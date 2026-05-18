@@ -434,7 +434,8 @@ class SDFGBuilder:
               callers can bind plain ``int`` / ``float`` instead of
               wrapping in a numpy 1-array.
         """
-        from dace.transformation.passes import ScalarizeLengthOneArrays
+        from dace.transformation.passes import ConvertLengthOneArraysToScalars
+        from dace_fortran.builder.scalar_shape_symbol_cleanup import RemoveScalarFortranShapeSymbols
         from dace_fortran.integer_power_exponents import IntegerizePowerExponents
         from dace.transformation.passes.unique_loop_iterators import UniqueLoopIterators
 
@@ -464,7 +465,13 @@ class SDFGBuilder:
         # 1-element buffer to receive the value.  ``intent(in)`` /
         # ``VALUE`` scalars are already emitted as ``Scalar`` directly by
         # ``descriptors.py`` and don't need this pass.
-        ScalarizeLengthOneArrays(recursive=True, transient_only=True).apply_pass(sdfg, {})
+        ConvertLengthOneArraysToScalars(recursive=True, transient_only=True).apply_pass(sdfg, {})
+
+        # A ``Scalar`` has no shape / offset, so the bridge's synthesised
+        # ``<s>_d<i>`` / ``offset_<s>_d<i>`` symbols for it are dead; under
+        # the current DaCe core a stray free symbol becomes a required
+        # call argument, so drop them.
+        RemoveScalarFortranShapeSymbols(recursive=True).apply_pass(sdfg, {})
 
         # Retype integer-valued float ``**`` exponents to ``int`` so
         # codegen uses repeated-multiply ``ipow`` (bit-matching the
