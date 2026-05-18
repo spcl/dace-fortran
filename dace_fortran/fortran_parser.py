@@ -21,9 +21,9 @@ from dace_fortran.hlfir_to_sdfg import DEFAULT_PIPELINE, SDFGBuilder
 
 
 def _find_flang() -> str:
-    bin_ = shutil.which("flang-new-21") or shutil.which("flang-new-20")
+    bin_ = shutil.which("flang-new-21")
     if bin_ is None:
-        raise RuntimeError("flang-new-21 (or -20) not on PATH; install LLVM/Flang to use "
+        raise RuntimeError("flang-new-21 not on PATH; install LLVM/Flang 21 to use "
                            "the HLFIR frontend.")
     return bin_
 

@@ -36,8 +36,8 @@ def _dump_dir() -> Path | None:
     return Path(val)
 
 
-# Prefer llvm-21 (matches build_bridge.py default); fall back to 20.
-_FLANG = shutil.which("flang-new-21") or shutil.which("flang-new-20")
+# LLVM/flang 21 only (matches build_bridge.py + the C++ bridge).
+_FLANG = shutil.which("flang-new-21")
 
 
 def have_flang() -> bool:
@@ -171,12 +171,8 @@ def compile_to_hlfir(source: str,
     assert _FLANG is not None, "flang-new-21 not available"
     out_dir.mkdir(parents=True, exist_ok=True)
     src = out_dir / f"{name}.f90"
-    from dace_fortran.preprocess import (merge_used_modules, preprocess_fortran, rewrite_integer_powers)
-    if merge:
-        source = merge_used_modules(source, search_dirs=[out_dir])
-    source = rewrite_integer_powers(source)
-    if preprocess:
-        source = preprocess_fortran(source)
+    from dace_fortran.preprocess import preprocess_fortran_source
+    source = preprocess_fortran_source(source, search_dirs=[out_dir], merge=merge, if_intvar=preprocess)
     src.write_text(source)
     hlfir = out_dir / f"{name}.hlfir"
     subprocess.check_call([_FLANG, "-fc1", "-emit-hlfir", str(src), "-o", str(hlfir)])

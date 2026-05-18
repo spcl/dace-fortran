@@ -80,11 +80,37 @@ try:
     print("binding still valid after transformations")
 except SignatureDriftError as e:
     raise SystemExit(f"binding invalidated by a transformation: {e}")
+
+# 5. Compile the (optimised) SDFG to a shared object and integrate:
+#    the generated binding is plain Fortran that calls the SDFG's
+#    C entry, so gfortran-compile it together with your caller and
+#    link against the SDFG .so.
+csdfg = sdfg.compile()                     # builds .dacecache/<name>/build/lib<name>.so
+so_path = csdfg.filename                   # path to the compiled SDFG library
 ```
+
+```sh
+# Integrate: caller.f90 + the generated binding, linked to the SDFG .so.
+gfortran -c velocity_tendencies_bindings.f90        # the emitted binding module
+gfortran caller.f90 velocity_tendencies_bindings.o \
+         -L"$(dirname "$so_path")" -Wl,-rpath,"$(dirname "$so_path")" \
+         -l:"$(basename "$so_path")" -o app
+./app    # caller -> binding -> compiled (transformed) SDFG
+```
+
+``caller.f90`` simply ``USE``s the generated
+``<entry>_dace_bindings`` module and calls ``<entry>_dace(...)`` with
+the original Fortran argument list -- the binding does the AoS->SoA
+unpack the ``FlattenPlan`` recorded.  ``tests/icon_full/
+test_velocity_full_bindings_e2e.py`` is the complete worked driver
+(builds ``iface``/``plan``, gfortran-compiles caller + driver +
+binding + shim, links the ``.so``, runs, and checks results).
 
 To go from a ``.f90`` directly (multi-file projects, ``USE``-merged
 into one TU first), use ``dace_fortran.generate_sdfg`` /
-``merge_used_modules``; see ``## Entry point`` below.
+``merge_used_modules`` (or the unified
+``dace_fortran.preprocess.preprocess_fortran_source``); see ``##
+Entry point`` below.
 
 ## Stages
 

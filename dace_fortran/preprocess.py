@@ -464,3 +464,33 @@ def merge_used_modules(source: str, *, search_dirs=()) -> str:
     if not order:
         return source
     return "".join(order) + "\n" + source
+
+
+def preprocess_fortran_source(source: str, *, search_dirs=(), merge: bool = True, if_intvar: bool = False) -> str:
+    """Single entrypoint for all Fortran-source preprocessing the HLFIR
+    frontend applies before handing source to flang.
+
+    Composes, in order:
+
+    1. ``merge_used_modules`` (when ``merge``) -- inline every
+       externally-``USE``-d module into one translation unit.
+    2. ``rewrite_integer_powers`` -- expand integer-valued real powers
+       (``x**2.0`` -> ``x*x``) for byte-identical arithmetic.
+    3. ``preprocess_fortran`` (when ``if_intvar``) -- the opt-in
+       ``IF (intvar)`` -> ``IF (intvar /= 0)`` rewrite.
+
+    The individual stages remain importable for their unit tests; this
+    is the production composition.
+
+    :param source: Fortran source text.
+    :param search_dirs: directories searched by ``merge_used_modules``.
+    :param merge: run the ``USE``-merge stage (default on).
+    :param if_intvar: also run the opt-in integer-IF rewrite.
+    :returns: the fully preprocessed Fortran source.
+    """
+    if merge:
+        source = merge_used_modules(source, search_dirs=search_dirs)
+    source = rewrite_integer_powers(source)
+    if if_intvar:
+        source = preprocess_fortran(source)
+    return source
