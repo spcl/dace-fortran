@@ -4,7 +4,7 @@ Exercises the four ``hlfir.*`` linalg ops that bypass the elemental
 path and go straight to dedicated library nodes:
 
     hlfir.matmul       -> blas.MatMul   (GEMM / GEMV shapes)
-    hlfir.transpose    -> standard.Transpose
+    hlfir.transpose    -> linalg.Transpose
     hlfir.dot_product  -> blas.Dot
 
 Each result is compared numerically against the gfortran/f2py-compiled
@@ -138,7 +138,7 @@ def test_linalg_ops_structure(tmp_path):
 
     from dace.sdfg.state import LoopRegion, SDFGState
     from dace.libraries.blas.nodes import MatMul, Dot
-    from dace.libraries.standard.nodes import Transpose
+    from dace.libraries.linalg.nodes import Transpose
 
     def iter_states(region):
         for n in region.nodes():
