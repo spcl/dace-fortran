@@ -364,4 +364,32 @@ llvm::SmallVector<mlir::Value, 4> extractExtents(mlir::Value shape) {
   return result;
 }
 
+fir::RecordType pointerToRecordMember(mlir::Type t) {
+  auto box = mlir::dyn_cast<fir::BoxType>(t);
+  if (!box) return {};
+  mlir::Type inner;
+  if (auto h = mlir::dyn_cast<fir::HeapType>(box.getEleTy()))
+    inner = h.getEleTy();
+  else if (auto p = mlir::dyn_cast<fir::PointerType>(box.getEleTy()))
+    inner = p.getEleTy();
+  else
+    return {};
+  return mlir::dyn_cast<fir::RecordType>(inner);
+}
+
+fir::RecordType allocOrPtrArrayOfRecordsMember(mlir::Type t) {
+  auto box = mlir::dyn_cast<fir::BoxType>(t);
+  if (!box) return {};
+  mlir::Type inner;
+  if (auto h = mlir::dyn_cast<fir::HeapType>(box.getEleTy()))
+    inner = h.getEleTy();
+  else if (auto p = mlir::dyn_cast<fir::PointerType>(box.getEleTy()))
+    inner = p.getEleTy();
+  else
+    return {};
+  auto seq = mlir::dyn_cast<fir::SequenceType>(inner);
+  if (!seq) return {};
+  return mlir::dyn_cast<fir::RecordType>(seq.getEleTy());
+}
+
 }  // namespace hlfir_bridge

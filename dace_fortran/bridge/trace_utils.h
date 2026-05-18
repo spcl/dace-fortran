@@ -16,6 +16,7 @@
 #include <set>
 #include <string>
 
+#include "flang/Optimizer/Dialect/FIRType.h"
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
 #include "mlir/IR/Value.h"
 
@@ -58,6 +59,17 @@ inline constexpr int kTraceConstIntMax = 128;
 /// Maximum memref-walk depth inside ``asAssumedShapeAlias`` (peels
 /// fir.convert ops between the alias declare and the outer declare).
 inline constexpr int kAliasMemrefWalkDepth = 32;
+
+/// Default budget for an SSA def-use *back-walk* that peels
+/// fir.convert / fir.load / box / declare / designate hops to reach
+/// an originating declare or memref.  Several passes and
+/// ``extract_vars`` hand-roll this same walk as a bare ``< 128``;
+/// named here so the one conceptual budget has a single value.
+inline constexpr int kSsaBackWalkDepth = 128;
+
+/// Budget for the shallow shape-recovery walk in ``PropagateShapes``
+/// (declare -> shape/hint within a few hops).
+inline constexpr int kShapeWalkDepth = 20;
 
 }  // namespace limits
 
@@ -181,5 +193,27 @@ hlfir::DeclareOp asAssumedShapeAlias(hlfir::DeclareOp decl);
 /// lower bound isn't a compile-time constant comes back as
 /// ``std::nullopt``.
 std::vector<std::optional<int64_t>> declareLowerBounds(hlfir::DeclareOp decl);
+
+/// Recognise a scalar ``type(T), pointer`` / ``type(T), allocatable``
+/// member  --  a record behind a ``box<heap|ptr<record>>``.  The
+/// bridge cannot navigate through such a pointer to its pointee
+/// (would need concrete pointer-aliasing analysis) but can safely
+/// IGNORE the field when the user code never reads through it.
+/// Returns the pointed-to ``RecordType`` when matched, null otherwise.
+/// Shared by ``hlfir-flatten-structs`` and
+/// ``hlfir-lift-alloc-array-of-records`` (must agree, hence one
+/// definition).
+fir::RecordType pointerToRecordMember(mlir::Type t);
+
+/// Companion of ``pointerToRecordMember`` for the array-shaped case:
+/// ``type(T), allocatable :: f(:)`` / ``type(T), pointer :: f(:)``
+/// (``box<heap|ptr<seq<? x record>>>``).  Returns the inner element
+/// ``RecordType`` when matched, null otherwise.  Treated as opaque by
+/// ``collectFlatLeaves``: the bridge can't pre-allocate a flat
+/// companion for "all records reachable through this descriptor"
+/// without runtime alloc-count info; access through such a member is
+/// handled by flattening the inlined-callee element-alias declare
+/// Flang emits after ``hlfir-inline-all`` instead.
+fir::RecordType allocOrPtrArrayOfRecordsMember(mlir::Type t);
 
 }  // namespace hlfir_bridge

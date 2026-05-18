@@ -70,7 +70,7 @@ static bool hasLocalShape(hlfir::DeclareOp decl) {
 static llvm::SmallVector<mlir::Value, 4> traceShapeAtCallSite(
     mlir::Value actual) {
   mlir::Value v = actual;
-  for (int i = 0; i < 20 && v; ++i) {
+  for (int i = 0; i < limits::kShapeWalkDepth && v; ++i) {
     auto *def = v.getDefiningOp();
     if (!def) break;
 
