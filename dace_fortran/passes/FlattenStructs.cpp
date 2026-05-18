@@ -430,7 +430,7 @@ static mlir::NamedAttribute declareSegments(mlir::OpBuilder &b, bool hasShape) {
 /// True if every member is flat (scalar or array-of-scalar) and we can
 /// synthesise a companion pointee for every (outer, member) pair.  AoS
 /// outers concatenate outer x inner extents in ``companionPointee``.
-static bool allMembersFlattenable(fir::RecordType rec, bool /*outerIsArray*/) {
+static bool allMembersFlattenable(fir::RecordType rec) {
   for (auto &pair : rec.getTypeList()) {
     if (!isFlatMemberType(pair.second)) return false;
   }
@@ -489,53 +489,10 @@ static constexpr int kFlattenMaxDepth = 12;
 ///     ``p_prog%pprog(i)%w(j, k)`` (where ``pprog: type(t)(10)``
 ///     is an array-of-struct member) to flatten to a 3D companion
 ///     ``p_prog_pprog_w`` of shape ``(10, 5, 5)``.
-/// Recognise a pointer/allocatable-to-record member (``type(t),
-/// pointer :: p`` / ``type(t), allocatable :: p`` with scalar
-/// pointee).  Used only by ``collectFlatLeaves``'s cycle handling
-///  --  the bridge cannot navigate through such a pointer to its
-/// pointee (would require concrete pointer-aliasing analysis), but
-/// it can safely IGNORE the field when the user code never reads
-/// through it.  Returns the pointed-to RecordType when matched,
-/// null otherwise.
-static fir::RecordType pointerToRecordMember(mlir::Type t) {
-  auto box = mlir::dyn_cast<fir::BoxType>(t);
-  if (!box) return {};
-  mlir::Type inner;
-  if (auto h = mlir::dyn_cast<fir::HeapType>(box.getEleTy()))
-    inner = h.getEleTy();
-  else if (auto p = mlir::dyn_cast<fir::PointerType>(box.getEleTy()))
-    inner = p.getEleTy();
-  else
-    return {};
-  return mlir::dyn_cast<fir::RecordType>(inner);
-}
-
-/// Recognise ``type(T), allocatable :: f(:)`` or ``type(T), pointer ::
-/// f(:)``  --  i.e. an alloc/pointer wrapper over an array of records.
-/// Companion of ``pointerToRecordMember`` for the array-shaped case.
-/// Returns the inner element ``RecordType`` when matched.
-///
-/// Treated as opaque by ``collectFlatLeaves`` for the same reason
-/// pointer-to-record-scalar is: the bridge can't pre-allocate a flat
-/// companion for "all records reachable through this descriptor"
-/// without runtime alloc-count info.  Access through such a member
-/// (``p_prog%pprog(<idx>)%...``) is handled by recognising the
-/// inlined-callee element-alias declare that Flang emits after
-/// ``hlfir-inline-all`` and flattening *that* declare instead.
-static fir::RecordType allocOrPtrArrayOfRecordsMember(mlir::Type t) {
-  auto box = mlir::dyn_cast<fir::BoxType>(t);
-  if (!box) return {};
-  mlir::Type inner;
-  if (auto h = mlir::dyn_cast<fir::HeapType>(box.getEleTy()))
-    inner = h.getEleTy();
-  else if (auto p = mlir::dyn_cast<fir::PointerType>(box.getEleTy()))
-    inner = p.getEleTy();
-  else
-    return {};
-  auto seq = mlir::dyn_cast<fir::SequenceType>(inner);
-  if (!seq) return {};
-  return mlir::dyn_cast<fir::RecordType>(seq.getEleTy());
-}
+// ``pointerToRecordMember`` / ``allocOrPtrArrayOfRecordsMember`` moved
+// to ``bridge/trace_utils`` so this pass and
+// ``hlfir-lift-alloc-array-of-records`` share one definition (the two
+// must agree on which members are treated as opaque).
 
 static bool collectFlatLeaves(fir::RecordType rec,
                               llvm::SmallVectorImpl<std::string> &prefix,
@@ -2096,7 +2053,7 @@ struct FlattenStructsPass
       if (!outerIsArray &&
           isJaggedScalarStruct(rec, p.jaggedEleTy, p.jaggedExtents))
         p.jagged = true;
-      else if (!allMembersFlattenable(rec, outerIsArray)) {
+      else if (!allMembersFlattenable(rec)) {
         // Nested branch: the struct has at least one record-
         // typed member.  Walk every leaf path; if every leaf is
         // a flat type with static extents we can replace the
@@ -3333,7 +3290,7 @@ struct FlattenStructsPass
         if (!aosAllocMaxConstSize(decl, pair.first).has_value()) return false;
       }
     }
-    if (allMembersFlattenable(rec, outerIsArray)) return true;
+    if (allMembersFlattenable(rec)) return true;
     // Nested-struct fallback.  ``collectFlatLeaves`` recurses
     // through ``RecordType`` and ``array<N x RecordType>``
     // members, building each leaf's flat companion shape.  When
@@ -3373,7 +3330,7 @@ struct FlattenStructsPass
     // initial ``outerDims`` so each leaf's flat companion
     // concatenates them as leading dims (e.g. ``s(3)%w(5,5)``
     // collapses to ``s_w`` of shape ``(3, 5, 5)``).
-    bool nested = !allMembersFlattenable(rec, outerIsArray);
+    bool nested = !allMembersFlattenable(rec);
     if (nested) {
       llvm::SmallVector<std::string, 4> prefix;
       llvm::SmallVector<int64_t, 4> initialDims(outerShape.begin(),

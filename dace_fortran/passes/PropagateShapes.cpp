@@ -70,7 +70,7 @@ static bool hasLocalShape(hlfir::DeclareOp decl) {
 static llvm::SmallVector<mlir::Value, 4> traceShapeAtCallSite(
     mlir::Value actual) {
   mlir::Value v = actual;
-  for (int i = 0; i < 20 && v; ++i) {
+  for (int i = 0; i < limits::kShapeWalkDepth && v; ++i) {
     auto *def = v.getDefiningOp();
     if (!def) break;
 
@@ -88,14 +88,10 @@ static llvm::SmallVector<mlir::Value, 4> traceShapeAtCallSite(
       // The caller's own declare  --  either has a shape directly,
       // or has been stamped with a hint by a previous iteration.
       if (decl.getShape()) return extractExtents(decl.getShape());
-      if (auto hint = decl->getAttrOfType<mlir::ArrayAttr>(kShapeHintAttr)) {
-        // Hint is by-name; we can't produce SSA values for it,
-        // so re-encode as a dummy extent list by looking up
-        // declares of the named symbols.  For simplicity, give
-        // up in this case  --  the fixed-point iteration will
-        // catch it next round after we propagate the inner one.
-        (void)hint;
-      }
+      // A ``kShapeHintAttr`` here is by-name only: we can't synthesise
+      // SSA extent values from it, so give up this round  --  the
+      // fixed-point iteration catches it next round once the inner
+      // declare's shape has propagated.
       return {};
     }
     if (auto conv = mlir::dyn_cast<fir::ConvertOp>(def)) {

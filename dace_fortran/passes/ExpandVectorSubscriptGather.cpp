@@ -330,8 +330,6 @@ struct ExpandVectorSubscriptGatherPass
     //    Collect the per-dim induction variables; the inner body
     //    applies the elemental and stores into the temp at the
     //    composite index.
-    auto idxTy = b.getIndexType();
-    (void)idxTy;
     auto c1 = b.create<mlir::arith::ConstantOp>(loc, b.getIndexAttr(1));
     llvm::SmallVector<mlir::Value, 4> ivs;
     for (unsigned i = 0; i < rank; ++i) {

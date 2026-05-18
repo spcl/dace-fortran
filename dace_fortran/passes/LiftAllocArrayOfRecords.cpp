@@ -103,30 +103,8 @@ namespace hlfir_bridge {
 
 namespace {
 
-// ---------------------------------------------------------------------------
-// Type predicates
-// ---------------------------------------------------------------------------
-
-/// Recognise an alloc-array or pointer-array struct member whose inner
-/// element type is itself a record:
-///     box<heap<seq<? x record>>>     ! type(t), allocatable :: f(:)
-///     box<ptr<seq<? x record>>>      ! type(t), pointer     :: f(:)
-///
-/// Returns the inner element RecordType when matched, null otherwise.
-static fir::RecordType allocOrPtrArrayOfRecordsMember(mlir::Type t) {
-  auto box = mlir::dyn_cast<fir::BoxType>(t);
-  if (!box) return {};
-  mlir::Type inner;
-  if (auto h = mlir::dyn_cast<fir::HeapType>(box.getEleTy()))
-    inner = h.getEleTy();
-  else if (auto p = mlir::dyn_cast<fir::PointerType>(box.getEleTy()))
-    inner = p.getEleTy();
-  else
-    return {};
-  auto seq = mlir::dyn_cast<fir::SequenceType>(inner);
-  if (!seq) return {};
-  return mlir::dyn_cast<fir::RecordType>(seq.getEleTy());
-}
+// ``allocOrPtrArrayOfRecordsMember`` moved to ``bridge/trace_utils``
+// (shared with ``hlfir-flatten-structs``; the two passes must agree).
 
 // ---------------------------------------------------------------------------
 // Per-(parent, member) lift state

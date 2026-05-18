@@ -205,7 +205,7 @@ static std::vector<std::string> lowerBoundsFromAllocSite(
   // allocmem result and the embox memref operand; peel it via a
   // tight worklist (depth bounded).
   auto peelToEmbox = [](mlir::Value v) -> fir::EmboxOp {
-    for (int i = 0; i < 128 && v; ++i) {
+    for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
       for (auto *u : v.getUsers()) {
         if (auto eb = mlir::dyn_cast<fir::EmboxOp>(u)) return eb;
       }
@@ -337,7 +337,7 @@ static std::vector<std::string> resolveLowerBounds(hlfir::DeclareOp decl) {
 /// chain link).  Bounded depth to keep the walk cheap.
 static bool designateRootedAt(hlfir::DesignateOp dg, hlfir::DeclareOp decl) {
   mlir::Value v = dg.getMemref();
-  for (int i = 0; i < 128 && v; ++i) {
+  for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
     auto *d = v.getDefiningOp();
     if (!d) return false;
     if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(d)) {
@@ -687,7 +687,7 @@ static std::vector<double> extractGlobalInitData(fir::GlobalOp gop) {
 // Walks through ``fir.convert`` shims that flang occasionally
 // inserts between the address_of and the declare's memref.
 static std::string traceToGlobalSymbol(mlir::Value memref) {
-  for (int i = 0; i < 128 && memref; ++i) {
+  for (int i = 0; i < limits::kSsaBackWalkDepth && memref; ++i) {
     auto *d = memref.getDefiningOp();
     if (!d) return {};
     if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
@@ -847,7 +847,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
   // information from collapsing.
   {
     auto leadsToDesignate = [](mlir::Value v) -> bool {
-      for (int i = 0; i < 128 && v; ++i) {
+      for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
         auto *d = v.getDefiningOp();
         if (!d) return false;
         if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
@@ -1462,7 +1462,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
       //     underlying section skips the copy and reverses
       //     ``hlfir.copy_out`` automatically (writes propagate
       //     through the view).
-      for (int i = 0; i < 128 && m; ++i) {
+      for (int i = 0; i < limits::kSsaBackWalkDepth && m; ++i) {
         auto *def = m.getDefiningOp();
         if (!def) break;
         if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def)) {
@@ -1496,7 +1496,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
             // fall back to a small symbol renderer so the
             // subset stays expressible.
             auto renderSym = [](mlir::Value v) -> std::string {
-              for (int i = 0; i < 128 && v; ++i) {
+              for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
                 auto *d = v.getDefiningOp();
                 if (!d) return "";
                 if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
