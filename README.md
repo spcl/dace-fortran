@@ -39,17 +39,19 @@ signature.
 ```python
 import shutil, subprocess
 from dace_fortran import SDFGBuilder
-from dace_fortran.preprocess import merge_used_modules, rewrite_integer_powers
-from dace_fortran.bindings import emit_bindings, SignatureDriftError
+from dace_fortran.preprocess import preprocess_fortran_source
+from dace_fortran.bindings import (
+    build_fortran_library, emit_bindings, SignatureDriftError,
+)
 
-# 1. velocity_tendencies.f90 -> HLFIR -> SDFG.
-src = open("velocity_full.f90").read()
-# Inline every USE-d module into one translation unit (no-op for a
-# self-contained single file) and expand integer-valued real powers.
-src = rewrite_integer_powers(merge_used_modules(src, search_dirs=["."]))
+# 1. velocity_tendencies.f90 -> HLFIR -> SDFG.  preprocess_fortran_source
+#    inlines every USE-d module into one TU (no-op for a self-contained
+#    file) and expands integer-valued real powers.
+src = preprocess_fortran_source(open("velocity_full.f90").read(),
+                                search_dirs=["."])
 open("velocity_full.merged.f90", "w").write(src)
 
-flang = shutil.which("flang-new-21") or shutil.which("flang-new-20")
+flang = shutil.which("flang-new-21")          # flang-new-21 only
 subprocess.check_call([flang, "-fc1", "-emit-hlfir",
                        "velocity_full.merged.f90", "-o", "velocity_full.hlfir"])
 
@@ -57,41 +59,49 @@ subprocess.check_call([flang, "-fc1", "-emit-hlfir",
 # sdfg._frozen_signature at build() time.
 builder = SDFGBuilder("velocity_full.hlfir", entry="_QPvelocity_tendencies")
 sdfg = builder.build()
-frozen = sdfg._frozen_signature
 
-# 2. Emit the Fortran binding (the caller-facing header/wrapper) from
-#    the frozen signature + the original interface + the AoS->SoA
-#    flatten plan.  ``iface`` / ``plan`` are built as in
-#    tests/icon_full/test_velocity_full_bindings_e2e.py (the complete
-#    worked driver, incl. gfortran-compiling + linking the .so).
-emit_bindings(frozen, iface, plan, "velocity_tendencies_bindings.f90")
-
-# 3. Optimise.  Any transformation may rewrite the SDFG.
+# 2. Optimise.  Any transformation may rewrite the SDFG.
 sdfg.simplify()
 # ... auto-opt / library-node expansion / etc.
 
-# 4. Validate the emitted binding is still correct: the frozen
-#    signature is re-checked against the (possibly transformed) SDFG.
-#    A changed arg order / dtype / free-symbol set raises
-#    SignatureDriftError -- i.e. the generated .f90 binding would no
-#    longer be ABI-valid; otherwise the binding is guaranteed sound.
+# 3. Build a Fortran-callable library in one call.  build_fortran_library
+#    compiles the (optimised) SDFG with vanilla DaCe codegen, re-checks
+#    the frozen signature against the live SDFG (a drifted arg order /
+#    dtype / free-symbol set raises SignatureDriftError -- the emitted
+#    binding would no longer be ABI-valid), emits the binding, and
+#    gfortran-links binding + your sources against the SDFG .so.
+#    ``iface`` / ``plan`` are built as in
+#    tests/icon_full/test_velocity_full_bindings_e2e.py.
 try:
-    frozen.verify_against(sdfg)
-    print("binding still valid after transformations")
+    lib = build_fortran_library(
+        sdfg, iface, plan, out_dir="build",
+        prelude_sources=["driver_modules.f90"],   # binding USEs these
+        extra_sources=["caller.f90"],             # these USE the binding
+        mode="ieee",        # "ieee" (debug -O3 + strict IEEE, default,
+                            #  bit-reproducible) | "fast" (-O3) |
+        # flags=["-O2", "-march=native"],         # explicit override
+    )
 except SignatureDriftError as e:
     raise SystemExit(f"binding invalidated by a transformation: {e}")
 
-# 5. Compile the (optimised) SDFG to a shared object and integrate:
-#    the generated binding is plain Fortran that calls the SDFG's
-#    C entry, so gfortran-compile it together with your caller and
-#    link against the SDFG .so.
-csdfg = sdfg.compile()                     # builds .dacecache/<name>/build/lib<name>.so
-so_path = csdfg.filename                   # path to the compiled SDFG library
+handle = lib.load()                 # CDLL; LD_PRELOADs libgomp if needed
+print("emitted binding saved at:", lib.bindings_f90)   # inspect / ship it
+print("Fortran-callable library:", lib.so_path)
 ```
 
+The emitted ``<entry>_bindings.f90`` is written to ``out_dir`` and
+exposed as ``lib.bindings_f90`` -- save, diff or ship it independently
+of the linked ``.so``.  ``emit_bindings(frozen, iface, plan, path)``
+dumps just that file if you only want the wrapper source.
+
+The explicit sequence (compile -> ``emit_bindings`` ->
+``frozen.verify_against(sdfg)`` -> gfortran-link) is still fully
+supported and is what ``build_fortran_library`` consolidates; the
+velocity e2e test exercises **both** paths.
+
 ```sh
-# Integrate: caller.f90 + the generated binding, linked to the SDFG .so.
-gfortran -c velocity_tendencies_bindings.f90        # the emitted binding module
+# Manual integrate (the un-consolidated path): caller + emitted binding.
+gfortran -c velocity_tendencies_bindings.f90
 gfortran caller.f90 velocity_tendencies_bindings.o \
          -L"$(dirname "$so_path")" -Wl,-rpath,"$(dirname "$so_path")" \
          -l:"$(basename "$so_path")" -o app
@@ -106,10 +116,9 @@ test_velocity_full_bindings_e2e.py`` is the complete worked driver
 (builds ``iface``/``plan``, gfortran-compiles caller + driver +
 binding + shim, links the ``.so``, runs, and checks results).
 
-To go from a ``.f90`` directly (multi-file projects, ``USE``-merged
-into one TU first), use ``dace_fortran.generate_sdfg`` /
-``merge_used_modules`` (or the unified
-``dace_fortran.preprocess.preprocess_fortran_source``); see ``##
+To go from a ``.f90`` directly (multi-file projects are ``USE``-merged
+into one TU first), use the unified
+``dace_fortran.preprocess.preprocess_fortran_source``; see ``##
 Entry point`` below.
 
 ## Stages

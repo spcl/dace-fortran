@@ -7,10 +7,12 @@ binding emitter downstream uses this snapshot, not the live SDFG, so
 transformations that mutate the SDFG can't silently invalidate a
 generated ``.f90`` wrapper.
 
-At codegen time (see ``dace/codegen/codegen.py``), before the C++
-header is emitted, we call ``fs.verify_against(sdfg)``.  Any drift
-from the snapshot raises ``SignatureDriftError``  --  the contract is
-compile-time, not SDFG-time.
+The drift gate lives in the dace-fortran ``build_fortran_library``
+entrypoint: before the binding is emitted/linked it calls
+``fs.verify_against(sdfg)``.  Any drift from the snapshot raises
+``SignatureDriftError``.  dace-core ``compile`` / ``generate_code``
+stay vanilla -- the contract is dace-fortran-only, not baked into
+DaCe codegen.
 """
 
 import json

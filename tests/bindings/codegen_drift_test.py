@@ -1,21 +1,28 @@
-"""Codegen-time drift check  --  ``codegen.generate_code`` must refuse
-to emit C++ headers when the SDFG's live arglist has drifted from
-its attached ``FrozenSignature``.
+"""Drift gate -- ``build_fortran_library`` must refuse to emit/link a
+Fortran binding when the SDFG's live arglist has drifted from its
+attached ``FrozenSignature``.
 
-This is the contract that keeps an already-generated Fortran
-binding honest: mutating the SDFG after ``build()`` can still be
-useful for other purposes, but you can't SHIP a compiled library
-whose signature disagrees with the wrapper that calls it.
+The drift contract used to live in a ``dace/codegen/codegen.py`` hook;
+it now lives in the dace-fortran ``build_fortran_library`` entrypoint
+(dace-core ``compile`` / ``generate_code`` stay vanilla).  This module
+asserts the gate fires at that new layer.
+
+``build_fortran_library`` runs ``frozen.verify_against(sdfg)`` *before*
+compiling or emitting anything, so the drift cases raise on the
+synthetic SDFGs here without needing a real ``OriginalInterface`` /
+``FlattenPlan`` (the gate is reached first).  The happy-path / unpinned
+cases assert the gate does not false-positive -- a later build step may
+fail on the synthetic kernel, but never with ``SignatureDriftError``.
 """
 
 import dace
 import pytest
 
-from dace.codegen import codegen
 from dace_fortran.bindings import (
     FrozenArg,
     FrozenSignature,
     SignatureDriftError,
+    build_fortran_library,
 )
 
 
@@ -55,41 +62,58 @@ def _pin(sdfg: dace.SDFG) -> FrozenSignature:
     return fs
 
 
-def test_codegen_honours_frozen_signature_happy_path():
-    """When the SDFG hasn't drifted, codegen generates code normally."""
+def _assert_gate_passes(sdfg, tmp_path):
+    """``build_fortran_library`` must not raise drift on ``sdfg``.
+
+    A later emit/link step legitimately fails on these synthetic
+    kernels (no real interface/plan); only ``SignatureDriftError``
+    indicates the gate misfired.
+    """
+    try:
+        build_fortran_library(sdfg, iface=None, plan=None, out_dir=str(tmp_path))
+    except SignatureDriftError:
+        pytest.fail("drift gate misfired on an undrifted SDFG")
+    except Exception:
+        pass  # synthetic kernel: post-gate failure expected & irrelevant
+
+
+def test_build_library_honours_frozen_signature_happy_path(tmp_path):
+    """When the SDFG hasn't drifted, the drift gate passes."""
     sdfg = _demo_sdfg()
     _pin(sdfg)
-    # Needs at least one state to be a legal SDFG.
     sdfg.add_state("s0", is_start_block=True)
-    # Should NOT raise.
-    codegen.generate_code(sdfg, validate=False)
+    _assert_gate_passes(sdfg, tmp_path)
 
 
-def test_codegen_raises_on_arg_removal():
+def test_build_library_raises_on_arg_removal(tmp_path):
     """Transformation dropped array ``b`` -> drift -> raise."""
     sdfg = _demo_sdfg()
     _pin(sdfg)
     sdfg.add_state("s0", is_start_block=True)
     del sdfg.arrays["b"]
     with pytest.raises(SignatureDriftError):
-        codegen.generate_code(sdfg, validate=False)
+        build_fortran_library(sdfg, iface=None, plan=None, out_dir=str(tmp_path))
 
 
-def test_codegen_raises_on_dtype_change():
+def test_build_library_raises_on_dtype_change(tmp_path):
     """Transformation changed ``a`` to float32 -> drift -> raise."""
     sdfg = _demo_sdfg()
     _pin(sdfg)
     sdfg.add_state("s0", is_start_block=True)
     sdfg.arrays["a"].dtype = dace.float32
     with pytest.raises(SignatureDriftError):
-        codegen.generate_code(sdfg, validate=False)
+        build_fortran_library(sdfg, iface=None, plan=None, out_dir=str(tmp_path))
 
 
-def test_codegen_unpinned_sdfg_unaffected():
-    """A plain SDFG without a frozen signature goes through codegen
-    without any drift check  --  the pinning is purely opt-in."""
+def test_build_library_requires_a_pinned_sdfg(tmp_path):
+    """``build_fortran_library`` is the dace-fortran-only binding path
+    and needs a ``build()``-pinned SDFG.  The old "plain SDFGs are
+    unaffected" guarantee is now structural: dace-core ``codegen`` is
+    vanilla (no drift hook), so a plain SDFG simply has no contract to
+    apply.  Calling the binding builder on an unpinned SDFG is a clear
+    usage error  --  not a silent pass, not a drift error."""
     sdfg = _demo_sdfg()
     sdfg.add_state("s0", is_start_block=True)
-    # No frozen signature set.
     assert not hasattr(sdfg, "_frozen_signature") or sdfg._frozen_signature is None
-    codegen.generate_code(sdfg, validate=False)
+    with pytest.raises(ValueError, match="_frozen_signature"):
+        build_fortran_library(sdfg, iface=None, plan=None, out_dir=str(tmp_path))

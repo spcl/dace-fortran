@@ -4,7 +4,7 @@ Each lowers directly from a first-class HLFIR op, no post-SDFG
 pattern-match pass needed:
 
     hlfir.matmul       -> dace.libraries.blas.nodes.matmul.MatMul
-    hlfir.transpose    -> dace.libraries.standard.nodes.transpose.Transpose
+    hlfir.transpose    -> dace.libraries.linalg.nodes.transpose.Transpose
     hlfir.dot_product  -> dace.libraries.blas.nodes.dot.Dot
 
 ``MatMul`` is a meta-node: its ``SpecializeMatMul`` expansion dispatches
@@ -22,7 +22,7 @@ from dace_fortran.intrinsics.base import LibNodeIntrinsic
 
 LINALG: dict[str, LibNodeIntrinsic] = {
     'matmul': LibNodeIntrinsic('matmul', module='blas', node_cls='MatMul'),
-    'transpose': LibNodeIntrinsic('transpose', module='standard', node_cls='Transpose'),
+    'transpose': LibNodeIntrinsic('transpose', module='linalg', node_cls='Transpose'),
     'dot_product': LibNodeIntrinsic('dot_product', module='blas', node_cls='Dot'),
 }
 

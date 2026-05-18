@@ -40,6 +40,7 @@ from dace_fortran.bindings import (
     FlattenPlan,
     OriginalArg,
     OriginalInterface,
+    build_fortran_library,
     emit_bindings,
 )
 
@@ -165,11 +166,18 @@ def _run(lib, fn, dims, bufs, z_arrays):
       *[z.ctypes.data for z in z_arrays])
 
 
-def test_velocity_full_f90_bindings_e2e(tmp_path: Path):
+@pytest.mark.parametrize("build_path", ["inline", "build_fortran_library"])
+def test_velocity_full_f90_bindings_e2e(tmp_path: Path, build_path: str):
     """The hand-authored derived-type ``OriginalInterface`` +
     bridge ``FlattenPlan`` must yield a ``velocity_tendencies_dace``
     binding that, linked against the compiled SDFG, reproduces the
-    gfortran reference of the un-transformed ``velocity_tendencies``."""
+    gfortran reference of the un-transformed ``velocity_tendencies``.
+
+    Verified two ways: the explicit inline sequence (compile ->
+    emit_bindings -> gfortran-link), and the first-class
+    ``build_fortran_library`` entrypoint that consolidates exactly
+    that plus the frozen-signature drift gate.  Both must produce a
+    numerically identical Fortran-callable library."""
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     builder = build_sdfg(_DRIVER_PATH.read_text(), sdfg_dir, name="velocity_tendencies", entry=_ENTRY)
@@ -177,24 +185,37 @@ def test_velocity_full_f90_bindings_e2e(tmp_path: Path):
     sdfg = builder.build()
     sdfg.validate()
     sdfg.name = "velocity_tendencies"
-    compiled = sdfg.compile()
-    so_path = Path(compiled._lib._library_filename)
+    # Per-parametrisation build dir: both variants compile an SDFG of
+    # the same name; without this they collide in the shared
+    # .dacecache when xdist runs them on one worker (the second
+    # compile clobbers the first variant's linked .so -> dlopen
+    # OSError).  tmp_path is unique per parametrised case.
+    sdfg.build_folder = str(tmp_path / "dacecache")
 
-    bindings_path = tmp_path / "velocity_tendencies_bindings.f90"
-    emit_bindings(sdfg._frozen_signature, _IFACE, plan, str(bindings_path))
-
-    caller_src = _CALLER_PATH.read_text()
-    sdfg_shim = _make_sdfg_driver(caller_src)
-
-    # SDFG .so: driver modules + caller (init only) + generated binding
-    # + the SDFG shim, linked against the compiled SDFG library.
     sdfg_build = tmp_path / "sdfg_build"
     sdfg_build.mkdir(parents=True, exist_ok=True)
     shim_path = sdfg_build / "velocity_sdfg_shim.f90"
-    shim_path.write_text(sdfg_shim)
-    sdfg_so = sdfg_build / "libvelocity_sdfg.so"
-    _gfortran(sdfg_so, _DRIVER_PATH, _CALLER_PATH, bindings_path, shim_path, mod_dir=sdfg_build, link_so=so_path)
-    sdfg_lib = ctypes.CDLL(str(sdfg_so))
+    shim_path.write_text(_make_sdfg_driver(_CALLER_PATH.read_text()))
+
+    if build_path == "build_fortran_library":
+        lib = build_fortran_library(sdfg,
+                                    _IFACE,
+                                    plan,
+                                    str(sdfg_build),
+                                    name="velocity_sdfg",
+                                    prelude_sources=[_DRIVER_PATH, _CALLER_PATH],
+                                    extra_sources=[shim_path])
+        sdfg_lib = lib.load()
+    else:
+        compiled = sdfg.compile()
+        so_path = Path(compiled._lib._library_filename)
+        bindings_path = tmp_path / "velocity_tendencies_bindings.f90"
+        emit_bindings(sdfg._frozen_signature, _IFACE, plan, str(bindings_path))
+        # SDFG .so: driver modules + caller (init only) + generated
+        # binding + the SDFG shim, linked against the compiled SDFG.
+        sdfg_so = sdfg_build / "libvelocity_sdfg.so"
+        _gfortran(sdfg_so, _DRIVER_PATH, _CALLER_PATH, bindings_path, shim_path, mod_dir=sdfg_build, link_so=so_path)
+        sdfg_lib = ctypes.CDLL(str(sdfg_so))
 
     # Reference .so: driver + the proven flat caller (un-transformed).
     ref_build = tmp_path / "ref_build"

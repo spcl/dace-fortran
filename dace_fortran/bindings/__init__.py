@@ -23,8 +23,14 @@ Public surface:
          --  the AoS->SoA plan from hlfir-flatten-structs
     emit_bindings(frozen, iface, plan, out_path)
          --  the top-level emitter
+    build_fortran_library(sdfg, iface, plan, out_dir, ...)
+         --  emit + drift-verify + link a Fortran-callable .so
 """
 
+from dace_fortran.bindings.build_fortran_library import (
+    FortranLibrary,
+    build_fortran_library,
+)
 from dace_fortran.bindings.emit_bindings import emit_bindings
 from dace_fortran.bindings.flatten_plan import (
     FlattenEntry,
@@ -63,4 +69,7 @@ __all__ = [
     "strip_index_args",
     # Emitter
     "emit_bindings",
+    # Fortran-callable library builder
+    "build_fortran_library",
+    "FortranLibrary",
 ]

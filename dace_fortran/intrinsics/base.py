@@ -34,7 +34,7 @@ class ReductionIntrinsic:
 @dataclass(frozen=True)
 class LibNodeIntrinsic:
     """Intrinsic that becomes a direct DaCe library-node emission
-    (``blas.Matmul``, ``standard.Transpose``, ``blas.Dot``, ``fft.FFT``)
+    (``blas.Matmul``, ``linalg.Transpose``, ``blas.Dot``, ``fft.FFT``)
      --  populated by ``linalg.py``, consumed by
     ``builder/emit_library.py``."""
 

@@ -40,6 +40,7 @@ from dace import InterstateEdge, SDFG
 
 from dace_fortran.build_bridge import hb
 
+from dace_fortran.builder.auto_dim_symbols import install_auto_dim_symbols
 from dace_fortran.builder.context import _Ctx
 from dace_fortran.builder.descriptors import (
     DTYPE,
@@ -365,7 +366,10 @@ class SDFGBuilder:
         self._run_post_gen_passes(sdfg)
         self._attach_frozen_signature(sdfg)
         sdfg.validate()
-        return sdfg
+        # Every Fortran extent stays a required SDFG input; resolve the
+        # synthetic ``<arr>_d<i>`` symbols a direct caller omits from
+        # the passed arrays (correct extent) or a don't-care default.
+        return install_auto_dim_symbols(sdfg)
 
     def _register_constants(self, sdfg: SDFG):
         """Attach Flang's constant-pool data to the SDFG.

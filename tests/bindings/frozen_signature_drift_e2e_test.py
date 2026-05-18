@@ -4,13 +4,17 @@
 against hand-built synthetic SDFGs.  This module closes the gap the
 contract actually guards: a signature snapshotted by
 ``SDFGBuilder.build()`` (``sdfg._frozen_signature``), then drifted by a
-post-build SDFG mutation, must be rejected at codegen -- not silently
-emit a C header that disagrees with the already-generated Fortran
-binding.
+post-build SDFG mutation, must be rejected by the dace-fortran binding
+builder -- not silently linked into a Fortran library that disagrees
+with the wrapper.
 
-The positive control compiles the untouched SDFG (snapshot matches
-live arglist -> no raise); the negative cases mutate the live SDFG
-*after* the snapshot was frozen and assert ``generate_code`` raises
+The drift gate used to be a ``dace/codegen/codegen.py`` hook; it now
+lives in ``build_fortran_library``, which runs ``verify_against``
+*before* compiling or emitting anything.  So the negative cases raise
+on the real bridge SDFG without a hand-built ``OriginalInterface`` /
+``FlattenPlan`` (the gate is reached first).  The positive control
+asserts the gate does not false-positive: a later emit/link step
+legitimately fails on the stub interface, but never with
 ``SignatureDriftError``.
 """
 
@@ -20,8 +24,7 @@ import dace
 import pytest
 
 from _util import build_sdfg, have_flang
-from dace.codegen.codegen import generate_code
-from dace_fortran.bindings import SignatureDriftError
+from dace_fortran.bindings import SignatureDriftError, build_fortran_library
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
@@ -55,22 +58,31 @@ def _build(tmp_path: Path):
     return sdfg
 
 
-def test_untouched_sdfg_codegens(tmp_path: Path):
-    """Positive control: a build that nobody mutated still matches its
-    own snapshot, so codegen does not raise."""
+def _build_lib(sdfg, tmp_path: Path):
+    return build_fortran_library(sdfg, iface=None, plan=None, out_dir=str(tmp_path / "lib"))
+
+
+def test_untouched_sdfg_passes_drift_gate(tmp_path: Path):
+    """Positive control: a build nobody mutated still matches its own
+    snapshot, so the drift gate in ``build_fortran_library`` passes
+    (a later emit step fails on the stub interface, never with drift)."""
     sdfg = _build(tmp_path)
-    generate_code(sdfg)  # no SignatureDriftError
+    try:
+        _build_lib(sdfg, tmp_path)
+    except SignatureDriftError:
+        pytest.fail("drift gate misfired on an undrifted bridge SDFG")
+    except Exception:
+        pass  # stub iface/plan: post-gate failure expected & irrelevant
 
 
 def test_added_arg_after_freeze_raises(tmp_path: Path):
     """A transformation that adds a non-transient array after the
-    signature was frozen drifts ``sdfg.arglist()``; codegen must
-    reject it instead of emitting a header the binding can't call."""
+    signature was frozen drifts ``sdfg.arglist()``; the builder must
+    reject it instead of linking a library the binding can't call."""
     sdfg = _build(tmp_path)
-    # New caller-visible array -> appears in arglist(), absent from snap.
     sdfg.add_array("z_drift", shape=(dace.symbol("n"), ), dtype=dace.float64, transient=False)
     with pytest.raises(SignatureDriftError, match="signature drift"):
-        generate_code(sdfg)
+        _build_lib(sdfg, tmp_path)
 
 
 def test_dtype_change_after_freeze_raises(tmp_path: Path):
@@ -80,7 +92,7 @@ def test_dtype_change_after_freeze_raises(tmp_path: Path):
     sdfg = _build(tmp_path)
     sdfg.arrays["y"].dtype = dace.float32
     with pytest.raises(SignatureDriftError, match="dtype"):
-        generate_code(sdfg)
+        _build_lib(sdfg, tmp_path)
 
 
 def test_extra_free_symbol_after_freeze_raises(tmp_path: Path):
@@ -88,11 +100,8 @@ def test_extra_free_symbol_after_freeze_raises(tmp_path: Path):
     SDFG's callable surface; the free-symbol set guard must fire."""
     sdfg = _build(tmp_path)
     sdfg.add_symbol("drift_sym", dace.int64)
-    # Append a state onto the existing sink so the graph stays
-    # connected (codegen validates before the drift check); the new
-    # edge's condition makes ``drift_sym`` a *used* free symbol.
     sink = sdfg.sink_nodes()[0]
     tail = sdfg.add_state("drift_tail")
     sdfg.add_edge(sink, tail, dace.InterstateEdge(condition="drift_sym > 0"))
     with pytest.raises(SignatureDriftError):
-        generate_code(sdfg)
+        _build_lib(sdfg, tmp_path)

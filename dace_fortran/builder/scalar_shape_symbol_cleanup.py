@@ -1,24 +1,23 @@
-"""Drop the Fortran offset / dimension symbols of scalar or dead data.
+"""Drop the Fortran offset / dimension symbols of genuine scalars.
 
 The HLFIR bridge synthesises one ``<name>_d<i>`` symbol per array
 dimension and one ``offset_<name>_d<i>`` symbol per lower bound.
-Under the current DaCe core a free symbol is a *required* SDFG
-argument, so a stray ``<name>_d0`` turns into a
-``KeyError: Missing program argument`` at call time.  Two cases make
-such a symbol meaningless:
+When the data behind ``<name>`` is (or becomes, e.g. after
+``ConvertLengthOneArraysToScalars``) a true ``Scalar`` those symbols
+are spurious -- a scalar has no shape and no offset -- and under the
+current DaCe core a stray free ``<name>_d0`` turns into a
+``KeyError: Missing program argument`` at call time.  They are simply
+removed.
 
-* the data behind ``<name>`` is (or becomes, e.g. after
-  ``ConvertLengthOneArraysToScalars``) a true ``Scalar`` -- a scalar
-  has no shape and no offset; the symbols are simply removed.
-* ``<name>`` is an array the SDFG never actually accesses (no memlet
-  references it): a never-``ALLOCATE``-d allocatable only fed to
-  ``ALLOCATED()``, a pointer dummy repointed to an internal target
-  before any read, etc.  Its extent is dead, so the free synthetic
-  dim/offset symbols are ``sdfg.specialize``-d to ``1`` -- concretising
-  the unused descriptor and dropping the symbols from the signature.
+Genuine array dimension symbols are deliberately *not* touched here:
+every array extent stays a required SDFG input (the new arglist
+methodology), with correct values supplied at the call boundary --
+the bindings emitter for real callers, the test call shim for direct
+``sdfg(...)`` invocations.  This pass only strips the symbols of
+things that are not arrays at all.
 
-Both keep any symbol still referenced by an *accessed* array, and
-recurse into nested SDFGs.
+Keeps any symbol still referenced by some array's shape / offset, and
+recurses into nested SDFGs.
 """
 import re
 
@@ -68,36 +67,6 @@ class RemoveScalarFortranShapeSymbols(ppl.Pass):
                 if pat.match(sym):
                     sdfg.symbols.pop(sym, None)
                     removed.add(sym)
-
-        # Dead arrays: a descriptor the SDFG never reads/writes (no
-        # memlet references it) -- e.g. a never-ALLOCATEd allocatable
-        # only fed to ALLOCATED(), or a pointer dummy repointed before
-        # use.  Its extent is irrelevant; specialise its free synthetic
-        # dim/offset symbols to 1 so the unused descriptor is concrete
-        # and the symbols leave the signature.  Guarded so a symbol
-        # shared with an *accessed* array is never touched.
-        accessed: set = set()
-        for state in sdfg.all_states():
-            for edge in state.edges():
-                mem = edge.data
-                if mem is not None and mem.data is not None:
-                    accessed.add(mem.data)
-        live_refs: set = set()
-        for name, desc in sdfg.arrays.items():
-            if name not in accessed:
-                continue
-            for s in getattr(desc, 'shape', ()):
-                live_refs.update(str(x) for x in dace.symbolic.symlist(s).values())
-            for s in getattr(desc, 'offset', ()):
-                live_refs.update(str(x) for x in dace.symbolic.symlist(s).values())
-        for name, desc in list(sdfg.arrays.items()):
-            if name in accessed or isinstance(desc, dace.data.Scalar):
-                continue
-            pat = re.compile(rf'^(offset_)?{re.escape(name)}_d\d+$')
-            dead = [s for s in list(sdfg.symbols) if pat.match(s) and s not in live_refs]
-            if dead:
-                sdfg.specialize({s: 1 for s in dead})
-                removed.update(dead)
 
         if self.recursive:
             for state in sdfg.all_states():
