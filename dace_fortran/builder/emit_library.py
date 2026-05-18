@@ -28,8 +28,12 @@ _LIBCALL_CONNECTORS = {
     "MatMul": (("_a", "_b"), "_c"),
     "Dot": (("_x", "_y"), "_result"),
     "Transpose": (("_inp", ), "_out"),
-    "MergeLibraryNode": (("_t", "_f", "_mask"), "_out"),
-    "CountLibraryNode": (("_mask", ), "_out"),
+    # Must mirror the node classes' *_CONNECTOR_NAME constants
+    # (MergeLibraryNode.TRUE/FALSE/MASK/OUTPUT_CONNECTOR_NAME,
+    # CountLibraryNode.INPUT/OUTPUT_CONNECTOR_NAME) -- restyled to the
+    # ``copy_node`` / ``memset_node`` prefixed-constant convention.
+    "MergeLibraryNode": (("_mrg_t", "_mrg_f", "_mrg_mask"), "_mrg_out"),
+    "CountLibraryNode": (("_cnt_in", ), "_cnt_out"),
 }
 
 
