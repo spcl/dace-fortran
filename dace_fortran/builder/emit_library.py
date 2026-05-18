@@ -73,8 +73,10 @@ def _parse_reduce_identity(s: str):
 
 
 def emit_copy(builder, ctx, n, region):
-    """Whole-array ``b = a`` -> ``CopyLibraryNode`` with ``_in`` / ``_out``
-    memlets covering the full source / destination arrays."""
+    """Whole-array ``b = a`` -> ``CopyLibraryNode``, with memlets covering
+    the full source / destination arrays.  Connector names come from the
+    node class (``_cpy_in`` / ``_cpy_out`` in the current libnode) so this
+    stays correct if the libnode renames them."""
     from dace.libraries.standard.nodes import CopyLibraryNode
     ctx.flush(builder, region)
     ctx.ensure(region)
@@ -85,18 +87,20 @@ def emit_copy(builder, ctx, n, region):
     src_desc = ctx.sdfg.arrays[src_name]
     tgt_desc = ctx.sdfg.arrays[tgt_name]
 
-    cp = CopyLibraryNode(f"copy_{tgt_name}_{builder.nid()}")
+    cp = CopyLibraryNode(name=f"copy_{tgt_name}_{builder.nid()}")
     state.add_node(cp)
 
     src_access = acc(builder, state, src_name)
     tgt_access = acc(builder, state, tgt_name)
-    state.add_edge(src_access, None, cp, "_in", Memlet.from_array(src_name, src_desc))
-    state.add_edge(cp, "_out", tgt_access, None, Memlet.from_array(tgt_name, tgt_desc))
+    state.add_edge(src_access, None, cp, CopyLibraryNode.INPUT_CONNECTOR_NAME,
+                   Memlet.from_array(src_name, src_desc))
+    state.add_edge(cp, CopyLibraryNode.OUTPUT_CONNECTOR_NAME, tgt_access, None,
+                   Memlet.from_array(tgt_name, tgt_desc))
 
 
 def emit_memset(builder, ctx, n, region):
     """Scalar-zero -> array fill -> ``MemsetLibraryNode`` with a single
-    ``_out`` memlet covering the destination.  The memset transitions
+    output memlet covering the destination.  The memset transitions
     to a fresh successor state so any later element write to the same
     array lands in a new state (and on a new access node) instead of
     racing with the array-wide write inside one state's DAG."""
@@ -120,22 +124,22 @@ def emit_memset(builder, ctx, n, region):
             else:
                 slab_parts.append(f"({slot}) - 1")
         slab_subset = ", ".join(slab_parts)
-        ms = MemsetLibraryNode(f"memset_{tgt_name}_{builder.nid()}")
-        ms.add_out_connector("_out")
+        ms = MemsetLibraryNode(name=f"memset_{tgt_name}_{builder.nid()}")
         state.add_node(ms)
         tgt_access = acc(builder, state, tgt_name)  # redirects to src via resolve
-        state.add_edge(ms, "_out", tgt_access, None, Memlet(data=src_name, subset=slab_subset))
+        state.add_edge(ms, MemsetLibraryNode.OUTPUT_CONNECTOR_NAME, tgt_access, None,
+                       Memlet(data=src_name, subset=slab_subset))
         ctx.new_state(builder, region)
         return
 
     tgt_desc = ctx.sdfg.arrays[tgt_name]
 
-    ms = MemsetLibraryNode(f"memset_{tgt_name}_{builder.nid()}")
-    ms.add_out_connector("_out")
+    ms = MemsetLibraryNode(name=f"memset_{tgt_name}_{builder.nid()}")
     state.add_node(ms)
 
     tgt_access = acc(builder, state, tgt_name)
-    state.add_edge(ms, "_out", tgt_access, None, Memlet.from_array(tgt_name, tgt_desc))
+    state.add_edge(ms, MemsetLibraryNode.OUTPUT_CONNECTOR_NAME, tgt_access, None,
+                   Memlet.from_array(tgt_name, tgt_desc))
 
     # Force a state break so a subsequent element write doesn't share
     # the memset's access node.  Two incoming memlets on one access

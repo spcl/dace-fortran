@@ -434,7 +434,7 @@ class SDFGBuilder:
               callers can bind plain ``int`` / ``float`` instead of
               wrapping in a numpy 1-array.
         """
-        from dace.sdfg.construction_utils import replace_length_one_arrays_with_scalars
+        from dace.transformation.passes import ScalarizeLengthOneArrays
         from dace_fortran.integer_power_exponents import IntegerizePowerExponents
         from dace.transformation.passes.unique_loop_iterators import UniqueLoopIterators
 
@@ -464,7 +464,7 @@ class SDFGBuilder:
         # 1-element buffer to receive the value.  ``intent(in)`` /
         # ``VALUE`` scalars are already emitted as ``Scalar`` directly by
         # ``descriptors.py`` and don't need this pass.
-        replace_length_one_arrays_with_scalars(sdfg, recursive=True, transient_only=True)
+        ScalarizeLengthOneArrays(recursive=True, transient_only=True).apply_pass(sdfg, {})
 
         # Retype integer-valued float ``**`` exponents to ``int`` so
         # codegen uses repeated-multiply ``ipow`` (bit-matching the
