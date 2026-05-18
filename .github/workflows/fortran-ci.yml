@@ -26,29 +26,46 @@ jobs:
       with:
         python-version: '3.12'
 
-    - name: Install LLVM/flang 21 + Fortran toolchain
+    - name: Install LLVM / MLIR / flang 21 + Fortran toolchain
       run: |
+        # The HLFIR bridge requires LLVM/flang 21 (flang-new-21 -fc1
+        # -emit-hlfir).  libflang-21-dev provides BOTH the FIR/HLFIR
+        # static libs the bridge links (libFIRTransforms.a,
+        # libFortranSupport.a, ...) AND the flang headers it #includes
+        # (flang/Optimizer/HLFIR/HLFIROps.h); without it CMake configures
+        # but the link fails.  Provenance verified via dpkg -S on a
+        # known-good local build.
         wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
         sudo add-apt-repository -y "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-21 main"
         sudo apt-get update
-        sudo apt-get install -y llvm-21-dev libmlir-21-dev mlir-21-tools \
-                                flang-21 clang-21 cmake ninja-build gfortran
+        sudo apt-get install -y \
+          llvm-21-dev libmlir-21-dev mlir-21-tools \
+          libflang-21-dev flang-21 clang-21 \
+          cmake ninja-build gfortran libgomp1
         echo "/usr/lib/llvm-21/bin" >> "$GITHUB_PATH"
-        # The bridge looks for flang-new-21 on PATH.
-        sudo ln -sf /usr/bin/flang-new-21 /usr/local/bin/flang-new-21 || true
+        # apt.llvm.org installs the binary as flang-new-21 in
+        # /usr/lib/llvm-21/bin (on PATH above).  Fall back to a symlink
+        # only if a packaging change drops that name.
+        command -v flang-new-21 || sudo ln -sf /usr/lib/llvm-21/bin/flang-21 /usr/local/bin/flang-new-21
 
-    - name: Install dependencies
+    - name: Install Python dependencies
       run: |
         rm -f ~/.dace.conf
         rm -rf .dacecache tests/.dacecache
         python -m pip install --upgrade pip
+        # nanobind is a CMake-configure-time requirement of the bridge;
+        # meson is the f2py backend on Python >=3.12 (numerical refs).
+        pip install nanobind numpy meson ninja
         pip install -e ".[testing]" pytest-xdist coverage
 
     - name: Build HLFIR bridge
       run: |
-        python -c "import dace_fortran; dace_fortran.generate_sdfg"  # triggers the CMake build
+        # First access of a builder-backed symbol triggers the CMake build.
+        python -c "import dace_fortran; dace_fortran.SDFGBuilder"
 
     - name: Run Fortran frontend tests
+      env:
+        LD_PRELOAD: /usr/lib/x86_64-linux-gnu/libgomp.so.1
       run: |
         export COVERAGE_RCFILE=`pwd`/.coveragerc
         pytest -n auto --cov-report=xml --cov=dace_fortran --tb=short tests/
