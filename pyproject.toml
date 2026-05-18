@@ -27,7 +27,11 @@ classifiers = [
 keywords = ["fortran", "flang", "hlfir", "mlir", "dace", "frontend", "dataflow"]
 
 dependencies = [
-    "dace @ git+https://github.com/spcl/dace.git@main",
+    # Pinned to the FaCe branch: it carries the DaCe-core pieces the
+    # frontend needs (``dace.sdfg.construction_utils``, the
+    # Memset/Copy/Count library nodes, the post-cleaning passes).
+    # Switch to ``@main`` once those land upstream.
+    "dace @ git+https://github.com/spcl/dace.git@FaCe",
 ]
 
 [project.optional-dependencies]
