@@ -430,7 +430,7 @@ static mlir::NamedAttribute declareSegments(mlir::OpBuilder &b, bool hasShape) {
 /// True if every member is flat (scalar or array-of-scalar) and we can
 /// synthesise a companion pointee for every (outer, member) pair.  AoS
 /// outers concatenate outer x inner extents in ``companionPointee``.
-static bool allMembersFlattenable(fir::RecordType rec, bool /*outerIsArray*/) {
+static bool allMembersFlattenable(fir::RecordType rec) {
   for (auto &pair : rec.getTypeList()) {
     if (!isFlatMemberType(pair.second)) return false;
   }
@@ -2053,7 +2053,7 @@ struct FlattenStructsPass
       if (!outerIsArray &&
           isJaggedScalarStruct(rec, p.jaggedEleTy, p.jaggedExtents))
         p.jagged = true;
-      else if (!allMembersFlattenable(rec, outerIsArray)) {
+      else if (!allMembersFlattenable(rec)) {
         // Nested branch: the struct has at least one record-
         // typed member.  Walk every leaf path; if every leaf is
         // a flat type with static extents we can replace the
@@ -3290,7 +3290,7 @@ struct FlattenStructsPass
         if (!aosAllocMaxConstSize(decl, pair.first).has_value()) return false;
       }
     }
-    if (allMembersFlattenable(rec, outerIsArray)) return true;
+    if (allMembersFlattenable(rec)) return true;
     // Nested-struct fallback.  ``collectFlatLeaves`` recurses
     // through ``RecordType`` and ``array<N x RecordType>``
     // members, building each leaf's flat companion shape.  When
@@ -3330,7 +3330,7 @@ struct FlattenStructsPass
     // initial ``outerDims`` so each leaf's flat companion
     // concatenates them as leading dims (e.g. ``s(3)%w(5,5)``
     // collapses to ``s_w`` of shape ``(3, 5, 5)``).
-    bool nested = !allMembersFlattenable(rec, outerIsArray);
+    bool nested = !allMembersFlattenable(rec);
     if (nested) {
       llvm::SmallVector<std::string, 4> prefix;
       llvm::SmallVector<int64_t, 4> initialDims(outerShape.begin(),
