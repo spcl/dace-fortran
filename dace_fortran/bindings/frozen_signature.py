@@ -147,22 +147,32 @@ class FrozenSignature:
         concrete mismatches when it assembles memlets.
         """
         live_arglist = sdfg.arglist()
-        live_names = list(live_arglist.keys())
-        snap_names = [a.sdfg_name for a in self.args]
+        live_fs = set(str(s) for s in sdfg.free_symbols)
+        snap_fs = set(self.free_symbols)
+
+        # The current ``SDFG.arglist()`` folds free symbols into the
+        # argument list.  The frozen signature models the data/scalar
+        # argument contract and the free-symbol set separately, so
+        # validate them as two partitions: compare argument *names*
+        # excluding free symbols here, and the free-symbol set on its
+        # own below.
+        live_names = [k for k in live_arglist if k not in live_fs]
+        snap_names = [a.sdfg_name for a in self.args if a.sdfg_name not in snap_fs]
         if live_names != snap_names:
             raise SignatureDriftError(f"signature drift on {self.entry!r}: "
                                       f"expected args {snap_names}, got {live_names}")
 
-        # dtype per arg  --  guard against silent type change.
+        # dtype per data/scalar arg  --  guard against silent type
+        # change.  Skip free-symbol args (validated by the set check)
+        # and any snapshot arg the live arglist no longer carries.
         for a in self.args:
-            desc = live_arglist[a.sdfg_name]
-            live_dtype = _dtype_string(desc)
+            if a.sdfg_name in snap_fs or a.sdfg_name not in live_arglist:
+                continue
+            live_dtype = _dtype_string(live_arglist[a.sdfg_name])
             if live_dtype != a.dtype:
                 raise SignatureDriftError(f"signature drift on {self.entry!r}: arg {a.sdfg_name!r} "
                                           f"dtype {a.dtype!r} in snapshot but {live_dtype!r} now")
 
-        live_fs = set(str(s) for s in sdfg.free_symbols)
-        snap_fs = set(self.free_symbols)
         if live_fs != snap_fs:
             raise SignatureDriftError(f"signature drift on {self.entry!r}: "
                                       f"expected free symbols {sorted(snap_fs)}, got {sorted(live_fs)}")
