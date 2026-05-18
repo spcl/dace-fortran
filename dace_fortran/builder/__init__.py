@@ -38,10 +38,10 @@ NOTE on nanobind bindings:
 
 from dace import InterstateEdge, SDFG
 
-from dace.frontend.hlfir.build_bridge import hb
+from dace_fortran.build_bridge import hb
 
-from dace.frontend.hlfir.builder.context import _Ctx
-from dace.frontend.hlfir.builder.descriptors import (
+from dace_fortran.builder.context import _Ctx
+from dace_fortran.builder.descriptors import (
     DTYPE,
     add_descriptors,
     auto_declare_synth,
@@ -49,7 +49,7 @@ from dace.frontend.hlfir.builder.descriptors import (
     emit_declare_transient,
     sdfg_name,
 )
-from dace.frontend.hlfir.builder.emit_library import (
+from dace_fortran.builder.emit_library import (
     emit_break,
     emit_copy,
     emit_libcall,
@@ -57,14 +57,14 @@ from dace.frontend.hlfir.builder.emit_library import (
     emit_reduce,
     emit_return,
 )
-from dace.frontend.hlfir.builder.emit_cfg import (
+from dace_fortran.builder.emit_cfg import (
     emit_assign,
     emit_cond,
     emit_loop,
     emit_symbol_init,
     emit_while,
 )
-from dace.frontend.hlfir.builder.emit_tasklet import emit_scalar_assign, emit_tasklet
+from dace_fortran.builder.emit_tasklet import emit_scalar_assign, emit_tasklet
 
 # Default bridge pass pipeline.  Order matters  --  see ``README.md``.
 DEFAULT_PIPELINE = (
@@ -358,7 +358,7 @@ class SDFGBuilder:
             sdfg.replace(src, dst)
             if src in sdfg.symbols:
                 sdfg.symbols.pop(src)
-        # Post-gen cleanups (Stage 4b in dace/frontend/hlfir/README.md).
+        # Post-gen cleanups (Stage 4b in dace_fortran/README.md).
         # Run BEFORE the FrozenSignature snapshot so the snapshot
         # captures the post-cleanup signature (matters for the
         # downstream codegen drift check).
@@ -415,7 +415,7 @@ class SDFGBuilder:
     def _run_post_gen_passes(self, sdfg: SDFG):
         """Run the post-generation cleanup passes that take a freshly-
         emitted bridge SDFG to its canonical shape.  See Stage 4b in
-        ``dace/frontend/hlfir/README.md`` for the pipeline.
+        ``dace_fortran/README.md`` for the pipeline.
 
         Currently:
             * ``UniqueLoopIterators`` -- rewrites every ``LoopRegion``'s
@@ -435,7 +435,7 @@ class SDFGBuilder:
               wrapping in a numpy 1-array.
         """
         from dace.sdfg.construction_utils import replace_length_one_arrays_with_scalars
-        from dace.frontend.hlfir.integer_power_exponents import IntegerizePowerExponents
+        from dace_fortran.integer_power_exponents import IntegerizePowerExponents
         from dace.transformation.passes.unique_loop_iterators import UniqueLoopIterators
 
         # Empty-region cleanup: any ControlFlowRegion (LoopRegion,
@@ -484,9 +484,9 @@ class SDFGBuilder:
         as a true ``Scalar`` and gets ``kind='scalar'``.
         """
         # Local import keeps the binding machinery optional -- plain
-        # ``import dace.frontend.hlfir`` doesn't drag it in.
+        # ``import dace_fortran`` doesn't drag it in.
         from dace.data import Array, Scalar
-        from dace.frontend.hlfir.bindings.frozen_signature import FrozenArg, FrozenSignature
+        from dace_fortran.bindings.frozen_signature import FrozenArg, FrozenSignature
 
         # Auto-detected Fortran module-global provenance, keyed by the
         # bridge's short Fortran name.  Populated from every VarInfo

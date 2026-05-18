@@ -12,7 +12,7 @@ parameters below; hlfir_to_sdfg then calls
 ``state.add_reduce(wcr, axes, identity)``.
 """
 
-from dace.frontend.hlfir.intrinsics.base import ReductionIntrinsic
+from dace_fortran.intrinsics.base import ReductionIntrinsic
 
 REDUCTIONS: dict[str, ReductionIntrinsic] = {
     'sum':

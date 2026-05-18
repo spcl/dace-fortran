@@ -19,10 +19,10 @@ this package and nothing else.  The families live in flat siblings:
     direct.py          --  SIZE / LBOUND / UBOUND / ... (Phase 4 stub)
 """
 
-from dace.frontend.hlfir.intrinsics.elementwise import ELEMENTWISE_INTRINSICS
-from dace.frontend.hlfir.intrinsics.reduction import REDUCTIONS
-from dace.frontend.hlfir.intrinsics.linalg import LINALG, STANDARD
-from dace.frontend.hlfir.intrinsics.direct import DIRECT_INTRINSICS
+from dace_fortran.intrinsics.elementwise import ELEMENTWISE_INTRINSICS
+from dace_fortran.intrinsics.reduction import REDUCTIONS
+from dace_fortran.intrinsics.linalg import LINALG, STANDARD
+from dace_fortran.intrinsics.direct import DIRECT_INTRINSICS
 
 
 def is_elementwise(name: str) -> bool:

@@ -12,7 +12,7 @@ import dace
 from dace import InterstateEdge
 from dace.sdfg.state import LoopRegion, ConditionalBlock, ControlFlowRegion
 
-from dace.frontend.hlfir.builder.access import (
+from dace_fortran.builder.access import (
     acc,
     array_read_to_dace_expr,
     collect_indirect,
@@ -20,9 +20,9 @@ from dace.frontend.hlfir.builder.access import (
     indirect_to_dace,
     iter_view_dim_map,
 )
-from dace.frontend.hlfir.builder.context import _Ctx
-from dace.frontend.hlfir.builder.descriptors import auto_declare_synth
-from dace.frontend.hlfir.builder.emit_tasklet import assign_reads_array, emit_tasklet
+from dace_fortran.builder.context import _Ctx
+from dace_fortran.builder.descriptors import auto_declare_synth
+from dace_fortran.builder.emit_tasklet import assign_reads_array, emit_tasklet
 
 
 def _anchor_views_referenced_in_expr(builder, expr: str, region, pre, sdfg):

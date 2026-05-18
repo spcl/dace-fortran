@@ -36,7 +36,7 @@ import numpy as np
 import pytest
 
 from _util import build_sdfg, gfortran_compile_so, have_flang
-from dace.frontend.hlfir.bindings import (
+from dace_fortran.bindings import (
     FlattenPlan,
     OriginalArg,
     OriginalInterface,

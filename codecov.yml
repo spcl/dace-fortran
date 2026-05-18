@@ -1,0 +1,15 @@
+ignore:
+  - "tests/**/*"
+
+coverage:
+  range: 40..90
+  round: nearest
+  status:
+    patch:
+      default:
+        informational: true
+    project:
+      default:
+        informational: true
+
+comment: false

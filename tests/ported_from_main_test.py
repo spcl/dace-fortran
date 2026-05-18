@@ -23,7 +23,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not avail
 
 
 def test_fortran_frontend_loop_region_basic_loop():
-    from dace.frontend.hlfir.fortran_parser import create_sdfg_from_string
+    from dace_fortran.fortran_parser import create_sdfg_from_string
 
     # The legacy version wraps the subroutine in a PROGRAM + CALL; the HLFIR
     # frontend runs on the subroutine directly (cross-subroutine lowering is

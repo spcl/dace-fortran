@@ -18,7 +18,7 @@ MKL / OpenBLAS / cuBLAS backends internally.
 ``Dot`` produces a scalar result from two rank-1 inputs.
 """
 
-from dace.frontend.hlfir.intrinsics.base import LibNodeIntrinsic
+from dace_fortran.intrinsics.base import LibNodeIntrinsic
 
 LINALG: dict[str, LibNodeIntrinsic] = {
     'matmul': LibNodeIntrinsic('matmul', module='blas', node_cls='MatMul'),

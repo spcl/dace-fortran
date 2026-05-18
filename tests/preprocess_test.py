@@ -3,7 +3,7 @@ rewrite, the ``x**2`` / ``x**3`` -> explicit-multiply expansion, and the
 single/default REAL literal -> double-precision promotion.
 """
 
-from dace.frontend.hlfir.preprocess import (
+from dace_fortran.preprocess import (
     preprocess_fortran,
     promote_real_literals_to_double,
     rewrite_integer_powers,

@@ -18,7 +18,7 @@ and hand to ``assemble_module``.
 
 from typing import List, Tuple
 
-from dace.frontend.hlfir.bindings.flatten_plan import (
+from dace_fortran.bindings.flatten_plan import (
     FlattenRecipe,
     strip_index_args,
     substitute_indices,

@@ -171,7 +171,7 @@ def compile_to_hlfir(source: str,
     assert _FLANG is not None, "flang-new-21 not available"
     out_dir.mkdir(parents=True, exist_ok=True)
     src = out_dir / f"{name}.f90"
-    from dace.frontend.hlfir.preprocess import (merge_used_modules, preprocess_fortran, rewrite_integer_powers)
+    from dace_fortran.preprocess import (merge_used_modules, preprocess_fortran, rewrite_integer_powers)
     if merge:
         source = merge_used_modules(source, search_dirs=[out_dir])
     source = rewrite_integer_powers(source)
@@ -262,7 +262,7 @@ def build_sdfg(source: str, out_dir: Path, name: str = "src", pipeline=None, ent
                   declares into the variable extraction.
     :return: ``SDFGBuilder`` with variables classified and the AST extracted.
     """
-    from dace.frontend.hlfir.hlfir_to_sdfg import SDFGBuilder, DEFAULT_PIPELINE
+    from dace_fortran.hlfir_to_sdfg import SDFGBuilder, DEFAULT_PIPELINE
     hlfir = compile_to_hlfir(source, out_dir, name)
     builder = SDFGBuilder(str(hlfir), pipeline=(pipeline or DEFAULT_PIPELINE), entry=entry)
     suffix = _per_test_suffix()
@@ -279,7 +279,7 @@ def run_passes_dump(source: str, out_dir: Path, name: str = "src", pipeline: str
     through SDFG extraction  --  handy for passes whose downstream tracing is
     still being wired in.
     """
-    from dace.frontend.hlfir.build_bridge import hb
+    from dace_fortran.build_bridge import hb
     hlfir = compile_to_hlfir(source, out_dir, name)
     mod = hb.HLFIRModule()
     if not mod.parse_file(str(hlfir)):

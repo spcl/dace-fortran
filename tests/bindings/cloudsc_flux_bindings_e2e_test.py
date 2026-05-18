@@ -26,7 +26,7 @@ import pytest
 
 from _util import build_sdfg, have_flang
 
-from dace.frontend.hlfir.bindings import (
+from dace_fortran.bindings import (
     FlattenPlan,
     OriginalArg,
     OriginalInterface,

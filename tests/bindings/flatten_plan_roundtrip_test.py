@@ -10,8 +10,8 @@ from pathlib import Path
 import pytest
 
 from _util import have_flang
-from dace.frontend.hlfir.build_bridge import hb
-from dace.frontend.hlfir.bindings import FlattenPlan
+from dace_fortran.build_bridge import hb
+from dace_fortran.bindings import FlattenPlan
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 

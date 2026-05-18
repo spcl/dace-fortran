@@ -57,7 +57,7 @@ def test_return_block_wired_at_top_level(tmp_path):
     return."""
     import dace
     from dace import SDFG
-    from dace.frontend.hlfir.hlfir_to_sdfg import SDFGBuilder
+    from dace_fortran.hlfir_to_sdfg import SDFGBuilder
 
     builder = SDFGBuilder.__new__(SDFGBuilder)
     builder.variables = []
@@ -69,7 +69,7 @@ def test_return_block_wired_at_top_level(tmp_path):
     sdfg.add_symbol("n", dace.int64)
     sdfg.add_array("a", shape=(dace.symbol("n"), ), dtype=dace.float64, transient=False)
 
-    from dace.frontend.hlfir.hlfir_to_sdfg import _Ctx
+    from dace_fortran.hlfir_to_sdfg import _Ctx
     ctx = _Ctx(sdfg, builder)
 
     ast = [_Node(kind="return")]
@@ -93,7 +93,7 @@ def test_break_block_inside_loop_region(tmp_path):
     import dace
     from dace import SDFG
     from dace.sdfg.state import LoopRegion, ConditionalBlock, ControlFlowRegion
-    from dace.frontend.hlfir.hlfir_to_sdfg import SDFGBuilder, _Ctx
+    from dace_fortran.hlfir_to_sdfg import SDFGBuilder, _Ctx
 
     builder = SDFGBuilder.__new__(SDFGBuilder)
     builder.variables = []

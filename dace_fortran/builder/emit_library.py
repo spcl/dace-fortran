@@ -15,7 +15,7 @@ import math
 
 from dace import InterstateEdge, Memlet
 
-from dace.frontend.hlfir.builder.access import acc, iter_view_dim_map
+from dace_fortran.builder.access import acc, iter_view_dim_map
 
 # Per-library-node connector conventions.  Kept here rather than on
 # ``LibNodeIntrinsic`` because the names are a property of the DaCe
@@ -148,7 +148,7 @@ def emit_libcall(builder, ctx, n, region):
     lowered to the matching DaCe library node.  ``MatMul`` specializes
     internally (GEMM / GEMV / Dot) based on operand ranks.
     """
-    from dace.frontend.hlfir.intrinsics import libnode_spec
+    from dace_fortran.intrinsics import libnode_spec
 
     ctx.flush(builder, region)
     ctx.ensure(region)
@@ -201,7 +201,7 @@ def emit_libcall(builder, ctx, n, region):
     # libcalls like dot_product, count, ...).
     write_acc = next((ac for ac in n.accesses if ac.is_write), None)
     if write_acc is not None:
-        from dace.frontend.hlfir.builder.access import build_memlet_index
+        from dace_fortran.builder.access import build_memlet_index
         ix = build_memlet_index(builder, n.target, write_acc, ctx.iter_map)
         out_memlet = Memlet(f"{n.target}[{ix}]")
     else:
@@ -223,7 +223,7 @@ def emit_reduce(builder, ctx, n, region):
     in the same routine all write through the whole destination and
     the last one wins.
     """
-    from dace.frontend.hlfir.builder.access import build_memlet_index
+    from dace_fortran.builder.access import build_memlet_index
 
     ctx.flush(builder, region)
     ctx.ensure(region)

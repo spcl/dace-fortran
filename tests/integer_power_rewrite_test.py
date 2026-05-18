@@ -28,7 +28,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from dace.frontend.hlfir.preprocess import rewrite_integer_powers
+from dace_fortran.preprocess import rewrite_integer_powers
 
 # --- base extraction / minimal parenthesisation ---------------------
 

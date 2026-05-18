@@ -12,7 +12,7 @@ wired.
 
 from pathlib import Path
 
-from dace.frontend.hlfir.bindings import (
+from dace_fortran.bindings import (
     FlattenEntry,
     FlattenPlan,
     FlattenRecipe,

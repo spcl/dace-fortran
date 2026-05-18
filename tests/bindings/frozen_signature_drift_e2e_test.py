@@ -21,7 +21,7 @@ import pytest
 
 from _util import build_sdfg, have_flang
 from dace.codegen.codegen import generate_code
-from dace.frontend.hlfir.bindings import SignatureDriftError
+from dace_fortran.bindings import SignatureDriftError
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 

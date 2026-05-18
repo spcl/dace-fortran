@@ -31,8 +31,8 @@ import numpy as np
 
 from _util import build_sdfg
 
-from dace.frontend.hlfir.bindings import FlattenPlan, emit_bindings
-from dace.frontend.hlfir.bindings.block_builders import effective_module_sources
+from dace_fortran.bindings import FlattenPlan, emit_bindings
+from dace_fortran.bindings.block_builders import effective_module_sources
 
 # The sibling e2e test owns the (large) struct construction + driver
 # shim + allocation helpers; reuse them verbatim so there is one

@@ -1,0 +1,76 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dace-fortran"
+version = "1.0.0"
+description = "Fortran (HLFIR) frontend for the DaCe data-centric framework"
+readme = "README.md"
+license = "BSD-3-Clause"
+authors = [
+    { name = "ETH Zurich and the DaCe authors" }
+]
+requires-python = ">=3.9"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Compilers",
+]
+keywords = ["fortran", "flang", "hlfir", "mlir", "dace", "frontend", "dataflow"]
+
+dependencies = [
+    "dace @ git+https://github.com/spcl/dace.git@main",
+]
+
+[project.optional-dependencies]
+testing = [
+    "pytest",
+    "pytest-cov",
+    "pytest-xdist",
+    "coverage",
+    "numpy",
+]
+linting = [
+    "flake8",
+    "pre-commit",
+]
+dev = [
+    "dace-fortran[testing,linting]",
+]
+
+[project.urls]
+Homepage = "https://github.com/spcl/dace-fortran"
+Repository = "https://github.com/spcl/dace-fortran"
+Documentation = "https://spcldace.readthedocs.io"
+Issues = "https://github.com/spcl/dace-fortran/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dace_fortran*"]
+
+[tool.setuptools.package-data]
+dace_fortran = [
+    "CMakeLists.txt",
+    "build_bridge.py",
+    "bridge/**/*.cpp",
+    "bridge/**/*.h",
+    "passes/**/*.cpp",
+    "passes/**/*.h",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "long: Test runs for a long time and is skipped in CI (select with '-m \"long\"')",
+    "sequential: Test must be run sequentially (select with '-m \"sequential\"')",
+]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+addopts = "--color=yes"

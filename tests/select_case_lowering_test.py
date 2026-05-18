@@ -3,7 +3,7 @@
 The pass lowers ``fir.select_case`` to chains of ``arith.cmp`` +
 ``cf.cond_br`` *before* ``hlfir-inline-all`` runs.  Without it the
 upstream MLIR inliner segfaults whenever a callee contains
-``SELECT CASE``  --  see [LowerFirSelectCase.cpp](../../dace/frontend/hlfir/passes/LowerFirSelectCase.cpp).
+``SELECT CASE``  --  see [LowerFirSelectCase.cpp](../../dace_fortran/passes/LowerFirSelectCase.cpp).
 
 These tests pin two small Fortran programs that drive the pass in its
 two interesting shapes:

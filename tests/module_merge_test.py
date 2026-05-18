@@ -22,7 +22,7 @@ import numpy as np
 import pytest
 
 from _util import build_sdfg, have_flang
-from dace.frontend.hlfir.preprocess import merge_used_modules
+from dace_fortran.preprocess import merge_used_modules
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 

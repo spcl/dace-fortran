@@ -1,0 +1,63 @@
+name: Fortran Tests
+
+on:
+  push:
+    branches: [ main, ci-fix ]
+  pull_request:
+    branches: [ main, ci-fix ]
+  merge_group:
+    branches: [ main, ci-fix ]
+
+env:
+  CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+concurrency:
+  group: ${{github.workflow}}-${{github.ref}}
+  cancel-in-progress: true
+
+jobs:
+  test-fortran:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install LLVM/flang 21 + Fortran toolchain
+      run: |
+        wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+        sudo add-apt-repository -y "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-21 main"
+        sudo apt-get update
+        sudo apt-get install -y llvm-21-dev libmlir-21-dev mlir-21-tools \
+                                flang-21 clang-21 cmake ninja-build gfortran
+        echo "/usr/lib/llvm-21/bin" >> "$GITHUB_PATH"
+        # The bridge looks for flang-new-21 on PATH.
+        sudo ln -sf /usr/bin/flang-new-21 /usr/local/bin/flang-new-21 || true
+
+    - name: Install dependencies
+      run: |
+        rm -f ~/.dace.conf
+        rm -rf .dacecache tests/.dacecache
+        python -m pip install --upgrade pip
+        pip install -e ".[testing]" pytest-xdist coverage
+
+    - name: Build HLFIR bridge
+      run: |
+        python -c "import dace_fortran; dace_fortran.generate_sdfg"  # triggers the CMake build
+
+    - name: Run Fortran frontend tests
+      run: |
+        export COVERAGE_RCFILE=`pwd`/.coveragerc
+        pytest -n auto --cov-report=xml --cov=dace_fortran --tb=short tests/
+        coverage report || true
+        coverage xml || true
+        reachable=0
+        ping -W 2 -c 1 codecov.io || reachable=$?
+        if [ $reachable -eq 0 ]; then
+          curl -Os https://uploader.codecov.io/latest/linux/codecov && chmod +x codecov && ./codecov || true
+        else
+          echo "Codecov.io is unreachable"
+        fi

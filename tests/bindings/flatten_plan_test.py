@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from dace.frontend.hlfir.bindings import (
+from dace_fortran.bindings import (
     FlattenEntry,
     FlattenPlan,
     FlattenRecipe,

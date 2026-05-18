@@ -14,13 +14,13 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from dace.frontend.hlfir.bindings.flatten_plan import (
+from dace_fortran.bindings.flatten_plan import (
     FlattenPlan,
     strip_index_args,
 )
-from dace.frontend.hlfir.bindings.fortran_interface import OriginalInterface
-from dace.frontend.hlfir.bindings.frozen_signature import FrozenSignature
-from dace.frontend.hlfir.bindings.loop_copy import (
+from dace_fortran.bindings.fortran_interface import OriginalInterface
+from dace_fortran.bindings.frozen_signature import FrozenSignature
+from dace_fortran.bindings.loop_copy import (
     _fortran_type,
     render_alias_calls,
     render_aos_alloc_pack_in,

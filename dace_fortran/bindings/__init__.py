@@ -1,6 +1,6 @@
 """Fortran binding emission for HLFIR-built SDFGs.
 
-Peer of ``builder/`` / ``intrinsics/`` under ``dace/frontend/hlfir/``.
+Peer of ``builder/`` / ``intrinsics/`` under ``dace_fortran/``.
 Runs AFTER the SDFG is built, consuming three inputs:
 
 - ``FrozenSignature``  --  the SDFG's argument list snapshotted at
@@ -25,21 +25,21 @@ Public surface:
          --  the top-level emitter
 """
 
-from dace.frontend.hlfir.bindings.emit_bindings import emit_bindings
-from dace.frontend.hlfir.bindings.flatten_plan import (
+from dace_fortran.bindings.emit_bindings import emit_bindings
+from dace_fortran.bindings.flatten_plan import (
     FlattenEntry,
     FlattenPlan,
     FlattenRecipe,
     strip_index_args,
     substitute_indices,
 )
-from dace.frontend.hlfir.bindings.fortran_interface import (
+from dace_fortran.bindings.fortran_interface import (
     DerivedType,
     Member,
     OriginalArg,
     OriginalInterface,
 )
-from dace.frontend.hlfir.bindings.frozen_signature import (
+from dace_fortran.bindings.frozen_signature import (
     FrozenArg,
     FrozenSignature,
     SignatureDriftError,

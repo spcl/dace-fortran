@@ -3,7 +3,7 @@ drives the HLFIR-based SDFG builder.
 
 The public surface mirrors the legacy frontend's so test files can swap
 ``from dace.frontend.fortran import fortran_parser`` for ``from
-dace.frontend.hlfir import fortran_parser`` without further edits.
+dace_fortran import fortran_parser`` without further edits.
 Unrecognised keyword arguments are silently accepted for interface
 compatibility; only the subset of features the HLFIR frontend currently
 lowers will actually produce correct SDFGs.
@@ -16,8 +16,8 @@ from pathlib import Path
 
 from dace import SDFG
 
-from dace.frontend.hlfir.build_bridge import hb  # noqa: F401   --  ensures the bridge is built
-from dace.frontend.hlfir.hlfir_to_sdfg import DEFAULT_PIPELINE, SDFGBuilder
+from dace_fortran.build_bridge import hb  # noqa: F401   --  ensures the bridge is built
+from dace_fortran.hlfir_to_sdfg import DEFAULT_PIPELINE, SDFGBuilder
 
 
 def _find_flang() -> str:

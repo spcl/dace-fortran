@@ -12,7 +12,7 @@ import dace
 import pytest
 
 from dace.codegen import codegen
-from dace.frontend.hlfir.bindings import (
+from dace_fortran.bindings import (
     FrozenArg,
     FrozenSignature,
     SignatureDriftError,

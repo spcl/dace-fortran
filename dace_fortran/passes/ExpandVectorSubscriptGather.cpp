@@ -37,7 +37,7 @@
 // any other elemental.
 //
 // ----------------------------------------------------------------------------
-// SCOPE / DESIGN CONSTRAINTS  --  see also dace/frontend/hlfir/README.md
+// SCOPE / DESIGN CONSTRAINTS  --  see also dace_fortran/README.md
 // "Future support map" for user-facing status.
 // ----------------------------------------------------------------------------
 //

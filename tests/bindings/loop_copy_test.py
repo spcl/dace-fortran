@@ -7,8 +7,8 @@ lines out.
 
 import pytest
 
-from dace.frontend.hlfir.bindings import FlattenRecipe
-from dace.frontend.hlfir.bindings.loop_copy import (
+from dace_fortran.bindings import FlattenRecipe
+from dace_fortran.bindings.loop_copy import (
     render_alias_calls,
     render_aos_alloc_pack_in,
     render_aos_alloc_pack_out,

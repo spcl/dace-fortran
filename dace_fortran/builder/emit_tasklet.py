@@ -20,7 +20,7 @@ import re
 
 from dace import Memlet
 
-from dace.frontend.hlfir.builder.access import (acc, build_memlet_index, get_access, indirect_host, rename_iters,
+from dace_fortran.builder.access import (acc, build_memlet_index, get_access, indirect_host, rename_iters,
                                                 resolve_section_alias)
 
 

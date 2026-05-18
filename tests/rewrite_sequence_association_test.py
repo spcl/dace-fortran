@@ -30,7 +30,7 @@ _REWRITE = "hlfir-rewrite-sequence-association"
 
 
 def _run(source: str, out_dir: Path, name: str, extra: str = ""):
-    from dace.frontend.hlfir.build_bridge import hb
+    from dace_fortran.build_bridge import hb
     hlfir = compile_to_hlfir(source, out_dir, name)
     m = hb.HLFIRModule()
     assert m.parse_file(str(hlfir))

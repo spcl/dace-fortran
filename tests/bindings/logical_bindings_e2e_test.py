@@ -1,6 +1,6 @@
 """End-to-end LOGICAL -> logical(c_bool) bridge tests.
 
-The bindings emitter in ``dace/frontend/hlfir/bindings/block_builders.py``
+The bindings emitter in ``dace_fortran/bindings/block_builders.py``
 generates a ``logical(c_bool), allocatable, target`` scratch buffer and
 an intrinsic-cast copy-in / copy-out bridge whenever an outer Fortran
 LOGICAL argument doesn't already match the SDFG's ``bool *`` ABI.
@@ -38,7 +38,7 @@ import numpy as np
 import pytest
 
 from _util import build_sdfg, have_flang
-from dace.frontend.hlfir.bindings import (
+from dace_fortran.bindings import (
     FlattenPlan,
     OriginalArg,
     OriginalInterface,

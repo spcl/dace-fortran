@@ -14,7 +14,7 @@ builders so each concern is test-isolated.
 
 from pathlib import Path
 
-from dace.frontend.hlfir.bindings.block_builders import (
+from dace_fortran.bindings.block_builders import (
     assemble_module,
     build_c_interface,
     build_finalize,
@@ -23,9 +23,9 @@ from dace.frontend.hlfir.bindings.block_builders import (
     build_wrapper_head,
     build_wrapper_tail,
 )
-from dace.frontend.hlfir.bindings.flatten_plan import FlattenPlan
-from dace.frontend.hlfir.bindings.fortran_interface import OriginalInterface
-from dace.frontend.hlfir.bindings.frozen_signature import FrozenSignature
+from dace_fortran.bindings.flatten_plan import FlattenPlan
+from dace_fortran.bindings.fortran_interface import OriginalInterface
+from dace_fortran.bindings.frozen_signature import FrozenSignature
 
 
 def emit_bindings(

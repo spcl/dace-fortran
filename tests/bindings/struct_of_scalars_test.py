@@ -31,7 +31,7 @@ import numpy as np
 import pytest
 
 from _util import build_sdfg, have_flang
-from dace.frontend.hlfir.bindings import FlattenPlan
+from dace_fortran.bindings import FlattenPlan
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 

@@ -193,15 +193,15 @@ def build(clean: bool = False, verbose: bool = True):
 # Import-or-build
 # ---------------------------------------------------------------------------
 
-_BRIDGE_MODULE = "dace.frontend.hlfir.hlfir_bridge"
+_BRIDGE_MODULE = "dace_fortran.hlfir_bridge"
 
 
 def ensure_bridge():
     """Import the compiled bridge, building first if necessary.
 
     The extension is imported as the package submodule
-    ``dace.frontend.hlfir.hlfir_bridge`` (``build`` symlinks the freshly
-    built ``.so`` next to this file, i.e. into the ``dace.frontend.hlfir``
+    ``dace_fortran.hlfir_bridge`` (``build`` symlinks the freshly
+    built ``.so`` next to this file, i.e. into the ``dace_fortran``
     package), so no ``sys.path`` manipulation is required.
     """
     try:

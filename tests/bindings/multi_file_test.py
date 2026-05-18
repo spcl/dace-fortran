@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from _util import have_flang
-from dace.frontend.hlfir.hlfir_to_sdfg import SDFGBuilder
+from dace_fortran.hlfir_to_sdfg import SDFGBuilder
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 

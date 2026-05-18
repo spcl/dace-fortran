@@ -135,10 +135,10 @@ def test_reserved_name_binding_wrapper_emits(tmp_path: Path):
     without crashing and produce a wrapper file.  This is the surface
     that downstream Fortran callers see  --  without it the rename pass
     has fixed the SDFG side but left the binding side broken."""
-    from dace.frontend.hlfir.bindings import emit_bindings
-    from dace.frontend.hlfir.bindings.frozen_signature import FrozenArg, FrozenSignature
-    from dace.frontend.hlfir.bindings.fortran_interface import OriginalArg, OriginalInterface
-    from dace.frontend.hlfir.bindings.flatten_plan import FlattenPlan
+    from dace_fortran.bindings import emit_bindings
+    from dace_fortran.bindings.frozen_signature import FrozenArg, FrozenSignature
+    from dace_fortran.bindings.fortran_interface import OriginalArg, OriginalInterface
+    from dace_fortran.bindings.flatten_plan import FlattenPlan
 
     fs = FrozenSignature(
         entry="main",

@@ -9,9 +9,9 @@ file pins the cheaper invariants: explicit override precedence, the
 auto-only path, and serialisation stability.
 """
 
-from dace.frontend.hlfir.bindings.block_builders import effective_module_sources
-from dace.frontend.hlfir.bindings.fortran_interface import OriginalInterface
-from dace.frontend.hlfir.bindings.frozen_signature import FrozenArg, FrozenSignature
+from dace_fortran.bindings.block_builders import effective_module_sources
+from dace_fortran.bindings.fortran_interface import OriginalInterface
+from dace_fortran.bindings.frozen_signature import FrozenArg, FrozenSignature
 
 
 def _frozen(origins):

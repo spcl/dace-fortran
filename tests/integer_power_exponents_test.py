@@ -35,7 +35,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 def test_pass_retypes_integer_valued_float_exponents():
     """The pass turns ``a ** 2.0`` / ``a ** -3.0`` into ``int``
     exponents and leaves fractional / already-int powers alone."""
-    from dace.frontend.hlfir.integer_power_exponents import IntegerizePowerExponents
+    from dace_fortran.integer_power_exponents import IntegerizePowerExponents
 
     sdfg = dace.SDFG("ipow_pass")
     sdfg.add_array("A", [1], dace.float64)

@@ -13,7 +13,7 @@ it bare by consulting ``is_elementwise`` so the name isn't rewritten to
 an ``_in_sin`` tasklet connector.
 """
 
-from dace.frontend.hlfir.intrinsics.base import ElementwiseIntrinsic
+from dace_fortran.intrinsics.base import ElementwiseIntrinsic
 
 
 def _one(name: str, arity: int = 1) -> tuple[str, ElementwiseIntrinsic]:

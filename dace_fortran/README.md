@@ -31,7 +31,7 @@ shape because the earlier stages normalised away the irregularities.
 
 ## Stages
 
-**(0) Pre-process source.** `dace.frontend.hlfir.preprocess` holds
+**(0) Pre-process source.** `dace_fortran.preprocess` holds
 three text rewrites that must run before flang (they change what
 flang accepts, or what arithmetic each backend is free to pick).
 They are SED-style regex transforms, not a Fortran parser, so each
@@ -164,7 +164,7 @@ freshly-built SDFG, in order:
    transient-only sub-cleanup follows the same rule).
 
 3. **`IntegerizePowerExponents`**
-   (`dace.frontend.hlfir.integer_power_exponents`).  Retypes
+   (`dace_fortran.integer_power_exponents`).  Retypes
    every integer-valued floating-point ``**`` exponent in a Python
    tasklet (``base**2.0``, ``base**-3.0``) to the corresponding
    ``int``.  C++ codegen routes a float exponent through libm
@@ -370,7 +370,7 @@ post-optimiser chains.
 ## Components
 
 ```
-dace/frontend/hlfir/
+dace_fortran/
 |--- bridge/            C++  --  HLFIR parser + classifier + walker (nanobind)
 |   |--- bridge.cpp              MLIRContext, pass pipeline, Python exports
 |   |--- extract_vars.cpp        hlfir.declare -> VarInfo[]
@@ -419,7 +419,7 @@ dace/frontend/hlfir/
 ## Entry point
 
 ```python
-from dace.frontend.hlfir.fortran_parser import generate_sdfg
+from dace_fortran.fortran_parser import generate_sdfg
 
 # Multi-file (production)
 sdfg, bindings_f90, frozen_sig_json = generate_sdfg(

@@ -8,7 +8,7 @@ from pathlib import Path
 import dace
 import pytest
 
-from dace.frontend.hlfir.bindings import (
+from dace_fortran.bindings import (
     FrozenArg,
     FrozenSignature,
     SignatureDriftError,
