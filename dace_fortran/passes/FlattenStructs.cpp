@@ -489,53 +489,10 @@ static constexpr int kFlattenMaxDepth = 12;
 ///     ``p_prog%pprog(i)%w(j, k)`` (where ``pprog: type(t)(10)``
 ///     is an array-of-struct member) to flatten to a 3D companion
 ///     ``p_prog_pprog_w`` of shape ``(10, 5, 5)``.
-/// Recognise a pointer/allocatable-to-record member (``type(t),
-/// pointer :: p`` / ``type(t), allocatable :: p`` with scalar
-/// pointee).  Used only by ``collectFlatLeaves``'s cycle handling
-///  --  the bridge cannot navigate through such a pointer to its
-/// pointee (would require concrete pointer-aliasing analysis), but
-/// it can safely IGNORE the field when the user code never reads
-/// through it.  Returns the pointed-to RecordType when matched,
-/// null otherwise.
-static fir::RecordType pointerToRecordMember(mlir::Type t) {
-  auto box = mlir::dyn_cast<fir::BoxType>(t);
-  if (!box) return {};
-  mlir::Type inner;
-  if (auto h = mlir::dyn_cast<fir::HeapType>(box.getEleTy()))
-    inner = h.getEleTy();
-  else if (auto p = mlir::dyn_cast<fir::PointerType>(box.getEleTy()))
-    inner = p.getEleTy();
-  else
-    return {};
-  return mlir::dyn_cast<fir::RecordType>(inner);
-}
-
-/// Recognise ``type(T), allocatable :: f(:)`` or ``type(T), pointer ::
-/// f(:)``  --  i.e. an alloc/pointer wrapper over an array of records.
-/// Companion of ``pointerToRecordMember`` for the array-shaped case.
-/// Returns the inner element ``RecordType`` when matched.
-///
-/// Treated as opaque by ``collectFlatLeaves`` for the same reason
-/// pointer-to-record-scalar is: the bridge can't pre-allocate a flat
-/// companion for "all records reachable through this descriptor"
-/// without runtime alloc-count info.  Access through such a member
-/// (``p_prog%pprog(<idx>)%...``) is handled by recognising the
-/// inlined-callee element-alias declare that Flang emits after
-/// ``hlfir-inline-all`` and flattening *that* declare instead.
-static fir::RecordType allocOrPtrArrayOfRecordsMember(mlir::Type t) {
-  auto box = mlir::dyn_cast<fir::BoxType>(t);
-  if (!box) return {};
-  mlir::Type inner;
-  if (auto h = mlir::dyn_cast<fir::HeapType>(box.getEleTy()))
-    inner = h.getEleTy();
-  else if (auto p = mlir::dyn_cast<fir::PointerType>(box.getEleTy()))
-    inner = p.getEleTy();
-  else
-    return {};
-  auto seq = mlir::dyn_cast<fir::SequenceType>(inner);
-  if (!seq) return {};
-  return mlir::dyn_cast<fir::RecordType>(seq.getEleTy());
-}
+// ``pointerToRecordMember`` / ``allocOrPtrArrayOfRecordsMember`` moved
+// to ``bridge/trace_utils`` so this pass and
+// ``hlfir-lift-alloc-array-of-records`` share one definition (the two
+// must agree on which members are treated as opaque).
 
 static bool collectFlatLeaves(fir::RecordType rec,
                               llvm::SmallVectorImpl<std::string> &prefix,
