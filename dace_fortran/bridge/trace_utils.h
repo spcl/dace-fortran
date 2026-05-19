@@ -15,6 +15,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "flang/Optimizer/Dialect/FIRType.h"
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
@@ -168,6 +169,24 @@ std::string traceExtentExpr(mlir::Value v);
 /// scalars and the expression string from ``traceExtentExpr``
 /// references undeclared SDFG names.
 void collectExtentExprScalars(mlir::Value v, std::set<std::string> &out);
+
+/// Decoded ``hlfir.declare`` / ``fir.declare`` shape operand.  Per the
+/// FIR/HLFIR op defs it is exactly one of:
+///   * ``fir.shape<N>``        -- extents only; lbs all implicit 1
+///   * ``fir.shape_shift<N>``  -- interleaved ``(lb,ext)`` pairs
+///   * ``fir.shift<N>``        -- lbs only; extents live on the box
+struct ShapeOperandInfo {
+  enum Kind { None, Shape, ShapeShift, Shift } kind = None;
+  std::vector<mlir::Value> lbs;      // empty for Shape (implicit 1)
+  std::vector<mlir::Value> extents;  // empty for Shift (box-carried)
+  unsigned rank = 0;
+};
+
+/// Single decoder for the one ``AnyShapeOrShiftType`` shape operand of
+/// ``hlfir.declare`` / ``fir.declare`` -- the one source of truth the
+/// extent / lower-bound helpers (and extract_vars) share instead of
+/// re-matching ShapeOp / ShapeShiftOp by hand.
+ShapeOperandInfo classifyShapeOperand(mlir::Value shape);
 
 /// Extract extent SSA values from a fir.shape or fir.shape_shift.
 /// Returns empty if the operand is neither (or is null).

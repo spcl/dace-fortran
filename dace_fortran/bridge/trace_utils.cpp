@@ -324,44 +324,46 @@ hlfir::DeclareOp asAssumedShapeAlias(hlfir::DeclareOp decl) {
   return {};
 }
 
+ShapeOperandInfo classifyShapeOperand(mlir::Value shape) {
+  ShapeOperandInfo si;
+  if (!shape) return si;
+  auto *def = shape.getDefiningOp();
+  if (auto sh = mlir::dyn_cast_or_null<fir::ShapeOp>(def)) {
+    si.kind = ShapeOperandInfo::Shape;
+    for (auto e : sh.getExtents()) si.extents.push_back(e);
+    si.rank = si.extents.size();
+  } else if (auto ss = mlir::dyn_cast_or_null<fir::ShapeShiftOp>(def)) {
+    si.kind = ShapeOperandInfo::ShapeShift;
+    auto ops = ss->getOperands();
+    for (unsigned i = 0; i + 1 < ops.size(); i += 2) {
+      si.lbs.push_back(ops[i]);
+      si.extents.push_back(ops[i + 1]);
+    }
+    si.rank = si.lbs.size();
+  } else if (auto sf = mlir::dyn_cast_or_null<fir::ShiftOp>(def)) {
+    si.kind = ShapeOperandInfo::Shift;
+    for (auto lb : sf->getOperands()) si.lbs.push_back(lb);
+    si.rank = si.lbs.size();
+  }
+  return si;
+}
+
 std::vector<std::optional<int64_t>> declareLowerBounds(hlfir::DeclareOp decl) {
   std::vector<std::optional<int64_t>> lbs;
-  auto shape = decl.getShape();
-  if (!shape) return lbs;
-  auto *def = shape.getDefiningOp();
-  if (!def) return lbs;
-  if (auto sh = mlir::dyn_cast<fir::ShapeOp>(def)) {
+  auto si = classifyShapeOperand(decl.getShape());
+  if (si.kind == ShapeOperandInfo::Shape) {
     // Plain fir.shape: every dim defaults to lbound=1.
-    for (unsigned i = 0; i < sh.getExtents().size(); ++i)
-      lbs.push_back(std::optional<int64_t>(1));
-    return lbs;
+    lbs.assign(si.rank, std::optional<int64_t>(1));
+  } else if (si.kind == ShapeOperandInfo::ShapeShift) {
+    for (auto lb : si.lbs) lbs.push_back(traceConstInt(lb));
   }
-  if (auto ss = mlir::dyn_cast<fir::ShapeShiftOp>(def)) {
-    // shape_shift operands alternate: lb0, ext0, lb1, ext1, ...
-    auto ops = ss->getOperands();
-    for (unsigned i = 0; i < ops.size(); i += 2)
-      lbs.push_back(traceConstInt(ops[i]));
-    return lbs;
-  }
+  // fir.shift / no shape: leave empty (caller default), as before.
   return lbs;
 }
 
 llvm::SmallVector<mlir::Value, 4> extractExtents(mlir::Value shape) {
-  llvm::SmallVector<mlir::Value, 4> result;
-  if (!shape) return result;
-  auto *def = shape.getDefiningOp();
-  if (!def) return result;
-
-  if (auto sh = mlir::dyn_cast<fir::ShapeOp>(def))
-    for (auto e : sh.getExtents()) result.push_back(e);
-
-  if (auto ss = mlir::dyn_cast<fir::ShapeShiftOp>(def)) {
-    // shape_shift: alternating (lb, extent)  --  we want odd indices.
-    auto ops = ss->getOperands();
-    for (unsigned i = 1; i < ops.size(); i += 2) result.push_back(ops[i]);
-  }
-
-  return result;
+  auto ext = classifyShapeOperand(shape).extents;
+  return {ext.begin(), ext.end()};
 }
 
 fir::RecordType pointerToRecordMember(mlir::Type t) {

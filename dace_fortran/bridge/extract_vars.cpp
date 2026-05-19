@@ -26,51 +26,8 @@ namespace hlfir_bridge {
 // Shape and lower-bound resolution for one declare.
 // ---------------------------------------------------------------------------
 
-/// Per-dim extent symbol names.  Resolution order:
-///   1. hlfir_bridge.shape_hint attribute (populated by PropagateShapes)
-///   2. fir.shape / fir.shape_shift operand (traced via SSA)
-///   3. empty  --  caller fills with synthetics
-/// Single decoder for the one ``AnyShapeOrShiftType`` shape operand of
-/// ``hlfir.declare`` / ``fir.declare``.  Per the FIR/HLFIR op defs it
-/// is exactly one of three forms (and lbs are carried *only* here --
-/// HLFIR omits them iff every lb is the default 1):
-///   * ``fir.shape<N>``        -- extents only; lbs all implicit 1
-///   * ``fir.shape_shift<N>``  -- interleaved ``(lb,ext)`` pairs
-///   * ``fir.shift<N>``        -- lbs only; extents live on the box
-/// Centralising this kills the three duplicated ShapeOp/ShapeShiftOp
-/// inspections and adds the previously-unhandled ``fir.shift`` (an
-/// assumed-shape / pointer dummy with explicit local lower bounds,
-/// e.g. ``a(10:,20:)`` -> ``fir.shift %c10,%c20``).
-struct ShapeOperandInfo {
-  enum Kind { None, Shape, ShapeShift, Shift } kind = None;
-  std::vector<mlir::Value> lbs;      // empty for Shape (implicit 1)
-  std::vector<mlir::Value> extents;  // empty for Shift (box-carried)
-  unsigned rank = 0;
-};
-
-static ShapeOperandInfo classifyShapeOperand(mlir::Value shape) {
-  ShapeOperandInfo si;
-  if (!shape) return si;
-  auto *def = shape.getDefiningOp();
-  if (auto sh = mlir::dyn_cast_or_null<fir::ShapeOp>(def)) {
-    si.kind = ShapeOperandInfo::Shape;
-    for (auto e : sh.getExtents()) si.extents.push_back(e);
-    si.rank = si.extents.size();
-  } else if (auto ss = mlir::dyn_cast_or_null<fir::ShapeShiftOp>(def)) {
-    si.kind = ShapeOperandInfo::ShapeShift;
-    auto ops = ss->getOperands();
-    for (unsigned i = 0; i + 1 < ops.size(); i += 2) {
-      si.lbs.push_back(ops[i]);
-      si.extents.push_back(ops[i + 1]);
-    }
-    si.rank = si.lbs.size();
-  } else if (auto sf = mlir::dyn_cast_or_null<fir::ShiftOp>(def)) {
-    si.kind = ShapeOperandInfo::Shift;
-    for (auto lb : sf->getOperands()) si.lbs.push_back(lb);
-    si.rank = si.lbs.size();
-  }
-  return si;
-}
+// ``ShapeOperandInfo`` / ``classifyShapeOperand`` live in trace_utils
+// now (shared with declareLowerBounds / extractExtents).
 
 /// Strip the array-descriptor wrappers Flang stacks over an element
 /// type -- ``fir.box`` / ``fir.ref`` / ``fir.heap`` / ``fir.ptr`` --
