@@ -613,6 +613,7 @@ contains
   real function custom_sum(d)
     real :: d(5, 5)
     integer :: i, j
+    custom_sum = 0
     do i = 1, 5
       do j = 1, 5
         custom_sum = custom_sum + d(i, j)
@@ -644,6 +645,7 @@ contains
     real :: custom_sum
     real :: d(5, 5)
     integer :: i, j
+    custom_sum = 0
     do i = 1, 5
       do j = 1, 5
         custom_sum = custom_sum + d(i, j)
