@@ -211,6 +211,49 @@ def emit_libcall(builder, ctx, n, region):
     state.add_edge(node, out_conn, acc(builder, state, n.target), None, out_memlet)
 
 
+def emit_mpi(builder, ctx, n, region):
+    """Lower a recognised Fortran MPI point-to-point call
+    (``kind == 'mpicall'``) to a ``dace.libraries.mpi`` library node.
+
+    ``n.callee`` is ``'mpi_send'`` / ``'mpi_recv'``; ``n.call_args`` is
+    ``[buffer, partner, tag]`` (``partner`` = the dest rank for Send,
+    the source rank for Recv).  The element count is implicit in the
+    buffer memlet and the MPI datatype is derived from the buffer
+    descriptor; the communicator is ``MPI_COMM_WORLD`` (the C++ bridge
+    already rejected a non-default communicator).  Mirrors the wiring
+    of ``dace/frontend/python/replacements/mpi.py``.
+
+    :raises NotImplementedError: for an MPI op other than send / recv.
+    """
+    import dace
+
+    state = ctx.flush_and_ensure(builder, region)
+    buffer, partner, tag = n.call_args
+    bdesc = ctx.sdfg.arrays[buffer]
+    bptr = dace.pointer(bdesc.dtype)
+
+    if n.callee == 'mpi_send':
+        from dace.libraries.mpi.nodes.send import Send
+        node = Send(f'_mpi_send_{builder.nid()}')
+        node.in_connectors = {c: (bptr if c == '_buffer' else t) for c, t in node.in_connectors.items()}
+        state.add_node(node)
+        state.add_edge(acc(builder, state, buffer), None, node, '_buffer', Memlet.from_array(buffer, bdesc))
+        state.add_edge(acc(builder, state, partner), None, node, '_dest',
+                       Memlet.from_array(partner, ctx.sdfg.arrays[partner]))
+        state.add_edge(acc(builder, state, tag), None, node, '_tag', Memlet.from_array(tag, ctx.sdfg.arrays[tag]))
+    elif n.callee == 'mpi_recv':
+        from dace.libraries.mpi.nodes.recv import Recv
+        node = Recv(f'_mpi_recv_{builder.nid()}')
+        node.out_connectors = {c: (bptr if c == '_buffer' else t) for c, t in node.out_connectors.items()}
+        state.add_node(node)
+        state.add_edge(acc(builder, state, partner), None, node, '_src',
+                       Memlet.from_array(partner, ctx.sdfg.arrays[partner]))
+        state.add_edge(acc(builder, state, tag), None, node, '_tag', Memlet.from_array(tag, ctx.sdfg.arrays[tag]))
+        state.add_edge(node, '_buffer', acc(builder, state, buffer), None, Memlet.from_array(buffer, bdesc))
+    else:
+        raise NotImplementedError(f"MPI op {n.callee!r} not supported yet (Phase 1: mpi_send / mpi_recv)")
+
+
 def emit_reduce(builder, ctx, n, region):
     """``target = sum(src)`` (and product / minval / maxval) lowered as a
     DaCe ``standard.Reduce`` library node via

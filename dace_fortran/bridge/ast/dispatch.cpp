@@ -166,6 +166,92 @@ static std::string traceLoopIter(fir::DoLoopOp loop) {
 }
 
 // ---------------------------------------------------------------------------
+// MPI point-to-point recognition
+//
+// Flang lowers ``call MPI_Send(...)`` to ``fir.call @_QPmpi_send(...)``
+// (Fortran is case-insensitive -> flang lowercases the external name).
+// There is no MLIR ``mpi`` dialect from flang, so we pattern-match the
+// callee symbol and map it to a DaCe ``dace.libraries.mpi`` node.  The
+// positional ABI (probed from real HLFIR) is:
+//   mpi_send(buf, count, datatype, dest, tag, comm, ierr)
+//   mpi_recv(buf, count, datatype, src,  tag, comm, status, ierr)
+// ---------------------------------------------------------------------------
+
+/// :returns: the normalised MPI op tag (``"mpi_send"`` / ``"mpi_recv"``)
+/// for a recognised callee, else empty.  Phase 1 = blocking Send/Recv.
+static std::string mpiCalleeTag(const std::string &callee) {
+  std::string s = callee;
+  if (!s.empty() && s[0] == '@') s.erase(0, 1);
+  if (s.rfind("_QP", 0) == 0) s.erase(0, 3);  // external/global mangling
+  std::string low = llvm::StringRef(s).lower();
+  if (low == "mpi_send" || low == "mpi_recv") return low;
+  return std::string{};
+}
+
+/// Build an ``mpicall`` ASTNode for a recognised MPI point-to-point
+/// call.  ``call_args`` = ``[buffer, partner(dest|src), tag]`` (the
+/// names the Python builder wires to the DaCe Send/Recv node's
+/// ``_buffer`` / ``_dest``|``_src`` / ``_tag`` connectors).  count is
+/// taken from the buffer memlet downstream; datatype / status / ierr
+/// are not modelled (DaCe derives the MPI datatype from the buffer and
+/// uses ``MPI_STATUS_IGNORE``).  Phase 1 supports only
+/// ``MPI_COMM_WORLD`` -- a non-WORLD communicator throws (Phase 3 adds
+/// an opaque ``MPI_Comm`` argument).
+static ASTNode buildMpiCallNode(fir::CallOp call, const std::string &mpiOp) {
+  ASTNode n;
+  n.kind = "mpicall";
+  n.callee = mpiOp;
+  auto args = call.getArgOperands();
+  if (args.size() < 6)
+    throw std::runtime_error("MPI " + mpiOp + ": unexpected argument count " +
+                             std::to_string(args.size()));
+  auto resolve = [&](mlir::Value v, const char *what) -> std::string {
+    auto nm = traceToDecl(v);
+    if (nm.empty())
+      throw std::runtime_error("MPI " + mpiOp + ": cannot resolve the " +
+                               std::string(what) + " argument to a name");
+    return nm;
+  };
+  std::string buf = resolve(args[0], "buffer");
+  std::string partner =
+      resolve(args[3], mpiOp == "mpi_send" ? "dest" : "src");
+  std::string tag = resolve(args[4], "tag");
+
+  // comm (arg 5) must be the default communicator in Phase 1.  DaCe's
+  // Send/Recv always emit ``MPI_COMM_WORLD`` regardless, so the only
+  // thing to guard against is silently miscompiling a *runtime* user
+  // communicator as WORLD.  A default comm is a compile-time constant:
+  // ``MPI_COMM_WORLD`` from ``use mpi`` is the world-named global, and
+  // a ``parameter`` folds to a literal flang wraps in
+  // load/associate/declare/convert.  Peel that wrapper; a literal (via
+  // ``traceConstInt``) or the ``mpi_comm_world`` global is WORLD, a
+  // genuine runtime variable (a dummy ``comm`` / split result) is a
+  // real external communicator -> rejected until the opaque-MPI_Comm
+  // path (Phase 3).
+  // Flang materialises a ``parameter`` / literal ``MPI_COMM_WORLD`` as
+  // a compiler-synthetic entity (``__assoc_scalar_*`` -- a Fortran user
+  // identifier can never start with ``_``); ``use mpi`` exposes it as
+  // an entity literally named ``mpi_comm_world``.  A genuine runtime
+  // user communicator resolves to a real user identifier (a dummy
+  // ``comm`` / split result).  An un-nameable operand is a bare folded
+  // constant.  Accept the first three (DaCe always emits
+  // ``MPI_COMM_WORLD`` anyway); reject only a real named variable.
+  std::string commName = traceToDecl(args[5]);
+  std::string low = llvm::StringRef(commName).lower();
+  bool isDefault = commName.empty() || low.rfind("__", 0) == 0 ||
+                   low.find("mpi_comm_world") != std::string::npos;
+  if (!isDefault)
+    throw std::runtime_error(
+        "MPI " + mpiOp + ": communicator \"" + commName +
+        "\" is a runtime/user communicator -- needs the opaque-MPI_Comm "
+        "path (not yet implemented); only MPI_COMM_WORLD is supported "
+        "in this phase");
+
+  n.call_args = {buf, partner, tag};
+  return n;
+}
+
+// ---------------------------------------------------------------------------
 // Block walker
 // ---------------------------------------------------------------------------
 
@@ -847,6 +933,11 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
         llvm::raw_string_ostream os(s);
         ref->print(os);
         n.callee = s;
+      }
+      std::string mpiOp = mpiCalleeTag(n.callee);
+      if (!mpiOp.empty()) {
+        nodes.push_back(buildMpiCallNode(call, mpiOp));
+        continue;
       }
       nodes.push_back(std::move(n));
       continue;

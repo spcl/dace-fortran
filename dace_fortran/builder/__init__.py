@@ -55,6 +55,7 @@ from dace_fortran.builder.emit_library import (
     emit_copy,
     emit_libcall,
     emit_memset,
+    emit_mpi,
     emit_reduce,
     emit_return,
 )
@@ -579,6 +580,7 @@ class SDFGBuilder:
         "copy": emit_copy,
         "memset": emit_memset,
         "libcall": emit_libcall,
+        "mpicall": emit_mpi,
         "break": emit_break,
         "return": emit_return,
         "declare_transient": emit_declare_transient,
