@@ -31,17 +31,17 @@ from dace_fortran.bindings.fortran_interface import OriginalInterface
 #: Mandatory flags -- a shared, position-independent, long-line module.
 _SHARED_FLAGS = ("-shared", "-fPIC", "-ffree-line-length-none")
 
-#: IEEE-faithful flags -- optimised (``-O3``) with debug info and
-#: strict IEEE: no fast-math, no fp-contraction, rounding-aware, so an
+#: Debug flags -- optimised (``-O3``) with debug info and strict IEEE
+#: (no fast-math, no fp-contraction, rounding-aware) so an
 #: SDFG-vs-reference comparison stays bit-reproducible (matches the
-#: e2e numerical policy / velocity debug-IEEE default).
-_IEEE_FAITHFUL_FLAGS = ("-O3", "-g", "-fno-fast-math", "-ffp-contract=off", "-frounding-math")
+#: e2e numerical policy / velocity debug default).
+_DEBUG_FLAGS = ("-O3", "-g", "-fno-fast-math", "-ffp-contract=off", "-frounding-math")
 
-#: Fast optimisation flags -- ``-O3``; trades IEEE reproducibility for
-#: speed (the binding-builder analogue of the velocity ``--release``).
-_FAST_FLAGS = ("-O3", )
+#: Release flags -- ``-O3 -ffast-math``; trades IEEE reproducibility
+#: for speed (the binding-builder analogue of the velocity ``--release``).
+_RELEASE_FLAGS = ("-O3", "-ffast-math")
 
-_MODE_FLAGS = {"ieee": _IEEE_FAITHFUL_FLAGS, "fast": _FAST_FLAGS}
+_MODE_FLAGS = {"debug": _DEBUG_FLAGS, "release": _RELEASE_FLAGS}
 
 #: The OpenMP runtime a DaCe kernel may need.  Not linked explicitly
 #: (``-lgomp`` is not always required); instead ``FortranLibrary.load``
@@ -70,8 +70,10 @@ class FortranLibrary:
 
         :returns: the library opened with :class:`ctypes.CDLL`.
         """
-        if Path(_LIBGOMP).exists():
+        try:
             ctypes.CDLL(_LIBGOMP, mode=ctypes.RTLD_GLOBAL)
+        except OSError:
+            pass  # no libgomp here -> the kernel may not need it
         return ctypes.CDLL(str(self.so_path))
 
 
@@ -84,7 +86,7 @@ def build_fortran_library(
     name: str = None,
     prelude_sources: Sequence = (),
     extra_sources: Sequence = (),
-    mode: str = "ieee",
+    mode: str = "debug",
     flags: Sequence = None,
     verify: bool = True,
 ) -> FortranLibrary:
@@ -103,9 +105,10 @@ def build_fortran_library(
     :param extra_sources: ``.f90`` sources that depend on the binding
                           (e.g. a caller / shim that ``use``s the
                           binding module).  Compiled *after* it.
-    :param mode: ``'ieee'`` (default, bit-reproducible: ``-O0`` +
-                 no fast-math / no fp-contraction) or ``'fast'``
-                 (``-O3``).  Ignored when ``flags`` is given.
+    :param mode: ``'debug'`` (default, bit-reproducible: ``-O3 -g`` +
+                 no fast-math / no fp-contraction / rounding-aware) or
+                 ``'release'`` (``-O3 -ffast-math``).  Ignored when
+                 ``flags`` is given.
     :param flags: explicit optimisation/fp flag list, overriding
                   ``mode`` entirely (``-shared``/``-fPIC``/``-fopenmp``
                   are always added).
@@ -124,8 +127,8 @@ def build_fortran_library(
     elif mode in _MODE_FLAGS:
         opt_flags = _MODE_FLAGS[mode]
     else:
-        raise ValueError(f"unknown mode {mode!r}; expected 'ieee', 'fast', "
-                         f"or an explicit flags= list")
+        raise ValueError(f"unknown mode {mode!r}; expected 'debug', "
+                         f"'release', or an explicit flags= list")
 
     frozen = getattr(sdfg, "_frozen_signature", None)
     if frozen is None:

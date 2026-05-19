@@ -73,13 +73,13 @@ sdfg.simplify()
 #    ``iface`` / ``plan`` are built as in
 #    tests/icon_full/test_velocity_full_bindings_e2e.py.
 try:
+    # mode: "debug" (default, bit-reproducible: -O3 -g + strict IEEE)
+    #       | "release" (-O3 -ffast-math) ; or flags=[...] to override.
     lib = build_fortran_library(
         sdfg, iface, plan, out_dir="build",
         prelude_sources=["driver_modules.f90"],   # binding USEs these
         extra_sources=["caller.f90"],             # these USE the binding
-        mode="ieee",        # "ieee" (debug -O3 + strict IEEE, default,
-                            #  bit-reproducible) | "fast" (-O3) |
-        # flags=["-O2", "-march=native"],         # explicit override
+        mode="debug",
     )
 except SignatureDriftError as e:
     raise SystemExit(f"binding invalidated by a transformation: {e}")

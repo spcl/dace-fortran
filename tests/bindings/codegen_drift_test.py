@@ -68,6 +68,9 @@ def _assert_gate_passes(sdfg, tmp_path):
     A later emit/link step legitimately fails on these synthetic
     kernels (no real interface/plan); only ``SignatureDriftError``
     indicates the gate misfired.
+
+    :param sdfg: a pinned, undrifted synthetic SDFG.
+    :param tmp_path: pytest scratch dir for the (doomed) link step.
     """
     try:
         build_fortran_library(sdfg, iface=None, plan=None, out_dir=str(tmp_path))

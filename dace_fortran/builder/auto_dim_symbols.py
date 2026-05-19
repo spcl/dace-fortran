@@ -25,6 +25,9 @@ import re
 import dace
 
 #: ``<arr>_d<i>`` / ``offset_<arr>_d<i>`` synthetic-extent symbol name.
+#: The greedy ``.+`` splits at the *rightmost* ``_d<i>`` -- the
+#: synthetic suffix is always last and an array name may itself
+#: contain ``_d`` (e.g. ``grid_d``).
 _DIM_SYMBOL_RE = re.compile(r'^(?P<off>offset_)?(?P<arr>.+)_d(?P<idx>\d+)$')
 
 
