@@ -75,6 +75,58 @@ def assign_reads_array(assign_node, arrays: dict) -> bool:
     return False
 
 
+def _rewrite_read_connectors(code: str, sorted_tokens, scalar_reads, array_occ: dict) -> str:
+    """Replace each read reference in a tasklet RHS with its
+    per-occurrence input connector.
+
+    A scalar ``<name>`` becomes ``_in_<name>``; the Nth array
+    occurrence ``<name>[...]`` becomes ``_in_<name>_<N>`` and its
+    balanced ``[...]`` subscript is consumed (the connector's memlet
+    already targets that one element, so a leftover subscript would
+    trip DaCe's dimension validator).  Balanced brackets are walked by
+    hand since ``re`` can't.
+
+    :param sorted_tokens: read names longest-first (so a short name
+                          can't shadow a longer one sharing a prefix).
+    :param scalar_reads: the subset of names that are scalar reads.
+    :param array_occ: ``{array_name: next_occurrence_index}``, mutated
+                      in place as occurrences are consumed.
+    """
+    for nm in sorted_tokens:
+        if nm in scalar_reads:
+            code = re.sub(rf'\b{re.escape(nm)}\b', f'_in_{nm}', code)
+            continue
+        new_chunks = []
+        cursor = 0
+        pat = re.compile(rf'\b{re.escape(nm)}\b')
+        for m in pat.finditer(code):
+            start = m.start()
+            end = m.end()
+            # If the very next char is '[', consume the balanced [...].
+            if end < len(code) and code[end] == '[':
+                depth = 1
+                j = end + 1
+                while j < len(code) and depth > 0:
+                    ch = code[j]
+                    if ch in '([{':
+                        depth += 1
+                    elif ch in ')]}':
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    j += 1
+                if depth == 0:
+                    end = j + 1
+            new_chunks.append(code[cursor:start])
+            n = array_occ[nm]
+            array_occ[nm] += 1
+            new_chunks.append(f"_in_{nm}_{n}")
+            cursor = end
+        new_chunks.append(code[cursor:])
+        code = ''.join(new_chunks)
+    return code
+
+
 def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect_syms: dict = None):
     """One Tasklet per array assignment.
 
@@ -114,51 +166,10 @@ def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect
     # (and consuming its balanced ``[...]`` subscript) with
     # ``_in_<name>_<N>``.  Scalars get a single bare-name connector
     # ``_in_<name>`` since they don't carry a subscript.
+    # ``_in_<name>`` (scalars) / ``_in_<name>_<N>`` (Nth array
+    # occurrence) connector substitution -- see _rewrite_read_connectors.
     occ = {nm: 0 for nm in r_arr}
     sorted_tokens = sorted(r_arr | r_scl, key=len, reverse=True)
-
-    def rewrite(code: str) -> str:
-        for nm in sorted_tokens:
-            if nm in r_scl:
-                code = re.sub(rf'\b{re.escape(nm)}\b', f'_in_{nm}', code)
-                continue
-            # Array references in the bridge-emitted RHS come with their
-            # subscript: ``zsolqa[(i)-1, (j)-1, (k)-1]``.  Replace the
-            # whole ``name[...]`` group with the connector  --  the
-            # connector's memlet already targets that one element, so
-            # leaving the subscript on it would surface as DaCe's
-            # "Subscript ... contains an invalid number of dimensions"
-            # validator error.  Walk balanced brackets manually since
-            # ``re`` can't.
-            new_chunks = []
-            cursor = 0
-            pat = re.compile(rf'\b{re.escape(nm)}\b')
-            for m in pat.finditer(code):
-                start = m.start()
-                end = m.end()
-                # If the very next char is '[', consume the balanced [...].
-                if end < len(code) and code[end] == '[':
-                    depth = 1
-                    j = end + 1
-                    while j < len(code) and depth > 0:
-                        ch = code[j]
-                        if ch in '([{':
-                            depth += 1
-                        elif ch in ')]}':
-                            depth -= 1
-                            if depth == 0:
-                                break
-                        j += 1
-                    if depth == 0:
-                        end = j + 1
-                new_chunks.append(code[cursor:start])
-                n = occ[nm]
-                occ[nm] += 1
-                new_chunks.append(f"_in_{nm}_{n}")
-                cursor = end
-            new_chunks.append(code[cursor:])
-            code = ''.join(new_chunks)
-        return code
 
     in_c = {f"_in_{sc}" for sc in r_scl}
     for nm, acs in reads_by_name.items():
@@ -176,7 +187,7 @@ def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect
     # binds ``i`` to whatever the SDFG-level ``i`` symbol holds  --
     # typically zero  --  instead of the per-iteration value ``i_0``.
     expr = rename_iters(assign_node.expr, iter_map)
-    code = f"_out_{target} = {rewrite(expr)}"
+    code = f"_out_{target} = {_rewrite_read_connectors(expr, sorted_tokens, r_scl, occ)}"
     t = state.add_tasklet(f"t_{idx}", in_c, out_c, code)
 
     for nm in sorted(reads_by_name):
