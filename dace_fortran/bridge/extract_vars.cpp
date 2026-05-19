@@ -72,6 +72,23 @@ static ShapeOperandInfo classifyShapeOperand(mlir::Value shape) {
   return si;
 }
 
+/// Strip the array-descriptor wrappers Flang stacks over an element
+/// type -- ``fir.box`` / ``fir.ref`` / ``fir.heap`` / ``fir.ptr`` --
+/// repeating until none remain (or ``maxDepth`` is hit).  Used wherever
+/// the bridge needs the ``fir.array`` / element type underneath an
+/// allocatable / pointer / boxed declare.
+static mlir::Type peelTypeLayers(mlir::Type t,
+                                 int maxDepth = limits::kTypeWrapperPeelDepth) {
+  for (int i = 0; i < maxDepth; ++i) {
+    if (auto b = mlir::dyn_cast<fir::BoxType>(t)) { t = b.getEleTy(); continue; }
+    if (auto r = mlir::dyn_cast<fir::ReferenceType>(t)) { t = r.getEleTy(); continue; }
+    if (auto h = mlir::dyn_cast<fir::HeapType>(t)) { t = h.getEleTy(); continue; }
+    if (auto p = mlir::dyn_cast<fir::PointerType>(t)) { t = p.getEleTy(); continue; }
+    break;
+  }
+  return t;
+}
+
 static std::vector<std::string> resolveShapeSyms(hlfir::DeclareOp decl) {
   std::vector<std::string> syms;
 
@@ -948,28 +965,8 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
     // (``a(n, m)`` where ``m`` is used as an SDFG symbol via
     // ``a``'s extent), and dropping ``a`` breaks the symbol
     // classification cascade.
-    auto resTy = op.getResult(0).getType();
-    bool isArrayLike = false;
-    for (int i = 0; i < limits::kTypeWrapperPeelDepth; ++i) {
-      if (auto bt = mlir::dyn_cast<fir::BoxType>(resTy)) {
-        resTy = bt.getEleTy();
-        continue;
-      }
-      if (auto rt = mlir::dyn_cast<fir::ReferenceType>(resTy)) {
-        resTy = rt.getEleTy();
-        continue;
-      }
-      if (auto ht = mlir::dyn_cast<fir::HeapType>(resTy)) {
-        resTy = ht.getEleTy();
-        continue;
-      }
-      if (auto pt = mlir::dyn_cast<fir::PointerType>(resTy)) {
-        resTy = pt.getEleTy();
-        continue;
-      }
-      break;
-    }
-    if (mlir::isa<fir::SequenceType>(resTy)) isArrayLike = true;
+    auto resTy = peelTypeLayers(op.getResult(0).getType());
+    bool isArrayLike = mlir::isa<fir::SequenceType>(resTy);
     if (op.getDummyScope() && !isArrayLike && op.getResult(0).use_empty() &&
         op.getResult(1).use_empty()) {
       return;
@@ -1175,26 +1172,10 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
         peelPointer = true;
     }
     if (isAllocatableAttr || peelPointer) {
-      for (int peel = 0; peel < 6; ++peel) {
-        if (auto b = mlir::dyn_cast<fir::BoxType>(ty)) {
-          ty = b.getEleTy();
-          continue;
-        }
-        if (auto r = mlir::dyn_cast<fir::ReferenceType>(ty)) {
-          ty = r.getEleTy();
-          continue;
-        }
-        if (auto h = mlir::dyn_cast<fir::HeapType>(ty)) {
-          ty = h.getEleTy();
-          continue;
-        }
-        if (auto p = mlir::dyn_cast<fir::PointerType>(ty)) {
-          ty = p.getEleTy();
-          continue;
-        }
-        break;
-      }
+      ty = peelTypeLayers(ty);
     } else {
+      // Single B->R->H->P sweep (one level each)  --  deliberately NOT
+      // peel-to-fixpoint: a plain dummy keeps any inner wrapper.
       if (auto b = mlir::dyn_cast<fir::BoxType>(ty)) ty = b.getEleTy();
       if (auto r = mlir::dyn_cast<fir::ReferenceType>(ty)) ty = r.getEleTy();
       if (auto h = mlir::dyn_cast<fir::HeapType>(ty)) ty = h.getEleTy();
