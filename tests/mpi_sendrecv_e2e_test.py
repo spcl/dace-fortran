@@ -85,5 +85,53 @@ def test_ring_send_recv_numeric(tmp_path: Path):
     np.testing.assert_allclose(rbuf, np.full(n, expected, dtype=np.float64))
 
 
+_NB_RING = """
+subroutine nbring(buf, rbuf, n, dst, src, tag)
+  implicit none
+  integer, intent(in) :: n, dst, src, tag
+  real(8), intent(inout) :: buf(n)
+  real(8), intent(out) :: rbuf(n)
+  integer :: ierr, sreq, rreq
+  integer, parameter :: MPI_COMM_WORLD = 0
+  integer, parameter :: MPI_DOUBLE_PRECISION = 17
+  integer, parameter :: MPI_STATUS_IGNORE = -1
+  external :: MPI_Isend, MPI_Irecv, MPI_Wait
+  call MPI_Irecv(rbuf, n, MPI_DOUBLE_PRECISION, src, tag, MPI_COMM_WORLD, rreq, ierr)
+  call MPI_Isend(buf, n, MPI_DOUBLE_PRECISION, dst, tag, MPI_COMM_WORLD, sreq, ierr)
+  call MPI_Wait(rreq, MPI_STATUS_IGNORE, ierr)
+  call MPI_Wait(sreq, MPI_STATUS_IGNORE, ierr)
+end subroutine nbring
+"""
+
+
+@pytest.mark.mpi
+def test_nonblocking_ring_numeric(tmp_path: Path):
+    """Deadlock-free nonblocking ring: Irecv + Isend + Wait + Wait.
+    Rank ``r`` ships ``r`` to ``(r+1)%size`` and receives from
+    ``(r-1)%size``; received buffer must equal ``(r-1)%size``."""
+    from mpi4py import MPI
+    from dace.sdfg import utils
+
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    size = comm.Get_size()
+    if size < 2:
+        pytest.skip("MPI Isend/Irecv e2e needs >= 2 ranks (mpirun -n 2 ...)")
+
+    sdfg = None
+    if rank == 0:
+        sdfg = build_sdfg(_NB_RING, tmp_path / "sdfg", name="nbring", entry="_QPnbring").build()
+        sdfg.name = "mpi_nbring"
+    func = utils.distributed_compile(sdfg, comm)
+
+    n = 8
+    buf = np.full(n, float(rank), dtype=np.float64, order="F")
+    rbuf = np.zeros(n, dtype=np.float64, order="F")
+    func(buf=buf, rbuf=rbuf, n=n, dst=(rank + 1) % size, src=(rank - 1 + size) % size, tag=7)
+
+    np.testing.assert_allclose(rbuf, np.full(n, float((rank - 1 + size) % size), dtype=np.float64))
+
+
 if __name__ == "__main__":
     test_ring_send_recv_numeric(Path("/tmp/mpi_ring_e2e"))
+    test_nonblocking_ring_numeric(Path("/tmp/mpi_nbring_e2e"))

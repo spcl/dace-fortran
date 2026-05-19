@@ -177,34 +177,41 @@ static std::string traceLoopIter(fir::DoLoopOp loop) {
 //   mpi_recv(buf, count, datatype, src,  tag, comm, status, ierr)
 // ---------------------------------------------------------------------------
 
-/// :returns: the normalised MPI op tag (``"mpi_send"`` / ``"mpi_recv"``)
-/// for a recognised callee, else empty.  Phase 1 = blocking Send/Recv.
+/// :returns: the normalised MPI op tag (``"mpi_send"`` / ``"mpi_recv"``
+/// / ``"mpi_isend"`` / ``"mpi_irecv"`` / ``"mpi_wait"``) for a
+/// recognised callee, else empty.
 static std::string mpiCalleeTag(const std::string &callee) {
   std::string s = callee;
   if (!s.empty() && s[0] == '@') s.erase(0, 1);
   if (s.rfind("_QP", 0) == 0) s.erase(0, 3);  // external/global mangling
   std::string low = llvm::StringRef(s).lower();
-  if (low == "mpi_send" || low == "mpi_recv") return low;
+  if (low == "mpi_send" || low == "mpi_recv" || low == "mpi_isend" ||
+      low == "mpi_irecv" || low == "mpi_wait")
+    return low;
   return std::string{};
 }
 
 /// Build an ``mpicall`` ASTNode for a recognised MPI point-to-point
-/// call.  ``call_args`` = ``[buffer, partner(dest|src), tag]`` (the
-/// names the Python builder wires to the DaCe Send/Recv node's
-/// ``_buffer`` / ``_dest``|``_src`` / ``_tag`` connectors).  count is
-/// taken from the buffer memlet downstream; datatype / status / ierr
-/// are not modelled (DaCe derives the MPI datatype from the buffer and
-/// uses ``MPI_STATUS_IGNORE``).  Phase 1 supports only
-/// ``MPI_COMM_WORLD`` -- a non-WORLD communicator throws (Phase 3 adds
-/// an opaque ``MPI_Comm`` argument).
+/// call.  ``call_args`` layout (the names the Python builder wires to
+/// the DaCe library node's connectors):
+///   * send / recv:    ``[buffer, partner(dest|src), tag]``
+///   * isend / irecv:  ``[buffer, partner(dest|src), tag, request]``
+///   * wait:           ``[request]``
+/// count is taken from the buffer memlet downstream; datatype / status
+/// / ierr are not modelled (DaCe derives the MPI datatype from the
+/// buffer and uses ``MPI_STATUS_IGNORE``).  Only ``MPI_COMM_WORLD`` is
+/// supported -- a non-default communicator throws until the opaque
+/// ``MPI_Comm`` path (Phase 3).  Positional ABI:
+///   send (buf,count,dt,dest,tag,comm,ierr)
+///   recv (buf,count,dt,src,tag,comm,status,ierr)
+///   isend(buf,count,dt,dest,tag,comm,request,ierr)
+///   irecv(buf,count,dt,src,tag,comm,request,ierr)
+///   wait (request,status,ierr)
 static ASTNode buildMpiCallNode(fir::CallOp call, const std::string &mpiOp) {
   ASTNode n;
   n.kind = "mpicall";
   n.callee = mpiOp;
   auto args = call.getArgOperands();
-  if (args.size() < 6)
-    throw std::runtime_error("MPI " + mpiOp + ": unexpected argument count " +
-                             std::to_string(args.size()));
   auto resolve = [&](mlir::Value v, const char *what) -> std::string {
     auto nm = traceToDecl(v);
     if (nm.empty())
@@ -212,30 +219,31 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string &mpiOp) {
                                std::string(what) + " argument to a name");
     return nm;
   };
+
+  if (mpiOp == "mpi_wait") {
+    if (args.empty())
+      throw std::runtime_error("MPI mpi_wait: no request argument");
+    n.call_args = {resolve(args[0], "request")};
+    return n;
+  }
+
+  if (args.size() < 6)
+    throw std::runtime_error("MPI " + mpiOp + ": unexpected argument count " +
+                             std::to_string(args.size()));
+  bool isSendLike = (mpiOp == "mpi_send" || mpiOp == "mpi_isend");
   std::string buf = resolve(args[0], "buffer");
-  std::string partner =
-      resolve(args[3], mpiOp == "mpi_send" ? "dest" : "src");
+  std::string partner = resolve(args[3], isSendLike ? "dest" : "src");
   std::string tag = resolve(args[4], "tag");
 
-  // comm (arg 5) must be the default communicator in Phase 1.  DaCe's
-  // Send/Recv always emit ``MPI_COMM_WORLD`` regardless, so the only
-  // thing to guard against is silently miscompiling a *runtime* user
-  // communicator as WORLD.  A default comm is a compile-time constant:
-  // ``MPI_COMM_WORLD`` from ``use mpi`` is the world-named global, and
-  // a ``parameter`` folds to a literal flang wraps in
-  // load/associate/declare/convert.  Peel that wrapper; a literal (via
-  // ``traceConstInt``) or the ``mpi_comm_world`` global is WORLD, a
-  // genuine runtime variable (a dummy ``comm`` / split result) is a
-  // real external communicator -> rejected until the opaque-MPI_Comm
-  // path (Phase 3).
+  // comm (arg 5) must be the default communicator.  DaCe's point-to-
+  // point nodes always emit ``MPI_COMM_WORLD``, so the only risk is
+  // silently miscompiling a *runtime* user communicator as WORLD.
   // Flang materialises a ``parameter`` / literal ``MPI_COMM_WORLD`` as
-  // a compiler-synthetic entity (``__assoc_scalar_*`` -- a Fortran user
-  // identifier can never start with ``_``); ``use mpi`` exposes it as
-  // an entity literally named ``mpi_comm_world``.  A genuine runtime
-  // user communicator resolves to a real user identifier (a dummy
-  // ``comm`` / split result).  An un-nameable operand is a bare folded
-  // constant.  Accept the first three (DaCe always emits
-  // ``MPI_COMM_WORLD`` anyway); reject only a real named variable.
+  // a compiler-synthetic entity (``__assoc_scalar_*`` -- a Fortran
+  // user identifier can never start with ``_``); ``use mpi`` exposes
+  // it as an entity literally named ``mpi_comm_world``; an un-nameable
+  // operand is a bare folded constant.  Accept those three; reject
+  // only a real named variable (a dummy ``comm`` / split result).
   std::string commName = traceToDecl(args[5]);
   std::string low = llvm::StringRef(commName).lower();
   bool isDefault = commName.empty() || low.rfind("__", 0) == 0 ||
@@ -248,6 +256,12 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string &mpiOp) {
         "in this phase");
 
   n.call_args = {buf, partner, tag};
+  if (mpiOp == "mpi_isend" || mpiOp == "mpi_irecv") {
+    if (args.size() < 7)
+      throw std::runtime_error("MPI " + mpiOp +
+                               ": expected a request argument");
+    n.call_args.push_back(resolve(args[6], "request"));
+  }
   return n;
 }
 

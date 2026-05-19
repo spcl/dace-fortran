@@ -140,6 +140,33 @@ def needs_build() -> bool:
     return False
 
 
+def _python_cmake_hints() -> list:
+    """Explicit ``Python_*`` hints for cmake's ``find_package(Python)``.
+
+    A pyenv / ``venv`` prefix frequently ships no headers or shared
+    ``libpython`` of its own -- they live in the base interpreter
+    install -- so cmake's venv-relative ``FindPython`` search misses
+    ``Development.Module`` even though the running interpreter is fully
+    usable.  Derive the real include dir and shared library from the
+    active interpreter's ``sysconfig`` and pass them straight through.
+
+    :return: ``-DPython_INCLUDE_DIR`` / ``-DPython_LIBRARY`` cmake args
+        (the library only when a shared ``libpython`` actually exists;
+        ``Development.Module`` does not require it).
+    """
+    hints = []
+    include = sysconfig.get_path("include")
+    if include and os.path.isdir(include):
+        hints.append(f"-DPython_INCLUDE_DIR={include}")
+    libdir = sysconfig.get_config_var("LIBDIR")
+    ldlibrary = sysconfig.get_config_var("LDLIBRARY")
+    if libdir and ldlibrary:
+        lib = os.path.join(libdir, ldlibrary)
+        if os.path.exists(lib):
+            hints.append(f"-DPython_LIBRARY={lib}")
+    return hints
+
+
 def build(clean: bool = False, verbose: bool = True):
     """Run cmake + make.  Raises on failure."""
     _detect_dirs()
@@ -161,6 +188,7 @@ def build(clean: bool = False, verbose: bool = True):
         f"-DLLVM_VERSION={_LLVM_VERSION}",
         f"-DLLVM_DIR={_LLVM_DIR}",
         f"-DPython_EXECUTABLE={python}",
+        *_python_cmake_hints(),
         "-DCMAKE_BUILD_TYPE=Release",
     ]
     if verbose:

@@ -215,43 +215,129 @@ def emit_mpi(builder, ctx, n, region):
     """Lower a recognised Fortran MPI point-to-point call
     (``kind == 'mpicall'``) to a ``dace.libraries.mpi`` library node.
 
-    ``n.callee`` is ``'mpi_send'`` / ``'mpi_recv'``; ``n.call_args`` is
-    ``[buffer, partner, tag]`` (``partner`` = the dest rank for Send,
-    the source rank for Recv).  The element count is implicit in the
-    buffer memlet and the MPI datatype is derived from the buffer
-    descriptor; the communicator is ``MPI_COMM_WORLD`` (the C++ bridge
-    already rejected a non-default communicator).  Mirrors the wiring
-    of ``dace/frontend/python/replacements/mpi.py``.
+    ``n.callee`` / ``n.call_args``:
 
-    :raises NotImplementedError: for an MPI op other than send / recv.
+    * ``mpi_send`` / ``mpi_recv``  -- ``[buffer, partner, tag]``
+    * ``mpi_isend`` / ``mpi_irecv`` -- ``[buffer, partner, tag, request]``
+    * ``mpi_wait``                 -- ``[request]``
+
+    ``partner`` is the dest rank for (i)send, the source rank for
+    (i)recv.  count is implicit in the buffer memlet, the MPI datatype
+    is derived from the buffer descriptor, the communicator is
+    ``MPI_COMM_WORLD`` (the C++ bridge already rejected a non-default
+    communicator).  The non-blocking request is threaded Isend/Irecv
+    -> Wait through a synthesised transient ``_mpireq_<req>`` of
+    ``opaque("MPI_Request")`` keyed by the Fortran request variable, so
+    the dataflow edge enforces the completion ordering.  ``MPI_Wait``'s
+    status fields are ignored (``MPI_STATUS_IGNORE``) -- wired to
+    write-only scratch.  Mirrors ``dace/frontend/python/replacements/mpi.py``.
+
+    Each MPI call is emitted into its **own fresh state** (chained by
+    an interstate edge), so program order between side-effecting MPI
+    nodes is enforced by state sequencing -- a state is a dataflow
+    graph, so two MPI nodes with no connecting memlet placed in one
+    state would be order-unspecified (reorder / deadlock risk).
+    ``has_side_effects`` (True for every ``MPINode``) only prevents
+    DCE, not reordering; the per-statement state is what orders them,
+    matching DaCe's Python-frontend MPI lowering.
+
+    :raises NotImplementedError: for an unsupported MPI op.
     """
     import dace
 
-    state = ctx.flush_and_ensure(builder, region)
-    buffer, partner, tag = n.call_args
+    # Fresh successor state per MPI call -> interstate-edge ordering.
+    ctx.new_state(builder, region)
+    state = ctx.cur
+
+    # Belt-and-suspenders: a shared len-1 ``__mpi_order`` transient that
+    # every MPI op's state reads *and* writes (via a tiny sequencing
+    # tasklet -- the MPI library nodes have fixed connector sets, so the
+    # token can't ride a node connector).  The RAW chain on
+    # ``__mpi_order`` across the per-call states is an explicit data
+    # dependency between the side-effecting MPI nodes, surviving even if
+    # a later transform were to fuse states.  The value is irrelevant
+    # (just incremented); only the read+write matters.
+    _tok = "__mpi_order"
+    if _tok not in ctx.sdfg.arrays:
+        ctx.sdfg.add_array(_tok, [1], dace.int32, transient=True)
+    _seq = state.add_tasklet(f"_mpi_seq_{builder.nid()}", {"_o_in"}, {"_o_out"}, "_o_out = _o_in + 1")
+    state.add_edge(state.add_read(_tok), None, _seq, "_o_in", Memlet(f"{_tok}[0]"))
+    state.add_edge(_seq, "_o_out", state.add_write(_tok), None, Memlet(f"{_tok}[0]"))
+
+    def _req_array(req: str) -> str:
+        """Ensure the per-request ``opaque(MPI_Request)`` transient
+        exists; return its name (shared by the Isend/Irecv producer and
+        the matching Wait consumer)."""
+        name = f"_mpireq_{req}"
+        if name not in ctx.sdfg.arrays:
+            ctx.sdfg.add_array(name, [1], dace.dtypes.opaque("MPI_Request"), transient=True)
+        return name
+
+    if n.callee == 'mpi_wait':
+        from dace.libraries.mpi.nodes.wait import Wait
+        (req, ) = n.call_args
+        rname = _req_array(req)
+        node = Wait(f'_mpi_wait_{builder.nid()}')
+        node.in_connectors = {c: (dace.pointer(dace.dtypes.opaque("MPI_Request")) if c == '_request' else t) for c, t in node.in_connectors.items()}
+        state.add_node(node)
+        state.add_memlet_path(acc(builder, state, rname), node, dst_conn='_request',
+                              memlet=Memlet.simple(rname, "0:1", num_accesses=1))
+        # status ignored (MPI_STATUS_IGNORE) -> write-only scratch.
+        for conn in ('_stat_tag', '_stat_source'):
+            sname = f'_mpistat{conn}_{builder.nid()}'
+            ctx.sdfg.add_array(sname, [1], dace.int32, transient=True)
+            state.add_memlet_path(node, acc(builder, state, sname), src_conn=conn,
+                                  memlet=Memlet.simple(sname, "0:1", num_accesses=1))
+        return
+
+    buffer, partner, tag = n.call_args[0], n.call_args[1], n.call_args[2]
     bdesc = ctx.sdfg.arrays[buffer]
     bptr = dace.pointer(bdesc.dtype)
+    partner_memlet = Memlet.from_array(partner, ctx.sdfg.arrays[partner])
+    tag_memlet = Memlet.from_array(tag, ctx.sdfg.arrays[tag])
+    buf_memlet = Memlet.from_array(buffer, bdesc)
 
     if n.callee == 'mpi_send':
         from dace.libraries.mpi.nodes.send import Send
         node = Send(f'_mpi_send_{builder.nid()}')
         node.in_connectors = {c: (bptr if c == '_buffer' else t) for c, t in node.in_connectors.items()}
         state.add_node(node)
-        state.add_edge(acc(builder, state, buffer), None, node, '_buffer', Memlet.from_array(buffer, bdesc))
-        state.add_edge(acc(builder, state, partner), None, node, '_dest',
-                       Memlet.from_array(partner, ctx.sdfg.arrays[partner]))
-        state.add_edge(acc(builder, state, tag), None, node, '_tag', Memlet.from_array(tag, ctx.sdfg.arrays[tag]))
+        state.add_memlet_path(acc(builder, state, buffer), node, dst_conn='_buffer', memlet=buf_memlet)
+        state.add_memlet_path(acc(builder, state, partner), node, dst_conn='_dest', memlet=partner_memlet)
+        state.add_memlet_path(acc(builder, state, tag), node, dst_conn='_tag', memlet=tag_memlet)
     elif n.callee == 'mpi_recv':
         from dace.libraries.mpi.nodes.recv import Recv
         node = Recv(f'_mpi_recv_{builder.nid()}')
         node.out_connectors = {c: (bptr if c == '_buffer' else t) for c, t in node.out_connectors.items()}
         state.add_node(node)
-        state.add_edge(acc(builder, state, partner), None, node, '_src',
-                       Memlet.from_array(partner, ctx.sdfg.arrays[partner]))
-        state.add_edge(acc(builder, state, tag), None, node, '_tag', Memlet.from_array(tag, ctx.sdfg.arrays[tag]))
-        state.add_edge(node, '_buffer', acc(builder, state, buffer), None, Memlet.from_array(buffer, bdesc))
+        state.add_memlet_path(acc(builder, state, partner), node, dst_conn='_src', memlet=partner_memlet)
+        state.add_memlet_path(acc(builder, state, tag), node, dst_conn='_tag', memlet=tag_memlet)
+        state.add_memlet_path(node, acc(builder, state, buffer), src_conn='_buffer', memlet=buf_memlet)
+    elif n.callee == 'mpi_isend':
+        from dace.libraries.mpi.nodes.isend import Isend
+        rname = _req_array(n.call_args[3])
+        node = Isend(f'_mpi_isend_{builder.nid()}')
+        node.in_connectors = {c: (bptr if c == '_buffer' else t) for c, t in node.in_connectors.items()}
+        node.out_connectors = {c: (dace.pointer(dace.dtypes.opaque("MPI_Request")) if c == '_request' else t) for c, t in node.out_connectors.items()}
+        state.add_node(node)
+        state.add_memlet_path(acc(builder, state, buffer), node, dst_conn='_buffer', memlet=buf_memlet)
+        state.add_memlet_path(acc(builder, state, partner), node, dst_conn='_dest', memlet=partner_memlet)
+        state.add_memlet_path(acc(builder, state, tag), node, dst_conn='_tag', memlet=tag_memlet)
+        state.add_edge(node, '_request', acc(builder, state, rname), None,
+                       Memlet.simple(rname, "0:1", num_accesses=1))
+    elif n.callee == 'mpi_irecv':
+        from dace.libraries.mpi.nodes.irecv import Irecv
+        rname = _req_array(n.call_args[3])
+        node = Irecv(f'_mpi_irecv_{builder.nid()}')
+        node.out_connectors = {c: (bptr if c == '_buffer' else dace.pointer(dace.dtypes.opaque("MPI_Request")) if c == '_request' else t) for c, t in node.out_connectors.items()}
+        state.add_node(node)
+        state.add_memlet_path(acc(builder, state, partner), node, dst_conn='_src', memlet=partner_memlet)
+        state.add_memlet_path(acc(builder, state, tag), node, dst_conn='_tag', memlet=tag_memlet)
+        state.add_memlet_path(node, acc(builder, state, buffer), src_conn='_buffer', memlet=buf_memlet)
+        state.add_edge(node, '_request', acc(builder, state, rname), None,
+                       Memlet.simple(rname, "0:1", num_accesses=1))
     else:
-        raise NotImplementedError(f"MPI op {n.callee!r} not supported yet (Phase 1: mpi_send / mpi_recv)")
+        raise NotImplementedError(f"MPI op {n.callee!r} not supported")
 
 
 def emit_reduce(builder, ctx, n, region):

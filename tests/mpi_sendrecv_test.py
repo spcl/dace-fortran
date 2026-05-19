@@ -92,6 +92,57 @@ def test_send_recv_lower_to_mpi_libnodes(tmp_path: Path):
     sdfg.validate()
 
 
+_NONBLOCKING = """
+subroutine nbring(buf, rbuf, n, dst, src, tag)
+  implicit none
+  integer, intent(in) :: n, dst, src, tag
+  real(8), intent(inout) :: buf(n)
+  real(8), intent(out) :: rbuf(n)
+  integer :: ierr, sreq, rreq
+  integer, parameter :: MPI_COMM_WORLD = 0
+  integer, parameter :: MPI_DOUBLE_PRECISION = 17
+  integer, parameter :: MPI_STATUS_IGNORE = -1
+  external :: MPI_Isend, MPI_Irecv, MPI_Wait
+  call MPI_Irecv(rbuf, n, MPI_DOUBLE_PRECISION, src, tag, MPI_COMM_WORLD, rreq, ierr)
+  call MPI_Isend(buf, n, MPI_DOUBLE_PRECISION, dst, tag, MPI_COMM_WORLD, sreq, ierr)
+  call MPI_Wait(rreq, MPI_STATUS_IGNORE, ierr)
+  call MPI_Wait(sreq, MPI_STATUS_IGNORE, ierr)
+end subroutine nbring
+"""
+
+
+def test_isend_irecv_wait_lower_to_mpi_libnodes(tmp_path: Path):
+    """``MPI_Isend`` / ``MPI_Irecv`` / ``MPI_Wait`` become DaCe
+    ``Isend`` / ``Irecv`` / ``Wait`` nodes; the non-blocking request is
+    threaded producer->Wait through a synthesised
+    ``opaque(MPI_Request)`` transient; each MPI call gets its own state
+    so program order is enforced by interstate edges."""
+    import dace
+    from dace.libraries.mpi.nodes.irecv import Irecv
+    from dace.libraries.mpi.nodes.isend import Isend
+    from dace.libraries.mpi.nodes.wait import Wait
+
+    sdfg = _build(_NONBLOCKING, tmp_path, "nbring", "_QPnbring")
+
+    counts = {Isend: 0, Irecv: 0, Wait: 0}
+    for nd, _ in sdfg.all_nodes_recursive():
+        for cls in counts:
+            if isinstance(nd, cls):
+                counts[cls] += 1
+    assert counts[Isend] == 1 and counts[Irecv] == 1 and counts[Wait] == 2
+
+    reqs = {a for a in sdfg.arrays if a.startswith("_mpireq_")}
+    assert reqs == {"_mpireq_sreq", "_mpireq_rreq"}
+    for r in reqs:
+        d = sdfg.arrays[r]
+        assert d.transient and d.dtype == dace.dtypes.opaque("MPI_Request")
+
+    # One state per MPI call (4) + the entry state -> interstate-edge
+    # ordering of the side-effecting MPI nodes.
+    assert len(list(sdfg.all_states())) >= 5
+    sdfg.validate()
+
+
 def test_runtime_communicator_is_rejected(tmp_path: Path):
     """A non-default (runtime dummy) communicator must fail loudly --
     Phase 1 supports only MPI_COMM_WORLD; silently treating a user
