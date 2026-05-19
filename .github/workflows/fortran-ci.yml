@@ -41,18 +41,17 @@ jobs:
         sudo apt-get install -y \
           llvm-21-dev libmlir-21-dev mlir-21-tools \
           libflang-21-dev flang-21 clang-21 \
-          cmake ninja-build gfortran-15 libgomp1
+          cmake ninja-build gfortran libgomp1
         echo "/usr/lib/llvm-21/bin" >> "$GITHUB_PATH"
         # apt.llvm.org installs the binary as flang-new-21 in
         # /usr/lib/llvm-21/bin (on PATH above).  Fall back to a symlink
         # only if a packaging change drops that name.
         command -v flang-new-21 || sudo ln -sf /usr/lib/llvm-21/bin/flang-21 /usr/local/bin/flang-new-21
-        # The default-apt gfortran on the runner is GCC <=12, whose
-        # free-form line limit is 132 cols -- it truncates the long
-        # generated binding signatures.  gfortran-15 (matching local)
-        # has the large free-form default; make it the ``gfortran``
-        # the bindings e2e tests invoke.
-        sudo ln -sf /usr/bin/gfortran-15 /usr/local/bin/gfortran
+        # Use the runner's default gfortran (older GCC, 132-col
+        # free-form limit).  gfortran-15 is not in the noble apt repo,
+        # and the version no longer matters: the bindings e2e tests
+        # pass -ffree-line-length-none (FLANG_PORTABLE_FFLAGS) so the
+        # long generated signatures compile on any gfortran.
 
     - name: Install Python dependencies
       run: |
