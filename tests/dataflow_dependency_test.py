@@ -434,14 +434,6 @@ END SUBROUTINE cw_default
     np.testing.assert_array_equal(e_sdfg, e_ref, err_msg="e mismatch")
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="Closest reproducer of the cloudsc Section 4.5 bug: multiple "
-    "tasklets inside nested IF (outer IEVAPRAIN-style + inner LLO1-style), "
-    "DEFAULT_PIPELINE, multi-JK loop with loop-carried cv state.  This "
-    "structure may be what triggers the WAR-ordering violation that the "
-    "simpler patterns above don't catch.",
-)
 def test_cloudsc_full_shape_nested_if(tmp_path):
     """Mirrors cloudsc.F90 4.5 structure more closely:
       outer IF (mode == 2) THEN  ! IEVAPRAIN-like

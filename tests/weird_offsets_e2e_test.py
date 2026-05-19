@@ -117,7 +117,10 @@ end subroutine ss_neg
     o = np.zeros((11, 4), order="F")
     sdfg(w=w.copy(order="F"), out=o)
     expect = w + (np.arange(-5, 6)[:, None] - np.arange(0, 4)[None, :])
-    np.testing.assert_array_equal(o, expect)
+    # real(8) ``w + i - j``: the SDFG and the numpy reference may differ
+    # by a last bit from fma / operand-order reassociation, so compare
+    # at 1e-12 rather than bit-exact.
+    np.testing.assert_allclose(o, expect, rtol=1e-12, atol=1e-12)
 
 
 def test_assumed_shape_explicit_lb_fir_shift(tmp_path: Path):
