@@ -561,20 +561,19 @@ static void collectConditionReads(mlir::Value v, std::set<std::string> &out,
   if (depth > 20 || !v) return;
   auto *def = v.getDefiningOp();
   if (!def) return;
-  auto nm = def->getName().getStringRef();
 
   // Comparison leaves: recurse into both operands to catch both sides
   // of ``i < n`` (i and n both become symbols if they're declared).
-  if (nm == "arith.cmpf" || nm == "arith.cmpi") {
+  if (mlir::isa<mlir::arith::CmpFOp, mlir::arith::CmpIOp>(def)) {
     for (auto operand : def->getOperands())
       collectConditionReads(operand, out, depth + 1);
     return;
   }
 
   // Logical combinators and int casts the lift-cf-to-scf chain emits.
-  if (nm == "arith.xori" || nm == "arith.andi" || nm == "arith.ori" ||
-      nm == "arith.trunci" || nm == "arith.extui" || nm == "arith.extsi" ||
-      nm == "fir.convert") {
+  if (mlir::isa<mlir::arith::XOrIOp, mlir::arith::AndIOp, mlir::arith::OrIOp,
+                mlir::arith::TruncIOp, mlir::arith::ExtUIOp,
+                mlir::arith::ExtSIOp, fir::ConvertOp>(def)) {
     for (auto operand : def->getOperands())
       collectConditionReads(operand, out, depth + 1);
     return;
