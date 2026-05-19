@@ -572,9 +572,7 @@ def emit_cond(builder, ctx: '_Ctx', n, region):
     a ``ControlFlowRegion`` per branch.  Subsequent statements land in a
     fresh successor state wired from the block.
     """
-    ctx.flush(builder, region)
-    ctx.ensure(region)
-    pre = ctx.cur
+    pre = ctx.flush_and_ensure(builder, region)
 
     cond = n.condition if n.condition and n.condition != "?" else "True"
     # Section-alias dummies (trivial section slices) have no SDFG

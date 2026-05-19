@@ -57,6 +57,17 @@ class _Ctx:
             builder.emit_scalar_assign(self.cur, target, value)
         self.pending.clear()
 
+    def flush_and_ensure(self, builder, region=None):
+        """Flush pending scalar assignments, then guarantee a writable
+        current state and return it.  Callers never ``ensure`` without
+        first ``flush``-ing; this enforces that order in one place.
+
+        :returns: ``self.cur`` (the now-writable current state).
+        """
+        self.flush(builder, region)
+        self.ensure(region)
+        return self.cur
+
     def new_state(self, builder, region=None, label=None):
         """Flush pending assignments, then open a fresh successor state."""
         self.flush(builder, region)

@@ -82,9 +82,7 @@ def emit_copy(builder, ctx, n, region):
     node class (``_cpy_in`` / ``_cpy_out`` in the current libnode) so this
     stays correct if the libnode renames them."""
     from dace.libraries.standard.nodes import CopyLibraryNode
-    ctx.flush(builder, region)
-    ctx.ensure(region)
-    state = ctx.cur
+    state = ctx.flush_and_ensure(builder, region)
 
     src_name = n.reduce_src  # buildCopyNode stored the source here
     tgt_name = n.target
@@ -109,9 +107,7 @@ def emit_memset(builder, ctx, n, region):
     array lands in a new state (and on a new access node) instead of
     racing with the array-wide write inside one state's DAG."""
     from dace.libraries.standard.nodes import MemsetLibraryNode
-    ctx.flush(builder, region)
-    ctx.ensure(region)
-    state = ctx.cur
+    state = ctx.flush_and_ensure(builder, region)
 
     tgt_name = n.target
     # Section-alias dummies route memset through the source array,
@@ -158,9 +154,7 @@ def emit_libcall(builder, ctx, n, region):
     """
     from dace_fortran.intrinsics import libnode_spec
 
-    ctx.flush(builder, region)
-    ctx.ensure(region)
-    state = ctx.cur
+    state = ctx.flush_and_ensure(builder, region)
 
     spec = libnode_spec(n.callee)
     if spec is None:
@@ -233,9 +227,7 @@ def emit_reduce(builder, ctx, n, region):
     """
     from dace_fortran.builder.access import build_memlet_index
 
-    ctx.flush(builder, region)
-    ctx.ensure(region)
-    state = ctx.cur
+    state = ctx.flush_and_ensure(builder, region)
 
     src_name = n.reduce_src
     src_desc = ctx.sdfg.arrays.get(src_name)
