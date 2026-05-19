@@ -43,12 +43,6 @@ _RELEASE_FLAGS = ("-O3", "-ffast-math")
 
 _MODE_FLAGS = {"debug": _DEBUG_FLAGS, "release": _RELEASE_FLAGS}
 
-#: The OpenMP runtime a DaCe kernel may need.  Not linked explicitly
-#: (``-lgomp`` is not always required); instead ``FortranLibrary.load``
-#: ``LD_PRELOAD``s it (``RTLD_GLOBAL``) when present so the library
-#: loads without the caller hand-setting ``LD_PRELOAD``.
-_LIBGOMP = "/usr/lib/x86_64-linux-gnu/libgomp.so.1"
-
 
 @dataclass
 class FortranLibrary:
@@ -64,16 +58,15 @@ class FortranLibrary:
     bindings_f90: Path
 
     def load(self) -> ctypes.CDLL:
-        """Open the library, pre-loading the OpenMP runtime globally so
-        the DaCe kernel's ``gomp`` symbols resolve without the caller
-        setting ``LD_PRELOAD``.
+        """Open the library with :class:`ctypes.CDLL`.
 
-        :returns: the library opened with :class:`ctypes.CDLL`.
+        If the DaCe kernel needs an OpenMP runtime, supply it via
+        ``LD_PRELOAD`` in the environment -- the runtime / its path is
+        deliberately not hard-coded here so any implementation
+        (``libgomp``, LLVM ``libomp``, ...) works.
+
+        :returns: the opened library.
         """
-        try:
-            ctypes.CDLL(_LIBGOMP, mode=ctypes.RTLD_GLOBAL)
-        except OSError:
-            pass  # no libgomp here -> the kernel may not need it
         return ctypes.CDLL(str(self.so_path))
 
 

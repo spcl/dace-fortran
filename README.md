@@ -84,10 +84,15 @@ try:
 except SignatureDriftError as e:
     raise SystemExit(f"binding invalidated by a transformation: {e}")
 
-handle = lib.load()                 # CDLL; LD_PRELOADs libgomp if needed
+handle = lib.load()                 # ctypes.CDLL of the linked .so
 print("emitted binding saved at:", lib.bindings_f90)   # inspect / ship it
 print("Fortran-callable library:", lib.so_path)
 ```
+
+If the DaCe kernel needs an OpenMP runtime, provide it through the
+environment, not the library: ``LD_PRELOAD=<your libgomp/libomp>
+python ...``.  The runtime is not hard-coded so any implementation
+works.
 
 The emitted ``<entry>_bindings.f90`` is written to ``out_dir`` and
 exposed as ``lib.bindings_f90`` -- save, diff or ship it independently

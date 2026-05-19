@@ -1,7 +1,7 @@
 """Registries + helpers for the full-CLOUDSC integration test.
 
-Lifted near-verbatim from
-``/home/primrose/Work/data_must_flow_artifacts/cloudsc/validate_cloudsc.py``
+Lifted near-verbatim from the data-must-flow artifacts'
+``cloudsc/validate_cloudsc.py``
 (the dict registries + the input/output helpers that
 drove the old ``dace.frontend.fortran`` Python frontend's
 end-to-end test).  Reused here for the HLFIR bridge port  --  the
