@@ -283,6 +283,23 @@ def emit_reduce(builder, ctx, n, region):
     state.add_edge(red, None, tgt_access, None, out_memlet)
 
 
+def _emit_terminator_block(builder, ctx, region, block_cls, prefix: str):
+    """Add a leaf control-flow terminator (``BreakBlock`` /
+    ``ReturnBlock``) to ``region``, wired from ``ctx.cur`` -- or marked
+    the region's start block when the terminator is its first statement.
+
+    :param block_cls: the DaCe terminator block class to instantiate.
+    :param prefix: node-name prefix (``break`` / ``return``).
+    """
+    ctx.flush(builder, region)
+    is_start = ctx.cur is None
+    blk = block_cls(f"{prefix}_{builder.nid()}")
+    region.add_node(blk, is_start_block=is_start)
+    if ctx.cur is not None:
+        region.add_edge(ctx.cur, blk, InterstateEdge())
+    ctx.cur = blk
+
+
 def emit_break(builder, ctx, n, region):
     """Fortran ``EXIT`` -> ``BreakBlock`` added to the current region.
     The block is a leaf and implicitly transfers control to the nearest
@@ -291,13 +308,7 @@ def emit_break(builder, ctx, n, region):
     ``exit``), it becomes the region's start block.
     """
     from dace.sdfg.state import BreakBlock
-    ctx.flush(builder, region)
-    is_start = ctx.cur is None
-    blk = BreakBlock(f"break_{builder.nid()}")
-    region.add_node(blk, is_start_block=is_start)
-    if ctx.cur is not None:
-        region.add_edge(ctx.cur, blk, InterstateEdge())
-    ctx.cur = blk
+    _emit_terminator_block(builder, ctx, region, BreakBlock, "break")
 
 
 def emit_return(builder, ctx, n, region):
@@ -307,10 +318,4 @@ def emit_return(builder, ctx, n, region):
     subroutine.
     """
     from dace.sdfg.state import ReturnBlock
-    ctx.flush(builder, region)
-    is_start = ctx.cur is None
-    blk = ReturnBlock(f"return_{builder.nid()}")
-    region.add_node(blk, is_start_block=is_start)
-    if ctx.cur is not None:
-        region.add_edge(ctx.cur, blk, InterstateEdge())
-    ctx.cur = blk
+    _emit_terminator_block(builder, ctx, region, ReturnBlock, "return")

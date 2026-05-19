@@ -292,6 +292,28 @@ def _is_trivial_bound(expr: str) -> bool:
     return False
 
 
+def _hoist_bound_to_symbol(ctx, region, builder, expr_str: str, prefix: str):
+    """Stage a non-trivial loop-bound expression onto a fresh
+    ``<prefix>_<nid>`` ``int64`` symbol via a pre-LoopRegion interstate
+    edge, so the LoopRegion's init / cond carry only a symbol name.
+
+    :param expr_str: the rendered bound expression.
+    :param prefix: symbol-name prefix (``loopend`` / ``loopbegin``).
+    :returns: the new symbol name, or ``None`` when ``expr_str`` is a
+              trivial bound (the caller keeps its original value).
+    """
+    if _is_trivial_bound(expr_str):
+        return None
+    sym = f"{prefix}_{builder.nid()}"
+    if sym not in ctx.sdfg.symbols:
+        ctx.sdfg.add_symbol(sym, dace.int64)
+    ctx.ensure(region)
+    nxt = region.add_state(f"pre_{sym}")
+    region.add_edge(ctx.cur, nxt, InterstateEdge(assignments={sym: expr_str}))
+    ctx.cur = nxt
+    return sym
+
+
 def _sibling_rw_hazard(assigns) -> bool:
     """Sequential-semantics hazard test over a list of sibling assign
     ASTNodes (the AST-list form of the invariant ``emit_assign``'s
@@ -374,26 +396,12 @@ def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
     # rendering (the hoisted assignment goes through the same
     # interstate-edge symbol-staging path indirect-array reads use).
     # Bare-symbol bounds are skipped; the staging would be pure noise.
-    bound_expr_str = str(bound)
-    lower_expr_str = str(lower)
-    if not _is_trivial_bound(bound_expr_str):
-        sym = f"loopend_{builder.nid()}"
-        if sym not in ctx.sdfg.symbols:
-            ctx.sdfg.add_symbol(sym, dace.int64)
-        ctx.ensure(region)
-        nxt = region.add_state(f"pre_{sym}")
-        region.add_edge(ctx.cur, nxt, InterstateEdge(assignments={sym: bound_expr_str}))
-        ctx.cur = nxt
-        bound = sym
-    if not _is_trivial_bound(lower_expr_str):
-        sym = f"loopbegin_{builder.nid()}"
-        if sym not in ctx.sdfg.symbols:
-            ctx.sdfg.add_symbol(sym, dace.int64)
-        ctx.ensure(region)
-        nxt = region.add_state(f"pre_{sym}")
-        region.add_edge(ctx.cur, nxt, InterstateEdge(assignments={sym: lower_expr_str}))
-        ctx.cur = nxt
-        lower = sym
+    _b = _hoist_bound_to_symbol(ctx, region, builder, str(bound), "loopend")
+    if _b is not None:
+        bound = _b
+    _l = _hoist_bound_to_symbol(ctx, region, builder, str(lower), "loopbegin")
+    if _l is not None:
+        lower = _l
 
     iter_map = {**iter_map, n.loop_iter: uid}
 
