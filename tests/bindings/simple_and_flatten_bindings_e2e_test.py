@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import build_sdfg, have_flang
+from _util import FLANG_PORTABLE_FFLAGS, build_sdfg, have_flang
 
 from dace_fortran.bindings import (
     FlattenPlan,
@@ -34,7 +34,7 @@ pytestmark = [
 
 
 def _compile_so(out_so: Path, *sources: Path, mod_dir: Path, link_so: Path | None = None):
-    cmd = ["gfortran", "-shared", "-fPIC", "-O0", "-fno-fast-math", "-ffp-contract=off", f"-J{mod_dir}"]
+    cmd = ["gfortran", "-shared", "-fPIC", *FLANG_PORTABLE_FFLAGS, f"-J{mod_dir}"]
     cmd.extend(str(s) for s in sources)
     cmd.extend(["-o", str(out_so)])
     if link_so is not None:

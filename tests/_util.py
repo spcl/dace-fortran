@@ -46,7 +46,10 @@ def have_flang() -> bool:
 
 # LLVM-flang-portable strict-FP flag set: keeps an SDFG-linked binding
 # and its gfortran reference on byte-identical arithmetic semantics.
-FLANG_PORTABLE_FFLAGS = ["-O0", "-fno-fast-math", "-ffp-contract=off"]
+# ``-ffree-line-length-none`` lifts the free-form column cap (132 on
+# gfortran <=12; large by default on 14/15) so the long generated
+# ``<entry>_dace`` signatures compile on any gfortran version.
+FLANG_PORTABLE_FFLAGS = ["-O0", "-fno-fast-math", "-ffp-contract=off", "-ffree-line-length-none"]
 
 
 def gfortran_compile_so(out_so: Path, *sources: Path, mod_dir: Path, link_so: Path | None = None):

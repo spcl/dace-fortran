@@ -59,7 +59,10 @@ def _compile_so(out_so: Path, *sources: Path, mod_dir: Path, link_so: Path | Non
     f2py probes leak stale modules there and the format isn't
     cross-compiler compatible.
     """
-    cmd = ["gfortran", "-shared", "-fPIC", f"-J{mod_dir}"]
+    # No strict-FP flags here by design (structural ABI test, not a
+    # numeric compare); just lift the free-form column cap so the long
+    # generated signatures compile on gfortran <=12.
+    cmd = ["gfortran", "-shared", "-fPIC", "-ffree-line-length-none", f"-J{mod_dir}"]
     cmd.extend(str(s) for s in sources)
     cmd.extend(["-o", str(out_so)])
     if link_so is not None:
