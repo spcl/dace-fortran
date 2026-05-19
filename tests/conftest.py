@@ -48,4 +48,21 @@ def pytest_unconfigure(config):
 
     sys.stdout.flush()
     sys.stderr.flush()
+
+    # ``os._exit`` skips CPython finalisation -- including mpi4py's
+    # atexit ``MPI_Finalize``.  DaCe's MPI environment deliberately
+    # never finalises (process-global, driver's job), so under
+    # ``mpirun`` the ranks would exit MPI-initialised-but-not-finalised:
+    # newer OpenMPI/PRTE only warns, but the runner's older OpenMPI/ORTE
+    # treats it as abnormal termination and makes ``mpirun`` return
+    # non-zero, failing CI even though every test passed.  Finalise
+    # explicitly here (guarded; a no-op when MPI was never initialised,
+    # i.e. the normal non-mpi sweep) so termination is clean everywhere.
+    try:
+        from mpi4py import MPI
+        if MPI.Is_initialized() and not MPI.Is_finalized():
+            MPI.Finalize()
+    except Exception:
+        pass
+
     os._exit(_pytest_exitstatus[0])
