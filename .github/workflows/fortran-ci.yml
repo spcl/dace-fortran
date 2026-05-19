@@ -80,9 +80,12 @@ jobs:
         pytest -n auto -m "not mpi" --cov-report=xml --cov=dace_fortran --tb=short tests/
         coverage report || true
         coverage xml || true
-        # MPI tests: 2 ranks oversubscribed onto the runner's cores
-        # (GH runners have few slots).
-        mpirun --oversubscribe -n 2 python -m pytest -m mpi \
+        # MPI tests: 4 ranks oversubscribed onto the runner's cores
+        # (GH runners have few slots, but the mpi tests are tiny).  4
+        # ranks is required so the non-default-communicator e2e
+        # (MPI_Comm_split by rank%2) actually runs -- it skips below 4;
+        # the ring tests run a ring of `size` and work at 4 too.
+        mpirun --oversubscribe -n 4 python -m pytest -m mpi \
           -p no:cacheprovider --tb=short tests/
         reachable=0
         ping -W 2 -c 1 codecov.io || reachable=$?
