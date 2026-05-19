@@ -124,7 +124,13 @@ def f2py_compile(
     if only:
         # f2py's filter form is ``only: name1 name2 :`` as trailing positional args.
         cmd += ["only:", *only, ":"]
-    subprocess.check_call(cmd, cwd=out_dir)
+    # numpy's f2py meson backend (Python>=3.12) ignores ``--f90flags``;
+    # meson reads ``FFLAGS`` for the Fortran compiler's default args.
+    # f2py emits a single-line ``SUBROUTINE foo(<many args>)`` that
+    # exceeds the 132-col free-form limit on gfortran <=13, so lift the
+    # cap there (append, don't clobber a caller's FFLAGS).
+    env = {**os.environ, "FFLAGS": (os.environ.get("FFLAGS", "") + " -ffree-line-length-none").strip()}
+    subprocess.check_call(cmd, cwd=out_dir, env=env)
     if str(out_dir) not in sys.path:
         sys.path.insert(0, str(out_dir))
     __import__(mod_name)

@@ -12,6 +12,7 @@ loopnests are bare flat subroutines  --  the SDFG-vs-f2py comparison is
 the only meaningful correctness check.
 """
 
+import os
 import shutil
 import subprocess
 import sys
@@ -37,10 +38,16 @@ def _f2py_build(src_text: str, out_dir: Path, mod_name: str):
     out_dir.mkdir(parents=True, exist_ok=True)
     src = out_dir / f"{mod_name}.f90"
     src.write_text(src_text)
+    # numpy's f2py meson backend (Python>=3.12) ignores ``--f90flags``;
+    # meson reads ``FFLAGS``.  f2py emits a single-line
+    # ``SUBROUTINE foo(<many args>)`` exceeding the 132-col free-form
+    # limit on gfortran <=13 -> lift the cap (append, don't clobber).
+    env = {**os.environ, "FFLAGS": (os.environ.get("FFLAGS", "") + " -ffree-line-length-none").strip()}
     subprocess.check_call(
         [sys.executable, "-m", "numpy.f2py", "-c",
          str(src), "-m", mod_name, "--quiet"],
         cwd=out_dir,
+        env=env,
     )
     if str(out_dir) not in sys.path:
         sys.path.insert(0, str(out_dir))
