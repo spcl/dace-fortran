@@ -41,7 +41,8 @@ jobs:
         sudo apt-get install -y \
           llvm-21-dev libmlir-21-dev mlir-21-tools \
           libflang-21-dev flang-21 clang-21 \
-          cmake ninja-build gfortran libgomp1
+          cmake ninja-build gfortran libgomp1 \
+          libopenmpi-dev openmpi-bin
         echo "/usr/lib/llvm-21/bin" >> "$GITHUB_PATH"
         # apt.llvm.org installs the binary as flang-new-21 in
         # /usr/lib/llvm-21/bin (on PATH above).  Fall back to a symlink
@@ -62,6 +63,9 @@ jobs:
         # meson is the f2py backend on Python >=3.12 (numerical refs).
         pip install nanobind numpy meson ninja
         pip install -e ".[testing]" pytest-xdist coverage
+        # mpi4py (built against the openmpi installed above) drives the
+        # multi-rank MPI Send/Recv e2e via dace.sdfg.utils.distributed_compile.
+        MPICC=mpicc pip install mpi4py
 
     - name: Build HLFIR bridge
       run: |
@@ -69,13 +73,17 @@ jobs:
         python -c "import dace_fortran; dace_fortran.SDFGBuilder"
 
     - name: Run Fortran frontend tests
-      env:
-        LD_PRELOAD: /usr/lib/x86_64-linux-gnu/libgomp.so.1
       run: |
         export COVERAGE_RCFILE=`pwd`/.coveragerc
-        pytest -n auto --cov-report=xml --cov=dace_fortran --tb=short tests/
+        # Main xdist sweep, excluding the multi-rank ``mpi`` tests
+        # (they need mpirun, not an xdist worker).
+        pytest -n auto -m "not mpi" --cov-report=xml --cov=dace_fortran --tb=short tests/
         coverage report || true
         coverage xml || true
+        # MPI tests: 2 ranks oversubscribed onto the runner's cores
+        # (GH runners have few slots).
+        mpirun --oversubscribe -n 2 python -m pytest -m mpi \
+          -p no:cacheprovider --tb=short tests/
         reachable=0
         ping -W 2 -c 1 codecov.io || reachable=$?
         if [ $reachable -eq 0 ]; then
