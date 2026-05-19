@@ -33,7 +33,9 @@ class FrozenArg:
         fortran_name: name as declared in the user's Fortran source.
         sdfg_name:    name DaCe sees (may differ after struct
                       flattening  --  e.g. ``st%u`` becomes ``st_u``).
-        kind:         ``'array'`` | ``'scalar'`` | ``'symbol'``.
+        kind:         ``'array'`` | ``'scalar'`` | ``'symbol'`` |
+                      ``'mpi_comm'`` (a Fortran integer communicator
+                      the wrapper converts via ``MPI_Comm_f2c``).
         dtype:        ``'float64'`` | ``'int32'`` | ``'complex128'`` | ...
         rank:         tensor rank (0 for scalars).
         shape:        symbolic extents in Fortran symbols.  Empty tuple
@@ -186,8 +188,14 @@ class FrozenSignature:
 
 def _dtype_string(desc) -> str:
     """Stringify a DaCe data descriptor's dtype for comparison."""
+    import dace
+
     t = getattr(desc, 'dtype', None)
     if t is None:
         return '?'
+    if isinstance(t, dace.dtypes.opaque):
+        # ``opaque.to_string()`` is unimplemented in this dace (no
+        # ``typename``); the ctype (``MPI_Comm`` / ...) is its identity.
+        return t.ctype
     # dace.typeclass instances have a ``to_string``  --  fall back to repr.
     return getattr(t, 'to_string', lambda: str(t))()

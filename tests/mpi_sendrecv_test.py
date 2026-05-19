@@ -44,9 +44,10 @@ subroutine sendrecv(buf, rbuf, n, dst, src, tag)
 end subroutine sendrecv
 """
 
-# A runtime/user communicator (a dummy ``comm`` argument) is not the
-# default; Phase-1 must reject it loudly rather than silently treat it
-# as MPI_COMM_WORLD.
+# A runtime/user communicator (a dummy ``comm`` argument) is threaded
+# into the libnode as an ``opaque(MPI_Comm)`` ``_comm`` connector; the
+# Fortran integer handle is retyped on the SDFG signature so the
+# generated binding wrapper can ``MPI_Comm_f2c`` it.
 _USER_COMM = """
 subroutine sr_usercomm(buf, n, dst, tag, comm)
   implicit none
@@ -143,9 +144,26 @@ def test_isend_irecv_wait_lower_to_mpi_libnodes(tmp_path: Path):
     sdfg.validate()
 
 
-def test_runtime_communicator_is_rejected(tmp_path: Path):
-    """A non-default (runtime dummy) communicator must fail loudly --
-    Phase 1 supports only MPI_COMM_WORLD; silently treating a user
-    communicator as WORLD would miscompute."""
-    with pytest.raises(Exception, match="(?i)communicator|MPI_COMM_WORLD"):
-        _build(_USER_COMM, tmp_path, "sr_usercomm", "_QPsr_usercomm")
+def test_runtime_communicator_lowers_to_comm_connector(tmp_path: Path):
+    """A non-default (runtime dummy) communicator is supported: the
+    ``Send`` node gains an ``opaque(MPI_Comm)`` ``_comm`` in-connector
+    and the Fortran integer ``comm`` dummy is retyped on the SDFG
+    signature to ``opaque(MPI_Comm)`` (the binding wrapper does
+    ``MPI_Comm_f2c``).  Supersedes the Phase-1 loud-rejection contract."""
+    import dace
+    from dace.libraries.mpi.nodes.send import Send
+
+    sdfg = _build(_USER_COMM, tmp_path, "sr_usercomm", "_QPsr_usercomm")
+
+    sends = [n for n, _ in sdfg.all_nodes_recursive() if isinstance(n, Send)]
+    assert len(sends) == 1, f"expected 1 Send node, got {len(sends)}"
+    assert '_comm' in sends[0].in_connectors
+
+    comm = sdfg.arrays['comm']
+    assert isinstance(comm.dtype, dace.dtypes.opaque) and comm.dtype.ctype == 'MPI_Comm'
+
+    fs = sdfg._frozen_signature
+    (comm_arg, ) = [a for a in fs.args if a.sdfg_name == 'comm']
+    assert comm_arg.kind == 'mpi_comm'
+
+    sdfg.validate()

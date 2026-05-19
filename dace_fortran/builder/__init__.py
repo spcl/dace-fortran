@@ -497,6 +497,7 @@ class SDFGBuilder:
         """
         # Local import keeps the binding machinery optional -- plain
         # ``import dace_fortran`` doesn't drag it in.
+        from dace import dtypes
         from dace.data import Array, Scalar
         from dace_fortran.bindings.frozen_signature import FrozenArg, FrozenSignature
 
@@ -521,7 +522,14 @@ class SDFGBuilder:
         for sdfg_name_, desc in sdfg.arglist().items():
             user_key = dace_to_user.get(sdfg_name_, sdfg_name_)
             v = (self.arrays.get(user_key) or self.symbols.get(user_key) or self.scalars.get(user_key))
-            if user_key in self.symbols:
+            _dt = getattr(desc, 'dtype', None)
+            if isinstance(_dt, dtypes.opaque) and _dt.ctype == 'MPI_Comm':
+                # A Fortran ``integer`` communicator dummy whose SDFG
+                # descriptor ``emit_mpi`` retyped to ``opaque(MPI_Comm)``;
+                # the binding wrapper does ``MPI_Comm_f2c`` on the
+                # integer handle.
+                kind = 'mpi_comm'
+            elif user_key in self.symbols:
                 kind = 'symbol'
             elif isinstance(desc, Scalar):
                 kind = 'scalar'
@@ -530,7 +538,13 @@ class SDFGBuilder:
             else:
                 kind = 'scalar'
             dtype_obj = getattr(desc, 'dtype', None)
-            dtype_str = (getattr(dtype_obj, 'to_string', lambda: str(dtype_obj))() if dtype_obj is not None else '?')
+            if isinstance(dtype_obj, dtypes.opaque):
+                # ``opaque.to_string()`` is unimplemented in this dace
+                # (no ``typename``); the ctype is the stable identity.
+                dtype_str = dtype_obj.ctype
+            else:
+                dtype_str = (getattr(dtype_obj, 'to_string', lambda: str(dtype_obj))()
+                             if dtype_obj is not None else '?')
             shape = tuple(str(s) for s in getattr(desc, 'shape', ()))
             origin = origin_by_name.get(user_key)
             if origin is not None:

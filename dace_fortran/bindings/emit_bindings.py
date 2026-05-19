@@ -33,6 +33,7 @@ def emit_bindings(
     iface: OriginalInterface,
     plan: FlattenPlan,
     out_path: str,
+    dace_arglist: tuple = (),
 ) -> Path:
     """Emit a Fortran binding module for the built SDFG.
 
@@ -49,17 +50,24 @@ def emit_bindings(
                  ``hlfir-flatten-structs`` performed; one source of
                  truth for copy-in / copy-out code.
     :param out_path: where to write ``<entry>_bindings.f90``.
+    :param dace_arglist: the live ``__program_<entry>`` argument-name
+                  order DaCe codegen emitted (``CompiledSDFG._sig``),
+                  supplied by ``build_fortran_library`` from the
+                  just-compiled SDFG.  This is codegen output -- not a
+                  stable contract -- so it is passed in rather than
+                  snapshotted in ``FrozenSignature``.  Empty -> the
+                  emitter falls back to ``frozen.args`` order.
     :returns: ``out_path`` as a ``Path`` (just materialised).
     """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     blocks = {
-        'c_interface': build_c_interface(frozen, iface),
+        'c_interface': build_c_interface(frozen, iface, dace_arglist),
         'handle_state': build_handle_state(iface),
         'wrapper_head': build_wrapper_head(frozen, iface, plan),
         'wrapper_body': build_wrapper_body(frozen, iface, plan),
-        'wrapper_tail': build_wrapper_tail(frozen, iface, plan),
+        'wrapper_tail': build_wrapper_tail(frozen, iface, plan, dace_arglist),
         'finalize': build_finalize(iface),
     }
     out_path.write_text(assemble_module(iface, frozen, blocks))

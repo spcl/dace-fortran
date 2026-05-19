@@ -197,11 +197,16 @@ static std::string mpiCalleeTag(const std::string &callee) {
 ///   * send / recv:    ``[buffer, partner(dest|src), tag]``
 ///   * isend / irecv:  ``[buffer, partner(dest|src), tag, request]``
 ///   * wait:           ``[request]``
+/// A non-default (runtime / user) communicator is appended as one extra
+/// trailing entry (``[..., comm]``); the default ``MPI_COMM_WORLD`` adds
+/// nothing, so the optional comm is unambiguous per callee from the
+/// ``call_args`` length (send/recv 3 vs 4, isend/irecv 4 vs 5).  The
+/// Python builder lowers the trailing comm to an ``opaque(MPI_Comm)``
+/// ``_comm`` connector; the c-binding wrapper does ``MPI_Comm_f2c`` on
+/// the Fortran integer handle.
 /// count is taken from the buffer memlet downstream; datatype / status
 /// / ierr are not modelled (DaCe derives the MPI datatype from the
-/// buffer and uses ``MPI_STATUS_IGNORE``).  Only ``MPI_COMM_WORLD`` is
-/// supported -- a non-default communicator throws until the opaque
-/// ``MPI_Comm`` path (Phase 3).  Positional ABI:
+/// buffer and uses ``MPI_STATUS_IGNORE``).  Positional ABI:
 ///   send (buf,count,dt,dest,tag,comm,ierr)
 ///   recv (buf,count,dt,src,tag,comm,status,ierr)
 ///   isend(buf,count,dt,dest,tag,comm,request,ierr)
@@ -235,25 +240,19 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string &mpiOp) {
   std::string partner = resolve(args[3], isSendLike ? "dest" : "src");
   std::string tag = resolve(args[4], "tag");
 
-  // comm (arg 5) must be the default communicator.  DaCe's point-to-
-  // point nodes always emit ``MPI_COMM_WORLD``, so the only risk is
-  // silently miscompiling a *runtime* user communicator as WORLD.
-  // Flang materialises a ``parameter`` / literal ``MPI_COMM_WORLD`` as
-  // a compiler-synthetic entity (``__assoc_scalar_*`` -- a Fortran
-  // user identifier can never start with ``_``); ``use mpi`` exposes
-  // it as an entity literally named ``mpi_comm_world``; an un-nameable
-  // operand is a bare folded constant.  Accept those three; reject
-  // only a real named variable (a dummy ``comm`` / split result).
+  // comm (arg 5).  Flang materialises a ``parameter`` / literal
+  // ``MPI_COMM_WORLD`` as a compiler-synthetic entity (``__assoc_scalar_*``
+  // -- a Fortran user identifier can never start with ``_``); ``use mpi``
+  // exposes it as an entity literally named ``mpi_comm_world``; an
+  // un-nameable operand is a bare folded constant.  Those three are the
+  // default WORLD (nothing appended -- DaCe emits ``MPI_COMM_WORLD``).
+  // A real named variable (a dummy ``comm`` / ``MPI_Comm_split`` result)
+  // is a runtime/user communicator: append it so the builder threads an
+  // ``opaque(MPI_Comm)`` ``_comm`` connector into the libnode.
   std::string commName = traceToDecl(args[5]);
   std::string low = llvm::StringRef(commName).lower();
   bool isDefault = commName.empty() || low.rfind("__", 0) == 0 ||
                    low.find("mpi_comm_world") != std::string::npos;
-  if (!isDefault)
-    throw std::runtime_error(
-        "MPI " + mpiOp + ": communicator \"" + commName +
-        "\" is a runtime/user communicator -- needs the opaque-MPI_Comm "
-        "path (not yet implemented); only MPI_COMM_WORLD is supported "
-        "in this phase");
 
   n.call_args = {buf, partner, tag};
   if (mpiOp == "mpi_isend" || mpiOp == "mpi_irecv") {
@@ -262,6 +261,8 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string &mpiOp) {
                                ": expected a request argument");
     n.call_args.push_back(resolve(args[6], "request"));
   }
+  if (!isDefault)
+    n.call_args.push_back(commName);
   return n;
 }
 

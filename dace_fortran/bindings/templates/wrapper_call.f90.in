@@ -1,6 +1,6 @@
     ! Ref-counted init -- first call allocates, subsequent calls reuse.
     if (init_count == 0) then
-      dace_handle = dace_init_{entry}()
+      dace_handle = dace_init_{entry}({init_call_args})
     end if
     init_count = init_count + 1
 

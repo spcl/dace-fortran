@@ -223,9 +223,12 @@ def emit_mpi(builder, ctx, n, region):
 
     ``partner`` is the dest rank for (i)send, the source rank for
     (i)recv.  count is implicit in the buffer memlet, the MPI datatype
-    is derived from the buffer descriptor, the communicator is
-    ``MPI_COMM_WORLD`` (the C++ bridge already rejected a non-default
-    communicator).  The non-blocking request is threaded Isend/Irecv
+    is derived from the buffer descriptor.  The communicator is
+    ``MPI_COMM_WORLD`` unless the C++ bridge appended a runtime/user
+    communicator, in which case the Fortran ``integer`` handle is
+    retyped to an ``opaque(MPI_Comm)`` SDFG input wired to the libnode's
+    ``_comm`` connector (the c-binding wrapper does ``MPI_Comm_f2c``).
+    The non-blocking request is threaded Isend/Irecv
     -> Wait through a synthesised transient ``_mpireq_<req>`` of
     ``opaque("MPI_Request")`` keyed by the Fortran request variable, so
     the dataflow edge enforces the completion ordering.  ``MPI_Wait``'s
@@ -297,6 +300,29 @@ def emit_mpi(builder, ctx, n, region):
     tag_memlet = Memlet.from_array(tag, ctx.sdfg.arrays[tag])
     buf_memlet = Memlet.from_array(buffer, bdesc)
 
+    # Optional trailing user communicator (the C++ bridge appends it only
+    # when non-default; default ``MPI_COMM_WORLD`` adds nothing).  Base
+    # ``call_args`` length is 3 for send/recv, 4 for isend/irecv (the
+    # request); one extra entry is the comm.
+    _comm_base = 4 if n.callee in ('mpi_isend', 'mpi_irecv') else 3
+    comm = n.call_args[_comm_base] if len(n.call_args) > _comm_base else None
+    if comm is not None:
+        # Retype the Fortran ``integer`` comm dummy to an
+        # ``opaque(MPI_Comm)`` SDFG input; the c-binding wrapper does
+        # ``MPI_Comm_f2c`` on the integer handle.  The opaque-dtype
+        # exemption in the length-1<->scalar passes keeps it a by-value
+        # ``Scalar`` (an ``MPI_Comm`` handle, not a pointer).
+        ctx.sdfg.arrays[comm].dtype = dace.dtypes.opaque("MPI_Comm")
+
+    def _wire_comm(node):
+        """Add a ``_comm`` input connector + memlet when a user
+        communicator is present (no-op for default WORLD)."""
+        if comm is None:
+            return
+        node.add_in_connector('_comm', dace.dtypes.opaque("MPI_Comm"))
+        state.add_memlet_path(acc(builder, state, comm), node, dst_conn='_comm',
+                              memlet=Memlet(data=comm, subset='0'))
+
     if n.callee == 'mpi_send':
         from dace.libraries.mpi.nodes.send import Send
         node = Send(f'_mpi_send_{builder.nid()}')
@@ -305,6 +331,7 @@ def emit_mpi(builder, ctx, n, region):
         state.add_memlet_path(acc(builder, state, buffer), node, dst_conn='_buffer', memlet=buf_memlet)
         state.add_memlet_path(acc(builder, state, partner), node, dst_conn='_dest', memlet=partner_memlet)
         state.add_memlet_path(acc(builder, state, tag), node, dst_conn='_tag', memlet=tag_memlet)
+        _wire_comm(node)
     elif n.callee == 'mpi_recv':
         from dace.libraries.mpi.nodes.recv import Recv
         node = Recv(f'_mpi_recv_{builder.nid()}')
@@ -313,6 +340,7 @@ def emit_mpi(builder, ctx, n, region):
         state.add_memlet_path(acc(builder, state, partner), node, dst_conn='_src', memlet=partner_memlet)
         state.add_memlet_path(acc(builder, state, tag), node, dst_conn='_tag', memlet=tag_memlet)
         state.add_memlet_path(node, acc(builder, state, buffer), src_conn='_buffer', memlet=buf_memlet)
+        _wire_comm(node)
     elif n.callee == 'mpi_isend':
         from dace.libraries.mpi.nodes.isend import Isend
         rname = _req_array(n.call_args[3])
@@ -325,6 +353,7 @@ def emit_mpi(builder, ctx, n, region):
         state.add_memlet_path(acc(builder, state, tag), node, dst_conn='_tag', memlet=tag_memlet)
         state.add_edge(node, '_request', acc(builder, state, rname), None,
                        Memlet.simple(rname, "0:1", num_accesses=1))
+        _wire_comm(node)
     elif n.callee == 'mpi_irecv':
         from dace.libraries.mpi.nodes.irecv import Irecv
         rname = _req_array(n.call_args[3])
@@ -336,6 +365,7 @@ def emit_mpi(builder, ctx, n, region):
         state.add_memlet_path(node, acc(builder, state, buffer), src_conn='_buffer', memlet=buf_memlet)
         state.add_edge(node, '_request', acc(builder, state, rname), None,
                        Memlet.simple(rname, "0:1", num_accesses=1))
+        _wire_comm(node)
     else:
         raise NotImplementedError(f"MPI op {n.callee!r} not supported")
 

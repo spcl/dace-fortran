@@ -138,8 +138,17 @@ def build_fortran_library(
     compiled = sdfg.compile()
     sdfg_so = Path(compiled._lib._library_filename)
 
+    # Authoritative ``__program_<entry>`` argument order: take it from
+    # the ``CompiledSDFG`` itself (``_sig`` -- the exact name order DaCe
+    # uses to call the kernel).  This is codegen *output* (its symbol
+    # set is transformation- / timing-dependent), so it is NOT
+    # snapshotted in the drift-checked ``FrozenSignature``; the emitter
+    # receives it live and generates the wrapper accordingly.  Empty ->
+    # the emitter falls back to ``frozen.args`` order.
+    dace_arglist = tuple(getattr(compiled, "_sig", None) or ())
+
     bindings_f90 = out_dir / f"{name}_bindings.f90"
-    emit_bindings(frozen, iface, plan, str(bindings_f90))
+    emit_bindings(frozen, iface, plan, str(bindings_f90), dace_arglist)
 
     so_path = out_dir / f"lib{name}.so"
     # gfortran compiles sources left-to-right with no dependency

@@ -1,8 +1,8 @@
   ! ---------------- C ABI interface to the compiled SDFG ----------------
   interface
-    function dace_init_{entry}() bind(c, name='__dace_init_{entry}') result(h)
-      import :: c_ptr
-      type(c_ptr) :: h
+    function dace_init_{entry}({init_args}) bind(c, name='__dace_init_{entry}') result(h)
+      import :: c_ptr, c_int
+{init_arg_decls}      type(c_ptr) :: h
     end function
 
     subroutine dace_program_{entry}(h,  &

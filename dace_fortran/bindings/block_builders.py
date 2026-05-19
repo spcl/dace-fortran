@@ -41,7 +41,7 @@ def _load(name: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def build_c_interface(frozen: FrozenSignature, iface: OriginalInterface) -> str:
+def build_c_interface(frozen: FrozenSignature, iface: OriginalInterface, dace_arglist: tuple = ()) -> str:
     """Render the ``interface ... end interface`` block declaring the
     three C entry points that the compiled SDFG exports.
 
@@ -72,7 +72,13 @@ def build_c_interface(frozen: FrozenSignature, iface: OriginalInterface) -> str:
     tpl = _load("c_interface.f90.in")
     header_lines: List[str] = []
     body_lines: List[str] = []
-    for a in frozen.args:
+    for a in _dace_call_order(frozen, dace_arglist):
+        if isinstance(a, str):
+            # A shape-only free symbol DaCe folds into the ``__program``
+            # signature (sorted with the scalars) -- pass-by-value int.
+            header_lines.append(f"      {a}")
+            body_lines.append(f"      integer(c_int), value :: {a}")
+            continue
         header_lines.append(f"      {a.sdfg_name}")
         if a.rank > 0:
             # Real array, or length-1 wrapper for a scalar OUTPUT
@@ -82,6 +88,14 @@ def build_c_interface(frozen: FrozenSignature, iface: OriginalInterface) -> str:
         elif a.kind == 'symbol':
             # Free symbol -- pass-by-value integer.
             body_lines.append(f"      integer(c_int), value :: {a.sdfg_name}")
+        elif a.kind == 'mpi_comm':
+            # ``emit_mpi`` retyped the Fortran ``integer`` communicator
+            # to an ``opaque(MPI_Comm)`` SDFG scalar; DaCe codegen emits
+            # an ``MPI_Comm`` by-value parameter.  ``MPI_Comm`` is a
+            # pointer-sized handle (OpenMPI ``ompi_communicator_t*``),
+            # so it binds as ``type(c_ptr), value``; the wrapper feeds
+            # it the ``MPI_Comm_f2c`` result.
+            body_lines.append(f"      type(c_ptr), value :: {a.sdfg_name}")
         elif a.kind == 'scalar':
             # Scalar INPUT (``intent(in)`` or ``REAL(8), VALUE``) lives
             # as a non-transient ``Scalar`` on the SDFG -- DaCe codegen
@@ -90,9 +104,63 @@ def build_c_interface(frozen: FrozenSignature, iface: OriginalInterface) -> str:
             body_lines.append(f"      {_fortran_c_value_type(a.dtype)}, value :: {a.sdfg_name}")
         else:
             body_lines.append(f"      type(c_ptr), value :: {a.sdfg_name}")
-    return tpl.format(entry=iface.entry,
-                      c_arg_decls=",  &\n".join(header_lines),
-                      c_arg_decls_body="\n".join(body_lines))
+    syms = _free_sym_names(frozen)
+    init_arg_decls = "".join(f"      integer(c_int), value :: {s}\n" for s in syms)
+    rendered = tpl.format(entry=iface.entry,
+                          c_arg_decls=",  &\n".join(header_lines),
+                          c_arg_decls_body="\n".join(body_lines),
+                          init_args=", ".join(syms),
+                          init_arg_decls=init_arg_decls)
+    if any(a.kind == 'mpi_comm' for a in frozen.args):
+        # Splice the ``MPI_Comm_f2c`` C binding into the same interface
+        # block (before its ``end interface``) so the wrapper can turn
+        # the Fortran integer handle into the C ``MPI_Comm`` the SDFG
+        # entry expects.
+        rendered = rendered.replace("  end interface", _MPI_COMM_F2C_IFACE + "  end interface")
+    return rendered
+
+
+# ``MPI_Comm_f2c(MPI_Fint) -> MPI_Comm``: converts a Fortran integer
+# communicator handle to the C handle.  ``MPI_Fint`` is ``int``;
+# ``MPI_Comm`` is pointer-sized on OpenMPI, returned as ``type(c_ptr)``.
+_MPI_COMM_F2C_IFACE = """
+    function dace_mpi_comm_f2c(fcomm) bind(c, name='MPI_Comm_f2c')
+      import :: c_int, c_ptr
+      integer(c_int), value :: fcomm
+      type(c_ptr) :: dace_mpi_comm_f2c
+    end function
+"""
+
+
+def _mpi_comm_local(sdfg_name: str) -> str:
+    """Wrapper-local ``c_ptr`` name holding the ``MPI_Comm_f2c`` result
+    for a communicator arg (kept distinct from the caller's integer
+    dummy of the same Fortran name)."""
+    return f"{sdfg_name}__commc"
+
+
+def _free_sym_names(frozen) -> list:
+    """Free symbols DaCe folds into ``__program`` / ``__dace_init``
+    (shape symbols like ``n``), sorted, excluding any that are already
+    an explicit ``frozen.args`` entry or DaCe-internal."""
+    argnames = {a.sdfg_name for a in frozen.args}
+    return sorted(s for s in frozen.free_symbols if s not in argnames and not s.startswith('__dace'))
+
+
+def _dace_call_order(frozen, dace_arglist) -> list:
+    """The exact ``__program_<entry>`` argument order DaCe codegen
+    emitted (``dace_arglist`` = ``CompiledSDFG._sig``, passed in live
+    from ``build_fortran_library``).  Each name resolves to its
+    ``FrozenArg``; a name with no matching arg is a free symbol,
+    yielded as ``str``.
+
+    No ``dace_arglist`` (direct ``emit_bindings`` callers / simple
+    kernels) -> fall back to ``frozen.args`` order then the sorted
+    free symbols."""
+    by_name = {a.sdfg_name: a for a in frozen.args}
+    if dace_arglist:
+        return [by_name.get(n, n) for n in dace_arglist]
+    return list(frozen.args) + _free_sym_names(frozen)
 
 
 def _fortran_c_value_type(dtype: str) -> str:
@@ -218,6 +286,13 @@ def build_wrapper_head(frozen: FrozenSignature, iface: OriginalInterface, plan: 
     if bridge_decls:
         scratch_lines = scratch_lines + bridge_decls
 
+    # One ``type(c_ptr)`` local per communicator arg, holding the
+    # ``MPI_Comm_f2c`` result fed to the SDFG call (the outer dummy
+    # itself stays the caller's Fortran ``integer`` handle).
+    for a in frozen.args:
+        if a.kind == 'mpi_comm':
+            scratch_lines.append(f"    type(c_ptr) :: {_mpi_comm_local(a.sdfg_name)}")
+
     return tpl.format(
         entry=iface.entry,
         outer_dummy_list=", ".join(outer_dummy_names),
@@ -283,6 +358,13 @@ def build_wrapper_body(frozen: FrozenSignature, iface: OriginalInterface, plan: 
                 body.append(f"    allocate({a.sdfg_name}({dims}))")
             body.append(f"    {a.sdfg_name} = {alias}")
 
+    comm_args = [a for a in frozen.args if a.kind == 'mpi_comm']
+    if comm_args:
+        body.append("")
+        body.append("    ! ----- Fortran integer comm -> C MPI_Comm -----")
+        for a in comm_args:
+            body.append(f"    {_mpi_comm_local(a.sdfg_name)} = dace_mpi_comm_f2c({a.fortran_name})")
+
     sym_lines = _build_symbol_assigns(frozen, plan, outer_dummy_set, iface)
     if sym_lines:
         body.append("")
@@ -296,7 +378,8 @@ def build_wrapper_body(frozen: FrozenSignature, iface: OriginalInterface, plan: 
 # ---------------------------------------------------------------------------
 
 
-def build_wrapper_tail(frozen: FrozenSignature, iface: OriginalInterface, plan: FlattenPlan) -> str:
+def build_wrapper_tail(frozen: FrozenSignature, iface: OriginalInterface, plan: FlattenPlan,
+                       dace_arglist: tuple = ()) -> str:
     """Render the tail of the wrapper: init-count bump + ``call
     dace_program_<entry>`` + copy-back for every non-aliased
     writeable entry, then deallocate scratch, then close the
@@ -325,13 +408,22 @@ def build_wrapper_tail(frozen: FrozenSignature, iface: OriginalInterface, plan: 
     # mismatch ... passed REAL/LOGICAL to TYPE(c_ptr)").  Scalars and
     # symbols pass by value -- no wrapping.
     def _call_actual(a) -> str:
+        if isinstance(a, str):
+            # Free symbol -- the wrapper-local DaCe sees by value
+            # (declared + populated from ``size(...)`` earlier).
+            return a
         actual = name_override.get(a.sdfg_name, a.sdfg_name)
+        if a.kind == 'mpi_comm':
+            # The C ``MPI_Comm`` (f2c result), not the integer dummy.
+            return _mpi_comm_local(a.sdfg_name)
         if a.kind == 'array' or a.rank > 0:
             return f"c_loc({actual})"
         return actual
 
-    call_args = ",  &\n".join(f"      {_call_actual(a)}" for a in frozen.args)
-    call_block = tpl.format(entry=iface.entry, call_arg_list=call_args)
+    call_args = ",  &\n".join(f"      {_call_actual(a)}" for a in _dace_call_order(frozen, dace_arglist))
+    call_block = tpl.format(entry=iface.entry,
+                            call_arg_list=call_args,
+                            init_call_args=", ".join(_free_sym_names(frozen)))
 
     copy_out_lines: List[str] = []
     for entry in plan.entries:
