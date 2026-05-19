@@ -277,6 +277,65 @@ def build_sdfg(source: str, out_dir: Path, name: str = "src", pipeline=None, ent
     return builder
 
 
+def _entry_proc_name(entry: str) -> str:
+    """Demangle a Flang entry symbol to its Fortran procedure name.
+
+    Flang mangles uppercase tag letters (``M`` module, ``F`` function,
+    ``S`` submodule, ``P`` procedure) around lowercased identifiers, so
+    the procedure name is the segment after the last ``P``
+    (``_QPmain`` -> ``main``; ``_QMmymodPbar`` -> ``bar``).
+    """
+    return entry.rsplit('P', 1)[-1] if 'P' in entry else entry
+
+
+def build_sdfg_from_files(files, out_dir: Path, name: str = "src", pipeline=None, entry: str | None = None):
+    """Compile a *multi-file* Fortran project to one SDFG.
+
+    The caller passes several ``.f90`` files (a driver/root plus the
+    modules it ``USE``s, in any order); they are staged into
+    ``out_dir`` and ``merge_used_modules`` (via :func:`compile_to_hlfir`,
+    ``search_dirs=[out_dir]``) inlines every ``USE``-d module into the
+    root's translation unit so flang sees one self-contained TU.  The
+    root is the file that defines ``entry`` 's procedure; the rest
+    supply modules.
+
+    :param files: sequence of ``.f90`` paths (one defines ``entry``;
+                  the others are its ``USE``-d modules).
+    :param out_dir: scratch directory (typically ``tmp_path``).
+    :param name: base filename for the merged ``.f90`` / ``.hlfir`` pair.
+    :param pipeline: override the default MLIR pass pipeline.
+    :param entry: mangled Flang symbol of the target procedure
+                  (e.g. ``_QPrun``).  Required -- it selects the root.
+    :returns: a configured ``SDFGBuilder`` for ``entry``.
+    :raises ValueError: if ``entry`` is not given, or no input file
+                        defines its procedure.
+    """
+    from dace_fortran.hlfir_to_sdfg import SDFGBuilder, DEFAULT_PIPELINE
+
+    if not entry:
+        raise ValueError("build_sdfg_from_files requires entry= (it selects the root file)")
+    files = [Path(f) for f in files]
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for f in files:
+        (out_dir / f.name).write_text(f.read_text())
+
+    proc = _entry_proc_name(entry)
+    _def = re.compile(rf"^\s*(?:[\w()*]+\s+)*?(?:subroutine|function)\s+{re.escape(proc)}\b",
+                      re.IGNORECASE | re.MULTILINE)
+    roots = [f for f in files if _def.search(f.read_text())]
+    if not roots:
+        raise ValueError(f"no input file defines procedure {proc!r} (entry {entry!r}); "
+                          f"given {[f.name for f in files]}")
+
+    hlfir = compile_to_hlfir(roots[0].read_text(), out_dir, name)
+    builder = SDFGBuilder(str(hlfir), pipeline=(pipeline or DEFAULT_PIPELINE), entry=entry)
+    suffix = _per_test_suffix()
+    dump = _dump_dir()
+    if suffix or dump is not None:
+        return _TestBuilder(builder, name, suffix, dump)
+    return builder
+
+
 def run_passes_dump(source: str, out_dir: Path, name: str = "src", pipeline: str = "builtin.module()") -> str:
     """Compile Fortran to HLFIR, run the given pipeline, return the IR dump.
 
