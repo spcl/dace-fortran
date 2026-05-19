@@ -42,9 +42,11 @@ class RemoveScalarFortranShapeSymbols(ppl.Pass):
         self.recursive = recursive
 
     def modifies(self) -> ppl.Modifies:
+        """This pass only mutates the SDFG symbol table."""
         return ppl.Modifies.Symbols
 
     def should_reapply(self, modified: ppl.Modifies) -> bool:
+        """One-shot: nothing this pass produces re-triggers it."""
         return False
 
     def _rewrite(self, sdfg: dace.SDFG) -> set:
@@ -76,5 +78,6 @@ class RemoveScalarFortranShapeSymbols(ppl.Pass):
         return removed
 
     def apply_pass(self, sdfg: dace.SDFG, _: dict):
+        """:returns: the set of removed symbol names, or ``None`` if none."""
         removed = self._rewrite(sdfg)
         return removed or None

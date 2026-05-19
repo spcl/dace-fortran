@@ -13,8 +13,9 @@ access of ``SDFGBuilder`` / ``generate_sdfg``), not at import time.
     import dace_fortran
     sdfg = dace_fortran.generate_sdfg("kernel.hlfir")   # -> dace.SDFG
 
-    # or from Fortran source via the preprocess / builder API, e.g.
-    from dace_fortran.preprocess import merge_used_modules
+    # or pre-process Fortran source first (the unified entrypoint
+    # composing module-merge + the text rewrites), e.g.
+    from dace_fortran.preprocess import preprocess_fortran_source
 """
 
 _LAZY = {
@@ -22,6 +23,7 @@ _LAZY = {
     "generate_sdfg": "dace_fortran.hlfir_to_sdfg",
     "DEFAULT_PIPELINE": "dace_fortran.hlfir_to_sdfg",
     "MULTI_FILE_PIPELINE": "dace_fortran.hlfir_to_sdfg",
+    "preprocess_fortran_source": "dace_fortran.preprocess",
     "merge_used_modules": "dace_fortran.preprocess",
     "preprocess_fortran": "dace_fortran.preprocess",
     "rewrite_integer_powers": "dace_fortran.preprocess",

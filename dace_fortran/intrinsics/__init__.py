@@ -26,14 +26,17 @@ from dace_fortran.intrinsics.direct import DIRECT_INTRINSICS
 
 
 def is_elementwise(name: str) -> bool:
+    """True if ``name`` is an elementwise Fortran intrinsic."""
     return name in ELEMENTWISE_INTRINSICS
 
 
 def is_reduction(name: str) -> bool:
+    """True if ``name`` is a reduction Fortran intrinsic."""
     return name in REDUCTIONS
 
 
 def is_libnode(name: str) -> bool:
+    """True if ``name`` lowers to a DaCe library node (linalg or standard)."""
     return name in LINALG or name in STANDARD
 
 

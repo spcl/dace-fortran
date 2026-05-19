@@ -597,6 +597,8 @@ class SDFGBuilder:
     # Scalar-assign is called from _Ctx.flush; keep it as a method on the
     # builder for that caller's convenience.
     def emit_scalar_assign(self, state, target: str, value: str):
+        """Emit ``target = value`` as a scalar assignment in ``state``
+        (method form so ``_Ctx.flush`` can call it on the builder)."""
         emit_scalar_assign(self, state, target, value)
 
 

@@ -55,6 +55,7 @@ class _ExponentIntegerizer(ast.NodeTransformer):
         return None
 
     def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
+        """Retype an integer-valued float ``**`` exponent to ``int``."""
         self.generic_visit(node)
         if isinstance(node.op, ast.Pow):
             repl = self._as_int_constant(node.right)
@@ -76,9 +77,11 @@ class IntegerizePowerExponents(ppl.Pass):
     """
 
     def modifies(self) -> ppl.Modifies:
+        """This pass only mutates tasklet bodies."""
         return ppl.Modifies.Tasklets
 
     def should_reapply(self, modified: ppl.Modifies) -> bool:
+        """One-shot: the retype doesn't re-trigger the pass."""
         return False
 
     def apply_pass(self, sdfg: dace.SDFG, _) -> Optional[int]:

@@ -45,18 +45,16 @@ def build_c_interface(frozen: FrozenSignature, iface: OriginalInterface) -> str:
     """Render the ``interface ... end interface`` block declaring the
     three C entry points that the compiled SDFG exports.
 
-    Args:
-        frozen:  Frozen signature  --  drives the per-arg declarations.
-        iface:   Outer interface  --  only ``iface.entry`` is read,
-                 used in the ``bind(c, name='...')`` attribute.
+    Template: ``templates/c_interface.f90.in``.
 
-    Returns:
-        One rendered string containing the full ``interface`` block.
+    :param frozen: frozen signature  --  drives the per-arg declarations.
+    :param iface: outer interface  --  only ``iface.entry`` is read,
+                  used in the ``bind(c, name='...')`` attribute.
+    :returns: one rendered string containing the full ``interface``
+              block.
 
-    Template:
-        ``templates/c_interface.f90.in``
+    Example fragment::
 
-    Example fragment:
         interface
           function dace_init_kernel() bind(c, name='__dace_init_kernel') result(h)
             type(c_ptr) :: h
@@ -122,15 +120,12 @@ def build_handle_state(iface: OriginalInterface) -> str:
     """Render the module-level ``dace_handle`` + ``init_count``
     declarations.
 
-    Args:
-        iface:  Only ``iface.entry`` is read (for comment text).
+    Template: ``templates/handle_state.f90.in``.
 
-    Returns:
-        Rendered block; the two ``save``-scoped variables that
-        ``<entry>_dace`` and ``<entry>_dace_finalize`` share.
-
-    Template:
-        ``templates/handle_state.f90.in``
+    :param iface: only ``iface.entry`` is read (for comment text).
+    :returns: the rendered block  --  the two ``save``-scoped
+              variables that ``<entry>_dace`` and
+              ``<entry>_dace_finalize`` share.
     """
     return _load("handle_state.f90.in").format(entry=iface.entry)
 
@@ -151,19 +146,14 @@ def build_wrapper_head(frozen: FrozenSignature, iface: OriginalInterface, plan: 
     ``integer(c_int)`` scalars; ``i1..iN`` loop iters are declared
     whenever any non-aliasable recipe exists.
 
-    Args:
-        frozen:  For free-symbol list.
-        iface:   Outer dummies drive the subroutine signature.
-        plan:    Drives pointer-vs-scratch decisions per flat.
+    :param frozen: for the free-symbol list.
+    :param iface: outer dummies drive the subroutine signature.
+    :param plan: drives pointer-vs-scratch decisions per flat.
+    :returns: everything from ``subroutine <entry>_dace(...)`` through
+              the final declaration line; does NOT include the body.
 
-    Returns:
-        Everything from ``subroutine <entry>_dace(...)`` through the
-        final declaration line.  Does NOT include the body.
+    Template: ``templates/wrapper_head.f90.in``.  Example fragment::
 
-    Template:
-        ``templates/wrapper_head.f90.in``
-
-    Example fragment:
         subroutine kernel_dace(fld, n, m)
           type(t_fields), intent(inout), target :: fld
           integer(c_int), intent(in),    target :: n
@@ -249,14 +239,11 @@ def build_wrapper_body(frozen: FrozenSignature, iface: OriginalInterface, plan: 
     in, then populate SDFG free symbols from ``size(...)`` on the
     outer storage.
 
-    Args:
-        frozen:  For the free-symbol set.
-        iface:   To skip symbols that are already outer dummies.
-        plan:    Drives per-entry alias-vs-copy emission.
-
-    Returns:
-        Indented Fortran lines ready to slot between the wrapper
-        head's declarations and the SDFG call.
+    :param frozen: for the free-symbol set.
+    :param iface: to skip symbols that are already outer dummies.
+    :param plan: drives per-entry alias-vs-copy emission.
+    :returns: indented Fortran lines ready to slot between the
+              wrapper head's declarations and the SDFG call.
     """
     outer_dummy_set = {a.name for a in iface.args}
     body: List[str] = ["    ! ----- Copy-in / alias per flatten entry -----"]
@@ -315,14 +302,11 @@ def build_wrapper_tail(frozen: FrozenSignature, iface: OriginalInterface, plan: 
     writeable entry, then deallocate scratch, then close the
     subroutine.
 
-    Args:
-        frozen:  For the SDFG call argument list.
-        iface:   For the entry name.
-        plan:    For per-entry writeback decisions.
-
-    Returns:
-        Everything after ``build_wrapper_body`` through the final
-        ``end subroutine <entry>_dace``.
+    :param frozen: for the SDFG call argument list.
+    :param iface: for the entry name.
+    :param plan: for per-entry writeback decisions.
+    :returns: everything after ``build_wrapper_body`` through the
+              final ``end subroutine <entry>_dace``.
 
     Template:
         ``templates/wrapper_call.f90.in`` supplies the init bump,
@@ -396,12 +380,9 @@ def build_finalize(iface: OriginalInterface) -> str:
     main wrapper tail.  Kept as a named function so the coordinator
     has a uniform shape.
 
-    Args:
-        iface:  Unused today  --  kept for API symmetry.
-
-    Returns:
-        Empty string.  Reserved for a future split that moves the
-        finalize body out of ``wrapper_call.f90.in``.
+    :param iface: unused today  --  kept for API symmetry.
+    :returns: the empty string; reserved for a future split that
+              moves the finalize body out of ``wrapper_call.f90.in``.
     """
     del iface  # unused
     return ""
@@ -415,14 +396,12 @@ def build_finalize(iface: OriginalInterface) -> str:
 def assemble_module(iface: OriginalInterface, frozen: FrozenSignature, blocks: dict) -> str:
     """Stitch the rendered blocks into the complete Fortran module.
 
-    Args:
-        iface:   For ``iface.used_modules`` (use-only statements).
-        frozen:  For the schema_version stamped in the header.
-        blocks:  Dict of ``'c_interface' / 'handle_state' / 'wrapper_head'
-                 / 'wrapper_body' / 'wrapper_tail' / 'finalize'`` -> str.
-
-    Returns:
-        Complete Fortran module source.
+    :param iface: for ``iface.used_modules`` (use-only statements).
+    :param frozen: for the schema_version stamped in the header.
+    :param blocks: dict of ``'c_interface'`` / ``'handle_state'`` /
+                   ``'wrapper_head'`` / ``'wrapper_body'`` /
+                   ``'wrapper_tail'`` / ``'finalize'`` -> str.
+    :returns: the complete Fortran module source.
 
     Template:
         ``templates/module.f90.in``  --  three placeholders (use
@@ -506,17 +485,18 @@ def _build_logical_bridges(frozen: FrozenSignature, iface: OriginalInterface):
     the bit-fiddling, and ``c_loc(cbool_buf)`` is then safely passed
     to the SDFG.
 
-    Returns:
-        ``(decl_lines, copy_in_lines, copy_out_lines, name_override)``:
-            * ``decl_lines``: scratch buffer declarations (one per
-              affected dummy).  Empty if no dummy needs bridging.
-            * ``copy_in_lines``: Fortran-intrinsic cast assignments
-              run before the SDFG call.
-            * ``copy_out_lines``: reverse-direction casts for
-              ``intent(out)/inout`` dummies, run after the SDFG call.
-            * ``name_override``: ``{sdfg_name: scratch_name}`` mapping
-              the SDFG-call-side name should pass instead of the
-              outer dummy when this dummy needs bridging.
+    :returns: ``(decl_lines, copy_in_lines, copy_out_lines,
+              name_override)``:
+
+              * ``decl_lines``: scratch buffer declarations (one per
+                affected dummy).  Empty if no dummy needs bridging.
+              * ``copy_in_lines``: Fortran-intrinsic cast assignments
+                run before the SDFG call.
+              * ``copy_out_lines``: reverse-direction casts for
+                ``intent(out)/inout`` dummies, run after the SDFG call.
+              * ``name_override``: ``{sdfg_name: scratch_name}``
+                mapping the SDFG-call-side name should pass instead of
+                the outer dummy when this dummy needs bridging.
 
     Bool dummies whose outer Fortran declaration is already
     ``logical(c_bool)`` need no bridge  --  pass-through is correct.

@@ -60,6 +60,7 @@ class FrozenArg:
     layout: str = 'same'
 
     def to_dict(self) -> dict:
+        """Serialise to a JSON-safe dict (``shape`` tuple becomes a list)."""
         d = asdict(self)
         # shape round-trips as a list in JSON; rebuild as tuple on load.
         d['shape'] = list(self.shape)
@@ -67,6 +68,7 @@ class FrozenArg:
 
     @classmethod
     def from_dict(cls, d: dict) -> "FrozenArg":
+        """Rebuild from a :meth:`to_dict` mapping (list back to tuple)."""
         d = dict(d)
         d['shape'] = tuple(d.get('shape', []))
         return cls(**d)
@@ -100,6 +102,7 @@ class FrozenSignature:
     # ----- I/O ---------------------------------------------------------
 
     def to_json(self, path: str):
+        """Write the snapshot to ``path`` as indented JSON."""
         with open(path, 'w') as fh:
             json.dump(
                 {
@@ -118,6 +121,7 @@ class FrozenSignature:
 
     @classmethod
     def from_json(cls, path: str) -> "FrozenSignature":
+        """Load a snapshot previously written by :meth:`to_json`."""
         with open(path) as fh:
             d = json.load(fh)
         return cls(

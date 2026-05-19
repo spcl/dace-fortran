@@ -516,19 +516,23 @@ dace_fortran/
 ## Entry point
 
 ```python
-from dace_fortran.fortran_parser import generate_sdfg
+from dace_fortran import generate_sdfg          # lazy: bridge builds on first use
 
-# Multi-file (production)
-sdfg, bindings_f90, frozen_sig_json = generate_sdfg(
-    entry="compute_tendencies",
+# Multi-file (production): merges the files, drops non-entry siblings.
+sdfg = generate_sdfg(
+    entry="_QPcompute_tendencies",
     hlfir_files=["kernel.hlfir", "math_utils.hlfir"],
-    out_dir="build/",
 )
 
-# Single-file (experiments; skips binding emission)
+# Single-file (experiments)
 sdfg = generate_sdfg("code.hlfir")
 sdfg = generate_sdfg("code.hlfir", pipeline="hlfir-propagate-shapes")
 ```
+
+`generate_sdfg` returns a validated `dace.SDFG` (with
+`sdfg._frozen_signature` attached).  Emit the Fortran binding and a
+callable library from it with `build_fortran_library` (see *Quick
+start*); it is not folded into `generate_sdfg`.
 
 ## Extending the frontend
 

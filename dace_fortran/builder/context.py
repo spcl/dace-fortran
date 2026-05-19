@@ -22,6 +22,9 @@ class _Ctx:
         self.iter_map = {}
 
     def ensure(self, region=None):
+        """Make ``self.cur`` a writable ``SDFGState``: create the start
+        state when empty, or wire a fresh successor past a non-state
+        control-flow block.  ``region`` defaults to the SDFG."""
         # ``not self.cur`` misfires the same way ``region or self.sdfg`` did:
         # SDFGState / LoopRegion define __len__ that returns 0 when empty,
         # so a freshly-created state is treated as falsy even though we
@@ -45,6 +48,7 @@ class _Ctx:
             self.cur = succ
 
     def flush(self, builder, region=None):
+        """Emit any pending scalar assignments into the current state."""
         if not self.pending:
             return
         r = self.sdfg if region is None else region
@@ -54,6 +58,7 @@ class _Ctx:
         self.pending.clear()
 
     def new_state(self, builder, region=None, label=None):
+        """Flush pending assignments, then open a fresh successor state."""
         self.flush(builder, region)
         r = self.sdfg if region is None else region
         s = r.add_state(label or f"s_{self.builder.nid()}")

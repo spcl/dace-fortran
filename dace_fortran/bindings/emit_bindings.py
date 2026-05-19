@@ -36,25 +36,20 @@ def emit_bindings(
 ) -> Path:
     """Emit a Fortran binding module for the built SDFG.
 
-    Args:
-        frozen:   ``FrozenSignature`` snapshot  --  the SDFG-facing arg
-                  list + free symbols.  Comes from ``SDFGBuilder.build()``
-                  and is verified at codegen to catch drift.
-        iface:    ``OriginalInterface``  --  the caller-facing Fortran
+    Side effect: creates ``out_path``'s parent directory if missing and
+    overwrites any existing file there.
+
+    :param frozen: ``FrozenSignature`` snapshot  --  the SDFG-facing arg
+                   list + free symbols, from ``SDFGBuilder.build()``
+                   (drift-checked by ``build_fortran_library``).
+    :param iface: ``OriginalInterface``  --  the caller-facing Fortran
                   surface of the entry subroutine (dummies + struct
-                  layouts, snapshotted from HLFIR pre-pass).
-        plan:     ``FlattenPlan``  --  the record of every unpack
-                  ``hlfir-flatten-structs`` performed.  One source
-                  of truth for copy-in / copy-out code.
-        out_path: Where to write ``<entry>_bindings.f90``.
-
-    Returns:
-        The path as a ``Path`` object (same as ``out_path`` just
-        materialised).
-
-    Side effect:
-        Creates ``out_path``'s parent directory if it doesn't
-        exist; overwrites any existing file at ``out_path``.
+                  layouts, snapshotted from the HLFIR pre-pass).
+    :param plan: ``FlattenPlan``  --  the record of every unpack
+                 ``hlfir-flatten-structs`` performed; one source of
+                 truth for copy-in / copy-out code.
+    :param out_path: where to write ``<entry>_bindings.f90``.
+    :returns: ``out_path`` as a ``Path`` (just materialised).
     """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)

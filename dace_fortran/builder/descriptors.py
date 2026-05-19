@@ -27,6 +27,7 @@ DTYPE = {
 
 
 def dt(s: str) -> dace.typeclass:
+    """Map a Fortran type string to its DaCe ``typeclass`` (default ``float64``)."""
     return DTYPE.get(s, dace.float64)
 
 

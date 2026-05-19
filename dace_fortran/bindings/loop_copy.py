@@ -54,20 +54,17 @@ def _loop_index_names(rank: int) -> Tuple[str, ...]:
 def render_alias_calls(recipe: FlattenRecipe) -> List[str]:
     """Zero-copy alias emission for an ``aliasable=True`` recipe.
 
-    Args:
-        recipe:
-            The recipe.  ``aliasable`` must be True; behaviour is
-            undefined otherwise.
+    Example  --  recipe for ``fld%a`` with flat name ``fld_a``::
 
-    Returns:
-        One-line-per-flat ``call c_f_pointer(c_loc(<outer>), <flat>,
-        [<shape>])`` statements, indented four spaces.  Empty list
-        if the recipe has no flats (defensive).
+        call c_f_pointer(c_loc(fld%a), fld_a,  &
+                         [size(fld%a, dim=1), size(fld%a, dim=2)])
 
-    Example:
-        Recipe for ``fld%a`` with flat name ``fld_a``:
-            call c_f_pointer(c_loc(fld%a), fld_a,  &
-                             [size(fld%a, dim=1), size(fld%a, dim=2)])
+    :param recipe: the recipe; ``aliasable`` must be True, behaviour
+                   is undefined otherwise.
+    :returns: one-line-per-flat ``call c_f_pointer(c_loc(<outer>),
+              <flat>, [<shape>])`` statements, indented four spaces.
+              Empty list if the recipe has no flats (defensive).
+    :raises ValueError: if the recipe is not ``aliasable``.
     """
     if not recipe.aliasable:
         raise ValueError("render_alias_calls called on non-aliasable recipe")
@@ -95,26 +92,24 @@ def render_copy_in_loop(recipe: FlattenRecipe) -> List[str]:
     each flat from the corresponding ``read_expr`` with loop-index
     placeholders substituted.
 
-    Args:
-        recipe:
-            The recipe.  ``aliasable`` must be False; ``rank`` >= 1.
+    Example  --  recipe for complex ``st%z``, flat names ``st_z_re``
+    / ``st_z_im``, rank 2::
 
-    Returns:
-        Indented Fortran lines  --  allocates followed by the nested
-        do-nest followed by the closing ``end do`` markers.
+        allocate(st_z_re(size(st%z, dim=1), size(st%z, dim=2)))
+        allocate(st_z_im(size(st%z, dim=1), size(st%z, dim=2)))
+        ! Copy-in for st%z -> st_z_re, st_z_im
+        do i2 = 1, size(st%z, dim=2)
+          do i1 = 1, size(st%z, dim=1)
+            st_z_re(i1, i2) = real(st%z(i1, i2), kind=c_double)
+            st_z_im(i1, i2) = aimag(st%z(i1, i2))
+          end do
+        end do
 
-    Example:
-        Recipe for complex ``st%z``, flat names ``st_z_re`` /
-        ``st_z_im``, rank 2:
-            allocate(st_z_re(size(st%z, dim=1), size(st%z, dim=2)))
-            allocate(st_z_im(size(st%z, dim=1), size(st%z, dim=2)))
-            ! Copy-in for st%z -> st_z_re, st_z_im
-            do i2 = 1, size(st%z, dim=2)
-              do i1 = 1, size(st%z, dim=1)
-                st_z_re(i1, i2) = real(st%z(i1, i2), kind=c_double)
-                st_z_im(i1, i2) = aimag(st%z(i1, i2))
-              end do
-            end do
+    :param recipe: the recipe; ``aliasable`` must be False,
+                   ``rank`` >= 1.
+    :returns: indented Fortran lines  --  allocates, the nested
+              do-nest, then the closing ``end do`` markers.
+    :raises ValueError: if the recipe is ``aliasable``.
     """
     if recipe.aliasable:
         raise ValueError("render_copy_in_loop called on aliasable recipe  --  use render_alias_calls")
@@ -156,31 +151,27 @@ def render_copy_out_loop(recipe: FlattenRecipe, outer_expr: str) -> List[str]:
     """Inverse of ``render_copy_in_loop``: pack the flat buffers
     back into the outer storage at each position, then deallocate.
 
-    Args:
-        recipe:
-            The recipe.  Requires ``write_expr`` to be non-empty;
-            empty write_expr means the caller shouldn't be invoking
-            copy-out.
-        outer_expr:
-            The Fortran expression for the outer destination
-            (``st%z``).  Same as the ``FlattenEntry.outer_expr`` the
-            recipe was created under.  Passed separately so the
-            renderer doesn't have to reach back up to the entry.
+    Example  --  complex-split recipe for ``st%z``::
 
-    Returns:
-        Indented Fortran lines  --  the reverse do-nest followed by
-        the matching ``deallocate`` statements.
+        ! Copy-out: st%z <- st_z_re, st_z_im
+        do i2 = 1, size(st%z, dim=2)
+          do i1 = 1, size(st%z, dim=1)
+            st%z(i1, i2) = cmplx(st_z_re(i1,i2), st_z_im(i1,i2), kind=c_double)
+          end do
+        end do
+        deallocate(st_z_re)
+        deallocate(st_z_im)
 
-    Example:
-        Complex-split recipe for ``st%z``:
-            ! Copy-out: st%z <- st_z_re, st_z_im
-            do i2 = 1, size(st%z, dim=2)
-              do i1 = 1, size(st%z, dim=1)
-                st%z(i1, i2) = cmplx(st_z_re(i1,i2), st_z_im(i1,i2), kind=c_double)
-              end do
-            end do
-            deallocate(st_z_re)
-            deallocate(st_z_im)
+    :param recipe: the recipe; requires ``write_expr`` non-empty (an
+                   empty ``write_expr`` means the caller shouldn't
+                   invoke copy-out).
+    :param outer_expr: the Fortran expression for the outer
+                       destination (``st%z``)  --  same as the
+                       ``FlattenEntry.outer_expr`` the recipe was
+                       created under, passed separately so the
+                       renderer doesn't reach back up to the entry.
+    :returns: indented Fortran lines  --  the reverse do-nest then
+              the matching ``deallocate`` statements.
     """
     if not recipe.write_expr:
         raise ValueError("render_copy_out_loop called on recipe with empty write_expr")
