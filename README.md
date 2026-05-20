@@ -766,7 +766,17 @@ compile with `gfortran` (Ubuntu's `flang-new-21` ships without
 `libflang_rt` so it's emit-HLFIR-only).
 
 ```bash
-# dump built SDFGs for inspection
+# Main xdist sweep -- excludes the multi-rank mpi-marked tests (they
+# need mpirun, not a thread worker).
+python3 -m pytest -n auto -m "not mpi" tests/
+
+# Multi-rank MPI tests (Send/Recv + Isend/Irecv + non-default
+# communicator).  ``--oversubscribe`` lets the 4-rank tests run on
+# laptops with fewer than 4 physical cores, the same flag CI uses.
+mpirun --oversubscribe -n 4 python3 -m pytest -m mpi \
+    -p no:cacheprovider tests/
+
+# Dump built SDFGs for inspection.
 __DACE_HLFIR_GEN_TEST_SDFGS=1 python3 -m pytest tests/hlfir/
 __DACE_HLFIR_GEN_TEST_SDFGS=/tmp/mine python3 -m pytest tests/hlfir/
 ```
