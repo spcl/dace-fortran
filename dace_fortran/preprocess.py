@@ -3,7 +3,7 @@
 Some transforms have to happen on the Fortran *text*, before
 ``flang-new -fc1 -emit-hlfir`` runs, because they either change what
 flang accepts or what arithmetic each backend is free to pick.  This
-module holds three independent text rewrites:
+module holds the independent text rewrites:
 
 * ``rewrite_integer_powers`` -- expands an integer-valued REAL-literal
   power (``x**2.0`` -> ``(x*x)``).  Runs **unconditionally** in
@@ -15,6 +15,15 @@ module holds three independent text rewrites:
   literals to an explicit double form (``2.0`` -> ``2.0D0``).  A
   standalone utility, applied directly to kernel source on disk when a
   codebase must be globally double; **not** wired into the build path.
+
+* ``strip_openmp_directives`` -- drops ``!$OMP`` / ``!$ACC`` / ``!$``
+  sentinel lines and the ICON ``#include "*omp_definitions*.inc"``
+  bring-ins of OpenMP macros.  Runs **unconditionally** in
+  ``preprocess_fortran_source``: without ``-fopenmp`` flang already
+  treats sentinels as comments, so the rewrite is a semantic no-op,
+  but it keeps the merged source free of accelerator noise (and
+  removes the cpp ``#include`` that flang would otherwise refuse
+  because the bridge does not run cpp).
 
 * ``preprocess_fortran`` -- rewrites ``IF (intvar)`` to
   ``IF (intvar /= 0)`` for INTEGER scalars.  flang-new-21 rejects bare
@@ -297,6 +306,124 @@ def promote_real_literals_to_double(source: str) -> str:
     return "".join(out)
 
 
+#: Free-form OpenMP / OpenACC / CUDA-Fortran sentinel: ``!$<tag>`` at the
+#: start of a (possibly-indented) line, where ``<tag>`` is ``omp`` /
+#: ``acc`` / ``cuf``.  Matches both the directive opener (``!$OMP DO``)
+#: and a continuation (``!$OMP&``) because both share the prefix.
+_OMP_SENTINEL_RE = re.compile(r"^\s*!\s*\$\s*(?:omp|acc|cuf)\b", re.IGNORECASE)
+
+#: Fortran-OpenMP conditional-compilation line: ``!$ <stmt>`` -- compiled
+#: only when ``_OPENMP`` is defined.  Without ``-fopenmp`` flang treats
+#: it as a comment, so dropping the line is a semantic no-op.  The
+#: pattern requires a space (or tab) after ``!$`` so a directive (``!$OMP``,
+#: ``!$ACC``) is left for the sentinel rule to handle.
+_OMP_COND_LINE_RE = re.compile(r"^\s*!\s*\$[ \t]+\S")
+
+#: ICON cpp include that pulls in the ``ICON_OMP_*`` / ``ICON_HAMOCC_OMP_*``
+#: macros (``#include "omp_definitions.inc"``, ``"hamocc_omp_definitions.inc"``).
+#: With the bridge not running cpp, the include line itself would crash
+#: flang -- dropping it is the safe choice because every macro it
+#: defines expands to an OpenMP sentinel comment (and those are stripped
+#: above too).
+_OMP_INCLUDE_RE = re.compile(r'^\s*#\s*include\s*[<"][^>"]*omp_definitions[^>"]*\.inc[>"]\s*$',
+                             re.IGNORECASE)
+
+#: Macros treated as undefined by ``strip_openmp_directives`` -- ``#ifdef``
+#: blocks gated on these are dropped, ``#ifndef`` blocks pass through.
+#: Limiting elision to this set keeps the pass narrow: unrelated cpp
+#: conditionals (``#ifdef __SWAPDIM``, ``#ifdef _CRAYFTN``) flow through
+#: untouched (and will surface as flang errors if no real cpp runs --
+#: that is the next preprocessing step to address, not this one's job).
+_OMP_ACC_MACROS = frozenset({"_OPENMP", "_OPENACC"})
+
+#: ``#if[n]def MACRO`` and the ``#if [!]defined(MACRO)`` aliases -- the
+#: directive openers we elide when ``MACRO`` is in :data:`_OMP_ACC_MACROS`.
+_CPP_IFDEF_RE = re.compile(r'^\s*#\s*(ifn?def)\s+(\w+)', re.IGNORECASE)
+_CPP_IFDEFINED_RE = re.compile(r'^\s*#\s*if\s+(!)?\s*defined\s*\(\s*(\w+)\s*\)\s*$', re.IGNORECASE)
+_CPP_IF_RE = re.compile(r'^\s*#\s*if\b', re.IGNORECASE)
+_CPP_ELSE_RE = re.compile(r'^\s*#\s*else\b', re.IGNORECASE)
+_CPP_ELIF_RE = re.compile(r'^\s*#\s*elif\b', re.IGNORECASE)
+_CPP_ENDIF_RE = re.compile(r'^\s*#\s*endif\b', re.IGNORECASE)
+
+
+def strip_openmp_directives(source: str) -> str:
+    """Drop OpenMP / OpenACC / CUDA-Fortran sentinel lines, the ICON
+    ``omp_definitions.inc`` cpp include, and ``#ifdef _OPENMP`` /
+    ``#ifdef _OPENACC`` conditional blocks (taking their ``#else`` body
+    when present).
+
+    The bridge does not run cpp and does not pass ``-fopenmp`` to flang,
+    so accelerator sentinels (``!$OMP``, ``!$ACC``, ``!$CUF``, ``!$ ...``)
+    are already inert comments, while the cpp ``#include`` and
+    ``#ifdef _OPENMP`` lines themselves crash flang outright.  This pass
+    removes all of them so the merged source the bridge writes to disk
+    is free of accelerator noise and free of OpenMP / OpenACC cpp
+    constructs that flang cannot consume.
+
+    Block elision is scoped to ``_OPENMP`` / ``_OPENACC`` (see
+    :data:`_OMP_ACC_MACROS`).  Other ``#ifdef`` macros (``__SWAPDIM``,
+    ``_CRAYFTN``, ...) pass through unchanged -- evaluating those is a
+    separate preprocessing step.  ``#if defined(_OPENMP)`` and
+    ``#if !defined(_OPENMP)`` are recognised as aliases of
+    ``#ifdef`` / ``#ifndef``; any other ``#if`` form passes through.
+
+    Idempotent: a second invocation finds no sentinel / include / OMP
+    conditional lines left to drop and returns the input unchanged.
+
+    :param source: full Fortran source text.
+    :returns: source with OpenMP / OpenACC sentinels, includes, and
+        ``#ifdef _OPENMP`` / ``#ifdef _OPENACC`` blocks removed.
+    """
+    out = []
+    # Stack of (is_omp_acc_block, dropping_now).  A non-OMP/ACC ``#if``
+    # pushes ``(False, False)`` so we keep nesting straight and don't
+    # touch unrelated cpp blocks.
+    stack: list = []
+    for line in source.splitlines(keepends=True):
+        m_ifdef = _CPP_IFDEF_RE.match(line)
+        m_ifdef_paren = _CPP_IFDEFINED_RE.match(line) if not m_ifdef else None
+        if m_ifdef:
+            kind, macro = m_ifdef.group(1).lower(), m_ifdef.group(2)
+            if macro in _OMP_ACC_MACROS:
+                stack.append((True, kind == "ifdef"))  # drop the matching body
+                continue
+            stack.append((False, False))
+        elif m_ifdef_paren:
+            negate, macro = bool(m_ifdef_paren.group(1)), m_ifdef_paren.group(2)
+            if macro in _OMP_ACC_MACROS:
+                stack.append((True, not negate))
+                continue
+            stack.append((False, False))
+        elif _CPP_IF_RE.match(line):
+            stack.append((False, False))
+        elif _CPP_ELSE_RE.match(line):
+            if stack and stack[-1][0]:
+                stack[-1] = (True, not stack[-1][1])
+                continue
+        elif _CPP_ELIF_RE.match(line):
+            if stack and stack[-1][0]:
+                # An OMP/ACC ``#elif`` always drops (the macro stays
+                # undefined whichever branch we are on).
+                stack[-1] = (True, True)
+                continue
+        elif _CPP_ENDIF_RE.match(line):
+            if stack and stack[-1][0]:
+                stack.pop()
+                continue
+            if stack:
+                stack.pop()
+        if any(is_omp and drop for is_omp, drop in stack):
+            continue
+        if _OMP_SENTINEL_RE.match(line):
+            continue
+        if _OMP_COND_LINE_RE.match(line):
+            continue
+        if _OMP_INCLUDE_RE.match(line):
+            continue
+        out.append(line)
+    return "".join(out)
+
+
 def preprocess_fortran(source: str) -> str:
     """Rewrite ``IF (intvar)`` to ``IF (intvar /= 0)`` for any INTEGER
     scalar declared in ``source``.
@@ -474,9 +601,12 @@ def preprocess_fortran_source(source: str, *, search_dirs=(), merge: bool = True
 
     1. ``merge_used_modules`` (when ``merge``) -- inline every
        externally-``USE``-d module into one translation unit.
-    2. ``rewrite_integer_powers`` -- expand integer-valued real powers
+    2. ``strip_openmp_directives`` -- drop OpenMP / OpenACC sentinels
+       and the ICON ``omp_definitions.inc`` cpp include (the bridge
+       does not run cpp and does not pass ``-fopenmp``).
+    3. ``rewrite_integer_powers`` -- expand integer-valued real powers
        (``x**2.0`` -> ``x*x``) for byte-identical arithmetic.
-    3. ``preprocess_fortran`` (when ``if_intvar``) -- the opt-in
+    4. ``preprocess_fortran`` (when ``if_intvar``) -- the opt-in
        ``IF (intvar)`` -> ``IF (intvar /= 0)`` rewrite.
 
     The individual stages remain importable for their unit tests; this
@@ -490,6 +620,7 @@ def preprocess_fortran_source(source: str, *, search_dirs=(), merge: bool = True
     """
     if merge:
         source = merge_used_modules(source, search_dirs=search_dirs)
+    source = strip_openmp_directives(source)
     source = rewrite_integer_powers(source)
     if if_intvar:
         source = preprocess_fortran(source)

@@ -407,6 +407,16 @@ def emit_call(builder, ctx, n, region):
 
     state = ctx.flush_and_ensure(builder, region)
 
+    # Argument-order invariant: every per-arg list below is built in one
+    # forward pass over ``sig.args`` (with the matching call-site name),
+    # so the i-th element of each list corresponds to the i-th
+    # signature parameter.  The C call body is ``c_name(terms[0], ...,
+    # terms[n-1])`` -- the order the C compiler sees, the order
+    # ``c_decl`` declares, and the order ``sig.args`` was registered in.
+    # Nothing downstream re-orders ``terms``: connector names embed the
+    # position via ``_a{i}`` and the LibraryNode is constructed with
+    # explicit ordered ``inputs`` / ``outputs`` lists (not sets).
+    #
     # Per arg, decide how it reaches the C call.  A data container ->
     # library-node connector(s): array = pointer (distinct in ``_aI`` /
     # out ``_aI_o`` names -- the expanded tasklet may not reuse one
@@ -414,9 +424,11 @@ def emit_call(builder, ctx, n, region):
     # aliases them), scalar = by-value ``_aI``.  A shape-only free
     # symbol (``n`` from ``a(n)``) has no container -> referenced
     # directly by name in the call body.
-    in_set, out_set, ptr_of = set(), set(), {}
-    edges = []  # (name, conn, direction)  direction: 'r' | 'w'
-    terms = []
+    in_conns: list = []
+    out_conns: list = []
+    ptr_of: dict = {}
+    edges: list = []  # (name, conn, direction)  direction: 'r' | 'w'
+    terms: list = []
     for i, (a, name) in enumerate(zip(sig.args, names)):
         if name not in ctx.sdfg.arrays:
             terms.append(name)  # free symbol -- in scope in the code
@@ -427,23 +439,23 @@ def emit_call(builder, ctx, n, region):
             writes = a.intent in ('out', 'inout')
             cin, cout = f"_a{i}", f"_a{i}_o"
             if reads:
-                in_set.add(cin); ptr_of[cin] = dt; edges.append((name, cin, 'r'))
+                in_conns.append(cin); ptr_of[cin] = dt; edges.append((name, cin, 'r'))
             if writes:
-                out_set.add(cout); ptr_of[cout] = dt; edges.append((name, cout, 'w'))
+                out_conns.append(cout); ptr_of[cout] = dt; edges.append((name, cout, 'w'))
             # The C call uses the writable pointer when it writes,
             # else the read pointer (both alias the same array).
             terms.append(cout if writes else cin)
         else:
             cin = f"_a{i}"
-            in_set.add(cin); edges.append((name, cin, 'r'))
+            in_conns.append(cin); edges.append((name, cin, 'r'))
             terms.append(cin)
 
     node = ExternalCall(name=f"_ext_{callee}_{builder.nid()}",
                         c_name=sig.c_name,
                         c_decl=sig.c_declaration(),
                         body=f"{sig.c_name}({', '.join(terms)});",
-                        inputs=in_set,
-                        outputs=out_set)
+                        inputs=in_conns,
+                        outputs=out_conns)
     state.add_node(node)
 
     for name, conn, direction in edges:

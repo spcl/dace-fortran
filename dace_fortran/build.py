@@ -31,7 +31,7 @@ from typing import Optional, Sequence, Union
 from dace import SDFG
 
 from dace_fortran.build_bridge import hb  # noqa: F401  -- ensures the bridge is built
-from dace_fortran.external import Arg, ExternalSignature, register_external  # noqa: F401
+from dace_fortran.external import Arg, ExternalSignature, keep_external, register_external  # noqa: F401
 from dace_fortran.hlfir_to_sdfg import DEFAULT_PIPELINE, SDFGBuilder
 from dace_fortran.preprocess import preprocess_fortran_source
 
@@ -39,6 +39,7 @@ __all__ = [
     "build_sdfg",
     "build_sdfg_from_files",
     "register_external",
+    "keep_external",
     "ExternalSignature",
     "Arg",
 ]

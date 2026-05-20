@@ -33,6 +33,7 @@ _LAZY = {
     "build_sdfg": "dace_fortran.build",
     "build_sdfg_from_files": "dace_fortran.build",
     "register_external": "dace_fortran.external",
+    "keep_external": "dace_fortran.external",
     "ExternalSignature": "dace_fortran.external",
     "Arg": "dace_fortran.external",
     "clear_external_registry": "dace_fortran.external",

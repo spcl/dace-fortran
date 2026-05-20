@@ -70,3 +70,92 @@ into its own `libfoo.so`, registers it (with `libraries=[libfoo]`),
 builds + runs an SDFG for a kernel that only declares `foo`'s
 interface and calls it — the SDFG `.so` links libfoo with an rpath,
 so it just runs — and asserts the array was incremented.
+
+## `keep_external` — same registry, intent-first API
+
+`keep_external(name, args=…, libraries=…)` is a thin wrapper around
+`register_external`.  Functionally identical (same registry, same
+lookup, same link-flag merge); the distinct name surfaces the intent
+("leave this procedure external; do not lower it into a kernel")
+without forcing the caller to spell out an `ExternalSignature` object.
+
+`c_name` defaults to the Fortran call-site name (the common case;
+override only when the `bind(c)` symbol uses a different label).  The
+`bar`-flavoured `test_keep_external.py` covers the same end-to-end
+flow as the `foo` test (compile separately, register, build, run,
+assert the mutation).
+
+## Real-world target: ICON `velocity_tendencies`
+
+The intent for `keep_external` is calls like ICON's
+`velocity_tendencies` (`mo_velocity_advection` in the real source,
+`fake_mo_velocity_advection` in the carved fake DyCore).  Its 14-arg
+signature is:
+
+```fortran
+SUBROUTINE velocity_tendencies(p_prog, p_patch, p_int, p_metrics, p_diag,
+                               z_w_concorr_me, z_kin_hor_e, z_vt_ie,
+                               ntnd, istep, lvn_only, dtime,
+                               dt_linintp_ubc, ldeepatmo)
+  TYPE(t_nh_prog),    INTENT(INOUT) :: p_prog
+  TYPE(t_patch),      TARGET, INTENT(IN) :: p_patch
+  TYPE(t_int_state),  TARGET, INTENT(IN) :: p_int
+  TYPE(t_nh_metrics), INTENT(INOUT) :: p_metrics
+  TYPE(t_nh_diag),    INTENT(INOUT) :: p_diag
+  REAL(8), DIMENSION(:,:,:), INTENT(INOUT) :: z_w_concorr_me, z_kin_hor_e, z_vt_ie
+  INTEGER, INTENT(IN) :: ntnd, istep
+  LOGICAL, INTENT(IN) :: lvn_only, ldeepatmo
+  REAL(8), INTENT(IN) :: dtime, dt_linintp_ubc
+END SUBROUTINE
+```
+
+The first 5 args are Fortran derived types: not C-interoperable as-is,
+so a direct `register_external`/`keep_external` registration cannot
+describe them.  The portable path is a **hand-written `bind(c)`
+shim** that takes the derived-type *leaves* (the inner arrays / scalars
+the kernel actually reads / writes) as flat C-interoperable pointers
+and forwards to the original procedure:
+
+```fortran
+subroutine velocity_tendencies_c(                                          &
+    ! t_nh_prog leaves the kernel reads/writes ...
+    p_prog_w_ptr, p_prog_vn_ptr,                                            &
+    ! t_patch leaves ...                                                    &
+    p_patch_nblks_c, p_patch_nblks_e, p_patch_nblks_v,                      &
+    p_patch_nlev, p_patch_nlevp1, p_patch_nshift,                           &
+    ! ... continue for t_int_state, t_nh_metrics, t_nh_diag ...
+    z_w_concorr_me_ptr, z_kin_hor_e_ptr, z_vt_ie_ptr,                       &
+    ntnd, istep, lvn_only_i8, dtime, dt_linintp_ubc, ldeepatmo_i8)          &
+  bind(c, name="velocity_tendencies_c")
+  use iso_c_binding
+  use mo_nonhydro_types,    only: t_nh_prog, t_nh_diag, t_nh_metrics
+  use mo_model_domain,      only: t_patch
+  use mo_intp_data_strc,    only: t_int_state
+  use mo_velocity_advection, only: velocity_tendencies
+  ! Reconstruct the derived types from the flat leaves and forward.
+  ...
+  call velocity_tendencies(p_prog, p_patch, p_int, p_metrics, p_diag,      &
+                           z_w_concorr_me, z_kin_hor_e, z_vt_ie,           &
+                           ntnd, istep, lvn_only, dtime,                   &
+                           dt_linintp_ubc, ldeepatmo)
+end subroutine
+```
+
+Register it:
+
+```python
+keep_external(
+    "velocity_tendencies",                # the Fortran call-site name
+    c_name="velocity_tendencies_c",       # the bind(c) shim
+    args=[Arg("array", "float64", "inout"),  # p_prog_w_ptr
+          Arg("array", "float64", "inout"),  # p_prog_vn_ptr
+          Arg("scalar", "int32", "in"),      # p_patch_nblks_c
+          ...],
+    libraries=["/abs/path/libvelocity_tendencies_shim.so"])
+```
+
+The shim is the only Fortran-side work; the registration is mechanical
+once the leaf list is fixed.  The bridge then emits one
+`ExternalCall` library node per `CALL velocity_tendencies(...)` in
+the kernel, exactly as for `foo` / `bar` -- the SDFG `.so` links the
+shim's library and the call resolves at run time.

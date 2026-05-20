@@ -1,12 +1,14 @@
 """Coverage for the Fortran source pre-processor: the ``IF (intvar)``
-rewrite, the ``x**2`` / ``x**3`` -> explicit-multiply expansion, and the
-single/default REAL literal -> double-precision promotion.
+rewrite, the ``x**2`` / ``x**3`` -> explicit-multiply expansion, the
+single/default REAL literal -> double-precision promotion, and the
+OpenMP / OpenACC sentinel + ``#ifdef`` block strip.
 """
 
 from dace_fortran.preprocess import (
     preprocess_fortran,
     promote_real_literals_to_double,
     rewrite_integer_powers,
+    strip_openmp_directives,
 )
 
 
@@ -182,3 +184,145 @@ def test_double_skips_identifiers_strings_comments():
 def test_double_idempotent():
     once = promote_real_literals_to_double("v = 2.0 + 0.85E5 + 1.0_JPRM")
     assert promote_real_literals_to_double(once) == once
+
+
+# --------------------------------------------------------------------------
+# strip_openmp_directives -- OpenMP / OpenACC sentinel lines, the
+# ICON ``omp_definitions.inc`` cpp include, and ``#ifdef _OPENMP`` /
+# ``#ifdef _OPENACC`` blocks are removed; unrelated cpp passes through.
+# --------------------------------------------------------------------------
+
+
+def test_strip_openmp_acc_sentinels():
+    src = (
+        "subroutine k(a, n)\n"
+        "  real(8) :: a(n)\n"
+        "  integer :: i, n\n"
+        "!$OMP PARALLEL DO\n"
+        "  do i = 1, n\n"
+        "!$ACC LOOP VECTOR\n"
+        "    a(i) = a(i) + 1.0D0\n"
+        "  end do\n"
+        "!$OMP END PARALLEL DO\n"
+        "end subroutine\n"
+    )
+    out = strip_openmp_directives(src)
+    assert "!$OMP" not in out
+    assert "!$ACC" not in out
+    # Real code is preserved.
+    assert "do i = 1, n" in out and "a(i) = a(i) + 1.0D0" in out
+
+
+def test_strip_openmp_continuation_and_conditional():
+    src = (
+        "subroutine k\n"
+        "  integer :: i\n"
+        "!$OMP PARALLEL DEFAULT(SHARED) &\n"
+        "!$OMP&   PRIVATE(i)\n"
+        "!$ i = 0\n"
+        "  i = 1\n"
+        "end subroutine\n"
+    )
+    out = strip_openmp_directives(src)
+    assert "!$OMP" not in out and "!$ " not in out
+    assert "i = 1" in out
+    # The `!$ i = 0` conditional line is OMP-only -> dropped.
+    assert "i = 0" not in out
+
+
+def test_strip_omp_acc_ifdef_blocks_and_else():
+    src = (
+        "subroutine k(a, n)\n"
+        "  integer :: n\n"
+        "  real(8) :: a(n)\n"
+        "#ifdef _OPENACC\n"
+        "  call acc_only_path(a, n)\n"
+        "#else\n"
+        "  call host_path(a, n)\n"
+        "#endif\n"
+        "#ifdef _OPENMP\n"
+        "  call omp_path(a, n)\n"
+        "#endif\n"
+        "#ifndef _OPENMP\n"
+        "  call serial_fallback(a, n)\n"
+        "#endif\n"
+        "end subroutine\n"
+    )
+    out = strip_openmp_directives(src)
+    # OPENACC body dropped, #else body kept.
+    assert "acc_only_path" not in out and "host_path" in out
+    # OPENMP body dropped.
+    assert "omp_path" not in out
+    # !OPENMP body kept.
+    assert "serial_fallback" in out
+    # No `#ifdef _OPENMP` / `#ifdef _OPENACC` directive lines survive.
+    assert "_OPENACC" not in out and "_OPENMP" not in out
+
+
+def test_strip_omp_acc_passes_through_unrelated_cpp():
+    src = (
+        "subroutine k(a)\n"
+        "  real(8) :: a(:)\n"
+        "#ifdef __SWAPDIM\n"
+        "  a = a + 1.0D0\n"
+        "#else\n"
+        "  a = a - 1.0D0\n"
+        "#endif\n"
+        "end subroutine\n"
+    )
+    out = strip_openmp_directives(src)
+    # Unrelated `#ifdef __SWAPDIM` block is untouched (both directives
+    # AND both branches survive -- evaluating it is not this pass's job).
+    assert "#ifdef __SWAPDIM" in out and "#else" in out and "#endif" in out
+    assert "a + 1.0D0" in out and "a - 1.0D0" in out
+
+
+def test_strip_omp_drops_omp_definitions_include():
+    src = (
+        "module m\n"
+        "#include \"omp_definitions.inc\"\n"
+        "#include \"hamocc_omp_definitions.inc\"\n"
+        "#include \"icon_definitions.inc\"\n"
+        "  implicit none\n"
+        "end module\n"
+    )
+    out = strip_openmp_directives(src)
+    assert "omp_definitions.inc" not in out
+    assert "hamocc_omp_definitions.inc" not in out
+    # Unrelated icon_definitions.inc include must survive.
+    assert "icon_definitions.inc" in out
+
+
+def test_strip_omp_handles_defined_paren_form():
+    src = (
+        "subroutine k\n"
+        "#if defined(_OPENMP)\n"
+        "  call omp_only(); call omp_only_2()\n"
+        "#endif\n"
+        "#if !defined(_OPENACC)\n"
+        "  call host_fallback()\n"
+        "#endif\n"
+        "end subroutine\n"
+    )
+    out = strip_openmp_directives(src)
+    assert "omp_only" not in out
+    assert "host_fallback" in out
+    assert "defined(_OPENMP)" not in out
+    assert "defined(_OPENACC)" not in out
+
+
+def test_strip_openmp_idempotent_and_clean_passthrough():
+    clean = "subroutine k\n  integer :: i\n  i = 1\nend subroutine\n"
+    assert strip_openmp_directives(clean) == clean
+    noisy = (
+        "subroutine k\n"
+        "!$OMP PARALLEL DO\n"
+        "#ifdef _OPENMP\n"
+        "  call omp()\n"
+        "#endif\n"
+        "  i = 1\n"
+        "end subroutine\n"
+    )
+    once = strip_openmp_directives(noisy)
+    twice = strip_openmp_directives(once)
+    assert once == twice

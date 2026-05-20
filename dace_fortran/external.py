@@ -19,6 +19,11 @@ to call a Fortran routine from the generated C++.  When only a
 ``.mod`` exists for a non-``bind(c)`` routine, write a thin
 ``bind(c)`` shim that ``USE``s the module and forwards, compile it
 against that ``.mod``, and register the shim's name.
+
+This module also exports :func:`keep_external`, a thin convenience
+wrapper that surfaces the intent ("leave this procedure external;
+do not inline its body").  It registers the same way -- the bridge
+treats every entry uniformly.
 """
 import re
 from dataclasses import dataclass, field
@@ -163,6 +168,40 @@ def register_external(name: str, signature: ExternalSignature):
     _REGISTRY[name] = signature
     if signature.libraries:
         _apply_linker_config()
+
+
+def keep_external(name: str,
+                  *,
+                  c_name: Optional[str] = None,
+                  args: Tuple[Arg, ...] = (),
+                  libraries: Tuple[str, ...] = ()):
+    """Mark ``name`` to be left external -- the bridge emits an
+    :class:`ExternalCall` library node for every ``CALL name(...)``
+    instead of inlining ``name`` 's body.
+
+    Functionally a convenience wrapper around :func:`register_external`:
+    same registry, same lookup, same library-link injection.  The
+    distinct name surfaces the intent ("don't lower this callee into a
+    kernel; emit it as an opaque call") and lets callers omit
+    ``ExternalSignature`` boilerplate at the call site.
+
+    :param name: name as it appears at the Fortran ``CALL`` site.
+    :param c_name: ``bind(c, name=...)`` symbol the C call invokes;
+        defaults to ``name`` when omitted (the common case where the
+        Fortran name is also the ``extern "C"`` symbol).
+    :param args: the ``bind(c)`` parameter list -- same shape as
+        :class:`ExternalSignature.args`.
+    :param libraries: shared libraries that export ``c_name`` -- merged
+        into ``compiler.linker.args`` so the SDFG ``.so`` resolves the
+        symbol at load time with no ``LD_PRELOAD``.
+
+    For procedures whose Fortran body still lives in the bridge's
+    source bundle, also strip the body (or USE-import only the
+    interface) so flang does not inline ``name`` ahead of dispatch.
+    """
+    register_external(name, ExternalSignature(c_name=c_name or name,
+                                              args=tuple(args),
+                                              libraries=tuple(libraries)))
 
 
 def lookup_external(name: str) -> Optional[ExternalSignature]:
