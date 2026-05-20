@@ -154,6 +154,144 @@ def _collect_include_dirs(roots: Sequence[Path]) -> List[Path]:
     return out
 
 
+#: ``MODULE <name>`` opener -- one definition per file in the common
+#: case (one-module-per-file).  Used to build the ``module -> path``
+#: index for the ``.mod`` compile path.
+_MODULE_DEF_RE = re.compile(r"^\s*MODULE\s+([A-Za-z_]\w*)\s*$",
+                            re.IGNORECASE | re.MULTILINE)
+
+#: ``USE <name>`` -- captured to walk the dependency graph from the
+#: entry source through the search roots.  The ``intrinsic`` prefix
+#: form is accepted; intrinsic / compiler-supplied modules
+#: (``iso_c_binding``, ``mpi``, ...) are filtered out separately.
+_USE_DEP_RE = re.compile(r"^\s*USE[\s,]*(?:INTRINSIC\s*::\s*)?\s*([A-Za-z_]\w*)",
+                         re.IGNORECASE | re.MULTILINE)
+
+
+def _index_module_files(roots: Sequence[Path]) -> dict:
+    """Build a ``module-name -> file path`` map for every ``.f90`` /
+    ``.F90`` source under ``roots`` (skipping ``build/`` /
+    ``CMakeFiles/`` artifact directories that mirror the upstream
+    sources but are stale at parse time).  First-seen wins, so caller
+    can order ``roots`` to prefer one tree over another."""
+    out: dict = {}
+    for root in roots:
+        root = Path(root)
+        if root.is_file():
+            files = [root]
+        elif root.is_dir():
+            files = sorted(list(root.rglob("*.f90")) + list(root.rglob("*.F90")))
+        else:
+            continue
+        for f in files:
+            sp = str(f)
+            if "/build/" in sp or "/CMakeFiles/" in sp:
+                continue
+            try:
+                txt = f.read_text(errors="ignore")
+            except OSError:
+                continue
+            for m in _MODULE_DEF_RE.finditer(txt):
+                out.setdefault(m.group(1).lower(), f)
+    return out
+
+
+def _topo_dep_order(source: str, mod_index: dict) -> List[Path]:
+    """Return the ``.mod`` compile order for ``source`` 's USE closure,
+    deps-first (dependencies before their dependents), with file paths
+    de-duplicated -- when one ``.f90`` file defines several modules
+    (a common pattern in ICON externals: ``libmtime.f90`` defines
+    ``mtime_utilities`` + ``mtime_eventgroups``), compiling that file
+    once produces all the ``.mod`` files at once and a re-compile
+    would clobber / fail on the already-emitted ones.
+
+    DFS over the ``USE`` graph starting from ``source`` 's directly-used
+    modules; nodes outside ``mod_index`` (intrinsics, externals we have
+    no source for) are skipped silently -- flang will diagnose them
+    when it can't resolve a USE in the entry compile.  A cycle guard
+    marks a node "visiting" when entered and "done" after; revisits
+    while "visiting" are dropped (a USE cycle is rare in well-formed
+    Fortran and not worth a hard failure here).
+    """
+    order: list = []
+    state: dict = {}  # name -> "visiting" / "done"
+    seen_paths: set = set()  # resolved file paths already in ``order``
+
+    def _visit(name: str):
+        if state.get(name) == "done":
+            return
+        if state.get(name) == "visiting":
+            return  # cycle -- skip
+        path = mod_index.get(name)
+        if path is None:
+            return  # external / intrinsic
+        state[name] = "visiting"
+        try:
+            txt = path.read_text(errors="ignore")
+        except OSError:
+            state[name] = "done"
+            return
+        for m in _USE_DEP_RE.finditer(txt):
+            _visit(m.group(1).lower())
+        state[name] = "done"
+        rp = path.resolve()
+        if rp not in seen_paths:
+            seen_paths.add(rp)
+            order.append(path)
+
+    for m in _USE_DEP_RE.finditer(source):
+        _visit(m.group(1).lower())
+    return order
+
+
+def _compile_dep_mods(source: str,
+                      mod_dir: Path,
+                      include_flags: List[str],
+                      search_dirs: Sequence[Path]) -> int:
+    """Compile ``source`` 's USE-closure to ``.mod`` files under
+    ``mod_dir`` in dep order, one at a time -- the same model flang
+    (and clang for C++) uses for normal multi-file builds.
+
+    flang does not ship a multi-file driver or a dep-extractor like
+    ``clang-scan-deps``; the standard practice in the Fortran world
+    (``makedepf90`` / ``fortdepend`` / ``fpm``) is to regex-scan
+    ``USE`` statements, topo-sort, and drive ``flang -fsyntax-only``
+    one-file-at-a-time -- which is what this does.
+
+    Each invocation is independent (``-fsyntax-only -J<mod_dir>``):
+    flang reads the already-built ``.mod`` files for the module's own
+    deps and writes a fresh ``.mod`` for it.  ``-fhermetic-module-files``
+    asks flang to emit each ``.mod`` self-contained (the transitive
+    USE info gets embedded), so a later consumer that misses a
+    transitive ``.mod`` still resolves the symbols it needs --
+    important on a real upstream tree where some leaf modules
+    legitimately fail to build in our scope (missing externals like
+    ``netcdf`` / ``yaxt`` / ``hdf5``).
+
+    Modules whose source isn't in ``search_dirs`` (intrinsics,
+    externals) are silently skipped; modules that fail to compile in
+    isolation (unresolvable transitive USEs, missing platform
+    includes) are skipped too so a single broken leaf doesn't tank
+    the whole closure -- the entry compile will diagnose any
+    genuinely-needed symbol that didn't resolve.
+
+    :returns: count of modules successfully compiled.
+    """
+    mod_dir.mkdir(parents=True, exist_ok=True)
+    mod_index = _index_module_files(search_dirs)
+    paths = _topo_dep_order(source, mod_index)
+    compiled = 0
+    for path in paths:
+        flags = ["-fc1", "-cpp", "-U_OPENMP", "-U_OPENACC", "-fsyntax-only",
+                 "-fhermetic-module-files",
+                 *include_flags, "-J", str(mod_dir), "-I", str(mod_dir),
+                 str(path)]
+        r = subprocess.run([_find_flang(), *flags], capture_output=True)
+        if r.returncode == 0:
+            compiled += 1
+    return compiled
+
+
 def _emit_hlfir(source: str,
                 out_dir: Path,
                 name: str,
@@ -161,24 +299,37 @@ def _emit_hlfir(source: str,
                 merge: bool,
                 preprocess: bool,
                 search_dirs: Sequence[Path] = ()) -> Path:
-    """Write ``source`` to ``<out_dir>/<name>.F90``, preprocess
-    (module-merge + opt-in rewrites), ``flang -fc1 -cpp -emit-hlfir``
-    it, and return the ``.hlfir`` path.
+    """Write ``source`` to ``<out_dir>/<name>.F90``, lower it to HLFIR,
+    and return the ``.hlfir`` path.
 
-    ``out_dir`` is always part of the merge search path (it holds the
-    written-out source and any files staged by ``build_sdfg_from_files``);
-    ``search_dirs`` adds more roots scanned recursively so callers can
-    point the merge at an external source tree (e.g. an unmodified
-    ICON checkout) without copying files in first.
+    Two compile models, selected by whether ``search_dirs`` is empty:
 
-    flang runs with ``-cpp`` so legacy codebases that ship ``#ifdef``
-    blocks or ``#include`` cpp directives (ICON, ECRAD, ...) are
-    consumable.  ``_OPENMP`` and ``_OPENACC`` are forced undefined --
-    matching the convention :func:`strip_openmp_directives` already
-    applies at the Fortran-text level so the two layers agree -- and
-    every ``search_dirs`` root (plus any ``include`` directory under
-    it) becomes a ``-I`` so cpp's ``#include`` resolution works on a
-    real source tree without callers staging file copies.
+    * **empty** (the default, all existing inline / staged tests):
+      run the text-level ``merge_used_modules`` pass so any ``.f90``
+      files in ``out_dir`` are inlined into ``source`` as one TU,
+      then flang emits HLFIR for the whole TU.  This is the legacy
+      behaviour and preserves callee inlining the multi-file tests
+      depend on.
+    * **non-empty** (the ICON / upstream-tree path): follow flang's
+      native model -- walk the entry source's USE closure, compile
+      each dep to a ``.mod`` file in dep order
+      (:func:`_compile_dep_mods`), then compile the entry alone
+      against ``-I<mod_dir>``.  No textual merge, so the merge's
+      preamble / between-module artefacts (which were tripping
+      flang-21 on the 91 k-line ICON TU) are out of the picture --
+      this is the model flang and clang/gcc normally use.  The
+      emitted HLFIR is the entry's only; callees referenced through
+      ``USE`` stay external symbols (handled downstream by
+      ``emit_call`` / ``ExternalCall``).
+
+    flang runs with ``-cpp -U_OPENMP -U_OPENACC`` so legacy codebases
+    that ship ``#ifdef`` blocks or ``#include`` cpp directives (ICON,
+    ECRAD, ...) are consumable; forcing the OMP/ACC macros undefined
+    matches the convention :func:`strip_openmp_directives` already
+    applies at the Fortran-text level so the two layers agree.  Every
+    search root (plus any ``include`` directory under it) becomes a
+    ``-I`` so cpp resolves real ``#include`` directives without callers
+    enumerating subdirectories.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     # Use ``.F90`` so flang's default file-by-extension detection
@@ -186,15 +337,29 @@ def _emit_hlfir(source: str,
     # this stays consistent if a future flang changes its default.
     src = out_dir / f"{name}.F90"
     all_dirs = [out_dir, *[Path(d) for d in search_dirs]]
-    src.write_text(preprocess_fortran_source(source, search_dirs=all_dirs,
-                                             merge=merge, if_intvar=preprocess))
+    if search_dirs:
+        # Native model: write the entry verbatim, compile deps to .mod.
+        # Drop OMP/ACC sentinels + the OMP cpp include from the entry
+        # source so flang's cpp sees clean text (``strip_openmp_directives``
+        # is the same pass the merge path runs as part of
+        # ``preprocess_fortran_source``).
+        from dace_fortran.preprocess import strip_openmp_directives
+        src.write_text(strip_openmp_directives(source))
+    else:
+        src.write_text(preprocess_fortran_source(source, search_dirs=all_dirs,
+                                                 merge=merge, if_intvar=preprocess))
+    include_flags: list = []
+    for d in _collect_include_dirs(all_dirs):
+        include_flags += ["-I", str(d)]
+    if search_dirs:
+        mod_dir = out_dir / f"{name}_mods"
+        _compile_dep_mods(src.read_text(), mod_dir, include_flags, list(search_dirs))
+        include_flags += ["-I", str(mod_dir)]
     hlfir = out_dir / f"{name}.hlfir"
-    include_dirs = _collect_include_dirs(all_dirs)
-    flags = ["-fc1", "-cpp", "-U_OPENMP", "-U_OPENACC"]
-    for d in include_dirs:
-        flags += ["-I", str(d)]
-    flags += ["-emit-hlfir", str(src), "-o", str(hlfir)]
-    subprocess.check_call([_find_flang(), *flags])
+    subprocess.check_call([_find_flang(),
+                           "-fc1", "-cpp", "-U_OPENMP", "-U_OPENACC",
+                           *include_flags,
+                           "-emit-hlfir", str(src), "-o", str(hlfir)])
     return hlfir
 
 
