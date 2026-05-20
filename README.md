@@ -552,18 +552,56 @@ dace_fortran.register_external("foo", dace_fortran.ExternalSignature(
     libraries=["/abs/path/libfoo.so"]))
 sdfg = dace_fortran.build_sdfg(kernel_src, entry="_QPrun")
 
-# (4) Lower level: an already-emitted .hlfir MLIR file.
+# (4) A prebuilt HLFIR file -- WIP, see *Tier 3* below.
+sdfg = dace_fortran.build_sdfg_from_hlfir(
+    "build/", entry="_QMmod_jacobiPjacobi2d_update")
+
+# (5) Lower level: an already-emitted .hlfir MLIR file.
 sdfg = dace_fortran.generate_sdfg("code.hlfir")    # pipeline=... optional
 ```
 
-`build_sdfg` / `build_sdfg_from_files` / `generate_sdfg` all return a
-validated `dace.SDFG` with `sdfg._frozen_signature` attached.  Emit a
-Fortran-callable library from it with `build_fortran_library` (see
-*Quick start*) -- that stays a separate step, not folded in.
+`build_sdfg` / `build_sdfg_from_files` / `build_sdfg_from_hlfir` /
+`generate_sdfg` all return a validated `dace.SDFG` with
+`sdfg._frozen_signature` attached.  Emit a Fortran-callable library
+from it with `build_fortran_library` (see *Quick start*) -- that
+stays a separate step, not folded in.
 
 MPI (`MPI_Send/Recv/Isend/Irecv/Wait`, including a non-default
 communicator) is recognised automatically and lowered to
 `dace.libraries.mpi` nodes -- no registration needed.
+
+### Tier 3: prebuilt HLFIR (WIP)
+
+Forms (1)–(3) make the bridge drive flang itself -- great for
+self-contained kernels and small multi-file projects, but it stops
+working for codebases too large or dep-tangled for the bridge to
+compile alone (ICON-scale: hundreds of modules, real `netcdf` /
+`hdf5` / `yaxt` externals, custom cpp gates).  Those codebases
+already have a working build system that knows the right include
+paths, the right intrinsic-module path, the right cpp defines.
+`build_sdfg_from_hlfir` is the **WIP** tier-3 entry point that lets
+the bridge get out of the way: the user injects `flang-new-21 -fc1
+-emit-hlfir ...` into their build (FCFLAGS, cmake custom target,
+make rule, fpm wrapper), gets one `.hlfir` per TU into a build
+directory, and the bridge consumes the relevant one:
+
+```python
+sdfg = dace_fortran.build_sdfg_from_hlfir(
+    "/path/to/build_dir",                              # file or directory
+    entry="_QMmod_jacobiPjacobi2d_update")             # required when dir
+```
+
+`tests/prebuilt_hlfir/` is the worked example: a 4-file
+distributed-Jacobi mock project (`mod_grid` / `mod_jacobi` /
+`mod_io` / `driver`) with real `find_package(MPI)` +
+`find_package(NetCDF)`; cmake builds the executable to verify the
+codebase actually compiles, then runs an `emit_hlfir` custom target
+to drop `.hlfir` files alongside; the test calls
+`build_sdfg_from_hlfir(build_dir, entry=...)` to lower
+`jacobi2d_update` without the bridge needing MPI or netCDF on its
+side.  WIP because the API only consumes one `.hlfir` (no
+cross-TU inlining yet) and the user is still responsible for
+ensuring the right inlining happens at HLFIR-emit time.
 
 ## Extending the frontend
 

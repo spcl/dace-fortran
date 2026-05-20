@@ -42,7 +42,8 @@ jobs:
           llvm-21-dev libmlir-21-dev mlir-21-tools \
           libflang-21-dev flang-21 clang-21 \
           cmake ninja-build gfortran libgomp1 \
-          libopenmpi-dev openmpi-bin
+          libopenmpi-dev openmpi-bin \
+          libnetcdff-dev pkg-config
         echo "/usr/lib/llvm-21/bin" >> "$GITHUB_PATH"
         # apt.llvm.org installs the binary as flang-new-21 in
         # /usr/lib/llvm-21/bin (on PATH above).  Fall back to a symlink

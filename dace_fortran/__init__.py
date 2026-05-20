@@ -32,6 +32,7 @@ _LAZY = {
     # Public build entry points (the documented surface).
     "build_sdfg": "dace_fortran.build",
     "build_sdfg_from_files": "dace_fortran.build",
+    "build_sdfg_from_hlfir": "dace_fortran.build",
     "register_external": "dace_fortran.external",
     "keep_external": "dace_fortran.external",
     "ExternalSignature": "dace_fortran.external",

@@ -26,7 +26,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import List, Optional, Sequence, Union
+from typing import Optional, Sequence, Union
 
 from dace import SDFG
 
@@ -38,6 +38,7 @@ from dace_fortran.preprocess import preprocess_fortran_source
 __all__ = [
     "build_sdfg",
     "build_sdfg_from_files",
+    "build_sdfg_from_hlfir",
     "register_external",
     "keep_external",
     "ExternalSignature",
@@ -128,237 +129,34 @@ def _resolve_entry(source: str, entry: Optional[str]) -> str:
     return f"_QM{mod.lower()}P{name.lower()}" if mod else f"_QP{name.lower()}"
 
 
-def _collect_include_dirs(roots: Sequence[Path]) -> List[Path]:
-    """Find every ``include`` directory under ``roots`` plus the roots
-    themselves -- both forms appear in real codebases (ICON keeps its
-    ``omp_definitions.inc`` / ``icon_definitions.inc`` under
-    ``src/include/``; the carved-out kernels stage their ``*_t0.inc``
-    next to the kernel ``.f90``).  Used to derive flang's ``-I`` flags
-    without forcing callers to enumerate every subdirectory.
-    """
-    out: list = []
-    seen: set = set()
+def _emit_hlfir(source: str, out_dir: Path, name: str, *, merge: bool, preprocess: bool) -> Path:
+    """Write ``source`` to ``<out_dir>/<name>.F90``, preprocess
+    (module-merge + opt-in rewrites), ``flang -fc1 -cpp -emit-hlfir``
+    it, and return the ``.hlfir`` path.
 
-    def _add(p: Path):
-        p = p.resolve()
-        if p not in seen and p.is_dir():
-            seen.add(p)
-            out.append(p)
+    ``out_dir`` is the merge search path -- ``merge_used_modules``
+    inlines any ``.f90`` staged there by ``build_sdfg_from_files`` so
+    flang sees one self-contained TU.  For codebases too large /
+    dep-tangled for the text-merge to handle cleanly, use
+    :func:`build_sdfg_from_hlfir` instead and let the project's own
+    build system emit the ``.hlfir``.
 
-    for r in roots:
-        p = Path(r)
-        _add(p)
-        if p.is_dir():
-            for sub in p.rglob("include"):
-                _add(sub)
-    return out
-
-
-#: ``MODULE <name>`` opener -- one definition per file in the common
-#: case (one-module-per-file).  Used to build the ``module -> path``
-#: index for the ``.mod`` compile path.
-_MODULE_DEF_RE = re.compile(r"^\s*MODULE\s+([A-Za-z_]\w*)\s*$",
-                            re.IGNORECASE | re.MULTILINE)
-
-#: ``USE <name>`` -- captured to walk the dependency graph from the
-#: entry source through the search roots.  The ``intrinsic`` prefix
-#: form is accepted; intrinsic / compiler-supplied modules
-#: (``iso_c_binding``, ``mpi``, ...) are filtered out separately.
-_USE_DEP_RE = re.compile(r"^\s*USE[\s,]*(?:INTRINSIC\s*::\s*)?\s*([A-Za-z_]\w*)",
-                         re.IGNORECASE | re.MULTILINE)
-
-
-def _index_module_files(roots: Sequence[Path]) -> dict:
-    """Build a ``module-name -> file path`` map for every ``.f90`` /
-    ``.F90`` source under ``roots`` (skipping ``build/`` /
-    ``CMakeFiles/`` artifact directories that mirror the upstream
-    sources but are stale at parse time).  First-seen wins, so caller
-    can order ``roots`` to prefer one tree over another."""
-    out: dict = {}
-    for root in roots:
-        root = Path(root)
-        if root.is_file():
-            files = [root]
-        elif root.is_dir():
-            files = sorted(list(root.rglob("*.f90")) + list(root.rglob("*.F90")))
-        else:
-            continue
-        for f in files:
-            sp = str(f)
-            if "/build/" in sp or "/CMakeFiles/" in sp:
-                continue
-            try:
-                txt = f.read_text(errors="ignore")
-            except OSError:
-                continue
-            for m in _MODULE_DEF_RE.finditer(txt):
-                out.setdefault(m.group(1).lower(), f)
-    return out
-
-
-def _topo_dep_order(source: str, mod_index: dict) -> List[Path]:
-    """Return the ``.mod`` compile order for ``source`` 's USE closure,
-    deps-first (dependencies before their dependents), with file paths
-    de-duplicated -- when one ``.f90`` file defines several modules
-    (a common pattern in ICON externals: ``libmtime.f90`` defines
-    ``mtime_utilities`` + ``mtime_eventgroups``), compiling that file
-    once produces all the ``.mod`` files at once and a re-compile
-    would clobber / fail on the already-emitted ones.
-
-    DFS over the ``USE`` graph starting from ``source`` 's directly-used
-    modules; nodes outside ``mod_index`` (intrinsics, externals we have
-    no source for) are skipped silently -- flang will diagnose them
-    when it can't resolve a USE in the entry compile.  A cycle guard
-    marks a node "visiting" when entered and "done" after; revisits
-    while "visiting" are dropped (a USE cycle is rare in well-formed
-    Fortran and not worth a hard failure here).
-    """
-    order: list = []
-    state: dict = {}  # name -> "visiting" / "done"
-    seen_paths: set = set()  # resolved file paths already in ``order``
-
-    def _visit(name: str):
-        if state.get(name) == "done":
-            return
-        if state.get(name) == "visiting":
-            return  # cycle -- skip
-        path = mod_index.get(name)
-        if path is None:
-            return  # external / intrinsic
-        state[name] = "visiting"
-        try:
-            txt = path.read_text(errors="ignore")
-        except OSError:
-            state[name] = "done"
-            return
-        for m in _USE_DEP_RE.finditer(txt):
-            _visit(m.group(1).lower())
-        state[name] = "done"
-        rp = path.resolve()
-        if rp not in seen_paths:
-            seen_paths.add(rp)
-            order.append(path)
-
-    for m in _USE_DEP_RE.finditer(source):
-        _visit(m.group(1).lower())
-    return order
-
-
-def _compile_dep_mods(source: str,
-                      mod_dir: Path,
-                      include_flags: List[str],
-                      search_dirs: Sequence[Path]) -> int:
-    """Compile ``source`` 's USE-closure to ``.mod`` files under
-    ``mod_dir`` in dep order, one at a time -- the same model flang
-    (and clang for C++) uses for normal multi-file builds.
-
-    flang does not ship a multi-file driver or a dep-extractor like
-    ``clang-scan-deps``; the standard practice in the Fortran world
-    (``makedepf90`` / ``fortdepend`` / ``fpm``) is to regex-scan
-    ``USE`` statements, topo-sort, and drive ``flang -fsyntax-only``
-    one-file-at-a-time -- which is what this does.
-
-    Each invocation is independent (``-fsyntax-only -J<mod_dir>``):
-    flang reads the already-built ``.mod`` files for the module's own
-    deps and writes a fresh ``.mod`` for it.  ``-fhermetic-module-files``
-    asks flang to emit each ``.mod`` self-contained (the transitive
-    USE info gets embedded), so a later consumer that misses a
-    transitive ``.mod`` still resolves the symbols it needs --
-    important on a real upstream tree where some leaf modules
-    legitimately fail to build in our scope (missing externals like
-    ``netcdf`` / ``yaxt`` / ``hdf5``).
-
-    Modules whose source isn't in ``search_dirs`` (intrinsics,
-    externals) are silently skipped; modules that fail to compile in
-    isolation (unresolvable transitive USEs, missing platform
-    includes) are skipped too so a single broken leaf doesn't tank
-    the whole closure -- the entry compile will diagnose any
-    genuinely-needed symbol that didn't resolve.
-
-    :returns: count of modules successfully compiled.
-    """
-    mod_dir.mkdir(parents=True, exist_ok=True)
-    mod_index = _index_module_files(search_dirs)
-    paths = _topo_dep_order(source, mod_index)
-    compiled = 0
-    for path in paths:
-        flags = ["-fc1", "-cpp", "-U_OPENMP", "-U_OPENACC", "-fsyntax-only",
-                 "-fhermetic-module-files",
-                 *include_flags, "-J", str(mod_dir), "-I", str(mod_dir),
-                 str(path)]
-        r = subprocess.run([_find_flang(), *flags], capture_output=True)
-        if r.returncode == 0:
-            compiled += 1
-    return compiled
-
-
-def _emit_hlfir(source: str,
-                out_dir: Path,
-                name: str,
-                *,
-                merge: bool,
-                preprocess: bool,
-                search_dirs: Sequence[Path] = ()) -> Path:
-    """Write ``source`` to ``<out_dir>/<name>.F90``, lower it to HLFIR,
-    and return the ``.hlfir`` path.
-
-    Two compile models, selected by whether ``search_dirs`` is empty:
-
-    * **empty** (the default, all existing inline / staged tests):
-      run the text-level ``merge_used_modules`` pass so any ``.f90``
-      files in ``out_dir`` are inlined into ``source`` as one TU,
-      then flang emits HLFIR for the whole TU.  This is the legacy
-      behaviour and preserves callee inlining the multi-file tests
-      depend on.
-    * **non-empty** (the ICON / upstream-tree path): follow flang's
-      native model -- walk the entry source's USE closure, compile
-      each dep to a ``.mod`` file in dep order
-      (:func:`_compile_dep_mods`), then compile the entry alone
-      against ``-I<mod_dir>``.  No textual merge, so the merge's
-      preamble / between-module artefacts (which were tripping
-      flang-21 on the 91 k-line ICON TU) are out of the picture --
-      this is the model flang and clang/gcc normally use.  The
-      emitted HLFIR is the entry's only; callees referenced through
-      ``USE`` stay external symbols (handled downstream by
-      ``emit_call`` / ``ExternalCall``).
-
-    flang runs with ``-cpp -U_OPENMP -U_OPENACC`` so legacy codebases
-    that ship ``#ifdef`` blocks or ``#include`` cpp directives (ICON,
-    ECRAD, ...) are consumable; forcing the OMP/ACC macros undefined
-    matches the convention :func:`strip_openmp_directives` already
-    applies at the Fortran-text level so the two layers agree.  Every
-    search root (plus any ``include`` directory under it) becomes a
-    ``-I`` so cpp resolves real ``#include`` directives without callers
-    enumerating subdirectories.
+    flang runs with ``-cpp -U_OPENMP -U_OPENACC`` so kernels that ship
+    ``#ifdef`` blocks are still consumable; the macros are forced
+    undefined to match what :func:`strip_openmp_directives` already
+    applies at the Fortran-text level.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    # Use ``.F90`` so flang's default file-by-extension detection
-    # routes through its built-in preprocessor; combined with ``-cpp``
-    # this stays consistent if a future flang changes its default.
+    # ``.F90`` routes through flang's built-in preprocessor by extension
+    # convention; combined with ``-cpp`` this stays consistent if a
+    # future flang changes its default.
     src = out_dir / f"{name}.F90"
-    all_dirs = [out_dir, *[Path(d) for d in search_dirs]]
-    if search_dirs:
-        # Native model: write the entry verbatim, compile deps to .mod.
-        # Drop OMP/ACC sentinels + the OMP cpp include from the entry
-        # source so flang's cpp sees clean text (``strip_openmp_directives``
-        # is the same pass the merge path runs as part of
-        # ``preprocess_fortran_source``).
-        from dace_fortran.preprocess import strip_openmp_directives
-        src.write_text(strip_openmp_directives(source))
-    else:
-        src.write_text(preprocess_fortran_source(source, search_dirs=all_dirs,
-                                                 merge=merge, if_intvar=preprocess))
-    include_flags: list = []
-    for d in _collect_include_dirs(all_dirs):
-        include_flags += ["-I", str(d)]
-    if search_dirs:
-        mod_dir = out_dir / f"{name}_mods"
-        _compile_dep_mods(src.read_text(), mod_dir, include_flags, list(search_dirs))
-        include_flags += ["-I", str(mod_dir)]
+    src.write_text(preprocess_fortran_source(source, search_dirs=[out_dir],
+                                             merge=merge, if_intvar=preprocess))
     hlfir = out_dir / f"{name}.hlfir"
     subprocess.check_call([_find_flang(),
                            "-fc1", "-cpp", "-U_OPENMP", "-U_OPENACC",
-                           *include_flags,
+                           "-I", str(out_dir),
                            "-emit-hlfir", str(src), "-o", str(hlfir)])
     return hlfir
 
@@ -369,8 +167,7 @@ def make_builder(source: str,
                  name: str = "sdfg",
                  pipeline: Optional[str] = None,
                  out_dir: Optional[Union[str, Path]] = None,
-                 preprocess: bool = False,
-                 search_dirs: Sequence[Union[str, Path]] = ()) -> SDFGBuilder:
+                 preprocess: bool = False) -> SDFGBuilder:
     """Resolve the entry, lower ``source`` to HLFIR, and return a
     configured (not yet built) :class:`SDFGBuilder`.
 
@@ -383,9 +180,6 @@ def make_builder(source: str,
     the single procedure in ``source`` (error if none / ambiguous).
     The ``.hlfir`` is parsed into the bridge module at ``SDFGBuilder``
     construction, so a temporary scratch dir is fine.
-
-    ``search_dirs`` are extra roots scanned recursively for module
-    definitions; the scratch / ``out_dir`` is always searched too.
     """
     # ``_resolve_entry`` *validates* the auto case: it raises when an
     # entry-less source has zero or >1 procedures (the contract: no
@@ -398,14 +192,11 @@ def make_builder(source: str,
     # need it to privatise the non-entry procedures).
     _resolve_entry(source, entry)
     pipeline = pipeline or DEFAULT_PIPELINE
-    sdirs = [Path(d) for d in search_dirs]
     if out_dir is not None:
-        hlfir = _emit_hlfir(source, Path(out_dir), name, merge=True,
-                            preprocess=preprocess, search_dirs=sdirs)
+        hlfir = _emit_hlfir(source, Path(out_dir), name, merge=True, preprocess=preprocess)
         return SDFGBuilder(str(hlfir), pipeline=pipeline, entry=entry)
     with tempfile.TemporaryDirectory(prefix=f"hlfir_{name}_") as td:
-        hlfir = _emit_hlfir(source, Path(td), name, merge=True,
-                            preprocess=preprocess, search_dirs=sdirs)
+        hlfir = _emit_hlfir(source, Path(td), name, merge=True, preprocess=preprocess)
         return SDFGBuilder(str(hlfir), pipeline=pipeline, entry=entry)
 
 
@@ -415,8 +206,7 @@ def build_sdfg(source: str,
                name: str = "sdfg",
                pipeline: Optional[str] = None,
                out_dir: Optional[Union[str, Path]] = None,
-               preprocess: bool = False,
-               search_dirs: Sequence[Union[str, Path]] = ()) -> SDFG:
+               preprocess: bool = False) -> SDFG:
     """Build a :class:`dace.SDFG` from a single inline Fortran source.
 
     :param source: Fortran source as one string.
@@ -433,18 +223,109 @@ def build_sdfg(source: str,
         removed when omitted.
     :param preprocess: also run the opt-in ``IF (intvar)`` rewrite
         (off by default so clean source is untouched).
-    :param search_dirs: extra roots scanned recursively for module
-        definitions (point at an unmodified upstream tree like an ICON
-        checkout to resolve ``USE`` chains without staging copies).
-        ``out_dir`` is always part of the search path; ``search_dirs``
-        adds to it, it does not replace it.
     :returns: a built, validated SDFG.
     :raises ValueError: if ``entry`` is ``None`` and the source has no
         procedure or is ambiguous (more than one).
     """
     return make_builder(source, entry=entry, name=name, pipeline=pipeline,
-                        out_dir=out_dir, preprocess=preprocess,
-                        search_dirs=search_dirs).build()
+                        out_dir=out_dir, preprocess=preprocess).build()
+
+
+#: ``func.func @<symbol>(`` -- the MLIR opener for a procedure inside
+#: a flang-emitted ``.hlfir``.  Used to scan a folder for the file
+#: that contains the requested entry symbol.
+_HLFIR_FUNC_RE = re.compile(r"func\.func\s+(?:private\s+)?@([A-Za-z_]\w*)\s*\(")
+
+
+def _resolve_hlfir_for_entry(root: Path, entry: str) -> Path:
+    """Walk ``root`` for ``.hlfir`` files and return the one whose
+    MLIR text defines ``func.func @<entry>(...)``.
+
+    Real build systems (cmake / make / fpm) emit one ``.hlfir`` per
+    translation unit into a build / artefact tree -- the caller knows
+    the entry symbol, not which TU it lives in.  This scan keeps the
+    caller from having to track that mapping by hand.
+    """
+    matches = []
+    for p in sorted(root.rglob("*.hlfir")):
+        try:
+            txt = p.read_text(errors="ignore")
+        except OSError:
+            continue
+        for m in _HLFIR_FUNC_RE.finditer(txt):
+            if m.group(1) == entry:
+                matches.append(p)
+                break
+    if not matches:
+        raise FileNotFoundError(
+            f"no .hlfir under {root} defines func.func @{entry}; "
+            f"check that the build emitted HLFIR for the TU containing "
+            f"the entry (and that the entry symbol is correctly mangled)")
+    if len(matches) > 1:
+        raise ValueError(
+            f"multiple .hlfir under {root} define @{entry} -- pick one explicitly: "
+            f"{[str(p) for p in matches]}")
+    return matches[0]
+
+
+def build_sdfg_from_hlfir(hlfir_path: Union[str, Path],
+                          *,
+                          entry: Optional[str] = None,
+                          pipeline: Optional[str] = None) -> SDFG:
+    """Build a :class:`dace.SDFG` from a pre-emitted ``.hlfir`` file
+    produced by the project's own build system (``flang -fc1
+    -emit-hlfir ...`` via cmake / make / fpm / a wrapper).
+
+    **WIP / experimental** -- the tier-3 entry point for codebases too
+    large or dep-tangled for the bridge to compile itself
+    (ICON-scale: hundreds of modules, ``netcdf`` / ``hdf5`` / ``yaxt``
+    externals, custom cpp).  The user's build system already knows how
+    to compile the project (it has the right ``-I``, the right
+    intrinsic-module path, the right cpp defines); the bridge stops
+    competing with it and just consumes the resulting ``.hlfir``.
+
+    ``hlfir_path`` may be:
+
+    * a path to a specific ``.hlfir`` file -- consumed directly; or
+    * a directory -- the bridge walks it recursively, picks the one
+      ``.hlfir`` whose MLIR contains ``func.func @<entry>(...)``,
+      and consumes that.  ``entry`` is **required** in this form
+      (without it there's nothing to match against).  Real build
+      systems often emit one ``.hlfir`` per TU under a build / cache
+      directory; passing the root saves the caller from tracking
+      which TU holds the entry.
+
+    All cross-procedure inlining the consumer expects must already be
+    visible in that ``.hlfir`` -- flang produces one ``.hlfir`` per
+    translation unit and only inlines procedures whose bodies are in
+    the same TU.  Procedures USE'd from a different TU stay as
+    external symbol references in the SDFG (handled downstream by
+    ``emit_call`` / ``ExternalCall``); this is the right contract for
+    things like halo exchanges or I/O routines that the consumer
+    explicitly *does* want left external.
+
+    :param hlfir_path: path to a ``.hlfir`` file, or a directory
+        containing one.
+    :param entry: mangled Flang symbol of the target procedure.
+        Optional when ``hlfir_path`` is a single file with one
+        procedure; **required** when ``hlfir_path`` is a directory
+        (it selects which ``.hlfir`` to load).
+    :param pipeline: MLIR pass pipeline; defaults to
+        ``DEFAULT_PIPELINE``.
+    :returns: a built, validated SDFG.
+    :raises FileNotFoundError: directory has no ``.hlfir`` containing
+        ``func.func @<entry>``.
+    :raises ValueError: directory passed without ``entry``, or several
+        ``.hlfir`` files define the same entry symbol.
+    """
+    pipeline = pipeline or DEFAULT_PIPELINE
+    p = Path(hlfir_path)
+    if p.is_dir():
+        if not entry:
+            raise ValueError("build_sdfg_from_hlfir requires entry= when given a "
+                              "directory (it selects which .hlfir to load)")
+        p = _resolve_hlfir_for_entry(p, entry)
+    return SDFGBuilder(str(p), pipeline=pipeline, entry=entry).build()
 
 
 def build_sdfg_from_files(files: Sequence[Union[str, Path]],
@@ -453,8 +334,7 @@ def build_sdfg_from_files(files: Sequence[Union[str, Path]],
                           name: str = "sdfg",
                           pipeline: Optional[str] = None,
                           out_dir: Optional[Union[str, Path]] = None,
-                          preprocess: bool = False,
-                          search_dirs: Sequence[Union[str, Path]] = ()) -> SDFG:
+                          preprocess: bool = False) -> SDFG:
     """Build a :class:`dace.SDFG` from a multi-file Fortran project.
 
     The files (a driver/root plus the modules it ``USE``s, in any
@@ -473,9 +353,6 @@ def build_sdfg_from_files(files: Sequence[Union[str, Path]],
     :param out_dir: scratch directory; a temporary one is used and
         removed when omitted.
     :param preprocess: also run the opt-in ``IF (intvar)`` rewrite.
-    :param search_dirs: extra roots scanned recursively for module
-        definitions, on top of the staged scratch dir (same semantics
-        as :func:`build_sdfg` 's ``search_dirs``).
     :returns: a built, validated SDFG.
     :raises ValueError: ``entry`` missing, or no file defines its
         procedure.
@@ -496,8 +373,7 @@ def build_sdfg_from_files(files: Sequence[Union[str, Path]],
         for p in paths:
             (d / p.name).write_text(p.read_text())
         return build_sdfg(roots[0].read_text(), entry=entry, name=name,
-                           pipeline=pipeline, out_dir=d, preprocess=preprocess,
-                           search_dirs=search_dirs)
+                           pipeline=pipeline, out_dir=d, preprocess=preprocess)
 
     if out_dir is not None:
         return _do(Path(out_dir))
