@@ -489,27 +489,57 @@ def _code_of(line: str) -> str:
     return "".join(code)
 
 
+#: A non-Fortran-statement line that should be carried with the next
+#: ``MODULE`` opener -- a cpp directive (``#include`` /
+#: ``#define`` / ``#ifdef`` / ...), a Fortran ``!`` comment, or a
+#: blank line.  Used by :func:`_module_blocks` so that leading cpp
+#: includes (ICON: ``#include "icon_definitions.inc"`` above the
+#: ``MODULE mo_sync`` opener) survive module extraction; without
+#: that, the macros those headers define (``start_sync_timer``,
+#: ``HANDLE_MPI_ERROR``, ...) stay unexpanded in the merged source
+#: and flang errors on the bare macro invocations.
+_PREAMBLE_LINE_RE = re.compile(r"^\s*(?:#|!|$)")
+
+
 def _module_blocks(text: str):
     """Yield ``(name_lower, block_text)`` for every top-level ``module``
     definition in ``text`` (modules do not nest; ``submodule`` and
     ``module procedure`` are not matched).
 
+    The yielded block also captures any contiguous cpp / comment /
+    blank lines immediately preceding the ``MODULE`` opener, so a
+    top-of-file ``#include "<defs>.inc"`` (and the macro definitions
+    behind it) is preserved when the bridge inlines the module into a
+    merged translation unit.  The capture walks back only over the
+    preamble shape (lines matching :data:`_PREAMBLE_LINE_RE`); it
+    stops at the previous module's ``END MODULE`` or any real
+    Fortran statement, so it never bleeds an earlier module's body
+    into the next one.
+
     :param text: Fortran source.
     :returns: generator of ``(lowercase module name, verbatim block)``.
     """
     lines = text.splitlines(keepends=True)
-    i, n = 0, len(lines)
+    n = len(lines)
+    i = 0
+    last_end = 0  # next-after the previous module's END MODULE (or 0)
     while i < n:
         m = _MODULE_OPEN_RE.match(_code_of(lines[i].rstrip("\r\n")))
         if not m:
             i += 1
             continue
-        start, name = i, m.group(1).lower()
+        name = m.group(1).lower()
+        # Walk back over the contiguous preamble (cpp / comment / blank
+        # lines) so a leading ``#include`` is carried with the module.
+        start = i
+        while start > last_end and _PREAMBLE_LINE_RE.match(lines[start - 1]):
+            start -= 1
         i += 1
         while i < n and not _MODULE_END_RE.match(_code_of(lines[i].rstrip("\r\n"))):
             i += 1
         end = min(i, n - 1)
         yield name, "".join(lines[start:end + 1])
+        last_end = end + 1
         i = end + 1
 
 
@@ -590,7 +620,18 @@ def merge_used_modules(source: str, *, search_dirs=()) -> str:
 
     if not order:
         return source
-    return "".join(order) + "\n" + source
+    # Ensure a newline between every block so a module whose final
+    # ``END MODULE`` line lacks a trailing ``\n`` (a common shape for
+    # human-edited files) does not glue into the next block's
+    # ``MODULE <next>`` opener.
+    parts = []
+    for blk in order:
+        parts.append(blk)
+        if not blk.endswith("\n"):
+            parts.append("\n")
+    parts.append("\n")
+    parts.append(source)
+    return "".join(parts)
 
 
 def preprocess_fortran_source(source: str, *, search_dirs=(), merge: bool = True, if_intvar: bool = False) -> str:

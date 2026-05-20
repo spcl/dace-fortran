@@ -26,7 +26,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional, Sequence, Union
+from typing import List, Optional, Sequence, Union
 
 from dace import SDFG
 
@@ -128,16 +128,73 @@ def _resolve_entry(source: str, entry: Optional[str]) -> str:
     return f"_QM{mod.lower()}P{name.lower()}" if mod else f"_QP{name.lower()}"
 
 
-def _emit_hlfir(source: str, out_dir: Path, name: str, *, merge: bool, preprocess: bool) -> Path:
-    """Write ``source`` to ``<out_dir>/<name>.f90``, preprocess
-    (module-merge + opt-in rewrites), ``flang -emit-hlfir`` it, and
-    return the ``.hlfir`` path."""
+def _collect_include_dirs(roots: Sequence[Path]) -> List[Path]:
+    """Find every ``include`` directory under ``roots`` plus the roots
+    themselves -- both forms appear in real codebases (ICON keeps its
+    ``omp_definitions.inc`` / ``icon_definitions.inc`` under
+    ``src/include/``; the carved-out kernels stage their ``*_t0.inc``
+    next to the kernel ``.f90``).  Used to derive flang's ``-I`` flags
+    without forcing callers to enumerate every subdirectory.
+    """
+    out: list = []
+    seen: set = set()
+
+    def _add(p: Path):
+        p = p.resolve()
+        if p not in seen and p.is_dir():
+            seen.add(p)
+            out.append(p)
+
+    for r in roots:
+        p = Path(r)
+        _add(p)
+        if p.is_dir():
+            for sub in p.rglob("include"):
+                _add(sub)
+    return out
+
+
+def _emit_hlfir(source: str,
+                out_dir: Path,
+                name: str,
+                *,
+                merge: bool,
+                preprocess: bool,
+                search_dirs: Sequence[Path] = ()) -> Path:
+    """Write ``source`` to ``<out_dir>/<name>.F90``, preprocess
+    (module-merge + opt-in rewrites), ``flang -fc1 -cpp -emit-hlfir``
+    it, and return the ``.hlfir`` path.
+
+    ``out_dir`` is always part of the merge search path (it holds the
+    written-out source and any files staged by ``build_sdfg_from_files``);
+    ``search_dirs`` adds more roots scanned recursively so callers can
+    point the merge at an external source tree (e.g. an unmodified
+    ICON checkout) without copying files in first.
+
+    flang runs with ``-cpp`` so legacy codebases that ship ``#ifdef``
+    blocks or ``#include`` cpp directives (ICON, ECRAD, ...) are
+    consumable.  ``_OPENMP`` and ``_OPENACC`` are forced undefined --
+    matching the convention :func:`strip_openmp_directives` already
+    applies at the Fortran-text level so the two layers agree -- and
+    every ``search_dirs`` root (plus any ``include`` directory under
+    it) becomes a ``-I`` so cpp's ``#include`` resolution works on a
+    real source tree without callers staging file copies.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
-    src = out_dir / f"{name}.f90"
-    src.write_text(preprocess_fortran_source(source, search_dirs=[out_dir],
+    # Use ``.F90`` so flang's default file-by-extension detection
+    # routes through its built-in preprocessor; combined with ``-cpp``
+    # this stays consistent if a future flang changes its default.
+    src = out_dir / f"{name}.F90"
+    all_dirs = [out_dir, *[Path(d) for d in search_dirs]]
+    src.write_text(preprocess_fortran_source(source, search_dirs=all_dirs,
                                              merge=merge, if_intvar=preprocess))
     hlfir = out_dir / f"{name}.hlfir"
-    subprocess.check_call([_find_flang(), "-fc1", "-emit-hlfir", str(src), "-o", str(hlfir)])
+    include_dirs = _collect_include_dirs(all_dirs)
+    flags = ["-fc1", "-cpp", "-U_OPENMP", "-U_OPENACC"]
+    for d in include_dirs:
+        flags += ["-I", str(d)]
+    flags += ["-emit-hlfir", str(src), "-o", str(hlfir)]
+    subprocess.check_call([_find_flang(), *flags])
     return hlfir
 
 
@@ -147,7 +204,8 @@ def make_builder(source: str,
                  name: str = "sdfg",
                  pipeline: Optional[str] = None,
                  out_dir: Optional[Union[str, Path]] = None,
-                 preprocess: bool = False) -> SDFGBuilder:
+                 preprocess: bool = False,
+                 search_dirs: Sequence[Union[str, Path]] = ()) -> SDFGBuilder:
     """Resolve the entry, lower ``source`` to HLFIR, and return a
     configured (not yet built) :class:`SDFGBuilder`.
 
@@ -160,6 +218,9 @@ def make_builder(source: str,
     the single procedure in ``source`` (error if none / ambiguous).
     The ``.hlfir`` is parsed into the bridge module at ``SDFGBuilder``
     construction, so a temporary scratch dir is fine.
+
+    ``search_dirs`` are extra roots scanned recursively for module
+    definitions; the scratch / ``out_dir`` is always searched too.
     """
     # ``_resolve_entry`` *validates* the auto case: it raises when an
     # entry-less source has zero or >1 procedures (the contract: no
@@ -172,11 +233,14 @@ def make_builder(source: str,
     # need it to privatise the non-entry procedures).
     _resolve_entry(source, entry)
     pipeline = pipeline or DEFAULT_PIPELINE
+    sdirs = [Path(d) for d in search_dirs]
     if out_dir is not None:
-        hlfir = _emit_hlfir(source, Path(out_dir), name, merge=True, preprocess=preprocess)
+        hlfir = _emit_hlfir(source, Path(out_dir), name, merge=True,
+                            preprocess=preprocess, search_dirs=sdirs)
         return SDFGBuilder(str(hlfir), pipeline=pipeline, entry=entry)
     with tempfile.TemporaryDirectory(prefix=f"hlfir_{name}_") as td:
-        hlfir = _emit_hlfir(source, Path(td), name, merge=True, preprocess=preprocess)
+        hlfir = _emit_hlfir(source, Path(td), name, merge=True,
+                            preprocess=preprocess, search_dirs=sdirs)
         return SDFGBuilder(str(hlfir), pipeline=pipeline, entry=entry)
 
 
@@ -186,7 +250,8 @@ def build_sdfg(source: str,
                name: str = "sdfg",
                pipeline: Optional[str] = None,
                out_dir: Optional[Union[str, Path]] = None,
-               preprocess: bool = False) -> SDFG:
+               preprocess: bool = False,
+               search_dirs: Sequence[Union[str, Path]] = ()) -> SDFG:
     """Build a :class:`dace.SDFG` from a single inline Fortran source.
 
     :param source: Fortran source as one string.
@@ -203,12 +268,18 @@ def build_sdfg(source: str,
         removed when omitted.
     :param preprocess: also run the opt-in ``IF (intvar)`` rewrite
         (off by default so clean source is untouched).
+    :param search_dirs: extra roots scanned recursively for module
+        definitions (point at an unmodified upstream tree like an ICON
+        checkout to resolve ``USE`` chains without staging copies).
+        ``out_dir`` is always part of the search path; ``search_dirs``
+        adds to it, it does not replace it.
     :returns: a built, validated SDFG.
     :raises ValueError: if ``entry`` is ``None`` and the source has no
         procedure or is ambiguous (more than one).
     """
     return make_builder(source, entry=entry, name=name, pipeline=pipeline,
-                        out_dir=out_dir, preprocess=preprocess).build()
+                        out_dir=out_dir, preprocess=preprocess,
+                        search_dirs=search_dirs).build()
 
 
 def build_sdfg_from_files(files: Sequence[Union[str, Path]],
@@ -217,7 +288,8 @@ def build_sdfg_from_files(files: Sequence[Union[str, Path]],
                           name: str = "sdfg",
                           pipeline: Optional[str] = None,
                           out_dir: Optional[Union[str, Path]] = None,
-                          preprocess: bool = False) -> SDFG:
+                          preprocess: bool = False,
+                          search_dirs: Sequence[Union[str, Path]] = ()) -> SDFG:
     """Build a :class:`dace.SDFG` from a multi-file Fortran project.
 
     The files (a driver/root plus the modules it ``USE``s, in any
@@ -236,6 +308,9 @@ def build_sdfg_from_files(files: Sequence[Union[str, Path]],
     :param out_dir: scratch directory; a temporary one is used and
         removed when omitted.
     :param preprocess: also run the opt-in ``IF (intvar)`` rewrite.
+    :param search_dirs: extra roots scanned recursively for module
+        definitions, on top of the staged scratch dir (same semantics
+        as :func:`build_sdfg` 's ``search_dirs``).
     :returns: a built, validated SDFG.
     :raises ValueError: ``entry`` missing, or no file defines its
         procedure.
@@ -256,7 +331,8 @@ def build_sdfg_from_files(files: Sequence[Union[str, Path]],
         for p in paths:
             (d / p.name).write_text(p.read_text())
         return build_sdfg(roots[0].read_text(), entry=entry, name=name,
-                           pipeline=pipeline, out_dir=d, preprocess=preprocess)
+                           pipeline=pipeline, out_dir=d, preprocess=preprocess,
+                           search_dirs=search_dirs)
 
     if out_dir is not None:
         return _do(Path(out_dir))

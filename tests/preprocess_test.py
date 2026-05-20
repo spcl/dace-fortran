@@ -5,6 +5,7 @@ OpenMP / OpenACC sentinel + ``#ifdef`` block strip.
 """
 
 from dace_fortran.preprocess import (
+    merge_used_modules,
     preprocess_fortran,
     promote_real_literals_to_double,
     rewrite_integer_powers,
@@ -326,3 +327,90 @@ def test_strip_openmp_idempotent_and_clean_passthrough():
     once = strip_openmp_directives(noisy)
     twice = strip_openmp_directives(once)
     assert once == twice
+
+
+# --------------------------------------------------------------------------
+# merge_used_modules -- inlining USE'd modules.  Cover the two
+# correctness traps the bridge hits on real ICON sources:
+#   (1) blocks must be separated by a newline (a module file whose
+#       final END MODULE lacks a trailing \n would otherwise glue
+#       into the next module's MODULE opener);
+#   (2) cpp/comment preamble above a MODULE opener must travel with
+#       the module so a leading #include "<defs>.inc" survives the
+#       extraction (without that, macros it defines never expand and
+#       flang errors on bare macro invocations downstream).
+# --------------------------------------------------------------------------
+
+
+def test_merge_inserts_newline_between_module_blocks(tmp_path):
+    """Two module files whose ``END MODULE`` lines lack trailing
+    newlines must not glue together in the merged output."""
+    (tmp_path / "mod_a.f90").write_text("MODULE mod_a\nEND MODULE mod_a")  # no trailing \n
+    (tmp_path / "mod_b.f90").write_text("MODULE mod_b\nEND MODULE mod_b")  # no trailing \n
+    src = "subroutine k\n  use mod_a\n  use mod_b\nend subroutine\n"
+    out = merge_used_modules(src, search_dirs=[tmp_path])
+    # Both modules survive, neither glues into the next opener.
+    assert "MODULE mod_a" in out and "MODULE mod_b" in out
+    assert "END MODULE mod_aMODULE mod_b" not in out
+    assert "END MODULE mod_a\n" in out  # the inserted separator landed
+
+
+def test_merge_carries_leading_cpp_include_with_its_module(tmp_path):
+    """A ``#include "defs.inc"`` above a ``MODULE`` opener must be
+    captured into the module's block; otherwise the macros that
+    header defines vanish from the merged source and downstream
+    references to them break (the ICON failure mode)."""
+    (tmp_path / "mod_a.f90").write_text(
+        "! header comment\n"
+        "#include \"defs.inc\"\n"
+        "#define LOCAL_MACRO 1\n"
+        "MODULE mod_a\n"
+        "  integer :: x = LOCAL_MACRO\n"
+        "END MODULE mod_a\n"
+    )
+    src = "subroutine k\n  use mod_a\nend subroutine\n"
+    out = merge_used_modules(src, search_dirs=[tmp_path])
+    # Module is inlined, AND its preceding cpp preamble + comment are
+    # carried with it -- so cpp will resolve the include/macros.
+    assert "MODULE mod_a" in out
+    assert "#include \"defs.inc\"" in out
+    assert "#define LOCAL_MACRO 1" in out
+    assert "! header comment" in out
+
+
+def test_merge_preamble_does_not_bleed_previous_module_body(tmp_path):
+    """When one source file holds two modules back-to-back, the
+    second module's preamble walk must stop at the first module's
+    ``END MODULE`` -- it cannot retroactively pull part of mod_a
+    into mod_b's block."""
+    (tmp_path / "two_mods.f90").write_text(
+        "MODULE mod_a\n"
+        "  integer :: a_value = 1\n"
+        "END MODULE mod_a\n"
+        "! comment between\n"
+        "#define SHARED_MACRO 7\n"
+        "MODULE mod_b\n"
+        "  integer :: b_value = SHARED_MACRO\n"
+        "END MODULE mod_b\n"
+    )
+    src = "subroutine k\n  use mod_a\n  use mod_b\nend subroutine\n"
+    out = merge_used_modules(src, search_dirs=[tmp_path])
+    # Both modules present.
+    assert "MODULE mod_a" in out and "MODULE mod_b" in out
+    # The between-modules comment / #define attach to mod_b (its
+    # preamble), not mod_a's body.  ``a_value = 1`` must NOT be
+    # repeated and the ``#define`` lands between the two modules.
+    assert out.count("a_value = 1") == 1
+    assert "#define SHARED_MACRO 7" in out
+
+
+def test_merge_passthrough_for_self_contained_source(tmp_path):
+    """A source that USEs only intrinsic modules (or no external
+    modules at all) is returned unchanged -- merge is a no-op."""
+    src = ("subroutine k(a, n)\n"
+           "  use iso_c_binding\n"
+           "  integer :: n\n"
+           "  real(8) :: a(n)\n"
+           "  a(1) = 0.0d0\n"
+           "end subroutine\n")
+    assert merge_used_modules(src, search_dirs=[tmp_path]) == src

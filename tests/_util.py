@@ -253,7 +253,12 @@ class _TestBuilder:
         return sdfg
 
 
-def build_sdfg(source: str, out_dir: Path, name: str = "src", pipeline=None, entry: str | None = None):
+def build_sdfg(source: str,
+               out_dir: Path,
+               name: str = "src",
+               pipeline=None,
+               entry: str | None = None,
+               search_dirs=()):
     """Test funnel over the canonical :func:`dace_fortran.build.make_builder`.
 
     Every test goes through the one real builder (entry
@@ -268,11 +273,15 @@ def build_sdfg(source: str, out_dir: Path, name: str = "src", pipeline=None, ent
     :param entry: mangled Flang symbol of the target procedure.
                   ``None`` -> auto-resolved from the single procedure
                   in ``source`` (error if none / ambiguous).
+    :param search_dirs: extra roots scanned recursively for module
+                        definitions (forwarded to
+                        :func:`dace_fortran.build.make_builder`).
     :return: ``SDFGBuilder`` (or ``_TestBuilder`` wrapper) -- callers
              still do ``.build()``.
     """
     from dace_fortran.build import make_builder
-    builder = make_builder(source, entry=entry, name=name, pipeline=pipeline, out_dir=out_dir)
+    builder = make_builder(source, entry=entry, name=name, pipeline=pipeline,
+                           out_dir=out_dir, search_dirs=search_dirs)
     suffix = _per_test_suffix()
     dump = _dump_dir()
     if suffix or dump is not None:
