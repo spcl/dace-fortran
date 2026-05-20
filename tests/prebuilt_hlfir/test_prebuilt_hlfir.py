@@ -1,8 +1,4 @@
-"""Tier-3 prebuilt-HLFIR end-to-end: a small distributed-Jacobi
-project (4 ``.f90`` files, hard deps on MPI + netCDF) is built by
-its own cmake, then HLFIR-emitted alongside, and the bridge consumes
-only the relevant ``.hlfir`` to lower ``jacobi2d_update`` into an
-SDFG without touching MPI or netCDF.
+"""Tier-3 prebuilt-HLFIR end-to-end across two mock projects.
 
 This shape -- the bridge as a clean consumer of whatever the
 project's build system produces -- is the canonical path for
@@ -10,55 +6,55 @@ codebases too large or dep-tangled for the bridge to compile itself
 (ICON / ECRAD / ...).  The tier-3 API is :func:`build_sdfg_from_hlfir`
 (WIP, see README).
 
-The test:
+What the user does (one extra cmake flag + one extra command):
 
-1. cmake configures + builds the real executable -- this is what
-   verifies the codebase genuinely compiles + links against the
-   system MPI / netCDF.  Test skips if any of cmake / flang-new-21 /
-   mpi / netcdf-fortran are missing on the host.
-2. cmake runs the ``emit_hlfir`` custom target, which drives
-   ``flang-new-21 -fc1 -emit-hlfir`` over the same sources (against
-   flang-compatible ``mpi`` / ``netcdf`` stubs the project's
-   ``CMakeLists.txt`` builds first -- the system Fortran modules
-   are in gfortran's binary format and flang cannot consume them).
-3. ``build_sdfg_from_hlfir(<build_dir>, entry=...)`` walks the
-   build dir, finds the ``.hlfir`` that defines the entry, and
-   lowers it.
+1. add ``-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`` to the cmake config
+2. after the regular build, run::
 
-The same ``.hlfir`` ``mod_jacobi`` also contains ``halo_exchange``
-(uses MPI) and ``stencil_5pt`` (the inlinable helper).  The bridge
-lowers only ``jacobi2d_update``; the test asserts:
+      python -m dace_fortran.emit_hlfir \\
+          <build_dir>/compile_commands.json \\
+          --out <build_dir>/hlfir \\
+          [--stub <stub.f90>]...
 
-* the produced SDFG validates,
-* the helper ``stencil_5pt`` was inlined (the SDFG arglist does
-  not surface any ``stencil_5pt`` artefact -- the body is fused
-  into the jacobi loop),
-* the MPI-using sibling ``halo_exchange`` is absent (no
-  ``MPI_Sendrecv`` reference anywhere in the SDFG arrays /
-  tasklets).
+The helper reads the artefact for build order + ``-I`` / ``-D``
+flags, so it works on any project that emits a
+``compile_commands.json`` (cmake / ninja / fpm).  ``--stub`` injects
+flang-buildable stand-ins for modules flang has no shipped ``.mod``
+for (``mpi`` / ``netcdf`` / ``hdf5`` / ...).
+
+Two projects are exercised here to confirm the helper is generic:
+
+* ``jacobi/`` -- 4 ``.f90`` files, hard deps on MPI + netCDF, two
+  stubs.  Entry ``jacobi2d_update`` has an inlinable
+  ``stencil_5pt`` helper and a sibling ``halo_exchange`` that uses
+  MPI -- the bridge lowers only the entry, MPI references stay out
+  of the SDFG.
+* ``csr_spmv/`` -- 2 ``.f90`` files, no external deps, no stubs.
+  Entry ``csr_spmv`` has an inlinable ``dot_row`` helper.
 """
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Sequence
 
 import pytest
 
 from _util import have_flang
 from dace_fortran import build_sdfg_from_hlfir
+from dace_fortran.emit_hlfir import emit as emit_hlfir
 
 _HERE = Path(__file__).resolve().parent
+_JACOBI_DIR = _HERE / "jacobi"
+_CSR_DIR = _HERE / "csr_spmv"
+_JACOBI_STUBS = [_JACOBI_DIR / "mpi_stub.f90", _JACOBI_DIR / "netcdf_stub.f90"]
 
 
-def _tools_available() -> bool:
-    """Hard-skip when any of the prerequisites is missing.  The test
-    requires cmake, flang-new-21, a system MPI compiler wrapper, and
-    netcdf-fortran (which the cmake ``find_package`` resolves via
-    pkg-config) -- not point reporting failures when the env is
-    incomplete."""
-    if shutil.which("cmake") is None:
-        return False
-    if not have_flang():
-        return False
+def _has_cmake_and_flang() -> bool:
+    return shutil.which("cmake") is not None and have_flang()
+
+
+def _has_mpi_netcdf() -> bool:
+    """jacobi needs system MPI + netcdf-fortran; csr_spmv does not."""
     if shutil.which("mpif90") is None and shutil.which("mpifort") is None:
         return False
     pkg = shutil.which("pkg-config")
@@ -67,39 +63,61 @@ def _tools_available() -> bool:
     return subprocess.run([pkg, "--exists", "netcdf-fortran"]).returncode == 0
 
 
-pytestmark = pytest.mark.skipif(
-    not _tools_available(),
+def _build_and_emit(src_dir: Path, build_dir: Path, hlfir_dir: Path,
+                    target: str, stubs: Sequence[Path] = ()):
+    """Run the canonical user flow for one project: configure cmake
+    with ``-DCMAKE_EXPORT_COMPILE_COMMANDS=ON``, build the project's
+    own executable target, then emit HLFIR from the
+    ``compile_commands.json`` artefact."""
+    build_dir.mkdir(parents=True, exist_ok=True)
+    subprocess.check_call([
+        "cmake", "-S", str(src_dir), "-B", str(build_dir),
+        "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+    ])
+    subprocess.check_call(["cmake", "--build", str(build_dir), "--target", target])
+    emit_hlfir(compile_commands=build_dir / "compile_commands.json",
+               stubs=list(stubs),
+               out_dir=hlfir_dir)
+
+
+@pytest.mark.skipif(
+    not (_has_cmake_and_flang() and _has_mpi_netcdf()),
     reason="cmake / flang-new-21 / MPI / netcdf-fortran missing",
 )
-
-
-def _cmake_build(build_dir: Path):
-    """Configure + build the real exe + the ``emit_hlfir`` target."""
-    build_dir.mkdir(parents=True, exist_ok=True)
-    subprocess.check_call(["cmake", "-S", str(_HERE), "-B", str(build_dir)])
-    subprocess.check_call(["cmake", "--build", str(build_dir), "--target", "jacobi"])
-    subprocess.check_call(["cmake", "--build", str(build_dir), "--target", "emit_hlfir"])
-
-
 def test_jacobi_update_from_prebuilt_hlfir(tmp_path: Path):
-    build_dir = tmp_path / "build"
-    _cmake_build(build_dir)
+    """Project 1 -- 4 files, MPI + netCDF, stubs needed."""
+    _build_and_emit(_JACOBI_DIR, tmp_path / "build", tmp_path / "hlfir",
+                    target="jacobi", stubs=_JACOBI_STUBS)
 
-    # The bridge walks ``build_dir`` for the .hlfir whose MLIR holds
-    # ``func.func @_QMmod_jacobiPjacobi2d_update``.  ``mod_jacobi.hlfir``
-    # also contains ``halo_exchange`` (MPI-using) and ``stencil_5pt``
-    # (inlinable helper) -- the bridge lowers only the entry.
     entry = "_QMmod_jacobiPjacobi2d_update"
-    sdfg = build_sdfg_from_hlfir(build_dir, entry=entry)
+    sdfg = build_sdfg_from_hlfir(tmp_path / "hlfir", entry=entry)
     sdfg.validate()
 
-    # Inlining: ``stencil_5pt`` should have been fused into the
-    # jacobi loop, not left as a separate access / tasklet ``.label``.
     arr_names = " ".join(sdfg.arrays.keys()).lower()
     assert "stencil_5pt" not in arr_names, (
         f"stencil_5pt should have been inlined; appeared in SDFG arrays: "
         f"{sorted(sdfg.arrays.keys())}")
-    # No MPI calls survive (the sibling halo_exchange was not lowered).
     for node, _ in sdfg.all_nodes_recursive():
         label = (getattr(node, "label", "") or "").lower()
         assert "mpi_" not in label, f"MPI reference leaked into SDFG: {node}"
+
+
+@pytest.mark.skipif(
+    not _has_cmake_and_flang(),
+    reason="cmake / flang-new-21 missing",
+)
+def test_csr_spmv_from_prebuilt_hlfir(tmp_path: Path):
+    """Project 2 -- 2 files, no external deps, no stubs.  Confirms
+    the helper handles a structurally-different project (different
+    file count, no MPI/netCDF, no stubs) with no per-project plumbing."""
+    _build_and_emit(_CSR_DIR, tmp_path / "build", tmp_path / "hlfir",
+                    target="csr_demo")
+
+    entry = "_QMmod_csrPcsr_spmv"
+    sdfg = build_sdfg_from_hlfir(tmp_path / "hlfir", entry=entry)
+    sdfg.validate()
+
+    arr_names = " ".join(sdfg.arrays.keys()).lower()
+    assert "dot_row" not in arr_names, (
+        f"dot_row should have been inlined; appeared in SDFG arrays: "
+        f"{sorted(sdfg.arrays.keys())}")

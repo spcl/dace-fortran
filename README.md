@@ -128,22 +128,32 @@ Entry point`` below.
 
 ## Stages
 
-**(0) Pre-process source.** `dace_fortran.preprocess` holds
-three text rewrites that must run before flang (they change what
-flang accepts, or what arithmetic each backend is free to pick).
-They are SED-style regex transforms, not a Fortran parser, so each
-is deliberately narrow; comment- and string-awareness is shared via
+**(0) Pre-process source.** `dace_fortran.preprocess` holds the
+text rewrites that must run before flang (they change what flang
+accepts, or what arithmetic each backend is free to pick).  All
+are SED-style regex transforms, not a Fortran parser, so each is
+deliberately narrow; comment- and string-awareness is shared via
 `_scan_line` so a `!` or `**` inside a character literal is never
 touched.
 
+- `merge_used_modules` -- inlines every externally-`USE`-d module's
+  real source so flang sees one self-contained translation unit.
+  Pass-through for self-contained input (the entire inline-source
+  test suite); only genuine multi-file projects activate it.
+- `strip_openmp_directives` -- drops `!$OMP` / `!$ACC` / `!$`
+  sentinel lines, the ICON `#include "omp_definitions.inc"` cpp
+  include, and `#ifdef _OPENMP` / `#ifdef _OPENACC` conditional
+  blocks (taking `#else` when present); unrelated cpp passes
+  through. Runs **unconditionally** so legacy codebases that ship
+  accelerator sentinels are consumable without `-fopenmp`.
 - `rewrite_integer_powers` -- expands an integer-valued REAL-literal
   power (`x**2.0` -> `(x*x)`, `(p-q)**3.0` -> `((p-q)*(p-q)*(p-q))`).
-  Runs **unconditionally** in `compile_to_hlfir`: algebraically exact
-  and removes a backend-dependent `pow(x, 2.0)` vs `x*x` rounding
-  difference against the gfortran reference. A bare-integer exponent
-  (`x**2`) is left for flang's own (bit-identical) integer-power
-  lowering; genuine fractional powers (`**0.5`) stay as `pow()`; a
-  base containing a call/array reference is left alone (duplicating it
+  Runs **unconditionally**: algebraically exact and removes a
+  backend-dependent `pow(x, 2.0)` vs `x*x` rounding difference
+  against the gfortran reference. A bare-integer exponent (`x**2`)
+  is left for flang's own (bit-identical) integer-power lowering;
+  genuine fractional powers (`**0.5`) stay as `pow()`; a base
+  containing a call/array reference is left alone (duplicating it
   would invoke it twice).
 - `promote_real_literals_to_double` -- single/default REAL literals to
   an explicit double form (`2.0` -> `2.0D0`). A standalone utility
@@ -153,7 +163,7 @@ touched.
   INTEGER scalars. flang-new-21 rejects bare INTEGER as an IF
   condition (only LOGICAL is legal); ECRAD / CloudSC (`IF
   (laericeauto)`) / ICON scaffolding ship this. **Opt-in** per call
-  site (`compile_to_hlfir(..., preprocess=True)`); off by default so
+  site (pass `preprocess=True` to `build_sdfg`); off by default so
   we don't paper over real issues in clean source.
 
 **(1) Parse.** One or more `.hlfir` files are loaded into a shared
@@ -509,15 +519,28 @@ dace_fortran/
 |   |--- block_builders.py       per-Fortran-section emitters
 |   |--- loop_copy.py            alias vs deep-copy renderers
 |   \--- emit_bindings.py        -> <entry>_bindings.f90
-|--- hlfir_to_sdfg.py   compat shim  --  re-exports from builder/
-\--- fortran_parser.py  top-level entry: generate_sdfg(...)
+|--- build.py           public entry: build_sdfg / build_sdfg_from_files /
+|                                     build_sdfg_from_hlfir (tier-3, WIP)
+|--- emit_hlfir.py      tier-3 helper: ``python -m dace_fortran.emit_hlfir
+|                       <build>/compile_commands.json --out <build>/hlfir [--stub ...]``
+|--- external.py        register_external / keep_external (ExternalCall libnode +
+|                       link-flag injection for separately-compiled bind(c) callees)
+|--- preprocess.py      Fortran-text rewrites: USE merge, OMP/ACC strip,
+|                       integer-power expansion, IF (intvar) -> /=0
+|--- build_bridge.py    one-time CMake build of the C++ HLFIR bridge
+|--- hlfir_to_sdfg.py   low-level entry: SDFGBuilder / generate_sdfg(...)
+\--- integer_power_exponents.py  (legacy detail; called from preprocess.py)
 ```
 
 ## Entry point
 
-`dace_fortran` exposes one canonical, documented surface for turning
-Fortran into a built, validated `dace.SDFG`.  Everything is lazy
-(`import dace_fortran` is cheap; the C++ bridge builds on first use).
+`dace_fortran` exposes a small documented surface for turning
+Fortran into a built, validated `dace.SDFG` -- three tiers ordered
+by how much the bridge does on the caller's behalf
+(`build_sdfg` -- inline / `build_sdfg_from_files` -- multi-file /
+`build_sdfg_from_hlfir` -- prebuilt HLFIR; see *Tier 3* below).
+Everything is lazy (`import dace_fortran` is cheap; the C++ bridge
+builds on first use).
 
 ```python
 import dace_fortran
@@ -578,30 +601,54 @@ working for codebases too large or dep-tangled for the bridge to
 compile alone (ICON-scale: hundreds of modules, real `netcdf` /
 `hdf5` / `yaxt` externals, custom cpp gates).  Those codebases
 already have a working build system that knows the right include
-paths, the right intrinsic-module path, the right cpp defines.
-`build_sdfg_from_hlfir` is the **WIP** tier-3 entry point that lets
-the bridge get out of the way: the user injects `flang-new-21 -fc1
--emit-hlfir ...` into their build (FCFLAGS, cmake custom target,
-make rule, fpm wrapper), gets one `.hlfir` per TU into a build
-directory, and the bridge consumes the relevant one:
+paths, intrinsic-module path, cpp defines.  Tier 3 lets the bridge
+stop competing with it: the user runs HLFIR emission once, points
+the bridge at the result, done.
+
+**What the user does** (two small additions to an existing build):
+
+1. configure with **one extra cmake flag**:
+   `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON` (every Ninja / Make /
+   ninja-multi-config generator already supports this; cmake drops
+   `compile_commands.json` into the build dir).
+2. after the regular build, **run the helper**:
+   ```bash
+   python -m dace_fortran.emit_hlfir <build_dir>/compile_commands.json \
+       --out <build_dir>/hlfir \
+       [--stub <stub.f90>]...           # for mpi / netcdf / hdf5 / ...
+   ```
+
+The helper inherits Fortran build order and `-I` / `-D` flags from
+the artefact -- so it's project-generic and never has to guess.
+`--stub` injects flang-buildable stand-ins for modules flang has no
+shipped `.mod` for (`mpi`, `netcdf`, `hdf5`, ...).  Then the bridge
+just consumes the output:
 
 ```python
 sdfg = dace_fortran.build_sdfg_from_hlfir(
-    "/path/to/build_dir",                              # file or directory
-    entry="_QMmod_jacobiPjacobi2d_update")             # required when dir
+    "<build_dir>/hlfir",                                # dir or single .hlfir
+    entry="_QMmod_jacobiPjacobi2d_update")              # required when dir
 ```
 
-`tests/prebuilt_hlfir/` is the worked example: a 4-file
-distributed-Jacobi mock project (`mod_grid` / `mod_jacobi` /
-`mod_io` / `driver`) with real `find_package(MPI)` +
-`find_package(NetCDF)`; cmake builds the executable to verify the
-codebase actually compiles, then runs an `emit_hlfir` custom target
-to drop `.hlfir` files alongside; the test calls
-`build_sdfg_from_hlfir(build_dir, entry=...)` to lower
-`jacobi2d_update` without the bridge needing MPI or netCDF on its
-side.  WIP because the API only consumes one `.hlfir` (no
-cross-TU inlining yet) and the user is still responsible for
-ensuring the right inlining happens at HLFIR-emit time.
+`tests/prebuilt_hlfir/` ships **two worked example projects** to
+prove the pipeline is generic:
+
+* `jacobi/` -- 4 files, hard deps on real MPI + netCDF; uses two
+  stubs (`mpi_stub.f90`, `netcdf_stub.f90`).  Entry
+  `jacobi2d_update` has an inlinable `stencil_5pt` helper and a
+  sibling `halo_exchange` that *does* use MPI -- the bridge lowers
+  only the entry, MPI references stay out of the SDFG.
+* `csr_spmv/` -- 2 files, no external deps, no stubs.  Entry
+  `csr_spmv` has an inlinable `dot_row` helper.
+
+Both projects ship their own *plain* `CMakeLists.txt` (they know
+nothing about HLFIR or the bridge); the test calls cmake +
+`emit_hlfir` exactly the way a real user would.
+
+**Why WIP**: cross-TU inlining is the user's responsibility -- flang
+emits one `.hlfir` per translation unit and only inlines procedures
+whose bodies are in the same TU.  Procedures `USE`d from a different
+TU stay as external symbol references in the SDFG.
 
 ## Extending the frontend
 

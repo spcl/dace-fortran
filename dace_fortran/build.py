@@ -1,21 +1,28 @@
-"""Public entry point for building a :class:`dace.SDFG` from Fortran.
+"""Public entry points for building a :class:`dace.SDFG` from Fortran.
 
-This is the one documented surface for turning Fortran into an SDFG;
-it composes the pieces (module merge / text rewrites -> ``flang-new``
-HLFIR -> the MLIR/C++ bridge -> ``SDFGBuilder``) so callers do not
-wire them by hand:
+Three entry points layered by how much the bridge does on the
+caller's behalf:
 
-- :func:`build_sdfg` -- a single inline source string.
+- :func:`build_sdfg` -- a single inline source string; the bridge
+  composes module merge / text rewrites -> ``flang-new`` HLFIR ->
+  the MLIR/C++ bridge -> ``SDFGBuilder``.
 - :func:`build_sdfg_from_files` -- a multi-file project (a driver
   plus the modules it ``USE``s, in any order); the file defining
   ``entry`` is the root, the rest are merged in via
-  ``merge_used_modules``.
+  ``merge_used_modules`` so flang sees one self-contained TU.
+- :func:`build_sdfg_from_hlfir` (**WIP**, tier 3) -- the bridge
+  does not drive flang at all; the user's own build system emits
+  ``.hlfir`` via :mod:`dace_fortran.emit_hlfir` and the bridge
+  consumes it.  This is the canonical path for codebases too
+  large or dep-tangled for the bridge to compile alone
+  (ICON-scale, real external libraries).
 
-Both return a built, validated :class:`dace.SDFG`.  ``entry`` is the
-mangled Flang symbol of the target procedure (``_QPrun`` for a free
-subroutine, ``_QMmodPbar`` for a module procedure); it selects which
-procedure the SDFG represents (and, for the multi-file form, which
-input file is the root).
+All three return a built, validated :class:`dace.SDFG`.  ``entry``
+is the mangled Flang symbol of the target procedure (``_QPrun`` for
+a free subroutine, ``_QMmodPbar`` for a module procedure); it
+selects which procedure the SDFG represents (and, for the
+multi-file / multi-``.hlfir`` forms, which input the bridge starts
+from).
 
 External (separately compiled) ``bind(c)`` functions a kernel calls
 are declared through :mod:`dace_fortran.external`
@@ -231,10 +238,13 @@ def build_sdfg(source: str,
                         out_dir=out_dir, preprocess=preprocess).build()
 
 
-#: ``func.func @<symbol>(`` -- the MLIR opener for a procedure inside
-#: a flang-emitted ``.hlfir``.  Used to scan a folder for the file
-#: that contains the requested entry symbol.
-_HLFIR_FUNC_RE = re.compile(r"func\.func\s+(?:private\s+)?@([A-Za-z_]\w*)\s*\(")
+#: ``func.func @<symbol>(`` -- the MLIR opener for a procedure
+#: **definition** inside a flang-emitted ``.hlfir``.  The negative
+#: lookahead drops the ``func.func private @<sym>(...)`` form, which
+#: is just a forward declaration for a cross-TU call site (flang
+#: emits one of those in every ``.hlfir`` whose source calls the
+#: procedure); only the file with the actual body should match.
+_HLFIR_FUNC_RE = re.compile(r"func\.func\s+(?!private\b)@([A-Za-z_]\w*)\s*\(")
 
 
 def _resolve_hlfir_for_entry(root: Path, entry: str) -> Path:
