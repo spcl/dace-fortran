@@ -10,6 +10,12 @@ on:
 
 env:
   CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+  # Default-on oversubscribe so any ``mpirun`` invocation in this job
+  # (the explicit ``-m mpi`` step + anything a test launches itself)
+  # can map more ranks than GH-runner cores without ``--oversubscribe``
+  # on every command line.
+  OMPI_MCA_rmaps_base_oversubscribe: "1"
+  PRTE_MCA_rmaps_default_mapping_policy: ":oversubscribe"
 
 concurrency:
   group: ${{github.workflow}}-${{github.ref}}

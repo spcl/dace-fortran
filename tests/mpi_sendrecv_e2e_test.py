@@ -3,7 +3,7 @@ lowered to DaCe ``dace.libraries.mpi`` nodes.
 
 Run under mpirun with >=2 ranks, e.g.::
 
-    mpirun -n 2 python -m pytest -p no:cacheprovider \\
+    mpirun --oversubscribe -n 2 python -m pytest -p no:cacheprovider \\
         tests/mpi_sendrecv_e2e_test.py
 
 mpi4py supplies rank/size and ``dace.sdfg.utils.distributed_compile``
@@ -63,7 +63,7 @@ def test_ring_send_recv_numeric(tmp_path: Path):
     rank = comm.Get_rank()
     size = comm.Get_size()
     if size < 2:
-        pytest.skip("MPI Send/Recv e2e needs >= 2 ranks (mpirun -n 2 ...)")
+        pytest.skip("MPI Send/Recv e2e needs >= 2 ranks (mpirun --oversubscribe -n 2 ...)")
 
     # Build + name the SDFG only on rank 0; distributed_compile shares
     # the compiled artifact with the other ranks.
@@ -116,7 +116,7 @@ def test_nonblocking_ring_numeric(tmp_path: Path):
     rank = comm.Get_rank()
     size = comm.Get_size()
     if size < 2:
-        pytest.skip("MPI Isend/Irecv e2e needs >= 2 ranks (mpirun -n 2 ...)")
+        pytest.skip("MPI Isend/Irecv e2e needs >= 2 ranks (mpirun --oversubscribe -n 2 ...)")
 
     sdfg = None
     if rank == 0:

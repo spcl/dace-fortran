@@ -108,7 +108,7 @@ def test_user_comm_split_send_recv(tmp_path: Path):
     wrank = world.Get_rank()
     wsize = world.Get_size()
     if wsize < 4:
-        pytest.skip("user-comm split e2e needs 4 ranks (mpirun -n 4 ...)")
+        pytest.skip("user-comm split e2e needs 4 ranks (mpirun --oversubscribe -n 4 ...)")
 
     # Even ranks {0,2} -> one comm, odd {1,3} -> another (size 2 each).
     split = world.Split(color=wrank % 2, key=wrank)
