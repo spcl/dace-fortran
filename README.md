@@ -9,132 +9,186 @@ consumes Flang's already-elaborated HLFIR (MLIR) instead, walks it
 into a DaCe SDFG, and regenerates a Fortran wrapper that preserves
 the caller's original interface.
 
-The pipeline is five sequential stages. Each stage strengthens an
-invariant; the Python walker only has to understand one narrow IR
-shape because the earlier stages normalised away the irregularities.
+The pipeline is five steps, each strengthening an invariant so the
+Python walker has to understand only one narrow IR shape.
 
 ```
-.f90 -- flang -fc1 -emit-hlfir --> .hlfir file(s)
-                                       |
-                            (1) parse + snapshot interface
-                                       |
-                        (2) inline + verify + DCE
-                                       |
-                       (3) normalise (HLFIR rewrites)
-                                       |
-                            (4) build SDFG
-                                       |
-                          (5) regen binding
-                                       v
-              <entry>_bindings.f90  +  compiled SDFG .so
+ .f90 --(0)--> .hlfir --(1)--> (2) --(3)--> (4) --(5)--> bindings.f90 + .so
 ```
+
+- **(0) Pre-process** the Fortran text (flang-friendly rewrites:
+  USE-merge, OMP/ACC strip, integer-power expansion, optional
+  `IF (intvar)` fix) and run `flang-new-21 -fc1 -emit-hlfir`.
+- **(1) Parse** one or more `.hlfir` files into a single MLIR
+  `ModuleOp`; snapshot the caller-visible dummy list + derived-type
+  layouts as `FortranInterface`.
+- **(2) Inline + link.** `hlfir-inline-all` folds the call tree into
+  the pinned entry, `symbol-dce` drops dead siblings, and (multi-file)
+  `hlfir-verify-no-unresolved-calls` fails loudly if any `fir.call`
+  survives outside the runtime / libm / C-stdlib allowlist.
+- **(3) Normalise.** HLFIR rewrites in strict order: select-case
+  lowering, element-alias folding, vector-subscript gather/scatter
+  expansion, polymorphism rejection, AoS->SoA flattening (emits the
+  `hlfir.flatten_plan` attribute), shape propagation, intent-less
+  default, CF-to-SCF, then `sccp / canonicalize / cse`.
+- **(4) Build SDFG.** Walk HLFIR into a small AST (`loop` / `while`
+  / `conditional` / `assign` / `copy` / `memset` / `libcall` /
+  `reduce` / `break` / `return`), emit the SDFG, run the
+  post-generation cleanup (loop-iter SSA, length-1-transient -> scalar,
+  integer power exponents), then pin a `FrozenSignature` snapshot of
+  the arglist + free symbols.
+- **(5) Regen binding.** Read `FortranInterface` + `FrozenSignature`
+  + `FlattenPlan` and emit `<entry>_bindings.f90`: a ref-counted
+  Fortran module that preserves the caller's original signature,
+  populates SDFG symbols via `size` / `lbound`, and per struct member
+  picks between a zero-copy `c_f_pointer` alias and a Fortran
+  `do`-loop deep copy.
 
 ## Quick start
 
-End-to-end on the full ICON ``velocity_tendencies`` kernel: take the
-Fortran source, generate the SDFG and its Fortran binding, then prove
-the binding still matches after DaCe transformations via the frozen
-signature.
+End-to-end: a `.f90` to an SDFG to a Fortran-callable `.so` whose
+binding is signature-locked against later DaCe transformations.
 
 ```python
-import shutil, subprocess
-from dace_fortran import SDFGBuilder
-from dace_fortran.preprocess import preprocess_fortran_source
-from dace_fortran.bindings import (
-    build_fortran_library, emit_bindings, SignatureDriftError,
-)
+import dace_fortran
 
-# 1. velocity_tendencies.f90 -> HLFIR -> SDFG.  preprocess_fortran_source
-#    inlines every USE-d module into one TU (no-op for a self-contained
-#    file) and expands integer-valued real powers.
-src = preprocess_fortran_source(open("velocity_full.f90").read(),
-                                search_dirs=["."])
-open("velocity_full.merged.f90", "w").write(src)
+# 1. Source -> SDFG.  ``entry`` is the mangled flang symbol;
+#    ``_QPname`` = free subroutine, ``_QM<mod>Pname`` = module procedure.
+sdfg = dace_fortran.build_sdfg(open("velocity_full.f90").read(),
+                               entry="_QPvelocity_tendencies")
 
-flang = shutil.which("flang-new-21")          # flang-new-21 only
-subprocess.check_call([flang, "-fc1", "-emit-hlfir",
-                       "velocity_full.merged.f90", "-o", "velocity_full.hlfir"])
-
-# The builder snapshots the kernel's argument list into
-# sdfg._frozen_signature at build() time.
-builder = SDFGBuilder("velocity_full.hlfir", entry="_QPvelocity_tendencies")
-sdfg = builder.build()
-
-# 2. Optimise.  Any transformation may rewrite the SDFG.
+# 2. Optimise.  Any DaCe transformation is allowed.
 sdfg.simplify()
-# ... auto-opt / library-node expansion / etc.
 
-# 3. Build a Fortran-callable library in one call.  build_fortran_library
-#    compiles the (optimised) SDFG with vanilla DaCe codegen, re-checks
-#    the frozen signature against the live SDFG (a drifted arg order /
-#    dtype / free-symbol set raises SignatureDriftError -- the emitted
-#    binding would no longer be ABI-valid), emits the binding, and
-#    gfortran-links binding + your sources against the SDFG .so.
-#    ``iface`` / ``plan`` are built as in
-#    tests/icon_full/test_velocity_full_bindings_e2e.py.
+# 3. Emit + link a Fortran-callable library.  ``build_fortran_library``
+#    re-checks ``sdfg._frozen_signature`` against the live SDFG before
+#    emitting the binding (a transformation that re-ordered arg slots
+#    or changed dtypes raises ``SignatureDriftError``); writes the
+#    binding to ``<out_dir>/<entry>_bindings.f90``; gfortran-links it
+#    with ``extra_sources`` against the SDFG ``.so``.  Build the
+#    ``iface`` / ``plan`` arguments as
+#    ``tests/icon_full/test_velocity_full_bindings_e2e.py`` does.
+from dace_fortran.bindings import build_fortran_library, SignatureDriftError
 try:
-    # mode: "debug" (default, bit-reproducible: -O3 -g + strict IEEE)
-    #       | "release" (-O3 -ffast-math) ; or flags=[...] to override.
-    lib = build_fortran_library(
-        sdfg, iface, plan, out_dir="build",
-        prelude_sources=["driver_modules.f90"],   # binding USEs these
-        extra_sources=["caller.f90"],             # these USE the binding
-        mode="debug",
-    )
+    lib = build_fortran_library(sdfg, iface, plan, out_dir="build",
+                                extra_sources=["caller.f90"],
+                                mode="debug")  # or "release", or flags=[...]
 except SignatureDriftError as e:
     raise SystemExit(f"binding invalidated by a transformation: {e}")
 
-handle = lib.load()                 # ctypes.CDLL of the linked .so
-print("emitted binding saved at:", lib.bindings_f90)   # inspect / ship it
-print("Fortran-callable library:", lib.so_path)
+lib.load()                                      # -> ctypes.CDLL
+print("binding:", lib.bindings_f90, "/ library:", lib.so_path)
 ```
 
-If the DaCe kernel needs an OpenMP runtime, provide it through the
-environment, not the library: ``LD_PRELOAD=<your libgomp/libomp>
-python ...``.  The runtime is not hard-coded so any implementation
-works.
+If the SDFG needs an OpenMP runtime, provide it via
+``LD_PRELOAD=<libgomp/libomp> python ...``; the library never hard-codes
+one.  The lower-level explicit sequence (``emit_bindings`` →
+``frozen.verify_against(sdfg)`` → gfortran link) is still supported
+and is what ``build_fortran_library`` consolidates.
 
-The emitted ``<entry>_bindings.f90`` is written to ``out_dir`` and
-exposed as ``lib.bindings_f90`` -- save, diff or ship it independently
-of the linked ``.so``.  ``emit_bindings(frozen, iface, plan, path)``
-dumps just that file if you only want the wrapper source.
+### Worked examples
 
-The explicit sequence (compile -> ``emit_bindings`` ->
-``frozen.verify_against(sdfg)`` -> gfortran-link) is still fully
-supported and is what ``build_fortran_library`` consolidates; the
-velocity e2e test exercises **both** paths.
+**Single Fortran file → SDFG.**  No external deps, no cmake.
+Reference: most of `tests/*_test.py` (e.g. `baseline_arithmetic_test.py`,
+`do_loop_exit_test.py`).
 
-```sh
-# Manual integrate (the un-consolidated path): caller + emitted binding.
-gfortran -c velocity_tendencies_bindings.f90
-gfortran caller.f90 velocity_tendencies_bindings.o \
-         -L"$(dirname "$so_path")" -Wl,-rpath,"$(dirname "$so_path")" \
-         -l:"$(basename "$so_path")" -o app
-./app    # caller -> binding -> compiled (transformed) SDFG
+```python
+src = """
+subroutine add_array(a, n)
+  implicit none
+  integer, intent(in) :: n
+  real(8), intent(inout) :: a(n)
+  integer :: i
+  do i = 1, n
+    a(i) = a(i) + 1.0d0
+  end do
+end subroutine add_array
+"""
+sdfg = dace_fortran.build_sdfg(src, entry="_QPadd_array")
+a = np.asfortranarray(np.zeros(8, dtype=np.float64))
+sdfg(a=a, n=8)
+assert (a == 1.0).all()
 ```
 
-``caller.f90`` simply ``USE``s the generated
-``<entry>_dace_bindings`` module and calls ``<entry>_dace(...)`` with
-the original Fortran argument list -- the binding does the AoS->SoA
-unpack the ``FlattenPlan`` recorded.  ``tests/icon_full/
-test_velocity_full_bindings_e2e.py`` is the complete worked driver
-(builds ``iface``/``plan``, gfortran-compiles caller + driver +
-binding + shim, links the ``.so``, runs, and checks results).
+**Multi-file project via cmake + `emit_hlfir`.**  The bridge stops
+driving flang; the user's existing build does it, the helper
+emits HLFIR, the bridge consumes.  Reference:
+`tests/prebuilt_hlfir/test_prebuilt_hlfir.py` (jacobi: MPI + netCDF
+with `mpi_stub.f90` / `netcdf_stub.f90`; csr_spmv: 2 files, no
+externals).
 
-To go from a ``.f90`` directly (multi-file projects are ``USE``-merged
-into one TU first), use the unified
-``dace_fortran.preprocess.preprocess_fortran_source``; see ``##
-Entry point`` below.
+```bash
+# user's existing build + ONE extra flag:
+cmake -S src/ -B build/ -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+cmake --build build/                                       # project as usual
 
-## Stages
+# ONE extra command afterwards -- helper drives flang per TU,
+# inheriting build order + -I / -D from the artefact:
+python -m dace_fortran.emit_hlfir build/compile_commands.json \
+    --out build/hlfir \
+    --stub stubs/mpi_stub.f90 --stub stubs/netcdf_stub.f90    # for flang's missing intrinsics
+```
 
-**(0) Pre-process source.** `dace_fortran.preprocess` holds the
-text rewrites that must run before flang (they change what flang
-accepts, or what arithmetic each backend is free to pick).  All
-are SED-style regex transforms, not a Fortran parser, so each is
-deliberately narrow; comment- and string-awareness is shared via
-`_scan_line` so a `!` or `**` inside a character literal is never
-touched.
+```python
+sdfg = dace_fortran.build_sdfg_from_hlfir(
+    "build/hlfir", entry="_QMmod_jacobiPjacobi2d_update")
+```
+
+**External `bind(c)` library.**  The kernel calls a separately
+compiled Fortran function; register its signature out-of-band and
+the bridge lowers the `CALL` to an `ExternalCall` library node.
+Reference: `tests/external_call/test_external_call.py`,
+`tests/external_call/test_keep_external.py`.
+
+```fortran
+! foo.f90 -- compiled standalone into libfoo.so
+subroutine foo(a, n) bind(c, name="foo")
+  use iso_c_binding
+  integer(c_int), value :: n
+  real(c_double), intent(inout) :: a(n)
+  a = a + 1.0d0
+end subroutine foo
+```
+
+```python
+import subprocess
+from dace_fortran import Arg, build_sdfg, register_external, ExternalSignature
+subprocess.check_call(["gfortran", "-shared", "-fPIC", "-o", "libfoo.so", "foo.f90"])
+
+register_external("foo", ExternalSignature(
+    c_name="foo",
+    args=[Arg("array", "float64", "inout"),    # inout default; missed write = silent bug
+          Arg("scalar", "int32", "in")],
+    libraries=["/abs/path/libfoo.so"]))        # linked into the SDFG .so with rpath
+
+src = """
+subroutine run(a, n)
+  use iso_c_binding
+  integer(c_int), intent(in) :: n
+  real(c_double), intent(inout) :: a(n)
+  interface
+    subroutine foo(a, n) bind(c, name="foo")
+      use iso_c_binding
+      real(c_double), intent(inout) :: a(*)
+      integer(c_int), value :: n
+    end subroutine foo
+  end interface
+  call foo(a, n)
+end subroutine run
+"""
+sdfg = build_sdfg(src, entry="_QPrun")
+```
+
+## Pipeline detail
+
+### Pre-process rewrites — step (0)
+
+`dace_fortran.preprocess` holds the text rewrites that must run
+before flang (they change what flang accepts, or what arithmetic
+each backend is free to pick).  All are SED-style regex transforms,
+not a Fortran parser, so each is deliberately narrow; comment- and
+string-awareness is shared via `_scan_line` so a `!` or `**` inside
+a character literal is never touched.
 
 - `merge_used_modules` -- inlines every externally-`USE`-d module's
   real source so flang sees one self-contained translation unit.
@@ -166,26 +220,13 @@ touched.
   site (pass `preprocess=True` to `build_sdfg`); off by default so
   we don't paper over real issues in clean source.
 
-**(1) Parse.** One or more `.hlfir` files are loaded into a shared
-`MLIRContext` and merged into a single `ModuleOp` via
-`SymbolTable::insert`. A pre-pass snapshot of the caller-visible
-`hlfir.declare`s  --  dummy names, intents, derived-type layouts  --  is
-captured as `FortranInterface`. Entry points: `HLFIRModule.parse_files`,
-`HLFIRModule.get_fortran_interface`.
+### HLFIR normalisation passes — steps (2) + (3)
 
-**(2) Inline + link.** `hlfir-inline-all` flattens the call tree
-into the pinned entry. `symbol-dce` strips the dead siblings. The
-multi-file pipeline additionally runs `hlfir-verify-no-unresolved-calls`
-to fail if any `fir.call` survives outside the Flang-runtime / libm /
-C-stdlib allowlist. Inlining requires the `DialectInlinerInterface`
-extensions for `fir` / `func` / `LLVM` to be attached to the context;
-the bridge constructor does this once.
-
-**(3) Normalise.** HLFIR rewrites in strict order  --  each depends on
-its predecessors having reshaped the IR.  This is the actual
-`DEFAULT_PIPELINE` order (see `builder/__init__.py`); stage (2)'s
-`hlfir-inline-all` is the second entry in the same pipeline, listed
-separately above only to keep the conceptual flow readable:
+These are the `DEFAULT_PIPELINE` entries (see
+`builder/__init__.py`).  Step (2)'s `hlfir-inline-all` is the
+second entry in this same table; it is broken out in the top-level
+pipeline only because inlining is the conceptual hinge between
+"raw HLFIR" and "normalised single-TU IR".
 
 | Pass | Purpose |
 | --- | --- |
@@ -203,18 +244,28 @@ separately above only to keep the conceptual flow readable:
 | `lift-cf-to-scf` | Raw-CFG loops (`DO WHILE`, `DO...EXIT`) -> `scf.while` + `scf.if` |
 | `sccp` -> `canonicalize` -> `cse` | Fold + simplify + dedupe after HLFIR exposed its constants |
 
-**(4) Build SDFG.** `bridge/extract_vars.cpp` classifies every
-`hlfir.declare` as `array`, `symbol`, or `scalar` (rules below).
-`bridge/extract_ast.cpp` is the dispatcher; the AST extraction itself
-is split into focused translation units under `bridge/ast/`  --
+Multi-file builds additionally run
+`hlfir-verify-no-unresolved-calls` so any `fir.call` that survives
+the inliner outside the Flang-runtime / libm / C-stdlib allowlist
+fails the build loudly.  Inlining requires the
+`DialectInlinerInterface` extensions for `fir` / `func` / `LLVM`
+to be attached to the context; the bridge constructor does this
+once.
+
+### SDFG emission — step (4)
+
+`bridge/extract_vars.cpp` classifies every `hlfir.declare` as
+`array`, `symbol`, or `scalar` (rules in *Mechanisms* below).
+`bridge/extract_ast.cpp` is the dispatcher; the AST extraction is
+split into focused translation units under `bridge/ast/`  --
 `expressions.cpp` (RHS rendering), `assigns.cpp` (assignment-shape
 builders), `elementals.cpp` (reductions + libcall + select-case),
-`control_flow.cpp` (cmp / boolean / scf-while / merge), `dispatch.cpp`
-(top-level walker).  Cross-TU API + thread-local state lives in
-`ast/ast_helpers.h`; internal cross-TU helpers in `ast/ast_internal.h`.
-The walker produces a recursive `ASTNode` tree covering `loop` /
-`while` / `conditional` / `assign` / `copy` / `memset` / `libcall` /
-`reduce` / `break` / `return`.
+`control_flow.cpp` (cmp / boolean / scf-while / merge),
+`dispatch.cpp` (top-level walker).  Cross-TU API + thread-local
+state lives in `ast/ast_helpers.h`; internal cross-TU helpers in
+`ast/ast_internal.h`.  The walker produces a recursive `ASTNode`
+tree covering `loop` / `while` / `conditional` / `assign` / `copy`
+/ `memset` / `libcall` / `reduce` / `break` / `return`.
 
 **Loop bounds + IF conditions are hoisted to symbols.** Every
 non-trivial loop bound (anything beyond a bare identifier or integer
@@ -233,12 +284,12 @@ in the bound or condition. This:
   * gives the SSA loop-iter pass a uniform input shape.
 
 `builder/SDFGBuilder` emits the SDFG from that tree, then runs the
-post-generation cleanup pipeline below, then snapshots
-`sdfg.arglist()` + free symbols into a `FrozenSignature` and pins
-it on the SDFG.
+post-generation cleanup below, then snapshots `sdfg.arglist()` +
+free symbols into a `FrozenSignature` and pins it on the SDFG.
 
-**(4b) Post-generation cleanup.** The following passes run over the
-freshly-built SDFG, in order:
+### Post-generation cleanup — between (4) and (5)
+
+Run over the freshly-built SDFG, in order:
 
 1. **`SSALoopIterators`** (`dace.transformation.passes.ssa_loop_iterators`).
    Renames every `LoopRegion.loop_variable` to a globally-unique
@@ -285,7 +336,7 @@ freshly-built SDFG, in order:
    cleanup.  Genuinely fractional exponents (``0.5``, ``0.333``) are
    left untouched.
 
-The pipeline runs **before** the `FrozenSignature` snapshot is taken
+The cleanup runs **before** the `FrozenSignature` snapshot is taken
 so the bindings emitter sees the post-cleanup signature.
 
 **Loop iterator validation.** SDFG validation rejects writing to a
@@ -294,18 +345,10 @@ its own region.  The `LoopRegion` already owns the iterator update
 via `init_expr` / `update_expr`; mutating it elsewhere races with
 that machinery and breaks the SSA invariant the iter pass relies on.
 
-**(5) Regen binding.** `bindings/emit_bindings` reads three artefacts
- --  `FortranInterface` (outer caller surface), `FrozenSignature`
-(inner SDFG surface), and the `FlattenPlan` from stage 3  --  and writes
-`<entry>_bindings.f90`: a ref-counted Fortran module that preserves
-the caller's original signature, populates SDFG symbols via
-`size` / `lbound`, and for each struct member picks between a zero-copy
-`c_f_pointer` alias and a Fortran `do`-loop deep copy based on the
-recipe.
-
 ## Data artefacts
 
-These are the structured records that flow between stages. They are
+These are the structured records that flow between the pipeline
+steps.  They are
 the frontend's stable contract surface  --  new features extend them,
 they do not invent parallel channels.
 
@@ -320,159 +363,75 @@ they do not invent parallel channels.
 ## Mechanisms
 
 **Symbol vs scalar classification.** A Fortran integer is a *symbol*
-iff it's a DO induction variable, an array shape extent, a DO bound
-(upper or lower), an `hlfir.designate` index, or feeds a control-flow
-condition. Everything else integer is a *scalar*. Writes to symbols
-become interstate-edge assignments; writes to scalars become
-tasklets. Only symbols can appear as array indices  --  so classification
-drives whether a write changes the state machine or mutates data in
-place.
+iff it's a DO induction variable, an array shape extent, a DO bound,
+an `hlfir.designate` index, or feeds a control-flow condition --
+everything else integer is a *scalar*.  Writes to symbols become
+interstate-edge assignments; writes to scalars become tasklets.
+Only symbols can appear as array indices.
 
 **Fortran lbound handling.** Every array descriptor carries
-`shape_symbols` and `lower_bounds`. Memlet subsets use Fortran-native
-indices; `access.py::build_memlet_index` folds the lbound offset
-once at subset-build time. DaCe's own descriptor `offset` field stays
-at zero  --  keeping a single-site offset arithmetic so downstream
-transformations don't have to reason about two conventions.
+`shape_symbols` + `lower_bounds`.  `access.build_memlet_index` folds
+the lbound offset once at subset-build time; DaCe's descriptor
+`offset` field stays at zero so downstream transformations only
+reason about one convention.
 
-**Assumed-shape alias re-basing.** After `hlfir-inline-all` splices
-an assumed-shape callee (`arr(:)`) into a caller whose actual has
-custom bounds (`x(-2:2)`), Flang emits a second `hlfir.declare`  --
-no shape operand, memref via `fir.convert` of the outer declare.
-The bridge detects this (`trace_utils::asAssumedShapeAlias`), skips
-it in `extract_vars` (one SDFG descriptor per storage), walks
-through it in `traceToDecl` (accesses resolve to the outer name),
-and rewrites each access's index by `outer_lbound - inner_lbound` at
-`buildDesignateIndexExpr`. The caller-side lbound fold then fires
-uniformly.
+**Assumed-shape alias re-basing.** When `hlfir-inline-all` splices
+an `arr(:)` callee into a caller whose actual has custom bounds
+(`x(-2:2)`), flang emits a second `hlfir.declare` aliasing the
+outer storage.  The bridge skips the alias in `extract_vars`,
+follows it in `traceToDecl`, and rewrites each access index by
+`outer_lbound - inner_lbound` so the lbound fold fires uniformly.
+
+**ELEMENTAL inlining.** Flang lowers each elemental call to
+`fir.do_loop { hlfir.designate per-arg; fir.call scalar_body }`.
+After `hlfir-inline-all` the per-element alias declares are folded
+by `hlfir-fold-element-aliases`; the SDFG builder sees the same
+shape as a hand-written per-element loop.
+
+**OPTIONAL dummies.** `fir.is_present %x` becomes a scalar
+`<name>_present` (i32) on the SDFG signature.  The existing if/else
+lowering reads it like any other condition -- no new AST kind.
+Intent-less optionals default to `intent_in` so they don't
+misclassify as transients.
+
+**AoS↔SoA flattening.** See *Pipeline detail* above -- `hlfir-flatten-structs`
+hoists every struct member as its own top-level dummy and stamps the
+`hlfir.flatten_plan` recipe that step (5)'s binding consumes to
+restore the caller-side AoS view.  Three supported layouts (plain /
+nested members, array-of-struct with array members, AoS + allocatable
+via padding-to-max) and their boundaries are listed in *Supported /
+not supported* below.
+
+**Section reductions.** Whole-array `SUM` / `PRODUCT` / `ANY` /
+`ALL` lower to DaCe's `standard.Reduce`.  Section reductions
+(`ANY(mask(lo:hi, jk))`) synthesise an init + `kind="loop"` AST
+because DaCe's Reduce can't express a dynamic-section input
+directly.
+
+**Sibling-assign RAW hazards in loop bodies.** Multiple assigns in
+one `fir.do_loop` body that target the same non-transient storage
+race when all wired into one state.  The emitter detects read-write
+name overlap across siblings and serialises them into a chain of
+states (one tasklet per state).  Non-overlapping siblings still
+share a state -- the check is per-loop-body.
 
 **Exponentiation.** `math.fpowi` / `math.powf` / `math.powi` /
-`math.ipowi` all surface as Python `(a ** b)` in the tasklet. A
-downstream SDFG simplify pass picks the concrete lowering from the
-tasklet's connector types. `hlfir.no_reassoc` (Flang's FP-reassoc
-barrier) is transparent in `buildExpr`.
-
-**Section reductions.** Whole-array `SUM` / `PRODUCT` / `ANY` / `ALL`
-lower to DaCe's `standard.Reduce`. Section reductions
-(`ANY(mask(lo:hi, jk))`) synthesise a loop-accumulator AST  --  an
-init-to-identity assign plus a `kind="loop"` whose body accumulates
-via the appropriate Python operator. DaCe's Reduce can't express a
-dynamic-section input directly.
-
-**ELEMENTAL procedures -> loop + scalar tasklet.** A Fortran
-`elemental` procedure is a scalar body that, when called on array
-actuals, Flang lowers as `fir.do_loop { hlfir.designate per-arg;
-fir.call scalar_body }` for the subroutine form, or as
-`hlfir.elemental { hlfir.designate; fir.call; yield_element }` for
-the function form. `hlfir-inline-all` splices the callee's body in;
-the per-element `hlfir.declare`s that remain (callee dummies named
-after outer array elements) are semantic no-ops that carry the
-callee's Fortran names into the body. `hlfir-fold-element-aliases`
-erases those  --  whatever reads them rewires to the outer array's
-`hlfir.designate`, so the SDFG builder sees the same shape as a
-hand-written per-element loop. `fir.do_loop` block args with no
-store-to-alloca sibling (produced by this fold) get a synthetic
-iter name (`_doit_N`) pushed onto `indexStack()` so `resolveIndex`
-still resolves raw block-arg uses inside the body.
-
-**Sibling-assign RAW hazards in loop bodies.** When a `fir.do_loop`
-body contains multiple assigns (`f = c*c; a = a - b*f; ...`) into
-`hlfir.declare`-backed storage, the naive "one tasklet per assign,
-all in one body state" wiring races: non-transient access nodes
-share the underlying SDFG array, so a second tasklet's write can
-clobber a first tasklet's read even with distinct access nodes. The
-loop emitter detects any read-write name overlap across siblings
-and serialises them into a chain of states (one tasklet per state,
-interstate edges between). Siblings with no hazard still share a
-single state  --  the check is per-loop-body, not a blanket pessimisation.
-
-**OPTIONAL dummies -> companion present-flag.** Fortran `OPTIONAL`
-args compile to `hlfir.declare` with `fortran_attrs = optional`, and
-`present(x)` lowers to `fir.is_present %x : (!fir.ref<T>) -> i1`.
-The bridge's `buildBoolExpr` renders that op as the identifier
-`<name>_present`, and `extract_vars` registers a corresponding
-`int32` symbol `VarInfo` right after each optional declare. The
-flag lands on the SDFG signature alongside its host (`sdfg(a=...,
-a_present=...)`); non-zero = present, zero = absent. The existing
-if/else lowering reads the flag exactly like any other scalar
-condition  --  no new AST kind. Intent-less optionals default to
-`intent_in` so `descriptors.py` doesn't misclassify them as
-transients. Correctness relies on Fortran's guarantee that every
-non-`present()` use of an absent optional is dominated by a
-`present` check; the SDFG simply threads that check through.
-
-**AoS -> SoA flattening.** `hlfir-flatten-structs` is the bridge's
-answer to Fortran derived types: DaCe has no record/struct data
-descriptor, so every member is hoisted out as its own top-level
-dummy. Each struct-typed `hlfir.declare` is replaced by one
-`hlfir.declare` per member (plus shape-ferrying ops), every
-`hlfir.designate` onto a struct field rewires to the lifted member,
-and the pass stamps a `hlfir.flatten_plan` module attribute
-recording the original AoS shape: which dummy each member came from,
-its offset in the record, whether it's aliasable (contiguous,
-pointer-valid), and the scratch dtype for non-aliasable spill. The
-downstream SDFG sees only flat arrays, no knowledge of the parent
-type. Stage (5) re-assembles the AoS view on the caller side:
-`bindings/loop_copy.py` reads the `FlattenPlan` and emits, per
-member, either a zero-copy `c_f_pointer` alias (contiguous +
-lifetime-compatible) or an explicit Fortran `do`-loop copy into a
-scratch member-typed array. The original caller's signature stays
-intact  --  the binding module is the AoS<->SoA boundary, the SDFG only
-ever sees SoA.
-
-**AoS + allocatable members  --  padding-to-max contract (Phase 5c).**
-A struct with allocatable / pointer array members on an AoS dummy
-(`type t :: real, allocatable :: w(:); type(t) :: A(N)`) can't
-flatten to a single static-shape companion: each instance owns its
-own descriptor with a runtime size, and the sizes generally differ.
-Two sub-cases, one shared contract:
-
-  * **5c-A  --  local instance, kernel-internal allocate.**  When `A`
-    is a local `fir.alloca` and every `allocate(A(i)%w(M))` site
-    uses the same compile-time constant `M`, the pass synthesises a
-    fully static 2D companion `A_w(N, M)` and erases the per-instance
-    allocate / freemem chain (the buffer is pre-allocated at the
-    static shape, so each `allocate` becomes a semantic no-op).  The
-    helpers `aosAllocUniformConstSize`, `rewriteAosWholeMemberAssign`,
-    `collapseAosAllocReads`, `eraseAosAllocDeallocChain`, and
-    `stripReallocOnAosMember` together turn the original IR into a
-    flat 2-index designate over `A_w`.
-
-  * **5c-B  --  true SDFG-boundary dummy.**  When `A` is an
-    `intent(inout)` (or `intent(in)`) AoS dummy on the SDFG entry
-    itself, per-instance sizes are caller-determined and may differ
-    at runtime.  The pass emits one FlattenEntry per allocatable
-    member with `aos_alloc=True` and `cap_symbol="cap_<base>_<m>"`,
-    and inserts two block args per member  --  a runtime cap (`index`
-    ref) and a 2D data buffer `ref<array<N x ?xT>>`.  The cap declare's
-    `uniq_name = cap_<base>_<m>` makes `traceToDecl` resolve the
-    inner extent to that symbol on the SDFG signature.  Stage (5)'s
-    bindings emitter (`render_aos_alloc_pack_in` /
-    `render_aos_alloc_pack_out` in `bindings/loop_copy.py`) computes
-    `cap = max_i(merge(size(A(i)%w), 0, allocated(A(i)%w)))`,
-    allocates `A_w(N, cap)`, packs each allocated row's live region
-    in, and (for `out`/`inout`) unpacks back on return.  Mixed
-    allocation states are allowed  --  unallocated rows stay as the
-    zero-padded default and the user's program logic is responsible
-    for not reading them.  An empty-batch sentinel (`cap == 0 -> 1`)
-    keeps the buffer non-degenerate.  Mixed structs (one allocatable
-    + one plain member) split into one `aos_alloc=True` entry per
-    allocatable plus one regular aliasable entry covering the rest;
-    `recordStructArgEntry` takes an exclude-set to skip members
-    already covered by the per-member path.
+`math.ipowi` all surface as `(a ** b)` in the tasklet; the
+post-generation `IntegerizePowerExponents` pass retypes
+integer-valued float exponents to `int` so DaCe codegen routes
+them through `dace::math::ipow` (bit-identical to gfortran's
+small-integer power lowering).
 
 **Signature freezing.** `codegen.generate_code` verifies
-`sdfg._frozen_signature` before emitting the C++ header. Drift from
-the snapshot raises `SignatureDriftError`. Transformations mutate
-SDFGs freely, but a header that disagrees with the emitted Fortran
-binding cannot ship.
+`sdfg._frozen_signature` before emitting the C++ header; drift
+raises `SignatureDriftError`.  Transformations mutate SDFGs freely
+-- a header that disagrees with the emitted Fortran binding cannot
+ship.
 
-**Defensive walk budgets.** SSA-tracing and expression-reconstruction
-helpers guard against pathological IR via `trace_utils::limits::*`
-depth constants (`kBuildExprDepth=128`, `kConvertChainDepth=32`,
-`kTraceToDeclMax=1024`, etc.). Bumping them never changes semantics
-on well-formed HLFIR; it only reduces false-`?` fallbacks on deep
-post-optimiser chains.
+**Defensive walk budgets.** `trace_utils::limits::*` constants
+(`kBuildExprDepth=128`, `kConvertChainDepth=32`,
+`kTraceToDeclMax=1024`) cap SSA-tracing depth on pathological IR.
+Bumping them never changes semantics on well-formed HLFIR.
 
 ## Components
 
@@ -503,7 +462,7 @@ dace_fortran/
 |   |--- DefaultIntent.cpp
 |   |--- VerifyNoUnresolvedCalls.cpp
 |   \--- Passes.cpp              registerAllBridgePasses()
-|--- builder/           Python  --  SDFG emission (stage 4)
+|--- builder/           Python  --  SDFG emission (step 4)
 |   |--- __init__.py             SDFGBuilder, _emit dispatch, pipelines
 |   |--- context.py              _Ctx (state, pending assigns, iter_map)
 |   |--- descriptors.py          add_descriptors, DTYPE mapping
@@ -512,7 +471,7 @@ dace_fortran/
 |   |--- emit_cfg.py             assign / loop / while / conditional
 |   \--- emit_library.py         copy / memset / libcall / reduce / break / return
 |--- intrinsics/        Python  --  Fortran intrinsic registry (consumed by bindings)
-|--- bindings/          Python  --  Fortran wrapper emitter (stage 5)
+|--- bindings/          Python  --  Fortran wrapper emitter (step 5)
 |   |--- frozen_signature.py     FrozenArg + FrozenSignature + drift check
 |   |--- fortran_interface.py    OriginalInterface (outer surface)
 |   |--- flatten_plan.py         FlattenPlan + to_dict / from_dict
@@ -528,127 +487,107 @@ dace_fortran/
 |--- preprocess.py      Fortran-text rewrites: USE merge, OMP/ACC strip,
 |                       integer-power expansion, IF (intvar) -> /=0
 |--- build_bridge.py    one-time CMake build of the C++ HLFIR bridge
-|--- hlfir_to_sdfg.py   low-level entry: SDFGBuilder / generate_sdfg(...)
-\--- integer_power_exponents.py  (legacy detail; called from preprocess.py)
+|--- hlfir_to_sdfg.py   back-compat shim re-exporting SDFGBuilder / generate_sdfg from builder/
+\--- integer_power_exponents.py  post-generation pass: float ``**int_value`` -> int exponent
 ```
 
 ## Entry point
 
-`dace_fortran` exposes a small documented surface for turning
-Fortran into a built, validated `dace.SDFG` -- three tiers ordered
-by how much the bridge does on the caller's behalf
-(`build_sdfg` -- inline / `build_sdfg_from_files` -- multi-file /
-`build_sdfg_from_hlfir` -- prebuilt HLFIR; see *Tier 3* below).
-Everything is lazy (`import dace_fortran` is cheap; the C++ bridge
-builds on first use).
+Three tiers ordered by how much the bridge does on the caller's
+behalf.  All return a validated `dace.SDFG` with
+`sdfg._frozen_signature` attached; `import dace_fortran` is lazy
+(the C++ bridge builds on first use).
+
+`entry` is the mangled flang symbol -- `_QPname` for a free
+subroutine, `_QM<mod>Pname` for a module procedure -- and is
+required (an SDFG targets one specific procedure).
 
 ```python
 import dace_fortran
 
-# (1) A single inline Fortran source.  `entry` is the *mangled* Flang
-#     symbol of the target procedure -- always required: an SDFG
-#     represents one specific procedure, there is no "first procedure"
-#     guessing.  `_QP<name>` = free subroutine, `_QM<mod>P<name>` =
-#     module procedure.
+# (1) Inline source.
 sdfg = dace_fortran.build_sdfg(src, entry="_QPcompute_tendencies")
 
-# (2) A multi-file project: a driver plus the modules it USEs, in any
-#     order.  The file defining `entry` is the root; the rest are
-#     merged into one translation unit (transitive USE is followed).
+# (2) Multi-file project (driver + the modules it USEs, any order).
+#     The file defining ``entry`` is the root; the rest are merged
+#     into one TU via ``merge_used_modules``.
 sdfg = dace_fortran.build_sdfg_from_files(
     ["driver.f90", "math_utils.f90"], entry="_QPcompute_tendencies")
 
-# (3) A kernel that CALLs a separately-compiled function.  The target
-#     MUST be ISO_C_BINDING `bind(c, name=...)` (Fortran name mangling
-#     is compiler-specific and a `.mod` is not C-consumable, so a
-#     stable bind(c) symbol -- native or via a hand-written shim -- is
-#     the only portable way to call it from the generated C++).
-#     Register its signature; `intent` defaults to `inout` (an opaque
-#     function is conservatively assumed to read *and* write an array
-#     -- a missed write would be a silent correctness bug).  The named
-#     libraries are linked into the SDFG `.so` with an rpath, so it is
-#     self-contained (no `LD_PRELOAD`).
+# (3) Prebuilt HLFIR -- tier 3, WIP.  See section below.
+sdfg = dace_fortran.build_sdfg_from_hlfir(
+    "build/hlfir", entry="_QMmod_jacobiPjacobi2d_update")
+```
+
+For tiers (1) and (2), a kernel that ``CALL``s a separately-compiled
+function declares its signature out-of-band -- the callee must
+present a stable `bind(c, name=...)` symbol (Fortran name mangling
+is compiler-specific):
+
+```python
 dace_fortran.register_external("foo", dace_fortran.ExternalSignature(
     c_name="foo",
     args=[dace_fortran.Arg("array", "float64"),    # inout by default
-          dace_fortran.Arg("scalar", "int32")],    # by-value
+          dace_fortran.Arg("scalar", "int32")],
     libraries=["/abs/path/libfoo.so"]))
-sdfg = dace_fortran.build_sdfg(kernel_src, entry="_QPrun")
-
-# (4) A prebuilt HLFIR file -- WIP, see *Tier 3* below.
-sdfg = dace_fortran.build_sdfg_from_hlfir(
-    "build/", entry="_QMmod_jacobiPjacobi2d_update")
-
-# (5) Lower level: an already-emitted .hlfir MLIR file.
-sdfg = dace_fortran.generate_sdfg("code.hlfir")    # pipeline=... optional
 ```
 
-`build_sdfg` / `build_sdfg_from_files` / `build_sdfg_from_hlfir` /
-`generate_sdfg` all return a validated `dace.SDFG` with
-`sdfg._frozen_signature` attached.  Emit a Fortran-callable library
-from it with `build_fortran_library` (see *Quick start*) -- that
-stays a separate step, not folded in.
-
-MPI (`MPI_Send/Recv/Isend/Irecv/Wait`, including a non-default
+`intent` defaults to `inout` (a missed write into an opaque external
+is a silent correctness bug; a missed read is just an optimisation
+miss).  Listed `libraries` are linked into the SDFG `.so` with an
+rpath, so it stays self-contained -- no `LD_PRELOAD`.
+`keep_external(name, ...)` is the shorter form when defaults are fine.
+MPI (`MPI_Send/Recv/Isend/Irecv/Wait`, including non-default
 communicator) is recognised automatically and lowered to
-`dace.libraries.mpi` nodes -- no registration needed.
+`dace.libraries.mpi` nodes; no registration needed.
 
 ### Tier 3: prebuilt HLFIR (WIP)
 
-Forms (1)–(3) make the bridge drive flang itself -- great for
-self-contained kernels and small multi-file projects, but it stops
-working for codebases too large or dep-tangled for the bridge to
-compile alone (ICON-scale: hundreds of modules, real `netcdf` /
-`hdf5` / `yaxt` externals, custom cpp gates).  Those codebases
-already have a working build system that knows the right include
-paths, intrinsic-module path, cpp defines.  Tier 3 lets the bridge
-stop competing with it: the user runs HLFIR emission once, points
-the bridge at the result, done.
+Tiers (1) and (2) drive flang internally -- fine for self-contained
+kernels and small multi-file projects, but it doesn't scale to
+codebases with hundreds of modules and real `netcdf` / `hdf5` /
+`yaxt` externals plus custom cpp gates.  Those projects already
+have a working build system; tier 3 lets the bridge stop competing
+with it.
 
-**What the user does** (two small additions to an existing build):
+**Two small additions to an existing build:**
 
-1. configure with **one extra cmake flag**:
-   `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON` (every Ninja / Make /
-   ninja-multi-config generator already supports this; cmake drops
+1. one cmake flag: `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`
+   (every Ninja / Make generator supports this; drops
    `compile_commands.json` into the build dir).
-2. after the regular build, **run the helper**:
+2. one shell command after the regular build:
+
    ```bash
-   python -m dace_fortran.emit_hlfir <build_dir>/compile_commands.json \
-       --out <build_dir>/hlfir \
+   python -m dace_fortran.emit_hlfir <build>/compile_commands.json \
+       --out <build>/hlfir \
        [--stub <stub.f90>]...           # for mpi / netcdf / hdf5 / ...
    ```
 
-The helper inherits Fortran build order and `-I` / `-D` flags from
-the artefact -- so it's project-generic and never has to guess.
-`--stub` injects flang-buildable stand-ins for modules flang has no
-shipped `.mod` for (`mpi`, `netcdf`, `hdf5`, ...).  Then the bridge
-just consumes the output:
+The helper inherits Fortran build order + `-I` / `-D` flags from
+the artefact, so it's project-generic.  `--stub` provides
+flang-buildable stand-ins for modules flang has no shipped `.mod`
+for (`mpi`, `netcdf`, `hdf5`, ...).  Then point the bridge at the
+output:
 
 ```python
 sdfg = dace_fortran.build_sdfg_from_hlfir(
-    "<build_dir>/hlfir",                                # dir or single .hlfir
-    entry="_QMmod_jacobiPjacobi2d_update")              # required when dir
+    "<build>/hlfir",                                    # dir or single .hlfir
+    entry="_QMmod_jacobiPjacobi2d_update")              # required for dir
 ```
 
-`tests/prebuilt_hlfir/` ships **two worked example projects** to
-prove the pipeline is generic:
+`tests/prebuilt_hlfir/` ships two worked projects to prove the
+pipeline is generic.  Both ship plain `CMakeLists.txt` -- they know
+nothing about HLFIR or the bridge:
 
-* `jacobi/` -- 4 files, hard deps on real MPI + netCDF; uses two
-  stubs (`mpi_stub.f90`, `netcdf_stub.f90`).  Entry
-  `jacobi2d_update` has an inlinable `stencil_5pt` helper and a
-  sibling `halo_exchange` that *does* use MPI -- the bridge lowers
-  only the entry, MPI references stay out of the SDFG.
-* `csr_spmv/` -- 2 files, no external deps, no stubs.  Entry
-  `csr_spmv` has an inlinable `dot_row` helper.
+| Project | Files | Externals | Demonstrates |
+|---|---|---|---|
+| `jacobi/` | 4 | MPI + netCDF (2 stubs) | entry stays MPI-free even though sibling `halo_exchange` USEs MPI |
+| `csr_spmv/` | 2 | none | minimal happy path |
 
-Both projects ship their own *plain* `CMakeLists.txt` (they know
-nothing about HLFIR or the bridge); the test calls cmake +
-`emit_hlfir` exactly the way a real user would.
-
-**Why WIP**: cross-TU inlining is the user's responsibility -- flang
-emits one `.hlfir` per translation unit and only inlines procedures
-whose bodies are in the same TU.  Procedures `USE`d from a different
-TU stay as external symbol references in the SDFG.
+**Why WIP**: only intra-TU inlining works -- flang emits one
+`.hlfir` per translation unit, and the bridge consumes one of them.
+A procedure `USE`d from a different TU stays as an external symbol
+reference in the SDFG.
 
 ## Extending the frontend
 
@@ -660,10 +599,10 @@ TU stay as external symbol references in the SDFG.
 | a new binding layout rule | `bindings/loop_copy.py` + new `FlattenRecipe` field | `tests/hlfir/bindings/emit_bindings_test.py` |
 | a new HLFIR pass | file in `passes/`, register in `Passes.cpp`, slot into `DEFAULT_PIPELINE` | `tests/hlfir/<pass>_test.py` |
 
-## Future support map
+## Supported / not supported
 
-Current status by feature.  [OK] supported, [!] planned (tracked in
-xfails), [X] never (out of scope).
+[OK] supported, [!] planned (tracked in xfails), [X] never (out
+of scope).
 
 ### Types
 
@@ -672,21 +611,20 @@ xfails), [X] never (out of scope).
 | `INTEGER(1/2/4/8)` | [OK] | mapped to `int8/16/32/64` |
 | `REAL(4/8)` | [OK] | mapped to `float32/64` |
 | `LOGICAL(1/4/8)` | [OK] | surfaced as `uint8/int32/int64` for f2py ABI |
-| `COMPLEX(4/8)` | [OK] | arrays only (Python 3.12 ctypes lacks `c_double_complex`; scalar by-value is a DaCe-core gap) |
+| `COMPLEX(4/8)` | [OK] | arrays only -- scalar by-value is a DaCe-core gap |
 | `CHARACTER(*)` | [X] | string handling out of scope |
-| Module-level derived type, flat members | [OK] | Phase 1, lowered by `hlfir-flatten-structs` |
-| Module-level derived type, nested | [OK] Phase 2 | recursive `collectFlatLeaves` synthesises one declare per leaf with path-flattened name `base_m1_m2_..._leaf` |
-| Array-of-struct with array members (`A(N)%w(M,M)`) | [OK] Phase 1.5 | shape concatenation; designate chains `A(i)%w(j,k)` rewrite to `A_w(i,j,k)` |
-| Whole-member access on AoS (`A(i)%w = ...`) | [OK] Phase 1.5 | rewriter emits triplet section `A_w(i, 1:M:1, ...)` |
-| Cross-subroutine struct args (incl. AoS) | [OK] Phase 2.2 | function signature rewrite + per-member block args + `hlfir.flatten_plan` attribute carries the recipe |
-| Module-level derived type, allocatable members | [OK] Phase 5a/5b | scalar struct + 1-D allocatable / pointer member  --  flat top-level allocatable companion + per-allocate-site rename |
-| AoS + allocatable, uniform compile-time size (`type(t) :: A(N); allocate(A(i)%w(M))` with constant `M`) | [OK] Phase 5c-A | static 2D companion `A_w(N, M)`; allocate / freemem chain erased post-flatten |
-| AoS + allocatable as inlined-kernel dummy | [OK] Phase 5c-B (inlined) | `collapseAosAllocReads` follows alias chains through `hlfir-inline-all`'s declare aliases |
-| AoS + allocatable as true SDFG-boundary dummy | [OK] Phase 5c-B | padding-to-max contract: bindings layer computes `cap = max_i(size(A(i)%w))`, packs/unpacks live regions; runtime cap symbol on SDFG signature |
-| AoS + allocatable, kernel-internal reallocation (`intent(out)` first allocation inside kernel) | [!] Phase 5c-C | needs an HLFIR shape-discovery pre-pass + caller-side stub interface |
-| Batched CSR (jagged AoS with per-instance allocatable members of differing sizes) | [!] Phase 5c+ | xfailed contract test pins the design; padding-to-max works mechanically but the two-different-members `(rowptr, colidx, val)` shape needs separate cap symbols (in scope but not yet exercised) |
-| Derived type with parametric array dim from struct field | [!] Phase 4 | 1 xfail |
-| Circular type definitions | [X] | recursion through pointer chain  --  out of scope |
+| Derived type, flat members | [OK] | `hlfir-flatten-structs` |
+| Derived type, nested | [OK] | recursive leaf collection, path-flattened name `base_m1_m2_leaf` |
+| Array-of-struct with array members (`A(N)%w(M,M)`) | [OK] | shape concatenation; `A(i)%w(j,k)` -> `A_w(i,j,k)` |
+| Whole-member access on AoS (`A(i)%w = ...`) | [OK] | triplet section `A_w(i, 1:M:1, ...)` |
+| Cross-subroutine struct args (incl. AoS) | [OK] | per-member block args + `hlfir.flatten_plan` recipe |
+| Derived type, allocatable members | [OK] | flat top-level allocatable companion + per-allocate-site rename |
+| AoS + allocatable, uniform constant inner size | [OK] | static 2D companion `A_w(N, M)`; allocate/freemem chain erased |
+| AoS + allocatable as SDFG-boundary dummy | [OK] | padding-to-max: binding computes `cap = max_i(size(A(i)%w))`, packs/unpacks live regions; runtime cap symbol on signature |
+| AoS + allocatable, kernel-internal first allocation (`intent(out)`) | [!] | needs an HLFIR shape-discovery pre-pass + caller stub interface |
+| Jagged AoS, two allocatable members of differing per-instance lengths | [!] | padding-to-max works mechanically; two-cap-symbol shape not yet exercised |
+| Derived type with parametric array dim from struct field | [!] | 1 xfail |
+| Circular type definitions (recursion through pointer chain) | [X] | out of scope |
 
 ### Control flow
 
@@ -695,23 +633,24 @@ xfails), [X] never (out of scope).
 | `DO`, `DO WHILE`, `DO CONCURRENT` | [OK] | LoopRegion + scf.while |
 | `IF` / `ELSE IF` / `ELSE` | [OK] | scf.if |
 | `SELECT CASE` | [OK] | `lower-fir-select-case` lifts to cf.cond_br |
-| `SELECT TYPE` | [X] | requires polymorphic dispatch  --  never |
 | `EXIT`, `CYCLE` | [OK] | |
-| `GOTO` | [X] | rely on flang's `lift-cf-to-scf`; unstructured GOTO won't lift |
-| Statement functions (`f(x) = ...`) | [!] | 1 xfail, [function_statement](../../../tests/hlfir/ported/fortran_language_test.py) |
+| Statement functions (`f(x) = ...`) | [!] | 1 xfail |
+| `GOTO` | [X] | unstructured GOTO doesn't lift to scf |
+| `SELECT TYPE` | [X] | requires runtime type discrimination |
 
 ### Subprograms / linkage
 
 | Feature | Status | Notes |
 |---|---|---|
 | Module-contained `SUBROUTINE` / `FUNCTION` | [OK] | inlined by `hlfir-inline-all` |
-| Internal subprograms (`CONTAINS` inside subroutine) | [OK] | needs `fir.embox` peeling in alias walk (added 2026-04-28) |
+| Internal subprograms (`CONTAINS` inside subroutine) | [OK] | |
 | `INTERFACE` blocks | [OK] | resolved at flang time |
-| `EXTERNAL` statements | [X] | use modules |
 | `USE`, `USE ... ONLY:` | [OK] | flang resolves at lowering |
 | `OPTIONAL` dummy + `PRESENT` | [OK] | folded statically post-inline |
 | `ALLOCATABLE`, `ALLOCATE`, `DEALLOCATE` | [OK] | local + dummy |
-| `POINTER` | [X] probably | requires SSA-breaking aliasing |
+| Separately-compiled `bind(c)` external | [OK] | `register_external` / `keep_external` |
+| `EXTERNAL` statements | [X] | use modules instead |
+| `POINTER` | [X] | requires SSA-breaking aliasing |
 | BLAS/LAPACK via `EXTERNAL` | [X] | use module-contained or DaCe libnodes |
 
 ### Polymorphism
@@ -719,24 +658,24 @@ xfails), [X] never (out of scope).
 | Feature | Status | Notes |
 |---|---|---|
 | `CLASS(t)` as a monomorphic box (no virtual dispatch) | [OK] | `FlattenStructs` peels `fir.class<T>` via `BaseBoxType` |
-| Type-bound procedure with statically-known receiver (`c%area()` where `c : type(circle_t)`) | [OK] | `fir-polymorphic-op` devirtualises before flatten; tested in `derived_type_test::test_static_polymorphism_devirtualised` |
-| Truly virtual dispatch (`class(shape_t) :: p; p%area()` where the receiver type is set by a caller) | [X] | `fir-polymorphic-op` lowers the dispatch to an indirect `fir.call` through the type-info table; `hlfir-reject-polymorphism` fires loudly on the residual `fir.box_tdesc`.  Tested in `noncontig_unsupported_test::test_virtual_dispatch_bails_loudly`. |
-| `SELECT TYPE` / runtime type discrimination | [X] | rejected by `hlfir-reject-polymorphism` |
+| Type-bound procedure with statically-known receiver | [OK] | `fir-polymorphic-op` devirtualises before flatten |
+| Truly virtual dispatch (caller-set receiver type) | [X] | `hlfir-reject-polymorphism` fails loudly on residual `fir.box_tdesc` |
+| `SELECT TYPE` / runtime type discrimination | [X] | same |
 
 ### Slicing / array ops
 
 | Feature | Status | Notes |
 |---|---|---|
 | Contiguous slice `a(i:j, k:l)` | [OK] | |
-| Whole-array assign `a = b` | [OK] | hlfir.elemental + emit_library |
-| Elementwise intrinsics (sin/cos/exp/sqrt/...) on real/complex | [OK] | added complex variants 2026-04-28 |
+| Whole-array assign `a = b` | [OK] | `hlfir.elemental` + emit_library |
+| Elementwise intrinsics (sin/cos/exp/sqrt/...) on real / complex | [OK] | |
 | Reductions (sum/product/min/max/all/any/count/minval/maxval) | [OK] | |
 | BLAS/LAPACK (matmul, transpose) | [OK] | dense -> libnode, strided -> explicit DO loop |
-| Noncontiguous slice via index array `a(idx, :)`  --  rank-1, **constant** gather extent | [OK] | Lowered by `hlfir-expand-vector-subscript-gather` (replaces flang's `hlfir.associate` of an `hlfir.elemental` with an explicit `fir.alloca` + gather DO loop, then reuses DaCe indirection memlets `<arr>_at<gid>`).  See pass header for shape constraints. |
-| Noncontiguous slice  --  rank-2+ gather (`d(cols2, cols)`) | [!] Phase 2 | 5 xfails  --  pass currently bails with a clear error |
-| Noncontiguous slice  --  **symbolic** extent | [X] | DaCe can't express runtime-sized symbol arrays.  Pass aborts loudly via `op.emitError`; covered by [noncontig_unsupported_test.py](../../../tests/hlfir/noncontig_unsupported_test.py) |
-| Noncontiguous slice  --  INTENT(out) scatter-back | [!] | rare in real code; not yet modelled (the i1 must-finalise flag is hard-coded to false) |
-| `ASSOCIATE` block | [!] | not currently exercised; relative indexing only |
+| Noncontiguous gather `a(idx, :)` -- rank-1, constant extent | [OK] | `hlfir-expand-vector-subscript-gather` |
+| Noncontiguous gather -- rank-2+ (`d(cols2, cols)`) | [!] | 5 xfails -- pass currently bails with a clear error |
+| Noncontiguous slice -- symbolic extent | [X] | DaCe can't express runtime-sized symbol arrays |
+| Noncontiguous scatter -- `intent(out)` write-back | [!] | not yet modelled |
+| `ASSOCIATE` block | [!] | relative indexing only |
 
 ### Codegen targets
 
@@ -744,7 +683,7 @@ xfails), [X] never (out of scope).
 |---|---|---|
 | CPU C++ tasklets | [OK] | |
 | GPU CUDA | [X] | would need OpenACC-style shim emission |
-| OpenMP / `!$OMP` directives | [X] | DaCe handles parallelism |
+| Native `!$OMP` directives | [X] | DaCe handles parallelism itself |
 | COARRAY | [X] | |
 
 ## Non-goals
