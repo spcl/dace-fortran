@@ -52,6 +52,7 @@ from dace_fortran.builder.descriptors import (
 )
 from dace_fortran.builder.emit_library import (
     emit_break,
+    emit_call,
     emit_copy,
     emit_libcall,
     emit_memset,
@@ -595,6 +596,7 @@ class SDFGBuilder:
         "memset": emit_memset,
         "libcall": emit_libcall,
         "mpicall": emit_mpi,
+        "call": emit_call,
         "break": emit_break,
         "return": emit_return,
         "declare_transient": emit_declare_transient,
@@ -607,8 +609,9 @@ class SDFGBuilder:
             fn = self._EMIT_DISPATCH.get(n.kind)
             if fn is not None:
                 fn(self, ctx, n, region)
-            # "call" currently has no emitter  --  nested SDFG / library node
-            # is a future feature (Phase 4).
+            # ``kind="call"`` dispatches to ``emit_call``: a no-op for
+            # an unregistered callee, a CPP tasklet for one registered
+            # via ``dace_fortran.external``.
 
     # Scalar-assign is called from _Ctx.flush; keep it as a method on the
     # builder for that caller's convenience.

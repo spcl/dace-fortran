@@ -12,7 +12,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import build_sdfg_from_files, have_flang
+from _util import have_flang
+
+from dace_fortran import build_sdfg, build_sdfg_from_files
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
@@ -83,8 +85,8 @@ def _write(tmp: Path, **named) -> list:
 def test_two_files_driver_plus_module(tmp_path: Path):
     """Driver + one ``USE``-d module, files given out of order."""
     files = _write(tmp_path / "src", driver=_DRIVER, mod_add=_MOD_ADD)
-    sdfg = build_sdfg_from_files(list(reversed(files)), tmp_path / "b",
-                                 name="run", entry="_QPrun").build()
+    sdfg = build_sdfg_from_files(list(reversed(files)), entry="_QPrun",
+                                 name="run", out_dir=tmp_path / "b")
     n = 16
     rng = np.random.default_rng(0)
     x = np.asfortranarray(rng.random(n))
@@ -98,8 +100,8 @@ def test_three_files_transitive_use(tmp_path: Path):
     """Driver USEs mod_scale which USEs mod_add -> transitive inline."""
     files = _write(tmp_path / "src", mod_add=_MOD_ADD, mod_scale=_MOD_SCALE,
                    driver=_DRIVER_CHAIN)
-    sdfg = build_sdfg_from_files(files, tmp_path / "b",
-                                 name="run_chain", entry="_QPrun_chain").build()
+    sdfg = build_sdfg_from_files(files, entry="_QPrun_chain",
+                                 name="run_chain", out_dir=tmp_path / "b")
     n = 8
     rng = np.random.default_rng(1)
     x = np.asfortranarray(rng.random(n))
@@ -113,11 +115,22 @@ def test_entry_not_found_is_rejected(tmp_path: Path):
     """No input file defines the entry's procedure -> clear error."""
     files = _write(tmp_path / "src", mod_add=_MOD_ADD)
     with pytest.raises(ValueError, match="(?i)no input file defines procedure"):
-        build_sdfg_from_files(files, tmp_path / "b", name="x", entry="_QPmissing")
+        build_sdfg_from_files(files, entry="_QPmissing", name="x", out_dir=tmp_path / "b")
 
 
-def test_entry_required(tmp_path: Path):
-    """``entry=`` selects the root, so it is mandatory."""
+def test_entry_resolution_contract(tmp_path: Path):
+    """Entry contract: ``build_sdfg`` auto-resolves a single
+    procedure but errors when the source is empty or *ambiguous*
+    (an SDFG targets one specific procedure -- no "first of many"
+    guessing); ``build_sdfg_from_files`` always requires ``entry=``
+    (it selects the root file)."""
     files = _write(tmp_path / "src", driver=_DRIVER, mod_add=_MOD_ADD)
     with pytest.raises(ValueError, match="(?i)requires entry"):
-        build_sdfg_from_files(files, tmp_path / "b", name="run")
+        build_sdfg_from_files(files, name="run", out_dir=tmp_path / "b")
+
+    two_procs = _DRIVER + "\nsubroutine other(p)\n  real(8) :: p\n  p = 1.0d0\nend subroutine other\n"
+    with pytest.raises(ValueError, match="(?i)multiple procedures"):
+        build_sdfg(two_procs, name="amb", out_dir=tmp_path / "b2")
+
+    with pytest.raises(ValueError, match="(?i)no SUBROUTINE/FUNCTION"):
+        build_sdfg("module m\n  integer :: x\nend module m\n", name="np", out_dir=tmp_path / "b3")

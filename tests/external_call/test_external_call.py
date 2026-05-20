@@ -1,23 +1,16 @@
-"""Executable spec (xfail until implemented): a separately-compiled
-external **iso_c Fortran** function lowered via a registered signature.
+"""End-to-end: a separately-compiled external **iso_c Fortran**
+function lowered via a registered signature (see ``DESIGN.md`` here).
 
-Design (see memory ``project_external_function_calls_design.md``):
-the user registers ``foo`` 's signature; the bridge lowers
-``call foo(a, n)`` to a CPP tasklet that calls the ``extern "C"``
+The user registers ``foo`` 's ``bind(c)`` signature; the bridge
+lowers ``call foo(a, n)`` to a CPP tasklet calling the ``extern "C"``
 symbol, left undefined in the SDFG ``.so`` and resolved at load by
-preloading the separately-built ``libfoo.so`` (RTLD_GLOBAL).
+preloading the separately-built ``libfoo.so`` (``RTLD_GLOBAL``).
 
-Why iso_c / ``bind(c)``: Fortran name mangling is compiler-specific
-and a ``.mod`` is not C-consumable, so the only portable way to call
-a Fortran routine from the generated C++ is an ``ISO_C_BINDING``
-``bind(c, name=...)`` stable symbol (or a generated ``bind(c)`` shim
-when only a ``.mod`` exists -- the documented case-B follow-up).
-
-``strict=False``: this xpasses (loudly) once the registry +
-``emit_call`` land, signalling the spec is satisfied; it must not be
-silently converted to a normal test until then.
+Contract: the target must be ``bind(c)`` -- Fortran name mangling is
+compiler-specific and a ``.mod`` is not C-consumable, so a stable
+``bind(c)`` symbol (native or via a hand-written shim) is the only
+portable way to call a Fortran routine from the generated C++.
 """
-import ctypes
 import shutil
 import subprocess
 from pathlib import Path
@@ -26,6 +19,8 @@ import numpy as np
 import pytest
 
 from _util import build_sdfg, have_flang
+from dace_fortran.external import (Arg, ExternalCall, ExternalSignature, clear_external_registry,
+                                   register_external)
 
 pytestmark = [
     pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH"),
@@ -66,14 +61,8 @@ end subroutine run
 """
 
 
-@pytest.mark.xfail(strict=False,
-                   reason="external-function registry + emit_call not yet implemented "
-                   "(spec-first; see project_external_function_calls_design)")
 def test_external_iso_c_function_increments_array(tmp_path: Path):
-    # Future registry API -- import inside the test so its absence is
-    # an xfail, not a collection error.
-    from dace_fortran.external import Arg, ExternalSignature, register_external
-
+    clear_external_registry()
     # Build the external function as its own shared library.
     foo_f90 = tmp_path / "foo.f90"
     foo_f90.write_text(_FOO_F90)
@@ -84,18 +73,52 @@ def test_external_iso_c_function_increments_array(tmp_path: Path):
         c_name="foo",
         args=[Arg(kind="array", dtype="float64", intent="inout"),
               Arg(kind="scalar", dtype="int32", intent="in")],
+        libraries=[str(libfoo)],
+    ))
+
+    # The SDFG .so is linked against libfoo with an rpath, so it is
+    # self-contained: no LD_PRELOAD / load ordering needed.
+    sdfg = build_sdfg(_KERNEL, tmp_path / "sdfg", name="run", entry="_QPrun").build()
+    sdfg.name = "ext_run"
+
+    calls = [nd for nd, _ in sdfg.all_nodes_recursive() if isinstance(nd, ExternalCall)]
+    assert len(calls) == 1 and calls[0].c_name == "foo"
+    assert calls[0].in_connectors and calls[0].out_connectors
+    sdfg.validate()
+
+    sdfg.compile()
+
+    n = 12
+    a = np.asfortranarray(np.arange(n, dtype=np.float64))
+    expected = a + 1.0
+    sdfg(a=a, n=n)
+    np.testing.assert_allclose(a, expected, rtol=1e-12, atol=1e-12)
+
+
+def test_external_default_intent_is_inout(tmp_path: Path):
+    """No explicit ``intent`` -> ``Arg`` defaults to ``inout``, so the
+    array still gets the write-back edge and the mutation is modelled
+    (a missed write would silently drop the increment)."""
+    clear_external_registry()
+    foo_f90 = tmp_path / "foo.f90"
+    foo_f90.write_text(_FOO_F90)
+    libfoo = tmp_path / "libfoo.so"
+    subprocess.check_call(["gfortran", "-shared", "-fPIC", "-o", str(libfoo), str(foo_f90)])
+
+    register_external("foo", ExternalSignature(
+        c_name="foo",
+        # No intent= on the array -> defaults to inout (safe).
+        args=[Arg(kind="array", dtype="float64"),
+              Arg(kind="scalar", dtype="int32")],
+        libraries=[str(libfoo)],
     ))
 
     sdfg = build_sdfg(_KERNEL, tmp_path / "sdfg", name="run", entry="_QPrun").build()
-    sdfg.name = "ext_run"
+    sdfg.name = "ext_run_def"
     sdfg.compile()
 
-    # Resolve the undefined ``foo`` symbol by preloading libfoo
-    # globally before the SDFG library is invoked.
-    ctypes.CDLL(str(libfoo), mode=ctypes.RTLD_GLOBAL)
-
-    n = 12
-    a = np.arange(n, dtype=np.float64, order="F")
+    n = 7
+    a = np.asfortranarray(np.arange(n, dtype=np.float64))
     expected = a + 1.0
     sdfg(a=a, n=n)
     np.testing.assert_allclose(a, expected, rtol=1e-12, atol=1e-12)

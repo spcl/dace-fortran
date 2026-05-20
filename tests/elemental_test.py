@@ -48,7 +48,7 @@ contains
   end subroutine delta
 end subroutine apply_delta
 """
-    sdfg = build_sdfg(src, tmp_path, name="apply_delta").build()
+    sdfg = build_sdfg(src, tmp_path, name="apply_delta", entry="_QPapply_delta").build()
 
     rng = np.random.default_rng(0)
     od = np.asfortranarray(rng.random(14, dtype=np.float64))
@@ -114,7 +114,7 @@ contains
   end subroutine doubler
 end subroutine driver
 """
-    b = build_sdfg(src, tmp_path, name="driver")
+    b = build_sdfg(src, tmp_path, name="driver", entry="_QPdriver")
     sdfg = b.build()
 
     # The outer array ``x`` is the only dummy of the driver.  The
@@ -142,7 +142,7 @@ contains
   end subroutine soft
 end subroutine apply_soft
 """
-    sdfg = build_sdfg(src, tmp_path, name="apply_soft").build()
+    sdfg = build_sdfg(src, tmp_path, name="apply_soft", entry="_QPapply_soft").build()
 
     rng = np.random.default_rng(2)
     n = 16
@@ -171,7 +171,7 @@ contains
   end subroutine relu
 end subroutine apply_relu
 """
-    sdfg = build_sdfg(src, tmp_path, name="apply_relu").build()
+    sdfg = build_sdfg(src, tmp_path, name="apply_relu", entry="_QPapply_relu").build()
 
     rng = np.random.default_rng(3)
     n = 32
@@ -208,7 +208,7 @@ contains
   end subroutine smstep
 end subroutine apply_softmax_step
 """
-    sdfg = build_sdfg(src, tmp_path, name="apply_softmax_step").build()
+    sdfg = build_sdfg(src, tmp_path, name="apply_softmax_step", entry="_QPapply_softmax_step").build()
 
     rng = np.random.default_rng(4)
     n = 16

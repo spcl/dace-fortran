@@ -370,6 +370,95 @@ def emit_mpi(builder, ctx, n, region):
         raise NotImplementedError(f"MPI op {n.callee!r} not supported")
 
 
+def emit_call(builder, ctx, n, region):
+    """Lower a *registered* external ``bind(c)`` call to an
+    :class:`dace_fortran.external.ExternalCall` library node.
+
+    The callee is matched against
+    ``dace_fortran.external.lookup_external``.  Unregistered callees
+    are a **no-op** (preserves prior behaviour -- ``kind="call"`` had
+    no emitter), so unrelated kernels are unaffected.
+
+    For a registered callee the signature drives the library node's
+    connectors and call body: array args are pointer connectors
+    (read / written per ``intent``), scalar args by-value connectors,
+    shape-only free symbols are referenced inline in the call body.
+    The library node carries the ``extern "C"`` declaration; its
+    expansion at code-gen time produces the side-effecting CPP
+    tasklet.  Linking the separately-compiled ``.so`` happens via the
+    scoped ``compiler.linker.args`` set by ``register_external``.
+
+    :raises ValueError: registered arg count disagrees with the call.
+    """
+    import dace
+    from dace_fortran.external import ExternalCall, lookup_external
+
+    callee = n.callee.lstrip('@')
+    if callee.startswith('_QP'):
+        callee = callee[3:]
+    sig = lookup_external(callee)
+    if sig is None:
+        return  # not registered -> unchanged (kind="call" had no emitter)
+
+    names = list(n.call_args)
+    if len(names) != len(sig.args):
+        raise ValueError(f"external {callee!r}: signature declares {len(sig.args)} "
+                         f"argument(s) but the call site passed {len(names)}")
+
+    state = ctx.flush_and_ensure(builder, region)
+
+    # Per arg, decide how it reaches the C call.  A data container ->
+    # library-node connector(s): array = pointer (distinct in ``_aI`` /
+    # out ``_aI_o`` names -- the expanded tasklet may not reuse one
+    # name across in & out; both memlet the same array so codegen
+    # aliases them), scalar = by-value ``_aI``.  A shape-only free
+    # symbol (``n`` from ``a(n)``) has no container -> referenced
+    # directly by name in the call body.
+    in_set, out_set, ptr_of = set(), set(), {}
+    edges = []  # (name, conn, direction)  direction: 'r' | 'w'
+    terms = []
+    for i, (a, name) in enumerate(zip(sig.args, names)):
+        if name not in ctx.sdfg.arrays:
+            terms.append(name)  # free symbol -- in scope in the code
+            continue
+        dt = ctx.sdfg.arrays[name].dtype
+        if a.kind == 'array':
+            reads = a.intent in ('in', 'inout')
+            writes = a.intent in ('out', 'inout')
+            cin, cout = f"_a{i}", f"_a{i}_o"
+            if reads:
+                in_set.add(cin); ptr_of[cin] = dt; edges.append((name, cin, 'r'))
+            if writes:
+                out_set.add(cout); ptr_of[cout] = dt; edges.append((name, cout, 'w'))
+            # The C call uses the writable pointer when it writes,
+            # else the read pointer (both alias the same array).
+            terms.append(cout if writes else cin)
+        else:
+            cin = f"_a{i}"
+            in_set.add(cin); edges.append((name, cin, 'r'))
+            terms.append(cin)
+
+    node = ExternalCall(name=f"_ext_{callee}_{builder.nid()}",
+                        c_name=sig.c_name,
+                        c_decl=sig.c_declaration(),
+                        body=f"{sig.c_name}({', '.join(terms)});",
+                        inputs=in_set,
+                        outputs=out_set)
+    state.add_node(node)
+
+    for name, conn, direction in edges:
+        mem = Memlet.from_array(name, ctx.sdfg.arrays[name])
+        if direction == 'r':
+            state.add_memlet_path(state.add_read(name), node, dst_conn=conn, memlet=mem)
+        else:
+            state.add_memlet_path(node, state.add_write(name), src_conn=conn, memlet=mem)
+
+    # Array connectors carry a pointer; data scalars stay by-value.
+    node.in_connectors = {c: (dace.pointer(ptr_of[c]) if c in ptr_of else d)
+                          for c, d in node.in_connectors.items()}
+    node.out_connectors = {c: dace.pointer(ptr_of[c]) for c, d in node.out_connectors.items()}
+
+
 def emit_reduce(builder, ctx, n, region):
     """``target = sum(src)`` (and product / minval / maxval) lowered as a
     DaCe ``standard.Reduce`` library node via

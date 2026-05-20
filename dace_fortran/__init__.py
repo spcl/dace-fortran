@@ -11,14 +11,32 @@ stays cheap: the C++ HLFIR bridge is compiled on first *use* (first
 access of ``SDFGBuilder`` / ``generate_sdfg``), not at import time.
 
     import dace_fortran
-    sdfg = dace_fortran.generate_sdfg("kernel.hlfir")   # -> dace.SDFG
 
-    # or pre-process Fortran source first (the unified entrypoint
-    # composing module-merge + the text rewrites), e.g.
-    from dace_fortran.preprocess import preprocess_fortran_source
+    # Inline Fortran source -> built dace.SDFG:
+    sdfg = dace_fortran.build_sdfg(src, entry="_QPrun")
+
+    # A multi-file project (driver + the modules it USEs, any order):
+    sdfg = dace_fortran.build_sdfg_from_files([drv, mod], entry="_QPrun")
+
+    # A kernel that CALLs a separately-compiled bind(c) function:
+    dace_fortran.register_external("foo", dace_fortran.ExternalSignature(
+        c_name="foo",
+        args=[dace_fortran.Arg("array", "float64")],   # intent defaults to inout
+        libraries=["/path/libfoo.so"]))
+
+    # Low level: an already-emitted .hlfir file:
+    sdfg = dace_fortran.generate_sdfg("kernel.hlfir")
 """
 
 _LAZY = {
+    # Public build entry points (the documented surface).
+    "build_sdfg": "dace_fortran.build",
+    "build_sdfg_from_files": "dace_fortran.build",
+    "register_external": "dace_fortran.external",
+    "ExternalSignature": "dace_fortran.external",
+    "Arg": "dace_fortran.external",
+    "clear_external_registry": "dace_fortran.external",
+    # Lower-level / advanced.
     "SDFGBuilder": "dace_fortran.hlfir_to_sdfg",
     "generate_sdfg": "dace_fortran.hlfir_to_sdfg",
     "DEFAULT_PIPELINE": "dace_fortran.hlfir_to_sdfg",

@@ -954,6 +954,11 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
         nodes.push_back(buildMpiCallNode(call, mpiOp));
         continue;
       }
+      // Resolve each operand to a decl name so the Python builder can
+      // lower a registered external (bind(c)) call to a tasklet.
+      // Harmless for unregistered callees (the builder ignores them).
+      for (auto v : call.getArgOperands())
+        n.call_args.push_back(traceToDecl(v));
       nodes.push_back(std::move(n));
       continue;
     }

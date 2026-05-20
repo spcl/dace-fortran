@@ -23,7 +23,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not avail
 
 
 def test_fortran_frontend_loop_region_basic_loop():
-    from dace_fortran.fortran_parser import create_sdfg_from_string
+    from dace_fortran import build_sdfg
 
     # The legacy version wraps the subroutine in a PROGRAM + CALL; the HLFIR
     # frontend runs on the subroutine directly (cross-subroutine lowering is
@@ -40,7 +40,7 @@ subroutine loop_test_function(a, b, c)
   end do
 end subroutine loop_test_function
 """
-    sdfg = create_sdfg_from_string(test_string, "loop_test", use_explicit_cf=True)
+    sdfg = build_sdfg(test_string, entry="_QPloop_test_function", name="loop_test")
 
     a_test = np.full((10, 10), 2.0, dtype=np.float64)
     b_test = np.full((10, 10), 3.0, dtype=np.float64)

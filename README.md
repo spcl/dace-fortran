@@ -515,24 +515,55 @@ dace_fortran/
 
 ## Entry point
 
+`dace_fortran` exposes one canonical, documented surface for turning
+Fortran into a built, validated `dace.SDFG`.  Everything is lazy
+(`import dace_fortran` is cheap; the C++ bridge builds on first use).
+
 ```python
-from dace_fortran import generate_sdfg          # lazy: bridge builds on first use
+import dace_fortran
 
-# Multi-file (production): merges the files, drops non-entry siblings.
-sdfg = generate_sdfg(
-    entry="_QPcompute_tendencies",
-    hlfir_files=["kernel.hlfir", "math_utils.hlfir"],
-)
+# (1) A single inline Fortran source.  `entry` is the *mangled* Flang
+#     symbol of the target procedure -- always required: an SDFG
+#     represents one specific procedure, there is no "first procedure"
+#     guessing.  `_QP<name>` = free subroutine, `_QM<mod>P<name>` =
+#     module procedure.
+sdfg = dace_fortran.build_sdfg(src, entry="_QPcompute_tendencies")
 
-# Single-file (experiments)
-sdfg = generate_sdfg("code.hlfir")
-sdfg = generate_sdfg("code.hlfir", pipeline="hlfir-propagate-shapes")
+# (2) A multi-file project: a driver plus the modules it USEs, in any
+#     order.  The file defining `entry` is the root; the rest are
+#     merged into one translation unit (transitive USE is followed).
+sdfg = dace_fortran.build_sdfg_from_files(
+    ["driver.f90", "math_utils.f90"], entry="_QPcompute_tendencies")
+
+# (3) A kernel that CALLs a separately-compiled function.  The target
+#     MUST be ISO_C_BINDING `bind(c, name=...)` (Fortran name mangling
+#     is compiler-specific and a `.mod` is not C-consumable, so a
+#     stable bind(c) symbol -- native or via a hand-written shim -- is
+#     the only portable way to call it from the generated C++).
+#     Register its signature; `intent` defaults to `inout` (an opaque
+#     function is conservatively assumed to read *and* write an array
+#     -- a missed write would be a silent correctness bug).  The named
+#     libraries are linked into the SDFG `.so` with an rpath, so it is
+#     self-contained (no `LD_PRELOAD`).
+dace_fortran.register_external("foo", dace_fortran.ExternalSignature(
+    c_name="foo",
+    args=[dace_fortran.Arg("array", "float64"),    # inout by default
+          dace_fortran.Arg("scalar", "int32")],    # by-value
+    libraries=["/abs/path/libfoo.so"]))
+sdfg = dace_fortran.build_sdfg(kernel_src, entry="_QPrun")
+
+# (4) Lower level: an already-emitted .hlfir MLIR file.
+sdfg = dace_fortran.generate_sdfg("code.hlfir")    # pipeline=... optional
 ```
 
-`generate_sdfg` returns a validated `dace.SDFG` (with
-`sdfg._frozen_signature` attached).  Emit the Fortran binding and a
-callable library from it with `build_fortran_library` (see *Quick
-start*); it is not folded into `generate_sdfg`.
+`build_sdfg` / `build_sdfg_from_files` / `generate_sdfg` all return a
+validated `dace.SDFG` with `sdfg._frozen_signature` attached.  Emit a
+Fortran-callable library from it with `build_fortran_library` (see
+*Quick start*) -- that stays a separate step, not folded in.
+
+MPI (`MPI_Send/Recv/Isend/Irecv/Wait`, including a non-default
+communicator) is recognised automatically and lowered to
+`dace.libraries.mpi` nodes -- no registration needed.
 
 ## Extending the frontend
 

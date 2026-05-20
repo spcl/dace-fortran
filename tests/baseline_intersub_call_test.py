@@ -14,9 +14,10 @@ from _util import build_sdfg, f2py_compile, have_flang
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not available")
 
 
-def _build(src: str, tmp: Path, name: str):
+def _build(src: str, tmp: Path, name: str, entry: str | None = None,
+           pipeline: str | None = "hlfir-propagate-shapes"):
     tmp.mkdir(parents=True, exist_ok=True)
-    return build_sdfg(src, tmp, name=name, pipeline="hlfir-propagate-shapes").build()
+    return build_sdfg(src, tmp, name=name, pipeline=pipeline, entry=entry).build()
 
 
 def test_intersub_call(tmp_path):
@@ -38,7 +39,10 @@ subroutine outer(d)
 end subroutine outer
 """
     mod = f2py_compile(src, tmp_path / "ref", "outer_mod")
-    sdfg = _build(src, tmp_path / "sdfg", name="outer")
+    # DEFAULT pipeline (pipeline=None) so hlfir-inline-all runs --
+    # required under the explicit-entry contract: privatised callees
+    # must be inlined before symbol-dce drops them.
+    sdfg = _build(src, tmp_path / "sdfg", name="outer", entry="_QPouter", pipeline=None)
 
     d_ref = np.zeros(4, order="F")
     mod.outer(d_ref)
