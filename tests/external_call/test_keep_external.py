@@ -132,3 +132,63 @@ def test_keep_external_empty_args_passthrough():
     assert lookup_external("noop").c_name == "other_sym"
     clear_external_registry()
     assert lookup_external("noop") is None
+
+
+# --------------------------------------------------------------------------
+# kind="comm" -- MPI_Comm by-value arg.  Drives the c_decl_type +
+# signature surface; full e2e (mpirun + DaCe MPI binding to materialise
+# a comm at the SDFG boundary) lives in tests/mpi_comm_e2e_test.py
+# (the existing Send/Recv-on-split-comm test).
+# --------------------------------------------------------------------------
+
+
+def test_comm_kind_c_decl_type_is_mpi_comm():
+    """``Arg(kind='comm')`` declares ``MPI_Comm`` regardless of
+    ``dtype`` -- the field is documented as ignored for this kind."""
+    from dace_fortran.external import Arg, ExternalSignature
+    a = Arg(kind="comm")
+    assert a.c_decl_type() == "MPI_Comm"
+    # An explicit (and irrelevant) dtype must not change the C type.
+    a_explicit = Arg(kind="comm", dtype="int32")
+    assert a_explicit.c_decl_type() == "MPI_Comm"
+
+    sig = ExternalSignature(
+        c_name="shim_with_comm",
+        args=(Arg(kind="array", dtype="float64", intent="inout"),
+              Arg(kind="scalar", dtype="int32", intent="in"),
+              Arg(kind="comm")))
+    decl = sig.c_declaration()
+    # Argument order is preserved verbatim (left-to-right same as args).
+    assert decl == 'extern "C" void shim_with_comm(double *, int, MPI_Comm);'
+
+
+def test_comm_kind_rejects_unknown_dtype_only_for_data_args():
+    """Unknown ``dtype`` is fatal for array/scalar (resolved via
+    ``_C_TYPES``) but **not** for comm (its type is fixed)."""
+    from dace_fortran.external import Arg
+    with pytest.raises(ValueError, match="unsupported dtype"):
+        Arg(kind="array", dtype="float16").c_decl_type()
+    with pytest.raises(ValueError, match="unsupported dtype"):
+        Arg(kind="scalar", dtype="complex64").c_decl_type()
+    # comm: the dtype is ignored, so a nonsense one still yields MPI_Comm.
+    assert Arg(kind="comm", dtype="something_irrelevant").c_decl_type() == "MPI_Comm"
+
+
+def test_keep_external_with_comm_signature_round_trip():
+    """``keep_external`` accepts the new ``kind='comm'`` arg and stores
+    the signature unchanged (the registry is type-blind; the consumer
+    in ``emit_call`` is what wires the opaque(MPI_Comm) connector)."""
+    from dace_fortran.external import Arg
+    clear_external_registry()
+    keep_external(
+        "exch_with_comm",
+        c_name="exch_with_comm_c",
+        args=[Arg(kind="array", dtype="float64", intent="inout"),
+              Arg(kind="scalar", dtype="int32", intent="in"),
+              Arg(kind="comm")])
+    sig = lookup_external("exch_with_comm")
+    assert sig is not None and sig.c_name == "exch_with_comm_c"
+    assert tuple(a.kind for a in sig.args) == ("array", "scalar", "comm")
+    assert sig.c_declaration() == \
+        'extern "C" void exch_with_comm_c(double *, int, MPI_Comm);'
+    clear_external_registry()

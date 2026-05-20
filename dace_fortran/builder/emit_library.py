@@ -421,17 +421,34 @@ def emit_call(builder, ctx, n, region):
     # library-node connector(s): array = pointer (distinct in ``_aI`` /
     # out ``_aI_o`` names -- the expanded tasklet may not reuse one
     # name across in & out; both memlet the same array so codegen
-    # aliases them), scalar = by-value ``_aI``.  A shape-only free
-    # symbol (``n`` from ``a(n)``) has no container -> referenced
-    # directly by name in the call body.
+    # aliases them), scalar = by-value ``_aI``, MPI communicator =
+    # by-value ``_aI`` typed as ``opaque(MPI_Comm)`` (the container is
+    # retyped so DaCe codegen passes it at the C ABI as ``MPI_Comm``,
+    # matching the shim's ``MPI_Comm`` parameter -- the ``bind(c)`` /
+    # DaCe binding handles the ``MPI_Comm_f2c`` from the Fortran handle).
+    # A shape-only free symbol (``n`` from ``a(n)``) has no container ->
+    # referenced directly by name in the call body.
     in_conns: list = []
     out_conns: list = []
-    ptr_of: dict = {}
+    ptr_of: dict = {}  # connector -> base dtype to wrap in dace.pointer()
+    comm_conns: set = set()  # connectors typed as opaque(MPI_Comm), by-value
     edges: list = []  # (name, conn, direction)  direction: 'r' | 'w'
     terms: list = []
     for i, (a, name) in enumerate(zip(sig.args, names)):
         if name not in ctx.sdfg.arrays:
             terms.append(name)  # free symbol -- in scope in the code
+            continue
+        if a.kind == 'comm':
+            # Retype the SDFG container so it flows as opaque(MPI_Comm)
+            # through dataflow (matches the emit_mpi convention).  The
+            # length-1 / scalar passes already exempt ``opaque`` dtypes
+            # so the retype stays a by-value Scalar.
+            ctx.sdfg.arrays[name].dtype = dace.dtypes.opaque("MPI_Comm")
+            cin = f"_a{i}"
+            in_conns.append(cin)
+            comm_conns.add(cin)
+            edges.append((name, cin, 'r'))
+            terms.append(cin)
             continue
         dt = ctx.sdfg.arrays[name].dtype
         if a.kind == 'array':
@@ -445,7 +462,7 @@ def emit_call(builder, ctx, n, region):
             # The C call uses the writable pointer when it writes,
             # else the read pointer (both alias the same array).
             terms.append(cout if writes else cin)
-        else:
+        else:  # 'scalar'
             cin = f"_a{i}"
             in_conns.append(cin); edges.append((name, cin, 'r'))
             terms.append(cin)
@@ -459,15 +476,27 @@ def emit_call(builder, ctx, n, region):
     state.add_node(node)
 
     for name, conn, direction in edges:
-        mem = Memlet.from_array(name, ctx.sdfg.arrays[name])
+        if conn in comm_conns:
+            # Comm: by-value opaque scalar (subset '0', single element).
+            mem = Memlet(data=name, subset='0')
+        else:
+            mem = Memlet.from_array(name, ctx.sdfg.arrays[name])
         if direction == 'r':
             state.add_memlet_path(state.add_read(name), node, dst_conn=conn, memlet=mem)
         else:
             state.add_memlet_path(node, state.add_write(name), src_conn=conn, memlet=mem)
 
-    # Array connectors carry a pointer; data scalars stay by-value.
-    node.in_connectors = {c: (dace.pointer(ptr_of[c]) if c in ptr_of else d)
-                          for c, d in node.in_connectors.items()}
+    # Array connectors carry a pointer; data scalars stay by-value;
+    # ``comm`` connectors carry ``opaque(MPI_Comm)`` by value (matches
+    # the C ``MPI_Comm`` parameter type the shim declares).
+    def _retype_in(c, d):
+        if c in ptr_of:
+            return dace.pointer(ptr_of[c])
+        if c in comm_conns:
+            return dace.dtypes.opaque("MPI_Comm")
+        return d
+
+    node.in_connectors = {c: _retype_in(c, d) for c, d in node.in_connectors.items()}
     node.out_connectors = {c: dace.pointer(ptr_of[c]) for c, d in node.out_connectors.items()}
 
 

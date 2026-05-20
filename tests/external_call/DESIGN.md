@@ -85,6 +85,48 @@ override only when the `bind(c)` symbol uses a different label).  The
 flow as the `foo` test (compile separately, register, build, run,
 assert the mutation).
 
+## MPI communicator args -- `Arg(kind="comm")`
+
+External calls that take an MPI communicator (ICON
+`sync_patch_array` / `exchange_data`, or any user-written
+collective wrapper) can declare it with `Arg(kind="comm")`:
+
+```python
+keep_external("exch_with_comm",
+              c_name="exch_with_comm_c",
+              args=[Arg("array", "float64", "inout"),
+                    Arg("scalar", "int32", "in"),
+                    Arg(kind="comm")],
+              libraries=["/abs/path/libexch.so"])
+```
+
+`kind="comm"` ignores `dtype` (the C type is always `MPI_Comm`).  At
+emit time `emit_call` retypes the SDFG-side container that holds the
+communicator handle to `dace.dtypes.opaque("MPI_Comm")` and adds a
+by-value `opaque(MPI_Comm)` input connector for it — the same
+convention `emit_mpi` already uses for the MPI nodes' `_comm`
+connector.  The length-1↔scalar passes already exempt `opaque`
+dtypes, so the retype stays a Scalar (handle by value, not a pointer
+decay).
+
+**Who calls `MPI_Comm_f2c`.**  The binding does — never the kernel.
+By "binding" we mean whichever layer sits between the Fortran handle
+the SDFG sees and the C `MPI_Comm` the shim consumes.  In the
+`dace_fortran` bindings flow (`build_fortran_library`, used by
+`mpi_comm_e2e_test`) the generated wrapper does the `MPI_Comm_f2c`
+on the integer handle before passing the resulting `MPI_Comm` into
+the SDFG via the opaque connector; the shim's `extern "C"` parameter
+is `MPI_Comm` and just uses it.  If a future call site needs the
+opposite split (kernel hands raw `MPI_Fint`, shim does `f2c`),
+declare the arg as `Arg("scalar", "int32", "in")` instead -- comm
+is the by-`MPI_Comm` form.
+
+`MPI_Request` is the natural symmetric extension (same opaque
+pattern, different type name).  Not implemented yet -- add when a
+real call site needs it; the shape is `kind="request"` →
+`opaque(MPI_Request)` connector + `MPI_Request` in the C
+declaration.
+
 ## Real-world target: ICON `velocity_tendencies`
 
 The intent for `keep_external` is calls like ICON's
@@ -159,3 +201,7 @@ once the leaf list is fixed.  The bridge then emits one
 `ExternalCall` library node per `CALL velocity_tendencies(...)` in
 the kernel, exactly as for `foo` / `bar` -- the SDFG `.so` links the
 shim's library and the call resolves at run time.
+
+If a leaf is an MPI communicator (ICON `sync_patch_array` /
+`exchange_data`), declare it as `Arg(kind="comm")` -- see
+**MPI communicator args** above.

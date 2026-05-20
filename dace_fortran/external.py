@@ -46,16 +46,40 @@ _C_TYPES = {
     "bool": "bool",
 }
 
+#: ``Arg.kind == "comm"`` -- pseudo-dtype name of an MPI communicator
+#: handle.  The C declaration uses the ``MPI_Comm`` opaque type
+#: directly; the SDFG-side container is retyped to
+#: ``dace.dtypes.opaque("MPI_Comm")`` so DaCe codegen passes the value
+#: as ``MPI_Comm`` at the C ABI.  The binding (the ``bind(c)`` shim
+#: or DaCe's MPI integration) handles ``MPI_Comm_f2c`` so that by the
+#: time the external function runs it has a C ``MPI_Comm`` to use --
+#: see ``Arg`` 's ``kind="comm"`` paragraph for the full contract.
+_OPAQUE_COMM_DTYPE = "MPI_Comm"
+
 
 @dataclass(frozen=True)
 class Arg:
     """One argument of a registered external function.
 
-    :ivar kind: ``'array'`` (passed as a pointer) or ``'scalar'``
-        (passed by value, i.e. the ``VALUE`` attribute on the Fortran
-        ``bind(c)`` dummy).
+    :ivar kind: how the arg crosses the C ABI:
+
+        * ``'array'`` -- passed as a pointer (``<ctype> *``).
+        * ``'scalar'`` -- passed by value (the ``VALUE`` attribute on
+          the Fortran ``bind(c)`` dummy).
+        * ``'comm'`` -- a C ``MPI_Comm`` handle, by value.  The
+          ``dtype`` field is ignored (the type is always ``MPI_Comm``);
+          the SDFG-side container is retyped to
+          ``dace.dtypes.opaque("MPI_Comm")`` so DaCe codegen passes the
+          value at the C ABI as ``MPI_Comm`` -- the ``bind(c)`` shim
+          (or DaCe's MPI integration) is responsible for ``MPI_Comm_f2c``
+          so by the time the external function runs it has a C
+          ``MPI_Comm`` ready to use.  A communicator is by-value and
+          read-only (the callee may use it but must not free it), so
+          ``intent`` is forced to ``'in'`` for this kind.
+
     :ivar dtype: element dtype string -- a key of :data:`_C_TYPES`
-        (``'float64'`` / ``'int32'`` / ...).
+        (``'float64'`` / ``'int32'`` / ...).  Ignored when
+        ``kind == 'comm'``.
     :ivar intent: ``'in'`` | ``'out'`` | ``'inout'``.  **Defaults to
         ``'inout'``** -- an external function is opaque, so the safe
         conservative assumption is that it both reads and writes an
@@ -65,15 +89,21 @@ class Arg:
         costs optimization.  Narrow to ``'in'`` / ``'out'`` only when
         the true behaviour is known.  A by-value ``'scalar'`` is
         read-only regardless of this field (the callee gets a copy --
-        it physically cannot write back; an ABI fact, not a choice).
+        it physically cannot write back; an ABI fact, not a choice);
+        a ``'comm'`` arg is always read-only.
     """
 
     kind: str
-    dtype: str
+    dtype: str = ""  # ignored when kind == "comm"
     intent: str = "inout"
 
     def c_decl_type(self) -> str:
-        """C parameter type for this arg's ``extern "C"`` declaration."""
+        """C parameter type for this arg's ``extern "C"`` declaration.
+
+        :raises ValueError: unsupported ``kind`` or ``dtype``.
+        """
+        if self.kind == "comm":
+            return _OPAQUE_COMM_DTYPE
         base = _C_TYPES.get(self.dtype)
         if base is None:
             raise ValueError(f"external Arg: unsupported dtype {self.dtype!r}; "
