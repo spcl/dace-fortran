@@ -12,6 +12,7 @@
 #include "bridge/ast/ast_helpers.h"
 #include "bridge/ast/ast_internal.h"
 #include "bridge/extract_vars.h"
+#include "bridge/trace_utils.h"
 #include "flang/Optimizer/Dialect/FIROps.h"
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
 #include "llvm/Support/raw_ostream.h"
@@ -308,6 +309,15 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
     if (raw.empty()) return {};
     unsigned site = allocSiteCount[raw]++;
     setAllocAlias(raw, allocAliasName(raw, site));
+    // Mint a position symbol for every constant-indexed element in the
+    // allocation's shape (``allocate(buf(max(dims(1), dims(2))))``) so each
+    // one gets a ``symbol_init`` -- even an element that appears only in
+    // the extent and nowhere else (no loop bound / index would otherwise
+    // mint it, leaving the shape symbol an unbound program argument).
+    for (auto sz : allocmem.getShape())
+      forEachConstIndexedElement(sz, [](const std::string &arr, int64_t idx) {
+        internPosSymbol(arr, idx);
+      });
     return raw;
   };
   auto emitAllocStateChange = [&](const std::string &name, int value) {

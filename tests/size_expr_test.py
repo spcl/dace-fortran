@@ -29,16 +29,22 @@ from _util import build_sdfg, f2py_compile, have_flang
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
 
-def _run(tmp_path, src, dims, *, entry="_QPprobe"):
+def _run(tmp_path, src, dims, *, entry="_QPprobe", shape_of=None):
     """Build ``src`` through the bridge and through f2py, run both on the
     same ``dims`` table, and return ``(sdfg_out, ref_out)``.  ``out`` is
-    dimensioned ``out(n)`` in the kernel, so it must match ``len(dims)``."""
+    dimensioned ``out(n)`` in the kernel, so it must match ``len(dims)``.
+
+    ``shape_of``: if given an array name, also returns the SDFG descriptor
+    shape (third tuple element) so a test can assert the extent expression
+    directly -- e.g. that a genuine MAX survives as ``Max(...)``."""
     n = len(dims)
     dims = np.asfortranarray(np.asarray(dims, dtype=np.int32))
     out_sdfg = np.zeros(n, dtype=np.float64)
     out_ref = np.zeros(n, dtype=np.float64)
 
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="probe", entry=entry).build()
+    if shape_of is not None:
+        shape_str = str(sdfg.arrays[shape_of].shape)
     sdfg(n=np.int32(n), dims=dims, out=out_sdfg)
 
     # Unique f2py module name per test: a shared name would be served from
@@ -46,7 +52,32 @@ def _run(tmp_path, src, dims, *, entry="_QPprobe"):
     # compiled kernel as its reference.
     mod = f2py_compile(src, tmp_path / "ref", f"size_ref_{tmp_path.name}")
     mod.probe(dims, out_ref)
+    if shape_of is not None:
+        return out_sdfg, out_ref, shape_str
     return out_sdfg, out_ref
+
+
+def _alloc_iter_by(size_expr: str, iter_idx: str) -> str:
+    """Allocate ``buf(size_expr)`` but iterate / read it via the bare
+    element ``iter_idx`` (which must be <= the realised size).  Lets a
+    MAX/MIN extent be exercised without also routing MAX/MIN through the
+    index/bound path (a separate subsystem)."""
+    return f"""
+subroutine probe(n, dims, out)
+  implicit none
+  integer, intent(in) :: n, dims(n)
+  real(8), intent(inout) :: out(n)
+  real(8), allocatable :: buf(:)
+  integer :: i
+  allocate(buf({size_expr}))
+  do i = 1, {iter_idx}
+    buf(i) = real(2*i, 8)
+  end do
+  out(1) = buf({iter_idx})
+  out(2) = buf(1)
+  deallocate(buf)
+end subroutine probe
+"""
 
 
 # ``out(1)`` is written ``buf(<size>) = 2*<size>`` so the realised extent
@@ -233,14 +264,19 @@ end subroutine probe
     np.testing.assert_array_equal(s, r)
 
 
-@pytest.mark.xfail(strict=True, reason="function fed an array element "
-                   "(foo(a(1))): the inlined call result used as size / index "
-                   "drops terms (reads buf(dims(1)) instead of buf(dims(1)*"
-                   "dims(2)+1)) -- a function-inlining issue distinct from the "
-                   "shape-symbol lifting, tracked separately")
+@pytest.mark.xfail(strict=True, reason="function fed array elements, used as "
+                   "BOTH size and index: the EXTENT now resolves correctly "
+                   "(both elements minted), but the index buf(fsz(dims(1),"
+                   "dims(2))) / loop bound go through the separate index "
+                   "expression builder, which does not recursively lift "
+                   "arith-over-element-reads the way traceExtentExpr does -> "
+                   "reads buf(dims(1)) not buf(dims(1)*dims(2)+1). Principled "
+                   "fix = unify the index resolver with the extent evaluator "
+                   "(share recursive element-lifting); deferred as it touches "
+                   "the pervasively-used memlet-index path")
 def test_size_function_of_array_element(tmp_path):
     """``allocate(buf(fsz(dims(1), dims(2))))`` -- function fed array
-    elements (the ``foo(a(0))`` shape)."""
+    elements (the ``foo(a(0))`` shape), result used as size AND index."""
     src = """
 subroutine probe(n, dims, out)
   implicit none
@@ -265,13 +301,40 @@ end subroutine probe
     np.testing.assert_array_equal(s, r)
 
 
-@pytest.mark.xfail(strict=True, reason="extent wrapped in MAX(elem, k): the "
-                   "select's false-arm is k != 0, so traceExtentExpr's "
-                   "max(ext,0)-clamp peel doesn't fire and the element read "
-                   "still resolves to the whole array name")
-def test_size_intrinsic_max_element(tmp_path):
-    """``allocate(buf(max(dims(1), 1)))`` -- element inside an intrinsic."""
-    s, r = _run(tmp_path, _alloc_1d("max(dims(1), 1)"), [5, 3])
+# --- clampdim checks: Flang's non-negativity clamp max(ext,0) is dropped,
+#     but a genuine two-operand MAX/MIN extent must survive. ---
+
+def test_size_max_element_const(tmp_path):
+    """``allocate(buf(max(dims(1), 1)))`` -- genuine MAX(element, const).
+    The realised extent is ``Max(1, dims(1))``, not the dropped clamp."""
+    s, r, shape = _run(tmp_path, _alloc_iter_by("max(dims(1), 1)", "dims(1)"),
+                       [5, 3], shape_of="buf")
+    assert "Max" in shape, shape
+    assert s[0] == 2 * 5 and s[1] == 2
+    np.testing.assert_array_equal(s, r)
+
+
+def test_size_max_two_elements(tmp_path):
+    """``allocate(buf(max(dims(1), dims(2))))`` -- MAX of two elements.
+    A wrong handling (dropping the max / taking the false arm) would
+    under-size the buffer and make ``buf(dims(1))`` out of bounds."""
+    s, r, shape = _run(tmp_path,
+                       _alloc_iter_by("max(dims(1), dims(2))", "dims(1)"),
+                       [5, 3], shape_of="buf")
+    assert "Max" in shape, shape
+    assert s[0] == 2 * 5
+    np.testing.assert_array_equal(s, r)
+
+
+def test_size_min_two_elements(tmp_path):
+    """``allocate(buf(min(dims(1), dims(2))))`` -- MIN of two elements;
+    verified through the descriptor (``Min(...)``) and a read at the
+    smaller extent."""
+    s, r, shape = _run(tmp_path,
+                       _alloc_iter_by("min(dims(1), dims(2))", "dims(2)"),
+                       [5, 3], shape_of="buf")
+    assert "Min" in shape, shape
+    assert s[0] == 2 * 3
     np.testing.assert_array_equal(s, r)
 
 

@@ -12,6 +12,7 @@
 
 #include <llvm/ADT/SmallVector.h>
 
+#include <functional>
 #include <optional>
 #include <set>
 #include <string>
@@ -186,6 +187,17 @@ std::string posSymbolName(const std::string &array, int64_t one_based_idx);
 /// position symbol instead of resolving to the whole array's name.
 std::optional<std::pair<std::string, int64_t>>
 constIndexedElementLoad(mlir::Value v);
+
+/// Walk an extent SSA value (the same op set ``traceExtentExpr`` handles:
+/// convert / select / cmp / addi-subi-muli-divsi-divui / maxsi-minsi-etc /
+/// element load) and invoke ``fn(arr, one_based_idx)`` for every
+/// constant-indexed array element read it contains.  The AST builder uses
+/// this at an ALLOCATE site to mint a position symbol for EVERY element
+/// in the shape -- not just the ones that also appear in a loop bound --
+/// so each shape symbol gets its ``symbol_init``.  ``fn`` should be
+/// idempotent (the position-symbol registry already dedups).
+void forEachConstIndexedElement(
+    mlir::Value v, const std::function<void(const std::string &, int64_t)> &fn);
 
 /// Decoded ``hlfir.declare`` / ``fir.declare`` shape operand.  Per the
 /// FIR/HLFIR op defs it is exactly one of:

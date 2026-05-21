@@ -209,6 +209,33 @@ constIndexedElementLoad(mlir::Value v) {
   return std::make_pair(arr, *c);
 }
 
+static void forEachConstIndexedElementImpl(
+    mlir::Value v, const std::function<void(const std::string &, int64_t)> &fn,
+    int depth) {
+  if (depth > limits::kTraceToDeclMax || !v) return;
+  if (auto e = constIndexedElementLoad(v)) {
+    fn(e->first, e->second);
+    return;
+  }
+  auto *def = v.getDefiningOp();
+  if (!def) return;
+  // Recurse through the same wrapper / arithmetic / max-min / select op
+  // set ``traceExtentExpr`` renders, so every element leaf is reached.
+  if (mlir::isa<fir::ConvertOp, mlir::arith::SelectOp, mlir::arith::CmpIOp,
+                mlir::arith::AddIOp, mlir::arith::SubIOp, mlir::arith::MulIOp,
+                mlir::arith::DivSIOp, mlir::arith::DivUIOp,
+                mlir::arith::MaxSIOp, mlir::arith::MaxUIOp,
+                mlir::arith::MinSIOp, mlir::arith::MinUIOp>(def)) {
+    for (auto op : def->getOperands())
+      forEachConstIndexedElementImpl(op, fn, depth + 1);
+  }
+}
+
+void forEachConstIndexedElement(
+    mlir::Value v, const std::function<void(const std::string &, int64_t)> &fn) {
+  forEachConstIndexedElementImpl(v, fn, 0);
+}
+
 std::string traceExtentExpr(mlir::Value v) {
   if (!v) return "";
   auto *def = v.getDefiningOp();
@@ -239,31 +266,52 @@ std::string traceExtentExpr(mlir::Value v) {
     return "";
   }
 
-  // Flang's clamp wrapper for a Fortran triplet extent:
-  //   %cmp = arith.cmpi sgt, %ext, %c0
-  //   %r   = arith.select %cmp, %ext, %c0
-  // Array extents are non-negative by construction in valid Fortran,
-  // so the clamp is dead defensive code at runtime.  Drop the wrap
-  // and return the underlying extent expression directly  --  keeps
-  // SDFG shapes and view subsets readable (``klon`` not
-  // ``max(klon, 0)``) and lets sympy fold downstream arithmetic.
+  // ``arith.select`` over an ``arith.cmpi`` is BOTH Flang's
+  // non-negativity clamp on an extent AND a genuine Fortran
+  // ``MAX``/``MIN`` -- they must be told apart:
+  //
+  //   * Clamp ``max(ext, 0)``: ``select(ext sgt 0, ext, 0)`` -- the
+  //     false arm is the constant ``0``.  Array extents are
+  //     non-negative by construction, so this is dead defensive code;
+  //     drop the wrap and return the underlying extent (keeps shapes
+  //     readable -- ``klon`` not ``max(klon, 0)`` -- and lets sympy
+  //     fold).
+  //   * Genuine ``MAX(a, b)`` / ``MIN(a, b)``:
+  //     ``select(a sgt b, a, b)`` / ``select(a slt b, a, b)`` -- the
+  //     two arms are the operands.  Render ``max(a, b)`` / ``min(a, b)``
+  //     so a real two-operand bound (``allocate(x(max(n, 1)))``)
+  //     survives instead of being dropped.
+  //
+  // The cmp operands must match the select arms; otherwise it is some
+  // other conditional we don't model.
   if (auto sel = mlir::dyn_cast<mlir::arith::SelectOp>(def)) {
     auto *cdef = sel.getCondition().getDefiningOp();
     auto cmp = cdef ? mlir::dyn_cast<mlir::arith::CmpIOp>(cdef) : nullptr;
+    if (!cmp || cmp.getLhs() != sel.getTrueValue() ||
+        cmp.getRhs() != sel.getFalseValue())
+      return "";
+    using P = mlir::arith::CmpIPredicate;
+    auto pred = cmp.getPredicate();
     bool falseIsZero = false;
     if (auto *fdef = sel.getFalseValue().getDefiningOp())
       if (auto c = mlir::dyn_cast<mlir::arith::ConstantOp>(fdef))
         if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue()))
           falseIsZero = (ia.getInt() == 0);
-    if (cmp && falseIsZero &&
-        cmp.getPredicate() == mlir::arith::CmpIPredicate::sgt) {
-      return traceExtentExpr(sel.getTrueValue());
-    }
+    if (falseIsZero && (pred == P::sgt || pred == P::sge))
+      return traceExtentExpr(sel.getTrueValue());  // non-negativity clamp
+    auto a = traceExtentExpr(sel.getTrueValue());
+    auto b = traceExtentExpr(sel.getFalseValue());
+    if (a.empty() || b.empty()) return "";
+    if (pred == P::sgt || pred == P::sge || pred == P::ugt || pred == P::uge)
+      return "max(" + a + ", " + b + ")";
+    if (pred == P::slt || pred == P::sle || pred == P::ult || pred == P::ule)
+      return "min(" + a + ", " + b + ")";
     return "";
   }
 
   // Binary integer arithmetic.  Render parenthesised so the result
-  // composes cleanly when nested.
+  // composes cleanly when nested.  ``arith.max*i`` / ``arith.min*i`` are
+  // the direct MAX/MIN lowering (vs the select-over-cmp form above).
   auto nm = def->getName().getStringRef();
   static const std::map<llvm::StringRef, std::string> bin = {
       {"arith.addi", " + "},   {"arith.subi", " - "},   {"arith.muli", " * "},
@@ -274,6 +322,15 @@ std::string traceExtentExpr(mlir::Value v) {
     auto r = traceExtentExpr(def->getOperand(1));
     if (l.empty() || r.empty()) return "";
     return "(" + l + it->second + r + ")";
+  }
+  if ((nm == "arith.maxsi" || nm == "arith.maxui" || nm == "arith.minsi" ||
+       nm == "arith.minui") &&
+      def->getNumOperands() == 2) {
+    auto l = traceExtentExpr(def->getOperand(0));
+    auto r = traceExtentExpr(def->getOperand(1));
+    if (l.empty() || r.empty()) return "";
+    const char *fn = (nm == "arith.maxsi" || nm == "arith.maxui") ? "max" : "min";
+    return std::string(fn) + "(" + l + ", " + r + ")";
   }
 
   return "";
