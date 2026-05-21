@@ -181,18 +181,12 @@ end subroutine probe
     assert {"a", "a_alloc1", "a_alloc2", "a_alloc3"} <= set(sdfg.arrays)
 
 
-@pytest.mark.xfail(strict=True, reason="conditional ALLOCATE followed by a "
-                   "sequential re-ALLOCATE of the same array (3 sites: 2 "
-                   "mutually-exclusive branches + 1 realloc).  The detector "
-                   "is all-or-nothing -- the realloc site isn't exclusive "
-                   "with the branch sites, so all 3 get versioned and the "
-                   "conditional pair is mis-handled (a_d0 leaks unbound).  "
-                   "Needs allocation-EPOCH grouping: partition sites so a "
-                   "mutually-exclusive set becomes one conditional buffer and "
-                   "each sequential epoch a fresh buffer.")
 def test_cond_alloc_then_realloc(tmp_path):
-    """Conditional ALLOCATE, used, deallocated, then re-ALLOCATEd to a new
-    size before the routine ends -- conditional + realloc on one array."""
+    """Conditional ALLOCATE, used (via ``size``), deallocated, then
+    re-ALLOCATEd to a new size -- conditional + sequential realloc on one
+    array.  Buffer-class grouping: ``{then,else}`` -> the conditional buffer
+    ``a`` (branch extent ``a_d0``); ``{realloc}`` -> ``a_alloc1`` (extent
+    ``a_alloc1_d0`` so ``size`` resolves on the versioned buffer too)."""
     src = """
 subroutine probe(cond, n, m, k, out)
   implicit none
@@ -221,4 +215,44 @@ subroutine probe(cond, n, m, k, out)
   deallocate(a)
 end subroutine probe
 """
-    _run(tmp_path, src, [(1, 5, 3, 4), (0, 5, 3, 4)], ["cond", "n", "m", "k"])
+    sdfg = _run(tmp_path, src, [(1, 5, 3, 4), (0, 5, 3, 4)],
+                ["cond", "n", "m", "k"])
+    assert str(sdfg.arrays["a"].shape) == "(a_d0,)"   # conditional buffer
+    assert "a_alloc1" in sdfg.arrays                  # realloc buffer
+
+
+def test_realloc_chain_inside_if(tmp_path):
+    """A realloc chain inside one ``IF`` branch (``alloc; use; dealloc;
+    alloc``) with a single alloc in the other branch.  The post-``IF`` use
+    is reached by the then-branch's LAST buffer and the else buffer -- they
+    merge into one conditional buffer; the then-branch's first (freed)
+    buffer is a separate transient."""
+    src = """
+subroutine probe(cond, n, n2, m, out)
+  implicit none
+  integer, intent(in) :: cond, n, n2, m
+  real(8), intent(inout) :: out(10)
+  real(8), allocatable :: a(:)
+  integer :: i, sz
+  if (cond > 0) then
+    allocate(a(n))
+    a(1) = 99.0d0
+    deallocate(a)
+    allocate(a(n2))
+  else
+    allocate(a(m))
+  end if
+  sz = size(a)
+  do i = 1, sz
+    a(i) = real(i, 8)
+  end do
+  out(1) = real(sz, 8)
+  out(2) = a(1)
+  deallocate(a)
+end subroutine probe
+"""
+    sdfg = _run(tmp_path, src, [(1, 5, 8, 3), (0, 5, 8, 3), (1, 2, 6, 9)],
+                ["cond", "n", "n2", "m"])
+    # post-IF buffer is the merged then-last/else class (conditional);
+    # the then's first (freed) buffer is a separate transient.
+    assert "a_alloc1" in sdfg.arrays

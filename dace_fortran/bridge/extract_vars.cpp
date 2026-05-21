@@ -4,7 +4,9 @@
 
 #include "bridge/extract_vars.h"
 
+#include <algorithm>
 #include <cctype>
+#include <functional>
 #include <limits>
 #include <map>
 #include <set>
@@ -184,6 +186,95 @@ bool allocSitesInExclusiveBranches(
       if (!exclusive(si.getOperation(), sj.getOperation())) return false;
     }
   return true;
+}
+
+std::vector<std::vector<fir::AllocMemOp>> groupAllocSites(
+    const std::string &declName, mlir::ModuleOp module) {
+  auto sites = collectAllocSites(declName, module);
+  std::vector<std::vector<fir::AllocMemOp>> classes;
+  unsigned n = sites.size();
+  if (n == 0) return classes;
+
+  // site index by allocmem op; union-find over indices.
+  std::map<mlir::Operation *, unsigned> idxOf;
+  for (unsigned i = 0; i < n; ++i) idxOf[sites[i].getOperation()] = i;
+  std::vector<unsigned> parent(n);
+  for (unsigned i = 0; i < n; ++i) parent[i] = i;
+  std::function<unsigned(unsigned)> find = [&](unsigned x) {
+    while (parent[x] != x) x = parent[x] = parent[parent[x]];
+    return x;
+  };
+  auto unite = [&](unsigned a, unsigned b) { parent[find(a)] = find(b); };
+
+  // Structured reaching-set walk.  A new ALLOCATE replaces the current
+  // buffer (Fortran allows only one live buffer per name); an scf.if /
+  // fir.if whose two branches BOTH stay live at the join merges their
+  // sites (they are alternatives for the post-IF buffer).  No explicit
+  // DEALLOCATE handling is needed: re-ALLOCATE already replaces, and a
+  // branch that allocates-then-frees still ends with no extra live site.
+  using Reaching = std::set<unsigned>;
+  std::function<Reaching(mlir::Block &, Reaching)> walk =
+      [&](mlir::Block &blk, Reaching reaching) -> Reaching {
+    auto mergeBranches = [&](const Reaching &t, const Reaching &e) {
+      if (t.empty() || e.empty()) return;
+      std::vector<unsigned> all(t.begin(), t.end());
+      all.insert(all.end(), e.begin(), e.end());
+      for (size_t k = 1; k < all.size(); ++k) unite(all[0], all[k]);
+    };
+    for (auto &op : blk) {
+      if (auto am = mlir::dyn_cast<fir::AllocMemOp>(&op)) {
+        auto it = idxOf.find(&op);
+        if (it != idxOf.end()) {
+          reaching = {it->second};
+          continue;
+        }
+      }
+      if (auto sif = mlir::dyn_cast<mlir::scf::IfOp>(&op)) {
+        Reaching rt = walk(sif.getThenRegion().front(), reaching);
+        Reaching re = sif.getElseRegion().empty()
+                          ? reaching
+                          : walk(sif.getElseRegion().front(), reaching);
+        mergeBranches(rt, re);
+        reaching.clear();
+        reaching.insert(rt.begin(), rt.end());
+        reaching.insert(re.begin(), re.end());
+        continue;
+      }
+      if (auto fif = mlir::dyn_cast<fir::IfOp>(&op)) {
+        Reaching rt = walk(fif.getThenRegion().front(), reaching);
+        Reaching re = fif.getElseRegion().empty()
+                          ? reaching
+                          : walk(fif.getElseRegion().front(), reaching);
+        mergeBranches(rt, re);
+        reaching.clear();
+        reaching.insert(rt.begin(), rt.end());
+        reaching.insert(re.begin(), re.end());
+        continue;
+      }
+      // Any other region-bearing op (loops, ...): thread the reaching set
+      // through each contained block.  An ALLOCATE inside a loop body
+      // re-allocates per iteration -- ``reaching`` simply tracks the last.
+      for (auto &reg : op.getRegions())
+        for (auto &b : reg.getBlocks()) reaching = walk(b, reaching);
+    }
+    return reaching;
+  };
+
+  if (auto fop = sites[0].getOperation()->getParentOfType<mlir::func::FuncOp>())
+    walk(fop.getBody().front(), {});
+
+  // Gather classes by root.  Members are pushed in site (first-def) order,
+  // so members[0] is the class's minimum index; order classes by it.
+  std::map<unsigned, std::vector<fir::AllocMemOp>> byRoot;
+  for (unsigned i = 0; i < n; ++i) byRoot[find(i)].push_back(sites[i]);
+  for (auto &kv : byRoot) classes.push_back(std::move(kv.second));
+  std::sort(classes.begin(), classes.end(),
+            [&](const std::vector<fir::AllocMemOp> &a,
+                const std::vector<fir::AllocMemOp> &b) {
+              fir::AllocMemOp fa = a.front(), fb = b.front();
+              return idxOf[fa.getOperation()] < idxOf[fb.getOperation()];
+            });
+  return classes;
 }
 
 /// Resolve the runtime shape of one ``fir.allocmem`` site to a symbol
@@ -1335,15 +1426,19 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
     std::vector<fir::AllocMemOp> allocSites;
     if (isAllocatable && v.rank > 0)
       allocSites = collectAllocSites(v.mangled_name, module);
-    // Conditional ALLOCATE (``IF (c) ALLOCATE(a(n)) ELSE ALLOCATE(a(m))``):
-    // the sites are in mutually-exclusive branches, so ``a`` stays ONE
-    // transient with a branch-dependent extent symbol (``a_d0``, assigned
-    // per branch by the AST builder).  Skip both the front-site shape
-    // (it would pin ``a`` to one branch's extent) and the ``a_allocK``
-    // versioning below; the synthesize-``a_d<i>`` fallback then gives the
-    // branch-symbol shape.
-    bool condAlloc = allocSitesInExclusiveBranches(allocSites);
-    if (!condAlloc && !allocSites.empty() &&
+    // Partition the ALLOCATE sites into buffer classes (one DaCe transient
+    // each): a class with >1 site is a conditional (mutually-exclusive
+    // branches sharing one buffer with a branch-dependent extent symbol);
+    // a singleton class is a plain / sequentially-versioned buffer.  The
+    // base name ``a`` is class 0 (first definition); classes 1.. become
+    // ``a_alloc1``, ``a_alloc2``, ...  See ALLOC_BUFFER_SSA_DESIGN.md.
+    auto allocClasses = groupAllocSites(v.mangled_name, module);
+    // ``baseCondAlloc``: is the base buffer (class 0) a conditional?  If so
+    // skip the front-site shape (it would pin ``a`` to one branch's extent)
+    // -- the synthesize-``a_d<i>`` fallback gives the branch-symbol shape,
+    // and the AST builder assigns it per branch.
+    bool baseCondAlloc = !allocClasses.empty() && allocClasses.front().size() > 1;
+    if (!baseCondAlloc && !allocSites.empty() &&
         (v.shape_symbols.empty() ||
          std::all_of(v.shape_symbols.begin(), v.shape_symbols.end(),
                      [](const std::string &s) { return s == "?"; }))) {
@@ -1734,14 +1829,13 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
       vars.push_back(std::move(av));
     }
 
-    // Conditional ALLOCATE: register each synthesized per-dim extent
-    // symbol (``a_d<i>``) as a symbol.  The AST builder assigns it the
-    // branch's extent at each ALLOCATE site, so it routes through the
-    // interstate-edge symbol-write path and -- being defined on every
-    // branch before the join -- stays off the program signature (like
-    // ``a_allocated``), not treated as a caller-provided dim.
-    if (condAlloc) {
-      for (const auto &s : v.shape_symbols) {
+    // Register the BASE buffer's branch-extent symbols when class 0 is a
+    // conditional (``a_d<i>``).  The AST builder assigns each at its
+    // branch's ALLOCATE site, so it routes through the interstate-edge
+    // symbol-write path and -- defined on every branch before the join --
+    // stays off the program signature (like ``a_allocated``).
+    auto registerExtentSyms = [&](const std::vector<std::string> &syms) {
+      for (const auto &s : syms) {
         if (s.empty() || symbolNames.count(s)) continue;
         VarInfo dv;
         dv.fortran_name = s;
@@ -1753,42 +1847,44 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
         symbolNames.insert(s);
         vars.push_back(std::move(dv));
       }
-    }
+    };
+    if (baseCondAlloc) registerExtentSyms(v.shape_symbols);
 
-    // For an allocatable with N SEQUENTIAL ALLOCATE sites (re-allocation
-    // across a DEALLOCATE), register N-1 additional synthetic transients
-    // alongside the primary VarInfo.  Each gets the per-site shape
-    // (n1, n2, ...) and the ``x_allocK`` alias name; the AST builder
-    // redirects reads / writes after the K-th ALLOCATE through it.
-    // Conditional (mutually-exclusive branch) ALLOCATEs are NOT versioned
-    // -- they are one array with a branch-dependent extent symbol.
-    if (allocSites.size() > 1 && !condAlloc) {
-      for (unsigned site = 1; site < allocSites.size(); ++site) {
-        VarInfo av;
-        av.fortran_name = allocAliasName(v.fortran_name, site);
-        av.mangled_name = v.mangled_name + "_alloc" + std::to_string(site);
-        av.intent = "";  // local transient, no caller-side ABI
-        av.dtype = v.dtype;
-        av.rank = v.rank;
-        av.is_dynamic = v.is_dynamic;
-        av.shape_symbols = shapeFromAllocSite(allocSites[site]);
-        if (av.shape_symbols.size() < (size_t)av.rank)
-          av.shape_symbols.assign(av.rank, "?");
-        av.lower_bounds.assign(av.shape_symbols.size(), "1");
-        // Per-alias lower-bound recovery from the same embox
-        // shape_shift the primary VarInfo uses.  Without this,
-        // every re-ALLOCATE alias defaults to ``offset = 1``
-        // regardless of the actual bound (real bug: writes
-        // via ``arr(0) = …`` after ``ALLOCATE(arr(0:10))``
-        // land at the wrong buffer position).
-        auto lb_from_alloc = lowerBoundsFromAllocSite(allocSites[site]);
-        for (size_t d = 0;
-             d < lb_from_alloc.size() && d < av.lower_bounds.size(); ++d) {
-          if (lb_from_alloc[d] != "?") av.lower_bounds[d] = lb_from_alloc[d];
-        }
-        av.role = "array";
-        vars.push_back(std::move(av));
-      }
+    // Register one synthetic transient per NON-base buffer class
+    // (``a_alloc1``, ``a_alloc2``, ...).  A singleton class is a
+    // sequentially re-allocated buffer -> concrete per-site shape; a
+    // multi-site class is a conditional buffer -> a branch-extent symbol
+    // (``a_allocK_d<i>``), assigned per branch by the AST builder.
+    for (unsigned g = 1; g < allocClasses.size(); ++g) {
+      const auto &cls = allocClasses[g];
+      fir::AllocMemOp site0 = cls.front();
+      VarInfo av;
+      av.fortran_name = allocAliasName(v.fortran_name, g);
+      av.mangled_name = v.mangled_name + "_alloc" + std::to_string(g);
+      av.intent = "";  // local transient, no caller-side ABI
+      av.dtype = v.dtype;
+      av.rank = v.rank;
+      av.is_dynamic = v.is_dynamic;
+      av.role = "array";
+      // A non-base buffer always uses a per-dim extent symbol
+      // (``a_allocK_d<i>``), bound at its ALLOCATE site(s) by the AST
+      // builder.  Unlike the base ``a`` (whose bare ``a_d<i>`` is bound by
+      // the caller for a deferred-shape dummy), a versioned buffer is a
+      // transient with no caller binding, so the symbol must be assigned
+      // here -- this also lets ``size(a_allocK)`` resolve.  Works for both
+      // a singleton (one site) and a conditional (branch) class.
+      for (int d = 0; d < v.rank; ++d)
+        av.shape_symbols.push_back(av.fortran_name + "_d" + std::to_string(d));
+      av.lower_bounds.assign(av.shape_symbols.size(), "1");
+      // Per-buffer lower-bound recovery from the embox shape_shift, so a
+      // re-ALLOCATE with a non-default bound (``ALLOCATE(arr(0:10))``)
+      // offsets correctly instead of defaulting to 1.
+      auto lb_from_alloc = lowerBoundsFromAllocSite(site0);
+      for (size_t d = 0;
+           d < lb_from_alloc.size() && d < av.lower_bounds.size(); ++d)
+        if (lb_from_alloc[d] != "?") av.lower_bounds[d] = lb_from_alloc[d];
+      registerExtentSyms(av.shape_symbols);
+      vars.push_back(std::move(av));
     }
 
     // Init-value detection.  Two shapes feed the same path:

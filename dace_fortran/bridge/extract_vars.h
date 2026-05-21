@@ -129,4 +129,15 @@ std::vector<fir::AllocMemOp> collectAllocSites(const std::string &declName,
 /// assigns ``<name>_d<i>`` per branch), not versioned into ``x_allocK``.
 bool allocSitesInExclusiveBranches(const std::vector<fir::AllocMemOp> &sites);
 
+/// Partition an allocatable's ALLOCATE sites into buffer equivalence
+/// classes (one DaCe transient each), ordered by first definition.  Two
+/// sites share a class iff their buffers co-reach an ``scf.if`` / ``fir.if``
+/// join as alternatives (the conditional / branch case); sites never
+/// simultaneously live (sequential re-allocation) land in separate
+/// classes.  A class with >1 site is conditional (use a branch-dependent
+/// extent symbol); a singleton class uses the site's concrete shape.  See
+/// ALLOC_BUFFER_SSA_DESIGN.md.
+std::vector<std::vector<fir::AllocMemOp>> groupAllocSites(
+    const std::string &declName, mlir::ModuleOp module);
+
 }  // namespace hlfir_bridge

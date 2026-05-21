@@ -274,16 +274,11 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string &mpiOp) {
 std::vector<ASTNode> buildAST(mlir::Block &block) {
   std::vector<ASTNode> nodes;
 
-  // Per-block site counter for ``ALLOCATE``-bound stores into an
-  // allocatable's box descriptor.  Increments every time we walk past
-  // a ``fir.store (fir.embox-of-fir.allocmem) to <decl_box_ref>``;
-  // first store keeps the original Fortran name (site 0 alias =
-  // identity), subsequent ones bind ``x_alloc1`` / ``x_alloc2`` /
-  // ... via setAllocAlias so every downstream traceToDecl picks up
-  // the per-allocation transient name.  Uses the block-local map
-  // keyed by raw declare name so two separate allocatables in the
-  // same scope don't share counters.
-  std::map<std::string, unsigned> allocSiteCount;
+  // Bind / advance the alloc-alias for an ``ALLOCATE``-bound store into an
+  // allocatable's box descriptor (``fir.store (fir.embox-of-fir.allocmem) to
+  // <decl_box_ref>``).  The target buffer is the site's CLASS buffer (see
+  // ``groupAllocSites``), not a per-store counter, so conditional branches
+  // and sequential re-allocation route correctly.
   // Returns the allocatable's raw Fortran name on a successful match
   // (so the caller can emit a state-change ``<name>_allocated = 1``
   // ASTNode), empty string otherwise.
@@ -307,32 +302,46 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
     if (!decl) return {};
     std::string raw = extractName(decl.getUniqName().str());
     if (raw.empty()) return {};
-    // Conditional ALLOCATE (``IF (c) ALLOCATE(a(n)) ELSE ALLOCATE(a(m))``):
-    // the sites are in mutually-exclusive branches, so ``a`` is one
-    // transient with a branch-dependent extent symbol.  Assign that
-    // symbol (``a_d<i> = <this branch's extent>``) here, in the branch,
-    // instead of versioning into ``a_allocK`` -- the per-branch writes
-    // merge at the IF join and bind ``a``'s shape.
+    // Route this ALLOCATE to its buffer CLASS (one DaCe transient per
+    // class).  Sequential re-allocation -> a singleton class per epoch
+    // (``a``, ``a_alloc1``, ...).  A conditional ALLOCATE -> a multi-site
+    // class: every branch site shares ONE buffer and assigns its
+    // branch-dependent extent symbol (``<buf>_d<i> = <this branch's
+    // extent>``) here, in the branch; the writes merge at the IF join and
+    // bind the shape.  See ALLOC_BUFFER_SSA_DESIGN.md.
     auto mod = decl->getParentOfType<mlir::ModuleOp>();
-    if (mod &&
-        allocSitesInExclusiveBranches(collectAllocSites(decl.getUniqName().str(), mod))) {
+    auto classes = mod ? groupAllocSites(decl.getUniqName().str(), mod)
+                       : std::vector<std::vector<fir::AllocMemOp>>{};
+    unsigned cls = 0;
+    bool condClass = false;
+    for (unsigned ci = 0; ci < classes.size(); ++ci)
+      for (auto site : classes[ci])
+        if (site.getOperation() == allocmem.getOperation()) {
+          cls = ci;
+          condClass = classes[ci].size() > 1;
+        }
+    std::string bufName = allocAliasName(raw, cls);
+    setAllocAlias(raw, bufName);
+    // Assign the buffer's extent symbol(s) here, at the site, when the
+    // buffer uses them: a conditional class (every branch) or ANY non-base
+    // (versioned) buffer -- a versioned transient has no caller binding,
+    // so the symbol must be assigned here, which also lets
+    // ``size(a_allocK)`` resolve.  The base singleton ``a`` keeps its
+    // caller-/shape-resolved extent and emits nothing.
+    if (condClass || cls >= 1) {
       unsigned d = 0;
       for (auto sz : allocmem.getShape()) {
         std::string ext = traceExtentExpr(sz);
         if (!ext.empty()) {
           ASTNode an;
           an.kind = "assign";
-          an.target = raw + "_d" + std::to_string(d);
+          an.target = bufName + "_d" + std::to_string(d);
           an.target_is_array = false;
           an.expr = ext;
           nodes.push_back(std::move(an));
         }
         ++d;
       }
-      // No alias versioning -- single transient.
-    } else {
-      unsigned site = allocSiteCount[raw]++;
-      setAllocAlias(raw, allocAliasName(raw, site));
     }
     // Mint a position symbol for every constant-indexed element in the
     // allocation's shape (``allocate(buf(max(dims(1), dims(2))))``) so each
