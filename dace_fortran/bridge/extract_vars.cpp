@@ -6,6 +6,7 @@
 
 #include <cctype>
 #include <limits>
+#include <map>
 #include <set>
 #include <utility>
 
@@ -127,7 +128,7 @@ static std::vector<std::string> resolveShapeSyms(hlfir::DeclareOp decl) {
 /// ``<declUniqName>.alloc``, in IR walk order.  Multiple matches indicate
 /// that the user wrote more than one ``ALLOCATE`` for the variable
 /// (e.g. across an explicit ``DEALLOCATE`` + re-``ALLOCATE``).
-static std::vector<fir::AllocMemOp> collectAllocSites(
+std::vector<fir::AllocMemOp> collectAllocSites(
     const std::string &declName, mlir::ModuleOp module) {
   std::vector<fir::AllocMemOp> sites;
   if (declName.empty()) return sites;
@@ -137,6 +138,52 @@ static std::vector<fir::AllocMemOp> collectAllocSites(
     if (un && un->str() == allocName) sites.push_back(a);
   });
   return sites;
+}
+
+/// Are these ALLOCATE sites mutually exclusive  --  each in a different
+/// branch of one common ``scf.if`` / ``fir.if`` (a conditional ALLOCATE,
+/// ``IF (c) ALLOCATE(a(n)) ELSE ALLOCATE(a(m))``) rather than sequential
+/// re-allocation (``ALLOCATE; DEALLOCATE; ALLOCATE``)?
+///
+/// The two differ fundamentally: a conditional ALLOCATE stores to the same
+/// box and the array is used jointly after the IF, so it must stay ONE
+/// transient with a branch-dependent extent symbol (each branch assigns
+/// the extent; they merge at the join).  Versioning it into ``a_alloc1``
+/// would split it into two transients and bind post-IF reads statically to
+/// whichever branch ran last  --  wrong.
+///
+/// Recognised shape: every site sits inside one common enclosing if, and
+/// no two sites share that if's branch region (so exactly one alloc fires).
+bool allocSitesInExclusiveBranches(
+    const std::vector<fir::AllocMemOp> &sites) {
+  if (sites.size() < 2) return false;
+  // Map each enclosing if of ``op`` to the region of it that holds ``op``.
+  auto ifRegions = [](mlir::Operation *op) {
+    std::map<mlir::Operation *, mlir::Region *> m;
+    for (mlir::Region *r = op->getParentRegion(); r;) {
+      mlir::Operation *p = r->getParentOp();
+      if (!p) break;
+      if (mlir::isa<mlir::scf::IfOp, fir::IfOp>(p)) m[p] = r;
+      r = p->getParentRegion();
+    }
+    return m;
+  };
+  // Two ops are mutually exclusive iff a common-ancestor if holds them in
+  // different regions (then vs else).
+  auto exclusive = [&](mlir::Operation *a, mlir::Operation *b) {
+    auto am = ifRegions(a);
+    for (auto &kv : ifRegions(b)) {
+      auto it = am.find(kv.first);
+      if (it != am.end() && it->second != kv.second) return true;
+    }
+    return false;
+  };
+  for (size_t i = 0; i < sites.size(); ++i)
+    for (size_t j = i + 1; j < sites.size(); ++j) {
+      fir::AllocMemOp si = sites[i], sj = sites[j];
+      if (!exclusive(si.getOperation(), sj.getOperation())) return false;
+    }
+  return true;
 }
 
 /// Resolve the runtime shape of one ``fir.allocmem`` site to a symbol
@@ -1288,7 +1335,15 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
     std::vector<fir::AllocMemOp> allocSites;
     if (isAllocatable && v.rank > 0)
       allocSites = collectAllocSites(v.mangled_name, module);
-    if (!allocSites.empty() &&
+    // Conditional ALLOCATE (``IF (c) ALLOCATE(a(n)) ELSE ALLOCATE(a(m))``):
+    // the sites are in mutually-exclusive branches, so ``a`` stays ONE
+    // transient with a branch-dependent extent symbol (``a_d0``, assigned
+    // per branch by the AST builder).  Skip both the front-site shape
+    // (it would pin ``a`` to one branch's extent) and the ``a_allocK``
+    // versioning below; the synthesize-``a_d<i>`` fallback then gives the
+    // branch-symbol shape.
+    bool condAlloc = allocSitesInExclusiveBranches(allocSites);
+    if (!condAlloc && !allocSites.empty() &&
         (v.shape_symbols.empty() ||
          std::all_of(v.shape_symbols.begin(), v.shape_symbols.end(),
                      [](const std::string &s) { return s == "?"; }))) {
@@ -1679,12 +1734,35 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
       vars.push_back(std::move(av));
     }
 
-    // For an allocatable with N ALLOCATE sites, register N-1
-    // additional synthetic transients alongside the primary
-    // VarInfo.  Each gets the per-site shape (n1, n2, ...) and the
-    // ``x_allocK`` alias name; the AST builder will redirect reads
-    // / writes after the K-th ALLOCATE through this name.
-    if (allocSites.size() > 1) {
+    // Conditional ALLOCATE: register each synthesized per-dim extent
+    // symbol (``a_d<i>``) as a symbol.  The AST builder assigns it the
+    // branch's extent at each ALLOCATE site, so it routes through the
+    // interstate-edge symbol-write path and -- being defined on every
+    // branch before the join -- stays off the program signature (like
+    // ``a_allocated``), not treated as a caller-provided dim.
+    if (condAlloc) {
+      for (const auto &s : v.shape_symbols) {
+        if (s.empty() || symbolNames.count(s)) continue;
+        VarInfo dv;
+        dv.fortran_name = s;
+        dv.mangled_name = s;
+        dv.dtype = "int64";
+        dv.rank = 0;
+        dv.intent = "";
+        dv.role = "symbol";
+        symbolNames.insert(s);
+        vars.push_back(std::move(dv));
+      }
+    }
+
+    // For an allocatable with N SEQUENTIAL ALLOCATE sites (re-allocation
+    // across a DEALLOCATE), register N-1 additional synthetic transients
+    // alongside the primary VarInfo.  Each gets the per-site shape
+    // (n1, n2, ...) and the ``x_allocK`` alias name; the AST builder
+    // redirects reads / writes after the K-th ALLOCATE through it.
+    // Conditional (mutually-exclusive branch) ALLOCATEs are NOT versioned
+    // -- they are one array with a branch-dependent extent symbol.
+    if (allocSites.size() > 1 && !condAlloc) {
       for (unsigned site = 1; site < allocSites.size(); ++site) {
         VarInfo av;
         av.fortran_name = allocAliasName(v.fortran_name, site);

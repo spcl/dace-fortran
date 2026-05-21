@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "flang/Optimizer/Dialect/FIROps.h"
 #include "mlir/IR/BuiltinOps.h"
 
 namespace hlfir_bridge {
@@ -115,5 +116,17 @@ bool needsAllocatedTracker(const std::string &declName, mlir::ModuleOp module);
 /// ``extractAST`` (which keeps the trace-utils alias map in sync as
 /// it walks the IR).
 std::string allocAliasName(const std::string &fortran, unsigned site);
+
+/// Every ``fir.allocmem`` whose ``uniq_name`` is ``<declName>.alloc`` (the
+/// ALLOCATE sites of one allocatable), in IR walk order.
+std::vector<fir::AllocMemOp> collectAllocSites(const std::string &declName,
+                                               mlir::ModuleOp module);
+
+/// True iff the ALLOCATE sites are mutually exclusive  --  each in a
+/// different branch of one common ``scf.if`` / ``fir.if`` (a conditional
+/// ALLOCATE) rather than sequential re-allocation.  Such an array stays
+/// one transient with a branch-dependent extent symbol (the AST builder
+/// assigns ``<name>_d<i>`` per branch), not versioned into ``x_allocK``.
+bool allocSitesInExclusiveBranches(const std::vector<fir::AllocMemOp> &sites);
 
 }  // namespace hlfir_bridge

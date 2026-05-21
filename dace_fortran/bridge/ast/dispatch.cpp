@@ -307,8 +307,33 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
     if (!decl) return {};
     std::string raw = extractName(decl.getUniqName().str());
     if (raw.empty()) return {};
-    unsigned site = allocSiteCount[raw]++;
-    setAllocAlias(raw, allocAliasName(raw, site));
+    // Conditional ALLOCATE (``IF (c) ALLOCATE(a(n)) ELSE ALLOCATE(a(m))``):
+    // the sites are in mutually-exclusive branches, so ``a`` is one
+    // transient with a branch-dependent extent symbol.  Assign that
+    // symbol (``a_d<i> = <this branch's extent>``) here, in the branch,
+    // instead of versioning into ``a_allocK`` -- the per-branch writes
+    // merge at the IF join and bind ``a``'s shape.
+    auto mod = decl->getParentOfType<mlir::ModuleOp>();
+    if (mod &&
+        allocSitesInExclusiveBranches(collectAllocSites(decl.getUniqName().str(), mod))) {
+      unsigned d = 0;
+      for (auto sz : allocmem.getShape()) {
+        std::string ext = traceExtentExpr(sz);
+        if (!ext.empty()) {
+          ASTNode an;
+          an.kind = "assign";
+          an.target = raw + "_d" + std::to_string(d);
+          an.target_is_array = false;
+          an.expr = ext;
+          nodes.push_back(std::move(an));
+        }
+        ++d;
+      }
+      // No alias versioning -- single transient.
+    } else {
+      unsigned site = allocSiteCount[raw]++;
+      setAllocAlias(raw, allocAliasName(raw, site));
+    }
     // Mint a position symbol for every constant-indexed element in the
     // allocation's shape (``allocate(buf(max(dims(1), dims(2))))``) so each
     // one gets a ``symbol_init`` -- even an element that appears only in
