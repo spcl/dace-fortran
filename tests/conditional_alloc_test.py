@@ -160,6 +160,27 @@ end subroutine probe
     assert "a_alloc1" in sdfg.arrays
 
 
+def test_realloc_chain_four_buffers(tmp_path):
+    """``ALLOC; DEALLOC`` repeated four times -> four versioned buffers
+    (``a``, ``a_alloc1``, ``a_alloc2``, ``a_alloc3``), one per epoch."""
+    src = """
+subroutine probe(n1, n2, n3, n4, out)
+  implicit none
+  integer, intent(in) :: n1, n2, n3, n4
+  real(8), intent(inout) :: out(10)
+  real(8), allocatable :: a(:)
+  integer :: i
+  allocate(a(n1)); do i=1,n1; a(i)=real(i,8);   end do; out(1)=a(n1); deallocate(a)
+  allocate(a(n2)); do i=1,n2; a(i)=real(2*i,8); end do; out(2)=a(n2); deallocate(a)
+  allocate(a(n3)); do i=1,n3; a(i)=real(3*i,8); end do; out(3)=a(n3); deallocate(a)
+  allocate(a(n4)); do i=1,n4; a(i)=real(4*i,8); end do; out(4)=a(n4); deallocate(a)
+end subroutine probe
+"""
+    sdfg = _run(tmp_path, src, [(5, 3, 7, 2), (1, 9, 4, 6)],
+                ["n1", "n2", "n3", "n4"])
+    assert {"a", "a_alloc1", "a_alloc2", "a_alloc3"} <= set(sdfg.arrays)
+
+
 @pytest.mark.xfail(strict=True, reason="conditional ALLOCATE followed by a "
                    "sequential re-ALLOCATE of the same array (3 sites: 2 "
                    "mutually-exclusive branches + 1 realloc).  The detector "
