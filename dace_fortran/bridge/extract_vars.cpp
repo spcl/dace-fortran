@@ -83,11 +83,9 @@ static std::vector<std::string> resolveShapeSyms(hlfir::DeclareOp decl) {
   // negative integer is genuinely invalid and we let it surface
   // (flang shouldn't emit such a thing for legal programs).
   auto pushExtent = [&](mlir::Value ext) {
-    auto n = traceToDecl(ext);
-    if (!n.empty()) {
-      syms.push_back(n);
-      return;
-    }
+    // Constant extents first -- this catches the dynamic / assumed-size
+    // sentinels (INT64_MIN, -1) before they reach traceExtentExpr, which
+    // would otherwise stringify them into an invalid negative shape.
     if (auto c = traceConstInt(ext)) {
       if (*c == fir::SequenceType::getUnknownExtent() || *c == -1) {
         syms.push_back("?");
@@ -96,17 +94,23 @@ static std::vector<std::string> resolveShapeSyms(hlfir::DeclareOp decl) {
       syms.push_back(std::to_string(*c));
       return;
     }
-    // Dynamic gather-temp extent: ``hlfir-expand-vector-subscript-gather``
-    // creates a temp whose shape includes a triplet-derived extent
-    // (``arith.select(cmpi_sgt, addi(subi(load_ub, load_lb), 1),
-    // 0)``).  Render the SSA expression directly so the descriptor
-    // gets a closed-form shape over already-promoted scalar
-    // symbols, instead of the ``?`` -> synthetic
-    // ``<arr>_d<i>`` fallback (which mints an unbound SDFG symbol
-    // and surfaces as a missing program-arg at runtime).
+    // Symbolic extent.  ``traceExtentExpr`` resolves a scalar, arithmetic,
+    // or constant-indexed element extent -- the last as its position
+    // symbol (``dims(1)`` -> ``__sym_dims_1``, peeling Flang's
+    // ``max(ext, 0)`` clamp) rather than collapsing the element read to
+    // its whole-array name the way ``traceToDecl`` would (which then
+    // collides the array with its own data descriptor).  It also renders
+    // the dynamic gather-temp extent
+    // (``arith.select(cmpi_sgt, addi(subi(load_ub, load_lb), 1), 0)``)
+    // as a closed-form expression over already-promoted scalar symbols.
     auto expr = traceExtentExpr(ext);
     if (!expr.empty()) {
       syms.push_back(expr);
+      return;
+    }
+    auto n = traceToDecl(ext);
+    if (!n.empty()) {
+      syms.push_back(n);
       return;
     }
     syms.push_back("?");
@@ -142,6 +146,17 @@ static std::vector<fir::AllocMemOp> collectAllocSites(
 static std::vector<std::string> shapeFromAllocSite(fir::AllocMemOp alloc) {
   std::vector<std::string> syms;
   for (auto sz : alloc.getShape()) {
+    // ``traceExtentExpr`` peels Flang's ``max(ext, 0)`` clamp and
+    // resolves the underlying extent uniformly: a constant-indexed array
+    // element (``dims(1)``) becomes its position symbol ``__sym_dims_1``
+    // rather than the whole array name -- promoting the array would
+    // collide it with its own data descriptor.  Falls back to the plain
+    // scalar / constant resolvers for shapes it doesn't recognise.
+    auto e = traceExtentExpr(sz);
+    if (!e.empty()) {
+      syms.push_back(e);
+      continue;
+    }
     auto n = traceToDecl(sz);
     if (!n.empty()) {
       syms.push_back(n);

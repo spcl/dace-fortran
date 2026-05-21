@@ -175,6 +175,40 @@ std::optional<int64_t> traceConstInt(mlir::Value v) {
   return std::nullopt;
 }
 
+std::string posSymbolName(const std::string &array, int64_t one_based_idx) {
+  // Keep in lockstep with ``internPosSymbol`` (ast/expressions.cpp): the
+  // descriptor-shape side mints the name here, the AST builder mints the
+  // matching ``symbol_init`` there, and they must agree.
+  return "__sym_" + array + "_" + std::to_string(one_based_idx);
+}
+
+std::optional<std::pair<std::string, int64_t>>
+constIndexedElementLoad(mlir::Value v) {
+  if (!v) return std::nullopt;
+  for (int i = 0; i < limits::kConvertChainDepth && v; ++i) {
+    auto *d = v.getDefiningOp();
+    if (auto cv = mlir::dyn_cast_or_null<fir::ConvertOp>(d)) {
+      v = cv.getValue();
+      continue;
+    }
+    break;
+  }
+  auto ld = mlir::dyn_cast_or_null<fir::LoadOp>(v.getDefiningOp());
+  if (!ld) return std::nullopt;
+  auto dg =
+      mlir::dyn_cast_or_null<hlfir::DesignateOp>(ld.getMemref().getDefiningOp());
+  if (!dg) return std::nullopt;
+  auto idxs = dg.getIndices();
+  if (idxs.size() != 1) return std::nullopt;  // single 1-D element only
+  auto triplets = dg.getIsTriplet();
+  if (!triplets.empty() && triplets[0]) return std::nullopt;  // not a section
+  auto c = traceConstInt(idxs[0]);
+  if (!c) return std::nullopt;
+  auto arr = traceToDecl(dg.getMemref());
+  if (arr.empty()) return std::nullopt;
+  return std::make_pair(arr, *c);
+}
+
 std::string traceExtentExpr(mlir::Value v) {
   if (!v) return "";
   auto *def = v.getDefiningOp();
@@ -189,11 +223,13 @@ std::string traceExtentExpr(mlir::Value v) {
     if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue()))
       return std::to_string(ia.getInt());
 
-  // Load of a Fortran scalar -- render as its short name.  Loads of
-  // designate-of-array (``cols(1)``) aren't expected in extent
-  // chains for the canonical Flang ``ub - lb + 1`` shape, so we
-  // bail rather than mint a position symbol.
+  // Load of a Fortran scalar -- render as its short name.  A load of a
+  // constant-indexed array element (``dims(1)``) becomes its position
+  // symbol so the shape stays symbolic; promoting the whole array would
+  // collide it with its own data descriptor.
   if (auto ld = mlir::dyn_cast<fir::LoadOp>(def)) {
+    if (auto e = constIndexedElementLoad(v))
+      return posSymbolName(e->first, e->second);
     auto mem = ld.getMemref();
     auto *md = mem.getDefiningOp();
     if (!md) return "";

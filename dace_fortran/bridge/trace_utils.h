@@ -15,6 +15,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "flang/Optimizer/Dialect/FIRType.h"
@@ -169,6 +170,22 @@ std::string traceExtentExpr(mlir::Value v);
 /// scalars and the expression string from ``traceExtentExpr``
 /// references undeclared SDFG names.
 void collectExtentExprScalars(mlir::Value v, std::set<std::string> &out);
+
+/// Canonical name of the SDFG symbol standing in for a constant-indexed
+/// element read ``<array>(<one_based_idx>)``.  This is the single source
+/// of truth for the name format: it MUST match ``internPosSymbol`` (AST
+/// builder) so the descriptor-shape side (``shapeFromAllocSite`` /
+/// ``traceExtentExpr``) and the ``symbol_init`` side agree on the symbol.
+std::string posSymbolName(const std::string &array, int64_t one_based_idx);
+
+/// If ``v`` is a ``fir.load`` of a ``hlfir.designate`` selecting a single
+/// element at a compile-time-constant index (``arr(7)``), return
+/// ``{arr, one_based_idx}``; ``nullopt`` otherwise (non-constant index,
+/// section/triplet, multi-dimensional, or not an element load).  Used to
+/// recognise an array element feeding a shape extent so it is lifted to a
+/// position symbol instead of resolving to the whole array's name.
+std::optional<std::pair<std::string, int64_t>>
+constIndexedElementLoad(mlir::Value v);
 
 /// Decoded ``hlfir.declare`` / ``fir.declare`` shape operand.  Per the
 /// FIR/HLFIR op defs it is exactly one of:
