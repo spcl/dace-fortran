@@ -446,6 +446,14 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
       }
       if (n.loop_bound.empty())
         n.loop_bound = buildIndexExpr(doLoop.getUpperBound(), 0);
+      // ``buildIndexExpr`` suppresses ``fir.box_dims`` on a local allocatable
+      // (it keeps the whole-array-section copy fallback for ``arr(:)`` reads).
+      // A loop bound is a scalar expression, not a subset, so ``do i = 1,
+      // size(a)`` should resolve like the scalar assignment ``sz = size(a)``
+      // does -- fall back to ``buildExpr``, which renders the extent as the
+      // bound ``<buf>_d<i>`` symbol.
+      if (n.loop_bound == "?")
+        n.loop_bound = buildExpr(doLoop.getUpperBound(), 0);
       n.loop_lower = traceLB(doLoop.getLowerBound());
       if (n.loop_lower < 0) {
         // Non-constant lower bound (``DO jk = nflatlev, nlev`` /

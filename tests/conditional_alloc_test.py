@@ -43,27 +43,42 @@ def _run(tmp_path, src, cases, argnames):
     return sdfg
 
 
-def test_cond_alloc_if_else(tmp_path):
+def _size_loop_parts(hop):
+    """Fortran fragments for a ``DO i = 1, SIZE(a)`` loop bound in the two
+    equivalent spellings the bridge must both handle: the direct form, and
+    the ``sz = SIZE(a)`` scalar hop.  Returns ``(declaration, loop_header)``;
+    the caller appends the loop body and ``end do``.  Both are exercised
+    (``@pytest.mark.parametrize``) so a regression in either is caught."""
+    if hop:
+        return "integer :: i, sz", "  sz = size(a)\n  do i = 1, sz"
+    return "integer :: i", "  do i = 1, size(a)"
+
+
+_SIZE_LOOP_FORMS = pytest.mark.parametrize("hop", [False, True], ids=["direct", "hop"])
+
+
+@_SIZE_LOOP_FORMS
+def test_cond_alloc_if_else(tmp_path, hop):
     """``IF (c) ALLOCATE(a(n)) ELSE ALLOCATE(a(m))`` -- one transient with a
     branch-dependent extent symbol; ``size(a)`` is ``n`` or ``m`` per branch."""
-    src = """
+    decl, loop = _size_loop_parts(hop)
+    src = f"""
 subroutine probe(cond, n, m, out)
   implicit none
   integer, intent(in) :: cond, n, m
   real(8), intent(inout) :: out(10)
   real(8), allocatable :: a(:)
-  integer :: i, sz
+  {decl}
   if (cond > 0) then
     allocate(a(n))
   else
     allocate(a(m))
   end if
-  sz = size(a)
-  do i = 1, sz
+{loop}
     a(i) = real(i, 8)
   end do
   out(1) = a(1)
-  out(2) = real(sz, 8)
+  out(2) = real(size(a), 8)
   deallocate(a)
 end subroutine probe
 """
@@ -74,15 +89,17 @@ end subroutine probe
     assert str(sdfg.arrays["a"].shape) == "(a_d0,)"
 
 
-def test_cond_alloc_if_elif_else(tmp_path):
+@_SIZE_LOOP_FORMS
+def test_cond_alloc_if_elif_else(tmp_path, hop):
     """Nested ``IF/ELSEIF/ELSEIF/ELSE`` (four mutually-exclusive branches)."""
-    src = """
+    decl, loop = _size_loop_parts(hop)
+    src = f"""
 subroutine probe(sel, n1, n2, n3, n4, out)
   implicit none
   integer, intent(in) :: sel, n1, n2, n3, n4
   real(8), intent(inout) :: out(10)
   real(8), allocatable :: a(:)
-  integer :: i, sz
+  {decl}
   if (sel == 1) then
     allocate(a(n1))
   else if (sel == 2) then
@@ -92,11 +109,10 @@ subroutine probe(sel, n1, n2, n3, n4, out)
   else
     allocate(a(n4))
   end if
-  sz = size(a)
-  do i = 1, sz
+{loop}
     a(i) = real(i, 8)
   end do
-  out(1) = real(sz, 8)
+  out(1) = real(size(a), 8)
   deallocate(a)
 end subroutine probe
 """
@@ -181,29 +197,30 @@ end subroutine probe
     assert {"a", "a_alloc1", "a_alloc2", "a_alloc3"} <= set(sdfg.arrays)
 
 
-def test_cond_alloc_then_realloc(tmp_path):
+@_SIZE_LOOP_FORMS
+def test_cond_alloc_then_realloc(tmp_path, hop):
     """Conditional ALLOCATE, used (via ``size``), deallocated, then
     re-ALLOCATEd to a new size -- conditional + sequential realloc on one
-    array.  Buffer-class grouping: ``{then,else}`` -> the conditional buffer
-    ``a`` (branch extent ``a_d0``); ``{realloc}`` -> ``a_alloc1`` (extent
+    array.  Buffer-class grouping: then/else -> the conditional buffer
+    ``a`` (branch extent ``a_d0``); the realloc -> ``a_alloc1`` (extent
     ``a_alloc1_d0`` so ``size`` resolves on the versioned buffer too)."""
-    src = """
+    decl, loop = _size_loop_parts(hop)
+    src = f"""
 subroutine probe(cond, n, m, k, out)
   implicit none
   integer, intent(in) :: cond, n, m, k
   real(8), intent(inout) :: out(10)
   real(8), allocatable :: a(:)
-  integer :: i, sz
+  {decl}
   if (cond > 0) then
     allocate(a(n))
   else
     allocate(a(m))
   end if
-  sz = size(a)
-  do i = 1, sz
+{loop}
     a(i) = real(i, 8)
   end do
-  out(1) = real(sz, 8)
+  out(1) = real(size(a), 8)
   out(2) = a(1)
   deallocate(a)
   allocate(a(k))
@@ -221,19 +238,21 @@ end subroutine probe
     assert "a_alloc1" in sdfg.arrays                  # realloc buffer
 
 
-def test_realloc_chain_inside_if(tmp_path):
+@_SIZE_LOOP_FORMS
+def test_realloc_chain_inside_if(tmp_path, hop):
     """A realloc chain inside one ``IF`` branch (``alloc; use; dealloc;
     alloc``) with a single alloc in the other branch.  The post-``IF`` use
     is reached by the then-branch's LAST buffer and the else buffer -- they
     merge into one conditional buffer; the then-branch's first (freed)
     buffer is a separate transient."""
-    src = """
+    decl, loop = _size_loop_parts(hop)
+    src = f"""
 subroutine probe(cond, n, n2, m, out)
   implicit none
   integer, intent(in) :: cond, n, n2, m
   real(8), intent(inout) :: out(10)
   real(8), allocatable :: a(:)
-  integer :: i, sz
+  {decl}
   if (cond > 0) then
     allocate(a(n))
     a(1) = 99.0d0
@@ -242,11 +261,10 @@ subroutine probe(cond, n, n2, m, out)
   else
     allocate(a(m))
   end if
-  sz = size(a)
-  do i = 1, sz
+{loop}
     a(i) = real(i, 8)
   end do
-  out(1) = real(sz, 8)
+  out(1) = real(size(a), 8)
   out(2) = a(1)
   deallocate(a)
 end subroutine probe
@@ -258,29 +276,28 @@ end subroutine probe
     assert "a_alloc1" in sdfg.arrays
 
 
-def test_size_of_concrete_base_buffer(tmp_path):
+@_SIZE_LOOP_FORMS
+def test_size_of_concrete_base_buffer(tmp_path, hop):
     """``SIZE(a)`` on a plain ``allocate(a(n))`` base buffer.  ``SIZE``
-    lowers to ``fir.box_dims`` which the bridge renders as the extent
-    symbol ``a_d0``; binding ``a_d0 = n`` at the ALLOCATE site keeps it
-    from leaking onto the program signature as a free symbol (it was an
-    unbound ``a_d0`` -> ``KeyError`` before).  Exercised via a scalar
-    ``sz = SIZE(a)`` hop and a direct ``SIZE(a)`` element read."""
-    src = """
+    lowers to ``fir.box_dims`` which the bridge renders as the extent symbol
+    ``a_d0``; binding ``a_d0 = n`` at the ALLOCATE site keeps it from leaking
+    onto the program signature as a free symbol (it was an unbound ``a_d0``
+    -> ``KeyError`` before)."""
+    decl, loop = _size_loop_parts(hop)
+    src = f"""
 subroutine probe(n, out)
   implicit none
   integer, intent(in) :: n
   real(8), intent(inout) :: out(10)
   real(8), allocatable :: a(:)
-  integer :: i, sz
+  {decl}
   allocate(a(n))
-  sz = size(a)
-  do i = 1, sz
+{loop}
     a(i) = real(i, 8)
   end do
   out(1) = a(1)
   out(2) = a(n)
-  out(3) = real(sz, 8)
-  out(4) = real(size(a), 8)
+  out(3) = real(size(a), 8)
   deallocate(a)
 end subroutine probe
 """
