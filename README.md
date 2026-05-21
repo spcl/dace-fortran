@@ -110,29 +110,36 @@ sdfg(a=a, n=8)
 assert (a == 1.0).all()
 ```
 
-**Multi-file project via cmake + `emit_hlfir`.**  The bridge stops
-driving flang; the user's existing build does it, the helper
-emits HLFIR, the bridge consumes.  Reference:
-`tests/prebuilt_hlfir/test_prebuilt_hlfir.py` (jacobi: MPI + netCDF
-with `mpi_stub.f90` / `netcdf_stub.f90`; csr_spmv: 2 files, no
-externals).
+**Multi-file project via `emit_hlfir`.**  The bridge stops driving
+flang; the user's existing build does it, the helper emits HLFIR,
+the bridge consumes.  The helper only needs a `compile_commands.json`
+artefact, which any build system can produce:
 
 ```bash
-# user's existing build + ONE extra flag:
+# --- cmake / ninja: one extra flag drops the artefact ---
 cmake -S src/ -B build/ -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-cmake --build build/                                       # project as usual
+cmake --build build/
 
-# ONE extra command afterwards -- helper drives flang per TU,
-# inheriting build order + -I / -D from the artefact:
+# --- autotools / plain make (this is how ICON builds): wrap the
+#     build in `bear`, which intercepts compiler exec() calls.
+#     Works for autoconf+automake AND autoconf+hand-Makefile alike.
+./configure ...
+bear -- make           # writes compile_commands.json
+
+# --- then ONE command, identical for either build system ---
 python -m dace_fortran.emit_hlfir build/compile_commands.json \
     --out build/hlfir \
-    --stub stubs/mpi_stub.f90 --stub stubs/netcdf_stub.f90    # for flang's missing intrinsics
+    --stub mpi_stub.f90 --stub netcdf_stub.f90    # flang has no shipped mpi/netcdf .mod
 ```
 
 ```python
 sdfg = dace_fortran.build_sdfg_from_hlfir(
     "build/hlfir", entry="_QMmod_jacobiPjacobi2d_update")
 ```
+
+Reference: `tests/prebuilt_hlfir/test_prebuilt_hlfir.py` --
+`jacobi/` (autotools + `bear -- make`, MPI + netCDF) and `csr_spmv/`
+(cmake, no externals).
 
 **External `bind(c)` library.**  The kernel calls a separately
 compiled Fortran function; register its signature out-of-band and
@@ -552,9 +559,14 @@ with it.
 
 **Two small additions to an existing build:**
 
-1. one cmake flag: `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`
-   (every Ninja / Make generator supports this; drops
-   `compile_commands.json` into the build dir).
+1. produce a `compile_commands.json` artefact for the build --
+   either a cmake flag or a `bear` wrapper, whichever the project
+   uses:
+   - cmake / ninja: `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`.
+   - autotools / plain make (**ICON's build shape** -- autoconf +
+     a hand-written `Makefile.in`): `bear -- make`.  `bear`
+     intercepts compiler `exec()` calls, so it is agnostic to
+     whether the Makefile came from automake or was hand-written.
 2. one shell command after the regular build:
 
    ```bash
@@ -564,10 +576,10 @@ with it.
    ```
 
 The helper inherits Fortran build order + `-I` / `-D` flags from
-the artefact, so it's project-generic.  `--stub` provides
-flang-buildable stand-ins for modules flang has no shipped `.mod`
-for (`mpi`, `netcdf`, `hdf5`, ...).  Then point the bridge at the
-output:
+the artefact, so it's agnostic to the build system that produced
+it.  `--stub` provides flang-buildable stand-ins for modules flang
+has no shipped `.mod` for (`mpi`, `netcdf`, `hdf5`, ...).  Then
+point the bridge at the output:
 
 ```python
 sdfg = dace_fortran.build_sdfg_from_hlfir(
@@ -575,14 +587,14 @@ sdfg = dace_fortran.build_sdfg_from_hlfir(
     entry="_QMmod_jacobiPjacobi2d_update")              # required for dir
 ```
 
-`tests/prebuilt_hlfir/` ships two worked projects to prove the
-pipeline is generic.  Both ship plain `CMakeLists.txt` -- they know
-nothing about HLFIR or the bridge:
+`tests/prebuilt_hlfir/` ships two worked projects -- one per
+DB-capture route -- to prove the pipeline is build-system-generic.
+Both ship a plain build that knows nothing about HLFIR or the bridge:
 
-| Project | Files | Externals | Demonstrates |
-|---|---|---|---|
-| `jacobi/` | 4 | MPI + netCDF (2 stubs) | entry stays MPI-free even though sibling `halo_exchange` USEs MPI |
-| `csr_spmv/` | 2 | none | minimal happy path |
+| Project | Build | Files | Externals | Demonstrates |
+|---|---|---|---|---|
+| `jacobi/` | autotools + `bear -- make` | 4 | MPI + netCDF (2 stubs) | ICON-shape build; entry stays MPI-free even though sibling `halo_exchange` USEs MPI |
+| `csr_spmv/` | cmake export flag | 2 | none | minimal happy path |
 
 **Why WIP**: only intra-TU inlining works -- flang emits one
 `.hlfir` per translation unit, and the bridge consumes one of them.

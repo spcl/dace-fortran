@@ -49,7 +49,11 @@ jobs:
           libflang-21-dev flang-21 clang-21 \
           cmake ninja-build gfortran libgomp1 \
           libopenmpi-dev openmpi-bin \
-          libnetcdff-dev pkg-config
+          libnetcdff-dev pkg-config \
+          bear autoconf automake
+        # bear + autotools drive the tier-3 prebuilt-HLFIR autotools
+        # project (tests/prebuilt_hlfir/jacobi): bear -- make captures
+        # compile_commands.json the way it would for ICON's build.
         echo "/usr/lib/llvm-21/bin" >> "$GITHUB_PATH"
         # apt.llvm.org installs the binary as flang-new-21 in
         # /usr/lib/llvm-21/bin (on PATH above).  Fall back to a symlink

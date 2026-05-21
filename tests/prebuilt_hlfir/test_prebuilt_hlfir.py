@@ -1,4 +1,5 @@
-"""Tier-3 prebuilt-HLFIR end-to-end across two mock projects.
+"""Tier-3 prebuilt-HLFIR end-to-end across two mock projects built
+with two different build systems, to confirm the helper is generic.
 
 This shape -- the bridge as a clean consumer of whatever the
 project's build system produces -- is the canonical path for
@@ -6,31 +7,31 @@ codebases too large or dep-tangled for the bridge to compile itself
 (ICON / ECRAD / ...).  The tier-3 API is :func:`build_sdfg_from_hlfir`
 (WIP, see README).
 
-What the user does (one extra cmake flag + one extra command):
+The user adds one DB-capture step to their normal build, then runs
+the helper once:
 
-1. add ``-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`` to the cmake config
-2. after the regular build, run::
-
-      python -m dace_fortran.emit_hlfir \\
-          <build_dir>/compile_commands.json \\
-          --out <build_dir>/hlfir \\
-          [--stub <stub.f90>]...
+    python -m dace_fortran.emit_hlfir <build>/compile_commands.json \\
+        --out <build>/hlfir [--stub <stub.f90>]...
 
 The helper reads the artefact for build order + ``-I`` / ``-D``
-flags, so it works on any project that emits a
-``compile_commands.json`` (cmake / ninja / fpm).  ``--stub`` injects
-flang-buildable stand-ins for modules flang has no shipped ``.mod``
-for (``mpi`` / ``netcdf`` / ``hdf5`` / ...).
+flags.  Two ways to get the ``compile_commands.json`` artefact are
+exercised here:
 
-Two projects are exercised here to confirm the helper is generic:
-
-* ``jacobi/`` -- 4 ``.f90`` files, hard deps on MPI + netCDF, two
-  stubs.  Entry ``jacobi2d_update`` has an inlinable
-  ``stencil_5pt`` helper and a sibling ``halo_exchange`` that uses
-  MPI -- the bridge lowers only the entry, MPI references stay out
-  of the SDFG.
-* ``csr_spmv/`` -- 2 ``.f90`` files, no external deps, no stubs.
-  Entry ``csr_spmv`` has an inlinable ``dot_row`` helper.
+* ``jacobi/`` -- **autotools** project (autoconf + automake), built
+  the way ICON is (ICON itself is autoconf + a hand-written
+  ``Makefile.in``; ``bear`` is build-system-agnostic so it captures
+  either identically).  ``bear -- make`` writes the DB by
+  intercepting compiler ``exec()`` calls.  4 ``.f90`` files, hard
+  deps on real MPI + netCDF; the entry ``jacobi2d_update`` has an
+  inlinable ``stencil_5pt`` helper and a sibling ``halo_exchange``
+  that uses MPI -- the bridge lowers only the entry, MPI stays out
+  of the SDFG.  Two flang stubs (``stubs/mpi_stub.f90``,
+  ``stubs/netcdf_stub.f90``) stand in for the modules flang has no
+  shipped ``.mod`` for.
+* ``csr_spmv/`` -- **cmake** project, DB via
+  ``-DCMAKE_EXPORT_COMPILE_COMMANDS=ON``.  2 ``.f90`` files, no
+  external deps, no stubs.  Entry ``csr_spmv`` has an inlinable
+  ``dot_row`` helper.
 """
 import shutil
 import subprocess
@@ -46,78 +47,78 @@ from dace_fortran.emit_hlfir import emit as emit_hlfir
 _HERE = Path(__file__).resolve().parent
 _JACOBI_DIR = _HERE / "jacobi"
 _CSR_DIR = _HERE / "csr_spmv"
-_JACOBI_STUBS = [_JACOBI_DIR / "mpi_stub.f90", _JACOBI_DIR / "netcdf_stub.f90"]
+_JACOBI_STUBS = [_JACOBI_DIR / "stubs" / "mpi_stub.f90",
+                 _JACOBI_DIR / "stubs" / "netcdf_stub.f90"]
 
 
-def _has_cmake_and_flang() -> bool:
-    return shutil.which("cmake") is not None and have_flang()
+def _have(*tools: str) -> bool:
+    return all(shutil.which(t) is not None for t in tools)
 
 
-def _has_mpi_netcdf() -> bool:
-    """jacobi needs system MPI + netcdf-fortran; csr_spmv does not."""
-    if shutil.which("mpif90") is None and shutil.which("mpifort") is None:
-        return False
+def _has_netcdf_fortran() -> bool:
     pkg = shutil.which("pkg-config")
-    if pkg is None:
-        return False
-    return subprocess.run([pkg, "--exists", "netcdf-fortran"]).returncode == 0
+    return pkg is not None and \
+        subprocess.run([pkg, "--exists", "netcdf-fortran"]).returncode == 0
 
 
-def _build_and_emit(src_dir: Path, build_dir: Path, hlfir_dir: Path,
-                    target: str, stubs: Sequence[Path] = ()):
-    """Run the canonical user flow for one project: configure cmake
-    with ``-DCMAKE_EXPORT_COMPILE_COMMANDS=ON``, build the project's
-    own executable target, then emit HLFIR from the
-    ``compile_commands.json`` artefact."""
-    build_dir.mkdir(parents=True, exist_ok=True)
-    subprocess.check_call([
-        "cmake", "-S", str(src_dir), "-B", str(build_dir),
-        "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
-    ])
-    subprocess.check_call(["cmake", "--build", str(build_dir), "--target", target])
-    emit_hlfir(compile_commands=build_dir / "compile_commands.json",
-               stubs=list(stubs),
-               out_dir=hlfir_dir)
+def _emit_and_lower(hlfir_dir: Path, cc_json: Path, entry: str,
+                    stubs: Sequence[Path] = ()):
+    """Shared tail: emit HLFIR from a compile_commands.json artefact,
+    then lower the requested entry to a validated SDFG."""
+    emit_hlfir(compile_commands=cc_json, stubs=list(stubs), out_dir=hlfir_dir)
+    sdfg = build_sdfg_from_hlfir(hlfir_dir, entry=entry)
+    sdfg.validate()
+    return sdfg
+
+
+def _assert_inlined(sdfg, helper: str):
+    arr_names = " ".join(sdfg.arrays.keys()).lower()
+    assert helper not in arr_names, (
+        f"{helper} should have been inlined; appeared in SDFG arrays: "
+        f"{sorted(sdfg.arrays.keys())}")
 
 
 @pytest.mark.skipif(
-    not (_has_cmake_and_flang() and _has_mpi_netcdf()),
-    reason="cmake / flang-new-21 / MPI / netcdf-fortran missing",
+    not (_have("flang-new-21", "bear", "autoreconf", "automake", "mpif90", "nf-config")
+         and _has_netcdf_fortran()),
+    reason="flang-new-21 / bear / autotools / MPI / netcdf-fortran missing",
 )
-def test_jacobi_update_from_prebuilt_hlfir(tmp_path: Path):
-    """Project 1 -- 4 files, MPI + netCDF, stubs needed."""
-    _build_and_emit(_JACOBI_DIR, tmp_path / "build", tmp_path / "hlfir",
-                    target="jacobi", stubs=_JACOBI_STUBS)
+def test_jacobi_autotools_bear(tmp_path: Path):
+    """Autotools + ``bear -- make`` -> compile_commands.json (the ICON
+    build shape).  4 files, MPI + netCDF, two flang stubs."""
+    build = tmp_path / "build"
+    shutil.copytree(_JACOBI_DIR, build)
 
-    entry = "_QMmod_jacobiPjacobi2d_update"
-    sdfg = build_sdfg_from_hlfir(tmp_path / "hlfir", entry=entry)
-    sdfg.validate()
+    subprocess.check_call(["autoreconf", "--install"], cwd=build)
+    subprocess.check_call(["./configure"], cwd=build)
+    # Serial make so the Fortran module .mod files land in USE-dep
+    # order; bear records each compiler exec, writing the DB even on
+    # a partial build.
+    subprocess.check_call(["bear", "--", "make"], cwd=build)
 
-    arr_names = " ".join(sdfg.arrays.keys()).lower()
-    assert "stencil_5pt" not in arr_names, (
-        f"stencil_5pt should have been inlined; appeared in SDFG arrays: "
-        f"{sorted(sdfg.arrays.keys())}")
+    sdfg = _emit_and_lower(tmp_path / "hlfir", build / "compile_commands.json",
+                           entry="_QMmod_jacobiPjacobi2d_update",
+                           stubs=_JACOBI_STUBS)
+    _assert_inlined(sdfg, "stencil_5pt")
     for node, _ in sdfg.all_nodes_recursive():
         label = (getattr(node, "label", "") or "").lower()
         assert "mpi_" not in label, f"MPI reference leaked into SDFG: {node}"
 
 
 @pytest.mark.skipif(
-    not _has_cmake_and_flang(),
+    not _have("cmake", "flang-new-21"),
     reason="cmake / flang-new-21 missing",
 )
-def test_csr_spmv_from_prebuilt_hlfir(tmp_path: Path):
-    """Project 2 -- 2 files, no external deps, no stubs.  Confirms
-    the helper handles a structurally-different project (different
-    file count, no MPI/netCDF, no stubs) with no per-project plumbing."""
-    _build_and_emit(_CSR_DIR, tmp_path / "build", tmp_path / "hlfir",
-                    target="csr_demo")
+def test_csr_spmv_cmake(tmp_path: Path):
+    """cmake ``-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`` -> compile_commands.json.
+    2 files, no external deps, no stubs -- a structurally-different
+    project with no per-project plumbing."""
+    build = tmp_path / "build"
+    build.mkdir(parents=True, exist_ok=True)
+    subprocess.check_call(["cmake", "-S", str(_CSR_DIR), "-B", str(build),
+                           "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"])
+    subprocess.check_call(["cmake", "--build", str(build), "--target", "csr_demo"])
 
-    entry = "_QMmod_csrPcsr_spmv"
-    sdfg = build_sdfg_from_hlfir(tmp_path / "hlfir", entry=entry)
-    sdfg.validate()
-
-    arr_names = " ".join(sdfg.arrays.keys()).lower()
-    assert "dot_row" not in arr_names, (
-        f"dot_row should have been inlined; appeared in SDFG arrays: "
-        f"{sorted(sdfg.arrays.keys())}")
+    sdfg = _emit_and_lower(tmp_path / "hlfir", build / "compile_commands.json",
+                           entry="_QMmod_csrPcsr_spmv")
+    _assert_inlined(sdfg, "dot_row")
