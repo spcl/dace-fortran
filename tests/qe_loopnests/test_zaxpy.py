@@ -24,45 +24,15 @@ Index maps are distinct-target permutation samples (as QE's
 ``uniformSample`` produces), so the scatter accumulation order is
 irrelevant and the comparison is exact.  Input values come from the
 same xorshift64 PRNG the SC26 artifacts use (``Xor64Rng`` /
-``splitmix64``); see :func:`_xor64_uniform01`.
+``splitmix64``); see :func:`_prng.xor64_uniform01`.
 """
 import numpy as np
 import pytest
 
+from _prng import complex_stream
 from _util import build_sdfg, have_flang
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
-
-_MASK64 = (1 << 64) - 1
-
-
-def _splitmix64(x: int) -> int:
-    x = (x + 0x9E3779B97F4A7C15) & _MASK64
-    x = ((x ^ (x >> 30)) * 0xBF58476D1CE4E5B9) & _MASK64
-    x = ((x ^ (x >> 27)) * 0x94D049BB133111EB) & _MASK64
-    return x ^ (x >> 31)
-
-
-def _xor64_uniform01(n: int, seed: int = 42) -> np.ndarray:
-    """``n`` draws of the SC26 ``Xor64Rng.uniform01()`` stream:
-    splitmix64 to seed the state, then xorshift64
-    (``^=<<13; ^=>>7; ^=<<17``) per draw, mantissa ``(next>>11)/2**53``.
-    Ported verbatim so the test data matches the artifact's scheme."""
-    state = _splitmix64(seed) or seed
-    out = np.empty(n, dtype=np.float64)
-    for i in range(n):
-        state ^= (state << 13) & _MASK64
-        state ^= state >> 7
-        state ^= (state << 17) & _MASK64
-        state &= _MASK64
-        out[i] = (state >> 11) / float(1 << 53)
-    return out
-
-
-def _complex_stream(n: int, seed: int) -> np.ndarray:
-    """``n`` complex draws (re, im interleaved from one stream)."""
-    flat = _xor64_uniform01(2 * n, seed)
-    return (flat[0::2] + 1j * flat[1::2]).astype(np.complex128)
 
 
 # (kind, indirection) -> Fortran kernel.  ``n`` = iteration count;
@@ -143,8 +113,8 @@ def test_zaxpy_aos(tmp_path, indir):
     """AoS complex(8) AXPY -- direct + single (gather/scatter) + double
     indirection."""
     ymap, xmap = _index_maps()
-    x = np.asfortranarray(_complex_stream(_NX, seed=1))
-    y = np.asfortranarray(_complex_stream(_NY, seed=2))
+    x = np.asfortranarray(complex_stream(_NX, seed=1))
+    y = np.asfortranarray(complex_stream(_NY, seed=2))
     ref = _ref(indir, ymap, xmap, x, y)
 
     sdfg = build_sdfg(_aos_src(_AOS[indir]), tmp_path, name="zaxpy_aos",
@@ -158,8 +128,8 @@ def test_zaxpy_soa(tmp_path, indir):
     """SoA paired real(8) re/im AXPY -- same indirection matrix as AoS;
     the layout-transformed variant."""
     ymap, xmap = _index_maps()
-    x = _complex_stream(_NX, seed=1)
-    y = _complex_stream(_NY, seed=2)
+    x = complex_stream(_NX, seed=1)
+    y = complex_stream(_NY, seed=2)
     ref = _ref(indir, ymap, xmap, x, y)
     xr = np.asfortranarray(x.real.copy()); xi = np.asfortranarray(x.imag.copy())
     yr = np.asfortranarray(y.real.copy()); yi = np.asfortranarray(y.imag.copy())

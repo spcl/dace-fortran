@@ -520,18 +520,26 @@ static std::string traceLoopIter(fir::DoLoopOp loop) {
   return "";
 }
 
-/// Walk the defining-op graph backwards from a control-flow condition
-/// Value, collecting the Fortran names of every ``hlfir.declare``'d
-/// scalar that feeds into it.  Used by pass 2d to promote loop /
-/// branch-condition scalars to symbols.
+/// Walk the defining-op graph backwards from an integer-valued
+/// expression, collecting the Fortran names of every ``hlfir.declare``'d
+/// integer scalar that feeds into it.  Used by pass 2c to promote scalars
+/// that appear in an array-index expression (``a(base + jh)`` -> ``base``
+/// is a symbol) and by pass 2d for loop / branch-condition scalars.
 ///
-/// Recognised shape: ``arith.cmp*`` (the leaf comparison), and the
-/// transparent wrappers lift-cf-to-scf emits around it  --
-/// ``arith.xori/andi/ori/trunci/extui/extsi`` and ``fir.convert``.
-/// Stops when it hits a ``fir.load`` (hands off to ``traceToDecl``) or
-/// an op it doesn't recognise.
-static void collectConditionReads(mlir::Value v, std::set<std::string> &out,
-                                  int depth = 0) {
+/// The principle is the same for both: a scalar whose value reaches an
+/// index subset or a control-flow condition must be a symbol, because
+/// DaCe memlet subsets and interstate conditions are symbolic.  Writing
+/// to a symbol then routes the assignment through the interstate-edge
+/// path in ``_emit_assign``, keeping the value live across states.
+///
+/// Recognised shape: ``arith.cmp*`` (condition leaf), the integer
+/// arithmetic Flang emits inside an index (``arith.addi/subi/muli/
+/// divsi/divui/remsi/remui``), the logical combinators / int casts the
+/// lift-cf-to-scf chain wraps a condition in (``arith.xori/andi/ori/
+/// trunci/extui/extsi``) and ``fir.convert``.  Stops at a ``fir.load``
+/// (hands off to ``traceToDecl``) or an op it doesn't recognise.
+static void collectIntegerScalarReads(mlir::Value v, std::set<std::string> &out,
+                                      int depth = 0) {
   if (depth > 20 || !v) return;
   auto *def = v.getDefiningOp();
   if (!def) return;
@@ -540,16 +548,22 @@ static void collectConditionReads(mlir::Value v, std::set<std::string> &out,
   // of ``i < n`` (i and n both become symbols if they're declared).
   if (mlir::isa<mlir::arith::CmpFOp, mlir::arith::CmpIOp>(def)) {
     for (auto operand : def->getOperands())
-      collectConditionReads(operand, out, depth + 1);
+      collectIntegerScalarReads(operand, out, depth + 1);
     return;
   }
 
-  // Logical combinators and int casts the lift-cf-to-scf chain emits.
-  if (mlir::isa<mlir::arith::XOrIOp, mlir::arith::AndIOp, mlir::arith::OrIOp,
+  // Integer arithmetic inside an index expression (``base + jh``,
+  // ``c*i + d``), the logical combinators and int casts the
+  // lift-cf-to-scf chain emits: recurse into every operand so each
+  // declared scalar leaf is promoted.
+  if (mlir::isa<mlir::arith::AddIOp, mlir::arith::SubIOp, mlir::arith::MulIOp,
+                mlir::arith::DivSIOp, mlir::arith::DivUIOp,
+                mlir::arith::RemSIOp, mlir::arith::RemUIOp,
+                mlir::arith::XOrIOp, mlir::arith::AndIOp, mlir::arith::OrIOp,
                 mlir::arith::TruncIOp, mlir::arith::ExtUIOp,
                 mlir::arith::ExtSIOp, fir::ConvertOp>(def)) {
     for (auto operand : def->getOperands())
-      collectConditionReads(operand, out, depth + 1);
+      collectIntegerScalarReads(operand, out, depth + 1);
     return;
   }
 
@@ -572,10 +586,10 @@ static void collectConditionReads(mlir::Value v, std::set<std::string> &out,
     return;
   }
 
-  // Anything else (constants, arith.addi used as index arithmetic, ...)
-  //  --  trace through traceToDecl as a last resort; it already handles
-  // several pass-through ops.  Same integer-only filter so non-integer
-  // scalars don't get promoted to symbols here either.
+  // Anything else (constants, an unrecognised producer, ...)  --  trace
+  // through traceToDecl as a last resort; it already handles several
+  // pass-through ops.  Same integer-only filter so non-integer scalars
+  // don't get promoted to symbols here either.
   if (v.getType().isIntOrIndex()) {
     auto n = traceToDecl(v);
     if (!n.empty()) out.insert(n);
@@ -1003,11 +1017,15 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
     auto operands = dg.getIndices();
     auto triplets = dg.getIsTriplet();
     if (triplets.empty()) {
-      // Plain scalar-indices: walk every operand.
-      for (auto idx : operands) {
-        auto n = traceToDecl(idx);
-        if (!n.empty()) symbolNames.insert(n);
-      }
+      // Plain scalar-indices: recurse through each operand so every
+      // declared scalar leaf is promoted, including ones hidden behind
+      // index arithmetic (``a(base + jh)`` -> ``base``).  A bare
+      // ``traceToDecl`` would stop at the ``arith.addi`` and miss
+      // ``base``, leaving it a transient scalar that the memlet subset
+      // then references by name -- which DaCe can't allocate across the
+      // states that read it.
+      for (auto idx : operands)
+        collectIntegerScalarReads(idx, symbolNames);
       return;
     }
     // Triplet-aware walk: each true entry in ``triplets`` consumes
@@ -1020,16 +1038,12 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
     unsigned cursor = 0;
     for (unsigned d = 0; d < triplets.size(); ++d) {
       if (triplets[d]) {
-        for (unsigned k = 0; k < 2 && cursor + k < operands.size(); ++k) {
-          auto n = traceToDecl(operands[cursor + k]);
-          if (!n.empty()) symbolNames.insert(n);
-        }
+        for (unsigned k = 0; k < 2 && cursor + k < operands.size(); ++k)
+          collectIntegerScalarReads(operands[cursor + k], symbolNames);
         cursor += 3;
       } else {
-        if (cursor < operands.size()) {
-          auto n = traceToDecl(operands[cursor]);
-          if (!n.empty()) symbolNames.insert(n);
-        }
+        if (cursor < operands.size())
+          collectIntegerScalarReads(operands[cursor], symbolNames);
         cursor += 1;
       }
     }
@@ -1042,13 +1056,13 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
   // Without this, ``DO WHILE (i < n)`` reads the scalar's initial
   // zero-init and the loop body never runs.
   module.walk([&](mlir::scf::IfOp ifOp) {
-    collectConditionReads(ifOp.getCondition(), symbolNames);
+    collectIntegerScalarReads(ifOp.getCondition(), symbolNames);
   });
   module.walk([&](fir::IfOp ifOp) {
-    collectConditionReads(ifOp.getCondition(), symbolNames);
+    collectIntegerScalarReads(ifOp.getCondition(), symbolNames);
   });
   module.walk([&](mlir::scf::ConditionOp condOp) {
-    collectConditionReads(condOp.getCondition(), symbolNames);
+    collectIntegerScalarReads(condOp.getCondition(), symbolNames);
   });
 
   // Pass 3: build one VarInfo per declare.
