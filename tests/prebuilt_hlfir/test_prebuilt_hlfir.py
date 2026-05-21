@@ -36,13 +36,11 @@ exercised here:
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Sequence
 
 import pytest
 
 from _util import have_flang
-from dace_fortran import build_sdfg_from_hlfir
-from dace_fortran.emit_hlfir import emit as emit_hlfir
+from dace_fortran import build_sdfg_from_project
 
 _HERE = Path(__file__).resolve().parent
 _JACOBI_DIR = _HERE / "jacobi"
@@ -61,16 +59,6 @@ def _has_netcdf_fortran() -> bool:
         subprocess.run([pkg, "--exists", "netcdf-fortran"]).returncode == 0
 
 
-def _emit_and_lower(hlfir_dir: Path, cc_json: Path, entry: str,
-                    stubs: Sequence[Path] = ()):
-    """Shared tail: emit HLFIR from a compile_commands.json artefact,
-    then lower the requested entry to a validated SDFG."""
-    emit_hlfir(compile_commands=cc_json, stubs=list(stubs), out_dir=hlfir_dir)
-    sdfg = build_sdfg_from_hlfir(hlfir_dir, entry=entry)
-    sdfg.validate()
-    return sdfg
-
-
 def _assert_inlined(sdfg, helper: str):
     arr_names = " ".join(sdfg.arrays.keys()).lower()
     assert helper not in arr_names, (
@@ -85,7 +73,8 @@ def _assert_inlined(sdfg, helper: str):
 )
 def test_jacobi_autotools_bear(tmp_path: Path):
     """Autotools + ``bear -- make`` -> compile_commands.json (the ICON
-    build shape).  4 files, MPI + netCDF, two flang stubs."""
+    build shape).  4 files, MPI + netCDF, two flang stubs.  Drives the
+    one-call ``build_sdfg_from_project`` tier-3 entry point."""
     build = tmp_path / "build"
     shutil.copytree(_JACOBI_DIR, build)
 
@@ -96,9 +85,11 @@ def test_jacobi_autotools_bear(tmp_path: Path):
     # a partial build.
     subprocess.check_call(["bear", "--", "make"], cwd=build)
 
-    sdfg = _emit_and_lower(tmp_path / "hlfir", build / "compile_commands.json",
-                           entry="_QMmod_jacobiPjacobi2d_update",
-                           stubs=_JACOBI_STUBS)
+    sdfg = build_sdfg_from_project(build / "compile_commands.json",
+                                   entry="_QMmod_jacobiPjacobi2d_update",
+                                   stubs=_JACOBI_STUBS,
+                                   out_dir=tmp_path / "hlfir")
+    sdfg.validate()
     _assert_inlined(sdfg, "stencil_5pt")
     for node, _ in sdfg.all_nodes_recursive():
         label = (getattr(node, "label", "") or "").lower()
@@ -119,6 +110,8 @@ def test_csr_spmv_cmake(tmp_path: Path):
                            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"])
     subprocess.check_call(["cmake", "--build", str(build), "--target", "csr_demo"])
 
-    sdfg = _emit_and_lower(tmp_path / "hlfir", build / "compile_commands.json",
-                           entry="_QMmod_csrPcsr_spmv")
+    sdfg = build_sdfg_from_project(build / "compile_commands.json",
+                                   entry="_QMmod_csrPcsr_spmv",
+                                   out_dir=tmp_path / "hlfir")
+    sdfg.validate()
     _assert_inlined(sdfg, "dot_row")

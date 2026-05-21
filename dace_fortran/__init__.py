@@ -24,13 +24,14 @@ access of ``SDFGBuilder`` / ``generate_sdfg``), not at import time.
         args=[dace_fortran.Arg("array", "float64")],   # intent defaults to inout
         libraries=["/path/libfoo.so"]))
 
-    # Tier 3 (WIP) -- the user's own build (cmake / ninja / fpm)
-    # emits .hlfir via ``python -m dace_fortran.emit_hlfir
-    # <build>/compile_commands.json --out <build>/hlfir``, then
-    # the bridge consumes the result without driving flang itself.
-    # See README and tests/prebuilt_hlfir/ for the worked examples.
-    sdfg = dace_fortran.build_sdfg_from_hlfir("<build>/hlfir",
-                                              entry="_QMmymodPmysub")
+    # Tier 3 -- a real CMake / Autotools project.  Get a
+    # compile_commands.json from the build (cmake
+    # -DCMAKE_EXPORT_COMPILE_COMMANDS=ON, or `bear -- make` for
+    # autotools), then one call.  See README "Building an SDFG from
+    # a real project" + tests/prebuilt_hlfir/ for worked examples.
+    sdfg = dace_fortran.build_sdfg_from_project(
+        "build/compile_commands.json", entry="_QMmymodPmysub",
+        stubs=["mpi_stub.f90"])           # flang has no shipped mpi/netcdf .mod
 
     # Low level: an already-emitted .hlfir file (single path):
     sdfg = dace_fortran.generate_sdfg("kernel.hlfir")
@@ -41,6 +42,7 @@ _LAZY = {
     "build_sdfg": "dace_fortran.build",
     "build_sdfg_from_files": "dace_fortran.build",
     "build_sdfg_from_hlfir": "dace_fortran.build",
+    "build_sdfg_from_project": "dace_fortran.build",
     # ``dace_fortran.emit_hlfir`` is a module (the tier-3 helper);
     # invoked as a CLI (``python -m dace_fortran.emit_hlfir ...``) or
     # imported directly (``from dace_fortran.emit_hlfir import emit``).

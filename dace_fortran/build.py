@@ -10,12 +10,15 @@ caller's behalf:
   plus the modules it ``USE``s, in any order); the file defining
   ``entry`` is the root, the rest are merged in via
   ``merge_used_modules`` so flang sees one self-contained TU.
-- :func:`build_sdfg_from_hlfir` (**WIP**, tier 3) -- the bridge
-  does not drive flang at all; the user's own build system emits
-  ``.hlfir`` via :mod:`dace_fortran.emit_hlfir` and the bridge
-  consumes it.  This is the canonical path for codebases too
-  large or dep-tangled for the bridge to compile alone
-  (ICON-scale, real external libraries).
+- :func:`build_sdfg_from_hlfir` (tier 3) -- the bridge does not
+  drive flang at all; the user's own build system emits ``.hlfir``
+  via :mod:`dace_fortran.emit_hlfir` and the bridge consumes it.
+  This is the canonical path for codebases too large or dep-tangled
+  for the bridge to compile alone (ICON-scale, real external
+  libraries).
+- :func:`build_sdfg_from_project` (tier 3) -- the one-call form of
+  the above: hand it a built project's ``compile_commands.json``
+  and it emits + lowers in a single step.
 
 All three return a built, validated :class:`dace.SDFG`.  ``entry``
 is the mangled Flang symbol of the target procedure (``_QPrun`` for
@@ -46,6 +49,7 @@ __all__ = [
     "build_sdfg",
     "build_sdfg_from_files",
     "build_sdfg_from_hlfir",
+    "build_sdfg_from_project",
     "register_external",
     "keep_external",
     "ExternalSignature",
@@ -286,10 +290,10 @@ def build_sdfg_from_hlfir(hlfir_path: Union[str, Path],
     produced by the project's own build system (``flang -fc1
     -emit-hlfir ...`` via cmake / make / fpm / a wrapper).
 
-    **WIP / experimental** -- the tier-3 entry point for codebases too
-    large or dep-tangled for the bridge to compile itself
-    (ICON-scale: hundreds of modules, ``netcdf`` / ``hdf5`` / ``yaxt``
-    externals, custom cpp).  The user's build system already knows how
+    The tier-3 entry point for codebases too large or dep-tangled for
+    the bridge to compile itself (ICON-scale: hundreds of modules,
+    ``netcdf`` / ``hdf5`` / ``yaxt`` externals, custom cpp).  The
+    user's build system already knows how
     to compile the project (it has the right ``-I``, the right
     intrinsic-module path, the right cpp defines); the bridge stops
     competing with it and just consumes the resulting ``.hlfir``.
@@ -336,6 +340,57 @@ def build_sdfg_from_hlfir(hlfir_path: Union[str, Path],
                               "directory (it selects which .hlfir to load)")
         p = _resolve_hlfir_for_entry(p, entry)
     return SDFGBuilder(str(p), pipeline=pipeline, entry=entry).build()
+
+
+def build_sdfg_from_project(compile_commands: Union[str, Path],
+                            *,
+                            entry: str,
+                            stubs: Sequence[Union[str, Path]] = (),
+                            out_dir: Optional[Union[str, Path]] = None,
+                            pipeline: Optional[str] = None,
+                            flang: str = "flang-new-21") -> SDFG:
+    """Build a :class:`dace.SDFG` from a built project's
+    ``compile_commands.json`` in one call -- tier 3.
+
+    Collapses the two tier-3 steps (emit HLFIR for the project's TUs,
+    then lower the entry) into one.  Equivalent to::
+
+        from dace_fortran.emit_hlfir import emit
+        emit(compile_commands=cc, stubs=stubs, out_dir=hlfir_dir, flang=flang)
+        sdfg = build_sdfg_from_hlfir(hlfir_dir, entry=entry, pipeline=pipeline)
+
+    Use the explicit two-step form when you want to emit once and
+    lower several entries, or to inspect the intermediate ``.hlfir``
+    files; this wrapper re-emits each call.
+
+    The ``compile_commands.json`` artefact comes from the project's
+    own build (``cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON``, or
+    ``bear -- make`` for autotools / plain-make builds like ICON);
+    see the README's *Building an SDFG from a real project* section.
+
+    :param compile_commands: path to the build's ``compile_commands.json``.
+    :param entry: mangled Flang symbol of the target procedure
+        (**required** -- it selects which emitted ``.hlfir`` to lower).
+    :param stubs: flang-buildable stub sources for modules flang has
+        no shipped ``.mod`` for (``mpi`` / ``netcdf`` / ``hdf5`` / ...),
+        compiled before the project TUs.
+    :param out_dir: directory for the emitted ``.hlfir`` / ``.mod``
+        files; a temporary one is used and removed when omitted.
+    :param pipeline: MLIR pass pipeline; defaults to ``DEFAULT_PIPELINE``.
+    :param flang: flang binary to drive (default ``flang-new-21``).
+    :returns: a built, validated SDFG.
+    """
+    from dace_fortran.emit_hlfir import emit
+
+    def _do(d: Path) -> SDFG:
+        emit(compile_commands=Path(compile_commands),
+             stubs=[Path(s) for s in stubs], out_dir=d, flang=flang)
+        return build_sdfg_from_hlfir(d, entry=entry, pipeline=pipeline)
+
+    if out_dir is not None:
+        return _do(Path(out_dir))
+    with tempfile.TemporaryDirectory(prefix="hlfir_project_") as td:
+        return _do(Path(td))
 
 
 def build_sdfg_from_files(files: Sequence[Union[str, Path]],
