@@ -367,11 +367,15 @@ class SDFGBuilder:
         # downstream codegen drift check).
         self._run_post_gen_passes(sdfg)
         self._attach_frozen_signature(sdfg)
-        sdfg.validate()
         # Every Fortran extent stays a required SDFG input; resolve the
         # synthetic ``<arr>_d<i>`` symbols a direct caller omits from
         # the passed arrays (correct extent) or a don't-care default.
-        return install_auto_dim_symbols(sdfg)
+        sdfg = install_auto_dim_symbols(sdfg)
+        # Validate the SDFG exactly as returned -- after every mutation
+        # (post-gen passes, frozen-signature snapshot, auto-dim retype) --
+        # so a caller never receives an unvalidated graph.
+        sdfg.validate()
+        return sdfg
 
     def _register_constants(self, sdfg: SDFG):
         """Attach Flang's constant-pool data to the SDFG.

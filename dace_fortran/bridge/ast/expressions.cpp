@@ -1177,14 +1177,22 @@ std::string buildExpr(mlir::Value val, int d) {
   }
 
   // Bit shifts  --  Fortran ``ishft`` (and the building blocks of
-  // ``ibset`` / ``ibclr`` / ``ibits``).  Map shli / shrsi / shrui to
-  // Python ``<<`` / ``>>``; Python's ``>>`` is signed by default, so
-  // ``shrsi`` and ``shrui`` both render the same on the integer types
-  // Flang produces here.
-  if ((nm == "arith.shli" || nm == "arith.shrsi" || nm == "arith.shrui") &&
+  // ``ibset`` / ``ibclr`` / ``ibits``).  ``arith.shrsi`` is the
+  // arithmetic (sign-extending) right shift and maps to ``>>`` directly.
+  // ``arith.shli`` / ``arith.shrui`` are the *logical* (bit-pattern,
+  // zero-fill) shifts Flang emits for ``ISHFT``: a signed ``>>`` would
+  // sign-extend instead of zero-filling -- wrong for a negative operand
+  // (``ishft(-182, -2)``) -- so route them through the
+  // ``logical_left_shift`` / ``logical_right_shift`` runtime helpers,
+  // which shift via the unsigned type.
+  if (nm == "arith.shrsi" && def->getNumOperands() == 2) {
+    return "(" + buildExpr(def->getOperand(0), d + 1) + " >> " +
+           buildExpr(def->getOperand(1), d + 1) + ")";
+  }
+  if ((nm == "arith.shli" || nm == "arith.shrui") &&
       def->getNumOperands() == 2) {
-    const char *op = (nm == "arith.shli") ? " << " : " >> ";
-    return "(" + buildExpr(def->getOperand(0), d + 1) + op +
+    const char *fn = (nm == "arith.shli") ? "logical_left_shift" : "logical_right_shift";
+    return std::string(fn) + "(" + buildExpr(def->getOperand(0), d + 1) + ", " +
            buildExpr(def->getOperand(1), d + 1) + ")";
   }
 
