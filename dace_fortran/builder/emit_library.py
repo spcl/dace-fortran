@@ -393,6 +393,12 @@ def emit_call(builder, ctx, n, region):
     import dace
     from dace_fortran.external import ExternalCall, lookup_external
 
+    # Normalise the bridge's callee name to the registry key the user
+    # registered.  The C++ side may hand us an MLIR symbol (leading
+    # ``@``) and flang's free-procedure mangling (``_QP<name>``); strip
+    # both so ``register_external("foo", ...)`` matches a ``CALL foo``.
+    # Module-procedure callees (``_QMmodP<name>``) are not stripped --
+    # register those under their bare ``<name>`` if needed.
     callee = n.callee.lstrip('@')
     if callee.startswith('_QP'):
         callee = callee[3:]

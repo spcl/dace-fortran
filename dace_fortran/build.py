@@ -287,36 +287,21 @@ def build_sdfg_from_hlfir(hlfir_path: Union[str, Path],
                           entry: Optional[str] = None,
                           pipeline: Optional[str] = None) -> SDFG:
     """Build a :class:`dace.SDFG` from a pre-emitted ``.hlfir`` file
-    produced by the project's own build system (``flang -fc1
-    -emit-hlfir ...`` via cmake / make / fpm / a wrapper).
-
-    The tier-3 entry point for codebases too large or dep-tangled for
-    the bridge to compile itself (ICON-scale: hundreds of modules,
-    ``netcdf`` / ``hdf5`` / ``yaxt`` externals, custom cpp).  The
-    user's build system already knows how
-    to compile the project (it has the right ``-I``, the right
-    intrinsic-module path, the right cpp defines); the bridge stops
-    competing with it and just consumes the resulting ``.hlfir``.
+    produced by the project's own build system (the tier-3 path; see
+    the module docstring for when to reach for it).
 
     ``hlfir_path`` may be:
 
     * a path to a specific ``.hlfir`` file -- consumed directly; or
-    * a directory -- the bridge walks it recursively, picks the one
-      ``.hlfir`` whose MLIR contains ``func.func @<entry>(...)``,
-      and consumes that.  ``entry`` is **required** in this form
-      (without it there's nothing to match against).  Real build
-      systems often emit one ``.hlfir`` per TU under a build / cache
-      directory; passing the root saves the caller from tracking
-      which TU holds the entry.
+    * a directory -- walked recursively for the one ``.hlfir`` whose
+      MLIR contains ``func.func @<entry>(...)``.  ``entry`` is
+      **required** in this form (it is the match key); this saves the
+      caller from tracking which per-TU ``.hlfir`` holds the entry.
 
-    All cross-procedure inlining the consumer expects must already be
-    visible in that ``.hlfir`` -- flang produces one ``.hlfir`` per
-    translation unit and only inlines procedures whose bodies are in
-    the same TU.  Procedures USE'd from a different TU stay as
-    external symbol references in the SDFG (handled downstream by
-    ``emit_call`` / ``ExternalCall``); this is the right contract for
-    things like halo exchanges or I/O routines that the consumer
-    explicitly *does* want left external.
+    Inlining is intra-TU only: flang emits one ``.hlfir`` per
+    translation unit, so a procedure ``USE``-d from another TU stays
+    an external symbol reference in the SDFG (the right contract for
+    halo exchanges / I/O routines deliberately left external).
 
     :param hlfir_path: path to a ``.hlfir`` file, or a directory
         containing one.

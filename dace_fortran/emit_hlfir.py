@@ -1,36 +1,25 @@
-"""One-command HLFIR emitter that piggy-backs on the user's existing
-build system rather than asking them to wire flang in by hand.
+"""The tier-3 HLFIR emitter: drive flang per translation unit from a
+build's ``compile_commands.json`` (or an explicit ``--source`` list)
+so the user need not wire flang into their build by hand.  CLI usage
+and flags are in :func:`main`'s argparse help; the README's
+*Building an SDFG from a real project* section is the walkthrough.
 
-Two minimal asks of the user:
+Two file-list sources, mutually exclusive:
 
-1. add ``-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`` to the cmake configure
-   (or use a generator that emits ``compile_commands.json`` --
-   Ninja / Make do), and
-2. run::
+* ``compile_commands`` -- the preferred path: build order and per-TU
+  ``-I`` / ``-D`` flags come straight from the artefact, so the
+  emitter never guesses.  Produced by ``cmake
+  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON`` or, for autotools / plain make,
+  ``bear -- make``.
+* ``sources`` -- a fallback for builds with no such artefact; order is
+  a ``USE``-graph topo-sort (regex scan, the shape ``makedepf90`` /
+  ``fortdepend`` / ``fpm`` use).
 
-      python -m dace_fortran.emit_hlfir <build_dir>/compile_commands.json \\
-          --out <build_dir>/hlfir [--stub <flang_buildable_stub>]...
-
-That's it.  The Fortran build order is whatever the user's
-``compile_commands.json`` records, and the per-file compile flags
-(``-cpp``, ``-D`` defines, ``-I`` cpp-include paths) come from the
-same JSON -- the script never has to guess.  ``--stub`` injects
-flang-buildable stand-ins for modules flang has no shipped ``.mod``
-for (``mpi`` / ``netcdf`` / ``hdf5`` / ...): they are compiled
-first, before the project sources, so the project's ``USE`` lines
-resolve.
-
-For projects without a compile-commands artefact (plain ``Makefile``,
-``fpm``, hand-rolled), the script also accepts an explicit
-``--source`` list -- order is then derived from a topo-sort of the
-files' ``USE`` lines (a regex scan, the same shape ``makedepf90`` /
-``fortdepend`` / ``fpm`` use).
-
-The emitted directory is the one to hand to
-:func:`dace_fortran.build_sdfg_from_hlfir`::
-
-    sdfg = dace_fortran.build_sdfg_from_hlfir(
-        "<build_dir>/hlfir", entry="_QMmod_jacobiPjacobi2d_update")
+``stubs`` are flang-buildable stand-ins for modules flang ships no
+``.mod`` for (``mpi`` / ``netcdf`` / ``hdf5`` / ...); compiled first
+so the project's ``USE`` lines resolve.  The emitted directory feeds
+:func:`dace_fortran.build_sdfg_from_hlfir` /
+:func:`dace_fortran.build_sdfg_from_project`.
 """
 import argparse
 import json
@@ -55,7 +44,10 @@ _USE_DEP_RE = re.compile(r"^\s*USE[\s,]*(?:INTRINSIC\s*::\s*)?\s*([A-Za-z_]\w*)"
 def _topo_order(sources: Sequence[Path]) -> List[Path]:
     """USE-graph topo-sort over an explicit file list (fallback path
     for projects without ``compile_commands.json``).  Files defining
-    no module sort last.  Multi-module files are emitted once.
+    no module sort last.  Multi-module files are emitted once.  A
+    ``USE`` cycle (rare in well-formed Fortran) is broken silently --
+    the ``"visiting"`` re-entry just returns, leaving the back-edge
+    file wherever the recursion first reached it.
     """
     file_modules: dict = {}
     module_owner: dict = {}
@@ -105,7 +97,10 @@ def _parse_compile_commands(cc_path: Path):
     out: list = []
     for e in entries:
         src = Path(e["file"])
-        if src.suffix.lower() not in (".f90", ".F90".lower(), ".f", ".for"):
+        # Fortran TUs only -- a mixed project's C/C++ entries (yaxt,
+        # cdi, ...) share the same compile_commands.json and must be
+        # skipped.  Suffix already lower-cased, so ``.F90`` is covered.
+        if src.suffix.lower() not in (".f90", ".f", ".for"):
             continue
         # Recorded command may be a string ("cc -I/x foo.c") or a list.
         cmd = e["command"] if "command" in e else " ".join(e.get("arguments", []))
@@ -172,6 +167,7 @@ def emit(*,
 
     :returns: the emitted ``.hlfir`` paths in build order.
     """
+    # XOR: exactly one of the two file-list sources must drive the run.
     if (compile_commands is None) == (not sources):
         raise ValueError("emit() takes exactly one of compile_commands= or sources=")
     out_dir.mkdir(parents=True, exist_ok=True)

@@ -46,14 +46,9 @@ _C_TYPES = {
     "bool": "bool",
 }
 
-#: ``Arg.kind == "comm"`` -- pseudo-dtype name of an MPI communicator
-#: handle.  The C declaration uses the ``MPI_Comm`` opaque type
-#: directly; the SDFG-side container is retyped to
-#: ``dace.dtypes.opaque("MPI_Comm")`` so DaCe codegen passes the value
-#: as ``MPI_Comm`` at the C ABI.  The binding (the ``bind(c)`` shim
-#: or DaCe's MPI integration) handles ``MPI_Comm_f2c`` so that by the
-#: time the external function runs it has a C ``MPI_Comm`` to use --
-#: see ``Arg`` 's ``kind="comm"`` paragraph for the full contract.
+#: C type emitted for an ``Arg(kind="comm")`` parameter.  Full
+#: contract (opaque-retype, who calls ``MPI_Comm_f2c``) is on
+#: ``Arg`` 's ``kind="comm"`` docstring.
 _OPAQUE_COMM_DTYPE = "MPI_Comm"
 
 

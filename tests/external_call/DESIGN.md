@@ -43,12 +43,13 @@ to allow that — it's just "register the shim's `c_name`".
 3. **Builder** (`emit_call`): unregistered callee → no-op (prior
    behaviour preserved); registered → an
    `ExternalCall` **library node** (one expansion to a side-effecting
-   CPP tasklet; validates its own connector names). The node carries
-   the `extern "C" void <c_name>(…);` declaration and the call
-   statement; array args are pointer connectors (read / written per
-   `intent`, paired `_aN` / `_aN_o` aliasing the same array),
-   scalars by-value, shape-only free symbols referenced inline in
-   the call body.
+   CPP tasklet; validates that the call body references only existing
+   connectors / SDFG symbols — a flat `c_name(a, b, c);` body, not a
+   nested-paren expression). The node carries the `extern "C" void
+   <c_name>(…);` declaration and the call statement; array args are
+   pointer connectors (read / written per `intent`, paired `_a{i}` /
+   `_a{i}_o` aliasing the same array), scalars by-value, shape-only
+   free symbols referenced inline in the call body.
 4. **Linking**: `register_external(..., libraries=[libfoo.so])`
    merges, for each library, `-Wl,--no-as-needed <abs .so path>
    -Wl,-rpath,<dir>` into `compiler.linker.args` (the verbatim
@@ -121,11 +122,13 @@ opposite split (kernel hands raw `MPI_Fint`, shim does `f2c`),
 declare the arg as `Arg("scalar", "int32", "in")` instead -- comm
 is the by-`MPI_Comm` form.
 
-`MPI_Request` is the natural symmetric extension (same opaque
-pattern, different type name).  Not implemented yet -- add when a
-real call site needs it; the shape is `kind="request"` →
-`opaque(MPI_Request)` connector + `MPI_Request` in the C
-declaration.
+`MPI_Request` already flows as `opaque(MPI_Request)` inside the
+*recognised-MPI* path (`emit_mpi` threads Isend/Irecv → Wait through
+an `opaque(MPI_Request)` transient).  What's not yet implemented is a
+**registered-external** `Arg(kind="request")` for a user `bind(c)`
+shim that takes an MPI request -- add when a real call site needs it;
+the shape mirrors `kind="comm"` (`opaque(MPI_Request)` connector +
+`MPI_Request` in the C declaration).
 
 ## Real-world target: ICON `velocity_tendencies`
 

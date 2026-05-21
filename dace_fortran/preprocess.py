@@ -380,33 +380,48 @@ def strip_openmp_directives(source: str) -> str:
     # touch unrelated cpp blocks.
     stack: list = []
     for line in source.splitlines(keepends=True):
+        # ``stack`` holds one ``(is_omp_acc, dropping)`` per open cpp
+        # conditional.  ``is_omp_acc`` marks blocks gated on a macro in
+        # ``_OMP_ACC_MACROS``; ``dropping`` is whether the *current* arm
+        # is the one to elide.  A non-OMP ``#if`` pushes ``(False, False)``
+        # so its lines and its ``#else`` / ``#elif`` pass through verbatim
+        # -- those branches below intentionally do nothing for a
+        # ``(False, ...)`` top-of-stack (the only ``else`` is "emit the
+        # line").
         m_ifdef = _CPP_IFDEF_RE.match(line)
         m_ifdef_paren = _CPP_IFDEFINED_RE.match(line) if not m_ifdef else None
         if m_ifdef:
             kind, macro = m_ifdef.group(1).lower(), m_ifdef.group(2)
             if macro in _OMP_ACC_MACROS:
-                stack.append((True, kind == "ifdef"))  # drop the matching body
+                # _OPENMP/_OPENACC are undefined: ``#ifdef`` arm drops,
+                # ``#ifndef`` arm keeps.
+                stack.append((True, kind == "ifdef"))
                 continue
             stack.append((False, False))
         elif m_ifdef_paren:
             negate, macro = bool(m_ifdef_paren.group(1)), m_ifdef_paren.group(2)
             if macro in _OMP_ACC_MACROS:
-                stack.append((True, not negate))
+                stack.append((True, not negate))  # defined()->drop, !defined()->keep
                 continue
             stack.append((False, False))
         elif _CPP_IF_RE.match(line):
             stack.append((False, False))
         elif _CPP_ELSE_RE.match(line):
             if stack and stack[-1][0]:
-                stack[-1] = (True, not stack[-1][1])
+                stack[-1] = (True, not stack[-1][1])  # flip to the other arm
                 continue
         elif _CPP_ELIF_RE.match(line):
             if stack and stack[-1][0]:
-                # An OMP/ACC ``#elif`` always drops (the macro stays
-                # undefined whichever branch we are on).
+                # KNOWN LIMITATION: in ``#ifdef _OPENMP / #elif FOO``, the
+                # ``#elif FOO`` arm is dropped too -- the macro is treated
+                # purely as undefined, so a sibling arm gated on an
+                # unrelated ``FOO`` is discarded.  Acceptable because
+                # OMP/ACC blocks rarely carry a meaningful ``#elif``.
                 stack[-1] = (True, True)
                 continue
         elif _CPP_ENDIF_RE.match(line):
+            # Pop on close.  An unbalanced ``#endif`` (empty stack -- e.g.
+            # its ``#if`` predates ``source``) is tolerated as a no-op.
             if stack and stack[-1][0]:
                 stack.pop()
                 continue
@@ -602,6 +617,12 @@ def merge_used_modules(source: str, *, search_dirs=()) -> str:
                 if nm not in in_source:
                     index.setdefault(nm, blk)
 
+    # Post-order DFS toposort (deps emitted before their dependents):
+    # each name is pushed once unexpanded, then re-pushed ``expanded``
+    # so it is appended to ``order`` only after its deps were visited
+    # (the classic gray/black marking).  A ``USE`` cycle drops its
+    # back-edge silently -- the already-``placed`` node is skipped --
+    # which is fine for well-formed Fortran (acyclic module graph).
     order: list = []
     placed = set(in_source)
     stack = [(nm, False) for nm in reversed(_used_modules(source))]
