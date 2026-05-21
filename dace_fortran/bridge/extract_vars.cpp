@@ -1848,7 +1848,20 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
         vars.push_back(std::move(dv));
       }
     };
-    if (baseCondAlloc) registerExtentSyms(v.shape_symbols);
+    if (baseCondAlloc) {
+      registerExtentSyms(v.shape_symbols);
+    } else if (!allocSites.empty() && v.rank > 0) {
+      // Concrete-shape base buffer (``allocate(a(n))``).  The shape stays
+      // the concrete extent (``n``), but ``size(a)`` / ``LBOUND`` / ``UBOUND``
+      // lower to ``fir.box_dims`` which the bridge renders as ``<name>_d<i>``.
+      // The ALLOCATE site has the dimensions, so the AST builder binds
+      // ``<name>_d<i> = <extent>`` there -- register the symbol so it
+      // resolves off-signature instead of leaking as a free program argument.
+      std::vector<std::string> baseExtentSyms;
+      for (int d = 0; d < v.rank; ++d)
+        baseExtentSyms.push_back(v.fortran_name + "_d" + std::to_string(d));
+      registerExtentSyms(baseExtentSyms);
+    }
 
     // Register one synthetic transient per NON-base buffer class
     // (``a_alloc1``, ``a_alloc2``, ...).  A singleton class is a

@@ -313,22 +313,20 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
     auto classes = mod ? groupAllocSites(decl.getUniqName().str(), mod)
                        : std::vector<std::vector<fir::AllocMemOp>>{};
     unsigned cls = 0;
-    bool condClass = false;
     for (unsigned ci = 0; ci < classes.size(); ++ci)
       for (auto site : classes[ci])
-        if (site.getOperation() == allocmem.getOperation()) {
-          cls = ci;
-          condClass = classes[ci].size() > 1;
-        }
+        if (site.getOperation() == allocmem.getOperation()) cls = ci;
     std::string bufName = allocAliasName(raw, cls);
     setAllocAlias(raw, bufName);
-    // Assign the buffer's extent symbol(s) here, at the site, when the
-    // buffer uses them: a conditional class (every branch) or ANY non-base
-    // (versioned) buffer -- a versioned transient has no caller binding,
-    // so the symbol must be assigned here, which also lets
-    // ``size(a_allocK)`` resolve.  The base singleton ``a`` keeps its
-    // caller-/shape-resolved extent and emits nothing.
-    if (condClass || cls >= 1) {
+    // Bind the buffer's per-dim extent symbol ``<buf>_d<i>`` here, at the
+    // site, from the ALLOCATE's own shape operand.  Every ALLOCATE passes
+    // its dimensions (``allocate(a(n))`` -> extent ``n``), so we always know
+    // them: assigning the symbol here keeps it from leaking onto the program
+    // signature as a free symbol and lets ``size(a)`` / ``LBOUND`` / ``UBOUND``
+    // (which lower to ``fir.box_dims`` rendered as ``<buf>_d<i>``) resolve --
+    // for the base buffer, conditional branches, and versioned re-allocations
+    // alike.
+    {
       unsigned d = 0;
       for (auto sz : allocmem.getShape()) {
         std::string ext = traceExtentExpr(sz);

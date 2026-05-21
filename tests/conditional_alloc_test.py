@@ -256,3 +256,32 @@ end subroutine probe
     # post-IF buffer is the merged then-last/else class (conditional);
     # the then's first (freed) buffer is a separate transient.
     assert "a_alloc1" in sdfg.arrays
+
+
+def test_size_of_concrete_base_buffer(tmp_path):
+    """``SIZE(a)`` on a plain ``allocate(a(n))`` base buffer.  ``SIZE``
+    lowers to ``fir.box_dims`` which the bridge renders as the extent
+    symbol ``a_d0``; binding ``a_d0 = n`` at the ALLOCATE site keeps it
+    from leaking onto the program signature as a free symbol (it was an
+    unbound ``a_d0`` -> ``KeyError`` before).  Exercised via a scalar
+    ``sz = SIZE(a)`` hop and a direct ``SIZE(a)`` element read."""
+    src = """
+subroutine probe(n, out)
+  implicit none
+  integer, intent(in) :: n
+  real(8), intent(inout) :: out(10)
+  real(8), allocatable :: a(:)
+  integer :: i, sz
+  allocate(a(n))
+  sz = size(a)
+  do i = 1, sz
+    a(i) = real(i, 8)
+  end do
+  out(1) = a(1)
+  out(2) = a(n)
+  out(3) = real(sz, 8)
+  out(4) = real(size(a), 8)
+  deallocate(a)
+end subroutine probe
+"""
+    _run(tmp_path, src, [(5,), (3,), (8,)], ["n"])
