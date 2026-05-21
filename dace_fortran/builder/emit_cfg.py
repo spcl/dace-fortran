@@ -220,16 +220,20 @@ def emit_assign(builder, ctx: '_Ctx', n, region):
 def emit_symbol_init(builder, ctx: '_Ctx', n, region):
     """Stage a position-array -> SDFG-symbol read at SDFG entry.
 
-    The bridge mints one of these for every ``arr(constant)`` it sees
-    used as an array index or section bound (e.g. ``a(pos(1):pos(2))``).
-    ``n.target`` is the symbol name (``__sym_pos_1``), ``n.expr`` the
-    source array name (``pos``), and ``n.loop_lower`` the 1-based
-    Fortran index.  We add the symbol to the SDFG and emit an
-    interstate edge ``__sym_pos_1 = pos[0]`` so every memlet whose
-    subset references the symbol resolves to a closed-form expression
-    rather than a data lookup DaCe can't represent in subset form.
+    The bridge mints one of these for every ``arr(consts)`` it sees used
+    as an array index, section bound, or shape extent (e.g.
+    ``a(pos(1):pos(2))`` or ``allocate(buf(shp(1,2,1)))``).  ``n.target``
+    is the symbol name (``__sym_pos_1`` / ``__sym_shp_1_2_1``), ``n.expr``
+    the source array name, and ``n.pos_indices`` the per-dim 1-based
+    Fortran indices.  We add the symbol and emit an interstate edge
+    ``__sym_pos_1 = pos[0]`` (``__sym_shp_1_2_1 = shp[0, 1, 0]``) so every
+    memlet / shape referencing the symbol resolves to a closed-form
+    expression rather than a data lookup DaCe can't represent in a subset.
     """
-    sym, arr, one_based = n.target, n.expr, int(n.loop_lower)
+    sym, arr = n.target, n.expr
+    idxs = list(getattr(n, "pos_indices", None) or [])
+    if not idxs:  # back-compat: scalar mirror on loop_lower
+        idxs = [int(n.loop_lower)]
     if sym not in ctx.sdfg.symbols:
         ctx.sdfg.add_symbol(sym, dace.int64)
     ctx.flush(builder, region)
@@ -238,14 +242,14 @@ def emit_symbol_init(builder, ctx: '_Ctx', n, region):
     # If ``arr`` is a Scalar on the SDFG (the bridge folds length-1
     # transients to Scalar), ``arr[0]`` is invalid -- a Scalar has no
     # subscript.  Drop the subscript so the interstate edge reads the
-    # Scalar value directly.  Non-scalar arrays keep the usual 0-based
-    # Fortran-to-DaCe index conversion.
+    # Scalar value directly.  Otherwise emit the (multi-dim) 0-based
+    # subscript; these source arrays use the default lower bound 1.
     from dace.data import Scalar
     src_desc = ctx.sdfg.arrays.get(arr)
     if isinstance(src_desc, Scalar):
         read_expr = arr
     else:
-        read_expr = f"{arr}[{one_based - 1}]"
+        read_expr = f"{arr}[{', '.join(str(i - 1) for i in idxs)}]"
     region.add_edge(ctx.cur, dst, InterstateEdge(assignments={sym: read_expr}))
     ctx.cur = dst
 

@@ -302,19 +302,50 @@ def _offset_token(arr: str, dim: int) -> str:
 
 
 def array_read_to_dace_expr(builder, assign_node, iter_map: dict) -> str:
-    """Render a scalar-target assign whose RHS is a single array read
-    (``ci0 = icidx(je, jb, 1)``) as a DaCe-style indexed expression
-    with the uniform offset-symbol form
-    (``arr[(idx) - offset_arr_d<i>, ...]``).  Used to lift the assign
-    onto an interstate-edge so the loaded value becomes a live SDFG
-    symbol the consuming tasklet's memlet can index by.  Falls back
-    to ``assign_node.expr`` if there's no array read."""
+    """Render a scalar-target assign's RHS as a DaCe interstate-edge
+    expression, lifting EVERY array read to the uniform offset-symbol
+    subscript form (``arr[(idx) - offset_arr_d<i>, ...]``).  Used to lift
+    the assign onto an interstate edge so the value becomes a live SDFG
+    symbol the consuming memlet can index by.
+
+    The bridge emits ``expr`` with bare array names (``(dims * dims) + 1``)
+    and a parallel, left-to-right-ordered ``accesses`` list (``dims(1)``,
+    ``dims(2)``).  Walk ``expr`` and replace each bare array-name token
+    with its subscript form, consuming the read accesses in order, so a
+    COMPOUND RHS keeps all its terms.  The previous single-read form
+    silently dropped everything past the first read (``k = dims(1)*
+    dims(2)+1`` collapsed to ``dims(1)``), making a promoted index/size
+    symbol wrong.  Falls back to ``expr`` when the RHS has no array read."""
     reads = [ac for ac in assign_node.accesses if ac.is_read and ac.array_name in builder.arrays]
     if not reads:
         return assign_node.expr
-    ac = reads[0]
-    parts = [_remap_token(raw, iter_map) for raw in ac.index_exprs]
-    return _format_offset_subset(ac.array_name, parts)
+    expr = assign_node.expr
+    out = []
+    ri = 0
+    i = 0
+    while i < len(expr):
+        ch = expr[i]
+        if ch.isalpha() or ch == '_':
+            j = i
+            while j < len(expr) and (expr[j].isalnum() or expr[j] == '_'):
+                j += 1
+            tok = expr[i:j]
+            # A name already followed by ``[`` is subscripted -- leave it;
+            # only a bare array-name occurrence maps to a read access (in
+            # the order the bridge lists them).
+            already_subscripted = j < len(expr) and expr[j] == '['
+            if not already_subscripted and ri < len(reads) and tok == reads[ri].array_name:
+                ac = reads[ri]
+                ri += 1
+                parts = [_remap_token(raw, iter_map) for raw in ac.index_exprs]
+                out.append(_format_offset_subset(ac.array_name, parts))
+            else:
+                out.append(tok)
+            i = j
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
 
 
 def _rewrite_inner_indirects(part: str, indirect_syms: dict) -> str:

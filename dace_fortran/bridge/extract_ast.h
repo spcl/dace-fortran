@@ -90,6 +90,11 @@ struct ASTNode {
   bool target_is_array = false;
   std::vector<AccessInfo> accesses;
 
+  // symbol_init: per-dim 1-based indices of the source element read
+  // (``__sym_shp_1_2_1 = shp(1,2,1)``).  ``expr`` holds the source array
+  // name; the emitter builds the (multi-dim) 0-based subscript from these.
+  std::vector<int64_t> pos_indices;
+
   // conditional / while
   std::string condition;
 

@@ -264,19 +264,14 @@ end subroutine probe
     np.testing.assert_array_equal(s, r)
 
 
-@pytest.mark.xfail(strict=True, reason="function fed array elements, used as "
-                   "BOTH size and index: the EXTENT now resolves correctly "
-                   "(both elements minted), but the index buf(fsz(dims(1),"
-                   "dims(2))) / loop bound go through the separate index "
-                   "expression builder, which does not recursively lift "
-                   "arith-over-element-reads the way traceExtentExpr does -> "
-                   "reads buf(dims(1)) not buf(dims(1)*dims(2)+1). Principled "
-                   "fix = unify the index resolver with the extent evaluator "
-                   "(share recursive element-lifting); deferred as it touches "
-                   "the pervasively-used memlet-index path")
 def test_size_function_of_array_element(tmp_path):
     """``allocate(buf(fsz(dims(1), dims(2))))`` -- function fed array
-    elements (the ``foo(a(0))`` shape), result used as size AND index."""
+    elements (the ``foo(a(0))`` shape), result used as size AND index.
+
+    The inlined result ``r = dims(1)*dims(2)+1`` is a scalar promoted to a
+    symbol; lifting its full compound RHS onto the interstate edge (not
+    just the first read) keeps every term, so the size and index are both
+    ``dims(1)*dims(2)+1``."""
     src = """
 subroutine probe(n, dims, out)
   implicit none
@@ -298,6 +293,7 @@ contains
 end subroutine probe
 """
     s, r = _run(tmp_path, src, [3, 4])
+    assert s[0] == 2 * (3 * 4 + 1)  # buf(13) = 26
     np.testing.assert_array_equal(s, r)
 
 
@@ -338,11 +334,45 @@ def test_size_min_two_elements(tmp_path):
     np.testing.assert_array_equal(s, r)
 
 
-@pytest.mark.xfail(strict=True, reason="multi-dimensional element extent "
-                   "shp(i,j,k): constIndexedElementLoad only lifts a single "
-                   "1-D index; a multi-dim position symbol is not yet minted")
-def test_size_multidim_element(tmp_path):
-    """``allocate(buf(shp(1,2,1)))`` -- size from a multi-dim element."""
+def test_size_multidim_element_via_scalar(tmp_path):
+    """``dim = shp(i,j,k); allocate(buf(dim))`` -- a multi-dim element via
+    a scalar hop (the idiomatic form).  The scalar is promoted to a symbol
+    and its read RHS ``shp(ii,jj,kk)`` lifts to the full multi-dim
+    subscript on the interstate edge -- so multi-dim element sizes work
+    this way without any multi-dim position-symbol machinery."""
+    src = """
+subroutine probe(ii, jj, kk, shp, out)
+  implicit none
+  integer, intent(in) :: ii, jj, kk
+  integer, intent(in) :: shp(2,2,2)
+  real(8), intent(inout) :: out(2)
+  real(8), allocatable :: buf(:)
+  integer :: i, dim
+  dim = shp(ii, jj, kk)
+  allocate(buf(dim))
+  do i = 1, dim
+    buf(i) = real(2*i, 8)
+  end do
+  out(1) = buf(dim)
+  out(2) = buf(1)
+  deallocate(buf)
+end subroutine probe
+"""
+    shp = np.asfortranarray(np.arange(1, 9, dtype=np.int32).reshape(2, 2, 2))
+    out_s = np.zeros(2); out_r = np.zeros(2)
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="probe", entry="_QPprobe").build()
+    sdfg(ii=np.int32(1), jj=np.int32(2), kk=np.int32(1), shp=shp, out=out_s)
+    assert out_s[0] == 2 * 3  # shp(1,2,1) == 3 (column-major), buf(3) = 6
+    mod = f2py_compile(src, tmp_path / "ref", f"size_ref_{tmp_path.name}")
+    mod.probe(1, 2, 1, shp, out_r)
+    np.testing.assert_array_equal(out_s, out_r)
+
+
+def test_size_multidim_element_inline(tmp_path):
+    """``allocate(buf(shp(1,2,1)))`` -- multi-dim element inline as the
+    extent (no intermediate scalar).  The direct-extent path lifts it to a
+    multi-dimensional position symbol ``__sym_shp_1_2_1`` (read once at
+    entry as ``shp[0, 1, 0]``), so the shape stays symbolic."""
     src = """
 subroutine probe(n, shp, out)
   implicit none
@@ -362,7 +392,9 @@ end subroutine probe
     shp = np.asfortranarray(np.arange(1, 9, dtype=np.int32).reshape(2, 2, 2))
     out_s = np.zeros(n); out_r = np.zeros(n)
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="probe", entry="_QPprobe").build()
+    assert "__sym_shp_1_2_1" in sdfg.symbols
     sdfg(n=np.int32(n), shp=shp, out=out_s)
-    mod = f2py_compile(src, tmp_path / "ref", "size_ref_md")
+    assert out_s[0] == 2 * 3  # shp(1,2,1) == 3 (column-major), buf(3) = 6
+    mod = f2py_compile(src, tmp_path / "ref", f"size_ref_{tmp_path.name}")
     mod.probe(shp, out_r)
     np.testing.assert_array_equal(out_s, out_r)

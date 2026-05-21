@@ -60,10 +60,14 @@ inline thread_local llvm::DenseMap<mlir::Operation *, std::string> kAllocaMap;
 inline thread_local std::map<mlir::Operation *, std::string>
     kHlfirExprToTransient;
 
-/// Position-array registry: ``__sym_<arr>_<one_based_idx>`` symbol minted by
-/// ``buildIndexExpr`` for each ``arr(constant)`` it sees used as an
-/// array index or section bound.
-inline thread_local std::map<std::pair<std::string, int64_t>, std::string>
+/// Position-array registry: ``__sym_<arr>_<i1>_<i2>...`` symbol minted by
+/// ``buildIndexExpr`` / the extent resolver for each ``arr(consts)`` it
+/// sees used as an array index, section bound, or shape extent.  Keyed by
+/// (array, per-dim 1-based constant indices) so a multi-dimensional
+/// element (``shp(1,2,1)``) gets its own symbol and the AST builder can
+/// emit the matching multi-dim ``symbol_init`` read.
+inline thread_local std::map<std::pair<std::string, std::vector<int64_t>>,
+                             std::string>
     kPosSymbolRegistry;
 
 /// Synthetic-transient counter used by elemental walks
@@ -194,11 +198,14 @@ std::string lowerIsPresent(mlir::Value operand);
 /// ``expressions.cpp``.
 std::string allocaSynthName(mlir::Value memref);
 
-/// Intern an ``arr(constant)`` index read as the SDFG symbol
-/// ``__sym_<arr>_<one_based_idx>``.  The bridge attaches a
+/// Intern an ``arr(consts)`` element read as the SDFG symbol
+/// ``__sym_<arr>_<i1>_<i2>...``.  The bridge attaches a
 /// ``kind="symbol_init"`` AST node so the Python emitter loads the
-/// value on an interstate edge at SDFG entry.  See
-/// ``expressions.cpp``.
+/// value on an interstate edge at SDFG entry.  The N-D overload handles
+/// a multi-dimensional element (``shp(1,2,1)``); the 1-D overload is the
+/// common ``arr(7)`` case.  See ``expressions.cpp``.
+std::string internPosSymbol(const std::string &array,
+                            const std::vector<int64_t> &one_based_idxs);
 std::string internPosSymbol(const std::string &array, int64_t one_based_idx);
 
 /// Capture the LHS of an ``hlfir.assign`` whose destination is either

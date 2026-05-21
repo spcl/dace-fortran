@@ -12,6 +12,7 @@
 
 #include "bridge/ast/ast_helpers.h"
 #include "bridge/ast/ast_internal.h"
+#include "bridge/trace_utils.h"
 #include "flang/Optimizer/Dialect/FIROps.h"
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
 #include "llvm/Support/raw_ostream.h"
@@ -350,16 +351,22 @@ std::string allocaSynthName(mlir::Value memref) {
 }
 
 /// Look up or mint the SDFG symbol name that stands in for
-/// ``<array>(<one_based_idx>)`` (both arguments are Fortran-side
-/// names / values).  Same key always yields the same symbol  --  callers
-/// can safely use this anywhere the load result was needed before.
-std::string internPosSymbol(const std::string &array, int64_t one_based_idx) {
-  auto k = std::make_pair(array, one_based_idx);
+/// ``<array>(<i1>, <i2>, ...)`` (Fortran-side names / values).  Same key
+/// always yields the same symbol  --  callers can safely use this
+/// anywhere the load result was needed before.  ``posSymbolName`` is the
+/// shared name format (also used by the descriptor-shape side).
+std::string internPosSymbol(const std::string &array,
+                            const std::vector<int64_t> &one_based_idxs) {
+  auto k = std::make_pair(array, one_based_idxs);
   auto it = kPosSymbolRegistry.find(k);
   if (it != kPosSymbolRegistry.end()) return it->second;
-  std::string s = "__sym_" + array + "_" + std::to_string(one_based_idx);
+  std::string s = posSymbolName(array, one_based_idxs);
   kPosSymbolRegistry[k] = s;
   return s;
+}
+
+std::string internPosSymbol(const std::string &array, int64_t one_based_idx) {
+  return internPosSymbol(array, std::vector<int64_t>{one_based_idx});
 }
 
 std::string buildExpr(mlir::Value val, int d) {

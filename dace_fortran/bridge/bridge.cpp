@@ -360,6 +360,7 @@ NB_MODULE(hlfir_bridge, m) {
       .def_ro("target", &ASTNode::target)
       .def_ro("expr", &ASTNode::expr)
       .def_ro("accesses", &ASTNode::accesses)
+      .def_ro("pos_indices", &ASTNode::pos_indices)
       .def_ro("target_is_array", &ASTNode::target_is_array)
       .def_ro("condition", &ASTNode::condition)
       .def_ro("callee", &ASTNode::callee)

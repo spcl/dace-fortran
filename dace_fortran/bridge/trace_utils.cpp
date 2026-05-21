@@ -175,14 +175,19 @@ std::optional<int64_t> traceConstInt(mlir::Value v) {
   return std::nullopt;
 }
 
-std::string posSymbolName(const std::string &array, int64_t one_based_idx) {
+std::string posSymbolName(const std::string &array,
+                          const std::vector<int64_t> &one_based_idxs) {
   // Keep in lockstep with ``internPosSymbol`` (ast/expressions.cpp): the
   // descriptor-shape side mints the name here, the AST builder mints the
-  // matching ``symbol_init`` there, and they must agree.
-  return "__sym_" + array + "_" + std::to_string(one_based_idx);
+  // matching ``symbol_init`` there, and they must agree.  Each 1-based
+  // index appends ``_<i>``, so ``shp(1,2,1)`` -> ``__sym_shp_1_2_1`` and
+  // the 1-D ``dims(1)`` -> ``__sym_dims_1`` (unchanged).
+  std::string s = "__sym_" + array;
+  for (auto i : one_based_idxs) s += "_" + std::to_string(i);
+  return s;
 }
 
-std::optional<std::pair<std::string, int64_t>>
+std::optional<std::pair<std::string, std::vector<int64_t>>>
 constIndexedElementLoad(mlir::Value v) {
   if (!v) return std::nullopt;
   for (int i = 0; i < limits::kConvertChainDepth && v; ++i) {
@@ -199,18 +204,26 @@ constIndexedElementLoad(mlir::Value v) {
       mlir::dyn_cast_or_null<hlfir::DesignateOp>(ld.getMemref().getDefiningOp());
   if (!dg) return std::nullopt;
   auto idxs = dg.getIndices();
-  if (idxs.size() != 1) return std::nullopt;  // single 1-D element only
+  if (idxs.empty()) return std::nullopt;
   auto triplets = dg.getIsTriplet();
-  if (!triplets.empty() && triplets[0]) return std::nullopt;  // not a section
-  auto c = traceConstInt(idxs[0]);
-  if (!c) return std::nullopt;
+  // Every dimension must be a single constant scalar index (no section /
+  // triplet) for the element to fold to one position symbol.
+  std::vector<int64_t> consts;
+  for (unsigned d = 0; d < idxs.size(); ++d) {
+    if (d < triplets.size() && triplets[d]) return std::nullopt;
+    auto c = traceConstInt(idxs[d]);
+    if (!c) return std::nullopt;
+    consts.push_back(*c);
+  }
   auto arr = traceToDecl(dg.getMemref());
   if (arr.empty()) return std::nullopt;
-  return std::make_pair(arr, *c);
+  return std::make_pair(arr, std::move(consts));
 }
 
 static void forEachConstIndexedElementImpl(
-    mlir::Value v, const std::function<void(const std::string &, int64_t)> &fn,
+    mlir::Value v,
+    const std::function<void(const std::string &, const std::vector<int64_t> &)>
+        &fn,
     int depth) {
   if (depth > limits::kTraceToDeclMax || !v) return;
   if (auto e = constIndexedElementLoad(v)) {
@@ -232,7 +245,9 @@ static void forEachConstIndexedElementImpl(
 }
 
 void forEachConstIndexedElement(
-    mlir::Value v, const std::function<void(const std::string &, int64_t)> &fn) {
+    mlir::Value v,
+    const std::function<void(const std::string &, const std::vector<int64_t> &)>
+        &fn) {
   forEachConstIndexedElementImpl(v, fn, 0);
 }
 

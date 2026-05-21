@@ -173,31 +173,36 @@ std::string traceExtentExpr(mlir::Value v);
 void collectExtentExprScalars(mlir::Value v, std::set<std::string> &out);
 
 /// Canonical name of the SDFG symbol standing in for a constant-indexed
-/// element read ``<array>(<one_based_idx>)``.  This is the single source
+/// element read ``<array>(<i1>, <i2>, ...)``.  This is the single source
 /// of truth for the name format: it MUST match ``internPosSymbol`` (AST
 /// builder) so the descriptor-shape side (``shapeFromAllocSite`` /
-/// ``traceExtentExpr``) and the ``symbol_init`` side agree on the symbol.
-std::string posSymbolName(const std::string &array, int64_t one_based_idx);
+/// ``traceExtentExpr``) and the ``symbol_init`` side agree.  One index per
+/// dimension: ``dims(1)`` -> ``__sym_dims_1``, ``shp(1,2,1)`` ->
+/// ``__sym_shp_1_2_1``.
+std::string posSymbolName(const std::string &array,
+                          const std::vector<int64_t> &one_based_idxs);
 
 /// If ``v`` is a ``fir.load`` of a ``hlfir.designate`` selecting a single
-/// element at a compile-time-constant index (``arr(7)``), return
-/// ``{arr, one_based_idx}``; ``nullopt`` otherwise (non-constant index,
-/// section/triplet, multi-dimensional, or not an element load).  Used to
-/// recognise an array element feeding a shape extent so it is lifted to a
-/// position symbol instead of resolving to the whole array's name.
-std::optional<std::pair<std::string, int64_t>>
+/// element at compile-time-constant indices (``arr(7)`` or ``shp(1,2,1)``),
+/// return ``{arr, [i1, i2, ...]}``; ``nullopt`` otherwise (any non-constant
+/// index, a section/triplet, or not an element load).  Used to recognise
+/// an array element feeding a shape extent so it is lifted to a position
+/// symbol instead of resolving to the whole array's name.
+std::optional<std::pair<std::string, std::vector<int64_t>>>
 constIndexedElementLoad(mlir::Value v);
 
 /// Walk an extent SSA value (the same op set ``traceExtentExpr`` handles:
 /// convert / select / cmp / addi-subi-muli-divsi-divui / maxsi-minsi-etc /
-/// element load) and invoke ``fn(arr, one_based_idx)`` for every
+/// element load) and invoke ``fn(arr, [i1, ...])`` for every
 /// constant-indexed array element read it contains.  The AST builder uses
 /// this at an ALLOCATE site to mint a position symbol for EVERY element
 /// in the shape -- not just the ones that also appear in a loop bound --
 /// so each shape symbol gets its ``symbol_init``.  ``fn`` should be
 /// idempotent (the position-symbol registry already dedups).
 void forEachConstIndexedElement(
-    mlir::Value v, const std::function<void(const std::string &, int64_t)> &fn);
+    mlir::Value v,
+    const std::function<void(const std::string &, const std::vector<int64_t> &)>
+        &fn);
 
 /// Decoded ``hlfir.declare`` / ``fir.declare`` shape operand.  Per the
 /// FIR/HLFIR op defs it is exactly one of:

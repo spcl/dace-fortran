@@ -315,9 +315,10 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
     // the extent and nowhere else (no loop bound / index would otherwise
     // mint it, leaving the shape symbol an unbound program argument).
     for (auto sz : allocmem.getShape())
-      forEachConstIndexedElement(sz, [](const std::string &arr, int64_t idx) {
-        internPosSymbol(arr, idx);
-      });
+      forEachConstIndexedElement(
+          sz, [](const std::string &arr, const std::vector<int64_t> &idxs) {
+            internPosSymbol(arr, idxs);
+          });
     return raw;
   };
   auto emitAllocStateChange = [&](const std::string &name, int value) {
@@ -1095,23 +1096,22 @@ std::vector<ASTNode> extractAST(mlir::ModuleOp module) {
   }
 
   if (!kPosSymbolRegistry.empty()) {
-    std::vector<std::tuple<std::string, std::string, int64_t>> entries;
-    for (auto &kv : kPosSymbolRegistry) {
-      const auto &arr = kv.first.first;
-      int64_t idx = kv.first.second;
-      entries.emplace_back(kv.second, arr, idx);
-    }
+    // (symbol name, source array, per-dim 1-based indices).
+    std::vector<std::tuple<std::string, std::string, std::vector<int64_t>>>
+        entries;
+    for (auto &kv : kPosSymbolRegistry)
+      entries.emplace_back(kv.second, kv.first.first, kv.first.second);
     std::sort(entries.begin(), entries.end());
     std::vector<ASTNode> initNodes;
     initNodes.reserve(entries.size());
     for (auto &e : entries) {
       ASTNode init;
       init.kind = "symbol_init";
-      init.target = std::get<0>(e);      // symbol name
-      init.expr = std::get<1>(e);        // source array name
-      init.loop_lower = std::get<2>(e);  // 1-based idx (0 if multi-dim
-                                         // packed name; the array name
-                                         // already encodes the dims)
+      init.target = std::get<0>(e);       // symbol name
+      init.expr = std::get<1>(e);         // source array name
+      init.pos_indices = std::get<2>(e);  // per-dim 1-based indices
+      // Back-compat scalar mirror for any reader still keying on it.
+      init.loop_lower = init.pos_indices.empty() ? 0 : init.pos_indices.front();
       initNodes.push_back(std::move(init));
     }
     initNodes.insert(initNodes.end(), result.begin(), result.end());
