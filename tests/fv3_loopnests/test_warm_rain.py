@@ -96,7 +96,12 @@ def test_fv3_warm_rain(tmp_path):
          tables_are_initialized=np.array([False]),
          **skw)
 
-    np.testing.assert_allclose(r1_out[0], r1_ref, rtol=1e-4, atol=1e-6)
+    # real(4) kernel: rtol 1e-5 holds for every field except the rain
+    # mass-flux ``m1_rain``, a float32 sedimentation prefix-sum
+    # (``m1(k) = m1(k-1) + q(k) - qm(k)``) whose accumulated round-off is
+    # ~7e-5 relative but only ~2e-6 absolute, so the small absolute floor
+    # (atol 5e-6) covers it while keeping the relative check tight.
+    np.testing.assert_allclose(r1_out[0], r1_ref, rtol=1e-5, atol=5e-6)
     for name in _INOUT:
-        np.testing.assert_allclose(skw[name], rkw[name], rtol=1e-4, atol=1e-6,
+        np.testing.assert_allclose(skw[name], rkw[name], rtol=1e-5, atol=5e-6,
                                    err_msg=f"mismatch in {name}")
