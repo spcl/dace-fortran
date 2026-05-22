@@ -78,6 +78,15 @@ DEFAULT_PIPELINE = (
     # a plain CFG that lift-cf-to-scf turns back into nested scf.if for
     # the bridge to consume.
     "lower-fir-select-case,"
+    # Structurize callees BEFORE inlining: an early ``RETURN`` (``if (c)
+    # return``) or other in-callee CFG makes the callee a multi-block
+    # function, and ``mlir::inlineCall`` then splices those blocks into the
+    # call site -- corrupting any structured ``fir.if`` / ``fir.do_loop``
+    # region the call sits in (``'fir.if' op expects region #0 to have 0 or 1
+    # blocks``).  Lifting cf -> scf first folds the early-return guard into a
+    # single-block ``scf.if`` so every callee is single-block and inlines
+    # cleanly; the trailing lift-cf-to-scf handles whatever inlining exposes.
+    "lift-cf-to-scf,"
     "hlfir-inline-all,"
     # Erase element-scoped alias declares left by inlining scalar-arg
     # procedures (elemental subroutines, most commonly)  --  runs before
@@ -314,6 +323,11 @@ class SDFGBuilder:
         # linking memlets lazily on first access, so reads/writes hit
         # the source storage directly.
         ctx = _Ctx(sdfg, self)
+        # Seed writable-init transients (module globals the kernel WRITES that
+        # carry an init value -- "not really constant") at SDFG entry, before
+        # the body runs.  Read-only module data / PARAMETERs stay in the
+        # constant pool (see _register_constants).
+        self._seed_written_inits(ctx, sdfg)
         self._emit(ctx, self.ast, sdfg)
         ctx.flush(self)
         # User-source identifiers that collide with sympy module-level
@@ -399,6 +413,12 @@ class SDFGBuilder:
         for v in self.variables:
             if not v.const_data:
                 continue
+            # A module global the kernel WRITES is not a read-only constant:
+            # it's a writable transient seeded with its init value at SDFG
+            # entry (see ``_seed_written_inits``).  A ``constexpr`` here would
+            # make the kernel's store to it fail to compile.
+            if getattr(v, 'is_written', False):
+                continue
             if v.fortran_name not in sdfg.arrays:
                 continue
             desc = sdfg.arrays[v.fortran_name]
@@ -421,6 +441,40 @@ class SDFGBuilder:
             if arr.size == int(np.prod(shape)):
                 arr = arr.reshape(shape, order='C')
             sdfg.add_constant(v.fortran_name, arr, desc)
+
+    def _seed_written_inits(self, ctx, sdfg):
+        """Seed module globals the kernel WRITES that carry an init value
+        (``is_written`` + ``const_data``) with that value at SDFG entry.
+
+        These are "not really constant" -- a lazy-init flag like
+        ``tables_are_initialized = .false.`` that an init routine later sets
+        ``.true.``.  The constant pool would make them read-only ``constexpr``;
+        instead they are writable transients (or symbols) seeded once up front:
+        a scalar via a tasklet in the entry state, a symbol via an
+        interstate-edge assignment.  Rank-0 only -- a written-before-read
+        scratch array (a lookup table) needs no seed, and a written array WITH
+        an init is not yet handled.
+        """
+        scalar_inits, symbol_inits = [], []
+        for v in self.variables:
+            if not (getattr(v, 'is_written', False) and v.const_data and v.rank == 0):
+                continue
+            val = v.const_data[0]
+            is_int = v.dtype.startswith('int') or v.dtype == 'bool'
+            expr = str(int(round(val))) if is_int else repr(float(val))
+            if v.fortran_name in self.symbols:
+                symbol_inits.append((v.fortran_name, expr))
+            elif v.fortran_name in self.scalars:
+                scalar_inits.append((v.fortran_name, expr))
+        if not scalar_inits and not symbol_inits:
+            return
+        for tgt, expr in scalar_inits:
+            ctx.pending.append((tgt, expr))
+        ctx.flush_and_ensure(self, sdfg)  # emit scalar seeds into the entry state
+        nxt = sdfg.add_state(f"s_{self.nid()}")
+        edge = InterstateEdge(assignments=dict(symbol_inits)) if symbol_inits else InterstateEdge()
+        sdfg.add_edge(ctx.cur, nxt, edge)
+        ctx.cur = nxt
 
     def _run_post_gen_passes(self, sdfg: SDFG):
         """Run the post-generation cleanup passes that take a freshly-
@@ -572,6 +626,16 @@ class SDFGBuilder:
         for s in free_syms:
             if s not in module_symbol_origins and s in origin_by_name:
                 module_symbol_origins[s] = origin_by_name[s]
+        # Module globals that survived as baked constants / seeded
+        # transients rather than kwargs: a read-only module datum WITH an
+        # initialiser (e.g. ICON's ``i_am_accel_node = .FALSE.``) takes the
+        # ``const_data`` path, so it is neither an arglist arg nor a free
+        # symbol and the loops above miss it.  Record its provenance too --
+        # the binding ``USE``-imports the host value; the baked initialiser
+        # is the default when no host override is supplied.
+        name_map = getattr(self, 'dace_name_map', {})
+        for name, origin in origin_by_name.items():
+            module_symbol_origins.setdefault(name_map.get(name, name), origin)
         fs = FrozenSignature(
             entry=sdfg.name,
             mangled=next((v.mangled_name for v in self.arrays.values() if getattr(v, 'mangled_name', '')), sdfg.name),
