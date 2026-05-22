@@ -403,7 +403,13 @@ def emit_io(builder, ctx, n, region):
     statement transfers each item in full.
     """
     nodes_mod = importlib.import_module("dace.libraries.fortran_io.nodes")
-    state = ctx.flush_and_ensure(builder, region)
+    # Each I/O statement gets its own SDFG state so the side-effecting
+    # statements run in program order.  Nodes within one state have no mutual
+    # dependency, so DaCe is free to reorder them -- which would corrupt
+    # ordered I/O (e.g. a write then a read of the same file).  Sequential
+    # states are a strict order, giving each I/O call its own state.
+    ctx.flush_and_ensure(builder, region)
+    state = ctx.new_state(builder, region)
     items = list(n.call_args)
 
     if n.callee == "namelist_read":

@@ -98,3 +98,32 @@ end module m
     sdfg(x=x)
     written = [float(tok) for tok in (tmp_path / "out.txt").read_text().split()]
     np.testing.assert_allclose(written, [4.0, 5.0, 6.0])
+
+
+def test_io_statement_ordering(tmp_path, monkeypatch):
+    """Write a file then read it back in the same kernel: the read must observe
+    the write, so the two I/O statements must keep their program order (each
+    lands in its own SDFG state -- nodes in one state could be reordered)."""
+    src = """
+module m
+  implicit none
+contains
+  subroutine roundtrip(x, y)
+    real(8), intent(in) :: x(3)
+    real(8), intent(out) :: y(3)
+    integer :: u
+    open (newunit=u, file='rt.txt', status='replace')
+    write (u, *) x
+    close (u)
+    open (newunit=u, file='rt.txt', status='old')
+    read (u, *) y
+    close (u)
+  end subroutine roundtrip
+end module m
+"""
+    monkeypatch.chdir(tmp_path)
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="roundtrip", entry="_QMmProundtrip").build()
+    x = np.array([7.0, 8.0, 9.0], dtype=np.float64)
+    y = np.zeros(3, dtype=np.float64)
+    sdfg(x=x, y=y)
+    np.testing.assert_allclose(y, x)
