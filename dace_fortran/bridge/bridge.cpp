@@ -316,6 +316,7 @@ NB_MODULE(hlfir_bridge, m) {
       .def_ro("rank", &VarInfo::rank)
       .def_ro("dtype", &VarInfo::dtype)
       .def_ro("is_dynamic", &VarInfo::is_dynamic)
+      .def_ro("is_written", &VarInfo::is_written)
       .def_ro("shape_symbols", &VarInfo::shape_symbols)
       .def_ro("lower_bounds", &VarInfo::lower_bounds)
       .def_ro("role", &VarInfo::role)

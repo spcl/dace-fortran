@@ -16,6 +16,7 @@
 #include "flang/Optimizer/Dialect/FIROps.h"
 #include "flang/Optimizer/Dialect/FIRType.h"
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -807,12 +808,21 @@ static std::vector<double> extractGlobalInitData(fir::GlobalOp gop) {
     auto hv = mlir::dyn_cast<fir::HasValueOp>(op);
     if (!hv) continue;
     auto *def = hv.getResval().getDefiningOp();
+    // Peel a kind/representation ``fir.convert`` (a LOGICAL init is
+    // ``arith.constant false : i1`` -> ``fir.convert i1 to logical<4>``).
+    while (def)
+      if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def))
+        def = cv.getValue().getDefiningOp();
+      else
+        break;
     if (!def) return out;
     auto cst = mlir::dyn_cast<mlir::arith::ConstantOp>(def);
     if (!cst) return out;
     auto attr = cst.getValue();
     if (auto fa = mlir::dyn_cast<mlir::FloatAttr>(attr)) {
       out.push_back(fa.getValueAsDouble());
+    } else if (auto ba = mlir::dyn_cast<mlir::BoolAttr>(attr)) {
+      out.push_back(ba.getValue() ? 1.0 : 0.0);
     } else if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(attr)) {
       out.push_back((double)ia.getInt());
     }
@@ -874,6 +884,40 @@ std::pair<std::string, std::string> decodeModuleGlobalSymbol(
   return {mod, name};
 }
 
+// True iff the module-scope global ``sym`` is written anywhere in the module
+// (a ``fir.store`` to it, or an ``hlfir.assign`` to it or to an
+// ``hlfir.designate`` rooted at it -- e.g. an element write ``tablew(i) =
+// ...``).  Distinguishes a written module-scope scratch global (a lookup
+// table an init routine such as ``qsmith_init_w`` fills, then a reader
+// consumes) from a read-only caller-supplied config global: the former is
+// the kernel's own transient, not an input the caller must provide.
+static bool globalIsWritten(const std::string &sym, mlir::ModuleOp module) {
+  llvm::SmallVector<hlfir::DeclareOp, 4> decls;
+  module.walk([&](hlfir::DeclareOp d) {
+    if (traceToGlobalSymbol(d.getMemref()) == sym) decls.push_back(d);
+  });
+  if (decls.empty()) return false;
+  auto writes = [&](mlir::Value dest) -> bool {
+    for (auto d : decls) {
+      if (dest == d.getResult(0) || dest == d.getResult(1)) return true;
+      if (auto *dd = dest.getDefiningOp())
+        if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(dd))
+          if (designateRootedAt(dg, d)) return true;
+    }
+    return false;
+  };
+  bool written = false;
+  module.walk([&](mlir::Operation *op) {
+    if (written) return;
+    if (auto st = mlir::dyn_cast<fir::StoreOp>(op)) {
+      if (writes(st.getMemref())) written = true;
+    } else if (auto as = mlir::dyn_cast<hlfir::AssignOp>(op)) {
+      if (writes(as.getLhs())) written = true;
+    }
+  });
+  return written;
+}
+
 // ---------------------------------------------------------------------------
 // Main extraction
 // ---------------------------------------------------------------------------
@@ -887,34 +931,15 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
   // reset the previous module's overrides would leak into this one.
   clearManglingOverrides();
 
-  // Pass 0: disambiguate inlined-callee locals.  Two callees with the
-  // same local name (Fortran's auto-generated ``a`` for ``result(a)``,
-  // for example) get inlined into a common parent and surface as two
-  // ``hlfir.declare`` ops with different full uniq_names but the same
-  // ``extractName`` short name.  Downstream code keys SDFG arrays /
-  // scalars by the short name; without disambiguation the two
-  // declares race on a single access node.  Walk all declares in
-  // public functions, group by short name, and rewrite the uniq_name
-  // of every duplicate to encode its source-callee scope.
+  // Pass 0: disambiguate inlined-callee locals.  Two procedures with the
+  // same variable name (Fortran's auto-generated ``a`` for ``result(a)``,
+  // or simply two routines that both name a local ``dz``) get inlined into
+  // a common parent and surface as two ``hlfir.declare`` ops with different
+  // full uniq_names but the same ``extractName`` short name.  Downstream
+  // code keys SDFG arrays / scalars by the short name; without
+  // disambiguation the two declares race on one access node.  Rewrite each
+  // colliding inlined-callee declare's uniq_name to encode its source scope.
   {
-    llvm::StringMap<llvm::SmallVector<hlfir::DeclareOp, 2>> byShort;
-    module.walk([&](hlfir::DeclareOp op) {
-      auto *fn = op->getParentOfType<mlir::func::FuncOp>().getOperation();
-      if (auto f = mlir::dyn_cast_or_null<mlir::func::FuncOp>(fn))
-        if (f.isPrivate()) return;
-      // Only disambiguate declares backed by a fresh
-      // ``fir.alloca``  --  those are real own-storage locals
-      // (the inlined function-result variable shape we care
-      // about).  Aliases (declare-of-declare, embox/convert
-      // chain, ``fir.absent``-backed optional dummies, and
-      // dummy-arg block-arguments) point at storage that is
-      // already named elsewhere; renaming them mints a
-      // phantom flat scalar that downstream extract_vars
-      // would surface as a top-level program kwarg.
-      auto *def = op.getMemref().getDefiningOp();
-      if (!def || !mlir::isa<fir::AllocaOp>(def)) return;
-      byShort[extractName(op.getUniqName().str())].push_back(op);
-    });
     auto getFScope = [](llvm::StringRef un) -> std::string {
       auto eP = un.rfind('E');
       if (eP == llvm::StringRef::npos) return {};
@@ -922,45 +947,76 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
       if (fP == llvm::StringRef::npos || fP + 1 >= eP) return {};
       return un.substr(fP + 1, eP - fP - 1).str();
     };
+    // True iff ``op``'s memref is the variable's OWN storage rather than an
+    // alias of storage named elsewhere: a fresh ``fir.alloca`` /
+    // ``fir.allocmem`` local, or a ``func.func`` entry block argument (the
+    // entry kernel's own dummy).  Aliases (declare-of-declare, embox /
+    // convert / box_addr chains, ``fir.absent``-backed optional dummies)
+    // resolve through ``traceToDecl`` to their source and never mint an
+    // array under their own short name, so they don't participate in
+    // collisions.
+    auto isOwnStorage = [](hlfir::DeclareOp op) -> bool {
+      mlir::Value memref = op.getMemref();
+      if (auto *def = memref.getDefiningOp())
+        return mlir::isa<fir::AllocaOp, fir::AllocMemOp>(def);
+      if (auto ba = mlir::dyn_cast<mlir::BlockArgument>(memref))
+        return mlir::isa_and_nonnull<mlir::func::FuncOp>(
+            ba.getOwner()->getParentOp());
+      return false;
+    };
+    // Distinct F-scopes that hold an OWN-STORAGE declare of each short
+    // name.  A short name owned by more than one scope is the
+    // inlined-callee collision shape  --  including a callee local that
+    // shadows an entry dummy of the same name (``implicit_fall``'s local
+    // ``dz`` vs the kernel's ``intent(in) dz`` block argument).  A
+    // pass-through alias (``ze`` received by an inlined callee) is NOT
+    // own storage, so a single genuine local keeps its bare name.
+    llvm::StringMap<llvm::StringSet<>> ownStorageScopes;
+    module.walk([&](hlfir::DeclareOp op) {
+      auto *fn = op->getParentOfType<mlir::func::FuncOp>().getOperation();
+      if (auto f = mlir::dyn_cast_or_null<mlir::func::FuncOp>(fn))
+        if (f.isPrivate()) return;
+      if (!isOwnStorage(op)) return;
+      auto un = op.getUniqName().str();
+      ownStorageScopes[extractName(un)].insert(getFScope(un));
+    });
+    // Rename candidates: ``fir.alloca``-backed locals only.  Block-arg
+    // dummies are own storage too (they drive collision detection above)
+    // but renaming one mints a phantom flat scalar that extract_vars would
+    // surface as a top-level program kwarg, so they keep their name; they
+    // are always entry-scope here and skipped by the ``entryScope`` guard
+    // below regardless.
+    llvm::StringMap<llvm::SmallVector<hlfir::DeclareOp, 2>> byShort;
+    module.walk([&](hlfir::DeclareOp op) {
+      auto *fn = op->getParentOfType<mlir::func::FuncOp>().getOperation();
+      if (auto f = mlir::dyn_cast_or_null<mlir::func::FuncOp>(fn))
+        if (f.isPrivate()) return;
+      auto *def = op.getMemref().getDefiningOp();
+      if (!def || !mlir::isa<fir::AllocaOp>(def)) return;
+      byShort[extractName(op.getUniqName().str())].push_back(op);
+    });
+    // Entry's F-scope: the single public ``func.func`` left in the module
+    // (set_entry_symbol made every other function private).  Symbol like
+    // ``_QPmain`` / ``_QMmodPname``  --  the name segment is everything
+    // after the last ``P``, matching ``getFScope``'s F-segment.  Entry
+    // declares keep their original short name; inlined-callee siblings get
+    // ``<callee_scope>_<short>``.
+    std::string entryScope;
+    for (auto fn : module.getOps<mlir::func::FuncOp>()) {
+      if (fn.isPrivate()) continue;
+      auto sn = fn.getSymName().str();
+      auto pPos = sn.rfind('P');
+      if (pPos == std::string::npos) continue;
+      entryScope = sn.substr(pPos + 1);
+      break;
+    }
     for (auto &kv : byShort) {
-      auto &group = kv.second;
-      if (group.size() < 2) continue;
-      // Only rename if duplicates span DIFFERENT F-scopes  --  that's
-      // the inlined-callee collision shape.  Two declares with
-      // matching short name AND matching F-scope (one func
-      // making two declares for one variable, e.g. shape-hint
-      // copies) are legitimate; leave them alone so extract_vars
-      // dedup downstream handles them.
-      std::string firstScope = getFScope(group.front().getUniqName().str());
-      bool sameScope = true;
-      for (auto op : group) {
-        if (getFScope(op.getUniqName().str()) != firstScope) {
-          sameScope = false;
-          break;
-        }
-      }
-      if (sameScope) continue;
-      // Rename each declare whose F-scope differs from the entry
-      // function's scope.  The entry's declare keeps its original
-      // short name; inlined-callee siblings get
-      // ``<callee_scope>_<short>``.  Entry = the single public
-      // ``func.func`` left in the module (set_entry_symbol made
-      // every other function private).  Match its symbol name
-      // tail against the F-scope segment of each declare.
-      std::string entryScope;
-      for (auto fn : module.getOps<mlir::func::FuncOp>()) {
-        if (fn.isPrivate()) continue;
-        auto sn = fn.getSymName().str();
-        // Symbol like ``_QPmain`` or ``_QMmodPname``: the
-        // function-name segment lives between the last ``P``
-        // and end-of-string.  Match against ``getFScope``,
-        // which pulls the F-segment from a declare uniq_name.
-        auto pPos = sn.rfind('P');
-        if (pPos == std::string::npos) continue;
-        entryScope = sn.substr(pPos + 1);
-        break;
-      }
-      for (auto op : group) {
+      // Only rename a short name owned by more than one procedure.  A
+      // single-owner name (the common case, including same-scope
+      // shape-hint duplicate declares) is unambiguous; leave it alone so
+      // extract_vars dedup downstream handles it.
+      if (ownStorageScopes[kv.getKey()].size() < 2) continue;
+      for (auto op : kv.second) {
         auto un = op.getUniqName().str();
         std::string scope = getFScope(un);
         if (scope == entryScope) continue;  // keep entry's name
@@ -1914,6 +1970,19 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
     if (!sym.empty()) {
       auto gop = module.lookupSymbol<fir::GlobalOp>(sym);
       v.const_data = extractGlobalInitData(gop);
+      // A global-backed variable the kernel WRITES is "not really constant":
+      // it must be a writable transient INITIALISED to its declared init
+      // value, not a read-only ``constexpr``.  Flag it so the SDFG builder
+      // seeds the init at entry (and skips the constant pool, whose
+      // ``constexpr`` the kernel's store can't compile against).  Covers both
+      // module globals (``_QM<mod>E<var>``, e.g. ``qsmith_init_w``'s
+      // saturation tables) and function-scope SAVE-locals
+      // (``_QF<func>E<var>`` -- an initialised local like ``logical :: bla =
+      // .false.`` that Fortran implicitly SAVEs, which Flang lowers to a
+      // ``fir.global``).  Read-only globals / PARAMETERs are never written, so
+      // they stay constant.
+      if (globalIsWritten(sym, module))
+        v.is_written = true;
       // Uninitialised TRUE module-scope global (``MODULE m;
       // INTEGER :: nrdmax(10); END MODULE`` -- symbol like
       // ``@_QMmEnrdmax`` with no ``fir.has_value`` body, and not
@@ -1935,7 +2004,13 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
         bool isParameter =
             (gop.getConstant().has_value() && *gop.getConstant());
         bool isModuleScope = llvm::StringRef(sym).starts_with("_QM");
-        if (!isParameter && isModuleScope) v.intent = "inout";
+        // A module global the kernel WRITES (an init routine filling a lookup
+        // table, e.g. qsmith_init_w's saturation tables) is internal scratch,
+        // not a caller-supplied input -- leave intent empty so descriptors.py
+        // registers a transient.  Only a read-only module global is a genuine
+        // USE-imported input the caller fills.
+        if (!isParameter && isModuleScope && !globalIsWritten(sym, module))
+          v.intent = "inout";
       }
       // Module-global provenance.  Independent of the intent gate
       // above: a module global that ALSO has an initialiser (so it
@@ -1950,7 +2025,9 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
       if (gop) {
         bool isParameter =
             (gop.getConstant().has_value() && *gop.getConstant());
-        if (!isParameter) {
+        // A kernel-written scratch global is a transient (above), not a
+        // caller import -- don't record USE-import provenance for it.
+        if (!isParameter && !globalIsWritten(sym, module)) {
           auto origin = decodeModuleGlobalSymbol(sym);
           if (!origin.first.empty()) {
             v.module_origin_mod = origin.first;

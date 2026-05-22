@@ -31,6 +31,11 @@ struct VarInfo {
   std::string fortran_name, mangled_name, intent, dtype;
   int rank = 0;
   bool is_dynamic = false;
+  /// True when this is a module-scope global the kernel WRITES.  Such a
+  /// variable is "not really constant": if it also carries an initial value
+  /// (``const_data``) it becomes a writable transient seeded with that value
+  /// at SDFG entry, not a read-only constant-pool ``constexpr``.
+  bool is_written = false;
   std::vector<std::string> shape_symbols;
   std::vector<std::string> lower_bounds;
   std::string role;
