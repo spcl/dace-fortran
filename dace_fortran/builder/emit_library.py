@@ -94,10 +94,21 @@ def emit_copy(builder, ctx, n, region):
 
     src_access = acc(builder, state, src_name)
     tgt_access = acc(builder, state, tgt_name)
+    # A Fortran whole-array assignment conforms, so source and destination
+    # hold the same number of elements per dim.  An allocatable's transient,
+    # however, carries its own ALLOCATE extent symbol (e.g. ``x_alloc1_d0``)
+    # distinct from the source's (``n``), and CopyLibraryNode's same-rank
+    # expansion can't prove the two symbolic shapes equal.  Drive the
+    # destination memlet off the SOURCE descriptor's shape when the two
+    # differ symbolically (same rank) so both subsets align; conformance
+    # guarantees the destination subset stays in bounds.
+    same_rank_diff_shape = (len(src_desc.shape) == len(tgt_desc.shape)
+                            and list(src_desc.shape) != list(tgt_desc.shape))
+    tgt_memlet = (Memlet.from_array(tgt_name, src_desc)
+                  if same_rank_diff_shape else Memlet.from_array(tgt_name, tgt_desc))
     state.add_edge(src_access, None, cp, CopyLibraryNode.INPUT_CONNECTOR_NAME,
                    Memlet.from_array(src_name, src_desc))
-    state.add_edge(cp, CopyLibraryNode.OUTPUT_CONNECTOR_NAME, tgt_access, None,
-                   Memlet.from_array(tgt_name, tgt_desc))
+    state.add_edge(cp, CopyLibraryNode.OUTPUT_CONNECTOR_NAME, tgt_access, None, tgt_memlet)
 
 
 def emit_memset(builder, ctx, n, region):
