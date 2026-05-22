@@ -617,6 +617,7 @@ class SDFGBuilder:
                     rank=len(shape) if kind == 'array' else 0,
                     shape=shape,
                     intent=(v.intent if v is not None else ''),
+                    is_written=bool(getattr(v, 'is_written', False)),
                 ))
         # Free symbols carrying module-global provenance: a scalar
         # module global the bridge lifted into a shape / bound symbol

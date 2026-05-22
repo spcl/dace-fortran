@@ -1970,70 +1970,56 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
     if (!sym.empty()) {
       auto gop = module.lookupSymbol<fir::GlobalOp>(sym);
       v.const_data = extractGlobalInitData(gop);
-      // A global-backed variable the kernel WRITES is "not really constant":
-      // it must be a writable transient INITIALISED to its declared init
-      // value, not a read-only ``constexpr``.  Flag it so the SDFG builder
-      // seeds the init at entry (and skips the constant pool, whose
-      // ``constexpr`` the kernel's store can't compile against).  Covers both
-      // module globals (``_QM<mod>E<var>``, e.g. ``qsmith_init_w``'s
-      // saturation tables) and function-scope SAVE-locals
-      // (``_QF<func>E<var>`` -- an initialised local like ``logical :: bla =
-      // .false.`` that Fortran implicitly SAVEs, which Flang lowers to a
-      // ``fir.global``).  Read-only globals / PARAMETERs are never written, so
-      // they stay constant.
-      if (globalIsWritten(sym, module))
-        v.is_written = true;
-      // Uninitialised TRUE module-scope global (``MODULE m;
-      // INTEGER :: nrdmax(10); END MODULE`` -- symbol like
-      // ``@_QMmEnrdmax`` with no ``fir.has_value`` body, and not
-      // ``parameter``-attributed).  These are external inputs to
-      // the kernel: the caller is expected to fill them at init
-      // time and the kernel reads them via ``USE m, ONLY: nrdmax``.
-      // Without intent, descriptors.py would register them as
-      // transients and the kernel would read uninitialised memory.
-      // Mark ``inout`` so they surface as non-transient kwargs.
-      //
-      // Gate: only module-scope (``_QM<mod>E<var>``) symbols, NOT
-      // function-scope SAVE-locals (``_QF<func>E<var>``).  A SAVE-
-      // local is private to its function -- the caller can't bind
-      // it and Fortran semantics say it's zero-init on first
-      // entry, which descriptors.py's transient already provides.
-      // ``v.intent.empty()`` keeps dummy-arg shadows (which set
-      // intent above) untouched.
-      if (v.const_data.empty() && v.intent.empty() && gop) {
-        bool isParameter =
-            (gop.getConstant().has_value() && *gop.getConstant());
-        bool isModuleScope = llvm::StringRef(sym).starts_with("_QM");
-        // A module global the kernel WRITES (an init routine filling a lookup
-        // table, e.g. qsmith_init_w's saturation tables) is internal scratch,
-        // not a caller-supplied input -- leave intent empty so descriptors.py
-        // registers a transient.  Only a read-only module global is a genuine
-        // USE-imported input the caller fills.
-        if (!isParameter && isModuleScope && !globalIsWritten(sym, module))
-          v.intent = "inout";
-      }
-      // Module-global provenance.  Independent of the intent gate
-      // above: a module global that ALSO has an initialiser (so it
-      // took the ``const_data`` path and is a transient) still needs
-      // its ``(module, name)`` recorded so the binding can ``USE``-
-      // import + assign it rather than leaving the SDFG free symbol /
-      // arg unbound.  Skip the read-only literal constant pool and
-      // ``parameter`` constants  --  ``decodeModuleGlobalSymbol``
-      // already filters non-``_QM..E..`` shapes; the explicit
-      // ``isParameter`` guard keeps Flang-synthesised PARAMETER
-      // globals (compile-time constants, not caller-supplied) out.
-      if (gop) {
-        bool isParameter =
-            (gop.getConstant().has_value() && *gop.getConstant());
-        // A kernel-written scratch global is a transient (above), not a
-        // caller import -- don't record USE-import provenance for it.
-        if (!isParameter && !globalIsWritten(sym, module)) {
-          auto origin = decodeModuleGlobalSymbol(sym);
-          if (!origin.first.empty()) {
-            v.module_origin_mod = origin.first;
-            v.module_origin_name = origin.second;
-          }
+      const bool written = globalIsWritten(sym, module);
+      const bool isParameter =
+          (gop && gop.getConstant().has_value() && *gop.getConstant());
+      const bool isModuleScope = llvm::StringRef(sym).starts_with("_QM");
+      auto recordModuleOrigin = [&] {
+        // ``decodeModuleGlobalSymbol`` filters non-``_QM..E..`` shapes
+        // (function-scope SAVE-locals, the literal constant pool), so it
+        // is a no-op for those.
+        auto origin = decodeModuleGlobalSymbol(sym);
+        if (!origin.first.empty()) {
+          v.module_origin_mod = origin.first;
+          v.module_origin_name = origin.second;
         }
+      };
+      if (written) {
+        v.is_written = true;
+        if (isModuleScope && !isParameter && v.intent.empty()) {
+          // A WRITTEN module-scope global is host-shared INOUT state: the
+          // kernel's update must be visible to the caller after the call.
+          // Surface it as an inout arg with module-origin provenance -- the
+          // binding ``USE``-imports the host value (copy-in) and writes the
+          // final value back (copy-out) on exit.  Its initialiser is the
+          // host's default, not a baked constant, so drop ``const_data`` (no
+          // constant pool, no entry seed; the arg carries the value).
+          v.intent = "inout";
+          v.const_data.clear();
+          recordModuleOrigin();
+        }
+        // A WRITTEN function-scope SAVE-local (``_QF`` -- e.g. ``logical ::
+        // bla = .false.`` that Fortran implicitly SAVEs) is private to its
+        // function: it falls through keeping ``is_written`` + ``const_data``
+        // so the builder seeds it as an internal writable transient (a
+        // read-only ``constexpr`` would make the kernel's store fail to
+        // compile).  No host linkage.
+      } else {
+        // Read-only module global.  Uninitialised (``INTEGER :: nrdmax(10)``
+        // with no ``fir.has_value`` body) -> a USE-imported caller input;
+        // mark ``inout`` so it surfaces as a non-transient kwarg the caller
+        // fills, not a transient read from uninitialised memory.  Function-
+        // scope SAVE-locals (``_QF``) are excluded -- the caller can't bind
+        // them.  ``v.intent.empty()`` keeps dummy-arg shadows untouched.
+        if (v.const_data.empty() && v.intent.empty() && gop && !isParameter && isModuleScope)
+          v.intent = "inout";
+        // Record provenance for every read-only module global (initialised
+        // or not), so the binding ``USE``-imports it.  An initialised
+        // read-only global that took the ``const_data`` path bakes its
+        // default, but still records provenance for an optional host
+        // override.  PARAMETERs / the literal constant pool are excluded.
+        if (gop && !isParameter)
+          recordModuleOrigin();
       }
     }
 

@@ -49,6 +49,11 @@ class FrozenArg:
                       complex split into two reals) | ``'transpose'`` /
                       similar.  The binding emitter picks its copy
                       strategy off this tag.
+        is_written:   true when this arg is a module-scope global the
+                      kernel WRITES (host-shared inout state).  The
+                      binding writes its final value back to the host
+                      module variable on exit (copy-out), so the update
+                      is visible to the caller -- not just copied in.
     """
 
     fortran_name: str
@@ -60,6 +65,7 @@ class FrozenArg:
     intent: str = ''
     from_struct_member: Optional[str] = None
     layout: str = 'same'
+    is_written: bool = False
 
     def to_dict(self) -> dict:
         """Serialise to a JSON-safe dict (``shape`` tuple becomes a list)."""

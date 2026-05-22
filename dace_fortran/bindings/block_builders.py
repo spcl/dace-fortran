@@ -445,12 +445,35 @@ def build_wrapper_tail(frozen: FrozenSignature, iface: OriginalInterface, plan: 
             continue
         copy_out_lines.extend(render_copy_out_loop(r, entry.outer_expr))
 
+    # Module globals the kernel WRITES (``FrozenArg.is_written``) are
+    # host-shared inout state: after the call, copy the SDFG arg's final
+    # value back to the host module variable (the ``=> member`` use-import
+    # alias) so the update is visible to the caller -- symmetric to the
+    # copy-in in ``build_wrapper_body``.  A scalar source was lifted to a
+    # length-1 array, so write back its first element; an array source
+    # assigns whole.  ``name_override`` resolves a LOGICAL arg to its
+    # ``logical(c_bool)`` bridge buffer (intrinsic kind conversion on the
+    # assignment back to the LOGICAL host member).
+    module_writeback_lines: List[str] = []
+    for a, _mod, _member in _orphan_module_args(frozen, iface, plan):
+        if not a.is_written:
+            continue
+        alias = _module_symbol_alias(a.sdfg_name)
+        actual = name_override.get(a.sdfg_name, a.sdfg_name)
+        rhs = f"{actual}(1)" if tuple(a.shape) == ('1', ) else actual
+        module_writeback_lines.append(f"    {alias} = {rhs}")
+
     bridge_block = ""
     if bridge_copy_out:
         bridge_block = "\n    ! ----- logical(c_bool) -> LOGICAL bridge (copy-out + dealloc) -----\n" + "\n".join(
             bridge_copy_out)
 
-    if not copy_out_lines and not bridge_copy_out:
+    writeback_block = ""
+    if module_writeback_lines:
+        writeback_block = "\n    ! ----- Write-back for kernel-written module globals -----\n" + "\n".join(
+            module_writeback_lines)
+
+    if not copy_out_lines and not bridge_copy_out and not module_writeback_lines:
         return call_block
 
     copy_out_block = ""
@@ -458,7 +481,7 @@ def build_wrapper_tail(frozen: FrozenSignature, iface: OriginalInterface, plan: 
         copy_out_block = "\n    ! ----- Copy-out for writeable deep-copy entries -----\n" + "\n".join(copy_out_lines)
     marker = f"  end subroutine {iface.entry}_dace"
     pre, post = call_block.split(marker, 1)
-    return pre + copy_out_block + bridge_block + "\n" + marker + post
+    return pre + copy_out_block + bridge_block + writeback_block + "\n" + marker + post
 
 
 # ---------------------------------------------------------------------------
