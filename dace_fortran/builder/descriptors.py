@@ -130,6 +130,16 @@ def add_descriptors(builder, sdfg: SDFG):
     def _is_flang_internal(nm: str) -> bool:
         return nm.startswith(".")
 
+    def _is_char_literal(dtype) -> bool:
+        """A Fortran ``CHARACTER`` constant from flang's literal pool (an I/O
+        ``filename`` / ``status`` / format string).  DaCe has no string data
+        type and these are never compute data -- they feed I/O statements,
+        which the ``fortran_io`` recognizer handles separately -- so they must
+        not be registered as SDFG descriptors.  Doing so mints invalid array
+        names (the hex-encoded literal contents, e.g. ``747874`` for ``txt``,
+        which also start with a digit)."""
+        return str(dtype).startswith("!fir.char")
+
     # Per-axis offset symbols for every array.  ``offset_<arr>_d<i>`` is
     # the value subtracted from the Fortran 1-based index in every
     # memlet (see ``access.py::build_memlet_index``).  Default value for
@@ -153,7 +163,7 @@ def add_descriptors(builder, sdfg: SDFG):
         return s if s in sdfg.symbols else None
 
     for v in builder.arrays.values():
-        if _is_flang_internal(v.fortran_name):
+        if _is_flang_internal(v.fortran_name) or _is_char_literal(v.dtype):
             continue
         if v.role == 'section_alias':
             # Trivial section slice  --  no SDFG descriptor, no offset
@@ -238,7 +248,7 @@ def add_descriptors(builder, sdfg: SDFG):
             builder.offset_values[sym_name] = _offset_value(lb)
 
     for v in builder.scalars.values():
-        if _is_flang_internal(v.fortran_name):
+        if _is_flang_internal(v.fortran_name) or _is_char_literal(v.dtype):
             continue
         if v.intent == '':
             # Local transient scalar.
