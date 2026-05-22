@@ -41,6 +41,14 @@ namespace hlfir_bridge {
 // added to the build's compile list  --  CMakeLists.txt deliberately omits
 // it.  The split is purely for readability: the AST builder used to
 // be a single 2800-line file.
+
+// Lower an ``scf.index_switch`` (the per-exit side-effect dispatch
+// lift-cf-to-scf emits for a loop with a conditional EXIT/RETURN/GOTO that
+// carries a side effect) into a chain of conditional ASTNodes keyed on the
+// loop's exit-reason synth scalar.  Defined after ``buildAST`` (it walks the
+// case regions with it); forward-declared here for ``walkSCFBeforeRegion``.
+static std::vector<ASTNode> buildIndexSwitchNodes(mlir::scf::IndexSwitchOp sw);
+
 static ASTNode buildScfIfAsConditional(mlir::scf::IfOp ifOp) {
   ASTNode c;
   c.kind = "conditional";
@@ -88,6 +96,23 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block &block) {
       continue;
     }
     if (auto condOp = mlir::dyn_cast<mlir::scf::ConditionOp>(op)) {
+      // Capture the enclosing scf.while's carried results into their synth
+      // scalars (each iteration, so they hold the value at exit).  A post-loop
+      // ``scf.index_switch`` reads these to run the side-effect of whichever
+      // EXIT fired -- without this the exit reason is lost and the dispatched
+      // side-effect (e.g. ``no_fall = .false.``) never happens.
+      if (auto whileOp = condOp->getParentOfType<mlir::scf::WhileOp>()) {
+        auto args = condOp.getArgs();
+        for (unsigned i = 0; i < args.size() && i < whileOp.getNumResults();
+             ++i) {
+          ASTNode a;
+          a.kind = "assign";
+          a.target = scfSynthName(whileOp.getResult(i));
+          a.expr = yieldedExpr(args[i]);
+          a.target_is_array = false;
+          out.push_back(std::move(a));
+        }
+      }
       // ``scf.condition(%c)``: break when %c is false.
       ASTNode guard;
       guard.kind = "conditional";
@@ -97,6 +122,11 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block &block) {
       brk.kind = "break";
       guard.children.push_back(std::move(brk));
       out.push_back(std::move(guard));
+      continue;
+    }
+    if (auto sw = mlir::dyn_cast<mlir::scf::IndexSwitchOp>(op)) {
+      auto chain = buildIndexSwitchNodes(sw);
+      for (auto &c : chain) out.push_back(std::move(c));
       continue;
     }
     if (auto assign = mlir::dyn_cast<hlfir::AssignOp>(op)) {
@@ -1017,6 +1047,11 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
       nodes.push_back(buildWhileNode(whileOp));
       continue;
     }
+    if (auto sw = mlir::dyn_cast<mlir::scf::IndexSwitchOp>(op)) {
+      auto chain = buildIndexSwitchNodes(sw);
+      for (auto &c : chain) nodes.push_back(std::move(c));
+      continue;
+    }
     if (auto sel = mlir::dyn_cast<fir::SelectCaseOp>(op)) {
       nodes.push_back(buildSelectCaseChain(sel));
       continue;
@@ -1158,6 +1193,53 @@ std::vector<ASTNode> extractAST(mlir::ModuleOp module) {
     result = std::move(initNodes);
   }
   return result;
+}
+
+// Name of the synth scalar carrying an scf.index_switch's selector value.
+// The selector traces (through index_cast / convert) back to the scf.while
+// result that ``scf.condition`` carried out -- the loop's exit reason -- whose
+// synth scalar the scf.condition handler assigns each iteration.
+static std::string scfSwitchValueName(mlir::Value v) {
+  for (int i = 0; i < limits::kTraceToDeclMax && v; ++i) {
+    auto *d = v.getDefiningOp();
+    if (!d) break;
+    if (auto cc = mlir::dyn_cast<mlir::arith::IndexCastUIOp>(d)) {
+      v = cc.getIn();
+      continue;
+    }
+    if (auto cc = mlir::dyn_cast<mlir::arith::IndexCastOp>(d)) {
+      v = cc.getIn();
+      continue;
+    }
+    if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
+      v = cv.getValue();
+      continue;
+    }
+    break;
+  }
+  return scfSynthName(v);
+}
+
+static std::vector<ASTNode> buildIndexSwitchNodes(mlir::scf::IndexSwitchOp sw) {
+  std::string val = scfSwitchValueName(sw.getArg());
+  auto cases = sw.getCases();  // ArrayRef<int64_t>: one selector value per case
+  // Innermost else == the default region's body.
+  std::vector<ASTNode> chain;
+  if (!sw.getDefaultRegion().empty())
+    chain = buildAST(sw.getDefaultRegion().front());
+  // Wrap each case (last first) as ``if (selector == case_i) {body} else
+  // {chain-so-far}`` so the per-exit side-effects run.
+  auto caseRegions = sw.getCaseRegions();
+  for (int i = static_cast<int>(cases.size()) - 1; i >= 0; --i) {
+    ASTNode c;
+    c.kind = "conditional";
+    c.condition = val + " == " + std::to_string(cases[i]);
+    if (!caseRegions[i].empty()) c.children = buildAST(caseRegions[i].front());
+    c.else_children = std::move(chain);
+    chain.clear();
+    chain.push_back(std::move(c));
+  }
+  return chain;
 }
 
 }  // namespace hlfir_bridge
