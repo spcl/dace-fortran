@@ -12,13 +12,11 @@ outputs are compared array-by-array.
 
 ``warm_rain`` is real(4); the bridge widens reals, so the comparison is loose.
 
-xfail probe: the bridge now builds and runs the kernel end-to-end (the
-pre-inline ``lift-cf-to-scf`` folds the early-exit ``fir.if`` chains, and the
-sedimentation / saturation-table call chain lowers cleanly).  The remaining
-blocker is purely on the DaCe side: the kernel zero-inits scratch arrays via
-``MemsetLibraryNode``, so the e2e numerical comparison needs a DaCe build that
-carries the explicit-copy-memset library nodes.  Flip to passing once the
-pinned DaCe provides them.
+The module-scope saturation tables (``tablew`` / ``desw``) and the lazy-init
+flag (``tables_are_initialized``) are kernel-WRITTEN module globals, so the
+bridge surfaces them as inout args the caller binds (a real host would bind
+them from the module; the test passes the module defaults and the kernel's
+``qsmith_init_w`` fills them on the first call).
 """
 from pathlib import Path
 
@@ -32,6 +30,9 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 _HERE = Path(__file__).parent
 _KM = 40
 _ENTRY = "_QMwarm_rain_modPwarm_rain_driver"
+# Length of the water-saturation lookup tables (``tablew`` / ``desw``),
+# the module ``parameter qs_length`` in the source.
+_QS_LENGTH = 2621
 
 # Names of the arguments warm_rain mutates (intent inout/out), in signature
 # order after the scalars -- these are what we compare between the two paths.
@@ -63,11 +64,6 @@ def _column():
     return {name: v.astype(np.float32) for name, v in a.items()}
 
 
-@pytest.mark.xfail(strict=False,
-                   reason="FV3 warm_rain integration probe: the bridge now builds and runs the "
-                          "kernel end-to-end, but the e2e numerical check needs a DaCe carrying the "
-                          "explicit-copy-memset library nodes (the kernel zero-inits arrays via "
-                          "MemsetLibraryNode), which the pinned DaCe does not yet provide")
 def test_fv3_warm_rain(tmp_path):
     src = (_HERE / "warm_rain.f90").read_text()
 
@@ -85,10 +81,20 @@ def test_fv3_warm_rain(tmp_path):
                                                 h_var=scalars["h_var"], **rkw)
 
     # Bridge SDFG (km is a free symbol; inout/out arrays passed by name).
+    # The module-scope saturation tables (``tablew`` / ``desw``) and the
+    # lazy-init flag (``tables_are_initialized``) are kernel-WRITTEN module
+    # globals, so the bridge surfaces them as inout args the caller supplies
+    # (a real host binds them from the module; here we pass the module
+    # defaults: empty tables + ``.false.``, and the kernel's ``qsmith_init_w``
+    # fills them on this first call, matching the f2py module state).
     skw = {n: base[n].copy() for n in (*_IN, *_INOUT)}
     r1_out = np.zeros(1, dtype=np.float32)
     sdfg(km=np.int32(_KM), dt=scalars["dt"], rh_rain=scalars["rh_rain"],
-         h_var=scalars["h_var"], r1=r1_out, **skw)
+         h_var=scalars["h_var"], r1=r1_out,
+         tablew=np.zeros(_QS_LENGTH, dtype=np.float32, order='F'),
+         desw=np.zeros(_QS_LENGTH, dtype=np.float32, order='F'),
+         tables_are_initialized=np.array([False]),
+         **skw)
 
     np.testing.assert_allclose(r1_out[0], r1_ref, rtol=1e-4, atol=1e-6)
     for name in _INOUT:
