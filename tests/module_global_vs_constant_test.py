@@ -20,9 +20,13 @@ shapes, decided by ``extract_vars.cpp`` + the SDFG builder:
     This is the ICON ``i_am_accel_node = .FALSE.`` shape.
 
   * **Module global the kernel WRITES** (``logical :: ready = .false.``
-    set inside the routine): "not really constant" -- a writable
-    transient seeded with its declared initial value at entry, not a
-    read-only ``constexpr`` and not a caller import.
+    set inside the routine): host-shared inout state.  It surfaces as an
+    inout arg with module-origin provenance, so the binding ``USE``-imports
+    the host value (copy-in) and writes the kernel's final value back to
+    the host module on exit (copy-out) -- the update is visible to the
+    caller.  Its declared initialiser is the host's default, not a baked
+    constant.  (A function-scope ``SAVE``-local the kernel writes is
+    instead a private internal transient -- no host linkage.)
 
 Each case is pinned structurally (arglist membership + frozen-signature
 ``module_symbol_origins``) and, where a value is observable, end-to-end
@@ -184,11 +188,18 @@ end module mod_flag
     np.testing.assert_allclose(y_sdfg, y_ref, rtol=1e-12)
 
 
-def test_written_global_is_seeded_writable_transient(tmp_path: Path):
-    """A module global the kernel WRITES is "not really constant": a
-    writable transient seeded with its declared initial value at entry,
-    not a read-only ``constexpr`` (which the store could not compile
-    against) and not a caller import."""
+def _written_arg(sdfg, name: str):
+    """The frozen-signature arg for ``name`` (asserts it is present)."""
+    fa = next((a for a in sdfg._frozen_signature.args if a.sdfg_name == name), None)
+    assert fa is not None, f"{name} is not an SDFG arg"
+    return fa
+
+
+def test_written_global_is_inout_with_writeback(tmp_path: Path):
+    """A module global the kernel WRITES is host-shared inout state: an
+    inout arg with module-origin provenance, not a baked constant.  The
+    kernel updates it in place, visible to the caller (the binding writes
+    the final value back to the host module on exit)."""
     src = """
 module mod_state
   implicit none
@@ -210,21 +221,31 @@ contains
 end module mod_state
 """
     sdfg = _build(src, tmp_path, "_QMmod_statePcompute")
-    assert 'initialized' not in sdfg.arglist(), "a kernel-written flag is an internal transient, not a kwarg"
-    assert _origin(sdfg, 'initialized') is None, "a kernel-written global is not a caller import"
+    for name in ('initialized', 'cached'):
+        assert name in sdfg.arglist(), f"{name}: a kernel-written global must be an inout arg"
+        fa = _written_arg(sdfg, name)
+        assert fa.intent == 'inout' and fa.is_written, f"{name}: expected written inout arg"
+    assert _origin(sdfg, 'initialized') == ('mod_state', 'initialized')
+    assert _origin(sdfg, 'cached') == ('mod_state', 'cached')
 
     ref = f2py_compile(src, tmp_path / "ref", "state_ref")
     x = np.asfortranarray(np.arange(1, 5, dtype=np.float64))
     y_sdfg = np.zeros(4, dtype=np.float64, order='F')
-    y_ref = ref.mod_state.compute(x)  # first call: initialized .false. -> cached = 10
-    sdfg(x=x, y=y_sdfg)               # seeded .false. -> cached = 10
+    y_ref = ref.mod_state.compute(x)  # initialized .false. -> cached 10, y = x + 10
+    # Pass the inout globals' host defaults (.false. / 0.0); the kernel
+    # writes the final values back in place, visible to the caller.
+    initialized = np.array([False])
+    cached = np.array([0.0], dtype=np.float64, order='F')
+    sdfg(x=x, y=y_sdfg, initialized=initialized, cached=cached)
     np.testing.assert_allclose(y_sdfg, y_ref, rtol=1e-12)
+    assert bool(initialized[0]) is True, "the kernel's flag update is visible to the caller"
+    np.testing.assert_allclose(cached, [10.0], rtol=1e-12)
 
 
 def test_written_global_no_initialiser_same_module(tmp_path: Path):
     """A module global with NO declared initialiser that the kernel
-    assigns before reading: an internal writable transient (no seed
-    needed, written-before-read), neither a kwarg nor a caller import."""
+    assigns before reading is still host-shared inout state: an inout arg
+    with provenance, updated in place."""
     src = """
 module mod_scratch
   implicit none
@@ -242,15 +263,18 @@ contains
 end module mod_scratch
 """
     sdfg = _build(src, tmp_path, "_QMmod_scratchPuse_sval")
-    assert 'sval' not in sdfg.arglist(), "a written-inside scratch global is an internal transient"
-    assert _origin(sdfg, 'sval') is None, "a kernel-written global is not a caller import"
+    assert 'sval' in sdfg.arglist(), "a kernel-written global is an inout arg"
+    assert _written_arg(sdfg, 'sval').is_written
+    assert _origin(sdfg, 'sval') == ('mod_scratch', 'sval')
 
     ref = f2py_compile(src, tmp_path / "ref", "scratch_ref")
     x = np.asfortranarray(np.arange(1, 5, dtype=np.float64))
     y_sdfg = np.zeros(4, dtype=np.float64, order='F')
-    y_ref = ref.mod_scratch.use_sval(x)
-    sdfg(x=x, y=y_sdfg)
+    y_ref = ref.mod_scratch.use_sval(x)  # sval = 3.0, y = x + 3
+    sval = np.array([0.0], dtype=np.float64, order='F')  # written before read; init irrelevant
+    sdfg(x=x, y=y_sdfg, sval=sval)
     np.testing.assert_allclose(y_sdfg, y_ref, rtol=1e-12)
+    np.testing.assert_allclose(sval, [3.0], rtol=1e-12)
 
 
 # ---------------------------------------------------------------------------
@@ -324,18 +348,19 @@ contains
 end module mod_kern_b
 """
     sdfg = _build(src, tmp_path, "_QMmod_kern_bPuse_state")
-    # The update is applied within the call, so the computed output is
-    # correct today.  Host-visibility of the global's final value (the
-    # binding writing it back on exit) is a separate, pending feature; until
-    # it lands a written global records no caller provenance.
-    assert _origin(sdfg, 'accum') is None
+    assert 'accum' in sdfg.arglist(), "a written cross-module global is an inout arg"
+    assert _written_arg(sdfg, 'accum').is_written
+    assert _origin(sdfg, 'accum') == ('mod_state_x', 'accum'), \
+        "a written cross-module global records provenance for host write-back"
 
     ref = f2py_compile(src, tmp_path / "ref", "xstate_ref")
     x = np.asfortranarray(np.arange(1, 5, dtype=np.float64))
     y_sdfg = np.zeros(4, dtype=np.float64, order='F')
     y_ref = ref.mod_kern_b.use_state(x)  # accum 1.0 -> 11.0, output x + 11
-    sdfg(x=x, y=y_sdfg)                   # seeded 1.0 -> 11.0, output x + 11
+    accum = np.array([1.0], dtype=np.float64, order='F')  # host default
+    sdfg(x=x, y=y_sdfg, accum=accum)     # 1.0 -> 11.0, output x + 11
     np.testing.assert_allclose(y_sdfg, y_ref, rtol=1e-12)
+    np.testing.assert_allclose(accum, [11.0], rtol=1e-12)
 
 
 def test_written_global_no_initialiser_from_other_module(tmp_path: Path):
@@ -364,11 +389,15 @@ contains
 end module mod_kern_c
 """
     sdfg = _build(src, tmp_path, "_QMmod_kern_cPuse_scratch")
-    assert 'tmpval' not in sdfg.arglist(), "a written-inside cross-module scratch global is internal"
+    assert 'tmpval' in sdfg.arglist(), "a written cross-module global is an inout arg"
+    assert _written_arg(sdfg, 'tmpval').is_written
+    assert _origin(sdfg, 'tmpval') == ('mod_scratch_x', 'tmpval')
 
     ref = f2py_compile(src, tmp_path / "ref", "xscratch_ref")
     x = np.asfortranarray(np.arange(1, 5, dtype=np.float64))
     y_sdfg = np.zeros(4, dtype=np.float64, order='F')
-    y_ref = ref.mod_kern_c.use_scratch(x)
-    sdfg(x=x, y=y_sdfg)
+    y_ref = ref.mod_kern_c.use_scratch(x)  # tmpval = 7.0, y = x * 7
+    tmpval = np.array([0.0], dtype=np.float64, order='F')  # written before read
+    sdfg(x=x, y=y_sdfg, tmpval=tmpval)
     np.testing.assert_allclose(y_sdfg, y_ref, rtol=1e-12)
+    np.testing.assert_allclose(tmpval, [7.0], rtol=1e-12)
