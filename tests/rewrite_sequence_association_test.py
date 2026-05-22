@@ -17,9 +17,10 @@ downstream consumers.
 """
 from pathlib import Path
 
+import numpy as np
 import pytest
 
-from _util import compile_to_hlfir, have_flang
+from _util import build_sdfg, compile_to_hlfir, have_flang
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
@@ -291,3 +292,38 @@ end subroutine main
     assert _count_seq_adapter(before) >= 1
     assert _count_seq_adapter(after) == 0
     assert 'fir.array<4xf32>' in after
+
+
+def test_multidim_column_element_access_e2e(tmp_path):
+    """A 2-D-column element passed to an explicit-shape array dummy that the
+    inlined callee reads BY ELEMENT (the FV3 ``acr3d (..., acco (1, k), ...)``
+    shape, where ``acr3d`` does ``cac (1) * .. + cac (2) * .. + cac (3) * ..``).
+
+    Sequence association maps ``a(1:3, j)`` to the formal ``c(3)``; the
+    callee's per-element reads must compose back to ``a(i, j)``.  Regression
+    for the kept-declare / ``box_addr`` path: a plain ``box -> ref`` convert
+    is illegal FIR, and erasing the formal declare dropped the section-alias
+    dim-map, collapsing the memlet to 1-D on the 2-D parent.  Runs e2e so the
+    composed subset is checked numerically, not just structurally.
+    """
+    src = """
+module seqassoc2d_mod
+  implicit none
+contains
+  real function dot3(c)
+    real, intent(in) :: c(3)
+    dot3 = c(1) + 2.0 * c(2) + 3.0 * c(3)
+  end function dot3
+  subroutine apply(a, out)
+    real, intent(in) :: a(3, 4)
+    real, intent(out) :: out
+    out = dot3(a(1, 2))
+  end subroutine apply
+end module seqassoc2d_mod
+"""
+    sdfg = build_sdfg(src, tmp_path, name="seq2d", entry="_QMseqassoc2d_modPapply").build()
+    a = np.arange(1, 13, dtype=np.float32).reshape(3, 4, order='F').copy(order='F')
+    out = np.zeros(1, dtype=np.float32)
+    sdfg(a=a, out=out)
+    # a(1,2) + 2*a(2,2) + 3*a(3,2) -- proves the column section composed right.
+    np.testing.assert_allclose(out[0], a[0, 1] + 2.0 * a[1, 1] + 3.0 * a[2, 1], rtol=1e-6)

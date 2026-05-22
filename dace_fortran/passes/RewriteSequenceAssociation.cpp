@@ -470,6 +470,66 @@ struct RewriteSequenceAssociationPass
         if (t) return;
     mlir::Value lo = eltDg.getIndices()[0];
 
+    // Element-access variant: an inlined callee that reads the formal's
+    // individual elements (``cac (1)`` ... in ``acr3d (..., acco (1, k),
+    // ...)``) consumes the formal's ``hlfir.declare`` results through
+    // ``hlfir.designate`` element ops, not as a whole-array box (the
+    // sum / GEMM consumers below).  For those, KEEP the formal declare and
+    // repoint its memref to ``box_addr`` of the section, so extract_vars'
+    // ``section_alias`` / ``view_dim_map`` machinery composes
+    // ``cac (i) -> parent (i, scalars...)``.  Erasing the declare (the
+    // whole-array path below) would drop that mapping and emit a
+    // rank-collapsed memlet on the multi-dim parent.  Only the
+    // compile-time-constant extent case is handled here (the section is
+    // built BEFORE the declare, so every operand -- parent, lo, the
+    // pass-through scalar indices -- is already in scope; a runtime extent
+    // is only defined after the declare and stays on the path below).
+    bool elementAccess = false;
+    for (mlir::Value r : {formalDecl.getResult(0), formalDecl.getResult(1)})
+      for (auto *u : r.getUsers())
+        if (mlir::isa<hlfir::DesignateOp>(u)) elementAccess = true;
+    if (auto Nconst = traceConstIndex(
+            mlir::dyn_cast<fir::ShapeOp>(formalDecl.getShape().getDefiningOp())
+                .getExtents()[0]);
+        elementAccess && Nconst && *Nconst > 0) {
+      int64_t N = *Nconst;
+      mlir::OpBuilder b(formalDecl);  // insertion point: before the declare
+      auto loc = conv.getLoc();
+      auto idxTy = b.getIndexType();
+      auto toIndex = [&](mlir::Value v) -> mlir::Value {
+        if (v.getType() == idxTy) return v;
+        return b.create<fir::ConvertOp>(loc, idxTy, v).getResult();
+      };
+      mlir::Value loIdx = toIndex(lo);
+      auto c1 = b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(1));
+      auto cN = b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(N));
+      auto cNm1 =
+          b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(N - 1));
+      mlir::Value hi = b.create<mlir::arith::AddIOp>(loc, loIdx, cNm1).getResult();
+      auto refTy = mlir::cast<fir::ReferenceType>(conv.getResult().getType());
+      auto eleTy = mlir::cast<fir::SequenceType>(refTy.getEleTy()).getEleTy();
+      auto boxTy = fir::BoxType::get(fir::SequenceType::get({N}, eleTy));
+      mlir::Value sectionShape =
+          b.create<fir::ShapeOp>(loc, mlir::ValueRange{cN.getResult()})
+              .getResult();
+      llvm::SmallVector<mlir::Value, 6> tripletOps{loIdx, hi, c1.getResult()};
+      llvm::SmallVector<bool, 6> isTriplet{true};
+      for (size_t i = 1; i < eltDg.getIndices().size(); ++i) {
+        tripletOps.push_back(toIndex(eltDg.getIndices()[i]));
+        isTriplet.push_back(false);
+      }
+      auto sectionDg = b.create<hlfir::DesignateOp>(
+          loc, boxTy, eltDg.getMemref(), mlir::StringAttr{}, mlir::Value{},
+          mlir::ValueRange{tripletOps}, b.getDenseBoolArrayAttr(isTriplet),
+          mlir::ValueRange{}, mlir::BoolAttr{}, sectionShape, mlir::ValueRange{},
+          fir::FortranVariableFlagsAttr{});
+      auto boxAddr = b.create<fir::BoxAddrOp>(loc, refTy, sectionDg.getResult());
+      formalDecl.getMemrefMutable().assign(boxAddr.getResult());
+      conv.erase();
+      if (eltDg.getResult().use_empty()) eltDg.erase();
+      return;
+    }
+
     // Step 4: build the section designate over the parent array.
     // Insert AFTER the formal declare  --  for the runtime-symbolic
     // path the extent Value is only defined inside the inlined
@@ -558,8 +618,28 @@ struct RewriteSequenceAssociationPass
       if (r.getType() != sectionResult.getType()) {
         // Builder ``b`` already sits after the formal declare,
         // so its insertion point is right after the section.
-        replacement = b.create<fir::ConvertOp>(loc, r.getType(), sectionResult)
-                          .getResult();
+        //
+        // The section designate yields a ``box``.  When the consumer is
+        // an explicit-shape formal that an inlined callee accesses by
+        // element (``cac (1)`` ... in ``acr3d (..., acco (1, k), ...)``),
+        // its ``hlfir.declare`` result is a raw ``ref<array<N>>`` -- a
+        // plain ``fir.convert`` from ``box`` to ``ref`` is an illegal FIR
+        // type conversion.  Extract the data pointer with ``fir.box_addr``
+        // instead.  Sequence association guarantees the associated
+        // elements are contiguous (a full leading dimension of the
+        // parent), so the section box is contiguous and ``box_addr`` is
+        // valid.  A non-box target (e.g. a different box kind) keeps the
+        // plain convert.
+        if (mlir::isa<fir::ReferenceType>(r.getType()) &&
+            mlir::isa<fir::BaseBoxType>(sectionResult.getType())) {
+          replacement =
+              b.create<fir::BoxAddrOp>(loc, r.getType(), sectionResult)
+                  .getResult();
+        } else {
+          replacement =
+              b.create<fir::ConvertOp>(loc, r.getType(), sectionResult)
+                  .getResult();
+        }
       }
       r.replaceAllUsesWith(replacement);
     };
