@@ -769,33 +769,38 @@ static void collectIntegerScalarReads(mlir::Value v, std::set<std::string> &out,
 static std::vector<double> extractGlobalInitData(fir::GlobalOp gop) {
   std::vector<double> out;
   if (!gop) return out;
-  // Path 1: ``fir.global ... constant`` arrays / scalars whose
-  // initialiser lives on the op as a ``DenseElementsAttr``  --
-  // Flang's encoding for ``parameter, dimension(...) :: x = (/ ... /)``
-  // and ``parameter :: x = <literal>``.  Restricted to globals
-  // marked ``constant`` because the dense attribute is the
-  // canonical static data.
-  if (gop.getConstant().value_or(false)) {
-    if (auto initOpt = gop.getInitVal()) {
-      if (auto dense = mlir::dyn_cast<mlir::DenseElementsAttr>(*initOpt)) {
-        auto eleTy = dense.getElementType();
-        if (eleTy.isF64()) {
-          for (auto v : dense.getValues<double>()) out.push_back(v);
-        } else if (eleTy.isF32()) {
-          for (auto v : dense.getValues<float>()) out.push_back((double)v);
-        } else if (eleTy.isInteger(8)) {
-          for (auto v : dense.getValues<int8_t>()) out.push_back((double)v);
-        } else if (eleTy.isInteger(16)) {
-          for (auto v : dense.getValues<int16_t>()) out.push_back((double)v);
-        } else if (eleTy.isInteger(32)) {
-          for (auto v : dense.getValues<int32_t>()) out.push_back((double)v);
-        } else if (eleTy.isInteger(64)) {
-          for (auto v : dense.getValues<int64_t>()) out.push_back((double)v);
-        } else if (eleTy.isInteger(1)) {
-          for (auto v : dense.getValues<bool>()) out.push_back(v ? 1.0 : 0.0);
-        }
-        if (!out.empty()) return out;
+  // Path 1: a ``DenseElementsAttr`` initialiser living directly on the
+  // ``fir.global`` op.  Two Fortran shapes lower this way -- both are an
+  // "array of constants" that the SDFG bakes into a constexpr array
+  // (``sdfg.add_constant``) downstream:
+  //   * ``parameter, dimension(...) :: x = (/ ... /)`` / ``parameter ::
+  //     x = <literal>``  --  the global is marked ``constant``;
+  //   * a DATA-statement-initialised array (``real :: c(3); data c
+  //     /.../``  --  an array of extrapolation / coefficient constants,
+  //     common in scientific codes).  The global is NOT marked
+  //     ``constant`` (DATA variables are mutable), but the dense
+  //     attribute is still its canonical static initial data.
+  // Extract in BOTH cases; the classification downstream bakes a
+  // read-only one and seeds a kernel-written one (``is_written``).
+  if (auto initOpt = gop.getInitVal()) {
+    if (auto dense = mlir::dyn_cast<mlir::DenseElementsAttr>(*initOpt)) {
+      auto eleTy = dense.getElementType();
+      if (eleTy.isF64()) {
+        for (auto v : dense.getValues<double>()) out.push_back(v);
+      } else if (eleTy.isF32()) {
+        for (auto v : dense.getValues<float>()) out.push_back((double)v);
+      } else if (eleTy.isInteger(8)) {
+        for (auto v : dense.getValues<int8_t>()) out.push_back((double)v);
+      } else if (eleTy.isInteger(16)) {
+        for (auto v : dense.getValues<int16_t>()) out.push_back((double)v);
+      } else if (eleTy.isInteger(32)) {
+        for (auto v : dense.getValues<int32_t>()) out.push_back((double)v);
+      } else if (eleTy.isInteger(64)) {
+        for (auto v : dense.getValues<int64_t>()) out.push_back((double)v);
+      } else if (eleTy.isInteger(1)) {
+        for (auto v : dense.getValues<bool>()) out.push_back(v ? 1.0 : 0.0);
       }
+      if (!out.empty()) return out;
     }
   }
   // Path 2: scalar ``fir.global`` (e.g. ``real :: bob = 1`` declared
@@ -1973,7 +1978,21 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
       const bool written = globalIsWritten(sym, module);
       const bool isParameter =
           (gop && gop.getConstant().has_value() && *gop.getConstant());
-      const bool isModuleScope = llvm::StringRef(sym).starts_with("_QM");
+      // A genuine module-scope VARIABLE is ``_QM<module>E<entity>`` -- the
+      // first scope separator after the lowercase module name is ``E``.  A
+      // module-PROCEDURE SAVE-local is ``_QM<module>F<proc>E<entity>`` (an
+      // ``F``/``P`` scope before the ``E``); it is function-private, NOT
+      // host-shared module data, so it must NOT take the inout / write-back /
+      // provenance paths -- it stays a writable transient (or a baked
+      // constexpr when read-only) seeded from its initialiser, like an
+      // external-procedure ``_QF`` SAVE-local.
+      const bool isModuleScope = [&] {
+        llvm::StringRef s = sym;
+        if (!s.consume_front("_QM")) return false;
+        for (char ch : s)
+          if (std::isupper(static_cast<unsigned char>(ch))) return ch == 'E';
+        return false;
+      }();
       auto recordModuleOrigin = [&] {
         // ``decodeModuleGlobalSymbol`` filters non-``_QM..E..`` shapes
         // (function-scope SAVE-locals, the literal constant pool), so it
@@ -2017,8 +2036,9 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
         // or not), so the binding ``USE``-imports it.  An initialised
         // read-only global that took the ``const_data`` path bakes its
         // default, but still records provenance for an optional host
-        // override.  PARAMETERs / the literal constant pool are excluded.
-        if (gop && !isParameter)
+        // override.  PARAMETERs / the literal constant pool and
+        // function-scope SAVE-locals are excluded.
+        if (gop && !isParameter && isModuleScope)
           recordModuleOrigin();
       }
     }

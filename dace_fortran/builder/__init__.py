@@ -443,34 +443,70 @@ class SDFGBuilder:
             sdfg.add_constant(v.fortran_name, arr, desc)
 
     def _seed_written_inits(self, ctx, sdfg):
-        """Seed module globals the kernel WRITES that carry an init value
+        """Seed globals the kernel WRITES that carry an init value
         (``is_written`` + ``const_data``) with that value at SDFG entry.
 
-        These are "not really constant" -- a lazy-init flag like
-        ``tables_are_initialized = .false.`` that an init routine later sets
-        ``.true.``.  The constant pool would make them read-only ``constexpr``;
-        instead they are writable transients (or symbols) seeded once up front:
-        a scalar via a tasklet in the entry state, a symbol via an
-        interstate-edge assignment.  Rank-0 only -- a written-before-read
-        scratch array (a lookup table) needs no seed, and a written array WITH
-        an init is not yet handled.
+        These are "not really constant": a read-only ``constexpr`` would make
+        the kernel's store fail to compile, so they become writable transients
+        seeded once up front.  Three shapes:
+
+          * scalar  -- a tasklet in the entry state (a lazy-init flag like
+            ``tables_are_initialized = .false.``);
+          * symbol  -- an interstate-edge assignment;
+          * array (an "array of constants" the kernel also mutates, e.g. a
+            DATA-statement array later assigned to) -- a writable transient
+            whose initial values are unfolded into per-element init tasklets
+            in the entry state.  (A read-only array of constants instead bakes
+            into a DaCe ``constexpr`` array via ``_register_constants``.)
         """
-        scalar_inits, symbol_inits = [], []
+        import numpy as np
+        from dace import Memlet
+        from dace.data import Scalar
+        scalar_inits, symbol_inits, array_inits = [], [], []
         for v in self.variables:
-            if not (getattr(v, 'is_written', False) and v.const_data and v.rank == 0):
+            if not (getattr(v, 'is_written', False) and v.const_data):
                 continue
-            val = v.const_data[0]
-            is_int = v.dtype.startswith('int') or v.dtype == 'bool'
-            expr = str(int(round(val))) if is_int else repr(float(val))
-            if v.fortran_name in self.symbols:
-                symbol_inits.append((v.fortran_name, expr))
-            elif v.fortran_name in self.scalars:
-                scalar_inits.append((v.fortran_name, expr))
-        if not scalar_inits and not symbol_inits:
+            if v.rank == 0:
+                val = v.const_data[0]
+                is_int = v.dtype.startswith('int') or v.dtype == 'bool'
+                expr = str(int(round(val))) if is_int else repr(float(val))
+                if v.fortran_name in self.symbols:
+                    symbol_inits.append((v.fortran_name, expr))
+                elif v.fortran_name in self.scalars:
+                    scalar_inits.append((v.fortran_name, expr))
+            elif v.fortran_name in sdfg.arrays and not isinstance(sdfg.arrays[v.fortran_name], Scalar):
+                array_inits.append(v)
+        if not scalar_inits and not symbol_inits and not array_inits:
             return
         for tgt, expr in scalar_inits:
             ctx.pending.append((tgt, expr))
         ctx.flush_and_ensure(self, sdfg)  # emit scalar seeds into the entry state
+        for v in array_inits:
+            desc = sdfg.arrays[v.fortran_name]
+            shape = tuple(int(d) for d in desc.shape)
+            arr = np.asarray(v.const_data, dtype=np.float64)
+            if arr.size != int(np.prod(shape)):
+                continue
+            # Make it a writable transient (a kwarg would force the caller to
+            # supply it) and unfold the dense init into one tasklet per
+            # element.  Reshape column-major (``order='F'``) so each logical
+            # ``a[i, j]`` write picks the Fortran-storage value the kernel
+            # later reads through the array's column-major strides -- the
+            # read-only ``_register_constants`` path instead stores the flat
+            # ``const_data`` verbatim and relies on the strides, so it uses
+            # ``order='C'``; a per-element write must map logical -> value
+            # itself.  (Identical for rank 1.)
+            desc.transient = True
+            arr = arr.reshape(shape, order='F')
+            is_int = v.dtype.startswith('int') or v.dtype == 'bool'
+            acc = ctx.cur.add_write(v.fortran_name)
+            for idx in np.ndindex(*shape):
+                val = arr[idx]
+                expr = str(int(round(float(val)))) if is_int else repr(float(val))
+                tname = "init_%s_%s" % (v.fortran_name, "_".join(str(i) for i in idx))
+                t = ctx.cur.add_tasklet(tname, set(), {"_o"}, "_o = %s" % expr)
+                ctx.cur.add_edge(t, "_o", acc, None,
+                                 Memlet("%s[%s]" % (v.fortran_name, ", ".join(str(i) for i in idx))))
         nxt = sdfg.add_state(f"s_{self.nid()}")
         edge = InterstateEdge(assignments=dict(symbol_inits)) if symbol_inits else InterstateEdge()
         sdfg.add_edge(ctx.cur, nxt, edge)
