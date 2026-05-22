@@ -393,23 +393,31 @@ def emit_io(builder, ctx, n, region):
     ``dace.libraries.fortran_io`` node.
 
     The C++ recognizer folds an ``open`` / ``read`` / ``write`` / ``close``
-    region into one node: ``n.callee`` is ``'read'`` or ``'write'``,
-    ``n.target`` is the literal filename (baked into the node -- DaCe cannot
-    pass a string at runtime), and ``n.call_args`` are the transferred
-    array / scalar names in statement order.  A READ writes each item (output
-    connectors ``_out_i``); a WRITE reads each item (input connectors
-    ``_in_i``).  Whole-array memlets -- the Fortran statement transfers each
-    item in full.
+    region into one node: ``n.callee`` is ``'read'`` / ``'write'`` /
+    ``'namelist_read'``, ``n.target`` is the literal filename (baked into the
+    node -- DaCe cannot pass a string at runtime), ``n.expr`` is the namelist
+    group name (namelist only), and ``n.call_args`` are the transferred
+    array / scalar names (a namelist member's name is its variable's name).  A
+    READ writes each item (output connectors ``_out_i``); a WRITE reads each
+    item (input connectors ``_in_i``).  Whole-array memlets -- the Fortran
+    statement transfers each item in full.
     """
     nodes_mod = importlib.import_module("dace.libraries.fortran_io.nodes")
     state = ctx.flush_and_ensure(builder, region)
-
     items = list(n.call_args)
+
+    if n.callee == "namelist_read":
+        node = nodes_mod.NamelistRead(f"namelist_{builder.nid()}", filename=n.target, group=n.expr, members=items)
+        state.add_node(node)
+        for i, name in enumerate(items):
+            state.add_edge(node, f"_out_{i}", acc(builder, state, name), None,
+                           Memlet.from_array(name, ctx.sdfg.arrays[name]))
+        return
+
     is_read = n.callee == "read"
     cls = nodes_mod.Read if is_read else nodes_mod.Write
     node = cls(f"{n.callee}_{builder.nid()}", filename=n.target, num_items=len(items))
     state.add_node(node)
-
     for i, name in enumerate(items):
         memlet = Memlet.from_array(name, ctx.sdfg.arrays[name])
         if is_read:

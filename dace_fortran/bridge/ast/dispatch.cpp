@@ -325,6 +325,9 @@ static std::string decodeCharLiteralSymbol(llvm::StringRef sym) {
     if (hi < 0 || lo < 0) return {};
     out.push_back(static_cast<char>(hi * 16 + lo));
   }
+  // Namelist group / member name literals carry a trailing NUL the filename
+  // / status literals do not; drop it so the decoded name is a clean token.
+  while (!out.empty() && out.back() == '\0') out.pop_back();
   return out;
 }
 
@@ -347,6 +350,67 @@ static std::string ioLiteralString(mlir::Value v) {
   return {};
 }
 
+/// The value stored into the alloca ``ref`` (the ``fir.store`` whose memref is
+/// ``ref``), or null.  Flang materialises the namelist descriptor / its member
+/// array on the stack and stores the built-up aggregate; this recovers it.
+static mlir::Value ioStoredValue(mlir::Value ref) {
+  for (auto* user : ref.getUsers())
+    if (auto st = mlir::dyn_cast<fir::StoreOp>(user))
+      if (st.getMemref() == ref) return st.getValue();
+  return {};
+}
+
+/// Walk the ``fir.insert_value`` chain defining ``agg`` and return the value
+/// inserted at the single-element index ``idx`` (null if absent).
+static mlir::Value ioInsertedAt(mlir::Value agg, int64_t idx) {
+  for (int i = 0; i < limits::kSsaBackWalkDepth && agg; ++i) {
+    auto iv = mlir::dyn_cast_or_null<fir::InsertValueOp>(agg.getDefiningOp());
+    if (!iv) break;
+    auto coor = iv.getCoor();
+    if (coor.size() == 1)
+      if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(coor[0]))
+        if (ia.getInt() == idx) return iv.getVal();
+    agg = iv.getAdt();
+  }
+  return {};
+}
+
+/// Extract a namelist group's name and member names from the descriptor the
+/// ``InputNamelist`` call receives.  The descriptor is a stack tuple
+/// ``{groupName, count, members, defIoTable}``; ``members`` is an array of
+/// ``{name, box}`` pairs built by a second insert-value chain.  A member's
+/// name is its Fortran variable name, which is also its SDFG array name.
+static void extractNamelist(mlir::Value descRef, std::string& group, std::vector<std::string>& members) {
+  for (int i = 0; i < limits::kSsaBackWalkDepth && descRef; ++i) {
+    auto* d = descRef.getDefiningOp();
+    if (auto cv = mlir::dyn_cast_or_null<fir::ConvertOp>(d)) { descRef = cv.getValue(); continue; }
+    break;
+  }
+  mlir::Value top = ioStoredValue(descRef);
+  if (!top) return;
+  group = ioLiteralString(ioInsertedAt(top, 0));
+  mlir::Value memberArr = ioStoredValue(ioInsertedAt(top, 2));
+  if (!memberArr) return;
+  // Member-array insert chain: ``[i, 0]`` is member i's name literal.  The
+  // chain is built bottom-up, so collect (index, name) and sort ascending.
+  std::vector<std::pair<int64_t, std::string>> byIndex;
+  for (int i = 0; i < limits::kSsaBackWalkDepth && memberArr; ++i) {
+    auto iv = mlir::dyn_cast_or_null<fir::InsertValueOp>(memberArr.getDefiningOp());
+    if (!iv) break;
+    auto coor = iv.getCoor();
+    if (coor.size() == 2)
+      if (auto slot = mlir::dyn_cast<mlir::IntegerAttr>(coor[1]))
+        if (slot.getInt() == 0)
+          if (auto mi = mlir::dyn_cast<mlir::IntegerAttr>(coor[0])) {
+            std::string nm = ioLiteralString(iv.getVal());
+            if (!nm.empty()) byIndex.emplace_back(mi.getInt(), nm);
+          }
+    memberArr = iv.getAdt();
+  }
+  std::sort(byIndex.begin(), byIndex.end());
+  for (auto& [idx, nm] : byIndex) members.push_back(nm);
+}
+
 /// State threaded across the consecutive ``_FortranAio*`` calls of one
 /// open/read/write/close region (all in one block, in program order).
 /// ``open_file`` holds the filename from the most recent ``open`` until its
@@ -356,6 +420,7 @@ struct IoState {
   std::string open_file;
   std::string op;
   std::string stmt_file;
+  std::string group;  // namelist group name (op == "namelist_read")
   std::vector<std::string> items;
 };
 
@@ -378,6 +443,13 @@ static void recognizeIoCall(fir::CallOp call, llvm::StringRef c, IoState& s, std
     s.op = "write";
     s.stmt_file = s.open_file;
     s.items.clear();
+  } else if (c.contains("InputNamelist") || c.contains("OutputNamelist")) {
+    // ``read(u, nml=grp)`` / ``write(u, nml=grp)``: the descriptor (operand 1)
+    // yields the group name + member (= variable = array) names.
+    s.op = c.contains("Input") ? "namelist_read" : "namelist_write";
+    s.group.clear();
+    s.items.clear();
+    if (args.size() >= 2) extractNamelist(args[1], s.group, s.items);
   } else if ((c.contains("Input") || c.contains("Output")) && !c.contains("Begin") && !c.contains("Ascii")) {
     // A transfer item: Input/OutputDescriptor(box) or the scalar
     // Input/OutputReal*/Integer*(ref); operand 1 is the data.
@@ -393,11 +465,13 @@ static void recognizeIoCall(fir::CallOp call, llvm::StringRef c, IoState& s, std
       io.kind = "iocall";
       io.callee = s.op;
       io.target = s.stmt_file;
+      io.expr = s.group;  // namelist group name (empty for list-directed)
       io.call_args = s.items;
       nodes.push_back(std::move(io));
     }
     s.op.clear();
     s.stmt_file.clear();
+    s.group.clear();
     s.items.clear();
   }
 }

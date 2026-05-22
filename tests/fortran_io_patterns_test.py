@@ -22,8 +22,6 @@ from _util import build_sdfg, have_flang
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
-_NOT_YET = "bridge _FortranAio* recognizer not yet implemented"
-
 
 def test_list_directed_read(tmp_path, monkeypatch):
     """``read(u,*) y`` of a whole array must yield the file's values."""
@@ -48,7 +46,6 @@ end module m
     np.testing.assert_allclose(y, [1.5, 2.5, 3.5])
 
 
-@pytest.mark.xfail(reason=_NOT_YET, strict=False)
 def test_namelist_read_external(tmp_path, monkeypatch):
     """``open`` + ``read(u, nml=cfg)`` + ``close`` (the FV3 init pattern, with a
     local namelist group) must read each member's value from the file."""
