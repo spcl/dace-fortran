@@ -100,7 +100,7 @@ struct VarInfo {
 ///     (function-scope ``_QF..``, program ``_QP..``, the
 ///     ``_QQro`` constant pool, or any non-conforming name).
 std::pair<std::string, std::string> decodeModuleGlobalSymbol(
-    const std::string &sym);
+    const std::string& sym);
 
 /// Walk the module and build one VarInfo per hlfir.declare.
 std::vector<VarInfo> extractVariables(mlir::ModuleOp module);
@@ -112,7 +112,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module);
 /// reader exists, lowered to ``fir.box_addr``).  Dummies passed in
 /// already-allocated and never queried by ``ALLOCATED(...)`` skip the
 /// tracker entirely.
-bool needsAllocatedTracker(const std::string &declName, mlir::ModuleOp module);
+bool needsAllocatedTracker(const std::string& declName, mlir::ModuleOp module);
 
 /// Per-site name for an allocatable ``ALLOCATE``.  Site 0 keeps the
 /// original Fortran name (``x``); site 1+ mints synthetic transient
@@ -120,11 +120,11 @@ bool needsAllocatedTracker(const std::string &declName, mlir::ModuleOp module);
 /// ``extractVariables`` (which registers the synthetic VarInfos) and
 /// ``extractAST`` (which keeps the trace-utils alias map in sync as
 /// it walks the IR).
-std::string allocAliasName(const std::string &fortran, unsigned site);
+std::string allocAliasName(const std::string& fortran, unsigned site);
 
 /// Every ``fir.allocmem`` whose ``uniq_name`` is ``<declName>.alloc`` (the
 /// ALLOCATE sites of one allocatable), in IR walk order.
-std::vector<fir::AllocMemOp> collectAllocSites(const std::string &declName,
+std::vector<fir::AllocMemOp> collectAllocSites(const std::string& declName,
                                                mlir::ModuleOp module);
 
 /// True iff the ALLOCATE sites are mutually exclusive  --  each in a
@@ -132,7 +132,7 @@ std::vector<fir::AllocMemOp> collectAllocSites(const std::string &declName,
 /// ALLOCATE) rather than sequential re-allocation.  Such an array stays
 /// one transient with a branch-dependent extent symbol (the AST builder
 /// assigns ``<name>_d<i>`` per branch), not versioned into ``x_allocK``.
-bool allocSitesInExclusiveBranches(const std::vector<fir::AllocMemOp> &sites);
+bool allocSitesInExclusiveBranches(const std::vector<fir::AllocMemOp>& sites);
 
 /// Partition an allocatable's ALLOCATE sites into buffer equivalence
 /// classes (one DaCe transient each), ordered by first definition.  Two
@@ -143,6 +143,6 @@ bool allocSitesInExclusiveBranches(const std::vector<fir::AllocMemOp> &sites);
 /// extent symbol); a singleton class uses the site's concrete shape.  See
 /// ALLOC_BUFFER_SSA_DESIGN.md.
 std::vector<std::vector<fir::AllocMemOp>> groupAllocSites(
-    const std::string &declName, mlir::ModuleOp module);
+    const std::string& declName, mlir::ModuleOp module);
 
 }  // namespace hlfir_bridge

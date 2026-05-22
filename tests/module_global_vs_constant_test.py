@@ -148,7 +148,7 @@ end module mod_init
     x = np.asfortranarray(np.arange(1, 5, dtype=np.float64))
     y_sdfg = np.zeros(4, dtype=np.float64, order='F')
     y_ref = ref.mod_init.apply_init(x)  # uses the module default 2.5
-    sdfg(x=x, y=y_sdfg)                  # uses the baked default 2.5
+    sdfg(x=x, y=y_sdfg)  # uses the baked default 2.5
     np.testing.assert_allclose(y_sdfg, y_ref, rtol=1e-12)
 
 
@@ -358,7 +358,7 @@ end module mod_kern_b
     y_sdfg = np.zeros(4, dtype=np.float64, order='F')
     y_ref = ref.mod_kern_b.use_state(x)  # accum 1.0 -> 11.0, output x + 11
     accum = np.array([1.0], dtype=np.float64, order='F')  # host default
-    sdfg(x=x, y=y_sdfg, accum=accum)     # 1.0 -> 11.0, output x + 11
+    sdfg(x=x, y=y_sdfg, accum=accum)  # 1.0 -> 11.0, output x + 11
     np.testing.assert_allclose(y_sdfg, y_ref, rtol=1e-12)
     np.testing.assert_allclose(accum, [11.0], rtol=1e-12)
 

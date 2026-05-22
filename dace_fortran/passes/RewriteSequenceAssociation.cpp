@@ -193,7 +193,7 @@ static std::optional<int64_t> traceStoredConstant(mlir::Value memref) {
   // Walk through hlfir.declare wrappers down to the underlying alloca.
   mlir::Value root = memref;
   for (int i = 0; i < 8; ++i) {
-    auto *d = root.getDefiningOp();
+    auto* d = root.getDefiningOp();
     if (!d) return std::nullopt;
     if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(d)) {
       root = decl.getMemref();
@@ -205,11 +205,11 @@ static std::optional<int64_t> traceStoredConstant(mlir::Value memref) {
   // Collect all alias views (the alloca itself plus any hlfir.declare
   // re-declares of it) and look for a single fir.store among their users.
   llvm::SmallVector<mlir::Value, 4> aliases{root};
-  for (auto *u : root.getUsers()) {
+  for (auto* u : root.getUsers()) {
     if (auto d = mlir::dyn_cast<hlfir::DeclareOp>(u)) {
       aliases.push_back(d.getResult(0));
       aliases.push_back(d.getResult(1));
-      for (auto *u2 : d.getResult(0).getUsers()) {
+      for (auto* u2 : d.getResult(0).getUsers()) {
         if (auto d2 = mlir::dyn_cast<hlfir::DeclareOp>(u2)) {
           aliases.push_back(d2.getResult(0));
           aliases.push_back(d2.getResult(1));
@@ -220,7 +220,7 @@ static std::optional<int64_t> traceStoredConstant(mlir::Value memref) {
   fir::StoreOp uniqueStore;
   int storeCount = 0;
   for (auto a : aliases) {
-    for (auto *u : a.getUsers()) {
+    for (auto* u : a.getUsers()) {
       if (auto s = mlir::dyn_cast<fir::StoreOp>(u)) {
         ++storeCount;
         uniqueStore = s;
@@ -237,14 +237,14 @@ static std::optional<int64_t> traceStoredConstant(mlir::Value memref) {
 /// global's body is a tiny region whose terminating ``fir.has_value``
 /// op carries the initial value.
 static std::optional<int64_t> traceGlobalInitialiser(mlir::SymbolRefAttr name,
-                                                     mlir::Operation *anchor) {
+                                                     mlir::Operation* anchor) {
   auto module = anchor->getParentOfType<mlir::ModuleOp>();
   if (!module) return std::nullopt;
   auto sym = module.lookupSymbol(name.getLeafReference());
   auto global = mlir::dyn_cast_or_null<fir::GlobalOp>(sym);
   if (!global) return std::nullopt;
   if (global.getRegion().empty()) return std::nullopt;
-  for (auto &op : global.getRegion().front()) {
+  for (auto& op : global.getRegion().front()) {
     if (auto hv = mlir::dyn_cast<fir::HasValueOp>(op))
       return traceConstIndex(hv.getResval());
   }
@@ -275,7 +275,7 @@ static std::optional<int64_t> traceGlobalInitialiser(mlir::SymbolRefAttr name,
 /// rewrite in that case.
 static std::optional<int64_t> traceConstIndex(mlir::Value v) {
   for (int i = 0; i < 32 && v; ++i) {
-    auto *def = v.getDefiningOp();
+    auto* def = v.getDefiningOp();
     if (!def) return std::nullopt;
     if (auto c = mlir::dyn_cast<mlir::arith::ConstantOp>(def)) {
       if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue()))
@@ -357,7 +357,7 @@ static std::optional<int64_t> traceConstIndex(mlir::Value v) {
       // Fall through to the address_of @global path.
       mlir::Value mem = ld.getMemref();
       for (int j = 0; j < 8 && mem; ++j) {
-        auto *d = mem.getDefiningOp();
+        auto* d = mem.getDefiningOp();
         if (!d) return std::nullopt;
         if (auto ao = mlir::dyn_cast<fir::AddrOfOp>(d))
           return traceGlobalInitialiser(ao.getSymbol(), def);
@@ -434,7 +434,7 @@ struct RewriteSequenceAssociationPass
     // Step 1: find the hlfir.declare that consumes the convert.
     // There should be exactly one (the formal's declare).
     hlfir::DeclareOp formalDecl;
-    for (auto *u : conv.getResult().getUsers()) {
+    for (auto* u : conv.getResult().getUsers()) {
       if (auto d = mlir::dyn_cast<hlfir::DeclareOp>(u)) {
         formalDecl = d;
         break;
@@ -486,7 +486,7 @@ struct RewriteSequenceAssociationPass
     // is only defined after the declare and stays on the path below).
     bool elementAccess = false;
     for (mlir::Value r : {formalDecl.getResult(0), formalDecl.getResult(1)})
-      for (auto *u : r.getUsers())
+      for (auto* u : r.getUsers())
         if (mlir::isa<hlfir::DesignateOp>(u)) elementAccess = true;
     if (auto Nconst = traceConstIndex(
             mlir::dyn_cast<fir::ShapeOp>(formalDecl.getShape().getDefiningOp())
@@ -501,11 +501,14 @@ struct RewriteSequenceAssociationPass
         return b.create<fir::ConvertOp>(loc, idxTy, v).getResult();
       };
       mlir::Value loIdx = toIndex(lo);
-      auto c1 = b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(1));
-      auto cN = b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(N));
+      auto c1 =
+          b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(1));
+      auto cN =
+          b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(N));
       auto cNm1 =
           b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(N - 1));
-      mlir::Value hi = b.create<mlir::arith::AddIOp>(loc, loIdx, cNm1).getResult();
+      mlir::Value hi =
+          b.create<mlir::arith::AddIOp>(loc, loIdx, cNm1).getResult();
       auto refTy = mlir::cast<fir::ReferenceType>(conv.getResult().getType());
       auto eleTy = mlir::cast<fir::SequenceType>(refTy.getEleTy()).getEleTy();
       auto boxTy = fir::BoxType::get(fir::SequenceType::get({N}, eleTy));
@@ -521,9 +524,10 @@ struct RewriteSequenceAssociationPass
       auto sectionDg = b.create<hlfir::DesignateOp>(
           loc, boxTy, eltDg.getMemref(), mlir::StringAttr{}, mlir::Value{},
           mlir::ValueRange{tripletOps}, b.getDenseBoolArrayAttr(isTriplet),
-          mlir::ValueRange{}, mlir::BoolAttr{}, sectionShape, mlir::ValueRange{},
-          fir::FortranVariableFlagsAttr{});
-      auto boxAddr = b.create<fir::BoxAddrOp>(loc, refTy, sectionDg.getResult());
+          mlir::ValueRange{}, mlir::BoolAttr{}, sectionShape,
+          mlir::ValueRange{}, fir::FortranVariableFlagsAttr{});
+      auto boxAddr =
+          b.create<fir::BoxAddrOp>(loc, refTy, sectionDg.getResult());
       formalDecl.getMemrefMutable().assign(boxAddr.getResult());
       conv.erase();
       if (eltDg.getResult().use_empty()) eltDg.erase();

@@ -54,14 +54,14 @@ static ASTNode buildScfIfAsConditional(mlir::scf::IfOp ifOp) {
   c.kind = "conditional";
   c.condition = buildBoolExpr(ifOp.getCondition(), 0);
 
-  auto walkArm = [&](mlir::Region &region) -> std::vector<ASTNode> {
+  auto walkArm = [&](mlir::Region& region) -> std::vector<ASTNode> {
     if (region.empty()) return {};
     auto arm = walkSCFBeforeRegion(region.front());
     // If the scf.if yields values, append one scalar_assign per result
     // reading the matching operand of the arm's scf.yield.
     if (ifOp.getNumResults() > 0) {
       mlir::scf::YieldOp yieldOp;
-      for (auto &op : region.front())
+      for (auto& op : region.front())
         if (auto y = mlir::dyn_cast<mlir::scf::YieldOp>(op)) {
           yieldOp = y;
           break;
@@ -88,9 +88,9 @@ static ASTNode buildScfIfAsConditional(mlir::scf::IfOp ifOp) {
   return c;
 }
 
-std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block &block) {
+std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
   std::vector<ASTNode> out;
-  for (auto &op : block) {
+  for (auto& op : block) {
     if (auto ifOp = mlir::dyn_cast<mlir::scf::IfOp>(op)) {
       out.push_back(buildScfIfAsConditional(ifOp));
       continue;
@@ -126,7 +126,7 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block &block) {
     }
     if (auto sw = mlir::dyn_cast<mlir::scf::IndexSwitchOp>(op)) {
       auto chain = buildIndexSwitchNodes(sw);
-      for (auto &c : chain) out.push_back(std::move(c));
+      for (auto& c : chain) out.push_back(std::move(c));
       continue;
     }
     if (auto assign = mlir::dyn_cast<hlfir::AssignOp>(op)) {
@@ -153,7 +153,7 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block &block) {
       auto memref = st.getMemref();
       auto target = traceToDecl(memref);
       if (target.empty())
-        if (auto *md = memref.getDefiningOp())
+        if (auto* md = memref.getDefiningOp())
           if (mlir::isa<fir::AllocaOp>(md)) target = allocaSynthName(memref);
       if (target.empty()) continue;
       auto expr = buildExpr(st.getValue(), 0);
@@ -188,7 +188,7 @@ static ASTNode buildWhileNode(mlir::scf::WhileOp whileOp) {
 }
 
 static std::string traceLoopIter(fir::DoLoopOp loop) {
-  for (auto &op : loop.getRegion().front())
+  for (auto& op : loop.getRegion().front())
     if (auto st = mlir::dyn_cast<fir::StoreOp>(op)) {
       auto n = traceToDecl(st.getMemref());
       if (!n.empty()) return n;
@@ -211,7 +211,7 @@ static std::string traceLoopIter(fir::DoLoopOp loop) {
 /// :returns: the normalised MPI op tag (``"mpi_send"`` / ``"mpi_recv"``
 /// / ``"mpi_isend"`` / ``"mpi_irecv"`` / ``"mpi_wait"``) for a
 /// recognised callee, else empty.
-static std::string mpiCalleeTag(const std::string &callee) {
+static std::string mpiCalleeTag(const std::string& callee) {
   std::string s = callee;
   if (!s.empty() && s[0] == '@') s.erase(0, 1);
   if (s.rfind("_QP", 0) == 0) s.erase(0, 3);  // external/global mangling
@@ -243,12 +243,12 @@ static std::string mpiCalleeTag(const std::string &callee) {
 ///   isend(buf,count,dt,dest,tag,comm,request,ierr)
 ///   irecv(buf,count,dt,src,tag,comm,request,ierr)
 ///   wait (request,status,ierr)
-static ASTNode buildMpiCallNode(fir::CallOp call, const std::string &mpiOp) {
+static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
   ASTNode n;
   n.kind = "mpicall";
   n.callee = mpiOp;
   auto args = call.getArgOperands();
-  auto resolve = [&](mlir::Value v, const char *what) -> std::string {
+  auto resolve = [&](mlir::Value v, const char* what) -> std::string {
     auto nm = traceToDecl(v);
     if (nm.empty())
       throw std::runtime_error("MPI " + mpiOp + ": cannot resolve the " +
@@ -292,8 +292,7 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string &mpiOp) {
                                ": expected a request argument");
     n.call_args.push_back(resolve(args[6], "request"));
   }
-  if (!isDefault)
-    n.call_args.push_back(commName);
+  if (!isDefault) n.call_args.push_back(commName);
   return n;
 }
 
@@ -301,7 +300,7 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string &mpiOp) {
 // Block walker
 // ---------------------------------------------------------------------------
 
-std::vector<ASTNode> buildAST(mlir::Block &block) {
+std::vector<ASTNode> buildAST(mlir::Block& block) {
   std::vector<ASTNode> nodes;
 
   // Bind / advance the alloc-alias for an ``ALLOCATE``-bound store into an
@@ -312,7 +311,7 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
   // Returns the allocatable's raw Fortran name on a successful match
   // (so the caller can emit a state-change ``<name>_allocated = 1``
   // ASTNode), empty string otherwise.
-  auto bindAllocSite = [&](mlir::Operation *op) -> std::string {
+  auto bindAllocSite = [&](mlir::Operation* op) -> std::string {
     auto store = mlir::dyn_cast<fir::StoreOp>(op);
     if (!store) return {};
     auto valDef = store.getValue().getDefiningOp();
@@ -378,12 +377,12 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
     // mint it, leaving the shape symbol an unbound program argument).
     for (auto sz : allocmem.getShape())
       forEachConstIndexedElement(
-          sz, [](const std::string &arr, const std::vector<int64_t> &idxs) {
+          sz, [](const std::string& arr, const std::vector<int64_t>& idxs) {
             internPosSymbol(arr, idxs);
           });
     return raw;
   };
-  auto emitAllocStateChange = [&](const std::string &name, int value) {
+  auto emitAllocStateChange = [&](const std::string& name, int value) {
     ASTNode n;
     n.kind = "assign";
     n.target = name + "_allocated";
@@ -391,7 +390,7 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
     n.expr = std::to_string(value);
     nodes.push_back(std::move(n));
   };
-  for (auto &op : block) {
+  for (auto& op : block) {
     // Bind / advance the alloc-alias for this allocatable, then
     // emit a state-change ``<name>_allocated = 1`` so downstream
     // ``ALLOCATED(arr)`` reads see the right value.  The ALLOCATE
@@ -415,7 +414,7 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
     if (auto fm = mlir::dyn_cast<fir::FreeMemOp>(&op)) {
       mlir::Value cur = fm.getHeapref();
       for (int i = 0; i < limits::kConvertChainDepth && cur; ++i) {
-        auto *cd = cur.getDefiningOp();
+        auto* cd = cur.getDefiningOp();
         if (!cd) break;
         if (auto cv = mlir::dyn_cast<fir::ConvertOp>(cd)) {
           cur = cv.getValue();
@@ -433,7 +432,7 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
       }
       std::string name;
       if (cur)
-        if (auto *cd = cur.getDefiningOp())
+        if (auto* cd = cur.getDefiningOp())
           if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(cd))
             name = extractName(decl.getUniqName().str());
       if (!name.empty()) emitAllocStateChange(name, 0);
@@ -454,7 +453,7 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
       // proper subscripted expression ``row_ptr[(i) - offset_row_ptr_d0]``.
       auto isArrayElementLoad = [](mlir::Value v) -> bool {
         for (int i = 0; i < 32 && v; ++i) {
-          auto *d = v.getDefiningOp();
+          auto* d = v.getDefiningOp();
           if (!d) break;
           if (mlir::isa<hlfir::DesignateOp>(d)) return true;
           if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
@@ -524,7 +523,7 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
       // inner designate's index is the raw block arg.
       static thread_local int kDoLoopIterCounter = 0;
       bool pushedBlockArg = false;
-      auto &loopBlock = doLoop.getRegion().front();
+      auto& loopBlock = doLoop.getRegion().front();
       if (n.loop_iter.empty() && loopBlock.getNumArguments() > 0) {
         n.loop_iter = "_doit_" + std::to_string(kDoLoopIterCounter++);
         indexStack().push_back({loopBlock.getArgument(0), n.loop_iter});
@@ -539,8 +538,8 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
       auto src = assign.getOperand(0);
       auto dst = assign.getOperand(1);
       {
-        auto *sop = src.getDefiningOp();
-        FILE *fd = fopen("/tmp/probes/dbg.log", "a");
+        auto* sop = src.getDefiningOp();
+        FILE* fd = fopen("/tmp/probes/dbg.log", "a");
         if (fd) {
           fprintf(fd, "DEBUG ASSIGN src=%s\n",
                   sop ? sop->getName().getStringRef().str().c_str() : "<null>");
@@ -555,9 +554,9 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
       // retargeted to ``%dst``; if we let the per-element stores
       // through here they'd surface as orphan assigns into
       // ``.tmp.arrayctor`` and break downstream memlet parsing.
-      if (auto *dd = dst.getDefiningOp()) {
+      if (auto* dd = dst.getDefiningOp()) {
         if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(dd)) {
-          if (auto *md = dg.getMemref().getDefiningOp()) {
+          if (auto* md = dg.getMemref().getDefiningOp()) {
             if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(md)) {
               if (decl.getUniqName().str().find(".tmp.") != std::string::npos) {
                 continue;
@@ -606,7 +605,7 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
         if (dstIsSection || srcIsSection) {
           auto built = buildSectionToSectionAssign(assign, dst);
           if (!built.empty()) {
-            for (auto &n : built) nodes.push_back(std::move(n));
+            for (auto& n : built) nodes.push_back(std::move(n));
             continue;
           }
         }
@@ -632,7 +631,7 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
         if (auto sec = asSectionDesignate(dst)) {
           auto built = buildSectionScalarAssign(assign, sec);
           if (!built.empty()) {
-            for (auto &built_n : built) nodes.push_back(std::move(built_n));
+            for (auto& built_n : built) nodes.push_back(std::move(built_n));
             continue;
           }
         }
@@ -642,7 +641,7 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
         if (dst_is_array) {
           auto built = buildWholeArrayScalarBroadcast(assign);
           if (!built.empty()) {
-            for (auto &built_n : built) nodes.push_back(std::move(built_n));
+            for (auto& built_n : built) nodes.push_back(std::move(built_n));
             continue;
           }
         }
@@ -669,7 +668,7 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
       // it here so the dispatch below pattern-matches the real
       // producer, not the convert.
       mlir::Value srcPeeled = src;
-      while (auto *pdef = srcPeeled.getDefiningOp()) {
+      while (auto* pdef = srcPeeled.getDefiningOp()) {
         if (auto cv = mlir::dyn_cast<fir::ConvertOp>(pdef)) {
           srcPeeled = cv.getValue();
           continue;
@@ -697,7 +696,7 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
       if (auto asExpr = mlir::dyn_cast_or_null<hlfir::AsExprOp>(
               srcPeeled.getDefiningOp())) {
         hlfir::DeclareOp tmpDecl;
-        if (auto *vd = asExpr.getVar().getDefiningOp())
+        if (auto* vd = asExpr.getVar().getDefiningOp())
           tmpDecl = mlir::dyn_cast<hlfir::DeclareOp>(vd);
         bool is_arrayctor = false;
         if (tmpDecl) {
@@ -707,19 +706,19 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
         if (is_arrayctor) {
           // Resolve the destination's Fortran name once.
           std::string dst_name;
-          if (auto *dd = dst.getDefiningOp())
+          if (auto* dd = dst.getDefiningOp())
             if (auto declOp = mlir::dyn_cast<hlfir::DeclareOp>(dd))
               dst_name = extractName(declOp.getUniqName().str());
           if (dst_name.empty()) dst_name = traceToDecl(dst);
           if (!dst_name.empty()) {
             std::vector<ASTNode> elem_assigns;
             bool every_idx_const = true;
-            for (auto &op2 : *assign->getBlock()) {
+            for (auto& op2 : *assign->getBlock()) {
               auto inner = mlir::dyn_cast<hlfir::AssignOp>(&op2);
               if (!inner) continue;
               if (inner == assign) break;  // stop at the final assign
               auto inner_dst = inner.getOperand(1);
-              auto *iddef = inner_dst.getDefiningOp();
+              auto* iddef = inner_dst.getDefiningOp();
               if (!iddef) continue;
               auto inner_dg = mlir::dyn_cast<hlfir::DesignateOp>(iddef);
               if (!inner_dg) continue;
@@ -757,21 +756,21 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
               elem_assigns.push_back(std::move(a));
             }
             if (every_idx_const && !elem_assigns.empty()) {
-              for (auto &n : elem_assigns) nodes.push_back(std::move(n));
+              for (auto& n : elem_assigns) nodes.push_back(std::move(n));
               continue;
             }
           }
         }
       }
 
-      if (auto *sd = srcPeeled.getDefiningOp()) {
+      if (auto* sd = srcPeeled.getDefiningOp()) {
         if (auto elem = mlir::dyn_cast<hlfir::ElementalOp>(sd)) {
           auto merge_built = buildMergeLibcall(assign, elem);
           if (!merge_built.empty()) {
-            for (auto &n : merge_built) nodes.push_back(std::move(n));
+            for (auto& n : merge_built) nodes.push_back(std::move(n));
             continue;
           }
-          for (auto &n : buildElementalAssign(assign, elem))
+          for (auto& n : buildElementalAssign(assign, elem))
             nodes.push_back(std::move(n));
           continue;
         }
@@ -797,7 +796,7 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
             {"hlfir.count", "count"},
         };
         bool libMatched = false;
-        for (auto &e : kLibTable) {
+        for (auto& e : kLibTable) {
           if (srcOpName == e.op) {
             // Mode C: ``hlfir.count`` whose first operand is
             // an ``hlfir.elemental`` (comparison-as-mask /
@@ -806,11 +805,11 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
             // then route through ``CountLibraryNode``.
             if (e.op == "hlfir.count" && sd->getNumOperands() > 0) {
               auto mask_src = sd->getOperand(0);
-              if (auto *ms = mask_src.getDefiningOp()) {
+              if (auto* ms = mask_src.getDefiningOp()) {
                 if (auto elem_src = mlir::dyn_cast<hlfir::ElementalOp>(ms)) {
                   auto built = buildElementalCountLibcall(assign, elem_src);
                   if (!built.empty()) {
-                    for (auto &n : built) nodes.push_back(std::move(n));
+                    for (auto& n : built) nodes.push_back(std::move(n));
                     libMatched = true;
                     break;
                   }
@@ -836,13 +835,13 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
             bool needSubst = false;
             for (unsigned i = 0; i < sd->getNumOperands(); ++i) {
               auto opnd = sd->getOperand(i);
-              auto *od = opnd.getDefiningOp();
+              auto* od = opnd.getDefiningOp();
               if (!od) continue;
               auto elem = mlir::dyn_cast<hlfir::ElementalOp>(od);
               if (!elem) continue;
               auto [trName, prelude] = materialiseElementalForLibcall(elem);
               if (trName.empty()) continue;
-              for (auto &n : prelude) nodes.push_back(std::move(n));
+              for (auto& n : prelude) nodes.push_back(std::move(n));
               elemSubst[i] = std::move(trName);
               needSubst = true;
             }
@@ -894,7 +893,7 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
             // and the optional ``dim`` argument).
         };
         bool matched = false;
-        for (auto &e : kRedTable) {
+        for (auto& e : kRedTable) {
           if (opName == e.op) {
             // If the reduction source is a section designate
             // (``mask(lo:hi, jk)``) we can't use DaCe's Reduce
@@ -919,7 +918,7 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
                          srcVal.getDefiningOp())) {
                 srcVal = cv.getValue();
               }
-              if (auto *srcOp = srcVal.getDefiningOp()) {
+              if (auto* srcOp = srcVal.getDefiningOp()) {
                 if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(srcOp)) {
                   bool hasTrip = false;
                   for (bool t : dg.getIsTriplet())
@@ -931,7 +930,7 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
                     auto built = buildSectionReduceAssign(
                         assign, dg, e.py_op.str(), e.identity.str());
                     if (!built.empty()) {
-                      for (auto &bn : built) nodes.push_back(std::move(bn));
+                      for (auto& bn : built) nodes.push_back(std::move(bn));
                       emitted = true;
                     }
                   }
@@ -949,12 +948,12 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
             if (!emitted && (e.op == "hlfir.any" || e.op == "hlfir.all") &&
                 sd->getNumOperands() > 0) {
               auto srcVal = sd->getOperand(0);
-              if (auto *srcOp = srcVal.getDefiningOp())
+              if (auto* srcOp = srcVal.getDefiningOp())
                 if (auto elem_src = mlir::dyn_cast<hlfir::ElementalOp>(srcOp)) {
                   auto built = buildElementalAnyAllReduce(
                       assign, elem_src, e.wcr.str(), e.identity.str());
                   if (!built.empty()) {
-                    for (auto &bn : built) nodes.push_back(std::move(bn));
+                    for (auto& bn : built) nodes.push_back(std::move(bn));
                     emitted = true;
                   }
                 }
@@ -977,10 +976,10 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
       // fir.freemem, reset box to zero }``.  Carries no observable
       // side effect in the SDFG model (we treat allocatables as
       // single-allocation transients)  --  skip the whole construct.
-      auto isAllocCleanup = [](mlir::Region &region) {
+      auto isAllocCleanup = [](mlir::Region& region) {
         if (region.empty()) return false;
         bool hasFreemem = false;
-        for (auto &op : region.front()) {
+        for (auto& op : region.front()) {
           auto nm = op.getName().getStringRef();
           if (nm == "fir.freemem") {
             hasFreemem = true;
@@ -1049,7 +1048,7 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
     }
     if (auto sw = mlir::dyn_cast<mlir::scf::IndexSwitchOp>(op)) {
       auto chain = buildIndexSwitchNodes(sw);
-      for (auto &c : chain) nodes.push_back(std::move(c));
+      for (auto& c : chain) nodes.push_back(std::move(c));
       continue;
     }
     if (auto sel = mlir::dyn_cast<fir::SelectCaseOp>(op)) {
@@ -1067,7 +1066,7 @@ std::vector<ASTNode> buildAST(mlir::Block &block) {
       auto memref = st.getMemref();
       auto target = traceToDecl(memref);
       if (target.empty())
-        if (auto *md = memref.getDefiningOp())
+        if (auto* md = memref.getDefiningOp())
           if (mlir::isa<fir::AllocaOp>(md)) target = allocaSynthName(memref);
       if (target.empty()) continue;
       auto expr = buildExpr(st.getValue(), 0);
@@ -1157,7 +1156,7 @@ std::vector<ASTNode> extractAST(mlir::ModuleOp module) {
     if (!allocNames.empty()) {
       std::vector<ASTNode> initNodes;
       initNodes.reserve(allocNames.size());
-      for (const auto &n : allocNames) {
+      for (const auto& n : allocNames) {
         ASTNode init;
         init.kind = "assign";
         init.target = n + "_allocated";
@@ -1174,12 +1173,12 @@ std::vector<ASTNode> extractAST(mlir::ModuleOp module) {
     // (symbol name, source array, per-dim 1-based indices).
     std::vector<std::tuple<std::string, std::string, std::vector<int64_t>>>
         entries;
-    for (auto &kv : kPosSymbolRegistry)
+    for (auto& kv : kPosSymbolRegistry)
       entries.emplace_back(kv.second, kv.first.first, kv.first.second);
     std::sort(entries.begin(), entries.end());
     std::vector<ASTNode> initNodes;
     initNodes.reserve(entries.size());
-    for (auto &e : entries) {
+    for (auto& e : entries) {
       ASTNode init;
       init.kind = "symbol_init";
       init.target = std::get<0>(e);       // symbol name
@@ -1201,7 +1200,7 @@ std::vector<ASTNode> extractAST(mlir::ModuleOp module) {
 // synth scalar the scf.condition handler assigns each iteration.
 static std::string scfSwitchValueName(mlir::Value v) {
   for (int i = 0; i < limits::kTraceToDeclMax && v; ++i) {
-    auto *d = v.getDefiningOp();
+    auto* d = v.getDefiningOp();
     if (!d) break;
     if (auto cc = mlir::dyn_cast<mlir::arith::IndexCastUIOp>(d)) {
       v = cc.getIn();

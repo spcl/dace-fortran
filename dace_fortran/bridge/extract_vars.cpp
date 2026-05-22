@@ -41,10 +41,22 @@ namespace hlfir_bridge {
 static mlir::Type peelTypeLayers(mlir::Type t,
                                  int maxDepth = limits::kTypeWrapperPeelDepth) {
   for (int i = 0; i < maxDepth; ++i) {
-    if (auto b = mlir::dyn_cast<fir::BoxType>(t)) { t = b.getEleTy(); continue; }
-    if (auto r = mlir::dyn_cast<fir::ReferenceType>(t)) { t = r.getEleTy(); continue; }
-    if (auto h = mlir::dyn_cast<fir::HeapType>(t)) { t = h.getEleTy(); continue; }
-    if (auto p = mlir::dyn_cast<fir::PointerType>(t)) { t = p.getEleTy(); continue; }
+    if (auto b = mlir::dyn_cast<fir::BoxType>(t)) {
+      t = b.getEleTy();
+      continue;
+    }
+    if (auto r = mlir::dyn_cast<fir::ReferenceType>(t)) {
+      t = r.getEleTy();
+      continue;
+    }
+    if (auto h = mlir::dyn_cast<fir::HeapType>(t)) {
+      t = h.getEleTy();
+      continue;
+    }
+    if (auto p = mlir::dyn_cast<fir::PointerType>(t)) {
+      t = p.getEleTy();
+      continue;
+    }
     break;
   }
   return t;
@@ -131,8 +143,8 @@ static std::vector<std::string> resolveShapeSyms(hlfir::DeclareOp decl) {
 /// ``<declUniqName>.alloc``, in IR walk order.  Multiple matches indicate
 /// that the user wrote more than one ``ALLOCATE`` for the variable
 /// (e.g. across an explicit ``DEALLOCATE`` + re-``ALLOCATE``).
-std::vector<fir::AllocMemOp> collectAllocSites(
-    const std::string &declName, mlir::ModuleOp module) {
+std::vector<fir::AllocMemOp> collectAllocSites(const std::string& declName,
+                                               mlir::ModuleOp module) {
   std::vector<fir::AllocMemOp> sites;
   if (declName.empty()) return sites;
   std::string allocName = declName + ".alloc";
@@ -157,14 +169,13 @@ std::vector<fir::AllocMemOp> collectAllocSites(
 ///
 /// Recognised shape: every site sits inside one common enclosing if, and
 /// no two sites share that if's branch region (so exactly one alloc fires).
-bool allocSitesInExclusiveBranches(
-    const std::vector<fir::AllocMemOp> &sites) {
+bool allocSitesInExclusiveBranches(const std::vector<fir::AllocMemOp>& sites) {
   if (sites.size() < 2) return false;
   // Map each enclosing if of ``op`` to the region of it that holds ``op``.
-  auto ifRegions = [](mlir::Operation *op) {
-    std::map<mlir::Operation *, mlir::Region *> m;
-    for (mlir::Region *r = op->getParentRegion(); r;) {
-      mlir::Operation *p = r->getParentOp();
+  auto ifRegions = [](mlir::Operation* op) {
+    std::map<mlir::Operation*, mlir::Region*> m;
+    for (mlir::Region* r = op->getParentRegion(); r;) {
+      mlir::Operation* p = r->getParentOp();
       if (!p) break;
       if (mlir::isa<mlir::scf::IfOp, fir::IfOp>(p)) m[p] = r;
       r = p->getParentRegion();
@@ -173,9 +184,9 @@ bool allocSitesInExclusiveBranches(
   };
   // Two ops are mutually exclusive iff a common-ancestor if holds them in
   // different regions (then vs else).
-  auto exclusive = [&](mlir::Operation *a, mlir::Operation *b) {
+  auto exclusive = [&](mlir::Operation* a, mlir::Operation* b) {
     auto am = ifRegions(a);
-    for (auto &kv : ifRegions(b)) {
+    for (auto& kv : ifRegions(b)) {
       auto it = am.find(kv.first);
       if (it != am.end() && it->second != kv.second) return true;
     }
@@ -190,14 +201,14 @@ bool allocSitesInExclusiveBranches(
 }
 
 std::vector<std::vector<fir::AllocMemOp>> groupAllocSites(
-    const std::string &declName, mlir::ModuleOp module) {
+    const std::string& declName, mlir::ModuleOp module) {
   auto sites = collectAllocSites(declName, module);
   std::vector<std::vector<fir::AllocMemOp>> classes;
   unsigned n = sites.size();
   if (n == 0) return classes;
 
   // site index by allocmem op; union-find over indices.
-  std::map<mlir::Operation *, unsigned> idxOf;
+  std::map<mlir::Operation*, unsigned> idxOf;
   for (unsigned i = 0; i < n; ++i) idxOf[sites[i].getOperation()] = i;
   std::vector<unsigned> parent(n);
   for (unsigned i = 0; i < n; ++i) parent[i] = i;
@@ -214,15 +225,15 @@ std::vector<std::vector<fir::AllocMemOp>> groupAllocSites(
   // DEALLOCATE handling is needed: re-ALLOCATE already replaces, and a
   // branch that allocates-then-frees still ends with no extra live site.
   using Reaching = std::set<unsigned>;
-  std::function<Reaching(mlir::Block &, Reaching)> walk =
-      [&](mlir::Block &blk, Reaching reaching) -> Reaching {
-    auto mergeBranches = [&](const Reaching &t, const Reaching &e) {
+  std::function<Reaching(mlir::Block&, Reaching)> walk =
+      [&](mlir::Block& blk, Reaching reaching) -> Reaching {
+    auto mergeBranches = [&](const Reaching& t, const Reaching& e) {
       if (t.empty() || e.empty()) return;
       std::vector<unsigned> all(t.begin(), t.end());
       all.insert(all.end(), e.begin(), e.end());
       for (size_t k = 1; k < all.size(); ++k) unite(all[0], all[k]);
     };
-    for (auto &op : blk) {
+    for (auto& op : blk) {
       if (auto am = mlir::dyn_cast<fir::AllocMemOp>(&op)) {
         auto it = idxOf.find(&op);
         if (it != idxOf.end()) {
@@ -255,8 +266,8 @@ std::vector<std::vector<fir::AllocMemOp>> groupAllocSites(
       // Any other region-bearing op (loops, ...): thread the reaching set
       // through each contained block.  An ALLOCATE inside a loop body
       // re-allocates per iteration -- ``reaching`` simply tracks the last.
-      for (auto &reg : op.getRegions())
-        for (auto &b : reg.getBlocks()) reaching = walk(b, reaching);
+      for (auto& reg : op.getRegions())
+        for (auto& b : reg.getBlocks()) reaching = walk(b, reaching);
     }
     return reaching;
   };
@@ -268,10 +279,10 @@ std::vector<std::vector<fir::AllocMemOp>> groupAllocSites(
   // so members[0] is the class's minimum index; order classes by it.
   std::map<unsigned, std::vector<fir::AllocMemOp>> byRoot;
   for (unsigned i = 0; i < n; ++i) byRoot[find(i)].push_back(sites[i]);
-  for (auto &kv : byRoot) classes.push_back(std::move(kv.second));
+  for (auto& kv : byRoot) classes.push_back(std::move(kv.second));
   std::sort(classes.begin(), classes.end(),
-            [&](const std::vector<fir::AllocMemOp> &a,
-                const std::vector<fir::AllocMemOp> &b) {
+            [&](const std::vector<fir::AllocMemOp>& a,
+                const std::vector<fir::AllocMemOp>& b) {
               fir::AllocMemOp fa = a.front(), fb = b.front();
               return idxOf[fa.getOperation()] < idxOf[fb.getOperation()];
             });
@@ -334,12 +345,12 @@ static std::vector<std::string> lowerBoundsFromAllocSite(
   // tight worklist (depth bounded).
   auto peelToEmbox = [](mlir::Value v) -> fir::EmboxOp {
     for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
-      for (auto *u : v.getUsers()) {
+      for (auto* u : v.getUsers()) {
         if (auto eb = mlir::dyn_cast<fir::EmboxOp>(u)) return eb;
       }
       // ``fir.convert`` produces a fresh value -- check its users.
       mlir::Value next;
-      for (auto *u : v.getUsers()) {
+      for (auto* u : v.getUsers()) {
         if (auto cv = mlir::dyn_cast<fir::ConvertOp>(u)) {
           next = cv.getResult();
           break;
@@ -378,7 +389,7 @@ static std::vector<std::string> lowerBoundsFromAllocSite(
 /// ``box_addr(load arr_box) != 0``; if no such reader exists the
 /// per-allocatable ``<arr>_allocated`` tracker scalar and its init
 /// state are dead weight in the SDFG.
-static bool hasAllocatedReader(const std::string &shortName,
+static bool hasAllocatedReader(const std::string& shortName,
                                mlir::ModuleOp module) {
   if (shortName.empty()) return false;
   bool found = false;
@@ -387,7 +398,7 @@ static bool hasAllocatedReader(const std::string &shortName,
     // ``box_addr``'s operand is normally a ``fir.load`` of a
     // box-ref; trace through that load to the declare.
     auto src = ba.getVal();
-    if (auto *sd = src.getDefiningOp())
+    if (auto* sd = src.getDefiningOp())
       if (auto ld = mlir::dyn_cast<fir::LoadOp>(sd)) src = ld.getMemref();
     // ``traceToDecl`` returns the short (extracted) name  --  match
     // against ``shortName``, not the full mangled uniq_name.
@@ -404,7 +415,7 @@ static bool hasAllocatedReader(const std::string &shortName,
 /// exists, keyed on the short post-``extractName`` name).  Dummy /
 /// module-level allocatables passed in already-allocated and never
 /// queried by ``ALLOCATED(...)`` skip the tracker entirely.
-bool needsAllocatedTracker(const std::string &declUniqName,
+bool needsAllocatedTracker(const std::string& declUniqName,
                            mlir::ModuleOp module) {
   if (declUniqName.empty()) return false;
   if (!collectAllocSites(declUniqName, module).empty()) return true;
@@ -415,7 +426,7 @@ bool needsAllocatedTracker(const std::string &declUniqName,
 /// every existing single-allocation test stays green); subsequent
 /// allocations mint fresh transient names ``<x>_alloc1``,
 /// ``<x>_alloc2``, ... one per re-allocation site.
-std::string allocAliasName(const std::string &fortran, unsigned site) {
+std::string allocAliasName(const std::string& fortran, unsigned site) {
   if (site == 0) return fortran;
   return fortran + "_alloc" + std::to_string(site);
 }
@@ -466,7 +477,7 @@ static std::vector<std::string> resolveLowerBounds(hlfir::DeclareOp decl) {
 static bool designateRootedAt(hlfir::DesignateOp dg, hlfir::DeclareOp decl) {
   mlir::Value v = dg.getMemref();
   for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
-    auto *d = v.getDefiningOp();
+    auto* d = v.getDefiningOp();
     if (!d) return false;
     if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(d)) {
       if (dc == decl) return true;
@@ -568,7 +579,7 @@ static std::optional<int64_t> traceConstIntThroughLoad(mlir::Value v,
                                                        int depth = 0) {
   if (depth > 64 || !v) return std::nullopt;
   if (auto c = traceConstInt(v)) return c;
-  auto *def = v.getDefiningOp();
+  auto* def = v.getDefiningOp();
   if (!def) return std::nullopt;
 
   // hlfir.associate %c {adapt.valuebyref} -- the callee received
@@ -616,7 +627,7 @@ static std::optional<int64_t> traceConstIntThroughLoad(mlir::Value v,
   // No store reached -- the load may read a declare that aliases an
   // ``hlfir.associate`` (inlined by-value dummy with no explicit
   // store).  Peel the load target through the declare chain.
-  if (auto *tdef = target.getDefiningOp()) {
+  if (auto* tdef = target.getDefiningOp()) {
     if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(tdef))
       return traceConstIntThroughLoad(dc.getMemref(), func, depth + 1);
   }
@@ -624,8 +635,8 @@ static std::optional<int64_t> traceConstIntThroughLoad(mlir::Value v,
 }
 
 static void inferLowerBoundsFromLiteralAccesses(
-    hlfir::DeclareOp decl, std::vector<std::string> &lbs, int rank,
-    std::vector<bool> *seenLitOut = nullptr) {
+    hlfir::DeclareOp decl, std::vector<std::string>& lbs, int rank,
+    std::vector<bool>* seenLitOut = nullptr) {
   if (rank <= 0) return;
   auto func = decl->getParentOfType<mlir::func::FuncOp>();
   if (!func) return;
@@ -666,7 +677,7 @@ static void inferLowerBoundsFromLiteralAccesses(
 /// Find the fir.do_loop induction variable's Fortran name by looking for
 /// `fir.store %block_arg, %alloca` in the loop body.
 static std::string traceLoopIter(fir::DoLoopOp loop) {
-  for (auto &op : loop.getRegion().front())
+  for (auto& op : loop.getRegion().front())
     if (auto st = mlir::dyn_cast<fir::StoreOp>(op)) {
       auto n = traceToDecl(st.getMemref());
       if (!n.empty()) return n;
@@ -692,10 +703,10 @@ static std::string traceLoopIter(fir::DoLoopOp loop) {
 /// lift-cf-to-scf chain wraps a condition in (``arith.xori/andi/ori/
 /// trunci/extui/extsi``) and ``fir.convert``.  Stops at a ``fir.load``
 /// (hands off to ``traceToDecl``) or an op it doesn't recognise.
-static void collectIntegerScalarReads(mlir::Value v, std::set<std::string> &out,
+static void collectIntegerScalarReads(mlir::Value v, std::set<std::string>& out,
                                       int depth = 0) {
   if (depth > 20 || !v) return;
-  auto *def = v.getDefiningOp();
+  auto* def = v.getDefiningOp();
   if (!def) return;
 
   // Comparison leaves: recurse into both operands to catch both sides
@@ -712,10 +723,10 @@ static void collectIntegerScalarReads(mlir::Value v, std::set<std::string> &out,
   // declared scalar leaf is promoted.
   if (mlir::isa<mlir::arith::AddIOp, mlir::arith::SubIOp, mlir::arith::MulIOp,
                 mlir::arith::DivSIOp, mlir::arith::DivUIOp,
-                mlir::arith::RemSIOp, mlir::arith::RemUIOp,
-                mlir::arith::XOrIOp, mlir::arith::AndIOp, mlir::arith::OrIOp,
-                mlir::arith::TruncIOp, mlir::arith::ExtUIOp,
-                mlir::arith::ExtSIOp, fir::ConvertOp>(def)) {
+                mlir::arith::RemSIOp, mlir::arith::RemUIOp, mlir::arith::XOrIOp,
+                mlir::arith::AndIOp, mlir::arith::OrIOp, mlir::arith::TruncIOp,
+                mlir::arith::ExtUIOp, mlir::arith::ExtSIOp, fir::ConvertOp>(
+          def)) {
     for (auto operand : def->getOperands())
       collectIntegerScalarReads(operand, out, depth + 1);
     return;
@@ -809,10 +820,10 @@ static std::vector<double> extractGlobalInitData(fir::GlobalOp gop) {
   // terminator  --  extract the constant attribute, narrowing to a
   // single-element ``out`` vector.
   if (gop.getRegion().empty()) return out;
-  for (auto &op : gop.getRegion().front()) {
+  for (auto& op : gop.getRegion().front()) {
     auto hv = mlir::dyn_cast<fir::HasValueOp>(op);
     if (!hv) continue;
-    auto *def = hv.getResval().getDefiningOp();
+    auto* def = hv.getResval().getDefiningOp();
     // Peel a kind/representation ``fir.convert`` (a LOGICAL init is
     // ``arith.constant false : i1`` -> ``fir.convert i1 to logical<4>``).
     while (def)
@@ -843,7 +854,7 @@ static std::vector<double> extractGlobalInitData(fir::GlobalOp gop) {
 // inserts between the address_of and the declare's memref.
 static std::string traceToGlobalSymbol(mlir::Value memref) {
   for (int i = 0; i < limits::kSsaBackWalkDepth && memref; ++i) {
-    auto *d = memref.getDefiningOp();
+    auto* d = memref.getDefiningOp();
     if (!d) return {};
     if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
       memref = cv.getValue();
@@ -858,7 +869,7 @@ static std::string traceToGlobalSymbol(mlir::Value memref) {
 }
 
 std::pair<std::string, std::string> decodeModuleGlobalSymbol(
-    const std::string &sym) {
+    const std::string& sym) {
   llvm::StringRef s(sym);
   // Module data only.  ``_QF`` = function-scope SAVE local (private,
   // not caller-bindable), ``_QP`` = program/procedure, ``_QQ`` =
@@ -896,7 +907,7 @@ std::pair<std::string, std::string> decodeModuleGlobalSymbol(
 // table an init routine such as ``qsmith_init_w`` fills, then a reader
 // consumes) from a read-only caller-supplied config global: the former is
 // the kernel's own transient, not an input the caller must provide.
-static bool globalIsWritten(const std::string &sym, mlir::ModuleOp module) {
+static bool globalIsWritten(const std::string& sym, mlir::ModuleOp module) {
   llvm::SmallVector<hlfir::DeclareOp, 4> decls;
   module.walk([&](hlfir::DeclareOp d) {
     if (traceToGlobalSymbol(d.getMemref()) == sym) decls.push_back(d);
@@ -905,14 +916,14 @@ static bool globalIsWritten(const std::string &sym, mlir::ModuleOp module) {
   auto writes = [&](mlir::Value dest) -> bool {
     for (auto d : decls) {
       if (dest == d.getResult(0) || dest == d.getResult(1)) return true;
-      if (auto *dd = dest.getDefiningOp())
+      if (auto* dd = dest.getDefiningOp())
         if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(dd))
           if (designateRootedAt(dg, d)) return true;
     }
     return false;
   };
   bool written = false;
-  module.walk([&](mlir::Operation *op) {
+  module.walk([&](mlir::Operation* op) {
     if (written) return;
     if (auto st = mlir::dyn_cast<fir::StoreOp>(op)) {
       if (writes(st.getMemref())) written = true;
@@ -962,7 +973,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
     // collisions.
     auto isOwnStorage = [](hlfir::DeclareOp op) -> bool {
       mlir::Value memref = op.getMemref();
-      if (auto *def = memref.getDefiningOp())
+      if (auto* def = memref.getDefiningOp())
         return mlir::isa<fir::AllocaOp, fir::AllocMemOp>(def);
       if (auto ba = mlir::dyn_cast<mlir::BlockArgument>(memref))
         return mlir::isa_and_nonnull<mlir::func::FuncOp>(
@@ -978,7 +989,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
     // own storage, so a single genuine local keeps its bare name.
     llvm::StringMap<llvm::StringSet<>> ownStorageScopes;
     module.walk([&](hlfir::DeclareOp op) {
-      auto *fn = op->getParentOfType<mlir::func::FuncOp>().getOperation();
+      auto* fn = op->getParentOfType<mlir::func::FuncOp>().getOperation();
       if (auto f = mlir::dyn_cast_or_null<mlir::func::FuncOp>(fn))
         if (f.isPrivate()) return;
       if (!isOwnStorage(op)) return;
@@ -993,10 +1004,10 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
     // below regardless.
     llvm::StringMap<llvm::SmallVector<hlfir::DeclareOp, 2>> byShort;
     module.walk([&](hlfir::DeclareOp op) {
-      auto *fn = op->getParentOfType<mlir::func::FuncOp>().getOperation();
+      auto* fn = op->getParentOfType<mlir::func::FuncOp>().getOperation();
       if (auto f = mlir::dyn_cast_or_null<mlir::func::FuncOp>(fn))
         if (f.isPrivate()) return;
-      auto *def = op.getMemref().getDefiningOp();
+      auto* def = op.getMemref().getDefiningOp();
       if (!def || !mlir::isa<fir::AllocaOp>(def)) return;
       byShort[extractName(op.getUniqName().str())].push_back(op);
     });
@@ -1015,7 +1026,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
       entryScope = sn.substr(pPos + 1);
       break;
     }
-    for (auto &kv : byShort) {
+    for (auto& kv : byShort) {
       // Only rename a short name owned by more than one procedure.  A
       // single-owner name (the common case, including same-scope
       // shape-hint duplicate declares) is unambiguous; leave it alone so
@@ -1049,7 +1060,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
   {
     auto leadsToDesignate = [](mlir::Value v) -> bool {
       for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
-        auto *d = v.getDefiningOp();
+        auto* d = v.getDefiningOp();
         if (!d) return false;
         if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
           v = cv.getValue();
@@ -1066,17 +1077,17 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
     };
     llvm::StringMap<llvm::SmallVector<hlfir::DeclareOp, 4>> byUniq;
     module.walk([&](hlfir::DeclareOp op) {
-      auto *fn = op->getParentOfType<mlir::func::FuncOp>().getOperation();
+      auto* fn = op->getParentOfType<mlir::func::FuncOp>().getOperation();
       if (auto f = mlir::dyn_cast_or_null<mlir::func::FuncOp>(fn))
         if (f.isPrivate()) return;
       if (!op.getDummyScope()) return;
       if (!leadsToDesignate(op.getMemref())) return;
       byUniq[op.getUniqName()].push_back(op);
     });
-    for (auto &kv : byUniq) {
-      auto &group = kv.second;
+    for (auto& kv : byUniq) {
+      auto& group = kv.second;
       if (group.size() < 2) continue;
-      llvm::SmallPtrSet<mlir::Operation *, 4> scopes;
+      llvm::SmallPtrSet<mlir::Operation*, 4> scopes;
       for (auto op : group)
         if (auto ds = op.getDummyScope().getDefiningOp()) scopes.insert(ds);
       if (scopes.size() < 2) continue;
@@ -1105,7 +1116,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
     // callsites).  Their dummy declares  --  typed e.g.
     // ``fir.class<T>``  --  would otherwise surface as phantom
     // top-level program args at SDFG-build time.
-    auto *parentOp = op->getParentOfType<mlir::func::FuncOp>().getOperation();
+    auto* parentOp = op->getParentOfType<mlir::func::FuncOp>().getOperation();
     if (auto fn = mlir::dyn_cast_or_null<mlir::func::FuncOp>(parentOp))
       if (fn.isPrivate()) return;
     if (asAssumedShapeAlias(op)) return;
@@ -1177,8 +1188,8 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
   // ``DO jk = nflatlev, nlev`` recognises ``nflatlev`` as a symbol  --
   // otherwise codegen generates an int*-vs-int64_t mismatch in the
   // loop initialiser.
-  for (auto &op : decls) {
-    for (auto &s : resolveShapeSyms(op)) {
+  for (auto& op : decls) {
+    for (auto& s : resolveShapeSyms(op)) {
       if (s == "?") continue;
       // Bare-name results (single declare name / integer literal)
       // get inserted directly.  Expression-string results (from
@@ -1238,8 +1249,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
       // ``base``, leaving it a transient scalar that the memlet subset
       // then references by name -- which DaCe can't allocate across the
       // states that read it.
-      for (auto idx : operands)
-        collectIntegerScalarReads(idx, symbolNames);
+      for (auto idx : operands) collectIntegerScalarReads(idx, symbolNames);
       return;
     }
     // Triplet-aware walk: each true entry in ``triplets`` consumes
@@ -1280,7 +1290,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
   });
 
   // Pass 3: build one VarInfo per declare.
-  for (auto &op : decls) {
+  for (auto& op : decls) {
     VarInfo v;
     v.mangled_name = op.getUniqName().str();
     v.fortran_name = extractName(v.mangled_name);
@@ -1498,11 +1508,12 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
     // skip the front-site shape (it would pin ``a`` to one branch's extent)
     // -- the synthesize-``a_d<i>`` fallback gives the branch-symbol shape,
     // and the AST builder assigns it per branch.
-    bool baseCondAlloc = !allocClasses.empty() && allocClasses.front().size() > 1;
+    bool baseCondAlloc =
+        !allocClasses.empty() && allocClasses.front().size() > 1;
     if (!baseCondAlloc && !allocSites.empty() &&
         (v.shape_symbols.empty() ||
          std::all_of(v.shape_symbols.begin(), v.shape_symbols.end(),
-                     [](const std::string &s) { return s == "?"; }))) {
+                     [](const std::string& s) { return s == "?"; }))) {
       auto from_alloc = shapeFromAllocSite(allocSites.front());
       if (!from_alloc.empty()) {
         v.shape_symbols = std::move(from_alloc);
@@ -1587,7 +1598,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
     //   * literal-index inference saw no literals for that dim
     bool isDummyArg = false;
     if (auto blk = mlir::dyn_cast<mlir::BlockArgument>(op.getMemref())) {
-      auto *parent = blk.getOwner()->getParentOp();
+      auto* parent = blk.getOwner()->getParentOp();
       if (mlir::isa_and_nonnull<mlir::func::FuncOp>(parent)) isDummyArg = true;
     }
     bool isAllocOrPointerAttr = false;
@@ -1640,7 +1651,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
       //     ``hlfir.copy_out`` automatically (writes propagate
       //     through the view).
       for (int i = 0; i < limits::kSsaBackWalkDepth && m; ++i) {
-        auto *def = m.getDefiningOp();
+        auto* def = m.getDefiningOp();
         if (!def) break;
         if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def)) {
           m = cv.getValue();
@@ -1656,7 +1667,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
         }
         break;
       }
-      if (auto *defOp = m.getDefiningOp()) {
+      if (auto* defOp = m.getDefiningOp()) {
         if (auto sec = mlir::dyn_cast<hlfir::DesignateOp>(defOp)) {
           auto srcName = traceToDecl(sec.getMemref());
           auto triplets = sec.getIsTriplet();
@@ -1674,7 +1685,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
             // subset stays expressible.
             auto renderSym = [](mlir::Value v) -> std::string {
               for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
-                auto *d = v.getDefiningOp();
+                auto* d = v.getDefiningOp();
                 if (!d) return "";
                 if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
                   v = cv.getValue();
@@ -1775,7 +1786,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
             // resolved to a closed-form expression; bail on
             // ``?`` entries so we don't emit broken memlets.
             bool allOk = !subset.empty();
-            for (auto &s : subset)
+            for (auto& s : subset)
               if (s.find('?') != std::string::npos) {
                 allOk = false;
                 break;
@@ -1895,8 +1906,8 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
     // branch's ALLOCATE site, so it routes through the interstate-edge
     // symbol-write path and -- defined on every branch before the join --
     // stays off the program signature (like ``a_allocated``).
-    auto registerExtentSyms = [&](const std::vector<std::string> &syms) {
-      for (const auto &s : syms) {
+    auto registerExtentSyms = [&](const std::vector<std::string>& syms) {
+      for (const auto& s : syms) {
         if (s.empty() || symbolNames.count(s)) continue;
         VarInfo dv;
         dv.fortran_name = s;
@@ -1930,7 +1941,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
     // multi-site class is a conditional buffer -> a branch-extent symbol
     // (``a_allocK_d<i>``), assigned per branch by the AST builder.
     for (unsigned g = 1; g < allocClasses.size(); ++g) {
-      const auto &cls = allocClasses[g];
+      const auto& cls = allocClasses[g];
       fir::AllocMemOp site0 = cls.front();
       VarInfo av;
       av.fortran_name = allocAliasName(v.fortran_name, g);
@@ -1954,8 +1965,8 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
       // re-ALLOCATE with a non-default bound (``ALLOCATE(arr(0:10))``)
       // offsets correctly instead of defaulting to 1.
       auto lb_from_alloc = lowerBoundsFromAllocSite(site0);
-      for (size_t d = 0;
-           d < lb_from_alloc.size() && d < av.lower_bounds.size(); ++d)
+      for (size_t d = 0; d < lb_from_alloc.size() && d < av.lower_bounds.size();
+           ++d)
         if (lb_from_alloc[d] != "?") av.lower_bounds[d] = lb_from_alloc[d];
       registerExtentSyms(av.shape_symbols);
       vars.push_back(std::move(av));
@@ -2030,7 +2041,8 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
         // fills, not a transient read from uninitialised memory.  Function-
         // scope SAVE-locals (``_QF``) are excluded -- the caller can't bind
         // them.  ``v.intent.empty()`` keeps dummy-arg shadows untouched.
-        if (v.const_data.empty() && v.intent.empty() && gop && !isParameter && isModuleScope)
+        if (v.const_data.empty() && v.intent.empty() && gop && !isParameter &&
+            isModuleScope)
           v.intent = "inout";
         // Record provenance for every read-only module global (initialised
         // or not), so the binding ``USE``-imports it.  An initialised
@@ -2038,8 +2050,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
         // default, but still records provenance for an optional host
         // override.  PARAMETERs / the literal constant pool and
         // function-scope SAVE-locals are excluded.
-        if (gop && !isParameter && isModuleScope)
-          recordModuleOrigin();
+        if (gop && !isParameter && isModuleScope) recordModuleOrigin();
       }
     }
 

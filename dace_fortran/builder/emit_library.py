@@ -102,12 +102,10 @@ def emit_copy(builder, ctx, n, region):
     # destination memlet off the SOURCE descriptor's shape when the two
     # differ symbolically (same rank) so both subsets align; conformance
     # guarantees the destination subset stays in bounds.
-    same_rank_diff_shape = (len(src_desc.shape) == len(tgt_desc.shape)
-                            and list(src_desc.shape) != list(tgt_desc.shape))
-    tgt_memlet = (Memlet.from_array(tgt_name, src_desc)
-                  if same_rank_diff_shape else Memlet.from_array(tgt_name, tgt_desc))
-    state.add_edge(src_access, None, cp, CopyLibraryNode.INPUT_CONNECTOR_NAME,
-                   Memlet.from_array(src_name, src_desc))
+    same_rank_diff_shape = (len(src_desc.shape) == len(tgt_desc.shape) and list(src_desc.shape) != list(tgt_desc.shape))
+    tgt_memlet = (Memlet.from_array(tgt_name, src_desc) if same_rank_diff_shape else Memlet.from_array(
+        tgt_name, tgt_desc))
+    state.add_edge(src_access, None, cp, CopyLibraryNode.INPUT_CONNECTOR_NAME, Memlet.from_array(src_name, src_desc))
     state.add_edge(cp, CopyLibraryNode.OUTPUT_CONNECTOR_NAME, tgt_access, None, tgt_memlet)
 
 
@@ -149,8 +147,7 @@ def emit_memset(builder, ctx, n, region):
     state.add_node(ms)
 
     tgt_access = acc(builder, state, tgt_name)
-    state.add_edge(ms, MemsetLibraryNode.OUTPUT_CONNECTOR_NAME, tgt_access, None,
-                   Memlet.from_array(tgt_name, tgt_desc))
+    state.add_edge(ms, MemsetLibraryNode.OUTPUT_CONNECTOR_NAME, tgt_access, None, Memlet.from_array(tgt_name, tgt_desc))
 
     # Force a state break so a subsequent element write doesn't share
     # the memset's access node.  Two incoming memlets on one access
@@ -292,15 +289,22 @@ def emit_mpi(builder, ctx, n, region):
         (req, ) = n.call_args
         rname = _req_array(req)
         node = Wait(f'_mpi_wait_{builder.nid()}')
-        node.in_connectors = {c: (dace.pointer(dace.dtypes.opaque("MPI_Request")) if c == '_request' else t) for c, t in node.in_connectors.items()}
+        node.in_connectors = {
+            c: (dace.pointer(dace.dtypes.opaque("MPI_Request")) if c == '_request' else t)
+            for c, t in node.in_connectors.items()
+        }
         state.add_node(node)
-        state.add_memlet_path(acc(builder, state, rname), node, dst_conn='_request',
+        state.add_memlet_path(acc(builder, state, rname),
+                              node,
+                              dst_conn='_request',
                               memlet=Memlet.simple(rname, "0:1", num_accesses=1))
         # status ignored (MPI_STATUS_IGNORE) -> write-only scratch.
         for conn in ('_stat_tag', '_stat_source'):
             sname = f'_mpistat{conn}_{builder.nid()}'
             ctx.sdfg.add_array(sname, [1], dace.int32, transient=True)
-            state.add_memlet_path(node, acc(builder, state, sname), src_conn=conn,
+            state.add_memlet_path(node,
+                                  acc(builder, state, sname),
+                                  src_conn=conn,
                                   memlet=Memlet.simple(sname, "0:1", num_accesses=1))
         return
 
@@ -331,8 +335,7 @@ def emit_mpi(builder, ctx, n, region):
         if comm is None:
             return
         node.add_in_connector('_comm', dace.dtypes.opaque("MPI_Comm"))
-        state.add_memlet_path(acc(builder, state, comm), node, dst_conn='_comm',
-                              memlet=Memlet(data=comm, subset='0'))
+        state.add_memlet_path(acc(builder, state, comm), node, dst_conn='_comm', memlet=Memlet(data=comm, subset='0'))
 
     if n.callee == 'mpi_send':
         from dace.libraries.mpi.nodes.send import Send
@@ -357,25 +360,29 @@ def emit_mpi(builder, ctx, n, region):
         rname = _req_array(n.call_args[3])
         node = Isend(f'_mpi_isend_{builder.nid()}')
         node.in_connectors = {c: (bptr if c == '_buffer' else t) for c, t in node.in_connectors.items()}
-        node.out_connectors = {c: (dace.pointer(dace.dtypes.opaque("MPI_Request")) if c == '_request' else t) for c, t in node.out_connectors.items()}
+        node.out_connectors = {
+            c: (dace.pointer(dace.dtypes.opaque("MPI_Request")) if c == '_request' else t)
+            for c, t in node.out_connectors.items()
+        }
         state.add_node(node)
         state.add_memlet_path(acc(builder, state, buffer), node, dst_conn='_buffer', memlet=buf_memlet)
         state.add_memlet_path(acc(builder, state, partner), node, dst_conn='_dest', memlet=partner_memlet)
         state.add_memlet_path(acc(builder, state, tag), node, dst_conn='_tag', memlet=tag_memlet)
-        state.add_edge(node, '_request', acc(builder, state, rname), None,
-                       Memlet.simple(rname, "0:1", num_accesses=1))
+        state.add_edge(node, '_request', acc(builder, state, rname), None, Memlet.simple(rname, "0:1", num_accesses=1))
         _wire_comm(node)
     elif n.callee == 'mpi_irecv':
         from dace.libraries.mpi.nodes.irecv import Irecv
         rname = _req_array(n.call_args[3])
         node = Irecv(f'_mpi_irecv_{builder.nid()}')
-        node.out_connectors = {c: (bptr if c == '_buffer' else dace.pointer(dace.dtypes.opaque("MPI_Request")) if c == '_request' else t) for c, t in node.out_connectors.items()}
+        node.out_connectors = {
+            c: (bptr if c == '_buffer' else dace.pointer(dace.dtypes.opaque("MPI_Request")) if c == '_request' else t)
+            for c, t in node.out_connectors.items()
+        }
         state.add_node(node)
         state.add_memlet_path(acc(builder, state, partner), node, dst_conn='_src', memlet=partner_memlet)
         state.add_memlet_path(acc(builder, state, tag), node, dst_conn='_tag', memlet=tag_memlet)
         state.add_memlet_path(node, acc(builder, state, buffer), src_conn='_buffer', memlet=buf_memlet)
-        state.add_edge(node, '_request', acc(builder, state, rname), None,
-                       Memlet.simple(rname, "0:1", num_accesses=1))
+        state.add_edge(node, '_request', acc(builder, state, rname), None, Memlet.simple(rname, "0:1", num_accesses=1))
         _wire_comm(node)
     else:
         raise NotImplementedError(f"MPI op {n.callee!r} not supported")
@@ -473,15 +480,20 @@ def emit_call(builder, ctx, n, region):
             writes = a.intent in ('out', 'inout')
             cin, cout = f"_a{i}", f"_a{i}_o"
             if reads:
-                in_conns.append(cin); ptr_of[cin] = dt; edges.append((name, cin, 'r'))
+                in_conns.append(cin)
+                ptr_of[cin] = dt
+                edges.append((name, cin, 'r'))
             if writes:
-                out_conns.append(cout); ptr_of[cout] = dt; edges.append((name, cout, 'w'))
+                out_conns.append(cout)
+                ptr_of[cout] = dt
+                edges.append((name, cout, 'w'))
             # The C call uses the writable pointer when it writes,
             # else the read pointer (both alias the same array).
             terms.append(cout if writes else cin)
         else:  # 'scalar'
             cin = f"_a{i}"
-            in_conns.append(cin); edges.append((name, cin, 'r'))
+            in_conns.append(cin)
+            edges.append((name, cin, 'r'))
             terms.append(cin)
 
     node = ExternalCall(name=f"_ext_{callee}_{builder.nid()}",

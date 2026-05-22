@@ -82,8 +82,10 @@ end subroutine run_kern
 def _gfortran(out_so: Path, *sources, mod_dir: Path):
     subprocess.check_call([
         "gfortran", "-shared", "-fPIC", "-O0", "-fno-fast-math", "-ffp-contract=off", "-ffree-line-length-none",
-        f"-J{mod_dir}", *[str(s) for s in sources], "-o", str(out_so)
-    ], cwd=mod_dir)
+        f"-J{mod_dir}", *[str(s) for s in sources], "-o",
+        str(out_so)
+    ],
+                          cwd=mod_dir)
 
 
 def _invoke(lib, x, set_vals, n_read):
@@ -127,8 +129,13 @@ def _e2e(tmp_path, name, src, *, kern_mod, sub, uses=(), sets=(), reads=()):
 
     dace_shim = tmp_path / "dace_shim.f90"
     dace_shim.write_text(_shim(f"{sub}_dace", (f"{sub}_dace_bindings", f"{sub}_dace"), uses, set_pairs, read_pairs))
-    lib = build_fortran_library(sdfg, _iface(sub), plan, str(tmp_path / "lib"),
-                                name=f"{sub}_lib", prelude_sources=[src_path], extra_sources=[dace_shim])
+    lib = build_fortran_library(sdfg,
+                                _iface(sub),
+                                plan,
+                                str(tmp_path / "lib"),
+                                name=f"{sub}_lib",
+                                prelude_sources=[src_path],
+                                extra_sources=[dace_shim])
     dace_lib = lib.load()
 
     ref_dir = tmp_path / "ref"
@@ -145,7 +152,9 @@ def _e2e(tmp_path, name, src, *, kern_mod, sub, uses=(), sets=(), reads=()):
 
     np.testing.assert_allclose(y_dace, y_ref, rtol=1e-12, err_msg="binding output disagrees with reference")
     for nm, dval, rval in zip(reads, reads_dace, reads_ref):
-        np.testing.assert_allclose(dval, rval, rtol=1e-12,
+        np.testing.assert_allclose(dval,
+                                   rval,
+                                   rtol=1e-12,
                                    err_msg=f"module global {nm!r} write-back disagrees with reference")
 
 
@@ -188,8 +197,13 @@ contains
   end subroutine apply_cfg
 end module mod_cfg
 """
-    _e2e(tmp_path, "cfg", src, kern_mod="mod_cfg", sub="apply_cfg",
-         uses=[("mod_cfg", "cfg_scale")], sets=[("cfg_scale", 3.0)])
+    _e2e(tmp_path,
+         "cfg",
+         src,
+         kern_mod="mod_cfg",
+         sub="apply_cfg",
+         uses=[("mod_cfg", "cfg_scale")],
+         sets=[("cfg_scale", 3.0)])
 
 
 def test_e2e_initialised_readonly_global_baked(tmp_path: Path):
@@ -233,8 +247,14 @@ contains
   end subroutine bump
 end module mod_acc
 """
-    _e2e(tmp_path, "acc", src, kern_mod="mod_acc", sub="bump",
-         uses=[("mod_acc", "counter")], sets=[("counter", 100.0)], reads=["counter"])
+    _e2e(tmp_path,
+         "acc",
+         src,
+         kern_mod="mod_acc",
+         sub="bump",
+         uses=[("mod_acc", "counter")],
+         sets=[("counter", 100.0)],
+         reads=["counter"])
 
 
 def test_e2e_written_global_no_init_writeback(tmp_path: Path):
@@ -256,8 +276,14 @@ contains
   end subroutine use_tmp
 end module mod_scr
 """
-    _e2e(tmp_path, "scr", src, kern_mod="mod_scr", sub="use_tmp",
-         uses=[("mod_scr", "tmpval")], sets=[("tmpval", 0.0)], reads=["tmpval"])
+    _e2e(tmp_path,
+         "scr",
+         src,
+         kern_mod="mod_scr",
+         sub="use_tmp",
+         uses=[("mod_scr", "tmpval")],
+         sets=[("tmpval", 0.0)],
+         reads=["tmpval"])
 
 
 def test_e2e_cross_module_written_writeback(tmp_path: Path):
@@ -285,5 +311,11 @@ contains
   end subroutine use_state
 end module mod_kern_b
 """
-    _e2e(tmp_path, "xstate", src, kern_mod="mod_kern_b", sub="use_state",
-         uses=[("mod_state_x", "accum")], sets=[("accum", 1.0)], reads=["accum"])
+    _e2e(tmp_path,
+         "xstate",
+         src,
+         kern_mod="mod_kern_b",
+         sub="use_state",
+         uses=[("mod_state_x", "accum")],
+         sets=[("accum", 1.0)],
+         reads=["accum"])

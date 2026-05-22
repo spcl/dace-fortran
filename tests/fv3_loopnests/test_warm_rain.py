@@ -45,8 +45,8 @@ def _column():
     k = np.arange(1, _KM + 1, dtype=np.float32)
     a = {
         "qv": 0.010 * (1.0 - 0.02 * k),
-        "ql": 0.0010 * np.sin(0.1 * k) ** 2,
-        "qr": 0.0010 * np.sin(0.1 * k) ** 2,
+        "ql": 0.0010 * np.sin(0.1 * k)**2,
+        "qr": 0.0010 * np.sin(0.1 * k)**2,
         "qi": np.zeros(_KM),
         "qs": np.zeros(_KM),
         "qg": np.zeros(_KM),
@@ -77,8 +77,10 @@ def test_fv3_warm_rain(tmp_path):
     # (derived from ``dp``'s shape) and returns the intent(out) ``r1``; the
     # intent(inout) arrays are updated in place.  Pass everything by keyword.
     rkw = {n: base[n].copy() for n in (*_IN, *_INOUT)}
-    r1_ref = ref.warm_rain_mod.warm_rain_driver(dt=scalars["dt"], rh_rain=scalars["rh_rain"],
-                                                h_var=scalars["h_var"], **rkw)
+    r1_ref = ref.warm_rain_mod.warm_rain_driver(dt=scalars["dt"],
+                                                rh_rain=scalars["rh_rain"],
+                                                h_var=scalars["h_var"],
+                                                **rkw)
 
     # Bridge SDFG (km is a free symbol; inout/out arrays passed by name).
     # The module-scope saturation tables (``tablew`` / ``desw``) and the
@@ -89,8 +91,11 @@ def test_fv3_warm_rain(tmp_path):
     # fills them on this first call, matching the f2py module state).
     skw = {n: base[n].copy() for n in (*_IN, *_INOUT)}
     r1_out = np.zeros(1, dtype=np.float32)
-    sdfg(km=np.int32(_KM), dt=scalars["dt"], rh_rain=scalars["rh_rain"],
-         h_var=scalars["h_var"], r1=r1_out,
+    sdfg(km=np.int32(_KM),
+         dt=scalars["dt"],
+         rh_rain=scalars["rh_rain"],
+         h_var=scalars["h_var"],
+         r1=r1_out,
          tablew=np.zeros(_QS_LENGTH, dtype=np.float32, order='F'),
          desw=np.zeros(_QS_LENGTH, dtype=np.float32, order='F'),
          tables_are_initialized=np.array([False]),
@@ -103,5 +108,4 @@ def test_fv3_warm_rain(tmp_path):
     # (atol 5e-6) covers it while keeping the relative check tight.
     np.testing.assert_allclose(r1_out[0], r1_ref, rtol=1e-5, atol=5e-6)
     for name in _INOUT:
-        np.testing.assert_allclose(skw[name], rkw[name], rtol=1e-5, atol=5e-6,
-                                   err_msg=f"mismatch in {name}")
+        np.testing.assert_allclose(skw[name], rkw[name], rtol=1e-5, atol=5e-6, err_msg=f"mismatch in {name}")

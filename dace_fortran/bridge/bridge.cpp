@@ -78,13 +78,13 @@ class HLFIRModule {
     ctx_.loadAllAvailableDialects();
   }
 
-  bool parse(const std::string &t) {
+  bool parse(const std::string& t) {
     module_ =
         mlir::parseSourceString<mlir::ModuleOp>(llvm::StringRef(t), &ctx_);
     return static_cast<bool>(module_);
   }
 
-  bool parse_file(const std::string &p) {
+  bool parse_file(const std::string& p) {
     module_ = mlir::parseSourceFile<mlir::ModuleOp>(llvm::StringRef(p), &ctx_);
     return static_cast<bool>(module_);
   }
@@ -97,16 +97,16 @@ class HLFIRModule {
   /// declaration; otherwise the base's version stays.  Mangled Flang names
   /// (``_QM<mod>F<sub>`` etc.) are unique per compilation unit so real
   /// collisions should only happen for runtime/external declarations.
-  bool parse_files(const std::vector<std::string> &paths) {
+  bool parse_files(const std::vector<std::string>& paths) {
     if (paths.empty()) return false;
     module_ =
         mlir::parseSourceFile<mlir::ModuleOp>(llvm::StringRef(paths[0]), &ctx_);
     if (!module_) return false;
     if (paths.size() == 1) return true;
 
-    auto &baseBody = module_->getBodyRegion().front();
+    auto& baseBody = module_->getBodyRegion().front();
     mlir::SymbolTable baseTab(*module_);
-    auto symName = [](mlir::Operation *op) -> llvm::StringRef {
+    auto symName = [](mlir::Operation* op) -> llvm::StringRef {
       if (auto a = op->getAttrOfType<mlir::StringAttr>(
               mlir::SymbolTable::getSymbolAttrName()))
         return a.getValue();
@@ -117,13 +117,13 @@ class HLFIRModule {
       auto extra = mlir::parseSourceFile<mlir::ModuleOp>(
           llvm::StringRef(paths[i]), &ctx_);
       if (!extra) return false;
-      auto &extraBody = extra->getBodyRegion().front();
+      auto& extraBody = extra->getBodyRegion().front();
 
       // Move each op individually so inc_range is safe under mutation.
-      for (auto &op : llvm::make_early_inc_range(extraBody)) {
+      for (auto& op : llvm::make_early_inc_range(extraBody)) {
         auto nm = symName(&op);
         if (!nm.empty()) {
-          if (auto *existing = baseTab.lookup(nm)) {
+          if (auto* existing = baseTab.lookup(nm)) {
             auto existingFn = mlir::dyn_cast<mlir::func::FuncOp>(existing);
             auto newFn = mlir::dyn_cast<mlir::func::FuncOp>(&op);
             if (existingFn && newFn && existingFn.isDeclaration() &&
@@ -147,7 +147,7 @@ class HLFIRModule {
   ///   run_passes("builtin.module(hlfir-propagate-shapes)")
   /// Every bridge pass is registered by registerAllBridgePasses() in
   /// NB_MODULE init, so pass names from passes/*.cpp are usable here.
-  void run_passes(const std::string &pipeline) {
+  void run_passes(const std::string& pipeline) {
     if (!module_) throw std::runtime_error("run_passes: no module parsed");
     mlir::PassManager pm(&ctx_);
     if (mlir::failed(mlir::parsePassPipeline(pipeline, pm)))
@@ -272,7 +272,7 @@ class HLFIRModule {
   /// subsequent ``symbol-dce`` pass drops the siblings that
   /// ``hlfir-inline-all`` has finished folding into the entry.
   /// Raises if the entry isn't in the module.
-  void set_entry_symbol(const std::string &name) {
+  void set_entry_symbol(const std::string& name) {
     if (!module_)
       throw std::runtime_error("set_entry_symbol: no module parsed");
     bool found = false;
@@ -326,7 +326,7 @@ NB_MODULE(hlfir_bridge, m) {
       .def_ro("view_dim_map", &VarInfo::view_dim_map)
       .def_ro("module_origin_mod", &VarInfo::module_origin_mod)
       .def_ro("module_origin_name", &VarInfo::module_origin_name)
-      .def("__repr__", [](const VarInfo &v) {
+      .def("__repr__", [](const VarInfo& v) {
         std::string s = "<" + v.role + " '" + v.fortran_name + "'";
         if (v.rank > 0) {
           s += "(";
@@ -373,7 +373,7 @@ NB_MODULE(hlfir_bridge, m) {
       .def_ro("reduce_axes", &ASTNode::reduce_axes)
       .def_ro("children", &ASTNode::children)
       .def_ro("else_children", &ASTNode::else_children)
-      .def("__repr__", [](const ASTNode &n) {
+      .def("__repr__", [](const ASTNode& n) {
         if (n.kind == "loop")
           return std::string("Loop(") + n.loop_iter + "=" +
                  std::to_string(n.loop_lower) + ":" + n.loop_bound + ", " +

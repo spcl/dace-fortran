@@ -24,7 +24,6 @@ from dace_fortran.builder.context import _Ctx
 from dace_fortran.builder.descriptors import auto_declare_synth
 from dace_fortran.builder.emit_tasklet import assign_reads_array, emit_tasklet
 
-
 _DACE_CAST_RE = re.compile(r"dace\.(?:int32|int64|float32|float64)\(")
 
 
