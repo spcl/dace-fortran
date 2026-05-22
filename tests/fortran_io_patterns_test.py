@@ -25,7 +25,6 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 _NOT_YET = "bridge _FortranAio* recognizer not yet implemented"
 
 
-@pytest.mark.xfail(reason=_NOT_YET, strict=False)
 def test_list_directed_read(tmp_path, monkeypatch):
     """``read(u,*) y`` of a whole array must yield the file's values."""
     src = """
@@ -80,7 +79,6 @@ end module m
     np.testing.assert_allclose(y, [1.5, 2.5])
 
 
-@pytest.mark.xfail(reason=_NOT_YET, strict=False)
 def test_list_directed_write(tmp_path, monkeypatch):
     """``write(u,*) x`` must actually emit the values (today it is dropped):
     read the written file back and check it round-trips."""

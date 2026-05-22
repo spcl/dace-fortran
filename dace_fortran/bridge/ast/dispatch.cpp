@@ -297,6 +297,112 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
 }
 
 // ---------------------------------------------------------------------------
+// Fortran I/O recognition
+// ---------------------------------------------------------------------------
+//
+// Flang lowers Fortran I/O to a sequence of ``fir.call @_FortranAio*`` runtime
+// calls.  We fold an ``open`` / ``read`` / ``write`` / ``close`` region into a
+// single ``kind="iocall"`` ASTNode the Python builder lowers to a
+// ``dace.libraries.fortran_io`` node.  The filename must be a compile-time
+// literal (a ``@_QQclX<hex>`` constant) -- it is baked into the node as
+// ``target`` because DaCe cannot pass a string at runtime; a non-literal
+// filename is unsupported (the statement is dropped, as is any I/O with no
+// associated file such as a ``write`` to stdout).
+
+/// Decode a flang character-literal global symbol ``_QQclX<hex>`` to its text
+/// (the hex digits are the literal's bytes).  Empty if not that form.
+static std::string decodeCharLiteralSymbol(llvm::StringRef sym) {
+  if (!sym.consume_front("_QQclX")) return {};
+  auto hexVal = [](char c) -> int {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+  };
+  std::string out;
+  for (size_t i = 0; i + 1 < sym.size() + 1 && i + 1 <= sym.size(); i += 2) {
+    int hi = hexVal(sym[i]), lo = hexVal(sym[i + 1]);
+    if (hi < 0 || lo < 0) return {};
+    out.push_back(static_cast<char>(hi * 16 + lo));
+  }
+  return out;
+}
+
+/// Resolve a ``SetFile`` operand to the string literal it addresses, tracing
+/// through the ``fir.convert`` / ``fir.coordinate_of`` shims and the
+/// ``hlfir.declare`` flang wraps the ``fir.address_of`` in.  Empty if the
+/// operand is not a literal (a runtime filename, which we cannot bake in).
+static std::string ioLiteralString(mlir::Value v) {
+  for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
+    auto* d = v.getDefiningOp();
+    if (!d) break;
+    if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) { v = cv.getValue(); continue; }
+    if (auto co = mlir::dyn_cast<fir::CoordinateOp>(d)) { v = co.getRef(); continue; }
+    if (auto hd = mlir::dyn_cast<hlfir::DeclareOp>(d)) { v = hd.getMemref(); continue; }
+    if (auto fd = mlir::dyn_cast<fir::DeclareOp>(d)) { v = fd.getMemref(); continue; }
+    if (auto ad = mlir::dyn_cast<fir::AddrOfOp>(d))
+      return decodeCharLiteralSymbol(ad.getSymbol().getRootReference().str());
+    break;
+  }
+  return {};
+}
+
+/// State threaded across the consecutive ``_FortranAio*`` calls of one
+/// open/read/write/close region (all in one block, in program order).
+/// ``open_file`` holds the filename from the most recent ``open`` until its
+/// ``close``; ``op`` / ``stmt_file`` / ``items`` accumulate the in-flight
+/// transfer statement between its ``Begin*`` and ``EndIoStatement``.
+struct IoState {
+  std::string open_file;
+  std::string op;
+  std::string stmt_file;
+  std::vector<std::string> items;
+};
+
+/// Advance the I/O state machine by one ``_FortranAio*`` ``call`` (callee
+/// ``c``), and on a completed read/write statement push an ``iocall`` ASTNode.
+/// Every such call is consumed by the caller, so none leaks out as a generic
+/// ``call`` node (its char-literal operands would otherwise mint invalid
+/// arrays).  Only statements with a literal file and >=1 data item are
+/// emitted -- a stdout write or a runtime-named file has no bindable filename
+/// and is dropped.
+static void recognizeIoCall(fir::CallOp call, llvm::StringRef c, IoState& s, std::vector<ASTNode>& nodes) {
+  auto args = call.getArgOperands();
+  if (c.contains("SetFile")) {
+    if (args.size() >= 2) s.open_file = ioLiteralString(args[1]);
+  } else if (c.contains("BeginExternalListInput") || c.contains("BeginExternalFormattedInput")) {
+    s.op = "read";
+    s.stmt_file = s.open_file;
+    s.items.clear();
+  } else if (c.contains("BeginExternalListOutput") || c.contains("BeginExternalFormattedOutput")) {
+    s.op = "write";
+    s.stmt_file = s.open_file;
+    s.items.clear();
+  } else if ((c.contains("Input") || c.contains("Output")) && !c.contains("Begin") && !c.contains("Ascii")) {
+    // A transfer item: Input/OutputDescriptor(box) or the scalar
+    // Input/OutputReal*/Integer*(ref); operand 1 is the data.
+    if (!s.op.empty() && args.size() >= 2) {
+      std::string nm = traceToDecl(args[1]);
+      if (!nm.empty()) s.items.push_back(nm);
+    }
+  } else if (c.contains("BeginClose")) {
+    s.open_file.clear();
+  } else if (c.contains("EndIoStatement") && !s.op.empty()) {
+    if (!s.stmt_file.empty() && !s.items.empty()) {
+      ASTNode io;
+      io.kind = "iocall";
+      io.callee = s.op;
+      io.target = s.stmt_file;
+      io.call_args = s.items;
+      nodes.push_back(std::move(io));
+    }
+    s.op.clear();
+    s.stmt_file.clear();
+    s.items.clear();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Block walker
 // ---------------------------------------------------------------------------
 
@@ -390,6 +496,7 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
     n.expr = std::to_string(value);
     nodes.push_back(std::move(n));
   };
+  IoState io_state;  // threaded across this block's ``_FortranAio*`` calls
   for (auto& op : block) {
     // Bind / advance the alloc-alias for this allocatable, then
     // emit a state-change ``<name>_allocated = 1`` so downstream
@@ -1032,6 +1139,12 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       std::string mpiOp = mpiCalleeTag(n.callee);
       if (!mpiOp.empty()) {
         nodes.push_back(buildMpiCallNode(call, mpiOp));
+        continue;
+      }
+      // Fortran I/O runtime call: advance the open/read/write/close state
+      // machine (see ``recognizeIoCall``).  Consumed here either way.
+      if (n.callee.find("_FortranAio") != std::string::npos) {
+        recognizeIoCall(call, n.callee, io_state, nodes);
         continue;
       }
       // Resolve each operand to a decl name so the Python builder can

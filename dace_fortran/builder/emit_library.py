@@ -388,6 +388,36 @@ def emit_mpi(builder, ctx, n, region):
         raise NotImplementedError(f"MPI op {n.callee!r} not supported")
 
 
+def emit_io(builder, ctx, n, region):
+    """Lower a recognised Fortran I/O statement (``kind == 'iocall'``) to a
+    ``dace.libraries.fortran_io`` node.
+
+    The C++ recognizer folds an ``open`` / ``read`` / ``write`` / ``close``
+    region into one node: ``n.callee`` is ``'read'`` or ``'write'``,
+    ``n.target`` is the literal filename (baked into the node -- DaCe cannot
+    pass a string at runtime), and ``n.call_args`` are the transferred
+    array / scalar names in statement order.  A READ writes each item (output
+    connectors ``_out_i``); a WRITE reads each item (input connectors
+    ``_in_i``).  Whole-array memlets -- the Fortran statement transfers each
+    item in full.
+    """
+    nodes_mod = importlib.import_module("dace.libraries.fortran_io.nodes")
+    state = ctx.flush_and_ensure(builder, region)
+
+    items = list(n.call_args)
+    is_read = n.callee == "read"
+    cls = nodes_mod.Read if is_read else nodes_mod.Write
+    node = cls(f"{n.callee}_{builder.nid()}", filename=n.target, num_items=len(items))
+    state.add_node(node)
+
+    for i, name in enumerate(items):
+        memlet = Memlet.from_array(name, ctx.sdfg.arrays[name])
+        if is_read:
+            state.add_edge(node, f"_out_{i}", acc(builder, state, name), None, memlet)
+        else:
+            state.add_edge(acc(builder, state, name), None, node, f"_in_{i}", memlet)
+
+
 def emit_call(builder, ctx, n, region):
     """Lower a *registered* external ``bind(c)`` call to an
     :class:`dace_fortran.external.ExternalCall` library node.
