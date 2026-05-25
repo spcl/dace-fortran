@@ -439,9 +439,15 @@ def build_wrapper_tail(frozen: FrozenSignature, iface: OriginalInterface, plan: 
             continue
         if r.aliasable:
             continue
-        if not r.write_expr:
-            continue
         if entry.writeback_intent not in ('out', 'inout'):
+            continue
+        # Writeable non-aliasable member -> copy the flats back.  A
+        # reconstruction recipe carries ``write_expr`` (e.g. complex
+        # re/im -> ``cmplx``); a plain single-flat member (e.g. an AoS
+        # scalar member ``pts(i)%x``) has no ``write_expr`` and is the
+        # exact inverse of its copy-in, scattered back into
+        # ``read_exprs[0]`` by ``render_copy_out_loop``.
+        if not r.write_expr and not (len(r.flat_names) == 1 and r.read_exprs):
             continue
         copy_out_lines.extend(render_copy_out_loop(r, entry.outer_expr))
 

@@ -663,10 +663,6 @@ end subroutine run_aos
 """
 
 
-@pytest.mark.xfail(reason="AoS deepcopy path: members now correctly non-aliasable, but the full SDFG "
-                   "build leaks a connector name into free-symbol resolution (KeyError '_in_pts_w_0'); "
-                   "flips green once that leak is fixed",
-                   strict=False)
 def test_e2e_array_of_scalar_structs_deepcopy(tmp_path: Path):
     """``type(point) :: pts(N)`` (4 scalar members) -> 4 SoA arrays via the
     strided-gather DEEPCOPY path.  The binding allocates ``pts_x``..``pts_w``,

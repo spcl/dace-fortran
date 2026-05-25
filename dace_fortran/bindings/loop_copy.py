@@ -173,20 +173,30 @@ def render_copy_out_loop(recipe: FlattenRecipe, outer_expr: str) -> List[str]:
     :returns: indented Fortran lines  --  the reverse do-nest then
               the matching ``deallocate`` statements.
     """
-    if not recipe.write_expr:
-        raise ValueError("render_copy_out_loop called on recipe with empty write_expr")
     out: List[str] = [f"    ! Copy-out: {outer_expr} <- {', '.join(recipe.flat_names)}"]
 
     idx_names = _loop_index_names(recipe.rank)
+    idx_tuple = ", ".join(idx_names)
     for d in reversed(range(recipe.rank)):
         indent = ' ' * ((recipe.rank - 1 - d) * 2)
         out.append(f"    {indent}do {idx_names[d]} = 1, {recipe.shape_exprs[d]}")
 
     body_indent = ' ' * (recipe.rank * 2)
-    idx_tuple = ", ".join(idx_names)
-    outer_lhs = f"{outer_expr}({idx_tuple})"
-    rhs = substitute_indices(recipe.write_expr, idx_names)
-    out.append(f"    {body_indent}{outer_lhs} = {rhs}")
+    # A reconstruction recipe (e.g. complex re/im -> ``cmplx``) carries a
+    # ``write_expr`` and writes ``outer_expr(idx) = write_expr``.  A plain
+    # single-flat member (e.g. an AoS scalar member) has no ``write_expr``
+    # and is the exact inverse of its copy-in: scatter the flat back into
+    # the member access ``read_exprs[0]`` (which encodes the index
+    # placement, ``pts(i)%x``), giving ``pts(i)%x = pts_x(i)``.
+    if recipe.write_expr:
+        lhs = f"{outer_expr}({idx_tuple})"
+        rhs = substitute_indices(recipe.write_expr, idx_names)
+    else:
+        if len(recipe.flat_names) != 1 or not recipe.read_exprs:
+            raise ValueError("render_copy_out_loop: empty write_expr needs a single flat + read_expr")
+        lhs = substitute_indices(recipe.read_exprs[0], idx_names)
+        rhs = f"{recipe.flat_names[0]}({idx_tuple})"
+    out.append(f"    {body_indent}{lhs} = {rhs}")
 
     for d in range(recipe.rank):
         indent = ' ' * ((recipe.rank - 1 - d) * 2)

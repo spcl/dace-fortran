@@ -129,16 +129,35 @@ def test_render_copy_out_loop_shape():
     assert "deallocate(st_z_im)" in joined
 
 
-def test_render_copy_out_loop_raises_on_empty_write_expr():
+def test_render_copy_out_loop_inverse_for_single_flat_empty_write_expr():
+    """A single-flat member with no ``write_expr`` (e.g. an AoS scalar member
+    ``pts(i)%x``) copies out as the exact inverse of copy-in:
+    ``<read_expr> = <flat>(idx)``  --  scattering the companion back into the
+    member access, then deallocating."""
     r = FlattenRecipe(
-        flat_names=("fld_a", ),
-        read_exprs=("fld%a($i1, $i2)", ),
-        rank=2,
-        shape_exprs=("size(fld%a, dim=1)", "size(fld%a, dim=2)"),
-        aliasable=False,  # non-aliasable but no writeback
+        flat_names=("pts_x", ),
+        read_exprs=("pts($i1)%x", ),
+        rank=1,
+        shape_exprs=("size(pts, dim=1)", ),
+        aliasable=False,
+    )
+    body = "\n".join(render_copy_out_loop(r, outer_expr="pts%x"))
+    assert "pts(i1)%x = pts_x(i1)" in body
+    assert "deallocate(pts_x)" in body
+
+
+def test_render_copy_out_loop_raises_on_multi_flat_empty_write_expr():
+    """A multi-flat recipe with no ``write_expr`` has no unambiguous inverse
+    (the reconstruction must be supplied as ``write_expr``) and must raise."""
+    r = FlattenRecipe(
+        flat_names=("st_z_re", "st_z_im"),
+        read_exprs=("real(st%z($i1))", "aimag(st%z($i1))"),
+        rank=1,
+        shape_exprs=("size(st%z, dim=1)", ),
+        aliasable=False,
     )
     with pytest.raises(ValueError, match="empty write_expr"):
-        render_copy_out_loop(r, outer_expr="fld%a")
+        render_copy_out_loop(r, outer_expr="st%z")
 
 
 # --------------------------------------------------------------------------

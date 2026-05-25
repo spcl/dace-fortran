@@ -1431,6 +1431,39 @@ static void rewriteDesignate(hlfir::DesignateOp dg,
   }
 
   if (dg.getIndices().empty()) {
+    // Scalar member access ``X%m``.  If the parent is an indexed access on
+    // an array-of-struct (``X(i)%m``), the i-th element is ``X_m(i)`` -- the
+    // parent's index must be applied to the flat companion.  Replacing with
+    // the bare companion (the rank-0 ``st%m`` behaviour) would drop the
+    // index, alias the WHOLE companion array, and leak the connector as a
+    // free symbol.  Apply the parent indices only when the companion's rank
+    // matches them (the plain per-element companion); a rank-0 struct (no
+    // parent index) or a differently-shaped companion (e.g. the aos_alloc
+    // packed form) keeps the bare alias.
+    auto parentDg =
+        mlir::dyn_cast_or_null<hlfir::DesignateOp>(dg.getMemref().getDefiningOp());
+    bool parentHasComponent = false;
+    if (parentDg)
+      for (auto nm : {"component_name", "component"})
+        if (parentDg->getAttrOfType<mlir::StringAttr>(nm)) {
+          parentHasComponent = true;
+          break;
+        }
+    if (parentDg && !parentHasComponent && !parentDg.getIndices().empty()) {
+      auto compSeq =
+          mlir::dyn_cast<fir::SequenceType>(fir::unwrapRefType(newBase.getType()));
+      if (compSeq && compSeq.getShape().size() == parentDg.getIndices().size()) {
+        mlir::OpBuilder rb(dg);
+        llvm::SmallVector<mlir::Value, 4> outerIdx(parentDg.getIndices().begin(),
+                                                   parentDg.getIndices().end());
+        auto newOp = rb.create<hlfir::DesignateOp>(
+            dg.getLoc(), dg.getResult().getType(), newBase, mlir::ValueRange{outerIdx});
+        dg.getResult().replaceAllUsesWith(newOp.getResult());
+        dg.erase();
+        if (parentDg.getResult().use_empty()) parentDg.erase();
+        return;
+      }
+    }
     dg.getResult().replaceAllUsesWith(newBase);
     dg.erase();
     return;
