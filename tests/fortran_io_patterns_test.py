@@ -127,3 +127,58 @@ end module m
     y = np.zeros(3, dtype=np.float64)
     sdfg(x=x, y=y)
     np.testing.assert_allclose(y, x)
+
+
+def test_two_writes_distinct_files(tmp_path, monkeypatch):
+    """Two writes to different files in one kernel must both land -- exercises
+    multiple ordered I/O statements (each its own state)."""
+    src = """
+module m
+  implicit none
+contains
+  subroutine two_writes(x)
+    real(8), intent(in) :: x(3)
+    integer :: u
+    open (newunit=u, file='wa.txt', status='replace'); write (u, *) x; close (u)
+    open (newunit=u, file='wb.txt', status='replace'); write (u, *) x*2.0d0; close (u)
+  end subroutine two_writes
+end module m
+"""
+    monkeypatch.chdir(tmp_path)
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="two_writes", entry="_QMmPtwo_writes").build()
+    x = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+    sdfg(x=x)
+    wa = [float(t) for t in (tmp_path / "wa.txt").read_text().split()]
+    wb = [float(t) for t in (tmp_path / "wb.txt").read_text().split()]
+    np.testing.assert_allclose(wa, [1.0, 2.0, 3.0])
+    np.testing.assert_allclose(wb, [2.0, 4.0, 6.0])
+
+
+@pytest.mark.xfail(reason="multi-read from one open: each Read node re-opens the file, so sequential "
+                   "reads don't share the file position (needs a shared I/O unit/handle)",
+                   strict=False)
+def test_two_sequential_reads_same_file(tmp_path, monkeypatch):
+    """``read a`` then ``read b`` from one open should read consecutive records;
+    today each fused Read re-opens the file, so both read from the start."""
+    src = """
+module m
+  implicit none
+contains
+  subroutine two_reads(a, b)
+    real(8), intent(out) :: a(2), b(2)
+    integer :: u
+    open (newunit=u, file='seq.txt', status='old')
+    read (u, *) a
+    read (u, *) b
+    close (u)
+  end subroutine two_reads
+end module m
+"""
+    (tmp_path / "seq.txt").write_text("1.0 2.0\n3.0 4.0\n")
+    monkeypatch.chdir(tmp_path)
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="two_reads", entry="_QMmPtwo_reads").build()
+    a = np.zeros(2, dtype=np.float64)
+    b = np.zeros(2, dtype=np.float64)
+    sdfg(a=a, b=b)
+    np.testing.assert_allclose(a, [1.0, 2.0])
+    np.testing.assert_allclose(b, [3.0, 4.0])
