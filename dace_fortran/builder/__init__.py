@@ -434,7 +434,14 @@ class SDFGBuilder:
             if isinstance(desc, Scalar) or v.rank == 0:
                 if arr.size != 1:
                     continue
-                sdfg.add_constant(v.fortran_name, arr.item(), desc)
+                # Keep a float constant as its typed numpy scalar (e.g.
+                # ``np.float32`` for a ``real(4)`` parameter) so the SDFG
+                # constant carries its true precision rather than a
+                # dtype-erased Python ``float`` widened to double; integers /
+                # booleans pass through as Python scalars (round-trip- and
+                # ``isinstance(..., int)``-friendly).
+                val = arr.reshape(())[()]
+                sdfg.add_constant(v.fortran_name, val if np.issubdtype(arr.dtype, np.floating) else val.item(), desc)
                 continue
             # Array globals: reshape from row-major doubles transport
             # to the descriptor's declared shape.
