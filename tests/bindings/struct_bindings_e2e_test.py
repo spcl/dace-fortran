@@ -580,3 +580,133 @@ def test_e2e_complex_member_struct(tmp_path: Path):
     )
 
     np.testing.assert_allclose(u_sdfg, u_ref, rtol=1e-12, atol=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# Array-of-structs with scalar members  --  DEEPCOPY path (strided gather)
+# ---------------------------------------------------------------------------
+#
+# ``type(point) :: pts(N)`` with four scalar members.  Each SoA companion
+# ``pts_x``..``pts_w`` is a *strided* view of the interleaved AoS (stride =
+# struct size), so it CANNOT be a zero-copy ``c_f_pointer`` alias -- the
+# binding must allocate contiguous companions and scatter/gather them
+# (``aliasable=False`` -> render_copy_in_loop / render_copy_out_loop).  This
+# exercises the deepcopy path end-to-end and value-checks the gather/scatter.
+
+_AOS_TYPES_SRC = """
+module mo_pt
+  use iso_c_binding
+  implicit none
+  integer, parameter :: N = 6
+  type :: point
+     real(c_double) :: x, y, z, w
+  end type point
+end module mo_pt
+"""
+
+_AOS_KERNEL_SRC = """
+subroutine kern_aos(pts)
+  use mo_pt
+  use iso_c_binding
+  implicit none
+  type(point), intent(inout) :: pts(N)
+  integer :: i
+  do i = 1, N
+     pts(i)%x = pts(i)%x + pts(i)%y * pts(i)%z - pts(i)%w
+  end do
+end subroutine kern_aos
+"""
+
+_AOS_REF_DRIVER_SRC = """
+subroutine run_aos_ref(p_ptr) bind(c, name='run_aos_ref')
+  use iso_c_binding
+  use mo_pt, only: point, N
+  implicit none
+  real(c_double), intent(inout) :: p_ptr(4, N)
+  type(point) :: pts(N)
+  integer :: i
+  external :: kern_aos
+  do i = 1, N
+     pts(i)%x = p_ptr(1, i); pts(i)%y = p_ptr(2, i)
+     pts(i)%z = p_ptr(3, i); pts(i)%w = p_ptr(4, i)
+  end do
+  call kern_aos(pts)
+  do i = 1, N
+     p_ptr(1, i) = pts(i)%x; p_ptr(2, i) = pts(i)%y
+     p_ptr(3, i) = pts(i)%z; p_ptr(4, i) = pts(i)%w
+  end do
+end subroutine run_aos_ref
+"""
+
+_AOS_SRC = _AOS_TYPES_SRC + _AOS_KERNEL_SRC
+
+_AOS_DRIVER = """
+subroutine run_aos(p_ptr) bind(c, name='run_aos')
+  use iso_c_binding
+  use mo_pt, only: point, N
+  use kern_aos_dace_bindings
+  implicit none
+  real(c_double), intent(inout) :: p_ptr(4, N)
+  type(point), target :: pts(N)
+  integer :: i
+  do i = 1, N
+     pts(i)%x = p_ptr(1, i); pts(i)%y = p_ptr(2, i)
+     pts(i)%z = p_ptr(3, i); pts(i)%w = p_ptr(4, i)
+  end do
+  call kern_aos_dace(pts)
+  do i = 1, N
+     p_ptr(1, i) = pts(i)%x; p_ptr(2, i) = pts(i)%y
+     p_ptr(3, i) = pts(i)%z; p_ptr(4, i) = pts(i)%w
+  end do
+  call kern_aos_dace_finalize()
+end subroutine run_aos
+"""
+
+
+@pytest.mark.xfail(reason="AoS deepcopy path: members now correctly non-aliasable, but the full SDFG "
+                   "build leaks a connector name into free-symbol resolution (KeyError '_in_pts_w_0'); "
+                   "flips green once that leak is fixed",
+                   strict=False)
+def test_e2e_array_of_scalar_structs_deepcopy(tmp_path: Path):
+    """``type(point) :: pts(N)`` (4 scalar members) -> 4 SoA arrays via the
+    strided-gather DEEPCOPY path.  The binding allocates ``pts_x``..``pts_w``,
+    scatters the interleaved AoS in, runs the kernel, gathers back out; the
+    result must match a gfortran reference of the same kernel on the AoS."""
+    iface = OriginalInterface(
+        entry="kern_aos",
+        args=(OriginalArg(name="pts", fortran_type="type(point)", rank=1, shape=("N", ), intent="inout",
+                          struct_type="point"), ),
+        used_modules={"mo_pt": ("point", "N")},
+    )
+    sdfg_lib = _build_sdfg_lib(
+        tmp_path,
+        kernel_src=_AOS_SRC,
+        types_src=_AOS_TYPES_SRC,
+        name="kern_aos",
+        entry="_QPkern_aos",
+        iface=iface,
+        driver_src=_AOS_DRIVER,
+    )
+    sdfg_lib.run_aos.argtypes = [ctypes.POINTER(ctypes.c_double)]
+    sdfg_lib.run_aos.restype = None
+
+    ref_lib = _build_reference_lib(
+        tmp_path,
+        types_src=_AOS_TYPES_SRC,
+        kernel_src=_AOS_KERNEL_SRC,
+        ref_driver_src=_AOS_REF_DRIVER_SRC,
+        name="kern_aos",
+    )
+    ref_lib.run_aos_ref.argtypes = [ctypes.POINTER(ctypes.c_double)]
+    ref_lib.run_aos_ref.restype = None
+
+    rng = np.random.default_rng(31)
+    p_init = np.asfortranarray(rng.standard_normal((4, 6)))
+
+    p_ref = p_init.copy(order="F")
+    ref_lib.run_aos_ref(p_ref.ctypes.data_as(ctypes.POINTER(ctypes.c_double)))
+
+    p_sdfg = p_init.copy(order="F")
+    sdfg_lib.run_aos(p_sdfg.ctypes.data_as(ctypes.POINTER(ctypes.c_double)))
+
+    np.testing.assert_allclose(p_sdfg, p_ref, rtol=1e-12, atol=1e-12)
