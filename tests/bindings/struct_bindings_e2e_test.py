@@ -706,3 +706,215 @@ def test_e2e_array_of_scalar_structs_deepcopy(tmp_path: Path):
     sdfg_lib.run_aos(p_sdfg.ctypes.data_as(ctypes.POINTER(ctypes.c_double)))
 
     np.testing.assert_allclose(p_sdfg, p_ref, rtol=1e-12, atol=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# AoS with MIXED-TYPE scalar members  --  deepcopy across dtypes
+# ---------------------------------------------------------------------------
+#
+# ``type(item) :: items(N)`` with a real(c_double) and an integer(c_int)
+# member.  Each flattens to its own typed SoA companion (items_a : f64,
+# items_n : i32), both deep-copied (strided gather/scatter).  Exercises the
+# copy-in/out path with two distinct element types in one struct.
+
+_MIX_TYPES_SRC = """
+module mo_mix
+  use iso_c_binding
+  implicit none
+  integer, parameter :: N = 5
+  type :: item
+     real(c_double)  :: a
+     integer(c_int)  :: n
+  end type item
+end module mo_mix
+"""
+
+_MIX_KERNEL_SRC = """
+subroutine kern_mix(items)
+  use mo_mix
+  use iso_c_binding
+  implicit none
+  type(item), intent(inout) :: items(N)
+  integer :: i
+  do i = 1, N
+     items(i)%a = items(i)%a * real(items(i)%n, c_double)
+     items(i)%n = items(i)%n + 1
+  end do
+end subroutine kern_mix
+"""
+
+_MIX_REF_DRIVER_SRC = """
+subroutine run_mix_ref(a_ptr, n_ptr) bind(c, name='run_mix_ref')
+  use iso_c_binding
+  use mo_mix, only: item, N
+  implicit none
+  real(c_double), intent(inout)   :: a_ptr(N)
+  integer(c_int), intent(inout)   :: n_ptr(N)
+  type(item) :: items(N)
+  integer :: i
+  external :: kern_mix
+  do i = 1, N
+     items(i)%a = a_ptr(i); items(i)%n = n_ptr(i)
+  end do
+  call kern_mix(items)
+  do i = 1, N
+     a_ptr(i) = items(i)%a; n_ptr(i) = items(i)%n
+  end do
+end subroutine run_mix_ref
+"""
+
+_MIX_SRC = _MIX_TYPES_SRC + _MIX_KERNEL_SRC
+
+_MIX_DRIVER = """
+subroutine run_mix(a_ptr, n_ptr) bind(c, name='run_mix')
+  use iso_c_binding
+  use mo_mix, only: item, N
+  use kern_mix_dace_bindings
+  implicit none
+  real(c_double), intent(inout)   :: a_ptr(N)
+  integer(c_int), intent(inout)   :: n_ptr(N)
+  type(item), target :: items(N)
+  integer :: i
+  do i = 1, N
+     items(i)%a = a_ptr(i); items(i)%n = n_ptr(i)
+  end do
+  call kern_mix_dace(items)
+  do i = 1, N
+     a_ptr(i) = items(i)%a; n_ptr(i) = items(i)%n
+  end do
+  call kern_mix_dace_finalize()
+end subroutine run_mix
+"""
+
+
+def test_e2e_array_of_mixed_type_structs_deepcopy(tmp_path: Path):
+    """``type(item){a:real, n:int} :: items(N)`` -> two typed SoA companions,
+    both deep-copied.  Kernel updates both members; result must match the
+    gfortran reference for both the real and integer arrays."""
+    iface = OriginalInterface(
+        entry="kern_mix",
+        args=(OriginalArg(name="items", fortran_type="type(item)", rank=1, shape=("N", ), intent="inout",
+                          struct_type="item"), ),
+        used_modules={"mo_mix": ("item", "N")},
+    )
+    sdfg_lib = _build_sdfg_lib(tmp_path, kernel_src=_MIX_SRC, types_src=_MIX_TYPES_SRC, name="kern_mix",
+                               entry="_QPkern_mix", iface=iface, driver_src=_MIX_DRIVER)
+    sdfg_lib.run_mix.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_int)]
+    sdfg_lib.run_mix.restype = None
+    ref_lib = _build_reference_lib(tmp_path, types_src=_MIX_TYPES_SRC, kernel_src=_MIX_KERNEL_SRC,
+                                   ref_driver_src=_MIX_REF_DRIVER_SRC, name="kern_mix")
+    ref_lib.run_mix_ref.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_int)]
+    ref_lib.run_mix_ref.restype = None
+
+    rng = np.random.default_rng(37)
+    a_init = np.asfortranarray(rng.standard_normal(5))
+    n_init = np.asfortranarray(rng.integers(1, 9, size=5).astype(np.int32))
+
+    a_ref, n_ref = a_init.copy(order="F"), n_init.copy(order="F")
+    ref_lib.run_mix_ref(a_ref.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+                        n_ref.ctypes.data_as(ctypes.POINTER(ctypes.c_int)))
+    a_sdfg, n_sdfg = a_init.copy(order="F"), n_init.copy(order="F")
+    sdfg_lib.run_mix(a_sdfg.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+                     n_sdfg.ctypes.data_as(ctypes.POINTER(ctypes.c_int)))
+    np.testing.assert_allclose(a_sdfg, a_ref, rtol=1e-12, atol=1e-12)
+    np.testing.assert_array_equal(n_sdfg, n_ref)
+
+
+# ---------------------------------------------------------------------------
+# AoS as an intent(in) argument  --  copy-IN only, no copy-out
+# ---------------------------------------------------------------------------
+#
+# When the struct array is read-only the deepcopy must scatter the members
+# IN but emit no copy-back (and the input must be left unchanged).  The
+# kernel writes a separate plain output array.
+
+_RO_KERNEL_SRC = """
+subroutine kern_ro(pts, outv)
+  use mo_pt
+  use iso_c_binding
+  implicit none
+  type(point), intent(in)  :: pts(N)
+  real(c_double), intent(out) :: outv(N)
+  integer :: i
+  do i = 1, N
+     outv(i) = pts(i)%x + pts(i)%y * pts(i)%z - pts(i)%w
+  end do
+end subroutine kern_ro
+"""
+
+_RO_REF_DRIVER_SRC = """
+subroutine run_ro_ref(p_ptr, o_ptr) bind(c, name='run_ro_ref')
+  use iso_c_binding
+  use mo_pt, only: point, N
+  implicit none
+  real(c_double), intent(in)    :: p_ptr(4, N)
+  real(c_double), intent(out)   :: o_ptr(N)
+  type(point) :: pts(N)
+  integer :: i
+  external :: kern_ro
+  do i = 1, N
+     pts(i)%x = p_ptr(1, i); pts(i)%y = p_ptr(2, i)
+     pts(i)%z = p_ptr(3, i); pts(i)%w = p_ptr(4, i)
+  end do
+  call kern_ro(pts, o_ptr)
+end subroutine run_ro_ref
+"""
+
+_RO_SRC = _AOS_TYPES_SRC + _RO_KERNEL_SRC
+
+_RO_DRIVER = """
+subroutine run_ro(p_ptr, o_ptr) bind(c, name='run_ro')
+  use iso_c_binding
+  use mo_pt, only: point, N
+  use kern_ro_dace_bindings
+  implicit none
+  real(c_double), intent(in)    :: p_ptr(4, N)
+  real(c_double), intent(out)   :: o_ptr(N)
+  type(point), target :: pts(N)
+  integer :: i
+  do i = 1, N
+     pts(i)%x = p_ptr(1, i); pts(i)%y = p_ptr(2, i)
+     pts(i)%z = p_ptr(3, i); pts(i)%w = p_ptr(4, i)
+  end do
+  call kern_ro_dace(pts, o_ptr)
+  call kern_ro_dace_finalize()
+end subroutine run_ro
+"""
+
+
+def test_e2e_array_of_structs_read_only_copy_in(tmp_path: Path):
+    """``type(point) :: pts(N)`` passed ``intent(in)``: the deepcopy scatters
+    the members in (no copy-back) and the kernel writes a separate output
+    array.  Output must match the reference."""
+    iface = OriginalInterface(
+        entry="kern_ro",
+        args=(
+            OriginalArg(name="pts", fortran_type="type(point)", rank=1, shape=("N", ), intent="in",
+                        struct_type="point"),
+            OriginalArg(name="outv", fortran_type="real(c_double)", rank=1, shape=("N", ), intent="out"),
+        ),
+        used_modules={"mo_pt": ("point", "N")},
+    )
+    sdfg_lib = _build_sdfg_lib(tmp_path, kernel_src=_RO_SRC, types_src=_AOS_TYPES_SRC, name="kern_ro",
+                               entry="_QPkern_ro", iface=iface, driver_src=_RO_DRIVER)
+    sdfg_lib.run_ro.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double)]
+    sdfg_lib.run_ro.restype = None
+    ref_lib = _build_reference_lib(tmp_path, types_src=_AOS_TYPES_SRC, kernel_src=_RO_KERNEL_SRC,
+                                   ref_driver_src=_RO_REF_DRIVER_SRC, name="kern_ro")
+    ref_lib.run_ro_ref.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double)]
+    ref_lib.run_ro_ref.restype = None
+
+    rng = np.random.default_rng(41)
+    p_init = np.asfortranarray(rng.standard_normal((4, 6)))
+
+    o_ref = np.zeros(6, dtype=np.float64, order="F")
+    p_ref = p_init.copy(order="F")
+    ref_lib.run_ro_ref(p_ref.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+                       o_ref.ctypes.data_as(ctypes.POINTER(ctypes.c_double)))
+    o_sdfg = np.zeros(6, dtype=np.float64, order="F")
+    p_sdfg = p_init.copy(order="F")
+    sdfg_lib.run_ro(p_sdfg.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+                    o_sdfg.ctypes.data_as(ctypes.POINTER(ctypes.c_double)))
+    np.testing.assert_allclose(o_sdfg, o_ref, rtol=1e-12, atol=1e-12)
+    # intent(in): the input AoS must be left unchanged.
+    np.testing.assert_array_equal(p_sdfg, p_init)
