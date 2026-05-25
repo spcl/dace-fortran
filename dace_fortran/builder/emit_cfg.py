@@ -24,42 +24,6 @@ from dace_fortran.builder.context import _Ctx
 from dace_fortran.builder.descriptors import auto_declare_synth
 from dace_fortran.builder.emit_tasklet import assign_reads_array, emit_tasklet
 
-_DACE_CAST_RE = re.compile(r"dace\.(?:int32|int64|float32|float64)\(")
-
-
-def _strip_dace_casts(expr):
-    """Drop tasklet-style ``dace.<dtype>(...)`` casts from a symbolic
-    interstate-edge expression.
-
-    The bridge renders a Fortran ``fir.convert`` (e.g. a real->int
-    truncation ``it = ap1``) as ``dace.int32(...)`` so a *tasklet* lowers it
-    via ``static_cast``.  On an interstate edge the assignment is parsed by
-    DaCe's symbolic engine, which has no ``dace`` symbol -- it would treat
-    ``dace`` as a free symbol (``KeyError: 'dace'`` in ``arglist``).  The
-    target symbol's own dtype performs the same truncation/widening on
-    assignment, so dropping the wrapper is value-preserving here.
-    """
-    if not isinstance(expr, str) or "dace." not in expr:
-        return expr
-    while True:
-        m = _DACE_CAST_RE.search(expr)
-        if not m:
-            return expr
-        open_paren = m.end() - 1
-        depth, i = 0, open_paren
-        while i < len(expr):
-            if expr[i] == "(":
-                depth += 1
-            elif expr[i] == ")":
-                depth -= 1
-                if depth == 0:
-                    break
-            i += 1
-        if i >= len(expr):
-            return expr  # unbalanced -- leave as-is
-        expr = expr[:m.start()] + "(" + expr[open_paren + 1:i] + ")" + expr[i + 1:]
-
-
 def _anchor_views_referenced_in_expr(builder, expr: str, region, pre, sdfg):
     """Ensure every ``view_alias`` array referenced (by name) in ``expr``
     has at least one real AccessNode in a state upstream of the
@@ -181,7 +145,6 @@ def emit_assign(builder, ctx: '_Ctx', n, region):
                     shape = getattr(desc, 'shape', None)
                     if shape is not None and tuple(shape) == (1, ):
                         rhs = f"{rhs_name}[0]"
-        rhs = _strip_dace_casts(rhs)
         ctx.flush(builder, region)
         ctx.ensure(region)
         dst = region.add_state(f"post_{n.target}_{builder.nid()}")
@@ -242,7 +205,7 @@ def emit_assign(builder, ctx: '_Ctx', n, region):
         indirect_syms = collect_indirect(builder, [n])
         if indirect_syms:
             for expr, sym in indirect_syms.items():
-                rhs = _strip_dace_casts(indirect_to_dace(builder, expr, ctx.iter_map, indirect_syms))
+                rhs = indirect_to_dace(builder, expr, ctx.iter_map, indirect_syms)
                 if sym not in ctx.sdfg.symbols:
                     ctx.sdfg.add_symbol(sym, dace.int64)
                 nxt = region.add_state(f"sym_{sym}_{builder.nid()}")
