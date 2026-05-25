@@ -1589,13 +1589,21 @@ struct FlattenStructsPass
         }
       }
 
+      // A member is a zero-copy ``c_f_pointer`` alias only when its data is
+      // contiguous.  For a rank-0 struct each member is a single contiguous
+      // block (alias ``c_loc(st%m)``).  For an AoS (the outer is an array),
+      // ``outer(i)%m`` strides by the struct size, so it is contiguous only
+      // when the struct has exactly one member; any multi-member AoS member
+      // is strided and must be deep-copied (allocate + scatter/gather loop).
+      bool memberAliasable = (outerRank == 0) || (rec.getTypeList().size() == 1);
+
       auto recipe = b.getDictionaryAttr({
           b.getNamedAttr("flat_names", b.getArrayAttr({mkStr(flat)})),
           b.getNamedAttr("read_exprs", b.getArrayAttr({mkStr(read)})),
           b.getNamedAttr("write_expr", mkStr("")),
           b.getNamedAttr("rank", b.getI64IntegerAttr(totalRank)),
           b.getNamedAttr("shape_exprs", b.getArrayAttr(shapeExprs)),
-          b.getNamedAttr("aliasable", b.getBoolAttr(true)),
+          b.getNamedAttr("aliasable", b.getBoolAttr(memberAliasable)),
           b.getNamedAttr("scratch_dtype", mkStr(scratchDtype)),
           b.getNamedAttr("aos_alloc", b.getBoolAttr(false)),
           b.getNamedAttr("cap_symbol", mkStr("")),
