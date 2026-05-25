@@ -2505,12 +2505,17 @@ struct FlattenStructsPass
     auto combinedArg = block.getArgument(argIdx + 1);
 
     mlir::OpBuilder b(argDecl);
+    // The packed companion is a static-shape array over a raw address base,
+    // so its hlfir.declare must carry a fir.shape operand (the verifier
+    // rejects a shapeless array declare); build ``[rows, maxExt]``.
+    llvm::SmallVector<int64_t, 2> combinedExtents{rows, maxExt};
+    mlir::Value combinedShape = emitStaticShape(b, loc, combinedExtents);
     mlir::NamedAttrList attrs;
     attrs.append("uniq_name", mlir::StringAttr::get(ctx, baseName + "_packed"));
-    attrs.append(declareSegments(b, /*hasShape=*/false));
+    attrs.append(declareSegments(b, /*hasShape=*/true));
     auto combinedDecl = b.create<hlfir::DeclareOp>(
         loc, mlir::TypeRange{combinedRef, combinedRef},
-        mlir::ValueRange{combinedArg}, attrs);
+        mlir::ValueRange{combinedArg, combinedShape}, attrs);
 
     // Per-member aliased view into a single row of the combined array.
     // fir.coordinate_of rank-reduces the 2-D combined ref to a 1-D row
