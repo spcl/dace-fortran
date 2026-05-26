@@ -461,13 +461,32 @@ static void recognizeIoCall(fir::CallOp call, llvm::StringRef c, IoState& s, std
     s.open_file.clear();
   } else if (c.contains("EndIoStatement") && !s.op.empty()) {
     if (!s.stmt_file.empty() && !s.items.empty()) {
-      ASTNode io;
-      io.kind = "iocall";
-      io.callee = s.op;
-      io.target = s.stmt_file;
-      io.expr = s.group;  // namelist group name (empty for list-directed)
-      io.call_args = s.items;
-      nodes.push_back(std::move(io));
+      // Fuse with an immediately-preceding transfer of the SAME op to the
+      // SAME file: consecutive ``read`` / ``write`` statements between one
+      // ``open`` and ``close`` then share a single open, so sequential
+      // reads advance the file position instead of each re-opening from the
+      // start.  Each item still lowers to its own ``read``/``write`` call (a
+      // fresh record), matching list-directed statement semantics.  Only
+      // fused when adjacent (``nodes.back()`` is that transfer) so any
+      // intervening computation forces a separate open -- preserving order.
+      // Namelist transfers carry a group name in ``expr`` and never fuse.
+      bool fused = false;
+      if ((s.op == "read" || s.op == "write") && s.group.empty() &&
+          !nodes.empty() && nodes.back().kind == "iocall" &&
+          nodes.back().callee == s.op && nodes.back().target == s.stmt_file &&
+          nodes.back().expr.empty()) {
+        for (auto& it : s.items) nodes.back().call_args.push_back(it);
+        fused = true;
+      }
+      if (!fused) {
+        ASTNode io;
+        io.kind = "iocall";
+        io.callee = s.op;
+        io.target = s.stmt_file;
+        io.expr = s.group;  // namelist group name (empty for list-directed)
+        io.call_args = s.items;
+        nodes.push_back(std::move(io));
+      }
     }
     s.op.clear();
     s.stmt_file.clear();

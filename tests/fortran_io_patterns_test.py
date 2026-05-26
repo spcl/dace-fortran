@@ -154,12 +154,10 @@ end module m
     np.testing.assert_allclose(wb, [2.0, 4.0, 6.0])
 
 
-@pytest.mark.xfail(reason="multi-read from one open: each Read node re-opens the file, so sequential "
-                   "reads don't share the file position (needs a shared I/O unit/handle)",
-                   strict=False)
 def test_two_sequential_reads_same_file(tmp_path, monkeypatch):
-    """``read a`` then ``read b`` from one open should read consecutive records;
-    today each fused Read re-opens the file, so both read from the start."""
+    """``read a`` then ``read b`` from one open read consecutive records:
+    the recognizer fuses adjacent same-file transfers into one Read node so
+    they share a single open and the file position advances across them."""
     src = """
 module m
   implicit none
