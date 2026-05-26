@@ -51,6 +51,7 @@ module mpi
   integer, parameter :: MPI_ERROR = 3
   integer, parameter :: MPI_MAX_ERROR_STRING = 256
   integer, parameter :: MPI_MAX_PROCESSOR_NAME = 256
+  integer, parameter :: MPI_MAX_LIBRARY_VERSION_STRING = 256
 
   ! Datatypes.
   integer, parameter :: MPI_BYTE = 1, MPI_PACKED = 2, MPI_CHARACTER = 3
@@ -119,6 +120,12 @@ contains
     integer, intent(out) :: version, subversion, ierr
     version = 3; subversion = 1; ierr = MPI_SUCCESS
   end subroutine MPI_Get_version
+
+  subroutine MPI_Get_library_version(version, resultlen, ierr)
+    character(len=*), intent(out) :: version
+    integer, intent(out)          :: resultlen, ierr
+    version = ''; resultlen = 0; ierr = MPI_SUCCESS
+  end subroutine MPI_Get_library_version
 
   subroutine MPI_Error_string(errorcode, string, resultlen, ierr)
     integer, intent(in)           :: errorcode

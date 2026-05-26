@@ -515,6 +515,42 @@ def _code_of(line: str) -> str:
 #: and flang errors on the bare macro invocations.
 _PREAMBLE_LINE_RE = re.compile(r"^\s*(?:#|!|$)")
 
+#: cpp conditional directives, classified for balancing an extracted block.
+_CPP_OPEN_RE = re.compile(r"^\s*#\s*(?:if|ifdef|ifndef)\b", re.IGNORECASE)
+_CPP_CLOSE_RE = re.compile(r"^\s*#\s*endif\b", re.IGNORECASE)
+_CPP_MID_RE = re.compile(r"^\s*#\s*(?:else|elif)\b", re.IGNORECASE)
+
+
+def _balance_cpp(block: str) -> str:
+    """Drop cpp conditional directives left unbalanced by module-block
+    extraction.  A whole-module ``#ifdef GUARD ... MODULE ... END MODULE ...
+    #endif`` wrapper splits across the block boundary -- the opener lands in one
+    block's preamble and the ``#endif`` in the next block's -- leaving each
+    block with an orphan ``#if`` or ``#endif`` that breaks cpp once the blocks
+    are concatenated into one TU.  Remove the unmatched directives (and orphan
+    ``#else`` / ``#elif``), keeping their guarded content: every module pulled
+    into a merged USE-closure was already selected by the real build, so it is
+    wanted unconditionally.  Conditionals fully contained in the block (a normal
+    in-body ``#if/#else/#endif``) stay balanced and untouched."""
+    lines = block.splitlines(keepends=True)
+    open_idx: list = []
+    drop: set = set()
+    for i, ln in enumerate(lines):
+        if _CPP_OPEN_RE.match(ln):
+            open_idx.append(i)
+        elif _CPP_CLOSE_RE.match(ln):
+            if open_idx:
+                open_idx.pop()
+            else:
+                drop.add(i)  # orphan #endif
+        elif _CPP_MID_RE.match(ln):
+            if not open_idx:
+                drop.add(i)  # orphan #else / #elif
+    drop.update(open_idx)  # unmatched #if openers
+    if not drop:
+        return block
+    return "".join(ln for i, ln in enumerate(lines) if i not in drop)
+
 
 def _module_blocks(text: str):
     """Yield ``(name_lower, block_text)`` for every top-level ``module``
@@ -553,7 +589,10 @@ def _module_blocks(text: str):
         while i < n and not _MODULE_END_RE.match(_code_of(lines[i].rstrip("\r\n"))):
             i += 1
         end = min(i, n - 1)
-        yield name, "".join(lines[start:end + 1])
+        # Balance cpp conditionals: a whole-module ``#ifdef..#endif`` wrapper
+        # splits across the block boundary (opener in this block's preamble,
+        # ``#endif`` swept into the next block's), so drop the orphan side.
+        yield name, _balance_cpp("".join(lines[start:end + 1]))
         last_end = end + 1
         i = end + 1
 

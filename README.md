@@ -130,6 +130,20 @@ sdfg = dace_fortran.build_sdfg_from_files(
     ["driver.f90", "math_utils.f90"], entry="_QPcompute_tendencies")
 ```
 
+**Why one TU:** flang emits one `.hlfir` per file, and each carries its own
+copy of every `USE`-d module's derived types -- so the `.hlfir` files cannot be
+merged after the fact (the record types collide). Merging at the *source* level
+instead means one flang pass, one copy of each type, and `hlfir-inline-all` then
+folds a function called across modules into the entry. So a scalar like
+`n = cpu_min_nproma(nproma, 256)` -- where `cpu_min_nproma` lives in another
+module -- inlines to its body (`min`) rather than staying an opaque external
+call the expression builder cannot lower. `merge_used_modules` keeps cpp
+balanced when a whole module is wrapped in `#ifdef GUARD .. #endif` (the wrapper
+splits across the extracted block boundary; the orphan side is dropped, since a
+module pulled into the closure was already selected by the real build).
+Externals with no Fortran source in the input (`mpi` / `netcdf` / ...) are not
+merged and stay real calls -- supply a flang stub for their `.mod` (see Tier 3).
+
 ### Tier 3 -- a real CMake / Autotools project
 
 Tiers 1 and 2 drive flang internally, which does not scale to codebases

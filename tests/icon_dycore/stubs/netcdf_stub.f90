@@ -44,6 +44,11 @@ contains
     status = NF90_NOERR
   end function nf90_close
 
+  function nf90_inq_libvers() result(version)
+    character(len=80) :: version
+    version = ''
+  end function nf90_inq_libvers
+
   function nf90_strerror(ncerr) result(string)
     integer, intent(in) :: ncerr
     character(len=80) :: string

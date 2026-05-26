@@ -72,6 +72,17 @@ from dace_fortran.builder.emit_tasklet import emit_scalar_assign, emit_tasklet
 
 # Default bridge pass pipeline.  Order matters  --  see ``README.md``.
 DEFAULT_PIPELINE = (
+    # Drop unreachable functions FIRST.  ``set_entry_symbol`` has marked the
+    # entry public and every other function private; symbol-dce then removes
+    # the private functions the entry never (transitively) calls.  This matters
+    # for a merged single-TU build of a large USE-closure (the cross-module
+    # inline-everything path): infrastructure modules pulled in only for their
+    # types carry features the bridge does not lower (e.g. ``fir.select_type``
+    # polymorphic dispatch), and lowering them would fail the pipeline even
+    # though the entry's call tree never reaches them.  Removing the dead code
+    # up front means the structurizing / lowering passes below only ever see
+    # live code.  A no-op for an ordinary single-procedure input.
+    "symbol-dce,"
     # Lower fir.select_case -> arith.cmp + cf.cond_br BEFORE inline-all.
     # The upstream ``mlir::inlineCall`` mishandles fir.select_case's
     # block-operand remap and segfaults when a callee containing one is
