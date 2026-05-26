@@ -123,6 +123,51 @@ def _parse_compile_commands(cc_path: Path):
     return out
 
 
+def _entry_module(entry: str) -> Optional[str]:
+    """Module name from a mangled entry symbol, or ``None`` for a free
+    subroutine.  ``_QM<module>P<proc>`` (module subroutine) / ``...F<proc>``
+    (function) -> ``<module>``; ``_QP<proc>`` has no module."""
+    m = re.match(r"_QM([a-z0-9_]+?)[PF][a-z0-9_]+$", entry, re.IGNORECASE)
+    return m.group(1).lower() if m else None
+
+
+def _select_use_closure(parsed, root_module: str):
+    """Filter parsed ``(src, includes, defines)`` entries down to the TU
+    that defines ``root_module`` plus the transitive ``USE``-closure it
+    needs, preserving the original (build) order.
+
+    A whole project's ``compile_commands.json`` lists every TU (ICON's is
+    ~900); emitting all of them to lower one entry is wasteful and drags
+    in modules flang need never see.  The bridge inlines only the entry's
+    call tree, so it only needs the entry's TU + the modules it ``USE``s
+    (transitively) for the ``.mod`` chain.  Falls back to the full list
+    if the root module's defining TU isn't found (safe over-emit)."""
+    module_owner: dict = {}
+    file_uses: dict = {}
+    for src, _, _ in parsed:
+        txt = src.read_text(errors="ignore")
+        for m in _MODULE_DEF_RE.finditer(txt):
+            module_owner[m.group(1).lower()] = src
+        file_uses[src] = [u.group(1).lower() for u in _USE_DEP_RE.finditer(txt)]
+
+    root = module_owner.get(root_module)
+    if root is None:
+        return parsed
+
+    needed: set = set()
+    stack = [root]
+    while stack:
+        s = stack.pop()
+        if s in needed:
+            continue
+        needed.add(s)
+        for use in file_uses.get(s, []):
+            owner = module_owner.get(use)
+            if owner is not None:
+                stack.append(owner)
+    return [t for t in parsed if t[0] in needed]
+
+
 def _flang_emit(flang: str,
                 src: Path,
                 out_dir: Path,
@@ -151,6 +196,7 @@ def emit(*,
          out_dir: Path,
          extra_includes: Sequence[Path] = (),
          extra_defines: Sequence[str] = (),
+         entry: Optional[str] = None,
          flang: str = "flang-new-21") -> List[Path]:
     """Emit ``.hlfir`` files under ``out_dir``.  Exactly one of
     ``compile_commands`` or ``sources`` must drive the file list:
@@ -172,6 +218,12 @@ def emit(*,
     / ``hdf5`` / ...); they are emitted first (in the order given)
     so the project sources' ``USE`` lines resolve.
 
+    ``entry`` (a mangled symbol like ``_QMmodPproc``) restricts the
+    ``compile_commands`` run to the entry's TU + its transitive
+    ``USE``-closure -- the only TUs the bridge needs to lower that entry.
+    Without it every TU in the database is emitted (fine for small
+    projects, wasteful for a whole-codebase ``compile_commands.json``).
+
     :returns: the emitted ``.hlfir`` paths in build order.
     """
     # XOR: exactly one of the two file-list sources must drive the run.
@@ -186,7 +238,12 @@ def emit(*,
         emitted.append(out_dir / f"{src.stem}.hlfir")
     # 2. project sources.
     if compile_commands is not None:
-        for src, incs, defs in _parse_compile_commands(Path(compile_commands)):
+        parsed = _parse_compile_commands(Path(compile_commands))
+        if entry is not None:
+            mod = _entry_module(entry)
+            if mod is not None:
+                parsed = _select_use_closure(parsed, mod)
+        for src, incs, defs in parsed:
             _flang_emit(flang, src, out_dir, incs, list(defs) + extra_defs)
             emitted.append(out_dir / f"{src.stem}.hlfir")
     else:
@@ -227,6 +284,10 @@ def main(argv=None):
                         "(repeat); the only way to set cpp config in "
                         "--source mode, and an augment in compile_commands "
                         "mode.")
+    p.add_argument("--entry", default=None,
+                   help="mangled entry symbol (_QMmodPproc); restricts a "
+                        "compile_commands run to that entry's USE-closure "
+                        "instead of emitting every TU.")
     p.add_argument("--out", required=True, type=Path,
                    help="output directory; .hlfir + .mod files land here.")
     p.add_argument("--flang", default="flang-new-21",
@@ -243,6 +304,7 @@ def main(argv=None):
                out_dir=args.out,
                extra_includes=args.extra_includes,
                extra_defines=args.extra_defines,
+               entry=args.entry,
                flang=args.flang)
     print(f"emitted {len(out)} .hlfir under {args.out}")
     return 0

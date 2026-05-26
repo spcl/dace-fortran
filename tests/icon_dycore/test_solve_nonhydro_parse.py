@@ -37,7 +37,8 @@ def test_solve_nonhydro_emits_hlfir(tmp_path):
     """flang cpp-preprocesses + emits HLFIR for the dycore, driven entirely
     by the per-TU -cpp / -I / -D flags from compile_commands.json."""
     from dace_fortran.emit_hlfir import emit
-    out = emit(compile_commands=Path(_CC), out_dir=tmp_path / "hlfir")
+    # entry= restricts the ~900-TU ICON database to solve_nh's USE-closure.
+    out = emit(compile_commands=Path(_CC), out_dir=tmp_path / "hlfir", entry=_ENTRY)
     # The dycore's func must appear in one of the emitted .hlfir files --
     # i.e. flang got through the preprocessor + frontend on solve_nh.
     func_re = re.compile(rf"func\.func\s+(?!private\b)@{re.escape(_ENTRY)}\s*\(")

@@ -384,8 +384,12 @@ def build_sdfg_from_project(compile_commands: Union[str, Path],
     from dace_fortran.emit_hlfir import emit
 
     def _do(d: Path) -> SDFG:
+        # Pass ``entry`` so the emitter restricts a whole-project
+        # compile_commands.json to the entry's USE-closure (a codebase
+        # like ICON lists ~900 TUs; we only need the entry's plus what
+        # it transitively USEs).
         emit(compile_commands=Path(compile_commands),
-             stubs=[Path(s) for s in stubs], out_dir=d, flang=flang)
+             stubs=[Path(s) for s in stubs], out_dir=d, entry=entry, flang=flang)
         return build_sdfg_from_hlfir(d, entry=entry, pipeline=pipeline)
 
     if out_dir is not None:
