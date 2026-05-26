@@ -167,8 +167,14 @@ class HLFIRModule {
 
   std::vector<VarInfo> get_variables() {
     if (!module_) return {};
-    return extractVariables(*module_);
+    value_symbols_.clear();
+    return extractVariables(*module_, &value_symbols_);
   }
+
+  /// Array-element values promoted to SDFG symbols (``__sym_<arr>_<idx>``)
+  /// while resolving array extents in the most recent ``get_variables`` call.
+  /// The builder seeds each from its element read and asserts constancy.
+  std::vector<ValueSymbol> get_value_symbols() { return value_symbols_; }
 
   std::vector<ASTNode> get_ast() {
     if (!module_) return {};
@@ -331,6 +337,7 @@ class HLFIRModule {
   mlir::DialectRegistry registry_;
   mlir::MLIRContext ctx_;
   mlir::OwningOpRef<mlir::ModuleOp> module_;
+  std::vector<ValueSymbol> value_symbols_;
 };
 
 // ============================================================================
@@ -380,6 +387,11 @@ NB_MODULE(hlfir_bridge, m) {
         s += ">";
         return s;
       });
+
+  nb::class_<ValueSymbol>(m, "ValueSymbol")
+      .def_ro("symbol", &ValueSymbol::symbol)
+      .def_ro("array", &ValueSymbol::array)
+      .def_ro("index_expr", &ValueSymbol::index_expr);
 
   nb::class_<AccessInfo>(m, "AccessInfo")
       .def_ro("array_name", &AccessInfo::array_name)
@@ -455,6 +467,9 @@ NB_MODULE(hlfir_bridge, m) {
       .def("dump", &HLFIRModule::dump, "Return the current IR as a string")
       .def("get_variables", &HLFIRModule::get_variables,
            "Classify all hlfir.declare ops -> list[VarInfo]")
+      .def("get_value_symbols", &HLFIRModule::get_value_symbols,
+           "Array-element values promoted to symbols -> list[ValueSymbol] "
+           "(call after get_variables)")
       .def("get_ast", &HLFIRModule::get_ast,
            "Recursive AST of the subroutine body -> list[ASTNode]")
       .def("list_functions", &HLFIRModule::list_functions,

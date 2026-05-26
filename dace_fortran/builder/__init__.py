@@ -286,6 +286,11 @@ class SDFGBuilder:
     def _classify(self):
         """Shared post-parse extraction: variables + AST + role split."""
         self.variables = self.module.get_variables()
+        # Array-element values promoted to symbols while resolving extents
+        # (e.g. ``z_raylfac(nrdmax(jg))`` -> ``__sym_nrdmax_jg``).  Must be read
+        # right after ``get_variables`` (which populates them).  ``build`` seeds
+        # each from its element read and asserts the element stays constant.
+        self.value_symbols = self.module.get_value_symbols()
         self.ast = self.module.get_ast()
         # ``view_alias`` participates in the array dictionary so the
         # emitter routes accesses to it normally; ``add_descriptors``
@@ -337,6 +342,9 @@ class SDFGBuilder:
         # the body runs.  Read-only module data / PARAMETERs stay in the
         # constant pool (see _register_constants).
         self._seed_written_inits(ctx, sdfg)
+        # Seed array-element value-symbols (``__sym_<arr>_<idx>``) before the
+        # body, so shapes/memlets that reference them resolve to a value.
+        self._seed_value_symbols(ctx, sdfg)
         self._emit(ctx, self.ast, sdfg)
         ctx.flush(self)
         # User-source identifiers that collide with sympy module-level
@@ -400,6 +408,10 @@ class SDFGBuilder:
         # synthetic ``<arr>_d<i>`` symbols a direct caller omits from
         # the passed arrays (correct extent) or a don't-care default.
         sdfg = install_auto_dim_symbols(sdfg)
+        # Soundness check for array-element value-symbols: the backing array of
+        # every ``__sym_<arr>_<idx>`` must be constant in the symbol's scope
+        # (no write would change the value it froze).  Run on the final graph.
+        self._check_value_symbols_constant(sdfg)
         # Validate the SDFG exactly as returned -- after every mutation
         # (post-gen passes, frozen-signature snapshot, auto-dim retype) --
         # so a caller never receives an unvalidated graph.
@@ -533,6 +545,61 @@ class SDFGBuilder:
         edge = InterstateEdge(assignments=dict(symbol_inits)) if symbol_inits else InterstateEdge()
         sdfg.add_edge(ctx.cur, nxt, edge)
         ctx.cur = nxt
+
+    def _seed_value_symbols(self, ctx, sdfg):
+        """Seed each array-element value-symbol (``__sym_<arr>_<idx>``, minted
+        when a runtime-indexed element like ``nrdmax(jg)`` sizes an array) from
+        its element read via an interstate edge at SDFG entry, so shapes and
+        memlets referencing the symbol resolve to a value rather than a data
+        lookup DaCe cannot place in a subset.  Records provenance for the
+        constancy check (:meth:`_check_value_symbols_constant`)."""
+        import dace
+        self._value_symbol_provenance: dict[str, tuple[str, str]] = {}
+        seeds = {}
+        for vs in getattr(self, "value_symbols", None) or []:
+            sym, arr, idx = vs.symbol, vs.array, vs.index_expr
+            if arr not in sdfg.arrays:
+                continue  # array not on the SDFG surface (trimmed)
+            if sym not in sdfg.symbols:
+                sdfg.add_symbol(sym, dace.int64)
+            # 1-based Fortran element read; assumes lower bound 1, matching the
+            # constant-index ``emit_symbol_init`` seeding.
+            seeds[sym] = f"{arr}[({idx}) - 1]"
+            self._value_symbol_provenance[sym] = (arr, idx)
+        if not seeds:
+            return
+        ctx.flush(self, sdfg)
+        ctx.ensure(sdfg)
+        dst = sdfg.add_state(f"value_symbol_seed_{self.nid()}")
+        sdfg.add_edge(ctx.cur, dst, InterstateEdge(assignments=seeds))
+        ctx.cur = dst
+
+    def _check_value_symbols_constant(self, sdfg: SDFG):
+        """Additional correctness check (re-runnable after transformations):
+        every array whose element was frozen into a value-symbol
+        (``__sym_<arr>_<idx>``) must stay constant in that symbol's scope.  A
+        write to the backing array anywhere in the assembled SDFG means the
+        symbol could hold a stale value, so refuse it.  Conservative: flags any
+        write to the array, not just the exact element.
+
+        :raises ValueError: the backing array of a value-symbol is written.
+        """
+        prov = getattr(self, "_value_symbol_provenance", None)
+        if not prov:
+            return
+        written = set()
+        for state in sdfg.all_states():
+            for node in state.data_nodes():
+                if state.in_degree(node) > 0:
+                    written.add(node.data)
+        for sym, (arr, idx) in prov.items():
+            if arr in written:
+                raise ValueError(
+                    f"array-element value '{arr}({idx})' is used as a data-access "
+                    f"dimension (promoted to symbol '{sym}'), but '{arr}' is "
+                    f"written in the SDFG -- the symbol would capture a stale "
+                    f"value.  This promotion requires '{arr}' to stay constant "
+                    f"within the scope where '{sym}' is live.")
 
     def _run_post_gen_passes(self, sdfg: SDFG):
         """Run the post-generation cleanup passes that take a freshly-

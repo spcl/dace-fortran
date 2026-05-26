@@ -65,7 +65,74 @@ static mlir::Type peelTypeLayers(mlir::Type t,
   return t;
 }
 
-static std::vector<std::string> resolveShapeSyms(hlfir::DeclareOp decl) {
+/// Mangled symbol name for an array-element value used as a symbol:
+/// ``__sym_<array>_<index>`` (index sanitised to a valid identifier).  Shares
+/// the ``__sym_`` prefix with the constant-indexed ``posSymbolName`` so both
+/// kinds of array-value symbol read consistently.
+static std::string valueSymbolName(const std::string& array,
+                                   const std::string& index) {
+  std::string s = "__sym_" + array + "_";
+  for (char c : index)
+    s += (std::isalnum((unsigned char)c) || c == '_') ? c : '_';
+  return s;
+}
+
+/// Recognise an extent that is a *runtime*-indexed array element
+/// ``arr(idx)`` (the ICON ``z_raylfac(nrdmax(jg))`` shape pattern): a load of a
+/// single-index ``hlfir.designate`` whose index is NOT a compile-time constant
+/// (the constant case is handled by ``traceExtentExpr`` -> ``__sym_arr_N``).
+/// Returns ``(array, index_expr)`` -- the array read from and the 1-based
+/// Fortran index expression -- or ``nullopt`` when the extent is not such an
+/// element (v1 handles a single index only).
+static std::optional<std::pair<std::string, std::string>>
+arrayElementExtent(mlir::Value ext) {
+  // Peel the kind-coercion converts and Flang's non-negativity clamp
+  // (``max(ext, 0)`` = ``select(cmpi sgt/sge X, 0, X, 0)``) that wrap an
+  // automatic-array extent, the same way ``traceExtentExpr`` does, to reach
+  // the underlying element load.
+  mlir::Value v = ext;
+  for (int i = 0; i < limits::kConvertChainDepth && v; ++i) {
+    auto* d = v.getDefiningOp();
+    if (!d) break;
+    if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
+      v = cv.getValue();
+      continue;
+    }
+    if (auto sel = mlir::dyn_cast<mlir::arith::SelectOp>(d)) {
+      auto* cdef = sel.getCondition().getDefiningOp();
+      auto cmp = cdef ? mlir::dyn_cast<mlir::arith::CmpIOp>(cdef) : nullptr;
+      using P = mlir::arith::CmpIPredicate;
+      if (cmp && cmp.getLhs() == sel.getTrueValue() &&
+          cmp.getRhs() == sel.getFalseValue() &&
+          (cmp.getPredicate() == P::sgt || cmp.getPredicate() == P::sge)) {
+        if (auto c = traceConstInt(sel.getFalseValue()); c && *c == 0) {
+          v = sel.getTrueValue();
+          continue;
+        }
+      }
+      return std::nullopt;  // some other conditional we don't model
+    }
+    break;
+  }
+  if (!v) return std::nullopt;
+  auto ld = mlir::dyn_cast_or_null<fir::LoadOp>(v.getDefiningOp());
+  if (!ld) return std::nullopt;
+  if (constIndexedElementLoad(v)) return std::nullopt;  // const case handled elsewhere
+  auto dg =
+      mlir::dyn_cast_or_null<hlfir::DesignateOp>(ld.getMemref().getDefiningOp());
+  if (!dg) return std::nullopt;
+  auto indices = dg.getIndices();
+  if (indices.size() != 1) return std::nullopt;  // v1: single-index only
+  std::string array = traceToDecl(dg.getMemref());
+  if (array.empty()) return std::nullopt;
+  std::string idx = traceExtentExpr(indices[0]);
+  if (idx.empty()) idx = traceToDecl(indices[0]);
+  if (idx.empty()) return std::nullopt;
+  return std::make_pair(array, idx);
+}
+
+static std::vector<std::string> resolveShapeSyms(
+    hlfir::DeclareOp decl, std::vector<ValueSymbol>* valueSyms = nullptr) {
   std::vector<std::string> syms;
 
   // (1) Check the attribute set by the shape-propagation pass.
@@ -111,6 +178,17 @@ static std::vector<std::string> resolveShapeSyms(hlfir::DeclareOp decl) {
         return;
       }
       syms.push_back(std::to_string(*c));
+      return;
+    }
+    // Runtime-indexed array element as an extent (``z_raylfac(nrdmax(jg))``):
+    // ``traceExtentExpr`` / ``traceToDecl`` would collapse it to the bare
+    // array name, colliding the array with its own data descriptor.  Mint a
+    // distinct value-symbol (``__sym_nrdmax_jg``) and record it so the builder
+    // seeds it from the element read (and asserts the element stays constant).
+    if (auto ae = arrayElementExtent(ext)) {
+      std::string sym = valueSymbolName(ae->first, ae->second);
+      syms.push_back(sym);
+      if (valueSyms) valueSyms->push_back({sym, ae->first, ae->second});
       return;
     }
     // Symbolic extent.  ``traceExtentExpr`` resolves a scalar, arithmetic,
@@ -998,7 +1076,8 @@ static bool globalIsWritten(const std::string& sym, mlir::ModuleOp module) {
 // Main extraction
 // ---------------------------------------------------------------------------
 
-std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
+std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
+                                      std::vector<ValueSymbol>* value_symbols) {
   std::vector<VarInfo> vars;
 
   // Reset thread-local extractName-override map.  Pass 3's view-alias
@@ -1562,7 +1641,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
       v.dtype = s;
     }
 
-    v.shape_symbols = resolveShapeSyms(op);
+    v.shape_symbols = resolveShapeSyms(op, value_symbols);
     v.lower_bounds = resolveLowerBounds(op);
 
     // SequenceType-extent fallback: a declare with no ``fir.shape``
@@ -2151,6 +2230,16 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
     }
 
     vars.push_back(std::move(v));
+  }
+  // De-duplicate the collected value-symbols: the same array-element extent
+  // (``__sym_nrdmax_jg``) can size several arrays, but each symbol is seeded
+  // and constancy-checked once.
+  if (value_symbols && !value_symbols->empty()) {
+    std::set<std::string> seen;
+    std::vector<ValueSymbol> uniq;
+    for (auto& vs : *value_symbols)
+      if (seen.insert(vs.symbol).second) uniq.push_back(vs);
+    *value_symbols = std::move(uniq);
   }
   return vars;
 }

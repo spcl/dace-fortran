@@ -104,8 +104,26 @@ struct VarInfo {
 std::pair<std::string, std::string> decodeModuleGlobalSymbol(
     const std::string& sym);
 
-/// Walk the module and build one VarInfo per hlfir.declare.
-std::vector<VarInfo> extractVariables(mlir::ModuleOp module);
+/// An array *element value* used where the SDFG needs a symbol -- a
+/// data-access dimension or bound, e.g. ICON's ``z_raylfac(nrdmax(jg))`` whose
+/// extent is the runtime-indexed element ``nrdmax(jg)``.  Collapsing that to the
+/// bare array name would make ``nrdmax`` both a data descriptor and a symbol
+/// (DaCe rejects it), so the bridge mints a distinct mangled symbol
+/// ``__sym_<array>_<index>`` and records it here.  The SDFG builder then (a)
+/// seeds the symbol from the element read and (b) asserts the element is
+/// constant in the symbol's scope -- a write after the symbol is frozen would
+/// be a stale-value bug.
+struct ValueSymbol {
+  std::string symbol;      // mangled symbol, e.g. ``__sym_nrdmax_jg``
+  std::string array;       // the data descriptor read from, e.g. ``nrdmax``
+  std::string index_expr;  // 1-based Fortran index expression, e.g. ``jg``
+};
+
+/// Walk the module and build one VarInfo per hlfir.declare.  When
+/// ``value_symbols`` is non-null, also collect the array-element-as-symbol
+/// promotions encountered while resolving array extents (see ``ValueSymbol``).
+std::vector<VarInfo> extractVariables(
+    mlir::ModuleOp module, std::vector<ValueSymbol>* value_symbols = nullptr);
 
 /// One entry-subroutine dummy argument, in the caller's pre-flatten view.
 /// Produced by ``extractFortranInterface`` so the binding emitter can
