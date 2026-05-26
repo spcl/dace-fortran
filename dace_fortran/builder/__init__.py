@@ -235,6 +235,12 @@ class SDFGBuilder:
         if entry is not None:
             self.module.set_entry_symbol(entry)
 
+        # Snapshot the caller-facing dummy list BEFORE any pass runs --
+        # ``hlfir-flatten-structs`` destroys the AoS view of struct dummies,
+        # so the only place to read the original interface is here.  Used to
+        # auto-derive an ``OriginalInterface`` for the binding emitter.
+        self._fortran_interface_raw = self.module.get_fortran_interface(entry or "")
+
         # Run bridge passes BEFORE extracting variables so assumed-shape
         # dummies pick up real names and the rest of the rewrites have
         # settled.
@@ -267,6 +273,8 @@ class SDFGBuilder:
         if not obj.module.parse_files(list(hlfir_paths)):
             raise RuntimeError(f"Cannot parse one of {hlfir_paths}")
         obj.module.set_entry_symbol(entry)
+        # Pre-flatten interface snapshot (see ``__init__``).
+        obj._fortran_interface_raw = obj.module.get_fortran_interface(entry or "")
         if pipeline:
             obj.module.run_passes(pipeline)
         remaining = obj.module.list_functions()
@@ -382,6 +390,12 @@ class SDFGBuilder:
         # downstream codegen drift check).
         self._run_post_gen_passes(sdfg)
         self._attach_frozen_signature(sdfg)
+        # Stash the pre-flatten caller interface + the post-flatten plan so
+        # the binding emitter can auto-derive both an ``OriginalInterface``
+        # and a ``FlattenPlan`` (built on demand against the final
+        # ``sdfg.name``, so a post-build rename is honoured).
+        sdfg._fortran_interface_raw = self._fortran_interface_raw
+        sdfg._flatten_plan_raw = self.module.get_flatten_plan()
         # Every Fortran extent stays a required SDFG input; resolve the
         # synthetic ``<arr>_d<i>`` symbols a direct caller omits from
         # the passed arrays (correct extent) or a don't-care default.

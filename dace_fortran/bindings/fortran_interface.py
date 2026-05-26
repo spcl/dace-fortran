@@ -21,6 +21,26 @@ names like ``_QM<mod>T<tname>`` let us recover module origins.
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
 
+# SDFG element dtype (as the bridge reports it) -> the ``iso_c_binding``
+# Fortran type the wrapper declares for that dummy.  ``bool`` is the
+# uniform image for any ``LOGICAL(KIND)`` (the logical-bridge converts the
+# caller's kind width at the boundary); integer kinds map width-for-width.
+_DTYPE_TO_FORTRAN_C = {
+    "complex128": "complex(c_double)",
+    "complex64": "complex(c_float)",
+    "float64": "real(c_double)",
+    "float32": "real(c_float)",
+    "int8": "integer(c_int8_t)",
+    "int16": "integer(c_int16_t)",
+    "int32": "integer(c_int)",
+    "int64": "integer(c_int64_t)",
+    "uint8": "integer(c_int8_t)",
+    "uint16": "integer(c_int16_t)",
+    "uint32": "integer(c_int32_t)",
+    "uint64": "integer(c_int64_t)",
+    "bool": "logical(c_bool)",
+}
+
 
 @dataclass(frozen=True)
 class Member:
@@ -75,3 +95,33 @@ class OriginalInterface:
     # ``<sym> = int(<sym>__mod, c_int)`` in the symbol-population
     # block.  Default-empty: a no-op for flat kernels.
     module_symbol_sources: Dict[str, Tuple[str, str]] = field(default_factory=dict)
+
+
+def build_auto_interface(raw: dict, entry: str) -> OriginalInterface:
+    """Build an :class:`OriginalInterface` from the bridge's
+    ``HLFIRModule.get_fortran_interface(entry)`` snapshot (taken before
+    ``hlfir-flatten-structs``).  ``entry`` should be the final ``sdfg.name``
+    so the wrapper's ``bind(c)`` symbols match the compiled SDFG exports.
+
+    :raises ValueError: a dummy uses a dtype the binding layer can't name
+        (e.g. ``CHARACTER``) or a derived-type arg whose type name the bridge
+        could not recover -- the caller then supplies an explicit interface.
+    """
+    args = []
+    for a in raw["args"]:
+        if a["is_struct"]:
+            if not a["struct_name"]:
+                raise ValueError(f"auto-iface: cannot name derived-type arg {a['name']!r}")
+            fortran_type = f"type({a['struct_name']})"
+            struct_type = a["struct_name"]
+        else:
+            fortran_type = _DTYPE_TO_FORTRAN_C.get(a["dtype"])
+            if fortran_type is None:
+                raise ValueError(f"auto-iface: unsupported dtype {a['dtype']!r} "
+                                 f"for argument {a['name']!r}")
+            struct_type = None
+        args.append(OriginalArg(name=a["name"], fortran_type=fortran_type,
+                                rank=int(a["rank"]), shape=tuple(a["shape"]),
+                                intent=a["intent"], struct_type=struct_type))
+    used_modules = {mod: tuple(syms) for mod, syms in raw["used_modules"].items()}
+    return OriginalInterface(entry=entry, args=tuple(args), used_modules=used_modules)

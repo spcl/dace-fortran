@@ -268,6 +268,43 @@ class HLFIRModule {
     return out;
   }
 
+  /// Describe the entry's dummy arguments as the caller sees them
+  /// (pre-flatten), so Python can auto-derive an ``OriginalInterface``
+  /// instead of the caller hand-writing one.  MUST be read before
+  /// ``hlfir-flatten-structs`` runs.  Shape:
+  ///   {"args": [{"name", "dtype", "intent", "rank", "shape",
+  ///              "is_struct", "struct_name", "struct_module"}, ...],
+  ///    "used_modules": {mod: [syms], ...}}
+  nb::object get_fortran_interface(const std::string& entry) {
+    nb::dict out;
+    nb::list args;
+    nb::dict used;
+    out["args"] = args;
+    out["used_modules"] = used;
+    if (!module_) return out;
+    auto info = extractFortranInterface(*module_, entry);
+    for (auto& a : info.args) {
+      nb::dict d;
+      d["name"] = a.name;
+      d["dtype"] = a.dtype;
+      d["intent"] = a.intent;
+      d["rank"] = a.rank;
+      nb::list sh;
+      for (auto& s : a.shape_symbols) sh.append(s);
+      d["shape"] = sh;
+      d["is_struct"] = a.is_struct;
+      d["struct_name"] = a.struct_name;
+      d["struct_module"] = a.struct_module;
+      args.append(d);
+    }
+    for (auto& kv : info.used_modules) {
+      nb::list syms;
+      for (auto& s : kv.second) syms.append(s);
+      used[kv.first.c_str()] = syms;
+    }
+    return out;
+  }
+
   /// Mark ``name`` public and every other func.func private so a
   /// subsequent ``symbol-dce`` pass drops the siblings that
   /// ``hlfir-inline-all`` has finished folding into the entry.
@@ -425,6 +462,8 @@ NB_MODULE(hlfir_bridge, m) {
       .def("set_entry_symbol", &HLFIRModule::set_entry_symbol,
            "Mark the named function public and everything else private so "
            "symbol-dce can drop post-inlining dead siblings")
+      .def("get_fortran_interface", &HLFIRModule::get_fortran_interface,
+           "Describe the entry's dummies (pre-flatten) for auto-iface")
       .def("get_flatten_plan", &HLFIRModule::get_flatten_plan,
            "Read back the ``hlfir.flatten_plan`` module attribute set by "
            "``hlfir-flatten-structs`` as a plain dict that mirrors "

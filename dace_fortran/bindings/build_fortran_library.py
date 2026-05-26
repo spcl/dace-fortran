@@ -26,7 +26,7 @@ from typing import Sequence
 
 from dace_fortran.bindings.emit_bindings import emit_bindings
 from dace_fortran.bindings.flatten_plan import FlattenPlan
-from dace_fortran.bindings.fortran_interface import OriginalInterface
+from dace_fortran.bindings.fortran_interface import OriginalInterface, build_auto_interface
 
 #: Mandatory flags -- a shared, position-independent, long-line module.
 _SHARED_FLAGS = ("-shared", "-fPIC", "-ffree-line-length-none")
@@ -72,9 +72,9 @@ class FortranLibrary:
 
 def build_fortran_library(
     sdfg,
-    iface: OriginalInterface,
-    plan: FlattenPlan,
-    out_dir: str,
+    iface: OriginalInterface = None,
+    plan: FlattenPlan = None,
+    out_dir: str = None,
     *,
     name: str = None,
     prelude_sources: Sequence = (),
@@ -88,7 +88,12 @@ def build_fortran_library(
     :param sdfg: the SDFG returned by ``SDFGBuilder.build()`` (carries
                  ``_frozen_signature``).
     :param iface: caller-facing Fortran surface of the entry subroutine.
-    :param plan: the ``hlfir-flatten-structs`` AoS->SoA plan.
+                  ``None`` (default) auto-derives it from the SDFG's
+                  pre-flatten interface snapshot (works for flat and
+                  explicit-shape derived-type kernels; pass an explicit
+                  ``iface`` for shapes the snapshot can't name).
+    :param plan: the ``hlfir-flatten-structs`` AoS->SoA plan.  ``None``
+                 (default) reads it from the SDFG's stamped plan.
     :param out_dir: scratch directory for the binding + linked ``.so``.
     :param name: library/base name; defaults to ``sdfg.name``.
     :param prelude_sources: ``.f90`` sources the emitted binding
@@ -111,6 +116,8 @@ def build_fortran_library(
             snapshot -- raised before the binding is emitted.
     :raises ValueError: on an unknown ``mode``.
     """
+    if out_dir is None:
+        raise ValueError("build_fortran_library: out_dir is required")
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     name = name or sdfg.name
@@ -134,6 +141,23 @@ def build_fortran_library(
     # fast and never produces a stale binding.
     if verify:
         frozen.verify_against(sdfg)
+
+    # Auto-derive the binding inputs from the SDFG when not given (after the
+    # drift gate, so a pinned/drift error surfaces first): the plan is the
+    # stamped flatten recipe, the iface the pre-flatten caller surface (built
+    # against the final ``name`` so the bind(c) symbols match the exports).
+    if plan is None:
+        raw = getattr(sdfg, "_flatten_plan_raw", None)
+        if raw is None:
+            raise ValueError("build_fortran_library: no plan given and the SDFG "
+                             "carries no _flatten_plan_raw (build via SDFGBuilder).")
+        plan = FlattenPlan.from_dict(raw)
+    if iface is None:
+        raw = getattr(sdfg, "_fortran_interface_raw", None)
+        if raw is None:
+            raise ValueError("build_fortran_library: no iface given and the SDFG "
+                             "carries no _fortran_interface_raw (build via SDFGBuilder).")
+        iface = build_auto_interface(raw, name)
 
     compiled = sdfg.compile()
     sdfg_so = Path(compiled._lib._library_filename)

@@ -2059,4 +2059,120 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
   return vars;
 }
 
+FortranInterfaceInfo extractFortranInterface(mlir::ModuleOp module,
+                                             const std::string& entry) {
+  FortranInterfaceInfo out;
+
+  // Locate the entry function: by mangled name, else the single public one.
+  mlir::func::FuncOp fn;
+  module.walk([&](mlir::func::FuncOp f) {
+    if (fn) return;
+    if (!entry.empty()) {
+      if (f.getSymName() == entry) fn = f;
+    } else if (!f.isDeclaration() &&
+               mlir::SymbolTable::getSymbolVisibility(f) ==
+                   mlir::SymbolTable::Visibility::Public) {
+      fn = f;
+    }
+  });
+  if (!fn || fn.getBody().empty()) return out;
+
+  // Demangled -> mangled map so a module-parameter array bound (a shape
+  // symbol like ``N``) can be decoded back to its defining module for the
+  // wrapper's ``use`` list.
+  llvm::StringMap<std::string> nameToMangled;
+  module.walk([&](hlfir::DeclareOp d) {
+    nameToMangled.try_emplace(extractName(d.getUniqName().str()),
+                              d.getUniqName().str());
+  });
+  auto addUseFromMangled = [&](llvm::StringRef mangled) {
+    auto md = decodeModuleGlobalSymbol(mangled.str());
+    if (!md.first.empty() && !md.second.empty())
+      out.used_modules[md.first].insert(md.second);
+  };
+
+  // ``_QM<mod>T<type>`` -> (mod, type); ``_QF..T<type>`` / ``_QT<type>``
+  // -> ("", type) for a non-module (host-associated / program) type.
+  auto parseRecordName = [](llvm::StringRef rn, std::string& mod,
+                            std::string& tname) {
+    if (rn.consume_front("_QM")) {
+      auto t = rn.find('T');
+      if (t != llvm::StringRef::npos) {
+        mod = rn.substr(0, t).str();
+        tname = rn.substr(t + 1).str();
+        return;
+      }
+    }
+    rn.consume_front("_Q");
+    auto t = rn.rfind('T');
+    tname = (t == llvm::StringRef::npos) ? rn.str() : rn.substr(t + 1).str();
+  };
+
+  auto& block = fn.getBody().front();
+  for (auto barg : block.getArguments()) {
+    hlfir::DeclareOp decl;
+    for (auto* u : barg.getUsers())
+      if (auto d = mlir::dyn_cast<hlfir::DeclareOp>(u)) {
+        decl = d;
+        break;
+      }
+    if (!decl) continue;
+
+    FortranArgInfo a;
+    a.name = extractName(decl.getUniqName().str());
+    if (auto fa = decl.getFortranAttrs()) {
+      auto f = *fa;
+      if (bitEnumContainsAny(f, fir::FortranVariableFlagsEnum::intent_inout))
+        a.intent = "inout";
+      else if (bitEnumContainsAny(f, fir::FortranVariableFlagsEnum::intent_in))
+        a.intent = "in";
+      else if (bitEnumContainsAny(f, fir::FortranVariableFlagsEnum::intent_out))
+        a.intent = "out";
+    }
+
+    // Peel box / ref / heap / pointer wrappers, then a SequenceType for
+    // the rank, leaving the element (scalar or RecordType).
+    mlir::Type ty = decl.getResult(0).getType();
+    for (bool changed = true; changed;) {
+      changed = true;
+      if (auto b = mlir::dyn_cast<fir::BoxType>(ty)) ty = b.getEleTy();
+      else if (auto r = mlir::dyn_cast<fir::ReferenceType>(ty)) ty = r.getEleTy();
+      else if (auto h = mlir::dyn_cast<fir::HeapType>(ty)) ty = h.getEleTy();
+      else if (auto p = mlir::dyn_cast<fir::PointerType>(ty)) ty = p.getEleTy();
+      else changed = false;
+    }
+    if (auto seq = mlir::dyn_cast<fir::SequenceType>(ty)) {
+      a.rank = (int)seq.getShape().size();
+      ty = seq.getEleTy();
+    }
+
+    if (auto rec = mlir::dyn_cast<fir::RecordType>(ty)) {
+      a.is_struct = true;
+      parseRecordName(rec.getName(), a.struct_module, a.struct_name);
+      if (!a.struct_module.empty() && !a.struct_name.empty())
+        out.used_modules[a.struct_module].insert(a.struct_name);
+    } else if (ty.isF64()) a.dtype = "float64";
+    else if (ty.isF32()) a.dtype = "float32";
+    else if (ty.isInteger(8)) a.dtype = "int8";
+    else if (ty.isInteger(16)) a.dtype = "int16";
+    else if (ty.isInteger(32)) a.dtype = "int32";
+    else if (ty.isInteger(64)) a.dtype = "int64";
+    else if (ty.isInteger(1) || mlir::isa<fir::LogicalType>(ty)) a.dtype = "bool";
+    else if (auto ct = mlir::dyn_cast<mlir::ComplexType>(ty)) {
+      a.dtype = ct.getElementType().isF32() ? "complex64" : "complex128";
+    } else {
+      // Unknown element (e.g. character) -- leave dtype empty so the
+      // Python side can fall back / raise rather than mis-bind.
+    }
+
+    a.shape_symbols = resolveShapeSyms(decl);
+    for (auto& s : a.shape_symbols) {
+      auto it = nameToMangled.find(s);
+      if (it != nameToMangled.end()) addUseFromMangled(it->second);
+    }
+    out.args.push_back(std::move(a));
+  }
+  return out;
+}
+
 }  // namespace hlfir_bridge

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <map>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -104,6 +106,41 @@ std::pair<std::string, std::string> decodeModuleGlobalSymbol(
 
 /// Walk the module and build one VarInfo per hlfir.declare.
 std::vector<VarInfo> extractVariables(mlir::ModuleOp module);
+
+/// One entry-subroutine dummy argument, in the caller's pre-flatten view.
+/// Produced by ``extractFortranInterface`` so the binding emitter can
+/// auto-derive an ``OriginalInterface`` (name / type / rank / shape /
+/// intent + derived-type origin) instead of the caller hand-writing it.
+/// Must be read BEFORE ``hlfir-flatten-structs`` runs -- flattening
+/// destroys the struct dummy's AoS view and reorders nothing the caller
+/// would recognise.
+struct FortranArgInfo {
+  std::string name;     // Fortran dummy name (``pts``)
+  std::string dtype;    // element dtype (``complex128`` / ``float64`` / ...)
+                        // empty for a derived-type arg (see ``is_struct``)
+  std::string intent;   // ``in`` / ``out`` / ``inout`` / ``""``
+  int rank = 0;
+  std::vector<std::string> shape_symbols;  // per-dim extent symbol / literal
+  bool is_struct = false;       // derived-type dummy
+  std::string struct_name;      // ``point`` when ``is_struct``
+  std::string struct_module;    // defining module (``mo_pt``) or ``""``
+};
+
+/// The whole caller-facing surface of one entry: its dummies in order,
+/// plus the ``use <mod>, only: <syms>`` set the wrapper needs to resolve
+/// derived-type names and module-parameter array bounds.
+struct FortranInterfaceInfo {
+  std::vector<FortranArgInfo> args;
+  /// module name -> referenced symbols (derived-type names + shape params).
+  std::map<std::string, std::set<std::string>> used_modules;
+};
+
+/// Walk the entry function's block arguments IN ORDER and describe each
+/// as the caller sees it (pre-flatten).  ``entry`` is the mangled symbol
+/// (``_QPkernel``); empty selects the single public function.  Returns an
+/// empty ``args`` vector if the entry has no resolvable declares.
+FortranInterfaceInfo extractFortranInterface(mlir::ModuleOp module,
+                                             const std::string& entry);
 
 /// True iff the allocatable / pointer ``declName`` needs the
 /// per-variable ``<declName>_allocated`` int32 tracker scalar  --  i.e.
