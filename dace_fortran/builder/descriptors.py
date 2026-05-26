@@ -19,6 +19,10 @@ DTYPE = {
     'int16': dace.int16,
     'int32': dace.int32,
     'int64': dace.int64,
+    # MLIR ``index`` (pointer-width integer) backs array extents and the
+    # AoS-allocatable ``cap_<base>_<member>`` symbol; it is an integer,
+    # not the ``float64`` default.
+    'index': dace.int64,
     'bool': dace.bool_,
     'uint8': dace.uint8,
     'complex64': dace.complex64,

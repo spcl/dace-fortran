@@ -2822,6 +2822,25 @@ struct FlattenStructsPass
       }
       return false;
     };
+    // Resolve dimension ``dim`` of the packed companion to the extent
+    // value baked into its declare's shape op.  Used to redirect a
+    // ``size(A(i)%member)`` query onto the companion's matching dim --
+    // the runtime ``cap_<base>_<member>`` symbol (true-boundary case)
+    // or the static extent (uniform-const case).
+    auto companionExtent = [](mlir::Value base, unsigned dim) -> mlir::Value {
+      auto declOp =
+          mlir::dyn_cast_or_null<hlfir::DeclareOp>(base.getDefiningOp());
+      if (!declOp || !declOp.getShape()) return {};
+      auto *shapeDef = declOp.getShape().getDefiningOp();
+      if (auto sh = mlir::dyn_cast_or_null<fir::ShapeOp>(shapeDef)) {
+        if (dim < sh.getExtents().size()) return sh.getExtents()[dim];
+      }
+      if (auto ss = mlir::dyn_cast_or_null<fir::ShapeShiftOp>(shapeDef)) {
+        unsigned extIdx = 2 * dim + 1;
+        if (extIdx < ss->getNumOperands()) return ss->getOperand(extIdx);
+      }
+      return {};
+    };
     if (auto func = decl->getParentOfType<mlir::func::FuncOp>()) {
       // Two-stage erase so dependencies tear down cleanly:
       // (1) eraseInner  --  the rewritten inner designates
@@ -2861,6 +2880,34 @@ struct FlattenStructsPass
         // element-form designate, rewrite to a direct
         // 2-index designate over flatBase.
         for (auto *u : load.getResult().getUsers()) {
+          // ``size(A(i)%member)`` lowers to ``fir.box_dims`` on the
+          // loaded per-instance member box.  That box no longer exists
+          // after flattening, so redirect the queried extent to the
+          // packed companion's matching dimension (member dim ``d``
+          // maps to companion dim ``outerRank + d``).  Only the extent
+          // result (#1) feeds loop bounds; lb (#0) / stride (#2), where
+          // used, are the contiguous 1-based defaults of a packed row.
+          if (auto bd = mlir::dyn_cast<fir::BoxDimsOp>(u)) {
+            auto memberDimC = traceConstInt(bd.getDim());
+            if (!memberDimC) continue;
+            mlir::Value ext = companionExtent(
+                flatBase, outerIdx.size() + static_cast<unsigned>(*memberDimC));
+            if (!ext) continue;
+            mlir::OpBuilder b(bd);
+            bd.getResult(1).replaceAllUsesWith(ext);
+            auto one = [&]() {
+              return b
+                  .create<mlir::arith::ConstantOp>(bd.getLoc(), b.getIndexType(),
+                                                   b.getIndexAttr(1))
+                  .getResult();
+            };
+            if (!bd.getResult(0).use_empty())
+              bd.getResult(0).replaceAllUsesWith(one());
+            if (!bd.getResult(2).use_empty())
+              bd.getResult(2).replaceAllUsesWith(one());
+            eraseInner.push_back(bd);
+            continue;
+          }
           auto inner = mlir::dyn_cast<hlfir::DesignateOp>(u);
           if (!inner) continue;
           // Element form (no triplets, has indices).

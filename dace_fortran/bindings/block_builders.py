@@ -86,8 +86,11 @@ def build_c_interface(frozen: FrozenSignature, iface: OriginalInterface, dace_ar
             # passes a pointer.
             body_lines.append(f"      type(c_ptr), value :: {a.sdfg_name}")
         elif a.kind == 'symbol':
-            # Free symbol -- pass-by-value integer.
-            body_lines.append(f"      integer(c_int), value :: {a.sdfg_name}")
+            # Free symbol -- pass-by-value integer of its own width.
+            # int32 by default; int64 for e.g. the AoS-allocatable
+            # ``cap_<base>_<member>`` extent.  Must match the
+            # wrapper-local decl ``build_wrapper_head`` emits for it.
+            body_lines.append(f"      {_fortran_c_value_type(a.dtype)}, value :: {a.sdfg_name}")
         elif a.kind == 'mpi_comm':
             # ``emit_mpi`` retyped the Fortran ``integer`` communicator
             # to an ``opaque(MPI_Comm)`` SDFG scalar; DaCe codegen emits

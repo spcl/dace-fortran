@@ -918,3 +918,136 @@ def test_e2e_array_of_structs_read_only_copy_in(tmp_path: Path):
     np.testing.assert_allclose(o_sdfg, o_ref, rtol=1e-12, atol=1e-12)
     # intent(in): the input AoS must be left unchanged.
     np.testing.assert_array_equal(p_sdfg, p_init)
+
+
+# ---------------------------------------------------------------------------
+# Jagged AoS + allocatable member  --  the runtime-cap pack/unpack path
+# ---------------------------------------------------------------------------
+# ``type(bag) :: a(NB)`` where ``bag`` has an ``allocatable :: w(:)`` member
+# and each instance is allocated a DIFFERENT length.  The flatten pass packs
+# the jagged member into an ELLPACK companion ``a_w(NB, cap)`` whose inner
+# extent is a runtime ``cap_a_w`` symbol the binding fills via ``max`` over
+# the per-instance sizes.  This exercises the extent-detection fix:
+# ``size(a(i)%w)`` (the inner loop bound) must resolve to that companion cap
+# symbol, not leak the original struct's ``a_d0`` extent.  The kernel scales
+# in place (padding rows stay zero -> harmless), and the binding's pack-out
+# copies back only each instance's live ``1:size`` region.
+
+_JAG_TYPES_SRC = """
+module mo_bag
+  use iso_c_binding
+  implicit none
+  integer, parameter :: NB = 3
+  type :: bag
+     real(c_double), allocatable :: w(:)
+  end type bag
+end module mo_bag
+"""
+
+_JAG_KERNEL_SRC = """
+subroutine kern_jag(a)
+  use mo_bag
+  use iso_c_binding
+  implicit none
+  type(bag), intent(inout) :: a(NB)
+  integer :: i, j
+  do i = 1, NB
+     do j = 1, size(a(i)%w)
+        a(i)%w(j) = a(i)%w(j) * 2.0_c_double
+     end do
+  end do
+end subroutine kern_jag
+"""
+
+# Both drivers allocate the same jagged shape (sizes 2, 4, 3 -> cap 4) and
+# move the flat 9-element buffer in/out of the per-instance members.
+_JAG_DRIVER = """
+subroutine run_jag(p_ptr) bind(c, name='run_jag')
+  use iso_c_binding
+  use mo_bag, only: bag, NB
+  use kern_jag_dace_bindings
+  implicit none
+  real(c_double), intent(inout) :: p_ptr(9)
+  type(bag), target :: a(NB)
+  integer :: i, off, sizes(NB)
+  sizes = [2, 4, 3]
+  off = 0
+  do i = 1, NB
+     allocate(a(i)%w(sizes(i)))
+     a(i)%w = p_ptr(off+1:off+sizes(i))
+     off = off + sizes(i)
+  end do
+  call kern_jag_dace(a)
+  off = 0
+  do i = 1, NB
+     p_ptr(off+1:off+sizes(i)) = a(i)%w
+     off = off + sizes(i)
+     deallocate(a(i)%w)
+  end do
+  call kern_jag_dace_finalize()
+end subroutine run_jag
+"""
+
+_JAG_REF_DRIVER = """
+subroutine run_jag_ref(p_ptr) bind(c, name='run_jag_ref')
+  use iso_c_binding
+  use mo_bag, only: bag, NB
+  implicit none
+  real(c_double), intent(inout) :: p_ptr(9)
+  type(bag) :: a(NB)
+  integer :: i, off, sizes(NB)
+  external :: kern_jag
+  sizes = [2, 4, 3]
+  off = 0
+  do i = 1, NB
+     allocate(a(i)%w(sizes(i)))
+     a(i)%w = p_ptr(off+1:off+sizes(i))
+     off = off + sizes(i)
+  end do
+  call kern_jag(a)
+  off = 0
+  do i = 1, NB
+     p_ptr(off+1:off+sizes(i)) = a(i)%w
+     off = off + sizes(i)
+     deallocate(a(i)%w)
+  end do
+end subroutine run_jag_ref
+"""
+
+
+def test_e2e_array_of_jagged_alloc_structs_deepcopy(tmp_path: Path):
+    """``type(bag){allocatable w(:)} :: a(NB)`` with per-instance sizes
+    (2, 4, 3) -> ELLPACK companion ``a_w(NB, cap_a_w)`` (cap = 4 via the
+    binding's ``max``).  Verifies the runtime-cap pack/unpack round-trips
+    the live data and that ``size(a(i)%w)`` resolved to the companion cap
+    (no ``a_d0`` symbol leak), against a gfortran reference."""
+    iface = OriginalInterface(
+        entry="kern_jag",
+        args=(OriginalArg(name="a", fortran_type="type(bag)", rank=1, shape=("NB", ),
+                          intent="inout", struct_type="bag"), ),
+        used_modules={"mo_bag": ("bag", "NB")},
+    )
+    sdfg_lib = _build_sdfg_lib(tmp_path, kernel_src=_JAG_TYPES_SRC + _JAG_KERNEL_SRC,
+                               types_src=_JAG_TYPES_SRC, name="kern_jag",
+                               entry="_QPkern_jag", iface=iface, driver_src=_JAG_DRIVER)
+    sdfg_lib.run_jag.argtypes = [ctypes.POINTER(ctypes.c_double)]
+    sdfg_lib.run_jag.restype = None
+
+    ref_lib = _build_reference_lib(tmp_path, types_src=_JAG_TYPES_SRC,
+                                   kernel_src=_JAG_KERNEL_SRC,
+                                   ref_driver_src=_JAG_REF_DRIVER, name="kern_jag")
+    ref_lib.run_jag_ref.argtypes = [ctypes.POINTER(ctypes.c_double)]
+    ref_lib.run_jag_ref.restype = None
+
+    rng = np.random.default_rng(7)
+    p_init = np.asfortranarray(rng.standard_normal(9))
+
+    p_ref = p_init.copy(order="F")
+    ref_lib.run_jag_ref(p_ref.ctypes.data_as(ctypes.POINTER(ctypes.c_double)))
+
+    p_sdfg = p_init.copy(order="F")
+    sdfg_lib.run_jag(p_sdfg.ctypes.data_as(ctypes.POINTER(ctypes.c_double)))
+
+    np.testing.assert_allclose(p_sdfg, p_ref, rtol=1e-12, atol=1e-12)
+    # Sanity: the live data really was scaled (not a no-op match).
+    np.testing.assert_allclose(p_ref, p_init * 2.0, rtol=1e-12, atol=1e-12)
