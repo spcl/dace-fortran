@@ -2,20 +2,25 @@
 subroutine, snapshotted from HLFIR BEFORE any normalising pass
 (``hlfir-flatten-structs`` in particular) runs.
 
-We populate these from the bridge's new
-``HLFIRModule.get_fortran_interface(entry)`` entry point  --  it walks
-``hlfir.declare`` ops on the entry function in the untransformed
-module and pulls out:
+This is **auto-derived by default**.  ``SDFGBuilder.build`` calls the
+bridge's ``HLFIRModule.get_fortran_interface(entry)`` -- which walks the
+entry function's block arguments IN ORDER on the untransformed module --
+and stashes the result on ``sdfg._fortran_interface_raw``.
+``build_fortran_library`` turns it into an ``OriginalInterface`` via
+``build_auto_interface`` whenever the caller does not pass one, so a
+normal build needs no hand-written interface.
 
-- each dummy arg's Fortran name / type / rank / intent,
-- the full layout of every derived type referenced by a struct dummy
-  (so we know what ``st%u`` / ``st%v`` / etc. look like from the
-  caller's side),
-- the module each derived type is defined in (so the generated
-  wrapper can emit ``use <mod>, only: <type_name>``).
+Per dummy the snapshot carries name / element dtype / rank / shape /
+intent and, for a derived-type dummy, the type name + defining module
+(recovered from the mangled ``_QM<mod>T<tname>``).  Member *layouts* are
+deliberately NOT extracted: the emitter gets per-member accesses from the
+``FlattenPlan``, so the interface only needs each dummy's outer surface
+plus the ``use <mod>, only: ...`` list.  No fparser dependency  --  HLFIR's
+types carry all of it.
 
-No fparser dependency  --  HLFIR's types carry all of this; mangled
-names like ``_QM<mod>T<tname>`` let us recover module origins.
+A hand-written ``OriginalInterface`` is only needed for a dummy shape the
+snapshot can't name (e.g. ``CHARACTER``); ``build_auto_interface`` raises
+``unsupported dtype`` in that case so the caller knows to supply one.
 """
 
 from dataclasses import dataclass, field

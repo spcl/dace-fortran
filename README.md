@@ -35,7 +35,7 @@ Python SDFG walker only ever sees a single, predictable IR shape:
 | Step | What it does | Produces |
 | --- | --- | --- |
 | **(0) Preprocess** | Text rewrites flang needs or that pin backend arithmetic (`USE`-merge, OMP/ACC strip, integer-power expansion), then `flang-new-21 -fc1 -emit-hlfir`. | `kernel.hlfir` -- raw HLFIR, one file per TU |
-| **(1) Parse** | Load the `.hlfir` into one MLIR `ModuleOp` and snapshot the caller-visible dummy list + derived-type layouts *before* any rewrite. | `ModuleOp` + a `FortranInterface` (the pre-flatten caller view) |
+| **(1) Parse** | Load the `.hlfir` into one MLIR `ModuleOp` and snapshot the entry's dummy list (name/type/rank/shape/intent + derived-type origins) *before* any rewrite -- the auto-derived binding interface. | `ModuleOp` + the pre-flatten caller-interface snapshot |
 | **(2) Inline** | `hlfir-inline-all` folds the whole call tree into the pinned entry; `symbol-dce` drops dead siblings; cross-TU calls left external fail loudly. | one self-contained function |
 | **(3) Normalise** | A fixed rewrite chain (select-case lowering, AoS->SoA flattening, vector-subscript expansion, polymorphism rejection, shape propagation) collapses the IR to one shape. | a single canonical HLFIR shape |
 | **(4) Build SDFG** | Walk HLFIR into a small AST, emit the SDFG, run post-generation cleanup, snapshot the arg list. | a `dace.SDFG` + a pinned `FrozenSignature` |
@@ -76,11 +76,14 @@ cdll = lib.load()                       # -> ctypes.CDLL
 print("binding:", lib.bindings_f90, "library:", lib.so_path)
 ```
 
-If the SDFG needs an OpenMP runtime, supply it at run time
-(`LD_PRELOAD=<libgomp/libomp> python ...`); the library never hard-codes
-one. The lower-level sequence (`emit_bindings` -> `frozen.verify_against(sdfg)`
--> gfortran link) is still supported and is exactly what
-`build_fortran_library` consolidates.
+`build_fortran_library` auto-derives the caller interface and flatten
+plan from the SDFG -- the default path needs neither hand-written. Pass an
+explicit `iface=` / `plan=` only to override (e.g. a dummy shape the
+snapshot can't name). If the SDFG needs an OpenMP runtime, supply it at run
+time (`LD_PRELOAD=<libgomp/libomp> python ...`); the library never
+hard-codes one. The lower-level primitive `emit_bindings(frozen, iface,
+plan, path)` takes both explicitly and is what `build_fortran_library`
+calls after auto-deriving them.
 
 ## The three input tiers
 
@@ -746,7 +749,7 @@ channels.
 
 | Artefact | Produced at | Consumed at | Role |
 | --- | --- | --- | --- |
-| `FortranInterface` | (1) snapshot | (5) emit | Caller-facing dummy list + derived-type layouts |
+| caller-interface snapshot | (1) snapshot | (5) emit | Pre-flatten dummy surface; auto-derived into the binding's `OriginalInterface` (member accesses come from the `FlattenPlan`, not here) |
 | `FlattenPlan` (MLIR attr) | (3) flatten-structs | (5) emit | Per-dummy AoS->SoA recipe (`flat_names`, `read_exprs`, `shape_exprs`, `aliasable`, ...) |
 | `VarInfo[]` | (4) extract_vars | (4) SDFGBuilder | Classification + shape + intent per variable |
 | `ASTNode` tree | (4) extract_ast | (4) SDFGBuilder | Normalised CFG + assigns + library-op references |
@@ -758,7 +761,7 @@ channels.
 dace_fortran/
 |-- bridge/            C++ -- HLFIR parser + classifier + walker (nanobind)
 |   |-- bridge.cpp           MLIRContext, pass pipeline, Python exports
-|   |-- extract_vars.cpp     hlfir.declare -> VarInfo[]; groupAllocSites
+|   |-- extract_vars.cpp     hlfir.declare -> VarInfo[]; groupAllocSites; extractFortranInterface
 |   |-- extract_ast.cpp      entry point; calls into ast/dispatch.cpp
 |   |-- trace_utils.cpp      SSA tracing + alias helpers + depth limits
 |   \-- ast/                 AST extraction split per responsibility
@@ -779,7 +782,7 @@ dace_fortran/
 |-- intrinsics/        Python -- Fortran intrinsic registry
 |-- bindings/          Python -- Fortran wrapper emitter (step 5)
 |   |-- frozen_signature.py  FrozenArg + FrozenSignature + drift check
-|   |-- fortran_interface.py OriginalInterface (outer surface)
+|   |-- fortran_interface.py OriginalInterface + build_auto_interface (auto-derived surface)
 |   |-- flatten_plan.py      FlattenPlan + FlattenRecipe + to/from_dict
 |   |-- block_builders.py    per-Fortran-section emitters
 |   |-- loop_copy.py         alias vs deep-copy renderers
