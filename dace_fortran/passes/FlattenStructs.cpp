@@ -2163,6 +2163,23 @@ struct FlattenStructsPass
       std::string intentStr = extractIntent(p.argDecl.getFortranAttrs());
       llvm::StringSet<> aosAllocSet;
       for (auto &m : p.aosAllocMembers) aosAllocSet.insert(m);
+      // Phase 5c-C (NOT supported, raise loudly): an ``intent(out)`` AoS
+      // dummy has its allocatable components auto-deallocated on entry
+      // (F2003), so the kernel must perform the FIRST ``allocate`` itself.
+      // There is then no caller-side data to size the padded companion
+      // from -- the binding would compute ``cap = 0 -> 1`` and emit a
+      // degenerate buffer that silently truncates the kernel's writes.
+      // Fail rather than miscompile; pass the struct as ``intent(inout)``
+      // with pre-allocated members instead.
+      if (!p.aosAllocMembers.empty() && intentStr == "out") {
+        p.argDecl->emitError(
+            "AoS-allocatable member on an intent(out) struct dummy needs a "
+            "kernel-internal first allocate, which is unsupported: no caller "
+            "data to size the padded companion.  Pass the struct as "
+            "intent(inout) with pre-allocated members.");
+        signalPassFailure();
+        continue;
+      }
       // Phase 5c-B: emit one aos_alloc=True entry per AoS+
       // allocatable member.  Then emit the regular entry
       // covering the non-allocatable members (skipped via the

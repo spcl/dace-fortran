@@ -1456,3 +1456,37 @@ end subroutine main
     # into a(1)%b).
     np.testing.assert_array_equal(out[:, 0], [31, 32, 33, 34])
     np.testing.assert_array_equal(out[:, 1], [31, 32, 33, 34])
+
+
+def test_intent_out_aos_alloc_member_raises_loudly(tmp_path, capfd):
+    """An ``intent(out)`` AoS dummy with an ``allocatable`` member forces a
+    kernel-internal FIRST allocate -- F2003 auto-deallocates intent(out)
+    allocatable components on entry, so there is no caller data to size the
+    padded companion.  ``hlfir-flatten-structs`` must fail loudly rather than
+    emit a degenerate (cap-1) buffer that silently truncates the writes."""
+    src = """
+module mo_ki
+  use iso_c_binding
+  implicit none
+  integer, parameter :: N = 3
+  type :: bag
+     real(c_double), allocatable :: w(:)
+  end type bag
+end module mo_ki
+subroutine kern_ki(a, m)
+  use mo_ki
+  implicit none
+  type(bag), intent(out) :: a(N)
+  integer, intent(in) :: m
+  integer :: i, j
+  do i = 1, N
+     allocate(a(i)%w(m))
+     do j = 1, m
+        a(i)%w(j) = real(j, c_double)
+     end do
+  end do
+end subroutine kern_ki
+"""
+    with pytest.raises(Exception):
+        _build(src, tmp_path, name="kern_ki", entry="_QPkern_ki")
+    assert "intent(out)" in capfd.readouterr().err

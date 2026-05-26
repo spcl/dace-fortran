@@ -837,9 +837,9 @@ dace_fortran/
 | Derived type, allocatable members | [OK] | flat allocatable companion + per-allocate-site rename |
 | AoS + allocatable, uniform constant inner size | [OK] | static companion `A_w(N, M)`; alloc chain erased |
 | AoS + allocatable as SDFG-boundary dummy | [OK] | padding-to-max with a runtime cap symbol |
-| AoS + allocatable, kernel-internal first alloc (`intent(out)`) | [!] | needs an HLFIR shape-discovery pre-pass |
+| AoS + allocatable, kernel-internal first alloc (`intent(out)`) | [X] | no caller data to size the companion; `hlfir-flatten-structs` raises loudly |
 | Jagged AoS, two allocatable members of differing lengths | [OK] | one cap symbol per member (`cap_a_w`, `cap_a_v`) |
-| Derived type with parametric array dim from a struct field | [!] | 1 xfail |
+| Derived type with parametric array dim from a struct field | [OK] | `test_parametric_dim_from_struct_field` |
 | Circular type definitions (recursion through a pointer chain) | [X] | out of scope |
 
 ### Control flow
@@ -888,9 +888,9 @@ dace_fortran/
 | Reductions (sum/product/min/max/all/any/count/minval/maxval) | [OK] | |
 | BLAS/LAPACK (matmul, transpose) | [OK] | dense -> libnode, strided -> explicit `do` loop |
 | Noncontiguous gather `a(idx, :)` -- rank-1, constant extent | [OK] | gather-expand pass |
-| Noncontiguous gather -- rank-2+ (`d(cols2, cols)`) | [!] | `ExpandVectorSubscriptGather` only emits the rank-1 nested loop yet; bails with a clear error (not a DaCe modeling limit) |
+| Noncontiguous gather -- rank-2+ (`d(cols2, cols)`) | [OK] | nested gather-loop tree (`noncontig_pardecls_test.py`) |
 | Noncontiguous slice -- symbolic extent | [X] | DaCe can't express runtime-sized symbol arrays |
-| Noncontiguous scatter -- `intent(out)` write-back | [!] | not yet modelled |
+| Noncontiguous scatter -- `a(idx) = rhs` write-back | [OK] | `hlfir-expand-vector-subscript-scatter` (`noncontig_gather_scatter_test.py`) |
 | `ASSOCIATE` block | [!] | relative indexing only |
 
 ### Codegen targets
