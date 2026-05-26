@@ -140,7 +140,8 @@ def _resolve_entry(source: str, entry: Optional[str]) -> str:
     return f"_QM{mod.lower()}P{name.lower()}" if mod else f"_QP{name.lower()}"
 
 
-def _emit_hlfir(source: str, out_dir: Path, name: str, *, merge: bool, preprocess: bool) -> Path:
+def _emit_hlfir(source: str, out_dir: Path, name: str, *, merge: bool,
+                preprocess: bool, defines: Sequence[str] = ()) -> Path:
     """Write ``source`` to ``<out_dir>/<name>.F90``, preprocess
     (module-merge + opt-in rewrites), ``flang -fc1 -cpp -emit-hlfir``
     it, and return the ``.hlfir`` path.
@@ -155,7 +156,11 @@ def _emit_hlfir(source: str, out_dir: Path, name: str, *, merge: bool, preproces
     flang runs with ``-cpp -U_OPENMP -U_OPENACC`` so kernels that ship
     ``#ifdef`` blocks are still consumable; the macros are forced
     undefined to match what :func:`strip_openmp_directives` already
-    applies at the Fortran-text level.
+    applies at the Fortran-text level.  ``defines`` are extra ``-D`` cpp
+    macros (``NAME`` / ``NAME=val``) for sources whose ``#if`` branches
+    select code by a build-time configuration -- the no-build-system
+    equivalent of the ``-D`` flags tier 3 reads from
+    ``compile_commands.json``.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     # ``.F90`` routes through flang's built-in preprocessor by extension
@@ -165,10 +170,12 @@ def _emit_hlfir(source: str, out_dir: Path, name: str, *, merge: bool, preproces
     src.write_text(preprocess_fortran_source(source, search_dirs=[out_dir],
                                              merge=merge, if_intvar=preprocess))
     hlfir = out_dir / f"{name}.hlfir"
-    subprocess.check_call([_find_flang(),
-                           "-fc1", "-cpp", "-U_OPENMP", "-U_OPENACC",
-                           "-I", str(out_dir),
-                           "-emit-hlfir", str(src), "-o", str(hlfir)])
+    cmd = [_find_flang(), "-fc1", "-cpp", "-U_OPENMP", "-U_OPENACC",
+           "-I", str(out_dir)]
+    for d in defines:
+        cmd += ["-D", d]
+    cmd += ["-emit-hlfir", str(src), "-o", str(hlfir)]
+    subprocess.check_call(cmd)
     return hlfir
 
 
@@ -178,7 +185,8 @@ def make_builder(source: str,
                  name: str = "sdfg",
                  pipeline: Optional[str] = None,
                  out_dir: Optional[Union[str, Path]] = None,
-                 preprocess: bool = False) -> SDFGBuilder:
+                 preprocess: bool = False,
+                 defines: Sequence[str] = ()) -> SDFGBuilder:
     """Resolve the entry, lower ``source`` to HLFIR, and return a
     configured (not yet built) :class:`SDFGBuilder`.
 
@@ -204,10 +212,12 @@ def make_builder(source: str,
     _resolve_entry(source, entry)
     pipeline = pipeline or DEFAULT_PIPELINE
     if out_dir is not None:
-        hlfir = _emit_hlfir(source, Path(out_dir), name, merge=True, preprocess=preprocess)
+        hlfir = _emit_hlfir(source, Path(out_dir), name, merge=True,
+                            preprocess=preprocess, defines=defines)
         return SDFGBuilder(str(hlfir), pipeline=pipeline, entry=entry)
     with tempfile.TemporaryDirectory(prefix=f"hlfir_{name}_") as td:
-        hlfir = _emit_hlfir(source, Path(td), name, merge=True, preprocess=preprocess)
+        hlfir = _emit_hlfir(source, Path(td), name, merge=True,
+                            preprocess=preprocess, defines=defines)
         return SDFGBuilder(str(hlfir), pipeline=pipeline, entry=entry)
 
 
@@ -217,7 +227,8 @@ def build_sdfg(source: str,
                name: str = "sdfg",
                pipeline: Optional[str] = None,
                out_dir: Optional[Union[str, Path]] = None,
-               preprocess: bool = False) -> SDFG:
+               preprocess: bool = False,
+               defines: Sequence[str] = ()) -> SDFG:
     """Build a :class:`dace.SDFG` from a single inline Fortran source.
 
     :param source: Fortran source as one string.
@@ -234,12 +245,17 @@ def build_sdfg(source: str,
         removed when omitted.
     :param preprocess: also run the opt-in ``IF (intvar)`` rewrite
         (off by default so clean source is untouched).
+    :param defines: extra ``-D`` cpp macros (``NAME`` / ``NAME=val``)
+        for flang's preprocessor -- set the build configuration when
+        there is no build system to read it from (tier 3 reads the same
+        flags from ``compile_commands.json`` automatically).
     :returns: a built, validated SDFG.
     :raises ValueError: if ``entry`` is ``None`` and the source has no
         procedure or is ambiguous (more than one).
     """
     return make_builder(source, entry=entry, name=name, pipeline=pipeline,
-                        out_dir=out_dir, preprocess=preprocess).build()
+                        out_dir=out_dir, preprocess=preprocess,
+                        defines=defines).build()
 
 
 #: ``func.func @<symbol>(`` -- the MLIR opener for a procedure

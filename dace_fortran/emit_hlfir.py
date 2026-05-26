@@ -150,15 +150,22 @@ def emit(*,
          stubs: Sequence[Path] = (),
          out_dir: Path,
          extra_includes: Sequence[Path] = (),
+         extra_defines: Sequence[str] = (),
          flang: str = "flang-new-21") -> List[Path]:
     """Emit ``.hlfir`` files under ``out_dir``.  Exactly one of
     ``compile_commands`` or ``sources`` must drive the file list:
 
-    * ``compile_commands`` -- a path to a cmake/ninja-emitted
-      ``compile_commands.json``; order + ``-I`` / ``-D`` flags come
-      from there (recommended).
+    * ``compile_commands`` -- a path to a cmake/ninja- or
+      ``bear``/autotools-emitted ``compile_commands.json``; build order
+      + per-TU ``-I`` / ``-D`` flags come from there (recommended).
     * ``sources`` -- explicit ``.f90`` list, topo-sorted by ``USE``;
       ``extra_includes`` becomes ``-I`` for every invocation.
+
+    ``extra_defines`` are extra ``-D`` cpp macros (``NAME`` or
+    ``NAME=val``) passed to flang on top of whatever the build flags
+    already carry -- the only way to set the cpp configuration when
+    there is no build system to read it from (the ``sources`` path), and
+    an override/augment for the ``compile_commands`` path.
 
     ``stubs`` is a list of flang-buildable stub sources for external
     modules flang has no shipped ``.mod`` for (``mpi`` / ``netcdf``
@@ -171,20 +178,21 @@ def emit(*,
     if (compile_commands is None) == (not sources):
         raise ValueError("emit() takes exactly one of compile_commands= or sources=")
     out_dir.mkdir(parents=True, exist_ok=True)
+    extra_defs = list(extra_defines)
     emitted: list = []
     # 1. stubs first (USE-order across stubs; usually a flat list).
     for src in _topo_order([Path(s) for s in stubs]):
-        _flang_emit(flang, src, out_dir, (), ())
+        _flang_emit(flang, src, out_dir, (), extra_defs)
         emitted.append(out_dir / f"{src.stem}.hlfir")
     # 2. project sources.
     if compile_commands is not None:
         for src, incs, defs in _parse_compile_commands(Path(compile_commands)):
-            _flang_emit(flang, src, out_dir, incs, defs)
+            _flang_emit(flang, src, out_dir, incs, list(defs) + extra_defs)
             emitted.append(out_dir / f"{src.stem}.hlfir")
     else:
         incs = [str(d) for d in extra_includes]
         for src in _topo_order([Path(s) for s in sources]):
-            _flang_emit(flang, src, out_dir, incs, ())
+            _flang_emit(flang, src, out_dir, incs, extra_defs)
             emitted.append(out_dir / f"{src.stem}.hlfir")
     return emitted
 
@@ -213,6 +221,12 @@ def main(argv=None):
                    dest="extra_includes",
                    help="extra -I path (--source mode only; "
                         "compile_commands inherits its own -I list).")
+    p.add_argument("--define", "-D", action="append", default=[],
+                   dest="extra_defines", metavar="NAME[=val]",
+                   help="extra -D cpp macro for flang's preprocessor "
+                        "(repeat); the only way to set cpp config in "
+                        "--source mode, and an augment in compile_commands "
+                        "mode.")
     p.add_argument("--out", required=True, type=Path,
                    help="output directory; .hlfir + .mod files land here.")
     p.add_argument("--flang", default="flang-new-21",
@@ -228,6 +242,7 @@ def main(argv=None):
                stubs=args.stubs,
                out_dir=args.out,
                extra_includes=args.extra_includes,
+               extra_defines=args.extra_defines,
                flang=args.flang)
     print(f"emitted {len(out)} .hlfir under {args.out}")
     return 0
