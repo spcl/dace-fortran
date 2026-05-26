@@ -52,18 +52,18 @@ instead of silently shipping a wrong wrapper.
 ```python
 import dace_fortran
 
-# 1. Fortran source -> SDFG.  ``entry`` is the mangled flang symbol:
-#    ``_QPname`` for a free subroutine, ``_QM<mod>Pname`` for a
-#    module procedure.  Omit it only when the source has exactly one
+# 1. Fortran source -> SDFG.  entry is the mangled flang symbol:
+#    _QPname for a free subroutine, _QM<mod>Pname for a module
+#    procedure.  Omit it only when the source has exactly one
 #    procedure (it is then auto-resolved).
 sdfg = dace_fortran.build_sdfg(open("kernel.f90").read(), entry="_QPkernel")
 
 # 2. Optimise.  Any DaCe transformation is fair game.
 sdfg.simplify()
 
-# 3. Emit + link a Fortran-callable library.  ``build_fortran_library``
-#    re-verifies the frozen signature, writes ``<entry>_bindings.f90``,
-#    and gfortran-links it against the compiled SDFG ``.so``.
+# 3. Emit + link a Fortran-callable library.  build_fortran_library
+#    re-verifies the frozen signature, writes <entry>_bindings.f90,
+#    and gfortran-links it against the compiled SDFG .so.
 from dace_fortran.bindings import build_fortran_library, SignatureDriftError
 try:
     lib = build_fortran_library(sdfg, iface, plan, out_dir="build",
@@ -213,10 +213,10 @@ SC26-Layout-AD experiment kernels:
 subroutine kernel(n, a, x, y)
   implicit none
   integer,    intent(in)    :: n
-  ! ``a`` is a length-1 array, not a plain ``complex(8)`` scalar, to
-  ! dodge a DaCe-core gap: ctypes on Python 3.12 has no
-  ! ``c_double_complex``, so a by-value complex128 truncates the
-  ! imaginary part.  Length-1 arrays use the pointer ABI (bit-identical).
+  ! a is a length-1 array, not a plain complex(8) scalar, to dodge a
+  ! DaCe-core gap: ctypes on Python 3.12 has no c_double_complex, so a
+  ! by-value complex128 truncates the imaginary part.  Length-1 arrays
+  ! use the pointer ABI (bit-identical).
   complex(8), intent(in)    :: a(1)
   complex(8), intent(in)    :: x(n)
   complex(8), intent(inout) :: y(n)
@@ -260,18 +260,18 @@ the `tests/_util.build_sdfg` test funnel (a thin wrapper over the real
 
 ### (b) The generated binding
 
-A flat kernel like this takes the **zero-copy alias path**: every array
-is passed straight through by address (`c_loc`), scalars go by value,
-and a ref-counted handle keeps one DaCe state per process. This is the
-real `kernel_bindings.f90` the step above produces (trimmed to the
-illustrative parts):
+A flat kernel takes the **zero-copy alias path**: every array passes
+through by address (`c_loc`), scalars by value, and a ref-counted handle
+keeps one DaCe state per process. The generated `kernel_bindings.f90` has
+two parts.
+
+First, the C-ABI interface to the compiled SDFG entry points:
 
 ```fortran
 module kernel_dace_bindings
   use iso_c_binding
   implicit none
 
-  ! ---------------- C ABI interface to the compiled SDFG ----------------
   interface
     function dace_init_kernel() bind(c, name='__dace_init_kernel') result(h)
       import :: c_ptr, c_int
@@ -284,7 +284,8 @@ module kernel_dace_bindings
       type(c_ptr), value :: a
       type(c_ptr), value :: x
       type(c_ptr), value :: y
-      integer(c_int), value :: n         ! free symbol, by value
+      ! n is a free symbol, passed by value
+      integer(c_int), value :: n
     end subroutine
 
     function dace_exit_kernel(h) bind(c, name='__dace_exit_kernel') result(err)
@@ -296,40 +297,31 @@ module kernel_dace_bindings
 
   type(c_ptr), save :: dace_handle = c_null_ptr
   integer,     save :: init_count  = 0
+```
 
-contains
+Then, in the module's `contains`, the wrapper that re-presents the
+caller's original signature and forwards to the SDFG:
 
-  subroutine kernel_dace(n, a, x, y)     ! <- caller's ORIGINAL signature
+```fortran
+  ! Drop-in for the original kernel: same (n, a, x, y) signature.
+  subroutine kernel_dace(n, a, x, y)
     integer(c_int),    intent(in),    target :: n
     complex(c_double), intent(in),    target :: a(1)
     complex(c_double), intent(in),    target :: x(n)
     complex(c_double), intent(inout), target :: y(n)
-    integer(c_int) :: dace_err
 
-    ! Ref-counted init -- first call allocates the state, the rest reuse it.
+    ! Ref-counted init: the first call allocates the state, the rest reuse it.
     if (init_count == 0) dace_handle = dace_init_kernel()
     init_count = init_count + 1
 
-    ! Every array passes straight through by address; n goes by value.
+    ! Arrays pass straight through by address; n goes by value.
     call dace_program_kernel(dace_handle, c_loc(a), c_loc(x), c_loc(y), n)
   end subroutine kernel_dace
-
-  subroutine kernel_dace_finalize()
-    integer(c_int) :: err
-    if (init_count > 0) then
-      init_count = init_count - 1
-      if (init_count == 0) then
-        err = dace_exit_kernel(dace_handle)
-        dace_handle = c_null_ptr
-      end if
-    end if
-  end subroutine kernel_dace_finalize
-end module kernel_dace_bindings
 ```
 
-The caller still writes `call kernel_dace(n, a, x, y)` exactly as it
-called the original kernel; the wrapper forwards by address to the
-compiled SDFG entry `__program_kernel`.
+The caller writes `call kernel_dace(n, a, x, y)` exactly as it called the
+original kernel. `kernel_dace_finalize` (omitted) decrements the handle
+ref-count and tears down the state when it hits zero.
 
 ## Flattening derived types
 
@@ -370,172 +362,111 @@ end subroutine kern_aos
 
 ### Why it can't alias
 
-Step (3)'s `hlfir-flatten-structs` turns the array-of-structs into four
-struct-of-arrays companions (`pts_x`, `pts_y`, `pts_z`, `pts_w`), and the
-SDFG kernel reads/writes those flat arrays. But in the caller's memory
-the four members are **interleaved** -- `pts(1)%x, pts(1)%y, pts(1)%z,
-pts(1)%w, pts(2)%x, ...` -- so `pts_x` is a *strided* view (stride = the
-struct size), not contiguous storage. A zero-copy `c_f_pointer` alias
-needs contiguous memory, which a strided AoS member does not provide.
-The binding therefore allocates contiguous companions and **scatters the
-members in / gathers them back out** with `do` loops. (When the members
-are whole contiguous arrays -- e.g. `type(t_fields){a(:,:), b(:,:)}` --
-each member *is* contiguous and the binding aliases it zero-copy via
-`c_f_pointer`; that is the other path in the same test file.)
+`hlfir-flatten-structs` makes four SoA companions `pts_x/y/z/w`, but in
+the caller's memory the members are **interleaved** (`pts(1)%x, pts(1)%y,
+..., pts(2)%x, ...`):
+
+- **Whole contiguous array member** (`type(t){a(:,:), b(:,:)}`) -- already
+  contiguous, so the binding aliases it zero-copy via `c_f_pointer`.
+- **Scalar member of an AoS** (this case) -- a *strided* view (stride =
+  struct size), no contiguous buffer to alias, so the binding allocates
+  companions and **scatters in / gathers out**.
 
 ### The generated binding (copy-in / copy-out)
 
-This is the real wrapper the bridge emitted for `kern_aos`
-(`aliasable=False` for every member -> `render_copy_in_loop` /
-`render_copy_out_loop`):
+Only the copy logic is shown; the module / `interface` / `finalize`
+scaffolding is identical to the QE example above.
 
 ```fortran
-! AUTO-GENERATED by dace.frontend.hlfir.bindings -- do not edit.
-module kern_aos_dace_bindings
-  use iso_c_binding
-  use mo_pt, only: point, N
-  implicit none
-  private
-  public :: kern_aos_dace, kern_aos_dace_finalize
-
-  interface
-    function dace_init_kern_aos() bind(c, name='__dace_init_kern_aos') result(h)
-      import :: c_ptr, c_int
-      type(c_ptr) :: h
-    end function
-    subroutine dace_program_kern_aos(h, pts_w, pts_x, pts_y, pts_z) &
-        bind(c, name='__program_kern_aos')
-      import
-      type(c_ptr), value :: h
-      type(c_ptr), value :: pts_w, pts_x, pts_y, pts_z
-    end subroutine
-    function dace_exit_kern_aos(h) bind(c, name='__dace_exit_kern_aos') result(err)
-      import :: c_ptr, c_int
-      type(c_ptr), value :: h
-      integer(c_int) :: err
-    end function
-  end interface
-
-  type(c_ptr), save :: dace_handle = c_null_ptr
-  integer,     save :: init_count  = 0
-
-contains
-
-  subroutine kern_aos_dace(pts)          ! <- caller's ORIGINAL AoS signature
+  ! Caller's original AoS signature.
+  subroutine kern_aos_dace(pts)
     type(point), intent(inout), target :: pts(N)
 
-    ! Contiguous SoA companions allocated per call (NOT aliases).
     real(c_double), allocatable, target :: pts_x(:), pts_y(:), pts_z(:), pts_w(:)
     integer(c_int) :: i1
-    integer(c_int) :: dace_err
 
-    ! ----- Copy-in: scatter the interleaved AoS into the SoA companions -----
+    ! copy-in: scatter the interleaved AoS into contiguous SoA companions
     allocate(pts_x(size(pts, dim=1)))
     do i1 = 1, size(pts, dim=1)
       pts_x(i1) = pts(i1)%x
     end do
-    allocate(pts_y(size(pts, dim=1)))
-    do i1 = 1, size(pts, dim=1)
-      pts_y(i1) = pts(i1)%y
-    end do
-    ! ... pts_z, pts_w likewise ...
-
-    if (init_count == 0) dace_handle = dace_init_kern_aos()
-    init_count = init_count + 1
+    ! ... pts_y, pts_z, pts_w likewise ...
 
     call dace_program_kern_aos(dace_handle, &
       c_loc(pts_w), c_loc(pts_x), c_loc(pts_y), c_loc(pts_z))
 
-    ! ----- Copy-out: gather the SoA companions back into the AoS -----
+    ! copy-out: gather the companions back into the AoS
     do i1 = 1, size(pts, dim=1)
       pts(i1)%x = pts_x(i1)
     end do
     deallocate(pts_x)
     ! ... pts_y, pts_z, pts_w likewise ...
   end subroutine kern_aos_dace
-
-  subroutine kern_aos_dace_finalize()
-    integer(c_int) :: err
-    if (init_count > 0) then
-      init_count = init_count - 1
-      if (init_count == 0) then
-        err = dace_exit_kern_aos(dace_handle)
-        dace_handle = c_null_ptr
-      end if
-    end if
-  end subroutine kern_aos_dace_finalize
-end module kern_aos_dace_bindings
 ```
 
-(The real file repeats the `pts_z` / `pts_w` loops in full; trimmed here.)
-An `intent(in)` struct array gets copy-in but no copy-out; an
-`intent(out)` one gets copy-out only.
+`intent(in)` gets copy-in only; `intent(out)` gets copy-out only.
 
 ### Edge case: jagged allocatable members
 
-The hardest flatten shape is an array-of-structs whose member is
-`allocatable` and a **different length in each instance**
-(`test_e2e_array_of_jagged_alloc_structs_deepcopy`):
+An AoS whose member is `allocatable` with a **different length per
+instance** (`test_e2e_array_of_jagged_alloc_structs_deepcopy`):
 
 ```fortran
 type :: bag
-   real(c_double), allocatable :: w(:)   ! per-instance length differs
+   ! per-instance length differs
+   real(c_double), allocatable :: w(:)
 end type bag
-! ... type(bag), intent(inout) :: a(NB), each a(i)%w allocated separately
+
+! each a(i)%w is allocated separately
+type(bag), intent(inout) :: a(NB)
 do i = 1, NB
-   do j = 1, size(a(i)%w)                ! per-instance extent
+   do j = 1, size(a(i)%w)
       a(i)%w(j) = a(i)%w(j) * 2.0_c_double
    end do
 end do
 ```
 
-There is no single contiguous companion shape for a jagged member, so
-the pass packs it into an **ELLPACK companion** `a_w(NB, cap)` whose
-inner extent `cap_a_w` is a runtime symbol -- the maximum member length
-over all instances. The binding computes that maximum, allocates the
-zero-padded buffer, scatters each instance's live region in, calls the
-SDFG, and gathers only each live region back. Crucially, `size(a(i)%w)`
-inside the kernel (the inner loop bound) flattens to that same
-`cap_a_w` symbol, so the SDFG and the binding agree on the buffer width:
+A jagged member has no single contiguous shape, so it flattens to an
+**ELLPACK companion**: one padded rectangular array `a_w(NB, cap_a_w)`.
+
+- `a(i)%w(j)` flattens to `a_w(i, j)`.
+- The inner extent `cap_a_w` is a runtime symbol = `max_i size(a(i)%w)`
+  (with a `cap == 0 -> 1` sentinel); rows shorter than `cap_a_w` are
+  zero-padded.
+- `size(a(i)%w)` -- the kernel's inner loop bound -- flattens to that
+  same `cap_a_w`, so the kernel and the binding agree on the width.
+
+The binding computes the cap, packs each instance's live `1:size` region
+into `a_w`, calls the SDFG, then copies only the live region back:
 
 ```fortran
-  subroutine kern_jag_dace(a)
-    type(bag), intent(inout), target :: a(NB)
-    real(c_double), allocatable, target :: a_w(:, :)
-    integer(c_long_long) :: cap_a_w        ! int64 runtime cap (by value)
-    integer(c_int) :: i1
-
-    ! ----- cap = max_i size(a(i)%w), guarded against unallocated rows -----
+    ! cap = max over instances (guarded so unallocated rows don't poison it)
     cap_a_w = 0
     do i1 = 1, size(a, dim=1)
       if (allocated(a(i1)%w)) then
         if (size(a(i1)%w) > cap_a_w) cap_a_w = size(a(i1)%w)
       end if
     end do
-    if (cap_a_w == 0) cap_a_w = 1          ! empty-batch sentinel
+    if (cap_a_w == 0) cap_a_w = 1
 
     allocate(a_w(size(a, dim=1), cap_a_w))
-    a_w = 0                                ! padding rows stay zero
-    do i1 = 1, size(a, dim=1)              ! pack-in: live region only
+    a_w = 0
+    ! pack-in: copy each instance's live region only
+    do i1 = 1, size(a, dim=1)
       if (allocated(a(i1)%w)) a_w(i1, 1:size(a(i1)%w)) = a(i1)%w
     end do
 
-    if (init_count == 0) dace_handle = dace_init_kern_jag()
-    init_count = init_count + 1
     call dace_program_kern_jag(dace_handle, c_loc(a_w), cap_a_w)
 
-    do i1 = 1, size(a, dim=1)              ! pack-out: live region only
+    ! pack-out: copy each instance's live region back
+    do i1 = 1, size(a, dim=1)
       if (allocated(a(i1)%w)) a(i1)%w = a_w(i1, 1:size(a(i1)%w))
     end do
     deallocate(a_w)
-  end subroutine kern_jag_dace
 ```
 
-The SDFG loops to `cap_a_w` for every row; the zero padding makes the
-extra iterations harmless for elementwise kernels, and the pack-out
-copies back only each instance's live `1:size` slice. Kernels that
-*reduce* over the padding (a product, a count) would see the zeros, so
-this packing is correct for elementwise and sum-like members only.
+Padding is harmless for elementwise / sum-like members, but a kernel that
+*reduces over* the padding would see the zeros.
 
 ## Pipeline detail
 
