@@ -131,6 +131,89 @@ def _entry_module(entry: str) -> Optional[str]:
     return m.group(1).lower() if m else None
 
 
+def demangle_entry(sym: str) -> str:
+    """Flang mangled symbol -> the Fortran name.  ``_QM<mod>P<proc>`` /
+    ``_QM<mod>F<proc>`` -> ``<mod>::<proc>``; ``_QP<proc>`` -> ``<proc>``."""
+    m = re.match(r"_QM([a-z0-9_]+?)[PF]([a-z0-9_]+)$", sym, re.IGNORECASE)
+    if m:
+        return f"{m.group(1)}::{m.group(2)}"
+    m = re.match(r"_Q[PF]([a-z0-9_]+)$", sym, re.IGNORECASE)
+    return m.group(1) if m else sym
+
+
+_MOD_OPEN_RE = re.compile(r"^\s*module\s+([a-z_]\w*)\s*$", re.IGNORECASE)
+_MOD_END_RE = re.compile(r"^\s*end\s+module\b", re.IGNORECASE)
+_INTERFACE_RE = re.compile(r"^\s*(abstract\s+)?interface\b", re.IGNORECASE)
+_END_INTERFACE_RE = re.compile(r"^\s*end\s+interface\b", re.IGNORECASE)
+_SUBR_DEF_RE = re.compile(
+    r"^\s*(?:(?:recursive|pure|impure|elemental|module)\s+)*subroutine\s+([a-z_]\w*)",
+    re.IGNORECASE)
+
+
+def _scan_subroutine_defs(text: str):
+    """``[(subroutine_lower, enclosing_module_lower_or_None), ...]`` for the
+    subroutine *definitions* in ``text``.  Tracks ``MODULE`` / ``END MODULE``
+    for the qualifier and skips ``INTERFACE`` blocks (those are declarations,
+    not definitions)."""
+    defs = []
+    mod = None
+    in_iface = False
+    for raw in text.splitlines():
+        line = raw.split("!", 1)[0]
+        if _INTERFACE_RE.match(line):
+            in_iface = True
+            continue
+        if _END_INTERFACE_RE.match(line):
+            in_iface = False
+            continue
+        if in_iface:
+            continue
+        mo = _MOD_OPEN_RE.match(line)
+        if mo and not re.match(r"^\s*module\s+procedure\b", line, re.IGNORECASE):
+            mod = mo.group(1).lower()
+            continue
+        if _MOD_END_RE.match(line):
+            mod = None
+            continue
+        sm = _SUBR_DEF_RE.match(line)
+        if sm:
+            defs.append((sm.group(1).lower(), mod))
+    return defs
+
+
+def resolve_entry(name: str, sources) -> str:
+    """Resolve a Fortran procedure name to its mangled flang symbol by
+    scanning ``sources`` for the subroutine definition.  Pass-through if
+    ``name`` is already mangled (``_Q...``).  Accepts ``module::proc`` to
+    disambiguate; a bare ``proc`` resolves uniquely or raises.
+
+    Currently resolves SUBROUTINES (the usual SDFG entry, incl. the ICON
+    dycore ``solve_nh``); pass a function's mangled symbol directly.
+
+    :raises ValueError: ``name`` is not found, or is ambiguous across
+        modules (the message lists the candidates so the caller can
+        qualify it ``module::proc``).
+    """
+    if name.startswith("_Q"):
+        return name
+    want_mod, _, want_proc = name.lower().rpartition("::")
+    want_mod = want_mod or None
+
+    matches = set()
+    for src in sources:
+        for proc, mod in _scan_subroutine_defs(Path(src).read_text(errors="ignore")):
+            if proc == want_proc and (want_mod is None or mod == want_mod):
+                matches.add((proc, mod))
+    if not matches:
+        raise ValueError(f"resolve_entry: no subroutine {name!r} found in the sources")
+    if len(matches) > 1:
+        cands = ", ".join(f"{m or '<free>'}::{p}" for p, m in sorted(matches))
+        raise ValueError(f"resolve_entry: {name!r} is ambiguous ({cands}); "
+                         f"qualify it as module::proc or pass the mangled symbol")
+    proc, mod = matches.pop()
+    return f"_QM{mod}P{proc}" if mod else f"_QP{proc}"
+
+
 def _select_use_closure(parsed, root_module: str):
     """Filter parsed ``(src, includes, defines)`` entries down to the TU
     that defines ``root_module`` plus the transitive ``USE``-closure it
@@ -240,6 +323,9 @@ def emit(*,
     if compile_commands is not None:
         parsed = _parse_compile_commands(Path(compile_commands))
         if entry is not None:
+            # Accept a plain Fortran name (resolved against the sources) or
+            # a mangled symbol (passthrough), then keep only its USE-closure.
+            entry = resolve_entry(entry, [t[0] for t in parsed])
             mod = _entry_module(entry)
             if mod is not None:
                 parsed = _select_use_closure(parsed, mod)

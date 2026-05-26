@@ -370,8 +370,11 @@ def build_sdfg_from_project(compile_commands: Union[str, Path],
     see the README's *Building an SDFG from a real project* section.
 
     :param compile_commands: path to the build's ``compile_commands.json``.
-    :param entry: mangled Flang symbol of the target procedure
-        (**required** -- it selects which emitted ``.hlfir`` to lower).
+    :param entry: the target procedure -- either the mangled Flang symbol
+        (``_QMmo_solve_nonhydroPsolve_nh``) or the plain Fortran name
+        (``solve_nh`` / ``mo_solve_nonhydro::solve_nh``), resolved against
+        the project sources.  Selects which emitted ``.hlfir`` to lower and
+        restricts emission to its USE-closure.
     :param stubs: flang-buildable stub sources for modules flang has
         no shipped ``.mod`` for (``mpi`` / ``netcdf`` / ``hdf5`` / ...),
         compiled before the project TUs.
@@ -381,16 +384,22 @@ def build_sdfg_from_project(compile_commands: Union[str, Path],
     :param flang: flang binary to drive (default ``flang-new-21``).
     :returns: a built, validated SDFG.
     """
-    from dace_fortran.emit_hlfir import emit
+    from dace_fortran.emit_hlfir import emit, resolve_entry, _parse_compile_commands
+
+    # Accept a plain Fortran name (``solve_nh`` / ``mod::proc``) and resolve
+    # it to the mangled symbol against the project's own sources, so callers
+    # need not hand-write ``_QMmo_solve_nonhydroPsolve_nh``.
+    sources = [s for s, _, _ in _parse_compile_commands(Path(compile_commands))]
+    entry_sym = resolve_entry(entry, sources)
 
     def _do(d: Path) -> SDFG:
-        # Pass ``entry`` so the emitter restricts a whole-project
+        # Pass ``entry_sym`` so the emitter restricts a whole-project
         # compile_commands.json to the entry's USE-closure (a codebase
         # like ICON lists ~900 TUs; we only need the entry's plus what
         # it transitively USEs).
         emit(compile_commands=Path(compile_commands),
-             stubs=[Path(s) for s in stubs], out_dir=d, entry=entry, flang=flang)
-        return build_sdfg_from_hlfir(d, entry=entry, pipeline=pipeline)
+             stubs=[Path(s) for s in stubs], out_dir=d, entry=entry_sym, flang=flang)
+        return build_sdfg_from_hlfir(d, entry=entry_sym, pipeline=pipeline)
 
     if out_dir is not None:
         return _do(Path(out_dir))
