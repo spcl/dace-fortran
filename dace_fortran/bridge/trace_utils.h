@@ -35,13 +35,17 @@ namespace limits {
 /// Maximum recursion depth for ``buildExpr`` / ``buildExprWithSubscripts``
 /// / ``buildBoolExpr``.  Arithmetic trees from composed ``hlfir.elemental``
 /// + ``hlfir.apply`` chains fused by ``hlfir-flatten-structs`` can run
-/// 40+ deep on real ICON kernels.
-inline constexpr int kBuildExprDepth = 128;
+/// 40+ deep on real ICON kernels, and a long left-associative sum/product
+/// chain (``a + b + ... + z``) in the dynamical core recurses one level per
+/// term -- so keep this generous.  The recursion only descends as far as the
+/// actual expression tree, so a larger cap costs nothing until an expression
+/// truly needs it.
+inline constexpr int kBuildExprDepth = 1024;
 
 /// Maximum recursion depth for ``buildIndexExpr``.  Index expressions
 /// stay shallower than general expressions (one index operand per
 /// designate dim, narrower op set), but inherit the same budget.
-inline constexpr int kBuildIndexExprDepth = 128;
+inline constexpr int kBuildIndexExprDepth = 1024;
 
 /// Maximum ``fir.convert`` chain length while walking a single SSA
 /// value inside ``resolveIndex``.  Flang occasionally stacks several
