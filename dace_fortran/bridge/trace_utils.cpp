@@ -9,6 +9,8 @@
 
 #include "flang/Optimizer/Dialect/FIROps.h"
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 
 namespace hlfir_bridge {
@@ -224,7 +226,7 @@ static void forEachConstIndexedElementImpl(
     mlir::Value v,
     const std::function<void(const std::string &, const std::vector<int64_t> &)>
         &fn,
-    int depth) {
+    int depth, llvm::SmallPtrSet<mlir::Operation *, 32> *visited = nullptr) {
   if (depth > limits::kTraceToDeclMax || !v) return;
   if (auto e = constIndexedElementLoad(v)) {
     fn(e->first, e->second);
@@ -232,6 +234,13 @@ static void forEachConstIndexedElementImpl(
   }
   auto *def = v.getDefiningOp();
   if (!def) return;
+  // Branches into every operand: on a shared-subexpression DAG the depth cap
+  // alone is not enough (a diamond re-explores exponentially), so mark each op
+  // once.  The callback (``internPosSymbol``) is idempotent, so visiting a
+  // shared element leaf once instead of twice is behaviour-preserving.
+  llvm::SmallPtrSet<mlir::Operation *, 32> seen;
+  if (!visited) visited = &seen;
+  if (!visited->insert(def).second) return;
   // Recurse through the same wrapper / arithmetic / max-min / select op
   // set ``traceExtentExpr`` renders, so every element leaf is reached.
   if (mlir::isa<fir::ConvertOp, mlir::arith::SelectOp, mlir::arith::CmpIOp,
@@ -240,7 +249,7 @@ static void forEachConstIndexedElementImpl(
                 mlir::arith::MaxSIOp, mlir::arith::MaxUIOp,
                 mlir::arith::MinSIOp, mlir::arith::MinUIOp>(def)) {
     for (auto op : def->getOperands())
-      forEachConstIndexedElementImpl(op, fn, depth + 1);
+      forEachConstIndexedElementImpl(op, fn, depth + 1, visited);
   }
 }
 
@@ -251,14 +260,23 @@ void forEachConstIndexedElement(
   forEachConstIndexedElementImpl(v, fn, 0);
 }
 
-std::string traceExtentExpr(mlir::Value v) {
+static std::string traceExtentExprMemo(
+    mlir::Value v, llvm::DenseMap<mlir::Operation *, std::string> &memo) {
   if (!v) return "";
   auto *def = v.getDefiningOp();
   if (!def) return "";
 
+  // Extent expressions are DAGs (a shared grid-parameter sub-expression feeds
+  // many array bounds, and recurs within one extent).  Without a cache this
+  // recursive render re-walks shared subtrees and re-builds their strings --
+  // exponential work on a real kernel.  Memoize the rendered string per
+  // defining op so each subexpression is built exactly once.
+  if (auto it = memo.find(def); it != memo.end()) return it->second;
+  std::string result = [&]() -> std::string {
+
   // Transparent peels.
   if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def))
-    return traceExtentExpr(cv.getValue());
+    return traceExtentExprMemo(cv.getValue(), memo);
 
   // Constant integer literal.
   if (auto cst = mlir::dyn_cast<mlir::arith::ConstantOp>(def))
@@ -313,9 +331,9 @@ std::string traceExtentExpr(mlir::Value v) {
         if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue()))
           falseIsZero = (ia.getInt() == 0);
     if (falseIsZero && (pred == P::sgt || pred == P::sge))
-      return traceExtentExpr(sel.getTrueValue());  // non-negativity clamp
-    auto a = traceExtentExpr(sel.getTrueValue());
-    auto b = traceExtentExpr(sel.getFalseValue());
+      return traceExtentExprMemo(sel.getTrueValue(), memo);  // non-neg clamp
+    auto a = traceExtentExprMemo(sel.getTrueValue(), memo);
+    auto b = traceExtentExprMemo(sel.getFalseValue(), memo);
     if (a.empty() || b.empty()) return "";
     if (pred == P::sgt || pred == P::sge || pred == P::ugt || pred == P::uge)
       return "max(" + a + ", " + b + ")";
@@ -333,30 +351,46 @@ std::string traceExtentExpr(mlir::Value v) {
       {"arith.divsi", " // "}, {"arith.divui", " // "},
   };
   if (auto it = bin.find(nm); it != bin.end() && def->getNumOperands() == 2) {
-    auto l = traceExtentExpr(def->getOperand(0));
-    auto r = traceExtentExpr(def->getOperand(1));
+    auto l = traceExtentExprMemo(def->getOperand(0), memo);
+    auto r = traceExtentExprMemo(def->getOperand(1), memo);
     if (l.empty() || r.empty()) return "";
     return "(" + l + it->second + r + ")";
   }
   if ((nm == "arith.maxsi" || nm == "arith.maxui" || nm == "arith.minsi" ||
        nm == "arith.minui") &&
       def->getNumOperands() == 2) {
-    auto l = traceExtentExpr(def->getOperand(0));
-    auto r = traceExtentExpr(def->getOperand(1));
+    auto l = traceExtentExprMemo(def->getOperand(0), memo);
+    auto r = traceExtentExprMemo(def->getOperand(1), memo);
     if (l.empty() || r.empty()) return "";
     const char *fn = (nm == "arith.maxsi" || nm == "arith.maxui") ? "max" : "min";
     return std::string(fn) + "(" + l + ", " + r + ")";
   }
 
   return "";
+  }();
+  memo[def] = result;
+  return result;
 }
 
-void collectExtentExprScalars(mlir::Value v, std::set<std::string> &out) {
+std::string traceExtentExpr(mlir::Value v) {
+  llvm::DenseMap<mlir::Operation *, std::string> memo;
+  return traceExtentExprMemo(v, memo);
+}
+
+// Extent expressions form a DAG: a shared sub-expression (a grid-parameter
+// product reused across array bounds) feeds many operands and recurs within
+// one extent.  Without a visited set the operand recursion re-explores shared
+// subtrees, which is exponential on a real kernel.  ``visited`` marks each
+// defining op once so the walk is linear in the DAG size; the public entry
+// seeds a fresh set and threads it through.
+static void collectExtentExprScalarsRec(
+    mlir::Value v, std::set<std::string> &out,
+    llvm::SmallPtrSet<mlir::Operation *, 32> &visited) {
   if (!v) return;
   auto *def = v.getDefiningOp();
-  if (!def) return;
+  if (!def || !visited.insert(def).second) return;
   if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def)) {
-    collectExtentExprScalars(cv.getValue(), out);
+    collectExtentExprScalarsRec(cv.getValue(), out, visited);
     return;
   }
   if (mlir::isa<mlir::arith::ConstantOp>(def)) return;
@@ -372,18 +406,23 @@ void collectExtentExprScalars(mlir::Value v, std::set<std::string> &out) {
   if (auto sel = mlir::dyn_cast<mlir::arith::SelectOp>(def)) {
     // Walk both branches; cmp condition leaves are already
     // covered by the operands themselves.
-    collectExtentExprScalars(sel.getTrueValue(), out);
-    collectExtentExprScalars(sel.getFalseValue(), out);
+    collectExtentExprScalarsRec(sel.getTrueValue(), out, visited);
+    collectExtentExprScalarsRec(sel.getFalseValue(), out, visited);
     return;
   }
   auto nm = def->getName().getStringRef();
   if ((nm == "arith.addi" || nm == "arith.subi" || nm == "arith.muli" ||
        nm == "arith.divsi" || nm == "arith.divui" || nm == "arith.cmpi") &&
       def->getNumOperands() == 2) {
-    collectExtentExprScalars(def->getOperand(0), out);
-    collectExtentExprScalars(def->getOperand(1), out);
+    collectExtentExprScalarsRec(def->getOperand(0), out, visited);
+    collectExtentExprScalarsRec(def->getOperand(1), out, visited);
     return;
   }
+}
+
+void collectExtentExprScalars(mlir::Value v, std::set<std::string> &out) {
+  llvm::SmallPtrSet<mlir::Operation *, 32> visited;
+  collectExtentExprScalarsRec(v, out, visited);
 }
 
 hlfir::DeclareOp asAssumedShapeAlias(hlfir::DeclareOp decl) {

@@ -16,6 +16,9 @@
 #include "flang/Optimizer/Dialect/FIROps.h"
 #include "flang/Optimizer/Dialect/FIRType.h"
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -574,54 +577,91 @@ static bool designateRootedAt(hlfir::DesignateOp dg, hlfir::DeclareOp decl) {
 /// :param func: enclosing function (scopes the store walk).
 /// :param depth: recursion guard.
 /// :returns: const value if a literal reaches the index, else nullopt.
-static std::optional<int64_t> traceConstIntThroughLoad(mlir::Value v,
-                                                       mlir::func::FuncOp func,
-                                                       int depth = 0) {
+/// Writes (``fir.store`` / ``hlfir.assign``) to a function's memrefs, indexed
+/// once so ``traceConstIntThroughLoad`` need not re-walk every store/assign per
+/// load.  ``byValue`` keys the exact target SSA value; ``byName`` keys
+/// ``traceToDecl`` of the target -- the inlined-alias case where a load reads
+/// ``decl#1`` while the store wrote ``decl#0``.
+struct FuncWrites {
+  llvm::DenseMap<mlir::Value, llvm::SmallVector<mlir::Value, 2>> byValue;
+  std::map<std::string, std::vector<mlir::Value>> byName;
+};
+
+/// Build (once, cached per function) the store/assign target index.  This
+/// replaces two per-load ``func.walk``s that, on a large kernel, re-scanned the
+/// whole function for every loaded index -- O(declares x designates x loads x
+/// IR), the dominant ``extractVariables`` cost on ICON's ``solve_nh``.
+static const FuncWrites& funcWritesFor(
+    mlir::func::FuncOp func, std::map<mlir::Operation*, FuncWrites>& cache) {
+  auto it = cache.find(func.getOperation());
+  if (it != cache.end()) return it->second;
+  FuncWrites& w = cache[func.getOperation()];
+  func.walk([&](fir::StoreOp st) {
+    w.byValue[st.getMemref()].push_back(st.getValue());
+    auto n = traceToDecl(st.getMemref());
+    if (!n.empty()) w.byName[n].push_back(st.getValue());
+  });
+  func.walk([&](hlfir::AssignOp as) {
+    w.byValue[as.getLhs()].push_back(as.getRhs());
+    auto n = traceToDecl(as.getLhs());
+    if (!n.empty()) w.byName[n].push_back(as.getRhs());
+  });
+  return w;
+}
+
+static std::optional<int64_t> traceConstIntThroughLoad(
+    mlir::Value v, mlir::func::FuncOp func,
+    std::map<mlir::Operation*, FuncWrites>& writeCache, int depth = 0,
+    llvm::SmallPtrSet<mlir::Operation*, 16>* visited = nullptr) {
   if (depth > 64 || !v) return std::nullopt;
   if (auto c = traceConstInt(v)) return c;
   auto* def = v.getDefiningOp();
   if (!def) return std::nullopt;
+  // SSA def chains are DAGs (a stored value reused by several loads); mark each
+  // op once so a shared sub-chain is explored once, not re-walked per path.
+  // The most-negative literal is still reached -- each literal's op is visited
+  // exactly once and folded into the caller's running min.
+  llvm::SmallPtrSet<mlir::Operation*, 16> seen;
+  if (!visited) visited = &seen;
+  if (!visited->insert(def).second) return std::nullopt;
 
   // hlfir.associate %c {adapt.valuebyref} -- the callee received
   // the literal by value; its source is the constant.
   if (auto as = mlir::dyn_cast<hlfir::AssociateOp>(def))
-    return traceConstIntThroughLoad(as.getSource(), func, depth + 1);
+    return traceConstIntThroughLoad(as.getSource(), func, writeCache, depth + 1,
+                                    visited);
   // fir.convert (kind coercion).
   if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def))
-    return traceConstIntThroughLoad(cv.getValue(), func, depth + 1);
+    return traceConstIntThroughLoad(cv.getValue(), func, writeCache, depth + 1,
+                                    visited);
   // hlfir.declare alias -- trace its backing memref.
   if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(def))
-    return traceConstIntThroughLoad(dc.getMemref(), func, depth + 1);
+    return traceConstIntThroughLoad(dc.getMemref(), func, writeCache, depth + 1,
+                                    visited);
 
   auto ld = mlir::dyn_cast<fir::LoadOp>(def);
   if (!ld) return std::nullopt;
   auto target = ld.getMemref();
 
-  // Match writes whose target is the same SSA value OR resolves to
-  // the same backing declare (the write may use decl#0 while the
-  // load uses decl#1, or one side goes through an extra alias
-  // declare).  Two write op shapes: ``fir.store <v>, %tgt`` and
-  // ``hlfir.assign <v> to %tgt`` (the form Flang emits for a plain
-  // scalar ``local = irl_end`` after inlining).
+  // Candidate writes to this load's target.  The precomputed index yields the
+  // same set the old per-load store/assign walks matched via ``sameTarget``:
+  // when the target has a declare name, every write to that name (covers the
+  // inlined-alias case AND exact-value writes, since a write to ``target`` has
+  // the same ``traceToDecl`` name); otherwise exact-value writes only.
   auto targetName = traceToDecl(target);
-  auto sameTarget = [&](mlir::Value writeTgt) {
-    if (writeTgt == target) return true;
-    if (!targetName.empty()) return traceToDecl(writeTgt) == targetName;
-    return false;
-  };
+  const FuncWrites& w = funcWritesFor(func, writeCache);
   std::optional<int64_t> result;
-  func.walk([&](fir::StoreOp st) {
-    if (!sameTarget(st.getMemref())) return;
-    if (auto c = traceConstIntThroughLoad(st.getValue(), func, depth + 1)) {
+  auto consider = [&](mlir::Value writeVal) {
+    if (auto c = traceConstIntThroughLoad(writeVal, func, writeCache, depth + 1,
+                                          visited))
       if (!result || *c < *result) result = c;
-    }
-  });
-  func.walk([&](hlfir::AssignOp as) {
-    if (!sameTarget(as.getLhs())) return;
-    if (auto c = traceConstIntThroughLoad(as.getRhs(), func, depth + 1)) {
-      if (!result || *c < *result) result = c;
-    }
-  });
+  };
+  if (!targetName.empty()) {
+    if (auto it = w.byName.find(targetName); it != w.byName.end())
+      for (auto wv : it->second) consider(wv);
+  } else if (auto it = w.byValue.find(target); it != w.byValue.end()) {
+    for (auto wv : it->second) consider(wv);
+  }
   if (result) return result;
 
   // No store reached -- the load may read a declare that aliases an
@@ -629,13 +669,15 @@ static std::optional<int64_t> traceConstIntThroughLoad(mlir::Value v,
   // store).  Peel the load target through the declare chain.
   if (auto* tdef = target.getDefiningOp()) {
     if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(tdef))
-      return traceConstIntThroughLoad(dc.getMemref(), func, depth + 1);
+      return traceConstIntThroughLoad(dc.getMemref(), func, writeCache,
+                                      depth + 1, visited);
   }
   return std::nullopt;
 }
 
 static void inferLowerBoundsFromLiteralAccesses(
     hlfir::DeclareOp decl, std::vector<std::string>& lbs, int rank,
+    std::map<mlir::Operation*, FuncWrites>& writeCache,
     std::vector<bool>* seenLitOut = nullptr) {
   if (rank <= 0) return;
   auto func = decl->getParentOfType<mlir::func::FuncOp>();
@@ -652,7 +694,7 @@ static void inferLowerBoundsFromLiteralAccesses(
       // Peel a single ``fir.load %decl`` indirection if needed
       // (inlined-callee pattern: caller passes -5, callee stores
       // it to a local, then loads it for the designate index).
-      if (auto c = traceConstIntThroughLoad(indices[d], func)) {
+      if (auto c = traceConstIntThroughLoad(indices[d], func, writeCache)) {
         if (*c < minLit[d]) minLit[d] = *c;
         seenLit[d] = true;
       }
@@ -703,17 +745,28 @@ static std::string traceLoopIter(fir::DoLoopOp loop) {
 /// lift-cf-to-scf chain wraps a condition in (``arith.xori/andi/ori/
 /// trunci/extui/extsi``) and ``fir.convert``.  Stops at a ``fir.load``
 /// (hands off to ``traceToDecl``) or an op it doesn't recognise.
-static void collectIntegerScalarReads(mlir::Value v, std::set<std::string>& out,
-                                      int depth = 0) {
-  if (depth > 20 || !v) return;
+static void collectIntegerScalarReads(
+    mlir::Value v, std::set<std::string>& out,
+    llvm::SmallPtrSet<mlir::Operation*, 32>* visited = nullptr) {
+  if (!v) return;
   auto* def = v.getDefiningOp();
   if (!def) return;
+  // Index expressions form a DAG: one arith sub-expression (a shared ``base``,
+  // a reused induction term) feeds many ``hlfir.designate`` indices and recurs
+  // within a single index.  Without a visited set the operand recursion
+  // re-explores shared subtrees, which is exponential on a real kernel (ICON's
+  // ``solve_nh`` spins here for tens of minutes at 100% CPU).  Visit each
+  // defining op once instead: a fresh set is seeded on the top-level call and
+  // threaded through the recursion, making the walk linear in the DAG size.
+  llvm::SmallPtrSet<mlir::Operation*, 32> seen;
+  if (!visited) visited = &seen;
+  if (!visited->insert(def).second) return;
 
   // Comparison leaves: recurse into both operands to catch both sides
   // of ``i < n`` (i and n both become symbols if they're declared).
   if (mlir::isa<mlir::arith::CmpFOp, mlir::arith::CmpIOp>(def)) {
     for (auto operand : def->getOperands())
-      collectIntegerScalarReads(operand, out, depth + 1);
+      collectIntegerScalarReads(operand, out, visited);
     return;
   }
 
@@ -728,7 +781,7 @@ static void collectIntegerScalarReads(mlir::Value v, std::set<std::string>& out,
                 mlir::arith::ExtUIOp, mlir::arith::ExtSIOp, fir::ConvertOp>(
           def)) {
     for (auto operand : def->getOperands())
-      collectIntegerScalarReads(operand, out, depth + 1);
+      collectIntegerScalarReads(operand, out, visited);
     return;
   }
 
@@ -1289,6 +1342,11 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
     collectIntegerScalarReads(condOp.getCondition(), symbolNames);
   });
 
+  // Per-function store/assign index, built lazily once per function and shared
+  // across all declares (see ``funcWritesFor``); without it the lower-bound
+  // inference below re-walked the whole function per loaded designate index.
+  std::map<mlir::Operation*, FuncWrites> writeCache;
+
   // Pass 3: build one VarInfo per declare.
   for (auto& op : decls) {
     VarInfo v;
@@ -1577,7 +1635,8 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
     if (plainShapeOp)
       seenLit.assign(v.rank, false);
     else
-      inferLowerBoundsFromLiteralAccesses(op, v.lower_bounds, v.rank, &seenLit);
+      inferLowerBoundsFromLiteralAccesses(op, v.lower_bounds, v.rank, writeCache,
+                                          &seenLit);
 
     // Dummy-arg deferred-shape ALLOCATABLE/POINTER fallback: the
     // declare is a function block-arg, its declared type has no
