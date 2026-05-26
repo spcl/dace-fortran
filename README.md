@@ -114,6 +114,11 @@ sdfg(a=a, n=8)
 assert (a == 1.0).all()
 ```
 
+If the source has `#ifdef` blocks but no build system to read the cpp
+config from, set the macros directly: `build_sdfg(src, ...,
+defines=["USE_DBL", "NPROMA=8"])` feeds them to `flang -cpp` (the tier-3
+equivalent of the `-D` flags from `compile_commands.json`).
+
 ### Tier 2 -- multi-file project
 
 A driver plus the modules it `USE`s, in any order. The file defining
@@ -155,6 +160,15 @@ sdfg = dace_fortran.build_sdfg_from_project(
 for (`mpi` / `netcdf` / `hdf5` / ...): a small module declaring the names
 the project `USE`s, compiled before the project TUs so those `USE` lines
 resolve. Omit when there are no such externals.
+
+**Preprocessor config comes from the build flags.** Heavily-`#ifdef`'d
+sources (ICON's dycore, CLOUDSC, ...) only compile under the right cpp
+macros. The emitter parses each TU's `-I` include paths and `-D` defines
+out of its `compile_commands.json` entry -- both the `"command"` string
+(cmake / ninja) and the `"arguments"` list (`bear` / autotools) forms --
+and passes them to `flang -cpp` so the preprocessor selects the same code
+the real build does, *before* HLFIR is emitted. Add extra macros with
+`extra_defines=[...]` (or `-D NAME[=val]` on the `emit_hlfir` CLI).
 
 To emit once and lower several entries (or to inspect the intermediate
 `.hlfir` files), use the two explicit steps that
