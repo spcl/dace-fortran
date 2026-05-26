@@ -678,6 +678,9 @@ static std::optional<int64_t> traceConstIntThroughLoad(
 static void inferLowerBoundsFromLiteralAccesses(
     hlfir::DeclareOp decl, std::vector<std::string>& lbs, int rank,
     std::map<mlir::Operation*, FuncWrites>& writeCache,
+    const llvm::DenseMap<mlir::Operation*,
+                         llvm::SmallVector<hlfir::DesignateOp, 4>>&
+        designatesByDecl,
     std::vector<bool>* seenLitOut = nullptr) {
   if (rank <= 0) return;
   auto func = decl->getParentOfType<mlir::func::FuncOp>();
@@ -686,20 +689,24 @@ static void inferLowerBoundsFromLiteralAccesses(
   std::vector<int64_t> minLit(rank, std::numeric_limits<int64_t>::max());
   std::vector<bool> seenLit(rank, false);
 
-  func.walk([&](hlfir::DesignateOp dg) {
-    if (!designateRootedAt(dg, decl)) return;
-    auto indices = dg.getIndices();
-    unsigned nIdx = std::min<unsigned>(indices.size(), (unsigned)rank);
-    for (unsigned d = 0; d < nIdx; ++d) {
-      // Peel a single ``fir.load %decl`` indirection if needed
-      // (inlined-callee pattern: caller passes -5, callee stores
-      // it to a local, then loads it for the designate index).
-      if (auto c = traceConstIntThroughLoad(indices[d], func, writeCache)) {
-        if (*c < minLit[d]) minLit[d] = *c;
-        seenLit[d] = true;
+  // Designates rooted at ``decl`` are looked up from the once-built index
+  // (see the builder in ``extractVariables``) instead of re-walking every
+  // designate in the function per declare.
+  auto dit = designatesByDecl.find(decl.getOperation());
+  if (dit != designatesByDecl.end())
+    for (auto dg : dit->second) {
+      auto indices = dg.getIndices();
+      unsigned nIdx = std::min<unsigned>(indices.size(), (unsigned)rank);
+      for (unsigned d = 0; d < nIdx; ++d) {
+        // Peel a single ``fir.load %decl`` indirection if needed
+        // (inlined-callee pattern: caller passes -5, callee stores
+        // it to a local, then loads it for the designate index).
+        if (auto c = traceConstIntThroughLoad(indices[d], func, writeCache)) {
+          if (*c < minLit[d]) minLit[d] = *c;
+          seenLit[d] = true;
+        }
       }
     }
-  });
 
   if ((int)lbs.size() < rank) lbs.resize(rank, "1");
   for (int d = 0; d < rank; ++d) {
@@ -1347,6 +1354,36 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
   // inference below re-walked the whole function per loaded designate index.
   std::map<mlir::Operation*, FuncWrites> writeCache;
 
+  // Group every designate under each declare in its root chain, once.  The
+  // chain matches ``designateRootedAt`` exactly, so a declare's bucket is the
+  // set of designates ``designateRootedAt`` would have matched -- but the walk
+  // happens once for the whole module instead of once per declare
+  // (O(declares x designates) -> O(designates) + a lookup per declare).
+  llvm::DenseMap<mlir::Operation*, llvm::SmallVector<hlfir::DesignateOp, 4>>
+      designatesByDecl;
+  module.walk([&](hlfir::DesignateOp dg) {
+    mlir::Value v = dg.getMemref();
+    for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
+      auto* d = v.getDefiningOp();
+      if (!d) break;
+      if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(d)) {
+        designatesByDecl[dc.getOperation()].push_back(dg);
+        v = dc.getMemref();
+        continue;
+      }
+      if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) { v = cv.getValue(); continue; }
+      if (auto ld = mlir::dyn_cast<fir::LoadOp>(d)) { v = ld.getMemref(); continue; }
+      if (auto rb = mlir::dyn_cast<fir::ReboxOp>(d)) { v = rb.getBox(); continue; }
+      if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) { v = ba.getVal(); continue; }
+      if (auto co = mlir::dyn_cast<fir::CoordinateOp>(d)) { v = co.getRef(); continue; }
+      if (auto inner = mlir::dyn_cast<hlfir::DesignateOp>(d)) {
+        v = inner.getMemref();
+        continue;
+      }
+      break;
+    }
+  });
+
   // Pass 3: build one VarInfo per declare.
   for (auto& op : decls) {
     VarInfo v;
@@ -1636,7 +1673,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module) {
       seenLit.assign(v.rank, false);
     else
       inferLowerBoundsFromLiteralAccesses(op, v.lower_bounds, v.rank, writeCache,
-                                          &seenLit);
+                                          designatesByDecl, &seenLit);
 
     // Dummy-arg deferred-shape ALLOCATABLE/POINTER fallback: the
     // declare is a function block-arg, its declared type has no
