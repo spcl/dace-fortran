@@ -177,7 +177,7 @@ def test_cloudsc_flux_f90_bindings_e2e(tmp_path: Path):
     # --- SDFG-via-binding library ---
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    builder = build_sdfg(_KERNEL_SRC, sdfg_dir, name="cloudsc", entry="_QPcloudscouter")
+    builder = build_sdfg(_KERNEL_SRC, sdfg_dir, name="cloudsc", entry="cloudscouter")
     plan = FlattenPlan.from_dict(builder.module.get_flatten_plan())
     sdfg = builder.build()
     # The generated binding references ``__dace_{init,exit}_<iface.entry>``;

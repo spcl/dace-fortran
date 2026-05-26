@@ -107,7 +107,7 @@ end subroutine ss_neg
 """
     d = tmp_path / "sdfg"
     d.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, d, name="ss_neg", entry="_QPss_neg").build()
+    sdfg = build_sdfg(src, d, name="ss_neg", entry="ss_neg").build()
     sdfg.validate()
     assert _offsets(sdfg, "w") == {"offset_w_d0": -5, "offset_w_d1": 0}
     assert _offsets(sdfg, "out") == {"offset_out_d0": -5, "offset_out_d1": 0}
@@ -148,7 +148,7 @@ end subroutine as_shift
 """
     d = tmp_path / "sdfg"
     d.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, d, name="as_shift", entry="_QPas_shift").build()
+    sdfg = build_sdfg(src, d, name="as_shift", entry="as_shift").build()
     sdfg.validate()
     # The E1 correctness signal: fir.shift lb recovered exactly.
     assert _offsets(sdfg, "a") == {"offset_a_d0": 10}
@@ -188,7 +188,7 @@ end subroutine as_shift2
 """
     d = tmp_path / "sdfg2"
     d.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, d, name="as_shift2", entry="_QPas_shift2").build()
+    sdfg = build_sdfg(src, d, name="as_shift2", entry="as_shift2").build()
     sdfg.validate()
     # E1 correctness signal: both fir.shift lbs recovered exactly.
     assert _offsets(sdfg, "a") == {"offset_a_d0": 10, "offset_a_d1": 20}

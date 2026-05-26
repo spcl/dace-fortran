@@ -249,7 +249,7 @@ def test_addusxx_aos(tmp_path, indir):
     rhoc = np.asfortranarray(d["rhoc"].copy())
 
     sdfg = build_sdfg(_aos_src("nlmap(g)" if indir == "double" else "g"),
-                      tmp_path, name="addusxx_aos", entry="_QPaddusxx_aos").build()
+                      tmp_path, name="addusxx_aos", entry="addusxx_aos").build()
     sdfg(**_dims(), ofsbeta=d["ofsbeta"], ityp=d["ityp"], ijtoh=d["ijtoh"],
          becphi=np.asfortranarray(d["becphi"]), becpsi=np.asfortranarray(d["becpsi"]),
          qgm=d["qgm"], eigqts=np.asfortranarray(d["eigqts"]),
@@ -280,7 +280,7 @@ def test_addusxx_soa(tmp_path, indir):
     eigts3_re, eigts3_im = split("eigts3")
 
     sdfg = build_sdfg(_soa_src("nlmap(g)" if indir == "double" else "g"),
-                      tmp_path, name="addusxx_soa", entry="_QPaddusxx_soa").build()
+                      tmp_path, name="addusxx_soa", entry="addusxx_soa").build()
     sdfg(**_dims(), ofsbeta=d["ofsbeta"], ityp=d["ityp"], ijtoh=d["ijtoh"],
          becphi_re=becphi_re, becphi_im=becphi_im,
          becpsi_re=becpsi_re, becpsi_im=becpsi_im,

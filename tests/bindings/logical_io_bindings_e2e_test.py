@@ -261,7 +261,7 @@ def test_e2e_logical_intent_inout(tmp_path: Path):
     lib, sdfg = _build_binding_lib(tmp_path,
                                    kernel_src=_INOUT_KERNEL,
                                    name="toggle_io",
-                                   entry="_QPtoggle_io",
+                                   entry="toggle_io",
                                    iface=iface,
                                    driver_src=_INOUT_SDFG_DRIVER)
     ref = _build_ref_lib(tmp_path, kernel_src=_INOUT_KERNEL, ref_driver_src=_INOUT_REF_DRIVER, name="toggle_io")
@@ -356,7 +356,7 @@ def test_e2e_scalar_logical_intent_inout(tmp_path: Path):
     lib, sdfg = _build_binding_lib(tmp_path,
                                    kernel_src=_SCALAR_INOUT_KERNEL,
                                    name="flip_flag",
-                                   entry="_QPflip_flag",
+                                   entry="flip_flag",
                                    iface=iface,
                                    driver_src=_SCALAR_INOUT_SDFG_DRIVER)
     ref = _build_ref_lib(tmp_path,

@@ -85,7 +85,7 @@ NCLDQS = 5
 def test_cloudsc_autoconversion_snow_builds(tmp_path: Path):
     """The bridge parses the kernel and produces a valid SDFG."""
     src = _kernel_source("autoconversion_snow")
-    sdfg = _build(src, tmp_path, name="autoconversion_snow", entry="_QPautoconversion_snow")
+    sdfg = _build(src, tmp_path, name="autoconversion_snow", entry="autoconversion_snow")
     sdfg.validate()
 
 
@@ -120,7 +120,7 @@ def test_cloudsc_autoconversion_snow_numerical(tmp_path: Path):
                                            consts["rnice"], consts["ptsphy"], consts["zepsec"], consts["laericeauto"],
                                            NCLDQS, NCLDQI)
 
-    sdfg = _build(src, tmp_path, name="autoconversion_snow", entry="_QPautoconversion_snow")
+    sdfg = _build(src, tmp_path, name="autoconversion_snow", entry="autoconversion_snow")
     ZSNOWAUT = np.zeros(KLON, dtype=np.float64, order="F")
     sdfg(kidia=1,
          kfdia=KLON,
@@ -146,7 +146,7 @@ def test_cloudsc_autoconversion_snow_numerical(tmp_path: Path):
 
 def test_cloudsc_ice_supersaturation_adjustment_builds(tmp_path: Path):
     src = _kernel_source("ice_supersaturation_adjustment")
-    sdfg = _build(src, tmp_path, name="ice_supersaturation_adjustment", entry="_QPice_supersaturation_adjustment")
+    sdfg = _build(src, tmp_path, name="ice_supersaturation_adjustment", entry="ice_supersaturation_adjustment")
     sdfg.validate()
 
 
@@ -178,7 +178,7 @@ def test_cloudsc_ice_supersaturation_adjustment_numerical(tmp_path: Path):
                                        consts["nssopt"], consts["rkooptau"], consts["ptsphy"], consts["zepsec"], NCLDQL,
                                        NCLDQI, NCLDQV)
 
-    sdfg = _build(src, tmp_path, name="ice_supersaturation_adjustment", entry="_QPice_supersaturation_adjustment")
+    sdfg = _build(src, tmp_path, name="ice_supersaturation_adjustment", entry="ice_supersaturation_adjustment")
     ZSOLQA_sd = ZSOLQA.copy(order="F")
     ZSOLAC_sd = ZSOLAC.copy(order="F")
     ZQXFG_sd = ZQXFG.copy(order="F")
@@ -212,7 +212,7 @@ def test_cloudsc_ice_supersaturation_adjustment_numerical(tmp_path: Path):
 
 def test_cloudsc_lu_solver_builds(tmp_path: Path):
     src = _kernel_source("lu_solver")
-    sdfg = _build(src, tmp_path, name="lu_solver_microphysics", entry="_QPlu_solver_microphysics")
+    sdfg = _build(src, tmp_path, name="lu_solver_microphysics", entry="lu_solver_microphysics")
     sdfg.validate()
 
 
@@ -237,7 +237,7 @@ def test_cloudsc_lu_solver_numerical(tmp_path: Path):
     # f2py: (kidia, kfdia, zqlhs, zqxn, [klon, nclv])
     mod.lu_solver_microphysics(1, KLON, ZQLHS_ref, ZQXN_ref)
 
-    sdfg = _build(src, tmp_path, name="lu_solver_microphysics", entry="_QPlu_solver_microphysics")
+    sdfg = _build(src, tmp_path, name="lu_solver_microphysics", entry="lu_solver_microphysics")
     ZQLHS_sd = ZQLHS.copy(order="F")
     ZQXN_sd = ZQXN.copy(order="F")
     sdfg(kidia=1, kfdia=KLON, klon=KLON, nclv=NCLV, zqlhs=ZQLHS_sd, zqxn=ZQXN_sd)
@@ -253,7 +253,7 @@ def test_cloudsc_lu_solver_numerical(tmp_path: Path):
 
 def test_cloudsc_rain_evaporation_builds(tmp_path: Path):
     src = _kernel_source("rain_evaporation_abel_boutle")
-    sdfg = _build(src, tmp_path, name="rain_evaporation_abel_boutle", entry="_QPrain_evaporation_abel_boutle")
+    sdfg = _build(src, tmp_path, name="rain_evaporation_abel_boutle", entry="rain_evaporation_abel_boutle")
     sdfg.validate()
 
 
@@ -307,7 +307,7 @@ def test_cloudsc_rain_evaporation_numerical(tmp_path: Path):
         consts["rcl_cdenom2"], consts["rcl_cdenom3"], consts["rcl_ka273"], consts["rcl_const1r"], consts["rcl_const2r"],
         consts["rcl_const3r"], consts["rcl_const4r"], NCLDQV, NCLDQR)
 
-    sdfg = _build(src, tmp_path, name="rain_evaporation_abel_boutle", entry="_QPrain_evaporation_abel_boutle")
+    sdfg = _build(src, tmp_path, name="rain_evaporation_abel_boutle", entry="rain_evaporation_abel_boutle")
     ZSOLQA_sd = ZSOLQA.copy(order="F")
     ZQXFG_sd = ZQXFG_NCLDQR.copy(order="F")
     ZCOVPTOT_sd = ZCOVPTOT.copy(order="F")
@@ -344,7 +344,7 @@ def test_cloudsc_rain_evaporation_numerical(tmp_path: Path):
 
 def test_cloudsc_saturation_calculation_builds(tmp_path: Path):
     src = _kernel_source("saturation_calculation")
-    sdfg = _build(src, tmp_path, name="compute_saturation_values", entry="_QPcompute_saturation_values")
+    sdfg = _build(src, tmp_path, name="compute_saturation_values", entry="compute_saturation_values")
     sdfg.validate()
 
 
@@ -380,7 +380,7 @@ def test_cloudsc_saturation_calculation_numerical(tmp_path: Path):
                           zfoeeliqt=zfoeeliqt_r,
                           zqsliq=zqsliq_r)
 
-    sdfg = _build(src, tmp_path, name="compute_saturation_values", entry="_QPcompute_saturation_values")
+    sdfg = _build(src, tmp_path, name="compute_saturation_values", entry="compute_saturation_values")
     out_sd = {
         k: np.asfortranarray(np.zeros((KLON, KLEV)))
         for k in ("zfoealfa", "zfoeewmt", "zqsmix", "zfoeew", "zqsice", "zfoeeliqt", "zqsliq")

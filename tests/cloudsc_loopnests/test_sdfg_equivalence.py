@@ -665,7 +665,7 @@ def test_cloudsc_zterm2_kernel_sdfg_matches_f2py(tmp_path: Path):
                       tmp_path / "sdfg",
                       name="zterm2_kernel",
                       pipeline="hlfir-propagate-shapes",
-                      entry="_QPzterm2_kernel").build()
+                      entry="zterm2_kernel").build()
 
     rng = np.random.default_rng(120)
     n = 32
@@ -710,7 +710,7 @@ def test_cloudsc_zbeta_kernel_sdfg_matches_f2py(tmp_path: Path):
                       tmp_path / "sdfg",
                       name="zbeta_kernel",
                       pipeline="hlfir-propagate-shapes",
-                      entry="_QPzbeta_kernel").build()
+                      entry="zbeta_kernel").build()
 
     rng = np.random.default_rng(121)
     n = 32
@@ -763,7 +763,7 @@ def test_cloudsc_zaplusb_kernel_sdfg_matches_f2py(tmp_path: Path):
                       tmp_path / "sdfg",
                       name="zaplusb_kernel",
                       pipeline="hlfir-propagate-shapes",
-                      entry="_QPzaplusb_kernel").build()
+                      entry="zaplusb_kernel").build()
 
     rng = np.random.default_rng(122)
     n = 32

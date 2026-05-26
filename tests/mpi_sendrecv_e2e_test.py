@@ -69,7 +69,7 @@ def test_ring_send_recv_numeric(tmp_path: Path):
     # the compiled artifact with the other ranks.
     sdfg = None
     if rank == 0:
-        sdfg = build_sdfg(_RING, tmp_path / "sdfg", name="ring", entry="_QPring").build()
+        sdfg = build_sdfg(_RING, tmp_path / "sdfg", name="ring", entry="ring").build()
         sdfg.name = "mpi_ring"
     func = utils.distributed_compile(sdfg, comm)
 
@@ -120,7 +120,7 @@ def test_nonblocking_ring_numeric(tmp_path: Path):
 
     sdfg = None
     if rank == 0:
-        sdfg = build_sdfg(_NB_RING, tmp_path / "sdfg", name="nbring", entry="_QPnbring").build()
+        sdfg = build_sdfg(_NB_RING, tmp_path / "sdfg", name="nbring", entry="nbring").build()
         sdfg.name = "mpi_nbring"
     func = utils.distributed_compile(sdfg, comm)
 

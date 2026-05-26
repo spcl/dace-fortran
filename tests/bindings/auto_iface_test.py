@@ -117,7 +117,7 @@ subroutine scale2(n, x)
   end do
 end subroutine scale2
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="scale2", entry="_QPscale2").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="scale2", entry="scale2").build()
     lib = build_fortran_library(sdfg, out_dir=str(tmp_path / "lib"), name="scale2")
     assert Path(lib.bindings_f90).exists()
     assert Path(lib.so_path).exists()

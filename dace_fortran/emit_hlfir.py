@@ -201,7 +201,13 @@ def resolve_entry(name: str, sources) -> str:
 
     matches = set()
     for src in sources:
-        for proc, mod in _scan_subroutine_defs(Path(src).read_text(errors="ignore")):
+        # Each source is a file path (read it) or already-inline source text
+        # (tier-1 passes the kernel string straight through).
+        try:
+            text = Path(src).read_text(errors="ignore") if Path(src).is_file() else str(src)
+        except (OSError, ValueError):
+            text = str(src)
+        for proc, mod in _scan_subroutine_defs(text):
             if proc == want_proc and (want_mod is None or mod == want_mod):
                 matches.add((proc, mod))
     if not matches:

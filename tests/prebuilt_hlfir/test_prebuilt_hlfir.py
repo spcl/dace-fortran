@@ -86,7 +86,7 @@ def test_jacobi_autotools_bear(tmp_path: Path):
     subprocess.check_call(["bear", "--", "make"], cwd=build)
 
     sdfg = build_sdfg_from_project(build / "compile_commands.json",
-                                   entry="_QMmod_jacobiPjacobi2d_update",
+                                   entry="mod_jacobi::jacobi2d_update",
                                    stubs=_JACOBI_STUBS,
                                    out_dir=tmp_path / "hlfir")
     sdfg.validate()
@@ -111,7 +111,7 @@ def test_csr_spmv_cmake(tmp_path: Path):
     subprocess.check_call(["cmake", "--build", str(build), "--target", "csr_demo"])
 
     sdfg = build_sdfg_from_project(build / "compile_commands.json",
-                                   entry="_QMmod_csrPcsr_spmv",
+                                   entry="mod_csr::csr_spmv",
                                    out_dir=tmp_path / "hlfir")
     sdfg.validate()
     _assert_inlined(sdfg, "dot_row")

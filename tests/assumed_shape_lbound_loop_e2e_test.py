@@ -71,7 +71,7 @@ def test_assumed_shape_lbound_ubound_loop(tmp_path: Path):
     ``sum(a)``."""
     d = tmp_path / "sdfg"
     d.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(_SRC, d, name="sum_as", entry="_QPsum_as").build()
+    sdfg = build_sdfg(_SRC, d, name="sum_as", entry="sum_as").build()
     sdfg.validate()
 
     n = 7

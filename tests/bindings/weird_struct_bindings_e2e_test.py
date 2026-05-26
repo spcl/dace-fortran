@@ -114,7 +114,7 @@ def test_e2e_mixed_rank_struct(tmp_path: Path):
     gfortran reference (``rtol=1e-12``); the FlattenPlan must be non-empty."""
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    builder = build_sdfg(_SRC, sdfg_dir, name="scale3d", entry="_QPscale3d")
+    builder = build_sdfg(_SRC, sdfg_dir, name="scale3d", entry="scale3d")
     plan = FlattenPlan.from_dict(builder.module.get_flatten_plan())
     sdfg = builder.build()
     sdfg.name = "scale3d"

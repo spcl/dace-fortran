@@ -51,7 +51,7 @@ def test_flatten_nested_array_nondefault_lb(tmp_path: Path):
     its inner dimension (offset 0), not the default 1."""
     d = tmp_path / "sdfg"
     d.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(_SRC, d, name="kn", entry="_QMmnPkn").build()
+    sdfg = build_sdfg(_SRC, d, name="kn", entry="mn::kn").build()
     sdfg.validate()
 
     consts = dict(sdfg.constants)

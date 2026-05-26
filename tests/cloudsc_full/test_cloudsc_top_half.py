@@ -64,7 +64,7 @@ def test_cloudsc_top_half_zsolqa_zsolqb(tmp_path, _f2py_top_half, _strict_fp_cpu
 
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="cloudsc_top_half", entry="_QPcloudscouter").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="cloudsc_top_half", entry="cloudscouter").build()
 
     rng = np.random.default_rng(42)
     inputs = get_inputs_physical(rng)

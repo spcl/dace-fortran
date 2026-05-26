@@ -148,7 +148,7 @@ def test_e2e_real8_arith_inout(tmp_path: Path):
     lib, sdfg = _build_binding_lib(tmp_path,
                                    kernel_src=_DAXPY_KERNEL,
                                    name="daxpy_lite",
-                                   entry="_QPdaxpy_lite",
+                                   entry="daxpy_lite",
                                    iface=iface,
                                    driver_src=_DAXPY_SDFG_DRIVER)
     ref = _build_ref_lib(tmp_path, kernel_src=_DAXPY_KERNEL, ref_driver_src=_DAXPY_REF_DRIVER, name="daxpy_lite")
@@ -237,7 +237,7 @@ def test_e2e_scalar_real_intent_out(tmp_path: Path):
     lib, sdfg = _build_binding_lib(tmp_path,
                                    kernel_src=_SUM_KERNEL,
                                    name="sum_reduce",
-                                   entry="_QPsum_reduce",
+                                   entry="sum_reduce",
                                    iface=iface,
                                    driver_src=_SUM_SDFG_DRIVER)
     ref = _build_ref_lib(tmp_path, kernel_src=_SUM_KERNEL, ref_driver_src=_SUM_REF_DRIVER, name="sum_reduce")
@@ -436,7 +436,7 @@ def test_e2e_minmax_intrinsic(tmp_path: Path):
     lib, sdfg = _build_binding_lib(tmp_path,
                                    kernel_src=_MINMAX_KERNEL,
                                    name="clamp_kernel",
-                                   entry="_QPclamp_kernel",
+                                   entry="clamp_kernel",
                                    iface=iface,
                                    driver_src=_MINMAX_SDFG_DRIVER)
     ref = _build_ref_lib(tmp_path, kernel_src=_MINMAX_KERNEL, ref_driver_src=_MINMAX_REF_DRIVER, name="clamp_kernel")

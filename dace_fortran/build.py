@@ -89,21 +89,25 @@ _IFACE_RE = re.compile(r"^\s*(?:abstract\s+)?interface\b", re.IGNORECASE)
 
 
 def _resolve_entry(source: str, entry: Optional[str]) -> str:
-    """Return the mangled Flang entry symbol.
+    """Return the mangled Flang entry symbol for ``entry``.
 
-    ``entry`` given -> used verbatim.  ``None`` -> auto-resolved by
-    scanning ``source`` for procedure *definitions* (``interface``
-    blocks and ``end`` lines are skipped): exactly one -> derive its
-    mangled name (``_QP<name>`` for a free procedure, ``_QM<mod>P<name>``
-    for a module procedure); none or more than one -> a clear error
-    (an SDFG targets one specific procedure -- no "first of many"
-    guessing).
+    Three input forms, all keyed off a scan of ``source`` for procedure
+    *definitions* (``interface`` blocks and ``end`` lines are skipped):
 
-    :raises ValueError: if no procedure is found, or more than one is
-        found and no explicit ``entry`` was given.
+    - a mangled symbol (``_Q...`` ) -> returned verbatim;
+    - a plain Fortran name (``solve_nh`` or ``mod::proc`` ) -> resolved
+      against the scan to its mangled form;
+    - ``None`` -> auto-resolved, requiring exactly one definition (an SDFG
+      targets one specific procedure -- no "first of many" guessing).
+
+    Mangling is ``_QP<name>`` for a free procedure and ``_QM<mod>P<name>``
+    for a module procedure.
+
+    :raises ValueError: if the named procedure is not found or is ambiguous,
+        or (``None`` case) the source has no or more than one procedure.
     """
-    if entry:
-        return entry
+    if entry and entry.startswith("_Q"):
+        return entry  # already a mangled symbol
     cur_mod: Optional[str] = None
     iface_depth = 0
     procs = []  # (module|None, name)
@@ -129,15 +133,35 @@ def _resolve_entry(source: str, entry: Optional[str]) -> str:
         m_p = _PROC_RE.match(line)
         if m_p:
             procs.append((cur_mod, m_p.group(2)))
+
+    def _mangle(mod, name):
+        return f"_QM{mod.lower()}P{name.lower()}" if mod else f"_QP{name.lower()}"
+
+    # Plain Fortran name given (``proc`` or ``mod::proc``): resolve against
+    # the scanned definitions so callers need not hand-write the mangled symbol.
+    if entry:
+        want_mod, _, want_proc = entry.lower().rpartition("::")
+        want_mod = want_mod or None
+        matches = {(m, n) for (m, n) in procs
+                   if n.lower() == want_proc
+                   and (want_mod is None or (m or "").lower() == want_mod)}
+        if not matches:
+            raise ValueError(f"build: no procedure {entry!r} defined in the source")
+        if len(matches) > 1:
+            cands = ", ".join(f"{(m or '<free>')}::{n}" for m, n in sorted(matches))
+            raise ValueError(f"build: entry {entry!r} is ambiguous ({cands}); "
+                             f"qualify it as module::proc")
+        return _mangle(*matches.pop())
+
+    # entry=None: derive from the single procedure definition.
     if not procs:
         raise ValueError("build: no SUBROUTINE/FUNCTION definition found to use as the "
                           "SDFG entry; pass entry= explicitly")
     if len(procs) > 1:
         shown = ", ".join(n for _, n in procs)
         raise ValueError(f"build: source defines multiple procedures ({shown}); pass "
-                          f"entry= (the mangled Flang symbol of the target one)")
-    mod, name = procs[0]
-    return f"_QM{mod.lower()}P{name.lower()}" if mod else f"_QP{name.lower()}"
+                          f"entry= (the Fortran name or mangled symbol of the target one)")
+    return _mangle(*procs[0])
 
 
 def _emit_hlfir(source: str, out_dir: Path, name: str, *, merge: bool,
@@ -195,30 +219,32 @@ def make_builder(source: str,
     goes through one real implementation (entry auto-resolution and
     all) while still wrapping the builder for per-test xdist naming.
 
-    ``entry`` may be ``None`` -> :func:`_resolve_entry` derives it from
-    the single procedure in ``source`` (error if none / ambiguous).
+    ``entry`` may be ``None`` (:func:`_resolve_entry` derives it from the
+    single procedure in ``source``; error if none / ambiguous), a plain
+    Fortran name (``proc`` or ``mod::proc`` ), or a mangled ``_Q...`` symbol.
     The ``.hlfir`` is parsed into the bridge module at ``SDFGBuilder``
     construction, so a temporary scratch dir is fine.
     """
-    # ``_resolve_entry`` *validates* the auto case: it raises when an
-    # entry-less source has zero or >1 procedures (the contract: no
-    # "first of many").  For a validated single-procedure source we
-    # forward the caller's original ``entry`` (``None``) unchanged --
-    # passing a synthesised symbol would call ``set_entry_symbol`` and
-    # perturb the single-proc lowering for no reason (every existing
-    # entry-less single-proc test must stay byte-identical).  An
-    # explicit ``entry`` is always forwarded (multi-proc / multi-file
-    # need it to privatise the non-entry procedures).
-    _resolve_entry(source, entry)
+    # ``_resolve_entry`` validates the auto case (it raises when an
+    # entry-less source has zero or >1 procedures -- the contract is no
+    # "first of many") and resolves a plain Fortran name to its mangled
+    # symbol.  ``entry=None`` is forwarded unchanged: a validated
+    # single-procedure source must not call ``set_entry_symbol`` (it would
+    # perturb the single-proc lowering -- every entry-less test stays
+    # byte-identical).  A given entry (mangled or plain name) is forwarded
+    # as the resolved symbol so multi-proc / multi-file builds privatise
+    # the non-entry procedures.
+    resolved = _resolve_entry(source, entry)
+    fwd = None if entry is None else resolved
     pipeline = pipeline or DEFAULT_PIPELINE
     if out_dir is not None:
         hlfir = _emit_hlfir(source, Path(out_dir), name, merge=True,
                             preprocess=preprocess, defines=defines)
-        return SDFGBuilder(str(hlfir), pipeline=pipeline, entry=entry)
+        return SDFGBuilder(str(hlfir), pipeline=pipeline, entry=fwd)
     with tempfile.TemporaryDirectory(prefix=f"hlfir_{name}_") as td:
         hlfir = _emit_hlfir(source, Path(td), name, merge=True,
                             preprocess=preprocess, defines=defines)
-        return SDFGBuilder(str(hlfir), pipeline=pipeline, entry=entry)
+        return SDFGBuilder(str(hlfir), pipeline=pipeline, entry=fwd)
 
 
 def build_sdfg(source: str,

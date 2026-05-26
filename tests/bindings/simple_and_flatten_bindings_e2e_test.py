@@ -153,7 +153,7 @@ def test_simple_flat_f90_binding(tmp_path: Path):
     flattening (plan must be empty)."""
     lib, plan = _build_sdfg_binding_lib(tmp_path,
                                         kernel_src=_SIMPLE_SRC,
-                                        entry="_QPsaxpy2",
+                                        entry="saxpy2",
                                         sdfg_name="saxpy2",
                                         iface=_SIMPLE_IFACE,
                                         sdfg_driver_src=_SIMPLE_SDFG_DRIVER,
@@ -263,7 +263,7 @@ def test_struct_flatten_f90_binding(tmp_path: Path):
     correctly through the generated binding's struct reconstruction."""
     lib, plan = _build_sdfg_binding_lib(tmp_path,
                                         kernel_src=_FLAT_SRC,
-                                        entry="_QPupdate_state",
+                                        entry="update_state",
                                         sdfg_name="update_state",
                                         iface=_FLAT_IFACE,
                                         sdfg_driver_src=_FLAT_SDFG_DRIVER,

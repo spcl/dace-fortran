@@ -141,7 +141,7 @@ def _build_binding_and_ref(
 
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    builder = build_sdfg(flat_src, sdfg_dir, name="kernel_flat", entry="_QPkernel_flat")
+    builder = build_sdfg(flat_src, sdfg_dir, name="kernel_flat", entry="kernel_flat")
     plan = FlattenPlan.from_dict(builder.module.get_flatten_plan())
     sdfg = builder.build()
     sdfg.name = entry
@@ -249,7 +249,7 @@ def test_icon_loopnest2_f90_bindings_e2e(tmp_path: Path):
 
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    builder = build_sdfg(flat_src, sdfg_dir, name="kernel_flat", entry="_QPkernel_flat")
+    builder = build_sdfg(flat_src, sdfg_dir, name="kernel_flat", entry="kernel_flat")
     plan = FlattenPlan.from_dict(builder.module.get_flatten_plan())
     sdfg = builder.build()
     sdfg.name = "kernel_flat"

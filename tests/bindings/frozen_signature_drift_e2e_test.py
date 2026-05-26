@@ -51,7 +51,7 @@ def _build(tmp_path: Path):
     """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(_SRC, sdfg_dir, name="axpy", entry="_QPaxpy").build()
+    sdfg = build_sdfg(_SRC, sdfg_dir, name="axpy", entry="axpy").build()
     sdfg.validate()
     assert getattr(sdfg, "_frozen_signature",
                    None) is not None, ("SDFGBuilder.build() must auto-attach a frozen signature")

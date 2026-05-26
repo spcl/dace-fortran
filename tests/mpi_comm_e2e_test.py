@@ -124,7 +124,7 @@ def test_user_comm_split_send_recv(tmp_path: Path):
     if wrank == 0:
         sdfg_dir = tmp_path / "sdfg"
         sdfg_dir.mkdir(parents=True, exist_ok=True)
-        builder = build_sdfg(_KERNEL, sdfg_dir, name="sr_usercomm", entry="_QPsr_usercomm")
+        builder = build_sdfg(_KERNEL, sdfg_dir, name="sr_usercomm", entry="sr_usercomm")
         plan = FlattenPlan.from_dict(builder.module.get_flatten_plan())
         sdfg = builder.build()
         sdfg.name = "sr_usercomm"

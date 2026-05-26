@@ -233,7 +233,7 @@ def test_e2e_two_real_array_struct(tmp_path: Path):
         kernel_src=_TWO_REAL_SRC,
         types_src=_TWO_REAL_TYPES_SRC,
         name="kernel_two_real",
-        entry="_QPkernel_two_real",
+        entry="kernel_two_real",
         driver_src=_TWO_REAL_DRIVER,
     )
     sdfg_lib.run_two_real.argtypes = [
@@ -378,7 +378,7 @@ def test_e2e_nested_struct(tmp_path: Path):
         kernel_src=_NESTED_SRC,
         types_src=_NESTED_TYPES_SRC,
         name="kernel_nested",
-        entry="_QPkernel_nested",
+        entry="kernel_nested",
         driver_src=_NESTED_DRIVER,
     )
     sdfg_lib.run_nested.argtypes = [
@@ -522,7 +522,7 @@ def test_e2e_complex_member_struct(tmp_path: Path):
         kernel_src=_COMPLEX_SRC,
         types_src=_COMPLEX_TYPES_SRC,
         name="kernel_complex",
-        entry="_QPkernel_complex",
+        entry="kernel_complex",
         driver_src=_COMPLEX_DRIVER,
     )
     sdfg_lib.run_complex.argtypes = [
@@ -660,7 +660,7 @@ def test_e2e_array_of_scalar_structs_deepcopy(tmp_path: Path):
         kernel_src=_AOS_SRC,
         types_src=_AOS_TYPES_SRC,
         name="kern_aos",
-        entry="_QPkern_aos",
+        entry="kern_aos",
         driver_src=_AOS_DRIVER,
     )
     sdfg_lib.run_aos.argtypes = [ctypes.POINTER(ctypes.c_double)]
@@ -772,7 +772,7 @@ def test_e2e_array_of_mixed_type_structs_deepcopy(tmp_path: Path):
     both deep-copied.  Kernel updates both members; result must match the
     gfortran reference for both the real and integer arrays."""
     sdfg_lib = _build_sdfg_lib(tmp_path, kernel_src=_MIX_SRC, types_src=_MIX_TYPES_SRC, name="kern_mix",
-                               entry="_QPkern_mix", driver_src=_MIX_DRIVER)
+                               entry="kern_mix", driver_src=_MIX_DRIVER)
     sdfg_lib.run_mix.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_int)]
     sdfg_lib.run_mix.restype = None
     ref_lib = _build_reference_lib(tmp_path, types_src=_MIX_TYPES_SRC, kernel_src=_MIX_KERNEL_SRC,
@@ -861,7 +861,7 @@ def test_e2e_array_of_structs_read_only_copy_in(tmp_path: Path):
     the members in (no copy-back) and the kernel writes a separate output
     array.  Output must match the reference."""
     sdfg_lib = _build_sdfg_lib(tmp_path, kernel_src=_RO_SRC, types_src=_AOS_TYPES_SRC, name="kern_ro",
-                               entry="_QPkern_ro", driver_src=_RO_DRIVER)
+                               entry="kern_ro", driver_src=_RO_DRIVER)
     sdfg_lib.run_ro.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double)]
     sdfg_lib.run_ro.restype = None
     ref_lib = _build_reference_lib(tmp_path, types_src=_AOS_TYPES_SRC, kernel_src=_RO_KERNEL_SRC,
@@ -988,7 +988,7 @@ def test_e2e_array_of_jagged_alloc_structs_deepcopy(tmp_path: Path):
     (no ``a_d0`` symbol leak), against a gfortran reference."""
     sdfg_lib = _build_sdfg_lib(tmp_path, kernel_src=_JAG_TYPES_SRC + _JAG_KERNEL_SRC,
                                types_src=_JAG_TYPES_SRC, name="kern_jag",
-                               entry="_QPkern_jag", driver_src=_JAG_DRIVER)
+                               entry="kern_jag", driver_src=_JAG_DRIVER)
     sdfg_lib.run_jag.argtypes = [ctypes.POINTER(ctypes.c_double)]
     sdfg_lib.run_jag.restype = None
 

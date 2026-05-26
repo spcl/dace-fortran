@@ -118,7 +118,7 @@ def test_zaxpy_aos(tmp_path, indir):
     ref = _ref(indir, ymap, xmap, x, y)
 
     sdfg = build_sdfg(_aos_src(_AOS[indir]), tmp_path, name="zaxpy_aos",
-                      entry="_QPzaxpy_aos").build()
+                      entry="zaxpy_aos").build()
     sdfg(n=np.int32(_N), ymap=ymap, xmap=xmap, x=x, y=y)
     np.testing.assert_allclose(y, ref, rtol=1e-12, atol=1e-12)
 
@@ -135,7 +135,7 @@ def test_zaxpy_soa(tmp_path, indir):
     yr = np.asfortranarray(y.real.copy()); yi = np.asfortranarray(y.imag.copy())
 
     sdfg = build_sdfg(_soa_src(_SOA[indir]), tmp_path, name="zaxpy_soa",
-                      entry="_QPzaxpy_soa").build()
+                      entry="zaxpy_soa").build()
     sdfg(n=np.int32(_N), ymap=ymap, xmap=xmap, xr=xr, xi=xi, yr=yr, yi=yi)
     np.testing.assert_allclose(yr, ref.real, rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(yi, ref.imag, rtol=1e-12, atol=1e-12)

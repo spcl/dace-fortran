@@ -92,7 +92,7 @@ def test_velocity_full_numerical(tmp_path: Path):
         _DRIVER_PATH.read_text(),
         sdfg_dir,
         name="velocity_full",
-        entry="_QMmo_velocity_advectionPvelocity_tendencies",
+        entry="mo_velocity_advection::velocity_tendencies",
     ).build()
     sdfg.validate()
 
