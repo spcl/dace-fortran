@@ -32,14 +32,14 @@ Fortran wrapper around the optimised result.
 The job splits into six steps, each strengthening one invariant so the
 Python SDFG walker only ever sees a single, predictable IR shape:
 
-| Step | What it does |
-| --- | --- |
-| **(0) Preprocess** | Flang-friendly Fortran-text rewrites (`USE`-merge, OMP/ACC strip, integer-power expansion), then `flang-new-21 -fc1 -emit-hlfir`. |
-| **(1) Parse** | Load the `.hlfir` into one MLIR `ModuleOp`; snapshot the caller-visible dummy list + derived-type layouts as a `FortranInterface`. |
-| **(2) Inline + link** | `hlfir-inline-all` folds the whole call tree into the pinned entry; `symbol-dce` drops dead siblings; multi-file builds fail loudly on any surviving cross-TU `fir.call`. |
-| **(3) Normalise** | A fixed chain of HLFIR rewrites (select-case lowering, AoS->SoA flattening, vector-subscript expansion, polymorphism rejection, shape propagation, ...) leaves one canonical IR shape. |
-| **(4) Build SDFG** | Walk HLFIR into a tiny AST, emit the SDFG, run post-generation cleanup, then pin a `FrozenSignature` snapshot of the arg list. |
-| **(5) Emit binding** | Generate `<entry>_bindings.f90`: a ref-counted Fortran module that re-presents the caller's original signature and, per struct member, picks a zero-copy alias or a deep copy. |
+| Step | What it does | Produces |
+| --- | --- | --- |
+| **(0) Preprocess** | Text rewrites flang needs or that pin backend arithmetic (`USE`-merge, OMP/ACC strip, integer-power expansion), then `flang-new-21 -fc1 -emit-hlfir`. | `kernel.hlfir` -- raw HLFIR, one file per TU |
+| **(1) Parse** | Load the `.hlfir` into one MLIR `ModuleOp` and snapshot the caller-visible dummy list + derived-type layouts *before* any rewrite. | `ModuleOp` + a `FortranInterface` (the pre-flatten caller view) |
+| **(2) Inline** | `hlfir-inline-all` folds the whole call tree into the pinned entry; `symbol-dce` drops dead siblings; cross-TU calls left external fail loudly. | one self-contained function |
+| **(3) Normalise** | A fixed rewrite chain (select-case lowering, AoS->SoA flattening, vector-subscript expansion, polymorphism rejection, shape propagation) collapses the IR to one shape. | a single canonical HLFIR shape |
+| **(4) Build SDFG** | Walk HLFIR into a small AST, emit the SDFG, run post-generation cleanup, snapshot the arg list. | a `dace.SDFG` + a pinned `FrozenSignature` |
+| **(5) Emit binding** | Generate a ref-counted Fortran module that re-presents the caller's original signature and, per member, picks an alias or a deep copy. | `<entry>_bindings.f90` + a linked `.so` |
 
 After step (4) you hold a normal `dace.SDFG`. Apply any DaCe
 transformation you like; step (5) re-checks the frozen signature against
@@ -232,7 +232,19 @@ end subroutine kernel
 The entry symbol is `_QPkernel` (a free subroutine). Build the SDFG,
 then describe the caller-facing interface with an `OriginalInterface`
 and emit the binding. This kernel has no derived types, so its
-`FlattenPlan` is empty (a pure pass-through):
+`FlattenPlan` is empty (a pure pass-through).
+
+**Why the `iface` is needed.** The SDFG only knows its *flattened* C-ABI
+signature -- after step (3), `type(point) :: pts(N)` is already four bare
+`double*` companions, and the caller's original types, derived-type
+layouts, intents, and argument order are gone from it. To emit a wrapper
+the caller can call *with its original signature* (and to know which
+member maps to which companion, alias vs deep copy), the emitter needs
+the pre-flatten caller view -- that is the `iface`, snapshotted at step
+(1). It is unavoidable for any struct kernel because flattening is
+destructive; for a flat kernel like this one it is nearly redundant but
+still carries the original argument *order*, which the SDFG arglist does
+not preserve.
 
 ```python
 import dace_fortran
@@ -378,7 +390,7 @@ Only the copy logic is shown; the module / `interface` / `finalize`
 scaffolding is identical to the QE example above.
 
 ```fortran
-  ! Caller's original AoS signature.
+  ! Original AoS signature -- a drop-in for the kernel.
   subroutine kern_aos_dace(pts)
     type(point), intent(inout), target :: pts(N)
 
@@ -436,11 +448,51 @@ A jagged member has no single contiguous shape, so it flattens to an
 - `size(a(i)%w)` -- the kernel's inner loop bound -- flattens to that
   same `cap_a_w`, so the kernel and the binding agree on the width.
 
-The binding computes the cap, packs each instance's live `1:size` region
-into `a_w`, calls the SDFG, then copies only the live region back:
+The full generated binding (the cap symbol is `int64`; the pack loops
+guard on `allocated` so unallocated rows do not poison the max or the
+copy):
 
 ```fortran
-    ! cap = max over instances (guarded so unallocated rows don't poison it)
+module kern_jag_dace_bindings
+  use iso_c_binding
+  use mo_jag, only: bag, N
+  implicit none
+  private
+  public :: kern_jag_dace, kern_jag_dace_finalize
+
+  interface
+    function dace_init_kern_jag() bind(c, name='__dace_init_kern_jag') result(h)
+      import :: c_ptr, c_int
+      type(c_ptr) :: h
+    end function
+
+    subroutine dace_program_kern_jag(h, a_w, cap_a_w) bind(c, name='__program_kern_jag')
+      import
+      type(c_ptr), value :: h
+      type(c_ptr), value :: a_w
+      ! the runtime cap, by value (int64)
+      integer(c_long_long), value :: cap_a_w
+    end subroutine
+
+    function dace_exit_kern_jag(h) bind(c, name='__dace_exit_kern_jag') result(err)
+      import :: c_ptr, c_int
+      type(c_ptr), value :: h
+      integer(c_int) :: err
+    end function
+  end interface
+
+  type(c_ptr), save :: dace_handle = c_null_ptr
+  integer,     save :: init_count  = 0
+
+contains
+
+  subroutine kern_jag_dace(a)
+    type(bag), intent(inout), target :: a(N)
+    real(c_double), allocatable, target :: a_w(:, :)
+    integer(c_long_long) :: cap_a_w
+    integer(c_int) :: i1
+
+    ! pack-in: cap = max over instances, then copy each live region in
     cap_a_w = 0
     do i1 = 1, size(a, dim=1)
       if (allocated(a(i1)%w)) then
@@ -448,25 +500,39 @@ into `a_w`, calls the SDFG, then copies only the live region back:
       end if
     end do
     if (cap_a_w == 0) cap_a_w = 1
-
     allocate(a_w(size(a, dim=1), cap_a_w))
     a_w = 0
-    ! pack-in: copy each instance's live region only
     do i1 = 1, size(a, dim=1)
       if (allocated(a(i1)%w)) a_w(i1, 1:size(a(i1)%w)) = a(i1)%w
     end do
 
+    if (init_count == 0) dace_handle = dace_init_kern_jag()
+    init_count = init_count + 1
     call dace_program_kern_jag(dace_handle, c_loc(a_w), cap_a_w)
 
-    ! pack-out: copy each instance's live region back
+    ! pack-out: copy each live region back, then release the buffer
     do i1 = 1, size(a, dim=1)
       if (allocated(a(i1)%w)) a(i1)%w = a_w(i1, 1:size(a(i1)%w))
     end do
     deallocate(a_w)
+  end subroutine kern_jag_dace
+
+  subroutine kern_jag_dace_finalize()
+    integer(c_int) :: err
+    if (init_count > 0) then
+      init_count = init_count - 1
+      if (init_count == 0) then
+        err = dace_exit_kern_jag(dace_handle)
+        dace_handle = c_null_ptr
+      end if
+    end if
+  end subroutine kern_jag_dace_finalize
+end module kern_jag_dace_bindings
 ```
 
 Padding is harmless for elementwise / sum-like members, but a kernel that
-*reduces over* the padding would see the zeros.
+*reduces over* the padding would see the zeros. A struct with two jagged
+members gets one cap symbol each (`cap_a_w`, `cap_a_v`).
 
 ## Pipeline detail
 
@@ -533,46 +599,39 @@ once by the bridge constructor.
 ### SDFG emission -- step (4)
 
 `bridge/extract_vars.cpp` classifies every `hlfir.declare` as `array`,
-`symbol`, or `scalar` (see *Mechanisms*). `bridge/extract_ast.cpp`
-dispatches into per-responsibility translation units under `bridge/ast/`
-(`expressions.cpp`, `assigns.cpp`, `elementals.cpp`, `control_flow.cpp`,
-`dispatch.cpp`). The walker produces a recursive `ASTNode` tree covering
-`loop` / `while` / `conditional` / `assign` / `copy` / `memset` /
-`libcall` / `reduce` / `break` / `return`.
+`symbol`, or `scalar` (see *Mechanisms*); `bridge/extract_ast.cpp` then
+walks the IR into a recursive `ASTNode` tree, dispatching into the
+per-responsibility files under `bridge/ast/`. The node kinds:
+
+| Kind | Represents |
+| --- | --- |
+| `loop` / `while` | `DO` (`LoopRegion`) / `DO WHILE` (`scf.while`) |
+| `conditional` | `IF` / `ELSE IF` / `ELSE` (`ConditionalBlock`) |
+| `assign` | scalar / symbol / array-element write |
+| `copy` / `memset` | whole-array copy / fill |
+| `libcall` | library node (reduction, external, MPI, I/O) |
+| `reduce` | `SUM` / `MAXVAL` / ... |
+| `break` / `return` | `EXIT` / early `RETURN` |
 
 **Loop bounds and IF conditions are hoisted to symbols.** Every
 non-trivial loop bound or branch guard is materialised as an SDFG symbol
 on a state-change before the block (`loopbegin_<N>` / `loopend_<N>` /
 `if_cond_<N>`), so the `LoopRegion` / `ConditionalBlock` references only
-the symbol. This keeps the emitters small, funnels indirect-array reads
-(`row_ptr[i+1] - 1`) through the symbol-staging machinery, and gives the
-SSA loop-iter pass a uniform input shape.
-
-`builder/SDFGBuilder` emits the SDFG, runs the post-generation cleanup
-below, then snapshots `sdfg.arglist()` + free symbols into a
-`FrozenSignature` pinned on the SDFG.
+the symbol -- keeping the emitters small, funnelling indirect-array reads
+(`row_ptr[i+1] - 1`) through one symbol-staging path, and giving the SSA
+loop-iter pass a uniform input shape.
 
 ### Post-generation cleanup -- between (4) and (5)
 
-Run over the freshly built SDFG, in order, **before** the
-`FrozenSignature` snapshot (so the binding emitter sees the post-cleanup
-signature):
+`builder/SDFGBuilder` runs these over the freshly built SDFG, in order,
+**before** the `FrozenSignature` snapshot (so the binding emitter sees
+the post-cleanup signature):
 
-1. **`SSALoopIterators`** -- renames each `LoopRegion.loop_variable` to a
-   globally-unique `_it_<N>` and propagates the rename through the body;
-   adds a reconstruction state re-asserting `<original_var> = <loop_end>`
-   so downstream code reading the un-renamed name is correct. The bridge
-   thus emits each loop with the source iter name (`jk`, `je`, ...) and
-   lets this pass uniquify it -- no `iter_map` plumbing in the emitters.
-2. **`replace_length_one_arrays_with_scalars`** (`transient_only=True`)
-   -- rewrites local 1-element transients (loop accumulators) to true
-   `Scalar`s, stripping leftover `[0]` subscripts. Signature scalars
-   follow the I/O convention below; recurses into nested SDFGs.
-3. **`IntegerizePowerExponents`** -- retypes integer-valued float `**`
-   exponents (`base**2.0`) to `int` so codegen routes them through
-   `dace::math::ipow` (repeated multiply, bit-identical to a Fortran
-   reference) instead of libm `pow`. Genuine fractional exponents are
-   left untouched.
+| Pass | What it does |
+| --- | --- |
+| `SSALoopIterators` | Renames each `LoopRegion.loop_variable` to a unique `_it_<N>` and propagates it through the body, plus a reconstruction state re-asserting `<orig> = <loop_end>` for downstream reads. The bridge emits the source name (`jk`, `je`); this uniquifies it -- no `iter_map` plumbing. |
+| `replace_length_one_arrays_with_scalars` | Rewrites local 1-element transients (loop accumulators) to true `Scalar`s, stripping leftover `[0]` subscripts; recurses into nested SDFGs. |
+| `IntegerizePowerExponents` | Retypes integer-valued float `**` exponents (`base**2.0`) to `int` so codegen uses `dace::math::ipow` (repeated multiply, bit-identical to Fortran) not libm `pow`. Fractional exponents untouched. |
 
 **Loop-iterator validation.** SDFG validation rejects writing a
 `LoopRegion.loop_variable` from an interstate-edge assignment inside its
@@ -779,7 +838,7 @@ dace_fortran/
 | AoS + allocatable, uniform constant inner size | [OK] | static companion `A_w(N, M)`; alloc chain erased |
 | AoS + allocatable as SDFG-boundary dummy | [OK] | padding-to-max with a runtime cap symbol |
 | AoS + allocatable, kernel-internal first alloc (`intent(out)`) | [!] | needs an HLFIR shape-discovery pre-pass |
-| Jagged AoS, two allocatable members of differing lengths | [!] | two-cap-symbol shape not yet exercised |
+| Jagged AoS, two allocatable members of differing lengths | [OK] | one cap symbol per member (`cap_a_w`, `cap_a_v`) |
 | Derived type with parametric array dim from a struct field | [!] | 1 xfail |
 | Circular type definitions (recursion through a pointer chain) | [X] | out of scope |
 
@@ -791,7 +850,7 @@ dace_fortran/
 | `IF` / `ELSE IF` / `ELSE` | [OK] | scf.if |
 | `SELECT CASE` | [OK] | `lower-fir-select-case` |
 | `EXIT`, `CYCLE` | [OK] | |
-| Statement functions (`f(x) = ...`) | [!] | 1 xfail |
+| Statement functions (`f(x) = ...`) | [X] | obsolescent; not seen in QE / ICON |
 | `GOTO` | [X] | unstructured GOTO doesn't lift to scf |
 | `SELECT TYPE` | [X] | requires runtime type discrimination |
 
@@ -829,7 +888,7 @@ dace_fortran/
 | Reductions (sum/product/min/max/all/any/count/minval/maxval) | [OK] | |
 | BLAS/LAPACK (matmul, transpose) | [OK] | dense -> libnode, strided -> explicit `do` loop |
 | Noncontiguous gather `a(idx, :)` -- rank-1, constant extent | [OK] | gather-expand pass |
-| Noncontiguous gather -- rank-2+ (`d(cols2, cols)`) | [!] | 5 xfails -- pass bails with a clear error |
+| Noncontiguous gather -- rank-2+ (`d(cols2, cols)`) | [!] | `ExpandVectorSubscriptGather` only emits the rank-1 nested loop yet; bails with a clear error (not a DaCe modeling limit) |
 | Noncontiguous slice -- symbolic extent | [X] | DaCe can't express runtime-sized symbol arrays |
 | Noncontiguous scatter -- `intent(out)` write-back | [!] | not yet modelled |
 | `ASSOCIATE` block | [!] | relative indexing only |
