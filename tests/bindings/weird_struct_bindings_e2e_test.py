@@ -32,10 +32,9 @@ import pytest
 from _util import build_sdfg, gfortran_compile_so, have_flang
 from dace_fortran.bindings import (
     FlattenPlan,
-    OriginalArg,
-    OriginalInterface,
     emit_bindings,
 )
+from dace_fortran.bindings.fortran_interface import build_auto_interface
 
 pytestmark = [
     pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH"),
@@ -113,18 +112,14 @@ def test_e2e_mixed_rank_struct(tmp_path: Path):
     scalar member ``coef``.  The kernel does
     ``w%vol = w%vol * w%coef + (i+j+k)``.  Binding AND direct SDFG vs a
     gfortran reference (``rtol=1e-12``); the FlattenPlan must be non-empty."""
-    iface = OriginalInterface(
-        entry="scale3d",
-        args=(OriginalArg(name="w", fortran_type="type(t_w)", rank=0, intent="inout", struct_type="t_w"), ),
-        used_modules={"mo_w": ("t_w", )},
-    )
-
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     builder = build_sdfg(_SRC, sdfg_dir, name="scale3d", entry="_QPscale3d")
     plan = FlattenPlan.from_dict(builder.module.get_flatten_plan())
     sdfg = builder.build()
     sdfg.name = "scale3d"
+    # Auto-derived caller interface (rank-0 ``type(t_w)`` dummy from mo_w).
+    iface = build_auto_interface(sdfg._fortran_interface_raw, "scale3d")
     compiled = sdfg.compile()
     so_path = Path(compiled._lib._library_filename)
 

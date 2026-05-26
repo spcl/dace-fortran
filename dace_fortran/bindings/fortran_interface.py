@@ -25,6 +25,8 @@ from typing import Dict, Optional, Tuple
 # Fortran type the wrapper declares for that dummy.  ``bool`` is the
 # uniform image for any ``LOGICAL(KIND)`` (the logical-bridge converts the
 # caller's kind width at the boundary); integer kinds map width-for-width.
+# No unsigned entries: Fortran < 2023 has no UNSIGNED type and flang lowers
+# everything to signless integers, so an unsigned dtype never reaches here.
 _DTYPE_TO_FORTRAN_C = {
     "complex128": "complex(c_double)",
     "complex64": "complex(c_float)",
@@ -34,10 +36,6 @@ _DTYPE_TO_FORTRAN_C = {
     "int16": "integer(c_int16_t)",
     "int32": "integer(c_int)",
     "int64": "integer(c_int64_t)",
-    "uint8": "integer(c_int8_t)",
-    "uint16": "integer(c_int16_t)",
-    "uint32": "integer(c_int32_t)",
-    "uint64": "integer(c_int64_t)",
     "bool": "logical(c_bool)",
 }
 

@@ -39,10 +39,10 @@ import pytest
 from _util import build_sdfg, have_flang
 from dace_fortran.bindings import (
     FlattenPlan,
-    OriginalArg,
     OriginalInterface,
     emit_bindings,
 )
+from dace_fortran.bindings.fortran_interface import build_auto_interface
 
 pytestmark = [
     pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH"),
@@ -81,7 +81,7 @@ def _build_sdfg_lib(
     types_src: str,
     name: str,
     entry: str,
-    iface: OriginalInterface,
+    iface: OriginalInterface = None,
     driver_src: str,
 ):
     """SDFG-via-bindings path: build SDFG, emit bindings, gfortran-link
@@ -90,7 +90,10 @@ def _build_sdfg_lib(
 
     ``FlattenPlan`` is read off the bridge module after the pass
     pipeline runs, so the emitter sees the same recipe
-    ``hlfir-flatten-structs`` actually recorded.
+    ``hlfir-flatten-structs`` actually recorded.  ``iface`` defaults to
+    the SDFG's auto-derived caller interface (these AoS kernels all flatten
+    explicit-shape struct dummies, which the snapshot names correctly);
+    pass an explicit one only for a shape the snapshot can't recover.
     """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
@@ -101,6 +104,8 @@ def _build_sdfg_lib(
     compiled = sdfg.compile()
     so_path = Path(compiled._lib._library_filename)
     fs = sdfg._frozen_signature
+    if iface is None:
+        iface = build_auto_interface(sdfg._fortran_interface_raw, name)
 
     bindings_path = tmp_path / f"{name}_bindings.f90"
     emit_bindings(fs, iface, plan, str(bindings_path))
@@ -223,18 +228,12 @@ def test_e2e_two_real_array_struct(tmp_path: Path):
     Both members alias zero-copy through ``c_loc``.  ``kernel`` does
     ``fld%a = fld%a + fld%b``; reference and SDFG paths must produce
     identical ``fld%a`` post-call."""
-    iface = OriginalInterface(
-        entry="kernel_two_real",
-        args=(OriginalArg(name="fld", fortran_type="type(t_fields)", rank=0, intent="inout", struct_type="t_fields"), ),
-        used_modules={"mo_fields": ("t_fields", )},
-    )
     sdfg_lib = _build_sdfg_lib(
         tmp_path,
         kernel_src=_TWO_REAL_SRC,
         types_src=_TWO_REAL_TYPES_SRC,
         name="kernel_two_real",
         entry="_QPkernel_two_real",
-        iface=iface,
         driver_src=_TWO_REAL_DRIVER,
     )
     sdfg_lib.run_two_real.argtypes = [
@@ -374,18 +373,12 @@ def test_e2e_nested_struct(tmp_path: Path):
     ``FlattenStructs.cpp`` emits one FlattenEntry whose recipe carries
     a flat name + a dotted read_expr per leaf, so the bindings emitter
     aliases each leaf via ``c_f_pointer(c_loc(st%a%v), st_a_v, [...])``."""
-    iface = OriginalInterface(
-        entry="kernel_nested",
-        args=(OriginalArg(name="st", fortran_type="type(t_outer)", rank=0, intent="inout", struct_type="t_outer"), ),
-        used_modules={"mo_nested": ("t_outer", )},
-    )
     sdfg_lib = _build_sdfg_lib(
         tmp_path,
         kernel_src=_NESTED_SRC,
         types_src=_NESTED_TYPES_SRC,
         name="kernel_nested",
         entry="_QPkernel_nested",
-        iface=iface,
         driver_src=_NESTED_DRIVER,
     )
     sdfg_lib.run_nested.argtypes = [
@@ -524,18 +517,12 @@ def test_e2e_complex_member_struct(tmp_path: Path):
     ``c_f_pointer(c_loc(st%z), st_z, [...])`` and DaCe's tasklet
     codegen handles the ``.real()`` / ``.imag()`` method calls on
     ``std::complex<double>``."""
-    iface = OriginalInterface(
-        entry="kernel_complex",
-        args=(OriginalArg(name="st", fortran_type="type(t_state)", rank=0, intent="inout", struct_type="t_state"), ),
-        used_modules={"mo_state": ("t_state", )},
-    )
     sdfg_lib = _build_sdfg_lib(
         tmp_path,
         kernel_src=_COMPLEX_SRC,
         types_src=_COMPLEX_TYPES_SRC,
         name="kernel_complex",
         entry="_QPkernel_complex",
-        iface=iface,
         driver_src=_COMPLEX_DRIVER,
     )
     sdfg_lib.run_complex.argtypes = [
@@ -668,19 +655,12 @@ def test_e2e_array_of_scalar_structs_deepcopy(tmp_path: Path):
     strided-gather DEEPCOPY path.  The binding allocates ``pts_x``..``pts_w``,
     scatters the interleaved AoS in, runs the kernel, gathers back out; the
     result must match a gfortran reference of the same kernel on the AoS."""
-    iface = OriginalInterface(
-        entry="kern_aos",
-        args=(OriginalArg(name="pts", fortran_type="type(point)", rank=1, shape=("N", ), intent="inout",
-                          struct_type="point"), ),
-        used_modules={"mo_pt": ("point", "N")},
-    )
     sdfg_lib = _build_sdfg_lib(
         tmp_path,
         kernel_src=_AOS_SRC,
         types_src=_AOS_TYPES_SRC,
         name="kern_aos",
         entry="_QPkern_aos",
-        iface=iface,
         driver_src=_AOS_DRIVER,
     )
     sdfg_lib.run_aos.argtypes = [ctypes.POINTER(ctypes.c_double)]
@@ -791,14 +771,8 @@ def test_e2e_array_of_mixed_type_structs_deepcopy(tmp_path: Path):
     """``type(item){a:real, n:int} :: items(N)`` -> two typed SoA companions,
     both deep-copied.  Kernel updates both members; result must match the
     gfortran reference for both the real and integer arrays."""
-    iface = OriginalInterface(
-        entry="kern_mix",
-        args=(OriginalArg(name="items", fortran_type="type(item)", rank=1, shape=("N", ), intent="inout",
-                          struct_type="item"), ),
-        used_modules={"mo_mix": ("item", "N")},
-    )
     sdfg_lib = _build_sdfg_lib(tmp_path, kernel_src=_MIX_SRC, types_src=_MIX_TYPES_SRC, name="kern_mix",
-                               entry="_QPkern_mix", iface=iface, driver_src=_MIX_DRIVER)
+                               entry="_QPkern_mix", driver_src=_MIX_DRIVER)
     sdfg_lib.run_mix.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_int)]
     sdfg_lib.run_mix.restype = None
     ref_lib = _build_reference_lib(tmp_path, types_src=_MIX_TYPES_SRC, kernel_src=_MIX_KERNEL_SRC,
@@ -886,17 +860,8 @@ def test_e2e_array_of_structs_read_only_copy_in(tmp_path: Path):
     """``type(point) :: pts(N)`` passed ``intent(in)``: the deepcopy scatters
     the members in (no copy-back) and the kernel writes a separate output
     array.  Output must match the reference."""
-    iface = OriginalInterface(
-        entry="kern_ro",
-        args=(
-            OriginalArg(name="pts", fortran_type="type(point)", rank=1, shape=("N", ), intent="in",
-                        struct_type="point"),
-            OriginalArg(name="outv", fortran_type="real(c_double)", rank=1, shape=("N", ), intent="out"),
-        ),
-        used_modules={"mo_pt": ("point", "N")},
-    )
     sdfg_lib = _build_sdfg_lib(tmp_path, kernel_src=_RO_SRC, types_src=_AOS_TYPES_SRC, name="kern_ro",
-                               entry="_QPkern_ro", iface=iface, driver_src=_RO_DRIVER)
+                               entry="_QPkern_ro", driver_src=_RO_DRIVER)
     sdfg_lib.run_ro.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double)]
     sdfg_lib.run_ro.restype = None
     ref_lib = _build_reference_lib(tmp_path, types_src=_AOS_TYPES_SRC, kernel_src=_RO_KERNEL_SRC,
@@ -1021,15 +986,9 @@ def test_e2e_array_of_jagged_alloc_structs_deepcopy(tmp_path: Path):
     binding's ``max``).  Verifies the runtime-cap pack/unpack round-trips
     the live data and that ``size(a(i)%w)`` resolved to the companion cap
     (no ``a_d0`` symbol leak), against a gfortran reference."""
-    iface = OriginalInterface(
-        entry="kern_jag",
-        args=(OriginalArg(name="a", fortran_type="type(bag)", rank=1, shape=("NB", ),
-                          intent="inout", struct_type="bag"), ),
-        used_modules={"mo_bag": ("bag", "NB")},
-    )
     sdfg_lib = _build_sdfg_lib(tmp_path, kernel_src=_JAG_TYPES_SRC + _JAG_KERNEL_SRC,
                                types_src=_JAG_TYPES_SRC, name="kern_jag",
-                               entry="_QPkern_jag", iface=iface, driver_src=_JAG_DRIVER)
+                               entry="_QPkern_jag", driver_src=_JAG_DRIVER)
     sdfg_lib.run_jag.argtypes = [ctypes.POINTER(ctypes.c_double)]
     sdfg_lib.run_jag.restype = None
 
