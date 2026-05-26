@@ -1,0 +1,163 @@
+#!/bin/bash
+
+# ICON
+#
+# ------------------------------------------
+# Copyright (C) 2004-2026, DWD, MPI-M, DKRZ, KIT, ETH, MeteoSwiss
+# Contact information: icon-model.org
+# See AUTHORS.TXT for a list of authors
+# See LICENSES/ for license information
+# SPDX-License-Identifier: BSD-3-Clause
+# ------------------------------------------
+
+set -eu
+unset CDPATH
+
+script_dir=$(cd "$(dirname "$0")"; pwd)
+icon_dir=$(cd "${script_dir}/../.."; pwd)
+
+################################################################################
+
+if test -z "${ICON_SW_PREFIX-}"; then
+  case $(uname -s) in
+    Darwin)
+      macports_prefix='/opt/local'
+      homebrew_prefix='/opt/homebrew'
+      if test ! -f "${macports_prefix}/bin/mpif90" && \
+        test -f "${homebrew_prefix}/bin/mpif90"; then
+        ICON_SW_PREFIX=${homebrew_prefix}
+      else
+        ICON_SW_PREFIX=${macports_prefix}
+      fi
+      ;;
+    *)
+      ICON_SW_PREFIX='/usr' ;;
+  esac
+fi
+
+# Adjustments for macOS:
+if test "$(uname -s)" = Darwin; then
+  # Do not export irrelevante environment variable:
+  export_ld_path=no
+else
+  export_ld_path=yes
+fi
+
+BUILD_ENV=${BUILD_ENV-}
+CPPFLAGS=${CPPFLAGS-}
+fc_includes=
+LDFLAGS=${LDFLAGS-}
+
+if test -d "${ICON_SW_PREFIX}"; then
+  ICON_SW_PREFIX=$(cd "${ICON_SW_PREFIX}"; pwd)
+  echo "INFO: ICON dependencies are expected in '${ICON_SW_PREFIX}'"
+  if test -d "${ICON_SW_PREFIX}/include"; then
+    CPPFLAGS="${CPPFLAGS} -I${ICON_SW_PREFIX}/include"
+    fc_includes="-I${ICON_SW_PREFIX}/include"
+  fi
+  if test -d "${ICON_SW_PREFIX}/include/libxml2"; then
+    CPPFLAGS="${CPPFLAGS} -I${ICON_SW_PREFIX}/include/libxml2"
+  fi
+  if test -d "${ICON_SW_PREFIX}/lib64"; then
+    LDFLAGS="${LDFLAGS} -L${ICON_SW_PREFIX}/lib64"
+    if test "${export_ld_path}" = yes; then
+      BUILD_ENV="${BUILD_ENV} export LD_LIBRARY_PATH=\"${ICON_SW_PREFIX}/lib64\${LD_LIBRARY_PATH:+:}\${LD_LIBRARY_PATH-}\";"
+    fi
+  fi
+  if test -d "${ICON_SW_PREFIX}/lib"; then
+    LDFLAGS="${LDFLAGS} -L${ICON_SW_PREFIX}/lib"
+    if test "${export_ld_path}" = yes; then
+      BUILD_ENV="${BUILD_ENV} export LD_LIBRARY_PATH=\"${ICON_SW_PREFIX}/lib\${LD_LIBRARY_PATH:+:}\${LD_LIBRARY_PATH-}\";"
+    fi
+  fi
+  if test -d "${ICON_SW_PREFIX}/bin"; then
+    BUILD_ENV="${BUILD_ENV} export PATH=\"${ICON_SW_PREFIX}/bin\${PATH:+:}\${PATH-}\";"
+  fi
+else
+  # Most probably, this will fail because the compiler will not be able to find
+  # Fortran module files even if they are installed to a standard directory.
+  echo "WARNING: directory '${ICON_SW_PREFIX}' not found: \
+set environment variable ICON_SW_PREFIX to the directory with ICON dependencies (NetCDF, LAPACK, etc.)" >&2
+fi
+
+################################################################################
+
+CC='mpicc'
+CFLAGS=${CFLAGS-'-O2 -g1'}
+
+CXX='mpicxx'
+CXXFLAGS=${CXXFLAGS-'-O2 -g1'}
+
+FC='mpif90'
+# Drive the MPI Fortran wrapper with flang-new so the build (and the
+# captured compile_commands.json) use flang's preprocessor + flags.
+BUILD_ENV="${BUILD_ENV} export OMPI_FC=flang-new-21;"
+FCFLAGS=${FCFLAGS-'-O2 -g'}" ${fc_includes}"
+
+# Detect the standard C++ library:
+if echo '#include <string>' | \
+  "${CXX}" -x c++ -dM -E - 2>/dev/null | \
+  grep -qe '_LIBCPP_VERSION' >/dev/null 2>&1
+then
+  stdcpp_libs='-lc++'
+else
+  stdcpp_libs='-lstdc++'
+fi
+
+LIBS=${LIBS-"-lxml2 -lfyaml -leccodes -llapack -lblas -lnetcdff -lnetcdf ${stdcpp_libs}"}
+
+MPI_LAUNCH='mpiexec'
+
+EXTRA_CONFIG_ARGS="\
+--enable-grib2 \
+--enable-loop-exchange \
+--enable-openmp \
+--enable-bundled-python=mtime \
+"
+
+################################################################################
+
+"${icon_dir}/configure" \
+BUILD_ENV="${BUILD_ENV}" \
+CC="${CC}" \
+CPPFLAGS="${CPPFLAGS}" \
+CXX="${CXX}" \
+FC="${FC}" \
+FCFLAGS="${FCFLAGS}" \
+CFLAGS="${CFLAGS}" \
+CXXFLAGS="${CXXFLAGS}" \
+LDFLAGS="${LDFLAGS}" \
+LIBS="${LIBS}" \
+MPI_LAUNCH="${MPI_LAUNCH}" \
+${EXTRA_CONFIG_ARGS} \
+"$@"
+
+for arg in "$@"; do
+  case ${arg} in
+    -help | --help | --hel | --he | -h | -help=r* | --help=r* | --hel=r* | --he=r* | -hr* | -help=s* | --help=s* | --hel=s* | --he=s* | -hs*)
+      test -n "${EXTRA_CONFIG_ARGS}" && echo '' && echo "This wrapper script ('$0') calls the configure script with the following extra arguments, which might override the default values listed above: ${EXTRA_CONFIG_ARGS}"
+      exit 0 ;;
+  esac
+done
+
+# Copy runscript-related files when building out-of-source:
+if test $(pwd) != $(cd "${icon_dir}"; pwd); then
+  if rsync -h >/dev/null 2>&1; then
+    echo "Copying runscript input files from the source directory..."
+    rsync -uavz ${icon_dir}/run . --exclude='*.in' --exclude='.*' --exclude='standard_*' --exclude=mkexp
+    ln -sf ${icon_dir}/run/{standard_*,mkexp} run/
+    for dir in \
+      'externals/art/runctrl_examples' \
+      'externals/ecrad/data' \
+      'externals/jsbach/data'
+    do
+      src="${icon_dir}/${dir}"
+      test -d "${src}" && mkdir -p "${dir}" && rsync -uavz "${src}/" "${dir}"
+    done
+    rsync -uavz ${icon_dir}/make_runscripts .
+    ln -sf ${icon_dir}/data
+    ln -sf ${icon_dir}/vertical_coord_tables
+  else
+    echo "WARNING: 'rsync' is not available: unable to copy runscript input files from the source directory." >&2
+  fi
+fi
