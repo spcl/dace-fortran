@@ -264,11 +264,25 @@ def _flang_emit(flang: str,
                 defines: Sequence[str]):
     """Run one ``flang -fc1 -emit-hlfir`` invocation.  ``cwd`` and
     ``-J/-I`` all point at ``out_dir`` so flang only ever sees the
-    ``.mod`` files it wrote itself -- the gfortran-format binary
-    ``.mod`` files the user's regular build emits next door cannot
-    collide via flang's implicit ``.`` lookup."""
+    ``.mod`` files it wrote itself -- with ``cwd`` set to ``out_dir`` the
+    implicit ``.`` lookup and the leading ``-I`` both resolve there, ahead
+    of any build ``-I`` dir, so the gfortran-format binary ``.mod`` files
+    the regular build emits next door (and the stubs') never shadow ours.
+    ``out_dir`` is resolved to an absolute path first: it doubles as
+    ``cwd``, so a relative ``-J/-I out_dir`` would otherwise nest under
+    itself.
+
+    We deliberately do NOT pass ``-fhermetic-module-files``: a hermetic
+    ``.mod`` embeds a private copy of every type it transitively uses, so a
+    type reaching a module by two ``USE`` paths (e.g. ICON's
+    ``t_tracer_meta`` arriving both directly and inside
+    ``t_var_metadata_dynamic``) loses identity, and ``SELECT TYPE`` /
+    ``TYPE IS`` against it fails with "must be an extension of itself".
+    Plain (path-referencing) ``.mod`` files keep one identity per type, and
+    the ``out_dir``-first search order already prevents cross-format
+    collisions, so hermetic mode buys nothing here."""
+    out_dir = out_dir.resolve()
     cmd = [flang, "-fc1", "-cpp", "-U_OPENMP", "-U_OPENACC",
-           "-fhermetic-module-files",
            "-J", str(out_dir), "-I", str(out_dir)]
     for d in includes:
         cmd += ["-I", str(d)]

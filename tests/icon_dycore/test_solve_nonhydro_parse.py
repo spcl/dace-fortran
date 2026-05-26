@@ -11,8 +11,17 @@ only need flang to **cpp-preprocess + emit HLFIR** for the dycore TU and its
 USE-closure, not a working ICON binary -- so the test asserts the dycore
 HLFIR was emitted, not that the SDFG fully builds.
 
+The dycore's USE-closure reaches two modules flang has no readable ``.mod``
+for: ``mpi`` (kept on -- the halo-exchange / collective structure is
+preserved for the MPI library nodes) and ``netcdf`` (a purely structural
+dependency: ``mo_solve_nonhydro`` -> ``mo_grid_config`` -> ``mo_netcdf``).
+The flang-buildable ``stubs/`` next to this test supply those ``.mod`` files;
+their bodies are never lowered.
+
 Gated on ``ICON_DYCORE_CC`` (path to the captured ``compile_commands.json``)
-so a normal sweep skips it; a configured runner sets the env var.
+so a normal sweep skips it; a configured runner sets the env var.  This stops
+at HLFIR emission on purpose -- lowering the 60k-line ``solve_nh`` to an SDFG
+is a separate (and currently unoptimised) step, so no SDFG is built here.
 """
 import os
 import re
@@ -23,7 +32,9 @@ import pytest
 from _util import have_flang
 
 _CC = os.environ.get("ICON_DYCORE_CC")
-_ENTRY = "_QMmo_solve_nonhydroPsolve_nh"  # mo_solve_nonhydro :: solve_nh
+_ENTRY = "mo_solve_nonhydro::solve_nh"  # friendly name; emit() resolves it
+_ENTRY_SYM = "_QMmo_solve_nonhydroPsolve_nh"  # its mangled flang symbol
+_STUBS_DIR = Path(__file__).parent / "stubs"
 
 pytestmark = [
     pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH"),
@@ -35,12 +46,16 @@ pytestmark = [
 
 def test_solve_nonhydro_emits_hlfir(tmp_path):
     """flang cpp-preprocesses + emits HLFIR for the dycore, driven entirely
-    by the per-TU -cpp / -I / -D flags from compile_commands.json."""
+    by the per-TU -cpp / -I / -D flags from compile_commands.json, with the
+    ``mpi`` / ``netcdf`` stubs standing in for their unreadable ``.mod``."""
     from dace_fortran.emit_hlfir import emit
-    # entry= restricts the ~900-TU ICON database to solve_nh's USE-closure.
-    out = emit(compile_commands=Path(_CC), out_dir=tmp_path / "hlfir", entry=_ENTRY)
+    stubs = [_STUBS_DIR / "mpi_stub.f90", _STUBS_DIR / "netcdf_stub.f90"]
+    # entry= restricts the ~900-TU ICON database to solve_nh's USE-closure;
+    # the plain Fortran name is resolved to the mangled symbol from the sources.
+    out = emit(compile_commands=Path(_CC), out_dir=tmp_path / "hlfir",
+               stubs=stubs, entry=_ENTRY)
     # The dycore's func must appear in one of the emitted .hlfir files --
     # i.e. flang got through the preprocessor + frontend on solve_nh.
-    func_re = re.compile(rf"func\.func\s+(?!private\b)@{re.escape(_ENTRY)}\s*\(")
+    func_re = re.compile(rf"func\.func\s+(?!private\b)@{re.escape(_ENTRY_SYM)}\s*\(")
     assert any(func_re.search(p.read_text()) for p in out if p.suffix == ".hlfir"), \
-        f"no emitted .hlfir defines {_ENTRY} ({len(out)} TUs emitted)"
+        f"no emitted .hlfir defines {_ENTRY_SYM} ({len(out)} TUs emitted)"

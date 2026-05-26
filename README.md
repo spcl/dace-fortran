@@ -152,14 +152,26 @@ bear -- make                  # writes ./compile_commands.json
 ```python
 sdfg = dace_fortran.build_sdfg_from_project(
     "build/compile_commands.json",
-    entry="_QMmod_jacobiPjacobi2d_update",      # mangled flang symbol
+    entry="mod_jacobi::jacobi2d_update",        # plain Fortran name --
+                                                # `module::proc`, or just
+                                                # `proc`, or the mangled
+                                                # `_QM...` symbol all work
     stubs=["mpi_stub.f90", "netcdf_stub.f90"])  # see below
 ```
+
+`entry` is resolved against the project's own sources, so you pass the
+Fortran name you already know (`solve_nh` / `mo_solve_nonhydro::solve_nh`),
+not the mangled flang symbol -- qualify with `module::` only to disambiguate
+a name defined in several modules.
 
 `stubs` are flang-buildable stand-ins for modules flang ships no `.mod`
 for (`mpi` / `netcdf` / `hdf5` / ...): a small module declaring the names
 the project `USE`s, compiled before the project TUs so those `USE` lines
-resolve. Omit when there are no such externals.
+resolve. Their **bodies are never lowered** -- a stub exists only so flang
+can produce a readable `.mod` and type-check the closure; a module reached
+purely structurally (e.g. `solve_nh` -> `mo_grid_config` -> `mo_netcdf` ->
+`netcdf`, with no netCDF call on the compute path) still needs one. Omit
+`stubs` when there are no such externals.
 
 **Preprocessor config comes from the build flags.** Heavily-`#ifdef`'d
 sources (ICON's dycore, CLOUDSC, ...) only compile under the right cpp
@@ -180,7 +192,9 @@ python -m dace_fortran.emit_hlfir build/compile_commands.json \
 ```
 ```python
 sdfg = dace_fortran.build_sdfg_from_hlfir(
-    "build/hlfir", entry="_QMmod_jacobiPjacobi2d_update")
+    "build/hlfir", entry="_QMmod_jacobiPjacobi2d_update")  # mangled symbol:
+    # this form has only the emitted .hlfir to match against, no Fortran
+    # sources, so it keys on the `func.func @<symbol>` name directly.
 ```
 
 `tests/prebuilt_hlfir/` ships one worked project per capture route, each
