@@ -62,11 +62,12 @@ sdfg = dace_fortran.build_sdfg(open("kernel.f90").read(), entry="_QPkernel")
 sdfg.simplify()
 
 # 3. Emit + link a Fortran-callable library.  build_fortran_library
-#    re-verifies the frozen signature, writes <entry>_bindings.f90,
-#    and gfortran-links it against the compiled SDFG .so.
+#    auto-derives the caller interface + flatten plan from the SDFG,
+#    re-verifies the frozen signature, writes <entry>_bindings.f90, and
+#    gfortran-links it against the compiled SDFG .so.
 from dace_fortran.bindings import build_fortran_library, SignatureDriftError
 try:
-    lib = build_fortran_library(sdfg, iface, plan, out_dir="build",
+    lib = build_fortran_library(sdfg, out_dir="build",
                                 extra_sources=["caller.f90"], name="kernel")
 except SignatureDriftError as e:
     raise SystemExit(f"a transformation invalidated the binding: {e}")
@@ -229,46 +230,33 @@ end subroutine kernel
 
 ### (a) Build the SDFG and emit the binding
 
-The entry symbol is `_QPkernel` (a free subroutine). Build the SDFG,
-then describe the caller-facing interface with an `OriginalInterface`
-and emit the binding. This kernel has no derived types, so its
-`FlattenPlan` is empty (a pure pass-through).
-
-**Why the `iface` is needed.** The SDFG only knows its *flattened* C-ABI
-signature -- after step (3), `type(point) :: pts(N)` is already four bare
-`double*` companions, and the caller's original types, derived-type
-layouts, intents, and argument order are gone from it. To emit a wrapper
-the caller can call *with its original signature* (and to know which
-member maps to which companion, alias vs deep copy), the emitter needs
-the pre-flatten caller view -- that is the `iface`, snapshotted at step
-(1). It is unavoidable for any struct kernel because flattening is
-destructive; for a flat kernel like this one it is nearly redundant but
-still carries the original argument *order*, which the SDFG arglist does
-not preserve.
+The entry symbol is `_QPkernel` (a free subroutine). Build the SDFG, then
+emit the binding -- the caller's interface is auto-derived:
 
 ```python
 import dace_fortran
-from dace_fortran.bindings import (OriginalArg, OriginalInterface,
-                                   FlattenPlan, emit_bindings)
+from dace_fortran.bindings import build_fortran_library
 
 src = open("tests/qe_loopnests/qe_e4_zaxpy.f90").read()
 sdfg = dace_fortran.build_sdfg(src, entry="_QPkernel", name="kernel")
-# sdfg.arglist() -> {'a', 'x', 'y'} arrays + free symbol 'n'
-
-iface = OriginalInterface(entry="kernel", args=(
-    OriginalArg(name="n", fortran_type="integer(c_int)",    rank=0,            intent="in"),
-    OriginalArg(name="a", fortran_type="complex(c_double)", rank=1, shape=("1",), intent="in"),
-    OriginalArg(name="x", fortran_type="complex(c_double)", rank=1, shape=("n",), intent="in"),
-    OriginalArg(name="y", fortran_type="complex(c_double)", rank=1, shape=("n",), intent="inout"),
-))
-emit_bindings(sdfg._frozen_signature, iface,
-              FlattenPlan.from_dict({"entries": []}), "kernel_bindings.f90")
+# ... optimise the SDFG here ...
+lib = build_fortran_library(sdfg, out_dir="build", name="kernel")
 ```
 
-For an end-to-end SDFG-vs-f2py numerical check of this exact kernel see
-`tests/qe_loopnests/test_sdfg_equivalence.py::test_e4_zaxpy`, which uses
-the `tests/_util.build_sdfg` test funnel (a thin wrapper over the real
-`make_builder`).
+`build_fortran_library` derives both the `OriginalInterface` and the
+`FlattenPlan` from the SDFG when they are not passed.
+
+**Why an interface is needed at all.** The SDFG only knows its *flattened*
+C-ABI signature -- after step (3), `type(point) :: pts(N)` is already four
+bare `double*` companions, and the caller's original types, derived-type
+layouts, intents, and argument order are gone from it. To emit a wrapper
+the caller can invoke *with its original signature* (and to map each
+member to its companion, alias vs deep copy), the emitter needs the
+pre-flatten caller view. The builder snapshots it at step (1) onto
+`sdfg._fortran_interface_raw`, so `build_fortran_library` can rebuild it
+automatically; pass an explicit `iface=` only for shapes the snapshot
+can't name (e.g. `CHARACTER`). For an end-to-end SDFG-vs-f2py check of
+this kernel see `tests/qe_loopnests/test_sdfg_equivalence.py::test_e4_zaxpy`.
 
 ### (b) The generated binding
 
@@ -826,7 +814,7 @@ dace_fortran/
 |---|---|---|
 | `INTEGER(1/2/4/8)` | [OK] | -> `int8/16/32/64` |
 | `REAL(4/8)` | [OK] | -> `float32/64` |
-| `LOGICAL(1/4/8)` | [OK] | surfaced as `uint8/int32/int64` for the f2py ABI |
+| `LOGICAL` (any kind) | [OK] | -> `bool` regardless of kind; the binding bridges the caller's kind width at the boundary |
 | `COMPLEX(4/8)` | [OK] | arrays only -- scalar by-value is a DaCe-core gap |
 | `CHARACTER(*)` | [X] | string handling out of scope |
 | Derived type, flat members | [OK] | `hlfir-flatten-structs` |

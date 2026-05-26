@@ -1,0 +1,67 @@
+"""Fortran KIND -> SDFG dtype mapping invariants.
+
+Two rules that must hold globally (the binding/codegen depend on them):
+
+* ``LOGICAL`` of ANY kind -> ``bool`` (1 byte).  The kind width is a
+  caller-ABI detail the logical-bridge converts at the Fortran boundary;
+  the SDFG itself only ever sees ``bool``.
+* ``INTEGER(1/2/4/8)`` -> ``int8/16/32/64`` (width preserved, never
+  widened or conflated with ``bool``).
+"""
+from pathlib import Path
+
+import pytest
+
+from _util import build_sdfg, have_flang
+
+pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+
+
+def _dtypes(src: str, tmp_path: Path, entry: str) -> dict:
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="k", entry=entry).build()
+    return {n: str(d.dtype) for n, d in sdfg.arrays.items()}
+
+
+def test_logical_every_kind_is_bool(tmp_path):
+    src = """
+subroutine klog(n, ld, l1, l4, l8, lcb)
+  use iso_c_binding
+  implicit none
+  integer(c_int), intent(in) :: n
+  logical,        intent(inout) :: ld(n)   ! default kind
+  logical(1),     intent(inout) :: l1(n)
+  logical(4),     intent(inout) :: l4(n)
+  logical(8),     intent(inout) :: l8(n)
+  logical(c_bool),intent(inout) :: lcb(n)
+  integer :: i
+  do i = 1, n
+     ld(i) = .not. ld(i)
+  end do
+end subroutine klog
+"""
+    d = _dtypes(src, tmp_path, "_QPklog")
+    for nm in ("ld", "l1", "l4", "l8", "lcb"):
+        assert d[nm] == "bool", f"{nm} -> {d[nm]}, expected bool"
+
+
+def test_integer_kinds_preserve_width(tmp_path):
+    src = """
+subroutine kint(n, a1, a2, a4, a8)
+  use iso_c_binding
+  implicit none
+  integer(c_int), intent(in) :: n
+  integer(1), intent(inout) :: a1(n)
+  integer(2), intent(inout) :: a2(n)
+  integer(4), intent(inout) :: a4(n)
+  integer(8), intent(inout) :: a8(n)
+  integer :: i
+  do i = 1, n
+     a1(i) = a1(i) + 1_1
+  end do
+end subroutine kint
+"""
+    d = _dtypes(src, tmp_path, "_QPkint")
+    assert d["a1"] == "int8_t"
+    assert d["a2"] == "int16_t"
+    assert d["a4"] == "int"
+    assert d["a8"] == "int64_t"
