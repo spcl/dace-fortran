@@ -249,6 +249,28 @@ non-default communicator) is recognised automatically and lowered to
 `tests/external_call/test_external_call.py`,
 `tests/external_call/test_keep_external.py`.
 
+**Derived-type arguments.** Mark a whole-struct argument `Arg("aos", ...)`.
+The SDFG side stays in the flattened SoA layout the bridge lowers everything
+to (`type(t) :: s` is already bare per-member companions there);
+`hlfir-marshal-external-structs` splits the struct into its members, and the
+generated C tasklet re-packs those SoA members into a local array-of-structs
+buffer for the call, then unpacks the buffer back into the members on return.
+`intent` picks the directions -- SoA->AoS pack-in for `in` / `inout`,
+AoS->SoA unpack-out for `out` / `inout` -- so the external sees the C `struct`
+ABI it expects while the dataflow never leaves SoA. See
+`tests/external_aos_test.py`.
+
+**Structurally-reached infrastructure (`stub=True`).**
+`keep_external(name, stub=True)` strips the procedure's body to a bare
+declaration before inlining *and* drops its call sites entirely (no library
+node, no `.so` to link) -- where the plain form lowers the call to an
+`ExternalCall`. Use it for infrastructure a large merged closure drags in but
+the compute path never executes: ICON's halo-exchange / metadata helpers built
+on `class(*)` `select_type` or virtual dispatch, which the bridge cannot lower.
+Dropping the unreachable call leaves the rest of the closure lowerable -- it is
+how `mo_solve_nonhydro::solve_nh` keeps its key/value store, hash table, and
+axis-registry clusters out of the lowered pipeline.
+
 ## Worked example: a Quantum Espresso kernel (complex AXPY)
 
 `tests/qe_loopnests/qe_e4_zaxpy.f90` is the hot loop of QE's `zaxpy`
