@@ -1977,12 +1977,18 @@ struct FlattenStructsPass
     // leaf assign into a flat ``val_var_<leaf> = indices_<leaf>``.
     decomposeStructAssigns(func);
 
+    // Step 0.5: (B) split an allocatable array-of-records struct-dummy member
+    // accessed only by stable index symbols (ICON's prog(nnow)/prog(nnew)
+    // double buffer) into one scalar-struct dummy per symbol, so Step 1 flattens
+    // each via the scalar path.  Inserts the new dummies before Step 1 sees them.
+    bool splitArgs = splitDoubleBufferMembers(func);
+
     // Step 1: collect struct-typed dummy arguments, rewrite them in
     // one pass over the original index list so mutations (insertArgument /
     // eraseArgument) don't invalidate later iterations.
     bool rewroteArgs = planAndReplaceStructArgs(func);
 
-    if (rewroteArgs) {
+    if (splitArgs || rewroteArgs) {
       auto &block = func.front();
       auto newInputs = llvm::to_vector(block.getArgumentTypes());
       func.setType(mlir::FunctionType::get(
@@ -2128,6 +2134,104 @@ struct FlattenStructsPass
       b.create<hlfir::AssignOp>(loc, rhsValue, lhsLeaf);
     }
     op.erase();
+  }
+
+  /// (B) Double-buffer split.  A struct dummy's allocatable / pointer
+  /// array-of-records member accessed only as ``s%member(<idx>)`` for stable
+  /// index symbols (ICON time-level buffering: ``prog(nnow)`` / ``prog(nnew)`` /
+  /// ...) is split into one SCALAR-struct dummy per index symbol
+  /// (``<base>_<member>_<sym>``), so the existing scalar-struct flatten in
+  /// ``planAndReplaceStructArgs`` handles each element directly  --  no
+  /// runtime-indexed companion.  The binding resolves ``s%member(nnow)`` /
+  /// ``(nnew)`` into the per-symbol dummies at call time (the time-level
+  /// rotation stays in the driver).  Returns true if any split happened; bails
+  /// for a non-symbol / computed index (member left for the generic
+  /// array-of-records path or a downstream error).
+  ///
+  /// :param func: the function whose struct dummy args to split.
+  /// :returns: true if a per-symbol dummy was inserted.
+  bool splitDoubleBufferMembers(mlir::func::FuncOp func) {
+    auto &block = func.front();
+    auto *ctx = func.getContext();
+    bool changed = false;
+    unsigned nOrig = block.getNumArguments();
+    for (unsigned i = 0; i < nOrig; ++i) {
+      hlfir::DeclareOp argDecl;
+      for (auto *u : block.getArgument(i).getUsers())
+        if (auto d = mlir::dyn_cast<hlfir::DeclareOp>(u)) {
+          argDecl = d;
+          break;
+        }
+      if (!argDecl) continue;
+      bool outerIsArray = false;
+      llvm::SmallVector<int64_t, 4> outerShape;
+      auto rec =
+          peelToRecord(argDecl.getResult(0).getType(), outerIsArray, outerShape);
+      if (!rec || outerIsArray) continue;
+      std::string demangledBase = demangleVarName(argDecl.getUniqName());
+
+      for (auto &pair : rec.getTypeList()) {
+        fir::RecordType elemRec = allocOrPtrArrayOfRecordsMember(pair.second);
+        if (!elemRec) continue;
+        const std::string &member = pair.first;
+
+        // Collect element-access designates ``s%member(idx)`` grouped by the
+        // index source symbol; track the member designate + load to clean up.
+        std::map<std::string, llvm::SmallVector<hlfir::DesignateOp, 4>> bySym;
+        llvm::SmallPtrSet<mlir::Operation *, 8> memberLoads, memberDgs;
+        bool bail = false;
+        func.walk([&](hlfir::DesignateOp elemDg) {
+          if (bail || elemDg.getComponentAttr()) return;
+          if (elemDg.getIndices().size() != 1) return;
+          auto ld = mlir::dyn_cast_or_null<fir::LoadOp>(
+              elemDg.getMemref().getDefiningOp());
+          if (!ld) return;
+          auto md = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
+              ld.getMemref().getDefiningOp());
+          if (!md) return;
+          auto comp = md.getComponentAttr();
+          if (!comp || comp.getValue() != llvm::StringRef(member)) return;
+          if (md.getMemref() != argDecl.getResult(0)) return;
+          std::string sym = traceToDecl(elemDg.getIndices()[0]);
+          if (sym.empty()) {
+            bail = true;  // non-symbol / computed index -> can't split
+            return;
+          }
+          bySym[sym].push_back(elemDg);
+          memberLoads.insert(ld);
+          memberDgs.insert(md);
+        });
+        if (bail || bySym.empty()) continue;
+
+        auto refElem = fir::ReferenceType::get(elemRec);
+        mlir::OpBuilder b(argDecl);
+        b.setInsertionPointAfter(argDecl);
+        for (auto &kv : bySym) {
+          unsigned newIdx = block.getNumArguments();
+          block.insertArgument(newIdx, refElem, argDecl.getLoc());
+          auto newArg = block.getArgument(newIdx);
+          mlir::NamedAttrList attrs;
+          attrs.append("uniq_name",
+                       mlir::StringAttr::get(
+                           ctx, demangledBase + "_" + member + "_" + kv.first));
+          attrs.append(declareSegments(b, /*hasShape=*/false));
+          auto decl = b.create<hlfir::DeclareOp>(
+              argDecl.getLoc(), mlir::TypeRange{refElem, refElem},
+              mlir::ValueRange{newArg}, attrs);
+          for (auto elemDg : kv.second)
+            elemDg.getResult().replaceAllUsesWith(decl.getResult(0));
+          for (auto elemDg : kv.second) elemDg.erase();
+          changed = true;
+        }
+        // Drop the now-dead member designate + load so the struct dummy can be
+        // erased later (no lingering array-of-records reference keeping it).
+        for (auto *op : memberLoads)
+          if (op->use_empty()) op->erase();
+        for (auto *op : memberDgs)
+          if (op->use_empty()) op->erase();
+      }
+    }
+    return changed;
   }
 
   /// Returns true if any struct-typed dummy argument was rewritten.
