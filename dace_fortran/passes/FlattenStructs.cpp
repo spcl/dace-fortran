@@ -564,12 +564,35 @@ struct FlatLeaf {
 // ``hlfir-lift-alloc-array-of-records`` share one definition (the two
 // must agree on which members are treated as opaque).
 
+/// Env-gated (``DACE_HLFIR_DEBUG_FLATTEN``) diagnostic: report the member path
+/// and type at which ``collectFlatLeaves`` bails, so the disqualifying member of
+/// a struct is visible.  Temporary aid for the ICON struct-flatten work.
+static void logFlatBail(const llvm::SmallVectorImpl<std::string> &prefix,
+                        const char *reason, mlir::Type t) {
+  if (!std::getenv("DACE_HLFIR_DEBUG_FLATTEN")) return;
+  std::string path;
+  for (auto &p : prefix) {
+    path += "%";
+    path += p;
+  }
+  llvm::errs() << "[flatten bail] " << reason << " at " << path << " : ";
+  t.print(llvm::errs());
+  llvm::errs() << "\n";
+}
+
+/// When ``partial`` is set, an unsupported member is SKIPPED (no leaf, keep
+/// walking the siblings) instead of failing the whole record.  Used only on the
+/// struct-dummy-argument path: a skipped member that is genuinely accessed is
+/// caught later (the companion is missing), while a skipped member that is never
+/// accessed simply costs nothing -- and ``replaceStructArgNested`` only erases
+/// the struct dummy when no users remain, so a kept-alive accessed member never
+/// dangles.  The local-instance / struct-assign callers keep all-or-nothing.
 static bool collectFlatLeaves(fir::RecordType rec,
                               llvm::SmallVectorImpl<std::string> &prefix,
                               llvm::SmallVectorImpl<int64_t> &outerDims,
                               llvm::SmallVectorImpl<FlatLeaf> &out,
                               llvm::SmallPtrSetImpl<mlir::Type> &visited,
-                              int depth = 0) {
+                              int depth = 0, bool partial = false) {
   if (depth > kFlattenMaxDepth) return false;
   // Mark this record as in-progress so a downstream pointer member
   // whose pointee re-enters the same type (mutual recursion: ``type a_t
@@ -615,6 +638,7 @@ static bool collectFlatLeaves(fir::RecordType rec,
       if (auto seq = mlir::dyn_cast<fir::SequenceType>(leafEle)) {
         for (auto d : seq.getShape()) {
           if (d == fir::SequenceType::getUnknownExtent()) {
+            logFlatBail(prefix, "dynamic-extent static array leaf", pair.second);
             prefix.pop_back();
             return false;  // dynamic extents in the
                            // leaf require a runtime
@@ -636,7 +660,7 @@ static bool collectFlatLeaves(fir::RecordType rec,
       out.push_back(std::move(leaf));
     } else if (auto innerRec = mlir::dyn_cast<fir::RecordType>(pair.second)) {
       if (!collectFlatLeaves(innerRec, prefix, outerDims, out, visited,
-                             depth + 1)) {
+                             depth + 1, partial)) {
         prefix.pop_back();
         return false;
       }
@@ -648,12 +672,14 @@ static bool collectFlatLeaves(fir::RecordType rec,
       // doesn't yet emit.
       auto innerRec = mlir::dyn_cast<fir::RecordType>(seq.getEleTy());
       if (!innerRec) {
+        logFlatBail(prefix, "array member, element not a record", pair.second);
         prefix.pop_back();
         return false;
       }
       llvm::SmallVector<int64_t, 4> theseDims;
       for (auto d : seq.getShape()) {
         if (d == fir::SequenceType::getUnknownExtent()) {
+          logFlatBail(prefix, "dynamic-extent array-of-records", pair.second);
           prefix.pop_back();
           return false;
         }
@@ -661,7 +687,7 @@ static bool collectFlatLeaves(fir::RecordType rec,
       }
       for (auto d : theseDims) outerDims.push_back(d);
       bool ok = collectFlatLeaves(innerRec, prefix, outerDims, out, visited,
-                                  depth + 1);
+                                  depth + 1, partial);
       for (size_t i = 0; i < theseDims.size(); ++i) outerDims.pop_back();
       if (!ok) {
         prefix.pop_back();
@@ -672,7 +698,10 @@ static bool collectFlatLeaves(fir::RecordType rec,
       // through this path.  Bail so the pass leaves the
       // struct untouched and the loud-failure throw in
       // extract_vars points at the right gap.
+      logFlatBail(prefix, "unsupported member (box/char/alloc-array-of-records)",
+                  pair.second);
       prefix.pop_back();
+      if (partial) continue;  // skip this member, keep flattening siblings
       return false;
     }
     prefix.pop_back();
@@ -686,10 +715,10 @@ static bool collectFlatLeaves(fir::RecordType rec,
 static bool collectFlatLeaves(fir::RecordType rec,
                               llvm::SmallVectorImpl<std::string> &prefix,
                               llvm::SmallVectorImpl<FlatLeaf> &out,
-                              int depth = 0) {
+                              int depth = 0, bool partial = false) {
   llvm::SmallVector<int64_t, 4> outerDims;
   llvm::SmallPtrSet<mlir::Type, 4> visited;
-  return collectFlatLeaves(rec, prefix, outerDims, out, visited, depth);
+  return collectFlatLeaves(rec, prefix, outerDims, out, visited, depth, partial);
 }
 
 /// Entry point that threads a caller-provided ``outerDims`` (used by
@@ -2175,7 +2204,13 @@ struct FlattenStructsPass
         if (outerIsArray) continue;
         llvm::SmallVector<std::string, 4> prefix;
         llvm::SmallVector<FlatLeaf, 8> leaves;
-        if (!collectFlatLeaves(rec, prefix, leaves)) continue;
+        // ``partial=true``: skip unsupported members (CHARACTER, alloc-array-of-
+        // records, ...) and flatten the rest, rather than abandoning the whole
+        // struct on the first one.  Unaccessed skipped members cost nothing;
+        // an accessed skipped member keeps the struct dummy alive (no companion)
+        // and is filtered/handled downstream.
+        if (!collectFlatLeaves(rec, prefix, leaves, /*depth=*/0, /*partial=*/true))
+          continue;
         p.nested = true;
         p.leaves = std::move(leaves);
       }
