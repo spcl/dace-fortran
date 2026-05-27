@@ -160,6 +160,13 @@ struct FortranInterfaceInfo {
 FortranInterfaceInfo extractFortranInterface(mlir::ModuleOp module,
                                              const std::string& entry);
 
+/// Index of every ``fir.allocmem`` keyed by its ``uniq_name``, built once with
+/// a single module walk.  Passing it to the helpers below replaces their
+/// per-variable ``module.walk`` with an O(1) lookup -- the difference between
+/// O(variables x module) and O(module + variables) when extracting a
+/// fully-inlined whole-program entry.
+using AllocSitesIndex = std::map<std::string, std::vector<fir::AllocMemOp>>;
+
 /// True iff the allocatable / pointer ``declName`` needs the
 /// per-variable ``<declName>_allocated`` int32 tracker scalar  --  i.e.
 /// either the kernel body writes it (an ALLOCATE / DEALLOCATE site
@@ -167,7 +174,13 @@ FortranInterfaceInfo extractFortranInterface(mlir::ModuleOp module,
 /// reader exists, lowered to ``fir.box_addr``).  Dummies passed in
 /// already-allocated and never queried by ``ALLOCATED(...)`` skip the
 /// tracker entirely.
-bool needsAllocatedTracker(const std::string& declName, mlir::ModuleOp module);
+///
+/// :param allocIdx: optional prebuilt alloc-site index (see above).
+/// :param readerNames: optional prebuilt set of short names with an
+///     ``ALLOCATED`` / ``ASSOCIATED`` reader.
+bool needsAllocatedTracker(const std::string& declName, mlir::ModuleOp module,
+                           const AllocSitesIndex* allocIdx = nullptr,
+                           const std::set<std::string>* readerNames = nullptr);
 
 /// Per-site name for an allocatable ``ALLOCATE``.  Site 0 keeps the
 /// original Fortran name (``x``); site 1+ mints synthetic transient
@@ -178,9 +191,11 @@ bool needsAllocatedTracker(const std::string& declName, mlir::ModuleOp module);
 std::string allocAliasName(const std::string& fortran, unsigned site);
 
 /// Every ``fir.allocmem`` whose ``uniq_name`` is ``<declName>.alloc`` (the
-/// ALLOCATE sites of one allocatable), in IR walk order.
+/// ALLOCATE sites of one allocatable), in IR walk order.  When ``idx`` is
+/// given the result comes from that prebuilt index instead of a module walk.
 std::vector<fir::AllocMemOp> collectAllocSites(const std::string& declName,
-                                               mlir::ModuleOp module);
+                                               mlir::ModuleOp module,
+                                               const AllocSitesIndex* idx = nullptr);
 
 /// True iff the ALLOCATE sites are mutually exclusive  --  each in a
 /// different branch of one common ``scf.if`` / ``fir.if`` (a conditional
@@ -198,6 +213,7 @@ bool allocSitesInExclusiveBranches(const std::vector<fir::AllocMemOp>& sites);
 /// extent symbol); a singleton class uses the site's concrete shape.  See
 /// ALLOC_BUFFER_SSA_DESIGN.md.
 std::vector<std::vector<fir::AllocMemOp>> groupAllocSites(
-    const std::string& declName, mlir::ModuleOp module);
+    const std::string& declName, mlir::ModuleOp module,
+    const AllocSitesIndex* idx = nullptr);
 
 }  // namespace hlfir_bridge

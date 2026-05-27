@@ -220,15 +220,34 @@ static std::vector<std::string> resolveShapeSyms(
   return syms;
 }
 
+/// Build the :type:`AllocSitesIndex` (declared in extract_vars.h) with one
+/// module walk, so the per-variable helpers below look a name up instead of
+/// re-walking the module each time.
+static AllocSitesIndex buildAllocSitesIndex(mlir::ModuleOp module) {
+  AllocSitesIndex idx;
+  module.walk([&](fir::AllocMemOp a) {
+    if (auto un = a.getUniqName()) idx[un->str()].push_back(a);
+  });
+  return idx;
+}
+
 /// Collect every ``fir.allocmem`` whose ``uniq_name`` matches
 /// ``<declUniqName>.alloc``, in IR walk order.  Multiple matches indicate
 /// that the user wrote more than one ``ALLOCATE`` for the variable
 /// (e.g. across an explicit ``DEALLOCATE`` + re-``ALLOCATE``).
+///
+/// :param idx: when given, the prebuilt name->sites index is consulted in O(1)
+///     instead of walking the module; pass it from a loop over many variables.
 std::vector<fir::AllocMemOp> collectAllocSites(const std::string& declName,
-                                               mlir::ModuleOp module) {
-  std::vector<fir::AllocMemOp> sites;
-  if (declName.empty()) return sites;
+                                               mlir::ModuleOp module,
+                                               const AllocSitesIndex* idx) {
+  if (declName.empty()) return {};
   std::string allocName = declName + ".alloc";
+  if (idx) {
+    auto it = idx->find(allocName);
+    return it == idx->end() ? std::vector<fir::AllocMemOp>{} : it->second;
+  }
+  std::vector<fir::AllocMemOp> sites;
   module.walk([&](fir::AllocMemOp a) {
     auto un = a.getUniqName();
     if (un && un->str() == allocName) sites.push_back(a);
@@ -282,11 +301,20 @@ bool allocSitesInExclusiveBranches(const std::vector<fir::AllocMemOp>& sites) {
 }
 
 std::vector<std::vector<fir::AllocMemOp>> groupAllocSites(
-    const std::string& declName, mlir::ModuleOp module) {
-  auto sites = collectAllocSites(declName, module);
+    const std::string& declName, mlir::ModuleOp module,
+    const AllocSitesIndex* idx) {
+  auto sites = collectAllocSites(declName, module, idx);
   std::vector<std::vector<fir::AllocMemOp>> classes;
   unsigned n = sites.size();
   if (n == 0) return classes;
+  // The reaching-set walk below only resolves which of *several* sites merge
+  // into one buffer; the overwhelmingly common single-ALLOCATE case needs none
+  // of it -- and that walk is over the whole enclosing function, which is the
+  // expensive part on a fully-inlined entry.  Short-circuit it.
+  if (n == 1) {
+    classes.push_back(std::move(sites));
+    return classes;
+  }
 
   // site index by allocmem op; union-find over indices.
   std::map<mlir::Operation*, unsigned> idxOf;
@@ -470,9 +498,26 @@ static std::vector<std::string> lowerBoundsFromAllocSite(
 /// ``box_addr(load arr_box) != 0``; if no such reader exists the
 /// per-allocatable ``<arr>_allocated`` tracker scalar and its init
 /// state are dead weight in the SDFG.
+/// Short (post-``extractName``) names that have an ``ALLOCATED`` / ``ASSOCIATED``
+/// reader (a ``fir.box_addr``), built with one module walk.  Lets
+/// ``needsAllocatedTracker`` look a name up instead of re-walking per variable.
+static std::set<std::string> buildAllocatedReaderNames(mlir::ModuleOp module) {
+  std::set<std::string> names;
+  module.walk([&](fir::BoxAddrOp ba) {
+    auto src = ba.getVal();
+    if (auto* sd = src.getDefiningOp())
+      if (auto ld = mlir::dyn_cast<fir::LoadOp>(sd)) src = ld.getMemref();
+    auto n = traceToDecl(src);
+    if (!n.empty()) names.insert(n);
+  });
+  return names;
+}
+
 static bool hasAllocatedReader(const std::string& shortName,
-                               mlir::ModuleOp module) {
+                               mlir::ModuleOp module,
+                               const std::set<std::string>* readerNames = nullptr) {
   if (shortName.empty()) return false;
+  if (readerNames) return readerNames->count(shortName) > 0;
   bool found = false;
   module.walk([&](fir::BoxAddrOp ba) {
     if (found) return;
@@ -497,10 +542,12 @@ static bool hasAllocatedReader(const std::string& shortName,
 /// module-level allocatables passed in already-allocated and never
 /// queried by ``ALLOCATED(...)`` skip the tracker entirely.
 bool needsAllocatedTracker(const std::string& declUniqName,
-                           mlir::ModuleOp module) {
+                           mlir::ModuleOp module,
+                           const AllocSitesIndex* idx,
+                           const std::set<std::string>* readerNames) {
   if (declUniqName.empty()) return false;
-  if (!collectAllocSites(declUniqName, module).empty()) return true;
-  return hasAllocatedReader(extractName(declUniqName), module);
+  if (!collectAllocSites(declUniqName, module, idx).empty()) return true;
+  return hasAllocatedReader(extractName(declUniqName), module, readerNames);
 }
 
 /// First ALLOCATE keeps the allocatable's original Fortran name (so
@@ -1045,7 +1092,48 @@ std::pair<std::string, std::string> decodeModuleGlobalSymbol(
 // table an init routine such as ``qsmith_init_w`` fills, then a reader
 // consumes) from a read-only caller-supplied config global: the former is
 // the kernel's own transient, not an input the caller must provide.
-static bool globalIsWritten(const std::string& sym, mlir::ModuleOp module) {
+/// Set of global symbols written somewhere in the module, built with one walk.
+/// Mirrors ``globalIsWritten``'s per-symbol logic (a write is a store/assign
+/// whose target is a global-backed declare's result, or a designate rooted at
+/// one) so a variable-loop caller can look a symbol up instead of re-walking
+/// the module -- twice -- per global-backed variable.
+static std::set<std::string> buildWrittenGlobals(mlir::ModuleOp module) {
+  llvm::DenseMap<mlir::Value, std::string> symByResult;
+  llvm::SmallVector<std::pair<hlfir::DeclareOp, std::string>, 8> globalDecls;
+  module.walk([&](hlfir::DeclareOp d) {
+    std::string sym = traceToGlobalSymbol(d.getMemref());
+    if (sym.empty()) return;
+    symByResult[d.getResult(0)] = sym;
+    symByResult[d.getResult(1)] = sym;
+    globalDecls.push_back({d, sym});
+  });
+  std::set<std::string> written;
+  auto markWrite = [&](mlir::Value dest) {
+    auto it = symByResult.find(dest);
+    if (it != symByResult.end()) {
+      written.insert(it->second);
+      return;
+    }
+    if (auto* dd = dest.getDefiningOp())
+      if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(dd))
+        for (auto& [d, sym] : globalDecls)
+          if (designateRootedAt(dg, d)) {
+            written.insert(sym);
+            break;
+          }
+  };
+  module.walk([&](mlir::Operation* op) {
+    if (auto st = mlir::dyn_cast<fir::StoreOp>(op))
+      markWrite(st.getMemref());
+    else if (auto as = mlir::dyn_cast<hlfir::AssignOp>(op))
+      markWrite(as.getLhs());
+  });
+  return written;
+}
+
+static bool globalIsWritten(const std::string& sym, mlir::ModuleOp module,
+                            const std::set<std::string>* writtenGlobals = nullptr) {
+  if (writtenGlobals) return writtenGlobals->count(sym) > 0;
   llvm::SmallVector<hlfir::DeclareOp, 4> decls;
   module.walk([&](hlfir::DeclareOp d) {
     if (traceToGlobalSymbol(d.getMemref()) == sym) decls.push_back(d);
@@ -1079,6 +1167,16 @@ static bool globalIsWritten(const std::string& sym, mlir::ModuleOp module) {
 std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
                                       std::vector<ValueSymbol>* value_symbols) {
   std::vector<VarInfo> vars;
+
+  // Build, with one module walk each, the indices the per-variable passes below
+  // would otherwise rebuild by re-walking the whole module (or function) once
+  // per variable -- the O(variables x module) cost that dominates extraction of
+  // a fully-inlined whole-program entry.  Extraction does not mutate the IR, so
+  // these stay valid for every lookup below.
+  const AllocSitesIndex allocIdx = buildAllocSitesIndex(module);
+  const std::set<std::string> writtenGlobals = buildWrittenGlobals(module);
+  const std::set<std::string> allocatedReaderNames =
+      buildAllocatedReaderNames(module);
 
   // Reset thread-local extractName-override map.  Pass 3's view-alias
   // detection below populates it for inlined-callee declares whose
@@ -1670,14 +1768,14 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
         isAllocatable = true;
     std::vector<fir::AllocMemOp> allocSites;
     if (isAllocatable && v.rank > 0)
-      allocSites = collectAllocSites(v.mangled_name, module);
+      allocSites = collectAllocSites(v.mangled_name, module, &allocIdx);
     // Partition the ALLOCATE sites into buffer classes (one DaCe transient
     // each): a class with >1 site is a conditional (mutually-exclusive
     // branches sharing one buffer with a branch-dependent extent symbol);
     // a singleton class is a plain / sequentially-versioned buffer.  The
     // base name ``a`` is class 0 (first definition); classes 1.. become
     // ``a_alloc1``, ``a_alloc2``, ...  See ALLOC_BUFFER_SSA_DESIGN.md.
-    auto allocClasses = groupAllocSites(v.mangled_name, module);
+    auto allocClasses = groupAllocSites(v.mangled_name, module, &allocIdx);
     // ``baseCondAlloc``: is the base buffer (class 0) a conditional?  If so
     // skip the front-site shape (it would pin ``a`` to one branch's extent)
     // -- the synthesize-``a_d<i>`` fallback gives the branch-symbol shape,
@@ -2056,7 +2154,8 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
     // instead of inspecting the descriptor's heap pointer (which
     // DaCe's data model doesn't surface).  Initial value is 0
     // (DaCe default for transient scalars).
-    if (isAllocatable && needsAllocatedTracker(v.mangled_name, module)) {
+    if (isAllocatable && needsAllocatedTracker(v.mangled_name, module, &allocIdx,
+                                               &allocatedReaderNames)) {
       // Role ``symbol`` (not ``scalar``) so writes land on
       // interstate edges and reads see the latest value across
       // state boundaries.  A plain transient scalar would let
@@ -2161,7 +2260,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
     if (!sym.empty()) {
       auto gop = module.lookupSymbol<fir::GlobalOp>(sym);
       v.const_data = extractGlobalInitData(gop);
-      const bool written = globalIsWritten(sym, module);
+      const bool written = globalIsWritten(sym, module, &writtenGlobals);
       const bool isParameter =
           (gop && gop.getConstant().has_value() && *gop.getConstant());
       // A genuine module-scope VARIABLE is ``_QM<module>E<entity>`` -- the
