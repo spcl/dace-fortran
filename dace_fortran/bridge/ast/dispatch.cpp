@@ -1243,8 +1243,26 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       // Resolve each operand to a decl name so the Python builder can
       // lower a registered external (bind(c)) call to a tasklet.
       // Harmless for unregistered callees (the builder ignores them).
-      for (auto v : call.getArgOperands())
-        n.call_args.push_back(traceToDecl(v));
+      // A by-value integer-constant operand (e.g. ``CALL ext(a, 16)``) has no
+      // decl  --  emit its literal value so it reaches the C call by name
+      // rather than as an empty term.
+      for (auto v : call.getArgOperands()) {
+        std::string nm = traceToDecl(v);
+        if (nm.empty())
+          if (auto c = traceConstInt(v)) nm = std::to_string(*c);
+        n.call_args.push_back(nm);
+      }
+      // Carry the AoS-marshalling grouping the marshal pass tagged on the
+      // callee so emit_call can re-pack the (now-SoA-flat) member args into a
+      // local AoS buffer for the external.
+      if (auto ref = call.getCallee())
+        if (auto mod = call->getParentOfType<mlir::ModuleOp>())
+          if (auto fn = mod.lookupSymbol<mlir::func::FuncOp>(
+                  ref->getLeafReference()))
+            if (auto g = fn->getAttrOfType<mlir::DenseI64ArrayAttr>(
+                    "hlfir.aos_marshal_groups"))
+              n.aos_marshal_groups.assign(g.asArrayRef().begin(),
+                                          g.asArrayRef().end());
       nodes.push_back(std::move(n));
       continue;
     }

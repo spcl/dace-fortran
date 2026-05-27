@@ -72,6 +72,13 @@ from dace_fortran.builder.emit_tasklet import emit_scalar_assign, emit_tasklet
 
 # Default bridge pass pipeline.  Order matters  --  see ``README.md``.
 DEFAULT_PIPELINE = (
+    # Erase dispatch-table bindings (``fir.dt_entry``) the entry never
+    # dynamically invokes, so the symbol-dce below can drop the unreachable
+    # (often polymorphic, e.g. ``fir.select_type`` over a ``class(*)`` key)
+    # procedure clusters a merged USE-closure drags in only for its types.
+    # Runs before symbol-dce / the structurizing passes; a no-op when there is
+    # no dispatch table.
+    "hlfir-prune-unreachable,"
     # Drop unreachable functions FIRST.  ``set_entry_symbol`` has marked the
     # entry public and every other function private; symbol-dce then removes
     # the private functions the entry never (transitively) calls.  This matters
@@ -139,6 +146,13 @@ DEFAULT_PIPELINE = (
     # FlattenStructs's opaque-skip for alloc-array-of-records members
     # provides the safety net for un-handled patterns.
     "hlfir-lift-alloc-array-of-records,"
+    # Expand the struct argument of a registered external (``keep_external``)
+    # call into its individual members, so flatten-structs turns each into the
+    # SoA flat the SDFG dataflow uses; the binding emitter re-packs the SoA
+    # flats into a local AoS buffer inside the generated C tasklet.  Runs BEFORE
+    # flatten-structs so the member designates feed the usual designate-rewrite;
+    # a no-op when no external takes a struct.
+    "hlfir-marshal-external-structs,"
     "hlfir-flatten-structs,"
     # Collapse Fortran ``ptr => target`` rebinds under the strict-no-
     # aliasing assumption: every read or write of the pointer becomes
@@ -251,6 +265,21 @@ class SDFGBuilder:
         # so the only place to read the original interface is here.  Used to
         # auto-derive an ``OriginalInterface`` for the binding emitter.
         self._fortran_interface_raw = self.module.get_fortran_interface(entry or "")
+
+        # Keep every registered external callee (``dace_fortran.external``) as a
+        # declaration through ``hlfir-inline-all``: a ``keep_external`` procedure
+        # whose Fortran body is present in a merged translation unit would
+        # otherwise be inlined into the entry, dragging its implementation (and
+        # everything only it reaches) into the lowered code.  No-op when the
+        # registry is empty, so ordinary single-procedure builds are unaffected.
+        from dace_fortran.external import registered_names
+        ext_names = registered_names()
+        if ext_names:
+            self.module.externalize_symbols(ext_names)
+            # Record the same names so hlfir-marshal-external-structs knows
+            # which calls take their struct args as array-of-structs and must
+            # be expanded to per-member arguments (deep-copy marshalling).
+            self.module.set_external_symbols(ext_names)
 
         # Run bridge passes BEFORE extracting variables so assumed-shape
         # dummies pick up real names and the rest of the rewrites have

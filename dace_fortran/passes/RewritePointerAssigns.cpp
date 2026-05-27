@@ -761,6 +761,49 @@ struct RewritePointerAssignsPass
           deadReaders.push_back(ba);
           continue;
         }
+        if (auto cin = mlir::dyn_cast<hlfir::CopyInOp>(uu)) {
+          // A pointer rebound to a CONTIGUOUS whole target (empty chain)
+          // passed to a contiguous-dummy callee (e.g. a ``bind(c)`` external)
+          // is wrapped by Flang in ``copy_in`` / ``copy_out`` around a temp.
+          // The copy is unnecessary here: fold each ``box_addr`` of the copied
+          // box straight to the parent's ref and drop the ``copy_in`` /
+          // ``copy_out`` pair, so the callee reads / writes the target in
+          // place (the external then connects to the target array, not an
+          // unnameable copy buffer).  A chained / sectioned rebind keeps its
+          // copy  --  that may be a genuine non-contiguous materialisation.
+          llvm::SmallVector<mlir::Operation *, 2> boxUsers(
+              cin.getResult(0).getUsers().begin(),
+              cin.getResult(0).getUsers().end());
+          // Only fold when the rebind is a whole contiguous target AND every
+          // use of the copied box is a box_addr (so eliding the copy is
+          // complete -- a non-box_addr use would dangle once copy_in/out go).
+          bool foldable = chain.chain.empty() && !boxUsers.empty();
+          for (auto *cu : boxUsers)
+            if (!mlir::isa<fir::BoxAddrOp>(cu)) { foldable = false; break; }
+          if (foldable) {
+            for (auto *cu : boxUsers) {
+              auto ba = mlir::cast<fir::BoxAddrOp>(cu);
+              mlir::OpBuilder b(ba);
+              // box_addr wants the target's raw data address; the declare's
+              // result #1 is that memref (result #0 may be a dynamic-extent
+              // box, which does not fir.convert to a ref/ptr).
+              mlir::Value replacement = chain.parent.getResult(1);
+              if (replacement.getType() != ba.getResult().getType())
+                replacement = b.create<fir::ConvertOp>(
+                    ba.getLoc(), ba.getResult().getType(), replacement);
+              ba.getResult().replaceAllUsesWith(replacement);
+              deadReaders.push_back(ba);
+            }
+            // Drop the matching copy_out (it consumes the copy_in flag).
+            llvm::SmallVector<mlir::Operation *, 2> flagUsers(
+                cin.getResult(1).getUsers().begin(),
+                cin.getResult(1).getUsers().end());
+            for (auto *fu : flagUsers)
+              if (mlir::isa<hlfir::CopyOutOp>(fu)) deadReaders.push_back(fu);
+            deadReaders.push_back(cin);
+          }
+          continue;
+        }
         // Other user shapes (rare)  --  leave alone.  The
         // surviving load + ptr declare keep them
         // resolvable downstream as a scalar passthrough.

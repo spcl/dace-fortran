@@ -49,6 +49,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "passes/Passes.h"
+#include "passes/shallow_alias.h"
 
 namespace nb = nanobind;
 using namespace hlfir_bridge;
@@ -213,6 +214,25 @@ class HLFIRModule {
   ///          },
   ///         }, ...
   ///     ]}
+  /// Run the shallow-alias analysis over every derived type the module uses
+  /// and return one verdict per type (``name`` / ``shallow_aliasable`` /
+  /// ``count`` / ``elem_dtype``).  A read-only diagnostic for testing up front
+  /// whether all of a program's structs can be pointer-aliased to
+  /// array-of-structs externals with no deep copy.
+  nb::object shallow_alias_report() {
+    nb::list out;
+    if (!module_) return out;
+    for (const auto &info : computeShallowAliasReport(*module_)) {
+      nb::dict d;
+      d["name"] = info.name;
+      d["shallow_aliasable"] = info.shallow_aliasable;
+      d["count"] = info.count;
+      d["elem_dtype"] = info.elem_dtype;
+      out.append(d);
+    }
+    return out;
+  }
+
   nb::object get_flatten_plan() {
     if (!module_) return nb::dict();
     auto attr = module_->getOperation()->getAttr("hlfir.flatten_plan");
@@ -333,6 +353,57 @@ class HLFIRModule {
       throw std::runtime_error("set_entry_symbol: '" + name + "' not found");
   }
 
+  /// Strip the bodies of the named procedures so they become external
+  /// declarations *before* ``hlfir-inline-all`` runs.  A ``keep_external``
+  /// callee whose Fortran body is present in a merged translation unit (the
+  /// inline-everything path) would otherwise be inlined into the entry,
+  /// dragging its implementation -- and everything only it reaches -- into the
+  /// lowered code.  ICON's halo-exchange wrappers (``sync_patch_array_*``) are
+  /// the motivating case: their body reaches a polymorphic ``exchange_data``
+  /// dispatch and a ``class(*)`` hash-table ``select_type`` the bridge cannot
+  /// lower.  Emptying the body leaves a declaration the inliner skips and the
+  /// call sites intact for the Python ``emit_call`` to lower to an
+  /// ``ExternalCall`` library node; the following ``symbol-dce`` then drops the
+  /// now-unreachable callees.
+  ///
+  /// A name matches a function when its symbol equals ``name`` or carries the
+  /// module-procedure (``...P<name>``) / free-procedure (``_QP<name>``)
+  /// mangling of it, mirroring ``emit_call``'s callee normalisation.  Returns
+  /// the symbol names actually stripped (so the caller can verify its registry
+  /// reached the module).
+  std::vector<std::string>
+  externalize_symbols(const std::vector<std::string>& names) {
+    if (!module_)
+      throw std::runtime_error("externalize_symbols: no module parsed");
+    std::vector<std::string> stripped;
+    module_->walk([&](mlir::func::FuncOp f) {
+      if (f.isDeclaration()) return;
+      llvm::StringRef sym = f.getSymName();
+      for (const std::string& n : names) {
+        if (sym == n || sym.ends_with("P" + n) || sym.ends_with("_QP" + n)) {
+          f.getBody().getBlocks().clear();  // empty region == declaration
+          stripped.push_back(sym.str());
+          break;
+        }
+      }
+    });
+    return stripped;
+  }
+
+  /// Record the registered external (``keep_external``) symbol names so
+  /// ``hlfir-marshal-external-structs`` knows which calls take their struct
+  /// args as array-of-structs and must be expanded to per-member arguments
+  /// (deep-copy marshalling).  Stored as a module attribute the pass reads.
+  void set_external_symbols(const std::vector<std::string>& names) {
+    if (!module_)
+      throw std::runtime_error("set_external_symbols: no module parsed");
+    llvm::SmallVector<mlir::Attribute, 4> attrs;
+    for (const std::string& n : names)
+      attrs.push_back(mlir::StringAttr::get(&ctx_, n));
+    module_->getOperation()->setAttr("hlfir.external_symbols",
+                                     mlir::ArrayAttr::get(&ctx_, attrs));
+  }
+
  private:
   mlir::DialectRegistry registry_;
   mlir::MLIRContext ctx_;
@@ -416,6 +487,7 @@ NB_MODULE(hlfir_bridge, m) {
       .def_ro("callee", &ASTNode::callee)
       .def_ro("call_args", &ASTNode::call_args)
       .def_ro("call_arg_subsets", &ASTNode::call_arg_subsets)
+      .def_ro("aos_marshal_groups", &ASTNode::aos_marshal_groups)
       .def_ro("reduce_src", &ASTNode::reduce_src)
       .def_ro("reduce_wcr", &ASTNode::reduce_wcr)
       .def_ro("reduce_identity", &ASTNode::reduce_identity)
@@ -477,10 +549,21 @@ NB_MODULE(hlfir_bridge, m) {
       .def("set_entry_symbol", &HLFIRModule::set_entry_symbol,
            "Mark the named function public and everything else private so "
            "symbol-dce can drop post-inlining dead siblings")
+      .def("externalize_symbols", &HLFIRModule::externalize_symbols,
+           "Strip the bodies of the named procedures (keep_external callees) "
+           "so they stay external declarations through hlfir-inline-all; "
+           "returns the symbols actually stripped")
+      .def("set_external_symbols", &HLFIRModule::set_external_symbols,
+           "Record registered external (keep_external) symbol names so "
+           "hlfir-marshal-external-structs expands their struct args to "
+           "per-member arguments for deep-copy marshalling")
       .def("get_fortran_interface", &HLFIRModule::get_fortran_interface,
            "Describe the entry's dummies (pre-flatten) for auto-iface")
       .def("get_flatten_plan", &HLFIRModule::get_flatten_plan,
            "Read back the ``hlfir.flatten_plan`` module attribute set by "
            "``hlfir-flatten-structs`` as a plain dict that mirrors "
-           "``FlattenPlan.to_dict()``");
+           "``FlattenPlan.to_dict()``")
+      .def("shallow_alias_report", &HLFIRModule::shallow_alias_report,
+           "Per derived type: whether it is shallow-aliasable to an "
+           "array-of-structs external (no deep copy) -> list of dicts");
 }

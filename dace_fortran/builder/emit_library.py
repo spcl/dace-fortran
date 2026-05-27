@@ -468,82 +468,148 @@ def emit_call(builder, ctx, n, region):
     if sig is None:
         return  # not registered -> unchanged (kind="call" had no emitter)
 
+    from collections import defaultdict
+    from math import prod
+
     names = list(n.call_args)
-    if len(names) != len(sig.args):
-        raise ValueError(f"external {callee!r}: signature declares {len(sig.args)} "
-                         f"argument(s) but the call site passed {len(names)}")
+    groups = list(n.aos_marshal_groups)  # flat [start, count, ...]
+    group_pairs = [(groups[i], groups[i + 1]) for i in range(0, len(groups), 2)]
+
+    # Expand ``sig.args`` to a per-call-arg plan.  An ``aos`` signature arg was
+    # split by ``hlfir-marshal-external-structs`` into the struct's member
+    # call-args (the i-th ``aos`` arg <-> the i-th ``[start, count]`` group);
+    # every other arg maps to one call-arg.  ``plan[i]`` = ``(kind, dtype,
+    # intent, gid)`` parallel to ``names`` (``gid`` is the group index for an
+    # aos member, else ``None``).
+    plan: list = []
+    gi = 0
+    for a in sig.args:
+        if a.kind == 'aos':
+            if gi >= len(group_pairs):
+                raise ValueError(f"external {callee!r}: 'aos' arg #{gi} has no "
+                                 f"marshalling group (was "
+                                 f"hlfir-marshal-external-structs run?)")
+            _, count = group_pairs[gi]
+            for _ in range(count):
+                plan.append(('aos', a.dtype, a.intent, gi))
+            gi += 1
+        else:
+            plan.append((a.kind, a.dtype, a.intent, None))
+    if len(plan) != len(names):
+        raise ValueError(f"external {callee!r}: expanded signature expects "
+                         f"{len(plan)} argument(s) but the call site passed "
+                         f"{len(names)}")
 
     state = ctx.flush_and_ensure(builder, region)
 
-    # Argument-order invariant: every per-arg list below is built in one
-    # forward pass over ``sig.args`` (with the matching call-site name),
-    # so the i-th element of each list corresponds to the i-th
-    # signature parameter.  The C call body is ``c_name(terms[0], ...,
-    # terms[n-1])`` -- the order the C compiler sees, the order
-    # ``c_decl`` declares, and the order ``sig.args`` was registered in.
-    # Nothing downstream re-orders ``terms``: connector names embed the
-    # position via ``_a{i}`` and the LibraryNode is constructed with
-    # explicit ordered ``inputs`` / ``outputs`` lists (not sets).
-    #
-    # Per arg, decide how it reaches the C call.  A data container ->
-    # library-node connector(s): array = pointer (distinct in ``_aI`` /
-    # out ``_aI_o`` names -- the expanded tasklet may not reuse one
-    # name across in & out; both memlet the same array so codegen
-    # aliases them), scalar = by-value ``_aI``, MPI communicator =
-    # by-value ``_aI`` typed as ``opaque(MPI_Comm)`` (the container is
-    # retyped so DaCe codegen passes it at the C ABI as ``MPI_Comm``,
-    # matching the shim's ``MPI_Comm`` parameter -- the ``bind(c)`` /
-    # DaCe binding handles the ``MPI_Comm_f2c`` from the Fortran handle).
-    # A shape-only free symbol (``n`` from ``a(n)``) has no container ->
-    # referenced directly by name in the call body.
+    # Build the library-node connectors per call-arg.  array / aos-member =
+    # pointer (distinct ``_aI`` / ``_aI_o`` names; both memlet the same array
+    # so codegen aliases them); scalar = by-value ``_aI``; MPI communicator =
+    # by-value ``opaque(MPI_Comm)``; a shape-only free symbol has no container
+    # and is referenced by name.  ``logical_terms`` is one entry per *signature*
+    # arg ((``'lit'``, term) or (``'aos'``, gid)); an aos group becomes one
+    # ``(void*)&buffer`` C argument.
     in_conns: list = []
     out_conns: list = []
-    ptr_of: dict = {}  # connector -> base dtype to wrap in dace.pointer()
-    comm_conns: set = set()  # connectors typed as opaque(MPI_Comm), by-value
+    ptr_of: dict = {}
+    comm_conns: set = set()
     edges: list = []  # (name, conn, direction)  direction: 'r' | 'w'
-    terms: list = []
-    for i, (a, name) in enumerate(zip(sig.args, names)):
-        if name not in ctx.sdfg.arrays:
-            terms.append(name)  # free symbol -- in scope in the code
-            continue
-        if a.kind == 'comm':
-            # Retype the SDFG container so it flows as opaque(MPI_Comm)
-            # through dataflow (matches the emit_mpi convention).  The
-            # length-1 / scalar passes already exempt ``opaque`` dtypes
-            # so the retype stays a by-value Scalar.
-            ctx.sdfg.arrays[name].dtype = dace.dtypes.opaque("MPI_Comm")
-            cin = f"_a{i}"
-            in_conns.append(cin)
-            comm_conns.add(cin)
-            edges.append((name, cin, 'r'))
-            terms.append(cin)
-            continue
-        dt = ctx.sdfg.arrays[name].dtype
-        if a.kind == 'array':
-            reads = a.intent in ('in', 'inout')
-            writes = a.intent in ('out', 'inout')
+    logical_terms: list = []
+    # gid -> [(ctype, n_elems, in_conn|None, out_conn|None)]; n_elems == 1 for a
+    # scalar member, else the member array's total element count.
+    group_members: dict = defaultdict(list)
+    prev_gid = None
+    for i, (kind, dtype, intent, gid) in enumerate(plan):
+        name = names[i]
+        if gid is not None:
+            desc = ctx.sdfg.arrays.get(name)
+            if desc is None:
+                raise ValueError(f"external {callee!r}: aos member {name!r} is not "
+                                 f"an SDFG array")
+            dt = desc.dtype
+            ctype = dt.ctype  # the member's concrete C scalar type (e.g. "double")
+            nel = int(prod(desc.shape)) if getattr(desc, "shape", None) else 1
+            reads = intent in ('in', 'inout')
+            writes = intent in ('out', 'inout')
             cin, cout = f"_a{i}", f"_a{i}_o"
             if reads:
-                in_conns.append(cin)
-                ptr_of[cin] = dt
-                edges.append((name, cin, 'r'))
+                in_conns.append(cin); ptr_of[cin] = dt; edges.append((name, cin, 'r'))
             if writes:
-                out_conns.append(cout)
-                ptr_of[cout] = dt
-                edges.append((name, cout, 'w'))
-            # The C call uses the writable pointer when it writes,
-            # else the read pointer (both alias the same array).
-            terms.append(cout if writes else cin)
+                out_conns.append(cout); ptr_of[cout] = dt; edges.append((name, cout, 'w'))
+            group_members[gid].append((ctype, nel, cin if reads else None,
+                                       cout if writes else None))
+            if gid != prev_gid:
+                logical_terms.append(('aos', gid))
+            prev_gid = gid
+            continue
+        prev_gid = None
+        if name not in ctx.sdfg.arrays:
+            logical_terms.append(('lit', name))  # free symbol -- in scope
+            continue
+        if kind == 'comm':
+            ctx.sdfg.arrays[name].dtype = dace.dtypes.opaque("MPI_Comm")
+            cin = f"_a{i}"
+            in_conns.append(cin); comm_conns.add(cin); edges.append((name, cin, 'r'))
+            logical_terms.append(('lit', cin))
+            continue
+        dt = ctx.sdfg.arrays[name].dtype
+        if kind == 'array':
+            reads = intent in ('in', 'inout')
+            writes = intent in ('out', 'inout')
+            cin, cout = f"_a{i}", f"_a{i}_o"
+            if reads:
+                in_conns.append(cin); ptr_of[cin] = dt; edges.append((name, cin, 'r'))
+            if writes:
+                out_conns.append(cout); ptr_of[cout] = dt; edges.append((name, cout, 'w'))
+            logical_terms.append(('lit', cout if writes else cin))
         else:  # 'scalar'
             cin = f"_a{i}"
-            in_conns.append(cin)
-            edges.append((name, cin, 'r'))
-            terms.append(cin)
+            in_conns.append(cin); edges.append((name, cin, 'r'))
+            logical_terms.append(('lit', cin))
+
+    # Assemble the C body.  For an aos group, declare a local AoS buffer, pack
+    # its pointer members in (in/inout), pass ``&buffer``, then unpack out
+    # (out/inout) -- so the SoA<->AoS cast lives entirely in this tasklet.
+    body_lines: list = []
+    call_args_c: list = []
+    bufname: dict = {}
+    for kind, val in logical_terms:
+        if kind == 'lit':
+            call_args_c.append(val)
+            continue
+        gid = val
+        mems = group_members[gid]
+        buf = f"_aosbuf{gid}"; bufname[gid] = buf
+        # One struct field per member: ``T mK;`` (scalar) or ``T mK[N];``
+        # (array).  The field layout mirrors the Fortran derived type, so the
+        # external's AoS pointer addresses the same contiguous bytes.
+        fields = " ".join(f"{ct} m{k};" if nel == 1 else f"{ct} m{k}[{nel}];"
+                          for k, (ct, nel, _, _) in enumerate(mems))
+        body_lines.append(f"struct {{ {fields} }} {buf};")
+        for k, (ct, nel, cin, cout) in enumerate(mems):
+            if cin is None:
+                continue
+            if nel == 1:
+                body_lines.append(f"{buf}.m{k} = (*{cin});")
+            else:
+                body_lines.append(f"for (int _i = 0; _i < {nel}; ++_i) "
+                                  f"{buf}.m{k}[_i] = {cin}[_i];")
+        call_args_c.append(f"(void*)(&{buf})")
+    body_lines.append(f"{sig.c_name}({', '.join(call_args_c)});")
+    for gid, mems in group_members.items():
+        for k, (ct, nel, cin, cout) in enumerate(mems):
+            if cout is None:
+                continue
+            if nel == 1:
+                body_lines.append(f"(*{cout}) = {bufname[gid]}.m{k};")
+            else:
+                body_lines.append(f"for (int _i = 0; _i < {nel}; ++_i) "
+                                  f"{cout}[_i] = {bufname[gid]}.m{k}[_i];")
 
     node = ExternalCall(name=f"_ext_{callee}_{builder.nid()}",
                         c_name=sig.c_name,
                         c_decl=sig.c_declaration(),
-                        body=f"{sig.c_name}({', '.join(terms)});",
+                        body="\n".join(body_lines),
                         inputs=in_conns,
                         outputs=out_conns)
     state.add_node(node)

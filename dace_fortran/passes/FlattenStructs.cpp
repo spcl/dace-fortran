@@ -201,6 +201,7 @@
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Pass/Pass.h"
 #include "passes/Passes.h"
+#include "passes/shallow_alias.h"
 
 namespace hlfir_bridge {
 
@@ -437,6 +438,76 @@ static bool allMembersFlattenable(fir::RecordType rec) {
   return true;
 }
 
+/// Cap recursion through nested record members (both the shallow-alias
+/// analysis and ``collectFlatLeaves``); Fortran nesting is realistically ~10.
+static constexpr int kFlattenMaxDepth = 12;
+
+/// Outcome of the shallow-alias analysis.  ``ok`` means the record is one
+/// contiguous run of ``count`` elements of a single ``elem`` type, so it can
+/// be represented as a ``(count)`` array that pointer-aliases the
+/// array-of-structs layout an external call expects  --  no deep gather /
+/// scatter.
+struct ShallowAlias {
+  bool ok = false;
+  int64_t count = 0;
+  mlir::Type elem;
+};
+
+/// Decide whether ``rec`` is shallow-aliasable: every member is INLINE
+/// contiguous storage of one uniform scalar type, recursively  --
+///   * a simple scalar contributes one element;
+///   * a static-shape array-of-scalar contributes ``product(extents)``;
+///   * a nested record contributes its own shallow-alias elements;
+/// and every leaf shares the SAME element type.  An allocatable / pointer
+/// member (a runtime descriptor, not inline bytes), a dynamic-extent array, a
+/// non-scalar leaf, or a type mismatch fails the analysis: the record's storage
+/// would then not be the contiguous uniform ``(count)`` block an array-of
+/// -structs pointer addresses, so a shallow alias would be unsound and the
+/// caller must deep-copy instead.
+///
+/// Deliberately stricter than :func:`allMembersFlattenable` (which admits
+/// allocatable-array members and mixed member types for the SoA split): the
+/// shallow path aliases raw storage, so it demands true inline contiguity and
+/// a single element type.  The uniform-type requirement is what lets the whole
+/// record fold to one typed ``(count)`` array; a member that is not itself
+/// shallow-aliasable poisons the whole record (hence the recursion returns
+/// failure up the chain).
+static ShallowAlias analyzeShallowAlias(fir::RecordType rec, int depth = 0) {
+  if (depth > kFlattenMaxDepth) return {};
+  int64_t total = 0;
+  mlir::Type elem;
+  for (auto &pair : rec.getTypeList()) {
+    mlir::Type mt = pair.second;
+    mlir::Type leaf;
+    int64_t n = 1;
+    if (isSimpleScalar(mt)) {
+      leaf = mt;
+    } else if (mlir::isa<fir::SequenceType>(mt)) {
+      auto ext = staticArrayExtents(mt);  // empty iff any extent is dynamic
+      auto seq = mlir::cast<fir::SequenceType>(mt);
+      if (ext.empty() || !isSimpleScalar(seq.getEleTy())) return {};
+      for (int64_t d : ext) n *= d;
+      leaf = seq.getEleTy();
+    } else if (auto nrec = mlir::dyn_cast<fir::RecordType>(mt)) {
+      ShallowAlias sub = analyzeShallowAlias(nrec, depth + 1);
+      if (!sub.ok) return {};
+      n = sub.count;
+      leaf = sub.elem;
+    } else {
+      return {};  // box (allocatable / pointer), char, etc. -- not inline
+    }
+    if (!elem) elem = leaf;
+    else if (elem != leaf) return {};  // non-uniform element type
+    total += n;
+  }
+  if (!elem || total <= 0) return {};
+  ShallowAlias r;
+  r.ok = true;
+  r.count = total;
+  r.elem = elem;
+  return r;
+}
+
 // ---------------------------------------------------------------------------
 // Nested struct flattening helpers
 // ---------------------------------------------------------------------------
@@ -465,7 +536,6 @@ struct FlatLeaf {
 /// pass falls back to its single-level path.  Limit recursion depth
 /// to guard against unexpectedly deep nesting (Fortran allows up to a
 /// realistic ~10).
-static constexpr int kFlattenMaxDepth = 12;
 
 /// Recursively walk a record type and append every reachable flat
 /// leaf to ``out``.  Returns false if any path bottoms out at a
@@ -3804,6 +3874,29 @@ struct FlattenStructsPass
 };
 
 }  // anonymous namespace
+
+std::vector<ShallowAliasInfo> computeShallowAliasReport(mlir::ModuleOp module) {
+  std::vector<ShallowAliasInfo> out;
+  llvm::StringSet<> seen;
+  auto consider = [&](mlir::Type t) {
+    mlir::Type p = unwrapAll(t);
+    while (auto seq = mlir::dyn_cast<fir::SequenceType>(p))
+      p = unwrapAll(seq.getEleTy());  // peel array-of-record to the record
+    auto rec = mlir::dyn_cast<fir::RecordType>(p);
+    if (!rec || !seen.insert(rec.getName()).second) return;
+    ShallowAlias sa = analyzeShallowAlias(rec);
+    out.push_back({rec.getName().str(), sa.ok, sa.ok ? sa.count : 0,
+                   sa.ok ? dtypeName(sa.elem) : std::string()});
+  };
+  module.walk([&](mlir::Operation *op) {
+    for (auto t : op->getResultTypes()) consider(t);
+    for (auto t : op->getOperandTypes()) consider(t);
+  });
+  module.walk([&](mlir::func::FuncOp f) {
+    for (auto t : f.getArgumentTypes()) consider(t);
+  });
+  return out;
+}
 
 std::unique_ptr<mlir::Pass> createFlattenStructsPass() {
   return std::make_unique<FlattenStructsPass>();

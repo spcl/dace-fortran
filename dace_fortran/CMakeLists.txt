@@ -223,6 +223,8 @@ add_library(hlfir_bridge_passes STATIC
     passes/RewriteSequenceAssociation.cpp
     passes/LiftReductionOperands.cpp
     passes/LiftAllocArrayOfRecords.cpp
+    passes/PruneUnreachable.cpp
+    passes/MarshalExternalStructs.cpp
 )
 target_link_libraries(hlfir_bridge_passes PUBLIC
     hlfir_bridge_core

@@ -61,6 +61,13 @@ class Arg:
         * ``'array'`` -- passed as a pointer (``<ctype> *``).
         * ``'scalar'`` -- passed by value (the ``VALUE`` attribute on
           the Fortran ``bind(c)`` dummy).
+        * ``'aos'`` -- a whole derived type the external receives as an
+          array-of-structs.  ``hlfir-marshal-external-structs`` split it
+          into its per-member arguments; the binding emitter re-packs the
+          (SoA-flat) members into a local AoS buffer in the C tasklet and
+          passes its address.  The C parameter is therefore ``void *`` (the
+          shim casts to its concrete ``struct`` pointer).  ``intent`` drives
+          the pack-in (in/inout) and unpack-out (out/inout) directions.
         * ``'comm'`` -- a C ``MPI_Comm`` handle, by value.  The
           ``dtype`` field is ignored (the type is always ``MPI_Comm``);
           the SDFG-side container is retyped to
@@ -99,6 +106,8 @@ class Arg:
         """
         if self.kind == "comm":
             return _OPAQUE_COMM_DTYPE
+        if self.kind == "aos":
+            return "void *"  # address of the re-packed AoS buffer
         base = _C_TYPES.get(self.dtype)
         if base is None:
             raise ValueError(f"external Arg: unsupported dtype {self.dtype!r}; "
@@ -234,6 +243,19 @@ def lookup_external(name: str) -> Optional[ExternalSignature]:
     return _REGISTRY.get(name)
 
 
+def registered_names() -> List[str]:
+    """Names registered as external (``keep_external`` / ``register_external``).
+
+    The builder passes these to ``HLFIRModule.externalize_symbols`` so a
+    registered callee whose Fortran body is in the (merged) translation unit
+    stays an external declaration through ``hlfir-inline-all`` instead of being
+    inlined ahead of the ``ExternalCall`` lowering.
+
+    :returns: the registry keys (Fortran call-site names).
+    """
+    return list(_REGISTRY)
+
+
 def clear_external_registry():
     """Drop all registrations and restore ``compiler.linker.args`` to
     its pre-registration value (test isolation / no global leak)."""
@@ -244,8 +266,6 @@ def clear_external_registry():
         dace.Config.set("compiler", "linker", "args", value=_ORIG_LINKER_ARGS)
         _ORIG_LINKER_ARGS = None
 
-
-_CALL_ARGS_RE = re.compile(r"(\w+)\s*\(([^)]*)\)\s*;")
 
 
 @dace.library.expansion
@@ -307,23 +327,16 @@ class ExternalCall(dace.sdfg.nodes.LibraryNode):
         self.body = body
 
     def validate(self, sdfg, state):
-        """Reject the node if the C call body references a name that
-        is not a current connector or an SDFG symbol.
+        """Reject the node if the C body does not actually call ``c_name``
+        or leaves a connector unreferenced.
 
-        The body is a verbatim C statement (``<c_name>(<args>);``) and
-        the argument identifiers carry meaning: a connector name
-        rename (or a stale identifier left in the body) would silently
-        bind ``foo`` to the wrong storage at codegen time.  Each
-        identifier inside the call is required to be an existing
-        ``in_connector`` / ``out_connector`` or a symbol declared on
-        the SDFG (free symbols flow into tasklet scope by name)."""
-        m = _CALL_ARGS_RE.search(self.body)
-        if not m or m.group(1) != self.c_name:
-            raise ValueError(f"ExternalCall {self.label!r}: body {self.body!r} is not a call "
-                              f"to {self.c_name!r}")
-        bound = set(self.in_connectors) | set(self.out_connectors) | {str(s) for s in sdfg.symbols}
-        for tok in (t.strip() for t in m.group(2).split(",")):
-            if tok and tok not in bound:
-                raise ValueError(f"ExternalCall {self.label!r}: body references {tok!r} which "
-                                  f"is neither a connector ({sorted(self.in_connectors | self.out_connectors)}) "
-                                  f"nor an SDFG symbol ({sorted(str(s) for s in sdfg.symbols)})")
+        The body is verbatim C: at minimum a call ``<c_name>(<args>);``, or
+        (for an array-of-structs argument) that call wrapped by a local
+        ``struct`` buffer pack / unpack.  The corruption to guard against is a
+        renamed / stale call identifier binding the wrong external, so require
+        a call to ``c_name`` to be present.  (Connector use is not required per
+        connector: an ``inout`` array's read connector intentionally aliases
+        its write connector, and only the writable one appears in the body.)"""
+        if not re.search(r"\b" + re.escape(self.c_name) + r"\s*\(", self.body):
+            raise ValueError(f"ExternalCall {self.label!r}: body {self.body!r} does not "
+                             f"call {self.c_name!r}")

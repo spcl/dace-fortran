@@ -106,6 +106,12 @@ struct ASTNode {
   // like ``"1:3"`` so emit_libcall can build a sliced memlet
   // (``dot_product(arg1(1:3), arg2(1:3))`` etc.).
   std::vector<std::string> call_arg_subsets;
+  // AoS-marshalling groups for a registered external whose struct args were
+  // expanded to per-member arguments by ``hlfir-marshal-external-structs``: a
+  // flat ``[start, count, ...]`` where each pair means ``call_args[start ..
+  // start+count)`` are one struct's members, to be re-packed into a local AoS
+  // buffer in the generated C tasklet.  Empty for an ordinary call.
+  std::vector<int64_t> aos_marshal_groups;
 
   // reduce
   std::string reduce_src;            // input array name
