@@ -126,11 +126,18 @@ class ExternalSignature:
         linked into the SDFG ``.so`` (``-L<dir> -l:<name>``) with an
         automatic ``-Wl,-rpath,<dir>`` so it also resolves at load
         time -- the SDFG library is self-contained, no ``LD_PRELOAD``.
+    :ivar stub: when true the call is DROPPED entirely (no library node) -- the
+        procedure is still left external (body stripped) so its unlowerable
+        internals never reach the bridge, but the call site becomes a no-op.
+        Used to excise infrastructure a kernel pulls in only structurally
+        (config / registry / metadata helpers with ``class(*)`` ``select_type``
+        bodies) so the kernel can build; a real run needs a proper shim instead.
     """
 
     c_name: str
     args: Tuple[Arg, ...] = field(default_factory=tuple)
     libraries: Tuple[str, ...] = field(default_factory=tuple)
+    stub: bool = False
 
     def c_declaration(self) -> str:
         """The ``extern "C" void <c_name>(<types>);`` declaration."""
@@ -208,7 +215,8 @@ def keep_external(name: str,
                   *,
                   c_name: Optional[str] = None,
                   args: Tuple[Arg, ...] = (),
-                  libraries: Tuple[str, ...] = ()):
+                  libraries: Tuple[str, ...] = (),
+                  stub: bool = False):
     """Mark ``name`` to be left external -- the bridge emits an
     :class:`ExternalCall` library node for every ``CALL name(...)``
     instead of inlining ``name`` 's body.
@@ -232,10 +240,16 @@ def keep_external(name: str,
     For procedures whose Fortran body still lives in the bridge's
     source bundle, also strip the body (or USE-import only the
     interface) so flang does not inline ``name`` ahead of dispatch.
+
+    :param stub: drop the call entirely (no library node) while still leaving
+        the procedure external -- excise infrastructure a kernel pulls in only
+        structurally (helpers whose unlowerable bodies would otherwise block
+        the build).  A real run needs a proper shim instead.
     """
     register_external(name, ExternalSignature(c_name=c_name or name,
                                               args=tuple(args),
-                                              libraries=tuple(libraries)))
+                                              libraries=tuple(libraries),
+                                              stub=stub))
 
 
 def lookup_external(name: str) -> Optional[ExternalSignature]:

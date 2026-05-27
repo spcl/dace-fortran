@@ -27,6 +27,19 @@
 // are left for ``symbol-dce`` to remove -- it accounts for every reference kind,
 // avoiding dangling-symbol bugs.
 //
+// The dispatch tables are not the only hold, though: flang also emits, per
+// derived type, a ``linkonce_odr`` binding-table vtable
+// (``fir.global @...E.v.<type>``) whose elements are ``fir.address_of`` the
+// type-bound procedures, alongside the descriptor / component / name RTTI
+// globals (``E.dt.`` / ``E.c.`` / ``E.n.`` / ...).  Those globals are not
+// ``private``, so ``symbol-dce`` treats them as roots and keeps the bound
+// procedures -- and everything they reach -- alive even once the dt_entries are
+// gone.  ``linkonce_odr`` is precisely flang's "discard if unused" linkage for
+// this compiler-generated RTTI, so this pass privatises it: the following
+// ``symbol-dce`` then discards the descriptors no reachable code references
+// (cascading through the proc-pointer web), while keeping the descriptors the
+// entry's live data genuinely uses.
+//
 // This does NOT remove a procedure the entry's call graph genuinely reaches --
 // e.g. a hash table reached transitively through a halo-exchange wrapper is live
 // and survives, by design.  The pass only unsticks the dead dispatch tables.
@@ -134,6 +147,21 @@ struct PruneUnreachablePass
       if (!reachedMethods.contains(e.getMethod())) dead.push_back(e);
     });
     for (auto e : dead) e.erase();
+
+    // Privatise the compiler-generated ``linkonce_odr`` RTTI globals (per-type
+    // binding-table vtables ``E.v.<type>``, descriptors ``E.dt.``, components
+    // ``E.c.``, ...).  Their ``fir.address_of`` elements are the *other* hold on
+    // the unreachable bound procedures, and being non-private they are
+    // symbol-dce roots.  ``linkonce_odr`` is flang's "discard if unused"
+    // linkage, so privatising lets the following ``symbol-dce`` drop the ones no
+    // reachable code references (and only those -- a descriptor the entry's live
+    // data uses stays referenced and survives).
+    module.walk([&](fir::GlobalOp g) {
+      std::optional<llvm::StringRef> link = g.getLinkName();
+      if (link && *link == "linkonce_odr")
+        mlir::SymbolTable::setSymbolVisibility(
+            g, mlir::SymbolTable::Visibility::Private);
+    });
   }
 };
 

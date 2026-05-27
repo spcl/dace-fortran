@@ -17,6 +17,7 @@
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Pass/PassRegistry.h"
+#include "llvm/Support/thread.h"
 
 // Flang FIR + HLFIR
 #include "flang/Optimizer/Dialect/FIRDialect.h"
@@ -53,6 +54,15 @@
 
 namespace nb = nanobind;
 using namespace hlfir_bridge;
+
+/// Stack size, in bytes, for the worker thread that runs the pass pipeline.
+/// A fully-inlined whole-program kernel (the ICON dynamical core flattens to
+/// hundreds of nested ``scf.if`` / ``scf.for`` levels) drives MLIR's recursive
+/// ``Region::cloneInto`` / verifier / printer far past the default 8 MB stack.
+/// 2 GB of *reserved* (lazily-committed) stack covers nesting depths the real
+/// kernels reach with large headroom; flang and ``mlir-opt`` use the same
+/// run-on-a-big-stack-thread strategy for deeply nested programs.
+static constexpr unsigned kPassPipelineStackBytes = 2u * 1024u * 1024u * 1024u;
 
 // ============================================================================
 // HLFIRModule  --  Python-facing container for one parsed HLFIR module.
@@ -153,8 +163,15 @@ class HLFIRModule {
     mlir::PassManager pm(&ctx_);
     if (mlir::failed(mlir::parsePassPipeline(pipeline, pm)))
       throw std::runtime_error("run_passes: bad pipeline: " + pipeline);
-    if (mlir::failed(pm.run(*module_)))
-      throw std::runtime_error("run_passes: pipeline failed");
+    // Run on a worker thread with a large stack: deeply nested IR (a
+    // fully-inlined whole-program kernel) overflows the default stack inside
+    // MLIR's recursive region cloning / verification.  The context is touched
+    // by only one thread at a time (we join before returning).
+    bool ok = false;
+    llvm::thread worker(std::optional<unsigned>(kPassPipelineStackBytes),
+                        [&] { ok = mlir::succeeded(pm.run(*module_)); });
+    worker.join();
+    if (!ok) throw std::runtime_error("run_passes: pipeline failed");
   }
 
   /// Print the current IR as text (useful for debugging from Python).
@@ -381,6 +398,12 @@ class HLFIRModule {
       llvm::StringRef sym = f.getSymName();
       for (const std::string& n : names) {
         if (sym == n || sym.ends_with("P" + n) || sym.ends_with("_QP" + n)) {
+          // Drop every reference the body holds (operands AND terminator block
+          // successors) BEFORE erasing the blocks: a multi-block body
+          // (e.g. one with a fir.select_type, whose terminators carry block
+          // successors) would otherwise have a block freed while another
+          // block's terminator still references it -> heap corruption.
+          for (mlir::Block& b : f.getBody().getBlocks()) b.dropAllReferences();
           f.getBody().getBlocks().clear();  // empty region == declaration
           stripped.push_back(sym.str());
           break;

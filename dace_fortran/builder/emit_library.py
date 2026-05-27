@@ -467,6 +467,8 @@ def emit_call(builder, ctx, n, region):
     sig = lookup_external(callee)
     if sig is None:
         return  # not registered -> unchanged (kind="call" had no emitter)
+    if sig.stub:
+        return  # stubbed external -> body already stripped; drop the call
 
     from collections import defaultdict
     from math import prod
