@@ -2368,7 +2368,42 @@ struct FlattenStructsPass
   /// ...) is split into one record-element dummy per (chain, index-symbol)
   /// pair (``<base>[_<member path>]_<sym>``), so the existing scalar-struct
   /// flatten in ``planAndReplaceStructArgs`` handles each element directly --
-  /// no runtime-indexed companion.  The binding resolves ``<chain>(nnow)`` /
+  /// no runtime-indexed companion.
+  ///
+  /// **Design: the pattern is purely structural -- no caller-side hint
+  /// declares "this is a double buffer."**  The split fires when ALL of:
+  ///
+  ///   1. ``hlfir.designate %X(%idx)`` is a 1-D element-access designate
+  ///      (single subscript, no component).
+  ///   2. ``%X`` traces back through one ``fir.load`` of a box plus a
+  ///      chain (possibly empty) of ``hlfir.designate{"<member>"}`` ops
+  ///      to a function-argument ``hlfir.declare``.  The chain length
+  ///      is unbounded; each hop's name joins the companion's prefix.
+  ///   3. The terminal AoR-member type is
+  ///      ``box<heap<array<? x record>>>`` (allocatable) or
+  ///      ``box<ptr<array<? x record>>>`` (pointer) -- checked by
+  ///      :cpp:func:`allocOrPtrArrayOfRecordsMember`.
+  ///   4. The single index ``%idx`` traces (via ``traceToDecl``) to a
+  ///      stable named symbol (any declared integer -- ``nnow``, ``nnew``,
+  ///      ``nvar``, ``jg``, etc.).  Computed-index sites bail the entire
+  ///      function back.
+  ///
+  /// "Double buffer" is the canonical ICON pattern (two stable symbols
+  /// ``nnow`` / ``nnew``), but the same code handles single-buffer,
+  /// triple-buffer, pointer-spine AoR, nested-struct chains, and the
+  /// direct-AoR-dummy (``type(t), allocatable :: s(:)``) uniformly.  The
+  /// number of resulting per-symbol dummies = the number of distinct
+  /// symbols observed across all access sites for that (root, chain)
+  /// pair.
+  ///
+  /// **Caller contract:** at every call site, the caller binds each
+  /// per-symbol dummy to the array element corresponding to that
+  /// symbol's runtime value (time-level rotation stays in the driver).
+  /// The bridge does not encode the rotation -- it splits the IR into
+  /// per-symbol lanes and leaves the lane-to-element mapping to the
+  /// bindings layer.
+  ///
+  /// The binding resolves ``<chain>(nnow)`` /
   /// ``(nnew)`` into the per-symbol dummies at call time (the time-level
   /// rotation stays in the driver).
   ///

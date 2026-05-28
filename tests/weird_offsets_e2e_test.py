@@ -84,7 +84,7 @@ end subroutine es_def
 
 
 def _offsets(sdfg, arr: str) -> dict:
-    c = dict(sdfg.constants)
+    c = dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants))
     return {k: int(v) for k, v in c.items() if k.startswith(f"offset_{arr}_d")}
 
 

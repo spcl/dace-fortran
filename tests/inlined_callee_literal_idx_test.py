@@ -73,7 +73,7 @@ def test_inlined_callee_propagates_negative_literal(tmp_path: Path):
     sdfg = build_sdfg(_SRC, sdfg_dir, name="outer", entry="_QPouter").build()
     sdfg.validate()
 
-    inferred_offset = dict(sdfg.constants).get('offset_arr_d0')
+    inferred_offset = dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0')
     assert inferred_offset == -5, (f"expected offset_arr_d0 == -5 (literal propagated through "
                                    f"inlined subroutine + load/store chain); got {inferred_offset}.  "
                                    f"This is the bridge gap identified in velocity_full bisection.")

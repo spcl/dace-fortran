@@ -210,6 +210,39 @@ _RESERVED_DACE_NAMES = frozenset({"test", "doctest"})
 _DACE_NAME_PREFIX = "program_"
 
 
+def _specialize_symbol(sdfg: SDFG, symbol_name: str, value):
+    """Bake a free symbol to a constant value, recursively through nested SDFGs.
+
+    Substitutes ``symbol_name`` with ``value`` in every subset, memlet,
+    tasklet, interstate edge, and array descriptor, walks every nested
+    SDFG via :meth:`all_sdfgs_recursive`, and strips the symbol from
+    each :class:`NestedSDFG` node's ``symbol_mapping``.  The symbol is
+    removed from the top-level ``sdfg.symbols`` so the SDFG signature
+    sheds the now-redundant entry entirely -- and transformations that
+    pattern-match on integer constants in shapes / strides / subsets
+    see the literal value instead of a bound symbol.
+
+    A direct port of :func:`dace.sdfg.utils.specialize_symbol` from
+    yakup/dev (not yet on d2/FaCe).  Switch to the dace import once it
+    lands upstream.
+
+    :param sdfg: The SDFG to specialize.
+    :param symbol_name: The symbol name to replace.
+    :param value: The constant value to substitute in.
+    """
+    from dace.sdfg.nodes import NestedSDFG
+    val = str(value)
+    for sd in list(sdfg.all_sdfgs_recursive()):
+        if (symbol_name in sd.symbols
+                or any(str(s) == symbol_name for s in sd.free_symbols)):
+            sd.replace_dict({symbol_name: val})
+        if symbol_name in sd.symbols:
+            sd.remove_symbol(symbol_name)
+    for node, _ in sdfg.all_nodes_recursive():
+        if isinstance(node, NestedSDFG):
+            node.symbol_mapping.pop(symbol_name, None)
+
+
 def _rename_reserved_collisions(sdfg) -> dict:
     """Walk ``sdfg.arrays`` / ``sdfg.symbols`` for entries whose name
     collides with a reserved sympy attribute and apply a deterministic
@@ -399,31 +432,32 @@ class SDFGBuilder:
         # Always-on post-emit substitution.  ``offset_values`` carries
         # two flavours of mapping: int constants (``offset_d_d0 = 50``
         # for ``dimension(50:54)``) and symbol aliases (``offset_d_d0 =
-        # "arrsize"`` for ``dimension(arrsize:arrsize+4)``).  They take
-        # different paths because ``sdfg.specialize`` only handles
-        # constants  --  feeding it a string would land on ``add_constant``
-        # and downstream casting tries ``int64("arrsize")`` and
-        # ValueError-s.
-        # TODO(future): replace the ``specialize`` call with
-        # ``sdfg.replace_dict`` so the offset symbols get erased from
-        # ``sdfg.symbols`` entirely (they currently linger as bound
-        # constants and bloat the symbol table).  An attempt at this
-        # broke ``test_fortran_frontend_type_array`` /
-        # ``test_fortran_frontend_type_array2`` in ``type_test.py``:
-        # for non-default lower bounds (``dimension(7:12)``) the
-        # ``replace_dict`` substitution didn't apply uniformly to
-        # every memlet subset, leaving raw-Fortran indices that went
-        # out-of-bounds against the 0-based flat companion.  Needs a
-        # careful audit of which property paths ``replace_dict``
-        # walks (vs. what ``specialize`` does in-place via the
-        # constants table) before re-trying.
+        # "arrsize"`` for ``dimension(arrsize:arrsize+4)``).  Both are
+        # erased from ``sdfg.symbols``: constants bake into every
+        # subset / memlet / shape as a literal ``sympy.Integer`` (which
+        # downstream transformations require -- they pattern-match on
+        # integer constants, not on a free symbol bound to a constant),
+        # aliases get renamed to the source symbol.
         const_offsets, alias_offsets = {}, {}
         for k, v in self.offset_values.items():
             if v is None:
                 continue
             (alias_offsets if isinstance(v, str) else const_offsets)[k] = v
-        if const_offsets:
-            sdfg.specialize(const_offsets)
+        # Snapshot the inferred per-axis offsets onto the SDFG before the
+        # specialise pass zeroes their symbols out, so tests / diagnostics
+        # can still inspect the inferred values without grepping memlet
+        # subsets.  ``sdfg.constants`` no longer carries these entries
+        # because ``_specialize_symbol`` substitutes them as literal
+        # integers in every subset.
+        sdfg._fortran_offset_values = dict(const_offsets)
+        # Constant offsets: ``_specialize_symbol`` walks every nested
+        # SDFG and strips the symbol from each NestedSDFG node's
+        # ``symbol_mapping``, so the symbol leaves the signature
+        # entirely.  This was the gap behind the older ``replace_dict``
+        # attempt that broke ``type_array`` /
+        # ``type_array2`` tests for non-default lower bounds.
+        for k, v in const_offsets.items():
+            _specialize_symbol(sdfg, k, v)
         # Symbol-to-symbol aliasing (``offset_d_d0 = arrsize``): rename
         # every reference and drop the now-redundant offset symbol from
         # the SDFG so its signature only carries ``arrsize`` as a free

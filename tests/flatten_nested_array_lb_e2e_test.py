@@ -54,7 +54,7 @@ def test_flatten_nested_array_nondefault_lb(tmp_path: Path):
     sdfg = build_sdfg(_SRC, d, name="kn", entry="mn::kn").build()
     sdfg.validate()
 
-    consts = dict(sdfg.constants)
+    consts = dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants))
     offs = {k: int(v) for k, v in consts.items() if k.startswith("offset_") and "arr_v" in k}
     # Companion is (arr dim, v dim): arr lb 1, v lb 0.
     assert offs.get("offset_o_arr_v_d0") == 1, offs

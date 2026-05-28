@@ -73,7 +73,7 @@ def test_explicit_shape_offsets_not_poisoned(tmp_path: Path):
     sdfg = build_sdfg(_SRC, sdfg_dir, name="mixed_idx", entry="_QPmixed_idx").build()
     sdfg.validate()
 
-    consts = dict(sdfg.constants)
+    consts = dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants))
     offsets = {k: int(v) for k, v in consts.items() if k.startswith("offset_")}
     assert offsets, "expected per-dim offset constants"
     bad = {k: v for k, v in offsets.items() if v != 1}
