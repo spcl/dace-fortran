@@ -338,9 +338,11 @@ subroutine shim_kern_c(fld_a_p, fld_b_p) bind(c, name='shim_kern_c')
 end subroutine shim_kern_c
 """
 
-# Hand-authored interface: ``build_auto_interface`` records ``struct_name``
-# but no member layout, so a struct kernel needs the layout supplied
-# explicitly until the bridge snapshot is extended.
+# Hand-authored interface kept as a regression anchor: the bridge
+# member-layout snapshot (see ``test_auto_iface_struct_members``) is the
+# preferred path; the explicit interface is the fallback when the
+# bridge's snapshot doesn't carry enough info (a future v2 shape -- a
+# nested struct, an allocatable member, ...).
 _STRUCT_IFACE = OriginalInterface(
     entry="shim_kern",
     args=(OriginalArg(name="fld", fortran_type="type(t_shim_fields)",

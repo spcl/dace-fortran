@@ -144,6 +144,28 @@ struct FortranArgInfo {
   std::string struct_module;    // defining module (``mo_pt``) or ``""``
 };
 
+/// One field of a Fortran derived type used as an entry dummy.  Populated
+/// alongside :class:`FortranArgInfo` when the dummy is a derived-type:
+/// ``extractFortranInterface`` walks the ``fir::RecordType`` member list and
+/// records each member's caller-facing shape.  Read by the binding emitter
+/// (``build_auto_interface``) so a struct-arg interface can be auto-derived
+/// rather than hand-authored.
+struct FortranMemberInfo {
+  std::string name;     // member name (``a``)
+  std::string dtype;    // scalar element dtype, empty for unsupported (nested
+                        // struct, box / heap / pointer member)
+  int rank = 0;
+  std::vector<std::string> shape_symbols;  // static-shape literal ints / "?"
+};
+
+/// One derived-type layout the entry's dummies reference.
+struct FortranStructLayout {
+  std::string name;     // ``t_fld``
+  std::string module;   // defining module (``mo_fld``), or ``""`` for a
+                        // host-associated / program-local type
+  std::vector<FortranMemberInfo> members;
+};
+
 /// The whole caller-facing surface of one entry: its dummies in order,
 /// plus the ``use <mod>, only: <syms>`` set the wrapper needs to resolve
 /// derived-type names and module-parameter array bounds.
@@ -151,6 +173,10 @@ struct FortranInterfaceInfo {
   std::vector<FortranArgInfo> args;
   /// module name -> referenced symbols (derived-type names + shape params).
   std::map<std::string, std::set<std::string>> used_modules;
+  /// struct name -> layout, one entry per distinct derived type that
+  /// appears in ``args`` (and whose ``fir::RecordType`` was reachable in
+  /// the entry's signature).
+  std::map<std::string, FortranStructLayout> struct_types;
 };
 
 /// Walk the entry function's block arguments IN ORDER and describe each

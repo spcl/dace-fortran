@@ -106,6 +106,15 @@ def build_auto_interface(raw: dict, entry: str) -> OriginalInterface:
     ``hlfir-flatten-structs``).  ``entry`` should be the final ``sdfg.name``
     so the wrapper's ``bind(c)`` symbols match the compiled SDFG exports.
 
+    Derived-type dummies pick up their per-member layout from the
+    ``struct_types`` sub-dict the bridge populates from each dummy's
+    ``fir::RecordType``.  Members whose element dtype the bridge could
+    not name (a nested record, ``allocatable`` / ``pointer`` /
+    ``character``, complex) carry an empty ``dtype`` -- ``Member`` keeps
+    the slot with a placeholder ``fortran_type`` (``'??'``) so the
+    downstream ``bind_c_shim`` emitter can reject only the unsupported
+    members and accept inline-flat ones from the same struct.
+
     :raises ValueError: a dummy uses a dtype the binding layer can't name
         (e.g. ``CHARACTER``) or a derived-type arg whose type name the bridge
         could not recover -- the caller then supplies an explicit interface.
@@ -127,4 +136,19 @@ def build_auto_interface(raw: dict, entry: str) -> OriginalInterface:
                                 rank=int(a["rank"]), shape=tuple(a["shape"]),
                                 intent=a["intent"], struct_type=struct_type))
     used_modules = {mod: tuple(syms) for mod, syms in raw["used_modules"].items()}
-    return OriginalInterface(entry=entry, args=tuple(args), used_modules=used_modules)
+    struct_types = {}
+    for sname, st in raw.get("struct_types", {}).items():
+        members = []
+        for m in st["members"]:
+            members.append(Member(
+                name=m["name"],
+                fortran_type=_DTYPE_TO_FORTRAN_C.get(m["dtype"], "??"),
+                rank=int(m["rank"]),
+                shape=tuple(m["shape"]),
+            ))
+        struct_types[sname] = DerivedType(name=st["name"],
+                                          module=st["module"] or None,
+                                          members=tuple(members))
+    return OriginalInterface(entry=entry, args=tuple(args),
+                             struct_types=struct_types,
+                             used_modules=used_modules)

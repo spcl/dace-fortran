@@ -15,6 +15,8 @@ import pytest
 from _util import build_sdfg, have_flang
 from dace_fortran.bindings import build_fortran_library
 from dace_fortran.bindings.fortran_interface import (
+    DerivedType,
+    Member,
     OriginalArg,
     OriginalInterface,
     build_auto_interface,
@@ -124,3 +126,50 @@ end subroutine scale2
     # The wrapper preserves the caller's (n, x) signature.
     text = Path(lib.bindings_f90).read_text()
     assert "subroutine scale2_dace(n, x)" in text
+
+
+def test_auto_iface_struct_members_picked_up_from_bridge(tmp_path):
+    """A struct dummy whose members are all static-shape scalar arrays
+    -- the bridge's ``extractFortranInterface`` walks the
+    ``fir::RecordType`` and emits one :class:`Member` per field with
+    its element dtype + rank + static-shape integer-literal extents.
+    ``build_auto_interface`` lifts that into
+    :attr:`OriginalInterface.struct_types` so the binding emitter (and
+    the bind(c) shim auto-gen) no longer needs a hand-authored layout
+    for the common static-shape shapes."""
+    src = """
+module mo_auto_iface_fld
+  use iso_c_binding
+  integer, parameter :: NX = 4, NY = 5
+  type :: t_auto_fld
+    real(c_double) :: a(NX, NY)
+    integer(c_int) :: tag(NX)
+  end type
+end module
+subroutine kern(fld)
+  use mo_auto_iface_fld
+  type(t_auto_fld), intent(inout) :: fld
+  fld%a = fld%a + 1.0_c_double
+end subroutine
+"""
+    auto = _auto(src, tmp_path, "kern", "_QPkern")
+
+    assert auto.args == (OriginalArg(name="fld",
+                                     fortran_type="type(t_auto_fld)",
+                                     rank=0,
+                                     intent="inout",
+                                     struct_type="t_auto_fld"), )
+    assert "t_auto_fld" in auto.struct_types
+    st = auto.struct_types["t_auto_fld"]
+    assert st.name == "t_auto_fld"
+    assert st.module == "mo_auto_iface_fld"
+    # Members ride in declaration order with their resolved literal
+    # extents (the module parameters NX / NY are inlined to ``4`` /
+    # ``5`` by HLFIR; the auto-iface surfaces them as the integer
+    # literals the bridge sees post-resolution).
+    assert st.members == (
+        Member(name="a", fortran_type="real(c_double)",
+               rank=2, shape=("4", "5")),
+        Member(name="tag", fortran_type="integer(c_int)",
+               rank=1, shape=("4", )),
+    )

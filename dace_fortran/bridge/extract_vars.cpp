@@ -2442,6 +2442,47 @@ FortranInterfaceInfo extractFortranInterface(mlir::ModuleOp module,
       parseRecordName(rec.getName(), a.struct_module, a.struct_name);
       if (!a.struct_module.empty() && !a.struct_name.empty())
         out.used_modules[a.struct_module].insert(a.struct_name);
+      // Record the struct's member layout once per distinct type so the
+      // Python ``build_auto_interface`` can populate
+      // ``OriginalInterface.struct_types`` without the caller
+      // hand-authoring it.  Each member: name + scalar element dtype +
+      // rank + per-dim static-shape literals.  Unsupported member shapes
+      // (nested record, box / heap / pointer, complex) record an empty
+      // dtype so the Python side can refuse them clearly rather than
+      // mis-binding.
+      if (!a.struct_name.empty() &&
+          out.struct_types.find(a.struct_name) == out.struct_types.end()) {
+        FortranStructLayout layout;
+        layout.name = a.struct_name;
+        layout.module = a.struct_module;
+        for (auto& p : rec.getTypeList()) {
+          FortranMemberInfo m;
+          m.name = p.first;
+          mlir::Type mt = p.second;
+          if (auto seq = mlir::dyn_cast<fir::SequenceType>(mt)) {
+            m.rank = (int)seq.getShape().size();
+            for (auto e : seq.getShape()) {
+              if (e == fir::SequenceType::getUnknownExtent())
+                m.shape_symbols.emplace_back("?");
+              else
+                m.shape_symbols.emplace_back(std::to_string(e));
+            }
+            mt = seq.getEleTy();
+          }
+          if (mt.isF64()) m.dtype = "float64";
+          else if (mt.isF32()) m.dtype = "float32";
+          else if (mt.isInteger(8)) m.dtype = "int8";
+          else if (mt.isInteger(16)) m.dtype = "int16";
+          else if (mt.isInteger(32)) m.dtype = "int32";
+          else if (mt.isInteger(64)) m.dtype = "int64";
+          else if (mt.isInteger(1) || mlir::isa<fir::LogicalType>(mt))
+            m.dtype = "bool";
+          // Nested record / box / heap / pointer / complex / character:
+          // leave ``m.dtype`` empty so Python can flag the v2 boundary.
+          layout.members.push_back(std::move(m));
+        }
+        out.struct_types[a.struct_name] = std::move(layout);
+      }
     } else if (ty.isF64()) a.dtype = "float64";
     else if (ty.isF32()) a.dtype = "float32";
     else if (ty.isInteger(8)) a.dtype = "int8";

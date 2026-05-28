@@ -317,13 +317,18 @@ class HLFIRModule {
   /// ``hlfir-flatten-structs`` runs.  Shape:
   ///   {"args": [{"name", "dtype", "intent", "rank", "shape",
   ///              "is_struct", "struct_name", "struct_module"}, ...],
-  ///    "used_modules": {mod: [syms], ...}}
+  ///    "used_modules": {mod: [syms], ...},
+  ///    "struct_types": {struct_name: {"name": ..., "module": ...,
+  ///                                    "members": [{"name", "dtype",
+  ///                                                 "rank", "shape"}]}}}
   nb::object get_fortran_interface(const std::string& entry) {
     nb::dict out;
     nb::list args;
     nb::dict used;
+    nb::dict struct_types;
     out["args"] = args;
     out["used_modules"] = used;
+    out["struct_types"] = struct_types;
     if (!module_) return out;
     auto info = extractFortranInterface(*module_, entry);
     for (auto& a : info.args) {
@@ -344,6 +349,25 @@ class HLFIRModule {
       nb::list syms;
       for (auto& s : kv.second) syms.append(s);
       used[kv.first.c_str()] = syms;
+    }
+    for (auto& kv : info.struct_types) {
+      const auto& layout = kv.second;
+      nb::dict sd;
+      sd["name"] = layout.name;
+      sd["module"] = layout.module;
+      nb::list members;
+      for (auto& m : layout.members) {
+        nb::dict md;
+        md["name"] = m.name;
+        md["dtype"] = m.dtype;
+        md["rank"] = m.rank;
+        nb::list sh;
+        for (auto& s : m.shape_symbols) sh.append(s);
+        md["shape"] = sh;
+        members.append(md);
+      }
+      sd["members"] = members;
+      struct_types[kv.first.c_str()] = sd;
     }
     return out;
   }
