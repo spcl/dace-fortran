@@ -750,6 +750,13 @@ class SDFGBuilder:
         # appear in ``free_symbols`` but never in ``needed`` here, so
         # downstream consumers (the diagnostic, the frozen-signature
         # snapshot, the ``arglist`` consumer) can filter them out.
+        # Pre-flight: an AccessNode whose ``data`` field isn't registered
+        # in ``sdfg.arrays`` -- e.g. the bare struct base name surfacing
+        # from an unflattened ``s%X(...)%Y`` chain that landed as an
+        # access node -- KeyErrors inside ``state.used_symbols`` when
+        # ``n.desc(sdfg)`` looks the name up.  Surface it directly so
+        # ``_collect_needed_symbols`` doesn't trip on the same lookup.
+        self._diagnose_unresolved_access_nodes(sdfg)
         needed_syms = self._collect_needed_symbols(sdfg)
         self._diagnose_unresolved_free_symbols(sdfg, needed_syms)
         # Pre-add placeholder entries for any leaked-but-unused free
@@ -845,6 +852,47 @@ class SDFGBuilder:
             module_symbol_origins=module_symbol_origins,
         )
         sdfg._frozen_signature = fs
+
+    def _diagnose_unresolved_access_nodes(self, sdfg: SDFG):
+        """Raise if any ``AccessNode`` references a ``data`` field that
+        isn't registered in ``sdfg.arrays``.
+
+        Same dominant cause as :meth:`_diagnose_unresolved_free_symbols`:
+        the bridge collapsed an unflattened struct-member access chain
+        (e.g. ``s%X(...)%Y``) to the bare struct base name and landed
+        the result as an access node.  Walked up front because the
+        downstream dace walker ``n.desc(sdfg)`` raises an opaque
+        ``KeyError`` on the first unresolved name with no use-site
+        information attached.
+
+        :param sdfg: The SDFG to walk.
+        :raises RuntimeError: If at least one access node references an
+            unregistered name.
+        """
+        from dace.sdfg.nodes import AccessNode
+        bad: list = []
+        for state in sdfg.all_states():
+            for n in state.nodes():
+                if isinstance(n, AccessNode) and n.data not in sdfg.arrays:
+                    bad.append((state.label, n.data))
+                    if len(bad) >= 5:
+                        break
+            if len(bad) >= 5:
+                break
+        if not bad:
+            return
+        bullet = '\n  '.join(f'access[{lbl}] data={d!r}' for lbl, d in bad)
+        raise RuntimeError(
+            f'unresolved access-node data field(s) in SDFG (not in '
+            f'``sdfg.arrays``):\n  {bullet}\n\n'
+            'Most likely cause: the bridge collapsed an unflattened '
+            'struct-member access chain (e.g. ``s%X(...)%Y``) to the '
+            'bare struct base name and landed the result as an access '
+            'node.  Common pattern: an alloc-array-of-records member '
+            '(``box<heap<array<? x record>>>``) whose inner '
+            'record-element members are read as scalars -- the flatten '
+            'pass skips the member and the access chain dead-ends at '
+            'the struct root.')
 
     def _collect_needed_symbols(self, sdfg: SDFG) -> set:
         """Return the set of symbol names ACTUALLY referenced at a use
