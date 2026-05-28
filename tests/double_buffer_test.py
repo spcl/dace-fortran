@@ -27,7 +27,6 @@ import numpy as np
 import pytest
 
 from _util import build_sdfg, f2py_compile, have_flang
-from _helpers import xfail
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
@@ -346,9 +345,6 @@ end subroutine
     np.testing.assert_allclose(out_sdfg, out_ref, rtol=0, atol=0)
 
 
-@xfail("nested-struct access chain ``s%inner%prog(idx)%w`` -- "
-       "splitDoubleBufferMembers only walks one member hop today; "
-       "the multi-hop walker is the next extension")
 def test_dbuf_split_nested_struct(tmp_path):
     """Nested-struct access chain: the AoR member lives below one or more
     plain struct members, e.g. ``s%inner%prog(idx)%w``.  The split must
@@ -429,9 +425,6 @@ end subroutine
     np.testing.assert_allclose(out_sdfg, out_ref, rtol=0, atol=0)
 
 
-@xfail("direct alloc-array-of-records dummy (``s(idx)%w`` with no "
-       "outer struct) -- splitDoubleBufferMembers bails when the "
-       "dummy is itself the AoR")
 def test_dbuf_split_direct_aor_dummy(tmp_path):
     """The dummy ITSELF is the alloc-array-of-records (no outer struct).
     Access is ``s(idx)%w`` rather than ``s%X(idx)%w``.  The split must

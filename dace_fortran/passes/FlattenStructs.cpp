@@ -2136,26 +2136,42 @@ struct FlattenStructsPass
     op.erase();
   }
 
-  /// (B) Double-buffer split.  A struct dummy's allocatable / pointer
-  /// array-of-records member accessed only as ``s%member(<idx>)`` for stable
-  /// index symbols (ICON time-level buffering: ``prog(nnow)`` / ``prog(nnew)`` /
-  /// ...) is split into one SCALAR-struct dummy per index symbol
-  /// (``<base>_<member>_<sym>``), so the existing scalar-struct flatten in
-  /// ``planAndReplaceStructArgs`` handles each element directly  --  no
-  /// runtime-indexed companion.  The binding resolves ``s%member(nnow)`` /
+  /// (B) Double-buffer split.  A function-argument-rooted alloc / pointer
+  /// array-of-records accessed only as ``<chain>(<idx>)`` for stable index
+  /// symbols (ICON time-level buffering: ``prog(nnow)`` / ``prog(nnew)`` /
+  /// ...) is split into one record-element dummy per (chain, index-symbol)
+  /// pair (``<base>[_<member path>]_<sym>``), so the existing scalar-struct
+  /// flatten in ``planAndReplaceStructArgs`` handles each element directly --
+  /// no runtime-indexed companion.  The binding resolves ``<chain>(nnow)`` /
   /// ``(nnew)`` into the per-symbol dummies at call time (the time-level
-  /// rotation stays in the driver).  Returns true if any split happened; bails
-  /// for a non-symbol / computed index (member left for the generic
-  /// array-of-records path or a downstream error).
+  /// rotation stays in the driver).
   ///
-  /// :param func: the function whose struct dummy args to split.
+  /// Three chain shapes are supported:
+  ///
+  ///   * Top-level AoR member: ``s%prog(idx)`` (one member hop).
+  ///   * Nested-struct AoR member: ``s%inner%prog(idx)`` (multiple
+  ///     plain-struct hops above the AoR; the joined path becomes part
+  ///     of the companion name).
+  ///   * Direct-AoR dummy: ``s(idx)`` where ``s`` is itself the alloc /
+  ///     pointer array-of-records (empty member path; the companion
+  ///     name is ``<base>_<sym>``).
+  ///
+  /// Bails (returns false, leaves the function untouched) on any element
+  /// access whose index doesn't trace to a single declared symbol -- the
+  /// member is left for the generic array-of-records path or a downstream
+  /// error.
+  ///
+  /// :param func: the function whose AoR-rooted dummies to split.
   /// :returns: true if a per-symbol dummy was inserted.
   bool splitDoubleBufferMembers(mlir::func::FuncOp func) {
     auto &block = func.front();
     auto *ctx = func.getContext();
-    bool changed = false;
-    unsigned nOrig = block.getNumArguments();
-    for (unsigned i = 0; i < nOrig; ++i) {
+
+    // Map: ``argDecl.getResult(0)`` -> demangled base name + argDecl.  Walked
+    // back-edges from element-designate sites must terminate at one of these
+    // root declares to be admissible.
+    llvm::DenseMap<mlir::Value, std::pair<std::string, hlfir::DeclareOp>> argDecls;
+    for (unsigned i = 0; i < block.getNumArguments(); ++i) {
       hlfir::DeclareOp argDecl;
       for (auto *u : block.getArgument(i).getUsers())
         if (auto d = mlir::dyn_cast<hlfir::DeclareOp>(u)) {
@@ -2163,74 +2179,108 @@ struct FlattenStructsPass
           break;
         }
       if (!argDecl) continue;
-      bool outerIsArray = false;
-      llvm::SmallVector<int64_t, 4> outerShape;
-      auto rec =
-          peelToRecord(argDecl.getResult(0).getType(), outerIsArray, outerShape);
-      if (!rec || outerIsArray) continue;
-      std::string demangledBase = demangleVarName(argDecl.getUniqName());
-
-      for (auto &pair : rec.getTypeList()) {
-        fir::RecordType elemRec = allocOrPtrArrayOfRecordsMember(pair.second);
-        if (!elemRec) continue;
-        const std::string &member = pair.first;
-
-        // Collect element-access designates ``s%member(idx)`` grouped by the
-        // index source symbol; track the member designate + load to clean up.
-        std::map<std::string, llvm::SmallVector<hlfir::DesignateOp, 4>> bySym;
-        llvm::SmallPtrSet<mlir::Operation *, 8> memberLoads, memberDgs;
-        bool bail = false;
-        func.walk([&](hlfir::DesignateOp elemDg) {
-          if (bail || elemDg.getComponentAttr()) return;
-          if (elemDg.getIndices().size() != 1) return;
-          auto ld = mlir::dyn_cast_or_null<fir::LoadOp>(
-              elemDg.getMemref().getDefiningOp());
-          if (!ld) return;
-          auto md = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
-              ld.getMemref().getDefiningOp());
-          if (!md) return;
-          auto comp = md.getComponentAttr();
-          if (!comp || comp.getValue() != llvm::StringRef(member)) return;
-          if (md.getMemref() != argDecl.getResult(0)) return;
-          std::string sym = traceToDecl(elemDg.getIndices()[0]);
-          if (sym.empty()) {
-            bail = true;  // non-symbol / computed index -> can't split
-            return;
-          }
-          bySym[sym].push_back(elemDg);
-          memberLoads.insert(ld);
-          memberDgs.insert(md);
-        });
-        if (bail || bySym.empty()) continue;
-
-        auto refElem = fir::ReferenceType::get(elemRec);
-        mlir::OpBuilder b(argDecl);
-        b.setInsertionPointAfter(argDecl);
-        for (auto &kv : bySym) {
-          unsigned newIdx = block.getNumArguments();
-          block.insertArgument(newIdx, refElem, argDecl.getLoc());
-          auto newArg = block.getArgument(newIdx);
-          mlir::NamedAttrList attrs;
-          attrs.append("uniq_name",
-                       mlir::StringAttr::get(
-                           ctx, demangledBase + "_" + member + "_" + kv.first));
-          attrs.append(declareSegments(b, /*hasShape=*/false));
-          auto decl = b.create<hlfir::DeclareOp>(
-              argDecl.getLoc(), mlir::TypeRange{refElem, refElem},
-              mlir::ValueRange{newArg}, attrs);
-          for (auto elemDg : kv.second)
-            elemDg.getResult().replaceAllUsesWith(decl.getResult(0));
-          for (auto elemDg : kv.second) elemDg.erase();
-          changed = true;
-        }
-        // Drop the now-dead member designate + load so the struct dummy can be
-        // erased later (no lingering array-of-records reference keeping it).
-        for (auto *op : memberLoads)
-          if (op->use_empty()) op->erase();
-        for (auto *op : memberDgs)
-          if (op->use_empty()) op->erase();
-      }
+      argDecls.try_emplace(argDecl.getResult(0),
+                           demangleVarName(argDecl.getUniqName()), argDecl);
     }
+    if (argDecls.empty()) return false;
+
+    // Key: (root, access-order member path, index-symbol name).
+    struct Key {
+      void *root;
+      std::vector<std::string> path;
+      std::string sym;
+      bool operator<(const Key &o) const {
+        if (root != o.root) return root < o.root;
+        if (path != o.path) return path < o.path;
+        return sym < o.sym;
+      }
+    };
+    std::map<Key, llvm::SmallVector<hlfir::DesignateOp, 4>> sites;
+    llvm::SmallPtrSet<mlir::Operation *, 32> deadOps;
+    bool bail = false;
+
+    func.walk([&](hlfir::DesignateOp elemDg) {
+      if (bail) return;
+      if (elemDg.getComponentAttr()) return;  // member access, not subscript
+      if (elemDg.getIndices().size() != 1) return;  // 1-D AoR only
+      // Walk back from the loaded box through zero or more
+      // ``hlfir.designate{"<member>"}`` hops to a function-arg declare.
+      auto *defOp = elemDg.getMemref().getDefiningOp();
+      auto ld = mlir::dyn_cast_or_null<fir::LoadOp>(defOp);
+      if (!ld) return;  // not a box-load -> not an alloc / ptr AoR access
+      llvm::SmallVector<std::string, 4> walkedPath;
+      llvm::SmallPtrSet<mlir::Operation *, 8> chainDead;
+      chainDead.insert(ld);
+      mlir::Value v = ld.getMemref();
+      while (true) {
+        auto *d = v.getDefiningOp();
+        auto md = mlir::dyn_cast_or_null<hlfir::DesignateOp>(d);
+        if (!md) break;
+        auto comp = md.getComponentAttr();
+        if (!comp) break;
+        walkedPath.push_back(comp.getValue().str());
+        chainDead.insert(md);
+        v = md.getMemref();
+      }
+      auto it = argDecls.find(v);
+      if (it == argDecls.end()) return;  // chain doesn't terminate at a func arg
+      // The element type at the AoR access must be a record so the new
+      // dummy below has a meaningful elemRec to typestamp.
+      auto refTy =
+          mlir::dyn_cast<fir::ReferenceType>(elemDg.getResult().getType());
+      if (!refTy || !mlir::isa<fir::RecordType>(refTy.getEleTy())) return;
+      std::string sym = traceToDecl(elemDg.getIndices()[0]);
+      if (sym.empty()) {
+        bail = true;
+        return;
+      }
+      Key key;
+      key.root = v.getAsOpaquePointer();
+      key.path.assign(walkedPath.rbegin(), walkedPath.rend());
+      key.sym = std::move(sym);
+      sites[std::move(key)].push_back(elemDg);
+      deadOps.insert(chainDead.begin(), chainDead.end());
+    });
+    if (bail || sites.empty()) return false;
+
+    bool changed = false;
+    for (auto &kv : sites) {
+      auto root = mlir::Value::getFromOpaquePointer(kv.first.root);
+      auto rootIt = argDecls.find(root);
+      if (rootIt == argDecls.end()) continue;
+      auto &[demangledBase, argDecl] = rootIt->second;
+      auto refTy =
+          mlir::cast<fir::ReferenceType>(kv.second[0].getResult().getType());
+      auto elemRec = mlir::cast<fir::RecordType>(refTy.getEleTy());
+      auto refElem = fir::ReferenceType::get(elemRec);
+
+      mlir::OpBuilder b(argDecl);
+      b.setInsertionPointAfter(argDecl);
+      unsigned newIdx = block.getNumArguments();
+      block.insertArgument(newIdx, refElem, argDecl.getLoc());
+      auto newArg = block.getArgument(newIdx);
+
+      std::string name = demangledBase;
+      for (auto &p : kv.first.path) name += "_" + p;
+      name += "_" + kv.first.sym;
+
+      mlir::NamedAttrList attrs;
+      attrs.append("uniq_name", mlir::StringAttr::get(ctx, name));
+      attrs.append(declareSegments(b, /*hasShape=*/false));
+      auto decl = b.create<hlfir::DeclareOp>(
+          argDecl.getLoc(), mlir::TypeRange{refElem, refElem},
+          mlir::ValueRange{newArg}, attrs);
+
+      for (auto elemDg : kv.second)
+        elemDg.getResult().replaceAllUsesWith(decl.getResult(0));
+      for (auto elemDg : kv.second) elemDg.erase();
+      changed = true;
+    }
+    // Drop the now-dead member designates + box loads so the original
+    // AoR-rooted dummy can be erased later (no lingering reference
+    // keeping it alive).
+    for (auto *op : deadOps)
+      if (op->use_empty()) op->erase();
     return changed;
   }
 
