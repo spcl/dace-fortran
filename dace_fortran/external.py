@@ -270,6 +270,89 @@ def registered_names() -> List[str]:
     return list(_REGISTRY)
 
 
+def inline_external(sdfg: 'dace.SDFG', name: str,
+                    callee_sdfg: 'dace.SDFG') -> int:
+    """Swap every ``ExternalCall`` library node for ``name`` in ``sdfg``
+    with a :class:`dace.sdfg.nodes.NestedSDFG` wrapping ``callee_sdfg``.
+
+    Both kernels (caller + callee) must have gone through the SAME
+    ``hlfir-flatten-structs`` pipeline on the SAME merged source, so the
+    flat-leaf signatures agree by position: the ExternalCall's connector
+    layout (``_a0``, ``_a1``, ...) matches ``callee_sdfg.arglist()`` in
+    order.  The lookup is by ``c_name`` (the Fortran procedure name
+    appearing in the ``CALL`` site, normalised by ``emit_call``).
+
+    No bind(c) shim is generated and no ``.mod`` files are needed --
+    the callee is embedded directly into the caller's SDFG.  This is
+    the recommended path for the in-tree ICON
+    ``solve_nh -> velocity_tendencies`` case.  Standalone-``.so``
+    deployment uses the shim-generation path instead.
+
+    :param sdfg: The caller SDFG that holds the ExternalCall(s).
+    :param name: The Fortran procedure name (matches ``ExternalCall.c_name``
+        after the registry's ``c_name or name`` defaulting).
+    :param callee_sdfg: The callee's pre-built SDFG.
+    :returns: The number of ExternalCall sites replaced.
+    """
+    from dace.sdfg.nodes import NestedSDFG
+    sig = lookup_external(name)
+    if sig is None:
+        raise ValueError(f"inline_external: {name!r} is not registered "
+                         f"as an external")
+    target_c_name = sig.c_name
+    replaced = 0
+    # Walk every state for ExternalCall nodes; we mutate as we go but
+    # collect first so the walk isn't disturbed.
+    targets = []
+    for state in sdfg.all_states():
+        for node in list(state.nodes()):
+            if (isinstance(node, ExternalCall)
+                    and node.c_name == target_c_name):
+                targets.append((state, node))
+    if not targets:
+        return 0
+    callee_args = list(callee_sdfg.arglist().keys())
+    for state, node in targets:
+        in_edges = list(state.in_edges(node))
+        out_edges = list(state.out_edges(node))
+        # ExternalCall connectors are ``_aI`` (in) and ``_aI_o`` (out);
+        # map them to the matching arglist entry by I.
+        in_map: dict = {}
+        out_map: dict = {}
+        for e in in_edges:
+            i = int(e.dst_conn[2:])  # strip ``_a``
+            in_map.setdefault(callee_args[i], e)
+        for e in out_edges:
+            # ``_a{i}_o`` -> strip ``_a`` prefix and the trailing ``_o``.
+            tail = e.src_conn[2:]
+            if tail.endswith('_o'):
+                tail = tail[:-2]
+            i = int(tail)
+            out_map.setdefault(callee_args[i], e)
+        # Symbol mapping: every callee free symbol that's also live in
+        # the caller passes through identity-named.
+        symbol_mapping = {s: s for s in callee_sdfg.free_symbols
+                          if s in sdfg.symbols or s in sdfg.arrays}
+        nested = state.add_nested_sdfg(
+            callee_sdfg,
+            inputs=set(in_map.keys()),
+            outputs=set(out_map.keys()),
+            symbol_mapping=symbol_mapping,
+            name=f"{name}_inlined_{replaced}",
+        )
+        for conn, e in in_map.items():
+            state.add_memlet_path(e.src, nested, dst_conn=conn,
+                                  memlet=e.data)
+        for conn, e in out_map.items():
+            state.add_memlet_path(nested, e.dst, src_conn=conn,
+                                  memlet=e.data)
+        for e in in_edges + out_edges:
+            state.remove_edge(e)
+        state.remove_node(node)
+        replaced += 1
+    return replaced
+
+
 def clear_external_registry():
     """Drop all registrations and restore ``compiler.linker.args`` to
     its pre-registration value (test isolation / no global leak)."""

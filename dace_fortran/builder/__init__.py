@@ -292,6 +292,9 @@ class SDFGBuilder:
 
         if entry is not None:
             self.module.set_entry_symbol(entry)
+        # Cache the entry name so ``sdfg_name`` can name the SDFG (and
+        # therefore the generated ``.so``) after the actual procedure.
+        self.entry = entry
 
         # Snapshot the caller-facing dummy list BEFORE any pass runs --
         # ``hlfir-flatten-structs`` destroys the AoS view of struct dummies,

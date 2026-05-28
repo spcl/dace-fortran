@@ -36,7 +36,25 @@ def dt(s: str) -> dace.typeclass:
 
 
 def sdfg_name(builder) -> str:
-    """Derive the SDFG name from the first Flang mangled name we see."""
+    """Derive the SDFG name -- and therefore the generated ``.so``
+    library name -- from the procedure being built.
+
+    Prefers the explicit ``entry`` symbol passed to :class:`SDFGBuilder`
+    (demangled to the procedure name -- ``_QMmoduleP<proc>`` or
+    ``_QP<proc>`` -> ``<proc>``).  Falls back to the first ``_QF<proc>``
+    mangled name on a registered variable, then to a generic ``sdfg``.
+
+    Using the entry-procedure name means
+    ``build_sdfg_from_hlfir(..., entry="_QMmo_velocity_advectionPvelocity_tendencies")``
+    produces ``libvelocity_tendencies.so`` instead of a generic name,
+    so a registered external callee can be linked against it by
+    function-keyed library name.
+    """
+    entry = getattr(builder, "entry", None)
+    if entry:
+        proc = entry.rsplit("P", 1)[-1] if "P" in entry else entry
+        if proc:
+            return proc
     for v in builder.arrays.values():
         mn = v.mangled_name
         if '_QF' in mn and 'E' in mn:
