@@ -743,7 +743,38 @@ class SDFGBuilder:
         # Fortran name from the SDFG-internal name.  Empty dict when no
         # reserved-name collision fired, so the lookup becomes a no-op.
         dace_to_user = {v: k for k, v in getattr(self, 'dace_name_map', {}).items()}
-        for sdfg_name_, desc in sdfg.arglist().items():
+        # USE-SITE-DERIVED symbol set.  Robust against the core-dace change
+        # that lifts an unused transient's shape symbols into
+        # ``sdfg.free_symbols`` even when no tasklet, memlet, NSDFG
+        # mapping, or interstate edge references them: such symbols
+        # appear in ``free_symbols`` but never in ``needed`` here, so
+        # downstream consumers (the diagnostic, the frozen-signature
+        # snapshot, the ``arglist`` consumer) can filter them out.
+        needed_syms = self._collect_needed_symbols(sdfg)
+        self._diagnose_unresolved_free_symbols(sdfg, needed_syms)
+        # Pre-add placeholder entries for any leaked-but-unused free
+        # symbol so ``sdfg.arglist()`` doesn't ``KeyError`` on
+        # ``self.symbols[k]``.  Restored after the loop; the leaked
+        # entries never enter ``args_list`` because the filter below
+        # drops them.
+        from dace import dtypes as _dtypes
+        leaked_syms = [
+            k for k in sdfg.free_symbols
+            if k not in sdfg.symbols
+            and k not in sdfg.arrays
+            and not k.startswith('__dace')
+            and k not in needed_syms
+        ]
+        for k in leaked_syms:
+            sdfg.symbols[k] = _dtypes.int64
+        try:
+            arglist_items = list(sdfg.arglist().items())
+        finally:
+            for k in leaked_syms:
+                sdfg.symbols.pop(k, None)
+        for sdfg_name_, desc in arglist_items:
+            if sdfg_name_ in leaked_syms:
+                continue  # leaked-but-unused; not a real argument
             user_key = dace_to_user.get(sdfg_name_, sdfg_name_)
             v = (self.arrays.get(user_key) or self.symbols.get(user_key) or self.scalars.get(user_key))
             _dt = getattr(desc, 'dtype', None)
@@ -787,8 +818,12 @@ class SDFGBuilder:
         # Free symbols carrying module-global provenance: a scalar
         # module global the bridge lifted into a shape / bound symbol
         # (no SDFG arg, so the loop above never saw it).  The SDFG
-        # symbol name is the bridge's short Fortran name.
-        free_syms = tuple(sorted(str(s) for s in sdfg.free_symbols))
+        # symbol name is the bridge's short Fortran name.  Source the
+        # set from ``sdfg.free_symbols`` filtered against the
+        # use-site-derived ``needed_syms`` so leaked unused-transient
+        # shape symbols don't bloat the signature.
+        free_syms = tuple(sorted(
+            str(s) for s in sdfg.free_symbols if s not in leaked_syms))
         for s in free_syms:
             if s not in module_symbol_origins and s in origin_by_name:
                 module_symbol_origins[s] = origin_by_name[s]
@@ -810,6 +845,159 @@ class SDFGBuilder:
             module_symbol_origins=module_symbol_origins,
         )
         sdfg._frozen_signature = fs
+
+    def _collect_needed_symbols(self, sdfg: SDFG) -> set:
+        """Return the set of symbol names ACTUALLY referenced at a use
+        site in the SDFG.
+
+        Equivalent to ``sdfg.free_symbols`` except for the
+        array-descriptor sweep at the end of
+        :meth:`dace.SDFG._used_symbols_internal`, which adds the shape /
+        stride / offset symbols of EVERY array -- including unused
+        transients the SDFG never accesses.  Here we restrict that
+        sweep to arrays that appear as an ``AccessNode``'s data or as a
+        memlet's ``data`` field, so a transient whose shape symbol is
+        never referenced anywhere doesn't bloat the signature.
+
+        Implemented on top of each node's / region's / edge's own
+        ``free_symbols`` (the dace public API), so no string parsing or
+        whitelist is required.
+
+        :param sdfg: SDFG to walk.
+        :returns: A set of symbol names (str) referenced at some use
+            site, with array names removed.
+        """
+        from dace.sdfg.nodes import AccessNode
+        from dace.sdfg.state import ControlFlowRegion
+        # Defined-at-SDFG: array names + module constants are not free
+        # symbols.  Seed ``defined_syms`` with them so the walker
+        # excludes them from the free set.
+        defined = set(sdfg.arrays.keys()) | set(sdfg.constants_prop.keys())
+        # Call the parent class's walker (``ControlFlowRegion``)
+        # directly to get the correct block-scope handling (LoopRegion
+        # loop_variables, MapEntry params, interstate-edge LHS
+        # assignments) WITHOUT triggering the SDFG override's
+        # array-descriptor sweep at the bottom of
+        # ``SDFG._used_symbols_internal`` -- which adds every array's
+        # shape / stride symbols regardless of whether the array is
+        # referenced anywhere.
+        free_syms, defined_syms, _ = ControlFlowRegion._used_symbols_internal(
+            sdfg, all_symbols=True,
+            defined_syms=set(defined),
+            free_syms=set(),
+            used_before_assignment=set(),
+            with_contents=True)
+        # SDFG-declared symbols are part of the free set when
+        # ``all_symbols=True`` (mirrors the SDFG override at
+        # ``sdfg.py:3099``).
+        free_syms |= set(sdfg.symbols.keys())
+        free_syms -= defined_syms
+        # USED-array shape / stride / offset symbols.  Restrict to
+        # arrays actually referenced by an AccessNode or a memlet
+        # ``data`` field; an unused transient contributes nothing.
+        used_arrays: set = set()
+        for state in sdfg.all_states():
+            for n in state.nodes():
+                if isinstance(n, AccessNode):
+                    used_arrays.add(n.data)
+            for edge in state.edges():
+                m = edge.data
+                if m is not None and getattr(m, 'data', None):
+                    used_arrays.add(m.data)
+        for name in used_arrays:
+            arr = sdfg.arrays.get(name)
+            if arr is None:
+                continue
+            free_syms |= {str(s) for s in arr.used_symbols(all_symbols=True)}
+        return (free_syms - defined_syms) - set(sdfg.arrays.keys())
+
+    def _diagnose_unresolved_free_symbols(self, sdfg: SDFG, needed: set):
+        """Surface a precise error before ``sdfg.arglist()`` raises an
+        opaque ``KeyError``.
+
+        ``sdfg.arglist`` looks every free symbol up in ``sdfg.symbols`` and
+        raises a bare ``KeyError`` on the first missing name -- with no
+        indication of where the symbol is referenced or why it's unresolved.
+        The dominant cause is the bridge collapsing an unflattened
+        struct-member access chain (e.g. ``s%X(...)%Y``) to the bare struct
+        base name in ``expressions.cpp::buildExpr`` -- the chain dead-ends
+        at the struct dummy because flatten-structs left the member
+        untouched (typically an alloc-array-of-records inner member).
+
+        The check fires only on symbols ACTUALLY USED at some site (so an
+        unused-transient shape symbol leaking through
+        ``sdfg.free_symbols`` is filtered out).  For each unresolved
+        symbol, point at a representative tasklet / memlet that
+        references it.
+
+        :param sdfg: The freshly built SDFG, immediately before
+            ``arglist()`` is consulted.
+        :param needed: The use-site-derived symbol set produced by
+            :meth:`_collect_needed_symbols`.
+        :raises RuntimeError: If any actually-used symbol is neither
+            registered on the SDFG nor a dace-internal name.
+        """
+        import re
+        from dace.sdfg.nodes import Tasklet, NestedSDFG
+        unresolved = sorted(
+            k for k in needed
+            if k not in sdfg.symbols
+            and k not in sdfg.arrays
+            and not k.startswith('__dace')
+        )
+        if not unresolved:
+            return
+        # Find up to three representative use sites for the first symbol so
+        # the user sees the exact tasklet / memlet that's referencing the
+        # bare name.  Word-boundary match to avoid substring noise (e.g. a
+        # symbol ``p_patch`` would otherwise match ``p_patch_nlev``).
+        target = unresolved[0]
+        pat = re.compile(rf'(?<![A-Za-z0-9_]){re.escape(target)}(?![A-Za-z0-9_])')
+        examples: list = []
+        for state in sdfg.all_states():
+            for edge in state.edges():
+                m = edge.data
+                if m is None or not getattr(m, 'data', None):
+                    continue
+                subset_str = f'{m.subset}'
+                if pat.search(subset_str):
+                    examples.append(
+                        f'memlet[{state.label}] data={m.data} '
+                        f'subset={subset_str[:160]}')
+                    if len(examples) >= 3:
+                        break
+            if len(examples) >= 3:
+                break
+            for n in state.nodes():
+                if isinstance(n, Tasklet) and pat.search(n.code.as_string):
+                    examples.append(
+                        f'tasklet[{state.label}::{n.label}] '
+                        f'code={n.code.as_string[:160]}')
+                    if len(examples) >= 3:
+                        break
+                if isinstance(n, NestedSDFG):
+                    for k, v in n.symbol_mapping.items():
+                        if pat.search(str(v)):
+                            examples.append(
+                                f'nsdfg[{state.label}::{n.label}] '
+                                f'symbol_mapping[{k}]={v}')
+                            if len(examples) >= 3:
+                                break
+            if len(examples) >= 3:
+                break
+        hint = (
+            'Most likely cause: the bridge collapsed an unflattened struct-'
+            'member access chain (e.g. ``s%X(...)%Y``) to the bare struct '
+            'base name.  Common pattern: an alloc-array-of-records member '
+            '(``box<heap<array<? x record>>>``) whose inner record-element '
+            'members are read as scalars -- the flatten pass skips the '
+            'member and the access chain dead-ends at the struct root.')
+        bullet = '\n  '.join(examples) if examples else '(no use site found)'
+        raise RuntimeError(
+            f'unresolved free symbol(s) in SDFG: {unresolved[:5]}'
+            f'{"" if len(unresolved) <= 5 else f" (+{len(unresolved) - 5} more)"}'
+            f'\nfirst representative use site(s) for {target!r}:\n  {bullet}'
+            f'\n\n{hint}')
 
     def nid(self) -> int:
         """Globally unique integer.  Shared across ``_Ctx`` instances so
