@@ -1977,6 +1977,13 @@ struct FlattenStructsPass
     // leaf assign into a flat ``val_var_<leaf> = indices_<leaf>``.
     decomposeStructAssigns(func);
 
+    // Step 0.4: (C) split a multi-dim array-of-records member with SCALAR
+    // inner record members (ICON's ``s%edges%primal_normal_cell(i,j,k)%v1``
+    // pattern -- ``t_tangent_vectors{v1: f64, v2: f64}``) into one
+    // dynamic-shape companion array dummy per inner member.  Inserts the
+    // companion dummies before Step 0.5 / Step 1 see them.
+    bool splitMD = splitMultiDimAoRScalarMembers(func);
+
     // Step 0.5: (B) split an allocatable array-of-records struct-dummy member
     // accessed only by stable index symbols (ICON's prog(nnow)/prog(nnew)
     // double buffer) into one scalar-struct dummy per symbol, so Step 1 flattens
@@ -1988,7 +1995,7 @@ struct FlattenStructsPass
     // eraseArgument) don't invalidate later iterations.
     bool rewroteArgs = planAndReplaceStructArgs(func);
 
-    if (splitArgs || rewroteArgs) {
+    if (splitMD || splitArgs || rewroteArgs) {
       auto &block = func.front();
       auto newInputs = llvm::to_vector(block.getArgumentTypes());
       func.setType(mlir::FunctionType::get(
@@ -2134,6 +2141,225 @@ struct FlattenStructsPass
       b.create<hlfir::AssignOp>(loc, rhsValue, lhsLeaf);
     }
     op.erase();
+  }
+
+  /// (C) Multi-dim AoR with scalar inner members.  A function-argument-rooted
+  /// alloc / pointer array-of-records (rank >= 1) whose element type is a
+  /// record with ONLY scalar leaf members (no inner pointer / allocatable /
+  /// array members), accessed as ``<chain>(<idx>...)%<inner>``, is split into
+  /// one dynamic-shape companion-array dummy per inner member
+  /// (``<base>[_<member path>]_<inner>`` with rank = AoR rank, dtype = inner
+  /// scalar).  Each access chain is rewritten to a designate on the matching
+  /// companion at the same indices.
+  ///
+  /// ICON canonical pattern (``t_patch%edges%primal_normal_cell(i,j,k)%v1``
+  /// with ``t_tangent_vectors {v1: f64, v2: f64}``): splits into two
+  /// rank-3 dynamic-shape ``f64`` companions
+  /// ``p_patch_edges_primal_normal_cell_v1`` and ``...v2``.  The bindings
+  /// layer is responsible for marshalling strided views into the companions
+  /// from the original AoR's box descriptor at call time -- this pass only
+  /// performs the structural rewrite so the SDFG builds.
+  ///
+  /// Bails (returns false, leaves the function untouched) if any access uses
+  /// an inner record with non-scalar members.
+  ///
+  /// :param func: the function whose AoR-rooted dummies to split.
+  /// :returns: true if a per-inner-member companion was inserted.
+  bool splitMultiDimAoRScalarMembers(mlir::func::FuncOp func) {
+    auto &block = func.front();
+    auto *ctx = func.getContext();
+
+    // Map: ``argDecl.getResult(0)`` -> demangled base + argDecl.
+    llvm::DenseMap<mlir::Value, std::pair<std::string, hlfir::DeclareOp>> argDecls;
+    for (unsigned i = 0; i < block.getNumArguments(); ++i) {
+      hlfir::DeclareOp argDecl;
+      for (auto *u : block.getArgument(i).getUsers())
+        if (auto d = mlir::dyn_cast<hlfir::DeclareOp>(u)) {
+          argDecl = d;
+          break;
+        }
+      if (!argDecl) continue;
+      argDecls.try_emplace(argDecl.getResult(0),
+                           demangleVarName(argDecl.getUniqName()), argDecl);
+    }
+    if (argDecls.empty()) return false;
+
+    // Key: (root, access-order member path, inner-member name).
+    struct Key {
+      void *root;
+      std::vector<std::string> path;
+      std::string inner;
+      bool operator<(const Key &o) const {
+        if (root != o.root) return root < o.root;
+        if (path != o.path) return path < o.path;
+        return inner < o.inner;
+      }
+    };
+    struct Site {
+      hlfir::DesignateOp innerDg;  // the inner-member designate to replace
+      hlfir::DesignateOp elemDg;   // the multi-dim element designate
+    };
+    std::map<Key, llvm::SmallVector<Site, 4>> sites;
+    llvm::SmallPtrSet<mlir::Operation *, 32> deadOps;
+    // Track per-Key inner-member scalar type (must be uniform across sites).
+    std::map<Key, mlir::Type> innerScalarTy;
+    // Track per-(root, path) the AoR's element record type so we can verify
+    // it has only scalar leaves.
+    std::map<std::pair<void *, std::vector<std::string>>, fir::RecordType>
+        elemRecByPath;
+
+    func.walk([&](hlfir::DesignateOp innerDg) {
+      // Inner-member designate: has component, no subscripts.
+      auto innerComp = innerDg.getComponentAttr();
+      if (!innerComp) return;
+      if (!innerDg.getIndices().empty()) return;
+      auto innerName = innerComp.getValue().str();
+
+      // Memref must be an element designate: subscripts, no component.
+      auto elemDg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
+          innerDg.getMemref().getDefiningOp());
+      if (!elemDg) return;
+      if (elemDg.getComponentAttr()) return;
+      if (elemDg.getIndices().empty()) return;
+
+      // Element designate's memref must be a loaded box.
+      auto ld = mlir::dyn_cast_or_null<fir::LoadOp>(
+          elemDg.getMemref().getDefiningOp());
+      if (!ld) return;
+
+      // Walk back via the member-designate chain to a function-arg declare.
+      llvm::SmallVector<std::string, 4> walkedPath;
+      llvm::SmallPtrSet<mlir::Operation *, 8> chainDead;
+      chainDead.insert(ld);
+      chainDead.insert(elemDg);
+      chainDead.insert(innerDg);
+      mlir::Value v = ld.getMemref();
+      while (true) {
+        auto *d = v.getDefiningOp();
+        auto md = mlir::dyn_cast_or_null<hlfir::DesignateOp>(d);
+        if (!md) break;
+        auto comp = md.getComponentAttr();
+        if (!comp) break;
+        walkedPath.push_back(comp.getValue().str());
+        chainDead.insert(md);
+        v = md.getMemref();
+      }
+      auto it = argDecls.find(v);
+      if (it == argDecls.end()) return;
+
+      // Element record type comes from the elemDg result (ref<RecordType>).
+      auto refTy =
+          mlir::dyn_cast<fir::ReferenceType>(elemDg.getResult().getType());
+      if (!refTy) return;
+      auto elemRec = mlir::dyn_cast<fir::RecordType>(refTy.getEleTy());
+      if (!elemRec) return;
+
+      // Verify the inner record has only scalar leaves (no allocatable /
+      // pointer / array / sub-record members).  If anything looks like an
+      // alloc-array-of-records inner member, skip -- that's the
+      // ``LiftAllocArrayOfRecords`` lane.
+      bool scalarOnly = true;
+      mlir::Type matchedInnerTy;
+      for (auto &p : elemRec.getTypeList()) {
+        // Member type must be a plain scalar: integer / float / complex /
+        // logical -- not an array, box, record, ptr, or heap.
+        if (mlir::isa<fir::SequenceType, fir::BoxType, fir::RecordType,
+                      fir::HeapType, fir::PointerType, fir::ReferenceType,
+                      fir::CharacterType>(p.second)) {
+          scalarOnly = false;
+          break;
+        }
+        if (p.first == innerName) matchedInnerTy = p.second;
+      }
+      if (!scalarOnly || !matchedInnerTy) return;
+
+      Key key;
+      key.root = v.getAsOpaquePointer();
+      key.path.assign(walkedPath.rbegin(), walkedPath.rend());
+      key.inner = innerName;
+
+      auto recKey = std::make_pair(key.root, key.path);
+      elemRecByPath[recKey] = elemRec;
+
+      sites[key].push_back({innerDg, elemDg});
+      innerScalarTy[key] = matchedInnerTy;
+      deadOps.insert(chainDead.begin(), chainDead.end());
+    });
+    if (sites.empty()) return false;
+
+    bool changed = false;
+    for (auto &kv : sites) {
+      auto root = mlir::Value::getFromOpaquePointer(kv.first.root);
+      auto rootIt = argDecls.find(root);
+      if (rootIt == argDecls.end()) continue;
+      auto &[demangledBase, argDecl] = rootIt->second;
+      auto innerTy = innerScalarTy[kv.first];
+
+      // Determine the AoR rank from the first site's element designate.
+      unsigned outerRank = kv.second[0].elemDg.getIndices().size();
+
+      // Companion type: ``ref<box<heap<array<? x ... x ? x innerTy>>>>``.
+      // Dynamic shape -- the bridge's allocatable-array path will
+      // synth shape symbols (``<name>_d0``, ``_d1``, ...) at extract
+      // time and the bindings layer is expected to populate them.
+      llvm::SmallVector<int64_t, 4> dynShape(
+          outerRank, fir::SequenceType::getUnknownExtent());
+      auto arrTy = fir::SequenceType::get(dynShape, innerTy);
+      auto heapTy = fir::HeapType::get(arrTy);
+      auto boxTy = fir::BoxType::get(heapTy);
+      auto refBoxTy = fir::ReferenceType::get(boxTy);
+
+      mlir::OpBuilder b(argDecl);
+      b.setInsertionPointAfter(argDecl);
+      unsigned newIdx = block.getNumArguments();
+      block.insertArgument(newIdx, refBoxTy, argDecl.getLoc());
+      auto newArg = block.getArgument(newIdx);
+
+      std::string name = demangledBase;
+      for (auto &p : kv.first.path) name += "_" + p;
+      name += "_" + kv.first.inner;
+
+      mlir::NamedAttrList attrs;
+      attrs.append("uniq_name", mlir::StringAttr::get(ctx, name));
+      attrs.append("fortran_attrs",
+                   fir::FortranVariableFlagsAttr::get(
+                       ctx, fir::FortranVariableFlagsEnum::allocatable));
+      attrs.append(declareSegments(b, /*hasShape=*/false));
+      auto decl = b.create<hlfir::DeclareOp>(
+          argDecl.getLoc(), mlir::TypeRange{refBoxTy, refBoxTy},
+          mlir::ValueRange{newArg}, attrs);
+
+      for (auto &site : kv.second) {
+        mlir::OpBuilder sb(site.innerDg);
+        // Load the box, then designate the element at the original indices.
+        auto loadedBox = sb.create<fir::LoadOp>(site.innerDg.getLoc(),
+                                                  decl.getResult(0));
+        // Construct a fresh designate over the companion box at the same
+        // indices.  ``hlfir.designate`` for an element access takes the
+        // memref, the indices, optional component, and either a shape or
+        // a typeparam; here we only need memref + indices.
+        auto elemRefTy = fir::ReferenceType::get(innerTy);
+        llvm::SmallVector<mlir::Value, 4> idxs(site.elemDg.getIndices().begin(),
+                                                site.elemDg.getIndices().end());
+        // Use the 7-argument convenience build (element access only,
+        // no component / shape / triplets / substring / complex_part).
+        auto newDg = sb.create<hlfir::DesignateOp>(
+            site.innerDg.getLoc(), elemRefTy, loadedBox.getResult(),
+            /*indices=*/idxs,
+            /*typeparams=*/mlir::ValueRange{},
+            /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
+        site.innerDg.getResult().replaceAllUsesWith(newDg.getResult());
+        site.innerDg.erase();
+      }
+      changed = true;
+    }
+    // Drop the dead element designates and member-chain ops.  The element
+    // designate is unconditionally dead after the rewrite (its only user
+    // was the innerDg we replaced); the member chain is dead only if no
+    // other access through the same path remained.
+    for (auto *op : deadOps)
+      if (op->use_empty()) op->erase();
+    return changed;
   }
 
   /// (B) Double-buffer split.  A function-argument-rooted alloc / pointer
