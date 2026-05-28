@@ -122,10 +122,14 @@ def build_fortran_library(
                        around the binding module's ``<entry>_dace``
                        procedure -- and link it into the library so
                        the ``.so`` exposes a stable C-ABI entry
-                       point.  Supports flat-arg kernels only today
-                       (raises
+                       point.  Supports flat-arg kernels and
+                       derived-type dummies whose every member is
+                       inline-flat (scalar or static-shape array of
+                       scalar).  Raises
                        :class:`UnsupportedShimInterfaceError` on a
-                       derived-type :class:`OriginalInterface`).
+                       non-inline-flat struct member (allocatable /
+                       pointer / dynamic shape / nested derived
+                       type).
     :returns: a :class:`FortranLibrary` handle.
     :raises SignatureDriftError: if the live SDFG drifted from the
             snapshot -- raised before the binding is emitted.
