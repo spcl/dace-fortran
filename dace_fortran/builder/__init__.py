@@ -146,6 +146,18 @@ DEFAULT_PIPELINE = (
     # FlattenStructs's opaque-skip for alloc-array-of-records members
     # provides the safety net for un-handled patterns.
     "hlfir-lift-alloc-array-of-records,"
+    # Pre-stage the alloc-array-of-records dummy splits BEFORE
+    # marshal-external-structs.  ``splitDoubleBufferMembers`` rewrites
+    # ``s%prog(nnow)`` element designates to a fresh scalar-struct
+    # dummy ``s_prog_nnow``; ``splitMultiDimAoRScalarMembers`` does the
+    # same for ``s%X(i,j,k)%v1`` with scalar inner members.  Marshal
+    # then sees the call's struct args under the NEW dummy names so
+    # the per-member designates it generates land on ``s_prog_nnow%w``
+    # (not ``s%prog(nnow)%w``) -- a chain that the scalar-struct
+    # flatten below resolves cleanly to the flat leaf.  The full
+    # ``hlfir-flatten-structs`` re-runs the splits (idempotent no-op)
+    # and adds ``planAndReplaceStructArgs`` on top.
+    "hlfir-split-aor-dummies,"
     # Expand the struct argument of a registered external (``keep_external``)
     # call into its individual members, so flatten-structs turns each into the
     # SoA flat the SDFG dataflow uses; the binding emitter re-packs the SoA

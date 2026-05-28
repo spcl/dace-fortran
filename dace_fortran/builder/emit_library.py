@@ -530,7 +530,23 @@ def emit_call(builder, ctx, n, region):
                                  f"an SDFG array")
             dt = desc.dtype
             ctype = dt.ctype  # the member's concrete C scalar type (e.g. "double")
-            nel = int(prod(desc.shape)) if getattr(desc, "shape", None) else 1
+            # ``int(prod(shape))`` fails for symbolic shapes -- ICON's
+            # dynamic-extent box members render their shape as symbol
+            # products (``s_w_d0 * s_w_d1 * s_w_d2``).  The AoS pack/unpack
+            # body for such a member is not statically computable; the
+            # node is destined for ``inline_external`` rewrite before
+            # codegen so the body is never emitted, but ``emit_call``
+            # still needs a syntactically valid placeholder.  ``nel == 0``
+            # signals "skip pack/unpack" -- handled by the body lines
+            # below.
+            shape = getattr(desc, "shape", None)
+            if shape:
+                try:
+                    nel = int(prod(shape))
+                except TypeError:
+                    nel = 0
+            else:
+                nel = 1
             reads = intent in ('in', 'inout')
             writes = intent in ('out', 'inout')
             cin, cout = f"_a{i}", f"_a{i}_o"
@@ -585,11 +601,19 @@ def emit_call(builder, ctx, n, region):
         # One struct field per member: ``T mK;`` (scalar) or ``T mK[N];``
         # (array).  The field layout mirrors the Fortran derived type, so the
         # external's AoS pointer addresses the same contiguous bytes.
-        fields = " ".join(f"{ct} m{k};" if nel == 1 else f"{ct} m{k}[{nel}];"
-                          for k, (ct, nel, _, _) in enumerate(mems))
+        # ``nel == 0`` is the dynamic-shape sentinel: AoS pack/unpack for
+        # that member is statically unrenderable and the node is destined
+        # for ``inline_external`` rewrite before codegen.  Render the field
+        # as a pointer placeholder so the surrounding struct stays well-
+        # formed and skip the pack/unpack lines below.
+        fields = " ".join(
+            (f"{ct} m{k};" if nel == 1 else
+             f"{ct}* m{k};" if nel == 0 else
+             f"{ct} m{k}[{nel}];")
+            for k, (ct, nel, _, _) in enumerate(mems))
         body_lines.append(f"struct {{ {fields} }} {buf};")
         for k, (ct, nel, cin, cout) in enumerate(mems):
-            if cin is None:
+            if cin is None or nel == 0:
                 continue
             if nel == 1:
                 body_lines.append(f"{buf}.m{k} = (*{cin});")
@@ -600,7 +624,7 @@ def emit_call(builder, ctx, n, region):
     body_lines.append(f"{sig.c_name}({', '.join(call_args_c)});")
     for gid, mems in group_members.items():
         for k, (ct, nel, cin, cout) in enumerate(mems):
-            if cout is None:
+            if cout is None or nel == 0:
                 continue
             if nel == 1:
                 body_lines.append(f"(*{cout}) = {bufname[gid]}.m{k};")

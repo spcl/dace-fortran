@@ -51,10 +51,16 @@ static bool isScalarMember(mlir::Type t) {
   return false;
 }
 
-/// A member the marshalling handles: a simple scalar, or a static-shape array
-/// of one  --  both inline contiguous storage the binding emitter can pack
-/// into / unpack from an AoS buffer.  Allocatable / pointer / dynamic-extent
-/// members (runtime descriptors) and nested records are out of scope.
+/// A member the *inline-flat AoS pack/unpack* path handles: a simple scalar,
+/// or a static-shape array of one -- both inline contiguous storage the
+/// binding emitter can deep-copy through a C struct buffer.
+///
+/// Distinct from the marshal expansion step (which is permissive for ANY
+/// member -- v2): box / nested-record / char members are admissible for
+/// expansion so flatten-structs + emit_call can wire the call's per-member
+/// SoA leaves, but they cannot participate in the inline-flat AoS pack/unpack
+/// path the binding emitter runs for ``Arg(kind="aos")``.  The inline-only
+/// callee path (``inline_external``) sidesteps the pack/unpack entirely.
 static bool isInlineFlatMember(mlir::Type t) {
   if (isScalarMember(t)) return true;
   if (auto seq = mlir::dyn_cast<fir::SequenceType>(t)) {
@@ -68,7 +74,8 @@ static bool isInlineFlatMember(mlir::Type t) {
 
 /// True iff every member of ``rec`` is inline-flat (scalar or static array of
 /// scalar); the marshalling can then deep-copy each member to / from the AoS
-/// buffer.
+/// buffer.  Distinct from ``allExpandableMembers`` (v2) -- inline-flat is the
+/// stricter shape the binding emitter's AoS pack/unpack path requires.
 static bool allInlineFlatMembers(fir::RecordType rec) {
   if (rec.getTypeList().empty()) return false;
   for (auto &p : rec.getTypeList())
@@ -77,6 +84,11 @@ static bool allInlineFlatMembers(fir::RecordType rec) {
 }
 
 /// The marshalable struct a reference type points at, or null.
+///
+/// v1 strict shape (in current use): every member is inline-flat (a scalar
+/// or a static-shape array of scalar).  The v2 permissive shape (every
+/// member admissible) is a separate experiment -- see
+/// ``project_external_call_inline_marshal_v2`` in memory for the design.
 static fir::RecordType scalarStructPointee(mlir::Type argTy) {
   auto ref = mlir::dyn_cast<fir::ReferenceType>(argTy);
   if (!ref) return {};

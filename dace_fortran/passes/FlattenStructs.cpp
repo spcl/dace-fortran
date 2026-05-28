@@ -1586,8 +1586,27 @@ struct FlattenStructsPass
                                mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(FlattenStructsPass)
 
-  llvm::StringRef getArgument() const final { return "hlfir-flatten-structs"; }
+  /// When true, only the AoR-element-access splits run; the
+  /// scalar-struct flatten (``planAndReplaceStructArgs``) is skipped.
+  /// Used by the ``hlfir-split-aor-dummies`` pipeline entry to seed
+  /// per-symbol / per-inner-member scalar-struct dummies BEFORE
+  /// ``hlfir-marshal-external-structs`` runs, so marshal sees the new
+  /// dummies as the call's struct args and can expand them into per-
+  /// member designates on the new dummy's name.  The full
+  /// ``hlfir-flatten-structs`` run later in the pipeline picks up the
+  /// already-split state (the split helpers are idempotent) and does
+  /// the scalar-struct flatten on top.
+  bool splitOnly = false;
+
+  llvm::StringRef getArgument() const final {
+    return splitOnly ? "hlfir-split-aor-dummies" : "hlfir-flatten-structs";
+  }
   llvm::StringRef getDescription() const final {
+    if (splitOnly)
+      return "Run only the alloc-array-of-records dummy splits "
+             "(splitMultiDimAoRScalarMembers + splitDoubleBufferMembers); "
+             "skip the scalar-struct flatten.  Pre-stage for marshal-"
+             "external-structs.";
     return "Flatten derived types with flat members into per-member "
            "companions (AoS -> SoA), rewriting struct-typed dummy "
            "arguments, renaming the function, and splitting local "
@@ -1975,7 +1994,11 @@ struct FlattenStructsPass
     // values) becomes one ``hlfir.assign`` per leaf of the struct
     // type; the existing designate-rewrite path then folds each
     // leaf assign into a flat ``val_var_<leaf> = indices_<leaf>``.
-    decomposeStructAssigns(func);
+    // SKIPPED in split-only mode: the full ``hlfir-flatten-structs``
+    // run later in the pipeline handles it, and running it twice can
+    // leave a transient designate state that the inter-pass verifier
+    // rejects.
+    if (!splitOnly) decomposeStructAssigns(func);
 
     // Step 0.4: (C) split a multi-dim array-of-records member with SCALAR
     // inner record members (ICON's ``s%edges%primal_normal_cell(i,j,k)%v1``
@@ -1989,6 +2012,21 @@ struct FlattenStructsPass
     // double buffer) into one scalar-struct dummy per symbol, so Step 1 flattens
     // each via the scalar path.  Inserts the new dummies before Step 1 sees them.
     bool splitArgs = splitDoubleBufferMembers(func);
+
+    if (splitOnly) {
+      // ``hlfir-split-aor-dummies`` mode: only the splits run.  Update
+      // the function type so the block argument-list change validates;
+      // skip the ``_soa`` rename so the full ``hlfir-flatten-structs``
+      // run later finds the function under its original (or
+      // marshal-rewritten) name.
+      if (splitMD || splitArgs) {
+        auto &block = func.front();
+        auto newInputs = llvm::to_vector(block.getArgumentTypes());
+        func.setType(mlir::FunctionType::get(
+            func.getContext(), newInputs, func.getFunctionType().getResults()));
+      }
+      return;
+    }
 
     // Step 1: collect struct-typed dummy arguments, rewrite them in
     // one pass over the original index list so mutations (insertArgument /
@@ -4350,6 +4388,12 @@ std::vector<ShallowAliasInfo> computeShallowAliasReport(mlir::ModuleOp module) {
 
 std::unique_ptr<mlir::Pass> createFlattenStructsPass() {
   return std::make_unique<FlattenStructsPass>();
+}
+
+std::unique_ptr<mlir::Pass> createSplitAoRDummiesPass() {
+  auto p = std::make_unique<FlattenStructsPass>();
+  p->splitOnly = true;
+  return p;
 }
 
 }  // namespace hlfir_bridge

@@ -40,6 +40,9 @@ void registerAllBridgePasses() {
     return createFlattenStructsPass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createSplitAoRDummiesPass();
+  });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createDefaultIntentPass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
