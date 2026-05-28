@@ -27,6 +27,10 @@ Public surface:
          --  emit + drift-verify + link a Fortran-callable .so
 """
 
+from dace_fortran.bindings.bind_c_shim import (
+    UnsupportedShimInterfaceError,
+    emit_bind_c_shim,
+)
 from dace_fortran.bindings.build_fortran_library import (
     FortranLibrary,
     build_fortran_library,
@@ -69,6 +73,9 @@ __all__ = [
     "strip_index_args",
     # Emitter
     "emit_bindings",
+    # bind(c) shim auto-gen (Phase 2.4)
+    "emit_bind_c_shim",
+    "UnsupportedShimInterfaceError",
     # Fortran-callable library builder
     "build_fortran_library",
     "FortranLibrary",
