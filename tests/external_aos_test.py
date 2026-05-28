@@ -26,6 +26,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from _helpers import xfail
 from _util import build_sdfg, have_flang
 from dace_fortran.external import Arg, clear_external_registry, keep_external
 
@@ -424,5 +425,94 @@ end module
         np.testing.assert_allclose(w, np.arange(16) * 2.0)   # field: shallow x2
         np.testing.assert_allclose(arr, exp_arr)             # blk: deep-copy roundtrip
         np.testing.assert_allclose(vn, 1.0)                  # untouched
+    finally:
+        clear_external_registry()
+
+
+# ---------------------------------------------------------------------------
+#  v2 marshal boundary (Phase 2.3.E) -- the strict v1
+#  ``isInlineFlatMember`` check in ``MarshalExternalStructs.cpp`` skips any
+#  struct with a non-scalar / non-static-array member (allocatable / pointer
+#  arrays, nested derived types, dynamic-shape members).  These tests pin
+#  the resulting diagnostic surface so the v2 permissive expansion has a
+#  clear target.  Workaround: ``dace_fortran.external.inline_external``
+#  bypasses marshalling entirely (the callee SDFG is folded into the
+#  caller); see ``tests/inline_external_test.py`` for that path.
+# ---------------------------------------------------------------------------
+
+
+# Shared kernel source for the two v2-boundary tests below.  The outer
+# struct ``outer_t`` has a *nested* derived-type member ``inner_t`` --
+# enough to fail the strict v1 ``isInlineFlatMember`` (which requires
+# every member to be a scalar or a static-shape array *of scalar*; a
+# nested record type isn't ``fir::SequenceType`` at all).  bind(c) is
+# *not* declared on the interface block, so flang stays semantically
+# happy with the non-interoperable shape.
+_V2_NESTED_SRC = """
+module m_v2
+  use iso_c_binding
+  implicit none
+  type :: inner_t
+    real(c_double) :: u
+    real(c_double) :: v
+  end type
+  type :: outer_t
+    type(inner_t) :: ip
+    real(c_double) :: scale
+  end type
+contains
+  subroutine kern(s)
+    type(outer_t), intent(inout) :: s
+    interface
+      subroutine ext_v2(p)
+        import :: outer_t
+        type(outer_t), intent(inout) :: p
+      end subroutine
+    end interface
+    call ext_v2(s)
+  end subroutine
+end module
+"""
+
+
+@xfail("Phase 2.3.E: hlfir-marshal-external-structs v1 skips structs "
+       "with nested derived-type members; emit_call then raises 'aos arg "
+       "has no marshalling group'.  v2 permissive expansion is the fix; "
+       "inline_external is the working alternative.")
+def test_v2_aos_external_with_nested_struct(tmp_path):
+    """``keep_external(kind='aos')`` on a callee whose struct has a
+    nested derived-type member -- the smallest shape that still trips
+    the strict v1 ``isInlineFlatMember`` check.
+
+    Pinned ``xfail`` until v2 marshal expansion lands.  The diagnostic
+    ``emit_call`` raises today is expected to point the reader at
+    ``inline_external`` and at this test; that contract is verified
+    separately by
+    :func:`test_v2_aos_external_diagnostic_mentions_inline_external`."""
+    clear_external_registry()
+    try:
+        keep_external("ext_v2",
+                      args=(Arg(kind="aos", intent="inout"), ))
+        build_sdfg(_V2_NESTED_SRC, tmp_path, name="kern",
+                   entry="_QMm_v2Pkern").build()
+    finally:
+        clear_external_registry()
+
+
+def test_v2_aos_external_diagnostic_mentions_inline_external(tmp_path):
+    """The ``emit_call`` failure for the v2 boundary must mention
+    :func:`dace_fortran.external.inline_external` so users know the
+    working workaround without having to dig into the bridge source.
+
+    Distinct from the ``xfail``-pinned scenario above: this one passes
+    today because it asserts on the *error message*, not on the build
+    succeeding.  When v2 expansion lands and the xfail flips, this one
+    must be retired alongside it."""
+    clear_external_registry()
+    try:
+        keep_external("ext_v2", args=(Arg(kind="aos", intent="inout"), ))
+        with pytest.raises(ValueError, match="inline_external"):
+            build_sdfg(_V2_NESTED_SRC, tmp_path, name="kern",
+                       entry="_QMm_v2Pkern").build()
     finally:
         clear_external_registry()

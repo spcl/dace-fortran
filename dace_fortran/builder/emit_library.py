@@ -590,9 +590,33 @@ def emit_call(builder, ctx, n, region):
     for a in sig.args:
         if a.kind == 'aos':
             if gi >= len(group_pairs):
-                raise ValueError(f"external {callee!r}: 'aos' arg #{gi} has no "
-                                 f"marshalling group (was "
-                                 f"hlfir-marshal-external-structs run?)")
+                # ``hlfir-marshal-external-structs`` only tags structs whose
+                # every member is inline-flat (scalar or static-shape array
+                # of scalar) -- the strict v1 ``isInlineFlatMember`` check
+                # (see ``MarshalExternalStructs.cpp``).  Box-typed
+                # (``allocatable`` / ``pointer``) members, nested derived
+                # types, and dynamic-shape members are the v2 boundary and
+                # the marshal pass silently skips them.  When that happens
+                # the call site keeps the whole-struct operand; the
+                # ``[start,count,...]`` tag the bridge would copy is absent;
+                # and this lookup fails.  Two ways forward for such a
+                # callee: (a) drop ``keep_external`` and use
+                # :func:`dace_fortran.external.inline_external` (the SDFG
+                # inlines callee's body, bypassing AoS marshalling
+                # entirely); (b) wait for the v2 marshal expansion that
+                # supports non-inline-flat members.
+                raise ValueError(
+                    f"external {callee!r}: 'aos' arg #{gi} has no "
+                    f"marshalling group.  Most likely "
+                    f"hlfir-marshal-external-structs skipped this callee "
+                    f"because its struct has non-inline-flat members "
+                    f"(allocatable / pointer arrays, nested derived types, "
+                    f"dynamic shape).  Workarounds: (1) use "
+                    f"dace_fortran.external.inline_external to fold the "
+                    f"callee's SDFG into the caller (no marshalling "
+                    f"needed); (2) restructure the callee to take only "
+                    f"inline-flat members; (3) wait for the v2 permissive "
+                    f"marshal expansion (Phase 2.3.E).")
             _, count = group_pairs[gi]
             for _ in range(count):
                 plan.append(('aos', a.dtype, a.intent, gi))
