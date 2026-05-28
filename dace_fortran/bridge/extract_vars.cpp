@@ -1762,9 +1762,16 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
     // ``x_alloc1``, ``x_alloc2``, ... (allocAliasName); the bridge's
     // alias map (see extract_ast.cpp) will route per-site reads /
     // writes to the right transient at AST-build time.
+    // Group allocatable + pointer here: both are descriptor-bearing and both
+    // get an ``<arr>_allocated`` tracker (the emission at ast/expressions.cpp
+    // and ast/control_flow.cpp returns ``<arr>_allocated`` for any
+    // ``box_addr`` -- the lowering of ``ALLOCATED(arr)`` AND ``ASSOCIATED(ptr)``
+    // -- so a pointer member without the tracker is referenced by emission but
+    // never registered, surfacing as a sdfg.arglist KeyError later).
     bool isAllocatable = false;
     if (auto a = op.getFortranAttrs())
-      if (bitEnumContainsAny(*a, fir::FortranVariableFlagsEnum::allocatable))
+      if (bitEnumContainsAny(*a, fir::FortranVariableFlagsEnum::allocatable) ||
+          bitEnumContainsAny(*a, fir::FortranVariableFlagsEnum::pointer))
         isAllocatable = true;
     std::vector<fir::AllocMemOp> allocSites;
     if (isAllocatable && v.rank > 0)

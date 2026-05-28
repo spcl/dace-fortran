@@ -463,6 +463,25 @@ def build_memlet_index(builder, array_name: str, access, iter_map: dict, indirec
         expr = exprs[dim] if dim < len(exprs) else v
         offset_sym = f"offset_{array_name}_d{dim}" if has_offset_sym else "1"
 
+        # Substitute every EMBEDDED indirect access in expr with its interned
+        # symbol so a dim like ``(ikidx[je,2,jk,jb] - 1)`` -- arithmetic
+        # wrapping an indirect read -- renders as ``(ikidx_at123 - 1)`` and
+        # doesn't leak the nested-bracket commas into the memlet subset.  The
+        # exact-match early-return below still catches the pure-indirect case
+        # (``ikidx[...]`` with no surrounding arithmetic).
+        if '[' in expr and indirect_syms:
+            while True:
+                replaced = False
+                for sub_start, sub_end, _arr, _parts in find_array_subscripts(
+                        expr, builder.arrays):
+                    sub = expr[sub_start:sub_end]
+                    if sub in indirect_syms:
+                        expr = expr[:sub_start] + indirect_syms[sub] + expr[sub_end:]
+                        replaced = True
+                        break  # positions invalidated; rescan
+                if not replaced:
+                    break
+
         # Indirect: substitute the minted symbol that holds the
         # Fortran 1-based runtime value, then offset uniformly.
         if '[' in expr and expr in indirect_syms:
