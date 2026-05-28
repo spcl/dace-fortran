@@ -80,7 +80,7 @@ def build_c_interface(frozen: FrozenSignature, iface: OriginalInterface, dace_ar
             # ``dace_user_comm`` / ``dace_user_comm_size`` that have
             # non-int dtypes.
             header_lines.append(f"      {a}")
-            body_lines.append(f"      {_init_symbol_decl(a)} :: {a}")
+            body_lines.append(f"      {_init_symbol_decl(a, frozen)} :: {a}")
             continue
         header_lines.append(f"      {a.sdfg_name}")
         if a.rank > 0:
@@ -110,13 +110,13 @@ def build_c_interface(frozen: FrozenSignature, iface: OriginalInterface, dace_ar
             body_lines.append(f"      {_fortran_c_value_type(a.dtype)}, value :: {a.sdfg_name}")
         else:
             body_lines.append(f"      type(c_ptr), value :: {a.sdfg_name}")
-    syms = _free_sym_names(frozen)
+    init_syms = _init_sym_names(frozen)
     init_arg_decls = "".join(
-        f"      {_init_symbol_decl(s)} :: {s}\n" for s in syms)
+        f"      {_init_symbol_decl(s, frozen)} :: {s}\n" for s in init_syms)
     rendered = tpl.format(entry=iface.entry,
                           c_arg_decls=",  &\n".join(header_lines),
                           c_arg_decls_body="\n".join(body_lines),
-                          init_args=", ".join(syms),
+                          init_args=", ".join(init_syms),
                           init_arg_decls=init_arg_decls)
     if any(a.kind == 'mpi_comm' for a in frozen.args) or frozen.user_comm_source:
         # Splice the ``MPI_Comm_f2c`` C binding into the same interface
@@ -142,12 +142,33 @@ _INIT_SYMBOL_DECL_OVERRIDES = {
 }
 
 
-def _init_symbol_decl(sym: str) -> str:
+def _init_symbol_decl(sym: str, frozen=None) -> str:
     """Fortran ``bind(c)`` decl for one ``__dace_init`` free-symbol
-    parameter.  Defaults to ``integer(c_int), value`` (ordinary shape /
-    bound symbols) but overrides the two pgrid-driving symbols
-    introduced by ``emit_mpi._install_user_pgrid``."""
-    return _INIT_SYMBOL_DECL_OVERRIDES.get(sym, "integer(c_int), value")
+    parameter.
+
+    Resolution order:
+
+    1. :data:`_INIT_SYMBOL_DECL_OVERRIDES` for the pgrid-driving symbols
+       introduced by ``emit_mpi._install_user_pgrid``.
+    2. The matching ``frozen.args`` entry's dtype when the symbol is
+       *also* a kernel argument (e.g. an ``int64`` AoS-allocatable
+       extent ``cap_<base>_<member>``, or an ``int64`` lower-bound
+       ``offset_<arr>_d<i>`` -- the init param dtype must match the
+       arg dtype DaCe codegen emits, regardless of whether the bridge
+       categorised it as ``kind='symbol'`` or ``kind='scalar'``).
+    3. Default ``integer(c_int), value`` (ordinary shape / bound symbol).
+
+    :param sym: SDFG free-symbol name.
+    :param frozen: frozen signature consulted for (2).  May be ``None``
+                   when only the override map and default are needed.
+    """
+    if sym in _INIT_SYMBOL_DECL_OVERRIDES:
+        return _INIT_SYMBOL_DECL_OVERRIDES[sym]
+    if frozen is not None:
+        for a in frozen.args:
+            if a.sdfg_name == sym and a.kind in ('symbol', 'scalar'):
+                return f"{_fortran_c_value_type(a.dtype)}, value"
+    return "integer(c_int), value"
 
 
 # ``MPI_Comm_f2c(MPI_Fint) -> MPI_Comm``: converts a Fortran integer
@@ -183,11 +204,23 @@ def _mpi_comm_local(sdfg_name: str) -> str:
 
 
 def _free_sym_names(frozen) -> list:
-    """Free symbols DaCe folds into ``__program`` / ``__dace_init``
-    (shape symbols like ``n``), sorted, excluding any that are already
-    an explicit ``frozen.args`` entry or DaCe-internal."""
+    """Free symbols DaCe folds into ``__program`` (shape symbols like
+    ``n``), sorted, excluding any that are already an explicit
+    ``frozen.args`` entry or DaCe-internal.
+
+    For the ``__dace_init`` argument list use :func:`_init_sym_names`
+    instead -- DaCe codegen passes *every* SDFG free symbol to init,
+    including those that are also kernel args (e.g. a scalar input
+    that doubles as an interstate-edge condition operand)."""
     argnames = {a.sdfg_name for a in frozen.args}
     return sorted(s for s in frozen.free_symbols if s not in argnames and not s.startswith('__dace'))
+
+
+def _init_sym_names(frozen) -> list:
+    """Symbol list for the ``__dace_init_<entry>`` call -- DaCe's init
+    routine takes every SDFG free symbol (alphabetically), regardless
+    of whether the same name is also a ``__program`` kernel arg."""
+    return sorted(s for s in frozen.free_symbols if not s.startswith('__dace'))
 
 
 def _dace_call_order(frozen, dace_arglist) -> list:
@@ -499,7 +532,7 @@ def build_wrapper_tail(frozen: FrozenSignature, iface: OriginalInterface, plan: 
     call_args = ",  &\n".join(f"      {_call_actual(a)}" for a in _dace_call_order(frozen, dace_arglist))
     call_block = tpl.format(entry=iface.entry,
                             call_arg_list=call_args,
-                            init_call_args=", ".join(_free_sym_names(frozen)))
+                            init_call_args=", ".join(_init_sym_names(frozen)))
 
     copy_out_lines: List[str] = []
     for entry in plan.entries:
