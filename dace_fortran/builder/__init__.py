@@ -834,6 +834,18 @@ class SDFGBuilder:
             user_key = dace_to_user.get(sdfg_name_, sdfg_name_)
             v = (self.arrays.get(user_key) or self.symbols.get(user_key) or self.scalars.get(user_key))
             _dt = getattr(desc, 'dtype', None)
+            if sdfg_name_ in ('dace_user_comm', 'dace_user_comm_size'):
+                # SDFG free symbols seeded by ``emit_mpi._install_user_pgrid``
+                # -- the bindings wrapper sources their values by calling
+                # ``MPI_Comm_f2c`` + ``MPI_Comm_size`` on the original
+                # Fortran integer communicator dummy (recorded on
+                # ``sdfg._fortran_user_comm_source``) and threads them
+                # through ``dace_init_<entry>`` so the pgrid's
+                # ``MPI_Cart_create`` runs with the user's comm as
+                # parent.  Skip from ``args_list`` -- they belong in the
+                # init-only path the bindings handle via
+                # ``free_symbols``.
+                continue
             if isinstance(_dt, dtypes.opaque) and _dt.ctype == 'MPI_Comm':
                 # A Fortran ``integer`` communicator dummy whose SDFG
                 # descriptor ``emit_mpi`` retyped to ``opaque(MPI_Comm)``;
@@ -899,6 +911,7 @@ class SDFGBuilder:
             args=tuple(args_list),
             free_symbols=free_syms,
             module_symbol_origins=module_symbol_origins,
+            user_comm_source=getattr(sdfg, '_fortran_user_comm_source', None),
         )
         sdfg._frozen_signature = fs
 

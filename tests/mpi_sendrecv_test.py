@@ -145,13 +145,18 @@ def test_isend_irecv_wait_lower_to_mpi_libnodes(tmp_path: Path):
 
 
 def test_runtime_communicator_lowers_to_comm_connector(tmp_path: Path):
-    """A non-default (runtime dummy) communicator is supported: the
-    ``Send`` node gains an ``opaque(MPI_Comm)`` ``_comm`` in-connector
-    and the Fortran integer ``comm`` dummy is retyped on the SDFG
-    signature to ``opaque(MPI_Comm)`` (the binding wrapper does
-    ``MPI_Comm_f2c``).  Supersedes the Phase-1 loud-rejection contract."""
+    """A non-default (runtime dummy) communicator is supported via a
+    :class:`FortranProcessGrid` descriptor: the ``Send`` node gains an
+    ``opaque(MPI_Comm)`` ``_comm`` in-connector wired to
+    ``dace_user_pgrid``; the pgrid's parent comm is the
+    ``dace_user_comm`` symbol the bindings wrapper populates from
+    ``MPI_Comm_f2c`` at ``__dace_init`` time.  The original Fortran
+    integer ``comm`` dummy is dropped from ``sdfg.arrays`` -- the C
+    MPI_Comm value flows through the pgrid's parent-comm symbol, not
+    through a kernel call arg."""
     import dace
     from dace.libraries.mpi.nodes.send import Send
+    from dace_fortran.data import FortranProcessGrid
 
     sdfg = _build(_USER_COMM, tmp_path, "sr_usercomm", "_QPsr_usercomm")
 
@@ -159,11 +164,24 @@ def test_runtime_communicator_lowers_to_comm_connector(tmp_path: Path):
     assert len(sends) == 1, f"expected 1 Send node, got {len(sends)}"
     assert '_comm' in sends[0].in_connectors
 
-    comm = sdfg.arrays['comm']
-    assert isinstance(comm.dtype, dace.dtypes.opaque) and comm.dtype.ctype == 'MPI_Comm'
+    # The orphan Fortran ``integer`` comm dummy was removed -- a
+    # FortranProcessGrid descriptor took its place.
+    assert 'comm' not in sdfg.arrays, (
+        "the Fortran integer ``comm`` dummy should be dropped from "
+        "sdfg.arrays once the pgrid takes over wiring")
+    assert 'dace_user_pgrid' in sdfg.arrays
+    pgrid = sdfg.arrays['dace_user_pgrid']
+    assert isinstance(pgrid, FortranProcessGrid)
+    assert pgrid.parent_comm_symbol == 'dace_user_comm'
 
-    fs = sdfg._frozen_signature
-    (comm_arg, ) = [a for a in fs.args if a.sdfg_name == 'comm']
-    assert comm_arg.kind == 'mpi_comm'
+    # Init/exit code references our pgrid (via state).
+    assert 'dace_user_pgrid' in sdfg.init_code['frame'].code
+    assert 'dace_user_pgrid' in sdfg.exit_code['frame'].code
+
+    # ``dace_user_comm`` is now an opaque(MPI_Comm) symbol the bindings
+    # wrapper must populate from ``MPI_Comm_f2c``.
+    assert 'dace_user_comm' in sdfg.symbols
+    assert isinstance(sdfg.symbols['dace_user_comm'], dace.dtypes.opaque)
+    assert sdfg.symbols['dace_user_comm'].ctype == 'MPI_Comm'
 
     sdfg.validate()

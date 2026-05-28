@@ -75,9 +75,12 @@ def build_c_interface(frozen: FrozenSignature, iface: OriginalInterface, dace_ar
     for a in _dace_call_order(frozen, dace_arglist):
         if isinstance(a, str):
             # A shape-only free symbol DaCe folds into the ``__program``
-            # signature (sorted with the scalars) -- pass-by-value int.
+            # signature (sorted with the scalars) -- pass-by-value int
+            # by default, with overrides for the pgrid-driving symbols
+            # ``dace_user_comm`` / ``dace_user_comm_size`` that have
+            # non-int dtypes.
             header_lines.append(f"      {a}")
-            body_lines.append(f"      integer(c_int), value :: {a}")
+            body_lines.append(f"      {_init_symbol_decl(a)} :: {a}")
             continue
         header_lines.append(f"      {a.sdfg_name}")
         if a.rank > 0:
@@ -108,19 +111,43 @@ def build_c_interface(frozen: FrozenSignature, iface: OriginalInterface, dace_ar
         else:
             body_lines.append(f"      type(c_ptr), value :: {a.sdfg_name}")
     syms = _free_sym_names(frozen)
-    init_arg_decls = "".join(f"      integer(c_int), value :: {s}\n" for s in syms)
+    init_arg_decls = "".join(
+        f"      {_init_symbol_decl(s)} :: {s}\n" for s in syms)
     rendered = tpl.format(entry=iface.entry,
                           c_arg_decls=",  &\n".join(header_lines),
                           c_arg_decls_body="\n".join(body_lines),
                           init_args=", ".join(syms),
                           init_arg_decls=init_arg_decls)
-    if any(a.kind == 'mpi_comm' for a in frozen.args):
+    if any(a.kind == 'mpi_comm' for a in frozen.args) or frozen.user_comm_source:
         # Splice the ``MPI_Comm_f2c`` C binding into the same interface
         # block (before its ``end interface``) so the wrapper can turn
         # the Fortran integer handle into the C ``MPI_Comm`` the SDFG
         # entry expects.
-        rendered = rendered.replace("  end interface", _MPI_COMM_F2C_IFACE + "  end interface")
+        rendered = rendered.replace("  end interface",
+                                    _MPI_COMM_F2C_IFACE + _MPI_COMM_SIZE_IFACE + "  end interface")
     return rendered
+
+
+# Symbols introduced by ``emit_mpi._install_user_pgrid`` -- their
+# init-signature decls are special-cased here rather than via a
+# generic dtype lookup because :class:`FrozenSignature.free_symbols`
+# carries names only.  Keep in lockstep with the names in
+# ``emit_library._USER_*``.
+_USER_COMM_SYMBOL_NAME = "dace_user_comm"
+_USER_COMM_SIZE_SYMBOL_NAME = "dace_user_comm_size"
+
+_INIT_SYMBOL_DECL_OVERRIDES = {
+    _USER_COMM_SYMBOL_NAME: "type(c_ptr), value",
+    _USER_COMM_SIZE_SYMBOL_NAME: "integer(c_long_long), value",
+}
+
+
+def _init_symbol_decl(sym: str) -> str:
+    """Fortran ``bind(c)`` decl for one ``__dace_init`` free-symbol
+    parameter.  Defaults to ``integer(c_int), value`` (ordinary shape /
+    bound symbols) but overrides the two pgrid-driving symbols
+    introduced by ``emit_mpi._install_user_pgrid``."""
+    return _INIT_SYMBOL_DECL_OVERRIDES.get(sym, "integer(c_int), value")
 
 
 # ``MPI_Comm_f2c(MPI_Fint) -> MPI_Comm``: converts a Fortran integer
@@ -131,6 +158,19 @@ _MPI_COMM_F2C_IFACE = """
       import :: c_int, c_ptr
       integer(c_int), value :: fcomm
       type(c_ptr) :: dace_mpi_comm_f2c
+    end function
+"""
+
+# ``MPI_Comm_size(comm, &size)`` -- needed so the bindings wrapper can
+# size the ``__user_pgrid`` (1-D cartesian comm) before ``dace_init``.
+# Bound to a static-shape ``size_buf(1)`` so the parameter is a
+# normal Fortran pointer (no ``MPI_Comm`` <-> ``c_ptr`` confusion).
+_MPI_COMM_SIZE_IFACE = """
+    function dace_mpi_comm_size(comm, size) bind(c, name='MPI_Comm_size')
+      import :: c_ptr, c_int
+      type(c_ptr), value :: comm
+      integer(c_int) :: size
+      integer(c_int) :: dace_mpi_comm_size
     end function
 """
 
@@ -271,8 +311,22 @@ def build_wrapper_head(frozen: FrozenSignature, iface: OriginalInterface, plan: 
     # ``already has basic type`` error.  Skip any free symbol that is
     # also a flat companion.
     flat_names = {f for entry in plan.entries for f in entry.recipe.flat_names}
-    symbol_decls = "\n".join(f"    {_fortran_c_value_type(sym_dtype.get(s, 'int32'))} :: {s}"
-                             for s in frozen.free_symbols if s not in outer_dummy_set and s not in flat_names)
+
+    def _local_decl(s: str) -> str:
+        """Wrapper-local Fortran decl for one free symbol.  Mirrors the
+        ``init_arg_decls`` overrides from ``build_c_interface`` so the
+        ``__user_comm`` / ``__user_comm_size`` pgrid params are typed
+        consistently across the interface block and the wrapper scope."""
+        if s == _USER_COMM_SYMBOL_NAME:
+            return "type(c_ptr)"
+        if s == _USER_COMM_SIZE_SYMBOL_NAME:
+            return "integer(c_long_long)"
+        return _fortran_c_value_type(sym_dtype.get(s, 'int32'))
+
+    symbol_decls = "\n".join(
+        f"    {_local_decl(s)} :: {s}"
+        for s in frozen.free_symbols
+        if s not in outer_dummy_set and s not in flat_names)
     if max_loop_rank:
         iter_decl = "    integer(c_int) :: " + ", ".join(f"i{d + 1}" for d in range(max_loop_rank))
         symbol_decls = (symbol_decls + "\n" + iter_decl) if symbol_decls else iter_decl
@@ -295,6 +349,14 @@ def build_wrapper_head(frozen: FrozenSignature, iface: OriginalInterface, plan: 
     for a in frozen.args:
         if a.kind == 'mpi_comm':
             scratch_lines.append(f"    type(c_ptr) :: {_mpi_comm_local(a.sdfg_name)}")
+    # Pgrid path (the modern replacement for the opaque-MPI_Comm scalar
+    # ``mpi_comm`` arg above): one ``integer(c_int)`` scratch for the
+    # ``MPI_Comm_size`` return + one ``integer(c_int)`` for the call's
+    # error code.  ``__user_comm`` / ``__user_comm_size`` themselves
+    # are declared above in ``symbol_decls`` (as free symbols).
+    if frozen.user_comm_source:
+        scratch_lines.append("    integer(c_int) :: dace_user_comm_size_buf")
+        scratch_lines.append("    integer(c_int) :: dace_user_comm_size_err")
 
     return tpl.format(
         entry=iface.entry,
@@ -367,6 +429,17 @@ def build_wrapper_body(frozen: FrozenSignature, iface: OriginalInterface, plan: 
         body.append("    ! ----- Fortran integer comm -> C MPI_Comm -----")
         for a in comm_args:
             body.append(f"    {_mpi_comm_local(a.sdfg_name)} = dace_mpi_comm_f2c({a.fortran_name})")
+
+    if frozen.user_comm_source:
+        body.append("")
+        body.append("    ! ----- Fortran integer comm -> __user_comm / __user_comm_size -----")
+        body.append("    ! Convert the caller's MPI_Fint to a C MPI_Comm, query its")
+        body.append("    ! size, and hand both to ``dace_init_<entry>`` so the")
+        body.append("    ! FortranProcessGrid's MPI_Cart_create runs against the")
+        body.append("    ! user's communicator (not MPI_COMM_WORLD).")
+        body.append(f"    {_USER_COMM_SYMBOL_NAME} = dace_mpi_comm_f2c({frozen.user_comm_source})")
+        body.append(f"    dace_user_comm_size_err = dace_mpi_comm_size({_USER_COMM_SYMBOL_NAME}, dace_user_comm_size_buf)")
+        body.append(f"    {_USER_COMM_SIZE_SYMBOL_NAME} = int(dace_user_comm_size_buf, c_long_long)")
 
     sym_lines = _build_symbol_assigns(frozen, plan, outer_dummy_set, iface)
     if sym_lines:

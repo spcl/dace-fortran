@@ -17,6 +17,16 @@ from dace import InterstateEdge, Memlet
 
 from dace_fortran.builder.access import acc, iter_view_dim_map
 
+# When a Fortran kernel passes a runtime user communicator to MPI calls,
+# :func:`emit_mpi` installs a :class:`FortranProcessGrid` on the SDFG --
+# its ``init_code`` builds an ``MPI_Cart_create``-cartesian sub-comm out
+# of the user's MPI_Comm at ``__dace_init`` time.  The pgrid + the
+# symbols that drive it live under fixed names so the bindings layer
+# and downstream tests can find them without grepping ``sdfg.symbols``.
+_USER_COMM_SYMBOL = "dace_user_comm"        # opaque(MPI_Comm) symbol -- f2c result from the wrapper
+_USER_COMM_SIZE_SYMBOL = "dace_user_comm_size"  # int -- MPI_Comm_size(dace_user_comm), 1-D pgrid extent
+_USER_PGRID_NAME = "dace_user_pgrid"        # FortranProcessGrid descriptor name
+
 # Per-library-node connector conventions.  Kept here rather than on
 # ``LibNodeIntrinsic`` because the names are a property of the DaCe
 # library node, not of the Fortran intrinsic.  Each entry maps a
@@ -219,6 +229,86 @@ def emit_libcall(builder, ctx, n, region):
     state.add_edge(node, out_conn, acc(builder, state, n.target), None, out_memlet)
 
 
+def _install_user_pgrid(ctx, comm_arg: str):
+    """Install the :class:`FortranProcessGrid` (+ its driving symbols)
+    on the SDFG if not already present, and remove the orphan Fortran
+    ``comm`` integer scalar from ``sdfg.arrays``.
+
+    After this call the SDFG has:
+      * symbol ``__user_comm`` of dtype ``opaque(MPI_Comm)`` -- the C
+        ``MPI_Comm`` passed by the bindings wrapper at ``__dace_init``.
+      * symbol ``__user_comm_size`` of dtype ``int64`` -- the
+        ``MPI_Comm_size`` of the user comm (used as the 1-D pgrid
+        extent).
+      * descriptor ``__user_pgrid`` (:class:`FortranProcessGrid`),
+        whose ``init_code`` runs ``MPI_Cart_create(__user_comm, 1,
+        [__user_comm_size], ...)``.
+
+    The bindings layer is responsible for populating both symbols from
+    ``MPI_Comm_f2c`` + ``MPI_Comm_size`` in the wrapper, and for
+    *omitting* the ``comm`` integer from the program call.
+
+    :param ctx: the build context (``ctx.sdfg`` is the target SDFG).
+    :param comm_arg: name of the Fortran ``integer`` ``comm`` dummy in
+        ``sdfg.arrays`` -- removed by this call.
+    """
+    import dace
+    from dace_fortran.data import FortranProcessGrid
+
+    sdfg = ctx.sdfg
+    if _USER_PGRID_NAME in sdfg.arrays:
+        # Already installed by an earlier MPI call in the same kernel.
+        # Still need to remove the orphan ``comm`` scalar -- it might be
+        # a distinct dummy in a later call (rare but easy to support).
+        if comm_arg in sdfg.arrays:
+            sdfg.arrays.pop(comm_arg, None)
+        return
+
+    sdfg.add_symbol(_USER_COMM_SYMBOL, dace.dtypes.opaque("MPI_Comm"))
+    sdfg.add_symbol(_USER_COMM_SIZE_SYMBOL, dace.dtypes.int64)
+    sdfg.add_datadesc(
+        _USER_PGRID_NAME,
+        FortranProcessGrid(
+            name=_USER_PGRID_NAME,
+            shape=[dace.symbol(_USER_COMM_SIZE_SYMBOL)],
+            parent_comm_symbol=_USER_COMM_SYMBOL,
+        ))
+    sdfg.append_init_code(sdfg.arrays[_USER_PGRID_NAME].init_code())
+    sdfg.append_exit_code(sdfg.arrays[_USER_PGRID_NAME].exit_code())
+    # ``ProcessGrid``'s ``init_code`` references state fields
+    # (``__state->__user_pgrid``, ``..._group``, ``..._rank``, etc.)
+    # but DaCe codegen only emits those fields when an MPI
+    # :class:`dace.libraries.mpi.Dummy` node declares them.  Place a
+    # Dummy on the SDFG's start state with the field list mirroring
+    # the stock ``add_pgrid`` pattern from
+    # ``dace/frontend/python/replacements/mpi.py``.
+    from dace.libraries.mpi import Dummy
+    start_state = sdfg.start_state
+    dummy = Dummy(_USER_PGRID_NAME, [
+        f'MPI_Comm {_USER_PGRID_NAME};',
+        f'MPI_Group {_USER_PGRID_NAME}_group;',
+        f'int {_USER_PGRID_NAME}_coords[1];',
+        f'int {_USER_PGRID_NAME}_dims[1];',
+        f'int {_USER_PGRID_NAME}_rank;',
+        f'int {_USER_PGRID_NAME}_size;',
+        f'bool {_USER_PGRID_NAME}_valid;',
+    ])
+    start_state.add_node(dummy)
+    wnode = start_state.add_write(_USER_PGRID_NAME)
+    start_state.add_edge(dummy, None, wnode, None, Memlet())
+    # Drop the original ``comm`` integer dummy from the SDFG signature
+    # -- the MPI nodes now wire to ``__user_pgrid`` instead, and the
+    # bindings wrapper routes the f2c'd MPI_Comm into ``__user_comm``
+    # at init time, not into the kernel call.
+    sdfg.arrays.pop(comm_arg, None)
+    # Remember the Fortran integer dummy that originally held this
+    # communicator -- the bindings wrapper needs the outer-dummy name
+    # to call ``MPI_Comm_f2c`` on it.  ``__user_comm_size`` is
+    # populated by an ``MPI_Comm_size`` call in the same wrapper
+    # block; track it alongside.
+    sdfg._fortran_user_comm_source = comm_arg
+
+
 def emit_mpi(builder, ctx, n, region):
     """Lower a recognised Fortran MPI point-to-point call
     (``kind == 'mpicall'``) to a ``dace.libraries.mpi`` library node.
@@ -322,20 +412,32 @@ def emit_mpi(builder, ctx, n, region):
     _comm_base = 4 if n.callee in ('mpi_isend', 'mpi_irecv') else 3
     comm = n.call_args[_comm_base] if len(n.call_args) > _comm_base else None
     if comm is not None:
-        # Retype the Fortran ``integer`` comm dummy to an
-        # ``opaque(MPI_Comm)`` SDFG input; the c-binding wrapper does
-        # ``MPI_Comm_f2c`` on the integer handle.  The opaque-dtype
-        # exemption in the length-1<->scalar passes keeps it a by-value
-        # ``Scalar`` (an ``MPI_Comm`` handle, not a pointer).
-        ctx.sdfg.arrays[comm].dtype = dace.dtypes.opaque("MPI_Comm")
+        # Replace the opaque-MPI_Comm scalar wiring with a
+        # ``FortranProcessGrid`` whose ``MPI_Cart_create`` parent is the
+        # user-supplied communicator.  At ``__dace_init`` time the
+        # bindings wrapper converts the Fortran integer comm to a C
+        # ``MPI_Comm`` and passes it as the ``__user_comm`` symbol; the
+        # pgrid's ``init_code`` then runs
+        # ``MPI_Cart_create(__user_comm, ...)`` and the resulting
+        # cartesian sub-comm lives in ``__state->__user_pgrid``.  Every
+        # MPI library node wires ``_comm`` (matching the stock
+        # Send/Recv connector contract) to an access node on
+        # ``__user_pgrid`` -- the codegen substitutes the
+        # ``__state->__user_pgrid`` reference, so the C tasklet line
+        # ``MPI_Send(..., _comm)`` invokes on the cartesian comm.
+        _install_user_pgrid(ctx, comm)
 
     def _wire_comm(node):
-        """Add a ``_comm`` input connector + memlet when a user
-        communicator is present (no-op for default WORLD)."""
+        """Add a ``_comm`` input connector + memlet wired to the
+        ``FortranProcessGrid`` access node when a user communicator is
+        present (no-op for default ``MPI_COMM_WORLD``)."""
         if comm is None:
             return
         node.add_in_connector('_comm', dace.dtypes.opaque("MPI_Comm"))
-        state.add_memlet_path(acc(builder, state, comm), node, dst_conn='_comm', memlet=Memlet(data=comm, subset='0'))
+        state.add_memlet_path(
+            acc(builder, state, _USER_PGRID_NAME), node,
+            dst_conn='_comm',
+            memlet=Memlet(data=_USER_PGRID_NAME, subset='0'))
 
     if n.callee == 'mpi_send':
         from dace.libraries.mpi.nodes.send import Send
