@@ -56,58 +56,115 @@ _OPAQUE_COMM_DTYPE = "MPI_Comm"
 class Arg:
     """One argument of a registered external function.
 
-    :ivar kind: how the arg crosses the C ABI:
+    Two orthogonal axes describe the arg, deliberately decoupled per
+    the external-call design (the user can have a Fortran derived
+    type cross the C ABI either as a packed AoS struct pointer *or*
+    as the per-member SoA slot list the bridge already produces, and
+    both are valid -- they just route to different callees):
 
-        * ``'array'`` -- passed as a pointer (``<ctype> *``).
-        * ``'scalar'`` -- passed by value (the ``VALUE`` attribute on
-          the Fortran ``bind(c)`` dummy).
-        * ``'aos'`` -- a whole derived type the external receives as an
-          array-of-structs.  ``hlfir-marshal-external-structs`` split it
-          into its per-member arguments; the binding emitter re-packs the
-          (SoA-flat) members into a local AoS buffer in the C tasklet and
-          passes its address.  The C parameter is therefore ``void *`` (the
-          shim casts to its concrete ``struct`` pointer).  ``intent`` drives
-          the pack-in (in/inout) and unpack-out (out/inout) directions.
-        * ``'comm'`` -- a C ``MPI_Comm`` handle, by value.  The
-          ``dtype`` field is ignored (the type is always ``MPI_Comm``);
-          the SDFG-side container is retyped to
-          ``dace.dtypes.opaque("MPI_Comm")`` so DaCe codegen passes the
-          value at the C ABI as ``MPI_Comm`` -- the ``bind(c)`` shim
-          (or DaCe's MPI integration) is responsible for ``MPI_Comm_f2c``
-          so by the time the external function runs it has a C
-          ``MPI_Comm`` ready to use.  A communicator is by-value and
-          read-only (the callee may use it but must not free it), so
-          ``intent`` is forced to ``'in'`` for this kind.
+    :ivar kind: Fortran-side shape of the arg.
+
+        * ``'array'`` -- a flat array dummy.  C ABI defaults to a
+          pointer (``<ctype> *``).
+        * ``'scalar'`` -- a scalar dummy.  C ABI defaults to by-value.
+        * ``'aos'`` -- a whole derived-type dummy that
+          ``hlfir-marshal-external-structs`` expanded into per-member
+          slots.  The :ivar:`c_abi` choice picks how those slots
+          reach the external (see below).
+        * ``'comm'`` -- a C ``MPI_Comm`` handle.  ``c_abi`` is forced
+          opaque-by-value; ``intent`` is forced ``'in'``.  The
+          SDFG-side container is retyped to
+          ``dace.dtypes.opaque("MPI_Comm")`` so DaCe codegen emits
+          the parameter as ``MPI_Comm`` directly -- the ``bind(c)``
+          shim (or DaCe's MPI integration) is responsible for
+          ``MPI_Comm_f2c`` so the external sees a C ``MPI_Comm``.
+
+    :ivar c_abi: how the arg crosses the C ABI to the external.
+        ``None`` (the default) picks the natural mapping for the
+        arg's :ivar:`kind`:
+
+        * ``'value'`` -- pass-by-value (the natural default for
+          ``kind='scalar'``).
+        * ``'pointer'`` -- pass-by-pointer (the natural default for
+          ``kind='array'``).
+        * ``'aos_struct_ptr'`` -- the natural default for
+          ``kind='aos'``: emit_call locally re-packs the SoA flats
+          into a stack AoS struct, passes ``&buf``, then unpacks out
+          (the inline pack/unpack body that has shipped in this
+          tree since v1).  ``intent`` drives the pack-in / unpack-out
+          directions.  The C parameter is ``void *`` (the callee
+          casts to its concrete struct).
+        * ``'per_member_soa'`` -- for ``kind='aos'`` only.  The
+          per-member SoA slots the marshal-expansion produced are
+          forwarded *verbatim* to the external (no AoS buffer, no
+          pack / unpack copy).  This is the shape a *sibling SDFG*
+          built from the same Fortran source expects -- both sides
+          already speak per-member SoA, so the AoS round-trip is dead
+          work.  The C parameters expand to one pointer per leaf
+          member, in marshal-expansion order.
 
     :ivar dtype: element dtype string -- a key of :data:`_C_TYPES`
-        (``'float64'`` / ``'int32'`` / ...).  Ignored when
-        ``kind == 'comm'``.
-    :ivar intent: ``'in'`` | ``'out'`` | ``'inout'``.  **Defaults to
-        ``'inout'``** -- an external function is opaque, so the safe
+        (``'float64'`` / ``'int32'`` / ...).  Ignored when ``kind``
+        is ``'aos'`` or ``'comm'``.
+    :ivar intent: ``'in'`` | ``'out'`` | ``'inout'``.  Defaults to
+        ``'inout'`` -- an external function is opaque, so the safe
         conservative assumption is that it both reads and writes an
-        array arg: a *missed* write is a correctness bug (the mutation
+        array arg: a missed write is a correctness bug (the mutation
         is invisible to dataflow -> wrong results / illegal
-        reordering / DCE), whereas an over-declared read/write only
-        costs optimization.  Narrow to ``'in'`` / ``'out'`` only when
-        the true behaviour is known.  A by-value ``'scalar'`` is
-        read-only regardless of this field (the callee gets a copy --
-        it physically cannot write back; an ABI fact, not a choice);
-        a ``'comm'`` arg is always read-only.
+        reordering / DCE), an over-declared read/write only costs
+        optimisation.  Narrow to ``'in'`` / ``'out'`` only when the
+        true behaviour is known.  A by-value scalar is read-only
+        regardless of this field (the callee gets a copy -- an ABI
+        fact, not a choice); ``'comm'`` is always read-only.
     """
 
     kind: str
-    dtype: str = ""  # ignored when kind == "comm"
+    dtype: str = ""  # ignored when kind == "comm" or kind == "aos"
     intent: str = "inout"
+    c_abi: Optional[str] = None
+
+    def resolved_c_abi(self) -> str:
+        """The :ivar:`c_abi` choice resolved to its concrete value
+        with the per-:ivar:`kind` natural default applied."""
+        if self.c_abi is not None:
+            return self.c_abi
+        if self.kind == "scalar":
+            return "value"
+        if self.kind == "array":
+            return "pointer"
+        if self.kind == "aos":
+            return "aos_struct_ptr"
+        if self.kind == "comm":
+            return "value"
+        raise ValueError(f"external Arg: unknown kind {self.kind!r}; "
+                         f"expected one of array / scalar / aos / comm")
 
     def c_decl_type(self) -> str:
         """C parameter type for this arg's ``extern "C"`` declaration.
+
+        For ``kind='aos'`` with ``c_abi='per_member_soa'`` the decl
+        expands to multiple parameters (one per leaf member); that
+        expansion is per-call-site and lives in
+        :func:`builder.emit_library.emit_call`.  This method returns
+        only the *single-parameter* C-decl shape; ``per_member_soa``
+        signals that to the caller with a sentinel.
 
         :raises ValueError: unsupported ``kind`` or ``dtype``.
         """
         if self.kind == "comm":
             return _OPAQUE_COMM_DTYPE
         if self.kind == "aos":
-            return "void *"  # address of the re-packed AoS buffer
+            abi = self.resolved_c_abi()
+            if abi == "aos_struct_ptr":
+                return "void *"  # address of the re-packed AoS buffer
+            if abi == "per_member_soa":
+                # The leaf-expanded decl is rendered by the caller
+                # from the marshal-expansion groups; nothing
+                # single-parameter to surface here.
+                return ""
+            raise ValueError(f"external Arg(kind='aos'): unsupported "
+                             f"c_abi {abi!r}; expected aos_struct_ptr "
+                             f"or per_member_soa")
         base = _C_TYPES.get(self.dtype)
         if base is None:
             raise ValueError(f"external Arg: unsupported dtype {self.dtype!r}; "

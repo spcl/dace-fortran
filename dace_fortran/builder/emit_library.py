@@ -584,8 +584,16 @@ def emit_call(builder, ctx, n, region):
     # call-args (the i-th ``aos`` arg <-> the i-th ``[start, count]`` group);
     # every other arg maps to one call-arg.  ``plan[i]`` = ``(kind, dtype,
     # intent, gid)`` parallel to ``names`` (``gid`` is the group index for an
-    # aos member, else ``None``).
+    # aos member, else ``None``).  ``group_c_abi[gid]`` records each aos
+    # group's :meth:`Arg.resolved_c_abi` so the body-generation step
+    # picks between the AoS-struct pack/unpack path
+    # (``'aos_struct_ptr'``) and the per-member SoA pass-through
+    # (``'per_member_soa'``); decoupling Arg's Fortran-side ``kind``
+    # from its C-ABI shape this way is what lets a sibling-SDFG callee
+    # receive the same SoA flats the marshal expansion already produces,
+    # with no intermediate AoS round-trip.
     plan: list = []
+    group_c_abi: dict = {}
     gi = 0
     for a in sig.args:
         if a.kind == 'aos':
@@ -618,6 +626,7 @@ def emit_call(builder, ctx, n, region):
                     f"inline-flat members; (3) wait for the v2 permissive "
                     f"marshal expansion (Phase 2.3.E).")
             _, count = group_pairs[gi]
+            group_c_abi[gi] = a.resolved_c_abi()
             for _ in range(count):
                 plan.append(('aos', a.dtype, a.intent, gi))
             gi += 1
@@ -711,9 +720,17 @@ def emit_call(builder, ctx, n, region):
             in_conns.append(cin); edges.append((name, cin, 'r'))
             logical_terms.append(('lit', cin))
 
-    # Assemble the C body.  For an aos group, declare a local AoS buffer, pack
-    # its pointer members in (in/inout), pass ``&buffer``, then unpack out
-    # (out/inout) -- so the SoA<->AoS cast lives entirely in this tasklet.
+    # Assemble the C body.  Per aos group, ``group_c_abi[gid]`` picks
+    # the route:
+    #   * ``aos_struct_ptr`` -- declare a local AoS buffer, pack its
+    #     pointer members in (in/inout), pass ``&buffer``, then unpack
+    #     out (out/inout) -- the SoA<->AoS cast lives entirely in this
+    #     tasklet.  Today's default; the opaque-C-library shape.
+    #   * ``per_member_soa`` -- forward each leaf member's connector
+    #     directly to the external in marshal-expansion order; no AoS
+    #     buffer, no pack/unpack copy.  Used for sibling-SDFG callees
+    #     that already speak SoA (their ``bind_c_shim`` receives the
+    #     per-member slots the marshal pass produced).
     body_lines: list = []
     call_args_c: list = []
     bufname: dict = {}
@@ -723,6 +740,17 @@ def emit_call(builder, ctx, n, region):
             continue
         gid = val
         mems = group_members[gid]
+        abi = group_c_abi.get(gid, 'aos_struct_ptr')
+        if abi == 'per_member_soa':
+            # Per-leaf pass-through: every leaf forwards its writable
+            # connector when present (so codegen sees the write
+            # dependency), else its readable one.  No struct buffer,
+            # no copy in or out.
+            for ct, nel, cin, cout in mems:
+                tok = cout if cout is not None else cin
+                call_args_c.append(tok)
+            continue
+        # ``aos_struct_ptr`` path (today's default).
         buf = f"_aosbuf{gid}"; bufname[gid] = buf
         # One struct field per member: ``T mK;`` (scalar) or ``T mK[N];``
         # (array).  The field layout mirrors the Fortran derived type, so the
@@ -748,7 +776,11 @@ def emit_call(builder, ctx, n, region):
                                   f"{buf}.m{k}[_i] = {cin}[_i];")
         call_args_c.append(f"(void*)(&{buf})")
     body_lines.append(f"{sig.c_name}({', '.join(call_args_c)});")
+    # AoS-struct-ptr copy-out (per_member_soa needs no unpack: writes
+    # land in the connector directly via the call).
     for gid, mems in group_members.items():
+        if group_c_abi.get(gid, 'aos_struct_ptr') != 'aos_struct_ptr':
+            continue
         for k, (ct, nel, cin, cout) in enumerate(mems):
             if cout is None or nel == 0:
                 continue
@@ -758,9 +790,39 @@ def emit_call(builder, ctx, n, region):
                 body_lines.append(f"for (int _i = 0; _i < {nel}; ++_i) "
                                   f"{cout}[_i] = {bufname[gid]}.m{k}[_i];")
 
+    # Build the ``extern "C"`` declaration at the call site so an
+    # ``Arg(kind='aos', c_abi='per_member_soa')`` arg expands to its
+    # actual leaf signature (one ``<ctype>*`` per leaf member, in
+    # marshal-expansion order).  An ``aos_struct_ptr`` group keeps the
+    # single ``void*`` shape; any non-aos arg lifts its
+    # ``Arg.c_decl_type()`` verbatim.
+    decl_types: list = []
+    sig_arg_iter = iter(sig.args)
+    cur_sig_arg = next(sig_arg_iter, None)
+    last_gid_seen = None
+    last_member_idx = -1
+    for kind, dtype, intent, gid in plan:
+        if gid is None:
+            decl_types.append(cur_sig_arg.c_decl_type())
+            cur_sig_arg = next(sig_arg_iter, None)
+            last_gid_seen = None
+            last_member_idx = -1
+            continue
+        if gid != last_gid_seen:
+            last_gid_seen = gid
+            last_member_idx = -1
+            cur_sig_arg = next(sig_arg_iter, None)  # consume the aos sig arg
+        last_member_idx += 1
+        if group_c_abi.get(gid) == 'per_member_soa':
+            ct, _nel, _cin, _cout = group_members[gid][last_member_idx]
+            decl_types.append(f"{ct}*")
+        elif last_member_idx == 0:  # aos_struct_ptr: emit once per group
+            decl_types.append("void *")
+    c_decl = f'extern "C" void {sig.c_name}({", ".join(decl_types) or "void"});'
+
     node = ExternalCall(name=f"_ext_{callee}_{builder.nid()}",
                         c_name=sig.c_name,
-                        c_decl=sig.c_declaration(),
+                        c_decl=c_decl,
                         body="\n".join(body_lines),
                         inputs=in_conns,
                         outputs=out_conns)

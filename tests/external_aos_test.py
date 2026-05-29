@@ -556,3 +556,90 @@ def test_v2_aos_external_diagnostic_mentions_inline_external(tmp_path):
                        entry="_QMm_v2_allocPkern").build()
     finally:
         clear_external_registry()
+
+
+# ---------------------------------------------------------------------------
+#  Arg.c_abi axis (Fortran shape x C ABI shape, decoupled): the same
+#  ``state_t`` shape that test_array_member_struct_aos_external above
+#  passes as an AoS struct pointer (default ``c_abi='aos_struct_ptr'``)
+#  is here passed as per-member SoA pointers (``c_abi='per_member_soa'``).
+#  The marshal expansion is identical -- only the call-site body
+#  differs: no ``_aosbuf`` struct, no pack/unpack copy, leaves forwarded
+#  verbatim.
+# ---------------------------------------------------------------------------
+
+
+def test_aos_external_per_member_soa_skips_aos_buffer(tmp_path):
+    """``Arg(kind='aos', c_abi='per_member_soa')`` -- the same
+    ``state_t`` shape passed as a *whole* struct from Fortran (so the
+    marshal pass expands it), but the C external takes per-member SoA
+    pointers in marshal-expansion order; no stack AoS struct is
+    materialised.
+
+    The C signature mirrors what a sibling SDFG's ``bind_c_shim``
+    would emit (one pointer per leaf), so the same registration
+    pattern reaches both an opaque C library that speaks SoA *and* a
+    sibling SDFG -- the decoupling of Fortran-side ``kind`` from the
+    C-side ABI is what closes the gap."""
+    so = _build_c_so(tmp_path, "ext_per_member",
+                     "void ext_per_member(double* u, double* v)"
+                     "{ for (int i = 0; i < 4; ++i) u[i] += v[i]; }")
+    # Note: the *Fortran* call passes the whole struct ``s`` so the
+    # marshal pass tags it as an aos group of 2 members; the
+    # ``c_abi='per_member_soa'`` registration tells emit_call to
+    # forward the SoA flats directly.
+    src = """
+module m_perm
+  use iso_c_binding
+  implicit none
+  type, bind(c) :: state_t
+    real(c_double) :: u(4)
+    real(c_double) :: v(4)
+  end type
+contains
+  subroutine kern(s)
+    type(state_t), intent(inout) :: s
+    interface
+      subroutine ext_per_member(p) bind(c, name="ext_per_member")
+        import :: state_t
+        type(state_t), intent(inout) :: p
+      end subroutine
+    end interface
+    s%u(1) = s%u(1) + 1.0_c_double
+    call ext_per_member(s)
+  end subroutine
+end module
+"""
+    clear_external_registry()
+    try:
+        keep_external("ext_per_member",
+                      args=(Arg(kind="aos", intent="inout",
+                                c_abi="per_member_soa"), ),
+                      libraries=(str(so), ))
+        sdfg = build_sdfg(src, tmp_path, name="kern",
+                          entry="_QMm_permPkern").build()
+        u = np.array([1.0, 2.0, 3.0, 4.0])
+        v = np.array([10.0, 20.0, 30.0, 40.0])
+        sdfg(s_u=u, s_v=v)
+        # s%u(1) += 1 -> u = [2,2,3,4]; then ext_per_member: u[i] += v[i].
+        np.testing.assert_allclose(u, [12.0, 22.0, 33.0, 44.0])
+        np.testing.assert_allclose(v, [10.0, 20.0, 30.0, 40.0])
+
+        # Body contract: no ``_aosbuf`` struct, no AoS pack/unpack.
+        from dace_fortran.external import ExternalCall
+        node = next((n for st in sdfg.all_states() for n in st.nodes()
+                     if isinstance(n, ExternalCall)), None)
+        assert node is not None
+        assert "_aosbuf" not in node.body, (
+            f"per_member_soa path emitted an AoS buffer; body=\n{node.body}")
+        # The leaves are forwarded verbatim in marshal-expansion order;
+        # the per-member ``ctype*`` decl shape (not ``void*``) is the
+        # other half of the contract.
+        assert "double*" in node.c_decl, (
+            f"per_member_soa decl should expand to per-leaf pointers; "
+            f"got {node.c_decl!r}")
+        assert "void *" not in node.c_decl, (
+            f"per_member_soa decl should not surface ``void *``; "
+            f"got {node.c_decl!r}")
+    finally:
+        clear_external_registry()
