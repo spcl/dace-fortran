@@ -68,22 +68,39 @@ static bool isInlineFlatMember(mlir::Type t) {
   return false;
 }
 
+/// A box-typed member whose box pointee is an array of scalar -- the
+/// shape the v2 marshal extension supports.  Covers both
+/// ``fir.box<fir.heap<seq<scalar>>>`` (Fortran ``allocatable``) and
+/// ``fir.box<fir.ptr<seq<scalar>>>`` (Fortran ``pointer``).  Any
+/// rank (including dynamic extents) is accepted -- the call-site
+/// expansion emits ``fir.load`` + ``fir.box_addr`` to extract the
+/// data pointer at runtime, so a static shape is not required.
+static bool isBoxOfScalarArray(mlir::Type t) {
+  auto box = mlir::dyn_cast<fir::BoxType>(t);
+  if (!box) return false;
+  mlir::Type inner = box.getEleTy();
+  if (auto heap = mlir::dyn_cast<fir::HeapType>(inner)) inner = heap.getEleTy();
+  else if (auto ptr = mlir::dyn_cast<fir::PointerType>(inner)) inner = ptr.getEleTy();
+  if (auto seq = mlir::dyn_cast<fir::SequenceType>(inner))
+    return isScalarMember(seq.getEleTy());
+  return false;
+}
+
 /// Recursive variant of :func:`isInlineFlatMember`: also accepts a
 /// member that is itself a derived type whose every member satisfies
-/// this predicate.  The expansion step (``marshal``) walks such a
-/// member recursively and unrolls each leaf into its own call arg, so
-/// at the binding emitter all that survives is a flat list of scalar /
-/// static-shape-array members in declaration order -- exactly what the
-/// inline-flat AoS pack/unpack path expects.
-///
-/// Box / pointer / allocatable / dynamic-shape members still fail this
-/// check; those need a separate marshalling shape (the data lives at a
-/// runtime descriptor, not inline in the struct's storage) and the
-/// :func:`emit_call` AoS body has no path for them.  Refusing here
-/// keeps that boundary clean and surfaces through the structured
-/// diagnostic in ``emit_library.emit_call``.
+/// this predicate, *and* (v2) a box-typed member whose pointee is a
+/// scalar-element array.  The expansion step (``marshal``) walks
+/// recursive-record members down to leaves and treats each
+/// box-member as its own leaf; ``rewriteCall`` emits the
+/// ``fir.load`` + ``fir.box_addr`` chain at the call site to extract
+/// the data pointer for the external.  The expanded function's
+/// per-leaf arg type is the box pointee (``fir.heap<seq<...>>`` or
+/// ``fir.ptr<seq<...>>``) -- not the box itself -- so the C ABI of
+/// each leaf collapses to a single ``<scalar>*`` pointer matching the
+/// per-member SoA slots the sibling-SDFG ``bind_c_shim`` produces.
 static bool isRecursiveInlineFlatMember(mlir::Type t) {
   if (isInlineFlatMember(t)) return true;
+  if (isBoxOfScalarArray(t)) return true;
   if (auto rec = mlir::dyn_cast<fir::RecordType>(t)) {
     if (rec.getTypeList().empty()) return false;
     for (auto &p : rec.getTypeList())
@@ -187,23 +204,28 @@ struct MarshalExternalStructsPass
   };
 
   /// Recursively walk ``rec`` and append one :struct:`ExpandedLeaf`
-  /// per terminal (scalar / static-shape-array) member, prefixing
-  /// each leaf's ``path`` with ``prefix`` so the caller can chain
-  /// component designates from the outer struct base.  Members that
-  /// are themselves derived types are walked through (not emitted as
-  /// leaves); the existing ``allRecursiveInlineFlatMembers`` check
-  /// guarantees the recursion bottoms out at inline-flat leaves only.
+  /// per terminal member, prefixing each leaf's ``path`` with
+  /// ``prefix``.  Members that are themselves derived types are
+  /// walked through; *box-typed* members are emitted as leaves with
+  /// their original (box) type recorded -- ``rewriteCall`` will emit
+  /// the ``fir.load`` + ``fir.box_addr`` chain to extract the data
+  /// pointer at the call site, and ``marshal`` rewrites the function
+  /// arg type to the box pointee.  The existing
+  /// ``allRecursiveInlineFlatMembers`` check guarantees every leaf is
+  /// either inline-flat or box-of-scalar-array.
   static void enumerateLeaves(
       fir::RecordType rec, mlir::MLIRContext *ctx,
       llvm::ArrayRef<mlir::StringAttr> prefix,
       llvm::SmallVectorImpl<ExpandedLeaf>& leaves) {
     for (auto &p : rec.getTypeList()) {
       auto name = mlir::StringAttr::get(ctx, p.first);
-      if (auto nested = mlir::dyn_cast<fir::RecordType>(p.second)) {
+      if (mlir::isa<fir::RecordType>(p.second) &&
+          !isBoxOfScalarArray(p.second)) {
         llvm::SmallVector<mlir::StringAttr, 4> next(prefix.begin(),
                                                     prefix.end());
         next.push_back(name);
-        enumerateLeaves(nested, ctx, next, leaves);
+        enumerateLeaves(mlir::cast<fir::RecordType>(p.second), ctx, next,
+                        leaves);
         continue;
       }
       ExpandedLeaf leaf;
@@ -212,6 +234,18 @@ struct MarshalExternalStructsPass
       leaf.type = p.second;
       leaves.push_back(std::move(leaf));
     }
+  }
+
+  /// For a box-typed leaf, the *callee* expects the box pointee --
+  /// the data buffer ``fir.box_addr`` returns -- not the box itself.
+  /// Map ``fir.box<fir.heap<seq<T>>>`` (allocatable) and
+  /// ``fir.box<fir.ptr<seq<T>>>`` (pointer) to the corresponding
+  /// inner type so the function type rewrite emits the right per-leaf
+  /// arg.  Non-box leaves are returned unchanged.
+  static mlir::Type boxLeafCalleeType(mlir::Type t) {
+    auto box = mlir::dyn_cast<fir::BoxType>(t);
+    if (!box) return t;
+    return box.getEleTy();
   }
 
   /// Rewrite ``fn``'s declaration to take each scalar-struct arg's members
@@ -234,8 +268,18 @@ struct MarshalExternalStructsPass
         int64_t start = static_cast<int64_t>(newArgTys.size());
         llvm::SmallVector<ExpandedLeaf, 4> leaves;
         enumerateLeaves(rec, ctx, /*prefix=*/{}, leaves);
-        for (auto &leaf : leaves)
-          newArgTys.push_back(fir::ReferenceType::get(leaf.type));
+        for (auto &leaf : leaves) {
+          // Per-leaf arg type.  For a box-typed leaf the callee
+          // expects the box pointee (the data buffer pointer
+          // ``fir.box_addr`` extracts at the call site); for an
+          // inline-flat leaf the existing ``ref<scalar | static-array>``
+          // shape is preserved.
+          mlir::Type callTy = boxLeafCalleeType(leaf.type);
+          if (mlir::isa<fir::BoxType>(leaf.type))
+            newArgTys.push_back(callTy);
+          else
+            newArgTys.push_back(fir::ReferenceType::get(callTy));
+        }
         groups.push_back(start);
         groups.push_back(static_cast<int64_t>(leaves.size()));
         isStruct.push_back(true);
@@ -297,11 +341,20 @@ struct MarshalExternalStructsPass
             // The last path element is the leaf; everything before is
             // a record member we walk through.
             bool isLast = (pi == leaf.path.size() - 1);
+            // Result type of *this* designate.  For an inline-flat
+            // leaf the existing ``ref<...>`` wrapping is used; for a
+            // box-typed leaf we keep the ``ref<box<...>>`` wrapping
+            // (the box address as stored in the parent record), then
+            // the post-walk ``fir.load`` + ``fir.box_addr`` extracts
+            // the data pointer.
             auto refTy = fir::ReferenceType::get(nextTy);
             mlir::Value memShape;
             // Only a static-shape array leaf needs a fir.shape (the
             // designate verifier requires it for a non-box array result).
-            if (isLast) {
+            // Box leaves do *not* get a shape -- the box already
+            // carries its dynamic extents and the designate's result
+            // is ``ref<box<...>>``.
+            if (isLast && !mlir::isa<fir::BoxType>(nextTy)) {
               if (auto seq = mlir::dyn_cast<fir::SequenceType>(nextTy)) {
                 llvm::SmallVector<mlir::Value, 4> dims;
                 for (auto e : seq.getShape())
@@ -321,6 +374,21 @@ struct MarshalExternalStructsPass
             cursor = dg.getResult();
             if (!isLast)
               cursorRec = mlir::cast<fir::RecordType>(nextTy);
+          }
+          // Box-typed leaf: at this point ``cursor`` is a ``ref<box<...>>``
+          // (the address of the box descriptor stored inside the
+          // struct).  Extract the data pointer the external expects
+          // via the canonical ``fir.load`` + ``fir.box_addr`` chain:
+          // load the box value, then ``box_addr`` to drop the
+          // descriptor and surface ``fir.heap<seq<...>>`` (allocatable)
+          // or ``fir.ptr<seq<...>>`` (pointer) -- the per-leaf arg
+          // type ``marshal`` rewrote the function declaration to.
+          if (mlir::isa<fir::BoxType>(leaf.type)) {
+            auto box = mlir::cast<fir::BoxType>(leaf.type);
+            auto loaded = b.create<fir::LoadOp>(loc, cursor);
+            auto addr = b.create<fir::BoxAddrOp>(loc, box.getEleTy(),
+                                                  loaded.getResult());
+            cursor = addr.getResult();
           }
           newOperands.push_back(cursor);
         }

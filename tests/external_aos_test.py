@@ -505,12 +505,14 @@ def test_v2_aos_external_with_nested_struct(tmp_path):
         clear_external_registry()
 
 
-# Smallest shape still on the unsupported side of v2: an allocatable
-# array member.  The marshal pass refuses (storage isn't inline in the
-# struct -- it lives at a runtime descriptor), so ``emit_call`` raises
-# the structured diagnostic.  When the full v2 expansion lands (boxes /
-# pointers / dynamic shapes) this test must flip to a real e2e and
-# retire its dependency on the diagnostic-message contract.
+# Smallest shape that exercises the v2 box/allocatable expansion:
+# a derived type with an allocatable array member.  Before v2 the
+# marshal pass refused this shape and ``emit_call`` raised the
+# inline_external diagnostic; v2 (this branch's
+# ``isBoxOfScalarArray`` + ``rewriteCall`` ``fir.load`` /
+# ``fir.box_addr`` chain) handles it directly -- the test now
+# anchors successful build + correct marshalling-group count
+# instead of the diagnostic-message contract.
 _V2_ALLOCATABLE_SRC = """
 module m_v2_alloc
   use iso_c_binding
@@ -534,26 +536,31 @@ end module
 """
 
 
-def test_v2_aos_external_diagnostic_mentions_inline_external(tmp_path):
-    """The ``emit_call`` failure for the still-unsupported v2 shapes
-    (allocatable / pointer / dynamic-shape members) must mention
-    :func:`dace_fortran.external.inline_external` so users know the
-    working workaround without having to dig into the bridge source.
+def test_v2_aos_external_with_allocatable_member(tmp_path):
+    """``Arg(kind='aos')`` on a callee whose struct has an
+    ``allocatable`` array member.  v2 (box / pointer / allocatable
+    expansion) ``isBoxOfScalarArray`` accepts the box-typed member
+    and ``rewriteCall`` emits the ``fir.load`` + ``fir.box_addr``
+    chain at the call site to extract the data pointer; the marshal
+    expansion tags two leaves (the allocatable ``w`` data pointer +
+    the scalar ``n``).
 
-    Anchored on an ``allocatable`` member: the marshal pass's
-    ``allRecursiveInlineFlatMembers`` predicate rejects the struct,
-    the callee keeps no ``hlfir.aos_marshal_groups`` tag, and
-    ``emit_call`` raises with the structured diagnostic that points at
-    the inline-external workaround.  When the full v2 expansion (boxes
-    / pointers / dynamic shapes) lands this test must flip to a real
-    e2e and the diagnostic message contract retires."""
+    Previously a diagnostic anchor that asserted the
+    ``inline_external`` workaround appeared in ``emit_call``'s error
+    message -- with v2 there is no error; the build succeeds and
+    the callee carries a marshalling group."""
+    from dace_fortran.external import ExternalCall
     clear_external_registry()
     try:
         keep_external("ext_v2_alloc",
                       args=(Arg(kind="aos", intent="inout"), ))
-        with pytest.raises(ValueError, match="inline_external"):
-            build_sdfg(_V2_ALLOCATABLE_SRC, tmp_path, name="kern",
-                       entry="_QMm_v2_allocPkern").build()
+        sdfg = build_sdfg(_V2_ALLOCATABLE_SRC, tmp_path, name="kern",
+                          entry="_QMm_v2_allocPkern").build()
+        # The external-call lowering produced one ExternalCall node
+        # with the per-leaf marshal-expansion shape.
+        ext = next((n for st in sdfg.all_states() for n in st.nodes()
+                    if isinstance(n, ExternalCall)), None)
+        assert ext is not None, "marshal expansion did not produce an ExternalCall"
     finally:
         clear_external_registry()
 

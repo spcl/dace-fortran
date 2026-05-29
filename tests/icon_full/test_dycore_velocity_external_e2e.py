@@ -68,6 +68,7 @@ from dace_fortran.bindings import (
     OriginalInterface,
     build_fortran_library,
 )
+from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.external import Arg, clear_external_registry, keep_external
 
 pytestmark = [
@@ -259,7 +260,13 @@ def test_dycore_outer_calls_velocity_sdfg_via_c_abi(tmp_path: Path):
                             entry="_QMmo_velocity_advectionPvelocity_tendencies").build()
     inner_sdfg.name = "velocity_tendencies"
     inner_sdfg.build_folder = str(inner_dir / "dacecache")
-    inner_iface = _velocity_iface("velocity_tendencies")
+    # Bridge-derived ``OriginalInterface`` -- carries the
+    # ``struct_types`` member layouts the bind_c_shim emitter needs
+    # (populated since c7b1f41).  The hand-authored ``_velocity_iface``
+    # below is for the outer-side ``build_fortran_library`` call where
+    # ``module_symbol_sources`` matters.
+    inner_iface = build_auto_interface(inner_sdfg._fortran_interface_raw,
+                                       "velocity_tendencies")
     inner_plan = FlattenPlan.from_dict(inner_sdfg._flatten_plan_raw or {})
     inner_lib = build_fortran_library(
         inner_sdfg,
@@ -267,6 +274,11 @@ def test_dycore_outer_calls_velocity_sdfg_via_c_abi(tmp_path: Path):
         plan=inner_plan,
         out_dir=str(inner_dir / "lib"),
         name="velocity_inner_wrap",
+        # The bind_c_shim ``use``s the ICON type modules
+        # (``mo_nonhydro_types`` etc.).  Build velocity_full.f90 as a
+        # prelude so its ``.mod`` files land in the bind dir before
+        # the shim source needs them.
+        prelude_sources=[_VELOCITY_PATH],
         bind_c_shim=True,
     )
     assert inner_lib.bind_c_shim_f90 is not None
