@@ -31,15 +31,45 @@ import pytest
 
 from _util import have_flang
 
-_CC = os.environ.get("ICON_DYCORE_CC")
 _ENTRY = "mo_solve_nonhydro::solve_nh"  # friendly name; emit() resolves it
 _ENTRY_SYM = "_QMmo_solve_nonhydroPsolve_nh"  # its mangled flang symbol
 _STUBS_DIR = Path(__file__).parent / "stubs"
 
+
+def _resolve_compile_commands() -> Path | None:
+    """Find a built ICON ``compile_commands.json`` for the parse test.
+
+    Resolution order:
+
+    1. ``ICON_DYCORE_CC`` environment variable -- explicit override, the
+       canonical CI / runner contract.
+    2. The conventional sibling-of-repo build directory
+       ``<repo-parent>/_icon_build/compile_commands.json``.  Matches the
+       layout :file:`setup_icon_dycore.sh` produces by default
+       (``BUILD_DIR=$HOME/_icon_build``); checking it here lets a
+       developer's local sweep pick the DB up without an env var.
+
+    The first hit that names a readable regular file wins.  ``None``
+    means no DB is reachable on this host -- the ``skipif`` below
+    surfaces the standard ``setup_icon_dycore.sh`` pointer."""
+    env = os.environ.get("ICON_DYCORE_CC")
+    if env and Path(env).is_file():
+        return Path(env)
+    # ``__file__`` -> tests/icon_dycore/<this>; parents[2] is the repo root,
+    # parents[3] is the workspace containing both the repo and ``_icon_build``.
+    sibling = Path(__file__).resolve().parents[3] / "_icon_build" / "compile_commands.json"
+    if sibling.is_file():
+        return sibling
+    return None
+
+
+_CC = _resolve_compile_commands()
+
 pytestmark = [
     pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH"),
-    pytest.mark.skipif(not _CC or not Path(_CC).is_file(),
-                       reason="set ICON_DYCORE_CC to a built compile_commands.json "
+    pytest.mark.skipif(_CC is None,
+                       reason="set ICON_DYCORE_CC to a built compile_commands.json, "
+                              "or place one at <workspace>/_icon_build/compile_commands.json "
                               "(see setup_icon_dycore.sh)"),
 ]
 
@@ -52,7 +82,7 @@ def test_solve_nonhydro_emits_hlfir(tmp_path):
     stubs = [_STUBS_DIR / "mpi_stub.f90", _STUBS_DIR / "netcdf_stub.f90"]
     # entry= restricts the ~900-TU ICON database to solve_nh's USE-closure;
     # the plain Fortran name is resolved to the mangled symbol from the sources.
-    out = emit(compile_commands=Path(_CC), out_dir=tmp_path / "hlfir",
+    out = emit(compile_commands=_CC, out_dir=tmp_path / "hlfir",
                stubs=stubs, entry=_ENTRY)
     # The dycore's func must appear in one of the emitted .hlfir files --
     # i.e. flang got through the preprocessor + frontend on solve_nh.
