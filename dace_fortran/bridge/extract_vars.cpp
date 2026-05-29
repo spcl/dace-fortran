@@ -2459,6 +2459,19 @@ FortranInterfaceInfo extractFortranInterface(mlir::ModuleOp module,
           FortranMemberInfo m;
           m.name = p.first;
           mlir::Type mt = p.second;
+          // v2 box-of-array member: unwrap ``fir.box<fir.heap|fir.ptr<
+          // seq<...>>>`` to expose the underlying sequence -- the
+          // data buffer the post-marshal-expansion external sees
+          // (``fir.box_addr``).  Rank + shape come from the
+          // sequence; dtype from its element type.
+          if (auto box = mlir::dyn_cast<fir::BoxType>(mt)) {
+            mlir::Type inner = box.getEleTy();
+            if (auto heap = mlir::dyn_cast<fir::HeapType>(inner))
+              inner = heap.getEleTy();
+            else if (auto ptr = mlir::dyn_cast<fir::PointerType>(inner))
+              inner = ptr.getEleTy();
+            mt = inner;
+          }
           if (auto seq = mlir::dyn_cast<fir::SequenceType>(mt)) {
             m.rank = (int)seq.getShape().size();
             for (auto e : seq.getShape()) {
@@ -2477,8 +2490,8 @@ FortranInterfaceInfo extractFortranInterface(mlir::ModuleOp module,
           else if (mt.isInteger(64)) m.dtype = "int64";
           else if (mt.isInteger(1) || mlir::isa<fir::LogicalType>(mt))
             m.dtype = "bool";
-          // Nested record / box / heap / pointer / complex / character:
-          // leave ``m.dtype`` empty so Python can flag the v2 boundary.
+          // Nested record / complex / character: leave ``m.dtype``
+          // empty so Python can flag the v2 boundary.
           layout.members.push_back(std::move(m));
         }
         out.struct_types[a.struct_name] = std::move(layout);

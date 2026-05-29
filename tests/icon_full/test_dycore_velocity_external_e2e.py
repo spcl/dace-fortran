@@ -231,14 +231,18 @@ def _run(lib, fn, dims, bufs, z_arrays):
 
 @pytest.mark.xfail(
     strict=True,
-    reason="dycore + external velocity_tendencies SDFG -- blocked by the "
-           "v2 marshal expansion for box / pointer / allocatable / "
-           "dynamic-shape members (Phase 2.3.E remaining work).  v2.1 "
-           "(4de6c7a) covers nested-record members only; "
-           "velocity_tendencies' derived-type args (t_nh_prog etc.) carry "
-           "box-typed members, so the marshal pass silently skips the "
-           "callee and emit_call raises 'aos arg has no marshalling "
-           "group'.  Flip to passing when v2 expansion lands.",
+    reason="dycore + external velocity_tendencies SDFG.  The marshal-pass "
+           "half is done -- the box / pointer / allocatable v2 expansion "
+           "landed in ``452f41a``, and the bridge struct-member extractor "
+           "now emits box-of-scalar-array dtypes after the box-unwrap.  "
+           "What remains is the bind_c_shim's *nested-struct* support: "
+           "ICON's t_patch has nested t_grid_cells / t_grid_edges / "
+           "t_grid_vertices members, and ``_emit_struct_arg`` today walks "
+           "only one level (top-level members).  Extending it to descend "
+           "recursively into nested struct members (the bridge needs to "
+           "also recursively populate ``struct_types`` for nested "
+           "records) is the remaining gate.  Flip xfail when both halves "
+           "of the bind_c_shim nested-struct walk land.",
 )
 def test_dycore_outer_calls_velocity_sdfg_via_c_abi(tmp_path: Path):
     """The dycore SDFG calls the standalone velocity_tendencies SDFG

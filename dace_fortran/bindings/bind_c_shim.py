@@ -70,15 +70,31 @@ def _shape_literal(shape) -> str:
 
 
 def _is_inline_flat_member(m: Member) -> bool:
-    """``True`` iff ``m`` is the inline-flat shape the shim's struct
-    expansion can build a c_f_pointer alias for: a scalar (rank 0),
-    or a static-shape array of scalar (rank > 0, no ``'?'`` /
-    ``'*'`` / ``':'`` in shape, no nested struct -- the
-    :class:`Member.fortran_type` already carries an ``iso_c_binding``
-    type for scalar elements only)."""
-    if m.rank == 0:
-        return True
-    return all(s not in ('?', '*', ':') for s in m.shape)
+    """``True`` iff the bind(c) shim can build a ``c_f_pointer`` alias
+    for ``m``.  Accepts:
+
+    * Scalar members (``rank == 0``).
+    * Static-shape arrays of scalar -- every shape entry is a
+      compile-time literal or named constant (no ``'?'``, ``'*'``,
+      ``':'``).
+    * **v2** Dynamic-shape arrays of scalar -- shape entries may be
+      ``'?'`` (the bridge's "unknown extent at HLFIR time" marker for
+      ``box<heap|ptr<seq<...>>>`` allocatable / pointer array members,
+      surfaced after the box-aware member extractor in
+      ``extract_vars.cpp``).  ``_emit_struct_arg`` takes the member's
+      extents as separate ``integer(c_int), value`` args
+      (``<name>_<member>_d<i>``) and feeds them into the
+      ``c_f_pointer`` shape constructor at runtime.
+
+    Refuses nested-struct members (the bridge leaves their
+    ``fortran_type`` as the ``'??'`` placeholder ``build_auto_interface``
+    inserts when the dtype map has no entry; the shim's
+    ``_emit_struct_arg`` can't materialise a typed pointer for that
+    shape).
+    """
+    if m.fortran_type == "??":
+        return False
+    return m.rank >= 0
 
 
 def _struct_module_use(iface: OriginalInterface, struct_name: str) -> str:
@@ -122,26 +138,42 @@ def _emit_flat_arg(a: OriginalArg, header_args: List[str],
 
 
 def _emit_struct_arg(a: OriginalArg, st: DerivedType,
-                     header_args: List[str], decls_ptr: List[str],
-                     decls_local: List[str], c_f_calls: List[str],
-                     copy_in: List[str], copy_out: List[str],
-                     call_args: List[str]):
-    """Append the per-member split for a derived-type argument with
-    inline-flat members only.
+                     header_args: List[str], decls_value: List[str],
+                     decls_ptr: List[str], decls_local: List[str],
+                     c_f_calls: List[str], copy_in: List[str],
+                     copy_out: List[str], call_args: List[str]):
+    """Append the per-member split for a derived-type argument.
 
     The dummy itself becomes a local ``type(<struct>), target ::
     <name>``; each member rides as its own C-ABI slot
     ``<name>_<member>_p`` (``c_ptr, value``) aliased through
-    ``c_f_pointer`` to the member's declared shape.  Per
-    :attr:`OriginalArg.intent` the shim copies values in before the
-    ``<entry>_dace`` call and (for ``out`` / ``inout``) copies them
-    back after.  The intent contract holds at the *whole-struct*
-    granularity since the member layout / intent split is not
-    surfaced on :class:`Member` today.
+    ``c_f_pointer``.  A static-shape member's extents are spelled as
+    literals on the ``c_f_pointer`` shape constructor; a *dynamic*
+    member's extents (``'?'`` shape entries) come as separate
+    ``integer(c_int), value`` args ``<name>_<member>_d<i>`` ahead of
+    the pointer, in declaration order -- matching the marshal-
+    expanded leaf ordering on the outer SDFG's emit_call side.
+
+    Per :attr:`OriginalArg.intent`:
+
+    * Static-shape members: copy-in / copy-out element-wise.
+    * Dynamic-shape members: pointer-assign ``<a>%<m> => <flat>`` to
+      alias the SDFG companion in place -- the bridge's struct flatten
+      already arranged the storage layout so no element copy is
+      needed.  Skipping the copy preserves the per_member_soa
+      no-pack contract on the outer side.
     """
     for m in st.members:
         flat_name = f"{a.name}_{m.name}"
         ptr_name = f"{flat_name}_p"
+        is_dynamic = any(s in ('?', '*', ':') for s in m.shape)
+        if is_dynamic:
+            # Extents ride ahead of the pointer, one ``integer(c_int),
+            # value`` arg per dim, named ``<flat>_d<i>``.
+            ext_names = [f"{flat_name}_d{i}" for i in range(m.rank)]
+            for en in ext_names:
+                header_args.append(en)
+                decls_value.append(f"  integer(c_int), value :: {en}")
         header_args.append(ptr_name)
         decls_ptr.append(f"  type(c_ptr), value :: {ptr_name}")
         if m.rank == 0:
@@ -150,8 +182,18 @@ def _emit_struct_arg(a: OriginalArg, st: DerivedType,
         else:
             decls_local.append(
                 f"  {m.fortran_type}, pointer :: {flat_name}{_dim_spec(m.shape)}")
+            if is_dynamic:
+                shape_tok = "[" + ", ".join(ext_names) + "]"
+            else:
+                shape_tok = _shape_literal(m.shape)
             c_f_calls.append(f"  call c_f_pointer({ptr_name}, {flat_name}, "
-                             f"{_shape_literal(m.shape)})")
+                             f"{shape_tok})")
+        if is_dynamic and m.rank > 0:
+            # Pointer-assign the struct field to the SDFG companion in
+            # place; no element copy.  Matches the per_member_soa
+            # no-pack contract.
+            copy_in.append(f"  {a.name}%{m.name} => {flat_name}")
+            continue
         if a.intent in ('in', 'inout', ''):
             if m.rank == 0:
                 copy_in.append(f"  {a.name}%{m.name} = {flat_name}(1)")
@@ -252,8 +294,9 @@ def emit_bind_c_shim(iface: OriginalInterface, out_path: str) -> Path:
                            decls_local, c_f_calls, call_args)
             continue
         st = iface.struct_types[a.struct_type]
-        _emit_struct_arg(a, st, header_args, decls_ptr, decls_local,
-                         c_f_calls, copy_in, copy_out, call_args)
+        _emit_struct_arg(a, st, header_args, decls_value, decls_ptr,
+                         decls_local, c_f_calls, copy_in, copy_out,
+                         call_args)
         # Pick up the ``use`` line for the struct's defining module so
         # the shim can spell ``type(<struct>)`` and any shape constants
         # the member declarations reference.

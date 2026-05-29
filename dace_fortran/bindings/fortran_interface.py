@@ -132,8 +132,19 @@ def build_auto_interface(raw: dict, entry: str) -> OriginalInterface:
                 raise ValueError(f"auto-iface: unsupported dtype {a['dtype']!r} "
                                  f"for argument {a['name']!r}")
             struct_type = None
+        rank = int(a["rank"])
+        shape = tuple(a["shape"])
+        # The bridge's snapshot reports ``rank`` but may leave
+        # ``shape`` empty for assumed-shape array dummies
+        # (``REAL, DIMENSION(:, :, :), INTENT(...) :: arr``) -- the
+        # extents aren't named at the call surface.  Default to a
+        # rank-length tuple of ``":"`` so the wrapper emitter picks the
+        # ``arr(:, :, :)`` declaration shape (matches the hand-authored
+        # ``OriginalInterface`` shape used by the velocity_full e2e).
+        if rank > 0 and not shape:
+            shape = (":", ) * rank
         args.append(OriginalArg(name=a["name"], fortran_type=fortran_type,
-                                rank=int(a["rank"]), shape=tuple(a["shape"]),
+                                rank=rank, shape=shape,
                                 intent=a["intent"], struct_type=struct_type))
     used_modules = {mod: tuple(syms) for mod, syms in raw["used_modules"].items()}
     struct_types = {}

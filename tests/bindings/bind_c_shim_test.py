@@ -118,12 +118,15 @@ def test_emit_shim_rank2_array_extents(tmp_path: Path):
     assert "call c_f_pointer(a_p, a, [m, n])" in text
 
 
-def test_emit_shim_rejects_dynamic_shape_struct_member(tmp_path: Path):
-    """A struct member whose extent is a Fortran symbol (here ``'n'``)
-    -- rather than a literal -- is treated as dynamic and refused: the
-    auto-shim's static-shape ``c_f_pointer`` alias cannot spell a
-    runtime extent without an extra dim-passing convention the MVP
-    doesn't define."""
+def test_emit_shim_dynamic_shape_struct_member(tmp_path: Path):
+    """A struct member with a dynamic extent (``'?'`` in
+    :attr:`Member.shape`) is now handled by the v2 shim emitter:
+    each dim rides as a separate ``integer(c_int), value`` arg
+    named ``<flat>_d<i>`` and the ``c_f_pointer`` shape constructor
+    references them at runtime.  Pointer-assignment
+    ``<a>%<m> => <flat>`` aliases the struct field to the SDFG
+    companion in place, preserving the per_member_soa no-pack
+    contract on the outer side."""
     iface = OriginalInterface(
         entry="kern",
         args=(
@@ -143,8 +146,14 @@ def test_emit_shim_rejects_dynamic_shape_struct_member(tmp_path: Path):
         },
         used_modules={"mo_state": ("t_state", )},
     )
-    with pytest.raises(UnsupportedShimInterfaceError):
-        emit_bind_c_shim(iface, str(tmp_path / "kern_c.f90"))
+    text = emit_bind_c_shim(iface, str(tmp_path / "kern_c.f90")).read_text()
+    # Per-dim extent arg precedes the pointer arg.
+    assert "integer(c_int), value :: st_u_d0" in text
+    assert "type(c_ptr), value :: st_u_p" in text
+    # The c_f_pointer shape constructor references the extent arg.
+    assert "call c_f_pointer(st_u_p, st_u, [st_u_d0])" in text
+    # Pointer-assign aliases the field in place (no element copy).
+    assert "st%u => st_u" in text
 
 
 def test_emit_shim_struct_with_static_array_members(tmp_path: Path):
