@@ -430,24 +430,20 @@ end module
 
 
 # ---------------------------------------------------------------------------
-#  v2 marshal boundary (Phase 2.3.E) -- the strict v1
-#  ``isInlineFlatMember`` check in ``MarshalExternalStructs.cpp`` skips any
-#  struct with a non-scalar / non-static-array member (allocatable / pointer
-#  arrays, nested derived types, dynamic-shape members).  These tests pin
-#  the resulting diagnostic surface so the v2 permissive expansion has a
-#  clear target.  Workaround: ``dace_fortran.external.inline_external``
-#  bypasses marshalling entirely (the callee SDFG is folded into the
-#  caller); see ``tests/inline_external_test.py`` for that path.
+#  v2.1 marshal expansion (Phase 2.3.E) -- ``MarshalExternalStructs.cpp``
+#  now recursively walks nested derived-type members down to inline-flat
+#  leaves (scalar or static-shape array of scalar) and expands each leaf
+#  into its own call-arg + struct field.  Still on the unsupported side
+#  of the v2 boundary: box / pointer / allocatable / dynamic-shape
+#  members -- :func:`emit_call`'s structured diagnostic continues to
+#  point at :func:`dace_fortran.external.inline_external` for those.
 # ---------------------------------------------------------------------------
 
 
-# Shared kernel source for the two v2-boundary tests below.  The outer
-# struct ``outer_t`` has a *nested* derived-type member ``inner_t`` --
-# enough to fail the strict v1 ``isInlineFlatMember`` (which requires
-# every member to be a scalar or a static-shape array *of scalar*; a
-# nested record type isn't ``fir::SequenceType`` at all).  bind(c) is
-# *not* declared on the interface block, so flang stays semantically
-# happy with the non-interoperable shape.
+# Shared kernel source for the v2.1 test pair.  The outer struct
+# ``outer_t`` has a *nested* derived-type member ``inner_t``; the
+# recursive flatten in ``MarshalExternalStructs.cpp`` walks it down to
+# three contiguous f64 leaves (``ip%u``, ``ip%v``, ``scale``).
 _V2_NESTED_SRC = """
 module m_v2
   use iso_c_binding
@@ -475,44 +471,88 @@ end module
 """
 
 
-@xfail("Phase 2.3.E: hlfir-marshal-external-structs v1 skips structs "
-       "with nested derived-type members; emit_call then raises 'aos arg "
-       "has no marshalling group'.  v2 permissive expansion is the fix; "
-       "inline_external is the working alternative.")
 def test_v2_aos_external_with_nested_struct(tmp_path):
     """``keep_external(kind='aos')`` on a callee whose struct has a
-    nested derived-type member -- the smallest shape that still trips
-    the strict v1 ``isInlineFlatMember`` check.
+    nested derived-type member.  The recursive expansion produces one
+    SoA flat per leaf member; ``emit_call`` lays out the AoS struct
+    field-by-field in declaration order (``ip%u``, ``ip%v``,
+    ``scale``).
 
-    Pinned ``xfail`` until v2 marshal expansion lands.  The diagnostic
-    ``emit_call`` raises today is expected to point the reader at
-    ``inline_external`` and at this test; that contract is verified
-    separately by
-    :func:`test_v2_aos_external_diagnostic_mentions_inline_external`."""
+    Asserts on both ends of the contract: the build succeeds (the
+    pre-v2 diagnostic does *not* fire here) AND the resulting
+    ``ExternalCall`` carries three leaf-aligned SoA edges, one per
+    leaf in declaration order."""
+    from dace_fortran.external import ExternalCall
     clear_external_registry()
     try:
         keep_external("ext_v2",
                       args=(Arg(kind="aos", intent="inout"), ))
-        build_sdfg(_V2_NESTED_SRC, tmp_path, name="kern",
-                   entry="_QMm_v2Pkern").build()
+        sdfg = build_sdfg(_V2_NESTED_SRC, tmp_path, name="kern",
+                          entry="_QMm_v2Pkern").build()
+        # Locate the external-call node and check the three leaves
+        # (``ip%u``, ``ip%v``, ``scale``) are wired in declaration order.
+        # The SoA flats inherit the outer struct's name prefix and the
+        # full member path: ``s_ip_u``, ``s_ip_v``, ``s_scale``.
+        node = next((n for st in sdfg.all_states() for n in st.nodes()
+                     if isinstance(n, ExternalCall)), None)
+        assert node is not None, "external call not lowered for nested struct"
+        st = next(s for s in sdfg.all_states() if node in s.nodes())
+        touched = {e.data.data for e in st.in_edges(node)} | \
+                  {e.data.data for e in st.out_edges(node)}
+        assert touched == {"s_ip_u", "s_ip_v", "s_scale"}, \
+            f"expected three SoA-flat leaves, got {touched}"
     finally:
         clear_external_registry()
 
 
+# Smallest shape still on the unsupported side of v2: an allocatable
+# array member.  The marshal pass refuses (storage isn't inline in the
+# struct -- it lives at a runtime descriptor), so ``emit_call`` raises
+# the structured diagnostic.  When the full v2 expansion lands (boxes /
+# pointers / dynamic shapes) this test must flip to a real e2e and
+# retire its dependency on the diagnostic-message contract.
+_V2_ALLOCATABLE_SRC = """
+module m_v2_alloc
+  use iso_c_binding
+  implicit none
+  type :: alloc_t
+    real(c_double), allocatable :: w(:)
+    integer(c_int) :: n
+  end type
+contains
+  subroutine kern(s)
+    type(alloc_t), intent(inout) :: s
+    interface
+      subroutine ext_v2_alloc(p)
+        import :: alloc_t
+        type(alloc_t), intent(inout) :: p
+      end subroutine
+    end interface
+    call ext_v2_alloc(s)
+  end subroutine
+end module
+"""
+
+
 def test_v2_aos_external_diagnostic_mentions_inline_external(tmp_path):
-    """The ``emit_call`` failure for the v2 boundary must mention
+    """The ``emit_call`` failure for the still-unsupported v2 shapes
+    (allocatable / pointer / dynamic-shape members) must mention
     :func:`dace_fortran.external.inline_external` so users know the
     working workaround without having to dig into the bridge source.
 
-    Distinct from the ``xfail``-pinned scenario above: this one passes
-    today because it asserts on the *error message*, not on the build
-    succeeding.  When v2 expansion lands and the xfail flips, this one
-    must be retired alongside it."""
+    Anchored on an ``allocatable`` member: the marshal pass's
+    ``allRecursiveInlineFlatMembers`` predicate rejects the struct,
+    the callee keeps no ``hlfir.aos_marshal_groups`` tag, and
+    ``emit_call`` raises with the structured diagnostic that points at
+    the inline-external workaround.  When the full v2 expansion (boxes
+    / pointers / dynamic shapes) lands this test must flip to a real
+    e2e and the diagnostic message contract retires."""
     clear_external_registry()
     try:
-        keep_external("ext_v2", args=(Arg(kind="aos", intent="inout"), ))
+        keep_external("ext_v2_alloc",
+                      args=(Arg(kind="aos", intent="inout"), ))
         with pytest.raises(ValueError, match="inline_external"):
-            build_sdfg(_V2_NESTED_SRC, tmp_path, name="kern",
-                       entry="_QMm_v2Pkern").build()
+            build_sdfg(_V2_ALLOCATABLE_SRC, tmp_path, name="kern",
+                       entry="_QMm_v2_allocPkern").build()
     finally:
         clear_external_registry()
