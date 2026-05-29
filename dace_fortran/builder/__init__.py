@@ -486,6 +486,22 @@ class SDFGBuilder:
         # captures the post-cleanup signature (matters for the
         # downstream codegen drift check).
         self._run_post_gen_passes(sdfg)
+        # Prune SoA companions left orphaned by a marshal-expansion
+        # refusal (Phase 2.3.E v2 boundary): with no AccessNode and no
+        # memlet referring to them they bloat the signature with kernel
+        # parameters the kernel never reads.  Bindings emission stays
+        # safe -- the :class:`FlattenPlan` recipes' ``flat_names`` are
+        # forwarded as ``binding_names`` keepers, so a member the
+        # bridge generated for the bindings ``c_loc`` aliasing path
+        # survives even if the SDFG dataflow itself never reads it.
+        from dace_fortran.builder.prune_unused_arrays import prune_unused_arrays
+        _plan_raw = self.module.get_flatten_plan() or {}
+        _binding_keep = {
+            f
+            for e in (_plan_raw.get('entries') or [])
+            for f in (e.get('recipe', {}).get('flat_names') or [])
+        }
+        prune_unused_arrays(sdfg, binding_names=_binding_keep)
         self._attach_frozen_signature(sdfg)
         # Stash the pre-flatten caller interface + the post-flatten plan so
         # the binding emitter can auto-derive both an ``OriginalInterface``
