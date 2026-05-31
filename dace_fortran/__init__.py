@@ -61,6 +61,15 @@ _LAZY = {
     "merge_used_modules": "dace_fortran.preprocess",
     "preprocess_fortran": "dace_fortran.preprocess",
     "rewrite_integer_powers": "dace_fortran.preprocess",
+    # Real-world-codebase helpers (ICON / IFS / ECRAD etc.).
+    "prepare_flang_translation_unit": "dace_fortran.flang_codebase",
+    "emit_hlfir_from_codebase": "dace_fortran.flang_codebase",
+    "extract_make_compile_args": "dace_fortran.flang_codebase",
+    "vendor_netcdf_fortran": "dace_fortran.flang_codebase",
+    "mpi_stub_source": "dace_fortran.flang_codebase",
+    "find_openmpi_include": "dace_fortran.flang_codebase",
+    "LIBRARY_STUBS": "dace_fortran.flang_codebase",
+    "FLANG_BUG_PATCHES": "dace_fortran.flang_codebase",
 }
 
 __all__ = list(_LAZY)

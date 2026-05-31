@@ -224,6 +224,74 @@ translation unit and the bridge consumes one. A procedure `USE`d from a
 different TU stays an external symbol reference in the SDFG -- the right
 contract for halo exchanges or I/O routines you *want* left external.
 
+#### `dace_fortran.flang_codebase` -- when there is no `compile_commands.json`
+
+Some real-world projects (ICON among them) don't ship a
+`compile_commands.json` and the build is heavy enough that `bear -- make`
+isn't always practical. `dace_fortran.flang_codebase` is a thin
+helper layer that builds the same self-contained translation unit
+straight from the project's existing autotools/CMake-generated
+`Makefile`, replays the project's own `-D` defines, and stitches in
+the library stubs flang needs for things like `USE mpi` and
+`USE netcdf` (whose only Ubuntu artifact is a gfortran-binary `.mod`).
+
+```python
+import dace_fortran
+from pathlib import Path
+
+ICON_SRC   = Path("/path/to/icon-model")
+ICON_BUILD = ICON_SRC / "build/stock_cpu"      # ICON's own configure+make
+
+# Lift -D / -I out of the project's Makefile via `make -n`.
+args = dace_fortran.extract_make_compile_args(
+    makefile_dir=ICON_BUILD,
+    target="src/atm_dyn_iconam/mo_velocity_advection.o")
+
+# Compose merged TU + run flang with stubs + bug patches.
+hlfir = dace_fortran.emit_hlfir_from_codebase(
+    entry_source=(ICON_SRC / "src/atm_dyn_iconam/mo_velocity_advection.f90").read_text(),
+    out_path=Path("/tmp/velocity.hlfir"),
+    search_dirs=[
+        ICON_SRC / "src",
+        ICON_SRC / "externals/fortran-support/src",
+        ICON_SRC / "externals/mtime/src",
+        ICON_SRC / "externals/iconmath/src",
+        ICON_SRC / "externals/cdi/src",
+        ICON_SRC / "externals/memman/src/bindings/fortran",
+    ],
+    library_stubs=["mpi", "netcdf"],           # opt-in registry
+    defines=args["defines"] + ["NO_MPI_CHOICE_ARG"],
+    include_dirs=args["include_dirs"],
+    cache_dir=Path("~/.cache/dace-fortran").expanduser(),
+)
+sdfg = dace_fortran.build_sdfg_from_hlfir(
+    hlfir, entry="_QMmo_velocity_advectionPvelocity_tendencies")
+```
+
+What's pluggable:
+
+* `LIBRARY_STUBS` -- a registry of upstream Fortran libraries whose
+  only install artifact is a binary `.mod` flang can't read. Built-in:
+  `'mpi'` (wraps OpenMPI's `mpif-*.h`), `'netcdf'` (vendors
+  netcdf-fortran source on first use). Add your own with a
+  `LibraryStub(name, source, flags)` entry.
+* `FLANG_BUG_PATCHES` -- text-level rewrites that route around flang-21
+  ICE / false-positive shapes. Default-on: the `MPI_SIZEOF` generic-
+  resolution false positive (rewritten to its statically-known byte
+  count). Register your own `(name, transform)` for the next compiler
+  bug you find.
+* `extract_make_compile_args(makefile_dir, target)` -- project-agnostic;
+  parses one `make -n` recipe for `-D` / `-I` / source path. No
+  cmake/`bear` dependency.
+
+Worked example: [tests/icon_full/test_velocity_from_icon_source.py](tests/icon_full/test_velocity_from_icon_source.py)
+parametrizes over a stub source and ICON's real
+`mo_velocity_advection.f90` (pulled via the `tests/icon_full/icon-model`
+git submodule, pinned to release tag `icon-2026.04-public`).
+[tests/icon_full/test_dycore_from_icon_source.py](tests/icon_full/test_dycore_from_icon_source.py)
+extends it to the dycore (`mo_solve_nonhydro.f90`), keeping
+`velocity_tendencies` and `sync_patch_array` as externals.
+
 ### Calling a separately-compiled external
 
 A kernel that `CALL`s a separately-compiled `bind(c)` function declares

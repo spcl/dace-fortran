@@ -78,4 +78,8 @@ markers = [
 ]
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
+# Don't recurse into the icon-model submodule -- its own scripts/
+# carries an unrelated pytest tree that fails to collect outside
+# its own dependency closure.
+norecursedirs = ["icon-model", ".git", "*.egg-info", "build", ".dacecache*"]
 addopts = "--color=yes"

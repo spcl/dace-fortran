@@ -1,0 +1,3 @@
+[submodule "icon-model"]
+	path = tests/icon_full/icon-model
+	url = https://gitlab.dkrz.de/icon/icon-model.git

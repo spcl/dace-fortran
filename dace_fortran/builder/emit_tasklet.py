@@ -270,8 +270,75 @@ def emit_scalar_assign(builder, state, target: str, value: str):
     ``value``  --  every one that names an SDFG scalar gets its own
     input connector so the tasklet can read ``i`` for ``i = i + 1``
     and similar self-updates.
+
+    Whole-array fast path: an assign whose target and (single-token)
+    value are BOTH multi-dim arrays of the same descriptor shape is a
+    pointer-rebind that ``RewritePointerAssigns`` didn't collapse  --
+    likely a chain shape (``ptr => derived_root%a%b``) the pass
+    doesn't yet recognise.  Emit a whole-array copy memlet instead of
+    a scalar tasklet with the wrong subset.  ICON's velocity_tendencies
+    surfaces this with the ``icidx => p_patch%edges%cell_idx`` rebinds
+    in its setup block.
     """
     value = str(value)
+    src_name = value.strip()
+    tgt_var = builder.arrays.get(target)
+    tgt_is_array = (tgt_var is not None
+                    and getattr(tgt_var, "rank", 0) > 0
+                    and len(tgt_var.shape_symbols) == tgt_var.rank)
+
+    if tgt_is_array:
+        is_whole_array_copy = (
+            src_name in builder.arrays
+            and re.fullmatch(r'[A-Za-z_]\w*', src_name) is not None
+        )
+        if is_whole_array_copy:
+            src_var = builder.arrays[src_name]
+            if (src_var.rank == tgt_var.rank
+                    and len(src_var.shape_symbols) == src_var.rank):
+                # Plain whole-array copy (pointer-rebind shape that
+                # ``RewritePointerAssigns`` didn't collapse, e.g.
+                # ``icidx => p_patch%edges%cell_idx``).
+                # AccessNode(src) -> AccessNode(tgt) with full-shape
+                # subsets on both sides; no tasklet needed.
+                read = acc(builder, state, src_name)
+                write = state.add_access(target)
+                cache = getattr(state, '_hlfir_access', None)
+                if cache is not None:
+                    cache[target] = write
+                _ensure_view_writeback_link(builder, state, write, target)
+                subset = ",".join(f"0:{s}" for s in src_var.shape_symbols)
+                state.add_edge(read, None, write, None,
+                               Memlet(f"{src_name}[{subset}]"))
+                return
+
+        # Whole-array fill: scalar literal -> multi-dim array.  The
+        # bridge emits this for ``ALLOCATE x; x = 0`` and similar
+        # zero-init prologues.  Use ``add_mapped_tasklet`` so DaCe
+        # wires the empty-input + indexed-output edges itself; doing
+        # it by hand needs a MapEntry connector dance.
+        if re.fullmatch(r'[+-]?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?',
+                        src_name) is not None:
+            dims = tgt_var.shape_symbols
+            ranges = {f"__i{k}": f"0:{s}"
+                      for k, s in enumerate(dims)}
+            idx_expr = ",".join(f"__i{k}" for k in range(len(dims)))
+            w = state.add_access(target)
+            cache = getattr(state, '_hlfir_access', None)
+            if cache is not None:
+                cache[target] = w
+            _ensure_view_writeback_link(builder, state, w, target)
+            state.add_mapped_tasklet(
+                name=f"set_{target}",
+                map_ranges=ranges,
+                inputs={},
+                code=f"_out = {src_name}",
+                outputs={"_out": Memlet(f"{target}[{idx_expr}]")},
+                output_nodes={target: w},
+                external_edges=True,
+            )
+            return
+
     tokens = set(re.findall(r'[a-zA-Z_]\w*', value))
     # ``nm != target`` was wrong  --  ``i = i + 1`` genuinely needs a read
     # edge on the target itself.

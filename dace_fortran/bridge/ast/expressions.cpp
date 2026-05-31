@@ -382,6 +382,98 @@ std::string buildExpr(mlir::Value val, int d) {
   auto *def = val.getDefiningOp();
   if (!def) return "?";
 
+  // ``fir.embox`` wraps a memref into a Fortran box descriptor (adds
+  // bounds + type-info around a raw pointer).  In an expression
+  // context the descriptor and the underlying memref denote the
+  // same Fortran value, so forward to the memref's expression.
+  // Real-world ICON code hits this when an array dummy is passed to
+  // a polymorphic helper via an assumed-shape interface  --  Flang
+  // wraps the actual through ``fir.embox`` at the call site.
+  if (auto eb = mlir::dyn_cast<fir::EmboxOp>(def))
+    return buildExpr(eb.getMemref(), d + 1);
+
+  // ``hlfir.as_expr`` lifts a named variable / temporary into an
+  // HLFIR-expr value (used when an op-class wants
+  // ``hlfir.expr<...>`` rather than ``fir.ref<...>``).  Transparent
+  // for expression building: the underlying variable IS the value.
+  if (auto ae = mlir::dyn_cast<hlfir::AsExprOp>(def))
+    return buildExpr(ae.getVar(), d + 1);
+
+  // ``hlfir.declare`` registers a Fortran name on a memref.  When
+  // referenced in an expression, the name itself is the read --
+  // forward to the memref to pick up the canonical declaration
+  // (``traceToDecl`` walks declare aliases) and return the name.
+  if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(def)) {
+    auto name = traceToDecl(dc.getMemref());
+    if (!name.empty()) return name;
+    return buildExpr(dc.getMemref(), d + 1);
+  }
+
+  // ``fir.emboxchar`` packages ``(char_ptr, length)`` into a
+  // CHARACTER descriptor.  The pointer half is the underlying
+  // string; downstream Fortran arithmetic / concat works against
+  // the character data itself, so forward to it.
+  if (auto ebc = mlir::dyn_cast<fir::EmboxCharOp>(def))
+    return buildExpr(ebc.getMemref(), d + 1);
+
+  // ``fir.box_addr`` pulls the data pointer out of a box descriptor.
+  // Forward through to the boxed value (peeling through any embox
+  // we just installed above).
+  if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(def))
+    return buildExpr(ba.getVal(), d + 1);
+
+  // ``fir.zero_bits`` (class name ``fir::ZeroOp``) produces an
+  // all-zero value of any Fortran type -- used for uninitialized
+  // scalars, null pointer sentinels, fresh boxes about to be
+  // ``fir.embox``'d.  ``0`` is correct for every integer / real /
+  // pointer typed RHS the expression layer surfaces.
+  if (mlir::isa<fir::ZeroOp>(def))
+    return "0";
+
+  // ``fir.address_of`` takes a symbol reference and yields its
+  // address.  In an expression context, the symbol's name is what
+  // a downstream reader wants -- ``traceToDecl`` resolves it
+  // through any subsequent declare aliases.
+  if (auto ao = mlir::dyn_cast<fir::AddrOfOp>(def)) {
+    auto name = traceToDecl(ao.getResult());
+    if (!name.empty()) return name;
+    // Strip the leading ``@`` from the symbol reference for a
+    // human-readable fallback.
+    auto sym = ao.getSymbol().getRootReference().getValue().str();
+    return sym;
+  }
+
+  // ``fir.alloca`` reserves storage on the stack.  ``traceToDecl``
+  // walks past any subsequent ``hlfir.declare`` to pick up the
+  // Fortran name the alloca participates in; if there is none
+  // (synthetic temporary), fall through to the diagnostic / ``?``
+  // path -- a raw alloca address has no spellable expression form.
+  if (mlir::isa<fir::AllocaOp>(def)) {
+    auto name = traceToDecl(def->getResult(0));
+    if (!name.empty()) return name;
+  }
+
+  // ``fir.unboxchar`` extracts ``(char_ptr, length)`` from a
+  // CHARACTER descriptor.  The char-data half (operand 0) is what
+  // an expression context wants; the length is a separate use that
+  // the bridge tracks via the box itself.
+  if (auto uc = mlir::dyn_cast<fir::UnboxCharOp>(def))
+    return buildExpr(uc.getOperand(), d + 1);
+
+  // ``hlfir.concat`` is the Fortran ``//`` string concatenation
+  // operator.  Map to Python ``+`` so the tasklet body uses the
+  // string-concat semantics the DaCe codegen already understands.
+  if (auto cc = mlir::dyn_cast<hlfir::ConcatOp>(def)) {
+    std::string out;
+    bool first = true;
+    for (auto str : cc.getStrings()) {
+      if (!first) out += " + ";
+      out += buildExpr(str, d + 1);
+      first = false;
+    }
+    return out;
+  }
+
   auto nm = def->getName().getStringRef();
 
   // ``ALLOCATED(arr)``  --  Flang lowers as
@@ -1447,6 +1539,20 @@ std::string buildExpr(mlir::Value val, int d) {
       }
   }
 
+  // Optional diagnostic for the "unhandled HLFIR op" fall-through:
+  // export ``DACE_FORTRAN_DEBUG_BUILDEXPR=1`` to log which op makes a
+  // tasklet emit ``_out_x = ?`` so the missing case can be added
+  // explicitly above.  Off by default to keep build logs quiet.
+  static const bool kDebug =
+      std::getenv("DACE_FORTRAN_DEBUG_BUILDEXPR") != nullptr;
+  if (kDebug) {
+    std::string op_name = def->getName().getStringRef().str();
+    std::string loc;
+    llvm::raw_string_ostream os(loc);
+    def->getLoc().print(os);
+    llvm::errs() << "[buildExpr fallthrough] op=" << op_name
+                 << " at " << loc << "\n";
+  }
   return "?";
 }
 
