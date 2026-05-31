@@ -27,6 +27,8 @@ from dace_fortran.bindings.flatten_plan import (
 _DTYPE_TO_F = {
     'float64': 'real(c_double)',
     'float32': 'real(c_float)',
+    'int8': 'integer(c_int8_t)',
+    'int16': 'integer(c_int16_t)',
     'int32': 'integer(c_int)',
     'int64': 'integer(c_long)',
     'bool': 'logical(c_bool)',

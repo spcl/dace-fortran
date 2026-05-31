@@ -47,6 +47,45 @@ _LIBCALL_CONNECTORS = {
 }
 
 
+# SDFG dtype -> C scalar type for ``extern "C"`` declarations on
+# Fortran module BSS symbols forwarded via
+# ``ExternalSignature.module_symbol_forward``.  Mirrors the
+# bind_c_shim's ``_MOD_FORWARD_SCALAR_FTYPE`` so the two ABIs match
+# byte-for-byte.
+_MOD_FORWARD_CTYPE = {
+    "int32": "int",
+    "int64": "long long",
+    "float32": "float",
+    "float64": "double",
+    "bool": "bool",
+}
+
+
+def _sym2c(s) -> str:
+    """Render a symbolic shape entry as a C expression suitable for an
+    ``(int)(...)`` cast inside an external-call body.
+
+    The expression is evaluated in the surrounding kernel scope where
+    every SDFG symbol is in scope; ``sym2cpp`` honours the connector /
+    free-symbol naming the C++ tasklet expects."""
+    from dace.codegen.common import sym2cpp
+    return sym2cpp(s)
+
+
+def _shape_is_symbolic(shape) -> bool:
+    """True iff any shape entry isn't an integer literal -- the
+    ``dynamic_extents_abi`` callee then needs a runtime extent per dim
+    rather than a baked compile-time literal in its ``c_f_pointer``."""
+    if not shape:
+        return False
+    for s in shape:
+        try:
+            int(s)
+        except (TypeError, ValueError):
+            return True
+    return False
+
+
 def _parse_reduce_identity(s: str):
     """Resolve a reduce-accumulator-identity string to its Python value.
 
@@ -559,14 +598,26 @@ def emit_call(builder, ctx, n, region):
 
     # Normalise the bridge's callee name to the registry key the user
     # registered.  The C++ side may hand us an MLIR symbol (leading
-    # ``@``) and flang's free-procedure mangling (``_QP<name>``); strip
-    # both so ``register_external("foo", ...)`` matches a ``CALL foo``.
-    # Module-procedure callees (``_QMmodP<name>``) are not stripped --
-    # register those under their bare ``<name>`` if needed.
-    callee = n.callee.lstrip('@')
+    # ``@``) and flang's free-procedure mangling (``_QP<name>``) or
+    # module-procedure mangling (``_QM<mod>P<name>``); strip both so
+    # ``register_external("foo", ...)`` matches both a free-procedure
+    # ``CALL foo`` and a ``CALL <module>::foo``.  We first try the bare
+    # name; if no registration matches, fall through and try the
+    # untouched mangled form so a caller can still register module-
+    # qualified if they want to disambiguate two same-named callees.
+    callee_raw = n.callee.lstrip('@')
+    callee = callee_raw
     if callee.startswith('_QP'):
         callee = callee[3:]
+    elif callee.startswith('_QM'):
+        # ``_QM<mod>P<name>`` -- the bare proc name is everything after
+        # the *last* ``P`` (handles module names that contain a ``P``).
+        p_idx = callee.rfind('P')
+        if p_idx > 2:
+            callee = callee[p_idx + 1:]
     sig = lookup_external(callee)
+    if sig is None and callee != callee_raw:
+        sig = lookup_external(callee_raw)
     if sig is None:
         return  # not registered -> unchanged (kind="call" had no emitter)
     if sig.stub:
@@ -652,9 +703,19 @@ def emit_call(builder, ctx, n, region):
     comm_conns: set = set()
     edges: list = []  # (name, conn, direction)  direction: 'r' | 'w'
     logical_terms: list = []
-    # gid -> [(ctype, n_elems, in_conn|None, out_conn|None)]; n_elems == 1 for a
-    # scalar member, else the member array's total element count.
+    # gid -> [(ctype, n_elems, in_conn|None, out_conn|None, shape)]; n_elems
+    # == 1 for a scalar member, else the member array's total element count.
+    # ``shape`` is the SDFG-array shape tuple (sympy expressions), used
+    # when ``sig.dynamic_extents_abi`` and ``n_elems == 0`` to prepend
+    # one ``int`` extent per dim before the leaf pointer.
     group_members: dict = defaultdict(list)
+    # Per-``logical_terms``-position record for ``kind='array'`` args
+    # whose connected SDFG array carries a symbolic shape; consumed by
+    # the body / decl-types builders when ``sig.dynamic_extents_abi`` is
+    # true so each such pointer arg gets one ``int`` extent per dim
+    # prepended (the C ABI :func:`emit_bind_c_shim` exports).  Maps the
+    # logical-term position to ``(shape_tuple,)``.
+    array_shape_at_term: dict = {}
     prev_gid = None
     for i, (kind, dtype, intent, gid) in enumerate(plan):
         name = names[i]
@@ -690,7 +751,8 @@ def emit_call(builder, ctx, n, region):
             if writes:
                 out_conns.append(cout); ptr_of[cout] = dt; edges.append((name, cout, 'w'))
             group_members[gid].append((ctype, nel, cin if reads else None,
-                                       cout if writes else None))
+                                       cout if writes else None,
+                                       tuple(shape) if shape else ()))
             if gid != prev_gid:
                 logical_terms.append(('aos', gid))
             prev_gid = gid
@@ -714,6 +776,9 @@ def emit_call(builder, ctx, n, region):
                 in_conns.append(cin); ptr_of[cin] = dt; edges.append((name, cin, 'r'))
             if writes:
                 out_conns.append(cout); ptr_of[cout] = dt; edges.append((name, cout, 'w'))
+            arr_shape = tuple(getattr(ctx.sdfg.arrays[name], "shape", ()) or ())
+            if sig.dynamic_extents_abi and _shape_is_symbolic(arr_shape):
+                array_shape_at_term[len(logical_terms)] = arr_shape
             logical_terms.append(('lit', cout if writes else cin))
         else:  # 'scalar'
             cin = f"_a{i}"
@@ -734,8 +799,12 @@ def emit_call(builder, ctx, n, region):
     body_lines: list = []
     call_args_c: list = []
     bufname: dict = {}
-    for kind, val in logical_terms:
+    for term_index, (kind, val) in enumerate(logical_terms):
         if kind == 'lit':
+            shape = array_shape_at_term.get(term_index)
+            if shape:
+                for s in shape:
+                    call_args_c.append(f"(int)({_sym2c(s)})")
             call_args_c.append(val)
             continue
         gid = val
@@ -745,9 +814,16 @@ def emit_call(builder, ctx, n, region):
             # Per-leaf pass-through: every leaf forwards its writable
             # connector when present (so codegen sees the write
             # dependency), else its readable one.  No struct buffer,
-            # no copy in or out.
-            for ct, nel, cin, cout in mems:
+            # no copy in or out.  When the callee's ABI is
+            # ``dynamic_extents_abi`` (a bind_c_shim'd sibling SDFG),
+            # each dynamic-shape leaf (``nel == 0``) gets one ``int``
+            # extent per dim prepended to feed the shim's
+            # ``c_f_pointer`` shape constructor.
+            for ct, nel, cin, cout, shape in mems:
                 tok = cout if cout is not None else cin
+                if sig.dynamic_extents_abi and nel == 0 and shape:
+                    for s in shape:
+                        call_args_c.append(f"(int)({_sym2c(s)})")
                 call_args_c.append(tok)
             continue
         # ``aos_struct_ptr`` path (today's default).
@@ -764,9 +840,9 @@ def emit_call(builder, ctx, n, region):
             (f"{ct} m{k};" if nel == 1 else
              f"{ct}* m{k};" if nel == 0 else
              f"{ct} m{k}[{nel}];")
-            for k, (ct, nel, _, _) in enumerate(mems))
+            for k, (ct, nel, _, _, _) in enumerate(mems))
         body_lines.append(f"struct {{ {fields} }} {buf};")
-        for k, (ct, nel, cin, cout) in enumerate(mems):
+        for k, (ct, nel, cin, cout, _shape) in enumerate(mems):
             if cin is None or nel == 0:
                 continue
             if nel == 1:
@@ -775,13 +851,47 @@ def emit_call(builder, ctx, n, region):
                 body_lines.append(f"for (int _i = 0; _i < {nel}; ++_i) "
                                   f"{buf}.m{k}[_i] = {cin}[_i];")
         call_args_c.append(f"(void*)(&{buf})")
+    # Forward Fortran module globals across the C ABI: read each
+    # ``__<module>_MOD_<member>`` symbol directly from the OUTER
+    # library's BSS (where the outer's wrapper has already written
+    # it from the caller's args via the existing ``use ...`` import
+    # path) and append the value to the call.  The matching
+    # ``bind_c_shim`` slot writes the INNER library's copy so the
+    # callee sees the same value.  See ``ExternalSignature.
+    # module_symbol_forward`` for the rationale (per-library
+    # Fortran-module-globals issue).  Pulled into a separate prefix
+    # list so the ``extern`` declarations for each ``__<mod>_MOD_<mem>``
+    # symbol get rendered once just before the call.
+    module_extern_decls: list = []
+    for module, member, dtype, rank in sig.module_symbol_forward:
+        sym = f"__{module}_MOD_{member}"
+        ct = _MOD_FORWARD_CTYPE.get(dtype)
+        if ct is None:
+            raise ValueError(
+                f"external {callee!r}: unsupported module_symbol_forward "
+                f"dtype {dtype!r} for ``{module}::{member}``")
+        if rank == 0:
+            # gfortran emits the scalar BSS as a ``<ct>``.  Pass the
+            # value by value.  ``extern`` (no language linkage --
+            # the body declarations are inside a function scope where
+            # ``extern "C"`` is illegal; the symbol's ABI is fixed by
+            # gfortran's mangling regardless).
+            module_extern_decls.append(f'extern {ct} {sym};')
+            call_args_c.append(sym)
+        else:
+            # Rank-N module array: gfortran emits a flat BSS region;
+            # the symbol decays to a pointer, which the C ABI takes
+            # directly.
+            module_extern_decls.append(f'extern {ct} {sym}[];')
+            call_args_c.append(sym)
+    body_lines = module_extern_decls + body_lines
     body_lines.append(f"{sig.c_name}({', '.join(call_args_c)});")
     # AoS-struct-ptr copy-out (per_member_soa needs no unpack: writes
     # land in the connector directly via the call).
     for gid, mems in group_members.items():
         if group_c_abi.get(gid, 'aos_struct_ptr') != 'aos_struct_ptr':
             continue
-        for k, (ct, nel, cin, cout) in enumerate(mems):
+        for k, (ct, nel, cin, cout, _shape) in enumerate(mems):
             if cout is None or nel == 0:
                 continue
             if nel == 1:
@@ -795,29 +905,53 @@ def emit_call(builder, ctx, n, region):
     # actual leaf signature (one ``<ctype>*`` per leaf member, in
     # marshal-expansion order).  An ``aos_struct_ptr`` group keeps the
     # single ``void*`` shape; any non-aos arg lifts its
-    # ``Arg.c_decl_type()`` verbatim.
+    # ``Arg.c_decl_type()`` verbatim.  When the callee's ABI is
+    # ``dynamic_extents_abi``, each dynamic-shape leaf (per_member_soa
+    # member with ``nel == 0`` or ``kind='array'`` with symbolic
+    # shape) is prefixed with one ``int`` per dim -- matching the
+    # extents the body emission prepends.
     decl_types: list = []
     sig_arg_iter = iter(sig.args)
     cur_sig_arg = next(sig_arg_iter, None)
     last_gid_seen = None
     last_member_idx = -1
+    plan_term_index = -1  # mirrors ``logical_terms`` indexing for non-aos
     for kind, dtype, intent, gid in plan:
         if gid is None:
+            plan_term_index += 1
+            arr_shape = array_shape_at_term.get(plan_term_index)
+            if arr_shape:
+                decl_types.extend(["int"] * len(arr_shape))
             decl_types.append(cur_sig_arg.c_decl_type())
             cur_sig_arg = next(sig_arg_iter, None)
             last_gid_seen = None
             last_member_idx = -1
             continue
         if gid != last_gid_seen:
+            plan_term_index += 1
             last_gid_seen = gid
             last_member_idx = -1
             cur_sig_arg = next(sig_arg_iter, None)  # consume the aos sig arg
         last_member_idx += 1
         if group_c_abi.get(gid) == 'per_member_soa':
-            ct, _nel, _cin, _cout = group_members[gid][last_member_idx]
+            ct, nel, _cin, _cout, shape = group_members[gid][last_member_idx]
+            if sig.dynamic_extents_abi and nel == 0 and shape:
+                decl_types.extend(["int"] * len(shape))
             decl_types.append(f"{ct}*")
         elif last_member_idx == 0:  # aos_struct_ptr: emit once per group
             decl_types.append("void *")
+    # ``module_symbol_forward`` values append AFTER every other arg
+    # in the same order ``bind_c_shim`` declares them, so the inner
+    # shim's signature lines up with what we pass here.  Scalars
+    # ride by value (``int`` / ``double`` / ...); rank-N module
+    # arrays decay to the matching pointer (``<ct>*``) on the C ABI.
+    for module, member, dtype, rank in sig.module_symbol_forward:
+        ct = _MOD_FORWARD_CTYPE.get(dtype)
+        if ct is None:
+            raise ValueError(
+                f"external {callee!r}: unsupported module_symbol_forward "
+                f"dtype {dtype!r} for ``{module}::{member}``")
+        decl_types.append(f"{ct}*" if rank > 0 else ct)
     c_decl = f'extern "C" void {sig.c_name}({", ".join(decl_types) or "void"});'
 
     node = ExternalCall(name=f"_ext_{callee}_{builder.nid()}",

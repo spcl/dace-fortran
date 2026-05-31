@@ -2399,6 +2399,87 @@ FortranInterfaceInfo extractFortranInterface(mlir::ModuleOp module,
     tname = (t == llvm::StringRef::npos) ? rn.str() : rn.substr(t + 1).str();
   };
 
+  // Recursively register every ``fir.RecordType`` reachable from
+  // ``rec`` (top-level dummy struct + every nested derived-type
+  // member) in ``out.struct_types``.  Each member entry carries
+  // either a scalar element dtype + rank + per-dim static-shape
+  // literals (box-of-array members unwrap to the underlying
+  // sequence), or a populated ``struct_name`` + empty dtype for a
+  // nested record member.  Unsupported leaf shapes (complex /
+  // character / function pointer) keep both dtype and struct_name
+  // empty so the Python side can flag them clearly.
+  std::function<void(fir::RecordType, const std::string&,
+                     const std::string&)>
+      recordStructLayoutRecursive = [&](fir::RecordType rec,
+                                        const std::string& mod,
+                                        const std::string& tname) {
+        if (out.struct_types.find(tname) != out.struct_types.end()) return;
+        FortranStructLayout layout;
+        layout.name = tname;
+        layout.module = mod;
+        // Insert before recursing so a self-referential / mutually-recursive
+        // type graph terminates -- the second visit hits the early-out
+        // above.  The members of this entry are filled in place below.
+        auto& slot =
+            (out.struct_types[tname] = std::move(layout));
+        std::vector<std::pair<fir::RecordType,
+                              std::pair<std::string, std::string>>> nested;
+        for (auto& p : rec.getTypeList()) {
+          FortranMemberInfo m;
+          m.name = p.first;
+          mlir::Type mt = p.second;
+          // v2 box-of-array member: unwrap ``fir.box<fir.heap|fir.ptr<
+          // seq<...>>>`` to expose the underlying sequence -- the
+          // data buffer the post-marshal-expansion external sees via
+          // ``fir.box_addr``.  Rank + shape come from the sequence;
+          // dtype from its element type.
+          if (auto box = mlir::dyn_cast<fir::BoxType>(mt)) {
+            mlir::Type inner = box.getEleTy();
+            if (auto heap = mlir::dyn_cast<fir::HeapType>(inner))
+              inner = heap.getEleTy();
+            else if (auto ptr = mlir::dyn_cast<fir::PointerType>(inner))
+              inner = ptr.getEleTy();
+            mt = inner;
+          }
+          if (auto seq = mlir::dyn_cast<fir::SequenceType>(mt)) {
+            m.rank = (int)seq.getShape().size();
+            for (auto e : seq.getShape()) {
+              if (e == fir::SequenceType::getUnknownExtent())
+                m.shape_symbols.emplace_back("?");
+              else
+                m.shape_symbols.emplace_back(std::to_string(e));
+            }
+            mt = seq.getEleTy();
+          }
+          if (mt.isF64()) m.dtype = "float64";
+          else if (mt.isF32()) m.dtype = "float32";
+          else if (mt.isInteger(8)) m.dtype = "int8";
+          else if (mt.isInteger(16)) m.dtype = "int16";
+          else if (mt.isInteger(32)) m.dtype = "int32";
+          else if (mt.isInteger(64)) m.dtype = "int64";
+          else if (mt.isInteger(1) || mlir::isa<fir::LogicalType>(mt))
+            m.dtype = "bool";  // see ``dtypeName`` in FlattenStructs.cpp
+          else if (auto nested_rec = mlir::dyn_cast<fir::RecordType>(mt)) {
+            // Nested derived-type member: register its name + module
+            // on this member, queue the type for its own layout entry.
+            parseRecordName(nested_rec.getName(), m.struct_module,
+                            m.struct_name);
+            if (!m.struct_module.empty() && !m.struct_name.empty())
+              out.used_modules[m.struct_module].insert(m.struct_name);
+            if (!m.struct_name.empty())
+              nested.emplace_back(nested_rec,
+                                  std::make_pair(m.struct_module,
+                                                 m.struct_name));
+          }
+          // Complex / character / function pointer: leave both
+          // ``dtype`` and ``struct_name`` empty.
+          slot.members.push_back(std::move(m));
+        }
+        for (auto& q : nested)
+          recordStructLayoutRecursive(q.first, q.second.first,
+                                      q.second.second);
+      };
+
   auto& block = fn.getBody().front();
   for (auto barg : block.getArguments()) {
     hlfir::DeclareOp decl;
@@ -2442,66 +2523,37 @@ FortranInterfaceInfo extractFortranInterface(mlir::ModuleOp module,
       parseRecordName(rec.getName(), a.struct_module, a.struct_name);
       if (!a.struct_module.empty() && !a.struct_name.empty())
         out.used_modules[a.struct_module].insert(a.struct_name);
-      // Record the struct's member layout once per distinct type so the
-      // Python ``build_auto_interface`` can populate
+      // Record the struct's member layout once per distinct type so
+      // the Python ``build_auto_interface`` can populate
       // ``OriginalInterface.struct_types`` without the caller
-      // hand-authoring it.  Each member: name + scalar element dtype +
-      // rank + per-dim static-shape literals.  Unsupported member shapes
-      // (nested record, box / heap / pointer, complex) record an empty
-      // dtype so the Python side can refuse them clearly rather than
-      // mis-binding.
-      if (!a.struct_name.empty() &&
-          out.struct_types.find(a.struct_name) == out.struct_types.end()) {
-        FortranStructLayout layout;
-        layout.name = a.struct_name;
-        layout.module = a.struct_module;
-        for (auto& p : rec.getTypeList()) {
-          FortranMemberInfo m;
-          m.name = p.first;
-          mlir::Type mt = p.second;
-          // v2 box-of-array member: unwrap ``fir.box<fir.heap|fir.ptr<
-          // seq<...>>>`` to expose the underlying sequence -- the
-          // data buffer the post-marshal-expansion external sees
-          // (``fir.box_addr``).  Rank + shape come from the
-          // sequence; dtype from its element type.
-          if (auto box = mlir::dyn_cast<fir::BoxType>(mt)) {
-            mlir::Type inner = box.getEleTy();
-            if (auto heap = mlir::dyn_cast<fir::HeapType>(inner))
-              inner = heap.getEleTy();
-            else if (auto ptr = mlir::dyn_cast<fir::PointerType>(inner))
-              inner = ptr.getEleTy();
-            mt = inner;
-          }
-          if (auto seq = mlir::dyn_cast<fir::SequenceType>(mt)) {
-            m.rank = (int)seq.getShape().size();
-            for (auto e : seq.getShape()) {
-              if (e == fir::SequenceType::getUnknownExtent())
-                m.shape_symbols.emplace_back("?");
-              else
-                m.shape_symbols.emplace_back(std::to_string(e));
-            }
-            mt = seq.getEleTy();
-          }
-          if (mt.isF64()) m.dtype = "float64";
-          else if (mt.isF32()) m.dtype = "float32";
-          else if (mt.isInteger(8)) m.dtype = "int8";
-          else if (mt.isInteger(16)) m.dtype = "int16";
-          else if (mt.isInteger(32)) m.dtype = "int32";
-          else if (mt.isInteger(64)) m.dtype = "int64";
-          else if (mt.isInteger(1) || mlir::isa<fir::LogicalType>(mt))
-            m.dtype = "bool";
-          // Nested record / complex / character: leave ``m.dtype``
-          // empty so Python can flag the v2 boundary.
-          layout.members.push_back(std::move(m));
-        }
-        out.struct_types[a.struct_name] = std::move(layout);
-      }
+      // hand-authoring it.  Walk recursively: each nested record
+      // member's type is enqueued so it lands in ``struct_types``
+      // too, keyed by its own name -- the Python side then looks
+      // each nested struct up by ``FortranMemberInfo.struct_name``.
+      // Box-of-array members unwrap to the underlying sequence's
+      // dtype + rank + shape (the data buffer the post-marshal
+      // ``fir.box_addr`` exposes); nested record members carry a
+      // populated ``struct_name`` + empty dtype.  Other
+      // unsupported leaf shapes (complex / character / function
+      // pointer) keep empty dtype + empty struct_name so the
+      // Python side can flag them clearly.
+      if (!a.struct_name.empty())
+        recordStructLayoutRecursive(rec, a.struct_module, a.struct_name);
     } else if (ty.isF64()) a.dtype = "float64";
     else if (ty.isF32()) a.dtype = "float32";
     else if (ty.isInteger(8)) a.dtype = "int8";
     else if (ty.isInteger(16)) a.dtype = "int16";
     else if (ty.isInteger(32)) a.dtype = "int32";
     else if (ty.isInteger(64)) a.dtype = "int64";
+    // Top-level ``LOGICAL`` dummy args stay ``bool`` regardless of
+    // KIND; the existing ``_build_logical_bridges`` Python pass
+    // wraps the wrapper's outer LOGICAL(KIND=N) dummy in a
+    // ``logical(c_bool)`` scratch + per-element bridge so the
+    // SDFG-facing storage is always 1 byte.  The struct-member
+    // walker below uses KIND-driven width because there is no such
+    // bridge layer for struct-internal flatten companions (the
+    // ``c_loc`` / ``c_f_pointer`` reinterpret needs the storage
+    // size to match the source LOGICAL slot byte-for-byte).
     else if (ty.isInteger(1) || mlir::isa<fir::LogicalType>(ty)) a.dtype = "bool";
     else if (auto ct = mlir::dyn_cast<mlir::ComplexType>(ty)) {
       a.dtype = ct.getElementType().isF32() ? "complex64" : "complex128";

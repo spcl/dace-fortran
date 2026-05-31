@@ -88,6 +88,8 @@ def build_fortran_library(
     flags: Sequence = None,
     verify: bool = True,
     bind_c_shim: bool = False,
+    bind_c_shim_debug_prints: bool = False,
+    bind_c_shim_module_symbol_forward=(),
 ) -> FortranLibrary:
     """Emit + verify + link a Fortran-callable library for ``sdfg``.
 
@@ -202,7 +204,9 @@ def build_fortran_library(
     shim_f90 = None
     if bind_c_shim:
         shim_f90 = out_dir / f"{iface.entry}_c.f90"
-        emit_bind_c_shim(iface, str(shim_f90))
+        emit_bind_c_shim(iface, str(shim_f90),
+                         debug_prints=bind_c_shim_debug_prints,
+                         module_symbol_forward=bind_c_shim_module_symbol_forward)
 
     so_path = out_dir / f"lib{name}.so"
     # gfortran compiles sources left-to-right with no dependency

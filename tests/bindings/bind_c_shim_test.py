@@ -123,10 +123,10 @@ def test_emit_shim_dynamic_shape_struct_member(tmp_path: Path):
     :attr:`Member.shape`) is now handled by the v2 shim emitter:
     each dim rides as a separate ``integer(c_int), value`` arg
     named ``<flat>_d<i>`` and the ``c_f_pointer`` shape constructor
-    references them at runtime.  Pointer-assignment
-    ``<a>%<m> => <flat>`` aliases the struct field to the SDFG
-    companion in place, preserving the per_member_soa no-pack
-    contract on the outer side."""
+    references them at runtime.  For ALLOCATABLE / POINTER members
+    the shim cannot ``=>``-alias uniformly (``=>`` is only valid for
+    POINTER), so it ``allocate``s the struct field at the runtime
+    extents and element-copies in / out per ``intent``."""
     iface = OriginalInterface(
         entry="kern",
         args=(
@@ -152,8 +152,11 @@ def test_emit_shim_dynamic_shape_struct_member(tmp_path: Path):
     assert "type(c_ptr), value :: st_u_p" in text
     # The c_f_pointer shape constructor references the extent arg.
     assert "call c_f_pointer(st_u_p, st_u, [st_u_d0])" in text
-    # Pointer-assign aliases the field in place (no element copy).
-    assert "st%u => st_u" in text
+    # Allocate at runtime extents, element copy-in (inout), element
+    # copy-out -- valid for both POINTER and ALLOCATABLE members.
+    assert "allocate(st%u(st_u_d0))" in text
+    assert "st%u = st_u" in text
+    assert "st_u = st%u" in text
 
 
 def test_emit_shim_struct_with_static_array_members(tmp_path: Path):

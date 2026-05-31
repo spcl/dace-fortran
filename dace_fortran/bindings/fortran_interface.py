@@ -55,6 +55,12 @@ class Member:
     # For assumed-shape inside structs we fall back to '?' and let the
     # wrapper use ``size(st%u, dim=d)`` at call time.
     shape: Tuple[str, ...] = field(default_factory=tuple)
+    # When the member is itself a derived type (a nested record like
+    # ``t_patch%cells :: type(t_grid_cells)``), ``struct_name`` names the
+    # nested type so the bind_c_shim emitter can look its layout up in
+    # ``OriginalInterface.struct_types`` and recurse.  Empty for scalar
+    # / box-of-array / inline-flat members.
+    struct_name: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -151,11 +157,22 @@ def build_auto_interface(raw: dict, entry: str) -> OriginalInterface:
     for sname, st in raw.get("struct_types", {}).items():
         members = []
         for m in st["members"]:
+            nested_name = m.get("struct_name") or ""
+            if nested_name:
+                # A nested derived-type member: ``fortran_type`` is
+                # ``type(<nested>)`` so the binding wrapper declares it
+                # consistently with how it would declare a top-level
+                # derived-type arg; bind_c_shim follows ``struct_name``
+                # to recurse into the nested layout.
+                fortran_type = f"type({nested_name})"
+            else:
+                fortran_type = _DTYPE_TO_FORTRAN_C.get(m["dtype"], "??")
             members.append(Member(
                 name=m["name"],
-                fortran_type=_DTYPE_TO_FORTRAN_C.get(m["dtype"], "??"),
+                fortran_type=fortran_type,
                 rank=int(m["rank"]),
                 shape=tuple(m["shape"]),
+                struct_name=nested_name or None,
             ))
         struct_types[sname] = DerivedType(name=st["name"],
                                           module=st["module"] or None,

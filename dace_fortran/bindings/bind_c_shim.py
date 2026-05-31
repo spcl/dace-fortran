@@ -86,15 +86,74 @@ def _is_inline_flat_member(m: Member) -> bool:
       (``<name>_<member>_d<i>``) and feeds them into the
       ``c_f_pointer`` shape constructor at runtime.
 
-    Refuses nested-struct members (the bridge leaves their
-    ``fortran_type`` as the ``'??'`` placeholder ``build_auto_interface``
-    inserts when the dtype map has no entry; the shim's
-    ``_emit_struct_arg`` can't materialise a typed pointer for that
-    shape).
+    A nested-struct member (``struct_name`` set) is NOT inline-flat at
+    this level; the validation walk recurses into the nested layout
+    and the emission walk descends through it.  Returns ``False`` so
+    callers know to recurse rather than emit a leaf.
+
+    Refuses members whose Fortran type the bridge could not name
+    (``fortran_type == '??'`` and no ``struct_name``): the
+    ``c_f_pointer`` would have no element type to spell.
     """
+    if m.struct_name:
+        return False
     if m.fortran_type == "??":
         return False
     return m.rank >= 0
+
+
+def _validate_struct_layout_recursive(iface: OriginalInterface,
+                                      st: DerivedType,
+                                      arg_name: str,
+                                      path: str):
+    """Walk ``st`` (and every nested derived-type member) and raise
+    :class:`UnsupportedShimInterfaceError` on the first leaf the
+    emitter can't handle.  ``path`` is the Fortran-side access path
+    used in the error message (``a%cells%foo``)."""
+    for m in st.members:
+        if m.struct_name:
+            nested = iface.struct_types.get(m.struct_name)
+            if nested is None:
+                raise UnsupportedShimInterfaceError(
+                    f"bind(c) shim: nested struct member {path}%{m.name} "
+                    f"is type {m.fortran_type} but no layout was recorded "
+                    f"for {m.struct_name!r} in OriginalInterface."
+                    f"struct_types.  The bridge's recursive struct walker "
+                    f"should have populated this; check that the bridge "
+                    f"build is current.")
+            _validate_struct_layout_recursive(iface, nested, arg_name,
+                                              f"{path}%{m.name}")
+            continue
+        if not _is_inline_flat_member(m):
+            raise UnsupportedShimInterfaceError(
+                f"bind(c) shim: argument {arg_name!r} has member "
+                f"{path}%{m.name} ({m.fortran_type}, rank={m.rank}, "
+                f"shape={m.shape}) the shim cannot handle.  Only scalar "
+                f"and array-of-scalar members (static or dynamic shape) "
+                f"are supported; complex / character / function-pointer "
+                f"members need a hand-authored shim.")
+
+
+def _collect_nested_struct_modules(iface: OriginalInterface,
+                                   st: DerivedType,
+                                   out_lines: List[str],
+                                   seen: set):
+    """Walk ``st``'s nested-derived-type members and append a
+    ``use <mod>, only: ...`` line for every distinct module the
+    nested types reference, so the shim can spell ``type(<nested>)``
+    on the locals it never declares (the outer ``type(<outer>),
+    target :: <a>`` already covers nested instances structurally, but
+    the modules must still resolve at compile time)."""
+    for m in st.members:
+        if not m.struct_name:
+            continue
+        u = _struct_module_use(iface, m.struct_name)
+        if u and u not in seen:
+            out_lines.append(u)
+            seen.add(u)
+        nested = iface.struct_types.get(m.struct_name)
+        if nested is not None:
+            _collect_nested_struct_modules(iface, nested, out_lines, seen)
 
 
 def _struct_module_use(iface: OriginalInterface, struct_name: str) -> str:
@@ -115,12 +174,25 @@ def _emit_flat_arg(a: OriginalArg, header_args: List[str],
                    call_args: List[str]):
     """Append the per-dummy split for a non-struct argument: scalar
     inputs ride by value, scalar outputs and arrays ride as ``c_ptr``
-    + ``c_f_pointer`` alias.  Mutates the parallel lists in place."""
+    + ``c_f_pointer`` alias.  Mutates the parallel lists in place.
+
+    Dynamic-shape arrays (any ``'?'`` / ``'*'`` / ``':'`` entry in
+    :attr:`shape`) take their extents from per-dim ``integer(c_int),
+    value`` args ``<name>_d<i>`` declared ahead of the pointer, in
+    declaration order -- the C caller passes the dims before the
+    pointer (same convention :func:`_emit_struct_members_recursive`
+    uses for dynamic-shape struct members)."""
     if a.rank == 0 and a.intent in ('in', ''):
         header_args.append(a.name)
         decls_value.append(f"  {a.fortran_type}, value :: {a.name}")
         call_args.append(a.name)
         return
+    is_dynamic = a.rank > 0 and any(s in ('?', '*', ':') for s in a.shape)
+    if is_dynamic:
+        ext_names = [f"{a.name}_d{i}" for i in range(a.rank)]
+        for en in ext_names:
+            header_args.append(en)
+            decls_value.append(f"  integer(c_int), value :: {en}")
     ptr_name = f"{a.name}_p"
     header_args.append(ptr_name)
     decls_ptr.append(f"  type(c_ptr), value :: {ptr_name}")
@@ -132,39 +204,44 @@ def _emit_flat_arg(a: OriginalArg, header_args: List[str],
     else:
         decls_local.append(
             f"  {a.fortran_type}, pointer :: {a.name}{_dim_spec(a.shape)}")
+        if is_dynamic:
+            shape_tok = "[" + ", ".join(ext_names) + "]"
+        else:
+            shape_tok = _shape_literal(a.shape)
         c_f_calls.append(f"  call c_f_pointer({ptr_name}, {a.name}, "
-                         f"{_shape_literal(a.shape)})")
+                         f"{shape_tok})")
     call_args.append(a.name)
 
 
-def _emit_struct_arg(a: OriginalArg, st: DerivedType,
-                     header_args: List[str], decls_value: List[str],
-                     decls_ptr: List[str], decls_local: List[str],
-                     c_f_calls: List[str], copy_in: List[str],
-                     copy_out: List[str], call_args: List[str]):
-    """Append the per-member split for a derived-type argument.
-
-    The dummy itself becomes a local ``type(<struct>), target ::
-    <name>``; each member rides as its own C-ABI slot
-    ``<name>_<member>_p`` (``c_ptr, value``) aliased through
-    ``c_f_pointer``.  A static-shape member's extents are spelled as
-    literals on the ``c_f_pointer`` shape constructor; a *dynamic*
-    member's extents (``'?'`` shape entries) come as separate
-    ``integer(c_int), value`` args ``<name>_<member>_d<i>`` ahead of
-    the pointer, in declaration order -- matching the marshal-
-    expanded leaf ordering on the outer SDFG's emit_call side.
-
-    Per :attr:`OriginalArg.intent`:
-
-    * Static-shape members: copy-in / copy-out element-wise.
-    * Dynamic-shape members: pointer-assign ``<a>%<m> => <flat>`` to
-      alias the SDFG companion in place -- the bridge's struct flatten
-      already arranged the storage layout so no element copy is
-      needed.  Skipping the copy preserves the per_member_soa
-      no-pack contract on the outer side.
-    """
+def _emit_struct_members_recursive(iface: OriginalInterface,
+                                   st: DerivedType,
+                                   inst_path: str, flat_prefix: str,
+                                   intent: str,
+                                   header_args: List[str],
+                                   decls_value: List[str],
+                                   decls_ptr: List[str],
+                                   decls_local: List[str],
+                                   c_f_calls: List[str],
+                                   copy_in: List[str], copy_out: List[str]):
+    """Walk ``st``'s members; for each leaf emit a C-ABI slot plus
+    the matching ``c_f_pointer`` alias + copy-in / copy-out, for each
+    nested-struct member descend into the nested layout with extended
+    paths.  ``inst_path`` is the Fortran-side access path
+    (``a%cells%foo``) used in struct-field assignments; ``flat_prefix``
+    is the C-ABI naming root (``a_cells_foo``) used for header arg
+    names and local pointer names; ``intent`` is inherited from the
+    outermost dummy."""
     for m in st.members:
-        flat_name = f"{a.name}_{m.name}"
+        if m.struct_name:
+            nested = iface.struct_types[m.struct_name]
+            _emit_struct_members_recursive(
+                iface, nested,
+                f"{inst_path}%{m.name}", f"{flat_prefix}_{m.name}",
+                intent,
+                header_args, decls_value, decls_ptr,
+                decls_local, c_f_calls, copy_in, copy_out)
+            continue
+        flat_name = f"{flat_prefix}_{m.name}"
         ptr_name = f"{flat_name}_p"
         is_dynamic = any(s in ('?', '*', ':') for s in m.shape)
         if is_dynamic:
@@ -189,26 +266,154 @@ def _emit_struct_arg(a: OriginalArg, st: DerivedType,
             c_f_calls.append(f"  call c_f_pointer({ptr_name}, {flat_name}, "
                              f"{shape_tok})")
         if is_dynamic and m.rank > 0:
-            # Pointer-assign the struct field to the SDFG companion in
-            # place; no element copy.  Matches the per_member_soa
-            # no-pack contract.
-            copy_in.append(f"  {a.name}%{m.name} => {flat_name}")
+            # Dynamic-shape member is ALLOCATABLE / POINTER in the
+            # outer struct's Fortran type definition.  ``=>`` would
+            # only be valid for POINTER members and the bridge does
+            # not yet distinguish POINTER vs ALLOCATABLE on
+            # ``fir.BoxType`` extracts, so we take the universal
+            # path: ``allocate`` the struct field at the runtime
+            # extents (allocatable + pointer both accept this),
+            # element-copy-in for ``intent(in / inout / '')``, call,
+            # element-copy-back for ``intent(out / inout)``.  Costs
+            # one extra copy per dynamic member per call; the
+            # per_member_soa no-pack contract still holds on the
+            # outer SDFG side (no AoS struct buffer is built --
+            # only the per-leaf pointers cross the C ABI).
+            shape_tok = "(" + ", ".join(ext_names) + ")"
+            copy_in.append(f"  allocate({inst_path}%{m.name}{shape_tok})")
+            if intent in ('in', 'inout', ''):
+                copy_in.append(f"  {inst_path}%{m.name} = {flat_name}")
+            if intent in ('out', 'inout'):
+                copy_out.append(f"  {flat_name} = {inst_path}%{m.name}")
             continue
-        if a.intent in ('in', 'inout', ''):
+        if intent in ('in', 'inout', ''):
             if m.rank == 0:
-                copy_in.append(f"  {a.name}%{m.name} = {flat_name}(1)")
+                copy_in.append(f"  {inst_path}%{m.name} = {flat_name}(1)")
             else:
-                copy_in.append(f"  {a.name}%{m.name} = {flat_name}")
-        if a.intent in ('out', 'inout'):
+                copy_in.append(f"  {inst_path}%{m.name} = {flat_name}")
+        if intent in ('out', 'inout'):
             if m.rank == 0:
-                copy_out.append(f"  {flat_name}(1) = {a.name}%{m.name}")
+                copy_out.append(f"  {flat_name}(1) = {inst_path}%{m.name}")
             else:
-                copy_out.append(f"  {flat_name} = {a.name}%{m.name}")
+                copy_out.append(f"  {flat_name} = {inst_path}%{m.name}")
+
+
+def _emit_struct_arg(a: OriginalArg, st: DerivedType,
+                     iface: OriginalInterface,
+                     header_args: List[str], decls_value: List[str],
+                     decls_ptr: List[str], decls_local: List[str],
+                     c_f_calls: List[str], copy_in: List[str],
+                     copy_out: List[str], call_args: List[str]):
+    """Append the per-member split for a derived-type argument.
+
+    The dummy becomes a local ``type(<struct>), target :: <name>``;
+    every inline-flat leaf member (transitively, descending through
+    nested derived-type members) rides as its own C-ABI slot
+    ``<name>_<...path...>_<leaf>_p`` (``c_ptr, value``) aliased
+    through ``c_f_pointer``.  Dynamic-shape leaf extents come as
+    separate ``integer(c_int), value`` args ``<flat>_d<i>`` ahead of
+    the pointer, in declaration order -- matching the marshal-
+    expanded leaf ordering on the outer SDFG's emit_call side.
+
+    Per :attr:`OriginalArg.intent` (inherited unchanged through
+    nested struct members):
+
+    * Static-shape leaves: copy-in / copy-out element-wise.
+    * Dynamic-shape leaves: pointer-assign
+      ``<a>%<...>%<leaf> => <flat>`` to alias the SDFG companion in
+      place -- the bridge's struct flatten already arranged the
+      storage layout so no element copy is needed.  Skipping the
+      copy preserves the per_member_soa no-pack contract on the
+      outer side.
+    """
+    _emit_struct_members_recursive(
+        iface, st, a.name, a.name, a.intent,
+        header_args, decls_value, decls_ptr,
+        decls_local, c_f_calls, copy_in, copy_out)
     decls_local.append(f"  {a.fortran_type}, target :: {a.name}")
     call_args.append(a.name)
 
 
-def emit_bind_c_shim(iface: OriginalInterface, out_path: str) -> Path:
+# SDFG dtype -> ``iso_c_binding`` Fortran type for a pass-by-value
+# scalar C ABI arg.  Keep in sync with the matching outer-side
+# ``emit_library._sym2c`` casts so the two ABIs coincide.
+_MOD_FORWARD_SCALAR_FTYPE = {
+    "int32": "integer(c_int)",
+    "int64": "integer(c_long_long)",
+    "float32": "real(c_float)",
+    "float64": "real(c_double)",
+    "bool": "logical(c_bool)",
+}
+
+
+def _emit_module_symbol_forward(module_symbol_forward, header_args: List[str],
+                                decls_value: List[str], decls_ptr: List[str],
+                                decls_local: List[str], c_f_calls: List[str],
+                                copy_in: List[str], use_lines: List[str]):
+    """Per ``(module, member, dtype, rank)`` in ``module_symbol_forward``,
+    extend the bind(c) shim so the caller can write the INNER library's
+    copy of ``<module>::<member>`` directly via the C ABI.
+
+    For a scalar (rank == 0): append a pass-by-value ``<dtype>`` arg
+    ``<member>_arg``, ``use <module>, only: <member>__sink => <member>``
+    so the import resolves to *this* library's copy (which gfortran
+    ships per-library, distinct from any other linked library's), and
+    ``<member>__sink = <member>_arg`` in the body.
+
+    For a rank-N fixed-shape array: append a ``type(c_ptr), value ::
+    <member>_p`` arg, ``c_f_pointer`` it to a rank-N pointer aliased
+    via the source-member's static shape (read off the imported
+    ``<member>__sink``), and copy-assign whole-array.
+
+    Mutates the parallel lists in place; the assignments land in
+    ``copy_in`` so they run BEFORE the local-struct alloc + the
+    ``<entry>_dace`` call, ensuring the inner kernel reads the value
+    the outer side passed.
+    """
+    seen_use_aliases = set()
+    for module, member, dtype, rank in module_symbol_forward:
+        ftype = _MOD_FORWARD_SCALAR_FTYPE.get(dtype)
+        if ftype is None:
+            raise ValueError(
+                f"bind_c_shim module_symbol_forward: unsupported dtype "
+                f"{dtype!r} for ``{module}::{member}``; extend "
+                f"``_MOD_FORWARD_SCALAR_FTYPE`` for new pass-by-value "
+                f"shapes.")
+        # The same module may appear multiple times (e.g.
+        # ``mo_run_config`` carries both ``lvert_nest`` and
+        # ``timers_level``).  Collapse the ``use`` line via a single
+        # ``only:`` list per module to keep the shim header tidy.
+        alias = f"{member}__sink"
+        if alias not in seen_use_aliases:
+            use_lines.append(f"  use {module}, only: {alias} => {member}")
+            seen_use_aliases.add(alias)
+        if rank == 0:
+            arg = f"{member}_arg"
+            header_args.append(arg)
+            decls_value.append(f"  {ftype}, value :: {arg}")
+            copy_in.append(f"  {alias} = {arg}")
+        else:
+            # Rank-N fixed-shape array: receive a pointer, alias via
+            # ``size`` queries on the source member, whole-array
+            # assign.  ``size(<sink>, dim=d)`` works because the
+            # ``use``d member is a static-shape array (its extents
+            # are baked into the module's type info).
+            ptr = f"{member}_p"
+            local = f"{member}_buf"
+            header_args.append(ptr)
+            decls_ptr.append(f"  type(c_ptr), value :: {ptr}")
+            shape_spec = ", ".join(":" for _ in range(rank))
+            decls_local.append(f"  {ftype}, pointer :: {local}({shape_spec})")
+            shape_args = ", ".join(
+                f"size({alias}, dim={d + 1})" for d in range(rank))
+            c_f_calls.append(
+                f"  call c_f_pointer({ptr}, {local}, [{shape_args}])")
+            copy_in.append(f"  {alias} = {local}")
+
+
+def emit_bind_c_shim(iface: OriginalInterface, out_path: str,
+                     debug_prints: bool = False,
+                     module_symbol_forward=()) -> Path:
     """Emit ``<entry>_c.f90`` -- a thin ``bind(c)`` wrapper around the
     binding module's ``<entry>_dace`` procedure.
 
@@ -250,7 +455,8 @@ def emit_bind_c_shim(iface: OriginalInterface, out_path: str) -> Path:
             recorded layout in
             :attr:`OriginalInterface.struct_types`).
     """
-    # Validate every struct dummy has an inline-flat-only layout.
+    # Validate every struct dummy (transitively through nested
+    # derived-type members) has only emitter-handleable leaves.
     for a in iface.args:
         if a.struct_type is None:
             continue
@@ -261,18 +467,7 @@ def emit_bind_c_shim(iface: OriginalInterface, out_path: str) -> Path:
                 f"but no layout was recorded for {a.struct_type!r} in "
                 f"OriginalInterface.struct_types.  Supply a hand-authored "
                 f"interface with the member list.")
-        for m in st.members:
-            if not _is_inline_flat_member(m):
-                raise UnsupportedShimInterfaceError(
-                    f"bind(c) shim: struct {a.struct_type!r} has a "
-                    f"non-inline-flat member {m.name!r} ({m.fortran_type}, "
-                    f"rank={m.rank}, shape={m.shape}).  Only scalar and "
-                    f"static-shape-array-of-scalar members are supported; "
-                    f"allocatable / pointer / dynamic-shape / nested "
-                    f"derived-type members need a hand-authored shim "
-                    f"(see ``run_velocity_flat_c`` in "
-                    f"tests/icon_full/velocity_full_caller.f90 for the "
-                    f"ICON-velocity pattern).")
+        _validate_struct_layout_recursive(iface, st, a.name, a.name)
 
     entry = iface.entry
     c_name = f"{entry}_c"
@@ -294,30 +489,71 @@ def emit_bind_c_shim(iface: OriginalInterface, out_path: str) -> Path:
                            decls_local, c_f_calls, call_args)
             continue
         st = iface.struct_types[a.struct_type]
-        _emit_struct_arg(a, st, header_args, decls_value, decls_ptr,
+        _emit_struct_arg(a, st, iface, header_args, decls_value, decls_ptr,
                          decls_local, c_f_calls, copy_in, copy_out,
                          call_args)
-        # Pick up the ``use`` line for the struct's defining module so
-        # the shim can spell ``type(<struct>)`` and any shape constants
-        # the member declarations reference.
+        # Pick up the ``use`` line for the struct's defining module
+        # AND every nested-derived-type member's module so the shim
+        # can spell ``type(<struct>)`` / ``type(<nested>)`` and any
+        # shape constants the member declarations reference.
         u = _struct_module_use(iface, a.struct_type)
         if u and u not in seen_struct_uses:
             struct_use_lines.append(u)
             seen_struct_uses.add(u)
+        _collect_nested_struct_modules(iface, st, struct_use_lines,
+                                       seen_struct_uses)
+
+    # Forward Fortran module globals across the C ABI -- under
+    # default ELF+gfortran linking, every shared library that USEs a
+    # module gets its OWN BSS copy of the module's variables; an
+    # outer caller writing ``mo_parallel_config::nproma`` in
+    # libouter.so does NOT reach libinner.so's copy.  The shim
+    # accepts the value as a C ABI arg and writes the INNER copy via
+    # ``use <module>, only: <member>__sink => <member>`` so the
+    # ``<entry>_dace`` call (in the inner library) reads the same
+    # value the outer caller passed.  See the velocity dycore + ext
+    # e2e ASan ODR diagnostic for the root cause.
+    module_forward_use_lines: List[str] = []
+    _emit_module_symbol_forward(module_symbol_forward, header_args,
+                                decls_value, decls_ptr, decls_local,
+                                c_f_calls, copy_in,
+                                module_forward_use_lines)
 
     decl_block = "\n".join(decls_value + decls_ptr + decls_local)
     body_parts: List[str] = []
+    if debug_prints:
+        body_parts.append(f"  write(0, *) '[{c_name}] enter'")
+        body_parts.append("  flush(0)")
     if c_f_calls:
         body_parts.append("\n".join(c_f_calls))
+        if debug_prints:
+            body_parts.append(f"  write(0, *) '[{c_name}] c_f_pointer done'")
+            body_parts.append("  flush(0)")
     if copy_in:
         body_parts.append("\n".join(copy_in))
+        if debug_prints:
+            body_parts.append(f"  write(0, *) '[{c_name}] copy-in done'")
+            body_parts.append("  flush(0)")
+    if debug_prints:
+        body_parts.append(f"  write(0, *) '[{c_name}] about to call {entry}_dace'")
+        body_parts.append("  flush(0)")
     body_parts.append(f"  call {entry}_dace({', '.join(call_args)})")
+    if debug_prints:
+        body_parts.append(f"  write(0, *) '[{c_name}] {entry}_dace returned'")
+        body_parts.append("  flush(0)")
     if copy_out:
         body_parts.append("\n".join(copy_out))
+        if debug_prints:
+            body_parts.append(f"  write(0, *) '[{c_name}] copy-out done'")
+            body_parts.append("  flush(0)")
     body_parts.append(f"  call {entry}_dace_finalize()")
+    if debug_prints:
+        body_parts.append(f"  write(0, *) '[{c_name}] finalize done'")
+        body_parts.append("  flush(0)")
     body_block = "\n".join(body_parts)
 
     use_lines = ["  use iso_c_binding", *struct_use_lines,
+                 *module_forward_use_lines,
                  f"  use {bind_mod}, only: {entry}_dace, {entry}_dace_finalize"]
     lines = [
         "! AUTO-GENERATED by dace_fortran.bindings.bind_c_shim -- do not edit.",

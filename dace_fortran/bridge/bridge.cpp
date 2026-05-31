@@ -228,6 +228,9 @@ class HLFIRModule {
   ///              "shape_exprs": [str, ...],
   ///              "aliasable": bool,
   ///              "scratch_dtype": str,
+  ///              "aos_alloc": bool,
+  ///              "cap_symbol": str,
+  ///              "source_logical_kind": int,
   ///          },
   ///         }, ...
   ///     ]}
@@ -304,6 +307,8 @@ class HLFIRModule {
         recipeDict["scratch_dtype"] = asStr(recipe.get("scratch_dtype"));
         recipeDict["aos_alloc"] = asBool(recipe.get("aos_alloc"));
         recipeDict["cap_symbol"] = asStr(recipe.get("cap_symbol"));
+        recipeDict["source_logical_kind"] =
+            (int64_t)asInt(recipe.get("source_logical_kind"));
       }
       entryDict["recipe"] = recipeDict;
       entries.append(entryDict);
@@ -320,7 +325,12 @@ class HLFIRModule {
   ///    "used_modules": {mod: [syms], ...},
   ///    "struct_types": {struct_name: {"name": ..., "module": ...,
   ///                                    "members": [{"name", "dtype",
-  ///                                                 "rank", "shape"}]}}}
+  ///                                                 "rank", "shape",
+  ///                                                 "struct_name",
+  ///                                                 "struct_module"}]}}}
+  /// A member with a non-empty ``struct_name`` is itself a derived-type
+  /// (nested record) -- the Python side looks the nested layout up in
+  /// ``struct_types`` by that name to descend recursively.
   nb::object get_fortran_interface(const std::string& entry) {
     nb::dict out;
     nb::list args;
@@ -364,6 +374,8 @@ class HLFIRModule {
         nb::list sh;
         for (auto& s : m.shape_symbols) sh.append(s);
         md["shape"] = sh;
+        md["struct_name"] = m.struct_name;
+        md["struct_module"] = m.struct_module;
         members.append(md);
       }
       sd["members"] = members;

@@ -809,13 +809,25 @@ static std::string extractIntent(
 
 /// Pretty-print a Flang element type as the Fortran scratch dtype the
 /// Python ``FlattenRecipe`` carries (``float64`` / ``float32`` /
-/// ``int32`` / ``int64``).  Returns an empty string for types we don't
-/// map; the caller typically falls back to ``float64`` in that case.
+/// ``int32`` / ``int64`` / ``bool``).
+///
+/// LOGICAL of every KIND maps to ``bool`` -- the SDFG internal
+/// storage for LOGICAL is always 1-byte boolean.  The Fortran-side
+/// width conversion (1 / 2 / 4 / 8 bytes per the source LOGICAL's
+/// KIND) is the binding-wrapper / bind_c_shim's job at the
+/// boundary; the SDFG kernel itself never sees the wider Fortran
+/// LOGICAL layout.
+///
+/// Returns an empty string for types we don't map; the caller
+/// typically falls back to ``float64`` in that case.
 static std::string dtypeName(mlir::Type t) {
   if (t.isF32()) return "float32";
   if (t.isF64()) return "float64";
+  if (t.isInteger(8)) return "int8";
+  if (t.isInteger(16)) return "int16";
   if (t.isInteger(32)) return "int32";
   if (t.isInteger(64)) return "int64";
+  if (t.isInteger(1) || mlir::isa<fir::LogicalType>(t)) return "bool";
   if (auto ct = mlir::dyn_cast<mlir::ComplexType>(t)) {
     auto et = ct.getElementType();
     if (et.isF32()) return "complex64";
@@ -867,6 +879,21 @@ static int memberRank(mlir::Type memTy) {
   mlir::Type core = peelMemberWrappers(memTy);
   if (auto seq = mlir::dyn_cast<fir::SequenceType>(core))
     return seq.getShape().size();
+  return 0;
+}
+
+/// Source-LOGICAL byte width for a struct member's element type, or
+/// ``0`` when the member is not a ``LOGICAL`` (any other dtype --
+/// real, integer, complex, character, nested record).  Used to set
+/// the recipe's ``source_logical_kind`` attribute so the binding
+/// emitter can bridge a Fortran ``LOGICAL(KIND=N)`` source slot
+/// (1 / 2 / 4 / 8 bytes) through a 1-byte SDFG ``bool`` companion
+/// without clobbering adjacent struct fields.  ``mlir::i1`` (the
+/// HLFIR boolean) maps to KIND=1.
+static int memberLogicalKind(mlir::Type memTy) {
+  mlir::Type et = memberElementType(memTy);
+  if (auto lt = mlir::dyn_cast<fir::LogicalType>(et)) return lt.getFKind();
+  if (et.isInteger(1)) return 1;
   return 0;
 }
 
@@ -1747,6 +1774,7 @@ struct FlattenStructsPass
       // when the struct has exactly one member; any multi-member AoS member
       // is strided and must be deep-copied (allocate + scatter/gather loop).
       bool memberAliasable = (outerRank == 0) || (rec.getTypeList().size() == 1);
+      int logicalKind = memberLogicalKind(memTy);
 
       auto recipe = b.getDictionaryAttr({
           b.getNamedAttr("flat_names", b.getArrayAttr({mkStr(flat)})),
@@ -1758,6 +1786,8 @@ struct FlattenStructsPass
           b.getNamedAttr("scratch_dtype", mkStr(scratchDtype)),
           b.getNamedAttr("aos_alloc", b.getBoolAttr(false)),
           b.getNamedAttr("cap_symbol", mkStr("")),
+          b.getNamedAttr("source_logical_kind",
+                         b.getI64IntegerAttr(logicalKind)),
       });
 
       // Per-member outer_expr ``<outer>%<member>`` so the
@@ -1850,6 +1880,7 @@ struct FlattenStructsPass
 
       std::string scratchDtype = dtypeName(memberElementType(leaf.leafTy));
       if (scratchDtype.empty()) scratchDtype = "float64";
+      int logicalKind = memberLogicalKind(leaf.leafTy);
 
       llvm::SmallVector<mlir::Attribute, 4> shapeExprs;
       for (int i = 1; i <= leafRank; ++i) {
@@ -1867,6 +1898,8 @@ struct FlattenStructsPass
           b.getNamedAttr("scratch_dtype", mkStr(scratchDtype)),
           b.getNamedAttr("aos_alloc", b.getBoolAttr(false)),
           b.getNamedAttr("cap_symbol", mkStr("")),
+          b.getNamedAttr("source_logical_kind",
+                         b.getI64IntegerAttr(logicalKind)),
       });
 
       auto entry = b.getDictionaryAttr({
@@ -1917,6 +1950,7 @@ struct FlattenStructsPass
     if (memTy)
       if (std::string dt = dtypeName(memberElementType(memTy)); !dt.empty())
         scratchDtype = dt;
+    int logicalKind = memTy ? memberLogicalKind(memTy) : 0;
 
     std::string flatName = outerName + "_" + memName.str();
     std::string capName = "cap_" + flatName;
@@ -1962,6 +1996,8 @@ struct FlattenStructsPass
         b.getNamedAttr("scratch_dtype", mkStr(scratchDtype)),
         b.getNamedAttr("aos_alloc", b.getBoolAttr(true)),
         b.getNamedAttr("cap_symbol", mkStr(capName)),
+        b.getNamedAttr("source_logical_kind",
+                       b.getI64IntegerAttr(logicalKind)),
     });
 
     auto entry = b.getDictionaryAttr({

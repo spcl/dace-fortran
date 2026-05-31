@@ -195,6 +195,44 @@ class ExternalSignature:
     args: Tuple[Arg, ...] = field(default_factory=tuple)
     libraries: Tuple[str, ...] = field(default_factory=tuple)
     stub: bool = False
+    # Fortran module globals to forward into the callee's library
+    # before each call.  Each tuple = ``(module, member, dtype, rank)``:
+    #
+    #   * ``module``  -- defining module (``"mo_parallel_config"``).
+    #   * ``member``  -- member name within that module (``"nproma"``).
+    #   * ``dtype``   -- SDFG dtype string (``"int32"`` / ``"bool"`` /
+    #                    ``"float64"`` etc.).
+    #   * ``rank``    -- 0 for a scalar, N for a rank-N fixed-shape
+    #                    array (the array's declared extents are
+    #                    spelled in the inner shim via a literal
+    #                    shape list captured at shim-emit time).
+    #
+    # When non-empty, ``emit_call`` reads ``__<module>_MOD_<member>``
+    # directly from the OUTER library's BSS (the bridge has the
+    # outer's wrapper populate that copy from the caller's args via
+    # the existing ``use <module>, only: ...`` import path) and
+    # appends the values to the C ABI call AFTER every other arg.
+    # The matching :func:`dace_fortran.bindings.emit_bind_c_shim`
+    # accepts those same args in the same order and writes them to
+    # the INNER library's ``use <module>`` import alias, so the
+    # callee's ``velocity_tendencies_dace`` reads the same value the
+    # outer's caller wrote.  See the velocity e2e ASan ODR-violation
+    # diagnostic for the per-library Fortran-module-globals issue
+    # this contract addresses.
+    module_symbol_forward: Tuple[Tuple[str, str, str, int], ...] = field(
+        default_factory=tuple)
+    # When true, ``emit_call`` prepends one ``int`` extent per
+    # dynamic-shape dim ahead of every dynamic-shape leaf -- the C
+    # ABI :func:`dace_fortran.bindings.emit_bind_c_shim` exports
+    # ("dynamic-shape" = ``per_member_soa`` AoS member with ``nel ==
+    # 0``, or ``kind='array'`` whose connected SDFG array has any
+    # symbolic shape entry).  Set this on every registration whose
+    # callee was produced by ``build_fortran_library(...,
+    # bind_c_shim=True)``: the shim needs the runtime extents to
+    # build ``c_f_pointer`` aliases.  Default ``False`` matches the
+    # pre-shim convention (the caller hand-authors a C external that
+    # accepts raw pointers).
+    dynamic_extents_abi: bool = False
 
     def c_declaration(self) -> str:
         """The ``extern "C" void <c_name>(<types>);`` declaration."""
@@ -273,7 +311,9 @@ def keep_external(name: str,
                   c_name: Optional[str] = None,
                   args: Tuple[Arg, ...] = (),
                   libraries: Tuple[str, ...] = (),
-                  stub: bool = False):
+                  stub: bool = False,
+                  dynamic_extents_abi: bool = False,
+                  module_symbol_forward: Tuple[Tuple[str, str, str, int], ...] = ()):
     """Mark ``name`` to be left external -- the bridge emits an
     :class:`ExternalCall` library node for every ``CALL name(...)``
     instead of inlining ``name`` 's body.
@@ -302,11 +342,25 @@ def keep_external(name: str,
         the procedure external -- excise infrastructure a kernel pulls in only
         structurally (helpers whose unlowerable bodies would otherwise block
         the build).  A real run needs a proper shim instead.
+    :param dynamic_extents_abi: when ``True``, every dynamic-shape leaf
+        crosses the C ABI with one ``int`` extent per dim prepended to
+        the pointer.  Set this when the callee was produced by
+        ``build_fortran_library(..., bind_c_shim=True)`` -- the shim's
+        ``c_f_pointer`` aliases need the runtime extents (see
+        :attr:`ExternalSignature.dynamic_extents_abi`).
+    :param module_symbol_forward: Fortran module globals to forward
+        across the library boundary.  Each tuple is ``(module,
+        member, dtype, rank)`` -- see
+        :attr:`ExternalSignature.module_symbol_forward` for the
+        rationale (per-library Fortran-module-globals issue exposed
+        by the velocity dycore + external e2e ASan diagnostic).
     """
     register_external(name, ExternalSignature(c_name=c_name or name,
                                               args=tuple(args),
                                               libraries=tuple(libraries),
-                                              stub=stub))
+                                              stub=stub,
+                                              dynamic_extents_abi=dynamic_extents_abi,
+                                              module_symbol_forward=tuple(module_symbol_forward)))
 
 
 def lookup_external(name: str) -> Optional[ExternalSignature]:

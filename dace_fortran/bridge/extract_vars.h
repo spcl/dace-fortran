@@ -153,9 +153,17 @@ struct FortranArgInfo {
 struct FortranMemberInfo {
   std::string name;     // member name (``a``)
   std::string dtype;    // scalar element dtype, empty for unsupported (nested
-                        // struct, box / heap / pointer member)
+                        // struct, complex, character)
   int rank = 0;
   std::vector<std::string> shape_symbols;  // static-shape literal ints / "?"
+  std::string struct_name;    // for a nested-derived-type member: the
+                              // member type's name (``t_grid_cells``).  Lets
+                              // the Python side look the layout up in
+                              // ``OriginalInterface.struct_types``;
+                              // populated only when the member is itself a
+                              // ``fir.RecordType``.  Empty otherwise.
+  std::string struct_module;  // defining module of the nested type
+                              // (``mo_model_domain``), or ``""``.
 };
 
 /// One derived-type layout the entry's dummies reference.

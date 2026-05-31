@@ -239,6 +239,45 @@ def _dace_call_order(frozen, dace_arglist) -> list:
     return list(frozen.args) + _free_sym_names(frozen)
 
 
+def _render_logical_bridge_copy_in(recipe, outer_expr: str) -> List[str]:
+    """Copy-in for a ``source_logical_kind > 1`` flat companion.
+
+    The struct member is a Fortran ``LOGICAL(KIND=N)`` (N = 2 / 4 /
+    8 bytes) but the SDFG storage is 1-byte ``bool``.  Allocate the
+    scratch flat at the source extents, then a whole-array
+    assignment (``<flat> = <outer>%<mem>``) -- Fortran's intrinsic
+    LOGICAL-kind conversion handles the per-element width change.
+
+    Rank-0 members declare the scratch as a *scalar allocatable*
+    (``logical(c_bool), allocatable, target :: <flat>``) and
+    allocate / assign as a scalar; ``c_loc(<flat>)`` gives the
+    address of the single byte the SDFG-side ``bool *`` reads.
+
+    :param recipe: an ``aliasable=True`` recipe whose
+        ``source_logical_kind`` is 2 / 4 / 8.  Single-flat by
+        construction (struct member -> one companion).
+    :param outer_expr: the entry's ``outer_expr`` (e.g.
+        ``p_diag%ddt_vn_adv_is_associated``); used as the Fortran-
+        side source path on the RHS.
+    """
+    flat = recipe.flat_names[0]
+    if recipe.rank == 0:
+        return [f"    allocate({flat})",
+                f"    {flat} = {outer_expr}"]
+    shape_args = ", ".join(recipe.shape_exprs)
+    return [f"    allocate({flat}({shape_args}))",
+            f"    {flat} = {outer_expr}"]
+
+
+def _render_logical_bridge_copy_out(recipe, outer_expr: str) -> List[str]:
+    """Inverse of :func:`_render_logical_bridge_copy_in`: pack the
+    SDFG-side bool flat back into the source struct slot for
+    ``intent(out)/inout`` entries, then release the scratch."""
+    flat = recipe.flat_names[0]
+    return [f"    {outer_expr} = {flat}",
+            f"    deallocate({flat})"]
+
+
 def _fortran_c_value_type(dtype: str) -> str:
     """Map a frozen-arg ``dtype`` string to its ``iso_c_binding`` form
     for a pass-by-value Fortran dummy."""
@@ -322,11 +361,25 @@ def build_wrapper_head(frozen: FrozenSignature, iface: OriginalInterface, plan: 
         # array spec  --  ``real :: x()`` is invalid Fortran; it must
         # be declared as a plain scalar ``pointer``.
         shape_dims = ("(" + ", ".join(":" for _ in range(r.rank)) + ")") if r.rank > 0 else ""
-        if r.aliasable:
+        # A LOGICAL(KIND=N) struct member with N > 1 (default
+        # Fortran LOGICAL is N=4) needs a width-bridging scratch
+        # even though its access pattern would otherwise alias:
+        # ``c_loc(<outer>%<mem>) + c_f_pointer(..., logical(c_bool))``
+        # reinterprets a 4-byte slot as 1 byte, so a SDFG write
+        # leaves the upper 3 bytes garbage and an adjacent struct
+        # field's heap chunk metadata can be clobbered (the
+        # ``free(): invalid next size`` diagnostic the ICON
+        # velocity e2e surfaced).  Force scratch + element copy
+        # so Fortran's intrinsic LOGICAL-kind conversion handles
+        # the per-element width change exactly like the existing
+        # top-level ``_build_logical_bridges`` does for outer
+        # LOGICAL dummies.
+        if r.aliasable and r.source_logical_kind in (0, 1):
             for flat in r.flat_names:
                 flat_ptr_lines.append(f"    {ftype}, pointer :: {flat}{shape_dims}")
         else:
-            max_loop_rank = max(max_loop_rank, r.rank)
+            if r.rank > 0:
+                max_loop_rank = max(max_loop_rank, r.rank)
             for flat in r.flat_names:
                 scratch_lines.append(f"    {ftype}, allocatable, target :: {flat}{shape_dims}")
 
@@ -422,12 +475,17 @@ def build_wrapper_body(frozen: FrozenSignature, iface: OriginalInterface, plan: 
     body: List[str] = ["    ! ----- Copy-in / alias per flatten entry -----"]
     for entry in plan.entries:
         r = entry.recipe
-        # Three mutually exclusive emitter shapes  --  see FlattenRecipe
-        # for the flag matrix.
+        # Four mutually exclusive emitter shapes  --  see FlattenRecipe
+        # for the flag matrix.  ``source_logical_kind > 1`` overrides
+        # the aliasable path with a width-bridging scratch + Fortran
+        # intrinsic LOGICAL-kind conversion (see ``build_wrapper_head``
+        # for the rationale).
         if r.aos_alloc:
             body.extend(render_aos_alloc_pack_in(r, entry.outer_expr))
-        elif r.aliasable:
+        elif r.aliasable and r.source_logical_kind in (0, 1):
             body.extend(render_alias_calls(r))
+        elif r.aliasable and r.source_logical_kind > 1:
+            body.extend(_render_logical_bridge_copy_in(r, entry.outer_expr))
         else:
             body.extend(render_copy_in_loop(r))
 
@@ -544,6 +602,18 @@ def build_wrapper_tail(frozen: FrozenSignature, iface: OriginalInterface, plan: 
                 # intent(in): no copy-back, but the scratch buffer
                 # was allocated unconditionally in pack-in and still
                 # needs releasing.
+                copy_out_lines.append(f"    deallocate({r.flat_names[0]})")
+            continue
+        # ``source_logical_kind > 1`` overrides the aliasable path
+        # with a width-bridging scratch (see ``build_wrapper_head``);
+        # the scratch was allocated unconditionally in copy-in and
+        # needs releasing.  For ``out`` / ``inout`` add the
+        # ``<outer> = <flat>`` assignment ahead of the deallocate.
+        if r.aliasable and r.source_logical_kind > 1:
+            if entry.writeback_intent in ('out', 'inout'):
+                copy_out_lines.extend(
+                    _render_logical_bridge_copy_out(r, entry.outer_expr))
+            else:
                 copy_out_lines.append(f"    deallocate({r.flat_names[0]})")
             continue
         if r.aliasable:
