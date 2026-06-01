@@ -32,6 +32,7 @@ from pathlib import Path
 
 import pytest
 
+from ._fc import FORTRAN_COMPILERS, fortran_compiler_flags
 from ._icon_solve_nh_patch import (
     SOLVE_NH_WRAPPER_NAME,
     apply_solve_nh_patch,
@@ -160,14 +161,39 @@ def test_write_patched_solve_nh(tmp_path: Path):
     not (_HAVE_ICON and _HAVE_ICON_MODS),
     reason="icon-model submodule + a stock ICON CPU build "
            "(populating $ICON_BUILD/mod) are required")
-def test_patched_source_parses_through_gfortran(tmp_path: Path):
-    """``gfortran -fsyntax-only`` accepts the patched file against
-    ICON's own ``.mod`` files.  This is the definitive proof that
-    the patch keeps ICON's call site happy without needing a full
-    re-link.  Any change to the wrapper INTERFACE block or to the
-    forwarding CALL's arg order surfaces here as a hard error."""
-    if shutil.which("gfortran") is None:
-        pytest.skip("gfortran not on PATH")
+@pytest.mark.parametrize("fc", FORTRAN_COMPILERS)
+def test_patched_source_parses_through_fortran_compiler(fc, tmp_path: Path):
+    """The Fortran compiler accepts the patched file (syntax-only)
+    against ICON's own ``.mod`` files.  Parametrized over every
+    compiler available on the host so a future binding-shim signature
+    change surfaces as a hard error from each one we support:
+
+      * ``gfortran``: the ICON CPU default.
+      * ``flang-new-21``: the bridge's own frontend; pinning the
+        wrapper's INTERFACE block here keeps the bridge's binding
+        emitter in sync with what it would later lower.
+      * ``nvfortran``: ICON GPU builds; their ``.mod`` format is
+        compiler-specific so the test only fires when the same
+        compiler that wrote ``$ICON_BUILD/mod`` also runs the
+        syntax check (the gate below).
+
+    The patched file's INTERFACE block + forwarding CALL arg order
+    is what's pinned here; any drift breaks ICON's caller."""
+    fc_name, fc_path = fc
+    # ICON's ``.mod`` files are compiler-specific.  gfortran's mods
+    # match gfortran; nvfortran's mods match nvfortran; flang has its
+    # own ``.mod`` format.  The host's stock CPU build probes for
+    # ``mod/mo_kind.mod``; if it carries a gfortran-shape mod, only
+    # gfortran can read it.  Detect the mod-format mismatch up front
+    # so the test skips cleanly rather than reporting a bogus error.
+    mod_probe = _ICON_BUILD / "mod" / "mo_kind.mod"
+    if mod_probe.is_file():
+        header = mod_probe.read_bytes()[:64]
+        is_gfortran_mod = header.startswith(b"\x1f\x8b") or b"GFORTRAN module" in header
+        if is_gfortran_mod and fc_name != "gfortran":
+            pytest.skip(f"$ICON_BUILD/mod carries gfortran-format .mod; "
+                        f"{fc_name} can't read those")
+
     out = tmp_path / "mo_solve_nonhydro_patched.f90"
     write_patched_solve_nh(_real_source(), out)
 
@@ -194,10 +220,17 @@ def test_patched_source_parses_through_gfortran(tmp_path: Path):
         "-D__NO_JSBACH_HD__", "-D__NO_JSBACH__", "-D__NO_QUINCY__",
         "-D__NO_RAGNAROK__",
     ]
+    # Each compiler spells "syntax only" differently.
+    syntax_only_flag = {
+        "gfortran": "-fsyntax-only",
+        "flang-new-21": "-fsyntax-only",
+        "nvfortran": "-Msyntax",
+    }.get(fc_name, "-fsyntax-only")
+    cpp_flag = "-cpp" if fc_name in ("gfortran", "flang-new-21") else "-Mpreprocess"
 
     subprocess.check_call(
-        ["gfortran", "-fsyntax-only", "-cpp",
-         "-ffree-line-length-none",
+        [fc_path, syntax_only_flag, cpp_flag,
+         *fortran_compiler_flags(fc_name),
          *include_flags, *defines,
          str(out)],
         cwd=str(tmp_path))

@@ -26,6 +26,7 @@ import pytest
 import dace_fortran
 from dace_fortran.flang_codebase import find_openmpi_include
 
+from ._fc import FORTRAN_COMPILERS, fortran_compiler_flags
 from ._icon_sync_iso_c_build import (
     _WRAPPER_SRC as _SYNC_WRAPPER_SRC,
     build_icon_sync_iso_c_so,
@@ -227,18 +228,21 @@ def test_build_sdfg_for_icon_solve_nh(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_sync_iso_c_wrapper_source_parses(tmp_path: Path):
-    """The iso_c wrapper Fortran source is well-formed: gfortran's
-    ``-fsyntax-only`` accepts it modulo the ``USE mo_sync`` /
-    ``USE mo_model_domain`` imports.  We compile a tiny stub of those
-    modules side-by-side so the parse succeeds standalone, no ICON
-    build required.
+@pytest.mark.parametrize("fc", FORTRAN_COMPILERS)
+def test_sync_iso_c_wrapper_source_parses(fc, tmp_path: Path):
+    """The iso_c wrapper Fortran source is well-formed under every
+    Fortran compiler we ship binding-shim recipes for: gfortran (ICON
+    CPU default), flang-new-21 (the bridge's own frontend), nvfortran
+    (NVHPC, ICON GPU build).  We compile minimal stubs of the
+    USE'd modules side-by-side so the parse succeeds standalone, no
+    ICON build required.
 
-    Pins the wrapper's iso_c interface as a regression gate: a typo
-    in any of the ``bind(c, name=...)`` signatures fails the parse
-    independently of whether the icon-model submodule is built."""
-    if shutil.which("gfortran") is None:
-        pytest.skip("gfortran not on PATH")
+    Pins the wrapper's iso_c interface as a regression gate across
+    the toolchain matrix: a typo in any of the ``bind(c, name=...)``
+    signatures, or a compiler-specific feature drift, fails the
+    parse independently of whether the icon-model submodule is
+    built."""
+    fc_name, fc_path = fc
     # Minimal stubs for the modules the wrapper USEs.  Only the symbols
     # the wrapper references need to exist; concrete bodies are no-ops.
     stubs = tmp_path / "stubs.f90"
@@ -295,10 +299,24 @@ CONTAINS
   END SUBROUTINE
 END MODULE mo_sync
 """)
+    # Compiler-specific syntax-only + .mod-output flag.
+    if fc_name == "nvfortran":
+        syntax_only_flag = "-Msyntax"
+        mod_out_flag = ["-module", str(tmp_path)]
+    elif fc_name == "flang-new-21":
+        # ``flang-new -fsyntax-only`` skips module emission; the
+        # stubs file is parsed in-line with the wrapper, so no -J/
+        # -module needed (all symbols resolve within the same
+        # compile invocation).
+        syntax_only_flag = "-fsyntax-only"
+        mod_out_flag = []
+    else:  # gfortran
+        syntax_only_flag = "-fsyntax-only"
+        mod_out_flag = ["-J", str(tmp_path)]
     subprocess.check_call(
-        ["gfortran", "-fsyntax-only",
-         "-ffree-line-length-none",
-         "-J", str(tmp_path),
+        [fc_path, syntax_only_flag,
+         *fortran_compiler_flags(fc_name),
+         *mod_out_flag,
          str(stubs), str(_SYNC_WRAPPER_SRC)],
         cwd=str(tmp_path))
 
