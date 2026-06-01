@@ -115,3 +115,60 @@ def fortran_compiler_flags(fc_name: str) -> List[str]:
     if fc_name == "gfortran":
         return ["-ffree-line-length-none"]
     return []
+
+
+# Standard locations where a user-local ``libflang_rt.runtime.a`` may
+# live.  When we find one we surface it via ``LIBRARY_PATH`` so the
+# ``flang-new-21`` driver's linker invocation picks it up without the
+# user having to set the env var themselves.  The build dir from
+# ``runtimes/`` and a few hand-rolled install prefixes get probed.
+_FLANG_RT_DIRS = (
+    str(Path.home() / ".local/llvm-flang-rt-21/lib/clang/21/lib/x86_64-unknown-linux-gnu"),
+    str(Path.home() / ".local/lib/clang/21/lib/x86_64-unknown-linux-gnu"),
+    # ROCm's runtime is ABI-compatible with flang-21 (LLVM-22-era
+    # built static archive; symbols are stable).  Probed last so a
+    # user-local build wins when both are present.
+    "/opt/rocm-7.2.0/lib/llvm/lib/clang/22/lib/x86_64-unknown-linux-gnu",
+)
+
+
+def find_flang_runtime_dir() -> Optional[str]:
+    """Return the first directory on the host that has
+    ``libflang_rt.runtime.a`` (the static archive flang-21's linker
+    invocation references as ``-lflang_rt.runtime``), or ``None`` if
+    no install is reachable.  Tests that drive a full link with
+    ``flang-new-21`` use this to decide whether to skip cleanly or
+    inject the path via ``LIBRARY_PATH``."""
+    for d in _FLANG_RT_DIRS:
+        if (Path(d) / "libflang_rt.runtime.a").is_file():
+            return d
+    return None
+
+
+def env_with_flang_runtime(fc_name: str) -> dict:
+    """A copy of ``os.environ`` with ``LIBRARY_PATH`` prepended for
+    flang's freshly-built runtime when ``fc_name`` is a flang variant
+    and a runtime is reachable.  Pass to ``subprocess.check_call(...,
+    env=env_with_flang_runtime(name))`` so a full compile + link
+    succeeds without the user having to export anything globally.
+    No-op for gfortran / nvfortran (they ship their own runtimes)."""
+    env = dict(os.environ)
+    if "flang" in fc_name:
+        rt = find_flang_runtime_dir()
+        if rt is not None:
+            existing = env.get("LIBRARY_PATH", "")
+            env["LIBRARY_PATH"] = f"{rt}:{existing}" if existing else rt
+    return env
+
+
+#: Skip reason used by tests that need a full link under flang but
+#: can't find the runtime.  Surfaced as the ``reason`` of a
+#: ``pytest.skip`` so the test report carries the exact remediation
+#: hint.
+FLANG_RT_HINT = (
+    "flang-new-21 needs ``libflang_rt.runtime.a`` for a full link; "
+    "build it locally with the recipe at the top of the README's "
+    "Fortran-compiler matrix section, or symlink ROCm's "
+    "/opt/rocm-7.2.0/...x86_64-unknown-linux-gnu/libflang_rt.runtime.a "
+    "into a $LIBRARY_PATH directory."
+)

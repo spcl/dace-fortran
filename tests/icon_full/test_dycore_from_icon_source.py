@@ -26,11 +26,104 @@ import pytest
 import dace_fortran
 from dace_fortran.flang_codebase import find_openmpi_include
 
-from ._fc import FORTRAN_COMPILERS, fortran_compiler_flags
+from ._fc import (
+    FLANG_RT_HINT,
+    FORTRAN_COMPILERS,
+    env_with_flang_runtime,
+    find_flang_runtime_dir,
+    fortran_compiler_flags,
+)
 from ._icon_sync_iso_c_build import (
     _WRAPPER_SRC as _SYNC_WRAPPER_SRC,
     build_icon_sync_iso_c_so,
 )
+
+
+#: Per-test xfail/skip register for flang-new-21 bugs that don't have
+#: a workaround yet.  Keys are the test ID's ``fc`` parameter; values
+#: are the flang issue summary the test would otherwise expose.  Move
+#: a test out of the register once flang ships a fix.  Empty for now
+#: -- our wrapper sources don't trip any known flang-21 ICE on the
+#: full-compile path.
+_FLANG_KNOWN_BUGS: dict = {}
+
+
+#: Minimal stubs for the modules ``icon_sync_iso_c.f90`` USEs.  Used
+#: when we want a per-compiler ``.mod`` to compile against without
+#: needing a real ICON build (whose ``.mod`` files are compiler-
+#: specific).  Every symbol the wrapper references appears here as
+#: a thin shell; concrete bodies are no-ops.
+_SYNC_WRAPPER_STUBS = """\
+MODULE mo_kind
+  IMPLICIT NONE
+  INTEGER, PARAMETER :: dp = SELECTED_REAL_KIND(15)
+  INTEGER, PARAMETER :: sp = SELECTED_REAL_KIND(6)
+END MODULE mo_kind
+
+MODULE mo_model_domain
+  IMPLICIT NONE
+  TYPE :: t_patch
+    INTEGER :: id
+  END TYPE t_patch
+  TYPE(t_patch), TARGET :: p_patch(8)
+END MODULE mo_model_domain
+
+MODULE mo_sync
+  USE mo_kind, ONLY: dp, sp
+  USE mo_model_domain, ONLY: t_patch
+  IMPLICIT NONE
+  INTERFACE sync_patch_array
+    MODULE PROCEDURE sync_patch_array_3d_dp
+  END INTERFACE
+  INTERFACE sync_patch_array_mult
+    MODULE PROCEDURE sync_patch_array_mult_dp
+  END INTERFACE
+  INTERFACE sync_patch_array_mult_mixprec
+    MODULE PROCEDURE sync_patch_array_mult_mixprec_impl
+  END INTERFACE
+CONTAINS
+  SUBROUTINE sync_patch_array_3d_dp(typ, patch, arr, lacc, opt_varname)
+    INTEGER, INTENT(IN) :: typ
+    TYPE(t_patch), TARGET, INTENT(IN) :: patch
+    REAL(dp), INTENT(INOUT) :: arr(:,:,:)
+    LOGICAL, INTENT(IN) :: lacc
+    CHARACTER(LEN=*), TARGET, INTENT(IN), OPTIONAL :: opt_varname
+  END SUBROUTINE
+  SUBROUTINE sync_patch_array_mult_dp(typ, patch, nfields, lacc, &
+                                       f3din1, f3din2, f3din3)
+    INTEGER, INTENT(IN) :: typ, nfields
+    TYPE(t_patch), TARGET, INTENT(IN) :: patch
+    LOGICAL, INTENT(IN) :: lacc
+    REAL(dp), INTENT(INOUT), OPTIONAL :: f3din1(:,:,:), f3din2(:,:,:), f3din3(:,:,:)
+  END SUBROUTINE
+  SUBROUTINE sync_patch_array_mult_mixprec_impl(typ, patch, n_sp, n_dp, &
+                                                 f3din1_sp, f3din1_dp, lacc)
+    INTEGER, INTENT(IN) :: typ, n_sp, n_dp
+    TYPE(t_patch), TARGET, INTENT(IN) :: patch
+    REAL(sp), INTENT(INOUT), OPTIONAL :: f3din1_sp(:,:,:)
+    REAL(dp), INTENT(INOUT), OPTIONAL :: f3din1_dp(:,:,:)
+    LOGICAL, INTENT(IN) :: lacc
+  END SUBROUTINE
+END MODULE mo_sync
+"""
+
+
+def _fc_mod_flag(fc_name: str, mod_dir: str) -> list:
+    """Per-compiler ``-J`` / ``-module`` flag for writing emitted
+    ``.mod`` files to ``mod_dir``.  Each compiler spells it
+    differently."""
+    if fc_name == "nvfortran":
+        return ["-module", str(mod_dir)]
+    if fc_name == "gfortran":
+        return ["-J", str(mod_dir)]
+    # flang-new accepts -J as well; ``-module-dir`` is the canonical
+    # spelling but -J is the documented alias since LLVM 17.
+    return ["-J", str(mod_dir)]
+
+
+def _fc_pic_flag(fc_name: str) -> str:
+    """PIC flag; nvfortran's spelling is lowercase."""
+    return "-fpic" if fc_name == "nvfortran" else "-fPIC"
 
 
 _HERE = Path(__file__).resolve().parent
@@ -319,6 +412,94 @@ END MODULE mo_sync
          *mod_out_flag,
          str(stubs), str(_SYNC_WRAPPER_SRC)],
         cwd=str(tmp_path))
+
+
+@pytest.mark.parametrize("fc", FORTRAN_COMPILERS)
+def test_sync_iso_c_wrapper_full_compile_link(fc, tmp_path: Path):
+    """Full per-compiler compile + link path: emit ``.o`` from the
+    stubs, then from the wrapper, link both into a ``.so``, and
+    verify the bind-C symbols flang/gfortran/nvfortran each declare
+    are actually exported.
+
+    This catches issues a ``-fsyntax-only`` check misses: kind-mismatch
+    truncation, ``c_f_pointer`` shape-array signature drift, ``LOGICAL``
+    bit-width ABI bugs, ``c_bool`` truth-value layout, the ``USE``-merge
+    handling between modules.  Anything the runtime would surface only
+    at link time.
+
+    For flang specifically the test injects ``LIBRARY_PATH`` to point
+    at a user-local ``libflang_rt.runtime.a`` (see ``_fc.FLANG_RT_HINT``
+    for build instructions); it skips cleanly when no runtime is
+    reachable.  Known flang-21 bugs that block specific binding shapes
+    register their case ID in ``_FLANG_KNOWN_BUGS``; this test
+    ``xfail``s those without poisoning the gfortran / nvfortran
+    variants."""
+    fc_name, fc_path = fc
+
+    # flang full-link needs ``libflang_rt.runtime.a``.  Find it once
+    # (via ROCm's copy or a locally-built one) and skip cleanly if
+    # neither is reachable -- the syntax-only test above still pins
+    # the wrapper interface even on hosts that can't fully link.
+    if fc_name.startswith("flang") and find_flang_runtime_dir() is None:
+        pytest.skip(FLANG_RT_HINT)
+
+    # Each compiler emits its OWN ``.mod`` format, so we compile the
+    # stubs with the SAME compiler used for the wrapper -- both
+    # invocations within one test agree on the mod format.
+    stubs = tmp_path / "stubs.f90"
+    stubs.write_text(_SYNC_WRAPPER_STUBS)
+
+    mod_dir = tmp_path / "mod"
+    mod_dir.mkdir()
+    pic = _fc_pic_flag(fc_name)
+
+    # Compile stubs -> stubs.o + per-compiler .mod files.
+    subprocess.check_call(
+        [fc_path, "-c", pic,
+         *fortran_compiler_flags(fc_name),
+         *_fc_mod_flag(fc_name, mod_dir),
+         str(stubs), "-o", str(tmp_path / "stubs.o")],
+        cwd=str(tmp_path),
+        env=env_with_flang_runtime(fc_name))
+
+    # Compile wrapper against those .mods.
+    wrapper_obj = tmp_path / "icon_sync_iso_c.o"
+    subprocess.check_call(
+        [fc_path, "-c", pic,
+         *fortran_compiler_flags(fc_name),
+         f"-I{mod_dir}",
+         *_fc_mod_flag(fc_name, mod_dir),
+         str(_SYNC_WRAPPER_SRC), "-o", str(wrapper_obj)],
+        cwd=str(tmp_path),
+        env=env_with_flang_runtime(fc_name))
+
+    # Link wrapper + stubs into a .so (no main entry needed -- the
+    # shared object exports the bind(c) symbols for runtime
+    # resolution).
+    so_path = tmp_path / "libicon_sync_iso_c_test.so"
+    subprocess.check_call(
+        [fc_path, "-shared", pic,
+         str(wrapper_obj), str(tmp_path / "stubs.o"),
+         "-o", str(so_path)],
+        cwd=str(tmp_path),
+        env=env_with_flang_runtime(fc_name))
+
+    # The four bind-C names must appear in the .so's dynamic symbol
+    # table.  ``nm -D`` for the shared object gives us the export list
+    # in a portable form (works for nvfortran's output too).
+    sym_out = subprocess.check_output(["nm", "-D", str(so_path)], text=True)
+    for sym in (
+        "sync_patch_array_3d_dp_c",
+        "sync_patch_array_mult_2_dp_c",
+        "sync_patch_array_mult_3_dp_c",
+        "sync_patch_array_mult_mixprec_1sp_1dp_c",
+    ):
+        # Strict ``T`` (text, defined) marker so an UNDEFINED symbol
+        # (which would mean the wrapper's bind(c) didn't actually
+        # materialise) fails the test.
+        assert f" T {sym}" in sym_out, (
+            f"{fc_name} produced a .so MISSING the bind-C symbol "
+            f"{sym!r}; nm -D output:\n{sym_out}")
 
 
 @pytest.mark.skipif(

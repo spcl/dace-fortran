@@ -292,6 +292,66 @@ git submodule, pinned to release tag `icon-2026.04-public`).
 extends it to the dycore (`mo_solve_nonhydro.f90`), keeping
 `velocity_tendencies` and `sync_patch_array` as externals.
 
+#### Driving the iso_c wrapper through multiple Fortran compilers
+
+The ICON-integration test infrastructure parametrizes its compile
++ link checks over every Fortran compiler available on the host:
+**gfortran** (ICON CPU default), **flang-new-21** (the bridge's own
+frontend), and **nvfortran** (NVIDIA HPC SDK -- ICON GPU build).
+Discovery is via `tests/icon_full/_fc.py`; the test reports a
+parametrized variant per available compiler, e.g.
+`test_sync_iso_c_wrapper_full_compile_link[gfortran]` +
+`...[flang-new-21]` + `...[nvfortran]` when all three are
+installed.
+
+**flang full-link prerequisite**: flang-new-21 needs
+`libflang_rt.runtime.a` for a full link.  Ubuntu's `flang-21`
+package doesn't ship it.  Two paths:
+
+```bash
+# Option A (no sudo) -- build once locally:
+git clone --depth 1 --branch llvmorg-21.1.2 \
+    https://github.com/llvm/llvm-project.git
+cd llvm-project
+LIBRARY_PATH=/opt/rocm-7.2.0/lib/llvm/lib/clang/22/lib/x86_64-unknown-linux-gnu \
+  cmake -G Ninja -S runtimes -B build \
+    -DLLVM_ENABLE_RUNTIMES=flang-rt \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_COMPILER=clang-21 -DCMAKE_CXX_COMPILER=clang++-21 \
+    -DCMAKE_Fortran_COMPILER=flang-new-21 \
+    -DCMAKE_INSTALL_PREFIX=$HOME/.local/llvm-flang-rt-21 \
+    -DFLANG_RT_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_TESTS=OFF
+cmake --build build --target flang-rt
+cmake --install build
+# Then either set LIBRARY_PATH in your shell:
+export LIBRARY_PATH=$HOME/.local/llvm-flang-rt-21/lib/clang/21/lib/x86_64-unknown-linux-gnu:$LIBRARY_PATH
+# or do nothing -- the test discovers ~/.local/llvm-flang-rt-21/...
+# automatically and injects it via subprocess env.
+
+# Option B (sudo) -- symlink ROCm's runtime (LLVM-22-era, ABI-stable):
+sudo mkdir -p /usr/lib/llvm-21/lib/clang/21/lib/linux
+sudo ln -sf /opt/rocm-7.2.0/lib/llvm/lib/clang/22/lib/x86_64-unknown-linux-gnu/libflang_rt.runtime.a \
+            /usr/lib/llvm-21/lib/clang/21/lib/linux/libflang_rt.runtime.a
+```
+
+Without one of those, the `[flang-new-21]` parametrized variant of
+the full-compile tests skips cleanly (the syntax-only variant still
+runs and pins the wrapper interface).
+
+**Known compiler bugs are tracked per-test**: when a known
+flang-21 ICE or false-positive blocks one of our wrapper shapes, the
+test ID is added to `_FLANG_KNOWN_BUGS` in
+[test_dycore_from_icon_source.py](tests/icon_full/test_dycore_from_icon_source.py).
+The `[flang-new-21]` variant `xfail`s with a clear reason while the
+gfortran / nvfortran variants stay required-green.
+
+**.mod files are compiler-specific** -- gfortran's, flang's, and
+nvfortran's mod formats aren't interoperable.  Tests that need ICON's
+own `.mod` files only fire under the compiler ICON itself was built
+with (the mod-format mismatch is detected at the file header and
+the test skips cleanly).  If you want the flang or nvfortran variants
+to run against ICON's mods, rebuild ICON under that compiler.
+
 ### Calling a separately-compiled external
 
 A kernel that `CALL`s a separately-compiled `bind(c)` function declares
