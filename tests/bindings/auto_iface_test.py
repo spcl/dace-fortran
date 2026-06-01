@@ -33,7 +33,7 @@ def _auto(src: str, tmp_path: Path, name: str, entry: str) -> OriginalInterface:
 def test_auto_iface_flat_matches_handwritten(tmp_path):
     """The QE complex-AXPY kernel: derived iface == the README's hand-written
     one, arg order (n, a, x, y) and all."""
-    src = (Path(__file__).parents[1] / "qe_loopnests" / "qe_e4_zaxpy.f90").read_text()
+    src = (Path(__file__).parents[1] / "qe" / "selected_loopnests" / "qe_e4_zaxpy.f90").read_text()
     auto = _auto(src, tmp_path, "kernel", "_QPkernel")
     assert auto.entry == "kernel"
     assert auto.used_modules == {}

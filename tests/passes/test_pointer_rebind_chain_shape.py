@@ -75,21 +75,6 @@ END MODULE
 """
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="RewritePointerAssigns loud-bails with 'pointer rebind with "
-           "bounds remap (...) not supported' because flang adds a "
-           "default ``fir.shift`` on the rebox even when the source "
-           "doesn't remap bounds.  ICON's velocity_tendencies case "
-           "(``icidx => p_patch%edges%cell_idx``) survives because "
-           "``hlfir-flatten-structs`` rewrites the nested designate "
-           "chain to a flat top-level array BEFORE rewrite-pointer-"
-           "assigns runs, which dissolves the shift.  This minimal "
-           "repro doesn't trigger flatten (the dummy arg path differs), "
-           "so the bounds-remap guard fires.  Fix the pass to ignore "
-           "shifts that are no-ops (shift == identity) and the workaround "
-           "in ``emit_scalar_assign`` can be dropped.  See "
-           "RewritePointerAssigns.cpp comment on 'Loud-failure cases'.")
 def test_pointer_rebind_chain_through_pointer_member_builds(tmp_path):
     """The SDFG builds and validates for the chain-shape pointer rebind.
 

@@ -35,7 +35,7 @@ from _util import build_sdfg, f2py_compile, have_flang
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
-_LOOPNESTS_DIR = Path(__file__).parent / "cloudsc_loopnests"
+_LOOPNESTS_DIR = Path(__file__).parent
 
 
 def _kernel_source(name: str) -> str:

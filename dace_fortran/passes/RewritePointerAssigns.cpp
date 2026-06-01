@@ -570,14 +570,69 @@ struct RewritePointerAssignsPass
     //   * REBOX SLICE OPERAND  --  defensive; flang doesn't emit
     //     this for pointer rebinds today, but it would mean an
     //     extra stride/section overlay we don't model.
+    // Identity check for ``fir.shift`` / ``fir.shape_shift`` operands.
+    // flang attaches a default ``fir.shift`` to every rebox even when the
+    // user did NOT write a bounds remap (a plain ``ptr => src(..)`` with
+    // no ``ptr(<lo>:..) =>`` reshape).  The bounds-remap guard below
+    // must NOT fire for those: the shift carries every lower-bound as
+    // either (a) the literal ``1`` (Fortran's default lb) or (b) the
+    // same source box's own ``fir.box_dims %src, %i -> #0``  --  flang
+    // emits the latter to re-assert the source's runtime lower bounds.
+    // Both shapes are observationally identical to an unshifted rebind,
+    // so the guard arms only when an lb operand is neither of those.
+    auto isConstantOne = [](mlir::Value lb) {
+      if (!lb) return false;
+      auto *def = lb.getDefiningOp();
+      if (!def) return false;
+      if (auto c = mlir::dyn_cast<mlir::arith::ConstantOp>(def)) {
+        if (auto a = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue()))
+          return a.getInt() == 1;
+      }
+      return false;
+    };
+    auto isBoxDimsLowerBoundOfSource = [](mlir::Value lb,
+                                          mlir::Value srcBox) {
+      // Match the ``lb = fir.box_dims %srcBox, %i -> (#0, #1, #2)``
+      // shape where ``lb`` is the result#0 (lower bound).  The middle
+      // and stride results (#1, #2) are NOT lower bounds and should
+      // not match -- we want the actual ``lb`` channel.
+      if (!lb || !srcBox) return false;
+      auto opRes = mlir::dyn_cast<mlir::OpResult>(lb);
+      if (!opRes || opRes.getResultNumber() != 0) return false;
+      auto bd = mlir::dyn_cast<fir::BoxDimsOp>(opRes.getOwner());
+      if (!bd) return false;
+      return bd.getVal() == srcBox;
+    };
+    auto isIdentityShift = [&](mlir::Operation *shapeDef,
+                               mlir::Value srcBox) {
+      auto checkLb = [&](mlir::Value lb) {
+        return isConstantOne(lb) ||
+               isBoxDimsLowerBoundOfSource(lb, srcBox);
+      };
+      if (auto s = mlir::dyn_cast_or_null<fir::ShiftOp>(shapeDef)) {
+        for (mlir::Value lb : s.getOrigins())
+          if (!checkLb(lb)) return false;
+        return true;
+      }
+      if (auto s = mlir::dyn_cast_or_null<fir::ShapeShiftOp>(shapeDef)) {
+        auto pairs = s.getPairs();
+        for (size_t i = 0; i < pairs.size(); i += 2)
+          if (!checkLb(pairs[i])) return false;
+        return true;
+      }
+      return false;
+    };
+
     for (mlir::Value v = rebindStore.getValue(); v;) {
       auto *def = v.getDefiningOp();
       if (!def) break;
       if (auto rb = mlir::dyn_cast<fir::ReboxOp>(def)) {
         if (mlir::Value shape = rb.getShape()) {
           auto *shapeDef = shape.getDefiningOp();
-          if (mlir::isa_and_nonnull<fir::ShiftOp>(shapeDef) ||
-              mlir::isa_and_nonnull<fir::ShapeShiftOp>(shapeDef)) {
+          bool isShift =
+              mlir::isa_and_nonnull<fir::ShiftOp>(shapeDef) ||
+              mlir::isa_and_nonnull<fir::ShapeShiftOp>(shapeDef);
+          if (isShift && !isIdentityShift(shapeDef, rb.getBox())) {
             rebindStore.emitError(
                 "hlfir-rewrite-pointer-assigns: pointer "
                 "rebind with bounds remap (``ptr(<lo>:..) "

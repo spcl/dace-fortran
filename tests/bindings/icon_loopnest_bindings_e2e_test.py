@@ -56,7 +56,7 @@ pytestmark = [
     pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
 ]
 
-_LOOPNESTS_DIR = Path(__file__).resolve().parent.parent / "icon_loopnests"
+_LOOPNESTS_DIR = Path(__file__).resolve().parent.parent / "icon" / "selected_loopnests"
 _LOOPNEST = _LOOPNESTS_DIR / "icon_loopnest_2.f90"
 
 
