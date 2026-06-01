@@ -78,13 +78,6 @@ end module m_pat_a
 """
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Fixed-shape PURE FUNCTION return used in arithmetic expression "
-           "(``a + make3(x)``).  Bridge emits ``_out_out_arr = (_in_a_0 + ?)`` "
-           "-- the function return chain isn't resolved when the call sits "
-           "inside an addition.  Production pattern: any compound expression "
-           "mixing an array-result PURE function with another array.")
 def test_array_fn_return_in_arithmetic(tmp_path):
     """Array RHS = arr + array_fn(...)."""
     src = tmp_path / "m.f90"
@@ -175,18 +168,6 @@ end module m_pat_f
 """
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="PURE FUNCTION returning a derived type (``type(vec3) :: r``).  "
-           "flang emits ``func.func ... -> !fir.type<...vec3{x:f64,y:f64,z:f64}>`` "
-           "i.e. by-VALUE struct return; after ``hlfir-inline-all`` the "
-           "callee's ``r`` alloca lives in the entry's body, but the bridge "
-           "does not yet thread the per-member assignments into a struct-"
-           "typed SDFG view, and emits ``_out_p = ?``.  Fix would either "
-           "(a) introduce a struct-temp descriptor for value-returned DTs, "
-           "or (b) lift the call into a sret-style pattern before lowering.  "
-           "Production pattern: ``constructor`` PURE functions returning "
-           "lightweight value types (tuples, vectors, point types).")
 def test_fn_returns_derived_type(tmp_path):
     """A PURE FUNCTION whose return is a small derived type."""
     src = tmp_path / "m.f90"

@@ -197,6 +197,35 @@ struct UnwrapEvalInMemPass
         if (auto d = mlir::dyn_cast<hlfir::DestroyOp>(user))
           destroys.push_back(d);
       for (auto d : destroys) d.erase();
+
+      // Rewrite ``hlfir.apply %expr (%i)`` users to
+      // ``fir.load (hlfir.designate %src_decl (%i))``.  The bypass
+      // replaces the ``!hlfir.expr<NxT>`` result with the source's
+      // ``!fir.ref<!fir.array<NxT>>``, which the apply op's verifier
+      // would reject (its operand must be expr-typed).  Designate +
+      // load on the source memref reads the same element value.
+      // Production case: ``c(:, i) = a + make3(src(i))`` where the
+      // fn return is the operand of an ``arith.addf`` inside an
+      // ``hlfir.elemental`` block -- the elemental's body uses
+      // ``hlfir.apply`` to extract each element.
+      llvm::SmallVector<hlfir::ApplyOp, 4> applies;
+      for (auto* user : op.getResult().getUsers())
+        if (auto a = mlir::dyn_cast<hlfir::ApplyOp>(user))
+          applies.push_back(a);
+      for (auto a : applies) {
+        mlir::OpBuilder ab(a);
+        auto elemTy = a.getResult().getType();
+        auto eltRefTy = fir::ReferenceType::get(elemTy);
+        auto designate = ab.create<hlfir::DesignateOp>(
+            a.getLoc(), eltRefTy, /*memref=*/cloned,
+            /*indices=*/a.getIndices(),
+            /*typeparams=*/mlir::ValueRange{},
+            /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
+        auto loaded = ab.create<fir::LoadOp>(a.getLoc(), designate.getResult());
+        a.getResult().replaceAllUsesWith(loaded.getResult());
+        a.erase();
+      }
+
       op.getResult().replaceAllUsesWith(cloned);
       op.erase();
       ++counter;  // keep counter consistent across paths even though no
@@ -242,6 +271,116 @@ struct UnwrapEvalInMemPass
     return true;
   }
 
+  /// Bypass the ``.result``-buffer pattern flang emits for a
+  /// derived-type (or any by-value scalar/aggregate) function return:
+  ///
+  ///   %result_buf = fir.alloca !fir.type<vec3> {bindc_name = ".result"}
+  ///   ... callee inlined: writes to its own ``%r`` declare ...
+  ///   %loaded = fir.load %r#0 : !fir.ref<!fir.type<vec3>>
+  ///   fir.save_result %loaded to %result_buf
+  ///   %result_decl = hlfir.declare %result_buf
+  ///   %expr        = hlfir.as_expr %result_decl#0 move %false
+  ///   hlfir.assign %expr to %p_decl
+  ///
+  /// flang does not wrap this in ``hlfir.eval_in_mem`` (that wrapper is
+  /// reserved for array-by-value returns) -- it goes directly through a
+  /// ``.result`` buffer + ``hlfir.as_expr``.  After
+  /// ``hlfir-inline-all`` splices the callee, the ``.result`` buffer
+  /// becomes redundant: the inlined ``r`` declare already holds the
+  /// value.  We replace uses of the ``.result``-backed declare with
+  /// the inlined source declare, then erase the intermediate
+  /// (save_result + load + as_expr + the .result alloca's declare).
+  ///
+  /// The end IR has ``hlfir.assign %r_decl#0 to %p_decl#0`` (whole-DT
+  /// copy from a stack-local), which ``hlfir-flatten-structs``
+  /// rewrites into per-member companions just like any user-declared
+  /// struct assignment.
+  void rewriteResultBuffers(mlir::ModuleOp module) {
+    // Collect all ``.result``-named allocas in one walk so we can
+    // mutate without invalidating the walker.
+    llvm::SmallVector<fir::AllocaOp, 8> bufs;
+    module.walk([&](fir::AllocaOp op) {
+      auto bn = op.getBindcName();
+      if (bn && bn.value() == ".result") bufs.push_back(op);
+    });
+    for (auto buf : bufs) {
+      // Find a ``hlfir.declare`` wrapping the buf and a
+      // ``fir.save_result`` writing to it.  The save_result may sit
+      // before or after the declare in source order; both shapes
+      // appear in practice.
+      hlfir::DeclareOp bufDecl;
+      fir::SaveResultOp save;
+      for (auto* u : buf.getResult().getUsers()) {
+        if (auto d = mlir::dyn_cast<hlfir::DeclareOp>(u)) bufDecl = d;
+        if (auto sr = mlir::dyn_cast<fir::SaveResultOp>(u)) save = sr;
+      }
+      if (!save && bufDecl) {
+        // save_result may write to the declare's result rather than the
+        // bare alloca; check both result#0 and result#1.
+        for (auto* u : bufDecl.getResult(0).getUsers())
+          if (auto sr = mlir::dyn_cast<fir::SaveResultOp>(u)) save = sr;
+        if (!save)
+          for (auto* u : bufDecl.getResult(1).getUsers())
+            if (auto sr = mlir::dyn_cast<fir::SaveResultOp>(u)) save = sr;
+      }
+      if (!save) continue;
+
+      // The value being saved must be a ``fir.load`` of a declare.
+      auto load = mlir::dyn_cast_or_null<fir::LoadOp>(
+          save.getValue().getDefiningOp());
+      if (!load) continue;
+      auto srcDecl = traceToDeclareResult(load.getMemref());
+      if (!srcDecl) continue;
+
+      // Replace uses of the ``.result``-backed declare (both results)
+      // with the source declare.  Then walk the chain forward and
+      // erase the intermediate ``hlfir.as_expr`` that wraps the
+      // ``.result`` declare for an expr-typed ``hlfir.assign`` source
+      // -- the bridge handles ref-typed assign sources directly, no
+      // expr wrapper needed.
+      if (bufDecl) {
+        // Snapshot ``hlfir.as_expr`` users.  We splice them OUT entirely
+        // (not re-issue) so the downstream ``hlfir.assign %expr to %p``
+        // sees a plain ref-typed source -- the bridge handles
+        // ``hlfir.assign`` between two memrefs via the existing whole-
+        // DT copy path that ``hlfir-flatten-structs`` then expands into
+        // per-member copies.  Keeping the as_expr wrapper would force
+        // the bridge through its expr-typed assign path, which does
+        // not yet flatten through to per-member access.
+        llvm::SmallVector<hlfir::AsExprOp, 2> asExprs;
+        for (auto* u : bufDecl.getResult(0).getUsers())
+          if (auto ae = mlir::dyn_cast<hlfir::AsExprOp>(u))
+            asExprs.push_back(ae);
+        for (auto ae : asExprs) {
+          // Drop any ``hlfir.destroy`` users of the expr (no expr to
+          // destroy once we splice the wrapper out).
+          llvm::SmallVector<hlfir::DestroyOp, 2> destroys;
+          for (auto* eu : ae.getResult().getUsers())
+            if (auto d = mlir::dyn_cast<hlfir::DestroyOp>(eu))
+              destroys.push_back(d);
+          for (auto d : destroys) d.erase();
+          ae.getResult().replaceAllUsesWith(srcDecl);
+          ae.erase();
+        }
+        // Any remaining ref-typed users of the declare get
+        // re-pointed at the source declare directly.
+        bufDecl.getResult(0).replaceAllUsesWith(srcDecl);
+        if (!bufDecl.getResult(1).use_empty())
+          bufDecl.getResult(1).replaceAllUsesWith(srcDecl);
+        bufDecl.erase();
+      }
+
+      // Erase the save_result + the load (if it has no other uses).
+      save.erase();
+      if (load.getResult().use_empty()) load.erase();
+
+      // Erase the ``.result`` alloca if it's now dead.  DCE would
+      // catch this later, but eagerly erasing keeps the IR cleaner
+      // for downstream passes that walk allocas.
+      if (buf.getResult().use_empty()) buf.erase();
+    }
+  }
+
   void runOnOperation() override {
     auto module = getOperation();
 
@@ -254,6 +393,13 @@ struct UnwrapEvalInMemPass
       func.walk([&](hlfir::EvaluateInMemoryOp op) { ops.push_back(op); });
       for (auto op : ops) (void)rewriteOne(op, counter);
     }
+
+    // Second walk: bypass the ``.result``-buffer pattern flang uses
+    // for derived-type-by-value function returns (no eval_in_mem
+    // involved).  This runs AFTER the eval_in_mem rewrites so any
+    // save_result that the eval_in_mem unwrap exposed gets a
+    // consistent treatment.
+    rewriteResultBuffers(module);
   }
 };
 
