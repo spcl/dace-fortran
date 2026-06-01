@@ -2042,6 +2042,21 @@ struct FlattenStructsPass
     // dynamic-shape companion array dummy per inner member.  Inserts the
     // companion dummies before Step 0.5 / Step 1 see them.
     bool splitMD = splitMultiDimAoRScalarMembers(func);
+    // Diagnose the LOCAL counterpart of the alloc-array-of-records-with-
+    // scalar-inner-members pattern: when the chain ends at a LOCAL
+    // ``hlfir.declare`` of a struct rather than a function argument,
+    // ``splitMultiDimAoRScalarMembers`` cannot rewrite it -- the dummy
+    // case lifts the inner members to function-argument companions and
+    // relies on the caller-side bindings to marshal strided views; the
+    // local case has no caller-side hook, and rewriting the local case
+    // also requires teaching the pass to thread synthesised
+    // ``_FortranAAllocatable{SetBounds,Allocate,Deallocate}`` calls
+    // through per-member companion allocations (different element type
+    // -> different strides, no shared heap).  Emit a clear error so the
+    // bridge fails loudly with a TODO marker instead of letting the
+    // bridge stumble into an opaque ``KeyError`` later when its emitter
+    // hits the unresolvable designate chain.
+    diagnoseLocalAoRScalarInnerMembers(func);
 
     // Step 0.5: (B) split an allocatable array-of-records struct-dummy member
     // accessed only by stable index symbols (ICON's prog(nnow)/prog(nnew)
@@ -2434,6 +2449,124 @@ struct FlattenStructsPass
     for (auto *op : deadOps)
       if (op->use_empty()) op->erase();
     return changed;
+  }
+
+  /// (A.1) Diagnose LOCAL-rooted instances of the alloc-array-of-records-
+  /// with-scalar-inner-members pattern.  When the access chain ends at a
+  /// LOCAL ``hlfir.declare`` of a struct (instead of a function-argument
+  /// declare), :func:`splitMultiDimAoRScalarMembers` deliberately bails:
+  /// the dummy-case rewrite synthesises per-inner-member function-argument
+  /// companions and relies on the caller-side bindings layer to marshal
+  /// strided views from the original AoR descriptor; the local case has
+  /// no such caller hook and ALSO needs the synthesised
+  /// ``_FortranAAllocatable{SetBounds,Allocate,Deallocate}`` runtime
+  /// calls rewritten to drive per-member companion allocations (different
+  /// element types -> different strides, no shared heap pointer).
+  ///
+  /// When the bridge encounters this shape today, the downstream emitter
+  /// hits an unresolvable designate chain and surfaces as an opaque
+  /// ``KeyError`` Python-side.  This walker preempts that with a clear
+  /// MLIR diagnostic identifying the exact root + path + inner-member
+  /// triple, plus a TODO marker pointing at the fix path.
+  ///
+  /// TODO[alloc-array-of-records LOCAL case]: extend
+  /// :func:`splitMultiDimAoRScalarMembers` to (a) accept LOCAL declares
+  /// as chain roots, (b) synthesise per-inner-member local
+  /// ``fir.alloca`` companions of the right shape, and (c) rewrite the
+  /// ``_FortranAAllocatableSetBounds`` + ``_FortranAAllocatableAllocate``
+  /// + ``_FortranAAllocatableDeallocate`` call sequences to drive each
+  /// companion's allocation independently.  See the project memory
+  /// ``project_alloc_array_of_records_scalar_inner.md``.
+  void diagnoseLocalAoRScalarInnerMembers(mlir::func::FuncOp func) {
+    auto &block = func.front();
+    // Function-arg declares -- the dummy case the existing pass handles.
+    // Any declare NOT in this set, but rooted at a ``fir.alloca``, is a
+    // local-case candidate.
+    llvm::DenseSet<mlir::Value> argDeclResults;
+    for (unsigned i = 0; i < block.getNumArguments(); ++i)
+      for (auto *u : block.getArgument(i).getUsers())
+        if (auto d = mlir::dyn_cast<hlfir::DeclareOp>(u))
+          argDeclResults.insert(d.getResult(0));
+
+    llvm::SmallVector<hlfir::DesignateOp, 4> hits;
+    func.walk([&](hlfir::DesignateOp innerDg) {
+      // Inner-member designate: has component, no subscripts.
+      auto innerComp = innerDg.getComponentAttr();
+      if (!innerComp) return;
+      if (!innerDg.getIndices().empty()) return;
+      // Memref must be an element designate.
+      auto elemDg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
+          innerDg.getMemref().getDefiningOp());
+      if (!elemDg) return;
+      if (elemDg.getComponentAttr()) return;
+      if (elemDg.getIndices().empty()) return;
+      // Element designate's memref must be a loaded box.
+      auto ld = mlir::dyn_cast_or_null<fir::LoadOp>(
+          elemDg.getMemref().getDefiningOp());
+      if (!ld) return;
+      // Walk the member-chain to its root declare.
+      mlir::Value v = ld.getMemref();
+      while (auto md = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
+                 v.getDefiningOp())) {
+        if (!md.getComponentAttr()) break;
+        v = md.getMemref();
+      }
+      if (argDeclResults.contains(v)) return;  // already handled by dummy case.
+      // LOCAL-case candidate: the root is a hlfir.declare whose memref is
+      // a ``fir.alloca`` (we deliberately ignore ``fir.allocmem`` here --
+      // that lives in a different lane).
+      auto rootDecl = mlir::dyn_cast_or_null<hlfir::DeclareOp>(v.getDefiningOp());
+      if (!rootDecl) return;
+      if (!mlir::isa_and_nonnull<fir::AllocaOp>(
+              rootDecl.getMemref().getDefiningOp()))
+        return;
+      // Verify the element record type holds only scalar leaves -- mirrors
+      // the dummy-case scalarOnly check so we only fire on the genuine
+      // ``t_tangent_vectors{v1: f64, v2: f64}``-style pattern.
+      auto refTy = mlir::dyn_cast<fir::ReferenceType>(
+          elemDg.getResult().getType());
+      if (!refTy) return;
+      auto elemRec = mlir::dyn_cast<fir::RecordType>(refTy.getEleTy());
+      if (!elemRec) return;
+      for (auto &p : elemRec.getTypeList()) {
+        mlir::Type mt = p.second;
+        if (mlir::isa<fir::SequenceType, fir::BoxType, fir::ReferenceType,
+                      fir::HeapType, fir::PointerType, fir::RecordType>(mt))
+          return;
+      }
+      hits.push_back(innerDg);
+    });
+
+    if (hits.empty()) return;
+
+    // Emit one diagnostic per (root, path, inner_member) triple at the
+    // first hit and signal pass failure.  We don't try to enumerate
+    // every site -- one location is enough for the user to find the
+    // pattern.
+    auto first = hits.front();
+    first.emitError()
+        << "hlfir-flatten-structs: LOCAL alloc-array-of-records with "
+        << "SCALAR inner members not yet supported.  "
+        << "Detected on inner-member designate of ``"
+        << first.getComponentAttr().getValue()
+        << "``.  The dummy-case rewrite "
+        << "(``splitMultiDimAoRScalarMembers``) synthesises per-inner-"
+        << "member function-argument companions and relies on the "
+        << "caller-side bindings to marshal strided views; the local "
+        << "case additionally requires rewriting the synthesised "
+        << "``_FortranAAllocatable{SetBounds,Allocate,Deallocate}`` "
+        << "runtime calls to drive per-member companion allocations "
+        << "(different element types -> different strides, no shared "
+        << "heap).  "
+        << "TODO[project_alloc_array_of_records_scalar_inner]: extend "
+        << "splitMultiDimAoRScalarMembers to accept local-declare "
+        << "roots and rewrite the ``_FortranAAllocatable*`` runtime "
+        << "calls per-companion.  "
+        << "Workaround: hoist the local struct + its allocate/deallocate "
+        << "out to a caller (becomes the dummy case, which IS supported), "
+        << "or split the AoR field out of the struct into a top-level "
+        << "allocatable of the inner-member scalar type.";
+    signalPassFailure();
   }
 
   /// (B) Double-buffer split.  A function-argument-rooted alloc / pointer
