@@ -20,6 +20,20 @@ _worker = os.environ.get("PYTEST_XDIST_WORKER")
 if _worker:
     from dace.config import Config
     Config.set("default_build_folder", value=f".dacecache_{_worker}")
+else:
+    # Master-only: build the C++ ``hlfir_bridge`` extension BEFORE
+    # pytest-xdist spawns workers.  Every worker imports
+    # ``dace_fortran.build_bridge`` (transitively, via SDFGBuilder),
+    # whose module-level ``ensure_fresh()`` rebuilds the .so when
+    # sources are newer or the .so is missing.  Without this gate,
+    # multiple workers can hit ``needs_build() == True`` concurrently,
+    # each launch a CMake build into the shared output path, and
+    # produce a partial .so that ImportErrors when any worker tries
+    # to load it.  Eagerly importing here forces the staleness check
+    # + (re)build to complete in the master where it is single-
+    # threaded; workers then inherit a fresh .so and the import
+    # in their conftest is a no-op fast path.
+    import dace_fortran.build_bridge  # noqa: F401
 
 import pytest
 
