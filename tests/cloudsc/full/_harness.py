@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 
 from _util import build_sdfg
-from cloudsc_full._registries import get_inputs_physical, get_outputs
+from cloudsc.full._registries import get_inputs_physical, get_outputs
 
 _SCALAR_TYPES = (bool, int, float, np.bool_, np.integer, np.floating)
 _ENTRY = "_QPcloudscouter"

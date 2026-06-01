@@ -31,11 +31,11 @@ import numpy as np
 import pytest
 
 from _util import f2py_compile, have_flang
-from cloudsc_full._registries import (
+from cloudsc.full._registries import (
     CLOUDSC_F90FLAGS,
     program_outputs,
 )
-from cloudsc_full._harness import run_cloudsc
+from cloudsc.full._harness import run_cloudsc
 
 _HERE = Path(__file__).resolve().parent
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")

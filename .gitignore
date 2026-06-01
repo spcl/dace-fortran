@@ -197,3 +197,7 @@ _all_tests/
 # and must be opted back in here.
 !tests/npb/**/*.F90
 !tests/npb/**/*.f90
+# ICON aes_graupel multi-file build (mo_aes_graupel + mo_aes_thermo +
+# mo_kind + mo_physical_constants).  Kept under tests/icon/graupel/ as
+# the canonical bridge test for the AES microphysics scheme.
+!tests/icon/graupel/**/*.f90

@@ -34,7 +34,7 @@ import numpy as np
 import pytest
 
 from _util import build_sdfg, have_flang
-from icon_full._harness import _INIT_ARRAY_ORDER, _OUTPUT_NAMES, _allocate
+from icon.full._harness import _INIT_ARRAY_ORDER, _OUTPUT_NAMES, _allocate
 
 from dace_fortran.bindings import (
     FlattenPlan,
