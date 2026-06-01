@@ -128,13 +128,6 @@ end module m_pat_c
 """
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="PURE FUNCTION return whose extent is derived from a dummy "
-           "(``real(8) :: r(k)``).  Bridge emits ``_out_tmp = ?`` -- the "
-           "function-return chain doesn't yet thread the dynamic shape "
-           "through to a downstream scalar-assign.  Production pattern: "
-           "any ``function f(n) result(r); real :: r(n)`` shape.")
 def test_dummy_shaped_fn_return(tmp_path):
     """Local array = fn(...) where fn's return shape is a dummy expression."""
     src = tmp_path / "m.f90"
@@ -231,15 +224,6 @@ end module m_pat_i
 """
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Slice LHS = fixed-shape PURE FUNCTION return "
-           "(``b(1:3, i) = make3(src(i))``).  Bridge emits ``? = ?`` -- "
-           "the slice-target binding doesn't know how to receive the array "
-           "function result, same root family as the direct-assignment "
-           "case (``tmp = make3(x)`` in array_return_assignment_test) but "
-           "via a designate / section LHS.  Production pattern: any "
-           "per-iteration multi-value update into a strided output array.")
 def test_slice_lhs_array_fn_return(tmp_path):
     """``arr(1:3, i) = fn(...)`` where fn returns a fixed-shape array."""
     src = tmp_path / "m.f90"

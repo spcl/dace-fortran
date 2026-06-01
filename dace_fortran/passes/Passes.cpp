@@ -78,6 +78,9 @@ void registerAllBridgePasses() {
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createMarshalExternalStructsPass();
   });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createUnwrapEvalInMemPass();
+  });
   // Flang's polymorphic-op conversion: statically devirtualises
   // ``fir.dispatch`` / ``fir.select_type`` ops whose target is
   // resolvable at compile time.  Run BEFORE

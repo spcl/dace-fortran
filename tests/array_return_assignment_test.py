@@ -60,14 +60,6 @@ end module m_array_return
 """
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="bridge cannot lower whole-array LHS = fixed-shape function "
-           "return (``tmp = make3(...)``).  The scalar-assign tasklet's "
-           "RHS resolves to the ``?`` unresolved-expression placeholder, "
-           "which fails ``ast.parse`` inside ``add_tasklet``.  "
-           "Production pattern: graupel's ``update = precip1(...)`` "
-           "where ``precip1`` returns ``real(8) :: r(3)``.")
 def test_whole_array_assignment_from_function_return(tmp_path):
     """The bridge builds an SDFG for the ``tmp = make3(src(i))`` pattern."""
     src = tmp_path / "m.f90"

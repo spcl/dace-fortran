@@ -34,6 +34,7 @@ std::unique_ptr<mlir::Pass> createLiftReductionOperandsPass();
 std::unique_ptr<mlir::Pass> createLiftAllocArrayOfRecordsPass();
 std::unique_ptr<mlir::Pass> createPruneUnreachablePass();
 std::unique_ptr<mlir::Pass> createMarshalExternalStructsPass();
+std::unique_ptr<mlir::Pass> createUnwrapEvalInMemPass();
 
 // --- Registry ---
 

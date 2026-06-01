@@ -107,6 +107,19 @@ DEFAULT_PIPELINE = (
     # cleanly; the trailing lift-cf-to-scf handles whatever inlining exposes.
     "lift-cf-to-scf,"
     "hlfir-inline-all,"
+    # Unwrap ``hlfir.eval_in_mem`` blocks into ``fir.alloca`` + body +
+    # reads.  flang's HLFIR wraps any array-valued expression that
+    # has to be evaluated into pre-allocated memory in eval_in_mem;
+    # after ``hlfir-inline-all`` inlines a callee whose return is an
+    # array-by-value (graupel's ``update = precip1(...)``, NPB-LU's
+    # ``snow_*`` helpers), the inlined body sits inside an
+    # eval_in_mem whose result is an ``!hlfir.expr<NxT>`` value the
+    # bridge's expression resolver cannot read.  This pass rewrites
+    # each eval_in_mem to a plain alloca + body + plain reads so the
+    # bridge's existing extract_vars + AST emitter handle it the
+    # same way they handle a stack-local Fortran array.  No-op when
+    # there are no eval_in_mem ops left.
+    "hlfir-unwrap-eval-in-mem,"
     # Erase element-scoped alias declares left by inlining scalar-arg
     # procedures (elemental subroutines, most commonly)  --  runs before
     # flatten-structs so the rewrite's designate chains are already
