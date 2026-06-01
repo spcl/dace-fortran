@@ -32,7 +32,12 @@ from pathlib import Path
 
 import pytest
 
-from ._fc import FORTRAN_COMPILERS, fortran_compiler_flags
+from ._fc import (
+    FORTRAN_COMPILERS,
+    cpp_flag,
+    fortran_compiler_flags,
+    syntax_check_argv,
+)
 from ._icon_solve_nh_patch import (
     SOLVE_NH_WRAPPER_NAME,
     apply_solve_nh_patch,
@@ -220,16 +225,8 @@ def test_patched_source_parses_through_fortran_compiler(fc, tmp_path: Path):
         "-D__NO_JSBACH_HD__", "-D__NO_JSBACH__", "-D__NO_QUINCY__",
         "-D__NO_RAGNAROK__",
     ]
-    # Each compiler spells "syntax only" differently.
-    syntax_only_flag = {
-        "gfortran": "-fsyntax-only",
-        "flang-new-21": "-fsyntax-only",
-        "nvfortran": "-Msyntax",
-    }.get(fc_name, "-fsyntax-only")
-    cpp_flag = "-cpp" if fc_name in ("gfortran", "flang-new-21") else "-Mpreprocess"
-
     subprocess.check_call(
-        [fc_path, syntax_only_flag, cpp_flag,
+        [fc_path, *syntax_check_argv(fc_name, tmp_path), cpp_flag(fc_name),
          *fortran_compiler_flags(fc_name),
          *include_flags, *defines,
          str(out)],

@@ -32,6 +32,7 @@ from ._fc import (
     env_with_flang_runtime,
     find_flang_runtime_dir,
     fortran_compiler_flags,
+    syntax_check_argv,
 )
 from ._icon_sync_iso_c_build import (
     _WRAPPER_SRC as _SYNC_WRAPPER_SRC,
@@ -392,22 +393,21 @@ CONTAINS
   END SUBROUTINE
 END MODULE mo_sync
 """)
-    # Compiler-specific syntax-only + .mod-output flag.
+    # ``-fsyntax-only`` (gfortran / flang-new) vs ``-c -o <obj>``
+    # (nvfortran, which has no syntax-only knob).
+    syntax_argv = syntax_check_argv(fc_name, tmp_path)
     if fc_name == "nvfortran":
-        syntax_only_flag = "-Msyntax"
         mod_out_flag = ["-module", str(tmp_path)]
     elif fc_name == "flang-new-21":
         # ``flang-new -fsyntax-only`` skips module emission; the
         # stubs file is parsed in-line with the wrapper, so no -J/
         # -module needed (all symbols resolve within the same
         # compile invocation).
-        syntax_only_flag = "-fsyntax-only"
         mod_out_flag = []
     else:  # gfortran
-        syntax_only_flag = "-fsyntax-only"
         mod_out_flag = ["-J", str(tmp_path)]
     subprocess.check_call(
-        [fc_path, syntax_only_flag,
+        [fc_path, *syntax_argv,
          *fortran_compiler_flags(fc_name),
          *mod_out_flag,
          str(stubs), str(_SYNC_WRAPPER_SRC)],

@@ -185,3 +185,7 @@ _all_tests/
 *.sdfgz
 .dacecache/
 .dacecache*/
+
+# In-test ICON build dir populated by tests/icon_dycore/setup_icon_dycore.sh
+# (captures compile_commands.json; consumed by test_solve_nonhydro_parse.py).
+.icon_build/

@@ -158,6 +158,44 @@ def fortran_compiler_flags(fc_name: str) -> List[str]:
     return []
 
 
+def syntax_check_argv(fc_name: str, scratch_dir: Path) -> List[str]:
+    """Per-compiler argv tail for a parse + semantic-check pass.
+
+    gfortran / flang-new spell it ``-fsyntax-only``: a single token
+    that suppresses codegen + link.  nvfortran has no equivalent
+    knob -- ``-Msyntax`` is rejected as an unknown switch, and the
+    closest fit is bare ``-c``: compile to object files (full
+    parse + semantic + body checks, no link).  We deliberately do
+    NOT pass ``-o`` here: nvfortran refuses ``-c -o single.o``
+    when more than one source is supplied ("More than one output
+    file will overwrite ..."), and the caller already runs with
+    ``cwd=scratch_dir`` (a per-test tmp_path under ``-n N``) so the
+    per-source ``.o`` files land in an xdist-private directory and
+    can't race.
+
+    :param fc_name: stable display name from ``FORTRAN_COMPILERS``.
+    :param scratch_dir: per-test scratch directory.  Reserved for a
+                        future compiler whose syntax-check argv
+                        legitimately needs a sandboxed output file.
+    :returns: argv fragment to splat into ``subprocess.check_call``
+              before the source-file arguments.
+    """
+    del scratch_dir  # reserved for future single-output compilers
+    if fc_name == "nvfortran":
+        return ["-c"]
+    return ["-fsyntax-only"]
+
+
+def cpp_flag(fc_name: str) -> str:
+    """Per-compiler ``-cpp``-equivalent preprocessing flag.
+
+    gfortran / flang-new accept ``-cpp``; nvfortran spells the same
+    thing ``-Mpreprocess``.  Centralised here so a third compiler
+    later only adds one entry, not a string-compare at every call site.
+    """
+    return "-Mpreprocess" if fc_name == "nvfortran" else "-cpp"
+
+
 # Standard locations where a user-local ``libflang_rt.runtime.a`` may
 # live.  When we find one we surface it via ``LIBRARY_PATH`` so the
 # ``flang-new-21`` driver's linker invocation picks it up without the
