@@ -14,6 +14,7 @@ honour the standard make variable pick the right one in-process.
 """
 import os
 import shutil
+import subprocess
 from pathlib import Path
 from typing import List, Optional
 
@@ -50,10 +51,50 @@ def _find_nvfortran() -> Optional[Path]:
     return None
 
 
+# LLVM-flang binary names probed in order.  Ubuntu's ``flang-21``
+# package ships ``flang-new-21`` and ``flang-21`` as identical
+# symlinks; upstream LLVM 21 dropped the ``-new`` suffix once the
+# rewritten frontend stabilised, so distributions differ on which
+# name is canonical.  The bridge accepts any of these  --  what
+# matters is the underlying compiler, not the path it was reached
+# through.
+_FLANG_NAMES = ("flang-new-21", "flang-21", "flang-new", "flang")
+
+
+def _looks_like_llvm_flang(path: str) -> bool:
+    """``True`` when ``path --version`` self-identifies as LLVM flang.
+
+    Used to gate ``$FC`` override: if the user pins ``FC`` to a custom
+    LLVM-flang build (Spack module, source build, ...), we honour it;
+    if ``FC`` points at gfortran or nvfortran, we ignore it for the
+    flang slot and the dedicated gfortran/nvfortran probes pick those
+    up by their own names.
+    """
+    try:
+        out = subprocess.check_output(
+            [path, "--version"], stderr=subprocess.STDOUT,
+            timeout=5).decode(errors="replace")
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "flang version" in out
+
+
 def _find_flang() -> Optional[Path]:
-    """Locate flang.  Prefer ``flang-new-21`` (the bridge's pinned
-    version) over ``flang-new`` over ``flang``."""
-    for name in ("flang-new-21", "flang-new", "flang"):
+    """Locate an LLVM-flang binary.
+
+    Resolution order:
+
+      1. ``$FC`` if set and the binary self-identifies as LLVM flang.
+         This lets the user point at an off-PATH build (e.g.
+         ``FC=/opt/llvm-21/bin/flang``) without renaming anything.
+      2. The first entry in ``_FLANG_NAMES`` found on ``PATH``.
+    """
+    fc = os.environ.get("FC")
+    if fc:
+        fc_path = shutil.which(fc) or (fc if os.path.isfile(fc) else None)
+        if fc_path and _looks_like_llvm_flang(fc_path):
+            return Path(fc_path)
+    for name in _FLANG_NAMES:
         p = shutil.which(name)
         if p is not None:
             return Path(p)

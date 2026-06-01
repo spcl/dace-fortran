@@ -37,7 +37,49 @@ def _dump_dir() -> Path | None:
 
 
 # LLVM/flang 21 only (matches build_bridge.py + the C++ bridge).
-_FLANG = shutil.which("flang-new-21")
+# Ubuntu's ``flang-21`` package ships both ``flang-new-21`` and
+# ``flang-21`` as identical symlinks into ``/usr/lib/llvm-21/bin``;
+# upstream LLVM 21 stabilised the rewritten frontend and dropped the
+# ``-new`` suffix, so distributions vary on which name is the canonical
+# one.  Probe both, and let ``$FC`` override outright when the user
+# points at a specific LLVM-flang binary.
+_FLANG_NAMES = ("flang-new-21", "flang-21", "flang-new", "flang")
+
+
+def _resolve_flang() -> str | None:
+    """Return the absolute path to an LLVM-flang binary or ``None``.
+
+    Resolution order:
+
+      1. ``$FC`` if set and the binary's ``--version`` self-identifies
+         as LLVM-flang (matches ``flang version``).  Lets the user
+         pin a specific build (LLVM trunk install, Spack module, ...)
+         without a name change here.
+      2. The first name in ``_FLANG_NAMES`` found on ``PATH``.
+
+    The probe is best-effort: a missing or non-executable ``$FC`` is
+    silently ignored and we fall back to the name list.
+    """
+    fc = os.environ.get("FC")
+    if fc:
+        fc_path = shutil.which(fc) or (fc if os.path.isfile(fc) else None)
+        if fc_path:
+            try:
+                out = subprocess.check_output(
+                    [fc_path, "--version"],
+                    stderr=subprocess.STDOUT, timeout=5).decode(errors="replace")
+                if "flang version" in out:
+                    return fc_path
+            except (OSError, subprocess.SubprocessError):
+                pass
+    for name in _FLANG_NAMES:
+        p = shutil.which(name)
+        if p is not None:
+            return p
+    return None
+
+
+_FLANG = _resolve_flang()
 
 
 def have_flang() -> bool:
