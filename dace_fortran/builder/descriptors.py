@@ -272,6 +272,22 @@ def add_descriptors(builder, sdfg: SDFG):
     for v in builder.scalars.values():
         if _is_flang_internal(v.fortran_name) or _is_char_literal(v.dtype):
             continue
+        # Cross-role collision guard.  When ``hlfir-inline-all`` splices
+        # multiple callees into the entry, the bridge's collector can
+        # surface several declares with the same bare ``fortran_name``
+        # in different roles -- e.g. graupel's ``qs`` shows up once as
+        # the entry's INTENT(INOUT) ARRAY dummy (added via ``arrays``
+        # above) AND again as the scalar dummy of each inlined PURE
+        # FUNCTION (``snow_lambda``, ``cloud_to_snow``, ...).  Without
+        # this guard, ``sdfg.add_scalar`` raises FileExistsError on
+        # the second add.  The array binding already represents the
+        # storage the caller hands in; the inlined-callee scalars are
+        # value-passed locals whose downstream uses route through the
+        # array's access node, so skipping the scalar add is the right
+        # choice.  Same applies to symbol collisions (a callee-local
+        # whose name collides with a shape symbol).
+        if v.fortran_name in sdfg.arrays or v.fortran_name in sdfg.symbols:
+            continue
         if v.intent == '':
             # Local transient scalar.
             sdfg.add_scalar(v.fortran_name, dtype=dt(v.dtype), transient=True)
