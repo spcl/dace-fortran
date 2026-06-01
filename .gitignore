@@ -189,3 +189,11 @@ _all_tests/
 # In-test ICON build dir populated by tests/icon_dycore/setup_icon_dycore.sh
 # (captures compile_commands.json; consumed by test_solve_nonhydro_parse.py).
 .icon_build/
+
+# Whitelist Fortran sources that are *fixtures*, not build outputs.  The
+# global ``*.f90`` / ``*.F90`` patterns above suppress build-time scratch
+# files (test tmp_path emissions, .dacecache artefacts).  The NPB corpus
+# (and any future per-test Fortran fixtures) lives in tracked folders
+# and must be opted back in here.
+!tests/npb/**/*.F90
+!tests/npb/**/*.f90
