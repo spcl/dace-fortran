@@ -7,6 +7,7 @@
 // ============================================================================
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/map.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
@@ -551,6 +552,7 @@ NB_MODULE(hlfir_bridge, m) {
       .def_ro("reduce_wcr", &ASTNode::reduce_wcr)
       .def_ro("reduce_identity", &ASTNode::reduce_identity)
       .def_ro("reduce_axes", &ASTNode::reduce_axes)
+      .def_ro("options", &ASTNode::options)
       .def_ro("children", &ASTNode::children)
       .def_ro("else_children", &ASTNode::else_children)
       .def("__repr__", [](const ASTNode& n) {

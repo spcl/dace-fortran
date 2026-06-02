@@ -1298,6 +1298,8 @@ ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation *srcOp,
 
   auto opName = srcOp->getName().getStringRef();
   bool is_count = (opName == "hlfir.count");
+  bool is_minloc = (opName == "hlfir.minloc");
+  bool is_maxloc = (opName == "hlfir.maxloc");
   if (is_count) {
     if (srcOp->getNumOperands() > 0) {
       auto [nm, sub] = resolveSliceSubset(srcOp->getOperand(0), callee, 0);
@@ -1308,6 +1310,44 @@ ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation *srcOp,
       auto dim_val = srcOp->getOperand(1);
       if (auto c = traceConstInt(dim_val))
         n.reduce_axes.push_back(*c - 1);  // Fortran 1-based -> 0-based
+    }
+  } else if (is_minloc || is_maxloc) {
+    // ``hlfir.minloc`` / ``hlfir.maxloc`` operand spec (see
+    // HLFIROps.td l470-498):
+    //   array (required)  [+ dim ($dim)]  [+ mask ($mask)]
+    //   [+ back ($back, i1)]
+    // Use the typed accessors so we honour the
+    // ``AttrSizedOperandSegments`` ABI (positional indices change
+    // depending on which optionals are present).
+    auto pushMask = [&](mlir::Value mask) {
+      auto [nm, sub] = resolveSliceSubset(mask, callee, 1);
+      n.call_args.push_back(nm);
+      n.call_arg_subsets.push_back(sub);
+    };
+    auto pushDim = [&](mlir::Value dim_val) {
+      if (auto c = traceConstInt(dim_val))
+        n.reduce_axes.push_back(*c - 1);
+    };
+    auto pushBack = [&](mlir::Value back_val) {
+      if (auto c = traceConstInt(back_val))
+        n.options["back"] = (*c != 0) ? "true" : "false";
+      else
+        n.options["back"] = "true";  // dynamic; safe default
+    };
+    if (auto minOp = mlir::dyn_cast<hlfir::MinlocOp>(srcOp)) {
+      auto [nm, sub] = resolveSliceSubset(minOp.getArray(), callee, 0);
+      n.call_args.push_back(nm);
+      n.call_arg_subsets.push_back(sub);
+      if (auto dim = minOp.getDim()) pushDim(dim);
+      if (auto mask = minOp.getMask()) pushMask(mask);
+      if (auto back = minOp.getBack()) pushBack(back);
+    } else if (auto maxOp = mlir::dyn_cast<hlfir::MaxlocOp>(srcOp)) {
+      auto [nm, sub] = resolveSliceSubset(maxOp.getArray(), callee, 0);
+      n.call_args.push_back(nm);
+      n.call_arg_subsets.push_back(sub);
+      if (auto dim = maxOp.getDim()) pushDim(dim);
+      if (auto mask = maxOp.getMask()) pushMask(mask);
+      if (auto back = maxOp.getBack()) pushBack(back);
     }
   } else {
     unsigned argIdx = 0;

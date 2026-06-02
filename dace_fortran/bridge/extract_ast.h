@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -118,6 +119,13 @@ struct ASTNode {
   std::string reduce_wcr;            // lambda string, e.g. "lambda a, b: a + b"
   std::string reduce_identity;       // initial-accumulator string, e.g. "0"
   std::vector<int64_t> reduce_axes;  // empty = reduce all dimensions
+
+  // libcall options -- free-form key=value carrier so a single ASTNode
+  // can ferry per-callee booleans / enums (e.g. MINLOC ``back``) to
+  // the Python emitter without growing a dedicated field per option.
+  // Bridge writes strings ("true" / "false" / etc.); the emitter
+  // parses them as needed.
+  std::map<std::string, std::string> options;
 
   // recursive
   std::vector<ASTNode> children, else_children;

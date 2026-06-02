@@ -22,7 +22,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 def test_mpi_alltoall_recognised(tmp_path):
     src = _SRC.read_text()
     sdfg = dace_fortran.build_sdfg(src, out_dir=str(tmp_path / "sdfg"),
-                                   entry="mpi_alltoall_probe::run_alltoall",
+                                   entry="run_alltoall",
                                    name="run_alltoall")
     sdfg.validate()
     classes = {type(n).__name__ for s in sdfg.states() for n in s.nodes()}

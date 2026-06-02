@@ -32,4 +32,6 @@ LINALG: dict[str, LibNodeIntrinsic] = {
 STANDARD: dict[str, LibNodeIntrinsic] = {
     'count': LibNodeIntrinsic('count', module='standard', node_cls='CountLibraryNode'),
     'merge': LibNodeIntrinsic('merge', module='standard', node_cls='MergeLibraryNode'),
+    'argmin': LibNodeIntrinsic('argmin', module='standard', node_cls='ArgMin'),
+    'argmax': LibNodeIntrinsic('argmax', module='standard', node_cls='ArgMax'),
 }

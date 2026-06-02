@@ -1683,6 +1683,15 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
             // picks up the optional ``dim`` operand and threads
             // it through the ASTNode for ``emit_libcall``.
             {"hlfir.count", "count"},
+            // Fortran ``MINLOC(array [, dim [, mask [, back]]])``
+            // and the symmetric ``MAXLOC``  --  routed through the
+            // ``ArgMin`` / ``ArgMax`` library nodes (pure WCR
+            // expansion mirroring the ``numpy.argmin`` / ``numpy.argmax``
+            // replacement pattern).  ``buildLibCallNode`` threads any
+            // ``dim`` (Fortran 1-based) and ``back`` flag through the
+            // ASTNode for ``emit_libcall``.
+            {"hlfir.minloc", "argmin"},
+            {"hlfir.maxloc", "argmax"},
         };
         bool libMatched = false;
         for (auto& e : kLibTable) {

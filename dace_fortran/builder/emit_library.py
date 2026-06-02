@@ -44,6 +44,12 @@ _LIBCALL_CONNECTORS = {
     # ``copy_node`` / ``memset_node`` prefixed-constant convention.
     "MergeLibraryNode": (("_mrg_t", "_mrg_f", "_mrg_mask"), "_mrg_out"),
     "CountLibraryNode": (("_cnt_in", ), "_cnt_out"),
+    # Fortran MINLOC / MAXLOC -> ``ArgMin`` / ``ArgMax``.  Optional
+    # ``_mask`` connector is wired only when the source
+    # ``hlfir.minloc`` / ``hlfir.maxloc`` carries a mask operand;
+    # ``emit_libcall`` adds it after the mandatory ``_x``.
+    "ArgMin": (("_x", ), "_idx"),
+    "ArgMax": (("_x", ), "_idx"),
 }
 
 # SDFG dtype -> C scalar type for ``extern "C"`` declarations on
@@ -226,6 +232,7 @@ def emit_libcall(builder, ctx, n, region):
     # operand); every other library node picks types up from the
     # attached memlets.
     tgt_desc = ctx.sdfg.arrays[n.target]
+    has_mask = False
     if spec.node_cls == "Transpose":
         node = cls(f"{spec.name}_{n.target}_{builder.nid()}", dtype=tgt_desc.dtype)
     elif spec.node_cls == "CountLibraryNode":
@@ -234,6 +241,23 @@ def emit_libcall(builder, ctx, n, region):
         # constructor wants Fortran 1-based, so convert back.
         dim = (n.reduce_axes[0] + 1) if n.reduce_axes else -1
         node = cls(f"{spec.name}_{n.target}_{builder.nid()}", dim=dim)
+    elif spec.node_cls in ("ArgMin", "ArgMax"):
+        # ``MINLOC`` / ``MAXLOC`` -- pull dim / back from the bridge
+        # ASTNode.  The bridge stores ``dim`` 0-based in
+        # ``reduce_axes`` (mirroring the Reduce path); ``back`` lives
+        # in ``options`` (set by ``buildLibCallNode``'s minloc/maxloc
+        # operand walker).  A mask= argument is signalled by an extra
+        # ``call_args`` entry past the first ``_x`` source.
+        dim = (n.reduce_axes[0] + 1) if n.reduce_axes else None
+        back = bool((getattr(n, 'options', None) or {}).get('back', False))
+        has_mask = len(n.call_args) > 1
+        node = cls(
+            f"{spec.name}_{n.target}_{builder.nid()}",
+            one_based=True,
+            back=back,
+            dim=dim,
+            mask=has_mask,
+        )
     else:
         node = cls(f"{spec.name}_{n.target}_{builder.nid()}")
     state.add_node(node)
@@ -244,7 +268,14 @@ def emit_libcall(builder, ctx, n, region):
     # builds may not populate the field; default to empty for each arg.
     arg_subsets = list(getattr(n, 'call_arg_subsets', None) or [])
     arg_subsets += [''] * (len(n.call_args) - len(arg_subsets))
-    for conn, src, sub in zip(in_conns, n.call_args, arg_subsets):
+    # ArgMin / ArgMax with mask=True expose an extra ``_mask`` input
+    # connector that ``_LIBCALL_CONNECTORS`` does NOT list (because
+    # mask is optional).  Append it on the fly so the iteration below
+    # binds the bridge's second positional arg to ``_mask``.
+    effective_in_conns = list(in_conns)
+    if has_mask and spec.node_cls in ("ArgMin", "ArgMax"):
+        effective_in_conns.append("_mask")
+    for conn, src, sub in zip(effective_in_conns, n.call_args, arg_subsets):
         src_desc = ctx.sdfg.arrays[src]
         if sub:
             in_memlet = Memlet(f"{src}[{sub}]")
