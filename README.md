@@ -284,11 +284,11 @@ What's pluggable:
   parses one `make -n` recipe for `-D` / `-I` / source path. No
   cmake/`bear` dependency.
 
-Worked example: [tests/icon_full/test_velocity_from_icon_source.py](tests/icon_full/test_velocity_from_icon_source.py)
+Worked example: [tests/icon/full/test_velocity_from_icon_source.py](tests/icon/full/test_velocity_from_icon_source.py)
 parametrizes over a stub source and ICON's real
-`mo_velocity_advection.f90` (pulled via the `tests/icon_full/icon-model`
+`mo_velocity_advection.f90` (pulled via the `tests/icon/full/icon-model`
 git submodule, pinned to release tag `icon-2026.04-public`).
-[tests/icon_full/test_dycore_from_icon_source.py](tests/icon_full/test_dycore_from_icon_source.py)
+[tests/icon/full/test_dycore_from_icon_source.py](tests/icon/full/test_dycore_from_icon_source.py)
 extends it to the dycore (`mo_solve_nonhydro.f90`), keeping
 `velocity_tendencies` and `sync_patch_array` as externals.
 
@@ -298,7 +298,7 @@ The ICON-integration test infrastructure parametrizes its compile
 + link checks over every Fortran compiler available on the host:
 **gfortran** (ICON CPU default), **flang-new-21** (the bridge's own
 frontend), and **nvfortran** (NVIDIA HPC SDK -- ICON GPU build).
-Discovery is via `tests/icon_full/_fc.py`; the test reports a
+Discovery is via `tests/icon/full/_fc.py`; the test reports a
 parametrized variant per available compiler, e.g.
 `test_sync_iso_c_wrapper_full_compile_link[gfortran]` +
 `...[flang-new-21]` + `...[nvfortran]` when all three are
@@ -341,7 +341,7 @@ runs and pins the wrapper interface).
 **Known compiler bugs are tracked per-test**: when a known
 flang-21 ICE or false-positive blocks one of our wrapper shapes, the
 test ID is added to `_FLANG_KNOWN_BUGS` in
-[test_dycore_from_icon_source.py](tests/icon_full/test_dycore_from_icon_source.py).
+[test_dycore_from_icon_source.py](tests/icon/full/test_dycore_from_icon_source.py).
 The `[flang-new-21]` variant `xfail`s with a clear reason while the
 gfortran / nvfortran variants stay required-green.
 
@@ -401,7 +401,7 @@ axis-registry clusters out of the lowered pipeline.
 
 ## Worked example: a Quantum Espresso kernel (complex AXPY)
 
-`tests/qe_loopnests/qe_e4_zaxpy.f90` is the hot loop of QE's `zaxpy`
+`tests/qe/selected_loopnests/qe_e4_zaxpy.f90` is the hot loop of QE's `zaxpy`
 (BLAS-shaped `Y = a*X + Y` on `complex(8)` data), one of the
 SC26-Layout-AD experiment kernels:
 
@@ -432,7 +432,7 @@ emit the binding -- the caller's interface is auto-derived:
 import dace_fortran
 from dace_fortran.bindings import build_fortran_library
 
-src = open("tests/qe_loopnests/qe_e4_zaxpy.f90").read()
+src = open("tests/qe/selected_loopnests/qe_e4_zaxpy.f90").read()
 sdfg = dace_fortran.build_sdfg(src, entry="_QPkernel", name="kernel")
 # ... optimise the SDFG here ...
 lib = build_fortran_library(sdfg, out_dir="build", name="kernel")
@@ -451,7 +451,7 @@ pre-flatten caller view. The builder snapshots it at step (1) onto
 `sdfg._fortran_interface_raw`, so `build_fortran_library` can rebuild it
 automatically; pass an explicit `iface=` only for shapes the snapshot
 can't name (e.g. `CHARACTER`). For an end-to-end SDFG-vs-f2py check of
-this kernel see `tests/qe_loopnests/test_sdfg_equivalence.py::test_e4_zaxpy`.
+this kernel see `tests/qe/selected_loopnests/test_sdfg_equivalence.py::test_e4_zaxpy`.
 
 ### (b) The generated binding
 
@@ -1097,8 +1097,8 @@ dace_fortran/
 
 Every supported construct has a seeded numerical test against
 gfortran / f2py. Binding-specific tests live in `tests/bindings/`; the QE
-loopnest kernels are in `tests/qe_loopnests/`; the ICON velocity-advection
-loopnests in `tests/icon_loopnests/`. All executable-Fortran tests
+loopnest kernels are in `tests/qe/selected_loopnests/`; the ICON velocity-advection
+loopnests in `tests/icon/selected_loopnests/`. All executable-Fortran tests
 compile with `gfortran` (Ubuntu's `flang-new-21` ships without
 `libflang_rt`, so flang is emit-HLFIR-only).
 

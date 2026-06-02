@@ -4,7 +4,7 @@
    (already known to bridge cleanly -- this run pins backwards
    compatibility for the recipe).
 2. ICON's REAL ``mo_velocity_advection.f90``, pulled via the
-   ``tests/icon_full/icon-model`` git submodule (pinned to release tag
+   ``tests/icon/full/icon-model`` git submodule (pinned to release tag
    ``icon-2026.04-public``), with its USE closure resolved by
    :func:`dace_fortran.prepare_flang_translation_unit`.
 
@@ -15,7 +15,7 @@ flang to emit HLFIR, and lowers that to a DaCe SDFG.  Both paths are
 parametrized so a regression on either route surfaces immediately.
 
 Skipped if the icon-model submodule isn't checked out (run
-``git submodule update --init --recursive tests/icon_full/icon-model``
+``git submodule update --init --recursive tests/icon/full/icon-model``
 to pull it) or if flang-new-21 / OpenMPI is absent.
 """
 import shutil
@@ -26,7 +26,6 @@ import pytest
 import dace_fortran
 from dace_fortran.flang_codebase import find_openmpi_include
 
-
 _HERE = Path(__file__).resolve().parent
 _STUB_SOURCE = _HERE / "velocity_full.f90"
 
@@ -35,14 +34,13 @@ _STUB_SOURCE = _HERE / "velocity_full.f90"
 #: checkout (e.g. the existing ``/home/primrose/Work/icon-model-public``
 #: tree) without re-cloning into the submodule.
 import os
+
 _ICON_SRC = Path(os.environ.get("ICON_SRC", str(_HERE / "icon-model")))
 
 #: ICON's own build dir (Makefile + .o per source); supplies the
 #: ``-D`` defines and ``-I`` paths the velocity object compiles with.
 #: Override with ``ICON_BUILD`` to point at a non-default build tree.
-_ICON_BUILD = Path(os.environ.get(
-    "ICON_BUILD",
-    str(_ICON_SRC / "build" / "stock_cpu")))
+_ICON_BUILD = Path(os.environ.get("ICON_BUILD", str(_ICON_SRC / "build" / "stock_cpu")))
 
 _VELOCITY_REAL = _ICON_SRC / "src" / "atm_dyn_iconam" / "mo_velocity_advection.f90"
 # Some ICON workflows keep a pristine backup at ``.bak`` while
@@ -50,8 +48,7 @@ _VELOCITY_REAL = _ICON_SRC / "src" / "atm_dyn_iconam" / "mo_velocity_advection.f
 # stable against the patch state.
 _VELOCITY_REAL_BAK = _VELOCITY_REAL.with_suffix(".f90.bak")
 
-_CACHE_DIR = Path(os.environ.get(
-    "DACE_FORTRAN_CACHE", str(Path.home() / ".cache" / "dace-fortran")))
+_CACHE_DIR = Path(os.environ.get("DACE_FORTRAN_CACHE", str(Path.home() / ".cache" / "dace-fortran")))
 
 _VELOCITY_TARGET = "src/atm_dyn_iconam/mo_velocity_advection.o"
 _VELOCITY_ENTRY = "_QMmo_velocity_advectionPvelocity_tendencies"
@@ -96,11 +93,18 @@ def _icon_search_dirs() -> list:
 #: (``fir.iterate_while`` LEN_TRIM scans, ``CLASS(*)`` polymorphism)
 #: from being inlined into the entry.
 _ICON_EXTERNAL_STUBS = (
-    "finish", "message", "message_text", "warning",
-    "print_status", "print_value", "init_logger",
-    "timer_start", "timer_stop", "new_timer", "delete_timer",
+    "finish",
+    "message",
+    "message_text",
+    "warning",
+    "print_status",
+    "print_value",
+    "init_logger",
+    "timer_start",
+    "timer_stop",
+    "new_timer",
+    "delete_timer",
 )
-
 
 #: ICON's standard CPU build defines for release icon-2026.04-public,
 #: lifted verbatim from a ``make -n src/atm_dyn_iconam/mo_velocity_advection.o``
@@ -132,16 +136,11 @@ def _icon_compile_args() -> dict:
     release-frozen :data:`_ICON_DEFINES_FALLBACK` set when no build
     dir is present (the common case for a fresh submodule clone)."""
     if (_ICON_BUILD / "Makefile").is_file():
-        return dace_fortran.extract_make_compile_args(
-            makefile_dir=_ICON_BUILD, target=_VELOCITY_TARGET)
-    return {"defines": list(_ICON_DEFINES_FALLBACK),
-            "include_dirs": [_ICON_SRC / "src/include"]}
+        return dace_fortran.extract_make_compile_args(makefile_dir=_ICON_BUILD, target=_VELOCITY_TARGET)
+    return {"defines": list(_ICON_DEFINES_FALLBACK), "include_dirs": [_ICON_SRC / "src/include"]}
 
 
-pytestmark = pytest.mark.skipif(
-    not (_HAVE_FLANG and _HAVE_OPENMPI),
-    reason="needs flang-new-21 + OpenMPI")
-
+pytestmark = pytest.mark.skipif(not (_HAVE_FLANG and _HAVE_OPENMPI), reason="needs flang-new-21 + OpenMPI")
 
 # ---------------------------------------------------------------------------
 # Headline test: build the velocity SDFG from BOTH a stub source and
@@ -168,8 +167,7 @@ def _build_sdfg_from_real_icon(tmp_path: Path):
     for sym in _ICON_EXTERNAL_STUBS:
         dace_fortran.keep_external(sym, stub=True)
     try:
-        return dace_fortran.build_sdfg_from_hlfir(
-            hlfir, entry=_VELOCITY_ENTRY)
+        return dace_fortran.build_sdfg_from_hlfir(hlfir, entry=_VELOCITY_ENTRY)
     finally:
         dace_fortran.clear_external_registry()
 
@@ -195,12 +193,11 @@ _PATHS = [
     pytest.param(
         "real_icon",
         marks=[
-            pytest.mark.skipif(
-                not _have_icon(),
-                reason="icon-model submodule not checked out + built; "
-                       "run `git submodule update --init --recursive "
-                       "tests/icon_full/icon-model` and configure a "
-                       "stock CPU build before re-running"),
+            pytest.mark.skipif(not _have_icon(),
+                               reason="icon-model submodule not checked out + built; "
+                               "run `git submodule update --init --recursive "
+                               "tests/icon/full/icon-model` and configure a "
+                               "stock CPU build before re-running"),
         ],
         id="icon_real_source",
     ),
@@ -238,9 +235,7 @@ def test_build_velocity_sdfg(tmp_path: Path, source: str):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(
-    not _have_icon(),
-    reason="icon-model submodule not checked out")
+@pytest.mark.skipif(not _have_icon(), reason="icon-model submodule not checked out")
 def test_emit_hlfir_for_icon_velocity(tmp_path: Path):
     """``emit_hlfir_from_codebase`` produces an ``.hlfir`` flang
     actually wrote (sanity check before we lower it to SDFG)."""

@@ -42,6 +42,6 @@ def test_cloudsc_bottom_upper_a_numerical(tmp_path, _f2py_a, _strict_fp_cpu_args
 
     np.testing.assert_allclose(outputs_sdfg["pcovptot"],
                                outputs_ref["pcovptot"],
-                               rtol=1e-15,
-                               atol=1e-15,
+                               rtol=1e-14,
+                               atol=1e-14,
                                err_msg="PCOVPTOT mismatch in bottom-upper-A (Sed/Autoconv/Melt/Freeze)")

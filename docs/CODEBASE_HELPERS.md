@@ -1,9 +1,9 @@
 # `dace_fortran.flang_codebase` -- driving flang on real-world Fortran codebases
 
 > **Status**: validated against ICON release `icon-2026.04-public`
-> (pinned by the `tests/icon_full/icon-model` submodule), the worked
-> examples in [tests/icon_full/test_velocity_from_icon_source.py](../tests/icon_full/test_velocity_from_icon_source.py),
-> and [tests/icon_full/test_dycore_from_icon_source.py](../tests/icon_full/test_dycore_from_icon_source.py).
+> (pinned by the `tests/icon/full/icon-model` submodule), the worked
+> examples in [tests/icon/full/test_velocity_from_icon_source.py](../tests/icon/full/test_velocity_from_icon_source.py),
+> and [tests/icon/full/test_dycore_from_icon_source.py](../tests/icon/full/test_dycore_from_icon_source.py).
 > Companion to the existing tier-3 path (`build_sdfg_from_project`)
 > covered in the [README](../README.md#tier-3----a-real-cmake--autotools-project).
 
@@ -92,7 +92,7 @@ order) is in this session's git history.  Notable findings:
 import dace_fortran
 from pathlib import Path
 
-ICON_SRC   = Path("tests/icon_full/icon-model")          # the submodule
+ICON_SRC   = Path("tests/icon/full/icon-model")          # the submodule
 ICON_BUILD = ICON_SRC / "build" / "stock_cpu"             # ICON's own make
 
 # 1. Extract ICON's -D / -I from its build dir's Makefile.
@@ -141,10 +141,10 @@ polymorphic halo-exchange.  Same recipe as velocity, plus:
 * Register the generic-interface specialisations one by one --
   `INTERFACE sync_patch_array` resolves at compile time to
   `sync_patch_array_3d_dp` / `_2d_int` / ... before HLFIR is emitted.
-  The full list is at [test_dycore_from_icon_source.py:107](../tests/icon_full/test_dycore_from_icon_source.py#L107).
+  The full list is at [test_dycore_from_icon_source.py:107](../tests/icon/full/test_dycore_from_icon_source.py#L107).
 * The iso-C wrapper that bridges the SDFG's bind-C call site to
   ICON's polymorphic `sync_patch_array` is at
-  [icon_sync_iso_c.f90](../tests/icon_full/icon_sync_iso_c.f90).  Four
+  [icon_sync_iso_c.f90](../tests/icon/full/icon_sync_iso_c.f90).  Four
   bind-C entries; the `c_name` field on the `keep_external` registration
   resolves to those at runtime.
 
@@ -179,7 +179,7 @@ Three fixes landed in this session:
    `fir.zero_bits` -> `"0"`, `hlfir.concat` -> Python `+`.
 2. ICON utility procedures (`finish` / `message` / `timer_start` /
    ...) marked as external stubs in the
-   [test setup](../tests/icon_full/test_velocity_from_icon_source.py)
+   [test setup](../tests/icon/full/test_velocity_from_icon_source.py)
    so their unlowerable bodies (LEN_TRIM scans, polymorphic dispatch)
    don't reach the bridge.
 3. Whole-array fast path in `emit_scalar_assign` for pointer

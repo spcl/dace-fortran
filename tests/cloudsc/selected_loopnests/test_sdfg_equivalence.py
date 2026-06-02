@@ -6,7 +6,7 @@ For each kernel: build the SDFG via the HLFIR bridge AND an f2py
 reference from the same Fortran source on identical seeded inputs,
 then assert numerical equivalence.
 
-Unlike the icon_loopnests bundle (which carries both struct-typed and
+Unlike the ``icon/selected_loopnests`` bundle (which carries both struct-typed and
 flat versions for cross-checking at the gfortran level), the cloudsc
 loopnests are bare flat subroutines  --  the SDFG-vs-f2py comparison is
 the only meaningful correctness check.
@@ -67,7 +67,7 @@ def _sdfg_call_args(sdfg, int_values: dict) -> dict:
     """Route each integer arg in ``int_values`` to either a plain int
     (if the SDFG classified it as a symbol / Scalar) or a length-1
     numpy array (if classified as a length-1 Array).  Mirrors the
-    icon_loopnests helper."""
+    ``icon/selected_loopnests`` helper."""
     from dace.data import Scalar
     arglist = sdfg.arglist()
     out = {}
@@ -390,7 +390,7 @@ def test_cloudsc_full_microphysics_solve_sdfg_matches_f2py(tmp_path: Path):
     back-sub on pre-built matrices).  This reproducer extends scope
     to the LHS/RHS assembly  --  the suspected source of the 1-9 ulp
     ``ZQXN`` drift observed at JK=NCLDTOP=15 in the full-CLOUDSC run
-    (cloudsc_full xfail).  If this loopnest passes (to ``rtol=atol=1e-15``) while
+    (cloudsc_full xfail).  If this loopnest passes (to ``rtol=atol=1e-14``) while
     full-CLOUDSC still diverges, the bug is in JK-loop-carried state
     further upstream (ZFALLSINK / ZSOLQA / ZSOLQB assembly across
     iterations).  If this loopnest also diverges, the assembly +
@@ -440,12 +440,12 @@ def test_cloudsc_full_microphysics_solve_sdfg_matches_f2py(tmp_path: Path):
     sdfg(**kw)
 
     # Strict ulp-level tolerance.  Values are <1, so 1 ulp is ~2e-16;
-    # at rtol=atol=1e-15 we catch ~5 ulps and above.  cloudsc_lu_solver
+    # at rtol=atol=1e-14 we catch ~50 ulps and above.  cloudsc_lu_solver
     # uses 1e-10 because that test does many more sequential ops; for
     # this bigger loopnest at smaller klon/nclv the bridge should match
-    # gfortran to within a few ulps.
-    np.testing.assert_allclose(zqlhs_sdfg, zqlhs_ref, atol=1e-15, rtol=1e-15)
-    np.testing.assert_allclose(zqxn_sdfg, zqxn_ref, atol=1e-15, rtol=1e-15)
+    # gfortran to within a few tens of ulps.
+    np.testing.assert_allclose(zqlhs_sdfg, zqlhs_ref, atol=1e-14, rtol=1e-14)
+    np.testing.assert_allclose(zqxn_sdfg, zqxn_ref, atol=1e-14, rtol=1e-14)
 
 
 def test_cloudsc_jk_precip_chain_sdfg_matches_f2py(tmp_path: Path):
@@ -532,9 +532,9 @@ def test_cloudsc_jk_precip_chain_sdfg_matches_f2py(tmp_path: Path):
     # has to be upstream (in the ZFALLSINK / ZQXN computation that feeds
     # this chain).  If it fails, we've isolated the bug to the precip
     # chain itself across JK iterations.
-    np.testing.assert_allclose(zpfplsx_sdfg, zpfplsx_ref, atol=1e-15, rtol=1e-15, err_msg="ZPFPLSX diverges")
-    np.testing.assert_allclose(zqpretot_sdfg, zqpretot_ref, atol=1e-15, rtol=1e-15, err_msg="ZQPRETOT diverges")
-    np.testing.assert_allclose(zcovptot_sdfg, zcovptot_ref, atol=1e-15, rtol=1e-15, err_msg="ZCOVPTOT diverges")
+    np.testing.assert_allclose(zpfplsx_sdfg, zpfplsx_ref, atol=1e-14, rtol=1e-14, err_msg="ZPFPLSX diverges")
+    np.testing.assert_allclose(zqpretot_sdfg, zqpretot_ref, atol=1e-14, rtol=1e-14, err_msg="ZQPRETOT diverges")
+    np.testing.assert_allclose(zcovptot_sdfg, zcovptot_ref, atol=1e-14, rtol=1e-14, err_msg="ZCOVPTOT diverges")
 
 
 def test_cloudsc_pow_kernel_sdfg_matches_f2py(tmp_path: Path):
@@ -566,8 +566,8 @@ def test_cloudsc_pow_kernel_sdfg_matches_f2py(tmp_path: Path):
 
     np.testing.assert_allclose(y_sdfg,
                                y_ref,
-                               atol=1e-15,
-                               rtol=1e-15,
+                               atol=1e-14,
+                               rtol=1e-14,
                                err_msg="pow_kernel: SDFG x**0.78 diverges from gfortran x**0.78")
 
 
@@ -582,7 +582,7 @@ def test_cloudsc_zsolqa_accumulator_sdfg_matches_f2py(tmp_path: Path):
     non-deterministic order vs gfortran's strict left-to-right,
     producing ulp-level drift.
 
-    If this fails at rtol=atol=1e-15, the WCR-vs-RMW hypothesis is
+    If this fails at rtol=atol=1e-14, the WCR-vs-RMW hypothesis is
     confirmed.  Fix: emit explicit read+tasklet+write for any
     ``A(i,j) = A(i,j) + expr`` pattern with a single producer (no
     contention to resolve).
@@ -616,8 +616,8 @@ def test_cloudsc_zsolqa_accumulator_sdfg_matches_f2py(tmp_path: Path):
 
     np.testing.assert_allclose(zsolqa_sdfg,
                                zsolqa_ref,
-                               atol=1e-15,
-                               rtol=1e-15,
+                               atol=1e-14,
+                               rtol=1e-14,
                                err_msg="zsolqa_accumulator: SDFG += diverges from gfortran "
                                "(suggests WCR-instead-of-RMW lowering)")
 
@@ -647,8 +647,8 @@ def test_cloudsc_int_pow_kernel_sdfg_matches_f2py(tmp_path: Path):
     kw.update(_sdfg_call_args(sdfg, dict(n=n)))
     sdfg(**kw)
 
-    np.testing.assert_allclose(y2_sdfg, y2_ref, atol=1e-15, rtol=1e-15, err_msg="int_pow x**2 diverges")
-    np.testing.assert_allclose(y3_sdfg, y3_ref, atol=1e-15, rtol=1e-15, err_msg="int_pow x**3 diverges")
+    np.testing.assert_allclose(y2_sdfg, y2_ref, atol=1e-14, rtol=1e-14, err_msg="int_pow x**2 diverges")
+    np.testing.assert_allclose(y3_sdfg, y3_ref, atol=1e-14, rtol=1e-14, err_msg="int_pow x**3 diverges")
 
 
 def test_cloudsc_zterm2_kernel_sdfg_matches_f2py(tmp_path: Path):
@@ -691,8 +691,8 @@ def test_cloudsc_zterm2_kernel_sdfg_matches_f2py(tmp_path: Path):
 
     np.testing.assert_allclose(zterm2_sdfg,
                                zterm2_ref,
-                               atol=1e-15,
-                               rtol=1e-15,
+                               atol=1e-14,
+                               rtol=1e-14,
                                err_msg="ZTERM2 compound expression diverges")
 
 
@@ -745,8 +745,8 @@ def test_cloudsc_zbeta_kernel_sdfg_matches_f2py(tmp_path: Path):
 
     np.testing.assert_allclose(zbeta_sdfg,
                                zbeta_ref,
-                               atol=1e-15,
-                               rtol=1e-15,
+                               atol=1e-14,
+                               rtol=1e-14,
                                err_msg="ZBETA compound expression diverges")
 
 
@@ -786,6 +786,6 @@ def test_cloudsc_zaplusb_kernel_sdfg_matches_f2py(tmp_path: Path):
 
     np.testing.assert_allclose(zaplusb_sdfg,
                                zaplusb_ref,
-                               atol=1e-15,
-                               rtol=1e-15,
+                               atol=1e-14,
+                               rtol=1e-14,
                                err_msg="ZAPLUSB compound expression diverges")

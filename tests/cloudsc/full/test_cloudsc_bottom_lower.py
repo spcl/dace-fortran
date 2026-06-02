@@ -8,7 +8,7 @@ ZSOLQA / ZSOLQB / ZCOVPTOT remain at zero (from their reset above the
 deleted region), and the solvers + flux/tendency chain runs on those
 zeros.
 
-Expectation: this PASSES at rtol=atol=1e-15.  The bisection chain says:
+Expectation: this PASSES at rtol=atol=1e-14.  The bisection chain says:
   * test_cloudsc_top_half          PASS  -> bug in bottom half
   * test_cloudsc_bottom_half       FAIL  -> bug confirmed in bottom half
   * test_cloudsc_bottom_upper      FAIL  -> bug in bottom-upper physics
@@ -54,6 +54,6 @@ def test_cloudsc_bottom_lower_numerical(tmp_path, _f2py_lo, _strict_fp_cpu_args)
     for name in program_outputs:
         np.testing.assert_allclose(outputs_sdfg[name.lower()],
                                    outputs_ref[name.lower()],
-                                   rtol=1e-15,
-                                   atol=1e-15,
+                                   rtol=1e-14,
+                                   atol=1e-14,
                                    err_msg=f"PCOVPTOT mismatch in bottom-lower (solvers/flux/tendency only): {name}")

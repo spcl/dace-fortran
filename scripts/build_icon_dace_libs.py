@@ -13,7 +13,7 @@ Usage::
     python -m scripts.build_icon_dace_libs --out-dir $WORK/dace-icon-libs
 
 The default ``--velocity-source`` is
-``tests/icon_full/velocity_full.f90`` -- the pre-merged
+``tests/icon/full/velocity_full.f90`` -- the pre-merged
 self-contained ICON ``mo_velocity_advection`` source the e2e test
 drives bit-exact.  Override only if you have your own merged
 single-TU source; the bridge's ``merge_used_modules`` pass searches
@@ -40,7 +40,7 @@ import dace
 # the velocity e2e test so the standalone build produces *exactly* the
 # artifacts the e2e is known to drive bit-exact.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
-from icon_full.test_dycore_velocity_external_e2e import (
+from icon.full.test_dycore_velocity_external_e2e import (
     _VELOCITY_MODULE_FORWARD,
     _O0_FFLAGS,
     _O0_CXX_FLAGS,
@@ -58,15 +58,20 @@ from dace_fortran.bindings import build_fortran_library, FlattenPlan
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.external import Arg, clear_external_registry, keep_external
 
-
 _RELEASE_FFLAGS = (
-    "-O3", "-fno-fast-math", "-ffp-contract=off", "-ffree-line-length-none",
+    "-O3",
+    "-fno-fast-math",
+    "-ffp-contract=off",
+    "-ffree-line-length-none",
 )
 _RELEASE_CXX_FLAGS = (
-    "-O3", "-fno-fast-math", "-ffp-contract=off",
-    "-fPIC", "-Wno-unused-parameter", "-Wno-unused-label",
+    "-O3",
+    "-fno-fast-math",
+    "-ffp-contract=off",
+    "-fPIC",
+    "-Wno-unused-parameter",
+    "-Wno-unused-label",
 )
-
 
 # Free-standing wrapper subroutine ICON's patched ``mo_velocity_advection``
 # calls into.  Exports the link-time symbol ``velocity_tendencies_dace_icon_``
@@ -125,8 +130,7 @@ END SUBROUTINE velocity_tendencies_dace_icon
 """
 
 
-def build_velocity_inner_wrap(velocity_source: Path, out_dir: Path,
-                              release: bool):
+def build_velocity_inner_wrap(velocity_source: Path, out_dir: Path, release: bool):
     """Build ``libvelocity_inner_wrap.so`` from
     ``mo_velocity_advection.f90``.  The output dir gets the .so + the
     .mod (``velocity_tendencies_dace_bindings.mod``) ICON needs at
@@ -138,8 +142,7 @@ def build_velocity_inner_wrap(velocity_source: Path, out_dir: Path,
     fflags = _RELEASE_FFLAGS if release else _O0_FFLAGS
     cxx_flags = _RELEASE_CXX_FLAGS if release else _O0_CXX_FLAGS
 
-    print(f"[build_icon_dace_libs] velocity source: {velocity_source}",
-          flush=True)
+    print(f"[build_icon_dace_libs] velocity source: {velocity_source}", flush=True)
     print(f"[build_icon_dace_libs] output dir:      {out_dir}", flush=True)
     print(f"[build_icon_dace_libs] FP flags ({'release' if release else 'debug'}): "
           f"{' '.join(fflags)}", flush=True)
@@ -164,14 +167,14 @@ def build_velocity_inner_wrap(velocity_source: Path, out_dir: Path,
 
     try:
         sdfg = build_sdfg(
-            velocity_src, sdfg_dir,
+            velocity_src,
+            sdfg_dir,
             name="velocity_tendencies",
             entry="_QMmo_velocity_advectionPvelocity_tendencies",
         ).build()
         sdfg.name = "velocity_tendencies"
         sdfg.build_folder = str(sdfg_dir / "dacecache")
-        iface = build_auto_interface(
-            sdfg._fortran_interface_raw, "velocity_tendencies")
+        iface = build_auto_interface(sdfg._fortran_interface_raw, "velocity_tendencies")
         plan = FlattenPlan.from_dict(sdfg._flatten_plan_raw or {})
         lib = build_fortran_library(
             sdfg,
@@ -193,16 +196,16 @@ def build_velocity_inner_wrap(velocity_source: Path, out_dir: Path,
     mod_path = out_dir / "velocity_tendencies_dace_bindings.mod"
     if mod_path.exists():
         print(f"[build_icon_dace_libs] .mod:     {mod_path}", flush=True)
-        print(f"\nICON build flags:\n"
-              f"  export FCFLAGS=\"-I{out_dir} ${{FCFLAGS-}}\"\n"
-              f"  export LDFLAGS=\"-L{out_dir} -Wl,-rpath,{out_dir} "
-              f"-l:{lib.so_path.name} ${{LDFLAGS-}}\"\n",
-              flush=True)
+        print(
+            f"\nICON build flags:\n"
+            f"  export FCFLAGS=\"-I{out_dir} ${{FCFLAGS-}}\"\n"
+            f"  export LDFLAGS=\"-L{out_dir} -Wl,-rpath,{out_dir} "
+            f"-l:{lib.so_path.name} ${{LDFLAGS-}}\"\n",
+            flush=True)
     return lib
 
 
-def build_dycore_wrapper(velocity_source: Path, inner_lib_so: Path,
-                         out_dir: Path, release: bool):
+def build_dycore_wrapper(velocity_source: Path, inner_lib_so: Path, out_dir: Path, release: bool):
     """Build ``libdycore_wrapper.so`` -- the outer SDFG that calls
     ``velocity_tendencies`` (resolved at runtime from
     ``libvelocity_inner_wrap.so``) and a Fortran/C++ pair of
@@ -230,8 +233,7 @@ def build_dycore_wrapper(velocity_source: Path, inner_lib_so: Path,
     # 1. sync_patch_array (Fortran) + sync_patch_cpp (C++) helpers ->
     #    libsync_helpers.so the outer SDFG resolves at load time.
     sync_lib_so = _build_sync_helpers(out_dir)
-    print(f"[build_icon_dace_libs] sync helpers:       {sync_lib_so}",
-          flush=True)
+    print(f"[build_icon_dace_libs] sync helpers:       {sync_lib_so}", flush=True)
 
     velocity_src = velocity_source.read_text()
     sync_args = (
@@ -283,10 +285,10 @@ def build_dycore_wrapper(velocity_source: Path, inner_lib_so: Path,
         outer_sdfg_dir = out_dir / "sdfg"
         outer_sdfg_dir.mkdir(parents=True, exist_ok=True)
         outer_src = velocity_src + _SYNC_FORTRAN_SRC + _DYCORE_WRAPPER_SRC
-        outer_sdfg = build_sdfg(
-            outer_src, outer_sdfg_dir,
-            name="dycore_wrapper",
-            entry="_QMmo_dycore_wrapperPdycore_wrapper").build()
+        outer_sdfg = build_sdfg(outer_src,
+                                outer_sdfg_dir,
+                                name="dycore_wrapper",
+                                entry="_QMmo_dycore_wrapperPdycore_wrapper").build()
         outer_sdfg.name = "dycore_wrapper"
         outer_sdfg.build_folder = str(out_dir / "dacecache")
         outer_iface = _velocity_iface("dycore_wrapper")
@@ -310,54 +312,48 @@ def build_dycore_wrapper(velocity_source: Path, inner_lib_so: Path,
         clear_external_registry()
         dace.Config.set("compiler", "cpu", "args", value=orig_cxx_args)
 
-    print(f"[build_icon_dace_libs] dycore artifact:    {outer_lib.so_path}",
-          flush=True)
+    print(f"[build_icon_dace_libs] dycore artifact:    {outer_lib.so_path}", flush=True)
     return outer_lib
 
 
 def main():
-    ap = argparse.ArgumentParser(
-        description=__doc__.split("\n\n")[0],
-        formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument(
-        "--velocity-source", type=Path,
-        default=(Path(__file__).resolve().parents[1]
-                 / "tests" / "icon_full" / "velocity_full.f90"),
-        help="Pre-merged self-contained ICON ``mo_velocity_advection`` "
-             "source.  Defaults to the e2e test's ``velocity_full.f90``.")
-    ap.add_argument(
-        "--out-dir", type=Path, required=True,
-        help="Where libvelocity_inner_wrap.so + .mod files go.")
-    ap.add_argument(
-        "--release", action="store_true",
-        help="Use -O3 -fno-fast-math -ffp-contract=off instead of -O0.  "
-             "Numerical envelope drops to 1 ULP but performance matches a "
-             "stock ICON production build.")
-    ap.add_argument(
-        "--with-dycore", action="store_true",
-        help="Also build ``libdycore_wrapper.so`` -- the outer SDFG "
-             "that dispatches to the inner velocity .so over the C "
-             "ABI (``velocity_tendencies_c``) AND calls a Fortran/C++ "
-             "sync helper pair.  ICON itself does NOT link this "
-             "artifact (its real ``mo_solve_nonhydro`` signature does "
-             "not match the wrapper), but building it validates the "
-             "SDFG-to-SDFG C-ABI chain.")
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--velocity-source",
+                    type=Path,
+                    default=(Path(__file__).resolve().parents[1] / "tests" / "icon" / "full" / "velocity_full.f90"),
+                    help="Pre-merged self-contained ICON ``mo_velocity_advection`` "
+                    "source.  Defaults to the e2e test's ``velocity_full.f90``.")
+    ap.add_argument("--out-dir", type=Path, required=True, help="Where libvelocity_inner_wrap.so + .mod files go.")
+    ap.add_argument("--release",
+                    action="store_true",
+                    help="Use -O3 -fno-fast-math -ffp-contract=off instead of -O0.  "
+                    "Numerical envelope drops to 1 ULP but performance matches a "
+                    "stock ICON production build.")
+    ap.add_argument("--with-dycore",
+                    action="store_true",
+                    help="Also build ``libdycore_wrapper.so`` -- the outer SDFG "
+                    "that dispatches to the inner velocity .so over the C "
+                    "ABI (``velocity_tendencies_c``) AND calls a Fortran/C++ "
+                    "sync helper pair.  ICON itself does NOT link this "
+                    "artifact (its real ``mo_solve_nonhydro`` signature does "
+                    "not match the wrapper), but building it validates the "
+                    "SDFG-to-SDFG C-ABI chain.")
     args = ap.parse_args()
 
     if not args.velocity_source.exists():
-        print(f"error: velocity source not found: {args.velocity_source}",
-              file=sys.stderr)
+        print(f"error: velocity source not found: {args.velocity_source}", file=sys.stderr)
         return 1
     if not shutil.which("gfortran") or not shutil.which("flang-new-21"):
         print("error: need gfortran + flang-new-21 on PATH", file=sys.stderr)
         return 1
 
-    inner_lib = build_velocity_inner_wrap(
-        args.velocity_source, args.out_dir, release=args.release)
+    inner_lib = build_velocity_inner_wrap(args.velocity_source, args.out_dir, release=args.release)
     if args.with_dycore:
-        build_dycore_wrapper(
-            args.velocity_source, inner_lib.so_path,
-            args.out_dir / "_dycore_build", release=args.release)
+        build_dycore_wrapper(args.velocity_source,
+                             inner_lib.so_path,
+                             args.out_dir / "_dycore_build",
+                             release=args.release)
     return 0
 
 

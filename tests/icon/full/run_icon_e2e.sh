@@ -46,7 +46,7 @@ GRID_URL=http://icon-downloads.mpimet.mpg.de/grids/public/edzw/${GRID_NAME}.nc
 
 VELOCITY_F90=${ICON_SRC}/src/atm_dyn_iconam/mo_velocity_advection.f90
 RUN=${ICON_SRC}/run
-COMPARE=${DACE_FORTRAN}/tests/icon_full/compare_icon_runs.py
+COMPARE=${DACE_FORTRAN}/tests/icon/full/compare_icon_runs.py
 
 step() { printf '\n=== %s ===\n' "$1"; }
 

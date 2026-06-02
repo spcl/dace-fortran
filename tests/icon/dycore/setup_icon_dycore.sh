@@ -13,12 +13,12 @@ ICON_TAG=${ICON_TAG:-icon-2026.04-public}
 ICON_URL=${ICON_URL:-https://gitlab.dkrz.de/icon/icon-model.git}
 HERE=$(cd "$(dirname "$0")"; pwd)
 # Default ``ICON_DIR`` to the in-tree submodule checkout at
-# ``tests/icon_full/icon-model``; the build dir lands next to this
+# ``tests/icon/full/icon-model``; the build dir lands next to this
 # script so the parse test owns its own state (no workspace-level
 # ``$HOME/_icon_build`` -- gone with the layout change of 2026-06).
 # ``REPO`` walks up: <script>/../../.. -> repo root.
-REPO=$(cd "$HERE/../.."; pwd)
-ICON_DIR=${ICON_DIR:-$REPO/tests/icon_full/icon-model}
+REPO=$(cd "$HERE/../../.."; pwd)
+ICON_DIR=${ICON_DIR:-$REPO/tests/icon/full/icon-model}
 BUILD_DIR=${BUILD_DIR:-$HERE/.icon_build}
 
 # 1. System deps (Debian/Ubuntu).  YAXT + CDI are bundled ICON submodules
@@ -37,8 +37,8 @@ fi
 # 2. Submodule init for the in-tree ICON checkout; a custom out-of-tree
 #    ``$ICON_DIR`` is shallow-cloned at the pinned tag.  Either way, the
 #    nested ICON submodules (yaxt, cdi, mtime, tixi, ...) get pulled in.
-if [ "$ICON_DIR" = "$REPO/tests/icon_full/icon-model" ]; then
-  git -C "$REPO" submodule update --init --recursive tests/icon_full/icon-model
+if [ "$ICON_DIR" = "$REPO/tests/icon/full/icon-model" ]; then
+  git -C "$REPO" submodule update --init --recursive tests/icon/full/icon-model
 else
   if [ ! -d "$ICON_DIR/.git" ]; then
     git clone --depth 1 --branch "$ICON_TAG" "$ICON_URL" "$ICON_DIR"

@@ -217,9 +217,514 @@ static std::string mpiCalleeTag(const std::string& callee) {
   if (s.rfind("_QP", 0) == 0) s.erase(0, 3);  // external/global mangling
   std::string low = llvm::StringRef(s).lower();
   if (low == "mpi_send" || low == "mpi_recv" || low == "mpi_isend" ||
-      low == "mpi_irecv" || low == "mpi_wait")
+      low == "mpi_irecv" || low == "mpi_wait" || low == "mpi_alltoall")
     return low;
   return std::string{};
+}
+
+// ---------------------------------------------------------------------------
+// BLAS / LAPACK recognition
+//
+// Pattern: Fortran source calls a vendor BLAS / LAPACK routine directly
+// (e.g. ``call dgemm('N','N', m, n, k, alpha, a, lda, b, ldb, beta, c, ldc)``).
+// Flang lowers each as ``fir.call @dgemm_(...)`` (or ``@_QPdgemm`` depending
+// on the binding flavour).  We pattern-match the callee by canonical name
+// and the Python ``emit_blas`` / ``emit_lapack`` handlers stamp a
+// :class:`dace.libraries.blas.*` / :class:`dace.libraries.lapack.*`
+// library node with operand memlets.
+//
+// The recognised subset (first wave -- the highest-frequency routines in
+// the cloudsc / ICON / QE working set):
+//   BLAS L1: DAXPY / DSCAL / DDOT
+//   BLAS L2: DGEMV
+//   BLAS L3: DGEMM
+//   LAPACK : DGETRF / DPOTRF
+// Single-precision twins (S-prefix) are accepted alongside the D-prefix
+// names so the same recognition path covers real32 callers; complex
+// (C / Z) twins are out of scope for the first wave.
+
+/// Strip Fortran mangling decorations and lowercase.
+static std::string normaliseBlasName(const std::string& callee) {
+  std::string s = callee;
+  if (!s.empty() && s[0] == '@') s.erase(0, 1);
+  if (s.rfind("_QP", 0) == 0) s.erase(0, 3);
+  while (!s.empty() && s.back() == '_') s.pop_back();
+  return llvm::StringRef(s).lower();
+}
+
+/// Return the canonical BLAS routine name (e.g. ``"dgemm"``) for a recognised
+/// callee, else empty.  Accepts the D-prefix (real64) and S-prefix (real32)
+/// names that map onto the same DaCe lib node (dtype-dispatched at expansion).
+static std::string blasCalleeTag(const std::string& callee) {
+  std::string low = normaliseBlasName(callee);
+  static const std::set<std::string> recognised = {
+      // L1
+      "daxpy", "saxpy", "dscal", "sscal", "ddot", "sdot",
+      "dnrm2", "snrm2", "dasum", "sasum", "idamax", "isamax",
+      "dcopy", "scopy", "dswap", "sswap",
+      // L2
+      "dgemv", "sgemv", "dger", "sger",
+      "dtrsv", "strsv", "dtrmv", "strmv", "dsymv", "ssymv",
+      // L3
+      "dgemm", "sgemm",
+      "dtrsm", "strsm", "dtrmm", "strmm",
+      "dsymm", "ssymm", "dsyrk", "ssyrk",
+  };
+  if (recognised.count(low)) return low;
+  return std::string{};
+}
+
+/// Return the canonical LAPACK routine name (e.g. ``"dgetrf"``) for a
+/// recognised callee, else empty.
+static std::string lapackCalleeTag(const std::string& callee) {
+  std::string low = normaliseBlasName(callee);
+  static const std::set<std::string> recognised = {
+      "dgetrf", "sgetrf", "dpotrf", "spotrf",
+      "dpotrs", "spotrs",
+      "dgeqrf", "sgeqrf", "dorgqr", "sorgqr",
+  };
+  if (recognised.count(low)) return low;
+  return std::string{};
+}
+
+// ---------------------------------------------------------------------------
+// Library-prefix "near-miss" detection
+//
+// When a Fortran call site matches the prefix of a recognised library
+// (MPI / FFTW3 / BLAS / LAPACK) but the exact routine isn't in the
+// supported subset, fall back to a clear ``unsupported_libcall`` ASTNode
+// so the Python builder raises a precise ``NotImplementedError`` instead
+// of silently emitting a broken generic call (``_out = ?`` -- the failure
+// mode this layer prevents).
+
+static const std::set<std::string>& knownBlasNames() {
+  static const std::set<std::string> names = {
+      // Real BLAS routines we *would* recognise once their handlers ship.
+      "drotg", "srotg", "drot", "srot", "drotmg", "srotmg", "drotm", "srotm",
+      "dnrm2", "snrm2", "scnrm2", "dznrm2",
+      "dasum", "sasum", "scasum", "dzasum",
+      "idamax", "isamax", "icamax", "izamax",
+      "dswap", "sswap", "dcopy", "scopy",
+      "dsdot",
+      // Already recognised in ``blasCalleeTag`` -- listed so the detector
+      // recognises THEM as BLAS and routes through the normal path.
+      "daxpy", "saxpy", "dscal", "sscal", "ddot", "sdot",
+      "dgemv", "sgemv", "dgemm", "sgemm",
+      // BLAS L2 / L3 routines whose handlers are pending:
+      "dger", "sger", "dsymv", "ssymv", "dsbmv", "ssbmv",
+      "dtrmv", "strmv", "dtrsv", "strsv", "dgbmv", "sgbmv",
+      "dsymm", "ssymm", "dsyrk", "ssyrk", "dsyr2k", "ssyr2k",
+      "dtrmm", "strmm", "dtrsm", "strsm",
+  };
+  return names;
+}
+
+static const std::set<std::string>& knownLapackNames() {
+  static const std::set<std::string> names = {
+      "dgetrf", "sgetrf", "dgetri", "sgetri", "dgetrs", "sgetrs",
+      "dgesv", "sgesv",
+      "dpotrf", "spotrf", "dpotrs", "spotrs", "dpotri", "spotri",
+      "dposv", "sposv",
+      "dsyev", "ssyev", "dsyevd", "ssyevd",
+      "dgeev", "sgeev", "dgesvd", "sgesvd",
+      "dgeqrf", "sgeqrf", "dorgqr", "sorgqr", "dormqr", "sormqr",
+  };
+  return names;
+}
+
+// ---------------------------------------------------------------------------
+// QE FFT-interfaces recognition
+//
+// Quantum ESPRESSO exposes a high-level generic FFT interface in
+// ``FFTXlib/src/fft_interfaces.f90``::
+//
+//     CALL fwfft(fft_kind, f, dfft [, howmany])   ! G -> R
+//     CALL invfft(fft_kind, f, dfft [, howmany])  ! R -> G
+//
+// The generic resolves to specific subroutines (``fwfft_y`` / ``invfft_y``
+// for the standard grid, ``invfft_b`` for the box grid).  ``fft_kind`` is
+// a literal character ('Rho' / 'Wave' / 'tgWave'), ``f`` is the (typically
+// 1-D) complex buffer that gets transformed in place, and ``dfft`` is the
+// :type:`fft_type_descriptor` that carries the 3-D grid sizes.
+//
+// For the bridge first cut we ignore ``dfft`` (the 3-D dims) and the
+// optional ``howmany`` argument, and emit a single ``fftcall`` ASTNode
+// referencing the buffer with the direction derived from the routine
+// name.  The Python ``emit_fft`` handler stamps an :class:`FFT` /
+// :class:`IFFT` library node with the buffer as the ``_inp`` / ``_out``
+// operand.  This matches the recognition layer; correct multi-D FFT
+// semantics (descriptor-driven dim extraction) is a follow-up gap.
+
+/// Return ``"forward"`` for ``fwfft``-family callees, ``"backward"`` for
+/// ``invfft``-family, else empty.  Accepts both the generic names
+/// (``fwfft`` / ``invfft``) and the specific subroutines (``fwfft_y``,
+/// ``invfft_y``, ``fwfft_b``, ``invfft_b``).
+static std::string qeFftCalleeTag(const std::string& callee) {
+  std::string low = normaliseBlasName(callee);
+  // Strip QE module prefix (e.g. ``_QMfft_interfacesPinvfft_y`` after
+  // ``normaliseBlasName`` drops the leading ``_QP``).  Be permissive about
+  // the in-between ``_QM<mod>P``-style decorations.
+  auto p = low.find('p');
+  if (p != std::string::npos && low.rfind("_qm", 0) == 0)
+    low = low.substr(p + 1);
+  if (low == "fwfft" || low == "fwfft_y" || low == "fwfft_b") return "forward";
+  if (low == "invfft" || low == "invfft_y" || low == "invfft_b") return "backward";
+  return std::string{};
+}
+
+/// Returns ``"real"`` / ``"complex"`` for QE's ``fft_interpolate_real`` /
+/// ``fft_interpolate_complex`` specific subroutines (the generic
+/// ``fft_interpolate`` resolves to one of these), else empty.
+static std::string qeFftInterpolateCalleeTag(const std::string& callee) {
+  std::string low = normaliseBlasName(callee);
+  auto p = low.find('p');
+  if (p != std::string::npos && low.rfind("_qm", 0) == 0)
+    low = low.substr(p + 1);
+  if (low == "fft_interpolate_real") return "real";
+  if (low == "fft_interpolate_complex") return "complex";
+  return std::string{};
+}
+
+// ---------------------------------------------------------------------------
+// QE parallel pencil-pipeline recognition
+//
+// QE's parallel 3-D FFT (``FFTXlib/src/fft_parallel.f90``) is a five-step
+// pipeline of batched 1-D FFTs and MPI alltoalls:
+//
+//     cft_1z(f)              ! 1-D FFT along the z axis
+//     fft_scatter_yz(f)      ! MPI alltoall across desc%comm3
+//     cft_1y(f)              ! 1-D FFT along the y axis
+//     fft_scatter_xy(f)      ! MPI alltoall across desc%comm2
+//     cft_1x(f)              ! 1-D FFT along the x axis
+//
+// The bridge recognises the per-axis FFTs (``cft_1x`` / ``cft_1y`` /
+// ``cft_1z``) and emits an :class:`FFT` lib node tagged with the axis,
+// and recognises the scatter routines (``fft_scatter_xy`` / ``yz``) and
+// emits an :class:`Alltoall` lib node.  Both are first-cut recognisers;
+// the buffer-to-3-D-grid reinterpretation that fully captures QE's
+// runtime semantics is a follow-up gap.
+
+/// Returns ``"axis=X,dir=Y"`` (where X is 0/1/2 and Y is forward/backward)
+/// for a recognised ``cft_1z`` / ``cft_1y`` / ``cft_1x`` callee, else
+/// empty.  Axis assignment: ``cft_1x`` -> 0, ``cft_1y`` -> 1, ``cft_1z`` -> 2
+/// (matches the C / row-major dimension order downstream code expects).
+static std::string qePencilCalleeTag(const std::string& callee) {
+  std::string low = normaliseBlasName(callee);
+  auto p = low.find('p');
+  if (p != std::string::npos && low.rfind("_qm", 0) == 0)
+    low = low.substr(p + 1);
+  if (low == "cft_1x") return "axis=0";
+  if (low == "cft_1y") return "axis=1";
+  if (low == "cft_1z") return "axis=2";
+  return std::string{};
+}
+
+/// Build the ``fftcall`` ASTNode for a recognised QE pencil routine.
+/// Signature: ``cft_1z(c, nsl, nz, ldz, isign, cout)``.  We treat
+/// ``c`` (arg 0) as the input buffer and ``cout`` (arg 5) as the
+/// output; the ``isign`` runtime sign is read literally when
+/// available (and otherwise defaults to ``forward``).
+static ASTNode buildQePencilCallNode(fir::CallOp call, const std::string& axisTag) {
+  ASTNode n;
+  auto args = call.getArgOperands();
+  if (args.size() < 6) return n;
+  std::string cin = traceToDecl(args[0]);
+  std::string cout = traceToDecl(args[5]);
+  if (cin.empty() || cout.empty()) return n;
+  // isign: positive = backward, negative = forward.  When the literal
+  // is unavailable we conservatively pick forward.
+  std::string direction = "forward";
+  if (auto c = traceConstInt(args[4])) {
+    direction = (*c > 0) ? "backward" : "forward";
+  }
+  n.kind = "fftcall";
+  n.callee = "fft_execute";
+  n.expr = direction;
+  n.target = cout;
+  // ``call_args[0]`` / ``[1]`` are the in / out buffer names; subsequent
+  // entries carry the axis tag so ``emit_fft`` can set ``node.axis``
+  // when we later wire up axis-aware FFTW3 / cuFFT expansions.
+  n.call_args = {cin, cout, axisTag};
+  return n;
+}
+
+/// Returns ``"xy"`` or ``"yz"`` for QE's ``fft_scatter_xy`` / ``fft_scatter_yz``
+/// alltoall transposes, else empty.
+static std::string qeScatterCalleeTag(const std::string& callee) {
+  std::string low = normaliseBlasName(callee);
+  auto p = low.find('p');
+  if (p != std::string::npos && low.rfind("_qm", 0) == 0)
+    low = low.substr(p + 1);
+  if (low == "fft_scatter_xy") return "xy";
+  if (low == "fft_scatter_yz") return "yz";
+  return std::string{};
+}
+
+/// Build the ``mpicall`` ASTNode for a recognised QE scatter routine.
+/// Signature: ``fft_scatter_xy(desc, f_in, f_aux, nxx_, isgn[, comm])``.
+/// We map this onto the existing ``mpi_alltoall`` ASTNode the Python
+/// builder already lowers to :class:`Alltoall`; ``desc`` is the
+/// descriptor (ignored at recognition), ``f_in`` (arg 1) is the send
+/// buffer, ``f_aux`` (arg 2) is the receive buffer.
+static ASTNode buildQeScatterCallNode(fir::CallOp call, const std::string& plane) {
+  ASTNode n;
+  auto args = call.getArgOperands();
+  if (args.size() < 5) return n;
+  std::string sendbuf = traceToDecl(args[1]);
+  std::string recvbuf = traceToDecl(args[2]);
+  if (sendbuf.empty() || recvbuf.empty()) return n;
+  n.kind = "mpicall";
+  n.callee = "mpi_alltoall";
+  n.call_args = {sendbuf, recvbuf};
+  // Carry the plane tag through ``expr`` so a downstream emitter could
+  // wire the matching descriptor sub-communicator (desc%comm2 vs comm3);
+  // the current ``emit_mpi`` Alltoall path ignores it and defaults to
+  // ``MPI_COMM_WORLD``.
+  n.expr = plane;
+  return n;
+}
+
+/// Build an ``fftcall`` ASTNode for a recognised QE FFT call.  The buffer
+/// is the 2nd argument (after the ``fft_kind`` literal).  We do not look
+/// at the descriptor or ``howmany`` for the recognition first cut.
+static ASTNode buildQeFftCallNode(fir::CallOp call, const std::string& direction) {
+  ASTNode n;
+  auto args = call.getArgOperands();
+  if (args.size() < 2) return n;
+  std::string buf = traceToDecl(args[1]);
+  if (buf.empty()) return n;
+  n.kind = "fftcall";
+  n.callee = "fft_execute";
+  n.expr = direction;
+  n.target = buf;
+  n.call_args = {buf, buf};  // in-place
+  return n;
+}
+
+/// Returns "mpi" / "blas" / "lapack" / "fftw3" if the callee matches one of
+/// those library's call conventions; else empty.  Used by the dispatch
+/// loop's near-miss detector.
+static std::string libraryFamilyTag(const std::string& callee) {
+  std::string low = normaliseBlasName(callee);
+  if (low.rfind("mpi_", 0) == 0) return "mpi";
+  if (low.rfind("fftw_", 0) == 0 || low.rfind("fftwf_", 0) == 0) return "fftw3";
+  if (knownBlasNames().count(low)) return "blas";
+  if (knownLapackNames().count(low)) return "lapack";
+  return std::string{};
+}
+
+/// Resolve a fir.call operand to either a decl name or a literal
+/// (constant int) for the BLAS / LAPACK / MPI recognisers.  An empty
+/// return means the operand is neither traceable to a declared name
+/// nor a known constant -- the dispatch loop drops the recognition
+/// gracefully.
+static std::string resolveCallArg(mlir::Value v) {
+  std::string n = traceToDecl(v);
+  if (!n.empty()) return n;
+  if (auto c = traceConstInt(v)) return std::to_string(*c);
+  return std::string{};
+}
+
+/// Build the ``ASTNode`` for a recognised BLAS call.  ``call_args`` carry
+/// the resolved decl / constant names in the routine's positional order
+/// (drops the ``N`` / leading-dim args -- the lib node derives them from
+/// memlets at expansion time).  Char-arg routines (DGEMM, DGEMV) capture
+/// the ``TRANS`` literal in ``ASTNode.expr`` so the Python builder can
+/// set the matching node property.
+static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
+  ASTNode n;
+  n.kind = "blascall";
+  n.callee = routine;
+  auto args = call.getArgOperands();
+
+  auto push = [&](mlir::Value v) {
+    n.call_args.push_back(resolveCallArg(v));
+  };
+
+  if (routine == "daxpy" || routine == "saxpy") {
+    // axpy(n, alpha, x, incx, y, incy) -- in-place y := alpha*x + y
+    if (args.size() < 6) { n.kind.clear(); return n; }
+    push(args[1]);  // alpha
+    push(args[2]);  // x
+    push(args[4]);  // y (inout)
+    return n;
+  }
+  if (routine == "dscal" || routine == "sscal") {
+    // scal(n, alpha, x, incx) -- in-place x := alpha*x
+    if (args.size() < 4) { n.kind.clear(); return n; }
+    push(args[1]);  // alpha
+    push(args[2]);  // x
+    return n;
+  }
+  if (routine == "ddot" || routine == "sdot") {
+    // ddot(n, x, incx, y, incy) -- returns scalar; assigned by the user as
+    // ``r = ddot(...)``.  The dot result is handled at the hlfir.assign
+    // for the result variable; here we only emit nothing for the call
+    // itself.  The result-name path is handled in the assign recogniser
+    // (parallel to the FFTW3 plan-create case).
+    n.kind.clear();
+    return n;
+  }
+  if (routine == "dgemv" || routine == "sgemv") {
+    // gemv(trans, m, n, alpha, A, lda, x, incx, beta, y, incy)
+    if (args.size() < 11) { n.kind.clear(); return n; }
+    n.expr = resolveCallArg(args[0]);  // trans char (literal)
+    push(args[3]);  // alpha
+    push(args[4]);  // A
+    push(args[6]);  // x
+    push(args[8]);  // beta
+    push(args[9]);  // y (inout)
+    return n;
+  }
+  if (routine == "dgemm" || routine == "sgemm") {
+    // gemm(transa, transb, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc)
+    if (args.size() < 13) { n.kind.clear(); return n; }
+    n.expr = resolveCallArg(args[0]) + "," + resolveCallArg(args[1]);  // transA,transB
+    push(args[5]);   // alpha
+    push(args[6]);   // A
+    push(args[8]);   // B
+    push(args[10]);  // beta
+    push(args[11]);  // C (inout)
+    return n;
+  }
+  if (routine == "dnrm2" || routine == "snrm2" ||
+      routine == "dasum" || routine == "sasum" ||
+      routine == "idamax" || routine == "isamax") {
+    // ?nrm2(n, x, incx) / ?asum(n, x, incx) / i?amax(n, x, incx) -- scalar result;
+    // the assign-side handler picks up the result variable.
+    n.kind.clear();
+    return n;
+  }
+  if (routine == "dcopy" || routine == "scopy") {
+    // copy(n, x, incx, y, incy) -- y := x
+    if (args.size() < 5) { n.kind.clear(); return n; }
+    push(args[1]);  // x
+    push(args[3]);  // y (out)
+    return n;
+  }
+  if (routine == "dswap" || routine == "sswap") {
+    // swap(n, x, incx, y, incy) -- x, y := y, x
+    if (args.size() < 5) { n.kind.clear(); return n; }
+    push(args[1]);  // x (inout)
+    push(args[3]);  // y (inout)
+    return n;
+  }
+  if (routine == "dger" || routine == "sger") {
+    // ger(m, n, alpha, x, incx, y, incy, A, lda) -- A := alpha*x*y' + A
+    if (args.size() < 9) { n.kind.clear(); return n; }
+    push(args[2]);  // alpha
+    push(args[3]);  // x
+    push(args[5]);  // y
+    push(args[7]);  // A (inout)
+    return n;
+  }
+  if (routine == "dtrsv" || routine == "strsv" ||
+      routine == "dtrmv" || routine == "strmv") {
+    // trsv/trmv(uplo, trans, diag, n, A, lda, x, incx)
+    if (args.size() < 8) { n.kind.clear(); return n; }
+    n.expr = resolveCallArg(args[0]) + "," + resolveCallArg(args[1]) + "," +
+             resolveCallArg(args[2]);  // uplo,trans,diag
+    push(args[4]);  // A
+    push(args[6]);  // x (inout)
+    return n;
+  }
+  if (routine == "dsymv" || routine == "ssymv") {
+    // symv(uplo, n, alpha, A, lda, x, incx, beta, y, incy)
+    if (args.size() < 10) { n.kind.clear(); return n; }
+    n.expr = resolveCallArg(args[0]);  // uplo
+    push(args[2]);  // alpha
+    push(args[3]);  // A
+    push(args[5]);  // x
+    push(args[7]);  // beta
+    push(args[8]);  // y (inout)
+    return n;
+  }
+  if (routine == "dtrsm" || routine == "strsm" ||
+      routine == "dtrmm" || routine == "strmm") {
+    // trsm/trmm(side, uplo, trans, diag, m, n, alpha, A, lda, B, ldb)
+    if (args.size() < 11) { n.kind.clear(); return n; }
+    n.expr = resolveCallArg(args[0]) + "," + resolveCallArg(args[1]) + "," +
+             resolveCallArg(args[2]) + "," + resolveCallArg(args[3]);
+    push(args[6]);  // alpha
+    push(args[7]);  // A
+    push(args[9]);  // B (inout)
+    return n;
+  }
+  if (routine == "dsymm" || routine == "ssymm") {
+    // symm(side, uplo, m, n, alpha, A, lda, B, ldb, beta, C, ldc)
+    if (args.size() < 12) { n.kind.clear(); return n; }
+    n.expr = resolveCallArg(args[0]) + "," + resolveCallArg(args[1]);
+    push(args[4]);  // alpha
+    push(args[5]);  // A
+    push(args[7]);  // B
+    push(args[9]);  // beta
+    push(args[10]); // C (inout)
+    return n;
+  }
+  if (routine == "dsyrk" || routine == "ssyrk") {
+    // syrk(uplo, trans, n, k, alpha, A, lda, beta, C, ldc)
+    if (args.size() < 10) { n.kind.clear(); return n; }
+    n.expr = resolveCallArg(args[0]) + "," + resolveCallArg(args[1]);
+    push(args[4]);  // alpha
+    push(args[5]);  // A
+    push(args[7]);  // beta
+    push(args[8]);  // C (inout)
+    return n;
+  }
+  n.kind.clear();
+  return n;
+}
+
+/// Build the ``ASTNode`` for a recognised LAPACK call.
+static ASTNode buildLapackCallNode(fir::CallOp call, const std::string& routine) {
+  ASTNode n;
+  n.kind = "lapackcall";
+  n.callee = routine;
+  auto args = call.getArgOperands();
+
+  if (routine == "dgetrf" || routine == "sgetrf") {
+    // getrf(m, n, A, lda, ipiv, info) -- LU factorisation
+    if (args.size() < 6) { n.kind.clear(); return n; }
+    n.call_args.push_back(resolveCallArg(args[2]));  // A (inout: factor in place)
+    n.call_args.push_back(resolveCallArg(args[4]));  // ipiv (out)
+    n.call_args.push_back(resolveCallArg(args[5]));  // info (out)
+    return n;
+  }
+  if (routine == "dpotrf" || routine == "spotrf") {
+    // potrf(uplo, n, A, lda, info) -- Cholesky factorisation
+    if (args.size() < 5) { n.kind.clear(); return n; }
+    n.expr = resolveCallArg(args[0]);  // 'U' or 'L'
+    n.call_args.push_back(resolveCallArg(args[2]));  // A (inout)
+    n.call_args.push_back(resolveCallArg(args[4]));  // info (out)
+    return n;
+  }
+  if (routine == "dpotrs" || routine == "spotrs") {
+    // potrs(uplo, n, nrhs, A, lda, B, ldb, info)
+    if (args.size() < 8) { n.kind.clear(); return n; }
+    n.expr = resolveCallArg(args[0]);                // 'U' or 'L'
+    n.call_args.push_back(resolveCallArg(args[3]));  // A
+    n.call_args.push_back(resolveCallArg(args[5]));  // B (inout)
+    n.call_args.push_back(resolveCallArg(args[7]));  // info (out)
+    return n;
+  }
+  if (routine == "dgeqrf" || routine == "sgeqrf") {
+    // geqrf(m, n, A, lda, tau, work, lwork, info)
+    if (args.size() < 8) { n.kind.clear(); return n; }
+    n.call_args.push_back(resolveCallArg(args[2]));  // A (inout)
+    n.call_args.push_back(resolveCallArg(args[4]));  // tau (out)
+    n.call_args.push_back(resolveCallArg(args[7]));  // info (out)
+    return n;
+  }
+  if (routine == "dorgqr" || routine == "sorgqr") {
+    // orgqr(m, n, k, A, lda, tau, work, lwork, info)
+    if (args.size() < 9) { n.kind.clear(); return n; }
+    n.call_args.push_back(resolveCallArg(args[3]));  // A (inout)
+    n.call_args.push_back(resolveCallArg(args[5]));  // tau (in)
+    n.call_args.push_back(resolveCallArg(args[8]));  // info (out)
+    return n;
+  }
+  n.kind.clear();
+  return n;
 }
 
 /// Build an ``mpicall`` ASTNode for a recognised MPI point-to-point
@@ -260,6 +765,24 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
     if (args.empty())
       throw std::runtime_error("MPI mpi_wait: no request argument");
     n.call_args = {resolve(args[0], "request")};
+    return n;
+  }
+
+  if (mpiOp == "mpi_alltoall") {
+    // MPI_Alltoall(sendbuf, sendcount, sendtype, recvbuf, recvcount,
+    //              recvtype, comm, ierr)
+    if (args.size() < 7)
+      throw std::runtime_error("MPI mpi_alltoall: unexpected argument count " +
+                               std::to_string(args.size()));
+    std::string sendbuf = resolve(args[0], "sendbuf");
+    std::string recvbuf = resolve(args[3], "recvbuf");
+    n.call_args = {sendbuf, recvbuf};
+    // comm decoding -- same rule as send/recv.  Append on a runtime/user comm.
+    std::string commName = traceToDecl(args[6]);
+    std::string low = llvm::StringRef(commName).lower();
+    bool isDefault = commName.empty() || low.rfind("__", 0) == 0 ||
+                     low.find("mpi_comm_world") != std::string::npos;
+    if (!isDefault) n.call_args.push_back(commName);
     return n;
   }
 
@@ -423,6 +946,110 @@ struct IoState {
   std::string group;  // namelist group name (op == "namelist_read")
   std::vector<std::string> items;
 };
+
+// ---------------------------------------------------------------------------
+// FFTW3 plan recognition
+//
+// Pattern this consumes -- the standard FFTW3 C ABI driven from Fortran via
+// ``iso_c_binding`` (and the FFTW-compat ABI of cuFFT / MKL):
+//
+//     plan = fftw_plan_dft_2d(N, M, in, out, FFTW_FORWARD, FFTW_ESTIMATE)
+//     call fftw_execute_dft(plan, in, out)
+//     call fftw_destroy_plan(plan)
+//
+// The opaque ``TYPE(C_PTR) :: plan`` SSA value cannot be modeled in DaCe.
+// We therefore (1) recognise the three calls by callee name, (2) capture
+// the (rank, dims, direction) at the plan-create site and stash it under
+// the destination variable name, and (3) on the ``execute_dft`` call
+// emit a single ``fftcall`` ``ASTNode`` carrying the input/output array
+// names + the looked-up direction.  The plan-create and destroy calls
+// are dropped (no ASTNode emitted) -- the FFT lib node's expansion
+// owns the plan lifecycle.
+struct FftPlanInfo {
+  int rank;                       // 2 or 3
+  std::vector<std::string> dims;  // dimension expressions / literals
+  std::string direction;          // "forward" or "backward"
+};
+
+/// Return the normalised tag for a recognised FFTW3 callee, else empty.
+/// Accepts both ``fftw_*`` (double precision) and ``fftwf_*`` (single).
+static std::string fftw3CalleeTag(const std::string& callee) {
+  std::string s = callee;
+  if (!s.empty() && s[0] == '@') s.erase(0, 1);
+  if (s.rfind("_QP", 0) == 0) s.erase(0, 3);  // external/global mangling
+  // Strip optional trailing underscore (older Fortran external mangling).
+  while (!s.empty() && s.back() == '_') s.pop_back();
+  std::string low = llvm::StringRef(s).lower();
+  if (low == "fftw_plan_dft_2d" || low == "fftwf_plan_dft_2d") return "fft_plan_2d";
+  if (low == "fftw_plan_dft_3d" || low == "fftwf_plan_dft_3d") return "fft_plan_3d";
+  if (low == "fftw_execute_dft" || low == "fftwf_execute_dft") return "fft_execute";
+  if (low == "fftw_destroy_plan" || low == "fftwf_destroy_plan") return "fft_destroy";
+  return std::string{};
+}
+
+/// Build the ``ASTNode`` for a recognised FFTW3 call.  Returns an empty
+/// ``ASTNode`` (kind="") to mean "consumed, emit nothing"; the dispatch
+/// loop then ``continue``-s without pushing.
+///
+/// ``plans`` is threaded across the block so the execute call can look
+/// up the (rank, dims, direction) recorded at the plan-create site by
+/// destination variable name.
+static ASTNode buildFftw3CallNode(fir::CallOp call, const std::string& fftOp,
+                                  std::map<std::string, FftPlanInfo>& plans) {
+  ASTNode n;
+  auto args = call.getArgOperands();
+
+  if (fftOp == "fft_plan_2d" || fftOp == "fft_plan_3d") {
+    // Signature: fftw_plan_dft_{2,3}d(n0, n1[, n2], in, out, sign, flags)
+    int rank = (fftOp == "fft_plan_2d") ? 2 : 3;
+    if ((int)args.size() < rank + 4) return n;  // safety -- malformed call
+    FftPlanInfo info;
+    info.rank = rank;
+    for (int i = 0; i < rank; ++i) {
+      std::string dim;
+      if (auto c = traceConstInt(args[i])) dim = std::to_string(*c);
+      else dim = traceToDecl(args[i]);
+      info.dims.push_back(dim);
+    }
+    // Sign: FFTW_FORWARD = -1, FFTW_BACKWARD = +1.
+    int sign = 0;
+    if (auto c = traceConstInt(args[rank + 2])) sign = (int)*c;
+    info.direction = (sign == -1) ? "forward" : "backward";
+    // The plan-create call returns the plan; track which user variable
+    // it is stored into so the matching execute can look it up.
+    std::string planVar;
+    for (auto u : call.getResult(0).getUsers()) {
+      if (auto store = mlir::dyn_cast<fir::StoreOp>(u)) {
+        planVar = traceToDecl(store.getMemref());
+        if (!planVar.empty()) break;
+      }
+    }
+    if (!planVar.empty()) plans[planVar] = info;
+    return n;  // consumed -- emit nothing
+  }
+
+  if (fftOp == "fft_execute") {
+    // Signature: fftw_execute_dft(plan, in, out)
+    if (args.size() < 3) return n;
+    std::string planVar = traceToDecl(args[0]);
+    std::string inArr = traceToDecl(args[1]);
+    std::string outArr = traceToDecl(args[2]);
+    if (planVar.empty() || inArr.empty()) return n;
+    auto it = plans.find(planVar);
+    if (it == plans.end()) return n;  // unknown plan -- give up cleanly
+    n.kind = "fftcall";
+    n.callee = "fft_execute";
+    n.target = outArr.empty() ? inArr : outArr;
+    n.expr = it->second.direction;  // "forward" or "backward"
+    n.call_args.push_back(inArr);
+    n.call_args.push_back(outArr.empty() ? inArr : outArr);
+    for (auto& d : it->second.dims) n.call_args.push_back(d);
+    return n;
+  }
+
+  // fft_destroy: drop -- plan lifecycle is owned by the lib node expansion.
+  return n;
+}
 
 /// Advance the I/O state machine by one ``_FortranAio*`` ``call`` (callee
 /// ``c``), and on a completed read/write statement push an ``iocall`` ASTNode.
@@ -590,6 +1217,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
     nodes.push_back(std::move(n));
   };
   IoState io_state;  // threaded across this block's ``_FortranAio*`` calls
+  // FFT plan info keyed by plan variable name (see ``fftw3CalleeTag``).
+  std::map<std::string, FftPlanInfo> fft_plans;
   for (auto& op : block) {
     // Bind / advance the alloc-alias for this allocatable, then
     // emit a state-change ``<name>_allocated = 1`` so downstream
@@ -745,6 +1374,66 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
                   sop ? sop->getName().getStringRef().str().c_str() : "<null>");
           fclose(fd);
         }
+      }
+
+      // Recognise + suppress the ``plan = fftw_plan_dft_*(...)`` user
+      // statement.  Flang lowers it through a ``.result`` temp:
+      //   ``%158 = fir.call @fftw_plan_dft_2d(...)``
+      //   ``fir.save_result %158 to %0  (the .result alloca)``
+      //   ``%159 = hlfir.declare %0``
+      //   ``%160 = hlfir.as_expr %159``
+      //   ``hlfir.assign %160 to %141#0``  (the user's ``plan`` variable)
+      // We walk back through the as_expr -> declare -> alloca chain and
+      // ask whether the alloca is the destination of a fir.save_result
+      // of a recognised FFTW3 plan-create call. If so, record the plan
+      // variable's (rank, dims, direction) under ``fft_plans`` for the
+      // matching ``fftw_execute_dft`` to look up, and skip the assign --
+      // the opaque ``TYPE(C_PTR)`` SSA value has no SDFG representation.
+      {
+        bool is_fft_plan_assign = false;
+        if (auto* sop = src.getDefiningOp()) {
+          if (auto as_expr = mlir::dyn_cast<hlfir::AsExprOp>(sop)) {
+            if (auto* dop = as_expr.getVar().getDefiningOp()) {
+              if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(dop)) {
+                auto memref = decl.getMemref();
+                for (auto u : memref.getUsers()) {
+                  auto sr = mlir::dyn_cast<fir::SaveResultOp>(u);
+                  if (!sr) continue;
+                  auto* srdef = sr.getValue().getDefiningOp();
+                  auto call = srdef ? mlir::dyn_cast<fir::CallOp>(srdef) : fir::CallOp{};
+                  if (!call) continue;
+                  auto ref = call.getCallee();
+                  if (!ref) continue;
+                  std::string cs;
+                  llvm::raw_string_ostream os(cs);
+                  ref->print(os);
+                  std::string tag = fftw3CalleeTag(cs);
+                  if (tag != "fft_plan_2d" && tag != "fft_plan_3d") continue;
+                  // Confirmed: this assign is the user's ``plan = fftw_plan_dft_*``.
+                  is_fft_plan_assign = true;
+                  std::string planVar = traceToDecl(dst);
+                  if (!planVar.empty()) {
+                    FftPlanInfo info;
+                    info.rank = (tag == "fft_plan_2d") ? 2 : 3;
+                    auto args = call.getArgOperands();
+                    for (int i = 0; i < info.rank; ++i) {
+                      std::string dim;
+                      if (auto c = traceConstInt(args[i])) dim = std::to_string(*c);
+                      else dim = traceToDecl(args[i]);
+                      info.dims.push_back(dim);
+                    }
+                    int sign = 0;
+                    if (auto c = traceConstInt(args[info.rank + 2])) sign = (int)*c;
+                    info.direction = (sign == -1) ? "forward" : "backward";
+                    fft_plans[planVar] = info;
+                  }
+                  break;
+                }
+              }
+            }
+          }
+        }
+        if (is_fft_plan_assign) continue;
       }
 
       // Suppress per-element stores into a Flang-synthesised
@@ -1234,6 +1923,103 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
         nodes.push_back(buildMpiCallNode(call, mpiOp));
         continue;
       }
+      // FFTW3 plan-create / execute / destroy triple: consume all three;
+      // only the execute emits an ``fftcall`` ASTNode (the plan-create
+      // and destroy are absorbed -- the FFT lib node's expansion owns
+      // the plan lifecycle).
+      std::string fftOp = fftw3CalleeTag(n.callee);
+      if (!fftOp.empty()) {
+        auto fn = buildFftw3CallNode(call, fftOp, fft_plans);
+        if (!fn.kind.empty()) nodes.push_back(std::move(fn));
+        continue;
+      }
+      // QE generic FFT (fwfft / invfft) and its specific subroutines
+      // (fwfft_y / invfft_y / fwfft_b / invfft_b).  Map to the same
+      // ``fftcall`` ASTNode the FFTW3 execute emits so ``emit_fft``
+      // handles both uniformly.
+      std::string qeDir = qeFftCalleeTag(n.callee);
+      if (!qeDir.empty()) {
+        auto qn = buildQeFftCallNode(call, qeDir);
+        if (!qn.kind.empty()) nodes.push_back(std::move(qn));
+        continue;
+      }
+      // QE Fourier interpolation (fft_interpolate_real / _complex).
+      // ABI: fft_interpolate(dfft_in, v_in, dfft_out, v_out) -- we use
+      // operand 1 as the input array and operand 3 as the output array.
+      std::string qeIntr = qeFftInterpolateCalleeTag(n.callee);
+      if (!qeIntr.empty()) {
+        auto args = call.getArgOperands();
+        if (args.size() >= 4) {
+          std::string vin = traceToDecl(args[1]);
+          std::string vout = traceToDecl(args[3]);
+          if (!vin.empty() && !vout.empty()) {
+            ASTNode in;
+            in.kind = "fft_interpolate";
+            in.callee = qeIntr;  // "real" or "complex"
+            in.target = vout;
+            in.call_args = {vin, vout};
+            nodes.push_back(std::move(in));
+            continue;
+          }
+        }
+      }
+      // QE per-axis pencil FFT (cft_1z / cft_1y / cft_1x).
+      std::string qePencil = qePencilCalleeTag(n.callee);
+      if (!qePencil.empty()) {
+        auto pn = buildQePencilCallNode(call, qePencil);
+        if (!pn.kind.empty()) nodes.push_back(std::move(pn));
+        continue;
+      }
+      // QE pencil-pipeline scatter routines (fft_scatter_xy / fft_scatter_yz).
+      std::string qeScatter = qeScatterCalleeTag(n.callee);
+      if (!qeScatter.empty()) {
+        auto sn = buildQeScatterCallNode(call, qeScatter);
+        if (!sn.kind.empty()) nodes.push_back(std::move(sn));
+        continue;
+      }
+      // BLAS routine call site (DAXPY / DSCAL / DGEMM / ...): emit a
+      // ``blascall`` ASTNode the Python builder lowers to the matching
+      // ``dace.libraries.blas`` library node.  ``ddot`` is special-cased
+      // -- the result-carrying assign handler picks it up at the
+      // matching ``hlfir.assign`` site instead.
+      std::string blasOp = blasCalleeTag(n.callee);
+      if (!blasOp.empty()) {
+        auto bn = buildBlasCallNode(call, blasOp);
+        if (!bn.kind.empty()) nodes.push_back(std::move(bn));
+        continue;
+      }
+      // LAPACK routine call site (DGETRF / DPOTRF / ...).
+      std::string lapOp = lapackCalleeTag(n.callee);
+      if (!lapOp.empty()) {
+        auto ln = buildLapackCallNode(call, lapOp);
+        if (!ln.kind.empty()) nodes.push_back(std::move(ln));
+        continue;
+      }
+      // Library-prefix near-miss: the callee matches a recognised library's
+      // call convention (MPI / FFTW3 / BLAS / LAPACK) but the specific
+      // routine isn't in our supported subset.  Emit an explicit
+      // ``unsupported_libcall`` ASTNode so the Python builder can raise a
+      // clear ``NotImplementedError`` (better than silently degrading to a
+      // generic ``call`` node that mints ``_out = ?`` placeholders).
+      std::string libFam = libraryFamilyTag(n.callee);
+      if (!libFam.empty()) {
+        // Recognised + supported routines are caught above; reaching here
+        // means the callee is in the library-prefix universe but not in
+        // the supported set.
+        bool isSupported =
+            !mpiCalleeTag(n.callee).empty() ||
+            !fftw3CalleeTag(n.callee).empty() ||
+            !blasCalleeTag(n.callee).empty() ||
+            !lapackCalleeTag(n.callee).empty();
+        if (!isSupported) {
+          ASTNode un;
+          un.kind = "unsupported_libcall";
+          un.callee = normaliseBlasName(n.callee);
+          un.expr = libFam;  // "mpi" / "fftw3" / "blas" / "lapack"
+          nodes.push_back(std::move(un));
+          continue;
+        }
+      }
       // Fortran I/O runtime call: advance the open/read/write/close state
       // machine (see ``recognizeIoCall``).  Consumed here either way.
       if (n.callee.find("_FortranAio") != std::string::npos) {
@@ -1293,6 +2079,19 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
         if (auto* md = memref.getDefiningOp())
           if (mlir::isa<fir::AllocaOp>(md)) target = allocaSynthName(memref);
       if (target.empty()) continue;
+      // Drop stores whose RHS is the return value of a recognised FFTW3
+      // ``fftw_plan_dft_*`` call -- the plan SSA value is opaque
+      // (``TYPE(C_PTR)``) and is consumed by the matching ``execute_dft``
+      // recognition, so the user's ``plan = fftw_plan_dft_2d(...)``
+      // statement has no observable side effect in the SDFG.
+      if (auto* def = st.getValue().getDefiningOp())
+        if (auto src_call = mlir::dyn_cast<fir::CallOp>(def))
+          if (auto ref = src_call.getCallee()) {
+            std::string s;
+            llvm::raw_string_ostream os(s);
+            ref->print(os);
+            if (!fftw3CalleeTag(s).empty()) continue;
+          }
       auto expr = buildExpr(st.getValue(), 0);
       // Drop stores with unresolvable RHS  --  see note in
       // ``walkSCFBeforeRegion``'s fir.store handler.

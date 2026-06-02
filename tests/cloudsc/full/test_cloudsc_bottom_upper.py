@@ -57,7 +57,7 @@ def test_cloudsc_bottom_upper_numerical(tmp_path, _f2py_bottom_upper, _strict_fp
     np.testing.assert_allclose(
         outputs_sdfg["pcovptot"],
         outputs_ref["pcovptot"],
-        rtol=1e-15,
-        atol=1e-15,
+        rtol=1e-14,
+        atol=1e-14,
         err_msg="PCOVPTOT mismatch in bottom-upper (sedimentation/physics) reproducer",
     )

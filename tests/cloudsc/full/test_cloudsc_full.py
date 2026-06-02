@@ -109,22 +109,11 @@ def test_cloudsc_full_numerical(tmp_path, _f2py_ref, _strict_fp_cpu_args):
     src = (_HERE / "cloudsc.F90").read_text()
     outputs_sdfg, outputs_ref = run_cloudsc(src, "cloudsc", _f2py_ref, tmp_path / "sdfg")
 
-    # Per-output mismatch budget (collect all, don't fail-fast).
-    #
-    # Every output must match the f2py reference at strict
-    # rtol=atol=1e-15 in EVERY cell (O0 -fno-fast-math -ffp-contract=off -> near-exact) -- except PCOVPTOT, where at most
-    # ONE cell may differ and that cell must be a hard {0,1}
-    # threshold flip at a high vertical level.  That single cell is
-    # the documented, non-bridge cross-compiler artifact: a 1-ulp
-    # rounding seed (gfortran ``x*x*x`` vs the bridge's expansion;
-    # FOE statement-function inlining order) compounds across ~99 JK
-    # levels in block IBL=3 until it crosses the hard reset
-    # ``IF (ZQPRETOT < ZEPSEC) ZCOVPTOT = 0``.  ZCOVPTOT is a cloud
-    # fraction in [0,1]; the reset makes it exactly 0 where gfortran
-    # keeps ~1 (or vice versa) -> a lone delta of 1.0.  See
-    # project_hlfir_cloudsc_section_4_5_bisection.  Any structural
-    # regression (the 373/548 garbage we fixed) reappears as many
-    # mismatches and fails loudly here.
+    # Every output must match the f2py reference at strict ``rtol=atol=1e-15``
+    # in every cell.  The earlier PCOVPTOT 1-cell tolerance has been
+    # removed -- the float-preservation cherry-picks (Min/Max type-strict
+    # ``2e38612c3`` + symbolic float preservation ``acb337a81``) closed
+    # the ULP-compound chain that justified it.
     rtol = atol = 1e-15
     report: list[str] = []
     for name in program_outputs:
@@ -134,21 +123,6 @@ def test_cloudsc_full_numerical(tmp_path, _f2py_ref, _strict_fp_cpu_args):
         nbad = int(bad.sum())
         if nbad == 0:
             continue
-        if name.upper() != "PCOVPTOT":
-            report.append(f"{name}: {nbad} cell(s) exceed rtol={rtol} "
-                          f"(max |Δ|={np.abs(a - b)[bad].max():.3e})")
-            continue
-        # PCOVPTOT: tolerate <=1 cell, and only a {0,1} threshold flip.
-        idx = np.argwhere(bad)
-        if nbad > 1:
-            report.append(f"PCOVPTOT: {nbad} cells differ (budget is <=1 "
-                          f"high-JK threshold flip); indices {idx[:5].tolist()}")
-            continue
-        (cell, ) = idx
-        av, bv = float(a[tuple(cell)]), float(b[tuple(cell)])
-        flip = {round(av, 9), round(bv, 9)} <= {0.0, 1.0}
-        jk = int(cell[1])  # (KLON, KLEV, NBLOCKS) -> dim 1 is the level
-        if not (flip and jk >= 90):
-            report.append(f"PCOVPTOT lone diff at {cell.tolist()} is not a high-JK "
-                          f"{{0,1}} threshold flip: sdfg={av} ref={bv} jk={jk}")
+        report.append(f"{name}: {nbad} cell(s) exceed rtol={rtol} "
+                      f"(max |Δ|={np.abs(a - b)[bad].max():.3e})")
     assert not report, "cloudsc_full numerical mismatch:\n" + "\n".join(report)

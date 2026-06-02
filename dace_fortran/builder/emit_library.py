@@ -23,9 +23,9 @@ from dace_fortran.builder.access import acc, iter_view_dim_map
 # of the user's MPI_Comm at ``__dace_init`` time.  The pgrid + the
 # symbols that drive it live under fixed names so the bindings layer
 # and downstream tests can find them without grepping ``sdfg.symbols``.
-_USER_COMM_SYMBOL = "dace_user_comm"        # opaque(MPI_Comm) symbol -- f2c result from the wrapper
+_USER_COMM_SYMBOL = "dace_user_comm"  # opaque(MPI_Comm) symbol -- f2c result from the wrapper
 _USER_COMM_SIZE_SYMBOL = "dace_user_comm_size"  # int -- MPI_Comm_size(dace_user_comm), 1-D pgrid extent
-_USER_PGRID_NAME = "dace_user_pgrid"        # FortranProcessGrid descriptor name
+_USER_PGRID_NAME = "dace_user_pgrid"  # FortranProcessGrid descriptor name
 
 # Per-library-node connector conventions.  Kept here rather than on
 # ``LibNodeIntrinsic`` because the names are a property of the DaCe
@@ -45,7 +45,6 @@ _LIBCALL_CONNECTORS = {
     "MergeLibraryNode": (("_mrg_t", "_mrg_f", "_mrg_mask"), "_mrg_out"),
     "CountLibraryNode": (("_cnt_in", ), "_cnt_out"),
 }
-
 
 # SDFG dtype -> C scalar type for ``extern "C"`` declarations on
 # Fortran module BSS symbols forwarded via
@@ -437,6 +436,21 @@ def emit_mpi(builder, ctx, n, region):
                                   memlet=Memlet.simple(sname, "0:1", num_accesses=1))
         return
 
+    if n.callee == 'mpi_alltoall':
+        # ``call_args``: [sendbuf, recvbuf, optional comm].  The Alltoall
+        # library node has fixed ``_inbuffer`` / ``_outbuffer`` connectors
+        # and derives the count from the buffer memlets.
+        from dace.libraries.mpi.nodes.alltoall import Alltoall
+        sendbuf = n.call_args[0]
+        recvbuf = n.call_args[1]
+        node = Alltoall(f'_mpi_alltoall_{builder.nid()}')
+        state.add_node(node)
+        send_desc = ctx.sdfg.arrays[sendbuf]
+        recv_desc = ctx.sdfg.arrays[recvbuf]
+        state.add_edge(state.add_read(sendbuf), None, node, '_inbuffer', Memlet.from_array(sendbuf, send_desc))
+        state.add_edge(node, '_outbuffer', state.add_write(recvbuf), None, Memlet.from_array(recvbuf, recv_desc))
+        return
+
     buffer, partner, tag = n.call_args[0], n.call_args[1], n.call_args[2]
     bdesc = ctx.sdfg.arrays[buffer]
     bptr = dace.pointer(bdesc.dtype)
@@ -473,10 +487,10 @@ def emit_mpi(builder, ctx, n, region):
         if comm is None:
             return
         node.add_in_connector('_comm', dace.dtypes.opaque("MPI_Comm"))
-        state.add_memlet_path(
-            acc(builder, state, _USER_PGRID_NAME), node,
-            dst_conn='_comm',
-            memlet=Memlet(data=_USER_PGRID_NAME, subset='0'))
+        state.add_memlet_path(acc(builder, state, _USER_PGRID_NAME),
+                              node,
+                              dst_conn='_comm',
+                              memlet=Memlet(data=_USER_PGRID_NAME, subset='0'))
 
     if n.callee == 'mpi_send':
         from dace.libraries.mpi.nodes.send import Send
@@ -573,6 +587,444 @@ def emit_io(builder, ctx, n, region):
             state.add_edge(acc(builder, state, name), None, node, f"_in_{i}", memlet)
 
 
+def emit_fft_interpolate(builder, ctx, n, region):
+    """Lower a recognised QE ``fft_interpolate_*`` call to an
+    :class:`dace.libraries.fft.nodes.FFTInterpolate` lib node.
+
+    ``n.callee`` is ``"real"`` or ``"complex"`` (the variant suffix).
+    ``n.call_args`` is ``[v_in, v_out]`` -- the value arrays on the
+    source and target grids.  The descriptor arguments (``dfft_in`` /
+    ``dfft_out``) are ignored at recognition time and the lib node
+    derives the rank / extents from the memlets at expansion.
+    """
+    import importlib
+
+    fft_nodes = importlib.import_module("dace.libraries.fft.nodes")
+    ctx.flush_and_ensure(builder, region)
+    state = ctx.new_state(builder, region)
+
+    vin, vout = n.call_args[0], n.call_args[1]
+    node = fft_nodes.FFTInterpolate(f"fft_interpolate_{builder.nid()}", dtype_kind=n.callee)
+    state.add_node(node)
+    in_desc = ctx.sdfg.arrays[vin]
+    out_desc = ctx.sdfg.arrays[vout]
+    state.add_edge(state.add_read(vin), None, node, "_inp", Memlet.from_array(vin, in_desc))
+    state.add_edge(node, "_out", state.add_write(vout), None, Memlet.from_array(vout, out_desc))
+
+
+def emit_unsupported_libcall(builder, ctx, n, region):
+    """Raise a clear ``NotImplementedError`` for a Fortran call site that
+    matches a recognised library's call convention (MPI / FFTW3 / BLAS /
+    LAPACK) but isn't in the bridge's supported subset yet.
+
+    The C++ side's near-miss detector emits this ASTNode in place of the
+    generic ``call`` fallback so the failure surfaces with the library
+    family name + the canonical routine name instead of degrading to a
+    silently-invalid ``_out = ?`` tasklet body.
+    """
+    family_help = {
+        "mpi": "extend ``mpiCalleeTag`` in dispatch.cpp and add a handler in ``emit_mpi``",
+        "fftw3": "extend ``fftw3CalleeTag`` and ``buildFftw3CallNode`` in dispatch.cpp",
+        "blas": "extend ``blasCalleeTag`` and ``buildBlasCallNode`` in dispatch.cpp + add a handler to ``emit_blas``",
+        "lapack": "extend ``lapackCalleeTag`` and ``buildLapackCallNode`` + extend ``emit_lapack``",
+    }
+    hint = family_help.get(n.expr, "extend the bridge's library recognition")
+    raise NotImplementedError(f"Fortran call to {n.callee!r} matches the {n.expr.upper()} library convention "
+                              f"but is not in the bridge's supported subset.  To add support: {hint}.")
+
+
+def emit_blas(builder, ctx, n, region):
+    """Lower a recognised Fortran BLAS call (``kind == 'blascall'``) to a
+    :mod:`dace.libraries.blas` library node.
+
+    Currently supported routines (real32 / real64; complex twins out of
+    scope for the first wave):
+
+    * ``daxpy`` / ``saxpy``     -- ``y := alpha*x + y``
+    * ``dscal`` / ``sscal``     -- ``x := alpha*x``
+    * ``dgemv`` / ``sgemv``     -- ``y := alpha*op(A)*x + beta*y``
+    * ``dgemm`` / ``sgemm``     -- ``C := alpha*op(A)*op(B) + beta*C``
+
+    ``ddot`` is special-cased on the C++ side and threads through the
+    matching ``hlfir.assign`` site (not via this emitter).
+
+    ``n.expr`` carries the character flag literals (TRANSA/TRANSB / etc.)
+    when the routine has them; ``n.call_args`` carries the resolved
+    operand decl-names in the order documented in
+    :func:`buildBlasCallNode` (dispatch.cpp).
+    """
+    import importlib
+
+    import dace
+    import dace.symbolic as _ds
+
+    blas_nodes = importlib.import_module("dace.libraries.blas.nodes")
+    ctx.flush_and_ensure(builder, region)
+    state = ctx.new_state(builder, region)
+    routine = n.callee.lower()
+
+    # Collect scalar promotions (e.g. alpha, beta arriving as ``REAL :: alpha``
+    # length-1 arrays).  Stage them on the inbound interstate edge of the
+    # BLAS state so the symbol is bound BEFORE the lib node executes.
+    promotions: dict[str, str] = {}  # sym -> "array_name[0]"
+
+    def _scalar(name):
+        """Resolve a scalar literal / dummy to a value usable as a
+        :class:`SymbolicProperty` on the BLAS lib node.
+        """
+        try:
+            return float(name)
+        except (TypeError, ValueError):
+            pass
+        if name in ctx.sdfg.symbols:
+            return _ds.symbol(name)
+        if name in ctx.sdfg.arrays:
+            desc = ctx.sdfg.arrays[name]
+            sym = f"__blas_{name}_{builder.nid()}"
+            ctx.sdfg.add_symbol(sym, desc.dtype)
+            promotions[sym] = f"{name}[0]"
+            return _ds.symbol(sym)
+        ctx.sdfg.add_symbol(name, dace.float64)
+        return _ds.symbol(name)
+
+    def _apply_promotions():
+        """Stage any pending scalar promotions on the BLAS state's inbound edge."""
+        if not promotions:
+            return
+        for in_edge in ctx.sdfg.in_edges(state):
+            for sym, expr in promotions.items():
+                in_edge.data.assignments[sym] = expr
+            break
+
+    if routine in ("daxpy", "saxpy"):
+        alpha, x, y = n.call_args
+        node = blas_nodes.Axpy(f"axpy_{builder.nid()}", a=_scalar(alpha))
+        _apply_promotions()
+        state.add_node(node)
+        x_desc = ctx.sdfg.arrays[x]
+        y_desc = ctx.sdfg.arrays[y]
+        state.add_edge(state.add_read(x), None, node, "_x", Memlet.from_array(x, x_desc))
+        state.add_edge(state.add_read(y), None, node, "_y", Memlet.from_array(y, y_desc))
+        state.add_edge(node, "_res", state.add_write(y), None, Memlet.from_array(y, y_desc))
+        return
+
+    if routine in ("dscal", "sscal"):
+        alpha, x = n.call_args
+        node = blas_nodes.Scal(f"scal_{builder.nid()}", a=_scalar(alpha))
+        _apply_promotions()
+        state.add_node(node)
+        x_desc = ctx.sdfg.arrays[x]
+        state.add_edge(state.add_read(x), None, node, "_x", Memlet.from_array(x, x_desc))
+        state.add_edge(node, "_res", state.add_write(x), None, Memlet.from_array(x, x_desc))
+        return
+
+    if routine in ("dgemv", "sgemv"):
+        trans = n.expr.strip().strip("'\"").upper()[:1] or "N"
+        alpha, A, x, beta, y = n.call_args
+        node = blas_nodes.Gemv(f"gemv_{builder.nid()}", transA=(trans == "T"), alpha=_scalar(alpha), beta=_scalar(beta))
+        _apply_promotions()
+        state.add_node(node)
+        for arr, conn in ((A, "_A"), (x, "_x"), (y, "_y")):
+            desc = ctx.sdfg.arrays[arr]
+            state.add_edge(state.add_read(arr), None, node, conn, Memlet.from_array(arr, desc))
+        y_desc = ctx.sdfg.arrays[y]
+        state.add_edge(node, "_y", state.add_write(y), None, Memlet.from_array(y, y_desc))
+        return
+
+    if routine in ("dgemm", "sgemm"):
+        tA, tB = (s.strip("'\"").upper()[:1] or "N" for s in n.expr.split(","))
+        alpha, A, B, beta, C = n.call_args
+        node = blas_nodes.Gemm(f"gemm_{builder.nid()}",
+                               transA=(tA == "T"),
+                               transB=(tB == "T"),
+                               alpha=_scalar(alpha),
+                               beta=_scalar(beta))
+        _apply_promotions()
+        state.add_node(node)
+        for arr, conn in ((A, "_a"), (B, "_b"), (C, "_c")):
+            desc = ctx.sdfg.arrays[arr]
+            state.add_edge(state.add_read(arr), None, node, conn, Memlet.from_array(arr, desc))
+        c_desc = ctx.sdfg.arrays[C]
+        state.add_edge(node, "_c", state.add_write(C), None, Memlet.from_array(C, c_desc))
+        return
+
+    # ----- new-extension BLAS L1/L2/L3 lib nodes -------------------------------
+
+    def _wire_inplace_single(node_cls, x, **kwargs):
+        """Lib nodes with ``_x`` in -> ``_res`` out (Scal-style) on a single array."""
+        node = node_cls(f"{routine}_{builder.nid()}", **kwargs)
+        _apply_promotions()
+        state.add_node(node)
+        x_desc = ctx.sdfg.arrays[x]
+        state.add_edge(state.add_read(x), None, node, "_x", Memlet.from_array(x, x_desc))
+        state.add_edge(node, "_res", state.add_write(x), None, Memlet.from_array(x, x_desc))
+
+    if routine in ("dcopy", "scopy"):
+        x, y = n.call_args
+        node = blas_nodes.Copy(f"copy_{builder.nid()}")
+        _apply_promotions()
+        state.add_node(node)
+        x_desc = ctx.sdfg.arrays[x]
+        y_desc = ctx.sdfg.arrays[y]
+        state.add_edge(state.add_read(x), None, node, "_x", Memlet.from_array(x, x_desc))
+        state.add_edge(node, "_y", state.add_write(y), None, Memlet.from_array(y, y_desc))
+        return
+
+    if routine in ("dswap", "sswap"):
+        x, y = n.call_args
+        node = blas_nodes.Swap(f"swap_{builder.nid()}")
+        _apply_promotions()
+        state.add_node(node)
+        x_desc = ctx.sdfg.arrays[x]
+        y_desc = ctx.sdfg.arrays[y]
+        state.add_edge(state.add_read(x), None, node, "_xin", Memlet.from_array(x, x_desc))
+        state.add_edge(state.add_read(y), None, node, "_yin", Memlet.from_array(y, y_desc))
+        state.add_edge(node, "_xout", state.add_write(x), None, Memlet.from_array(x, x_desc))
+        state.add_edge(node, "_yout", state.add_write(y), None, Memlet.from_array(y, y_desc))
+        return
+
+    if routine in ("dger", "sger"):
+        alpha, x, y, A = n.call_args
+        node = blas_nodes.Ger(f"ger_{builder.nid()}", alpha=_scalar(alpha))
+        _apply_promotions()
+        state.add_node(node)
+        for arr, conn in ((A, "_A"), (x, "_x"), (y, "_y")):
+            desc = ctx.sdfg.arrays[arr]
+            state.add_edge(state.add_read(arr), None, node, conn, Memlet.from_array(arr, desc))
+        a_desc = ctx.sdfg.arrays[A]
+        state.add_edge(node, "_res", state.add_write(A), None, Memlet.from_array(A, a_desc))
+        return
+
+    if routine in ("dtrsv", "strsv", "dtrmv", "strmv"):
+        is_trsv = routine.endswith("trsv")
+        flags = n.expr.split(",")
+        uplo_l = flags[0].strip("'\"").upper()[:1] or "L"
+        trans_l = flags[1].strip("'\"").upper()[:1] or "N"
+        diag_l = flags[2].strip("'\"").upper()[:1] or "N"
+        A, x = n.call_args
+        cls = blas_nodes.Trsv if is_trsv else blas_nodes.Trmv
+        node = cls(f"{routine}_{builder.nid()}",
+                   uplo=(uplo_l == "U"),
+                   transA=(trans_l == "T"),
+                   unit_diag=(diag_l == "U"))
+        _apply_promotions()
+        state.add_node(node)
+        for arr, conn in ((A, "_A"), (x, "_xin")):
+            desc = ctx.sdfg.arrays[arr]
+            state.add_edge(state.add_read(arr), None, node, conn, Memlet.from_array(arr, desc))
+        x_desc = ctx.sdfg.arrays[x]
+        state.add_edge(node, "_xout", state.add_write(x), None, Memlet.from_array(x, x_desc))
+        return
+
+    if routine in ("dsymv", "ssymv"):
+        uplo_l = n.expr.strip("'\"").upper()[:1] or "L"
+        alpha, A, x, beta, y = n.call_args
+        node = blas_nodes.Symv(f"symv_{builder.nid()}", uplo=(uplo_l == "U"), alpha=_scalar(alpha), beta=_scalar(beta))
+        _apply_promotions()
+        state.add_node(node)
+        for arr, conn in ((A, "_A"), (x, "_x"), (y, "_yin")):
+            desc = ctx.sdfg.arrays[arr]
+            state.add_edge(state.add_read(arr), None, node, conn, Memlet.from_array(arr, desc))
+        y_desc = ctx.sdfg.arrays[y]
+        state.add_edge(node, "_yout", state.add_write(y), None, Memlet.from_array(y, y_desc))
+        return
+
+    if routine in ("dtrsm", "strsm", "dtrmm", "strmm"):
+        is_trsm = routine.endswith("trsm")
+        flags = n.expr.split(",")
+        side_l = flags[0].strip("'\"").upper()[:1] or "L"
+        uplo_l = flags[1].strip("'\"").upper()[:1] or "L"
+        trans_l = flags[2].strip("'\"").upper()[:1] or "N"
+        diag_l = flags[3].strip("'\"").upper()[:1] or "N"
+        alpha, A, B = n.call_args
+        cls = blas_nodes.Trsm if is_trsm else blas_nodes.Trmm
+        node = cls(f"{routine}_{builder.nid()}",
+                   side=(side_l == "R"),
+                   uplo=(uplo_l == "U"),
+                   transA=(trans_l == "T"),
+                   unit_diag=(diag_l == "U"),
+                   alpha=_scalar(alpha))
+        _apply_promotions()
+        state.add_node(node)
+        for arr, conn in ((A, "_A"), (B, "_Bin")):
+            desc = ctx.sdfg.arrays[arr]
+            state.add_edge(state.add_read(arr), None, node, conn, Memlet.from_array(arr, desc))
+        b_desc = ctx.sdfg.arrays[B]
+        state.add_edge(node, "_Bout", state.add_write(B), None, Memlet.from_array(B, b_desc))
+        return
+
+    if routine in ("dsymm", "ssymm"):
+        flags = n.expr.split(",")
+        side_l = flags[0].strip("'\"").upper()[:1] or "L"
+        uplo_l = flags[1].strip("'\"").upper()[:1] or "L"
+        alpha, A, B, beta, C = n.call_args
+        node = blas_nodes.Symm(f"symm_{builder.nid()}",
+                               side=(side_l == "R"),
+                               uplo=(uplo_l == "U"),
+                               alpha=_scalar(alpha),
+                               beta=_scalar(beta))
+        _apply_promotions()
+        state.add_node(node)
+        for arr, conn in ((A, "_A"), (B, "_B"), (C, "_Cin")):
+            desc = ctx.sdfg.arrays[arr]
+            state.add_edge(state.add_read(arr), None, node, conn, Memlet.from_array(arr, desc))
+        c_desc = ctx.sdfg.arrays[C]
+        state.add_edge(node, "_Cout", state.add_write(C), None, Memlet.from_array(C, c_desc))
+        return
+
+    if routine in ("dsyrk", "ssyrk"):
+        flags = n.expr.split(",")
+        uplo_l = flags[0].strip("'\"").upper()[:1] or "L"
+        trans_l = flags[1].strip("'\"").upper()[:1] or "N"
+        alpha, A, beta, C = n.call_args
+        node = blas_nodes.Syrk(f"syrk_{builder.nid()}",
+                               uplo=(uplo_l == "U"),
+                               transA=(trans_l == "T"),
+                               alpha=_scalar(alpha),
+                               beta=_scalar(beta))
+        _apply_promotions()
+        state.add_node(node)
+        for arr, conn in ((A, "_A"), (C, "_Cin")):
+            desc = ctx.sdfg.arrays[arr]
+            state.add_edge(state.add_read(arr), None, node, conn, Memlet.from_array(arr, desc))
+        c_desc = ctx.sdfg.arrays[C]
+        state.add_edge(node, "_Cout", state.add_write(C), None, Memlet.from_array(C, c_desc))
+        return
+
+
+def emit_lapack(builder, ctx, n, region):
+    """Lower a recognised Fortran LAPACK call (``kind == 'lapackcall'``)
+    to a :mod:`dace.libraries.lapack` library node.
+
+    Supported routines:
+
+    * ``dgetrf`` / ``sgetrf``  -- LU factorisation
+    * ``dpotrf`` / ``spotrf``  -- Cholesky factorisation
+    """
+    import importlib
+
+    lapack_nodes = importlib.import_module("dace.libraries.lapack.nodes")
+    ctx.flush_and_ensure(builder, region)
+    state = ctx.new_state(builder, region)
+    routine = n.callee.lower()
+
+    if routine in ("dgetrf", "sgetrf"):
+        A, ipiv, info = n.call_args
+        node = lapack_nodes.Getrf(f"getrf_{builder.nid()}")
+        state.add_node(node)
+        a_desc = ctx.sdfg.arrays[A]
+        state.add_edge(state.add_read(A), None, node, "_xin", Memlet.from_array(A, a_desc))
+        state.add_edge(node, "_xout", state.add_write(A), None, Memlet.from_array(A, a_desc))
+        if ipiv in ctx.sdfg.arrays:
+            ipiv_desc = ctx.sdfg.arrays[ipiv]
+            state.add_edge(node, "_ipiv", state.add_write(ipiv), None, Memlet.from_array(ipiv, ipiv_desc))
+        if info in ctx.sdfg.arrays:
+            info_desc = ctx.sdfg.arrays[info]
+            state.add_edge(node, "_res", state.add_write(info), None, Memlet.from_array(info, info_desc))
+        return
+
+    if routine in ("dpotrf", "spotrf"):
+        uplo_literal = n.expr.strip().strip("'\"").upper()[:1] or "L"
+        A, info = n.call_args
+        node = lapack_nodes.Potrf(f"potrf_{builder.nid()}", lower=(uplo_literal == "L"))
+        state.add_node(node)
+        a_desc = ctx.sdfg.arrays[A]
+        state.add_edge(state.add_read(A), None, node, "_xin", Memlet.from_array(A, a_desc))
+        state.add_edge(node, "_xout", state.add_write(A), None, Memlet.from_array(A, a_desc))
+        if info in ctx.sdfg.arrays:
+            info_desc = ctx.sdfg.arrays[info]
+            state.add_edge(node, "_res", state.add_write(info), None, Memlet.from_array(info, info_desc))
+        return
+
+    if routine in ("dpotrs", "spotrs"):
+        uplo_literal = n.expr.strip().strip("'\"").upper()[:1] or "L"
+        A, B, info = n.call_args
+        node = lapack_nodes.Potrs(f"potrs_{builder.nid()}", lower=(uplo_literal == "L"))
+        state.add_node(node)
+        a_desc = ctx.sdfg.arrays[A]
+        b_desc = ctx.sdfg.arrays[B]
+        state.add_edge(state.add_read(A), None, node, "_a", Memlet.from_array(A, a_desc))
+        state.add_edge(state.add_read(B), None, node, "_bin", Memlet.from_array(B, b_desc))
+        state.add_edge(node, "_bout", state.add_write(B), None, Memlet.from_array(B, b_desc))
+        if info in ctx.sdfg.arrays:
+            info_desc = ctx.sdfg.arrays[info]
+            state.add_edge(node, "_res", state.add_write(info), None, Memlet.from_array(info, info_desc))
+        return
+
+    if routine in ("dgeqrf", "sgeqrf"):
+        A, tau, info = n.call_args
+        node = lapack_nodes.Geqrf(f"geqrf_{builder.nid()}")
+        state.add_node(node)
+        a_desc = ctx.sdfg.arrays[A]
+        state.add_edge(state.add_read(A), None, node, "_ain", Memlet.from_array(A, a_desc))
+        state.add_edge(node, "_aout", state.add_write(A), None, Memlet.from_array(A, a_desc))
+        if tau in ctx.sdfg.arrays:
+            tau_desc = ctx.sdfg.arrays[tau]
+            state.add_edge(node, "_tau", state.add_write(tau), None, Memlet.from_array(tau, tau_desc))
+        if info in ctx.sdfg.arrays:
+            info_desc = ctx.sdfg.arrays[info]
+            state.add_edge(node, "_res", state.add_write(info), None, Memlet.from_array(info, info_desc))
+        return
+
+    if routine in ("dorgqr", "sorgqr"):
+        A, tau, info = n.call_args
+        node = lapack_nodes.Orgqr(f"orgqr_{builder.nid()}")
+        state.add_node(node)
+        a_desc = ctx.sdfg.arrays[A]
+        tau_desc = ctx.sdfg.arrays[tau]
+        state.add_edge(state.add_read(A), None, node, "_ain", Memlet.from_array(A, a_desc))
+        state.add_edge(state.add_read(tau), None, node, "_tau", Memlet.from_array(tau, tau_desc))
+        state.add_edge(node, "_aout", state.add_write(A), None, Memlet.from_array(A, a_desc))
+        if info in ctx.sdfg.arrays:
+            info_desc = ctx.sdfg.arrays[info]
+            state.add_edge(node, "_res", state.add_write(info), None, Memlet.from_array(info, info_desc))
+        return
+
+
+def emit_fft(builder, ctx, n, region):
+    """Lower a recognised FFTW3 ``fftw_execute_dft`` call site
+    (``kind == 'fftcall'``) to a :class:`dace.libraries.fft.nodes.FFT`
+    (forward) or :class:`dace.libraries.fft.nodes.IFFT` (backward)
+    library node.
+
+    The C++ side absorbs the matching ``fftw_plan_dft_*`` and
+    ``fftw_destroy_plan`` calls and only emits an ``fftcall`` ASTNode
+    for the executing call.  The plan's ``rank`` / ``dims`` /
+    ``direction`` are looked up at recognition time and carried on the
+    ``ASTNode``:
+
+    * ``n.expr`` -- ``"forward"`` (CUFFT_FORWARD / FFTW_FORWARD) or
+      ``"backward"``.
+    * ``n.call_args`` -- ``[in_array, out_array, dim0, dim1[, dim2]]``.
+
+    A fresh successor state is opened so the side-effecting FFT runs
+    in program order with respect to any other library calls
+    (mirroring the MPI / I/O patterns).
+    """
+    import importlib
+
+    fft_nodes = importlib.import_module("dace.libraries.fft.nodes")
+    ctx.flush_and_ensure(builder, region)
+    state = ctx.new_state(builder, region)
+
+    in_arr, out_arr = n.call_args[0], n.call_args[1]
+    is_inverse = (n.expr == "backward")
+    cls = fft_nodes.IFFT if is_inverse else fft_nodes.FFT
+    node = cls(f"{'i' if is_inverse else ''}fft_{builder.nid()}")
+    state.add_node(node)
+
+    in_desc = ctx.sdfg.arrays[in_arr]
+    out_desc = ctx.sdfg.arrays[out_arr]
+    # Use ``add_read`` / ``add_write`` (fresh nodes) rather than the cached
+    # ``acc`` helper: when the Fortran source is in-place (the same array
+    # for ``in`` and ``out``) the cache returns one shared access node and
+    # the resulting in+out edge on a single node forms a self-cycle that
+    # SDFG validation rejects.  A fresh read + write pair binds to the same
+    # underlying array but lets the dataflow stay acyclic.
+    state.add_edge(state.add_read(in_arr), None, node, "_inp", Memlet.from_array(in_arr, in_desc))
+    state.add_edge(node, "_out", state.add_write(out_arr), None, Memlet.from_array(out_arr, out_desc))
+
+
 def emit_call(builder, ctx, n, region):
     """Lower a *registered* external ``bind(c)`` call to an
     :class:`dace_fortran.external.ExternalCall` library node.
@@ -664,18 +1116,17 @@ def emit_call(builder, ctx, n, region):
                 # inlines callee's body, bypassing AoS marshalling
                 # entirely); (b) wait for the v2 marshal expansion that
                 # supports non-inline-flat members.
-                raise ValueError(
-                    f"external {callee!r}: 'aos' arg #{gi} has no "
-                    f"marshalling group.  Most likely "
-                    f"hlfir-marshal-external-structs skipped this callee "
-                    f"because its struct has non-inline-flat members "
-                    f"(allocatable / pointer arrays, nested derived types, "
-                    f"dynamic shape).  Workarounds: (1) use "
-                    f"dace_fortran.external.inline_external to fold the "
-                    f"callee's SDFG into the caller (no marshalling "
-                    f"needed); (2) restructure the callee to take only "
-                    f"inline-flat members; (3) wait for the v2 permissive "
-                    f"marshal expansion (Phase 2.3.E).")
+                raise ValueError(f"external {callee!r}: 'aos' arg #{gi} has no "
+                                 f"marshalling group.  Most likely "
+                                 f"hlfir-marshal-external-structs skipped this callee "
+                                 f"because its struct has non-inline-flat members "
+                                 f"(allocatable / pointer arrays, nested derived types, "
+                                 f"dynamic shape).  Workarounds: (1) use "
+                                 f"dace_fortran.external.inline_external to fold the "
+                                 f"callee's SDFG into the caller (no marshalling "
+                                 f"needed); (2) restructure the callee to take only "
+                                 f"inline-flat members; (3) wait for the v2 permissive "
+                                 f"marshal expansion (Phase 2.3.E).")
             _, count = group_pairs[gi]
             group_c_abi[gi] = a.resolved_c_abi()
             for _ in range(count):
@@ -747,12 +1198,15 @@ def emit_call(builder, ctx, n, region):
             writes = intent in ('out', 'inout')
             cin, cout = f"_a{i}", f"_a{i}_o"
             if reads:
-                in_conns.append(cin); ptr_of[cin] = dt; edges.append((name, cin, 'r'))
+                in_conns.append(cin)
+                ptr_of[cin] = dt
+                edges.append((name, cin, 'r'))
             if writes:
-                out_conns.append(cout); ptr_of[cout] = dt; edges.append((name, cout, 'w'))
-            group_members[gid].append((ctype, nel, cin if reads else None,
-                                       cout if writes else None,
-                                       tuple(shape) if shape else ()))
+                out_conns.append(cout)
+                ptr_of[cout] = dt
+                edges.append((name, cout, 'w'))
+            group_members[gid].append(
+                (ctype, nel, cin if reads else None, cout if writes else None, tuple(shape) if shape else ()))
             if gid != prev_gid:
                 logical_terms.append(('aos', gid))
             prev_gid = gid
@@ -764,7 +1218,9 @@ def emit_call(builder, ctx, n, region):
         if kind == 'comm':
             ctx.sdfg.arrays[name].dtype = dace.dtypes.opaque("MPI_Comm")
             cin = f"_a{i}"
-            in_conns.append(cin); comm_conns.add(cin); edges.append((name, cin, 'r'))
+            in_conns.append(cin)
+            comm_conns.add(cin)
+            edges.append((name, cin, 'r'))
             logical_terms.append(('lit', cin))
             continue
         dt = ctx.sdfg.arrays[name].dtype
@@ -773,16 +1229,21 @@ def emit_call(builder, ctx, n, region):
             writes = intent in ('out', 'inout')
             cin, cout = f"_a{i}", f"_a{i}_o"
             if reads:
-                in_conns.append(cin); ptr_of[cin] = dt; edges.append((name, cin, 'r'))
+                in_conns.append(cin)
+                ptr_of[cin] = dt
+                edges.append((name, cin, 'r'))
             if writes:
-                out_conns.append(cout); ptr_of[cout] = dt; edges.append((name, cout, 'w'))
+                out_conns.append(cout)
+                ptr_of[cout] = dt
+                edges.append((name, cout, 'w'))
             arr_shape = tuple(getattr(ctx.sdfg.arrays[name], "shape", ()) or ())
             if sig.dynamic_extents_abi and _shape_is_symbolic(arr_shape):
                 array_shape_at_term[len(logical_terms)] = arr_shape
             logical_terms.append(('lit', cout if writes else cin))
         else:  # 'scalar'
             cin = f"_a{i}"
-            in_conns.append(cin); edges.append((name, cin, 'r'))
+            in_conns.append(cin)
+            edges.append((name, cin, 'r'))
             logical_terms.append(('lit', cin))
 
     # Assemble the C body.  Per aos group, ``group_c_abi[gid]`` picks
@@ -827,7 +1288,8 @@ def emit_call(builder, ctx, n, region):
                 call_args_c.append(tok)
             continue
         # ``aos_struct_ptr`` path (today's default).
-        buf = f"_aosbuf{gid}"; bufname[gid] = buf
+        buf = f"_aosbuf{gid}"
+        bufname[gid] = buf
         # One struct field per member: ``T mK;`` (scalar) or ``T mK[N];``
         # (array).  The field layout mirrors the Fortran derived type, so the
         # external's AoS pointer addresses the same contiguous bytes.
@@ -836,11 +1298,8 @@ def emit_call(builder, ctx, n, region):
         # for ``inline_external`` rewrite before codegen.  Render the field
         # as a pointer placeholder so the surrounding struct stays well-
         # formed and skip the pack/unpack lines below.
-        fields = " ".join(
-            (f"{ct} m{k};" if nel == 1 else
-             f"{ct}* m{k};" if nel == 0 else
-             f"{ct} m{k}[{nel}];")
-            for k, (ct, nel, _, _, _) in enumerate(mems))
+        fields = " ".join((f"{ct} m{k};" if nel == 1 else f"{ct}* m{k};" if nel == 0 else f"{ct} m{k}[{nel}];")
+                          for k, (ct, nel, _, _, _) in enumerate(mems))
         body_lines.append(f"struct {{ {fields} }} {buf};")
         for k, (ct, nel, cin, cout, _shape) in enumerate(mems):
             if cin is None or nel == 0:
@@ -867,9 +1326,8 @@ def emit_call(builder, ctx, n, region):
         sym = f"__{module}_MOD_{member}"
         ct = _MOD_FORWARD_CTYPE.get(dtype)
         if ct is None:
-            raise ValueError(
-                f"external {callee!r}: unsupported module_symbol_forward "
-                f"dtype {dtype!r} for ``{module}::{member}``")
+            raise ValueError(f"external {callee!r}: unsupported module_symbol_forward "
+                             f"dtype {dtype!r} for ``{module}::{member}``")
         if rank == 0:
             # gfortran emits the scalar BSS as a ``<ct>``.  Pass the
             # value by value.  ``extern`` (no language linkage --
@@ -948,9 +1406,8 @@ def emit_call(builder, ctx, n, region):
     for module, member, dtype, rank in sig.module_symbol_forward:
         ct = _MOD_FORWARD_CTYPE.get(dtype)
         if ct is None:
-            raise ValueError(
-                f"external {callee!r}: unsupported module_symbol_forward "
-                f"dtype {dtype!r} for ``{module}::{member}``")
+            raise ValueError(f"external {callee!r}: unsupported module_symbol_forward "
+                             f"dtype {dtype!r} for ``{module}::{member}``")
         decl_types.append(f"{ct}*" if rank > 0 else ct)
     c_decl = f'extern "C" void {sig.c_name}({", ".join(decl_types) or "void"});'
 

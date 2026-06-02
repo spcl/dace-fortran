@@ -51,15 +51,20 @@ from dace_fortran.builder.descriptors import (
     sdfg_name,
 )
 from dace_fortran.builder.emit_library import (
+    emit_blas,
     emit_break,
     emit_call,
     emit_copy,
+    emit_fft,
+    emit_fft_interpolate,
     emit_io,
+    emit_lapack,
     emit_libcall,
     emit_memset,
     emit_mpi,
     emit_reduce,
     emit_return,
+    emit_unsupported_libcall,
 )
 from dace_fortran.builder.emit_cfg import (
     emit_assign,
@@ -258,8 +263,7 @@ def _specialize_symbol(sdfg: SDFG, symbol_name: str, value):
     from dace.sdfg.nodes import NestedSDFG
     val = str(value)
     for sd in list(sdfg.all_sdfgs_recursive()):
-        if (symbol_name in sd.symbols
-                or any(str(s) == symbol_name for s in sd.free_symbols)):
+        if (symbol_name in sd.symbols or any(str(s) == symbol_name for s in sd.free_symbols)):
             sd.replace_dict({symbol_name: val})
         if symbol_name in sd.symbols:
             sd.remove_symbol(symbol_name)
@@ -712,12 +716,11 @@ class SDFGBuilder:
                     written.add(node.data)
         for sym, (arr, idx) in prov.items():
             if arr in written:
-                raise ValueError(
-                    f"array-element value '{arr}({idx})' is used as a data-access "
-                    f"dimension (promoted to symbol '{sym}'), but '{arr}' is "
-                    f"written in the SDFG -- the symbol would capture a stale "
-                    f"value.  This promotion requires '{arr}' to stay constant "
-                    f"within the scope where '{sym}' is live.")
+                raise ValueError(f"array-element value '{arr}({idx})' is used as a data-access "
+                                 f"dimension (promoted to symbol '{sym}'), but '{arr}' is "
+                                 f"written in the SDFG -- the symbol would capture a stale "
+                                 f"value.  This promotion requires '{arr}' to stay constant "
+                                 f"within the scope where '{sym}' is live.")
 
     def _run_post_gen_passes(self, sdfg: SDFG):
         """Run the post-generation cleanup passes that take a freshly-
@@ -845,10 +848,7 @@ class SDFGBuilder:
         from dace import dtypes as _dtypes
         leaked_syms = [
             k for k in sdfg.free_symbols
-            if k not in sdfg.symbols
-            and k not in sdfg.arrays
-            and not k.startswith('__dace')
-            and k not in needed_syms
+            if k not in sdfg.symbols and k not in sdfg.arrays and not k.startswith('__dace') and k not in needed_syms
         ]
         for k in leaked_syms:
             sdfg.symbols[k] = _dtypes.int64
@@ -919,8 +919,7 @@ class SDFGBuilder:
         # set from ``sdfg.free_symbols`` filtered against the
         # use-site-derived ``needed_syms`` so leaked unused-transient
         # shape symbols don't bloat the signature.
-        free_syms = tuple(sorted(
-            str(s) for s in sdfg.free_symbols if s not in leaked_syms))
+        free_syms = tuple(sorted(str(s) for s in sdfg.free_symbols if s not in leaked_syms))
         for s in free_syms:
             if s not in module_symbol_origins and s in origin_by_name:
                 module_symbol_origins[s] = origin_by_name[s]
@@ -973,17 +972,16 @@ class SDFGBuilder:
         if not bad:
             return
         bullet = '\n  '.join(f'access[{lbl}] data={d!r}' for lbl, d in bad)
-        raise RuntimeError(
-            f'unresolved access-node data field(s) in SDFG (not in '
-            f'``sdfg.arrays``):\n  {bullet}\n\n'
-            'Most likely cause: the bridge collapsed an unflattened '
-            'struct-member access chain (e.g. ``s%X(...)%Y``) to the '
-            'bare struct base name and landed the result as an access '
-            'node.  Common pattern: an alloc-array-of-records member '
-            '(``box<heap<array<? x record>>>``) whose inner '
-            'record-element members are read as scalars -- the flatten '
-            'pass skips the member and the access chain dead-ends at '
-            'the struct root.')
+        raise RuntimeError(f'unresolved access-node data field(s) in SDFG (not in '
+                           f'``sdfg.arrays``):\n  {bullet}\n\n'
+                           'Most likely cause: the bridge collapsed an unflattened '
+                           'struct-member access chain (e.g. ``s%X(...)%Y``) to the '
+                           'bare struct base name and landed the result as an access '
+                           'node.  Common pattern: an alloc-array-of-records member '
+                           '(``box<heap<array<? x record>>>``) whose inner '
+                           'record-element members are read as scalars -- the flatten '
+                           'pass skips the member and the access chain dead-ends at '
+                           'the struct root.')
 
     def _collect_needed_symbols(self, sdfg: SDFG) -> set:
         """Return the set of symbol names ACTUALLY referenced at a use
@@ -1020,12 +1018,12 @@ class SDFGBuilder:
         # ``SDFG._used_symbols_internal`` -- which adds every array's
         # shape / stride symbols regardless of whether the array is
         # referenced anywhere.
-        free_syms, defined_syms, _ = ControlFlowRegion._used_symbols_internal(
-            sdfg, all_symbols=True,
-            defined_syms=set(defined),
-            free_syms=set(),
-            used_before_assignment=set(),
-            with_contents=True)
+        free_syms, defined_syms, _ = ControlFlowRegion._used_symbols_internal(sdfg,
+                                                                              all_symbols=True,
+                                                                              defined_syms=set(defined),
+                                                                              free_syms=set(),
+                                                                              used_before_assignment=set(),
+                                                                              with_contents=True)
         # SDFG-declared symbols are part of the free set when
         # ``all_symbols=True`` (mirrors the SDFG override at
         # ``sdfg.py:3099``).
@@ -1078,12 +1076,8 @@ class SDFGBuilder:
         """
         import re
         from dace.sdfg.nodes import Tasklet, NestedSDFG
-        unresolved = sorted(
-            k for k in needed
-            if k not in sdfg.symbols
-            and k not in sdfg.arrays
-            and not k.startswith('__dace')
-        )
+        unresolved = sorted(k for k in needed
+                            if k not in sdfg.symbols and k not in sdfg.arrays and not k.startswith('__dace'))
         if not unresolved:
             return
         # Find up to three representative use sites for the first symbol so
@@ -1100,43 +1094,38 @@ class SDFGBuilder:
                     continue
                 subset_str = f'{m.subset}'
                 if pat.search(subset_str):
-                    examples.append(
-                        f'memlet[{state.label}] data={m.data} '
-                        f'subset={subset_str[:160]}')
+                    examples.append(f'memlet[{state.label}] data={m.data} '
+                                    f'subset={subset_str[:160]}')
                     if len(examples) >= 3:
                         break
             if len(examples) >= 3:
                 break
             for n in state.nodes():
                 if isinstance(n, Tasklet) and pat.search(n.code.as_string):
-                    examples.append(
-                        f'tasklet[{state.label}::{n.label}] '
-                        f'code={n.code.as_string[:160]}')
+                    examples.append(f'tasklet[{state.label}::{n.label}] '
+                                    f'code={n.code.as_string[:160]}')
                     if len(examples) >= 3:
                         break
                 if isinstance(n, NestedSDFG):
                     for k, v in n.symbol_mapping.items():
                         if pat.search(str(v)):
-                            examples.append(
-                                f'nsdfg[{state.label}::{n.label}] '
-                                f'symbol_mapping[{k}]={v}')
+                            examples.append(f'nsdfg[{state.label}::{n.label}] '
+                                            f'symbol_mapping[{k}]={v}')
                             if len(examples) >= 3:
                                 break
             if len(examples) >= 3:
                 break
-        hint = (
-            'Most likely cause: the bridge collapsed an unflattened struct-'
-            'member access chain (e.g. ``s%X(...)%Y``) to the bare struct '
-            'base name.  Common pattern: an alloc-array-of-records member '
-            '(``box<heap<array<? x record>>>``) whose inner record-element '
-            'members are read as scalars -- the flatten pass skips the '
-            'member and the access chain dead-ends at the struct root.')
+        hint = ('Most likely cause: the bridge collapsed an unflattened struct-'
+                'member access chain (e.g. ``s%X(...)%Y``) to the bare struct '
+                'base name.  Common pattern: an alloc-array-of-records member '
+                '(``box<heap<array<? x record>>>``) whose inner record-element '
+                'members are read as scalars -- the flatten pass skips the '
+                'member and the access chain dead-ends at the struct root.')
         bullet = '\n  '.join(examples) if examples else '(no use site found)'
-        raise RuntimeError(
-            f'unresolved free symbol(s) in SDFG: {unresolved[:5]}'
-            f'{"" if len(unresolved) <= 5 else f" (+{len(unresolved) - 5} more)"}'
-            f'\nfirst representative use site(s) for {target!r}:\n  {bullet}'
-            f'\n\n{hint}')
+        raise RuntimeError(f'unresolved free symbol(s) in SDFG: {unresolved[:5]}'
+                           f'{"" if len(unresolved) <= 5 else f" (+{len(unresolved) - 5} more)"}'
+                           f'\nfirst representative use site(s) for {target!r}:\n  {bullet}'
+                           f'\n\n{hint}')
 
     def nid(self) -> int:
         """Globally unique integer.  Shared across ``_Ctx`` instances so
@@ -1158,6 +1147,11 @@ class SDFGBuilder:
         "libcall": emit_libcall,
         "mpicall": emit_mpi,
         "iocall": emit_io,
+        "fftcall": emit_fft,
+        "blascall": emit_blas,
+        "lapackcall": emit_lapack,
+        "fft_interpolate": emit_fft_interpolate,
+        "unsupported_libcall": emit_unsupported_libcall,
         "call": emit_call,
         "break": emit_break,
         "return": emit_return,

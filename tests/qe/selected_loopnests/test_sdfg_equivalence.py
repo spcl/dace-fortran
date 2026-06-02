@@ -1,7 +1,7 @@
 """End-to-end tests for the QE / SC26-Layout-AD experiment kernels
 (E1-E5) translated to Fortran.
 
-Each kernel is in ``tests/hlfir/qe_loopnests/qe_eN_*.f90``;
+Each kernel is in ``tests/qe/selected_loopnests/qe_eN_*.f90``;
 this harness compiles it through the bridge AND through ``f2py``,
 then asserts numerical equivalence on a small random input.
 

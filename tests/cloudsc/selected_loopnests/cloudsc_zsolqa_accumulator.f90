@@ -15,7 +15,7 @@ SUBROUTINE zsolqa_accumulator(n, nclv, kidia, kfdia, ncldqv, ncldqr, ncldqs, &
   ! the full vertical column and triggers the cloudsc_full 26/548
   ! PCOVPTOT mismatch.
   !
-  ! If this test fails at rtol=atol=1e-15, the WCR-vs-RMW hypothesis is
+  ! If this test fails at rtol=atol=1e-14, the WCR-vs-RMW hypothesis is
   ! confirmed.  The fix would be to emit explicit read+tasklet+write
   ! (no WCR) for any ``A(i,j) = A(i,j) + expr`` pattern with a single
   ! producer.

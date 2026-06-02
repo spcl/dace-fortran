@@ -2,7 +2,7 @@
 the bridge -- the tier-3 / automake integration end to end.
 
 Reproducible setup (a runner script ships alongside this test):
-``tests/icon_dycore/setup_icon_dycore.sh`` apt-installs the deps, shallow
+``tests/icon/dycore/setup_icon_dycore.sh`` apt-installs the deps, shallow
 -clones ICON at the pinned tag, inits submodules recursively (JSBACH, yaxt,
 cdi, mtime, tixi, ... -- the externals the build reads), drops in the
 ``config/generic/flang`` wrapper, configures, and runs ``bear -- make`` to
@@ -43,7 +43,7 @@ def _resolve_compile_commands() -> Path | None:
 
     1. ``ICON_DYCORE_CC`` environment variable -- explicit override, the
        canonical CI / runner contract.
-    2. The in-test build dir ``tests/icon_dycore/.icon_build/
+    2. The in-test build dir ``tests/icon/dycore/.icon_build/
        compile_commands.json``.  Matches what :file:`setup_icon_dycore.sh`
        produces by default (``BUILD_DIR=<this-dir>/.icon_build``); keeps
        the build state owned by the test rather than scattered at the
@@ -55,7 +55,7 @@ def _resolve_compile_commands() -> Path | None:
     env = os.environ.get("ICON_DYCORE_CC")
     if env and Path(env).is_file():
         return Path(env)
-    # ``__file__`` -> tests/icon_dycore/<this>; ``.icon_build`` lives
+    # ``__file__`` -> tests/icon/dycore/<this>; ``.icon_build`` lives
     # next to this test file as the per-test scratch dir.
     in_test = Path(__file__).resolve().parent / ".icon_build" / "compile_commands.json"
     if in_test.is_file():
@@ -64,8 +64,8 @@ def _resolve_compile_commands() -> Path | None:
 
 
 _SETUP_HINT = ("set ICON_DYCORE_CC to a built compile_commands.json, "
-               "or run tests/icon_dycore/setup_icon_dycore.sh "
-               "(populates tests/icon_dycore/.icon_build/compile_commands.json)")
+               "or run tests/icon/dycore/setup_icon_dycore.sh "
+               "(populates tests/icon/dycore/.icon_build/compile_commands.json)")
 
 pytestmark = [
     pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH"),
@@ -91,8 +91,7 @@ def test_solve_nonhydro_emits_hlfir(tmp_path):
     stubs = [_STUBS_DIR / "mpi_stub.f90", _STUBS_DIR / "netcdf_stub.f90"]
     # entry= restricts the ~900-TU ICON database to solve_nh's USE-closure;
     # the plain Fortran name is resolved to the mangled symbol from the sources.
-    out = emit(compile_commands=cc, out_dir=tmp_path / "hlfir",
-               stubs=stubs, entry=_ENTRY)
+    out = emit(compile_commands=cc, out_dir=tmp_path / "hlfir", stubs=stubs, entry=_ENTRY)
     # The dycore's func must appear in one of the emitted .hlfir files --
     # i.e. flang got through the preprocessor + frontend on solve_nh.
     func_re = re.compile(rf"func\.func\s+(?!private\b)@{re.escape(_ENTRY_SYM)}\s*\(")

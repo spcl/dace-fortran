@@ -4,7 +4,7 @@
 > against the local Ubuntu 25.10 install (GCC 15.2 / OpenMPI 5 /
 > system NetCDF + HDF5 + libxml2 + eccodes + fyaml + lapack), against
 > ICON release `2026.04` at `gitlab.dkrz.de/icon/icon-model` and the
-> e2e tests at `tests/icon_full/`.  All paths in
+> e2e tests at `tests/icon/full/`.  All paths in
 > `scripts/configure_icon_dace_cpu.sh` are pinned to apt defaults --
 > adapt the four "Ubuntu apt-installed deps" path blocks at the top
 > of the script for your site.
@@ -59,12 +59,12 @@ into ICON's own object files alongside everything else.  So the real
 
 ## Tested against the in-tree e2e suite
 
-  * `tests/icon_full/test_dycore_velocity_external_e2e.py` —
+  * `tests/icon/full/test_dycore_velocity_external_e2e.py` —
     `velocity_tendencies` via per_member_soa C ABI + Fortran-no-bind-c
     sync + C++ sync, bit-exact under `-O0`.
-  * `tests/icon_full/test_standalone_dycore_sync_e2e.py` —
+  * `tests/icon/full/test_standalone_dycore_sync_e2e.py` —
     minimal standalone dycore + no-op sync, bit-exact.
-  * `tests/icon_full/test_dycore_mpi_sync_e2e.py` — 2-rank dycore +
+  * `tests/icon/full/test_dycore_mpi_sync_e2e.py` — 2-rank dycore +
     real `MPI_Sendrecv` halo exchange, bit-exact per rank.
 
 ## Step 1 — clone the repos
@@ -111,7 +111,7 @@ bundle** that defines:
     `t_nh_metrics`, `t_nh_diag`, ...) -- only the shape /
     members matter, not the bodies of any methods.
 
-The in-tree test file `tests/icon_full/velocity_full.f90` is exactly
+The in-tree test file `tests/icon/full/velocity_full.f90` is exactly
 this bundle and is the right starting point.  Maintain it alongside
 ICON releases (a `git log` diff against ICON's `mo_velocity_advection.f90`
 catches drifts).

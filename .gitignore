@@ -201,3 +201,16 @@ _all_tests/
 # mo_kind + mo_physical_constants).  Kept under tests/icon/graupel/ as
 # the canonical bridge test for the AES microphysics scheme.
 !tests/icon/graupel/**/*.f90
+# QE exx_bp::vexx_bp_k_gpu parse anchor (pre-processed flat .f90 from the
+# f2dace-qe-source repo's pruning pipeline).  Kept under tests/qe/exx_bp/.
+!tests/qe/exx_bp/**/*.f90
+# Standalone FFTW3 2-D / 3-D probe under tests/fft/.  Pinned as the bridge
+# anchor for FFTW3 call-site recognition (currently xfailed).
+!tests/fft/**/*.f90
+# BLAS / LAPACK / MPI-Alltoall frontend-recognition probes (one .f90 per
+# recognised callee).  Kept under tests/blas/, tests/lapack/, tests/mpi_alltoall/.
+!tests/blas/**/*.f90
+!tests/lapack/**/*.f90
+!tests/mpi_alltoall/**/*.f90
+# QE-style ``fwfft`` / ``invfft`` frontend-recognition probes.
+!tests/qe_fft/**/*.f90
