@@ -1300,6 +1300,7 @@ ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation *srcOp,
   bool is_count = (opName == "hlfir.count");
   bool is_minloc = (opName == "hlfir.minloc");
   bool is_maxloc = (opName == "hlfir.maxloc");
+  bool is_cshift = (opName == "hlfir.cshift");
   if (is_count) {
     if (srcOp->getNumOperands() > 0) {
       auto [nm, sub] = resolveSliceSubset(srcOp->getOperand(0), callee, 0);
@@ -1348,6 +1349,29 @@ ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation *srcOp,
       if (auto dim = maxOp.getDim()) pushDim(dim);
       if (auto mask = maxOp.getMask()) pushMask(mask);
       if (auto back = maxOp.getBack()) pushBack(back);
+    }
+  } else if (is_cshift) {
+    // ``hlfir.cshift %array %shift [dim %dim]``.  Stash the source
+    // array name in ``call_args`` (whole-array memlet) and the shift
+    // expression in ``options["shift"]``; the optional dim lands in
+    // ``reduce_axes`` (0-based), matching MINLOC / MAXLOC.
+    if (auto cshOp = mlir::dyn_cast<hlfir::CShiftOp>(srcOp)) {
+      auto [nm, sub] = resolveSliceSubset(cshOp.getArray(), callee, 0);
+      n.call_args.push_back(nm);
+      n.call_arg_subsets.push_back(sub);
+      auto shiftVal = cshOp.getShift();
+      if (auto c = traceConstInt(shiftVal)) {
+        n.options["shift"] = std::to_string(*c);
+      } else {
+        auto sExpr = buildIndexExpr(shiftVal, 0);
+        if (sExpr.empty() || sExpr == "?")
+          throw std::runtime_error("hlfir.cshift: cannot resolve shift expression");
+        n.options["shift"] = sExpr;
+      }
+      if (auto dim = cshOp.getDim()) {
+        if (auto c = traceConstInt(dim))
+          n.reduce_axes.push_back(*c - 1);
+      }
     }
   } else {
     unsigned argIdx = 0;

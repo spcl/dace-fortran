@@ -13,6 +13,7 @@ and none is big enough to earn its own file.
 import importlib
 import math
 
+import dace.symbolic
 from dace import InterstateEdge, Memlet
 
 from dace_fortran.builder.access import acc, iter_view_dim_map
@@ -50,6 +51,8 @@ _LIBCALL_CONNECTORS = {
     # ``emit_libcall`` adds it after the mandatory ``_x``.
     "ArgMin": (("_x", ), "_idx"),
     "ArgMax": (("_x", ), "_idx"),
+    # Fortran CSHIFT -- single-array input + shift-via-symbol output.
+    "CShift": (("_x", ), "_out"),
 }
 
 # SDFG dtype -> C scalar type for ``extern "C"`` declarations on
@@ -215,8 +218,61 @@ def emit_libcall(builder, ctx, n, region):
     internally (GEMM / GEMV / Dot) based on operand ranks.
     """
     from dace_fortran.intrinsics import libnode_spec
+    import dace.dtypes as dtypes
 
     state = ctx.flush_and_ensure(builder, region)
+
+    # ``hlfir.matmul_transpose`` -- ``C = MATMUL(TRANSPOSE(A), B)``.
+    # Compose into a Transpose libcall (A -> A_T transient) plus a
+    # MatMul libcall (A_T, B -> C) instead of adding a new lib node;
+    # the existing Transpose + MatMul expansions cover every backend
+    # (pure / OpenBLAS / MKL / cuBLAS) at the cost of one transient
+    # copy.  Future fused-cuBLAS / fused-MKL path can swap in a
+    # MatMul with ``transA=True`` once that flag is wired through
+    # SpecializeMatMul.
+    if n.callee == "matmul_transpose":
+        from types import SimpleNamespace
+        if len(n.call_args) != 2:
+            raise RuntimeError(f"matmul_transpose: expected 2 operands, got {len(n.call_args)}")
+        a_name, b_name = n.call_args
+        a_desc = ctx.sdfg.arrays[a_name]
+        if len(a_desc.shape) != 2:
+            raise NotImplementedError("matmul_transpose: rank != 2 LHS not yet supported")
+        at_shape = [a_desc.shape[1], a_desc.shape[0]]
+        at_name = f"__matmul_t_{builder.nid()}"
+        ctx.sdfg.add_transient(at_name, at_shape, a_desc.dtype)
+        # Synthesise a Transpose libcall ASTNode and reuse the
+        # generic path.  ``ASTNode`` is a read-only C++ binding so
+        # use a duck-typed ``SimpleNamespace`` carrying the field set
+        # the generic emit code reads (kind / callee / target /
+        # target_is_array / call_args / call_arg_subsets / accesses /
+        # reduce_axes / options).
+        t_node = SimpleNamespace(
+            kind="libcall",
+            callee="transpose",
+            target=at_name,
+            target_is_array=True,
+            call_args=[a_name],
+            call_arg_subsets=[''],
+            accesses=[],
+            reduce_axes=[],
+            options={},
+        )
+        emit_libcall(builder, ctx, t_node, region)
+        # Then MatMul of (A_T, B) into the original target.
+        m_node = SimpleNamespace(
+            kind="libcall",
+            callee="matmul",
+            target=n.target,
+            target_is_array=n.target_is_array,
+            call_args=[at_name, b_name],
+            call_arg_subsets=['', ''],
+            accesses=list(n.accesses),
+            reduce_axes=[],
+            options={},
+        )
+        emit_libcall(builder, ctx, m_node, region)
+        return
 
     spec = libnode_spec(n.callee)
     if spec is None:
@@ -258,6 +314,42 @@ def emit_libcall(builder, ctx, n, region):
             dim=dim,
             mask=has_mask,
         )
+    elif spec.node_cls == "CShift":
+        # Fortran CSHIFT -- bridge stores the shift expression in
+        # ``options['shift']`` (a Python-compatible string built by
+        # ``buildLibCallNode``'s ``hlfir.cshift`` arm); the optional
+        # axis lives in ``reduce_axes`` 0-based.
+        opts = getattr(n, 'options', None) or {}
+        shift_expr = opts.get('shift', None)
+        shift = dace.symbolic.pystr_to_symbolic(shift_expr) if shift_expr else None  # noqa: F405
+        dim = (n.reduce_axes[0] + 1) if n.reduce_axes else 1
+        node = cls(f"{spec.name}_{n.target}_{builder.nid()}", dim=dim, shift=shift)
+        # Promote every free symbol the shift expression depends on
+        # to an SDFG-level symbol -- the scalar-INTENT(IN) Fortran
+        # arg might otherwise land as a Scalar array (e.g. when it
+        # has no other memlet / tasklet use) and the lib node's
+        # symbolic-property reference would not match up at arglist
+        # time.
+        import dace.dtypes as dtypes
+        if shift is not None:
+            for sym in shift.free_symbols:
+                name = str(sym)
+                if name in ctx.sdfg.symbols:
+                    continue
+                if name in ctx.sdfg.arrays:
+                    # Already an array -- the libcall reads its
+                    # element-0 value via an interstate-edge.
+                    sym_name = f"__{name}_sym"
+                    if sym_name not in ctx.sdfg.symbols:
+                        ctx.sdfg.add_symbol(sym_name, dtypes.int64)
+                    # Wire the value through a pre-state assign.
+                    nxt = region.add_state(f"pre_cshift_{sym_name}")
+                    region.add_edge(ctx.cur, nxt, InterstateEdge(assignments={sym_name: f"{name}[0]"}))
+                    ctx.cur = nxt
+                    state = ctx.flush_and_ensure(builder, region)
+                    node.shift = node.shift.subs(sym, dace.symbolic.symbol(sym_name))  # noqa: F405
+                else:
+                    ctx.sdfg.add_symbol(name, dtypes.int64)
     else:
         node = cls(f"{spec.name}_{n.target}_{builder.nid()}")
     state.add_node(node)

@@ -1653,6 +1653,36 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       }
 
       if (auto* sd = srcPeeled.getDefiningOp()) {
+        // ``hlfir.reshape %src %shape`` -> flat copy from the
+        // reshape's source array into the assignment's destination.
+        // Fortran ``RESHAPE`` requires both sides to carry the same
+        // total element count, so a ``CopyLibraryNode`` whose
+        // expansion collapses each side to a 1-D walker handles the
+        // rank/extent mismatch.  ``hlfir.reshape``'s optional
+        // ``pad`` / ``order`` operands are NOT supported in this
+        // first cut  --  fall through to the existing
+        // libcall/elemental path with a clear NotImplemented at the
+        // bridge layer when present, so the surfaced gap is the
+        // unsupported variant rather than a silent miscopy.
+        if (auto reshape = mlir::dyn_cast<hlfir::ReshapeOp>(sd)) {
+          if (sd->getNumOperands() > 2) {
+            throw std::runtime_error(
+                "hlfir.reshape: pad= / order= variants are not yet supported");
+          }
+          ASTNode n;
+          n.kind = "copy";
+          if (auto* dd = dst.getDefiningOp())
+            if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(dd))
+              n.target = allocAliasFor(extractName(decl.getUniqName().str()));
+          if (n.target.empty()) n.target = traceToDecl(dst);
+          n.target_is_array = true;
+          n.reduce_src = traceToDecl(reshape.getOperand(0));
+          if (n.reduce_src.empty())
+            throw std::runtime_error(
+                "hlfir.reshape: cannot resolve source array name");
+          nodes.push_back(std::move(n));
+          continue;
+        }
         if (auto elem = mlir::dyn_cast<hlfir::ElementalOp>(sd)) {
           auto merge_built = buildMergeLibcall(assign, elem);
           if (!merge_built.empty()) {
@@ -1674,6 +1704,14 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
         };
         static const LibEntry kLibTable[] = {
             {"hlfir.matmul", "matmul"},
+            // ``MATMUL(TRANSPOSE(A), B)`` lowers under the optimised
+            // ``hlfir-optimized-bufferization`` pass as a single
+            // ``hlfir.matmul_transpose``.  The Python emitter expands
+            // it to a ``Transpose`` + ``MatMul`` libcall pair so the
+            // operand-order semantics are correct without a
+            // dedicated lib node; future cuBLAS/MKL acceleration
+            // can swap in a fused expansion.
+            {"hlfir.matmul_transpose", "matmul_transpose"},
             {"hlfir.transpose", "transpose"},
             {"hlfir.dot_product", "dot_product"},
             // Fortran ``COUNT(mask [, dim])``  --  routed through
@@ -1692,6 +1730,11 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
             // ASTNode for ``emit_libcall``.
             {"hlfir.minloc", "argmin"},
             {"hlfir.maxloc", "argmax"},
+            // Fortran ``CSHIFT(array, shift [, dim])`` -- circular
+            // shift along ``dim`` (default 1).  Routed through
+            // ``CShift`` (pure expansion = Map of mod-indexed reads
+            // along the chosen axis).
+            {"hlfir.cshift", "cshift"},
         };
         bool libMatched = false;
         for (auto& e : kLibTable) {

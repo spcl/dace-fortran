@@ -24,6 +24,11 @@ LINALG: dict[str, LibNodeIntrinsic] = {
     'matmul': LibNodeIntrinsic('matmul', module='blas', node_cls='MatMul'),
     'transpose': LibNodeIntrinsic('transpose', module='linalg', node_cls='Transpose'),
     'dot_product': LibNodeIntrinsic('dot_product', module='blas', node_cls='Dot'),
+    # ``hlfir.matmul_transpose`` -- ``MATMUL(TRANSPOSE(A), B)`` fused.
+    # ``emit_libcall`` materialises a transposed-A transient and
+    # composes a Transpose + MatMul pair; the registry entry exists so
+    # ``libnode_spec("matmul_transpose")`` resolves at dispatch time.
+    'matmul_transpose': LibNodeIntrinsic('matmul_transpose', module='blas', node_cls='MatMul'),
 }
 
 # Generic / non-linalg standard library nodes that the bridge emits via the
@@ -34,4 +39,5 @@ STANDARD: dict[str, LibNodeIntrinsic] = {
     'merge': LibNodeIntrinsic('merge', module='standard', node_cls='MergeLibraryNode'),
     'argmin': LibNodeIntrinsic('argmin', module='standard', node_cls='ArgMin'),
     'argmax': LibNodeIntrinsic('argmax', module='standard', node_cls='ArgMax'),
+    'cshift': LibNodeIntrinsic('cshift', module='standard', node_cls='CShift'),
 }
