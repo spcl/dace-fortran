@@ -464,6 +464,139 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
   if (_nm == "hlfir.no_reassoc" && def->getNumOperands() == 1)
     return buildExprWithSubscripts(def->getOperand(0), d + 1);
 
+  // ``hlfir.minval`` / ``maxval`` / ``sum`` / ``product`` over a
+  // CONSTANT-extent array section  --  unfold inline so the reduction
+  // stays parseable in an interstate-edge condition.  Without this,
+  // ``IF (k >= MINVAL(kmin(iv, :)))`` (ICON aes_graupel l341) hits
+  // the ``buildExpr`` fall-through and emerges as ``(k >= ?)``, which
+  // DaCe's symbolic engine then rejects when specialising symbols
+  // at SDFG-build time.  Capped at product-of-extents <= 64 to keep
+  // the unfolded expression bounded; larger or runtime-extent
+  // sections fall through to ``?`` (and are reported as such by
+  // the downstream emitter).
+  {
+    auto opName = def->getName().getStringRef();
+    struct RedSpec {
+      llvm::StringRef op;
+      llvm::StringRef pyOp;  // ``min`` / ``max`` (callable) or ``+`` / ``*``
+                             // (binary infix)
+      bool isBinop;
+    };
+    static const RedSpec kRedTbl[] = {
+        {"hlfir.minval", "min", false},
+        {"hlfir.maxval", "max", false},
+        {"hlfir.sum", "+", true},
+        {"hlfir.product", "*", true},
+    };
+    for (auto& e : kRedTbl) {
+      if (opName != e.op) continue;
+      if (def->getNumOperands() == 0) return "?";
+      auto src = def->getOperand(0);
+      while (auto cv =
+                 mlir::dyn_cast_or_null<fir::ConvertOp>(src.getDefiningOp()))
+        src = cv.getValue();
+      auto* sd = src.getDefiningOp();
+      if (!sd) return "?";
+      auto dg = mlir::dyn_cast<hlfir::DesignateOp>(sd);
+      if (!dg) return "?";
+      auto arr = traceToDecl(dg.getMemref());
+      if (arr.empty()) return "?";
+      auto triplets = dg.getIsTriplet();
+      auto allIdx = dg.getIndices();
+      if (triplets.empty()) return "?";
+      struct DimSpec {
+        bool isTriplet;
+        std::vector<int64_t> values;  // triplet  --  enumerated 1-based values
+        std::string scalarExpr;       // non-triplet  --  Fortran 1-based expr
+      };
+      std::vector<DimSpec> dims;
+      unsigned cursor = 0;
+      int64_t totalExtent = 1;
+      bool ok = true;
+      for (bool isT : triplets) {
+        DimSpec ds;
+        ds.isTriplet = isT;
+        if (isT) {
+          if (cursor + 3 > allIdx.size()) {
+            ok = false;
+            break;
+          }
+          auto cLo = traceConstInt(allIdx[cursor]);
+          auto cHi = traceConstInt(allIdx[cursor + 1]);
+          auto cSt = traceConstInt(allIdx[cursor + 2]);
+          if (!cLo || !cHi || !cSt || *cSt == 0) {
+            ok = false;
+            break;
+          }
+          int64_t lo = *cLo, hi = *cHi, st = *cSt;
+          if (st > 0)
+            for (int64_t v = lo; v <= hi; v += st) ds.values.push_back(v);
+          else
+            for (int64_t v = lo; v >= hi; v += st) ds.values.push_back(v);
+          if (ds.values.empty()) {
+            ok = false;
+            break;
+          }
+          totalExtent *= static_cast<int64_t>(ds.values.size());
+          if (totalExtent > 64) {
+            ok = false;
+            break;
+          }
+          cursor += 3;
+        } else {
+          if (cursor + 1 > allIdx.size()) {
+            ok = false;
+            break;
+          }
+          ds.scalarExpr = buildIndexExpr(allIdx[cursor], d + 1);
+          if (ds.scalarExpr.empty() || ds.scalarExpr == "?") {
+            ok = false;
+            break;
+          }
+          cursor += 1;
+        }
+        dims.push_back(std::move(ds));
+      }
+      if (!ok) return "?";
+      std::vector<size_t> cur(dims.size(), 0);
+      auto incCounters = [&dims](std::vector<size_t>& c) -> bool {
+        for (int i = static_cast<int>(dims.size()) - 1; i >= 0; --i) {
+          if (!dims[i].isTriplet) continue;
+          if (c[i] + 1 < dims[i].values.size()) {
+            c[i]++;
+            return true;
+          }
+          c[i] = 0;
+        }
+        return false;
+      };
+      std::vector<std::string> elems;
+      do {
+        std::string s = arr + "[";
+        bool first = true;
+        for (size_t i = 0; i < dims.size(); ++i) {
+          if (!first) s += ", ";
+          if (dims[i].isTriplet)
+            s += std::to_string(dims[i].values[cur[i]] - 1);
+          else
+            s += "(" + dims[i].scalarExpr + ") - 1";
+          first = false;
+        }
+        s += "]";
+        elems.push_back(std::move(s));
+      } while (incCounters(cur));
+      if (elems.empty()) return "?";
+      std::string acc = elems[0];
+      for (size_t i = 1; i < elems.size(); ++i) {
+        if (e.isBinop)
+          acc = "(" + acc + " " + e.pyOp.str() + " " + elems[i] + ")";
+        else
+          acc = e.pyOp.str() + "(" + acc + ", " + elems[i] + ")";
+      }
+      return acc;
+    }
+  }
+
   // fir.load of hlfir.designate: emit 0-based subscripts.  Peel
   // through any ``fir.convert`` (kind coercion, ref-shape rebox)
   // between the load and the designate  --  without this peel a chain
