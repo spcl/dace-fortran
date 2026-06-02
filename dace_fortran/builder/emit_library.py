@@ -51,8 +51,13 @@ _LIBCALL_CONNECTORS = {
     # ``emit_libcall`` adds it after the mandatory ``_x``.
     "ArgMin": (("_x", ), "_idx"),
     "ArgMax": (("_x", ), "_idx"),
-    # Fortran CSHIFT -- single-array input + shift-via-symbol output.
+    # Fortran CSHIFT / EOSHIFT -- single-array input + shift-via-symbol output.
     "CShift": (("_x", ), "_out"),
+    "EOShift": (("_x", ), "_out"),
+    # Fortran NORM2 -- single-array input, scalar output.
+    "Norm2": (("_x", ), "_out"),
+    # Fortran SPREAD -- single-array source, broadcasted destination.
+    "Broadcast": (("_src", ), "_dst"),
 }
 
 # SDFG dtype -> C scalar type for ``extern "C"`` declarations on
@@ -314,16 +319,25 @@ def emit_libcall(builder, ctx, n, region):
             dim=dim,
             mask=has_mask,
         )
-    elif spec.node_cls == "CShift":
-        # Fortran CSHIFT -- bridge stores the shift expression in
-        # ``options['shift']`` (a Python-compatible string built by
-        # ``buildLibCallNode``'s ``hlfir.cshift`` arm); the optional
-        # axis lives in ``reduce_axes`` 0-based.
+    elif spec.node_cls in ("CShift", "EOShift"):
+        # Fortran CSHIFT / EOSHIFT -- bridge stores the shift (and
+        # optional boundary, for EOSHIFT) expressions in
+        # ``options['shift']`` / ``options['boundary']`` as Python-
+        # compatible strings; the optional axis lives in
+        # ``reduce_axes`` 0-based.  Symbol-promotion for the shift
+        # expression's free symbols runs after node creation so a
+        # Fortran scalar INTENT(IN) arg the libcall references gets
+        # an SDFG-level symbol.
         opts = getattr(n, 'options', None) or {}
         shift_expr = opts.get('shift', None)
+        boundary_expr = opts.get('boundary', None)
         shift = dace.symbolic.pystr_to_symbolic(shift_expr) if shift_expr else None  # noqa: F405
+        boundary = dace.symbolic.pystr_to_symbolic(boundary_expr) if boundary_expr else None  # noqa: F405
         dim = (n.reduce_axes[0] + 1) if n.reduce_axes else 1
-        node = cls(f"{spec.name}_{n.target}_{builder.nid()}", dim=dim, shift=shift)
+        if spec.node_cls == "CShift":
+            node = cls(f"{spec.name}_{n.target}_{builder.nid()}", dim=dim, shift=shift)
+        else:
+            node = cls(f"{spec.name}_{n.target}_{builder.nid()}", dim=dim, shift=shift, boundary=boundary)
         # Promote every free symbol the shift expression depends on
         # to an SDFG-level symbol -- the scalar-INTENT(IN) Fortran
         # arg might otherwise land as a Scalar array (e.g. when it
@@ -337,19 +351,26 @@ def emit_libcall(builder, ctx, n, region):
                 if name in ctx.sdfg.symbols:
                     continue
                 if name in ctx.sdfg.arrays:
-                    # Already an array -- the libcall reads its
-                    # element-0 value via an interstate-edge.
                     sym_name = f"__{name}_sym"
                     if sym_name not in ctx.sdfg.symbols:
                         ctx.sdfg.add_symbol(sym_name, dtypes.int64)
-                    # Wire the value through a pre-state assign.
-                    nxt = region.add_state(f"pre_cshift_{sym_name}")
+                    nxt = region.add_state(f"pre_{spec.name}_{sym_name}")
                     region.add_edge(ctx.cur, nxt, InterstateEdge(assignments={sym_name: f"{name}[0]"}))
                     ctx.cur = nxt
                     state = ctx.flush_and_ensure(builder, region)
                     node.shift = node.shift.subs(sym, dace.symbolic.symbol(sym_name))  # noqa: F405
                 else:
                     ctx.sdfg.add_symbol(name, dtypes.int64)
+    elif spec.node_cls == "Norm2":
+        # Fortran NORM2 -- optional 1-based dim from reduce_axes (empty
+        # for whole-array scalar).
+        dim = (n.reduce_axes[0] + 1) if n.reduce_axes else None
+        node = cls(f"{spec.name}_{n.target}_{builder.nid()}", dim=dim)
+    elif spec.node_cls == "Broadcast":
+        # Fortran SPREAD -- bridge stores the inserted axis (Fortran
+        # 1-based) in ``reduce_axes[0]`` (0-based).
+        dim = (n.reduce_axes[0] + 1) if n.reduce_axes else 1
+        node = cls(f"{spec.name}_{n.target}_{builder.nid()}", dim=dim)
     else:
         node = cls(f"{spec.name}_{n.target}_{builder.nid()}")
     state.add_node(node)

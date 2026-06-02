@@ -1366,15 +1366,177 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
     if (auto assign = mlir::dyn_cast<hlfir::AssignOp>(op)) {
       auto src = assign.getOperand(0);
       auto dst = assign.getOperand(1);
-      {
-        auto* sop = src.getDefiningOp();
-        FILE* fd = fopen("/tmp/probes/dbg.log", "a");
-        if (fd) {
-          fprintf(fd, "DEBUG ASSIGN src=%s\n",
-                  sop ? sop->getName().getStringRef().str().c_str() : "<null>");
-          fclose(fd);
+
+      // Fortran-runtime transformational intrinsics return their
+      // result either as a scalar (``_FortranANorm2_*``) or as a
+      // newly-heap-allocated array whose descriptor lives in an
+      // alloca passed as the first operand
+      // (``_FortranASpread`` / ``_FortranAEoshiftVector`` / etc.).
+      //
+      // Scalar form ``hlfir.assign %fXX_call_result to %dst``:
+      // detect the call directly.
+      // Array form ``hlfir.assign %as_expr to %dst`` where
+      // ``%as_expr = hlfir.as_expr %decl move %true`` and ``%decl``
+      // declares the runtime ``.tmp.intrinsic_result``: walk back
+      // through ``declare -> box_addr -> load %alloca`` and look at
+      // users of ``%alloca`` for the matching runtime call.
+      auto canonicalCallee = [](fir::CallOp call) -> std::string {
+        auto cref = call.getCallee();
+        if (!cref) return "";
+        std::string cs;
+        llvm::raw_string_ostream os(cs);
+        cref->print(os);
+        std::string callee = cs;
+        if (!callee.empty() && callee.front() == '@') callee.erase(0, 1);
+        if (callee.size() >= 2 && callee.front() == '"' && callee.back() == '"')
+          callee = callee.substr(1, callee.size() - 2);
+        return callee;
+      };
+
+      if (auto* sop = src.getDefiningOp()) {
+        if (auto call = mlir::dyn_cast<fir::CallOp>(sop)) {
+          std::string callee = canonicalCallee(call);
+          // ``_FortranANorm2_<bits>`` -> ``Norm2`` lib node.
+          if (callee.rfind("_FortranANorm2_", 0) == 0) {
+            ASTNode n;
+            n.kind = "libcall";
+            n.callee = "norm2";
+            if (auto* dd = dst.getDefiningOp())
+              if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(dd))
+                n.target =
+                    allocAliasFor(extractName(decl.getUniqName().str()));
+            if (n.target.empty()) n.target = traceToDecl(dst);
+            n.target_is_array = false;
+            auto args = call.getArgOperands();
+            if (args.size() >= 1) {
+              auto srcName = traceToDecl(args[0]);
+              if (srcName.empty())
+                throw std::runtime_error(
+                    "_FortranANorm2: cannot resolve source array name");
+              n.call_args.push_back(srcName);
+              n.call_arg_subsets.push_back("");
+            }
+            if (args.size() >= 4) {
+              if (auto c = traceConstInt(args[3])) {
+                if (*c > 0) n.reduce_axes.push_back(*c - 1);
+              }
+            }
+            nodes.push_back(std::move(n));
+            continue;
+          }
+        }
+        // Heap-result form: trace through as_expr / declare to the
+        // alloca whose store-from-runtime-call seeded it.
+        if (auto as_expr = mlir::dyn_cast<hlfir::AsExprOp>(sop)) {
+          mlir::Value v = as_expr.getVar();
+          // declare -> box_addr -> load -> alloca chain.
+          mlir::Operation* allocaOp = nullptr;
+          for (int hop = 0; hop < 8 && v; ++hop) {
+            auto* d = v.getDefiningOp();
+            if (!d) break;
+            if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(d)) {
+              v = decl.getMemref();
+              continue;
+            }
+            if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
+              v = ba.getVal();
+              continue;
+            }
+            if (auto ld = mlir::dyn_cast<fir::LoadOp>(d)) {
+              v = ld.getMemref();
+              continue;
+            }
+            if (auto al = mlir::dyn_cast<fir::AllocaOp>(d)) {
+              allocaOp = al.getOperation();
+              break;
+            }
+            break;
+          }
+          if (allocaOp) {
+            // Look for ``_FortranASpread`` / ``_FortranAEoshiftVector``
+            // among users of the alloca, peeling through
+            // ``fir.convert`` (the runtime call takes a
+            // ``!fir.ref<!fir.box<none>>`` so the alloca's typed
+            // result is first reboxed via convert).
+            std::vector<mlir::Operation*> queue;
+            for (auto* u : allocaOp->getResult(0).getUsers())
+              queue.push_back(u);
+            for (size_t qi = 0; qi < queue.size(); ++qi) {
+              auto* user = queue[qi];
+              if (auto cv = mlir::dyn_cast<fir::ConvertOp>(user)) {
+                for (auto* uu : cv.getResult().getUsers()) queue.push_back(uu);
+                continue;
+              }
+              auto rtcall = mlir::dyn_cast<fir::CallOp>(user);
+              if (!rtcall) continue;
+              std::string callee = canonicalCallee(rtcall);
+              auto rtargs = rtcall.getArgOperands();
+              // SPREAD / EOSHIFT: lower directly to the lib node
+              // writing INTO the user's destination -- src -> lib node
+              // -> dst, no intermediate transient.  Fortran's
+              // assignment semantics guarantees the heap-result shape
+              // matches dst's shape, so the runtime allocation is just
+              // ceremony around what is semantically a copy from a
+              // shape-transformed source.
+              std::string dstName;
+              if (auto* dd = dst.getDefiningOp())
+                if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(dd))
+                  dstName =
+                      allocAliasFor(extractName(decl.getUniqName().str()));
+              if (dstName.empty()) dstName = traceToDecl(dst);
+              if (callee == "_FortranASpread" && rtargs.size() >= 4) {
+                auto srcName = traceToDecl(rtargs[1]);
+                if (srcName.empty())
+                  throw std::runtime_error(
+                      "_FortranASpread: cannot resolve source array name");
+                ASTNode n;
+                n.kind = "libcall";
+                n.callee = "broadcast";
+                n.target = dstName;
+                n.target_is_array = true;
+                n.call_args.push_back(srcName);
+                n.call_arg_subsets.push_back("");
+                if (auto c = traceConstInt(rtargs[2]))
+                  n.reduce_axes.push_back(*c - 1);
+                nodes.push_back(std::move(n));
+                goto runtime_call_handled;
+              }
+              if ((callee == "_FortranAEoshiftVector" ||
+                   callee.rfind("_FortranAEoshift", 0) == 0) &&
+                  rtargs.size() >= 3) {
+                auto srcName = traceToDecl(rtargs[1]);
+                if (srcName.empty())
+                  throw std::runtime_error(
+                      "_FortranAEoshift: cannot resolve source array name");
+                ASTNode n;
+                n.kind = "libcall";
+                n.callee = "eoshift";
+                n.target = dstName;
+                n.target_is_array = true;
+                n.call_args.push_back(srcName);
+                n.call_arg_subsets.push_back("");
+                if (auto c = traceConstInt(rtargs[2])) {
+                  n.options["shift"] = std::to_string(*c);
+                } else {
+                  auto sExpr = buildIndexExpr(rtargs[2], 0);
+                  if (!sExpr.empty() && sExpr != "?")
+                    n.options["shift"] = sExpr;
+                }
+                if (rtargs.size() >= 4) {
+                  if (auto c = traceConstInt(rtargs[3]))
+                    n.options["boundary"] = std::to_string(*c);
+                }
+                nodes.push_back(std::move(n));
+                goto runtime_call_handled;
+              }
+            }
+          }
         }
       }
+      goto runtime_call_not_handled;
+    runtime_call_handled:
+      continue;
+    runtime_call_not_handled:;
 
       // Recognise + suppress the ``plan = fftw_plan_dft_*(...)`` user
       // statement.  Flang lowers it through a ``.result`` temp:
