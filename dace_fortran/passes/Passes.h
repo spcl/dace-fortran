@@ -32,6 +32,7 @@ std::unique_ptr<mlir::Pass> createRewritePointerAssignsPass();
 std::unique_ptr<mlir::Pass> createRewriteSequenceAssociationPass();
 std::unique_ptr<mlir::Pass> createLiftReductionOperandsPass();
 std::unique_ptr<mlir::Pass> createLiftAllocArrayOfRecordsPass();
+std::unique_ptr<mlir::Pass> createLiftAosPointerRecordsPass();
 std::unique_ptr<mlir::Pass> createPruneUnreachablePass();
 std::unique_ptr<mlir::Pass> createMarshalExternalStructsPass();
 std::unique_ptr<mlir::Pass> createUnwrapEvalInMemPass();

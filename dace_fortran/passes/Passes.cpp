@@ -73,6 +73,9 @@ void registerAllBridgePasses() {
     return createLiftAllocArrayOfRecordsPass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createLiftAosPointerRecordsPass();
+  });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createPruneUnreachablePass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
