@@ -371,9 +371,32 @@ def emit_declare_transient(builder, ctx, n, region):
     Reads ``n.target`` (name), ``n.expr`` (dtype as string), and shape
     from ``n.accesses[0].index_exprs`` (one string per dim).  Calls
     ``declare_synth_array`` to register the SDFG descriptor.
+
+    Resolves ``<src>_d<N>`` shape placeholders against the source array's
+    actual SDFG descriptor: the bridge emits these for synthesised
+    transients derived from a known source (e.g. a transpose-of-A
+    transient picked up by ``MATMUL(A, TRANSPOSE(B))``) but doesn't
+    have access to the source's already-registered symbolic shape.
+    Without this rewrite the transient would carry a fresh symbol like
+    ``b_d1`` that is symbolically distinct from ``b.shape[1]`` and the
+    downstream lib node's same-dim validation rejects the mismatch.
     """
+    import re
+
     shape = list(n.accesses[0].index_exprs) if n.accesses else []
-    declare_synth_array(builder, n.target, shape, n.expr or "int32", ctx)
+    resolved = []
+    for entry in shape:
+        s = str(entry)
+        m = re.fullmatch(r'([A-Za-z_][A-Za-z_0-9]*)_d(\d+)', s)
+        if m:
+            src, dim = m.group(1), int(m.group(2))
+            if src in ctx.sdfg.arrays:
+                desc = ctx.sdfg.arrays[src]
+                if 0 <= dim < len(desc.shape):
+                    resolved.append(desc.shape[dim])
+                    continue
+        resolved.append(entry)
+    declare_synth_array(builder, n.target, resolved, n.expr or "int32", ctx)
 
 
 def auto_declare_synth(builder, name: str, ctx):

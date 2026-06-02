@@ -1778,13 +1778,54 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
               auto opnd = sd->getOperand(i);
               auto* od = opnd.getDefiningOp();
               if (!od) continue;
-              auto elem = mlir::dyn_cast<hlfir::ElementalOp>(od);
-              if (!elem) continue;
-              auto [trName, prelude] = materialiseElementalForLibcall(elem);
-              if (trName.empty()) continue;
-              for (auto& n : prelude) nodes.push_back(std::move(n));
-              elemSubst[i] = std::move(trName);
-              needSubst = true;
+              if (auto elem = mlir::dyn_cast<hlfir::ElementalOp>(od)) {
+                auto [trName, prelude] = materialiseElementalForLibcall(elem);
+                if (trName.empty()) continue;
+                for (auto& n : prelude) nodes.push_back(std::move(n));
+                elemSubst[i] = std::move(trName);
+                needSubst = true;
+                continue;
+              }
+              // Inline ``hlfir.transpose %A`` operand -- materialise a
+              // ``transpose`` libcall into a fresh ``_libsrc_<n>``
+              // transient, then point the outer libcall at the
+              // transient.  Covers ``MATMUL(A, TRANSPOSE(B))`` and
+              // ``MATMUL(TRANSPOSE(A), TRANSPOSE(B))`` in the default
+              // (unfused) HLFIR pipeline.
+              if (auto tp = mlir::dyn_cast<hlfir::TransposeOp>(od)) {
+                auto srcVal = tp.getOperand();
+                auto srcName = traceToDecl(srcVal);
+                if (srcName.empty()) continue;
+                std::string trName =
+                    "_libsrc_t_" + std::to_string(kSynthTransientCounter++);
+                ASTNode decl;
+                decl.kind = "declare_transient";
+                decl.target = trName;
+                decl.expr = exprDtypeString(tp.getType());
+                AccessInfo shape_info;
+                shape_info.array_name = trName;
+                // ``hlfir.transpose`` result is rank-2 with the
+                // source's dims reversed.  Derive each result-dim
+                // extent from the source array's ``box_dims`` so the
+                // transient gets a symbolic shape rather than the
+                // ``?`` placeholder Flang puts in the expression-type
+                // shape vector for assumed-shape sources.
+                shape_info.index_exprs.push_back(srcName + "_d1");
+                shape_info.index_exprs.push_back(srcName + "_d0");
+                decl.accesses.push_back(std::move(shape_info));
+                nodes.push_back(std::move(decl));
+                ASTNode tcall;
+                tcall.kind = "libcall";
+                tcall.callee = "transpose";
+                tcall.target = trName;
+                tcall.target_is_array = true;
+                tcall.call_args.push_back(srcName);
+                tcall.call_arg_subsets.push_back("");
+                nodes.push_back(std::move(tcall));
+                elemSubst[i] = std::move(trName);
+                needSubst = true;
+                continue;
+              }
             }
             auto lib = buildLibCallNode(assign, sd, e.callee.str());
             if (needSubst) {

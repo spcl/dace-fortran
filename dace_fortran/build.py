@@ -66,6 +66,41 @@ def _find_flang() -> str:
     return bin_
 
 
+def _flang_intrinsic_modules_path(flang_bin: str) -> Optional[Path]:
+    """Locate the LLVM-flang intrinsic-modules directory shipped beside ``flang_bin``.
+
+    Probed paths (first match wins):
+
+    * ``<flang_install_root>/include/flang/iso_c_binding.mod``  --  the
+      Ubuntu / Debian / Fedora layout (``flang-new-21`` -> ``/usr/lib/llvm-21/bin``;
+      modules under ``/usr/lib/llvm-21/include/flang``).
+    * ``<flang_install_root>/../share/flang/include`` -- some custom builds.
+
+    Returns the **directory** that contains ``iso_c_binding.mod`` (and the
+    matching ``ieee_*`` / ``omp_lib`` / ... modules), or ``None`` if no
+    match is found.  When called with ``-fc1``, flang skips the driver-side
+    auto-population of this path -- without an explicit
+    ``-fintrinsic-modules-path`` every ``USE iso_c_binding`` fails at
+    semantic analysis with a ``No explicit type declared for 'c_int'``
+    error.
+
+    The probe is best-effort: a missing match leaves the bridge to fall
+    back on flang's compiled-in default, which usually fails for
+    ``-fc1`` invocations but works for tests that don't ``USE`` any
+    intrinsic module.
+    """
+    flang_real = Path(flang_bin).resolve()
+    install_root = flang_real.parent.parent  # /usr/lib/llvm-21
+    candidates = (
+        install_root / "include" / "flang",
+        install_root / "share" / "flang" / "include",
+    )
+    for cand in candidates:
+        if (cand / "iso_c_binding.mod").exists():
+            return cand
+    return None
+
+
 def _entry_proc_name(entry: Optional[str]) -> Optional[str]:
     """Demangle a Flang entry symbol to its Fortran procedure name.
 
@@ -196,10 +231,21 @@ def _emit_hlfir(source: str, out_dir: Path, name: str, *, merge: bool,
     hlfir = out_dir / f"{name}.hlfir"
     cmd = [_find_flang(), "-fc1", "-cpp", "-U_OPENMP", "-U_OPENACC",
            "-I", str(out_dir)]
+    intrinsic_path = _flang_intrinsic_modules_path(cmd[0])
+    if intrinsic_path is not None:
+        cmd += ["-fintrinsic-modules-path", str(intrinsic_path)]
     for d in defines:
         cmd += ["-D", d]
     cmd += ["-emit-hlfir", str(src), "-o", str(hlfir)]
-    subprocess.check_call(cmd)
+    # flang resolves ``USE iso_c_binding`` (and the other intrinsic modules)
+    # by first checking cwd for a matching ``.mod`` file, then falling back
+    # on the install's intrinsic-modules path.  An earlier failed build can
+    # leave a stale stub ``iso_c_binding.mod`` (or similar) in cwd that
+    # checksums different from the install's ``__fortran_builtins`` -- flang
+    # then refuses to resolve ``c_int`` etc. with a misleading
+    # ``No explicit type declared`` error.  Run flang in a clean scratch
+    # cwd to avoid the cwd-precedence trap.
+    subprocess.check_call(cmd, cwd=str(out_dir))
     return hlfir
 
 
