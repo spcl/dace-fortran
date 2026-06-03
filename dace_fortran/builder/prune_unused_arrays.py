@@ -93,8 +93,7 @@ def _collect_live_names(sdfg: SDFG) -> Set[str]:
     from dace.sdfg.state import ConditionalBlock, LoopRegion
     for region in sdfg.all_control_flow_regions():
         if isinstance(region, LoopRegion):
-            for attr in ('loop_condition', 'init_statement',
-                         'update_statement'):
+            for attr in ('loop_condition', 'init_statement', 'update_statement'):
                 cb = getattr(region, attr, None)
                 if cb is not None:
                     _grep(getattr(cb, 'as_string', None) or str(cb))
@@ -113,28 +112,38 @@ def _prune_one(sdfg: SDFG, binding_names: Set[str]) -> Set[str]:
     SDFG and is not referenced by the bindings layer.  Returns the
     set of pruned names."""
     live = _collect_live_names(sdfg)
-    live |= set(sdfg.symbols.keys())          # symbol-promoted scalars
+    live |= set(sdfg.symbols.keys())  # symbol-promoted scalars
     live |= {str(s) for s in sdfg.free_symbols}  # free symbol references
-    live |= binding_names                      # FlattenPlan + arglist keepers
+    live |= binding_names  # FlattenPlan + arglist keepers
     dropped: Set[str] = set()
     for name in list(sdfg.arrays.keys()):
         if name in live:
             continue
         desc = sdfg.arrays[name]
+        # Non-transient descriptors are the SDFG's caller-binding
+        # contract -- dropping one breaks the kernel's argument list
+        # against any caller (Python kwargs, bindings emitter, frozen
+        # signature).  The bridge surfaces module-level scalar inputs
+        # / outputs as non-transient ``(1,)``-Array entries; their
+        # reads can vanish after SCCP + symbol-dce constant-fold the
+        # BSS-zero init across every load, but the caller still
+        # pre-sets them and the SDFG must accept that value.  Skip
+        # the prune for any non-transient entry -- the live-name
+        # walker is for transients only.
+        if not desc.transient:
+            continue
         # Persistent-lifetime / global descriptors are kept regardless
         # of dataflow visibility -- the runtime allocator manages them
         # and dropping the descriptor would break codegen.
         lifetime = getattr(desc, 'lifetime', None)
-        if lifetime in (dace.AllocationLifetime.Persistent,
-                        dace.AllocationLifetime.Global):
+        if lifetime in (dace.AllocationLifetime.Persistent, dace.AllocationLifetime.Global):
             continue
         del sdfg.arrays[name]
         dropped.add(name)
     return dropped
 
 
-def prune_unused_arrays(sdfg: SDFG,
-                        binding_names: Set[str] = frozenset()) -> Set[str]:
+def prune_unused_arrays(sdfg: SDFG, binding_names: Set[str] = frozenset()) -> Set[str]:
     """Recursively prune dead-descriptor arrays from ``sdfg`` and
     every NestedSDFG body reachable from it.
 
