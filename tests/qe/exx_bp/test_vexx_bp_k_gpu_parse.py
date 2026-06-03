@@ -147,15 +147,20 @@ def test_restore_fft_interfaces_unblocks_flang_parse(tmp_path):
     strict=False,
     reason=(
         "Source-side restore lets flang parse the QE checkpoint cleanly "
-        "(verified in test_restore_fft_interfaces_unblocks_flang_parse), "
-        "and the pipeline-internal SIGSEGV inside ``hlfir-inline-all`` is "
-        "fixed (multi-block error helpers like ``errore`` / ``upf_error`` "
-        "are now refused, leaving them as ``fir.call`` for the downstream "
-        "bridge to lower).  Pipeline now errors cleanly on the next gap: "
-        "``hlfir-rewrite-pointer-assigns`` rejects QE's pointer rebind "
-        "with bounds remap (``ptr(<lo>:..) => src(..)``) at two call "
-        "sites in ``addusxx_g`` and ``newdxx_g``.  Anchored as a follow-up "
-        "bridge gap; both the parse half and the inline-all half are fixed."))
+        "(verified in test_restore_fft_interfaces_unblocks_flang_parse).  "
+        "Three earlier pipeline-internal gates are now fixed: "
+        "(1) the ``hlfir-inline-all`` SIGSEGV (multi-block error helpers "
+        "like ``errore`` / ``upf_error`` get stripped / refused); "
+        "(2) the ``hlfir-rewrite-pointer-assigns`` rejection of QE's "
+        "``ptr(<lo>:..) => src(..)`` bounds-remap (marked as a View at "
+        "extract_vars time); "
+        "(3) the ``hlfir-lift-reduction-operands`` verifier crash on "
+        "dimensional ``SUM(arr, DIM=k)`` reductions producing "
+        "``!hlfir.expr<Nxf64>`` (lift now skips non-scalar reduction "
+        "results).  The pipeline now runs cleanly; AST-extraction / "
+        "SDFG-construction hits the next downstream gap: ``fir.do_loop "
+        "with non-constant step``, the bridge's symbolic-step refusal in "
+        "the loop emitter.  Anchored as a follow-up."))
 def test_vexx_bp_k_gpu_parses(tmp_path):
     """End-to-end SDFG build for ``vexx_bp_k_gpu`` -- currently xfails on a
     downstream bridge crash, gated separately from the parse fix above."""

@@ -152,9 +152,23 @@ struct LiftReductionOperandsPass
     if (!func) return;
     if (redOp->getNumResults() != 1) return;
     auto resTy = redOp->getResult(0).getType();
-    // Reduction result types are always scalar (i32, f64, logical, ...).
-    // Defensive: bail on unexpected shapes.
+    // Only lift GLOBAL reductions (those producing a scalar).  A
+    // DIMENSIONAL reduction (``SUM(arr, DIM=1)`` / ``MAXVAL(arr,
+    // DIM=2)`` / etc.) produces an ARRAY result whose Fortran type is
+    // ``!hlfir.expr<NxT>`` -- materialising it through a
+    // ``fir.alloca`` + ``fir.load`` is invalid IR (``fir.load`` only
+    // returns FIR-dialect scalar types; the verifier rejects an
+    // ``!hlfir.expr`` result).  The dispatcher's dimensional-
+    // reduction code path already handles those at the outer assign,
+    // so leaving them alone is the right call -- the pass just
+    // refuses to lift the wrong shape.
+    //
+    // Conservative bail: ``fir.SequenceType`` is the FIR array type;
+    // ``hlfir::ExprType`` with non-scalar shape is the HLFIR array
+    // value type.  Refuse both.
     if (mlir::isa<fir::SequenceType>(resTy)) return;
+    if (auto exprTy = mlir::dyn_cast<hlfir::ExprType>(resTy))
+      if (!exprTy.isScalar()) return;
 
     unsigned gid = liftCounter[func]++;
     auto loc = redOp->getLoc();

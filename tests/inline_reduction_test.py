@@ -177,3 +177,56 @@ end subroutine kernel
     out = np.zeros((1, ), dtype=np.float64)
     _build_and_run(src, tmp_path, arr=arr, scalar=scalar, out=out)
     assert out[0] == max(scalar, arr.max())
+
+
+def test_dimensional_sum_does_not_corrupt_verifier(tmp_path: Path):
+    """``SUM(arr, DIM=1)`` produces an ARRAY result, not a scalar
+    -- ``!hlfir.expr<NxT>`` rather than a plain ``f64``.  The lift
+    pass must skip these: synthesising a ``fir.alloca !hlfir.expr<NxT>``
+    + ``fir.load`` round-trip produces invalid IR (``fir.load`` only
+    returns FIR-dialect scalar types; the verifier rejects an
+    ``!hlfir.expr`` load).  Encountered upstream in QE's
+    ``vexx_bp_k_gpu`` where an inlined helper has
+
+        SQRT(SUM(matrix**2, DIM=1))    ! -> !hlfir.expr<3xf64>
+
+    Before the ``isScalar`` guard in ``LiftReductionOperands.cpp``,
+    the bridge's pipeline died at ``hlfir-lift-reduction-operands``
+    with ``run_passes: pipeline failed`` plus a verifier complaint
+    about ``fir.load`` returning ``!hlfir.expr<Nxf64>``.  After the
+    fix the pipeline runs through cleanly; AST extraction / SDFG
+    construction may still hit a separate downstream gap for
+    dimensional reductions (the dispatcher's ``emit_reduce`` doesn't
+    yet handle non-named-array sources), but the verifier contract
+    is the bridge-pipeline-level invariant this test pins."""
+    import tempfile
+    src = """
+subroutine kernel(matrix, out)
+  implicit none
+  real(8), intent(in) :: matrix(3, 3)
+  real(8), intent(out) :: out
+  out = minval(sqrt(sum(matrix**2, dim=1)))
+end subroutine kernel
+"""
+    # Drive the bridge pipeline directly (no AST/SDFG construction):
+    # parse HLFIR, run every pass through the DEFAULT_PIPELINE.  If
+    # the verifier complaint resurfaces, ``run_passes`` raises.
+    import subprocess
+    from dace_fortran import DEFAULT_PIPELINE
+    from dace_fortran.build_bridge import hb
+    with tempfile.TemporaryDirectory() as td:
+        from pathlib import Path as _P
+        f = _P(td) / "k.f90"
+        f.write_text(src)
+        h = _P(td) / "k.hlfir"
+        subprocess.check_call([
+            "flang-new-21", "-fc1", "-fintrinsic-modules-path",
+            "/usr/lib/llvm-21/include/flang", "-emit-hlfir",
+            str(f), "-o", str(h)], cwd=td)
+        mod = hb.HLFIRModule()
+        mod.parse_file(str(h))
+        mod.set_entry_symbol("_QPkernel")
+        # Pipeline runs through every pass without the verifier
+        # rejecting the IR.  Before the fix this raised at
+        # ``hlfir-lift-reduction-operands``.
+        mod.run_passes(DEFAULT_PIPELINE)
