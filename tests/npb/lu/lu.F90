@@ -65,6 +65,18 @@ PRIVATE
       !common/cexact/ ce
 
       PUBLIC :: dolu
+      ! Expose the SSOR solver's configuration inputs and convergence
+      ! state so a reference-vs-SDFG numerical test can (a) seed the
+      ! solver with the same NPB-class parameters on both sides and
+      ! (b) compare ``rsdnm`` (residual norms set by ``l2norm``) after
+      ! ``call_dolu``.  ``dolu()`` reads ``nx0`` / ``ny0`` / ``nz0`` /
+      ! ``itmax`` / ``dt`` / ``omega`` / ``tolrsd`` / ``inorm`` as
+      ! pre-set module state -- the bridge surfaces these on the SDFG
+      ! side via kwargs; this PUBLIC just makes them symbol-accessible
+      ! on the gfortran reference side too.  Benchmark behaviour is
+      ! unchanged.
+      PUBLIC :: nx0, ny0, nz0, itmax, dt, omega, tolrsd, inorm
+      PUBLIC :: rsdnm
 
 CONTAINS
 
