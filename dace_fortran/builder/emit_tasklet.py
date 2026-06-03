@@ -281,6 +281,21 @@ def emit_scalar_assign(builder, state, target: str, value: str):
     in its setup block.
     """
     value = str(value)
+    # A bare ``?`` in the rendered value means the C++ AST builder hit
+    # ``buildIndexExpr`` / ``leafExpr`` for an operand it could not
+    # trace -- a designate chain past ``kBuildIndexExprDepth``, a
+    # block-arg with no entry on ``indexStack``, or a load whose
+    # memref didn't resolve to a declare.  Emitting it as Python code
+    # gives a SyntaxError pointing at <unknown>:1 in DaCe's
+    # ``ast.parse`` from a deeply-nested call site, which is opaque.
+    # Raise here with the target / value so the gap is easy to find.
+    if "?" in value:
+        raise NotImplementedError(
+            f"emit_scalar_assign: unresolved operand placeholder ``?`` in "
+            f"``{target} = {value}`` -- the C++ AST builder couldn't trace "
+            "one of the operand chains.  Check bridge/ast/assigns.cpp "
+            "``buildIndexExpr`` and control_flow.cpp ``leafExpr`` for the "
+            "fallback returning ``?`` against this kernel's HLFIR.")
     src_name = value.strip()
     tgt_var = builder.arrays.get(target)
     tgt_is_array = (tgt_var is not None
