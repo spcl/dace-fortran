@@ -332,6 +332,67 @@ def _is_trivial_bound(expr: str) -> bool:
     return False
 
 
+def _deref_scalar_arrays_for_interstate(expr_str: str, ctx) -> str:
+    """Rewrite bare references to scalar ``(1,)``-shape SDFG data
+    descriptors as ``name[0]``.
+
+    Interstate-edge assignments do not auto-dereference scalar-array
+    data on the LHS / RHS the way tasklet codegen does (``int _in_x =
+    x[0];``).  Any module-level scalar exposed on the SDFG as a
+    ``(1,)``-Array (the bridge's default for module variables that
+    are not promoted to symbols) must therefore be referenced as
+    ``name[0]`` in interstate expressions or the C++ unparser emits
+    ``int64_t loopend_N = (x - 1);`` -- pointer arithmetic against a
+    ``int*`` parameter -- and the build fails.
+
+    :param expr_str: a rendered expression string headed for an
+        ``InterstateEdge.assignments`` value or condition.
+    :param ctx: the build context (carries ``ctx.sdfg`` whose
+        ``.arrays`` map is the source of truth for shapes).
+    :returns: ``expr_str`` with bare names of scalar arrays substituted
+        for ``name[0]``; identifiers that are not scalar arrays, are
+        already subscripted, or aren't known to the SDFG are left
+        untouched.
+    """
+    import re
+    if not isinstance(expr_str, str) or not expr_str:
+        return expr_str
+
+    sdfg_arrays = ctx.sdfg.arrays
+
+    def _is_scalar_array(name: str) -> bool:
+        # Only ``(1,)``-shape ``dace.data.Array`` entries need
+        # dereferencing -- ``dace.data.Scalar`` is passed by value in
+        # the C++ signature, so subscripting one ('``n[0]``' where ``n``
+        # is a plain ``int``) is a hard compile error.
+        desc = sdfg_arrays.get(name)
+        if not isinstance(desc, dace.data.Array):
+            return False
+        shape = tuple(desc.shape)
+        if len(shape) != 1:
+            return False
+        try:
+            return int(shape[0]) == 1
+        except (TypeError, ValueError):
+            return False
+
+    out = []
+    pos = 0
+    for m in re.finditer(r"\b[A-Za-z_][A-Za-z0-9_]*\b", expr_str):
+        name = m.group(0)
+        out.append(expr_str[pos:m.start()])
+        # Skip when already subscripted (next non-space char is ``[``).
+        tail = expr_str[m.end():]
+        already_subscripted = tail.lstrip().startswith('[')
+        if _is_scalar_array(name) and not already_subscripted:
+            out.append(f"{name}[0]")
+        else:
+            out.append(name)
+        pos = m.end()
+    out.append(expr_str[pos:])
+    return "".join(out)
+
+
 def _hoist_bound_to_symbol(ctx, region, builder, expr_str: str, prefix: str):
     """Stage a non-trivial loop-bound expression onto a fresh
     ``<prefix>_<nid>`` ``int64`` symbol via a pre-LoopRegion interstate
@@ -349,7 +410,8 @@ def _hoist_bound_to_symbol(ctx, region, builder, expr_str: str, prefix: str):
         ctx.sdfg.add_symbol(sym, dace.int64)
     ctx.ensure(region)
     nxt = region.add_state(f"pre_{sym}")
-    region.add_edge(ctx.cur, nxt, InterstateEdge(assignments={sym: expr_str}))
+    deref_expr = _deref_scalar_arrays_for_interstate(expr_str, ctx)
+    region.add_edge(ctx.cur, nxt, InterstateEdge(assignments={sym: deref_expr}))
     ctx.cur = nxt
     return sym
 
