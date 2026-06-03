@@ -83,8 +83,16 @@ struct ASTNode {
   std::string loop_lower_expr;
   // Step (Fortran ``DO i = a, b, c``'s ``c``).  Default 1; -1 for
   // reverse-direction ``DO i = N, 1, -1`` (LU back-substitution
-  // pattern).  Other steps are not yet supported.
+  // pattern).  Constant steps capture into ``loop_step``; symbolic
+  // steps (``DO jbnd = jstart, jend, many_fft`` where ``many_fft`` is
+  // a runtime config integer) capture into ``loop_step_expr`` instead
+  // -- the emitter prefers the expression string whenever it is
+  // non-empty.  Symbolic step is assumed positive (forward iteration);
+  // a runtime-negative symbol produces zero-or-one iterations under
+  // the emitted ``while uid <= bound`` form, matching Fortran's
+  // trip-count semantics for mismatched-direction loops.
   int64_t loop_step = 1;
+  std::string loop_step_expr;
 
   // assign
   std::string target, expr;

@@ -1336,13 +1336,40 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       if (auto stepC = traceConstInt(doLoop.getStep())) {
         n.loop_step = *stepC;
       } else {
-        throw std::runtime_error(
-            "fir.do_loop with non-constant step  --  bridge "
-            "currently lowers only constant-step loops. The "
-            "step's sign decides forward-vs-reverse codegen; "
-            "with a symbolic step we'd silently default to +1 "
-            "and produce wrong-direction iteration when the "
-            "symbol is negative.");
+        // Symbolic step (``DO jbnd = jstart, jend, many_fft`` where
+        // ``many_fft`` is a runtime config integer).  Capture the
+        // symbolic form so emit_loop threads it through as the
+        // iteration update.  Defaults to forward iteration; a
+        // runtime-negative symbol falls out as zero-or-one
+        // iterations under the ``uid <= bound`` condition, matching
+        // Fortran's trip-count semantics for mismatched-direction
+        // loops.
+        //
+        // ``traceToDecl`` lifts the underlying scalar's name; if
+        // that's empty (the step comes from an inline arithmetic
+        // expression like ``2*chunk``) fall back to ``buildIndexExpr``
+        // which renders the SSA tree as a Fortran-style expression
+        // string.  Either way ``loop_step`` stays at the default 1
+        // and the emitter consults ``loop_step_expr`` first.
+        if (!isArrayElementLoad(doLoop.getStep())) {
+          auto sym = traceToDecl(doLoop.getStep());
+          if (!sym.empty()) n.loop_step_expr = sym;
+        }
+        if (n.loop_step_expr.empty())
+          n.loop_step_expr = buildIndexExpr(doLoop.getStep(), 0);
+        if (n.loop_step_expr.empty() || n.loop_step_expr == "?") {
+          // Fallback failed -- emit a location-rich diagnostic so
+          // the user can find the offending DO in their source.
+          std::string locStr;
+          llvm::raw_string_ostream locOS(locStr);
+          doLoop.getLoc().print(locOS);
+          throw std::runtime_error(
+              "fir.do_loop with unrenderable symbolic step at " + locStr +
+              "  --  step expression couldn't be lifted to a "
+              "Fortran-style scalar.  Open an issue if you need this "
+              "shape (typically a step computed from a function call "
+              "or struct member).");
+        }
       }
       // Elemental-inlined bodies use the fir.do_loop block arg
       // directly as the hlfir.designate index  --  no fir.store ->

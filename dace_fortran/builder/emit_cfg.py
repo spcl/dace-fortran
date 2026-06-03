@@ -454,8 +454,26 @@ def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
     # reordering, so emit_loop is responsible for picking the right
     # one as init.
     step = getattr(n, 'loop_step', 1)
+    step_expr = getattr(n, 'loop_step_expr', '') or ''
 
-    if step >= 0:
+    if step_expr:
+        # Symbolic step  --  ``DO jbnd = jstart, jend, many_fft``
+        # where ``many_fft`` is a runtime config integer.  Treat as
+        # forward iteration with the symbolic step.  When the
+        # runtime symbol is positive (the common QE / NWP case) the
+        # loop runs normally; a runtime-negative symbol would yield
+        # zero or one iteration under ``uid <= bound``  --  matching
+        # Fortran's trip-count formula
+        # ``MAX(0, (hi - lo + step) / step)`` for the
+        # mismatched-direction case.
+        loop = LoopRegion(
+            label=f"loop_{uid}_{builder.nid()}",
+            condition_expr=f"{uid} < {bound} + 1",
+            loop_var=uid,
+            initialize_expr=f"{uid} = {lower}",
+            update_expr=f"{uid} = {uid} + ({step_expr})",
+        )
+    elif step >= 0:
         loop = LoopRegion(
             label=f"loop_{uid}_{builder.nid()}",
             condition_expr=f"{uid} < {bound} + 1",
