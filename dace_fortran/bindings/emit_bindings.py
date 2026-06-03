@@ -29,11 +29,12 @@ from dace_fortran.bindings.frozen_signature import FrozenSignature
 
 
 def emit_bindings(
-    frozen: FrozenSignature,
-    iface: OriginalInterface,
-    plan: FlattenPlan,
-    out_path: str,
-    dace_arglist: tuple = (),
+        frozen: FrozenSignature,
+        iface: OriginalInterface,
+        plan: FlattenPlan,
+        out_path: str,
+        dace_arglist: tuple = (),
+        enum_maps: dict = None,
 ) -> Path:
     """Emit a Fortran binding module for the built SDFG.
 
@@ -57,17 +58,29 @@ def emit_bindings(
                   stable contract -- so it is passed in rather than
                   snapshotted in ``FrozenSignature``.  Empty -> the
                   emitter falls back to ``frozen.args`` order.
+    :param enum_maps: ``{arg_name: {literal_lower: int}}`` from
+                  :func:`rewrite_string_enum_to_integer`.  When an
+                  arg name matches one of ``iface.args``, the emitter
+                  generates the binding with a ``CHARACTER(LEN=N)``
+                  outer dummy (length sized by the longest literal)
+                  plus an internal ``SELECT CASE`` that translates
+                  the string to the integer the SDFG expects.  The
+                  SDFG itself only ever receives the integer; the
+                  binding is the only place the string is accepted.
+                  Empty / ``None`` -> emitter behaves identically to
+                  the pre-enum-maps path.
     :returns: ``out_path`` as a ``Path`` (just materialised).
     """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    enum_maps = enum_maps or {}
 
     blocks = {
         'c_interface': build_c_interface(frozen, iface, dace_arglist),
         'handle_state': build_handle_state(iface),
-        'wrapper_head': build_wrapper_head(frozen, iface, plan),
-        'wrapper_body': build_wrapper_body(frozen, iface, plan),
-        'wrapper_tail': build_wrapper_tail(frozen, iface, plan, dace_arglist),
+        'wrapper_head': build_wrapper_head(frozen, iface, plan, enum_maps=enum_maps),
+        'wrapper_body': build_wrapper_body(frozen, iface, plan, enum_maps=enum_maps),
+        'wrapper_tail': build_wrapper_tail(frozen, iface, plan, dace_arglist, enum_maps=enum_maps),
         'finalize': build_finalize(iface),
     }
     out_path.write_text(assemble_module(iface, frozen, blocks))

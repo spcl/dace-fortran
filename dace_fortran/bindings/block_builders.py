@@ -111,8 +111,7 @@ def build_c_interface(frozen: FrozenSignature, iface: OriginalInterface, dace_ar
         else:
             body_lines.append(f"      type(c_ptr), value :: {a.sdfg_name}")
     init_syms = _init_sym_names(frozen)
-    init_arg_decls = "".join(
-        f"      {_init_symbol_decl(s, frozen)} :: {s}\n" for s in init_syms)
+    init_arg_decls = "".join(f"      {_init_symbol_decl(s, frozen)} :: {s}\n" for s in init_syms)
     rendered = tpl.format(entry=iface.entry,
                           c_arg_decls=",  &\n".join(header_lines),
                           c_arg_decls_body="\n".join(body_lines),
@@ -123,8 +122,7 @@ def build_c_interface(frozen: FrozenSignature, iface: OriginalInterface, dace_ar
         # block (before its ``end interface``) so the wrapper can turn
         # the Fortran integer handle into the C ``MPI_Comm`` the SDFG
         # entry expects.
-        rendered = rendered.replace("  end interface",
-                                    _MPI_COMM_F2C_IFACE + _MPI_COMM_SIZE_IFACE + "  end interface")
+        rendered = rendered.replace("  end interface", _MPI_COMM_F2C_IFACE + _MPI_COMM_SIZE_IFACE + "  end interface")
     return rendered
 
 
@@ -262,11 +260,9 @@ def _render_logical_bridge_copy_in(recipe, outer_expr: str) -> List[str]:
     """
     flat = recipe.flat_names[0]
     if recipe.rank == 0:
-        return [f"    allocate({flat})",
-                f"    {flat} = {outer_expr}"]
+        return [f"    allocate({flat})", f"    {flat} = {outer_expr}"]
     shape_args = ", ".join(recipe.shape_exprs)
-    return [f"    allocate({flat}({shape_args}))",
-            f"    {flat} = {outer_expr}"]
+    return [f"    allocate({flat}({shape_args}))", f"    {flat} = {outer_expr}"]
 
 
 def _render_logical_bridge_copy_out(recipe, outer_expr: str) -> List[str]:
@@ -274,8 +270,7 @@ def _render_logical_bridge_copy_out(recipe, outer_expr: str) -> List[str]:
     SDFG-side bool flat back into the source struct slot for
     ``intent(out)/inout`` entries, then release the scratch."""
     flat = recipe.flat_names[0]
-    return [f"    {outer_expr} = {flat}",
-            f"    deallocate({flat})"]
+    return [f"    {outer_expr} = {flat}", f"    deallocate({flat})"]
 
 
 def _fortran_c_value_type(dtype: str) -> str:
@@ -318,7 +313,47 @@ def build_handle_state(iface: OriginalInterface) -> str:
 # ---------------------------------------------------------------------------
 
 
-def build_wrapper_head(frozen: FrozenSignature, iface: OriginalInterface, plan: FlattenPlan) -> str:
+def _enum_args(iface: OriginalInterface, enum_maps: dict) -> dict:
+    """Filter ``enum_maps`` down to the iface's actual outer dummies.
+
+    ``enum_maps`` is the ``{arg_name: {literal_lower: int}}`` table
+    surfaced by :func:`rewrite_string_enum_to_integer`.  Returns the
+    subset whose keys appear in ``iface.args`` (matched
+    case-insensitively against ``OriginalArg.name``), preserving each
+    entry's literal -> int mapping verbatim.  An ``enum_maps`` key
+    that doesn't match any dummy is silently dropped: the dummy may
+    have been renamed by ``hlfir-flatten-structs`` or eliminated by
+    a later bridge pass.
+    """
+    if not enum_maps:
+        return {}
+    iface_names = {a.name.lower() for a in iface.args}
+    return {a: m for a, m in enum_maps.items() if a.lower() in iface_names}
+
+
+def _enum_local_name(arg_name: str) -> str:
+    """Local INTEGER scratch name for an enum-mapped CHARACTER dummy.
+    Uses double-underscore to avoid collision with any flat or
+    bridged name the bindings layer also synthesises."""
+    return f"{arg_name}__enum"
+
+
+def _enum_literal_case_clause(literal: str) -> str:
+    """Render the ``CASE ('lower', 'UPPER')`` Fortran list for one
+    enum literal, matching the lowercase + uppercase variants -- the
+    QE ``flag == 'c' .OR. flag == 'C'`` shape the preprocess pass
+    collapses to a single integer entry."""
+    lower = literal.lower()
+    upper = literal.upper()
+    if lower == upper:  # digits / symbols
+        return f"CASE ('{lower}')"
+    return f"CASE ('{lower}', '{upper}')"
+
+
+def build_wrapper_head(frozen: FrozenSignature,
+                       iface: OriginalInterface,
+                       plan: FlattenPlan,
+                       enum_maps: dict = None) -> str:
     """Render the ``<entry>_dace`` subroutine header + declaration
     section.
 
@@ -348,8 +383,34 @@ def build_wrapper_head(frozen: FrozenSignature, iface: OriginalInterface, plan: 
     tpl = _load("wrapper_head.f90.in")
     outer_dummy_names = [a.name for a in iface.args]
     outer_dummy_set = set(outer_dummy_names)
-    outer_dummy_decls = "\n".join(f"    {a.fortran_type}, intent({a.intent or 'inout'}), target :: {a.name}"
-                                  f"{_dim_spec(a.shape)}" for a in iface.args)
+    enum_args = _enum_args(iface, enum_maps or {})
+
+    # An enum-mapped arg comes through ``rewrite_string_enum_to_integer``
+    # as an ``INTEGER, INTENT(IN)`` dummy on the SDFG side, but the
+    # caller's surface is still ``CHARACTER(LEN=N)`` -- the binding's
+    # job is to bridge the two by accepting the string outside and
+    # converting it to the integer inside.  Override the outer
+    # ``fortran_type`` accordingly and remove the ``target`` attr
+    # (a character dummy needs no ``c_loc``, the converted INTEGER
+    # local is what reaches the SDFG).
+    def _outer_decl(a) -> str:
+        if a.name.lower() in enum_args:
+            literals = enum_args[a.name.lower()]
+            max_len = max((len(lit) for lit in literals), default=1)
+            return (f"    character(len={max_len}),"
+                    f" intent({a.intent or 'in'}) :: {a.name}")
+        return (f"    {a.fortran_type},"
+                f" intent({a.intent or 'inout'}), target :: {a.name}"
+                f"{_dim_spec(a.shape)}")
+
+    outer_dummy_decls = "\n".join(_outer_decl(a) for a in iface.args)
+
+    # One ``integer(c_int)`` scratch per enum-mapped arg holds the
+    # ``SELECT CASE``-translated value the SDFG actually receives.
+    # Declared in the head, populated in the body, passed to the call
+    # in the tail.
+    enum_local_decls = "\n".join(f"    integer(c_int) :: {_enum_local_name(a.name)}" for a in iface.args
+                                 if a.name.lower() in enum_args)
 
     flat_ptr_lines: List[str] = []
     scratch_lines: List[str] = []
@@ -409,10 +470,8 @@ def build_wrapper_head(frozen: FrozenSignature, iface: OriginalInterface, plan: 
             return "integer(c_long_long)"
         return _fortran_c_value_type(sym_dtype.get(s, 'int32'))
 
-    symbol_decls = "\n".join(
-        f"    {_local_decl(s)} :: {s}"
-        for s in frozen.free_symbols
-        if s not in outer_dummy_set and s not in flat_names)
+    symbol_decls = "\n".join(f"    {_local_decl(s)} :: {s}" for s in frozen.free_symbols
+                             if s not in outer_dummy_set and s not in flat_names)
     if max_loop_rank:
         iter_decl = "    integer(c_int) :: " + ", ".join(f"i{d + 1}" for d in range(max_loop_rank))
         symbol_decls = (symbol_decls + "\n" + iter_decl) if symbol_decls else iter_decl
@@ -443,6 +502,8 @@ def build_wrapper_head(frozen: FrozenSignature, iface: OriginalInterface, plan: 
     if frozen.user_comm_source:
         scratch_lines.append("    integer(c_int) :: dace_user_comm_size_buf")
         scratch_lines.append("    integer(c_int) :: dace_user_comm_size_err")
+    if enum_local_decls:
+        scratch_lines.append(enum_local_decls)
 
     return tpl.format(
         entry=iface.entry,
@@ -459,7 +520,10 @@ def build_wrapper_head(frozen: FrozenSignature, iface: OriginalInterface, plan: 
 # ---------------------------------------------------------------------------
 
 
-def build_wrapper_body(frozen: FrozenSignature, iface: OriginalInterface, plan: FlattenPlan) -> str:
+def build_wrapper_body(frozen: FrozenSignature,
+                       iface: OriginalInterface,
+                       plan: FlattenPlan,
+                       enum_maps: dict = None) -> str:
     """Render the between-declaration-and-SDFG-call block  --  for each
     ``FlattenEntry`` either alias it (zero-copy) or allocate + copy
     in, then populate SDFG free symbols from ``size(...)`` on the
@@ -472,7 +536,33 @@ def build_wrapper_body(frozen: FrozenSignature, iface: OriginalInterface, plan: 
               wrapper head's declarations and the SDFG call.
     """
     outer_dummy_set = {a.name for a in iface.args}
-    body: List[str] = ["    ! ----- Copy-in / alias per flatten entry -----"]
+    enum_args = _enum_args(iface, enum_maps or {})
+    body: List[str] = []
+    # Enum-mapped CHARACTER dummy -> ``SELECT CASE`` -> INTEGER scratch.
+    # Runs FIRST so the converted value is ready by the time the
+    # symbol-population block (which may reference it) executes.
+    if enum_args:
+        body.append("    ! ----- String-enum CHARACTER -> integer conversion -----")
+        for a in iface.args:
+            tbl = enum_args.get(a.name.lower())
+            if not tbl:
+                continue
+            local = _enum_local_name(a.name)
+            body.append(f"    select case ({a.name})")
+            for literal, value in sorted(tbl.items(), key=lambda kv: kv[1]):
+                body.append(f"    {_enum_literal_case_clause(literal)}")
+                body.append(f"      {local} = {value}")
+            body.append("    case default")
+            # ``-1`` is the bridge's "unknown enum value" sentinel;
+            # the SDFG's IF chain has no branch for it so the kernel
+            # falls through to the source's ``ELSE`` (or to a no-op
+            # if there isn't one).  An explicit error stop would
+            # change observable behaviour, so the bridge sticks to
+            # the source's already-permissive default-fallthrough.
+            body.append(f"      {local} = -1")
+            body.append("    end select")
+        body.append("")
+    body.append("    ! ----- Copy-in / alias per flatten entry -----")
     for entry in plan.entries:
         r = entry.recipe
         # Four mutually exclusive emitter shapes  --  see FlattenRecipe
@@ -529,7 +619,8 @@ def build_wrapper_body(frozen: FrozenSignature, iface: OriginalInterface, plan: 
         body.append("    ! FortranProcessGrid's MPI_Cart_create runs against the")
         body.append("    ! user's communicator (not MPI_COMM_WORLD).")
         body.append(f"    {_USER_COMM_SYMBOL_NAME} = dace_mpi_comm_f2c({frozen.user_comm_source})")
-        body.append(f"    dace_user_comm_size_err = dace_mpi_comm_size({_USER_COMM_SYMBOL_NAME}, dace_user_comm_size_buf)")
+        body.append(
+            f"    dace_user_comm_size_err = dace_mpi_comm_size({_USER_COMM_SYMBOL_NAME}, dace_user_comm_size_buf)")
         body.append(f"    {_USER_COMM_SIZE_SYMBOL_NAME} = int(dace_user_comm_size_buf, c_long_long)")
 
     sym_lines = _build_symbol_assigns(frozen, plan, outer_dummy_set, iface)
@@ -545,8 +636,11 @@ def build_wrapper_body(frozen: FrozenSignature, iface: OriginalInterface, plan: 
 # ---------------------------------------------------------------------------
 
 
-def build_wrapper_tail(frozen: FrozenSignature, iface: OriginalInterface, plan: FlattenPlan,
-                       dace_arglist: tuple = ()) -> str:
+def build_wrapper_tail(frozen: FrozenSignature,
+                       iface: OriginalInterface,
+                       plan: FlattenPlan,
+                       dace_arglist: tuple = (),
+                       enum_maps: dict = None) -> str:
     """Render the tail of the wrapper: init-count bump + ``call
     dace_program_<entry>`` + copy-back for every non-aliased
     writeable entry, then deallocate scratch, then close the
@@ -565,6 +659,26 @@ def build_wrapper_tail(frozen: FrozenSignature, iface: OriginalInterface, plan: 
     """
     tpl = _load("wrapper_call.f90.in")
     _, _, bridge_copy_out, name_override = _build_logical_bridges(frozen, iface)
+
+    # Enum-mapped CHARACTER dummies pass their ``SELECT CASE``-converted
+    # INTEGER scratch to the SDFG, not the outer ``CHARACTER`` itself.
+    # Extend ``name_override`` so ``_call_actual`` picks up the swap
+    # alongside the existing LOGICAL-bridge overrides.
+    enum_args = _enum_args(iface, enum_maps or {})
+    name_override = dict(name_override)
+    if enum_args:
+        # ``_call_actual`` keys ``name_override`` by ``FrozenArg.
+        # sdfg_name``; map each iface arg's outer name to its frozen
+        # entry's sdfg_name (typically identical for plain scalar
+        # dummies, but plumbed defensively for any future flatten-
+        # induced rename).
+        frozen_by_fortran = {fa.fortran_name.lower(): fa for fa in frozen.args if fa.fortran_name}
+        for a in iface.args:
+            if a.name.lower() not in enum_args:
+                continue
+            fa = frozen_by_fortran.get(a.name.lower())
+            sdfg_name = fa.sdfg_name if fa is not None else a.name
+            name_override[sdfg_name] = _enum_local_name(a.name)
 
     # The C interface declares every array arg as ``type(c_ptr), value``
     # (see ``build_c_interface``).  Wrap each array actual with
@@ -611,8 +725,7 @@ def build_wrapper_tail(frozen: FrozenSignature, iface: OriginalInterface, plan: 
         # ``<outer> = <flat>`` assignment ahead of the deallocate.
         if r.aliasable and r.source_logical_kind > 1:
             if entry.writeback_intent in ('out', 'inout'):
-                copy_out_lines.extend(
-                    _render_logical_bridge_copy_out(r, entry.outer_expr))
+                copy_out_lines.extend(_render_logical_bridge_copy_out(r, entry.outer_expr))
             else:
                 copy_out_lines.append(f"    deallocate({r.flat_names[0]})")
             continue
