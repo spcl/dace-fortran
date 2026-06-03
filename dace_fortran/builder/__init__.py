@@ -111,6 +111,18 @@ DEFAULT_PIPELINE = (
     # single-block ``scf.if`` so every callee is single-block and inlines
     # cleanly; the trailing lift-cf-to-scf handles whatever inlining exposes.
     "lift-cf-to-scf,"
+    # Delete every ``CALL errore(...)`` / ``CALL finish(...)`` site
+    # BEFORE the inliner runs.  These helpers are universally
+    # ``IF (ierr <= 0) RETURN`` + ``WRITE`` + ``STOP 1`` -- their error
+    # branch is unreachable under any valid input, and ``STOP`` is a
+    # noreturn terminator the ``scf`` dialect doesn't model, so
+    # ``lift-cf-to-scf`` leaves them multi-block.  Inlining a multi-
+    # block callee into the caller's surrounding ``scf`` region
+    # crashes flang's ``mlir::inlineCall``.  Stripping the call sites
+    # leaves the orphan callee for ``symbol-dce`` to remove.  See
+    # ``passes/StripErrorHelpers.cpp`` for the default helper-name
+    # list and the ``HLFIR_ERROR_HELPERS`` extension knob.
+    "hlfir-strip-error-helpers,"
     "hlfir-inline-all,"
     # Unwrap ``hlfir.eval_in_mem`` blocks into ``fir.alloca`` + body +
     # reads.  flang's HLFIR wraps any array-valued expression that

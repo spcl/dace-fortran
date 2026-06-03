@@ -227,6 +227,7 @@ add_library(hlfir_bridge_passes STATIC
     passes/PruneUnreachable.cpp
     passes/MarshalExternalStructs.cpp
     passes/UnwrapEvalInMem.cpp
+    passes/StripErrorHelpers.cpp
 )
 target_link_libraries(hlfir_bridge_passes PUBLIC
     hlfir_bridge_core
