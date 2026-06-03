@@ -64,6 +64,7 @@ _LAZY = {
     "normalize_kind_parameters": "dace_fortran.preprocess",
     "replace_external_with_modules": "dace_fortran.preprocess",
     "rewrite_string_enum_to_integer": "dace_fortran.preprocess",
+    "install_enum_arg_translation": "dace_fortran.builder.enum_arg_symbols",
     # Real-world-codebase helpers (ICON / IFS / ECRAD etc.).
     "prepare_flang_translation_unit": "dace_fortran.flang_codebase",
     "emit_hlfir_from_codebase": "dace_fortran.flang_codebase",
