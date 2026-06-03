@@ -89,6 +89,21 @@ struct VarInfo {
   /// (those carry ``const_data`` instead).
   std::string module_origin_mod;
   std::string module_origin_name;
+  /// Fortran 2003 bounds-remapping pointer view metadata, populated when
+  /// ``hlfir-mark-bounds-remap-views`` tagged this pointer's declare.
+  /// ``bounds_remap_view`` is the gate; the other two fields are
+  /// meaningful only when it is ``true``.  ``bounds_remap_source`` is
+  /// the parent array's Fortran name (the rebox chain's root declare
+  /// resolved by ``extract_vars``); ``bounds_remap_total_extent`` is
+  /// the symbol / expression for the flat 1-D extent of the view
+  /// (e.g. ``"n*k"``).  Consumed by ``descriptors.py`` to emit
+  /// ``sdfg.add_view(name, shape=[total_extent], strides=[1])`` aliased
+  /// to the parent, and to mint a fresh ``offset_<name>_d0`` symbol
+  /// that the per-rebind interstate edge binds to the column-offset
+  /// arithmetic inferred from the rebox chain.
+  bool bounds_remap_view = false;
+  std::string bounds_remap_source;
+  std::string bounds_remap_total_extent;
 };
 
 /// Decode a Flang module-global mangled symbol of the form

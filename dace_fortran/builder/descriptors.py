@@ -194,7 +194,50 @@ def add_descriptors(builder, sdfg: SDFG):
             # ``access.py`` / ``emit_tasklet.py``.
             continue
         dims = [_dim(s) for s in shape_syms[v.fortran_name]]
-        if v.role == 'view_alias':
+        if v.bounds_remap_view:
+            # Fortran 2003 bounds-remapping pointer assignment lowered
+            # to a 1-D contiguous view of the parent array.  See
+            # ``passes/MarkBoundsRemapViews.cpp`` for the detection
+            # contract.  The View shares storage with
+            # ``v.bounds_remap_source``; element ``ptr(i)`` lowers to
+            # ``parent_flat[offset_<ptr>_d0 + i - 1]`` at codegen.
+            #
+            # Shape: ``[total_extent]`` -- the flat 1-D size flang
+            # encodes on the rebox's shape-shift extent operand.  When
+            # ``v.bounds_remap_total_extent`` is a plain symbol /
+            # arithmetic expression the bridge extracted from the
+            # rebox, use it directly; otherwise fall back to a
+            # synthesised ``<ptr>_total_extent_d0`` symbol the caller
+            # binds.
+            #
+            # Strides: ``[1]`` -- per the spec, the contiguous case.
+            # QE's two sites flatten a column-major rank-2 slice over
+            # the last dim, which IS stride 1.  Other contiguous-
+            # column shapes also land here; non-contiguous slices
+            # wouldn't have triggered the mark pass in the first
+            # place (those produce a different rebox shape).
+            #
+            # Offset: ``0`` -- the View descriptor itself is offset-0.
+            # The per-rebind column offset into the parent is bound to
+            # a fresh ``offset_<ptr>_d0`` symbol (minted below
+            # alongside every array's offset symbols), assigned per
+            # loop iteration via interstate edge (a follow-up commit
+            # wires the assignment).
+            extent_str = v.bounds_remap_total_extent
+            if not extent_str:
+                # Synth fallback: caller binds a free total-extent
+                # symbol when the rebox's extent operand wasn't
+                # statically expressible.
+                extent_str = f"{v.fortran_name}_total_extent_d0"
+                if extent_str not in sdfg.symbols:
+                    sdfg.add_symbol(extent_str, dace.int64)
+            sdfg.add_view(
+                v.fortran_name,
+                shape=[dace.symbolic.pystr_to_symbolic(extent_str)],
+                dtype=dt(v.dtype),
+                strides=[1],
+            )
+        elif v.role == 'view_alias':
             # Pointer alias of ``v.view_source``  --  no separate storage.
             # ``sdfg.add_view`` registers a static reference that DaCe
             # codegen lowers to a typed pointer into the source's
@@ -266,6 +309,19 @@ def add_descriptors(builder, sdfg: SDFG):
             sym_name = f"offset_{v.fortran_name}_d{d}"
             if sym_name not in sdfg.symbols:
                 sdfg.add_symbol(sym_name, dace.int64)
+            if v.bounds_remap_view:
+                # The offset of a bounds-remap view is *dynamic*: it
+                # encodes the column offset into the parent array and
+                # changes per surrounding-loop iteration (e.g. each
+                # ``jbnd`` step in QE's ``addusxx_g`` rebinds
+                # ``prhoc_d`` to a different column slice).
+                # Setting ``offset_values`` to ``None`` keeps the
+                # symbol free on the SDFG signature so it survives
+                # ``_specialize_symbol``'s constant-fold sweep; the
+                # interstate-edge assignment that binds it lives in
+                # the View's linking-memlet wiring (follow-up).
+                builder.offset_values[sym_name] = None
+                continue
             lb = v.lower_bounds[d] if d < len(v.lower_bounds) else "1"
             builder.offset_values[sym_name] = _offset_value(lb)
 

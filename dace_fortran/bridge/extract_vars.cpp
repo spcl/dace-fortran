@@ -2335,6 +2335,138 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
       }
     }
 
+    // Detect Fortran 2003 bounds-remapping pointer views tagged by
+    // ``hlfir-mark-bounds-remap-views``.  When the tag is present:
+    //   1. Trace the LAST rebind store (skipping any nullify) back
+    //      through ``fir.rebox`` / ``fir.convert`` / ``hlfir.designate``
+    //      to the underlying parent ``hlfir.declare``.
+    //   2. Record the parent's Fortran name as ``bounds_remap_source``.
+    //   3. Record the rebox's shape-shift extent operand (the flat
+    //      1-D size) as ``bounds_remap_total_extent``, rendering it
+    //      as a string the Python builder can parse / emit as a
+    //      symbol or symbolic expression.
+    //
+    // The actual SDFG ``add_view`` + offset-symbol emission lives in
+    // ``descriptors.py``; this block only surfaces the three fields.
+    // A tagged declare whose rebind chain doesn't trace cleanly
+    // falls through with ``bounds_remap_view = false`` so the
+    // pipeline doesn't crash on an unsupported shape (the existing
+    // rewriter would have rejected such a shape too).
+    if (op->hasAttr("hlfir_bridge.bounds_remap_view")) {
+      // Find the rebind store: the LAST non-nullify ``fir.store``
+      // whose memref is ``op.getResult(0)``.
+      fir::StoreOp rebindStore;
+      for (auto* u : op.getResult(0).getUsers()) {
+        auto st = mlir::dyn_cast<fir::StoreOp>(u);
+        if (!st) continue;
+        auto* valDef = st.getValue().getDefiningOp();
+        if (auto eb = mlir::dyn_cast_or_null<fir::EmboxOp>(valDef))
+          if (mlir::isa_and_nonnull<fir::ZeroOp>(
+                  eb.getMemref().getDefiningOp()))
+            continue;  // skip nullify
+        if (!rebindStore || rebindStore->isBeforeInBlock(st))
+          rebindStore = st;
+      }
+      if (rebindStore) {
+        // The outermost ``fir.rebox`` carries the shape_shift whose
+        // extent operand is the flat 1-D total size of the view.
+        // Trace through ``fir.convert`` to find it.
+        mlir::Value cur = rebindStore.getValue();
+        fir::ReboxOp topRebox;
+        for (int hops = 0; cur && hops < 8 && !topRebox; ++hops) {
+          auto* def = cur.getDefiningOp();
+          if (!def) break;
+          if (auto rb = mlir::dyn_cast<fir::ReboxOp>(def)) {
+            topRebox = rb;
+            break;
+          }
+          if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def)) {
+            cur = cv.getValue();
+            continue;
+          }
+          break;
+        }
+        if (topRebox) {
+          // Render the shape-shift's first extent operand
+          // (lb0, ext0, lb1, ext1, ...) as the total extent.  For a
+          // rank-1 shape_shift -- the only shape the mark pass
+          // recognises -- this is the single ``ext0`` entry.
+          if (auto ss = mlir::dyn_cast_or_null<fir::ShapeShiftOp>(
+                  topRebox.getShape().getDefiningOp())) {
+            auto pairs = ss.getPairs();
+            if (pairs.size() >= 2) {
+              // Render the extent SSA value as a parseable string.
+              // Supports: (a) constant integer, (b) load of a named
+              // declare (Fortran scalar name), (c) ``arith.muli`` of
+              // two loads / constants (the common ``n*k`` shape).
+              // Falls back to empty string for anything more complex;
+              // descriptors.py then mints a synthetic
+              // ``<ptr>_total_extent_d0`` symbol the caller binds.
+              std::function<std::string(mlir::Value)> renderExtent =
+                  [&](mlir::Value vv) -> std::string {
+                for (int hops = 0; vv && hops < 8; ++hops) {
+                  auto* d = vv.getDefiningOp();
+                  if (!d) return "";
+                  if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
+                    vv = cv.getValue();
+                    continue;
+                  }
+                  if (auto cst = mlir::dyn_cast<mlir::arith::ConstantOp>(d)) {
+                    if (auto ia =
+                            mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue()))
+                      return std::to_string(ia.getInt());
+                    return "";
+                  }
+                  if (auto ld = mlir::dyn_cast<fir::LoadOp>(d)) {
+                    return traceToDecl(ld.getMemref());
+                  }
+                  if (auto mul = mlir::dyn_cast<mlir::arith::MulIOp>(d)) {
+                    std::string lhs = renderExtent(mul.getLhs());
+                    std::string rhs = renderExtent(mul.getRhs());
+                    if (lhs.empty() || rhs.empty()) return "";
+                    return lhs + "*" + rhs;
+                  }
+                  return "";
+                }
+                return "";
+              };
+              v.bounds_remap_total_extent = renderExtent(pairs[1]);
+            }
+          }
+          // Trace back to the parent declare through any
+          // ``hlfir.designate`` / ``fir.convert`` chain on the
+          // rebox's input box.
+          mlir::Value parent = topRebox.getBox();
+          for (int hops = 0; parent && hops < 16; ++hops) {
+            auto* pd = parent.getDefiningOp();
+            if (!pd) break;
+            if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(pd)) {
+              v.bounds_remap_source = extractName(dc.getUniqName().str());
+              v.bounds_remap_view = !v.bounds_remap_source.empty();
+              break;
+            }
+            if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(pd)) {
+              parent = dg.getMemref();
+              continue;
+            }
+            if (auto cv = mlir::dyn_cast<fir::ConvertOp>(pd)) {
+              parent = cv.getValue();
+              continue;
+            }
+            if (auto rb = mlir::dyn_cast<fir::ReboxOp>(pd)) {
+              parent = rb.getBox();
+              continue;
+            }
+            if (auto eb = mlir::dyn_cast<fir::EmboxOp>(pd)) {
+              parent = eb.getMemref();
+              continue;
+            }
+            break;
+          }
+        }
+      }
+    }
+
     vars.push_back(std::move(v));
   }
   // De-duplicate the collected value-symbols: the same array-element extent
