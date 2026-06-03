@@ -61,6 +61,7 @@ _LAZY = {
     "merge_used_modules": "dace_fortran.preprocess",
     "preprocess_fortran": "dace_fortran.preprocess",
     "rewrite_integer_powers": "dace_fortran.preprocess",
+    "normalize_kind_parameters": "dace_fortran.preprocess",
     # Real-world-codebase helpers (ICON / IFS / ECRAD etc.).
     "prepare_flang_translation_unit": "dace_fortran.flang_codebase",
     "emit_hlfir_from_codebase": "dace_fortran.flang_codebase",

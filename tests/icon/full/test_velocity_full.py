@@ -47,6 +47,8 @@ def _compile_caller_so(out_dir: Path) -> ctypes.CDLL:
         pytest.skip("gfortran not available")
     out_dir.mkdir(parents=True, exist_ok=True)
     so_path = out_dir / "libvelocity_caller.so"
+    # cwd=out_dir keeps gfortran from picking up any stale .mod that
+    # a prior flang invocation left in the repo root.
     subprocess.check_call([
         "gfortran",
         "-shared",
@@ -59,7 +61,8 @@ def _compile_caller_so(out_dir: Path) -> ctypes.CDLL:
         str(_CALLER_PATH),
         "-o",
         str(so_path),
-    ])
+    ],
+                          cwd=str(out_dir))
     return ctypes.CDLL(str(so_path))
 
 

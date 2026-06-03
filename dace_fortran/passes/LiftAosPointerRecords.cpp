@@ -451,7 +451,16 @@ static void emitCopyLoop(mlir::OpBuilder &b, mlir::Location loc,
   auto loaded = b.create<fir::LoadOp>(loc, srcDg.getResult());
   auto dstDg = b.create<hlfir::DesignateOp>(loc, elemRefTy, dstRef,
                                             mlir::ValueRange{dstIdxs});
-  b.create<fir::StoreOp>(loc, loaded.getResult(), dstDg.getResult());
+  // ``hlfir.assign %loaded_scalar to %dst_element_ref`` -- a scalar
+  // store into one element.  The bridge's ``buildAssignNode`` routes
+  // this through the normal SDFG-emit path; a raw ``fir.store``
+  // surfaces an access node whose data field resolves to the loop
+  // iterator symbol instead of the destination array (a pre-existing
+  // bridge gap), so the assign form is the right shape.
+  b.create<hlfir::AssignOp>(loc, loaded.getResult(), dstDg.getResult(),
+                            /*realloc=*/false,
+                            /*keep_lhs_length_if_realloc=*/false,
+                            /*temporary_lhs=*/false);
   (void)idxTy;
 }
 

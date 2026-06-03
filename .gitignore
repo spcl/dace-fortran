@@ -214,3 +214,18 @@ _all_tests/
 !tests/mpi_alltoall/**/*.f90
 # QE-style ``fwfft`` / ``invfft`` frontend-recognition probes.
 !tests/qe_fft/**/*.f90
+# AoS-of-pointer-records (Graupel t_qx_ptr pattern) + ``wp`` kind-alias
+# end-to-end probes for the hlfir-lift-aos-pointer-records pass.
+!tests/aos_pointer_records/**/*.f90
+# Fortran-intrinsic frontend-recognition probes (one .f90 per intrinsic
+# the bridge has to recognise + lower): argminmax (MINLOC/MAXLOC),
+# eoshift (EOSHIFT), cshift (CSHIFT), matmul_transpose (MATMUL of
+# TRANSPOSE fused pattern), norm2 (NORM2), reshape (RESHAPE), spread
+# (SPREAD).
+!tests/argminmax/**/*.f90
+!tests/eoshift/**/*.f90
+!tests/cshift/**/*.f90
+!tests/matmul_transpose/**/*.f90
+!tests/norm2/**/*.f90
+!tests/reshape/**/*.f90
+!tests/spread/**/*.f90

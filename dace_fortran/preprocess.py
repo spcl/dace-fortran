@@ -325,8 +325,7 @@ _OMP_COND_LINE_RE = re.compile(r"^\s*!\s*\$[ \t]+\S")
 #: flang -- dropping it is the safe choice because every macro it
 #: defines expands to an OpenMP sentinel comment (and those are stripped
 #: above too).
-_OMP_INCLUDE_RE = re.compile(r'^\s*#\s*include\s*[<"][^>"]*omp_definitions[^>"]*\.inc[>"]\s*$',
-                             re.IGNORECASE)
+_OMP_INCLUDE_RE = re.compile(r'^\s*#\s*include\s*[<"][^>"]*omp_definitions[^>"]*\.inc[>"]\s*$', re.IGNORECASE)
 
 #: Macros treated as undefined by ``strip_openmp_directives`` -- ``#ifdef``
 #: blocks gated on these are dropped, ``#ifndef`` blocks pass through.
@@ -436,6 +435,175 @@ def strip_openmp_directives(source: str) -> str:
         if _OMP_INCLUDE_RE.match(line):
             continue
         out.append(line)
+    return "".join(out)
+
+
+# Default precision-kind aliases.  Each maps an unresolved kind symbol
+# (one not locally bound to a literal integer) to the IEEE byte width
+# the bridge should substitute.  Covers the four conventions seen in
+# climate / NWP code: ``wp`` (working precision, ECMWF / ICON / CLOUDSC),
+# ``sp``/``dp`` (single / double, generic), ``qp`` (quad), ``rp`` (real
+# precision, less common).  ``kind_map=`` to ``normalize_kind_parameters``
+# both extends and overrides this table; pass ``None`` for an alias to
+# leave it untouched.
+_DEFAULT_KIND_ALIASES = {
+    "wp": 8,
+    "rp": 8,
+    "sp": 4,
+    "dp": 8,
+    "qp": 16,
+}
+
+# ``KIND = sym`` -- with arbitrary spacing.  Group 1 is the
+# ``KIND<sp>=<sp>`` prefix (preserved verbatim), group 2 the symbol.
+_KIND_EQ_RE = re.compile(r"\b(KIND\s*=\s*)([A-Za-z_]\w*)\b", re.IGNORECASE)
+
+# ``REAL(sym)`` / ``INTEGER(sym)`` / ``COMPLEX(sym)`` / ``LOGICAL(sym)``
+# -- the sole-argument numeric-type-spec form.  Group 1 = type keyword,
+# group 2 = ``(<sp>``, group 3 = symbol, group 4 = ``<sp>)``.
+_TYPE_PAREN_RE = re.compile(
+    r"\b(REAL|INTEGER|COMPLEX|LOGICAL)(\s*\(\s*)([A-Za-z_]\w*)(\s*\))",
+    re.IGNORECASE,
+)
+
+# Literal-kind suffix: ``1.0_wp``, ``1.0E0_wp``, ``1_wp``.  Group 1 is
+# the numeric portion, group 2 the kind symbol.  A leading word
+# boundary keeps the match off the middle of identifiers.
+_LITERAL_KIND_RE = re.compile(r"\b(\d+(?:\.\d*)?(?:[eEdD][+-]?\d+)?)_([A-Za-z_]\w*)\b")
+
+# ``INTEGER, PARAMETER ... :: sym = <int_literal>`` -- the locally-bound
+# form the bridge can already evaluate.  Aliases caught here are dropped
+# from the substitution set (the local binding wins).  Any non-integer
+# RHS (``SELECTED_REAL_KIND(...)``, ``KIND(0.0D0)``) doesn't match and
+# falls through to the rewrite, which is exactly the target case.
+_PARAM_BIND_RE = re.compile(r"\bINTEGER\b[^:\n]*::\s*([A-Za-z_]\w*)\s*=\s*(\d+)\b", re.IGNORECASE)
+
+
+def _local_kind_bindings(source: str) -> dict:
+    """Collect locally-defined ``INTEGER, PARAMETER :: sym = <int>``
+    bindings.
+
+    Only the literal-integer form is captured -- those are the bindings
+    flang already lowers without help.  Any other RHS (intrinsics,
+    arithmetic) is opaque to this scan and falls through to the
+    alias-substitution path.
+
+    :param source: full Fortran source text.
+    :returns: ``{lowercase-symbol: literal int}``.
+    """
+    out: dict = {}
+    for raw in source.splitlines():
+        m = _PARAM_BIND_RE.search(_code_of(raw))
+        if m:
+            out.setdefault(m.group(1).lower(), int(m.group(2)))
+    return out
+
+
+def normalize_kind_parameters(source: str, *, kind_map: dict = None, passthrough: bool = False) -> str:
+    """Substitute symbolic precision kind aliases with literal kind ints.
+
+    Climate / NWP Fortran tends to thread one symbolic kind alias
+    (``wp`` in CLOUDSC / ICON, ``JPRB`` via ECMWF's ``PARKIND1``,
+    ``REAL_KIND`` in legacy ECRAD) through every type spec
+    (``REAL(KIND=wp)``, ``REAL(wp)``) and every numeric literal
+    (``1.0_wp``).  The kind alias is itself defined in a tiny
+    constants module via ``SELECTED_REAL_KIND`` / ``KIND(0.0D0)`` and
+    pulled in via ``USE``.  flang resolves these aliases at parse time
+    *only if* the defining module is in the translation unit -- when
+    the bridge runs against a single-file slice (a probe, a kernel
+    extracted for a microbenchmark) the constants module is absent and
+    flang errors out.
+
+    This rewrite makes single-file slices self-contained: every
+    unresolved kind alias is replaced by the literal IEEE byte width
+    (default fp64 ``8``) at every use site.  Locally-bound integer
+    parameter aliases (``INTEGER, PARAMETER :: wp = 8``) are skipped --
+    flang already handles those.
+
+    Integrating into an existing build pipeline that already supplies
+    the constants module (and so resolves ``wp`` itself):
+
+    1. ``normalize_kind_parameters`` is **idempotent and no-op-safe**.
+       A second pass over already-substituted source finds no
+       symbolic aliases left and returns the input unchanged; running
+       it on source where ``wp`` is locally bound to an integer
+       literal also returns the input unchanged.  It is therefore
+       safe to leave default-on in the bridge even when the upstream
+       pipeline resolves kinds.
+    2. To bind a single alias to a non-default precision (e.g. an
+       fp32 build that defines ``wp = 4``), pass
+       ``kind_map={"wp": 4}``.
+    3. To leave one specific alias alone (the upstream pipeline
+       resolves it correctly and the default would be wrong), pass
+       ``kind_map={"wp": None}``.
+    4. To disable the rewrite entirely (upstream guarantees every
+       kind is already a literal), pass ``passthrough=True``.
+
+    The pass is comment- and string-aware via ``_scan_line``: a kind
+    alias that appears inside a character literal or a ``!`` comment
+    is never touched.
+
+    :param source: Fortran source text.
+    :param kind_map: optional override / extension of
+        ``_DEFAULT_KIND_ALIASES``; per-alias ``None`` disables it.
+    :param passthrough: ``True`` returns ``source`` unchanged.
+    :returns: source with kind aliases replaced by literal integers.
+    """
+    if passthrough:
+        return source
+
+    aliases = dict(_DEFAULT_KIND_ALIASES)
+    if kind_map:
+        for k, v in kind_map.items():
+            aliases[k.lower()] = v
+    # Drop aliases the caller opted out of and any locally-bound ones.
+    aliases = {k: v for k, v in aliases.items() if v is not None}
+    for nm in _local_kind_bindings(source):
+        aliases.pop(nm, None)
+    if not aliases:
+        return source
+
+    def _resolve_kind_eq(m):
+        sym = m.group(2).lower()
+        return f"{m.group(1)}{aliases[sym]}" if sym in aliases else None
+
+    def _resolve_type_paren(m):
+        sym = m.group(3).lower()
+        if sym not in aliases:
+            return None
+        return f"{m.group(1)}{m.group(2)}{aliases[sym]}{m.group(4)}"
+
+    def _resolve_literal(m):
+        sym = m.group(2).lower()
+        return f"{m.group(1)}_{aliases[sym]}" if sym in aliases else None
+
+    rules = (
+        (_KIND_EQ_RE, _resolve_kind_eq),
+        (_TYPE_PAREN_RE, _resolve_type_paren),
+        (_LITERAL_KIND_RE, _resolve_literal),
+    )
+
+    out = []
+    for line in source.splitlines(keepends=True):
+        nl = line[len(line.rstrip("\r\n")):]
+        body = line[:len(line) - len(nl)]
+        cut, strings = _scan_line(body)
+        code, tail = body[:cut], body[cut:]
+        edits = []
+        for pat, fn in rules:
+            for m in pat.finditer(code):
+                if any(s <= m.start() < e for s, e in strings):
+                    continue  # inside a character literal
+                repl = fn(m)
+                if repl is None:
+                    continue
+                # Skip if this span overlaps an edit already queued.
+                if any(not (m.end() <= eb or m.start() >= ee) for eb, ee, _ in edits):
+                    continue
+                edits.append((m.start(), m.end(), repl))
+        for begin, fin, repl in sorted(edits, key=lambda e: e[0], reverse=True):
+            code = code[:begin] + repl + code[fin:]
+        out.append(code + tail + nl)
     return "".join(out)
 
 
@@ -694,7 +862,13 @@ def merge_used_modules(source: str, *, search_dirs=()) -> str:
     return "".join(parts)
 
 
-def preprocess_fortran_source(source: str, *, search_dirs=(), merge: bool = True, if_intvar: bool = False) -> str:
+def preprocess_fortran_source(source: str,
+                              *,
+                              search_dirs=(),
+                              merge: bool = True,
+                              if_intvar: bool = False,
+                              kind_map: dict = None,
+                              kind_passthrough: bool = False) -> str:
     """Single entrypoint for all Fortran-source preprocessing the HLFIR
     frontend applies before handing source to flang.
 
@@ -705,9 +879,13 @@ def preprocess_fortran_source(source: str, *, search_dirs=(), merge: bool = True
     2. ``strip_openmp_directives`` -- drop OpenMP / OpenACC sentinels
        and the ICON ``omp_definitions.inc`` cpp include (the bridge
        does not run cpp and does not pass ``-fopenmp``).
-    3. ``rewrite_integer_powers`` -- expand integer-valued real powers
+    3. ``normalize_kind_parameters`` -- substitute unresolved precision
+       aliases (``wp``, ``sp``, ``dp``, ``qp``) with literal kind ints
+       (default fp64).  No-op when every alias is locally bound or the
+       caller passes ``kind_passthrough=True``.
+    4. ``rewrite_integer_powers`` -- expand integer-valued real powers
        (``x**2.0`` -> ``x*x``) for byte-identical arithmetic.
-    4. ``preprocess_fortran`` (when ``if_intvar``) -- the opt-in
+    5. ``preprocess_fortran`` (when ``if_intvar``) -- the opt-in
        ``IF (intvar)`` -> ``IF (intvar /= 0)`` rewrite.
 
     The individual stages remain importable for their unit tests; this
@@ -717,11 +895,18 @@ def preprocess_fortran_source(source: str, *, search_dirs=(), merge: bool = True
     :param search_dirs: directories searched by ``merge_used_modules``.
     :param merge: run the ``USE``-merge stage (default on).
     :param if_intvar: also run the opt-in integer-IF rewrite.
+    :param kind_map: per-alias override forwarded to
+        ``normalize_kind_parameters`` -- ``{"wp": 4}`` for an fp32
+        build, ``{"wp": None}`` to leave one alias alone, etc.
+    :param kind_passthrough: ``True`` skips ``normalize_kind_parameters``
+        entirely -- for build pipelines that already resolve every kind
+        alias upstream and want the bridge to assume nothing.
     :returns: the fully preprocessed Fortran source.
     """
     if merge:
         source = merge_used_modules(source, search_dirs=search_dirs)
     source = strip_openmp_directives(source)
+    source = normalize_kind_parameters(source, kind_map=kind_map, passthrough=kind_passthrough)
     source = rewrite_integer_powers(source)
     if if_intvar:
         source = preprocess_fortran(source)

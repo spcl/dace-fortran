@@ -19,8 +19,7 @@ import numpy as np
 import pytest
 
 from _util import build_sdfg, have_flang
-from dace_fortran.external import (Arg, ExternalCall, ExternalSignature, clear_external_registry,
-                                   register_external)
+from dace_fortran.external import (Arg, ExternalCall, ExternalSignature, clear_external_registry, register_external)
 
 pytestmark = [
     pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH"),
@@ -67,14 +66,19 @@ def test_external_iso_c_function_increments_array(tmp_path: Path):
     foo_f90 = tmp_path / "foo.f90"
     foo_f90.write_text(_FOO_F90)
     libfoo = tmp_path / "libfoo.so"
-    subprocess.check_call(["gfortran", "-shared", "-fPIC", "-o", str(libfoo), str(foo_f90)])
+    # cwd=tmp_path keeps gfortran from picking up any stale .mod that
+    # a prior flang invocation left in the repo root (gfortran searches
+    # cwd for ``iso_c_binding.mod`` and refuses a flang-format module).
+    subprocess.check_call(["gfortran", "-shared", "-fPIC", "-o", str(libfoo), str(foo_f90)], cwd=str(tmp_path))
 
-    register_external("foo", ExternalSignature(
-        c_name="foo",
-        args=[Arg(kind="array", dtype="float64", intent="inout"),
-              Arg(kind="scalar", dtype="int32", intent="in")],
-        libraries=[str(libfoo)],
-    ))
+    register_external(
+        "foo",
+        ExternalSignature(
+            c_name="foo",
+            args=[Arg(kind="array", dtype="float64", intent="inout"),
+                  Arg(kind="scalar", dtype="int32", intent="in")],
+            libraries=[str(libfoo)],
+        ))
 
     # The SDFG .so is linked against libfoo with an rpath, so it is
     # self-contained: no LD_PRELOAD / load ordering needed.
@@ -103,15 +107,17 @@ def test_external_default_intent_is_inout(tmp_path: Path):
     foo_f90 = tmp_path / "foo.f90"
     foo_f90.write_text(_FOO_F90)
     libfoo = tmp_path / "libfoo.so"
-    subprocess.check_call(["gfortran", "-shared", "-fPIC", "-o", str(libfoo), str(foo_f90)])
+    subprocess.check_call(["gfortran", "-shared", "-fPIC", "-o", str(libfoo), str(foo_f90)], cwd=str(tmp_path))
 
-    register_external("foo", ExternalSignature(
-        c_name="foo",
-        # No intent= on the array -> defaults to inout (safe).
-        args=[Arg(kind="array", dtype="float64"),
-              Arg(kind="scalar", dtype="int32")],
-        libraries=[str(libfoo)],
-    ))
+    register_external(
+        "foo",
+        ExternalSignature(
+            c_name="foo",
+            # No intent= on the array -> defaults to inout (safe).
+            args=[Arg(kind="array", dtype="float64"),
+                  Arg(kind="scalar", dtype="int32")],
+            libraries=[str(libfoo)],
+        ))
 
     sdfg = build_sdfg(_KERNEL, tmp_path / "sdfg", name="run", entry="_QPrun").build()
     sdfg.name = "ext_run_def"
