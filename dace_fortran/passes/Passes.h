@@ -37,6 +37,7 @@ std::unique_ptr<mlir::Pass> createPruneUnreachablePass();
 std::unique_ptr<mlir::Pass> createMarshalExternalStructsPass();
 std::unique_ptr<mlir::Pass> createUnwrapEvalInMemPass();
 std::unique_ptr<mlir::Pass> createStripErrorHelpersPass();
+std::unique_ptr<mlir::Pass> createStripRuntimeIoPass();
 
 // --- Registry ---
 

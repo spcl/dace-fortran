@@ -123,6 +123,13 @@ DEFAULT_PIPELINE = (
     # ``passes/StripErrorHelpers.cpp`` for the default helper-name
     # list and the ``HLFIR_ERROR_HELPERS`` extension knob.
     "hlfir-strip-error-helpers,"
+    # Delete every ``fir.call @_FortranAio*`` -- WRITE / PRINT / FLUSH /
+    # OPEN / CLOSE all lower to opaque flang runtime calls that the
+    # SDFG can't model and that the bridge's numerical-equivalence
+    # contract doesn't care about.  Same slot as strip-error-helpers
+    # (pre-inline) so the cookie-threading IO chains never reach the
+    # inliner.  See ``passes/StripRuntimeIo.cpp``.
+    "hlfir-strip-runtime-io,"
     "hlfir-inline-all,"
     # Unwrap ``hlfir.eval_in_mem`` blocks into ``fir.alloca`` + body +
     # reads.  flang's HLFIR wraps any array-valued expression that
