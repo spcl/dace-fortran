@@ -25,14 +25,35 @@
 //     reduce to a ``WRITE(stdout, ...) "no clock for ... found !"`` style
 //     diagnostic, which is exactly what this pass deletes.
 //
+//     FILE-bound I/O is a separate story: ``OPEN(newunit=u, file='cfg.nml')
+//     ... READ (u, *) y`` lowers to a SetFile + BeginExternalListInput +
+//     InputDescriptor + EndIoStatement chain that the AST-extraction-
+//     time recognizer (``bridge/ast/dispatch.cpp::recognizeIoCall``)
+//     maps to ``dace.libraries.fortran_io`` library nodes -- those
+//     transfers ARE part of the kernel's contract.  Stripping them
+//     would silently drop the data load, so a ``y = [1.5, 2.5]`` test
+//     reads ``[0.0, 0.0]`` instead.  The strip pass must therefore
+//     preserve file-bound chains and only erase stdout / stderr ones.
+//
 // Approach:
 //     Walk the module for every ``fir.call`` whose callee starts with
-//     ``_FortranAio``; replace each call's result(s) with a benign
-//     constant matching the result type (``i1`` -> false, ``i32`` -> 0,
-//     ``!fir.ref<i8>`` -> ``fir.zero_bits``), then erase the call.  After
-//     the walk every Fortran I/O statement has been collapsed to dead
-//     constants which the trailing ``canonicalize`` + ``symbol-dce``
-//     sweep up.
+//     ``_FortranAio``.  Walk each ``Begin*`` call's cookie SSA value
+//     forward to gather the whole chain (everything that uses the
+//     cookie transitively up to ``EndIoStatement``).  Mark the chain
+//     as file-bound if ANY member is a ``SetFile`` call -- the
+//     SetFile pattern is the universal flang marker for "this IO
+//     targets a named file" (both OPEN's chain and any subsequent
+//     read/write chain that uses an opened unit go through a
+//     SetFile in the OPEN sequence).
+//
+//     Then for every IO call, replace its SSA result(s) with a benign
+//     constant matching the result type (``i1`` -> false, ``i32`` ->
+//     0, ``!fir.ref<i8>`` -> ``fir.zero_bits``) and erase, BUT ONLY
+//     when the call is NOT part of any file-bound chain.  After the
+//     walk every stdout / stderr IO statement has been collapsed to
+//     dead constants which the trailing ``canonicalize`` +
+//     ``symbol-dce`` sweep up; file-bound chains pass through to the
+//     AST-extraction-time recognizer untouched.
 //
 //     Three runtime result types cover every ``_FortranAio*`` entry:
 //       - ``i1``                : per-item OutputXxx / InputXxx status
@@ -130,45 +151,76 @@ struct StripRuntimeIoPass
 
   llvm::StringRef getArgument() const final { return "hlfir-strip-runtime-io"; }
   llvm::StringRef getDescription() const final {
-    return "Delete fir.call ops to flang's _FortranAio* I/O runtime "
-           "(WRITE / PRINT / FLUSH / OPEN / CLOSE).  Diagnostic output is "
-           "orthogonal to the SDFG's numerical-equivalence contract.";
+    return "Delete fir.call ops to flang's _FortranAio* I/O runtime that target "
+           "stdout / stderr (WRITE * / PRINT / stop_clock diagnostic).  File-"
+           "bound IO chains (anything reaching a SetFile call) are preserved "
+           "for the AST-extraction-time recognizer.";
+  }
+
+  /// True iff ``func`` contains a ``_FortranAioSetFile`` call.  The
+  /// SetFile runtime entry is emitted by every ``OPEN (..., FILE=
+  /// '...')`` lowering, so its presence in a function is a tight
+  /// proxy for "this function does file-bound I/O somewhere".  Per-
+  /// function scope works because each subroutine's IO chains are
+  /// self-contained: an ``OPEN`` and the ``READ`` / ``WRITE`` /
+  /// ``CLOSE`` that use its unit all live inside the same
+  /// ``func.func``.
+  static bool funcTouchesFile(mlir::func::FuncOp func) {
+    bool found = false;
+    func.walk([&](fir::CallOp call) {
+      if (found) return mlir::WalkResult::interrupt();
+      auto sym = call.getCallee();
+      if (sym && sym->getLeafReference().getValue().contains("SetFile")) {
+        found = true;
+        return mlir::WalkResult::interrupt();
+      }
+      return mlir::WalkResult::advance();
+    });
+    return found;
   }
 
   void runOnOperation() override {
     auto module = getOperation();
     llvm::SmallVector<fir::CallOp, 32> toErase;
 
-    module.walk([&](fir::CallOp call) {
-      auto sym = call.getCallee();
-      if (!sym) return;  // indirect call
-      llvm::StringRef name = sym->getLeafReference().getValue();
-      if (!name.starts_with(kFortranIoPrefix)) return;
-
-      // For each SSA result, replace uses with a benign constant.
-      // The replacement op is inserted right before ``call`` so it
-      // dominates every use the call's result currently has.
-      mlir::OpBuilder builder(call);
-      bool allReplaced = true;
-      for (auto res : call.getResults()) {
-        mlir::Value repl = makeReplacement(builder, call.getLoc(), res.getType());
-        if (!repl) {
-          LLVM_DEBUG(llvm::dbgs()
-                     << "StripRuntimeIo: refusing to strip " << name
-                     << " -- result type unsupported\n");
-          allReplaced = false;
-          break;
+    module.walk([&](mlir::func::FuncOp func) {
+      // Functions that touch file IO (any ``SetFile`` call in scope)
+      // keep their entire ``_FortranAio*`` chain intact -- the AST-
+      // extraction-time recognizer needs to walk the SetFile +
+      // BeginExternal* + EndIoStatement sequence to map ``OPEN`` /
+      // ``READ`` / ``WRITE`` / ``CLOSE`` to library nodes.
+      // Functions that don't touch file IO are diagnostic-only
+      // (stdout writes, PRINT, stop_clock chatter); we strip
+      // everything in them so ``hlfir-inline-all`` doesn't walk
+      // their cookie chains.
+      if (funcTouchesFile(func)) return;
+      func.walk([&](fir::CallOp call) {
+        auto sym = call.getCallee();
+        if (!sym) return;
+        llvm::StringRef name = sym->getLeafReference().getValue();
+        if (!name.starts_with(kFortranIoPrefix)) return;
+        mlir::OpBuilder builder(call);
+        bool allReplaced = true;
+        for (auto res : call.getResults()) {
+          mlir::Value repl = makeReplacement(builder, call.getLoc(), res.getType());
+          if (!repl) {
+            LLVM_DEBUG(llvm::dbgs()
+                       << "StripRuntimeIo: refusing to strip " << name
+                       << " -- result type unsupported\n");
+            allReplaced = false;
+            break;
+          }
+          res.replaceAllUsesWith(repl);
         }
-        res.replaceAllUsesWith(repl);
-      }
-      if (allReplaced) toErase.push_back(call);
+        if (allReplaced) toErase.push_back(call);
+      });
     });
 
     for (auto call : toErase) call->erase();
 
     LLVM_DEBUG(llvm::dbgs()
                << "StripRuntimeIo: erased " << toErase.size()
-               << " _FortranAio* call(s)\n");
+               << " stdout-bound _FortranAio* call(s)\n");
   }
 };
 

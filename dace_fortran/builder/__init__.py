@@ -123,12 +123,16 @@ DEFAULT_PIPELINE = (
     # ``passes/StripErrorHelpers.cpp`` for the default helper-name
     # list and the ``HLFIR_ERROR_HELPERS`` extension knob.
     "hlfir-strip-error-helpers,"
-    # Delete every ``fir.call @_FortranAio*`` -- WRITE / PRINT / FLUSH /
-    # OPEN / CLOSE all lower to opaque flang runtime calls that the
-    # SDFG can't model and that the bridge's numerical-equivalence
-    # contract doesn't care about.  Same slot as strip-error-helpers
-    # (pre-inline) so the cookie-threading IO chains never reach the
-    # inliner.  See ``passes/StripRuntimeIo.cpp``.
+    # Delete every ``fir.call @_FortranAio*`` whose cookie chain
+    # does NOT touch a ``SetFile`` call -- stdout / stderr WRITEs,
+    # PRINTs, and the QE stop_clock diagnostic.  File-bound chains
+    # (``OPEN (..., FILE='...') ... READ (u, *) y``) are preserved
+    # for the AST-extraction-time recognizer at
+    # ``bridge/ast/dispatch.cpp::recognizeIoCall``, which maps them
+    # to ``dace.libraries.fortran_io`` library nodes.  Same slot as
+    # strip-error-helpers (pre-inline) so the cookie-threading chains
+    # never reach ``hlfir-inline-all``.  See
+    # ``passes/StripRuntimeIo.cpp``.
     "hlfir-strip-runtime-io,"
     "hlfir-inline-all,"
     # Unwrap ``hlfir.eval_in_mem`` blocks into ``fir.alloca`` + body +
