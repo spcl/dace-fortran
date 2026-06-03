@@ -64,3 +64,32 @@ def test_write_through_pointer_recognised(tmp_path):
     """Writes through the alias don't affect matching either."""
     mod = _post_pass_module("aos_write_through_pointer_probe.f90", "m::run", tmp_path)
     assert _has_attr(mod, "hlfir.aos_ptr_records.")
+
+
+def _materialisation_landed(module_str: str) -> bool:
+    """The materialisation step injects a concat declare named ``_QXaos_lift_*``."""
+    return any('_QXaos_lift_' in line for line in module_str.splitlines())
+
+
+def test_materialisation_emits_concat_declare(tmp_path):
+    """The pass allocates a per-member concat transient when materialisation fires.
+
+    The recognised candidate's pointer member gets a top-level
+    ``hlfir.declare`` whose uniq_name carries the ``_QXaos_lift_<aos>_<member>_<n>``
+    convention.  This verifies the pass progresses past the recognition stage
+    into the actual IR rewrite.
+    """
+    mod = _post_pass_module("aos_single_pointer_member_probe.f90", "m::run", tmp_path)
+    assert _materialisation_landed(mod), (
+        "expected an `_QXaos_lift_` concat declare in the post-pass module; "
+        "the materialisation step did not emit one"
+    )
+
+
+def test_materialisation_handles_two_members(tmp_path):
+    """Both pointer members get their own concat transient."""
+    mod = _post_pass_module("aos_two_pointer_members_probe.f90", "m::run", tmp_path)
+    concat_lines = [l for l in mod.splitlines() if '_QXaos_lift_' in l]
+    # 2 concat declares (one per member)
+    assert sum(1 for l in concat_lines if 'hlfir.declare' in l) >= 2, \
+        f"expected 2 concat declares; got: {concat_lines!r}"

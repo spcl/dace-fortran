@@ -167,12 +167,12 @@ DEFAULT_PIPELINE = (
     # Lift an AoS-of-records-with-pointer-only-members (Graupel's
     # ``TYPE(t_qx_ptr) :: q(N)`` with ``REAL, POINTER :: p(:), x(:,:)``)
     # to flat per-member concat transients with copy-in / copy-out.
-    # Without this, ``flatten-structs`` rejects the shape (its
-    # docstring says ``Pointer members and AoS-with-allocatable
-    # members are still out of scope``) and the bridge emits a 2-D
-    # subscript against a scalar-shape descriptor that Python's
-    # interstate-edge parser then chokes on.  Runs BEFORE
-    # flatten-structs so flatten sees only ordinary flat arrays.
+    # Without this, ``flatten-structs`` rejects the shape (its docstring
+    # says ``Pointer members and AoS-with-allocatable members are still
+    # out of scope``) and the bridge emits a 2-D subscript against a
+    # scalar-shape descriptor that Python's interstate-edge parser then
+    # chokes on.  Runs BEFORE flatten-structs so flatten sees only
+    # ordinary flat arrays.
     "hlfir-lift-aos-pointer-records,"
     # Pre-stage the alloc-array-of-records dummy splits BEFORE
     # marshal-external-structs.  ``splitDoubleBufferMembers`` rewrites
