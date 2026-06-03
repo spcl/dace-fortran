@@ -472,6 +472,17 @@ struct RewritePointerAssignsPass
 
  private:
   void rewrite(hlfir::DeclareOp ptrDecl) {
+    // Skip pointers that ``hlfir-mark-bounds-remap-views`` already
+    // identified as Fortran 2003 bounds-remapping views
+    // (``ptr(1:N*K) => target(:, slice)``).  Those are handled at
+    // SDFG construction by emitting a DaCe ``View`` node aliasing
+    // the parent array; the index-rewriting model below cannot
+    // express a rank reshape and would either fail (rank-mismatch
+    // in ``mergeIndices``) or, worse, silently produce wrong
+    // accesses.  Leaving the rebind IR intact lets the bridge's
+    // descriptors.py path consume it directly.
+    if (ptrDecl->hasAttr("hlfir_bridge.bounds_remap_view")) return;
+
     // Find the rebind store(s): ``fir.store %targetBox to
     // %ptrDecl#0``.  Three forms:
     //   * Initial nullify (``embox(zero_bits)``): skipped.

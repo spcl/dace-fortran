@@ -213,6 +213,20 @@ DEFAULT_PIPELINE = (
     # a no-op when no external takes a struct.
     "hlfir-marshal-external-structs,"
     "hlfir-flatten-structs,"
+    # Tag Fortran 2003 bounds-remapping pointer assignments
+    # (``ptr(1:N*K) => target(:, slice)``) with
+    # ``hlfir_bridge.bounds_remap_view`` on the LHS pointer declare.
+    # Runs BEFORE ``hlfir-rewrite-pointer-assigns`` so the
+    # rewriter skips the marked declares (its index-rewriting model
+    # can't express a rank reshape).  The actual SDFG-side View
+    # emission lives in ``descriptors.py``: it reads the tag, traces
+    # the rebox chain to the parent array, and emits
+    # ``sdfg.add_view(shape=[total_extent], strides=[1])`` with a
+    # fresh ``offset_<ptr>_d0`` symbol bound per surrounding loop
+    # iteration via interstate assignment.  See
+    # ``passes/MarkBoundsRemapViews.cpp`` and
+    # ``tests/bounds_remap_view/`` for the detection contract.
+    "hlfir-mark-bounds-remap-views,"
     # Collapse Fortran ``ptr => target`` rebinds under the strict-no-
     # aliasing assumption: every read or write of the pointer becomes
     # an access to the rebind target's storage.  Runs AFTER
