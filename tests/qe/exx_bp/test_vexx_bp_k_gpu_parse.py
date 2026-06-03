@@ -147,10 +147,15 @@ def test_restore_fft_interfaces_unblocks_flang_parse(tmp_path):
     strict=False,
     reason=(
         "Source-side restore lets flang parse the QE checkpoint cleanly "
-        "(verified in test_restore_fft_interfaces_unblocks_flang_parse), but "
-        "the bridge's downstream HLFIR pipeline segfaults on the QE-specific "
-        "type / pattern surface that flang now exposes.  Anchored as a "
-        "follow-up bridge gap; the parse half is fixed."))
+        "(verified in test_restore_fft_interfaces_unblocks_flang_parse), "
+        "and the pipeline-internal SIGSEGV inside ``hlfir-inline-all`` is "
+        "fixed (multi-block error helpers like ``errore`` / ``upf_error`` "
+        "are now refused, leaving them as ``fir.call`` for the downstream "
+        "bridge to lower).  Pipeline now errors cleanly on the next gap: "
+        "``hlfir-rewrite-pointer-assigns`` rejects QE's pointer rebind "
+        "with bounds remap (``ptr(<lo>:..) => src(..)``) at two call "
+        "sites in ``addusxx_g`` and ``newdxx_g``.  Anchored as a follow-up "
+        "bridge gap; both the parse half and the inline-all half are fixed."))
 def test_vexx_bp_k_gpu_parses(tmp_path):
     """End-to-end SDFG build for ``vexx_bp_k_gpu`` -- currently xfails on a
     downstream bridge crash, gated separately from the parse fix above."""

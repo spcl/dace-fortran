@@ -12,6 +12,31 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+# Raise the stack size to the hard limit (typically ``unlimited`` on Linux)
+# for every test process.  Deeply-nested fully-inlined kernels (cloudsc,
+# ICON dycore, QE microkernels) drive MLIR's recursive ``Region::cloneInto``
+# / verifier / printer far past the default 8 MB stack.  The bridge already
+# runs its pass pipeline on a 2 GB-stack worker thread, but any pre-pipeline
+# IR walk (parse, ``set_entry_symbol``, ``dump``, ``get_ast``) runs on the
+# Python main thread, and on systems whose soft limit ``RLIMIT_STACK`` is
+# 8 MB those walks can overflow even before the pipeline starts.  Bumping
+# soft to hard at session start gives every kernel the same ample stack
+# without per-test boilerplate, and is a no-op when the user has already
+# raised the limit themselves.
+try:
+    import resource
+    _soft, _hard = resource.getrlimit(resource.RLIMIT_STACK)
+    if _hard != resource.RLIM_INFINITY and (_soft == resource.RLIM_INFINITY or _soft < _hard):
+        resource.setrlimit(resource.RLIMIT_STACK, (_hard, _hard))
+    elif _hard == resource.RLIM_INFINITY and _soft != resource.RLIM_INFINITY:
+        resource.setrlimit(resource.RLIMIT_STACK, (resource.RLIM_INFINITY, _hard))
+except (ImportError, ValueError, OSError):
+    # ``resource`` is POSIX-only; ``setrlimit`` fails when the new soft
+    # limit exceeds the hard limit -- fall through with the inherited
+    # limit and let any kernel that overflows surface as a stack
+    # overflow the user can raise their own shell limit for.
+    pass
+
 # Per-worker DaCe build folder.  ``PYTEST_XDIST_WORKER`` is set by
 # pytest-xdist to ``gw0``, ``gw1``, ... on each worker process; absent on
 # serial runs (we keep the default ``.dacecache`` so existing tooling

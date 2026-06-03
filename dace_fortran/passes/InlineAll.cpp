@@ -39,12 +39,15 @@
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/InliningUtils.h"
+
+#include <cstdlib>
 #include "passes/Passes.h"
 
 #define DEBUG_TYPE "inline-all"
@@ -144,6 +147,40 @@ struct InlineAllPass
       auto callee = symTab.lookup<mlir::func::FuncOp>(sym->getLeafReference());
       if (!callee || callee.isDeclaration()) continue;  // external
 
+      // Refuse multi-block callees -- splicing their CFG into a
+      // structured ``scf.if`` / ``scf.for`` region around the call
+      // site corrupts the region's single-block invariant and
+      // crashes inside ``mlir::inlineCall`` (observed on QE's
+      // ``errore`` early-return-then-STOP shape, ICON ``finish``,
+      // and similar terminal error helpers that ``lift-cf-to-scf``
+      // can't structurize because of the unreachable / noreturn
+      // tail).  Leaving the call as a plain ``fir.call`` is safe:
+      // the downstream bridge handles it the same way it handles
+      // any external call site, and the multi-block callee stays
+      // as its own (private, externally callable) function in the
+      // module.
+      if (callee.getBody().getBlocks().size() > 1) {
+        if (std::getenv("HLFIR_INLINE_TRACE")) {
+          llvm::errs() << "InlineAll: SKIP multi-block "
+                       << callee.getSymName() << " ("
+                       << callee.getBody().getBlocks().size()
+                       << " blocks)\n";
+          llvm::errs().flush();
+        }
+        continue;
+      }
+
+      // TRACE: emit per-call attempt so a downstream crash inside
+      // ``mlir::inlineCall`` reveals which callee tripped it.  This
+      // print is gated by the ``HLFIR_INLINE_TRACE`` env var so it
+      // stays silent for ordinary runs.
+      if (std::getenv("HLFIR_INLINE_TRACE")) {
+        llvm::errs() << "InlineAll: inlining " << callee.getSymName()
+                     << " into "
+                     << call->getParentOfType<mlir::func::FuncOp>().getSymName()
+                     << "\n";
+        llvm::errs().flush();
+      }
       LLVM_DEBUG(llvm::dbgs()
                  << "InlineAll: inlining " << callee.getSymName() << " into "
                  << call->getParentOfType<mlir::func::FuncOp>().getSymName()

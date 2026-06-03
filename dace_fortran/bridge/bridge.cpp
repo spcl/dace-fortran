@@ -164,6 +164,19 @@ class HLFIRModule {
     mlir::PassManager pm(&ctx_);
     if (mlir::failed(mlir::parsePassPipeline(pipeline, pm)))
       throw std::runtime_error("run_passes: bad pipeline: " + pipeline);
+    // Disable MLIR's multithreaded pass execution so every nested
+    // ``OperationPass<FuncOp>`` runs serially on the same big-stack
+    // worker we set up below.  With multithreading on, MLIR spins up
+    // its own thread pool whose workers get the default ~8 MB stack;
+    // ``hlfir-inline-all`` on a deep call tree (QE's vexx_bp_k_gpu's
+    // ~50-deep recursive descend through ``mlir::inlineCall`` /
+    // ``Region::cloneInto`` / verifier) overflows that small stack
+    // and crashes mid-walk with a corrupt-stack SIGSEGV.  The
+    // dedicated worker below already gives the run a 2 GB stack;
+    // serialising the nested passes onto it means every
+    // recursive-walk frame lands on it too.
+    bool prev_mt = ctx_.isMultithreadingEnabled();
+    ctx_.disableMultithreading();
     // Run on a worker thread with a large stack: deeply nested IR (a
     // fully-inlined whole-program kernel) overflows the default stack inside
     // MLIR's recursive region cloning / verification.  The context is touched
@@ -172,6 +185,7 @@ class HLFIRModule {
     llvm::thread worker(std::optional<unsigned>(kPassPipelineStackBytes),
                         [&] { ok = mlir::succeeded(pm.run(*module_)); });
     worker.join();
+    if (prev_mt) ctx_.enableMultithreading();
     if (!ok) throw std::runtime_error("run_passes: pipeline failed");
   }
 
