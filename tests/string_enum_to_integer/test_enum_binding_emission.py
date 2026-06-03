@@ -121,13 +121,13 @@ def test_enum_arg_character_length_matches_longest_literal(tmp_path):
 
 
 def test_enum_arg_internal_integer_scratch_is_declared(tmp_path):
-    """A local ``integer(c_int) :: flag__enum`` holds the converted
+    """A local ``integer(c_int) :: dace_enum_flag`` holds the converted
     integer that reaches the SDFG."""
     import re
     src = _emit(tmp_path, enum_maps={"flag": {"c": 0}})
-    assert re.search(r"integer\s*\(\s*c_int\s*\)\s*::\s*flag__enum",
+    assert re.search(r"integer\s*\(\s*c_int\s*\)\s*::\s*dace_enum_flag",
                      src, re.IGNORECASE), \
-        f"expected ``integer(c_int) :: flag__enum`` scratch decl.  got:\n{src}"
+        f"expected ``integer(c_int) :: dace_enum_flag`` scratch decl.  got:\n{src}"
 
 
 # ---------------------------------------------------------------------------
@@ -148,10 +148,10 @@ def test_body_contains_select_case_with_both_casings(tmp_path):
     assert "case ('c', 'c')" in src_lower or "case ('c','c')" in src_lower or \
            "case ('c'" in src_lower and "'C'" in src, \
         "expected case-insensitive CASE clause for 'c'"
-    # The converted assignment ``flag__enum = N`` follows.
-    assert "flag__enum = 0" in src_lower
-    assert "flag__enum = 1" in src_lower
-    assert "flag__enum = 2" in src_lower
+    # The converted assignment ``dace_enum_flag = N`` follows.
+    assert "dace_enum_flag = 0" in src_lower
+    assert "dace_enum_flag = 1" in src_lower
+    assert "dace_enum_flag = 2" in src_lower
 
 
 def test_body_select_case_has_default_fallback(tmp_path):
@@ -161,7 +161,7 @@ def test_body_select_case_has_default_fallback(tmp_path):
     src = _emit(tmp_path, enum_maps={"flag": {"c": 0}})
     src_lower = src.lower()
     assert "case default" in src_lower
-    assert "flag__enum = -1" in src_lower
+    assert "dace_enum_flag = -1" in src_lower
 
 
 def test_body_case_clauses_ordered_by_integer_value(tmp_path):
@@ -169,9 +169,9 @@ def test_body_case_clauses_ordered_by_integer_value(tmp_path):
     and match the order ``rewrite_string_enum_to_integer`` assigned."""
     src = _emit(tmp_path, enum_maps={"flag": {"r": 1, "c": 0, "i": 2}})
     src_lower = src.lower()
-    pos_c = src_lower.find("flag__enum = 0")
-    pos_r = src_lower.find("flag__enum = 1")
-    pos_i = src_lower.find("flag__enum = 2")
+    pos_c = src_lower.find("dace_enum_flag = 0")
+    pos_r = src_lower.find("dace_enum_flag = 1")
+    pos_i = src_lower.find("dace_enum_flag = 2")
     assert 0 < pos_c < pos_r < pos_i, \
         f"expected integer-ordered case branches; got positions c={pos_c} r={pos_r} i={pos_i}"
 
@@ -182,7 +182,7 @@ def test_body_case_clauses_ordered_by_integer_value(tmp_path):
 
 
 def test_sdfg_call_passes_integer_scratch_not_outer_character(tmp_path):
-    """The SDFG call's actuals reference ``flag__enum`` (the converted
+    """The SDFG call's actuals reference ``dace_enum_flag`` (the converted
     integer scratch), not ``flag`` (the outer CHARACTER dummy)."""
     src = _emit(tmp_path, enum_maps={"flag": {"c": 0}})
     import re
@@ -196,14 +196,14 @@ def test_sdfg_call_passes_integer_scratch_not_outer_character(tmp_path):
     end_match = re.search(r"end\s+subroutine", src[tail_start:], re.IGNORECASE)
     assert end_match, "no end subroutine after the call -- truncated source?"
     call_block_text = src[tail_start:tail_start + end_match.start()]
-    assert "flag__enum" in call_block_text, \
-        f"expected flag__enum in call args.  got:\n{call_block_text}"
+    assert "dace_enum_flag" in call_block_text, \
+        f"expected dace_enum_flag in call args.  got:\n{call_block_text}"
     # The outer CHARACTER ``flag`` dummy must NOT be passed -- it has
     # an incompatible type for the integer C-bound parameter.  Allow
-    # the substring ``flag`` only as part of ``flag__enum``.
-    leftover = call_block_text.replace("flag__enum", "")
+    # the substring ``flag`` only as part of ``dace_enum_flag``.
+    leftover = call_block_text.replace("dace_enum_flag", "")
     assert not re.search(r"\bflag\b", leftover), \
-        f"outer CHARACTER 'flag' must not appear in the SDFG call args (only flag__enum).  call args:\n{call_block_text}"
+        f"outer CHARACTER 'flag' must not appear in the SDFG call args (only dace_enum_flag).  call args:\n{call_block_text}"
 
 
 # ---------------------------------------------------------------------------
@@ -235,4 +235,26 @@ def test_enum_maps_missing_iface_arg_is_silent(tmp_path):
     substitution."""
     src = _emit(tmp_path, enum_maps={"not_an_arg": {"x": 0}})
     assert "not_an_arg" not in src
-    assert "__enum" not in src
+    assert "dace_enum_" not in src
+
+
+# ---------------------------------------------------------------------------
+# Synthetic-name collision-resistance
+# ---------------------------------------------------------------------------
+
+
+def test_synthesised_local_uses_dace_prefix_namespace(tmp_path):
+    """The synthesised INTEGER scratch lives in the ``dace_`` namespace
+    that the rest of the binding layer reserves for its own emitted
+    names (``dace_handle``, ``dace_program_<entry>``, ...).  This
+    avoids the false-collision risk of a ``<arg>__enum`` shape that a
+    user kernel could plausibly use itself (``flag__enum``,
+    ``column__enum``  --  both Fortran-legal identifiers).  A user
+    variable explicitly named ``dace_enum_<arg>`` would still collide,
+    but the convention puts that outside the user namespace and the
+    resulting Fortran would fail to compile loudly rather than
+    silently shadow."""
+    src = _emit(tmp_path, enum_maps={"flag": {"c": 0}})
+    assert "dace_enum_flag" in src
+    # The old ``__enum`` shape is gone.
+    assert "flag__enum" not in src

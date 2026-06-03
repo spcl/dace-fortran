@@ -333,9 +333,20 @@ def _enum_args(iface: OriginalInterface, enum_maps: dict) -> dict:
 
 def _enum_local_name(arg_name: str) -> str:
     """Local INTEGER scratch name for an enum-mapped CHARACTER dummy.
-    Uses double-underscore to avoid collision with any flat or
-    bridged name the bindings layer also synthesises."""
-    return f"{arg_name}__enum"
+
+    Uses the ``dace_enum_<arg>`` prefix the rest of the binding layer
+    already follows for its synthesised names (``dace_handle``,
+    ``dace_program_<entry>``, ``dace_init_<entry>``, ...).  The
+    ``dace_`` namespace is reserved for bridge-emitted identifiers --
+    a user-source variable starting with ``dace_`` is by convention
+    out-of-bounds, so this avoids the collision risk of a
+    ``<arg>__enum`` shape that a kernel could plausibly use itself
+    (``flag__enum``, ``column__enum``, ...).  When even that's
+    insufficient (a user kernel that defines its own
+    ``dace_enum_<arg>``) the synthesised SELECT CASE will fail to
+    parse loudly under flang rather than silently shadow.
+    """
+    return f"dace_enum_{arg_name}"
 
 
 def _enum_literal_case_clause(literal: str) -> str:
