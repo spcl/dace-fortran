@@ -229,3 +229,8 @@ _all_tests/
 !tests/norm2/**/*.f90
 !tests/reshape/**/*.f90
 !tests/spread/**/*.f90
+# Bounds-remap-view probes: pin the IR-pattern claim that
+# view-semantics (pointer assign with bounds remap) and copy-
+# semantics (RESHAPE intrinsic, plain slice assign) are
+# structurally distinguishable in the HLFIR.
+!tests/bounds_remap_view/**/*.f90
