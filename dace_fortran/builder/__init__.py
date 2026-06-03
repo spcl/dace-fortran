@@ -134,6 +134,15 @@ DEFAULT_PIPELINE = (
     # never reach ``hlfir-inline-all``.  See
     # ``passes/StripRuntimeIo.cpp``.
     "hlfir-strip-runtime-io,"
+    # Delete every ``fir.call @_FortranACharacter*`` -- string compare
+    # (CharacterCompareScalar1), Trim, Adjust, etc.  Lowered from
+    # string-keyed dispatch helpers (QE's ``start_clock(name)`` walks
+    # a clock-name table via ``_FortranACharacterCompareScalar1``); the
+    # bridge's numerical-equivalence contract does not model character
+    # data, and the AST builder's ``leafExpr`` falls through to ``?``
+    # on these calls, so they must be elided before AST extraction.
+    # See ``passes/StripCharacterRuntime.cpp``.
+    "hlfir-strip-character-runtime,"
     "hlfir-inline-all,"
     # Unwrap ``hlfir.eval_in_mem`` blocks into ``fir.alloca`` + body +
     # reads.  flang's HLFIR wraps any array-valued expression that

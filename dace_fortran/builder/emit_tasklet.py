@@ -21,7 +21,7 @@ import re
 from dace import Memlet
 
 from dace_fortran.builder.access import (acc, build_memlet_index, get_access, indirect_host, rename_iters,
-                                                resolve_section_alias)
+                                         resolve_section_alias)
 
 
 def _ensure_view_writeback_link(builder, state, write_node, target: str):
@@ -188,6 +188,19 @@ def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect
     # typically zero  --  instead of the per-iteration value ``i_0``.
     expr = rename_iters(assign_node.expr, iter_map)
     code = f"_out_{target} = {_rewrite_read_connectors(expr, sorted_tokens, r_scl, occ)}"
+    # Mirror the ``?`` guard in ``emit_scalar_assign``: a bare ``?`` in
+    # the rendered RHS means the C++ AST builder hit a
+    # ``buildIndexExpr`` / ``leafExpr`` fallback for an operand it
+    # couldn't trace.  Without this raise the code reaches DaCe's
+    # ``CodeBlock.ast.parse`` and surfaces as a ``SyntaxError`` at
+    # ``<unknown>:1``, which is opaque about which AST node hit it.
+    if "?" in code:
+        raise NotImplementedError(f"emit_tasklet: unresolved operand placeholder ``?`` in tasklet "
+                                  f"body ``{code}`` (target={target!r}).  The C++ AST builder "
+                                  "couldn't trace one of the operand chains -- check "
+                                  "bridge/ast/assigns.cpp ``buildIndexExpr`` and "
+                                  "expressions.cpp ``buildExpr`` for the fallback returning "
+                                  "``?`` against this kernel's HLFIR.")
     t = state.add_tasklet(f"t_{idx}", in_c, out_c, code)
 
     for nm in sorted(reads_by_name):
@@ -290,27 +303,21 @@ def emit_scalar_assign(builder, state, target: str, value: str):
     # ``ast.parse`` from a deeply-nested call site, which is opaque.
     # Raise here with the target / value so the gap is easy to find.
     if "?" in value:
-        raise NotImplementedError(
-            f"emit_scalar_assign: unresolved operand placeholder ``?`` in "
-            f"``{target} = {value}`` -- the C++ AST builder couldn't trace "
-            "one of the operand chains.  Check bridge/ast/assigns.cpp "
-            "``buildIndexExpr`` and control_flow.cpp ``leafExpr`` for the "
-            "fallback returning ``?`` against this kernel's HLFIR.")
+        raise NotImplementedError(f"emit_scalar_assign: unresolved operand placeholder ``?`` in "
+                                  f"``{target} = {value}`` -- the C++ AST builder couldn't trace "
+                                  "one of the operand chains.  Check bridge/ast/assigns.cpp "
+                                  "``buildIndexExpr`` and control_flow.cpp ``leafExpr`` for the "
+                                  "fallback returning ``?`` against this kernel's HLFIR.")
     src_name = value.strip()
     tgt_var = builder.arrays.get(target)
-    tgt_is_array = (tgt_var is not None
-                    and getattr(tgt_var, "rank", 0) > 0
+    tgt_is_array = (tgt_var is not None and getattr(tgt_var, "rank", 0) > 0
                     and len(tgt_var.shape_symbols) == tgt_var.rank)
 
     if tgt_is_array:
-        is_whole_array_copy = (
-            src_name in builder.arrays
-            and re.fullmatch(r'[A-Za-z_]\w*', src_name) is not None
-        )
+        is_whole_array_copy = (src_name in builder.arrays and re.fullmatch(r'[A-Za-z_]\w*', src_name) is not None)
         if is_whole_array_copy:
             src_var = builder.arrays[src_name]
-            if (src_var.rank == tgt_var.rank
-                    and len(src_var.shape_symbols) == src_var.rank):
+            if (src_var.rank == tgt_var.rank and len(src_var.shape_symbols) == src_var.rank):
                 # Plain whole-array copy (pointer-rebind shape that
                 # ``RewritePointerAssigns`` didn't collapse, e.g.
                 # ``icidx => p_patch%edges%cell_idx``).
@@ -323,8 +330,7 @@ def emit_scalar_assign(builder, state, target: str, value: str):
                     cache[target] = write
                 _ensure_view_writeback_link(builder, state, write, target)
                 subset = ",".join(f"0:{s}" for s in src_var.shape_symbols)
-                state.add_edge(read, None, write, None,
-                               Memlet(f"{src_name}[{subset}]"))
+                state.add_edge(read, None, write, None, Memlet(f"{src_name}[{subset}]"))
                 return
 
         # Whole-array fill: scalar literal -> multi-dim array.  The
@@ -332,11 +338,9 @@ def emit_scalar_assign(builder, state, target: str, value: str):
         # zero-init prologues.  Use ``add_mapped_tasklet`` so DaCe
         # wires the empty-input + indexed-output edges itself; doing
         # it by hand needs a MapEntry connector dance.
-        if re.fullmatch(r'[+-]?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?',
-                        src_name) is not None:
+        if re.fullmatch(r'[+-]?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?', src_name) is not None:
             dims = tgt_var.shape_symbols
-            ranges = {f"__i{k}": f"0:{s}"
-                      for k, s in enumerate(dims)}
+            ranges = {f"__i{k}": f"0:{s}" for k, s in enumerate(dims)}
             idx_expr = ",".join(f"__i{k}" for k in range(len(dims)))
             w = state.add_access(target)
             cache = getattr(state, '_hlfir_access', None)

@@ -91,6 +91,9 @@ void registerAllBridgePasses() {
     return createStripRuntimeIoPass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createStripCharacterRuntimePass();
+  });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createMarkBoundsRemapViewsPass();
   });
   // Flang's polymorphic-op conversion: statically devirtualises

@@ -120,6 +120,19 @@ static const char* const kDefaultErrorHelpers[] = {
     "upf_error",         // Quantum ESPRESSO UPF
     "radiation_abort",   // ECRAD
     "dwarning",          // ECRAD
+    // ---- Diagnostic timing / annotation subroutines.  These are not
+    // error abort paths but they're equally orthogonal to the bridge's
+    // numerical-equivalence contract: they wrap timing instrumentation
+    // and NVTX range markers that the SDFG does not model.  Stripping
+    // the CALL keeps their inlined bodies (which would otherwise drag
+    // in unresolvable runtime functions like ``f_tcpu`` / ``f_wall``)
+    // out of ``hlfir-inline-all``.  Same trailing-``P``-segment
+    // demangling as the error helpers, so module-procedure forms
+    // (``_QMtiming_modPstart_clock``) match the same entries.
+    "start_clock",       // Quantum ESPRESSO timing
+    "stop_clock",        // Quantum ESPRESSO timing
+    "nvtxstartrange",    // NVIDIA NVTX range marker (QE GPU port)
+    "nvtxendrange",      // NVIDIA NVTX range marker (QE GPU port)
 };
 
 // ---------------------------------------------------------------------------
