@@ -148,7 +148,7 @@ def test_restore_fft_interfaces_unblocks_flang_parse(tmp_path):
     reason=(
         "Source-side restore lets flang parse the QE checkpoint cleanly "
         "(verified in test_restore_fft_interfaces_unblocks_flang_parse).  "
-        "Three earlier pipeline-internal gates are now fixed: "
+        "Four earlier pipeline-internal gates are now fixed: "
         "(1) the ``hlfir-inline-all`` SIGSEGV (multi-block error helpers "
         "like ``errore`` / ``upf_error`` get stripped / refused); "
         "(2) the ``hlfir-rewrite-pointer-assigns`` rejection of QE's "
@@ -157,10 +157,12 @@ def test_restore_fft_interfaces_unblocks_flang_parse(tmp_path):
         "(3) the ``hlfir-lift-reduction-operands`` verifier crash on "
         "dimensional ``SUM(arr, DIM=k)`` reductions producing "
         "``!hlfir.expr<Nxf64>`` (lift now skips non-scalar reduction "
-        "results).  The pipeline now runs cleanly; AST-extraction / "
-        "SDFG-construction hits the next downstream gap: ``fir.do_loop "
-        "with non-constant step``, the bridge's symbolic-step refusal in "
-        "the loop emitter.  Anchored as a follow-up."))
+        "results); "
+        "(4) the ``fir.do_loop`` non-constant step refusal (hoist + "
+        "symbolic-step support landed).  AST-extraction / SDFG "
+        "construction hits the next downstream gap: tasklet "
+        "expression rendering with a ``?`` placeholder for an "
+        "unresolved operand.  Anchored as a follow-up."))
 def test_vexx_bp_k_gpu_parses(tmp_path):
     """End-to-end SDFG build for ``vexx_bp_k_gpu`` -- currently xfails on a
     downstream bridge crash, gated separately from the parse fix above."""
@@ -171,3 +173,108 @@ def test_vexx_bp_k_gpu_parses(tmp_path):
     assert sdfg is not None
     assert any('vexx_bp_k_gpu' in name for name in sdfg.arrays) or \
         'vexx_bp_k_gpu' in str(sdfg.label)
+
+
+@pytest.mark.xfail(
+    strict=False,
+    reason=(
+        "Gates on ``test_vexx_bp_k_gpu_parses`` flipping first: until the "
+        "full SDFG-build path lands, there's no SDFG to run.  This test "
+        "is scaffolded so it auto-flips once the build gate closes -- "
+        "the gfortran reference + SDFG run + element-wise comparison is "
+        "wired through; the xfail just guards the missing build step."))
+def test_vexx_bp_k_gpu_numerical_correctness(tmp_path):
+    """End-to-end numerical correctness against a gfortran reference.
+
+    Pipeline:
+      1. Apply ``_restore_fft_interfaces`` to the QE checkpoint.
+      2. Build the SDFG via the bridge.
+      3. Compile the SAME source with gfortran into a Fortran-callable
+         ``libvexx_ref.so`` via the standard bridge test pattern
+         (mirrors the harness used by ``tests/icon/full/test_velocity_full.py``).
+      4. Seed every INTENT(IN[OUT]) array with a deterministic RNG
+         (``np.random.default_rng(0)``).
+      5. Call both with identical inputs, assert element-wise
+         agreement on the OUTPUT arrays.
+
+    Currently xfail-strict-false: until the SDFG-build gate closes,
+    step 2 throws and the whole test short-circuits.  When the build
+    starts succeeding the comparison fires automatically.  The
+    fixture's INTEGER/COMPLEX dummy shapes (``lda, n, m, psi(lda*npol,
+    max_ibands), hpsi(lda*npol, max_ibands), becpsi``) drive the input
+    sizing -- we pick small values (``lda=4``, ``n=4``, ``m=1``) so the
+    test stays fast.
+    """
+    import ctypes
+    import shutil
+    import subprocess
+    import numpy as np
+
+    if shutil.which("gfortran") is None:
+        pytest.skip("gfortran required for the reference build")
+
+    # Step 1: parse-restored source.
+    src = _restore_fft_interfaces(_SRC.read_text())
+
+    # Step 2: SDFG build (the current xfail gate).
+    sdfg = dace_fortran.build_sdfg(
+        src, out_dir=str(tmp_path / "sdfg"),
+        entry=_ENTRY, name="vexx_bp_k_gpu")
+
+    # Step 3: gfortran reference via ctypes.  The QE checkpoint is a
+    # flat single-TU file containing every USE-closure module inlined,
+    # so it compiles standalone; the entry is in MODULE exx_bp so the
+    # mangled symbol is ``__exx_bp_MOD_vexx_bp_k_gpu`` under gfortran.
+    src_path = tmp_path / "qe_ref.f90"
+    src_path.write_text(src)
+    libpath = tmp_path / "libvexx_ref.so"
+    subprocess.check_call([
+        "gfortran", "-shared", "-fPIC", "-O0",
+        "-fno-fast-math", "-ffp-contract=off",
+        "-ffree-line-length-none",
+        str(src_path), "-o", str(libpath)],
+        cwd=str(tmp_path))
+    lib = ctypes.CDLL(str(libpath))
+
+    # Step 4: deterministic random inputs at a small problem size.
+    # ``max_ibands``, ``npol``, ``nkb`` etc. are module-globals on the
+    # QE side -- the SDFG side binds them via the auto-dim symbol
+    # mechanism (caller passes them as integer kwargs).
+    rng = np.random.default_rng(0)
+    lda, n, m = 4, 4, 1
+    npol, max_ibands = 1, 1
+    shape = (lda * npol, max_ibands)
+    psi_re = rng.standard_normal(shape)
+    psi_im = rng.standard_normal(shape)
+    psi_ref = np.asfortranarray(psi_re + 1j * psi_im, dtype=np.complex128)
+    psi_sdfg = psi_ref.copy(order="F")
+    hpsi_ref = np.zeros(shape, dtype=np.complex128, order="F")
+    hpsi_sdfg = np.zeros(shape, dtype=np.complex128, order="F")
+
+    # Step 5: run reference + SDFG.  gfortran's by-reference ABI takes
+    # all-pointers; the bind(c)-free entry name is mangled.
+    fn = lib.__exx_bp_MOD_vexx_bp_k_gpu
+    fn.argtypes = [
+        ctypes.POINTER(ctypes.c_int),    # lda
+        ctypes.POINTER(ctypes.c_int),    # n
+        ctypes.POINTER(ctypes.c_int),    # m
+        ctypes.c_void_p,                  # psi
+        ctypes.c_void_p,                  # hpsi
+        ctypes.c_void_p,                  # becpsi (OPTIONAL, pass NULL)
+    ]
+    fn.restype = None
+    fn(ctypes.byref(ctypes.c_int(lda)),
+       ctypes.byref(ctypes.c_int(n)),
+       ctypes.byref(ctypes.c_int(m)),
+       psi_ref.ctypes.data, hpsi_ref.ctypes.data, None)
+
+    # SDFG side -- the auto-dim symbol mechanism fills the module-
+    # globals from caller-supplied kwargs.
+    sdfg(lda=np.int32(lda), n=np.int32(n), m=np.int32(m),
+         psi=psi_sdfg, hpsi=hpsi_sdfg,
+         max_ibands=np.int32(max_ibands), npol=np.int32(npol))
+
+    # Element-wise comparison on the writeable output.  Tight tolerance
+    # since both sides use the SAME floating-point sequence on identical
+    # inputs (no fast-math, no -ffp-contract).
+    np.testing.assert_allclose(hpsi_sdfg, hpsi_ref, rtol=1e-12, atol=1e-12)
