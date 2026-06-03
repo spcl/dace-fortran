@@ -216,6 +216,85 @@ def test_missing_in_flag_is_an_argument_error():
     assert res.returncode == 2
 
 
+# ---------------------------------------------------------------------------
+# --inplace -- the build-system-free path
+# ---------------------------------------------------------------------------
+
+
+def test_inplace_rewrites_file_in_place(tmp_path):
+    """``--inplace`` rewrites the file at its original path; the
+    user's existing build system compiles the result with no
+    cmake / automake glue."""
+    src = tmp_path / "kernel.f90"
+    src.write_text(_STRING_ENUM_KERNEL)
+    _run_cli("--rewrite-string-enum", "--inplace", "--in", str(src))
+    rewritten = src.read_text()
+    assert "INTEGER, INTENT(IN) :: action" in rewritten
+    assert "CHARACTER(LEN=1), INTENT(IN) :: action" not in rewritten
+    # Sidecar JSON lives next to the rewritten source.
+    sidecar = src.with_name(src.name + ".enum_maps.json")
+    assert sidecar.is_file()
+
+
+def test_inplace_batch_rewrites_every_input(tmp_path):
+    """``--inplace`` plus several ``--in`` paths rewrites every
+    one in order  --  the natural shape for processing a whole
+    source tree in one shot."""
+    src1 = tmp_path / "k1.f90"
+    src2 = tmp_path / "k2.f90"
+    src1.write_text(_STRING_ENUM_KERNEL)
+    src2.write_text(_STRING_ENUM_KERNEL.replace("action", "mode"))
+    _run_cli("--rewrite-string-enum", "--inplace", "--in", str(src1), "--in", str(src2))
+    assert "INTEGER, INTENT(IN) :: action" in src1.read_text()
+    assert "INTEGER, INTENT(IN) :: mode" in src2.read_text()
+
+
+def test_inplace_with_backup_suffix_keeps_original(tmp_path):
+    """``--backup-suffix .orig`` keeps a copy of each original next
+    to the rewritten file -- a safety belt for users who want to
+    diff before/after or roll back."""
+    src = tmp_path / "k.f90"
+    orig = _STRING_ENUM_KERNEL
+    src.write_text(orig)
+    _run_cli("--rewrite-string-enum", "--inplace", "--backup-suffix", ".orig", "--in", str(src))
+    rewritten = src.read_text()
+    assert "INTEGER" in rewritten
+    backup = src.with_name("k.f90.orig")
+    assert backup.is_file()
+    assert backup.read_text() == orig
+
+
+def test_inplace_noop_when_no_pass_changes_source(tmp_path):
+    """An input that doesn't match any enabled rewrite is left
+    completely untouched, including its mtime -- so build-system
+    incremental rebuilds don't fire spuriously."""
+    src = tmp_path / "k.f90"
+    src.write_text("SUBROUTINE k(); END SUBROUTINE\n")
+    orig_mtime = src.stat().st_mtime
+    import time
+    time.sleep(1.05)  # past the FS mtime granularity
+    _run_cli("--rewrite-string-enum", "--inplace", "--in", str(src))
+    assert src.stat().st_mtime == orig_mtime, \
+        "no-op rewrite should preserve mtime"
+
+
+def test_inplace_and_out_are_mutually_exclusive(tmp_path):
+    """``--inplace`` and ``--out`` together is a usage error -- the
+    pair has ambiguous semantics."""
+    src = tmp_path / "k.f90"
+    src.write_text("SUBROUTINE k(); END SUBROUTINE\n")
+    out = tmp_path / "out.f90"
+    cmd = [
+        sys.executable, "-m", "dace_fortran.preprocess_cli", "--all-defaults", "--inplace", "--in",
+        str(src), "--out",
+        str(out)
+    ]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    assert res.returncode != 0
+    assert "mutually exclusive" in res.stderr.lower() or \
+           "mutually exclusive" in res.stdout.lower()
+
+
 def test_warn_when_rewrite_external_without_search_dir(tmp_path):
     """``--rewrite-external`` without any ``--search-dir`` is a
     no-op (no modules to resolve against); the CLI prints a clear

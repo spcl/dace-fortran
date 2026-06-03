@@ -51,12 +51,33 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="python -m dace_fortran.preprocess_cli",
         description="Apply DaCe-Fortran source-text preprocess passes.",
     )
-    p.add_argument("--in", dest="in_path", required=True, help="Input .f90 / .F90 source.  Use '-' for stdin.")
+    p.add_argument("--in",
+                   dest="in_path",
+                   required=True,
+                   help="Input .f90 / .F90 source.  Use '-' for stdin.  "
+                   "Repeatable when paired with --inplace -- the easiest "
+                   "build-system-free way to apply the rewrites: each "
+                   "file is rewritten in place, the user's existing "
+                   "compiler builds the result with no further glue.",
+                   action="append")
     p.add_argument("--out",
                    dest="out_path",
                    help="Output path.  Default: stdout.  When set + "
                    "--rewrite-string-enum is on, an additional "
-                   "<out>.enum_maps.json sidecar is written.")
+                   "<out>.enum_maps.json sidecar is written.  Mutually "
+                   "exclusive with --inplace.")
+    p.add_argument("--inplace",
+                   action="store_true",
+                   help="Rewrite each --in path in place (atomic write "
+                   "via a sibling tempfile + rename).  Skip the cmake / "
+                   "automake glue entirely  --  run this once over your "
+                   "source tree, then let your existing build system "
+                   "compile the rewritten files.")
+    p.add_argument("--backup-suffix",
+                   default=None,
+                   help="When --inplace is on, keep a backup of each "
+                   "original next to it with this suffix (e.g. .orig).  "
+                   "Default: no backup kept.")
     p.add_argument("--search-dir",
                    dest="search_dirs",
                    action="append",
@@ -109,29 +130,14 @@ def _parse_kind_map(items) -> dict:
     return out
 
 
-def main(argv=None) -> int:
-    """Run the CLI; returns the process exit code.
-
-    :param argv: optional list of command-line tokens (excluding the
-        program name); defaults to ``sys.argv[1:]``.
-    :returns: 0 on success, 2 on argument errors, 3 on pass refusal.
-    """
-    args = _build_parser().parse_args(argv)
-
-    # Resolve input.
-    if args.in_path == "-":
-        source = sys.stdin.read()
-    else:
-        source = Path(args.in_path).read_text()
-
-    # Apply passes in the canonical order so composition matches
-    # what ``preprocess_fortran_source`` already exposes.
+def _apply_passes(source: str, args) -> tuple:
+    """Apply the requested passes (in canonical order) to one source
+    string.  Returns ``(rewritten_source, enum_maps)``."""
     if args.all_defaults:
         args.merge_modules = True
         args.strip_openmp = True
         args.normalize_kind = True
         args.rewrite_integer_powers = True
-
     if args.merge_modules:
         source = merge_used_modules(source, search_dirs=args.search_dirs)
     if args.strip_openmp:
@@ -141,18 +147,94 @@ def main(argv=None) -> int:
     if args.rewrite_integer_powers:
         source = rewrite_integer_powers(source)
     if args.rewrite_external:
-        # Conservative: a pass with empty ``search_dirs`` is a no-op
-        # by design.  Surface a clear hint if the user enabled
-        # --rewrite-external without any --search-dir.
-        if not args.search_dirs:
-            print("warning: --rewrite-external is a no-op without --search-dir", file=sys.stderr)
         source = replace_external_with_modules(source, search_dirs=args.search_dirs)
     if args.rewrite_if_intvar:
         source = preprocess_fortran(source)
-
     enum_maps: dict = {}
     if args.rewrite_string_enum:
         source, enum_maps = rewrite_string_enum_to_integer(source)
+    return source, enum_maps
+
+
+def _rewrite_inplace(in_path: Path, args) -> dict:
+    """Read ``in_path``, apply passes, atomically replace the original
+    via a sibling tempfile + rename.  Returns the enum_maps (empty
+    when --rewrite-string-enum is off)."""
+    import os
+    import tempfile
+    src_text = in_path.read_text()
+    rewritten, emaps = _apply_passes(src_text, args)
+    if rewritten == src_text:
+        # No-op: don't even touch the file (preserve mtime, surface
+        # the "this file already meets the contract" signal to the
+        # build system's incremental rebuilds).
+        return emaps
+    if args.backup_suffix:
+        backup = in_path.with_name(in_path.name + args.backup_suffix)
+        backup.write_text(src_text)
+    fd, tmp = tempfile.mkstemp(dir=str(in_path.parent), prefix=f".{in_path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(rewritten)
+        os.replace(tmp, str(in_path))
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    if emaps:
+        sidecar = in_path.with_name(in_path.name + ".enum_maps.json")
+        sidecar.write_text(json.dumps(emaps, indent=2, sort_keys=True))
+    return emaps
+
+
+def main(argv=None) -> int:
+    """Run the CLI; returns the process exit code.
+
+    :param argv: optional list of command-line tokens (excluding the
+        program name); defaults to ``sys.argv[1:]``.
+    :returns: 0 on success, 2 on argument errors, 3 on pass refusal.
+    """
+    args = _build_parser().parse_args(argv)
+
+    # Validate mutually exclusive paths.  argparse can't express
+    # "exactly one of --inplace, --out, or default-stdout" because
+    # --out defaulting to stdout makes the matrix three-way; check
+    # by hand.
+    if args.inplace and args.out_path:
+        raise SystemExit("--inplace and --out are mutually exclusive")
+    if args.rewrite_external and not args.search_dirs:
+        print("warning: --rewrite-external is a no-op without --search-dir", file=sys.stderr)
+
+    # In-place rewrite over one or more input files -- the
+    # build-system-free path: run this once over your source tree,
+    # let your existing compiler build the result.
+    if args.inplace:
+        # All but the first ``--in`` would have been silently ignored
+        # by the previous CLI shape (--out single).  --inplace allows
+        # the natural batch form: rewrite every file in a list.
+        for raw_in in args.in_path:
+            if raw_in == "-":
+                raise SystemExit("--inplace cannot be used with --in -")
+            _rewrite_inplace(Path(raw_in), args)
+        return 0
+
+    # Single-file rewrite via --in/--out (or stdout).  Repeat ``--in``
+    # is not meaningful here; if the user passed more than one, use
+    # the last (argparse-store-the-last semantics).  Warn if the user
+    # supplied multiple inputs without --inplace.
+    if len(args.in_path) > 1:
+        print("warning: multiple --in without --inplace -- using last", file=sys.stderr)
+    in_path_str = args.in_path[-1]
+
+    # Resolve input.
+    if in_path_str == "-":
+        source = sys.stdin.read()
+    else:
+        source = Path(in_path_str).read_text()
+
+    source, enum_maps = _apply_passes(source, args)
 
     # Write rewritten source.
     if args.out_path:
