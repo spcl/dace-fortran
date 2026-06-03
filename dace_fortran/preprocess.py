@@ -862,6 +862,549 @@ def merge_used_modules(source: str, *, search_dirs=()) -> str:
     return "".join(parts)
 
 
+# ``EXTERNAL`` declaration: ``EXTERNAL`` keyword followed by zero or
+# more attribute commas, optional ``::``, then a comma-separated name
+# list.  Anchored at the leading-whitespace start of a line so it
+# never matches mid-statement.  Captures: group(1) = the name list as
+# a raw string (commas + names + optional whitespace).
+_EXTERNAL_DECL_RE = re.compile(
+    r"^(?P<indent>\s*)EXTERNAL\s*(?:::\s*)?(?P<names>[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*$",
+    re.IGNORECASE,
+)
+
+# A ``SUBROUTINE`` / ``FUNCTION`` opener at the start of a scope.  The
+# pass inserts the synthesised ``USE`` lines right after this opener
+# (and after any ``USE`` lines already present, so the insertion
+# stacks with the existing imports rather than displacing them).
+_SCOPE_OPEN_RE = re.compile(
+    r"^\s*(?:RECURSIVE\s+|PURE\s+|ELEMENTAL\s+|IMPURE\s+)*"
+    r"(?:SUBROUTINE|FUNCTION|REAL\s*FUNCTION|"
+    r"INTEGER\s*FUNCTION|LOGICAL\s*FUNCTION|"
+    r"DOUBLE\s+PRECISION\s+FUNCTION|"
+    r"(?:REAL|INTEGER|LOGICAL|COMPLEX|CHARACTER)\s*\(\s*[^)]*\)\s+FUNCTION)\s+"
+    r"([A-Za-z]\w*)",
+    re.IGNORECASE,
+)
+
+
+def _index_procedures_in_modules(search_dirs) -> dict:
+    """Scan ``search_dirs`` recursively for ``.f90`` / ``.F90`` /
+    ``.incf`` files; index every ``SUBROUTINE`` / ``FUNCTION`` declared
+    inside a ``MODULE`` block by lowercase procedure name.
+
+    Sibling of :func:`merge_used_modules`'s module-block scan: walks
+    the same files but indexes the procedures within each module
+    instead of inlining the module bodies.  Used by
+    :func:`replace_external_with_modules` to resolve every ``EXTERNAL
+    <name>`` declaration to its defining module.
+
+    :param search_dirs: iterable of directories (each scanned
+        recursively) and / or individual file paths.
+    :returns: dict ``{procedure_name_lower: module_name_lower}``.
+    """
+    from pathlib import Path
+    index: dict = {}
+    proc_open = re.compile(
+        r"^\s*(?:RECURSIVE\s+|PURE\s+|ELEMENTAL\s+|IMPURE\s+)*"
+        r"(?:SUBROUTINE|FUNCTION|REAL\s*FUNCTION|"
+        r"INTEGER\s*FUNCTION|LOGICAL\s*FUNCTION|"
+        r"DOUBLE\s+PRECISION\s+FUNCTION|"
+        r"(?:REAL|INTEGER|LOGICAL|COMPLEX|CHARACTER)\s*\(\s*[^)]*\)\s+FUNCTION)\s+"
+        r"([A-Za-z]\w*)",
+        re.IGNORECASE,
+    )
+    for d in search_dirs:
+        d = Path(d)
+        if d.is_file():
+            files = [d]
+        else:
+            files = sorted(list(d.rglob("*.f90")) + list(d.rglob("*.F90")) + list(d.rglob("*.incf")))
+        for f in files:
+            try:
+                txt = f.read_text()
+            except (OSError, UnicodeDecodeError):
+                continue
+            for mod_name, blk in _module_blocks(txt):
+                for raw in blk.splitlines():
+                    m = proc_open.match(_code_of(raw))
+                    if m:
+                        index.setdefault(m.group(1).lower(), mod_name)
+    return index
+
+
+# A type declaration that names ONE function result without any
+# variable-defining attributes (no ``INTENT``, no ``::`` followed by
+# more than the function name, no array spec).  Used to detect the
+# ``REAL(8) :: dscale`` companion that often sits next to ``EXTERNAL
+# :: dscale``; once ``dscale`` is imported via ``USE``, this line
+# becomes a "use-associated, cannot be re-declared" error in flang.
+_FUNC_RESULT_TYPE_DECL_RE = re.compile(
+    r"^\s*(?P<type>(?:REAL|INTEGER|LOGICAL|COMPLEX|DOUBLE\s+PRECISION)"
+    r"(?:\s*\(\s*[^)]*\s*\))?)\s*"
+    r"(?:::\s*)?"
+    r"(?P<names>[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _scope_already_uses(scope_lines, mod_name: str) -> bool:
+    """``True`` when one of ``scope_lines`` is ``USE <mod_name>`` (any
+    casing, with or without ``ONLY``).  Used to suppress duplicate
+    imports: if the kernel already imports the module under a plain
+    ``USE``, the synthesised ``USE module, ONLY: name`` would be
+    redundant (and some compilers warn on it)."""
+    target = mod_name.lower()
+    for raw in scope_lines:
+        m = _USE_RE.match(_code_of(raw))
+        if m and m.group(1).lower() == target:
+            return True
+    return False
+
+
+def replace_external_with_modules(source: str, *, search_dirs=()) -> str:
+    """Replace ``EXTERNAL <name1>, <name2>`` declarations with the
+    equivalent ``USE <module>, ONLY: <name1>, <name2>`` imports
+    whenever the referenced procedures are defined in modules visible
+    via ``search_dirs``.
+
+    Background:
+        Legacy Fortran code -- and machine-translated code like
+        QE's ``f2dace-qe-source`` pruned single-TU sources --
+        often declares one procedure ``EXTERNAL`` and another via
+        ``USE``, even when both procedures live in the same
+        module that's reachable from the build's source tree.
+        ``EXTERNAL`` carries only the linker-symbol promise;
+        flang then routes the call through its implicit-interface
+        path, which the bridge can't lower as faithfully as a
+        proper module import (type / shape promises lost,
+        polymorphism inferred per call site, etc.).  Converting
+        every resolvable ``EXTERNAL`` to a ``USE`` restores the
+        explicit interface and unblocks downstream lowering.
+
+    Algorithm:
+        1. Index every procedure declared inside any ``MODULE``
+           block in ``search_dirs`` (recursive).
+        2. Find each ``EXTERNAL`` line in ``source``; resolve each
+           name through the index to a defining module.
+        3. Within the enclosing scope (the ``SUBROUTINE`` /
+           ``FUNCTION`` containing the ``EXTERNAL`` line, or the
+           top-level module-procedure scope), group resolved
+           names by their defining module and synthesise one
+           ``USE <mod>, ONLY: <names...>`` line per module.
+        4. Insert the synthesised ``USE`` lines right after the
+           scope opener (collapsing with any existing ``USE``
+           imports of the same module so the resulting source
+           has no duplicate imports).
+        5. Delete every ``EXTERNAL`` declaration whose names
+           were fully resolved.  An ``EXTERNAL`` line carrying
+           any unresolved name is left in place verbatim (with
+           the resolved names also left in the declaration) --
+           the pass is conservative: an unresolved ``EXTERNAL``
+           means the build is missing a source file the user
+           knows about.
+
+    Pass-through:
+        Returns ``source`` unchanged when ``search_dirs`` is empty
+        or no ``EXTERNAL`` declaration in ``source`` resolves to a
+        module in the index.  Idempotent: a second invocation has
+        nothing left to rewrite.  Comment- and string-aware via
+        ``_scan_line``: an ``EXTERNAL`` token inside a character
+        literal or after ``!`` is never touched.
+
+    :param source: Fortran source text.
+    :param search_dirs: directories (recursive) and / or file paths
+        scanned for procedure definitions, same convention as
+        ``merge_used_modules``'s ``search_dirs``.
+    :returns: rewritten source with every resolvable ``EXTERNAL``
+        replaced by the equivalent module import.
+    """
+    if not search_dirs:
+        return source
+    index = _index_procedures_in_modules(search_dirs)
+    if not index:
+        return source
+
+    lines = source.splitlines(keepends=True)
+
+    # Pass 1: identify scope-opener line indices and the ``EXTERNAL``
+    # lines that belong to each scope.  A scope opens at a
+    # ``SUBROUTINE`` / ``FUNCTION`` line and closes at the next one;
+    # ``END SUBROUTINE`` / ``END FUNCTION`` closes the current scope
+    # without opening a new one.
+    scopes = []  # list of (opener_idx, end_idx_exclusive)
+    cur_open = None
+    for i, raw in enumerate(lines):
+        code = _code_of(raw)
+        if _SCOPE_OPEN_RE.match(code):
+            if cur_open is not None:
+                scopes.append((cur_open, i))
+            cur_open = i
+        elif re.match(r"^\s*END\s+(SUBROUTINE|FUNCTION)\b", code, re.IGNORECASE):
+            if cur_open is not None:
+                scopes.append((cur_open, i + 1))
+                cur_open = None
+    if cur_open is not None:
+        scopes.append((cur_open, len(lines)))
+
+    # Pass 2: per scope, resolve the EXTERNAL names + build the
+    # USE-line additions and EXTERNAL-line deletions.
+    delete_idx = set()
+    insert_at_idx: dict = {}  # opener_idx -> list of synthesized USE lines
+    for opener_idx, end_idx in scopes:
+        scope_lines = lines[opener_idx:end_idx]
+        # First pass: collect EXTERNAL declarations + their resolution.
+        # Group resolved names by defining module.
+        per_mod_names: dict = {}
+        ext_line_idxs: list = []  # absolute indices to delete
+        all_resolved_names: set = set()
+        for li, raw in enumerate(scope_lines, start=opener_idx):
+            code = _code_of(raw)
+            m = _EXTERNAL_DECL_RE.match(code)
+            if not m:
+                continue
+            names = [n.strip() for n in m.group("names").split(",")]
+            unresolved = [n for n in names if n.lower() not in index]
+            if unresolved:
+                # Leave the EXTERNAL line alone -- conservative.
+                continue
+            for n in names:
+                mod = index[n.lower()]
+                per_mod_names.setdefault(mod, []).append(n)
+                all_resolved_names.add(n.lower())
+            ext_line_idxs.append(li)
+        if not per_mod_names:
+            continue
+        # Function-result type declarations whose name is now
+        # use-associated must also be deleted: flang rejects
+        # ``REAL(8) :: dscale`` once ``dscale`` is imported via
+        # ``USE``.  Only a single-name declaration is safe to drop
+        # whole; a mixed ``REAL(8) :: dscale, scratch_local`` is
+        # left alone (would need a more surgical rewrite to split
+        # the line, which is rare enough to defer).
+        for li, raw in enumerate(scope_lines, start=opener_idx):
+            code = _code_of(raw)
+            # Skip lines that are EXTERNAL / INTENT-bearing decls /
+            # any ``::``-attribute-bearing declarations -- the
+            # function-result-decl regex matches only the bare
+            # ``<type> :: <name>`` shape with no attributes.
+            if _EXTERNAL_DECL_RE.match(code):
+                continue
+            if re.search(
+                    r"(?i)\b(intent|parameter|dimension|allocatable|pointer|target|save|optional|public|private|value)\b",
+                    code):
+                continue
+            m = _FUNC_RESULT_TYPE_DECL_RE.match(code)
+            if not m:
+                continue
+            decl_names = [n.strip().lower() for n in m.group("names").split(",")]
+            # Only drop when EVERY name on this line is a resolved
+            # external -- a mixed line keeps the bridge safe.
+            if all(n in all_resolved_names for n in decl_names):
+                delete_idx.add(li)
+        # Suppress imports for modules the scope already USEs.
+        synth_use_lines = []
+        for mod, names in per_mod_names.items():
+            if _scope_already_uses(scope_lines, mod):
+                continue  # EXTERNAL becomes a no-op delete
+            # Pick the indent matching the opener's leading whitespace
+            # plus two spaces -- the conventional Fortran continuation.
+            opener_indent = re.match(r"^(\s*)", lines[opener_idx]).group(1)
+            body_indent = opener_indent + "  "
+            synth_use_lines.append(f"{body_indent}USE {mod}, ONLY: {', '.join(names)}\n")
+        if synth_use_lines:
+            insert_at_idx[opener_idx + 1] = synth_use_lines
+        for idx in ext_line_idxs:
+            delete_idx.add(idx)
+
+    if not delete_idx and not insert_at_idx:
+        return source
+
+    # Pass 3: produce the rewritten source.  Walk every line; when an
+    # index has an insertion, emit the inserts BEFORE the line; when
+    # an index is in delete_idx, drop it.
+    out = []
+    for i, raw in enumerate(lines):
+        if i in insert_at_idx:
+            out.extend(insert_at_idx[i])
+        if i in delete_idx:
+            continue
+        out.append(raw)
+    return "".join(out)
+
+
+# A CHARACTER dummy declaration -- the LHS shape of a procedure
+# parameter that's a string used as an enum.  Captures the dummy
+# names (group ``names``) and the full type spec (group ``type``).
+# Recognises ``CHARACTER(LEN=*)``, ``CHARACTER(LEN=N)``,
+# ``CHARACTER(*)``, ``CHARACTER(N)``, and the bare ``CHARACTER``
+# form -- all of which are valid Fortran string-arg shapes.
+_CHARACTER_INTENT_IN_RE = re.compile(
+    r"^(?P<lead>\s*)CHARACTER(?:\s*\(\s*[^)]+\s*\))?\s*"
+    r",\s*INTENT\s*\(\s*IN\s*\)\s*"
+    r"::\s*(?P<names>[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _line_clip_comment(raw: str) -> str:
+    """Return ``raw`` truncated at the first ``!`` that is outside a
+    character literal.  Unlike :func:`_code_of` this preserves the
+    contents of character literals (which the string-enum detector
+    NEEDS to capture)."""
+    cut, _ = _scan_line(raw)
+    return raw[:cut]
+
+
+def _scan_string_enum_uses(scope_body: str, var: str) -> dict:
+    """Return the enum mapping ``{lowercase_literal: int}`` for every
+    distinct literal ``var`` is compared against.
+
+    Recognises three shapes within ``scope_body``:
+      * ``<var> == '<literal>'``  /  ``<var> .EQ. '<literal>'``
+      * ``'<literal>' == <var>``  /  ``'<literal>' .EQ. <var>``
+      * ``CASE ('<literal>')`` inside a ``SELECT CASE (<var>)`` block
+        (the block scope is tracked by ``_select_case_blocks``).
+
+    Case-insensitive grouping is applied so a Fortran source that
+    accepts both ``'c'`` and ``'C'`` collapses to one integer entry
+    (the same downstream branch fires for either).  Literals are
+    enumerated in first-appearance order so the resulting map is
+    deterministic between runs.
+    """
+    seen_order: list = []
+    mapping: dict = {}
+
+    # ``<var> == 'lit'`` / ``<var> .EQ. 'lit'`` -- two operand orders.
+    var_eq_re = re.compile(
+        rf"\b{re.escape(var)}\s*(?:==|\.EQ\.)\s*['\"]([^'\"]*)['\"]",
+        re.IGNORECASE,
+    )
+    eq_var_re = re.compile(
+        rf"['\"]([^'\"]*)['\"]\s*(?:==|\.EQ\.)\s*\b{re.escape(var)}\b",
+        re.IGNORECASE,
+    )
+
+    def _record(lit: str):
+        key = lit.lower()
+        if key in mapping:
+            return
+        mapping[key] = len(seen_order)
+        seen_order.append(key)
+
+    for line in scope_body.splitlines():
+        code = _line_clip_comment(line)
+        for m in var_eq_re.finditer(code):
+            _record(m.group(1))
+        for m in eq_var_re.finditer(code):
+            _record(m.group(1))
+
+    # ``SELECT CASE (<var>)`` block scan: collect CASE-branch literals
+    # within the block.  Single-pass; nested SELECT CASE on different
+    # variables don't get conflated because we re-anchor on each
+    # block opener.
+    in_block = False
+    block_re = re.compile(rf"^\s*SELECT\s+CASE\s*\(\s*{re.escape(var)}\s*\)", re.IGNORECASE)
+    end_block_re = re.compile(r"^\s*END\s+SELECT\b", re.IGNORECASE)
+    case_lit_re = re.compile(r"^\s*CASE\s*\(\s*['\"]([^'\"]*)['\"]\s*\)", re.IGNORECASE)
+    for line in scope_body.splitlines():
+        code = _line_clip_comment(line)
+        if not in_block:
+            if block_re.match(code):
+                in_block = True
+            continue
+        if end_block_re.match(code):
+            in_block = False
+            continue
+        cm = case_lit_re.match(code)
+        if cm:
+            _record(cm.group(1))
+
+    return mapping
+
+
+def rewrite_string_enum_to_integer(source: str) -> tuple:
+    """Convert ``CHARACTER(LEN=...), INTENT(IN) :: <var>`` dummy args
+    that act as enum-style switches to ``INTEGER, INTENT(IN)`` plus
+    integer-valued comparisons.
+
+    Pattern (QE's ``addusxx_g`` ``flag`` shape):
+
+      SUBROUTINE k(out, flag)
+        CHARACTER(LEN=1), INTENT(IN) :: flag
+        IF (flag == 'c' .OR. flag == 'C') THEN ...
+        IF (flag == 'r' .OR. flag == 'R') THEN ...
+      END SUBROUTINE
+
+    becomes
+
+      SUBROUTINE k(out, flag)
+        INTEGER, INTENT(IN) :: flag
+        IF (flag == 0 .OR. flag == 0) THEN ...
+        IF (flag == 1 .OR. flag == 1) THEN ...
+      END SUBROUTINE
+
+    where ``0 -> {'c', 'C'}``, ``1 -> {'r', 'R'}``, etc. (the case-
+    insensitive grouping collapses upper/lower variants to the
+    same integer).
+
+    Sidecar mapping:
+        Returns ``(rewritten_source, enum_maps)`` where ``enum_maps``
+        is ``{procedure_name: {arg_name: {literal_lower: int}}}``.
+        The bindings layer consumes ``enum_maps`` to expose a string-
+        typed wrapper (``run(flag='c', ...)``) at the Python boundary
+        and normalises the string to the integer value before calling
+        the SDFG.
+
+    Limitations (deliberately scope-narrow for the first cut):
+      * Only single-name CHARACTER declarations  --  a mixed
+        ``CHARACTER :: a, b`` is left alone (would need a per-name
+        split).
+      * Only INTENT(IN) dummies  --  locals, INTENT(OUT) / (INOUT)
+        and module variables are skipped (could be enum-promoted
+        too but the call-site rewrite story is harder).
+      * Call sites are NOT rewritten  --  the bindings layer
+        converts the string argument to the integer at the SDFG
+        boundary.  A caller invoking the rewritten Fortran
+        directly would have to pass an integer literal.
+      * SELECT CASE on TRIM(<var>) etc. is not detected  --  only
+        the bare ``SELECT CASE (<var>)`` shape.
+
+    Pass-through:
+        Returns ``(source, {})`` when no procedure has an INTENT(IN)
+        CHARACTER dummy that's used purely as an enum switch.
+        Idempotent: a second invocation finds no CHARACTER-INTENT(IN)
+        dummies left to rewrite and returns its input + ``{}``.
+        Comment- and string-aware via ``_scan_line``: an ``==``
+        comparison inside a string literal or after ``!`` is never
+        treated as code.
+
+    :param source: Fortran source text.
+    :returns: ``(rewritten_source, enum_maps)``.
+    """
+    lines = source.splitlines(keepends=True)
+
+    # Reuse the EXTERNAL pass's scope extraction.
+    scopes: list = []
+    cur_open = None
+    cur_name = None
+    for i, raw in enumerate(lines):
+        code = _code_of(raw)
+        m = _SCOPE_OPEN_RE.match(code)
+        if m:
+            if cur_open is not None:
+                scopes.append((cur_open, i, cur_name))
+            cur_open = i
+            cur_name = m.group(1).lower()
+        elif re.match(r"^\s*END\s+(SUBROUTINE|FUNCTION)\b", code, re.IGNORECASE):
+            if cur_open is not None:
+                scopes.append((cur_open, i + 1, cur_name))
+                cur_open = None
+                cur_name = None
+    if cur_open is not None:
+        scopes.append((cur_open, len(lines), cur_name))
+
+    enum_maps: dict = {}
+    delete_idx: dict = {}  # line idx -> replacement string (or None for delete)
+
+    for opener_idx, end_idx, proc_name in scopes:
+        scope_lines = lines[opener_idx:end_idx]
+        scope_body = "".join(scope_lines)
+
+        # Find every CHARACTER(...) INTENT(IN) declaration in this scope.
+        decl_targets: list = []  # (line_idx, var_name, lead_indent)
+        for li, raw in enumerate(scope_lines, start=opener_idx):
+            code = _code_of(raw)
+            m = _CHARACTER_INTENT_IN_RE.match(code)
+            if not m:
+                continue
+            names = [n.strip() for n in m.group("names").split(",")]
+            if len(names) != 1:
+                continue  # mixed-decl line -- skip
+            decl_targets.append((li, names[0], m.group("lead")))
+
+        if not decl_targets:
+            continue
+
+        # For each candidate dummy, derive its enum mapping; skip if
+        # the scope never compares it against any string literal.
+        for li, var, lead in decl_targets:
+            mapping = _scan_string_enum_uses(scope_body, var)
+            if not mapping:
+                continue
+
+            # Record the mapping for the bindings layer.
+            enum_maps.setdefault(proc_name, {})[var] = dict(mapping)
+
+            # Rewrite the declaration line: CHARACTER... -> INTEGER.
+            delete_idx[li] = f"{lead}INTEGER, INTENT(IN) :: {var}\n"
+
+            # Rewrite every comparison + CASE literal in scope.
+            var_eq_re = re.compile(
+                rf"(\b{re.escape(var)}\b\s*(?:==|\.EQ\.)\s*)['\"]([^'\"]*)['\"]",
+                re.IGNORECASE,
+            )
+            eq_var_re = re.compile(
+                rf"['\"]([^'\"]*)['\"](\s*(?:==|\.EQ\.)\s*\b{re.escape(var)}\b)",
+                re.IGNORECASE,
+            )
+            case_re = re.compile(r"^(\s*CASE\s*\(\s*)['\"]([^'\"]*)['\"](\s*\))", re.IGNORECASE)
+
+            in_block = False
+            block_re = re.compile(rf"^\s*SELECT\s+CASE\s*\(\s*{re.escape(var)}\s*\)", re.IGNORECASE)
+            end_block_re = re.compile(r"^\s*END\s+SELECT\b", re.IGNORECASE)
+
+            for lj, raw in enumerate(scope_lines, start=opener_idx):
+                if lj == li:
+                    continue  # already rewritten above
+                clipped = _line_clip_comment(raw)
+                if not clipped.strip():
+                    continue
+
+                # Track SELECT CASE block scope for case-literal rewrite.
+                if not in_block and block_re.match(clipped):
+                    in_block = True
+                elif in_block and end_block_re.match(clipped):
+                    in_block = False
+
+                new_line = raw
+                # CASE ('lit') inside SELECT CASE (var)
+                if in_block:
+                    cm = case_re.match(clipped)
+                    if cm:
+                        lit_key = cm.group(2).lower()
+                        if lit_key in mapping:
+                            # Rebuild line preserving any trailing
+                            # comment past the match end.
+                            new_line = (cm.group(1) + str(mapping[lit_key]) + cm.group(3) + raw[len(cm.group(0)):])
+
+                # ``<var> == 'lit'`` / ``<var> .EQ. 'lit'``
+                def _replace_var_eq(m):
+                    lit_key = m.group(2).lower()
+                    if lit_key not in mapping:
+                        return m.group(0)
+                    return f"{m.group(1)}{mapping[lit_key]}"
+
+                def _replace_eq_var(m):
+                    lit_key = m.group(1).lower()
+                    if lit_key not in mapping:
+                        return m.group(0)
+                    return f"{mapping[lit_key]}{m.group(2)}"
+
+                new_line = var_eq_re.sub(_replace_var_eq, new_line)
+                new_line = eq_var_re.sub(_replace_eq_var, new_line)
+
+                if new_line != raw:
+                    delete_idx[lj] = new_line
+
+    if not enum_maps:
+        return source, {}
+
+    out = []
+    for i, raw in enumerate(lines):
+        out.append(delete_idx[i] if i in delete_idx else raw)
+    return "".join(out), enum_maps
+
+
 def preprocess_fortran_source(source: str,
                               *,
                               search_dirs=(),

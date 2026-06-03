@@ -234,3 +234,9 @@ _all_tests/
 # semantics (RESHAPE intrinsic, plain slice assign) are
 # structurally distinguishable in the HLFIR.
 !tests/bounds_remap_view/**/*.f90
+# Pattern 1 + Pattern 2 example sources (EXTERNAL -> module imports,
+# string-as-enum -> integer enum) referenced by the preprocess-pass
+# unit tests; live under their own tests dirs alongside the test
+# files.
+!tests/external_to_modules/**/*.f90
+!tests/string_enum_to_integer/**/*.f90
