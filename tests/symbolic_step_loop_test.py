@@ -124,25 +124,15 @@ end subroutine kernel
     np.testing.assert_array_equal(sdfg["out"], expected)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Step rendered through ``buildIndexExpr`` on an array "
-    "element ``stride_arr(idx)`` is off-by-one against the f2py "
-    "reference (SDFG ends up using ``stride_arr[2]=5``, ref expects "
-    "``stride_arr[1]=3``).  Proper fix: hoist the array-element step "
-    "to a fresh scalar SDFG symbol BEFORE the loop "
-    "(``__loop_<id>_step = stride_arr(idx)``) so the loop's "
-    "update_expr stays a bare-symbol reference -- matches the "
-    "''loop iterator / array access / loop bounds are symbols'' "
-    "design.  Follow-up; the scalar-argument-step case (the QE "
-    "``many_fft`` shape) works correctly today.")
 def test_step_from_array_element(tmp_path: Path):
     """``DO j = 1, n, stride_arr(idx)`` -- the step reads from an
-    array.  Exercises the ``traceToDecl`` -> ``buildIndexExpr``
-    fallback for steps that aren't a bare scalar load.
-
-    Result: ``out`` records the iteration values; the choice of
-    ``stride_arr(idx)`` determines which entries land where."""
+    array.  The bridge hoists the non-trivial step expression to a
+    fresh ``loopstep_<nid>`` symbol via a pre-LoopRegion interstate
+    edge, mirroring the existing bound-hoist machinery -- the
+    LoopRegion's update_expr stays a bare-symbol reference.  The
+    ``arr(idx)`` -> ``arr[idx-1]`` Fortran-to-DaCe conversion
+    happens once on the hoisted assignment via
+    ``_fortran_subs_to_dace``."""
     src = """
 subroutine kernel(out, stride_arr, idx, n, m)
   implicit none

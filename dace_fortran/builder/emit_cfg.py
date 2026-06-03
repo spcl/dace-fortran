@@ -458,20 +458,29 @@ def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
 
     if step_expr:
         # Symbolic step  --  ``DO jbnd = jstart, jend, many_fft``
-        # where ``many_fft`` is a runtime config integer.  Treat as
-        # forward iteration with the symbolic step.  When the
-        # runtime symbol is positive (the common QE / NWP case) the
-        # loop runs normally; a runtime-negative symbol would yield
-        # zero or one iteration under ``uid <= bound``  --  matching
-        # Fortran's trip-count formula
-        # ``MAX(0, (hi - lo + step) / step)`` for the
-        # mismatched-direction case.
+        # where ``many_fft`` is a runtime config integer, or
+        # ``DO j = 1, n, stride_arr(idx)`` where the step reads an
+        # array element.  Apply the same hoist-to-symbol path the
+        # bounds use so the update_expr stays a bare symbol -- this
+        # keeps the bridge's "loop iterator / array access / loop
+        # bounds are symbols" design consistent, and the Fortran
+        # 1-based -> DaCe 0-based conversion of ``arr(idx)`` to
+        # ``arr[(idx) - offset_arr_d0]`` happens once on the
+        # hoisted interstate-edge assignment instead of being
+        # embedded in the loop body.  Treat as forward iteration;
+        # runtime-negative symbols yield zero-or-one iterations
+        # under ``uid <= bound``, matching Fortran's mismatched-
+        # direction trip-count semantics.
+        step_expr = _fortran_subs_to_dace(step_expr, builder)
+        _s = _hoist_bound_to_symbol(ctx, region, builder, str(step_expr), "loopstep")
+        if _s is not None:
+            step_expr = _s
         loop = LoopRegion(
             label=f"loop_{uid}_{builder.nid()}",
             condition_expr=f"{uid} < {bound} + 1",
             loop_var=uid,
             initialize_expr=f"{uid} = {lower}",
-            update_expr=f"{uid} = {uid} + ({step_expr})",
+            update_expr=f"{uid} = {uid} + {step_expr}",
         )
     elif step >= 0:
         loop = LoopRegion(
