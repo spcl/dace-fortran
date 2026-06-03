@@ -15,8 +15,7 @@ import numpy as np
 import pytest
 
 from _util import build_sdfg, f2py_compile, have_flang
-from dace_fortran.external import (Arg, clear_external_registry,
-                                    inline_external, keep_external)
+from dace_fortran.external import (Arg, clear_external_registry, inline_external, keep_external)
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
@@ -55,9 +54,7 @@ end subroutine caller
     # Build the callee with an EMPTY registry -- we're defining its
     # body, so it must not be marked external for its own build.
     clear_external_registry()
-    callee_sdfg = build_sdfg(callee_src, tmp_path / "callee",
-                              name="add_one",
-                              entry="_QPadd_one").build()
+    callee_sdfg = build_sdfg(callee_src, tmp_path / "callee", name="add_one", entry="_QPadd_one").build()
     # Now register so the caller build emits an ExternalCall for it
     # (otherwise hlfir-inline-all would lower the bind(c) interface
     # away and the call would disappear).
@@ -65,12 +62,8 @@ end subroutine caller
     try:
         keep_external("add_one",
                       args=(Arg(kind="array", dtype="float64",
-                                intent="inout"),
-                            Arg(kind="scalar", dtype="int32",
-                                intent="in")))
-        caller_sdfg = build_sdfg(caller_src, tmp_path / "caller",
-                                  name="caller",
-                                  entry="_QPcaller").build()
+                                intent="inout"), Arg(kind="scalar", dtype="int32", intent="in")))
+        caller_sdfg = build_sdfg(caller_src, tmp_path / "caller", name="caller", entry="_QPcaller").build()
     finally:
         clear_external_registry()
 
@@ -82,37 +75,35 @@ end subroutine caller
     # Pre-condition: the caller SDFG carries an ExternalCall library
     # node for add_one.
     from dace_fortran.external import ExternalCall
-    ext_sites = [n for state in caller_sdfg.all_states()
-                 for n in state.nodes() if isinstance(n, ExternalCall)
-                 and n.c_name == "add_one"]
-    assert len(ext_sites) == 1, (
-        f"expected exactly one ExternalCall for add_one before inline, "
-        f"got {len(ext_sites)}")
+    ext_sites = [
+        n for state in caller_sdfg.all_states() for n in state.nodes()
+        if isinstance(n, ExternalCall) and n.c_name == "add_one"
+    ]
+    assert len(ext_sites) == 1, (f"expected exactly one ExternalCall for add_one before inline, "
+                                 f"got {len(ext_sites)}")
 
     # Re-register so the lookup inside inline_external resolves.
     keep_external("add_one",
                   args=(Arg(kind="array", dtype="float64",
-                            intent="inout"),
-                        Arg(kind="scalar", dtype="int32",
-                            intent="in")))
+                            intent="inout"), Arg(kind="scalar", dtype="int32", intent="in")))
     try:
-        replaced = inline_external(caller_sdfg, "add_one",
-                                    callee_sdfg=callee_sdfg)
+        replaced = inline_external(caller_sdfg, "add_one", callee_sdfg=callee_sdfg)
     finally:
         clear_external_registry()
     assert replaced == 1
 
     # Post-condition: the ExternalCall is gone and a NestedSDFG wraps
     # the callee SDFG.
-    ext_sites_after = [n for state in caller_sdfg.all_states()
-                       for n in state.nodes()
-                       if isinstance(n, ExternalCall)
-                       and n.c_name == "add_one"]
+    ext_sites_after = [
+        n for state in caller_sdfg.all_states() for n in state.nodes()
+        if isinstance(n, ExternalCall) and n.c_name == "add_one"
+    ]
     assert ext_sites_after == []
     from dace.sdfg.nodes import NestedSDFG
-    nested_sites = [n for state in caller_sdfg.all_states()
-                    for n in state.nodes() if isinstance(n, NestedSDFG)
-                    and n.sdfg is callee_sdfg]
+    nested_sites = [
+        n for state in caller_sdfg.all_states() for n in state.nodes()
+        if isinstance(n, NestedSDFG) and n.sdfg is callee_sdfg
+    ]
     assert len(nested_sites) == 1
 
     # Functional: the inlined caller should produce the same result as
@@ -170,23 +161,28 @@ end subroutine caller
 """
     callee_ext_name = "_QMaos_modPadd_vec"
     clear_external_registry()
-    callee_sdfg = build_sdfg(callee_src, tmp_path / "callee",
-                              name="add_vec",
-                              entry=callee_ext_name).build()
+    callee_sdfg = build_sdfg(callee_src, tmp_path / "callee", name="add_vec", entry=callee_ext_name).build()
     clear_external_registry()
+    # Stage ``aos_mod`` source in the caller's scratch dir so
+    # ``merge_used_modules`` resolves ``USE aos_mod`` -- the bridge's
+    # one-TU flang invocation needs the module body present even
+    # though ``keep_external`` keeps ``add_vec`` as an ExternalCall
+    # (the call site still has to resolve ``type(t_vec)`` to declare
+    # the dummy).
+    caller_dir = tmp_path / "caller"
+    caller_dir.mkdir(parents=True, exist_ok=True)
+    (caller_dir / "aos_mod.f90").write_text(callee_src)
     try:
-        keep_external(callee_ext_name,
-                      args=(Arg(kind="aos", intent="inout"),))
-        caller_sdfg = build_sdfg(caller_src, tmp_path / "caller",
-                                  name="caller",
-                                  entry="_QPcaller").build()
+        keep_external(callee_ext_name, args=(Arg(kind="aos", intent="inout"), ))
+        caller_sdfg = build_sdfg(caller_src, caller_dir, name="caller", entry="_QPcaller").build()
     finally:
         clear_external_registry()
 
     from dace_fortran.external import ExternalCall
-    ext_sites = [n for state in caller_sdfg.all_states()
-                 for n in state.nodes() if isinstance(n, ExternalCall)
-                 and n.c_name == callee_ext_name]
+    ext_sites = [
+        n for state in caller_sdfg.all_states() for n in state.nodes()
+        if isinstance(n, ExternalCall) and n.c_name == callee_ext_name
+    ]
     assert len(ext_sites) == 1
     ext_node = ext_sites[0]
     # The marshal pass expanded the single struct arg into per-member
@@ -197,27 +193,26 @@ end subroutine caller
     # Confirm callee SDFG was flattened to the same two leaves so the
     # arglist matches by position.
     callee_args = list(callee_sdfg.arglist().keys())
-    assert len(callee_args) == 2, (
-        f"callee expected to flatten its struct dummy to 2 leaves, got "
-        f"{callee_args}")
+    assert len(callee_args) == 2, (f"callee expected to flatten its struct dummy to 2 leaves, got "
+                                   f"{callee_args}")
 
-    keep_external(callee_ext_name,
-                  args=(Arg(kind="aos", intent="inout"),))
+    keep_external(callee_ext_name, args=(Arg(kind="aos", intent="inout"), ))
     try:
-        replaced = inline_external(caller_sdfg, callee_ext_name,
-                                    callee_sdfg=callee_sdfg)
+        replaced = inline_external(caller_sdfg, callee_ext_name, callee_sdfg=callee_sdfg)
     finally:
         clear_external_registry()
     assert replaced == 1
 
-    ext_after = [n for state in caller_sdfg.all_states()
-                 for n in state.nodes() if isinstance(n, ExternalCall)
-                 and n.c_name == callee_ext_name]
+    ext_after = [
+        n for state in caller_sdfg.all_states() for n in state.nodes()
+        if isinstance(n, ExternalCall) and n.c_name == callee_ext_name
+    ]
     assert ext_after == []
     from dace.sdfg.nodes import NestedSDFG
-    nested_after = [n for state in caller_sdfg.all_states()
-                    for n in state.nodes() if isinstance(n, NestedSDFG)
-                    and n.sdfg is callee_sdfg]
+    nested_after = [
+        n for state in caller_sdfg.all_states() for n in state.nodes()
+        if isinstance(n, NestedSDFG) and n.sdfg is callee_sdfg
+    ]
     assert len(nested_after) == 1
 
     caller_sdfg.validate()
