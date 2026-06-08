@@ -289,7 +289,15 @@ def add_descriptors(builder, sdfg: SDFG):
             # this branch (they live in ``builder.scalars``); this only
             # triggers for explicit ``REAL :: x(1)`` declarations whose
             # source already names a length-1 array.
-            transient = (v.intent == '')
+            #
+            # ``transient`` follows the bake / kwarg classification
+            # mirrored from ``hlfir-preserve-mutable-globals`` -- a
+            # baked constant (PARAMETER or function-scope local) is a
+            # transient backed by ``add_constant`` data; every other
+            # intent-empty global is a caller kwarg (non-transient
+            # (1,)-Array surfacing on the SDFG signature).
+            from dace_fortran.builder import _global_is_baked_constant
+            transient = (v.intent == '' and _global_is_baked_constant(v))
             is_length_one = len(dims) == 1 and dims[0] == 1
             if transient and is_length_one:
                 sdfg.add_scalar(v.fortran_name, dtype=dt(v.dtype), transient=True)

@@ -263,6 +263,18 @@ DEFAULT_PIPELINE = (
     "hlfir-default-intent,"
     # Lift cf.br / cf.cond_br loops into scf.while so extract_ast can walk them.
     "lift-cf-to-scf,"
+    # Classify ``fir.global`` ops as INPUT vs MUTABLE based on whether
+    # the IR writes them.  INPUT globals (no in-IR writes -- the caller
+    # mutates them from OUTSIDE via the bindings layer) have their
+    # init body cleared so ``sccp`` cannot fold their loads to the
+    # BSS initializer.  Without this, a Fortran module-level scalar
+    # the caller pre-sets (LU's ``dt``, QE's per-call config scalars,
+    # ...) gets baked to its in-source initial value and the SDFG
+    # silently ignores the runtime kwarg.  Must run AFTER
+    # ``hlfir-inline-all`` (so we see inlined writes) and BEFORE
+    # ``sccp,canonicalize,cse``.  See
+    # ``passes/PreserveMutableGlobals.cpp``.
+    "hlfir-preserve-mutable-globals,"
     # Constant propagation + fold + CSE after every HLFIR rewrite has
     # exposed as many constants as it will.
     "sccp,canonicalize,cse")
@@ -282,6 +294,7 @@ MULTI_FILE_PIPELINE = ("hlfir-inline-all,"
                        "hlfir-propagate-shapes,"
                        "hlfir-default-intent,"
                        "lift-cf-to-scf,"
+                       "hlfir-preserve-mutable-globals,"
                        "sccp,canonicalize,cse")
 
 # Sympy module-level attributes that turn user-source identifiers into
@@ -294,6 +307,50 @@ MULTI_FILE_PIPELINE = ("hlfir-inline-all,"
 _RESERVED_DACE_NAMES = frozenset({"test", "doctest"})
 
 _DACE_NAME_PREFIX = "program_"
+
+
+def _global_is_baked_constant(v) -> bool:
+    """Mirror of the ``hlfir-preserve-mutable-globals`` rule on the
+    Python side.  A module-level Fortran global is "baked" (becomes a
+    compile-time constant in the SDFG) iff the caller has no symbol to
+    bind it -- which is exactly two cases:
+
+    * PARAMETER constants -- flang marks them with the ``EC`` separator
+      before the variable name (``_QM<mod>EC<var>`` / ``_QM<mod>F<func>EC<var>``).
+    * Function-scope locals declared with a source-level initialiser
+      (``real :: bob = 1`` inside a subroutine) -- flang marks the
+      enclosing scope with an uppercase ``F`` segment after the
+      leading ``_Q`` (``_QF<func>E<var>`` / ``_QM<mod>F<func>E<var>``).
+
+    Every other module-level initialised global is a caller-overridable
+    default (LU ``dt``, a config lookup table the caller may override)
+    and surfaces as a kwarg on the SDFG signature.
+
+    Flang lowercases every Fortran identifier; an uppercase ``F`` or
+    ``EC`` after ``_Q`` is therefore always a scope / attribute marker
+    and never coincides with a module / function / variable name.
+    """
+    mangled = getattr(v, 'mangled_name', '') or ''
+    if not mangled.startswith('_Q'):
+        return False
+    # Flang's synthetic literal-pool globals back every array / string
+    # literal in the source.  Two prefixes:
+    #
+    #   _QQro.<shape>x<dtype>.<counter>     -- array literal read-only data
+    #                                          (see ``_register_constants``
+    #                                          docstring and
+    #                                          ``bridge/extract_vars.h``
+    #                                          line 45 / 118)
+    #   _QQclX<hex>                         -- character literal decoded
+    #                                          inline in ``bridge/ast/
+    #                                          dispatch.cpp`` line 835
+    #
+    # Neither carries a Fortran-source symbol the caller could bind --
+    # always bake.
+    if mangled.startswith('_QQro') or mangled.startswith('_QQcl'):
+        return True
+    tail = mangled[2:]
+    return 'EC' in tail or 'F' in tail
 
 
 def _specialize_symbol(sdfg: SDFG, symbol_name: str, value):
@@ -623,6 +680,19 @@ class SDFGBuilder:
             # entry (see ``_seed_written_inits``).  A ``constexpr`` here would
             # make the kernel's store to it fail to compile.
             if getattr(v, 'is_written', False):
+                continue
+            # Mirror the MLIR-side ``hlfir-preserve-mutable-globals`` rule
+            # on the Python side: only globals that the caller can NOT
+            # bind get baked into the SDFG constant pool.  Two such
+            # shapes -- PARAMETERs (true compile-time constants;
+            # flang's mangled marker is the ``EC`` separator before
+            # the var name) and routine-local ``SAVE``-init globals
+            # (function-scope, flang marks scope with an uppercase
+            # ``F`` segment).  Every other module-level initialised
+            # global is a caller-overridable default (LU ``dt``, a
+            # module lookup table the caller may override) and must
+            # surface as a kwarg, not as a baked constant.
+            if not _global_is_baked_constant(v):
                 continue
             if v.fortran_name not in sdfg.arrays:
                 continue

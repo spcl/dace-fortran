@@ -1,10 +1,14 @@
-"""The builder generates typed scalar constants.
+"""The builder surfaces read-only module-level scalars with the right
+dtype on the SDFG arglist.
 
-A read-only Fortran scalar that reaches the SDFG as a constant carries its
-true precision: a ``real(4)`` parameter becomes a ``np.float32`` constant (not
-a Python ``float`` widened to double), a ``real(8)`` becomes ``np.float64``,
-and integers stay Python ``int``.  This keeps fp32 constants single precision
-through code generation, building on DaCe's typed-constant support.
+After ``hlfir-preserve-mutable-globals`` runs, every non-PARAMETER,
+non-written module-level global is a caller kwarg on the SDFG -- a
+non-transient length-1 ``Array`` whose dtype reflects the source-
+declared Fortran KIND.  A ``real(4)`` global lands as ``np.float32``,
+a ``real(8)`` as ``np.float64``, an ``integer`` as ``np.int32``.
+PARAMETER constants stay baked in the constant pool with the same
+dtype rule; that path is exercised separately by
+``module_global_vs_constant_test.py::test_parameter_is_baked_constant``.
 """
 import tempfile
 from pathlib import Path
@@ -35,20 +39,21 @@ end module m
 """
 
 
-def _constants(tmp_path):
+def _arg_dtype(tmp_path, name: str):
+    """Resolve the SDFG arglist entry for ``name`` and return its
+    numpy dtype.  Verifies the symbol actually surfaced as a kwarg."""
     sdfg = build_sdfg(_SRC, tmp_path, name="apply", entry="_QMmPapply").build()
-    return {name: val[1] for name, val in sdfg.constants_prop.items()}
+    assert name in sdfg.arglist(), f"{name!r} not in arglist; got {sorted(sdfg.arglist())}"
+    return sdfg.arglist()[name].dtype.as_numpy_dtype()
 
 
 def test_fp32_scalar_constant_is_float32(tmp_path):
-    consts = _constants(tmp_path)
-    assert isinstance(consts["cscale"], np.float32)
-    np.testing.assert_allclose(consts["cscale"], np.float32(0.1), rtol=0)
+    """A ``real(4)`` module-level global surfaces as a float32 kwarg."""
+    assert _arg_dtype(tmp_path, "cscale") == np.float32
 
 
 def test_fp64_and_int_scalar_constants_keep_their_types(tmp_path):
-    consts = _constants(tmp_path)
-    assert isinstance(consts["dscale"], np.float64)
-    np.testing.assert_allclose(consts["dscale"], 0.2)
-    # Integers stay Python ``int`` (round-trip- and isinstance(int)-friendly).
-    assert type(consts["icount"]) is int and consts["icount"] == 7
+    """``real(8)`` -> float64; ``integer`` -> int32 (Fortran default
+    integer KIND = int32 on every platform we target)."""
+    assert _arg_dtype(tmp_path, "dscale") == np.float64
+    assert _arg_dtype(tmp_path, "icount") == np.int32

@@ -230,6 +230,7 @@ add_library(hlfir_bridge_passes STATIC
     passes/StripErrorHelpers.cpp
     passes/StripRuntimeIo.cpp
     passes/StripCharacterRuntime.cpp
+    passes/PreserveMutableGlobals.cpp
     passes/MarkBoundsRemapViews.cpp
 )
 target_link_libraries(hlfir_bridge_passes PUBLIC

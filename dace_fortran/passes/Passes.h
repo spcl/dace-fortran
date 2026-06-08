@@ -39,6 +39,7 @@ std::unique_ptr<mlir::Pass> createUnwrapEvalInMemPass();
 std::unique_ptr<mlir::Pass> createStripErrorHelpersPass();
 std::unique_ptr<mlir::Pass> createStripRuntimeIoPass();
 std::unique_ptr<mlir::Pass> createStripCharacterRuntimePass();
+std::unique_ptr<mlir::Pass> createPreserveMutableGlobalsPass();
 std::unique_ptr<mlir::Pass> createMarkBoundsRemapViewsPass();
 
 // --- Registry ---
