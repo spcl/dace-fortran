@@ -286,16 +286,30 @@ DEFAULT_PIPELINE = (
 # DialectInlinerInterface to be attached to the MLIRContext, which
 # the bridge's constructor now does via ``mlir::func::
 # registerInlinerExtension`` + ``fir::addFIRInlinerExtension``.
-MULTI_FILE_PIPELINE = ("hlfir-inline-all,"
-                       "hlfir-fold-element-aliases,"
-                       "symbol-dce,"
-                       "hlfir-verify-no-unresolved-calls,"
-                       "hlfir-flatten-structs,"
-                       "hlfir-propagate-shapes,"
-                       "hlfir-default-intent,"
-                       "lift-cf-to-scf,"
-                       "hlfir-preserve-mutable-globals,"
-                       "sccp,canonicalize,cse")
+MULTI_FILE_PIPELINE = (
+    # Structurize callees BEFORE inlining (mirrors ``DEFAULT_PIPELINE``):
+    # an early ``RETURN`` makes a callee multi-block, and ``mlir::
+    # inlineCall`` skips multi-block callees per
+    # ``passes/InlineAll.cpp`` line 162.  For LU's contained subroutines
+    # (``domain`` / ``setcoeff`` / ``ssor`` / etc.), every one was
+    # multi-block until ``lift-cf-to-scf`` ran, so the inliner left
+    # them all as separate functions and the AST extractor saw only
+    # 9 opaque call nodes -- the entire LU body invisible to the
+    # SDFG builder.  Lifting first folds each callee into a single
+    # scf-wrapped block; the inliner then absorbs every level of the
+    # call tree in its existing fixed-point loop.  This is the
+    # ``WP-2`` fix; the LU numerical correctness test passes
+    # element-wise against the gfortran reference after this lands.
+    "lift-cf-to-scf,"
+    "hlfir-inline-all,"
+    "hlfir-fold-element-aliases,"
+    "symbol-dce,"
+    "hlfir-verify-no-unresolved-calls,"
+    "hlfir-flatten-structs,"
+    "hlfir-propagate-shapes,"
+    "hlfir-default-intent,"
+    "hlfir-preserve-mutable-globals,"
+    "sccp,canonicalize,cse")
 
 # Sympy module-level attributes that turn user-source identifiers into
 # parser hazards.  ``test`` / ``doctest`` are ``LazyFunction`` wrappers
