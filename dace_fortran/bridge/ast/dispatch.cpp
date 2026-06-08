@@ -88,6 +88,11 @@ static ASTNode buildScfIfAsConditional(mlir::scf::IfOp ifOp) {
   return c;
 }
 
+// Forward declaration used by ``walkSCFBeforeRegion``'s ``fir.do_loop``
+// dispatch (definition lives further down the file).  ``traceLB`` and
+// ``traceConstInt`` / ``buildIndexExpr`` come in via ``ast_helpers.h``.
+static std::string traceLoopIter(fir::DoLoopOp loop);
+
 std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
   std::vector<ASTNode> out;
   for (auto& op : block) {
@@ -170,6 +175,48 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
       a.expr = expr;
       a.target_is_array = false;
       out.push_back(std::move(a));
+      continue;
+    }
+    // ``fir.do_loop`` parked inside an ``scf.while`` BEFORE region.
+    // This is the shape ``lift-cf-to-scf`` produces from a Fortran
+    // ``do`` whose containing istep loop has an early ``return``
+    // (NPB LU's ``ssor``: the istep loop with ``if (rsdnm < tolrsd)
+    // return``).  Without this dispatch the op falls through as a
+    // "pure-value op" and EVERY assign in the loop body is silently
+    // dropped from the AST.  Emit a minimal "loop" node and recurse
+    // into the body block; the existing emit_loop fallbacks recover
+    // bounds and iter from the SSA chain when loop_iter / loop_bound
+    // are absent.
+    if (auto doLoop = mlir::dyn_cast<fir::DoLoopOp>(op)) {
+      ASTNode n;
+      n.kind = "loop";
+      n.loop_iter = traceLoopIter(doLoop);
+      if (auto c = traceConstInt(doLoop.getUpperBound())) {
+        n.loop_bound = std::to_string(*c);
+      } else {
+        auto sym = traceToDecl(doLoop.getUpperBound());
+        if (!sym.empty()) n.loop_bound = sym;
+        else n.loop_bound = buildIndexExpr(doLoop.getUpperBound(), 0);
+      }
+      n.loop_lower = traceLB(doLoop.getLowerBound());
+      if (n.loop_lower < 0) {
+        auto sym = traceToDecl(doLoop.getLowerBound());
+        if (!sym.empty()) n.loop_lower_expr = sym;
+        else n.loop_lower_expr = buildIndexExpr(doLoop.getLowerBound(), 0);
+      }
+      if (auto stepC = traceConstInt(doLoop.getStep()))
+        n.loop_step = *stepC;
+      static thread_local int kSCFDoLoopIterCounter = 0;
+      bool pushedBlockArg = false;
+      auto& loopBlock = doLoop.getRegion().front();
+      if (n.loop_iter.empty() && loopBlock.getNumArguments() > 0) {
+        n.loop_iter = "_scfdoit_" + std::to_string(kSCFDoLoopIterCounter++);
+        indexStack().push_back({loopBlock.getArgument(0), n.loop_iter});
+        pushedBlockArg = true;
+      }
+      n.children = buildAST(loopBlock);
+      if (pushedBlockArg) indexStack().pop_back();
+      out.push_back(std::move(n));
       continue;
     }
     // Pure-value ops  --  no AST node, their values flow inline.
