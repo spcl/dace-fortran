@@ -290,6 +290,48 @@ std::string buildIndexExpr(mlir::Value v, int d) {
         }
       }
       if (!hasAllocmem) {
+        // Before falling back to the synthesised ``<arr>_d<dim>``
+        // symbol, try the same shape-operand walk the
+        // ``buildExpr`` box_dims handler does in expressions.cpp.
+        // For a caller declare ``arr(n)`` whose body carries
+        // ``fir.shape %max(n, 0)``, this resolves the loop bound
+        // directly to ``n`` instead of leaking ``arr_d0`` -- the
+        // caller already passes ``n`` and wouldn't know to bind
+        // a synthetic shape symbol.
+        if (resIdx == 1) {
+          mlir::Value shapeVal;
+          if (auto *adef = arrayVal.getDefiningOp()) {
+            if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(adef)) {
+              shapeVal = decl.getShape();
+              if (!shapeVal) {
+                if (auto outer = asAssumedShapeAlias(decl))
+                  shapeVal = outer.getShape();
+              }
+            }
+          }
+          if (shapeVal) {
+            unsigned udim = static_cast<unsigned>(*dimC);
+            if (auto sh = mlir::dyn_cast<fir::ShapeOp>(shapeVal.getDefiningOp())) {
+              if (udim < sh.getExtents().size()) {
+                auto te = traceExtentExpr(sh.getExtents()[udim]);
+                if (!te.empty() && te != "?") return te;
+                auto s = buildIndexExpr(sh.getExtents()[udim], d + 1);
+                if (!s.empty() && s != "?") return s;
+              }
+            }
+            if (auto ss = mlir::dyn_cast<fir::ShapeShiftOp>(
+                    shapeVal.getDefiningOp())) {
+              auto ops = ss->getOperands();
+              unsigned extIdx = 2 * udim + 1;
+              if (extIdx < ops.size()) {
+                auto te = traceExtentExpr(ops[extIdx]);
+                if (!te.empty() && te != "?") return te;
+                auto s = buildIndexExpr(ops[extIdx], d + 1);
+                if (!s.empty() && s != "?") return s;
+              }
+            }
+          }
+        }
         std::string suffix = "_d" + std::to_string(*dimC);
         if (resIdx == 0) return "offset_" + arrName + suffix;
         if (resIdx == 1) return arrName + suffix;

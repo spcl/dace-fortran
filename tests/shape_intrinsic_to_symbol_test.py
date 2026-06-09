@@ -55,15 +55,6 @@ end module m
     np.testing.assert_array_equal(arr, np.arange(1, 9, dtype=np.float64))
 
 
-@pytest.mark.xfail(strict=False,
-                   reason=("The bridge mints ``arr_d0`` as a shape symbol "
-                           "for the dynamic-shape outer dummy but never "
-                           "wires the caller-side ``n`` to bind it.  This is "
-                           "the shape-symbol-propagation gap (separate from "
-                           "the ``size``/``box_dims`` symbol-emission "
-                           "contract, which works -- see the static-extent "
-                           "test).  Surfaces as 'unresolved free symbol "
-                           "arr_d0' at build time."))
 def test_size_on_assumed_shape_dummy_resolves_to_symbol(tmp_path):
     """When the dummy has dynamic shape, ``size(buf, 1)`` must
     surface as the bridge's ``<arr>_d<dim>`` symbol -- not a

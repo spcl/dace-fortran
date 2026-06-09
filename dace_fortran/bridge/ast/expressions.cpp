@@ -683,6 +683,18 @@ std::string buildExpr(mlir::Value val, int d) {
           if (dim < sh.getExtents().size()) {
             auto s = buildIndexExpr(sh.getExtents()[dim], d + 1);
             if (!s.empty() && s != "?") return s;
+            // ``buildIndexExpr`` doesn't handle Flang's
+            // ``max(ext, 0)`` extent-clamp idiom (an
+            // ``arith.select`` over an ``arith.cmpi sgt``).
+            // ``traceExtentExpr`` peels the clamp -- it's what
+            // ``extract_vars`` already uses to derive
+            // ``v.shape_symbols``.  Routes the box_dims extent
+            // for an explicit-shape caller (``arr(n)``) directly
+            // to ``n`` instead of falling through to the
+            // synthetic ``<arr>_d<dim>`` symbol, which the
+            // caller wouldn't know to bind.
+            auto te = traceExtentExpr(sh.getExtents()[dim]);
+            if (!te.empty() && te != "?") return te;
           }
         }
         if (auto ss =
@@ -692,6 +704,8 @@ std::string buildExpr(mlir::Value val, int d) {
           if (extIdx < ops.size()) {
             auto s = buildIndexExpr(ops[extIdx], d + 1);
             if (!s.empty() && s != "?") return s;
+            auto te = traceExtentExpr(ops[extIdx]);
+            if (!te.empty() && te != "?") return te;
           }
         }
       }
