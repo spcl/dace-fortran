@@ -275,6 +275,17 @@ DEFAULT_PIPELINE = (
     # ``sccp,canonicalize,cse``.  See
     # ``passes/PreserveMutableGlobals.cpp``.
     "hlfir-preserve-mutable-globals,"
+    # Fold ``fir.box_rank`` / ``fir.is_assumed_size`` to constants
+    # when the rank-erased dummy traces back to a concrete-rank
+    # caller declare.  Without this every ``SELECT RANK`` dispatch
+    # in an assumed-rank ``DIMENSION(..)`` callee reaches AST
+    # extraction with all branches live (the bridge would see
+    # multiple ``hlfir.declare`` ops with the same uniq_name but
+    # different ranks).  Must run AFTER ``hlfir-inline-all`` (so
+    # the callee body is inlined and the convert chain is visible)
+    # and BEFORE ``canonicalize`` (so the cmpi / scf.if / select
+    # chain reduces to just the matching branch).
+    "hlfir-fold-assumed-rank-queries,"
     # Constant propagation + fold + CSE after every HLFIR rewrite has
     # exposed as many constants as it will.
     "sccp,canonicalize,cse")
@@ -309,6 +320,7 @@ MULTI_FILE_PIPELINE = (
     "hlfir-propagate-shapes,"
     "hlfir-default-intent,"
     "hlfir-preserve-mutable-globals,"
+    "hlfir-fold-assumed-rank-queries,"
     "sccp,canonicalize,cse")
 
 # Sympy module-level attributes that turn user-source identifiers into

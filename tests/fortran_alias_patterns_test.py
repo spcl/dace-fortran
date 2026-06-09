@@ -342,13 +342,8 @@ end module m
 
 
 # ---------------------------------------------------------------------------
-# Pattern D -- assumed-rank dummy ``DIMENSION(..)``.
+# Pattern D -- assumed-rank dummy ``DIMENSION(..)`` + SELECT RANK.
 # ---------------------------------------------------------------------------
-@pytest.mark.xfail(strict=False,
-                   reason=("Assumed-rank dummies (Fortran 2018) take their rank "
-                           "from the actual at runtime via the descriptor.  "
-                           "Bridge probably needs special handling for "
-                           "fir.rebox_assumed_rank / fir.box_rank ops."))
 def test_d_assumed_rank_dummy(tmp_path):
     """``DIMENSION(..)`` -- assumed rank.  Actual's rank reaches the
     callee at runtime; the callee uses SELECT RANK to dispatch."""

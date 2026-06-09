@@ -41,6 +41,7 @@ std::unique_ptr<mlir::Pass> createStripRuntimeIoPass();
 std::unique_ptr<mlir::Pass> createStripCharacterRuntimePass();
 std::unique_ptr<mlir::Pass> createPreserveMutableGlobalsPass();
 std::unique_ptr<mlir::Pass> createMarkBoundsRemapViewsPass();
+std::unique_ptr<mlir::Pass> createFoldAssumedRankQueriesPass();
 
 // --- Registry ---
 

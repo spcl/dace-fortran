@@ -232,6 +232,7 @@ add_library(hlfir_bridge_passes STATIC
     passes/StripCharacterRuntime.cpp
     passes/PreserveMutableGlobals.cpp
     passes/MarkBoundsRemapViews.cpp
+    passes/FoldAssumedRankQueries.cpp
 )
 target_link_libraries(hlfir_bridge_passes PUBLIC
     hlfir_bridge_core
