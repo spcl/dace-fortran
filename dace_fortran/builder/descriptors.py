@@ -527,21 +527,26 @@ def auto_declare_synth(builder, name: str, ctx):
     # A ``SimpleNamespace`` is enough  --  scalar dispatch only reads
     # ``.intent`` and ``.dtype``.
     # ``__brk_<N>`` is the bridge's pre-body snapshot of an scf.while
-    # break condition (see ``walkSCFBeforeRegion`` in dispatch.cpp).
-    # Register it as a symbol so ``emit_assign`` routes the snapshot
-    # assign through the interstate-edge path instead of staging a
-    # scalar tasklet -- the break check then reads a symbol-valued
-    # condition without a per-state AccessNode round-trip.
-    is_brk = name.startswith("__brk_")
+    # break condition.  ``__al_<N>`` is the lift-cf-to-scf scratch
+    # counter that drives the ``do istep = 1, niter`` shape (NPB LU's
+    # ssor istep loop): each iteration decrements it and the
+    # surrounding scf.while breaks when it hits 0.  Both feed
+    # interstate-edge conditions (the break check + the
+    # ``__al_X > 0`` outer iteration gate), so they need to register
+    # as SYMBOLS rather than scalar transients.  A scalar transient
+    # in an interstate-edge condition surfaces as a free symbol that
+    # defaults to 0 at runtime -- the LU SSOR loop then breaks
+    # immediately and the sweep is a no-op.
+    is_sym = name.startswith("__brk_") or name.startswith("__al_")
     v = SimpleNamespace(fortran_name=name,
                         intent='',
                         dtype='int32',
                         rank=0,
                         is_dynamic=False,
-                        role='symbol' if is_brk else 'scalar',
+                        role='symbol' if is_sym else 'scalar',
                         shape_symbols=[],
                         lower_bounds=[])
-    if is_brk:
+    if is_sym:
         builder.symbols[name] = v
         if name not in ctx.sdfg.symbols:
             ctx.sdfg.add_symbol(name, dace.int32)
