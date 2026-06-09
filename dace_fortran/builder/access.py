@@ -142,12 +142,39 @@ def acc(builder, state, name: str):
                 and v.view_source and v.view_source in state.parent.arrays:
             from dace import Memlet
             src = v.view_source
-            src_subset = ", ".join(v.view_subset)
-            view_dims = [str(d) for d in state.parent.arrays[name].shape]
-            view_subset = ", ".join(f"0:{d}" for d in view_dims)
             src_node = cache.get(src) or state.add_access(src)
             cache.setdefault(src, src_node)
-            state.add_edge(src_node, None, node, None, Memlet(data=src, subset=src_subset, other_subset=view_subset))
+            # Canonical DaCe view linking: source AccessNode ->
+            # view ViewAccessNode via the ``views`` connector
+            # (see d-face/tests/numpy/reshape_test.py).  The view's
+            # own descriptor (shape + strides set in
+            # ``descriptors.py``) handles the reinterpretation;
+            # the linking memlet just carries the source name with
+            # no explicit subset (defaults to full extent on both
+            # sides, matching the view's storage span).
+            if len(v.view_subset) == 1 and v.view_subset[0] == "":
+                # Whole-array rank reinterpretation
+                # (``ssor_tv(N)`` 1D -> ``buts_tv(5, M, K)`` 3D).
+                # Build src_subset spanning the source's full flat
+                # storage and other_subset spanning the view's
+                # full multi-D shape.  Element counts match
+                # (5445 == 5*33*33) so DaCe's dimensionality
+                # check is satisfied even with the rank difference.
+                src_dims = [str(d) for d in state.parent.arrays[src].shape]
+                src_subset = ", ".join(f"0:{d}" for d in src_dims)
+                view_dims = [str(d) for d in state.parent.arrays[name].shape]
+                view_subset = ", ".join(f"0:{d}" for d in view_dims)
+                state.add_edge(src_node, None, node, 'views',
+                               Memlet(data=src, subset=src_subset, other_subset=view_subset))
+            else:
+                # Section-reshape view: source-side subset
+                # describes which slab of ``src`` the view covers;
+                # view-side subset spans the view's own shape.
+                src_subset = ", ".join(v.view_subset)
+                view_dims = [str(d) for d in state.parent.arrays[name].shape]
+                view_subset = ", ".join(f"0:{d}" for d in view_dims)
+                state.add_edge(src_node, None, node, 'views',
+                               Memlet(data=src, subset=src_subset, other_subset=view_subset))
     return node
 
 

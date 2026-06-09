@@ -436,11 +436,59 @@ hlfir::DeclareOp asAssumedShapeAlias(hlfir::DeclareOp decl) {
   // callee-side shape) callees, the only difference being whether
   // the inner declare reissues a shape.  Either way the storage is
   // shared and downstream tracing should walk to the outer declare.
+  //
+  // Exception: rank-promotion / rank-reduction.  Fortran sequence
+  // association lets a caller pass a 1D array to a multi-D dummy
+  // (or vice versa) -- ssor's ``tv(N)`` flowing into buts's ``tv(5,
+  // M, K)`` is the canonical case.  The storage is shared but the
+  // dummy's accesses are at a DIFFERENT RANK than the source's
+  // descriptor; if we treat the dummy as a transparent alias then
+  // ``traceToDecl`` resolves a 3D ``hlfir.designate`` to the
+  // source's 1D name and the bridge emits a 3D memlet subset
+  // against a 1D array (unresolved per-dim offset symbols).  Refuse
+  // the alias collapse in that case so extract_vars mints a real
+  // VarInfo for the dummy and the view-alias path can wire it as
+  // a rank-promoted view over the source's flat storage.
+  // Strip ``fir.ref`` / ``fir.box`` / ``fir.heap`` / ``fir.ptr`` layers
+  // off a declare result type until we hit the underlying ``fir.array``
+  // (``fir.SequenceType``); read its rank.  Scalars and non-array
+  // types report rank 0.
+  auto rankOfDeclResult = [](mlir::Value v) -> int {
+    mlir::Type t = v.getType();
+    for (int i = 0; i < 8; ++i) {
+      if (auto refTy = mlir::dyn_cast<fir::ReferenceType>(t)) {
+        t = refTy.getEleTy();
+        continue;
+      }
+      if (auto bx = mlir::dyn_cast<fir::BoxType>(t)) {
+        t = bx.getEleTy();
+        continue;
+      }
+      if (auto hp = mlir::dyn_cast<fir::HeapType>(t)) {
+        t = hp.getEleTy();
+        continue;
+      }
+      if (auto pt = mlir::dyn_cast<fir::PointerType>(t)) {
+        t = pt.getEleTy();
+        continue;
+      }
+      break;
+    }
+    if (auto seq = mlir::dyn_cast<fir::SequenceType>(t))
+      return seq.getDimension();
+    return 0;
+  };
+  int innerRank = rankOfDeclResult(decl.getResult(0));
   auto mr = decl.getMemref();
   for (int i = 0; i < limits::kAliasMemrefWalkDepth && mr; ++i) {
     auto *d = mr.getDefiningOp();
     if (!d) break;
-    if (auto outer = mlir::dyn_cast<hlfir::DeclareOp>(d)) return outer;
+    if (auto outer = mlir::dyn_cast<hlfir::DeclareOp>(d)) {
+      int outerRank = rankOfDeclResult(outer.getResult(0));
+      if (innerRank > 0 && outerRank > 0 && innerRank != outerRank)
+        return {};
+      return outer;
+    }
     if (auto conv = mlir::dyn_cast<fir::ConvertOp>(d)) {
       mr = conv.getValue();
       continue;

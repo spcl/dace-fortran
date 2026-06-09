@@ -2126,6 +2126,64 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
               }
             }
           }
+        } else if (auto srcDecl = mlir::dyn_cast<hlfir::DeclareOp>(defOp)) {
+          // Whole-array RANK reinterpretation -- ssor's ``tv(N)`` 1D
+          // passed unmodified to buts's ``tv(5, M, K)`` 3D dummy.
+          // Same Fortran feature as the section-reshape branch above
+          // (storage-association reshape) but the IR has NO designate
+          // (no slicing); just a ``fir.convert`` from the source's
+          // typed ref to the dummy's reinterpreted ref.  After the
+          // peel loop above lands ``m`` on the source's
+          // ``hlfir.declare``.
+          //
+          // ``asAssumedShapeAlias`` already refuses the alias collapse
+          // when ranks differ (see ``trace_utils.cpp``), so this dummy
+          // is now a separate VarInfo.  Mark it as a view_alias over
+          // the source's flat storage; ``descriptors.py`` registers
+          // the view with column-major strides over its OWN shape so
+          // the source AccessNode -> view ViewAccessNode linking
+          // memlet wires 1D source range -> ND view range correctly.
+          // Single sentinel marker in ``view_subset`` -- one empty
+          // string -- signals "whole-array rank reinterpretation"
+          // to ``descriptors.py`` and ``access.py``.
+          auto rankOfDeclResult = [](mlir::Value val) -> int {
+            auto t = peelTypeLayers(val.getType());
+            if (auto seq = mlir::dyn_cast<fir::SequenceType>(t))
+              return seq.getDimension();
+            return 0;
+          };
+          int srcRank = rankOfDeclResult(srcDecl.getResult(0));
+          if (srcRank > 0 && srcRank != v.rank) {
+            auto srcName = extractName(srcDecl.getUniqName().str());
+            // ssor's tv was renamed to ``ssor_tv`` by Pass 0a's F-
+            // scope-prefix path (own-storage + multi-procedure
+            // short-name collision); buts's tv kept the bare name
+            // ``tv``.  When they collide give the dummy its own
+            // scope-prefix.
+            if (srcName == v.fortran_name) {
+              auto eP = v.mangled_name.rfind('E');
+              auto fP = v.mangled_name.rfind('F', eP);
+              if (eP != std::string::npos && fP != std::string::npos &&
+                  fP + 1 < eP) {
+                std::string scope =
+                    v.mangled_name.substr(fP + 1, eP - fP - 1);
+                std::string newName = scope + "_" + v.fortran_name;
+                setManglingOverride(v.mangled_name, newName);
+                v.fortran_name = newName;
+              }
+            }
+            if (!srcName.empty() && srcName != v.fortran_name) {
+              v.view_source = srcName;
+              v.role = "view_alias";
+              // Single sentinel "" entry: distinct from "rank-
+              // preserving section_alias" (no entries) and from
+              // "section reshape" (per-source-dim entries).  The
+              // descriptor / access-node wiring sees one entry and
+              // routes through the rank-reinterpret stride path.
+              v.view_subset.clear();
+              v.view_subset.push_back("");
+            }
+          }
         }
       }
     }

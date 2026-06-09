@@ -257,7 +257,15 @@ def add_descriptors(builder, sdfg: SDFG):
             src_dims = (shape_syms.get(v.view_source) if src_v is not None else None)
             src_strides = (_fortran_strides([_dim(s) for s in src_dims]) if src_dims and len(src_dims) > 1 else None)
             view_strides = []
-            if src_strides is not None and len(v.view_subset) == len(src_strides):
+            # Whole-array rank reinterpretation -- ssor's ``tv(N)``
+            # 1D passed unmodified to buts's ``tv(5, M, K)`` 3D.
+            # ``extract_vars`` signals this with a single empty
+            # entry in ``view_subset``.  Build view strides as
+            # column-major over the view's OWN shape; the source's
+            # flat storage is reinterpreted as the multi-D view.
+            if len(v.view_subset) == 1 and v.view_subset[0] == "" and len(dims) >= 1:
+                view_strides = _fortran_strides(dims) if len(dims) > 1 else [1]
+            elif src_strides is not None and len(v.view_subset) == len(src_strides):
                 for src_d, sub in enumerate(v.view_subset):
                     if ':' not in sub:
                         continue  # scalar dim  --  drops out of the view

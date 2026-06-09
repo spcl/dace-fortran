@@ -49,13 +49,6 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 @pytest.mark.long
-@pytest.mark.xfail(strict=False,
-                   reason=("Same as test_lu_multi_file_builds: surfaces "
-                           "ssor's function-scope dynamic-size local "
-                           "``tv(5*isiz1*isiz2)`` whose ``ssor_tv_d0`` / "
-                           "``ssor_tv_d1`` shape symbols + ``offset_*`` "
-                           "offsets aren't yet resolved by the bound-"
-                           "resolution path for routine-scope locals."))
 def test_lu_single_file_builds(tmp_path):
     """The bridge ingests just ``lu.F90`` and emits an SDFG rooted at
     ``lu::dolu``."""
