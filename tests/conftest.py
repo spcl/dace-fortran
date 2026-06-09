@@ -37,6 +37,30 @@ except (ImportError, ValueError, OSError):
     # overflow the user can raise their own shell limit for.
     pass
 
+# Strict numerical correctness compile flags for DaCe's CPU codegen.
+#
+# DaCe's default ``compiler.cpu.args`` is
+# ``-O3 -march=native -ffast-math`` which permits FMA contractions,
+# reciprocal approximations, and associativity-based rewrites -- all of
+# which produce a quietly different bit pattern from a strict Fortran
+# reference compiled at ``-O0 -fno-fast-math -ffp-contract=off``.  For
+# every numerical-correctness test against an f2py / gfortran reference,
+# this drift surfaces as a small percentage residual gap (NPB LU's ssor
+# residual sat ~1.7% off the reference at itmax=50 with the default
+# flags) that is REAL but is a flag mismatch, not a bridge bug.
+#
+# Force strict IEEE FP semantics on the SDFG's compile here so every
+# test starts from the same baseline as the reference.  Tests that
+# specifically want optimised performance set ``compiler.cpu.args``
+# themselves; this baseline gives them a known reference point.
+from dace.config import Config
+
+Config.set("compiler",
+           "cpu",
+           "args",
+           value=("-fPIC -Wall -Wextra -O0 -fno-fast-math -ffp-contract=off "
+                  "-Wno-unused-parameter -Wno-unused-label"))
+
 # Per-worker DaCe build folder.  ``PYTEST_XDIST_WORKER`` is set by
 # pytest-xdist to ``gw0``, ``gw1``, ... on each worker process; absent on
 # serial runs (we keep the default ``.dacecache`` so existing tooling
