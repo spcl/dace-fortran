@@ -2426,16 +2426,22 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
           rebindStore = st;
       }
       if (rebindStore) {
-        // The outermost ``fir.rebox`` carries the shape_shift whose
-        // extent operand is the flat 1-D total size of the view.
-        // Trace through ``fir.convert`` to find it.
+        // The outermost ``fir.rebox`` (rebox form) or ``fir.embox``
+        // (rank-changing remap form -- ``p(1:M,1:K) => arr1d``) carries
+        // the shape_shift whose extent operands give the view's
+        // multi-dim extents.  Trace through ``fir.convert`` to find it.
         mlir::Value cur = rebindStore.getValue();
         fir::ReboxOp topRebox;
-        for (int hops = 0; cur && hops < 8 && !topRebox; ++hops) {
+        fir::EmboxOp topEmbox;
+        for (int hops = 0; cur && hops < 8 && !topRebox && !topEmbox; ++hops) {
           auto* def = cur.getDefiningOp();
           if (!def) break;
           if (auto rb = mlir::dyn_cast<fir::ReboxOp>(def)) {
             topRebox = rb;
+            break;
+          }
+          if (auto eb = mlir::dyn_cast<fir::EmboxOp>(def)) {
+            topEmbox = eb;
             break;
           }
           if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def)) {
@@ -2443,6 +2449,75 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
             continue;
           }
           break;
+        }
+        if (topEmbox) {
+          // Embox path: shape carries the multi-dim shape_shift; the
+          // total extent is the product of its extents (rank-change
+          // means the source is 1D / different rank).  For the
+          // ``p(1:M, 1:K) => arr1d`` form the renderer needs to emit
+          // ``M * K`` so descriptors.py mints the right total-extent
+          // size.  Reuse the same renderExtent recursion below by
+          // multiplying the per-dim extent strings.
+          mlir::Value shape = topEmbox.getShape();
+          if (auto ss = mlir::dyn_cast_or_null<fir::ShapeShiftOp>(
+                  shape ? shape.getDefiningOp() : nullptr)) {
+            auto pairs = ss.getPairs();
+            std::function<std::string(mlir::Value)> renderExt =
+                [&](mlir::Value vv) -> std::string {
+              for (int hops = 0; vv && hops < 8; ++hops) {
+                auto* d = vv.getDefiningOp();
+                if (!d) return "";
+                if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
+                  vv = cv.getValue();
+                  continue;
+                }
+                if (auto cst = mlir::dyn_cast<mlir::arith::ConstantOp>(d)) {
+                  if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue()))
+                    return std::to_string(ia.getInt());
+                  return "";
+                }
+                if (auto ld = mlir::dyn_cast<fir::LoadOp>(d))
+                  return traceToDecl(ld.getMemref());
+                if (auto mul = mlir::dyn_cast<mlir::arith::MulIOp>(d)) {
+                  auto l = renderExt(mul.getLhs());
+                  auto r = renderExt(mul.getRhs());
+                  if (l.empty() || r.empty()) return "";
+                  return l + "*" + r;
+                }
+                return "";
+              }
+              return "";
+            };
+            // Multiply per-dim extents.  ``pairs`` layout: lb0, ext0,
+            // lb1, ext1, ...
+            std::string total;
+            for (size_t i = 1; i < pairs.size(); i += 2) {
+              auto e = renderExt(pairs[i]);
+              if (e.empty()) { total.clear(); break; }
+              total = total.empty() ? e : total + "*" + e;
+            }
+            v.bounds_remap_total_extent = total;
+          }
+          // Walk the embox's memref back to the parent declare.
+          mlir::Value parent = topEmbox.getMemref();
+          for (int hops = 0; parent && hops < 16; ++hops) {
+            auto* pd = parent.getDefiningOp();
+            if (!pd) break;
+            if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(pd)) {
+              v.bounds_remap_source = extractName(dc.getUniqName().str());
+              v.bounds_remap_view = !v.bounds_remap_source.empty();
+              break;
+            }
+            if (auto cv = mlir::dyn_cast<fir::ConvertOp>(pd)) {
+              parent = cv.getValue();
+              continue;
+            }
+            if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(pd)) {
+              parent = dg.getMemref();
+              continue;
+            }
+            break;
+          }
         }
         if (topRebox) {
           // Render the shape-shift's first extent operand

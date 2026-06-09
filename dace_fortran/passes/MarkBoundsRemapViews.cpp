@@ -237,6 +237,86 @@ struct MarkBoundsRemapViewsPass
   void runOnOperation() override {
     unsigned tagged = 0;
     auto module = getOperation();
+
+    // ``fir.embox`` form: ``p(1:M, 1:K) => arr1d`` (1D target -> 2D
+    // pointer view) lowers to ``embox %arr1d(%shape_shift_2D)`` with
+    // a rank-laundering ``fir.convert`` from ``<NxT>`` to ``<?x?xT>``
+    // sitting between the parent's declare and the embox.  Same
+    // bounds-remap-view semantics as the rebox form -- just produced
+    // through a different IR shape because the parent is a plain
+    // ref-array (not yet wrapped in a box).
+    module.walk([&](fir::EmboxOp embox) {
+      if (!isPointerBox(embox.getType())) return;
+      int outRank = boxedArrayRank(embox.getType());
+      if (outRank <= 0) return;
+
+      // The embox's memref carries the (possibly rank-laundered)
+      // target's ref type.  Walk through any ``fir.convert`` to
+      // find the source rank.
+      mlir::Value mem = embox.getMemref();
+      mlir::Type sourceTy = mem.getType();
+      for (int hop = 0; hop < 8; ++hop) {
+        if (auto *def = mem.getDefiningOp()) {
+          if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def)) {
+            mem = cv.getValue();
+            sourceTy = mem.getType();
+            continue;
+          }
+        }
+        break;
+      }
+      // Strip ref/heap/ptr off sourceTy to read the underlying
+      // sequence type's static rank.
+      int inRank = -1;
+      for (int p = 0; p < 8; ++p) {
+        if (auto r = mlir::dyn_cast<fir::ReferenceType>(sourceTy)) {
+          sourceTy = r.getEleTy();
+          continue;
+        }
+        if (auto h = mlir::dyn_cast<fir::HeapType>(sourceTy)) {
+          sourceTy = h.getEleTy();
+          continue;
+        }
+        if (auto pt = mlir::dyn_cast<fir::PointerType>(sourceTy)) {
+          sourceTy = pt.getEleTy();
+          continue;
+        }
+        break;
+      }
+      if (auto seq = mlir::dyn_cast<fir::SequenceType>(sourceTy))
+        inRank = static_cast<int>(seq.getDimension());
+      if (inRank <= 0 || inRank == outRank) return;
+
+      // Shape operand must be ``shape_shift`` with all LB == 1.
+      mlir::Value shape = embox.getShape();
+      if (!shape) return;
+      auto shiftOp = mlir::dyn_cast_or_null<fir::ShapeShiftOp>(shape.getDefiningOp());
+      if (!shiftOp) return;
+      auto pairs = shiftOp.getPairs();
+      bool allLbOne = true;
+      for (size_t i = 0; i + 1 < pairs.size(); i += 2)
+        if (!isConstantOne(pairs[i])) { allLbOne = false; break; }
+      if (!allLbOne) return;
+
+      // Locate the store target and trace to the pointer declare.
+      mlir::Value storeTarget;
+      for (auto *u : embox.getResult().getUsers()) {
+        if (auto st = mlir::dyn_cast<fir::StoreOp>(u)) {
+          storeTarget = st.getMemref();
+          break;
+        }
+      }
+      if (!storeTarget) return;
+      auto ptrDecl = mlir::dyn_cast_or_null<hlfir::DeclareOp>(
+          storeTarget.getDefiningOp());
+      if (!ptrDecl) ptrDecl = findDeclareThroughChain(storeTarget);
+      if (!ptrDecl) return;
+
+      ptrDecl->setAttr(kBoundsRemapViewAttr,
+                        mlir::UnitAttr::get(&getContext()));
+      ++tagged;
+    });
+
     module.walk([&](fir::ReboxOp rebox) {
       // (1) Output type must be a pointer-typed box.
       if (!isPointerBox(rebox.getType())) return;

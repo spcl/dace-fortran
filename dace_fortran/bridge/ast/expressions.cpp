@@ -438,9 +438,13 @@ std::string buildExpr(mlir::Value val, int d) {
     auto name = traceToDecl(ao.getResult());
     if (!name.empty()) return name;
     // Strip the leading ``@`` from the symbol reference for a
-    // human-readable fallback.
+    // human-readable fallback.  ``extractName`` peels Flang's
+    // mangling decoration (``_QM<mod>E<var>`` -> ``var``) so the
+    // tasklet code references the Fortran user name, not the raw
+    // ``_QMmEarr1d`` form (which the SDFG arrays dict doesn't key
+    // on -- the bridge stores each global under its short name).
     auto sym = ao.getSymbol().getRootReference().getValue().str();
-    return sym;
+    return extractName(sym);
   }
 
   // ``fir.alloca`` reserves storage on the stack.  ``traceToDecl``
