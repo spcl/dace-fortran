@@ -15,10 +15,12 @@
 #include "bridge/trace_utils.h"
 #include "flang/Optimizer/Dialect/FIROps.h"
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
+#include "llvm/ADT/SmallSet.h"
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 
 namespace hlfir_bridge {
 
@@ -144,6 +146,34 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
   for (auto& op : block) {
     if (auto ifOp = mlir::dyn_cast<mlir::scf::IfOp>(op)) {
       out.push_back(buildScfIfAsConditional(ifOp));
+      continue;
+    }
+    // ``fir.if`` parked inside an ``scf.while`` BEFORE region.  Flang
+    // emits ``fir.if`` for explicit Fortran ``IF (cond) THEN ... END
+    // IF`` blocks; ``lift-cf-to-scf`` lowers cf.cond_br into ``scf.if``
+    // but leaves the original ``fir.if`` ops as-is.  Without this
+    // dispatch the op falls through as a "pure-value op" and the IF
+    // body (any assigns / nested loops) is SILENTLY DROPPED from the
+    // AST -- producing an SDFG with no writes from the gated block.
+    // NPB LU's ``ssor`` istep loop hit this via
+    // ``if (mod(istep, inorm) == 0 .or. istep == itmax) call l2norm(
+    // ..., rsdnm)`` inside the istep do-loop with a following
+    // ``if (rsdnm < tolrsd) return``: rsdnm's per-iter recompute was
+    // dropped, rsdnm froze at the pre-loop value, residuals reported
+    // pre-sweep state regardless of itmax.  See
+    // ``tests/if_then_return_in_loop_elision_test.py`` for the
+    // distilled repro.  The dispatch mirrors the toplevel ``fir.if``
+    // handler at the bottom of ``buildAST`` (line 2246) -- same
+    // shape, just reached via the scf.while walker.
+    if (auto firIfOp = mlir::dyn_cast<fir::IfOp>(op)) {
+      ASTNode n;
+      n.kind = "conditional";
+      n.condition = buildBoolExpr(firIfOp.getCondition(), 0);
+      if (!firIfOp.getThenRegion().empty())
+        n.children = buildAST(firIfOp.getThenRegion().front());
+      if (!firIfOp.getElseRegion().empty())
+        n.else_children = buildAST(firIfOp.getElseRegion().front());
+      out.push_back(std::move(n));
       continue;
     }
     if (auto condOp = mlir::dyn_cast<mlir::scf::ConditionOp>(op)) {
@@ -273,7 +303,52 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
       out.push_back(std::move(n));
       continue;
     }
-    // Pure-value ops  --  no AST node, their values flow inline.
+    // Pure-value ops -- no AST node, their values flow inline through
+    // SSA into the consuming side-effect op (which IS handled above).
+    //
+    // Defensive audit: if we reach here with an op that DOES carry
+    // observable side effects (writes / nested side-effecting
+    // regions), it means the walker's per-op-type switch is missing
+    // a handler and the op's effects WILL be silently dropped from
+    // the SDFG.  The fir.if elision bug (NPB LU residuals stuck at
+    // pre-loop state) was exactly this -- ``fir.if`` was missing
+    // from the dispatch above and its IF body fell through here.
+    //
+    // MLIR's ``MemoryEffectOpInterface`` distinguishes pure-value
+    // ops (arith.*, fir.load, hlfir.designate, ...) from
+    // side-effecting ones; only the latter need a handler.  Emit
+    // a one-time diagnostic per unrecognised side-effecting op
+    // kind so the gap surfaces immediately on the next workload.
+    auto effects =
+        mlir::dyn_cast<mlir::MemoryEffectOpInterface>(op);
+    bool hasWriteEffect = false;
+    if (effects) {
+      llvm::SmallVector<mlir::MemoryEffects::EffectInstance, 4> instances;
+      effects.getEffects(instances);
+      for (auto& e : instances)
+        if (mlir::isa<mlir::MemoryEffects::Write>(e.getEffect())) {
+          hasWriteEffect = true;
+          break;
+        }
+    } else if (op.getNumRegions() > 0) {
+      // No MemoryEffectOpInterface but has nested regions -- the
+      // regions themselves may carry effects (e.g. a custom dialect
+      // op wrapping a body).  Treat as side-effecting for the
+      // audit.
+      hasWriteEffect = true;
+    }
+    if (hasWriteEffect) {
+      static thread_local llvm::SmallSet<llvm::StringRef, 16> warned;
+      auto name = op.getName().getStringRef();
+      if (warned.insert(name).second) {
+        llvm::errs()
+            << "[walkSCFBeforeRegion] WARNING: dropping side-effecting op '"
+            << name
+            << "' from scf.while body -- add a handler in dispatch.cpp "
+               "(see fir::IfOp pattern at the top of the for-loop) or "
+               "the op's effects will be missing from the SDFG.\n";
+      }
+    }
   }
   return out;
 }

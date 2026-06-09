@@ -110,14 +110,6 @@ def _run(sdfg, itmax_v: int):
     return float(kw['rsdnm'][0])
 
 
-@pytest.mark.xfail(strict=False,
-                   reason=("IF block wrapping array writes inside a do-loop is ELIDED when "
-                           "FOLLOWED by another IF-return.  rsdnm stays at its initial 0 "
-                           "because the gated write never runs.  Surfaces NPB LU's "
-                           "residuals-don't-accumulate bug (per-iter l2norm elided -> "
-                           "rsdnm reflects pre-loop value).  Pipeline pass causing the "
-                           "elision is unidentified -- bisect DEFAULT_PIPELINE by dumping "
-                           "IR after each stage and grep for the IF survival."))
 def test_if_then_return_in_loop_does_not_elide_if_body(tmp_path):
     """For itmax=3: ssor runs 3 iterations.  At istep==itmax (=3), the IF
     body writes rsdnm(1) = u(1) * 1 = 3.0 (u(1) increments by 1 each
