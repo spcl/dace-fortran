@@ -484,19 +484,31 @@ def auto_declare_synth(builder, name: str, ctx):
     """
     if name in builder.scalars or name in builder.symbols:
         return
-    if not (name.startswith("__sc_") or name.startswith("__al_")):
+    if not (name.startswith("__sc_") or name.startswith("__al_") or name.startswith("__brk_")):
         return
     # Fake a VarInfo-like record so _add_descriptors-consistent paths work.
     # A ``SimpleNamespace`` is enough  --  scalar dispatch only reads
     # ``.intent`` and ``.dtype``.
+    # ``__brk_<N>`` is the bridge's pre-body snapshot of an scf.while
+    # break condition (see ``walkSCFBeforeRegion`` in dispatch.cpp).
+    # Register it as a symbol so ``emit_assign`` routes the snapshot
+    # assign through the interstate-edge path instead of staging a
+    # scalar tasklet -- the break check then reads a symbol-valued
+    # condition without a per-state AccessNode round-trip.
+    is_brk = name.startswith("__brk_")
     v = SimpleNamespace(fortran_name=name,
                         intent='',
                         dtype='int32',
                         rank=0,
                         is_dynamic=False,
-                        role='scalar',
+                        role='symbol' if is_brk else 'scalar',
                         shape_symbols=[],
                         lower_bounds=[])
-    builder.scalars[name] = v
-    if name not in ctx.sdfg.arrays:
-        ctx.sdfg.add_scalar(name, dtype=dace.int32, transient=True)
+    if is_brk:
+        builder.symbols[name] = v
+        if name not in ctx.sdfg.symbols:
+            ctx.sdfg.add_symbol(name, dace.int32)
+    else:
+        builder.scalars[name] = v
+        if name not in ctx.sdfg.arrays:
+            ctx.sdfg.add_scalar(name, dtype=dace.int32, transient=True)

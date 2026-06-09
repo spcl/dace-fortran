@@ -95,6 +95,52 @@ static std::string traceLoopIter(fir::DoLoopOp loop);
 
 std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
   std::vector<ASTNode> out;
+  // Snapshot the scf.condition's break value at the START of the body
+  // -- BEFORE any nested scf.if mutates the SSA operands of the
+  // condition.  Fortran's ``do; body; if (cond) exit; counter+=1;
+  // end do`` shape (lift-cf-to-scf form) puts the increment INSIDE
+  // the BEFORE region (in the else arm of a scf.if guarded by the
+  // exit condition), then the scf.condition reads a SEPARATE cmpi
+  // that the bridge's expression renderer re-evaluates at the
+  // break-check state -- by then counter has been incremented and
+  // the break fires one iteration too early.
+  //
+  // Detect the pattern up front: any ``scf.condition`` whose value
+  // depends on a scalar that an in-body ``scf.if`` mutates needs a
+  // pre-body snapshot.  Mint ``__brk_<N>`` (an interstate-edge
+  // symbol via ``auto_declare_synth`` prefix), emit the snapshot
+  // as the first assign in ``out``, and rewrite the
+  // ``scf.condition`` handler to read the snapshot instead of
+  // re-rendering the condition.
+  //
+  // NPB LU's ssor istep loop (``do istep = 1, niter; sweep;
+  // if (rsdnm < tolrsd) return; end do``) has the same shape: each
+  // istep iteration runs RHS + the sweep, then checks convergence
+  // for the early return, then increments istep.  Without this
+  // snapshot the SSOR sweep is effectively a no-op and residuals
+  // stay at ~1e5 instead of converging to ~1e-2.
+  static thread_local int kBrkCounter = 0;
+  std::string brkSynthName;
+  mlir::scf::ConditionOp pendingCondOp;
+  for (auto& op : block) {
+    if (auto condOp = mlir::dyn_cast<mlir::scf::ConditionOp>(op)) {
+      pendingCondOp = condOp;
+      break;
+    }
+  }
+  if (pendingCondOp) {
+    auto condVal = pendingCondOp.getCondition();
+    auto b = buildBoolExpr(condVal, 0);
+    if (!b.empty() && b != "?") {
+      brkSynthName = "__brk_" + std::to_string(kBrkCounter++);
+      ASTNode snap;
+      snap.kind = "assign";
+      snap.target = brkSynthName;
+      snap.expr = b;
+      snap.target_is_array = false;
+      out.push_back(std::move(snap));
+    }
+  }
   for (auto& op : block) {
     if (auto ifOp = mlir::dyn_cast<mlir::scf::IfOp>(op)) {
       out.push_back(buildScfIfAsConditional(ifOp));
@@ -118,11 +164,19 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
           out.push_back(std::move(a));
         }
       }
-      // ``scf.condition(%c)``: break when %c is false.
+      // ``scf.condition(%c)``: break when %c is false.  Use the
+      // pre-body snapshot ``__brk_<N>`` if we created one (see the
+      // top-of-function block) so the break check sees the SSA-
+      // operand values from the start of the iteration, not the
+      // post-mutation values produced by an in-body scf.if.
       ASTNode guard;
       guard.kind = "conditional";
-      auto b = buildBoolExpr(condOp.getCondition(), 0);
-      guard.condition = "not (" + b + ")";
+      if (!brkSynthName.empty()) {
+        guard.condition = "not (" + brkSynthName + ")";
+      } else {
+        auto b = buildBoolExpr(condOp.getCondition(), 0);
+        guard.condition = "not (" + b + ")";
+      }
       ASTNode brk;
       brk.kind = "break";
       guard.children.push_back(std::move(brk));

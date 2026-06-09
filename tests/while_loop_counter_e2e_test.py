@@ -49,27 +49,6 @@ end module m
     np.testing.assert_array_equal(arr, expected)
 
 
-@pytest.mark.xfail(strict=False,
-                   reason=("The increment ``counter = counter + 1`` in a "
-                           "Fortran ``do; ...; if (cond) exit; counter = "
-                           "counter + 1; end do`` shape reaches the SDFG "
-                           "(visible in interstate edges as "
-                           "``counter = (counter + 1)``), but the loop runs "
-                           "ONE ITERATION SHORT -- the final write at "
-                           "``counter = N`` is missed.  Same shape as NPB "
-                           "LU's ssor istep loop, where each iteration "
-                           "effectively executes only RHS without the "
-                           "SSOR sweep + residual update, producing "
-                           "6-orders-off residuals.  The increment AST "
-                           "lives in ``else_children`` of a nested "
-                           "conditional (``while True > if al_0 > 0 > if "
-                           "rsdnm_converged > ELSE``); ``emit_cond`` "
-                           "walks else_children + ``emit_assign`` "
-                           "produces an interstate edge -- the order or "
-                           "control-flow stitching across the nested "
-                           "conditional drops one body execution.  Pin "
-                           "the repro here; root-cause / fix is a "
-                           "follow-up."))
 def test_do_while_with_break_on_convergence(tmp_path):
     """``do; if (cond) exit; counter = counter + 1; end do`` -- the
     bridge models this as ``scf.while True`` with a ``break`` child
