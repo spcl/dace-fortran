@@ -15,7 +15,7 @@
 #include "bridge/trace_utils.h"
 #include "flang/Optimizer/Dialect/FIROps.h"
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
-#include "llvm/ADT/SmallSet.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -306,21 +306,35 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
     // Pure-value ops -- no AST node, their values flow inline through
     // SSA into the consuming side-effect op (which IS handled above).
     //
-    // Defensive audit: if we reach here with an op that DOES carry
+    // Defensive guard: if we reach here with an op that DOES carry
     // observable side effects (writes / nested side-effecting
-    // regions), it means the walker's per-op-type switch is missing
-    // a handler and the op's effects WILL be silently dropped from
-    // the SDFG.  The fir.if elision bug (NPB LU residuals stuck at
-    // pre-loop state) was exactly this -- ``fir.if`` was missing
-    // from the dispatch above and its IF body fell through here.
+    // regions), the per-op-type switch above is missing a handler
+    // and the op's effects would be silently dropped from the SDFG.
+    // The fir.if elision bug (NPB LU residuals stuck at pre-loop
+    // state) was exactly this -- ``fir.if`` was missing from the
+    // dispatch above and its IF body fell through here.
     //
     // MLIR's ``MemoryEffectOpInterface`` distinguishes pure-value
     // ops (arith.*, fir.load, hlfir.designate, ...) from
-    // side-effecting ones; only the latter need a handler.  Emit
-    // a one-time diagnostic per unrecognised side-effecting op
-    // kind so the gap surfaces immediately on the next workload.
-    auto effects =
-        mlir::dyn_cast<mlir::MemoryEffectOpInterface>(op);
+    // side-effecting ones; only the latter need a handler.  Throw
+    // immediately rather than warn-and-continue: a warning could be
+    // missed in CI noise and the SDFG would then silently compute
+    // the wrong result.  An unhandled side-effecting op is a real
+    // bridge gap that must be fixed by adding the corresponding
+    // handler -- the error names the op so the gap surfaces at
+    // parse time, not later in residual diffs.
+    // Known-benign ops that carry no observable SDFG effect even
+    // though they have nested regions or lack a MemoryEffect
+    // interface.  Anything else is treated as a side-effect gap.
+    auto opName = op.getName().getStringRef();
+    static const llvm::StringSet<> kKnownBenign = {
+        // Scope marker for dummy arguments -- pure metadata, no
+        // runtime effect.
+        "fir.dummy_scope",
+    };
+    if (kKnownBenign.contains(opName)) continue;
+
+    auto effects = mlir::dyn_cast<mlir::MemoryEffectOpInterface>(op);
     bool hasWriteEffect = false;
     if (effects) {
       llvm::SmallVector<mlir::MemoryEffects::EffectInstance, 4> instances;
@@ -332,22 +346,19 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
         }
     } else if (op.getNumRegions() > 0) {
       // No MemoryEffectOpInterface but has nested regions -- the
-      // regions themselves may carry effects (e.g. a custom dialect
-      // op wrapping a body).  Treat as side-effecting for the
-      // audit.
+      // regions themselves may carry effects (custom dialect ops
+      // wrapping a body).  Treat as side-effecting for the guard;
+      // allowlist via ``kKnownBenign`` above for legitimate markers.
       hasWriteEffect = true;
     }
     if (hasWriteEffect) {
-      static thread_local llvm::SmallSet<llvm::StringRef, 16> warned;
-      auto name = op.getName().getStringRef();
-      if (warned.insert(name).second) {
-        llvm::errs()
-            << "[walkSCFBeforeRegion] WARNING: dropping side-effecting op '"
-            << name
-            << "' from scf.while body -- add a handler in dispatch.cpp "
-               "(see fir::IfOp pattern at the top of the for-loop) or "
-               "the op's effects will be missing from the SDFG.\n";
-      }
+      throw std::runtime_error(
+          "walkSCFBeforeRegion: unhandled side-effecting op '" + opName.str() +
+          "' inside an scf.while body.  Its effects would be silently "
+          "dropped from the SDFG.  Add a handler in "
+          "bridge/ast/dispatch.cpp::walkSCFBeforeRegion (see the "
+          "fir::IfOp pattern at the top of the for-loop), or "
+          "allowlist via ``kKnownBenign`` if the op is a pure marker.");
     }
   }
   return out;

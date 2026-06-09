@@ -10,12 +10,12 @@ PRIVATE
       INTEGER ipr_default
       parameter (ipr_default = 1)
       DOUBLE PRECISION omega_default
-      parameter (omega_default = 1.2)
+      parameter (omega_default = 1.2d0)
       DOUBLE PRECISION tolrsd1_def, tolrsd2_def, tolrsd3_def, tolrsd4_def, tolrsd5_def
-      parameter (tolrsd1_def=1.0e-08, tolrsd2_def=1.0e-08, tolrsd3_def=1.0e-08, tolrsd4_def=1.0e-08, tolrsd5_def=1.0e-08)
+      parameter (tolrsd1_def=1.0d-08, tolrsd2_def=1.0d-08, tolrsd3_def=1.0d-08, tolrsd4_def=1.0d-08, tolrsd5_def=1.0d-08)
 
       DOUBLE PRECISION c1, c2, c3, c4, c5
-      parameter( c1 = 1.40, c2 = 0.40, c3 = 0.10, c4 = 1.00, c5 = 1.40 )
+      parameter( c1 = 1.40d0, c2 = 0.40d0, c3 = 0.10d0, c4 = 1.00d0, c5 = 1.40d0 )
 
       INTEGER nx, ny, nz
       INTEGER nx0, ny0, nz0
