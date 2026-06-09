@@ -153,10 +153,10 @@ def _run_sdfg(sdfg):
         kw[name] = np.zeros(shape, dtype=np.float64 if is_float else np.int32, order='F')
     # Seed the NPB Class S configuration scalars (each is a (1,)-Array
     # on the SDFG side -- the bridge surfaces module-level scalars as
-    # one-element arrays).  ``dt`` does not appear in the arglist
-    # (current bridge gap -- see test docstring); ``inorm`` is a free
-    # symbol so the bridge resolves it via the kwarg name.
-    for name, value in (('nx0', _NX0), ('ny0', _NY0), ('nz0', _NZ0), ('itmax', _ITMAX), ('omega', _OMEGA)):
+    # one-element arrays).  ``inorm`` is a free symbol so the bridge
+    # resolves it via the kwarg name.
+    for name, value in (('nx0', _NX0), ('ny0', _NY0), ('nz0', _NZ0), ('itmax', _ITMAX),
+                        ('omega', _OMEGA), ('dt', _DT)):
         if name in kw:
             kw[name][...] = value
     if 'tolrsd' in kw:
@@ -191,7 +191,24 @@ def test_lu_reference_runs(tmp_path):
 
 @pytest.mark.long
 @pytest.mark.xfail(strict=False,
-                   reason=("Two bridge gaps surface on the LU SDFG run path: (1) ``dt`` is "
+                   reason=("After the 7-commit dt-flow chain (a724cf0 -> dc35458) the "
+                           "structural gaps are closed: dt appears in the SDFG arglist as "
+                           "a non-transient (1,)-Array, 266 tasklets read it via "
+                           "``_in_dt`` connectors, the d/a/b/c matrices receive jacld's "
+                           "writes (no longer dropped by walkSCFBeforeRegion), and the "
+                           "free_symbols leaks closed.  The remaining divergence -- "
+                           "rsdnm ~ 1e5 vs reference ~1e-2, ~6 orders -- is rooted in "
+                           "the SSOR iteration loop being effectively a no-op: ``istep`` "
+                           "has only 11 mentions in the SDFG JSON and ``itmax`` only 7, "
+                           "vs the >100 expected for a 50-iter loop that reads/writes "
+                           "rsd / d-matrix per step.  The do istep loop is likely "
+                           "collapsed, peeled to a single iteration, or its iterations "
+                           "share state with each other in a way that effectively makes "
+                           "later iterations no-ops.  Likely root: the bridge's "
+                           "interstate-edge sequencing across the do istep loop body's "
+                           "many call sites (rhs/l2norm/jacld+blts/jacu+buts/u-update) "
+                           "doesn't carry the updated u/rsd values forward.\n\nWAS: \n"
+                           "(1) ``dt`` is "
                            "read inside ``ssor`` but does not appear in the SDFG's "
                            "arglist / symbols / arrays (some upstream simplification "
                            "drops it before bindings see it), so the SDFG behaves as if "
