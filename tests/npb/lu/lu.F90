@@ -118,41 +118,41 @@ CONTAINS
       SUBROUTINE setcoeff()
             implicit none
 
-            dxi = 1.0 / ( nx0 - 1 )
-            deta = 1.0 / ( ny0 - 1 )
-            dzeta = 1.0 / ( nz0 - 1 )
+            dxi = 1.0d0 / ( nx0 - 1 )
+            deta = 1.0d0 / ( ny0 - 1 )
+            dzeta = 1.0d0 / ( nz0 - 1 )
 
-            tx1 = 1.0 / ( dxi * dxi )
-            tx2 = 1.0 / ( 2.0 * dxi )
-            tx3 = 1.0 / dxi
+            tx1 = 1.0d0 / ( dxi * dxi )
+            tx2 = 1.0d0 / ( 2.0d0 * dxi )
+            tx3 = 1.0d0 / dxi
 
-            ty1 = 1.0 / ( deta * deta )
-            ty2 = 1.0 / ( 2.0 * deta )
-            ty3 = 1.0 / deta
+            ty1 = 1.0d0 / ( deta * deta )
+            ty2 = 1.0d0 / ( 2.0d0 * deta )
+            ty3 = 1.0d0 / deta
 
-            tz1 = 1.0 / ( dzeta * dzeta )
-            tz2 = 1.0 / ( 2.0 * dzeta )
-            tz3 = 1.0 / dzeta
+            tz1 = 1.0d0 / ( dzeta * dzeta )
+            tz2 = 1.0d0 / ( 2.0d0 * dzeta )
+            tz3 = 1.0d0 / dzeta
 
-            dx1 = 0.75
+            dx1 = 0.75d0
             dx2 = dx1
             dx3 = dx1
             dx4 = dx1
             dx5 = dx1
 
-            dy1 = 0.75
+            dy1 = 0.75d0
             dy2 = dy1
             dy3 = dy1
             dy4 = dy1
             dy5 = dy1
 
-            dz1 = 1.00
+            dz1 = 1.00d0
             dz2 = dz1
             dz3 = dz1
             dz4 = dz1
             dz5 = dz1
 
-            dssp = ( max (dx1, dy1, dz1 ) ) / 4.0
+            dssp = ( max (dx1, dy1, dz1 ) ) / 4.0d0
 
             ce(1,1) = 2.0
             ce(1,2) = 0.0
@@ -401,10 +401,10 @@ CONTAINS
                               u41im1 = tmp * rsd(4,i-1,j,k)
                               u51im1 = tmp * rsd(5,i-1,j,k)
 
-                              flux(2,i) = (4.0/3.0) * tx3 * ( u21i - u21im1 )
+                              flux(2,i) = (4.0d0/3.0d0) * tx3 * ( u21i - u21im1 )
                               flux(3,i) = tx3 * ( u31i - u31im1 )
                               flux(4,i) = tx3 * ( u41i - u41im1 )
-                              flux(5,i) = 0.50 * ( 1.0 - c1*c5 ) * tx3 * ( ( u21i  **2 + u31i  **2 + u41i  **2 ) - ( u21im1**2 + u31im1**2 + u41im1**2 ) ) + (1.0/6.0) * tx3 * ( u21i**2 - u21im1**2 ) + c1 * c5 * tx3 * ( u51i - u51im1 )
+                              flux(5,i) = 0.50 * ( 1.0 - c1*c5 ) * tx3 * ( ( u21i  **2 + u31i  **2 + u41i  **2 ) - ( u21im1**2 + u31im1**2 + u41im1**2 ) ) + (1.0d0/6.0d0) * tx3 * ( u21i**2 - u21im1**2 ) + c1 * c5 * tx3 * ( u51i - u51im1 )
                         end do
 
                         do i = ist, iend
@@ -468,9 +468,9 @@ CONTAINS
                               u51jm1 = tmp * rsd(5,i,j-1,k)
 
                               flux(2,j) = ty3 * ( u21j - u21jm1 )
-                              flux(3,j) = (4.0/3.0) * ty3 *  ( u31j - u31jm1 )
+                              flux(3,j) = (4.0d0/3.0d0) * ty3 *  ( u31j - u31jm1 )
                               flux(4,j) = ty3 * ( u41j - u41jm1 )
-                              flux(5,j) = 0.50 * ( 1.0 - c1*c5 )  * ty3 * ( ( u21j  **2 + u31j  **2 + u41j  **2 ) - ( u21jm1**2 + u31jm1**2 + u41jm1**2 ) ) + (1.0/6.0)* ty3 * ( u31j**2 - u31jm1**2 ) + c1 * c5 * ty3 * ( u51j - u51jm1 )
+                              flux(5,j) = 0.50 * ( 1.0 - c1*c5 )  * ty3 * ( ( u21j  **2 + u31j  **2 + u41j  **2 ) - ( u21jm1**2 + u31jm1**2 + u41jm1**2 ) ) + (1.0d0/6.0d0)* ty3 * ( u31j**2 - u31jm1**2 ) + c1 * c5 * ty3 * ( u51j - u51jm1 )
                         end do
 
                         do j = jst, jend
@@ -535,8 +535,8 @@ CONTAINS
 
                               flux(2,k) = tz3 * ( u21k - u21km1 )
                               flux(3,k) = tz3 * ( u31k - u31km1 )
-                              flux(4,k) = (4.0/3.0) * tz3 * ( u41k   - u41km1 )
-                              flux(5,k) = 0.50 * ( 1.0 - c1*c5 ) * tz3 * ( ( u21k  **2 + u31k  **2 + u41k  **2 )  - ( u21km1**2 + u31km1**2 + u41km1**2 ) ) + (1.0/6.0) * tz3 * ( u41k**2 - u41km1**2 ) + c1 * c5 * tz3 * ( u51k - u51km1 )
+                              flux(4,k) = (4.0d0/3.0d0) * tz3 * ( u41k   - u41km1 )
+                              flux(5,k) = 0.50 * ( 1.0 - c1*c5 ) * tz3 * ( ( u21k  **2 + u31k  **2 + u41k  **2 )  - ( u21km1**2 + u31km1**2 + u41km1**2 ) ) + (1.0d0/6.0d0) * tz3 * ( u41k**2 - u41km1**2 ) + c1 * c5 * tz3 * ( u51k - u51km1 )
                         end do
 
                         do k = 2, nz - 1
@@ -716,10 +716,10 @@ CONTAINS
                               u41im1 = tmp * u(4,i-1,j,k)
                               u51im1 = tmp * u(5,i-1,j,k)
 
-                              flux(2,i) = (4.0/3.0) * tx3 * (u21i-u21im1)
+                              flux(2,i) = (4.0d0/3.0d0) * tx3 * (u21i-u21im1)
                               flux(3,i) = tx3 * ( u31i - u31im1 )
                               flux(4,i) = tx3 * ( u41i - u41im1 )
-                              flux(5,i) = 0.50 * ( 1.0 - c1*c5 )  * tx3 * ( ( u21i  **2 + u31i  **2 + u41i  **2 ) - ( u21im1**2 + u31im1**2 + u41im1**2 ) ) + (1.0/6.0)  * tx3 * ( u21i**2 - u21im1**2 ) + c1 * c5 * tx3 * ( u51i - u51im1 )
+                              flux(5,i) = 0.50 * ( 1.0 - c1*c5 )  * tx3 * ( ( u21i  **2 + u31i  **2 + u41i  **2 ) - ( u21im1**2 + u31im1**2 + u41im1**2 ) ) + (1.0d0/6.0d0)  * tx3 * ( u21i**2 - u21im1**2 ) + c1 * c5 * tx3 * ( u51i - u51im1 )
                         end do
 
                         do i = ist, iend
@@ -785,9 +785,9 @@ CONTAINS
                               u51jm1 = tmp * u(5,i,j-1,k)
 
                               flux(2,j) = ty3 * ( u21j - u21jm1 )
-                              flux(3,j) = (4.0/3.0) * ty3 * (u31j-u31jm1)
+                              flux(3,j) = (4.0d0/3.0d0) * ty3 * (u31j-u31jm1)
                               flux(4,j) = ty3 * ( u41j - u41jm1 )
-                              flux(5,j) = 0.50 * ( 1.0 - c1*c5 ) * ty3 * ( ( u21j  **2 + u31j  **2 + u41j  **2 ) - ( u21jm1**2 + u31jm1**2 + u41jm1**2 ) ) + (1.0/6.0)  * ty3 * ( u31j**2 - u31jm1**2 ) + c1 * c5 * ty3 * ( u51j - u51jm1 )
+                              flux(5,j) = 0.50 * ( 1.0 - c1*c5 ) * ty3 * ( ( u21j  **2 + u31j  **2 + u41j  **2 ) - ( u21jm1**2 + u31jm1**2 + u41jm1**2 ) ) + (1.0d0/6.0d0)  * ty3 * ( u31j**2 - u31jm1**2 ) + c1 * c5 * ty3 * ( u51j - u51jm1 )
                         end do
 
                         do j = jst, jend
@@ -868,8 +868,8 @@ CONTAINS
 
                               flux(2,k) = tz3 * ( u21k - u21km1 )
                               flux(3,k) = tz3 * ( u31k - u31km1 )
-                              flux(4,k) = (4.0/3.0) * tz3 * (u41k-u41km1)
-                              flux(5,k) = 0.50 * ( 1.0 - c1*c5 )  * tz3 * ( ( u21k  **2 + u31k  **2 + u41k  **2 ) - ( u21km1**2 + u31km1**2 + u41km1**2 ) )  + (1.0/6.0) * tz3 * ( u41k**2 - u41km1**2 ) + c1 * c5 * tz3 * ( u51k - u51km1 )
+                              flux(4,k) = (4.0d0/3.0d0) * tz3 * (u41k-u41km1)
+                              flux(5,k) = 0.50 * ( 1.0 - c1*c5 )  * tz3 * ( ( u21k  **2 + u31k  **2 + u41k  **2 ) - ( u21km1**2 + u31km1**2 + u41km1**2 ) )  + (1.0d0/6.0d0) * tz3 * ( u41k**2 - u41km1**2 ) + c1 * c5 * tz3 * ( u51k - u51km1 )
                         end do
 
                         do k = 2, nz - 1

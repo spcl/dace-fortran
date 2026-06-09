@@ -132,7 +132,23 @@ def _run_reference(tmp_path):
 
 
 def _build_sdfg(tmp_path):
-    """Build the LU SDFG via the multi-file bridge entry point."""
+    """Build the LU SDFG via the multi-file bridge entry point.
+
+    Belt-and-braces: explicitly pin the CPU compile flags here even
+    though ``tests/conftest.py`` sets the same defaults at session
+    start.  E2E numerical correctness tests that compare against a
+    strict gfortran reference (``-O0 -fno-fast-math
+    -ffp-contract=off``) must use the same flags on the SDFG side to
+    avoid spurious FMA / reassociation drift; making the dependence
+    explicit in the test guards against silent behaviour changes if
+    a future commit weakens or removes the conftest defaults.
+    """
+    import dace
+    dace.Config.set("compiler",
+                    "cpu",
+                    "args",
+                    value=("-fPIC -Wall -Wextra -O0 -fno-fast-math -ffp-contract=off "
+                           "-Wno-unused-parameter -Wno-unused-label"))
     return build_sdfg_from_files(
         [_LU, _USE],
         entry=_ENTRY,
