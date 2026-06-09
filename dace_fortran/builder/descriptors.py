@@ -223,20 +223,47 @@ def add_descriptors(builder, sdfg: SDFG):
             # alongside every array's offset symbols), assigned per
             # loop iteration via interstate edge (a follow-up commit
             # wires the assignment).
-            extent_str = v.bounds_remap_total_extent
-            if not extent_str:
-                # Synth fallback: caller binds a free total-extent
-                # symbol when the rebox's extent operand wasn't
-                # statically expressible.
-                extent_str = f"{v.fortran_name}_total_extent_d0"
-                if extent_str not in sdfg.symbols:
-                    sdfg.add_symbol(extent_str, dace.int64)
-            sdfg.add_view(
-                v.fortran_name,
-                shape=[dace.symbolic.pystr_to_symbolic(extent_str)],
-                dtype=dt(v.dtype),
-                strides=[1],
-            )
+            # Two flavours of bounds-remap-view reach this branch:
+            #
+            #  * Same-rank rebind (QE's ``ptr(:) => parent(:, k)``):
+            #    pointer and target both 1D.  Original flat-view
+            #    path: shape ``[total_extent]``, strides ``[1]``.
+            #    Element ``ptr(i)`` lowers to
+            #    ``parent_flat[offset + i - 1]`` at codegen.
+            #
+            #  * Rank-changing rebind (``p(1:M, 1:K) => arr1d`` --
+            #    Fortran 2003 multi-D pointer remap of a 1D target):
+            #    pointer is multi-D, target is 1D contiguous.  The
+            #    kernel writes ``p(i, j)`` with multi-D subsets;
+            #    register the view with the POINTER's own shape so
+            #    those subsets match.  Strides are column-major over
+            #    the view's shape (``(1, M, M*K2, ...)``) so a
+            #    ``p(i, j)`` access flattens to linear offset
+            #    ``i + M*(j-1)`` in the source's 1D storage --
+            #    matching the rank-reinterpretation view-alias path
+            #    for dummy reshapes (see access.py / extract_vars
+            #    asAssumedShapeAlias rank-mismatch refusal).
+            same_rank = (len(dims) == 1)
+            if same_rank:
+                extent_str = v.bounds_remap_total_extent
+                if not extent_str:
+                    extent_str = f"{v.fortran_name}_total_extent_d0"
+                    if extent_str not in sdfg.symbols:
+                        sdfg.add_symbol(extent_str, dace.int64)
+                sdfg.add_view(
+                    v.fortran_name,
+                    shape=[dace.symbolic.pystr_to_symbolic(extent_str)],
+                    dtype=dt(v.dtype),
+                    strides=[1],
+                )
+            else:
+                view_strides = _fortran_strides(dims)
+                sdfg.add_view(
+                    v.fortran_name,
+                    shape=dims,
+                    dtype=dt(v.dtype),
+                    strides=view_strides,
+                )
         elif v.role == 'view_alias':
             # Pointer alias of ``v.view_source``  --  no separate storage.
             # ``sdfg.add_view`` registers a static reference that DaCe
@@ -326,17 +353,27 @@ def add_descriptors(builder, sdfg: SDFG):
             if sym_name not in sdfg.symbols:
                 sdfg.add_symbol(sym_name, dace.int64)
             if v.bounds_remap_view:
-                # The offset of a bounds-remap view is *dynamic*: it
-                # encodes the column offset into the parent array and
-                # changes per surrounding-loop iteration (e.g. each
-                # ``jbnd`` step in QE's ``addusxx_g`` rebinds
-                # ``prhoc_d`` to a different column slice).
-                # Setting ``offset_values`` to ``None`` keeps the
-                # symbol free on the SDFG signature so it survives
-                # ``_specialize_symbol``'s constant-fold sweep; the
-                # interstate-edge assignment that binds it lives in
-                # the View's linking-memlet wiring (follow-up).
-                builder.offset_values[sym_name] = None
+                # Rank-preserving bounds-remap-view (QE's
+                # ``ptr(:) => parent(:, k)``): the column offset
+                # changes per surrounding-loop iteration -- mark the
+                # symbol as dynamic and bind it per rebind site (the
+                # interstate-edge wiring lives in the View's linking
+                # path).
+                #
+                # Rank-changing bounds-remap-view (``p(1:M, 1:K) =>
+                # arr1d``): the offset is the Fortran 1-based
+                # default ``1`` on every dim -- the view's strides
+                # already encode the multi-D -> linear remap and
+                # there's no per-iteration column re-anchor.  Without
+                # this binding ``offset_p_d0`` stays at 0 and every
+                # ``p(i, j)`` access lands one slot past the
+                # expected flat offset (the 1-based ``i`` would be
+                # subtracted by 0 instead of 1).
+                same_rank_view = (rank == 1)
+                if same_rank_view:
+                    builder.offset_values[sym_name] = None
+                else:
+                    builder.offset_values[sym_name] = 1
                 continue
             lb = v.lower_bounds[d] if d < len(v.lower_bounds) else "1"
             builder.offset_values[sym_name] = _offset_value(lb)

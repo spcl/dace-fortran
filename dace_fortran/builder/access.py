@@ -138,6 +138,19 @@ def acc(builder, state, name: str):
         node = state.add_access(name)
         cache[name] = node
         v = builder.arrays.get(name)
+        # ``bounds_remap_view`` (multi-D POINTER remap of a 1D target,
+        # e.g. ``p(1:M, 1:K) => arr1d``) needs the same source ->
+        # view linking edge the rank-reinterpret ``view_alias`` path
+        # uses.  Synthesise an equivalent VarInfo on the spot so the
+        # shared code below handles both shapes uniformly.
+        if v is not None and getattr(v, 'bounds_remap_view', False) \
+                and v.bounds_remap_source \
+                and v.bounds_remap_source in state.parent.arrays:
+            from types import SimpleNamespace
+            v = SimpleNamespace(role='view_alias',
+                                view_source=v.bounds_remap_source,
+                                view_subset=[""],
+                                fortran_name=v.fortran_name)
         if v is not None and getattr(v, 'role', '') == 'view_alias' \
                 and v.view_source and v.view_source in state.parent.arrays:
             from dace import Memlet

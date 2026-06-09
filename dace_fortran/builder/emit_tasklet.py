@@ -313,6 +313,20 @@ def emit_scalar_assign(builder, state, target: str, value: str):
     tgt_is_array = (tgt_var is not None and getattr(tgt_var, "rank", 0) > 0
                     and len(tgt_var.shape_symbols) == tgt_var.rank)
 
+    # Bounds-remap-view rebind (``p(1:M, 1:K) => arr1d``): the View
+    # descriptor itself + the source -> view linking edge in
+    # ``access.py`` already establish the alias.  The Fortran-level
+    # rebind ``p = arr1d`` lands here as an array-target assign with
+    # a bare name RHS; the bridge's ``RewritePointerAssigns`` pass
+    # leaves it intact when the LHS is tagged ``bounds_remap_view``
+    # so we can emit a typed View instead of the per-element index
+    # rewrite.  Skip the redundant tasklet entirely -- otherwise
+    # ``set_<target>`` writes a rank-1 subset against a multi-D View
+    # and the validator rejects the edge.
+    if tgt_var is not None and getattr(tgt_var, "bounds_remap_view", False) \
+            and getattr(tgt_var, "bounds_remap_source", "") == src_name:
+        return
+
     if tgt_is_array:
         is_whole_array_copy = (src_name in builder.arrays and re.fullmatch(r'[A-Za-z_]\w*', src_name) is not None)
         if is_whole_array_copy:

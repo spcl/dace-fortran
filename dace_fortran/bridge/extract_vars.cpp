@@ -2488,15 +2488,23 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
               }
               return "";
             };
-            // Multiply per-dim extents.  ``pairs`` layout: lb0, ext0,
+            // Multiply per-dim extents for the total; ALSO fill
+            // ``v.shape_symbols`` per dim so the SDFG View carries
+            // the multi-D shape directly (no synthetic ``<ptr>_d<i>``
+            // fallback that would leave the View's stride symbols
+            // unbound at runtime).  ``pairs`` layout: lb0, ext0,
             // lb1, ext1, ...
             std::string total;
+            std::vector<std::string> perDim;
             for (size_t i = 1; i < pairs.size(); i += 2) {
               auto e = renderExt(pairs[i]);
-              if (e.empty()) { total.clear(); break; }
+              if (e.empty()) { total.clear(); perDim.clear(); break; }
+              perDim.push_back(e);
               total = total.empty() ? e : total + "*" + e;
             }
             v.bounds_remap_total_extent = total;
+            if (!perDim.empty() && (int)perDim.size() == v.rank)
+              v.shape_symbols = std::move(perDim);
           }
           // Walk the embox's memref back to the parent declare.
           mlir::Value parent = topEmbox.getMemref();

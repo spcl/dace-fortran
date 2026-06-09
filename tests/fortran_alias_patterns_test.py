@@ -195,11 +195,6 @@ end module m
 # ---------------------------------------------------------------------------
 # Pattern G -- POINTER bounds-remap WITH rank change.
 # ---------------------------------------------------------------------------
-@pytest.mark.xfail(strict=False,
-                   reason=("POINTER rank-changing remap (1D target -> 2D pointer "
-                           "view) is a Fortran 2003 feature.  Bridge has a "
-                           "bounds-remap-view path but the rank-change variant "
-                           "wires through a different IR shape; probe to confirm."))
 def test_g_pointer_rank_changing_remap(tmp_path):
     """``real, pointer :: p(:,:)`` rebound via ``p(1:M,1:K) => arr1d``.
     Same storage; pointer sees the 1D data as 2D."""
