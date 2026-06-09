@@ -858,9 +858,30 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block &block);
 /// scalar.  scf.yield of an i32 constant / boolean / computed expression  --
 /// just reuse buildExpr, which traces through arith ops and cast chains.
 std::string yieldedExpr(mlir::Value v) {
-  auto s = buildExpr(v, 0);
-  if (s == "?") s = buildBoolExpr(v, 0);
-  return s;
+  // The yielded value lands in an ``__sc_<N>`` interstate-edge
+  // assignment / scalar tasklet for a downstream conditional check
+  // (lift-cf-to-scf encodes Fortran ``if (...) early-return`` as
+  // scf.if yielding an i32 then trunci-tested at the surrounding
+  // scf.condition).  When the yielded value is an ``arith.andi`` of
+  // i1 cmp results -- the multi-element AND convergence check
+  // ``rsdnm(1) < tolrsd(1) .and. rsdnm(2) < tolrsd(2)`` -- buildExpr
+  // at expressions.cpp:1280-1288 sets ``NoSubscriptGuard`` and routes
+  // through ``buildBoolExpr``, stripping the per-cmp ``rsdnm[0]``
+  // subscripts from the assumption that emit_tasklet wires them via
+  // memlets.  But the snapshot assign here ends up in a tasklet
+  // body where the regex rewrite only touches BARE names -- the
+  // ``rsdnm < tolrsd`` cmpf renders as POINTER comparison in C++
+  // (rsdnm and tolrsd are ``double*`` arglist params), which is
+  // deterministic at runtime based on memory layout and silently
+  // breaks the early-return semantics (NPB LU's ssor istep loop:
+  // EVEN iter counts wrap to 1 iter, ODD counts iterate fully --
+  // see tests/lu_two_call_convergence_repro_test.py for the
+  // distilled repro).  Render with subscripts directly via
+  // ``buildBoolExpr`` so the leaf cmpf operands keep their
+  // ``arr[idx]`` form.
+  auto b = buildBoolExpr(v, 0);
+  if (b != "?") return b;
+  return buildExpr(v, 0);
 }
 
 }  // namespace hlfir_bridge

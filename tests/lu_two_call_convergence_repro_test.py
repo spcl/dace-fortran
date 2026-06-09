@@ -102,21 +102,6 @@ def _run(sdfg, itmax_v: int) -> float:
     return float(kw['u'][0])
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=
-    ("Minimal repro of the LU SSOR-sweep no-op.  ``ssor(1) "
-     "+ ssor(itmax)`` with a multi-element AND "
-     "convergence check inside ssor.  EVEN ``itmax`` "
-     "values produce u[0]=2 (only the literal ssor(1)'s "
-     "iteration runs) instead of 1 + itmax; ODD values "
-     "iterate correctly.  Bug requires all three "
-     "factors: two calls + multi-element AND + module "
-     "globals.  Root cause not yet isolated; needs to "
-     "snapshot of the convergence condition with "
-     "BARE array names (rsdnm < tolrsd) instead of "
-     "subscripted (rsdnm[0] < tolrsd[0]).  The compiled C++ comparison degrades to POINTER comparison, which is deterministic based on memory layout -- the iteration count then depends on whether rsdnm < tolrsd in memory.  Even itmax happens to break (always 1 iter), odd itmax happens to continue.  Fix: buildBoolExpr (or its caller in walkSCFBeforeRegion) must emit subscripted array reads when rendering an scf.condition expression that references hlfir.designate array elements."
-     ))
 def test_lu_two_call_convergence_repro_itmax_2(tmp_path):
     """itmax=2 must give u[0] = 1 + 2 = 3 (2 iterations of ssor(itmax)
     on top of ssor(1)'s 1 iteration)."""
