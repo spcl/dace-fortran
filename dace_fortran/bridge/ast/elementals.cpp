@@ -400,9 +400,34 @@ void collectReadAccesses(mlir::Value v, std::vector<AccessInfo> &accesses,
 const char *libcallNameForExprOp(mlir::Operation *op) {
   if (!op) return nullptr;
   auto name = op->getName().getStringRef();
+  // The set MUST stay in sync with the libcall dispatcher's
+  // ``kLibTable`` at ``dispatch.cpp:2082`` -- every entry there that
+  // has an HLFIR op-name maps to an inline-libcall name here so the
+  // elemental + ``hlfir.apply`` materialisation in
+  // ``control_flow.cpp::walkElementalBody`` can pre-emit a
+  // ``_libtmp_<gid>`` transient for the result.  Without this entry,
+  // ``buildExpr`` sees the apply, falls through, and emits ``?`` into
+  // the tasklet body.  QE's ``vcut_get`` (inline matmul_transpose)
+  // was the surfacing case for the recent additions.
   if (name == "hlfir.matmul") return "matmul";
   if (name == "hlfir.transpose") return "transpose";
   if (name == "hlfir.dot_product") return "dot_product";
+  // ``hlfir.matmul_transpose`` is the fused ``MATMUL(TRANSPOSE(A), B)``
+  // op that ``hlfir-optimized-bufferization`` synthesises from the
+  // separate ``hlfir.matmul %T %B`` + ``%T = hlfir.transpose %A``
+  // pair.
+  if (name == "hlfir.matmul_transpose") return "matmul_transpose";
+  // Fortran ``COUNT(mask [, dim])`` -- CountLibraryNode.  The
+  // dispatcher path at ``dispatch.cpp::buildElementalCountLibcall``
+  // handles the elemental-mask case at the WHOLE-assign level; this
+  // entry covers the same op when it appears as an inline operand
+  // (e.g. ``res = COUNT(arr > 0) + 1``).
+  if (name == "hlfir.count") return "count";
+  // ``MINLOC`` / ``MAXLOC`` -- ArgMin / ArgMax library nodes.
+  if (name == "hlfir.minloc") return "argmin";
+  if (name == "hlfir.maxloc") return "argmax";
+  // ``CSHIFT(array, shift [, dim])`` -- circular shift.
+  if (name == "hlfir.cshift") return "cshift";
   return nullptr;
 }
 

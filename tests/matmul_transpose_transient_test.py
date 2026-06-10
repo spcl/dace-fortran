@@ -111,23 +111,29 @@ end module
     np.testing.assert_allclose(C, expected)
 
 
-def test_inline_matmul_transpose_division_raises_clear_error(tmp_path):
-    """The unsupported INLINE ``MATMUL(TRANSPOSE(...)) / scalar``
-    shape now surfaces a loud, descriptive error at parse time
-    instead of producing a cryptic ``?`` placeholder later.
-
-    Per the bridge's error-throw contract for unsupported patterns,
-    the parse should raise; the message should name the workaround
-    (materialise to a temp first)."""
+def test_inline_matmul_transpose_division_works_via_elemental_lift(tmp_path):
+    """``res = MATMUL(TRANSPOSE(A), q) / scalar`` -- the bridge's
+    elemental + ``hlfir.apply`` libcall materialisation
+    (``control_flow.cpp::walkElementalBody``, with
+    ``libcallNameForExprOp`` recognising ``hlfir.matmul_transpose``)
+    pre-emits a ``_libtmp_<gid>`` transient holding the matmul
+    result, and the consuming elemental reads it element-by-element
+    for the division.  No Fortran-source rewrite needed.  QE's
+    ``vcut_get`` was the surfacing case."""
     src = """
 module m
 contains
-  subroutine inline_bad(a, q, scalar, res)
+  subroutine inline_qe(a, q, scalar, res)
     real(kind=8), intent(in) :: a(3, 3), q(3), scalar
     real(kind=8), intent(out) :: res(3)
     res = MATMUL(TRANSPOSE(a), q) / scalar
   end subroutine
 end module
 """
-    with pytest.raises(RuntimeError, match=r"(pipeline failed|matmul|MATMUL|lift)"):
-        build_sdfg(src, tmp_path / "sdfg", name="inline_bad", entry="_QMmPinline_bad").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="inline_qe", entry="_QMmPinline_qe").build()
+    A = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order='F')
+    q = np.array([1.0, 2.0, 3.0], dtype=np.float64, order='F')
+    res = np.zeros(3, dtype=np.float64, order='F')
+    sdfg(a=A, q=q, scalar=np.float64(2.0), res=res)
+    expected = (A.T @ q) / 2.0
+    np.testing.assert_allclose(res, expected)

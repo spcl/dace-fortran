@@ -305,7 +305,7 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign,
                   // declare.  Materialise the elemental
                   // into a synthetic transient and pass
                   // its name as the libcall arg.
-                  if (auto *od = operand.getDefiningOp())
+                  if (auto *od = operand.getDefiningOp()) {
                     if (auto inner_elem =
                             mlir::dyn_cast<hlfir::ElementalOp>(od)) {
                       auto [trName, mat_nodes] =
@@ -316,6 +316,65 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign,
                         n = std::move(trName);
                       }
                     }
+                    // Nested libcall expr-producer (e.g.
+                    // ``MATMUL(TRANSPOSE(a), q)`` -- the
+                    // matmul's first operand is the
+                    // transpose result, which is also a
+                    // libcall expr-producer with no
+                    // backing declare).  Recursively
+                    // materialise it via the same
+                    // ``_libtmp_<gid>`` mechanism so the
+                    // outer libcall's source arg is a
+                    // real array name, not the empty
+                    // string ``traceToDecl`` returned.
+                    // QE's ``vcut_get`` (``i_real =
+                    // MATMUL(TRANSPOSE(vcut % a), q)
+                    // / tpi``) was the surfacing case.
+                    else if (n.empty() && libcallNameForExprOp(od)) {
+                      // Memoise per (op, transient name)
+                      // so a transpose result shared
+                      // between two consumers reuses the
+                      // same transient.
+                      auto it = kHlfirExprToTransient.find(od);
+                      std::string innerTr;
+                      if (it != kHlfirExprToTransient.end()) {
+                        innerTr = it->second;
+                      } else {
+                        innerTr = "_libtmp_" +
+                                  std::to_string(kLibTmpCounter++);
+                        kHlfirExprToTransient[od] = innerTr;
+                        mlir::Type irty = od->getResult(0).getType();
+                        auto ishape = exprResultShape(irty);
+
+                        ASTNode idecl;
+                        idecl.kind = "declare_transient";
+                        idecl.target = innerTr;
+                        idecl.expr = exprDtypeString(irty);
+                        idecl.target_is_array = !ishape.empty();
+                        AccessInfo ishapeInfo;
+                        ishapeInfo.array_name = innerTr;
+                        for (auto &s : ishape)
+                          ishapeInfo.index_exprs.push_back(s);
+                        idecl.accesses.push_back(std::move(ishapeInfo));
+                        preNodes.push_back(std::move(idecl));
+
+                        ASTNode ilib;
+                        ilib.kind = "libcall";
+                        ilib.target = innerTr;
+                        ilib.target_is_array = !ishape.empty();
+                        ilib.callee = libcallNameForExprOp(od);
+                        for (auto iop : od->getOperands()) {
+                          auto in = traceToDecl(iop);
+                          // Only one-level nesting handled
+                          // here; deeper would need full
+                          // recursion (uncommon shape).
+                          ilib.call_args.push_back(in);
+                        }
+                        preNodes.push_back(std::move(ilib));
+                      }
+                      n = innerTr;
+                    }
+                  }
                 }
                 lib.call_args.push_back(n);
               }
