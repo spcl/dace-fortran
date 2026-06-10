@@ -569,6 +569,130 @@ materialiseElementalToTransient(hlfir::ElementalOp elem,
       yielded = y.getElementValue();
       break;
     }
+
+  // Pre-walk for dim-reductions on the apply chain:
+  // ``hlfir.apply %sum_result, %i`` where ``%sum_result =
+  // hlfir.sum %inner_elem dim %k`` returns a vector that the outer
+  // elemental's body applies element-wise.  Without pre-materialisation,
+  // ``buildExpr(%apply)`` returns ``?`` because the ``hlfir.sum`` source
+  // is neither an inner elemental nor a libcall whose result already
+  // landed in ``kHlfirExprToTransient``.  QE's
+  // ``MINVAL(SQRT(SUM(a ** 2, 1)))`` shape (in ``vcut_spheric_get``)
+  // surfaces this as ``_out__mask_1 = sqrt(?)`` at
+  // emit_tasklet validation time.
+  //
+  // Strategy mirrors ``findApplies`` for libcalls (control_flow.cpp:289+):
+  // walk the body, find apply-of-reduction, materialise the inner
+  // elemental into a ``_libtmp_<gid>`` transient, emit a
+  // ``kind="reduce"`` AST node writing to a sibling transient, and
+  // register the reduction op in ``kHlfirExprToTransient`` so
+  // ``buildExpr``'s apply branch renders the apply as the transient's
+  // name.
+  std::vector<ASTNode> reductionPreNodes;
+  auto reduceWcrIdentity = [](mlir::Operation *op,
+                              std::string& wcr,
+                              std::string& identity) -> bool {
+    auto nm = op->getName().getStringRef();
+    if (nm == "hlfir.sum") {
+      wcr = "lambda a, b: a + b"; identity = "0"; return true;
+    }
+    if (nm == "hlfir.product") {
+      wcr = "lambda a, b: a * b"; identity = "1"; return true;
+    }
+    if (nm == "hlfir.minval") {
+      wcr = "lambda a, b: min(a, b)"; identity = "inf"; return true;
+    }
+    if (nm == "hlfir.maxval") {
+      wcr = "lambda a, b: max(a, b)"; identity = "-inf"; return true;
+    }
+    return false;
+  };
+  if (yielded) {
+    std::function<void(mlir::Value, int)> walkForReductions =
+        [&](mlir::Value v, int depth) {
+          if (depth > 40 || !v) return;
+          auto *op = v.getDefiningOp();
+          if (!op) return;
+          if (auto apply = mlir::dyn_cast<hlfir::ApplyOp>(op)) {
+            auto src = apply.getExpr();
+            auto *srcOp = src.getDefiningOp();
+            if (!srcOp) return;
+            if (kHlfirExprToTransient.count(srcOp)) return;
+            std::string wcr, identity;
+            if (!reduceWcrIdentity(srcOp, wcr, identity)) {
+              // Not a reduction -- recurse into operands.
+              for (auto operand : op->getOperands())
+                walkForReductions(operand, depth + 1);
+              return;
+            }
+            // Materialise the inner source.  If it's an elemental,
+            // run ``materialiseElementalForLibcall`` to get a
+            // transient that the reduce reads from; if it's a
+            // named array, use ``traceToDecl`` directly.
+            mlir::Value redSrc = srcOp->getOperand(0);
+            std::string redSrcName;
+            std::vector<ASTNode> srcMaterialNodes;
+            if (auto *rsd = redSrc.getDefiningOp()) {
+              if (auto innerElem =
+                      mlir::dyn_cast<hlfir::ElementalOp>(rsd)) {
+                auto [trName, mat_nodes] =
+                    materialiseElementalForLibcall(innerElem);
+                if (!trName.empty()) {
+                  redSrcName = std::move(trName);
+                  for (auto &mn : mat_nodes)
+                    srcMaterialNodes.push_back(std::move(mn));
+                }
+              }
+            }
+            if (redSrcName.empty()) redSrcName = traceToDecl(redSrc);
+            if (redSrcName.empty()) return;  // can't materialise; skip
+            // Mint the reduction's result transient.
+            std::string tmp = "_libtmp_" + std::to_string(kLibTmpCounter++);
+            kHlfirExprToTransient[srcOp] = tmp;
+            mlir::Type rty = srcOp->getResult(0).getType();
+            auto rshape = exprResultShape(rty);
+            ASTNode decl;
+            decl.kind = "declare_transient";
+            decl.target = tmp;
+            decl.expr = exprDtypeString(rty);
+            decl.target_is_array = !rshape.empty();
+            AccessInfo shapeInfo;
+            shapeInfo.array_name = tmp;
+            for (auto &s : rshape) shapeInfo.index_exprs.push_back(s);
+            decl.accesses.push_back(std::move(shapeInfo));
+            // Reduce AST node.
+            ASTNode red;
+            red.kind = "reduce";
+            red.target = tmp;
+            red.target_is_array = !rshape.empty();
+            red.reduce_src = redSrcName;
+            red.reduce_wcr = wcr;
+            red.reduce_identity = identity;
+            // ``dim`` is the second operand (1-based Fortran -> 0-based).
+            if (srcOp->getNumOperands() >= 2) {
+              auto dimV = srcOp->getOperand(1);
+              if (auto c = traceConstInt(dimV))
+                red.reduce_axes.push_back(*c - 1);
+            }
+            // Pre-nodes ordering: source materialisation first, then
+            // declare_transient, then the reduce that writes to it.
+            for (auto &n : srcMaterialNodes)
+              reductionPreNodes.push_back(std::move(n));
+            reductionPreNodes.push_back(std::move(decl));
+            reductionPreNodes.push_back(std::move(red));
+            // Continue recursion in case there's another reduction
+            // deeper (chained reductions).
+            for (auto operand : op->getOperands())
+              walkForReductions(operand, depth + 1);
+            return;
+          }
+          // Plain non-apply op -- recurse into all operands.
+          for (auto operand : op->getOperands())
+            walkForReductions(operand, depth + 1);
+        };
+    walkForReductions(yielded, 0);
+  }
+
   std::string body = "?";
   if (yielded) {
     // Tasklet-body mode: comparisons / loads emit bare names so
@@ -605,7 +729,10 @@ materialiseElementalToTransient(hlfir::ElementalOp elem,
   }
 
   std::vector<ASTNode> nodes;
-  nodes.reserve(2);
+  nodes.reserve(2 + reductionPreNodes.size());
+  // Reduction pre-materialisation nodes go FIRST -- they declare the
+  // transients the elemental body's apply now reads from.
+  for (auto &n : reductionPreNodes) nodes.push_back(std::move(n));
   nodes.push_back(std::move(decl));
   nodes.push_back(std::move(current));
   return {std::move(trName), std::move(nodes)};
