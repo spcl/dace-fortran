@@ -98,15 +98,20 @@ std::string buildIndexExpr(mlir::Value v, int d) {
         // the designate has a component attribute and no
         // subscripts.  Resolve to the flattened scalar name
         // (``g_idx``) via the component-aware ``traceToDecl`` walk
-        // -- the result is a scalar value, no bracket subscript
-        // needed.  Previously ``traceToDecl(dg.getMemref())``
-        // bypassed the component branch and returned the struct
-        // base ``g``, which then fell through to the
-        // ``arr[<index>]`` brace path emitting ``g[]``.
+        // and mint an entry-time POSITION SYMBOL
+        // (``__sym_g_idx_1``) -- same one-shot symbol-init shape
+        // ``internPosSymbol`` uses for constant-indexed array
+        // element reads.  The Python emitter stages it as
+        // ``__sym_g_idx_1 = g_idx[0]`` on an interstate edge at
+        // SDFG entry; downstream memlet subsets pick up the
+        // symbol directly.  Without this promotion, the raw
+        // ``g_idx`` scalar transient leaks into the memlet
+        // subset and DaCe's parser raises
+        // ``unresolved free symbol(s) in SDFG: ['g_idx']``.
         if (dg.getComponentAttr() && dg.getIndices().empty()) {
           auto flatName = traceToDecl(dg.getResult());
-          if (!flatName.empty()) return flatName;
-          return "?";
+          if (flatName.empty()) return "?";
+          return internPosSymbol(flatName, 1);
         }
         auto arrName = resolveIndex(dg.getMemref());
         if (arrName.empty()) arrName = traceToDecl(dg.getMemref());

@@ -251,17 +251,12 @@ end module
     assert "local" not in sdfg.symbols
 
 
-@pytest.mark.xfail(strict=False,
-                   reason=("Struct scalar integer field used as ARRAY "
-                           "SUBSCRIPT INDEX -- the trace resolves to the "
-                           "flat name correctly (memlet sees ``g_idx - 1``) "
-                           "but ``g_idx`` is registered as a scalar "
-                           "transient; DaCe's memlet subset needs it as an "
-                           "SDFG symbol.  Separate symbol-promotion path "
-                           "for integer scalar struct fields used as "
-                           "indices."))
 def test_module_struct_int_field_as_subscript(tmp_path):
-    """``arr(g % idx)`` -- struct integer field as array subscript."""
+    """``arr(g % idx)`` -- struct integer field as array subscript.
+    The bridge mints a one-shot position symbol
+    ``__sym_g_idx_1`` via ``internPosSymbol`` and stages an entry-
+    time interstate-edge ``__sym_g_idx_1 = g_idx[0]``; the memlet
+    subset picks up the symbol directly."""
     src = """
 module m
   type :: t

@@ -73,20 +73,10 @@ end module
     assert "g" not in sdfg.symbols
 
 
-@pytest.mark.xfail(strict=False,
-                   reason=("Scalar struct field used as array INDEX "
-                           "(``arr(g % idx)``) -- the memlet index builder "
-                           "(access.py / build_memlet_index) needs to "
-                           "resolve the field load to the flat name and "
-                           "fold it into the symbolic index expression.  "
-                           "Structural issue beyond the trace-name "
-                           "rewrite; surfaces as ValueError on memlet "
-                           "subset parsing.  Separate fix in the index-"
-                           "builder path."))
 def test_module_struct_field_in_subscript(tmp_path):
-    """Scalar struct field used as ARRAY INDEX in subscript -- the
-    bridge's memlet index builder must also resolve to the flat
-    name."""
+    """Scalar struct field used as ARRAY INDEX in subscript.  The
+    bridge mints a one-shot position symbol via ``internPosSymbol``
+    so the memlet subset gets a closed-form expression."""
     src = """
 module m
   type :: t
