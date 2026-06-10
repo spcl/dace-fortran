@@ -2354,16 +2354,21 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
                 }
               }
             }
-            // Mode-C for ``hlfir.any`` / ``hlfir.all``: the
-            // reduction's source is an ``hlfir.elemental``
-            // (compound boolean expression), so ``traceToDecl``
-            // returns "" and the plain Reduce path explodes
-            // with ``reduction source '' not registered``.
-            // Materialise the elemental into a transient mask
-            // via a per-element loop (same pattern as Mode-C
-            // COUNT) and route the Reduce over the transient.
-            if (!emitted && (e.op == "hlfir.any" || e.op == "hlfir.all") &&
-                sd->getNumOperands() > 0) {
+            // Mode-C for ANY reduction op whose source is an
+            // ``hlfir.elemental`` (compound boolean expression for
+            // ANY/ALL, element-wise arithmetic like ``SUM(q ** 2)``
+            // for SUM/PRODUCT/MINVAL/MAXVAL).  ``traceToDecl``
+            // returns "" for an elemental result -- the plain
+            // Reduce path then explodes with ``reduction source ''
+            // not registered``.  Materialise the elemental into a
+            // transient via a per-element loop and route the
+            // Reduce over the transient.  ``buildElementalAnyAllReduce``
+            // is op-agnostic (its name is historical -- the wcr +
+            // identity arguments make it work for any reduction)
+            // so we route SUM/PRODUCT/MINVAL/MAXVAL the same way.
+            // QE's ``vcut_get`` (3 occurrences of ``SUM(... ** 2)``)
+            // was the surfacing case.
+            if (!emitted && sd->getNumOperands() > 0) {
               auto srcVal = sd->getOperand(0);
               if (auto* srcOp = srcVal.getDefiningOp())
                 if (auto elem_src = mlir::dyn_cast<hlfir::ElementalOp>(srcOp)) {

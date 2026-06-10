@@ -450,11 +450,21 @@ std::vector<std::string> exprResultShape(mlir::Type ty) {
 /// Map an ``hlfir.expr<...>`` element type to FaCe's dtype string.
 /// Defaults to ``float64`` to keep callers simple  --  the caller would
 /// otherwise have to fall back to it anyway.
+///
+/// ``i1`` (boolean mask elements from COUNT / ANY / ALL elementals)
+/// surfaces as ``int32`` -- DaCe's CountLibraryNode and the
+/// ``Reduce.atomic`` over a boolean mask expect 0/1 integer
+/// elements, and the bridge's materialise loop emits
+/// ``dace.int32(<i1 yield>)`` to widen each element correctly.
+/// Other integer widths (i8 / i16) fall through to float64 -- no
+/// workload has surfaced those yet; if a future case needs them,
+/// add the explicit mapping here.
 std::string exprDtypeString(mlir::Type ty) {
   if (auto e = mlir::dyn_cast<hlfir::ExprType>(ty)) {
     auto elt = e.getElementType();
     if (elt.isF64()) return "float64";
     if (elt.isF32()) return "float32";
+    if (elt.isInteger(1)) return "int32";
     if (elt.isInteger(32)) return "int32";
     if (elt.isInteger(64)) return "int64";
   }
@@ -510,10 +520,20 @@ materialiseElementalToTransient(hlfir::ElementalOp elem,
   std::string trName =
       std::string(prefix) + std::to_string(kSynthTransientCounter++);
 
+  // Dtype follows the elemental's result element type via
+  // ``exprDtypeString`` (which now handles i1 -> int32 for the
+  // boolean mask elements COUNT / ANY / ALL produce).  Previously
+  // this was hardcoded ``int32`` because the helper was only used
+  // for those mask elementals; routing SUM / PRODUCT / MINVAL /
+  // MAXVAL of inline elementals (e.g. QE's
+  // ``SUM((a - b) ** 2)``) through the same path needs the
+  // elemental's real element type.
+  std::string dtype = exprDtypeString(elem.getType());
+
   ASTNode decl;
   decl.kind = "declare_transient";
   decl.target = trName;
-  decl.expr = "int32";
+  decl.expr = dtype;
   AccessInfo shape_info;
   shape_info.array_name = trName;
   for (unsigned i = 0; i < rank; ++i)
@@ -558,7 +578,16 @@ materialiseElementalToTransient(hlfir::ElementalOp elem,
     if (b == "?") b = buildExpr(yielded, 0);
     body = b;
   }
-  inner.expr = "dace.int32(" + body + ")";
+  // Wrap the per-element value in ``dace.int32(...)`` ONLY when
+  // the elemental yields a boolean (i1).  This is the COUNT /
+  // ANY / ALL mask path -- the i1 value widens to int32 (0/1)
+  // for the runtime mask buffer.  For SUM / PRODUCT / MINVAL /
+  // MAXVAL of an inline elemental over real / integer values
+  // (e.g. ``SUM((a - b) ** 2)``) the cast would silently truncate
+  // every materialised value to int32, breaking the reduction.
+  bool isI1Yield = false;
+  if (yielded && yielded.getType().isInteger(1)) isI1Yield = true;
+  inner.expr = isI1Yield ? ("dace.int32(" + body + ")") : body;
 
   if (yielded) collectReadAccesses(yielded, inner.accesses, 0);
 

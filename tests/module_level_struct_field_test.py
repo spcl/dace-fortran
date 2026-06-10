@@ -116,17 +116,11 @@ end module
     assert "g_b" in sdfg.arrays
 
 
-@pytest.mark.xfail(strict=False,
-                   reason=("Scalar field on module-level struct global -- the "
-                           "extract_vars synthesis emits ``g_c`` as a VarInfo "
-                           "but the tasklet expression renderer still "
-                           "produces the bare struct base ``g`` for the "
-                           "scalar field read.  Fix path: extend buildExpr "
-                           "(or similar) to also call the new "
-                           "traceToDecl-with-componentAttr branch for scalar "
-                           "designate operands."))
 def test_module_level_struct_scalar_field(tmp_path):
-    """Scalar struct fields on a module-level global -- known gap."""
+    """Scalar struct fields on a module-level global.  The
+    ``buildExpr`` fix to pass the load's memref directly to
+    ``traceToDecl`` (and let its component-aware walk fire)
+    closes the bare-name leak in the tasklet body."""
     src = """
 module m
   type :: t

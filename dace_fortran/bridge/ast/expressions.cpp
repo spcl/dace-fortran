@@ -1432,9 +1432,16 @@ std::string buildExpr(mlir::Value val, int d) {
 
   if (auto ld = mlir::dyn_cast<fir::LoadOp>(def)) {
     auto mem = ld.getMemref();
-    if (auto md = mem.getDefiningOp())
-      if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(md))
-        return traceToDecl(dg.getMemref());
+    // Pass the designate-or-load result directly to ``traceToDecl``.
+    // It walks through ``hlfir.designate`` correctly: section /
+    // element designates fall through to the parent name, struct-
+    // field designates (component attr set) build the flattened
+    // ``<parent>_<member>`` name (the fix at trace_utils.cpp from
+    // commit 25f8e83).  Previously this branch short-circuited
+    // with ``traceToDecl(dg.getMemref())`` which BYPASSED the
+    // component-aware walk and returned the struct base name
+    // ``g`` instead of ``g_c`` for ``g % c`` scalar reads --
+    // leaking ``g`` as a free symbol into the generated tasklet.
     auto n = traceToDecl(mem);
     if (!n.empty()) return n;
     // Bare fir.alloca without a hlfir.declare  --  mint a synthetic
