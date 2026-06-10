@@ -467,17 +467,31 @@ ASTNode buildAssignNode(hlfir::AssignOp assign) {
   auto dest = assign.getOperand(1);
   if (auto dd = dest.getDefiningOp()) {
     if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(dd)) {
-      auto [arr, dims] = expandDesignateChain(dg);
-      node.target = arr.empty() ? traceToDecl(dg.getMemref()) : arr;
-      node.target_is_array = true;
-      AccessInfo wa;
-      wa.array_name = node.target;
-      wa.is_write = true;
-      for (auto &de : dims) {
-        wa.index_vars.push_back(de.var);
-        wa.index_exprs.push_back(de.expr);
+      // Struct field write (``g % y = ...``) -- the designate has
+      // a component attribute but no element subscripts.  Resolve
+      // to the flat ``<parent>_<member>`` name via
+      // ``traceToDecl`` on the designate's result (the
+      // component-aware walk fires) and DON'T treat it as an
+      // array write -- emit_assign downstream uses the registered
+      // VarInfo's descriptor classification to pick scalar vs
+      // array write.  Previously ``expandDesignateChain`` +
+      // ``traceToDecl(dg.getMemref())`` returned the struct base
+      // ``g``, leaking it as the target name.
+      if (dg.getComponentAttr() && dg.getIndices().empty()) {
+        node.target = traceToDecl(dg.getResult());
+      } else {
+        auto [arr, dims] = expandDesignateChain(dg);
+        node.target = arr.empty() ? traceToDecl(dg.getMemref()) : arr;
+        node.target_is_array = true;
+        AccessInfo wa;
+        wa.array_name = node.target;
+        wa.is_write = true;
+        for (auto &de : dims) {
+          wa.index_vars.push_back(de.var);
+          wa.index_exprs.push_back(de.expr);
+        }
+        node.accesses.push_back(std::move(wa));
       }
-      node.accesses.push_back(std::move(wa));
     } else {
       node.target = traceToDecl(dest);
     }

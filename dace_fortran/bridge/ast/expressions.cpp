@@ -273,19 +273,38 @@ void captureElementDesignateWrite(mlir::Value dest, ASTNode &node) {
     if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(dd)) {
       node.target = allocAliasFor(extractName(decl.getUniqName().str()));
     } else if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(dd)) {
-      node.target = traceToDecl(dg.getMemref());
-      node.target_is_array = true;
-      AccessInfo wa;
-      wa.array_name = node.target;
-      wa.is_write = true;
-      unsigned di = 0;
-      for (auto idx : dg.getIndices()) {
-        auto resolved = resolveIndex(idx);
-        wa.index_vars.push_back(resolved.empty() ? "?" : resolved);
-        wa.index_exprs.push_back(buildDesignateIndexExpr(dg, di, idx, 0));
-        ++di;
+      // Struct field write target: ``g % y = ...`` -- the designate
+      // has a component attribute but no element indices.  Use the
+      // flattened ``<parent>_<member>`` name via ``traceToDecl`` on
+      // the designate's result (lets the component branch fire)
+      // and DON'T treat it as an array write (no AccessInfo
+      // indexed loop is needed -- the target is a scalar / whole
+      // field that downstream emit_assign treats by its own
+      // descriptor classification).  Previously
+      // ``traceToDecl(dg.getMemref())`` returned the struct base
+      // ``g``, leaking ``g`` as the target name and forcing an
+      // array-style write that ``KeyError``ed at arglist lookup.
+      if (dg.getComponentAttr() && dg.getIndices().empty()) {
+        node.target = traceToDecl(dg.getResult());
+        // Whole-field write -- target_is_array reflects the field's
+        // OWN shape, which downstream descriptor classification
+        // recovers from the registered VarInfo.  Leaving it false
+        // by default lets emit_assign pick the right path.
+      } else {
+        node.target = traceToDecl(dg.getMemref());
+        node.target_is_array = true;
+        AccessInfo wa;
+        wa.array_name = node.target;
+        wa.is_write = true;
+        unsigned di = 0;
+        for (auto idx : dg.getIndices()) {
+          auto resolved = resolveIndex(idx);
+          wa.index_vars.push_back(resolved.empty() ? "?" : resolved);
+          wa.index_exprs.push_back(buildDesignateIndexExpr(dg, di, idx, 0));
+          ++di;
+        }
+        node.accesses.push_back(std::move(wa));
       }
-      node.accesses.push_back(std::move(wa));
     }
   }
   if (node.target.empty()) node.target = traceToDecl(dest);

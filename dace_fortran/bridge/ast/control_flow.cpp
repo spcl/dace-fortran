@@ -697,7 +697,15 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
     }
     if (auto md = mem.getDefiningOp())
       if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(md)) {
-        auto arr = traceToDecl(dg.getMemref());
+        // Pass the designate itself to ``traceToDecl`` so the
+        // component-aware walk fires for struct-field designates
+        // (``g % threshold``); element / section designates fall
+        // through to the parent name unchanged.  Previously
+        // ``traceToDecl(dg.getMemref())`` bypassed the component
+        // branch and returned the struct base ``g`` for the
+        // ``if (x > g % threshold)`` shape, leaking ``g`` as a
+        // free symbol into the interstate-edge condition.
+        auto arr = traceToDecl(dg.getResult());
         auto indices = dg.getIndices();
         if (arr.empty()) return "?";
         if (indices.empty()) return arr;
