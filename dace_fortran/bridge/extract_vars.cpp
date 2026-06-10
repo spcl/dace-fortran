@@ -1711,26 +1711,105 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
     else if (mlir::isa<fir::LogicalType>(ty)) {
       v.dtype = "bool";
     } else if (mlir::isa<fir::RecordType>(ty)) {
-      // Drop ALL ``fir.RecordType`` declares.  Two cases:
+      // ``fir.RecordType`` declares fall into three categories:
       //
       //   1. Flang-internal type-info metadata
       //      (``_QM__fortran_type_info...`` tables, component
       //      descriptors named ``.b.<type>.<field>``)  --  never
-      //      user-visible.
-      //   2. User struct that escaped ``hlfir-flatten-structs``
-      //      (the pass handles flat-member structs and nested
-      //      records; allocatable-member structs and other
-      //      shapes are out of scope).
+      //      user-visible.  Drop them.
+      //   2. DUMMY-arg struct that ``hlfir-flatten-structs``
+      //      already lowered to per-field declares -- this
+      //      original struct declare's designates have been
+      //      replaced.  Drop the leftover.
+      //   3. MODULE-LEVEL struct global (``type(t) :: g`` at
+      //      module scope) -- the flatten pass does NOT process
+      //      these (it only walks dummy args).  Field accesses
+      //      (``g % a``) reach the bridge as
+      //      ``hlfir.designate %g_decl{"a"}``; ``traceToDecl``
+      //      returns the flat ``g_a`` name (the bridge's
+      //      ``<parent>_<member>`` convention).  Without a
+      //      matching SDFG array the libcall dispatcher raises
+      //      ``KeyError: 'g_a'``.
       //
-      // Either way the struct does not belong on the SDFG
-      // signature: writing the raw MLIR type string into
-      // ``v.dtype`` would produce broken descriptors that
-      // downstream codegen would only sometimes tolerate.  Skip
-      // the VarInfo entirely; downstream ``traceToDecl`` reads
-      // through the per-field declares the pass did lower.  A
-      // loud-failure throw here would be ideal but regresses
-      // tests that exploit the accidental-success path, so the
-      // loud check lives in a dedicated unit test instead.
+      // Fix for category 3: synthesise one per-field VarInfo
+      // per UNIQUE (struct, field) pair actually accessed,
+      // marked as a TRANSIENT (no signature exposure -- module
+      // globals are internal state).  The per-field VarInfo's
+      // type and shape come from the struct's member type; the
+      // bindings layer can either bake the initial-value
+      // ``fir.global`` contents OR copy from the host on entry.
+      //
+      // Discriminator: a module-scope global declare's memref
+      // traces back to ``fir.address_of @_QM<m>E<n>`` (or the
+      // ``_QM<m>F<f>E<n>`` SAVE-local form, which we deliberately
+      // include too -- SAVE-locals are persistent state with the
+      // same access pattern).  Type-info tables (category 1) and
+      // dummy structs (category 2) DON'T have the address_of
+      // trace, so this branch fires only on real category-3
+      // shapes.
+      auto rec = mlir::cast<fir::RecordType>(ty);
+      std::string globalSym = traceToGlobalSymbol(op.getMemref());
+      auto designates_it = designatesByDecl.find(op.getOperation());
+      bool hasFieldUses = (designates_it != designatesByDecl.end() &&
+                           !designates_it->second.empty());
+      if (!globalSym.empty() && hasFieldUses) {
+        // Emit one VarInfo per UNIQUE component name actually
+        // referenced.  Track names so we don't double-emit when
+        // the same field is read from multiple sites.
+        std::set<std::string> emittedFields;
+        for (auto dg : designates_it->second) {
+          auto compAttr = dg.getComponentAttr();
+          if (!compAttr) continue;
+          std::string compName = compAttr.getValue().str();
+          if (!emittedFields.insert(compName).second) continue;
+          // Look up the member type in the record's type list.
+          mlir::Type memberTy;
+          for (auto& p : rec.getTypeList()) {
+            if (p.first == compName) {
+              memberTy = p.second;
+              break;
+            }
+          }
+          if (!memberTy) continue;
+          VarInfo mv;
+          mv.fortran_name = v.fortran_name + "_" + compName;
+          mv.mangled_name = v.mangled_name + "_" + compName;
+          // Module-level struct fields are transient state, NOT
+          // exposed on the SDFG signature.  Default the intent
+          // empty so descriptors.py classifies them as transients.
+          mv.intent = "";
+          // Member type: walk SequenceType to extract dtype +
+          // shape (same shape extraction as the main path; only
+          // static extents supported at first cut).
+          mlir::Type elemTy = memberTy;
+          if (auto seq = mlir::dyn_cast<fir::SequenceType>(memberTy)) {
+            elemTy = seq.getEleTy();
+            for (auto d : seq.getShape())
+              mv.shape_symbols.push_back(std::to_string(d));
+          }
+          mv.rank = mv.shape_symbols.size();
+          mv.role = (mv.rank > 0) ? "array" : "scalar";
+          // Default lower bound = 1 (Fortran default) per dim.
+          for (size_t d = 0; d < mv.shape_symbols.size(); ++d)
+            mv.lower_bounds.push_back("1");
+          if (auto fty = mlir::dyn_cast<mlir::FloatType>(elemTy)) {
+            unsigned w = fty.getWidth();
+            mv.dtype = (w == 32) ? "fp32"
+                                  : (w == 64) ? "fp64" : "fp" + std::to_string(w);
+          } else if (auto ity = mlir::dyn_cast<mlir::IntegerType>(elemTy)) {
+            unsigned w = ity.getWidth();
+            mv.dtype = (w == 8) ? "i8"
+                                : (w == 16) ? "i16"
+                                            : (w == 32) ? "i32"
+                                                        : (w == 64) ? "i64" : "i" + std::to_string(w);
+          } else if (mlir::isa<fir::LogicalType>(elemTy) || elemTy.isInteger(1)) {
+            mv.dtype = "bool";
+          } else {
+            continue;  // unsupported field type -- skip.
+          }
+          vars.push_back(std::move(mv));
+        }
+      }
       continue;
     } else {
       std::string s;
