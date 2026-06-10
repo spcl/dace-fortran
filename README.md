@@ -78,6 +78,11 @@ checkpoint emitted by `f2dace-qe-source`'s pruner for the
 `exx_bp::vexx_bp_k_gpu` entry: ~2k lines, every USE-closure module
 inlined.
 
+For the full parse -> bindings -> compile -> save lifecycle (and the
+current xfail gates), see [`tasks/qe_e2e_guide.md`](tasks/qe_e2e_guide.md).
+The walkthrough below is the bridge-side entry; the task guide covers
+the binding emission + persistence flow.
+
 ```python
 import re, pathlib, dace_fortran
 from dace_fortran.preprocess import (
