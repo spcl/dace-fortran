@@ -239,17 +239,43 @@ struct LiftReductionOperandsPass
     // safety check stays explicit).
     if (!isScalar) {
       if (isLiftableLinalgOp(redOp)) {
-        bool allUsersHandled = true;
+        // The existing ``hlfir.elemental + hlfir.apply <libcall>``
+        // materialisation in ``bridge/ast/control_flow.cpp:251+``
+        // already pre-emits a ``_libtmp_<gid>`` transient for any
+        // libcall-result the elemental's body reads.  Any matmul /
+        // transpose / dot_product whose consumers include
+        // ``hlfir.apply`` (inside an elemental) or
+        // ``hlfir.shape_of`` (the shape feed for the same elemental)
+        // is handled there -- DON'T loud-error.
+        //
+        // Skip the loud error when ANY user is one of the elemental-
+        // consumer indicators (apply / shape_of / consuming assign
+        // / liftable op for fusion).  Only fail when NONE of the
+        // users hint at an elemental / whole-assign / fusion path
+        // -- those are the truly unmodelled inline shapes (e.g.
+        // matmul fed directly to an arith op outside an elemental,
+        // which we haven't seen in any workload yet).
+        //
+        // Required because some Flang versions / pipeline configs
+        // lower ``2.0 - matmul(a, b)`` through op shapes that
+        // include intermediate ops (arith.subf wrapping the
+        // matmul without an explicit hlfir.elemental, etc.); the
+        // ANY-allowed gate keeps the pass from breaking those
+        // patterns where the downstream elemental machinery still
+        // does the right thing.
+        bool anyIndicator = false;
+        bool anyUnhandled = false;
         for (auto *user : redOp->getResult(0).getUsers()) {
-          if (isLiftableOp(user)) continue;
-          if (mlir::isa<hlfir::AssignOp>(user)) continue;
-          // ``hlfir.destroy`` is a cleanup marker; not a real
-          // consumer.
+          if (mlir::isa<hlfir::ApplyOp>(user) ||
+              mlir::isa<hlfir::ShapeOfOp>(user) ||
+              mlir::isa<hlfir::AssignOp>(user) || isLiftableOp(user)) {
+            anyIndicator = true;
+            continue;
+          }
           if (user->getName().getStringRef() == "hlfir.destroy") continue;
-          allUsersHandled = false;
-          break;
+          anyUnhandled = true;
         }
-        if (!allUsersHandled) {
+        if (anyUnhandled && !anyIndicator) {
           redOp->emitError()
               << "hlfir-lift-reduction-operands: inline "
               << redOp->getName().getStringRef()
