@@ -542,9 +542,65 @@ class SDFGBuilder:
         # source array, no separate storage) and the ``acc`` factory
         # adds a per-state linking memlet so DaCe codegen knows
         # ``dd``'s reads/writes propagate to ``d``.
-        self.arrays = {v.fortran_name: v for v in self.variables if v.role in ("array", "view_alias", "section_alias")}
-        self.symbols = {v.fortran_name: v for v in self.variables if v.role == "symbol"}
-        self.scalars = {v.fortran_name: v for v in self.variables if v.role == "scalar"}
+        # Role-keyed lookups -- ``builder.arrays`` is the canonical
+        # ARRAY (rank>0) dict, ``builder.scalars`` is rank-0, etc.
+        #
+        # Collision resolution: when multiple VarInfos share the same
+        # short ``fortran_name`` -- typically a kernel-entry block-arg
+        # ARRAY whose Fortran name happens to match a SCALAR dummy of
+        # an inlined helper subroutine (graupel's
+        # ``qr(ivec, k_v)`` 2D arg vs an inlined-callee scalar
+        # ``qr``) -- the extract_vars Pass-0 disambiguation skips
+        # entry-scope block args by design (renaming one would mint
+        # a phantom flat-scalar SDFG kwarg).  The colliding callee
+        # SCALAR then leaked into ``builder.scalars`` AND the
+        # ``builder.arrays`` array, causing emit_tasklet's
+        # ``r_arr | r_scl`` token classifier to fire BOTH paths --
+        # adding a spurious ``qr[0]`` 1D memlet that failed validation
+        # against the 2D ``qr`` shape.
+        #
+        # Fix: when a name appears in both ARRAY and SCALAR roles,
+        # ARRAY wins (the array IS the user-visible top-level entity;
+        # the colliding scalar is an inlined-callee remnant whose
+        # accesses route to the array via the same designate
+        # rewriting that produces the 2D AccessInfo for the
+        # surrounding statement).  Detected at builder-init time so
+        # downstream code (emit_tasklet, access.py, descriptors.py)
+        # never sees the inconsistency.
+        array_names = {v.fortran_name for v in self.variables
+                        if v.role in ("array", "view_alias", "section_alias")}
+        symbol_names = {v.fortran_name for v in self.variables if v.role == "symbol"}
+        self.arrays = {v.fortran_name: v for v in self.variables
+                        if v.role in ("array", "view_alias", "section_alias")}
+        self.symbols = {v.fortran_name: v for v in self.variables
+                        if v.role == "symbol" and v.fortran_name not in array_names}
+        self.scalars = {v.fortran_name: v for v in self.variables
+                        if v.role == "scalar"
+                        and v.fortran_name not in array_names
+                        and v.fortran_name not in symbol_names}
+        # Post-condition: the three role-keyed dicts are disjoint.
+        # A name in two of them is a Pass-0 disambiguation gap and
+        # surfaces downstream as the spurious-edge / wrong-rank shape
+        # described above.  Loud-fail here so the gap is caught at
+        # extract time, not at SDFG validation 200 states later
+        # with an opaque ``InvalidSDFGEdgeError``.
+        _array_keys = set(self.arrays)
+        _symbol_keys = set(self.symbols)
+        _scalar_keys = set(self.scalars)
+        _ax = _array_keys & _scalar_keys
+        _ay = _array_keys & _symbol_keys
+        _xy = _scalar_keys & _symbol_keys
+        if _ax or _ay or _xy:
+            collisions = sorted(_ax | _ay | _xy)
+            raise RuntimeError(
+                f"variable name collision across role-keyed dicts: {collisions[:5]}.  "
+                "A VarInfo's Fortran short name appears in more than one of "
+                "builder.arrays / builder.scalars / builder.symbols after the "
+                "array-wins de-collision -- means Pass-0 disambiguation in "
+                "extract_vars.cpp didn't catch a same-name shadow (typically "
+                "an inlined-callee scalar dummy whose name matches an outer "
+                "array).  Fix in the disambiguation pass; downstream code "
+                "assumes the three dicts are disjoint.")
         # Per-axis offset symbols: ``offset_<arr>_d<i>`` is the SDFG
         # symbol every memlet of array ``<arr>`` subtracts on dim ``i``.
         # Populated by ``add_descriptors`` from each VarInfo's

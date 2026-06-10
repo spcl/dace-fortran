@@ -143,6 +143,18 @@ def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect
     tokens = set(re.findall(r'[a-zA-Z_]\w*', assign_node.expr))
     r_arr = tokens & set(builder.arrays)
     r_scl = tokens & set(builder.scalars)
+    # A name can collide between ``builder.arrays`` and
+    # ``builder.scalars`` when ``extract_vars``'s inlined-callee
+    # local disambiguation didn't rename a SCALAR dummy whose short
+    # Fortran name matches an outer ARRAY's name -- e.g. graupel's
+    # ``qr(ivec, k_v)`` 2D arg plus an inlined helper that took a
+    # scalar ``qr`` dummy.  The bridge's AccessInfo for the current
+    # statement still carries the array shape (the token came from
+    # a designate over the 2D qr declare), so prefer the array
+    # classification and drop the scalar entry to avoid the
+    # spurious ``_in_qr`` scalar connector + ``qr[0]`` 1D memlet
+    # that fails validation against the 2D ``qr.shape``.
+    r_scl -= r_arr
     target = assign_node.target
 
     # Index arrays (e.g. edge_idx) show up in the RHS token scan but we
