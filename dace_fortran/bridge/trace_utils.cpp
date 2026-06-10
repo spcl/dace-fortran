@@ -129,7 +129,32 @@ std::string traceToDecl(mlir::Value val, int max) {
     // through to the underlying memref so a reduce over an
     // ``hlfir.any %levmask(i_startblk:i_endblk, jk)`` resolves its
     // source array to ``levmask``.
+    //
+    // Struct field designates (``vcut % a``) are different: they
+    // carry a ``componentAttr`` naming the member.  Walking through
+    // would land on the struct base (``vcut``) -- which is NOT the
+    // flattened name the SDFG arglist uses (the bridge's
+    // hlfir-flatten-structs pass produces ``vcut_a`` for DUMMY
+    // args, and the bindings layer maps a MODULE-LEVEL struct
+    // global the same way).  Build the flattened name
+    // ``<parent>_<component>`` from this designate's component
+    // attribute and the recursively-traced parent name.  Mirrors
+    // the ``_QMmFvcut_getEvcut_a`` form Flang produces for the
+    // dummy-arg case AND the flat-name convention the SDFG
+    // arglist uses for module-level struct globals.  QE's
+    // ``vcut_get`` (called from ``g2_convolution`` over a module-
+    // level ``vcut`` global) was the surfacing case -- the libcall
+    // dispatcher's ``traceToDecl`` on the matmul's first operand
+    // had been returning the bare struct name ``vcut`` instead of
+    // ``vcut_a``, causing ``KeyError: 'vcut'`` at SDFG arglist
+    // lookup.
     if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(d)) {
+      if (auto comp = dg.getComponentAttr()) {
+        auto parent = traceToDecl(dg.getMemref(), max - i);
+        if (!parent.empty()) {
+          return parent + "_" + comp.getValue().str();
+        }
+      }
       val = dg.getMemref();
       continue;
     }
