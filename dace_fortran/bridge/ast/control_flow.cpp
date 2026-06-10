@@ -263,8 +263,26 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign,
         auto src = apply.getExpr();
         if (auto *srcOp = src.getDefiningOp()) {
           // Inner elemental -> existing path inlines the body.
-          if (mlir::isa<hlfir::ElementalOp>(srcOp)) {
-            findApplies(src, depth + 1);
+          // Walk the body's yielded value (where the real applies
+          // live) -- ``findApplies(src, ...)`` would just recurse on
+          // the elemental's top-level operands (its shape), missing
+          // every libcall expr-producer the body's apply reads.  QE's
+          // ``vcut_get`` (``MATMUL(TRANSPOSE(...)) / tpi``) flang-
+          // lowers as TWO nested elementals: outer divides by tpi,
+          // inner wraps matmul + ``hlfir.no_reassoc``.  Without this
+          // body-walk, the matmul never lands in
+          // ``kHlfirExprToTransient`` and the inner apply renders as
+          // ``?`` in the consuming tasklet body.
+          if (auto inner_elem = mlir::dyn_cast<hlfir::ElementalOp>(srcOp)) {
+            auto &iregion = inner_elem.getRegion();
+            if (!iregion.empty()) {
+              for (auto &iop : iregion.front()) {
+                if (auto iy = mlir::dyn_cast<hlfir::YieldElementOp>(iop)) {
+                  findApplies(iy.getElementValue(), depth + 1);
+                  break;
+                }
+              }
+            }
             return;
           }
           // Recognised libcall expr-producer -> materialise.
