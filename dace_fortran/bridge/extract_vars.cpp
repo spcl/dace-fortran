@@ -1749,9 +1749,39 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
       // shapes.
       auto rec = mlir::cast<fir::RecordType>(ty);
       std::string globalSym = traceToGlobalSymbol(op.getMemref());
+      // Aggregate field-designate uses across the WHOLE alias chain
+      // that ultimately bottoms out at this module-level declare:
+      // direct designates on ``op.getResult(0)`` PLUS designates on
+      // any further ``hlfir.declare`` that takes our result as its
+      // memref (e.g. an inlined callee's ``intent(in) :: vcut``
+      // dummy whose memref is the module ``%735#0``).  QE's
+      // ``vcut`` shape: the module declare ``_QMexx_baseEvcut`` has
+      // ZERO direct designates -- every ``vcut % a`` / ``vcut % cutoff``
+      // hits via the inlined ``vcut_get`` / ``vcut_spheric_get``
+      // dummy declares (their uniq_name carries the F-scope
+      // ``_QMcoulomb_vcut_moduleFvcut_getEvcut`` form).  Without
+      // walking the alias chain we'd see zero designates on the
+      // module declare and emit zero per-field VarInfos -- exactly
+      // the original ``KeyError: 'vcut_a'`` reproducer.
       auto designates_it = designatesByDecl.find(op.getOperation());
-      bool hasFieldUses = (designates_it != designatesByDecl.end() &&
-                           !designates_it->second.empty());
+      std::vector<hlfir::DesignateOp> allDesignates;
+      if (designates_it != designatesByDecl.end())
+        for (auto dg : designates_it->second)
+          allDesignates.push_back(dg);
+      // Walk users of the module declare's result for inlined-callee
+      // alias declares.  One hop only at first cut; if the bridge
+      // surfaces a multi-hop alias chain in practice, extend with
+      // a transitive walk bounded to ~8 levels.
+      for (auto* u : op.getResult(0).getUsers()) {
+        auto aliasDecl = mlir::dyn_cast_or_null<hlfir::DeclareOp>(u);
+        if (!aliasDecl) continue;
+        if (aliasDecl == op) continue;  // skip self
+        auto aliasIt = designatesByDecl.find(aliasDecl.getOperation());
+        if (aliasIt == designatesByDecl.end()) continue;
+        for (auto dg : aliasIt->second)
+          allDesignates.push_back(dg);
+      }
+      bool hasFieldUses = !allDesignates.empty();
       if (!globalSym.empty() && hasFieldUses) {
         // Recursive emit: walk the (struct, field) chain, generating
         // one VarInfo per LEAF field whose type is a supported
@@ -1801,8 +1831,31 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
               // Collect user designates of designateResult that
               // carry a component attribute -- each one is one
               // more level of nesting.
+              //
+              // Also follow ALIAS DECLARES: a user that's another
+              // ``hlfir.declare`` taking ``designateResult`` as its
+              // memref is an inlined-callee dummy alias of the
+              // module-level struct (QE's ``vcut_get`` /
+              // ``vcut_spheric_get`` dummies aliasing
+              // ``_QMexx_baseEvcut``).  Walk the alias's result
+              // users to discover field designates one level
+              // deeper.  Bounded by the same ``depth`` budget.
               std::set<std::string> componentsSeen;
-              for (auto* u : designateResult.getUsers()) {
+              // Build a flat list of (sub)results whose users we
+              // want to scan for field designates: the
+              // ``designateResult`` itself plus the result of any
+              // ALIAS DECLARE (an inlined-callee dummy that took
+              // the module-level struct as its memref).  Skipping
+              // the alias hop means the module-level declare sees
+              // zero designates (QE's vcut shape) and the
+              // per-field synthesis emits nothing.
+              llvm::SmallVector<mlir::Value, 4> scanRoots;
+              scanRoots.push_back(designateResult);
+              for (auto* u : designateResult.getUsers())
+                if (auto ad = mlir::dyn_cast_or_null<hlfir::DeclareOp>(u))
+                  scanRoots.push_back(ad.getResult(0));
+              for (auto root : scanRoots)
+              for (auto* u : root.getUsers()) {
                 auto childDg =
                     mlir::dyn_cast_or_null<hlfir::DesignateOp>(u);
                 if (!childDg) continue;

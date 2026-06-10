@@ -138,6 +138,54 @@ end module
     assert "g_c" in sdfg.arrays or "g_c" in sdfg.scalars or "g_c" in sdfg.symbols
 
 
+def test_module_level_struct_accessed_via_inlined_callee_alias(tmp_path):
+    """QE's ``vcut`` shape: the module-level struct global is passed
+    to a callee as ``intent(in) :: vcut``; the callee accesses
+    ``vcut % a``.  After ``hlfir-inline-all`` runs the callee inline,
+    the field designate lands on the inlined-callee DUMMY DECLARE
+    (an alias of the module-level declare) -- NOT on the module
+    declare itself.  Before this fix, the bridge's per-field VarInfo
+    synthesis checked ``designatesByDecl[module_decl]`` (empty for
+    this shape) and emitted ZERO per-field VarInfos -- the libcall
+    dispatcher then raised ``KeyError: 'vcut_a'`` at SDFG arglist
+    lookup.
+
+    Fix: aggregate field designates across the alias chain --
+    direct designates on the module declare PLUS designates on any
+    inlined-callee dummy declare whose memref is the module
+    declare's result."""
+    src = """
+module helper_mod
+  type :: t
+    real(kind=8) :: a(3, 3)
+    real(kind=8) :: c
+  end type
+contains
+  subroutine read_field(s, out)
+    type(t), intent(in) :: s
+    real(kind=8), intent(out) :: out
+    out = sum(s % a) + s % c
+  end subroutine
+end module
+module driver_mod
+  use helper_mod
+  type(t) :: g
+contains
+  subroutine driver(out)
+    real(kind=8), intent(out) :: out
+    call read_field(g, out)
+  end subroutine
+end module
+"""
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="_QMdriver_modPdriver").build()
+    # After inline-all, g%a and g%c reach the bridge through the
+    # inlined read_field's ``s`` dummy declare aliasing g.  The
+    # per-field VarInfo synthesis must pick them up via the
+    # alias chain.
+    assert "g_a" in sdfg.arrays, f"expected g_a in arrays: {sorted(sdfg.arrays.keys())}"
+    assert ("g_c" in sdfg.arrays or "g_c" in sdfg.scalars or "g_c" in sdfg.symbols)
+
+
 def test_module_level_struct_field_unaccessed_not_registered(tmp_path):
     """Only field references actually present in the function get
     a VarInfo -- the bridge doesn't speculatively emit every
