@@ -2223,22 +2223,30 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
         struct RedEntry {
           llvm::StringRef op;
           llvm::StringRef wcr;       // DaCe wcr lambda string
-          llvm::StringRef identity;  // initial accumulator value
+          llvm::StringRef identity;  // initial accumulator value (float-typed)
           llvm::StringRef py_op;     // Python binary op for
                                      // section-reduce loop body;
                                      // empty -> fall back to
                                      // buildReduceNode (whole-array)
         };
+        // Identity strings here are the FLOAT-TYPED defaults.  The
+        // ``identityForType`` helper below specialises them per
+        // element type because ``inf`` / ``-inf`` cast to an integer
+        // is undefined behaviour: at -O3 the compiler folds it to
+        // INT_MAX/INT_MIN; at -O0 the un-folded ``INFINITY`` to
+        // ``int`` conversion gives INT_MIN regardless of intent,
+        // breaking integer MINVAL (e.g. NPB LU's class-S tests
+        // surface this as ``MINVAL(arr) == -2147483648`` at -O0).
+        // Identity strings use the bare ``inf`` token (not
+        // ``math.inf``) so DaCe's cppunparse -- which maps
+        // ``inf`` -> ``INFINITY`` via _py2c_reserved -- emits
+        // a valid C++ literal in the section-reduce init
+        // tasklet.  The whole-array Reduce path's eval()
+        // namespace is patched with ``inf=math.inf`` for
+        // the same string.
         static const RedEntry kRedTable[] = {
             {"hlfir.sum", "lambda a, b: a + b", "0", "+"},
             {"hlfir.product", "lambda a, b: a * b", "1", "*"},
-            // Identity strings use the bare ``inf`` token (not
-            // ``math.inf``) so DaCe's cppunparse  --  which maps
-            // ``inf`` -> ``INFINITY`` via _py2c_reserved  --  emits
-            // a valid C++ literal in the section-reduce init
-            // tasklet.  The whole-array Reduce path's eval()
-            // namespace is patched with ``inf=math.inf`` for
-            // the same string.
             {"hlfir.minval", "lambda a, b: min(a, b)", "inf", "min"},
             {"hlfir.maxval", "lambda a, b: max(a, b)", "-inf", "max"},
             // Logical reductions  --  ANY / ALL on ``fir.logical``
@@ -2250,6 +2258,56 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
             // libcall (covers Fortran COUNT's int-cast semantics
             // and the optional ``dim`` argument).
         };
+        // Pick the type-correct identity literal for the reduction
+        // op's element type.  MINVAL / MAXVAL on integer arrays must
+        // initialise with INT_MAX / INT_MIN; ``inf`` / ``-inf`` to
+        // int is undefined behaviour and breaks at -O0 (see
+        // ``tests/integer_reduction_identity_test.py``).
+        auto identityForType = [&](const RedEntry& entry,
+                                   mlir::Type elemTy) -> std::string {
+          // SUM / PRODUCT identities (``0`` / ``1``) are type-
+          // compatible for both int and float -- pass through.
+          if (entry.identity == "0" || entry.identity == "1" ||
+              entry.identity == "True" || entry.identity == "False") {
+            return entry.identity.str();
+          }
+          // MINVAL / MAXVAL: pick the type-correct sentinel.
+          bool isInf = (entry.identity == "inf");
+          bool isNegInf = (entry.identity == "-inf");
+          if (!isInf && !isNegInf) return entry.identity.str();
+          if (auto intTy = mlir::dyn_cast<mlir::IntegerType>(elemTy)) {
+            // Emit the literal min/max value for the integer width.
+            // We use literal integers (not ``std::numeric_limits<>``)
+            // because the builder's ``_parse_reduce_identity``
+            // (emit_library.py:138) round-trips the identity through
+            // Python ``int(s)``: a string of the right literal goes
+            // straight through, while ``std::numeric_limits<>::max()``
+            // forces a separate Python-side parser.  Fortran's INTEGER
+            // KINDs map to MLIR signed integer widths 8/16/32/64;
+            // signed semantics, two's complement min/max.
+            unsigned w = intTy.getWidth();
+            // Two's-complement max = 2^(w-1) - 1, min = -2^(w-1).
+            // ``__int128`` would overflow llvm::APInt construction
+            // from int64; we cap at w == 64 and fall back to the
+            // float identity for wider types (none arise from
+            // Fortran).
+            if (w > 64) return entry.identity.str();
+            int64_t maxVal = (w == 64) ? std::numeric_limits<int64_t>::max()
+                                       : ((int64_t(1) << (w - 1)) - 1);
+            int64_t minVal = (w == 64) ? std::numeric_limits<int64_t>::min()
+                                       : (-(int64_t(1) << (w - 1)));
+            return std::to_string(isInf ? maxVal : minVal);
+          }
+          // Default: float identity (``inf`` / ``-inf``) -- DaCe's
+          // cppunparse maps to ``INFINITY`` / ``-INFINITY``.
+          return entry.identity.str();
+        };
+        // Compute the reduction's element type once; ``sd`` is the
+        // hlfir.minval / maxval / sum / ... op.  Its result type is
+        // the per-element scalar type for these "reduce to scalar"
+        // ops.
+        mlir::Type redElemTy;
+        if (sd->getNumResults() > 0) redElemTy = sd->getResult(0).getType();
         bool matched = false;
         for (auto& e : kRedTable) {
           if (opName == e.op) {
@@ -2286,7 +2344,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
                     }
                   if (hasTrip) {
                     auto built = buildSectionReduceAssign(
-                        assign, dg, e.py_op.str(), e.identity.str());
+                        assign, dg, e.py_op.str(),
+                        identityForType(e, redElemTy));
                     if (!built.empty()) {
                       for (auto& bn : built) nodes.push_back(std::move(bn));
                       emitted = true;
@@ -2309,7 +2368,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
               if (auto* srcOp = srcVal.getDefiningOp())
                 if (auto elem_src = mlir::dyn_cast<hlfir::ElementalOp>(srcOp)) {
                   auto built = buildElementalAnyAllReduce(
-                      assign, elem_src, e.wcr.str(), e.identity.str());
+                      assign, elem_src, e.wcr.str(),
+                      identityForType(e, redElemTy));
                   if (!built.empty()) {
                     for (auto& bn : built) nodes.push_back(std::move(bn));
                     emitted = true;
@@ -2317,8 +2377,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
                 }
             }
             if (!emitted) {
-              nodes.push_back(
-                  buildReduceNode(assign, sd, e.wcr.str(), e.identity.str()));
+              nodes.push_back(buildReduceNode(assign, sd, e.wcr.str(),
+                                              identityForType(e, redElemTy)));
             }
             matched = true;
             break;
