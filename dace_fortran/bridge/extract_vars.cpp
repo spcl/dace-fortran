@@ -1753,62 +1753,111 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
       bool hasFieldUses = (designates_it != designatesByDecl.end() &&
                            !designates_it->second.empty());
       if (!globalSym.empty() && hasFieldUses) {
-        // Emit one VarInfo per UNIQUE component name actually
-        // referenced.  Track names so we don't double-emit when
-        // the same field is read from multiple sites.
-        std::set<std::string> emittedFields;
-        for (auto dg : designates_it->second) {
-          auto compAttr = dg.getComponentAttr();
-          if (!compAttr) continue;
-          std::string compName = compAttr.getValue().str();
-          if (!emittedFields.insert(compName).second) continue;
-          // Look up the member type in the record's type list.
-          mlir::Type memberTy;
-          for (auto& p : rec.getTypeList()) {
-            if (p.first == compName) {
-              memberTy = p.second;
-              break;
-            }
-          }
-          if (!memberTy) continue;
-          VarInfo mv;
-          mv.fortran_name = v.fortran_name + "_" + compName;
-          mv.mangled_name = v.mangled_name + "_" + compName;
-          // Module-level struct fields are transient state, NOT
-          // exposed on the SDFG signature.  Default the intent
-          // empty so descriptors.py classifies them as transients.
-          mv.intent = "";
-          // Member type: walk SequenceType to extract dtype +
-          // shape (same shape extraction as the main path; only
-          // static extents supported at first cut).
-          mlir::Type elemTy = memberTy;
-          if (auto seq = mlir::dyn_cast<fir::SequenceType>(memberTy)) {
-            elemTy = seq.getEleTy();
-            for (auto d : seq.getShape())
-              mv.shape_symbols.push_back(std::to_string(d));
-          }
-          mv.rank = mv.shape_symbols.size();
-          mv.role = (mv.rank > 0) ? "array" : "scalar";
-          // Default lower bound = 1 (Fortran default) per dim.
-          for (size_t d = 0; d < mv.shape_symbols.size(); ++d)
-            mv.lower_bounds.push_back("1");
+        // Recursive emit: walk the (struct, field) chain, generating
+        // one VarInfo per LEAF field whose type is a supported
+        // scalar / array.  For nested records (``g % inner % a``)
+        // the inner field designate's USERS include the further
+        // ``a`` designate, so we recurse through ``designatesByDecl``
+        // / direct users on the SSA result to discover deeper
+        // levels.  Tracks ``visitedKey`` to keep recursion
+        // bounded for cyclic or self-referential type structures.
+        //
+        // Type-to-dtype mapping is shared with the top-level path
+        // via the lambda below; non-supported leaf types
+        // (CharacterType, PointerType, allocatable boxes, ...)
+        // are skipped silently and the downstream traceToDecl
+        // lookup will fail loudly if a kernel actually reads the
+        // unsupported leaf.
+        auto dtypeFor = [](mlir::Type elemTy,
+                           std::string& outDtype) -> bool {
           if (auto fty = mlir::dyn_cast<mlir::FloatType>(elemTy)) {
             unsigned w = fty.getWidth();
-            mv.dtype = (w == 32) ? "fp32"
-                                  : (w == 64) ? "fp64" : "fp" + std::to_string(w);
-          } else if (auto ity = mlir::dyn_cast<mlir::IntegerType>(elemTy)) {
+            outDtype = (w == 32) ? "fp32"
+                                 : (w == 64) ? "fp64" : "fp" + std::to_string(w);
+            return true;
+          }
+          if (auto ity = mlir::dyn_cast<mlir::IntegerType>(elemTy)) {
             unsigned w = ity.getWidth();
-            mv.dtype = (w == 8) ? "i8"
+            outDtype = (w == 8) ? "i8"
                                 : (w == 16) ? "i16"
                                             : (w == 32) ? "i32"
                                                         : (w == 64) ? "i64" : "i" + std::to_string(w);
-          } else if (mlir::isa<fir::LogicalType>(elemTy) || elemTy.isInteger(1)) {
-            mv.dtype = "bool";
-          } else {
-            continue;  // unsupported field type -- skip.
+            return true;
           }
-          vars.push_back(std::move(mv));
-        }
+          if (mlir::isa<fir::LogicalType>(elemTy) || elemTy.isInteger(1)) {
+            outDtype = "bool";
+            return true;
+          }
+          return false;
+        };
+        std::set<std::string> emittedFlatNames;
+        std::function<void(mlir::Value, fir::RecordType,
+                            const std::string&, const std::string&, int)>
+            walkLevel = [&](mlir::Value designateResult,
+                            fir::RecordType levelRec,
+                            const std::string& flatNameBase,
+                            const std::string& mangledBase, int depth) {
+              if (depth > 8) return;  // bounded recursion
+              // Collect user designates of designateResult that
+              // carry a component attribute -- each one is one
+              // more level of nesting.
+              std::set<std::string> componentsSeen;
+              for (auto* u : designateResult.getUsers()) {
+                auto childDg =
+                    mlir::dyn_cast_or_null<hlfir::DesignateOp>(u);
+                if (!childDg) continue;
+                auto childComp = childDg.getComponentAttr();
+                if (!childComp) continue;
+                std::string childName = childComp.getValue().str();
+                if (!componentsSeen.insert(childName).second) continue;
+                mlir::Type childMemberTy;
+                for (auto& p : levelRec.getTypeList())
+                  if (p.first == childName) {
+                    childMemberTy = p.second;
+                    break;
+                  }
+                if (!childMemberTy) continue;
+                std::string newFlat =
+                    flatNameBase + "_" + childName;
+                std::string newMangled =
+                    mangledBase + "_" + childName;
+                // Nested record: recurse into ITS designates.
+                if (auto childRec = mlir::dyn_cast<fir::RecordType>(
+                        childMemberTy)) {
+                  walkLevel(childDg.getResult(), childRec, newFlat,
+                            newMangled, depth + 1);
+                  continue;
+                }
+                // Leaf -- emit a VarInfo if the dtype is
+                // supported.  Memoise on the flat name so two
+                // independent leaf-access sites collapse to one.
+                if (!emittedFlatNames.insert(newFlat).second)
+                  continue;
+                VarInfo mv;
+                mv.fortran_name = newFlat;
+                mv.mangled_name = newMangled;
+                mv.intent = "";
+                mlir::Type elemTy = childMemberTy;
+                if (auto seq = mlir::dyn_cast<fir::SequenceType>(
+                        childMemberTy)) {
+                  elemTy = seq.getEleTy();
+                  for (auto dimd : seq.getShape())
+                    mv.shape_symbols.push_back(std::to_string(dimd));
+                }
+                mv.rank = mv.shape_symbols.size();
+                mv.role = (mv.rank > 0) ? "array" : "scalar";
+                for (size_t d = 0; d < mv.shape_symbols.size(); ++d)
+                  mv.lower_bounds.push_back("1");
+                std::string dtype;
+                if (!dtypeFor(elemTy, dtype)) continue;
+                mv.dtype = dtype;
+                vars.push_back(std::move(mv));
+              }
+            };
+        // Kick off the recursive walk from the struct declare's
+        // own result (the FIRST level of designates).
+        walkLevel(op.getResult(0), rec, v.fortran_name,
+                  v.mangled_name, 0);
       }
       continue;
     } else {

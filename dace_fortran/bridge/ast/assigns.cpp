@@ -94,6 +94,20 @@ std::string buildIndexExpr(mlir::Value v, int d) {
     auto mem = ld.getMemref();
     if (auto *md = mem.getDefiningOp()) {
       if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(md)) {
+        // Struct field load used as an index (``arr(g % idx)``):
+        // the designate has a component attribute and no
+        // subscripts.  Resolve to the flattened scalar name
+        // (``g_idx``) via the component-aware ``traceToDecl`` walk
+        // -- the result is a scalar value, no bracket subscript
+        // needed.  Previously ``traceToDecl(dg.getMemref())``
+        // bypassed the component branch and returned the struct
+        // base ``g``, which then fell through to the
+        // ``arr[<index>]`` brace path emitting ``g[]``.
+        if (dg.getComponentAttr() && dg.getIndices().empty()) {
+          auto flatName = traceToDecl(dg.getResult());
+          if (!flatName.empty()) return flatName;
+          return "?";
+        }
         auto arrName = resolveIndex(dg.getMemref());
         if (arrName.empty()) arrName = traceToDecl(dg.getMemref());
         if (arrName.empty()) return "?";

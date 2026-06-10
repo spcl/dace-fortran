@@ -178,14 +178,11 @@ end module
     np.testing.assert_allclose(out, A @ B)
 
 
-@pytest.mark.xfail(strict=False,
-                   reason=("Nested struct field ``g % inner % a`` -- traceToDecl "
-                           "would need to build ``g_inner_a``, but the "
-                           "recursive walk only handles ONE level of "
-                           "component.  Multi-level struct flatten is a "
-                           "separate gap."))
 def test_module_struct_nested_field(tmp_path):
-    """Nested struct member access (``g % inner % a``) -- known gap."""
+    """Nested struct member access (``g % inner % a``).  Fixed by
+    extending extract_vars's per-field synthesis to RECURSE through
+    record-typed members -- each leaf path emits its own flat
+    VarInfo (``g_inner_a``)."""
     src = """
 module m
   type :: inner_t
