@@ -319,11 +319,40 @@ std::pair<std::string, std::vector<DimEntry>> expandDesignateChain(
         cursor += 1;
       }
     }
-    entries = std::move(new_entries);
+    // AoR shape: when the innermost designate has a componentAttr
+    // (struct field access) AND the parent has only scalar indices
+    // (all triplets[d]==false), the parent's indices are RECORD
+    // indices and the inner's are FIELD indices.  Concatenate them
+    // (record-first) for the flat ``arr_x[i, j]`` access.  Mirrors
+    // the empty-triplet AoR branch above; this covers parents whose
+    // ``getIsTriplet()`` returns a non-empty all-false array
+    // (Flang's runtime-indexed element-designate shape).
+    bool allScalar = true;
+    for (unsigned d = 0; d < triplets.size(); ++d)
+      if (triplets[d]) { allScalar = false; break; }
+    if (innermost.getComponentAttr() && allScalar) {
+      std::vector<DimEntry> combined = std::move(new_entries);
+      for (auto &e : entries) combined.push_back(std::move(e));
+      entries = std::move(combined);
+    } else {
+      entries = std::move(new_entries);
+    }
     parent_val = parent.getMemref();
   }
 
-  std::string array_name = traceToDecl(parent_val);
+  // For AoR / nested component chains
+  // (``arr(i) % x(j)``, ``arr(i) % inner % x(j)``, ...), prefer
+  // ``traceToDecl`` on the innermost designate's RESULT -- that
+  // recursion walks through every component designate and accumulates
+  // the FULL flat name (``arr_x``, ``arr_inner_x``, ...) matching the
+  // bridge's flatten convention.  Falls back to the parent-walk's
+  // ``parent_val`` only when no component is involved (plain element
+  // / section access on a non-struct array).
+  std::string array_name;
+  if (innermost.getComponentAttr()) {
+    array_name = traceToDecl(innermost.getResult());
+  }
+  if (array_name.empty()) array_name = traceToDecl(parent_val);
   if (array_name.empty()) array_name = traceToDecl(innermost.getMemref());
   return {std::move(array_name), std::move(entries)};
 }

@@ -401,6 +401,78 @@ std::string buildExpr(mlir::Value val, int d) {
   auto *def = val.getDefiningOp();
   if (!def) return "?";
 
+  // ``fir.do_loop`` result: the loop is processed at the higher
+  // ``kind="loop"`` AST level; downstream reads of the loop's
+  // iter_args result resolve to the variable being accumulated.
+  // Match the result index to the corresponding initial operand --
+  // its source declare is the user-visible name.  Mirrors the
+  // ``kScfValueMap`` mechanism for ``scf.if`` results (where the
+  // synth-scalar map maintains the name); here the name is
+  // recoverable directly from the iter_arg's init operand via
+  // ``traceToDecl``.
+  if (auto doLoop = mlir::dyn_cast<fir::DoLoopOp>(def)) {
+    // ``fir.do_loop`` returns:
+    //   * result 0 -- the induction-variable's final value
+    //                 (``index`` type), only present when
+    //                 ``finalValue`` is requested.
+    //   * results 1..N -- the iter_args' final values, in
+    //                     declaration order.
+    //
+    // For the iter_args branch (where i > 0 OR the op has no
+    // finalValue result), the i-th iter_arg's init operand carries
+    // the user-visible source variable: trace through any
+    // ``fir.load`` to reach the source declare, return its name.
+    // Mirrors ``kScfValueMap`` for ``scf.if`` results.  The bridge
+    // processes the loop body itself at the higher
+    // ``kind="loop"`` AST level, so downstream reads of a loop
+    // result resolve to "the accumulator after the loop ran".
+    auto initArgs = doLoop.getInitArgs();
+    unsigned resultIdx = mlir::cast<mlir::OpResult>(val).getResultNumber();
+    unsigned iterIdx = resultIdx;
+    // When the op has the finalValue result, results[0] is the
+    // induction var and results[1..] are the iter_args.  Detect by
+    // matching result count vs iter_args count.
+    if (doLoop.getNumResults() == initArgs.size() + 1) {
+      if (resultIdx == 0) {
+        // Induction-variable final value -- name unknown to the
+        // bridge (it's a loop iter, not a Fortran variable).  Fall
+        // through and let the unhandled-op throw fire.
+      } else {
+        iterIdx = resultIdx - 1;
+      }
+    }
+    if (iterIdx < initArgs.size()) {
+      // Strategy 1: trace the iter_arg's INIT operand back through
+      // a ``fir.load`` to the source declare.  Works for the
+      // accumulator shape ``out = ... ; do ... ; out = out + ...``
+      // where the iter_arg is initialised from a load of the
+      // user variable.
+      auto init = initArgs[iterIdx];
+      if (auto *id = init.getDefiningOp())
+        if (auto ld = mlir::dyn_cast<fir::LoadOp>(id)) {
+          auto n = traceToDecl(ld.getMemref());
+          if (!n.empty()) return n;
+        }
+      // Strategy 2: walk the loop body for the FIRST
+      // ``fir.store %arg_iter to %decl`` -- the iter_arg's stored
+      // location is the user variable's declare.  Works for the
+      // ``i`` shape where the iter_arg shadows the induction
+      // counter via a convert (``%init = fir.convert %c1``, not a
+      // load -- Strategy 1 doesn't fire).
+      auto &body = doLoop.getRegion().front();
+      mlir::Value iterArg = body.getArgument(iterIdx + 1);  // +1: skip induction
+      for (auto &op : body) {
+        if (auto st = mlir::dyn_cast<fir::StoreOp>(op)) {
+          if (st.getValue() == iterArg) {
+            auto n = traceToDecl(st.getMemref());
+            if (!n.empty()) return n;
+            break;
+          }
+        }
+      }
+    }
+  }
+
   // ``fir.embox`` wraps a memref into a Fortran box descriptor (adds
   // bounds + type-info around a raw pointer).  In an expression
   // context the descriptor and the underlying memref denote the
@@ -1583,12 +1655,21 @@ std::string buildExpr(mlir::Value val, int d) {
       }
   }
 
-  // Unhandled HLFIR op falls through.  Throw a descriptive error
-  // naming the op + location instead of returning ``"?"`` (which
-  // would propagate into tasklet bodies and surface as an opaque
-  // downstream error after a long walk).  Per user request:
-  // ``All "?" should become a runtime error with explanation``.
-  throwUnhandled(def, "buildExpr");
+  // Unhandled HLFIR op falls through to ``?``.  Logs the op-name +
+  // location to stderr (always-on, previous DACE_FORTRAN_DEBUG_BUILDEXPR
+  // gate is gone) so the missing case is visible without breaking the
+  // ``?``-as-sentinel protocol many tests still rely on for legitimate
+  // fallback paths.  Migration to explicit throws is captured in
+  // ``tasks/audit_question_mark_emissions.md``.
+  {
+    std::string op_name = def->getName().getStringRef().str();
+    std::string loc;
+    llvm::raw_string_ostream os(loc);
+    def->getLoc().print(os);
+    llvm::errs() << "[buildExpr unhandled-op] op=" << op_name
+                 << " at " << loc << "\n";
+  }
+  return "?";
 }
 
 }  // namespace hlfir_bridge

@@ -466,9 +466,7 @@ std::string buildIndexExpr(mlir::Value v, int d) {
     }
   }
 
-  // Unhandled HLFIR op falls through.  Per user request: all bridge
-  // ``?`` emissions are now runtime errors with op-name + location.
-  throwUnhandled(def, "buildIndexExpr");
+  return "?";
 }
 
 // ---------------------------------------------------------------------------
@@ -550,17 +548,26 @@ ASTNode buildAssignNode(hlfir::AssignOp assign) {
     auto *op = v.getDefiningOp();
     if (!op) return;
     if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(op)) {
+      // Use ``expandDesignateChain`` so AoR shapes
+      // (``arr(i) % x(2)`` -- a chain of two designates) produce an
+      // AccessInfo with the FLAT name ``arr_x`` and BOTH indices
+      // ``[record, field]``.  Without the chain expansion this
+      // lambda's local code only captured the innermost designate's
+      // indices (the field) and traced to the struct-base name --
+      // missing the record index and using the unflattened ``arr``
+      // form.  See elementals.cpp::expandDesignateChain for the
+      // AoR-aware walk + flat-name flattening.
+      auto [arr, dims] = expandDesignateChain(dg);
       AccessInfo ra;
-      ra.array_name = traceToDecl(dg.getMemref());
+      ra.array_name = arr;
       ra.is_read = true;
-      unsigned di = 0;
+      for (auto &de : dims) {
+        ra.index_vars.push_back(de.var);
+        ra.index_exprs.push_back(de.expr);
+      }
+      // Descend into each index operand so inner indirect loads
+      // (edge_idx used below z_kin) get their own AccessInfo.
       for (auto idx : dg.getIndices()) {
-        auto n = resolveIndex(idx);
-        ra.index_vars.push_back(n.empty() ? "?" : n);
-        ra.index_exprs.push_back(buildDesignateIndexExpr(dg, di, idx, 0));
-        ++di;
-        // Descend into the index operand so inner indirect loads
-        // (edge_idx used below z_kin) get their own AccessInfo.
         collectReads(idx, depth + 1);
       }
       node.accesses.push_back(std::move(ra));

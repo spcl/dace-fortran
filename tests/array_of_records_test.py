@@ -175,6 +175,41 @@ end module
 
 
 @pytest.mark.xfail(strict=False,
+                   reason=("Multi-level AoS hierarchy ``arr(i) % inner % x(j)``: "
+                           "``expandDesignateChain`` + the AccessInfo fix correctly "
+                           "produce the flat name ``arr_inner_x`` via recursive "
+                           "``traceToDecl``; what's missing is the FLATTEN-STRUCTS "
+                           "pass extension to register a per-(struct, nested-component-path) "
+                           "VarInfo so ``arr_inner_x`` appears in ``builder.arrays``.  "
+                           "Without that, ``arr_inner_x`` is unresolved at SDFG "
+                           "arglist lookup time even though the name is built "
+                           "correctly throughout the access path."))
+def test_aor_multi_level_static_const_indexed(tmp_path):
+    """``arr(i) % inner % x(j)`` -- two levels of struct inside the AoR.
+    Tests that the flat name ``arr_inner_x`` propagates through the
+    designate chain.  Per user request: 'For implementations wrt. AoS
+    struct hierarchies we need to be able to support multiple levels'."""
+    src = """
+module m
+  type :: inner_t
+    real(kind=8) :: x(4)
+  end type
+  type :: outer_t
+    type(inner_t) :: inner
+  end type
+contains
+  subroutine driver(arr, out)
+    type(outer_t), intent(in) :: arr(3)
+    real(kind=8), intent(out) :: out
+    out = arr(1) % inner % x(1) + arr(2) % inner % x(2) + arr(3) % inner % x(3)
+  end subroutine
+end module
+"""
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="_QMmPdriver").build()
+    assert "arr_inner_x" in sdfg.arrays
+
+
+@pytest.mark.xfail(strict=False,
                    reason=("QE's ``tabxx(ia) % box(ir)`` pattern: "
                            "``type(realsp_augmentation), pointer :: tabxx(:)`` "
                            "with ``integer, allocatable :: box(:)`` inside the "

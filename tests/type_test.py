@@ -605,17 +605,6 @@ end subroutine main
     assert (a[2, 0] == 42)
 
 
-@pytest.mark.xfail(strict=False,
-                   reason=("Loop-iter-args result of ``fir.do_loop`` is not yet "
-                           "handled by ``buildExpr``.  Previously silently returned "
-                           "``?`` which propagated into unused code paths; the "
-                           "explicit throw at the unhandled-op fallthrough (per "
-                           "user request 'all ? should become a runtime error') "
-                           "exposes this latent gap.  Fix path: extend "
-                           "``buildExpr`` with a ``fir.do_loop`` result handler "
-                           "(mirror the ``kScfValueMap`` mechanism for "
-                           "``scf.if`` results -- mint a synthetic name and "
-                           "register the loop's accumulated value)."))
 def test_fortran_frontend_func_type_prefix(tmp_path):
     src = """
 module lib
@@ -647,10 +636,6 @@ end subroutine main
     assert (a[0, 0] == 625)
 
 
-@pytest.mark.xfail(strict=False,
-                   reason=("Same ``fir.do_loop`` result handler gap as "
-                           "``test_fortran_frontend_func_type_prefix`` above -- "
-                           "exposed by the unhandled-op throw."))
 def test_fortran_frontend_func_type_body(tmp_path):
     src = """
 module lib
@@ -747,11 +732,6 @@ end subroutine kernel
     np.testing.assert_allclose(d_ref, [val, val * 2.0], rtol=0, atol=0)
 
 
-@pytest.mark.xfail(strict=False,
-                   reason=("Same ``fir.do_loop`` result handler gap as the "
-                           "``test_fortran_frontend_func_type_*`` pair above -- "
-                           "exposed by the unhandled-op throw.  ICON's AoR "
-                           "iteration pattern hits the same path."))
 def test_lift_alloc_array_of_records_icon_pattern(tmp_path):
     """ICON-derived test for the LiftAllocArrayOfRecords pre-pass.
 
