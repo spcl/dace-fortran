@@ -1164,15 +1164,46 @@ std::string buildExpr(mlir::Value val, int d) {
       // ``fir.convert`` (transparent here) and an integer cast on
       // the Python side; nothing extra needed for that.
       static const std::map<llvm::StringRef, std::string> cast_calls = {
+          // ``NINT`` (and ``IDNINT``)  --  round-to-nearest then cast.
           {"llvm.lround.i32.f64", "dace.int32"},
           {"llvm.lround.i32.f32", "dace.int32"},
           {"llvm.lround.i64.f64", "dace.int64"},
           {"llvm.lround.i64.f32", "dace.int64"},
+          // ``llvm.lrint`` (round-to-nearest under current rounding
+          // mode) -- Fortran ``NINT`` may lower to this on some
+          // targets.  Same Python rendering.
+          {"llvm.lrint.i32.f64", "dace.int32"},
+          {"llvm.lrint.i32.f32", "dace.int32"},
+          {"llvm.lrint.i64.f64", "dace.int64"},
+          {"llvm.lrint.i64.f32", "dace.int64"},
       };
       if (auto it = cast_calls.find(cname);
           it != cast_calls.end() && call.getNumOperands() >= 1) {
         return it->second + "(round(" + buildExpr(call.getOperand(0), d + 1) +
                "))";
+      }
+      // ``AINT(x)`` truncating to a float result -- LLVM emits
+      // ``llvm.trunc.f{32,64}``.  Render as ``float{32,64}(int(x))``
+      // so the integer cast truncates and the float widening
+      // restores the kind.  Likewise for ``ANINT`` -> ``llvm.round``,
+      // ``FLOOR`` -> ``llvm.floor``, ``CEILING`` -> ``llvm.ceil``.
+      static const std::map<llvm::StringRef, std::string> float_round = {
+          {"llvm.trunc.f64", "trunc"},
+          {"llvm.trunc.f32", "trunc"},
+          {"llvm.round.f64", "round"},
+          {"llvm.round.f32", "round"},
+          {"llvm.floor.f64", "floor"},
+          {"llvm.floor.f32", "floor"},
+          {"llvm.ceil.f64", "ceil"},
+          {"llvm.ceil.f32", "ceil"},
+          {"llvm.rint.f64", "round"},
+          {"llvm.rint.f32", "round"},
+          {"llvm.nearbyint.f64", "round"},
+          {"llvm.nearbyint.f32", "round"},
+      };
+      if (auto it = float_round.find(cname);
+          it != float_round.end() && call.getNumOperands() >= 1) {
+        return it->second + "(" + buildExpr(call.getOperand(0), d + 1) + ")";
       }
       // Complex division  --  flang lowers ``a / b`` on COMPLEX(8) to
       // ``__divdc3(re_a, im_a, re_b, im_b)`` (and ``__divsc3`` for
@@ -1244,6 +1275,35 @@ std::string buildExpr(mlir::Value val, int d) {
            cname == "_FortranAModuloInteger8") &&
           call.getNumOperands() >= 2) {
         return "floor_mod(" + buildExpr(call.getOperand(0), d + 1) + ", " +
+               buildExpr(call.getOperand(1), d + 1) + ")";
+      }
+      // Fortran ``base ** exponent`` lowers to a runtime ``pow``
+      // helper when the operands are typed combinations the IEEE
+      // ``math.powf`` op can't cover  --  complex base, mixed
+      // kinds, or any integer-exponent shape Flang opts to send
+      // through the runtime.  The Fortran-runtime naming convention
+      // is ``_FortranA<base-kind><exp-kind>``:
+      //
+      //   * ``z`` = complex<f64>, ``c`` = complex<f32>
+      //   * ``d`` = f64,           ``s`` = f32
+      //   * ``i`` = i32,           ``k`` = i64
+      //
+      // and pairs e.g. ``_FortranAzpowi`` = ``complex(8) ** int(4)``,
+      // ``_FortranAdpowk`` = ``real(8) ** int(8)``.  All take
+      // ``(base, exponent)`` and return the base's type.
+      //
+      // Python's ``**`` covers each shape because DaCe lowers it
+      // through ``std::pow`` overloads at codegen time -- one handler
+      // suffices for every variant.  QE's
+      // ``(0.D0, -1.D0) ** nhtol(ih, nt)`` surfaces this as
+      // ``_FortranAzpowi`` and previously yielded a ``?`` tasklet
+      // body because the ``fir.call`` had no handler.
+      if ((cname == "_FortranAzpowi" || cname == "_FortranAzpowk" ||
+           cname == "_FortranAcpowi" || cname == "_FortranAcpowk" ||
+           cname == "_FortranAdpowi" || cname == "_FortranAdpowk" ||
+           cname == "_FortranAspowi" || cname == "_FortranAspowk") &&
+          call.getNumOperands() >= 2) {
+        return "(" + buildExpr(call.getOperand(0), d + 1) + " ** " +
                buildExpr(call.getOperand(1), d + 1) + ")";
       }
     }
