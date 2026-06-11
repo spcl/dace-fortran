@@ -254,16 +254,45 @@ std::pair<std::string, std::vector<DimEntry>> expandDesignateChain(
     if (!parent) break;
     auto triplets = parent.getIsTriplet();
     if (triplets.empty()) {
-      // Element designate (every dim is a scalar)  --  collapse
-      // back to scalar dims.
-      std::vector<DimEntry> new_entries;
+      // Element designate (every dim is a scalar).  Two shapes
+      // bottom out here:
+      //
+      //   * Plain element access of an array (no further struct
+      //     designate inside):  the inner designate's indices are
+      //     dimensional element subscripts that supersede whatever
+      //     the inner had -- overwrite.
+      //
+      //   * Array-of-Records access where the inner is a COMPONENT
+      //     designate with its own field subscript
+      //     (``arr(i) % x(2)``): the parent's indices are the
+      //     RECORD-index (outer dim of the flat ``arr_x``), the
+      //     inner's are the FIELD-index (inner dim).  In Fortran
+      //     column-major, record runs fastest -- but the bridge's
+      //     SDFG arrays for static AoR keep the source order
+      //     (record on dim 0, field on dim 1, matching the
+      //     flat layout the flatten pass produces with shape
+      //     ``[N_records, N_field_elems]``).  PREPEND the parent's
+      //     indices to the existing entries so the flat
+      //     ``arr_x[i, 2]`` access carries both dims.
+      std::vector<DimEntry> parent_entries;
       auto pidxOps = parent.getIndices();
       for (unsigned d = 0; d < pidxOps.size(); ++d) {
         auto idx = pidxOps[d];
         auto n = resolveIndex(idx);
-        new_entries.push_back({n.empty() ? "?" : n, buildIndexExpr(idx, 0)});
+        parent_entries.push_back(
+            {n.empty() ? "?" : n, buildIndexExpr(idx, 0)});
       }
-      entries = std::move(new_entries);
+      // AoR component-chain discriminator: the inner designate has a
+      // componentAttr (struct field access).  In that case prepend.
+      // Otherwise overwrite (the plain nested-element case where the
+      // inner's indices already describe the same data view).
+      if (innermost.getComponentAttr()) {
+        std::vector<DimEntry> combined = std::move(parent_entries);
+        for (auto &e : entries) combined.push_back(std::move(e));
+        entries = std::move(combined);
+      } else {
+        entries = std::move(parent_entries);
+      }
       parent_val = parent.getMemref();
       continue;
     }
