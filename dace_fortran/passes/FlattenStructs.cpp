@@ -2793,21 +2793,46 @@ struct FlattenStructsPass
       auto rec = peelToRecord(argDecl.getResult(0).getType(), outerIsArray,
                               outerShape);
       if (!rec) continue;
-      // AoS dummy args: the local rewrite already handles the
-      // concat shape; the dummy-arg path needs the per-member
-      // block-arg insertion + recipe entry to match.  Static
-      // outer extent only -- dynamic-extent AoS dummies require a
-      // fresh symbol per padded dim AND a shape operand for the
-      // synthesised ``hlfir.declare`` (the verifier rejects
-      // ``!fir.ref<!fir.array<?xT>>`` without shape).  Out of scope
-      // for this session.
+      // AoS dummy args: dynamic-extent outer dims (assumed-shape
+      // ``arr(n)``) are now supported -- ``replaceStructArg``'s
+      // companion declare gets a box-wrapped result type when the
+      // concat'd pointee has any unknown dim (descriptor carries
+      // the extent at runtime), and the bindings layer's
+      // assumed-shape marshalling picks up the actual extent.
+      // Previously a hard bail.
+      //
+      // Guard: skip when ``splitDoubleBufferMembers`` (Step 0.5)
+      // has already consumed this dummy by rewriting every component
+      // designate user to a fresh per-buffer-index dummy.  Detect by
+      // checking whether the argDecl's result still has at least one
+      // user that's an ``hlfir.designate`` with a component attribute
+      // -- if not, the split already handled it and the
+      // ``s_<sym>_<member>`` companions are wired downstream;
+      // processing it again here would mint a conflicting ``s_<member>``
+      // companion (``test_dbuf_split_direct_aor_dummy`` surfaced this).
       if (outerIsArray) {
-        for (auto d : outerShape)
-          if (d == fir::SequenceType::getUnknownExtent()) {
-            outerIsArray = false;  // fallthrough = bail
+        bool hasComponentUse = false;
+        for (auto *u : argDecl.getResult(0).getUsers()) {
+          auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u);
+          if (!dg) continue;
+          if (dg.getComponentAttr()) {
+            hasComponentUse = true;
             break;
           }
-        if (!outerIsArray) continue;
+          // Element designate -- check its users for component
+          // designates (the AoR ``arr(i) % x`` chain leaves a
+          // section/element designate as the user, the component
+          // designate sits one level deeper).
+          for (auto *uu : dg.getResult().getUsers()) {
+            auto inner = mlir::dyn_cast<hlfir::DesignateOp>(uu);
+            if (inner && inner.getComponentAttr()) {
+              hasComponentUse = true;
+              break;
+            }
+          }
+          if (hasComponentUse) break;
+        }
+        if (!hasComponentUse) continue;
       }
 
       Plan p;
@@ -3070,6 +3095,19 @@ struct FlattenStructsPass
       if (!pointee) continue;  // defensive; caller already checked
       auto refTy = fir::ReferenceType::get(pointee);
 
+      // Dynamic-extent companion (assumed-shape outer ``arr(n)``):
+      // ``hlfir.declare`` needs the variable-form ``(box, ref)``
+      // result pair when any dim is unknown (Flang itself emits
+      // the same shape for explicit-shape dummies whose extent
+      // comes from a runtime ``n``).  Pair this with a
+      // ``fir.shape`` operand whose dynamic-dim operands are
+      // pulled from a fresh ``index``-typed value loaded from
+      // the caller-supplied extent symbol -- the bindings layer
+      // populates that symbol at the call boundary.
+      auto extentsForShape = staticArrayExtents(pointee);
+      bool hasDynExtent =
+          mlir::isa<fir::SequenceType>(pointee) && extentsForShape.empty();
+
       bool memberIsArray = mlir::isa<fir::SequenceType>(memTy);
       bool concat = outerIsArray && memberIsArray;
       if (concat) concatMembers.insert(memName);
@@ -3081,11 +3119,39 @@ struct FlattenStructsPass
       mlir::OpBuilder b(&block, std::next(argDecl->getIterator()));
       b.setInsertionPoint(argDecl);
 
-      // Array members need a fir.shape operand for the declare to verify.
-      // For AoS+memberArray (concat), build the concat shape from
-      // the outer dims followed by the member's static extents.
-      auto extents = staticArrayExtents(pointee);
-      mlir::Value shape = emitStaticShape(b, loc, extents);
+      // Array members need a fir.shape operand for the declare to
+      // verify.  For AoS+memberArray (concat), build the concat
+      // shape from the outer dims followed by the member's static
+      // extents.  For dynamic-extent companions, emit a runtime
+      // ``fir.shape`` from a fresh ``index`` value per unknown dim
+      // -- the bindings layer populates the extent symbol.
+      mlir::Value shape;
+      if (!hasDynExtent) {
+        shape = emitStaticShape(b, loc, extentsForShape);
+      } else {
+        // Build a runtime shape op.  Each unknown dim becomes a
+        // ``fir.alloca index`` + immediate ``fir.load`` -- the
+        // bindings emitter populates the alloca at the call site
+        // from the assumed-shape descriptor.  Static dims pass
+        // through as ``arith.constant``.
+        auto seq = mlir::cast<fir::SequenceType>(pointee);
+        auto idxTy = mlir::IndexType::get(ctx);
+        llvm::SmallVector<mlir::Value, 4> dims;
+        for (auto d : seq.getShape()) {
+          if (d == fir::SequenceType::getUnknownExtent()) {
+            auto al = b.create<fir::AllocaOp>(loc, idxTy);
+            auto ld = b.create<fir::LoadOp>(loc, al.getResult());
+            dims.push_back(ld.getResult());
+          } else {
+            dims.push_back(
+                b.create<mlir::arith::ConstantOp>(loc, idxTy,
+                                                   b.getIndexAttr(d))
+                    .getResult());
+          }
+        }
+        auto shapeTy = fir::ShapeType::get(ctx, dims.size());
+        shape = b.create<fir::ShapeOp>(loc, shapeTy, dims).getResult();
+      }
 
       llvm::SmallVector<mlir::Value, 2> operands;
       operands.push_back(newArg);
@@ -3115,8 +3181,17 @@ struct FlattenStructsPass
       }
       attrs.append(declareSegments(b, /*hasShape=*/shape != nullptr));
 
+      // For dynamic-extent companions, the HLFIR variable-form
+      // first result is ``box<array<?xT>>`` (descriptor-aware) not
+      // ``ref<array<?xT>>``.  Mirror the
+      // ``real(8), intent(inout) :: x(3, n)`` lowering at
+      // ``replaceStructArg``'s aosAlloc path (line ~3007).
+      mlir::Type firstResultTy = refTy;
+      if (hasDynExtent) {
+        firstResultTy = fir::BoxType::get(pointee);
+      }
       auto newDecl =
-          b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{refTy, refTy},
+          b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{firstResultTy, refTy},
                                      mlir::ValueRange(operands), attrs);
 
       memberBase[memName] = newDecl.getResult(0);
