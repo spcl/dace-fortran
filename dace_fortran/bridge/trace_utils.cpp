@@ -152,7 +152,51 @@ std::string traceToDecl(mlir::Value val, int max) {
       if (auto comp = dg.getComponentAttr()) {
         auto parent = traceToDecl(dg.getMemref(), max - i);
         if (!parent.empty()) {
-          return parent + "_" + comp.getValue().str();
+          // Flat-name construction is just string join ``parent_member``.
+          // Flang's pointer-companion alloca uses a DOUBLE-underscore
+          // form (``dfftt__nl``) that doesn't collide with our
+          // single-underscore convention as long as Fortran member
+          // names don't start with ``_`` (which they can't -- Fortran
+          // identifiers must start with a letter).  In practice we
+          // walk the module's hlfir.declares for a companion whose
+          // uniq_name ends in ``E<parent>__<member>`` (the
+          // POINTER / ALLOCATABLE struct member snapshot path Flang
+          // synthesises) and prefer THAT name when found, so the
+          // SDFG arglist key matches what the rest of the pipeline
+          // registered.  Falls back to the single-underscore form
+          // when no companion exists (the common case).
+          std::string singleU = parent + "_" + comp.getValue().str();
+          bool wantPtr = false;
+          if (auto attrs = dg.getFortranAttrs()) {
+            auto fa = *attrs;
+            wantPtr =
+                bitEnumContainsAny(fa,
+                    fir::FortranVariableFlagsEnum::pointer) ||
+                bitEnumContainsAny(fa,
+                    fir::FortranVariableFlagsEnum::allocatable);
+          }
+          if (wantPtr) {
+            // Search the enclosing func.func / module for a declare
+            // whose uniq_name's E-scope short tail equals
+            // ``<parent>__<member>``.  Found -> use its name.
+            std::string doubleU = parent + "__" + comp.getValue().str();
+            auto *func =
+                dg->getParentOfType<mlir::func::FuncOp>().getOperation();
+            bool found = false;
+            if (func) {
+              mlir::dyn_cast<mlir::func::FuncOp>(func).walk(
+                  [&](hlfir::DeclareOp candidate) {
+                    if (found) return;
+                    auto un = candidate.getUniqName().str();
+                    auto eP = un.rfind('E');
+                    if (eP == std::string::npos) return;
+                    std::string tail = un.substr(eP + 1);
+                    if (tail == doubleU) found = true;
+                  });
+            }
+            if (found) return doubleU;
+          }
+          return singleU;
         }
       }
       val = dg.getMemref();
