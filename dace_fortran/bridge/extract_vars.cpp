@@ -1638,6 +1638,21 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
       if (!op.getResult(0).use_empty() || !op.getResult(1).use_empty())
         peelPointer = true;
     }
+    // Phantom-pointer drop: a POINTER dummy whose declare has NO
+    // remaining users is a dangling artifact from
+    // ``hlfir-flatten-structs`` (every access was redirected to the
+    // flat companion ``<base>_<member>``).  Without this skip the
+    // declare lands as a phantom scalar VarInfo of dtype
+    // ``!fir.box<!fir.ptr<...>>`` -- the SDFG signature then carries
+    // BOTH the struct-base pointer ``arr`` AND the flat companion
+    // ``arr_x`` for L3-shape ``type(t), pointer :: arr(:)``,
+    // confusing the bindings layer.  L3 ``test_aor_l3_pointer_scalar_member``
+    // surfaced this; the flatten companion is the only one any
+    // downstream tasklet actually reads.
+    if (isPointerAttr && op.getResult(0).use_empty() &&
+        op.getResult(1).use_empty()) {
+      continue;
+    }
     if (isAllocatableAttr || peelPointer) {
       ty = peelTypeLayers(ty);
     } else {

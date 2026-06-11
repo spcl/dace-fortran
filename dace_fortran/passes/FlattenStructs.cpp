@@ -2796,8 +2796,11 @@ struct FlattenStructsPass
       // AoS dummy args: the local rewrite already handles the
       // concat shape; the dummy-arg path needs the per-member
       // block-arg insertion + recipe entry to match.  Static
-      // outer extent only  --  dynamic-extent AoS dummies require
-      // a fresh symbol per padded dim (out of scope).
+      // outer extent only -- dynamic-extent AoS dummies require a
+      // fresh symbol per padded dim AND a shape operand for the
+      // synthesised ``hlfir.declare`` (the verifier rejects
+      // ``!fir.ref<!fir.array<?xT>>`` without shape).  Out of scope
+      // for this session.
       if (outerIsArray) {
         for (auto d : outerShape)
           if (d == fir::SequenceType::getUnknownExtent()) {
@@ -2821,18 +2824,39 @@ struct FlattenStructsPass
         // a flat type with static extents we can replace the
         // single struct dummy with one block arg per leaf.
         // Outer-array nested (``type(t)::s(N)`` where ``t`` is
-        // nested) is left for a follow-up  --  the dummy-arg block-
-        // arg shape would need extra outer-dim handling.
-        if (outerIsArray) continue;
+        // nested): ``collectFlatLeaves`` already prepends ``outerDims``
+        // onto each leaf's intrinsic type (line ~555 docs), so the
+        // produced ``FlatLeaf::leafTy`` carries the outer extent and
+        // ``replaceStructArgNested`` can mint block args of the
+        // concat'd shape.  Without this, the user-flagged multi-level
+        // AoS hierarchy (``arr(i) % inner % x(j)``) stays
+        // unflattened.
         llvm::SmallVector<std::string, 4> prefix;
         llvm::SmallVector<FlatLeaf, 8> leaves;
+        llvm::SmallVector<int64_t, 4> outerDimsForCollect;
+        if (outerIsArray)
+          for (auto d : outerShape) outerDimsForCollect.push_back(d);
         // ``partial=true``: skip unsupported members (CHARACTER, alloc-array-of-
         // records, ...) and flatten the rest, rather than abandoning the whole
         // struct on the first one.  Unaccessed skipped members cost nothing;
         // an accessed skipped member keeps the struct dummy alive (no companion)
         // and is filtered/handled downstream.
-        if (!collectFlatLeaves(rec, prefix, leaves, /*depth=*/0, /*partial=*/true))
-          continue;
+        // When ``outerIsArray``, use the outerDims-taking overload
+        // so leaves carry the outer extent at the front of their
+        // flat shape; otherwise the simpler overload covers the
+        // scalar-struct case.  ``partial`` only applies to the
+        // simpler overload (the outerDims one doesn't support
+        // partial-skip yet -- nested AoR with an unsupported
+        // member would simply not flatten in this path).
+        bool collected;
+        if (outerIsArray) {
+          collected = collectFlatLeaves(rec, prefix, outerDimsForCollect,
+                                        leaves, /*depth=*/0);
+        } else {
+          collected = collectFlatLeaves(rec, prefix, leaves, /*depth=*/0,
+                                        /*partial=*/true);
+        }
+        if (!collected) continue;
         p.nested = true;
         p.leaves = std::move(leaves);
       }

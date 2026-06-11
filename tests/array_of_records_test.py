@@ -134,17 +134,13 @@ end module
 # ----------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=False,
-                   reason=("Pointer AoR (``type(t), pointer :: arr(:)``) "
-                           "currently exposes BOTH ``arr`` (the struct base) "
-                           "AND ``arr_x`` (the flattened field) on the SDFG "
-                           "signature; bindings layer needs work to marshal "
-                           "the pointer descriptor so the SDFG sees only the "
-                           "flat companion.  Probe locked here to flip to "
-                           "PASS when the bindings extension lands."))
 def test_aor_l3_pointer_scalar_member(tmp_path):
-    """``type(t), pointer :: arr(:); arr(i) % x``.  Builds today
-    but the calling convention isn't yet stable."""
+    """``type(t), pointer :: arr(:); arr(i) % x``.  The pointer
+    descriptor (``!fir.box<!fir.ptr<...>>``) has zero users after
+    ``hlfir-flatten-structs`` redirects all accesses to the flat
+    companion ``arr_x``; the phantom-pointer-drop guard in
+    extract_vars.cpp ensures only the flat companion lands on
+    the SDFG signature."""
     src = """
 module m
   type :: t
@@ -174,16 +170,6 @@ end module
 # ----------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=False,
-                   reason=("Multi-level AoS hierarchy ``arr(i) % inner % x(j)``: "
-                           "``expandDesignateChain`` + the AccessInfo fix correctly "
-                           "produce the flat name ``arr_inner_x`` via recursive "
-                           "``traceToDecl``; what's missing is the FLATTEN-STRUCTS "
-                           "pass extension to register a per-(struct, nested-component-path) "
-                           "VarInfo so ``arr_inner_x`` appears in ``builder.arrays``.  "
-                           "Without that, ``arr_inner_x`` is unresolved at SDFG "
-                           "arglist lookup time even though the name is built "
-                           "correctly throughout the access path."))
 def test_aor_multi_level_static_const_indexed(tmp_path):
     """``arr(i) % inner % x(j)`` -- two levels of struct inside the AoR.
     Tests that the flat name ``arr_inner_x`` propagates through the
