@@ -437,10 +437,26 @@ def declare_synth_array(builder, name: str, shape, dtype: str, ctx):
         s_str = str(s).strip()
         if s_str.lstrip('-').isdigit():
             dims.append(int(s_str))
-        else:
-            if s_str not in ctx.sdfg.symbols:
-                ctx.sdfg.add_symbol(s_str, dace.int64)
-            dims.append(dace.symbol(s_str))
+            continue
+        # Compound shape expression (e.g. QE's bridge-derived
+        # ``((offset + extent - 1) - offset + 1)`` for a section-view
+        # transient): parse via sympy so it simplifies AND the leaf
+        # symbol-registration walks the sub-expression's free names
+        # rather than registering the whole string as one identifier
+        # (which DaCe rejects with NameError).  Mirrors the
+        # ``_dim``/``_is_expr`` path used for non-synth arrays a few
+        # screens up.
+        if any(c in s_str for c in '+-*/()'):
+            sym_expr = dace.symbolic.pystr_to_symbolic(s_str)
+            for leaf in sym_expr.free_symbols:
+                leaf_name = str(leaf)
+                if leaf_name not in ctx.sdfg.symbols:
+                    ctx.sdfg.add_symbol(leaf_name, dace.int64)
+            dims.append(sym_expr)
+            continue
+        if s_str not in ctx.sdfg.symbols:
+            ctx.sdfg.add_symbol(s_str, dace.int64)
+        dims.append(dace.symbol(s_str))
     # Fortran-style transient: rank > 1 -> column-major strides so the
     # matmul / transpose / dot_product library nodes (which inherit
     # layout from the source operands' strides) write the result in the
