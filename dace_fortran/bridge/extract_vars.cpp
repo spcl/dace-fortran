@@ -1891,11 +1891,40 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
                 mv.mangled_name = newMangled;
                 mv.intent = "";
                 mlir::Type elemTy = childMemberTy;
+                // Unwrap Box / Heap / Ptr layers for ALLOCATABLE or
+                // POINTER struct members (``INTEGER, ALLOCATABLE :: nlm(:)``
+                // -> ``!fir.box<!fir.heap<!fir.array<?xi32>>>``).  Without
+                // peeling, the dyn_cast<SequenceType> below misses the
+                // wrapped array and the member is dropped from VarInfo
+                // emission -- QE's ``dfftt%nlm`` shape, surfacing as a
+                // nested-bracket memlet ``rhoc[dfftt_nlm[...]]`` because
+                // ``collect_indirect`` doesn't know ``dfftt_nlm`` is an
+                // array.  Unknown-extent dimensions render as ``<flat>_d<i>``
+                // symbols the caller passes alongside the array, matching
+                // the assumed-shape convention used everywhere else in the
+                // bridge.
+                if (auto b = mlir::dyn_cast<fir::BoxType>(childMemberTy))
+                  childMemberTy = b.getEleTy();
+                if (auto h = mlir::dyn_cast<fir::HeapType>(childMemberTy))
+                  childMemberTy = h.getEleTy();
+                if (auto p = mlir::dyn_cast<fir::PointerType>(childMemberTy))
+                  childMemberTy = p.getEleTy();
                 if (auto seq = mlir::dyn_cast<fir::SequenceType>(
                         childMemberTy)) {
                   elemTy = seq.getEleTy();
-                  for (auto dimd : seq.getShape())
-                    mv.shape_symbols.push_back(std::to_string(dimd));
+                  unsigned dimIdx = 0;
+                  for (auto dimd : seq.getShape()) {
+                    if (dimd == fir::SequenceType::getUnknownExtent()) {
+                      // Allocatable: extent only known at runtime --
+                      // synthesise per-dim symbol matching the bridge's
+                      // assumed-shape convention.
+                      mv.shape_symbols.push_back(newFlat + "_d" +
+                                                 std::to_string(dimIdx));
+                    } else {
+                      mv.shape_symbols.push_back(std::to_string(dimd));
+                    }
+                    ++dimIdx;
+                  }
                 }
                 mv.rank = mv.shape_symbols.size();
                 mv.role = (mv.rank > 0) ? "array" : "scalar";
