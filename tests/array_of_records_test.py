@@ -87,17 +87,23 @@ end module
 
 
 @pytest.mark.xfail(strict=False,
-                   reason=("Static AoR with RUNTIME record-index ``arr(i) % x(2)`` -- "
-                           "the bridge captures only the field index ``[2]`` in the "
-                           "AccessInfo (array_name='arr' idx=['2']), losing the "
-                           "outer record index ``i``.  Constant-indexed access "
-                           "(L2 above, ``arr(1)%x(1) + arr(2)%x(2) + arr(3)%x(3)``) "
-                           "works because each (record, field) is a separate "
-                           "designate fully resolved at compile time.  Fix: "
-                           "expandDesignateChain (assigns.cpp) should walk the "
-                           "outer record-element designate AND the field designate "
-                           "and concatenate both indices into the flat AoR array "
-                           "access ``arr_x[i, j]``."))
+                   reason=("Static AoR with RUNTIME record-index ``arr(i) % x(2)`` "
+                           "AND assumed-shape ``arr(n)`` (dynamic outer extent).  "
+                           "Upstream parts work: ``expandDesignateChain`` "
+                           "(elementals.cpp) prepends parent indices, "
+                           "``collectReads`` (assigns.cpp) uses the chain, "
+                           "AccessInfo carries ``arr_x[i, j]`` correctly.  "
+                           "Blocker: ``FlattenStructs.cpp`` line 2802 bails the "
+                           "AoS-dummy flatten when ``outerShape`` has unknown "
+                           "extent -- the synthesised ``hlfir.declare`` would need "
+                           "either (a) a box-wrap of the leaf type so the verifier "
+                           "accepts ``ref<box<array<?xT>>>`` without an explicit "
+                           "shape op, or (b) a synthesised ``fir.shape`` operand "
+                           "from a fresh runtime symbol (``<base>_d0``).  Tried "
+                           "(a) but it interacts with the pointer-AoR L3 path; "
+                           "needs a deeper refactor to gate (a) only for "
+                           "non-pointer assumed-shape AoR.  Out of scope for this "
+                           "turn."))
 def test_aor_l2_static_array_member_loop_indexed(tmp_path):
     """Same shape as L2 but accessed in a runtime-indexed loop --
     verifies the flatten preserves the runtime-index path
