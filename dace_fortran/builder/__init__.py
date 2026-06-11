@@ -327,10 +327,28 @@ MULTI_FILE_PIPELINE = (
 # parser hazards.  ``test`` / ``doctest`` are ``LazyFunction`` wrappers
 # that fail sympify with ``cannot sympify object of type LazyFunction``
 # whenever a string referencing them is parsed (interstate-edge
-# expressions, memlet subsets, etc.).  The bridge renames any matching
-# Fortran identifier to ``program_<name>`` at the SDFG layer; the binding
-# emitter restores the original name on the Python wrapper.
-_RESERVED_DACE_NAMES = frozenset({"test", "doctest"})
+# expressions, memlet subsets, etc.).
+#
+# Sympy also exposes a family of *FunctionClass* attributes  --  ``im``
+# (imaginary part), ``re`` (real part), ``N`` (numeric eval), etc. --
+# whose names commonly appear as Fortran scalars (QE uses ``im`` as a
+# band-index loop counter).  A memlet subset string ``(im + start) - 1``
+# becomes ``sympy.im + Symbol("start") - 1`` after parse, which fails
+# with ``unsupported operand type(s) for +: 'FunctionClass' and
+# 'Symbol'``.  Renaming any matching SDFG entry to ``program_<name>``
+# keeps the parsed expression on plain Symbols.
+#
+# Restricted to ``im`` / ``re`` (sympy's imaginary / real-part
+# ``FunctionClass``  --  the only sympy-attribute clash we've
+# actually seen raise; other reserved names like ``S`` / ``N`` /
+# ``zeta`` / ``gamma`` shadow without raising and are common
+# Fortran physics-variable names, so renaming them would break
+# user-side bindings interfaces that key on the original name).
+#
+# The bridge renames any matching Fortran identifier to ``program_<name>``
+# at the SDFG layer; the binding emitter restores the original name on
+# the Python wrapper.
+_RESERVED_DACE_NAMES = frozenset({"test", "doctest", "im", "re"})
 
 _DACE_NAME_PREFIX = "program_"
 
