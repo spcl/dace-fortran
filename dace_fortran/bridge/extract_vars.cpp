@@ -1866,9 +1866,26 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
               // per-field synthesis emits nothing.
               llvm::SmallVector<mlir::Value, 4> scanRoots;
               scanRoots.push_back(designateResult);
-              for (auto* u : designateResult.getUsers())
+              for (auto* u : designateResult.getUsers()) {
                 if (auto ad = mlir::dyn_cast_or_null<hlfir::DeclareOp>(u))
                   scanRoots.push_back(ad.getResult(0));
+                // Pointer / allocatable AoR module-level case
+                // (QE's ``tabxx(ia) % box(ir)`` -- ``tabxx`` is
+                // ``type(t), pointer :: tabxx(:)`` at module scope).
+                // Access chain is ``fir.load %declare ; designate
+                // %loaded (ia) ; designate %elem {"box"}``.  Walk
+                // through the load -- then through any non-component
+                // (element) designate -- to find the component
+                // designates that name the actual struct fields.
+                if (auto ld = mlir::dyn_cast_or_null<fir::LoadOp>(u)) {
+                  scanRoots.push_back(ld.getResult());
+                  for (auto* lu : ld.getResult().getUsers())
+                    if (auto edg =
+                            mlir::dyn_cast_or_null<hlfir::DesignateOp>(lu))
+                      if (!edg.getComponentAttr())
+                        scanRoots.push_back(edg.getResult());
+                }
+              }
               for (auto root : scanRoots)
               for (auto* u : root.getUsers()) {
                 auto childDg =
