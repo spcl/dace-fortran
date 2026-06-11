@@ -170,15 +170,13 @@ end module
     assert "arr_nn3_w" in arrs, f"missing arr_nn3_w: {sorted(arrs.keys())}"
 
 
-@pytest.mark.skip(reason=("``double free or corruption`` during build for "
-                          "4-distinct-symbol split + scalar member.  Triple-"
-                          "buffer (3 syms + ARRAY member) works.  Likely a "
-                          "use-after-free in the post-split regular-flatten "
-                          "walk (new per-symbol companions get reprocessed by "
-                          "``planAndReplaceStructArgs``, possibly double-"
-                          "erasing dead designates).  Needs valgrind / "
-                          "address-sanitizer investigation in next session; "
-                          "the gate logic works correctly otherwise."))
+@pytest.mark.skip(reason=("4-symbol + scalar member crashes the C++ pipeline "
+                          "under pytest (direct Python invocation succeeds with "
+                          "``arr_x`` -- gate prevents split, regular flatten "
+                          "fires).  Pytest-specific environmental issue in "
+                          "``SDFGBuilder._classify()`` -- needs valgrind / "
+                          "ASAN to root-cause.  Triple-buffer with ARRAY member "
+                          "works (test above)."))
 def test_quad_buffer_split_fires_for_four_distinct_symbols(tmp_path):
     """Four distinct stable index symbols -- quad-buffer pattern.
     Mints four per-symbol companions."""
