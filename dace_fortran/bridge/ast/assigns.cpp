@@ -466,7 +466,9 @@ std::string buildIndexExpr(mlir::Value v, int d) {
     }
   }
 
-  return "?";
+  // Unhandled HLFIR op falls through.  Per user request: all bridge
+  // ``?`` emissions are now runtime errors with op-name + location.
+  throwUnhandled(def, "buildIndexExpr");
 }
 
 // ---------------------------------------------------------------------------
