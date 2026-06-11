@@ -1583,18 +1583,24 @@ std::string buildExpr(mlir::Value val, int d) {
       }
   }
 
-  // Optional diagnostic for the "unhandled HLFIR op" fall-through:
-  // export ``DACE_FORTRAN_DEBUG_BUILDEXPR=1`` to log which op makes a
-  // tasklet emit ``_out_x = ?`` so the missing case can be added
-  // explicitly above.  Off by default to keep build logs quiet.
-  static const bool kDebug =
-      std::getenv("DACE_FORTRAN_DEBUG_BUILDEXPR") != nullptr;
-  if (kDebug) {
+  // Unhandled HLFIR op falls through.  Always log the op-name +
+  // location to stderr (the previous DACE_FORTRAN_DEBUG_BUILDEXPR
+  // gate was off by default, so the diagnostic only fired when an
+  // engineer remembered to set the env var).  Emitting ``?`` is
+  // never correct -- it lands in tasklet bodies, propagates through
+  // expression strings, and surfaces as opaque downstream errors
+  // (``NameError``, ``ValueError``, etc.).  The loud-log makes the
+  // missing case visible without breaking the "?"-as-sentinel
+  // protocol the materialise paths still rely on (those check
+  // ``body == "?"`` and fall back to an alternative path).  Once
+  // every materialise caller is migrated to a throws-on-failure
+  // helper, this return can become an explicit throw.
+  {
     std::string op_name = def->getName().getStringRef().str();
     std::string loc;
     llvm::raw_string_ostream os(loc);
     def->getLoc().print(os);
-    llvm::errs() << "[buildExpr fallthrough] op=" << op_name
+    llvm::errs() << "[buildExpr unhandled-op] op=" << op_name
                  << " at " << loc << "\n";
   }
   return "?";
