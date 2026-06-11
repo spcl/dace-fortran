@@ -228,53 +228,33 @@ def emit_libcall(builder, ctx, n, region):
     state = ctx.flush_and_ensure(builder, region)
 
     # ``hlfir.matmul_transpose`` -- ``C = MATMUL(TRANSPOSE(A), B)``.
-    # Compose into a Transpose libcall (A -> A_T transient) plus a
-    # MatMul libcall (A_T, B -> C) instead of adding a new lib node;
-    # the existing Transpose + MatMul expansions cover every backend
-    # (pure / OpenBLAS / MKL / cuBLAS) at the cost of one transient
-    # copy.  Future fused-cuBLAS / fused-MKL path can swap in a
-    # MatMul with ``transA=True`` once that flag is wired through
-    # SpecializeMatMul.
+    # Emit a single ``MatMul`` with ``transA=True``; the transpose
+    # folds into the BLAS call (``cblas_dgemm(CblasTrans, ...)`` for
+    # MKL / OpenBLAS, ``cublasDgemm`` with ``CUBLAS_OP_T`` for cuBLAS,
+    # and the pure expansion swaps the per-element index pair).  No
+    # transient copy of ``A^T`` is allocated -- the previous emitter
+    # path's transpose-into-transient-then-matmul cost is gone.
+    # ``transB`` is the symmetric case (``MATMUL(A, TRANSPOSE(B))``)
+    # and uses the same path; the bridge fronts only the ``A``-side
+    # case today because Flang's ``hlfir.matmul_transpose`` op covers
+    # the A-side shape, but the option lives on the node for future
+    # B-side detection.
     if n.callee == "matmul_transpose":
         from types import SimpleNamespace
         if len(n.call_args) != 2:
             raise RuntimeError(f"matmul_transpose: expected 2 operands, got {len(n.call_args)}")
-        a_name, b_name = n.call_args
-        a_desc = ctx.sdfg.arrays[a_name]
-        if len(a_desc.shape) != 2:
-            raise NotImplementedError("matmul_transpose: rank != 2 LHS not yet supported")
-        at_shape = [a_desc.shape[1], a_desc.shape[0]]
-        at_name = f"__matmul_t_{builder.nid()}"
-        ctx.sdfg.add_transient(at_name, at_shape, a_desc.dtype)
-        # Synthesise a Transpose libcall ASTNode and reuse the
-        # generic path.  ``ASTNode`` is a read-only C++ binding so
-        # use a duck-typed ``SimpleNamespace`` carrying the field set
-        # the generic emit code reads (kind / callee / target /
-        # target_is_array / call_args / call_arg_subsets / accesses /
-        # reduce_axes / options).
-        t_node = SimpleNamespace(
-            kind="libcall",
-            callee="transpose",
-            target=at_name,
-            target_is_array=True,
-            call_args=[a_name],
-            call_arg_subsets=[''],
-            accesses=[],
-            reduce_axes=[],
-            options={},
-        )
-        emit_libcall(builder, ctx, t_node, region)
-        # Then MatMul of (A_T, B) into the original target.
+        opts = dict(getattr(n, 'options', None) or {})
+        opts["transA"] = True
         m_node = SimpleNamespace(
             kind="libcall",
             callee="matmul",
             target=n.target,
             target_is_array=n.target_is_array,
-            call_args=[at_name, b_name],
-            call_arg_subsets=['', ''],
+            call_args=list(n.call_args),
+            call_arg_subsets=list(getattr(n, 'call_arg_subsets', None) or ['', '']),
             accesses=list(n.accesses),
-            reduce_axes=[],
-            options={},
+            reduce_axes=list(getattr(n, 'reduce_axes', None) or []),
+            options=opts,
         )
         emit_libcall(builder, ctx, m_node, region)
         return
@@ -371,6 +351,17 @@ def emit_libcall(builder, ctx, n, region):
         # 1-based) in ``reduce_axes[0]`` (0-based).
         dim = (n.reduce_axes[0] + 1) if n.reduce_axes else 1
         node = cls(f"{spec.name}_{n.target}_{builder.nid()}", dim=dim)
+    elif spec.node_cls == "MatMul":
+        # Fortran ``MATMUL(TRANSPOSE(A), B)`` lowers via
+        # ``hlfir.matmul_transpose`` which the libcall pre-pass
+        # rewrites to ``callee="matmul"`` + ``options["transA"]=True``;
+        # plumb the flag onto the node so ``SpecializeMatMul`` passes
+        # it through to ``Gemm(transA=True)`` and the BLAS call does
+        # the transpose in-place.
+        opts = getattr(n, 'options', None) or {}
+        node = cls(f"{spec.name}_{n.target}_{builder.nid()}",
+                   transA=bool(opts.get('transA', False)),
+                   transB=bool(opts.get('transB', False)))
     else:
         node = cls(f"{spec.name}_{n.target}_{builder.nid()}")
     state.add_node(node)

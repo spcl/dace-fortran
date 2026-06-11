@@ -1715,6 +1715,57 @@ std::string buildExpr(mlir::Value val, int d) {
       }
   }
 
+  // ``fir.rebox`` -- pointer / box descriptor rebind.  Value-wise
+  // the rebox is transparent: it builds a new descriptor over the
+  // same data with adjusted bounds.  For ``buildExpr`` (value
+  // lookup) just walk through to the input box; the indexing /
+  // descriptor adjustment is handled at the access-info layer.
+  // Surfaces in QE where ``MATMUL(TRANSPOSE(vcut % a), q) / tpi``
+  // produces a rebox to assemble the slab descriptor before the
+  // following ops read it.
+  if (auto rb = mlir::dyn_cast<fir::ReboxOp>(def)) {
+    return buildExpr(rb.getBox(), d + 1);
+  }
+
+  // ``scf.if`` -- structured-if as a value-yielding expression.
+  // Each region ends in an ``scf.yield`` carrying the branch's
+  // result; render as a Python ternary
+  // ``(then_val if cond else else_val)`` so emit_tasklet picks it up
+  // at codegen.  Memlet-subset uses of ``scf.if`` results would
+  // need a separate sympify-safe rendering but no test currently
+  // exercises that path -- the ternary suffices for tasklet bodies.
+  if (auto ifOp = mlir::dyn_cast<mlir::scf::IfOp>(def)) {
+    if (ifOp.getNumResults() == 0) return "?";
+    unsigned resultIdx = 0;
+    for (unsigned i = 0; i < ifOp.getNumResults(); ++i)
+      if (ifOp.getResult(i) == val) { resultIdx = i; break; }
+    auto extractYield = [&](mlir::Region &region) -> std::string {
+      if (region.empty()) return "?";
+      auto &block = region.front();
+      for (auto &op : block) {
+        if (auto y = mlir::dyn_cast<mlir::scf::YieldOp>(op)) {
+          if (resultIdx < y.getNumOperands())
+            return buildExpr(y.getOperand(resultIdx), d + 1);
+        }
+      }
+      return "?";
+    };
+    std::string thenVal = extractYield(ifOp.getThenRegion());
+    std::string elseVal = extractYield(ifOp.getElseRegion());
+    std::string condStr = buildExpr(ifOp.getCondition(), d + 1);
+    return "(" + thenVal + " if " + condStr + " else " + elseVal + ")";
+  }
+
+  // ``hlfir.all`` / ``hlfir.any`` -- whole-array boolean reductions.
+  // Lower to Python ``all(...)`` / ``any(...)`` over the input
+  // expression.  Used by QE's ``IF (ALL(odg(:)))`` at line 286.
+  if (auto allOp = mlir::dyn_cast<hlfir::AllOp>(def)) {
+    return "all(" + buildExpr(allOp.getMask(), d + 1) + ")";
+  }
+  if (auto anyOp = mlir::dyn_cast<hlfir::AnyOp>(def)) {
+    return "any(" + buildExpr(anyOp.getMask(), d + 1) + ")";
+  }
+
   // Unhandled HLFIR op falls through to ``?``.  Logs the op-name +
   // location to stderr (always-on, previous DACE_FORTRAN_DEBUG_BUILDEXPR
   // gate is gone) so the missing case is visible without breaking the
