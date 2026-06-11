@@ -2711,11 +2711,38 @@ struct FlattenStructsPass
     });
     if (bail || sites.empty()) return false;
 
+    // Multi-buffer-toggle gate: a double-buffer pattern requires
+    // MULTIPLE distinct stable index symbols on the SAME
+    // ``(root, member_path)`` -- e.g. ICON dycore's
+    // ``prog(nnow) % w`` + ``prog(nnew) % w`` (two distinct symbols
+    // ``nnow`` and ``nnew`` toggling between physical buffers).  A
+    // single distinct symbol per ``(root, path)`` is just a regular
+    // AoR access through one runtime index; splitting it mints a
+    // false-positive per-symbol companion (QE's
+    // ``tabxx(ia) % box(ir)`` -> ``arr_ia_box`` instead of
+    // ``arr_box``).  Count distinct symbols per ``(root, path)`` and
+    // skip sites that don't meet the >=2 threshold; those fall
+    // through to the regular AoR flatten path in
+    // ``planAndReplaceStructArgs``.
+    std::map<std::pair<void *, std::vector<std::string>>,
+             std::set<std::string>> symsPerPath;
+    for (auto &kv : sites) {
+      symsPerPath[{kv.first.root, kv.first.path}].insert(kv.first.sym);
+    }
+
     bool changed = false;
     for (auto &kv : sites) {
       auto root = mlir::Value::getFromOpaquePointer(kv.first.root);
       auto rootIt = argDecls.find(root);
       if (rootIt == argDecls.end()) continue;
+      // Apply the multi-buffer-toggle gate.
+      auto &symSet = symsPerPath[{kv.first.root, kv.first.path}];
+      if (symSet.size() < 2) {
+        // Single-symbol access on this ``(root, path)`` -- not a
+        // double-buffer pattern.  Leave the chain intact for the
+        // regular AoR flatten.
+        continue;
+      }
       auto &[demangledBase, argDecl] = rootIt->second;
       auto refTy =
           mlir::cast<fir::ReferenceType>(kv.second[0].getResult().getType());
@@ -2804,35 +2831,38 @@ struct FlattenStructsPass
       // Guard: skip when ``splitDoubleBufferMembers`` (Step 0.5)
       // has already consumed this dummy by rewriting every component
       // designate user to a fresh per-buffer-index dummy.  Detect by
-      // checking whether the argDecl's result still has at least one
-      // user that's an ``hlfir.designate`` with a component attribute
-      // -- if not, the split already handled it and the
-      // ``s_<sym>_<member>`` companions are wired downstream;
-      // processing it again here would mint a conflicting ``s_<member>``
-      // companion (``test_dbuf_split_direct_aor_dummy`` surfaced this).
+      // walking through the typical access shapes -- direct designate
+      // users on argDecl, designate on a LOAD of the argDecl (the
+      // pointer / allocatable dummy shape: ``fir.load %arg`` then
+      // designate on the boxed value), and one level of nested
+      // designate (element-then-component AoR chains) -- looking for
+      // any user with a component attribute.  Without this guard
+      // ``test_dbuf_split_direct_aor_dummy`` regressed because the
+      // regular flatten minted a conflicting ``s_<member>`` companion
+      // alongside the split's ``s_<sym>_<member>``.  Without the
+      // LOAD-aware extension, pointer / allocatable dummies (QE L4
+      // ``arr(ia) % box(ir)`` shape) would falsely be skipped because
+      // their access path goes through a ``fir.load`` before any
+      // designate user.
       if (outerIsArray) {
-        bool hasComponentUse = false;
-        for (auto *u : argDecl.getResult(0).getUsers()) {
-          auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u);
-          if (!dg) continue;
-          if (dg.getComponentAttr()) {
-            hasComponentUse = true;
-            break;
-          }
-          // Element designate -- check its users for component
-          // designates (the AoR ``arr(i) % x`` chain leaves a
-          // section/element designate as the user, the component
-          // designate sits one level deeper).
-          for (auto *uu : dg.getResult().getUsers()) {
-            auto inner = mlir::dyn_cast<hlfir::DesignateOp>(uu);
-            if (inner && inner.getComponentAttr()) {
-              hasComponentUse = true;
-              break;
-            }
-          }
-          if (hasComponentUse) break;
-        }
-        if (!hasComponentUse) continue;
+        std::function<bool(mlir::Value)> hasComponentReachable =
+            [&](mlir::Value v) -> bool {
+              for (auto *u : v.getUsers()) {
+                if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u)) {
+                  if (dg.getComponentAttr()) return true;
+                  // Element designate -- recurse on its result for
+                  // the inner component designate.
+                  if (hasComponentReachable(dg.getResult())) return true;
+                }
+                if (auto ld = mlir::dyn_cast<fir::LoadOp>(u)) {
+                  // Pointer / allocatable dummy: load the box, then
+                  // designate on the boxed value.
+                  if (hasComponentReachable(ld.getResult())) return true;
+                }
+              }
+              return false;
+            };
+        if (!hasComponentReachable(argDecl.getResult(0))) continue;
       }
 
       Plan p;

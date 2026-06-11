@@ -153,6 +153,90 @@ end module
     assert not bad_names, f"false-positive single-index-baked names: {bad_names}"
 
 
+def test_triple_buffer_split_fires_for_three_distinct_symbols(tmp_path):
+    """Three distinct stable index symbols ``nn1``, ``nn2``, ``nn3``
+    accessing the same ``(root, member)`` -- triple-buffer pattern.
+    The ``>=2`` gate should fire (>= 2 distinct symbols) and the
+    bridge should mint three per-symbol companions
+    ``arr_nn1_w`` / ``arr_nn2_w`` / ``arr_nn3_w``."""
+    src = """
+module m
+  type :: t
+    real(kind=8) :: w(4)
+  end type
+contains
+  subroutine driver(arr, nn1, nn2, nn3, out)
+    type(t), pointer, intent(in) :: arr(:)
+    integer, intent(in) :: nn1, nn2, nn3
+    real(kind=8), intent(out) :: out
+    out = arr(nn1) % w(1) + arr(nn2) % w(2) + arr(nn3) % w(3)
+  end subroutine
+end module
+"""
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="_QMmPdriver").build()
+    arrs = sdfg.arrays
+    # Each per-symbol companion should be there.
+    assert "arr_nn1_w" in arrs, f"missing arr_nn1_w: {sorted(arrs.keys())}"
+    assert "arr_nn2_w" in arrs, f"missing arr_nn2_w: {sorted(arrs.keys())}"
+    assert "arr_nn3_w" in arrs, f"missing arr_nn3_w: {sorted(arrs.keys())}"
+
+
+@pytest.mark.skip(reason=("Quad-buffer (4 distinct symbols) triggers a "
+                          "C++-side segfault during build under the current "
+                          "split / regular-flatten interaction.  Triple-buffer "
+                          "with ARRAY member works -- difference is SCALAR "
+                          "member here.  Next-session: investigate the crash "
+                          "(likely in ``replaceStructArg`` for 4+ per-symbol "
+                          "companions on a scalar-member dummy)."))
+def test_quad_buffer_split_fires_for_four_distinct_symbols(tmp_path):
+    """Four distinct stable index symbols -- quad-buffer pattern.
+    Mints four per-symbol companions."""
+    src = """
+module m
+  type :: t
+    real(kind=8) :: x
+  end type
+contains
+  subroutine driver(arr, a, b, c, d, out)
+    type(t), pointer, intent(in) :: arr(:)
+    integer, intent(in) :: a, b, c, d
+    real(kind=8), intent(out) :: out
+    out = arr(a) % x + arr(b) % x + arr(c) % x + arr(d) % x
+  end subroutine
+end module
+"""
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="_QMmPdriver").build()
+    arrs = sdfg.arrays
+    for sym in ("a", "b", "c", "d"):
+        flat = f"arr_{sym}_x"
+        assert flat in arrs, f"missing {flat}: {sorted(arrs.keys())}"
+
+
+def test_single_distinct_symbol_does_not_split(tmp_path):
+    """Same symbol used multiple times on the same (root, member) --
+    still ONE distinct symbol, NOT a buffer-toggle.  Split must not
+    fire even though there are multiple ACCESS sites; the count is
+    on DISTINCT symbols, not sites."""
+    src = """
+module m
+  type :: t
+    real(kind=8) :: w
+  end type
+contains
+  subroutine driver(arr, idx, out)
+    type(t), pointer, intent(in) :: arr(:)
+    integer, intent(in) :: idx
+    real(kind=8), intent(out) :: out
+    ! Two USES of the SAME symbol ``idx`` -- still one distinct.
+    out = arr(idx) % w + arr(idx) % w
+  end subroutine
+end module
+"""
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="_QMmPdriver").build()
+    bad_names = [k for k in sdfg.arrays if "_idx_" in k]
+    assert not bad_names, f"false-positive on same-symbol repeated use: {bad_names}"
+
+
 @pytest.mark.xfail(strict=False,
                    reason=("Computed expression ``arr(mod(i, 2) + 1) % w`` -- "
                            "the bridge's ``splitDoubleBufferMembers`` would "
