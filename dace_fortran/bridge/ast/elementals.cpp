@@ -250,6 +250,18 @@ std::pair<std::string, std::vector<DimEntry>> expandDesignateChain(
       parent_val = cv.getValue();
       continue;
     }
+    // Pointer / allocatable dereference: ``fir.load`` between two
+    // designates (QE L4 ``arr(ia) % box(ir)`` shape -- the inner
+    // ``box`` member is allocatable, so its access path is
+    // ``designate %component ; fir.load ; designate %element``).
+    // Walk through the load to find the underlying designate so
+    // the AoR chain stays connected.  Without this the walk
+    // breaks at the load and the record-index ``ia`` is lost
+    // from the AccessInfo.
+    if (auto ld = mlir::dyn_cast<fir::LoadOp>(def)) {
+      parent_val = ld.getMemref();
+      continue;
+    }
     auto parent = mlir::dyn_cast<hlfir::DesignateOp>(def);
     if (!parent) break;
     auto triplets = parent.getIsTriplet();

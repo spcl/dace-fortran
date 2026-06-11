@@ -41,17 +41,6 @@ from _util import build_sdfg, have_flang
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
 
-@pytest.mark.xfail(strict=False,
-                   reason=("CONFIRMED FALSE POSITIVE: QE ``tabxx(ia) % box(ir)`` "
-                           "produces ``arr_ia_box`` instead of ``arr_box``.  "
-                           "``splitDoubleBufferMembers`` treats ``ia`` as a "
-                           "stable buffer symbol when it's just a single-use "
-                           "runtime arg.  Next-session fix: tighten the "
-                           "stable-symbol gate to require MULTIPLE distinct "
-                           "stable indices (the dycore's nnow + nnew toggle) "
-                           "before splitting.  Currently a single use triggers "
-                           "the split.  Verified ICON dycore must still "
-                           "pass: ``tests/icon/dycore/test_solve_nonhydro_parse.py``."))
 def test_no_split_for_runtime_arg_index(tmp_path):
     """Single runtime arg ``ia`` indexing AoR -- NOT a double-buffer
     pattern.  ``splitDoubleBufferMembers`` should NOT fire; the
@@ -181,13 +170,15 @@ end module
     assert "arr_nn3_w" in arrs, f"missing arr_nn3_w: {sorted(arrs.keys())}"
 
 
-@pytest.mark.skip(reason=("Quad-buffer (4 distinct symbols) triggers a "
-                          "C++-side segfault during build under the current "
-                          "split / regular-flatten interaction.  Triple-buffer "
-                          "with ARRAY member works -- difference is SCALAR "
-                          "member here.  Next-session: investigate the crash "
-                          "(likely in ``replaceStructArg`` for 4+ per-symbol "
-                          "companions on a scalar-member dummy)."))
+@pytest.mark.skip(reason=("``double free or corruption`` during build for "
+                          "4-distinct-symbol split + scalar member.  Triple-"
+                          "buffer (3 syms + ARRAY member) works.  Likely a "
+                          "use-after-free in the post-split regular-flatten "
+                          "walk (new per-symbol companions get reprocessed by "
+                          "``planAndReplaceStructArgs``, possibly double-"
+                          "erasing dead designates).  Needs valgrind / "
+                          "address-sanitizer investigation in next session; "
+                          "the gate logic works correctly otherwise."))
 def test_quad_buffer_split_fires_for_four_distinct_symbols(tmp_path):
     """Four distinct stable index symbols -- quad-buffer pattern.
     Mints four per-symbol companions."""

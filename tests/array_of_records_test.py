@@ -183,15 +183,6 @@ end module
     assert "arr_inner_x" in sdfg.arrays
 
 
-@pytest.mark.xfail(strict=False,
-                   reason=("QE's ``tabxx(ia) % box(ir)`` pattern: pointer AoR "
-                           "with an ALLOCATABLE inner array.  ``splitDoubleBufferMembers`` "
-                           "treats single-use runtime indices ``ia``/``ir`` as "
-                           "stable double-buffer symbols and mints "
-                           "``arr_ia_box`` instead of ``arr_box``.  Separate "
-                           "fix in the split pass: gate stable-symbol detection "
-                           "on USAGE PATTERN (must be index-stable across a "
-                           "loop nest, not just any runtime int)."))
 def test_aor_l4_pointer_with_allocatable_inner(tmp_path):
     """Pointer AoR with an allocatable array member -- the QE shape."""
     src = """
