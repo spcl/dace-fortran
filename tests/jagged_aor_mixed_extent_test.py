@@ -32,13 +32,6 @@ from _util import build_sdfg, have_flang
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
 
-@pytest.mark.xfail(strict=False,
-                   reason=("Jagged packing produces 2-D ``g_packed`` but the "
-                           "access path emits a 1-D memlet ``g_packed[0]`` -- "
-                           "validation rejects with ``Memlet subset does not "
-                           "match node dimension``.  Pre-existing gap in the "
-                           "jagged designate rewriter; out of scope for the "
-                           "AoR fixes this turn."))
 def test_jagged_scalar_struct_max_extent_packing(tmp_path):
     """``type :: t; a(3); b(5); c(7); end type`` -- the bridge packs
     into ``g(3, 7)`` (3 members x max-extent 7), accessing
@@ -95,7 +88,6 @@ end module
     assert tuple(int(s) for s in sdfg.arrays["arr_x"].shape) == (3, 4)
 
 
-@pytest.mark.xfail(strict=False, reason="Same jagged-rewriter gap as above")
 def test_min_extent_struct_member_no_overpadding(tmp_path):
     """Struct with one small + one large array member -- the jagged
     packing uses the LARGER extent (max) so the small member's
@@ -129,7 +121,6 @@ end module
         assert tuple(int(s) for s in arrs["g_large"].shape) == (8, )
 
 
-@pytest.mark.xfail(strict=False, reason="Same jagged-rewriter gap as above")
 def test_jagged_then_aor_separate_dummies(tmp_path):
     """Both shapes in the same kernel: a jagged-style struct ``g``
     AND an AoR ``arr``.  Verify they take their respective flatten

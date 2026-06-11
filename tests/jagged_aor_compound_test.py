@@ -134,13 +134,65 @@ end module
 # -----------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=False,
-                   reason=("Full ICON-dycore prog-struct shape: a TOP-level "
-                           "struct ``p`` containing a double-buffered ``prog`` "
-                           "array of records with heterogeneous extent members.  "
-                           "End-to-end test for the compound flatten path -- "
-                           "currently a known gap.  Locked here to lock the "
-                           "contract for the next-session work."))
+def test_double_buffer_member_inside_outer_struct(tmp_path):
+    """Pattern ``p % prog(nnow) % w(1)`` -- double-buffered ``prog``
+    is a POINTER AoR member inside an outer struct ``p``.  Per user
+    request: 'Add support for pattern where the double-buffer member
+    is inside a struct like p%'."""
+    src = """
+module m
+  type :: prog_t
+    real(kind=8) :: w(4)
+  end type
+  type :: nh_t
+    type(prog_t), pointer :: prog(:)
+  end type
+contains
+  subroutine driver(p, nnow, nnew, out)
+    type(nh_t), intent(in) :: p
+    integer, intent(in) :: nnow, nnew
+    real(kind=8), intent(out) :: out
+    out = p % prog(nnow) % w(1) + p % prog(nnew) % w(1)
+  end subroutine
+end module
+"""
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="_QMmPdriver").build()
+    arrs = sdfg.arrays
+    # Both buffer companions should be present.
+    has_buf_split = any("nnow" in k for k in arrs) and any("nnew" in k for k in arrs)
+    assert has_buf_split, f"expected nnow/nnew companions: {sorted(arrs.keys())}"
+
+
+def test_double_buffer_member_nested_two_levels(tmp_path):
+    """Pattern ``p % w % s(nnow)`` -- double-buffered ``s`` is two
+    levels deep (``p`` -> ``w`` -> ``s``).  Per user request: 'also
+    like p%w%s(nnow)'."""
+    src = """
+module m
+  type :: s_t
+    real(kind=8) :: v(3)
+  end type
+  type :: w_t
+    type(s_t), pointer :: s(:)
+  end type
+  type :: p_t
+    type(w_t) :: w
+  end type
+contains
+  subroutine driver(p, nnow, nnew, out)
+    type(p_t), intent(in) :: p
+    integer, intent(in) :: nnow, nnew
+    real(kind=8), intent(out) :: out
+    out = p % w % s(nnow) % v(1) + p % w % s(nnew) % v(1)
+  end subroutine
+end module
+"""
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="_QMmPdriver").build()
+    arrs = sdfg.arrays
+    has_buf_split = any("nnow" in k for k in arrs) and any("nnew" in k for k in arrs)
+    assert has_buf_split, f"expected nnow/nnew companions for nested chain: {sorted(arrs.keys())}"
+
+
 def test_dycore_prog_struct_full_shape(tmp_path):
     """``p % prog(nnow) % w`` -- this is the literal ICON prog struct
     access pattern."""

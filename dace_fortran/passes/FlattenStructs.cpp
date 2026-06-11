@@ -3457,7 +3457,26 @@ struct FlattenStructsPass
       auto casted =
           b.create<fir::ConvertOp>(loc, memberRefTy, rowPtr.getResult());
 
-      memberBase[memName] = casted.getResult();
+      // Synthesise a per-member ``hlfir.declare`` so ``traceToDecl``
+      // can stop at the member view rather than walking through
+      // the ``fir.convert`` + ``fir.coordinate_of`` chain back to
+      // the 2-D ``<base>_packed`` companion (which yields a 2-D
+      // shape for a 1-D access subset and the memlet-dim validator
+      // rejects ``g_packed[0]`` on a 2-D ``g_packed``).  The
+      // ``hlfir.declare`` carries an explicit ``fir.shape`` operand
+      // so the verifier accepts the static-extent member type.
+      auto memberShape =
+          emitStaticShape(b, loc, llvm::ArrayRef<int64_t>{ext});
+      mlir::NamedAttrList memberAttrs;
+      memberAttrs.append(
+          "uniq_name",
+          mlir::StringAttr::get(ctx, baseName + "_" + memName));
+      memberAttrs.append(declareSegments(b, /*hasShape=*/true));
+      auto memberDecl = b.create<hlfir::DeclareOp>(
+          loc, mlir::TypeRange{memberRefTy, memberRefTy},
+          mlir::ValueRange{casted.getResult(), memberShape}, memberAttrs);
+
+      memberBase[memName] = memberDecl.getResult(0);
       ++rowIdx;
     }
 
