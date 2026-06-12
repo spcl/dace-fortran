@@ -1460,6 +1460,37 @@ ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation *srcOp,
   } else {
     unsigned argIdx = 0;
     for (auto operand : srcOp->getOperands()) {
+      // MATMUL fold: ``C = MATMUL(TRANSPOSE(A), B)`` and the
+      // symmetric ``MATMUL(A, TRANSPOSE(B))`` and combined
+      // ``MATMUL(TRANSPOSE(A), TRANSPOSE(B))`` cases.  Flang emits
+      // a separate ``%T = hlfir.transpose %X`` for each transposed
+      // operand and feeds ``%T`` into ``hlfir.matmul``.  Folding
+      // the transpose into the GEMM via ``transA`` / ``transB``
+      // avoids materialising a transposed transient (one fewer
+      // copy + one fewer BLAS call -- the BLAS already handles
+      // transpose in place via ``CblasTrans`` / ``CUBLAS_OP_T``).
+      // The fused ``hlfir.matmul_transpose`` op covers only the
+      // LHS-side; this fold catches the non-fused shapes the
+      // optimised-bufferisation pass leaves behind, plus the RHS
+      // and both-sides cases that don't have a fused op at all.
+      // ``matmul``: both operands eligible for the transpose fold.
+      // ``matmul_transpose``: LHS is already folded by Flang into the
+      // op itself (handled in emit_library.py); only the RHS (arg
+      // index 1) can carry an additional ``hlfir.transpose`` for the
+      // ``MATMUL(TRANSPOSE(A), TRANSPOSE(B))`` case -- detect it
+      // here so the combined call lands as a single
+      // ``MatMul(transA=True, transB=True)``.
+      bool eligibleForFold =
+          (callee == "matmul" && argIdx < 2) ||
+          (callee == "matmul_transpose" && argIdx == 1);
+      if (eligibleForFold) {
+        if (auto *def = operand.getDefiningOp()) {
+          if (auto trans = mlir::dyn_cast<hlfir::TransposeOp>(def)) {
+            n.options[argIdx == 0 ? "transA" : "transB"] = "true";
+            operand = trans.getArray();
+          }
+        }
+      }
       auto [nm, sub] = resolveSliceSubset(operand, callee, argIdx);
       n.call_args.push_back(nm);
       n.call_arg_subsets.push_back(sub);
