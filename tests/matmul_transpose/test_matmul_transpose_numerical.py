@@ -82,11 +82,14 @@ END SUBROUTINE matmul_atb_kernel
                                     out_dir=str(tmp_path / "sdfg"),
                                     entry="matmul_atb_kernel",
                                     name="matmul_atb_kernel")
-    # The matmul fold sets transB=True on the MatMul.  The transpose
-    # materialiser still emits a Transpose libcall whose result is
-    # then unused (the MatMul reads B directly + uses transB at
-    # the BLAS level).  Eliminating the dead Transpose is a
-    # follow-up (transpose-materialiser-skip).
+    # ZERO Transpose libcalls -- materialiser skips, BLAS does
+    # the transpose in-place via transB=True.
+    mm_count = sum(1 for s in sdfg.states() for n in s.nodes()
+                   if type(n).__name__ == "MatMul")
+    tr_count = sum(1 for s in sdfg.states() for n in s.nodes()
+                   if type(n).__name__ == "Transpose")
+    assert mm_count == 1 and tr_count == 0, \
+        f"expected 1 MatMul + 0 Transpose, got mm={mm_count} tr={tr_count}"
     mm = [n for s in sdfg.states() for n in s.nodes()
           if type(n).__name__ == "MatMul"][0]
     assert mm.transB is True, f"expected transB=True, got {mm.transB}"
@@ -118,7 +121,14 @@ END SUBROUTINE matmul_atbt_kernel
                                     out_dir=str(tmp_path / "sdfg"),
                                     entry="matmul_atbt_kernel",
                                     name="matmul_atbt_kernel")
-    # Both flags fold in.  Dead Transpose libcalls may remain
+    # Both flags fold + materialiser skip -- ZERO Transpose libcalls.
+    mm_count = sum(1 for s in sdfg.states() for n in s.nodes()
+                   if type(n).__name__ == "MatMul")
+    tr_count = sum(1 for s in sdfg.states() for n in s.nodes()
+                   if type(n).__name__ == "Transpose")
+    assert mm_count == 1 and tr_count == 0, \
+        f"expected 1 MatMul + 0 Transpose (both fold via BLAS), got mm={mm_count} tr={tr_count}"
+    # Earlier dummy comment retained for grep history:
     # (see B-only case for explanation); fixed by a separate
     # transpose-materialiser-skip pass.
     mm = [n for s in sdfg.states() for n in s.nodes()

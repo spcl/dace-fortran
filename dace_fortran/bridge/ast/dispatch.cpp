@@ -2178,6 +2178,30 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
               // transient.  Covers ``MATMUL(A, TRANSPOSE(B))`` and
               // ``MATMUL(TRANSPOSE(A), TRANSPOSE(B))`` in the default
               // (unfused) HLFIR pipeline.
+              //
+              // SKIP this materialisation when the outer libcall is
+              // ``matmul`` / ``matmul_transpose`` -- the BLAS call's
+              // ``transA`` / ``transB`` flag handles the transpose
+              // in-place (``CblasTrans`` / ``CUBLAS_OP_T``), no
+              // transient + no extra copy.  ``buildLibCallNode``
+              // (assigns.cpp) detects the same shape and sets
+              // ``options[transA/transB]=true`` so the two paths
+              // line up.  For ``matmul``: both arg 0 and arg 1
+              // qualify.  For ``matmul_transpose``: only arg 1
+              // qualifies (LHS transpose is already in the op
+              // itself).
+              bool isMatmulFamily = (e.callee == "matmul" ||
+                                     e.callee == "matmul_transpose");
+              bool foldsViaBlas =
+                  (e.callee == "matmul" && i < 2) ||
+                  (e.callee == "matmul_transpose" && i == 1);
+              if (auto tp = mlir::dyn_cast<hlfir::TransposeOp>(od);
+                  tp && isMatmulFamily && foldsViaBlas) {
+                // Defer to buildLibCallNode -- it will see the
+                // hlfir.transpose operand, set the BLAS flag, and
+                // re-bind to the un-transposed source.
+                continue;
+              }
               if (auto tp = mlir::dyn_cast<hlfir::TransposeOp>(od)) {
                 auto srcVal = tp.getOperand();
                 auto srcName = traceToDecl(srcVal);

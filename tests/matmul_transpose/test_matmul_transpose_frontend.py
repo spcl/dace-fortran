@@ -57,35 +57,32 @@ def test_matmul_of_transpose_lhs_default_lowering(tmp_path):
 
 
 def test_matmul_with_transpose_rhs(tmp_path):
-    """``C = MATMUL(A, TRANSPOSE(B))`` -- separate Transpose + MatMul.
-
-    The libcall dispatch now materialises an inline ``hlfir.transpose``
-    operand into a ``_libsrc_t_<n>`` transient and points the outer
-    ``hlfir.matmul`` at it.
-    """
+    """``C = MATMUL(A, TRANSPOSE(B))`` -- folds into ``MatMul(transB=True)``.
+    The libcall dispatcher now SKIPS materialising the
+    ``hlfir.transpose`` operand when it feeds a matmul (the BLAS
+    flag handles the transpose in-place), so no Transpose libcall
+    is emitted."""
     sdfg = _build("matmul_a_transposeb_probe.f90", "matmul_a_transposeb", tmp_path)
-    classes = _classes(sdfg)
-    assert "Transpose" in classes and "MatMul" in classes, sorted(classes)
+    assert _count(sdfg, "MatMul") == 1, \
+        f"expected exactly one MatMul, got {_count(sdfg, 'MatMul')}"
+    assert _count(sdfg, "Transpose") == 0, \
+        f"expected zero Transpose libcalls (B-transpose folds via transB), got {_count(sdfg, 'Transpose')}"
+    mm = [n for s in sdfg.states() for n in s.nodes()
+          if type(n).__name__ == "MatMul"][0]
+    assert mm.transB is True, f"expected transB=True, got {mm.transB}"
 
 
 def test_matmul_both_transposed(tmp_path):
-    """``C = MATMUL(TRANSPOSE(A), TRANSPOSE(B))``.
-
-    Flang's optimised lowering emits ``hlfir.matmul_transpose`` for
-    the A side (fused) and a separate ``hlfir.transpose`` for the B
-    side.  The bridge maps ``hlfir.matmul_transpose`` to a single
-    ``MatMul`` node with ``transA=True`` -- the A-side transpose
-    folds into the BLAS call (``cblas_dgemm(CblasTrans, ...)``) and
-    no transient is materialised for ``A^T``.  Only the B-side
-    Transpose libcall remains, so the SDFG carries exactly one
-    Transpose + one MatMul; the MatMul's ``transA`` property is
-    True."""
+    """``C = MATMUL(TRANSPOSE(A), TRANSPOSE(B))`` -- both flags fold,
+    zero Transpose libcalls.  The materialiser-skip + buildLibCallNode
+    detection together produce one ``MatMul(transA=True, transB=True)``
+    with NO transient -- BLAS does both transposes in place."""
     sdfg = _build("matmul_transpose_both_probe.f90", "matmul_transpose_both", tmp_path)
-    assert _count(sdfg, "Transpose") == 1, \
-        f"expected one B-side Transpose libcall (A-side folds into MatMul), got {_count(sdfg, 'Transpose')}"
+    assert _count(sdfg, "Transpose") == 0, \
+        f"expected zero Transpose libcalls (both fold via BLAS flags), got {_count(sdfg, 'Transpose')}"
     assert _count(sdfg, "MatMul") == 1, \
         f"expected exactly one MatMul, got {_count(sdfg, 'MatMul')}"
     mm_nodes = [n for s in sdfg.states() for n in s.nodes()
                 if type(n).__name__ == "MatMul"]
-    assert mm_nodes[0].transA is True, \
-        f"MatMul should have transA=True (A-transpose folded in), got transA={mm_nodes[0].transA}"
+    assert mm_nodes[0].transA is True and mm_nodes[0].transB is True, \
+        f"MatMul should have transA=True transB=True, got transA={mm_nodes[0].transA} transB={mm_nodes[0].transB}"

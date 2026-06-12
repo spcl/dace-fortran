@@ -1474,19 +1474,19 @@ ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation *srcOp,
       // optimised-bufferisation pass leaves behind, plus the RHS
       // and both-sides cases that don't have a fused op at all.
       // ``matmul``: both operands eligible for the transpose fold.
-      //
-      // ``matmul_transpose``: skip here.  Flang's optimised
-      // bufferisation has ALREADY routed the LHS transpose into the
-      // op itself, and the RHS (arg index 1) is an ``hlfir.expr``
-      // whose materialiser pre-emits a separate ``Transpose``
-      // libcall into a ``_libsrc_t_<n>`` transient -- folding ``transB=True``
-      // here would double-transpose the materialised view and
-      // surface as the ``MATMUL(TRANSPOSE(A), TRANSPOSE(B))``
-      // numerical mismatch the CI runner caught.  The dead
-      // materialised transient is an optimisation gap (a DCE-pass
-      // away) but the numerical result via the materialised
-      // transpose stays correct.
-      bool eligibleForFold = (callee == "matmul" && argIdx < 2);
+      // ``matmul_transpose``: only arg 1 (RHS) -- the LHS transpose
+      // is already in the op itself.  The materialiser in
+      // ``dispatch.cpp`` SKIPS pre-emitting the Transpose libcall
+      // for these positions, so the operand here IS the original
+      // ``hlfir.transpose`` op (not the materialised transient) and
+      // our ``dyn_cast<TransposeOp>`` succeeds.  Setting the
+      // matching BLAS flag here + re-binding to ``trans.getArray()``
+      // routes the matmul through the un-transposed source -- BLAS
+      // handles the transpose in-place via ``CblasTrans`` /
+      // ``CUBLAS_OP_T``.
+      bool eligibleForFold =
+          (callee == "matmul" && argIdx < 2) ||
+          (callee == "matmul_transpose" && argIdx == 1);
       if (eligibleForFold) {
         if (auto *def = operand.getDefiningOp()) {
           if (auto trans = mlir::dyn_cast<hlfir::TransposeOp>(def)) {
