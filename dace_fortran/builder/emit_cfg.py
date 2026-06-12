@@ -725,18 +725,60 @@ def emit_cond(builder, ctx: '_Ctx', n, region):
     # Trivial cases (a bare name or ``True`` / ``False``) skip the
     # staging.
     if not _is_trivial_bound(cond):
-        sym = f"if_cond_{builder.nid()}"
-        if sym not in ctx.sdfg.symbols:
-            ctx.sdfg.add_symbol(sym, dace.int64)
-        # If the condition references any view_alias array, anchor it
-        # in a state upstream of the interstate-edge assignment so
-        # DaCe's framecode finds a real AccessNode first.
-        pre = _anchor_views_referenced_in_expr(builder, cond, region, pre, ctx.sdfg)
-        nxt = region.add_state(f"pre_{sym}")
-        region.add_edge(pre, nxt, InterstateEdge(assignments={sym: cond}))
-        pre = nxt
-        ctx.cur = nxt
-        cond = sym
+        # Conditions that reference ARRAYS (e.g. graupel's
+        # ``MAX(q_x_1[1,iv,k], q_x_1[5,iv,k], q_x_1[6,iv,k]) > qmin``)
+        # cannot be lifted onto a plain interstate-edge assignment --
+        # DaCe treats bare array names there as Symbols (no connector
+        # + no memlet) and the C++ codegen emits the data pointer
+        # where a scalar was expected (``double* > 1e-15`` type-error
+        # in graupel's ``if_cond_38``).
+        #
+        # Detection: if the bridge populated ``n.accesses`` for the
+        # conditional AND any of the read targets is in
+        # ``builder.arrays``, route through the per-occurrence-
+        # connector tasklet path (same machinery ``emit_tasklet``
+        # uses for assigns) into a fresh ``if_cond_<nid>`` scalar
+        # transient.  The conditional then reads the transient
+        # element-0 as a regular scalar.
+        cond_accesses = list(getattr(n, 'accesses', None) or [])
+        if cond_accesses and any(ac.is_read and ac.array_name in builder.arrays
+                                 for ac in cond_accesses):
+            from types import SimpleNamespace
+            sym = f"if_cond_{builder.nid()}"
+            # Materialise a 1-element transient (so the regular
+            # whole-array-out tasklet path applies) and reroute the
+            # conditional onto its element-0 value.
+            ctx.sdfg.add_transient(sym, (1, ), dace.int64, find_new_name=False)
+            synth = SimpleNamespace(
+                kind='assign', target=sym, expr=cond,
+                target_is_array=False, accesses=cond_accesses,
+            )
+            pre = _anchor_views_referenced_in_expr(builder, cond, region, pre, ctx.sdfg)
+            nxt = region.add_state(f"pre_{sym}")
+            region.add_edge(pre, nxt, InterstateEdge())
+            ctx.cur = nxt
+            # The tasklet writes the boolean as int64 into ``sym[0]``.
+            # ``emit_scalar_assign`` handles the scalar-target case
+            # (and walks the same connector-rewriting logic as
+            # ``emit_tasklet``) so an array-read condition lifts the
+            # exact same way an array-read RHS does.
+            from dace_fortran.builder.emit_tasklet import emit_scalar_assign
+            emit_scalar_assign(builder, ctx, synth)
+            pre = ctx.cur
+            cond = f"{sym}[0]"
+        else:
+            sym = f"if_cond_{builder.nid()}"
+            if sym not in ctx.sdfg.symbols:
+                ctx.sdfg.add_symbol(sym, dace.int64)
+            # If the condition references any view_alias array, anchor it
+            # in a state upstream of the interstate-edge assignment so
+            # DaCe's framecode finds a real AccessNode first.
+            pre = _anchor_views_referenced_in_expr(builder, cond, region, pre, ctx.sdfg)
+            nxt = region.add_state(f"pre_{sym}")
+            region.add_edge(pre, nxt, InterstateEdge(assignments={sym: cond}))
+            pre = nxt
+            ctx.cur = nxt
+            cond = sym
 
     uid = builder.nid()
     cond_block = ConditionalBlock(f"if_{uid}")

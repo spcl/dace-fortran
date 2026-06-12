@@ -1630,13 +1630,27 @@ std::string buildExpr(mlir::Value val, int d) {
           lit = o.str();
         }
       } else {
-        // 17 digits round-trips IEEE-754 binary64 exactly  --
-        // anything less truncates the mantissa and Flang-folded
-        // constants (module ``parameter`` literals etc.) come
-        // out at f32 precision in tasklet code.
-        std::ostringstream o;
-        o << std::setprecision(17) << f.getValueAsDouble();
-        lit = o.str();
+        // Print the SHORTEST decimal that round-trips to the same
+        // binary64 value.  17 digits is the worst-case upper bound
+        // (Steele & White) but ``1e-15`` only needs 1 significant
+        // digit -- printing all 17 (``1.0000000000000001e-15``)
+        // bloats the generated C++ and surfaced as noise in graupel
+        // constants the user flagged.  Try shortest -> longer and
+        // accept the first that round-trips.
+        double dv = f.getValueAsDouble();
+        for (int prec = 1; prec <= 17; ++prec) {
+          std::ostringstream o;
+          o << std::setprecision(prec) << dv;
+          if (std::strtod(o.str().c_str(), nullptr) == dv) {
+            lit = o.str();
+            break;
+          }
+        }
+        if (lit.empty()) {  // non-finite or unexpected
+          std::ostringstream o;
+          o << std::setprecision(17) << dv;
+          lit = o.str();
+        }
       }
       // ``ostringstream`` drops the decimal point for integer-valued
       // doubles (e.g. ``0.0`` -> ``"0"``).  That makes the C++ code

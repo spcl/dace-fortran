@@ -169,6 +169,16 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
       ASTNode n;
       n.kind = "conditional";
       n.condition = buildBoolExpr(firIfOp.getCondition(), 0);
+      // Walk the condition's IR for array-element reads so the
+      // Python emitter can lift the condition into a tasklet when
+      // it references arrays.  Without this, ``emit_cond`` hoists
+      // the rendered string to an interstate-edge assignment, but
+      // DaCe treats array names there as bare Symbols (no
+      // connector + no memlet) and the C++ codegen emits the data
+      // pointer where it expected a scalar (graupel's
+      // ``max(q_x_1, q_x_1, q_x_1)`` if_cond was the surfacer:
+      // ``double* > 1e-15`` type-error).
+      collectReadAccesses(firIfOp.getCondition(), n.accesses, 0);
       if (!firIfOp.getThenRegion().empty())
         n.children = buildAST(firIfOp.getThenRegion().front());
       if (!firIfOp.getElseRegion().empty())
@@ -2436,6 +2446,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       ASTNode n;
       n.kind = "conditional";
       n.condition = buildBoolExpr(ifOp.getCondition(), 0);
+      // Same array-read collection as the ``fir.if`` branch above.
+      collectReadAccesses(ifOp.getCondition(), n.accesses, 0);
       if (!ifOp.getThenRegion().empty())
         n.children = buildAST(ifOp.getThenRegion().front());
       if (!ifOp.getElseRegion().empty())
