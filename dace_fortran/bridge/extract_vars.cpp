@@ -1165,7 +1165,8 @@ static bool globalIsWritten(const std::string& sym, mlir::ModuleOp module,
 // ---------------------------------------------------------------------------
 
 std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
-                                      std::vector<ValueSymbol>* value_symbols) {
+                                      std::vector<ValueSymbol>* value_symbols,
+                                      const std::string &entry_symbol) {
   std::vector<VarInfo> vars;
 
   // Build, with one module walk each, the indices the per-variable passes below
@@ -1184,103 +1185,57 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
   // reset the previous module's overrides would leak into this one.
   clearManglingOverrides();
 
-  // Pass 0: disambiguate inlined-callee locals.  Two procedures with the
-  // same variable name (Fortran's auto-generated ``a`` for ``result(a)``,
-  // or simply two routines that both name a local ``dz``) get inlined into
-  // a common parent and surface as two ``hlfir.declare`` ops with different
-  // full uniq_names but the same ``extractName`` short name.  Downstream
-  // code keys SDFG arrays / scalars by the short name; without
-  // disambiguation the two declares race on one access node.  Rewrite each
-  // colliding inlined-callee declare's uniq_name to encode its source scope.
+  // Pass 0: install entry F-scope for ``extractName``'s on-demand
+  // scope-qualification path (trace_utils.cpp:extractName).
+  //
+  // Replaces a ~100-LoC pre-walk pass that built ownStorageScopes /
+  // byShort maps, then setAttr'd new uniq_names on colliding declares
+  // backed by ``fir.alloca``.  That gated path missed inlined-callee
+  // scalar dummies whose memref is the CALLER's loaded value (not a
+  // fresh alloca) -- graupel's ``cloud_to_rain(qc, qr, t)`` inlining
+  // surfaced as bare ``qc`` / ``qr`` names in the body, shadowing the
+  // outer 2-D arrays and producing the ``_in_qc_0`` unresolved-free-
+  // symbol error.
+  //
+  // New rule (applied in ``extractName`` for every uniq_name):
+  //
+  //   * Entry-scope declares (F-scope == kEntryScope) keep their
+  //     bare short name -- preserves the SDFG signature shape +
+  //     bindings-side ABI.
+  //   * Every NON-entry-scope declare gets ``<F-scope>_<short>``,
+  //     regardless of how its memref is backed.  Covers block args,
+  //     alloca, allocmem, and the inlined-callee-from-load case
+  //     the old pass missed.
+  //   * Module-scope globals (no F segment) keep their bare name.
+  //
+  // No upfront walk, no setAttr mutation, no collision tracking --
+  // every short-name uniqueness decision is local to a single
+  // declare's mangled name.
   {
-    auto getFScope = [](llvm::StringRef un) -> std::string {
-      auto eP = un.rfind('E');
-      if (eP == llvm::StringRef::npos) return {};
-      auto fP = un.rfind('F', eP);
-      if (fP == llvm::StringRef::npos || fP + 1 >= eP) return {};
-      return un.substr(fP + 1, eP - fP - 1).str();
-    };
-    // True iff ``op``'s memref is the variable's OWN storage rather than an
-    // alias of storage named elsewhere: a fresh ``fir.alloca`` /
-    // ``fir.allocmem`` local, or a ``func.func`` entry block argument (the
-    // entry kernel's own dummy).  Aliases (declare-of-declare, embox /
-    // convert / box_addr chains, ``fir.absent``-backed optional dummies)
-    // resolve through ``traceToDecl`` to their source and never mint an
-    // array under their own short name, so they don't participate in
-    // collisions.
-    auto isOwnStorage = [](hlfir::DeclareOp op) -> bool {
-      mlir::Value memref = op.getMemref();
-      if (auto* def = memref.getDefiningOp())
-        return mlir::isa<fir::AllocaOp, fir::AllocMemOp>(def);
-      if (auto ba = mlir::dyn_cast<mlir::BlockArgument>(memref))
-        return mlir::isa_and_nonnull<mlir::func::FuncOp>(
-            ba.getOwner()->getParentOp());
-      return false;
-    };
-    // Distinct F-scopes that hold an OWN-STORAGE declare of each short
-    // name.  A short name owned by more than one scope is the
-    // inlined-callee collision shape  --  including a callee local that
-    // shadows an entry dummy of the same name (``implicit_fall``'s local
-    // ``dz`` vs the kernel's ``intent(in) dz`` block argument).  A
-    // pass-through alias (``ze`` received by an inlined callee) is NOT
-    // own storage, so a single genuine local keeps its bare name.
-    llvm::StringMap<llvm::StringSet<>> ownStorageScopes;
-    module.walk([&](hlfir::DeclareOp op) {
-      auto* fn = op->getParentOfType<mlir::func::FuncOp>().getOperation();
-      if (auto f = mlir::dyn_cast_or_null<mlir::func::FuncOp>(fn))
-        if (f.isPrivate()) return;
-      if (!isOwnStorage(op)) return;
-      auto un = op.getUniqName().str();
-      ownStorageScopes[extractName(un)].insert(getFScope(un));
-    });
-    // Rename candidates: ``fir.alloca``-backed locals only.  Block-arg
-    // dummies are own storage too (they drive collision detection above)
-    // but renaming one mints a phantom flat scalar that extract_vars would
-    // surface as a top-level program kwarg, so they keep their name; they
-    // are always entry-scope here and skipped by the ``entryScope`` guard
-    // below regardless.
-    llvm::StringMap<llvm::SmallVector<hlfir::DeclareOp, 2>> byShort;
-    module.walk([&](hlfir::DeclareOp op) {
-      auto* fn = op->getParentOfType<mlir::func::FuncOp>().getOperation();
-      if (auto f = mlir::dyn_cast_or_null<mlir::func::FuncOp>(fn))
-        if (f.isPrivate()) return;
-      auto* def = op.getMemref().getDefiningOp();
-      if (!def || !mlir::isa<fir::AllocaOp>(def)) return;
-      byShort[extractName(op.getUniqName().str())].push_back(op);
-    });
-    // Entry's F-scope: the single public ``func.func`` left in the module
-    // (set_entry_symbol made every other function private).  Symbol like
-    // ``_QPmain`` / ``_QMmodPname``  --  the name segment is everything
-    // after the last ``P``, matching ``getFScope``'s F-segment.  Entry
-    // declares keep their original short name; inlined-callee siblings get
-    // ``<callee_scope>_<short>``.
+    // Anchor on the USER-PROVIDED entry symbol if supplied: passes
+    // like ``hlfir-flatten-structs`` rename the public func.func
+    // (``kernel`` -> ``kernel_soa``) but variable declares keep the
+    // ORIGINAL F-scope in their uniq_name (``_QMmodFkernelE<var>``),
+    // so anchoring on the renamed public symbol misclassifies every
+    // entry-scope variable as inlined-callee and double-prefixes it.
+    // Fall back to the public-symbol-derived scope only when no
+    // entry name was passed (legacy callers).
     std::string entryScope;
-    for (auto fn : module.getOps<mlir::func::FuncOp>()) {
-      if (fn.isPrivate()) continue;
-      auto sn = fn.getSymName().str();
-      auto pPos = sn.rfind('P');
-      if (pPos == std::string::npos) continue;
-      entryScope = sn.substr(pPos + 1);
-      break;
-    }
-    for (auto& kv : byShort) {
-      // Only rename a short name owned by more than one procedure.  A
-      // single-owner name (the common case, including same-scope
-      // shape-hint duplicate declares) is unambiguous; leave it alone so
-      // extract_vars dedup downstream handles it.
-      if (ownStorageScopes[kv.getKey()].size() < 2) continue;
-      for (auto op : kv.second) {
-        auto un = op.getUniqName().str();
-        std::string scope = getFScope(un);
-        if (scope == entryScope) continue;  // keep entry's name
-        auto eP = un.rfind('E');
-        std::string shortNm = un.substr(eP + 1);
-        std::string newShort = scope + "_" + shortNm;
-        std::string newUniq = un.substr(0, eP + 1) + newShort;
-        op->setAttr("uniq_name",
-                    mlir::StringAttr::get(op.getContext(), newUniq));
+    if (!entry_symbol.empty()) {
+      auto pPos = entry_symbol.rfind('P');
+      if (pPos != std::string::npos)
+        entryScope = entry_symbol.substr(pPos + 1);
+    } else {
+      for (auto fn : module.getOps<mlir::func::FuncOp>()) {
+        if (fn.isPrivate()) continue;
+        auto sn = fn.getSymName().str();
+        auto pPos = sn.rfind('P');
+        if (pPos == std::string::npos) continue;
+        entryScope = sn.substr(pPos + 1);
+        break;
       }
     }
+    setEntryScope(entryScope);
   }
 
   // Pass 0b: disambiguate multi-callsite duplicates of the same

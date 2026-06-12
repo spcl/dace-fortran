@@ -120,6 +120,20 @@ void setManglingOverride(const std::string &mangled,
 /// module's overrides don't leak into the next one.
 void clearManglingOverrides();
 
+/// Set the entry procedure's F-scope name (e.g. ``"graupel_run"`` for
+/// ``_QMmo_aes_graupelPgraupel_run``).  ``extractName`` consults this
+/// to scope-qualify every NON-entry-scope declare's short name on
+/// demand, replacing the upfront inlined-callee disambiguator pass.
+/// Set once per build, immediately after ``set_entry_symbol``;
+/// cleared together with the override map on each fresh extract.
+/// Per thread.
+void setEntryScope(const std::string &scope);
+
+/// Extract the F-segment of a Fortran mangled name -- the procedure
+/// scope between the last ``F`` and the last ``E``.  Returns "" for
+/// names without an F segment (module globals, type-info metadata).
+std::string getFScope(const std::string &uniq);
+
 /// Trace an SSA value backwards to the hlfir.declare / fir.declare that
 /// introduced it.  Peels fir.convert -> fir.load -> arith.select transparently.
 /// Returns the Fortran name, or "" if the chain breaks before a declare.

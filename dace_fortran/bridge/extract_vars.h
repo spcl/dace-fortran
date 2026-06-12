@@ -137,8 +137,13 @@ struct ValueSymbol {
 /// Walk the module and build one VarInfo per hlfir.declare.  When
 /// ``value_symbols`` is non-null, also collect the array-element-as-symbol
 /// promotions encountered while resolving array extents (see ``ValueSymbol``).
+/// ``entry_symbol`` is the USER-PROVIDED entry name (as passed to
+/// ``set_entry_symbol``, e.g. ``_QMmodPkernel``); its F-scope anchors
+/// the on-demand scope qualification in ``extractName``.  Empty
+/// disables qualification (legacy / standalone callers).
 std::vector<VarInfo> extractVariables(
-    mlir::ModuleOp module, std::vector<ValueSymbol>* value_symbols = nullptr);
+    mlir::ModuleOp module, std::vector<ValueSymbol>* value_symbols = nullptr,
+    const std::string &entry_symbol = "");
 
 /// One entry-subroutine dummy argument, in the caller's pre-flatten view.
 /// Produced by ``extractFortranInterface`` so the binding emitter can

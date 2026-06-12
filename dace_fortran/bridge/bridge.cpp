@@ -201,7 +201,7 @@ class HLFIRModule {
   std::vector<VarInfo> get_variables() {
     if (!module_) return {};
     value_symbols_.clear();
-    return extractVariables(*module_, &value_symbols_);
+    return extractVariables(*module_, &value_symbols_, entry_symbol_);
   }
 
   /// Array-element values promoted to SDFG symbols (``__sym_<arr>_<idx>``)
@@ -419,7 +419,21 @@ class HLFIRModule {
     });
     if (!found)
       throw std::runtime_error("set_entry_symbol: '" + name + "' not found");
+    // Cache the entry symbol so ``extract_variables`` can install the
+    // original F-scope into ``trace_utils.cpp::kEntryScope`` -- later
+    // passes (``hlfir-flatten-structs``' SoA rename, etc.) may change
+    // the public symbol name (e.g. ``kernel`` -> ``kernel_soa``), and
+    // we MUST anchor on the ORIGINAL user-facing scope so declares
+    // whose uniq_name still references the pre-pass scope (``..._FkernelEout``)
+    // are correctly recognised as entry-scope and keep their bare names.
+    entry_symbol_ = name;
   }
+
+  /// The user-provided entry symbol name (as passed to
+  /// ``set_entry_symbol``).  Used by ``extract_variables`` to anchor
+  /// the ``kEntryScope`` used by ``extractName``'s on-demand scope
+  /// qualification.
+  std::string entry_symbol_;
 
   /// Strip the bodies of the named procedures so they become external
   /// declarations *before* ``hlfir-inline-all`` runs.  A ``keep_external``

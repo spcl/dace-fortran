@@ -33,13 +33,62 @@ void setManglingOverride(const std::string &mangled,
   kManglingOverride[mangled] = shortName;
 }
 
-void clearManglingOverrides() { kManglingOverride.clear(); }
+// Per-thread entry F-scope.  Set once per build by ``setEntryScope``,
+// consulted by ``extractName`` to scope-qualify every NON-entry-scope
+// declare's short name on demand.  Empty until set; in that case
+// ``extractName`` skips the scope-qualification (back-compat with
+// callers that haven't migrated to the new flow).
+static thread_local std::string kEntryScope;
+
+void clearManglingOverrides() { kManglingOverride.clear(); kEntryScope.clear(); }
+
+void setEntryScope(const std::string &scope) { kEntryScope = scope; }
+
+std::string getFScope(const std::string &uniq) {
+  // Fortran mangled-name shape: ``_QM<mod>F<func>E<name>`` (with
+  // optional nested ``F`` segments for procedure-internal
+  // procedures).  Take the F immediately before the last E.
+  auto eP = uniq.rfind('E');
+  if (eP == std::string::npos) return {};
+  auto fP = uniq.rfind('F', eP);
+  if (fP == std::string::npos || fP + 1 >= eP) return {};
+  return uniq.substr(fP + 1, eP - fP - 1);
+}
 
 std::string extractName(const std::string &m) {
   auto it = kManglingOverride.find(m);
   if (it != kManglingOverride.end()) return it->second;
   auto p = m.rfind('E');
   std::string name = p != std::string::npos ? m.substr(p + 1) : m;
+
+  // Scope-qualify NON-entry-scope declares' short names on demand.
+  // Replaces the upfront inlined-callee disambiguator pass at
+  // ``extract_vars.cpp:1187`` (which only renamed ``fir.alloca``-
+  // backed declares -- missing the inlined PURE FUNCTION scalar
+  // dummies that arrive backed by the caller's loaded value, which
+  // surfaced as graupel's ``_in_qc_0`` unresolved-free-symbol bug).
+  //
+  // Rule: every declare in a non-entry F-scope gets ``<scope>_<short>``;
+  // entry-scope declares (the kernel's own dummies + locals) keep
+  // their bare short name so the SDFG signature matches the
+  // user-facing Fortran procedure interface.  Module globals
+  // (no F segment) keep their bare name -- they live in the
+  // entry's symbol-table sense.  Empty ``kEntryScope`` (set yet?
+  // legacy caller?) also keeps the bare name.
+  //
+  // Already-prefixed names (the old disambiguator's ``setAttr`` rename
+  // left some IRs with ``scope_short`` as the trailing E segment;
+  // the new logic would otherwise produce ``scope_scope_short``)
+  // are detected by checking whether ``name`` already starts with
+  // ``<scope>_``.
+  if (!kEntryScope.empty()) {
+    std::string scope = getFScope(m);
+    if (!scope.empty() && scope != kEntryScope) {
+      std::string prefix = scope + "_";
+      if (name.compare(0, prefix.size(), prefix) != 0) name = prefix + name;
+    }
+  }
+
   // Sanitize dots  --  flang emits compiler-generated globals like
   // ``_QQro.4xi4.0`` (read-only constant pool for array literals)
   // whose names contain ``.``.  DaCe's ``NestedDict`` reserves
