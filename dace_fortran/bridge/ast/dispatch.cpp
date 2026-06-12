@@ -2435,6 +2435,12 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       ASTNode n;
       n.kind = "conditional";
       n.condition = buildBoolExpr(ifOp.getCondition(), 0);
+      // Walk the condition's IR for array-element reads -- same as
+      // the ``fir.if`` handler at the top of ``walkBlock`` and the
+      // ``scf.if`` handler below.  Without this the Python emitter
+      // has no per-occurrence access info to lift array-read
+      // conditions through the tasklet path.
+      collectReadAccesses(ifOp.getCondition(), n.accesses, 0);
       if (!ifOp.getThenRegion().empty())
         n.children = buildAST(ifOp.getThenRegion().front());
       if (!ifOp.getElseRegion().empty())

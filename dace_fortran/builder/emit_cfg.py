@@ -740,31 +740,72 @@ def emit_cond(builder, ctx: '_Ctx', n, region):
         # uses for assigns) into a fresh ``if_cond_<nid>`` scalar
         # transient.  The conditional then reads the transient
         # element-0 as a regular scalar.
-        cond_accesses = list(getattr(n, 'accesses', None) or [])
-        if cond_accesses and any(ac.is_read and ac.array_name in builder.arrays
-                                 for ac in cond_accesses):
+        # Dedupe accesses by ``(array_name, index_exprs)`` -- the
+        # bridge walker recurses through ``arith.maximumf`` /
+        # ``cmpf`` / ``select`` chains and visits the same
+        # ``hlfir.designate`` from multiple paths, so the raw
+        # accesses list has duplicates (e.g. 20 entries for a,b,c
+        # each accessed once textually).  Dedupe to 1 entry per
+        # unique (name, indices) so the per-occurrence connector
+        # count matches the text-occurrence count.
+        cond_accesses = []
+        if n.accesses:
+            seen_acc = set()
+            for ac in n.accesses:
+                key = (ac.array_name, tuple(ac.index_exprs), ac.is_read)
+                if key in seen_acc:
+                    continue
+                seen_acc.add(key)
+                cond_accesses.append(ac)
+        cond_array_reads = [ac for ac in cond_accesses
+                             if ac.is_read and ac.array_name in builder.arrays]
+        # Only lift via the tasklet path when accesses can be matched
+        # 1:1 to text occurrences -- otherwise we mint connectors that
+        # the rewritten code references but the access list can't
+        # bind to memlets, producing the ``_in_<arr>_<n>`` unresolved-
+        # free-symbol error.  Mismatch surfaces when the bridge
+        # collapsed a slice ``arr[i, 0:4]`` into ONE access while
+        # ``buildBoolExpr`` expanded the slice into FOUR textual
+        # ``arr[i, 0], arr[i, 1], ...`` references (graupel's
+        # ``MIN(kmin[iv,0:4]) >`` shape).
+        if cond_array_reads:
+            from collections import Counter
+            text_occ = Counter()
+            for tok in re.findall(r'\b([A-Za-z_]\w*)\b', cond):
+                if tok in builder.arrays:
+                    text_occ[tok] += 1
+            access_count = Counter()
+            for ac in cond_array_reads:
+                access_count[ac.array_name] += 1
+            mismatched = any(text_occ[k] != access_count[k]
+                              for k in set(text_occ) | set(access_count))
+            if mismatched:
+                cond_array_reads = []  # fall through to legacy path
+        if cond_array_reads:
             from types import SimpleNamespace
             sym = f"if_cond_{builder.nid()}"
-            # Materialise a 1-element transient (so the regular
-            # whole-array-out tasklet path applies) and reroute the
-            # conditional onto its element-0 value.
+            # Materialise a 1-element int64 transient to hold the
+            # boolean (DaCe expects a numeric truthy value on the
+            # branch).  ``emit_tasklet``'s per-occurrence array-read
+            # connector machinery does the rest: each ``arr[i, k]``
+            # reference in the condition becomes ``_in_arr_N`` with
+            # a matching unit memlet.
             ctx.sdfg.add_transient(sym, (1, ), dace.int64, find_new_name=False)
-            synth = SimpleNamespace(
-                kind='assign', target=sym, expr=cond,
-                target_is_array=False, accesses=cond_accesses,
-            )
             pre = _anchor_views_referenced_in_expr(builder, cond, region, pre, ctx.sdfg)
             nxt = region.add_state(f"pre_{sym}")
             region.add_edge(pre, nxt, InterstateEdge())
             ctx.cur = nxt
-            # The tasklet writes the boolean as int64 into ``sym[0]``.
-            # ``emit_scalar_assign`` handles the scalar-target case
-            # (and walks the same connector-rewriting logic as
-            # ``emit_tasklet``) so an array-read condition lifts the
-            # exact same way an array-read RHS does.
-            from dace_fortran.builder.emit_tasklet import emit_scalar_assign
-            emit_scalar_assign(builder, ctx, synth)
-            pre = ctx.cur
+            # ``emit_tasklet`` expects a target-is-array assign whose
+            # ``accesses`` list carries the per-occurrence indices.
+            # The condition value lands in the 0-th element of the
+            # transient via the same path tasklet-array-writes take.
+            synth = SimpleNamespace(
+                kind='assign', target=sym, expr=cond,
+                target_is_array=True, accesses=cond_accesses,
+            )
+            from dace_fortran.builder.emit_tasklet import emit_tasklet
+            emit_tasklet(builder, nxt, synth, builder.nid(), ctx.iter_map)
+            pre = nxt
             cond = f"{sym}[0]"
         else:
             sym = f"if_cond_{builder.nid()}"

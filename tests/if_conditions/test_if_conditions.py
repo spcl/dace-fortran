@@ -79,11 +79,6 @@ END SUBROUTINE
     np.testing.assert_array_equal(out, [0.0, 100.0, 100.0, 0.0])
 
 
-@pytest.mark.xfail(strict=False, reason=(
-    "Bridge collectReadAccesses doesnt reach the array reads in MAX/AND/OR + "
-    "compare chains (arith.maximumf, arith.andi pattern); accesses=0 falls "
-    "back to interstate-edge -> codegen emits double*>scalar -- needs "
-    "elementals.cpp:collectReadAccesses extension for cmp/select/min/max."))
 def test_if_max_over_array_elements(tmp_path):
     """``IF (MAX(a(i), b(i), c(i)) > eps)`` -- the graupel
     ``if_cond_38`` shape: max over multiple array reads.  Bridge
@@ -120,11 +115,6 @@ END SUBROUTINE
     np.testing.assert_array_equal(out, [0.0, 1.0, 0.0, 0.0])
 
 
-@pytest.mark.xfail(strict=False, reason=(
-    "Bridge collectReadAccesses doesnt reach the array reads in MAX/AND/OR + "
-    "compare chains (arith.maximumf, arith.andi pattern); accesses=0 falls "
-    "back to interstate-edge -> codegen emits double*>scalar -- needs "
-    "elementals.cpp:collectReadAccesses extension for cmp/select/min/max."))
 def test_if_logical_chain_mixed(tmp_path):
     """``IF (a(i) > 0 .AND. (b(i) < 1 .OR. c == 0))`` -- chains of
     AND/OR mixing array reads and a scalar.  Each operand needs its
