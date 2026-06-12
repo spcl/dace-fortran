@@ -574,6 +574,77 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
         src = cv.getValue();
       auto* sd = src.getDefiningOp();
       if (!sd) return "?";
+
+      // ``hlfir.elemental`` source -- unfold the elemental body per
+      // index combination and combine with the reduction op.
+      // Surfaces in QE's ``IF (SUM((i - i_real) ** 2) > eps6)`` where
+      // the elemental computes ``(i[k] - i_real[k])**2`` for k=0..2
+      // and SUM reduces.  Constant-extent shape only (matches the
+      // designate branch's ``totalExtent <= 64`` budget).
+      if (auto elem = mlir::dyn_cast<hlfir::ElementalOp>(sd)) {
+        auto shapeVal = elem.getShape();
+        auto* shDef = shapeVal.getDefiningOp();
+        auto shapeOp = mlir::dyn_cast_or_null<fir::ShapeOp>(shDef);
+        if (!shapeOp) return "?";
+        std::vector<int64_t> extents;
+        int64_t total = 1;
+        for (auto extVal : shapeOp.getExtents()) {
+          auto ce = traceConstInt(extVal);
+          if (!ce) return "?";
+          extents.push_back(*ce);
+          total *= *ce;
+          if (total > 64) return "?";
+        }
+        auto &region = elem.getRegion();
+        if (region.empty()) return "?";
+        auto &block = region.front();
+        if (block.getNumArguments() != extents.size()) return "?";
+        // Find the yield_element op in the body once.
+        mlir::Value yielded;
+        for (auto &op : block) {
+          if (auto y = mlir::dyn_cast<hlfir::YieldElementOp>(op)) {
+            yielded = y.getElementValue();
+            break;
+          }
+        }
+        if (!yielded) return "?";
+        // Enumerate the index combinations (Fortran 1-based -> the
+        // ``buildExprWithSubscripts`` walk converts to 0-based at
+        // the access sites; here we push the index name as a literal
+        // Fortran-1-based integer string).
+        std::vector<int64_t> cur(extents.size(), 1);
+        auto incCur = [&]() -> bool {
+          for (int i = static_cast<int>(extents.size()) - 1; i >= 0; --i) {
+            if (cur[i] < extents[i]) { cur[i]++; return true; }
+            cur[i] = 1;
+          }
+          return false;
+        };
+        std::vector<std::string> elems;
+        do {
+          // Push iter -> value bindings for each block arg.
+          unsigned pushed = 0;
+          for (unsigned i = 0; i < block.getNumArguments(); ++i) {
+            indexStack().push_back(
+                {block.getArgument(i), std::to_string(cur[i])});
+            ++pushed;
+          }
+          std::string es = buildExprWithSubscripts(yielded, d + 1);
+          for (unsigned i = 0; i < pushed; ++i) indexStack().pop_back();
+          if (es.empty() || es.find('?') != std::string::npos) return "?";
+          elems.push_back(std::move(es));
+        } while (incCur());
+        if (elems.empty()) return "?";
+        std::string acc = elems[0];
+        for (size_t i = 1; i < elems.size(); ++i) {
+          if (e.isBinop)
+            acc = "(" + acc + " " + e.pyOp.str() + " " + elems[i] + ")";
+          else
+            acc = e.pyOp.str() + "(" + acc + ", " + elems[i] + ")";
+        }
+        return acc;
+      }
+
       auto dg = mlir::dyn_cast<hlfir::DesignateOp>(sd);
       if (!dg) return "?";
       auto arr = traceToDecl(dg.getMemref());

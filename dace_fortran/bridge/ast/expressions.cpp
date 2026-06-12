@@ -1741,6 +1741,58 @@ std::string buildExpr(mlir::Value val, int d) {
     return buildExpr(rb.getBox(), d + 1);
   }
 
+  // ``hlfir.designate`` reached in a value context (no enclosing
+  // ``fir.load``).  Typical surface: a comparison like
+  // ``SUM((i - i_real)**2) > eps6`` where the SUM result is left
+  // as an ``hlfir.expr`` whose materialisation (when the bridge
+  // hasn't run the elemental-to-transient pre-pass) lands on a
+  // designate.  QE's ``vcut_get`` hits this -- the comparison
+  // rendered as ``(? > 1e-06)`` because buildExpr fell through
+  // to the unhandled-op log.
+  //
+  // Render strategy:
+  //   * No indices and a component attr (``s%y``) -> flat
+  //     ``<parent>_<member>`` name (same path used by traceToDecl
+  //     for component designates).
+  //   * Element designate with indices -> ``<name>[idx0, idx1, ...]``
+  //     so ``emit_tasklet``'s ``_rewrite_read_connectors`` consumes
+  //     the brackets and binds each occurrence to its memlet.
+  //   * Section (triplet) designate -> bare name; the slice is
+  //     captured by the AccessInfo path, the tasklet just reads
+  //     the named slab.
+  //
+  // This pairs the AccessInfo ``collectReads`` already builds
+  // (which DOES handle designate via ``expandDesignateChain``)
+  // with a matching textual form so the emitter's per-occurrence
+  // counts agree.
+  if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(def)) {
+    auto comp = dg.getComponentAttr();
+    if (comp && dg.getIndices().empty()) {
+      auto parent = traceToDecl(dg.getMemref());
+      if (!parent.empty()) return parent + "_" + comp.getValue().str();
+    }
+    auto name = traceToDecl(dg.getMemref());
+    if (name.empty()) name = traceToDecl(dg.getResult());
+    if (name.empty()) return "?";
+    auto indices = dg.getIndices();
+    if (indices.empty()) return name;
+    auto triplets = dg.getIsTriplet();
+    bool anyTriplet = false;
+    for (bool t : triplets) {
+      if (t) { anyTriplet = true; break; }
+    }
+    if (anyTriplet) return name;
+    std::string out = name + "[";
+    bool first = true;
+    for (auto idx : indices) {
+      if (!first) out += ", ";
+      out += buildExpr(idx, d + 1);
+      first = false;
+    }
+    out += "]";
+    return out;
+  }
+
   // ``scf.if`` -- structured-if as a value-yielding expression.
   // Each region ends in an ``scf.yield`` carrying the branch's
   // result; render as a Python ternary
