@@ -174,6 +174,44 @@ def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect
         if ac.is_read and ac.array_name in r_arr:
             reads_by_name.setdefault(ac.array_name, []).append(ac)
 
+    # Graupel surfaced a bridge gap where the expression text
+    # references an array name (``qc`` / ``qr``) but the
+    # ``accesses`` list omits it -- typically after Flang inlined a
+    # scalar cache (``q_x_1 = qc(...)``) back into the expression
+    # but the AccessInfo still pointed at the cache.  Without
+    # matching ``reads_by_name`` entries, ``_rewrite_read_connectors``
+    # still renames ``qc`` -> ``_in_qc_0`` (it walks ``sorted_tokens``,
+    # which includes every array in ``r_arr``), but no input
+    # connector is minted and DaCe's tasklet-free-symbol walker
+    # then surfaces ``_in_qc_0`` as an unresolved free symbol.
+    # Synthesise whole-array AccessInfo entries for each missing
+    # array so the tasklet has matching connectors + memlets.  The
+    # whole-array memlet is over-broad but lets the kernel build
+    # while the bridge-side fix (preserve AccessInfo when buildExpr
+    # rewrites cache aliases) is in flight.
+    pat_count = re.compile(r'\b[a-zA-Z_]\w*\b')
+    text_occurrences = {}
+    for tok in pat_count.findall(assign_node.expr):
+        if tok in r_arr and tok not in reads_by_name:
+            text_occurrences[tok] = text_occurrences.get(tok, 0) + 1
+    if text_occurrences:
+        from types import SimpleNamespace
+        for nm, count in text_occurrences.items():
+            arr = builder.arrays[nm]
+            shape = list(arr.shape_symbols)
+            whole_subset = ", ".join(f"0:{s}" for s in shape) if shape else "0"
+            synth = []
+            for _ in range(count):
+                synth.append(SimpleNamespace(
+                    array_name=nm,
+                    is_read=True,
+                    is_write=False,
+                    index_exprs=[],
+                    index_vars=[],
+                    whole_array_subset=whole_subset,
+                ))
+            reads_by_name[nm] = synth
+
     # Rewrite the RHS, replacing the Nth occurrence of each array name
     # (and consuming its balanced ``[...]`` subscript) with
     # ``_in_<name>_<N>``.  Scalars get a single bare-name connector
@@ -222,6 +260,15 @@ def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect
         # indices spliced via ``view_dim_map``; the dummy itself has
         # no SDFG descriptor.
         for i, ac in enumerate(reads_by_name[nm]):
+            # Synthetic whole-array access (graupel cache-inline
+            # gap fallback) -- the ``SimpleNamespace`` carries a
+            # ``whole_array_subset`` field; isinstance check
+            # discriminates from the bridge AccessInfo.
+            from types import SimpleNamespace
+            if isinstance(ac, SimpleNamespace):
+                state.add_edge(r, None, t, f"_in_{nm}_{i}",
+                               Memlet(f"{nm}[{ac.whole_array_subset}]"))
+                continue
             eff_nm, eff_ac = resolve_section_alias(builder, nm, ac)
             ix = build_memlet_index(builder, eff_nm, eff_ac, iter_map, indirect_syms)
             state.add_edge(r, None, t, f"_in_{nm}_{i}", Memlet(f"{eff_nm}[{ix}]"))
