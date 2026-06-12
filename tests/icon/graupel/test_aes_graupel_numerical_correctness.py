@@ -109,7 +109,12 @@ def test_aes_graupel_e2e_numerical(tmp_path):
     init.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int, *([ctypes.c_void_p] * 10), ctypes.c_void_p]
     run = lib.run_graupel_c
     run.restype = None
-    run.argtypes = [ctypes.c_int] * 5 + [ctypes.c_double] + [ctypes.c_void_p] * 16
+    # 11 inputs (dz, t, p, rho, qv, qc, qi, qr, qs, qg, qnc) + 6 outputs
+    # (prr_gsp, pri_gsp, prs_gsp, prg_gsp, pflx, pre_gsp) = 17 array args.
+    # The previous ``* 16`` was off-by-one and the missing trailing arg
+    # corrupted the stack, surfacing as a SIGSEGV inside the gfortran
+    # reference before the kernel body even ran.
+    run.argtypes = [ctypes.c_int] * 5 + [ctypes.c_double] + [ctypes.c_void_p] * 17
 
     # Reference buffers.
     f64_2d = lambda: np.zeros((ivec, k_v), dtype=np.float64, order='F')
