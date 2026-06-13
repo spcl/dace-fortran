@@ -75,23 +75,14 @@ end module
     np.testing.assert_allclose(out[0], np.max(np.sqrt(np.sum(a**2, axis=1))))
 
 
-@pytest.mark.xfail(strict=False,
-                   reason=("``SUM(LOG(SUM(a, 1) + 1.0))`` -- the outer SUM is "
-                           "the reduction over an elemental whose body has a "
-                           "scalar add+log on top of the inner SUM-dim apply.  "
-                           "The pre-walk in ``materialiseElementalToTransient`` "
-                           "does find the apply but the dispatch path for the "
-                           "OUTER SUM doesn't currently route through "
-                           "materialiseElementalToTransient for this shape -- "
-                           "the LOG elemental is processed before the inner SUM "
-                           "pre-materialisation fires.  Separate dispatch "
-                           "follow-up: extend the Mode-C reduction routing in "
-                           "dispatch.cpp to also pre-walk the source elemental's "
-                           "body for dim-reductions before calling "
-                           "buildElementalAnyAllReduce."))
 def test_sum_of_log_of_sum_dim(tmp_path):
-    """A different inline scalar op on top of the dim-reduction --
-    verifies the materialisation isn't sqrt-specific."""
+    """``SUM(LOG(SUM(a, 1) + 1.0))`` -- a 3-level nest
+    (inner-SUM-dim -> +1.0 elemental -> LOG elemental -> outer SUM).
+    The pre-walk in ``materialiseElementalToTransient`` now descends
+    through nested elemental bodies, so the inner SUM-dim is
+    materialised to its own transient and the chain resolves
+    transient-by-transient (verifies the materialisation isn't
+    sqrt-specific and handles arbitrary elemental nesting)."""
     src = """
 module m
 contains

@@ -690,7 +690,25 @@ materialiseElementalToTransient(hlfir::ElementalOp elem,
             if (kHlfirExprToTransient.count(srcOp)) return;
             std::string wcr, identity;
             if (!reduceWcrIdentity(srcOp, wcr, identity)) {
-              // Not a reduction -- recurse into operands.
+              // Not a reduction -- recurse into operands.  AND, when
+              // the apply is over a nested ELEMENTAL, descend into
+              // that elemental's BODY too: a chain like
+              // ``SUM(LOG(SUM(a,1)+1.0))`` nests
+              // ``outer-sum -> log-elem -> (+1.0)-elem -> inner-sum-dim``,
+              // and the inner SUM-dim lives inside the ``+1.0``
+              // elemental's body, NOT among this apply's operands.
+              // Without descending, ``buildExpr`` later renders the
+              // inner ``hlfir.apply %inner_sum`` as ``?`` (the inner
+              // SUM was never materialised).  Each level the walk
+              // reaches gets its own ``_libtmp_`` transient, so the
+              // chain resolves transient-by-transient.
+              if (auto innerElem = mlir::dyn_cast<hlfir::ElementalOp>(srcOp)) {
+                auto &ireg = innerElem.getRegion();
+                if (!ireg.empty())
+                  for (auto &iop : ireg.front())
+                    if (auto iy = mlir::dyn_cast<hlfir::YieldElementOp>(iop))
+                      walkForReductions(iy.getElementValue(), depth + 1);
+              }
               for (auto operand : op->getOperands())
                 walkForReductions(operand, depth + 1);
               return;
