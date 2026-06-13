@@ -34,7 +34,13 @@ end subroutine main
 """
     sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
     a = np.full([4], 42, order="F", dtype=np.float64)
-    sdfg(d=a)
+    # ``outside_init`` is a non-PARAMETER module-level scalar with a
+    # source-level initialiser.  After ``hlfir-preserve-mutable-
+    # globals``, every non-written, non-PARAMETER global surfaces as a
+    # caller kwarg with the source-declared value as the value the
+    # caller would supply for the Fortran-source default behaviour.
+    eps = np.finfo(np.float32).eps
+    sdfg(d=a, outside_init=np.array([eps], dtype=np.float32, order='F'))
     assert (a[0] == 42)
     # Source: ``5.5 + bob + outside_init`` where both ``bob`` and
     # ``outside_init`` are ``epsilon(1.0)`` (~1.19e-7).  Fortran

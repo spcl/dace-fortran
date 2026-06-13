@@ -1,7 +1,7 @@
   ! ---------------- C ABI interface to the compiled SDFG ----------------
   interface
     function dace_init_{entry}({init_args}) bind(c, name='__dace_init_{entry}') result(h)
-      import :: c_ptr, c_int
+      import :: c_ptr, c_int, c_long_long
 {init_arg_decls}      type(c_ptr) :: h
     end function
 

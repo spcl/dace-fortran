@@ -120,6 +120,33 @@ void setManglingOverride(const std::string &mangled,
 /// module's overrides don't leak into the next one.
 void clearManglingOverrides();
 
+/// Set the entry procedure's F-scope name (e.g. ``"graupel_run"`` for
+/// ``_QMmo_aes_graupelPgraupel_run``).  ``extractName`` consults this
+/// to scope-qualify every NON-entry-scope declare's short name on
+/// demand, replacing the upfront inlined-callee disambiguator pass.
+/// Set once per build, immediately after ``set_entry_symbol``;
+/// cleared together with the override map on each fresh extract.
+/// Per thread.
+void setEntryScope(const std::string &scope);
+
+/// Register the set of short names that COLLIDE across multiple F-scopes
+/// in the current module.  ``extractName`` consults this set to decide
+/// whether to scope-qualify a non-entry-scope declare's short name:
+///   * Short name appears in the collision set -> qualify as
+///     ``<scope>_<short>`` (avoid signature ambiguity).
+///   * Short name appears in only ONE non-entry scope -> keep bare
+///     (caller-and-callee agreed, no ambiguity, no extra signature
+///     variable).
+/// Called by ``extractVariables`` after the upfront short-name walk;
+/// cleared together with the override map on each fresh extract.
+/// Per thread.
+void setShortNameCollisions(const std::set<std::string> &collisions);
+
+/// Extract the F-segment of a Fortran mangled name -- the procedure
+/// scope between the last ``F`` and the last ``E``.  Returns "" for
+/// names without an F segment (module globals, type-info metadata).
+std::string getFScope(const std::string &uniq);
+
 /// Trace an SSA value backwards to the hlfir.declare / fir.declare that
 /// introduced it.  Peels fir.convert -> fir.load -> arith.select transparently.
 /// Returns the Fortran name, or "" if the chain breaks before a declare.

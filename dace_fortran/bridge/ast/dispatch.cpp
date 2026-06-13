@@ -15,10 +15,12 @@
 #include "bridge/trace_utils.h"
 #include "flang/Optimizer/Dialect/FIROps.h"
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 
 namespace hlfir_bridge {
 
@@ -88,11 +90,100 @@ static ASTNode buildScfIfAsConditional(mlir::scf::IfOp ifOp) {
   return c;
 }
 
+// Forward declaration used by ``walkSCFBeforeRegion``'s ``fir.do_loop``
+// dispatch (definition lives further down the file).  ``traceLB`` and
+// ``traceConstInt`` / ``buildIndexExpr`` come in via ``ast_helpers.h``.
+static std::string traceLoopIter(fir::DoLoopOp loop);
+
 std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
   std::vector<ASTNode> out;
+  // Snapshot the scf.condition's break value at the START of the body
+  // -- BEFORE any nested scf.if mutates the SSA operands of the
+  // condition.  Fortran's ``do; body; if (cond) exit; counter+=1;
+  // end do`` shape (lift-cf-to-scf form) puts the increment INSIDE
+  // the BEFORE region (in the else arm of a scf.if guarded by the
+  // exit condition), then the scf.condition reads a SEPARATE cmpi
+  // that the bridge's expression renderer re-evaluates at the
+  // break-check state -- by then counter has been incremented and
+  // the break fires one iteration too early.
+  //
+  // Detect the pattern up front: any ``scf.condition`` whose value
+  // depends on a scalar that an in-body ``scf.if`` mutates needs a
+  // pre-body snapshot.  Mint ``__brk_<N>`` (an interstate-edge
+  // symbol via ``auto_declare_synth`` prefix), emit the snapshot
+  // as the first assign in ``out``, and rewrite the
+  // ``scf.condition`` handler to read the snapshot instead of
+  // re-rendering the condition.
+  //
+  // NPB LU's ssor istep loop (``do istep = 1, niter; sweep;
+  // if (rsdnm < tolrsd) return; end do``) has the same shape: each
+  // istep iteration runs RHS + the sweep, then checks convergence
+  // for the early return, then increments istep.  Without this
+  // snapshot the SSOR sweep is effectively a no-op and residuals
+  // stay at ~1e5 instead of converging to ~1e-2.
+  static thread_local int kBrkCounter = 0;
+  std::string brkSynthName;
+  mlir::scf::ConditionOp pendingCondOp;
+  for (auto& op : block) {
+    if (auto condOp = mlir::dyn_cast<mlir::scf::ConditionOp>(op)) {
+      pendingCondOp = condOp;
+      break;
+    }
+  }
+  if (pendingCondOp) {
+    auto condVal = pendingCondOp.getCondition();
+    auto b = buildBoolExpr(condVal, 0);
+    if (!b.empty() && b != "?") {
+      brkSynthName = "__brk_" + std::to_string(kBrkCounter++);
+      ASTNode snap;
+      snap.kind = "assign";
+      snap.target = brkSynthName;
+      snap.expr = b;
+      snap.target_is_array = false;
+      out.push_back(std::move(snap));
+    }
+  }
   for (auto& op : block) {
     if (auto ifOp = mlir::dyn_cast<mlir::scf::IfOp>(op)) {
       out.push_back(buildScfIfAsConditional(ifOp));
+      continue;
+    }
+    // ``fir.if`` parked inside an ``scf.while`` BEFORE region.  Flang
+    // emits ``fir.if`` for explicit Fortran ``IF (cond) THEN ... END
+    // IF`` blocks; ``lift-cf-to-scf`` lowers cf.cond_br into ``scf.if``
+    // but leaves the original ``fir.if`` ops as-is.  Without this
+    // dispatch the op falls through as a "pure-value op" and the IF
+    // body (any assigns / nested loops) is SILENTLY DROPPED from the
+    // AST -- producing an SDFG with no writes from the gated block.
+    // NPB LU's ``ssor`` istep loop hit this via
+    // ``if (mod(istep, inorm) == 0 .or. istep == itmax) call l2norm(
+    // ..., rsdnm)`` inside the istep do-loop with a following
+    // ``if (rsdnm < tolrsd) return``: rsdnm's per-iter recompute was
+    // dropped, rsdnm froze at the pre-loop value, residuals reported
+    // pre-sweep state regardless of itmax.  See
+    // ``tests/if_then_return_in_loop_elision_test.py`` for the
+    // distilled repro.  The dispatch mirrors the toplevel ``fir.if``
+    // handler at the bottom of ``buildAST`` (line 2246) -- same
+    // shape, just reached via the scf.while walker.
+    if (auto firIfOp = mlir::dyn_cast<fir::IfOp>(op)) {
+      ASTNode n;
+      n.kind = "conditional";
+      n.condition = buildBoolExpr(firIfOp.getCondition(), 0);
+      // Walk the condition's IR for array-element reads so the
+      // Python emitter can lift the condition into a tasklet when
+      // it references arrays.  Without this, ``emit_cond`` hoists
+      // the rendered string to an interstate-edge assignment, but
+      // DaCe treats array names there as bare Symbols (no
+      // connector + no memlet) and the C++ codegen emits the data
+      // pointer where it expected a scalar (graupel's
+      // ``max(q_x_1, q_x_1, q_x_1)`` if_cond was the surfacer:
+      // ``double* > 1e-15`` type-error).
+      collectReadAccesses(firIfOp.getCondition(), n.accesses, 0);
+      if (!firIfOp.getThenRegion().empty())
+        n.children = buildAST(firIfOp.getThenRegion().front());
+      if (!firIfOp.getElseRegion().empty())
+        n.else_children = buildAST(firIfOp.getElseRegion().front());
+      out.push_back(std::move(n));
       continue;
     }
     if (auto condOp = mlir::dyn_cast<mlir::scf::ConditionOp>(op)) {
@@ -113,11 +204,19 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
           out.push_back(std::move(a));
         }
       }
-      // ``scf.condition(%c)``: break when %c is false.
+      // ``scf.condition(%c)``: break when %c is false.  Use the
+      // pre-body snapshot ``__brk_<N>`` if we created one (see the
+      // top-of-function block) so the break check sees the SSA-
+      // operand values from the start of the iteration, not the
+      // post-mutation values produced by an in-body scf.if.
       ASTNode guard;
       guard.kind = "conditional";
-      auto b = buildBoolExpr(condOp.getCondition(), 0);
-      guard.condition = "not (" + b + ")";
+      if (!brkSynthName.empty()) {
+        guard.condition = "not (" + brkSynthName + ")";
+      } else {
+        auto b = buildBoolExpr(condOp.getCondition(), 0);
+        guard.condition = "not (" + b + ")";
+      }
       ASTNode brk;
       brk.kind = "break";
       guard.children.push_back(std::move(brk));
@@ -172,7 +271,105 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
       out.push_back(std::move(a));
       continue;
     }
-    // Pure-value ops  --  no AST node, their values flow inline.
+    // ``fir.do_loop`` parked inside an ``scf.while`` BEFORE region.
+    // This is the shape ``lift-cf-to-scf`` produces from a Fortran
+    // ``do`` whose containing istep loop has an early ``return``
+    // (NPB LU's ``ssor``: the istep loop with ``if (rsdnm < tolrsd)
+    // return``).  Without this dispatch the op falls through as a
+    // "pure-value op" and EVERY assign in the loop body is silently
+    // dropped from the AST.  Emit a minimal "loop" node and recurse
+    // into the body block; the existing emit_loop fallbacks recover
+    // bounds and iter from the SSA chain when loop_iter / loop_bound
+    // are absent.
+    if (auto doLoop = mlir::dyn_cast<fir::DoLoopOp>(op)) {
+      ASTNode n;
+      n.kind = "loop";
+      n.loop_iter = traceLoopIter(doLoop);
+      if (auto c = traceConstInt(doLoop.getUpperBound())) {
+        n.loop_bound = std::to_string(*c);
+      } else {
+        auto sym = traceToDecl(doLoop.getUpperBound());
+        if (!sym.empty()) n.loop_bound = sym;
+        else n.loop_bound = buildIndexExpr(doLoop.getUpperBound(), 0);
+      }
+      n.loop_lower = traceLB(doLoop.getLowerBound());
+      if (n.loop_lower < 0) {
+        auto sym = traceToDecl(doLoop.getLowerBound());
+        if (!sym.empty()) n.loop_lower_expr = sym;
+        else n.loop_lower_expr = buildIndexExpr(doLoop.getLowerBound(), 0);
+      }
+      if (auto stepC = traceConstInt(doLoop.getStep()))
+        n.loop_step = *stepC;
+      static thread_local int kSCFDoLoopIterCounter = 0;
+      bool pushedBlockArg = false;
+      auto& loopBlock = doLoop.getRegion().front();
+      if (n.loop_iter.empty() && loopBlock.getNumArguments() > 0) {
+        n.loop_iter = "_scfdoit_" + std::to_string(kSCFDoLoopIterCounter++);
+        indexStack().push_back({loopBlock.getArgument(0), n.loop_iter});
+        pushedBlockArg = true;
+      }
+      n.children = buildAST(loopBlock);
+      if (pushedBlockArg) indexStack().pop_back();
+      out.push_back(std::move(n));
+      continue;
+    }
+    // Pure-value ops -- no AST node, their values flow inline through
+    // SSA into the consuming side-effect op (which IS handled above).
+    //
+    // Defensive guard: if we reach here with an op that DOES carry
+    // observable side effects (writes / nested side-effecting
+    // regions), the per-op-type switch above is missing a handler
+    // and the op's effects would be silently dropped from the SDFG.
+    // The fir.if elision bug (NPB LU residuals stuck at pre-loop
+    // state) was exactly this -- ``fir.if`` was missing from the
+    // dispatch above and its IF body fell through here.
+    //
+    // MLIR's ``MemoryEffectOpInterface`` distinguishes pure-value
+    // ops (arith.*, fir.load, hlfir.designate, ...) from
+    // side-effecting ones; only the latter need a handler.  Throw
+    // immediately rather than warn-and-continue: a warning could be
+    // missed in CI noise and the SDFG would then silently compute
+    // the wrong result.  An unhandled side-effecting op is a real
+    // bridge gap that must be fixed by adding the corresponding
+    // handler -- the error names the op so the gap surfaces at
+    // parse time, not later in residual diffs.
+    // Known-benign ops that carry no observable SDFG effect even
+    // though they have nested regions or lack a MemoryEffect
+    // interface.  Anything else is treated as a side-effect gap.
+    auto opName = op.getName().getStringRef();
+    static const llvm::StringSet<> kKnownBenign = {
+        // Scope marker for dummy arguments -- pure metadata, no
+        // runtime effect.
+        "fir.dummy_scope",
+    };
+    if (kKnownBenign.contains(opName)) continue;
+
+    auto effects = mlir::dyn_cast<mlir::MemoryEffectOpInterface>(op);
+    bool hasWriteEffect = false;
+    if (effects) {
+      llvm::SmallVector<mlir::MemoryEffects::EffectInstance, 4> instances;
+      effects.getEffects(instances);
+      for (auto& e : instances)
+        if (mlir::isa<mlir::MemoryEffects::Write>(e.getEffect())) {
+          hasWriteEffect = true;
+          break;
+        }
+    } else if (op.getNumRegions() > 0) {
+      // No MemoryEffectOpInterface but has nested regions -- the
+      // regions themselves may carry effects (custom dialect ops
+      // wrapping a body).  Treat as side-effecting for the guard;
+      // allowlist via ``kKnownBenign`` above for legitimate markers.
+      hasWriteEffect = true;
+    }
+    if (hasWriteEffect) {
+      throw std::runtime_error(
+          "walkSCFBeforeRegion: unhandled side-effecting op '" + opName.str() +
+          "' inside an scf.while body.  Its effects would be silently "
+          "dropped from the SDFG.  Add a handler in "
+          "bridge/ast/dispatch.cpp::walkSCFBeforeRegion (see the "
+          "fir::IfOp pattern at the top of the for-loop), or "
+          "allowlist via ``kKnownBenign`` if the op is a pure marker.");
+    }
   }
   return out;
 }
@@ -217,9 +414,514 @@ static std::string mpiCalleeTag(const std::string& callee) {
   if (s.rfind("_QP", 0) == 0) s.erase(0, 3);  // external/global mangling
   std::string low = llvm::StringRef(s).lower();
   if (low == "mpi_send" || low == "mpi_recv" || low == "mpi_isend" ||
-      low == "mpi_irecv" || low == "mpi_wait")
+      low == "mpi_irecv" || low == "mpi_wait" || low == "mpi_alltoall")
     return low;
   return std::string{};
+}
+
+// ---------------------------------------------------------------------------
+// BLAS / LAPACK recognition
+//
+// Pattern: Fortran source calls a vendor BLAS / LAPACK routine directly
+// (e.g. ``call dgemm('N','N', m, n, k, alpha, a, lda, b, ldb, beta, c, ldc)``).
+// Flang lowers each as ``fir.call @dgemm_(...)`` (or ``@_QPdgemm`` depending
+// on the binding flavour).  We pattern-match the callee by canonical name
+// and the Python ``emit_blas`` / ``emit_lapack`` handlers stamp a
+// :class:`dace.libraries.blas.*` / :class:`dace.libraries.lapack.*`
+// library node with operand memlets.
+//
+// The recognised subset (first wave -- the highest-frequency routines in
+// the cloudsc / ICON / QE working set):
+//   BLAS L1: DAXPY / DSCAL / DDOT
+//   BLAS L2: DGEMV
+//   BLAS L3: DGEMM
+//   LAPACK : DGETRF / DPOTRF
+// Single-precision twins (S-prefix) are accepted alongside the D-prefix
+// names so the same recognition path covers real32 callers; complex
+// (C / Z) twins are out of scope for the first wave.
+
+/// Strip Fortran mangling decorations and lowercase.
+static std::string normaliseBlasName(const std::string& callee) {
+  std::string s = callee;
+  if (!s.empty() && s[0] == '@') s.erase(0, 1);
+  if (s.rfind("_QP", 0) == 0) s.erase(0, 3);
+  while (!s.empty() && s.back() == '_') s.pop_back();
+  return llvm::StringRef(s).lower();
+}
+
+/// Return the canonical BLAS routine name (e.g. ``"dgemm"``) for a recognised
+/// callee, else empty.  Accepts the D-prefix (real64) and S-prefix (real32)
+/// names that map onto the same DaCe lib node (dtype-dispatched at expansion).
+static std::string blasCalleeTag(const std::string& callee) {
+  std::string low = normaliseBlasName(callee);
+  static const std::set<std::string> recognised = {
+      // L1
+      "daxpy", "saxpy", "dscal", "sscal", "ddot", "sdot",
+      "dnrm2", "snrm2", "dasum", "sasum", "idamax", "isamax",
+      "dcopy", "scopy", "dswap", "sswap",
+      // L2
+      "dgemv", "sgemv", "dger", "sger",
+      "dtrsv", "strsv", "dtrmv", "strmv", "dsymv", "ssymv",
+      // L3
+      "dgemm", "sgemm",
+      "dtrsm", "strsm", "dtrmm", "strmm",
+      "dsymm", "ssymm", "dsyrk", "ssyrk",
+  };
+  if (recognised.count(low)) return low;
+  return std::string{};
+}
+
+/// Return the canonical LAPACK routine name (e.g. ``"dgetrf"``) for a
+/// recognised callee, else empty.
+static std::string lapackCalleeTag(const std::string& callee) {
+  std::string low = normaliseBlasName(callee);
+  static const std::set<std::string> recognised = {
+      "dgetrf", "sgetrf", "dpotrf", "spotrf",
+      "dpotrs", "spotrs",
+      "dgeqrf", "sgeqrf", "dorgqr", "sorgqr",
+  };
+  if (recognised.count(low)) return low;
+  return std::string{};
+}
+
+// ---------------------------------------------------------------------------
+// Library-prefix "near-miss" detection
+//
+// When a Fortran call site matches the prefix of a recognised library
+// (MPI / FFTW3 / BLAS / LAPACK) but the exact routine isn't in the
+// supported subset, fall back to a clear ``unsupported_libcall`` ASTNode
+// so the Python builder raises a precise ``NotImplementedError`` instead
+// of silently emitting a broken generic call (``_out = ?`` -- the failure
+// mode this layer prevents).
+
+static const std::set<std::string>& knownBlasNames() {
+  static const std::set<std::string> names = {
+      // Real BLAS routines we *would* recognise once their handlers ship.
+      "drotg", "srotg", "drot", "srot", "drotmg", "srotmg", "drotm", "srotm",
+      "dnrm2", "snrm2", "scnrm2", "dznrm2",
+      "dasum", "sasum", "scasum", "dzasum",
+      "idamax", "isamax", "icamax", "izamax",
+      "dswap", "sswap", "dcopy", "scopy",
+      "dsdot",
+      // Already recognised in ``blasCalleeTag`` -- listed so the detector
+      // recognises THEM as BLAS and routes through the normal path.
+      "daxpy", "saxpy", "dscal", "sscal", "ddot", "sdot",
+      "dgemv", "sgemv", "dgemm", "sgemm",
+      // BLAS L2 / L3 routines whose handlers are pending:
+      "dger", "sger", "dsymv", "ssymv", "dsbmv", "ssbmv",
+      "dtrmv", "strmv", "dtrsv", "strsv", "dgbmv", "sgbmv",
+      "dsymm", "ssymm", "dsyrk", "ssyrk", "dsyr2k", "ssyr2k",
+      "dtrmm", "strmm", "dtrsm", "strsm",
+  };
+  return names;
+}
+
+static const std::set<std::string>& knownLapackNames() {
+  static const std::set<std::string> names = {
+      "dgetrf", "sgetrf", "dgetri", "sgetri", "dgetrs", "sgetrs",
+      "dgesv", "sgesv",
+      "dpotrf", "spotrf", "dpotrs", "spotrs", "dpotri", "spotri",
+      "dposv", "sposv",
+      "dsyev", "ssyev", "dsyevd", "ssyevd",
+      "dgeev", "sgeev", "dgesvd", "sgesvd",
+      "dgeqrf", "sgeqrf", "dorgqr", "sorgqr", "dormqr", "sormqr",
+  };
+  return names;
+}
+
+// ---------------------------------------------------------------------------
+// QE FFT-interfaces recognition
+//
+// Quantum ESPRESSO exposes a high-level generic FFT interface in
+// ``FFTXlib/src/fft_interfaces.f90``::
+//
+//     CALL fwfft(fft_kind, f, dfft [, howmany])   ! G -> R
+//     CALL invfft(fft_kind, f, dfft [, howmany])  ! R -> G
+//
+// The generic resolves to specific subroutines (``fwfft_y`` / ``invfft_y``
+// for the standard grid, ``invfft_b`` for the box grid).  ``fft_kind`` is
+// a literal character ('Rho' / 'Wave' / 'tgWave'), ``f`` is the (typically
+// 1-D) complex buffer that gets transformed in place, and ``dfft`` is the
+// :type:`fft_type_descriptor` that carries the 3-D grid sizes.
+//
+// For the bridge first cut we ignore ``dfft`` (the 3-D dims) and the
+// optional ``howmany`` argument, and emit a single ``fftcall`` ASTNode
+// referencing the buffer with the direction derived from the routine
+// name.  The Python ``emit_fft`` handler stamps an :class:`FFT` /
+// :class:`IFFT` library node with the buffer as the ``_inp`` / ``_out``
+// operand.  This matches the recognition layer; correct multi-D FFT
+// semantics (descriptor-driven dim extraction) is a follow-up gap.
+
+/// Return ``"forward"`` for ``fwfft``-family callees, ``"backward"`` for
+/// ``invfft``-family, else empty.  Accepts both the generic names
+/// (``fwfft`` / ``invfft``) and the specific subroutines (``fwfft_y``,
+/// ``invfft_y``, ``fwfft_b``, ``invfft_b``).
+static std::string qeFftCalleeTag(const std::string& callee) {
+  std::string low = normaliseBlasName(callee);
+  // Strip QE module prefix (e.g. ``_QMfft_interfacesPinvfft_y`` after
+  // ``normaliseBlasName`` drops the leading ``_QP``).  Be permissive about
+  // the in-between ``_QM<mod>P``-style decorations.
+  auto p = low.find('p');
+  if (p != std::string::npos && low.rfind("_qm", 0) == 0)
+    low = low.substr(p + 1);
+  if (low == "fwfft" || low == "fwfft_y" || low == "fwfft_b") return "forward";
+  if (low == "invfft" || low == "invfft_y" || low == "invfft_b") return "backward";
+  return std::string{};
+}
+
+/// Returns ``"real"`` / ``"complex"`` for QE's ``fft_interpolate_real`` /
+/// ``fft_interpolate_complex`` specific subroutines (the generic
+/// ``fft_interpolate`` resolves to one of these), else empty.
+static std::string qeFftInterpolateCalleeTag(const std::string& callee) {
+  std::string low = normaliseBlasName(callee);
+  auto p = low.find('p');
+  if (p != std::string::npos && low.rfind("_qm", 0) == 0)
+    low = low.substr(p + 1);
+  if (low == "fft_interpolate_real") return "real";
+  if (low == "fft_interpolate_complex") return "complex";
+  return std::string{};
+}
+
+// ---------------------------------------------------------------------------
+// QE parallel pencil-pipeline recognition
+//
+// QE's parallel 3-D FFT (``FFTXlib/src/fft_parallel.f90``) is a five-step
+// pipeline of batched 1-D FFTs and MPI alltoalls:
+//
+//     cft_1z(f)              ! 1-D FFT along the z axis
+//     fft_scatter_yz(f)      ! MPI alltoall across desc%comm3
+//     cft_1y(f)              ! 1-D FFT along the y axis
+//     fft_scatter_xy(f)      ! MPI alltoall across desc%comm2
+//     cft_1x(f)              ! 1-D FFT along the x axis
+//
+// The bridge recognises the per-axis FFTs (``cft_1x`` / ``cft_1y`` /
+// ``cft_1z``) and emits an :class:`FFT` lib node tagged with the axis,
+// and recognises the scatter routines (``fft_scatter_xy`` / ``yz``) and
+// emits an :class:`Alltoall` lib node.  Both are first-cut recognisers;
+// the buffer-to-3-D-grid reinterpretation that fully captures QE's
+// runtime semantics is a follow-up gap.
+
+/// Returns ``"axis=X,dir=Y"`` (where X is 0/1/2 and Y is forward/backward)
+/// for a recognised ``cft_1z`` / ``cft_1y`` / ``cft_1x`` callee, else
+/// empty.  Axis assignment: ``cft_1x`` -> 0, ``cft_1y`` -> 1, ``cft_1z`` -> 2
+/// (matches the C / row-major dimension order downstream code expects).
+static std::string qePencilCalleeTag(const std::string& callee) {
+  std::string low = normaliseBlasName(callee);
+  auto p = low.find('p');
+  if (p != std::string::npos && low.rfind("_qm", 0) == 0)
+    low = low.substr(p + 1);
+  if (low == "cft_1x") return "axis=0";
+  if (low == "cft_1y") return "axis=1";
+  if (low == "cft_1z") return "axis=2";
+  return std::string{};
+}
+
+/// Build the ``fftcall`` ASTNode for a recognised QE pencil routine.
+/// Signature: ``cft_1z(c, nsl, nz, ldz, isign, cout)``.  We treat
+/// ``c`` (arg 0) as the input buffer and ``cout`` (arg 5) as the
+/// output; the ``isign`` runtime sign is read literally when
+/// available (and otherwise defaults to ``forward``).
+static ASTNode buildQePencilCallNode(fir::CallOp call, const std::string& axisTag) {
+  ASTNode n;
+  auto args = call.getArgOperands();
+  if (args.size() < 6) return n;
+  std::string cin = traceToDecl(args[0]);
+  std::string cout = traceToDecl(args[5]);
+  if (cin.empty() || cout.empty()) return n;
+  // isign: positive = backward, negative = forward.  When the literal
+  // is unavailable we conservatively pick forward.
+  std::string direction = "forward";
+  if (auto c = traceConstInt(args[4])) {
+    direction = (*c > 0) ? "backward" : "forward";
+  }
+  n.kind = "fftcall";
+  n.callee = "fft_execute";
+  n.expr = direction;
+  n.target = cout;
+  // ``call_args[0]`` / ``[1]`` are the in / out buffer names; subsequent
+  // entries carry the axis tag so ``emit_fft`` can set ``node.axis``
+  // when we later wire up axis-aware FFTW3 / cuFFT expansions.
+  n.call_args = {cin, cout, axisTag};
+  return n;
+}
+
+/// Returns ``"xy"`` or ``"yz"`` for QE's ``fft_scatter_xy`` / ``fft_scatter_yz``
+/// alltoall transposes, else empty.
+static std::string qeScatterCalleeTag(const std::string& callee) {
+  std::string low = normaliseBlasName(callee);
+  auto p = low.find('p');
+  if (p != std::string::npos && low.rfind("_qm", 0) == 0)
+    low = low.substr(p + 1);
+  if (low == "fft_scatter_xy") return "xy";
+  if (low == "fft_scatter_yz") return "yz";
+  return std::string{};
+}
+
+/// Build the ``mpicall`` ASTNode for a recognised QE scatter routine.
+/// Signature: ``fft_scatter_xy(desc, f_in, f_aux, nxx_, isgn[, comm])``.
+/// We map this onto the existing ``mpi_alltoall`` ASTNode the Python
+/// builder already lowers to :class:`Alltoall`; ``desc`` is the
+/// descriptor (ignored at recognition), ``f_in`` (arg 1) is the send
+/// buffer, ``f_aux`` (arg 2) is the receive buffer.
+static ASTNode buildQeScatterCallNode(fir::CallOp call, const std::string& plane) {
+  ASTNode n;
+  auto args = call.getArgOperands();
+  if (args.size() < 5) return n;
+  std::string sendbuf = traceToDecl(args[1]);
+  std::string recvbuf = traceToDecl(args[2]);
+  if (sendbuf.empty() || recvbuf.empty()) return n;
+  n.kind = "mpicall";
+  n.callee = "mpi_alltoall";
+  n.call_args = {sendbuf, recvbuf};
+  // Carry the plane tag through ``expr`` so a downstream emitter could
+  // wire the matching descriptor sub-communicator (desc%comm2 vs comm3);
+  // the current ``emit_mpi`` Alltoall path ignores it and defaults to
+  // ``MPI_COMM_WORLD``.
+  n.expr = plane;
+  return n;
+}
+
+/// Build an ``fftcall`` ASTNode for a recognised QE FFT call.  The buffer
+/// is the 2nd argument (after the ``fft_kind`` literal).  We do not look
+/// at the descriptor or ``howmany`` for the recognition first cut.
+static ASTNode buildQeFftCallNode(fir::CallOp call, const std::string& direction) {
+  ASTNode n;
+  auto args = call.getArgOperands();
+  if (args.size() < 2) return n;
+  std::string buf = traceToDecl(args[1]);
+  if (buf.empty()) return n;
+  n.kind = "fftcall";
+  n.callee = "fft_execute";
+  n.expr = direction;
+  n.target = buf;
+  n.call_args = {buf, buf};  // in-place
+  return n;
+}
+
+/// Returns "mpi" / "blas" / "lapack" / "fftw3" if the callee matches one of
+/// those library's call conventions; else empty.  Used by the dispatch
+/// loop's near-miss detector.
+static std::string libraryFamilyTag(const std::string& callee) {
+  std::string low = normaliseBlasName(callee);
+  if (low.rfind("mpi_", 0) == 0) return "mpi";
+  if (low.rfind("fftw_", 0) == 0 || low.rfind("fftwf_", 0) == 0) return "fftw3";
+  if (knownBlasNames().count(low)) return "blas";
+  if (knownLapackNames().count(low)) return "lapack";
+  return std::string{};
+}
+
+/// Resolve a fir.call operand to either a decl name or a literal
+/// (constant int) for the BLAS / LAPACK / MPI recognisers.  An empty
+/// return means the operand is neither traceable to a declared name
+/// nor a known constant -- the dispatch loop drops the recognition
+/// gracefully.
+static std::string resolveCallArg(mlir::Value v) {
+  std::string n = traceToDecl(v);
+  if (!n.empty()) return n;
+  if (auto c = traceConstInt(v)) return std::to_string(*c);
+  return std::string{};
+}
+
+/// Build the ``ASTNode`` for a recognised BLAS call.  ``call_args`` carry
+/// the resolved decl / constant names in the routine's positional order
+/// (drops the ``N`` / leading-dim args -- the lib node derives them from
+/// memlets at expansion time).  Char-arg routines (DGEMM, DGEMV) capture
+/// the ``TRANS`` literal in ``ASTNode.expr`` so the Python builder can
+/// set the matching node property.
+static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
+  ASTNode n;
+  n.kind = "blascall";
+  n.callee = routine;
+  auto args = call.getArgOperands();
+
+  auto push = [&](mlir::Value v) {
+    n.call_args.push_back(resolveCallArg(v));
+  };
+
+  if (routine == "daxpy" || routine == "saxpy") {
+    // axpy(n, alpha, x, incx, y, incy) -- in-place y := alpha*x + y
+    if (args.size() < 6) { n.kind.clear(); return n; }
+    push(args[1]);  // alpha
+    push(args[2]);  // x
+    push(args[4]);  // y (inout)
+    return n;
+  }
+  if (routine == "dscal" || routine == "sscal") {
+    // scal(n, alpha, x, incx) -- in-place x := alpha*x
+    if (args.size() < 4) { n.kind.clear(); return n; }
+    push(args[1]);  // alpha
+    push(args[2]);  // x
+    return n;
+  }
+  if (routine == "ddot" || routine == "sdot") {
+    // ddot(n, x, incx, y, incy) -- returns scalar; assigned by the user as
+    // ``r = ddot(...)``.  The dot result is handled at the hlfir.assign
+    // for the result variable; here we only emit nothing for the call
+    // itself.  The result-name path is handled in the assign recogniser
+    // (parallel to the FFTW3 plan-create case).
+    n.kind.clear();
+    return n;
+  }
+  if (routine == "dgemv" || routine == "sgemv") {
+    // gemv(trans, m, n, alpha, A, lda, x, incx, beta, y, incy)
+    if (args.size() < 11) { n.kind.clear(); return n; }
+    n.expr = resolveCallArg(args[0]);  // trans char (literal)
+    push(args[3]);  // alpha
+    push(args[4]);  // A
+    push(args[6]);  // x
+    push(args[8]);  // beta
+    push(args[9]);  // y (inout)
+    return n;
+  }
+  if (routine == "dgemm" || routine == "sgemm") {
+    // gemm(transa, transb, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc)
+    if (args.size() < 13) { n.kind.clear(); return n; }
+    n.expr = resolveCallArg(args[0]) + "," + resolveCallArg(args[1]);  // transA,transB
+    push(args[5]);   // alpha
+    push(args[6]);   // A
+    push(args[8]);   // B
+    push(args[10]);  // beta
+    push(args[11]);  // C (inout)
+    return n;
+  }
+  if (routine == "dnrm2" || routine == "snrm2" ||
+      routine == "dasum" || routine == "sasum" ||
+      routine == "idamax" || routine == "isamax") {
+    // ?nrm2(n, x, incx) / ?asum(n, x, incx) / i?amax(n, x, incx) -- scalar result;
+    // the assign-side handler picks up the result variable.
+    n.kind.clear();
+    return n;
+  }
+  if (routine == "dcopy" || routine == "scopy") {
+    // copy(n, x, incx, y, incy) -- y := x
+    if (args.size() < 5) { n.kind.clear(); return n; }
+    push(args[1]);  // x
+    push(args[3]);  // y (out)
+    return n;
+  }
+  if (routine == "dswap" || routine == "sswap") {
+    // swap(n, x, incx, y, incy) -- x, y := y, x
+    if (args.size() < 5) { n.kind.clear(); return n; }
+    push(args[1]);  // x (inout)
+    push(args[3]);  // y (inout)
+    return n;
+  }
+  if (routine == "dger" || routine == "sger") {
+    // ger(m, n, alpha, x, incx, y, incy, A, lda) -- A := alpha*x*y' + A
+    if (args.size() < 9) { n.kind.clear(); return n; }
+    push(args[2]);  // alpha
+    push(args[3]);  // x
+    push(args[5]);  // y
+    push(args[7]);  // A (inout)
+    return n;
+  }
+  if (routine == "dtrsv" || routine == "strsv" ||
+      routine == "dtrmv" || routine == "strmv") {
+    // trsv/trmv(uplo, trans, diag, n, A, lda, x, incx)
+    if (args.size() < 8) { n.kind.clear(); return n; }
+    n.expr = resolveCallArg(args[0]) + "," + resolveCallArg(args[1]) + "," +
+             resolveCallArg(args[2]);  // uplo,trans,diag
+    push(args[4]);  // A
+    push(args[6]);  // x (inout)
+    return n;
+  }
+  if (routine == "dsymv" || routine == "ssymv") {
+    // symv(uplo, n, alpha, A, lda, x, incx, beta, y, incy)
+    if (args.size() < 10) { n.kind.clear(); return n; }
+    n.expr = resolveCallArg(args[0]);  // uplo
+    push(args[2]);  // alpha
+    push(args[3]);  // A
+    push(args[5]);  // x
+    push(args[7]);  // beta
+    push(args[8]);  // y (inout)
+    return n;
+  }
+  if (routine == "dtrsm" || routine == "strsm" ||
+      routine == "dtrmm" || routine == "strmm") {
+    // trsm/trmm(side, uplo, trans, diag, m, n, alpha, A, lda, B, ldb)
+    if (args.size() < 11) { n.kind.clear(); return n; }
+    n.expr = resolveCallArg(args[0]) + "," + resolveCallArg(args[1]) + "," +
+             resolveCallArg(args[2]) + "," + resolveCallArg(args[3]);
+    push(args[6]);  // alpha
+    push(args[7]);  // A
+    push(args[9]);  // B (inout)
+    return n;
+  }
+  if (routine == "dsymm" || routine == "ssymm") {
+    // symm(side, uplo, m, n, alpha, A, lda, B, ldb, beta, C, ldc)
+    if (args.size() < 12) { n.kind.clear(); return n; }
+    n.expr = resolveCallArg(args[0]) + "," + resolveCallArg(args[1]);
+    push(args[4]);  // alpha
+    push(args[5]);  // A
+    push(args[7]);  // B
+    push(args[9]);  // beta
+    push(args[10]); // C (inout)
+    return n;
+  }
+  if (routine == "dsyrk" || routine == "ssyrk") {
+    // syrk(uplo, trans, n, k, alpha, A, lda, beta, C, ldc)
+    if (args.size() < 10) { n.kind.clear(); return n; }
+    n.expr = resolveCallArg(args[0]) + "," + resolveCallArg(args[1]);
+    push(args[4]);  // alpha
+    push(args[5]);  // A
+    push(args[7]);  // beta
+    push(args[8]);  // C (inout)
+    return n;
+  }
+  n.kind.clear();
+  return n;
+}
+
+/// Build the ``ASTNode`` for a recognised LAPACK call.
+static ASTNode buildLapackCallNode(fir::CallOp call, const std::string& routine) {
+  ASTNode n;
+  n.kind = "lapackcall";
+  n.callee = routine;
+  auto args = call.getArgOperands();
+
+  if (routine == "dgetrf" || routine == "sgetrf") {
+    // getrf(m, n, A, lda, ipiv, info) -- LU factorisation
+    if (args.size() < 6) { n.kind.clear(); return n; }
+    n.call_args.push_back(resolveCallArg(args[2]));  // A (inout: factor in place)
+    n.call_args.push_back(resolveCallArg(args[4]));  // ipiv (out)
+    n.call_args.push_back(resolveCallArg(args[5]));  // info (out)
+    return n;
+  }
+  if (routine == "dpotrf" || routine == "spotrf") {
+    // potrf(uplo, n, A, lda, info) -- Cholesky factorisation
+    if (args.size() < 5) { n.kind.clear(); return n; }
+    n.expr = resolveCallArg(args[0]);  // 'U' or 'L'
+    n.call_args.push_back(resolveCallArg(args[2]));  // A (inout)
+    n.call_args.push_back(resolveCallArg(args[4]));  // info (out)
+    return n;
+  }
+  if (routine == "dpotrs" || routine == "spotrs") {
+    // potrs(uplo, n, nrhs, A, lda, B, ldb, info)
+    if (args.size() < 8) { n.kind.clear(); return n; }
+    n.expr = resolveCallArg(args[0]);                // 'U' or 'L'
+    n.call_args.push_back(resolveCallArg(args[3]));  // A
+    n.call_args.push_back(resolveCallArg(args[5]));  // B (inout)
+    n.call_args.push_back(resolveCallArg(args[7]));  // info (out)
+    return n;
+  }
+  if (routine == "dgeqrf" || routine == "sgeqrf") {
+    // geqrf(m, n, A, lda, tau, work, lwork, info)
+    if (args.size() < 8) { n.kind.clear(); return n; }
+    n.call_args.push_back(resolveCallArg(args[2]));  // A (inout)
+    n.call_args.push_back(resolveCallArg(args[4]));  // tau (out)
+    n.call_args.push_back(resolveCallArg(args[7]));  // info (out)
+    return n;
+  }
+  if (routine == "dorgqr" || routine == "sorgqr") {
+    // orgqr(m, n, k, A, lda, tau, work, lwork, info)
+    if (args.size() < 9) { n.kind.clear(); return n; }
+    n.call_args.push_back(resolveCallArg(args[3]));  // A (inout)
+    n.call_args.push_back(resolveCallArg(args[5]));  // tau (in)
+    n.call_args.push_back(resolveCallArg(args[8]));  // info (out)
+    return n;
+  }
+  n.kind.clear();
+  return n;
 }
 
 /// Build an ``mpicall`` ASTNode for a recognised MPI point-to-point
@@ -260,6 +962,24 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
     if (args.empty())
       throw std::runtime_error("MPI mpi_wait: no request argument");
     n.call_args = {resolve(args[0], "request")};
+    return n;
+  }
+
+  if (mpiOp == "mpi_alltoall") {
+    // MPI_Alltoall(sendbuf, sendcount, sendtype, recvbuf, recvcount,
+    //              recvtype, comm, ierr)
+    if (args.size() < 7)
+      throw std::runtime_error("MPI mpi_alltoall: unexpected argument count " +
+                               std::to_string(args.size()));
+    std::string sendbuf = resolve(args[0], "sendbuf");
+    std::string recvbuf = resolve(args[3], "recvbuf");
+    n.call_args = {sendbuf, recvbuf};
+    // comm decoding -- same rule as send/recv.  Append on a runtime/user comm.
+    std::string commName = traceToDecl(args[6]);
+    std::string low = llvm::StringRef(commName).lower();
+    bool isDefault = commName.empty() || low.rfind("__", 0) == 0 ||
+                     low.find("mpi_comm_world") != std::string::npos;
+    if (!isDefault) n.call_args.push_back(commName);
     return n;
   }
 
@@ -423,6 +1143,110 @@ struct IoState {
   std::string group;  // namelist group name (op == "namelist_read")
   std::vector<std::string> items;
 };
+
+// ---------------------------------------------------------------------------
+// FFTW3 plan recognition
+//
+// Pattern this consumes -- the standard FFTW3 C ABI driven from Fortran via
+// ``iso_c_binding`` (and the FFTW-compat ABI of cuFFT / MKL):
+//
+//     plan = fftw_plan_dft_2d(N, M, in, out, FFTW_FORWARD, FFTW_ESTIMATE)
+//     call fftw_execute_dft(plan, in, out)
+//     call fftw_destroy_plan(plan)
+//
+// The opaque ``TYPE(C_PTR) :: plan`` SSA value cannot be modeled in DaCe.
+// We therefore (1) recognise the three calls by callee name, (2) capture
+// the (rank, dims, direction) at the plan-create site and stash it under
+// the destination variable name, and (3) on the ``execute_dft`` call
+// emit a single ``fftcall`` ``ASTNode`` carrying the input/output array
+// names + the looked-up direction.  The plan-create and destroy calls
+// are dropped (no ASTNode emitted) -- the FFT lib node's expansion
+// owns the plan lifecycle.
+struct FftPlanInfo {
+  int rank;                       // 2 or 3
+  std::vector<std::string> dims;  // dimension expressions / literals
+  std::string direction;          // "forward" or "backward"
+};
+
+/// Return the normalised tag for a recognised FFTW3 callee, else empty.
+/// Accepts both ``fftw_*`` (double precision) and ``fftwf_*`` (single).
+static std::string fftw3CalleeTag(const std::string& callee) {
+  std::string s = callee;
+  if (!s.empty() && s[0] == '@') s.erase(0, 1);
+  if (s.rfind("_QP", 0) == 0) s.erase(0, 3);  // external/global mangling
+  // Strip optional trailing underscore (older Fortran external mangling).
+  while (!s.empty() && s.back() == '_') s.pop_back();
+  std::string low = llvm::StringRef(s).lower();
+  if (low == "fftw_plan_dft_2d" || low == "fftwf_plan_dft_2d") return "fft_plan_2d";
+  if (low == "fftw_plan_dft_3d" || low == "fftwf_plan_dft_3d") return "fft_plan_3d";
+  if (low == "fftw_execute_dft" || low == "fftwf_execute_dft") return "fft_execute";
+  if (low == "fftw_destroy_plan" || low == "fftwf_destroy_plan") return "fft_destroy";
+  return std::string{};
+}
+
+/// Build the ``ASTNode`` for a recognised FFTW3 call.  Returns an empty
+/// ``ASTNode`` (kind="") to mean "consumed, emit nothing"; the dispatch
+/// loop then ``continue``-s without pushing.
+///
+/// ``plans`` is threaded across the block so the execute call can look
+/// up the (rank, dims, direction) recorded at the plan-create site by
+/// destination variable name.
+static ASTNode buildFftw3CallNode(fir::CallOp call, const std::string& fftOp,
+                                  std::map<std::string, FftPlanInfo>& plans) {
+  ASTNode n;
+  auto args = call.getArgOperands();
+
+  if (fftOp == "fft_plan_2d" || fftOp == "fft_plan_3d") {
+    // Signature: fftw_plan_dft_{2,3}d(n0, n1[, n2], in, out, sign, flags)
+    int rank = (fftOp == "fft_plan_2d") ? 2 : 3;
+    if ((int)args.size() < rank + 4) return n;  // safety -- malformed call
+    FftPlanInfo info;
+    info.rank = rank;
+    for (int i = 0; i < rank; ++i) {
+      std::string dim;
+      if (auto c = traceConstInt(args[i])) dim = std::to_string(*c);
+      else dim = traceToDecl(args[i]);
+      info.dims.push_back(dim);
+    }
+    // Sign: FFTW_FORWARD = -1, FFTW_BACKWARD = +1.
+    int sign = 0;
+    if (auto c = traceConstInt(args[rank + 2])) sign = (int)*c;
+    info.direction = (sign == -1) ? "forward" : "backward";
+    // The plan-create call returns the plan; track which user variable
+    // it is stored into so the matching execute can look it up.
+    std::string planVar;
+    for (auto u : call.getResult(0).getUsers()) {
+      if (auto store = mlir::dyn_cast<fir::StoreOp>(u)) {
+        planVar = traceToDecl(store.getMemref());
+        if (!planVar.empty()) break;
+      }
+    }
+    if (!planVar.empty()) plans[planVar] = info;
+    return n;  // consumed -- emit nothing
+  }
+
+  if (fftOp == "fft_execute") {
+    // Signature: fftw_execute_dft(plan, in, out)
+    if (args.size() < 3) return n;
+    std::string planVar = traceToDecl(args[0]);
+    std::string inArr = traceToDecl(args[1]);
+    std::string outArr = traceToDecl(args[2]);
+    if (planVar.empty() || inArr.empty()) return n;
+    auto it = plans.find(planVar);
+    if (it == plans.end()) return n;  // unknown plan -- give up cleanly
+    n.kind = "fftcall";
+    n.callee = "fft_execute";
+    n.target = outArr.empty() ? inArr : outArr;
+    n.expr = it->second.direction;  // "forward" or "backward"
+    n.call_args.push_back(inArr);
+    n.call_args.push_back(outArr.empty() ? inArr : outArr);
+    for (auto& d : it->second.dims) n.call_args.push_back(d);
+    return n;
+  }
+
+  // fft_destroy: drop -- plan lifecycle is owned by the lib node expansion.
+  return n;
+}
 
 /// Advance the I/O state machine by one ``_FortranAio*`` ``call`` (callee
 /// ``c``), and on a completed read/write statement push an ``iocall`` ASTNode.
@@ -590,6 +1414,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
     nodes.push_back(std::move(n));
   };
   IoState io_state;  // threaded across this block's ``_FortranAio*`` calls
+  // FFT plan info keyed by plan variable name (see ``fftw3CalleeTag``).
+  std::map<std::string, FftPlanInfo> fft_plans;
   for (auto& op : block) {
     // Bind / advance the alloc-alias for this allocatable, then
     // emit a state-change ``<name>_allocated = 1`` so downstream
@@ -707,13 +1533,40 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       if (auto stepC = traceConstInt(doLoop.getStep())) {
         n.loop_step = *stepC;
       } else {
-        throw std::runtime_error(
-            "fir.do_loop with non-constant step  --  bridge "
-            "currently lowers only constant-step loops. The "
-            "step's sign decides forward-vs-reverse codegen; "
-            "with a symbolic step we'd silently default to +1 "
-            "and produce wrong-direction iteration when the "
-            "symbol is negative.");
+        // Symbolic step (``DO jbnd = jstart, jend, many_fft`` where
+        // ``many_fft`` is a runtime config integer).  Capture the
+        // symbolic form so emit_loop threads it through as the
+        // iteration update.  Defaults to forward iteration; a
+        // runtime-negative symbol falls out as zero-or-one
+        // iterations under the ``uid <= bound`` condition, matching
+        // Fortran's trip-count semantics for mismatched-direction
+        // loops.
+        //
+        // ``traceToDecl`` lifts the underlying scalar's name; if
+        // that's empty (the step comes from an inline arithmetic
+        // expression like ``2*chunk``) fall back to ``buildIndexExpr``
+        // which renders the SSA tree as a Fortran-style expression
+        // string.  Either way ``loop_step`` stays at the default 1
+        // and the emitter consults ``loop_step_expr`` first.
+        if (!isArrayElementLoad(doLoop.getStep())) {
+          auto sym = traceToDecl(doLoop.getStep());
+          if (!sym.empty()) n.loop_step_expr = sym;
+        }
+        if (n.loop_step_expr.empty())
+          n.loop_step_expr = buildIndexExpr(doLoop.getStep(), 0);
+        if (n.loop_step_expr.empty() || n.loop_step_expr == "?") {
+          // Fallback failed -- emit a location-rich diagnostic so
+          // the user can find the offending DO in their source.
+          std::string locStr;
+          llvm::raw_string_ostream locOS(locStr);
+          doLoop.getLoc().print(locOS);
+          throw std::runtime_error(
+              "fir.do_loop with unrenderable symbolic step at " + locStr +
+              "  --  step expression couldn't be lifted to a "
+              "Fortran-style scalar.  Open an issue if you need this "
+              "shape (typically a step computed from a function call "
+              "or struct member).");
+        }
       }
       // Elemental-inlined bodies use the fir.do_loop block arg
       // directly as the hlfir.designate index  --  no fir.store ->
@@ -737,14 +1590,236 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
     if (auto assign = mlir::dyn_cast<hlfir::AssignOp>(op)) {
       auto src = assign.getOperand(0);
       auto dst = assign.getOperand(1);
-      {
-        auto* sop = src.getDefiningOp();
-        FILE* fd = fopen("/tmp/probes/dbg.log", "a");
-        if (fd) {
-          fprintf(fd, "DEBUG ASSIGN src=%s\n",
-                  sop ? sop->getName().getStringRef().str().c_str() : "<null>");
-          fclose(fd);
+
+      // Fortran-runtime transformational intrinsics return their
+      // result either as a scalar (``_FortranANorm2_*``) or as a
+      // newly-heap-allocated array whose descriptor lives in an
+      // alloca passed as the first operand
+      // (``_FortranASpread`` / ``_FortranAEoshiftVector`` / etc.).
+      //
+      // Scalar form ``hlfir.assign %fXX_call_result to %dst``:
+      // detect the call directly.
+      // Array form ``hlfir.assign %as_expr to %dst`` where
+      // ``%as_expr = hlfir.as_expr %decl move %true`` and ``%decl``
+      // declares the runtime ``.tmp.intrinsic_result``: walk back
+      // through ``declare -> box_addr -> load %alloca`` and look at
+      // users of ``%alloca`` for the matching runtime call.
+      auto canonicalCallee = [](fir::CallOp call) -> std::string {
+        auto cref = call.getCallee();
+        if (!cref) return "";
+        std::string cs;
+        llvm::raw_string_ostream os(cs);
+        cref->print(os);
+        std::string callee = cs;
+        if (!callee.empty() && callee.front() == '@') callee.erase(0, 1);
+        if (callee.size() >= 2 && callee.front() == '"' && callee.back() == '"')
+          callee = callee.substr(1, callee.size() - 2);
+        return callee;
+      };
+
+      if (auto* sop = src.getDefiningOp()) {
+        if (auto call = mlir::dyn_cast<fir::CallOp>(sop)) {
+          std::string callee = canonicalCallee(call);
+          // ``_FortranANorm2_<bits>`` -> ``Norm2`` lib node.
+          if (callee.rfind("_FortranANorm2_", 0) == 0) {
+            ASTNode n;
+            n.kind = "libcall";
+            n.callee = "norm2";
+            if (auto* dd = dst.getDefiningOp())
+              if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(dd))
+                n.target =
+                    allocAliasFor(extractName(decl.getUniqName().str()));
+            if (n.target.empty()) n.target = traceToDecl(dst);
+            n.target_is_array = false;
+            auto args = call.getArgOperands();
+            if (args.size() >= 1) {
+              auto srcName = traceToDecl(args[0]);
+              if (srcName.empty())
+                throw std::runtime_error(
+                    "_FortranANorm2: cannot resolve source array name");
+              n.call_args.push_back(srcName);
+              n.call_arg_subsets.push_back("");
+            }
+            if (args.size() >= 4) {
+              if (auto c = traceConstInt(args[3])) {
+                if (*c > 0) n.reduce_axes.push_back(*c - 1);
+              }
+            }
+            nodes.push_back(std::move(n));
+            continue;
+          }
         }
+        // Heap-result form: trace through as_expr / declare to the
+        // alloca whose store-from-runtime-call seeded it.
+        if (auto as_expr = mlir::dyn_cast<hlfir::AsExprOp>(sop)) {
+          mlir::Value v = as_expr.getVar();
+          // declare -> box_addr -> load -> alloca chain.
+          mlir::Operation* allocaOp = nullptr;
+          for (int hop = 0; hop < 8 && v; ++hop) {
+            auto* d = v.getDefiningOp();
+            if (!d) break;
+            if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(d)) {
+              v = decl.getMemref();
+              continue;
+            }
+            if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
+              v = ba.getVal();
+              continue;
+            }
+            if (auto ld = mlir::dyn_cast<fir::LoadOp>(d)) {
+              v = ld.getMemref();
+              continue;
+            }
+            if (auto al = mlir::dyn_cast<fir::AllocaOp>(d)) {
+              allocaOp = al.getOperation();
+              break;
+            }
+            break;
+          }
+          if (allocaOp) {
+            // Look for ``_FortranASpread`` / ``_FortranAEoshiftVector``
+            // among users of the alloca, peeling through
+            // ``fir.convert`` (the runtime call takes a
+            // ``!fir.ref<!fir.box<none>>`` so the alloca's typed
+            // result is first reboxed via convert).
+            std::vector<mlir::Operation*> queue;
+            for (auto* u : allocaOp->getResult(0).getUsers())
+              queue.push_back(u);
+            for (size_t qi = 0; qi < queue.size(); ++qi) {
+              auto* user = queue[qi];
+              if (auto cv = mlir::dyn_cast<fir::ConvertOp>(user)) {
+                for (auto* uu : cv.getResult().getUsers()) queue.push_back(uu);
+                continue;
+              }
+              auto rtcall = mlir::dyn_cast<fir::CallOp>(user);
+              if (!rtcall) continue;
+              std::string callee = canonicalCallee(rtcall);
+              auto rtargs = rtcall.getArgOperands();
+              // SPREAD / EOSHIFT: lower directly to the lib node
+              // writing INTO the user's destination -- src -> lib node
+              // -> dst, no intermediate transient.  Fortran's
+              // assignment semantics guarantees the heap-result shape
+              // matches dst's shape, so the runtime allocation is just
+              // ceremony around what is semantically a copy from a
+              // shape-transformed source.
+              std::string dstName;
+              if (auto* dd = dst.getDefiningOp())
+                if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(dd))
+                  dstName =
+                      allocAliasFor(extractName(decl.getUniqName().str()));
+              if (dstName.empty()) dstName = traceToDecl(dst);
+              if (callee == "_FortranASpread" && rtargs.size() >= 4) {
+                auto srcName = traceToDecl(rtargs[1]);
+                if (srcName.empty())
+                  throw std::runtime_error(
+                      "_FortranASpread: cannot resolve source array name");
+                ASTNode n;
+                n.kind = "libcall";
+                n.callee = "broadcast";
+                n.target = dstName;
+                n.target_is_array = true;
+                n.call_args.push_back(srcName);
+                n.call_arg_subsets.push_back("");
+                if (auto c = traceConstInt(rtargs[2]))
+                  n.reduce_axes.push_back(*c - 1);
+                nodes.push_back(std::move(n));
+                goto runtime_call_handled;
+              }
+              if ((callee == "_FortranAEoshiftVector" ||
+                   callee.rfind("_FortranAEoshift", 0) == 0) &&
+                  rtargs.size() >= 3) {
+                auto srcName = traceToDecl(rtargs[1]);
+                if (srcName.empty())
+                  throw std::runtime_error(
+                      "_FortranAEoshift: cannot resolve source array name");
+                ASTNode n;
+                n.kind = "libcall";
+                n.callee = "eoshift";
+                n.target = dstName;
+                n.target_is_array = true;
+                n.call_args.push_back(srcName);
+                n.call_arg_subsets.push_back("");
+                if (auto c = traceConstInt(rtargs[2])) {
+                  n.options["shift"] = std::to_string(*c);
+                } else {
+                  auto sExpr = buildIndexExpr(rtargs[2], 0);
+                  if (!sExpr.empty() && sExpr != "?")
+                    n.options["shift"] = sExpr;
+                }
+                if (rtargs.size() >= 4) {
+                  if (auto c = traceConstInt(rtargs[3]))
+                    n.options["boundary"] = std::to_string(*c);
+                }
+                nodes.push_back(std::move(n));
+                goto runtime_call_handled;
+              }
+            }
+          }
+        }
+      }
+      goto runtime_call_not_handled;
+    runtime_call_handled:
+      continue;
+    runtime_call_not_handled:;
+
+      // Recognise + suppress the ``plan = fftw_plan_dft_*(...)`` user
+      // statement.  Flang lowers it through a ``.result`` temp:
+      //   ``%158 = fir.call @fftw_plan_dft_2d(...)``
+      //   ``fir.save_result %158 to %0  (the .result alloca)``
+      //   ``%159 = hlfir.declare %0``
+      //   ``%160 = hlfir.as_expr %159``
+      //   ``hlfir.assign %160 to %141#0``  (the user's ``plan`` variable)
+      // We walk back through the as_expr -> declare -> alloca chain and
+      // ask whether the alloca is the destination of a fir.save_result
+      // of a recognised FFTW3 plan-create call. If so, record the plan
+      // variable's (rank, dims, direction) under ``fft_plans`` for the
+      // matching ``fftw_execute_dft`` to look up, and skip the assign --
+      // the opaque ``TYPE(C_PTR)`` SSA value has no SDFG representation.
+      {
+        bool is_fft_plan_assign = false;
+        if (auto* sop = src.getDefiningOp()) {
+          if (auto as_expr = mlir::dyn_cast<hlfir::AsExprOp>(sop)) {
+            if (auto* dop = as_expr.getVar().getDefiningOp()) {
+              if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(dop)) {
+                auto memref = decl.getMemref();
+                for (auto u : memref.getUsers()) {
+                  auto sr = mlir::dyn_cast<fir::SaveResultOp>(u);
+                  if (!sr) continue;
+                  auto* srdef = sr.getValue().getDefiningOp();
+                  auto call = srdef ? mlir::dyn_cast<fir::CallOp>(srdef) : fir::CallOp{};
+                  if (!call) continue;
+                  auto ref = call.getCallee();
+                  if (!ref) continue;
+                  std::string cs;
+                  llvm::raw_string_ostream os(cs);
+                  ref->print(os);
+                  std::string tag = fftw3CalleeTag(cs);
+                  if (tag != "fft_plan_2d" && tag != "fft_plan_3d") continue;
+                  // Confirmed: this assign is the user's ``plan = fftw_plan_dft_*``.
+                  is_fft_plan_assign = true;
+                  std::string planVar = traceToDecl(dst);
+                  if (!planVar.empty()) {
+                    FftPlanInfo info;
+                    info.rank = (tag == "fft_plan_2d") ? 2 : 3;
+                    auto args = call.getArgOperands();
+                    for (int i = 0; i < info.rank; ++i) {
+                      std::string dim;
+                      if (auto c = traceConstInt(args[i])) dim = std::to_string(*c);
+                      else dim = traceToDecl(args[i]);
+                      info.dims.push_back(dim);
+                    }
+                    int sign = 0;
+                    if (auto c = traceConstInt(args[info.rank + 2])) sign = (int)*c;
+                    info.direction = (sign == -1) ? "forward" : "backward";
+                    fft_plans[planVar] = info;
+                  }
+                  break;
+                }
+              }
+            }
+          }
+        }
+        if (is_fft_plan_assign) continue;
       }
 
       // Suppress per-element stores into a Flang-synthesised
@@ -964,6 +2039,36 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       }
 
       if (auto* sd = srcPeeled.getDefiningOp()) {
+        // ``hlfir.reshape %src %shape`` -> flat copy from the
+        // reshape's source array into the assignment's destination.
+        // Fortran ``RESHAPE`` requires both sides to carry the same
+        // total element count, so a ``CopyLibraryNode`` whose
+        // expansion collapses each side to a 1-D walker handles the
+        // rank/extent mismatch.  ``hlfir.reshape``'s optional
+        // ``pad`` / ``order`` operands are NOT supported in this
+        // first cut  --  fall through to the existing
+        // libcall/elemental path with a clear NotImplemented at the
+        // bridge layer when present, so the surfaced gap is the
+        // unsupported variant rather than a silent miscopy.
+        if (auto reshape = mlir::dyn_cast<hlfir::ReshapeOp>(sd)) {
+          if (sd->getNumOperands() > 2) {
+            throw std::runtime_error(
+                "hlfir.reshape: pad= / order= variants are not yet supported");
+          }
+          ASTNode n;
+          n.kind = "copy";
+          if (auto* dd = dst.getDefiningOp())
+            if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(dd))
+              n.target = allocAliasFor(extractName(decl.getUniqName().str()));
+          if (n.target.empty()) n.target = traceToDecl(dst);
+          n.target_is_array = true;
+          n.reduce_src = traceToDecl(reshape.getOperand(0));
+          if (n.reduce_src.empty())
+            throw std::runtime_error(
+                "hlfir.reshape: cannot resolve source array name");
+          nodes.push_back(std::move(n));
+          continue;
+        }
         if (auto elem = mlir::dyn_cast<hlfir::ElementalOp>(sd)) {
           auto merge_built = buildMergeLibcall(assign, elem);
           if (!merge_built.empty()) {
@@ -985,6 +2090,14 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
         };
         static const LibEntry kLibTable[] = {
             {"hlfir.matmul", "matmul"},
+            // ``MATMUL(TRANSPOSE(A), B)`` lowers under the optimised
+            // ``hlfir-optimized-bufferization`` pass as a single
+            // ``hlfir.matmul_transpose``.  The Python emitter expands
+            // it to a ``Transpose`` + ``MatMul`` libcall pair so the
+            // operand-order semantics are correct without a
+            // dedicated lib node; future cuBLAS/MKL acceleration
+            // can swap in a fused expansion.
+            {"hlfir.matmul_transpose", "matmul_transpose"},
             {"hlfir.transpose", "transpose"},
             {"hlfir.dot_product", "dot_product"},
             // Fortran ``COUNT(mask [, dim])``  --  routed through
@@ -994,6 +2107,20 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
             // picks up the optional ``dim`` operand and threads
             // it through the ASTNode for ``emit_libcall``.
             {"hlfir.count", "count"},
+            // Fortran ``MINLOC(array [, dim [, mask [, back]]])``
+            // and the symmetric ``MAXLOC``  --  routed through the
+            // ``ArgMin`` / ``ArgMax`` library nodes (pure WCR
+            // expansion mirroring the ``numpy.argmin`` / ``numpy.argmax``
+            // replacement pattern).  ``buildLibCallNode`` threads any
+            // ``dim`` (Fortran 1-based) and ``back`` flag through the
+            // ASTNode for ``emit_libcall``.
+            {"hlfir.minloc", "argmin"},
+            {"hlfir.maxloc", "argmax"},
+            // Fortran ``CSHIFT(array, shift [, dim])`` -- circular
+            // shift along ``dim`` (default 1).  Routed through
+            // ``CShift`` (pure expansion = Map of mod-indexed reads
+            // along the chosen axis).
+            {"hlfir.cshift", "cshift"},
         };
         bool libMatched = false;
         for (auto& e : kLibTable) {
@@ -1037,13 +2164,78 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
               auto opnd = sd->getOperand(i);
               auto* od = opnd.getDefiningOp();
               if (!od) continue;
-              auto elem = mlir::dyn_cast<hlfir::ElementalOp>(od);
-              if (!elem) continue;
-              auto [trName, prelude] = materialiseElementalForLibcall(elem);
-              if (trName.empty()) continue;
-              for (auto& n : prelude) nodes.push_back(std::move(n));
-              elemSubst[i] = std::move(trName);
-              needSubst = true;
+              if (auto elem = mlir::dyn_cast<hlfir::ElementalOp>(od)) {
+                auto [trName, prelude] = materialiseElementalForLibcall(elem);
+                if (trName.empty()) continue;
+                for (auto& n : prelude) nodes.push_back(std::move(n));
+                elemSubst[i] = std::move(trName);
+                needSubst = true;
+                continue;
+              }
+              // Inline ``hlfir.transpose %A`` operand -- materialise a
+              // ``transpose`` libcall into a fresh ``_libsrc_<n>``
+              // transient, then point the outer libcall at the
+              // transient.  Covers ``MATMUL(A, TRANSPOSE(B))`` and
+              // ``MATMUL(TRANSPOSE(A), TRANSPOSE(B))`` in the default
+              // (unfused) HLFIR pipeline.
+              //
+              // SKIP this materialisation when the outer libcall is
+              // ``matmul`` / ``matmul_transpose`` -- the BLAS call's
+              // ``transA`` / ``transB`` flag handles the transpose
+              // in-place (``CblasTrans`` / ``CUBLAS_OP_T``), no
+              // transient + no extra copy.  ``buildLibCallNode``
+              // (assigns.cpp) detects the same shape and sets
+              // ``options[transA/transB]=true`` so the two paths
+              // line up.  For ``matmul``: both arg 0 and arg 1
+              // qualify.  For ``matmul_transpose``: only arg 1
+              // qualifies (LHS transpose is already in the op
+              // itself).
+              bool isMatmulFamily = (e.callee == "matmul" ||
+                                     e.callee == "matmul_transpose");
+              bool foldsViaBlas =
+                  (e.callee == "matmul" && i < 2) ||
+                  (e.callee == "matmul_transpose" && i == 1);
+              if (auto tp = mlir::dyn_cast<hlfir::TransposeOp>(od);
+                  tp && isMatmulFamily && foldsViaBlas) {
+                // Defer to buildLibCallNode -- it will see the
+                // hlfir.transpose operand, set the BLAS flag, and
+                // re-bind to the un-transposed source.
+                continue;
+              }
+              if (auto tp = mlir::dyn_cast<hlfir::TransposeOp>(od)) {
+                auto srcVal = tp.getOperand();
+                auto srcName = traceToDecl(srcVal);
+                if (srcName.empty()) continue;
+                std::string trName =
+                    "_libsrc_t_" + std::to_string(kSynthTransientCounter++);
+                ASTNode decl;
+                decl.kind = "declare_transient";
+                decl.target = trName;
+                decl.expr = exprDtypeString(tp.getType());
+                AccessInfo shape_info;
+                shape_info.array_name = trName;
+                // ``hlfir.transpose`` result is rank-2 with the
+                // source's dims reversed.  Derive each result-dim
+                // extent from the source array's ``box_dims`` so the
+                // transient gets a symbolic shape rather than the
+                // ``?`` placeholder Flang puts in the expression-type
+                // shape vector for assumed-shape sources.
+                shape_info.index_exprs.push_back(srcName + "_d1");
+                shape_info.index_exprs.push_back(srcName + "_d0");
+                decl.accesses.push_back(std::move(shape_info));
+                nodes.push_back(std::move(decl));
+                ASTNode tcall;
+                tcall.kind = "libcall";
+                tcall.callee = "transpose";
+                tcall.target = trName;
+                tcall.target_is_array = true;
+                tcall.call_args.push_back(srcName);
+                tcall.call_arg_subsets.push_back("");
+                nodes.push_back(std::move(tcall));
+                elemSubst[i] = std::move(trName);
+                needSubst = true;
+                continue;
+              }
             }
             auto lib = buildLibCallNode(assign, sd, e.callee.str());
             if (needSubst) {
@@ -1065,22 +2257,30 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
         struct RedEntry {
           llvm::StringRef op;
           llvm::StringRef wcr;       // DaCe wcr lambda string
-          llvm::StringRef identity;  // initial accumulator value
+          llvm::StringRef identity;  // initial accumulator value (float-typed)
           llvm::StringRef py_op;     // Python binary op for
                                      // section-reduce loop body;
                                      // empty -> fall back to
                                      // buildReduceNode (whole-array)
         };
+        // Identity strings here are the FLOAT-TYPED defaults.  The
+        // ``identityForType`` helper below specialises them per
+        // element type because ``inf`` / ``-inf`` cast to an integer
+        // is undefined behaviour: at -O3 the compiler folds it to
+        // INT_MAX/INT_MIN; at -O0 the un-folded ``INFINITY`` to
+        // ``int`` conversion gives INT_MIN regardless of intent,
+        // breaking integer MINVAL (e.g. NPB LU's class-S tests
+        // surface this as ``MINVAL(arr) == -2147483648`` at -O0).
+        // Identity strings use the bare ``inf`` token (not
+        // ``math.inf``) so DaCe's cppunparse -- which maps
+        // ``inf`` -> ``INFINITY`` via _py2c_reserved -- emits
+        // a valid C++ literal in the section-reduce init
+        // tasklet.  The whole-array Reduce path's eval()
+        // namespace is patched with ``inf=math.inf`` for
+        // the same string.
         static const RedEntry kRedTable[] = {
             {"hlfir.sum", "lambda a, b: a + b", "0", "+"},
             {"hlfir.product", "lambda a, b: a * b", "1", "*"},
-            // Identity strings use the bare ``inf`` token (not
-            // ``math.inf``) so DaCe's cppunparse  --  which maps
-            // ``inf`` -> ``INFINITY`` via _py2c_reserved  --  emits
-            // a valid C++ literal in the section-reduce init
-            // tasklet.  The whole-array Reduce path's eval()
-            // namespace is patched with ``inf=math.inf`` for
-            // the same string.
             {"hlfir.minval", "lambda a, b: min(a, b)", "inf", "min"},
             {"hlfir.maxval", "lambda a, b: max(a, b)", "-inf", "max"},
             // Logical reductions  --  ANY / ALL on ``fir.logical``
@@ -1092,6 +2292,56 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
             // libcall (covers Fortran COUNT's int-cast semantics
             // and the optional ``dim`` argument).
         };
+        // Pick the type-correct identity literal for the reduction
+        // op's element type.  MINVAL / MAXVAL on integer arrays must
+        // initialise with INT_MAX / INT_MIN; ``inf`` / ``-inf`` to
+        // int is undefined behaviour and breaks at -O0 (see
+        // ``tests/integer_reduction_identity_test.py``).
+        auto identityForType = [&](const RedEntry& entry,
+                                   mlir::Type elemTy) -> std::string {
+          // SUM / PRODUCT identities (``0`` / ``1``) are type-
+          // compatible for both int and float -- pass through.
+          if (entry.identity == "0" || entry.identity == "1" ||
+              entry.identity == "True" || entry.identity == "False") {
+            return entry.identity.str();
+          }
+          // MINVAL / MAXVAL: pick the type-correct sentinel.
+          bool isInf = (entry.identity == "inf");
+          bool isNegInf = (entry.identity == "-inf");
+          if (!isInf && !isNegInf) return entry.identity.str();
+          if (auto intTy = mlir::dyn_cast<mlir::IntegerType>(elemTy)) {
+            // Emit the literal min/max value for the integer width.
+            // We use literal integers (not ``std::numeric_limits<>``)
+            // because the builder's ``_parse_reduce_identity``
+            // (emit_library.py:138) round-trips the identity through
+            // Python ``int(s)``: a string of the right literal goes
+            // straight through, while ``std::numeric_limits<>::max()``
+            // forces a separate Python-side parser.  Fortran's INTEGER
+            // KINDs map to MLIR signed integer widths 8/16/32/64;
+            // signed semantics, two's complement min/max.
+            unsigned w = intTy.getWidth();
+            // Two's-complement max = 2^(w-1) - 1, min = -2^(w-1).
+            // ``__int128`` would overflow llvm::APInt construction
+            // from int64; we cap at w == 64 and fall back to the
+            // float identity for wider types (none arise from
+            // Fortran).
+            if (w > 64) return entry.identity.str();
+            int64_t maxVal = (w == 64) ? std::numeric_limits<int64_t>::max()
+                                       : ((int64_t(1) << (w - 1)) - 1);
+            int64_t minVal = (w == 64) ? std::numeric_limits<int64_t>::min()
+                                       : (-(int64_t(1) << (w - 1)));
+            return std::to_string(isInf ? maxVal : minVal);
+          }
+          // Default: float identity (``inf`` / ``-inf``) -- DaCe's
+          // cppunparse maps to ``INFINITY`` / ``-INFINITY``.
+          return entry.identity.str();
+        };
+        // Compute the reduction's element type once; ``sd`` is the
+        // hlfir.minval / maxval / sum / ... op.  Its result type is
+        // the per-element scalar type for these "reduce to scalar"
+        // ops.
+        mlir::Type redElemTy;
+        if (sd->getNumResults() > 0) redElemTy = sd->getResult(0).getType();
         bool matched = false;
         for (auto& e : kRedTable) {
           if (opName == e.op) {
@@ -1128,7 +2378,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
                     }
                   if (hasTrip) {
                     auto built = buildSectionReduceAssign(
-                        assign, dg, e.py_op.str(), e.identity.str());
+                        assign, dg, e.py_op.str(),
+                        identityForType(e, redElemTy));
                     if (!built.empty()) {
                       for (auto& bn : built) nodes.push_back(std::move(bn));
                       emitted = true;
@@ -1137,21 +2388,27 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
                 }
               }
             }
-            // Mode-C for ``hlfir.any`` / ``hlfir.all``: the
-            // reduction's source is an ``hlfir.elemental``
-            // (compound boolean expression), so ``traceToDecl``
-            // returns "" and the plain Reduce path explodes
-            // with ``reduction source '' not registered``.
-            // Materialise the elemental into a transient mask
-            // via a per-element loop (same pattern as Mode-C
-            // COUNT) and route the Reduce over the transient.
-            if (!emitted && (e.op == "hlfir.any" || e.op == "hlfir.all") &&
-                sd->getNumOperands() > 0) {
+            // Mode-C for ANY reduction op whose source is an
+            // ``hlfir.elemental`` (compound boolean expression for
+            // ANY/ALL, element-wise arithmetic like ``SUM(q ** 2)``
+            // for SUM/PRODUCT/MINVAL/MAXVAL).  ``traceToDecl``
+            // returns "" for an elemental result -- the plain
+            // Reduce path then explodes with ``reduction source ''
+            // not registered``.  Materialise the elemental into a
+            // transient via a per-element loop and route the
+            // Reduce over the transient.  ``buildElementalAnyAllReduce``
+            // is op-agnostic (its name is historical -- the wcr +
+            // identity arguments make it work for any reduction)
+            // so we route SUM/PRODUCT/MINVAL/MAXVAL the same way.
+            // QE's ``vcut_get`` (3 occurrences of ``SUM(... ** 2)``)
+            // was the surfacing case.
+            if (!emitted && sd->getNumOperands() > 0) {
               auto srcVal = sd->getOperand(0);
               if (auto* srcOp = srcVal.getDefiningOp())
                 if (auto elem_src = mlir::dyn_cast<hlfir::ElementalOp>(srcOp)) {
                   auto built = buildElementalAnyAllReduce(
-                      assign, elem_src, e.wcr.str(), e.identity.str());
+                      assign, elem_src, e.wcr.str(),
+                      identityForType(e, redElemTy));
                   if (!built.empty()) {
                     for (auto& bn : built) nodes.push_back(std::move(bn));
                     emitted = true;
@@ -1159,8 +2416,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
                 }
             }
             if (!emitted) {
-              nodes.push_back(
-                  buildReduceNode(assign, sd, e.wcr.str(), e.identity.str()));
+              nodes.push_back(buildReduceNode(assign, sd, e.wcr.str(),
+                                              identityForType(e, redElemTy)));
             }
             matched = true;
             break;
@@ -1202,6 +2459,12 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       ASTNode n;
       n.kind = "conditional";
       n.condition = buildBoolExpr(ifOp.getCondition(), 0);
+      // Walk the condition's IR for array-element reads -- same as
+      // the ``fir.if`` handler at the top of ``walkBlock`` and the
+      // ``scf.if`` handler below.  Without this the Python emitter
+      // has no per-occurrence access info to lift array-read
+      // conditions through the tasklet path.
+      collectReadAccesses(ifOp.getCondition(), n.accesses, 0);
       if (!ifOp.getThenRegion().empty())
         n.children = buildAST(ifOp.getThenRegion().front());
       if (!ifOp.getElseRegion().empty())
@@ -1213,6 +2476,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       ASTNode n;
       n.kind = "conditional";
       n.condition = buildBoolExpr(ifOp.getCondition(), 0);
+      // Same array-read collection as the ``fir.if`` branch above.
+      collectReadAccesses(ifOp.getCondition(), n.accesses, 0);
       if (!ifOp.getThenRegion().empty())
         n.children = buildAST(ifOp.getThenRegion().front());
       if (!ifOp.getElseRegion().empty())
@@ -1234,6 +2499,103 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
         nodes.push_back(buildMpiCallNode(call, mpiOp));
         continue;
       }
+      // FFTW3 plan-create / execute / destroy triple: consume all three;
+      // only the execute emits an ``fftcall`` ASTNode (the plan-create
+      // and destroy are absorbed -- the FFT lib node's expansion owns
+      // the plan lifecycle).
+      std::string fftOp = fftw3CalleeTag(n.callee);
+      if (!fftOp.empty()) {
+        auto fn = buildFftw3CallNode(call, fftOp, fft_plans);
+        if (!fn.kind.empty()) nodes.push_back(std::move(fn));
+        continue;
+      }
+      // QE generic FFT (fwfft / invfft) and its specific subroutines
+      // (fwfft_y / invfft_y / fwfft_b / invfft_b).  Map to the same
+      // ``fftcall`` ASTNode the FFTW3 execute emits so ``emit_fft``
+      // handles both uniformly.
+      std::string qeDir = qeFftCalleeTag(n.callee);
+      if (!qeDir.empty()) {
+        auto qn = buildQeFftCallNode(call, qeDir);
+        if (!qn.kind.empty()) nodes.push_back(std::move(qn));
+        continue;
+      }
+      // QE Fourier interpolation (fft_interpolate_real / _complex).
+      // ABI: fft_interpolate(dfft_in, v_in, dfft_out, v_out) -- we use
+      // operand 1 as the input array and operand 3 as the output array.
+      std::string qeIntr = qeFftInterpolateCalleeTag(n.callee);
+      if (!qeIntr.empty()) {
+        auto args = call.getArgOperands();
+        if (args.size() >= 4) {
+          std::string vin = traceToDecl(args[1]);
+          std::string vout = traceToDecl(args[3]);
+          if (!vin.empty() && !vout.empty()) {
+            ASTNode in;
+            in.kind = "fft_interpolate";
+            in.callee = qeIntr;  // "real" or "complex"
+            in.target = vout;
+            in.call_args = {vin, vout};
+            nodes.push_back(std::move(in));
+            continue;
+          }
+        }
+      }
+      // QE per-axis pencil FFT (cft_1z / cft_1y / cft_1x).
+      std::string qePencil = qePencilCalleeTag(n.callee);
+      if (!qePencil.empty()) {
+        auto pn = buildQePencilCallNode(call, qePencil);
+        if (!pn.kind.empty()) nodes.push_back(std::move(pn));
+        continue;
+      }
+      // QE pencil-pipeline scatter routines (fft_scatter_xy / fft_scatter_yz).
+      std::string qeScatter = qeScatterCalleeTag(n.callee);
+      if (!qeScatter.empty()) {
+        auto sn = buildQeScatterCallNode(call, qeScatter);
+        if (!sn.kind.empty()) nodes.push_back(std::move(sn));
+        continue;
+      }
+      // BLAS routine call site (DAXPY / DSCAL / DGEMM / ...): emit a
+      // ``blascall`` ASTNode the Python builder lowers to the matching
+      // ``dace.libraries.blas`` library node.  ``ddot`` is special-cased
+      // -- the result-carrying assign handler picks it up at the
+      // matching ``hlfir.assign`` site instead.
+      std::string blasOp = blasCalleeTag(n.callee);
+      if (!blasOp.empty()) {
+        auto bn = buildBlasCallNode(call, blasOp);
+        if (!bn.kind.empty()) nodes.push_back(std::move(bn));
+        continue;
+      }
+      // LAPACK routine call site (DGETRF / DPOTRF / ...).
+      std::string lapOp = lapackCalleeTag(n.callee);
+      if (!lapOp.empty()) {
+        auto ln = buildLapackCallNode(call, lapOp);
+        if (!ln.kind.empty()) nodes.push_back(std::move(ln));
+        continue;
+      }
+      // Library-prefix near-miss: the callee matches a recognised library's
+      // call convention (MPI / FFTW3 / BLAS / LAPACK) but the specific
+      // routine isn't in our supported subset.  Emit an explicit
+      // ``unsupported_libcall`` ASTNode so the Python builder can raise a
+      // clear ``NotImplementedError`` (better than silently degrading to a
+      // generic ``call`` node that mints ``_out = ?`` placeholders).
+      std::string libFam = libraryFamilyTag(n.callee);
+      if (!libFam.empty()) {
+        // Recognised + supported routines are caught above; reaching here
+        // means the callee is in the library-prefix universe but not in
+        // the supported set.
+        bool isSupported =
+            !mpiCalleeTag(n.callee).empty() ||
+            !fftw3CalleeTag(n.callee).empty() ||
+            !blasCalleeTag(n.callee).empty() ||
+            !lapackCalleeTag(n.callee).empty();
+        if (!isSupported) {
+          ASTNode un;
+          un.kind = "unsupported_libcall";
+          un.callee = normaliseBlasName(n.callee);
+          un.expr = libFam;  // "mpi" / "fftw3" / "blas" / "lapack"
+          nodes.push_back(std::move(un));
+          continue;
+        }
+      }
       // Fortran I/O runtime call: advance the open/read/write/close state
       // machine (see ``recognizeIoCall``).  Consumed here either way.
       if (n.callee.find("_FortranAio") != std::string::npos) {
@@ -1243,8 +2605,26 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       // Resolve each operand to a decl name so the Python builder can
       // lower a registered external (bind(c)) call to a tasklet.
       // Harmless for unregistered callees (the builder ignores them).
-      for (auto v : call.getArgOperands())
-        n.call_args.push_back(traceToDecl(v));
+      // A by-value integer-constant operand (e.g. ``CALL ext(a, 16)``) has no
+      // decl  --  emit its literal value so it reaches the C call by name
+      // rather than as an empty term.
+      for (auto v : call.getArgOperands()) {
+        std::string nm = traceToDecl(v);
+        if (nm.empty())
+          if (auto c = traceConstInt(v)) nm = std::to_string(*c);
+        n.call_args.push_back(nm);
+      }
+      // Carry the AoS-marshalling grouping the marshal pass tagged on the
+      // callee so emit_call can re-pack the (now-SoA-flat) member args into a
+      // local AoS buffer for the external.
+      if (auto ref = call.getCallee())
+        if (auto mod = call->getParentOfType<mlir::ModuleOp>())
+          if (auto fn = mod.lookupSymbol<mlir::func::FuncOp>(
+                  ref->getLeafReference()))
+            if (auto g = fn->getAttrOfType<mlir::DenseI64ArrayAttr>(
+                    "hlfir.aos_marshal_groups"))
+              n.aos_marshal_groups.assign(g.asArrayRef().begin(),
+                                          g.asArrayRef().end());
       nodes.push_back(std::move(n));
       continue;
     }
@@ -1275,6 +2655,19 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
         if (auto* md = memref.getDefiningOp())
           if (mlir::isa<fir::AllocaOp>(md)) target = allocaSynthName(memref);
       if (target.empty()) continue;
+      // Drop stores whose RHS is the return value of a recognised FFTW3
+      // ``fftw_plan_dft_*`` call -- the plan SSA value is opaque
+      // (``TYPE(C_PTR)``) and is consumed by the matching ``execute_dft``
+      // recognition, so the user's ``plan = fftw_plan_dft_2d(...)``
+      // statement has no observable side effect in the SDFG.
+      if (auto* def = st.getValue().getDefiningOp())
+        if (auto src_call = mlir::dyn_cast<fir::CallOp>(def))
+          if (auto ref = src_call.getCallee()) {
+            std::string s;
+            llvm::raw_string_ostream os(s);
+            ref->print(os);
+            if (!fftw3CalleeTag(s).empty()) continue;
+          }
       auto expr = buildExpr(st.getValue(), 0);
       // Drop stores with unresolvable RHS  --  see note in
       // ``walkSCFBeforeRegion``'s fir.store handler.
@@ -1295,7 +2688,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
 // Entry point
 // ---------------------------------------------------------------------------
 
-std::vector<ASTNode> extractAST(mlir::ModuleOp module) {
+std::vector<ASTNode> extractAST(mlir::ModuleOp module,
+                                const std::string &entry_symbol) {
   // Fresh synthetic-name counters / maps per module so two consecutive
   // extractAST calls don't interleave __sc_5 / __al_2 across unrelated
   // SDFGs.
@@ -1313,6 +2707,15 @@ std::vector<ASTNode> extractAST(mlir::ModuleOp module) {
   // (an exception reaches here), the flag could still be set.
   kBoolExprNoSubscripts = false;
   clearAllocAliases();
+
+  // D1: reseed per-thread extraction state.  Without this, calling
+  // ``extractAST`` standalone (without a preceding ``extractVariables``)
+  // or on a DIFFERENT module than the prior ``extractVariables`` would
+  // leak stale ``kEntryScope`` / ``kShortNameCollisions`` and produce
+  // names that diverge from any subsequent extract on this thread.
+  // Same helper ``extractVariables`` uses -- shared so the two paths
+  // can't drift.
+  prepareExtractionState(module, entry_symbol);
 
   std::vector<ASTNode> result;
   module.walk([&](mlir::func::FuncOp func) {

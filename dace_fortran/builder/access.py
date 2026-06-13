@@ -138,16 +138,56 @@ def acc(builder, state, name: str):
         node = state.add_access(name)
         cache[name] = node
         v = builder.arrays.get(name)
+        # ``bounds_remap_view`` (multi-D POINTER remap of a 1D target,
+        # e.g. ``p(1:M, 1:K) => arr1d``) needs the same source ->
+        # view linking edge the rank-reinterpret ``view_alias`` path
+        # uses.  Synthesise an equivalent VarInfo on the spot so the
+        # shared code below handles both shapes uniformly.
+        if v is not None and getattr(v, 'bounds_remap_view', False) \
+                and v.bounds_remap_source \
+                and v.bounds_remap_source in state.parent.arrays:
+            from types import SimpleNamespace
+            v = SimpleNamespace(role='view_alias',
+                                view_source=v.bounds_remap_source,
+                                view_subset=[""],
+                                fortran_name=v.fortran_name)
         if v is not None and getattr(v, 'role', '') == 'view_alias' \
                 and v.view_source and v.view_source in state.parent.arrays:
             from dace import Memlet
             src = v.view_source
-            src_subset = ", ".join(v.view_subset)
-            view_dims = [str(d) for d in state.parent.arrays[name].shape]
-            view_subset = ", ".join(f"0:{d}" for d in view_dims)
             src_node = cache.get(src) or state.add_access(src)
             cache.setdefault(src, src_node)
-            state.add_edge(src_node, None, node, None, Memlet(data=src, subset=src_subset, other_subset=view_subset))
+            # Canonical DaCe view linking: source AccessNode ->
+            # view ViewAccessNode via the ``views`` connector
+            # (see d-face/tests/numpy/reshape_test.py).  The view's
+            # own descriptor (shape + strides set in
+            # ``descriptors.py``) handles the reinterpretation;
+            # the linking memlet just carries the source name with
+            # no explicit subset (defaults to full extent on both
+            # sides, matching the view's storage span).
+            if len(v.view_subset) == 1 and v.view_subset[0] == "":
+                # Whole-array rank reinterpretation
+                # (``ssor_tv(N)`` 1D -> ``buts_tv(5, M, K)`` 3D).
+                # Build src_subset spanning the source's full flat
+                # storage and other_subset spanning the view's
+                # full multi-D shape.  Element counts match
+                # (5445 == 5*33*33) so DaCe's dimensionality
+                # check is satisfied even with the rank difference.
+                src_dims = [str(d) for d in state.parent.arrays[src].shape]
+                src_subset = ", ".join(f"0:{d}" for d in src_dims)
+                view_dims = [str(d) for d in state.parent.arrays[name].shape]
+                view_subset = ", ".join(f"0:{d}" for d in view_dims)
+                state.add_edge(src_node, None, node, 'views',
+                               Memlet(data=src, subset=src_subset, other_subset=view_subset))
+            else:
+                # Section-reshape view: source-side subset
+                # describes which slab of ``src`` the view covers;
+                # view-side subset spans the view's own shape.
+                src_subset = ", ".join(v.view_subset)
+                view_dims = [str(d) for d in state.parent.arrays[name].shape]
+                view_subset = ", ".join(f"0:{d}" for d in view_dims)
+                state.add_edge(src_node, None, node, 'views',
+                               Memlet(data=src, subset=src_subset, other_subset=view_subset))
     return node
 
 
@@ -165,27 +205,69 @@ def get_access(accesses: list, array_name: str, is_read: bool):
     return None
 
 
+def _reserved_rewrite(name):
+    """Map a single identifier to its ``program_<name>`` form when it
+    collides with a sympy attribute (``im`` -> ``sympy.im`` is a
+    ``FunctionClass``; arithmetic against a ``Symbol`` then fails).
+    See ``builder.__init__._RESERVED_DACE_NAMES`` for the full set.
+    Imported lazily to avoid a circular import at module load."""
+    from dace_fortran.builder import _RESERVED_DACE_NAMES, _DACE_NAME_PREFIX
+    if name in _RESERVED_DACE_NAMES:
+        return _DACE_NAME_PREFIX + name
+    return name
+
+
 def rename_iters(expr, iter_map):
     """Whole-word substitution of Fortran iter names with their
     uniquified DaCe counterparts.  Word boundaries protect against
     partial matches inside identifiers (``i`` shouldn't rewrite
-    inside ``input1``).  Pass-through for ``None`` / non-string."""
+    inside ``input1``).  Pass-through for ``None`` / non-string.
+
+    Does NOT apply the sympy-reserved-name rewrite -- this helper is
+    used by ``emit_tasklet`` to rewrite the tasklet body code, where
+    a Fortran identifier ``test`` must stay bare so the per-tasklet
+    ``_rewrite_read_connectors`` can find it and map it to its input
+    connector name; the SDFG-wide ``sdfg.replace("test",
+    "program_test")`` later in ``_rename_reserved_collisions``
+    handles the rename consistently for tasklet bodies + data names.
+    Memlet subsets need the rewrite earlier (sympify runs at memlet
+    construction time, before ``_rename_reserved_collisions``) --
+    those sites call ``apply_reserved`` on the result."""
     if not iter_map or not isinstance(expr, str):
         return expr
-    return re.sub(r"\b([A-Za-z_]\w*)\b", lambda m: iter_map.get(m.group(1), m.group(1)), expr)
+    return re.sub(r"\b([A-Za-z_]\w*)\b",
+                  lambda m: iter_map.get(m.group(1), m.group(1)), expr)
+
+
+def apply_reserved(expr):
+    """Whole-word rewrite of sympy-reserved Fortran identifiers
+    (``im`` -> ``program_im`` etc.) inside a memlet-subset string.
+    The SDFG-wide ``_rename_reserved_collisions`` only sees
+    identifiers registered as arrays / symbols; loop counters and
+    expression-internal names slip through, so the subset string
+    is the right place to catch them before sympify."""
+    if not isinstance(expr, str):
+        return expr
+    return re.sub(r"\b([A-Za-z_]\w*)\b",
+                  lambda m: _reserved_rewrite(m.group(1)), expr)
 
 
 def _remap_token(token, iter_map):
     """Rewrite a single subscript token through ``iter_map``.  Three
     forms collapse to one helper: integer literals pass through;
     arithmetic / parenthesised expressions go through whole-word
-    substitution; bare identifiers do a direct dict lookup."""
+    substitution; bare identifiers do a direct dict lookup.  In
+    every case the reserved-sympy-name rewrite (``im`` -> ``program_im``)
+    is applied as a final guard so the memlet's sympified subset
+    stays on plain Symbols.  This helper is ONLY used by memlet-subset
+    paths -- the tasklet-body rewrite calls bare ``rename_iters``."""
     token = token.strip()
     if token.lstrip('-').isdigit():
         return token
     if any(op in token for op in "+-*/") or token.startswith("("):
-        return rename_iters(token, iter_map)
-    return iter_map.get(token, token)
+        return apply_reserved(rename_iters(token, iter_map))
+    mapped = iter_map.get(token, token) if iter_map else token
+    return _reserved_rewrite(mapped)
 
 
 def _format_offset_subset(arr, parts):
@@ -463,6 +545,25 @@ def build_memlet_index(builder, array_name: str, access, iter_map: dict, indirec
         expr = exprs[dim] if dim < len(exprs) else v
         offset_sym = f"offset_{array_name}_d{dim}" if has_offset_sym else "1"
 
+        # Substitute every EMBEDDED indirect access in expr with its interned
+        # symbol so a dim like ``(ikidx[je,2,jk,jb] - 1)`` -- arithmetic
+        # wrapping an indirect read -- renders as ``(ikidx_at123 - 1)`` and
+        # doesn't leak the nested-bracket commas into the memlet subset.  The
+        # exact-match early-return below still catches the pure-indirect case
+        # (``ikidx[...]`` with no surrounding arithmetic).
+        if '[' in expr and indirect_syms:
+            while True:
+                replaced = False
+                for sub_start, sub_end, _arr, _parts in find_array_subscripts(
+                        expr, builder.arrays):
+                    sub = expr[sub_start:sub_end]
+                    if sub in indirect_syms:
+                        expr = expr[:sub_start] + indirect_syms[sub] + expr[sub_end:]
+                        replaced = True
+                        break  # positions invalidated; rescan
+                if not replaced:
+                    break
+
         # Indirect: substitute the minted symbol that holds the
         # Fortran 1-based runtime value, then offset uniformly.
         if '[' in expr and expr in indirect_syms:
@@ -473,7 +574,8 @@ def build_memlet_index(builder, array_name: str, access, iter_map: dict, indirec
         # Closed-form arithmetic: remap the iter names through the
         # current LoopRegion's uniquified iter_map, then offset.
         if any(op in expr for op in "+-*/") or expr.startswith("("):
-            parts.append(f"({rename_iters(expr, iter_map)}) - {offset_sym}")
+            parts.append(
+                f"({apply_reserved(rename_iters(expr, iter_map))}) - {offset_sym}")
             continue
 
         # Constant literal: keep as-is, offset symbolically (sympy
@@ -510,6 +612,12 @@ def build_memlet_index(builder, array_name: str, access, iter_map: dict, indirec
         # ``arr(struct_member(const))`` indirect-index path
         # exercised by ``long_tasklet_test``.
         uid = iter_map.get(v, expr)
+        # Shield sympy-reserved bare names (``im``, ``re``, ...) --
+        # iter_map doesn't carry them, so the dict lookup returned
+        # ``expr`` unchanged.  Without the rewrite, the memlet's
+        # sympified subset would see ``sympy.im - Symbol(...)`` ->
+        # ``FunctionClass - Symbol`` TypeError.
+        uid = _reserved_rewrite(uid)
         parts.append(f"{uid} - {offset_sym}")
 
     return ", ".join(parts)

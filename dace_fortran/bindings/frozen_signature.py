@@ -106,6 +106,15 @@ class FrozenSignature:
     # explicit map wins on conflict) so no hand-authored list is
     # required for kernels the bridge can resolve on its own.
     module_symbol_origins: Dict[str, Tuple[str, str]] = field(default_factory=dict)
+    # Fortran ``integer`` communicator dummy whose value the bindings
+    # wrapper feeds (via ``MPI_Comm_f2c`` + ``MPI_Comm_size``) into the
+    # SDFG-side ``__user_comm`` / ``__user_comm_size`` symbols at
+    # ``dace_init_<entry>`` time.  ``None`` when the kernel has no MPI
+    # calls on a runtime user communicator.  Set by
+    # :meth:`SDFGBuilder._attach_frozen_signature` from the
+    # ``_fortran_user_comm_source`` sidecar that ``emit_mpi``
+    # stashes on the SDFG.
+    user_comm_source: Optional[str] = None
 
     # ----- I/O ---------------------------------------------------------
 
@@ -123,6 +132,7 @@ class FrozenSignature:
                         k: list(v)
                         for k, v in self.module_symbol_origins.items()
                     },
+                    'user_comm_source': self.user_comm_source,
                 },
                 fh,
                 indent=2)
@@ -142,6 +152,7 @@ class FrozenSignature:
                 k: tuple(v)
                 for k, v in d.get('module_symbol_origins', {}).items()
             },
+            user_comm_source=d.get('user_comm_source'),
         )
 
     # ----- Drift check -------------------------------------------------

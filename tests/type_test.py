@@ -834,3 +834,93 @@ end subroutine kernel
     np.testing.assert_allclose(out_rho_sdfg, out_rho_ref, rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(out_theta_sdfg, out_theta_ref, rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(out_w_sdfg, out_w_ref, rtol=1e-12, atol=1e-12)
+
+
+@xfail("alloc-array-of-records with SCALAR inner members, LOCAL root: bridge "
+       "now fails gracefully with a TODO-marked MLIR diagnostic from "
+       "``hlfir-flatten-structs`` (see "
+       "``diagnoseLocalAoRScalarInnerMembers`` in FlattenStructs.cpp).  "
+       "The pass walker recognises the pattern (chain ending at a "
+       "``fir.alloca``-rooted ``hlfir.declare`` instead of a function "
+       "argument), emits a clear error pointing at the failing inner-"
+       "member designate + workaround + TODO marker, and signals pass "
+       "failure -- preempting the opaque downstream ``KeyError`` the "
+       "bridge would otherwise produce.  Implementation gap: the dummy-"
+       "case companion-per-member rewrite at lines 2242+ of "
+       "FlattenStructs.cpp needs (a) LOCAL declare roots accepted as "
+       "chain endpoints and (b) the synthesised "
+       "``_FortranAAllocatable{SetBounds,Allocate,Deallocate}`` runtime "
+       "calls rewritten to drive per-companion allocations.  "
+       "Production case: ICON ``s%edges%primal_normal_cell(i,j,k)%v1`` "
+       "where ``s`` is a function argument (DUMMY case, supported) -- "
+       "the LOCAL case shows up in small standalone reproducers and "
+       "future production code that uses local state structures.")
+def test_alloc_array_of_records_inner_scalar_members(tmp_path):
+    """Regression test for ``s%X(i,j,k)%v1`` with X = alloc-array-of-records
+    whose element record holds plain SCALAR (non-pointer) members.
+
+    This is distinct from the LiftAllocArrayOfRecords case (where inner
+    pointer members are REBOUND to storage slices and the lift rewrites
+    accesses to the storage parent).  Here the inner members are values
+    held inline in the array element; the only natural lowering is one
+    companion array per inner member, indexed by the outer array dims,
+    populated from the embedded box descriptor at call time (strided
+    views over the same data buffer, with a per-member byte offset).
+    """
+    src = """
+module aos_inner_scalar_mod
+  implicit none
+  type tangent_t
+    real(kind=8) :: v1
+    real(kind=8) :: v2
+  end type tangent_t
+  type edges_t
+    type(tangent_t), allocatable :: primal_normal_cell(:, :, :)
+  end type edges_t
+  type state_t
+    type(edges_t) :: edges
+  end type state_t
+end module aos_inner_scalar_mod
+
+subroutine kernel(out_v1, out_v2, i_idx, blk_idx, k_idx)
+  use aos_inner_scalar_mod
+  implicit none
+  integer, intent(in)         :: i_idx, blk_idx, k_idx
+  real(kind=8), intent(inout) :: out_v1, out_v2
+  type(state_t) :: s
+  integer :: i, j, k
+
+  allocate(s%edges%primal_normal_cell(3, 2, 4))
+  do k = 1, 4
+    do j = 1, 2
+      do i = 1, 3
+        s%edges%primal_normal_cell(i, j, k)%v1 = 100.0d0 * i + 10.0d0 * j + k
+        s%edges%primal_normal_cell(i, j, k)%v2 = -100.0d0 * i + 10.0d0 * j - k
+      end do
+    end do
+  end do
+
+  out_v1 = s%edges%primal_normal_cell(i_idx, blk_idx, k_idx)%v1
+  out_v2 = s%edges%primal_normal_cell(i_idx, blk_idx, k_idx)%v2
+
+  deallocate(s%edges%primal_normal_cell)
+end subroutine kernel
+"""
+    (tmp_path / "sdfg").mkdir(parents=True, exist_ok=True)
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name='kernel').build()
+    ref = f2py_compile(src, tmp_path / "ref", "aos_inner_scalar_ref")
+
+    i_idx = np.int32(2)
+    blk_idx = np.int32(1)
+    k_idx = np.int32(3)
+    out_v1_sdfg = np.zeros(1, dtype=np.float64)
+    out_v2_sdfg = np.zeros(1, dtype=np.float64)
+    out_v1_ref = np.zeros(1, dtype=np.float64)
+    out_v2_ref = np.zeros(1, dtype=np.float64)
+
+    sdfg(out_v1=out_v1_sdfg, out_v2=out_v2_sdfg,
+         i_idx=i_idx, blk_idx=blk_idx, k_idx=k_idx)
+    ref.kernel(out_v1_ref, out_v2_ref, i_idx, blk_idx, k_idx)
+
+    np.testing.assert_allclose(out_v1_sdfg, out_v1_ref, rtol=0, atol=0)
+    np.testing.assert_allclose(out_v2_sdfg, out_v2_ref, rtol=0, atol=0)

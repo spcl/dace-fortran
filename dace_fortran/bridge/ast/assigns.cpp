@@ -94,6 +94,25 @@ std::string buildIndexExpr(mlir::Value v, int d) {
     auto mem = ld.getMemref();
     if (auto *md = mem.getDefiningOp()) {
       if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(md)) {
+        // Struct field load used as an index (``arr(g % idx)``):
+        // the designate has a component attribute and no
+        // subscripts.  Resolve to the flattened scalar name
+        // (``g_idx``) via the component-aware ``traceToDecl`` walk
+        // and mint an entry-time POSITION SYMBOL
+        // (``__sym_g_idx_1``) -- same one-shot symbol-init shape
+        // ``internPosSymbol`` uses for constant-indexed array
+        // element reads.  The Python emitter stages it as
+        // ``__sym_g_idx_1 = g_idx[0]`` on an interstate edge at
+        // SDFG entry; downstream memlet subsets pick up the
+        // symbol directly.  Without this promotion, the raw
+        // ``g_idx`` scalar transient leaks into the memlet
+        // subset and DaCe's parser raises
+        // ``unresolved free symbol(s) in SDFG: ['g_idx']``.
+        if (dg.getComponentAttr() && dg.getIndices().empty()) {
+          auto flatName = traceToDecl(dg.getResult());
+          if (flatName.empty()) return "?";
+          return internPosSymbol(flatName, 1);
+        }
         auto arrName = resolveIndex(dg.getMemref());
         if (arrName.empty()) arrName = traceToDecl(dg.getMemref());
         if (arrName.empty()) return "?";
@@ -290,6 +309,48 @@ std::string buildIndexExpr(mlir::Value v, int d) {
         }
       }
       if (!hasAllocmem) {
+        // Before falling back to the synthesised ``<arr>_d<dim>``
+        // symbol, try the same shape-operand walk the
+        // ``buildExpr`` box_dims handler does in expressions.cpp.
+        // For a caller declare ``arr(n)`` whose body carries
+        // ``fir.shape %max(n, 0)``, this resolves the loop bound
+        // directly to ``n`` instead of leaking ``arr_d0`` -- the
+        // caller already passes ``n`` and wouldn't know to bind
+        // a synthetic shape symbol.
+        if (resIdx == 1) {
+          mlir::Value shapeVal;
+          if (auto *adef = arrayVal.getDefiningOp()) {
+            if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(adef)) {
+              shapeVal = decl.getShape();
+              if (!shapeVal) {
+                if (auto outer = asAssumedShapeAlias(decl))
+                  shapeVal = outer.getShape();
+              }
+            }
+          }
+          if (shapeVal) {
+            unsigned udim = static_cast<unsigned>(*dimC);
+            if (auto sh = mlir::dyn_cast<fir::ShapeOp>(shapeVal.getDefiningOp())) {
+              if (udim < sh.getExtents().size()) {
+                auto te = traceExtentExpr(sh.getExtents()[udim]);
+                if (!te.empty() && te != "?") return te;
+                auto s = buildIndexExpr(sh.getExtents()[udim], d + 1);
+                if (!s.empty() && s != "?") return s;
+              }
+            }
+            if (auto ss = mlir::dyn_cast<fir::ShapeShiftOp>(
+                    shapeVal.getDefiningOp())) {
+              auto ops = ss->getOperands();
+              unsigned extIdx = 2 * udim + 1;
+              if (extIdx < ops.size()) {
+                auto te = traceExtentExpr(ops[extIdx]);
+                if (!te.empty() && te != "?") return te;
+                auto s = buildIndexExpr(ops[extIdx], d + 1);
+                if (!s.empty() && s != "?") return s;
+              }
+            }
+          }
+        }
         std::string suffix = "_d" + std::to_string(*dimC);
         if (resIdx == 0) return "offset_" + arrName + suffix;
         if (resIdx == 1) return arrName + suffix;
@@ -425,17 +486,31 @@ ASTNode buildAssignNode(hlfir::AssignOp assign) {
   auto dest = assign.getOperand(1);
   if (auto dd = dest.getDefiningOp()) {
     if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(dd)) {
-      auto [arr, dims] = expandDesignateChain(dg);
-      node.target = arr.empty() ? traceToDecl(dg.getMemref()) : arr;
-      node.target_is_array = true;
-      AccessInfo wa;
-      wa.array_name = node.target;
-      wa.is_write = true;
-      for (auto &de : dims) {
-        wa.index_vars.push_back(de.var);
-        wa.index_exprs.push_back(de.expr);
+      // Struct field write (``g % y = ...``) -- the designate has
+      // a component attribute but no element subscripts.  Resolve
+      // to the flat ``<parent>_<member>`` name via
+      // ``traceToDecl`` on the designate's result (the
+      // component-aware walk fires) and DON'T treat it as an
+      // array write -- emit_assign downstream uses the registered
+      // VarInfo's descriptor classification to pick scalar vs
+      // array write.  Previously ``expandDesignateChain`` +
+      // ``traceToDecl(dg.getMemref())`` returned the struct base
+      // ``g``, leaking it as the target name.
+      if (dg.getComponentAttr() && dg.getIndices().empty()) {
+        node.target = traceToDecl(dg.getResult());
+      } else {
+        auto [arr, dims] = expandDesignateChain(dg);
+        node.target = arr.empty() ? traceToDecl(dg.getMemref()) : arr;
+        node.target_is_array = true;
+        AccessInfo wa;
+        wa.array_name = node.target;
+        wa.is_write = true;
+        for (auto &de : dims) {
+          wa.index_vars.push_back(de.var);
+          wa.index_exprs.push_back(de.expr);
+        }
+        node.accesses.push_back(std::move(wa));
       }
-      node.accesses.push_back(std::move(wa));
     } else {
       node.target = traceToDecl(dest);
     }
@@ -473,17 +548,26 @@ ASTNode buildAssignNode(hlfir::AssignOp assign) {
     auto *op = v.getDefiningOp();
     if (!op) return;
     if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(op)) {
+      // Use ``expandDesignateChain`` so AoR shapes
+      // (``arr(i) % x(2)`` -- a chain of two designates) produce an
+      // AccessInfo with the FLAT name ``arr_x`` and BOTH indices
+      // ``[record, field]``.  Without the chain expansion this
+      // lambda's local code only captured the innermost designate's
+      // indices (the field) and traced to the struct-base name --
+      // missing the record index and using the unflattened ``arr``
+      // form.  See elementals.cpp::expandDesignateChain for the
+      // AoR-aware walk + flat-name flattening.
+      auto [arr, dims] = expandDesignateChain(dg);
       AccessInfo ra;
-      ra.array_name = traceToDecl(dg.getMemref());
+      ra.array_name = arr;
       ra.is_read = true;
-      unsigned di = 0;
+      for (auto &de : dims) {
+        ra.index_vars.push_back(de.var);
+        ra.index_exprs.push_back(de.expr);
+      }
+      // Descend into each index operand so inner indirect loads
+      // (edge_idx used below z_kin) get their own AccessInfo.
       for (auto idx : dg.getIndices()) {
-        auto n = resolveIndex(idx);
-        ra.index_vars.push_back(n.empty() ? "?" : n);
-        ra.index_exprs.push_back(buildDesignateIndexExpr(dg, di, idx, 0));
-        ++di;
-        // Descend into the index operand so inner indirect loads
-        // (edge_idx used below z_kin) get their own AccessInfo.
         collectReads(idx, depth + 1);
       }
       node.accesses.push_back(std::move(ra));
@@ -1298,6 +1382,9 @@ ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation *srcOp,
 
   auto opName = srcOp->getName().getStringRef();
   bool is_count = (opName == "hlfir.count");
+  bool is_minloc = (opName == "hlfir.minloc");
+  bool is_maxloc = (opName == "hlfir.maxloc");
+  bool is_cshift = (opName == "hlfir.cshift");
   if (is_count) {
     if (srcOp->getNumOperands() > 0) {
       auto [nm, sub] = resolveSliceSubset(srcOp->getOperand(0), callee, 0);
@@ -1309,9 +1396,105 @@ ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation *srcOp,
       if (auto c = traceConstInt(dim_val))
         n.reduce_axes.push_back(*c - 1);  // Fortran 1-based -> 0-based
     }
+  } else if (is_minloc || is_maxloc) {
+    // ``hlfir.minloc`` / ``hlfir.maxloc`` operand spec (see
+    // HLFIROps.td l470-498):
+    //   array (required)  [+ dim ($dim)]  [+ mask ($mask)]
+    //   [+ back ($back, i1)]
+    // Use the typed accessors so we honour the
+    // ``AttrSizedOperandSegments`` ABI (positional indices change
+    // depending on which optionals are present).
+    auto pushMask = [&](mlir::Value mask) {
+      auto [nm, sub] = resolveSliceSubset(mask, callee, 1);
+      n.call_args.push_back(nm);
+      n.call_arg_subsets.push_back(sub);
+    };
+    auto pushDim = [&](mlir::Value dim_val) {
+      if (auto c = traceConstInt(dim_val))
+        n.reduce_axes.push_back(*c - 1);
+    };
+    auto pushBack = [&](mlir::Value back_val) {
+      if (auto c = traceConstInt(back_val))
+        n.options["back"] = (*c != 0) ? "true" : "false";
+      else
+        n.options["back"] = "true";  // dynamic; safe default
+    };
+    if (auto minOp = mlir::dyn_cast<hlfir::MinlocOp>(srcOp)) {
+      auto [nm, sub] = resolveSliceSubset(minOp.getArray(), callee, 0);
+      n.call_args.push_back(nm);
+      n.call_arg_subsets.push_back(sub);
+      if (auto dim = minOp.getDim()) pushDim(dim);
+      if (auto mask = minOp.getMask()) pushMask(mask);
+      if (auto back = minOp.getBack()) pushBack(back);
+    } else if (auto maxOp = mlir::dyn_cast<hlfir::MaxlocOp>(srcOp)) {
+      auto [nm, sub] = resolveSliceSubset(maxOp.getArray(), callee, 0);
+      n.call_args.push_back(nm);
+      n.call_arg_subsets.push_back(sub);
+      if (auto dim = maxOp.getDim()) pushDim(dim);
+      if (auto mask = maxOp.getMask()) pushMask(mask);
+      if (auto back = maxOp.getBack()) pushBack(back);
+    }
+  } else if (is_cshift) {
+    // ``hlfir.cshift %array %shift [dim %dim]``.  Stash the source
+    // array name in ``call_args`` (whole-array memlet) and the shift
+    // expression in ``options["shift"]``; the optional dim lands in
+    // ``reduce_axes`` (0-based), matching MINLOC / MAXLOC.
+    if (auto cshOp = mlir::dyn_cast<hlfir::CShiftOp>(srcOp)) {
+      auto [nm, sub] = resolveSliceSubset(cshOp.getArray(), callee, 0);
+      n.call_args.push_back(nm);
+      n.call_arg_subsets.push_back(sub);
+      auto shiftVal = cshOp.getShift();
+      if (auto c = traceConstInt(shiftVal)) {
+        n.options["shift"] = std::to_string(*c);
+      } else {
+        auto sExpr = buildIndexExpr(shiftVal, 0);
+        if (sExpr.empty() || sExpr == "?")
+          throw std::runtime_error("hlfir.cshift: cannot resolve shift expression");
+        n.options["shift"] = sExpr;
+      }
+      if (auto dim = cshOp.getDim()) {
+        if (auto c = traceConstInt(dim))
+          n.reduce_axes.push_back(*c - 1);
+      }
+    }
   } else {
     unsigned argIdx = 0;
     for (auto operand : srcOp->getOperands()) {
+      // MATMUL fold: ``C = MATMUL(TRANSPOSE(A), B)`` and the
+      // symmetric ``MATMUL(A, TRANSPOSE(B))`` and combined
+      // ``MATMUL(TRANSPOSE(A), TRANSPOSE(B))`` cases.  Flang emits
+      // a separate ``%T = hlfir.transpose %X`` for each transposed
+      // operand and feeds ``%T`` into ``hlfir.matmul``.  Folding
+      // the transpose into the GEMM via ``transA`` / ``transB``
+      // avoids materialising a transposed transient (one fewer
+      // copy + one fewer BLAS call -- the BLAS already handles
+      // transpose in place via ``CblasTrans`` / ``CUBLAS_OP_T``).
+      // The fused ``hlfir.matmul_transpose`` op covers only the
+      // LHS-side; this fold catches the non-fused shapes the
+      // optimised-bufferisation pass leaves behind, plus the RHS
+      // and both-sides cases that don't have a fused op at all.
+      // ``matmul``: both operands eligible for the transpose fold.
+      // ``matmul_transpose``: only arg 1 (RHS) -- the LHS transpose
+      // is already in the op itself.  The materialiser in
+      // ``dispatch.cpp`` SKIPS pre-emitting the Transpose libcall
+      // for these positions, so the operand here IS the original
+      // ``hlfir.transpose`` op (not the materialised transient) and
+      // our ``dyn_cast<TransposeOp>`` succeeds.  Setting the
+      // matching BLAS flag here + re-binding to ``trans.getArray()``
+      // routes the matmul through the un-transposed source -- BLAS
+      // handles the transpose in-place via ``CblasTrans`` /
+      // ``CUBLAS_OP_T``.
+      bool eligibleForFold =
+          (callee == "matmul" && argIdx < 2) ||
+          (callee == "matmul_transpose" && argIdx == 1);
+      if (eligibleForFold) {
+        if (auto *def = operand.getDefiningOp()) {
+          if (auto trans = mlir::dyn_cast<hlfir::TransposeOp>(def)) {
+            n.options[argIdx == 0 ? "transA" : "transB"] = "true";
+            operand = trans.getArray();
+          }
+        }
+      }
       auto [nm, sub] = resolveSliceSubset(operand, callee, argIdx);
       n.call_args.push_back(nm);
       n.call_arg_subsets.push_back(sub);

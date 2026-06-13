@@ -66,6 +66,41 @@ def _find_flang() -> str:
     return bin_
 
 
+def _flang_intrinsic_modules_path(flang_bin: str) -> Optional[Path]:
+    """Locate the LLVM-flang intrinsic-modules directory shipped beside ``flang_bin``.
+
+    Probed paths (first match wins):
+
+    * ``<flang_install_root>/include/flang/iso_c_binding.mod``  --  the
+      Ubuntu / Debian / Fedora layout (``flang-new-21`` -> ``/usr/lib/llvm-21/bin``;
+      modules under ``/usr/lib/llvm-21/include/flang``).
+    * ``<flang_install_root>/../share/flang/include`` -- some custom builds.
+
+    Returns the **directory** that contains ``iso_c_binding.mod`` (and the
+    matching ``ieee_*`` / ``omp_lib`` / ... modules), or ``None`` if no
+    match is found.  When called with ``-fc1``, flang skips the driver-side
+    auto-population of this path -- without an explicit
+    ``-fintrinsic-modules-path`` every ``USE iso_c_binding`` fails at
+    semantic analysis with a ``No explicit type declared for 'c_int'``
+    error.
+
+    The probe is best-effort: a missing match leaves the bridge to fall
+    back on flang's compiled-in default, which usually fails for
+    ``-fc1`` invocations but works for tests that don't ``USE`` any
+    intrinsic module.
+    """
+    flang_real = Path(flang_bin).resolve()
+    install_root = flang_real.parent.parent  # /usr/lib/llvm-21
+    candidates = (
+        install_root / "include" / "flang",
+        install_root / "share" / "flang" / "include",
+    )
+    for cand in candidates:
+        if (cand / "iso_c_binding.mod").exists():
+            return cand
+    return None
+
+
 def _entry_proc_name(entry: Optional[str]) -> Optional[str]:
     """Demangle a Flang entry symbol to its Fortran procedure name.
 
@@ -80,9 +115,9 @@ def _entry_proc_name(entry: Optional[str]) -> Optional[str]:
     return entry.rsplit("P", 1)[-1] if "P" in entry else entry
 
 
-_PROC_RE = re.compile(r"^\s*(?:(?:recursive|pure|impure|elemental|module)\s+)*"
-                      r"(?:[\w*()]+\s+)*?(subroutine|function)\s+(\w+)",
-                      re.IGNORECASE)
+_PROC_RE = re.compile(
+    r"^\s*(?:(?:recursive|pure|impure|elemental|module)\s+)*"
+    r"(?:[\w*()]+\s+)*?(subroutine|function)\s+(\w+)", re.IGNORECASE)
 _MOD_RE = re.compile(r"^\s*module\s+(\w+)\s*$", re.IGNORECASE)
 _END_RE = re.compile(r"^\s*end\s*(module|interface|subroutine|function)?\b", re.IGNORECASE)
 _IFACE_RE = re.compile(r"^\s*(?:abstract\s+)?interface\b", re.IGNORECASE)
@@ -142,9 +177,9 @@ def _resolve_entry(source: str, entry: Optional[str]) -> str:
     if entry:
         want_mod, _, want_proc = entry.lower().rpartition("::")
         want_mod = want_mod or None
-        matches = {(m, n) for (m, n) in procs
-                   if n.lower() == want_proc
-                   and (want_mod is None or (m or "").lower() == want_mod)}
+        matches = {(m, n)
+                   for (m, n) in procs
+                   if n.lower() == want_proc and (want_mod is None or (m or "").lower() == want_mod)}
         if not matches:
             raise ValueError(f"build: no procedure {entry!r} defined in the source")
         if len(matches) > 1:
@@ -156,16 +191,23 @@ def _resolve_entry(source: str, entry: Optional[str]) -> str:
     # entry=None: derive from the single procedure definition.
     if not procs:
         raise ValueError("build: no SUBROUTINE/FUNCTION definition found to use as the "
-                          "SDFG entry; pass entry= explicitly")
+                         "SDFG entry; pass entry= explicitly")
     if len(procs) > 1:
         shown = ", ".join(n for _, n in procs)
         raise ValueError(f"build: source defines multiple procedures ({shown}); pass "
-                          f"entry= (the Fortran name or mangled symbol of the target one)")
+                         f"entry= (the Fortran name or mangled symbol of the target one)")
     return _mangle(*procs[0])
 
 
-def _emit_hlfir(source: str, out_dir: Path, name: str, *, merge: bool,
-                preprocess: bool, defines: Sequence[str] = ()) -> Path:
+def _emit_hlfir(source: str,
+                out_dir: Path,
+                name: str,
+                *,
+                merge: bool,
+                preprocess: bool,
+                defines: Sequence[str] = (),
+                kind_map: dict = None,
+                kind_passthrough: bool = False) -> Path:
     """Write ``source`` to ``<out_dir>/<name>.F90``, preprocess
     (module-merge + opt-in rewrites), ``flang -fc1 -cpp -emit-hlfir``
     it, and return the ``.hlfir`` path.
@@ -191,15 +233,30 @@ def _emit_hlfir(source: str, out_dir: Path, name: str, *, merge: bool,
     # convention; combined with ``-cpp`` this stays consistent if a
     # future flang changes its default.
     src = out_dir / f"{name}.F90"
-    src.write_text(preprocess_fortran_source(source, search_dirs=[out_dir],
-                                             merge=merge, if_intvar=preprocess))
+    src.write_text(
+        preprocess_fortran_source(source,
+                                  search_dirs=[out_dir],
+                                  merge=merge,
+                                  if_intvar=preprocess,
+                                  kind_map=kind_map,
+                                  kind_passthrough=kind_passthrough))
     hlfir = out_dir / f"{name}.hlfir"
-    cmd = [_find_flang(), "-fc1", "-cpp", "-U_OPENMP", "-U_OPENACC",
-           "-I", str(out_dir)]
+    cmd = [_find_flang(), "-fc1", "-cpp", "-U_OPENMP", "-U_OPENACC", "-I", str(out_dir)]
+    intrinsic_path = _flang_intrinsic_modules_path(cmd[0])
+    if intrinsic_path is not None:
+        cmd += ["-fintrinsic-modules-path", str(intrinsic_path)]
     for d in defines:
         cmd += ["-D", d]
     cmd += ["-emit-hlfir", str(src), "-o", str(hlfir)]
-    subprocess.check_call(cmd)
+    # flang resolves ``USE iso_c_binding`` (and the other intrinsic modules)
+    # by first checking cwd for a matching ``.mod`` file, then falling back
+    # on the install's intrinsic-modules path.  An earlier failed build can
+    # leave a stale stub ``iso_c_binding.mod`` (or similar) in cwd that
+    # checksums different from the install's ``__fortran_builtins`` -- flang
+    # then refuses to resolve ``c_int`` etc. with a misleading
+    # ``No explicit type declared`` error.  Run flang in a clean scratch
+    # cwd to avoid the cwd-precedence trap.
+    subprocess.check_call(cmd, cwd=str(out_dir))
     return hlfir
 
 
@@ -210,7 +267,9 @@ def make_builder(source: str,
                  pipeline: Optional[str] = None,
                  out_dir: Optional[Union[str, Path]] = None,
                  preprocess: bool = False,
-                 defines: Sequence[str] = ()) -> SDFGBuilder:
+                 defines: Sequence[str] = (),
+                 kind_map: dict = None,
+                 kind_passthrough: bool = False) -> SDFGBuilder:
     """Resolve the entry, lower ``source`` to HLFIR, and return a
     configured (not yet built) :class:`SDFGBuilder`.
 
@@ -238,12 +297,24 @@ def make_builder(source: str,
     fwd = None if entry is None else resolved
     pipeline = pipeline or DEFAULT_PIPELINE
     if out_dir is not None:
-        hlfir = _emit_hlfir(source, Path(out_dir), name, merge=True,
-                            preprocess=preprocess, defines=defines)
+        hlfir = _emit_hlfir(source,
+                            Path(out_dir),
+                            name,
+                            merge=True,
+                            preprocess=preprocess,
+                            defines=defines,
+                            kind_map=kind_map,
+                            kind_passthrough=kind_passthrough)
         return SDFGBuilder(str(hlfir), pipeline=pipeline, entry=fwd)
     with tempfile.TemporaryDirectory(prefix=f"hlfir_{name}_") as td:
-        hlfir = _emit_hlfir(source, Path(td), name, merge=True,
-                            preprocess=preprocess, defines=defines)
+        hlfir = _emit_hlfir(source,
+                            Path(td),
+                            name,
+                            merge=True,
+                            preprocess=preprocess,
+                            defines=defines,
+                            kind_map=kind_map,
+                            kind_passthrough=kind_passthrough)
         return SDFGBuilder(str(hlfir), pipeline=pipeline, entry=fwd)
 
 
@@ -254,7 +325,9 @@ def build_sdfg(source: str,
                pipeline: Optional[str] = None,
                out_dir: Optional[Union[str, Path]] = None,
                preprocess: bool = False,
-               defines: Sequence[str] = ()) -> SDFG:
+               defines: Sequence[str] = (),
+               kind_map: dict = None,
+               kind_passthrough: bool = False) -> SDFG:
     """Build a :class:`dace.SDFG` from a single inline Fortran source.
 
     :param source: Fortran source as one string.
@@ -275,13 +348,28 @@ def build_sdfg(source: str,
         for flang's preprocessor -- set the build configuration when
         there is no build system to read it from (tier 3 reads the same
         flags from ``compile_commands.json`` automatically).
+    :param kind_map: precision-alias override forwarded to
+        :func:`normalize_kind_parameters`.  ``{"wp": 4}`` for an fp32
+        build; ``{"wp": None}`` to leave one alias alone.  ``None``
+        (default) accepts the table's defaults (``wp``/``dp`` -> 8,
+        ``sp`` -> 4, ``qp`` -> 16).
+    :param kind_passthrough: ``True`` skips the kind-alias rewrite
+        entirely -- for build pipelines that already resolve every
+        kind alias upstream (e.g. via cpp expansion or by emitting
+        HLFIR with the constants module pre-merged).
     :returns: a built, validated SDFG.
     :raises ValueError: if ``entry`` is ``None`` and the source has no
         procedure or is ambiguous (more than one).
     """
-    return make_builder(source, entry=entry, name=name, pipeline=pipeline,
-                        out_dir=out_dir, preprocess=preprocess,
-                        defines=defines).build()
+    return make_builder(source,
+                        entry=entry,
+                        name=name,
+                        pipeline=pipeline,
+                        out_dir=out_dir,
+                        preprocess=preprocess,
+                        defines=defines,
+                        kind_map=kind_map,
+                        kind_passthrough=kind_passthrough).build()
 
 
 #: ``func.func @<symbol>(`` -- the MLIR opener for a procedure
@@ -313,14 +401,12 @@ def _resolve_hlfir_for_entry(root: Path, entry: str) -> Path:
                 matches.append(p)
                 break
     if not matches:
-        raise FileNotFoundError(
-            f"no .hlfir under {root} defines func.func @{entry}; "
-            f"check that the build emitted HLFIR for the TU containing "
-            f"the entry (and that the entry symbol is correctly mangled)")
+        raise FileNotFoundError(f"no .hlfir under {root} defines func.func @{entry}; "
+                                f"check that the build emitted HLFIR for the TU containing "
+                                f"the entry (and that the entry symbol is correctly mangled)")
     if len(matches) > 1:
-        raise ValueError(
-            f"multiple .hlfir under {root} define @{entry} -- pick one explicitly: "
-            f"{[str(p) for p in matches]}")
+        raise ValueError(f"multiple .hlfir under {root} define @{entry} -- pick one explicitly: "
+                         f"{[str(p) for p in matches]}")
     return matches[0]
 
 
@@ -364,7 +450,7 @@ def build_sdfg_from_hlfir(hlfir_path: Union[str, Path],
     if p.is_dir():
         if not entry:
             raise ValueError("build_sdfg_from_hlfir requires entry= when given a "
-                              "directory (it selects which .hlfir to load)")
+                             "directory (it selects which .hlfir to load)")
         p = _resolve_hlfir_for_entry(p, entry)
     return SDFGBuilder(str(p), pipeline=pipeline, entry=entry).build()
 
@@ -424,7 +510,10 @@ def build_sdfg_from_project(compile_commands: Union[str, Path],
         # like ICON lists ~900 TUs; we only need the entry's plus what
         # it transitively USEs).
         emit(compile_commands=Path(compile_commands),
-             stubs=[Path(s) for s in stubs], out_dir=d, entry=entry_sym, flang=flang)
+             stubs=[Path(s) for s in stubs],
+             out_dir=d,
+             entry=entry_sym,
+             flang=flang)
         return build_sdfg_from_hlfir(d, entry=entry_sym, pipeline=pipeline)
 
     if out_dir is not None:
@@ -471,14 +560,18 @@ def build_sdfg_from_files(files: Sequence[Union[str, Path]],
     roots = [p for p in paths if _def.search(p.read_text())]
     if not roots:
         raise ValueError(f"no input file defines procedure {proc!r} (entry {entry!r}); "
-                          f"given {[p.name for p in paths]}")
+                         f"given {[p.name for p in paths]}")
 
     def _do(d: Path) -> SDFG:
         d.mkdir(parents=True, exist_ok=True)
         for p in paths:
             (d / p.name).write_text(p.read_text())
-        return build_sdfg(roots[0].read_text(), entry=entry, name=name,
-                           pipeline=pipeline, out_dir=d, preprocess=preprocess)
+        return build_sdfg(roots[0].read_text(),
+                          entry=entry,
+                          name=name,
+                          pipeline=pipeline,
+                          out_dir=d,
+                          preprocess=preprocess)
 
     if out_dir is not None:
         return _do(Path(out_dir))

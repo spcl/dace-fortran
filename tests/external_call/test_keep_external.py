@@ -16,8 +16,7 @@ import numpy as np
 import pytest
 
 from _util import build_sdfg, have_flang
-from dace_fortran.external import (Arg, ExternalCall, clear_external_registry,
-                                   keep_external, lookup_external)
+from dace_fortran.external import (Arg, ExternalCall, clear_external_registry, keep_external, lookup_external)
 
 pytestmark = [
     pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH"),
@@ -62,7 +61,9 @@ def test_keep_external_lowers_to_externalcall(tmp_path: Path):
     bar_f90 = tmp_path / "bar.f90"
     bar_f90.write_text(_BAR_F90)
     libbar = tmp_path / "libbar.so"
-    subprocess.check_call(["gfortran", "-shared", "-fPIC", "-o", str(libbar), str(bar_f90)])
+    # cwd=tmp_path keeps gfortran from picking up any stale .mod that
+    # a prior flang invocation left in the repo root.
+    subprocess.check_call(["gfortran", "-shared", "-fPIC", "-o", str(libbar), str(bar_f90)], cwd=str(tmp_path))
 
     keep_external(
         "bar",
@@ -97,7 +98,7 @@ def test_keep_external_defaults_c_name_to_fortran_name(tmp_path: Path):
     bar_f90 = tmp_path / "bar.f90"
     bar_f90.write_text(_BAR_F90)
     libbar = tmp_path / "libbar.so"
-    subprocess.check_call(["gfortran", "-shared", "-fPIC", "-o", str(libbar), str(bar_f90)])
+    subprocess.check_call(["gfortran", "-shared", "-fPIC", "-o", str(libbar), str(bar_f90)], cwd=str(tmp_path))
 
     # No c_name= -> defaults to "bar".
     keep_external(
@@ -152,11 +153,10 @@ def test_comm_kind_c_decl_type_is_mpi_comm():
     a_explicit = Arg(kind="comm", dtype="int32")
     assert a_explicit.c_decl_type() == "MPI_Comm"
 
-    sig = ExternalSignature(
-        c_name="shim_with_comm",
-        args=(Arg(kind="array", dtype="float64", intent="inout"),
-              Arg(kind="scalar", dtype="int32", intent="in"),
-              Arg(kind="comm")))
+    sig = ExternalSignature(c_name="shim_with_comm",
+                            args=(Arg(kind="array", dtype="float64",
+                                      intent="inout"), Arg(kind="scalar", dtype="int32",
+                                                           intent="in"), Arg(kind="comm")))
     decl = sig.c_declaration()
     # Argument order is preserved verbatim (left-to-right same as args).
     assert decl == 'extern "C" void shim_with_comm(double *, int, MPI_Comm);'
@@ -180,12 +180,13 @@ def test_keep_external_with_comm_signature_round_trip():
     in ``emit_call`` is what wires the opaque(MPI_Comm) connector)."""
     from dace_fortran.external import Arg
     clear_external_registry()
-    keep_external(
-        "exch_with_comm",
-        c_name="exch_with_comm_c",
-        args=[Arg(kind="array", dtype="float64", intent="inout"),
-              Arg(kind="scalar", dtype="int32", intent="in"),
-              Arg(kind="comm")])
+    keep_external("exch_with_comm",
+                  c_name="exch_with_comm_c",
+                  args=[
+                      Arg(kind="array", dtype="float64", intent="inout"),
+                      Arg(kind="scalar", dtype="int32", intent="in"),
+                      Arg(kind="comm")
+                  ])
     sig = lookup_external("exch_with_comm")
     assert sig is not None and sig.c_name == "exch_with_comm_c"
     assert tuple(a.kind for a in sig.args) == ("array", "scalar", "comm")

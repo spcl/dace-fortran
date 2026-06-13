@@ -46,7 +46,11 @@ end subroutine main
     sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
 
     a = np.full([4, 4], 42, order="F", dtype=np.float64)
-    sdfg(d=a, i=0, j=0)
+    # ``outside_init`` is unread in the body (the IF picks the constant
+    # branch), but ``hlfir-preserve-mutable-globals`` still surfaces it
+    # as a caller kwarg per the write-based classifier.  Bind it to the
+    # source default so the binding layer is happy.
+    sdfg(d=a, i=0, j=0, outside_init=np.array([1.0], dtype=np.float32, order='F'))
     assert (a[0, 0] == 42)
     assert (a[1, 0] == 6.5)
     assert (a[2, 0] == 42)

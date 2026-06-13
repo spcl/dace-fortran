@@ -21,7 +21,7 @@ import re
 from dace import Memlet
 
 from dace_fortran.builder.access import (acc, build_memlet_index, get_access, indirect_host, rename_iters,
-                                                resolve_section_alias)
+                                         resolve_section_alias)
 
 
 def _ensure_view_writeback_link(builder, state, write_node, target: str):
@@ -143,6 +143,18 @@ def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect
     tokens = set(re.findall(r'[a-zA-Z_]\w*', assign_node.expr))
     r_arr = tokens & set(builder.arrays)
     r_scl = tokens & set(builder.scalars)
+    # A name can collide between ``builder.arrays`` and
+    # ``builder.scalars`` when ``extract_vars``'s inlined-callee
+    # local disambiguation didn't rename a SCALAR dummy whose short
+    # Fortran name matches an outer ARRAY's name -- e.g. graupel's
+    # ``qr(ivec, k_v)`` 2D arg plus an inlined helper that took a
+    # scalar ``qr`` dummy.  The bridge's AccessInfo for the current
+    # statement still carries the array shape (the token came from
+    # a designate over the 2D qr declare), so prefer the array
+    # classification and drop the scalar entry to avoid the
+    # spurious ``_in_qr`` scalar connector + ``qr[0]`` 1D memlet
+    # that fails validation against the 2D ``qr.shape``.
+    r_scl -= r_arr
     target = assign_node.target
 
     # Index arrays (e.g. edge_idx) show up in the RHS token scan but we
@@ -188,6 +200,19 @@ def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect
     # typically zero  --  instead of the per-iteration value ``i_0``.
     expr = rename_iters(assign_node.expr, iter_map)
     code = f"_out_{target} = {_rewrite_read_connectors(expr, sorted_tokens, r_scl, occ)}"
+    # Mirror the ``?`` guard in ``emit_scalar_assign``: a bare ``?`` in
+    # the rendered RHS means the C++ AST builder hit a
+    # ``buildIndexExpr`` / ``leafExpr`` fallback for an operand it
+    # couldn't trace.  Without this raise the code reaches DaCe's
+    # ``CodeBlock.ast.parse`` and surfaces as a ``SyntaxError`` at
+    # ``<unknown>:1``, which is opaque about which AST node hit it.
+    if "?" in code:
+        raise NotImplementedError(f"emit_tasklet: unresolved operand placeholder ``?`` in tasklet "
+                                  f"body ``{code}`` (target={target!r}).  The C++ AST builder "
+                                  "couldn't trace one of the operand chains -- check "
+                                  "bridge/ast/assigns.cpp ``buildIndexExpr`` and "
+                                  "expressions.cpp ``buildExpr`` for the fallback returning "
+                                  "``?`` against this kernel's HLFIR.")
     t = state.add_tasklet(f"t_{idx}", in_c, out_c, code)
 
     for nm in sorted(reads_by_name):
@@ -270,8 +295,95 @@ def emit_scalar_assign(builder, state, target: str, value: str):
     ``value``  --  every one that names an SDFG scalar gets its own
     input connector so the tasklet can read ``i`` for ``i = i + 1``
     and similar self-updates.
+
+    Whole-array fast path: an assign whose target and (single-token)
+    value are BOTH multi-dim arrays of the same descriptor shape is a
+    pointer-rebind that ``RewritePointerAssigns`` didn't collapse  --
+    likely a chain shape (``ptr => derived_root%a%b``) the pass
+    doesn't yet recognise.  Emit a whole-array copy memlet instead of
+    a scalar tasklet with the wrong subset.  ICON's velocity_tendencies
+    surfaces this with the ``icidx => p_patch%edges%cell_idx`` rebinds
+    in its setup block.
     """
     value = str(value)
+    # A bare ``?`` in the rendered value means the C++ AST builder hit
+    # ``buildIndexExpr`` / ``leafExpr`` for an operand it could not
+    # trace -- a designate chain past ``kBuildIndexExprDepth``, a
+    # block-arg with no entry on ``indexStack``, or a load whose
+    # memref didn't resolve to a declare.  Emitting it as Python code
+    # gives a SyntaxError pointing at <unknown>:1 in DaCe's
+    # ``ast.parse`` from a deeply-nested call site, which is opaque.
+    # Raise here with the target / value so the gap is easy to find.
+    if "?" in value:
+        raise NotImplementedError(f"emit_scalar_assign: unresolved operand placeholder ``?`` in "
+                                  f"``{target} = {value}`` -- the C++ AST builder couldn't trace "
+                                  "one of the operand chains.  Check bridge/ast/assigns.cpp "
+                                  "``buildIndexExpr`` and control_flow.cpp ``leafExpr`` for the "
+                                  "fallback returning ``?`` against this kernel's HLFIR.")
+    src_name = value.strip()
+    tgt_var = builder.arrays.get(target)
+    tgt_is_array = (tgt_var is not None and getattr(tgt_var, "rank", 0) > 0
+                    and len(tgt_var.shape_symbols) == tgt_var.rank)
+
+    # Bounds-remap-view rebind (``p(1:M, 1:K) => arr1d``): the View
+    # descriptor itself + the source -> view linking edge in
+    # ``access.py`` already establish the alias.  The Fortran-level
+    # rebind ``p = arr1d`` lands here as an array-target assign with
+    # a bare name RHS; the bridge's ``RewritePointerAssigns`` pass
+    # leaves it intact when the LHS is tagged ``bounds_remap_view``
+    # so we can emit a typed View instead of the per-element index
+    # rewrite.  Skip the redundant tasklet entirely -- otherwise
+    # ``set_<target>`` writes a rank-1 subset against a multi-D View
+    # and the validator rejects the edge.
+    if tgt_var is not None and getattr(tgt_var, "bounds_remap_view", False) \
+            and getattr(tgt_var, "bounds_remap_source", "") == src_name:
+        return
+
+    if tgt_is_array:
+        is_whole_array_copy = (src_name in builder.arrays and re.fullmatch(r'[A-Za-z_]\w*', src_name) is not None)
+        if is_whole_array_copy:
+            src_var = builder.arrays[src_name]
+            if (src_var.rank == tgt_var.rank and len(src_var.shape_symbols) == src_var.rank):
+                # Plain whole-array copy (pointer-rebind shape that
+                # ``RewritePointerAssigns`` didn't collapse, e.g.
+                # ``icidx => p_patch%edges%cell_idx``).
+                # AccessNode(src) -> AccessNode(tgt) with full-shape
+                # subsets on both sides; no tasklet needed.
+                read = acc(builder, state, src_name)
+                write = state.add_access(target)
+                cache = getattr(state, '_hlfir_access', None)
+                if cache is not None:
+                    cache[target] = write
+                _ensure_view_writeback_link(builder, state, write, target)
+                subset = ",".join(f"0:{s}" for s in src_var.shape_symbols)
+                state.add_edge(read, None, write, None, Memlet(f"{src_name}[{subset}]"))
+                return
+
+        # Whole-array fill: scalar literal -> multi-dim array.  The
+        # bridge emits this for ``ALLOCATE x; x = 0`` and similar
+        # zero-init prologues.  Use ``add_mapped_tasklet`` so DaCe
+        # wires the empty-input + indexed-output edges itself; doing
+        # it by hand needs a MapEntry connector dance.
+        if re.fullmatch(r'[+-]?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?', src_name) is not None:
+            dims = tgt_var.shape_symbols
+            ranges = {f"__i{k}": f"0:{s}" for k, s in enumerate(dims)}
+            idx_expr = ",".join(f"__i{k}" for k in range(len(dims)))
+            w = state.add_access(target)
+            cache = getattr(state, '_hlfir_access', None)
+            if cache is not None:
+                cache[target] = w
+            _ensure_view_writeback_link(builder, state, w, target)
+            state.add_mapped_tasklet(
+                name=f"set_{target}",
+                map_ranges=ranges,
+                inputs={},
+                code=f"_out = {src_name}",
+                outputs={"_out": Memlet(f"{target}[{idx_expr}]")},
+                output_nodes={target: w},
+                external_edges=True,
+            )
+            return
+
     tokens = set(re.findall(r'[a-zA-Z_]\w*', value))
     # ``nm != target`` was wrong  --  ``i = i + 1`` genuinely needs a read
     # edge on the target itself.

@@ -55,6 +55,12 @@ class Member:
     # For assumed-shape inside structs we fall back to '?' and let the
     # wrapper use ``size(st%u, dim=d)`` at call time.
     shape: Tuple[str, ...] = field(default_factory=tuple)
+    # When the member is itself a derived type (a nested record like
+    # ``t_patch%cells :: type(t_grid_cells)``), ``struct_name`` names the
+    # nested type so the bind_c_shim emitter can look its layout up in
+    # ``OriginalInterface.struct_types`` and recurse.  Empty for scalar
+    # / box-of-array / inline-flat members.
+    struct_name: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -106,6 +112,15 @@ def build_auto_interface(raw: dict, entry: str) -> OriginalInterface:
     ``hlfir-flatten-structs``).  ``entry`` should be the final ``sdfg.name``
     so the wrapper's ``bind(c)`` symbols match the compiled SDFG exports.
 
+    Derived-type dummies pick up their per-member layout from the
+    ``struct_types`` sub-dict the bridge populates from each dummy's
+    ``fir::RecordType``.  Members whose element dtype the bridge could
+    not name (a nested record, ``allocatable`` / ``pointer`` /
+    ``character``, complex) carry an empty ``dtype`` -- ``Member`` keeps
+    the slot with a placeholder ``fortran_type`` (``'??'``) so the
+    downstream ``bind_c_shim`` emitter can reject only the unsupported
+    members and accept inline-flat ones from the same struct.
+
     :raises ValueError: a dummy uses a dtype the binding layer can't name
         (e.g. ``CHARACTER``) or a derived-type arg whose type name the bridge
         could not recover -- the caller then supplies an explicit interface.
@@ -123,8 +138,45 @@ def build_auto_interface(raw: dict, entry: str) -> OriginalInterface:
                 raise ValueError(f"auto-iface: unsupported dtype {a['dtype']!r} "
                                  f"for argument {a['name']!r}")
             struct_type = None
+        rank = int(a["rank"])
+        shape = tuple(a["shape"])
+        # The bridge's snapshot reports ``rank`` but may leave
+        # ``shape`` empty for assumed-shape array dummies
+        # (``REAL, DIMENSION(:, :, :), INTENT(...) :: arr``) -- the
+        # extents aren't named at the call surface.  Default to a
+        # rank-length tuple of ``":"`` so the wrapper emitter picks the
+        # ``arr(:, :, :)`` declaration shape (matches the hand-authored
+        # ``OriginalInterface`` shape used by the velocity_full e2e).
+        if rank > 0 and not shape:
+            shape = (":", ) * rank
         args.append(OriginalArg(name=a["name"], fortran_type=fortran_type,
-                                rank=int(a["rank"]), shape=tuple(a["shape"]),
+                                rank=rank, shape=shape,
                                 intent=a["intent"], struct_type=struct_type))
     used_modules = {mod: tuple(syms) for mod, syms in raw["used_modules"].items()}
-    return OriginalInterface(entry=entry, args=tuple(args), used_modules=used_modules)
+    struct_types = {}
+    for sname, st in raw.get("struct_types", {}).items():
+        members = []
+        for m in st["members"]:
+            nested_name = m.get("struct_name") or ""
+            if nested_name:
+                # A nested derived-type member: ``fortran_type`` is
+                # ``type(<nested>)`` so the binding wrapper declares it
+                # consistently with how it would declare a top-level
+                # derived-type arg; bind_c_shim follows ``struct_name``
+                # to recurse into the nested layout.
+                fortran_type = f"type({nested_name})"
+            else:
+                fortran_type = _DTYPE_TO_FORTRAN_C.get(m["dtype"], "??")
+            members.append(Member(
+                name=m["name"],
+                fortran_type=fortran_type,
+                rank=int(m["rank"]),
+                shape=tuple(m["shape"]),
+                struct_name=nested_name or None,
+            ))
+        struct_types[sname] = DerivedType(name=st["name"],
+                                          module=st["module"] or None,
+                                          members=tuple(members))
+    return OriginalInterface(entry=entry, args=tuple(args),
+                             struct_types=struct_types,
+                             used_modules=used_modules)

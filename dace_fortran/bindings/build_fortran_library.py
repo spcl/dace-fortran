@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+from dace_fortran.bindings.bind_c_shim import emit_bind_c_shim
 from dace_fortran.bindings.emit_bindings import emit_bindings
 from dace_fortran.bindings.flatten_plan import FlattenPlan
 from dace_fortran.bindings.fortran_interface import OriginalInterface, build_auto_interface
@@ -51,11 +52,15 @@ class FortranLibrary:
     :ivar so_path: the linked ``.so`` (binding + kernel + extra sources).
     :ivar sdfg_so: the vanilla-compiled SDFG kernel ``.so`` it links against.
     :ivar bindings_f90: the emitted ``<entry>_bindings.f90`` wrapper.
+    :ivar bind_c_shim_f90: the auto-generated ``<entry>_c.f90`` ``bind(c)``
+                           shim, when ``bind_c_shim=True`` was requested;
+                           ``None`` otherwise.
     """
 
     so_path: Path
     sdfg_so: Path
     bindings_f90: Path
+    bind_c_shim_f90: Path = None
 
     def load(self) -> ctypes.CDLL:
         """Open the library with :class:`ctypes.CDLL`.
@@ -82,6 +87,9 @@ def build_fortran_library(
     mode: str = "debug",
     flags: Sequence = None,
     verify: bool = True,
+    bind_c_shim: bool = False,
+    bind_c_shim_debug_prints: bool = False,
+    bind_c_shim_module_symbol_forward=(),
 ) -> FortranLibrary:
     """Emit + verify + link a Fortran-callable library for ``sdfg``.
 
@@ -111,10 +119,25 @@ def build_fortran_library(
                   ``mode`` entirely (``-shared``/``-fPIC``/``-fopenmp``
                   are always added).
     :param verify: run the frozen-signature drift check (default on).
+    :param bind_c_shim: when ``True``, auto-generate ``<entry>_c.f90``
+                       -- a ``bind(c, name='<entry>_c')`` wrapper
+                       around the binding module's ``<entry>_dace``
+                       procedure -- and link it into the library so
+                       the ``.so`` exposes a stable C-ABI entry
+                       point.  Supports flat-arg kernels and
+                       derived-type dummies whose every member is
+                       inline-flat (scalar or static-shape array of
+                       scalar).  Raises
+                       :class:`UnsupportedShimInterfaceError` on a
+                       non-inline-flat struct member (allocatable /
+                       pointer / dynamic shape / nested derived
+                       type).
     :returns: a :class:`FortranLibrary` handle.
     :raises SignatureDriftError: if the live SDFG drifted from the
             snapshot -- raised before the binding is emitted.
     :raises ValueError: on an unknown ``mode``.
+    :raises UnsupportedShimInterfaceError: ``bind_c_shim=True`` on an
+            interface containing a derived-type dummy.
     """
     if out_dir is None:
         raise ValueError("build_fortran_library: out_dir is required")
@@ -174,6 +197,17 @@ def build_fortran_library(
     bindings_f90 = out_dir / f"{name}_bindings.f90"
     emit_bindings(frozen, iface, plan, str(bindings_f90), dace_arglist)
 
+    # Auto-gen ``<entry>_c`` shim around the binding module's
+    # ``<entry>_dace`` procedure.  Threaded between the binding (which
+    # the shim ``USE``\\s) and ``extra_sources`` so gfortran's strict
+    # left-to-right module-dependency ordering is preserved.
+    shim_f90 = None
+    if bind_c_shim:
+        shim_f90 = out_dir / f"{iface.entry}_c.f90"
+        emit_bind_c_shim(iface, str(shim_f90),
+                         debug_prints=bind_c_shim_debug_prints,
+                         module_symbol_forward=bind_c_shim_module_symbol_forward)
+
     so_path = out_dir / f"lib{name}.so"
     # gfortran compiles sources left-to-right with no dependency
     # reordering: modules the binding ``use``s must precede it, and
@@ -181,8 +215,11 @@ def build_fortran_library(
     cmd = [
         "gfortran", *_SHARED_FLAGS, *opt_flags, "-fopenmp", f"-J{out_dir}",
         *[str(s) for s in prelude_sources],
-        str(bindings_f90), *[str(s) for s in extra_sources], "-o",
+        str(bindings_f90),
+        *([str(shim_f90)] if shim_f90 else []),
+        *[str(s) for s in extra_sources], "-o",
         str(so_path), f"-L{sdfg_so.parent}", f"-Wl,-rpath,{sdfg_so.parent}", f"-l:{sdfg_so.name}"
     ]
     subprocess.check_call(cmd, cwd=out_dir)
-    return FortranLibrary(so_path=so_path, sdfg_so=sdfg_so, bindings_f90=bindings_f90)
+    return FortranLibrary(so_path=so_path, sdfg_so=sdfg_so,
+                          bindings_f90=bindings_f90, bind_c_shim_f90=shim_f90)

@@ -220,15 +220,34 @@ static std::vector<std::string> resolveShapeSyms(
   return syms;
 }
 
+/// Build the :type:`AllocSitesIndex` (declared in extract_vars.h) with one
+/// module walk, so the per-variable helpers below look a name up instead of
+/// re-walking the module each time.
+static AllocSitesIndex buildAllocSitesIndex(mlir::ModuleOp module) {
+  AllocSitesIndex idx;
+  module.walk([&](fir::AllocMemOp a) {
+    if (auto un = a.getUniqName()) idx[un->str()].push_back(a);
+  });
+  return idx;
+}
+
 /// Collect every ``fir.allocmem`` whose ``uniq_name`` matches
 /// ``<declUniqName>.alloc``, in IR walk order.  Multiple matches indicate
 /// that the user wrote more than one ``ALLOCATE`` for the variable
 /// (e.g. across an explicit ``DEALLOCATE`` + re-``ALLOCATE``).
+///
+/// :param idx: when given, the prebuilt name->sites index is consulted in O(1)
+///     instead of walking the module; pass it from a loop over many variables.
 std::vector<fir::AllocMemOp> collectAllocSites(const std::string& declName,
-                                               mlir::ModuleOp module) {
-  std::vector<fir::AllocMemOp> sites;
-  if (declName.empty()) return sites;
+                                               mlir::ModuleOp module,
+                                               const AllocSitesIndex* idx) {
+  if (declName.empty()) return {};
   std::string allocName = declName + ".alloc";
+  if (idx) {
+    auto it = idx->find(allocName);
+    return it == idx->end() ? std::vector<fir::AllocMemOp>{} : it->second;
+  }
+  std::vector<fir::AllocMemOp> sites;
   module.walk([&](fir::AllocMemOp a) {
     auto un = a.getUniqName();
     if (un && un->str() == allocName) sites.push_back(a);
@@ -282,11 +301,20 @@ bool allocSitesInExclusiveBranches(const std::vector<fir::AllocMemOp>& sites) {
 }
 
 std::vector<std::vector<fir::AllocMemOp>> groupAllocSites(
-    const std::string& declName, mlir::ModuleOp module) {
-  auto sites = collectAllocSites(declName, module);
+    const std::string& declName, mlir::ModuleOp module,
+    const AllocSitesIndex* idx) {
+  auto sites = collectAllocSites(declName, module, idx);
   std::vector<std::vector<fir::AllocMemOp>> classes;
   unsigned n = sites.size();
   if (n == 0) return classes;
+  // The reaching-set walk below only resolves which of *several* sites merge
+  // into one buffer; the overwhelmingly common single-ALLOCATE case needs none
+  // of it -- and that walk is over the whole enclosing function, which is the
+  // expensive part on a fully-inlined entry.  Short-circuit it.
+  if (n == 1) {
+    classes.push_back(std::move(sites));
+    return classes;
+  }
 
   // site index by allocmem op; union-find over indices.
   std::map<mlir::Operation*, unsigned> idxOf;
@@ -470,9 +498,26 @@ static std::vector<std::string> lowerBoundsFromAllocSite(
 /// ``box_addr(load arr_box) != 0``; if no such reader exists the
 /// per-allocatable ``<arr>_allocated`` tracker scalar and its init
 /// state are dead weight in the SDFG.
+/// Short (post-``extractName``) names that have an ``ALLOCATED`` / ``ASSOCIATED``
+/// reader (a ``fir.box_addr``), built with one module walk.  Lets
+/// ``needsAllocatedTracker`` look a name up instead of re-walking per variable.
+static std::set<std::string> buildAllocatedReaderNames(mlir::ModuleOp module) {
+  std::set<std::string> names;
+  module.walk([&](fir::BoxAddrOp ba) {
+    auto src = ba.getVal();
+    if (auto* sd = src.getDefiningOp())
+      if (auto ld = mlir::dyn_cast<fir::LoadOp>(sd)) src = ld.getMemref();
+    auto n = traceToDecl(src);
+    if (!n.empty()) names.insert(n);
+  });
+  return names;
+}
+
 static bool hasAllocatedReader(const std::string& shortName,
-                               mlir::ModuleOp module) {
+                               mlir::ModuleOp module,
+                               const std::set<std::string>* readerNames = nullptr) {
   if (shortName.empty()) return false;
+  if (readerNames) return readerNames->count(shortName) > 0;
   bool found = false;
   module.walk([&](fir::BoxAddrOp ba) {
     if (found) return;
@@ -497,10 +542,12 @@ static bool hasAllocatedReader(const std::string& shortName,
 /// module-level allocatables passed in already-allocated and never
 /// queried by ``ALLOCATED(...)`` skip the tracker entirely.
 bool needsAllocatedTracker(const std::string& declUniqName,
-                           mlir::ModuleOp module) {
+                           mlir::ModuleOp module,
+                           const AllocSitesIndex* idx,
+                           const std::set<std::string>* readerNames) {
   if (declUniqName.empty()) return false;
-  if (!collectAllocSites(declUniqName, module).empty()) return true;
-  return hasAllocatedReader(extractName(declUniqName), module);
+  if (!collectAllocSites(declUniqName, module, idx).empty()) return true;
+  return hasAllocatedReader(extractName(declUniqName), module, readerNames);
 }
 
 /// First ALLOCATE keeps the allocatable's original Fortran name (so
@@ -1045,7 +1092,48 @@ std::pair<std::string, std::string> decodeModuleGlobalSymbol(
 // table an init routine such as ``qsmith_init_w`` fills, then a reader
 // consumes) from a read-only caller-supplied config global: the former is
 // the kernel's own transient, not an input the caller must provide.
-static bool globalIsWritten(const std::string& sym, mlir::ModuleOp module) {
+/// Set of global symbols written somewhere in the module, built with one walk.
+/// Mirrors ``globalIsWritten``'s per-symbol logic (a write is a store/assign
+/// whose target is a global-backed declare's result, or a designate rooted at
+/// one) so a variable-loop caller can look a symbol up instead of re-walking
+/// the module -- twice -- per global-backed variable.
+static std::set<std::string> buildWrittenGlobals(mlir::ModuleOp module) {
+  llvm::DenseMap<mlir::Value, std::string> symByResult;
+  llvm::SmallVector<std::pair<hlfir::DeclareOp, std::string>, 8> globalDecls;
+  module.walk([&](hlfir::DeclareOp d) {
+    std::string sym = traceToGlobalSymbol(d.getMemref());
+    if (sym.empty()) return;
+    symByResult[d.getResult(0)] = sym;
+    symByResult[d.getResult(1)] = sym;
+    globalDecls.push_back({d, sym});
+  });
+  std::set<std::string> written;
+  auto markWrite = [&](mlir::Value dest) {
+    auto it = symByResult.find(dest);
+    if (it != symByResult.end()) {
+      written.insert(it->second);
+      return;
+    }
+    if (auto* dd = dest.getDefiningOp())
+      if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(dd))
+        for (auto& [d, sym] : globalDecls)
+          if (designateRootedAt(dg, d)) {
+            written.insert(sym);
+            break;
+          }
+  };
+  module.walk([&](mlir::Operation* op) {
+    if (auto st = mlir::dyn_cast<fir::StoreOp>(op))
+      markWrite(st.getMemref());
+    else if (auto as = mlir::dyn_cast<hlfir::AssignOp>(op))
+      markWrite(as.getLhs());
+  });
+  return written;
+}
+
+static bool globalIsWritten(const std::string& sym, mlir::ModuleOp module,
+                            const std::set<std::string>* writtenGlobals = nullptr) {
+  if (writtenGlobals) return writtenGlobals->count(sym) > 0;
   llvm::SmallVector<hlfir::DeclareOp, 4> decls;
   module.walk([&](hlfir::DeclareOp d) {
     if (traceToGlobalSymbol(d.getMemref()) == sym) decls.push_back(d);
@@ -1073,90 +1161,304 @@ static bool globalIsWritten(const std::string& sym, mlir::ModuleOp module) {
 }
 
 // ---------------------------------------------------------------------------
-// Main extraction
+// Shared extraction-state setup (D1, D2, D4, latent #1, #2, #8)
 // ---------------------------------------------------------------------------
 
-std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
-                                      std::vector<ValueSymbol>* value_symbols) {
-  std::vector<VarInfo> vars;
+namespace {
 
-  // Reset thread-local extractName-override map.  Pass 3's view-alias
-  // detection below populates it for inlined-callee declares whose
-  // short name collides with their view source's; without a clean
-  // reset the previous module's overrides would leak into this one.
+// Fortran intrinsics the bridge renders inline as bare Python tokens
+// in tasklet bodies / interstate-edge expressions.  A user variable
+// sharing one of these names would shadow the intrinsic in
+// ``emit_tasklet``'s regex rewriter -- the rewriter walks token
+// matches and replaces with ``_in_<token>_<N>``, silently corrupting
+// the intrinsic call.  We HARD-REJECT these because there's no way
+// to disambiguate the bridge's rendering (``max(a, b)``) from a
+// user-named variable ``max``.
+const std::set<std::string> &kRejectedIntrinsicNames() {
+  static const std::set<std::string> v = {
+      // Reductions emit as binary chain or builtin call:
+      "min", "max", "sum", "product", "minval", "maxval",
+      // Math.* intrinsics emit as bare Python function call:
+      "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+      "sinh", "cosh", "tanh", "exp", "log", "log10", "sqrt",
+      "abs", "floor", "ceil", "erf", "erfc",
+  };
+  return v;
+}
+
+// Names reserved by SymPy's symbolic expression layer.  SymPy treats
+// these as built-in constants regardless of any local binding, so an
+// interstate-edge expression like ``i = i + 1`` would be silently
+// parsed with ``i`` as the imaginary unit.  These names are TOO COMMON
+// in real Fortran code to reject (``i`` loop iterator, ``pi`` math
+// constant) -- so we RENAME locals on extraction to ``fortran_<short>``.
+// Dummies (signature variables) are EXEMPT from the rename to preserve
+// the caller-side ABI; their existing Python-side reserved-name shield
+// (``builder/__init__.py::_RESERVED_DACE_NAMES``) handles sanitisation
+// in specific contexts (memlet subsets) without changing the signature.
+//
+// EXCLUDED from this set on purpose:
+//   * ``im`` / ``re`` -- handled by the Python shield (complex-part
+//     field name convention is too universal to fight at the bridge).
+//   * ``test`` / ``doctest`` -- handled by the Python shield (renamed
+//     to ``program_test`` / ``program_doctest`` via the existing
+//     ``_RESERVED_DACE_NAMES`` path).
+const std::set<std::string> &kSympyReservedNames() {
+  static const std::set<std::string> v = {
+      "i",    // sympy.I -- imaginary unit
+      "e",    // sympy.E -- Euler's number
+      "pi",   // sympy.pi
+      "oo",   // sympy.oo -- positive infinity
+      "zoo",  // sympy.zoo -- complex infinity
+      "nan",  // sympy.nan
+      "s",    // sympy.S -- singleton registry
+  };
+  return v;
+}
+
+// Walk every user-declared hlfir.declare in the module.  Two passes:
+//
+//   * Hard-reject when a short name collides with a Fortran intrinsic
+//     the bridge emits as a bare token (``max``, ``sin``, etc.) --
+//     no way to disambiguate, fail fast with a diagnostic.
+//
+//   * Auto-rename when a short name collides with a SymPy reserved
+//     constant / function (``i``, ``pi``, ``re``, ``im``, ...) --
+//     install a ``kManglingOverride`` so every subsequent
+//     ``extractName`` call returns ``fortran_<short>``.  The binding
+//     emitter is expected to preserve the user-facing Fortran name on
+//     the SDFG signature side; internal references all see the
+//     prefixed form so SymPy's symbolic engine cannot collapse the
+//     variable into a constant.
+//
+// Skip compiler-synthesised aliases (assumed-shape inlining
+// duplicates) -- those route through ``traceToDecl`` to their entry-
+// scope original, which will be processed on its own walk hit.
+void rejectOrRenameReservedShortNames(mlir::ModuleOp module) {
+  const auto &rejected = kRejectedIntrinsicNames();
+  const auto &sympyReserved = kSympyReservedNames();
+  std::set<std::string> hardHits;
+  std::set<std::string> softHits;
+  module.walk([&](hlfir::DeclareOp decl) {
+    if (asAssumedShapeAlias(decl)) return;
+    auto un = decl.getUniqName().str();
+    auto p = un.rfind('E');
+    std::string shortName = p != std::string::npos ? un.substr(p + 1) : un;
+    if (shortName.empty()) return;
+    std::string lower;
+    lower.reserve(shortName.size());
+    for (char c : shortName)
+      lower.push_back(static_cast<char>(std::tolower(c)));
+    if (rejected.count(lower)) {
+      hardHits.insert(lower + " (mangled: " + un + ")");
+      return;
+    }
+    if (sympyReserved.count(lower)) {
+      // Dummy arguments (variables with an ``intent_*`` attribute) are
+      // user-facing on the SDFG signature -- the binding layer maps
+      // caller-side ``i=...`` directly to the SDFG arg name, so a
+      // silent rename to ``fortran_i`` would break the call.  Skip
+      // dummies; only rename LOCALS / GLOBALS where the rename is
+      // transparent to the user.  SymPy collisions on dummies still
+      // route through the existing Python-side reserved-name shield
+      // (``builder/__init__.py::_RESERVED_DACE_NAMES``) which
+      // sanitises specific contexts (memlet subsets) without
+      // changing the signature.
+      bool isDummy = false;
+      if (auto fattrs = decl.getFortranAttrs()) {
+        auto fa = *fattrs;
+        isDummy =
+            bitEnumContainsAny(fa, fir::FortranVariableFlagsEnum::intent_in) ||
+            bitEnumContainsAny(fa, fir::FortranVariableFlagsEnum::intent_out) ||
+            bitEnumContainsAny(fa,
+                               fir::FortranVariableFlagsEnum::intent_inout);
+      }
+      if (isDummy) return;
+      // Install a mangling override that prefixes the short name with
+      // ``fortran_``.  ``extractName`` consults
+      // ``kManglingOverride`` first (trace_utils.cpp:60) so every
+      // downstream consumer of this declare's name sees the prefixed
+      // form.
+      std::string prefixed = "fortran_" + lower;
+      setManglingOverride(un, prefixed);
+      softHits.insert(lower);
+    }
+  });
+  if (!hardHits.empty()) {
+    std::string msg = "Fortran variable name(s) collide with bridge-rendered "
+                      "intrinsics; rename to disambiguate. Offending names: ";
+    bool first = true;
+    for (auto &h : hardHits) {
+      if (!first) msg += ", ";
+      msg += h;
+      first = false;
+    }
+    throw std::runtime_error(msg);
+  }
+  // softHits are silent (renamed transparently) -- log only at debug.
+  (void)softHits;
+}
+
+// Pass 0b -- multi-callsite ``_call<idx>`` rename.  Mutates the IR;
+// idempotent (a re-run sees groups of size 1 after the first rename
+// and is a no-op).  Extracted here so both ``extractVariables`` and
+// ``extractAST`` see post-rename names in the collision pre-walk.
+void runMultiCallsiteDisambiguation(mlir::ModuleOp module) {
+  auto leadsToDesignate = [](mlir::Value v) -> bool {
+    for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
+      auto *d = v.getDefiningOp();
+      if (!d) return false;
+      if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
+        v = cv.getValue();
+        continue;
+      }
+      if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
+        v = ba.getVal();
+        continue;
+      }
+      if (mlir::isa<hlfir::DesignateOp>(d)) return true;
+      return false;
+    }
+    return false;
+  };
+  llvm::StringMap<llvm::SmallVector<hlfir::DeclareOp, 4>> byUniq;
+  module.walk([&](hlfir::DeclareOp op) {
+    auto *fn = op->getParentOfType<mlir::func::FuncOp>().getOperation();
+    if (auto f = mlir::dyn_cast_or_null<mlir::func::FuncOp>(fn))
+      if (f.isPrivate()) return;
+    if (!op.getDummyScope()) return;
+    if (!leadsToDesignate(op.getMemref())) return;
+    byUniq[op.getUniqName()].push_back(op);
+  });
+  for (auto &kv : byUniq) {
+    auto &group = kv.second;
+    if (group.size() < 2) continue;
+    llvm::SmallPtrSet<mlir::Operation *, 4> scopes;
+    for (auto op : group)
+      if (auto ds = op.getDummyScope().getDefiningOp()) scopes.insert(ds);
+    if (scopes.size() < 2) continue;
+    unsigned idx = 0;
+    for (auto op : group) {
+      auto un = op.getUniqName().str();
+      std::string newUniq = un + "_call" + std::to_string(idx++);
+      op->setAttr("uniq_name",
+                  mlir::StringAttr::get(op.getContext(), newUniq));
+    }
+  }
+}
+
+// Build the collision set fed to ``extractName``.  Walks BOTH
+// ``hlfir::DeclareOp`` and ``fir::DeclareOp`` (latent #2) and PEELS
+// ``asAssumedShapeAlias`` before recording the scope (D4) so an
+// inlined-callee alias whose memref traces back to the entry-scope
+// declare contributes to the entry-scope's bucket, not the inlined
+// scope's -- collapsing the false-positive collision.
+void buildCollisionSet(mlir::ModuleOp module,
+                       const std::string &entryScope) {
+  std::map<std::string, std::set<std::string>> shortToScopes;
+  auto record = [&](mlir::Operation *op, llvm::StringRef uniq) {
+    std::string un = uniq.str();
+    std::string scope = getFScope(un);
+    if (scope.empty()) return;
+    auto p = un.rfind('E');
+    std::string shortName = p != std::string::npos ? un.substr(p + 1) : un;
+    if (shortName.empty()) return;
+    shortToScopes[shortName].insert(scope);
+  };
+  module.walk([&](hlfir::DeclareOp decl) {
+    // D4: an inlined-callee assumed-shape alias is just a view of the
+    // outer declare.  Two pieces:
+    //   (a) Skip recording its scope for collision detection -- the
+    //       outer's scope is already recorded on its own walk hit.
+    //   (b) Install a mangling override mapping the alias's uniq_name
+    //       to the OUTER's short name.  Without this, direct calls
+    //       to ``extractName(alias_decl.getUniqName())`` (~16 sites
+    //       across ast/*.cpp) return the alias's bare short name,
+    //       which the SDFG never registered -- downstream lookups
+    //       KeyError.  ``traceToDecl`` already walks past aliases
+    //       to the outer declare; this override ensures the direct
+    //       path produces the same name.
+    if (auto outer = asAssumedShapeAlias(decl)) {
+      auto outerUniq = outer.getUniqName().str();
+      auto p = outerUniq.rfind('E');
+      std::string outerShort =
+          p != std::string::npos ? outerUniq.substr(p + 1) : outerUniq;
+      if (!outerShort.empty()) {
+        // Only override if outer is entry-scope; otherwise the alias's
+        // OWN qualified name is still the right answer.
+        std::string outerScope = getFScope(outerUniq);
+        if (outerScope.empty() || outerScope == entryScope) {
+          setManglingOverride(decl.getUniqName().str(), outerShort);
+        }
+      }
+      return;
+    }
+
+    // Inlined-callee OPTIONAL dummies: after ``hlfir-inline-all``
+    // splices the callee's body into the caller, an OPTIONAL dummy
+    // that the caller didn't pass survives as a declare with the
+    // OPTIONAL attribute but no caller-side storage (its memref is
+    // synthesised / fir.absent).  ``fir.is_present`` folds its body
+    // statically so the runtime value is never read -- it's effectively
+    // dead.  Counting it in the collision map would qualify the
+    // CALLER's same-named dummy and produce a spurious signature
+    // variable.  Skip OPTIONAL dummies in non-entry F-scopes (the
+    // entry's own OPTIONAL dummies still need their bare name).
+    if (auto attrs = decl.getFortranAttrs()) {
+      bool isOptional =
+          bitEnumContainsAny(*attrs, fir::FortranVariableFlagsEnum::optional);
+      std::string declScope = getFScope(decl.getUniqName().str());
+      if (isOptional && !declScope.empty() && declScope != entryScope) {
+        return;
+      }
+    }
+    record(decl, decl.getUniqName());
+  });
+  module.walk([&](fir::DeclareOp decl) {
+    // Latent #2: ``fir.declare`` (non-hlfir) is invisible to the
+    // hlfir-only walk above but ``traceToDecl`` walks both -- so a
+    // ``fir.declare``-only short name colliding with an
+    // ``hlfir.declare`` short name in another scope would silently
+    // miss collision detection.
+    record(decl, decl.getUniqName());
+  });
+  std::set<std::string> collisions;
+  for (auto &kv : shortToScopes) {
+    if (kv.second.size() >= 2) collisions.insert(kv.first);
+  }
+  setShortNameCollisions(collisions);
+}
+
+}  // namespace
+
+void prepareExtractionState(mlir::ModuleOp module,
+                            const std::string &entry_symbol) {
+  // Latent #1 + D1: clear thread-locals FIRST.  ``buildAllocatedReaderNames``
+  // and similar pre-walk helpers must not see stale per-thread state
+  // from a previous extract (e.g. a prior module's collision set).
   clearManglingOverrides();
 
-  // Pass 0: disambiguate inlined-callee locals.  Two procedures with the
-  // same variable name (Fortran's auto-generated ``a`` for ``result(a)``,
-  // or simply two routines that both name a local ``dz``) get inlined into
-  // a common parent and surface as two ``hlfir.declare`` ops with different
-  // full uniq_names but the same ``extractName`` short name.  Downstream
-  // code keys SDFG arrays / scalars by the short name; without
-  // disambiguation the two declares race on one access node.  Rewrite each
-  // colliding inlined-callee declare's uniq_name to encode its source scope.
-  {
-    auto getFScope = [](llvm::StringRef un) -> std::string {
-      auto eP = un.rfind('E');
-      if (eP == llvm::StringRef::npos) return {};
-      auto fP = un.rfind('F', eP);
-      if (fP == llvm::StringRef::npos || fP + 1 >= eP) return {};
-      return un.substr(fP + 1, eP - fP - 1).str();
-    };
-    // True iff ``op``'s memref is the variable's OWN storage rather than an
-    // alias of storage named elsewhere: a fresh ``fir.alloca`` /
-    // ``fir.allocmem`` local, or a ``func.func`` entry block argument (the
-    // entry kernel's own dummy).  Aliases (declare-of-declare, embox /
-    // convert / box_addr chains, ``fir.absent``-backed optional dummies)
-    // resolve through ``traceToDecl`` to their source and never mint an
-    // array under their own short name, so they don't participate in
-    // collisions.
-    auto isOwnStorage = [](hlfir::DeclareOp op) -> bool {
-      mlir::Value memref = op.getMemref();
-      if (auto* def = memref.getDefiningOp())
-        return mlir::isa<fir::AllocaOp, fir::AllocMemOp>(def);
-      if (auto ba = mlir::dyn_cast<mlir::BlockArgument>(memref))
-        return mlir::isa_and_nonnull<mlir::func::FuncOp>(
-            ba.getOwner()->getParentOp());
-      return false;
-    };
-    // Distinct F-scopes that hold an OWN-STORAGE declare of each short
-    // name.  A short name owned by more than one scope is the
-    // inlined-callee collision shape  --  including a callee local that
-    // shadows an entry dummy of the same name (``implicit_fall``'s local
-    // ``dz`` vs the kernel's ``intent(in) dz`` block argument).  A
-    // pass-through alias (``ze`` received by an inlined callee) is NOT
-    // own storage, so a single genuine local keeps its bare name.
-    llvm::StringMap<llvm::StringSet<>> ownStorageScopes;
-    module.walk([&](hlfir::DeclareOp op) {
-      auto* fn = op->getParentOfType<mlir::func::FuncOp>().getOperation();
-      if (auto f = mlir::dyn_cast_or_null<mlir::func::FuncOp>(fn))
-        if (f.isPrivate()) return;
-      if (!isOwnStorage(op)) return;
-      auto un = op.getUniqName().str();
-      ownStorageScopes[extractName(un)].insert(getFScope(un));
-    });
-    // Rename candidates: ``fir.alloca``-backed locals only.  Block-arg
-    // dummies are own storage too (they drive collision detection above)
-    // but renaming one mints a phantom flat scalar that extract_vars would
-    // surface as a top-level program kwarg, so they keep their name; they
-    // are always entry-scope here and skipped by the ``entryScope`` guard
-    // below regardless.
-    llvm::StringMap<llvm::SmallVector<hlfir::DeclareOp, 2>> byShort;
-    module.walk([&](hlfir::DeclareOp op) {
-      auto* fn = op->getParentOfType<mlir::func::FuncOp>().getOperation();
-      if (auto f = mlir::dyn_cast_or_null<mlir::func::FuncOp>(fn))
-        if (f.isPrivate()) return;
-      auto* def = op.getMemref().getDefiningOp();
-      if (!def || !mlir::isa<fir::AllocaOp>(def)) return;
-      byShort[extractName(op.getUniqName().str())].push_back(op);
-    });
-    // Entry's F-scope: the single public ``func.func`` left in the module
-    // (set_entry_symbol made every other function private).  Symbol like
-    // ``_QPmain`` / ``_QMmodPname``  --  the name segment is everything
-    // after the last ``P``, matching ``getFScope``'s F-segment.  Entry
-    // declares keep their original short name; inlined-callee siblings get
-    // ``<callee_scope>_<short>``.
-    std::string entryScope;
+  // Latent #8: reject user variable names that collide with bridge-
+  // rendered intrinsics; auto-rename user variable names that collide
+  // with SymPy reserved constants/functions (``i``, ``pi``, ``re``,
+  // ``im`` etc.) to ``fortran_<short>``.  Runs first so the error
+  // (if any) is the most diagnostic and so the override map is
+  // populated before any subsequent ``extractName`` consults it.
+  rejectOrRenameReservedShortNames(module);
+
+  // Entry-scope detection.  Prefer the USER-PROVIDED entry name
+  // (cached via ``set_entry_symbol``) because passes may rename the
+  // public ``func.func`` AFTER it was captured -- declares keep the
+  // original F-scope in their uniq_name (``_QMmodFkernelE<var>``),
+  // so anchoring on a post-rename name double-prefixes every entry
+  // variable.  Fall back to the first non-private ``P``-named func
+  // when no entry name was passed (legacy / standalone callers).
+  std::string entryScope;
+  if (!entry_symbol.empty()) {
+    auto pPos = entry_symbol.rfind('P');
+    if (pPos != std::string::npos)
+      entryScope = entry_symbol.substr(pPos + 1);
+  } else {
     for (auto fn : module.getOps<mlir::func::FuncOp>()) {
       if (fn.isPrivate()) continue;
       auto sn = fn.getSymName().str();
@@ -1165,80 +1467,44 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
       entryScope = sn.substr(pPos + 1);
       break;
     }
-    for (auto& kv : byShort) {
-      // Only rename a short name owned by more than one procedure.  A
-      // single-owner name (the common case, including same-scope
-      // shape-hint duplicate declares) is unambiguous; leave it alone so
-      // extract_vars dedup downstream handles it.
-      if (ownStorageScopes[kv.getKey()].size() < 2) continue;
-      for (auto op : kv.second) {
-        auto un = op.getUniqName().str();
-        std::string scope = getFScope(un);
-        if (scope == entryScope) continue;  // keep entry's name
-        auto eP = un.rfind('E');
-        std::string shortNm = un.substr(eP + 1);
-        std::string newShort = scope + "_" + shortNm;
-        std::string newUniq = un.substr(0, eP + 1) + newShort;
-        op->setAttr("uniq_name",
-                    mlir::StringAttr::get(op.getContext(), newUniq));
-      }
-    }
   }
+  setEntryScope(entryScope);
 
-  // Pass 0b: disambiguate multi-callsite duplicates of the same
-  // inlined callee, but ONLY when the inlined dummy is backed by a
-  // section-slice memref chain (``fir.convert`` of ``fir.box_addr``
-  // of ``hlfir.designate``).  Whole-array pass-through aliases trace
-  // through the convert chain back to the caller's own declare /
-  // block-arg, and the bridge's downstream alias chain handles
-  // per-callsite disambiguation correctly without renaming those.
-  // Section-slice aliases instead get a fresh box-of-the-slice per
-  // call site, so the bridge's view_subset / view_source machinery
-  // needs distinct VarInfo entries to keep per-site slice
-  // information from collapsing.
-  {
-    auto leadsToDesignate = [](mlir::Value v) -> bool {
-      for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
-        auto* d = v.getDefiningOp();
-        if (!d) return false;
-        if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
-          v = cv.getValue();
-          continue;
-        }
-        if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
-          v = ba.getVal();
-          continue;
-        }
-        if (mlir::isa<hlfir::DesignateOp>(d)) return true;
-        return false;
-      }
-      return false;
-    };
-    llvm::StringMap<llvm::SmallVector<hlfir::DeclareOp, 4>> byUniq;
-    module.walk([&](hlfir::DeclareOp op) {
-      auto* fn = op->getParentOfType<mlir::func::FuncOp>().getOperation();
-      if (auto f = mlir::dyn_cast_or_null<mlir::func::FuncOp>(fn))
-        if (f.isPrivate()) return;
-      if (!op.getDummyScope()) return;
-      if (!leadsToDesignate(op.getMemref())) return;
-      byUniq[op.getUniqName()].push_back(op);
-    });
-    for (auto& kv : byUniq) {
-      auto& group = kv.second;
-      if (group.size() < 2) continue;
-      llvm::SmallPtrSet<mlir::Operation*, 4> scopes;
-      for (auto op : group)
-        if (auto ds = op.getDummyScope().getDefiningOp()) scopes.insert(ds);
-      if (scopes.size() < 2) continue;
-      unsigned idx = 0;
-      for (auto op : group) {
-        auto un = op.getUniqName().str();
-        std::string newUniq = un + "_call" + std::to_string(idx++);
-        op->setAttr("uniq_name",
-                    mlir::StringAttr::get(op.getContext(), newUniq));
-      }
-    }
-  }
+  // D2: run Pass 0b BEFORE the collision pre-walk so the pre-walk
+  // sees the post-mutation ``_call<idx>`` names.  Without this,
+  // mutated callsites would silently miss collision detection and
+  // ``extractName`` would skip qualification for them.
+  runMultiCallsiteDisambiguation(module);
+
+  // Build the collision set (peels aliases + walks fir.declare too +
+  // skips inlined-callee OPTIONAL dummies whose runtime value is folded
+  // by ``fir.is_present``).
+  buildCollisionSet(module, entryScope);
+}
+
+// ---------------------------------------------------------------------------
+// Main extraction
+// ---------------------------------------------------------------------------
+
+std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
+                                      std::vector<ValueSymbol>* value_symbols,
+                                      const std::string &entry_symbol) {
+  // Set up per-thread extraction state (entry scope + collision set +
+  // ``_call<idx>`` disambiguation + intrinsic-name reject).
+  // Same helper used by ``extractAST`` so the two paths can't drift.
+  prepareExtractionState(module, entry_symbol);
+
+  std::vector<VarInfo> vars;
+
+  // Build, with one module walk each, the indices the per-variable passes below
+  // would otherwise rebuild by re-walking the whole module (or function) once
+  // per variable -- the O(variables x module) cost that dominates extraction of
+  // a fully-inlined whole-program entry.  Extraction does not mutate the IR, so
+  // these stay valid for every lookup below.
+  const AllocSitesIndex allocIdx = buildAllocSitesIndex(module);
+  const std::set<std::string> writtenGlobals = buildWrittenGlobals(module);
+  const std::set<std::string> allocatedReaderNames =
+      buildAllocatedReaderNames(module);
 
   // Pass 1: collect every hlfir.declare.  Skip assumed-shape alias
   // declares inserted by ``hlfir-inline-all``  --  they share storage
@@ -1540,6 +1806,21 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
       if (!op.getResult(0).use_empty() || !op.getResult(1).use_empty())
         peelPointer = true;
     }
+    // Phantom-pointer drop: a POINTER dummy whose declare has NO
+    // remaining users is a dangling artifact from
+    // ``hlfir-flatten-structs`` (every access was redirected to the
+    // flat companion ``<base>_<member>``).  Without this skip the
+    // declare lands as a phantom scalar VarInfo of dtype
+    // ``!fir.box<!fir.ptr<...>>`` -- the SDFG signature then carries
+    // BOTH the struct-base pointer ``arr`` AND the flat companion
+    // ``arr_x`` for L3-shape ``type(t), pointer :: arr(:)``,
+    // confusing the bindings layer.  L3 ``test_aor_l3_pointer_scalar_member``
+    // surfaced this; the flatten companion is the only one any
+    // downstream tasklet actually reads.
+    if (isPointerAttr && op.getResult(0).use_empty() &&
+        op.getResult(1).use_empty()) {
+      continue;
+    }
     if (isAllocatableAttr || peelPointer) {
       ty = peelTypeLayers(ty);
     } else {
@@ -1613,26 +1894,253 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
     else if (mlir::isa<fir::LogicalType>(ty)) {
       v.dtype = "bool";
     } else if (mlir::isa<fir::RecordType>(ty)) {
-      // Drop ALL ``fir.RecordType`` declares.  Two cases:
+      // ``fir.RecordType`` declares fall into three categories:
       //
       //   1. Flang-internal type-info metadata
       //      (``_QM__fortran_type_info...`` tables, component
       //      descriptors named ``.b.<type>.<field>``)  --  never
-      //      user-visible.
-      //   2. User struct that escaped ``hlfir-flatten-structs``
-      //      (the pass handles flat-member structs and nested
-      //      records; allocatable-member structs and other
-      //      shapes are out of scope).
+      //      user-visible.  Drop them.
+      //   2. DUMMY-arg struct that ``hlfir-flatten-structs``
+      //      already lowered to per-field declares -- this
+      //      original struct declare's designates have been
+      //      replaced.  Drop the leftover.
+      //   3. MODULE-LEVEL struct global (``type(t) :: g`` at
+      //      module scope) -- the flatten pass does NOT process
+      //      these (it only walks dummy args).  Field accesses
+      //      (``g % a``) reach the bridge as
+      //      ``hlfir.designate %g_decl{"a"}``; ``traceToDecl``
+      //      returns the flat ``g_a`` name (the bridge's
+      //      ``<parent>_<member>`` convention).  Without a
+      //      matching SDFG array the libcall dispatcher raises
+      //      ``KeyError: 'g_a'``.
       //
-      // Either way the struct does not belong on the SDFG
-      // signature: writing the raw MLIR type string into
-      // ``v.dtype`` would produce broken descriptors that
-      // downstream codegen would only sometimes tolerate.  Skip
-      // the VarInfo entirely; downstream ``traceToDecl`` reads
-      // through the per-field declares the pass did lower.  A
-      // loud-failure throw here would be ideal but regresses
-      // tests that exploit the accidental-success path, so the
-      // loud check lives in a dedicated unit test instead.
+      // Fix for category 3: synthesise one per-field VarInfo
+      // per UNIQUE (struct, field) pair actually accessed,
+      // marked as a TRANSIENT (no signature exposure -- module
+      // globals are internal state).  The per-field VarInfo's
+      // type and shape come from the struct's member type; the
+      // bindings layer can either bake the initial-value
+      // ``fir.global`` contents OR copy from the host on entry.
+      //
+      // Discriminator: a module-scope global declare's memref
+      // traces back to ``fir.address_of @_QM<m>E<n>`` (or the
+      // ``_QM<m>F<f>E<n>`` SAVE-local form, which we deliberately
+      // include too -- SAVE-locals are persistent state with the
+      // same access pattern).  Type-info tables (category 1) and
+      // dummy structs (category 2) DON'T have the address_of
+      // trace, so this branch fires only on real category-3
+      // shapes.
+      auto rec = mlir::cast<fir::RecordType>(ty);
+      std::string globalSym = traceToGlobalSymbol(op.getMemref());
+      // Aggregate field-designate uses across the WHOLE alias chain
+      // that ultimately bottoms out at this module-level declare:
+      // direct designates on ``op.getResult(0)`` PLUS designates on
+      // any further ``hlfir.declare`` that takes our result as its
+      // memref (e.g. an inlined callee's ``intent(in) :: vcut``
+      // dummy whose memref is the module ``%735#0``).  QE's
+      // ``vcut`` shape: the module declare ``_QMexx_baseEvcut`` has
+      // ZERO direct designates -- every ``vcut % a`` / ``vcut % cutoff``
+      // hits via the inlined ``vcut_get`` / ``vcut_spheric_get``
+      // dummy declares (their uniq_name carries the F-scope
+      // ``_QMcoulomb_vcut_moduleFvcut_getEvcut`` form).  Without
+      // walking the alias chain we'd see zero designates on the
+      // module declare and emit zero per-field VarInfos -- exactly
+      // the original ``KeyError: 'vcut_a'`` reproducer.
+      auto designates_it = designatesByDecl.find(op.getOperation());
+      std::vector<hlfir::DesignateOp> allDesignates;
+      if (designates_it != designatesByDecl.end())
+        for (auto dg : designates_it->second)
+          allDesignates.push_back(dg);
+      // Walk users of the module declare's result for inlined-callee
+      // alias declares.  One hop only at first cut; if the bridge
+      // surfaces a multi-hop alias chain in practice, extend with
+      // a transitive walk bounded to ~8 levels.
+      for (auto* u : op.getResult(0).getUsers()) {
+        auto aliasDecl = mlir::dyn_cast_or_null<hlfir::DeclareOp>(u);
+        if (!aliasDecl) continue;
+        if (aliasDecl == op) continue;  // skip self
+        auto aliasIt = designatesByDecl.find(aliasDecl.getOperation());
+        if (aliasIt == designatesByDecl.end()) continue;
+        for (auto dg : aliasIt->second)
+          allDesignates.push_back(dg);
+      }
+      bool hasFieldUses = !allDesignates.empty();
+      if (!globalSym.empty() && hasFieldUses) {
+        // Recursive emit: walk the (struct, field) chain, generating
+        // one VarInfo per LEAF field whose type is a supported
+        // scalar / array.  For nested records (``g % inner % a``)
+        // the inner field designate's USERS include the further
+        // ``a`` designate, so we recurse through ``designatesByDecl``
+        // / direct users on the SSA result to discover deeper
+        // levels.  Tracks ``visitedKey`` to keep recursion
+        // bounded for cyclic or self-referential type structures.
+        //
+        // Type-to-dtype mapping is shared with the top-level path
+        // via the lambda below; non-supported leaf types
+        // (CharacterType, PointerType, allocatable boxes, ...)
+        // are skipped silently and the downstream traceToDecl
+        // lookup will fail loudly if a kernel actually reads the
+        // unsupported leaf.
+        auto dtypeFor = [](mlir::Type elemTy,
+                           std::string& outDtype) -> bool {
+          if (auto fty = mlir::dyn_cast<mlir::FloatType>(elemTy)) {
+            unsigned w = fty.getWidth();
+            outDtype = (w == 32) ? "fp32"
+                                 : (w == 64) ? "fp64" : "fp" + std::to_string(w);
+            return true;
+          }
+          if (auto ity = mlir::dyn_cast<mlir::IntegerType>(elemTy)) {
+            unsigned w = ity.getWidth();
+            outDtype = (w == 8) ? "i8"
+                                : (w == 16) ? "i16"
+                                            : (w == 32) ? "i32"
+                                                        : (w == 64) ? "i64" : "i" + std::to_string(w);
+            return true;
+          }
+          if (mlir::isa<fir::LogicalType>(elemTy) || elemTy.isInteger(1)) {
+            outDtype = "bool";
+            return true;
+          }
+          return false;
+        };
+        std::set<std::string> emittedFlatNames;
+        std::function<void(mlir::Value, fir::RecordType,
+                            const std::string&, const std::string&, int)>
+            walkLevel = [&](mlir::Value designateResult,
+                            fir::RecordType levelRec,
+                            const std::string& flatNameBase,
+                            const std::string& mangledBase, int depth) {
+              if (depth > 8) return;  // bounded recursion
+              // Collect user designates of designateResult that
+              // carry a component attribute -- each one is one
+              // more level of nesting.
+              //
+              // Also follow ALIAS DECLARES: a user that's another
+              // ``hlfir.declare`` taking ``designateResult`` as its
+              // memref is an inlined-callee dummy alias of the
+              // module-level struct (QE's ``vcut_get`` /
+              // ``vcut_spheric_get`` dummies aliasing
+              // ``_QMexx_baseEvcut``).  Walk the alias's result
+              // users to discover field designates one level
+              // deeper.  Bounded by the same ``depth`` budget.
+              std::set<std::string> componentsSeen;
+              // Build a flat list of (sub)results whose users we
+              // want to scan for field designates: the
+              // ``designateResult`` itself plus the result of any
+              // ALIAS DECLARE (an inlined-callee dummy that took
+              // the module-level struct as its memref).  Skipping
+              // the alias hop means the module-level declare sees
+              // zero designates (QE's vcut shape) and the
+              // per-field synthesis emits nothing.
+              llvm::SmallVector<mlir::Value, 4> scanRoots;
+              scanRoots.push_back(designateResult);
+              for (auto* u : designateResult.getUsers()) {
+                if (auto ad = mlir::dyn_cast_or_null<hlfir::DeclareOp>(u))
+                  scanRoots.push_back(ad.getResult(0));
+                // Pointer / allocatable AoR module-level case
+                // (QE's ``tabxx(ia) % box(ir)`` -- ``tabxx`` is
+                // ``type(t), pointer :: tabxx(:)`` at module scope).
+                // Access chain is ``fir.load %declare ; designate
+                // %loaded (ia) ; designate %elem {"box"}``.  Walk
+                // through the load -- then through any non-component
+                // (element) designate -- to find the component
+                // designates that name the actual struct fields.
+                if (auto ld = mlir::dyn_cast_or_null<fir::LoadOp>(u)) {
+                  scanRoots.push_back(ld.getResult());
+                  for (auto* lu : ld.getResult().getUsers())
+                    if (auto edg =
+                            mlir::dyn_cast_or_null<hlfir::DesignateOp>(lu))
+                      if (!edg.getComponentAttr())
+                        scanRoots.push_back(edg.getResult());
+                }
+              }
+              for (auto root : scanRoots)
+              for (auto* u : root.getUsers()) {
+                auto childDg =
+                    mlir::dyn_cast_or_null<hlfir::DesignateOp>(u);
+                if (!childDg) continue;
+                auto childComp = childDg.getComponentAttr();
+                if (!childComp) continue;
+                std::string childName = childComp.getValue().str();
+                if (!componentsSeen.insert(childName).second) continue;
+                mlir::Type childMemberTy;
+                for (auto& p : levelRec.getTypeList())
+                  if (p.first == childName) {
+                    childMemberTy = p.second;
+                    break;
+                  }
+                if (!childMemberTy) continue;
+                std::string newFlat =
+                    flatNameBase + "_" + childName;
+                std::string newMangled =
+                    mangledBase + "_" + childName;
+                // Nested record: recurse into ITS designates.
+                if (auto childRec = mlir::dyn_cast<fir::RecordType>(
+                        childMemberTy)) {
+                  walkLevel(childDg.getResult(), childRec, newFlat,
+                            newMangled, depth + 1);
+                  continue;
+                }
+                // Leaf -- emit a VarInfo if the dtype is
+                // supported.  Memoise on the flat name so two
+                // independent leaf-access sites collapse to one.
+                if (!emittedFlatNames.insert(newFlat).second)
+                  continue;
+                VarInfo mv;
+                mv.fortran_name = newFlat;
+                mv.mangled_name = newMangled;
+                mv.intent = "";
+                mlir::Type elemTy = childMemberTy;
+                // Unwrap Box / Heap / Ptr layers for ALLOCATABLE or
+                // POINTER struct members (``INTEGER, ALLOCATABLE :: nlm(:)``
+                // -> ``!fir.box<!fir.heap<!fir.array<?xi32>>>``).  Without
+                // peeling, the dyn_cast<SequenceType> below misses the
+                // wrapped array and the member is dropped from VarInfo
+                // emission -- QE's ``dfftt%nlm`` shape, surfacing as a
+                // nested-bracket memlet ``rhoc[dfftt_nlm[...]]`` because
+                // ``collect_indirect`` doesn't know ``dfftt_nlm`` is an
+                // array.  Unknown-extent dimensions render as ``<flat>_d<i>``
+                // symbols the caller passes alongside the array, matching
+                // the assumed-shape convention used everywhere else in the
+                // bridge.
+                if (auto b = mlir::dyn_cast<fir::BoxType>(childMemberTy))
+                  childMemberTy = b.getEleTy();
+                if (auto h = mlir::dyn_cast<fir::HeapType>(childMemberTy))
+                  childMemberTy = h.getEleTy();
+                if (auto p = mlir::dyn_cast<fir::PointerType>(childMemberTy))
+                  childMemberTy = p.getEleTy();
+                if (auto seq = mlir::dyn_cast<fir::SequenceType>(
+                        childMemberTy)) {
+                  elemTy = seq.getEleTy();
+                  unsigned dimIdx = 0;
+                  for (auto dimd : seq.getShape()) {
+                    if (dimd == fir::SequenceType::getUnknownExtent()) {
+                      // Allocatable: extent only known at runtime --
+                      // synthesise per-dim symbol matching the bridge's
+                      // assumed-shape convention.
+                      mv.shape_symbols.push_back(newFlat + "_d" +
+                                                 std::to_string(dimIdx));
+                    } else {
+                      mv.shape_symbols.push_back(std::to_string(dimd));
+                    }
+                    ++dimIdx;
+                  }
+                }
+                mv.rank = mv.shape_symbols.size();
+                mv.role = (mv.rank > 0) ? "array" : "scalar";
+                for (size_t d = 0; d < mv.shape_symbols.size(); ++d)
+                  mv.lower_bounds.push_back("1");
+                std::string dtype;
+                if (!dtypeFor(elemTy, dtype)) continue;
+                mv.dtype = dtype;
+                vars.push_back(std::move(mv));
+              }
+            };
+        // Kick off the recursive walk from the struct declare's
+        // own result (the FIRST level of designates).
+        walkLevel(op.getResult(0), rec, v.fortran_name,
+                  v.mangled_name, 0);
+      }
       continue;
     } else {
       std::string s;
@@ -1664,20 +2172,27 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
     // ``x_alloc1``, ``x_alloc2``, ... (allocAliasName); the bridge's
     // alias map (see extract_ast.cpp) will route per-site reads /
     // writes to the right transient at AST-build time.
+    // Group allocatable + pointer here: both are descriptor-bearing and both
+    // get an ``<arr>_allocated`` tracker (the emission at ast/expressions.cpp
+    // and ast/control_flow.cpp returns ``<arr>_allocated`` for any
+    // ``box_addr`` -- the lowering of ``ALLOCATED(arr)`` AND ``ASSOCIATED(ptr)``
+    // -- so a pointer member without the tracker is referenced by emission but
+    // never registered, surfacing as a sdfg.arglist KeyError later).
     bool isAllocatable = false;
     if (auto a = op.getFortranAttrs())
-      if (bitEnumContainsAny(*a, fir::FortranVariableFlagsEnum::allocatable))
+      if (bitEnumContainsAny(*a, fir::FortranVariableFlagsEnum::allocatable) ||
+          bitEnumContainsAny(*a, fir::FortranVariableFlagsEnum::pointer))
         isAllocatable = true;
     std::vector<fir::AllocMemOp> allocSites;
     if (isAllocatable && v.rank > 0)
-      allocSites = collectAllocSites(v.mangled_name, module);
+      allocSites = collectAllocSites(v.mangled_name, module, &allocIdx);
     // Partition the ALLOCATE sites into buffer classes (one DaCe transient
     // each): a class with >1 site is a conditional (mutually-exclusive
     // branches sharing one buffer with a branch-dependent extent symbol);
     // a singleton class is a plain / sequentially-versioned buffer.  The
     // base name ``a`` is class 0 (first definition); classes 1.. become
     // ``a_alloc1``, ``a_alloc2``, ...  See ALLOC_BUFFER_SSA_DESIGN.md.
-    auto allocClasses = groupAllocSites(v.mangled_name, module);
+    auto allocClasses = groupAllocSites(v.mangled_name, module, &allocIdx);
     // ``baseCondAlloc``: is the base buffer (class 0) a conditional?  If so
     // skip the front-site shape (it would pin ``a`` to one branch's extent)
     // -- the synthesize-``a_d<i>`` fallback gives the branch-symbol shape,
@@ -2021,6 +2536,64 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
               }
             }
           }
+        } else if (auto srcDecl = mlir::dyn_cast<hlfir::DeclareOp>(defOp)) {
+          // Whole-array RANK reinterpretation -- ssor's ``tv(N)`` 1D
+          // passed unmodified to buts's ``tv(5, M, K)`` 3D dummy.
+          // Same Fortran feature as the section-reshape branch above
+          // (storage-association reshape) but the IR has NO designate
+          // (no slicing); just a ``fir.convert`` from the source's
+          // typed ref to the dummy's reinterpreted ref.  After the
+          // peel loop above lands ``m`` on the source's
+          // ``hlfir.declare``.
+          //
+          // ``asAssumedShapeAlias`` already refuses the alias collapse
+          // when ranks differ (see ``trace_utils.cpp``), so this dummy
+          // is now a separate VarInfo.  Mark it as a view_alias over
+          // the source's flat storage; ``descriptors.py`` registers
+          // the view with column-major strides over its OWN shape so
+          // the source AccessNode -> view ViewAccessNode linking
+          // memlet wires 1D source range -> ND view range correctly.
+          // Single sentinel marker in ``view_subset`` -- one empty
+          // string -- signals "whole-array rank reinterpretation"
+          // to ``descriptors.py`` and ``access.py``.
+          auto rankOfDeclResult = [](mlir::Value val) -> int {
+            auto t = peelTypeLayers(val.getType());
+            if (auto seq = mlir::dyn_cast<fir::SequenceType>(t))
+              return seq.getDimension();
+            return 0;
+          };
+          int srcRank = rankOfDeclResult(srcDecl.getResult(0));
+          if (srcRank > 0 && srcRank != v.rank) {
+            auto srcName = extractName(srcDecl.getUniqName().str());
+            // ssor's tv was renamed to ``ssor_tv`` by Pass 0a's F-
+            // scope-prefix path (own-storage + multi-procedure
+            // short-name collision); buts's tv kept the bare name
+            // ``tv``.  When they collide give the dummy its own
+            // scope-prefix.
+            if (srcName == v.fortran_name) {
+              auto eP = v.mangled_name.rfind('E');
+              auto fP = v.mangled_name.rfind('F', eP);
+              if (eP != std::string::npos && fP != std::string::npos &&
+                  fP + 1 < eP) {
+                std::string scope =
+                    v.mangled_name.substr(fP + 1, eP - fP - 1);
+                std::string newName = scope + "_" + v.fortran_name;
+                setManglingOverride(v.mangled_name, newName);
+                v.fortran_name = newName;
+              }
+            }
+            if (!srcName.empty() && srcName != v.fortran_name) {
+              v.view_source = srcName;
+              v.role = "view_alias";
+              // Single sentinel "" entry: distinct from "rank-
+              // preserving section_alias" (no entries) and from
+              // "section reshape" (per-source-dim entries).  The
+              // descriptor / access-node wiring sees one entry and
+              // routes through the rank-reinterpret stride path.
+              v.view_subset.clear();
+              v.view_subset.push_back("");
+            }
+          }
         }
       }
     }
@@ -2056,7 +2629,8 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
     // instead of inspecting the descriptor's heap pointer (which
     // DaCe's data model doesn't surface).  Initial value is 0
     // (DaCe default for transient scalars).
-    if (isAllocatable && needsAllocatedTracker(v.mangled_name, module)) {
+    if (isAllocatable && needsAllocatedTracker(v.mangled_name, module, &allocIdx,
+                                               &allocatedReaderNames)) {
       // Role ``symbol`` (not ``scalar``) so writes land on
       // interstate edges and reads see the latest value across
       // state boundaries.  A plain transient scalar would let
@@ -2161,7 +2735,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
     if (!sym.empty()) {
       auto gop = module.lookupSymbol<fir::GlobalOp>(sym);
       v.const_data = extractGlobalInitData(gop);
-      const bool written = globalIsWritten(sym, module);
+      const bool written = globalIsWritten(sym, module, &writtenGlobals);
       const bool isParameter =
           (gop && gop.getConstant().has_value() && *gop.getConstant());
       // A genuine module-scope VARIABLE is ``_QM<module>E<entity>`` -- the
@@ -2229,6 +2803,221 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
       }
     }
 
+    // Detect Fortran 2003 bounds-remapping pointer views tagged by
+    // ``hlfir-mark-bounds-remap-views``.  When the tag is present:
+    //   1. Trace the LAST rebind store (skipping any nullify) back
+    //      through ``fir.rebox`` / ``fir.convert`` / ``hlfir.designate``
+    //      to the underlying parent ``hlfir.declare``.
+    //   2. Record the parent's Fortran name as ``bounds_remap_source``.
+    //   3. Record the rebox's shape-shift extent operand (the flat
+    //      1-D size) as ``bounds_remap_total_extent``, rendering it
+    //      as a string the Python builder can parse / emit as a
+    //      symbol or symbolic expression.
+    //
+    // The actual SDFG ``add_view`` + offset-symbol emission lives in
+    // ``descriptors.py``; this block only surfaces the three fields.
+    // A tagged declare whose rebind chain doesn't trace cleanly
+    // falls through with ``bounds_remap_view = false`` so the
+    // pipeline doesn't crash on an unsupported shape (the existing
+    // rewriter would have rejected such a shape too).
+    if (op->hasAttr("hlfir_bridge.bounds_remap_view")) {
+      // Find the rebind store: the LAST non-nullify ``fir.store``
+      // whose memref is ``op.getResult(0)``.
+      fir::StoreOp rebindStore;
+      for (auto* u : op.getResult(0).getUsers()) {
+        auto st = mlir::dyn_cast<fir::StoreOp>(u);
+        if (!st) continue;
+        auto* valDef = st.getValue().getDefiningOp();
+        if (auto eb = mlir::dyn_cast_or_null<fir::EmboxOp>(valDef))
+          if (mlir::isa_and_nonnull<fir::ZeroOp>(
+                  eb.getMemref().getDefiningOp()))
+            continue;  // skip nullify
+        if (!rebindStore || rebindStore->isBeforeInBlock(st))
+          rebindStore = st;
+      }
+      if (rebindStore) {
+        // The outermost ``fir.rebox`` (rebox form) or ``fir.embox``
+        // (rank-changing remap form -- ``p(1:M,1:K) => arr1d``) carries
+        // the shape_shift whose extent operands give the view's
+        // multi-dim extents.  Trace through ``fir.convert`` to find it.
+        mlir::Value cur = rebindStore.getValue();
+        fir::ReboxOp topRebox;
+        fir::EmboxOp topEmbox;
+        for (int hops = 0; cur && hops < 8 && !topRebox && !topEmbox; ++hops) {
+          auto* def = cur.getDefiningOp();
+          if (!def) break;
+          if (auto rb = mlir::dyn_cast<fir::ReboxOp>(def)) {
+            topRebox = rb;
+            break;
+          }
+          if (auto eb = mlir::dyn_cast<fir::EmboxOp>(def)) {
+            topEmbox = eb;
+            break;
+          }
+          if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def)) {
+            cur = cv.getValue();
+            continue;
+          }
+          break;
+        }
+        if (topEmbox) {
+          // Embox path: shape carries the multi-dim shape_shift; the
+          // total extent is the product of its extents (rank-change
+          // means the source is 1D / different rank).  For the
+          // ``p(1:M, 1:K) => arr1d`` form the renderer needs to emit
+          // ``M * K`` so descriptors.py mints the right total-extent
+          // size.  Reuse the same renderExtent recursion below by
+          // multiplying the per-dim extent strings.
+          mlir::Value shape = topEmbox.getShape();
+          if (auto ss = mlir::dyn_cast_or_null<fir::ShapeShiftOp>(
+                  shape ? shape.getDefiningOp() : nullptr)) {
+            auto pairs = ss.getPairs();
+            std::function<std::string(mlir::Value)> renderExt =
+                [&](mlir::Value vv) -> std::string {
+              for (int hops = 0; vv && hops < 8; ++hops) {
+                auto* d = vv.getDefiningOp();
+                if (!d) return "";
+                if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
+                  vv = cv.getValue();
+                  continue;
+                }
+                if (auto cst = mlir::dyn_cast<mlir::arith::ConstantOp>(d)) {
+                  if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue()))
+                    return std::to_string(ia.getInt());
+                  return "";
+                }
+                if (auto ld = mlir::dyn_cast<fir::LoadOp>(d))
+                  return traceToDecl(ld.getMemref());
+                if (auto mul = mlir::dyn_cast<mlir::arith::MulIOp>(d)) {
+                  auto l = renderExt(mul.getLhs());
+                  auto r = renderExt(mul.getRhs());
+                  if (l.empty() || r.empty()) return "";
+                  return l + "*" + r;
+                }
+                return "";
+              }
+              return "";
+            };
+            // Multiply per-dim extents for the total; ALSO fill
+            // ``v.shape_symbols`` per dim so the SDFG View carries
+            // the multi-D shape directly (no synthetic ``<ptr>_d<i>``
+            // fallback that would leave the View's stride symbols
+            // unbound at runtime).  ``pairs`` layout: lb0, ext0,
+            // lb1, ext1, ...
+            std::string total;
+            std::vector<std::string> perDim;
+            for (size_t i = 1; i < pairs.size(); i += 2) {
+              auto e = renderExt(pairs[i]);
+              if (e.empty()) { total.clear(); perDim.clear(); break; }
+              perDim.push_back(e);
+              total = total.empty() ? e : total + "*" + e;
+            }
+            v.bounds_remap_total_extent = total;
+            if (!perDim.empty() && (int)perDim.size() == v.rank)
+              v.shape_symbols = std::move(perDim);
+          }
+          // Walk the embox's memref back to the parent declare.
+          mlir::Value parent = topEmbox.getMemref();
+          for (int hops = 0; parent && hops < 16; ++hops) {
+            auto* pd = parent.getDefiningOp();
+            if (!pd) break;
+            if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(pd)) {
+              v.bounds_remap_source = extractName(dc.getUniqName().str());
+              v.bounds_remap_view = !v.bounds_remap_source.empty();
+              break;
+            }
+            if (auto cv = mlir::dyn_cast<fir::ConvertOp>(pd)) {
+              parent = cv.getValue();
+              continue;
+            }
+            if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(pd)) {
+              parent = dg.getMemref();
+              continue;
+            }
+            break;
+          }
+        }
+        if (topRebox) {
+          // Render the shape-shift's first extent operand
+          // (lb0, ext0, lb1, ext1, ...) as the total extent.  For a
+          // rank-1 shape_shift -- the only shape the mark pass
+          // recognises -- this is the single ``ext0`` entry.
+          if (auto ss = mlir::dyn_cast_or_null<fir::ShapeShiftOp>(
+                  topRebox.getShape().getDefiningOp())) {
+            auto pairs = ss.getPairs();
+            if (pairs.size() >= 2) {
+              // Render the extent SSA value as a parseable string.
+              // Supports: (a) constant integer, (b) load of a named
+              // declare (Fortran scalar name), (c) ``arith.muli`` of
+              // two loads / constants (the common ``n*k`` shape).
+              // Falls back to empty string for anything more complex;
+              // descriptors.py then mints a synthetic
+              // ``<ptr>_total_extent_d0`` symbol the caller binds.
+              std::function<std::string(mlir::Value)> renderExtent =
+                  [&](mlir::Value vv) -> std::string {
+                for (int hops = 0; vv && hops < 8; ++hops) {
+                  auto* d = vv.getDefiningOp();
+                  if (!d) return "";
+                  if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
+                    vv = cv.getValue();
+                    continue;
+                  }
+                  if (auto cst = mlir::dyn_cast<mlir::arith::ConstantOp>(d)) {
+                    if (auto ia =
+                            mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue()))
+                      return std::to_string(ia.getInt());
+                    return "";
+                  }
+                  if (auto ld = mlir::dyn_cast<fir::LoadOp>(d)) {
+                    return traceToDecl(ld.getMemref());
+                  }
+                  if (auto mul = mlir::dyn_cast<mlir::arith::MulIOp>(d)) {
+                    std::string lhs = renderExtent(mul.getLhs());
+                    std::string rhs = renderExtent(mul.getRhs());
+                    if (lhs.empty() || rhs.empty()) return "";
+                    return lhs + "*" + rhs;
+                  }
+                  return "";
+                }
+                return "";
+              };
+              v.bounds_remap_total_extent = renderExtent(pairs[1]);
+            }
+          }
+          // Trace back to the parent declare through any
+          // ``hlfir.designate`` / ``fir.convert`` chain on the
+          // rebox's input box.
+          mlir::Value parent = topRebox.getBox();
+          for (int hops = 0; parent && hops < 16; ++hops) {
+            auto* pd = parent.getDefiningOp();
+            if (!pd) break;
+            if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(pd)) {
+              v.bounds_remap_source = extractName(dc.getUniqName().str());
+              v.bounds_remap_view = !v.bounds_remap_source.empty();
+              break;
+            }
+            if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(pd)) {
+              parent = dg.getMemref();
+              continue;
+            }
+            if (auto cv = mlir::dyn_cast<fir::ConvertOp>(pd)) {
+              parent = cv.getValue();
+              continue;
+            }
+            if (auto rb = mlir::dyn_cast<fir::ReboxOp>(pd)) {
+              parent = rb.getBox();
+              continue;
+            }
+            if (auto eb = mlir::dyn_cast<fir::EmboxOp>(pd)) {
+              parent = eb.getMemref();
+              continue;
+            }
+            break;
+          }
+        }
+      }
+    }
+
     vars.push_back(std::move(v));
   }
   // De-duplicate the collected value-symbols: the same array-element extent
@@ -2293,6 +3082,87 @@ FortranInterfaceInfo extractFortranInterface(mlir::ModuleOp module,
     tname = (t == llvm::StringRef::npos) ? rn.str() : rn.substr(t + 1).str();
   };
 
+  // Recursively register every ``fir.RecordType`` reachable from
+  // ``rec`` (top-level dummy struct + every nested derived-type
+  // member) in ``out.struct_types``.  Each member entry carries
+  // either a scalar element dtype + rank + per-dim static-shape
+  // literals (box-of-array members unwrap to the underlying
+  // sequence), or a populated ``struct_name`` + empty dtype for a
+  // nested record member.  Unsupported leaf shapes (complex /
+  // character / function pointer) keep both dtype and struct_name
+  // empty so the Python side can flag them clearly.
+  std::function<void(fir::RecordType, const std::string&,
+                     const std::string&)>
+      recordStructLayoutRecursive = [&](fir::RecordType rec,
+                                        const std::string& mod,
+                                        const std::string& tname) {
+        if (out.struct_types.find(tname) != out.struct_types.end()) return;
+        FortranStructLayout layout;
+        layout.name = tname;
+        layout.module = mod;
+        // Insert before recursing so a self-referential / mutually-recursive
+        // type graph terminates -- the second visit hits the early-out
+        // above.  The members of this entry are filled in place below.
+        auto& slot =
+            (out.struct_types[tname] = std::move(layout));
+        std::vector<std::pair<fir::RecordType,
+                              std::pair<std::string, std::string>>> nested;
+        for (auto& p : rec.getTypeList()) {
+          FortranMemberInfo m;
+          m.name = p.first;
+          mlir::Type mt = p.second;
+          // v2 box-of-array member: unwrap ``fir.box<fir.heap|fir.ptr<
+          // seq<...>>>`` to expose the underlying sequence -- the
+          // data buffer the post-marshal-expansion external sees via
+          // ``fir.box_addr``.  Rank + shape come from the sequence;
+          // dtype from its element type.
+          if (auto box = mlir::dyn_cast<fir::BoxType>(mt)) {
+            mlir::Type inner = box.getEleTy();
+            if (auto heap = mlir::dyn_cast<fir::HeapType>(inner))
+              inner = heap.getEleTy();
+            else if (auto ptr = mlir::dyn_cast<fir::PointerType>(inner))
+              inner = ptr.getEleTy();
+            mt = inner;
+          }
+          if (auto seq = mlir::dyn_cast<fir::SequenceType>(mt)) {
+            m.rank = (int)seq.getShape().size();
+            for (auto e : seq.getShape()) {
+              if (e == fir::SequenceType::getUnknownExtent())
+                m.shape_symbols.emplace_back("?");
+              else
+                m.shape_symbols.emplace_back(std::to_string(e));
+            }
+            mt = seq.getEleTy();
+          }
+          if (mt.isF64()) m.dtype = "float64";
+          else if (mt.isF32()) m.dtype = "float32";
+          else if (mt.isInteger(8)) m.dtype = "int8";
+          else if (mt.isInteger(16)) m.dtype = "int16";
+          else if (mt.isInteger(32)) m.dtype = "int32";
+          else if (mt.isInteger(64)) m.dtype = "int64";
+          else if (mt.isInteger(1) || mlir::isa<fir::LogicalType>(mt))
+            m.dtype = "bool";  // see ``dtypeName`` in FlattenStructs.cpp
+          else if (auto nested_rec = mlir::dyn_cast<fir::RecordType>(mt)) {
+            // Nested derived-type member: register its name + module
+            // on this member, queue the type for its own layout entry.
+            parseRecordName(nested_rec.getName(), m.struct_module,
+                            m.struct_name);
+            if (!m.struct_module.empty() && !m.struct_name.empty())
+              out.used_modules[m.struct_module].insert(m.struct_name);
+            if (!m.struct_name.empty())
+              nested.emplace_back(nested_rec,
+                                  std::make_pair(m.struct_module,
+                                                 m.struct_name));
+          }
+          // Complex / character / function pointer: leave both
+          // ``dtype`` and ``struct_name`` empty.
+          slot.members.push_back(std::move(m));
+        }
+        for (auto& q : nested)
+          recordStructLayoutRecursive(q.first, q.second.first,
+                                      q.second.second);
+      };
+
   auto& block = fn.getBody().front();
   for (auto barg : block.getArguments()) {
     hlfir::DeclareOp decl;
@@ -2336,12 +3206,37 @@ FortranInterfaceInfo extractFortranInterface(mlir::ModuleOp module,
       parseRecordName(rec.getName(), a.struct_module, a.struct_name);
       if (!a.struct_module.empty() && !a.struct_name.empty())
         out.used_modules[a.struct_module].insert(a.struct_name);
+      // Record the struct's member layout once per distinct type so
+      // the Python ``build_auto_interface`` can populate
+      // ``OriginalInterface.struct_types`` without the caller
+      // hand-authoring it.  Walk recursively: each nested record
+      // member's type is enqueued so it lands in ``struct_types``
+      // too, keyed by its own name -- the Python side then looks
+      // each nested struct up by ``FortranMemberInfo.struct_name``.
+      // Box-of-array members unwrap to the underlying sequence's
+      // dtype + rank + shape (the data buffer the post-marshal
+      // ``fir.box_addr`` exposes); nested record members carry a
+      // populated ``struct_name`` + empty dtype.  Other
+      // unsupported leaf shapes (complex / character / function
+      // pointer) keep empty dtype + empty struct_name so the
+      // Python side can flag them clearly.
+      if (!a.struct_name.empty())
+        recordStructLayoutRecursive(rec, a.struct_module, a.struct_name);
     } else if (ty.isF64()) a.dtype = "float64";
     else if (ty.isF32()) a.dtype = "float32";
     else if (ty.isInteger(8)) a.dtype = "int8";
     else if (ty.isInteger(16)) a.dtype = "int16";
     else if (ty.isInteger(32)) a.dtype = "int32";
     else if (ty.isInteger(64)) a.dtype = "int64";
+    // Top-level ``LOGICAL`` dummy args stay ``bool`` regardless of
+    // KIND; the existing ``_build_logical_bridges`` Python pass
+    // wraps the wrapper's outer LOGICAL(KIND=N) dummy in a
+    // ``logical(c_bool)`` scratch + per-element bridge so the
+    // SDFG-facing storage is always 1 byte.  The struct-member
+    // walker below uses KIND-driven width because there is no such
+    // bridge layer for struct-internal flatten companions (the
+    // ``c_loc`` / ``c_f_pointer`` reinterpret needs the storage
+    // size to match the source LOGICAL slot byte-for-byte).
     else if (ty.isInteger(1) || mlir::isa<fir::LogicalType>(ty)) a.dtype = "bool";
     else if (auto ct = mlir::dyn_cast<mlir::ComplexType>(ty)) {
       a.dtype = ct.getElementType().isF32() ? "complex64" : "complex128";

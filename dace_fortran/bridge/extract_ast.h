@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -82,8 +83,16 @@ struct ASTNode {
   std::string loop_lower_expr;
   // Step (Fortran ``DO i = a, b, c``'s ``c``).  Default 1; -1 for
   // reverse-direction ``DO i = N, 1, -1`` (LU back-substitution
-  // pattern).  Other steps are not yet supported.
+  // pattern).  Constant steps capture into ``loop_step``; symbolic
+  // steps (``DO jbnd = jstart, jend, many_fft`` where ``many_fft`` is
+  // a runtime config integer) capture into ``loop_step_expr`` instead
+  // -- the emitter prefers the expression string whenever it is
+  // non-empty.  Symbolic step is assumed positive (forward iteration);
+  // a runtime-negative symbol produces zero-or-one iterations under
+  // the emitted ``while uid <= bound`` form, matching Fortran's
+  // trip-count semantics for mismatched-direction loops.
   int64_t loop_step = 1;
+  std::string loop_step_expr;
 
   // assign
   std::string target, expr;
@@ -106,6 +115,12 @@ struct ASTNode {
   // like ``"1:3"`` so emit_libcall can build a sliced memlet
   // (``dot_product(arg1(1:3), arg2(1:3))`` etc.).
   std::vector<std::string> call_arg_subsets;
+  // AoS-marshalling groups for a registered external whose struct args were
+  // expanded to per-member arguments by ``hlfir-marshal-external-structs``: a
+  // flat ``[start, count, ...]`` where each pair means ``call_args[start ..
+  // start+count)`` are one struct's members, to be re-packed into a local AoS
+  // buffer in the generated C tasklet.  Empty for an ordinary call.
+  std::vector<int64_t> aos_marshal_groups;
 
   // reduce
   std::string reduce_src;            // input array name
@@ -113,11 +128,26 @@ struct ASTNode {
   std::string reduce_identity;       // initial-accumulator string, e.g. "0"
   std::vector<int64_t> reduce_axes;  // empty = reduce all dimensions
 
+  // libcall options -- free-form key=value carrier so a single ASTNode
+  // can ferry per-callee booleans / enums (e.g. MINLOC ``back``) to
+  // the Python emitter without growing a dedicated field per option.
+  // Bridge writes strings ("true" / "false" / etc.); the emitter
+  // parses them as needed.
+  std::map<std::string, std::string> options;
+
   // recursive
   std::vector<ASTNode> children, else_children;
 };
 
 /// Build the AST for the first func.func found in the module.
-std::vector<ASTNode> extractAST(mlir::ModuleOp module);
+///
+/// ``entry_symbol`` is the same USER-PROVIDED entry name passed to
+/// ``extractVariables``; it anchors the on-demand scope qualification
+/// (``extractName`` in trace_utils.cpp).  Empty disables qualification.
+/// Passing it through ``extractAST`` keeps the two extraction paths
+/// in lockstep so an inlined-callee dummy gets the same name in the
+/// VarInfo list and in the AST node ``target`` / ``expr`` fields.
+std::vector<ASTNode> extractAST(mlir::ModuleOp module,
+                                const std::string &entry_symbol = "");
 
 }  // namespace hlfir_bridge

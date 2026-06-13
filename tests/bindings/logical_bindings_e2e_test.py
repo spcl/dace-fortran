@@ -480,7 +480,9 @@ def test_e2e_rank1_cbool_passthrough(tmp_path: Path):
 
     # gfortran-compile bindings + driver into a single .so linked to
     # the SDFG library.  This bypasses f2py's logical(c_bool) parser
-    # limitation entirely.
+    # limitation entirely.  ``cwd=tmp_path`` keeps gfortran from
+    # picking up any stale ``iso_c_binding.mod`` a prior flang
+    # invocation left in the repo root.
     driver_so = tmp_path / "flip_cbool_driver.so"
     subprocess.check_call([
         "gfortran",
@@ -493,7 +495,8 @@ def test_e2e_rank1_cbool_passthrough(tmp_path: Path):
         f"-L{so_path.parent}",
         f"-Wl,-rpath,{so_path.parent}",
         f"-l:{so_path.name}",
-    ])
+    ],
+                          cwd=str(tmp_path))
 
     lib = ctypes.CDLL(str(driver_so))
     lib.run_cbool_passthrough.argtypes = [

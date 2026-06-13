@@ -7,6 +7,7 @@
 // ============================================================================
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/map.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
@@ -17,6 +18,7 @@
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Pass/PassRegistry.h"
+#include "llvm/Support/thread.h"
 
 // Flang FIR + HLFIR
 #include "flang/Optimizer/Dialect/FIRDialect.h"
@@ -49,9 +51,19 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "passes/Passes.h"
+#include "passes/shallow_alias.h"
 
 namespace nb = nanobind;
 using namespace hlfir_bridge;
+
+/// Stack size, in bytes, for the worker thread that runs the pass pipeline.
+/// A fully-inlined whole-program kernel (the ICON dynamical core flattens to
+/// hundreds of nested ``scf.if`` / ``scf.for`` levels) drives MLIR's recursive
+/// ``Region::cloneInto`` / verifier / printer far past the default 8 MB stack.
+/// 2 GB of *reserved* (lazily-committed) stack covers nesting depths the real
+/// kernels reach with large headroom; flang and ``mlir-opt`` use the same
+/// run-on-a-big-stack-thread strategy for deeply nested programs.
+static constexpr unsigned kPassPipelineStackBytes = 2u * 1024u * 1024u * 1024u;
 
 // ============================================================================
 // HLFIRModule  --  Python-facing container for one parsed HLFIR module.
@@ -79,12 +91,16 @@ class HLFIRModule {
   }
 
   bool parse(const std::string& t) {
+    // Reset the cached entry symbol -- a previous module's entry name
+    // must not leak into the freshly parsed one (D1).
+    entry_symbol_.clear();
     module_ =
         mlir::parseSourceString<mlir::ModuleOp>(llvm::StringRef(t), &ctx_);
     return static_cast<bool>(module_);
   }
 
   bool parse_file(const std::string& p) {
+    entry_symbol_.clear();
     module_ = mlir::parseSourceFile<mlir::ModuleOp>(llvm::StringRef(p), &ctx_);
     return static_cast<bool>(module_);
   }
@@ -98,6 +114,7 @@ class HLFIRModule {
   /// (``_QM<mod>F<sub>`` etc.) are unique per compilation unit so real
   /// collisions should only happen for runtime/external declarations.
   bool parse_files(const std::vector<std::string>& paths) {
+    entry_symbol_.clear();
     if (paths.empty()) return false;
     module_ =
         mlir::parseSourceFile<mlir::ModuleOp>(llvm::StringRef(paths[0]), &ctx_);
@@ -152,8 +169,29 @@ class HLFIRModule {
     mlir::PassManager pm(&ctx_);
     if (mlir::failed(mlir::parsePassPipeline(pipeline, pm)))
       throw std::runtime_error("run_passes: bad pipeline: " + pipeline);
-    if (mlir::failed(pm.run(*module_)))
-      throw std::runtime_error("run_passes: pipeline failed");
+    // Disable MLIR's multithreaded pass execution so every nested
+    // ``OperationPass<FuncOp>`` runs serially on the same big-stack
+    // worker we set up below.  With multithreading on, MLIR spins up
+    // its own thread pool whose workers get the default ~8 MB stack;
+    // ``hlfir-inline-all`` on a deep call tree (QE's vexx_bp_k_gpu's
+    // ~50-deep recursive descend through ``mlir::inlineCall`` /
+    // ``Region::cloneInto`` / verifier) overflows that small stack
+    // and crashes mid-walk with a corrupt-stack SIGSEGV.  The
+    // dedicated worker below already gives the run a 2 GB stack;
+    // serialising the nested passes onto it means every
+    // recursive-walk frame lands on it too.
+    bool prev_mt = ctx_.isMultithreadingEnabled();
+    ctx_.disableMultithreading();
+    // Run on a worker thread with a large stack: deeply nested IR (a
+    // fully-inlined whole-program kernel) overflows the default stack inside
+    // MLIR's recursive region cloning / verification.  The context is touched
+    // by only one thread at a time (we join before returning).
+    bool ok = false;
+    llvm::thread worker(std::optional<unsigned>(kPassPipelineStackBytes),
+                        [&] { ok = mlir::succeeded(pm.run(*module_)); });
+    worker.join();
+    if (prev_mt) ctx_.enableMultithreading();
+    if (!ok) throw std::runtime_error("run_passes: pipeline failed");
   }
 
   /// Print the current IR as text (useful for debugging from Python).
@@ -168,7 +206,7 @@ class HLFIRModule {
   std::vector<VarInfo> get_variables() {
     if (!module_) return {};
     value_symbols_.clear();
-    return extractVariables(*module_, &value_symbols_);
+    return extractVariables(*module_, &value_symbols_, entry_symbol_);
   }
 
   /// Array-element values promoted to SDFG symbols (``__sym_<arr>_<idx>``)
@@ -178,7 +216,11 @@ class HLFIRModule {
 
   std::vector<ASTNode> get_ast() {
     if (!module_) return {};
-    return extractAST(*module_);
+    // Pass the cached entry symbol so ``extractAST`` re-seeds
+    // ``kEntryScope`` / ``kShortNameCollisions`` identically to
+    // ``extractVariables`` -- the two paths share
+    // ``prepareExtractionState`` under the hood.
+    return extractAST(*module_, entry_symbol_);
   }
 
   /// List every top-level func.func symbol name currently in the module.
@@ -210,9 +252,31 @@ class HLFIRModule {
   ///              "shape_exprs": [str, ...],
   ///              "aliasable": bool,
   ///              "scratch_dtype": str,
+  ///              "aos_alloc": bool,
+  ///              "cap_symbol": str,
+  ///              "source_logical_kind": int,
   ///          },
   ///         }, ...
   ///     ]}
+  /// Run the shallow-alias analysis over every derived type the module uses
+  /// and return one verdict per type (``name`` / ``shallow_aliasable`` /
+  /// ``count`` / ``elem_dtype``).  A read-only diagnostic for testing up front
+  /// whether all of a program's structs can be pointer-aliased to
+  /// array-of-structs externals with no deep copy.
+  nb::object shallow_alias_report() {
+    nb::list out;
+    if (!module_) return out;
+    for (const auto &info : computeShallowAliasReport(*module_)) {
+      nb::dict d;
+      d["name"] = info.name;
+      d["shallow_aliasable"] = info.shallow_aliasable;
+      d["count"] = info.count;
+      d["elem_dtype"] = info.elem_dtype;
+      out.append(d);
+    }
+    return out;
+  }
+
   nb::object get_flatten_plan() {
     if (!module_) return nb::dict();
     auto attr = module_->getOperation()->getAttr("hlfir.flatten_plan");
@@ -267,6 +331,8 @@ class HLFIRModule {
         recipeDict["scratch_dtype"] = asStr(recipe.get("scratch_dtype"));
         recipeDict["aos_alloc"] = asBool(recipe.get("aos_alloc"));
         recipeDict["cap_symbol"] = asStr(recipe.get("cap_symbol"));
+        recipeDict["source_logical_kind"] =
+            (int64_t)asInt(recipe.get("source_logical_kind"));
       }
       entryDict["recipe"] = recipeDict;
       entries.append(entryDict);
@@ -280,13 +346,23 @@ class HLFIRModule {
   /// ``hlfir-flatten-structs`` runs.  Shape:
   ///   {"args": [{"name", "dtype", "intent", "rank", "shape",
   ///              "is_struct", "struct_name", "struct_module"}, ...],
-  ///    "used_modules": {mod: [syms], ...}}
+  ///    "used_modules": {mod: [syms], ...},
+  ///    "struct_types": {struct_name: {"name": ..., "module": ...,
+  ///                                    "members": [{"name", "dtype",
+  ///                                                 "rank", "shape",
+  ///                                                 "struct_name",
+  ///                                                 "struct_module"}]}}}
+  /// A member with a non-empty ``struct_name`` is itself a derived-type
+  /// (nested record) -- the Python side looks the nested layout up in
+  /// ``struct_types`` by that name to descend recursively.
   nb::object get_fortran_interface(const std::string& entry) {
     nb::dict out;
     nb::list args;
     nb::dict used;
+    nb::dict struct_types;
     out["args"] = args;
     out["used_modules"] = used;
+    out["struct_types"] = struct_types;
     if (!module_) return out;
     auto info = extractFortranInterface(*module_, entry);
     for (auto& a : info.args) {
@@ -307,6 +383,27 @@ class HLFIRModule {
       nb::list syms;
       for (auto& s : kv.second) syms.append(s);
       used[kv.first.c_str()] = syms;
+    }
+    for (auto& kv : info.struct_types) {
+      const auto& layout = kv.second;
+      nb::dict sd;
+      sd["name"] = layout.name;
+      sd["module"] = layout.module;
+      nb::list members;
+      for (auto& m : layout.members) {
+        nb::dict md;
+        md["name"] = m.name;
+        md["dtype"] = m.dtype;
+        md["rank"] = m.rank;
+        nb::list sh;
+        for (auto& s : m.shape_symbols) sh.append(s);
+        md["shape"] = sh;
+        md["struct_name"] = m.struct_name;
+        md["struct_module"] = m.struct_module;
+        members.append(md);
+      }
+      sd["members"] = members;
+      struct_types[kv.first.c_str()] = sd;
     }
     return out;
   }
@@ -331,6 +428,77 @@ class HLFIRModule {
     });
     if (!found)
       throw std::runtime_error("set_entry_symbol: '" + name + "' not found");
+    // Cache the entry symbol so ``extract_variables`` can install the
+    // original F-scope into ``trace_utils.cpp::kEntryScope`` -- later
+    // passes (``hlfir-flatten-structs``' SoA rename, etc.) may change
+    // the public symbol name (e.g. ``kernel`` -> ``kernel_soa``), and
+    // we MUST anchor on the ORIGINAL user-facing scope so declares
+    // whose uniq_name still references the pre-pass scope (``..._FkernelEout``)
+    // are correctly recognised as entry-scope and keep their bare names.
+    entry_symbol_ = name;
+  }
+
+  /// The user-provided entry symbol name (as passed to
+  /// ``set_entry_symbol``).  Used by ``extract_variables`` to anchor
+  /// the ``kEntryScope`` used by ``extractName``'s on-demand scope
+  /// qualification.
+  std::string entry_symbol_;
+
+  /// Strip the bodies of the named procedures so they become external
+  /// declarations *before* ``hlfir-inline-all`` runs.  A ``keep_external``
+  /// callee whose Fortran body is present in a merged translation unit (the
+  /// inline-everything path) would otherwise be inlined into the entry,
+  /// dragging its implementation -- and everything only it reaches -- into the
+  /// lowered code.  ICON's halo-exchange wrappers (``sync_patch_array_*``) are
+  /// the motivating case: their body reaches a polymorphic ``exchange_data``
+  /// dispatch and a ``class(*)`` hash-table ``select_type`` the bridge cannot
+  /// lower.  Emptying the body leaves a declaration the inliner skips and the
+  /// call sites intact for the Python ``emit_call`` to lower to an
+  /// ``ExternalCall`` library node; the following ``symbol-dce`` then drops the
+  /// now-unreachable callees.
+  ///
+  /// A name matches a function when its symbol equals ``name`` or carries the
+  /// module-procedure (``...P<name>``) / free-procedure (``_QP<name>``)
+  /// mangling of it, mirroring ``emit_call``'s callee normalisation.  Returns
+  /// the symbol names actually stripped (so the caller can verify its registry
+  /// reached the module).
+  std::vector<std::string>
+  externalize_symbols(const std::vector<std::string>& names) {
+    if (!module_)
+      throw std::runtime_error("externalize_symbols: no module parsed");
+    std::vector<std::string> stripped;
+    module_->walk([&](mlir::func::FuncOp f) {
+      if (f.isDeclaration()) return;
+      llvm::StringRef sym = f.getSymName();
+      for (const std::string& n : names) {
+        if (sym == n || sym.ends_with("P" + n) || sym.ends_with("_QP" + n)) {
+          // Drop every reference the body holds (operands AND terminator block
+          // successors) BEFORE erasing the blocks: a multi-block body
+          // (e.g. one with a fir.select_type, whose terminators carry block
+          // successors) would otherwise have a block freed while another
+          // block's terminator still references it -> heap corruption.
+          for (mlir::Block& b : f.getBody().getBlocks()) b.dropAllReferences();
+          f.getBody().getBlocks().clear();  // empty region == declaration
+          stripped.push_back(sym.str());
+          break;
+        }
+      }
+    });
+    return stripped;
+  }
+
+  /// Record the registered external (``keep_external``) symbol names so
+  /// ``hlfir-marshal-external-structs`` knows which calls take their struct
+  /// args as array-of-structs and must be expanded to per-member arguments
+  /// (deep-copy marshalling).  Stored as a module attribute the pass reads.
+  void set_external_symbols(const std::vector<std::string>& names) {
+    if (!module_)
+      throw std::runtime_error("set_external_symbols: no module parsed");
+    llvm::SmallVector<mlir::Attribute, 4> attrs;
+    for (const std::string& n : names)
+      attrs.push_back(mlir::StringAttr::get(&ctx_, n));
+    module_->getOperation()->setAttr("hlfir.external_symbols",
+                                     mlir::ArrayAttr::get(&ctx_, attrs));
   }
 
  private:
@@ -370,6 +538,9 @@ NB_MODULE(hlfir_bridge, m) {
       .def_ro("view_dim_map", &VarInfo::view_dim_map)
       .def_ro("module_origin_mod", &VarInfo::module_origin_mod)
       .def_ro("module_origin_name", &VarInfo::module_origin_name)
+      .def_ro("bounds_remap_view", &VarInfo::bounds_remap_view)
+      .def_ro("bounds_remap_source", &VarInfo::bounds_remap_source)
+      .def_ro("bounds_remap_total_extent", &VarInfo::bounds_remap_total_extent)
       .def("__repr__", [](const VarInfo& v) {
         std::string s = "<" + v.role + " '" + v.fortran_name + "'";
         if (v.rank > 0) {
@@ -407,6 +578,7 @@ NB_MODULE(hlfir_bridge, m) {
       .def_ro("loop_lower", &ASTNode::loop_lower)
       .def_ro("loop_lower_expr", &ASTNode::loop_lower_expr)
       .def_ro("loop_step", &ASTNode::loop_step)
+      .def_ro("loop_step_expr", &ASTNode::loop_step_expr)
       .def_ro("target", &ASTNode::target)
       .def_ro("expr", &ASTNode::expr)
       .def_ro("accesses", &ASTNode::accesses)
@@ -416,10 +588,12 @@ NB_MODULE(hlfir_bridge, m) {
       .def_ro("callee", &ASTNode::callee)
       .def_ro("call_args", &ASTNode::call_args)
       .def_ro("call_arg_subsets", &ASTNode::call_arg_subsets)
+      .def_ro("aos_marshal_groups", &ASTNode::aos_marshal_groups)
       .def_ro("reduce_src", &ASTNode::reduce_src)
       .def_ro("reduce_wcr", &ASTNode::reduce_wcr)
       .def_ro("reduce_identity", &ASTNode::reduce_identity)
       .def_ro("reduce_axes", &ASTNode::reduce_axes)
+      .def_ro("options", &ASTNode::options)
       .def_ro("children", &ASTNode::children)
       .def_ro("else_children", &ASTNode::else_children)
       .def("__repr__", [](const ASTNode& n) {
@@ -477,10 +651,21 @@ NB_MODULE(hlfir_bridge, m) {
       .def("set_entry_symbol", &HLFIRModule::set_entry_symbol,
            "Mark the named function public and everything else private so "
            "symbol-dce can drop post-inlining dead siblings")
+      .def("externalize_symbols", &HLFIRModule::externalize_symbols,
+           "Strip the bodies of the named procedures (keep_external callees) "
+           "so they stay external declarations through hlfir-inline-all; "
+           "returns the symbols actually stripped")
+      .def("set_external_symbols", &HLFIRModule::set_external_symbols,
+           "Record registered external (keep_external) symbol names so "
+           "hlfir-marshal-external-structs expands their struct args to "
+           "per-member arguments for deep-copy marshalling")
       .def("get_fortran_interface", &HLFIRModule::get_fortran_interface,
            "Describe the entry's dummies (pre-flatten) for auto-iface")
       .def("get_flatten_plan", &HLFIRModule::get_flatten_plan,
            "Read back the ``hlfir.flatten_plan`` module attribute set by "
            "``hlfir-flatten-structs`` as a plain dict that mirrors "
-           "``FlattenPlan.to_dict()``");
+           "``FlattenPlan.to_dict()``")
+      .def("shallow_alias_report", &HLFIRModule::shallow_alias_report,
+           "Per derived type: whether it is shallow-aliasable to an "
+           "array-of-structs external (no deep copy) -> list of dicts");
 }

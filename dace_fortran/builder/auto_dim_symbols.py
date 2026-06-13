@@ -53,6 +53,17 @@ class _AutoDimSDFG(dace.SDFG):
                 kwargs[sym] = 0 if is_offset else 1  # unused: don't care
         return super().__call__(*args, **kwargs)
 
+    def to_json(self, *args, **kwargs):
+        """Serialise as plain ``SDFG`` so DaCe's strict-type
+        :meth:`dace.SDFG.from_json` (and downstream tooling like
+        :func:`dace.sdfg.utils.distributed_compile` re-loading a
+        gzipped ``program.sdfgz`` per rank) accepts the dump.  The
+        auto-fill behaviour is a thin ``__call__`` wrapper, not
+        persisted state, so the round-trip loses nothing material."""
+        d = super().to_json(*args, **kwargs)
+        d['type'] = dace.SDFG.__name__
+        return d
+
 
 def install_auto_dim_symbols(sdfg: dace.SDFG) -> dace.SDFG:
     """Rebind ``sdfg`` so direct calls auto-resolve synthetic extents.

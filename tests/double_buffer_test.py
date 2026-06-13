@@ -1,0 +1,496 @@
+"""End-to-end tests for ``splitDoubleBufferMembers`` in
+``hlfir-flatten-structs``.
+
+The split fires on a struct DUMMY argument with an alloc-or-pointer-array-
+of-records member accessed by stable scalar-symbol indices (the ICON
+``s%prog(nnow)`` / ``s%prog(nnew)`` two-time-level pattern).  Each
+``(member, idx_sym)`` pair becomes a fresh per-symbol dummy of the
+record-element type; the existing scalar-struct flatten then expands the
+inner members into plain companion arrays.
+
+For each test, the kernel under test takes the struct as a dummy
+argument.  A neighbouring ``wrapper`` subroutine (compiled into the same
+module, but exposed to f2py via ``only=``) builds the AoR in Fortran,
+calls the kernel, and writes the result back to flat arrays the Python
+side can consume.  The SDFG is built for the kernel; its arglist is the
+per-time-level companion arrays.  Outputs are compared to the f2py
+reference produced by ``wrapper``.
+
+The inner record members use STATIC shape (``real :: w(2, 3)`` instead
+of ``real, allocatable :: w(:, :)``) so the companion's shape and offset
+are baked into the SDFG.  Dynamic-shape inner members require the
+bindings layer to marshal the descriptor's shape/offset symbols at call
+time, which is exercised separately by ``external_aos_test.py``.
+"""
+
+import numpy as np
+import pytest
+
+from _util import build_sdfg, f2py_compile, have_flang
+
+pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+
+
+def test_dbuf_split_simple(tmp_path):
+    """Minimal end-to-end: single struct dummy, single inner array
+    member, two time levels.  The split must produce ``s_prog_nnow_w``
+    and ``s_prog_nnew_w`` as plain rank-2 array dummies on the SDFG."""
+    src = """
+module dbuf_simple_mod
+  implicit none
+  type t_prog
+    real(kind=8) :: w(2, 3)
+  end type t_prog
+  type t_state
+    type(t_prog), allocatable :: prog(:)
+  end type t_state
+contains
+  subroutine kernel(s, nnow, nnew, out)
+    type(t_state), intent(inout) :: s
+    integer, intent(in)          :: nnow, nnew
+    real(kind=8), intent(inout)  :: out(2, 3)
+    integer :: i, j
+    do j = 1, 3
+      do i = 1, 2
+        s%prog(nnew)%w(i, j) = s%prog(nnow)%w(i, j) * 2.0d0
+        out(i, j) = s%prog(nnew)%w(i, j)
+      end do
+    end do
+  end subroutine
+end module
+
+subroutine wrapper(w_now, w_new, out, nnow, nnew)
+  use dbuf_simple_mod
+  implicit none
+  real(kind=8), intent(inout) :: w_now(2, 3), w_new(2, 3)
+  real(kind=8), intent(inout) :: out(2, 3)
+  integer, intent(in)         :: nnow, nnew
+  type(t_state) :: s
+  allocate(s%prog(2))
+  s%prog(1)%w = w_now
+  s%prog(2)%w = w_new
+  call kernel(s, nnow, nnew, out)
+  w_now = s%prog(1)%w
+  w_new = s%prog(2)%w
+  deallocate(s%prog)
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path / 'sdfg', name='kernel',
+                      entry='_QMdbuf_simple_modPkernel').build()
+
+    # Split-produced companions must appear; the original struct dummy
+    # is gone.
+    assert 's_prog_nnow_w' in sdfg.arrays
+    assert 's_prog_nnew_w' in sdfg.arrays
+    assert 's' not in sdfg.arrays
+    assert 's_prog' not in sdfg.arrays
+
+    ref = f2py_compile(src, tmp_path / 'ref', 'dbuf_simple_ref',
+                       only=('wrapper',))
+
+    rng = np.random.default_rng(7)
+    w_now_in = np.asfortranarray(rng.standard_normal((2, 3)))
+    w_new_in = np.asfortranarray(rng.standard_normal((2, 3)))
+
+    w_now_sdfg = w_now_in.copy(order='F')
+    w_new_sdfg = w_new_in.copy(order='F')
+    out_sdfg = np.zeros((2, 3), order='F', dtype=np.float64)
+    sdfg(s_prog_nnow_w=w_now_sdfg,
+         s_prog_nnew_w=w_new_sdfg,
+         out=out_sdfg)
+
+    w_now_ref = w_now_in.copy(order='F')
+    w_new_ref = w_new_in.copy(order='F')
+    out_ref = np.zeros((2, 3), order='F', dtype=np.float64)
+    ref.wrapper(w_now_ref, w_new_ref, out_ref, np.int32(1), np.int32(2))
+
+    np.testing.assert_allclose(w_now_sdfg, w_now_ref, rtol=0, atol=0)
+    np.testing.assert_allclose(w_new_sdfg, w_new_ref, rtol=0, atol=0)
+    np.testing.assert_allclose(out_sdfg, out_ref, rtol=0, atol=0)
+
+
+def test_dbuf_split_multi_member(tmp_path):
+    """Struct with two inner array members.  Each (member, idx_sym)
+    pair gets its own companion -- four total: ``s_prog_nnow_{w,vn}``
+    and ``s_prog_nnew_{w,vn}``."""
+    src = """
+module dbuf_multi_mod
+  implicit none
+  type t_prog
+    real(kind=8) :: w(2, 3)
+    real(kind=8) :: vn(2, 3)
+  end type t_prog
+  type t_state
+    type(t_prog), allocatable :: prog(:)
+  end type t_state
+contains
+  subroutine kernel(s, nnow, nnew, out_w, out_vn)
+    type(t_state), intent(inout) :: s
+    integer, intent(in)          :: nnow, nnew
+    real(kind=8), intent(inout)  :: out_w(2, 3), out_vn(2, 3)
+    integer :: i, j
+    do j = 1, 3
+      do i = 1, 2
+        s%prog(nnew)%w(i, j)  = s%prog(nnow)%w(i, j)  + 1.0d0
+        s%prog(nnew)%vn(i, j) = s%prog(nnow)%vn(i, j) - 0.5d0
+        out_w(i, j)  = s%prog(nnew)%w(i, j)
+        out_vn(i, j) = s%prog(nnew)%vn(i, j)
+      end do
+    end do
+  end subroutine
+end module
+
+subroutine wrapper(w_now, w_new, vn_now, vn_new, out_w, out_vn, nnow, nnew)
+  use dbuf_multi_mod
+  implicit none
+  real(kind=8), intent(inout) :: w_now(2, 3), w_new(2, 3)
+  real(kind=8), intent(inout) :: vn_now(2, 3), vn_new(2, 3)
+  real(kind=8), intent(inout) :: out_w(2, 3), out_vn(2, 3)
+  integer, intent(in)         :: nnow, nnew
+  type(t_state) :: s
+  allocate(s%prog(2))
+  s%prog(1)%w  = w_now;  s%prog(2)%w  = w_new
+  s%prog(1)%vn = vn_now; s%prog(2)%vn = vn_new
+  call kernel(s, nnow, nnew, out_w, out_vn)
+  w_now  = s%prog(1)%w;  w_new  = s%prog(2)%w
+  vn_now = s%prog(1)%vn; vn_new = s%prog(2)%vn
+  deallocate(s%prog)
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path / 'sdfg', name='kernel',
+                      entry='_QMdbuf_multi_modPkernel').build()
+    for name in ('s_prog_nnow_w', 's_prog_nnew_w',
+                 's_prog_nnow_vn', 's_prog_nnew_vn'):
+        assert name in sdfg.arrays, f'missing companion {name!r}'
+
+    ref = f2py_compile(src, tmp_path / 'ref', 'dbuf_multi_ref',
+                       only=('wrapper',))
+
+    rng = np.random.default_rng(11)
+    arrs = {k: np.asfortranarray(rng.standard_normal((2, 3)))
+            for k in ('w_now', 'w_new', 'vn_now', 'vn_new')}
+    out_w_sdfg  = np.zeros((2, 3), order='F', dtype=np.float64)
+    out_vn_sdfg = np.zeros((2, 3), order='F', dtype=np.float64)
+    sdfg_arrs = {k: v.copy(order='F') for k, v in arrs.items()}
+    sdfg(s_prog_nnow_w=sdfg_arrs['w_now'],
+         s_prog_nnew_w=sdfg_arrs['w_new'],
+         s_prog_nnow_vn=sdfg_arrs['vn_now'],
+         s_prog_nnew_vn=sdfg_arrs['vn_new'],
+         out_w=out_w_sdfg,
+         out_vn=out_vn_sdfg)
+
+    out_w_ref  = np.zeros((2, 3), order='F', dtype=np.float64)
+    out_vn_ref = np.zeros((2, 3), order='F', dtype=np.float64)
+    ref_arrs = {k: v.copy(order='F') for k, v in arrs.items()}
+    ref.wrapper(ref_arrs['w_now'], ref_arrs['w_new'],
+                ref_arrs['vn_now'], ref_arrs['vn_new'],
+                out_w_ref, out_vn_ref,
+                np.int32(1), np.int32(2))
+
+    for k in sdfg_arrs:
+        np.testing.assert_allclose(sdfg_arrs[k], ref_arrs[k], rtol=0, atol=0,
+                                    err_msg=f'mismatch on {k}')
+    np.testing.assert_allclose(out_w_sdfg, out_w_ref, rtol=0, atol=0)
+    np.testing.assert_allclose(out_vn_sdfg, out_vn_ref, rtol=0, atol=0)
+
+
+def test_dbuf_split_three_levels(tmp_path):
+    """Three time-level symbols (nnow, nnew, ntemp).  Each becomes its
+    own companion -- exercises the ``bySym`` map branching beyond two
+    entries."""
+    src = """
+module dbuf_three_mod
+  implicit none
+  type t_prog
+    real(kind=8) :: w(2, 3)
+  end type t_prog
+  type t_state
+    type(t_prog), allocatable :: prog(:)
+  end type t_state
+contains
+  subroutine kernel(s, nnow, nnew, ntemp, out)
+    type(t_state), intent(inout) :: s
+    integer, intent(in)          :: nnow, nnew, ntemp
+    real(kind=8), intent(inout)  :: out(2, 3)
+    integer :: i, j
+    do j = 1, 3
+      do i = 1, 2
+        s%prog(ntemp)%w(i, j) = s%prog(nnow)%w(i, j) + s%prog(nnew)%w(i, j)
+        out(i, j) = s%prog(ntemp)%w(i, j)
+      end do
+    end do
+  end subroutine
+end module
+
+subroutine wrapper(w_now, w_new, w_temp, out, nnow, nnew, ntemp)
+  use dbuf_three_mod
+  implicit none
+  real(kind=8), intent(inout) :: w_now(2, 3), w_new(2, 3), w_temp(2, 3)
+  real(kind=8), intent(inout) :: out(2, 3)
+  integer, intent(in)         :: nnow, nnew, ntemp
+  type(t_state) :: s
+  allocate(s%prog(3))
+  s%prog(1)%w = w_now;  s%prog(2)%w = w_new;  s%prog(3)%w = w_temp
+  call kernel(s, nnow, nnew, ntemp, out)
+  w_now = s%prog(1)%w; w_new = s%prog(2)%w; w_temp = s%prog(3)%w
+  deallocate(s%prog)
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path / 'sdfg', name='kernel',
+                      entry='_QMdbuf_three_modPkernel').build()
+    for name in ('s_prog_nnow_w', 's_prog_nnew_w', 's_prog_ntemp_w'):
+        assert name in sdfg.arrays, f'missing companion {name!r}'
+
+    ref = f2py_compile(src, tmp_path / 'ref', 'dbuf_three_ref',
+                       only=('wrapper',))
+
+    rng = np.random.default_rng(13)
+    w_now = np.asfortranarray(rng.standard_normal((2, 3)))
+    w_new = np.asfortranarray(rng.standard_normal((2, 3)))
+    w_temp = np.asfortranarray(rng.standard_normal((2, 3)))
+
+    sdfg_now  = w_now.copy(order='F')
+    sdfg_new  = w_new.copy(order='F')
+    sdfg_temp = w_temp.copy(order='F')
+    out_sdfg = np.zeros((2, 3), order='F', dtype=np.float64)
+    sdfg(s_prog_nnow_w=sdfg_now,
+         s_prog_nnew_w=sdfg_new,
+         s_prog_ntemp_w=sdfg_temp,
+         out=out_sdfg)
+
+    ref_now  = w_now.copy(order='F')
+    ref_new  = w_new.copy(order='F')
+    ref_temp = w_temp.copy(order='F')
+    out_ref = np.zeros((2, 3), order='F', dtype=np.float64)
+    ref.wrapper(ref_now, ref_new, ref_temp, out_ref,
+                np.int32(1), np.int32(2), np.int32(3))
+
+    np.testing.assert_allclose(sdfg_now, ref_now, rtol=0, atol=0)
+    np.testing.assert_allclose(sdfg_new, ref_new, rtol=0, atol=0)
+    np.testing.assert_allclose(sdfg_temp, ref_temp, rtol=0, atol=0)
+    np.testing.assert_allclose(out_sdfg, out_ref, rtol=0, atol=0)
+
+
+def test_dbuf_split_pointer_aor(tmp_path):
+    """The split also handles the ``type(t), pointer :: prog(:)``
+    flavour of the array-of-records spine (vs ``allocatable``).
+    Ensures ``allocOrPtrArrayOfRecordsMember`` recognises both."""
+    src = """
+module dbuf_ptr_mod
+  implicit none
+  type t_prog
+    real(kind=8) :: w(2, 3)
+  end type t_prog
+  type t_state
+    type(t_prog), pointer :: prog(:)
+  end type t_state
+contains
+  subroutine kernel(s, nnow, nnew, out)
+    type(t_state), intent(inout) :: s
+    integer, intent(in)          :: nnow, nnew
+    real(kind=8), intent(inout)  :: out(2, 3)
+    integer :: i, j
+    do j = 1, 3
+      do i = 1, 2
+        s%prog(nnew)%w(i, j) = s%prog(nnow)%w(i, j) + 3.0d0
+        out(i, j) = s%prog(nnew)%w(i, j)
+      end do
+    end do
+  end subroutine
+end module
+
+subroutine wrapper(w_now, w_new, out, nnow, nnew)
+  use dbuf_ptr_mod
+  implicit none
+  real(kind=8), intent(inout) :: w_now(2, 3), w_new(2, 3)
+  real(kind=8), intent(inout) :: out(2, 3)
+  integer, intent(in)         :: nnow, nnew
+  type(t_state) :: s
+  type(t_prog), target, save :: spine(2)
+  s%prog => spine
+  s%prog(1)%w = w_now
+  s%prog(2)%w = w_new
+  call kernel(s, nnow, nnew, out)
+  w_now = s%prog(1)%w
+  w_new = s%prog(2)%w
+  nullify(s%prog)
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path / 'sdfg', name='kernel',
+                      entry='_QMdbuf_ptr_modPkernel').build()
+    assert 's_prog_nnow_w' in sdfg.arrays
+    assert 's_prog_nnew_w' in sdfg.arrays
+
+    ref = f2py_compile(src, tmp_path / 'ref', 'dbuf_ptr_ref',
+                       only=('wrapper',))
+
+    rng = np.random.default_rng(17)
+    w_now_in = np.asfortranarray(rng.standard_normal((2, 3)))
+    w_new_in = np.asfortranarray(rng.standard_normal((2, 3)))
+
+    w_now_sdfg = w_now_in.copy(order='F')
+    w_new_sdfg = w_new_in.copy(order='F')
+    out_sdfg = np.zeros((2, 3), order='F', dtype=np.float64)
+    sdfg(s_prog_nnow_w=w_now_sdfg,
+         s_prog_nnew_w=w_new_sdfg,
+         out=out_sdfg)
+
+    w_now_ref = w_now_in.copy(order='F')
+    w_new_ref = w_new_in.copy(order='F')
+    out_ref = np.zeros((2, 3), order='F', dtype=np.float64)
+    ref.wrapper(w_now_ref, w_new_ref, out_ref, np.int32(1), np.int32(2))
+
+    np.testing.assert_allclose(w_now_sdfg, w_now_ref, rtol=0, atol=0)
+    np.testing.assert_allclose(w_new_sdfg, w_new_ref, rtol=0, atol=0)
+    np.testing.assert_allclose(out_sdfg, out_ref, rtol=0, atol=0)
+
+
+def test_dbuf_split_nested_struct(tmp_path):
+    """Nested-struct access chain: the AoR member lives below one or more
+    plain struct members, e.g. ``s%inner%prog(idx)%w``.  The split must
+    walk the full chain to the dummy root and bake the joined member path
+    into the companion name: ``s_inner_prog_<sym>_<inner_member>``."""
+    src = """
+module dbuf_nested_mod
+  implicit none
+  type t_prog
+    real(kind=8) :: w(2, 3)
+  end type t_prog
+  type t_inner
+    type(t_prog), allocatable :: prog(:)
+  end type t_inner
+  type t_state
+    type(t_inner) :: inner
+  end type t_state
+contains
+  subroutine kernel(s, nnow, nnew, out)
+    type(t_state), intent(inout) :: s
+    integer, intent(in)          :: nnow, nnew
+    real(kind=8), intent(inout)  :: out(2, 3)
+    integer :: i, j
+    do j = 1, 3
+      do i = 1, 2
+        s%inner%prog(nnew)%w(i, j) = s%inner%prog(nnow)%w(i, j) * 2.0d0
+        out(i, j) = s%inner%prog(nnew)%w(i, j)
+      end do
+    end do
+  end subroutine
+end module
+
+subroutine wrapper(w_now, w_new, out, nnow, nnew)
+  use dbuf_nested_mod
+  implicit none
+  real(kind=8), intent(inout) :: w_now(2, 3), w_new(2, 3)
+  real(kind=8), intent(inout) :: out(2, 3)
+  integer, intent(in)         :: nnow, nnew
+  type(t_state) :: s
+  allocate(s%inner%prog(2))
+  s%inner%prog(1)%w = w_now
+  s%inner%prog(2)%w = w_new
+  call kernel(s, nnow, nnew, out)
+  w_now = s%inner%prog(1)%w
+  w_new = s%inner%prog(2)%w
+  deallocate(s%inner%prog)
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path / 'sdfg', name='kernel',
+                      entry='_QMdbuf_nested_modPkernel').build()
+
+    assert 's_inner_prog_nnow_w' in sdfg.arrays
+    assert 's_inner_prog_nnew_w' in sdfg.arrays
+    assert 's' not in sdfg.arrays
+    assert 's_inner' not in sdfg.arrays
+
+    ref = f2py_compile(src, tmp_path / 'ref', 'dbuf_nested_ref',
+                       only=('wrapper',))
+
+    rng = np.random.default_rng(23)
+    w_now_in = np.asfortranarray(rng.standard_normal((2, 3)))
+    w_new_in = np.asfortranarray(rng.standard_normal((2, 3)))
+
+    w_now_sdfg = w_now_in.copy(order='F')
+    w_new_sdfg = w_new_in.copy(order='F')
+    out_sdfg = np.zeros((2, 3), order='F', dtype=np.float64)
+    sdfg(s_inner_prog_nnow_w=w_now_sdfg,
+         s_inner_prog_nnew_w=w_new_sdfg,
+         out=out_sdfg)
+
+    w_now_ref = w_now_in.copy(order='F')
+    w_new_ref = w_new_in.copy(order='F')
+    out_ref = np.zeros((2, 3), order='F', dtype=np.float64)
+    ref.wrapper(w_now_ref, w_new_ref, out_ref, np.int32(1), np.int32(2))
+
+    np.testing.assert_allclose(w_now_sdfg, w_now_ref, rtol=0, atol=0)
+    np.testing.assert_allclose(w_new_sdfg, w_new_ref, rtol=0, atol=0)
+    np.testing.assert_allclose(out_sdfg, out_ref, rtol=0, atol=0)
+
+
+def test_dbuf_split_direct_aor_dummy(tmp_path):
+    """The dummy ITSELF is the alloc-array-of-records (no outer struct).
+    Access is ``s(idx)%w`` rather than ``s%X(idx)%w``.  The split must
+    treat the dummy as the AoR root with an empty member path; the
+    companion name is just ``s_<sym>_<inner_member>``."""
+    src = """
+module dbuf_direct_mod
+  implicit none
+  type t_prog
+    real(kind=8) :: w(2, 3)
+  end type t_prog
+contains
+  subroutine kernel(s, nnow, nnew, out)
+    type(t_prog), allocatable, intent(inout) :: s(:)
+    integer, intent(in)                       :: nnow, nnew
+    real(kind=8), intent(inout)               :: out(2, 3)
+    integer :: i, j
+    do j = 1, 3
+      do i = 1, 2
+        s(nnew)%w(i, j) = s(nnow)%w(i, j) * 2.0d0
+        out(i, j) = s(nnew)%w(i, j)
+      end do
+    end do
+  end subroutine
+end module
+
+subroutine wrapper(w_now, w_new, out, nnow, nnew)
+  use dbuf_direct_mod
+  implicit none
+  real(kind=8), intent(inout) :: w_now(2, 3), w_new(2, 3)
+  real(kind=8), intent(inout) :: out(2, 3)
+  integer, intent(in)         :: nnow, nnew
+  type(t_prog), allocatable :: s(:)
+  allocate(s(2))
+  s(1)%w = w_now
+  s(2)%w = w_new
+  call kernel(s, nnow, nnew, out)
+  w_now = s(1)%w
+  w_new = s(2)%w
+  deallocate(s)
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path / 'sdfg', name='kernel',
+                      entry='_QMdbuf_direct_modPkernel').build()
+
+    assert 's_nnow_w' in sdfg.arrays
+    assert 's_nnew_w' in sdfg.arrays
+    assert 's' not in sdfg.arrays
+
+    ref = f2py_compile(src, tmp_path / 'ref', 'dbuf_direct_ref',
+                       only=('wrapper',))
+
+    rng = np.random.default_rng(29)
+    w_now_in = np.asfortranarray(rng.standard_normal((2, 3)))
+    w_new_in = np.asfortranarray(rng.standard_normal((2, 3)))
+
+    w_now_sdfg = w_now_in.copy(order='F')
+    w_new_sdfg = w_new_in.copy(order='F')
+    out_sdfg = np.zeros((2, 3), order='F', dtype=np.float64)
+    sdfg(s_nnow_w=w_now_sdfg, s_nnew_w=w_new_sdfg, out=out_sdfg)
+
+    w_now_ref = w_now_in.copy(order='F')
+    w_new_ref = w_new_in.copy(order='F')
+    out_ref = np.zeros((2, 3), order='F', dtype=np.float64)
+    ref.wrapper(w_now_ref, w_new_ref, out_ref, np.int32(1), np.int32(2))
+
+    np.testing.assert_allclose(w_now_sdfg, w_now_ref, rtol=0, atol=0)
+    np.testing.assert_allclose(w_new_sdfg, w_new_ref, rtol=0, atol=0)
+    np.testing.assert_allclose(out_sdfg, out_ref, rtol=0, atol=0)

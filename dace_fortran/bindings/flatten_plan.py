@@ -93,6 +93,18 @@ class FlattenRecipe:
         cap.  Empty unless ``aos_alloc=True``; otherwise
         ``cap_<base>_<member>``.  ``_build_symbol_assigns`` skips this
         symbol because the pack-in code computes it directly.
+    :ivar source_logical_kind: ``N`` when the source struct member's
+        element type is Fortran ``LOGICAL(KIND=N)`` (``1`` / ``2`` /
+        ``4`` / ``8``).  ``0`` otherwise.  The SDFG-side storage
+        stays ``bool`` (1 byte) regardless of the kind; this drives
+        a boundary bridge in the binding wrapper that declares the
+        wrapper-local aliased pointer as ``logical(KIND=N), pointer
+        ::`` (matching the source struct slot byte-for-byte) plus a
+        ``logical(c_bool)`` scratch + per-element conversion, so a
+        default ``LOGICAL :: x`` field on the source struct does not
+        have its 4-byte slot clobbered by a 1-byte SDFG write
+        (the ``free(): invalid next size`` glibc diagnostic the
+        ICON velocity_tendencies e2e surfaced).
     """
     flat_names: Tuple[str, ...]
     read_exprs: Tuple[str, ...]
@@ -103,6 +115,7 @@ class FlattenRecipe:
     scratch_dtype: str = 'float64'
     aos_alloc: bool = False
     cap_symbol: str = ''
+    source_logical_kind: int = 0
 
     # ----- JSON I/O ---------------------------------------------------
 

@@ -36,7 +36,25 @@ def dt(s: str) -> dace.typeclass:
 
 
 def sdfg_name(builder) -> str:
-    """Derive the SDFG name from the first Flang mangled name we see."""
+    """Derive the SDFG name -- and therefore the generated ``.so``
+    library name -- from the procedure being built.
+
+    Prefers the explicit ``entry`` symbol passed to :class:`SDFGBuilder`
+    (demangled to the procedure name -- ``_QMmoduleP<proc>`` or
+    ``_QP<proc>`` -> ``<proc>``).  Falls back to the first ``_QF<proc>``
+    mangled name on a registered variable, then to a generic ``sdfg``.
+
+    Using the entry-procedure name means
+    ``build_sdfg_from_hlfir(..., entry="_QMmo_velocity_advectionPvelocity_tendencies")``
+    produces ``libvelocity_tendencies.so`` instead of a generic name,
+    so a registered external callee can be linked against it by
+    function-keyed library name.
+    """
+    entry = getattr(builder, "entry", None)
+    if entry:
+        proc = entry.rsplit("P", 1)[-1] if "P" in entry else entry
+        if proc:
+            return proc
     for v in builder.arrays.values():
         mn = v.mangled_name
         if '_QF' in mn and 'E' in mn:
@@ -176,7 +194,77 @@ def add_descriptors(builder, sdfg: SDFG):
             # ``access.py`` / ``emit_tasklet.py``.
             continue
         dims = [_dim(s) for s in shape_syms[v.fortran_name]]
-        if v.role == 'view_alias':
+        if v.bounds_remap_view:
+            # Fortran 2003 bounds-remapping pointer assignment lowered
+            # to a 1-D contiguous view of the parent array.  See
+            # ``passes/MarkBoundsRemapViews.cpp`` for the detection
+            # contract.  The View shares storage with
+            # ``v.bounds_remap_source``; element ``ptr(i)`` lowers to
+            # ``parent_flat[offset_<ptr>_d0 + i - 1]`` at codegen.
+            #
+            # Shape: ``[total_extent]`` -- the flat 1-D size flang
+            # encodes on the rebox's shape-shift extent operand.  When
+            # ``v.bounds_remap_total_extent`` is a plain symbol /
+            # arithmetic expression the bridge extracted from the
+            # rebox, use it directly; otherwise fall back to a
+            # synthesised ``<ptr>_total_extent_d0`` symbol the caller
+            # binds.
+            #
+            # Strides: ``[1]`` -- per the spec, the contiguous case.
+            # QE's two sites flatten a column-major rank-2 slice over
+            # the last dim, which IS stride 1.  Other contiguous-
+            # column shapes also land here; non-contiguous slices
+            # wouldn't have triggered the mark pass in the first
+            # place (those produce a different rebox shape).
+            #
+            # Offset: ``0`` -- the View descriptor itself is offset-0.
+            # The per-rebind column offset into the parent is bound to
+            # a fresh ``offset_<ptr>_d0`` symbol (minted below
+            # alongside every array's offset symbols), assigned per
+            # loop iteration via interstate edge (a follow-up commit
+            # wires the assignment).
+            # Two flavours of bounds-remap-view reach this branch:
+            #
+            #  * Same-rank rebind (QE's ``ptr(:) => parent(:, k)``):
+            #    pointer and target both 1D.  Original flat-view
+            #    path: shape ``[total_extent]``, strides ``[1]``.
+            #    Element ``ptr(i)`` lowers to
+            #    ``parent_flat[offset + i - 1]`` at codegen.
+            #
+            #  * Rank-changing rebind (``p(1:M, 1:K) => arr1d`` --
+            #    Fortran 2003 multi-D pointer remap of a 1D target):
+            #    pointer is multi-D, target is 1D contiguous.  The
+            #    kernel writes ``p(i, j)`` with multi-D subsets;
+            #    register the view with the POINTER's own shape so
+            #    those subsets match.  Strides are column-major over
+            #    the view's shape (``(1, M, M*K2, ...)``) so a
+            #    ``p(i, j)`` access flattens to linear offset
+            #    ``i + M*(j-1)`` in the source's 1D storage --
+            #    matching the rank-reinterpretation view-alias path
+            #    for dummy reshapes (see access.py / extract_vars
+            #    asAssumedShapeAlias rank-mismatch refusal).
+            same_rank = (len(dims) == 1)
+            if same_rank:
+                extent_str = v.bounds_remap_total_extent
+                if not extent_str:
+                    extent_str = f"{v.fortran_name}_total_extent_d0"
+                    if extent_str not in sdfg.symbols:
+                        sdfg.add_symbol(extent_str, dace.int64)
+                sdfg.add_view(
+                    v.fortran_name,
+                    shape=[dace.symbolic.pystr_to_symbolic(extent_str)],
+                    dtype=dt(v.dtype),
+                    strides=[1],
+                )
+            else:
+                view_strides = _fortran_strides(dims)
+                sdfg.add_view(
+                    v.fortran_name,
+                    shape=dims,
+                    dtype=dt(v.dtype),
+                    strides=view_strides,
+                )
+        elif v.role == 'view_alias':
             # Pointer alias of ``v.view_source``  --  no separate storage.
             # ``sdfg.add_view`` registers a static reference that DaCe
             # codegen lowers to a typed pointer into the source's
@@ -196,7 +284,15 @@ def add_descriptors(builder, sdfg: SDFG):
             src_dims = (shape_syms.get(v.view_source) if src_v is not None else None)
             src_strides = (_fortran_strides([_dim(s) for s in src_dims]) if src_dims and len(src_dims) > 1 else None)
             view_strides = []
-            if src_strides is not None and len(v.view_subset) == len(src_strides):
+            # Whole-array rank reinterpretation -- ssor's ``tv(N)``
+            # 1D passed unmodified to buts's ``tv(5, M, K)`` 3D.
+            # ``extract_vars`` signals this with a single empty
+            # entry in ``view_subset``.  Build view strides as
+            # column-major over the view's OWN shape; the source's
+            # flat storage is reinterpreted as the multi-D view.
+            if len(v.view_subset) == 1 and v.view_subset[0] == "" and len(dims) >= 1:
+                view_strides = _fortran_strides(dims) if len(dims) > 1 else [1]
+            elif src_strides is not None and len(v.view_subset) == len(src_strides):
                 for src_d, sub in enumerate(v.view_subset):
                     if ':' not in sub:
                         continue  # scalar dim  --  drops out of the view
@@ -228,7 +324,15 @@ def add_descriptors(builder, sdfg: SDFG):
             # this branch (they live in ``builder.scalars``); this only
             # triggers for explicit ``REAL :: x(1)`` declarations whose
             # source already names a length-1 array.
-            transient = (v.intent == '')
+            #
+            # ``transient`` follows the bake / kwarg classification
+            # mirrored from ``hlfir-preserve-mutable-globals`` -- a
+            # baked constant (PARAMETER or function-scope local) is a
+            # transient backed by ``add_constant`` data; every other
+            # intent-empty global is a caller kwarg (non-transient
+            # (1,)-Array surfacing on the SDFG signature).
+            from dace_fortran.builder import _global_is_baked_constant
+            transient = (v.intent == '' and _global_is_baked_constant(v))
             is_length_one = len(dims) == 1 and dims[0] == 1
             if transient and is_length_one:
                 sdfg.add_scalar(v.fortran_name, dtype=dt(v.dtype), transient=True)
@@ -248,11 +352,50 @@ def add_descriptors(builder, sdfg: SDFG):
             sym_name = f"offset_{v.fortran_name}_d{d}"
             if sym_name not in sdfg.symbols:
                 sdfg.add_symbol(sym_name, dace.int64)
+            if v.bounds_remap_view:
+                # Rank-preserving bounds-remap-view (QE's
+                # ``ptr(:) => parent(:, k)``): the column offset
+                # changes per surrounding-loop iteration -- mark the
+                # symbol as dynamic and bind it per rebind site (the
+                # interstate-edge wiring lives in the View's linking
+                # path).
+                #
+                # Rank-changing bounds-remap-view (``p(1:M, 1:K) =>
+                # arr1d``): the offset is the Fortran 1-based
+                # default ``1`` on every dim -- the view's strides
+                # already encode the multi-D -> linear remap and
+                # there's no per-iteration column re-anchor.  Without
+                # this binding ``offset_p_d0`` stays at 0 and every
+                # ``p(i, j)`` access lands one slot past the
+                # expected flat offset (the 1-based ``i`` would be
+                # subtracted by 0 instead of 1).
+                same_rank_view = (rank == 1)
+                if same_rank_view:
+                    builder.offset_values[sym_name] = None
+                else:
+                    builder.offset_values[sym_name] = 1
+                continue
             lb = v.lower_bounds[d] if d < len(v.lower_bounds) else "1"
             builder.offset_values[sym_name] = _offset_value(lb)
 
     for v in builder.scalars.values():
         if _is_flang_internal(v.fortran_name) or _is_char_literal(v.dtype):
+            continue
+        # Cross-role collision guard.  When ``hlfir-inline-all`` splices
+        # multiple callees into the entry, the bridge's collector can
+        # surface several declares with the same bare ``fortran_name``
+        # in different roles -- e.g. graupel's ``qs`` shows up once as
+        # the entry's INTENT(INOUT) ARRAY dummy (added via ``arrays``
+        # above) AND again as the scalar dummy of each inlined PURE
+        # FUNCTION (``snow_lambda``, ``cloud_to_snow``, ...).  Without
+        # this guard, ``sdfg.add_scalar`` raises FileExistsError on
+        # the second add.  The array binding already represents the
+        # storage the caller hands in; the inlined-callee scalars are
+        # value-passed locals whose downstream uses route through the
+        # array's access node, so skipping the scalar add is the right
+        # choice.  Same applies to symbol collisions (a callee-local
+        # whose name collides with a shape symbol).
+        if v.fortran_name in sdfg.arrays or v.fortran_name in sdfg.symbols:
             continue
         if v.intent == '':
             # Local transient scalar.
@@ -294,10 +437,26 @@ def declare_synth_array(builder, name: str, shape, dtype: str, ctx):
         s_str = str(s).strip()
         if s_str.lstrip('-').isdigit():
             dims.append(int(s_str))
-        else:
-            if s_str not in ctx.sdfg.symbols:
-                ctx.sdfg.add_symbol(s_str, dace.int64)
-            dims.append(dace.symbol(s_str))
+            continue
+        # Compound shape expression (e.g. QE's bridge-derived
+        # ``((offset + extent - 1) - offset + 1)`` for a section-view
+        # transient): parse via sympy so it simplifies AND the leaf
+        # symbol-registration walks the sub-expression's free names
+        # rather than registering the whole string as one identifier
+        # (which DaCe rejects with NameError).  Mirrors the
+        # ``_dim``/``_is_expr`` path used for non-synth arrays a few
+        # screens up.
+        if any(c in s_str for c in '+-*/()'):
+            sym_expr = dace.symbolic.pystr_to_symbolic(s_str)
+            for leaf in sym_expr.free_symbols:
+                leaf_name = str(leaf)
+                if leaf_name not in ctx.sdfg.symbols:
+                    ctx.sdfg.add_symbol(leaf_name, dace.int64)
+            dims.append(sym_expr)
+            continue
+        if s_str not in ctx.sdfg.symbols:
+            ctx.sdfg.add_symbol(s_str, dace.int64)
+        dims.append(dace.symbol(s_str))
     # Fortran-style transient: rank > 1 -> column-major strides so the
     # matmul / transpose / dot_product library nodes (which inherit
     # layout from the source operands' strides) write the result in the
@@ -337,9 +496,32 @@ def emit_declare_transient(builder, ctx, n, region):
     Reads ``n.target`` (name), ``n.expr`` (dtype as string), and shape
     from ``n.accesses[0].index_exprs`` (one string per dim).  Calls
     ``declare_synth_array`` to register the SDFG descriptor.
+
+    Resolves ``<src>_d<N>`` shape placeholders against the source array's
+    actual SDFG descriptor: the bridge emits these for synthesised
+    transients derived from a known source (e.g. a transpose-of-A
+    transient picked up by ``MATMUL(A, TRANSPOSE(B))``) but doesn't
+    have access to the source's already-registered symbolic shape.
+    Without this rewrite the transient would carry a fresh symbol like
+    ``b_d1`` that is symbolically distinct from ``b.shape[1]`` and the
+    downstream lib node's same-dim validation rejects the mismatch.
     """
+    import re
+
     shape = list(n.accesses[0].index_exprs) if n.accesses else []
-    declare_synth_array(builder, n.target, shape, n.expr or "int32", ctx)
+    resolved = []
+    for entry in shape:
+        s = str(entry)
+        m = re.fullmatch(r'([A-Za-z_][A-Za-z_0-9]*)_d(\d+)', s)
+        if m:
+            src, dim = m.group(1), int(m.group(2))
+            if src in ctx.sdfg.arrays:
+                desc = ctx.sdfg.arrays[src]
+                if 0 <= dim < len(desc.shape):
+                    resolved.append(desc.shape[dim])
+                    continue
+        resolved.append(entry)
+    declare_synth_array(builder, n.target, resolved, n.expr or "int32", ctx)
 
 
 def auto_declare_synth(builder, name: str, ctx):
@@ -355,19 +537,36 @@ def auto_declare_synth(builder, name: str, ctx):
     """
     if name in builder.scalars or name in builder.symbols:
         return
-    if not (name.startswith("__sc_") or name.startswith("__al_")):
+    if not (name.startswith("__sc_") or name.startswith("__al_") or name.startswith("__brk_")):
         return
     # Fake a VarInfo-like record so _add_descriptors-consistent paths work.
     # A ``SimpleNamespace`` is enough  --  scalar dispatch only reads
     # ``.intent`` and ``.dtype``.
+    # ``__brk_<N>`` is the bridge's pre-body snapshot of an scf.while
+    # break condition.  ``__al_<N>`` is the lift-cf-to-scf scratch
+    # counter that drives the ``do istep = 1, niter`` shape (NPB LU's
+    # ssor istep loop): each iteration decrements it and the
+    # surrounding scf.while breaks when it hits 0.  Both feed
+    # interstate-edge conditions (the break check + the
+    # ``__al_X > 0`` outer iteration gate), so they need to register
+    # as SYMBOLS rather than scalar transients.  A scalar transient
+    # in an interstate-edge condition surfaces as a free symbol that
+    # defaults to 0 at runtime -- the LU SSOR loop then breaks
+    # immediately and the sweep is a no-op.
+    is_sym = name.startswith("__brk_") or name.startswith("__al_")
     v = SimpleNamespace(fortran_name=name,
                         intent='',
                         dtype='int32',
                         rank=0,
                         is_dynamic=False,
-                        role='scalar',
+                        role='symbol' if is_sym else 'scalar',
                         shape_symbols=[],
                         lower_bounds=[])
-    builder.scalars[name] = v
-    if name not in ctx.sdfg.arrays:
-        ctx.sdfg.add_scalar(name, dtype=dace.int32, transient=True)
+    if is_sym:
+        builder.symbols[name] = v
+        if name not in ctx.sdfg.symbols:
+            ctx.sdfg.add_symbol(name, dace.int32)
+    else:
+        builder.scalars[name] = v
+        if name not in ctx.sdfg.arrays:
+            ctx.sdfg.add_scalar(name, dtype=dace.int32, transient=True)

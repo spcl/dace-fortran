@@ -40,6 +40,9 @@ void registerAllBridgePasses() {
     return createFlattenStructsPass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createSplitAoRDummiesPass();
+  });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createDefaultIntentPass();
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
@@ -68,6 +71,36 @@ void registerAllBridgePasses() {
   });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createLiftAllocArrayOfRecordsPass();
+  });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createLiftAosPointerRecordsPass();
+  });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createPruneUnreachablePass();
+  });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createMarshalExternalStructsPass();
+  });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createUnwrapEvalInMemPass();
+  });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createStripErrorHelpersPass();
+  });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createStripRuntimeIoPass();
+  });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createStripCharacterRuntimePass();
+  });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createPreserveMutableGlobalsPass();
+  });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createMarkBoundsRemapViewsPass();
+  });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createFoldAssumedRankQueriesPass();
   });
   // Flang's polymorphic-op conversion: statically devirtualises
   // ``fir.dispatch`` / ``fir.select_type`` ops whose target is

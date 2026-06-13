@@ -23,19 +23,28 @@ def _dtypes(src: str, tmp_path: Path, entry: str) -> dict:
 
 
 def test_logical_every_kind_is_bool(tmp_path):
+    # Every LOGICAL kind arg gets a write so the post-build prune
+    # (``prune_unused_arrays``) keeps each in ``sdfg.arrays`` -- the
+    # dtype-mapping invariant the test is here to enforce is about
+    # *kernel-arg* args, so a dead-code-eliminated arg never reached
+    # the SDFG to begin with.
     src = """
 subroutine klog(n, ld, l1, l4, l8, lcb)
   use iso_c_binding
   implicit none
   integer(c_int), intent(in) :: n
-  logical,        intent(inout) :: ld(n)   ! default kind
+  logical,        intent(inout) :: ld(n)
   logical(1),     intent(inout) :: l1(n)
   logical(4),     intent(inout) :: l4(n)
   logical(8),     intent(inout) :: l8(n)
   logical(c_bool),intent(inout) :: lcb(n)
   integer :: i
   do i = 1, n
-     ld(i) = .not. ld(i)
+     ld(i)  = .not. ld(i)
+     l1(i)  = .not. l1(i)
+     l4(i)  = .not. l4(i)
+     l8(i)  = .not. l8(i)
+     lcb(i) = .not. lcb(i)
   end do
 end subroutine klog
 """
@@ -45,6 +54,9 @@ end subroutine klog
 
 
 def test_integer_kinds_preserve_width(tmp_path):
+    # Each INTEGER width arg gets a write so the post-build prune
+    # keeps every descriptor; otherwise the unused widths drop out
+    # before the dtype assertions run.
     src = """
 subroutine kint(n, a1, a2, a4, a8)
   use iso_c_binding
@@ -57,6 +69,9 @@ subroutine kint(n, a1, a2, a4, a8)
   integer :: i
   do i = 1, n
      a1(i) = a1(i) + 1_1
+     a2(i) = a2(i) + 1_2
+     a4(i) = a4(i) + 1_4
+     a8(i) = a8(i) + 1_8
   end do
 end subroutine kint
 """

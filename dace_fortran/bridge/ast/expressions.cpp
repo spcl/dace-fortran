@@ -273,19 +273,38 @@ void captureElementDesignateWrite(mlir::Value dest, ASTNode &node) {
     if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(dd)) {
       node.target = allocAliasFor(extractName(decl.getUniqName().str()));
     } else if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(dd)) {
-      node.target = traceToDecl(dg.getMemref());
-      node.target_is_array = true;
-      AccessInfo wa;
-      wa.array_name = node.target;
-      wa.is_write = true;
-      unsigned di = 0;
-      for (auto idx : dg.getIndices()) {
-        auto resolved = resolveIndex(idx);
-        wa.index_vars.push_back(resolved.empty() ? "?" : resolved);
-        wa.index_exprs.push_back(buildDesignateIndexExpr(dg, di, idx, 0));
-        ++di;
+      // Struct field write target: ``g % y = ...`` -- the designate
+      // has a component attribute but no element indices.  Use the
+      // flattened ``<parent>_<member>`` name via ``traceToDecl`` on
+      // the designate's result (lets the component branch fire)
+      // and DON'T treat it as an array write (no AccessInfo
+      // indexed loop is needed -- the target is a scalar / whole
+      // field that downstream emit_assign treats by its own
+      // descriptor classification).  Previously
+      // ``traceToDecl(dg.getMemref())`` returned the struct base
+      // ``g``, leaking ``g`` as the target name and forcing an
+      // array-style write that ``KeyError``ed at arglist lookup.
+      if (dg.getComponentAttr() && dg.getIndices().empty()) {
+        node.target = traceToDecl(dg.getResult());
+        // Whole-field write -- target_is_array reflects the field's
+        // OWN shape, which downstream descriptor classification
+        // recovers from the registered VarInfo.  Leaving it false
+        // by default lets emit_assign pick the right path.
+      } else {
+        node.target = traceToDecl(dg.getMemref());
+        node.target_is_array = true;
+        AccessInfo wa;
+        wa.array_name = node.target;
+        wa.is_write = true;
+        unsigned di = 0;
+        for (auto idx : dg.getIndices()) {
+          auto resolved = resolveIndex(idx);
+          wa.index_vars.push_back(resolved.empty() ? "?" : resolved);
+          wa.index_exprs.push_back(buildDesignateIndexExpr(dg, di, idx, 0));
+          ++di;
+        }
+        node.accesses.push_back(std::move(wa));
       }
-      node.accesses.push_back(std::move(wa));
     }
   }
   if (node.target.empty()) node.target = traceToDecl(dest);
@@ -381,6 +400,174 @@ std::string buildExpr(mlir::Value val, int d) {
   }
   auto *def = val.getDefiningOp();
   if (!def) return "?";
+
+  // ``fir.do_loop`` result: the loop is processed at the higher
+  // ``kind="loop"`` AST level; downstream reads of the loop's
+  // iter_args result resolve to the variable being accumulated.
+  // Match the result index to the corresponding initial operand --
+  // its source declare is the user-visible name.  Mirrors the
+  // ``kScfValueMap`` mechanism for ``scf.if`` results (where the
+  // synth-scalar map maintains the name); here the name is
+  // recoverable directly from the iter_arg's init operand via
+  // ``traceToDecl``.
+  if (auto doLoop = mlir::dyn_cast<fir::DoLoopOp>(def)) {
+    // ``fir.do_loop`` returns:
+    //   * result 0 -- the induction-variable's final value
+    //                 (``index`` type), only present when
+    //                 ``finalValue`` is requested.
+    //   * results 1..N -- the iter_args' final values, in
+    //                     declaration order.
+    //
+    // For the iter_args branch (where i > 0 OR the op has no
+    // finalValue result), the i-th iter_arg's init operand carries
+    // the user-visible source variable: trace through any
+    // ``fir.load`` to reach the source declare, return its name.
+    // Mirrors ``kScfValueMap`` for ``scf.if`` results.  The bridge
+    // processes the loop body itself at the higher
+    // ``kind="loop"`` AST level, so downstream reads of a loop
+    // result resolve to "the accumulator after the loop ran".
+    auto initArgs = doLoop.getInitArgs();
+    unsigned resultIdx = mlir::cast<mlir::OpResult>(val).getResultNumber();
+    unsigned iterIdx = resultIdx;
+    // When the op has the finalValue result, results[0] is the
+    // induction var and results[1..] are the iter_args.  Detect by
+    // matching result count vs iter_args count.
+    if (doLoop.getNumResults() == initArgs.size() + 1) {
+      if (resultIdx == 0) {
+        // Induction-variable final value -- name unknown to the
+        // bridge (it's a loop iter, not a Fortran variable).  Fall
+        // through and let the unhandled-op throw fire.
+      } else {
+        iterIdx = resultIdx - 1;
+      }
+    }
+    if (iterIdx < initArgs.size()) {
+      // Strategy 1: trace the iter_arg's INIT operand back through
+      // a ``fir.load`` to the source declare.  Works for the
+      // accumulator shape ``out = ... ; do ... ; out = out + ...``
+      // where the iter_arg is initialised from a load of the
+      // user variable.
+      auto init = initArgs[iterIdx];
+      if (auto *id = init.getDefiningOp())
+        if (auto ld = mlir::dyn_cast<fir::LoadOp>(id)) {
+          auto n = traceToDecl(ld.getMemref());
+          if (!n.empty()) return n;
+        }
+      // Strategy 2: walk the loop body for the FIRST
+      // ``fir.store %arg_iter to %decl`` -- the iter_arg's stored
+      // location is the user variable's declare.  Works for the
+      // ``i`` shape where the iter_arg shadows the induction
+      // counter via a convert (``%init = fir.convert %c1``, not a
+      // load -- Strategy 1 doesn't fire).
+      auto &body = doLoop.getRegion().front();
+      mlir::Value iterArg = body.getArgument(iterIdx + 1);  // +1: skip induction
+      for (auto &op : body) {
+        if (auto st = mlir::dyn_cast<fir::StoreOp>(op)) {
+          if (st.getValue() == iterArg) {
+            auto n = traceToDecl(st.getMemref());
+            if (!n.empty()) return n;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // ``fir.embox`` wraps a memref into a Fortran box descriptor (adds
+  // bounds + type-info around a raw pointer).  In an expression
+  // context the descriptor and the underlying memref denote the
+  // same Fortran value, so forward to the memref's expression.
+  // Real-world ICON code hits this when an array dummy is passed to
+  // a polymorphic helper via an assumed-shape interface  --  Flang
+  // wraps the actual through ``fir.embox`` at the call site.
+  if (auto eb = mlir::dyn_cast<fir::EmboxOp>(def))
+    return buildExpr(eb.getMemref(), d + 1);
+
+  // ``hlfir.as_expr`` lifts a named variable / temporary into an
+  // HLFIR-expr value (used when an op-class wants
+  // ``hlfir.expr<...>`` rather than ``fir.ref<...>``).  Transparent
+  // for expression building: the underlying variable IS the value.
+  if (auto ae = mlir::dyn_cast<hlfir::AsExprOp>(def))
+    return buildExpr(ae.getVar(), d + 1);
+
+  // ``hlfir.declare`` registers a Fortran name on a memref.  When
+  // referenced in an expression, the name itself is the read --
+  // forward to the memref to pick up the canonical declaration
+  // (``traceToDecl`` walks declare aliases) and return the name.
+  if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(def)) {
+    auto name = traceToDecl(dc.getMemref());
+    if (!name.empty()) return name;
+    return buildExpr(dc.getMemref(), d + 1);
+  }
+
+  // ``fir.emboxchar`` packages ``(char_ptr, length)`` into a
+  // CHARACTER descriptor.  The pointer half is the underlying
+  // string; downstream Fortran arithmetic / concat works against
+  // the character data itself, so forward to it.
+  if (auto ebc = mlir::dyn_cast<fir::EmboxCharOp>(def))
+    return buildExpr(ebc.getMemref(), d + 1);
+
+  // ``fir.box_addr`` pulls the data pointer out of a box descriptor.
+  // Forward through to the boxed value (peeling through any embox
+  // we just installed above).
+  if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(def))
+    return buildExpr(ba.getVal(), d + 1);
+
+  // ``fir.zero_bits`` (class name ``fir::ZeroOp``) produces an
+  // all-zero value of any Fortran type -- used for uninitialized
+  // scalars, null pointer sentinels, fresh boxes about to be
+  // ``fir.embox``'d.  ``0`` is correct for every integer / real /
+  // pointer typed RHS the expression layer surfaces.
+  if (mlir::isa<fir::ZeroOp>(def))
+    return "0";
+
+  // ``fir.address_of`` takes a symbol reference and yields its
+  // address.  In an expression context, the symbol's name is what
+  // a downstream reader wants -- ``traceToDecl`` resolves it
+  // through any subsequent declare aliases.
+  if (auto ao = mlir::dyn_cast<fir::AddrOfOp>(def)) {
+    auto name = traceToDecl(ao.getResult());
+    if (!name.empty()) return name;
+    // Strip the leading ``@`` from the symbol reference for a
+    // human-readable fallback.  ``extractName`` peels Flang's
+    // mangling decoration (``_QM<mod>E<var>`` -> ``var``) so the
+    // tasklet code references the Fortran user name, not the raw
+    // ``_QMmEarr1d`` form (which the SDFG arrays dict doesn't key
+    // on -- the bridge stores each global under its short name).
+    auto sym = ao.getSymbol().getRootReference().getValue().str();
+    return extractName(sym);
+  }
+
+  // ``fir.alloca`` reserves storage on the stack.  ``traceToDecl``
+  // walks past any subsequent ``hlfir.declare`` to pick up the
+  // Fortran name the alloca participates in; if there is none
+  // (synthetic temporary), fall through to the diagnostic / ``?``
+  // path -- a raw alloca address has no spellable expression form.
+  if (mlir::isa<fir::AllocaOp>(def)) {
+    auto name = traceToDecl(def->getResult(0));
+    if (!name.empty()) return name;
+  }
+
+  // ``fir.unboxchar`` extracts ``(char_ptr, length)`` from a
+  // CHARACTER descriptor.  The char-data half (operand 0) is what
+  // an expression context wants; the length is a separate use that
+  // the bridge tracks via the box itself.
+  if (auto uc = mlir::dyn_cast<fir::UnboxCharOp>(def))
+    return buildExpr(uc.getOperand(), d + 1);
+
+  // ``hlfir.concat`` is the Fortran ``//`` string concatenation
+  // operator.  Map to Python ``+`` so the tasklet body uses the
+  // string-concat semantics the DaCe codegen already understands.
+  if (auto cc = mlir::dyn_cast<hlfir::ConcatOp>(def)) {
+    std::string out;
+    bool first = true;
+    for (auto str : cc.getStrings()) {
+      if (!first) out += " + ";
+      out += buildExpr(str, d + 1);
+      first = false;
+    }
+    return out;
+  }
 
   auto nm = def->getName().getStringRef();
 
@@ -591,6 +778,18 @@ std::string buildExpr(mlir::Value val, int d) {
           if (dim < sh.getExtents().size()) {
             auto s = buildIndexExpr(sh.getExtents()[dim], d + 1);
             if (!s.empty() && s != "?") return s;
+            // ``buildIndexExpr`` doesn't handle Flang's
+            // ``max(ext, 0)`` extent-clamp idiom (an
+            // ``arith.select`` over an ``arith.cmpi sgt``).
+            // ``traceExtentExpr`` peels the clamp -- it's what
+            // ``extract_vars`` already uses to derive
+            // ``v.shape_symbols``.  Routes the box_dims extent
+            // for an explicit-shape caller (``arr(n)``) directly
+            // to ``n`` instead of falling through to the
+            // synthetic ``<arr>_d<dim>`` symbol, which the
+            // caller wouldn't know to bind.
+            auto te = traceExtentExpr(sh.getExtents()[dim]);
+            if (!te.empty() && te != "?") return te;
           }
         }
         if (auto ss =
@@ -600,6 +799,8 @@ std::string buildExpr(mlir::Value val, int d) {
           if (extIdx < ops.size()) {
             auto s = buildIndexExpr(ops[extIdx], d + 1);
             if (!s.empty() && s != "?") return s;
+            auto te = traceExtentExpr(ops[extIdx]);
+            if (!te.empty() && te != "?") return te;
           }
         }
       }
@@ -963,15 +1164,46 @@ std::string buildExpr(mlir::Value val, int d) {
       // ``fir.convert`` (transparent here) and an integer cast on
       // the Python side; nothing extra needed for that.
       static const std::map<llvm::StringRef, std::string> cast_calls = {
+          // ``NINT`` (and ``IDNINT``)  --  round-to-nearest then cast.
           {"llvm.lround.i32.f64", "dace.int32"},
           {"llvm.lround.i32.f32", "dace.int32"},
           {"llvm.lround.i64.f64", "dace.int64"},
           {"llvm.lround.i64.f32", "dace.int64"},
+          // ``llvm.lrint`` (round-to-nearest under current rounding
+          // mode) -- Fortran ``NINT`` may lower to this on some
+          // targets.  Same Python rendering.
+          {"llvm.lrint.i32.f64", "dace.int32"},
+          {"llvm.lrint.i32.f32", "dace.int32"},
+          {"llvm.lrint.i64.f64", "dace.int64"},
+          {"llvm.lrint.i64.f32", "dace.int64"},
       };
       if (auto it = cast_calls.find(cname);
           it != cast_calls.end() && call.getNumOperands() >= 1) {
         return it->second + "(round(" + buildExpr(call.getOperand(0), d + 1) +
                "))";
+      }
+      // ``AINT(x)`` truncating to a float result -- LLVM emits
+      // ``llvm.trunc.f{32,64}``.  Render as ``float{32,64}(int(x))``
+      // so the integer cast truncates and the float widening
+      // restores the kind.  Likewise for ``ANINT`` -> ``llvm.round``,
+      // ``FLOOR`` -> ``llvm.floor``, ``CEILING`` -> ``llvm.ceil``.
+      static const std::map<llvm::StringRef, std::string> float_round = {
+          {"llvm.trunc.f64", "trunc"},
+          {"llvm.trunc.f32", "trunc"},
+          {"llvm.round.f64", "round"},
+          {"llvm.round.f32", "round"},
+          {"llvm.floor.f64", "floor"},
+          {"llvm.floor.f32", "floor"},
+          {"llvm.ceil.f64", "ceil"},
+          {"llvm.ceil.f32", "ceil"},
+          {"llvm.rint.f64", "round"},
+          {"llvm.rint.f32", "round"},
+          {"llvm.nearbyint.f64", "round"},
+          {"llvm.nearbyint.f32", "round"},
+      };
+      if (auto it = float_round.find(cname);
+          it != float_round.end() && call.getNumOperands() >= 1) {
+        return it->second + "(" + buildExpr(call.getOperand(0), d + 1) + ")";
       }
       // Complex division  --  flang lowers ``a / b`` on COMPLEX(8) to
       // ``__divdc3(re_a, im_a, re_b, im_b)`` (and ``__divsc3`` for
@@ -1043,6 +1275,35 @@ std::string buildExpr(mlir::Value val, int d) {
            cname == "_FortranAModuloInteger8") &&
           call.getNumOperands() >= 2) {
         return "floor_mod(" + buildExpr(call.getOperand(0), d + 1) + ", " +
+               buildExpr(call.getOperand(1), d + 1) + ")";
+      }
+      // Fortran ``base ** exponent`` lowers to a runtime ``pow``
+      // helper when the operands are typed combinations the IEEE
+      // ``math.powf`` op can't cover  --  complex base, mixed
+      // kinds, or any integer-exponent shape Flang opts to send
+      // through the runtime.  The Fortran-runtime naming convention
+      // is ``_FortranA<base-kind><exp-kind>``:
+      //
+      //   * ``z`` = complex<f64>, ``c`` = complex<f32>
+      //   * ``d`` = f64,           ``s`` = f32
+      //   * ``i`` = i32,           ``k`` = i64
+      //
+      // and pairs e.g. ``_FortranAzpowi`` = ``complex(8) ** int(4)``,
+      // ``_FortranAdpowk`` = ``real(8) ** int(8)``.  All take
+      // ``(base, exponent)`` and return the base's type.
+      //
+      // Python's ``**`` covers each shape because DaCe lowers it
+      // through ``std::pow`` overloads at codegen time -- one handler
+      // suffices for every variant.  QE's
+      // ``(0.D0, -1.D0) ** nhtol(ih, nt)`` surfaces this as
+      // ``_FortranAzpowi`` and previously yielded a ``?`` tasklet
+      // body because the ``fir.call`` had no handler.
+      if ((cname == "_FortranAzpowi" || cname == "_FortranAzpowk" ||
+           cname == "_FortranAcpowi" || cname == "_FortranAcpowk" ||
+           cname == "_FortranAdpowi" || cname == "_FortranAdpowk" ||
+           cname == "_FortranAspowi" || cname == "_FortranAspowk") &&
+          call.getNumOperands() >= 2) {
+        return "(" + buildExpr(call.getOperand(0), d + 1) + " ** " +
                buildExpr(call.getOperand(1), d + 1) + ")";
       }
     }
@@ -1322,9 +1583,16 @@ std::string buildExpr(mlir::Value val, int d) {
 
   if (auto ld = mlir::dyn_cast<fir::LoadOp>(def)) {
     auto mem = ld.getMemref();
-    if (auto md = mem.getDefiningOp())
-      if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(md))
-        return traceToDecl(dg.getMemref());
+    // Pass the designate-or-load result directly to ``traceToDecl``.
+    // It walks through ``hlfir.designate`` correctly: section /
+    // element designates fall through to the parent name, struct-
+    // field designates (component attr set) build the flattened
+    // ``<parent>_<member>`` name (the fix at trace_utils.cpp from
+    // commit 25f8e83).  Previously this branch short-circuited
+    // with ``traceToDecl(dg.getMemref())`` which BYPASSED the
+    // component-aware walk and returned the struct base name
+    // ``g`` instead of ``g_c`` for ``g % c`` scalar reads --
+    // leaking ``g`` as a free symbol into the generated tasklet.
     auto n = traceToDecl(mem);
     if (!n.empty()) return n;
     // Bare fir.alloca without a hlfir.declare  --  mint a synthetic
@@ -1362,13 +1630,39 @@ std::string buildExpr(mlir::Value val, int d) {
           lit = o.str();
         }
       } else {
-        // 17 digits round-trips IEEE-754 binary64 exactly  --
-        // anything less truncates the mantissa and Flang-folded
-        // constants (module ``parameter`` literals etc.) come
-        // out at f32 precision in tasklet code.
-        std::ostringstream o;
-        o << std::setprecision(17) << f.getValueAsDouble();
-        lit = o.str();
+        // Print the SHORTEST decimal that round-trips to the same
+        // binary64 value.  17 digits is the worst-case upper bound
+        // (Steele & White) but ``1e-15`` only needs 1 significant
+        // digit -- printing all 17 (``1.0000000000000001e-15``)
+        // bloats the generated C++ and surfaced as noise in graupel
+        // constants the user flagged.  Try shortest -> longer and
+        // accept the first that round-trips.
+        double dv = f.getValueAsDouble();
+        // ``-0.0`` short-circuit: IEEE 754 says ``-0.0 == +0.0`` so
+        // the round-trip loop below would accept ``"0"`` -> +0.0 and
+        // silently drop the sign.  But the sign IS observable in
+        // ``1.0/x`` (-> -inf vs +inf), ``ATAN2(x, -1.0)`` (-> -pi vs
+        // +pi), ``SIGN(y, x)`` and complex branch cuts -- so
+        // well-formed Fortran code can legitimately depend on it.
+        // Emit ``"-0.0"`` directly when the sign bit is set on a
+        // zero value.
+        if (dv == 0.0 && std::signbit(dv)) {
+          lit = "-0.0";
+        } else {
+          for (int prec = 1; prec <= 17; ++prec) {
+            std::ostringstream o;
+            o << std::setprecision(prec) << dv;
+            if (std::strtod(o.str().c_str(), nullptr) == dv) {
+              lit = o.str();
+              break;
+            }
+          }
+          if (lit.empty()) {  // non-finite (NaN; signed inf round-trips at prec=1)
+            std::ostringstream o;
+            o << std::setprecision(17) << dv;
+            lit = o.str();
+          }
+        }
       }
       // ``ostringstream`` drops the decimal point for integer-valued
       // doubles (e.g. ``0.0`` -> ``"0"``).  That makes the C++ code
@@ -1447,6 +1741,123 @@ std::string buildExpr(mlir::Value val, int d) {
       }
   }
 
+  // ``fir.rebox`` -- pointer / box descriptor rebind.  Value-wise
+  // the rebox is transparent: it builds a new descriptor over the
+  // same data with adjusted bounds.  For ``buildExpr`` (value
+  // lookup) just walk through to the input box; the indexing /
+  // descriptor adjustment is handled at the access-info layer.
+  // Surfaces in QE where ``MATMUL(TRANSPOSE(vcut % a), q) / tpi``
+  // produces a rebox to assemble the slab descriptor before the
+  // following ops read it.
+  if (auto rb = mlir::dyn_cast<fir::ReboxOp>(def)) {
+    return buildExpr(rb.getBox(), d + 1);
+  }
+
+  // ``hlfir.designate`` reached in a value context (no enclosing
+  // ``fir.load``).  Typical surface: a comparison like
+  // ``SUM((i - i_real)**2) > eps6`` where the SUM result is left
+  // as an ``hlfir.expr`` whose materialisation (when the bridge
+  // hasn't run the elemental-to-transient pre-pass) lands on a
+  // designate.  QE's ``vcut_get`` hits this -- the comparison
+  // rendered as ``(? > 1e-06)`` because buildExpr fell through
+  // to the unhandled-op log.
+  //
+  // Render strategy:
+  //   * No indices and a component attr (``s%y``) -> flat
+  //     ``<parent>_<member>`` name (same path used by traceToDecl
+  //     for component designates).
+  //   * Element designate with indices -> ``<name>[idx0, idx1, ...]``
+  //     so ``emit_tasklet``'s ``_rewrite_read_connectors`` consumes
+  //     the brackets and binds each occurrence to its memlet.
+  //   * Section (triplet) designate -> bare name; the slice is
+  //     captured by the AccessInfo path, the tasklet just reads
+  //     the named slab.
+  //
+  // This pairs the AccessInfo ``collectReads`` already builds
+  // (which DOES handle designate via ``expandDesignateChain``)
+  // with a matching textual form so the emitter's per-occurrence
+  // counts agree.
+  if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(def)) {
+    auto comp = dg.getComponentAttr();
+    if (comp && dg.getIndices().empty()) {
+      auto parent = traceToDecl(dg.getMemref());
+      if (!parent.empty()) return parent + "_" + comp.getValue().str();
+    }
+    auto name = traceToDecl(dg.getMemref());
+    if (name.empty()) name = traceToDecl(dg.getResult());
+    if (name.empty()) return "?";
+    auto indices = dg.getIndices();
+    if (indices.empty()) return name;
+    auto triplets = dg.getIsTriplet();
+    bool anyTriplet = false;
+    for (bool t : triplets) {
+      if (t) { anyTriplet = true; break; }
+    }
+    if (anyTriplet) return name;
+    std::string out = name + "[";
+    bool first = true;
+    for (auto idx : indices) {
+      if (!first) out += ", ";
+      out += buildExpr(idx, d + 1);
+      first = false;
+    }
+    out += "]";
+    return out;
+  }
+
+  // ``scf.if`` -- structured-if as a value-yielding expression.
+  // Each region ends in an ``scf.yield`` carrying the branch's
+  // result; render as a Python ternary
+  // ``(then_val if cond else else_val)`` so emit_tasklet picks it up
+  // at codegen.  Memlet-subset uses of ``scf.if`` results would
+  // need a separate sympify-safe rendering but no test currently
+  // exercises that path -- the ternary suffices for tasklet bodies.
+  if (auto ifOp = mlir::dyn_cast<mlir::scf::IfOp>(def)) {
+    if (ifOp.getNumResults() == 0) return "?";
+    unsigned resultIdx = 0;
+    for (unsigned i = 0; i < ifOp.getNumResults(); ++i)
+      if (ifOp.getResult(i) == val) { resultIdx = i; break; }
+    auto extractYield = [&](mlir::Region &region) -> std::string {
+      if (region.empty()) return "?";
+      auto &block = region.front();
+      for (auto &op : block) {
+        if (auto y = mlir::dyn_cast<mlir::scf::YieldOp>(op)) {
+          if (resultIdx < y.getNumOperands())
+            return buildExpr(y.getOperand(resultIdx), d + 1);
+        }
+      }
+      return "?";
+    };
+    std::string thenVal = extractYield(ifOp.getThenRegion());
+    std::string elseVal = extractYield(ifOp.getElseRegion());
+    std::string condStr = buildExpr(ifOp.getCondition(), d + 1);
+    return "(" + thenVal + " if " + condStr + " else " + elseVal + ")";
+  }
+
+  // ``hlfir.all`` / ``hlfir.any`` -- whole-array boolean reductions.
+  // Lower to Python ``all(...)`` / ``any(...)`` over the input
+  // expression.  Used by QE's ``IF (ALL(odg(:)))`` at line 286.
+  if (auto allOp = mlir::dyn_cast<hlfir::AllOp>(def)) {
+    return "all(" + buildExpr(allOp.getMask(), d + 1) + ")";
+  }
+  if (auto anyOp = mlir::dyn_cast<hlfir::AnyOp>(def)) {
+    return "any(" + buildExpr(anyOp.getMask(), d + 1) + ")";
+  }
+
+  // Unhandled HLFIR op falls through to ``?``.  Logs the op-name +
+  // location to stderr (always-on, previous DACE_FORTRAN_DEBUG_BUILDEXPR
+  // gate is gone) so the missing case is visible without breaking the
+  // ``?``-as-sentinel protocol many tests still rely on for legitimate
+  // fallback paths.  Migration to explicit throws is captured in
+  // ``tasks/audit_question_mark_emissions.md``.
+  {
+    std::string op_name = def->getName().getStringRef().str();
+    std::string loc;
+    llvm::raw_string_ostream os(loc);
+    def->getLoc().print(os);
+    llvm::errs() << "[buildExpr unhandled-op] op=" << op_name
+                 << " at " << loc << "\n";
+  }
   return "?";
 }
 

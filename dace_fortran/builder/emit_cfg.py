@@ -332,6 +332,67 @@ def _is_trivial_bound(expr: str) -> bool:
     return False
 
 
+def _deref_scalar_arrays_for_interstate(expr_str: str, ctx) -> str:
+    """Rewrite bare references to scalar ``(1,)``-shape SDFG data
+    descriptors as ``name[0]``.
+
+    Interstate-edge assignments do not auto-dereference scalar-array
+    data on the LHS / RHS the way tasklet codegen does (``int _in_x =
+    x[0];``).  Any module-level scalar exposed on the SDFG as a
+    ``(1,)``-Array (the bridge's default for module variables that
+    are not promoted to symbols) must therefore be referenced as
+    ``name[0]`` in interstate expressions or the C++ unparser emits
+    ``int64_t loopend_N = (x - 1);`` -- pointer arithmetic against a
+    ``int*`` parameter -- and the build fails.
+
+    :param expr_str: a rendered expression string headed for an
+        ``InterstateEdge.assignments`` value or condition.
+    :param ctx: the build context (carries ``ctx.sdfg`` whose
+        ``.arrays`` map is the source of truth for shapes).
+    :returns: ``expr_str`` with bare names of scalar arrays substituted
+        for ``name[0]``; identifiers that are not scalar arrays, are
+        already subscripted, or aren't known to the SDFG are left
+        untouched.
+    """
+    import re
+    if not isinstance(expr_str, str) or not expr_str:
+        return expr_str
+
+    sdfg_arrays = ctx.sdfg.arrays
+
+    def _is_scalar_array(name: str) -> bool:
+        # Only ``(1,)``-shape ``dace.data.Array`` entries need
+        # dereferencing -- ``dace.data.Scalar`` is passed by value in
+        # the C++ signature, so subscripting one ('``n[0]``' where ``n``
+        # is a plain ``int``) is a hard compile error.
+        desc = sdfg_arrays.get(name)
+        if not isinstance(desc, dace.data.Array):
+            return False
+        shape = tuple(desc.shape)
+        if len(shape) != 1:
+            return False
+        try:
+            return int(shape[0]) == 1
+        except (TypeError, ValueError):
+            return False
+
+    out = []
+    pos = 0
+    for m in re.finditer(r"\b[A-Za-z_][A-Za-z0-9_]*\b", expr_str):
+        name = m.group(0)
+        out.append(expr_str[pos:m.start()])
+        # Skip when already subscripted (next non-space char is ``[``).
+        tail = expr_str[m.end():]
+        already_subscripted = tail.lstrip().startswith('[')
+        if _is_scalar_array(name) and not already_subscripted:
+            out.append(f"{name}[0]")
+        else:
+            out.append(name)
+        pos = m.end()
+    out.append(expr_str[pos:])
+    return "".join(out)
+
+
 def _hoist_bound_to_symbol(ctx, region, builder, expr_str: str, prefix: str):
     """Stage a non-trivial loop-bound expression onto a fresh
     ``<prefix>_<nid>`` ``int64`` symbol via a pre-LoopRegion interstate
@@ -349,7 +410,8 @@ def _hoist_bound_to_symbol(ctx, region, builder, expr_str: str, prefix: str):
         ctx.sdfg.add_symbol(sym, dace.int64)
     ctx.ensure(region)
     nxt = region.add_state(f"pre_{sym}")
-    region.add_edge(ctx.cur, nxt, InterstateEdge(assignments={sym: expr_str}))
+    deref_expr = _deref_scalar_arrays_for_interstate(expr_str, ctx)
+    region.add_edge(ctx.cur, nxt, InterstateEdge(assignments={sym: deref_expr}))
     ctx.cur = nxt
     return sym
 
@@ -454,8 +516,35 @@ def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
     # reordering, so emit_loop is responsible for picking the right
     # one as init.
     step = getattr(n, 'loop_step', 1)
+    step_expr = getattr(n, 'loop_step_expr', '') or ''
 
-    if step >= 0:
+    if step_expr:
+        # Symbolic step  --  ``DO jbnd = jstart, jend, many_fft``
+        # where ``many_fft`` is a runtime config integer, or
+        # ``DO j = 1, n, stride_arr(idx)`` where the step reads an
+        # array element.  Apply the same hoist-to-symbol path the
+        # bounds use so the update_expr stays a bare symbol -- this
+        # keeps the bridge's "loop iterator / array access / loop
+        # bounds are symbols" design consistent, and the Fortran
+        # 1-based -> DaCe 0-based conversion of ``arr(idx)`` to
+        # ``arr[(idx) - offset_arr_d0]`` happens once on the
+        # hoisted interstate-edge assignment instead of being
+        # embedded in the loop body.  Treat as forward iteration;
+        # runtime-negative symbols yield zero-or-one iterations
+        # under ``uid <= bound``, matching Fortran's mismatched-
+        # direction trip-count semantics.
+        step_expr = _fortran_subs_to_dace(step_expr, builder)
+        _s = _hoist_bound_to_symbol(ctx, region, builder, str(step_expr), "loopstep")
+        if _s is not None:
+            step_expr = _s
+        loop = LoopRegion(
+            label=f"loop_{uid}_{builder.nid()}",
+            condition_expr=f"{uid} < {bound} + 1",
+            loop_var=uid,
+            initialize_expr=f"{uid} = {lower}",
+            update_expr=f"{uid} = {uid} + {step_expr}",
+        )
+    elif step >= 0:
         loop = LoopRegion(
             label=f"loop_{uid}_{builder.nid()}",
             condition_expr=f"{uid} < {bound} + 1",
@@ -589,15 +678,80 @@ def emit_while(builder, ctx: '_Ctx', n, region):
     condition is ``True`` (the bridge's faithful walker folds any
     break-on-false into a ``break`` child node inside the body).
     """
-    ctx.flush(builder, region)
+    pre = ctx.flush_and_ensure(builder, region)
     # ``?`` is the bridge's placeholder for an unextractable condition.
     # Default to ``True`` so ast.parse succeeds and leaves the faithful
     # structure visible in the SDFG for inspection.
     cond = n.condition if n.condition and n.condition != "?" else "True"
+
+    # Mirror the ``emit_cond`` cond-rewrite pipeline so a real
+    # ``DO WHILE (a(i) > thr)`` doesn't relapse the bugs already
+    # fixed for ``IF``.  Today the bridge folds break-on-false into
+    # ``break`` nodes and sends ``True`` here -- but the day a real
+    # condition lands, every gap below was an emit_cond fix:
+    cond = _rewrite_section_aliases_in_expr(builder, cond)
+
+    # When the condition references arrays, lift it through a
+    # tasklet-into-scalar-transient (same per-occurrence connector
+    # machinery emit_tasklet uses for assigns) so the array reads
+    # get proper memlets instead of bare-pointer interstate-edge
+    # free symbols.  The scalar-``[0]`` rewrite for inout scalars
+    # is skipped on the lift path (would survive past the rewriter
+    # and surface as ``_in_<nm>[0]`` against a scalar connector).
+    cond_accesses = []
+    if n.accesses:
+        seen_acc = set()
+        for ac in n.accesses:
+            key = (ac.array_name, tuple(ac.index_exprs), ac.is_read)
+            if key in seen_acc:
+                continue
+            seen_acc.add(key)
+            cond_accesses.append(ac)
+    cond_array_reads = [ac for ac in cond_accesses
+                        if ac.is_read and ac.array_name in builder.arrays]
+    will_lift = bool(cond_array_reads)
+    if will_lift:
+        from collections import Counter
+        text_occ = Counter()
+        for tok in re.findall(r'\b([A-Za-z_]\w*)\b', cond):
+            if tok in builder.arrays:
+                text_occ[tok] += 1
+        access_count = Counter()
+        for ac in cond_array_reads:
+            access_count[ac.array_name] += 1
+        mismatched = any(text_occ[k] != access_count[k]
+                         for k in set(text_occ) | set(access_count))
+        if mismatched:
+            will_lift = False
+    if not will_lift:
+        # Legacy path: rewrite intent(out)/inout scalars to ``nm[0]``
+        # so the LoopRegion's condition_expr reads the size-1
+        # backing array's element 0.
+        for nm, v in builder.scalars.items():
+            if v.intent in ('out', 'inout'):
+                cond = re.sub(rf'\b{re.escape(nm)}\b', f"{nm}[0]", cond)
+
+    if will_lift and not _is_trivial_bound(cond):
+        from types import SimpleNamespace
+        sym = f"while_cond_{builder.nid()}"
+        ctx.sdfg.add_transient(sym, (1, ), dace.int64, find_new_name=False)
+        pre = _anchor_views_referenced_in_expr(builder, cond, region, pre, ctx.sdfg)
+        nxt = region.add_state(f"pre_{sym}")
+        region.add_edge(pre, nxt, InterstateEdge())
+        ctx.cur = nxt
+        synth = SimpleNamespace(
+            kind='assign', target=sym, expr=cond,
+            target_is_array=True, accesses=cond_accesses,
+        )
+        from dace_fortran.builder.emit_tasklet import emit_tasklet
+        emit_tasklet(builder, nxt, synth, builder.nid(), ctx.iter_map)
+        pre = nxt
+        cond = f"{sym}[0]"
+
     loop = LoopRegion(label=f"while_{builder.nid()}", condition_expr=cond)
     region.add_node(loop)
-    if ctx.cur is not None:
-        region.add_edge(ctx.cur, loop, InterstateEdge())
+    if pre is not None:
+        region.add_edge(pre, loop, InterstateEdge())
     ctx.cur = loop
 
     body_start = loop.add_state(f"while_body_{builder.nid()}", is_start_block=True)
@@ -626,9 +780,20 @@ def emit_cond(builder, ctx: '_Ctx', n, region):
     # array pointer.  Subscript each one to read element 0.  Scalar
     # INPUTS (``intent(in)`` / ``VALUE``) are true Scalars and need no
     # subscript -- they're addressable as the bare name in C++.
-    for nm, v in builder.scalars.items():
-        if v.intent in ('out', 'inout'):
-            cond = re.sub(rf'\b{re.escape(nm)}\b', f"{nm}[0]", cond)
+    #
+    # Skip when the condition will be lifted into a tasklet
+    # (downstream array-read path): emit_tasklet's
+    # ``_rewrite_read_connectors`` handles scalar connectors as
+    # ``_in_<nm>`` -- a textual ``[0]`` already in the body would
+    # leak through as ``_in_<nm>[0]`` and fail validation as a
+    # subscript-on-scalar (the IndexError that surfaced
+    # test_sqrt_in_if / test_exp_in_if).
+    will_lift = bool(n.accesses) and any(
+        ac.is_read and ac.array_name in builder.arrays for ac in n.accesses)
+    if not will_lift:
+        for nm, v in builder.scalars.items():
+            if v.intent in ('out', 'inout'):
+                cond = re.sub(rf'\b{re.escape(nm)}\b', f"{nm}[0]", cond)
 
     # Hoist non-trivial conditions to a pre-state symbol so the
     # ConditionalBlock branch carries only a symbol name -- one path
@@ -636,18 +801,101 @@ def emit_cond(builder, ctx: '_Ctx', n, region):
     # Trivial cases (a bare name or ``True`` / ``False``) skip the
     # staging.
     if not _is_trivial_bound(cond):
-        sym = f"if_cond_{builder.nid()}"
-        if sym not in ctx.sdfg.symbols:
-            ctx.sdfg.add_symbol(sym, dace.int64)
-        # If the condition references any view_alias array, anchor it
-        # in a state upstream of the interstate-edge assignment so
-        # DaCe's framecode finds a real AccessNode first.
-        pre = _anchor_views_referenced_in_expr(builder, cond, region, pre, ctx.sdfg)
-        nxt = region.add_state(f"pre_{sym}")
-        region.add_edge(pre, nxt, InterstateEdge(assignments={sym: cond}))
-        pre = nxt
-        ctx.cur = nxt
-        cond = sym
+        # Conditions that reference ARRAYS (e.g. graupel's
+        # ``MAX(q_x_1[1,iv,k], q_x_1[5,iv,k], q_x_1[6,iv,k]) > qmin``)
+        # cannot be lifted onto a plain interstate-edge assignment --
+        # DaCe treats bare array names there as Symbols (no connector
+        # + no memlet) and the C++ codegen emits the data pointer
+        # where a scalar was expected (``double* > 1e-15`` type-error
+        # in graupel's ``if_cond_38``).
+        #
+        # Detection: if the bridge populated ``n.accesses`` for the
+        # conditional AND any of the read targets is in
+        # ``builder.arrays``, route through the per-occurrence-
+        # connector tasklet path (same machinery ``emit_tasklet``
+        # uses for assigns) into a fresh ``if_cond_<nid>`` scalar
+        # transient.  The conditional then reads the transient
+        # element-0 as a regular scalar.
+        # Dedupe accesses by ``(array_name, index_exprs)`` -- the
+        # bridge walker recurses through ``arith.maximumf`` /
+        # ``cmpf`` / ``select`` chains and visits the same
+        # ``hlfir.designate`` from multiple paths, so the raw
+        # accesses list has duplicates (e.g. 20 entries for a,b,c
+        # each accessed once textually).  Dedupe to 1 entry per
+        # unique (name, indices) so the per-occurrence connector
+        # count matches the text-occurrence count.
+        cond_accesses = []
+        if n.accesses:
+            seen_acc = set()
+            for ac in n.accesses:
+                key = (ac.array_name, tuple(ac.index_exprs), ac.is_read)
+                if key in seen_acc:
+                    continue
+                seen_acc.add(key)
+                cond_accesses.append(ac)
+        cond_array_reads = [ac for ac in cond_accesses
+                             if ac.is_read and ac.array_name in builder.arrays]
+        # Only lift via the tasklet path when accesses can be matched
+        # 1:1 to text occurrences -- otherwise we mint connectors that
+        # the rewritten code references but the access list can't
+        # bind to memlets, producing the ``_in_<arr>_<n>`` unresolved-
+        # free-symbol error.  Mismatch surfaces when the bridge
+        # collapsed a slice ``arr[i, 0:4]`` into ONE access while
+        # ``buildBoolExpr`` expanded the slice into FOUR textual
+        # ``arr[i, 0], arr[i, 1], ...`` references (graupel's
+        # ``MIN(kmin[iv,0:4]) >`` shape).
+        if cond_array_reads:
+            from collections import Counter
+            text_occ = Counter()
+            for tok in re.findall(r'\b([A-Za-z_]\w*)\b', cond):
+                if tok in builder.arrays:
+                    text_occ[tok] += 1
+            access_count = Counter()
+            for ac in cond_array_reads:
+                access_count[ac.array_name] += 1
+            mismatched = any(text_occ[k] != access_count[k]
+                              for k in set(text_occ) | set(access_count))
+            if mismatched:
+                cond_array_reads = []  # fall through to legacy path
+        if cond_array_reads:
+            from types import SimpleNamespace
+            sym = f"if_cond_{builder.nid()}"
+            # Materialise a 1-element int64 transient to hold the
+            # boolean (DaCe expects a numeric truthy value on the
+            # branch).  ``emit_tasklet``'s per-occurrence array-read
+            # connector machinery does the rest: each ``arr[i, k]``
+            # reference in the condition becomes ``_in_arr_N`` with
+            # a matching unit memlet.
+            ctx.sdfg.add_transient(sym, (1, ), dace.int64, find_new_name=False)
+            pre = _anchor_views_referenced_in_expr(builder, cond, region, pre, ctx.sdfg)
+            nxt = region.add_state(f"pre_{sym}")
+            region.add_edge(pre, nxt, InterstateEdge())
+            ctx.cur = nxt
+            # ``emit_tasklet`` expects a target-is-array assign whose
+            # ``accesses`` list carries the per-occurrence indices.
+            # The condition value lands in the 0-th element of the
+            # transient via the same path tasklet-array-writes take.
+            synth = SimpleNamespace(
+                kind='assign', target=sym, expr=cond,
+                target_is_array=True, accesses=cond_accesses,
+            )
+            from dace_fortran.builder.emit_tasklet import emit_tasklet
+            emit_tasklet(builder, nxt, synth, builder.nid(), ctx.iter_map)
+            pre = nxt
+            cond = f"{sym}[0]"
+        else:
+            sym = f"if_cond_{builder.nid()}"
+            if sym not in ctx.sdfg.symbols:
+                ctx.sdfg.add_symbol(sym, dace.int64)
+            # If the condition references any view_alias array, anchor it
+            # in a state upstream of the interstate-edge assignment so
+            # DaCe's framecode finds a real AccessNode first.
+            pre = _anchor_views_referenced_in_expr(builder, cond, region, pre, ctx.sdfg)
+            nxt = region.add_state(f"pre_{sym}")
+            region.add_edge(pre, nxt, InterstateEdge(assignments={sym: cond}))
+            pre = nxt
+            ctx.cur = nxt
+            cond = sym
 
     uid = builder.nid()
     cond_block = ConditionalBlock(f"if_{uid}")

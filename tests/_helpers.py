@@ -45,7 +45,7 @@ def sdfg_call_args(sdfg, int_values: dict) -> dict:
     """Route each integer arg in ``int_values`` to either a plain int or
     a length-1 numpy int32 array, depending on whether the SDFG
     descriptor classifies it as a Scalar/symbol or a length-1 Array.
-    Mirrors the helper in ``icon_loopnests/test_sdfg_equivalence.py``.
+    Mirrors the helper in ``icon/selected_loopnests/test_sdfg_equivalence.py``.
     """
     from dace.data import Scalar
     arglist = sdfg.arglist()

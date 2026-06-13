@@ -21,6 +21,7 @@
 #pragma once
 
 #include <map>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -34,6 +35,31 @@
 #include "mlir/IR/Value.h"
 
 namespace hlfir_bridge {
+
+/// Throw a descriptive ``std::runtime_error`` for an unhandled HLFIR op
+/// at a buildExpr-style end-of-function fallthrough.  Previously these
+/// returned ``"?"`` which propagated silently into tasklet bodies and
+/// surfaced as opaque downstream errors (``NameError``, ``ValueError``,
+/// ``KeyError``) after a long walk through the SDFG.  The throw surfaces
+/// the missing case at the C++ source point with the IR op-name + the
+/// MLIR location, so the diagnostic names what to add a handler for and
+/// where.  Pass ``__func__`` as ``fn`` for ``buildExpr: unhandled HLFIR
+/// op 'hlfir.assoc' at <source.f90:42:5>``.
+[[noreturn]] inline void throwUnhandled(mlir::Operation *op, const char *fn) {
+  std::string opName = op ? op->getName().getStringRef().str() : "<null>";
+  std::string loc;
+  if (op) {
+    llvm::raw_string_ostream os(loc);
+    op->getLoc().print(os);
+  }
+  throw std::runtime_error(std::string(fn) +
+                           ": unhandled HLFIR op '" + opName +
+                           "' at " + (loc.empty() ? "<unknown loc>" : loc) +
+                           ".  Add a handler in the corresponding "
+                           "bridge/ast/*.cpp file (search for the helper "
+                           "name) or update the op coverage in "
+                           "tasks/audit_question_mark_emissions.md.");
+}
 
 // ============================================================================
 // Thread-local state

@@ -51,7 +51,7 @@ subroutine arith_idx(out)
 end subroutine arith_idx
 """
     sdfg = _build(src, tmp_path, "_QParith_idx")
-    consts = dict(sdfg.constants)
+    consts = dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants))
     assert consts.get('offset_arr_d0') == -6, (f"expected offset_arr_d0 == -6 (from ALLOCATE shape_shift); "
                                                f"got {consts.get('offset_arr_d0')}")
     out = np.zeros(1, dtype=np.int32, order='F')
@@ -85,7 +85,7 @@ end subroutine multi_alloc
     sdfg = _build(src, tmp_path, "_QPmulti_alloc")
     # Each ALLOCATE produces a separate SDFG alias.  Verify offsets
     # directly:
-    consts = dict(sdfg.constants)
+    consts = dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants))
     assert consts.get('offset_arr_d0') == -5, (f"first alias offset should be -5; got {consts.get('offset_arr_d0')}")
     # REAL gap: second-allocate alias defaults to offset=1 instead
     # of the actual ALLOCATE bound 0.  Bridge's
@@ -123,7 +123,7 @@ subroutine loop_iv_local(out)
 end subroutine loop_iv_local
 """
     sdfg = _build(src, tmp_path, "_QPloop_iv_local")
-    consts = dict(sdfg.constants)
+    consts = dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants))
     assert consts.get('offset_arr_d0') == -3, (f"expected offset_arr_d0 == -3 from local ALLOCATE shape_shift; "
                                                f"got {consts.get('offset_arr_d0')}")
     out = np.zeros(1, dtype=np.int32, order='F')

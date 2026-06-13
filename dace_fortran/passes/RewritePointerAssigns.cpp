@@ -472,6 +472,17 @@ struct RewritePointerAssignsPass
 
  private:
   void rewrite(hlfir::DeclareOp ptrDecl) {
+    // Skip pointers that ``hlfir-mark-bounds-remap-views`` already
+    // identified as Fortran 2003 bounds-remapping views
+    // (``ptr(1:N*K) => target(:, slice)``).  Those are handled at
+    // SDFG construction by emitting a DaCe ``View`` node aliasing
+    // the parent array; the index-rewriting model below cannot
+    // express a rank reshape and would either fail (rank-mismatch
+    // in ``mergeIndices``) or, worse, silently produce wrong
+    // accesses.  Leaving the rebind IR intact lets the bridge's
+    // descriptors.py path consume it directly.
+    if (ptrDecl->hasAttr("hlfir_bridge.bounds_remap_view")) return;
+
     // Find the rebind store(s): ``fir.store %targetBox to
     // %ptrDecl#0``.  Three forms:
     //   * Initial nullify (``embox(zero_bits)``): skipped.
@@ -570,14 +581,69 @@ struct RewritePointerAssignsPass
     //   * REBOX SLICE OPERAND  --  defensive; flang doesn't emit
     //     this for pointer rebinds today, but it would mean an
     //     extra stride/section overlay we don't model.
+    // Identity check for ``fir.shift`` / ``fir.shape_shift`` operands.
+    // flang attaches a default ``fir.shift`` to every rebox even when the
+    // user did NOT write a bounds remap (a plain ``ptr => src(..)`` with
+    // no ``ptr(<lo>:..) =>`` reshape).  The bounds-remap guard below
+    // must NOT fire for those: the shift carries every lower-bound as
+    // either (a) the literal ``1`` (Fortran's default lb) or (b) the
+    // same source box's own ``fir.box_dims %src, %i -> #0``  --  flang
+    // emits the latter to re-assert the source's runtime lower bounds.
+    // Both shapes are observationally identical to an unshifted rebind,
+    // so the guard arms only when an lb operand is neither of those.
+    auto isConstantOne = [](mlir::Value lb) {
+      if (!lb) return false;
+      auto *def = lb.getDefiningOp();
+      if (!def) return false;
+      if (auto c = mlir::dyn_cast<mlir::arith::ConstantOp>(def)) {
+        if (auto a = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue()))
+          return a.getInt() == 1;
+      }
+      return false;
+    };
+    auto isBoxDimsLowerBoundOfSource = [](mlir::Value lb,
+                                          mlir::Value srcBox) {
+      // Match the ``lb = fir.box_dims %srcBox, %i -> (#0, #1, #2)``
+      // shape where ``lb`` is the result#0 (lower bound).  The middle
+      // and stride results (#1, #2) are NOT lower bounds and should
+      // not match -- we want the actual ``lb`` channel.
+      if (!lb || !srcBox) return false;
+      auto opRes = mlir::dyn_cast<mlir::OpResult>(lb);
+      if (!opRes || opRes.getResultNumber() != 0) return false;
+      auto bd = mlir::dyn_cast<fir::BoxDimsOp>(opRes.getOwner());
+      if (!bd) return false;
+      return bd.getVal() == srcBox;
+    };
+    auto isIdentityShift = [&](mlir::Operation *shapeDef,
+                               mlir::Value srcBox) {
+      auto checkLb = [&](mlir::Value lb) {
+        return isConstantOne(lb) ||
+               isBoxDimsLowerBoundOfSource(lb, srcBox);
+      };
+      if (auto s = mlir::dyn_cast_or_null<fir::ShiftOp>(shapeDef)) {
+        for (mlir::Value lb : s.getOrigins())
+          if (!checkLb(lb)) return false;
+        return true;
+      }
+      if (auto s = mlir::dyn_cast_or_null<fir::ShapeShiftOp>(shapeDef)) {
+        auto pairs = s.getPairs();
+        for (size_t i = 0; i < pairs.size(); i += 2)
+          if (!checkLb(pairs[i])) return false;
+        return true;
+      }
+      return false;
+    };
+
     for (mlir::Value v = rebindStore.getValue(); v;) {
       auto *def = v.getDefiningOp();
       if (!def) break;
       if (auto rb = mlir::dyn_cast<fir::ReboxOp>(def)) {
         if (mlir::Value shape = rb.getShape()) {
           auto *shapeDef = shape.getDefiningOp();
-          if (mlir::isa_and_nonnull<fir::ShiftOp>(shapeDef) ||
-              mlir::isa_and_nonnull<fir::ShapeShiftOp>(shapeDef)) {
+          bool isShift =
+              mlir::isa_and_nonnull<fir::ShiftOp>(shapeDef) ||
+              mlir::isa_and_nonnull<fir::ShapeShiftOp>(shapeDef);
+          if (isShift && !isIdentityShift(shapeDef, rb.getBox())) {
             rebindStore.emitError(
                 "hlfir-rewrite-pointer-assigns: pointer "
                 "rebind with bounds remap (``ptr(<lo>:..) "
@@ -759,6 +825,49 @@ struct RewritePointerAssignsPass
           }
           ba.getResult().replaceAllUsesWith(replacement);
           deadReaders.push_back(ba);
+          continue;
+        }
+        if (auto cin = mlir::dyn_cast<hlfir::CopyInOp>(uu)) {
+          // A pointer rebound to a CONTIGUOUS whole target (empty chain)
+          // passed to a contiguous-dummy callee (e.g. a ``bind(c)`` external)
+          // is wrapped by Flang in ``copy_in`` / ``copy_out`` around a temp.
+          // The copy is unnecessary here: fold each ``box_addr`` of the copied
+          // box straight to the parent's ref and drop the ``copy_in`` /
+          // ``copy_out`` pair, so the callee reads / writes the target in
+          // place (the external then connects to the target array, not an
+          // unnameable copy buffer).  A chained / sectioned rebind keeps its
+          // copy  --  that may be a genuine non-contiguous materialisation.
+          llvm::SmallVector<mlir::Operation *, 2> boxUsers(
+              cin.getResult(0).getUsers().begin(),
+              cin.getResult(0).getUsers().end());
+          // Only fold when the rebind is a whole contiguous target AND every
+          // use of the copied box is a box_addr (so eliding the copy is
+          // complete -- a non-box_addr use would dangle once copy_in/out go).
+          bool foldable = chain.chain.empty() && !boxUsers.empty();
+          for (auto *cu : boxUsers)
+            if (!mlir::isa<fir::BoxAddrOp>(cu)) { foldable = false; break; }
+          if (foldable) {
+            for (auto *cu : boxUsers) {
+              auto ba = mlir::cast<fir::BoxAddrOp>(cu);
+              mlir::OpBuilder b(ba);
+              // box_addr wants the target's raw data address; the declare's
+              // result #1 is that memref (result #0 may be a dynamic-extent
+              // box, which does not fir.convert to a ref/ptr).
+              mlir::Value replacement = chain.parent.getResult(1);
+              if (replacement.getType() != ba.getResult().getType())
+                replacement = b.create<fir::ConvertOp>(
+                    ba.getLoc(), ba.getResult().getType(), replacement);
+              ba.getResult().replaceAllUsesWith(replacement);
+              deadReaders.push_back(ba);
+            }
+            // Drop the matching copy_out (it consumes the copy_in flag).
+            llvm::SmallVector<mlir::Operation *, 2> flagUsers(
+                cin.getResult(1).getUsers().begin(),
+                cin.getResult(1).getUsers().end());
+            for (auto *fu : flagUsers)
+              if (mlir::isa<hlfir::CopyOutOp>(fu)) deadReaders.push_back(fu);
+            deadReaders.push_back(cin);
+          }
           continue;
         }
         // Other user shapes (rare)  --  leave alone.  The

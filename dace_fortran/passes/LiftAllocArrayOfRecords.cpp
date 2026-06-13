@@ -96,6 +96,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/Pass/Pass.h"
 #include "passes/Passes.h"
 
@@ -605,7 +606,19 @@ static bool rewriteAccesses(mlir::func::FuncOp func, LiftTarget &target,
     jobs.push_back({accessDg, r, em.elemIdx});
   });
 
+  mlir::DominanceInfo dom(func);
   for (auto &job : jobs) {
+    // The rewrite roots the access at the rebind's backing-storage declare, so
+    // that declare must dominate the access.  An access is matched to a rebind
+    // by (element index, inner-member name) only; when the same pointer member
+    // is rebound at several program points (e.g. a prognostic field rebound per
+    // time level inside a loop), the matched rebind's storage may be defined
+    // after -- or off the dominating path of -- this access.  Rewriting anyway
+    // would produce ``operand does not dominate this use``; skip it instead and
+    // leave the original pointer-chain access for hlfir-rewrite-pointer-assigns.
+    if (!dom.dominates(job.rebind->storageDecl.getOperation(),
+                       job.accessDg.getOperation()))
+      continue;
     auto newVal =
         buildLiftedAccess(b, job.accessDg, *job.rebind, job.accessElemIdx);
     if (!newVal) continue;
@@ -749,7 +762,15 @@ static bool redirectAccessesToAliases(
     jobs.push_back({accessDg, a});
   });
 
+  mlir::DominanceInfo dom(func);
   for (auto &[accessDg, a] : jobs) {
+    // The alias declare must dominate the access it is rerouted to.  Aliases
+    // are matched to accesses by (element index, inner-member name) only, so a
+    // per-iteration alias materialised inside a loop can match an access on a
+    // path it does not dominate; rerouting anyway yields ``operand does not
+    // dominate this use``.  Skip such an access and leave its original chain.
+    if (!dom.dominates(a->aliasDecl.getOperation(), accessDg.getOperation()))
+      continue;
     // Build replacement: ``hlfir.designate %alias (accessIdxs...)``.
     b.setInsertionPoint(accessDg);
     llvm::SmallVector<mlir::Value, 4> idxs(accessDg.getIndices().begin(),

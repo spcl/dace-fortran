@@ -263,8 +263,26 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign,
         auto src = apply.getExpr();
         if (auto *srcOp = src.getDefiningOp()) {
           // Inner elemental -> existing path inlines the body.
-          if (mlir::isa<hlfir::ElementalOp>(srcOp)) {
-            findApplies(src, depth + 1);
+          // Walk the body's yielded value (where the real applies
+          // live) -- ``findApplies(src, ...)`` would just recurse on
+          // the elemental's top-level operands (its shape), missing
+          // every libcall expr-producer the body's apply reads.  QE's
+          // ``vcut_get`` (``MATMUL(TRANSPOSE(...)) / tpi``) flang-
+          // lowers as TWO nested elementals: outer divides by tpi,
+          // inner wraps matmul + ``hlfir.no_reassoc``.  Without this
+          // body-walk, the matmul never lands in
+          // ``kHlfirExprToTransient`` and the inner apply renders as
+          // ``?`` in the consuming tasklet body.
+          if (auto inner_elem = mlir::dyn_cast<hlfir::ElementalOp>(srcOp)) {
+            auto &iregion = inner_elem.getRegion();
+            if (!iregion.empty()) {
+              for (auto &iop : iregion.front()) {
+                if (auto iy = mlir::dyn_cast<hlfir::YieldElementOp>(iop)) {
+                  findApplies(iy.getElementValue(), depth + 1);
+                  break;
+                }
+              }
+            }
             return;
           }
           // Recognised libcall expr-producer -> materialise.
@@ -305,7 +323,7 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign,
                   // declare.  Materialise the elemental
                   // into a synthetic transient and pass
                   // its name as the libcall arg.
-                  if (auto *od = operand.getDefiningOp())
+                  if (auto *od = operand.getDefiningOp()) {
                     if (auto inner_elem =
                             mlir::dyn_cast<hlfir::ElementalOp>(od)) {
                       auto [trName, mat_nodes] =
@@ -316,6 +334,65 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign,
                         n = std::move(trName);
                       }
                     }
+                    // Nested libcall expr-producer (e.g.
+                    // ``MATMUL(TRANSPOSE(a), q)`` -- the
+                    // matmul's first operand is the
+                    // transpose result, which is also a
+                    // libcall expr-producer with no
+                    // backing declare).  Recursively
+                    // materialise it via the same
+                    // ``_libtmp_<gid>`` mechanism so the
+                    // outer libcall's source arg is a
+                    // real array name, not the empty
+                    // string ``traceToDecl`` returned.
+                    // QE's ``vcut_get`` (``i_real =
+                    // MATMUL(TRANSPOSE(vcut % a), q)
+                    // / tpi``) was the surfacing case.
+                    else if (n.empty() && libcallNameForExprOp(od)) {
+                      // Memoise per (op, transient name)
+                      // so a transpose result shared
+                      // between two consumers reuses the
+                      // same transient.
+                      auto it = kHlfirExprToTransient.find(od);
+                      std::string innerTr;
+                      if (it != kHlfirExprToTransient.end()) {
+                        innerTr = it->second;
+                      } else {
+                        innerTr = "_libtmp_" +
+                                  std::to_string(kLibTmpCounter++);
+                        kHlfirExprToTransient[od] = innerTr;
+                        mlir::Type irty = od->getResult(0).getType();
+                        auto ishape = exprResultShape(irty);
+
+                        ASTNode idecl;
+                        idecl.kind = "declare_transient";
+                        idecl.target = innerTr;
+                        idecl.expr = exprDtypeString(irty);
+                        idecl.target_is_array = !ishape.empty();
+                        AccessInfo ishapeInfo;
+                        ishapeInfo.array_name = innerTr;
+                        for (auto &s : ishape)
+                          ishapeInfo.index_exprs.push_back(s);
+                        idecl.accesses.push_back(std::move(ishapeInfo));
+                        preNodes.push_back(std::move(idecl));
+
+                        ASTNode ilib;
+                        ilib.kind = "libcall";
+                        ilib.target = innerTr;
+                        ilib.target_is_array = !ishape.empty();
+                        ilib.callee = libcallNameForExprOp(od);
+                        for (auto iop : od->getOperands()) {
+                          auto in = traceToDecl(iop);
+                          // Only one-level nesting handled
+                          // here; deeper would need full
+                          // recursion (uncommon shape).
+                          ilib.call_args.push_back(in);
+                        }
+                        preNodes.push_back(std::move(ilib));
+                      }
+                      n = innerTr;
+                    }
+                  }
                 }
                 lib.call_args.push_back(n);
               }
@@ -464,6 +541,210 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
   if (_nm == "hlfir.no_reassoc" && def->getNumOperands() == 1)
     return buildExprWithSubscripts(def->getOperand(0), d + 1);
 
+  // ``hlfir.minval`` / ``maxval`` / ``sum`` / ``product`` over a
+  // CONSTANT-extent array section  --  unfold inline so the reduction
+  // stays parseable in an interstate-edge condition.  Without this,
+  // ``IF (k >= MINVAL(kmin(iv, :)))`` (ICON aes_graupel l341) hits
+  // the ``buildExpr`` fall-through and emerges as ``(k >= ?)``, which
+  // DaCe's symbolic engine then rejects when specialising symbols
+  // at SDFG-build time.  Capped at product-of-extents <= 64 to keep
+  // the unfolded expression bounded; larger or runtime-extent
+  // sections fall through to ``?`` (and are reported as such by
+  // the downstream emitter).
+  {
+    auto opName = def->getName().getStringRef();
+    struct RedSpec {
+      llvm::StringRef op;
+      llvm::StringRef pyOp;  // ``min`` / ``max`` (callable) or ``+`` / ``*``
+                             // (binary infix)
+      bool isBinop;
+    };
+    static const RedSpec kRedTbl[] = {
+        {"hlfir.minval", "min", false},
+        {"hlfir.maxval", "max", false},
+        {"hlfir.sum", "+", true},
+        {"hlfir.product", "*", true},
+    };
+    for (auto& e : kRedTbl) {
+      if (opName != e.op) continue;
+      if (def->getNumOperands() == 0) return "?";
+      auto src = def->getOperand(0);
+      while (auto cv =
+                 mlir::dyn_cast_or_null<fir::ConvertOp>(src.getDefiningOp()))
+        src = cv.getValue();
+      auto* sd = src.getDefiningOp();
+      if (!sd) return "?";
+
+      // ``hlfir.elemental`` source -- unfold the elemental body per
+      // index combination and combine with the reduction op.
+      // Surfaces in QE's ``IF (SUM((i - i_real) ** 2) > eps6)`` where
+      // the elemental computes ``(i[k] - i_real[k])**2`` for k=0..2
+      // and SUM reduces.  Constant-extent shape only (matches the
+      // designate branch's ``totalExtent <= 64`` budget).
+      if (auto elem = mlir::dyn_cast<hlfir::ElementalOp>(sd)) {
+        auto shapeVal = elem.getShape();
+        auto* shDef = shapeVal.getDefiningOp();
+        auto shapeOp = mlir::dyn_cast_or_null<fir::ShapeOp>(shDef);
+        if (!shapeOp) return "?";
+        std::vector<int64_t> extents;
+        int64_t total = 1;
+        for (auto extVal : shapeOp.getExtents()) {
+          auto ce = traceConstInt(extVal);
+          if (!ce) return "?";
+          extents.push_back(*ce);
+          total *= *ce;
+          if (total > 64) return "?";
+        }
+        auto &region = elem.getRegion();
+        if (region.empty()) return "?";
+        auto &block = region.front();
+        if (block.getNumArguments() != extents.size()) return "?";
+        // Find the yield_element op in the body once.
+        mlir::Value yielded;
+        for (auto &op : block) {
+          if (auto y = mlir::dyn_cast<hlfir::YieldElementOp>(op)) {
+            yielded = y.getElementValue();
+            break;
+          }
+        }
+        if (!yielded) return "?";
+        // Enumerate the index combinations (Fortran 1-based -> the
+        // ``buildExprWithSubscripts`` walk converts to 0-based at
+        // the access sites; here we push the index name as a literal
+        // Fortran-1-based integer string).
+        std::vector<int64_t> cur(extents.size(), 1);
+        auto incCur = [&]() -> bool {
+          for (int i = static_cast<int>(extents.size()) - 1; i >= 0; --i) {
+            if (cur[i] < extents[i]) { cur[i]++; return true; }
+            cur[i] = 1;
+          }
+          return false;
+        };
+        std::vector<std::string> elems;
+        do {
+          // Push iter -> value bindings for each block arg.
+          unsigned pushed = 0;
+          for (unsigned i = 0; i < block.getNumArguments(); ++i) {
+            indexStack().push_back(
+                {block.getArgument(i), std::to_string(cur[i])});
+            ++pushed;
+          }
+          std::string es = buildExprWithSubscripts(yielded, d + 1);
+          for (unsigned i = 0; i < pushed; ++i) indexStack().pop_back();
+          if (es.empty() || es.find('?') != std::string::npos) return "?";
+          elems.push_back(std::move(es));
+        } while (incCur());
+        if (elems.empty()) return "?";
+        std::string acc = elems[0];
+        for (size_t i = 1; i < elems.size(); ++i) {
+          if (e.isBinop)
+            acc = "(" + acc + " " + e.pyOp.str() + " " + elems[i] + ")";
+          else
+            acc = e.pyOp.str() + "(" + acc + ", " + elems[i] + ")";
+        }
+        return acc;
+      }
+
+      auto dg = mlir::dyn_cast<hlfir::DesignateOp>(sd);
+      if (!dg) return "?";
+      auto arr = traceToDecl(dg.getMemref());
+      if (arr.empty()) return "?";
+      auto triplets = dg.getIsTriplet();
+      auto allIdx = dg.getIndices();
+      if (triplets.empty()) return "?";
+      struct DimSpec {
+        bool isTriplet;
+        std::vector<int64_t> values;  // triplet  --  enumerated 1-based values
+        std::string scalarExpr;       // non-triplet  --  Fortran 1-based expr
+      };
+      std::vector<DimSpec> dims;
+      unsigned cursor = 0;
+      int64_t totalExtent = 1;
+      bool ok = true;
+      for (bool isT : triplets) {
+        DimSpec ds;
+        ds.isTriplet = isT;
+        if (isT) {
+          if (cursor + 3 > allIdx.size()) {
+            ok = false;
+            break;
+          }
+          auto cLo = traceConstInt(allIdx[cursor]);
+          auto cHi = traceConstInt(allIdx[cursor + 1]);
+          auto cSt = traceConstInt(allIdx[cursor + 2]);
+          if (!cLo || !cHi || !cSt || *cSt == 0) {
+            ok = false;
+            break;
+          }
+          int64_t lo = *cLo, hi = *cHi, st = *cSt;
+          if (st > 0)
+            for (int64_t v = lo; v <= hi; v += st) ds.values.push_back(v);
+          else
+            for (int64_t v = lo; v >= hi; v += st) ds.values.push_back(v);
+          if (ds.values.empty()) {
+            ok = false;
+            break;
+          }
+          totalExtent *= static_cast<int64_t>(ds.values.size());
+          if (totalExtent > 64) {
+            ok = false;
+            break;
+          }
+          cursor += 3;
+        } else {
+          if (cursor + 1 > allIdx.size()) {
+            ok = false;
+            break;
+          }
+          ds.scalarExpr = buildIndexExpr(allIdx[cursor], d + 1);
+          if (ds.scalarExpr.empty() || ds.scalarExpr == "?") {
+            ok = false;
+            break;
+          }
+          cursor += 1;
+        }
+        dims.push_back(std::move(ds));
+      }
+      if (!ok) return "?";
+      std::vector<size_t> cur(dims.size(), 0);
+      auto incCounters = [&dims](std::vector<size_t>& c) -> bool {
+        for (int i = static_cast<int>(dims.size()) - 1; i >= 0; --i) {
+          if (!dims[i].isTriplet) continue;
+          if (c[i] + 1 < dims[i].values.size()) {
+            c[i]++;
+            return true;
+          }
+          c[i] = 0;
+        }
+        return false;
+      };
+      std::vector<std::string> elems;
+      do {
+        std::string s = arr + "[";
+        bool first = true;
+        for (size_t i = 0; i < dims.size(); ++i) {
+          if (!first) s += ", ";
+          if (dims[i].isTriplet)
+            s += std::to_string(dims[i].values[cur[i]] - 1);
+          else
+            s += "(" + dims[i].scalarExpr + ") - 1";
+          first = false;
+        }
+        s += "]";
+        elems.push_back(std::move(s));
+      } while (incCounters(cur));
+      if (elems.empty()) return "?";
+      std::string acc = elems[0];
+      for (size_t i = 1; i < elems.size(); ++i) {
+        if (e.isBinop)
+          acc = "(" + acc + " " + e.pyOp.str() + " " + elems[i] + ")";
+        else
+          acc = e.pyOp.str() + "(" + acc + ", " + elems[i] + ")";
+      }
+      return acc;
+    }
+  }
+
   // fir.load of hlfir.designate: emit 0-based subscripts.  Peel
   // through any ``fir.convert`` (kind coercion, ref-shape rebox)
   // between the load and the designate  --  without this peel a chain
@@ -487,7 +768,15 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
     }
     if (auto md = mem.getDefiningOp())
       if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(md)) {
-        auto arr = traceToDecl(dg.getMemref());
+        // Pass the designate itself to ``traceToDecl`` so the
+        // component-aware walk fires for struct-field designates
+        // (``g % threshold``); element / section designates fall
+        // through to the parent name unchanged.  Previously
+        // ``traceToDecl(dg.getMemref())`` bypassed the component
+        // branch and returned the struct base ``g`` for the
+        // ``if (x > g % threshold)`` shape, leaking ``g`` as a
+        // free symbol into the interstate-edge condition.
+        auto arr = traceToDecl(dg.getResult());
         auto indices = dg.getIndices();
         if (arr.empty()) return "?";
         if (indices.empty()) return arr;
@@ -725,9 +1014,30 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block &block);
 /// scalar.  scf.yield of an i32 constant / boolean / computed expression  --
 /// just reuse buildExpr, which traces through arith ops and cast chains.
 std::string yieldedExpr(mlir::Value v) {
-  auto s = buildExpr(v, 0);
-  if (s == "?") s = buildBoolExpr(v, 0);
-  return s;
+  // The yielded value lands in an ``__sc_<N>`` interstate-edge
+  // assignment / scalar tasklet for a downstream conditional check
+  // (lift-cf-to-scf encodes Fortran ``if (...) early-return`` as
+  // scf.if yielding an i32 then trunci-tested at the surrounding
+  // scf.condition).  When the yielded value is an ``arith.andi`` of
+  // i1 cmp results -- the multi-element AND convergence check
+  // ``rsdnm(1) < tolrsd(1) .and. rsdnm(2) < tolrsd(2)`` -- buildExpr
+  // at expressions.cpp:1280-1288 sets ``NoSubscriptGuard`` and routes
+  // through ``buildBoolExpr``, stripping the per-cmp ``rsdnm[0]``
+  // subscripts from the assumption that emit_tasklet wires them via
+  // memlets.  But the snapshot assign here ends up in a tasklet
+  // body where the regex rewrite only touches BARE names -- the
+  // ``rsdnm < tolrsd`` cmpf renders as POINTER comparison in C++
+  // (rsdnm and tolrsd are ``double*`` arglist params), which is
+  // deterministic at runtime based on memory layout and silently
+  // breaks the early-return semantics (NPB LU's ssor istep loop:
+  // EVEN iter counts wrap to 1 iter, ODD counts iterate fully --
+  // see tests/lu_two_call_convergence_repro_test.py for the
+  // distilled repro).  Render with subscripts directly via
+  // ``buildBoolExpr`` so the leaf cmpf operands keep their
+  // ``arr[idx]`` form.
+  auto b = buildBoolExpr(v, 0);
+  if (b != "?") return b;
+  return buildExpr(v, 0);
 }
 
 }  // namespace hlfir_bridge

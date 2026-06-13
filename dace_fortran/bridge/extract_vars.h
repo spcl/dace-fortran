@@ -89,6 +89,21 @@ struct VarInfo {
   /// (those carry ``const_data`` instead).
   std::string module_origin_mod;
   std::string module_origin_name;
+  /// Fortran 2003 bounds-remapping pointer view metadata, populated when
+  /// ``hlfir-mark-bounds-remap-views`` tagged this pointer's declare.
+  /// ``bounds_remap_view`` is the gate; the other two fields are
+  /// meaningful only when it is ``true``.  ``bounds_remap_source`` is
+  /// the parent array's Fortran name (the rebox chain's root declare
+  /// resolved by ``extract_vars``); ``bounds_remap_total_extent`` is
+  /// the symbol / expression for the flat 1-D extent of the view
+  /// (e.g. ``"n*k"``).  Consumed by ``descriptors.py`` to emit
+  /// ``sdfg.add_view(name, shape=[total_extent], strides=[1])`` aliased
+  /// to the parent, and to mint a fresh ``offset_<name>_d0`` symbol
+  /// that the per-rebind interstate edge binds to the column-offset
+  /// arithmetic inferred from the rebox chain.
+  bool bounds_remap_view = false;
+  std::string bounds_remap_source;
+  std::string bounds_remap_total_extent;
 };
 
 /// Decode a Flang module-global mangled symbol of the form
@@ -122,8 +137,33 @@ struct ValueSymbol {
 /// Walk the module and build one VarInfo per hlfir.declare.  When
 /// ``value_symbols`` is non-null, also collect the array-element-as-symbol
 /// promotions encountered while resolving array extents (see ``ValueSymbol``).
+/// ``entry_symbol`` is the USER-PROVIDED entry name (as passed to
+/// ``set_entry_symbol``, e.g. ``_QMmodPkernel``); its F-scope anchors
+/// the on-demand scope qualification in ``extractName``.  Empty
+/// disables qualification (legacy / standalone callers).
 std::vector<VarInfo> extractVariables(
-    mlir::ModuleOp module, std::vector<ValueSymbol>* value_symbols = nullptr);
+    mlir::ModuleOp module, std::vector<ValueSymbol>* value_symbols = nullptr,
+    const std::string &entry_symbol = "");
+
+/// Prepare per-thread extraction state shared by ``extractVariables``
+/// and ``extractAST``: clears mangling overrides, installs entry F-scope,
+/// runs the multi-callsite ``_call<idx>`` disambiguation pass (Pass 0b),
+/// then builds the short-name collision set fed to ``extractName``.
+///
+/// Idempotent -- safe to call multiple times.  Both ``extractVariables``
+/// and ``extractAST`` invoke this at their entry; without it, calling
+/// ``extractAST`` standalone (or with a different module than the prior
+/// ``extractVariables``) would leak stale ``kEntryScope`` /
+/// ``kShortNameCollisions`` from the previous extraction.
+///
+/// Throws ``std::runtime_error`` if a user-declared Fortran variable's
+/// short name collides with a Fortran intrinsic the bridge renders
+/// inline (``min``, ``max``, ``sum``, ``sqrt`` etc.) -- the rewriter at
+/// ``emit_tasklet`` and the symbolic walker cannot disambiguate, so we
+/// fail fast with an explicit diagnostic instead of producing wrong
+/// numerics.
+void prepareExtractionState(mlir::ModuleOp module,
+                            const std::string &entry_symbol);
 
 /// One entry-subroutine dummy argument, in the caller's pre-flatten view.
 /// Produced by ``extractFortranInterface`` so the binding emitter can
@@ -144,6 +184,36 @@ struct FortranArgInfo {
   std::string struct_module;    // defining module (``mo_pt``) or ``""``
 };
 
+/// One field of a Fortran derived type used as an entry dummy.  Populated
+/// alongside :class:`FortranArgInfo` when the dummy is a derived-type:
+/// ``extractFortranInterface`` walks the ``fir::RecordType`` member list and
+/// records each member's caller-facing shape.  Read by the binding emitter
+/// (``build_auto_interface``) so a struct-arg interface can be auto-derived
+/// rather than hand-authored.
+struct FortranMemberInfo {
+  std::string name;     // member name (``a``)
+  std::string dtype;    // scalar element dtype, empty for unsupported (nested
+                        // struct, complex, character)
+  int rank = 0;
+  std::vector<std::string> shape_symbols;  // static-shape literal ints / "?"
+  std::string struct_name;    // for a nested-derived-type member: the
+                              // member type's name (``t_grid_cells``).  Lets
+                              // the Python side look the layout up in
+                              // ``OriginalInterface.struct_types``;
+                              // populated only when the member is itself a
+                              // ``fir.RecordType``.  Empty otherwise.
+  std::string struct_module;  // defining module of the nested type
+                              // (``mo_model_domain``), or ``""``.
+};
+
+/// One derived-type layout the entry's dummies reference.
+struct FortranStructLayout {
+  std::string name;     // ``t_fld``
+  std::string module;   // defining module (``mo_fld``), or ``""`` for a
+                        // host-associated / program-local type
+  std::vector<FortranMemberInfo> members;
+};
+
 /// The whole caller-facing surface of one entry: its dummies in order,
 /// plus the ``use <mod>, only: <syms>`` set the wrapper needs to resolve
 /// derived-type names and module-parameter array bounds.
@@ -151,6 +221,10 @@ struct FortranInterfaceInfo {
   std::vector<FortranArgInfo> args;
   /// module name -> referenced symbols (derived-type names + shape params).
   std::map<std::string, std::set<std::string>> used_modules;
+  /// struct name -> layout, one entry per distinct derived type that
+  /// appears in ``args`` (and whose ``fir::RecordType`` was reachable in
+  /// the entry's signature).
+  std::map<std::string, FortranStructLayout> struct_types;
 };
 
 /// Walk the entry function's block arguments IN ORDER and describe each
@@ -160,6 +234,13 @@ struct FortranInterfaceInfo {
 FortranInterfaceInfo extractFortranInterface(mlir::ModuleOp module,
                                              const std::string& entry);
 
+/// Index of every ``fir.allocmem`` keyed by its ``uniq_name``, built once with
+/// a single module walk.  Passing it to the helpers below replaces their
+/// per-variable ``module.walk`` with an O(1) lookup -- the difference between
+/// O(variables x module) and O(module + variables) when extracting a
+/// fully-inlined whole-program entry.
+using AllocSitesIndex = std::map<std::string, std::vector<fir::AllocMemOp>>;
+
 /// True iff the allocatable / pointer ``declName`` needs the
 /// per-variable ``<declName>_allocated`` int32 tracker scalar  --  i.e.
 /// either the kernel body writes it (an ALLOCATE / DEALLOCATE site
@@ -167,7 +248,13 @@ FortranInterfaceInfo extractFortranInterface(mlir::ModuleOp module,
 /// reader exists, lowered to ``fir.box_addr``).  Dummies passed in
 /// already-allocated and never queried by ``ALLOCATED(...)`` skip the
 /// tracker entirely.
-bool needsAllocatedTracker(const std::string& declName, mlir::ModuleOp module);
+///
+/// :param allocIdx: optional prebuilt alloc-site index (see above).
+/// :param readerNames: optional prebuilt set of short names with an
+///     ``ALLOCATED`` / ``ASSOCIATED`` reader.
+bool needsAllocatedTracker(const std::string& declName, mlir::ModuleOp module,
+                           const AllocSitesIndex* allocIdx = nullptr,
+                           const std::set<std::string>* readerNames = nullptr);
 
 /// Per-site name for an allocatable ``ALLOCATE``.  Site 0 keeps the
 /// original Fortran name (``x``); site 1+ mints synthetic transient
@@ -178,9 +265,11 @@ bool needsAllocatedTracker(const std::string& declName, mlir::ModuleOp module);
 std::string allocAliasName(const std::string& fortran, unsigned site);
 
 /// Every ``fir.allocmem`` whose ``uniq_name`` is ``<declName>.alloc`` (the
-/// ALLOCATE sites of one allocatable), in IR walk order.
+/// ALLOCATE sites of one allocatable), in IR walk order.  When ``idx`` is
+/// given the result comes from that prebuilt index instead of a module walk.
 std::vector<fir::AllocMemOp> collectAllocSites(const std::string& declName,
-                                               mlir::ModuleOp module);
+                                               mlir::ModuleOp module,
+                                               const AllocSitesIndex* idx = nullptr);
 
 /// True iff the ALLOCATE sites are mutually exclusive  --  each in a
 /// different branch of one common ``scf.if`` / ``fir.if`` (a conditional
@@ -198,6 +287,7 @@ bool allocSitesInExclusiveBranches(const std::vector<fir::AllocMemOp>& sites);
 /// extent symbol); a singleton class uses the site's concrete shape.  See
 /// ALLOC_BUFFER_SSA_DESIGN.md.
 std::vector<std::vector<fir::AllocMemOp>> groupAllocSites(
-    const std::string& declName, mlir::ModuleOp module);
+    const std::string& declName, mlir::ModuleOp module,
+    const AllocSitesIndex* idx = nullptr);
 
 }  // namespace hlfir_bridge

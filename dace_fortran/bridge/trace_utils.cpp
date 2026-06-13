@@ -33,13 +33,83 @@ void setManglingOverride(const std::string &mangled,
   kManglingOverride[mangled] = shortName;
 }
 
-void clearManglingOverrides() { kManglingOverride.clear(); }
+// Per-thread entry F-scope.  Set once per build by ``setEntryScope``,
+// consulted by ``extractName`` to scope-qualify every NON-entry-scope
+// declare's short name on demand.  Empty until set; in that case
+// ``extractName`` skips the scope-qualification (back-compat with
+// callers that haven't migrated to the new flow).
+static thread_local std::string kEntryScope;
+static thread_local std::set<std::string> kShortNameCollisions;
+
+void clearManglingOverrides() {
+  kManglingOverride.clear();
+  kEntryScope.clear();
+  kShortNameCollisions.clear();
+}
+
+void setEntryScope(const std::string &scope) { kEntryScope = scope; }
+
+void setShortNameCollisions(const std::set<std::string> &collisions) {
+  kShortNameCollisions = collisions;
+}
+
+std::string getFScope(const std::string &uniq) {
+  // Fortran mangled-name shape: ``_QM<mod>F<func>E<name>`` (with
+  // optional nested ``F`` segments for procedure-internal
+  // procedures).  Take the F immediately before the last E.
+  auto eP = uniq.rfind('E');
+  if (eP == std::string::npos) return {};
+  auto fP = uniq.rfind('F', eP);
+  if (fP == std::string::npos || fP + 1 >= eP) return {};
+  return uniq.substr(fP + 1, eP - fP - 1);
+}
 
 std::string extractName(const std::string &m) {
   auto it = kManglingOverride.find(m);
   if (it != kManglingOverride.end()) return it->second;
   auto p = m.rfind('E');
   std::string name = p != std::string::npos ? m.substr(p + 1) : m;
+
+  // Scope-qualify NON-entry-scope declares' short names on demand.
+  // Replaces the upfront inlined-callee disambiguator pass at
+  // ``extract_vars.cpp:1187`` (which only renamed ``fir.alloca``-
+  // backed declares -- missing the inlined PURE FUNCTION scalar
+  // dummies that arrive backed by the caller's loaded value, which
+  // surfaced as graupel's ``_in_qc_0`` unresolved-free-symbol bug).
+  //
+  // Rule: every declare in a non-entry F-scope gets ``<scope>_<short>``;
+  // entry-scope declares (the kernel's own dummies + locals) keep
+  // their bare short name so the SDFG signature matches the
+  // user-facing Fortran procedure interface.  Module globals
+  // (no F segment) keep their bare name -- they live in the
+  // entry's symbol-table sense.  Empty ``kEntryScope`` (set yet?
+  // legacy caller?) also keeps the bare name.
+  //
+  // Already-prefixed names (the old disambiguator's ``setAttr`` rename
+  // left some IRs with ``scope_short`` as the trailing E segment;
+  // the new logic would otherwise produce ``scope_scope_short``)
+  // are detected by checking whether ``name`` already starts with
+  // ``<scope>_``.
+  if (!kEntryScope.empty()) {
+    std::string scope = getFScope(m);
+    if (!scope.empty() && scope != kEntryScope) {
+      // Qualify ONLY when the short name actually collides across
+      // scopes.  ``kShortNameCollisions`` is populated by
+      // ``extractVariables`` from a pre-walk of every declare.
+      // Without this guard, qualifying every non-entry-scope
+      // declare creates EXTRA signature variables for unused
+      // inlined-callee dummies -- e.g. ``test_fortran_frontend_present``
+      // has ``tf2``'s OPTIONAL ``a`` folded by ``is_present`` so it
+      // never reaches a tasklet, but ``tf2_a`` still landed on the
+      // SDFG signature and broke the caller's ``a=5`` binding.
+      bool collides = kShortNameCollisions.count(name) > 0;
+      if (collides) {
+        std::string prefix = scope + "_";
+        if (name.compare(0, prefix.size(), prefix) != 0) name = prefix + name;
+      }
+    }
+  }
+
   // Sanitize dots  --  flang emits compiler-generated globals like
   // ``_QQro.4xi4.0`` (read-only constant pool for array literals)
   // whose names contain ``.``.  DaCe's ``NestedDict`` reserves
@@ -129,7 +199,76 @@ std::string traceToDecl(mlir::Value val, int max) {
     // through to the underlying memref so a reduce over an
     // ``hlfir.any %levmask(i_startblk:i_endblk, jk)`` resolves its
     // source array to ``levmask``.
+    //
+    // Struct field designates (``vcut % a``) are different: they
+    // carry a ``componentAttr`` naming the member.  Walking through
+    // would land on the struct base (``vcut``) -- which is NOT the
+    // flattened name the SDFG arglist uses (the bridge's
+    // hlfir-flatten-structs pass produces ``vcut_a`` for DUMMY
+    // args, and the bindings layer maps a MODULE-LEVEL struct
+    // global the same way).  Build the flattened name
+    // ``<parent>_<component>`` from this designate's component
+    // attribute and the recursively-traced parent name.  Mirrors
+    // the ``_QMmFvcut_getEvcut_a`` form Flang produces for the
+    // dummy-arg case AND the flat-name convention the SDFG
+    // arglist uses for module-level struct globals.  QE's
+    // ``vcut_get`` (called from ``g2_convolution`` over a module-
+    // level ``vcut`` global) was the surfacing case -- the libcall
+    // dispatcher's ``traceToDecl`` on the matmul's first operand
+    // had been returning the bare struct name ``vcut`` instead of
+    // ``vcut_a``, causing ``KeyError: 'vcut'`` at SDFG arglist
+    // lookup.
     if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(d)) {
+      if (auto comp = dg.getComponentAttr()) {
+        auto parent = traceToDecl(dg.getMemref(), max - i);
+        if (!parent.empty()) {
+          // Flat-name construction is just string join ``parent_member``.
+          // Flang's pointer-companion alloca uses a DOUBLE-underscore
+          // form (``dfftt__nl``) that doesn't collide with our
+          // single-underscore convention as long as Fortran member
+          // names don't start with ``_`` (which they can't -- Fortran
+          // identifiers must start with a letter).  In practice we
+          // walk the module's hlfir.declares for a companion whose
+          // uniq_name ends in ``E<parent>__<member>`` (the
+          // POINTER / ALLOCATABLE struct member snapshot path Flang
+          // synthesises) and prefer THAT name when found, so the
+          // SDFG arglist key matches what the rest of the pipeline
+          // registered.  Falls back to the single-underscore form
+          // when no companion exists (the common case).
+          std::string singleU = parent + "_" + comp.getValue().str();
+          bool wantPtr = false;
+          if (auto attrs = dg.getFortranAttrs()) {
+            auto fa = *attrs;
+            wantPtr =
+                bitEnumContainsAny(fa,
+                    fir::FortranVariableFlagsEnum::pointer) ||
+                bitEnumContainsAny(fa,
+                    fir::FortranVariableFlagsEnum::allocatable);
+          }
+          if (wantPtr) {
+            // Search the enclosing func.func / module for a declare
+            // whose uniq_name's E-scope short tail equals
+            // ``<parent>__<member>``.  Found -> use its name.
+            std::string doubleU = parent + "__" + comp.getValue().str();
+            auto *func =
+                dg->getParentOfType<mlir::func::FuncOp>().getOperation();
+            bool found = false;
+            if (func) {
+              mlir::dyn_cast<mlir::func::FuncOp>(func).walk(
+                  [&](hlfir::DeclareOp candidate) {
+                    if (found) return;
+                    auto un = candidate.getUniqName().str();
+                    auto eP = un.rfind('E');
+                    if (eP == std::string::npos) return;
+                    std::string tail = un.substr(eP + 1);
+                    if (tail == doubleU) found = true;
+                  });
+            }
+            if (found) return doubleU;
+          }
+          return singleU;
+        }
+      }
       val = dg.getMemref();
       continue;
     }
@@ -436,11 +575,59 @@ hlfir::DeclareOp asAssumedShapeAlias(hlfir::DeclareOp decl) {
   // callee-side shape) callees, the only difference being whether
   // the inner declare reissues a shape.  Either way the storage is
   // shared and downstream tracing should walk to the outer declare.
+  //
+  // Exception: rank-promotion / rank-reduction.  Fortran sequence
+  // association lets a caller pass a 1D array to a multi-D dummy
+  // (or vice versa) -- ssor's ``tv(N)`` flowing into buts's ``tv(5,
+  // M, K)`` is the canonical case.  The storage is shared but the
+  // dummy's accesses are at a DIFFERENT RANK than the source's
+  // descriptor; if we treat the dummy as a transparent alias then
+  // ``traceToDecl`` resolves a 3D ``hlfir.designate`` to the
+  // source's 1D name and the bridge emits a 3D memlet subset
+  // against a 1D array (unresolved per-dim offset symbols).  Refuse
+  // the alias collapse in that case so extract_vars mints a real
+  // VarInfo for the dummy and the view-alias path can wire it as
+  // a rank-promoted view over the source's flat storage.
+  // Strip ``fir.ref`` / ``fir.box`` / ``fir.heap`` / ``fir.ptr`` layers
+  // off a declare result type until we hit the underlying ``fir.array``
+  // (``fir.SequenceType``); read its rank.  Scalars and non-array
+  // types report rank 0.
+  auto rankOfDeclResult = [](mlir::Value v) -> int {
+    mlir::Type t = v.getType();
+    for (int i = 0; i < 8; ++i) {
+      if (auto refTy = mlir::dyn_cast<fir::ReferenceType>(t)) {
+        t = refTy.getEleTy();
+        continue;
+      }
+      if (auto bx = mlir::dyn_cast<fir::BoxType>(t)) {
+        t = bx.getEleTy();
+        continue;
+      }
+      if (auto hp = mlir::dyn_cast<fir::HeapType>(t)) {
+        t = hp.getEleTy();
+        continue;
+      }
+      if (auto pt = mlir::dyn_cast<fir::PointerType>(t)) {
+        t = pt.getEleTy();
+        continue;
+      }
+      break;
+    }
+    if (auto seq = mlir::dyn_cast<fir::SequenceType>(t))
+      return seq.getDimension();
+    return 0;
+  };
+  int innerRank = rankOfDeclResult(decl.getResult(0));
   auto mr = decl.getMemref();
   for (int i = 0; i < limits::kAliasMemrefWalkDepth && mr; ++i) {
     auto *d = mr.getDefiningOp();
     if (!d) break;
-    if (auto outer = mlir::dyn_cast<hlfir::DeclareOp>(d)) return outer;
+    if (auto outer = mlir::dyn_cast<hlfir::DeclareOp>(d)) {
+      int outerRank = rankOfDeclResult(outer.getResult(0));
+      if (innerRank > 0 && outerRank > 0 && innerRank != outerRank)
+        return {};
+      return outer;
+    }
     if (auto conv = mlir::dyn_cast<fir::ConvertOp>(d)) {
       mr = conv.getValue();
       continue;

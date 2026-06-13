@@ -21,6 +21,7 @@ std::unique_ptr<mlir::Pass> createPropagateShapesPass();
 std::unique_ptr<mlir::Pass> createInlineAllPass();
 std::unique_ptr<mlir::Pass> createLowerFirSelectCasePass();
 std::unique_ptr<mlir::Pass> createFlattenStructsPass();
+std::unique_ptr<mlir::Pass> createSplitAoRDummiesPass();
 std::unique_ptr<mlir::Pass> createDefaultIntentPass();
 std::unique_ptr<mlir::Pass> createVerifyNoUnresolvedCallsPass();
 std::unique_ptr<mlir::Pass> createFoldElementAliasesPass();
@@ -31,6 +32,16 @@ std::unique_ptr<mlir::Pass> createRewritePointerAssignsPass();
 std::unique_ptr<mlir::Pass> createRewriteSequenceAssociationPass();
 std::unique_ptr<mlir::Pass> createLiftReductionOperandsPass();
 std::unique_ptr<mlir::Pass> createLiftAllocArrayOfRecordsPass();
+std::unique_ptr<mlir::Pass> createLiftAosPointerRecordsPass();
+std::unique_ptr<mlir::Pass> createPruneUnreachablePass();
+std::unique_ptr<mlir::Pass> createMarshalExternalStructsPass();
+std::unique_ptr<mlir::Pass> createUnwrapEvalInMemPass();
+std::unique_ptr<mlir::Pass> createStripErrorHelpersPass();
+std::unique_ptr<mlir::Pass> createStripRuntimeIoPass();
+std::unique_ptr<mlir::Pass> createStripCharacterRuntimePass();
+std::unique_ptr<mlir::Pass> createPreserveMutableGlobalsPass();
+std::unique_ptr<mlir::Pass> createMarkBoundsRemapViewsPass();
+std::unique_ptr<mlir::Pass> createFoldAssumedRankQueriesPass();
 
 // --- Registry ---
 

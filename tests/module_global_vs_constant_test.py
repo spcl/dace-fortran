@@ -120,10 +120,21 @@ end module mod_cfg
     np.testing.assert_allclose(y_sdfg, y_ref, rtol=1e-12)
 
 
-def test_initialised_numeric_global_is_baked_with_provenance(tmp_path: Path):
-    """A read-only numeric module global WITH an initialiser bakes its
-    default into the constant pool (init_test relies on this), yet still
-    records module-origin provenance for a host override."""
+def test_initialised_numeric_global_is_caller_kwarg(tmp_path: Path):
+    """A read-only numeric module global -- even one WITH a source-level
+    initialiser -- surfaces as a non-transient caller kwarg.  The
+    source default is the value the caller would supply if it wants the
+    Fortran-source default behaviour; the binding layer can stage that
+    on the caller's behalf.  The SDFG still records module-origin
+    provenance so the host knows what symbol it's overriding.
+
+    Prior to ``hlfir-preserve-mutable-globals`` this initialiser was
+    baked into the constant pool and the global never reached the
+    arglist (a Fortran-source contract that prevented LU's ``dt`` and
+    every similar caller-pre-set module scalar from working).  The
+    write-based classifier now treats every non-PARAMETER, non-written
+    global as caller-supplied input; PARAMETER constants stay baked.
+    """
     src = """
 module mod_init
   implicit none
@@ -140,23 +151,30 @@ contains
 end module mod_init
 """
     sdfg = _build(src, tmp_path, "_QMmod_initPapply_init")
-    assert 'init_scale' not in sdfg.arglist(), "an initialised read-only global bakes its default"
+    assert 'init_scale' in sdfg.arglist(), \
+        "an initialised read-only global surfaces as a caller kwarg"
     assert _origin(sdfg, 'init_scale') == ('mod_init', 'init_scale'), \
-        "the baked default must still record provenance for a host override"
+        "the kwarg must record provenance so the host can spot its source"
 
     ref = f2py_compile(src, tmp_path / "ref", "init_ref")
     x = np.asfortranarray(np.arange(1, 5, dtype=np.float64))
     y_sdfg = np.zeros(4, dtype=np.float64, order='F')
-    y_ref = ref.mod_init.apply_init(x)  # uses the module default 2.5
-    sdfg(x=x, y=y_sdfg)  # uses the baked default 2.5
+    y_ref = ref.mod_init.apply_init(x)  # f2py uses the module's source default 2.5
+    # SDFG: caller supplies the same value the source declares as the default.
+    sdfg(x=x, y=y_sdfg, init_scale=np.array([2.5], dtype=np.float64, order='F'))
     np.testing.assert_allclose(y_sdfg, y_ref, rtol=1e-12)
 
 
-def test_initialised_logical_global_is_baked_with_provenance(tmp_path: Path):
+def test_initialised_logical_global_is_caller_kwarg(tmp_path: Path):
     """The ICON ``i_am_accel_node = .FALSE.`` shape: a read-only LOGICAL
-    module global with an initialiser bakes its default and records
-    provenance (regression guard -- logical-init globals must classify
-    exactly like numeric-init globals)."""
+    module global with an initialiser surfaces as a caller kwarg, same
+    as the numeric case above.
+
+    Prior to ``hlfir-preserve-mutable-globals`` a logical-init global
+    baked its default into the SDFG and was hidden from the caller.
+    The write-based classifier now treats it as input; the bindings
+    layer marshals the bool value into the length-1 buffer slot.
+    """
     src = """
 module mod_flag
   implicit none
@@ -177,14 +195,15 @@ contains
 end module mod_flag
 """
     sdfg = _build(src, tmp_path, "_QMmod_flagPapply_flag")
-    assert 'use_neg' not in sdfg.arglist(), "an initialised read-only logical bakes its default"
+    assert 'use_neg' in sdfg.arglist(), \
+        "an initialised read-only logical surfaces as a caller kwarg"
     assert _origin(sdfg, 'use_neg') == ('mod_flag', 'use_neg')
 
     ref = f2py_compile(src, tmp_path / "ref", "flag_ref")
     x = np.asfortranarray(np.arange(1, 5, dtype=np.float64))
     y_sdfg = np.zeros(4, dtype=np.float64, order='F')
     y_ref = ref.mod_flag.apply_flag(x)  # default .true. -> negate
-    sdfg(x=x, y=y_sdfg)
+    sdfg(x=x, y=y_sdfg, use_neg=np.array([True], dtype=np.bool_, order='F'))
     np.testing.assert_allclose(y_sdfg, y_ref, rtol=1e-12)
 
 

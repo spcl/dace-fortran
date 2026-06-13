@@ -250,20 +250,61 @@ std::pair<std::string, std::vector<DimEntry>> expandDesignateChain(
       parent_val = cv.getValue();
       continue;
     }
+    // Pointer / allocatable dereference: ``fir.load`` between two
+    // designates (QE L4 ``arr(ia) % box(ir)`` shape -- the inner
+    // ``box`` member is allocatable, so its access path is
+    // ``designate %component ; fir.load ; designate %element``).
+    // Walk through the load to find the underlying designate so
+    // the AoR chain stays connected.  Without this the walk
+    // breaks at the load and the record-index ``ia`` is lost
+    // from the AccessInfo.
+    if (auto ld = mlir::dyn_cast<fir::LoadOp>(def)) {
+      parent_val = ld.getMemref();
+      continue;
+    }
     auto parent = mlir::dyn_cast<hlfir::DesignateOp>(def);
     if (!parent) break;
     auto triplets = parent.getIsTriplet();
     if (triplets.empty()) {
-      // Element designate (every dim is a scalar)  --  collapse
-      // back to scalar dims.
-      std::vector<DimEntry> new_entries;
+      // Element designate (every dim is a scalar).  Two shapes
+      // bottom out here:
+      //
+      //   * Plain element access of an array (no further struct
+      //     designate inside):  the inner designate's indices are
+      //     dimensional element subscripts that supersede whatever
+      //     the inner had -- overwrite.
+      //
+      //   * Array-of-Records access where the inner is a COMPONENT
+      //     designate with its own field subscript
+      //     (``arr(i) % x(2)``): the parent's indices are the
+      //     RECORD-index (outer dim of the flat ``arr_x``), the
+      //     inner's are the FIELD-index (inner dim).  In Fortran
+      //     column-major, record runs fastest -- but the bridge's
+      //     SDFG arrays for static AoR keep the source order
+      //     (record on dim 0, field on dim 1, matching the
+      //     flat layout the flatten pass produces with shape
+      //     ``[N_records, N_field_elems]``).  PREPEND the parent's
+      //     indices to the existing entries so the flat
+      //     ``arr_x[i, 2]`` access carries both dims.
+      std::vector<DimEntry> parent_entries;
       auto pidxOps = parent.getIndices();
       for (unsigned d = 0; d < pidxOps.size(); ++d) {
         auto idx = pidxOps[d];
         auto n = resolveIndex(idx);
-        new_entries.push_back({n.empty() ? "?" : n, buildIndexExpr(idx, 0)});
+        parent_entries.push_back(
+            {n.empty() ? "?" : n, buildIndexExpr(idx, 0)});
       }
-      entries = std::move(new_entries);
+      // AoR component-chain discriminator: the inner designate has a
+      // componentAttr (struct field access).  In that case prepend.
+      // Otherwise overwrite (the plain nested-element case where the
+      // inner's indices already describe the same data view).
+      if (innermost.getComponentAttr()) {
+        std::vector<DimEntry> combined = std::move(parent_entries);
+        for (auto &e : entries) combined.push_back(std::move(e));
+        entries = std::move(combined);
+      } else {
+        entries = std::move(parent_entries);
+      }
       parent_val = parent.getMemref();
       continue;
     }
@@ -290,11 +331,40 @@ std::pair<std::string, std::vector<DimEntry>> expandDesignateChain(
         cursor += 1;
       }
     }
-    entries = std::move(new_entries);
+    // AoR shape: when the innermost designate has a componentAttr
+    // (struct field access) AND the parent has only scalar indices
+    // (all triplets[d]==false), the parent's indices are RECORD
+    // indices and the inner's are FIELD indices.  Concatenate them
+    // (record-first) for the flat ``arr_x[i, j]`` access.  Mirrors
+    // the empty-triplet AoR branch above; this covers parents whose
+    // ``getIsTriplet()`` returns a non-empty all-false array
+    // (Flang's runtime-indexed element-designate shape).
+    bool allScalar = true;
+    for (unsigned d = 0; d < triplets.size(); ++d)
+      if (triplets[d]) { allScalar = false; break; }
+    if (innermost.getComponentAttr() && allScalar) {
+      std::vector<DimEntry> combined = std::move(new_entries);
+      for (auto &e : entries) combined.push_back(std::move(e));
+      entries = std::move(combined);
+    } else {
+      entries = std::move(new_entries);
+    }
     parent_val = parent.getMemref();
   }
 
-  std::string array_name = traceToDecl(parent_val);
+  // For AoR / nested component chains
+  // (``arr(i) % x(j)``, ``arr(i) % inner % x(j)``, ...), prefer
+  // ``traceToDecl`` on the innermost designate's RESULT -- that
+  // recursion walks through every component designate and accumulates
+  // the FULL flat name (``arr_x``, ``arr_inner_x``, ...) matching the
+  // bridge's flatten convention.  Falls back to the parent-walk's
+  // ``parent_val`` only when no component is involved (plain element
+  // / section access on a non-struct array).
+  std::string array_name;
+  if (innermost.getComponentAttr()) {
+    array_name = traceToDecl(innermost.getResult());
+  }
+  if (array_name.empty()) array_name = traceToDecl(parent_val);
   if (array_name.empty()) array_name = traceToDecl(innermost.getMemref());
   return {std::move(array_name), std::move(entries)};
 }
@@ -400,9 +470,34 @@ void collectReadAccesses(mlir::Value v, std::vector<AccessInfo> &accesses,
 const char *libcallNameForExprOp(mlir::Operation *op) {
   if (!op) return nullptr;
   auto name = op->getName().getStringRef();
+  // The set MUST stay in sync with the libcall dispatcher's
+  // ``kLibTable`` at ``dispatch.cpp:2082`` -- every entry there that
+  // has an HLFIR op-name maps to an inline-libcall name here so the
+  // elemental + ``hlfir.apply`` materialisation in
+  // ``control_flow.cpp::walkElementalBody`` can pre-emit a
+  // ``_libtmp_<gid>`` transient for the result.  Without this entry,
+  // ``buildExpr`` sees the apply, falls through, and emits ``?`` into
+  // the tasklet body.  QE's ``vcut_get`` (inline matmul_transpose)
+  // was the surfacing case for the recent additions.
   if (name == "hlfir.matmul") return "matmul";
   if (name == "hlfir.transpose") return "transpose";
   if (name == "hlfir.dot_product") return "dot_product";
+  // ``hlfir.matmul_transpose`` is the fused ``MATMUL(TRANSPOSE(A), B)``
+  // op that ``hlfir-optimized-bufferization`` synthesises from the
+  // separate ``hlfir.matmul %T %B`` + ``%T = hlfir.transpose %A``
+  // pair.
+  if (name == "hlfir.matmul_transpose") return "matmul_transpose";
+  // Fortran ``COUNT(mask [, dim])`` -- CountLibraryNode.  The
+  // dispatcher path at ``dispatch.cpp::buildElementalCountLibcall``
+  // handles the elemental-mask case at the WHOLE-assign level; this
+  // entry covers the same op when it appears as an inline operand
+  // (e.g. ``res = COUNT(arr > 0) + 1``).
+  if (name == "hlfir.count") return "count";
+  // ``MINLOC`` / ``MAXLOC`` -- ArgMin / ArgMax library nodes.
+  if (name == "hlfir.minloc") return "argmin";
+  if (name == "hlfir.maxloc") return "argmax";
+  // ``CSHIFT(array, shift [, dim])`` -- circular shift.
+  if (name == "hlfir.cshift") return "cshift";
   return nullptr;
 }
 
@@ -425,11 +520,21 @@ std::vector<std::string> exprResultShape(mlir::Type ty) {
 /// Map an ``hlfir.expr<...>`` element type to FaCe's dtype string.
 /// Defaults to ``float64`` to keep callers simple  --  the caller would
 /// otherwise have to fall back to it anyway.
+///
+/// ``i1`` (boolean mask elements from COUNT / ANY / ALL elementals)
+/// surfaces as ``int32`` -- DaCe's CountLibraryNode and the
+/// ``Reduce.atomic`` over a boolean mask expect 0/1 integer
+/// elements, and the bridge's materialise loop emits
+/// ``dace.int32(<i1 yield>)`` to widen each element correctly.
+/// Other integer widths (i8 / i16) fall through to float64 -- no
+/// workload has surfaced those yet; if a future case needs them,
+/// add the explicit mapping here.
 std::string exprDtypeString(mlir::Type ty) {
   if (auto e = mlir::dyn_cast<hlfir::ExprType>(ty)) {
     auto elt = e.getElementType();
     if (elt.isF64()) return "float64";
     if (elt.isF32()) return "float32";
+    if (elt.isInteger(1)) return "int32";
     if (elt.isInteger(32)) return "int32";
     if (elt.isInteger(64)) return "int64";
   }
@@ -485,10 +590,20 @@ materialiseElementalToTransient(hlfir::ElementalOp elem,
   std::string trName =
       std::string(prefix) + std::to_string(kSynthTransientCounter++);
 
+  // Dtype follows the elemental's result element type via
+  // ``exprDtypeString`` (which now handles i1 -> int32 for the
+  // boolean mask elements COUNT / ANY / ALL produce).  Previously
+  // this was hardcoded ``int32`` because the helper was only used
+  // for those mask elementals; routing SUM / PRODUCT / MINVAL /
+  // MAXVAL of inline elementals (e.g. QE's
+  // ``SUM((a - b) ** 2)``) through the same path needs the
+  // elemental's real element type.
+  std::string dtype = exprDtypeString(elem.getType());
+
   ASTNode decl;
   decl.kind = "declare_transient";
   decl.target = trName;
-  decl.expr = "int32";
+  decl.expr = dtype;
   AccessInfo shape_info;
   shape_info.array_name = trName;
   for (unsigned i = 0; i < rank; ++i)
@@ -524,6 +639,130 @@ materialiseElementalToTransient(hlfir::ElementalOp elem,
       yielded = y.getElementValue();
       break;
     }
+
+  // Pre-walk for dim-reductions on the apply chain:
+  // ``hlfir.apply %sum_result, %i`` where ``%sum_result =
+  // hlfir.sum %inner_elem dim %k`` returns a vector that the outer
+  // elemental's body applies element-wise.  Without pre-materialisation,
+  // ``buildExpr(%apply)`` returns ``?`` because the ``hlfir.sum`` source
+  // is neither an inner elemental nor a libcall whose result already
+  // landed in ``kHlfirExprToTransient``.  QE's
+  // ``MINVAL(SQRT(SUM(a ** 2, 1)))`` shape (in ``vcut_spheric_get``)
+  // surfaces this as ``_out__mask_1 = sqrt(?)`` at
+  // emit_tasklet validation time.
+  //
+  // Strategy mirrors ``findApplies`` for libcalls (control_flow.cpp:289+):
+  // walk the body, find apply-of-reduction, materialise the inner
+  // elemental into a ``_libtmp_<gid>`` transient, emit a
+  // ``kind="reduce"`` AST node writing to a sibling transient, and
+  // register the reduction op in ``kHlfirExprToTransient`` so
+  // ``buildExpr``'s apply branch renders the apply as the transient's
+  // name.
+  std::vector<ASTNode> reductionPreNodes;
+  auto reduceWcrIdentity = [](mlir::Operation *op,
+                              std::string& wcr,
+                              std::string& identity) -> bool {
+    auto nm = op->getName().getStringRef();
+    if (nm == "hlfir.sum") {
+      wcr = "lambda a, b: a + b"; identity = "0"; return true;
+    }
+    if (nm == "hlfir.product") {
+      wcr = "lambda a, b: a * b"; identity = "1"; return true;
+    }
+    if (nm == "hlfir.minval") {
+      wcr = "lambda a, b: min(a, b)"; identity = "inf"; return true;
+    }
+    if (nm == "hlfir.maxval") {
+      wcr = "lambda a, b: max(a, b)"; identity = "-inf"; return true;
+    }
+    return false;
+  };
+  if (yielded) {
+    std::function<void(mlir::Value, int)> walkForReductions =
+        [&](mlir::Value v, int depth) {
+          if (depth > 40 || !v) return;
+          auto *op = v.getDefiningOp();
+          if (!op) return;
+          if (auto apply = mlir::dyn_cast<hlfir::ApplyOp>(op)) {
+            auto src = apply.getExpr();
+            auto *srcOp = src.getDefiningOp();
+            if (!srcOp) return;
+            if (kHlfirExprToTransient.count(srcOp)) return;
+            std::string wcr, identity;
+            if (!reduceWcrIdentity(srcOp, wcr, identity)) {
+              // Not a reduction -- recurse into operands.
+              for (auto operand : op->getOperands())
+                walkForReductions(operand, depth + 1);
+              return;
+            }
+            // Materialise the inner source.  If it's an elemental,
+            // run ``materialiseElementalForLibcall`` to get a
+            // transient that the reduce reads from; if it's a
+            // named array, use ``traceToDecl`` directly.
+            mlir::Value redSrc = srcOp->getOperand(0);
+            std::string redSrcName;
+            std::vector<ASTNode> srcMaterialNodes;
+            if (auto *rsd = redSrc.getDefiningOp()) {
+              if (auto innerElem =
+                      mlir::dyn_cast<hlfir::ElementalOp>(rsd)) {
+                auto [trName, mat_nodes] =
+                    materialiseElementalForLibcall(innerElem);
+                if (!trName.empty()) {
+                  redSrcName = std::move(trName);
+                  for (auto &mn : mat_nodes)
+                    srcMaterialNodes.push_back(std::move(mn));
+                }
+              }
+            }
+            if (redSrcName.empty()) redSrcName = traceToDecl(redSrc);
+            if (redSrcName.empty()) return;  // can't materialise; skip
+            // Mint the reduction's result transient.
+            std::string tmp = "_libtmp_" + std::to_string(kLibTmpCounter++);
+            kHlfirExprToTransient[srcOp] = tmp;
+            mlir::Type rty = srcOp->getResult(0).getType();
+            auto rshape = exprResultShape(rty);
+            ASTNode decl;
+            decl.kind = "declare_transient";
+            decl.target = tmp;
+            decl.expr = exprDtypeString(rty);
+            decl.target_is_array = !rshape.empty();
+            AccessInfo shapeInfo;
+            shapeInfo.array_name = tmp;
+            for (auto &s : rshape) shapeInfo.index_exprs.push_back(s);
+            decl.accesses.push_back(std::move(shapeInfo));
+            // Reduce AST node.
+            ASTNode red;
+            red.kind = "reduce";
+            red.target = tmp;
+            red.target_is_array = !rshape.empty();
+            red.reduce_src = redSrcName;
+            red.reduce_wcr = wcr;
+            red.reduce_identity = identity;
+            // ``dim`` is the second operand (1-based Fortran -> 0-based).
+            if (srcOp->getNumOperands() >= 2) {
+              auto dimV = srcOp->getOperand(1);
+              if (auto c = traceConstInt(dimV))
+                red.reduce_axes.push_back(*c - 1);
+            }
+            // Pre-nodes ordering: source materialisation first, then
+            // declare_transient, then the reduce that writes to it.
+            for (auto &n : srcMaterialNodes)
+              reductionPreNodes.push_back(std::move(n));
+            reductionPreNodes.push_back(std::move(decl));
+            reductionPreNodes.push_back(std::move(red));
+            // Continue recursion in case there's another reduction
+            // deeper (chained reductions).
+            for (auto operand : op->getOperands())
+              walkForReductions(operand, depth + 1);
+            return;
+          }
+          // Plain non-apply op -- recurse into all operands.
+          for (auto operand : op->getOperands())
+            walkForReductions(operand, depth + 1);
+        };
+    walkForReductions(yielded, 0);
+  }
+
   std::string body = "?";
   if (yielded) {
     // Tasklet-body mode: comparisons / loads emit bare names so
@@ -533,7 +772,16 @@ materialiseElementalToTransient(hlfir::ElementalOp elem,
     if (b == "?") b = buildExpr(yielded, 0);
     body = b;
   }
-  inner.expr = "dace.int32(" + body + ")";
+  // Wrap the per-element value in ``dace.int32(...)`` ONLY when
+  // the elemental yields a boolean (i1).  This is the COUNT /
+  // ANY / ALL mask path -- the i1 value widens to int32 (0/1)
+  // for the runtime mask buffer.  For SUM / PRODUCT / MINVAL /
+  // MAXVAL of an inline elemental over real / integer values
+  // (e.g. ``SUM((a - b) ** 2)``) the cast would silently truncate
+  // every materialised value to int32, breaking the reduction.
+  bool isI1Yield = false;
+  if (yielded && yielded.getType().isInteger(1)) isI1Yield = true;
+  inner.expr = isI1Yield ? ("dace.int32(" + body + ")") : body;
 
   if (yielded) collectReadAccesses(yielded, inner.accesses, 0);
 
@@ -551,7 +799,10 @@ materialiseElementalToTransient(hlfir::ElementalOp elem,
   }
 
   std::vector<ASTNode> nodes;
-  nodes.reserve(2);
+  nodes.reserve(2 + reductionPreNodes.size());
+  // Reduction pre-materialisation nodes go FIRST -- they declare the
+  // transients the elemental body's apply now reads from.
+  for (auto &n : reductionPreNodes) nodes.push_back(std::move(n));
   nodes.push_back(std::move(decl));
   nodes.push_back(std::move(current));
   return {std::move(trName), std::move(nodes)};

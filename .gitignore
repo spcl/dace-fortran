@@ -185,3 +185,58 @@ _all_tests/
 *.sdfgz
 .dacecache/
 .dacecache*/
+
+# In-test ICON build dir populated by tests/icon_dycore/setup_icon_dycore.sh
+# (captures compile_commands.json; consumed by test_solve_nonhydro_parse.py).
+.icon_build/
+
+# Whitelist Fortran sources that are *fixtures*, not build outputs.  The
+# global ``*.f90`` / ``*.F90`` patterns above suppress build-time scratch
+# files (test tmp_path emissions, .dacecache artefacts).  The NPB corpus
+# (and any future per-test Fortran fixtures) lives in tracked folders
+# and must be opted back in here.
+!tests/npb/**/*.F90
+!tests/npb/**/*.f90
+# ICON aes_graupel multi-file build (mo_aes_graupel + mo_aes_thermo +
+# mo_kind + mo_physical_constants).  Kept under tests/icon/graupel/ as
+# the canonical bridge test for the AES microphysics scheme.
+!tests/icon/graupel/**/*.f90
+# QE exx_bp::vexx_bp_k_gpu parse anchor (pre-processed flat .f90 from the
+# f2dace-qe-source repo's pruning pipeline).  Kept under tests/qe/exx_bp/.
+!tests/qe/exx_bp/**/*.f90
+# Standalone FFTW3 2-D / 3-D probe under tests/fft/.  Pinned as the bridge
+# anchor for FFTW3 call-site recognition (currently xfailed).
+!tests/fft/**/*.f90
+# BLAS / LAPACK / MPI-Alltoall frontend-recognition probes (one .f90 per
+# recognised callee).  Kept under tests/blas/, tests/lapack/, tests/mpi_alltoall/.
+!tests/blas/**/*.f90
+!tests/lapack/**/*.f90
+!tests/mpi_alltoall/**/*.f90
+# QE-style ``fwfft`` / ``invfft`` frontend-recognition probes.
+!tests/qe_fft/**/*.f90
+# AoS-of-pointer-records (Graupel t_qx_ptr pattern) + ``wp`` kind-alias
+# end-to-end probes for the hlfir-lift-aos-pointer-records pass.
+!tests/aos_pointer_records/**/*.f90
+# Fortran-intrinsic frontend-recognition probes (one .f90 per intrinsic
+# the bridge has to recognise + lower): argminmax (MINLOC/MAXLOC),
+# eoshift (EOSHIFT), cshift (CSHIFT), matmul_transpose (MATMUL of
+# TRANSPOSE fused pattern), norm2 (NORM2), reshape (RESHAPE), spread
+# (SPREAD).
+!tests/argminmax/**/*.f90
+!tests/eoshift/**/*.f90
+!tests/cshift/**/*.f90
+!tests/matmul_transpose/**/*.f90
+!tests/norm2/**/*.f90
+!tests/reshape/**/*.f90
+!tests/spread/**/*.f90
+# Bounds-remap-view probes: pin the IR-pattern claim that
+# view-semantics (pointer assign with bounds remap) and copy-
+# semantics (RESHAPE intrinsic, plain slice assign) are
+# structurally distinguishable in the HLFIR.
+!tests/bounds_remap_view/**/*.f90
+# Pattern 1 + Pattern 2 example sources (EXTERNAL -> module imports,
+# string-as-enum -> integer enum) referenced by the preprocess-pass
+# unit tests; live under their own tests dirs alongside the test
+# files.
+!tests/external_to_modules/**/*.f90
+!tests/string_enum_to_integer/**/*.f90
