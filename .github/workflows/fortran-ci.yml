@@ -25,8 +25,18 @@ jobs:
   test-fortran:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
     runs-on: ubuntu-24.04
+    env:
+      # Disable hwloc's GL/X11 backend so ``from mpi4py import MPI``
+      # (MPI_Init -> hwloc topology) doesn't probe a (possibly absent /
+      # hung) X display and block.  CPU/PCI topology -- all MPI needs --
+      # is unaffected.
+      HWLOC_COMPONENTS: "-gl"
     steps:
     - uses: actions/checkout@v4
+      with:
+        # The ICON-integration tests build the icon-model submodule on
+        # demand (the ``icon_build`` fixture); fetch it here.
+        submodules: recursive
 
     - uses: actions/setup-python@v5
       with:
@@ -49,8 +59,17 @@ jobs:
           libflang-21-dev flang-21 clang-21 \
           cmake ninja-build gfortran libgomp1 \
           libopenmpi-dev openmpi-bin \
-          libnetcdff-dev pkg-config \
+          libnetcdff-dev libnetcdf-dev libhdf5-dev \
+          libfyaml-dev libxml2-dev liblapack-dev libblas-dev \
+          pkg-config perl python3 \
           bear autoconf automake
+        # The ICON-integration tests configure + ``make`` the
+        # icon-model submodule on demand (the ``icon_build`` fixture).
+        # GRIB2/eccodes is DISABLED in that build (the dycore tests
+        # need only compiled ``.mod`` files, and eccodes' Fortran
+        # binding isn't shipped by stock ``libeccodes-dev``), so the
+        # libs above (netcdf-fortran, serial HDF5, fyaml, xml2,
+        # lapack/blas) are the full ICON-build dependency set.
         # bear + autotools drive the tier-3 prebuilt-HLFIR autotools
         # project (tests/prebuilt_hlfir/jacobi): bear -- make captures
         # compile_commands.json the way it would for ICON's build.
@@ -87,8 +106,12 @@ jobs:
       run: |
         export COVERAGE_RCFILE=`pwd`/.coveragerc
         # Main xdist sweep, excluding the multi-rank ``mpi`` tests
-        # (they need mpirun, not an xdist worker).
-        pytest -n auto -m "not mpi" --cov-report=xml --cov=dace_fortran --tb=short tests/
+        # (they need mpirun, not an xdist worker).  ``--dist loadgroup``
+        # honours the ``xdist_group`` markers so all ICON-build tests
+        # land on ONE worker (ICON gets configured + built exactly
+        # once); ungrouped tests distribute normally.
+        pytest -n auto --dist loadgroup -m "not mpi" \
+          --cov-report=xml --cov=dace_fortran --tb=short tests/
         coverage report || true
         coverage xml || true
         # MPI tests: 4 ranks oversubscribed onto the runner's cores

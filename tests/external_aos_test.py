@@ -31,11 +31,12 @@ from _util import build_sdfg, have_flang
 from dace_fortran.external import Arg, clear_external_registry, keep_external
 
 #: Standalone "fake" mo_velocity_advection (full velocity_tendencies + its USE
-#: closure as one file).  Outside the repo; the full-velocity test is gated on
-#: its presence (set ``VELOCITY_FULL_F90`` to override the default path).
+#: closure as one file).  Vendored in-repo at
+#: ``tests/icon/full/velocity_full.f90``; override with
+#: ``VELOCITY_FULL_F90`` to point at an out-of-tree copy.
 _VELOCITY_FULL = Path(os.environ.get(
     "VELOCITY_FULL_F90",
-    "/home/primrose/Work/icon-artifacts/velocity/velocity.f90"))
+    str(Path(__file__).resolve().parent / "icon" / "full" / "velocity_full.f90")))
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 

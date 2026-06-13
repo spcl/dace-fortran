@@ -101,6 +101,60 @@ else:
 
 import pytest
 
+
+# --- ICON build fixture --------------------------------------------------
+# The ICON-integration tests need a configured + ``make``-d ICON tree
+# (compiled ``.mod`` files under ``build/stock_cpu/mod`` + a Makefile
+# ``make -n`` can introspect).  Rather than gate them on an externally-
+# provisioned build (which made them SKIP on CI), they build ICON
+# themselves via this session-scoped fixture: ``ensure_icon_built`` is
+# idempotent + cached, so the configure + make runs at most once per
+# session and is a no-op when a build (developer tree or CI cache
+# restore) is already present.
+def pytest_collection_modifyitems(config, items):
+    """Pin every ICON-build test onto a SINGLE xdist worker.
+
+    The ``icon_build`` fixture configures + ``make``s ICON once per
+    worker (session-scoped).  Under ``pytest -n auto`` that would mean
+    one ICON build per worker that happens to receive an ICON test --
+    wasteful, and a cross-worker race on the shared tmp build dir
+    (the file lock in ``ensure_icon_built`` makes it safe, but still
+    serialises).  Assigning all ICON tests the same ``xdist_group``
+    makes ``--dist loadgroup`` schedule them onto ONE worker, so ICON
+    builds exactly once.  No-op without xdist / loadgroup.
+    """
+    for item in items:
+        if "icon_build" in getattr(item, "fixturenames", ()):  # uses the fixture
+            item.add_marker(pytest.mark.xdist_group("icon_build"))
+
+
+@pytest.fixture(scope="session")
+def icon_build():
+    """Configure + build the ICON submodule on demand; yield the build dir.
+
+    Resolves ICON source from ``ICON_SRC`` (default: the in-repo
+    submodule ``tests/icon/full/icon-model``) and the build location
+    from ``ICON_BUILD`` (default ``<src>/build/stock_cpu``).  Only
+    SKIPS when the submodule itself is not checked out -- a genuine
+    "nothing to build" state; with the submodule present it builds
+    (never silently skips).
+    """
+    here = Path(__file__).resolve().parent
+    icon_src = Path(os.environ.get(
+        "ICON_SRC", str(here / "icon" / "full" / "icon-model")))
+    if not (icon_src / "configure").is_file():
+        pytest.skip("icon-model submodule not checked out (run "
+                    "`git submodule update --init tests/icon/full/icon-model`)")
+    from icon.full._icon_build import ensure_icon_built, default_build_dir
+    # Build into TMP storage by default (no repo-tree pollution);
+    # ``ICON_BUILD`` overrides to a persistent / cached location.
+    icon_build_dir = default_build_dir()
+    build = ensure_icon_built(icon_src, icon_build_dir)
+    if build is None:
+        pytest.skip("icon-model submodule not checked out")
+    return build
+
+
 # --- f2py-reference teardown-crash guard ---------------------------------
 # The e2e tests import f2py-compiled reference extension modules and never
 # unload them.  At CPython finalisation numpy's teardown races those

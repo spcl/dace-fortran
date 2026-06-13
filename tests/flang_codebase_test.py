@@ -9,8 +9,10 @@ from ``make -n``, source merging from ICON's own ``src/`` +
 to HLFIR cleanly under flang-21.  Skipped if no ICON checkout, no
 flang, or no OpenMPI.
 """
+import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -26,15 +28,28 @@ from dace_fortran.flang_codebase import (
     prepare_flang_translation_unit,
 )
 
-_ICON_SRC = Path("/home/primrose/Work/icon-model-public")
-_ICON_BUILD = _ICON_SRC / "build" / "stock_cpu"
-_VELOCITY_BAK = _ICON_SRC / "src" / "atm_dyn_iconam" / "mo_velocity_advection.f90.bak"
+# ICON source.  Defaults to the in-repo submodule
+# (``tests/icon/full/icon-model``); override with ``ICON_SRC`` for a
+# local out-of-tree checkout.  The BUILD dir is owned by the
+# ``icon_build`` fixture (root conftest.py), which builds into TMP
+# storage on demand -- no repo-tree pollution.
+_ICON_SRC = Path(os.environ.get(
+    "ICON_SRC", str(Path(__file__).resolve().parent / "icon" / "full" / "icon-model")))
+_VELOCITY_SRC = _ICON_SRC / "src" / "atm_dyn_iconam" / "mo_velocity_advection.f90"
+_VELOCITY_BAK = _VELOCITY_SRC.with_suffix(".f90.bak")
 
-_CACHE_DIR = Path("/home/primrose/.cache/dace-fortran")
+_CACHE_DIR = Path(os.environ.get(
+    "DACE_FORTRAN_CACHE", str(Path(tempfile.gettempdir()) / "dace-fortran-cache")))
+
+# Prefer the pristine ``.bak`` if a developer left one; otherwise the
+# submodule's own (pristine) source is fine.
+_VELOCITY_REF = _VELOCITY_BAK if _VELOCITY_BAK.is_file() else _VELOCITY_SRC
 
 _HAVE_FLANG = shutil.which("flang-new-21") is not None
-_HAVE_ICON = _ICON_BUILD.is_dir() and _VELOCITY_BAK.is_file()
 _HAVE_OPENMPI = find_openmpi_include() is not None
+# The ``icon_build`` session fixture (root conftest.py) configures +
+# builds ICON on demand and yields the build dir; the ICON ``.mod``
+# tree is therefore NOT required upfront here.
 
 # ---------------------------------------------------------------------------
 # Stand-alone tests for the individual helpers.
@@ -102,12 +117,12 @@ def test_prepare_translation_unit_rejects_unknown_patch():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _HAVE_ICON, reason="ICON checkout not present at the standard path")
-def test_extract_make_compile_args_for_icon_velocity():
+def test_extract_make_compile_args_for_icon_velocity(icon_build):
     """``make -n`` against an ICON build dir yields the same ``-D`` /
     ``-I`` set that ICON's own gfortran invocation uses for the
-    velocity object file."""
-    args = extract_make_compile_args(makefile_dir=_ICON_BUILD, target="src/atm_dyn_iconam/mo_velocity_advection.o")
+    velocity object file.  The ``icon_build`` fixture configures +
+    builds ICON on demand."""
+    args = extract_make_compile_args(makefile_dir=icon_build, target="src/atm_dyn_iconam/mo_velocity_advection.o")
     # ICON's recognisable feature-disable defines.
     assert "__ICON__" in args["defines"]
     assert "__NO_JSBACH__" in args["defines"]
@@ -119,16 +134,16 @@ def test_extract_make_compile_args_for_icon_velocity():
     assert src_include in args["include_dirs"]
 
 
-@pytest.mark.skipif(not (_HAVE_ICON and _HAVE_FLANG and _HAVE_OPENMPI),
-                    reason="needs ICON checkout + flang-new-21 + OpenMPI")
-def test_prepare_translation_unit_flang_clean_on_icon_velocity(tmp_path: Path):
+@pytest.mark.skipif(not (_HAVE_FLANG and _HAVE_OPENMPI),
+                    reason="needs flang-new-21 + OpenMPI")
+def test_prepare_translation_unit_flang_clean_on_icon_velocity(tmp_path: Path, icon_build):
     """Compose a TU for ICON's real ``mo_velocity_advection.f90`` via
     the helpers and verify flang-21 lowers it to HLFIR with zero
     errors.  This is the load-bearing assertion: it pins the entire
     recipe (merge + stubs + patches + extracted defines) as a
-    regression gate."""
-    args = extract_make_compile_args(makefile_dir=_ICON_BUILD, target="src/atm_dyn_iconam/mo_velocity_advection.o")
-    entry = _VELOCITY_BAK.read_text()
+    regression gate.  The ``icon_build`` fixture builds ICON on demand."""
+    args = extract_make_compile_args(makefile_dir=icon_build, target="src/atm_dyn_iconam/mo_velocity_advection.o")
+    entry = _VELOCITY_REF.read_text()
     tu, flang_flags = prepare_flang_translation_unit(
         entry,
         search_dirs=[

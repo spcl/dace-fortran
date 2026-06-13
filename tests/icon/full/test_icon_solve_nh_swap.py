@@ -162,12 +162,10 @@ def test_write_patched_solve_nh(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(
-    not (_HAVE_ICON and _HAVE_ICON_MODS),
-    reason="icon-model submodule + a stock ICON CPU build "
-           "(populating $ICON_BUILD/mod) are required")
+@pytest.mark.skipif(not _HAVE_ICON,
+                    reason="icon-model submodule not checked out")
 @pytest.mark.parametrize("fc", FORTRAN_COMPILERS)
-def test_patched_source_parses_through_fortran_compiler(fc, tmp_path: Path):
+def test_patched_source_parses_through_fortran_compiler(fc, tmp_path: Path, icon_build):
     """The Fortran compiler accepts the patched file (syntax-only)
     against ICON's own ``.mod`` files.  Parametrized over every
     compiler available on the host so a future binding-shim signature
@@ -191,7 +189,7 @@ def test_patched_source_parses_through_fortran_compiler(fc, tmp_path: Path):
     # ``mod/mo_kind.mod``; if it carries a gfortran-shape mod, only
     # gfortran can read it.  Detect the mod-format mismatch up front
     # so the test skips cleanly rather than reporting a bogus error.
-    mod_probe = _ICON_BUILD / "mod" / "mo_kind.mod"
+    mod_probe = icon_build / "mod" / "mo_kind.mod"
     if mod_probe.is_file():
         header = mod_probe.read_bytes()[:64]
         is_gfortran_mod = header.startswith(b"\x1f\x8b") or b"GFORTRAN module" in header
@@ -203,13 +201,13 @@ def test_patched_source_parses_through_fortran_compiler(fc, tmp_path: Path):
     write_patched_solve_nh(_real_source(), out)
 
     mod_dirs = [
-        _ICON_BUILD / "mod",
-        _ICON_BUILD / "externals/fortran-support/build/src/mod",
-        _ICON_BUILD / "externals/iconmath/build/src/support/mod",
-        _ICON_BUILD / "externals/iconmath/build/src/horizontal/mod",
-        _ICON_BUILD / "externals/iconmath/build/src/interpolation/mod",
-        _ICON_BUILD / "externals/memman/build/_icon/src/bindings/fortran/mod",
-        _ICON_BUILD / "externals/mtime/build/src/mod",
+        icon_build / "mod",
+        icon_build / "externals/fortran-support/build/src/mod",
+        icon_build / "externals/iconmath/build/src/support/mod",
+        icon_build / "externals/iconmath/build/src/horizontal/mod",
+        icon_build / "externals/iconmath/build/src/interpolation/mod",
+        icon_build / "externals/memman/build/_icon/src/bindings/fortran/mod",
+        icon_build / "externals/mtime/build/src/mod",
     ]
     include_flags = [f"-I{d}" for d in mod_dirs if d.is_dir()]
     include_flags.append(f"-I{_ICON_SRC}/src/include")

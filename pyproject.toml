@@ -74,6 +74,7 @@ markers = [
     "long: Test runs for a long time and is skipped in CI (select with '-m \"long\"')",
     "sequential: Test must be run sequentially (select with '-m \"sequential\"')",
     "mpi: Multi-rank MPI test; excluded from the normal sweep, run under mpirun (select with '-m \"mpi\"')",
+    "xdist_group: pytest-xdist load-group marker (ICON-build tests share one worker via --dist loadgroup)",
 ]
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
