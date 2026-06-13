@@ -715,9 +715,20 @@ def emit_cond(builder, ctx: '_Ctx', n, region):
     # array pointer.  Subscript each one to read element 0.  Scalar
     # INPUTS (``intent(in)`` / ``VALUE``) are true Scalars and need no
     # subscript -- they're addressable as the bare name in C++.
-    for nm, v in builder.scalars.items():
-        if v.intent in ('out', 'inout'):
-            cond = re.sub(rf'\b{re.escape(nm)}\b', f"{nm}[0]", cond)
+    #
+    # Skip when the condition will be lifted into a tasklet
+    # (downstream array-read path): emit_tasklet's
+    # ``_rewrite_read_connectors`` handles scalar connectors as
+    # ``_in_<nm>`` -- a textual ``[0]`` already in the body would
+    # leak through as ``_in_<nm>[0]`` and fail validation as a
+    # subscript-on-scalar (the IndexError that surfaced
+    # test_sqrt_in_if / test_exp_in_if).
+    will_lift = bool(n.accesses) and any(
+        ac.is_read and ac.array_name in builder.arrays for ac in n.accesses)
+    if not will_lift:
+        for nm, v in builder.scalars.items():
+            if v.intent in ('out', 'inout'):
+                cond = re.sub(rf'\b{re.escape(nm)}\b', f"{nm}[0]", cond)
 
     # Hoist non-trivial conditions to a pre-state symbol so the
     # ConditionalBlock branch carries only a symbol name -- one path
