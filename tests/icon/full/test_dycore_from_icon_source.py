@@ -502,15 +502,13 @@ def test_sync_iso_c_wrapper_full_compile_link(fc, tmp_path: Path):
             f"{sym!r}; nm -D output:\n{sym_out}")
 
 
-@pytest.mark.skipif(
-    not _have_icon() or not (_ICON_BUILD / "mod").is_dir(),
-    reason="icon-model submodule not built; the wrapper's USE imports "
-           "need ICON's .mod files (run a stock CPU make under ICON_BUILD)")
-def test_sync_iso_c_wrapper_builds_against_icon_mods(tmp_path: Path):
+@pytest.mark.skipif(not _have_icon(),
+                    reason="icon-model submodule not checked out")
+def test_sync_iso_c_wrapper_builds_against_icon_mods(tmp_path: Path, icon_build):
     """Build the wrapper into ``libicon_sync_iso_c.so`` against ICON's
-    own ``.mod`` files.  This is the artifact the integration step
-    links into ICON at run time."""
-    so_path = build_icon_sync_iso_c_so(_ICON_BUILD, out_dir=tmp_path)
+    own ``.mod`` files.  The ``icon_build`` fixture configures + builds
+    ICON on demand so the ``.mod`` ``-I`` set exists."""
+    so_path = build_icon_sync_iso_c_so(icon_build, out_dir=tmp_path)
     assert so_path is not None
     assert so_path.is_file()
     # Sanity: ELF, has our bind(c) symbols
