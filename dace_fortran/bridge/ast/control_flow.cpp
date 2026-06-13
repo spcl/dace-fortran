@@ -310,6 +310,42 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign,
               lib.target = tmp;
               lib.target_is_array = !shape.empty();
               lib.callee = callee;
+              // CSHIFT as an EXPR-PRODUCER (``2.0 - CSHIFT(arr, 1)``):
+              // the shift is a SCALAR that belongs in ``options["shift"]``
+              // (the dim in ``reduce_axes``), NOT a ``call_args`` array
+              // operand.  ``buildLibCallNode`` already does this for the
+              // whole-array assign form; mirror it here.  Without this,
+              // ``options["shift"]`` stays empty, ``emit_library`` builds
+              // the ``CShift`` node with ``shift=None``, and the pure
+              // expansion falls back to the ``__shift`` symbol -- which
+              // is referenced in the memlet subset but never assigned, so
+              // it leaks as a free symbol (``KeyError: '__shift'``).
+              if (auto cshOp = mlir::dyn_cast<hlfir::CShiftOp>(srcOp)) {
+                auto arrName = traceToDecl(cshOp.getArray());
+                if (arrName.empty())
+                  if (auto *ad = cshOp.getArray().getDefiningOp())
+                    if (auto ae = mlir::dyn_cast<hlfir::ElementalOp>(ad)) {
+                      auto [trName, mat] = materialiseElementalForLibcall(ae);
+                      if (!trName.empty()) {
+                        for (auto &mn : mat) preNodes.push_back(std::move(mn));
+                        arrName = std::move(trName);
+                      }
+                    }
+                lib.call_args.push_back(arrName);
+                auto shiftVal = cshOp.getShift();
+                if (auto c = traceConstInt(shiftVal))
+                  lib.options["shift"] = std::to_string(*c);
+                else {
+                  auto sExpr = buildIndexExpr(shiftVal, 0);
+                  if (!sExpr.empty() && sExpr != "?")
+                    lib.options["shift"] = sExpr;
+                }
+                if (auto dim = cshOp.getDim())
+                  if (auto c = traceConstInt(dim))
+                    lib.reduce_axes.push_back(*c - 1);
+                preNodes.push_back(std::move(lib));
+                return;
+              }
               for (auto operand : srcOp->getOperands()) {
                 auto n = traceToDecl(operand);
                 if (n.empty()) {

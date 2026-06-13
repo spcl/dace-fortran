@@ -66,18 +66,14 @@ end module
     np.testing.assert_allclose(res, (A.T @ q) / 2.0)
 
 
-@pytest.mark.xfail(strict=False,
-                   reason=("Bridge materialisation works (cshift is now in "
-                           "libcallNameForExprOp), but the downstream "
-                           "CShiftLibraryNode's pure expansion is not yet "
-                           "implemented in d-face -- see "
-                           "libraries/standard/nodes/cshift.py.  When that "
-                           "expansion lands (single Map with Mod-indexed "
-                           "memlet) this test flips to passing."))
 def test_inline_cshift_in_elemental(tmp_path):
-    """``2.0 - CSHIFT(arr, 1)`` -- the cshift expr-producer feeds
-    an elemental's apply through the new entry in
-    ``libcallNameForExprOp``."""
+    """``2.0 - CSHIFT(arr, 1)`` -- the cshift expr-producer feeds an
+    elemental's apply.  The bridge stashes the shift into
+    ``options['shift']`` (so the ``CShift`` node gets the concrete
+    shift, not the ``__shift`` fallback symbol that would leak as a
+    free symbol) and d-face's ``ExpandCShiftPure`` lowers it to a
+    single Map whose source memlet subset is the ``Mod``-rotated
+    index."""
     src = """
 module m
 contains
