@@ -55,6 +55,21 @@ std::string buildIndexExpr(mlir::Value v, int d) {
   if (auto conv = mlir::dyn_cast<fir::ConvertOp>(def))
     return buildIndexExpr(conv.getValue(), d + 1);
 
+  // Integer width casts (``arith.extsi`` / ``extui`` / ``trunci``) are
+  // transparent in an index context -- they appear when Flang extends
+  // an ``i32`` loop counter to ``i64`` for subscripting (``arr(i)``
+  // with ``i`` declared ``integer(4)``) and emits the cast as an
+  // ``arith.*`` op rather than ``fir.convert``.  Without this pass-
+  // through the index bottoms out at ``?``.  (``buildExpr`` already
+  // treats these as transparent; mirror it here.)
+  {
+    auto cn = def->getName().getStringRef();
+    if ((cn == "arith.extsi" || cn == "arith.extui" ||
+         cn == "arith.trunci") &&
+        def->getNumOperands() == 1)
+      return buildIndexExpr(def->getOperand(0), d + 1);
+  }
+
   // ``hlfir.apply %elem, %i`` used as a designate index (e.g. the
   // gather elemental ``cols(arg2)`` produced for noncontiguous slice
   // arguments).  Inline the referenced elemental's body and recurse
@@ -366,6 +381,15 @@ std::string buildIndexExpr(mlir::Value v, int d) {
   static const std::map<llvm::StringRef, std::string> int_bin = {
       {"arith.addi", " + "},   {"arith.subi", " - "},   {"arith.muli", " * "},
       {"arith.divsi", " // "}, {"arith.divui", " // "},
+      // ``MOD(i, k)`` in an index expression (``arr(mod(i,2)+1)``)
+      // lowers to ``arith.remsi`` / ``arith.remui``.  Render as Python
+      // ``%`` -- sympy maps it to ``Mod``, which the memlet-subset
+      // engine accepts.  Fortran ``MOD`` truncates toward zero and
+      // Python ``%`` floors; they agree for non-negative operands,
+      // which every valid array index is (index >= lbound >= 1, and
+      // ``mod(i,k)+1`` only produces a valid subscript when ``i`` is
+      // non-negative).
+      {"arith.remsi", " % "},  {"arith.remui", " % "},
   };
   if (auto it = int_bin.find(nm);
       it != int_bin.end() && def->getNumOperands() == 2) {

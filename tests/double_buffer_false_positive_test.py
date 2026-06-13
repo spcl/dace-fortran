@@ -226,15 +226,10 @@ end module
     assert not bad_names, f"false-positive on same-symbol repeated use: {bad_names}"
 
 
-@pytest.mark.xfail(strict=False,
-                   reason=("Computed expression ``arr(mod(i, 2) + 1) % w`` -- "
-                           "the bridge's ``splitDoubleBufferMembers`` would "
-                           "need to recognise that ``mod(i, 2) + 1`` is not a "
-                           "stable buffer symbol.  Currently may false-positive "
-                           "depending on the symbolic-folding state."))
 def test_no_split_for_computed_index_expression(tmp_path):
     """``arr(mod(i, 2) + 1) % w`` -- computed expression, not a stable
-    symbol.  Split should not fire."""
+    symbol.  Split should not fire, AND the ``MOD`` index must render
+    (``arith.remsi`` -> Python ``%``) instead of bottoming out at ``?``."""
     src = """
 module m
   type :: t
