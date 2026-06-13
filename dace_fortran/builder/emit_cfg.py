@@ -678,15 +678,80 @@ def emit_while(builder, ctx: '_Ctx', n, region):
     condition is ``True`` (the bridge's faithful walker folds any
     break-on-false into a ``break`` child node inside the body).
     """
-    ctx.flush(builder, region)
+    pre = ctx.flush_and_ensure(builder, region)
     # ``?`` is the bridge's placeholder for an unextractable condition.
     # Default to ``True`` so ast.parse succeeds and leaves the faithful
     # structure visible in the SDFG for inspection.
     cond = n.condition if n.condition and n.condition != "?" else "True"
+
+    # Mirror the ``emit_cond`` cond-rewrite pipeline so a real
+    # ``DO WHILE (a(i) > thr)`` doesn't relapse the bugs already
+    # fixed for ``IF``.  Today the bridge folds break-on-false into
+    # ``break`` nodes and sends ``True`` here -- but the day a real
+    # condition lands, every gap below was an emit_cond fix:
+    cond = _rewrite_section_aliases_in_expr(builder, cond)
+
+    # When the condition references arrays, lift it through a
+    # tasklet-into-scalar-transient (same per-occurrence connector
+    # machinery emit_tasklet uses for assigns) so the array reads
+    # get proper memlets instead of bare-pointer interstate-edge
+    # free symbols.  The scalar-``[0]`` rewrite for inout scalars
+    # is skipped on the lift path (would survive past the rewriter
+    # and surface as ``_in_<nm>[0]`` against a scalar connector).
+    cond_accesses = []
+    if n.accesses:
+        seen_acc = set()
+        for ac in n.accesses:
+            key = (ac.array_name, tuple(ac.index_exprs), ac.is_read)
+            if key in seen_acc:
+                continue
+            seen_acc.add(key)
+            cond_accesses.append(ac)
+    cond_array_reads = [ac for ac in cond_accesses
+                        if ac.is_read and ac.array_name in builder.arrays]
+    will_lift = bool(cond_array_reads)
+    if will_lift:
+        from collections import Counter
+        text_occ = Counter()
+        for tok in re.findall(r'\b([A-Za-z_]\w*)\b', cond):
+            if tok in builder.arrays:
+                text_occ[tok] += 1
+        access_count = Counter()
+        for ac in cond_array_reads:
+            access_count[ac.array_name] += 1
+        mismatched = any(text_occ[k] != access_count[k]
+                         for k in set(text_occ) | set(access_count))
+        if mismatched:
+            will_lift = False
+    if not will_lift:
+        # Legacy path: rewrite intent(out)/inout scalars to ``nm[0]``
+        # so the LoopRegion's condition_expr reads the size-1
+        # backing array's element 0.
+        for nm, v in builder.scalars.items():
+            if v.intent in ('out', 'inout'):
+                cond = re.sub(rf'\b{re.escape(nm)}\b', f"{nm}[0]", cond)
+
+    if will_lift and not _is_trivial_bound(cond):
+        from types import SimpleNamespace
+        sym = f"while_cond_{builder.nid()}"
+        ctx.sdfg.add_transient(sym, (1, ), dace.int64, find_new_name=False)
+        pre = _anchor_views_referenced_in_expr(builder, cond, region, pre, ctx.sdfg)
+        nxt = region.add_state(f"pre_{sym}")
+        region.add_edge(pre, nxt, InterstateEdge())
+        ctx.cur = nxt
+        synth = SimpleNamespace(
+            kind='assign', target=sym, expr=cond,
+            target_is_array=True, accesses=cond_accesses,
+        )
+        from dace_fortran.builder.emit_tasklet import emit_tasklet
+        emit_tasklet(builder, nxt, synth, builder.nid(), ctx.iter_map)
+        pre = nxt
+        cond = f"{sym}[0]"
+
     loop = LoopRegion(label=f"while_{builder.nid()}", condition_expr=cond)
     region.add_node(loop)
-    if ctx.cur is not None:
-        region.add_edge(ctx.cur, loop, InterstateEdge())
+    if pre is not None:
+        region.add_edge(pre, loop, InterstateEdge())
     ctx.cur = loop
 
     body_start = loop.add_state(f"while_body_{builder.nid()}", is_start_block=True)

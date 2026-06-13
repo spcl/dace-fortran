@@ -1638,18 +1638,30 @@ std::string buildExpr(mlir::Value val, int d) {
         // constants the user flagged.  Try shortest -> longer and
         // accept the first that round-trips.
         double dv = f.getValueAsDouble();
-        for (int prec = 1; prec <= 17; ++prec) {
-          std::ostringstream o;
-          o << std::setprecision(prec) << dv;
-          if (std::strtod(o.str().c_str(), nullptr) == dv) {
-            lit = o.str();
-            break;
+        // ``-0.0`` short-circuit: IEEE 754 says ``-0.0 == +0.0`` so
+        // the round-trip loop below would accept ``"0"`` -> +0.0 and
+        // silently drop the sign.  But the sign IS observable in
+        // ``1.0/x`` (-> -inf vs +inf), ``ATAN2(x, -1.0)`` (-> -pi vs
+        // +pi), ``SIGN(y, x)`` and complex branch cuts -- so
+        // well-formed Fortran code can legitimately depend on it.
+        // Emit ``"-0.0"`` directly when the sign bit is set on a
+        // zero value.
+        if (dv == 0.0 && std::signbit(dv)) {
+          lit = "-0.0";
+        } else {
+          for (int prec = 1; prec <= 17; ++prec) {
+            std::ostringstream o;
+            o << std::setprecision(prec) << dv;
+            if (std::strtod(o.str().c_str(), nullptr) == dv) {
+              lit = o.str();
+              break;
+            }
           }
-        }
-        if (lit.empty()) {  // non-finite or unexpected
-          std::ostringstream o;
-          o << std::setprecision(17) << dv;
-          lit = o.str();
+          if (lit.empty()) {  // non-finite (NaN; signed inf round-trips at prec=1)
+            std::ostringstream o;
+            o << std::setprecision(17) << dv;
+            lit = o.str();
+          }
         }
       }
       // ``ostringstream`` drops the decimal point for integer-valued
