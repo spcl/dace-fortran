@@ -288,6 +288,80 @@ END SUBROUTINE
     np.testing.assert_allclose(out[0], 14.0)
 
 
+def test_local_i_loop_iterator_not_renamed(tmp_path):
+    """``i`` as a LOCAL loop iterator must NOT be renamed to
+    ``fortran_i`` -- the rename collides with DaCe's LoopRegion
+    iterator-symbol machinery (``_loop_it_<N>`` on the loop labelled
+    ``loop_fortran_i_0``) and surfaces as ``InvalidSDFGError: Loop
+    iterator must not appear on the LHS of an interstate-edge
+    assignment``.  ``i`` is excluded from ``kSympyReservedNames`` for
+    exactly this reason.  Regression for the CI failure
+    ``test_dummy_shaped_fn_return``."""
+    src = """
+SUBROUTINE kern(out, n)
+  IMPLICIT NONE
+  INTEGER, INTENT(IN) :: n
+  REAL(8), INTENT(OUT) :: out(n)
+  INTEGER :: i
+  DO i = 1, n
+    out(i) = REAL(i, 8)
+  END DO
+END SUBROUTINE
+"""
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kern",
+                      entry="_QPkern").build()
+    out = np.zeros(4, dtype=np.float64, order="F")
+    sdfg(out=out, n=np.int32(4))
+    np.testing.assert_array_equal(out, [1.0, 2.0, 3.0, 4.0])
+
+
+def test_nested_loops_with_i_iterator(tmp_path):
+    """Two loop iterators (``i`` outer, ``i`` reused in inlined helper)
+    after a PURE FUNCTION inline -- the shape that broke
+    ``test_dummy_shaped_fn_return``.  Both ``i`` copies stay bare; no
+    LoopRegion iterator collision."""
+    src = """
+MODULE m_iter
+  IMPLICIT NONE
+CONTAINS
+  PURE FUNCTION scaled(x, k) RESULT(r)
+    INTEGER, INTENT(IN) :: k
+    REAL(8), INTENT(IN) :: x
+    REAL(8) :: r(k)
+    INTEGER :: i
+    DO i = 1, k
+      r(i) = x * REAL(i, 8)
+    END DO
+  END FUNCTION scaled
+
+  SUBROUTINE kern(out_arr, src, n, k)
+    INTEGER, INTENT(IN) :: n, k
+    REAL(8), INTENT(IN) :: src(n)
+    REAL(8), INTENT(OUT) :: out_arr(k, n)
+    REAL(8) :: tmp(k)
+    INTEGER :: i
+    DO i = 1, n
+      tmp = scaled(src(i), k)
+      out_arr(:, i) = tmp
+    END DO
+  END SUBROUTINE kern
+END MODULE m_iter
+"""
+    from dace_fortran import build_sdfg_from_files
+    srcfile = tmp_path / "m_iter.f90"
+    srcfile.write_text(src)
+    sdfg = build_sdfg_from_files(
+        [srcfile], entry="_QMm_iterPkern", name="kern",
+        out_dir=tmp_path / "build")
+    sdfg.validate()
+    out_arr = np.zeros((3, 2), dtype=np.float64, order="F")
+    src_a = np.array([2.0, 5.0], dtype=np.float64, order="F")
+    sdfg(out_arr=out_arr, src=src_a, n=np.int32(2), k=np.int32(3))
+    # col i=1: scaled(2.0, 3) = [2, 4, 6]; col i=2: scaled(5.0,3)=[5,10,15]
+    np.testing.assert_array_equal(out_arr[:, 0], [2.0, 4.0, 6.0])
+    np.testing.assert_array_equal(out_arr[:, 1], [5.0, 10.0, 15.0])
+
+
 def test_dummy_pi_preserves_signature_name(tmp_path):
     """``pi`` as an intent(in) DUMMY must NOT be renamed."""
     src = """

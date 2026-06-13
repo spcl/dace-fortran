@@ -406,6 +406,23 @@ def add_descriptors(builder, sdfg: SDFG):
             # caller hands in (Python ``float`` would be pass-by-value
             # so updates wouldn't surface on the caller side).
             sdfg.add_array(v.fortran_name, shape=(1, ), dtype=dt(v.dtype), transient=False)
+        elif v.dtype in ('complex64', 'complex128'):
+            # Scalar INPUT of COMPLEX type.  DaCe's ctypes interop
+            # mis-handles a by-value complex scalar argument:
+            # ``complex128.as_ctypes()`` returns ``c_longdouble`` (a
+            # REAL 80-bit type) and ``complex64.as_ctypes()`` returns
+            # ``c_ulong`` -- both drop the imaginary part (or fail to
+            # construct from a Python complex).  Fortran passes scalar
+            # dummies BY REFERENCE anyway, so register the complex
+            # scalar input as a length-1 ``Array`` (pointer ABI):
+            # the C++ codegen reads ``z[0]`` (``complex128*``) which
+            # marshals correctly, and ``z[0].real()`` / ``z[0].imag()``
+            # extract the parts.  Callers bind a 1-element numpy
+            # complex array.  (A by-value fix would require correcting
+            # DaCe core's complex ``as_ctypes`` + the SysV 2-SSE-reg
+            # complex ABI, which is out of scope here.)
+            sdfg.add_array(v.fortran_name, shape=(1, ), dtype=dt(v.dtype),
+                           transient=False)
         else:
             # Scalar INPUT (``intent(in)`` or ``REAL(8), VALUE :: x``).
             # Register as a true Scalar -- DaCe accepts plain Python

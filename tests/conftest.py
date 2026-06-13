@@ -12,6 +12,21 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+# Disable hwloc's GL/X11 topology backend BEFORE any ``from mpi4py import MPI``
+# (DaCe pulls MPI in transitively; ``pytest_unconfigure`` below imports it
+# explicitly to ``MPI_Finalize`` cleanly).  ``MPI_Init`` runs hwloc topology
+# detection, and hwloc's GL backend probes every local X11 display
+# (``:0``, ``:1``, ...) to enumerate NVIDIA GPUs via the NV-CONTROL X
+# extension.  On a GNOME-on-Wayland desktop, gnome-shell squats on the
+# abstract ``@/tmp/.X11-unix/X1`` socket without speaking the X protocol, so
+# hwloc's probe connects, gets accepted, then blocks forever waiting for the
+# X handshake -- hanging the whole pytest process at teardown (and any
+# ``import mpi4py`` in a dev shell).  ``HWLOC_COMPONENTS=-gl`` disables only
+# the GL/X11 GPU probe; CPU / memory / PCI topology detection (all MPI needs
+# for binding) is unaffected.  ``setdefault`` so an explicit user override
+# (e.g. someone debugging hwloc) still wins.
+os.environ.setdefault("HWLOC_COMPONENTS", "-gl")
+
 # Raise the stack size to the hard limit (typically ``unlimited`` on Linux)
 # for every test process.  Deeply-nested fully-inlined kernels (cloudsc,
 # ICON dycore, QE microkernels) drive MLIR's recursive ``Region::cloneInto``

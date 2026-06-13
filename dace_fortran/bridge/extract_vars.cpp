@@ -1188,16 +1188,27 @@ const std::set<std::string> &kRejectedIntrinsicNames() {
 
 // Names reserved by SymPy's symbolic expression layer.  SymPy treats
 // these as built-in constants regardless of any local binding, so an
-// interstate-edge expression like ``i = i + 1`` would be silently
-// parsed with ``i`` as the imaginary unit.  These names are TOO COMMON
-// in real Fortran code to reject (``i`` loop iterator, ``pi`` math
-// constant) -- so we RENAME locals on extraction to ``fortran_<short>``.
+// interstate-edge expression like ``pi = pi + 1`` would be silently
+// parsed with ``pi`` as the constant pi.  These names are TOO COMMON
+// in real Fortran code to reject (``pi`` math constant, ``e`` Euler) --
+// so we RENAME locals on extraction to ``fortran_<short>``.
 // Dummies (signature variables) are EXEMPT from the rename to preserve
 // the caller-side ABI; their existing Python-side reserved-name shield
 // (``builder/__init__.py::_RESERVED_DACE_NAMES``) handles sanitisation
 // in specific contexts (memlet subsets) without changing the signature.
 //
 // EXCLUDED from this set on purpose:
+//   * ``i`` -- the universal Fortran loop iterator.  SymPy DOES treat
+//     bare ``i`` as the imaginary unit, but renaming it to
+//     ``fortran_i`` collides with DaCe's LoopRegion iterator-symbol
+//     machinery (``_loop_it_<N>`` on the loop labelled
+//     ``loop_fortran_i_0``) and surfaces as ``InvalidSDFGError: Loop
+//     iterator must not appear on the LHS of an interstate-edge
+//     assignment``.  ``i`` virtually always IS a loop iterator (which
+//     DaCe handles as a LoopRegion symbol, not a sympy expression
+//     leaf), so the rename does more harm than good.  The rare
+//     ``i``-as-complex-scalar case is covered by the existing
+//     complex-literal lowering, not this set.
 //   * ``im`` / ``re`` -- handled by the Python shield (complex-part
 //     field name convention is too universal to fight at the bridge).
 //   * ``test`` / ``doctest`` -- handled by the Python shield (renamed
@@ -1205,7 +1216,6 @@ const std::set<std::string> &kRejectedIntrinsicNames() {
 //     ``_RESERVED_DACE_NAMES`` path).
 const std::set<std::string> &kSympyReservedNames() {
   static const std::set<std::string> v = {
-      "i",    // sympy.I -- imaginary unit
       "e",    // sympy.E -- Euler's number
       "pi",   // sympy.pi
       "oo",   // sympy.oo -- positive infinity
@@ -1239,6 +1249,7 @@ void rejectOrRenameReservedShortNames(mlir::ModuleOp module) {
   const auto &sympyReserved = kSympyReservedNames();
   std::set<std::string> hardHits;
   std::set<std::string> softHits;
+
   module.walk([&](hlfir::DeclareOp decl) {
     if (asAssumedShapeAlias(decl)) return;
     auto un = decl.getUniqName().str();

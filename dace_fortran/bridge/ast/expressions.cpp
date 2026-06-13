@@ -1583,6 +1583,35 @@ std::string buildExpr(mlir::Value val, int d) {
 
   if (auto ld = mlir::dyn_cast<fir::LoadOp>(def)) {
     auto mem = ld.getMemref();
+    // Fortran 2008 complex-part accessor: ``z%re`` / ``z%im`` lower
+    // to ``hlfir.designate %z {complex_part = false/true}`` -- a
+    // SELECTOR on a COMPLEX value, NOT a struct-field component.
+    // ``traceToDecl`` below would walk through it to the base ``z``
+    // and silently drop the part extraction (the generated tasklet
+    // became ``_out = _in_z`` instead of ``_out = _in_z.real()``,
+    // a ``complex128 -> double`` codegen type error).  Render the
+    // method-call form ``(<z>.real())`` / ``(<z>.imag())`` -- same
+    // shape the ``fir.extract_value`` complex handler emits for
+    // ``REAL(z)`` / ``AIMAG(z)``, which ``cppunparse`` maps to
+    // ``std::complex<T>::real()`` / ``::imag()``.
+    if (auto dg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
+            mem.getDefiningOp())) {
+      if (auto cp = dg.getComplexPart()) {
+        // ``dg.getMemref()`` is the COMPLEX value's declare addr (a
+        // ``fir.ref<complex<T>>``) for the scalar case, or an
+        // element/section designate for ``z(i)%re``.  ``traceToDecl``
+        // resolves the addr to the Fortran name; for the array case
+        // it walks the element designate to the base array, and the
+        // index lives in the AccessInfo the read-collector emits.
+        // Fall back to ``buildExpr`` only if ``traceToDecl`` can't
+        // name it (e.g. a complex temporary).
+        std::string base = traceToDecl(dg.getMemref());
+        if (base.empty()) base = buildExpr(dg.getMemref(), d + 1);
+        if (!base.empty() && base != "?")
+          return "(" + base + (*cp ? ".imag()" : ".real()") + ")";
+        return "?";
+      }
+    }
     // Pass the designate-or-load result directly to ``traceToDecl``.
     // It walks through ``hlfir.designate`` correctly: section /
     // element designates fall through to the parent name, struct-

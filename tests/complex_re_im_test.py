@@ -31,8 +31,16 @@ pytestmark = pytest.mark.skipif(not have_flang(),
 # ===========================================================================
 # Basic %re / %im read paths
 # ===========================================================================
+# A SCALAR ``COMPLEX(8) :: z`` dummy is registered by the bridge as a
+# length-1 ``Array`` (pass-by-reference) rather than a by-value
+# ``Scalar``, because DaCe's ctypes interop mis-handles by-value
+# complex scalars (``complex128.as_ctypes()`` returns ``c_longdouble``,
+# dropping the imaginary part).  Fortran passes scalar dummies by
+# reference anyway, so callers bind a 1-element numpy complex array.
+# These tests cover BOTH the scalar declaration (``z``) AND the array
+# declaration (``z(n)``) forms of the ``%re`` / ``%im`` accessor.
 def test_complex_re_read_scalar(tmp_path):
-    """``out = z%re`` on a scalar COMPLEX returns the real part."""
+    """``out = z%re`` on a SCALAR COMPLEX dummy returns the real part."""
     src = """
 SUBROUTINE cplx_re_scalar(z, out)
   IMPLICIT NONE
@@ -43,13 +51,14 @@ END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_re_scalar",
                       entry="_QPcplx_re_scalar").build()
+    z = np.array([3 + 4j], dtype=np.complex128)  # scalar dummy, by-ref bind
     out_arr = np.zeros(1, dtype=np.float64)
-    sdfg(z=np.complex128(3 + 4j), out=out_arr)
+    sdfg(z=z, out=out_arr)
     assert out_arr[0] == 3.0
 
 
 def test_complex_im_read_scalar(tmp_path):
-    """``out = z%im`` on a scalar COMPLEX returns the imaginary part."""
+    """``out = z%im`` on a SCALAR COMPLEX dummy returns the imag part."""
     src = """
 SUBROUTINE cplx_im_scalar(z, out)
   IMPLICIT NONE
@@ -60,8 +69,45 @@ END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_im_scalar",
                       entry="_QPcplx_im_scalar").build()
+    z = np.array([3 + 4j], dtype=np.complex128)
     out_arr = np.zeros(1, dtype=np.float64)
-    sdfg(z=np.complex128(3 + 4j), out=out_arr)
+    sdfg(z=z, out=out_arr)
+    assert out_arr[0] == 4.0
+
+
+def test_complex_re_read_element(tmp_path):
+    """``out = z(1)%re`` returns the real part of a COMPLEX element."""
+    src = """
+SUBROUTINE cplx_re_elem(z, out)
+  IMPLICIT NONE
+  COMPLEX(8), INTENT(IN) :: z(1)
+  REAL(8), INTENT(OUT) :: out
+  out = z(1)%re
+END SUBROUTINE
+"""
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_re_elem",
+                      entry="_QPcplx_re_elem").build()
+    z = np.array([3 + 4j], dtype=np.complex128, order="F")
+    out_arr = np.zeros(1, dtype=np.float64)
+    sdfg(z=z, out=out_arr)
+    assert out_arr[0] == 3.0
+
+
+def test_complex_im_read_element(tmp_path):
+    """``out = z(1)%im`` returns the imaginary part of a COMPLEX element."""
+    src = """
+SUBROUTINE cplx_im_elem(z, out)
+  IMPLICIT NONE
+  COMPLEX(8), INTENT(IN) :: z(1)
+  REAL(8), INTENT(OUT) :: out
+  out = z(1)%im
+END SUBROUTINE
+"""
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_im_elem",
+                      entry="_QPcplx_im_elem").build()
+    z = np.array([3 + 4j], dtype=np.complex128, order="F")
+    out_arr = np.zeros(1, dtype=np.float64)
+    sdfg(z=z, out=out_arr)
     assert out_arr[0] == 4.0
 
 
@@ -94,40 +140,42 @@ END SUBROUTINE
 # Equivalent intrinsics REAL() / AIMAG() must produce the SAME result
 # ===========================================================================
 def test_complex_re_equivalent_to_real_intrinsic(tmp_path):
-    """``z%re`` and ``REAL(z, KIND=8)`` are semantically equal."""
+    """``z(1)%re`` and ``REAL(z(1), KIND=8)`` are semantically equal."""
     src = """
 SUBROUTINE cplx_re_vs_real(z, out_field, out_intr)
   IMPLICIT NONE
-  COMPLEX(8), INTENT(IN) :: z
+  COMPLEX(8), INTENT(IN) :: z(1)
   REAL(8), INTENT(OUT) :: out_field, out_intr
-  out_field = z%re
-  out_intr  = REAL(z, KIND=8)
+  out_field = z(1)%re
+  out_intr  = REAL(z(1), KIND=8)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_re_vs_real",
                       entry="_QPcplx_re_vs_real").build()
+    z = np.array([2.5 - 1.5j], dtype=np.complex128, order="F")
     field = np.zeros(1, dtype=np.float64)
     intr = np.zeros(1, dtype=np.float64)
-    sdfg(z=np.complex128(2.5 - 1.5j), out_field=field, out_intr=intr)
+    sdfg(z=z, out_field=field, out_intr=intr)
     assert field[0] == intr[0] == 2.5
 
 
 def test_complex_im_equivalent_to_aimag(tmp_path):
-    """``z%im`` and ``AIMAG(z)`` produce the same value."""
+    """``z(1)%im`` and ``AIMAG(z(1))`` produce the same value."""
     src = """
 SUBROUTINE cplx_im_vs_aimag(z, out_field, out_intr)
   IMPLICIT NONE
-  COMPLEX(8), INTENT(IN) :: z
+  COMPLEX(8), INTENT(IN) :: z(1)
   REAL(8), INTENT(OUT) :: out_field, out_intr
-  out_field = z%im
-  out_intr  = AIMAG(z)
+  out_field = z(1)%im
+  out_intr  = AIMAG(z(1))
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_im_vs_aimag",
                       entry="_QPcplx_im_vs_aimag").build()
+    z = np.array([2.5 - 1.5j], dtype=np.complex128, order="F")
     field = np.zeros(1, dtype=np.float64)
     intr = np.zeros(1, dtype=np.float64)
-    sdfg(z=np.complex128(2.5 - 1.5j), out_field=field, out_intr=intr)
+    sdfg(z=z, out_field=field, out_intr=intr)
     assert field[0] == intr[0] == -1.5
 
 
@@ -170,18 +218,20 @@ def test_complex_kind4_re_im(tmp_path):
     src = """
 SUBROUTINE cplx_k4(z, out_re, out_im)
   IMPLICIT NONE
-  COMPLEX(4), INTENT(IN) :: z
+  COMPLEX(4), INTENT(IN) :: z(1)
   REAL(4), INTENT(OUT) :: out_re, out_im
-  out_re = z%re
-  out_im = z%im
+  out_re = z(1)%re
+  out_im = z(1)%im
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_k4",
                       entry="_QPcplx_k4").build()
+    z = np.array([1.5 + 2.5j], dtype=np.complex64, order="F")
     out_re = np.zeros(1, dtype=np.float32)
     out_im = np.zeros(1, dtype=np.float32)
-    sdfg(z=np.complex64(1.5 + 2.5j), out_re=out_re, out_im=out_im)
+    sdfg(z=z, out_re=out_re, out_im=out_im)
     assert out_re[0] == 1.5
+    assert out_im[0] == 2.5
     assert out_im[0] == 2.5
 
 
