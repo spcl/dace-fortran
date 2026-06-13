@@ -140,6 +140,14 @@ struct ASTNode {
 };
 
 /// Build the AST for the first func.func found in the module.
-std::vector<ASTNode> extractAST(mlir::ModuleOp module);
+///
+/// ``entry_symbol`` is the same USER-PROVIDED entry name passed to
+/// ``extractVariables``; it anchors the on-demand scope qualification
+/// (``extractName`` in trace_utils.cpp).  Empty disables qualification.
+/// Passing it through ``extractAST`` keeps the two extraction paths
+/// in lockstep so an inlined-callee dummy gets the same name in the
+/// VarInfo list and in the AST node ``target`` / ``expr`` fields.
+std::vector<ASTNode> extractAST(mlir::ModuleOp module,
+                                const std::string &entry_symbol = "");
 
 }  // namespace hlfir_bridge

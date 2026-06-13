@@ -2688,7 +2688,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
 // Entry point
 // ---------------------------------------------------------------------------
 
-std::vector<ASTNode> extractAST(mlir::ModuleOp module) {
+std::vector<ASTNode> extractAST(mlir::ModuleOp module,
+                                const std::string &entry_symbol) {
   // Fresh synthetic-name counters / maps per module so two consecutive
   // extractAST calls don't interleave __sc_5 / __al_2 across unrelated
   // SDFGs.
@@ -2706,6 +2707,15 @@ std::vector<ASTNode> extractAST(mlir::ModuleOp module) {
   // (an exception reaches here), the flag could still be set.
   kBoolExprNoSubscripts = false;
   clearAllocAliases();
+
+  // D1: reseed per-thread extraction state.  Without this, calling
+  // ``extractAST`` standalone (without a preceding ``extractVariables``)
+  // or on a DIFFERENT module than the prior ``extractVariables`` would
+  // leak stale ``kEntryScope`` / ``kShortNameCollisions`` and produce
+  // names that diverge from any subsequent extract on this thread.
+  // Same helper ``extractVariables`` uses -- shared so the two paths
+  // can't drift.
+  prepareExtractionState(module, entry_symbol);
 
   std::vector<ASTNode> result;
   module.walk([&](mlir::func::FuncOp func) {

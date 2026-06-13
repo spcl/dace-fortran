@@ -145,6 +145,26 @@ std::vector<VarInfo> extractVariables(
     mlir::ModuleOp module, std::vector<ValueSymbol>* value_symbols = nullptr,
     const std::string &entry_symbol = "");
 
+/// Prepare per-thread extraction state shared by ``extractVariables``
+/// and ``extractAST``: clears mangling overrides, installs entry F-scope,
+/// runs the multi-callsite ``_call<idx>`` disambiguation pass (Pass 0b),
+/// then builds the short-name collision set fed to ``extractName``.
+///
+/// Idempotent -- safe to call multiple times.  Both ``extractVariables``
+/// and ``extractAST`` invoke this at their entry; without it, calling
+/// ``extractAST`` standalone (or with a different module than the prior
+/// ``extractVariables``) would leak stale ``kEntryScope`` /
+/// ``kShortNameCollisions`` from the previous extraction.
+///
+/// Throws ``std::runtime_error`` if a user-declared Fortran variable's
+/// short name collides with a Fortran intrinsic the bridge renders
+/// inline (``min``, ``max``, ``sum``, ``sqrt`` etc.) -- the rewriter at
+/// ``emit_tasklet`` and the symbolic walker cannot disambiguate, so we
+/// fail fast with an explicit diagnostic instead of producing wrong
+/// numerics.
+void prepareExtractionState(mlir::ModuleOp module,
+                            const std::string &entry_symbol);
+
 /// One entry-subroutine dummy argument, in the caller's pre-flatten view.
 /// Produced by ``extractFortranInterface`` so the binding emitter can
 /// auto-derive an ``OriginalInterface`` (name / type / rank / shape /

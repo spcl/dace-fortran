@@ -1161,12 +1161,339 @@ static bool globalIsWritten(const std::string& sym, mlir::ModuleOp module,
 }
 
 // ---------------------------------------------------------------------------
+// Shared extraction-state setup (D1, D2, D4, latent #1, #2, #8)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Fortran intrinsics the bridge renders inline as bare Python tokens
+// in tasklet bodies / interstate-edge expressions.  A user variable
+// sharing one of these names would shadow the intrinsic in
+// ``emit_tasklet``'s regex rewriter -- the rewriter walks token
+// matches and replaces with ``_in_<token>_<N>``, silently corrupting
+// the intrinsic call.  We HARD-REJECT these because there's no way
+// to disambiguate the bridge's rendering (``max(a, b)``) from a
+// user-named variable ``max``.
+const std::set<std::string> &kRejectedIntrinsicNames() {
+  static const std::set<std::string> v = {
+      // Reductions emit as binary chain or builtin call:
+      "min", "max", "sum", "product", "minval", "maxval",
+      // Math.* intrinsics emit as bare Python function call:
+      "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+      "sinh", "cosh", "tanh", "exp", "log", "log10", "sqrt",
+      "abs", "floor", "ceil", "erf", "erfc",
+  };
+  return v;
+}
+
+// Names reserved by SymPy's symbolic expression layer.  SymPy treats
+// these as built-in constants regardless of any local binding, so an
+// interstate-edge expression like ``i = i + 1`` would be silently
+// parsed with ``i`` as the imaginary unit.  These names are TOO COMMON
+// in real Fortran code to reject (``i`` loop iterator, ``pi`` math
+// constant) -- so we RENAME locals on extraction to ``fortran_<short>``.
+// Dummies (signature variables) are EXEMPT from the rename to preserve
+// the caller-side ABI; their existing Python-side reserved-name shield
+// (``builder/__init__.py::_RESERVED_DACE_NAMES``) handles sanitisation
+// in specific contexts (memlet subsets) without changing the signature.
+//
+// EXCLUDED from this set on purpose:
+//   * ``im`` / ``re`` -- handled by the Python shield (complex-part
+//     field name convention is too universal to fight at the bridge).
+//   * ``test`` / ``doctest`` -- handled by the Python shield (renamed
+//     to ``program_test`` / ``program_doctest`` via the existing
+//     ``_RESERVED_DACE_NAMES`` path).
+const std::set<std::string> &kSympyReservedNames() {
+  static const std::set<std::string> v = {
+      "i",    // sympy.I -- imaginary unit
+      "e",    // sympy.E -- Euler's number
+      "pi",   // sympy.pi
+      "oo",   // sympy.oo -- positive infinity
+      "zoo",  // sympy.zoo -- complex infinity
+      "nan",  // sympy.nan
+      "s",    // sympy.S -- singleton registry
+  };
+  return v;
+}
+
+// Walk every user-declared hlfir.declare in the module.  Two passes:
+//
+//   * Hard-reject when a short name collides with a Fortran intrinsic
+//     the bridge emits as a bare token (``max``, ``sin``, etc.) --
+//     no way to disambiguate, fail fast with a diagnostic.
+//
+//   * Auto-rename when a short name collides with a SymPy reserved
+//     constant / function (``i``, ``pi``, ``re``, ``im``, ...) --
+//     install a ``kManglingOverride`` so every subsequent
+//     ``extractName`` call returns ``fortran_<short>``.  The binding
+//     emitter is expected to preserve the user-facing Fortran name on
+//     the SDFG signature side; internal references all see the
+//     prefixed form so SymPy's symbolic engine cannot collapse the
+//     variable into a constant.
+//
+// Skip compiler-synthesised aliases (assumed-shape inlining
+// duplicates) -- those route through ``traceToDecl`` to their entry-
+// scope original, which will be processed on its own walk hit.
+void rejectOrRenameReservedShortNames(mlir::ModuleOp module) {
+  const auto &rejected = kRejectedIntrinsicNames();
+  const auto &sympyReserved = kSympyReservedNames();
+  std::set<std::string> hardHits;
+  std::set<std::string> softHits;
+  module.walk([&](hlfir::DeclareOp decl) {
+    if (asAssumedShapeAlias(decl)) return;
+    auto un = decl.getUniqName().str();
+    auto p = un.rfind('E');
+    std::string shortName = p != std::string::npos ? un.substr(p + 1) : un;
+    if (shortName.empty()) return;
+    std::string lower;
+    lower.reserve(shortName.size());
+    for (char c : shortName)
+      lower.push_back(static_cast<char>(std::tolower(c)));
+    if (rejected.count(lower)) {
+      hardHits.insert(lower + " (mangled: " + un + ")");
+      return;
+    }
+    if (sympyReserved.count(lower)) {
+      // Dummy arguments (variables with an ``intent_*`` attribute) are
+      // user-facing on the SDFG signature -- the binding layer maps
+      // caller-side ``i=...`` directly to the SDFG arg name, so a
+      // silent rename to ``fortran_i`` would break the call.  Skip
+      // dummies; only rename LOCALS / GLOBALS where the rename is
+      // transparent to the user.  SymPy collisions on dummies still
+      // route through the existing Python-side reserved-name shield
+      // (``builder/__init__.py::_RESERVED_DACE_NAMES``) which
+      // sanitises specific contexts (memlet subsets) without
+      // changing the signature.
+      bool isDummy = false;
+      if (auto fattrs = decl.getFortranAttrs()) {
+        auto fa = *fattrs;
+        isDummy =
+            bitEnumContainsAny(fa, fir::FortranVariableFlagsEnum::intent_in) ||
+            bitEnumContainsAny(fa, fir::FortranVariableFlagsEnum::intent_out) ||
+            bitEnumContainsAny(fa,
+                               fir::FortranVariableFlagsEnum::intent_inout);
+      }
+      if (isDummy) return;
+      // Install a mangling override that prefixes the short name with
+      // ``fortran_``.  ``extractName`` consults
+      // ``kManglingOverride`` first (trace_utils.cpp:60) so every
+      // downstream consumer of this declare's name sees the prefixed
+      // form.
+      std::string prefixed = "fortran_" + lower;
+      setManglingOverride(un, prefixed);
+      softHits.insert(lower);
+    }
+  });
+  if (!hardHits.empty()) {
+    std::string msg = "Fortran variable name(s) collide with bridge-rendered "
+                      "intrinsics; rename to disambiguate. Offending names: ";
+    bool first = true;
+    for (auto &h : hardHits) {
+      if (!first) msg += ", ";
+      msg += h;
+      first = false;
+    }
+    throw std::runtime_error(msg);
+  }
+  // softHits are silent (renamed transparently) -- log only at debug.
+  (void)softHits;
+}
+
+// Pass 0b -- multi-callsite ``_call<idx>`` rename.  Mutates the IR;
+// idempotent (a re-run sees groups of size 1 after the first rename
+// and is a no-op).  Extracted here so both ``extractVariables`` and
+// ``extractAST`` see post-rename names in the collision pre-walk.
+void runMultiCallsiteDisambiguation(mlir::ModuleOp module) {
+  auto leadsToDesignate = [](mlir::Value v) -> bool {
+    for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
+      auto *d = v.getDefiningOp();
+      if (!d) return false;
+      if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
+        v = cv.getValue();
+        continue;
+      }
+      if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
+        v = ba.getVal();
+        continue;
+      }
+      if (mlir::isa<hlfir::DesignateOp>(d)) return true;
+      return false;
+    }
+    return false;
+  };
+  llvm::StringMap<llvm::SmallVector<hlfir::DeclareOp, 4>> byUniq;
+  module.walk([&](hlfir::DeclareOp op) {
+    auto *fn = op->getParentOfType<mlir::func::FuncOp>().getOperation();
+    if (auto f = mlir::dyn_cast_or_null<mlir::func::FuncOp>(fn))
+      if (f.isPrivate()) return;
+    if (!op.getDummyScope()) return;
+    if (!leadsToDesignate(op.getMemref())) return;
+    byUniq[op.getUniqName()].push_back(op);
+  });
+  for (auto &kv : byUniq) {
+    auto &group = kv.second;
+    if (group.size() < 2) continue;
+    llvm::SmallPtrSet<mlir::Operation *, 4> scopes;
+    for (auto op : group)
+      if (auto ds = op.getDummyScope().getDefiningOp()) scopes.insert(ds);
+    if (scopes.size() < 2) continue;
+    unsigned idx = 0;
+    for (auto op : group) {
+      auto un = op.getUniqName().str();
+      std::string newUniq = un + "_call" + std::to_string(idx++);
+      op->setAttr("uniq_name",
+                  mlir::StringAttr::get(op.getContext(), newUniq));
+    }
+  }
+}
+
+// Build the collision set fed to ``extractName``.  Walks BOTH
+// ``hlfir::DeclareOp`` and ``fir::DeclareOp`` (latent #2) and PEELS
+// ``asAssumedShapeAlias`` before recording the scope (D4) so an
+// inlined-callee alias whose memref traces back to the entry-scope
+// declare contributes to the entry-scope's bucket, not the inlined
+// scope's -- collapsing the false-positive collision.
+void buildCollisionSet(mlir::ModuleOp module,
+                       const std::string &entryScope) {
+  std::map<std::string, std::set<std::string>> shortToScopes;
+  auto record = [&](mlir::Operation *op, llvm::StringRef uniq) {
+    std::string un = uniq.str();
+    std::string scope = getFScope(un);
+    if (scope.empty()) return;
+    auto p = un.rfind('E');
+    std::string shortName = p != std::string::npos ? un.substr(p + 1) : un;
+    if (shortName.empty()) return;
+    shortToScopes[shortName].insert(scope);
+  };
+  module.walk([&](hlfir::DeclareOp decl) {
+    // D4: an inlined-callee assumed-shape alias is just a view of the
+    // outer declare.  Two pieces:
+    //   (a) Skip recording its scope for collision detection -- the
+    //       outer's scope is already recorded on its own walk hit.
+    //   (b) Install a mangling override mapping the alias's uniq_name
+    //       to the OUTER's short name.  Without this, direct calls
+    //       to ``extractName(alias_decl.getUniqName())`` (~16 sites
+    //       across ast/*.cpp) return the alias's bare short name,
+    //       which the SDFG never registered -- downstream lookups
+    //       KeyError.  ``traceToDecl`` already walks past aliases
+    //       to the outer declare; this override ensures the direct
+    //       path produces the same name.
+    if (auto outer = asAssumedShapeAlias(decl)) {
+      auto outerUniq = outer.getUniqName().str();
+      auto p = outerUniq.rfind('E');
+      std::string outerShort =
+          p != std::string::npos ? outerUniq.substr(p + 1) : outerUniq;
+      if (!outerShort.empty()) {
+        // Only override if outer is entry-scope; otherwise the alias's
+        // OWN qualified name is still the right answer.
+        std::string outerScope = getFScope(outerUniq);
+        if (outerScope.empty() || outerScope == entryScope) {
+          setManglingOverride(decl.getUniqName().str(), outerShort);
+        }
+      }
+      return;
+    }
+
+    // Inlined-callee OPTIONAL dummies: after ``hlfir-inline-all``
+    // splices the callee's body into the caller, an OPTIONAL dummy
+    // that the caller didn't pass survives as a declare with the
+    // OPTIONAL attribute but no caller-side storage (its memref is
+    // synthesised / fir.absent).  ``fir.is_present`` folds its body
+    // statically so the runtime value is never read -- it's effectively
+    // dead.  Counting it in the collision map would qualify the
+    // CALLER's same-named dummy and produce a spurious signature
+    // variable.  Skip OPTIONAL dummies in non-entry F-scopes (the
+    // entry's own OPTIONAL dummies still need their bare name).
+    if (auto attrs = decl.getFortranAttrs()) {
+      bool isOptional =
+          bitEnumContainsAny(*attrs, fir::FortranVariableFlagsEnum::optional);
+      std::string declScope = getFScope(decl.getUniqName().str());
+      if (isOptional && !declScope.empty() && declScope != entryScope) {
+        return;
+      }
+    }
+    record(decl, decl.getUniqName());
+  });
+  module.walk([&](fir::DeclareOp decl) {
+    // Latent #2: ``fir.declare`` (non-hlfir) is invisible to the
+    // hlfir-only walk above but ``traceToDecl`` walks both -- so a
+    // ``fir.declare``-only short name colliding with an
+    // ``hlfir.declare`` short name in another scope would silently
+    // miss collision detection.
+    record(decl, decl.getUniqName());
+  });
+  std::set<std::string> collisions;
+  for (auto &kv : shortToScopes) {
+    if (kv.second.size() >= 2) collisions.insert(kv.first);
+  }
+  setShortNameCollisions(collisions);
+}
+
+}  // namespace
+
+void prepareExtractionState(mlir::ModuleOp module,
+                            const std::string &entry_symbol) {
+  // Latent #1 + D1: clear thread-locals FIRST.  ``buildAllocatedReaderNames``
+  // and similar pre-walk helpers must not see stale per-thread state
+  // from a previous extract (e.g. a prior module's collision set).
+  clearManglingOverrides();
+
+  // Latent #8: reject user variable names that collide with bridge-
+  // rendered intrinsics; auto-rename user variable names that collide
+  // with SymPy reserved constants/functions (``i``, ``pi``, ``re``,
+  // ``im`` etc.) to ``fortran_<short>``.  Runs first so the error
+  // (if any) is the most diagnostic and so the override map is
+  // populated before any subsequent ``extractName`` consults it.
+  rejectOrRenameReservedShortNames(module);
+
+  // Entry-scope detection.  Prefer the USER-PROVIDED entry name
+  // (cached via ``set_entry_symbol``) because passes may rename the
+  // public ``func.func`` AFTER it was captured -- declares keep the
+  // original F-scope in their uniq_name (``_QMmodFkernelE<var>``),
+  // so anchoring on a post-rename name double-prefixes every entry
+  // variable.  Fall back to the first non-private ``P``-named func
+  // when no entry name was passed (legacy / standalone callers).
+  std::string entryScope;
+  if (!entry_symbol.empty()) {
+    auto pPos = entry_symbol.rfind('P');
+    if (pPos != std::string::npos)
+      entryScope = entry_symbol.substr(pPos + 1);
+  } else {
+    for (auto fn : module.getOps<mlir::func::FuncOp>()) {
+      if (fn.isPrivate()) continue;
+      auto sn = fn.getSymName().str();
+      auto pPos = sn.rfind('P');
+      if (pPos == std::string::npos) continue;
+      entryScope = sn.substr(pPos + 1);
+      break;
+    }
+  }
+  setEntryScope(entryScope);
+
+  // D2: run Pass 0b BEFORE the collision pre-walk so the pre-walk
+  // sees the post-mutation ``_call<idx>`` names.  Without this,
+  // mutated callsites would silently miss collision detection and
+  // ``extractName`` would skip qualification for them.
+  runMultiCallsiteDisambiguation(module);
+
+  // Build the collision set (peels aliases + walks fir.declare too +
+  // skips inlined-callee OPTIONAL dummies whose runtime value is folded
+  // by ``fir.is_present``).
+  buildCollisionSet(module, entryScope);
+}
+
+// ---------------------------------------------------------------------------
 // Main extraction
 // ---------------------------------------------------------------------------
 
 std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
                                       std::vector<ValueSymbol>* value_symbols,
                                       const std::string &entry_symbol) {
+  // Set up per-thread extraction state (entry scope + collision set +
+  // ``_call<idx>`` disambiguation + intrinsic-name reject).
+  // Same helper used by ``extractAST`` so the two paths can't drift.
+  prepareExtractionState(module, entry_symbol);
+
   std::vector<VarInfo> vars;
 
   // Build, with one module walk each, the indices the per-variable passes below
@@ -1178,149 +1505,6 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
   const std::set<std::string> writtenGlobals = buildWrittenGlobals(module);
   const std::set<std::string> allocatedReaderNames =
       buildAllocatedReaderNames(module);
-
-  // Reset thread-local extractName-override map.  Pass 3's view-alias
-  // detection below populates it for inlined-callee declares whose
-  // short name collides with their view source's; without a clean
-  // reset the previous module's overrides would leak into this one.
-  clearManglingOverrides();
-
-  // Pass 0: install entry F-scope for ``extractName``'s on-demand
-  // scope-qualification path (trace_utils.cpp:extractName).
-  //
-  // Replaces a ~100-LoC pre-walk pass that built ownStorageScopes /
-  // byShort maps, then setAttr'd new uniq_names on colliding declares
-  // backed by ``fir.alloca``.  That gated path missed inlined-callee
-  // scalar dummies whose memref is the CALLER's loaded value (not a
-  // fresh alloca) -- graupel's ``cloud_to_rain(qc, qr, t)`` inlining
-  // surfaced as bare ``qc`` / ``qr`` names in the body, shadowing the
-  // outer 2-D arrays and producing the ``_in_qc_0`` unresolved-free-
-  // symbol error.
-  //
-  // New rule (applied in ``extractName`` for every uniq_name):
-  //
-  //   * Entry-scope declares (F-scope == kEntryScope) keep their
-  //     bare short name -- preserves the SDFG signature shape +
-  //     bindings-side ABI.
-  //   * Every NON-entry-scope declare gets ``<F-scope>_<short>``,
-  //     regardless of how its memref is backed.  Covers block args,
-  //     alloca, allocmem, and the inlined-callee-from-load case
-  //     the old pass missed.
-  //   * Module-scope globals (no F segment) keep their bare name.
-  //
-  // No upfront walk, no setAttr mutation, no collision tracking --
-  // every short-name uniqueness decision is local to a single
-  // declare's mangled name.
-  {
-    // Anchor on the USER-PROVIDED entry symbol if supplied: passes
-    // like ``hlfir-flatten-structs`` rename the public func.func
-    // (``kernel`` -> ``kernel_soa``) but variable declares keep the
-    // ORIGINAL F-scope in their uniq_name (``_QMmodFkernelE<var>``),
-    // so anchoring on the renamed public symbol misclassifies every
-    // entry-scope variable as inlined-callee and double-prefixes it.
-    // Fall back to the public-symbol-derived scope only when no
-    // entry name was passed (legacy callers).
-    std::string entryScope;
-    if (!entry_symbol.empty()) {
-      auto pPos = entry_symbol.rfind('P');
-      if (pPos != std::string::npos)
-        entryScope = entry_symbol.substr(pPos + 1);
-    } else {
-      for (auto fn : module.getOps<mlir::func::FuncOp>()) {
-        if (fn.isPrivate()) continue;
-        auto sn = fn.getSymName().str();
-        auto pPos = sn.rfind('P');
-        if (pPos == std::string::npos) continue;
-        entryScope = sn.substr(pPos + 1);
-        break;
-      }
-    }
-    setEntryScope(entryScope);
-
-    // Pre-walk: build the short-name -> {F-scopes that declared it}
-    // map across the WHOLE module.  ``extractName`` reads this to
-    // decide whether a non-entry-scope declare's short name needs
-    // qualification: if the short name appears in 2+ scopes there's
-    // a genuine collision (qualify); if it appears in only ONE non-
-    // entry scope (the typical inlined-callee dummy) leave it bare
-    // so unused inlined dummies don't bloat the SDFG signature.
-    // Mirrors what the removed ``ownStorageScopes`` map captured,
-    // but feeds the on-demand ``extractName`` path instead of doing
-    // ``setAttr`` (which missed non-alloca-backed declares).
-    {
-      std::map<std::string, std::set<std::string>> shortToScopes;
-      module.walk([&](hlfir::DeclareOp decl) {
-        auto un = decl.getUniqName().str();
-        std::string scope = getFScope(un);
-        if (scope.empty()) return;
-        auto p = un.rfind('E');
-        std::string shortName =
-            p != std::string::npos ? un.substr(p + 1) : un;
-        if (shortName.empty()) return;
-        shortToScopes[shortName].insert(scope);
-      });
-      std::set<std::string> collisions;
-      for (auto &kv : shortToScopes) {
-        if (kv.second.size() >= 2) collisions.insert(kv.first);
-      }
-      setShortNameCollisions(collisions);
-    }
-  }
-
-  // Pass 0b: disambiguate multi-callsite duplicates of the same
-  // inlined callee, but ONLY when the inlined dummy is backed by a
-  // section-slice memref chain (``fir.convert`` of ``fir.box_addr``
-  // of ``hlfir.designate``).  Whole-array pass-through aliases trace
-  // through the convert chain back to the caller's own declare /
-  // block-arg, and the bridge's downstream alias chain handles
-  // per-callsite disambiguation correctly without renaming those.
-  // Section-slice aliases instead get a fresh box-of-the-slice per
-  // call site, so the bridge's view_subset / view_source machinery
-  // needs distinct VarInfo entries to keep per-site slice
-  // information from collapsing.
-  {
-    auto leadsToDesignate = [](mlir::Value v) -> bool {
-      for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
-        auto* d = v.getDefiningOp();
-        if (!d) return false;
-        if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
-          v = cv.getValue();
-          continue;
-        }
-        if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
-          v = ba.getVal();
-          continue;
-        }
-        if (mlir::isa<hlfir::DesignateOp>(d)) return true;
-        return false;
-      }
-      return false;
-    };
-    llvm::StringMap<llvm::SmallVector<hlfir::DeclareOp, 4>> byUniq;
-    module.walk([&](hlfir::DeclareOp op) {
-      auto* fn = op->getParentOfType<mlir::func::FuncOp>().getOperation();
-      if (auto f = mlir::dyn_cast_or_null<mlir::func::FuncOp>(fn))
-        if (f.isPrivate()) return;
-      if (!op.getDummyScope()) return;
-      if (!leadsToDesignate(op.getMemref())) return;
-      byUniq[op.getUniqName()].push_back(op);
-    });
-    for (auto& kv : byUniq) {
-      auto& group = kv.second;
-      if (group.size() < 2) continue;
-      llvm::SmallPtrSet<mlir::Operation*, 4> scopes;
-      for (auto op : group)
-        if (auto ds = op.getDummyScope().getDefiningOp()) scopes.insert(ds);
-      if (scopes.size() < 2) continue;
-      unsigned idx = 0;
-      for (auto op : group) {
-        auto un = op.getUniqName().str();
-        std::string newUniq = un + "_call" + std::to_string(idx++);
-        op->setAttr("uniq_name",
-                    mlir::StringAttr::get(op.getContext(), newUniq));
-      }
-    }
-  }
 
   // Pass 1: collect every hlfir.declare.  Skip assumed-shape alias
   // declares inserted by ``hlfir-inline-all``  --  they share storage

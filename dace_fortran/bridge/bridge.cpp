@@ -91,12 +91,16 @@ class HLFIRModule {
   }
 
   bool parse(const std::string& t) {
+    // Reset the cached entry symbol -- a previous module's entry name
+    // must not leak into the freshly parsed one (D1).
+    entry_symbol_.clear();
     module_ =
         mlir::parseSourceString<mlir::ModuleOp>(llvm::StringRef(t), &ctx_);
     return static_cast<bool>(module_);
   }
 
   bool parse_file(const std::string& p) {
+    entry_symbol_.clear();
     module_ = mlir::parseSourceFile<mlir::ModuleOp>(llvm::StringRef(p), &ctx_);
     return static_cast<bool>(module_);
   }
@@ -110,6 +114,7 @@ class HLFIRModule {
   /// (``_QM<mod>F<sub>`` etc.) are unique per compilation unit so real
   /// collisions should only happen for runtime/external declarations.
   bool parse_files(const std::vector<std::string>& paths) {
+    entry_symbol_.clear();
     if (paths.empty()) return false;
     module_ =
         mlir::parseSourceFile<mlir::ModuleOp>(llvm::StringRef(paths[0]), &ctx_);
@@ -211,7 +216,11 @@ class HLFIRModule {
 
   std::vector<ASTNode> get_ast() {
     if (!module_) return {};
-    return extractAST(*module_);
+    // Pass the cached entry symbol so ``extractAST`` re-seeds
+    // ``kEntryScope`` / ``kShortNameCollisions`` identically to
+    // ``extractVariables`` -- the two paths share
+    // ``prepareExtractionState`` under the hood.
+    return extractAST(*module_, entry_symbol_);
   }
 
   /// List every top-level func.func symbol name currently in the module.
