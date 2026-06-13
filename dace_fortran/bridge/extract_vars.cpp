@@ -1236,6 +1236,35 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
       }
     }
     setEntryScope(entryScope);
+
+    // Pre-walk: build the short-name -> {F-scopes that declared it}
+    // map across the WHOLE module.  ``extractName`` reads this to
+    // decide whether a non-entry-scope declare's short name needs
+    // qualification: if the short name appears in 2+ scopes there's
+    // a genuine collision (qualify); if it appears in only ONE non-
+    // entry scope (the typical inlined-callee dummy) leave it bare
+    // so unused inlined dummies don't bloat the SDFG signature.
+    // Mirrors what the removed ``ownStorageScopes`` map captured,
+    // but feeds the on-demand ``extractName`` path instead of doing
+    // ``setAttr`` (which missed non-alloca-backed declares).
+    {
+      std::map<std::string, std::set<std::string>> shortToScopes;
+      module.walk([&](hlfir::DeclareOp decl) {
+        auto un = decl.getUniqName().str();
+        std::string scope = getFScope(un);
+        if (scope.empty()) return;
+        auto p = un.rfind('E');
+        std::string shortName =
+            p != std::string::npos ? un.substr(p + 1) : un;
+        if (shortName.empty()) return;
+        shortToScopes[shortName].insert(scope);
+      });
+      std::set<std::string> collisions;
+      for (auto &kv : shortToScopes) {
+        if (kv.second.size() >= 2) collisions.insert(kv.first);
+      }
+      setShortNameCollisions(collisions);
+    }
   }
 
   // Pass 0b: disambiguate multi-callsite duplicates of the same

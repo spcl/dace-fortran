@@ -129,6 +129,19 @@ void clearManglingOverrides();
 /// Per thread.
 void setEntryScope(const std::string &scope);
 
+/// Register the set of short names that COLLIDE across multiple F-scopes
+/// in the current module.  ``extractName`` consults this set to decide
+/// whether to scope-qualify a non-entry-scope declare's short name:
+///   * Short name appears in the collision set -> qualify as
+///     ``<scope>_<short>`` (avoid signature ambiguity).
+///   * Short name appears in only ONE non-entry scope -> keep bare
+///     (caller-and-callee agreed, no ambiguity, no extra signature
+///     variable).
+/// Called by ``extractVariables`` after the upfront short-name walk;
+/// cleared together with the override map on each fresh extract.
+/// Per thread.
+void setShortNameCollisions(const std::set<std::string> &collisions);
+
 /// Extract the F-segment of a Fortran mangled name -- the procedure
 /// scope between the last ``F`` and the last ``E``.  Returns "" for
 /// names without an F segment (module globals, type-info metadata).

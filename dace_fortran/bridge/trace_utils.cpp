@@ -39,10 +39,19 @@ void setManglingOverride(const std::string &mangled,
 // ``extractName`` skips the scope-qualification (back-compat with
 // callers that haven't migrated to the new flow).
 static thread_local std::string kEntryScope;
+static thread_local std::set<std::string> kShortNameCollisions;
 
-void clearManglingOverrides() { kManglingOverride.clear(); kEntryScope.clear(); }
+void clearManglingOverrides() {
+  kManglingOverride.clear();
+  kEntryScope.clear();
+  kShortNameCollisions.clear();
+}
 
 void setEntryScope(const std::string &scope) { kEntryScope = scope; }
+
+void setShortNameCollisions(const std::set<std::string> &collisions) {
+  kShortNameCollisions = collisions;
+}
 
 std::string getFScope(const std::string &uniq) {
   // Fortran mangled-name shape: ``_QM<mod>F<func>E<name>`` (with
@@ -84,8 +93,20 @@ std::string extractName(const std::string &m) {
   if (!kEntryScope.empty()) {
     std::string scope = getFScope(m);
     if (!scope.empty() && scope != kEntryScope) {
-      std::string prefix = scope + "_";
-      if (name.compare(0, prefix.size(), prefix) != 0) name = prefix + name;
+      // Qualify ONLY when the short name actually collides across
+      // scopes.  ``kShortNameCollisions`` is populated by
+      // ``extractVariables`` from a pre-walk of every declare.
+      // Without this guard, qualifying every non-entry-scope
+      // declare creates EXTRA signature variables for unused
+      // inlined-callee dummies -- e.g. ``test_fortran_frontend_present``
+      // has ``tf2``'s OPTIONAL ``a`` folded by ``is_present`` so it
+      // never reaches a tasklet, but ``tf2_a`` still landed on the
+      // SDFG signature and broke the caller's ``a=5`` binding.
+      bool collides = kShortNameCollisions.count(name) > 0;
+      if (collides) {
+        std::string prefix = scope + "_";
+        if (name.compare(0, prefix.size(), prefix) != 0) name = prefix + name;
+      }
     }
   }
 
