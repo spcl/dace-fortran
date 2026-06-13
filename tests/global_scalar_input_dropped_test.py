@@ -60,16 +60,6 @@ end module mdriver
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
 
-@pytest.mark.xfail(strict=False,
-                   reason=("Module-level scalar INPUT ``x`` is BSS-zero in the upstream "
-                           "global, gets SCCP-folded to 0 across every load, and the "
-                           "address_of chain dies in symbol-dce -- so the SDFG never "
-                           "surfaces ``x`` as an argument.  Caller's pre-set value is "
-                           "ignored and ``y`` receives ``0.0`` instead of ``2.0 * x``.  "
-                           "Fix: either skip SCCP on non-parameter ``fir.global`` ops, "
-                           "or promote every module-scalar declare in the entry function "
-                           "to a (1,)-Array kwarg in ``descriptors.add_descriptors`` so "
-                           "the bindings layer pins the address before SCCP sees it."))
 def test_module_scalar_input_survives_sccp(tmp_path):
     """A module-level scalar pre-set by the caller must reach the
     kernel body intact -- not constant-folded to its BSS-zero init."""

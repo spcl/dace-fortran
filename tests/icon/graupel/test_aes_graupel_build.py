@@ -46,13 +46,6 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 @pytest.mark.long
-@pytest.mark.xfail(
-    strict=False,
-    reason="multi-file build of mo_aes_graupel::graupel_run still surfaces "
-           "an unresolved ``?`` placeholder in a downstream tasklet; "
-           "covers a bridge gap separate from the PURE-fn-return cases "
-           "that hlfir-unwrap-eval-in-mem already handles.  strict=False "
-           "so the test flips to PASS automatically when the gap closes.")
 def test_aes_graupel_multi_file_build(tmp_path):
     """The bridge ingests the 4-module aes_graupel project and emits a
     validated SDFG rooted at ``mo_aes_graupel::graupel_run``."""

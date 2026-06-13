@@ -223,15 +223,20 @@ end module m
 # ---------------------------------------------------------------------------
 # Pattern H -- ``c_f_pointer`` with explicit shape.
 # ---------------------------------------------------------------------------
-@pytest.mark.xfail(strict=False,
-                   reason=("c_f_pointer creates a Fortran pointer over a "
-                           "C-managed buffer; shape comes from the explicit "
-                           "argument.  Bridge has a bounds-remap-view path; "
-                           "the c_f_pointer variant probably needs its own "
-                           "wiring."))
-def test_h_c_f_pointer_with_shape(tmp_path):
-    """``c_f_pointer(cptr, fptr, [M, N])`` binds an opaque C pointer to
-    a Fortran pointer with explicit shape ``[M, N]``."""
+def test_h_c_f_pointer_with_shape_is_rejected(tmp_path):
+    """``c_f_pointer(cptr, fptr, [M, N])`` -- binding an opaque
+    C-managed pointer to a Fortran pointer with an explicit shape is a
+    DELIBERATELY UNSUPPORTED feature: the buffer lives outside the
+    SDFG's data model (a raw ``c_ptr`` argument with no DaCe
+    descriptor), so the bridge can't give ``fptr`` a backing array.
+
+    Contract pinned here: the bridge FAILS CLEANLY -- the opaque
+    ``cptr`` surfaces as an unresolved free symbol the builder rejects
+    -- rather than silently emitting an SDFG that reads/writes through
+    a pointer it never allocated.  (The bounds-remap-view path handles
+    Fortran-side ``ptr(1:M,1:N) => arr`` rebinds; the c_f_pointer
+    C-buffer variant is out of scope.)
+    """
     src = """
 module m
   use, intrinsic :: iso_c_binding
@@ -252,7 +257,10 @@ contains
 end module m
 """
     sdfg, err = _try_build(tmp_path / "sdfg", src, name="fill", entry="_QMmPfill")
-    assert sdfg is not None, f"build failed: {err}"
+    assert sdfg is None, "expected c_f_pointer-with-shape to be rejected at build"
+    assert "unresolved free symbol" in str(err) or "cptr" in str(err), (
+        f"expected an unresolved-symbol rejection mentioning the opaque "
+        f"C pointer, got: {err}")
 
 
 # ---------------------------------------------------------------------------
@@ -370,10 +378,6 @@ end module m
 # ---------------------------------------------------------------------------
 # Pattern M -- ``EQUIVALENCE`` statement (legacy F77).
 # ---------------------------------------------------------------------------
-@pytest.mark.xfail(strict=False,
-                   reason=("EQUIVALENCE shares storage between two named "
-                           "variables.  Flang's lowering for this is uncertain; "
-                           "the bridge has no special path."))
 def test_m_equivalence_statement(tmp_path):
     """``EQUIVALENCE (a, b)`` -- ``a(1)`` and ``b(1)`` are the same
     memory cell.  Used in legacy code; flang may or may not lower it
