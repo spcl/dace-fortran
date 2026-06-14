@@ -1260,30 +1260,54 @@ void rejectOrRenameReservedShortNames(mlir::ModuleOp module) {
     lower.reserve(shortName.size());
     for (char c : shortName)
       lower.push_back(static_cast<char>(std::tolower(c)));
+    // Dummy arguments (variables with an ``intent_*`` attribute) are
+    // user-facing on the SDFG signature -- the binding layer maps
+    // caller-side ``x=...`` directly to the SDFG arg name, so a silent
+    // rename to ``fortran_x`` would break the call.  Computed once and
+    // shared by both the intrinsic-shadow and SymPy-reserved branches.
+    bool isDummy = false;
+    if (auto fattrs = decl.getFortranAttrs()) {
+      auto fa = *fattrs;
+      isDummy =
+          bitEnumContainsAny(fa, fir::FortranVariableFlagsEnum::intent_in) ||
+          bitEnumContainsAny(fa, fir::FortranVariableFlagsEnum::intent_out) ||
+          bitEnumContainsAny(fa,
+                             fir::FortranVariableFlagsEnum::intent_inout);
+    }
     if (rejected.count(lower)) {
-      hardHits.insert(lower + " (mangled: " + un + ")");
+      // A user VARIABLE whose name shadows an intrinsic the bridge
+      // renders as a bare token (``max``, ``sum``, ``sqrt``, ...).
+      // Flang only emits this ``hlfir.declare`` when the name is
+      // actually USED as a variable -- it has already resolved the
+      // name-vs-intrinsic ambiguity for us.  A dead
+      // ``DOUBLE PRECISION :: max`` that the code never reads (QE's
+      // case) is dropped by Flang, so we never see it here and the real
+      // ``max(...)`` intrinsic calls render normally.  When the declare
+      // DOES exist, RENAME the variable to ``var_<short>``: the mangling
+      // override only rewrites references that flow through THIS declare,
+      // so genuine intrinsic ``max(...)`` calls (separate ``hlfir`` ops)
+      // keep rendering as ``max(...)``.  A DISTINCT prefix from the
+      // SymPy-reserved ``fortran_<short>`` (a variable shadowing a
+      // CONSTANT) makes the two collision kinds self-documenting:
+      // ``var_max`` reads as "the user variable max, not the function".
+      // DUMMIES keep the hard-reject -- their short name is the
+      // user-facing SDFG arg and (unlike the SymPy names) there is no
+      // Python-side shield to sanitise an intrinsic collision on the
+      // signature.
+      if (isDummy) {
+        hardHits.insert(lower + " (mangled: " + un + ")");
+        return;
+      }
+      setManglingOverride(un, "var_" + lower);
+      softHits.insert(lower);
       return;
     }
     if (sympyReserved.count(lower)) {
-      // Dummy arguments (variables with an ``intent_*`` attribute) are
-      // user-facing on the SDFG signature -- the binding layer maps
-      // caller-side ``i=...`` directly to the SDFG arg name, so a
-      // silent rename to ``fortran_i`` would break the call.  Skip
-      // dummies; only rename LOCALS / GLOBALS where the rename is
-      // transparent to the user.  SymPy collisions on dummies still
-      // route through the existing Python-side reserved-name shield
-      // (``builder/__init__.py::_RESERVED_DACE_NAMES``) which
-      // sanitises specific contexts (memlet subsets) without
-      // changing the signature.
-      bool isDummy = false;
-      if (auto fattrs = decl.getFortranAttrs()) {
-        auto fa = *fattrs;
-        isDummy =
-            bitEnumContainsAny(fa, fir::FortranVariableFlagsEnum::intent_in) ||
-            bitEnumContainsAny(fa, fir::FortranVariableFlagsEnum::intent_out) ||
-            bitEnumContainsAny(fa,
-                               fir::FortranVariableFlagsEnum::intent_inout);
-      }
+      // SymPy reserved constants (``pi``, ``e``, ...).  Dummies stay
+      // un-renamed and rely on the Python-side reserved-name shield
+      // (``builder/__init__.py::_RESERVED_DACE_NAMES``) which sanitises
+      // specific contexts (memlet subsets) without changing the
+      // signature.
       if (isDummy) return;
       // Install a mangling override that prefixes the short name with
       // ``fortran_``.  ``extractName`` consults
@@ -1646,6 +1670,21 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
       if (!n.empty()) symbolNames.insert(n);
     }
   });
+
+  // Snapshot the symbols collected so far -- passes 2a (loop iterators)
+  // and 2b (array shapes, do-loop bounds, allocmem extents).  These are
+  // the SIZE / EXTENT uses: a name here has to be an SDFG symbol because
+  // it appears in a descriptor's shape or a LoopRegion bound.  The
+  // later passes 2c / 2d add INDEX and CONDITION uses, which a plain
+  // declared scalar can also satisfy as a symbol but a flattened struct
+  // MEMBER cannot: a member used purely as a subscript (``a(g%idx)``)
+  // stays a scalar and routes through the indirect-gather path (the
+  // index value is materialised into a scalar temp, then used in the
+  // memlet subset), so promoting it to a symbol leaves the member with
+  // no readable descriptor (``KeyError: g_idx``).  Struct-member role
+  // promotion (line ~2150) therefore keys on this size-only snapshot,
+  // while ordinary declares keep using the full ``symbolNames``.
+  std::set<std::string> shapeSymbolNames = symbolNames;
 
   // Pass 2c: scalars used as array indices (``a(i)``) are also symbols.
   // Catches the DO-with-EXIT / DO-WHILE shape where lift-cf-to-scf
@@ -2120,10 +2159,33 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
                   childMemberTy = h.getEleTy();
                 if (auto p = mlir::dyn_cast<fir::PointerType>(childMemberTy))
                   childMemberTy = p.getEleTy();
+                // ARRAY-OF-RECORDS record dimension(s).  When the
+                // enclosing struct variable is itself an array
+                // (``TYPE(t), ALLOCATABLE :: ke(:)``; ``POINTER ::
+                // tabxx(:)``), an access ``ke(np) % k(i,j,k,l)`` carries
+                // the RECORD index ``np`` ahead of the member's own
+                // subscripts (``expandDesignateChain`` prepends it).  The
+                // flat member array must therefore be shaped
+                // ``[record_dims..., member_dims...]`` -- otherwise the
+                // memlet has more dims than the descriptor and the
+                // higher per-dim offset symbol (``offset_ke_k_d4``,
+                // ``offset_tabxx_box_d1``) is never registered -> free
+                // symbol.  ``seqExtents`` holds the outer record-array
+                // extents captured when the struct declare's type was
+                // peeled (empty for a SCALAR struct like ``vcut``, so a
+                // scalar struct's members keep their own rank).
+                unsigned dimIdx = 0;
+                for (auto& rext : seqExtents) {
+                  if (rext == "?")
+                    mv.shape_symbols.push_back(newFlat + "_d" +
+                                               std::to_string(dimIdx));
+                  else
+                    mv.shape_symbols.push_back(rext);
+                  ++dimIdx;
+                }
                 if (auto seq = mlir::dyn_cast<fir::SequenceType>(
                         childMemberTy)) {
                   elemTy = seq.getEleTy();
-                  unsigned dimIdx = 0;
                   for (auto dimd : seq.getShape()) {
                     if (dimd == fir::SequenceType::getUnknownExtent()) {
                       // Allocatable: extent only known at runtime --
@@ -2138,7 +2200,26 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
                   }
                 }
                 mv.rank = mv.shape_symbols.size();
-                mv.role = (mv.rank > 0) ? "array" : "scalar";
+                // A flattened struct member is classified by rank like a
+                // plain declare, but rank-0 members must ALSO honour the
+                // ``symbolNames`` promotion the regular-scalar branch
+                // applies below (line ~2324): a member used as an array
+                // size / loop extent / index / condition (``ALLOCATE(fac(
+                // dfftt%ngm))``, ``DO ig = 1, dfftt%ngm``) has to be a
+                // SYMBOL, not a scalar data container.  Without this the
+                // member lands in ``builder.scalars`` while the SDFG
+                // separately mints a shape symbol of the same name -- the
+                // scalar-assign emitter then wires an AccessNode against a
+                // descriptor that doesn't exist (QE ``dfftt_ngm``
+                // KeyError).  The struct-member VarInfos ``continue`` past
+                // the regular classifier, so the promotion has to happen
+                // here.
+                if (mv.rank > 0)
+                  mv.role = "array";
+                else if (shapeSymbolNames.count(newFlat))
+                  mv.role = "symbol";
+                else
+                  mv.role = "scalar";
                 for (size_t d = 0; d < mv.shape_symbols.size(); ++d)
                   mv.lower_bounds.push_back("1");
                 std::string dtype;

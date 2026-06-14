@@ -23,6 +23,23 @@ from dace import Memlet
 from dace_fortran.builder.access import (acc, build_memlet_index, get_access, indirect_host, rename_iters,
                                          resolve_section_alias)
 
+# Identifier scan that EXCLUDES the imaginary-unit suffix of a complex
+# literal: in ``(0.0) + 1j * (0.0)`` (how the bridge renders a Fortran
+# complex constant such as ``z = (1.0, 2.0)`` / ``c = 0.0_dp``), the
+# ``j`` of ``1j`` is Python's imaginary unit, NOT a variable.  The
+# negative lookbehind drops any word that starts right after a digit or
+# ``.`` (``1j``, ``2.0j``), so a real scalar / loop iterator named ``j``
+# is still picked up but ``1j`` is not mistaken for it -- otherwise a
+# spurious ``_in_j`` read connector (or a missed constant-fill) appears
+# wherever a complex literal meets a ``j`` in scope.
+_IDENT_RE = re.compile(r'(?<![0-9.])[a-zA-Z_]\w*')
+
+
+def _ident_tokens(expr: str) -> set:
+    """Identifier tokens in ``expr``, excluding complex-literal imaginary
+    units (see ``_IDENT_RE``)."""
+    return set(_IDENT_RE.findall(expr))
+
 
 def _ensure_view_writeback_link(builder, state, write_node, target: str):
     """When the Phase I self-update split creates a fresh access node
@@ -140,7 +157,7 @@ def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect
     indirect_syms = indirect_syms or {}
     accesses = assign_node.accesses
 
-    tokens = set(re.findall(r'[a-zA-Z_]\w*', assign_node.expr))
+    tokens = _ident_tokens(assign_node.expr)
     r_arr = tokens & set(builder.arrays)
     r_scl = tokens & set(builder.scalars)
     # A name can collide between ``builder.arrays`` and
@@ -359,12 +376,20 @@ def emit_scalar_assign(builder, state, target: str, value: str):
                 state.add_edge(read, None, write, None, Memlet(f"{src_name}[{subset}]"))
                 return
 
-        # Whole-array fill: scalar literal -> multi-dim array.  The
+        # Whole-array fill: CONSTANT scalar -> multi-dim array.  The
         # bridge emits this for ``ALLOCATE x; x = 0`` and similar
-        # zero-init prologues.  Use ``add_mapped_tasklet`` so DaCe
-        # wires the empty-input + indexed-output edges itself; doing
-        # it by hand needs a MapEntry connector dance.
-        if re.fullmatch(r'[+-]?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?', src_name) is not None:
+        # zero-init prologues.  Fires for any RHS that reads no data --
+        # a bare real literal (``0.0``), but also a complex literal
+        # (``(0.0) + 1j * (0.0)`` for a COMPLEX ``x = 0.0_dp``) or a
+        # ``dace.complex128(...)`` cast.  The imaginary-unit ``j`` in
+        # ``1j`` is NOT a data identifier, so exclude any word preceded
+        # by a digit / dot from the data-token check (a real variable
+        # ``j`` is still caught).  Use ``add_mapped_tasklet`` so DaCe
+        # wires the empty-input + indexed-output edges itself.
+        _val_toks = _ident_tokens(src_name)
+        _reads_data = bool(_val_toks & (set(builder.arrays) | set(builder.scalars)
+                                        | set(builder.symbols)))
+        if not _reads_data:
             dims = tgt_var.shape_symbols
             ranges = {f"__i{k}": f"0:{s}" for k, s in enumerate(dims)}
             idx_expr = ",".join(f"__i{k}" for k in range(len(dims)))
@@ -384,7 +409,7 @@ def emit_scalar_assign(builder, state, target: str, value: str):
             )
             return
 
-    tokens = set(re.findall(r'[a-zA-Z_]\w*', value))
+    tokens = _ident_tokens(value)
     # ``nm != target`` was wrong  --  ``i = i + 1`` genuinely needs a read
     # edge on the target itself.
     reads = [nm for nm in sorted(tokens, key=len, reverse=True) if nm in builder.scalars]

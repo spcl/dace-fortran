@@ -241,6 +241,14 @@ std::pair<std::string, std::vector<DimEntry>> expandDesignateChain(
         {n.empty() ? "?" : n, buildDesignateIndexExpr(innermost, d, idx, 0)});
   }
 
+  // Set when ANY parent designate in the walk carries a component
+  // attribute (struct-field selector).  ``vcut % corrected(i,j,k)`` puts
+  // the component on the PARENT (``designate{component=corrected}``) and
+  // the element indices on the INNERMOST -- so ``innermost.getComponentAttr()``
+  // is empty even though the access IS a flattened struct member.  The
+  // flat name (``vcut_corrected``) only comes from ``traceToDecl`` on the
+  // innermost RESULT, which walks the whole chain; record that we need it.
+  bool sawComponentParent = false;
   mlir::Value parent_val = innermost.getMemref();
   for (int level = 0; level < limits::kAliasMemrefWalkDepth; ++level) {
     if (!parent_val) break;
@@ -264,6 +272,17 @@ std::pair<std::string, std::vector<DimEntry>> expandDesignateChain(
     }
     auto parent = mlir::dyn_cast<hlfir::DesignateOp>(def);
     if (!parent) break;
+    // Only a WHOLE-MEMBER component selector (``vcut % corrected`` -- the
+    // pointer/allocatable member with no index of its own; the element
+    // subscript lives on the innermost designate, reached through the
+    // pointer-box ``fir.load``) needs the flat name recovered from the
+    // innermost RESULT.  An AoR component designate that ALSO carries a
+    // record index (``arr(ia) % box(ir)`` -- parent indices ``[ia]``)
+    // keeps the existing ``parent_val`` name resolution; widening the
+    // flag to every component parent reshapes that L4 access and breaks
+    // its memlet subset.
+    if (parent.getComponentAttr() && parent.getIndices().empty())
+      sawComponentParent = true;
     auto triplets = parent.getIsTriplet();
     if (triplets.empty()) {
       // Element designate (every dim is a scalar).  Two shapes
@@ -294,11 +313,20 @@ std::pair<std::string, std::vector<DimEntry>> expandDesignateChain(
         parent_entries.push_back(
             {n.empty() ? "?" : n, buildIndexExpr(idx, 0)});
       }
-      // AoR component-chain discriminator: the inner designate has a
-      // componentAttr (struct field access).  In that case prepend.
-      // Otherwise overwrite (the plain nested-element case where the
-      // inner's indices already describe the same data view).
-      if (innermost.getComponentAttr()) {
+      // AoR component-chain discriminator: PREPEND the parent's
+      // (record) indices when this is a struct-field access chain.
+      // ``innermost.getComponentAttr()`` covers the classic
+      // ``arr(i) % x(j)`` shape (component on the innermost designate);
+      // ``sawComponentParent`` extends it to the pointer/allocatable
+      // member case (``vcut % corrected(i,j,k)`` / ``arr(ia) % box(ir)``)
+      // where the component sits on an INTERMEDIATE whole-member
+      // selector reached through a box ``fir.load`` -- there the element
+      // subscript lives on the innermost designate and any outer record
+      // index must PREPEND, not overwrite (overwriting drops the element
+      // dims and the memlet rank no longer matches the flat array).
+      // Otherwise overwrite (plain nested-element access on a non-struct
+      // array, where the inner indices already describe the data view).
+      if (innermost.getComponentAttr() || sawComponentParent) {
         std::vector<DimEntry> combined = std::move(parent_entries);
         for (auto &e : entries) combined.push_back(std::move(e));
         entries = std::move(combined);
@@ -331,18 +359,22 @@ std::pair<std::string, std::vector<DimEntry>> expandDesignateChain(
         cursor += 1;
       }
     }
-    // AoR shape: when the innermost designate has a componentAttr
-    // (struct field access) AND the parent has only scalar indices
-    // (all triplets[d]==false), the parent's indices are RECORD
-    // indices and the inner's are FIELD indices.  Concatenate them
-    // (record-first) for the flat ``arr_x[i, j]`` access.  Mirrors
-    // the empty-triplet AoR branch above; this covers parents whose
-    // ``getIsTriplet()`` returns a non-empty all-false array
-    // (Flang's runtime-indexed element-designate shape).
+    // AoR shape: when the access is a struct-field chain AND the parent
+    // has only scalar indices (all triplets[d]==false), the parent's
+    // indices are RECORD indices and the inner's are FIELD/element
+    // indices.  Concatenate them (record-first) for the flat
+    // ``arr_x[i, j]`` access.  Mirrors the empty-triplet AoR branch
+    // above; this covers parents whose ``getIsTriplet()`` returns a
+    // non-empty all-false array (Flang's runtime-indexed
+    // element-designate shape).  ``sawComponentParent`` extends the
+    // discriminator to the pointer/allocatable member case where the
+    // component is on an intermediate whole-member selector
+    // (``arr(ia) % box(ir)``: the record index ``ia`` arrives here and
+    // must PREPEND onto the element ``[ir]``, not overwrite it).
     bool allScalar = true;
     for (unsigned d = 0; d < triplets.size(); ++d)
       if (triplets[d]) { allScalar = false; break; }
-    if (innermost.getComponentAttr() && allScalar) {
+    if ((innermost.getComponentAttr() || sawComponentParent) && allScalar) {
       std::vector<DimEntry> combined = std::move(new_entries);
       for (auto &e : entries) combined.push_back(std::move(e));
       entries = std::move(combined);
@@ -360,8 +392,15 @@ std::pair<std::string, std::vector<DimEntry>> expandDesignateChain(
   // bridge's flatten convention.  Falls back to the parent-walk's
   // ``parent_val`` only when no component is involved (plain element
   // / section access on a non-struct array).
+  //
+  // ``sawComponentParent`` covers the pointer/allocatable-member case
+  // where the component sits on a PARENT designate, not the innermost
+  // (``vcut % corrected(i,j,k)``: innermost is the plain element
+  // designate over the loaded box, the component ``corrected`` is on
+  // its parent).  Without it ``traceToDecl(parent_val)`` returns the
+  // bare struct base ``vcut`` and the read flattens to the wrong name.
   std::string array_name;
-  if (innermost.getComponentAttr()) {
+  if (innermost.getComponentAttr() || sawComponentParent) {
     array_name = traceToDecl(innermost.getResult());
   }
   if (array_name.empty()) array_name = traceToDecl(parent_val);
@@ -799,7 +838,7 @@ materialiseElementalToTransient(hlfir::ElementalOp elem,
   // every materialised value to int32, breaking the reduction.
   bool isI1Yield = false;
   if (yielded && yielded.getType().isInteger(1)) isI1Yield = true;
-  inner.expr = isI1Yield ? ("dace.int32(" + body + ")") : body;
+  inner.expr = isI1Yield ? ("int32(" + body + ")") : body;
 
   if (yielded) collectReadAccesses(yielded, inner.accesses, 0);
 

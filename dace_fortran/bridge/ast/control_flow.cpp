@@ -600,6 +600,13 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
         {"hlfir.maxval", "max", false},
         {"hlfir.sum", "+", true},
         {"hlfir.product", "*", true},
+        // NOTE: ALL / ANY are deliberately NOT unfolded inline here.
+        // Per design they lower to the ``AllNode`` / ``AnyNode`` library
+        // node (returning a boolean scalar) -- the IF-condition path
+        // materialises that scalar BEFORE the branch and reads it, rather
+        // than inlining ``(odg[0] and odg[1] and ...)`` into the
+        // condition.  See the ``hlfir.all`` / ``hlfir.any`` condition
+        // materialisation in the dispatch IF handlers.
     };
     for (auto& e : kRedTbl) {
       if (opName != e.op) continue;

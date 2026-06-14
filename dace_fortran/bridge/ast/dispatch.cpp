@@ -1323,6 +1323,62 @@ static void recognizeIoCall(fir::CallOp call, llvm::StringRef c, IoState& s, std
 // Block walker
 // ---------------------------------------------------------------------------
 
+/// An ``ALL`` / ``ANY`` reduction used DIRECTLY as an IF condition is
+/// materialised into a boolean-scalar transient via the ``AllNode`` /
+/// ``AnyNode`` library node (the ``reduce`` ASTNode routes to it in
+/// ``emit_reduce``), so the branch reads a scalar instead of inlining the
+/// section into the condition tasklet -- which produced a malformed
+/// multi-dim memlet for ``IF (ALL(odg(:)))``.  Pushes a
+/// ``declare_transient`` (bool ``[1]``) + a ``reduce`` node into
+/// ``nodes`` and returns the scalar's name (the caller reads it as
+/// ``<name>[0]``); empty string when the condition is not a bare
+/// ALL/ANY (nested forms like ``.NOT. ALL(...)`` fall through to the
+/// normal boolean-expression path).
+static std::string tryMaterialiseAllAnyCond(mlir::Value condVal,
+                                            std::vector<ASTNode>& nodes) {
+  mlir::Value v = condVal;
+  for (int i = 0; i < 8 && v; ++i) {
+    auto* d = v.getDefiningOp();
+    if (!d) break;
+    if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) { v = cv.getValue(); continue; }
+    if (d->getName().getStringRef() == "hlfir.no_reassoc" &&
+        d->getNumOperands() == 1) {
+      v = d->getOperand(0);
+      continue;
+    }
+    break;
+  }
+  auto* def = v.getDefiningOp();
+  if (!def) return "";
+  bool isAll = mlir::isa<hlfir::AllOp>(def);
+  bool isAny = mlir::isa<hlfir::AnyOp>(def);
+  if ((!isAll && !isAny) || def->getNumOperands() == 0) return "";
+  std::string maskName = traceToDecl(def->getOperand(0));
+  if (maskName.empty()) return "";
+
+  std::string tr = "__allany_cond_" + std::to_string(kSynthTransientCounter++);
+
+  ASTNode decl;
+  decl.kind = "declare_transient";
+  decl.target = tr;
+  decl.expr = "bool";
+  AccessInfo shp;
+  shp.array_name = tr;
+  shp.index_exprs.push_back("1");
+  decl.accesses.push_back(std::move(shp));
+  nodes.push_back(std::move(decl));
+
+  ASTNode red;
+  red.kind = "reduce";
+  red.target = tr;
+  red.target_is_array = true;
+  red.reduce_src = maskName;
+  red.reduce_wcr = isAll ? "lambda a, b: a and b" : "lambda a, b: a or b";
+  red.reduce_identity = isAll ? "True" : "False";
+  nodes.push_back(std::move(red));
+  return tr;
+}
+
 std::vector<ASTNode> buildAST(mlir::Block& block) {
   std::vector<ASTNode> nodes;
 
@@ -2458,13 +2514,28 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       }
       ASTNode n;
       n.kind = "conditional";
-      n.condition = buildBoolExpr(ifOp.getCondition(), 0);
-      // Walk the condition's IR for array-element reads -- same as
-      // the ``fir.if`` handler at the top of ``walkBlock`` and the
-      // ``scf.if`` handler below.  Without this the Python emitter
-      // has no per-occurrence access info to lift array-read
-      // conditions through the tasklet path.
-      collectReadAccesses(ifOp.getCondition(), n.accesses, 0);
+      // ``IF (ALL(mask))`` / ``IF (ANY(mask))`` -- materialise the
+      // reduction into a boolean scalar (via AllNode/AnyNode) and read
+      // it, instead of inlining the section into the condition tasklet.
+      std::string allanyScalar =
+          tryMaterialiseAllAnyCond(ifOp.getCondition(), nodes);
+      if (!allanyScalar.empty()) {
+        // ``__allany_cond_N`` is a boolean SCALAR (the materialised
+        // reduction result).  A scalar referenced in a CODE BLOCK (an
+        // if / loop / interstate condition) is the bare name -- only a
+        // MEMLET SUBSET needs the ``[0]`` / ``(0,0,1)`` element index
+        // (the reduce node's output memlet handles that via
+        // ``Memlet.from_array``).
+        n.condition = allanyScalar;
+      } else {
+        n.condition = buildBoolExpr(ifOp.getCondition(), 0);
+        // Walk the condition's IR for array-element reads -- same as
+        // the ``fir.if`` handler at the top of ``walkBlock`` and the
+        // ``scf.if`` handler below.  Without this the Python emitter
+        // has no per-occurrence access info to lift array-read
+        // conditions through the tasklet path.
+        collectReadAccesses(ifOp.getCondition(), n.accesses, 0);
+      }
       if (!ifOp.getThenRegion().empty())
         n.children = buildAST(ifOp.getThenRegion().front());
       if (!ifOp.getElseRegion().empty())
@@ -2475,9 +2546,16 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
     if (auto ifOp = mlir::dyn_cast<mlir::scf::IfOp>(op)) {
       ASTNode n;
       n.kind = "conditional";
-      n.condition = buildBoolExpr(ifOp.getCondition(), 0);
-      // Same array-read collection as the ``fir.if`` branch above.
-      collectReadAccesses(ifOp.getCondition(), n.accesses, 0);
+      std::string allanyScalar =
+          tryMaterialiseAllAnyCond(ifOp.getCondition(), nodes);
+      if (!allanyScalar.empty()) {
+        // Bare boolean scalar -- see the ``fir.if`` branch above.
+        n.condition = allanyScalar;
+      } else {
+        n.condition = buildBoolExpr(ifOp.getCondition(), 0);
+        // Same array-read collection as the ``fir.if`` branch above.
+        collectReadAccesses(ifOp.getCondition(), n.accesses, 0);
+      }
       if (!ifOp.getThenRegion().empty())
         n.children = buildAST(ifOp.getThenRegion().front());
       if (!ifOp.getElseRegion().empty())
