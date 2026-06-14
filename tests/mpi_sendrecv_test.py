@@ -144,14 +144,16 @@ def test_isend_irecv_wait_lower_to_mpi_libnodes(tmp_path: Path):
     sdfg.validate()
 
 
-def test_runtime_communicator_lowers_to_comm_connector(tmp_path: Path):
+def test_runtime_communicator_lowers_to_grid_connector(tmp_path: Path):
     """A non-default (runtime dummy) communicator is supported via a
     :class:`FortranProcessGrid` descriptor: the ``Send`` node gains an
-    ``opaque(MPI_Comm)`` ``_comm`` in-connector wired to
-    ``dace_user_pgrid``; the pgrid's parent comm is the
-    ``dace_user_comm`` symbol the bindings wrapper populates from
-    ``MPI_Comm_f2c`` at ``__dace_init`` time.  The original Fortran
-    integer ``comm`` dummy is dropped from ``sdfg.arrays`` -- the C
+    ``opaque(MPI_Comm)`` ``_grid`` in-connector wired to
+    ``dace_user_pgrid`` -- the same process-grid connector contract the
+    collective nodes (Bcast/Scatter/Gather) use, so point-to-point and
+    collective ops thread the communicator identically.  The pgrid's
+    parent comm is the ``dace_user_comm`` symbol the bindings wrapper
+    populates from ``MPI_Comm_f2c`` at ``__dace_init`` time.  The original
+    Fortran integer ``comm`` dummy is dropped from ``sdfg.arrays`` -- the C
     MPI_Comm value flows through the pgrid's parent-comm symbol, not
     through a kernel call arg."""
     import dace
@@ -162,7 +164,7 @@ def test_runtime_communicator_lowers_to_comm_connector(tmp_path: Path):
 
     sends = [n for n, _ in sdfg.all_nodes_recursive() if isinstance(n, Send)]
     assert len(sends) == 1, f"expected 1 Send node, got {len(sends)}"
-    assert '_comm' in sends[0].in_connectors
+    assert '_grid' in sends[0].in_connectors
 
     # The orphan Fortran ``integer`` comm dummy was removed -- a
     # FortranProcessGrid descriptor took its place.

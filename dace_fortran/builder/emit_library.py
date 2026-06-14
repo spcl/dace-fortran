@@ -615,16 +615,20 @@ def emit_mpi(builder, ctx, n, region):
         # ``MPI_Send(..., _comm)`` invokes on the cartesian comm.
         _install_user_pgrid(ctx, comm)
 
-    def _wire_comm(node):
-        """Add a ``_comm`` input connector + memlet wired to the
+    def _wire_grid(node):
+        """Add a ``_grid`` input connector + memlet wired to the
         ``FortranProcessGrid`` access node when a user communicator is
-        present (no-op for default ``MPI_COMM_WORLD``)."""
+        present (no-op for default ``MPI_COMM_WORLD``).  Matches the
+        collective nodes' ``_grid`` connector contract -- the point-to-point
+        node's expansion resolves the communicator via
+        ``input_descriptor_name(node, .., '_grid')`` and emits the cartesian
+        sub-comm, identical to Bcast/Scatter/Gather."""
         if comm is None:
             return
-        node.add_in_connector('_comm', dace.dtypes.opaque("MPI_Comm"))
+        node.add_in_connector('_grid', dace.dtypes.opaque("MPI_Comm"))
         state.add_memlet_path(acc(builder, state, _USER_PGRID_NAME),
                               node,
-                              dst_conn='_comm',
+                              dst_conn='_grid',
                               memlet=Memlet(data=_USER_PGRID_NAME, subset='0'))
 
     if n.callee == 'mpi_send':
@@ -635,7 +639,7 @@ def emit_mpi(builder, ctx, n, region):
         state.add_memlet_path(acc(builder, state, buffer), node, dst_conn='_buffer', memlet=buf_memlet)
         state.add_memlet_path(acc(builder, state, partner), node, dst_conn='_dest', memlet=partner_memlet)
         state.add_memlet_path(acc(builder, state, tag), node, dst_conn='_tag', memlet=tag_memlet)
-        _wire_comm(node)
+        _wire_grid(node)
     elif n.callee == 'mpi_recv':
         from dace.libraries.mpi.nodes.recv import Recv
         node = Recv(f'_mpi_recv_{builder.nid()}')
@@ -644,7 +648,7 @@ def emit_mpi(builder, ctx, n, region):
         state.add_memlet_path(acc(builder, state, partner), node, dst_conn='_src', memlet=partner_memlet)
         state.add_memlet_path(acc(builder, state, tag), node, dst_conn='_tag', memlet=tag_memlet)
         state.add_memlet_path(node, acc(builder, state, buffer), src_conn='_buffer', memlet=buf_memlet)
-        _wire_comm(node)
+        _wire_grid(node)
     elif n.callee == 'mpi_isend':
         from dace.libraries.mpi.nodes.isend import Isend
         rname = _req_array(n.call_args[3])
@@ -659,7 +663,7 @@ def emit_mpi(builder, ctx, n, region):
         state.add_memlet_path(acc(builder, state, partner), node, dst_conn='_dest', memlet=partner_memlet)
         state.add_memlet_path(acc(builder, state, tag), node, dst_conn='_tag', memlet=tag_memlet)
         state.add_edge(node, '_request', acc(builder, state, rname), None, Memlet.simple(rname, "0:1", num_accesses=1))
-        _wire_comm(node)
+        _wire_grid(node)
     elif n.callee == 'mpi_irecv':
         from dace.libraries.mpi.nodes.irecv import Irecv
         rname = _req_array(n.call_args[3])
@@ -673,7 +677,7 @@ def emit_mpi(builder, ctx, n, region):
         state.add_memlet_path(acc(builder, state, tag), node, dst_conn='_tag', memlet=tag_memlet)
         state.add_memlet_path(node, acc(builder, state, buffer), src_conn='_buffer', memlet=buf_memlet)
         state.add_edge(node, '_request', acc(builder, state, rname), None, Memlet.simple(rname, "0:1", num_accesses=1))
-        _wire_comm(node)
+        _wire_grid(node)
     else:
         raise NotImplementedError(f"MPI op {n.callee!r} not supported")
 
@@ -1628,11 +1632,8 @@ def emit_reduce(builder, ctx, n, region):
                 info = np.finfo(np_dt)
                 identity_val = float(info.max if identity_val == math.inf else info.min)
 
-    red = state.add_reduce(n.reduce_wcr, axes, identity_val)
-
     src_access = acc(builder, state, src_name)
     tgt_access = acc(builder, state, n.target)
-    state.add_edge(src_access, None, red, None, Memlet.from_array(src_name, src_desc))
 
     write_acc = next((ac for ac in n.accesses if ac.is_write), None) if n.accesses else None
     if n.target_is_array and write_acc is not None and write_acc.index_exprs:
@@ -1640,6 +1641,31 @@ def emit_reduce(builder, ctx, n, region):
         out_memlet = Memlet(f"{n.target}[{subset}]")
     else:
         out_memlet = Memlet.from_array(n.target, tgt_desc)
+
+    # Fortran logical reductions ALL / ANY get their own library nodes
+    # (``AllNode`` / ``AnyNode``) instead of a bare ``Reduce`` -- they own
+    # the Fortran identity (true / false) and offer a short-circuit
+    # expansion alongside the parallel reduction.  Detected from the wcr
+    # lambda body the bridge's ``kRedTable`` emits (``a and b`` / ``a or
+    # b``); every other reduction (sum / product / minval / maxval) stays
+    # on ``state.add_reduce``.
+    _body = n.reduce_wcr.split(":", 1)[-1].strip() if ":" in n.reduce_wcr else ""
+    _logical_op = "all" if _body == "a and b" else "any" if _body == "a or b" else None
+    if _logical_op is not None:
+        from dace.libraries.standard.nodes import AllNode, AnyNode
+        cls = AllNode if _logical_op == "all" else AnyNode
+        # ``reduce_axes`` is 0-based; AllNode/AnyNode want the Fortran
+        # 1-based ``dim`` (-1 = whole-array collapse to a scalar).
+        dim = (n.reduce_axes[0] + 1) if n.reduce_axes else -1
+        node = cls(f"{_logical_op}_{n.target}_{builder.nid()}", dim=dim)
+        state.add_node(node)
+        state.add_edge(src_access, None, node, cls.INPUT_CONNECTOR_NAME,
+                       Memlet.from_array(src_name, src_desc))
+        state.add_edge(node, cls.OUTPUT_CONNECTOR_NAME, tgt_access, None, out_memlet)
+        return
+
+    red = state.add_reduce(n.reduce_wcr, axes, identity_val)
+    state.add_edge(src_access, None, red, None, Memlet.from_array(src_name, src_desc))
     state.add_edge(red, None, tgt_access, None, out_memlet)
 
 
