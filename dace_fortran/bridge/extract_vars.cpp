@@ -1517,6 +1517,69 @@ void prepareExtractionState(mlir::ModuleOp module,
   buildCollisionSet(module, entryScope);
 }
 
+// Render an ``hlfir.designate`` section's per-dim subset as 0-based DaCe
+// subset strings: ``"lo-1:hi"`` (or ``"lo-1:hi:stride"`` when stride != 1)
+// for a triplet dim, ``"k-1"`` for a scalar-selected dim.  Literal lower
+// bounds fold to a literal ``lo-1``; symbolic ones render ``"(lo)-1"`` so
+// the OFFSET stays expressible (e.g. ``"(c0)-1:c1"`` for ``a(:, c0:c1)``).
+// Returns an empty vector when any bound can't be rendered (the caller
+// falls back to a whole-array link).  Mirrors the inline renderer in the
+// view_alias detection below; surfaced here so the bounds-remap-view rebox
+// trace can carry the source section into the original->view linking
+// memlet (``access.py``).  Uses only file-scope trace helpers
+// (``traceConstInt`` / ``traceExtentExpr`` / ``traceToDecl``).
+static std::vector<std::string> renderDesignateSubsetStrings(hlfir::DesignateOp sec) {
+  auto triplets = sec.getIsTriplet();
+  auto secIdx = sec.getIndices();
+  std::vector<std::string> subset;
+  if (triplets.empty()) return subset;
+  auto renderSym = [](mlir::Value v) -> std::string {
+    for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
+      auto *d = v.getDefiningOp();
+      if (!d) return "";
+      if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) { v = cv.getValue(); continue; }
+      if (auto ld = mlir::dyn_cast<fir::LoadOp>(d)) return traceToDecl(ld.getMemref());
+      if (auto cst = mlir::dyn_cast<mlir::arith::ConstantOp>(d)) {
+        if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue())) return std::to_string(ia.getInt());
+        return "";
+      }
+      return "";
+    }
+    return "";
+  };
+  auto renderBound = [&](mlir::Value v) -> std::string {
+    if (auto c = traceConstInt(v)) return std::to_string(*c);
+    auto s = renderSym(v);
+    if (!s.empty()) return s;
+    return traceExtentExpr(v);
+  };
+  unsigned cursor = 0;
+  for (unsigned d = 0; d < triplets.size(); ++d) {
+    if (triplets[d] && cursor + 2 < secIdx.size()) {
+      std::string lo = renderBound(secIdx[cursor]);
+      std::string hi = renderBound(secIdx[cursor + 1]);
+      std::string st = renderBound(secIdx[cursor + 2]);
+      auto loC = traceConstInt(secIdx[cursor]);
+      auto stC = traceConstInt(secIdx[cursor + 2]);
+      if (lo.empty() || hi.empty()) return {};
+      std::string s = loC ? std::to_string(*loC - 1) : ("(" + lo + ")-1");
+      s += ":" + hi;
+      if (!st.empty() && st != "1" && !(stC && *stC == 1)) s += ":" + st;
+      subset.push_back(std::move(s));
+      cursor += 3;
+    } else if (!triplets[d] && cursor < secIdx.size()) {
+      auto kC = traceConstInt(secIdx[cursor]);
+      std::string k = renderBound(secIdx[cursor]);
+      if (k.empty()) return {};
+      subset.push_back(kC ? std::to_string(*kC - 1) : ("(" + k + ")-1"));
+      cursor += 1;
+    } else {
+      return {};
+    }
+  }
+  return subset;
+}
+
 // ---------------------------------------------------------------------------
 // Main extraction
 // ---------------------------------------------------------------------------
@@ -3089,6 +3152,14 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
               break;
             }
             if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(pd)) {
+              // The OUTERMOST designate on the rebox's box is the source
+              // section (``a(:, c0:c1)``).  Render it once so access.py
+              // links the view to exactly that slab -- carrying the
+              // column OFFSET -- rather than all of the parent (a
+              // constant-offset read works by luck at offset 0; a
+              // variable ``c0`` does not).
+              if (v.bounds_remap_source_subset.empty())
+                v.bounds_remap_source_subset = renderDesignateSubsetStrings(dg);
               parent = dg.getMemref();
               continue;
             }

@@ -104,6 +104,16 @@ struct VarInfo {
   bool bounds_remap_view = false;
   std::string bounds_remap_source;
   std::string bounds_remap_total_extent;
+  /// Per-source-dim subset of the parent array that the bounds-remap
+  /// view covers, rendered as 0-based DaCe subset strings (one entry
+  /// per source dim, e.g. ``{"0:nrows", "(c0)-1:(c0)-1+ncols"}`` for
+  /// ``p(1:n*k) => a(:, c0:c1)``).  Empty when the rebind is a
+  /// whole-array reinterpretation (no section).  Consumed by
+  /// ``access.py`` to build the source-side subset of the
+  /// ``original -> view`` linking memlet so the column OFFSET stays
+  /// symbolic (a constant-offset read works by luck at offset 0; a
+  /// variable ``c0`` needs this).
+  std::vector<std::string> bounds_remap_source_subset;
 };
 
 /// Decode a Flang module-global mangled symbol of the form

@@ -147,9 +147,17 @@ def acc(builder, state, name: str):
                 and v.bounds_remap_source \
                 and v.bounds_remap_source in state.parent.arrays:
             from types import SimpleNamespace
+            # Prefer the surfaced source-SECTION subset (carries the
+            # column offset, e.g. ``a[0:nrows, (c0)-1:c1]``) so the
+            # original -> view linking memlet covers exactly the aliased
+            # slab.  Fall back to the whole-array sentinel for the
+            # rank-increasing embox case (``p(1:M, 1:K) => arr1d``) where
+            # the view's own strides encode the reshape and there is no
+            # source section to carry.
+            src_subset = list(v.bounds_remap_source_subset) or [""]
             v = SimpleNamespace(role='view_alias',
                                 view_source=v.bounds_remap_source,
-                                view_subset=[""],
+                                view_subset=src_subset,
                                 fortran_name=v.fortran_name)
         if v is not None and getattr(v, 'role', '') == 'view_alias' \
                 and v.view_source and v.view_source in state.parent.arrays:
@@ -235,8 +243,7 @@ def rename_iters(expr, iter_map):
     those sites call ``apply_reserved`` on the result."""
     if not iter_map or not isinstance(expr, str):
         return expr
-    return re.sub(r"\b([A-Za-z_]\w*)\b",
-                  lambda m: iter_map.get(m.group(1), m.group(1)), expr)
+    return re.sub(r"\b([A-Za-z_]\w*)\b", lambda m: iter_map.get(m.group(1), m.group(1)), expr)
 
 
 def apply_reserved(expr):
@@ -248,8 +255,7 @@ def apply_reserved(expr):
     is the right place to catch them before sympify."""
     if not isinstance(expr, str):
         return expr
-    return re.sub(r"\b([A-Za-z_]\w*)\b",
-                  lambda m: _reserved_rewrite(m.group(1)), expr)
+    return re.sub(r"\b([A-Za-z_]\w*)\b", lambda m: _reserved_rewrite(m.group(1)), expr)
 
 
 def _remap_token(token, iter_map):
@@ -622,8 +628,7 @@ def build_memlet_index(builder, array_name: str, access, iter_map: dict, indirec
         if '[' in expr and indirect_syms:
             while True:
                 replaced = False
-                for sub_start, sub_end, _arr, _parts in find_array_subscripts(
-                        expr, builder.arrays):
+                for sub_start, sub_end, _arr, _parts in find_array_subscripts(expr, builder.arrays):
                     sub = expr[sub_start:sub_end]
                     if sub in indirect_syms:
                         expr = expr[:sub_start] + indirect_syms[sub] + expr[sub_end:]
@@ -642,8 +647,7 @@ def build_memlet_index(builder, array_name: str, access, iter_map: dict, indirec
         # Closed-form arithmetic: remap the iter names through the
         # current LoopRegion's uniquified iter_map, then offset.
         if any(op in expr for op in "+-*/") or expr.startswith("("):
-            parts.append(
-                f"({apply_reserved(rename_iters(expr, iter_map))}) - {offset_sym}")
+            parts.append(f"({apply_reserved(rename_iters(expr, iter_map))}) - {offset_sym}")
             continue
 
         # Constant literal: keep as-is, offset symbolically (sympy

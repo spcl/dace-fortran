@@ -541,6 +541,7 @@ NB_MODULE(hlfir_bridge, m) {
       .def_ro("bounds_remap_view", &VarInfo::bounds_remap_view)
       .def_ro("bounds_remap_source", &VarInfo::bounds_remap_source)
       .def_ro("bounds_remap_total_extent", &VarInfo::bounds_remap_total_extent)
+      .def_ro("bounds_remap_source_subset", &VarInfo::bounds_remap_source_subset)
       .def("__repr__", [](const VarInfo& v) {
         std::string s = "<" + v.role + " '" + v.fortran_name + "'";
         if (v.rank > 0) {

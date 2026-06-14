@@ -53,13 +53,6 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 _PLAIN_REBIND_WHOLE_READ = ("plain rank-reducing rebind: a bare whole-array read `out = p` is not "
                             "forwarded to the target (only subscripted `p(i)` access is rewritten)")
 
-#: Bounds-remap-view flatten read with a *variable* section lower bound:
-#: `p(1:n*k) => a(:, c0:c1)`.  The constant-offset read works (see the
-#: passing C/G cases); a runtime `c0` leaves the View's offset symbol
-#: unresolved.  This is QE's exact `prhoc_d(...) => rhoc_d(:, off+1:...)`.
-_VIEW_VAR_OFFSET = ("bounds-remap-view: a variable section lower bound leaves the View's "
-                    "offset symbol unbound (constant-offset flatten reads already pass)")
-
 #: Write-back through a flattened bounds-remap view: `p(1:n*k) =>
 #: a(:, c0:c1); p(i) = ...` (or a callee mutating `p`).  The read-side
 #: View linking memlet is wired; the write-side fold-back to the parent's
@@ -270,10 +263,11 @@ end subroutine main
     assert list(out[12:20]) == [41, 42, 43, 44, 51, 52, 53, 54]
 
 
-@pytest.mark.xfail(reason=_VIEW_VAR_OFFSET, strict=False)
 def test_c_section_flatten_variable_lb(tmp_path: Path):
-    """``p(1:12) => a(:, c0:c0+2)`` with a *variable* lower bound ``c0``
-    -- the section's offset must stay symbolic (QE feeds a loop index)."""
+    """``p(1:12) => a(:, c0:c0+2)`` with a *variable* lower bound ``c0``.
+    The bridge surfaces the source section ``a[:, (c0)-1:c0+2]`` so the
+    original->view linking memlet carries the symbolic column offset
+    (QE feeds a loop index).  Regression guard for the facet-2 fix."""
     src = """
 subroutine main(c0, out)
   implicit none
