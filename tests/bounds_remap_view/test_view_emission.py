@@ -193,15 +193,23 @@ def test_view_extent_is_symbolic_n_times_k(tmp_path):
         f"View extent should be n*k or a synth symbol, got {extent_str!r}"
 
 
-def test_offset_symbol_is_minted(tmp_path):
-    """The bridge mints ``offset_prhoc_d0`` alongside the View, so
-    the per-rebind column offset stays symbolic at SDFG-call time
-    (per the spec: shape/strides are baked, offset goes through a
-    fresh symbol)."""
+def test_offset_symbol_is_stamped_to_view_lb(tmp_path):
+    """The view's access offset is stamped to its Fortran lower bound (1):
+    a ``prhoc(i)`` access subtracts 1 to reach the 0-based view element.
+
+    The per-rebind SOURCE column offset (``rhoc(:, k)``) rides the
+    original->view linking memlet's source subset
+    (``VarInfo.bounds_remap_source_subset``), NOT this symbol -- so
+    ``offset_prhoc_d0`` folds to the constant 1.  (It used to be left a
+    free symbol meant to carry the column offset; that binding was never
+    wired, so the symbol stayed 0 and every ``prhoc(i)`` write landed one
+    slot past its element -- the write-back off-by-one.)"""
     builder = _make_builder("pointer_view_bounds_remap_probe.f90", tmp_path)
-    sdfg = _build_partial_sdfg(builder)
-    assert "offset_prhoc_d0" in sdfg.symbols, \
-        f"missing offset_prhoc_d0; sdfg.symbols={list(sdfg.symbols)}"
+    _build_partial_sdfg(builder)
+    inner = getattr(builder, "_inner", builder)
+    assert inner.offset_values.get("offset_prhoc_d0") == 1, \
+        f"offset_prhoc_d0 should be stamped to the view LB 1, got " \
+        f"{inner.offset_values.get('offset_prhoc_d0')!r}"
 
 
 def test_copy_probes_yield_no_view_at_destination(tmp_path):

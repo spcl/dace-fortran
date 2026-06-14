@@ -3086,6 +3086,15 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
               continue;
             }
             if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(pd)) {
+              // A literal-bounds section (``a(:, 1:3)``) lowers the rebind
+              // through embox (not rebox); render the outermost designate
+              // here too so the view links to exactly that section, not
+              // all of the parent.  The rank-increasing ``=> arr1d`` form
+              // has no designate on its memref, so this stays empty and
+              // access.py falls back to the whole-array (strides-encoded)
+              // link.
+              if (v.bounds_remap_source_subset.empty())
+                v.bounds_remap_source_subset = renderDesignateSubsetStrings(dg);
               parent = dg.getMemref();
               continue;
             }

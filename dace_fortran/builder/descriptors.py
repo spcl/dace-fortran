@@ -375,27 +375,18 @@ def add_descriptors(builder, sdfg: SDFG):
             if sym_name not in sdfg.symbols:
                 sdfg.add_symbol(sym_name, dace.int64)
             if v.bounds_remap_view:
-                # Rank-preserving bounds-remap-view (QE's
-                # ``ptr(:) => parent(:, k)``): the column offset
-                # changes per surrounding-loop iteration -- mark the
-                # symbol as dynamic and bind it per rebind site (the
-                # interstate-edge wiring lives in the View's linking
-                # path).
-                #
-                # Rank-changing bounds-remap-view (``p(1:M, 1:K) =>
-                # arr1d``): the offset is the Fortran 1-based
-                # default ``1`` on every dim -- the view's strides
-                # already encode the multi-D -> linear remap and
-                # there's no per-iteration column re-anchor.  Without
-                # this binding ``offset_p_d0`` stays at 0 and every
-                # ``p(i, j)`` access lands one slot past the
-                # expected flat offset (the 1-based ``i`` would be
-                # subtracted by 0 instead of 1).
-                same_rank_view = (rank == 1)
-                if same_rank_view:
-                    builder.offset_values[sym_name] = None
-                else:
-                    builder.offset_values[sym_name] = 1
+                # The view's OWN access offset is its Fortran lower bound,
+                # which the mark pass pins to 1 (``p(1:n*k) => ...``): a
+                # ``p(i)`` / ``p(i, j)`` access subtracts 1 to reach the
+                # 0-based view element.  The per-rebind SOURCE column
+                # offset (``a(:, c0:c1)``) is carried by the
+                # original->view linking memlet's source subset (see
+                # ``VarInfo.bounds_remap_source_subset`` / access.py), NOT
+                # here -- so every dim's access offset is the constant 1.
+                # (Previously a rank-1 flatten view left this ``None`` -> 0,
+                # so every ``p(i)`` write landed one slot past its element:
+                # the write-back off-by-one.)
+                builder.offset_values[sym_name] = 1
                 continue
             lb = v.lower_bounds[d] if d < len(v.lower_bounds) else "1"
             builder.offset_values[sym_name] = _offset_value(lb)
@@ -443,8 +434,7 @@ def add_descriptors(builder, sdfg: SDFG):
             # complex array.  (A by-value fix would require correcting
             # DaCe core's complex ``as_ctypes`` + the SysV 2-SSE-reg
             # complex ABI, which is out of scope here.)
-            sdfg.add_array(v.fortran_name, shape=(1, ), dtype=dt(v.dtype),
-                           transient=False)
+            sdfg.add_array(v.fortran_name, shape=(1, ), dtype=dt(v.dtype), transient=False)
         else:
             # Scalar INPUT (``intent(in)`` or ``REAL(8), VALUE :: x``).
             # Register as a true Scalar -- DaCe accepts plain Python

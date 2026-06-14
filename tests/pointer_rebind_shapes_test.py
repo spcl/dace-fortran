@@ -229,10 +229,12 @@ end subroutine main
     np.testing.assert_array_equal(out, [11, 12, 13, 14, 21, 22, 23, 24, 31, 32, 33, 34])
 
 
-@pytest.mark.xfail(reason=_VIEW_WRITEBACK, strict=False)
 def test_c_section_flatten_write_through(tmp_path: Path):
-    """Write through the flattened section view; alias write-back must
-    land at the column-major offsets inside ``a``."""
+    """Write through the flattened section view; alias write-back lands at
+    the column-major offsets inside ``a``.  The view's access offset is
+    stamped to its Fortran LB (1) and the source column offset rides the
+    linking memlet, so ``p(i) = ...`` propagates to ``a`` without the
+    old off-by-one."""
     src = """
 subroutine main(out)
   implicit none
@@ -482,6 +484,41 @@ end subroutine main
     np.testing.assert_array_equal(out, ref)
     # Plane k=2, column-major over (i=1..2, j=1..3): 211,212,221,222,231,232.
     np.testing.assert_array_equal(out, [211, 212, 221, 222, 231, 232])
+
+
+@pytest.mark.xfail(reason=_PLAIN_REBIND_WHOLE_READ, strict=False)
+def test_f_3d_noncontig_plane_to_2d_read(tmp_path: Path):
+    """``p(:,:) => a(:, j, :)`` -- a NON-packed 2-D view of a 3-D array
+    (the middle dim is fixed).  The view's strides must be
+    ``(1, dim0*dim1)`` -- NOT a packed ``(1, dim0)`` -- since dim-2 skips
+    over the whole fixed dim-1.  Pins the stride-correctness requirement
+    for the View migration (P3)."""
+    src = """
+subroutine main(out)
+  implicit none
+  real(8), intent(out) :: out(8)
+  real(8), target :: a(2, 3, 4)
+  real(8), pointer :: p(:, :)
+  integer :: i, j, k
+  do k = 1, 4
+    do j = 1, 3
+      do i = 1, 2
+        a(i, j, k) = real(100 * k + 10 * j + i, 8)
+      end do
+    end do
+  end do
+  p => a(:, 2, :)
+  out = reshape(p, [8])
+end subroutine main
+"""
+    mod = f2py_compile(src, tmp_path / "ref", "f_noncontig")
+    ref = np.asarray(mod.main(), dtype=np.float64)
+
+    out = np.zeros(8, order="F", dtype=np.float64)
+    _build(src, tmp_path)(out=out)
+    np.testing.assert_array_equal(out, ref)
+    # a(:, 2, :): column-major over (i=1..2, k=1..4), j fixed = 2.
+    np.testing.assert_array_equal(out, [121, 122, 221, 222, 321, 322, 421, 422])
 
 
 # ===========================================================================
