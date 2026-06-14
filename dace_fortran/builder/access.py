@@ -277,6 +277,65 @@ def _format_offset_subset(arr, parts):
     return f"{arr}[{items}]"
 
 
+def sdfg_is_len1_array(sdfg, name: str) -> bool:
+    """True when ``name`` is registered on the SDFG as a length-1 ``Array``
+    rather than a ``Scalar``.  The bridge keeps some logical SCALARS as
+    ``(1,)``-Arrays (``descriptors.py``): an ``intent(out)`` / ``inout``
+    scalar -- the caller needs a writable buffer, e.g. a module global like
+    ``kunit`` / ``npool`` the kernel updates -- and a complex ``intent(in)``
+    scalar (pass-by-pointer ABI).  Such a var is a POINTER in the generated
+    C, so a CODE-BLOCK reference (interstate-edge assignment / condition)
+    must read it as ``name[0]``; a bare ``name`` leaks the pointer
+    (``int* / int*``).  Tasklets already deref correctly via the memlet
+    ``[0]``; only the bridge-built code-block expression strings need the
+    explicit subscript.  Keyed off the real descriptor (``dtype is array``)
+    rather than the intent classification, so any length-1 Array is caught."""
+    import dace
+    s = sdfg
+    while s is not None:
+        d = s.arrays.get(name)
+        if d is not None:
+            return isinstance(d, dace.data.Array) and tuple(d.shape) == (1, )
+        # A nested-SDFG code block can reference a parent-scope length-1 Array
+        # (a module global like ``kunit`` lives on the top SDFG); walk up.
+        s = getattr(s, 'parent_sdfg', None)
+    return False
+
+
+def deref_len1_array_scalars(sdfg, expr: str) -> str:
+    """Token-walk a code-block expression STRING and rewrite every bare
+    reference to a length-1 Array scalar (see :func:`sdfg_is_len1_array`) as
+    ``name[0]``.  Used to repair interstate-edge assignment values /
+    conditions the bridge built before the descriptor was known to be a
+    length-1 Array (so a logical scalar kept as a ``(1,)``-Array -- e.g. the
+    inout module globals ``kunit`` / ``npool`` -- reads its element, not the
+    bare pointer).  Already-subscripted occurrences (``name[...]``) and names
+    not on the SDFG (tasklet connectors, symbols, locals) are left alone, so
+    the rewrite is idempotent and connector-safe."""
+    if not isinstance(expr, str) or sdfg is None or not expr:
+        return expr
+    out = []
+    i = 0
+    while i < len(expr):
+        ch = expr[i]
+        if ch.isalpha() or ch == '_':
+            j = i
+            while j < len(expr) and (expr[j].isalnum() or expr[j] == '_'):
+                j += 1
+            tok = expr[i:j]
+            already_subscripted = j < len(expr) and expr[j] == '['
+            attr_access = i > 0 and expr[i - 1] == '.'
+            if not already_subscripted and not attr_access and sdfg_is_len1_array(sdfg, tok):
+                out.append(f"{tok}[0]")
+            else:
+                out.append(tok)
+            i = j
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out)
+
+
 def find_array_subscripts(expr, names):
     """Generator yielding ``(start, end, arr_name, parts)`` for each
     top-level ``<arr>[...]`` substring in ``expr`` whose ``<arr>`` is in
@@ -383,7 +442,7 @@ def _offset_token(arr: str, dim: int) -> str:
     return f"offset_{arr}_d{dim}"
 
 
-def array_read_to_dace_expr(builder, assign_node, iter_map: dict) -> str:
+def array_read_to_dace_expr(builder, assign_node, iter_map: dict, sdfg=None) -> str:
     """Render a scalar-target assign's RHS as a DaCe interstate-edge
     expression, lifting EVERY array read to the uniform offset-symbol
     subscript form (``arr[(idx) - offset_arr_d<i>, ...]``).  Used to lift
@@ -399,9 +458,11 @@ def array_read_to_dace_expr(builder, assign_node, iter_map: dict) -> str:
     dims(2)+1`` collapsed to ``dims(1)``), making a promoted index/size
     symbol wrong.  Falls back to ``expr`` when the RHS has no array read."""
     reads = [ac for ac in assign_node.accesses if ac.is_read and ac.array_name in builder.arrays]
-    if not reads:
-        return assign_node.expr
     expr = assign_node.expr
+    # Fast path: nothing to subscript (no array reads, and -- absent the SDFG
+    # to consult for length-1 Array scalars -- no deref to add).
+    if not reads and sdfg is None:
+        return expr
     out = []
     ri = 0
     i = 0
@@ -421,6 +482,13 @@ def array_read_to_dace_expr(builder, assign_node, iter_map: dict) -> str:
                 ri += 1
                 parts = [_remap_token(raw, iter_map) for raw in ac.index_exprs]
                 out.append(_format_offset_subset(ac.array_name, parts))
+            elif not already_subscripted and sdfg_is_len1_array(sdfg, tok):
+                # A logical scalar kept as a length-1 Array (inout/out module
+                # global like ``kunit`` / ``npool``, or a complex intent(in)):
+                # it is a pointer in C, so the code-block expression must read
+                # the single element ``tok[0]`` rather than leak the bare
+                # pointer (``int* / int*`` compile error).
+                out.append(f"{tok}[0]")
             else:
                 out.append(tok)
             i = j

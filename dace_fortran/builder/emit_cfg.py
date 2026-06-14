@@ -159,28 +159,20 @@ def emit_assign(builder, ctx: '_Ctx', n, region):
         # iter_map remap; otherwise the interstate edge would assign the
         # whole array to a scalar symbol.  Plain symbol writes
         # (``i = i + 1``) keep ``n.expr`` verbatim.
-        if assign_reads_array(n, builder.arrays):
-            rhs = array_read_to_dace_expr(builder, n, ctx.iter_map)
-        else:
-            rhs = n.expr
-            # Scalar I/O convention: ``intent(inout)`` / ``intent(out)``
-            # scalar dummies register in the SDFG as length-1 ``Array``
-            # descriptors (so the caller's binding has a writable slot);
-            # ``intent(in)`` scalars register as ``Scalar``.  The C ABI
-            # binds an Array as ``T*`` and a Scalar as ``T`` (after
-            # DaCe's auto-deref), so a bare ``<name>`` reference on the
-            # RHS of a symbol-target interstate-edge assignment renders
-            # correctly as ``indices_end = endidx`` only when ``endidx``
-            # is a Scalar.  For length-1 Arrays we need an explicit
-            # ``<name>[0]`` so the codegen sees a scalar value, not the
-            # bare pointer.
-            rhs_name = rhs.strip() if isinstance(rhs, str) else None
-            if rhs_name and rhs_name in ctx.sdfg.arrays:
-                desc = ctx.sdfg.arrays[rhs_name]
-                if type(desc).__name__ == 'Array':
-                    shape = getattr(desc, 'shape', None)
-                    if shape is not None and tuple(shape) == (1, ):
-                        rhs = f"{rhs_name}[0]"
+        # ``array_read_to_dace_expr`` lifts every builder.arrays read to the
+        # uniform offset-subset form AND derefs length-1 Array scalars to
+        # ``name[0]``.  Scalar I/O convention: ``intent(inout)`` /
+        # ``intent(out)`` scalar dummies (and module globals like ``kunit`` /
+        # ``npool`` the kernel updates) register in the SDFG as length-1
+        # ``Array`` descriptors (writable buffer for the caller's binding);
+        # ``intent(in)`` scalars register as ``Scalar``.  The C ABI binds an
+        # Array as ``T*`` and a Scalar as ``T``, so a bare ``<name>`` on the
+        # RHS of a symbol-target interstate-edge assignment leaks the pointer
+        # (``int* / int*``) unless dereferenced.  The token-walk handles this
+        # uniformly for both single-name (``indices_end = endidx``) and
+        # COMPOUND (``nks = kunit * ifloor(nkbl / npool)``) right-hand sides;
+        # plain ``i = i + 1`` passes through verbatim.
+        rhs = array_read_to_dace_expr(builder, n, ctx.iter_map, ctx.sdfg)
         rhs = _strip_dace_casts(rhs)
         ctx.flush(builder, region)
         ctx.ensure(region)
@@ -275,14 +267,20 @@ def emit_symbol_init(builder, ctx: '_Ctx', n, region):
     ctx.flush(builder, region)
     ctx.ensure(region)
     dst = region.add_state(f"sym_init_{sym}_{builder.nid()}")
-    # If ``arr`` is a Scalar on the SDFG (the bridge folds length-1
-    # transients to Scalar), ``arr[0]`` is invalid -- a Scalar has no
-    # subscript.  Drop the subscript so the interstate edge reads the
-    # Scalar value directly.  Otherwise emit the (multi-dim) 0-based
-    # subscript; these source arrays use the default lower bound 1.
+    # Reference the source without a subscript when it isn't a real
+    # multi-element data array:
+    #   * ``arr`` is already a SYMBOL -- a flattened struct-member scalar
+    #     promoted to a shape symbol (QE ``dfftt%ngm`` -> ``dfftt_ngm``)
+    #     holds the value directly; ``dfftt_ngm[0]`` would subscript a
+    #     symbol and ``sdfg.validate`` raises ``KeyError`` looking it up
+    #     as data.
+    #   * ``arr`` is a Scalar on the SDFG (the bridge folds length-1
+    #     transients to Scalar) -- a Scalar has no subscript.
+    # Otherwise emit the (multi-dim) 0-based subscript; these source
+    # arrays use the default lower bound 1.
     from dace.data import Scalar
     src_desc = ctx.sdfg.arrays.get(arr)
-    if isinstance(src_desc, Scalar):
+    if arr in ctx.sdfg.symbols or isinstance(src_desc, Scalar):
         read_expr = arr
     else:
         read_expr = f"{arr}[{', '.join(str(i - 1) for i in idxs)}]"
@@ -634,7 +632,7 @@ def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
                 ctx.sdfg.add_symbol(sym, dace.int64)
         symbol_assign_pairs: list[tuple[str, str]] = []
         for a in symbol_assigns:
-            symbol_assign_pairs.append((a.target, array_read_to_dace_expr(builder, a, iter_map)))
+            symbol_assign_pairs.append((a.target, array_read_to_dace_expr(builder, a, iter_map, ctx.sdfg)))
 
         if per_sym_assigns or symbol_assign_pairs:
             pre = loop.add_state(f"pre_{builder.nid()}")
@@ -646,13 +644,30 @@ def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
                 nxt = loop.add_state(f"sym_{sym}_{builder.nid()}")
                 loop.add_edge(cur, nxt, InterstateEdge(assignments={sym: rhs}))
                 cur = nxt
-            # Stage-staged scalar->symbol writes (``ci0 = icidx(je, jb, 1)``)
-            # don't have ordering constraints among themselves, so they
-            # can share one final edge.
-            body = loop.add_state('body')
+            # Stage-staged scalar->symbol writes.  Most are independent
+            # (``ci0 = icidx(je, jb, 1)``) and share one edge, but some
+            # CHAIN (``qvan2_i1 = qvan2_i0 + 1`` right after ``qvan2_i0 =
+            # int32(qm) + 1``).  DaCe forbids an interstate assignment
+            # whose RHS reads a name written on the SAME edge (no defined
+            # order), so a pair whose RHS references a target written
+            # EARLIER in the current batch must open a NEW edge (the prior
+            # batch then sits on the preceding edge).  Dependency detected
+            # via the RHS's SYMBOLIC free-symbols (robust to substrings /
+            # the ``int32(...)`` typecast function, which is not a symbol).
             edge = InterstateEdge()
+            batch_lhs: set = set()
             for tgt, rhs in symbol_assign_pairs:
+                try:
+                    rhs_syms = {str(s) for s in dace.symbolic.pystr_to_symbolic(rhs).free_symbols}
+                except Exception:
+                    rhs_syms = set(re.findall(r'[A-Za-z_]\w*', str(rhs)))
+                if edge.assignments and (rhs_syms & batch_lhs):
+                    nxt = loop.add_state(f"sym_chain_{builder.nid()}")
+                    loop.add_edge(cur, nxt, edge)
+                    cur, edge, batch_lhs = nxt, InterstateEdge(), set()
                 edge.assignments[tgt] = rhs
+                batch_lhs.add(tgt)
+            body = loop.add_state('body')
             loop.add_edge(cur, body, edge)
         else:
             body = loop.add_state('body')

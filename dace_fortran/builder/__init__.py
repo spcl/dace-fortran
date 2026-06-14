@@ -348,7 +348,7 @@ MULTI_FILE_PIPELINE = (
 # The bridge renames any matching Fortran identifier to ``program_<name>``
 # at the SDFG layer; the binding emitter restores the original name on
 # the Python wrapper.
-_RESERVED_DACE_NAMES = frozenset({"test", "doctest", "im", "re"})
+_RESERVED_DACE_NAMES = frozenset({"test", "doctest", "im", "re", "limit"})
 
 _DACE_NAME_PREFIX = "program_"
 
@@ -1014,6 +1014,50 @@ class SDFGBuilder:
         # Fortran reference) rather than libm ``pow``.
         IntegerizePowerExponents().apply_pass(sdfg, {})
 
+        # Code-block length-1 Array deref.  A logical scalar the bridge keeps
+        # as a length-1 ``Array`` (intent(inout)/out -- e.g. the module
+        # globals ``kunit`` / ``npool`` the kernel updates -- or a complex
+        # intent(in)) is a POINTER in C, so a CODE-BLOCK reference must read
+        # ``name[0]``.  ``emit_assign`` / ``array_read_to_dace_expr`` already
+        # deref the assignment RHS strings they build, but interstate-edge
+        # CONDITIONS (``if_cond_NNN = ...``) and any other bridge-built
+        # code-block expression are repaired uniformly here -- per-SDFG so the
+        # descriptor lookup is scoped correctly.  Idempotent (skips
+        # already-subscripted refs / non-SDFG names), so re-running over
+        # already-deref'd edges is a no-op.
+        from dace_fortran.builder.access import deref_len1_array_scalars
+        from dace.properties import CodeBlock
+        from dace.sdfg.state import LoopRegion, ConditionalBlock
+
+        def _deref_cb(scope_sdfg, cb):
+            """Deref a CodeBlock in place; return the (possibly new) block."""
+            if cb is None or not getattr(cb, 'as_string', None):
+                return cb
+            new = deref_len1_array_scalars(scope_sdfg, cb.as_string)
+            return CodeBlock(new) if new != cb.as_string else cb
+
+        for nsdfg in list(sdfg.all_sdfgs_recursive()):
+            for e in nsdfg.all_interstate_edges():
+                ie = e.data
+                for k in list(ie.assignments.keys()):
+                    ie.assignments[k] = deref_len1_array_scalars(nsdfg, str(ie.assignments[k]))
+                ie.condition = _deref_cb(nsdfg, ie.condition)
+            # Conditions / bounds on structured control flow (LoopRegion
+            # condition + init/update, ConditionalBlock branch guards) are NOT
+            # interstate edges, so repair them here too.
+            for region in nsdfg.all_control_flow_regions():
+                if isinstance(region, LoopRegion):
+                    region.loop_condition = _deref_cb(nsdfg, region.loop_condition)
+                    if region.init_statement is not None:
+                        region.init_statement = _deref_cb(nsdfg, region.init_statement)
+                    if region.update_statement is not None:
+                        region.update_statement = _deref_cb(nsdfg, region.update_statement)
+                elif isinstance(region, ConditionalBlock):
+                    for idx, (cond, body) in enumerate(list(region.branches)):
+                        new_cond = _deref_cb(nsdfg, cond)
+                        if new_cond is not cond:
+                            region.branches[idx] = (new_cond, body)
+
     def _attach_frozen_signature(self, sdfg: SDFG):
         """Snapshot ``sdfg.arglist()`` + free symbols into a
         ``FrozenSignature`` and pin it on the SDFG.
@@ -1272,6 +1316,15 @@ class SDFGBuilder:
             if arr is None:
                 continue
             free_syms |= {str(s) for s in arr.used_symbols(all_symbols=True)}
+        # ``dace`` is the module namespace tasklet bodies reference for
+        # typed casts (``dace.float32(...)`` / ``dace.int64(...)`` -- the
+        # bridge emits these when a Fortran expression mixes kinds, e.g.
+        # ``nqs_inv = 1.0 / nqs`` where the ``1.0`` literal is REAL(4)).
+        # DaCe's code free-symbol walker surfaces the bare ``dace`` Name,
+        # but it is NOT a runtime symbol: codegen resolves
+        # ``dace.float32`` to the C++ cast.  Drop it like ``__dace``
+        # internals so it never lands in the required-symbol signature.
+        free_syms.discard('dace')
         return (free_syms - defined_syms) - set(sdfg.arrays.keys())
 
     def _diagnose_unresolved_free_symbols(self, sdfg: SDFG, needed: set):
