@@ -243,3 +243,6 @@ _all_tests/
 
 # External ICON source clone used by the self-building ICON tests (not tracked)
 tests/icon/full/icon-model/
+
+# Local session planning scratch (not repo content)
+WORK_PACKAGES.md
