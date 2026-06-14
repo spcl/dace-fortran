@@ -27,6 +27,28 @@ DTYPE = {
     'uint8': dace.uint8,
     'complex64': dace.complex64,
     'complex128': dace.complex128,
+    # RAW MLIR type spellings.  Most bridge paths emit the canonical names
+    # above, but the flattened-struct-member path (``extract_vars.cpp``
+    # ``dtypeFor`` on the innermost element type) emits the verbatim
+    # ``ty.print()`` form -- so a symbol minted from a flattened INTEGER
+    # member (``dfftt%ngm`` -> ``i32``) reached here as ``"i32"`` and hit
+    # the ``float64`` default, producing a ``double`` symbol that can't be
+    # a ``new[]`` extent / memlet subscript.  Recognise every MLIR scalar
+    # spelling so both forms map to the same DaCe typeclass.
+    'i1': dace.bool_,
+    'i8': dace.int8,
+    'i16': dace.int16,
+    'i32': dace.int32,
+    'i64': dace.int64,
+    'ui8': dace.uint8,
+    'ui16': dace.uint16,
+    'ui32': dace.uint32,
+    'ui64': dace.uint64,
+    'f16': dace.float16,
+    'f32': dace.float32,
+    'f64': dace.float64,
+    'complex<f32>': dace.complex64,
+    'complex<f64>': dace.complex128,
 }
 
 
