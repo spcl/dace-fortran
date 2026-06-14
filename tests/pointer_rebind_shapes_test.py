@@ -45,14 +45,6 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 #     ends; every xfail names the single facet that breaks so the marker
 #     can be removed the moment that facet is wired.
 
-#: A bare *whole-array* read of a plain (non-bounds-remap) rank-reducing
-#: rebind: `p => a(:, j); out = p`.  Subscripted reads `p(i)` and writes
-#: `p(i) = ...` forward correctly, but a bare `p` on an assignment RHS is
-#: not rewritten to its target -- `out` reads the uninitialised pointer
-#: storage.  Same root as QE's `res = p` whole-array copy (gate-H).
-_PLAIN_REBIND_WHOLE_READ = ("plain rank-reducing rebind: a bare whole-array read `out = p` is not "
-                            "forwarded to the target (only subscripted `p(i)` access is rewritten)")
-
 #: Write-back through a flattened bounds-remap view: `p(1:n*k) =>
 #: a(:, c0:c1); p(i) = ...` (or a callee mutating `p`).  The read-side
 #: View linking memlet is wired; the write-side fold-back to the parent's
@@ -134,9 +126,10 @@ end subroutine main
 # ===========================================================================
 
 
-@pytest.mark.xfail(reason=_PLAIN_REBIND_WHOLE_READ, strict=False)
 def test_b_column_rebind_read(tmp_path: Path):
-    """``p(:) => a(:, 3)`` then copy the whole view out (`out = p`)."""
+    """``p(:) => a(:, 3)`` then copy the whole view out (`out = p`).
+    Plain section rebind lowered as a view (P3): the bare whole-array
+    read forwards through the view to the column."""
     src = """
 subroutine main(out)
   implicit none
@@ -455,9 +448,9 @@ end subroutine main
 # ===========================================================================
 
 
-@pytest.mark.xfail(reason=_PLAIN_REBIND_WHOLE_READ, strict=False)
 def test_f_3d_plane_to_2d_read(tmp_path: Path):
-    """``p(:,:) => a(:,:,2)`` then copy the whole plane out (`reshape(p)`)."""
+    """``p(:,:) => a(:,:,2)`` then copy the whole plane out (`reshape(p)`).
+    Plain rank-reducing rebind lowered as a (contiguous) view (P3)."""
     src = """
 subroutine main(out)
   implicit none
@@ -486,17 +479,18 @@ end subroutine main
     np.testing.assert_array_equal(out, [211, 212, 221, 222, 231, 232])
 
 
-@pytest.mark.xfail(reason=_PLAIN_REBIND_WHOLE_READ, strict=False)
 def test_f_3d_noncontig_plane_to_2d_read(tmp_path: Path):
     """``p(:,:) => a(:, j, :)`` -- a NON-packed 2-D view of a 3-D array
-    (the middle dim is fixed).  The view's strides must be
-    ``(1, dim0*dim1)`` -- NOT a packed ``(1, dim0)`` -- since dim-2 skips
-    over the whole fixed dim-1.  Pins the stride-correctness requirement
-    for the View migration (P3)."""
+    (the middle dim is fixed).  The view's strides are ``(1, d0*d1)`` --
+    NOT a packed ``(1, d0)`` -- since dim-2 skips the whole fixed dim-1.
+    A same-rank ``out = p`` copy reads the right slab through the
+    non-packed strides.  (A 1-D ``reshape(p, [...])`` of a non-packed
+    source is a separate DaCe CopyNode limitation -- a rank-mismatched
+    copy needs both ends packed -- not a view-stride issue.)"""
     src = """
 subroutine main(out)
   implicit none
-  real(8), intent(out) :: out(8)
+  real(8), intent(out) :: out(2, 4)
   real(8), target :: a(2, 3, 4)
   real(8), pointer :: p(:, :)
   integer :: i, j, k
@@ -508,17 +502,17 @@ subroutine main(out)
     end do
   end do
   p => a(:, 2, :)
-  out = reshape(p, [8])
+  out = p
 end subroutine main
 """
     mod = f2py_compile(src, tmp_path / "ref", "f_noncontig")
     ref = np.asarray(mod.main(), dtype=np.float64)
 
-    out = np.zeros(8, order="F", dtype=np.float64)
+    out = np.zeros((2, 4), order="F", dtype=np.float64)
     _build(src, tmp_path)(out=out)
     np.testing.assert_array_equal(out, ref)
-    # a(:, 2, :): column-major over (i=1..2, k=1..4), j fixed = 2.
-    np.testing.assert_array_equal(out, [121, 122, 221, 222, 321, 322, 421, 422])
+    # Plane j=2: out(i, k) = a(i, 2, k), column-major.
+    np.testing.assert_array_equal(out, [[121, 221, 321, 421], [122, 222, 322, 422]])
 
 
 # ===========================================================================

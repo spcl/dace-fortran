@@ -356,6 +356,16 @@ def emit_scalar_assign(builder, state, target: str, value: str):
             and getattr(tgt_var, "bounds_remap_source", "") == src_name:
         return
 
+    # P3: a plain section rebind (``p => a(:, j)`` / ``p => store(3:7)``)
+    # lowered as a ``view_alias``.  The source -> view linking edge in
+    # access.py already establishes the alias; the bare ``p = a`` rebind
+    # store is NOT a data copy -- skip it, else a spurious whole-array
+    # ``a -> view`` edge is added on top of the section link and DaCe
+    # reports an "ambiguous view" (two candidate sources).
+    if tgt_var is not None and tgt_var.role == "view_alias" \
+            and tgt_var.view_source == src_name:
+        return
+
     if tgt_is_array:
         is_whole_array_copy = (src_name in builder.arrays and re.fullmatch(r'[A-Za-z_]\w*', src_name) is not None)
         if is_whole_array_copy:
@@ -387,8 +397,7 @@ def emit_scalar_assign(builder, state, target: str, value: str):
         # ``j`` is still caught).  Use ``add_mapped_tasklet`` so DaCe
         # wires the empty-input + indexed-output edges itself.
         _val_toks = _ident_tokens(src_name)
-        _reads_data = bool(_val_toks & (set(builder.arrays) | set(builder.scalars)
-                                        | set(builder.symbols)))
+        _reads_data = bool(_val_toks & (set(builder.arrays) | set(builder.scalars) | set(builder.symbols)))
         if not _reads_data:
             dims = tgt_var.shape_symbols
             ranges = {f"__i{k}": f"0:{s}" for k, s in enumerate(dims)}

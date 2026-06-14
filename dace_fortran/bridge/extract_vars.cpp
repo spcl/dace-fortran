@@ -2975,7 +2975,14 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
     // falls through with ``bounds_remap_view = false`` so the
     // pipeline doesn't crash on an unsupported shape (the existing
     // rewriter would have rejected such a shape too).
-    if (op->hasAttr("hlfir_bridge.bounds_remap_view")) {
+    if (op->hasAttr("hlfir_bridge.bounds_remap_view") ||
+        op->hasAttr("hlfir_bridge.pointer_view")) {
+      // Both tags reach the same rebind-store trace below (find the
+      // source declare + render the source-section subset).  A
+      // ``bounds_remap_view`` (rank-reshape flatten) keeps the flatten
+      // descriptor; a ``pointer_view`` (plain section rebind) is
+      // converted to a ``view_alias`` right after this block (see the
+      // P3 conversion) so it gets the section's real strides.
       // Find the rebind store: the LAST non-nullify ``fir.store``
       // whose memref is ``op.getResult(0)``.
       fir::StoreOp rebindStore;
@@ -3106,8 +3113,14 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
           // (lb0, ext0, lb1, ext1, ...) as the total extent.  For a
           // rank-1 shape_shift -- the only shape the mark pass
           // recognises -- this is the single ``ext0`` entry.
-          if (auto ss = mlir::dyn_cast_or_null<fir::ShapeShiftOp>(
-                  topRebox.getShape().getDefiningOp())) {
+          // A plain section rebind (``pointer_view``: ``w => store(1:n)``)
+          // reboxes WITHOUT a shape_shift, so ``getShape()`` is null --
+          // guard before ``getDefiningOp()`` (the bounds-remap form always
+          // has the shape_shift; only the pointer_view form may lack it).
+          mlir::Value rbShape = topRebox.getShape();
+          if (auto ss = rbShape ? mlir::dyn_cast_or_null<fir::ShapeShiftOp>(
+                                      rbShape.getDefiningOp())
+                                : nullptr) {
             auto pairs = ss.getPairs();
             if (pairs.size() >= 2) {
               // Render the extent SSA value as a parseable string.
@@ -3188,6 +3201,39 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
           }
         }
       }
+    }
+
+    // ----- P3: a plain SECTION rebind tagged ``pointer_view`` becomes a
+    // DaCe ``view_alias`` (NOT the flatten descriptor), reusing the
+    // source + section subset the trace above resolved.  The view_alias
+    // descriptor path (descriptors.py) then computes the section's real
+    // column-major strides -- including the NON-packed case (a 2-D view
+    // of a 3-D array, ``p(:,:) => a(:, j, :)`` -> strides ``(1, d0*d1)``).
+    if (op->hasAttr("hlfir_bridge.pointer_view") &&
+        !v.bounds_remap_source.empty() &&
+        !v.bounds_remap_source_subset.empty()) {
+      v.role = "view_alias";
+      v.view_source = v.bounds_remap_source;
+      v.view_subset = v.bounds_remap_source_subset;
+      // View shape = the surviving (triplet) dims' extents, derived from
+      // the subset: each ``lo:hi`` entry contributes ``(hi)-(lo)``; a
+      // scalar (dropped) entry has no ':' and is skipped.
+      std::vector<std::string> viewShape;
+      for (auto& s : v.view_subset) {
+        auto colon = s.find(':');
+        if (colon == std::string::npos) continue;  // scalar-fixed dim
+        std::string lo = s.substr(0, colon);
+        std::string rest = s.substr(colon + 1);
+        auto colon2 = rest.find(':');  // strip a trailing ``:stride``
+        std::string hi =
+            (colon2 == std::string::npos) ? rest : rest.substr(0, colon2);
+        viewShape.push_back("(" + hi + ")-(" + lo + ")");
+      }
+      v.shape_symbols = viewShape;
+      // Route through view_alias, not the flatten-view descriptor.
+      v.bounds_remap_view = false;
+      v.bounds_remap_source.clear();
+      v.bounds_remap_total_extent.clear();
     }
 
     vars.push_back(std::move(v));

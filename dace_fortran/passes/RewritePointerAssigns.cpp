@@ -722,6 +722,29 @@ struct RewritePointerAssignsPass
       });
     }
 
+    // ----- P3: lower a plain SECTION rebind as a DaCe View -----
+    // A same-rank section rebind (``p => a(:, j)`` / ``p => store(2:5)``
+    // / ``p => a(:,:,k)``) aliases a slab of the parent.  Rather than the
+    // index-rewrite below, TAG the pointer declare so ``extract_vars``
+    // emits a ``view_alias`` (reusing the bounds-remap-view trace + the
+    // view_alias stride path, which gets NON-packed strides right).
+    // Scoped to the single-designate, has-a-triplet, no-inlined-alias
+    // shape; the other shapes (whole-array, scalar element, struct
+    // member, inlined alias) still rewrite below and migrate next.
+    if (aliasDecls.empty() && chain.chain.size() == 1) {
+      bool hasTriplet = false;
+      for (bool t : chain.chain[0].triplets)
+        if (t) {
+          hasTriplet = true;
+          break;
+        }
+      if (hasTriplet) {
+        ptrDecl->setAttr("hlfir_bridge.pointer_view",
+                         mlir::UnitAttr::get(&getContext()));
+        return;
+      }
+    }
+
     ptrDecl.emitWarning()
         << "hlfir-rewrite-pointer-assigns: collapsing pointer "
         << "rebind ``" << ptrDecl.getUniqName().str() << " => "
