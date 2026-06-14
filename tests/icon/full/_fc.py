@@ -108,8 +108,15 @@ def _find_gfortran() -> Optional[Path]:
 
 def discover_fortran_compilers() -> dict:
     """Return ``{display_name: absolute_path}`` for every Fortran
-    compiler available on this host.  Display names are stable across
-    versions so pytest test IDs stay diffable."""
+    compiler we parametrize over: ``gfortran`` (ICON's stock CPU
+    build) and ``flang-new-21`` (the bridge's own frontend).  Both are
+    installed on CI, and each test compiles against an ICON ``.mod``
+    tree built by the SAME compiler (gfortran mods are binary-
+    incompatible with flang's and vice versa -- see the ``icon_build``
+    / ``icon_build_flang`` fixtures).  ``nvfortran`` is intentionally
+    NOT included: the NVHPC SDK is a multi-GB dependency we don't carry
+    in CI, and ICON GPU builds are out of scope here.  Display names
+    are stable across versions so pytest IDs stay diffable."""
     out: dict = {}
     gfortran = _find_gfortran()
     if gfortran:
@@ -117,9 +124,6 @@ def discover_fortran_compilers() -> dict:
     flang = _find_flang()
     if flang:
         out["flang-new-21"] = flang
-    nvfortran = _find_nvfortran()
-    if nvfortran:
-        out["nvfortran"] = nvfortran
     return out
 
 

@@ -240,3 +240,6 @@ _all_tests/
 # files.
 !tests/external_to_modules/**/*.f90
 !tests/string_enum_to_integer/**/*.f90
+
+# External ICON source clone used by the self-building ICON tests (not tracked)
+tests/icon/full/icon-model/
