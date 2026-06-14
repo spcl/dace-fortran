@@ -94,6 +94,42 @@ std::string lowerIsPresent(mlir::Value operand) {
         cur = dc.getMemref();
         continue;
       }
+      // Descriptor-unwrapping wrappers are transparent for a presence
+      // query: only ``fir.absent`` ever marks an argument absent, so a
+      // box/ref that came from a real descriptor is present.  After
+      // ``hlfir-inline-all`` splices an OPTIONAL dummy bound to a
+      // PRESENT actual, the dummy's declare memref resolves through
+      // ``fir.box_addr`` (and friends) onto the caller's storage --
+      // without walking these we broke out and leaked ``?`` into the
+      // guard (QE addusxx_g ``PRESENT(becphi_c)`` over a complex box).
+      if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
+        cur = ba.getVal();
+        continue;
+      }
+      if (auto rb = mlir::dyn_cast<fir::ReboxOp>(d)) {
+        cur = rb.getBox();
+        continue;
+      }
+      if (auto eb = mlir::dyn_cast<fir::EmboxOp>(d)) {
+        cur = eb.getMemref();
+        continue;
+      }
+      if (auto ld = mlir::dyn_cast<fir::LoadOp>(d)) {
+        cur = ld.getMemref();
+        continue;
+      }
+      // A concrete data reference reached through the wrappers above is
+      // a PRESENT actual argument.  After ``hlfir-inline-all`` splices
+      // an OPTIONAL dummy bound to a present actual, the dummy's declare
+      // memref resolves through ``box_addr`` onto the caller's value:
+      // an ``hlfir.designate`` (array section / element, e.g. QE
+      // ``becphi_c = becxx(ikq)%k(:, jbnd)``) or raw storage
+      // (``alloca`` / ``allocmem`` / module ``addr_of``).  Absence only
+      // ever appears as ``fir.absent`` (handled above), so any such
+      // concrete root is present -> ``1``.
+      if (mlir::isa<hlfir::DesignateOp, fir::AllocaOp, fir::AllocMemOp,
+                    fir::AddrOfOp>(d))
+        return "1";
       break;
     }
     // Block argument  --  that's the storage root.  The declare we
@@ -212,11 +248,34 @@ std::string buildDesignateIndexExpr(hlfir::DesignateOp dg, unsigned dim,
   // Section-designate parent contribution.
   if (auto parentDg = mlir::dyn_cast<hlfir::DesignateOp>(defOp)) {
     auto triplets = parentDg.getIsTriplet();
-    if (!triplets.empty() && dim < triplets.size() && triplets[dim]) {
-      unsigned cursor = 0;
-      for (unsigned k = 0; k < dim; ++k) cursor += triplets[k] ? 3 : 1;
+    if (!triplets.empty()) {
+      // The inner designate indexes the section's (possibly RANK-REDUCED)
+      // VIEW: its dim ``dim`` is the ``dim``-th TRIPLET dim of the parent
+      // section, NOT the ``dim``-th original dim -- scalar-fixed dims
+      // (the ``1`` in ``mill(1, offset+1:blk)``) are squeezed out of the
+      // view and must be skipped.  Walk the parent dims to the ``dim``-th
+      // triplet, then add THAT triplet's lower-bound rebase.  A
+      // rank-preserving section (every dim a triplet) maps ``dim`` to
+      // itself -- byte-identical to the previous ``triplets[dim]`` form.
+      // (Without this, ``mill(1, off+1:blk)(k)`` dropped the ``+off``
+      // rebase because ``triplets[dim=0]`` was the scalar dim, gathering
+      // ``mill[1, k]`` instead of ``mill[1, off+k]``.)
+      unsigned cursor = 0, tripletSeen = 0;
+      bool found = false;
+      for (unsigned k = 0; k < triplets.size(); ++k) {
+        if (triplets[k]) {
+          if (tripletSeen == dim) {
+            found = true;
+            break;
+          }
+          ++tripletSeen;
+          cursor += 3;
+        } else {
+          cursor += 1;
+        }
+      }
       auto idxOps = parentDg.getIndices();
-      if (cursor < idxOps.size()) {
+      if (found && cursor < idxOps.size()) {
         if (auto lo = traceConstInt(idxOps[cursor])) {
           int64_t adjust = *lo - 1;
           if (adjust > 0)
@@ -1165,17 +1224,17 @@ std::string buildExpr(mlir::Value val, int d) {
       // the Python side; nothing extra needed for that.
       static const std::map<llvm::StringRef, std::string> cast_calls = {
           // ``NINT`` (and ``IDNINT``)  --  round-to-nearest then cast.
-          {"llvm.lround.i32.f64", "dace.int32"},
-          {"llvm.lround.i32.f32", "dace.int32"},
-          {"llvm.lround.i64.f64", "dace.int64"},
-          {"llvm.lround.i64.f32", "dace.int64"},
+          {"llvm.lround.i32.f64", "int32"},
+          {"llvm.lround.i32.f32", "int32"},
+          {"llvm.lround.i64.f64", "int64"},
+          {"llvm.lround.i64.f32", "int64"},
           // ``llvm.lrint`` (round-to-nearest under current rounding
           // mode) -- Fortran ``NINT`` may lower to this on some
           // targets.  Same Python rendering.
-          {"llvm.lrint.i32.f64", "dace.int32"},
-          {"llvm.lrint.i32.f32", "dace.int32"},
-          {"llvm.lrint.i64.f64", "dace.int64"},
-          {"llvm.lrint.i64.f32", "dace.int64"},
+          {"llvm.lrint.i32.f64", "int32"},
+          {"llvm.lrint.i32.f32", "int32"},
+          {"llvm.lrint.i64.f64", "int64"},
+          {"llvm.lrint.i64.f32", "int64"},
       };
       if (auto it = cast_calls.find(cname);
           it != cast_calls.end() && call.getNumOperands() >= 1) {
@@ -1329,7 +1388,7 @@ std::string buildExpr(mlir::Value val, int d) {
     // Float -> integer: explicit truncating cast.  Use ``dace.intN``
     // so the C++ codegen lowers via ``static_cast<int{32,64}>``.
     if (inIsFloat && outIsInt) {
-      const char *cast = outT.isInteger(64) ? "dace.int64" : "dace.int32";
+      const char *cast = outT.isInteger(64) ? "int64" : "int32";
       return std::string(cast) + "(" + buildExpr(conv.getValue(), d + 1) + ")";
     }
     // Integer -> float: same shape  --  codegen will widen at the
@@ -1337,8 +1396,8 @@ std::string buildExpr(mlir::Value val, int d) {
     // intent is explicit when the surrounding op is integer too.
     if (inIsInt && outIsFloat) {
       const char *cast = mlir::cast<mlir::FloatType>(outT).getWidth() == 32
-                             ? "dace.float32"
-                             : "dace.float64";
+                             ? "float32"
+                             : "float64";
       return std::string(cast) + "(" + buildExpr(conv.getValue(), d + 1) + ")";
     }
     // Float -> wider float (f32 -> f64): wrap in an explicit
@@ -1355,7 +1414,7 @@ std::string buildExpr(mlir::Value val, int d) {
       auto inW = mlir::cast<mlir::FloatType>(inT).getWidth();
       auto outW = mlir::cast<mlir::FloatType>(outT).getWidth();
       if (inW < outW && !kSuppressFloatCast) {
-        const char *cast = inW == 32 ? "dace.float32" : "dace.float64";
+        const char *cast = inW == 32 ? "float32" : "float64";
         return std::string(cast) + "(" + buildExpr(conv.getValue(), d + 1) +
                ")";
       }
@@ -1715,7 +1774,7 @@ std::string buildExpr(mlir::Value val, int d) {
       // ``5.5``.  Pairs with the ``fir.convert f32->f64`` wrap so
       // both the literal and the widening cast preserve the
       // intended precision.
-      if (isF32 && !kSuppressFloatCast) return "dace.float32(" + lit + ")";
+      if (isF32 && !kSuppressFloatCast) return "float32(" + lit + ")";
       return lit;
     }
     if (auto i = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue()))

@@ -226,6 +226,34 @@ std::string buildIndexExpr(mlir::Value v, int d) {
         // memlets via ``indirect_to_dace``  --  keeping the bridge
         // output uniform regardless of which downstream context
         // ultimately consumes it.
+        // Rank-reducing section parent: ``mill(1, offset+1:blk)`` produces a
+        // 1-D view, then indexed by ``[k]``.  The innermost designate's own
+        // indices (``[k]``) don't describe the ROOT array's full subscript --
+        // the fixed component dim (``1``) and the slice lower-bound rebase
+        // live on the parent SECTION designate.  Compose the whole chain with
+        // the same ``expandDesignateChain`` the elemental path uses (it yields
+        // one (var, expr) per underlying-array dim, folding parent scalar dims
+        // + slice rebases in) so a 2-D gather index
+        // ``eigts1(mill(1, off+1:blk), na)`` emits ``mill[1, off+k]`` (a single
+        // element) instead of the rank-deficient ``mill[k]`` -- which on a 2-D
+        // array is a RANGE, illegal on the interstate edge that hosts the
+        // minted indirect symbol.  Only fires when the chain exposes MORE dims
+        // than the innermost carries; a plain element / AoR access keeps the
+        // existing innermost render below (byte-identical).
+        {
+          auto [chainArr, chainDims] = expandDesignateChain(dg);
+          if (!chainArr.empty() && chainDims.size() > dg.getIndices().size()) {
+            std::string cs = chainArr + "[";
+            bool cfirst = true;
+            for (auto &de : chainDims) {
+              if (!cfirst) cs += ",";
+              cs += de.expr.empty() ? "?" : de.expr;
+              cfirst = false;
+            }
+            cs += "]";
+            return cs;
+          }
+        }
         std::string s = arrName + "[";
         bool first = true;
         unsigned di = 0;
@@ -311,6 +339,7 @@ std::string buildIndexExpr(mlir::Value v, int d) {
       // declare's expected name  --  that path keeps the legacy
       // bounds-fail fallback (``buildCopyNode`` whole-array copy).
       bool hasAllocmem = false;
+      fir::AllocMemOp allocOp;
       if (auto *adef = arrayVal.getDefiningOp()) {
         if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(adef)) {
           std::string allocName = decl.getUniqName().str() + ".alloc";
@@ -318,8 +347,33 @@ std::string buildIndexExpr(mlir::Value v, int d) {
             mod.walk([&](fir::AllocMemOp a) {
               if (hasAllocmem) return;
               if (auto un = a.getUniqName())
-                if (un->str() == allocName) hasAllocmem = true;
+                if (un->str() == allocName) { hasAllocmem = true; allocOp = a; }
             });
+          }
+        }
+      }
+      // Local allocatable (``ALLOCATE(arr(e0, e1, ...))``) used in a
+      // SECTION-bound context (``arr(:, ii)``).  ``box_dims`` reads the
+      // runtime descriptor; resolve it from the ALLOCATE itself rather
+      // than leaking ``?``:
+      //   * lower bound (resIdx 0)  --  Fortran default-shape ALLOCATE
+      //     gives lbound 1 (``ALLOCATE(arr(0:n))`` lo:hi form is rare
+      //     and would carry an explicit shift; not handled here).
+      //   * extent (resIdx 1)  --  the ALLOCATE's per-dim extent
+      //     operand, rendered through ``buildIndexExpr`` (e.g. ``nkb``).
+      // Without this the QE deexx / temppsic / aux section bounds
+      // (``deexx(:, ii)`` with ``deexx`` a local allocatable) bottomed
+      // out at ``?`` in the memlet subset.
+      if (hasAllocmem && allocOp) {
+        if (resIdx == 0) return "1";
+        if (resIdx == 1) {
+          auto shp = allocOp.getShape();
+          unsigned udim = static_cast<unsigned>(*dimC);
+          if (udim < shp.size()) {
+            auto te = traceExtentExpr(shp[udim]);
+            if (!te.empty() && te != "?") return te;
+            auto s = buildIndexExpr(shp[udim], d + 1);
+            if (!s.empty() && s != "?") return s;
           }
         }
       }
