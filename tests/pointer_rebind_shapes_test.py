@@ -50,26 +50,23 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 #: `p(i) = ...` forward correctly, but a bare `p` on an assignment RHS is
 #: not rewritten to its target -- `out` reads the uninitialised pointer
 #: storage.  Same root as QE's `res = p` whole-array copy (gate-H).
-_PLAIN_REBIND_WHOLE_READ = (
-    "plain rank-reducing rebind: a bare whole-array read `out = p` is not "
-    "forwarded to the target (only subscripted `p(i)` access is rewritten)")
+_PLAIN_REBIND_WHOLE_READ = ("plain rank-reducing rebind: a bare whole-array read `out = p` is not "
+                            "forwarded to the target (only subscripted `p(i)` access is rewritten)")
 
 #: Bounds-remap-view flatten read with a *variable* section lower bound:
 #: `p(1:n*k) => a(:, c0:c1)`.  The constant-offset read works (see the
 #: passing C/G cases); a runtime `c0` leaves the View's offset symbol
 #: unresolved.  This is QE's exact `prhoc_d(...) => rhoc_d(:, off+1:...)`.
-_VIEW_VAR_OFFSET = (
-    "bounds-remap-view: a variable section lower bound leaves the View's "
-    "offset symbol unbound (constant-offset flatten reads already pass)")
+_VIEW_VAR_OFFSET = ("bounds-remap-view: a variable section lower bound leaves the View's "
+                    "offset symbol unbound (constant-offset flatten reads already pass)")
 
 #: Write-back through a flattened bounds-remap view: `p(1:n*k) =>
 #: a(:, c0:c1); p(i) = ...` (or a callee mutating `p`).  The read-side
 #: View linking memlet is wired; the write-side fold-back to the parent's
 #: multi-D coordinates is not.
-_VIEW_WRITEBACK = (
-    "bounds-remap-view: write-back through a flattened view (direct or via "
-    "a callee) lacks the per-state linking memlet folding the flat index "
-    "to the parent's multi-D coordinates")
+_VIEW_WRITEBACK = ("bounds-remap-view: write-back through a flattened view (direct or via "
+                   "a callee) lacks the per-state linking memlet folding the flat index "
+                   "to the parent's multi-D coordinates")
 
 
 def _build(src: str, tmp: Path, entry: str = "_QPmain"):
