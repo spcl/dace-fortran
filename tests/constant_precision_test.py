@@ -149,8 +149,12 @@ def test_single_constant_emits_float32_cast(tmp_path: Path):
     sdfg.validate()
 
     code = _tasklet_code(sdfg)
-    assert "dace.float32(" in code, (f"fp32 constant must be wrapped in dace.float32(...) for correct "
-                                     f"rounding; tasklet code was: {code}")
+    # The bridge emits the canonical bare ``float32(...)`` kind-coercion;
+    # d-face's cppunparse (``_typecast_funcs``) lowers it to
+    # ``dace::float32(...)`` at codegen so the literal rounds to single
+    # precision (verified numerically below).
+    assert "float32(" in code, (f"fp32 constant must be wrapped in a float32(...) cast for correct "
+                                f"rounding; tasklet code was: {code}")
     assert sdfg.arrays["y"].dtype.type == np.float32
 
     ref = f2py_compile(_SRC_F32, d / "ref", "cst32_ref")
@@ -166,8 +170,8 @@ def test_single_constant_emits_float32_cast(tmp_path: Path):
 
 def test_single_constant_uses_shortest_roundtrip_form(tmp_path: Path):
     """The f32 literal is stringified in its SHORTEST round-tripping
-    form (``dace.float32(0.1)``), not the f64-widened expansion
-    (``dace.float32(0.10000000149011612)``).  Both are bit-identical
+    form (``float32(0.1)``), not the f64-widened expansion
+    (``float32(0.10000000149011612)``).  Both are bit-identical
     once cast, but the short form stays close to the Fortran source."""
     d = tmp_path / "f32short"
     d.mkdir(parents=True, exist_ok=True)
@@ -175,9 +179,9 @@ def test_single_constant_uses_shortest_roundtrip_form(tmp_path: Path):
     sdfg.validate()
 
     code = _tasklet_code(sdfg)
-    assert "dace.float32(0.1)" in code, (f"expected shortest-roundtrip f32 literal dace.float32(0.1); "
-                                         f"got: {code}")
-    assert "dace.float32(0.2)" in code, code
+    assert "float32(0.1)" in code, (f"expected shortest-roundtrip f32 literal float32(0.1); "
+                                    f"got: {code}")
+    assert "float32(0.2)" in code, code
     # The long f64-widened form must NOT appear.
     assert "0.10000000149011612" not in code, (f"f32 constant widened to f64 17-digit form: {code}")
     assert "0.20000000298023224" not in code, code

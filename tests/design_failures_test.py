@@ -11,8 +11,7 @@ import pytest
 
 from _util import build_sdfg, have_flang
 
-pytestmark = pytest.mark.skipif(not have_flang(),
-                                reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
 
 # ===========================================================================
@@ -46,18 +45,15 @@ SUBROUTINE beta(y, m)
 END SUBROUTINE
 """
     # Build A first
-    sdfg_a = build_sdfg(src_a, tmp_path / "a", name="alpha",
-                       entry="_QPalpha").build()
+    sdfg_a = build_sdfg(src_a, tmp_path / "a", name="alpha", entry="_QPalpha").build()
     xa = np.ones(3, dtype=np.float64, order='F')
     sdfg_a(x=xa, n=np.int32(3))
     np.testing.assert_array_equal(xa, 2.0)
     # Build B second -- A's state (entryScope='alpha', collisions for
     # ``x`` / ``n``) must not contaminate B's extraction.  B's signature
     # must have bare ``y`` and ``m``, not ``alpha_y`` or ``beta_y``.
-    sdfg_b = build_sdfg(src_b, tmp_path / "b", name="beta",
-                       entry="_QPbeta").build()
-    assert 'y' in sdfg_b.arrays, (
-        f"B leaked A's state: B's signature is {sorted(sdfg_b.arrays.keys())}")
+    sdfg_b = build_sdfg(src_b, tmp_path / "b", name="beta", entry="_QPbeta").build()
+    assert 'y' in sdfg_b.arrays, (f"B leaked A's state: B's signature is {sorted(sdfg_b.arrays.keys())}")
     yb = np.ones(3, dtype=np.float64, order='F')
     sdfg_b(y=yb, m=np.int32(3))
     np.testing.assert_array_equal(yb, 2.0)
@@ -92,8 +88,7 @@ CONTAINS
   END SUBROUTINE
 END SUBROUTINE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="main",
-                      entry="_QPmain").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="main", entry="_QPmain").build()
     a = np.ones(3, dtype=np.float64, order='F')
     sdfg(a=a, n=np.int32(3))
     np.testing.assert_array_equal(a, 2.0)
@@ -124,11 +119,9 @@ CONTAINS
   END SUBROUTINE
 END SUBROUTINE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kern",
-                      entry="_QPkern").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kern", entry="_QPkern").build()
     # SDFG signature must have bare ``out``, not ``set_one_out``.
-    assert 'out' in sdfg.arrays, (
-        f"expected bare 'out' on signature, got: {sorted(sdfg.arrays.keys())}")
+    assert 'out' in sdfg.arrays, (f"expected bare 'out' on signature, got: {sorted(sdfg.arrays.keys())}")
     out = np.zeros(3, dtype=np.float64, order='F')
     sdfg(out=out, n=np.int32(3))
     np.testing.assert_array_equal(out, 1.0)
@@ -161,26 +154,27 @@ CONTAINS
   END SUBROUTINE
 END SUBROUTINE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="main",
-                      entry="_QPmain").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="main", entry="_QPmain").build()
     # No tf_x in the signature -- the inlined OPTIONAL is folded.
-    bad_keys = [k for k in sdfg.arrays.keys()
-                 if k.startswith('tf_') or k.endswith('_x')]
-    assert not bad_keys, (
-        f"unexpected qualified inlined-OPTIONAL on signature: {bad_keys}")
+    bad_keys = [k for k in sdfg.arrays.keys() if k.startswith('tf_') or k.endswith('_x')]
+    assert not bad_keys, (f"unexpected qualified inlined-OPTIONAL on signature: {bad_keys}")
 
 
 # ===========================================================================
-# Latent #8 (hard-reject) -- user variable named after a Fortran intrinsic
+# Latent #8 (intrinsic-shadow RENAME) -- user variable named after a
 # ---------------------------------------------------------------------------
-# ``max``, ``min``, ``sin``, ``sqrt`` etc.  The bridge renders these as
-# bare tokens in tasklet bodies; a user variable with the same name would
-# silently corrupt the intrinsic call.  Detect at extract time and raise
-# a clear diagnostic.
+# Fortran intrinsic (``max``, ``min``, ``sqrt``, ...).  The bridge renders
+# intrinsics as bare tokens in tasklet bodies, so a user variable with the
+# same name would collide.  Rather than hard-reject -- QE's dead
+# ``DOUBLE PRECISION :: max`` must still build -- extract-time RENAMES the
+# user variable to ``var_<name>`` so its reads/writes stay distinct while a
+# genuine intrinsic ``<name>(...)`` call keeps rendering normally.  (Changed
+# from hard-reject to rename in de9348e; these tests pin that the rename
+# yields a correct build, not a diagnostic.)
 # ===========================================================================
-def test_user_variable_named_max_is_rejected(tmp_path):
-    """``REAL(8) :: max`` -- a local named after MAX intrinsic.  Bridge
-    must reject."""
+def test_user_variable_named_max_builds_via_rename(tmp_path):
+    """``REAL(8) :: max`` shadowing the MAX intrinsic builds (renamed to
+    ``var_max``) and computes correctly."""
     src = """
 SUBROUTINE bad_max(out)
   IMPLICIT NONE
@@ -190,12 +184,14 @@ SUBROUTINE bad_max(out)
   out = max + 1.0_8
 END SUBROUTINE
 """
-    with pytest.raises((RuntimeError, Exception), match=r"(max|intrinsic)"):
-        build_sdfg(src, tmp_path / "sdfg", name="bad_max",
-                   entry="_QPbad_max").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="bad_max", entry="_QPbad_max").build()
+    out = np.zeros(1, dtype=np.float64)
+    sdfg(out=out)
+    assert out[0] == 6.0  # max = 5.0; out = max + 1.0
 
 
-def test_user_variable_named_sqrt_is_rejected(tmp_path):
+def test_user_variable_named_sqrt_builds_via_rename(tmp_path):
+    """``REAL(8) :: sqrt`` shadowing the SQRT intrinsic builds and reads back."""
     src = """
 SUBROUTINE bad_sqrt(out)
   IMPLICIT NONE
@@ -205,12 +201,14 @@ SUBROUTINE bad_sqrt(out)
   out = sqrt
 END SUBROUTINE
 """
-    with pytest.raises((RuntimeError, Exception), match=r"(sqrt|intrinsic)"):
-        build_sdfg(src, tmp_path / "sdfg", name="bad_sqrt",
-                   entry="_QPbad_sqrt").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="bad_sqrt", entry="_QPbad_sqrt").build()
+    out = np.zeros(1, dtype=np.float64)
+    sdfg(out=out)
+    assert out[0] == 4.0  # sqrt = 4.0
 
 
-def test_user_variable_named_min_is_rejected(tmp_path):
+def test_user_variable_named_min_builds_via_rename(tmp_path):
+    """``INTEGER :: min`` shadowing the MIN intrinsic builds and reads back."""
     src = """
 SUBROUTINE bad_min(out)
   IMPLICIT NONE
@@ -220,9 +218,10 @@ SUBROUTINE bad_min(out)
   out = REAL(min, 8)
 END SUBROUTINE
 """
-    with pytest.raises((RuntimeError, Exception), match=r"(min|intrinsic)"):
-        build_sdfg(src, tmp_path / "sdfg", name="bad_min",
-                   entry="_QPbad_min").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="bad_min", entry="_QPbad_min").build()
+    out = np.zeros(1, dtype=np.float64)
+    sdfg(out=out)
+    assert out[0] == 7.0  # min = 7
 
 
 # ===========================================================================
@@ -245,8 +244,7 @@ SUBROUTINE kern(out)
   out = pi * 2.0_8
 END SUBROUTINE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kern",
-                      entry="_QPkern").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kern", entry="_QPkern").build()
     out = np.zeros(1, dtype=np.float64)
     sdfg(out=out)
     np.testing.assert_allclose(out[0], 2.0 * 3.141592653589793, rtol=1e-12)
@@ -263,8 +261,7 @@ SUBROUTINE kern(out)
   out = e + 1.0_8
 END SUBROUTINE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kern",
-                      entry="_QPkern").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kern", entry="_QPkern").build()
     out = np.zeros(1, dtype=np.float64)
     sdfg(out=out)
     np.testing.assert_allclose(out[0], 3.71828, rtol=1e-6)
@@ -281,8 +278,7 @@ SUBROUTINE kern(i, out)
   out = REAL(i * 2, 8)
 END SUBROUTINE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kern",
-                      entry="_QPkern").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kern", entry="_QPkern").build()
     out = np.zeros(1, dtype=np.float64)
     sdfg(i=np.int32(7), out=out)
     np.testing.assert_allclose(out[0], 14.0)
@@ -308,8 +304,7 @@ SUBROUTINE kern(out, n)
   END DO
 END SUBROUTINE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kern",
-                      entry="_QPkern").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kern", entry="_QPkern").build()
     out = np.zeros(4, dtype=np.float64, order="F")
     sdfg(out=out, n=np.int32(4))
     np.testing.assert_array_equal(out, [1.0, 2.0, 3.0, 4.0])
@@ -350,9 +345,7 @@ END MODULE m_iter
     from dace_fortran import build_sdfg_from_files
     srcfile = tmp_path / "m_iter.f90"
     srcfile.write_text(src)
-    sdfg = build_sdfg_from_files(
-        [srcfile], entry="_QMm_iterPkern", name="kern",
-        out_dir=tmp_path / "build")
+    sdfg = build_sdfg_from_files([srcfile], entry="_QMm_iterPkern", name="kern", out_dir=tmp_path / "build")
     sdfg.validate()
     out_arr = np.zeros((3, 2), dtype=np.float64, order="F")
     src_a = np.array([2.0, 5.0], dtype=np.float64, order="F")
@@ -372,8 +365,7 @@ SUBROUTINE kern(pi, out)
   out = pi * 2.0_8
 END SUBROUTINE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kern",
-                      entry="_QPkern").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kern", entry="_QPkern").build()
     out = np.zeros(1, dtype=np.float64)
     sdfg(pi=np.float64(3.14), out=out)
     np.testing.assert_allclose(out[0], 6.28, rtol=1e-6)
