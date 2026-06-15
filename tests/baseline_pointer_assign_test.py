@@ -134,6 +134,34 @@ end subroutine main
         build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
 
 
+def test_unsupported_interleaved_rebind_across_blocks_raises(tmp_path: Path):
+    """The interleaved read sits inside an ``IF`` body (a nested ``scf``
+    region), so a purely intra-block (``isBeforeInBlock``) check misses it
+    and the scalar View path would silently bind BOTH reads to the last
+    target (``out(1)`` reads ``y`` instead of ``x``).  The DOMINANCE-based
+    detection catches it: ``out(1)``'s read is not dominated by the final
+    ``tmp => y`` rebind, so the pass rejects loudly."""
+    src = """
+subroutine main(out, cond)
+  implicit none
+  integer, intent(out) :: out(2)
+  logical, intent(in) :: cond
+  integer, target :: x, y
+  integer, pointer :: tmp
+  x = 11
+  y = 22
+  tmp => x
+  if (cond) then
+    out(1) = tmp
+  end if
+  tmp => y
+  out(2) = tmp
+end subroutine main
+"""
+    with pytest.raises(RuntimeError):
+        build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+
+
 def test_bounds_remap_lb_rebase_lowers_as_view(tmp_path: Path):
     """``w(0:n-1) => src(1:n)`` rebases the pointer's lower bound to 0.
     Under the all-rebinds-are-views design this lowers as a View whose

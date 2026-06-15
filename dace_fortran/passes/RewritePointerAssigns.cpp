@@ -237,6 +237,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/Pass.h"
 #include "passes/Passes.h"
@@ -540,28 +541,34 @@ struct RewritePointerAssignsPass
         nonNullifyStores.begin(), nonNullifyStores.end(),
         [](fir::StoreOp a, fir::StoreOp b) { return a->isBeforeInBlock(b); });
 
-    // Interleaved-rebind detection: a read between two rebinds
-    // observes the EARLIER target  --  collapsing to one would lose
-    // that semantics.  Bail loudly.
+    // Interleaved-rebind detection: a read between two rebinds observes
+    // the EARLIER target.  The bridge lowers a rebind as a View (or a
+    // collapse) of ONE source, so this must bail loudly rather than bind
+    // every read to the last target.  DOMINANCE-based, not
+    // ``isBeforeInBlock``: the read may sit inside a nested ``scf`` region
+    // (an ``IF`` body) where IR-order comparison is undefined and a purely
+    // intra-block check silently misses it -- then the scalar/array View
+    // path would wire both reads to the last source (wrong result, no
+    // error).  If more than one rebind store exists and ANY load is not
+    // dominated by the LAST (effective) store, that load may reach an
+    // earlier rebind -> reject.  Dead-store rebinds (``p=>A; p=>B; use p``)
+    // have every read after the last store, so all loads are dominated and
+    // this does not fire.
     if (nonNullifyStores.size() > 1) {
+      mlir::Operation *effective = nonNullifyStores.back().getOperation();
+      mlir::DominanceInfo dom;
       for (auto ld : loads) {
-        for (size_t k = 1; k < nonNullifyStores.size(); ++k) {
-          if (nonNullifyStores[k - 1]->isBeforeInBlock(ld) &&
-              ld->isBeforeInBlock(nonNullifyStores[k])) {
-            ld.emitError(
-                "hlfir-rewrite-pointer-assigns: pointer "
-                "``" +
-                ptrDecl.getUniqName().str() +
-                "`` "
-                "is read between two rebind sites  --  "
-                "collapsing would silently bind every "
-                "read to one target.  Refactor to use "
-                "distinct pointer variables, or guard "
-                "the single rebind site behind a runtime "
-                "selection that the bridge can lower.");
-            signalPassFailure();
-            return;
-          }
+        if (!dom.dominates(effective, ld.getOperation())) {
+          ld.emitError("hlfir-rewrite-pointer-assigns: pointer ``" +
+                       ptrDecl.getUniqName().str() +
+                       "`` is read between two rebind sites (interleaved "
+                       "rebind)  --  the bridge lowers a rebind as a View of "
+                       "a single source, so a read that may observe an "
+                       "earlier target cannot be lowered.  Refactor to use "
+                       "distinct pointer variables, or guard the single "
+                       "rebind site behind a runtime selection.");
+          signalPassFailure();
+          return;
         }
       }
     }
