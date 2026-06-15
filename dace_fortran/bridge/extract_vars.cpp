@@ -3240,6 +3240,20 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
         // shape for it.
         v.view_subset = {std::string("")};
       }
+      // Bounds-remap lower bound (``w(0:n-1) => src(1:n)``): the pointer's
+      // explicit lb rebases its access offset.  The rewrite pass captured
+      // the constant lb(s) on ``hlfir_bridge.pointer_view_lb``; surface
+      // them as ``lower_bounds`` so descriptors.py stamps
+      // ``offset_<w>_d<d> = lb`` (a ``w(i)`` read subtracts the lb to reach
+      // the 0-based view element).  A default-lb rebind (``=> src(1:n)``)
+      // carries no attr, so ``lower_bounds`` keeps its resolved default.
+      if (auto lbAttr = op->getAttrOfType<mlir::DenseI64ArrayAttr>(
+              "hlfir_bridge.pointer_view_lb")) {
+        std::vector<std::string> lbs;
+        for (int64_t lb : lbAttr.asArrayRef())
+          lbs.push_back(std::to_string(lb));
+        if (!lbs.empty()) v.lower_bounds = lbs;
+      }
       // Route through view_alias, not the flatten-view descriptor.
       v.bounds_remap_view = false;
       v.bounds_remap_source.clear();

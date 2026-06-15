@@ -102,22 +102,81 @@ end subroutine main
         build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
 
 
-def test_unsupported_bounds_remap_raises(tmp_path: Path):
-    """Loud-failure contract: ``ptr(0:n-1) => src(1:n)`` re-bases the
-    lower bound.  Flang encodes the remap on the rebox's
-    ``fir.shift`` / ``fir.shape_shift`` operand; collapsing without
-    observing the remap would shift every subsequent read by
-    ``remap_lo - 1``.  Until the remap is properly handled in the
-    rewrite, the pass must reject."""
+def test_bounds_remap_lb_rebase_lowers_as_view(tmp_path: Path):
+    """``w(0:n-1) => src(1:n)`` rebases the pointer's lower bound to 0.
+    Under the all-rebinds-are-views design this lowers as a View whose
+    access offset is the explicit lb: ``w(0)`` aliases ``src(1)``,
+    ``w(n-1)`` aliases ``src(n)``.  The rewrite pass captures the constant
+    lb off the rebox's ``fir.shape_shift`` and forwards it as the view's
+    ``lower_bounds`` so descriptors.py stamps ``offset_w_d0 = 0``.  (Was a
+    loud-failure rejection while the index-rewrite couldn't model the lb
+    shift.)"""
     src = """
-subroutine main(n, src, res)
+subroutine main(out)
   implicit none
-  integer, intent(in)        :: n
-  real, intent(in), target   :: src(n)
-  real, intent(out)          :: res
-  real, pointer              :: w(:)
-  w(0:n-1) => src(1:n)
-  res = w(0)
+  real(8), intent(out) :: out(3)
+  real(8), target :: src(10)
+  real(8), pointer :: w(:)
+  integer :: i
+  do i = 1, 10
+    src(i) = real(i, 8)
+  end do
+  w(0:9) => src(1:10)
+  out(1) = w(0)
+  out(2) = w(5)
+  out(3) = w(9)
+end subroutine main
+"""
+    mod = f2py_compile(src, tmp_path / "ref", "bounds_remap_lb0")
+    ref = np.asarray(mod.main(), dtype=np.float64)
+    out = np.zeros(3, dtype=np.float64)
+    build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()(out=out)
+    np.testing.assert_array_equal(out, ref)
+    np.testing.assert_array_equal(out, [1.0, 6.0, 10.0])
+
+
+def test_bounds_remap_nonzero_lb_rebase_view(tmp_path: Path):
+    """``w(5:14) => src(1:10)`` -- lb rebased to 5 (neither 0 nor the
+    Fortran default 1).  ``w(5)`` aliases ``src(1)``, ``w(14)`` aliases
+    ``src(10)``; verifies the view's access offset is the *captured* lb,
+    not a hardcoded default."""
+    src = """
+subroutine main(out)
+  implicit none
+  real(8), intent(out) :: out(2)
+  real(8), target :: src(10)
+  real(8), pointer :: w(:)
+  integer :: i
+  do i = 1, 10
+    src(i) = real(i * 10, 8)
+  end do
+  w(5:14) => src(1:10)
+  out(1) = w(5)
+  out(2) = w(14)
+end subroutine main
+"""
+    mod = f2py_compile(src, tmp_path / "ref", "bounds_remap_lb5")
+    ref = np.asarray(mod.main(), dtype=np.float64)
+    out = np.zeros(2, dtype=np.float64)
+    build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()(out=out)
+    np.testing.assert_array_equal(out, ref)
+    np.testing.assert_array_equal(out, [10.0, 100.0])
+
+
+def test_bounds_remap_nonconstant_lb_still_rejected(tmp_path: Path):
+    """Loud-failure contract preserved for the genuinely-unmodellable
+    case: a bounds remap with a NON-constant lower bound (``w(k:k+n-1) =>
+    src(1:n)``, ``k`` a runtime value) has no fixed View access offset, so
+    the pass still rejects."""
+    src = """
+subroutine main(n, k, src, res)
+  implicit none
+  integer, intent(in)        :: n, k
+  real(8), intent(in), target :: src(n)
+  real(8), intent(out)       :: res
+  real(8), pointer           :: w(:)
+  w(k : k + n - 1) => src(1:n)
+  res = w(k)
 end subroutine main
 """
     with pytest.raises(RuntimeError):

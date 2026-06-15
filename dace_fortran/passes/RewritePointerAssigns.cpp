@@ -235,10 +235,13 @@
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/Pass/Pass.h"
 #include "passes/Passes.h"
+
+#include <optional>
 
 namespace hlfir_bridge {
 
@@ -634,6 +637,48 @@ struct RewritePointerAssignsPass
       return false;
     };
 
+    // Extract every lower-bound operand of a ``fir.shift`` / ``fir.shape_shift``
+    // as a compile-time constant.  Returns false (leaving ``out`` cleared) if
+    // any lb is non-constant -- a non-default lb we cannot model as a View's
+    // access offset, so the rebind stays unsupported.
+    auto constLbValue = [](mlir::Value lb) -> std::optional<int64_t> {
+      if (!lb) return std::nullopt;
+      auto *def = lb.getDefiningOp();
+      if (!def) return std::nullopt;
+      if (auto c = mlir::dyn_cast<mlir::arith::ConstantOp>(def))
+        if (auto a = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue()))
+          return a.getInt();
+      return std::nullopt;
+    };
+    auto tryExtractConstLbs = [&](mlir::Operation *shapeDef,
+                                  llvm::SmallVectorImpl<int64_t> &out) -> bool {
+      out.clear();
+      if (auto s = mlir::dyn_cast_or_null<fir::ShiftOp>(shapeDef)) {
+        for (mlir::Value lb : s.getOrigins()) {
+          auto cv = constLbValue(lb);
+          if (!cv) return false;
+          out.push_back(*cv);
+        }
+        return true;
+      }
+      if (auto s = mlir::dyn_cast_or_null<fir::ShapeShiftOp>(shapeDef)) {
+        auto pairs = s.getPairs();
+        for (size_t i = 0; i < pairs.size(); i += 2) {
+          auto cv = constLbValue(pairs[i]);
+          if (!cv) return false;
+          out.push_back(*cv);
+        }
+        return true;
+      }
+      return false;
+    };
+
+    // Non-default constant lower bounds from a bounds-remap rebind
+    // (``w(0:n-1) => src(1:n)``).  Captured during the value-chain walk
+    // below; stamped as ``hlfir_bridge.pointer_view_lb`` when the rebind is
+    // tagged as a View, or used to reject loudly if it falls to the rewrite.
+    llvm::SmallVector<int64_t, 4> remapLbs;
+
     for (mlir::Value v = rebindStore.getValue(); v;) {
       auto *def = v.getDefiningOp();
       if (!def) break;
@@ -644,16 +689,25 @@ struct RewritePointerAssignsPass
               mlir::isa_and_nonnull<fir::ShiftOp>(shapeDef) ||
               mlir::isa_and_nonnull<fir::ShapeShiftOp>(shapeDef);
           if (isShift && !isIdentityShift(shapeDef, rb.getBox())) {
-            rebindStore.emitError(
-                "hlfir-rewrite-pointer-assigns: pointer "
-                "rebind with bounds remap (``ptr(<lo>:..) "
-                "=> src(..)``) not supported  --  flang "
-                "encodes the remapped lower bound on the "
-                "rebox's shift operand and forwarding the "
-                "rebound box would silently shift every "
-                "read by ``remap_lo - 1``.");
-            signalPassFailure();
-            return;
+            // Bounds remap (``w(0:n-1) => src(1:n)``): the rebox shift
+            // rebases the pointer's lower bound.  If every lb is a
+            // compile-time constant we model it as a View whose access
+            // offset is that lb -- capture the constants here; the tag
+            // block stamps them on ``pointer_view_lb`` and descriptors.py
+            // turns them into ``offset_<w>_d<d>``.  A non-constant /
+            // box-derived shift can't be modelled this way -> reject.
+            if (!tryExtractConstLbs(shapeDef, remapLbs)) {
+              rebindStore.emitError(
+                  "hlfir-rewrite-pointer-assigns: pointer "
+                  "rebind with non-constant bounds remap "
+                  "(``ptr(<lo>:..) => src(..)``) not supported  --  "
+                  "flang encodes the remapped lower bound on the "
+                  "rebox's shift operand and forwarding the rebound "
+                  "box would silently shift every read by "
+                  "``remap_lo - 1``.");
+              signalPassFailure();
+              return;
+            }
           }
         }
         if (rb.getSlice()) {
@@ -666,6 +720,31 @@ struct RewritePointerAssignsPass
         }
         v = rb.getBox();
         continue;
+      }
+      // Literal-extent section rebind (``w(0:9) => src(1:10)`` with a
+      // compile-time ``src(10)``) lowers via ``fir.embox`` carrying a
+      // ``fir.shape_shift`` rather than a ``fir.rebox``.  Same bounds-remap
+      // capture as the rebox arm: a non-identity shift's constant lb(s)
+      // become the view's access offset.  Embox is the leaf of the rebind
+      // value, so stop after inspecting it.
+      if (auto eb = mlir::dyn_cast<fir::EmboxOp>(def)) {
+        if (mlir::Value shape = eb.getShape()) {
+          auto *shapeDef = shape.getDefiningOp();
+          bool isShift =
+              mlir::isa_and_nonnull<fir::ShiftOp>(shapeDef) ||
+              mlir::isa_and_nonnull<fir::ShapeShiftOp>(shapeDef);
+          if (isShift && !isIdentityShift(shapeDef, /*srcBox=*/mlir::Value())) {
+            if (!tryExtractConstLbs(shapeDef, remapLbs)) {
+              rebindStore.emitError(
+                  "hlfir-rewrite-pointer-assigns: pointer "
+                  "rebind with non-constant bounds remap "
+                  "(``ptr(<lo>:..) => src(..)``) not supported.");
+              signalPassFailure();
+              return;
+            }
+          }
+        }
+        break;
       }
       if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def)) {
         v = cv.getValue();
@@ -772,8 +851,31 @@ struct RewritePointerAssignsPass
       if (tagAsView) {
         ptrDecl->setAttr("hlfir_bridge.pointer_view",
                          mlir::UnitAttr::get(&getContext()));
+        // Bounds-remap lower bound(s) captured during the value-chain
+        // walk (``w(0:n-1) => src(1:n)``): forward them to extract_vars,
+        // which surfaces them as the view's ``lower_bounds`` so
+        // descriptors.py stamps ``offset_<w>_d<d> = lb``.  Absent for a
+        // default-lb section rebind (identity shift -> remapLbs empty).
+        if (!remapLbs.empty())
+          ptrDecl->setAttr(
+              "hlfir_bridge.pointer_view_lb",
+              mlir::DenseI64ArrayAttr::get(&getContext(), remapLbs));
         return;
       }
+    }
+
+    // A non-default lower-bound rebind we captured but could NOT tag as a
+    // View (scalar pointer, inlined-alias, or other not-yet-migrated shape)
+    // cannot be index-rewritten without silently shifting every read by
+    // ``lb - 1`` -- preserve the loud-failure contract.
+    if (!remapLbs.empty()) {
+      rebindStore.emitError(
+          "hlfir-rewrite-pointer-assigns: pointer rebind with bounds "
+          "remap (``ptr(<lo>:..) => src(..)``) not supported for this "
+          "rebind shape (only array section / whole-array rebinds lower "
+          "as Views).");
+      signalPassFailure();
+      return;
     }
 
     ptrDecl.emitWarning()
