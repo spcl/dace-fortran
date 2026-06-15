@@ -339,18 +339,38 @@ std::string buildIndexExpr(mlir::Value v, int d) {
       // declare's expected name  --  that path keeps the legacy
       // bounds-fail fallback (``buildCopyNode`` whole-array copy).
       bool hasAllocmem = false;
+      int allocmemCount = 0;
       fir::AllocMemOp allocOp;
       if (auto *adef = arrayVal.getDefiningOp()) {
         if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(adef)) {
           std::string allocName = decl.getUniqName().str() + ".alloc";
           if (auto mod = decl->getParentOfType<mlir::ModuleOp>()) {
             mod.walk([&](fir::AllocMemOp a) {
-              if (hasAllocmem) return;
               if (auto un = a.getUniqName())
-                if (un->str() == allocName) { hasAllocmem = true; allocOp = a; }
+                if (un->str() == allocName) {
+                  ++allocmemCount;
+                  if (!hasAllocmem) { hasAllocmem = true; allocOp = a; }
+                }
             });
           }
         }
+      }
+      // Conditional / multi-site ALLOCATE of the SAME allocatable
+      // (``IF (c) ALLOCATE(a(n)) ELSE ALLOCATE(a(m))``) keeps ONE buffer
+      // whose extent is branch-dependent; flang emits one ``fir.allocmem``
+      // per branch, all sharing the ``<decl>.alloc`` uniq_name.  Picking
+      // any single site's extent below (the ``mod.walk`` lands on the
+      // first / then-branch ``n``) would make ``size(a)`` / a section
+      // bound mis-size the loop on the OTHER branch and over-run the
+      // buffer (``corrupted size vs. prev_size`` heap abort).  Resolve to
+      // the bridge's MERGED descriptor symbol instead: extract_vars
+      // assigns ``<arr>_d<dim> = n`` / ``= m`` per branch and they join at
+      // the IF, so it carries the correct runtime extent.  (A genuine
+      // sequential re-ALLOCATE gets a fresh versioned buffer name upstream,
+      // so its allocmem ops do NOT share a uniq_name and never land here.)
+      if (allocmemCount > 1) {
+        if (resIdx == 0) return "1";  // default-shape ALLOCATE -> lb 1
+        if (resIdx == 1) return arrName + "_d" + std::to_string(*dimC);
       }
       // Local allocatable (``ALLOCATE(arr(e0, e1, ...))``) used in a
       // SECTION-bound context (``arr(:, ii)``).  ``box_dims`` reads the
