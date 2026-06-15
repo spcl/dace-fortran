@@ -103,7 +103,9 @@ def _ensure_view_writeback_link(builder, state, write_node, target: str):
         src_dims = [str(d) for d in state.parent.arrays[src].shape]
         src_subset = ", ".join(f"0:{d}" for d in src_dims)
     else:
-        src_subset = ", ".join(v.view_subset)
+        from dace_fortran.builder.access import resolve_full_dim_markers
+        src_shape = [str(d) for d in state.parent.arrays[src].shape]
+        src_subset = ", ".join(resolve_full_dim_markers(v.view_subset, src_shape))
     view_dims = [str(d) for d in state.parent.arrays[target].shape]
     view_subset = ", ".join(f"0:{d}" for d in view_dims)
     src_node = state.add_access(src)
@@ -330,7 +332,19 @@ def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect
     cached_has_readers = False
     if cache is not None and eff_target in cache:
         cached_has_readers = state.out_degree(cache[eff_target]) > 0
-    if is_self_update or cached_has_readers:
+    # Global view-edge rule: a READ of a View links ``source -> view`` (the
+    # ``acc()`` read-side edge), a WRITE links ``view -> source`` (the
+    # writeback edge).  ``acc()`` only emits the read direction, so a WRITE
+    # whose target is a View must go through ``_ensure_view_writeback_link``
+    # -- NOT ``acc()`` -- otherwise the write lands on a view node with an
+    # incoming (read) view edge and never propagates to the parent (and the
+    # parent looks uninitialised).  Covers the pure-write case the
+    # self-update / cached-reader branch already handled for RMW.
+    v_eff = builder.arrays.get(eff_target)
+    is_view_write = v_eff is not None and (
+        getattr(v_eff, 'bounds_remap_view', False)
+        or getattr(v_eff, 'role', '') == 'view_alias')
+    if is_view_write or is_self_update or cached_has_readers:
         w = state.add_access(eff_target)
         if cache is not None:
             cache[eff_target] = w

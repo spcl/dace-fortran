@@ -104,6 +104,32 @@ def test_var_info_carries_bounds_remap_fields(tmp_path):
         f"bounds_remap_source={pointer_vi.bounds_remap_source!r}"
 
 
+def test_var_info_bounds_remap_view_through_allocatable_target(tmp_path):
+    """The bounds-remap source trace must walk through the ``fir.load`` of
+    an ALLOCATABLE target's descriptor box to reach the parent declare.
+
+    This is the QE ``vexx_bp_k_gpu`` ``prhoc_d => rhoc_d(:, slice)`` shape
+    (Gate H) where ``rhoc_d`` is ALLOCATABLE: flang lowers the section
+    designate over a ``fir.load %rhoc#0``.  Before the ``fir.LoadOp`` hop in
+    ``extract_vars``'s source trace, the walk stopped at the load,
+    ``bounds_remap_source`` stayed empty, ``bounds_remap_view`` was left
+    false, and the rebind was mis-lowered as a scalar copy (a bare
+    ``complex128*`` ref in a tasklet body)."""
+    builder = _make_builder("pointer_view_bounds_remap_allocatable_probe.f90", tmp_path)
+    _build_partial_sdfg(builder)
+    inner = getattr(builder, "_inner", builder)
+    pointer_vi = next(
+        (vi for vi in inner.module.get_variables() if vi.fortran_name == "prhoc"),
+        None,
+    )
+    assert pointer_vi is not None, "no VarInfo for 'prhoc'"
+    assert pointer_vi.bounds_remap_view is True, \
+        ("allocatable-target bounds-remap-view not detected: "
+         f"bounds_remap_view={pointer_vi.bounds_remap_view}")
+    assert pointer_vi.bounds_remap_source == "rhoc", \
+        f"bounds_remap_source={pointer_vi.bounds_remap_source!r}"
+
+
 def test_var_info_total_extent_parses_n_times_k(tmp_path):
     """For the probe ``prhoc(1:n*k) => rhoc(:, 1:k)`` the extent
     operand on the rebox's shape-shift is the ``arith.muli`` of

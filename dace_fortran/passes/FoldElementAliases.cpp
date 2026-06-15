@@ -117,6 +117,12 @@ struct FoldElementAliasesPass
           base = cv.getValue().getDefiningOp();
           continue;
         }
+        if (auto ld = mlir::dyn_cast<fir::LoadOp>(base)) {
+          // ALLOCATABLE / POINTER parent: walk through the loaded box so the
+          // chain reaches the declare root (otherwise it stops at the load).
+          base = ld.getMemref().getDefiningOp();
+          continue;
+        }
         base = nullptr;
         break;
       }

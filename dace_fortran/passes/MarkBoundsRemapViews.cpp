@@ -193,6 +193,12 @@ static hlfir::DeclareOp findDeclareThroughChain(mlir::Value v) {
       v = dg.getMemref();
       continue;
     }
+    if (auto ld = mlir::dyn_cast<fir::LoadOp>(def)) {
+      // ALLOCATABLE / POINTER parent: walk through the loaded box to reach
+      // the declare (otherwise the chain stops at the load).
+      v = ld.getMemref();
+      continue;
+    }
     if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(def)) return dc;
     return {};
   }

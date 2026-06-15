@@ -1553,7 +1553,24 @@ static std::vector<std::string> renderDesignateSubsetStrings(hlfir::DesignateOp 
     if (!s.empty()) return s;
     return traceExtentExpr(v);
   };
+  // The section's SHAPE operand carries the per-(triplet-)dim EXTENTS, in
+  // order; used to render a full ``:`` dim whose box bounds don't resolve
+  // (an ALLOCATABLE / POINTER parent whose section designate reads a loaded
+  // box -- ``rhoc(:, c0:c1)`` over ``fir.load %rhoc#0``).  Without this the
+  // whole subset bails to ``{}`` and the bounds-remap view links the WHOLE
+  // parent (element-count mismatch) instead of just the aliased slab.
+  llvm::SmallVector<mlir::Value, 4> shapeExtents;
+  if (mlir::Value shp = sec.getShape()) {
+    auto *sd = shp.getDefiningOp();
+    if (auto so = mlir::dyn_cast_or_null<fir::ShapeOp>(sd))
+      shapeExtents.assign(so.getExtents().begin(), so.getExtents().end());
+    else if (auto sso = mlir::dyn_cast_or_null<fir::ShapeShiftOp>(sd)) {
+      auto pr = sso.getPairs();
+      for (size_t i = 1; i < pr.size(); i += 2) shapeExtents.push_back(pr[i]);
+    }
+  }
   unsigned cursor = 0;
+  unsigned tripCursor = 0;  // index into shapeExtents (triplet dims only)
   for (unsigned d = 0; d < triplets.size(); ++d) {
     if (triplets[d] && cursor + 2 < secIdx.size()) {
       std::string lo = renderBound(secIdx[cursor]);
@@ -1561,12 +1578,29 @@ static std::vector<std::string> renderDesignateSubsetStrings(hlfir::DesignateOp 
       std::string st = renderBound(secIdx[cursor + 2]);
       auto loC = traceConstInt(secIdx[cursor]);
       auto stC = traceConstInt(secIdx[cursor + 2]);
-      if (lo.empty() || hi.empty()) return {};
+      if (lo.empty() || hi.empty()) {
+        // Full ``:`` dim (offset 0) whose dynamic box bounds don't render
+        // (ALLOCATABLE/POINTER parent: bounds come from ``fir.box_dims`` of a
+        // loaded box).  Prefer the section's own SHAPE extent -> ``0:<ext>``;
+        // if even that is a dynamic box-dims value that won't render, emit a
+        // ``":"`` FULL-DIM marker -- the consumer (access.py /
+        // _ensure_view_writeback_link) resolves it against the parent's
+        // known SDFG shape (``0:<src_shape[d]>``).  Either way the slab's
+        // element count matches the view (no whole-array fallback).
+        std::string ext = (tripCursor < shapeExtents.size())
+                              ? renderBound(shapeExtents[tripCursor])
+                              : std::string();
+        subset.push_back(ext.empty() ? std::string(":") : ("0:" + ext));
+        cursor += 3;
+        ++tripCursor;
+        continue;
+      }
       std::string s = loC ? std::to_string(*loC - 1) : ("(" + lo + ")-1");
       s += ":" + hi;
       if (!st.empty() && st != "1" && !(stC && *stC == 1)) s += ":" + st;
       subset.push_back(std::move(s));
       cursor += 3;
+      ++tripCursor;
     } else if (!triplets[d] && cursor < secIdx.size()) {
       auto kC = traceConstInt(secIdx[cursor]);
       std::string k = renderBound(secIdx[cursor]);
@@ -3199,6 +3233,19 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
             }
             if (auto eb = mlir::dyn_cast<fir::EmboxOp>(pd)) {
               parent = eb.getMemref();
+              continue;
+            }
+            if (auto ld = mlir::dyn_cast<fir::LoadOp>(pd)) {
+              // ALLOCATABLE / POINTER parent: its section designate operates
+              // on a LOADED box (``%b = fir.load %decl#0``).  Walk through
+              // the load to reach the declare -- without this the trace
+              // stops at the load and ``bounds_remap_source`` stays empty,
+              // so ``bounds_remap_view`` is left false and the rebind is
+              // mis-lowered as a scalar copy.  QE's ``prhoc_d(1 : nrxxs*jcurr)
+              // => rhoc_d(:, j1:j2)`` hits this because ``rhoc_d`` is
+              // ALLOCATABLE (the section designate reads ``fir.load
+              // rhoc_d_box``).
+              parent = ld.getMemref();
               continue;
             }
             break;

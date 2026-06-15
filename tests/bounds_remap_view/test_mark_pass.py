@@ -69,6 +69,18 @@ def test_pointer_view_bounds_remap_is_tagged():
         "view probe should have exactly one bounds-remap-view tag"
 
 
+def test_pointer_view_bounds_remap_allocatable_is_tagged():
+    """The bounds-remap view whose TARGET is ALLOCATABLE (the QE
+    ``prhoc_d => rhoc_d(:, slice)`` Gate-H shape) is still tagged.  The
+    rebox-rank-change detection is independent of the parent being
+    allocatable; the allocatable-specific ``fir.load`` hop is needed
+    downstream in extract_vars' source trace (covered by
+    ``test_view_emission.test_var_info_bounds_remap_view_through_allocatable_target``)."""
+    ir = _emit_hlfir_and_mark(_HERE / "pointer_view_bounds_remap_allocatable_probe.f90")
+    assert _count_tagged(ir) >= 1, \
+        "allocatable-target view probe should have a bounds-remap-view tag"
+
+
 def test_reshape_intrinsic_copy_is_not_tagged():
     """The RESHAPE copy probe must NOT trigger the tag -- RESHAPE
     lowers through ``hlfir.reshape`` (a different op), so the

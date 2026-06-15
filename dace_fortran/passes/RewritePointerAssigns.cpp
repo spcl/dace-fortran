@@ -309,6 +309,15 @@ static RebindChain traceRebindChain(mlir::Value v) {
       v = cv.getValue();
       continue;
     }
+    if (auto ld = mlir::dyn_cast<fir::LoadOp>(def)) {
+      // ALLOCATABLE / POINTER parent: its section designate reads a LOADED
+      // box (``%b = fir.load %decl#0``).  Walk through the load to reach the
+      // declare -- without this the chain stops at the load and the rebind
+      // is reported as unsupported (parent == nullptr).  Same gap class as
+      // the bounds-remap-view source trace in extract_vars.cpp.
+      v = ld.getMemref();
+      continue;
+    }
     if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(def)) {
       ChainStep step;
       step.dg = dg;

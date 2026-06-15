@@ -109,6 +109,27 @@ def resolve_section_alias(builder, array_name: str, access):
     return src, spliced
 
 
+def resolve_full_dim_markers(view_subset, src_shape):
+    """Replace ``":"`` full-dimension markers in a section subset with an
+    explicit ``"0:<extent>"`` drawn from the parent array's SDFG shape
+    (per-dim, in order).
+
+    A bounds-remap / section view over an ALLOCATABLE / POINTER parent has a
+    full ``:`` dim whose Fortran box bounds are dynamic and don't render in
+    the bridge -- ``renderDesignateSubsetStrings`` emits ``":"`` for those.
+    The parent's real extent IS known here (the SDFG descriptor's shape), so
+    the linking memlet covers exactly the aliased slab (matching element
+    count) instead of bailing to the whole array.
+    """
+    out = []
+    for i, s in enumerate(view_subset):
+        if s == ":":
+            out.append(f"0:{src_shape[i]}" if i < len(src_shape) else s)
+        else:
+            out.append(s)
+    return out
+
+
 def acc(builder, state, name: str):
     """Single access node for ``name`` in ``state``, reused across reads /
     writes.  Without this, every tasklet in the same state would fabricate
@@ -191,7 +212,8 @@ def acc(builder, state, name: str):
                 # Section-reshape view: source-side subset
                 # describes which slab of ``src`` the view covers;
                 # view-side subset spans the view's own shape.
-                src_subset = ", ".join(v.view_subset)
+                src_shape = [str(d) for d in state.parent.arrays[src].shape]
+                src_subset = ", ".join(resolve_full_dim_markers(v.view_subset, src_shape))
                 view_dims = [str(d) for d in state.parent.arrays[name].shape]
                 view_subset = ", ".join(f"0:{d}" for d in view_dims)
                 state.add_edge(src_node, None, node, 'views',
