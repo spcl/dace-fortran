@@ -63,12 +63,35 @@ def _ensure_view_writeback_link(builder, state, write_node, target: str):
       clean ``in=1 (linking) / out=N (tasklets)`` shape.
     """
     v = builder.arrays.get(target)
-    if v is None or getattr(v, 'role', '') != 'view_alias':
+    if v is None:
+        return
+    # ``bounds_remap_view`` (flatten POINTER remap ``p(1:n*k) => a(:,c0:c1)``)
+    # is a View just like ``view_alias`` but flagged differently; on the READ
+    # side ``acc()`` synthesises the equivalent (source, subset) view, so do
+    # the same here for the WRITE-back direction.  Without this, a
+    # read-modify-write through a flatten view (``p(i) = p(i)*2``, or a callee
+    # ``v(i)=v(i)*2`` aliasing it) left the fresh write node with no ``views``
+    # edge -> ``get_view_edge`` returns None -> "Ambiguous edge to/from a View".
+    if getattr(v, 'bounds_remap_view', False) and v.bounds_remap_source \
+            and v.bounds_remap_source in state.parent.arrays:
+        from types import SimpleNamespace
+        v = SimpleNamespace(role='view_alias',
+                            view_source=v.bounds_remap_source,
+                            view_subset=list(v.bounds_remap_source_subset) or [""],
+                            fortran_name=v.fortran_name)
+    if getattr(v, 'role', '') != 'view_alias':
         return
     if not v.view_source or v.view_source not in state.parent.arrays:
         return
     src = v.view_source
-    src_subset = ", ".join(v.view_subset)
+    # Whole-array reinterpret sentinel ``[""]`` -> span the source's full flat
+    # storage (mirrors the acc() read-side link); a real section subset is
+    # used verbatim.
+    if len(v.view_subset) == 1 and v.view_subset[0] == "":
+        src_dims = [str(d) for d in state.parent.arrays[src].shape]
+        src_subset = ", ".join(f"0:{d}" for d in src_dims)
+    else:
+        src_subset = ", ".join(v.view_subset)
     view_dims = [str(d) for d in state.parent.arrays[target].shape]
     view_subset = ", ".join(f"0:{d}" for d in view_dims)
     src_node = state.add_access(src)

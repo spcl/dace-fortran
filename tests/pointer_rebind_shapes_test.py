@@ -45,13 +45,23 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 #     ends; every xfail names the single facet that breaks so the marker
 #     can be removed the moment that facet is wired.
 
-#: Write-back through a flattened bounds-remap view: `p(1:n*k) =>
-#: a(:, c0:c1); p(i) = ...` (or a callee mutating `p`).  The read-side
-#: View linking memlet is wired; the write-side fold-back to the parent's
-#: multi-D coordinates is not.
-_VIEW_WRITEBACK = ("bounds-remap-view: write-back through a flattened view (direct or via "
-                   "a callee) lacks the per-state linking memlet folding the flat index "
-                   "to the parent's multi-D coordinates")
+#: Gate H = two independent gaps (diagnosed 2026-06-15). Read-only AND
+#: write-ONLY through a flattened bounds-remap view already work; the
+#: callee variant `call scale(p,n)` fails on:
+#:  (1) inlined view-arg aliasing -- after hlfir-inline-all the callee's
+#:      array dummy `v` (its declare memref traces to `p`'s box) is
+#:      classified as an INDEPENDENT `role='array' intent='inout'` instead
+#:      of a view-of-view alias of `p`, so `v` leaks as a top-level arg
+#:      (`Missing program argument "v"`).
+#:  (2) read-modify-write through a view (`v(i)=v(i)*2`, also fails
+#:      DIRECTLY as `p(i)=p(i)*2`): the single cached view node gets 2 in-
+#:      edges (source->view link + tasklet write) and 1 out-edge (read ->
+#:      tasklet), and `get_view_edge` returns None -> "Ambiguous edge
+#:      to/from a View".  Fix = separate read-view (source->view) and
+#:      write-view (view->source) access nodes in access.py::acc.
+_VIEW_WRITEBACK = ("gate H: (1) inlined callee array-dummy bound to a view leaks as a top-level "
+                   "arg (view-arg aliasing), and (2) read-modify-write through a view yields an "
+                   "ambiguous View edge -- needs separate read/write view nodes in acc()")
 
 
 def _build(src: str, tmp: Path, entry: str = "_QPmain"):
@@ -314,6 +324,43 @@ end subroutine main
     np.testing.assert_array_equal(out, ref)
     # First 12 flat slots (cols 1..3) overwritten; cols 4,5 unchanged.
     assert list(out[0:12]) == [1000 + i for i in range(1, 13)]
+    assert list(out[12:20]) == [41, 42, 43, 44, 51, 52, 53, 54]
+
+
+def test_c_section_flatten_read_modify_write(tmp_path: Path):
+    """READ-MODIFY-WRITE through the flattened section view (``p(i) =
+    p(i) * 2``): the view node is BOTH read and written in the same state.
+    A single shared view node would get a source->view link + a tasklet
+    write (2 in) and a tasklet read (1 out), which ``get_view_edge`` can't
+    disambiguate -- the self-update split gives the write its own
+    view->source node so each view node has a clean single viewed edge."""
+    src = """
+subroutine main(out)
+  implicit none
+  real(8), intent(out) :: out(20)
+  real(8), target :: a(4, 5)
+  real(8), pointer :: p(:)
+  integer :: i, j
+  do j = 1, 5
+    do i = 1, 4
+      a(i, j) = real(10 * j + i, 8)
+    end do
+  end do
+  p(1 : 4 * 3) => a(:, 1:3)
+  do i = 1, 12
+    p(i) = p(i) * 2.0d0
+  end do
+  out = reshape(a, [20])
+end subroutine main
+"""
+    mod = f2py_compile(src, tmp_path / "ref", "c_sec_rmw")
+    ref = np.asarray(mod.main(), dtype=np.float64)
+
+    out = np.zeros(20, order="F", dtype=np.float64)
+    _build(src, tmp_path)(out=out)
+    np.testing.assert_array_equal(out, ref)
+    # Cols 1..3 (first 12 flat slots) doubled; cols 4,5 unchanged.
+    assert list(out[0:12]) == [2 * (10 * j + i) for j in range(1, 4) for i in range(1, 5)]
     assert list(out[12:20]) == [41, 42, 43, 44, 51, 52, 53, 54]
 
 
