@@ -404,8 +404,24 @@ def add_descriptors(builder, sdfg: SDFG):
             lb = v.lower_bounds[d] if d < len(v.lower_bounds) else "1"
             builder.offset_values[sym_name] = _offset_value(lb)
 
+    # Scalars that are the TARGET of a scalar POINTER rebind (``tmp => x``)
+    # must be materialised as a length-1 ARRAY, not a ``Scalar``: the rebind
+    # is lowered as a length-1 ``view_alias`` of the target, and a View can
+    # only alias an Array source (a ``Scalar`` source is emitted ``const`` in
+    # codegen so the view write-back fails to compile).  The d-face
+    # ``ConvertLengthOneArraysToScalars`` pass skips view-sources, so the
+    # length-1 Array survives the later scalar-folding cleanup.
+    scalar_view_sources = {
+        a.view_source
+        for a in builder.arrays.values() if getattr(a, 'role', '') == 'view_alias' and a.view_source in builder.scalars
+    }
     for v in builder.scalars.values():
         if _is_flang_internal(v.fortran_name) or _is_char_literal(v.dtype):
+            continue
+        if v.fortran_name in scalar_view_sources and v.fortran_name not in sdfg.arrays:
+            # length-1 Array view source (see note above).  Local target ->
+            # transient; a dummy target keeps the caller-visible buffer.
+            sdfg.add_array(v.fortran_name, shape=(1, ), dtype=dt(v.dtype), transient=(v.intent == ''))
             continue
         # Cross-role collision guard.  When ``hlfir-inline-all`` splices
         # multiple callees into the entry, the bridge's collector can

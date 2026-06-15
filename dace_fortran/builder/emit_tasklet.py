@@ -41,6 +41,18 @@ def _ident_tokens(expr: str) -> set:
     return set(_IDENT_RE.findall(expr))
 
 
+def _is_len1_scalar_view(builder, nm: str) -> bool:
+    """True when ``nm`` is a length-1 ``view_alias`` -- a Fortran scalar
+    POINTER rebind (``tmp => x``) lowered as a length-1-array View.  It
+    lives in ``builder.arrays`` but reads/writes like a scalar (``tmp``
+    means ``tmp[0]``), so the emit paths wire it as a single ``_in_<nm>``
+    connector (memlet ``<nm>[0]``) rather than an indexed array occurrence
+    (an unwired ``_in_<nm>_0``) or a bare ``int*`` view reference."""
+    a = builder.arrays.get(nm)
+    return a is not None and getattr(a, 'role', '') == 'view_alias' \
+        and list(a.shape_symbols) == ['1']
+
+
 def _ensure_view_writeback_link(builder, state, write_node, target: str):
     """When the Phase I self-update split creates a fresh access node
     for the write side of a view alias, the view's required source
@@ -195,6 +207,14 @@ def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect
     # spurious ``_in_qr`` scalar connector + ``qr[0]`` 1D memlet
     # that fails validation against the 2D ``qr.shape``.
     r_scl -= r_arr
+    # A length-1 ``view_alias`` (scalar POINTER rebind ``tmp => x``) lives in
+    # ``builder.arrays`` so it lands in ``r_arr``, but it reads like a scalar
+    # (``tmp`` -> ``tmp[0]``).  Move it to ``r_scl`` so it gets a single
+    # ``_in_tmp`` connector (memlet ``tmp[0]``) -- otherwise it renders as an
+    # unwired ``_in_tmp_0`` array occurrence (free symbol).
+    _len1_views = {nm for nm in r_arr if _is_len1_scalar_view(builder, nm)}
+    r_arr -= _len1_views
+    r_scl |= _len1_views
     target = assign_node.target
 
     # Index arrays (e.g. edge_idx) show up in the RHS token scan but we
@@ -442,9 +462,19 @@ def emit_scalar_assign(builder, state, target: str, value: str):
             return
 
     tokens = _ident_tokens(value)
+
+    # A length-1 ``view_alias`` (a Fortran scalar POINTER rebind ``tmp => x``
+    # lowered as a length-1-array view) reads like a scalar: ``tmp`` in a
+    # scalar expression means ``tmp[0]``.  It lives in ``builder.arrays``
+    # (not ``builder.scalars``), so include it here -- otherwise the tasklet
+    # references the bare ``tmp`` (an ``int*`` view) and codegen emits
+    # ``tmp + 1`` -> invalid ``int*`` arithmetic.
     # ``nm != target`` was wrong  --  ``i = i + 1`` genuinely needs a read
     # edge on the target itself.
-    reads = [nm for nm in sorted(tokens, key=len, reverse=True) if nm in builder.scalars]
+    reads = [
+        nm for nm in sorted(tokens, key=len, reverse=True)
+        if nm in builder.scalars or _is_len1_scalar_view(builder, nm)
+    ]
 
     code = value
     for nm in reads:

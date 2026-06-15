@@ -47,6 +47,38 @@ end subroutine main
     assert int(out[0]) == int(out_ref) == 14
 
 
+def test_scalar_rebind_lowers_as_length_one_view(tmp_path: Path):
+    """``tmp => x`` lowers as a length-1-array View of ``x``: writing through
+    ``tmp`` aliases ``x`` (read ``x`` directly afterwards, not ``tmp``), and
+    ``x`` is materialised as a length-1 ``Array`` (not a ``Scalar``) so the
+    view can write back.  Pins the all-rebinds-are-Views design for scalars."""
+    import dace.data as dd
+    src = """
+subroutine main(out)
+  implicit none
+  integer, intent(out) :: out
+  integer, target  :: x
+  integer, pointer :: tmp
+  x = 7
+  tmp => x
+  tmp = 13
+  out = x
+end subroutine main
+"""
+    mod = f2py_compile(src, tmp_path / "ref", "scalar_view_alias")
+    out_ref = int(mod.main())
+    b = build_sdfg(src, tmp_path, name='main', entry='_QPmain')
+    sdfg = b.build()
+    # tmp is a View; x is a length-1 Array (not a Scalar).
+    assert isinstance(sdfg.arrays["tmp"], dd.View)
+    assert isinstance(sdfg.arrays["x"], dd.Array) and not isinstance(sdfg.arrays["x"], dd.View)
+    assert tuple(sdfg.arrays["x"].shape) == (1, )
+    out = np.zeros(1, dtype=np.int32)
+    sdfg(out=out)
+    # The write through tmp must reach x: out = x = 13, NOT the initial 7.
+    assert int(out[0]) == out_ref == 13
+
+
 def test_dead_store_rebind_is_collapsed(tmp_path: Path):
     """Sequential dead-store rebinds (``ptr => A; ptr => B; use ptr``)
     are not ambiguous  --  only the LAST rebind is observable.  The

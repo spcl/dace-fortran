@@ -2976,13 +2976,17 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
     // pipeline doesn't crash on an unsupported shape (the existing
     // rewriter would have rejected such a shape too).
     if (op->hasAttr("hlfir_bridge.bounds_remap_view") ||
-        op->hasAttr("hlfir_bridge.pointer_view")) {
-      // Both tags reach the same rebind-store trace below (find the
+        op->hasAttr("hlfir_bridge.pointer_view") ||
+        op->hasAttr("hlfir_bridge.pointer_view_scalar")) {
+      // All three tags reach the same rebind-store trace below (find the
       // source declare + render the source-section subset).  A
       // ``bounds_remap_view`` (rank-reshape flatten) keeps the flatten
-      // descriptor; a ``pointer_view`` (plain section rebind) is
-      // converted to a ``view_alias`` right after this block (see the
-      // P3 conversion) so it gets the section's real strides.
+      // descriptor; a ``pointer_view`` (plain section rebind) and a
+      // ``pointer_view_scalar`` (``tmp => x`` scalar rebind) are converted
+      // to a ``view_alias`` right after this block (see the P3 conversion)
+      // -- the scalar one as a length-1-array view.  For the scalar embox
+      // (``embox(x_ref)``, no shape operand) the shape_shift block is
+      // skipped and the memref walk just records the parent ``x``.
       // Find the rebind store: the LAST non-nullify ``fir.store``
       // whose memref is ``op.getResult(0)``.
       fir::StoreOp rebindStore;
@@ -3255,6 +3259,24 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
         if (!lbs.empty()) v.lower_bounds = lbs;
       }
       // Route through view_alias, not the flatten-view descriptor.
+      v.bounds_remap_view = false;
+      v.bounds_remap_source.clear();
+      v.bounds_remap_total_extent.clear();
+    }
+
+    // ----- Scalar pointer rebind (``tmp => x``) as a length-1-array View.
+    // A View cannot alias a ``const`` Scalar source, so ``tmp`` is a
+    // length-1 (rank-1) ``view_alias`` of ``x`` and ``x`` is re-classified
+    // as a length-1 Array (descriptors.py, driven by ``x`` appearing as a
+    // scalar view's ``view_source``).  ``tmp[0]`` then aliases ``x[0]``.
+    if (op->hasAttr("hlfir_bridge.pointer_view_scalar") &&
+        !v.bounds_remap_source.empty()) {
+      v.role = "view_alias";
+      v.view_source = v.bounds_remap_source;
+      v.view_subset = {std::string("")};  // whole (length-1) source
+      v.rank = 1;
+      v.shape_symbols = {std::string("1")};
+      v.lower_bounds = {std::string("1")};
       v.bounds_remap_view = false;
       v.bounds_remap_source.clear();
       v.bounds_remap_total_extent.clear();

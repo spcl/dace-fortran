@@ -812,6 +812,7 @@ struct RewritePointerAssignsPass
     // member, inlined alias) still rewrite below and migrate next.
     if (aliasDecls.empty()) {
       bool tagAsView = false;
+      bool tagScalarView = false;
       if (chain.chain.size() == 1) {
         // Section rebind (``p => a(:, j)``): a single designate with at
         // least one triplet dim.
@@ -845,8 +846,16 @@ struct RewritePointerAssignsPass
           }
           break;
         }
-        if (auto seq = mlir::dyn_cast<fir::SequenceType>(t))
+        if (auto seq = mlir::dyn_cast<fir::SequenceType>(t)) {
           if (seq.getDimension() > 0) tagAsView = true;
+        } else {
+          // Scalar pointer rebind (``tmp => x``, ``x`` a scalar TARGET):
+          // the pointer peeled to a non-array element type.  Lower as a
+          // length-1-array View of the target -- extract_vars emits ``tmp``
+          // as a length-1 ``view_alias`` and re-classifies the target as a
+          // length-1 Array (a View cannot alias a const Scalar source).
+          tagScalarView = true;
+        }
       }
       if (tagAsView) {
         ptrDecl->setAttr("hlfir_bridge.pointer_view",
@@ -860,6 +869,11 @@ struct RewritePointerAssignsPass
           ptrDecl->setAttr(
               "hlfir_bridge.pointer_view_lb",
               mlir::DenseI64ArrayAttr::get(&getContext(), remapLbs));
+        return;
+      }
+      if (tagScalarView) {
+        ptrDecl->setAttr("hlfir_bridge.pointer_view_scalar",
+                         mlir::UnitAttr::get(&getContext()));
         return;
       }
     }
