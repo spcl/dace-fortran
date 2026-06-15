@@ -595,23 +595,27 @@ def auto_declare_synth(builder, name: str, ctx):
     """
     if name in builder.scalars or name in builder.symbols:
         return
-    if not (name.startswith("__sc_") or name.startswith("__al_") or name.startswith("__brk_")):
+    if not (name.startswith("__sc_") or name.startswith("__al_") or name.startswith("__brk_")
+            or name.startswith("__brkc_")):
         return
     # Fake a VarInfo-like record so _add_descriptors-consistent paths work.
     # A ``SimpleNamespace`` is enough  --  scalar dispatch only reads
     # ``.intent`` and ``.dtype``.
-    # ``__brk_<N>`` is the bridge's pre-body snapshot of an scf.while
-    # break condition.  ``__al_<N>`` is the lift-cf-to-scf scratch
-    # counter that drives the ``do istep = 1, niter`` shape (NPB LU's
-    # ssor istep loop): each iteration decrements it and the
-    # surrounding scf.while breaks when it hits 0.  Both feed
-    # interstate-edge conditions (the break check + the
-    # ``__al_X > 0`` outer iteration gate), so they need to register
-    # as SYMBOLS rather than scalar transients.  A scalar transient
-    # in an interstate-edge condition surfaces as a free symbol that
-    # defaults to 0 at runtime -- the LU SSOR loop then breaks
-    # immediately and the sweep is a no-op.
+    # ``__al_<N>`` is the lift-cf-to-scf scratch counter that drives the
+    # ``do istep = 1, niter`` shape (NPB LU's ssor istep loop): each
+    # iteration DECREMENTS it on an interstate edge (``__al = __al - 1``)
+    # and the surrounding scf.while breaks when it hits 0.  It is genuine
+    # interstate counter arithmetic, so it registers as a SYMBOL.
+    # ``__brk_<N>`` is the pre-body snapshot of a PURE-SCALAR / counter-only
+    # break continuation (no array reads) -- a plain symbol assignment is
+    # exact, so it is a SYMBOL too.
     is_sym = name.startswith("__brk_") or name.startswith("__al_")
+    # ``__brkc_<N>`` is the array-dependent break continuation (see
+    # dispatch.cpp): a tasklet writes the boolean into it and the break
+    # guard reads it by its BARE name.  It is a SCALAR transient (verified
+    # that a scalar reads correctly on a ConditionalBlock branch /
+    # interstate edge in d-face 2.0.0a3 -- no length-1 array needed; the
+    # earlier "scalar = free-symbol 0 on the edge" belief was wrong).
     v = SimpleNamespace(fortran_name=name,
                         intent='',
                         dtype='int32',

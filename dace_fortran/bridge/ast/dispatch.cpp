@@ -134,13 +134,45 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
     auto condVal = pendingCondOp.getCondition();
     auto b = buildBoolExpr(condVal, 0);
     if (!b.empty() && b != "?") {
-      brkSynthName = "__brk_" + std::to_string(kBrkCounter++);
-      ASTNode snap;
-      snap.kind = "assign";
-      snap.target = brkSynthName;
-      snap.expr = b;
-      snap.target_is_array = false;
-      out.push_back(std::move(snap));
+      // Does the break condition read array ELEMENTS (e.g. NPB LU ssor
+      // convergence ``rsdnm(i) < tolrsd(i)``)?  A symbolic interstate-edge
+      // assignment can NOT carry a multi-element array-element read -- DaCe
+      // strips the subscript and the C++ unparser emits a bare POINTER
+      // comparison of the two ``double*`` arglist params (heap-address
+      // compare), a non-deterministic break that silently no-ops the loop
+      // (see tests/lu_two_call_convergence_repro_test.py).
+      std::vector<AccessInfo> condAccesses;
+      collectReadAccesses(condVal, condAccesses, 0);
+      int brkId = kBrkCounter++;
+      if (condAccesses.empty()) {
+        // Pure scalar / counter condition -- a symbol snapshot is exact
+        // (no array reads to keep off the interstate edge).
+        brkSynthName = "__brk_" + std::to_string(brkId);
+        ASTNode snap;
+        snap.kind = "assign";
+        snap.target = brkSynthName;
+        snap.expr = b;
+        snap.target_is_array = false;
+        out.push_back(std::move(snap));
+      } else {
+        // Array-dependent break (e.g. NPB LU's convergence
+        // ``rsdnm(i) < tolrsd(i)``): compute the continuation into a
+        // SCALAR transient ``__brkc_<N>`` via a tasklet -- the array reads
+        // wire through per-occurrence connectors + memlets (keeping their
+        // ``arr[idx]`` form), and ``__al_<N>`` stays a free symbol.  The
+        // break guard then reads the scalar by its BARE name (verified to
+        // work on a ConditionalBlock branch / interstate edge), so a
+        // multi-element array read never lands on a codeblock.  No length-1
+        // array, no ``__brk`` symbol promotion (scalars-over-len1 rule).
+        brkSynthName = "__brkc_" + std::to_string(brkId);
+        ASTNode comp;
+        comp.kind = "assign";
+        comp.target = brkSynthName;
+        comp.expr = b;  // bare names; emit_tasklet wires the subscripts
+        comp.accesses = std::move(condAccesses);
+        comp.target_is_array = false;
+        out.push_back(std::move(comp));
+      }
     }
   }
   for (auto& op : block) {

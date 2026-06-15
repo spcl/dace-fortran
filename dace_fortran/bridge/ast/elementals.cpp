@@ -499,6 +499,26 @@ void collectReadAccesses(mlir::Value v, std::vector<AccessInfo> &accesses,
     }
     return;
   }
+  if (auto ifOp = mlir::dyn_cast<mlir::scf::IfOp>(op)) {
+    // The reads of an ``scf.if``-valued expression (e.g. NPB LU's break
+    // continuation ``(not (rsdnm(i) < tolrsd(i))) if (rem > 0) else 0``)
+    // live inside the THEN / ELSE regions' ``scf.yield`` values -- the
+    // generic operand recursion below only reaches the ``scf.if``
+    // CONDITION.  Mirror ``buildBoolExpr``'s scf.if descent so the yielded
+    // array reads are enumerated; without this ``condAccesses`` comes back
+    // empty and ``walkSCFBeforeRegion`` renders the break as a bare-pointer
+    // compare on an interstate-edge symbol (see
+    // tests/lu_two_call_convergence_repro_test.py).
+    collectReadAccesses(ifOp.getCondition(), accesses, depth + 1);
+    for (auto *reg : {&ifOp.getThenRegion(), &ifOp.getElseRegion()}) {
+      if (reg->empty()) continue;
+      for (auto &iop : reg->front())
+        if (auto y = mlir::dyn_cast<mlir::scf::YieldOp>(iop))
+          for (auto yv : y.getResults())
+            collectReadAccesses(yv, accesses, depth + 1);
+    }
+    return;
+  }
   for (auto operand : op->getOperands())
     collectReadAccesses(operand, accesses, depth + 1);
 }

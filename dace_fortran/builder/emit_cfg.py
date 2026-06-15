@@ -687,6 +687,35 @@ def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
                 prev = nxt
 
 
+def _stage_cond_scalar(builder, ctx, region, pre, sym, cond, cond_accesses):
+    """Compute an array-dependent control-flow condition into a SCALAR
+    transient via a tasklet; return ``(new_pre_state, scalar_name)``.
+
+    Per the codeblock rule the LoopRegion / ConditionalBlock then reads the
+    scalar by its BARE name (no ``[0]``).  Internal condition values are
+    never length-1 Arrays -- those are reserved for values returned outside
+    the SDFG.  Registering ``sym`` in ``builder.scalars`` routes
+    ``emit_tasklet``'s scalar-output path (``Memlet(sym, subset='0')``); the
+    array reads still wire through per-occurrence ``_in_<arr>_<n>``
+    connectors + memlets.
+    """
+    from types import SimpleNamespace
+    if sym not in ctx.sdfg.arrays:
+        ctx.sdfg.add_scalar(sym, dace.int64, transient=True, find_new_name=False)
+    builder.scalars.setdefault(
+        sym,
+        SimpleNamespace(fortran_name=sym, intent='', dtype='int64', rank=0,
+                        is_dynamic=False, role='scalar', shape_symbols=[], lower_bounds=[]))
+    pre = _anchor_views_referenced_in_expr(builder, cond, region, pre, ctx.sdfg)
+    nxt = region.add_state(f"pre_{sym}")
+    region.add_edge(pre, nxt, InterstateEdge())
+    ctx.cur = nxt
+    synth = SimpleNamespace(kind='assign', target=sym, expr=cond,
+                            target_is_array=False, accesses=cond_accesses)
+    emit_tasklet(builder, nxt, synth, builder.nid(), ctx.iter_map)
+    return nxt, sym
+
+
 def emit_while(builder, ctx: '_Ctx', n, region):
     """Fortran ``DO WHILE``  --  lifted by ``lift-cf-to-scf`` into scf.while
     and extracted as ``kind="while"``.  Emit a DaCe LoopRegion whose
@@ -747,21 +776,10 @@ def emit_while(builder, ctx: '_Ctx', n, region):
                 cond = re.sub(rf'\b{re.escape(nm)}\b', f"{nm}[0]", cond)
 
     if will_lift and not _is_trivial_bound(cond):
-        from types import SimpleNamespace
+        # Lift an array-dependent loop condition into a SCALAR transient;
+        # the LoopRegion reads it by its bare name (no ``[0]``).
         sym = f"while_cond_{builder.nid()}"
-        ctx.sdfg.add_transient(sym, (1, ), dace.int64, find_new_name=False)
-        pre = _anchor_views_referenced_in_expr(builder, cond, region, pre, ctx.sdfg)
-        nxt = region.add_state(f"pre_{sym}")
-        region.add_edge(pre, nxt, InterstateEdge())
-        ctx.cur = nxt
-        synth = SimpleNamespace(
-            kind='assign', target=sym, expr=cond,
-            target_is_array=True, accesses=cond_accesses,
-        )
-        from dace_fortran.builder.emit_tasklet import emit_tasklet
-        emit_tasklet(builder, nxt, synth, builder.nid(), ctx.iter_map)
-        pre = nxt
-        cond = f"{sym}[0]"
+        pre, cond = _stage_cond_scalar(builder, ctx, region, pre, sym, cond, cond_accesses)
 
     loop = LoopRegion(label=f"while_{builder.nid()}", condition_expr=cond)
     region.add_node(loop)
@@ -873,31 +891,13 @@ def emit_cond(builder, ctx: '_Ctx', n, region):
             if mismatched:
                 cond_array_reads = []  # fall through to legacy path
         if cond_array_reads:
-            from types import SimpleNamespace
+            # Lift the array-reading branch condition into a SCALAR
+            # transient (DaCe takes any numeric-truthy value on the
+            # branch); the ConditionalBlock reads it by its bare name.
+            # ``emit_tasklet``'s per-occurrence array-read connector
+            # machinery wires each ``arr[i, k]`` to ``_in_arr_N`` + memlet.
             sym = f"if_cond_{builder.nid()}"
-            # Materialise a 1-element int64 transient to hold the
-            # boolean (DaCe expects a numeric truthy value on the
-            # branch).  ``emit_tasklet``'s per-occurrence array-read
-            # connector machinery does the rest: each ``arr[i, k]``
-            # reference in the condition becomes ``_in_arr_N`` with
-            # a matching unit memlet.
-            ctx.sdfg.add_transient(sym, (1, ), dace.int64, find_new_name=False)
-            pre = _anchor_views_referenced_in_expr(builder, cond, region, pre, ctx.sdfg)
-            nxt = region.add_state(f"pre_{sym}")
-            region.add_edge(pre, nxt, InterstateEdge())
-            ctx.cur = nxt
-            # ``emit_tasklet`` expects a target-is-array assign whose
-            # ``accesses`` list carries the per-occurrence indices.
-            # The condition value lands in the 0-th element of the
-            # transient via the same path tasklet-array-writes take.
-            synth = SimpleNamespace(
-                kind='assign', target=sym, expr=cond,
-                target_is_array=True, accesses=cond_accesses,
-            )
-            from dace_fortran.builder.emit_tasklet import emit_tasklet
-            emit_tasklet(builder, nxt, synth, builder.nid(), ctx.iter_map)
-            pre = nxt
-            cond = f"{sym}[0]"
+            pre, cond = _stage_cond_scalar(builder, ctx, region, pre, sym, cond, cond_accesses)
         else:
             sym = f"if_cond_{builder.nid()}"
             if sym not in ctx.sdfg.symbols:
