@@ -1558,16 +1558,30 @@ def emit_call(builder, ctx, n, region):
                         outputs=out_conns)
     state.add_node(node)
 
+    import dace.data as _dd
+    from dace_fortran.builder.access import acc as _acc
+    from dace_fortran.builder.emit_tasklet import _ensure_view_writeback_link
     for name, conn, direction in edges:
         if conn in comm_conns:
             # Comm: by-value opaque scalar (subset '0', single element).
             mem = Memlet(data=name, subset='0')
         else:
             mem = Memlet.from_array(name, ctx.sdfg.arrays[name])
+        # A whole-array POINTER rebind (``fld => tgt``) reaches an external
+        # as a View of its target (the velocity-binding shallow-pass pattern).
+        # A View access node needs the canonical source <-> view linking edge
+        # or ``get_view_edge`` rejects it; reuse the same read-side (``acc``)
+        # and write-back (``_ensure_view_writeback_link``) helpers the tasklet
+        # emitter uses so the external reads / writes the target in place.
+        is_view = isinstance(ctx.sdfg.arrays.get(name), _dd.View)
         if direction == 'r':
-            state.add_memlet_path(state.add_read(name), node, dst_conn=conn, memlet=mem)
+            rnode = _acc(builder, state, name) if is_view else state.add_read(name)
+            state.add_memlet_path(rnode, node, dst_conn=conn, memlet=mem)
         else:
-            state.add_memlet_path(node, state.add_write(name), src_conn=conn, memlet=mem)
+            wnode = state.add_write(name)
+            state.add_memlet_path(node, wnode, src_conn=conn, memlet=mem)
+            if is_view:
+                _ensure_view_writeback_link(builder, state, wnode, name)
 
     # Array connectors carry a pointer; data scalars stay by-value;
     # ``comm`` connectors carry ``opaque(MPI_Comm)`` by value (matches
@@ -1659,8 +1673,7 @@ def emit_reduce(builder, ctx, n, region):
         dim = (n.reduce_axes[0] + 1) if n.reduce_axes else -1
         node = cls(f"{_logical_op}_{n.target}_{builder.nid()}", dim=dim)
         state.add_node(node)
-        state.add_edge(src_access, None, node, cls.INPUT_CONNECTOR_NAME,
-                       Memlet.from_array(src_name, src_desc))
+        state.add_edge(src_access, None, node, cls.INPUT_CONNECTOR_NAME, Memlet.from_array(src_name, src_desc))
         state.add_edge(node, cls.OUTPUT_CONNECTOR_NAME, tgt_access, None, out_memlet)
         return
 

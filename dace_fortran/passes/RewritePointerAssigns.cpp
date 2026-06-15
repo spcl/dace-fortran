@@ -740,7 +740,30 @@ struct RewritePointerAssignsPass
           bool isShift =
               mlir::isa_and_nonnull<fir::ShiftOp>(shapeDef) ||
               mlir::isa_and_nonnull<fir::ShapeShiftOp>(shapeDef);
-          if (isShift && !isIdentityShift(shapeDef, /*srcBox=*/mlir::Value())) {
+          // A plain whole-array rebind onto an allocatable/pointer member
+          // (``my_arr2 => my_arr%w``) is NOT a bounds remap: flang emboxes
+          // ``fir.box_addr %srcBox`` and re-asserts the source's OWN runtime
+          // lower bounds via ``fir.box_dims %srcBox`` on the shape_shift.
+          // That shift is an IDENTITY (lb = source's lb), so recover the
+          // source box behind the embox'd address and hand it to
+          // isIdentityShift -- mirroring the rebox arm's ``rb.getBox()`` --
+          // otherwise the box_dims-of-source lbs read as a non-constant
+          // remap and the rebind is wrongly rejected.
+          mlir::Value srcBox;
+          for (mlir::Value mem = eb.getMemref(); mem;) {
+            auto *mdef = mem.getDefiningOp();
+            if (!mdef) break;
+            if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(mdef)) {
+              srcBox = ba.getVal();
+              break;
+            }
+            if (auto cv = mlir::dyn_cast<fir::ConvertOp>(mdef)) {
+              mem = cv.getValue();
+              continue;
+            }
+            break;
+          }
+          if (isShift && !isIdentityShift(shapeDef, srcBox)) {
             if (!tryExtractConstLbs(shapeDef, remapLbs)) {
               rebindStore.emitError(
                   "hlfir-rewrite-pointer-assigns: pointer "
