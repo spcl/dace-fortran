@@ -213,13 +213,17 @@ def test_offset_symbol_is_stamped_to_view_lb(tmp_path):
 
 
 def test_copy_probes_yield_no_view_at_destination(tmp_path):
-    """The three copy/non-view probes must NOT emit a View
-    descriptor for their destination."""
+    """Genuine *copy* probes (value assignment, RESHAPE) must NOT emit a
+    View descriptor for their destination -- only ``=>`` rebinds do.
+
+    NB: ``pointer_plain_no_remap_probe.f90`` (``prhoc => rhoc``) is a
+    pointer rebind, not a copy, so under the all-rebinds-are-views design
+    it CORRECTLY becomes a View -- it is asserted positively in
+    ``test_plain_pointer_rebind_yields_view_at_destination`` below."""
     from dace.data import View
     cases = [
         ("plain_slice_copy_probe.f90", "dst"),
         ("reshape_intrinsic_copy_probe.f90", "prhoc"),
-        ("pointer_plain_no_remap_probe.f90", "prhoc"),
     ]
     for probe, dst_name in cases:
         builder = _make_builder(probe, tmp_path / probe.replace(".f90", ""))
@@ -232,3 +236,20 @@ def test_copy_probes_yield_no_view_at_destination(tmp_path):
         if dst_name in sdfg.arrays:
             assert not isinstance(sdfg.arrays[dst_name], View), \
                 f"{probe}: '{dst_name}' should be a real Array, not a View"
+
+
+def test_plain_pointer_rebind_yields_view_at_destination(tmp_path):
+    """A whole-array plain rebind (``prhoc => rhoc``) lowers as a View:
+    under the all-rebinds-are-views design every ``=>`` -- including the
+    no-section, no-remap case -- duplicates the source as an ArrayView
+    rather than rewriting accesses.  (Was previously mis-grouped with the
+    copy probes that assert *no* view.)"""
+    from dace.data import View
+    probe = "pointer_plain_no_remap_probe.f90"
+    builder = _make_builder(probe, tmp_path / probe.replace(".f90", ""))
+    sdfg = _build_partial_sdfg(builder)
+    assert "prhoc" in sdfg.arrays, \
+        f"'prhoc' missing from {list(sdfg.arrays)}"
+    assert isinstance(sdfg.arrays["prhoc"], View), \
+        f"{probe}: 'prhoc' should be a View (plain rebind), got " \
+        f"{type(sdfg.arrays['prhoc']).__name__}"

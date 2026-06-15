@@ -130,6 +130,19 @@ def add_descriptors(builder, sdfg: SDFG):
     shape_syms = {}
     for v in builder.arrays.values():
         syms = list(v.shape_symbols)
+        # Whole-array pointer-rebind view (``p => a`` / ``p => s%w``): the
+        # deferred ``p(:)`` spans the entire SOURCE at the SAME rank, so it
+        # has exactly the source's shape -- inherit it.  A rank-reinterpret
+        # ``view_alias`` (e.g. ``buts_tv(5, M, K)`` of a 1-D ``tv``) shares
+        # the same ``['']`` whole-array sentinel but has its OWN concrete
+        # declared shape at a DIFFERENT rank; rank-equality distinguishes
+        # the two.  (The old ``all == '?'`` guard missed this case once the
+        # bridge began minting ``p_d0`` placeholders for the deferred dims
+        # -- they are no longer literal ``?`` -- leaving ``p`` with an
+        # unbound free symbol instead of the source extent.)
+        if (v.role == 'view_alias' and list(v.view_subset) == [''] and v.view_source in builder.arrays
+                and len(syms) == len(builder.arrays[v.view_source].shape_symbols)):
+            syms = list(builder.arrays[v.view_source].shape_symbols)
         for dim, s in enumerate(syms):
             if s == "?":
                 syms[dim] = f"{v.fortran_name}_d{dim}"

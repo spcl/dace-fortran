@@ -3210,26 +3210,36 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
     // column-major strides -- including the NON-packed case (a 2-D view
     // of a 3-D array, ``p(:,:) => a(:, j, :)`` -> strides ``(1, d0*d1)``).
     if (op->hasAttr("hlfir_bridge.pointer_view") &&
-        !v.bounds_remap_source.empty() &&
-        !v.bounds_remap_source_subset.empty()) {
+        !v.bounds_remap_source.empty()) {
       v.role = "view_alias";
       v.view_source = v.bounds_remap_source;
-      v.view_subset = v.bounds_remap_source_subset;
-      // View shape = the surviving (triplet) dims' extents, derived from
-      // the subset: each ``lo:hi`` entry contributes ``(hi)-(lo)``; a
-      // scalar (dropped) entry has no ':' and is skipped.
-      std::vector<std::string> viewShape;
-      for (auto& s : v.view_subset) {
-        auto colon = s.find(':');
-        if (colon == std::string::npos) continue;  // scalar-fixed dim
-        std::string lo = s.substr(0, colon);
-        std::string rest = s.substr(colon + 1);
-        auto colon2 = rest.find(':');  // strip a trailing ``:stride``
-        std::string hi =
-            (colon2 == std::string::npos) ? rest : rest.substr(0, colon2);
-        viewShape.push_back("(" + hi + ")-(" + lo + ")");
+      if (!v.bounds_remap_source_subset.empty()) {
+        // SECTION view (``p => a(:, j)``): the subset carries the slab +
+        // offset.  View shape = the surviving (triplet) dims' extents,
+        // derived from the subset: each ``lo:hi`` entry contributes
+        // ``(hi)-(lo)``; a scalar (dropped) entry has no ':' and is
+        // skipped.
+        v.view_subset = v.bounds_remap_source_subset;
+        std::vector<std::string> viewShape;
+        for (auto& s : v.view_subset) {
+          auto colon = s.find(':');
+          if (colon == std::string::npos) continue;  // scalar-fixed dim
+          std::string lo = s.substr(0, colon);
+          std::string rest = s.substr(colon + 1);
+          auto colon2 = rest.find(':');  // strip a trailing ``:stride``
+          std::string hi =
+              (colon2 == std::string::npos) ? rest : rest.substr(0, colon2);
+          viewShape.push_back("(" + hi + ")-(" + lo + ")");
+        }
+        v.shape_symbols = viewShape;
+      } else {
+        // WHOLE-ARRAY view (``p => a`` / ``p => s%w``): no section.  The
+        // ``[""]`` sentinel routes through the whole-array reinterpret
+        // link (access.py / descriptors.py); the deferred ``p(:)`` has
+        // no shape of its own, so descriptors.py inherits the SOURCE's
+        // shape for it.
+        v.view_subset = {std::string("")};
       }
-      v.shape_symbols = viewShape;
       // Route through view_alias, not the flatten-view descriptor.
       v.bounds_remap_view = false;
       v.bounds_remap_source.clear();

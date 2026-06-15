@@ -731,14 +731,45 @@ struct RewritePointerAssignsPass
     // Scoped to the single-designate, has-a-triplet, no-inlined-alias
     // shape; the other shapes (whole-array, scalar element, struct
     // member, inlined alias) still rewrite below and migrate next.
-    if (aliasDecls.empty() && chain.chain.size() == 1) {
-      bool hasTriplet = false;
-      for (bool t : chain.chain[0].triplets)
-        if (t) {
-          hasTriplet = true;
+    if (aliasDecls.empty()) {
+      bool tagAsView = false;
+      if (chain.chain.size() == 1) {
+        // Section rebind (``p => a(:, j)``): a single designate with at
+        // least one triplet dim.
+        for (bool t : chain.chain[0].triplets)
+          if (t) {
+            tagAsView = true;
+            break;
+          }
+      } else if (chain.chain.empty()) {
+        // Whole-array rebind (``p => a`` / ``p => s%w``): no designate,
+        // the view spans the entire parent.  Only for an ARRAY pointer --
+        // a scalar pointer (``tmp => x`` / ``tmp => arr(i)``) is a
+        // separate not-yet-migrated shape and still rewrites below.
+        mlir::Type t = ptrDecl.getResult(0).getType();
+        for (int i = 0; i < 6; ++i) {
+          if (auto r = mlir::dyn_cast<fir::ReferenceType>(t)) {
+            t = r.getEleTy();
+            continue;
+          }
+          if (auto box = mlir::dyn_cast<fir::BoxType>(t)) {
+            t = box.getEleTy();
+            continue;
+          }
+          if (auto p = mlir::dyn_cast<fir::PointerType>(t)) {
+            t = p.getElementType();
+            continue;
+          }
+          if (auto h = mlir::dyn_cast<fir::HeapType>(t)) {
+            t = h.getElementType();
+            continue;
+          }
           break;
         }
-      if (hasTriplet) {
+        if (auto seq = mlir::dyn_cast<fir::SequenceType>(t))
+          if (seq.getDimension() > 0) tagAsView = true;
+      }
+      if (tagAsView) {
         ptrDecl->setAttr("hlfir_bridge.pointer_view",
                          mlir::UnitAttr::get(&getContext()));
         return;

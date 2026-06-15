@@ -121,6 +121,65 @@ end subroutine main
 
 
 # ===========================================================================
+# Family A2 -- whole-array rebind `p => a` (no section).  The view spans the
+# entire parent; the deferred `p(:)` inherits the source's shape.
+# ===========================================================================
+
+
+def test_whole_array_rebind_read(tmp_path: Path):
+    """``p => a`` then ``out = p`` -- whole-array view, bare read."""
+    src = """
+subroutine main(out)
+  implicit none
+  real(8), intent(out) :: out(5)
+  real(8), target :: a(5)
+  real(8), pointer :: p(:)
+  integer :: i
+  do i = 1, 5
+    a(i) = real(i * 10, 8)
+  end do
+  p => a
+  out = p
+end subroutine main
+"""
+    mod = f2py_compile(src, tmp_path / "ref", "whole_read")
+    ref = np.asarray(mod.main(), dtype=np.float64)
+
+    out = np.zeros(5, order="F", dtype=np.float64)
+    _build(src, tmp_path)(out=out)
+    np.testing.assert_array_equal(out, ref)
+    np.testing.assert_array_equal(out, [10, 20, 30, 40, 50])
+
+
+def test_whole_array_rebind_write_through(tmp_path: Path):
+    """``p => a; p(i) = ...`` -- write through the whole-array view."""
+    src = """
+subroutine main(out)
+  implicit none
+  real(8), intent(out) :: out(5)
+  real(8), target :: a(5)
+  real(8), pointer :: p(:)
+  integer :: i
+  do i = 1, 5
+    a(i) = real(i, 8)
+  end do
+  p => a
+  do i = 1, 5
+    p(i) = real(100 + i, 8)
+  end do
+  out = a
+end subroutine main
+"""
+    mod = f2py_compile(src, tmp_path / "ref", "whole_write")
+    ref = np.asarray(mod.main(), dtype=np.float64)
+
+    out = np.zeros(5, order="F", dtype=np.float64)
+    _build(src, tmp_path)(out=out)
+    np.testing.assert_array_equal(out, ref)
+    np.testing.assert_array_equal(out, [101, 102, 103, 104, 105])
+
+
+# ===========================================================================
 # Family B -- rank-reducing single column (2-D -> 1-D) over a plain array.
 # `p(:) => a(:, j)` keeps a unit stride; the section's fixed dim collapses.
 # ===========================================================================
