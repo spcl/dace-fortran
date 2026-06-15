@@ -653,6 +653,18 @@ hlfir::DeclareOp asAssumedShapeAlias(hlfir::DeclareOp decl) {
       mr = rb.getBox();
       continue;
     }
+    // Explicit-shape array dummy bound to a POINTER/VIEW actual
+    // (``call scale(p, n)``, ``p`` a flatten view, ``real :: v(n)``):
+    // ``FoldCopyInOut`` rewrites the inlined ``v`` to
+    // ``hlfir.declare(convert(box_addr(load(p_box))))`` (it drops the
+    // copy_in/copy_out, which are element-wise no-ops under no-aliasing).
+    // Peel ``box_addr`` so the walk reaches ``p``'s declare; ``v`` is then
+    // a same-rank alias of ``p`` and ``traceToDecl`` resolves ``v(i)`` to
+    // ``p(i)`` (folded to the parent by p's bounds-remap view).
+    if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
+      mr = ba.getVal();
+      continue;
+    }
     break;
   }
   return {};

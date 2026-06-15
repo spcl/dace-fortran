@@ -188,6 +188,16 @@ DEFAULT_PIPELINE = (
     # declare-of-converted-ref is visible) and BEFORE flatten-structs
     # (so the section view feeds into the usual designate-rewrite).
     "hlfir-rewrite-sequence-association,"
+    # Fold ``hlfir.copy_in`` / ``hlfir.copy_out`` around an inlined-callee
+    # dummy bound to a POINTER / bounds-remap VIEW actual (``call
+    # scale(p, n)`` with ``p`` a flatten view).  The copy round-trip is
+    # element-wise-equivalent to the view under strict-no-aliasing, so the
+    # pass drops it and leaves the callee dummy declaring over the source
+    # view's data (``box_addr(load(p_box))``); ``asAssumedShapeAlias``
+    # resolves the dummy to ``p`` and p's view folds the writes back to the
+    # parent.  Runs AFTER sequence-association (so plain-section copy-ins
+    # are already handled there) and before ``mark-bounds-remap-views``.
+    "hlfir-fold-copy-in-out,"
     # Lift ``type(t), allocatable :: f(:)`` struct members (alloc-array
     # of records  --  ICON's ``p_patch%pprog(jg)`` shape) into top-level
     # companions with a leading runtime-extent dim.  Runs BEFORE

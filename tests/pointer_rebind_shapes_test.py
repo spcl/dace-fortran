@@ -40,29 +40,6 @@ from _util import build_sdfg, f2py_compile, have_flang
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
-# --- Known-unsupported shape classes, each with a precise reason. The
-#     matrix below pins exactly where the bridge's pointer-rebind support
-#     ends; every xfail names the single facet that breaks so the marker
-#     can be removed the moment that facet is wired.
-
-#: Gate H = two independent gaps (diagnosed 2026-06-15). Read-only AND
-#: write-ONLY through a flattened bounds-remap view already work; the
-#: callee variant `call scale(p,n)` fails on:
-#:  (1) inlined view-arg aliasing -- after hlfir-inline-all the callee's
-#:      array dummy `v` (its declare memref traces to `p`'s box) is
-#:      classified as an INDEPENDENT `role='array' intent='inout'` instead
-#:      of a view-of-view alias of `p`, so `v` leaks as a top-level arg
-#:      (`Missing program argument "v"`).
-#:  (2) read-modify-write through a view (`v(i)=v(i)*2`, also fails
-#:      DIRECTLY as `p(i)=p(i)*2`): the single cached view node gets 2 in-
-#:      edges (source->view link + tasklet write) and 1 out-edge (read ->
-#:      tasklet), and `get_view_edge` returns None -> "Ambiguous edge
-#:      to/from a View".  Fix = separate read-view (source->view) and
-#:      write-view (view->source) access nodes in access.py::acc.
-_VIEW_WRITEBACK = ("gate H: (1) inlined callee array-dummy bound to a view leaks as a top-level "
-                   "arg (view-arg aliasing), and (2) read-modify-write through a view yields an "
-                   "ambiguous View edge -- needs separate read/write view nodes in acc()")
-
 
 def _build(src: str, tmp: Path, entry: str = "_QPmain"):
     sdfg_dir = tmp / "sdfg"
@@ -663,10 +640,16 @@ end subroutine main
 # ===========================================================================
 
 
-@pytest.mark.xfail(reason=_VIEW_WRITEBACK, strict=False)
 def test_h_flattened_view_passed_to_callee(tmp_path: Path):
     """``p(1:12) => a(:,1:3); call scale(p, 12)`` -- the callee doubles
-    every element in place; the writes must land back in ``a``."""
+    every element in place; the writes must land back in ``a``.
+
+    Flang wraps the pointer actual in ``hlfir.copy_in`` / ``hlfir.copy_out``
+    (the contiguous dummy ``v(n)`` receives a pointer).  ``FoldCopyInOut``
+    drops the redundant copy round-trip (element-wise-equivalent to the view
+    under no-aliasing), so the inlined ``v`` aliases ``p`` and ``v(i)=v(i)*2``
+    folds through p's bounds-remap view back into ``a`` (read-modify-write
+    via the part-2 view-writeback split)."""
     src = """
 subroutine scale(v, n)
   implicit none
@@ -700,3 +683,86 @@ end subroutine main
     out = np.zeros(20, order="F", dtype=np.float64)
     _build(src, tmp_path)(out=out)
     np.testing.assert_array_equal(out, ref)
+
+
+def test_h_flattened_view_to_readonly_callee(tmp_path: Path):
+    """``call total(p, 12, s)`` with ``v`` ``intent(in)`` -- the copy-in has
+    no copy-out, so folding it to a view must still read ``a``'s section
+    correctly.  Exercises the read-only copy-in elision path."""
+    src = """
+subroutine total(v, n, s)
+  implicit none
+  integer, intent(in) :: n
+  real(8), intent(in) :: v(n)
+  real(8), intent(out) :: s
+  integer :: i
+  s = 0.0d0
+  do i = 1, n
+    s = s + v(i)
+  end do
+end subroutine total
+
+subroutine main(out)
+  implicit none
+  real(8), intent(out) :: out
+  real(8), target :: a(4, 5)
+  real(8), pointer :: p(:)
+  integer :: i, j
+  do j = 1, 5
+    do i = 1, 4
+      a(i, j) = real(10 * j + i, 8)
+    end do
+  end do
+  p(1 : 4 * 3) => a(:, 1:3)
+  call total(p, 12, out)
+end subroutine main
+"""
+    mod = f2py_compile(src, tmp_path / "ref", "h_ro_call", only=("main", ))
+    ref = float(np.asarray(mod.main(), dtype=np.float64))
+
+    out = np.zeros(1, order="F", dtype=np.float64)
+    _build(src, tmp_path)(out=out)
+    np.testing.assert_allclose(out[0], ref)
+    # sum of a(:,1:3): cols 1..3, rows 1..4 of 10*j+i
+    assert out[0] == sum(10 * j + i for j in range(1, 4) for i in range(1, 5))
+
+
+def test_h_section_view_to_callee(tmp_path: Path):
+    """A plain (non-flatten) single-column section view ``p => a(:, 3)``
+    passed to a mutating callee.  Same copy-in/out fold, but the source is
+    a rank-preserving view rather than a rank-reducing flatten."""
+    src = """
+subroutine scale(v, n)
+  implicit none
+  integer, intent(in) :: n
+  real(8), intent(inout) :: v(n)
+  integer :: i
+  do i = 1, n
+    v(i) = v(i) + 1000.0d0
+  end do
+end subroutine scale
+
+subroutine main(out)
+  implicit none
+  real(8), intent(out) :: out(20)
+  real(8), target :: a(4, 5)
+  real(8), pointer :: p(:)
+  integer :: i, j
+  do j = 1, 5
+    do i = 1, 4
+      a(i, j) = real(10 * j + i, 8)
+    end do
+  end do
+  p => a(:, 3)
+  call scale(p, 4)
+  out = reshape(a, [20])
+end subroutine main
+"""
+    mod = f2py_compile(src, tmp_path / "ref", "h_sec_call", only=("main", ))
+    ref = np.asarray(mod.main(), dtype=np.float64)
+
+    out = np.zeros(20, order="F", dtype=np.float64)
+    _build(src, tmp_path)(out=out)
+    np.testing.assert_array_equal(out, ref)
+    # Only column 3 (flat slots 8..11) gets +1000.
+    assert list(out[8:12]) == [1031, 1032, 1033, 1034]

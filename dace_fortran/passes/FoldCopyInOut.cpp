@@ -144,7 +144,17 @@ struct FoldCopyInOutPass
   void tryFold(hlfir::CopyInOp cin) {
     // 1) Source must be a section ``hlfir.designate``.
     auto srcDg = cin.getVar().getDefiningOp<hlfir::DesignateOp>();
-    if (!srcDg) return;
+    if (!srcDg) {
+      // View/pointer source: ``copy_in(load(p_box))`` where ``p`` is a
+      // POINTER / bounds-remap VIEW passed to a contiguous explicit-shape
+      // dummy (``call scale(p, n)`` -> ``real :: v(n)``).  copy_in/copy_out
+      // around a view argument is element-wise-equivalent to the view under
+      // the strict-no-aliasing assumption (copy_in gathers, copy_out
+      // scatters; net = in-place per logical index), so fold it to a direct
+      // alias of the source view rather than materialising a temp.
+      tryFoldViewSource(cin);
+      return;
+    }
     SectionShape sec;
     if (!parseSimpleSection(srcDg, sec)) return;
     if (!isConstOne(sec.tripStride)) return;
@@ -217,6 +227,44 @@ struct FoldCopyInOutPass
       cin.erase();
       // The temp box is typically a ``fir.alloca`` whose only
       // users were the copy_in / copy_out pair.  Erase if dead.
+      if (auto *def = temp.getDefiningOp())
+        if (def->use_empty()) def->erase();
+    }
+  }
+
+  /// Fold ``copy_in`` whose source is a load of a POINTER / VIEW box.
+  /// Replaces the copy box (``cin#0``) with the source box (``load(p_box)``)
+  /// so the inlined alias declare reads ``box_addr(load(p_box))`` directly,
+  /// then erases the now-dead copy_in / copy_out pair + temp buffer.
+  /// ``asAssumedShapeAlias`` (box_addr peel) resolves the alias to ``p``,
+  /// and ``p``'s bounds-remap view folds every ``v(i)`` to the parent.
+  void tryFoldViewSource(hlfir::CopyInOp cin) {
+    auto ld = cin.getVar().getDefiningOp<fir::LoadOp>();
+    if (!ld) return;
+    auto srcDecl = ld.getMemref().getDefiningOp<hlfir::DeclareOp>();
+    if (!srcDecl) return;
+    // Scope to POINTER actuals (covers bounds-remap views + plain pointer
+    // rebinds).  A copy_in of a plain contiguous array is left to the
+    // section path / untouched.
+    auto attrs = srcDecl.getFortranAttrs();
+    if (!attrs ||
+        !bitEnumContainsAny(*attrs, fir::FortranVariableFlagsEnum::pointer))
+      return;
+    // The copy box and the source box share the same type
+    // (``box<ptr<array<?>>>``), so the replacement is type-safe and the
+    // downstream ``fir.box_addr`` now extracts the source view's data.
+    if (cin.getResult(0).getType() != cin.getVar().getType()) return;
+    cin.getResult(0).replaceAllUsesWith(cin.getVar());
+
+    llvm::SmallVector<hlfir::CopyOutOp, 2> copyOuts;
+    getOperation().walk([&](hlfir::CopyOutOp op) {
+      if (op.getOperand(1) == cin.getResult(1)) copyOuts.push_back(op);
+    });
+    for (auto co : copyOuts) co.erase();
+
+    if (cin.getResult(0).use_empty() && cin.getResult(1).use_empty()) {
+      mlir::Value temp = cin.getTempBox();
+      cin.erase();
       if (auto *def = temp.getDefiningOp())
         if (def->use_empty()) def->erase();
     }
