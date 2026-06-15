@@ -161,7 +161,7 @@ end subroutine pw
     ref_dir = tmp_path / "ref"
     ref_dir.mkdir(parents=True, exist_ok=True)
 
-    sdfg = build_sdfg(src, sdfg_dir, name="pw", entry="_QPpw").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="pw", entry="pw").build()
     sdfg.validate()
     ref = f2py_compile(src, ref_dir, "pw_ref")
 

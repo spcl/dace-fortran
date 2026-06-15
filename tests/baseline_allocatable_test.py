@@ -47,7 +47,7 @@ subroutine main(n, out)
   deallocate(data)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     out = np.zeros(3, order="F", dtype=np.int32)
     sdfg(n=6, out=out)
     np.testing.assert_array_equal(out, [10, 40, 60])

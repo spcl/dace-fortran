@@ -43,7 +43,7 @@ contains
   end subroutine f32_const
 end module m
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f32_const", entry="_QMmPf32_const").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f32_const", entry="f32_const").build()
     out = np.zeros((1, ), dtype=np.float32, order='F')
     sdfg(out=out)
     expected = np.float32(1.4) * np.float32(2.0)
@@ -65,7 +65,7 @@ contains
   end subroutine f64_const
 end module m
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f64_const", entry="_QMmPf64_const").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f64_const", entry="f64_const").build()
     out = np.zeros((1, ), dtype=np.float64, order='F')
     sdfg(out=out)
     expected = np.float64(1.4) * np.float64(2.0)
@@ -91,7 +91,7 @@ contains
   end subroutine widen
 end module m
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="widen", entry="_QMmPwiden").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="widen", entry="widen").build()
     out = np.zeros((1, ), dtype=np.float64, order='F')
     sdfg(out=out)
     # gfortran semantic: 1.4 is fp32, widened to fp64 = 1.399999976...
@@ -114,7 +114,7 @@ contains
   end subroutine fp64param
 end module m
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="fp64param", entry="_QMmPfp64param").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="fp64param", entry="fp64param").build()
     out = np.zeros((1, ), dtype=np.float64, order='F')
     sdfg(out=out)
     expected = np.float64(1.4) * np.float64(2.0)

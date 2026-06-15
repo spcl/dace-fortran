@@ -70,7 +70,7 @@ def test_inlined_callee_propagates_negative_literal(tmp_path: Path):
     """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(_SRC, sdfg_dir, name="outer", entry="_QPouter").build()
+    sdfg = build_sdfg(_SRC, sdfg_dir, name="outer", entry="outer").build()
     sdfg.validate()
 
     inferred_offset = dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0')

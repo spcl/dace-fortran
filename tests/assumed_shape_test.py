@@ -114,7 +114,7 @@ def test_inlined_hlfir_has_assumed_shape_alias_declare(tmp_path: Path):
 
     m = hb.HLFIRModule()
     assert m.parse_files([str(driver_hlfir), str(callee_hlfir)])
-    m.set_entry_symbol("_QPdriver")
+    m.set_entry_symbol("driver")
     m.run_passes("hlfir-inline-all,symbol-dce")
     dump = m.dump()
 
@@ -135,7 +135,7 @@ def test_inline_rebase_storage(tmp_path: Path):
     callee_hlfir = _hlfir(_CALLEE_SRC, tmp_path / "callee.hlfir")
     driver_hlfir = _hlfir(_DRIVER_SRC, tmp_path / "driver.hlfir")
 
-    b = SDFGBuilder.from_files([str(driver_hlfir), str(callee_hlfir)], entry="_QPdriver")
+    b = SDFGBuilder.from_files([str(driver_hlfir), str(callee_hlfir)], entry="driver")
     sdfg = b.build()
 
     x = np.asfortranarray(np.array([10, 20, 30, 40, 50], dtype=np.int32))
@@ -150,7 +150,7 @@ def test_sdfg_matches_gfortran_reference(tmp_path: Path):
     driver_hlfir = _hlfir(_DRIVER_SRC, tmp_path / "driver.hlfir")
 
     ref = _f2py_build([_CALLEE_SRC, _DRIVER_SRC], tmp_path / "ref", "asref")
-    b = SDFGBuilder.from_files([str(driver_hlfir), str(callee_hlfir)], entry="_QPdriver")
+    b = SDFGBuilder.from_files([str(driver_hlfir), str(callee_hlfir)], entry="driver")
     sdfg = b.build()
 
     rng = np.random.default_rng(0)

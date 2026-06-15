@@ -37,7 +37,7 @@ subroutine main(out)
   out = pi_val * 2.0d0
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     out = np.zeros(1, dtype=np.float64)
     sdfg(out=out)
     expected = 3.14159265358979323846 * 2.0
@@ -123,7 +123,7 @@ def test_double_constant_stays_double(tmp_path: Path):
     output matches an f2py reference of the same source exactly."""
     d = tmp_path / "f64"
     d.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(_SRC_F64, d, name="cst64", entry="_QPcst64").build()
+    sdfg = build_sdfg(_SRC_F64, d, name="cst64", entry="cst64").build()
     sdfg.validate()
 
     code = _tasklet_code(sdfg)
@@ -145,7 +145,7 @@ def test_single_constant_emits_float32_cast(tmp_path: Path):
     double evaluation."""
     d = tmp_path / "f32"
     d.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(_SRC_F32, d, name="cst32", entry="_QPcst32").build()
+    sdfg = build_sdfg(_SRC_F32, d, name="cst32", entry="cst32").build()
     sdfg.validate()
 
     code = _tasklet_code(sdfg)
@@ -175,7 +175,7 @@ def test_single_constant_uses_shortest_roundtrip_form(tmp_path: Path):
     once cast, but the short form stays close to the Fortran source."""
     d = tmp_path / "f32short"
     d.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(_SRC_F32, d, name="cst32s", entry="_QPcst32").build()
+    sdfg = build_sdfg(_SRC_F32, d, name="cst32s", entry="cst32").build()
     sdfg.validate()
 
     code = _tasklet_code(sdfg)

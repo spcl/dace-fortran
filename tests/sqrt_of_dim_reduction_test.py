@@ -47,7 +47,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="_QMmPdriver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
     a = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order='F')
     out = np.zeros((1, ), dtype=np.float64, order='F')
     sdfg(a=a, out=out)
@@ -68,7 +68,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="_QMmPdriver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
     a = np.arange(16.0, dtype=np.float64).reshape(4, 4, order='F') + 0.5
     out = np.zeros((1, ), dtype=np.float64, order='F')
     sdfg(a=a, out=out)
@@ -93,7 +93,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="_QMmPdriver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
     a = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order='F')
     out = np.zeros((1, ), dtype=np.float64, order='F')
     sdfg(a=a, out=out)

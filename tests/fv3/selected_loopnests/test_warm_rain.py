@@ -29,7 +29,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 _HERE = Path(__file__).parent
 _KM = 40
-_ENTRY = "_QMwarm_rain_modPwarm_rain_driver"
+_ENTRY = "warm_rain_driver"
 # Length of the water-saturation lookup tables (``tablew`` / ``desw``),
 # the module ``parameter qs_length`` in the source.
 _QS_LENGTH = 2621

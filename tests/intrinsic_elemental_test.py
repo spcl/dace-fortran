@@ -112,7 +112,7 @@ MODULE test_elemental
 END MODULE
 
 """
-    sdfg = build_sdfg(src, tmp_path, name='test_func', entry='_QMtest_elementalPtest_func').build()
+    sdfg = build_sdfg(src, tmp_path, name='test_func', entry='test_func').build()
 
     size = 5
     arg1 = np.full([size], 42, order="F", dtype=np.float64)

@@ -56,7 +56,7 @@ contains
   end subroutine get_indices_c
 end subroutine main
     """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
 
     size = 4
     res = np.full([size], 42, order="F", dtype=np.int32)

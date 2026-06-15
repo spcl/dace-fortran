@@ -456,6 +456,68 @@ def _rename_reserved_collisions(sdfg) -> dict:
     return renames
 
 
+def _demangle_fortran_proc(sym: str) -> str:
+    """Plain Fortran procedure name from a flang-mangled func symbol.
+
+    ``_QP<name>`` (free procedure) and ``_QM<mod>P<name>`` (module
+    procedure) both demangle to ``<name>``.  flang lower-cases every
+    Fortran identifier, so the structural markers (``M`` / ``P`` / ``F``)
+    are the only upper-case letters and the procedure name is everything
+    after the last ``P`` separator.  A symbol without the ``_Q`` prefix is
+    returned unchanged.
+    """
+    if not sym.startswith("_Q"):
+        return sym
+    p = sym.rfind("P")
+    return sym[p + 1:] if p > 1 else sym
+
+
+def _module_of_fortran_sym(sym: str):
+    """Module name from a flang module-procedure symbol
+    ``_QM<mod>[P|F]<proc>``, or ``None`` for a free procedure / non-mangled
+    name.  flang lower-cases identifiers, so the first ``P`` / ``F`` in the
+    post-``_QM`` body is the module/proc separator (the module is all
+    lower-case)."""
+    if not sym.startswith("_QM"):
+        return None
+    body = sym[3:]
+    for i, ch in enumerate(body):
+        if ch in ("P", "F"):
+            return body[:i].lower() if i > 0 else None
+    return None
+
+
+def _resolve_entry_symbol(module, entry: str) -> str:
+    """Resolve a user-supplied ``entry`` to the flang-mangled func symbol
+    the bridge keys on.
+
+    The user-facing contract is the PLAIN Fortran procedure name
+    (``main``, ``vexx_bp_k_gpu``), optionally qualified as ``module::proc``
+    (``exx_bp::vexx_bp_k_gpu``) to disambiguate -- the bridge resolves it
+    against the module's actual function symbols (``_QP<name>`` for a free
+    procedure, ``_QM<mod>P<name>`` for a module procedure).  A name already
+    given in mangled form (leading ``_Q``) passes through unchanged for
+    back-compatibility.
+    """
+    if entry.startswith("_Q"):
+        return entry
+    # ``module::proc`` -> (module, proc); a bare name leaves the module
+    # unconstrained.  flang lower-cases Fortran identifiers.
+    want_mod, _, want_proc = entry.lower().rpartition("::")
+    want_mod = want_mod or None
+    funcs = list(module.list_functions())
+    matches = [s for s in funcs
+               if _demangle_fortran_proc(s) == want_proc
+               and (want_mod is None or _module_of_fortran_sym(s) == want_mod)]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise RuntimeError(f"entry '{entry}': no Fortran procedure of that name in the module; "
+                           f"available: {sorted(set(_demangle_fortran_proc(s) for s in funcs))}")
+    raise RuntimeError(f"entry '{entry}' is ambiguous -- {len(matches)} procedures match "
+                       f"({matches}); qualify it as module::proc or pass the mangled symbol")
+
+
 class SDFGBuilder:
     """Walks the HLFIR ASTNode tree and emits a DaCe SDFG.
 
@@ -487,9 +549,11 @@ class SDFGBuilder:
             raise RuntimeError(f"Cannot parse {hlfir_path}")
 
         if entry is not None:
+            entry = _resolve_entry_symbol(self.module, entry)
             self.module.set_entry_symbol(entry)
-        # Cache the entry name so ``sdfg_name`` can name the SDFG (and
-        # therefore the generated ``.so``) after the actual procedure.
+        # Cache the (resolved, mangled) entry name so ``sdfg_name`` can name
+        # the SDFG (and therefore the generated ``.so``) after the actual
+        # procedure.
         self.entry = entry
 
         # Snapshot the caller-facing dummy list BEFORE any pass runs --
@@ -544,6 +608,7 @@ class SDFGBuilder:
         obj.module = hb.HLFIRModule()
         if not obj.module.parse_files(list(hlfir_paths)):
             raise RuntimeError(f"Cannot parse one of {hlfir_paths}")
+        entry = _resolve_entry_symbol(obj.module, entry)
         obj.module.set_entry_symbol(entry)
         # Pre-flatten interface snapshot (see ``__init__``).
         obj._fortran_interface_raw = obj.module.get_fortran_interface(entry or "")
@@ -595,17 +660,18 @@ class SDFGBuilder:
         # surrounding statement).  Detected at builder-init time so
         # downstream code (emit_tasklet, access.py, descriptors.py)
         # never sees the inconsistency.
-        array_names = {v.fortran_name for v in self.variables
-                        if v.role in ("array", "view_alias", "section_alias")}
+        array_names = {v.fortran_name for v in self.variables if v.role in ("array", "view_alias", "section_alias")}
         symbol_names = {v.fortran_name for v in self.variables if v.role == "symbol"}
-        self.arrays = {v.fortran_name: v for v in self.variables
-                        if v.role in ("array", "view_alias", "section_alias")}
-        self.symbols = {v.fortran_name: v for v in self.variables
-                        if v.role == "symbol" and v.fortran_name not in array_names}
-        self.scalars = {v.fortran_name: v for v in self.variables
-                        if v.role == "scalar"
-                        and v.fortran_name not in array_names
-                        and v.fortran_name not in symbol_names}
+        self.arrays = {v.fortran_name: v for v in self.variables if v.role in ("array", "view_alias", "section_alias")}
+        self.symbols = {
+            v.fortran_name: v
+            for v in self.variables if v.role == "symbol" and v.fortran_name not in array_names
+        }
+        self.scalars = {
+            v.fortran_name: v
+            for v in self.variables
+            if v.role == "scalar" and v.fortran_name not in array_names and v.fortran_name not in symbol_names
+        }
         # Post-condition: the three role-keyed dicts are disjoint.
         # A name in two of them is a Pass-0 disambiguation gap and
         # surfaces downstream as the spurious-edge / wrong-rank shape
@@ -620,15 +686,14 @@ class SDFGBuilder:
         _xy = _scalar_keys & _symbol_keys
         if _ax or _ay or _xy:
             collisions = sorted(_ax | _ay | _xy)
-            raise RuntimeError(
-                f"variable name collision across role-keyed dicts: {collisions[:5]}.  "
-                "A VarInfo's Fortran short name appears in more than one of "
-                "builder.arrays / builder.scalars / builder.symbols after the "
-                "array-wins de-collision -- means Pass-0 disambiguation in "
-                "extract_vars.cpp didn't catch a same-name shadow (typically "
-                "an inlined-callee scalar dummy whose name matches an outer "
-                "array).  Fix in the disambiguation pass; downstream code "
-                "assumes the three dicts are disjoint.")
+            raise RuntimeError(f"variable name collision across role-keyed dicts: {collisions[:5]}.  "
+                               "A VarInfo's Fortran short name appears in more than one of "
+                               "builder.arrays / builder.scalars / builder.symbols after the "
+                               "array-wins de-collision -- means Pass-0 disambiguation in "
+                               "extract_vars.cpp didn't catch a same-name shadow (typically "
+                               "an inlined-callee scalar dummy whose name matches an outer "
+                               "array).  Fix in the disambiguation pass; downstream code "
+                               "assumes the three dicts are disjoint.")
         # Per-axis offset symbols: ``offset_<arr>_d<i>`` is the SDFG
         # symbol every memlet of array ``<arr>`` subtracts on dim ``i``.
         # Populated by ``add_descriptors`` from each VarInfo's

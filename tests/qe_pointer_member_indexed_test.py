@@ -57,7 +57,7 @@ CONTAINS
   END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="run", entry="_QMmPrun").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="run", entry="run").build()
     nx, ny, nz = 3, 4, 5
     corrected = np.asfortranarray(
         np.arange(nx * ny * nz, dtype=np.float64).reshape((nx, ny, nz)))
@@ -111,7 +111,7 @@ CONTAINS
   END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="run", entry="_QMmPrun").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="run", entry="run").build()
     nx, ny, nz = 3, 3, 3
     corrected = np.asarray(np.arange(nx * ny * nz), dtype=np.float64).reshape(
         (nx, ny, nz), order="F")
@@ -146,7 +146,7 @@ CONTAINS
   END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="run", entry="_QMmPrun").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="run", entry="run").build()
     assert "tabxx_box" in sdfg.arrays
     # record dim + member dim
     assert len(sdfg.arrays["tabxx_box"].shape) == 2

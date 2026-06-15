@@ -50,7 +50,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="outer", entry="_QMmPouter").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="outer", entry="outer").build()
     # ``arr`` must be in arrays (2D), NOT in scalars (the inlined
     # callee's collision must lose to the outer array).
     assert "arr" in sdfg.arrays
@@ -78,7 +78,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="_QMmPf").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="f").build()
     # No exception -> no false-positive collision.
     assert "a" in sdfg.arrays
     assert "b" in sdfg.arrays

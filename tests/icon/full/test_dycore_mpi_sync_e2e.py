@@ -288,7 +288,7 @@ def test_dycore_with_real_mpi_sync_2rank(tmp_path: Path):
             sdfg = build_sdfg(
                 full_src, sdfg_dir,
                 name="dycore_with_sync",
-                entry="_QMmo_dycore_mpiPdycore_with_sync").build()
+                entry="dycore_with_sync").build()
             sdfg.name = "dycore_with_sync"
             sdfg.build_folder = str(sdfg_dir / "dacecache")
             iface = build_auto_interface(

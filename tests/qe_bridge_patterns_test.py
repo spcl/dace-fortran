@@ -49,7 +49,7 @@ SUBROUTINE sect(res, n, m, j)
   DEALLOCATE(arr)
 END SUBROUTINE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="sect", entry="_QPsect").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="sect", entry="sect").build()
     n, m, j = 5, 3, 2
     res = np.zeros(n, dtype=np.float64, order="F")
     sdfg(res=res, n=np.int32(n), m=np.int32(m), j=np.int32(j))
@@ -88,7 +88,7 @@ CONTAINS
   END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="_QMmPdriver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
     n = 4
     a = np.asarray(np.arange(1, n + 1), dtype=np.float64, order="F")
     res = np.zeros(n, dtype=np.float64, order="F")
@@ -121,7 +121,7 @@ CONTAINS
   END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="run", entry="_QMmPrun").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="run", entry="run").build()
     n = 6
     res = np.zeros(n, dtype=np.float64, order="F")
     sdfg(d_n=np.int32(n), res=res)
@@ -147,7 +147,7 @@ SUBROUTINE s(n, a, res)
   END DO
 END SUBROUTINE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="_QPs").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="s").build()
     n = 3
     a = np.asarray(np.arange(1, n + 1), dtype=np.float64, order="F")
     res = np.zeros(n, dtype=np.float64, order="F")
@@ -175,7 +175,7 @@ SUBROUTINE shadow(a, b, res)
   res = max + MIN(a, b)
 END SUBROUTINE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="shadow", entry="_QPshadow").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="shadow", entry="shadow").build()
     res = np.zeros(1, dtype=np.float64)
     sdfg(a=3.0, b=10.0, res=res)
     np.testing.assert_allclose(res[0], 3.0 * 2.0 + min(3.0, 10.0))
@@ -194,7 +194,7 @@ SUBROUTINE shadow_dummy(max, res)
 END SUBROUTINE
 """
     with pytest.raises(RuntimeError, match="collide with bridge-rendered"):
-        build_sdfg(src, tmp_path / "sdfg", name="shadow_dummy", entry="_QPshadow_dummy").build()
+        build_sdfg(src, tmp_path / "sdfg", name="shadow_dummy", entry="shadow_dummy").build()
 
 
 def test_rank_reducing_section_gather(tmp_path):
@@ -216,7 +216,7 @@ SUBROUTINE g2d(eig, mill, na, n, offset, ld, res)
   res(1:n) = eig(mill(1, offset + 1:offset + n), na)
 END SUBROUTINE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="g2d", entry="_QPg2d").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="g2d", entry="g2d").build()
     na, n, offset, ld = 2, 4, 1, 6
     rng = np.random.default_rng(0)
     eig = np.asfortranarray(rng.standard_normal((ld, na)) + 1j * rng.standard_normal((ld, na)), dtype=np.complex128)

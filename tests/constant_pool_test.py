@@ -221,7 +221,7 @@ end subroutine
     mod = f2py_compile(src, tmp_path / "ref", "indirect_sym_struct_idx_ref")
     out_ref = np.asarray(mod.main(3), dtype=np.float64)
 
-    sdfg = _build(src, tmp_path, entry='_QPmain')
+    sdfg = _build(src, tmp_path, entry='main')
     out = np.zeros(1, dtype=np.float64)
     sdfg(out=out, j=3)
     np.testing.assert_array_equal(out, out_ref)

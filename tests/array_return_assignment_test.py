@@ -65,6 +65,6 @@ def test_whole_array_assignment_from_function_return(tmp_path):
     src = tmp_path / "m.f90"
     src.write_text(_SRC)
     sdfg = build_sdfg_from_files(
-        [src], entry="_QMm_array_returnPkern",
+        [src], entry="kern",
         name="array_return", out_dir=tmp_path / "build")
     sdfg.validate()

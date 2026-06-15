@@ -142,7 +142,7 @@ subroutine main(d, cols, out)
   call fun(d(cols), out)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     rng = np.random.default_rng(2)
     d = rng.random(10).astype(np.float64)
     cols = np.array([3, 6, 1, 9], dtype=np.int32)

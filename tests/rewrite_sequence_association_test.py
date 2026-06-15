@@ -35,7 +35,7 @@ def _run(source: str, out_dir: Path, name: str, extra: str = ""):
     hlfir = compile_to_hlfir(source, out_dir, name)
     m = hb.HLFIRModule()
     assert m.parse_file(str(hlfir))
-    m.set_entry_symbol('_QPmain')
+    m.set_entry_symbol('main')
     m.run_passes(_PRELUDE)
     before = m.dump()
     m.run_passes(_REWRITE + (("," + extra) if extra else ""))
@@ -321,7 +321,7 @@ contains
   end subroutine apply
 end module seqassoc2d_mod
 """
-    sdfg = build_sdfg(src, tmp_path, name="seq2d", entry="_QMseqassoc2d_modPapply").build()
+    sdfg = build_sdfg(src, tmp_path, name="seq2d", entry="apply").build()
     a = np.arange(1, 13, dtype=np.float32).reshape(3, 4, order='F').copy(order='F')
     out = np.zeros(1, dtype=np.float32)
     sdfg(a=a, out=out)

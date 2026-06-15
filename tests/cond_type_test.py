@@ -37,7 +37,7 @@ subroutine main(d)
   end if
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
     assert (a[0, 0] == 42)

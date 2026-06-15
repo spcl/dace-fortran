@@ -45,7 +45,7 @@ SUBROUTINE if_scalar(n, x, out)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / 'sdfg', name='if_scalar',
-                      entry='_QPif_scalar').build()
+                      entry='if_scalar').build()
     out = np.zeros(4, dtype=np.float64, order='F')
     sdfg(n=np.int32(4), x=np.float64(2.5), out=out)
     np.testing.assert_array_equal(out, [1.0, 2.0, 3.0, 4.0])
@@ -72,7 +72,7 @@ SUBROUTINE if_array_elem(n, a, out)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / 'sdfg', name='if_array_elem',
-                      entry='_QPif_array_elem').build()
+                      entry='if_array_elem').build()
     a = np.array([0.5, 1.5, 2.0, 0.1], dtype=np.float64, order='F')
     out = np.zeros(4, dtype=np.float64, order='F')
     sdfg(n=np.int32(4), a=a, out=out)
@@ -102,7 +102,7 @@ SUBROUTINE if_max3(n, a, b, c, out)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / 'sdfg', name='if_max3',
-                      entry='_QPif_max3').build()
+                      entry='if_max3').build()
     a = np.array([0.0, 0.5, 1e-7, 0.0], dtype=np.float64, order='F')
     b = np.array([0.0, 0.0, 1e-8, 0.0], dtype=np.float64, order='F')
     c = np.array([1e-9, 0.0, 1e-9, 1e-7], dtype=np.float64, order='F')
@@ -137,7 +137,7 @@ SUBROUTINE if_chain(n, a, b, c, out)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / 'sdfg', name='if_chain',
-                      entry='_QPif_chain').build()
+                      entry='if_chain').build()
     a = np.array([0.5, -0.5, 1.0, 0.1], dtype=np.float64, order='F')
     b = np.array([0.5, 0.5, 2.0, 2.0], dtype=np.float64, order='F')
     out = np.zeros(4, dtype=np.float64, order='F')
@@ -171,7 +171,7 @@ SUBROUTINE if_2d(n, m, mat, threshold, out)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / 'sdfg', name='if_2d',
-                      entry='_QPif_2d').build()
+                      entry='if_2d').build()
     mat = np.array([[0.5, 2.5], [1.5, 0.1], [3.0, 0.0]],
                    dtype=np.float64, order='F')
     out = np.zeros((3, 2), dtype=np.float64, order='F')

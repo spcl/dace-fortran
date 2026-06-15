@@ -17,7 +17,7 @@ from _util import build_sdfg
 from cloudsc.full._registries import get_inputs_physical, get_outputs
 
 _SCALAR_TYPES = (bool, int, float, np.bool_, np.integer, np.floating)
-_ENTRY = "_QPcloudscouter"
+_ENTRY = "cloudscouter"
 
 
 def lower_keys(d: dict) -> dict:

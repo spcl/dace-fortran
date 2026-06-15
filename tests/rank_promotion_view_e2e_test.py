@@ -61,7 +61,7 @@ def test_rank_promotion_view_writes_land_at_correct_linear_offset(tmp_path):
     N1, N2, N3 = 5, 7, 4
     SCRATCH_N = N1 * N2 * N3
 
-    sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="fill", entry="_QMmPfill").build()
+    sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="fill", entry="fill").build()
 
     # Initialise to a sentinel so we can see which slots inner wrote
     # and which stayed untouched (any -1.0 = view stride bug).
@@ -125,7 +125,7 @@ def test_rank_reinterpret_4d_source_to_2d_view(tmp_path):
     lands at the expected source slot.
     """
     A, B, C, D = 4, 3, 5, 2
-    sdfg = build_sdfg(_SRC_4D_TO_2D, tmp_path / "sdfg", name="fill", entry="_QMmPfill").build()
+    sdfg = build_sdfg(_SRC_4D_TO_2D, tmp_path / "sdfg", name="fill", entry="fill").build()
 
     arr_sdfg = np.full((A, B, C, D), -1.0, dtype=np.float64, order='F')
     sdfg(arr_4d=arr_sdfg)
@@ -173,7 +173,7 @@ def test_rank_reinterpret_3d_source_to_1d_view(tmp_path):
     slot ``i - 1`` of the source.  Verifies rank REDUCTION (the
     opposite direction from LU's tv pattern)."""
     A, B, C = 4, 3, 5
-    sdfg = build_sdfg(_SRC_3D_TO_1D, tmp_path / "sdfg", name="fill", entry="_QMmPfill").build()
+    sdfg = build_sdfg(_SRC_3D_TO_1D, tmp_path / "sdfg", name="fill", entry="fill").build()
 
     arr_sdfg = np.full((A, B, C), -1.0, dtype=np.float64, order='F')
     sdfg(arr_3d=arr_sdfg)
@@ -220,7 +220,7 @@ def test_rank_reinterpret_2d_source_to_4d_view(tmp_path):
     strides ``(1, 2, 6, 24)``.  Each ``buf(a, b, c, d)`` write lands
     at the right flat offset inside the 2D actual."""
     ROWS, COLS = 6, 8
-    sdfg = build_sdfg(_SRC_2D_TO_4D, tmp_path / "sdfg", name="fill", entry="_QMmPfill").build()
+    sdfg = build_sdfg(_SRC_2D_TO_4D, tmp_path / "sdfg", name="fill", entry="fill").build()
 
     arr_sdfg = np.full((ROWS, COLS), -1.0, dtype=np.float64, order='F')
     sdfg(arr_2d=arr_sdfg)
@@ -271,7 +271,7 @@ def test_rank_reinterpret_2d_source_to_3d_view(tmp_path):
     accesses to 2D column-major offsets inside the actual.
     """
     ROWS, COLS = 6, 8
-    sdfg = build_sdfg(_SRC_2D_TO_3D, tmp_path / "sdfg", name="fill", entry="_QMmPfill").build()
+    sdfg = build_sdfg(_SRC_2D_TO_3D, tmp_path / "sdfg", name="fill", entry="fill").build()
 
     arr_sdfg = np.full((ROWS, COLS), -1.0, dtype=np.float64, order='F')
     sdfg(arr_2d=arr_sdfg)

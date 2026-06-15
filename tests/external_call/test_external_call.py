@@ -82,7 +82,7 @@ def test_external_iso_c_function_increments_array(tmp_path: Path):
 
     # The SDFG .so is linked against libfoo with an rpath, so it is
     # self-contained: no LD_PRELOAD / load ordering needed.
-    sdfg = build_sdfg(_KERNEL, tmp_path / "sdfg", name="run", entry="_QPrun").build()
+    sdfg = build_sdfg(_KERNEL, tmp_path / "sdfg", name="run", entry="run").build()
     sdfg.name = "ext_run"
 
     calls = [nd for nd, _ in sdfg.all_nodes_recursive() if isinstance(nd, ExternalCall)]
@@ -119,7 +119,7 @@ def test_external_default_intent_is_inout(tmp_path: Path):
             libraries=[str(libfoo)],
         ))
 
-    sdfg = build_sdfg(_KERNEL, tmp_path / "sdfg", name="run", entry="_QPrun").build()
+    sdfg = build_sdfg(_KERNEL, tmp_path / "sdfg", name="run", entry="run").build()
     sdfg.name = "ext_run_def"
     sdfg.compile()
 

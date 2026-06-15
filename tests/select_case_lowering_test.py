@@ -51,7 +51,7 @@ subroutine main(d)
   call foo(d(2))
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.array([1, 7, 0, 0, 0], dtype=np.int32, order="F")
     sdfg(d=a)
     # d(1) was 1 -> matched, becomes 5; d(2) was 7 -> no match, unchanged.
@@ -87,7 +87,7 @@ subroutine main(d)
   call foo(d(6))
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.array([1, 2, 3, 4, 5, 0], dtype=np.int32, order="F")
     sdfg(d=a)
     # Only 2..4 match the case (2:4) range -> become 6; 1, 5, 0 stay put.

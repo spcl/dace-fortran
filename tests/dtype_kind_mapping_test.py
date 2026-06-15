@@ -48,7 +48,7 @@ subroutine klog(n, ld, l1, l4, l8, lcb)
   end do
 end subroutine klog
 """
-    d = _dtypes(src, tmp_path, "_QPklog")
+    d = _dtypes(src, tmp_path, "klog")
     for nm in ("ld", "l1", "l4", "l8", "lcb"):
         assert d[nm] == "bool", f"{nm} -> {d[nm]}, expected bool"
 
@@ -75,7 +75,7 @@ subroutine kint(n, a1, a2, a4, a8)
   end do
 end subroutine kint
 """
-    d = _dtypes(src, tmp_path, "_QPkint")
+    d = _dtypes(src, tmp_path, "kint")
     assert d["a1"] == "int8_t"
     assert d["a2"] == "int16_t"
     assert d["a4"] == "int"

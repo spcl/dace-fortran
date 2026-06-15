@@ -31,7 +31,7 @@ subroutine fun(d, d2)
   end do
 end subroutine fun
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
 
     size = 5
     d = np.full([size], 42, order="F", dtype=np.float64)
@@ -68,7 +68,7 @@ subroutine fun(d, d2)
   end do
 end subroutine fun
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
 
     size_x, size_y = 4, 5
     d = np.full([size_x, size_y], 42, order="F", dtype=np.float64)
@@ -112,7 +112,7 @@ subroutine fun(d, d2)
   end do
 end subroutine fun
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
 
     size_x, size_y = 4, 5
     d = np.full([size_x, size_y], 42, order="F", dtype=np.float64)
@@ -152,7 +152,7 @@ subroutine fun(d, d2)
   end do
 end subroutine fun
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
 
     size_x, size_y = 4, 5
     d = np.full([size_x, size_y], 42, order="F", dtype=np.float64)
@@ -192,7 +192,7 @@ subroutine fun(d, d2)
   end do
 end subroutine fun
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
 
     size_x, size_y = 4, 5
     d = np.full([size_x, size_y], 42, order="F", dtype=np.float64)
@@ -252,7 +252,7 @@ subroutine fun(d, d2)
   end do
 end subroutine fun
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
 
     size_x, size_y = 4, 5
     d = np.full([size_x, size_y], 42, order="F", dtype=np.float64)
@@ -301,7 +301,7 @@ subroutine fun(d, d2)
   end do
 end subroutine fun
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
 
     size_x, size_y = 4, 5
     d = np.full([size_x, size_y], 42, order="F", dtype=np.float64)

@@ -181,21 +181,32 @@ def _scan_subroutine_defs(text: str):
     return defs
 
 
-def resolve_entry(name: str, sources) -> str:
-    """Resolve a Fortran procedure name to its mangled flang symbol by
-    scanning ``sources`` for the subroutine definition.  Pass-through if
-    ``name`` is already mangled (``_Q...``).  Accepts ``module::proc`` to
-    disambiguate; a bare ``proc`` resolves uniquely or raises.
+def _resolve_entry_with_module(name: str, sources):
+    """``(proc, module_or_None)`` for a Fortran entry, scanning ``sources``
+    for the subroutine definition.
 
-    Currently resolves SUBROUTINES (the usual SDFG entry, incl. the ICON
-    dycore ``solve_nh``); pass a function's mangled symbol directly.
+    The returned ``proc`` is ALWAYS a plain Fortran name (never the flang
+    ``_QM...`` mangling) -- the bridge's ``set_entry_symbol`` does the final
+    plain -> flang-symbol resolution against the emitted HLFIR.  The
+    companion ``module`` is kept so the caller can prune a whole-project
+    ``compile_commands`` to the entry's USE-closure (the module is context,
+    not part of the user-facing name).
+
+    Accepts ``module::proc`` to disambiguate; a bare ``proc`` resolves
+    uniquely or raises.  A mangled ``_Q...`` name passes through (demangled
+    to its plain ``proc`` + module) for back-compat.
 
     :raises ValueError: ``name`` is not found, or is ambiguous across
         modules (the message lists the candidates so the caller can
         qualify it ``module::proc``).
     """
     if name.startswith("_Q"):
-        return name
+        # Back-compat: a hand-written mangled symbol.  Demangle to the plain
+        # proc + module so the rest of the pipeline stays mangling-free.
+        mod = _entry_module(name)
+        m = re.match(r"_QM[a-z0-9_]+?[PF]([a-z0-9_]+)$", name, re.IGNORECASE) \
+            or re.match(r"_Q[PF]([a-z0-9_]+)$", name, re.IGNORECASE)
+        return (m.group(1).lower() if m else name), mod
     want_mod, _, want_proc = name.lower().rpartition("::")
     want_mod = want_mod or None
 
@@ -216,8 +227,32 @@ def resolve_entry(name: str, sources) -> str:
         cands = ", ".join(f"{m or '<free>'}::{p}" for p, m in sorted(matches))
         raise ValueError(f"resolve_entry: {name!r} is ambiguous ({cands}); "
                          f"qualify it as module::proc or pass the mangled symbol")
-    proc, mod = matches.pop()
-    return f"_QM{mod}P{proc}" if mod else f"_QP{proc}"
+    return matches.pop()
+
+
+def resolve_entry(name: str, sources) -> str:
+    """Validate a Fortran procedure name against ``sources`` and return its
+    PLAIN Fortran name (never the flang ``_QM...`` mangling).
+
+    Entries are always plain Fortran names per the pipeline design; the
+    bridge resolves the plain name to the mangled flang symbol against the
+    emitted HLFIR.  ``module::proc`` is accepted to disambiguate and is
+    reduced to its plain ``proc`` (the module is context, not the name).
+    With no sources (``[]``) the name passes through unchanged.
+
+    Currently resolves SUBROUTINES (the usual SDFG entry, incl. the ICON
+    dycore ``solve_nh``); pass a function's name the same way.
+
+    :raises ValueError: ``name`` is not found, or is ambiguous across
+        modules (the message lists the candidates so the caller can
+        qualify it ``module::proc``).
+    """
+    if not sources:
+        # Nothing to resolve against -- reduce ``module::proc`` to its plain
+        # ``proc`` but otherwise pass the name straight through.
+        return name.rpartition("::")[2]
+    proc, _ = _resolve_entry_with_module(name, sources)
+    return proc
 
 
 def _select_use_closure(parsed, root_module: str):
@@ -343,10 +378,11 @@ def emit(*,
     if compile_commands is not None:
         parsed = _parse_compile_commands(Path(compile_commands))
         if entry is not None:
-            # Accept a plain Fortran name (resolved against the sources) or
-            # a mangled symbol (passthrough), then keep only its USE-closure.
-            entry = resolve_entry(entry, [t[0] for t in parsed])
-            mod = _entry_module(entry)
+            # Accept a plain Fortran name / ``module::proc`` / a mangled
+            # symbol; keep ``entry`` plain and use its enclosing module
+            # (context, scanned from the sources) to keep only the entry's
+            # USE-closure.
+            entry, mod = _resolve_entry_with_module(entry, [t[0] for t in parsed])
             if mod is not None:
                 parsed = _select_use_closure(parsed, mod)
         for src, incs, defs in parsed:

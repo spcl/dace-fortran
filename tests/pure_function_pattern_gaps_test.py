@@ -83,7 +83,7 @@ def test_array_fn_return_in_arithmetic(tmp_path):
     src = tmp_path / "m.f90"
     src.write_text(_PAT_A)
     sdfg = build_sdfg_from_files(
-        [src], entry="_QMm_pat_aPkern",
+        [src], entry="kern",
         name="pat_a", out_dir=tmp_path / "build")
     sdfg.validate()
 
@@ -126,7 +126,7 @@ def test_dummy_shaped_fn_return(tmp_path):
     src = tmp_path / "m.f90"
     src.write_text(_PAT_C)
     sdfg = build_sdfg_from_files(
-        [src], entry="_QMm_pat_cPkern",
+        [src], entry="kern",
         name="pat_c", out_dir=tmp_path / "build")
     sdfg.validate()
 
@@ -173,7 +173,7 @@ def test_fn_returns_derived_type(tmp_path):
     src = tmp_path / "m.f90"
     src.write_text(_PAT_F)
     sdfg = build_sdfg_from_files(
-        [src], entry="_QMm_pat_fPkern",
+        [src], entry="kern",
         name="pat_f", out_dir=tmp_path / "build")
     sdfg.validate()
 
@@ -210,6 +210,6 @@ def test_slice_lhs_array_fn_return(tmp_path):
     src = tmp_path / "m.f90"
     src.write_text(_PAT_I)
     sdfg = build_sdfg_from_files(
-        [src], entry="_QMm_pat_iPkern",
+        [src], entry="kern",
         name="pat_i", out_dir=tmp_path / "build")
     sdfg.validate()

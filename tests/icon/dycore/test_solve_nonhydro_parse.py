@@ -32,7 +32,7 @@ import pytest
 from _util import have_flang
 
 _ENTRY = "mo_solve_nonhydro::solve_nh"  # friendly name; emit() resolves it
-_ENTRY_SYM = "_QMmo_solve_nonhydroPsolve_nh"  # its mangled flang symbol
+_ENTRY_SYM = "solve_nh"  # its mangled flang symbol
 _STUBS_DIR = Path(__file__).parent / "stubs"
 
 

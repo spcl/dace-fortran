@@ -76,7 +76,7 @@ def test_keep_external_lowers_to_externalcall(tmp_path: Path):
     sig = lookup_external("bar")
     assert sig is not None and sig.c_name == "bar"
 
-    sdfg = build_sdfg(_KERNEL, tmp_path / "sdfg", name="run", entry="_QPrun").build()
+    sdfg = build_sdfg(_KERNEL, tmp_path / "sdfg", name="run", entry="run").build()
     sdfg.name = "ext_keep_run"
 
     calls = [nd for nd, _ in sdfg.all_nodes_recursive() if isinstance(nd, ExternalCall)]
@@ -108,7 +108,7 @@ def test_keep_external_defaults_c_name_to_fortran_name(tmp_path: Path):
     )
     assert lookup_external("bar").c_name == "bar"
 
-    sdfg = build_sdfg(_KERNEL, tmp_path / "sdfg", name="run", entry="_QPrun").build()
+    sdfg = build_sdfg(_KERNEL, tmp_path / "sdfg", name="run", entry="run").build()
     sdfg.name = "ext_keep_default_cname"
     sdfg.compile()
 

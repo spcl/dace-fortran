@@ -60,7 +60,7 @@ subroutine fun(res, idx)
   res(idx%start:idx%end) = 42
 end subroutine fun
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
 
     res = np.zeros(6, order="F", dtype=np.int32)
     # ``intent(inout)`` scalar dummies -> length-1 Arrays on the

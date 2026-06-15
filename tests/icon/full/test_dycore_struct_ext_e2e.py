@@ -149,7 +149,7 @@ def test_dycore_struct_outer_calls_inner_via_sibling_sdfg(tmp_path: Path):
     clear_external_registry()
     inner_src = _TYPES_SRC + _INNER_KERNEL_SRC
     inner_sdfg = build_sdfg(inner_src, inner_sdfg_dir, name="inner_state",
-                            entry="_QPinner_state").build()
+                            entry="inner_state").build()
     inner_sdfg.name = "inner_state"
     inner_sdfg.build_folder = str(inner_dir / "dacecache")
     inner_iface = OriginalInterface(
@@ -200,7 +200,7 @@ def test_dycore_struct_outer_calls_inner_via_sibling_sdfg(tmp_path: Path):
         outer_src = _TYPES_SRC + _INNER_KERNEL_SRC + _OUTER_KERNEL_SRC
         outer_sdfg = build_sdfg(outer_src, outer_sdfg_dir,
                                 name="outer_state",
-                                entry="_QPouter_state").build()
+                                entry="outer_state").build()
         outer_sdfg.name = "outer_state"
         outer_sdfg.build_folder = str(outer_dir / "dacecache")
         outer_iface = OriginalInterface(
@@ -376,7 +376,7 @@ def test_dycore_struct_ext_dynamic_shape_e2e(tmp_path: Path):
     clear_external_registry()
     inner_src = _DYN_TYPES_SRC + _DYN_INNER_KERNEL_SRC
     inner_sdfg = build_sdfg(inner_src, inner_sdfg_dir, name="inner_state_dyn",
-                            entry="_QPinner_state_dyn").build()
+                            entry="inner_state_dyn").build()
     inner_sdfg.name = "inner_state_dyn"
     inner_sdfg.build_folder = str(inner_dir / "dacecache")
     inner_iface = OriginalInterface(
@@ -422,7 +422,7 @@ def test_dycore_struct_ext_dynamic_shape_e2e(tmp_path: Path):
         outer_src = _DYN_TYPES_SRC + _DYN_INNER_KERNEL_SRC + _DYN_OUTER_KERNEL_SRC
         outer_sdfg = build_sdfg(outer_src, outer_sdfg_dir,
                                 name="outer_state_dyn",
-                                entry="_QPouter_state_dyn").build()
+                                entry="outer_state_dyn").build()
         outer_sdfg.name = "outer_state_dyn"
         outer_sdfg.build_folder = str(outer_dir / "dacecache")
         outer_iface = OriginalInterface(

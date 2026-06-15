@@ -32,7 +32,7 @@ subroutine main(d)
   call init_test_function(d)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.full([4], 42, order="F", dtype=np.float64)
     # ``outside_init`` is a non-PARAMETER module-level scalar with a
     # source-level initialiser.  After ``hlfir-preserve-mutable-
@@ -77,7 +77,7 @@ subroutine main(d)
   call init2_test_function(d)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.full([4], 42, order="F", dtype=np.float64)
     sdfg(d=a)
     assert np.allclose(a, [42, 5.674532920122147, 42, 42])

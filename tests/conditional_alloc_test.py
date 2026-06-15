@@ -31,7 +31,7 @@ def _run(tmp_path, src, cases, argnames):
     """Build ``src`` through the bridge and f2py; run both on each
     ``cases`` tuple (mapped to ``argnames``); assert the ``out(10)``
     arrays match."""
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="probe", entry="_QPprobe").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="probe", entry="probe").build()
     mod = f2py_compile(src, tmp_path / "ref", f"ca_ref_{tmp_path.name}")
     for args in cases:
         s = np.zeros(10, dtype=np.float64)

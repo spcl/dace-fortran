@@ -225,7 +225,7 @@ end subroutine kernel
             str(f), "-o", str(h)], cwd=td)
         mod = hb.HLFIRModule()
         mod.parse_file(str(h))
-        mod.set_entry_symbol("_QPkernel")
+        mod.set_entry_symbol("kernel")
         # Pipeline runs through every pass without the verifier
         # rejecting the IR.  Before the fix this raised at
         # ``hlfir-lift-reduction-operands``.

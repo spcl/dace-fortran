@@ -400,7 +400,7 @@ subroutine spmv_batched(A, x, out)
   end do
 end subroutine spmv_batched
 """
-    sdfg = _build(src, tmp_path, name='main', entry='_QPmain')
+    sdfg = _build(src, tmp_path, name='main', entry='main')
     out = np.zeros((2, 3), order='F', dtype=np.float64)
     sdfg(out=out)
 
@@ -566,7 +566,7 @@ subroutine accumulate(s, out)
   end do
 end subroutine accumulate
 """
-    sdfg = _build(src, tmp_path, entry='_QPmain')
+    sdfg = _build(src, tmp_path, entry='main')
     out = np.zeros(1, dtype=np.float32)
     sdfg(out=out)
     assert out[0] == 100.0
@@ -606,7 +606,7 @@ subroutine main(n, src, res)
   res = s%w(2) + s%w(4)
 end subroutine main
 """
-    sdfg = _build(src, tmp_path, entry='_QPmain')
+    sdfg = _build(src, tmp_path, entry='main')
     n = 5
     src_arr = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float32)
     res = np.zeros(1, dtype=np.float32)
@@ -625,7 +625,7 @@ def test_local_struct_allocatable_via_inlined_subprogram(tmp_path: Path):
     alias walk the SDFG ends up with an unbound ``s_w_d0`` symbol
     even though the user-visible Fortran name ``n`` is in scope.
 
-    NOTE: ``entry='_QPmain'`` is REQUIRED.  The Fortran source
+    NOTE: ``entry='main'`` is REQUIRED.  The Fortran source
     declares two public functions (``_QMlibPfill_and_set`` and
     ``_QPmain``).  Without explicit entry the bridge would walk the
     first public function in module order  --  ``fill_and_set``  --
@@ -663,7 +663,7 @@ subroutine main(n, res)
   deallocate(s%w)
 end subroutine main
 """
-    sdfg = _build(src, tmp_path, entry='_QPmain')
+    sdfg = _build(src, tmp_path, entry='main')
     res = np.zeros(3, dtype=np.float32)
     sdfg(n=6, res=res)
     np.testing.assert_array_equal(res, [10.0, 30.0, 60.0])
@@ -699,7 +699,7 @@ subroutine main(n, res)
   end block
 end subroutine main
 """
-    sdfg = _build(src, tmp_path, entry='_QPmain')
+    sdfg = _build(src, tmp_path, entry='main')
     res = np.zeros(10, dtype=np.float32)
     sdfg(n=4, res=res)
     np.testing.assert_array_equal(res, [6.5, 1.0, 1.0, 1.0, 0, 0, 0, 0, 0, 0])
@@ -742,7 +742,7 @@ subroutine main(av, bv, res)
   end block
 end subroutine main
 """
-    sdfg = _build(src, tmp_path, entry='_QPmain')
+    sdfg = _build(src, tmp_path, entry='main')
     res = np.zeros(20, dtype=np.float32)
     sdfg(av=3, bv=4, res=res)
     np.testing.assert_array_equal(res, [1.5, 1.5, 1.5, 2.5, 2.5, 2.5, 2.5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
@@ -784,7 +784,7 @@ subroutine main(n, res)
   call fill(res, st)
 end subroutine main
 """
-    sdfg = _build(src, tmp_path, entry='_QPmain')
+    sdfg = _build(src, tmp_path, entry='main')
     res = np.zeros(10, dtype=np.float32)
     sdfg(n=4, res=res)
     np.testing.assert_array_equal(res, [2, 4, 6, 8, 0, 0, 0, 0, 0, 0])
@@ -877,7 +877,7 @@ subroutine main(out)
   end do
 end subroutine main
 """
-    sdfg = _build(src, tmp_path, entry='_QPmain')
+    sdfg = _build(src, tmp_path, entry='main')
     out = np.zeros(1, dtype=np.float32)
     sdfg(out=out)
     # A(1)%w(1) = 1*1 = 1, A(2)%w(2) = 2*2 = 4, sum = 5
@@ -937,7 +937,7 @@ subroutine main(out)
   end do
 end subroutine main
 """
-    sdfg = _build(src, tmp_path, entry='_QPmain')
+    sdfg = _build(src, tmp_path, entry='main')
     out = np.zeros(1, dtype=np.float32)
     sdfg(out=out)
     # Original A(1)%w(1) = 1+1 = 2; after kernel doubles every cell,
@@ -979,7 +979,7 @@ subroutine main(out)
   end do
 end subroutine main
 """
-    sdfg = _build(src, tmp_path, entry='_QPmain')
+    sdfg = _build(src, tmp_path, entry='main')
     out = np.zeros(1, dtype=np.float32)
     sdfg(out=out)
     # A(1)%w = [1, 1, 1], A(2)%w = [2, 2, 2]; sum = 1 + 2 = 3.
@@ -1125,7 +1125,7 @@ end subroutine main
     mod = f2py_compile(src, tmp_path / "ref", "static_poly_ref")
     out_ref = mod.main(2.0, 3.0, 4.0)
 
-    sdfg = _build(src, tmp_path, name='main', entry='_QPmain')
+    sdfg = _build(src, tmp_path, name='main', entry='main')
     out = np.zeros(2, dtype=np.float64)
     sdfg(r=2.0, w=3.0, h=4.0, out=out)
     np.testing.assert_allclose(out, out_ref, rtol=1e-12)
@@ -1187,7 +1187,7 @@ end subroutine main
     mod = f2py_compile(src, tmp_path / "ref", "class_box_ref")
     out_ref = float(mod.main(0.5))
 
-    sdfg = _build(src, tmp_path, name='main', entry='_QPmain')
+    sdfg = _build(src, tmp_path, name='main', entry='main')
     out = np.zeros(1, dtype=np.float64)
     if kwarg_for_sdfg:
         sdfg(x=0.5, out=out)
@@ -1488,5 +1488,5 @@ subroutine kern_ki(a, m)
 end subroutine kern_ki
 """
     with pytest.raises(Exception):
-        _build(src, tmp_path, name="kern_ki", entry="_QPkern_ki")
+        _build(src, tmp_path, name="kern_ki", entry="kern_ki")
     assert "intent(out)" in capfd.readouterr().err

@@ -79,7 +79,7 @@ subroutine raw_kern(n, a, t, out)
 end subroutine raw_kern
 """
     a = np.arange(1, 9, dtype=np.float64)
-    s, r = _run(src, "_QPraw_kern", tmp_path, a=a, t=np.zeros(8), out=np.zeros(8))
+    s, r = _run(src, "raw_kern", tmp_path, a=a, t=np.zeros(8), out=np.zeros(8))
     np.testing.assert_array_equal(s["out"], r["out"])
     np.testing.assert_array_equal(s["out"], a * 2.0 + 1.0)
 
@@ -104,7 +104,7 @@ end subroutine war_kern
 """
     a = np.arange(1, 9, dtype=np.float64)
     f0 = np.full(8, 7.0)
-    s, r = _run(src, "_QPwar_kern", tmp_path, a=a, f=f0.copy(), out=np.zeros(8))
+    s, r = _run(src, "war_kern", tmp_path, a=a, f=f0.copy(), out=np.zeros(8))
     np.testing.assert_array_equal(s["out"], r["out"])
     np.testing.assert_array_equal(s["out"], f0 + 1.0)  # old f, not a*2
     np.testing.assert_array_equal(s["f"], a * 2.0)
@@ -133,7 +133,7 @@ end subroutine waw_kern
 """
     a = np.arange(1, 9, dtype=np.float64)
     b = np.arange(11, 19, dtype=np.float64)
-    s, r = _run(src, "_QPwaw_kern", tmp_path, a=a, b=b, x=np.zeros(8), y=np.zeros(8))
+    s, r = _run(src, "waw_kern", tmp_path, a=a, b=b, x=np.zeros(8), y=np.zeros(8))
     np.testing.assert_array_equal(s["y"], r["y"])
     np.testing.assert_array_equal(s["x"], r["x"])
     np.testing.assert_array_equal(s["y"], a * 3.0)  # first write of x
@@ -166,6 +166,6 @@ end subroutine haz_if
 """
     a = np.arange(1, 9, dtype=np.float64)
     b = np.full(8, 0.5)
-    s, r = _run(src, "_QPhaz_if", tmp_path, a=a, b=b, f=np.full(8, 10.0), cv=np.zeros(8))
+    s, r = _run(src, "haz_if", tmp_path, a=a, b=b, f=np.full(8, 10.0), cv=np.zeros(8))
     np.testing.assert_array_equal(s["cv"], r["cv"])
     np.testing.assert_array_equal(s["f"], r["f"])

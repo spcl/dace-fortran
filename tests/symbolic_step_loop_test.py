@@ -54,7 +54,7 @@ def _build_and_run(src: str, tmp: Path, *, ref_kwargs: dict, sdfg_kwargs: dict, 
     caller compares ``sdfg_kwargs_after_call['out']`` against
     ``ref_out_array``."""
     mod = f2py_compile(src, tmp / "ref", mod_name)
-    sdfg = build_sdfg(src, tmp / "sdfg", name=mod_name, entry="_QPkernel").build()
+    sdfg = build_sdfg(src, tmp / "sdfg", name=mod_name, entry="kernel").build()
     sdfg_copy = {k: (v.copy() if isinstance(v, np.ndarray) else v)
                  for k, v in sdfg_kwargs.items()}
     ref_out = mod.kernel(**ref_kwargs)
@@ -192,7 +192,7 @@ end subroutine kernel
         ], cwd=td)
         mod = hb.HLFIRModule()
         mod.parse_file(str(h))
-        mod.set_entry_symbol("_QPkernel")
+        mod.set_entry_symbol("kernel")
         mod.run_passes(DEFAULT_PIPELINE)
         ast = mod.get_ast()
 

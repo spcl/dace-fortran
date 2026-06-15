@@ -139,7 +139,7 @@ _CACHE_DIR = Path(os.environ.get(
     "DACE_FORTRAN_CACHE", str(Path.home() / ".cache" / "dace-fortran")))
 
 _SOLVE_NH_TARGET = "src/atm_dyn_iconam/mo_solve_nonhydro.o"
-_SOLVE_NH_ENTRY = "_QMmo_solve_nonhydroPsolve_nh"
+_SOLVE_NH_ENTRY = "solve_nh"
 
 _HAVE_FLANG = shutil.which("flang-new-21") is not None
 _HAVE_OPENMPI = find_openmpi_include() is not None

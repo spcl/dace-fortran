@@ -67,7 +67,7 @@ def test_assumed_rank_dispatches_to_rank2_branch(tmp_path):
     only the rank-2 dispatch live for the canonicalizer + bridge AST
     extractor."""
     N, M = 4, 3
-    sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="outer", entry="_QMmPouter").build()
+    sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="outer", entry="outer").build()
 
     arr_sdfg = np.full((N, M), -1.0, dtype=np.float64, order='F')
     sdfg(arr2d=arr_sdfg)

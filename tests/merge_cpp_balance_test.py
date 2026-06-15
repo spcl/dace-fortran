@@ -82,7 +82,7 @@ def test_cpp_wrapped_module_merges_and_builds(tmp_path: Path):
     helpers = tmp_path / "helpers.f90"
     helpers.write_text(_HELPERS)
 
-    sdfg = build_sdfg_from_files([caller, helpers], entry="_QPapply_dbl",
+    sdfg = build_sdfg_from_files([caller, helpers], entry="apply_dbl",
                                  name="apply_dbl", out_dir=tmp_path / "build")
     k = 5
     out = np.zeros(4, dtype=np.float64)

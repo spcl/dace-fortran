@@ -41,7 +41,7 @@ subroutine copy_int1(a, b, n)
   end do
 end subroutine copy_int1
 """
-    sdfg = build_sdfg(src, tmp_path, name='copy_int1', entry='_QPcopy_int1').build()
+    sdfg = build_sdfg(src, tmp_path, name='copy_int1', entry='copy_int1').build()
     n = 5
     a = np.array([-128, -1, 0, 1, 127], dtype=np.int8)
     b = np.zeros(n, dtype=np.int8)
@@ -63,7 +63,7 @@ subroutine copy_int2(a, b, n)
   end do
 end subroutine copy_int2
 """
-    sdfg = build_sdfg(src, tmp_path, name='copy_int2', entry='_QPcopy_int2').build()
+    sdfg = build_sdfg(src, tmp_path, name='copy_int2', entry='copy_int2').build()
     n = 4
     a = np.array([-32768, -1, 0, 32767], dtype=np.int16)
     b = np.zeros(n, dtype=np.int16)
@@ -87,7 +87,7 @@ subroutine add_int1(a, b, c, n)
   end do
 end subroutine add_int1
 """
-    sdfg = build_sdfg(src, tmp_path, name='add_int1', entry='_QPadd_int1').build()
+    sdfg = build_sdfg(src, tmp_path, name='add_int1', entry='add_int1').build()
     n = 4
     a = np.array([-1, 0, 1, 5], dtype=np.int8)
     b = np.array([10, 20, -3, -1], dtype=np.int8)
@@ -111,7 +111,7 @@ subroutine mul_int2(a, b, c, n)
   end do
 end subroutine mul_int2
 """
-    sdfg = build_sdfg(src, tmp_path, name='mul_int2', entry='_QPmul_int2').build()
+    sdfg = build_sdfg(src, tmp_path, name='mul_int2', entry='mul_int2').build()
     n = 4
     a = np.array([2, 100, -50, 7], dtype=np.int16)
     b = np.array([3, 200, -10, 11], dtype=np.int16)

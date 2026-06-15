@@ -216,7 +216,7 @@ def test_standalone_dycore_with_sync_external(tmp_path: Path):
         sdfg = build_sdfg(
             full_src, sdfg_dir,
             name="standalone_dycore",
-            entry="_QMmo_standalone_dycorePstandalone_dycore").build()
+            entry="standalone_dycore").build()
         sdfg.name = "standalone_dycore"
         sdfg.build_folder = str(sdfg_dir / "dacecache")
         iface = build_auto_interface(

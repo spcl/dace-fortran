@@ -389,7 +389,25 @@ def _resolve_hlfir_for_entry(root: Path, entry: str) -> Path:
     translation unit into a build / artefact tree -- the caller knows
     the entry symbol, not which TU it lives in.  This scan keeps the
     caller from having to track that mapping by hand.
+
+    ``entry`` is the user-facing PLAIN Fortran name (``csr_spmv``) or a
+    ``module::proc`` qualifier; the ``.hlfir`` defines the flang-MANGLED
+    symbol (``_QMmod_csrPcsr_spmv``), so we demangle-compare each
+    ``func.func @<sym>`` against the requested proc (and module, when
+    qualified).  A ``_Q...`` entry matches the symbol verbatim.
     """
+    from dace_fortran.builder import _demangle_fortran_proc, _module_of_fortran_sym
+
+    mangled = entry.startswith("_Q")
+    want_mod, _, want_proc = entry.lower().rpartition("::")
+    want_mod = want_mod or None
+
+    def _is_entry(sym: str) -> bool:
+        if mangled:
+            return sym == entry
+        return _demangle_fortran_proc(sym) == want_proc \
+            and (want_mod is None or _module_of_fortran_sym(sym) == want_mod)
+
     matches = []
     for p in sorted(root.rglob("*.hlfir")):
         try:
@@ -397,13 +415,13 @@ def _resolve_hlfir_for_entry(root: Path, entry: str) -> Path:
         except OSError:
             continue
         for m in _HLFIR_FUNC_RE.finditer(txt):
-            if m.group(1) == entry:
+            if _is_entry(m.group(1)):
                 matches.append(p)
                 break
     if not matches:
-        raise FileNotFoundError(f"no .hlfir under {root} defines func.func @{entry}; "
-                                f"check that the build emitted HLFIR for the TU containing "
-                                f"the entry (and that the entry symbol is correctly mangled)")
+        raise FileNotFoundError(f"no .hlfir under {root} defines a func.func matching entry "
+                                f"{entry!r}; check that the build emitted HLFIR for the TU "
+                                f"containing the entry")
     if len(matches) > 1:
         raise ValueError(f"multiple .hlfir under {root} define @{entry} -- pick one explicitly: "
                          f"{[str(p) for p in matches]}")

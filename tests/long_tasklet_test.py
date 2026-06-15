@@ -32,7 +32,7 @@ subroutine main(d)
   d(1) = arr(1)*arr(ind%indices(1))!+arr(2,2,2)*arr(ind%indices(2,2,2),2,2)!+arr(3,3,3)*arr(ind%indices(3,3,3),3,3)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.full([5], 42, order="F", dtype=np.float64)
     sdfg(d=a)
     assert (a[1] == 5.5)

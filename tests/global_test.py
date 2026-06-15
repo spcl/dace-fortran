@@ -54,4 +54,4 @@ subroutine main(d)
   d(i + 1) = 5.5 + ptr_patch%w(3, 3, 3)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()

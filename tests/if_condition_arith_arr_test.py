@@ -46,7 +46,7 @@ END SUBROUTINE filter
     ref = f2py(src, tmp_path / 'ref', 'filter_ref')
     sdfg_dir = tmp_path / 'sdfg'
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='filter', entry='_QPfilter').build()
+    sdfg = build_sdfg(src, sdfg_dir, name='filter', entry='filter').build()
 
     rng = np.random.default_rng(7)
     klon, klev = 4, 3

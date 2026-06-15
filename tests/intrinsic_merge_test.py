@@ -443,7 +443,7 @@ def test_fortran_frontend_merge_dataref(tmp_path):
 
                     END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path, name='merge_test', entry='_QMtest_mergePmerge_test').build()
+    sdfg = build_sdfg(src, tmp_path, name='merge_test', entry='merge_test').build()
 
     data1 = np.full([3], 42, order="F", dtype=np.float64)
     data2 = np.full([3], 40, order="F", dtype=np.float64)

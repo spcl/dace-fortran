@@ -539,7 +539,7 @@ def test_dycore_outer_calls_velocity_sdfg_via_c_abi(tmp_path: Path):
     velocity_src = _VELOCITY_PATH.read_text()
     inner_sdfg = build_sdfg(velocity_src, inner_sdfg_dir,
                             name="velocity_tendencies",
-                            entry="_QMmo_velocity_advectionPvelocity_tendencies").build()
+                            entry="velocity_tendencies").build()
     inner_sdfg.name = "velocity_tendencies"
     inner_sdfg.build_folder = str(inner_dir / "dacecache")
     # Bridge-derived ``OriginalInterface`` -- carries the
@@ -649,7 +649,7 @@ def test_dycore_outer_calls_velocity_sdfg_via_c_abi(tmp_path: Path):
         outer_src = velocity_src + _SYNC_FORTRAN_SRC + _DYCORE_WRAPPER_SRC
         outer_sdfg = build_sdfg(outer_src, outer_sdfg_dir,
                                 name="dycore_wrapper",
-                                entry="_QMmo_dycore_wrapperPdycore_wrapper").build()
+                                entry="dycore_wrapper").build()
         outer_sdfg.name = "dycore_wrapper"
         outer_sdfg.build_folder = str(outer_dir / "dacecache")
         outer_iface = _velocity_iface("dycore_wrapper")

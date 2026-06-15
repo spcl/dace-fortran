@@ -34,7 +34,7 @@ def _run(tmp_path, name: str, src: str, *, expected: int, n: int):
     ref = f2py(src, tmp_path / 'ref', f'{name}_ref')
     sdfg_dir = tmp_path / 'sdfg'
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name=name, entry='_QMkernel_modPdriver').build()
+    sdfg = build_sdfg(src, sdfg_dir, name=name, entry='driver').build()
 
     # f2py: ``out_iter`` is intent(out) integer scalar -- returned as Python int.
     iter_ref = ref.kernel_mod.driver(n=n)

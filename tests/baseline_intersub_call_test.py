@@ -42,7 +42,7 @@ end subroutine outer
     # DEFAULT pipeline (pipeline=None) so hlfir-inline-all runs --
     # required under the explicit-entry contract: privatised callees
     # must be inlined before symbol-dce drops them.
-    sdfg = _build(src, tmp_path / "sdfg", name="outer", entry="_QPouter", pipeline=None)
+    sdfg = _build(src, tmp_path / "sdfg", name="outer", entry="outer", pipeline=None)
 
     d_ref = np.zeros(4, order="F")
     mod.outer(d_ref)

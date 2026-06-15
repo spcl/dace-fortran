@@ -35,7 +35,7 @@ def test_fortran_frontend_arr2loop_without_offset(tmp_path):
 
                     END SUBROUTINE index_test_function
                     """
-    sdfg = build_sdfg(test_string, tmp_path, name='index_offset_test', entry='_QPindex_test_function').build()
+    sdfg = build_sdfg(test_string, tmp_path, name='index_offset_test', entry='index_test_function').build()
 
     assert len(sdfg.arrays['d'].shape) == 2
     assert sdfg.arrays['d'].shape[0] == 5
@@ -63,7 +63,7 @@ def test_fortran_frontend_arr2loop_1d_offset(tmp_path):
 
                     END SUBROUTINE index_test_function
                     """
-    sdfg = build_sdfg(test_string, tmp_path, name='index_offset_test', entry='_QPindex_test_function').build()
+    sdfg = build_sdfg(test_string, tmp_path, name='index_offset_test', entry='index_test_function').build()
 
     assert len(sdfg.arrays['d'].shape) == 1
     assert sdfg.arrays['d'].shape[0] == 5
@@ -92,7 +92,7 @@ def test_fortran_frontend_arr2loop_2d_offset(tmp_path):
 
                     END SUBROUTINE index_test_function
                     """
-    sdfg = build_sdfg(test_string, tmp_path, name='index_offset_test', entry='_QPindex_test_function').build()
+    sdfg = build_sdfg(test_string, tmp_path, name='index_offset_test', entry='index_test_function').build()
 
     assert len(sdfg.arrays['d'].shape) == 2
     assert sdfg.arrays['d'].shape[0] == 5
@@ -120,7 +120,7 @@ def test_fortran_frontend_arr2loop_2d_offset2(tmp_path):
 
                     END SUBROUTINE index_test_function
                     """
-    sdfg = build_sdfg(test_string, tmp_path, name='index_offset_test', entry='_QPindex_test_function').build()
+    sdfg = build_sdfg(test_string, tmp_path, name='index_offset_test', entry='index_test_function').build()
 
     a = np.full([5, 3], 42, order="F", dtype=np.float64)
     sdfg(d=a)
@@ -144,7 +144,7 @@ def test_fortran_frontend_arr2loop_2d_offset3(tmp_path):
 
                     END SUBROUTINE index_test_function
                     """
-    sdfg = build_sdfg(test_string, tmp_path, name='index_offset_test', entry='_QPindex_test_function').build()
+    sdfg = build_sdfg(test_string, tmp_path, name='index_offset_test', entry='index_test_function').build()
 
     a = np.full([5, 3], 42, order="F", dtype=np.float64)
     sdfg(d=a)

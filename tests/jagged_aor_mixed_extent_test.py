@@ -52,7 +52,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="_QMmPdriver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
     # Jagged path packs ALL members into one 2-D companion.  Either
     # the bridge picks the jagged path (one 2-D ``g`` companion) OR
     # the per-member flat path (three 1-D ``g_a``/``g_b``/``g_c``).
@@ -82,7 +82,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="_QMmPdriver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
     assert "arr_x" in sdfg.arrays
     # AoR shape: (records, field_extent) -- NOT (numMembers, max).
     assert tuple(int(s) for s in sdfg.arrays["arr_x"].shape) == (3, 4)
@@ -107,7 +107,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="_QMmPdriver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
     arrs = sdfg.arrays
     if "g" in arrs and len(arrs["g"].shape) == 2:
         # Jagged path -- inner dim must be >= max(small=2, large=8).
@@ -143,7 +143,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="_QMmPdriver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
     arrs = sdfg.arrays
     # AoR ``arr`` -> ``arr_x`` per-field flatten.
     assert "arr_x" in arrs

@@ -50,7 +50,7 @@ SUBROUTINE cplx_re_scalar(z, out)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_re_scalar",
-                      entry="_QPcplx_re_scalar").build()
+                      entry="cplx_re_scalar").build()
     z = np.array([3 + 4j], dtype=np.complex128)  # scalar dummy, by-ref bind
     out_arr = np.zeros(1, dtype=np.float64)
     sdfg(z=z, out=out_arr)
@@ -68,7 +68,7 @@ SUBROUTINE cplx_im_scalar(z, out)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_im_scalar",
-                      entry="_QPcplx_im_scalar").build()
+                      entry="cplx_im_scalar").build()
     z = np.array([3 + 4j], dtype=np.complex128)
     out_arr = np.zeros(1, dtype=np.float64)
     sdfg(z=z, out=out_arr)
@@ -86,7 +86,7 @@ SUBROUTINE cplx_re_elem(z, out)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_re_elem",
-                      entry="_QPcplx_re_elem").build()
+                      entry="cplx_re_elem").build()
     z = np.array([3 + 4j], dtype=np.complex128, order="F")
     out_arr = np.zeros(1, dtype=np.float64)
     sdfg(z=z, out=out_arr)
@@ -104,7 +104,7 @@ SUBROUTINE cplx_im_elem(z, out)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_im_elem",
-                      entry="_QPcplx_im_elem").build()
+                      entry="cplx_im_elem").build()
     z = np.array([3 + 4j], dtype=np.complex128, order="F")
     out_arr = np.zeros(1, dtype=np.float64)
     sdfg(z=z, out=out_arr)
@@ -127,7 +127,7 @@ SUBROUTINE cplx_arr_split(z, out_re, out_im, n)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_arr_split",
-                      entry="_QPcplx_arr_split").build()
+                      entry="cplx_arr_split").build()
     z = np.array([1 + 2j, 3 + 4j, 5 + 6j], dtype=np.complex128, order="F")
     out_re = np.zeros(3, dtype=np.float64, order="F")
     out_im = np.zeros(3, dtype=np.float64, order="F")
@@ -151,7 +151,7 @@ SUBROUTINE cplx_re_vs_real(z, out_field, out_intr)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_re_vs_real",
-                      entry="_QPcplx_re_vs_real").build()
+                      entry="cplx_re_vs_real").build()
     z = np.array([2.5 - 1.5j], dtype=np.complex128, order="F")
     field = np.zeros(1, dtype=np.float64)
     intr = np.zeros(1, dtype=np.float64)
@@ -171,7 +171,7 @@ SUBROUTINE cplx_im_vs_aimag(z, out_field, out_intr)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_im_vs_aimag",
-                      entry="_QPcplx_im_vs_aimag").build()
+                      entry="cplx_im_vs_aimag").build()
     z = np.array([2.5 - 1.5j], dtype=np.complex128, order="F")
     field = np.zeros(1, dtype=np.float64)
     intr = np.zeros(1, dtype=np.float64)
@@ -196,7 +196,7 @@ SUBROUTINE cplx_signature(z, n)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_signature",
-                      entry="_QPcplx_signature").build()
+                      entry="cplx_signature").build()
     arglist = sdfg.arglist()
     assert 'z' in arglist
     # No spurious split arrays
@@ -225,7 +225,7 @@ SUBROUTINE cplx_k4(z, out_re, out_im)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_k4",
-                      entry="_QPcplx_k4").build()
+                      entry="cplx_k4").build()
     z = np.array([1.5 + 2.5j], dtype=np.complex64, order="F")
     out_re = np.zeros(1, dtype=np.float32)
     out_im = np.zeros(1, dtype=np.float32)
@@ -260,7 +260,7 @@ SUBROUTINE im_dual_use(z, sums, n)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="im_dual_use",
-                      entry="_QPim_dual_use").build()
+                      entry="im_dual_use").build()
     z = np.array([1 + 2j, 3 + 4j, 5 + 6j], dtype=np.complex128, order="F")
     sums = np.zeros(1, dtype=np.float64)
     sdfg(z=z, sums=sums, n=np.int32(3))

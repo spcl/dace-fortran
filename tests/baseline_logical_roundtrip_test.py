@@ -35,7 +35,7 @@ subroutine roundtrip(a, b, n)
   end do
 end subroutine roundtrip
 """
-    sdfg = build_sdfg(src, tmp_path, name='roundtrip', entry='_QProundtrip').build()
+    sdfg = build_sdfg(src, tmp_path, name='roundtrip', entry='roundtrip').build()
 
     n = 5
     a = np.array([True, False, True, True, False], dtype=np.bool_)
@@ -60,7 +60,7 @@ subroutine not_kernel(a, b, n)
   end do
 end subroutine not_kernel
 """
-    sdfg = build_sdfg(src, tmp_path, name='not_kernel', entry='_QPnot_kernel').build()
+    sdfg = build_sdfg(src, tmp_path, name='not_kernel', entry='not_kernel').build()
 
     n = 5
     a = np.array([True, False, True, True, False], dtype=np.bool_)
@@ -87,7 +87,7 @@ subroutine invert_in_place(mask, n)
   end do
 end subroutine invert_in_place
 """
-    sdfg = build_sdfg(src, tmp_path, name='invert_in_place', entry='_QPinvert_in_place').build()
+    sdfg = build_sdfg(src, tmp_path, name='invert_in_place', entry='invert_in_place').build()
 
     n = 6
     original = np.array([True, False, True, True, False, True], dtype=np.bool_)

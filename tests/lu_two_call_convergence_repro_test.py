@@ -105,5 +105,5 @@ def _run(sdfg, itmax_v: int) -> float:
 def test_lu_two_call_convergence_repro_itmax_2(tmp_path):
     """itmax=2 must give u[0] = 1 + 2 = 3 (2 iterations of ssor(itmax)
     on top of ssor(1)'s 1 iteration)."""
-    sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="dolu", entry="_QMmPdolu").build()
+    sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="dolu", entry="dolu").build()
     assert _run(sdfg, 2) == 3.0, "itmax=2 should give u[0]=3, not 2 (one iter only)"

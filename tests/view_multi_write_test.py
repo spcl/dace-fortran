@@ -45,7 +45,7 @@ END MODULE kernel_mod
     ref = f2py(src, tmp_path / 'ref', 'view_multi_write_ref')
     sdfg_dir = tmp_path / 'sdfg'
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='view_multi_write', entry='_QMkernel_modPdriver').build()
+    sdfg = build_sdfg(src, sdfg_dir, name='view_multi_write', entry='driver').build()
 
     klon, klev, nb = 4, 5, 3
 

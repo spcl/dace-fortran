@@ -33,7 +33,7 @@ subroutine main(d)
   call foo(d(1, 2))
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.array([[i + j for i in range(5)] for j in range(5)], order="F", dtype=np.int32)
     sdfg(d=a)
     assert (a[0, 1] == 5)
@@ -67,7 +67,7 @@ subroutine main(d)
   call foo(d(1, 5))
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.array([[i + j for i in range(5)] for j in range(5)], order="F", dtype=np.int32)
     sdfg(d=a)
     assert (a[0, 2] == 6)

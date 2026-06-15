@@ -145,7 +145,7 @@ subroutine inner_loops(INP, OUT)
   end do
 end subroutine inner_loops
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     sdfg.validate()
     rng = np.random.default_rng(0)
     inp = np.asfortranarray(rng.random((100, 10), dtype=np.float64).astype(np.float32))
@@ -180,7 +180,7 @@ subroutine main(d)
   d(1) = f(d(11), 5)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     d = np.full([50], 42, order="F", dtype=np.float32)
     sdfg(d=d)
     assert d[0] == 65
@@ -212,7 +212,7 @@ subroutine main(d)
   d(1) = f(d(11), sz)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     d = np.full([50], 42, order="F", dtype=np.float32)
     sdfg(d=d)
     assert d[0] == 65

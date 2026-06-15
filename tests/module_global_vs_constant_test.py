@@ -75,7 +75,7 @@ contains
   end subroutine apply_param
 end module mod_param
 """
-    sdfg = _build(src, tmp_path, "_QMmod_paramPapply_param")
+    sdfg = _build(src, tmp_path, "apply_param")
     assert 'gconst' not in sdfg.arglist(), "a parameter must be baked, not a kwarg"
     assert _origin(sdfg, 'gconst') is None, "a parameter carries no caller provenance"
 
@@ -105,7 +105,7 @@ contains
   end subroutine apply_cfg
 end module mod_cfg
 """
-    sdfg = _build(src, tmp_path, "_QMmod_cfgPapply_cfg")
+    sdfg = _build(src, tmp_path, "apply_cfg")
     assert 'cfg_scale' in sdfg.arglist(), "an uninitialised module global must surface as a kwarg"
     assert _origin(sdfg, 'cfg_scale') == ('mod_cfg', 'cfg_scale')
 
@@ -150,7 +150,7 @@ contains
   end subroutine apply_init
 end module mod_init
 """
-    sdfg = _build(src, tmp_path, "_QMmod_initPapply_init")
+    sdfg = _build(src, tmp_path, "apply_init")
     assert 'init_scale' in sdfg.arglist(), \
         "an initialised read-only global surfaces as a caller kwarg"
     assert _origin(sdfg, 'init_scale') == ('mod_init', 'init_scale'), \
@@ -194,7 +194,7 @@ contains
   end subroutine apply_flag
 end module mod_flag
 """
-    sdfg = _build(src, tmp_path, "_QMmod_flagPapply_flag")
+    sdfg = _build(src, tmp_path, "apply_flag")
     assert 'use_neg' in sdfg.arglist(), \
         "an initialised read-only logical surfaces as a caller kwarg"
     assert _origin(sdfg, 'use_neg') == ('mod_flag', 'use_neg')
@@ -239,7 +239,7 @@ contains
   end subroutine compute
 end module mod_state
 """
-    sdfg = _build(src, tmp_path, "_QMmod_statePcompute")
+    sdfg = _build(src, tmp_path, "compute")
     for name in ('initialized', 'cached'):
         assert name in sdfg.arglist(), f"{name}: a kernel-written global must be an inout arg"
         fa = _written_arg(sdfg, name)
@@ -281,7 +281,7 @@ contains
   end subroutine use_sval
 end module mod_scratch
 """
-    sdfg = _build(src, tmp_path, "_QMmod_scratchPuse_sval")
+    sdfg = _build(src, tmp_path, "use_sval")
     assert 'sval' in sdfg.arglist(), "a kernel-written global is an inout arg"
     assert _written_arg(sdfg, 'sval').is_written
     assert _origin(sdfg, 'sval') == ('mod_scratch', 'sval')
@@ -328,7 +328,7 @@ contains
   end subroutine use_const
 end module mod_kern_a
 """
-    sdfg = _build(src, tmp_path, "_QMmod_kern_aPuse_const")
+    sdfg = _build(src, tmp_path, "use_const")
     assert 'gravity' not in sdfg.arglist(), "a USE-imported parameter is baked"
     assert _origin(sdfg, 'gravity') is None
 
@@ -366,7 +366,7 @@ contains
   end subroutine use_state
 end module mod_kern_b
 """
-    sdfg = _build(src, tmp_path, "_QMmod_kern_bPuse_state")
+    sdfg = _build(src, tmp_path, "use_state")
     assert 'accum' in sdfg.arglist(), "a written cross-module global is an inout arg"
     assert _written_arg(sdfg, 'accum').is_written
     assert _origin(sdfg, 'accum') == ('mod_state_x', 'accum'), \
@@ -407,7 +407,7 @@ contains
   end subroutine use_scratch
 end module mod_kern_c
 """
-    sdfg = _build(src, tmp_path, "_QMmod_kern_cPuse_scratch")
+    sdfg = _build(src, tmp_path, "use_scratch")
     assert 'tmpval' in sdfg.arglist(), "a written cross-module global is an inout arg"
     assert _written_arg(sdfg, 'tmpval').is_written
     assert _origin(sdfg, 'tmpval') == ('mod_scratch_x', 'tmpval')

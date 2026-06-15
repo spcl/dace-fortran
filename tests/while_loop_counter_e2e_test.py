@@ -42,7 +42,7 @@ contains
 end module m
 """
     N = 8
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="fill", entry="_QMmPfill").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="fill", entry="fill").build()
     arr = np.full((N, ), -1.0, dtype=np.float64, order='F')
     sdfg(arr=arr, n=np.int32(N))
     expected = np.arange(1, N + 1, dtype=np.float64)
@@ -72,7 +72,7 @@ contains
 end module m
 """
     N = 6
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="count_to_n", entry="_QMmPcount_to_n").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="count_to_n", entry="count_to_n").build()
     out = np.full((N, ), -1, dtype=np.int32, order='F')
     sdfg(out_arr=out, n=np.int32(N))
     expected = np.arange(1, N + 1, dtype=np.int32) * 7

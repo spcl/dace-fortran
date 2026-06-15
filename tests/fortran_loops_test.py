@@ -32,7 +32,7 @@ def test_fortran_frontend_loop_region_basic_loop(tmp_path):
         ENDDO
     end SUBROUTINE loop_test_function
     """
-    sdfg = build_sdfg(test_string, tmp_path, name='loop_test', entry='_QPloop_test_function').build()
+    sdfg = build_sdfg(test_string, tmp_path, name='loop_test', entry='loop_test_function').build()
 
     a_test = np.full([10, 10], 2, order="F", dtype=np.float64)
     b_test = np.full([10, 10], 3, order="F", dtype=np.float64)

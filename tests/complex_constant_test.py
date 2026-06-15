@@ -33,7 +33,7 @@ SUBROUTINE s(res, n, m)
   DEALLOCATE(big)
 END SUBROUTINE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="_QPs").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="s").build()
     res = np.full((3, 2), 7.0 + 1j, dtype=np.complex128, order="F")
     sdfg(res=res, n=np.int32(3), m=np.int32(2))
     assert np.allclose(res, 0)
@@ -51,7 +51,7 @@ SUBROUTINE s(res, n)
   res = a
 END SUBROUTINE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="_QPs").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="s").build()
     res = np.zeros(5, dtype=np.complex128, order="F")
     sdfg(res=res, n=np.int32(5))
     assert np.allclose(res, 1.0 + 2.0j)
@@ -75,7 +75,7 @@ SUBROUTINE s(res, n)
   res = a
 END SUBROUTINE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="_QPs").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="s").build()
     res = np.zeros(4, dtype=np.complex128, order="F")
     sdfg(res=res, n=np.int32(4))
     np.testing.assert_allclose(res, np.array([complex(i + 1, 2.0) for i in range(4)]))
@@ -92,7 +92,7 @@ SUBROUTINE s(j, res)
   res = j * (1.0_8, 0.0_8) + (0.0_8, 1.0_8)
 END SUBROUTINE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="_QPs").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="s").build()
     res = np.zeros(1, dtype=np.complex128)
     sdfg(j=3.0, res=res)
     np.testing.assert_allclose(res[0], 3.0 + 1.0j)

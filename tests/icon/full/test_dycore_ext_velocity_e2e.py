@@ -130,7 +130,7 @@ def test_dycore_outer_calls_inner_via_sibling_sdfg(tmp_path: Path):
     inner_sdfg_dir.mkdir(parents=True, exist_ok=True)
     clear_external_registry()
     inner_sdfg = build_sdfg(_INNER_SRC, inner_sdfg_dir, name="inner_axpy",
-                            entry="_QPinner_axpy").build()
+                            entry="inner_axpy").build()
     inner_sdfg.name = "inner_axpy"
     inner_sdfg.build_folder = str(inner_dir / "dacecache")
     # Wrapper lib uses a *distinct* basename (``libinner_axpy_wrap.so``)
@@ -181,7 +181,7 @@ def test_dycore_outer_calls_inner_via_sibling_sdfg(tmp_path: Path):
         outer_sdfg_dir.mkdir(parents=True, exist_ok=True)
         outer_sdfg = build_sdfg(_OUTER_SRC, outer_sdfg_dir,
                                 name="outer_wrapper",
-                                entry="_QPouter_wrapper").build()
+                                entry="outer_wrapper").build()
         outer_sdfg.name = "outer_wrapper"
         outer_sdfg.build_folder = str(outer_dir / "dacecache")
         outer_lib = build_fortran_library(

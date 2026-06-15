@@ -212,7 +212,7 @@ MODULE test_minval
     END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path, name='minval_test_func', entry='_QMtest_minvalPminval_test_func').build()
+    sdfg = build_sdfg(src, tmp_path, name='minval_test_func', entry='minval_test_func').build()
 
     size = 7
     inp = np.full([size], 0, order="F", dtype=np.int32)

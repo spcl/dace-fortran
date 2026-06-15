@@ -50,7 +50,7 @@ subroutine arith_idx(out)
   deallocate(arr)
 end subroutine arith_idx
 """
-    sdfg = _build(src, tmp_path, "_QParith_idx")
+    sdfg = _build(src, tmp_path, "arith_idx")
     consts = dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants))
     assert consts.get('offset_arr_d0') == -6, (f"expected offset_arr_d0 == -6 (from ALLOCATE shape_shift); "
                                                f"got {consts.get('offset_arr_d0')}")
@@ -82,7 +82,7 @@ subroutine multi_alloc(out)
   out = arr(3)
 end subroutine multi_alloc
 """
-    sdfg = _build(src, tmp_path, "_QPmulti_alloc")
+    sdfg = _build(src, tmp_path, "multi_alloc")
     # Each ALLOCATE produces a separate SDFG alias.  Verify offsets
     # directly:
     consts = dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants))
@@ -122,7 +122,7 @@ subroutine loop_iv_local(out)
   deallocate(arr)
 end subroutine loop_iv_local
 """
-    sdfg = _build(src, tmp_path, "_QPloop_iv_local")
+    sdfg = _build(src, tmp_path, "loop_iv_local")
     consts = dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants))
     assert consts.get('offset_arr_d0') == -3, (f"expected offset_arr_d0 == -3 from local ALLOCATE shape_shift; "
                                                f"got {consts.get('offset_arr_d0')}")
@@ -152,7 +152,7 @@ subroutine loop_iv_dummy(arr, out)
   out = total
 end subroutine loop_iv_dummy
 """
-    sdfg = _build(src, tmp_path, "_QPloop_iv_dummy")
+    sdfg = _build(src, tmp_path, "loop_iv_dummy")
     # Bridge leaves the offset as a free symbol -- caller binds.
     assert 'offset_arr_d0' in sdfg.arglist(), (f"expected free offset symbol for dummy-arg + no-literal pattern; "
                                                f"arglist: {[k for k in sdfg.arglist() if 'offset' in k]}")
@@ -181,7 +181,7 @@ subroutine indirect_neg(arr, idx_table, n_idx, out)
   end do
 end subroutine indirect_neg
 """
-    sdfg = _build(src, tmp_path, "_QPindirect_neg")
+    sdfg = _build(src, tmp_path, "indirect_neg")
     # Bridge can't infer the bound -- expect the offset stays free.
     assert 'offset_arr_d0' in sdfg.arglist(), (f"expected free symbol for unresolvable indirect access; "
                                                f"arglist: {list(sdfg.arglist().keys())}")

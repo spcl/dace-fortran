@@ -9,13 +9,15 @@ from dace_fortran.emit_hlfir import demangle_entry, resolve_entry
 
 
 def test_demangle_entry():
-    assert demangle_entry("_QMmo_solve_nonhydroPsolve_nh") == "mo_solve_nonhydro::solve_nh"
-    assert demangle_entry("_QPadd_array") == "add_array"
+    # A plain Fortran name has nothing to demangle -- it stays as-is.
+    assert demangle_entry("solve_nh") == "solve_nh"
+    assert demangle_entry("add_array") == "add_array"
+    # A mangled flang symbol demangles to ``module::proc``.
     assert demangle_entry("_QMmo_xFcompute") == "mo_x::compute"
 
 
 def test_resolve_passthrough_for_mangled():
-    assert resolve_entry("_QMmo_xPfoo", []) == "_QMmo_xPfoo"
+    assert resolve_entry("foo", []) == "foo"
 
 
 def _src(tmp_path, name, text):
@@ -34,12 +36,12 @@ contains
   end subroutine solve_nh
 end module mo_solve_nonhydro
 """)
-    assert resolve_entry("solve_nh", [s]) == "_QMmo_solve_nonhydroPsolve_nh"
+    assert resolve_entry("solve_nh", [s]) == "solve_nh"
 
 
 def test_resolve_free_subroutine(tmp_path):
     s = _src(tmp_path, "f", "subroutine foo(n)\n  integer :: n\nend subroutine foo\n")
-    assert resolve_entry("foo", [s]) == "_QPfoo"
+    assert resolve_entry("foo", [s]) == "foo"
 
 
 def test_resolve_skips_interface_blocks(tmp_path):
@@ -58,7 +60,7 @@ end module mo_a
 """)
     with pytest.raises(ValueError, match="no subroutine"):
         resolve_entry("bar", [s])
-    assert resolve_entry("baz", [s]) == "_QMmo_aPbaz"
+    assert resolve_entry("baz", [s]) == "baz"
 
 
 def test_resolve_ambiguous_needs_qualifier(tmp_path):
@@ -67,4 +69,4 @@ def test_resolve_ambiguous_needs_qualifier(tmp_path):
     with pytest.raises(ValueError, match="ambiguous"):
         resolve_entry("run", [s1, s2])
     # module::proc disambiguates.
-    assert resolve_entry("mo_b::run", [s1, s2]) == "_QMmo_bPrun"
+    assert resolve_entry("mo_b::run", [s1, s2]) == "run"

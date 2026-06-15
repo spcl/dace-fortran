@@ -44,7 +44,7 @@ SUBROUTINE s(a, res, n)
   res = {op}(mask)
 END SUBROUTINE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="_QPs").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="s").build()
     assert {"AllNode", "AnyNode"} & _libnode_names(sdfg)
     res = np.zeros(1, dtype=np.bool_)
     a = np.asarray(x, dtype=np.float64, order="F")
@@ -77,7 +77,7 @@ SUBROUTINE s(a, res)
   END IF
 END SUBROUTINE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="_QPs").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="s").build()
     assert {"AllNode", "AnyNode"} & _libnode_names(sdfg)
     res = np.zeros(1, dtype=np.int32)
     a = np.asarray(x, dtype=np.float64, order="F")

@@ -39,7 +39,7 @@ contains
   end subroutine apply
 end module m
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="apply", entry="_QMmPapply").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="apply", entry="apply").build()
     assert 'scale' in sdfg.arglist(), \
         f"module read-only init must surface as kwarg; got {sorted(sdfg.arglist())}"
     x = np.array([2.0, 3.0], dtype=np.float64, order='F')
@@ -64,7 +64,7 @@ subroutine s(out)
   out(2) = bob + 1.0
 end subroutine s
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="_QPs").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="s").build()
     # ``bob`` is NOT a kwarg -- function-scope globals are caller-
     # invisible (the caller has no symbol to bind).
     assert 'bob' not in sdfg.arglist(), \
@@ -96,7 +96,7 @@ contains
   end subroutine apply
 end module m
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="apply", entry="_QMmPapply").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="apply", entry="apply").build()
     # PARAMETER constants stay baked; no kwarg expected.
     assert 'kappa' not in sdfg.arglist(), \
         f"PARAMETER must stay baked; arglist={sorted(sdfg.arglist())}"
@@ -134,7 +134,7 @@ contains
   end subroutine apply
 end module mod_use
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="apply", entry="_QMmod_usePapply").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="apply", entry="apply").build()
     assert 'scale' in sdfg.arglist()
     x = np.array([2.0, 3.0], dtype=np.float64, order='F')
     y = np.zeros(2, dtype=np.float64, order='F')
@@ -163,7 +163,7 @@ contains
   end subroutine apply
 end module mod_table
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="apply", entry="_QMmod_tablePapply").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="apply", entry="apply").build()
     assert 'lut' in sdfg.arglist()
     x = np.array([10.0, 10.0, 10.0, 10.0], dtype=np.float64, order='F')
     y = np.zeros(4, dtype=np.float64, order='F')
@@ -188,7 +188,7 @@ contains
   end subroutine update
 end module m
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="update", entry="_QMmPupdate").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="update", entry="update").build()
     assert 'state' in sdfg.arglist()
     state = np.array([4.0], dtype=np.float64, order='F')
     sdfg(state=state, x=np.float64(3.5))
@@ -215,7 +215,7 @@ contains
   end subroutine bump_scale
 end module mod_use
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="bump_scale", entry="_QMmod_usePbump_scale").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="bump_scale", entry="bump_scale").build()
     assert 'scale' in sdfg.arglist()
     scale = np.array([10.0], dtype=np.float64, order='F')
     sdfg(scale=scale, amount=np.float64(2.5))
@@ -243,7 +243,7 @@ contains
   end subroutine scale_lut
 end module mod_table
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="scale_lut", entry="_QMmod_tablePscale_lut").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="scale_lut", entry="scale_lut").build()
     assert 'lut' in sdfg.arglist()
     lut = np.array([0.5, 1.5, 2.5, 3.5], dtype=np.float64, order='F')
     sdfg(lut=lut, factor=np.float64(2.0))
@@ -270,7 +270,7 @@ contains
   end subroutine bump
 end module m
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="bump", entry="_QMmPbump").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="bump", entry="bump").build()
     assert 'counter' in sdfg.arglist(), \
         f"mutable module global must be a kwarg; arglist={sorted(sdfg.arglist())}"
     # Caller pre-sets counter = 10, calls with n_calls = 3 -> counter = 13.

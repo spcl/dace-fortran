@@ -31,7 +31,7 @@ def test_fortran_frontend_simplify(tmp_path):
 
                     END SUBROUTINE symbol_test_function
                     """
-    sdfg = build_sdfg(test_string, tmp_path, name='symbol_test', entry='_QPsymbol_test_function').build()
+    sdfg = build_sdfg(test_string, tmp_path, name='symbol_test', entry='symbol_test_function').build()
     a = np.full([2, 3], 42, order="F", dtype=np.float64)
     sdfg(d=a)
     assert a[0, 0] == 0

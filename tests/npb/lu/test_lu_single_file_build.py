@@ -6,7 +6,7 @@ one targets ``lu.F90`` standalone and exercises ``dolu`` directly as the
 SDFG entry  --  no driver-wrapper around it.
 
 This pins the single-source path: ``build_sdfg_from_files([lu.F90],
-entry="_QMluPdolu")``.  flang's name-mangling lower-cases the module
+entry="dolu")``.  flang's name-mangling lower-cases the module
 name, so the entry symbol is ``_QMluPdolu`` (capital-M + ``lu`` module +
 capital-P + ``dolu`` procedure).
 
@@ -38,7 +38,7 @@ _HERE = Path(__file__).resolve().parent
 
 # Flang lowercases module names: ``MODULE lu`` -> ``_QMlu``, public procedure
 # ``dolu`` -> ``P dolu``.
-_ENTRY = "_QMluPdolu"
+_ENTRY = "dolu"
 
 # Same compute kernels as the multi-file variant; one or more must appear in
 # the serialised SDFG so a regression that silently strips lu.F90's body is

@@ -38,7 +38,7 @@ from _util import build_sdfg, have_flang  # noqa: E402
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
 
-def _make_builder(probe_name: str, tmp_path: Path, entry: str = "_QPrun"):
+def _make_builder(probe_name: str, tmp_path: Path, entry: str = "run"):
     """Build the SDFGBuilder for a probe and return it before
     ``.build()`` invokes validation.  Lets the test inspect the
     bridge's ``VarInfo`` list and the descriptors-stage SDFG

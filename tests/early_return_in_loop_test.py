@@ -100,7 +100,7 @@ def test_early_return_preserves_loop_body_assigns(tmp_path):
     loops live inside the scf.while BEFORE region.  We assert all
     four ``d`` writes survive into the AST.
     """
-    builder = build_sdfg(_SRC, tmp_path / "sdfg", name="bar", entry="_QMmPbar")
+    builder = build_sdfg(_SRC, tmp_path / "sdfg", name="bar", entry="bar")
     n_d = _count_assigns_to(builder, 'd')
     assert n_d >= 4, (f"expected at least 4 ``d`` assigns to reach the AST; got {n_d}. "
                       f"The bridge's ``walkSCFBeforeRegion`` likely skipped a "

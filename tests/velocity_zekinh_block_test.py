@@ -18,7 +18,7 @@ from _util import build_sdfg, have_flang
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
 _SRC_PATH = Path(__file__).resolve().parent / "velocity_zekinh_block.f90"
-_ENTRY = "_QMmo_velocity_zekinhPzekinh_block"
+_ENTRY = "zekinh_block"
 
 
 def _numpy_reference(edge_idx, edge_blk, e_bln_c_s, z_kin_hor_e, z_ekinh, nproma, nlev, nblks_c, i_startblk, i_endblk):

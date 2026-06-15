@@ -37,7 +37,7 @@ subroutine main(d)
   d(1, 1) = conf%fraction(1,2)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     d = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=d)
     assert d[0][0] == 1
@@ -75,7 +75,7 @@ subroutine main(d)
   d(1, 1) = p_prog%pprog(1)%w(1, 1)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     d = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=d)
     assert d[0][0] == 47
@@ -115,7 +115,7 @@ subroutine main(d)
   d(1, 1) = t0%w(1, 1)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
 
@@ -154,7 +154,7 @@ subroutine main(d, p_prog)
   call f2(d, p_prog)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
 
 
 def test_fortran_frontend_type3_array(tmp_path):
@@ -214,4 +214,4 @@ subroutine main(d, p_prog)
   end do
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()

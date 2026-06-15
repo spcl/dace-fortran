@@ -6,6 +6,9 @@
 // via the MLIR pass pipeline parser.  Nothing here walks the IR.
 // ============================================================================
 
+#include <algorithm>
+#include <cctype>
+
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/map.h>
 #include <nanobind/stl/string.h>
@@ -415,9 +418,46 @@ class HLFIRModule {
   void set_entry_symbol(const std::string& name) {
     if (!module_)
       throw std::runtime_error("set_entry_symbol: no module parsed");
+    // Accept a PLAIN Fortran procedure name (the user-facing contract) as
+    // well as a flang-mangled symbol.  A name without the ``_Q`` prefix is
+    // resolved against the module's function symbols by demangling each to
+    // its Fortran procedure name (``_QP<name>`` / ``_QM<mod>P<name>`` ->
+    // ``<name>``): flang lower-cases identifiers, so the structural M/P/F
+    // markers are the only upper-case letters and the procedure name is the
+    // text after the last ``P``.
+    std::string target = name;
+    if (name.rfind("_Q", 0) != 0) {
+      std::string want = name;
+      std::transform(want.begin(), want.end(), want.begin(),
+                     [](unsigned char c) { return std::tolower(c); });
+      std::vector<std::string> matches;
+      module_->walk([&](mlir::func::FuncOp f) {
+        std::string sym = f.getSymName().str();
+        if (sym.rfind("_Q", 0) != 0) return;
+        auto p = sym.rfind('P');
+        std::string proc =
+            (p != std::string::npos && p > 1) ? sym.substr(p + 1) : sym;
+        if (proc == want) matches.push_back(sym);
+      });
+      if (matches.size() == 1) {
+        target = matches[0];
+      } else if (matches.empty()) {
+        throw std::runtime_error(
+            "set_entry_symbol: no Fortran procedure named '" + name + "'");
+      } else {
+        std::string msg =
+            "set_entry_symbol: entry '" + name + "' is ambiguous (";
+        for (size_t i = 0; i < matches.size(); ++i) {
+          if (i) msg += ", ";
+          msg += matches[i];
+        }
+        msg += "); pass the mangled symbol to disambiguate";
+        throw std::runtime_error(msg);
+      }
+    }
     bool found = false;
     module_->walk([&](mlir::func::FuncOp f) {
-      if (f.getSymName() == name) {
+      if (f.getSymName() == target) {
         mlir::SymbolTable::setSymbolVisibility(
             f, mlir::SymbolTable::Visibility::Public);
         found = true;
@@ -427,7 +467,7 @@ class HLFIRModule {
       }
     });
     if (!found)
-      throw std::runtime_error("set_entry_symbol: '" + name + "' not found");
+      throw std::runtime_error("set_entry_symbol: '" + target + "' not found");
     // Cache the entry symbol so ``extract_variables`` can install the
     // original F-scope into ``trace_utils.cpp::kEntryScope`` -- later
     // passes (``hlfir-flatten-structs``' SoA rename, etc.) may change
@@ -435,7 +475,7 @@ class HLFIRModule {
     // we MUST anchor on the ORIGINAL user-facing scope so declares
     // whose uniq_name still references the pre-pass scope (``..._FkernelEout``)
     // are correctly recognised as entry-scope and keep their bare names.
-    entry_symbol_ = name;
+    entry_symbol_ = target;
   }
 
   /// The user-provided entry symbol name (as passed to

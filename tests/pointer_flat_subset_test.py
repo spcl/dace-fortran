@@ -70,7 +70,7 @@ end subroutine main
     mod = f2py_compile(src, tmp_path / "ref", "ptr_full_member_ref")
     out_ref = np.asarray(mod.main(), dtype=np.float32)
 
-    sdfg = _build(src, tmp_path, entry='_QPmain')
+    sdfg = _build(src, tmp_path, entry='main')
     out = np.zeros(1, dtype=np.float32)
     sdfg(out=out)
     np.testing.assert_array_equal(out, out_ref)
@@ -109,7 +109,7 @@ end subroutine main
     mod = f2py_compile(src, tmp_path / "ref", "ptr_member_slice_ref")
     out_ref = np.asarray(mod.main(), dtype=np.float32)
 
-    sdfg = _build(src, tmp_path, entry='_QPmain')
+    sdfg = _build(src, tmp_path, entry='main')
     out = np.zeros(1, dtype=np.float32)
     sdfg(out=out)
     np.testing.assert_array_equal(out, out_ref)
@@ -150,7 +150,7 @@ end subroutine main
     mod = f2py_compile(src, tmp_path / "ref", "ptr_2d_column_ref")
     out_ref = np.asarray(mod.main(), dtype=np.float32)
 
-    sdfg = _build(src, tmp_path, entry='_QPmain')
+    sdfg = _build(src, tmp_path, entry='main')
     out = np.zeros(4, order="F", dtype=np.float32)
     sdfg(out=out)
     np.testing.assert_array_equal(out, out_ref)
@@ -183,7 +183,7 @@ end subroutine main
     mod = f2py_compile(src, tmp_path / "ref", "ptr_element_rebind_ref")
     out_ref = np.asarray(mod.main(), dtype=np.int32)
 
-    sdfg = _build(src, tmp_path, entry='_QPmain')
+    sdfg = _build(src, tmp_path, entry='main')
     out = np.zeros(1, dtype=np.int32)
     sdfg(out=out)
     np.testing.assert_array_equal(out, out_ref)
@@ -227,7 +227,7 @@ end subroutine main
     mod = f2py_compile(src, tmp_path / "ref", "ptr_write_member_slice_ref")
     out_ref = np.asarray(mod.main(), dtype=np.int32)
 
-    sdfg = _build(src, tmp_path, entry='_QPmain')
+    sdfg = _build(src, tmp_path, entry='main')
     out = np.zeros(8, order="F", dtype=np.int32)
     sdfg(out=out)
     np.testing.assert_array_equal(out, out_ref)

@@ -146,7 +146,7 @@ contains
   end subroutine fn
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     d = np.full([1], 42, order="F", dtype=np.float32)
     sdfg(d=d)
     assert np.allclose(d, [2])

@@ -43,7 +43,7 @@ subroutine main(d)
   call view_collapse_test_function(d(i,j))
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
 
     a = np.full([4, 4], 42, order="F", dtype=np.float64)
     # ``outside_init`` is unread in the body (the IF picks the constant

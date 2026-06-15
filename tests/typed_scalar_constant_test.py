@@ -42,7 +42,7 @@ end module m
 def _arg_dtype(tmp_path, name: str):
     """Resolve the SDFG arglist entry for ``name`` and return its
     numpy dtype.  Verifies the symbol actually surfaced as a kwarg."""
-    sdfg = build_sdfg(_SRC, tmp_path, name="apply", entry="_QMmPapply").build()
+    sdfg = build_sdfg(_SRC, tmp_path, name="apply", entry="apply").build()
     assert name in sdfg.arglist(), f"{name!r} not in arglist; got {sorted(sdfg.arglist())}"
     return sdfg.arglist()[name].dtype.as_numpy_dtype()
 

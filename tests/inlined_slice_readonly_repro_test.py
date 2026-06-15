@@ -68,7 +68,7 @@ def test_inlined_2d_slice_readonly_of_3d_array(tmp_path: Path):
     ref_dir = tmp_path / "ref"
     ref_dir.mkdir(parents=True, exist_ok=True)
 
-    sdfg = build_sdfg(_SRC, sdfg_dir, name="outer", entry="_QPouter").build()
+    sdfg = build_sdfg(_SRC, sdfg_dir, name="outer", entry="outer").build()
     sdfg.validate()
     ref = f2py_compile(_SRC, ref_dir, "slice_ref", only=("outer", ))
 
@@ -132,7 +132,7 @@ def test_inlined_flux_accumulation_shifted_index(tmp_path: Path):
     ref_dir = tmp_path / "ref2"
     ref_dir.mkdir(parents=True, exist_ok=True)
 
-    sdfg = build_sdfg(_SRC_FLUX, sdfg_dir, name="outer_flux", entry="_QPouter_flux").build()
+    sdfg = build_sdfg(_SRC_FLUX, sdfg_dir, name="outer_flux", entry="outer_flux").build()
     sdfg.validate()
     ref = f2py_compile(_SRC_FLUX, ref_dir, "flux_ref", only=("outer_flux", ))
 

@@ -53,7 +53,7 @@ end subroutine read_holder
 def test_pointer_array_member_dummy_arg_flattens(tmp_path: Path):
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(_SRC, sdfg_dir, name="read_holder", entry="_QPread_holder").build()
+    sdfg = build_sdfg(_SRC, sdfg_dir, name="read_holder", entry="read_holder").build()
     sdfg.validate()
 
     # The flat companion must be a rank-3 Array, not a Scalar (which is

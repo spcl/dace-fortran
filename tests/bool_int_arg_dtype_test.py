@@ -41,7 +41,7 @@ END SUBROUTINE bool_pass
     ref = f2py(src, tmp_path / 'ref', 'bool_pass_ref')
     sdfg_dir = tmp_path / 'sdfg'
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='bool_pass', entry='_QPbool_pass').build()
+    sdfg = build_sdfg(src, sdfg_dir, name='bool_pass', entry='bool_pass').build()
 
     flags = np.array([True, False, True, False, True, False, True, False], dtype=np.bool_)
     n = flags.size
@@ -75,7 +75,7 @@ END SUBROUTINE bool_2d_pass
     ref = f2py(src, tmp_path / 'ref', 'bool_2d_pass_ref')
     sdfg_dir = tmp_path / 'sdfg'
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='bool_2d_pass', entry='_QPbool_2d_pass').build()
+    sdfg = build_sdfg(src, sdfg_dir, name='bool_2d_pass', entry='bool_2d_pass').build()
 
     klon, nblocks = 1, 4
     flags = np.array([[False, True, True, False]], dtype=np.bool_, order='F')
@@ -102,7 +102,7 @@ END SUBROUTINE int_double
     ref = f2py(src, tmp_path / 'ref', 'int_double_ref')
     sdfg_dir = tmp_path / 'sdfg'
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='int_double', entry='_QPint_double').build()
+    sdfg = build_sdfg(src, sdfg_dir, name='int_double', entry='int_double').build()
 
     inp = np.array([1, 2, 3, 100, -5, 1000000], dtype=np.int32)
     n = inp.size
@@ -143,7 +143,7 @@ END SUBROUTINE bool_scalar
     ref = f2py(src, tmp_path / 'ref', 'bool_scalar_ref')
     sdfg_dir = tmp_path / 'sdfg'
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='bool_scalar', entry='_QPbool_scalar').build()
+    sdfg = build_sdfg(src, sdfg_dir, name='bool_scalar', entry='bool_scalar').build()
 
     from dace.data import Scalar
     desc = sdfg.arglist().get('flag')

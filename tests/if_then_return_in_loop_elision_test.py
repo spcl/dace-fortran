@@ -115,5 +115,5 @@ def test_if_then_return_in_loop_does_not_elide_if_body(tmp_path):
     body writes rsdnm(1) = u(1) * 1 = 3.0 (u(1) increments by 1 each
     iteration starting from 0).  If the IF block is elided, rsdnm stays
     at 0."""
-    sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="dolu", entry="_QMmPdolu").build()
+    sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="dolu", entry="dolu").build()
     assert _run(sdfg, 3) == 3.0, "IF body elided: rsdnm(1) should be u(1)=3.0 at istep==itmax"

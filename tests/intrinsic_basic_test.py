@@ -118,7 +118,7 @@ contains
   end subroutine tf2
 end subroutine
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
 
     size = 4
     res = np.full([size], 42, order="F", dtype=np.int32)
@@ -270,7 +270,7 @@ def test_fortran_frontend_allocated_nested(tmp_path):
 
     END SUBROUTINE allocated_test_nested
 """
-    sdfg = build_sdfg(src, tmp_path, name='allocated_test', entry='_QPallocated_test').build()
+    sdfg = build_sdfg(src, tmp_path, name='allocated_test', entry='allocated_test').build()
 
     size = 3
     res = np.full([size], 42, order="F", dtype=np.int32)

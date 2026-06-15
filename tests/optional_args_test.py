@@ -43,7 +43,7 @@ def test_fortran_frontend_optional(tmp_path):
     sdfg = build_sdfg(src,
                       tmp_path,
                       name='intrinsic_optional_test_function',
-                      entry='_QPintrinsic_optional_test_function').build()
+                      entry='intrinsic_optional_test_function').build()
 
     size = 4
     res = np.full([size], 42, order="F", dtype=np.int32)
@@ -99,7 +99,7 @@ def test_fortran_frontend_optional_complex(tmp_path):
     sdfg = build_sdfg(src,
                       tmp_path,
                       name='intrinsic_optional_test_function',
-                      entry='_QPintrinsic_optional_test_function').build()
+                      entry='intrinsic_optional_test_function').build()
 
     size = 5
     res = np.full([size], 42, order="F", dtype=np.int32)

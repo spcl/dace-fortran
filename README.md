@@ -33,10 +33,11 @@ from dace_fortran.bindings import build_fortran_library
 
 src = open("kernel.f90").read()
 
-# Build the SDFG.  ``entry`` is the mangled flang symbol --
-# ``_QPname`` for a free subroutine, ``_QM<mod>Pname`` for a module
-# procedure.  Omit it only when the source has exactly one procedure.
-sdfg = dace_fortran.build_sdfg(src, entry="_QPkernel", name="kernel")
+# Build the SDFG.  ``entry`` is the plain Fortran procedure name
+# (``kernel``); qualify it as ``module::proc`` (``mo_x::kernel``) to
+# disambiguate a name defined in several modules.  Omit it only when the
+# source has exactly one procedure.
+sdfg = dace_fortran.build_sdfg(src, entry="kernel", name="kernel")
 
 # ... optimise the SDFG here ...
 

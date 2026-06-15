@@ -40,7 +40,7 @@ def test_dedup_same_index_three_times(tmp_path):
                     ENDDO
                     END SUBROUTINE cube
                     """
-    sdfg = build_sdfg(test_string, tmp_path, name='cube', entry='_QPcube').build()
+    sdfg = build_sdfg(test_string, tmp_path, name='cube', entry='cube').build()
     t = _tasklet_for(sdfg, '_in_a')
     assert t is not None, "couldn't find the cube tasklet"
     in_conns = [c for c in t.in_connectors if c.startswith('_in_a')]
@@ -71,7 +71,7 @@ def test_no_dedup_when_index_differs(tmp_path):
                     ENDDO
                     END SUBROUTINE pair_sum
                     """
-    sdfg = build_sdfg(test_string, tmp_path, name='pair_sum', entry='_QPpair_sum').build()
+    sdfg = build_sdfg(test_string, tmp_path, name='pair_sum', entry='pair_sum').build()
     t = _tasklet_for(sdfg, '_in_a')
     assert t is not None
     in_conns = sorted(c for c in t.in_connectors if c.startswith('_in_a'))

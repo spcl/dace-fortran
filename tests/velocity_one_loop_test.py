@@ -90,7 +90,7 @@ def test_velocity_one_loop_builds_and_calls(tmp_path: Path):
         src,
         sdfg_dir,
         name="velocity_one_loop",
-        entry="_QMmo_velocity_onePone_loop_nest",
+        entry="one_loop_nest",
     ).build()
     sdfg.validate()
 
@@ -115,7 +115,7 @@ def test_velocity_one_loop_numerical(tmp_path: Path):
         src,
         sdfg_dir,
         name="velocity_one_loop",
-        entry="_QMmo_velocity_onePone_loop_nest",
+        entry="one_loop_nest",
     ).build()
 
     nproma, nlev, nblks_e = 8, 5, 3

@@ -49,7 +49,7 @@ contains
   end subroutine fill
 end module m
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="fill", entry="_QMmPfill").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="fill", entry="fill").build()
     arr = np.full((8, ), -1.0, dtype=np.float64, order='F')
     sdfg(arr=arr)
     np.testing.assert_array_equal(arr, np.arange(1, 9, dtype=np.float64))
@@ -78,7 +78,7 @@ contains
   end subroutine outer
 end module m
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="outer", entry="_QMmPouter").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="outer", entry="outer").build()
     # The bridge mints ``arr_d0`` (or similar) as a shape symbol
     # that the caller binds via the runtime ``n``.  The SDFG must
     # accept ``n`` as a scalar arg; the extent symbol is then
@@ -107,7 +107,7 @@ contains
   end subroutine fill
 end module m
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="fill", entry="_QMmPfill").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="fill", entry="fill").build()
     arr = np.full((5, ), -1.0, dtype=np.float64, order='F')
     sdfg(arr=arr)
     np.testing.assert_array_equal(arr, np.array([3.0, 6.0, 9.0, 12.0, 15.0]))

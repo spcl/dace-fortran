@@ -44,7 +44,7 @@ contains
   end subroutine k
 end module m
 """
-    sdfg = build_sdfg(src, tmp_path, name='k', entry='_QMmPk').build()
+    sdfg = build_sdfg(src, tmp_path, name='k', entry='k').build()
     assert 'c' not in sdfg.arglist(), "a read-only DATA array must bake, not be a kwarg"
     assert 'c' in getattr(sdfg, 'constants', {}), "expected c in the constant pool"
     x = np.ones(3, dtype=np.float32)
@@ -74,7 +74,7 @@ contains
   end subroutine k
 end module m
 """
-    sdfg = build_sdfg(src, tmp_path, name='k', entry='_QMmPk').build()
+    sdfg = build_sdfg(src, tmp_path, name='k', entry='k').build()
     assert 'c' not in sdfg.arglist(), "a kernel-written const array is an internal transient"
     assert 'c' not in getattr(sdfg, 'constants', {}), "a written array must not be a constexpr"
     x = np.ones(3, dtype=np.float32)
@@ -102,7 +102,7 @@ contains
   end subroutine extrap
 end module extrap_mod
 """
-    sdfg = build_sdfg(src, tmp_path, name='extrap', entry='_QMextrap_modPextrap').build()
+    sdfg = build_sdfg(src, tmp_path, name='extrap', entry='extrap').build()
     assert 'w' not in sdfg.arglist()
     x = np.arange(1, 5, dtype=np.float32)
     y = np.zeros(1, dtype=np.float32)
@@ -129,7 +129,7 @@ contains
   end subroutine k
 end module m
 """
-    sdfg = build_sdfg(src, tmp_path, name='k', entry='_QMmPk').build()
+    sdfg = build_sdfg(src, tmp_path, name='k', entry='k').build()
     assert 'a' not in sdfg.arglist() and 'a' not in getattr(sdfg, 'constants', {})
     # Fortran column-major: a(1,1)=1 a(2,1)=2 a(1,2)=3 a(2,2)=4 a(1,3)=5 a(2,3)=6.
     # Column-major storage -> the leading (row) stride is 1.

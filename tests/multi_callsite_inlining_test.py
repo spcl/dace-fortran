@@ -58,7 +58,7 @@ END MODULE kernel_mod
     ref = f2py(src, tmp_path / 'ref', 'multi_callsite_whole_ref')
     sdfg_dir = tmp_path / 'sdfg'
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='multi_callsite_whole', entry='_QMkernel_modPdriver').build()
+    sdfg = build_sdfg(src, sdfg_dir, name='multi_callsite_whole', entry='driver').build()
 
     a_ref = np.zeros(10, dtype=np.float64)
     b_ref = np.zeros(10, dtype=np.float64)
@@ -96,7 +96,7 @@ END MODULE kernel_mod
     ref = f2py(src, tmp_path / 'ref', 'multi_callsite_slice_ref')
     sdfg_dir = tmp_path / 'sdfg'
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='multi_callsite_slice', entry='_QMkernel_modPdriver').build()
+    sdfg = build_sdfg(src, sdfg_dir, name='multi_callsite_slice', entry='driver').build()
 
     a_ref = np.asfortranarray(np.zeros((10, 5), dtype=np.float64))
     b_ref = np.asfortranarray(np.zeros((10, 5), dtype=np.float64))

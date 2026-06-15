@@ -62,7 +62,7 @@ def test_cross_tu_function_result_inlines(tmp_path: Path):
     helper = tmp_path / "mo_clamp.f90"
     helper.write_text(_HELPER)
 
-    sdfg = build_sdfg_from_files([caller, helper], entry="_QPapply_clamp",
+    sdfg = build_sdfg_from_files([caller, helper], entry="apply_clamp",
                                  name="apply_clamp", out_dir=tmp_path / "build")
 
     for nproma in (2, 6):  # below and above the clamp of 4

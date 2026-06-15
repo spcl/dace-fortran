@@ -17,6 +17,8 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_entry_module_parsing():
+    # ``_entry_module`` parses the enclosing module out of a *mangled* flang
+    # symbol (an IR-introspection helper); user-facing entry names are plain.
     assert _entry_module("_QMmo_solve_nonhydroPsolve_nh") == "mo_solve_nonhydro"
     assert _entry_module("_QMmo_xPfoo") == "mo_x"
     assert _entry_module("_QPbar") is None          # free subroutine, no module
@@ -50,6 +52,6 @@ def test_emit_only_closure_from_compile_commands(tmp_path):
         for p in (c, b, a, d)
     ]))
     out = emit(compile_commands=cc, out_dir=tmp_path / "hlfir",
-               entry="_QMaPrun")
+               entry="run")
     stems = {p.stem for p in out}
     assert stems == {"a", "b", "c"}                                # d not emitted

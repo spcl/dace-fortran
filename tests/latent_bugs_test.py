@@ -47,7 +47,7 @@ SUBROUTINE while_arr(a, thr, n, count)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="while_arr",
-                      entry="_QPwhile_arr").build()
+                      entry="while_arr").build()
     a = np.array([2.0, 3.0, 1.5, 0.5, 4.0], dtype=np.float64, order="F")
     thr = 1.0
     count_arr = np.array([0], dtype=np.int32)
@@ -79,7 +79,7 @@ SUBROUTINE neg_zero_div(out_pos_inf, out_neg_inf)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="neg_zero_div",
-                      entry="_QPneg_zero_div").build()
+                      entry="neg_zero_div").build()
     pos = np.zeros(1, dtype=np.float64)
     neg = np.zeros(1, dtype=np.float64)
     sdfg(out_pos_inf=pos, out_neg_inf=neg)
@@ -101,7 +101,7 @@ SUBROUTINE atan2_zero_sign(out_pos, out_neg)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="atan2_zero_sign",
-                      entry="_QPatan2_zero_sign").build()
+                      entry="atan2_zero_sign").build()
     pos = np.zeros(1, dtype=np.float64)
     neg = np.zeros(1, dtype=np.float64)
     sdfg(out_pos=pos, out_neg=neg)
@@ -120,7 +120,7 @@ SUBROUTINE emit_neg_zero(out)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="emit_neg_zero",
-                      entry="_QPemit_neg_zero").build()
+                      entry="emit_neg_zero").build()
     out = np.zeros(1, dtype=np.float64)
     sdfg(out=out)
     assert out[0] == 0.0
@@ -146,7 +146,7 @@ SUBROUTINE emit_pos_inf(out)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="emit_pos_inf",
-                      entry="_QPemit_pos_inf").build()
+                      entry="emit_pos_inf").build()
     out = np.zeros(1, dtype=np.float64)
     sdfg(out=out)
     assert np.isposinf(out[0]), f"expected +inf, got {out[0]}"
@@ -163,7 +163,7 @@ SUBROUTINE emit_neg_inf(out)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="emit_neg_inf",
-                      entry="_QPemit_neg_inf").build()
+                      entry="emit_neg_inf").build()
     out = np.zeros(1, dtype=np.float64)
     sdfg(out=out)
     assert np.isneginf(out[0]), f"expected -inf, got {out[0]}"
@@ -182,7 +182,7 @@ SUBROUTINE emit_nan(out)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="emit_nan",
-                      entry="_QPemit_nan").build()
+                      entry="emit_nan").build()
     out = np.zeros(1, dtype=np.float64)
     sdfg(out=out)
     assert np.isnan(out[0]), f"expected NaN, got {out[0]}"
@@ -207,7 +207,7 @@ SUBROUTINE mixed_triplet_assign(s_y, out, i, n)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="mixed_triplet_assign",
-                      entry="_QPmixed_triplet_assign").build()
+                      entry="mixed_triplet_assign").build()
     s_y = np.zeros((10, 100), order="F", dtype=np.float64)
     s_y[3, :5] = [1.0, 2.0, 3.0, 4.0, 5.0]
     out = np.zeros(100, dtype=np.float64, order="F")

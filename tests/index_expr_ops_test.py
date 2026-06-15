@@ -41,7 +41,7 @@ SUBROUTINE mod_idx(a, out, n, m)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="mod_idx",
-                      entry="_QPmod_idx").build()
+                      entry="mod_idx").build()
     a = np.array([10.0, 20.0, 30.0], dtype=np.float64, order="F")
     out = np.zeros(5, dtype=np.float64, order="F")
     sdfg(a=a, out=out, n=np.int32(3), m=np.int32(5))
@@ -69,7 +69,7 @@ SUBROUTINE k4_idx(a, out, n)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="k4_idx",
-                      entry="_QPk4_idx").build()
+                      entry="k4_idx").build()
     a = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64, order="F")
     out = np.zeros(1, dtype=np.float64)
     sdfg(a=a, out=out, n=np.int32(4))
@@ -91,7 +91,7 @@ SUBROUTINE mod_idx_2d(a, out, n, m)
 END SUBROUTINE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="mod_idx_2d",
-                      entry="_QPmod_idx_2d").build()
+                      entry="mod_idx_2d").build()
     a = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float64, order="F")
     out = np.zeros(3, dtype=np.float64, order="F")
     sdfg(a=a, out=out, n=np.int32(3), m=np.int32(3))

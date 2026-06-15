@@ -40,7 +40,7 @@ _HERE = Path(__file__).resolve().parent
 # Mangled flang symbol for ``useapplu::call_dolu`` -- the driver entry.
 # ``_QM<module>P<procedure>`` is flang's name-mangling form for a
 # CONTAIN-ed subroutine inside a Fortran 90 module.
-_ENTRY = "_QMuseappluPcall_dolu"
+_ENTRY = "call_dolu"
 
 _LU_SOURCES = [_HERE / "lu.F90", _HERE / "useapplu.F90"]
 

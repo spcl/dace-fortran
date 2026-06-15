@@ -204,7 +204,7 @@ contains
   end subroutine other
 end module lib
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QMlibPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
 
     arrsize = 5
     arrsize2 = 10

@@ -40,7 +40,7 @@ subroutine loop_test_function(a, b, c)
   end do
 end subroutine loop_test_function
 """
-    sdfg = build_sdfg(test_string, entry="_QPloop_test_function", name="loop_test")
+    sdfg = build_sdfg(test_string, entry="loop_test_function", name="loop_test")
 
     a_test = np.full((10, 10), 2.0, dtype=np.float64)
     b_test = np.full((10, 10), 3.0, dtype=np.float64)

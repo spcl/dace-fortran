@@ -70,7 +70,7 @@ def test_explicit_shape_offsets_not_poisoned(tmp_path: Path):
     ref_dir = tmp_path / "ref"
     ref_dir.mkdir(parents=True, exist_ok=True)
 
-    sdfg = build_sdfg(_SRC, sdfg_dir, name="mixed_idx", entry="_QPmixed_idx").build()
+    sdfg = build_sdfg(_SRC, sdfg_dir, name="mixed_idx", entry="mixed_idx").build()
     sdfg.validate()
 
     consts = dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants))

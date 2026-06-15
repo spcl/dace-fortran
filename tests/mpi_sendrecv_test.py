@@ -74,7 +74,7 @@ def test_send_recv_lower_to_mpi_libnodes(tmp_path: Path):
     from dace.libraries.mpi.nodes.recv import Recv
     from dace.libraries.mpi.nodes.send import Send
 
-    sdfg = _build(_SENDRECV, tmp_path, "sendrecv", "_QPsendrecv")
+    sdfg = _build(_SENDRECV, tmp_path, "sendrecv", "sendrecv")
 
     sends = [n for n, _ in sdfg.all_nodes_recursive() if isinstance(n, Send)]
     recvs = [n for n, _ in sdfg.all_nodes_recursive() if isinstance(n, Recv)]
@@ -123,7 +123,7 @@ def test_isend_irecv_wait_lower_to_mpi_libnodes(tmp_path: Path):
     from dace.libraries.mpi.nodes.isend import Isend
     from dace.libraries.mpi.nodes.wait import Wait
 
-    sdfg = _build(_NONBLOCKING, tmp_path, "nbring", "_QPnbring")
+    sdfg = _build(_NONBLOCKING, tmp_path, "nbring", "nbring")
 
     counts = {Isend: 0, Irecv: 0, Wait: 0}
     for nd, _ in sdfg.all_nodes_recursive():
@@ -160,7 +160,7 @@ def test_runtime_communicator_lowers_to_grid_connector(tmp_path: Path):
     from dace.libraries.mpi.nodes.send import Send
     from dace_fortran.data import FortranProcessGrid
 
-    sdfg = _build(_USER_COMM, tmp_path, "sr_usercomm", "_QPsr_usercomm")
+    sdfg = _build(_USER_COMM, tmp_path, "sr_usercomm", "sr_usercomm")
 
     sends = [n for n, _ in sdfg.all_nodes_recursive() if isinstance(n, Send)]
     assert len(sends) == 1, f"expected 1 Send node, got {len(sends)}"

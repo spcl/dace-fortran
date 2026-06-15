@@ -34,7 +34,7 @@ def test_auto_iface_flat_matches_handwritten(tmp_path):
     """The QE complex-AXPY kernel: derived iface == the README's hand-written
     one, arg order (n, a, x, y) and all."""
     src = (Path(__file__).parents[1] / "qe" / "selected_loopnests" / "qe_e4_zaxpy.f90").read_text()
-    auto = _auto(src, tmp_path, "kernel", "_QPkernel")
+    auto = _auto(src, tmp_path, "kernel", "kernel")
     assert auto.entry == "kernel"
     assert auto.used_modules == {}
     assert auto.args == (
@@ -63,7 +63,7 @@ subroutine kern(ni, xr4, xr8, yi8, out8)
   end do
 end subroutine kern
 """
-    auto = _auto(src, tmp_path, "kern", "_QPkern")
+    auto = _auto(src, tmp_path, "kern", "kern")
     by = {a.name: a for a in auto.args}
     assert [a.name for a in auto.args] == ["ni", "xr4", "xr8", "yi8", "out8"]
     assert by["ni"].fortran_type == "integer(c_int)" and by["ni"].rank == 0
@@ -96,7 +96,7 @@ subroutine kern_aos(pts)
   end do
 end subroutine kern_aos
 """
-    auto = _auto(src, tmp_path, "kern_aos", "_QPkern_aos")
+    auto = _auto(src, tmp_path, "kern_aos", "kern_aos")
     assert len(auto.args) == 1
     arg = auto.args[0]
     assert arg.name == "pts" and arg.fortran_type == "type(point)"
@@ -152,7 +152,7 @@ subroutine kern(fld)
   fld%a = fld%a + 1.0_c_double
 end subroutine
 """
-    auto = _auto(src, tmp_path, "kern", "_QPkern")
+    auto = _auto(src, tmp_path, "kern", "kern")
 
     assert auto.args == (OriginalArg(name="fld",
                                      fortran_type="type(t_auto_fld)",

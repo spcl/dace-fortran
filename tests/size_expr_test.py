@@ -29,7 +29,7 @@ from _util import build_sdfg, f2py_compile, have_flang
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
 
-def _run(tmp_path, src, dims, *, entry="_QPprobe", shape_of=None):
+def _run(tmp_path, src, dims, *, entry="probe", shape_of=None):
     """Build ``src`` through the bridge and through f2py, run both on the
     same ``dims`` table, and return ``(sdfg_out, ref_out)``.  ``out`` is
     dimensioned ``out(n)`` in the kernel, so it must match ``len(dims)``.
@@ -200,7 +200,7 @@ def _run_scalar_args(tmp_path, src, kwargs, ref_args, *, nout=2):
     from a function of those scalars, not from a ``dims`` table."""
     out_sdfg = np.zeros(nout, dtype=np.float64)
     out_ref = np.zeros(nout, dtype=np.float64)
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="probe", entry="_QPprobe").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="probe", entry="probe").build()
     sdfg(out=out_sdfg, **kwargs)
     mod = f2py_compile(src, tmp_path / "ref", f"size_ref_{tmp_path.name}")
     mod.probe(*ref_args, out_ref)
@@ -360,7 +360,7 @@ end subroutine probe
 """
     shp = np.asfortranarray(np.arange(1, 9, dtype=np.int32).reshape(2, 2, 2))
     out_s = np.zeros(2); out_r = np.zeros(2)
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="probe", entry="_QPprobe").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="probe", entry="probe").build()
     sdfg(ii=np.int32(1), jj=np.int32(2), kk=np.int32(1), shp=shp, out=out_s)
     assert out_s[0] == 2 * 3  # shp(1,2,1) == 3 (column-major), buf(3) = 6
     mod = f2py_compile(src, tmp_path / "ref", f"size_ref_{tmp_path.name}")
@@ -391,7 +391,7 @@ end subroutine probe
     n = 4
     shp = np.asfortranarray(np.arange(1, 9, dtype=np.int32).reshape(2, 2, 2))
     out_s = np.zeros(n); out_r = np.zeros(n)
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="probe", entry="_QPprobe").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="probe", entry="probe").build()
     assert "__sym_shp_1_2_1" in sdfg.symbols
     sdfg(n=np.int32(n), shp=shp, out=out_s)
     assert out_s[0] == 2 * 3  # shp(1,2,1) == 3 (column-major), buf(3) = 6

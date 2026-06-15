@@ -68,7 +68,7 @@ end subroutine es_def
     a = np.asfortranarray(np.random.default_rng(1).random((n, n)))
     o_r = np.zeros((n, n), order="F")
     o_s = np.zeros((n, n), order="F")
-    _e2e(src, "_QPes_def", tmp_path, dict(n=np.int32(n), a=a.copy(order="F"), out=o_s), (a.copy(order="F"), o_r))
+    _e2e(src, "es_def", tmp_path, dict(n=np.int32(n), a=a.copy(order="F"), out=o_s), (a.copy(order="F"), o_r))
     np.testing.assert_array_equal(o_s, o_r)
     np.testing.assert_array_equal(o_s, a * 2.0 + 1.0)
 

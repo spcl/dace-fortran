@@ -41,7 +41,7 @@ end subroutine main
 """
     mod = f2py_compile(src, tmp_path / "ref", "ptr_to_scalar_local")
     out_ref = mod.main()
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     out = np.zeros(1, dtype=np.int32)
     sdfg(out=out)
     assert int(out[0]) == int(out_ref) == 14
@@ -67,7 +67,7 @@ end subroutine main
 """
     mod = f2py_compile(src, tmp_path / "ref", "scalar_view_alias")
     out_ref = int(mod.main())
-    b = build_sdfg(src, tmp_path, name='main', entry='_QPmain')
+    b = build_sdfg(src, tmp_path, name='main', entry='main')
     sdfg = b.build()
     # tmp is a View; x is a length-1 Array (not a Scalar).
     assert isinstance(sdfg.arrays["tmp"], dd.View)
@@ -99,7 +99,7 @@ subroutine main(out)
   out = tmp
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     out = np.zeros(1, dtype=np.int32)
     sdfg(out=out)
     assert int(out[0]) == 2  # last rebind wins
@@ -131,7 +131,7 @@ subroutine main(out)
 end subroutine main
 """
     with pytest.raises(RuntimeError):
-        build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+        build_sdfg(src, tmp_path, name='main', entry='main').build()
 
 
 def test_unsupported_interleaved_rebind_across_blocks_raises(tmp_path: Path):
@@ -159,7 +159,7 @@ subroutine main(out, cond)
 end subroutine main
 """
     with pytest.raises(RuntimeError):
-        build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+        build_sdfg(src, tmp_path, name='main', entry='main').build()
 
 
 def test_bounds_remap_lb_rebase_lowers_as_view(tmp_path: Path):
@@ -190,7 +190,7 @@ end subroutine main
     mod = f2py_compile(src, tmp_path / "ref", "bounds_remap_lb0")
     ref = np.asarray(mod.main(), dtype=np.float64)
     out = np.zeros(3, dtype=np.float64)
-    build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()(out=out)
+    build_sdfg(src, tmp_path, name='main', entry='main').build()(out=out)
     np.testing.assert_array_equal(out, ref)
     np.testing.assert_array_equal(out, [1.0, 6.0, 10.0])
 
@@ -218,7 +218,7 @@ end subroutine main
     mod = f2py_compile(src, tmp_path / "ref", "bounds_remap_lb5")
     ref = np.asarray(mod.main(), dtype=np.float64)
     out = np.zeros(2, dtype=np.float64)
-    build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()(out=out)
+    build_sdfg(src, tmp_path, name='main', entry='main').build()(out=out)
     np.testing.assert_array_equal(out, ref)
     np.testing.assert_array_equal(out, [10.0, 100.0])
 
@@ -240,7 +240,7 @@ subroutine main(n, k, src, res)
 end subroutine main
 """
     with pytest.raises(RuntimeError):
-        build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+        build_sdfg(src, tmp_path, name='main', entry='main').build()
 
 
 def test_pointer_rebind_to_array_slice(tmp_path: Path):
@@ -269,7 +269,7 @@ subroutine main(n, store, res)
   res = w(2) + w(4)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     n = 5
     store = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float32)
     res = np.zeros(1, dtype=np.float32)
@@ -309,7 +309,7 @@ end subroutine main
     mod = f2py_compile(src, tmp_path / "ref", "ptr_to_struct_field")
     d_ref = np.zeros(2, order="F", dtype=np.float32)
     mod.main(d_ref)
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     d = np.zeros(2, dtype=np.float32)
     sdfg(d=d)
     np.testing.assert_array_equal(d, d_ref)

@@ -81,9 +81,9 @@ def test_defines_select_cpp_branch_without_build_system(tmp_path):
     The ``#ifdef USE_DBL`` branch picks real(8) vs real(4), so the SDFG
     arg dtype proves the define reached the preprocessor before HLFIR."""
     sdfg_dbl = build_sdfg(_GATED_SRC, tmp_path / "dbl", name="kern",
-                          entry="_QPkern", defines=["USE_DBL"]).build()
+                          entry="kern", defines=["USE_DBL"]).build()
     assert str(sdfg_dbl.arrays["x"].dtype) == "double"
 
     sdfg_flt = build_sdfg(_GATED_SRC, tmp_path / "flt", name="kern",
-                          entry="_QPkern").build()
+                          entry="kern").build()
     assert str(sdfg_flt.arrays["x"].dtype) == "float"

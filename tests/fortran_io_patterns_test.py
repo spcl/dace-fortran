@@ -40,7 +40,7 @@ end module m
 """
     (tmp_path / "data.txt").write_text("1.5 2.5 3.5\n")
     monkeypatch.chdir(tmp_path)
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="read_vals", entry="_QMmPread_vals").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="read_vals", entry="read_vals").build()
     y = np.zeros(3, dtype=np.float64)
     sdfg(y=y)
     np.testing.assert_allclose(y, [1.5, 2.5, 3.5])
@@ -70,7 +70,7 @@ end module m
 """
     (tmp_path / "cfg.nml").write_text("&cfg\n  alpha = 1.5\n  beta = 2.5\n/\n")
     monkeypatch.chdir(tmp_path)
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="nml_read", entry="_QMmPnml_read").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="nml_read", entry="nml_read").build()
     y = np.zeros(2, dtype=np.float64)
     sdfg(y=y)
     np.testing.assert_allclose(y, [1.5, 2.5])
@@ -93,7 +93,7 @@ contains
 end module m
 """
     monkeypatch.chdir(tmp_path)
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="write_vals", entry="_QMmPwrite_vals").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="write_vals", entry="write_vals").build()
     x = np.array([4.0, 5.0, 6.0], dtype=np.float64)
     sdfg(x=x)
     written = [float(tok) for tok in (tmp_path / "out.txt").read_text().split()]
@@ -122,7 +122,7 @@ contains
 end module m
 """
     monkeypatch.chdir(tmp_path)
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="roundtrip", entry="_QMmProundtrip").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="roundtrip", entry="roundtrip").build()
     x = np.array([7.0, 8.0, 9.0], dtype=np.float64)
     y = np.zeros(3, dtype=np.float64)
     sdfg(x=x, y=y)
@@ -145,7 +145,7 @@ contains
 end module m
 """
     monkeypatch.chdir(tmp_path)
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="two_writes", entry="_QMmPtwo_writes").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="two_writes", entry="two_writes").build()
     x = np.array([1.0, 2.0, 3.0], dtype=np.float64)
     sdfg(x=x)
     wa = [float(t) for t in (tmp_path / "wa.txt").read_text().split()]
@@ -174,7 +174,7 @@ end module m
 """
     (tmp_path / "seq.txt").write_text("1.0 2.0\n3.0 4.0\n")
     monkeypatch.chdir(tmp_path)
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="two_reads", entry="_QMmPtwo_reads").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="two_reads", entry="two_reads").build()
     a = np.zeros(2, dtype=np.float64)
     b = np.zeros(2, dtype=np.float64)
     sdfg(a=a, b=b)

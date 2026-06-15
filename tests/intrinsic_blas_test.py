@@ -133,7 +133,7 @@ MODULE test_transpose
 
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path, name='test_function', entry='_QMtest_transposePtest_function').build()
+    sdfg = build_sdfg(src, tmp_path, name='test_function', entry='test_function').build()
 
     size_x = 5
     size_y = 4

@@ -45,7 +45,7 @@ end subroutine read_arr
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="read_arr", entry="_QPread_arr").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="read_arr", entry="read_arr").build()
     sdfg.validate()
 
     # Populate arr so position-i holds value (i * 10) -- distinguishes
@@ -96,7 +96,7 @@ end subroutine read_alloc
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="read_alloc", entry="_QPread_alloc").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="read_alloc", entry="read_alloc").build()
     sdfg.validate()
 
     out = np.zeros(1, dtype=np.int32, order='F')
@@ -138,7 +138,7 @@ end subroutine read_alloc
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="read_alloc", entry="_QPread_alloc").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="read_alloc", entry="read_alloc").build()
     sdfg.validate()
 
     # Inference should pick -5 as the lower bound (most-negative literal
@@ -173,7 +173,7 @@ end subroutine zero_based
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="zero_based", entry="_QPzero_based").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="zero_based", entry="zero_based").build()
     sdfg.validate()
     assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0') == 0
 
@@ -208,7 +208,7 @@ end subroutine icon_edge_blocks
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="icon_edge_blocks", entry="_QPicon_edge_blocks").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="icon_edge_blocks", entry="icon_edge_blocks").build()
     sdfg.validate()
     assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_end_block_d0') == -13
 
@@ -240,7 +240,7 @@ end subroutine mixed_bounds
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="mixed_bounds", entry="_QPmixed_bounds").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="mixed_bounds", entry="mixed_bounds").build()
     sdfg.validate()
     assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0') == -4
     # dim 1 has no literal index below 1, so stays at default 1
@@ -277,7 +277,7 @@ end subroutine sym_idx
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="sym_idx", entry="_QPsym_idx").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="sym_idx", entry="sym_idx").build()
     sdfg.validate()
     assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0') == -5, (f"shape_shift inference should pick -5 from ALLOCATE(arr(-5:5)); "
                                                      f"got {dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0')}")
@@ -306,7 +306,7 @@ end subroutine read_dummy
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="read_dummy", entry="_QPread_dummy").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="read_dummy", entry="read_dummy").build()
     sdfg.validate()
     # literal-index inference sees -3 as the most-negative literal
     assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0') == -3, (f"expected offset_arr_d0 == -3 (most-negative literal); "
@@ -345,7 +345,7 @@ end subroutine sum_arr
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="sum_arr", entry="_QPsum_arr").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="sum_arr", entry="sum_arr").build()
     sdfg.validate()
     # Loop bounds are literals but the designate index is symbolic;
     # the bridge leaves the offset free on the SDFG signature.
@@ -381,7 +381,7 @@ end subroutine sum_col
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="sum_col", entry="_QPsum_col").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="sum_col", entry="sum_col").build()
     sdfg.validate()
     arglist = sdfg.arglist()
     assert 'offset_arr_d0' in arglist, "offset_arr_d0 should be free"
@@ -418,7 +418,7 @@ end subroutine write_arr
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="write_arr", entry="_QPwrite_arr").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="write_arr", entry="write_arr").build()
     sdfg.validate()
     assert 'offset_arr_d0' in sdfg.arglist()
 
@@ -450,7 +450,7 @@ end subroutine pair_sum
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="pair_sum", entry="_QPpair_sum").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="pair_sum", entry="pair_sum").build()
     sdfg.validate()
     arglist = sdfg.arglist()
     assert 'offset_a_d0' in arglist, "a should have a free offset symbol"
@@ -483,7 +483,7 @@ end subroutine param_bound
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="param_bound", entry="_QPparam_bound").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="param_bound", entry="param_bound").build()
     sdfg.validate()
     assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0') == -8
 

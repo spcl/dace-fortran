@@ -121,7 +121,7 @@ def test_merge_then_single_file_matches_all_files_together(tmp_path: Path):
     ref_merged = _f2py(tmp_path / "bw", "mm_merged", md / "merged.f90")
 
     # SDFG via the bridge from the merged single TU.
-    sdfg = build_sdfg(merged, tmp_path / "sdfg", name="drv", entry="_QPdrv").build()
+    sdfg = build_sdfg(merged, tmp_path / "sdfg", name="drv", entry="drv").build()
 
     rng = np.random.default_rng(0)
     base = np.asfortranarray(rng.standard_normal(7))

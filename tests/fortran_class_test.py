@@ -52,7 +52,7 @@ subroutine main(d)
   d(1) = p_pat%n_pnts
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     d = np.full([2], 42, order="F", dtype=np.int64)
     sdfg(d=d)
     assert np.all(d == [400, 42])

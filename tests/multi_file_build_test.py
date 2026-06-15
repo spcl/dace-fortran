@@ -85,7 +85,7 @@ def _write(tmp: Path, **named) -> list:
 def test_two_files_driver_plus_module(tmp_path: Path):
     """Driver + one ``USE``-d module, files given out of order."""
     files = _write(tmp_path / "src", driver=_DRIVER, mod_add=_MOD_ADD)
-    sdfg = build_sdfg_from_files(list(reversed(files)), entry="_QPrun",
+    sdfg = build_sdfg_from_files(list(reversed(files)), entry="run",
                                  name="run", out_dir=tmp_path / "b")
     n = 16
     rng = np.random.default_rng(0)
@@ -100,7 +100,7 @@ def test_three_files_transitive_use(tmp_path: Path):
     """Driver USEs mod_scale which USEs mod_add -> transitive inline."""
     files = _write(tmp_path / "src", mod_add=_MOD_ADD, mod_scale=_MOD_SCALE,
                    driver=_DRIVER_CHAIN)
-    sdfg = build_sdfg_from_files(files, entry="_QPrun_chain",
+    sdfg = build_sdfg_from_files(files, entry="run_chain",
                                  name="run_chain", out_dir=tmp_path / "b")
     n = 8
     rng = np.random.default_rng(1)
@@ -115,7 +115,7 @@ def test_entry_not_found_is_rejected(tmp_path: Path):
     """No input file defines the entry's procedure -> clear error."""
     files = _write(tmp_path / "src", mod_add=_MOD_ADD)
     with pytest.raises(ValueError, match="(?i)no input file defines procedure"):
-        build_sdfg_from_files(files, entry="_QPmissing", name="x", out_dir=tmp_path / "b")
+        build_sdfg_from_files(files, entry="missing", name="x", out_dir=tmp_path / "b")
 
 
 def test_entry_resolution_contract(tmp_path: Path):

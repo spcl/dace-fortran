@@ -41,7 +41,7 @@ from _util import build_sdfg, f2py_compile, have_flang
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
 
-def _build(src: str, tmp: Path, entry: str = "_QPmain"):
+def _build(src: str, tmp: Path, entry: str = "main"):
     sdfg_dir = tmp / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     return build_sdfg(src, sdfg_dir, name="m", entry=entry).build()

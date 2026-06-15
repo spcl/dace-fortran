@@ -30,7 +30,7 @@ def test_fortran_frontend_call_extract(tmp_path):
     sdfg = build_sdfg(test_string,
                       tmp_path,
                       name='intrinsic_call_extract',
-                      entry='_QPintrinsic_call_extract_test_function').build()
+                      entry='intrinsic_call_extract_test_function').build()
 
     inp = np.full([2], 42, order="F", dtype=np.float32)
     res = np.full([2], 42, order="F", dtype=np.float32)

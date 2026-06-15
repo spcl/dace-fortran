@@ -97,7 +97,7 @@ def test_array_base_float_power_matches_gfortran(tmp_path: Path):
     ref = _f2py(_ARR_POW, tmp_path / "ref", "ipow_ref")
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(_ARR_POW, sdfg_dir, name="kern", entry="_QPkern").build()
+    sdfg = build_sdfg(_ARR_POW, sdfg_dir, name="kern", entry="kern").build()
 
     # The exponents must have been integerised: no libm float ``pow``
     # of an integer-valued exponent should remain in any tasklet.

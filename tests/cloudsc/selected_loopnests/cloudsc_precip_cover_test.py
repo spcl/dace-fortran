@@ -101,7 +101,7 @@ END MODULE kernel_mod
     ref = f2py(src, tmp_path / 'ref', 'cloudsc_pc_ref')
     sdfg_dir = tmp_path / 'sdfg'
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name='cloudsc_pc', entry='_QMkernel_modPdriver').build()
+    sdfg = build_sdfg(src, sdfg_dir, name='cloudsc_pc', entry='driver').build()
 
     klon, klev, nblocks = 1, 137, 4
     ncldqr, ncldqs, ncldtop = 3, 4, 15

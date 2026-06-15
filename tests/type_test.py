@@ -29,7 +29,7 @@ subroutine main(d)
   d(2, 1) = 5.5 + s%w(1, 1, 1)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
     assert (a[0, 0] == 42)
@@ -69,7 +69,7 @@ subroutine main(d)
   d(2, 1) = c%s%w(1, 1, 1) + s(1)%w(1, 1, 1)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
     assert (a[0, 0] == 42)
@@ -106,7 +106,7 @@ subroutine internal_function(d, st)
   d(2, 1) = 2*bob(1)
 end subroutine internal_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
     assert (a[0, 0] == 42)
@@ -172,7 +172,7 @@ subroutine internal_function(d, st)
   d(:, 1) = bob(1) + bob2(1:5)
 end subroutine internal_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
     assert (a[0, 0] == 11)
@@ -218,7 +218,7 @@ subroutine internal_function(d,st)
   d(2, 1) = bob(1) + bob2(1)
 end subroutine internal_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.full([4, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
     assert (a[0, 0] == 42)
@@ -261,7 +261,7 @@ subroutine main(d)
   d(2, 1) = 5.5 + s%w(1, 1, 1)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
     assert (a[0, 0] == 42)
@@ -340,7 +340,7 @@ subroutine main(d)
   d(2, 1) = max(1.0, tmp(1, 1, 1))
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
     assert (a[0, 0] == 42)
@@ -382,7 +382,7 @@ subroutine f2(s)
   s%name%w(8, 10)%a = 42
 end subroutine f2
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
 
@@ -427,7 +427,7 @@ subroutine f2(s, x)
   s%name%wx(8, x(3, 3, 3)) = 43
 end subroutine f2
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
 
@@ -454,7 +454,7 @@ subroutine main(d)
   d(2, 1) = max(1.0, tmp(1, 1, 1))
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
     assert (a[0, 0] == 42)
@@ -493,7 +493,7 @@ subroutine main(d)
   d(1, 1) = p_prog%pprog(1)%w(1, 1)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     # ``my_arr_d0``/``my_arr_d1`` are inherited from an inlined-callee alias
     # declare on the pointer member ``p_prog%pprog(1)%w``  --  its assumed-shape
@@ -535,7 +535,7 @@ subroutine main(d)
   call deepest(p_prog%pprog(i)%w, d)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
 
@@ -565,7 +565,7 @@ subroutine main(d)
   call internal_function(d, st%z)
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.full([4, 5], 42, order="F", dtype=np.float32)
     # Should NOT need to bind ``sta_d0`` / ``sta_d1``  --  ``st_z`` is
     # concretely (3, 3) and ``sta`` is just an inlined alias.  The
@@ -603,7 +603,7 @@ subroutine main(d)
   d(1, 1) = custom_sum(d) ** 2.0
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.full([5, 5], 1, order="F", dtype=np.float32)
     sdfg(d=a)
     assert (a[0, 0] == 625)
@@ -635,7 +635,7 @@ subroutine main(d)
   d(1, 1) = custom_sum(d) ** 2.0
 end subroutine main
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.full([5, 5], 1, order="F", dtype=np.float32)
     sdfg(d=a)
     assert (a[0, 0] == 625)

@@ -118,7 +118,7 @@ def test_transpose_of_elemental(tmp_path):
 
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(_TRANSPOSE_OF_ELEMENTAL_SRC, sdfg_dir, name="probe", entry="_QPprobe").build()
+    sdfg = build_sdfg(_TRANSPOSE_OF_ELEMENTAL_SRC, sdfg_dir, name="probe", entry="probe").build()
 
     rng = np.random.default_rng(7)
     d = np.asfortranarray(rng.standard_normal((16, 5)))

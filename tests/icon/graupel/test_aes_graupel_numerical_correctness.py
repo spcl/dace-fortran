@@ -51,7 +51,7 @@ _GRAUPEL_SOURCES = [
 
 _CALLER = _HERE / "graupel_caller.f90"
 
-_ENTRY = "_QMmo_aes_graupelPgraupel_run"
+_ENTRY = "graupel_run"
 
 
 def _compile_reference(out_dir: Path) -> ctypes.CDLL:

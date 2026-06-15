@@ -38,7 +38,7 @@ subroutine fun(res, idx)
   res(idx%start:idx%end) = 42
 end subroutine fun
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
 
     size = 6
     res = np.full([size], 42, order="F", dtype=np.int32)
@@ -86,7 +86,7 @@ subroutine fun(idx)
   idx%var%res(idx%var%start:idx%var%end) = 42
 end subroutine fun
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
 
     size = 6
     res = np.full([size], 42, order="F", dtype=np.int32)

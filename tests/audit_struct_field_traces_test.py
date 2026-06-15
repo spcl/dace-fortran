@@ -43,7 +43,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="_QMmPf").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="f").build()
     # Should NOT have ``g`` as a free symbol -- flat ``g_x`` is the access.
     assert "g" not in sdfg.symbols, f"struct base leaked as symbol: {sdfg.symbols}"
 
@@ -69,7 +69,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="_QMmPf").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="f").build()
     assert "g" not in sdfg.symbols
 
 
@@ -91,7 +91,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="_QMmPf").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="f").build()
     assert "g" not in sdfg.symbols
 
 
@@ -113,7 +113,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="_QMmPf").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="f").build()
     # The flat array ``g_a`` should be registered; element access
     # ``g_a[i-1]`` lands as memlet subset.
     assert "g_a" in sdfg.arrays, f"flat g_a missing: {sorted(sdfg.arrays.keys())}"
@@ -136,7 +136,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="_QMmPf").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="f").build()
     assert "g_y" in sdfg.arrays or "g_y" in sdfg.scalars or "g_y" in sdfg.symbols
     assert "g" not in sdfg.symbols
 
@@ -159,7 +159,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="_QMmPf").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="f").build()
     assert "g_a" in sdfg.arrays
     A = np.eye(3, dtype=np.float64, order='F')
     B = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order='F')
@@ -189,5 +189,5 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="_QMmPf").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="f").build()
     assert "g_inner_a" in sdfg.arrays

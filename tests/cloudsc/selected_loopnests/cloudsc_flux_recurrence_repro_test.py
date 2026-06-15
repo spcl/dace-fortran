@@ -98,7 +98,7 @@ def test_cloudsc_flux_recurrence(tmp_path: Path):
     ref = _f2py_build(_SRC, tmp_path / "ref", "flux_ref")
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(_SRC, sdfg_dir, name="cloudsc", entry="_QPcloudscouter").build()
+    sdfg = build_sdfg(_SRC, sdfg_dir, name="cloudsc", entry="cloudscouter").build()
 
     rng = np.random.default_rng(7)
     klon, klev, nblocks = 4, 6, 3

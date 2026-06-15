@@ -40,7 +40,7 @@ _GRAUPEL_SOURCES = [
 ]
 
 # Mangled flang symbol for ``mo_aes_graupel::graupel_run``.
-_ENTRY = "_QMmo_aes_graupelPgraupel_run"
+_ENTRY = "graupel_run"
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 

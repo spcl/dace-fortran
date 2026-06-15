@@ -76,7 +76,7 @@ subroutine wrapper(w_now, w_new, out, nnow, nnew)
 end subroutine
 """
     sdfg = build_sdfg(src, tmp_path / 'sdfg', name='kernel',
-                      entry='_QMdbuf_simple_modPkernel').build()
+                      entry='kernel').build()
 
     # Split-produced companions must appear; the original struct dummy
     # is gone.
@@ -158,7 +158,7 @@ subroutine wrapper(w_now, w_new, vn_now, vn_new, out_w, out_vn, nnow, nnew)
 end subroutine
 """
     sdfg = build_sdfg(src, tmp_path / 'sdfg', name='kernel',
-                      entry='_QMdbuf_multi_modPkernel').build()
+                      entry='kernel').build()
     for name in ('s_prog_nnow_w', 's_prog_nnew_w',
                  's_prog_nnow_vn', 's_prog_nnew_vn'):
         assert name in sdfg.arrays, f'missing companion {name!r}'
@@ -237,7 +237,7 @@ subroutine wrapper(w_now, w_new, w_temp, out, nnow, nnew, ntemp)
 end subroutine
 """
     sdfg = build_sdfg(src, tmp_path / 'sdfg', name='kernel',
-                      entry='_QMdbuf_three_modPkernel').build()
+                      entry='kernel').build()
     for name in ('s_prog_nnow_w', 's_prog_nnew_w', 's_prog_ntemp_w'):
         assert name in sdfg.arrays, f'missing companion {name!r}'
 
@@ -317,7 +317,7 @@ subroutine wrapper(w_now, w_new, out, nnow, nnew)
 end subroutine
 """
     sdfg = build_sdfg(src, tmp_path / 'sdfg', name='kernel',
-                      entry='_QMdbuf_ptr_modPkernel').build()
+                      entry='kernel').build()
     assert 's_prog_nnow_w' in sdfg.arrays
     assert 's_prog_nnew_w' in sdfg.arrays
 
@@ -394,7 +394,7 @@ subroutine wrapper(w_now, w_new, out, nnow, nnew)
 end subroutine
 """
     sdfg = build_sdfg(src, tmp_path / 'sdfg', name='kernel',
-                      entry='_QMdbuf_nested_modPkernel').build()
+                      entry='kernel').build()
 
     assert 's_inner_prog_nnow_w' in sdfg.arrays
     assert 's_inner_prog_nnew_w' in sdfg.arrays
@@ -468,7 +468,7 @@ subroutine wrapper(w_now, w_new, out, nnow, nnew)
 end subroutine
 """
     sdfg = build_sdfg(src, tmp_path / 'sdfg', name='kernel',
-                      entry='_QMdbuf_direct_modPkernel').build()
+                      entry='kernel').build()
 
     assert 's_nnow_w' in sdfg.arrays
     assert 's_nnew_w' in sdfg.arrays

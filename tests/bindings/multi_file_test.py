@@ -50,8 +50,10 @@ subroutine kernel(x, n)
 end subroutine
 """, tmp_path / "b.hlfir")
 
-    b = SDFGBuilder.from_files([str(tmp_path / "a.hlfir"), str(tmp_path / "b.hlfir")], entry="_QPkernel")
+    b = SDFGBuilder.from_files([str(tmp_path / "a.hlfir"), str(tmp_path / "b.hlfir")], entry="kernel")
     remaining = b.module.list_functions()
+    # ``list_functions`` reports the flang IR symbols, which stay mangled;
+    # only the user-facing ``entry=`` is plain.
     assert remaining == ["_QPkernel"], \
         f"symbol-dce should have dropped unused_helper; got {remaining}"
     sdfg = b.build()
@@ -78,7 +80,7 @@ subroutine caller(x, n)
 end subroutine
 """, tmp_path / "caller.hlfir")
     with pytest.raises(RuntimeError, match="pipeline failed"):
-        SDFGBuilder.from_files([str(tmp_path / "caller.hlfir")], entry="_QPcaller")
+        SDFGBuilder.from_files([str(tmp_path / "caller.hlfir")], entry="caller")
 
 
 def test_entry_missing_raises(tmp_path: Path):
@@ -92,8 +94,8 @@ subroutine foo(x, n)
   x(1) = 0.0d0
 end subroutine
 """, tmp_path / "foo.hlfir")
-    with pytest.raises(RuntimeError, match="not found|dropped"):
-        SDFGBuilder.from_files([str(tmp_path / "foo.hlfir")], entry="_QPnonexistent")
+    with pytest.raises(RuntimeError, match="no Fortran procedure|not found|dropped"):
+        SDFGBuilder.from_files([str(tmp_path / "foo.hlfir")], entry="nonexistent")
 
 
 def test_cross_file_callee_gets_inlined(tmp_path: Path):
@@ -134,7 +136,7 @@ subroutine kernel(x, n)
 end subroutine
 """, tmp_path / "kernel.hlfir")
 
-    b = SDFGBuilder.from_files([str(tmp_path / "kernel.hlfir"), str(tmp_path / "helper.hlfir")], entry="_QPkernel")
+    b = SDFGBuilder.from_files([str(tmp_path / "kernel.hlfir"), str(tmp_path / "helper.hlfir")], entry="kernel")
     remaining = b.module.list_functions()
     assert remaining == ["_QPkernel"], f"helper should have inlined + dce'd; got {remaining}"
     # The helper's ``* 2.0`` multiply should live in the entry's body.
@@ -169,7 +171,7 @@ subroutine shared(x, n)
   x(1) = 99.0d0
 end subroutine
 """, tmp_path / "shared.hlfir")
-    b = SDFGBuilder.from_files([str(tmp_path / "caller.hlfir"), str(tmp_path / "shared.hlfir")], entry="_QPkernel")
+    b = SDFGBuilder.from_files([str(tmp_path / "caller.hlfir"), str(tmp_path / "shared.hlfir")], entry="kernel")
     # Once the definition wins, inline-all folds shared into kernel and
     # symbol-dce drops the helper.  The 99.0 constant must land inside
     # kernel's body as proof the real definition was used  --  if the

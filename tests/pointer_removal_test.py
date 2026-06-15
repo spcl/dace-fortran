@@ -90,7 +90,7 @@ SUBROUTINE type_in_call_test_function(d)
 
 END SUBROUTINE type_in_call_test_function
 """
-    sdfg = build_sdfg(src, tmp_path, name='type_in_call_test_function', entry='_QPtype_in_call_test_function').build()
+    sdfg = build_sdfg(src, tmp_path, name='type_in_call_test_function', entry='type_in_call_test_function').build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
     sdfg(d=a)
     assert (a[0, 0] == 42)

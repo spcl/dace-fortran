@@ -59,7 +59,7 @@ end subroutine apply_delta
     # public module-scope ``delta`` private so its dummies don't leak
     # into extract_vars alongside ``apply_delta``'s own dummies.
     (tmp_path / "sdfg").mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(sdfg_src, tmp_path / "sdfg", name="apply_delta", entry="_QPapply_delta").build()
+    sdfg = build_sdfg(sdfg_src, tmp_path / "sdfg", name="apply_delta", entry="apply_delta").build()
 
     rng = np.random.default_rng(7)
     od = rng.standard_normal(14)

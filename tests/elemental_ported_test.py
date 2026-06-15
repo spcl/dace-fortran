@@ -36,7 +36,7 @@ SUBROUTINE main(od_sw_liq, scat_od_sw_liq, g_sw_liq)
     CALL delta_eddington_scat_od(od_sw_liq, scat_od_sw_liq, g_sw_liq)
 END SUBROUTINE
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
 
     size = 14
     arg1 = np.full([size], 42, order="F", dtype=np.float64)
@@ -100,7 +100,7 @@ SUBROUTINE main(fsd, cdf, val)
     CALL sample_from_pdf(class_object, fsd, cdf, val)
 END SUBROUTINE
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
 
     size = 5
     arg1 = np.full([size], 42, order="F", dtype=np.float64)
@@ -168,7 +168,7 @@ SUBROUTINE main(iters, fsd, cdf, val)
     CALL sample_from_pdf(class_object, fsd(iter_up - iter_low : iter_up - 1), cdf(1:iter_low), val(iter_up - iter_low: iter_up - 1))
 END SUBROUTINE
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='_QPmain').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
 
     size = 5
     arg1 = np.full([size], 42, order="F", dtype=np.float64)

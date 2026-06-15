@@ -63,7 +63,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 def test_module_scalar_input_survives_sccp(tmp_path):
     """A module-level scalar pre-set by the caller must reach the
     kernel body intact -- not constant-folded to its BSS-zero init."""
-    sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="call_doublex", entry="_QMmdriverPcall_doublex").build()
+    sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="call_doublex", entry="call_doublex").build()
     assert 'x' in sdfg.arglist(), (f"module scalar ``x`` missing from SDFG arglist; "
                                    f"got {sorted(sdfg.arglist())}")
     y_buf = np.zeros(1, dtype=np.float64, order='F')

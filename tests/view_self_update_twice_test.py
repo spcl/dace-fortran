@@ -46,7 +46,7 @@ def _run(tmp_path, src, name, klon=4, klev=5, nb=3, seed=7):
     ref = f2py(src, tmp_path / 'ref', f'{name}_ref')
     sdfg_dir = tmp_path / 'sdfg'
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name=name, entry='_QMkernel_modPdriver').build()
+    sdfg = build_sdfg(src, sdfg_dir, name=name, entry='driver').build()
 
     rng = np.random.default_rng(seed)
     t_in = np.asfortranarray(rng.random((klon, klev, nb)))
