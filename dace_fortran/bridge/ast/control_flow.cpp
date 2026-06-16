@@ -562,6 +562,12 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
   SuppressFloatCastGuard floatCastGuard;
   auto *def = val.getDefiningOp();
   if (!def) return "?";
+  // A reduction op materialised into a scalar by ``materialiseCondReductions``
+  // (Reduce lib-node before the branch) renders as the bare scalar -- the
+  // inline-unroll reduction table below is bypassed for it.
+  if (auto it = kCondReductionScalars.find(def);
+      it != kCondReductionScalars.end())
+    return it->second;
 
   if (auto conv = mlir::dyn_cast<fir::ConvertOp>(def))
     return buildExprWithSubscripts(conv.getValue(), d + 1);
@@ -870,6 +876,21 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
            ")";
   if (nm == "arith.negf" && def->getNumOperands() == 1)
     return "(-" + buildExprWithSubscripts(def->getOperand(0), d + 1) + ")";
+
+  // Exponentiation ``a ** b`` (Flang's ``math.fpowi`` float**int,
+  // ``math.powf`` float**float, ``math.powi`` / ``math.ipowi`` int**int).
+  // Recurse the base (and exponent) through the subscript-aware builder so a
+  // squared per-element term keeps its subscript.  Without this the power op
+  // falls through to ``buildExpr`` below, which strips subscripts and leaves a
+  // bare array name -- QE's ``IF (SUM((i - i_real) ** 2) > eps6)`` (the
+  // elemental-unfold above renders each term via this builder) then emits
+  // ``(float64(i) - i_real) ** 2`` with whole-array ``i`` / ``i_real``
+  // operands, which C++ codegen rejects as ``int* - double*``.
+  if ((nm == "math.fpowi" || nm == "math.powf" || nm == "math.powi" || nm == "math.ipowi") &&
+      def->getNumOperands() == 2) {
+    return "(" + buildExprWithSubscripts(def->getOperand(0), d + 1) + " ** " +
+           buildExprWithSubscripts(def->getOperand(1), d + 1) + ")";
+  }
 
   // Fall through to the plain expression builder for anything else
   // (constants, math intrinsics, ...).

@@ -459,6 +459,12 @@ std::string buildExpr(mlir::Value val, int d) {
   }
   auto *def = val.getDefiningOp();
   if (!def) return "?";
+  // A reduction op (``hlfir.sum`` / ``minval`` / ``maxval`` / ``product``) in a
+  // CONDITION that ``materialiseCondReductions`` lowered to a Reduce lib-node
+  // renders as the bare scalar transient (``s``); the inline-unroll is bypassed.
+  if (auto it = kCondReductionScalars.find(def);
+      it != kCondReductionScalars.end())
+    return it->second;
 
   // ``fir.do_loop`` result: the loop is processed at the higher
   // ``kind="loop"`` AST level; downstream reads of the loop's

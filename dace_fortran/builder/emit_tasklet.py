@@ -53,6 +53,50 @@ def _is_len1_scalar_view(builder, nm: str) -> bool:
         and list(a.shape_symbols) == ['1']
 
 
+def _view_link_spec(builder, state, target: str):
+    """Resolve the ``(src, src_subset, view_subset)`` for a View ``target``'s
+    source linking memlet, or ``None`` if ``target`` is not a View.
+
+    Handles all three View flavours uniformly  --  the complex-component alias
+    (re-cast as a same-dtype COMPLEX view), the ``bounds_remap_view`` flatten
+    pointer remap, and the plain ``view_alias`` reshape  --  by normalising each
+    to a ``(view_source, view_subset)`` pair, then rendering the source-side slab
+    (``:`` full-dim markers resolved against the parent shape; the ``[""]``
+    whole-array sentinel spanning the full flat storage) and the view-side span.
+    Shared by the read-link (``acc`` / ``_ensure_view_read_link``) and the
+    write-back (``_ensure_view_writeback_link``) so both directions agree.
+    """
+    if target in getattr(builder, 'complex_component_aliases', {}):
+        from dace_fortran.builder.access import cc_alias_view_spec
+        v = cc_alias_view_spec(builder, target)
+    else:
+        v = builder.arrays.get(target)
+    if v is None:
+        return None
+    if getattr(v, 'bounds_remap_view', False) and v.bounds_remap_source \
+            and v.bounds_remap_source in state.parent.arrays:
+        from types import SimpleNamespace
+        v = SimpleNamespace(role='view_alias',
+                            view_source=v.bounds_remap_source,
+                            view_subset=list(v.bounds_remap_source_subset) or [""],
+                            fortran_name=v.fortran_name)
+    if getattr(v, 'role', '') != 'view_alias':
+        return None
+    if not v.view_source or v.view_source not in state.parent.arrays:
+        return None
+    src = v.view_source
+    if len(v.view_subset) == 1 and v.view_subset[0] == "":
+        src_dims = [str(d) for d in state.parent.arrays[src].shape]
+        src_subset = ", ".join(f"0:{d}" for d in src_dims)
+    else:
+        from dace_fortran.builder.access import resolve_full_dim_markers
+        src_shape = [str(d) for d in state.parent.arrays[src].shape]
+        src_subset = ", ".join(resolve_full_dim_markers(v.view_subset, src_shape))
+    view_dims = [str(d) for d in state.parent.arrays[target].shape]
+    view_subset = ", ".join(f"0:{d}" for d in view_dims)
+    return src, src_subset, view_subset
+
+
 def _ensure_view_writeback_link(builder, state, write_node, target: str):
     """When the Phase I self-update split creates a fresh access node
     for the write side of a view alias, the view's required source
@@ -74,46 +118,36 @@ def _ensure_view_writeback_link(builder, state, write_node, target: str):
       shape ``get_view_edge`` recognises, and the read-side with the
       clean ``in=1 (linking) / out=N (tasklets)`` shape.
     """
-    v = builder.arrays.get(target)
-    if v is None:
+    spec = _view_link_spec(builder, state, target)
+    if spec is None:
         return
-    # ``bounds_remap_view`` (flatten POINTER remap ``p(1:n*k) => a(:,c0:c1)``)
-    # is a View just like ``view_alias`` but flagged differently; on the READ
-    # side ``acc()`` synthesises the equivalent (source, subset) view, so do
-    # the same here for the WRITE-back direction.  Without this, a
-    # read-modify-write through a flatten view (``p(i) = p(i)*2``, or a callee
-    # ``v(i)=v(i)*2`` aliasing it) left the fresh write node with no ``views``
-    # edge -> ``get_view_edge`` returns None -> "Ambiguous edge to/from a View".
-    if getattr(v, 'bounds_remap_view', False) and v.bounds_remap_source \
-            and v.bounds_remap_source in state.parent.arrays:
-        from types import SimpleNamespace
-        v = SimpleNamespace(role='view_alias',
-                            view_source=v.bounds_remap_source,
-                            view_subset=list(v.bounds_remap_source_subset) or [""],
-                            fortran_name=v.fortran_name)
-    if getattr(v, 'role', '') != 'view_alias':
-        return
-    if not v.view_source or v.view_source not in state.parent.arrays:
-        return
-    src = v.view_source
-    # Whole-array reinterpret sentinel ``[""]`` -> span the source's full flat
-    # storage (mirrors the acc() read-side link); a real section subset is
-    # used verbatim.
-    if len(v.view_subset) == 1 and v.view_subset[0] == "":
-        src_dims = [str(d) for d in state.parent.arrays[src].shape]
-        src_subset = ", ".join(f"0:{d}" for d in src_dims)
-    else:
-        from dace_fortran.builder.access import resolve_full_dim_markers
-        src_shape = [str(d) for d in state.parent.arrays[src].shape]
-        src_subset = ", ".join(resolve_full_dim_markers(v.view_subset, src_shape))
-    view_dims = [str(d) for d in state.parent.arrays[target].shape]
-    view_subset = ", ".join(f"0:{d}" for d in view_dims)
+    src, src_subset, view_subset = spec
     src_node = state.add_access(src)
     cache = getattr(state, '_hlfir_access', None)
     if cache is not None:
         cache[src] = src_node
         cache.pop(target, None)
     state.add_edge(write_node, None, src_node, None, Memlet(data=src, subset=src_subset, other_subset=view_subset))
+
+
+def _ensure_view_read_link(builder, state, read_node, target: str):
+    """Install the source -> view linking memlet on a GIVEN read node of a View
+    ``target`` (the read-direction counterpart of
+    ``_ensure_view_writeback_link``).
+
+    ``acc()`` installs this link on its cached node, but a library node whose
+    input is a View (e.g. an in-place FFT over the ``bounds_remap_view``
+    ``prhoc_d``) must use a FRESH read node -- sharing ``acc``'s cached node
+    with the matching write would self-cycle on the view.  This wires the
+    ``views`` edge on that fresh node with a FRESH (un-cached) source node so the
+    read-side source and the write-back source stay distinct (no cycle for the
+    in-place case)."""
+    spec = _view_link_spec(builder, state, target)
+    if spec is None:
+        return
+    src, src_subset, view_subset = spec
+    src_node = state.add_access(src)
+    state.add_edge(src_node, None, read_node, 'views', Memlet(data=src, subset=src_subset, other_subset=view_subset))
 
 
 def assign_reads_array(assign_node, arrays: dict) -> bool:
@@ -341,9 +375,8 @@ def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect
     # parent looks uninitialised).  Covers the pure-write case the
     # self-update / cached-reader branch already handled for RMW.
     v_eff = builder.arrays.get(eff_target)
-    is_view_write = v_eff is not None and (
-        getattr(v_eff, 'bounds_remap_view', False)
-        or getattr(v_eff, 'role', '') == 'view_alias')
+    is_view_write = v_eff is not None and (getattr(v_eff, 'bounds_remap_view', False)
+                                           or getattr(v_eff, 'role', '') == 'view_alias')
     if is_view_write or is_self_update or cached_has_readers:
         w = state.add_access(eff_target)
         if cache is not None:
@@ -523,3 +556,115 @@ def emit_scalar_assign(builder, state, target: str, value: str):
     else:
         a = acc(builder, state, target)
     state.add_edge(t, '_out', a, None, Memlet(data=target, subset='0'))
+
+
+def _cc_elem_subset(name, elem_exprs):
+    """Element subset for a complex-component-alias access in the VIEW's own
+    0-based coordinates.  The COMPLEX view already encodes the source slab
+    (base / extent / aliasing) via its descriptor + linking memlet, so an access
+    ``qg(comp, i...)`` only subtracts the element dims' Fortran lower bound:
+    ``qg[(i) - offset_qg_d0, ...]``.  No base folding here -- that was the
+    descriptor-less form; the view subsumes it."""
+    return ", ".join(f"({e}) - offset_{name}_d{k}" for k, e in enumerate(elem_exprs))
+
+
+def emit_complex_component_assign(builder, state, node, idx: int, iter_map: dict, indirect_syms: dict = None):
+    """``qg(c, i...) = <rhs>`` where ``qg`` is a complex-as-2-reals component
+    alias (a ``REAL(2, N)`` dummy bound to a ``COMPLEX`` element -- QE's
+    ``qvan2`` ``qg(2, ngy)`` aliasing ``qgm(1, ijh)``).
+
+    ``qg`` is registered as a SAME-dtype COMPLEX View of the source slab (see
+    ``cc_alias_view_spec`` / ``descriptors.py``), so the write is a staged
+    read-modify-write on the VIEW element ``qg[i...]`` (the view's linking memlet
+    maps it to the complex source): read the complex value, set its component
+    ``c`` (``c == 1`` real, else imaginary) to the rhs (with any ``qg`` read in
+    the rhs replaced by the CURRENT component ``_cur``), and write it back.  Any
+    OTHER array / scalar reads in the rhs (QE's ``sig * ylmk0(ig,lp) * work``)
+    are wired as ordinary tasklet input connectors -- the same per-occurrence
+    connector machinery ``emit_tasklet`` uses.  Components are read / built with
+    the ``.real()`` / ``.imag()`` methods (collision-proof) and the
+    ``component + 1j*other`` reconstruction; the write-back direction is wired by
+    ``_ensure_view_writeback_link``.
+    """
+    indirect_syms = indirect_syms or {}
+    name = node.target  # the COMPLEX view
+    comp_dim = 0  # the leading (size-2) component dim of qg(2, ...)
+
+    # The qg write access carries the index list ``[component, elem...]``.
+    accesses = node.accesses or []
+    wac = next((a for a in accesses if a.array_name == node.target and not a.is_read), None)
+    if wac is None:
+        raise NotImplementedError(f"complex_component_alias '{node.target}': "
+                                  "assign has no write access to map onto the complex source")
+    qg_exprs = list(wac.index_exprs)
+    comp_expr = rename_iters(qg_exprs[comp_dim], iter_map)
+    elem_exprs = [rename_iters(e, iter_map) for i, e in enumerate(qg_exprs) if i != comp_dim]
+    elem_sub = _cc_elem_subset(name, elem_exprs)
+
+    # rhs: replace bare ``qg`` reads with the CURRENT component ``_cur``.
+    rhs = rename_iters(node.expr, iter_map)
+    rhs = re.sub(rf'\b{re.escape(node.target)}\b', '_cur', rhs)
+
+    # Collect the OTHER reads in the rhs (everything but ``qg`` itself, now
+    # ``_cur``) and wire them like ``emit_tasklet`` does: array occurrences get a
+    # per-occurrence ``_in_<name>_<N>`` connector (its ``[...]`` subscript folded
+    # into the memlet), scalars a single ``_in_<name>``.  The component selector
+    # scalar is folded into this same scalar set so it is wired exactly once.
+    tokens = _ident_tokens(rhs)
+    r_arr = tokens & set(builder.arrays)
+    r_scl = tokens & set(builder.scalars)
+    r_scl -= r_arr
+    _len1_views = {nm for nm in r_arr if _is_len1_scalar_view(builder, nm)}
+    r_arr -= _len1_views
+    r_scl |= _len1_views
+    r_arr.discard(name)
+    r_scl.discard(name)
+    comp_is_scalar = comp_expr in builder.scalars
+    if comp_is_scalar:
+        r_scl.add(comp_expr)
+    comp_ref = f"_in_{comp_expr}" if comp_is_scalar else comp_expr
+
+    reads_by_name = {}
+    for ac in accesses:
+        if ac.is_read and ac.array_name in r_arr:
+            reads_by_name.setdefault(ac.array_name, []).append(ac)
+    occ = {nm: 0 for nm in r_arr}
+    sorted_tokens = sorted(r_arr | r_scl, key=len, reverse=True)
+    rhs_code = _rewrite_read_connectors(rhs, sorted_tokens, r_scl, occ)
+    if "?" in rhs_code:
+        raise NotImplementedError(f"emit_complex_component_assign: unresolved operand placeholder "
+                                  f"``?`` in rhs ``{rhs_code}`` (target={name!r}).")
+
+    in_conns = {'_in_z'} | {f"_in_{sc}" for sc in r_scl}
+    for nm, acs in reads_by_name.items():
+        for i in range(len(acs)):
+            in_conns.add(f"_in_{nm}_{i}")
+    # Read the components with the ``.real()`` / ``.imag()`` METHODS rather than
+    # the ``re()`` / ``im()`` helper functions: a bare ``im`` token in tasklet
+    # code collides with a kernel variable/symbol named ``im`` (QE declares one),
+    # which the reserved-name rewrite renames to ``program_im`` -- turning the
+    # function call into a call on an int.  An attribute access (``_in_z.imag()``)
+    # is immune (it is not a free Name, so no symbol substitution touches it) and
+    # compiles directly on ``std::complex`` / ``thrust::complex`` with no d-face
+    # support needed.
+    code = (f"_cur = ((_in_z).real() if ({comp_ref} == 1) else (_in_z).imag())\n"
+            f"_new = {rhs_code}\n"
+            f"_out_z = (_new + 1j*(_in_z).imag()) if ({comp_ref} == 1) else ((_in_z).real() + 1j*_new)")
+    t = state.add_tasklet(f"cc_{name}_{idx}", in_conns, {'_out_z'}, code)
+
+    rz = acc(builder, state, name)  # COMPLEX view read (installs src -> view link)
+    state.add_edge(rz, None, t, '_in_z', Memlet(f"{name}[{elem_sub}]"))
+    for nm in sorted(reads_by_name):
+        r = acc(builder, state, nm)
+        for i, ac in enumerate(reads_by_name[nm]):
+            eff_nm, eff_ac = resolve_section_alias(builder, nm, ac)
+            ix = build_memlet_index(builder, eff_nm, eff_ac, iter_map, indirect_syms)
+            state.add_edge(r, None, t, f"_in_{nm}_{i}", Memlet(f"{eff_nm}[{ix}]"))
+    for sc in sorted(r_scl):
+        r = acc(builder, state, sc)
+        state.add_edge(r, None, t, f"_in_{sc}", Memlet(data=sc, subset="0"))
+    # Fresh write node so ``view_read -> tasklet -> view_write`` is a clean RMW
+    # chain; ``_ensure_view_writeback_link`` wires the view -> source direction.
+    wz = state.add_access(name)
+    state.add_edge(t, '_out_z', wz, None, Memlet(f"{name}[{elem_sub}]"))
+    _ensure_view_writeback_link(builder, state, wz, name)

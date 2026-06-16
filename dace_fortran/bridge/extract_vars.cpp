@@ -1528,7 +1528,7 @@ void prepareExtractionState(mlir::ModuleOp module,
 // trace can carry the source section into the original->view linking
 // memlet (``access.py``).  Uses only file-scope trace helpers
 // (``traceConstInt`` / ``traceExtentExpr`` / ``traceToDecl``).
-static std::vector<std::string> renderDesignateSubsetStrings(hlfir::DesignateOp sec) {
+std::vector<std::string> renderDesignateSubsetStrings(hlfir::DesignateOp sec) {
   auto triplets = sec.getIsTriplet();
   auto secIdx = sec.getIndices();
   std::vector<std::string> subset;

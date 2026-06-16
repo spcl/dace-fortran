@@ -130,6 +130,50 @@ def resolve_full_dim_markers(view_subset, src_shape):
     return out
 
 
+def cc_alias_view_spec(builder, name: str):
+    """Synthesized COMPLEX-view spec for a complex-as-2-reals component alias.
+
+    The bridge surfaces such a dummy (QE ``qvan2``'s ``REAL(8) :: qg(2, ngy)``
+    bound by sequence association to a ``COMPLEX`` element ``qgm(1, ijh)``) as a
+    ``float`` ``view_alias`` of a ``complex`` source -- a dtype-reinterpret view
+    DaCe cannot express.  Re-cast it as a SAME-dtype COMPLEX view of the source
+    slab the alias actually spans: the leading size-2 component axis (re, im) is
+    DROPPED from the descriptor and handled per-access by the ``re`` / ``im``
+    mask, so the view is plain ``complex`` of ``complex`` -- fully expressible.
+
+    Returns a namespace shaped like a ``view_alias`` VarInfo so the shared
+    view-link code in ``acc`` / ``_ensure_view_writeback_link`` handles it
+    uniformly (mirrors the ``bounds_remap_view`` synthesis), plus the view
+    ``shape`` / complex ``dtype`` / element ``lower_bounds`` the descriptor
+    registration needs.
+
+    The slab subset folds the alias BASE (``view_subset``, the START element of
+    the spanned slice, 0-based) with the element EXTENT (``shape_symbols`` minus
+    the component dim): the leading source dims vary over the element extent (a
+    column-major contiguous slice), the trailing dims stay fixed at the base.
+    ``qgm(1:ngy, ijh)`` -> base ``['0', '(ijh)-1']`` + extent ``['dfftt_ngm']``
+    -> slab ``['0:dfftt_ngm', '(ijh)-1']``.
+    """
+    from types import SimpleNamespace
+    v = builder.complex_component_aliases[name]
+    src_v = builder.arrays.get(v.view_source)
+    base = [str(s) for s in (v.view_subset or [])]
+    elem_ext = [str(s) for s in v.shape_symbols][1:]  # drop the size-2 component dim
+    slab = []
+    for j in range(len(base)):
+        if j < len(elem_ext):
+            slab.append(f"({base[j]}):({base[j]}) + ({elem_ext[j]})")
+        else:
+            slab.append(base[j])
+    return SimpleNamespace(role='view_alias',
+                           view_source=v.view_source,
+                           view_subset=slab,
+                           fortran_name=name,
+                           shape=elem_ext,
+                           dtype=(src_v.dtype if src_v is not None else v.dtype),
+                           lower_bounds=list(v.lower_bounds)[1:])
+
+
 def acc(builder, state, name: str):
     """Single access node for ``name`` in ``state``, reused across reads /
     writes.  Without this, every tasklet in the same state would fabricate
@@ -159,6 +203,12 @@ def acc(builder, state, name: str):
         node = state.add_access(name)
         cache[name] = node
         v = builder.arrays.get(name)
+        # Complex-as-2-reals component alias: re-cast the bridge's invalid
+        # float-of-complex ``view_alias`` as a SAME-dtype COMPLEX view of the
+        # spanned source slab, then fall through to the shared view-link code
+        # (mirrors the ``bounds_remap_view`` synthesis below).
+        if name in getattr(builder, 'complex_component_aliases', {}):
+            v = cc_alias_view_spec(builder, name)
         # ``bounds_remap_view`` (multi-D POINTER remap of a 1D target,
         # e.g. ``p(1:M, 1:K) => arr1d``) needs the same source ->
         # view linking edge the rank-reinterpret ``view_alias`` path

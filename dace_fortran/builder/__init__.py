@@ -506,9 +506,10 @@ def _resolve_entry_symbol(module, entry: str) -> str:
     want_mod, _, want_proc = entry.lower().rpartition("::")
     want_mod = want_mod or None
     funcs = list(module.list_functions())
-    matches = [s for s in funcs
-               if _demangle_fortran_proc(s) == want_proc
-               and (want_mod is None or _module_of_fortran_sym(s) == want_mod)]
+    matches = [
+        s for s in funcs
+        if _demangle_fortran_proc(s) == want_proc and (want_mod is None or _module_of_fortran_sym(s) == want_mod)
+    ]
     if len(matches) == 1:
         return matches[0]
     if not matches:
@@ -694,6 +695,36 @@ class SDFGBuilder:
                                "an inlined-callee scalar dummy whose name matches an outer "
                                "array).  Fix in the disambiguation pass; downstream code "
                                "assumes the three dicts are disjoint.")
+        # Complex-as-2-reals sequence association: a ``REAL(2, N)`` dummy
+        # aliasing a ``COMPLEX`` array element (QE ``qvan2``'s ``qg(2, ngy)``
+        # bound to ``qgm(1, ijh)``).  DaCe cannot express a ``float`` View of a
+        # ``complex`` array (Views alias same-dtype memory; no dtype
+        # reinterpret), so the bridge's ``view_alias`` for it is invalid.
+        # Detect it -- a float-dtype ``view_alias`` whose source is COMPLEX
+        # with exactly one extra (leading, component) dim -- and route it to
+        # the descriptor-less component-access path: NO descriptor, and every
+        # ``qg(c, i...)`` access rewrites to component ``c`` (``re``/``im``) of
+        # the complex source ``z[i...]``.  (``VarInfo.role`` is read-only, so
+        # track these in a side dict instead of re-marking the role.)
+        self.complex_component_aliases: dict = {}
+        _by_name = {v.fortran_name: v for v in self.variables}
+        for _nm, _v in self.arrays.items():
+            if getattr(_v, 'role', '') != 'view_alias':
+                continue
+            _src = _by_name.get(getattr(_v, 'view_source', '') or '')
+            if _src is None:
+                continue
+            # The dummy is a ``REAL`` array whose LEADING dim is the size-2
+            # component axis (re, im) and whose source is COMPLEX.  Its rank
+            # need NOT be source.rank+1: it may alias a SLICE of a higher-rank
+            # source (QE ``qg(2,ngy)`` aliases the column ``qgm(1:ngy, ijh)`` of
+            # a rank-2 ``qgm``).  Key signal: float dtype + complex source +
+            # leading shape symbol ``'2'``.
+            _shp = [str(s) for s in getattr(_v, 'shape_symbols', [])]
+            if str(_v.dtype).startswith(('float', 'real')) \
+                    and str(_src.dtype).startswith('complex') \
+                    and _shp and _shp[0] == '2':
+                self.complex_component_aliases[_nm] = _v
         # Per-axis offset symbols: ``offset_<arr>_d<i>`` is the SDFG
         # symbol every memlet of array ``<arr>`` subtracts on dim ``i``.
         # Populated by ``add_descriptors`` from each VarInfo's

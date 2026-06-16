@@ -208,6 +208,22 @@ def emit_memset(builder, ctx, n, region):
     ms = MemsetLibraryNode(name=f"memset_{tgt_name}_{builder.nid()}")
     state.add_node(ms)
 
+    from dace.data import View
+    if isinstance(tgt_desc, View):
+        # Whole-array zero of a View (e.g. the complex-component alias ``qg = 0``,
+        # which zeros both re/im symmetrically -- no mask needed).  A View write
+        # needs the view -> source direction, NOT ``acc``'s source -> view read
+        # link, so use a fresh write node + ``_ensure_view_writeback_link`` (the
+        # same RMW-write wiring tasklets use).  Memset zeroes the storage span,
+        # which the link maps to the aliased source slab.
+        from dace_fortran.builder.emit_tasklet import _ensure_view_writeback_link
+        view_node = state.add_access(tgt_name)
+        state.add_edge(ms, MemsetLibraryNode.OUTPUT_CONNECTOR_NAME, view_node, None,
+                       Memlet.from_array(tgt_name, tgt_desc))
+        _ensure_view_writeback_link(builder, state, view_node, tgt_name)
+        ctx.new_state(builder, region)
+        return
+
     tgt_access = acc(builder, state, tgt_name)
     state.add_edge(ms, MemsetLibraryNode.OUTPUT_CONNECTOR_NAME, tgt_access, None, Memlet.from_array(tgt_name, tgt_desc))
 
@@ -1160,8 +1176,21 @@ def emit_fft(builder, ctx, n, region):
     # the resulting in+out edge on a single node forms a self-cycle that
     # SDFG validation rejects.  A fresh read + write pair binds to the same
     # underlying array but lets the dataflow stay acyclic.
-    state.add_edge(state.add_read(in_arr), None, node, "_inp", Memlet.from_array(in_arr, in_desc))
-    state.add_edge(node, "_out", state.add_write(out_arr), None, Memlet.from_array(out_arr, out_desc))
+    from dace.data import View
+    from dace_fortran.builder.emit_tasklet import _ensure_view_read_link, _ensure_view_writeback_link
+    in_node = state.add_read(in_arr)
+    state.add_edge(in_node, None, node, "_inp", Memlet.from_array(in_arr, in_desc))
+    out_node = state.add_write(out_arr)
+    state.add_edge(node, "_out", out_node, None, Memlet.from_array(out_arr, out_desc))
+    # A View input / output (e.g. the ``bounds_remap_view`` ``prhoc_d`` flattening
+    # ``rhoc_d(:, col_range)`` for an in-place FFT) needs its source linking
+    # memlet on these fresh nodes -- source -> view for the read, view -> source
+    # for the write -- or ``get_view_edge`` returns None at validation.  Fresh
+    # (un-cached) source nodes on each side keep the in-place dataflow acyclic.
+    if isinstance(in_desc, View):
+        _ensure_view_read_link(builder, state, in_node, in_arr)
+    if isinstance(out_desc, View):
+        _ensure_view_writeback_link(builder, state, out_node, out_arr)
 
 
 def emit_call(builder, ctx, n, region):
@@ -1675,6 +1704,36 @@ def emit_reduce(builder, ctx, n, region):
         state.add_node(node)
         state.add_edge(src_access, None, node, cls.INPUT_CONNECTOR_NAME, Memlet.from_array(src_name, src_desc))
         state.add_edge(node, cls.OUTPUT_CONNECTOR_NAME, tgt_access, None, out_memlet)
+        return
+
+    # Section source (``MINVAL(kmin(iv, :))`` row / ``m(:, j)`` column): reduce a
+    # VIEW of the section instead of the whole parent.  The bridge passes the
+    # section's 0-based per-dim subset in ``options['src_subset']``; build a View
+    # whose shape = the ranged dims' extents and whose strides = the PARENT's
+    # strides for those dims (so a row keeps its column-major stride, a column
+    # stays contiguous), link ``parent[subset] -> view``, and reduce the view.
+    opts = dict(n.options) if n.options else {}
+    src_subset = opts.get("src_subset", "")
+    if src_subset:
+        import dace
+        from dace_fortran.builder.access import resolve_full_dim_markers
+        parts = resolve_full_dim_markers([p.strip() for p in src_subset.split(",")], [str(s) for s in src_desc.shape])
+        view_shape, view_strides = [], []
+        for d, s in enumerate(parts):
+            if ':' in s:
+                lo, hi = s.split(':')[0], s.split(':')[1]
+                view_shape.append(dace.symbolic.pystr_to_symbolic(f"({hi}) - ({lo})"))
+                view_strides.append(src_desc.strides[d])
+        view_name = f"{src_name}_redview_{builder.nid()}"
+        ctx.sdfg.add_view(view_name, view_shape, src_desc.dtype, strides=view_strides or [1])
+        view_desc = ctx.sdfg.arrays[view_name]
+        vnode = state.add_access(view_name)
+        view_full = ", ".join(f"0:{s}" for s in view_shape)
+        state.add_edge(src_access, None, vnode, 'views',
+                       Memlet(data=src_name, subset=", ".join(parts), other_subset=view_full))
+        red = state.add_reduce(n.reduce_wcr, None, identity_val)
+        state.add_edge(vnode, None, red, None, Memlet.from_array(view_name, view_desc))
+        state.add_edge(red, None, tgt_access, None, out_memlet)
         return
 
     red = state.add_reduce(n.reduce_wcr, axes, identity_val)

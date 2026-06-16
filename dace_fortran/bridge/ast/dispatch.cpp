@@ -94,6 +94,14 @@ static ASTNode buildScfIfAsConditional(mlir::scf::IfOp ifOp) {
 // dispatch (definition lives further down the file).  ``traceLB`` and
 // ``traceConstInt`` / ``buildIndexExpr`` come in via ``ast_helpers.h``.
 static std::string traceLoopIter(fir::DoLoopOp loop);
+// Materialise SUM/MINVAL/MAXVAL/PRODUCT reduction sub-terms of a condition into
+// Reduce lib-nodes before the branch (definition further down); forward-declared
+// for the scf.while break-condition walker above its definition.
+static void materialiseCondReductions(mlir::Value condVal,
+                                      std::vector<ASTNode>& nodes);
+// 0-based per-dim DaCe subset strings for a section designate (defined in
+// extract_vars.cpp); used to feed a section-reduction's VIEW source.
+std::vector<std::string> renderDesignateSubsetStrings(hlfir::DesignateOp sec);
 
 std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
   std::vector<ASTNode> out;
@@ -132,6 +140,13 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
   }
   if (pendingCondOp) {
     auto condVal = pendingCondOp.getCondition();
+    // Materialise any SUM/MINVAL/MAXVAL/PRODUCT reduction in the loop condition
+    // into a Reduce lib-node + scalar BEFORE the break-check (pushed into the
+    // BEFORE-region node list so it re-evaluates each iteration); the rendered
+    // condition then reads the bare scalar.  Without this a runtime-extent
+    // ``DO WHILE (MAXVAL(a) > 0)`` falls to the inline-unroll which bails to
+    // ``?`` (constant-extent only).
+    materialiseCondReductions(condVal, out);
     auto b = buildBoolExpr(condVal, 0);
     if (!b.empty() && b != "?") {
       // Does the break condition read array ELEMENTS (e.g. NPB LU ssor
@@ -1411,6 +1426,160 @@ static std::string tryMaterialiseAllAnyCond(mlir::Value condVal,
   return tr;
 }
 
+/// Type-correct reduction identity for a base identity token and element type.
+/// SUM / PRODUCT (``0`` / ``1``) and ALL / ANY (``True`` / ``False``) pass
+/// through.  MINVAL / MAXVAL on a FLOAT element keep ``inf`` / ``-inf`` (DaCe's
+/// cppunparse renders them as ``INFINITY`` / ``-INFINITY`` and sympy parses
+/// ``inf`` as ``oo``); on an INTEGER element they become the width-correct
+/// two's-complement INT_MAX / INT_MIN literal -- ``inf`` cast to int is UB and
+/// breaks at -O0 (integer_reduction_identity_test).  Shared by the array-assign
+/// reduce path (``identityForType``) and the condition-reduction materialiser.
+std::string reductionIdentityForType(llvm::StringRef baseIdent,
+                                     mlir::Type elemTy) {
+  if (baseIdent == "0" || baseIdent == "1" || baseIdent == "True" ||
+      baseIdent == "False")
+    return baseIdent.str();
+  bool isInf = (baseIdent == "inf");
+  bool isNegInf = (baseIdent == "-inf");
+  if (!isInf && !isNegInf) return baseIdent.str();
+  if (auto intTy = mlir::dyn_cast<mlir::IntegerType>(elemTy)) {
+    unsigned w = intTy.getWidth();
+    if (w > 64) return baseIdent.str();
+    int64_t maxVal = (w == 64) ? std::numeric_limits<int64_t>::max()
+                               : ((int64_t(1) << (w - 1)) - 1);
+    int64_t minVal = (w == 64) ? std::numeric_limits<int64_t>::min()
+                               : (-(int64_t(1) << (w - 1)));
+    return std::to_string(isInf ? maxVal : minVal);
+  }
+  return baseIdent.str();
+}
+
+/// Materialise reduction SUB-TERMS (``hlfir.sum`` / ``minval`` / ``maxval`` /
+/// ``product``) of an IF / loop condition into scalar transients via Reduce
+/// LIBRARY NODES emitted before the branch -- "use lib-nodes whenever we can".
+///
+/// For ``IF (SUM((i - i_real) ** 2) > eps6)`` the lowering is:
+///   * the reduction's elemental operand ``(i - i_real) ** 2`` is materialised
+///     to a transient array via element-wise FOR-LOOPS
+///     (``materialiseElementalForLibcall``), and
+///   * the ``SUM`` runs as a ``reduce`` ASTNode (``standard.Reduce`` lib-node)
+///     writing a scalar, so the condition reads ``s > eps6``.
+/// This replaces the old inline-unroll (which dropped per-element subscripts --
+/// Gate G -- and only handled constant extents).  Each materialised reduction
+/// op is registered in ``kCondReductionScalars`` so the condition renderer
+/// (``buildExpr`` / ``buildExprWithSubscripts`` / ``collectReadAccesses``)
+/// substitutes the bare scalar instead of recursing into the reduction.
+/// Walks the whole condition tree so a reduction nested anywhere in the
+/// comparison (``... > MAXVAL(...)``) is caught.  Sources the
+/// ``materialiseElementalForLibcall`` helper can't handle (e.g. a bare
+/// section designate) are left for the inline-unroll fallback.
+static void materialiseCondReductions(mlir::Value condVal,
+                                      std::vector<ASTNode>& nodes) {
+  struct RedSpec {
+    llvm::StringRef op, wcr, identity;
+  };
+  static const RedSpec kTbl[] = {
+      {"hlfir.sum", "lambda a, b: a + b", "0"},
+      {"hlfir.product", "lambda a, b: a * b", "1"},
+      {"hlfir.minval", "lambda a, b: min(a, b)", "inf"},
+      {"hlfir.maxval", "lambda a, b: max(a, b)", "-inf"},
+  };
+  llvm::SmallVector<mlir::Operation*, 8> worklist;
+  llvm::SmallPtrSet<mlir::Operation*, 16> seen;
+  if (auto* d = condVal.getDefiningOp()) {
+    worklist.push_back(d);
+    seen.insert(d);
+  }
+  while (!worklist.empty()) {
+    auto* op = worklist.pop_back_val();
+    auto nm = op->getName().getStringRef();
+    const RedSpec* spec = nullptr;
+    for (auto& e : kTbl)
+      if (nm == e.op) {
+        spec = &e;
+        break;
+      }
+    if (spec && op->getNumOperands() >= 1 &&
+        kCondReductionScalars.find(op) == kCondReductionScalars.end()) {
+      // Resolve the reduction source: an elemental -> materialise it to a
+      // transient via element-wise for-loops; a WHOLE named array -> use it
+      // directly.  A SECTION / sliced source (``MINVAL(kmin(iv, :))``,
+      // ``SUM(w(1:3))``) must reduce the SECTION, not the whole array, but
+      // ``traceToDecl`` would name the whole array (wrong) -- so a
+      // ``hlfir.designate`` source is left to the const-extent inline-unroll
+      // fallback in ``buildExprWithSubscripts`` (a proper section materialiser
+      // is a follow-up).
+      mlir::Value src = op->getOperand(0);
+      auto* srcDef = src.getDefiningOp();
+      std::string srcName;
+      std::string srcSubset;  // non-empty -> reduce a VIEW of this parent section
+      if (srcDef)
+        if (auto elem = mlir::dyn_cast<hlfir::ElementalOp>(srcDef)) {
+          auto [tr, prelude] = materialiseElementalForLibcall(elem);
+          if (!tr.empty()) {
+            for (auto& pn : prelude) nodes.push_back(std::move(pn));
+            srcName = tr;
+          }
+        }
+      // A SECTION / sliced source (``MINVAL(kmin(iv, :))`` -- a row; ``m(:, j)``
+      // -- a column) reduces the SECTION, not the whole array.  Render the
+      // section's 0-based per-dim subset and reduce a VIEW of it (correct row /
+      // column stride + shape) -- emit_reduce synthesises the View from the
+      // parent + this subset.  ``traceToDecl`` on the designate names the parent.
+      if (srcName.empty())
+        if (auto dg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(srcDef)) {
+          auto parts = renderDesignateSubsetStrings(dg);
+          std::string parent = traceToDecl(dg.getMemref());
+          if (!parts.empty() && !parent.empty()) {
+            srcName = parent;
+            for (size_t i = 0; i < parts.size(); ++i)
+              srcSubset += (i ? ", " : "") + parts[i];
+          }
+        }
+      // Whole named array (declare / load, not a designate).
+      if (srcName.empty() &&
+          !(srcDef && mlir::isa<hlfir::DesignateOp>(srcDef)))
+        srcName = traceToDecl(src);
+      if (!srcName.empty()) {
+        mlir::Type elemTy = op->getResult(0).getType();
+        std::string dtype = exprDtypeString(elemTy);
+        std::string ident = reductionIdentityForType(spec->identity, elemTy);
+        std::string sc =
+            "__reduce_cond_" + std::to_string(kSynthTransientCounter++);
+        ASTNode decl;
+        decl.kind = "declare_transient";
+        decl.target = sc;
+        decl.expr = dtype;
+        AccessInfo shp;
+        shp.array_name = sc;
+        shp.index_exprs.push_back("1");
+        decl.accesses.push_back(std::move(shp));
+        nodes.push_back(std::move(decl));
+
+        ASTNode red;
+        red.kind = "reduce";
+        red.target = sc;
+        red.target_is_array = true;
+        red.reduce_src = srcName;
+        red.reduce_wcr = spec->wcr.str();
+        red.reduce_identity = ident;
+        // A section source -> emit_reduce builds a VIEW of ``reduce_src`` over
+        // this 0-based subset (row / column stride + shape) and reduces it.
+        if (!srcSubset.empty()) red.options["src_subset"] = srcSubset;
+        nodes.push_back(std::move(red));
+
+        kCondReductionScalars[op] = sc;
+        // The reduction is fully owned by the reduce node now -- do NOT recurse
+        // into its operands (the elemental is already materialised).
+        continue;
+      }
+    }
+    for (auto operand : op->getOperands())
+      if (auto* od = operand.getDefiningOp())
+        if (seen.insert(od).second) worklist.push_back(od);
+  }
+}
+
 std::vector<ASTNode> buildAST(mlir::Block& block) {
   std::vector<ASTNode> nodes;
 
@@ -2387,42 +2556,12 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
         // ``tests/integer_reduction_identity_test.py``).
         auto identityForType = [&](const RedEntry& entry,
                                    mlir::Type elemTy) -> std::string {
-          // SUM / PRODUCT identities (``0`` / ``1``) are type-
-          // compatible for both int and float -- pass through.
-          if (entry.identity == "0" || entry.identity == "1" ||
-              entry.identity == "True" || entry.identity == "False") {
-            return entry.identity.str();
-          }
-          // MINVAL / MAXVAL: pick the type-correct sentinel.
-          bool isInf = (entry.identity == "inf");
-          bool isNegInf = (entry.identity == "-inf");
-          if (!isInf && !isNegInf) return entry.identity.str();
-          if (auto intTy = mlir::dyn_cast<mlir::IntegerType>(elemTy)) {
-            // Emit the literal min/max value for the integer width.
-            // We use literal integers (not ``std::numeric_limits<>``)
-            // because the builder's ``_parse_reduce_identity``
-            // (emit_library.py:138) round-trips the identity through
-            // Python ``int(s)``: a string of the right literal goes
-            // straight through, while ``std::numeric_limits<>::max()``
-            // forces a separate Python-side parser.  Fortran's INTEGER
-            // KINDs map to MLIR signed integer widths 8/16/32/64;
-            // signed semantics, two's complement min/max.
-            unsigned w = intTy.getWidth();
-            // Two's-complement max = 2^(w-1) - 1, min = -2^(w-1).
-            // ``__int128`` would overflow llvm::APInt construction
-            // from int64; we cap at w == 64 and fall back to the
-            // float identity for wider types (none arise from
-            // Fortran).
-            if (w > 64) return entry.identity.str();
-            int64_t maxVal = (w == 64) ? std::numeric_limits<int64_t>::max()
-                                       : ((int64_t(1) << (w - 1)) - 1);
-            int64_t minVal = (w == 64) ? std::numeric_limits<int64_t>::min()
-                                       : (-(int64_t(1) << (w - 1)));
-            return std::to_string(isInf ? maxVal : minVal);
-          }
-          // Default: float identity (``inf`` / ``-inf``) -- DaCe's
-          // cppunparse maps to ``INFINITY`` / ``-INFINITY``.
-          return entry.identity.str();
+          // Shared with the condition-reduction materialiser: SUM / PRODUCT /
+          // ALL / ANY identities pass through; MINVAL / MAXVAL pick the
+          // type-correct sentinel (float ``inf`` -> cppunparse INFINITY;
+          // integer -> width-correct INT_MAX / INT_MIN literal, since ``inf``
+          // cast to int is UB at -O0).
+          return reductionIdentityForType(entry.identity, elemTy);
         };
         // Compute the reduction's element type once; ``sd`` is the
         // hlfir.minval / maxval / sum / ... op.  Its result type is
@@ -2549,6 +2688,11 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       // ``IF (ALL(mask))`` / ``IF (ANY(mask))`` -- materialise the
       // reduction into a boolean scalar (via AllNode/AnyNode) and read
       // it, instead of inlining the section into the condition tasklet.
+      // Materialise SUM / MINVAL / MAXVAL / PRODUCT reduction sub-terms of the
+      // condition into scalar transients via Reduce lib-nodes BEFORE the branch
+      // (elemental operands -> for-loops); the rendered condition reads the
+      // scalars (``s > eps``) instead of inline-unrolling the reduction.
+      materialiseCondReductions(ifOp.getCondition(), nodes);
       std::string allanyScalar =
           tryMaterialiseAllAnyCond(ifOp.getCondition(), nodes);
       if (!allanyScalar.empty()) {
@@ -2578,6 +2722,11 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
     if (auto ifOp = mlir::dyn_cast<mlir::scf::IfOp>(op)) {
       ASTNode n;
       n.kind = "conditional";
+      // Materialise SUM / MINVAL / MAXVAL / PRODUCT reduction sub-terms of the
+      // condition into scalar transients via Reduce lib-nodes BEFORE the branch
+      // (elemental operands -> for-loops); the rendered condition reads the
+      // scalars (``s > eps``) instead of inline-unrolling the reduction.
+      materialiseCondReductions(ifOp.getCondition(), nodes);
       std::string allanyScalar =
           tryMaterialiseAllAnyCond(ifOp.getCondition(), nodes);
       if (!allanyScalar.empty()) {
@@ -2787,6 +2936,21 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       a.target = target;
       a.expr = expr;
       a.target_is_array = false;
+      // Collect the stored value's array-element reads for a value-by-reference
+      // associate store (``call f(x(k,1) / nq, ...)`` -> ``RewriteSequence
+      // Association`` / ``ExpandVectorSubscriptGather`` synthesise a
+      // ``__assoc_scalar`` alloca + ``fir.store %val`` reaching here).  When
+      // ``%val`` reads an array ELEMENT (esp. an allocatable, ``x(k,1)``),
+      // ``buildExpr`` renders the BARE parent name by design -- the subscript is
+      // supplied by the AccessInfo + ``emit_tasklet``'s per-occurrence connector
+      // wiring.  Without these reads the assign looks scalar and the element
+      // leaks as a bare ``x`` pointer (QE ``paw_newdxx`` Gate H) / an unwired
+      // ``_in_x_0`` free symbol.  SCOPED to the ``__assoc_scalar`` synthesised
+      // target so it doesn't perturb other top-level stores (e.g. the
+      // ``prhoc_d`` reshaping pointer-rebind, whose value-collect would mint a
+      // malformed multi-dim ``rhoc_d`` subset).
+      if (target.find("assoc_scalar") != std::string::npos)
+        collectReadAccesses(st.getValue(), a.accesses, 0);
       nodes.push_back(std::move(a));
       continue;
     }
@@ -2808,6 +2972,7 @@ std::vector<ASTNode> extractAST(mlir::ModuleOp module,
   kAllocaCounter = 0;
   kAllocaMap.clear();
   kHlfirExprToTransient.clear();
+  kCondReductionScalars.clear();
   kLibTmpCounter = 0;
   kPosSymbolRegistry.clear();
   kSynthTransientCounter = 0;

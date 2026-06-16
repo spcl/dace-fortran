@@ -86,6 +86,17 @@ inline thread_local llvm::DenseMap<mlir::Operation *, std::string> kAllocaMap;
 inline thread_local std::map<mlir::Operation *, std::string>
     kHlfirExprToTransient;
 
+/// Map from a reduction op (``hlfir.sum`` / ``minval`` / ``maxval`` /
+/// ``product``) appearing in an IF / loop CONDITION to the scalar transient its
+/// result was materialised into -- a Reduce LIBRARY NODE emitted before the
+/// branch (operand elemental(s) materialised to a transient via for-loops
+/// first).  ``buildExpr`` / ``buildExprWithSubscripts`` / ``collectReadAccesses``
+/// consult this so the condition reads the bare scalar (``s > eps``) instead of
+/// inline-unrolling the reduction into the condition expression.  See
+/// ``materialiseCondReductions`` in dispatch.cpp.
+inline thread_local std::map<mlir::Operation *, std::string>
+    kCondReductionScalars;
+
 /// Position-array registry: ``__sym_<arr>_<i1>_<i2>...`` symbol minted by
 /// ``buildIndexExpr`` / the extent resolver for each ``arr(consts)`` it
 /// sees used as an array index, section bound, or shape extent.  Keyed by

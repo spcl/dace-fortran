@@ -22,7 +22,7 @@ from dace_fortran.builder.access import (
 )
 from dace_fortran.builder.context import _Ctx
 from dace_fortran.builder.descriptors import auto_declare_synth
-from dace_fortran.builder.emit_tasklet import assign_reads_array, emit_tasklet
+from dace_fortran.builder.emit_tasklet import assign_reads_array, emit_complex_component_assign, emit_tasklet
 
 _DACE_CAST_RE = re.compile(r"dace\.(?:int32|int64|float32|float64)\(")
 
@@ -179,6 +179,16 @@ def emit_assign(builder, ctx: '_Ctx', n, region):
         dst = region.add_state(f"post_{n.target}_{builder.nid()}")
         region.add_edge(ctx.cur, dst, InterstateEdge(assignments={n.target: rhs}))
         ctx.cur = dst
+        return
+    if n.target in getattr(builder, 'complex_component_aliases', {}):
+        # Complex-as-2-reals component alias write (``qg(c, i) = ...``): a
+        # staged read-modify-write on the complex source's element, setting
+        # component ``c`` (re/im).  No descriptor / no View -- handled wholly
+        # in a tasklet with ``re()`` / ``im()``.
+        from dace_fortran.builder.emit_tasklet import emit_complex_component_assign
+        ctx.flush(builder, region)
+        ctx.ensure(region)
+        emit_complex_component_assign(builder, ctx.cur, n, builder.nid(), ctx.iter_map)
         return
     if n.target_is_array or assign_reads_array(n, builder.arrays):
         ctx.flush(builder, region)
@@ -672,18 +682,26 @@ def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
         else:
             body = loop.add_state('body')
 
+        def _emit_one(st, a, i):
+            # A complex-as-2-reals component-alias write (``qg(c,i)=...``) is a
+            # staged re/im RMW on the complex source, not a normal tasklet.
+            if a.target in getattr(builder, 'complex_component_aliases', {}):
+                emit_complex_component_assign(builder, st, a, i, iter_map, indirect_syms)
+            else:
+                emit_tasklet(builder, st, a, i, iter_map, indirect_syms)
+
         if not serialise:
             for idx, a in enumerate(compute_assigns):
-                emit_tasklet(builder, body, a, idx, iter_map, indirect_syms)
+                _emit_one(body, a, idx)
         else:
             prev = body
             for idx, a in enumerate(compute_assigns):
                 if idx == 0:
-                    emit_tasklet(builder, prev, a, idx, iter_map, indirect_syms)
+                    _emit_one(prev, a, idx)
                     continue
                 nxt = loop.add_state(f"body_{builder.nid()}")
                 loop.add_edge(prev, nxt, InterstateEdge())
-                emit_tasklet(builder, nxt, a, idx, iter_map, indirect_syms)
+                _emit_one(nxt, a, idx)
                 prev = nxt
 
 
@@ -704,14 +722,19 @@ def _stage_cond_scalar(builder, ctx, region, pre, sym, cond, cond_accesses):
         ctx.sdfg.add_scalar(sym, dace.int64, transient=True, find_new_name=False)
     builder.scalars.setdefault(
         sym,
-        SimpleNamespace(fortran_name=sym, intent='', dtype='int64', rank=0,
-                        is_dynamic=False, role='scalar', shape_symbols=[], lower_bounds=[]))
+        SimpleNamespace(fortran_name=sym,
+                        intent='',
+                        dtype='int64',
+                        rank=0,
+                        is_dynamic=False,
+                        role='scalar',
+                        shape_symbols=[],
+                        lower_bounds=[]))
     pre = _anchor_views_referenced_in_expr(builder, cond, region, pre, ctx.sdfg)
     nxt = region.add_state(f"pre_{sym}")
     region.add_edge(pre, nxt, InterstateEdge())
     ctx.cur = nxt
-    synth = SimpleNamespace(kind='assign', target=sym, expr=cond,
-                            target_is_array=False, accesses=cond_accesses)
+    synth = SimpleNamespace(kind='assign', target=sym, expr=cond, target_is_array=False, accesses=cond_accesses)
     emit_tasklet(builder, nxt, synth, builder.nid(), ctx.iter_map)
     return nxt, sym
 
@@ -751,8 +774,7 @@ def emit_while(builder, ctx: '_Ctx', n, region):
                 continue
             seen_acc.add(key)
             cond_accesses.append(ac)
-    cond_array_reads = [ac for ac in cond_accesses
-                        if ac.is_read and ac.array_name in builder.arrays]
+    cond_array_reads = [ac for ac in cond_accesses if ac.is_read and ac.array_name in builder.arrays]
     will_lift = bool(cond_array_reads)
     if will_lift:
         from collections import Counter
@@ -763,8 +785,7 @@ def emit_while(builder, ctx: '_Ctx', n, region):
         access_count = Counter()
         for ac in cond_array_reads:
             access_count[ac.array_name] += 1
-        mismatched = any(text_occ[k] != access_count[k]
-                         for k in set(text_occ) | set(access_count))
+        mismatched = any(text_occ[k] != access_count[k] for k in set(text_occ) | set(access_count))
         if mismatched:
             will_lift = False
     if not will_lift:
@@ -821,8 +842,7 @@ def emit_cond(builder, ctx: '_Ctx', n, region):
     # leak through as ``_in_<nm>[0]`` and fail validation as a
     # subscript-on-scalar (the IndexError that surfaced
     # test_sqrt_in_if / test_exp_in_if).
-    will_lift = bool(n.accesses) and any(
-        ac.is_read and ac.array_name in builder.arrays for ac in n.accesses)
+    will_lift = bool(n.accesses) and any(ac.is_read and ac.array_name in builder.arrays for ac in n.accesses)
     if not will_lift:
         for nm, v in builder.scalars.items():
             if v.intent in ('out', 'inout'):
@@ -866,8 +886,7 @@ def emit_cond(builder, ctx: '_Ctx', n, region):
                     continue
                 seen_acc.add(key)
                 cond_accesses.append(ac)
-        cond_array_reads = [ac for ac in cond_accesses
-                             if ac.is_read and ac.array_name in builder.arrays]
+        cond_array_reads = [ac for ac in cond_accesses if ac.is_read and ac.array_name in builder.arrays]
         # Only lift via the tasklet path when accesses can be matched
         # 1:1 to text occurrences -- otherwise we mint connectors that
         # the rewritten code references but the access list can't
@@ -886,8 +905,7 @@ def emit_cond(builder, ctx: '_Ctx', n, region):
             access_count = Counter()
             for ac in cond_array_reads:
                 access_count[ac.array_name] += 1
-            mismatched = any(text_occ[k] != access_count[k]
-                              for k in set(text_occ) | set(access_count))
+            mismatched = any(text_occ[k] != access_count[k] for k in set(text_occ) | set(access_count))
             if mismatched:
                 cond_array_reads = []  # fall through to legacy path
         if cond_array_reads:

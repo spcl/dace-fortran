@@ -436,6 +436,11 @@ void collectReadAccesses(mlir::Value v, std::vector<AccessInfo> &accesses,
   if (depth > 40) return;
   auto *op = v.getDefiningOp();
   if (!op) return;
+  // A reduction materialised into a scalar by ``materialiseCondReductions`` is
+  // owned by its Reduce lib-node; its source array reads belong to that node,
+  // NOT the condition.  Skip it -- the condition reads the bare scalar transient
+  // (added separately as a register read by the materialiser's reduce node).
+  if (kCondReductionScalars.find(op) != kCondReductionScalars.end()) return;
   if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(op)) {
     auto [arr, dims] = expandDesignateChain(dg);
     AccessInfo ra;

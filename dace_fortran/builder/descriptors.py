@@ -222,6 +222,32 @@ def add_descriptors(builder, sdfg: SDFG):
     for v in builder.arrays.values():
         if _is_flang_internal(v.fortran_name) or _is_char_literal(v.dtype):
             continue
+        if v.fortran_name in getattr(builder, 'complex_component_aliases', {}):
+            # Complex-as-2-reals component alias (``REAL(2,N)`` dummy bound to a
+            # ``COMPLEX`` element, QE ``qvan2``'s ``qg(2, ngy)`` <- ``qgm(1,
+            # ijh)``).  Register it as a SAME-dtype COMPLEX View of the source
+            # slab: the leading size-2 component axis is dropped from the
+            # descriptor (handled per-access by the ``re``/``im`` mask), so the
+            # view is plain ``complex`` of ``complex`` -- expressible, unlike the
+            # bridge's invalid float-of-complex view.  The source->view linking
+            # memlet (``acc`` / ``_ensure_view_writeback_link``) carries the
+            # slab; ``qg(c, i)`` lowers to ``re/im(qg[i-1])`` in emit.
+            from dace_fortran.builder.access import cc_alias_view_spec
+            spec = cc_alias_view_spec(builder, v.fortran_name)
+            vdims = [_dim(s) for s in spec.shape]
+            sdfg.add_view(
+                v.fortran_name,
+                shape=vdims,
+                dtype=dt(spec.dtype),
+                strides=_fortran_strides(vdims) if len(vdims) > 1 else [1],
+            )
+            for d in range(len(vdims)):
+                sym_name = f"offset_{v.fortran_name}_d{d}"
+                if sym_name not in sdfg.symbols:
+                    sdfg.add_symbol(sym_name, dace.int64)
+                lb = spec.lower_bounds[d] if d < len(spec.lower_bounds) else "1"
+                builder.offset_values[sym_name] = _offset_value(lb)
+            continue
         if v.role == 'section_alias':
             # Trivial section slice  --  no SDFG descriptor, no offset
             # symbols.  Accesses through the inlined-body dummy rewrite
