@@ -4,6 +4,9 @@ single/default REAL literal -> double-precision promotion, and the
 OpenMP / OpenACC sentinel + ``#ifdef`` block strip.
 """
 
+import re
+from pathlib import Path
+
 from dace_fortran.preprocess import (
     merge_used_modules,
     normalize_kind_parameters,
@@ -401,6 +404,97 @@ def test_merge_passthrough_for_self_contained_source(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# merge_engine selector -- regex (default) vs the fparser AST inliner
+# ---------------------------------------------------------------------------
+
+
+def _gfortran_compiles(text: str) -> bool:
+    import shutil
+    import subprocess
+    from tempfile import TemporaryDirectory
+    if not shutil.which("gfortran"):
+        import pytest
+        pytest.skip("gfortran not on PATH")
+    with TemporaryDirectory() as td:
+        f = Path(td) / "m.f90"
+        f.write_text(text)
+        r = subprocess.run(["gfortran", "-shared", "-fPIC", "-ffree-line-length-none", "-c",
+                            str(f)],
+                           cwd=td,
+                           capture_output=True)
+        if r.returncode:
+            print(r.stderr.decode())
+        return r.returncode == 0
+
+
+def _two_module_project(tmp_path):
+    """A driver module that ``USE``s a helper module across files -- the shape
+    that needs a real merge (regex splice or fparser inline)."""
+    (tmp_path / "helper.f90").write_text("module helper\n"
+                                         "  implicit none\n"
+                                         "contains\n"
+                                         "  real function dbl(x)\n"
+                                         "    real, intent(in) :: x\n"
+                                         "    dbl = 2.0 * x\n"
+                                         "  end function dbl\n"
+                                         "end module helper\n")
+    driver = ("module drv\n"
+              "  use helper, only: dbl\n"
+              "  implicit none\n"
+              "contains\n"
+              "  subroutine run(a)\n"
+              "    real, intent(inout) :: a\n"
+              "    a = dbl(a)\n"
+              "  end subroutine run\n"
+              "end module drv\n")
+    return driver
+
+
+def test_merge_engine_fparser_produces_compilable_single_tu(tmp_path):
+    """``merge_engine='fparser'`` inlines the helper module and the result is a
+    single, self-contained, compilable translation unit."""
+    driver = _two_module_project(tmp_path)
+    out = preprocess_fortran_source(driver, search_dirs=[tmp_path], merge_engine="fparser")
+    assert "FUNCTION dbl" in out
+    assert "SUBROUTINE run" in out
+    assert _gfortran_compiles(out)
+
+
+def test_merge_engine_regex_and_fparser_both_compile(tmp_path):
+    """Both engines turn the multi-file project into one compilable TU."""
+    driver = _two_module_project(tmp_path)
+    rgx = preprocess_fortran_source(driver, search_dirs=[tmp_path], merge_engine="regex")
+    fps = preprocess_fortran_source(driver, search_dirs=[tmp_path], merge_engine="fparser")
+    assert _gfortran_compiles(rgx)
+    assert _gfortran_compiles(fps)
+
+
+def test_merge_engine_fparser_resolves_intrinsic_and_strips_stub(tmp_path):
+    """The fparser engine resolves ``USE iso_c_binding`` from a built-in stub
+    while parsing, but the stub module is not emitted (the compiler ships its
+    own), so ``REAL(c_double)`` lowers to ``REAL(KIND=8)``."""
+    src = ("subroutine k(a)\n"
+           "  use iso_c_binding, only: c_double\n"
+           "  implicit none\n"
+           "  real(c_double), intent(inout) :: a\n"
+           "  a = a * 2.0_c_double\n"
+           "end subroutine\n")
+    out = preprocess_fortran_source(src, search_dirs=[tmp_path], merge_engine="fparser")
+    # The stub module is not emitted; the ``USE iso_c_binding`` is kept so the
+    # compiler's own intrinsic module resolves ``c_double``.  The single TU
+    # compiles without a colliding stub definition.
+    assert "MODULE ISO_C_BINDING" not in out.upper()
+    assert _gfortran_compiles(out)
+
+
+def test_merge_engine_invalid_raises(tmp_path):
+    """An unknown ``merge_engine`` is a clear error."""
+    import pytest
+    with pytest.raises(ValueError, match="merge_engine"):
+        preprocess_fortran_source("subroutine k\nend subroutine\n", search_dirs=[tmp_path], merge_engine="bogus")
+
+
+# ---------------------------------------------------------------------------
 # normalize_kind_parameters
 # ---------------------------------------------------------------------------
 
@@ -564,11 +658,18 @@ def test_preprocess_fortran_source_threads_kind_options(tmp_path):
     """The end-to-end composition forwards ``kind_map`` and
     ``kind_passthrough`` to the kind-normalisation stage."""
     src = "subroutine k(x)\n  real(KIND=wp) :: x\n  x = 1.0_wp\nend subroutine\n"
+
+    # The fparser merge re-emits the source, normalising ``KIND=wp`` to
+    # ``KIND = wp`` (spaces around ``=``); match whitespace-insensitively so
+    # the assertion checks the kind value, not the emitter's spacing.
+    def _kind(out):
+        return re.sub(r"\s+", "", out)
+
     # Default: substitutes.
-    assert "KIND=8" in preprocess_fortran_source(src, search_dirs=[tmp_path])
+    assert "KIND=8" in _kind(preprocess_fortran_source(src, search_dirs=[tmp_path]))
     # Override: fp32.
     out_fp32 = preprocess_fortran_source(src, search_dirs=[tmp_path], kind_map={"wp": 4})
-    assert "KIND=4" in out_fp32
+    assert "KIND=4" in _kind(out_fp32)
     # Passthrough: source untouched (except OpenMP strip, which is a
     # no-op here, and the integer-power rewrite, also a no-op here).
-    assert "KIND=wp" in preprocess_fortran_source(src, search_dirs=[tmp_path], kind_passthrough=True)
+    assert "KIND=wp" in _kind(preprocess_fortran_source(src, search_dirs=[tmp_path], kind_passthrough=True))

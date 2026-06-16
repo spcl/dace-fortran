@@ -82,11 +82,13 @@ def _write(tmp: Path, **named) -> list:
     return out
 
 
-def test_two_files_driver_plus_module(tmp_path: Path):
-    """Driver + one ``USE``-d module, files given out of order."""
+@pytest.mark.parametrize("merge_engine", ["fparser", "regex"])
+def test_two_files_driver_plus_module(tmp_path: Path, merge_engine):
+    """Driver + one ``USE``-d module, files given out of order (both engines)."""
     files = _write(tmp_path / "src", driver=_DRIVER, mod_add=_MOD_ADD)
     sdfg = build_sdfg_from_files(list(reversed(files)), entry="run",
-                                 name="run", out_dir=tmp_path / "b")
+                                 name="run", out_dir=tmp_path / "b",
+                                 merge_engine=merge_engine)
     n = 16
     rng = np.random.default_rng(0)
     x = np.asfortranarray(rng.random(n))
@@ -96,12 +98,14 @@ def test_two_files_driver_plus_module(tmp_path: Path):
     np.testing.assert_allclose(z, x + y, rtol=1e-12, atol=1e-12)
 
 
-def test_three_files_transitive_use(tmp_path: Path):
-    """Driver USEs mod_scale which USEs mod_add -> transitive inline."""
+@pytest.mark.parametrize("merge_engine", ["fparser", "regex"])
+def test_three_files_transitive_use(tmp_path: Path, merge_engine):
+    """Driver USEs mod_scale which USEs mod_add -> transitive inline (both engines)."""
     files = _write(tmp_path / "src", mod_add=_MOD_ADD, mod_scale=_MOD_SCALE,
                    driver=_DRIVER_CHAIN)
     sdfg = build_sdfg_from_files(files, entry="run_chain",
-                                 name="run_chain", out_dir=tmp_path / "b")
+                                 name="run_chain", out_dir=tmp_path / "b",
+                                 merge_engine=merge_engine)
     n = 8
     rng = np.random.default_rng(1)
     x = np.asfortranarray(rng.random(n))

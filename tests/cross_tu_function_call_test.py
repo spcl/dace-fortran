@@ -53,17 +53,21 @@ end subroutine apply_clamp
 """
 
 
-def test_cross_tu_function_result_inlines(tmp_path: Path):
+@pytest.mark.parametrize("merge_engine", ["fparser", "regex"])
+def test_cross_tu_function_result_inlines(tmp_path: Path, merge_engine):
     """``nb = clamp_to(nproma, 4)`` with ``clamp_to`` in another module: the
     callee inlines (to ``min``) when both TUs are merged, the SDFG builds, and
-    the result matches the reference for nproma above and below the clamp."""
+    the result matches the reference for nproma above and below the clamp.
+
+    Run with both ``USE``-merge engines (fparser default + legacy regex)."""
     caller = tmp_path / "apply_clamp.f90"
     caller.write_text(_CALLER)
     helper = tmp_path / "mo_clamp.f90"
     helper.write_text(_HELPER)
 
     sdfg = build_sdfg_from_files([caller, helper], entry="apply_clamp",
-                                 name="apply_clamp", out_dir=tmp_path / "build")
+                                 name="apply_clamp", out_dir=tmp_path / "build",
+                                 merge_engine=merge_engine)
 
     for nproma in (2, 6):  # below and above the clamp of 4
         x = np.arange(1, 9, dtype=np.float64)
