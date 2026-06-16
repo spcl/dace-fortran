@@ -88,12 +88,6 @@ def _compile_reference(out_dir: Path) -> ctypes.CDLL:
 
 
 @pytest.mark.long
-@pytest.mark.xfail(strict=False,
-                   reason=("AES graupel multi-file build currently fails at SDFG "
-                           "validation with an InvalidSDFGEdgeError (memlet "
-                           "dim mismatch); test_aes_graupel_build.py pins the "
-                           "build gate.  This e2e harness auto-flips to passing "
-                           "once the build closes."))
 def test_aes_graupel_e2e_numerical(tmp_path):
     """``graupel_run`` reference vs SDFG: element-wise compare of
     every INOUT prognostic + every OUT diagnostic for seeded random

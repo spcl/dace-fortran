@@ -892,8 +892,14 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
            buildExprWithSubscripts(def->getOperand(1), d + 1) + ")";
   }
 
-  // Fall through to the plain expression builder for anything else
-  // (constants, math intrinsics, ...).
+  // GENERIC fall-through: render any other op (min / max / abs / select /
+  // unhandled intrinsic / ...) via ``buildExpr`` BUT with ``kForceSubscripts``
+  // set, so its element-read leaves keep their subscripts.  This is the single
+  // source of truth that retires the per-op subscript handlers above and the
+  // whole "bare array pointer in a condition" class of bug -- ``buildExpr``
+  // already knows how to spell every op; the only thing it would otherwise get
+  // wrong in a condition context is stripping the leaf subscript.
+  ForceSubscriptsGuard _force;
   return buildExpr(val, d + 1);
 }
 

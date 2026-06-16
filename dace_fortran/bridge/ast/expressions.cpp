@@ -1688,7 +1688,40 @@ std::string buildExpr(mlir::Value val, int d) {
     // ``g`` instead of ``g_c`` for ``g % c`` scalar reads --
     // leaking ``g`` as a free symbol into the generated tasklet.
     auto n = traceToDecl(mem);
-    if (!n.empty()) return n;
+    if (!n.empty()) {
+      // CONDITION / interstate-edge context (``buildExprWithSubscripts``
+      // sets ``kForceSubscripts`` for its generic fall-through): render the
+      // element's 0-based subscript inline instead of the bare name.  Mirrors
+      // ``buildExprWithSubscripts``'s own load-of-designate handler so that any
+      // op it doesn't special-case still lands here with subscripts intact.
+      if (kForceSubscripts) {
+        mlir::Value mm = mem;
+        for (int i = 0; i < 128 && mm; ++i) {
+          auto *md = mm.getDefiningOp();
+          if (auto cv = mlir::dyn_cast_or_null<fir::ConvertOp>(md)) {
+            mm = cv.getValue();
+            continue;
+          }
+          break;
+        }
+        if (auto *md = mm.getDefiningOp())
+          if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(md)) {
+            auto arr = traceToDecl(dg.getResult());
+            auto idxs = dg.getIndices();
+            if (!arr.empty() && !idxs.empty()) {
+              std::string s = arr + "[";
+              bool first = true;
+              for (auto idx : idxs) {
+                if (!first) s += ", ";
+                s += "(" + buildIndexExpr(idx, d + 1) + ") - 1";
+                first = false;
+              }
+              return s + "]";
+            }
+          }
+      }
+      return n;
+    }
     // Bare fir.alloca without a hlfir.declare  --  mint a synthetic
     // scalar name.  Flang uses these as scratch counters for
     // lift-cf-to-scf's lowered DO / DO-WHILE / DO+EXIT shapes.

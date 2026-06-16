@@ -141,6 +141,24 @@ struct NoSubscriptGuard {
   ~NoSubscriptGuard() { kBoolExprNoSubscripts = prev; }
 };
 
+/// When true, ``buildExpr``'s element-read LEAF renders the explicit 0-based
+/// subscript (``q_x_1[(iqx)-1, (iv)-1, (k)-1]``) instead of the bare name.
+/// The bare form is correct only inside a TASKLET (the subscript rides on the
+/// memlet); a CONDITION / interstate-edge expression must carry the subscript
+/// inline.  ``buildExprWithSubscripts`` sets this for its generic fall-through
+/// so that ANY op it doesn't special-case (min/max/pow/...) still keeps its
+/// operands' subscripts -- the single source of truth that retires the
+/// per-op subscript handlers and the "bare pointer in a condition" class of
+/// bug (graupel ``MAX(q%x,...) > qmin`` / ``qc > qmin``).
+inline thread_local bool kForceSubscripts = false;
+
+/// RAII guard scoping ``kForceSubscripts = true`` (see above).
+struct ForceSubscriptsGuard {
+  bool prev;
+  ForceSubscriptsGuard() : prev(kForceSubscripts) { kForceSubscripts = true; }
+  ~ForceSubscriptsGuard() { kForceSubscripts = prev; }
+};
+
 /// When true, suppress the ``dace.float32(...)`` wrap around f32
 /// constants and f32->f64 converts.  Set inside ``buildBoolExpr`` /
 /// ``buildExprWithSubscripts`` -- the resulting string lands in an
