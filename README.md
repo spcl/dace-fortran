@@ -60,7 +60,7 @@ nothing to rewrite and returns the input verbatim.
 
 | Pass | Default | What it does | When you need it |
 |---|---|---|---|
-| `merge_used_modules` | on | Inlines every externally-`USE`-d module's source so flang sees one self-contained TU. | Multi-file projects with module dependencies. |
+| `merge_used_modules` | on | Inlines every externally-`USE`-d module's source so flang sees one self-contained TU. Default **regex** text-splice; an **fparser** AST engine is available via `merge_engine="fparser"` (see [fparser module inliner](#fparser-module-inliner-opt-in-single-tu-tool)). | Multi-file projects with module dependencies. |
 | `strip_openmp_directives` | on | Drops `!$OMP` / `!$ACC` / `!$` sentinels, the ICON `#include "omp_definitions.inc"`, and `#ifdef _OPENMP` / `_OPENACC` blocks. | Any accelerator-annotated legacy code. |
 | `normalize_kind_parameters` | on | Substitutes precision aliases (`wp`, `sp`, `dp`, `qp`) with literal kind integers when the alias isn't locally bound. | Sources that `USE` a constants module the bridge can't compile alongside. |
 | `rewrite_integer_powers` | on | Expands integer-valued REAL-literal powers (`x**2.0` -> `(x*x)`). | Removes a backend-dependent `pow(x, 2.0)` vs `x*x` rounding difference against the gfortran reference. |
@@ -69,6 +69,58 @@ nothing to rewrite and returns the input verbatim.
 | `preprocess_fortran` (IF-intvar) | opt-in | Rewrites `IF (intvar)` -> `IF (intvar /= 0)` for INTEGER scalars. | Legacy code that uses integer guards (flang-new-21 only accepts LOGICAL). |
 
 Each pass is importable standalone from `dace_fortran.preprocess`. For build-system integration via a CLI, see [Build-system integration](#build-system-integration).
+
+### fparser module inliner (opt-in single-TU tool)
+
+`dace_fortran.fparser_inliner` is an **fparser AST** alternative to the regex
+`merge_used_modules` text-splicer. Instead of splicing whole `MODULE … END
+MODULE` blocks verbatim, it parses the whole project into one fparser AST,
+resolves every `USE` / `ONLY:` / `=>` rename, **prunes to what the entry point
+reaches**, **consolidates** the surviving `USE` clauses, runs the desugaring
+pipeline (deconstruct ASSOCIATE / GOTO / procedure-calls / statement-functions,
+remove interfaces), and re-emits one self-contained `.f90`. It is a faithful
+port of the upstream DaCe Fortran-frontend tooling (the `ast_desugaring`
+package + `create_preprocessed_ast`), restricted to its source-text product —
+the SDFG-construction path is **not** vendored (dace-fortran has its own HLFIR
+builder for that step). Modules can survive the merge (it prunes-to-used and
+consolidates; it does *not* blindly drop every module). Every `USE`-d module
+must be resolvable: an unresolved external module is an inlining error (there is
+no keep-external mode), and the standard intrinsic modules (`iso_c_binding`,
+`iso_fortran_env`, …) are resolved from built-in stubs that are stripped from
+the output (flang supplies the real ones).
+
+```python
+from dace_fortran.fparser_inliner import inline_to_single_tu, inline_to_ast
+
+# Emit ONE combined .f90 and return its path.
+out = inline_to_single_tu(
+    {"mo_kind.f90": kind_src, "lib.f90": lib_src, "driver.f90": driver_src},
+    "run",                       # plain name, module::proc, or mangled _Q... symbol
+    out_dir="build", name="merged",
+)
+single_tu = out.read_text()      # self-contained; feed straight to build_sdfg
+
+# Or inspect / further-transform the combined fparser AST before serialising.
+ast = inline_to_ast([pathlib.Path("driver.f90"), pathlib.Path("lib.f90")], "run")
+text = ast.tofortran()
+```
+
+CLI:
+
+```bash
+python -m dace_fortran.fparser_inliner -i src/ -k module::proc -o merged.f90
+# or route the preprocess CLI through it:
+python -m dace_fortran.preprocess_cli --in driver.f90 --search-dir src/ \
+    --merge-modules --merge-engine fparser --merge-entry module::proc --out merged.f90
+```
+
+The fparser engine is a source *transformer* (it re-emits the Fortran), not a
+transparent splice. Because it resolves symbols through its own alias map it
+drops inter-module `USE` statements as redundant — correct for its native
+AST→SDFG path, but a real compiler needs them for legal scoping — so the
+inliner restores `USE <mod>, ONLY: <proc>` for every surviving cross-module
+procedure call (`restore_cross_module_uses`) before serialising, guaranteeing
+the output is valid, single-file-compilable Fortran. `requires fparser>0.2`.
 
 ## QE end-to-end example -- `ast_v1_vexx_bp_k_gpu.f90`
 
