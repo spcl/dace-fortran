@@ -1,0 +1,962 @@
+# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+"""fparser-based single-TU module inliner (opt-in alternative to the
+regex ``merge_used_modules`` text-splicer).
+
+This is a faithful port of the upstream DaCe Fortran-frontend tooling
+(``create_preprocessed_ast.py`` + the ``ast_desugaring`` package),
+restricted to its **source-text** product: it parses a multi-file
+Fortran project into one combined fparser AST, resolves ``USE``
+statements and inlines the needed modules, prunes everything not
+reachable from the requested entry point, runs the desugaring /
+optimization pipeline, and serialises the result back to a single
+self-contained ``.f90`` file.
+
+Upstream entry-point map (what the windmill tooling produces):
+
+- ``tools/create_preprocessed_ast.py`` -> a preprocessed single
+  ``.f90`` written from ``run_fparser_transformations(...).tofortran()``.
+- ``tools/create_singular_sdfg_from_ast.py`` -> an SDFG (NOT ported
+  here: that is the windmill SDFG-construction path, out of scope for a
+  source-text single-TU producer; dace-fortran has its own HLFIR
+  builder for the SDFG step).
+
+The heavy ``fortran_parser.py`` SDFG translator and ``fix_utils.py``
+(SDFG post-processing) are deliberately *not* vendored -- they are not
+on the ``inline_to_single_tu`` path.  Only ``ParseConfig``,
+``create_fparser_ast``, ``construct_full_ast``,
+``run_fparser_transformations`` (and the small parsing helpers) are
+ported, plus the ``ast_desugaring`` package they depend on.
+
+Public API
+----------
+``inline_to_single_tu(sources, entry, ...) -> Path``  -- the headline
+entry point: emit ONE combined ``.f90`` and return its path.  It also
+exposes the combined fparser AST via ``inline_to_ast(...)`` for callers
+that want to inspect / further-transform the tree before serialisation.
+"""
+import argparse
+import logging
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Set, Tuple, Union
+
+import fparser.two.Fortran2003 as f03
+from fparser.api import get_reader
+from fparser.two.C99Preprocessor import CPP_CLASS_NAMES
+from fparser.two.parser import ParserFactory
+from fparser.two.utils import Base, FortranSyntaxError, walk
+
+from dace_fortran.inliner.ast_desugaring import (analysis, cleanup, desugaring, optimizations, pruning, types, utils)
+from dace_fortran.inliner.ast_utils import atmost_one, children_of_type, singular
+
+logger = logging.getLogger(__name__)
+
+#: Stub implementations of the standard intrinsic modules so ``USE
+#: iso_c_binding`` / ``USE iso_fortran_env`` resolve during parsing even
+#: when the full standard-library sources are not on the search path.
+#: Ported verbatim from ``tools/create_preprocessed_ast.py``.
+BUILTINS = """
+! This file provides stub implementations for standard Fortran intrinsic modules.
+! These are included during preprocessing to ensure that `USE` statements for
+! these common modules can be resolved by the parser, even if the full
+! standard library implementations are not available.
+
+module iso_c_binding
+  integer, parameter :: c_int8_t = 1, c_int16_t = 2, c_int32_t = 4, c_int64_t = 8
+  integer, parameter :: c_char = c_int8_t, c_signed_char = c_char, c_bool = c_int8_t, c_int = c_int32_t, c_long = c_int, c_size_t = c_int64_t
+  integer, parameter :: c_float = 4, c_double = 8
+
+  type c_ptr
+  end type c_ptr
+
+  type c_funptr
+  end type c_funptr
+
+  type(c_ptr), parameter :: c_null_ptr = c_ptr()
+  character(kind=c_char), parameter :: c_null_char = char(0)
+
+  interface c_f_pointer
+    module procedure :: cfp_logical_r3
+  end interface c_f_pointer
+
+  interface c_f_procpointer
+  end interface c_f_procpointer
+
+  interface c_loc
+  end interface c_loc
+
+  interface c_associated
+    module procedure :: cass_cptr
+  end interface c_associated
+contains
+  subroutine cfp_logical_r3(cptr, fptr, shape, lower)
+    type(c_ptr), intent(in) :: cptr
+    logical, pointer, intent(out) :: fptr(:, :, :)
+    integer, optional :: shape(:)
+    integer, optional :: lower(:)
+  end subroutine cfp_logical_r3
+
+  logical function cass_cptr(a, b)
+    type(c_ptr), intent(in) :: a
+    type(c_ptr), optional, intent(in) :: b
+  end function cass_cptr
+end module iso_c_binding
+
+module iso_fortran_env
+  integer, parameter :: real32 = 4
+  integer, parameter :: real64 = 8
+  integer, parameter :: int32 = 4
+  integer, parameter :: int64 = 8
+  integer, parameter :: error_unit = 0
+  integer, parameter :: output_unit = 6
+  character, parameter :: compiler_version = "", compiler_options = ""
+end module iso_fortran_env
+"""
+
+#: Names of the intrinsic-module stubs ``BUILTINS`` defines.  These are
+#: injected only so the inliner's fparser parse resolves ``USE iso_c_binding``
+#: / ``USE iso_fortran_env``; the real modules are compiler-provided, so any
+#: stub that survives pruning (e.g. when nothing prunes it because no entry
+#: point is given) must be dropped before the text is handed to flang -- a
+#: stub definition would otherwise collide with the compiler's own.
+BUILTIN_STUB_MODULE_NAMES = frozenset({"iso_c_binding", "iso_fortran_env"})
+
+#: Compiler-provided intrinsic modules.  Their ``USE`` statements must survive
+#: the merge so the serialised Fortran compiles (flang supplies the real module),
+#: but the pipeline strips them as "resolved internally" -- and the symbols they
+#: export (``c_double_complex``, ``c_ptr``, kind parameters, ...) are not module
+#: procedures, so ``restore_cross_module_uses`` does not bring them back.  We
+#: instead capture these ``USE``s before the pipeline and restore them after.
+#: They are otherwise irrelevant to the SDFG dace emits (kinds resolve to plain
+#: integers downstream), so a verbatim pass-through is exactly right.
+INTRINSIC_MODULE_NAMES = frozenset({
+    "iso_c_binding", "iso_fortran_env", "ieee_arithmetic", "ieee_exceptions", "ieee_features", "omp_lib",
+    "omp_lib_kinds", "openacc", "mpi", "mpi_f08"
+})
+
+
+def strip_builtin_stub_modules(ast: f03.Program) -> f03.Program:
+    """Remove the injected intrinsic-module stubs (see ``BUILTINS`` /
+    :data:`BUILTIN_STUB_MODULE_NAMES`) from a merged AST, in place.
+
+    The pruning pipeline drops them automatically when an entry point scopes
+    the closure, but a whole-project merge (no entry) keeps every top-level
+    unit -- including the stubs.  flang supplies the real intrinsic modules,
+    so the stub blocks are redundant and would collide; this removes them."""
+    kept = []
+    for child in ast.children:
+        if isinstance(child, f03.Module):
+            stmt = atmost_one(children_of_type(child, f03.Module_Stmt))
+            name = stmt.children[1].string.lower() if stmt else None
+            if name in BUILTIN_STUB_MODULE_NAMES:
+                continue
+        kept.append(child)
+    if len(kept) != len(ast.children):
+        ast.init(kept)
+    return ast
+
+
+def find_all_f90_files(root: Path) -> Iterable[Path]:
+    """Yield every Fortran source under ``root`` (recursively), or ``root``
+    itself when it is a file.  Ported from ``tools/helpers.py``.
+    """
+    if root.is_file():
+        yield root
+        return
+    for pat in ("*.f90", "*.F90", "*.incf"):
+        yield from root.rglob(pat)
+
+
+class ParseConfig:
+    """Configuration for parsing and inlining a Fortran project.
+
+    A faithful port of ``fortran_parser.ParseConfig`` restricted to the
+    fields the source-text inliner consumes.  Canonicalises the various
+    accepted input forms up front (``sources`` list/dict, single-tuple
+    entry points, etc.).
+    """
+
+    def __init__(self,
+                 sources: Union[None, List[Path], Dict[str, str]] = None,
+                 entry_points: Union[None, types.SPEC, List[types.SPEC]] = None,
+                 do_not_prune: Union[None, types.SPEC, List[types.SPEC]] = None,
+                 do_not_rename: Union[None, types.SPEC, List[types.SPEC]] = None,
+                 make_noop: Union[None, types.SPEC, List[types.SPEC]] = None,
+                 ast_checkpoint_dir: Union[None, str, Path] = None,
+                 consolidate_global_data: bool = False,
+                 rename_uniquely: bool = False,
+                 do_not_prune_type_components: bool = False):
+        # Make the configs canonical, by processing the various types upfront.
+        if not sources:
+            sources = {}
+        elif isinstance(sources, list):
+            sources = {str(p): Path(p).read_text() for p in sources}
+        if not entry_points:
+            entry_points = []
+        elif isinstance(entry_points, tuple):
+            entry_points = [entry_points]
+        if not do_not_prune:
+            do_not_prune = []
+        elif isinstance(do_not_prune, tuple):
+            do_not_prune = [do_not_prune]
+        do_not_prune = list({x for x in entry_points + do_not_prune})
+        if not do_not_rename:
+            do_not_rename = []
+        elif isinstance(do_not_rename, tuple):
+            do_not_rename = [do_not_rename]
+        do_not_rename = list({x for x in entry_points + do_not_rename})
+        if not make_noop:
+            make_noop = []
+        elif isinstance(make_noop, tuple):
+            make_noop = [make_noop]
+        if isinstance(ast_checkpoint_dir, str):
+            ast_checkpoint_dir = Path(ast_checkpoint_dir)
+
+        self.sources: Dict[str, str] = sources
+        self.entry_points: List[types.SPEC] = entry_points
+        self.config_injections: list = []
+        self.do_not_prune: List[types.SPEC] = do_not_prune
+        self.do_not_rename: List[types.SPEC] = do_not_rename
+        self.make_noop: List[types.SPEC] = make_noop
+        self.ast_checkpoint_dir = ast_checkpoint_dir
+        self.consolidate_global_data = consolidate_global_data
+        self.rename_uniquely = rename_uniquely
+        self.do_not_prune_type_components = do_not_prune_type_components
+
+    def set_all_possible_entry_points_from(self, ast: f03.Program):
+        """Treat every top-level subprogram / main program as an entry point
+        (used when no explicit entry point was supplied)."""
+        self.entry_points = [
+            analysis.ident_spec(singular(children_of_type(c, utils.NAMED_STMTS_OF_INTEREST_CLASSES)))
+            for c in walk(ast, utils.ENTRY_POINT_OBJECT_CLASSES) if isinstance(c, utils.ENTRY_POINT_OBJECT_CLASSES)
+        ]
+        self.do_not_prune = list({x for x in self.entry_points + self.do_not_prune})
+
+    def avoid_pruning_type_components(self, ast: f03.Program):
+        """Mark every derived-type component to be preserved during pruning."""
+        ident_map = analysis.identifier_specs(ast)
+        comp_specs = [k for k, v in ident_map.items() if isinstance(v, f03.Component_Decl)]
+        self.do_not_prune = list({x for x in comp_specs + self.do_not_prune})
+
+
+def top_level_objects_map(ast: f03.Program, path: str) -> Dict[str, Base]:
+    """Map lowercase names of top-level objects (modules, main programs) to
+    their fparser nodes.  Warns (and skips) leftover cpp directives."""
+    out: Dict[str, Base] = {}
+    for top in ast.children:
+        if type(top).__name__ in CPP_CLASS_NAMES:
+            logger.warning(
+                "Resolve the C++ preprocessor statements before starting to do anything with it; got `%s` in %s", top,
+                path)
+            continue
+        name = utils.find_name_of_node(top)
+        assert name
+        out[name.lower()] = top
+    return out
+
+
+def _get_toplevel_objects(path_f90: Tuple[str, str], parser, sources: Dict[str, str]) -> Dict[str, Base]:
+    """Parse one source file, resolve its ``INCLUDE`` statements by text
+    substitution from ``sources``, and map its top-level objects."""
+    path, f90 = path_f90
+    assert isinstance(f90, str)
+    try:
+        # C++ preprocessor would not resolve the Fortran include statements, so we resolve them ourselves first.
+        cast = parser(get_reader(f90))
+        inc_map = {}
+        for inc in walk(cast, f03.Include_Stmt):
+            file, = inc.children
+            repls = {k: c for k, c in sources.items() if k.endswith(f"{file}")}
+            if not repls:
+                logger.warning("Could not find the file to include `%s` in %s; moving on", inc, path)
+                continue
+            if len(repls) > 1:
+                logger.warning("Found multiple candidate files to include `%s` in %s: %s; proceeding arbitrarily", inc,
+                               path, sorted(repls.keys()))
+            _, content = repls.popitem()
+            inc_map[inc.tofortran()] = content
+        if inc_map:
+            f90_again = cast.tofortran()
+            for k, v in inc_map.items():
+                f90_again = f90_again.replace(k, v)
+            cast = parser(get_reader(f90_again))
+        return top_level_objects_map(cast, path)
+    except FortranSyntaxError as e:
+        logger.warning("Could not parse `%s`; got %s", path, e)
+        return {}
+
+
+def construct_full_ast(sources: Dict[str, str],
+                       parser,
+                       entry_points: Optional[Iterable[types.SPEC]] = None) -> f03.Program:
+    """Combine every source file into one fparser AST, resolving
+    ``INCLUDE`` directives and pruning modules unreachable from
+    ``entry_points`` (all modules kept when ``entry_points`` is ``None``)."""
+    tops: Dict[str, Base] = {}
+    for path, f90 in sources.items():
+        ctops = _get_toplevel_objects((path, f90), parser=parser, sources=sources)
+        if ctops.keys() & tops.keys():
+            logger.warning("Found duplicate names for top-level objects: %s", ctops.keys() & tops.keys())
+        tops.update(ctops)
+
+    ast = f03.Program(get_reader(''))
+    ast.content = []
+    for _, v in tops.items():
+        utils.append_children(ast, v)
+
+    ast = pruning.keep_sorted_used_modules(ast, entry_points)
+    return ast
+
+
+def _module_name_of_use(use: f03.Use_Stmt) -> Optional[str]:
+    """The module name a ``USE`` statement imports from (its first ``Name``
+    child -- the ``ONLY:`` list / renames are separate child nodes)."""
+    nm = next(iter(children_of_type(use, f03.Name)), None)
+    return nm.string.lower() if nm else None
+
+
+def _scope_visible_names(scope: Base, host_spec: Optional[f03.Specification_Part]):
+    """Names already bound in ``scope`` that must NOT be re-imported / shadowed,
+    plus the set of modules ``scope`` imports *whole* (``USE x`` with no
+    ``ONLY:``, which brings in every public name of ``x``).
+
+    Collects: the procedure's own name + dummy arguments, locally declared
+    entities, and every ``USE``-imported name -- from the scope's own
+    specification part and, for a module-contained procedure, the host module's
+    specification part (host association)."""
+    visible: Set[str] = set()
+    whole_use_mods: Set[str] = set()
+    own_stmt = atmost_one(children_of_type(scope, (f03.Subroutine_Stmt, f03.Function_Stmt, f03.Program_Stmt)))
+    if own_stmt is not None:
+        for nm in walk(own_stmt, f03.Name):  # proc name + dummy-arg names (+ result)
+            visible.add(nm.string.lower())
+    own_spec = atmost_one(children_of_type(scope, f03.Specification_Part))
+    for spec in (own_spec, host_spec):
+        if spec is None:
+            continue
+        for use in walk(spec, f03.Use_Stmt):
+            only = atmost_one(children_of_type(use, f03.Only_List))
+            if only is None:
+                mnm = _module_name_of_use(use)
+                if mnm:
+                    whole_use_mods.add(mnm)
+            else:
+                for nm in walk(only, f03.Name):  # ONLY: a, b => c -> a, b, c all blocked
+                    visible.add(nm.string.lower())
+        for ent in walk(spec, f03.Entity_Decl):
+            nm = next(iter(children_of_type(ent, f03.Name)), None)
+            if nm:
+                visible.add(nm.string.lower())
+    return visible, whole_use_mods
+
+
+def _prepend_use(scope: Base, clause: str):
+    """Add a ``USE`` statement to the front of ``scope``'s specification part,
+    creating one (in the correct position, right after the opening statement)
+    when the scope has none -- so the ``USE`` lands before ``IMPLICIT`` /
+    declarations rather than after the body (which is illegal Fortran)."""
+    spec = atmost_one(children_of_type(scope, f03.Specification_Part))
+    if spec is not None:
+        utils.prepend_children(spec, f03.Use_Stmt(clause))
+    else:
+        kids = list(scope.children)
+        kids.insert(1, f03.Specification_Part(get_reader(clause)))
+        utils.set_children(scope, kids)
+
+
+_SCOPE_CLASSES = (f03.Module, f03.Main_Program, f03.Subroutine_Subprogram, f03.Function_Subprogram)
+_SCOPE_STMT_CLASSES = (f03.Module_Stmt, f03.Program_Stmt, f03.Subroutine_Stmt, f03.Function_Stmt)
+
+
+def _scope_qualname(scope: Base) -> Tuple[str, ...]:
+    """The qualified name of ``scope`` -- the lower-cased names of the enclosing
+    program units, root-first (``('m', 'foo')`` for subprogram ``foo`` in module
+    ``m``).  Stable across the (no-body-inlining) merge, so it keys a scope
+    before and after the pipeline."""
+    names: List[str] = []
+    node: Optional[Base] = scope
+    while node is not None:
+        if isinstance(node, _SCOPE_CLASSES):
+            stmt = atmost_one(children_of_type(node, _SCOPE_STMT_CLASSES))
+            nm = utils.find_name_of_stmt(stmt) if stmt is not None else None
+            if nm:
+                names.append(nm.lower())
+        node = node.parent
+    return tuple(reversed(names))
+
+
+def collect_intrinsic_uses(ast: f03.Program) -> Dict[Tuple[str, ...], List[str]]:
+    """Record every ``USE`` of a compiler-provided intrinsic module
+    (:data:`INTRINSIC_MODULE_NAMES`), keyed by the qualified name of the scope
+    that holds it.  Run BEFORE the pipeline, which strips these ``USE``s."""
+    captured: Dict[Tuple[str, ...], List[str]] = {}
+    for use in walk(ast, f03.Use_Stmt):
+        if _module_name_of_use(use) not in INTRINSIC_MODULE_NAMES:
+            continue
+        scope = use.parent
+        while scope is not None and not isinstance(scope, _SCOPE_CLASSES):
+            scope = scope.parent
+        if scope is None:
+            continue
+        captured.setdefault(_scope_qualname(scope), []).append(str(use).strip())
+    return captured
+
+
+def restore_intrinsic_uses(ast: f03.Program, captured: Dict[Tuple[str, ...], List[str]]) -> f03.Program:
+    """Re-add the intrinsic-module ``USE``s captured by
+    :func:`collect_intrinsic_uses` to their original scopes (matched by
+    qualified name), so the merged Fortran still compiles -- flang supplies the
+    real intrinsic module.  No-op for scopes that already carry the ``USE``."""
+    if not captured:
+        return ast
+    # 1. Drop every intrinsic-module ``USE`` the pipeline left behind.  Those are
+    #    redistributed *partial* ``ONLY:`` imports of the (now-stripped) stub's
+    #    names (``ONLY: c_int``) -- they neither import what the stub lacked
+    #    (``c_double_complex``) nor carry the ``, INTRINSIC`` attribute, so flang
+    #    rejects them.  We replace the lot with the captured originals.
+    for use in list(walk(ast, f03.Use_Stmt)):
+        if _module_name_of_use(use) in INTRINSIC_MODULE_NAMES:
+            utils.remove_self(use)
+    # 2. Restore the original intrinsic ``USE``s at their scopes (matched by
+    #    qualified name); a module-level ``USE`` is host-associated into every
+    #    contained procedure, so the per-subprogram partials are not needed.
+    for scope in walk(ast, _SCOPE_CLASSES):
+        for clause in captured.get(_scope_qualname(scope), []):
+            _prepend_use(scope, clause)
+    return ast
+
+
+def _defined_proc_names(ast: f03.Program) -> Set[str]:
+    """Names of every procedure DEFINED with a body (module / internal
+    subprograms).  Interface-body declarations are not subprograms, so they are
+    excluded -- which is exactly what lets us tell a declared-external procedure
+    from a locally-defined one."""
+    names: Set[str] = set()
+    for sp in walk(ast, (f03.Subroutine_Subprogram, f03.Function_Subprogram)):
+        stmt = atmost_one(children_of_type(sp, (f03.Subroutine_Stmt, f03.Function_Stmt)))
+        nm = utils.find_name_of_stmt(stmt) if stmt is not None else None
+        if nm:
+            names.add(nm.lower())
+    return names
+
+
+def collect_external_interfaces(ast: f03.Program) -> Dict[Tuple[str, ...], List[str]]:
+    """Capture ``INTERFACE`` blocks that declare *external* procedures -- an
+    explicit interface for a procedure with no definition anywhere in the
+    project (e.g. a C-library function via ``BIND(C)``), keyed by the scope's
+    qualified name.  The pipeline removes these ("no candidate to resolve to"),
+    but they are declarations the serialised Fortran needs to compile (to an
+    object -- the external symbol is resolved at link time, which the bridge's
+    compile-to-HLFIR step never does)."""
+    defined = _defined_proc_names(ast)
+    captured: Dict[Tuple[str, ...], List[str]] = {}
+    for ib in walk(ast, f03.Interface_Block):
+        decl = {
+            nm
+            for nm in (utils.find_name_of_stmt(s) for s in walk(ib, (f03.Function_Stmt, f03.Subroutine_Stmt))) if nm
+        }
+        decl = {n.lower() for n in decl}
+        # Skip a generic interface (no procedure bodies -> ``MODULE PROCEDURE``)
+        # and any interface a locally-defined procedure backs (the pipeline
+        # resolves / inlines that one correctly).
+        if not decl or (decl & defined):
+            continue
+        scope = ib.parent
+        while scope is not None and not isinstance(scope, _SCOPE_CLASSES):
+            scope = scope.parent
+        if scope is None:
+            continue
+        captured.setdefault(_scope_qualname(scope), []).append(str(ib))
+    return captured
+
+
+def restore_external_interfaces(ast: f03.Program, captured: Dict[Tuple[str, ...], List[str]]) -> f03.Program:
+    """Re-insert the external-procedure ``INTERFACE`` blocks captured by
+    :func:`collect_external_interfaces` into their scopes' specification parts
+    (matched by qualified name), so the calls to those external procedures have
+    an explicit interface and the single TU compiles."""
+    if not captured:
+        return ast
+    for scope in walk(ast, _SCOPE_CLASSES):
+        blocks = captured.get(_scope_qualname(scope))
+        if not blocks:
+            continue
+        spec = atmost_one(children_of_type(scope, f03.Specification_Part))
+        present = {str(ib) for ib in walk(spec, f03.Interface_Block)} if spec is not None else set()
+        for text in blocks:
+            if text in present:
+                continue
+            if spec is None:
+                kids = list(scope.children)
+                kids.insert(1, f03.Specification_Part(get_reader(text)))
+                utils.set_children(scope, kids)
+                spec = atmost_one(children_of_type(scope, f03.Specification_Part))
+            else:
+                utils.append_children(spec, f03.Interface_Block(get_reader(text)))
+            present.add(text)
+    return ast
+
+
+def restore_cross_module_uses(ast: f03.Program) -> f03.Program:
+    """Re-add the inter-module ``USE`` statements the pipeline strips, so the
+    serialised Fortran is a valid, single-file-compilable program (in place).
+
+    The inliner resolves every symbol through its own alias map and drops
+    ``USE`` statements as redundant -- correct for its native AST->SDFG path,
+    but a real compiler (flang / gfortran) needs the ``USE`` for legal scoping.
+    For every reference to a procedure that survives as a *different* module's
+    procedure, this restores ``USE <mod>, ONLY: <proc>`` -- at the host module
+    level (host-associated to every contained procedure, matching the original
+    style), or in the scope itself for a free subprogram / main program.  Names
+    that are locally declared / dummy arguments / siblings / already imported,
+    and procedure names defined in more than one module (ambiguous), are left
+    untouched -- so a local array or variable that merely shares a name with
+    some module procedure is never mis-imported."""
+    # Map each module-procedure name to its defining module(s).
+    proc_mods: Dict[str, Set[str]] = {}
+    for mod in walk(ast, f03.Module):
+        mname = utils.find_name_of_stmt(atmost_one(children_of_type(mod, f03.Module_Stmt)))
+        subpart = atmost_one(children_of_type(mod, f03.Module_Subprogram_Part))
+        if not mname or subpart is None:
+            continue
+        for sp in children_of_type(subpart, (f03.Subroutine_Subprogram, f03.Function_Subprogram)):
+            pstmt = atmost_one(children_of_type(sp, (f03.Subroutine_Stmt, f03.Function_Stmt)))
+            pname = utils.find_name_of_stmt(pstmt) if pstmt is not None else None
+            if pname:
+                proc_mods.setdefault(pname.lower(), set()).add(mname.lower())
+    # Only unambiguously-defined module procedures can be safely imported by name.
+    unique_proc_mod = {p: next(iter(m)) for p, m in proc_mods.items() if len(m) == 1}
+    if not unique_proc_mod:
+        return ast
+
+    # Plan the additions per target node (a module, or a free scope), so two
+    # sibling procedures needing the same import add it once at module level.
+    plan: Dict[int, Tuple[Base, Dict[str, Set[str]]]] = {}
+    planned: Dict[int, Set[str]] = {}
+    for scope in walk(ast, (f03.Subroutine_Subprogram, f03.Function_Subprogram, f03.Main_Program)):
+        exec_part = atmost_one(children_of_type(scope, f03.Execution_Part))
+        if exec_part is None:
+            continue
+        # Enclosing module: USE goes there (host association); else the scope itself.
+        host = scope.parent
+        while host is not None and not isinstance(host, f03.Module):
+            host = host.parent
+        cmod, host_spec, target = None, None, scope
+        if isinstance(host, f03.Module):
+            cmod = utils.find_name_of_stmt(atmost_one(children_of_type(host, f03.Module_Stmt)))
+            cmod = cmod.lower() if cmod else None
+            host_spec = atmost_one(children_of_type(host, f03.Specification_Part))
+            target = host
+
+        visible, whole_use_mods = _scope_visible_names(scope, host_spec)
+        # Procedure names referenced in this scope: CALL targets + function/array
+        # references (the latter guarded by ``visible`` so a local array of the
+        # same name is excluded).
+        refs: Set[str] = set()
+        for call in walk(exec_part, f03.Call_Stmt):
+            nm = next(iter(children_of_type(call, f03.Name)), None)
+            if nm:
+                refs.add(nm.string.lower())
+        for ref in walk(exec_part, (f03.Function_Reference, f03.Part_Ref)):
+            nm = next(iter(children_of_type(ref, f03.Name)), None)
+            if nm:
+                refs.add(nm.string.lower())
+
+        tid = id(target)
+        seen = planned.setdefault(tid, set())
+        for rn in sorted(refs):
+            if rn in visible or rn in seen:
+                continue
+            tgt = unique_proc_mod.get(rn)
+            if not tgt or tgt == cmod or tgt in whole_use_mods:
+                continue
+            plan.setdefault(tid, (target, {}))[1].setdefault(tgt, set()).add(rn)
+            seen.add(rn)
+
+    for target, mod_procs in plan.values():
+        for mod, procs in sorted(mod_procs.items()):
+            _prepend_use(target, f"use {mod}, only: {', '.join(sorted(procs))}")
+    return ast
+
+
+def create_fparser_ast(cfg: ParseConfig) -> f03.Program:
+    """Parse the configured sources into one combined, lowercased fparser
+    AST (the first stage of the inliner pipeline)."""
+    parser = ParserFactory().create(std="f2008")
+    ast = construct_full_ast(cfg.sources, parser, cfg.entry_points or None)
+    ast = cleanup.lower_identifier_names(ast)
+    assert isinstance(ast, f03.Program)
+    return ast
+
+
+def _checkpoint_ast(cfg: ParseConfig, name: str, ast: f03.Program):
+    """Dump an intermediate AST as Fortran into the checkpoint dir, if set."""
+    if cfg.ast_checkpoint_dir:
+        cfg.ast_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        with open(cfg.ast_checkpoint_dir.joinpath(name), 'w') as f:
+            f.write(ast.tofortran())
+
+
+def run_fparser_transformations(ast: f03.Program, cfg: ParseConfig, *, optimize: bool = True) -> f03.Program:
+    """Run the desugaring / pruning / optimization pipeline that turns the
+    raw combined AST into a simplified, self-contained single-TU AST.
+
+    Ported faithfully from ``fortran_parser.run_fparser_transformations``;
+    the only omitted stages are the ones that have no effect on a
+    source-text product (none -- the full pipeline is reproduced).
+
+    ``optimize=False`` runs the structural passes only -- procedure /
+    interface inlining, coarse pruning, entity-level prune-to-used, and
+    ``USE`` consolidation -- and SKIPS the constant-propagation /
+    branch-pruning optimizations (``inject_const_evals``,
+    ``make_practically_constant_arguments_constants``,
+    ``exploit_locally_constant_variables``, ``const_eval_nodes``,
+    ``prune_branches``).  This is the mode the HLFIR build path
+    (:func:`dace_fortran.preprocess._fparser_merge`) uses: flang and the
+    bridge do their own constant-folding / dead-branch elimination, so the
+    merge only needs a valid inlined single TU -- and skipping the
+    optimizers both matches the legacy regex merge's "splice and let flang
+    inline" semantics and sidesteps optimizer fragilities (e.g. the
+    ``exploit_locally_constant_variables`` local-alias assertion) on
+    inlined-call patterns that never reach the f2dace numpy backend."""
+    if not cfg.entry_points:
+        cfg.set_all_possible_entry_points_from(ast)
+    if cfg.do_not_prune_type_components:
+        cfg.avoid_pruning_type_components(ast)
+    # Intrinsic-module ``USE``s (``iso_c_binding`` for C-interop kinds/types, ...)
+    # and external-procedure ``INTERFACE`` blocks (C-library declarations) are
+    # stripped by the pipeline as "resolved internally" / "no candidate"; capture
+    # them now and restore them at the end so the serialised Fortran compiles.
+    captured_intrinsic_uses = collect_intrinsic_uses(ast)
+    captured_external_interfaces = collect_external_interfaces(ast)
+    _checkpoint_ast(cfg, 'ast_v0.f90', ast)
+
+    if cfg.make_noop:
+        logger.debug("FParser Op: Making certain functions no-op in the AST...")
+        noop_missed: Set[types.SPEC] = set(cfg.make_noop)
+        for fn in walk(ast, (f03.Function_Stmt, f03.Subroutine_Stmt)):
+            fnspec = analysis.ident_spec(fn)
+            if fnspec not in cfg.make_noop:
+                continue
+            noop_missed.discard(fnspec)
+            expart = atmost_one(children_of_type(fn.parent, f03.Execution_Part))
+            if expart:
+                utils.remove_self(expart)
+        if noop_missed:
+            logger.warning("The following functions could not be found for making no-op: %s", noop_missed)
+
+    logger.debug("FParser Op: Removing local indirections from AST...")
+    ast = desugaring.deconstruct_enums(ast)
+    ast = desugaring.deconstruct_associations(ast)
+    ast = cleanup.remove_access_and_bind_statements(ast)
+    ast = desugaring.deconstruct_goto_statements(ast)
+    ast = desugaring.deconstruct_external_statements(ast)
+    # NOTE: We need a coarse pruning as early (and as often) as reasonably
+    # possible to make it easier on the operations that rely on full
+    # resolution (e.g., building an alias map).  After this pruning, a full
+    # resolution is expected.
+    ast = pruning.prune_coarsely(ast, cfg.do_not_prune)
+    ast.init([n for n in ast.children if n is not None])
+    _checkpoint_ast(cfg, 'ast_v1.f90', ast)
+
+    logger.debug("FParser Op: Removing remote indirections from AST...")
+    ast = desugaring.convert_data_statements_into_assignments(ast)
+    ast = cleanup.correct_for_function_calls(ast)
+    ast = desugaring.deconstruct_statement_functions(ast)
+    ast = desugaring.deconstruct_procedure_calls(ast)
+    ast = pruning.prune_coarsely(ast, cfg.do_not_prune)
+    ast_f90_old, ast_f90_new = None, ast.tofortran()
+    while not ast_f90_old or ast_f90_old != ast_f90_new:
+        ast = cleanup.correct_for_function_calls(ast)
+        ast = desugaring.deconstruct_interface_calls(ast)
+        ast = pruning.prune_coarsely(ast, cfg.do_not_prune)
+        ast_f90_old, ast_f90_new = ast_f90_new, ast.tofortran()
+    if walk(ast, f03.Interface_Stmt):
+        _checkpoint_ast(cfg, 'ast_v1.error.f90', ast)
+        raise RuntimeError("Could not remove all the interfaces from AST")
+    ast = cleanup.correct_for_function_calls(ast)
+    _checkpoint_ast(cfg, 'ast_v2.f90', ast)
+
+    ast_f90_old, ast_f90_new = None, ast.tofortran()
+    while not ast_f90_old or ast_f90_old != ast_f90_new:
+        logger.debug("FParser Op: Coarsely pruning the AST...")
+        ast = pruning.prune_coarsely(ast, cfg.do_not_prune)
+        if optimize:
+            ast = optimizations.inject_const_evals(ast, cfg.config_injections)
+            ast = optimizations.make_practically_constant_arguments_constants(ast, cfg.entry_points)
+            ast = optimizations.exploit_locally_constant_variables(ast)
+            ast = optimizations.const_eval_nodes(ast)
+            ast = pruning.prune_branches(ast)
+            # ``prune_unused_objects`` trims unused entities WITHIN kept scopes
+            # (unused locals / parameters).  It is skipped in merge mode
+            # (``optimize=False``): the coarse pruning above already drops
+            # unreferenced procedures / modules (the real size win), keeping
+            # unused locals is always safe for flang, and the entity-level
+            # prune has an upstream bug -- for an unused F77-style named
+            # constant (separate ``DOUBLE PRECISION x`` + ``PARAMETER(x=..)``
+            # statements) it removes the type declaration but leaves the
+            # orphaned ``PARAMETER`` statement, which then fails to compile
+            # (hit by NPB LU's unused ``tolrsd*_def``).
+            ast = pruning.prune_unused_objects(ast, cfg.do_not_prune)
+        ast = pruning.consolidate_uses(ast)
+        ast_f90_old, ast_f90_new = ast_f90_new, ast.tofortran()
+    logger.debug("FParser Op: AST-size settled at %d lines.", len(ast_f90_new.splitlines()))
+    _checkpoint_ast(cfg, 'ast_v3.f90', ast)
+
+    if cfg.consolidate_global_data:
+        logger.debug("FParser Op: Consolidating the global variables of the AST...")
+        ast = cleanup.consolidate_global_data_into_arg(ast)
+        ast = pruning.prune_coarsely(ast, cfg.do_not_prune)
+        _checkpoint_ast(cfg, 'ast_v4.f90', ast)
+
+    if cfg.rename_uniquely:
+        logger.debug("FParser Op: Rename uniquely...")
+        ast = cleanup.assign_globally_unique_subprogram_names(ast, set(cfg.do_not_rename))
+        ast = cleanup.assign_globally_unique_variable_names(ast, set(cfg.do_not_rename))
+        ast = pruning.consolidate_uses(ast)
+        _checkpoint_ast(cfg, 'ast_v5.f90', ast)
+
+    # The pipeline resolves symbols through its own alias map and drops the
+    # inter-module ``USE`` statements as redundant -- fine for the native
+    # AST->SDFG path, but the serialised Fortran is handed to a real compiler
+    # that needs those ``USE``s for legal scoping.  Restore them so the output
+    # is a single self-contained, compilable translation unit.  (Do NOT run
+    # ``consolidate_uses`` afterwards: it re-applies the same redundant-USE
+    # pruning and would strip exactly what we just restored.)
+    ast = restore_cross_module_uses(ast)
+    ast = restore_intrinsic_uses(ast, captured_intrinsic_uses)
+    ast = restore_external_interfaces(ast, captured_external_interfaces)
+    _checkpoint_ast(cfg, 'ast_v6.f90', ast)
+
+    return ast
+
+
+def parse_and_improve(sources: Dict[str, str], entry_points: Optional[Iterable[types.SPEC]] = None) -> f03.Program:
+    """Parse ``sources`` into one combined AST and apply the
+    ``correct_for_function_calls`` improver -- the light-weight entry used
+    by the ported unit tests (matches the upstream
+    ``fortran_test_helper.parse_and_improve``)."""
+    parser = ParserFactory().create(std="f2008")
+    ast = construct_full_ast(sources, parser, entry_points=entry_points)
+    ast = cleanup.correct_for_function_calls(ast)
+    assert isinstance(ast, f03.Program)
+    return ast
+
+
+def _demangle_spec(mangled: str) -> types.SPEC:
+    """Turn a flang-mangled symbol (``_QP<proc>`` / ``_QM<mod>P<proc>``)
+    into an fparser entry SPEC ``(proc,)`` / ``(mod, proc)``.
+
+    Self-contained so the inliner's unit tests need not import the C++
+    bridge (which ``dace_fortran.builder`` pulls in eagerly).  Kept in
+    lock-step with ``dace_fortran.builder._demangle_fortran_proc`` /
+    ``_module_of_fortran_sym``: flang lower-cases every identifier, so the
+    only upper-case markers are the structural ``M`` / ``P`` / ``F``."""
+    if not mangled.startswith("_Q"):
+        return (mangled.lower(), )
+    p = mangled.rfind("P")
+    proc = mangled[p + 1:].lower() if p > 1 else mangled.lower()
+    if mangled.startswith("_QM"):
+        body = mangled[3:]
+        for i, ch in enumerate(body):
+            if ch in ("P", "F"):
+                if i > 0:
+                    return (body[:i].lower(), proc)
+                break
+    return (proc, )
+
+
+def _entry_to_spec(source: str, entry: Optional[str]) -> Optional[types.SPEC]:
+    """Resolve ``entry`` (plain name / ``module::proc`` / mangled ``_Q...``)
+    to an fparser entry-point SPEC ``(module, proc)`` or ``(proc,)``.
+
+    Resolution goes through dace-fortran's own ``_resolve_entry`` (so the
+    inliner agrees byte-for-byte with the HLFIR build path on which
+    procedure is the root); the result is demangled locally to avoid
+    importing the bridge-heavy ``dace_fortran.builder``.  ``None`` passes
+    through (every top-level subprogram is kept as an entry point)."""
+    if entry is None:
+        return None
+    from dace_fortran.build import _resolve_entry
+
+    return _demangle_spec(_resolve_entry(source, entry))
+
+
+def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
+                  entry: Optional[str] = None,
+                  *,
+                  make_noop: Union[None, types.SPEC, List[types.SPEC]] = None,
+                  consolidate_global_data: bool = False,
+                  rename_uniquely: bool = False,
+                  do_not_prune_type_components: bool = False,
+                  checkpoint_dir: Union[None, str, Path] = None,
+                  include_builtins: bool = True,
+                  optimize: bool = True) -> f03.Program:
+    """Run the full inliner pipeline and return the combined fparser AST.
+
+    ``sources`` is either a ``{filename: content}`` mapping or an iterable
+    of file paths / directories (each directory is globbed for Fortran
+    sources).  ``entry`` selects the root procedure (and thus what is kept
+    by pruning); ``None`` keeps every top-level subprogram.
+
+    ``optimize=False`` skips the constant-propagation / branch-pruning
+    optimization passes (see :func:`run_fparser_transformations`) -- used by
+    the HLFIR build-path merge, which only needs a valid inlined single TU.
+    """
+    src_map = _normalize_sources(sources)
+    spec = _entry_to_spec(_concat_sources(src_map), entry)
+    cfg = ParseConfig(
+        sources=dict(src_map),
+        entry_points=spec,
+        make_noop=make_noop,
+        ast_checkpoint_dir=checkpoint_dir,
+        consolidate_global_data=consolidate_global_data,
+        rename_uniquely=rename_uniquely,
+        do_not_prune_type_components=do_not_prune_type_components,
+    )
+    if include_builtins:
+        cfg.sources.setdefault("_builtins.f90", BUILTINS)
+    ast = create_fparser_ast(cfg)
+    ast = run_fparser_transformations(ast, cfg, optimize=optimize)
+    assert ast.children, "Nothing remains in this AST after pruning."
+    return ast
+
+
+def inline_to_single_tu(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
+                        entry: Optional[str] = None,
+                        *,
+                        output: Union[None, str, Path] = None,
+                        out_dir: Union[None, str, Path] = None,
+                        name: str = "inlined",
+                        make_noop: Union[None, types.SPEC, List[types.SPEC]] = None,
+                        consolidate_global_data: bool = False,
+                        rename_uniquely: bool = False,
+                        do_not_prune_type_components: bool = False,
+                        checkpoint_dir: Union[None, str, Path] = None,
+                        include_builtins: bool = True) -> Path:
+    """Inline a multi-file Fortran project into ONE self-contained ``.f90``
+    and return the path to it.
+
+    This is the headline public entry point.  It parses ``sources``,
+    resolves ``USE`` statements, inlines the needed modules, prunes
+    everything unreachable from ``entry``, runs the desugaring pipeline,
+    and serialises the resulting fparser AST back to Fortran text.
+
+    :param sources: ``{filename: content}`` mapping, or an iterable of
+        file / directory paths.
+    :param entry: target procedure -- plain Fortran name (``graupel_run``),
+        ``module::proc``, or a mangled ``_Q...`` symbol.  ``None`` keeps
+        every top-level subprogram.
+    :param output: explicit output ``.f90`` path.  When omitted, the file
+        is written to ``<out_dir>/<name>.f90`` (``out_dir`` defaults to the
+        current directory).
+    :param out_dir: directory for the default output filename.
+    :param name: base name of the default output file.
+    :param make_noop: subprogram specs to replace with an empty body.
+    :param consolidate_global_data: gather module-level variables into one
+        derived type passed by argument.
+    :param rename_uniquely: rename subprograms / variables to globally
+        unique identifiers.
+    :param do_not_prune_type_components: keep unused derived-type
+        components.
+    :param checkpoint_dir: dump intermediate ASTs (``ast_v*.f90``) here.
+    :param include_builtins: inject intrinsic-module stubs so ``USE
+        iso_c_binding`` / ``iso_fortran_env`` resolve during parsing.
+    :returns: the path to the written single-TU ``.f90``.
+    """
+    ast = inline_to_ast(sources,
+                        entry,
+                        make_noop=make_noop,
+                        consolidate_global_data=consolidate_global_data,
+                        rename_uniquely=rename_uniquely,
+                        do_not_prune_type_components=do_not_prune_type_components,
+                        checkpoint_dir=checkpoint_dir,
+                        include_builtins=include_builtins)
+    f90 = ast.tofortran()
+
+    if output is not None:
+        out_path = Path(output)
+    else:
+        base = Path(out_dir) if out_dir is not None else Path.cwd()
+        out_path = base / f"{name}.f90"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(f90)
+    return out_path
+
+
+def _normalize_sources(sources: Union[Dict[str, str], Iterable[Union[str, Path]]]) -> Dict[str, str]:
+    """Accept a ``{name: content}`` mapping or an iterable of file /
+    directory paths and return a ``{name: content}`` mapping."""
+    if isinstance(sources, dict):
+        return dict(sources)
+    out: Dict[str, str] = {}
+    for item in sources:
+        p = Path(item)
+        for f in find_all_f90_files(p):
+            out[str(f)] = f.read_text()
+    return out
+
+
+def _concat_sources(src_map: Dict[str, str]) -> str:
+    """Join all source texts (for the entry-name scan)."""
+    return "\n".join(src_map.values())
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    """CLI: ``python -m dace_fortran.fparser_inliner -i SRC -k ENTRY -o OUT.f90``."""
+    argp = argparse.ArgumentParser(
+        prog="dace_fortran.fparser_inliner",
+        description="Inline a multi-file Fortran project into one self-contained .f90 (fparser engine).")
+    argp.add_argument("-i",
+                      "--in_src",
+                      action="append",
+                      default=[],
+                      required=True,
+                      help="A Fortran source file or directory (repeatable).")
+    argp.add_argument("-k",
+                      "--entry_point",
+                      default=None,
+                      help="Entry procedure: plain name, module::proc, or mangled _Q... symbol.")
+    argp.add_argument("-o",
+                      "--output",
+                      default=None,
+                      help="Output .f90 path (default: ./inlined.f90; '-' writes to stdout).")
+    argp.add_argument("--noop",
+                      action="append",
+                      default=[],
+                      help="Function/subroutine to make no-op, as dot-separated spec (repeatable).")
+    argp.add_argument("-d", "--checkpoint_dir", default=None, help="Dump intermediate ASTs here.")
+    argp.add_argument("--consolidate_global_data",
+                      action="store_true",
+                      help="Consolidate module-level globals into one structure.")
+    argp.add_argument("--rename_uniquely",
+                      action="store_true",
+                      help="Rename variables/functions to globally unique names.")
+    args = argp.parse_args(argv)
+
+    src_map = _normalize_sources(args.in_src)
+    noops = [tuple(n.split(".")) for n in args.noop]
+
+    if args.output == "-":
+        ast = inline_to_ast(src_map,
+                            args.entry_point,
+                            make_noop=noops or None,
+                            consolidate_global_data=args.consolidate_global_data,
+                            rename_uniquely=args.rename_uniquely,
+                            checkpoint_dir=args.checkpoint_dir)
+        print(ast.tofortran())
+        return 0
+
+    out = inline_to_single_tu(src_map,
+                              args.entry_point,
+                              output=args.output,
+                              name="inlined",
+                              make_noop=noops or None,
+                              consolidate_global_data=args.consolidate_global_data,
+                              rename_uniquely=args.rename_uniquely,
+                              checkpoint_dir=args.checkpoint_dir)
+    print(f"Wrote single-TU Fortran to: {out}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

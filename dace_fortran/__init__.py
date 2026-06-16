@@ -59,6 +59,10 @@ _LAZY = {
     "MULTI_FILE_PIPELINE": "dace_fortran.hlfir_to_sdfg",
     "preprocess_fortran_source": "dace_fortran.preprocess",
     "merge_used_modules": "dace_fortran.preprocess",
+    # fparser-based single-TU inliner (opt-in alternative to the regex
+    # ``merge_used_modules`` text-splicer).
+    "inline_to_single_tu": "dace_fortran.fparser_inliner",
+    "inline_to_ast": "dace_fortran.fparser_inliner",
     "preprocess_fortran": "dace_fortran.preprocess",
     "rewrite_integer_powers": "dace_fortran.preprocess",
     "normalize_kind_parameters": "dace_fortran.preprocess",

@@ -87,6 +87,17 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # Pass switches.  All default off (caller picks what to apply).
     p.add_argument("--merge-modules", action="store_true", help="Inline every ``USE``-d module's source.")
+    p.add_argument("--merge-engine",
+                   choices=("regex", "fparser"),
+                   default="regex",
+                   help="Which --merge-modules engine to use: 'regex' "
+                   "(default, the fparser-free text-splicer) or 'fparser' "
+                   "(the AST inliner -- also desugars + prunes).")
+    p.add_argument("--merge-entry",
+                   default=None,
+                   help="Entry procedure (plain name / module::proc / "
+                   "mangled symbol) for the fparser engine's pruning; "
+                   "ignored by the regex engine.")
     p.add_argument("--strip-openmp", action="store_true", help="Drop OpenMP / OpenACC sentinel directives.")
     p.add_argument("--rewrite-integer-powers", action="store_true", help="Expand ``x**2.0`` to ``x*x``.")
     p.add_argument("--normalize-kind",
@@ -139,7 +150,11 @@ def _apply_passes(source: str, args) -> tuple:
         args.normalize_kind = True
         args.rewrite_integer_powers = True
     if args.merge_modules:
-        source = merge_used_modules(source, search_dirs=args.search_dirs)
+        if args.merge_engine == "fparser":
+            from dace_fortran.preprocess import _fparser_merge
+            source = _fparser_merge(source, search_dirs=args.search_dirs, entry=args.merge_entry)
+        else:
+            source = merge_used_modules(source, search_dirs=args.search_dirs)
     if args.strip_openmp:
         source = strip_openmp_directives(source)
     if args.normalize_kind and not args.kind_passthrough:

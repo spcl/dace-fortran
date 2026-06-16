@@ -65,9 +65,8 @@ def _resolve_flang() -> str | None:
         fc_path = shutil.which(fc) or (fc if os.path.isfile(fc) else None)
         if fc_path:
             try:
-                out = subprocess.check_output(
-                    [fc_path, "--version"],
-                    stderr=subprocess.STDOUT, timeout=5).decode(errors="replace")
+                out = subprocess.check_output([fc_path, "--version"], stderr=subprocess.STDOUT,
+                                              timeout=5).decode(errors="replace")
                 if "flang version" in out:
                     return fc_path
             except (OSError, subprocess.SubprocessError):
@@ -295,8 +294,13 @@ class _TestBuilder:
         return sdfg
 
 
-def build_sdfg(source: str, out_dir: Path, name: str = "src", pipeline=None, entry: str | None = None,
-               defines=()):
+def build_sdfg(source: str,
+               out_dir: Path,
+               name: str = "src",
+               pipeline=None,
+               entry: str | None = None,
+               defines=(),
+               merge_engine: str = "regex"):
     """Test funnel over the canonical :func:`dace_fortran.build.make_builder`.
 
     Every test goes through the one real builder (entry
@@ -315,8 +319,13 @@ def build_sdfg(source: str, out_dir: Path, name: str = "src", pipeline=None, ent
              still do ``.build()``.
     """
     from dace_fortran.build import make_builder
-    builder = make_builder(source, entry=entry, name=name, pipeline=pipeline, out_dir=out_dir,
-                           defines=defines)
+    builder = make_builder(source,
+                           entry=entry,
+                           name=name,
+                           pipeline=pipeline,
+                           out_dir=out_dir,
+                           defines=defines,
+                           merge_engine=merge_engine)
     suffix = _per_test_suffix()
     dump = _dump_dir()
     if suffix or dump is not None:

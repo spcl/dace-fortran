@@ -205,6 +205,8 @@ def _emit_hlfir(source: str,
                 *,
                 merge: bool,
                 preprocess: bool,
+                merge_entry: Optional[str] = None,
+                merge_engine: str = "regex",
                 defines: Sequence[str] = (),
                 kind_map: dict = None,
                 kind_passthrough: bool = False) -> Path:
@@ -237,6 +239,8 @@ def _emit_hlfir(source: str,
         preprocess_fortran_source(source,
                                   search_dirs=[out_dir],
                                   merge=merge,
+                                  merge_engine=merge_engine,
+                                  merge_entry=merge_entry,
                                   if_intvar=preprocess,
                                   kind_map=kind_map,
                                   kind_passthrough=kind_passthrough))
@@ -269,7 +273,8 @@ def make_builder(source: str,
                  preprocess: bool = False,
                  defines: Sequence[str] = (),
                  kind_map: dict = None,
-                 kind_passthrough: bool = False) -> SDFGBuilder:
+                 kind_passthrough: bool = False,
+                 merge_engine: str = "regex") -> SDFGBuilder:
     """Resolve the entry, lower ``source`` to HLFIR, and return a
     configured (not yet built) :class:`SDFGBuilder`.
 
@@ -302,6 +307,8 @@ def make_builder(source: str,
                             name,
                             merge=True,
                             preprocess=preprocess,
+                            merge_entry=None,
+                            merge_engine=merge_engine,
                             defines=defines,
                             kind_map=kind_map,
                             kind_passthrough=kind_passthrough)
@@ -312,6 +319,8 @@ def make_builder(source: str,
                             name,
                             merge=True,
                             preprocess=preprocess,
+                            merge_entry=None,
+                            merge_engine=merge_engine,
                             defines=defines,
                             kind_map=kind_map,
                             kind_passthrough=kind_passthrough)
@@ -327,7 +336,8 @@ def build_sdfg(source: str,
                preprocess: bool = False,
                defines: Sequence[str] = (),
                kind_map: dict = None,
-               kind_passthrough: bool = False) -> SDFG:
+               kind_passthrough: bool = False,
+               merge_engine: str = "regex") -> SDFG:
     """Build a :class:`dace.SDFG` from a single inline Fortran source.
 
     :param source: Fortran source as one string.
@@ -357,6 +367,9 @@ def build_sdfg(source: str,
         entirely -- for build pipelines that already resolve every
         kind alias upstream (e.g. via cpp expansion or by emitting
         HLFIR with the constants module pre-merged).
+    :param merge_engine: ``"fparser"`` (default) or ``"regex"`` -- which
+        ``USE``-merge engine preprocesses the source (see
+        :func:`build_sdfg_from_files`).
     :returns: a built, validated SDFG.
     :raises ValueError: if ``entry`` is ``None`` and the source has no
         procedure or is ambiguous (more than one).
@@ -369,7 +382,8 @@ def build_sdfg(source: str,
                         preprocess=preprocess,
                         defines=defines,
                         kind_map=kind_map,
-                        kind_passthrough=kind_passthrough).build()
+                        kind_passthrough=kind_passthrough,
+                        merge_engine=merge_engine).build()
 
 
 #: ``func.func @<symbol>(`` -- the MLIR opener for a procedure
@@ -546,7 +560,8 @@ def build_sdfg_from_files(files: Sequence[Union[str, Path]],
                           name: str = "sdfg",
                           pipeline: Optional[str] = None,
                           out_dir: Optional[Union[str, Path]] = None,
-                          preprocess: bool = False) -> SDFG:
+                          preprocess: bool = False,
+                          merge_engine: str = "regex") -> SDFG:
     """Build a :class:`dace.SDFG` from a multi-file Fortran project.
 
     The files (a driver/root plus the modules it ``USE``s, in any
@@ -565,6 +580,9 @@ def build_sdfg_from_files(files: Sequence[Union[str, Path]],
     :param out_dir: scratch directory; a temporary one is used and
         removed when omitted.
     :param preprocess: also run the opt-in ``IF (intvar)`` rewrite.
+    :param merge_engine: ``"fparser"`` (default) inlines the ``USE``-d
+        modules with the fparser AST engine; ``"regex"`` uses the legacy
+        text-splicer (:func:`merge_used_modules`).
     :returns: a built, validated SDFG.
     :raises ValueError: ``entry`` missing, or no file defines its
         procedure.
@@ -589,7 +607,8 @@ def build_sdfg_from_files(files: Sequence[Union[str, Path]],
                           name=name,
                           pipeline=pipeline,
                           out_dir=d,
-                          preprocess=preprocess)
+                          preprocess=preprocess,
+                          merge_engine=merge_engine)
 
     if out_dir is not None:
         return _do(Path(out_dir))

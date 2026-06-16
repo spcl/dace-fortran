@@ -40,6 +40,8 @@ inside a character literal is never touched.
 """
 
 import re
+from pathlib import Path
+from typing import Optional
 
 # A REAL-literal exponent whose value is a whole number (``**2.0``,
 # ``**3.0``, ``**2.0_JPRB``, ``**2.0D0``, ``**2.``).  Only this form is
@@ -1405,10 +1407,65 @@ def rewrite_string_enum_to_integer(source: str) -> tuple:
     return "".join(out), enum_maps
 
 
+def _fparser_merge(source: str, *, search_dirs=(), entry: Optional[str] = None) -> str:
+    """Single-TU merge via the fparser inliner engine (opt-in).
+
+    Sibling of :func:`merge_used_modules`: instead of the regex
+    text-splicer, this parses ``source`` plus every Fortran file under
+    ``search_dirs`` into one fparser AST, resolves the ``USE`` graph,
+    inlines the needed modules, runs the desugaring pipeline, and
+    serialises back to a single ``.f90`` text.  Selected by
+    ``merge_engine="fparser"``; the regex engine stays the default.
+
+    ``entry`` (when given) restricts pruning to the entry's USE-closure;
+    ``None`` keeps every top-level subprogram (a faithful whole-project
+    single-TU merge).
+    """
+    from dace_fortran.fparser_inliner import inline_to_ast, strip_builtin_stub_modules
+
+    src_map = {}
+    for d in search_dirs:
+        d = Path(d)
+        files = ([d]
+                 if d.is_file() else sorted(list(d.rglob("*.f90")) + list(d.rglob("*.F90")) + list(d.rglob("*.incf"))))
+        for f in files:
+            try:
+                src_map.setdefault(str(f), f.read_text())
+            except (OSError, UnicodeDecodeError):
+                continue
+    # The multi-file build stages the root file (the one defining the entry)
+    # into ``search_dirs`` as well, so it is already in ``src_map``; only
+    # inject ``source`` under a synthetic key when it is NOT already present
+    # (the single-source build passes no staged files).  Injecting it
+    # unconditionally would duplicate every procedure in the root file.
+    if not any(txt == source for txt in src_map.values()):
+        src_map["__entry__.f90"] = source
+    # Inject the intrinsic-module stubs so the inliner's fparser parse
+    # resolves ``USE iso_c_binding`` / ``iso_fortran_env`` (it hard-requires
+    # every ``USE``-d module in the closure).  The stubs do NOT leak into the
+    # output fed to flang: the inliner prunes the unreachable stub modules and
+    # resolves intrinsic kinds inline (``REAL(c_double)`` -> ``REAL(KIND=8)``),
+    # so flang still supplies its own intrinsic modules without a collision.
+    # ``optimize=False``: the merge only needs a valid inlined single TU --
+    # flang and the bridge do their own constant-folding / dead-branch
+    # elimination, so skip the inliner's const-propagation optimizers (which
+    # also matches the legacy regex merge's "splice and let flang inline"
+    # semantics and avoids optimizer fragilities on inlined-call patterns).
+    ast = inline_to_ast(src_map, entry, include_builtins=True, optimize=False)
+    # A whole-project merge (``entry is None``) keeps every top-level unit,
+    # including the injected intrinsic-module stubs; strip them so flang's own
+    # ``iso_c_binding`` / ``iso_fortran_env`` are used without a collision.
+    # (No-op when an entry point already pruned them.)
+    ast = strip_builtin_stub_modules(ast)
+    return ast.tofortran()
+
+
 def preprocess_fortran_source(source: str,
                               *,
                               search_dirs=(),
                               merge: bool = True,
+                              merge_engine: str = "regex",
+                              merge_entry: Optional[str] = None,
                               if_intvar: bool = False,
                               kind_map: dict = None,
                               kind_passthrough: bool = False) -> str:
@@ -1437,6 +1494,15 @@ def preprocess_fortran_source(source: str,
     :param source: Fortran source text.
     :param search_dirs: directories searched by ``merge_used_modules``.
     :param merge: run the ``USE``-merge stage (default on).
+    :param merge_engine: which merge implementation to use --
+        ``"regex"`` (default) is the fparser-free
+        :func:`merge_used_modules` text-splicer; ``"fparser"`` routes
+        through :func:`_fparser_merge`, the fparser AST inliner
+        (:mod:`dace_fortran.fparser_inliner`), which additionally desugars
+        and prunes.
+    :param merge_entry: entry procedure for the ``"fparser"`` engine's
+        pruning (plain name / ``module::proc`` / mangled symbol); ``None``
+        keeps every top-level subprogram.  Ignored by the regex engine.
     :param if_intvar: also run the opt-in integer-IF rewrite.
     :param kind_map: per-alias override forwarded to
         ``normalize_kind_parameters`` -- ``{"wp": 4}`` for an fp32
@@ -1447,7 +1513,12 @@ def preprocess_fortran_source(source: str,
     :returns: the fully preprocessed Fortran source.
     """
     if merge:
-        source = merge_used_modules(source, search_dirs=search_dirs)
+        if merge_engine == "fparser":
+            source = _fparser_merge(source, search_dirs=search_dirs, entry=merge_entry)
+        elif merge_engine == "regex":
+            source = merge_used_modules(source, search_dirs=search_dirs)
+        else:
+            raise ValueError(f"merge_engine must be 'regex' or 'fparser', got {merge_engine!r}")
     source = strip_openmp_directives(source)
     source = normalize_kind_parameters(source, kind_map=kind_map, passthrough=kind_passthrough)
     source = rewrite_integer_powers(source)
