@@ -417,6 +417,27 @@ static std::string traceExtentExprMemo(
   if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def))
     return traceExtentExprMemo(cv.getValue(), memo);
 
+  // ``fir.box_dims`` extent result of an array descriptor: render as that
+  // array's synthetic extent symbol ``<name>_d<dim>``.  A transient sized
+  // from another array's *runtime* extent -- e.g. the AoS-of-pointer-records
+  // gather temp (``LiftAosPointerRecords``), whose inner shape is recovered
+  // via ``fir.box_dims`` on a rebind target's assumed-shape box -- must reuse
+  // the source array's extent symbol.  Otherwise the extent falls through to
+  // ``"?"`` and the caller mints a fresh ``<temp>_d<i>`` that no passed array
+  // backs, so the call-time auto-fill defaults it to ``1`` and the transient
+  // is under-allocated (heap overflow).  ``fir.box_dims`` yields
+  // ``(lowerBound, extent, byteStride)``; only result #1 is an extent.
+  if (auto bd = mlir::dyn_cast<fir::BoxDimsOp>(def)) {
+    if (v == bd.getResult(1)) {
+      if (auto dim = traceConstInt(bd.getDim())) {
+        auto base = traceToDecl(bd.getVal());
+        if (!base.empty())
+          return base + "_d" + std::to_string(*dim);
+      }
+    }
+    return "";
+  }
+
   // Constant integer literal.
   if (auto cst = mlir::dyn_cast<mlir::arith::ConstantOp>(def))
     if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue()))
