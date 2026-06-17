@@ -170,34 +170,42 @@ end module
     assert "arr_nn3_w" in arrs, f"missing arr_nn3_w: {sorted(arrs.keys())}"
 
 
-@pytest.mark.skip(reason=("4-symbol + scalar member crashes the C++ pipeline "
-                          "under pytest (direct Python invocation succeeds with "
-                          "``arr_x`` -- gate prevents split, regular flatten "
-                          "fires).  Pytest-specific environmental issue in "
-                          "``SDFGBuilder._classify()`` -- needs valgrind / "
-                          "ASAN to root-cause.  Triple-buffer with ARRAY member "
-                          "works (test above)."))
 def test_quad_buffer_split_fires_for_four_distinct_symbols(tmp_path):
-    """Four distinct stable index symbols -- quad-buffer pattern.
-    Mints four per-symbol companions."""
+    """Four distinct stable index symbols ``a``/``b``/``c``/``d`` on the
+    same ``(root, member)`` -- quad-buffer pattern.  The ``>=2`` gate
+    fires and the bridge mints four per-symbol companions
+    ``arr_a_w`` ... ``arr_d_w`` (the triple-buffer case above, extended
+    to four).
+
+    The member is an ARRAY (``w(4)``): the per-symbol split gives each
+    toggle its own flat companion so a downstream double-buffer detector
+    can't false-positive on a shared one.  An all-scalar record
+    (``type :: t; real(8) :: x; end type``) instead collapses the whole
+    AoR to a single ``arr_x`` through the regular flatten -- correct,
+    since a scalar AoR is already one contiguous array -- so the
+    per-symbol split is reserved for records with an array member.  (This
+    test previously used a scalar ``x`` and asserted ``arr_a_x``; that
+    expectation was wrong -- the all-scalar record collapses and the
+    split correctly does not fire.  The original skip masked a since-fixed
+    pipeline crash, not this behaviour.)"""
     src = """
 module m
   type :: t
-    real(kind=8) :: x
+    real(kind=8) :: w(4)
   end type
 contains
   subroutine driver(arr, a, b, c, d, out)
     type(t), pointer, intent(in) :: arr(:)
     integer, intent(in) :: a, b, c, d
     real(kind=8), intent(out) :: out
-    out = arr(a) % x + arr(b) % x + arr(c) % x + arr(d) % x
+    out = arr(a) % w(1) + arr(b) % w(2) + arr(c) % w(3) + arr(d) % w(4)
   end subroutine
 end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     arrs = sdfg.arrays
     for sym in ("a", "b", "c", "d"):
-        flat = f"arr_{sym}_x"
+        flat = f"arr_{sym}_w"
         assert flat in arrs, f"missing {flat}: {sorted(arrs.keys())}"
 
 
