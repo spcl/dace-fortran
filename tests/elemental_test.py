@@ -33,6 +33,8 @@ def test_elemental_subroutine_with_inout(tmp_path: Path):
     inline-all + fold-element-aliases collapse the body into indexed
     updates on the outer arrays."""
     src = """
+module apply_delta_mod
+contains
 subroutine apply_delta(od, scat_od, g)
   implicit none
   real(8), intent(inout) :: od(14), scat_od(14), g(14)
@@ -47,8 +49,9 @@ contains
     c = c / (1.0d0 + c)
   end subroutine delta
 end subroutine apply_delta
+end module apply_delta_mod
 """
-    sdfg = build_sdfg(src, tmp_path, name="apply_delta", entry="apply_delta").build()
+    sdfg = build_sdfg(src, tmp_path, name="apply_delta", entry="apply_delta_mod::apply_delta").build()
 
     rng = np.random.default_rng(0)
     od = np.asfortranarray(rng.random(14, dtype=np.float64))
@@ -76,6 +79,8 @@ def test_elemental_function_via_hlfir_elemental(tmp_path: Path):
     ``FoldElementAliases`` (which targets inlined-scalar-body aliases)
     leaves the standard intrinsic-elemental path untouched."""
     src = """
+module apply_square_shift_mod
+contains
 subroutine apply_square_shift(x, y, n)
   implicit none
   integer, intent(in)  :: n
@@ -83,8 +88,10 @@ subroutine apply_square_shift(x, y, n)
   real(8), intent(out) :: y(n)
   y = x * x - 1.0d0
 end subroutine apply_square_shift
+end module apply_square_shift_mod
 """
-    sdfg = build_sdfg(src, tmp_path, name="apply_square_shift").build()
+    sdfg = build_sdfg(src, tmp_path, name="apply_square_shift",
+                      entry="apply_square_shift_mod::apply_square_shift").build()
 
     rng = np.random.default_rng(1)
     n = 32
@@ -103,6 +110,8 @@ def test_fold_element_aliases_drops_inlined_declares(tmp_path: Path):
     per-element dummies showed up as stray ``a`` / ``b`` / ``c`` /
     ``f`` scalars on the SDFG argslist.)"""
     src = """
+module driver_mod
+contains
 subroutine driver(x)
   implicit none
   real(8), intent(inout) :: x(8)
@@ -113,8 +122,9 @@ contains
     v = v * 2.0d0
   end subroutine doubler
 end subroutine driver
+end module driver_mod
 """
-    b = build_sdfg(src, tmp_path, name="driver", entry="driver")
+    b = build_sdfg(src, tmp_path, name="driver", entry="driver_mod::driver")
     sdfg = b.build()
 
     # The outer array ``x`` is the only dummy of the driver.  The
@@ -130,6 +140,8 @@ def test_elemental_body_with_intrinsic(tmp_path: Path):
     the intrinsic must survive and land in the tasklet code as a
     Python call (``exp``)."""
     src = """
+module apply_soft_mod
+contains
 subroutine apply_soft(x, n)
   implicit none
   integer, intent(in) :: n
@@ -141,8 +153,9 @@ contains
     v = exp(v) - 1.0d0
   end subroutine soft
 end subroutine apply_soft
+end module apply_soft_mod
 """
-    sdfg = build_sdfg(src, tmp_path, name="apply_soft", entry="apply_soft").build()
+    sdfg = build_sdfg(src, tmp_path, name="apply_soft", entry="apply_soft_mod::apply_soft").build()
 
     rng = np.random.default_rng(2)
     n = 16
@@ -159,6 +172,8 @@ def test_elemental_subroutine_relu(tmp_path: Path):
     each element  --  exercises conditional control flow *inside* the
     inlined scalar body, on top of the loop-over-array shape."""
     src = """
+module apply_relu_mod
+contains
 subroutine apply_relu(x, n)
   implicit none
   integer, intent(in) :: n
@@ -170,8 +185,9 @@ contains
     if (v <= 0.0d0) v = 0.0d0
   end subroutine relu
 end subroutine apply_relu
+end module apply_relu_mod
 """
-    sdfg = build_sdfg(src, tmp_path, name="apply_relu", entry="apply_relu").build()
+    sdfg = build_sdfg(src, tmp_path, name="apply_relu", entry="apply_relu_mod::apply_relu").build()
 
     rng = np.random.default_rng(3)
     n = 32
@@ -192,6 +208,8 @@ def test_elemental_subroutine_softmax_step(tmp_path: Path):
     tasklet's read of ``t`` would race with the first tasklet's
     write."""
     src = """
+module apply_softmax_step_mod
+contains
 subroutine apply_softmax_step(x, s, n)
   implicit none
   integer, intent(in) :: n
@@ -207,8 +225,10 @@ contains
     v = t / norm
   end subroutine smstep
 end subroutine apply_softmax_step
+end module apply_softmax_step_mod
 """
-    sdfg = build_sdfg(src, tmp_path, name="apply_softmax_step", entry="apply_softmax_step").build()
+    sdfg = build_sdfg(src, tmp_path, name="apply_softmax_step",
+                      entry="apply_softmax_step_mod::apply_softmax_step").build()
 
     rng = np.random.default_rng(4)
     n = 16

@@ -35,6 +35,8 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 def test_local_allocatable_section_bound(tmp_path):
     """Whole-column SECTION of a local 2-D allocatable -> box_dims bound."""
     src = """
+MODULE sect_mod
+CONTAINS
 SUBROUTINE sect(res, n, m, j)
   IMPLICIT NONE
   INTEGER, INTENT(IN) :: n, m, j
@@ -48,8 +50,9 @@ SUBROUTINE sect(res, n, m, j)
   res = arr(:, j)
   DEALLOCATE(arr)
 END SUBROUTINE
+END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="sect", entry="sect").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="sect", entry="sect_mod::sect").build()
     n, m, j = 5, 3, 2
     res = np.zeros(n, dtype=np.float64, order="F")
     sdfg(res=res, n=np.int32(n), m=np.int32(m), j=np.int32(j))
@@ -88,7 +91,7 @@ CONTAINS
   END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     n = 4
     a = np.asarray(np.arange(1, n + 1), dtype=np.float64, order="F")
     res = np.zeros(n, dtype=np.float64, order="F")
@@ -121,7 +124,7 @@ CONTAINS
   END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="run", entry="run").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="run", entry="m::run").build()
     n = 6
     res = np.zeros(n, dtype=np.float64, order="F")
     sdfg(d_n=np.int32(n), res=res)
@@ -134,6 +137,8 @@ def test_float32_cast_with_symbol(tmp_path):
     bare ``dace`` module name must NOT leak as a required free symbol
     (codegen resolves it)."""
     src = """
+MODULE s_mod
+CONTAINS
 SUBROUTINE s(n, a, res)
   IMPLICIT NONE
   INTEGER, INTENT(IN) :: n
@@ -146,8 +151,9 @@ SUBROUTINE s(n, a, res)
     res(i) = a(i) * inv
   END DO
 END SUBROUTINE
+END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="s").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="s_mod::s").build()
     n = 3
     a = np.asarray(np.arange(1, n + 1), dtype=np.float64, order="F")
     res = np.zeros(n, dtype=np.float64, order="F")
@@ -164,6 +170,8 @@ def test_intrinsic_shadowing_local_variable_renamed(tmp_path):
     hlfir op) is unaffected.  A dead declaration that is only ever used
     as the intrinsic (Flang drops it) never reaches this path."""
     src = """
+MODULE shadow_mod
+CONTAINS
 SUBROUTINE shadow(a, b, res)
   IMPLICIT NONE
   REAL(8), INTENT(IN) :: a, b
@@ -174,8 +182,9 @@ SUBROUTINE shadow(a, b, res)
   ! name still renders as the intrinsic.
   res = max + MIN(a, b)
 END SUBROUTINE
+END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="shadow", entry="shadow").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="shadow", entry="shadow_mod::shadow").build()
     res = np.zeros(1, dtype=np.float64)
     sdfg(a=3.0, b=10.0, res=res)
     np.testing.assert_allclose(res[0], 3.0 * 2.0 + min(3.0, 10.0))
@@ -207,6 +216,8 @@ def test_rank_reducing_section_gather(tmp_path):
     indirect gather symbol.  ``buildIndexExpr`` now composes the full root
     subscript via ``expandDesignateChain`` (bridge/ast/assigns.cpp)."""
     src = """
+MODULE g2d_mod
+CONTAINS
 SUBROUTINE g2d(eig, mill, na, n, offset, ld, res)
   IMPLICIT NONE
   INTEGER, INTENT(IN) :: na, n, offset, ld
@@ -215,8 +226,9 @@ SUBROUTINE g2d(eig, mill, na, n, offset, ld, res)
   COMPLEX(8), INTENT(OUT) :: res(n)
   res(1:n) = eig(mill(1, offset + 1:offset + n), na)
 END SUBROUTINE
+END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="g2d", entry="g2d").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="g2d", entry="g2d_mod::g2d").build()
     na, n, offset, ld = 2, 4, 1, 6
     rng = np.random.default_rng(0)
     eig = np.asfortranarray(rng.standard_normal((ld, na)) + 1j * rng.standard_normal((ld, na)), dtype=np.complex128)

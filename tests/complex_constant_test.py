@@ -22,6 +22,8 @@ def test_complex_2d_zero_fill(tmp_path):
     """``COMPLEX(:,:); x = 0.0_dp`` -> whole 2-D array fill (not a 1-D
     scalar write)."""
     src = """
+MODULE s_mod
+CONTAINS
 SUBROUTINE s(res, n, m)
   IMPLICIT NONE
   INTEGER, INTENT(IN) :: n, m
@@ -32,8 +34,9 @@ SUBROUTINE s(res, n, m)
   res = big
   DEALLOCATE(big)
 END SUBROUTINE
+END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="s").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="s_mod::s").build()
     res = np.full((3, 2), 7.0 + 1j, dtype=np.complex128, order="F")
     sdfg(res=res, n=np.int32(3), m=np.int32(2))
     assert np.allclose(res, 0)
@@ -42,6 +45,8 @@ END SUBROUTINE
 def test_complex_literal_fill(tmp_path):
     """``x = (1.0, 2.0)`` fills every element with ``1 + 2j``."""
     src = """
+MODULE s_mod
+CONTAINS
 SUBROUTINE s(res, n)
   IMPLICIT NONE
   INTEGER, INTENT(IN) :: n
@@ -50,8 +55,9 @@ SUBROUTINE s(res, n)
   a = (1.0_8, 2.0_8)
   res = a
 END SUBROUTINE
+END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="s").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="s_mod::s").build()
     res = np.zeros(5, dtype=np.complex128, order="F")
     sdfg(res=res, n=np.int32(5))
     assert np.allclose(res, 1.0 + 2.0j)
@@ -62,6 +68,8 @@ def test_complex_with_loop_iterator_j(tmp_path):
     renders for complex constants -- the imaginary unit is NOT the
     variable."""
     src = """
+MODULE s_mod
+CONTAINS
 SUBROUTINE s(res, n)
   IMPLICIT NONE
   INTEGER, INTENT(IN) :: n
@@ -74,8 +82,9 @@ SUBROUTINE s(res, n)
   END DO
   res = a
 END SUBROUTINE
+END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="s").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="s_mod::s").build()
     res = np.zeros(4, dtype=np.complex128, order="F")
     sdfg(res=res, n=np.int32(4))
     np.testing.assert_allclose(res, np.array([complex(i + 1, 2.0) for i in range(4)]))
@@ -85,14 +94,17 @@ def test_complex_scalar_j_plus_imaginary(tmp_path):
     """A REAL scalar named ``j`` used in arithmetic alongside a complex
     constant -- ``j`` is read as data, ``1j`` is not."""
     src = """
+MODULE s_mod
+CONTAINS
 SUBROUTINE s(j, res)
   IMPLICIT NONE
   REAL(8), INTENT(IN) :: j
   COMPLEX(8), INTENT(OUT) :: res
   res = j * (1.0_8, 0.0_8) + (0.0_8, 1.0_8)
 END SUBROUTINE
+END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="s").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="s_mod::s").build()
     res = np.zeros(1, dtype=np.complex128)
     sdfg(j=3.0, res=res)
     np.testing.assert_allclose(res[0], 3.0 + 1.0j)

@@ -49,7 +49,7 @@ contains
   end subroutine outer
 end module m
 """
-    _builds(tmp_path, src, name="outer", entry="outer")
+    _builds(tmp_path, src, name="outer", entry="m::outer")
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +78,7 @@ contains
   end subroutine top
 end module m
 """
-    _builds(tmp_path, src, name="top", entry="top")
+    _builds(tmp_path, src, name="top", entry="m::top")
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +103,7 @@ contains
   end subroutine outer
 end module m
 """
-    sdfg = _builds(tmp_path, src, name="outer", entry="outer")
+    sdfg = _builds(tmp_path, src, name="outer", entry="m::outer")
     # Same-rank pass-through: only ``arr_2d`` should appear; no
     # separately-classified ``buf`` view alias.
     assert 'arr_2d' in sdfg.arrays
@@ -140,7 +140,7 @@ contains
   end subroutine outer
 end module m
 """
-    _builds(tmp_path, src, name="outer", entry="outer")
+    _builds(tmp_path, src, name="outer", entry="m::outer")
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +167,7 @@ contains
   end subroutine outer
 end module m
 """
-    _builds(tmp_path, src, name="outer", entry="outer")
+    _builds(tmp_path, src, name="outer", entry="m::outer")
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +191,7 @@ contains
   end subroutine outer
 end module m
 """
-    _builds(tmp_path, src, name="outer", entry="outer")
+    _builds(tmp_path, src, name="outer", entry="m::outer")
 
 
 # ---------------------------------------------------------------------------
@@ -217,4 +217,4 @@ contains
   end subroutine outer
 end module m
 """
-    _builds(tmp_path, src, name="outer", entry="outer")
+    _builds(tmp_path, src, name="outer", entry="m::outer")

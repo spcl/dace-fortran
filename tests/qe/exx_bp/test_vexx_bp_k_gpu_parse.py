@@ -141,46 +141,13 @@ def test_restore_fft_interfaces_unblocks_flang_parse(tmp_path):
         "flang did not produce a HLFIR output"
 
 
-@pytest.mark.xfail(strict=False,
-                   reason=("Source-side restore lets flang parse the QE checkpoint cleanly "
-                           "(verified in test_restore_fft_interfaces_unblocks_flang_parse).  "
-                           "Pipeline-internal gates fixed so far: "
-                           "(1) the ``hlfir-inline-all`` SIGSEGV (multi-block error helpers "
-                           "like ``errore`` / ``upf_error`` get stripped / refused); "
-                           "(2) the ``hlfir-rewrite-pointer-assigns`` rejection of QE's "
-                           "``ptr(<lo>:..) => src(..)`` bounds-remap (marked as a View at "
-                           "extract_vars time); "
-                           "(3) the ``hlfir-lift-reduction-operands`` verifier crash on "
-                           "dimensional ``SUM(arr, DIM=k)`` reductions producing "
-                           "``!hlfir.expr<Nxf64>`` (lift now skips non-scalar reduction "
-                           "results); "
-                           "(4) the ``fir.do_loop`` non-constant step refusal (hoist + "
-                           "symbolic-step support landed); "
-                           "(5) the unresolved ``?`` placeholder in the inline "
-                           "``MATMUL(TRANSPOSE(vcut % a), q) / tpi`` tasklet body in "
-                           "``vcut_get`` -- fixed via (a) ``libcallNameForExprOp`` "
-                           "recognising ``hlfir.matmul_transpose``, (b) ``findApplies`` "
-                           "walking the inner elemental body, (c) ``traceToDecl`` "
-                           "building the flattened ``<parent>_<member>`` name for "
-                           "struct-field designates.  CURRENT NEXT GAP: "
-                           "``KeyError: 'vcut_a'`` at SDFG arglist lookup.  The bridge's "
-                           "``hlfir-flatten-structs`` pass lowers DUMMY-arg struct fields "
-                           "to flat declares (``vcut_a`` / ``vcut_cutoff`` / ...) but "
-                           "MODULE-LEVEL struct globals (``type(vcut_type) :: vcut`` at "
-                           "module scope) are NOT flattened.  Fix path: extend "
-                           "``planAndReplaceStructArgs`` in ``passes/FlattenStructs.cpp`` "
-                           "(or add a sibling pass) to also process module-level struct "
-                           "globals -- discover them via ``fir.address_of`` of a "
-                           "struct-typed ``fir.global``, walk the function for field "
-                           "designates, and emit per-(global, field) flat declares.  "
-                           "Alternatively: extend ``extract_vars.cpp``'s "
-                           "``fir.RecordType`` drop branch (line 1713+) to synthesise "
-                           "per-field VarInfo entries with ``module_origin_mod`` / "
-                           "``module_origin_name`` set so the bindings layer marshals "
-                           "the struct field as a flat array."))
 def test_vexx_bp_k_gpu_parses(tmp_path):
-    """End-to-end SDFG build for ``vexx_bp_k_gpu`` -- currently xfails on a
-    downstream bridge crash, gated separately from the parse fix above."""
+    """End-to-end SDFG build for ``vexx_bp_k_gpu``: the QE checkpoint
+    parses, inlines, and lowers to a validated SDFG.  Previously xfailed on
+    a ``KeyError: 'vcut_a'`` (module-level struct global not flattened);
+    that downstream gap is now closed, so the build returns cleanly.  The
+    numerical-correctness sibling stays gated until the reference compare
+    lands."""
     src = _restore_fft_interfaces(_SRC.read_text())
     sdfg = dace_fortran.build_sdfg(src, out_dir=str(tmp_path / "sdfg"), entry=_ENTRY, name="vexx_bp_k_gpu")
     sdfg.validate()
@@ -284,11 +251,19 @@ def test_vexx_bp_k_gpu_reference_runs(tmp_path):
 
 
 @pytest.mark.xfail(strict=False,
-                   reason=("Gates on ``test_vexx_bp_k_gpu_parses`` flipping first: until "
-                           "the SDFG build closes (downstream tasklet ``?`` placeholder), "
-                           "there is no SDFG side to compare against.  Reference half of "
-                           "the harness is pinned by ``test_vexx_bp_k_gpu_reference_runs``; "
-                           "once ``build_sdfg`` returns, this test auto-flips."))
+                   reason=("The SDFG now BUILDS (``test_vexx_bp_k_gpu_parses`` passes), so the "
+                           "comparison harness is fully wired.  Remaining gap is at the SDFG "
+                           "CALL: ``KeyError: Missing program argument 'add_nlxx_pot_deexx'``.  "
+                           "``hpsi(lda)`` / ``deexx(nkb)`` are DUMMY args of the inlined "
+                           "``add_nlxx_pot`` (lines 1216-1227); at the call site the caller "
+                           "passes sections of its own locals (``hpsi(:,ii)`` and "
+                           "``deexx(:,ii)``, ``deexx`` being a local ALLOCATABLE allocated only "
+                           "under ``okvan``).  The inliner leaks these dummies as program "
+                           "arguments (``add_nlxx_pot_deexx (nkb,)`` / ``add_nlxx_pot_hpsi "
+                           "(lda,)``) instead of binding them as section-aliases of the "
+                           "caller's locals -- the QE inlined-dummy-bound-to-local-section gap "
+                           "(plan Ext 1/2/4).  Once those bind as transients/section-aliases "
+                           "this auto-flips to a clean element-wise compare on the no-op path."))
 def test_vexx_bp_k_gpu_numerical_correctness(tmp_path):
     """End-to-end gfortran-reference vs SDFG element-wise comparison.
 

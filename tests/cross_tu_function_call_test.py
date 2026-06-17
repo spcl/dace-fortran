@@ -34,8 +34,11 @@ end module mo_clamp
 """
 
 _CALLER = """
-subroutine apply_clamp(nproma, x, out)
+module mo_apply_clamp
   use mo_clamp, only: clamp_to
+  implicit none
+contains
+subroutine apply_clamp(nproma, x, out)
   implicit none
   integer, intent(in) :: nproma
   real(8), intent(in) :: x(8)
@@ -50,6 +53,7 @@ subroutine apply_clamp(nproma, x, out)
     end if
   end do
 end subroutine apply_clamp
+end module mo_apply_clamp
 """
 
 
@@ -65,7 +69,7 @@ def test_cross_tu_function_result_inlines(tmp_path: Path, merge_engine):
     helper = tmp_path / "mo_clamp.f90"
     helper.write_text(_HELPER)
 
-    sdfg = build_sdfg_from_files([caller, helper], entry="apply_clamp",
+    sdfg = build_sdfg_from_files([caller, helper], entry="mo_apply_clamp::apply_clamp",
                                  name="apply_clamp", out_dir=tmp_path / "build",
                                  merge_engine=merge_engine)
 

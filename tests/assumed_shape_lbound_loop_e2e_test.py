@@ -33,6 +33,8 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 # bound must become the ``offset_a_d0`` symbol, not the ``?``
 # sentinel, in the loop-bound expression.
 _SRC = """
+module sum_as_mod
+contains
 subroutine sum_as(a, out)
   implicit none
   real(8), intent(in)  :: a(10:)
@@ -43,6 +45,7 @@ subroutine sum_as(a, out)
     out = out + a(i)
   end do
 end subroutine sum_as
+end module sum_as_mod
 """
 
 
@@ -71,7 +74,7 @@ def test_assumed_shape_lbound_ubound_loop(tmp_path: Path):
     ``sum(a)``."""
     d = tmp_path / "sdfg"
     d.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(_SRC, d, name="sum_as", entry="sum_as").build()
+    sdfg = build_sdfg(_SRC, d, name="sum_as", entry="sum_as_mod::sum_as").build()
     sdfg.validate()
 
     n = 7

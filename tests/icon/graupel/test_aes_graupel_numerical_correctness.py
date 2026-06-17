@@ -14,12 +14,13 @@ Pattern mirrors ``tests/icon/full/test_velocity_full.py``:
   * raw-pointer reference call vs DaCe numpy-arg dispatch ->
     identical Fortran-side ABI from both runs.
 
-Status: ``xfail(strict=False)`` -- the SDFG build itself currently
-hits ``InvalidSDFGEdgeError`` during validation (memlet
-dimensionality mismatch downstream of the graupel multi-file
-inline).  This test scaffolds the harness so when the validation
-gap closes the test auto-flips to passing; until then the failure
-points at the validation error rather than silently absent.
+Status: green.  The SDFG build used to fail downstream of the graupel
+multi-file inline -- the AoS-of-pointer-records gather temp
+(``t_qx_ptr%x``), whose inner extents are recovered via ``fir.box_dims``,
+was sized from unbound extent symbols that the call-time auto-fill
+defaulted to 1, under-allocating the buffer and overflowing the heap.
+The ``fir.box_dims -> <name>_d<dim>`` extent resolution closed it; the
+SDFG now builds, runs, and matches the gfortran reference element-wise.
 
 Random-input determinism:  ``init_graupel_inputs_c`` is a small
 Fortran routine in ``graupel_caller.f90`` that runs a Mulberry32-
@@ -51,7 +52,7 @@ _GRAUPEL_SOURCES = [
 
 _CALLER = _HERE / "graupel_caller.f90"
 
-_ENTRY = "graupel_run"
+_ENTRY = "mo_aes_graupel::graupel_run"
 
 
 def _compile_reference(out_dir: Path) -> ctypes.CDLL:
@@ -147,7 +148,7 @@ def test_aes_graupel_e2e_numerical(tmp_path):
         prr_ref.ctypes.data, pri_ref.ctypes.data, prs_ref.ctypes.data, prg_ref.ctypes.data, pflx_ref.ctypes.data,
         pre_ref.ctypes.data)
 
-    # SDFG side.  XFAILs at build until the validation gap closes.
+    # SDFG side.
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg_from_files(_GRAUPEL_SOURCES, entry=_ENTRY, name="graupel_run", out_dir=sdfg_dir / "build")

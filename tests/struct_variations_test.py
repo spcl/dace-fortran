@@ -65,7 +65,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="f").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="m::f").build()
     assert "g_inner_x" in sdfg.arrays or "g_inner_x" in sdfg.scalars, \
         f"expected g_inner_x: arrays={sorted(sdfg.arrays.keys())}"
 
@@ -88,7 +88,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="f").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="m::f").build()
     assert "g_inner_a" in sdfg.arrays
 
 
@@ -113,7 +113,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="f").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="m::f").build()
     assert "g_a_b_x" in sdfg.arrays or "g_a_b_x" in sdfg.scalars
 
 
@@ -138,7 +138,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="f").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="m::f").build()
     arrs = sorted(sdfg.arrays.keys())
     # Both i1.x and i2.x referenced as scalar; i1.y referenced
     # as array.  i2.y NOT referenced -- shouldn't be registered.
@@ -169,7 +169,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="f").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="m::f").build()
     assert "g" not in sdfg.symbols
 
 
@@ -189,7 +189,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="f").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="m::f").build()
     assert "g_a" in sdfg.arrays
     assert "g" not in sdfg.symbols
 
@@ -218,7 +218,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="f").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="m::f").build()
     # The flatten pass produces flat per-field args.
     assert "s" not in sdfg.symbols
 
@@ -246,7 +246,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="f").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="m::f").build()
     # Local scalar struct's field should be addressable.
     assert "local" not in sdfg.symbols
 
@@ -271,5 +271,5 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="f").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="m::f").build()
     assert "g_idx" in sdfg.symbols or "g_idx" in sdfg.arrays

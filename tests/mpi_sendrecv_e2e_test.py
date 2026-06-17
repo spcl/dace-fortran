@@ -31,6 +31,8 @@ pytestmark = [
 ]
 
 _RING = """
+module ring_mod
+contains
 subroutine ring(buf, rbuf, n, dst, src, tag, rank)
   implicit none
   integer, intent(in) :: n, dst, src, tag, rank
@@ -51,6 +53,7 @@ subroutine ring(buf, rbuf, n, dst, src, tag, rank)
     call MPI_Send(buf, n, MPI_DOUBLE_PRECISION, dst, tag, MPI_COMM_WORLD, ierr)
   end if
 end subroutine ring
+end module ring_mod
 """
 
 
@@ -69,7 +72,7 @@ def test_ring_send_recv_numeric(tmp_path: Path):
     # the compiled artifact with the other ranks.
     sdfg = None
     if rank == 0:
-        sdfg = build_sdfg(_RING, tmp_path / "sdfg", name="ring", entry="ring").build()
+        sdfg = build_sdfg(_RING, tmp_path / "sdfg", name="ring", entry="ring_mod::ring").build()
         sdfg.name = "mpi_ring"
     func = utils.distributed_compile(sdfg, comm)
 
@@ -86,6 +89,8 @@ def test_ring_send_recv_numeric(tmp_path: Path):
 
 
 _NB_RING = """
+module nbring_mod
+contains
 subroutine nbring(buf, rbuf, n, dst, src, tag)
   implicit none
   integer, intent(in) :: n, dst, src, tag
@@ -101,6 +106,7 @@ subroutine nbring(buf, rbuf, n, dst, src, tag)
   call MPI_Wait(rreq, MPI_STATUS_IGNORE, ierr)
   call MPI_Wait(sreq, MPI_STATUS_IGNORE, ierr)
 end subroutine nbring
+end module nbring_mod
 """
 
 
@@ -120,7 +126,7 @@ def test_nonblocking_ring_numeric(tmp_path: Path):
 
     sdfg = None
     if rank == 0:
-        sdfg = build_sdfg(_NB_RING, tmp_path / "sdfg", name="nbring", entry="nbring").build()
+        sdfg = build_sdfg(_NB_RING, tmp_path / "sdfg", name="nbring", entry="nbring_mod::nbring").build()
         sdfg.name = "mpi_nbring"
     func = utils.distributed_compile(sdfg, comm)
 

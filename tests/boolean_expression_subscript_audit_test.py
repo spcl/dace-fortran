@@ -52,7 +52,7 @@ contains
   end subroutine check
 end module m
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="check", entry="check").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="check", entry="m::check").build()
     a = np.array([1.0, 1.0], dtype=np.float64, order='F')
     b = np.array([0.5, 0.5], dtype=np.float64, order='F')
     out = np.zeros((1, ), dtype=np.int32, order='F')
@@ -80,7 +80,7 @@ contains
   end subroutine check
 end module m
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="check", entry="check").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="check", entry="m::check").build()
     a = np.array([0.0, 1.0], dtype=np.float64, order='F')
     b = np.array([0.5, 0.5], dtype=np.float64, order='F')
     out = np.zeros((1, ), dtype=np.int32, order='F')
@@ -109,7 +109,7 @@ contains
   end subroutine check
 end module m
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="check", entry="check").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="check", entry="m::check").build()
     # case: AND true (a>b, c>d) -> OR is true
     a = np.array([1.0], dtype=np.float64, order='F')
     b = np.array([0.0], dtype=np.float64, order='F')

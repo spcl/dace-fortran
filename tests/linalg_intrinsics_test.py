@@ -88,12 +88,15 @@ def test_linalg_ops_numerical(tmp_path):
 
 
 _TRANSPOSE_OF_ELEMENTAL_SRC = """
+module probe_mod
+contains
 subroutine probe(d, res)
   implicit none
   double precision, intent(in)    :: d(16, 5)
   double precision, intent(inout) :: res(5, 16)
   res = transpose(1.0d0 - d)
 end subroutine probe
+end module probe_mod
 """
 
 
@@ -118,13 +121,13 @@ def test_transpose_of_elemental(tmp_path):
 
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(_TRANSPOSE_OF_ELEMENTAL_SRC, sdfg_dir, name="probe", entry="probe").build()
+    sdfg = build_sdfg(_TRANSPOSE_OF_ELEMENTAL_SRC, sdfg_dir, name="probe", entry="probe_mod::probe").build()
 
     rng = np.random.default_rng(7)
     d = np.asfortranarray(rng.standard_normal((16, 5)))
     res_ref = np.zeros((5, 16), order="F", dtype=np.float64)
     res_sdfg = np.zeros((5, 16), order="F", dtype=np.float64)
-    mod.probe(d, res_ref)
+    mod.probe_mod.probe(d, res_ref)
     sdfg(d=d, res=res_sdfg)
     np.testing.assert_allclose(res_sdfg, res_ref, rtol=1e-12, atol=1e-12)
 

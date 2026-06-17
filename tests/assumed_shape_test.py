@@ -59,6 +59,9 @@ end subroutine
 """
 
 _DRIVER_SRC = """
+module driver_mod
+  implicit none
+contains
 subroutine driver(x)
   implicit none
   integer, intent(inout) :: x(-2:2)
@@ -70,6 +73,7 @@ subroutine driver(x)
   ! The callee's arr(1) must land in x(-2) per assumed-shape semantics.
   call callee(x)
 end subroutine
+end module driver_mod
 """
 
 
@@ -135,7 +139,7 @@ def test_inline_rebase_storage(tmp_path: Path):
     callee_hlfir = _hlfir(_CALLEE_SRC, tmp_path / "callee.hlfir")
     driver_hlfir = _hlfir(_DRIVER_SRC, tmp_path / "driver.hlfir")
 
-    b = SDFGBuilder.from_files([str(driver_hlfir), str(callee_hlfir)], entry="driver")
+    b = SDFGBuilder.from_files([str(driver_hlfir), str(callee_hlfir)], entry="driver_mod::driver")
     sdfg = b.build()
 
     x = np.asfortranarray(np.array([10, 20, 30, 40, 50], dtype=np.int32))
@@ -150,14 +154,14 @@ def test_sdfg_matches_gfortran_reference(tmp_path: Path):
     driver_hlfir = _hlfir(_DRIVER_SRC, tmp_path / "driver.hlfir")
 
     ref = _f2py_build([_CALLEE_SRC, _DRIVER_SRC], tmp_path / "ref", "asref")
-    b = SDFGBuilder.from_files([str(driver_hlfir), str(callee_hlfir)], entry="driver")
+    b = SDFGBuilder.from_files([str(driver_hlfir), str(callee_hlfir)], entry="driver_mod::driver")
     sdfg = b.build()
 
     rng = np.random.default_rng(0)
     x_init = rng.integers(0, 1000, size=5, dtype=np.int32)
 
     x_ref = np.asfortranarray(x_init.copy())
-    ref.driver(x_ref)
+    ref.driver_mod.driver(x_ref)
 
     x_sdfg = np.asfortranarray(x_init.copy())
     sdfg(x=x_sdfg)

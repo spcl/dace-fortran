@@ -29,7 +29,7 @@ from _util import build_sdfg, f2py_compile, have_flang
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
 
-def _run(tmp_path, src, dims, *, entry="probe", shape_of=None):
+def _run(tmp_path, src, dims, *, entry="probe_mod::probe", shape_of=None):
     """Build ``src`` through the bridge and through f2py, run both on the
     same ``dims`` table, and return ``(sdfg_out, ref_out)``.  ``out`` is
     dimensioned ``out(n)`` in the kernel, so it must match ``len(dims)``.
@@ -51,7 +51,7 @@ def _run(tmp_path, src, dims, *, entry="probe", shape_of=None):
     # Python's import cache, handing every later test the first test's
     # compiled kernel as its reference.
     mod = f2py_compile(src, tmp_path / "ref", f"size_ref_{tmp_path.name}")
-    mod.probe(dims, out_ref)
+    mod.probe_mod.probe(dims, out_ref)
     if shape_of is not None:
         return out_sdfg, out_ref, shape_str
     return out_sdfg, out_ref
@@ -63,6 +63,8 @@ def _alloc_iter_by(size_expr: str, iter_idx: str) -> str:
     MAX/MIN extent be exercised without also routing MAX/MIN through the
     index/bound path (a separate subsystem)."""
     return f"""
+module probe_mod
+contains
 subroutine probe(n, dims, out)
   implicit none
   integer, intent(in) :: n, dims(n)
@@ -77,6 +79,7 @@ subroutine probe(n, dims, out)
   out(2) = buf(1)
   deallocate(buf)
 end subroutine probe
+end module probe_mod
 """
 
 
@@ -85,6 +88,8 @@ end subroutine probe
 # the only thing that varies between the 1-D allocatable cases.
 def _alloc_1d(size_expr: str) -> str:
     return f"""
+module probe_mod
+contains
 subroutine probe(n, dims, out)
   implicit none
   integer, intent(in) :: n, dims(n)
@@ -99,6 +104,7 @@ subroutine probe(n, dims, out)
   out(2) = buf(1)
   deallocate(buf)
 end subroutine probe
+end module probe_mod
 """
 
 
@@ -127,6 +133,8 @@ def test_size_scalar_hop(tmp_path):
     """``k = dims(1); allocate(buf(k))`` -- element via a scalar (the
     scalar is already a symbol; verifies the hop stays consistent)."""
     src = """
+module probe_mod
+contains
 subroutine probe(n, dims, out)
   implicit none
   integer, intent(in) :: n, dims(n)
@@ -141,6 +149,7 @@ subroutine probe(n, dims, out)
   out(1) = buf(k)
   deallocate(buf)
 end subroutine probe
+end module probe_mod
 """
     s, r = _run(tmp_path, src, [6, 3])
     assert s[0] == 2 * 6
@@ -150,6 +159,8 @@ end subroutine probe
 def test_size_multidim_alloc(tmp_path):
     """``allocate(mat(dims(1), dims(2)))`` -- one position symbol per dim."""
     src = """
+module probe_mod
+contains
 subroutine probe(n, dims, out)
   implicit none
   integer, intent(in) :: n, dims(n)
@@ -166,6 +177,7 @@ subroutine probe(n, dims, out)
   out(2) = mat(1, 1)
   deallocate(mat)
 end subroutine probe
+end module probe_mod
 """
     s, r = _run(tmp_path, src, [4, 3])
     assert s[0] == 4 + 10 * 3 and s[1] == 1 + 10
@@ -176,6 +188,8 @@ def test_size_automatic_array(tmp_path):
     """``real(8) :: tmp(dims(1))`` -- automatic (explicit-shape local)
     array sized by an element; no ALLOCATE."""
     src = """
+module probe_mod
+contains
 subroutine probe(n, dims, out)
   implicit none
   integer, intent(in) :: n, dims(n)
@@ -188,6 +202,7 @@ subroutine probe(n, dims, out)
   out(1) = tmp(dims(1))
   out(2) = tmp(1)
 end subroutine probe
+end module probe_mod
 """
     s, r = _run(tmp_path, src, [6, 3])
     assert s[0] == 2 * 6 and s[1] == 2
@@ -200,10 +215,10 @@ def _run_scalar_args(tmp_path, src, kwargs, ref_args, *, nout=2):
     from a function of those scalars, not from a ``dims`` table."""
     out_sdfg = np.zeros(nout, dtype=np.float64)
     out_ref = np.zeros(nout, dtype=np.float64)
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="probe", entry="probe").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="probe", entry="probe_mod::probe").build()
     sdfg(out=out_sdfg, **kwargs)
     mod = f2py_compile(src, tmp_path / "ref", f"size_ref_{tmp_path.name}")
-    mod.probe(*ref_args, out_ref)
+    mod.probe_mod.probe(*ref_args, out_ref)
     return out_sdfg, out_ref
 
 
@@ -212,6 +227,8 @@ def test_size_function_of_scalars(tmp_path):
     its scalar inputs stay plain scalars (input is a scalar, output is a
     symbol)."""
     src = """
+module probe_mod
+contains
 subroutine probe(a, b, out)
   implicit none
   integer, intent(in) :: a, b
@@ -231,6 +248,7 @@ contains
     r = x*y + 1
   end function fsz
 end subroutine probe
+end module probe_mod
 """
     s, r = _run_scalar_args(tmp_path, src,
                             {"a": np.int32(3), "b": np.int32(4)}, (3, 4))
@@ -241,6 +259,8 @@ end subroutine probe
 def test_size_function_no_input(tmp_path):
     """``allocate(buf(fc()))`` -- size from a no-argument function."""
     src = """
+module probe_mod
+contains
 subroutine probe(out)
   implicit none
   real(8), intent(inout) :: out(2)
@@ -258,6 +278,7 @@ contains
     r = 7
   end function fc
 end subroutine probe
+end module probe_mod
 """
     s, r = _run_scalar_args(tmp_path, src, {}, ())
     assert s[0] == 2 * 7 and s[1] == 2
@@ -273,6 +294,8 @@ def test_size_function_of_array_element(tmp_path):
     just the first read) keeps every term, so the size and index are both
     ``dims(1)*dims(2)+1``."""
     src = """
+module probe_mod
+contains
 subroutine probe(n, dims, out)
   implicit none
   integer, intent(in) :: n, dims(n)
@@ -291,6 +314,7 @@ contains
     r = x*y + 1
   end function fsz
 end subroutine probe
+end module probe_mod
 """
     s, r = _run(tmp_path, src, [3, 4])
     assert s[0] == 2 * (3 * 4 + 1)  # buf(13) = 26
@@ -341,6 +365,8 @@ def test_size_multidim_element_via_scalar(tmp_path):
     subscript on the interstate edge -- so multi-dim element sizes work
     this way without any multi-dim position-symbol machinery."""
     src = """
+module probe_mod
+contains
 subroutine probe(ii, jj, kk, shp, out)
   implicit none
   integer, intent(in) :: ii, jj, kk
@@ -357,14 +383,15 @@ subroutine probe(ii, jj, kk, shp, out)
   out(2) = buf(1)
   deallocate(buf)
 end subroutine probe
+end module probe_mod
 """
     shp = np.asfortranarray(np.arange(1, 9, dtype=np.int32).reshape(2, 2, 2))
     out_s = np.zeros(2); out_r = np.zeros(2)
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="probe", entry="probe").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="probe", entry="probe_mod::probe").build()
     sdfg(ii=np.int32(1), jj=np.int32(2), kk=np.int32(1), shp=shp, out=out_s)
     assert out_s[0] == 2 * 3  # shp(1,2,1) == 3 (column-major), buf(3) = 6
     mod = f2py_compile(src, tmp_path / "ref", f"size_ref_{tmp_path.name}")
-    mod.probe(1, 2, 1, shp, out_r)
+    mod.probe_mod.probe(1, 2, 1, shp, out_r)
     np.testing.assert_array_equal(out_s, out_r)
 
 
@@ -374,6 +401,8 @@ def test_size_multidim_element_inline(tmp_path):
     multi-dimensional position symbol ``__sym_shp_1_2_1`` (read once at
     entry as ``shp[0, 1, 0]``), so the shape stays symbolic."""
     src = """
+module probe_mod
+contains
 subroutine probe(n, shp, out)
   implicit none
   integer, intent(in) :: n, shp(2,2,2)
@@ -387,14 +416,15 @@ subroutine probe(n, shp, out)
   out(1) = buf(shp(1,2,1))
   deallocate(buf)
 end subroutine probe
+end module probe_mod
 """
     n = 4
     shp = np.asfortranarray(np.arange(1, 9, dtype=np.int32).reshape(2, 2, 2))
     out_s = np.zeros(n); out_r = np.zeros(n)
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="probe", entry="probe").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="probe", entry="probe_mod::probe").build()
     assert "__sym_shp_1_2_1" in sdfg.symbols
     sdfg(n=np.int32(n), shp=shp, out=out_s)
     assert out_s[0] == 2 * 3  # shp(1,2,1) == 3 (column-major), buf(3) = 6
     mod = f2py_compile(src, tmp_path / "ref", f"size_ref_{tmp_path.name}")
-    mod.probe(shp, out_r)
+    mod.probe_mod.probe(shp, out_r)
     np.testing.assert_array_equal(out_s, out_r)

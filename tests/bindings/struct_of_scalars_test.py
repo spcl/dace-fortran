@@ -46,6 +46,8 @@ module mo_consts
   end type t_consts
 end module mo_consts
 
+module kernel_dt_const_mod
+contains
 subroutine kernel_dt_const(cst, n, out)
   use mo_consts
   use iso_c_binding
@@ -58,6 +60,7 @@ subroutine kernel_dt_const(cst, n, out)
      out(i) = (cst%rg / cst%rcpd) * cst%rd * real(i, c_double)
   end do
 end subroutine kernel_dt_const
+end module kernel_dt_const_mod
 """
 
 
@@ -69,7 +72,7 @@ def test_dt_of_scalar_constants_flattens_per_member(tmp_path):
     that the SDFG arglist has the expected flat names."""
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    builder = build_sdfg(_SRC, sdfg_dir, name="kernel_dt_const", entry="kernel_dt_const")
+    builder = build_sdfg(_SRC, sdfg_dir, name="kernel_dt_const", entry="kernel_dt_const_mod::kernel_dt_const")
     plan = FlattenPlan.from_dict(builder.module.get_flatten_plan())
     sdfg = builder.build()
 
@@ -106,7 +109,7 @@ def test_dt_of_scalar_constants_numerical(tmp_path):
     """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(_SRC, sdfg_dir, name="kernel_dt_const", entry="kernel_dt_const").build()
+    sdfg = build_sdfg(_SRC, sdfg_dir, name="kernel_dt_const", entry="kernel_dt_const_mod::kernel_dt_const").build()
 
     rg = 9.80665
     rd = 287.0597

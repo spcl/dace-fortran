@@ -31,13 +31,17 @@ module pi_consts
   real(8), parameter :: pi_val = 3.14159265358979323846d0
 end module
 
+module main_mod
+  implicit none
+contains
 subroutine main(out)
   use pi_consts, only: pi_val
   real(8), intent(out) :: out
   out = pi_val * 2.0d0
 end subroutine main
+end module main_mod
 """
-    sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
+    sdfg = build_sdfg(src, tmp_path, name='main', entry='main_mod::main').build()
     out = np.zeros(1, dtype=np.float64)
     sdfg(out=out)
     expected = 3.14159265358979323846 * 2.0

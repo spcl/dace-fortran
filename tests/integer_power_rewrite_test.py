@@ -143,6 +143,9 @@ def test_e2e_parenthesised_base_matches_gfortran(tmp_path: Path):
         pytest.skip("flang-new-21 not on PATH")
 
     src = """
+module pw_mod
+  implicit none
+contains
 subroutine pw(t, k, s, out, n)
   implicit none
   integer, intent(in) :: n
@@ -155,13 +158,14 @@ subroutine pw(t, k, s, out, n)
     out(i) = 1.0_8 / (t(i) - k)**2.0 + s**3.0
   end do
 end subroutine pw
+end module pw_mod
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     ref_dir = tmp_path / "ref"
     ref_dir.mkdir(parents=True, exist_ok=True)
 
-    sdfg = build_sdfg(src, sdfg_dir, name="pw", entry="pw").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="pw", entry="pw_mod::pw").build()
     sdfg.validate()
     ref = f2py_compile(src, ref_dir, "pw_ref")
 
@@ -171,6 +175,6 @@ end subroutine pw
     s = np.float64(1.7)
     o_ref = np.zeros(16, dtype=np.float64, order="F")
     o_sdfg = np.zeros(16, dtype=np.float64, order="F")
-    ref.pw(t, k, s, o_ref)  # n auto-derived from shape(t)
+    ref.pw_mod.pw(t, k, s, o_ref)  # n auto-derived from shape(t)
     sdfg(n=np.int32(16), t=t, k=k, s=s, out=o_sdfg)
     np.testing.assert_array_equal(o_sdfg, o_ref)

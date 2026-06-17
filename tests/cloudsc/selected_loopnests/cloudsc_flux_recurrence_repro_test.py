@@ -35,6 +35,9 @@ from _util import build_sdfg, have_flang
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
 _SRC = """
+module cloudsc_mod
+  implicit none
+contains
 subroutine cloudsc(klon, klev, paph, za, zb, pfsqlf, pfsqrf)
   implicit none
   integer, intent(in) :: klon, klev
@@ -72,6 +75,7 @@ subroutine cloudscouter(klon, klev, nblocks, paph, za, zb, pfsqlf, pfsqrf)
                  zb(:, :, ibl), pfsqlf(:, :, ibl), pfsqrf(:, :, ibl))
   end do
 end subroutine cloudscouter
+end module cloudsc_mod
 """
 
 
@@ -98,7 +102,7 @@ def test_cloudsc_flux_recurrence(tmp_path: Path):
     ref = _f2py_build(_SRC, tmp_path / "ref", "flux_ref")
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(_SRC, sdfg_dir, name="cloudsc", entry="cloudscouter").build()
+    sdfg = build_sdfg(_SRC, sdfg_dir, name="cloudsc", entry="cloudsc_mod::cloudscouter").build()
 
     rng = np.random.default_rng(7)
     klon, klev, nblocks = 4, 6, 3
@@ -110,7 +114,7 @@ def test_cloudsc_flux_recurrence(tmp_path: Path):
     za = _f((klon, klev, nblocks))
     zb = _f((klon, klev, nblocks))
 
-    lf_ref, rf_ref = ref.cloudscouter(paph, za, zb)
+    lf_ref, rf_ref = ref.cloudsc_mod.cloudscouter(paph, za, zb)
 
     lf_sdfg = np.zeros((klon, klev + 1, nblocks), dtype=np.float64, order="F")
     rf_sdfg = np.zeros_like(lf_sdfg)

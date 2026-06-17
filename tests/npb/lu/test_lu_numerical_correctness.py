@@ -63,7 +63,7 @@ _HERE = Path(__file__).resolve().parent
 _LU = _HERE / "lu.F90"
 _USE = _HERE / "useapplu.F90"
 _CALLER = _HERE / "lu_caller.f90"
-_ENTRY = "call_dolu"
+_ENTRY = "useapplu::call_dolu"
 
 # NPB Class S (the smallest class) -- 12^3 grid, 50 SSOR steps.  Picked
 # so the full solver runs in under a second on each side; large enough

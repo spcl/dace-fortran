@@ -36,6 +36,9 @@ end subroutine bar
 """
 
 _KERNEL = """
+module run_mod
+  implicit none
+contains
 subroutine run(a, n)
   use iso_c_binding
   implicit none
@@ -50,6 +53,7 @@ subroutine run(a, n)
   end interface
   call bar(a, n)
 end subroutine run
+end module run_mod
 """
 
 
@@ -76,7 +80,7 @@ def test_keep_external_lowers_to_externalcall(tmp_path: Path):
     sig = lookup_external("bar")
     assert sig is not None and sig.c_name == "bar"
 
-    sdfg = build_sdfg(_KERNEL, tmp_path / "sdfg", name="run", entry="run").build()
+    sdfg = build_sdfg(_KERNEL, tmp_path / "sdfg", name="run", entry="run_mod::run").build()
     sdfg.name = "ext_keep_run"
 
     calls = [nd for nd, _ in sdfg.all_nodes_recursive() if isinstance(nd, ExternalCall)]
@@ -108,7 +112,7 @@ def test_keep_external_defaults_c_name_to_fortran_name(tmp_path: Path):
     )
     assert lookup_external("bar").c_name == "bar"
 
-    sdfg = build_sdfg(_KERNEL, tmp_path / "sdfg", name="run", entry="run").build()
+    sdfg = build_sdfg(_KERNEL, tmp_path / "sdfg", name="run", entry="run_mod::run").build()
     sdfg.name = "ext_keep_default_cname"
     sdfg.compile()
 

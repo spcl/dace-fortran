@@ -35,6 +35,8 @@ def test_explicit_negative_lower_bound(tmp_path: Path):
     """Explicit-shape ``arr(-5:5)`` -- the bridge SHOULD see the
     bound on the declare and specialise the offset symbol."""
     src = """
+module read_arr_mod
+contains
 subroutine read_arr(arr, idx, out)
   implicit none
   integer, intent(in) :: arr(-5:5)
@@ -42,10 +44,11 @@ subroutine read_arr(arr, idx, out)
   integer, intent(out) :: out
   out = arr(idx)
 end subroutine read_arr
+end module read_arr_mod
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="read_arr", entry="read_arr").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="read_arr", entry="read_arr_mod::read_arr").build()
     sdfg.validate()
 
     # Populate arr so position-i holds value (i * 10) -- distinguishes
@@ -80,6 +83,8 @@ def test_deferred_shape_allocatable_offset_is_one_by_default(tmp_path: Path):
     most-negative index used and infer that as the lower bound.
     """
     src = """
+module read_alloc_mod
+contains
 subroutine read_alloc(idx, out)
   implicit none
   integer, intent(in) :: idx
@@ -93,10 +98,11 @@ subroutine read_alloc(idx, out)
   out = arr(idx)
   deallocate(arr)
 end subroutine read_alloc
+end module read_alloc_mod
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="read_alloc", entry="read_alloc").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="read_alloc", entry="read_alloc_mod::read_alloc").build()
     sdfg.validate()
 
     out = np.zeros(1, dtype=np.int32, order='F')
@@ -120,6 +126,8 @@ def test_deferred_shape_allocatable_negative_lower_bound(tmp_path: Path):
     ``arr(-3)`` to ``arr[-4]`` -> segfault.  This test holds the line
     on the inference."""
     src = """
+module read_alloc_mod
+contains
 subroutine read_alloc(out)
   implicit none
   integer, intent(out) :: out(4)
@@ -135,10 +143,11 @@ subroutine read_alloc(out)
   out(4) = arr( 5)
   deallocate(arr)
 end subroutine read_alloc
+end module read_alloc_mod
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="read_alloc", entry="read_alloc").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="read_alloc", entry="read_alloc_mod::read_alloc").build()
     sdfg.validate()
 
     # Inference should pick -5 as the lower bound (most-negative literal
@@ -157,6 +166,8 @@ def test_zero_based_allocatable(tmp_path: Path):
     offset_d0 to 1; the inference pass should drop it to 0 after
     seeing the literal ``arr(0)`` write."""
     src = """
+module zero_based_mod
+contains
 subroutine zero_based(out)
   implicit none
   integer, intent(out) :: out(3)
@@ -170,10 +181,11 @@ subroutine zero_based(out)
   out(3) = arr(2)
   deallocate(arr)
 end subroutine zero_based
+end module zero_based_mod
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="zero_based", entry="zero_based").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="zero_based", entry="zero_based_mod::zero_based").build()
     sdfg.validate()
     assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0') == 0
 
@@ -190,6 +202,8 @@ def test_icon_min_rledge_pattern(tmp_path: Path):
     and ``mo_velocity_advection`` later reads at literal negative
     indices like ``end_block(-13)``."""
     src = """
+module icon_edge_blocks_mod
+contains
 subroutine icon_edge_blocks(out)
   implicit none
   integer, parameter :: min_rl = -13
@@ -205,10 +219,11 @@ subroutine icon_edge_blocks(out)
   out(3) = end_block(  5)
   deallocate(end_block)
 end subroutine icon_edge_blocks
+end module icon_edge_blocks_mod
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="icon_edge_blocks", entry="icon_edge_blocks").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="icon_edge_blocks", entry="icon_edge_blocks_mod::icon_edge_blocks").build()
     sdfg.validate()
     assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_end_block_d0') == -13
 
@@ -222,6 +237,8 @@ def test_multidim_mixed_negative_bounds(tmp_path: Path):
     array, dim-0 has a negative lower bound and dim-1 is default 1-based.
     Inference must adjust only dim-0, leave dim-1 at 1."""
     src = """
+module mixed_bounds_mod
+contains
 subroutine mixed_bounds(out)
   implicit none
   integer, intent(out) :: out(4)
@@ -237,10 +254,11 @@ subroutine mixed_bounds(out)
   out(4) = arr(-2, 2)
   deallocate(arr)
 end subroutine mixed_bounds
+end module mixed_bounds_mod
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="mixed_bounds", entry="mixed_bounds").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="mixed_bounds", entry="mixed_bounds_mod::mixed_bounds").build()
     sdfg.validate()
     assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0') == -4
     # dim 1 has no literal index below 1, so stays at default 1
@@ -260,6 +278,8 @@ def test_symbolic_index_local_allocatable(tmp_path: Path):
     ``v.lower_bounds[0]``.  The kernel then lowers correctly without
     any literal-index hint."""
     src = """
+module sym_idx_mod
+contains
 subroutine sym_idx(out)
   implicit none
   integer, intent(out) :: out(11)
@@ -274,10 +294,11 @@ subroutine sym_idx(out)
   end do
   deallocate(arr)
 end subroutine sym_idx
+end module sym_idx_mod
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="sym_idx", entry="sym_idx").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="sym_idx", entry="sym_idx_mod::sym_idx").build()
     sdfg.validate()
     assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0') == -5, (f"shape_shift inference should pick -5 from ALLOCATE(arr(-5:5)); "
                                                      f"got {dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0')}")
@@ -295,6 +316,8 @@ def test_dummy_arg_allocatable_literal_negative_index(tmp_path: Path):
     negative literals and sets ``offset_arr_d0`` correctly without
     any bindings-layer involvement -- direct call works."""
     src = """
+module read_dummy_mod
+contains
 subroutine read_dummy(arr, out)
   implicit none
   integer, allocatable, intent(in) :: arr(:)
@@ -303,10 +326,11 @@ subroutine read_dummy(arr, out)
   out(2) = arr( 0)
   out(3) = arr( 5)
 end subroutine read_dummy
+end module read_dummy_mod
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="read_dummy", entry="read_dummy").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="read_dummy", entry="read_dummy_mod::read_dummy").build()
     sdfg.validate()
     # literal-index inference sees -3 as the most-negative literal
     assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0') == -3, (f"expected offset_arr_d0 == -3 (most-negative literal); "
@@ -330,6 +354,8 @@ def test_dummy_arg_allocatable_symbolic_loop(tmp_path: Path):
     ``offset_arr_d0`` as a free symbol on the SDFG signature; the
     direct-call test passes it explicitly (``offset_arr_d0=-5``)."""
     src = """
+module sum_arr_mod
+contains
 subroutine sum_arr(arr, n, out)
   implicit none
   integer, allocatable, intent(in) :: arr(:)
@@ -342,10 +368,11 @@ subroutine sum_arr(arr, n, out)
   end do
   out = total
 end subroutine sum_arr
+end module sum_arr_mod
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="sum_arr", entry="sum_arr").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="sum_arr", entry="sum_arr_mod::sum_arr").build()
     sdfg.validate()
     # Loop bounds are literals but the designate index is symbolic;
     # the bridge leaves the offset free on the SDFG signature.
@@ -366,6 +393,8 @@ def test_dummy_arg_allocatable_multidim_mixed(tmp_path: Path):
     Bridge: offset_arr_d0 is free (caller binds), offset_arr_d1 = 1
     (default, never bound below 1)."""
     src = """
+module sum_col_mod
+contains
 subroutine sum_col(arr, n, out)
   implicit none
   integer, allocatable, intent(in) :: arr(:, :)
@@ -378,10 +407,11 @@ subroutine sum_col(arr, n, out)
   end do
   out = total
 end subroutine sum_col
+end module sum_col_mod
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="sum_col", entry="sum_col").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="sum_col", entry="sum_col_mod::sum_col").build()
     sdfg.validate()
     arglist = sdfg.arglist()
     assert 'offset_arr_d0' in arglist, "offset_arr_d0 should be free"
@@ -407,6 +437,8 @@ def test_dummy_arg_allocatable_inout_symbolic_write(tmp_path: Path):
     a symbolic-index loop.  Verifies the runtime offset works for
     writebacks too, not just reads."""
     src = """
+module write_arr_mod
+contains
 subroutine write_arr(arr)
   implicit none
   integer, allocatable, intent(inout) :: arr(:)
@@ -415,10 +447,11 @@ subroutine write_arr(arr)
     arr(i) = i * 10
   end do
 end subroutine write_arr
+end module write_arr_mod
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="write_arr", entry="write_arr").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="write_arr", entry="write_arr_mod::write_arr").build()
     sdfg.validate()
     assert 'offset_arr_d0' in sdfg.arglist()
 
@@ -433,6 +466,8 @@ def test_dummy_arg_allocatable_two_arrays_independent_offsets(tmp_path: Path):
     negative bounds.  Each gets its own free offset symbol; the
     caller passes the right one for each."""
     src = """
+module pair_sum_mod
+contains
 subroutine pair_sum(a, b, out)
   implicit none
   integer, allocatable, intent(in) :: a(:), b(:)
@@ -447,10 +482,11 @@ subroutine pair_sum(a, b, out)
   end do
   out = total
 end subroutine pair_sum
+end module pair_sum_mod
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="pair_sum", entry="pair_sum").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="pair_sum", entry="pair_sum_mod::pair_sum").build()
     sdfg.validate()
     arglist = sdfg.arglist()
     assert 'offset_a_d0' in arglist, "a should have a free offset symbol"
@@ -470,6 +506,8 @@ def test_explicit_shape_parameter_negative_bound(tmp_path: Path):
     traces the parameter through ``traceConstInt``; this stays
     working alongside the literal-access inference."""
     src = """
+module param_bound_mod
+contains
 subroutine param_bound(arr, out)
   implicit none
   integer, parameter :: lb = -8
@@ -480,10 +518,11 @@ subroutine param_bound(arr, out)
   out(2) = arr( 0)
   out(3) = arr( 5)
 end subroutine param_bound
+end module param_bound_mod
 """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="param_bound", entry="param_bound").build()
+    sdfg = build_sdfg(src, sdfg_dir, name="param_bound", entry="param_bound_mod::param_bound").build()
     sdfg.validate()
     assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0') == -8
 

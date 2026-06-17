@@ -52,6 +52,14 @@ pytestmark = [
 ]
 
 
+def _module_wrap(free_subroutine_src: str, module_name: str) -> str:
+    """Wrap a free ``SUBROUTINE`` source in ``module <module_name>`` so the
+    SDFG build can address it via the ``module::proc`` entry spelling.  The
+    f2py reference path keeps using the *unwrapped* free-subroutine string,
+    so the top-level ``ref.<proc>`` accessor stays intact."""
+    return f"module {module_name}\ncontains\n{free_subroutine_src}\nend module {module_name}\n"
+
+
 def _build_e2e_module(
     tmp_path: Path,
     *,
@@ -187,9 +195,9 @@ def test_e2e_rank1_default(tmp_path: Path):
     )
     mod = _build_e2e_module(
         tmp_path,
-        kernel_src=_RANK1_KERNEL,
+        kernel_src=_module_wrap(_RANK1_KERNEL, "flip_mask_mod"),
         name="flip_mask",
-        entry="flip_mask",
+        entry="flip_mask_mod::flip_mask",
         outer_args=outer,
         driver_src=_RANK1_DRIVER,
         module_name="flip_mask_e2e",
@@ -252,9 +260,9 @@ def test_e2e_rank2_default(tmp_path: Path):
     )
     mod = _build_e2e_module(
         tmp_path,
-        kernel_src=_RANK2_KERNEL,
+        kernel_src=_module_wrap(_RANK2_KERNEL, "flip_mask2_mod"),
         name="flip_mask2",
-        entry="flip_mask2",
+        entry="flip_mask2_mod::flip_mask2",
         outer_args=outer,
         driver_src=_RANK2_DRIVER,
         module_name="flip_mask2_e2e",
@@ -320,9 +328,9 @@ def test_e2e_rank3_default(tmp_path: Path):
     )
     mod = _build_e2e_module(
         tmp_path,
-        kernel_src=_RANK3_KERNEL,
+        kernel_src=_module_wrap(_RANK3_KERNEL, "flip_mask3_mod"),
         name="flip_mask3",
-        entry="flip_mask3",
+        entry="flip_mask3_mod::flip_mask3",
         outer_args=outer,
         driver_src=_RANK3_DRIVER,
         module_name="flip_mask3_e2e",
@@ -460,7 +468,8 @@ def test_e2e_rank1_cbool_passthrough(tmp_path: Path):
     """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(_CBOOL_KERNEL, sdfg_dir, name="flip_cbool", entry="flip_cbool").build()
+    sdfg = build_sdfg(_module_wrap(_CBOOL_KERNEL, "flip_cbool_mod"), sdfg_dir, name="flip_cbool",
+                      entry="flip_cbool_mod::flip_cbool").build()
     sdfg.name = "flip_cbool"
     compiled = sdfg.compile()
     so_path = Path(compiled._lib._library_filename)
@@ -562,9 +571,9 @@ def test_e2e_scalar_logical(tmp_path: Path):
     )
     mod = _build_e2e_module(
         tmp_path,
-        kernel_src=_SCALAR_KERNEL,
+        kernel_src=_module_wrap(_SCALAR_KERNEL, "scalar_flag_mod"),
         name="scalar_flag",
-        entry="scalar_flag",
+        entry="scalar_flag_mod::scalar_flag",
         outer_args=outer,
         driver_src=_SCALAR_DRIVER,
         module_name="scalar_flag_e2e",

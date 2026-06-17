@@ -93,6 +93,9 @@ def test_explicit_negative_bounds_shape_shift(tmp_path: Path):
     non-unit lower bounds ``w(-5:5, 0:3)``.  Offsets must be -5 and 0;
     a wrong offset shifts (or wild-writes) every element."""
     src = """
+module ss_neg_mod
+  implicit none
+contains
 subroutine ss_neg(w, out)
   implicit none
   real(8), intent(inout) :: w(-5:5, 0:3)
@@ -104,10 +107,11 @@ subroutine ss_neg(w, out)
     end do
   end do
 end subroutine ss_neg
+end module ss_neg_mod
 """
     d = tmp_path / "sdfg"
     d.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, d, name="ss_neg", entry="ss_neg").build()
+    sdfg = build_sdfg(src, d, name="ss_neg", entry="ss_neg_mod::ss_neg").build()
     sdfg.validate()
     assert _offsets(sdfg, "w") == {"offset_w_d0": -5, "offset_w_d1": 0}
     assert _offsets(sdfg, "out") == {"offset_out_d0": -5, "offset_out_d1": 0}
@@ -135,6 +139,9 @@ def test_assumed_shape_explicit_lb_fir_shift(tmp_path: Path):
     surfaced as a program arg (a separate gap, unrelated to the lower
     bound this test pins); 1-D keeps the numeric e2e clean."""
     src = """
+module as_shift_mod
+  implicit none
+contains
 subroutine as_shift(n, a, out)
   implicit none
   integer, intent(in) :: n
@@ -145,10 +152,11 @@ subroutine as_shift(n, a, out)
     out(i) = a(i) * 3.0d0 - 2.0d0
   end do
 end subroutine as_shift
+end module as_shift_mod
 """
     d = tmp_path / "sdfg"
     d.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, d, name="as_shift", entry="as_shift").build()
+    sdfg = build_sdfg(src, d, name="as_shift", entry="as_shift_mod::as_shift").build()
     sdfg.validate()
     # The E1 correctness signal: fir.shift lb recovered exactly.
     assert _offsets(sdfg, "a") == {"offset_a_d0": 10}
@@ -173,6 +181,9 @@ def test_assumed_shape_explicit_lb_fir_shift_2d(tmp_path: Path):
     bindable program argument; recover them generically from the
     arglist (this also pins the 2-D-assumed-shape extent surfacing)."""
     src = """
+module as_shift2_mod
+  implicit none
+contains
 subroutine as_shift2(n, m, a, out)
   implicit none
   integer, intent(in) :: n, m
@@ -185,10 +196,11 @@ subroutine as_shift2(n, m, a, out)
     end do
   end do
 end subroutine as_shift2
+end module as_shift2_mod
 """
     d = tmp_path / "sdfg2"
     d.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, d, name="as_shift2", entry="as_shift2").build()
+    sdfg = build_sdfg(src, d, name="as_shift2", entry="as_shift2_mod::as_shift2").build()
     sdfg.validate()
     # E1 correctness signal: both fir.shift lbs recovered exactly.
     assert _offsets(sdfg, "a") == {"offset_a_d0": 10, "offset_a_d1": 20}

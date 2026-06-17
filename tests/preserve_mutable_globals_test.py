@@ -39,7 +39,7 @@ contains
   end subroutine apply
 end module m
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="apply", entry="apply").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="apply", entry="m::apply").build()
     assert 'scale' in sdfg.arglist(), \
         f"module read-only init must surface as kwarg; got {sorted(sdfg.arglist())}"
     x = np.array([2.0, 3.0], dtype=np.float64, order='F')
@@ -56,15 +56,19 @@ def test_function_scope_global_stays_baked(tmp_path):
     stays baked -- it is NOT a caller-bindable input.  This is the
     ``real :: bob = 1`` pattern inside a subroutine body."""
     src = """
-subroutine s(out)
+module s_mod
   implicit none
-  double precision, intent(out) :: out(2)
-  real :: bob = 7.5
-  out(1) = bob
-  out(2) = bob + 1.0
-end subroutine s
+contains
+  subroutine s(out)
+    implicit none
+    double precision, intent(out) :: out(2)
+    real :: bob = 7.5
+    out(1) = bob
+    out(2) = bob + 1.0
+  end subroutine s
+end module s_mod
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="s").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="s_mod::s").build()
     # ``bob`` is NOT a kwarg -- function-scope globals are caller-
     # invisible (the caller has no symbol to bind).
     assert 'bob' not in sdfg.arglist(), \
@@ -96,7 +100,7 @@ contains
   end subroutine apply
 end module m
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="apply", entry="apply").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="apply", entry="m::apply").build()
     # PARAMETER constants stay baked; no kwarg expected.
     assert 'kappa' not in sdfg.arglist(), \
         f"PARAMETER must stay baked; arglist={sorted(sdfg.arglist())}"
@@ -134,7 +138,7 @@ contains
   end subroutine apply
 end module mod_use
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="apply", entry="apply").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="apply", entry="mod_use::apply").build()
     assert 'scale' in sdfg.arglist()
     x = np.array([2.0, 3.0], dtype=np.float64, order='F')
     y = np.zeros(2, dtype=np.float64, order='F')
@@ -163,7 +167,7 @@ contains
   end subroutine apply
 end module mod_table
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="apply", entry="apply").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="apply", entry="mod_table::apply").build()
     assert 'lut' in sdfg.arglist()
     x = np.array([10.0, 10.0, 10.0, 10.0], dtype=np.float64, order='F')
     y = np.zeros(4, dtype=np.float64, order='F')
@@ -188,7 +192,7 @@ contains
   end subroutine update
 end module m
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="update", entry="update").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="update", entry="m::update").build()
     assert 'state' in sdfg.arglist()
     state = np.array([4.0], dtype=np.float64, order='F')
     sdfg(state=state, x=np.float64(3.5))
@@ -215,7 +219,7 @@ contains
   end subroutine bump_scale
 end module mod_use
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="bump_scale", entry="bump_scale").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="bump_scale", entry="mod_use::bump_scale").build()
     assert 'scale' in sdfg.arglist()
     scale = np.array([10.0], dtype=np.float64, order='F')
     sdfg(scale=scale, amount=np.float64(2.5))
@@ -243,7 +247,7 @@ contains
   end subroutine scale_lut
 end module mod_table
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="scale_lut", entry="scale_lut").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="scale_lut", entry="mod_table::scale_lut").build()
     assert 'lut' in sdfg.arglist()
     lut = np.array([0.5, 1.5, 2.5, 3.5], dtype=np.float64, order='F')
     sdfg(lut=lut, factor=np.float64(2.0))
@@ -270,7 +274,7 @@ contains
   end subroutine bump
 end module m
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="bump", entry="bump").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="bump", entry="m::bump").build()
     assert 'counter' in sdfg.arglist(), \
         f"mutable module global must be a kwarg; arglist={sorted(sdfg.arglist())}"
     # Caller pre-sets counter = 10, calls with n_calls = 3 -> counter = 13.

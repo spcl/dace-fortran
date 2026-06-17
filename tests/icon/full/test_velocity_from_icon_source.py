@@ -51,7 +51,7 @@ _VELOCITY_REAL_BAK = _VELOCITY_REAL.with_suffix(".f90.bak")
 _CACHE_DIR = Path(os.environ.get("DACE_FORTRAN_CACHE", str(Path.home() / ".cache" / "dace-fortran")))
 
 _VELOCITY_TARGET = "src/atm_dyn_iconam/mo_velocity_advection.o"
-_VELOCITY_ENTRY = "velocity_tendencies"
+_VELOCITY_ENTRY = "mo_velocity_advection::velocity_tendencies"
 
 _HAVE_FLANG = shutil.which("flang-new-21") is not None
 _HAVE_OPENMPI = find_openmpi_include() is not None

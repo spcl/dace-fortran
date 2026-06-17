@@ -52,7 +52,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="vcut_get", entry="vcut_get").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="vcut_get", entry="m::vcut_get").build()
     # The flatten pass produces ``vcut_a`` (and ``vcut_cutoff``) as
     # top-level SDFG arrays/scalars; the struct base is GONE.
     assert "vcut_a" in sdfg.arrays, f"expected vcut_a in arrays: {sorted(sdfg.arrays.keys())}"

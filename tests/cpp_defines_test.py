@@ -59,8 +59,11 @@ def test_parse_compile_commands_automake_arguments_list(tmp_path):
 
 
 _GATED_SRC = """
-subroutine kern(n, x)
+module kern_mod
   use iso_c_binding
+  implicit none
+contains
+subroutine kern(n, x)
   implicit none
   integer(c_int), intent(in) :: n
 #ifdef USE_DBL
@@ -73,6 +76,7 @@ subroutine kern(n, x)
      x(i) = x(i) + 1
   end do
 end subroutine kern
+end module kern_mod
 """
 
 
@@ -81,9 +85,9 @@ def test_defines_select_cpp_branch_without_build_system(tmp_path):
     The ``#ifdef USE_DBL`` branch picks real(8) vs real(4), so the SDFG
     arg dtype proves the define reached the preprocessor before HLFIR."""
     sdfg_dbl = build_sdfg(_GATED_SRC, tmp_path / "dbl", name="kern",
-                          entry="kern", defines=["USE_DBL"]).build()
+                          entry="kern_mod::kern", defines=["USE_DBL"]).build()
     assert str(sdfg_dbl.arrays["x"].dtype) == "double"
 
     sdfg_flt = build_sdfg(_GATED_SRC, tmp_path / "flt", name="kern",
-                          entry="kern").build()
+                          entry="kern_mod::kern").build()
     assert str(sdfg_flt.arrays["x"].dtype) == "float"

@@ -37,10 +37,10 @@ from dace_fortran import build_sdfg_from_files
 
 _HERE = Path(__file__).resolve().parent
 
-# Mangled flang symbol for ``useapplu::call_dolu`` -- the driver entry.
-# ``_QM<module>P<procedure>`` is flang's name-mangling form for a
-# CONTAIN-ed subroutine inside a Fortran 90 module.
-_ENTRY = "call_dolu"
+# The driver entry, addressed by its Fortran ``module::procedure`` name
+# (``call_dolu`` is a CONTAIN-ed subroutine of ``MODULE useapplu``).  The
+# bridge resolves it to flang's mangled ``_QMuseappluPcall_dolu`` symbol.
+_ENTRY = "useapplu::call_dolu"
 
 _LU_SOURCES = [_HERE / "lu.F90", _HERE / "useapplu.F90"]
 
@@ -54,14 +54,17 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 @pytest.mark.long
-def test_lu_multi_file_builds(tmp_path):
+@pytest.mark.parametrize("merge_engine", ["fparser", "regex"])
+def test_lu_multi_file_builds(tmp_path, merge_engine):
     """The bridge ingests ``[lu.F90, useapplu.F90]`` and emits an SDFG
-    rooted at ``useapplu::call_dolu``."""
+    rooted at ``useapplu::call_dolu`` -- under both USE-merge engines
+    (the fparser AST inliner and the legacy regex splicer)."""
     sdfg = build_sdfg_from_files(
         _LU_SOURCES,
         entry=_ENTRY,
         name="npb_lu",
         out_dir=tmp_path / "build",
+        merge_engine=merge_engine,
     )
     sdfg.validate()
     # At least one LU compute kernel must show up in the serialised

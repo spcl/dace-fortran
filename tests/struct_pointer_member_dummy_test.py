@@ -32,6 +32,10 @@ module mo_holder
   end type holder_t
 end module mo_holder
 
+module read_holder_mod
+  use mo_holder, only: holder_t
+  implicit none
+contains
 subroutine read_holder(h, out, n)
   use mo_holder, only: holder_t
   implicit none
@@ -47,13 +51,14 @@ subroutine read_holder(h, out, n)
     end do
   end do
 end subroutine read_holder
+end module read_holder_mod
 """
 
 
 def test_pointer_array_member_dummy_arg_flattens(tmp_path: Path):
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(_SRC, sdfg_dir, name="read_holder", entry="read_holder").build()
+    sdfg = build_sdfg(_SRC, sdfg_dir, name="read_holder", entry="read_holder_mod::read_holder").build()
     sdfg.validate()
 
     # The flat companion must be a rank-3 Array, not a Scalar (which is

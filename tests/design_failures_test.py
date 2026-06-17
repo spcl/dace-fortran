@@ -29,30 +29,38 @@ def test_two_modules_back_to_back_isolated(tmp_path):
     ``kShortNameCollisions`` must not leak.  Both must produce SDFG
     signatures matching their OWN entry name."""
     src_a = """
+MODULE alpha_mod
+  IMPLICIT NONE
+CONTAINS
 SUBROUTINE alpha(x, n)
   IMPLICIT NONE
   INTEGER, INTENT(IN) :: n
   REAL(8), INTENT(INOUT) :: x(n)
   x = x + 1.0_8
 END SUBROUTINE
+END MODULE alpha_mod
 """
     src_b = """
+MODULE beta_mod
+  IMPLICIT NONE
+CONTAINS
 SUBROUTINE beta(y, m)
   IMPLICIT NONE
   INTEGER, INTENT(IN) :: m
   REAL(8), INTENT(INOUT) :: y(m)
   y = y * 2.0_8
 END SUBROUTINE
+END MODULE beta_mod
 """
     # Build A first
-    sdfg_a = build_sdfg(src_a, tmp_path / "a", name="alpha", entry="alpha").build()
+    sdfg_a = build_sdfg(src_a, tmp_path / "a", name="alpha", entry="alpha_mod::alpha").build()
     xa = np.ones(3, dtype=np.float64, order='F')
     sdfg_a(x=xa, n=np.int32(3))
     np.testing.assert_array_equal(xa, 2.0)
     # Build B second -- A's state (entryScope='alpha', collisions for
     # ``x`` / ``n``) must not contaminate B's extraction.  B's signature
     # must have bare ``y`` and ``m``, not ``alpha_y`` or ``beta_y``.
-    sdfg_b = build_sdfg(src_b, tmp_path / "b", name="beta", entry="beta").build()
+    sdfg_b = build_sdfg(src_b, tmp_path / "b", name="beta", entry="beta_mod::beta").build()
     assert 'y' in sdfg_b.arrays, (f"B leaked A's state: B's signature is {sorted(sdfg_b.arrays.keys())}")
     yb = np.ones(3, dtype=np.float64, order='F')
     sdfg_b(y=yb, m=np.int32(3))
@@ -76,6 +84,9 @@ def test_multi_callsite_no_qualification_for_unique_short_name(tmp_path):
     # Simple 1-callsite version: helper's ``arr`` is an inlined alias of
     # caller's ``a``; my fix collapses to entry-scope ``a``.
     src = """
+MODULE main_mod
+  IMPLICIT NONE
+CONTAINS
 SUBROUTINE main(a, n)
   IMPLICIT NONE
   INTEGER, INTENT(IN) :: n
@@ -87,8 +98,9 @@ CONTAINS
     arr = arr + 1.0_8
   END SUBROUTINE
 END SUBROUTINE
+END MODULE main_mod
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="main", entry="main").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="main", entry="main_mod::main").build()
     a = np.ones(3, dtype=np.float64, order='F')
     sdfg(a=a, n=np.int32(3))
     np.testing.assert_array_equal(a, 2.0)
@@ -107,6 +119,9 @@ def test_inlined_alias_does_not_qualify_caller_dummy(tmp_path):
     has dummy ``out`` that aliases the caller's after inlining.  Both
     must collapse to a single signature variable ``out``."""
     src = """
+MODULE kern_mod
+  IMPLICIT NONE
+CONTAINS
 SUBROUTINE kern(out, n)
   IMPLICIT NONE
   INTEGER, INTENT(IN) :: n
@@ -118,8 +133,9 @@ CONTAINS
     out = 1.0_8
   END SUBROUTINE
 END SUBROUTINE
+END MODULE kern_mod
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kern", entry="kern").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kern", entry="kern_mod::kern").build()
     # SDFG signature must have bare ``out``, not ``set_one_out``.
     assert 'out' in sdfg.arrays, (f"expected bare 'out' on signature, got: {sorted(sdfg.arrays.keys())}")
     out = np.zeros(3, dtype=np.float64, order='F')
@@ -136,6 +152,9 @@ def test_inlined_optional_dummy_collapses_to_caller_arg(tmp_path):
     SDFG signature variable.  The caller's ``a`` is bound at one
     callsite and absent at the other; ``is_present`` folds statically."""
     src = """
+MODULE main_mod
+  IMPLICIT NONE
+CONTAINS
 SUBROUTINE main(res, res2, a)
   IMPLICIT NONE
   INTEGER :: a
@@ -153,8 +172,9 @@ CONTAINS
     END IF
   END SUBROUTINE
 END SUBROUTINE
+END MODULE main_mod
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="main", entry="main").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="main", entry="main_mod::main").build()
     # No tf_x in the signature -- the inlined OPTIONAL is folded.
     bad_keys = [k for k in sdfg.arrays.keys() if k.startswith('tf_') or k.endswith('_x')]
     assert not bad_keys, (f"unexpected qualified inlined-OPTIONAL on signature: {bad_keys}")
@@ -176,6 +196,9 @@ def test_user_variable_named_max_builds_via_rename(tmp_path):
     """``REAL(8) :: max`` shadowing the MAX intrinsic builds (renamed to
     ``var_max``) and computes correctly."""
     src = """
+MODULE bad_max_mod
+  IMPLICIT NONE
+CONTAINS
 SUBROUTINE bad_max(out)
   IMPLICIT NONE
   REAL(8), INTENT(OUT) :: out
@@ -183,8 +206,9 @@ SUBROUTINE bad_max(out)
   max = 5.0_8
   out = max + 1.0_8
 END SUBROUTINE
+END MODULE bad_max_mod
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="bad_max", entry="bad_max").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="bad_max", entry="bad_max_mod::bad_max").build()
     out = np.zeros(1, dtype=np.float64)
     sdfg(out=out)
     assert out[0] == 6.0  # max = 5.0; out = max + 1.0
@@ -193,6 +217,9 @@ END SUBROUTINE
 def test_user_variable_named_sqrt_builds_via_rename(tmp_path):
     """``REAL(8) :: sqrt`` shadowing the SQRT intrinsic builds and reads back."""
     src = """
+MODULE bad_sqrt_mod
+  IMPLICIT NONE
+CONTAINS
 SUBROUTINE bad_sqrt(out)
   IMPLICIT NONE
   REAL(8), INTENT(OUT) :: out
@@ -200,8 +227,9 @@ SUBROUTINE bad_sqrt(out)
   sqrt = 4.0_8
   out = sqrt
 END SUBROUTINE
+END MODULE bad_sqrt_mod
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="bad_sqrt", entry="bad_sqrt").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="bad_sqrt", entry="bad_sqrt_mod::bad_sqrt").build()
     out = np.zeros(1, dtype=np.float64)
     sdfg(out=out)
     assert out[0] == 4.0  # sqrt = 4.0
@@ -210,6 +238,9 @@ END SUBROUTINE
 def test_user_variable_named_min_builds_via_rename(tmp_path):
     """``INTEGER :: min`` shadowing the MIN intrinsic builds and reads back."""
     src = """
+MODULE bad_min_mod
+  IMPLICIT NONE
+CONTAINS
 SUBROUTINE bad_min(out)
   IMPLICIT NONE
   REAL(8), INTENT(OUT) :: out
@@ -217,8 +248,9 @@ SUBROUTINE bad_min(out)
   min = 7
   out = REAL(min, 8)
 END SUBROUTINE
+END MODULE bad_min_mod
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="bad_min", entry="bad_min").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="bad_min", entry="bad_min_mod::bad_min").build()
     out = np.zeros(1, dtype=np.float64)
     sdfg(out=out)
     assert out[0] == 7.0  # min = 7
@@ -237,14 +269,18 @@ def test_local_pi_is_renamed_to_fortran_pi(tmp_path):
     renames to ``fortran_pi`` internally; user doesn't see it on the
     signature."""
     src = """
+MODULE kern_mod
+  IMPLICIT NONE
+CONTAINS
 SUBROUTINE kern(out)
   IMPLICIT NONE
   REAL(8), INTENT(OUT) :: out
   REAL(8), PARAMETER :: pi = 3.141592653589793_8
   out = pi * 2.0_8
 END SUBROUTINE
+END MODULE kern_mod
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kern", entry="kern").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kern", entry="kern_mod::kern").build()
     out = np.zeros(1, dtype=np.float64)
     sdfg(out=out)
     np.testing.assert_allclose(out[0], 2.0 * 3.141592653589793, rtol=1e-12)
@@ -253,6 +289,9 @@ END SUBROUTINE
 def test_local_e_is_renamed(tmp_path):
     """``e`` as a LOCAL must not collide with sympy.E."""
     src = """
+MODULE kern_mod
+  IMPLICIT NONE
+CONTAINS
 SUBROUTINE kern(out)
   IMPLICIT NONE
   REAL(8), INTENT(OUT) :: out
@@ -260,8 +299,9 @@ SUBROUTINE kern(out)
   e = 2.71828_8
   out = e + 1.0_8
 END SUBROUTINE
+END MODULE kern_mod
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kern", entry="kern").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kern", entry="kern_mod::kern").build()
     out = np.zeros(1, dtype=np.float64)
     sdfg(out=out)
     np.testing.assert_allclose(out[0], 3.71828, rtol=1e-6)
@@ -271,14 +311,18 @@ def test_dummy_i_preserves_signature_name(tmp_path):
     """``i`` as an intent(in) DUMMY must NOT be renamed -- caller's
     ``i=...`` binding requires the bare name on the SDFG signature."""
     src = """
+MODULE kern_mod
+  IMPLICIT NONE
+CONTAINS
 SUBROUTINE kern(i, out)
   IMPLICIT NONE
   INTEGER, INTENT(IN) :: i
   REAL(8), INTENT(OUT) :: out
   out = REAL(i * 2, 8)
 END SUBROUTINE
+END MODULE kern_mod
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kern", entry="kern").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kern", entry="kern_mod::kern").build()
     out = np.zeros(1, dtype=np.float64)
     sdfg(i=np.int32(7), out=out)
     np.testing.assert_allclose(out[0], 14.0)
@@ -294,6 +338,9 @@ def test_local_i_loop_iterator_not_renamed(tmp_path):
     exactly this reason.  Regression for the CI failure
     ``test_dummy_shaped_fn_return``."""
     src = """
+MODULE kern_mod
+  IMPLICIT NONE
+CONTAINS
 SUBROUTINE kern(out, n)
   IMPLICIT NONE
   INTEGER, INTENT(IN) :: n
@@ -303,8 +350,9 @@ SUBROUTINE kern(out, n)
     out(i) = REAL(i, 8)
   END DO
 END SUBROUTINE
+END MODULE kern_mod
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kern", entry="kern").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kern", entry="kern_mod::kern").build()
     out = np.zeros(4, dtype=np.float64, order="F")
     sdfg(out=out, n=np.int32(4))
     np.testing.assert_array_equal(out, [1.0, 2.0, 3.0, 4.0])
@@ -345,7 +393,7 @@ END MODULE m_iter
     from dace_fortran import build_sdfg_from_files
     srcfile = tmp_path / "m_iter.f90"
     srcfile.write_text(src)
-    sdfg = build_sdfg_from_files([srcfile], entry="kern", name="kern", out_dir=tmp_path / "build")
+    sdfg = build_sdfg_from_files([srcfile], entry="m_iter::kern", name="kern", out_dir=tmp_path / "build")
     sdfg.validate()
     out_arr = np.zeros((3, 2), dtype=np.float64, order="F")
     src_a = np.array([2.0, 5.0], dtype=np.float64, order="F")
@@ -358,14 +406,18 @@ END MODULE m_iter
 def test_dummy_pi_preserves_signature_name(tmp_path):
     """``pi`` as an intent(in) DUMMY must NOT be renamed."""
     src = """
+MODULE kern_mod
+  IMPLICIT NONE
+CONTAINS
 SUBROUTINE kern(pi, out)
   IMPLICIT NONE
   REAL(8), INTENT(IN) :: pi
   REAL(8), INTENT(OUT) :: out
   out = pi * 2.0_8
 END SUBROUTINE
+END MODULE kern_mod
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kern", entry="kern").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="kern", entry="kern_mod::kern").build()
     out = np.zeros(1, dtype=np.float64)
     sdfg(pi=np.float64(3.14), out=out)
     np.testing.assert_allclose(out[0], 6.28, rtol=1e-6)

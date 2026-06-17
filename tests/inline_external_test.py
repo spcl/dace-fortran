@@ -24,6 +24,8 @@ def test_inline_external_swaps_libnode_for_nested_sdfg(tmp_path):
     """Inline a separately-built callee SDFG at the caller's external
     call site."""
     callee_src = """
+module add_one_mod
+contains
 subroutine add_one(arr, n)
   use iso_c_binding
   implicit none
@@ -34,8 +36,11 @@ subroutine add_one(arr, n)
     arr(i) = arr(i) + 1.0d0
   end do
 end subroutine add_one
+end module add_one_mod
 """
     caller_src = """
+module caller_mod
+contains
 subroutine caller(arr, n)
   use iso_c_binding
   implicit none
@@ -50,11 +55,12 @@ subroutine caller(arr, n)
   end interface
   call add_one(arr, n)
 end subroutine caller
+end module caller_mod
 """
     # Build the callee with an EMPTY registry -- we're defining its
     # body, so it must not be marked external for its own build.
     clear_external_registry()
-    callee_sdfg = build_sdfg(callee_src, tmp_path / "callee", name="add_one", entry="add_one").build()
+    callee_sdfg = build_sdfg(callee_src, tmp_path / "callee", name="add_one", entry="add_one_mod::add_one").build()
     # Now register so the caller build emits an ExternalCall for it
     # (otherwise hlfir-inline-all would lower the bind(c) interface
     # away and the call would disappear).
@@ -63,7 +69,7 @@ end subroutine caller
         keep_external("add_one",
                       args=(Arg(kind="array", dtype="float64",
                                 intent="inout"), Arg(kind="scalar", dtype="int32", intent="in")))
-        caller_sdfg = build_sdfg(caller_src, tmp_path / "caller", name="caller", entry="caller").build()
+        caller_sdfg = build_sdfg(caller_src, tmp_path / "caller", name="caller", entry="caller_mod::caller").build()
     finally:
         clear_external_registry()
 
@@ -152,12 +158,16 @@ end module
     # site; the bridge then emits an ExternalCall library node with per-
     # member SoA connectors (``_a0`` = u, ``_a1`` = v).
     caller_src = """
-subroutine caller(s)
+module caller_mod
   use aos_mod
+  implicit none
+contains
+subroutine caller(s)
   implicit none
   type(t_vec), intent(inout) :: s
   call add_vec(s)
 end subroutine caller
+end module caller_mod
 """
     callee_ext_name = "_QMaos_modPadd_vec"
     clear_external_registry()
@@ -174,7 +184,7 @@ end subroutine caller
     (caller_dir / "aos_mod.f90").write_text(callee_src)
     try:
         keep_external(callee_ext_name, args=(Arg(kind="aos", intent="inout"), ))
-        caller_sdfg = build_sdfg(caller_src, caller_dir, name="caller", entry="caller").build()
+        caller_sdfg = build_sdfg(caller_src, caller_dir, name="caller", entry="caller_mod::caller").build()
     finally:
         clear_external_registry()
 

@@ -39,6 +39,23 @@ _HERE = Path(__file__).resolve().parent
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
 
+def _module_wrap_drivers(src: str) -> str:
+    """Wrap the free CLOUDSCOUTER + CLOUDSC driver subroutines of the
+    cloudsc_top_half source in ``module cloudsc_top_half_mod`` so the SDFG
+    build can address the entry as ``cloudsc_top_half_mod::cloudscouter``.
+
+    The leading derived-type modules (PARKIND1/YOMCST/...) stay outside; only
+    the two top-level driver subroutines are pulled into the wrapper module
+    (host association keeps CLOUDSCOUTER -> CLOUDSC resolving).  The on-disk
+    file is left untouched for the f2py reference path.
+    """
+    marker = "SUBROUTINE CLOUDSCOUTER"
+    head, _, tail = src.partition(marker)
+    assert tail, "CLOUDSCOUTER driver not found in cloudsc_top_half source"
+    return (f"{head}module cloudsc_top_half_mod\ncontains\n"
+            f"{marker}{tail.rstrip()}\nend module cloudsc_top_half_mod\n")
+
+
 @pytest.fixture(scope="module")
 def _f2py_top_half(tmp_path_factory):
     src = (_HERE / "cloudsc_top_half.F90").read_text()
@@ -64,7 +81,14 @@ def test_cloudsc_top_half_zsolqa_zsolqb(tmp_path, _f2py_top_half, _strict_fp_cpu
 
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(src, sdfg_dir, name="cloudsc_top_half", entry="cloudscouter").build()
+    # Build from a variant that wraps the two free driver subroutines
+    # (CLOUDSCOUTER + the CLOUDSC carve-out it calls) in a module, so the
+    # SDFG entry can use the ``cloudsc_top_half_mod::cloudscouter`` spelling.
+    # The on-disk file stays free-subroutine for the f2py reference
+    # (``_f2py_top_half.cloudscouter`` resolves top-level).
+    build_src = _module_wrap_drivers(src)
+    sdfg = build_sdfg(build_src, sdfg_dir, name="cloudsc_top_half",
+                      entry="cloudsc_top_half_mod::cloudscouter").build()
 
     rng = np.random.default_rng(42)
     inputs = get_inputs_physical(rng)

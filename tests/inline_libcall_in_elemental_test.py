@@ -58,7 +58,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="qe_pattern", entry="qe_pattern").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="qe_pattern", entry="m::qe_pattern").build()
     A = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order='F')
     q = np.array([1.0, 2.0, 3.0], dtype=np.float64, order='F')
     res = np.zeros(3, dtype=np.float64, order='F')
@@ -84,7 +84,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="cshift_inline", entry="cshift_inline").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="cshift_inline", entry="m::cshift_inline").build()
     arr = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float64, order='F')
     res = np.zeros(5, dtype=np.float64, order='F')
     sdfg(arr=arr, res=res)

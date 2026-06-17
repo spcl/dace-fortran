@@ -164,6 +164,8 @@ end module mo_fields
 """
 
 _TWO_REAL_KERNEL_SRC = """
+module kernel_two_real_mod
+contains
 subroutine kernel_two_real(fld)
   use mo_fields
   use iso_c_binding
@@ -176,6 +178,7 @@ subroutine kernel_two_real(fld)
      end do
   end do
 end subroutine kernel_two_real
+end module kernel_two_real_mod
 """
 
 _TWO_REAL_REF_DRIVER_SRC = """
@@ -185,10 +188,10 @@ _TWO_REAL_REF_DRIVER_SRC = """
 subroutine run_two_real_ref(a_ptr, b_ptr) bind(c, name='run_two_real_ref')
   use iso_c_binding
   use mo_fields, only: t_fields, NX, NY
+  use kernel_two_real_mod, only: kernel_two_real
   implicit none
   real(c_double), intent(inout) :: a_ptr(NX, NY), b_ptr(NX, NY)
   type(t_fields) :: fld
-  external :: kernel_two_real
   fld%a = a_ptr
   fld%b = b_ptr
   call kernel_two_real(fld)
@@ -233,7 +236,7 @@ def test_e2e_two_real_array_struct(tmp_path: Path):
         kernel_src=_TWO_REAL_SRC,
         types_src=_TWO_REAL_TYPES_SRC,
         name="kernel_two_real",
-        entry="kernel_two_real",
+        entry="kernel_two_real_mod::kernel_two_real",
         driver_src=_TWO_REAL_DRIVER,
     )
     sdfg_lib.run_two_real.argtypes = [
@@ -316,6 +319,8 @@ end module mo_nested
 """
 
 _NESTED_KERNEL_SRC = """
+module kernel_nested_mod
+contains
 subroutine kernel_nested(st)
   use mo_nested
   use iso_c_binding
@@ -328,16 +333,17 @@ subroutine kernel_nested(st)
      end do
   end do
 end subroutine kernel_nested
+end module kernel_nested_mod
 """
 
 _NESTED_REF_DRIVER_SRC = """
 subroutine run_nested_ref(a_ptr, b_ptr) bind(c, name='run_nested_ref')
   use iso_c_binding
   use mo_nested, only: t_outer, NX, NY
+  use kernel_nested_mod, only: kernel_nested
   implicit none
   real(c_double), intent(inout) :: a_ptr(NX, NY), b_ptr(NX, NY)
   type(t_outer) :: st
-  external :: kernel_nested
   st%a%v = a_ptr
   st%b%v = b_ptr
   call kernel_nested(st)
@@ -378,7 +384,7 @@ def test_e2e_nested_struct(tmp_path: Path):
         kernel_src=_NESTED_SRC,
         types_src=_NESTED_TYPES_SRC,
         name="kernel_nested",
-        entry="kernel_nested",
+        entry="kernel_nested_mod::kernel_nested",
         driver_src=_NESTED_DRIVER,
     )
     sdfg_lib.run_nested.argtypes = [
@@ -457,6 +463,8 @@ end module mo_state
 """
 
 _COMPLEX_KERNEL_SRC = """
+module kernel_complex_mod
+contains
 subroutine kernel_complex(st)
   use mo_state
   use iso_c_binding
@@ -469,18 +477,19 @@ subroutine kernel_complex(st)
      end do
   end do
 end subroutine kernel_complex
+end module kernel_complex_mod
 """
 
 _COMPLEX_REF_DRIVER_SRC = """
 subroutine run_complex_ref(z_re_ptr, z_im_ptr, u_ptr) bind(c, name='run_complex_ref')
   use iso_c_binding
   use mo_state, only: t_state, NX, NY
+  use kernel_complex_mod, only: kernel_complex
   implicit none
   real(c_double), intent(in)    :: z_re_ptr(NX, NY)
   real(c_double), intent(in)    :: z_im_ptr(NX, NY)
   real(c_double), intent(inout) :: u_ptr(NX, NY)
   type(t_state) :: st
-  external :: kernel_complex
   st%z = cmplx(z_re_ptr, z_im_ptr, kind=c_double)
   st%u = u_ptr
   call kernel_complex(st)
@@ -522,7 +531,7 @@ def test_e2e_complex_member_struct(tmp_path: Path):
         kernel_src=_COMPLEX_SRC,
         types_src=_COMPLEX_TYPES_SRC,
         name="kernel_complex",
-        entry="kernel_complex",
+        entry="kernel_complex_mod::kernel_complex",
         driver_src=_COMPLEX_DRIVER,
     )
     sdfg_lib.run_complex.argtypes = [
@@ -592,6 +601,8 @@ end module mo_pt
 """
 
 _AOS_KERNEL_SRC = """
+module kern_aos_mod
+contains
 subroutine kern_aos(pts)
   use mo_pt
   use iso_c_binding
@@ -602,17 +613,18 @@ subroutine kern_aos(pts)
      pts(i)%x = pts(i)%x + pts(i)%y * pts(i)%z - pts(i)%w
   end do
 end subroutine kern_aos
+end module kern_aos_mod
 """
 
 _AOS_REF_DRIVER_SRC = """
 subroutine run_aos_ref(p_ptr) bind(c, name='run_aos_ref')
   use iso_c_binding
   use mo_pt, only: point, N
+  use kern_aos_mod, only: kern_aos
   implicit none
   real(c_double), intent(inout) :: p_ptr(4, N)
   type(point) :: pts(N)
   integer :: i
-  external :: kern_aos
   do i = 1, N
      pts(i)%x = p_ptr(1, i); pts(i)%y = p_ptr(2, i)
      pts(i)%z = p_ptr(3, i); pts(i)%w = p_ptr(4, i)
@@ -660,7 +672,7 @@ def test_e2e_array_of_scalar_structs_deepcopy(tmp_path: Path):
         kernel_src=_AOS_SRC,
         types_src=_AOS_TYPES_SRC,
         name="kern_aos",
-        entry="kern_aos",
+        entry="kern_aos_mod::kern_aos",
         driver_src=_AOS_DRIVER,
     )
     sdfg_lib.run_aos.argtypes = [ctypes.POINTER(ctypes.c_double)]
@@ -710,6 +722,8 @@ end module mo_mix
 """
 
 _MIX_KERNEL_SRC = """
+module kern_mix_mod
+contains
 subroutine kern_mix(items)
   use mo_mix
   use iso_c_binding
@@ -721,18 +735,19 @@ subroutine kern_mix(items)
      items(i)%n = items(i)%n + 1
   end do
 end subroutine kern_mix
+end module kern_mix_mod
 """
 
 _MIX_REF_DRIVER_SRC = """
 subroutine run_mix_ref(a_ptr, n_ptr) bind(c, name='run_mix_ref')
   use iso_c_binding
   use mo_mix, only: item, N
+  use kern_mix_mod, only: kern_mix
   implicit none
   real(c_double), intent(inout)   :: a_ptr(N)
   integer(c_int), intent(inout)   :: n_ptr(N)
   type(item) :: items(N)
   integer :: i
-  external :: kern_mix
   do i = 1, N
      items(i)%a = a_ptr(i); items(i)%n = n_ptr(i)
   end do
@@ -772,7 +787,7 @@ def test_e2e_array_of_mixed_type_structs_deepcopy(tmp_path: Path):
     both deep-copied.  Kernel updates both members; result must match the
     gfortran reference for both the real and integer arrays."""
     sdfg_lib = _build_sdfg_lib(tmp_path, kernel_src=_MIX_SRC, types_src=_MIX_TYPES_SRC, name="kern_mix",
-                               entry="kern_mix", driver_src=_MIX_DRIVER)
+                               entry="kern_mix_mod::kern_mix", driver_src=_MIX_DRIVER)
     sdfg_lib.run_mix.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_int)]
     sdfg_lib.run_mix.restype = None
     ref_lib = _build_reference_lib(tmp_path, types_src=_MIX_TYPES_SRC, kernel_src=_MIX_KERNEL_SRC,
@@ -803,6 +818,8 @@ def test_e2e_array_of_mixed_type_structs_deepcopy(tmp_path: Path):
 # kernel writes a separate plain output array.
 
 _RO_KERNEL_SRC = """
+module kern_ro_mod
+contains
 subroutine kern_ro(pts, outv)
   use mo_pt
   use iso_c_binding
@@ -814,18 +831,19 @@ subroutine kern_ro(pts, outv)
      outv(i) = pts(i)%x + pts(i)%y * pts(i)%z - pts(i)%w
   end do
 end subroutine kern_ro
+end module kern_ro_mod
 """
 
 _RO_REF_DRIVER_SRC = """
 subroutine run_ro_ref(p_ptr, o_ptr) bind(c, name='run_ro_ref')
   use iso_c_binding
   use mo_pt, only: point, N
+  use kern_ro_mod, only: kern_ro
   implicit none
   real(c_double), intent(in)    :: p_ptr(4, N)
   real(c_double), intent(out)   :: o_ptr(N)
   type(point) :: pts(N)
   integer :: i
-  external :: kern_ro
   do i = 1, N
      pts(i)%x = p_ptr(1, i); pts(i)%y = p_ptr(2, i)
      pts(i)%z = p_ptr(3, i); pts(i)%w = p_ptr(4, i)
@@ -861,7 +879,7 @@ def test_e2e_array_of_structs_read_only_copy_in(tmp_path: Path):
     the members in (no copy-back) and the kernel writes a separate output
     array.  Output must match the reference."""
     sdfg_lib = _build_sdfg_lib(tmp_path, kernel_src=_RO_SRC, types_src=_AOS_TYPES_SRC, name="kern_ro",
-                               entry="kern_ro", driver_src=_RO_DRIVER)
+                               entry="kern_ro_mod::kern_ro", driver_src=_RO_DRIVER)
     sdfg_lib.run_ro.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double)]
     sdfg_lib.run_ro.restype = None
     ref_lib = _build_reference_lib(tmp_path, types_src=_AOS_TYPES_SRC, kernel_src=_RO_KERNEL_SRC,
@@ -910,6 +928,8 @@ end module mo_bag
 """
 
 _JAG_KERNEL_SRC = """
+module kern_jag_mod
+contains
 subroutine kern_jag(a)
   use mo_bag
   use iso_c_binding
@@ -922,6 +942,7 @@ subroutine kern_jag(a)
      end do
   end do
 end subroutine kern_jag
+end module kern_jag_mod
 """
 
 # Both drivers allocate the same jagged shape (sizes 2, 4, 3 -> cap 4) and
@@ -957,11 +978,11 @@ _JAG_REF_DRIVER = """
 subroutine run_jag_ref(p_ptr) bind(c, name='run_jag_ref')
   use iso_c_binding
   use mo_bag, only: bag, NB
+  use kern_jag_mod, only: kern_jag
   implicit none
   real(c_double), intent(inout) :: p_ptr(9)
   type(bag) :: a(NB)
   integer :: i, off, sizes(NB)
-  external :: kern_jag
   sizes = [2, 4, 3]
   off = 0
   do i = 1, NB
@@ -988,7 +1009,7 @@ def test_e2e_array_of_jagged_alloc_structs_deepcopy(tmp_path: Path):
     (no ``a_d0`` symbol leak), against a gfortran reference."""
     sdfg_lib = _build_sdfg_lib(tmp_path, kernel_src=_JAG_TYPES_SRC + _JAG_KERNEL_SRC,
                                types_src=_JAG_TYPES_SRC, name="kern_jag",
-                               entry="kern_jag", driver_src=_JAG_DRIVER)
+                               entry="kern_jag_mod::kern_jag", driver_src=_JAG_DRIVER)
     sdfg_lib.run_jag.argtypes = [ctypes.POINTER(ctypes.c_double)]
     sdfg_lib.run_jag.restype = None
 

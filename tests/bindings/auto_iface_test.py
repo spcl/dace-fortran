@@ -34,6 +34,9 @@ def test_auto_iface_flat_matches_handwritten(tmp_path):
     """The QE complex-AXPY kernel: derived iface == the README's hand-written
     one, arg order (n, a, x, y) and all."""
     src = (Path(__file__).parents[1] / "qe" / "selected_loopnests" / "qe_e4_zaxpy.f90").read_text()
+    # Entry kept BARE: ``qe_e4_zaxpy.f90`` is a shared free-subroutine fixture
+    # that ``qe/selected_loopnests/test_sdfg_equivalence.py`` also f2py-compiles
+    # and calls as ``mod.kernel(...)``; wrapping it in a module would break that.
     auto = _auto(src, tmp_path, "kernel", "kernel")
     assert auto.entry == "kernel"
     assert auto.used_modules == {}
@@ -49,6 +52,8 @@ def test_auto_iface_scalar_and_array_dtypes(tmp_path):
     """real(4)/real(8)/int kinds + intent in/out/inout map to the right
     iso-c types in declaration order."""
     src = """
+module kern_mod
+contains
 subroutine kern(ni, xr4, xr8, yi8, out8)
   use iso_c_binding
   implicit none
@@ -62,8 +67,9 @@ subroutine kern(ni, xr4, xr8, yi8, out8)
      out8(i) = real(xr4(i), c_double) + xr8(i) + real(yi8(i), c_double)
   end do
 end subroutine kern
+end module kern_mod
 """
-    auto = _auto(src, tmp_path, "kern", "kern")
+    auto = _auto(src, tmp_path, "kern", "kern_mod::kern")
     by = {a.name: a for a in auto.args}
     assert [a.name for a in auto.args] == ["ni", "xr4", "xr8", "yi8", "out8"]
     assert by["ni"].fortran_type == "integer(c_int)" and by["ni"].rank == 0
@@ -86,8 +92,10 @@ module mo_pt
      real(c_double) :: x, y, z, w
   end type point
 end module mo_pt
-subroutine kern_aos(pts)
+module kern_aos_mod
   use mo_pt
+contains
+subroutine kern_aos(pts)
   implicit none
   type(point), intent(inout) :: pts(N)
   integer :: i
@@ -95,8 +103,9 @@ subroutine kern_aos(pts)
      pts(i)%x = pts(i)%x + pts(i)%y
   end do
 end subroutine kern_aos
+end module kern_aos_mod
 """
-    auto = _auto(src, tmp_path, "kern_aos", "kern_aos")
+    auto = _auto(src, tmp_path, "kern_aos", "kern_aos_mod::kern_aos")
     assert len(auto.args) == 1
     arg = auto.args[0]
     assert arg.name == "pts" and arg.fortran_type == "type(point)"
@@ -119,6 +128,11 @@ subroutine scale2(n, x)
   end do
 end subroutine scale2
 """
+    # Kept a FREE subroutine: this test drives ``build_fortran_library`` to
+    # EMIT + gfortran-COMPILE the binding, which links the kernel via an
+    # implicit interface (no ``use``).  Wrapping the kernel in a module makes
+    # the binding emitter generate a malformed ``use`` of the kernel module
+    # (the emitter assumes a free-subroutine kernel), so the entry stays bare.
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="scale2", entry="scale2").build()
     lib = build_fortran_library(sdfg, out_dir=str(tmp_path / "lib"), name="scale2")
     assert Path(lib.bindings_f90).exists()
@@ -146,13 +160,16 @@ module mo_auto_iface_fld
     integer(c_int) :: tag(NX)
   end type
 end module
-subroutine kern(fld)
+module kern_fld_mod
   use mo_auto_iface_fld
+contains
+subroutine kern(fld)
   type(t_auto_fld), intent(inout) :: fld
   fld%a = fld%a + 1.0_c_double
 end subroutine
+end module kern_fld_mod
 """
-    auto = _auto(src, tmp_path, "kern", "kern")
+    auto = _auto(src, tmp_path, "kern", "kern_fld_mod::kern")
 
     assert auto.args == (OriginalArg(name="fld",
                                      fortran_type="type(t_auto_fld)",

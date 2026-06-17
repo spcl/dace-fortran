@@ -115,6 +115,53 @@ def test_three_files_transitive_use(tmp_path: Path, merge_engine):
     np.testing.assert_allclose(z, 2.0 * (x + y), rtol=1e-12, atol=1e-12)
 
 
+def test_entry_proc_name_accepts_all_three_spellings():
+    """Root-file selection reduces every accepted entry spelling to the bare
+    procedure name: the friendly ``module::proc`` qualifier, a mangled Flang
+    symbol, and an already-plain name.  (Regression: ``module::proc`` used to
+    fall through unstripped and never match any ``subroutine``/``function``.)"""
+    from dace_fortran.build import _entry_proc_name
+    assert _entry_proc_name("mo_solve_nonhydro::solve_nh") == "solve_nh"
+    assert _entry_proc_name("m_array_return::kern") == "kern"
+    assert _entry_proc_name("_QMmymodPbar") == "bar"
+    assert _entry_proc_name("_QPmain") == "main"
+    assert _entry_proc_name("solve_nh") == "solve_nh"
+    assert _entry_proc_name(None) is None
+
+
+@pytest.mark.parametrize("merge_engine", ["fparser", "regex"])
+def test_module_qualified_entry_selects_root(tmp_path: Path, merge_engine):
+    """A ``module::proc`` entry resolves the root file and builds (both engines).
+    Mirrors the bare-name path of ``test_two_files_driver_plus_module`` with the
+    driver wrapped in a module and addressed as ``drv::run``."""
+    driver = """
+module drv
+  use mod_add
+  implicit none
+contains
+  subroutine run(x, y, z, n)
+    integer, intent(in) :: n
+    real(8), intent(in) :: x(n), y(n)
+    real(8), intent(out) :: z(n)
+    integer :: i
+    do i = 1, n
+      z(i) = add2(x(i), y(i))
+    end do
+  end subroutine run
+end module drv
+"""
+    files = _write(tmp_path / "src", driver=driver, mod_add=_MOD_ADD)
+    sdfg = build_sdfg_from_files(files, entry="drv::run", name="run",
+                                 out_dir=tmp_path / "b", merge_engine=merge_engine)
+    n = 12
+    rng = np.random.default_rng(2)
+    x = np.asfortranarray(rng.random(n))
+    y = np.asfortranarray(rng.random(n))
+    z = np.zeros(n, order="F")
+    sdfg(x=x, y=y, z=z, n=n)
+    np.testing.assert_allclose(z, x + y, rtol=1e-12, atol=1e-12)
+
+
 def test_entry_not_found_is_rejected(tmp_path: Path):
     """No input file defines the entry's procedure -> clear error."""
     files = _write(tmp_path / "src", mod_add=_MOD_ADD)

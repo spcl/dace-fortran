@@ -12,14 +12,13 @@ drives its 4-module project through the bridge as a multi-file build:
   * ``mo_kind.f90``              -- working-precision kinds.
   * ``mo_physical_constants.f90``-- gas-law / latent-heat / etc.
 
-Status: ``xfail(strict=False)``.  The pipeline currently surfaces an
-unresolved ``?`` placeholder somewhere in the post-inline body of
-``graupel_run`` -- traced to a different code path than the PURE
-FUNCTION return cases we already cover (those flip green via
-``hlfir-unwrap-eval-in-mem``).  Pinning here so progress on related
-bridge work surfaces as a clean XPASS rather than going unnoticed,
-and so anyone touching the graupel pipeline has a fast regression
-gate.
+Status: green.  The pipeline used to surface an unresolved ``?``
+placeholder in the post-inline body of ``graupel_run`` -- the
+AoS-of-pointer-records gather temp (``t_qx_ptr%x``), whose inner extents
+are recovered via ``fir.box_dims``, was left with unbound extent symbols.
+The ``fir.box_dims -> <name>_d<dim>`` extent resolution closed it; this
+build test is the fast regression gate for anyone touching the graupel
+pipeline.
 """
 from pathlib import Path
 
@@ -40,7 +39,7 @@ _GRAUPEL_SOURCES = [
 ]
 
 # Mangled flang symbol for ``mo_aes_graupel::graupel_run``.
-_ENTRY = "graupel_run"
+_ENTRY = "mo_aes_graupel::graupel_run"
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 

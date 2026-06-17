@@ -27,6 +27,9 @@ pytestmark = [
 ]
 
 _SRC = """
+module array_value_as_dim_mod
+  implicit none
+contains
 subroutine array_value_as_dim(sizes, sel, out)
   implicit none
   integer, intent(in) :: sizes(4)
@@ -42,6 +45,7 @@ subroutine array_value_as_dim(sizes, sel, out)
     if (i <= n) out(i) = work(i)
   end do
 end subroutine array_value_as_dim
+end module array_value_as_dim_mod
 """
 
 
@@ -51,7 +55,7 @@ def test_array_value_as_dimension_symbol(tmp_path: Path):
     (distinct from the ``sizes`` data descriptor), seeded from ``sizes(sel)``;
     the result matches the reference computation."""
     sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="avd",
-                      entry="array_value_as_dim").build()
+                      entry="array_value_as_dim_mod::array_value_as_dim").build()
     assert "sizes" in sdfg.arrays  # the array stays a data descriptor
     assert "sizes" not in sdfg.symbols, "array name leaked in as a symbol"
     assert "__sym_sizes_sel" in sdfg.symbols, \
@@ -72,6 +76,9 @@ def test_array_value_as_dimension_symbol(tmp_path: Path):
 
 
 _SRC_WRITTEN = """
+module array_value_written_mod
+  implicit none
+contains
 subroutine array_value_written(sizes, sel, out)
   implicit none
   integer, intent(inout) :: sizes(4)
@@ -88,6 +95,7 @@ subroutine array_value_written(sizes, sel, out)
     if (i <= n) out(i) = work(i)
   end do
 end subroutine array_value_written
+end module array_value_written_mod
 """
 
 
@@ -97,4 +105,4 @@ def test_value_symbol_backing_array_write_refused(tmp_path: Path):
     build with a clear error."""
     with pytest.raises(ValueError, match=r"constant within the scope|stale value"):
         build_sdfg(_SRC_WRITTEN, tmp_path / "sdfg", name="avw",
-                   entry="array_value_written").build()
+                   entry="array_value_written_mod::array_value_written").build()

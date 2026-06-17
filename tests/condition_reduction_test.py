@@ -35,6 +35,9 @@ def test_if_sum_reduction_in_loop(tmp_path):
     difference must keep its subscript (no bare ``(iv - rv)`` whole-array term).
     Each hit increments an in-bounds counter."""
     src = """
+module driver_mod
+  implicit none
+contains
 subroutine driver(rv, cnt, n)
   implicit none
   integer, intent(in) :: n
@@ -48,8 +51,9 @@ subroutine driver(rv, cnt, n)
     end if
   end do
 end subroutine driver
+end module driver_mod
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver_mod::driver").build()
     assert len(_reduce_nodes(sdfg)) >= 1, "SUM-in-condition should be a Reduce lib-node"
     n = 5
     cnt = np.zeros(n, dtype=np.int32)
@@ -65,6 +69,9 @@ def test_if_maxval_of_array_diff(tmp_path):
     """``IF (MAXVAL(a - b) > thr)`` -- an array-op (elementwise subtract) feeding
     a MAXVAL reduction in the condition.  Materialises a ``Reduce`` (max)."""
     src = """
+module driver_mod
+  implicit none
+contains
 subroutine driver(a, b, cnt, n)
   implicit none
   integer, intent(in) :: n
@@ -77,8 +84,9 @@ subroutine driver(a, b, cnt, n)
     end if
   end do
 end subroutine driver
+end module driver_mod
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver_mod::driver").build()
     assert len(_reduce_nodes(sdfg)) >= 1
     n = 4
     a = np.array([1.0, 2.0, 3.0, 0.0], dtype=np.float64)
@@ -98,6 +106,9 @@ def test_reduction_in_loop_body(tmp_path):
     condition) -- the ordinary reduce path; guards that the condition-reduction
     change didn't perturb it."""
     src = """
+module driver_mod
+  implicit none
+contains
 subroutine driver(m, out, n)
   implicit none
   integer, intent(in) :: n
@@ -108,8 +119,9 @@ subroutine driver(m, out, n)
     out(k) = sum(m(:, k))
   end do
 end subroutine driver
+end module driver_mod
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver_mod::driver").build()
     n = 4
     m = np.asfortranarray(np.arange(3 * n, dtype=np.float64).reshape(3, n))
     out = np.zeros(n, dtype=np.float64)
@@ -124,6 +136,9 @@ def test_minval_row_view_in_condition(tmp_path):
     row stride) and the ``Reduce`` lib-node reduces the view (NOT the whole
     array).  Counts rows whose minimum exceeds the threshold."""
     src = """
+module driver_mod
+  implicit none
+contains
 subroutine driver(m, cnt, nr, nc)
   implicit none
   integer, intent(in) :: nr, nc
@@ -136,8 +151,9 @@ subroutine driver(m, cnt, nr, nc)
     end if
   end do
 end subroutine driver
+end module driver_mod
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver_mod::driver").build()
     assert len(_reduce_nodes(sdfg)) >= 1, "MINVAL of a row section should be a Reduce lib-node"
     from dace.data import View
     assert any(isinstance(d, View) for d in sdfg.arrays.values()), "row section should become a View"
@@ -160,6 +176,9 @@ def test_maxval_col_view_in_condition(tmp_path):
     """``IF (MAXVAL(m(:, j)) > thr)`` -- a COLUMN section (contiguous in
     column-major) becomes a VIEW reduced by the ``Reduce`` lib-node."""
     src = """
+module driver_mod
+  implicit none
+contains
 subroutine driver(m, cnt, nr, nc)
   implicit none
   integer, intent(in) :: nr, nc
@@ -172,8 +191,9 @@ subroutine driver(m, cnt, nr, nc)
     end if
   end do
 end subroutine driver
+end module driver_mod
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver_mod::driver").build()
     assert len(_reduce_nodes(sdfg)) >= 1
     from dace.data import View
     assert any(isinstance(d, View) for d in sdfg.arrays.values()), "col section should become a View"
@@ -194,6 +214,9 @@ def test_do_while_maxval_condition(tmp_path):
     only advances scalars (``thr`` / ``iters``) so the array stays read-only and
     in-bounds; the loop runs ``ceil(maxval(a))`` times."""
     src = """
+module driver_mod
+  implicit none
+contains
 subroutine driver(a, iters, n)
   implicit none
   integer, intent(in) :: n
@@ -207,8 +230,9 @@ subroutine driver(a, iters, n)
     iters = iters + 1
   end do
 end subroutine driver
+end module driver_mod
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver_mod::driver").build()
     assert len(_reduce_nodes(sdfg)) >= 1, "MAXVAL in a loop condition should be a Reduce lib-node"
     n = 4
     a = np.array([3.0, 1.0, 2.5, 0.0], dtype=np.float64)  # maxval=3 -> thr 0,1,2 pass; stop at 3

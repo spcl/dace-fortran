@@ -92,7 +92,7 @@ end module
                             Arg(kind="scalar", dtype="int32", intent="in")),
                       libraries=(str(so),))
         sdfg = build_sdfg(src, tmp_path, name="kern",
-                          entry="kern").build()
+                          entry="m_alias::kern").build()
         u = np.arange(8, dtype=np.float64)
         v = np.ones(8, dtype=np.float64)
         sdfg(s_u=u, s_v=v, n=np.int32(8))
@@ -140,7 +140,7 @@ end module
                       args=(Arg(kind="aos", intent="inout"),),
                       libraries=(str(so),))
         sdfg = build_sdfg(src, tmp_path, name="kern",
-                          entry="kern").build()
+                          entry="m_aos::kern").build()
         f1 = np.array([3.0]); f2 = np.array([5.0])
         sdfg(s_f1=f1, s_f2=f2)
         np.testing.assert_allclose(f1, 5.0)        # swapped
@@ -187,7 +187,7 @@ end module
                       args=(Arg(kind="aos", intent="inout"),),
                       libraries=(str(so),))
         sdfg = build_sdfg(src, tmp_path, name="kern",
-                          entry="kern").build()
+                          entry="m_vel::kern").build()
         u = np.array([1.0, 2.0, 3.0, 4.0])
         v = np.array([10.0, 20.0, 30.0, 40.0])
         sdfg(s_u=u, s_v=v)
@@ -247,7 +247,7 @@ end module
                             Arg(kind="scalar", dtype="int32", intent="in")),
                       libraries=(str(so),))
         sdfg = build_sdfg(src, tmp_path, name="kern",
-                          entry="kern").build()
+                          entry="m_velptr::kern").build()
         # Shallow pass: the tasklet calls the external on the array pointer
         # directly -- no AoS struct buffer / element copies.
         body = _external_call_body(sdfg)
@@ -303,7 +303,7 @@ end module
                       args=(Arg(kind="aos", intent="inout"),),
                       libraries=(str(so),))
         sdfg = build_sdfg(src, tmp_path, name="kern",
-                          entry="kern").build()
+                          entry="m_velstate::kern").build()
         rng = np.random.default_rng(0)
         u = np.asfortranarray(rng.random((4, 4)))
         v = np.asfortranarray(rng.random((4, 4)))
@@ -351,7 +351,7 @@ def test_full_velocity_advection_external_call(tmp_path):
                       args=(Arg(kind="array", dtype="float64", intent="inout"),),
                       libraries=(str(so),))
         sdfg = build_sdfg(src, tmp_path, name="velext",
-                          entry="velocity_tendencies").build()
+                          entry="mo_velocity_advection::velocity_tendencies").build()
         from dace_fortran.external import ExternalCall
         node = next((n for st in sdfg.all_states() for n in st.nodes()
                      if isinstance(n, ExternalCall)), None)
@@ -414,7 +414,7 @@ end module
                             Arg(kind="aos", intent="inout")),
                       libraries=(str(so),))
         sdfg = build_sdfg(src, tmp_path, name="kern",
-                          entry="kern").build()
+                          entry="m_dycore::kern").build()
         body = _external_call_body(sdfg)
         assert "_a0_o" in body and "struct" in body, \
             f"expected shallow w + AoS buffer for blk, got:\n{body}"
@@ -489,7 +489,7 @@ def test_v2_aos_external_with_nested_struct(tmp_path):
         keep_external("ext_v2",
                       args=(Arg(kind="aos", intent="inout"), ))
         sdfg = build_sdfg(_V2_NESTED_SRC, tmp_path, name="kern",
-                          entry="kern").build()
+                          entry="m_v2::kern").build()
         # Locate the external-call node and check the three leaves
         # (``ip%u``, ``ip%v``, ``scale``) are wired in declaration order.
         # The SoA flats inherit the outer struct's name prefix and the
@@ -556,7 +556,7 @@ def test_v2_aos_external_with_allocatable_member(tmp_path):
         keep_external("ext_v2_alloc",
                       args=(Arg(kind="aos", intent="inout"), ))
         sdfg = build_sdfg(_V2_ALLOCATABLE_SRC, tmp_path, name="kern",
-                          entry="kern").build()
+                          entry="m_v2_alloc::kern").build()
         # The external-call lowering produced one ExternalCall node
         # with the per-leaf marshal-expansion shape.
         ext = next((n for st in sdfg.all_states() for n in st.nodes()
@@ -625,7 +625,7 @@ end module
                                 c_abi="per_member_soa"), ),
                       libraries=(str(so), ))
         sdfg = build_sdfg(src, tmp_path, name="kern",
-                          entry="kern").build()
+                          entry="m_perm::kern").build()
         u = np.array([1.0, 2.0, 3.0, 4.0])
         v = np.array([10.0, 20.0, 30.0, 40.0])
         sdfg(s_u=u, s_v=v)

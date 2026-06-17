@@ -52,7 +52,7 @@ def test_pointer_2d_view_of_1d_target_writes_at_correct_offsets(tmp_path):
     accesses to linear offsets inside the 1D target."""
     M, K = 4, 3
 
-    sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="fill", entry="fill").build()
+    sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="fill", entry="m::fill").build()
 
     arr = np.full((M * K, ), -1.0, dtype=np.float64, order='F')
     sdfg(arr1d=arr)

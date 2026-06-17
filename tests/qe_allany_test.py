@@ -31,6 +31,9 @@ def test_allany_assignment_emits_libnode(tmp_path, op, x, expected):
     """``res = ALL/ANY(mask)`` lowers to the AllNode/AnyNode and returns a
     boolean."""
     src = f"""
+MODULE s_mod
+  IMPLICIT NONE
+CONTAINS
 SUBROUTINE s(a, res, n)
   IMPLICIT NONE
   INTEGER, INTENT(IN) :: n
@@ -43,8 +46,9 @@ SUBROUTINE s(a, res, n)
   END DO
   res = {op}(mask)
 END SUBROUTINE
+END MODULE s_mod
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="s").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="s_mod::s").build()
     assert {"AllNode", "AnyNode"} & _libnode_names(sdfg)
     res = np.zeros(1, dtype=np.bool_)
     a = np.asarray(x, dtype=np.float64, order="F")
@@ -62,6 +66,9 @@ def test_allany_in_if_condition(tmp_path, op, x, expected):
     """``IF (ALL/ANY(mask))`` materialises a boolean scalar via the libnode
     and branches on it."""
     src = f"""
+MODULE s_mod
+  IMPLICIT NONE
+CONTAINS
 SUBROUTINE s(a, res)
   IMPLICIT NONE
   REAL(8), INTENT(IN) :: a(3)
@@ -76,8 +83,9 @@ SUBROUTINE s(a, res)
     res = 0
   END IF
 END SUBROUTINE
+END MODULE s_mod
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="s").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="s", entry="s_mod::s").build()
     assert {"AllNode", "AnyNode"} & _libnode_names(sdfg)
     res = np.zeros(1, dtype=np.int32)
     a = np.asarray(x, dtype=np.float64, order="F")

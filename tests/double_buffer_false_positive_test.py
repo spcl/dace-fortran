@@ -64,7 +64,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     # Should NOT have ``arr_ia_box`` (the false-positive split shape).
     # Should have ``arr_box`` (the proper AoR flatten).
     bad_names = [k for k in sdfg.arrays if "_ia_" in k or "_ir_" in k]
@@ -92,7 +92,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     bad_names = [k for k in sdfg.arrays if "_i_" in k]
     assert not bad_names, f"false-positive loop-iter-baked names: {bad_names}"
 
@@ -114,7 +114,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     bad_names = [k for k in sdfg.arrays if "_1_" in k or "_2_" in k]
     assert not bad_names, f"false-positive const-baked names: {bad_names}"
 
@@ -137,7 +137,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     bad_names = [k for k in sdfg.arrays if "_idx_" in k]
     assert not bad_names, f"false-positive single-index-baked names: {bad_names}"
 
@@ -162,7 +162,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     arrs = sdfg.arrays
     # Each per-symbol companion should be there.
     assert "arr_nn1_w" in arrs, f"missing arr_nn1_w: {sorted(arrs.keys())}"
@@ -194,7 +194,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     arrs = sdfg.arrays
     for sym in ("a", "b", "c", "d"):
         flat = f"arr_{sym}_x"
@@ -221,7 +221,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     bad_names = [k for k in sdfg.arrays if "_idx_" in k]
     assert not bad_names, f"false-positive on same-symbol repeated use: {bad_names}"
 
@@ -244,6 +244,6 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     bad_names = [k for k in sdfg.arrays if "_mod_" in k or "_i_" in k]
     assert not bad_names, f"false-positive computed-expr-baked names: {bad_names}"

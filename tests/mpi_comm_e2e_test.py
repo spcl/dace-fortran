@@ -45,6 +45,9 @@ pytestmark = [
 ]
 
 _KERNEL = """
+module sr_usercomm_mod
+  implicit none
+contains
 subroutine sr_usercomm(buf, rbuf, n, dst, src, tag, comm, crank)
   implicit none
   integer, intent(in) :: n, dst, src, tag, comm, crank
@@ -64,6 +67,7 @@ subroutine sr_usercomm(buf, rbuf, n, dst, src, tag, comm, crank)
     call MPI_Send(buf, n, MPI_DOUBLE_PRECISION, dst, tag, comm, ierr)
   end if
 end subroutine sr_usercomm
+end module sr_usercomm_mod
 """
 
 # Stable C entry: the bindings wrapper ``sr_usercomm_dace`` is a module
@@ -124,7 +128,7 @@ def test_user_comm_split_send_recv(tmp_path: Path):
     if wrank == 0:
         sdfg_dir = tmp_path / "sdfg"
         sdfg_dir.mkdir(parents=True, exist_ok=True)
-        builder = build_sdfg(_KERNEL, sdfg_dir, name="sr_usercomm", entry="sr_usercomm")
+        builder = build_sdfg(_KERNEL, sdfg_dir, name="sr_usercomm", entry="sr_usercomm_mod::sr_usercomm")
         plan = FlattenPlan.from_dict(builder.module.get_flatten_plan())
         sdfg = builder.build()
         sdfg.name = "sr_usercomm"

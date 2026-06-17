@@ -95,6 +95,9 @@ def _build_ref_lib(tmp_path: Path, *, kernel_src: str, ref_driver_src: str, name
 # ---------------------------------------------------------------------------
 
 _DAXPY_KERNEL = """
+module daxpy_lite_mod
+  implicit none
+contains
 subroutine daxpy_lite(x, y, z, n)
   implicit none
   integer, intent(in)    :: n
@@ -105,6 +108,7 @@ subroutine daxpy_lite(x, y, z, n)
     z(i) = 2.0d0 * x(i) + y(i) - 0.5d0 * x(i)
   end do
 end subroutine daxpy_lite
+end module daxpy_lite_mod
 """
 
 _DAXPY_SDFG_DRIVER = """
@@ -123,11 +127,11 @@ end subroutine run_daxpy
 _DAXPY_REF_DRIVER = """
 subroutine run_daxpy_ref(x, y, z, n) bind(c, name='run_daxpy_ref')
   use iso_c_binding
+  use daxpy_lite_mod, only: daxpy_lite
   implicit none
   integer(c_int), value :: n
   real(c_double), intent(in)    :: x(n), y(n)
   real(c_double), intent(inout) :: z(n)
-  external :: daxpy_lite
   call daxpy_lite(x, y, z, n)
 end subroutine run_daxpy_ref
 """
@@ -148,7 +152,7 @@ def test_e2e_real8_arith_inout(tmp_path: Path):
     lib, sdfg = _build_binding_lib(tmp_path,
                                    kernel_src=_DAXPY_KERNEL,
                                    name="daxpy_lite",
-                                   entry="daxpy_lite",
+                                   entry="daxpy_lite_mod::daxpy_lite",
                                    iface=iface,
                                    driver_src=_DAXPY_SDFG_DRIVER)
     ref = _build_ref_lib(tmp_path, kernel_src=_DAXPY_KERNEL, ref_driver_src=_DAXPY_REF_DRIVER, name="daxpy_lite")
@@ -182,6 +186,9 @@ def test_e2e_real8_arith_inout(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 _SUM_KERNEL = """
+module sum_reduce_mod
+  implicit none
+contains
 subroutine sum_reduce(a, s, n)
   implicit none
   integer, intent(in)  :: n
@@ -193,6 +200,7 @@ subroutine sum_reduce(a, s, n)
     s = s + a(i) * a(i)
   end do
 end subroutine sum_reduce
+end module sum_reduce_mod
 """
 
 _SUM_SDFG_DRIVER = """
@@ -211,11 +219,11 @@ end subroutine run_sum
 _SUM_REF_DRIVER = """
 subroutine run_sum_ref(a, s, n) bind(c, name='run_sum_ref')
   use iso_c_binding
+  use sum_reduce_mod, only: sum_reduce
   implicit none
   integer(c_int), value :: n
   real(c_double), intent(in)  :: a(n)
   real(c_double), intent(out) :: s
-  external :: sum_reduce
   call sum_reduce(a, s, n)
 end subroutine run_sum_ref
 """
@@ -237,7 +245,7 @@ def test_e2e_scalar_real_intent_out(tmp_path: Path):
     lib, sdfg = _build_binding_lib(tmp_path,
                                    kernel_src=_SUM_KERNEL,
                                    name="sum_reduce",
-                                   entry="sum_reduce",
+                                   entry="sum_reduce_mod::sum_reduce",
                                    iface=iface,
                                    driver_src=_SUM_SDFG_DRIVER)
     ref = _build_ref_lib(tmp_path, kernel_src=_SUM_KERNEL, ref_driver_src=_SUM_REF_DRIVER, name="sum_reduce")
@@ -378,6 +386,9 @@ def test_e2e_integer_kind_arith(tmp_path: Path, kind: int, npty, cty):
 # ---------------------------------------------------------------------------
 
 _MINMAX_KERNEL = """
+module clamp_kernel_mod
+  implicit none
+contains
 subroutine clamp_kernel(a, lo, hi, out, n)
   implicit none
   integer, intent(in)  :: n
@@ -389,6 +400,7 @@ subroutine clamp_kernel(a, lo, hi, out, n)
     out(i) = max(lo, min(hi, a(i)))
   end do
 end subroutine clamp_kernel
+end module clamp_kernel_mod
 """
 
 _MINMAX_SDFG_DRIVER = """
@@ -408,12 +420,12 @@ end subroutine run_clamp
 _MINMAX_REF_DRIVER = """
 subroutine run_clamp_ref(a, lo, hi, out, n) bind(c, name='run_clamp_ref')
   use iso_c_binding
+  use clamp_kernel_mod, only: clamp_kernel
   implicit none
   integer(c_int), value :: n
   real(c_double), intent(in)  :: a(n)
   real(c_double), value :: lo, hi
   real(c_double), intent(out) :: out(n)
-  external :: clamp_kernel
   call clamp_kernel(a, lo, hi, out, n)
 end subroutine run_clamp_ref
 """
@@ -436,7 +448,7 @@ def test_e2e_minmax_intrinsic(tmp_path: Path):
     lib, sdfg = _build_binding_lib(tmp_path,
                                    kernel_src=_MINMAX_KERNEL,
                                    name="clamp_kernel",
-                                   entry="clamp_kernel",
+                                   entry="clamp_kernel_mod::clamp_kernel",
                                    iface=iface,
                                    driver_src=_MINMAX_SDFG_DRIVER)
     ref = _build_ref_lib(tmp_path, kernel_src=_MINMAX_KERNEL, ref_driver_src=_MINMAX_REF_DRIVER, name="clamp_kernel")

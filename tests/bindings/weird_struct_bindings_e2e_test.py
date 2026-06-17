@@ -114,6 +114,10 @@ def test_e2e_mixed_rank_struct(tmp_path: Path):
     gfortran reference (``rtol=1e-12``); the FlattenPlan must be non-empty."""
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
+    # Entry kept BARE: ``scale3d`` is a free subroutine that the gfortran
+    # reference driver (``_REF_DRIVER``) links via ``external :: scale3d`` and
+    # the binding emitter wraps via an implicit interface.  Wrapping it in a
+    # module would break both the reference link and the emitted binding.
     builder = build_sdfg(_SRC, sdfg_dir, name="scale3d", entry="scale3d")
     plan = FlattenPlan.from_dict(builder.module.get_flatten_plan())
     sdfg = builder.build()

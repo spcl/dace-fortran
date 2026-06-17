@@ -128,7 +128,7 @@ contains
   end subroutine outer
 end module m
 """
-    sdfg, err = _try_build(tmp_path / "sdfg", src, name="outer", entry="outer")
+    sdfg, err = _try_build(tmp_path / "sdfg", src, name="outer", entry="m::outer")
     assert sdfg is not None, f"build failed: {err}"
 
 
@@ -158,7 +158,7 @@ contains
   end subroutine outer
 end module m
 """
-    sdfg, err = _try_build(tmp_path / "sdfg", src, name="outer", entry="outer")
+    sdfg, err = _try_build(tmp_path / "sdfg", src, name="outer", entry="m::outer")
     assert sdfg is not None, f"build failed: {err}"
 
 
@@ -188,7 +188,7 @@ contains
   end subroutine outer
 end module m
 """
-    sdfg, err = _try_build(tmp_path / "sdfg", src, name="outer", entry="outer")
+    sdfg, err = _try_build(tmp_path / "sdfg", src, name="outer", entry="m::outer")
     assert sdfg is not None, f"build failed: {err}"
 
 
@@ -216,7 +216,7 @@ contains
   end subroutine fill
 end module m
 """
-    sdfg, err = _try_build(tmp_path / "sdfg", src, name="fill", entry="fill")
+    sdfg, err = _try_build(tmp_path / "sdfg", src, name="fill", entry="m::fill")
     assert sdfg is not None, f"build failed: {err}"
 
 
@@ -256,7 +256,7 @@ contains
   end subroutine fill
 end module m
 """
-    sdfg, err = _try_build(tmp_path / "sdfg", src, name="fill", entry="fill")
+    sdfg, err = _try_build(tmp_path / "sdfg", src, name="fill", entry="m::fill")
     assert sdfg is None, "expected c_f_pointer-with-shape to be rejected at build"
     assert "unresolved free symbol" in str(err) or "cptr" in str(err), (
         f"expected an unresolved-symbol rejection mentioning the opaque "
@@ -286,7 +286,7 @@ contains
   end subroutine fill
 end module m
 """
-    sdfg, err = _try_build(tmp_path / "sdfg", src, name="fill", entry="fill")
+    sdfg, err = _try_build(tmp_path / "sdfg", src, name="fill", entry="m::fill")
     assert sdfg is not None, f"build failed: {err}"
 
 
@@ -312,7 +312,7 @@ contains
   end subroutine fill
 end module m
 """
-    sdfg, err = _try_build(tmp_path / "sdfg", src, name="fill", entry="fill")
+    sdfg, err = _try_build(tmp_path / "sdfg", src, name="fill", entry="m::fill")
     assert sdfg is not None, f"build failed: {err}"
 
 
@@ -340,7 +340,7 @@ contains
   end subroutine fill
 end module m
 """
-    sdfg, err = _try_build(tmp_path / "sdfg", src, name="fill", entry="fill")
+    sdfg, err = _try_build(tmp_path / "sdfg", src, name="fill", entry="m::fill")
     assert sdfg is not None, f"build failed: {err}"
 
 
@@ -371,7 +371,7 @@ contains
   end subroutine outer
 end module m
 """
-    sdfg, err = _try_build(tmp_path / "sdfg", src, name="outer", entry="outer")
+    sdfg, err = _try_build(tmp_path / "sdfg", src, name="outer", entry="m::outer")
     assert sdfg is not None, f"build failed: {err}"
 
 
@@ -403,5 +403,5 @@ contains
   end subroutine fill
 end module m
 """
-    sdfg, err = _try_build(tmp_path / "sdfg", src, name="fill", entry="fill")
+    sdfg, err = _try_build(tmp_path / "sdfg", src, name="fill", entry="m::fill")
     assert sdfg is not None, f"build failed: {err}"

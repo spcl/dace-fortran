@@ -51,7 +51,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="matmul_t", entry="matmul_t").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="matmul_t", entry="m::matmul_t").build()
     A = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order='F')
     q = np.array([1.0, 2.0, 3.0], dtype=np.float64, order='F')
     tmp = np.zeros(3, dtype=np.float64, order='F')
@@ -80,7 +80,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="vcut_pattern", entry="vcut_pattern").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="vcut_pattern", entry="m::vcut_pattern").build()
     A = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order='F')
     q = np.array([1.0, 2.0, 3.0], dtype=np.float64, order='F')
     res = np.zeros(3, dtype=np.float64, order='F')
@@ -102,7 +102,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="mm", entry="mm").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="mm", entry="m::mm").build()
     A = np.array([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0], [9.0, 10.0, 11.0, 12.0]], dtype=np.float64, order='F')
     B = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]], dtype=np.float64, order='F')
     C = np.zeros((3, 2), dtype=np.float64, order='F')
@@ -130,7 +130,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="inline_qe", entry="inline_qe").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="inline_qe", entry="m::inline_qe").build()
     A = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float64, order='F')
     q = np.array([1.0, 2.0, 3.0], dtype=np.float64, order='F')
     res = np.zeros(3, dtype=np.float64, order='F')

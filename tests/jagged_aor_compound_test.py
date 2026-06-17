@@ -59,7 +59,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     arrs = sdfg.arrays
     # At minimum the bridge should not emit the unflattened struct
     # base ``arr``; it should produce per-field companions.
@@ -89,7 +89,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     assert "arr_a" in sdfg.arrays
     assert "arr_b" in sdfg.arrays
 
@@ -121,7 +121,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     # Double-buffer split should mint per-symbol companions, each
     # with the inner jagged + AoR flatten.
     arrs = sdfg.arrays
@@ -156,7 +156,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     arrs = sdfg.arrays
     # Both buffer companions should be present.
     has_buf_split = any("nnow" in k for k in arrs) and any("nnew" in k for k in arrs)
@@ -187,7 +187,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     arrs = sdfg.arrays
     has_buf_split = any("nnow" in k for k in arrs) and any("nnew" in k for k in arrs)
     assert has_buf_split, f"expected nnow/nnew companions for nested chain: {sorted(arrs.keys())}"
@@ -215,7 +215,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     # Should mint per-symbol companions for the double-buffer split,
     # each with the inner jagged AoR fully flattened.
     arrs = sdfg.arrays

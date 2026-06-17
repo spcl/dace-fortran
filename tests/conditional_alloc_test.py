@@ -31,14 +31,16 @@ def _run(tmp_path, src, cases, argnames):
     """Build ``src`` through the bridge and f2py; run both on each
     ``cases`` tuple (mapped to ``argnames``); assert the ``out(10)``
     arrays match."""
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="probe", entry="probe").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="probe", entry="probe_mod::probe").build()
     mod = f2py_compile(src, tmp_path / "ref", f"ca_ref_{tmp_path.name}")
     for args in cases:
         s = np.zeros(10, dtype=np.float64)
         r = np.zeros(10, dtype=np.float64)
         kw = {k: np.int32(v) for k, v in zip(argnames, args)}
         sdfg(out=s, **kw)
-        mod.probe(*args, r)
+        # ``probe`` now lives in ``probe_mod`` so f2py exposes it under
+        # the module's submodule namespace.
+        mod.probe_mod.probe(*args, r)
         np.testing.assert_array_equal(s, r)
     return sdfg
 
@@ -63,6 +65,9 @@ def test_cond_alloc_if_else(tmp_path, hop):
     branch-dependent extent symbol; ``size(a)`` is ``n`` or ``m`` per branch."""
     decl, loop = _size_loop_parts(hop)
     src = f"""
+module probe_mod
+  implicit none
+contains
 subroutine probe(cond, n, m, out)
   implicit none
   integer, intent(in) :: cond, n, m
@@ -81,6 +86,7 @@ subroutine probe(cond, n, m, out)
   out(2) = real(size(a), 8)
   deallocate(a)
 end subroutine probe
+end module probe_mod
 """
     sdfg = _run(tmp_path, src, [(1, 5, 3), (0, 5, 3), (1, 2, 7), (0, 2, 7)],
                 ["cond", "n", "m"])
@@ -94,6 +100,9 @@ def test_cond_alloc_if_elif_else(tmp_path, hop):
     """Nested ``IF/ELSEIF/ELSEIF/ELSE`` (four mutually-exclusive branches)."""
     decl, loop = _size_loop_parts(hop)
     src = f"""
+module probe_mod
+  implicit none
+contains
 subroutine probe(sel, n1, n2, n3, n4, out)
   implicit none
   integer, intent(in) :: sel, n1, n2, n3, n4
@@ -115,6 +124,7 @@ subroutine probe(sel, n1, n2, n3, n4, out)
   out(1) = real(size(a), 8)
   deallocate(a)
 end subroutine probe
+end module probe_mod
 """
     sdfg = _run(tmp_path, src,
                 [(1, 5, 3, 7, 2), (2, 5, 3, 7, 2), (3, 5, 3, 7, 2), (4, 5, 3, 7, 2)],
@@ -127,6 +137,9 @@ def test_cond_alloc_single_branch(tmp_path):
     """``IF (c) THEN; ALLOCATE(a(n)); ...; ENDIF`` -- a single alloc site;
     ``a`` is used only on the allocated path."""
     src = """
+module probe_mod
+  implicit none
+contains
 subroutine probe(sel, n, out)
   implicit none
   integer, intent(in) :: sel, n
@@ -142,6 +155,7 @@ subroutine probe(sel, n, out)
     deallocate(a)
   end if
 end subroutine probe
+end module probe_mod
 """
     _run(tmp_path, src, [(1, 6), (0, 6)], ["sel", "n"])
 
@@ -151,6 +165,9 @@ def test_realloc_sequential_new_buffer(tmp_path):
     sequential re-allocation gets a fresh buffer (``a_alloc1``); this is NOT
     the conditional case and must stay versioned."""
     src = """
+module probe_mod
+  implicit none
+contains
 subroutine probe(n, m, out)
   implicit none
   integer, intent(in) :: n, m
@@ -170,6 +187,7 @@ subroutine probe(n, m, out)
   out(2) = a(m)
   deallocate(a)
 end subroutine probe
+end module probe_mod
 """
     sdfg = _run(tmp_path, src, [(5, 3), (4, 8)], ["n", "m"])
     # Sequential realloc -> a fresh versioned buffer (new name).
@@ -180,6 +198,9 @@ def test_realloc_chain_four_buffers(tmp_path):
     """``ALLOC; DEALLOC`` repeated four times -> four versioned buffers
     (``a``, ``a_alloc1``, ``a_alloc2``, ``a_alloc3``), one per epoch."""
     src = """
+module probe_mod
+  implicit none
+contains
 subroutine probe(n1, n2, n3, n4, out)
   implicit none
   integer, intent(in) :: n1, n2, n3, n4
@@ -191,6 +212,7 @@ subroutine probe(n1, n2, n3, n4, out)
   allocate(a(n3)); do i=1,n3; a(i)=real(3*i,8); end do; out(3)=a(n3); deallocate(a)
   allocate(a(n4)); do i=1,n4; a(i)=real(4*i,8); end do; out(4)=a(n4); deallocate(a)
 end subroutine probe
+end module probe_mod
 """
     sdfg = _run(tmp_path, src, [(5, 3, 7, 2), (1, 9, 4, 6)],
                 ["n1", "n2", "n3", "n4"])
@@ -206,6 +228,9 @@ def test_cond_alloc_then_realloc(tmp_path, hop):
     ``a_alloc1_d0`` so ``size`` resolves on the versioned buffer too)."""
     decl, loop = _size_loop_parts(hop)
     src = f"""
+module probe_mod
+  implicit none
+contains
 subroutine probe(cond, n, m, k, out)
   implicit none
   integer, intent(in) :: cond, n, m, k
@@ -231,6 +256,7 @@ subroutine probe(cond, n, m, k, out)
   out(4) = a(k)
   deallocate(a)
 end subroutine probe
+end module probe_mod
 """
     sdfg = _run(tmp_path, src, [(1, 5, 3, 4), (0, 5, 3, 4)],
                 ["cond", "n", "m", "k"])
@@ -247,6 +273,9 @@ def test_realloc_chain_inside_if(tmp_path, hop):
     buffer is a separate transient."""
     decl, loop = _size_loop_parts(hop)
     src = f"""
+module probe_mod
+  implicit none
+contains
 subroutine probe(cond, n, n2, m, out)
   implicit none
   integer, intent(in) :: cond, n, n2, m
@@ -268,6 +297,7 @@ subroutine probe(cond, n, n2, m, out)
   out(2) = a(1)
   deallocate(a)
 end subroutine probe
+end module probe_mod
 """
     sdfg = _run(tmp_path, src, [(1, 5, 8, 3), (0, 5, 8, 3), (1, 2, 6, 9)],
                 ["cond", "n", "n2", "m"])
@@ -285,6 +315,9 @@ def test_size_of_concrete_base_buffer(tmp_path, hop):
     -> ``KeyError`` before)."""
     decl, loop = _size_loop_parts(hop)
     src = f"""
+module probe_mod
+  implicit none
+contains
 subroutine probe(n, out)
   implicit none
   integer, intent(in) :: n
@@ -300,5 +333,6 @@ subroutine probe(n, out)
   out(3) = real(size(a), 8)
   deallocate(a)
 end subroutine probe
+end module probe_mod
 """
     _run(tmp_path, src, [(5,), (3,), (8,)], ["n"])

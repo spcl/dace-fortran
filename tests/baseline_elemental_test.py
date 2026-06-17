@@ -32,12 +32,16 @@ contains
   end subroutine delta
 end module elemod
 
-subroutine apply_delta(od, scat_od, g)
-  use elemod
+module apply_delta_mod
   implicit none
-  real(8), intent(inout) :: od(14), scat_od(14), g(14)
-  call delta(od, scat_od, g)
-end subroutine apply_delta
+contains
+  subroutine apply_delta(od, scat_od, g)
+    use elemod
+    implicit none
+    real(8), intent(inout) :: od(14), scat_od(14), g(14)
+    call delta(od, scat_od, g)
+  end subroutine apply_delta
+end module apply_delta_mod
 """
     ref_src = """
 subroutine apply_delta(od, scat_od, g)
@@ -59,7 +63,7 @@ end subroutine apply_delta
     # public module-scope ``delta`` private so its dummies don't leak
     # into extract_vars alongside ``apply_delta``'s own dummies.
     (tmp_path / "sdfg").mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(sdfg_src, tmp_path / "sdfg", name="apply_delta", entry="apply_delta").build()
+    sdfg = build_sdfg(sdfg_src, tmp_path / "sdfg", name="apply_delta", entry="apply_delta_mod::apply_delta").build()
 
     rng = np.random.default_rng(7)
     od = rng.standard_normal(14)

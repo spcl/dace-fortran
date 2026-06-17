@@ -29,6 +29,8 @@ def test_fortran_frontend_loop_region_basic_loop():
     # frontend runs on the subroutine directly (cross-subroutine lowering is
     # not yet implemented).  The compute body is identical.
     test_string = """
+module loop_test_function_mod
+contains
 subroutine loop_test_function(a, b, c)
   implicit none
   real(8) :: a(10, 10), b(10, 10), c(10, 10)
@@ -39,8 +41,9 @@ subroutine loop_test_function(a, b, c)
     end do
   end do
 end subroutine loop_test_function
+end module loop_test_function_mod
 """
-    sdfg = build_sdfg(test_string, entry="loop_test_function", name="loop_test")
+    sdfg = build_sdfg(test_string, entry="loop_test_function_mod::loop_test_function", name="loop_test")
 
     a_test = np.full((10, 10), 2.0, dtype=np.float64)
     b_test = np.full((10, 10), 3.0, dtype=np.float64)

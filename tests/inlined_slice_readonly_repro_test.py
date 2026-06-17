@@ -56,6 +56,15 @@ subroutine outer(n, lev, nb, plude, out)
 end subroutine outer
 """
 
+# Build variant: the free ``outer`` driver wrapped in a module so the SDFG
+# build can use the ``outer_mod::outer`` entry spelling.  ``_SRC`` (free
+# ``outer``) stays the f2py reference source so ``ref.outer`` resolves
+# top-level.
+_SRC_BUILD = _SRC.replace(
+    "subroutine outer(n, lev, nb, plude, out)",
+    "module outer_mod\ncontains\nsubroutine outer(n, lev, nb, plude, out)",
+).rstrip() + "\nend module outer_mod\n"
+
 
 def test_inlined_2d_slice_readonly_of_3d_array(tmp_path: Path):
     """``out(:,:,ib) += plude(:,:,ib)*2`` via an inlined callee.  The
@@ -68,7 +77,7 @@ def test_inlined_2d_slice_readonly_of_3d_array(tmp_path: Path):
     ref_dir = tmp_path / "ref"
     ref_dir.mkdir(parents=True, exist_ok=True)
 
-    sdfg = build_sdfg(_SRC, sdfg_dir, name="outer", entry="outer").build()
+    sdfg = build_sdfg(_SRC_BUILD, sdfg_dir, name="outer", entry="outer_mod::outer").build()
     sdfg.validate()
     ref = f2py_compile(_SRC, ref_dir, "slice_ref", only=("outer", ))
 
@@ -120,6 +129,14 @@ subroutine outer_flux(n, lev, nb, plude, pfsqlf)
 end subroutine outer_flux
 """
 
+# Build variant of ``_SRC_FLUX`` (see ``_SRC_BUILD``): module-wrapped
+# ``outer_flux`` for the ``outer_flux_mod::outer_flux`` build entry;
+# ``_SRC_FLUX`` itself stays free for the f2py reference.
+_SRC_FLUX_BUILD = _SRC_FLUX.replace(
+    "subroutine outer_flux(n, lev, nb, plude, pfsqlf)",
+    "module outer_flux_mod\ncontains\nsubroutine outer_flux(n, lev, nb, plude, pfsqlf)",
+).rstrip() + "\nend module outer_flux_mod\n"
+
 
 def test_inlined_flux_accumulation_shifted_index(tmp_path: Path):
     """``pfsqlf(:,1)=0 ; pfsqlf(:,k+1)=pfsqlf(:,k)+plude(:,k)*0.5``
@@ -132,7 +149,7 @@ def test_inlined_flux_accumulation_shifted_index(tmp_path: Path):
     ref_dir = tmp_path / "ref2"
     ref_dir.mkdir(parents=True, exist_ok=True)
 
-    sdfg = build_sdfg(_SRC_FLUX, sdfg_dir, name="outer_flux", entry="outer_flux").build()
+    sdfg = build_sdfg(_SRC_FLUX_BUILD, sdfg_dir, name="outer_flux", entry="outer_flux_mod::outer_flux").build()
     sdfg.validate()
     ref = f2py_compile(_SRC_FLUX, ref_dir, "flux_ref", only=("outer_flux", ))
 

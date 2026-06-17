@@ -40,7 +40,7 @@ contains
 end module m
 """
     N, K = 4, 3
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="fill", entry="fill").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="fill", entry="m::fill").build()
     # arr2d laid out in Fortran column-major
     arr = np.full((N, K), -1.0, dtype=np.float64, order='F')
     sdfg(arr2d=arr)

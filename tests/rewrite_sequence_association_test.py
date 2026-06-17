@@ -321,7 +321,7 @@ contains
   end subroutine apply
 end module seqassoc2d_mod
 """
-    sdfg = build_sdfg(src, tmp_path, name="seq2d", entry="apply").build()
+    sdfg = build_sdfg(src, tmp_path, name="seq2d", entry="seqassoc2d_mod::apply").build()
     a = np.arange(1, 13, dtype=np.float32).reshape(3, 4, order='F').copy(order='F')
     out = np.zeros(1, dtype=np.float32)
     sdfg(a=a, out=out)

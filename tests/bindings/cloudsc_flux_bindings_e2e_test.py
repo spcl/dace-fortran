@@ -43,6 +43,8 @@ pytestmark = [
 # accumulate, cross-array PFSQRF<-PFSQLF(JK), inlined-callee
 # INTENT(OUT) section slice through a block wrapper.
 _KERNEL_SRC = """
+module cloudsc_mod
+contains
 subroutine cloudsc(klon, klev, paph, za, zb, pfsqlf, pfsqrf)
   implicit none
   integer, intent(in) :: klon, klev
@@ -80,6 +82,7 @@ subroutine cloudscouter(klon, klev, nblocks, paph, za, zb, pfsqlf, pfsqrf)
                  zb(:, :, ibl), pfsqlf(:, :, ibl), pfsqrf(:, :, ibl))
   end do
 end subroutine cloudscouter
+end module cloudsc_mod
 """
 
 # C-callable driver that calls the GENERATED binding wrapper
@@ -106,6 +109,7 @@ _REF_DRIVER = """
 subroutine run_flux_ref(klon, klev, nblocks, paph, za, zb, lf, rf) &
     bind(c, name='run_flux_ref')
   use iso_c_binding
+  use cloudsc_mod, only: cloudscouter
   implicit none
   integer(c_int), value :: klon, klev, nblocks
   real(c_double), intent(in)    :: paph(klon, klev+1, nblocks)
@@ -113,7 +117,6 @@ subroutine run_flux_ref(klon, klev, nblocks, paph, za, zb, lf, rf) &
   real(c_double), intent(in)    :: zb(klon, klev, nblocks)
   real(c_double), intent(inout) :: lf(klon, klev+1, nblocks)
   real(c_double), intent(inout) :: rf(klon, klev+1, nblocks)
-  external :: cloudscouter
   call cloudscouter(klon, klev, nblocks, paph, za, zb, lf, rf)
 end subroutine run_flux_ref
 """
@@ -177,7 +180,7 @@ def test_cloudsc_flux_f90_bindings_e2e(tmp_path: Path):
     # --- SDFG-via-binding library ---
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    builder = build_sdfg(_KERNEL_SRC, sdfg_dir, name="cloudsc", entry="cloudscouter")
+    builder = build_sdfg(_KERNEL_SRC, sdfg_dir, name="cloudsc", entry="cloudsc_mod::cloudscouter")
     plan = FlattenPlan.from_dict(builder.module.get_flatten_plan())
     sdfg = builder.build()
     # The generated binding references ``__dace_{init,exit}_<iface.entry>``;

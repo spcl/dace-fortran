@@ -57,7 +57,7 @@ CONTAINS
   END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="run", entry="run").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="run", entry="m::run").build()
     nx, ny, nz = 3, 4, 5
     corrected = np.asfortranarray(
         np.arange(nx * ny * nz, dtype=np.float64).reshape((nx, ny, nz)))
@@ -68,12 +68,6 @@ END MODULE
     np.testing.assert_allclose(res[0], corrected[1, 2, 3])
 
 
-@pytest.mark.xfail(strict=False,
-                   reason="inlined FUNCTION-RESULT dummy bound to an array "
-                   "SECTION (``getv(t, q(:,ig))``) leaks ``getv_q`` as a free "
-                   "symbol -- section-alias detection misses the function path. "
-                   "Separate gate; the QE kernel itself does not hit it after "
-                   "the pointer-member-indexed-read fix.")
 def test_pointer_member_indexed_inlined_function(tmp_path):
     """Faithful ``vcut_get`` shape: a RESULT function with a pointer
     struct-member 3-D read, a bounds-check IF, and a section-arg call
@@ -111,16 +105,23 @@ CONTAINS
   END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="run", entry="run").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="run", entry="m::run").build()
     nx, ny, nz = 3, 3, 3
-    corrected = np.asarray(np.arange(nx * ny * nz), dtype=np.float64).reshape(
-        (nx, ny, nz), order="F")
+    # ``asfortranarray`` of the reshape, not ``reshape(order="F")`` -- the
+    # latter returns a non-owning view, which DaCe rejects as a program
+    # argument (analyzability).  Mirrors the sibling test above.
+    corrected = np.asfortranarray(
+        np.arange(nx * ny * nz, dtype=np.float64).reshape((nx, ny, nz)))
     ng = 2
     # q chosen so SUM(q**2) <= cutoff**2 (take the ELSE branch) and
     # NINT(q) lands inside [1, n].
     q = np.asarray([[1.0, 2.0], [1.0, 2.0], [1.0, 2.0]], dtype=np.float64, order="F")
     fac = np.zeros(ng, dtype=np.float64, order="F")
-    sdfg(t_corrected=corrected, t_cutoff=100.0, q=q, fac=fac, ng=np.int32(ng))
+    # ``t_cutoff`` (the flattened scalar member ``t%cutoff``) is exposed as
+    # a (1,)-Array on the SDFG surface, so pass a 1-element array, not a
+    # bare Python float.
+    t_cutoff = np.array([100.0], dtype=np.float64)
+    sdfg(t_corrected=corrected, t_cutoff=t_cutoff, q=q, fac=fac, ng=np.int32(ng))
     expected = np.array([corrected[0, 0, 0], corrected[1, 1, 1]])
     np.testing.assert_allclose(fac, expected)
 
@@ -146,7 +147,7 @@ CONTAINS
   END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="run", entry="run").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="run", entry="m::run").build()
     assert "tabxx_box" in sdfg.arrays
     # record dim + member dim
     assert len(sdfg.arrays["tabxx_box"].shape) == 2

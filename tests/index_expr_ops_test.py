@@ -29,6 +29,9 @@ def test_mod_in_array_index(tmp_path):
     """``a(MOD(i, n) + 1)`` -- the MOD lowers to ``arith.remsi``; the
     subscript must render as ``(i % n) + 1`` (sympy ``Mod``)."""
     src = """
+MODULE mod_idx_mod
+  IMPLICIT NONE
+CONTAINS
 SUBROUTINE mod_idx(a, out, n, m)
   IMPLICIT NONE
   INTEGER, INTENT(IN) :: n, m
@@ -39,9 +42,10 @@ SUBROUTINE mod_idx(a, out, n, m)
     out(i) = a(MOD(i, n) + 1)
   END DO
 END SUBROUTINE
+END MODULE mod_idx_mod
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="mod_idx",
-                      entry="mod_idx").build()
+                      entry="mod_idx_mod::mod_idx").build()
     a = np.array([10.0, 20.0, 30.0], dtype=np.float64, order="F")
     out = np.zeros(5, dtype=np.float64, order="F")
     sdfg(a=a, out=out, n=np.int32(3), m=np.int32(5))
@@ -56,6 +60,9 @@ def test_kind4_index_extended_to_i64(tmp_path):
     to i64 by Flang (``arith.extsi``); the index path must treat the
     cast as transparent rather than emitting ``?``."""
     src = """
+MODULE k4_idx_mod
+  IMPLICIT NONE
+CONTAINS
 SUBROUTINE k4_idx(a, out, n)
   IMPLICIT NONE
   INTEGER(4), INTENT(IN) :: n
@@ -67,9 +74,10 @@ SUBROUTINE k4_idx(a, out, n)
     out = out + a(i)
   END DO
 END SUBROUTINE
+END MODULE k4_idx_mod
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="k4_idx",
-                      entry="k4_idx").build()
+                      entry="k4_idx_mod::k4_idx").build()
     a = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64, order="F")
     out = np.zeros(1, dtype=np.float64)
     sdfg(a=a, out=out, n=np.int32(4))
@@ -79,6 +87,9 @@ END SUBROUTINE
 def test_mod_plus_offset_index_2d(tmp_path):
     """``a(MOD(i, 2) + 1, j)`` -- MOD in one dim of a 2-D subscript."""
     src = """
+MODULE mod_idx_2d_mod
+  IMPLICIT NONE
+CONTAINS
 SUBROUTINE mod_idx_2d(a, out, n, m)
   IMPLICIT NONE
   INTEGER, INTENT(IN) :: n, m
@@ -89,9 +100,10 @@ SUBROUTINE mod_idx_2d(a, out, n, m)
     out(j) = a(MOD(j, 2) + 1, j)
   END DO
 END SUBROUTINE
+END MODULE mod_idx_2d_mod
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="mod_idx_2d",
-                      entry="mod_idx_2d").build()
+                      entry="mod_idx_2d_mod::mod_idx_2d").build()
     a = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float64, order="F")
     out = np.zeros(3, dtype=np.float64, order="F")
     sdfg(a=a, out=out, n=np.int32(3), m=np.int32(3))

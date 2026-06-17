@@ -55,7 +55,7 @@ END MODULE mo_kernel
 def test_module_global_array_passthrough(tmp_path: Path):
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(_SRC, sdfg_dir, name="read_table", entry="read_table").build()
+    sdfg = build_sdfg(_SRC, sdfg_dir, name="read_table", entry="mo_kernel::read_table").build()
     sdfg.validate()
 
     # Without the fix, ``gtable`` is a transient -- arglist won't carry it.

@@ -18,6 +18,8 @@ pytestmark = pytest.mark.skipif(not have_flang(),
 
 def test_cshift_whole_array_positive(tmp_path):
     src = """
+MODULE csh_mod
+CONTAINS
 SUBROUTINE csh(arr, res, n)
   IMPLICIT NONE
   INTEGER, INTENT(IN) :: n
@@ -25,8 +27,9 @@ SUBROUTINE csh(arr, res, n)
   REAL(8), INTENT(OUT) :: res(n)
   res = CSHIFT(arr, 2)
 END SUBROUTINE
+END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="csh", entry="csh").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="csh", entry="csh_mod::csh").build()
     arr = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float64, order="F")
     res = np.zeros(5, dtype=np.float64, order="F")
     sdfg(arr=arr, res=res, n=np.int32(5))
@@ -37,6 +40,8 @@ def test_cshift_negative_shift(tmp_path):
     """Negative shift -- exercises the doubled ``Mod`` that keeps the
     rotated index non-negative."""
     src = """
+MODULE csh_neg_mod
+CONTAINS
 SUBROUTINE csh_neg(arr, res, n)
   IMPLICIT NONE
   INTEGER, INTENT(IN) :: n
@@ -44,9 +49,10 @@ SUBROUTINE csh_neg(arr, res, n)
   REAL(8), INTENT(OUT) :: res(n)
   res = CSHIFT(arr, -1)
 END SUBROUTINE
+END MODULE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="csh_neg",
-                      entry="csh_neg").build()
+                      entry="csh_neg_mod::csh_neg").build()
     arr = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float64, order="F")
     res = np.zeros(5, dtype=np.float64, order="F")
     sdfg(arr=arr, res=res, n=np.int32(5))
@@ -66,7 +72,7 @@ contains
 end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="cshe",
-                      entry="cshe").build()
+                      entry="m::cshe").build()
     arr = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float64, order="F")
     res = np.zeros(5, dtype=np.float64, order="F")
     sdfg(arr=arr, res=res)

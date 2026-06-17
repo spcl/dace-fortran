@@ -29,17 +29,21 @@ from dace_fortran.bindings import SignatureDriftError, build_fortran_library
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
 _SRC = """
-subroutine axpy(n, a, x, y)
+module axpy_mod
   implicit none
-  integer, intent(in) :: n
-  real(8), intent(in) :: a
-  real(8), intent(in) :: x(n)
-  real(8), intent(inout) :: y(n)
-  integer :: i
-  do i = 1, n
-    y(i) = a * x(i) + y(i)
-  end do
-end subroutine axpy
+contains
+  subroutine axpy(n, a, x, y)
+    implicit none
+    integer, intent(in) :: n
+    real(8), intent(in) :: a
+    real(8), intent(in) :: x(n)
+    real(8), intent(inout) :: y(n)
+    integer :: i
+    do i = 1, n
+      y(i) = a * x(i) + y(i)
+    end do
+  end subroutine axpy
+end module axpy_mod
 """
 
 
@@ -51,7 +55,7 @@ def _build(tmp_path: Path):
     """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(_SRC, sdfg_dir, name="axpy", entry="axpy").build()
+    sdfg = build_sdfg(_SRC, sdfg_dir, name="axpy", entry="axpy_mod::axpy").build()
     sdfg.validate()
     assert getattr(sdfg, "_frozen_signature",
                    None) is not None, ("SDFGBuilder.build() must auto-attach a frozen signature")

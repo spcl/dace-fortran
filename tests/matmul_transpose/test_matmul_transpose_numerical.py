@@ -26,6 +26,9 @@ pytestmark = pytest.mark.skipif(not have_flang(),
 def test_matmul_transpose_numerical(tmp_path):
     """``C = MATMUL(TRANSPOSE(A), B)`` with concrete values."""
     src = """
+MODULE matmul_t_kernel_mod
+  IMPLICIT NONE
+CONTAINS
 SUBROUTINE matmul_t_kernel(n, m, k, A, B, C)
   IMPLICIT NONE
   INTEGER, INTENT(IN) :: n, m, k
@@ -34,10 +37,11 @@ SUBROUTINE matmul_t_kernel(n, m, k, A, B, C)
   REAL(8), INTENT(OUT) :: C(n, k)
   C = MATMUL(TRANSPOSE(A), B)
 END SUBROUTINE matmul_t_kernel
+END MODULE matmul_t_kernel_mod
 """
     sdfg = dace_fortran.build_sdfg(src,
                                     out_dir=str(tmp_path / "sdfg"),
-                                    entry="matmul_t_kernel",
+                                    entry="matmul_t_kernel_mod::matmul_t_kernel",
                                     name="matmul_t_kernel")
 
     # The fused path should produce exactly one MatMul + zero Transpose
@@ -69,6 +73,9 @@ def test_matmul_a_transposeB_numerical(tmp_path):
     detects ``hlfir.transpose`` as the matmul's RHS operand and
     folds it into ``MatMul(transB=True)``."""
     src = """
+MODULE matmul_atb_kernel_mod
+  IMPLICIT NONE
+CONTAINS
 SUBROUTINE matmul_atb_kernel(n, m, k, A, B, C)
   IMPLICIT NONE
   INTEGER, INTENT(IN) :: n, m, k
@@ -77,10 +84,11 @@ SUBROUTINE matmul_atb_kernel(n, m, k, A, B, C)
   REAL(8), INTENT(OUT) :: C(n, k)
   C = MATMUL(A, TRANSPOSE(B))
 END SUBROUTINE matmul_atb_kernel
+END MODULE matmul_atb_kernel_mod
 """
     sdfg = dace_fortran.build_sdfg(src,
                                     out_dir=str(tmp_path / "sdfg"),
-                                    entry="matmul_atb_kernel",
+                                    entry="matmul_atb_kernel_mod::matmul_atb_kernel",
                                     name="matmul_atb_kernel")
     # ZERO Transpose libcalls -- materialiser skips, BLAS does
     # the transpose in-place via transB=True.
@@ -108,6 +116,9 @@ def test_matmul_both_transposed_numerical(tmp_path):
     into one ``MatMul(transA=True, transB=True)`` -- no transient,
     no separate Transpose libcall."""
     src = """
+MODULE matmul_atbt_kernel_mod
+  IMPLICIT NONE
+CONTAINS
 SUBROUTINE matmul_atbt_kernel(n, m, k, A, B, C)
   IMPLICIT NONE
   INTEGER, INTENT(IN) :: n, m, k
@@ -116,10 +127,11 @@ SUBROUTINE matmul_atbt_kernel(n, m, k, A, B, C)
   REAL(8), INTENT(OUT) :: C(n, k)
   C = MATMUL(TRANSPOSE(A), TRANSPOSE(B))
 END SUBROUTINE matmul_atbt_kernel
+END MODULE matmul_atbt_kernel_mod
 """
     sdfg = dace_fortran.build_sdfg(src,
                                     out_dir=str(tmp_path / "sdfg"),
-                                    entry="matmul_atbt_kernel",
+                                    entry="matmul_atbt_kernel_mod::matmul_atbt_kernel",
                                     name="matmul_atbt_kernel")
     # Both flags fold + materialiser skip -- ZERO Transpose libcalls.
     mm_count = sum(1 for s in sdfg.states() for n in s.nodes()
@@ -151,6 +163,9 @@ def test_matmul_transpose_vector(tmp_path):
     of ``SpecializeMatMul`` -- a separate path from the 2-D Gemm test
     above."""
     src = """
+MODULE matmul_tv_kernel_mod
+  IMPLICIT NONE
+CONTAINS
 SUBROUTINE matmul_tv_kernel(n, m, A, v, y)
   IMPLICIT NONE
   INTEGER, INTENT(IN) :: n, m
@@ -159,10 +174,11 @@ SUBROUTINE matmul_tv_kernel(n, m, A, v, y)
   REAL(8), INTENT(OUT) :: y(n)
   y = MATMUL(TRANSPOSE(A), v)
 END SUBROUTINE matmul_tv_kernel
+END MODULE matmul_tv_kernel_mod
 """
     sdfg = dace_fortran.build_sdfg(src,
                                     out_dir=str(tmp_path / "sdfg"),
-                                    entry="matmul_tv_kernel",
+                                    entry="matmul_tv_kernel_mod::matmul_tv_kernel",
                                     name="matmul_tv_kernel")
 
     rng = np.random.default_rng(seed=7)

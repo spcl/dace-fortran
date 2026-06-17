@@ -48,7 +48,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     assert "vcut_a" in sdfg.arrays, f"expected vcut_a in arrays: {sorted(sdfg.arrays.keys())}"
     # vcut_a should be a TRANSIENT (not on the SDFG signature) -- module
     # globals are internal state, not caller kwargs.
@@ -85,7 +85,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     assert "vcut_a" in sdfg.arrays
     pass  # transient or kwarg, both work
 
@@ -111,7 +111,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     assert "g_a" in sdfg.arrays
     assert "g_b" in sdfg.arrays
 
@@ -134,7 +134,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     assert "g_c" in sdfg.arrays or "g_c" in sdfg.scalars or "g_c" in sdfg.symbols
 
 
@@ -177,7 +177,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver_mod::driver").build()
     # After inline-all, g%a and g%c reach the bridge through the
     # inlined read_field's ``s`` dummy declare aliasing g.  The
     # per-field VarInfo synthesis must pick them up via the
@@ -205,7 +205,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     assert "g_used" in sdfg.arrays
     assert "g_unused" not in sdfg.arrays, \
         "unaccessed fields should not be registered"

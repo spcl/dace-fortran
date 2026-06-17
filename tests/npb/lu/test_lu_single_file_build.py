@@ -37,8 +37,9 @@ from dace_fortran import build_sdfg_from_files
 _HERE = Path(__file__).resolve().parent
 
 # Flang lowercases module names: ``MODULE lu`` -> ``_QMlu``, public procedure
-# ``dolu`` -> ``P dolu``.
-_ENTRY = "dolu"
+# ``dolu`` -> ``P dolu``.  ``dolu`` lives in ``MODULE lu`` so the entry is
+# qualified ``lu::dolu`` (resolves to ``_QMluPdolu``).
+_ENTRY = "lu::dolu"
 
 # Same compute kernels as the multi-file variant; one or more must appear in
 # the serialised SDFG so a regression that silently strips lu.F90's body is

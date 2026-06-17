@@ -212,6 +212,9 @@ def test_e2e_logical_intent_out(tmp_path: Path, kind_spec: str, width: int, cty)
 # ---------------------------------------------------------------------------
 
 _INOUT_KERNEL = """
+MODULE toggle_io_mod
+IMPLICIT NONE
+CONTAINS
 SUBROUTINE toggle_io(mask, n)
 integer, intent(in) :: n
 logical, intent(inout) :: mask(n)
@@ -220,6 +223,7 @@ DO i = 1, n
   mask(i) = .NOT. mask(i)
 ENDDO
 END SUBROUTINE toggle_io
+END MODULE toggle_io_mod
 """
 
 _INOUT_SDFG_DRIVER = """
@@ -237,10 +241,10 @@ end subroutine run_toggle_io
 _INOUT_REF_DRIVER = """
 subroutine run_toggle_io_ref(mask, n) bind(c, name='run_toggle_io_ref')
   use iso_c_binding
+  use toggle_io_mod, only: toggle_io
   implicit none
   integer(c_int), value :: n
   logical, intent(inout) :: mask(n)
-  external :: toggle_io
   call toggle_io(mask, n)
 end subroutine run_toggle_io_ref
 """
@@ -261,7 +265,7 @@ def test_e2e_logical_intent_inout(tmp_path: Path):
     lib, sdfg = _build_binding_lib(tmp_path,
                                    kernel_src=_INOUT_KERNEL,
                                    name="toggle_io",
-                                   entry="toggle_io",
+                                   entry="toggle_io_mod::toggle_io",
                                    iface=iface,
                                    driver_src=_INOUT_SDFG_DRIVER)
     ref = _build_ref_lib(tmp_path, kernel_src=_INOUT_KERNEL, ref_driver_src=_INOUT_REF_DRIVER, name="toggle_io")
@@ -297,6 +301,9 @@ def test_e2e_logical_intent_inout(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 _SCALAR_INOUT_KERNEL = """
+MODULE flip_flag_mod
+IMPLICIT NONE
+CONTAINS
 SUBROUTINE flip_flag(flag, hits, n)
 integer, intent(in) :: n
 logical, intent(inout) :: flag
@@ -311,6 +318,7 @@ DO i = 1, n
 ENDDO
 flag = .NOT. flag
 END SUBROUTINE flip_flag
+END MODULE flip_flag_mod
 """
 
 _SCALAR_INOUT_SDFG_DRIVER = """
@@ -329,11 +337,11 @@ end subroutine run_flip_flag
 _SCALAR_INOUT_REF_DRIVER = """
 subroutine run_flip_flag_ref(flag, hits, n) bind(c, name='run_flip_flag_ref')
   use iso_c_binding
+  use flip_flag_mod, only: flip_flag
   implicit none
   integer(c_int), value :: n
   logical, intent(inout) :: flag
   integer(c_int), intent(out) :: hits(n)
-  external :: flip_flag
   call flip_flag(flag, hits, n)
 end subroutine run_flip_flag_ref
 """
@@ -356,7 +364,7 @@ def test_e2e_scalar_logical_intent_inout(tmp_path: Path):
     lib, sdfg = _build_binding_lib(tmp_path,
                                    kernel_src=_SCALAR_INOUT_KERNEL,
                                    name="flip_flag",
-                                   entry="flip_flag",
+                                   entry="flip_flag_mod::flip_flag",
                                    iface=iface,
                                    driver_src=_SCALAR_INOUT_SDFG_DRIVER)
     ref = _build_ref_lib(tmp_path,

@@ -10,14 +10,14 @@ multi-file sources.
 If the single-TU producer is faithful, the SDFG built from the inlined
 file must validate and match the multi-file path's numerics.
 
-Status mirrors the sibling graupel build / numerical tests: the
-multi-file inline currently surfaces a downstream codegen gap, so the
-build is pinned ``xfail(strict=False)`` -- the test scaffolds the
-round-trip harness so progress on the graupel pipeline flips it to a
-clean XPASS rather than going unnoticed.  The *inlining* step itself
-(parse -> merge -> prune -> serialise -> re-parse to a valid TU) is
-asserted unconditionally up front, so a regression in the inliner
-surfaces as a hard failure even while the SDFG build stays xfail.
+The multi-file inline used to surface a downstream codegen gap -- the
+AoS-of-pointer-records gather temp (``t_qx_ptr%x``) was sized from
+unbound extent symbols that defaulted to 1 at call time and overflowed
+the heap.  The ``fir.box_dims -> <name>_d<dim>`` extent resolution closed
+it, so this round-trip now builds and matches the multi-file path's
+numerics.  The *inlining* step itself (parse -> merge -> prune ->
+serialise -> re-parse to a valid TU) is asserted unconditionally up
+front, so an inliner regression still surfaces as a hard failure.
 """
 import ctypes
 import subprocess
@@ -42,7 +42,7 @@ _GRAUPEL_SOURCES = [
 ]
 
 _CALLER = _HERE / "graupel_caller.f90"
-_ENTRY = "graupel_run"
+_ENTRY = "mo_aes_graupel::graupel_run"
 
 
 def _compile_reference(out_dir: Path) -> ctypes.CDLL:
@@ -84,8 +84,6 @@ def test_aes_graupel_inline_single_tu(tmp_path):
 
 
 @pytest.mark.long
-@pytest.mark.xfail(strict=False, reason="graupel multi-file inline surfaces a downstream codegen gap; "
-                   "pinned so the round-trip flips to XPASS when it closes")
 def test_aes_graupel_inline_roundtrip_numerical(tmp_path):
     """``graupel_run`` reference vs SDFG built from the fparser-inlined
     single TU: element-wise compare of every INOUT prognostic + OUT

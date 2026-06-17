@@ -7,6 +7,9 @@
 ! the file lowers via flang-new-21 without ``mpi.mod`` -- same
 ! convention as ``mpi_sendrecv_test.py`` (the bridge sees an opaque
 ! ``fir.call @_QPmpi_alltoall`` either way).
+MODULE run_alltoall_mod
+  IMPLICIT NONE
+CONTAINS
 SUBROUTINE run_alltoall(n, sendbuf, recvbuf)
   IMPLICIT NONE
   INTEGER, INTENT(IN) :: n
@@ -22,3 +25,4 @@ SUBROUTINE run_alltoall(n, sendbuf, recvbuf)
                     recvbuf, recvcount, MPI_DOUBLE_PRECISION, &
                     MPI_COMM_WORLD, ierr)
 END SUBROUTINE run_alltoall
+END MODULE run_alltoall_mod

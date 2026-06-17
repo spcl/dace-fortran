@@ -47,7 +47,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     assert "arr_x" in sdfg.arrays
     arr_x = np.array([1.0, 2.0, 4.0], dtype=np.float64, order='F')
     out = np.zeros((1, ), dtype=np.float64, order='F')
@@ -77,7 +77,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     assert "arr_x" in sdfg.arrays
     assert tuple(int(s) for s in sdfg.arrays["arr_x"].shape) == (3, 4)
     arr_x = np.array([[1, 2, 3, 4], [10, 20, 30, 40], [100, 200, 300, 400]], dtype=np.float64, order='F')
@@ -108,7 +108,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     assert "arr_x" in sdfg.arrays
     n = 3
     arr_x = np.array([[1, 2, 3, 4], [10, 20, 30, 40], [100, 200, 300, 400]], dtype=np.float64, order='F')
@@ -147,7 +147,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     # Should be flat: only arr_x, not arr.
     assert "arr_x" in sdfg.arrays
     assert "arr" not in sdfg.arrays
@@ -179,7 +179,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     assert "arr_inner_x" in sdfg.arrays
 
 
@@ -199,5 +199,5 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     assert "arr_box" in sdfg.arrays

@@ -47,17 +47,21 @@ end module mo_dbl
 """
 
 _CALLER = """
-subroutine apply_dbl(k, out)
-  use mo_dbl, only: dbl
+module apply_dbl_mod
   implicit none
-  integer, intent(in) :: k
-  real(8), intent(out) :: out(4)
-  integer :: m, i
-  m = dbl(k)
-  do i = 1, 4
-    out(i) = real(m + i, 8)
-  end do
-end subroutine apply_dbl
+contains
+  subroutine apply_dbl(k, out)
+    use mo_dbl, only: dbl
+    implicit none
+    integer, intent(in) :: k
+    real(8), intent(out) :: out(4)
+    integer :: m, i
+    m = dbl(k)
+    do i = 1, 4
+      out(i) = real(m + i, 8)
+    end do
+  end subroutine apply_dbl
+end module apply_dbl_mod
 """
 
 
@@ -82,7 +86,7 @@ def test_cpp_wrapped_module_merges_and_builds(tmp_path: Path):
     helpers = tmp_path / "helpers.f90"
     helpers.write_text(_HELPERS)
 
-    sdfg = build_sdfg_from_files([caller, helpers], entry="apply_dbl",
+    sdfg = build_sdfg_from_files([caller, helpers], entry="apply_dbl_mod::apply_dbl",
                                  name="apply_dbl", out_dir=tmp_path / "build")
     k = 5
     out = np.zeros(4, dtype=np.float64)

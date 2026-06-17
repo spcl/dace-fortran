@@ -43,20 +43,24 @@ end subroutine foo
 # calls it -- foo itself is compiled separately (only its symbol need
 # resolve at load).
 _KERNEL = """
-subroutine run(a, n)
-  use iso_c_binding
+module run_mod
   implicit none
-  integer(c_int), intent(in) :: n
-  real(c_double), intent(inout) :: a(n)
-  interface
-    subroutine foo(a, n) bind(c, name="foo")
-      use iso_c_binding
-      real(c_double), intent(inout) :: a(*)
-      integer(c_int), value :: n
-    end subroutine foo
-  end interface
-  call foo(a, n)
-end subroutine run
+contains
+  subroutine run(a, n)
+    use iso_c_binding
+    implicit none
+    integer(c_int), intent(in) :: n
+    real(c_double), intent(inout) :: a(n)
+    interface
+      subroutine foo(a, n) bind(c, name="foo")
+        use iso_c_binding
+        real(c_double), intent(inout) :: a(*)
+        integer(c_int), value :: n
+      end subroutine foo
+    end interface
+    call foo(a, n)
+  end subroutine run
+end module run_mod
 """
 
 
@@ -82,7 +86,7 @@ def test_external_iso_c_function_increments_array(tmp_path: Path):
 
     # The SDFG .so is linked against libfoo with an rpath, so it is
     # self-contained: no LD_PRELOAD / load ordering needed.
-    sdfg = build_sdfg(_KERNEL, tmp_path / "sdfg", name="run", entry="run").build()
+    sdfg = build_sdfg(_KERNEL, tmp_path / "sdfg", name="run", entry="run_mod::run").build()
     sdfg.name = "ext_run"
 
     calls = [nd for nd, _ in sdfg.all_nodes_recursive() if isinstance(nd, ExternalCall)]
@@ -119,7 +123,7 @@ def test_external_default_intent_is_inout(tmp_path: Path):
             libraries=[str(libfoo)],
         ))
 
-    sdfg = build_sdfg(_KERNEL, tmp_path / "sdfg", name="run", entry="run").build()
+    sdfg = build_sdfg(_KERNEL, tmp_path / "sdfg", name="run", entry="run_mod::run").build()
     sdfg.name = "ext_run_def"
     sdfg.compile()
 

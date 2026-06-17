@@ -42,15 +42,18 @@ pytestmark = pytest.mark.skipif(not have_flang(),
 def test_complex_re_read_scalar(tmp_path):
     """``out = z%re`` on a SCALAR COMPLEX dummy returns the real part."""
     src = """
+MODULE cplx_re_scalar_mod
+CONTAINS
 SUBROUTINE cplx_re_scalar(z, out)
   IMPLICIT NONE
   COMPLEX(8), INTENT(IN) :: z
   REAL(8), INTENT(OUT) :: out
   out = z%re
 END SUBROUTINE
+END MODULE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_re_scalar",
-                      entry="cplx_re_scalar").build()
+                      entry="cplx_re_scalar_mod::cplx_re_scalar").build()
     z = np.array([3 + 4j], dtype=np.complex128)  # scalar dummy, by-ref bind
     out_arr = np.zeros(1, dtype=np.float64)
     sdfg(z=z, out=out_arr)
@@ -60,15 +63,18 @@ END SUBROUTINE
 def test_complex_im_read_scalar(tmp_path):
     """``out = z%im`` on a SCALAR COMPLEX dummy returns the imag part."""
     src = """
+MODULE cplx_im_scalar_mod
+CONTAINS
 SUBROUTINE cplx_im_scalar(z, out)
   IMPLICIT NONE
   COMPLEX(8), INTENT(IN) :: z
   REAL(8), INTENT(OUT) :: out
   out = z%im
 END SUBROUTINE
+END MODULE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_im_scalar",
-                      entry="cplx_im_scalar").build()
+                      entry="cplx_im_scalar_mod::cplx_im_scalar").build()
     z = np.array([3 + 4j], dtype=np.complex128)
     out_arr = np.zeros(1, dtype=np.float64)
     sdfg(z=z, out=out_arr)
@@ -78,15 +84,18 @@ END SUBROUTINE
 def test_complex_re_read_element(tmp_path):
     """``out = z(1)%re`` returns the real part of a COMPLEX element."""
     src = """
+MODULE cplx_re_elem_mod
+CONTAINS
 SUBROUTINE cplx_re_elem(z, out)
   IMPLICIT NONE
   COMPLEX(8), INTENT(IN) :: z(1)
   REAL(8), INTENT(OUT) :: out
   out = z(1)%re
 END SUBROUTINE
+END MODULE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_re_elem",
-                      entry="cplx_re_elem").build()
+                      entry="cplx_re_elem_mod::cplx_re_elem").build()
     z = np.array([3 + 4j], dtype=np.complex128, order="F")
     out_arr = np.zeros(1, dtype=np.float64)
     sdfg(z=z, out=out_arr)
@@ -96,15 +105,18 @@ END SUBROUTINE
 def test_complex_im_read_element(tmp_path):
     """``out = z(1)%im`` returns the imaginary part of a COMPLEX element."""
     src = """
+MODULE cplx_im_elem_mod
+CONTAINS
 SUBROUTINE cplx_im_elem(z, out)
   IMPLICIT NONE
   COMPLEX(8), INTENT(IN) :: z(1)
   REAL(8), INTENT(OUT) :: out
   out = z(1)%im
 END SUBROUTINE
+END MODULE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_im_elem",
-                      entry="cplx_im_elem").build()
+                      entry="cplx_im_elem_mod::cplx_im_elem").build()
     z = np.array([3 + 4j], dtype=np.complex128, order="F")
     out_arr = np.zeros(1, dtype=np.float64)
     sdfg(z=z, out=out_arr)
@@ -114,6 +126,8 @@ END SUBROUTINE
 def test_complex_re_im_read_array(tmp_path):
     """``out_re(i) = z(i)%re`` element-wise over a 1-D COMPLEX array."""
     src = """
+MODULE cplx_arr_split_mod
+CONTAINS
 SUBROUTINE cplx_arr_split(z, out_re, out_im, n)
   IMPLICIT NONE
   INTEGER, INTENT(IN) :: n
@@ -125,9 +139,10 @@ SUBROUTINE cplx_arr_split(z, out_re, out_im, n)
     out_im(i) = z(i)%im
   END DO
 END SUBROUTINE
+END MODULE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_arr_split",
-                      entry="cplx_arr_split").build()
+                      entry="cplx_arr_split_mod::cplx_arr_split").build()
     z = np.array([1 + 2j, 3 + 4j, 5 + 6j], dtype=np.complex128, order="F")
     out_re = np.zeros(3, dtype=np.float64, order="F")
     out_im = np.zeros(3, dtype=np.float64, order="F")
@@ -142,6 +157,8 @@ END SUBROUTINE
 def test_complex_re_equivalent_to_real_intrinsic(tmp_path):
     """``z(1)%re`` and ``REAL(z(1), KIND=8)`` are semantically equal."""
     src = """
+MODULE cplx_re_vs_real_mod
+CONTAINS
 SUBROUTINE cplx_re_vs_real(z, out_field, out_intr)
   IMPLICIT NONE
   COMPLEX(8), INTENT(IN) :: z(1)
@@ -149,9 +166,10 @@ SUBROUTINE cplx_re_vs_real(z, out_field, out_intr)
   out_field = z(1)%re
   out_intr  = REAL(z(1), KIND=8)
 END SUBROUTINE
+END MODULE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_re_vs_real",
-                      entry="cplx_re_vs_real").build()
+                      entry="cplx_re_vs_real_mod::cplx_re_vs_real").build()
     z = np.array([2.5 - 1.5j], dtype=np.complex128, order="F")
     field = np.zeros(1, dtype=np.float64)
     intr = np.zeros(1, dtype=np.float64)
@@ -162,6 +180,8 @@ END SUBROUTINE
 def test_complex_im_equivalent_to_aimag(tmp_path):
     """``z(1)%im`` and ``AIMAG(z(1))`` produce the same value."""
     src = """
+MODULE cplx_im_vs_aimag_mod
+CONTAINS
 SUBROUTINE cplx_im_vs_aimag(z, out_field, out_intr)
   IMPLICIT NONE
   COMPLEX(8), INTENT(IN) :: z(1)
@@ -169,9 +189,10 @@ SUBROUTINE cplx_im_vs_aimag(z, out_field, out_intr)
   out_field = z(1)%im
   out_intr  = AIMAG(z(1))
 END SUBROUTINE
+END MODULE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_im_vs_aimag",
-                      entry="cplx_im_vs_aimag").build()
+                      entry="cplx_im_vs_aimag_mod::cplx_im_vs_aimag").build()
     z = np.array([2.5 - 1.5j], dtype=np.complex128, order="F")
     field = np.zeros(1, dtype=np.float64)
     intr = np.zeros(1, dtype=np.float64)
@@ -188,15 +209,18 @@ def test_complex_array_stays_single_complex_descriptor(tmp_path):
     real descriptors.  Pinning this so a future struct-flattening pass
     can't accidentally split complex into a struct."""
     src = """
+MODULE cplx_signature_mod
+CONTAINS
 SUBROUTINE cplx_signature(z, n)
   IMPLICIT NONE
   INTEGER, INTENT(IN) :: n
   COMPLEX(8), INTENT(INOUT) :: z(n)
   z(1) = (1.0_8, 0.0_8)
 END SUBROUTINE
+END MODULE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_signature",
-                      entry="cplx_signature").build()
+                      entry="cplx_signature_mod::cplx_signature").build()
     arglist = sdfg.arglist()
     assert 'z' in arglist
     # No spurious split arrays
@@ -216,6 +240,8 @@ END SUBROUTINE
 # ===========================================================================
 def test_complex_kind4_re_im(tmp_path):
     src = """
+MODULE cplx_k4_mod
+CONTAINS
 SUBROUTINE cplx_k4(z, out_re, out_im)
   IMPLICIT NONE
   COMPLEX(4), INTENT(IN) :: z(1)
@@ -223,9 +249,10 @@ SUBROUTINE cplx_k4(z, out_re, out_im)
   out_re = z(1)%re
   out_im = z(1)%im
 END SUBROUTINE
+END MODULE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_k4",
-                      entry="cplx_k4").build()
+                      entry="cplx_k4_mod::cplx_k4").build()
     z = np.array([1.5 + 2.5j], dtype=np.complex64, order="F")
     out_re = np.zeros(1, dtype=np.float32)
     out_im = np.zeros(1, dtype=np.float32)
@@ -247,6 +274,8 @@ def test_user_integer_im_does_not_conflict_with_complex_im_accessor(tmp_path):
     routes through ``fir.extract_value`` and isn't seen as a user
     field at all."""
     src = """
+MODULE im_dual_use_mod
+CONTAINS
 SUBROUTINE im_dual_use(z, sums, n)
   IMPLICIT NONE
   INTEGER, INTENT(IN) :: n
@@ -258,9 +287,10 @@ SUBROUTINE im_dual_use(z, sums, n)
     sums = sums + z(im)%im
   END DO
 END SUBROUTINE
+END MODULE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="im_dual_use",
-                      entry="im_dual_use").build()
+                      entry="im_dual_use_mod::im_dual_use").build()
     z = np.array([1 + 2j, 3 + 4j, 5 + 6j], dtype=np.complex128, order="F")
     sums = np.zeros(1, dtype=np.float64)
     sdfg(z=z, sums=sums, n=np.int32(3))

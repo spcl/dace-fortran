@@ -58,7 +58,13 @@ def _f2py_build(src_text: str, out_dir: Path, mod_name: str):
 def _sdfg_from_src(src: str, tmp: Path, name: str):
     """Build an SDFG from raw Fortran source via the HLFIR bridge using
     the minimal ``hlfir-propagate-shapes`` pipeline (matches icon's
-    convention)."""
+    convention).
+
+    The entry stays BARE (auto-resolved): each cloudsc kernel is a free
+    subroutine in a shared ``cloudsc_*.f90`` fixture that this test AND its
+    siblings (``cloudsc_loopnests_test.py``) f2py-compile and call as
+    ``ref.<proc>(...)``.  Wrapping the kernel in a module would re-expose it
+    under f2py as ``ref.<module>.<proc>`` and break those references."""
     tmp.mkdir(parents=True, exist_ok=True)
     return build_sdfg(src, tmp, name=name, pipeline="hlfir-propagate-shapes").build()
 

@@ -54,10 +54,12 @@ def _build_and_run(src: str, tmp: Path, *, ref_kwargs: dict, sdfg_kwargs: dict, 
     caller compares ``sdfg_kwargs_after_call['out']`` against
     ``ref_out_array``."""
     mod = f2py_compile(src, tmp / "ref", mod_name)
-    sdfg = build_sdfg(src, tmp / "sdfg", name=mod_name, entry="kernel").build()
+    sdfg = build_sdfg(src, tmp / "sdfg", name=mod_name, entry="kernel_mod::kernel").build()
     sdfg_copy = {k: (v.copy() if isinstance(v, np.ndarray) else v)
                  for k, v in sdfg_kwargs.items()}
-    ref_out = mod.kernel(**ref_kwargs)
+    # ``kernel`` now lives in ``kernel_mod`` so f2py exposes it under the
+    # module's submodule namespace.
+    ref_out = mod.kernel_mod.kernel(**ref_kwargs)
     sdfg(**sdfg_copy)
     return ref_out, sdfg_copy
 
@@ -69,6 +71,9 @@ def test_step_from_scalar_argument(tmp_path: Path):
     Result: ``out`` accumulates one entry per stride step.
     Verifies bit-exact match against an f2py reference."""
     src = """
+module kernel_mod
+  implicit none
+contains
 subroutine kernel(out, jstart, jend, batch, n)
   implicit none
   integer, intent(in) :: jstart, jend, batch, n
@@ -81,6 +86,7 @@ subroutine kernel(out, jstart, jend, batch, n)
     if (k <= n) out(k) = j
   end do
 end subroutine kernel
+end module kernel_mod
 """
     out = np.zeros(8, dtype=np.int32, order="F")
     ref_out, sdfg = _build_and_run(
@@ -100,6 +106,9 @@ def test_step_from_scalar_argument_with_batch_one(tmp_path: Path):
     Verifies the symbolic-step path handles the common no-op-stride
     case identically to the constant-step path."""
     src = """
+module kernel_mod
+  implicit none
+contains
 subroutine kernel(out, jstart, jend, batch, n)
   implicit none
   integer, intent(in) :: jstart, jend, batch, n
@@ -112,6 +121,7 @@ subroutine kernel(out, jstart, jend, batch, n)
     if (k <= n) out(k) = j
   end do
 end subroutine kernel
+end module kernel_mod
 """
     out = np.zeros(8, dtype=np.int32, order="F")
     ref_out, sdfg = _build_and_run(
@@ -134,6 +144,9 @@ def test_step_from_array_element(tmp_path: Path):
     happens once on the hoisted assignment via
     ``_fortran_subs_to_dace``."""
     src = """
+module kernel_mod
+  implicit none
+contains
 subroutine kernel(out, stride_arr, idx, n, m)
   implicit none
   integer, intent(in) :: idx, n, m
@@ -147,6 +160,7 @@ subroutine kernel(out, stride_arr, idx, n, m)
     out(k) = j
   end do
 end subroutine kernel
+end module kernel_mod
 """
     stride_arr = np.array([2, 3, 5], dtype=np.int32, order="F")
     out = np.zeros(8, dtype=np.int32, order="F")

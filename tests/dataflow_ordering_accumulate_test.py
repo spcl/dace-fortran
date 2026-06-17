@@ -71,6 +71,8 @@ def _sdfg_kw(sdfg, ints: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 _PREFIX_SCAN = """
+module prefix_scan_mod
+contains
 subroutine kern(klon, klev, paph, pclv, ptend, pwork_in, q0, qn, flux)
   implicit none
   integer, intent(in) :: klon, klev
@@ -118,6 +120,7 @@ subroutine outer(klon, klev, nb, paph, pclv, ptend, pwork_in, q0, qn, flux)
               pwork_in(:,:,ib), q0(:,:,ib), qn(:,:,ib), flux(:,:,ib))
   end do
 end subroutine outer
+end module prefix_scan_mod
 """
 
 
@@ -125,7 +128,8 @@ def test_prefix_scan_early_save_vs_late_produced(tmp_path: Path):
     """``flux(jk+1)=flux(jk)+(qn-q0)*g`` where ``q0`` is saved early and
     ``qn`` produced in a later loop, per block.  Must equal gfortran."""
     ref = _f2py(_PREFIX_SCAN, tmp_path / "ref", "scan_ref")
-    sdfg = build_sdfg(_PREFIX_SCAN, _mkd(tmp_path / "sdfg"), name="outer", entry="outer").build()
+    sdfg = build_sdfg(_PREFIX_SCAN, _mkd(tmp_path / "sdfg"), name="outer",
+                      entry="prefix_scan_mod::outer").build()
 
     klon, klev, nb = 1, 40, 4
     rng = np.random.default_rng(0)
@@ -135,7 +139,7 @@ def test_prefix_scan_early_save_vs_late_produced(tmp_path: Path):
 
     paph, pclv = F(klon, klev + 1, nb), F(klon, klev, nb)
     ptend, pwin = F(klon, klev, nb), F(klon, klev, nb)
-    q0r, qnr, fr = ref.outer(paph, pclv, ptend, pwin)
+    q0r, qnr, fr = ref.prefix_scan_mod.outer(paph, pclv, ptend, pwin)
 
     q0s = np.zeros((klon, klev, nb), order="F")
     qns = np.zeros((klon, klev, nb), order="F")
@@ -159,6 +163,8 @@ def test_prefix_scan_early_save_vs_late_produced(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 _LONG_TASKLET = """
+module long_tasklet_mod
+contains
 subroutine kern(n, klev, a, b, c, d, e, f, g, h, s0, sn, acc)
   implicit none
   integer, intent(in) :: n, klev
@@ -189,6 +195,7 @@ subroutine kern(n, klev, a, b, c, d, e, f, g, h, s0, sn, acc)
     end do
   end do
 end subroutine kern
+end module long_tasklet_mod
 """
 
 
@@ -197,7 +204,8 @@ def test_very_long_accumulate_tasklet(tmp_path: Path):
     early-saved (``s0``) and late-produced (``sn``) operand, prefix-
     scanned.  Pins the CLOUDSC ``ZQXN2D-ZQX0+...`` increment shape."""
     ref = _f2py(_LONG_TASKLET, tmp_path / "ref", "long_ref")
-    sdfg = build_sdfg(_LONG_TASKLET, _mkd(tmp_path / "sdfg"), name="kern", entry="kern").build()
+    sdfg = build_sdfg(_LONG_TASKLET, _mkd(tmp_path / "sdfg"), name="kern",
+                      entry="long_tasklet_mod::kern").build()
 
     n, klev = 1, 50
     rng = np.random.default_rng(1)
@@ -206,7 +214,7 @@ def test_very_long_accumulate_tasklet(tmp_path: Path):
         return np.asfortranarray(rng.standard_normal((n, klev)))
 
     arrs = [F() for _ in range(8)]
-    s0r, snr, accr = ref.kern(*arrs)
+    s0r, snr, accr = ref.long_tasklet_mod.kern(*arrs)
 
     s0s = np.zeros((n, klev), order="F")
     sns = np.zeros((n, klev), order="F")

@@ -61,6 +61,8 @@ def _aos_src(write_idx: str) -> str:
     """AoS ``complex(8)`` augmentation kernel; ``write_idx`` is the
     ``rhoc`` subscript (``g`` dense / ``nlmap(g)`` scatter)."""
     return f"""
+module addusxx_aos_mod
+contains
 subroutine addusxx_aos(ngms, nh, nat, nt, nm, nrho, ofsbeta, ityp, ijtoh, &
                        becphi, becpsi, qgm, eigqts, eigts1, eigts2, eigts3, &
                        mill1, mill2, mill3, nlmap, rhoc)
@@ -103,6 +105,7 @@ subroutine addusxx_aos(ngms, nh, nat, nt, nm, nrho, ofsbeta, ityp, ijtoh, &
     end if
   end do
 end subroutine addusxx_aos
+end module addusxx_aos_mod
 """
 
 
@@ -111,6 +114,8 @@ def _soa_src(write_idx: str) -> str:
     :func:`_aos_src` with every complex op expanded into real / imag
     parts (multiply ``(ac-bd, ad+bc)``; ``conjg`` negates imag)."""
     return f"""
+module addusxx_soa_mod
+contains
 subroutine addusxx_soa(ngms, nh, nat, nt, nm, nrho, ofsbeta, ityp, ijtoh, &
                        becphi_re, becphi_im, becpsi_re, becpsi_im, &
                        qgm_re, qgm_im, eigqts_re, eigqts_im, &
@@ -174,6 +179,7 @@ subroutine addusxx_soa(ngms, nh, nat, nt, nm, nrho, ofsbeta, ityp, ijtoh, &
     end if
   end do
 end subroutine addusxx_soa
+end module addusxx_soa_mod
 """
 
 
@@ -249,7 +255,7 @@ def test_addusxx_aos(tmp_path, indir):
     rhoc = np.asfortranarray(d["rhoc"].copy())
 
     sdfg = build_sdfg(_aos_src("nlmap(g)" if indir == "double" else "g"),
-                      tmp_path, name="addusxx_aos", entry="addusxx_aos").build()
+                      tmp_path, name="addusxx_aos", entry="addusxx_aos_mod::addusxx_aos").build()
     sdfg(**_dims(), ofsbeta=d["ofsbeta"], ityp=d["ityp"], ijtoh=d["ijtoh"],
          becphi=np.asfortranarray(d["becphi"]), becpsi=np.asfortranarray(d["becpsi"]),
          qgm=d["qgm"], eigqts=np.asfortranarray(d["eigqts"]),
@@ -280,7 +286,7 @@ def test_addusxx_soa(tmp_path, indir):
     eigts3_re, eigts3_im = split("eigts3")
 
     sdfg = build_sdfg(_soa_src("nlmap(g)" if indir == "double" else "g"),
-                      tmp_path, name="addusxx_soa", entry="addusxx_soa").build()
+                      tmp_path, name="addusxx_soa", entry="addusxx_soa_mod::addusxx_soa").build()
     sdfg(**_dims(), ofsbeta=d["ofsbeta"], ityp=d["ityp"], ijtoh=d["ijtoh"],
          becphi_re=becphi_re, becphi_im=becphi_im,
          becpsi_re=becpsi_re, becpsi_im=becpsi_im,

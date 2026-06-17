@@ -100,13 +100,21 @@ def _run_seq_assoc(tmp_path, ind, src_decls, call):
     """Build + run a ``REAL(2,N)`` dummy bound to a COMPLEX element kernel.
     Returns the post-call complex array.  ``ind`` selects the component the
     inner subroutine writes (1=real, 2=imag)."""
+    # ``driver`` calls ``fill`` via sequence association (a COMPLEX element
+    # bound to a REAL(2,n) dummy), which REQUIRES ``fill`` to keep an
+    # implicit interface -- so ``fill`` must stay an external (free)
+    # subroutine.  Only the entry ``driver`` is wrapped in a module.
     src = f"""
-subroutine driver(z, n)
+module driver_mod
   implicit none
-  integer, intent(in) :: n
-  {src_decls}
-  {call}
-end subroutine driver
+contains
+  subroutine driver(z, n)
+    implicit none
+    integer, intent(in) :: n
+    {src_decls}
+    {call}
+  end subroutine driver
+end module driver_mod
 
 subroutine fill(ngy, qg)
   implicit none
@@ -119,7 +127,7 @@ subroutine fill(ngy, qg)
   end do
 end subroutine fill
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver_mod::driver").build()
     n = 4
     z = np.array([1 + 2j, 3 + 4j, 5 + 6j, 7 + 8j], dtype=np.complex128)
     sdfg(z=z, n=np.int32(n))
@@ -148,13 +156,19 @@ def _build_run_fill(tmp_path, fill_body, z0):
     """Build + run a driver whose inner ``fill(ngy, qg)`` has the given body
     (``qg`` is the ``REAL(2, ngy)`` complex-component alias).  Returns the
     post-call complex array seeded from ``z0``."""
+    # ``fill`` stays external (implicit interface) for the COMPLEX-element
+    # -> REAL(2,n) sequence association; only the entry is module-wrapped.
     src = f"""
-subroutine driver(z, n)
+module driver_mod
   implicit none
-  integer, intent(in) :: n
-  complex(8), intent(inout) :: z(n)
-  call fill(n, z(1))
-end subroutine driver
+contains
+  subroutine driver(z, n)
+    implicit none
+    integer, intent(in) :: n
+    complex(8), intent(inout) :: z(n)
+    call fill(n, z(1))
+  end subroutine driver
+end module driver_mod
 
 subroutine fill(ngy, qg)
   implicit none
@@ -164,7 +178,7 @@ subroutine fill(ngy, qg)
 {fill_body}
 end subroutine fill
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver_mod::driver").build()
     z = np.array(z0, dtype=np.complex128)
     sdfg(z=z, n=np.int32(len(z0)))
     return z
@@ -186,14 +200,20 @@ def test_seq_assoc_rhs_reads_other_array(tmp_path):
     literal alongside the ``qg`` self-read: ``qg(1,ig) = qg(1,ig) + w(ig)*2``.
     Exercises the per-occurrence connector wiring for non-``qg`` reads inside the
     complex-component tasklet (the QE ``sig*ylmk0(ig,lp)*work`` shape)."""
+    # ``fill`` stays external (implicit interface) for the COMPLEX-element
+    # -> REAL(2,n) sequence association; only the entry is module-wrapped.
     src = """
-subroutine driver(z, w, n)
+module driver_mod
   implicit none
-  integer, intent(in) :: n
-  complex(8), intent(inout) :: z(n)
-  real(8), intent(in) :: w(n)
-  call fill(n, z(1), w)
-end subroutine driver
+contains
+  subroutine driver(z, w, n)
+    implicit none
+    integer, intent(in) :: n
+    complex(8), intent(inout) :: z(n)
+    real(8), intent(in) :: w(n)
+    call fill(n, z(1), w)
+  end subroutine driver
+end module driver_mod
 
 subroutine fill(ngy, qg, w)
   implicit none
@@ -207,7 +227,7 @@ subroutine fill(ngy, qg, w)
   end do
 end subroutine fill
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="driver_mod::driver").build()
     z = np.array([1 + 2j, 3 + 4j, 5 + 6j, 7 + 8j], dtype=np.complex128)
     w = np.array([10.0, 20.0, 30.0, 40.0], dtype=np.float64)
     sdfg(z=z, w=w, n=np.int32(4))

@@ -105,6 +105,39 @@ def test_write_through_pointer_numerical(tmp_path):
     np.testing.assert_allclose(qb_sdfg, qb_ref, rtol=1e-12, atol=1e-12)
 
 
+def test_assumed_shape_target_numerical(tmp_path):
+    """Assumed-shape pointer targets (``q(iqx)%x => t(:,:)``) -- the
+    gather temp's inner extents come from ``fir.box_dims``, not a static
+    ``(n, k)`` type.  Regression for the ``box_dims -> <name>_d<dim>``
+    extent resolution: before the fix the temp minted unbindable extent
+    symbols that defaulted to ``1`` at call time, under-allocating the
+    gather buffer and overflowing the heap (graupel's crash in
+    miniature).  Mirrors ``aos_runtime_index_probe`` but with
+    assumed-shape dummies."""
+    src_path = _HERE / "aos_assumed_shape_target_probe.f90"
+    src_text = src_path.read_text()
+    sdfg = _sdfg(src_text, tmp_path / "sdfg", "m::run", "run")
+
+    # The kernel is a pure runtime-indexed select (``out = q(ix)%x``), so
+    # the reference is just the ``ix``-th input -- no gfortran/f2py build
+    # needed (and f2py can't wrap the assumed-shape ``(:,:)`` dummies this
+    # probe deliberately uses to drive the ``fir.box_dims`` path).  The
+    # gather buffer is allocated from the targets' runtime extents; before
+    # the box_dims fix that buffer was sized 1 and this call crashed the
+    # process with a heap overflow rather than returning.
+    rng = np.random.default_rng(3)
+    n, k = 7, 5
+    targets = [np.asfortranarray(rng.standard_normal((n, k))) for _ in range(4)]
+    for ix in (1, 2, 3, 4):
+        out_sdfg = np.zeros((n, k), order="F")
+        sdfg(ix=np.int32(ix),
+             qa=targets[0].copy(order="F"), qb=targets[1].copy(order="F"),
+             qc=targets[2].copy(order="F"), qd=targets[3].copy(order="F"),
+             out=out_sdfg)
+        np.testing.assert_allclose(out_sdfg, targets[ix - 1], rtol=1e-12, atol=1e-12,
+                                   err_msg=f"mismatch for ix={ix}")
+
+
 def test_wp_kind_alias_numerical(tmp_path):
     """``REAL(KIND=wp)`` source compiles + runs without the user having
     to pre-resolve ``wp``.  Exercises ``normalize_kind_parameters``

@@ -57,6 +57,9 @@ def test_pass_retypes_integer_valued_float_exponents():
 
 
 _ARR_POW = """
+module kern_mod
+  implicit none
+contains
 subroutine kern(n, a, y)
   implicit none
   integer, intent(in) :: n
@@ -67,6 +70,7 @@ subroutine kern(n, a, y)
     y(jl) = a(jl)**2.0 + 3.0d0 * a(jl)**3.0
   end do
 end subroutine kern
+end module kern_mod
 """
 
 
@@ -97,7 +101,7 @@ def test_array_base_float_power_matches_gfortran(tmp_path: Path):
     ref = _f2py(_ARR_POW, tmp_path / "ref", "ipow_ref")
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(_ARR_POW, sdfg_dir, name="kern", entry="kern").build()
+    sdfg = build_sdfg(_ARR_POW, sdfg_dir, name="kern", entry="kern_mod::kern").build()
 
     # The exponents must have been integerised: no libm float ``pow``
     # of an integer-valued exponent should remain in any tasklet.
@@ -109,7 +113,7 @@ def test_array_base_float_power_matches_gfortran(tmp_path: Path):
     n = 7
     rng = np.random.default_rng(0)
     a = np.asfortranarray(rng.standard_normal(n))
-    yr = ref.kern(a)
+    yr = ref.kern_mod.kern(a)
 
     ys = np.zeros(n, order="F")
     from dace.data import Scalar

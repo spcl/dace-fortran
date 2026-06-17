@@ -49,13 +49,16 @@ module mo_callee
   end subroutine read_end_index
 end module mo_callee
 
-subroutine outer(arr, out)
+module outer_mod
   use mo_callee, only: read_end_index
   implicit none
-  integer, allocatable, intent(in) :: arr(:)
-  integer, intent(out) :: out
-  call read_end_index(arr, -5, out)
-end subroutine outer
+  contains
+  subroutine outer(arr, out)
+    integer, allocatable, intent(in) :: arr(:)
+    integer, intent(out) :: out
+    call read_end_index(arr, -5, out)
+  end subroutine outer
+end module outer_mod
 """
 
 
@@ -70,7 +73,7 @@ def test_inlined_callee_propagates_negative_literal(tmp_path: Path):
     """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(_SRC, sdfg_dir, name="outer", entry="outer").build()
+    sdfg = build_sdfg(_SRC, sdfg_dir, name="outer", entry="outer_mod::outer").build()
     sdfg.validate()
 
     inferred_offset = dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0')
