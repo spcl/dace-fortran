@@ -4,7 +4,6 @@ import numpy as np
 import pytest
 
 from _util import build_sdfg, f2py_compile, have_flang
-from _helpers import xfail
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
@@ -809,25 +808,6 @@ end subroutine kernel
     np.testing.assert_allclose(out_w_sdfg, out_w_ref, rtol=1e-12, atol=1e-12)
 
 
-@xfail("alloc-array-of-records with SCALAR inner members, LOCAL root: bridge "
-       "now fails gracefully with a TODO-marked MLIR diagnostic from "
-       "``hlfir-flatten-structs`` (see "
-       "``diagnoseLocalAoRScalarInnerMembers`` in FlattenStructs.cpp).  "
-       "The pass walker recognises the pattern (chain ending at a "
-       "``fir.alloca``-rooted ``hlfir.declare`` instead of a function "
-       "argument), emits a clear error pointing at the failing inner-"
-       "member designate + workaround + TODO marker, and signals pass "
-       "failure -- preempting the opaque downstream ``KeyError`` the "
-       "bridge would otherwise produce.  Implementation gap: the dummy-"
-       "case companion-per-member rewrite at lines 2242+ of "
-       "FlattenStructs.cpp needs (a) LOCAL declare roots accepted as "
-       "chain endpoints and (b) the synthesised "
-       "``_FortranAAllocatable{SetBounds,Allocate,Deallocate}`` runtime "
-       "calls rewritten to drive per-companion allocations.  "
-       "Production case: ICON ``s%edges%primal_normal_cell(i,j,k)%v1`` "
-       "where ``s`` is a function argument (DUMMY case, supported) -- "
-       "the LOCAL case shows up in small standalone reproducers and "
-       "future production code that uses local state structures.")
 def test_alloc_array_of_records_inner_scalar_members(tmp_path):
     """Regression test for ``s%X(i,j,k)%v1`` with X = alloc-array-of-records
     whose element record holds plain SCALAR (non-pointer) members.

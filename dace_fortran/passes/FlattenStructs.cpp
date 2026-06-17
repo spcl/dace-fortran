@@ -2056,6 +2056,11 @@ struct FlattenStructsPass
     // bridge fails loudly with a TODO marker instead of letting the
     // bridge stumble into an opaque ``KeyError`` later when its emitter
     // hits the unresolvable designate chain.
+    //
+    // First try the local-case rewrite (per-member plain local allocatable
+    // companions with inline allocmem/freemem); only if it cannot fire does
+    // the diagnostic below report the unsupported shape.
+    splitLocalAoRScalarMembers(func);
     diagnoseLocalAoRScalarInnerMembers(func);
 
     // Step 0.5: (B) split an allocatable array-of-records struct-dummy member
@@ -2449,6 +2454,327 @@ struct FlattenStructsPass
     for (auto *op : deadOps)
       if (op->use_empty()) op->erase();
     return changed;
+  }
+
+  /// (A.1') Rewrite a LOCAL-rooted alloc-array-of-records-with-scalar-inner-
+  /// members into one plain local allocatable companion per inner member --
+  /// the local counterpart of :func:`splitMultiDimAoRScalarMembers` (which
+  /// handles the function-argument case via per-member dummy companions the
+  /// caller marshals).  Because the inner members are uniform scalars, each
+  /// companion is a plain local allocatable the rest of the bridge already
+  /// lowers, so we drive its storage with INLINE ``fir.allocmem`` /
+  /// ``fir.freemem`` (using the extents captured from the original
+  /// ``_FortranAAllocatableSetBounds`` calls).  The ``_FortranAAllocatable*``
+  /// runtime calls flang emits for the derived-type AoR element -- which the
+  /// bridge cannot lower for a SoA split -- are dropped.
+  ///
+  /// :returns: true if at least one local AoR member was rewritten.
+  bool splitLocalAoRScalarMembers(mlir::func::FuncOp func) {
+    auto &block = func.front();
+    auto *ctx = func.getContext();
+    auto idxTy = mlir::IndexType::get(ctx);
+    auto i64Ty = mlir::IntegerType::get(ctx, 64);
+
+    llvm::DenseSet<mlir::Value> argDeclResults;
+    for (unsigned i = 0; i < block.getNumArguments(); ++i)
+      for (auto *u : block.getArgument(i).getUsers())
+        if (auto d = mlir::dyn_cast<hlfir::DeclareOp>(u))
+          argDeclResults.insert(d.getResult(0));
+
+    // (root declare result, member path incl. AoR member as last hop).
+    using RPKey = std::pair<void *, std::vector<std::string>>;
+    struct Site { hlfir::DesignateOp innerDg, elemDg; };
+    struct PathInfo {
+      hlfir::DeclareOp rootDecl;
+      unsigned rank = 0;
+      // inner member name -> (scalar type, access sites).
+      std::map<std::string, std::pair<mlir::Type, llvm::SmallVector<Site, 8>>>
+          members;
+    };
+    std::map<RPKey, PathInfo> byPath;
+
+    func.walk([&](hlfir::DesignateOp innerDg) {
+      auto innerComp = innerDg.getComponentAttr();
+      if (!innerComp || !innerDg.getIndices().empty()) return;
+      auto innerName = innerComp.getValue().str();
+      auto elemDg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
+          innerDg.getMemref().getDefiningOp());
+      if (!elemDg || elemDg.getComponentAttr() || elemDg.getIndices().empty())
+        return;
+      auto ld = mlir::dyn_cast_or_null<fir::LoadOp>(
+          elemDg.getMemref().getDefiningOp());
+      if (!ld) return;
+      llvm::SmallVector<std::string, 4> walkedPath;
+      mlir::Value v = ld.getMemref();
+      while (auto md = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
+                 v.getDefiningOp())) {
+        if (!md.getComponentAttr()) break;
+        walkedPath.push_back(md.getComponentAttr().getValue().str());
+        v = md.getMemref();
+      }
+      if (argDeclResults.contains(v)) return;  // dummy case
+      auto rootDecl =
+          mlir::dyn_cast_or_null<hlfir::DeclareOp>(v.getDefiningOp());
+      if (!rootDecl ||
+          !mlir::isa_and_nonnull<fir::AllocaOp>(
+              rootDecl.getMemref().getDefiningOp()))
+        return;
+      auto refTy =
+          mlir::dyn_cast<fir::ReferenceType>(elemDg.getResult().getType());
+      if (!refTy) return;
+      auto elemRec = mlir::dyn_cast<fir::RecordType>(refTy.getEleTy());
+      if (!elemRec) return;
+      mlir::Type matchedTy;
+      for (auto &p : elemRec.getTypeList()) {
+        if (mlir::isa<fir::SequenceType, fir::BoxType, fir::ReferenceType,
+                      fir::HeapType, fir::PointerType, fir::RecordType,
+                      fir::CharacterType>(p.second))
+          return;  // not a pure-scalar element record
+        if (p.first == innerName) matchedTy = p.second;
+      }
+      if (!matchedTy) return;
+      RPKey k{v.getAsOpaquePointer(),
+              std::vector<std::string>(walkedPath.rbegin(), walkedPath.rend())};
+      auto &pi = byPath[k];
+      pi.rootDecl = rootDecl;
+      pi.rank = elemDg.getIndices().size();
+      auto &mem = pi.members[innerName];
+      mem.first = matchedTy;
+      mem.second.push_back({innerDg, elemDg});
+    });
+    if (byPath.empty()) return false;
+
+    // Match a runtime-call box operand back to its (root, path): peel
+    // ``fir.convert``, then walk the member-designate chain to the root.
+    auto boxPathRoot = [&](mlir::Value boxOperand)
+        -> std::pair<void *, std::vector<std::string>> {
+      mlir::Value v = boxOperand;
+      while (auto cv =
+                 mlir::dyn_cast_or_null<fir::ConvertOp>(v.getDefiningOp()))
+        v = cv.getValue();
+      llvm::SmallVector<std::string, 4> p;
+      while (auto md =
+                 mlir::dyn_cast_or_null<hlfir::DesignateOp>(v.getDefiningOp())) {
+        if (!md.getComponentAttr()) break;
+        p.push_back(md.getComponentAttr().getValue().str());
+        v = md.getMemref();
+      }
+      return {v.getAsOpaquePointer(),
+              std::vector<std::string>(p.rbegin(), p.rend())};
+    };
+
+    // Collect the SetBounds / Allocate / Deallocate runtime calls per path.
+    struct RTCalls {
+      // dim -> (lo, hi) i64 values from SetBounds.
+      std::map<unsigned, std::pair<mlir::Value, mlir::Value>> bounds;
+      fir::CallOp allocate, deallocate;
+      llvm::SmallVector<fir::CallOp, 6> setBounds;
+    };
+    std::map<RPKey, RTCalls> rtByPath;
+    func.walk([&](fir::CallOp call) {
+      auto callee = call.getCallee();
+      if (!callee) return;
+      llvm::StringRef name = callee->getRootReference().getValue();
+      bool isSB = name == "_FortranAAllocatableSetBounds";
+      bool isAl = name == "_FortranAAllocatableAllocate";
+      bool isDe = name == "_FortranAAllocatableDeallocate";
+      if (!isSB && !isAl && !isDe) return;
+      if (call.getArgs().empty()) return;
+      auto pr = boxPathRoot(call.getArgs()[0]);
+      auto it = byPath.find(pr);
+      if (it == byPath.end()) return;
+      auto &rt = rtByPath[pr];
+      if (isSB) {
+        // SetBounds(box, dim_i32, lo_i64, hi_i64).
+        if (call.getArgs().size() >= 4) {
+          if (auto dimC = mlir::dyn_cast_or_null<mlir::arith::ConstantOp>(
+                  call.getArgs()[1].getDefiningOp())) {
+            auto dimAttr = mlir::dyn_cast<mlir::IntegerAttr>(dimC.getValue());
+            if (dimAttr)
+              rt.bounds[dimAttr.getInt()] = {call.getArgs()[2],
+                                             call.getArgs()[3]};
+          }
+        }
+        rt.setBounds.push_back(call);
+      } else if (isAl) {
+        rt.allocate = call;
+      } else {
+        rt.deallocate = call;
+      }
+    });
+
+    llvm::SmallPtrSet<mlir::Operation *, 32> deadOps;
+    bool changed = false;
+
+    for (auto &kv : byPath) {
+      auto &pi = kv.second;
+      auto rtIt = rtByPath.find(kv.first);
+      if (rtIt == rtByPath.end() || !rtIt->second.allocate) continue;
+      auto &rt = rtIt->second;
+      unsigned rank = pi.rank;
+      // Need every dim's bounds to size the companions.
+      bool haveAllBounds = rt.bounds.size() >= rank;
+      for (unsigned d = 0; d < rank && haveAllBounds; ++d)
+        if (!rt.bounds.count(d)) haveAllBounds = false;
+      if (!haveAllBounds) continue;
+
+      auto demangledBase = demangleVarName(pi.rootDecl.getUniqName());
+
+      // Build, per inner member, a local allocatable companion + its
+      // (init, allocate, deallocate) inline storage.
+      for (auto &m : pi.members) {
+        const std::string &innerName = m.first;
+        mlir::Type innerTy = m.second.first;
+        auto &siteList = m.second.second;
+
+        llvm::SmallVector<int64_t, 4> dynShape(
+            rank, fir::SequenceType::getUnknownExtent());
+        auto arrTy = fir::SequenceType::get(dynShape, innerTy);
+        auto heapTy = fir::HeapType::get(arrTy);
+        auto boxTy = fir::BoxType::get(heapTy);
+        auto refBoxTy = fir::ReferenceType::get(boxTy);
+        auto shapeTy = fir::ShapeType::get(ctx, rank);
+
+        std::string name = demangledBase;
+        for (auto &p : kv.first.second) name += "_" + p;
+        name += "_" + innerName;
+        // Mangle the companion's uniq_name with the root's Flang scope
+        // prefix (``_QF<func>E``) so the bridge's variable extraction
+        // classifies it as a function-LOCAL (transient), not a program
+        // argument -- it keys local-vs-input off the ``_QF...E<var>`` form
+        // (extract_vars.cpp).  demangle(uniqName) recovers the readable
+        // array name unchanged.
+        std::string rootUniq = pi.rootDecl.getUniqName().str();
+        auto ePos = rootUniq.rfind('E');
+        std::string scopePrefix =
+            ePos == std::string::npos ? std::string() : rootUniq.substr(0, ePos + 1);
+        std::string uniqName = scopePrefix + name;
+        auto loc = pi.rootDecl.getLoc();
+
+        // (a) descriptor init right after the root declare.
+        mlir::OpBuilder b(pi.rootDecl);
+        b.setInsertionPointAfter(pi.rootDecl);
+        auto boxAlloca = b.create<fir::AllocaOp>(loc, boxTy);
+        auto zero = b.create<fir::ZeroOp>(loc, heapTy);
+        llvm::SmallVector<mlir::Value, 4> zeroDims(
+            rank,
+            b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(0)));
+        auto shape0 = b.create<fir::ShapeOp>(loc, shapeTy, zeroDims);
+        auto embox0 = b.create<fir::EmboxOp>(loc, boxTy, zero, shape0);
+        b.create<fir::StoreOp>(loc, embox0, boxAlloca);
+        mlir::NamedAttrList attrs;
+        attrs.append("uniq_name", mlir::StringAttr::get(ctx, uniqName));
+        attrs.append("fortran_attrs",
+                     fir::FortranVariableFlagsAttr::get(
+                         ctx, fir::FortranVariableFlagsEnum::allocatable));
+        attrs.append(declareSegments(b, /*hasShape=*/false));
+        auto decl = b.create<hlfir::DeclareOp>(
+            loc, mlir::TypeRange{refBoxTy, refBoxTy},
+            mlir::ValueRange{boxAlloca}, attrs);
+
+        // (b) inline allocmem just before the original Allocate call.
+        mlir::OpBuilder ab(rt.allocate);
+        auto aloc = rt.allocate.getLoc();
+        auto one64 =
+            ab.create<mlir::arith::ConstantOp>(aloc, i64Ty, ab.getI64IntegerAttr(1));
+        auto zeroIdx =
+            ab.create<mlir::arith::ConstantOp>(aloc, idxTy, ab.getIndexAttr(0));
+        llvm::SmallVector<mlir::Value, 4> extents;
+        for (unsigned d = 0; d < rank; ++d) {
+          auto [lo, hi] = rt.bounds[d];
+          auto diff = ab.create<mlir::arith::SubIOp>(aloc, hi, lo);
+          auto ext64 = ab.create<mlir::arith::AddIOp>(aloc, diff, one64);
+          auto extIdx = ab.create<fir::ConvertOp>(aloc, idxTy, ext64);
+          auto cmp = ab.create<mlir::arith::CmpIOp>(
+              aloc, mlir::arith::CmpIPredicate::sgt, extIdx, zeroIdx);
+          extents.push_back(
+              ab.create<mlir::arith::SelectOp>(aloc, cmp, extIdx, zeroIdx));
+        }
+        // The bridge recognises an allocatable's storage by an allocmem
+        // whose ``uniq_name`` is ``<decl-uniq_name>.alloc`` (see
+        // bridge/ast/expressions.cpp); without it the allocmem falls
+        // through to buildExpr as an unhandled op.
+        std::string allocName = uniqName + ".alloc";
+        auto am = ab.create<fir::AllocMemOp>(
+            aloc, arrTy, /*uniq_name=*/llvm::StringRef(allocName),
+            mlir::ValueRange{}, extents);
+        am->setAttr("fir.must_be_heap", ab.getBoolAttr(true));
+        auto shapeA = ab.create<fir::ShapeOp>(aloc, shapeTy, extents);
+        auto eboxA = ab.create<fir::EmboxOp>(aloc, boxTy, am, shapeA);
+        ab.create<fir::StoreOp>(aloc, eboxA, decl.getResult(0));
+
+        // (c) inline freemem just before the original Deallocate call (if
+        // any -- a kernel that never deallocates simply leaks, as the
+        // original would).
+        if (rt.deallocate) {
+          mlir::OpBuilder db(rt.deallocate);
+          auto dloc = rt.deallocate.getLoc();
+          auto ldBox = db.create<fir::LoadOp>(dloc, decl.getResult(0));
+          auto heapVal = db.create<fir::BoxAddrOp>(dloc, heapTy, ldBox);
+          db.create<fir::FreeMemOp>(dloc, heapVal);
+        }
+
+        // (d) rewrite every inner-member designate to a designate over the
+        // companion box at the same indices (reads and writes alike).
+        for (auto &site : siteList) {
+          mlir::OpBuilder sb(site.innerDg);
+          auto loadedBox =
+              sb.create<fir::LoadOp>(site.innerDg.getLoc(), decl.getResult(0));
+          auto elemRefTy = fir::ReferenceType::get(innerTy);
+          llvm::SmallVector<mlir::Value, 4> idxs(
+              site.elemDg.getIndices().begin(), site.elemDg.getIndices().end());
+          auto newDg = sb.create<hlfir::DesignateOp>(
+              site.innerDg.getLoc(), elemRefTy, loadedBox.getResult(), idxs,
+              /*typeparams=*/mlir::ValueRange{},
+              /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
+          site.innerDg.getResult().replaceAllUsesWith(newDg.getResult());
+          deadOps.insert(site.innerDg);
+          deadOps.insert(site.elemDg);
+        }
+        changed = true;
+      }
+
+      // Retire the original AoR runtime-call sequence; its operand chains
+      // (member designates, converts, loads) become dead and are swept below.
+      for (auto sb : rt.setBounds) deadOps.insert(sb);
+      deadOps.insert(rt.allocate);
+      if (rt.deallocate) deadOps.insert(rt.deallocate);
+    }
+
+    if (!changed) return false;
+    // The Allocate/Deallocate calls return an i32 status that may be read
+    // (an ``allocate(stat=)`` check); feed those uses a constant 0 (success)
+    // so the calls become dead and erasable.
+    for (auto *op : deadOps)
+      for (auto res : op->getResults())
+        if (!res.use_empty())
+          if (auto it = mlir::dyn_cast<mlir::IntegerType>(res.getType())) {
+            mlir::OpBuilder pb(op);
+            res.replaceAllUsesWith(pb.create<mlir::arith::ConstantOp>(
+                op->getLoc(), it, mlir::IntegerAttr::get(it, 0)));
+          }
+    for (auto *op : deadOps)
+      if (op->use_empty()) op->erase();
+    // Fixpoint-erase the now-dead operand chains the retired runtime calls /
+    // accesses left behind (member designates, box loads, converts, the
+    // descriptor-init embox/shape/zero_bits).  Collect-then-erase so we never
+    // erase the op a walk is visiting.
+    bool progress = true;
+    while (progress) {
+      progress = false;
+      llvm::SmallVector<mlir::Operation *, 16> nowDead;
+      func.walk([&](mlir::Operation *op) {
+        if (mlir::isa<hlfir::DesignateOp, fir::ConvertOp, fir::LoadOp,
+                      fir::EmboxOp, fir::ShapeOp, fir::ZeroOp>(op) &&
+            op->use_empty())
+          nowDead.push_back(op);
+      });
+      for (auto *op : nowDead) {
+        op->erase();
+        progress = true;
+      }
+    }
+    return true;
   }
 
   /// (A.1) Diagnose LOCAL-rooted instances of the alloc-array-of-records-
