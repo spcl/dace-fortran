@@ -761,14 +761,22 @@ class SDFGBuilder:
         # linking memlets lazily on first access, so reads/writes hit
         # the source storage directly.
         ctx = _Ctx(sdfg, self)
+        # Stamp array-element value-symbols (``__sym_<arr>_<idx>``, minted when
+        # a runtime-indexed element like ``nrdmax(jg)`` is used as a symbol --
+        # e.g. it sizes an array) FIRST, on the first interstate edge out of an
+        # empty start state.  Anything downstream -- the written-init seeds
+        # below, every transient allocation, every shape/memlet -- may
+        # reference these symbols, so they must be defined at program entry
+        # before any state that allocates or uses them.  Value-symbols only
+        # read input / constant arrays (the constancy check refuses any written
+        # backing array), so they never depend on the written-init seeds and
+        # are safe to stamp before them.
+        self._seed_value_symbols(ctx, sdfg)
         # Seed writable-init transients (module globals the kernel WRITES that
         # carry an init value -- "not really constant") at SDFG entry, before
         # the body runs.  Read-only module data / PARAMETERs stay in the
         # constant pool (see _register_constants).
         self._seed_written_inits(ctx, sdfg)
-        # Seed array-element value-symbols (``__sym_<arr>_<idx>``) before the
-        # body, so shapes/memlets that reference them resolve to a value.
-        self._seed_value_symbols(ctx, sdfg)
         self._emit(ctx, self.ast, sdfg)
         ctx.flush(self)
         # User-source identifiers that collide with sympy module-level
@@ -1001,12 +1009,20 @@ class SDFGBuilder:
         ctx.cur = nxt
 
     def _seed_value_symbols(self, ctx, sdfg):
-        """Seed each array-element value-symbol (``__sym_<arr>_<idx>``, minted
-        when a runtime-indexed element like ``nrdmax(jg)`` sizes an array) from
-        its element read via an interstate edge at SDFG entry, so shapes and
-        memlets referencing the symbol resolve to a value rather than a data
-        lookup DaCe cannot place in a subset.  Records provenance for the
-        constancy check (:meth:`_check_value_symbols_constant`)."""
+        """Stamp each array-element value-symbol (``__sym_<arr>_<idx>``, minted
+        when a runtime-indexed element like ``nrdmax(jg)`` is used as a symbol)
+        from its element read, so shapes and memlets referencing the symbol
+        resolve to a value rather than a data lookup DaCe cannot place in a
+        subset.
+
+        Design: the start state is left **empty** and the symbol-generation
+        assignments ride the **first interstate edge** out of it
+        (``s_start --{__sym = arr[idx-1]}--> value_symbol_seed``).  Called
+        before any other entry seeding, so ``ctx.cur is None`` and ``ensure``
+        mints that empty start block; the symbols are therefore defined at
+        program entry, ahead of every transient allocation / shape / memlet
+        that may use them.  Records provenance for the constancy check
+        (:meth:`_check_value_symbols_constant`)."""
         import dace
         self._value_symbol_provenance: dict[str, tuple[str, str]] = {}
         seeds = {}
@@ -1024,6 +1040,12 @@ class SDFGBuilder:
             return
         ctx.flush(self, sdfg)
         ctx.ensure(sdfg)
+        # Invariant: this is the program entry, so ``ctx.cur`` is the freshly
+        # minted (empty) start state -- the symbol-generation assignments are
+        # the first thing that happens, before any allocation can read them.
+        assert ctx.cur.is_empty(), (
+            "value-symbol seeding must own the first interstate edge from an "
+            "empty start state; found a non-empty start block")
         dst = sdfg.add_state(f"value_symbol_seed_{self.nid()}")
         sdfg.add_edge(ctx.cur, dst, InterstateEdge(assignments=seeds))
         ctx.cur = dst
