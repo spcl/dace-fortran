@@ -49,8 +49,19 @@ class _AutoDimSDFG(dace.SDFG):
             idx = int(m.group('idx'))
             if not is_offset and shape is not None and idx < len(shape):
                 kwargs[sym] = int(shape[idx])  # always the correct extent
+            elif is_offset:
+                # An ``offset_<arr>_d<i>`` left free by the bridge -- the
+                # access lowers to ``arr[idx - offset]``.  Default to the
+                # Fortran 1-based lower bound (1): a direct ``sdfg()`` call on
+                # a default-associated array then reads ``arr[idx - 1]``
+                # correctly.  (Non-default bounds -- e.g. ICON's
+                # ``end_block(min_rl:)`` -- are passed by the bindings emitter
+                # via ``lbound(arr, dim)``; a direct caller that needs a non-1
+                # bound passes the symbol explicitly.)  Previously defaulted to
+                # 0, an off-by-one read of every such array.
+                kwargs[sym] = 1
             else:
-                kwargs[sym] = 0 if is_offset else 1  # unused: don't care
+                kwargs[sym] = 1  # unused extent: don't care
         return super().__call__(*args, **kwargs)
 
     def to_json(self, *args, **kwargs):

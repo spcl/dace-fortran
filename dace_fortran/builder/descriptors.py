@@ -209,6 +209,14 @@ def add_descriptors(builder, sdfg: SDFG):
     def _offset_value(s: str):
         s = s.strip()
         if s == "?" or not s:
+            # Unresolved lower bound -- left free ON PURPOSE for a dummy
+            # deferred-shape ALLOCATABLE/POINTER whose bound is set by the
+            # caller's ALLOCATE/association (e.g. ICON's ``end_block(min_rl:)``,
+            # a non-1 bound the bindings emitter passes via ``lbound(arr,dim)``
+            # at call time).  Do NOT bake a constant here -- that would strip
+            # the symbol and lose a non-default bound.  Direct ``sdfg()`` calls
+            # (no bindings emitter) default it to the Fortran 1-based lower
+            # bound in ``auto_dim_symbols``.
             return None
         if s.lstrip('-').isdigit():
             return int(s)
