@@ -27,6 +27,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # (e.g. someone debugging hwloc) still wins.
 os.environ.setdefault("HWLOC_COMPONENTS", "-gl")
 
+# DaCe's frontend lazily ``from mpi4py import MPI`` during ``to_sdfg`` (and the
+# ``pytest_unconfigure`` hook below imports it to ``MPI_Finalize`` cleanly).  On
+# hosts where MPI_Init stalls on UCX -- or, worse, where UCX/PMIx teardown
+# aborts in ``PMIx_Finalize`` (SIGABRT) and kills the process -- steer Open MPI
+# onto the in-node ``ob1``/``self,vader`` transports BEFORE that import runs.
+# Without this, the finalize-on-exit abort takes down xdist workers
+# ("node down: Not properly terminated"), cascading to sibling workers and
+# deadlocking the controller.  ``setdefault`` keeps any externally-provided MPI
+# configuration.
+os.environ.setdefault("OMPI_MCA_pml", "ob1")
+os.environ.setdefault("OMPI_MCA_btl", "self,vader")
+os.environ.setdefault("UCX_VFS_ENABLE", "n")
+
 # Raise the stack size to the hard limit (typically ``unlimited`` on Linux)
 # for every test process.  Deeply-nested fully-inlined kernels (cloudsc,
 # ICON dycore, QE microkernels) drive MLIR's recursive ``Region::cloneInto``
@@ -190,11 +203,23 @@ def pytest_unconfigure(config):
     # non-zero, failing CI even though every test passed.  Finalise
     # explicitly here (guarded; a no-op when MPI was never initialised,
     # i.e. the normal non-mpi sweep) so termination is clean everywhere.
-    try:
-        from mpi4py import MPI
-        if MPI.Is_initialized() and not MPI.Is_finalized():
-            MPI.Finalize()
-    except Exception:
-        pass
+    # Only finalise under a real ``mpirun``/``mpiexec`` launch (where ORTE
+    # needs every rank finalised for a zero exit code).  In the normal,
+    # non-MPI sweep there is no launcher and finalising is unnecessary --
+    # and on this host OpenMPI's teardown corrupts the heap ("corrupted
+    # double-linked list" -> SIGABRT) inside ``MPI_Finalize`` itself, which
+    # is uncatchable and fires *before* the ``os._exit`` below, killing the
+    # process (and, under xdist, the worker -> "node down" cascade).  When
+    # not under a launcher we skip the finalise entirely: ``os._exit`` skips
+    # CPython finalisation (and mpi4py's atexit ``MPI_Finalize``), so the
+    # process leaves MPI initialised-but-not-finalised -- harmless without a
+    # launcher -- and exits cleanly with the recorded verdict.
+    if any(k in os.environ for k in ("OMPI_COMM_WORLD_SIZE", "PMIX_RANK")):
+        try:
+            from mpi4py import MPI
+            if MPI.Is_initialized() and not MPI.Is_finalized():
+                MPI.Finalize()
+        except Exception:
+            pass
 
     os._exit(_pytest_exitstatus[0])

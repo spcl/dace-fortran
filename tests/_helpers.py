@@ -13,16 +13,30 @@ implementation is reused across every ported file:
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+#: The ``f2py`` reference build shells out to gfortran/meson/ninja.  Under
+#: heavy parallel load -- xdist ``-n`` workers, and in practice a second
+#: pytest session running concurrently -- on a memory-constrained host the
+#: kernel swaps hard and a child ``fork``/``exec`` for the compiler can
+#: transiently fail (``ENOMEM``), surfacing as a ``CalledProcessError`` that
+#: has nothing to do with the Fortran source.  Retry the *reference* build a
+#: few times: a genuine, reproducible compile error still fails every attempt
+#: and surfaces, while a one-off resource hiccup no longer masquerades as a
+#: kernel regression.  Only the deterministic reference build is retried --
+#: never the SDFG build or the numerical comparison.
+_F2PY_BUILD_ATTEMPTS = 3
+
 
 def f2py(src_text: str, out_dir: Path, mod_name: str):
     """Compile ``src_text`` as a Python extension via ``numpy.f2py`` and
     return the imported module.  Skips the test if gfortran or meson is
-    not installed."""
+    not installed.  The reference build is retried on transient
+    resource-exhaustion failures (see ``_F2PY_BUILD_ATTEMPTS``)."""
     if shutil.which("gfortran") is None:
         pytest.skip("gfortran not available")
     if shutil.which("meson") is None:
@@ -30,11 +44,22 @@ def f2py(src_text: str, out_dir: Path, mod_name: str):
     out_dir.mkdir(parents=True, exist_ok=True)
     src_file = out_dir / f"{mod_name}.f90"
     src_file.write_text(src_text)
-    subprocess.check_call(
-        [sys.executable, "-m", "numpy.f2py", "-c",
-         str(src_file), "-m", mod_name, "--quiet"],
-        cwd=out_dir,
-    )
+    cmd = [sys.executable, "-m", "numpy.f2py", "-c",
+           str(src_file), "-m", mod_name, "--quiet"]
+    for attempt in range(1, _F2PY_BUILD_ATTEMPTS + 1):
+        proc = subprocess.run(cmd, cwd=out_dir, capture_output=True, text=True)
+        if proc.returncode == 0:
+            break
+        if attempt == _F2PY_BUILD_ATTEMPTS:
+            raise RuntimeError(
+                f"f2py reference build for {mod_name!r} failed after "
+                f"{_F2PY_BUILD_ATTEMPTS} attempts (rc={proc.returncode}).\n"
+                f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}")
+        # Drop any half-written extension and back off so the resource
+        # spike (swap thrash / fork ENOMEM) can clear before retrying.
+        for stale in out_dir.glob(f"{mod_name}*.so"):
+            stale.unlink()
+        time.sleep(2 * attempt)
     if str(out_dir) not in sys.path:
         sys.path.insert(0, str(out_dir))
     __import__(mod_name)
