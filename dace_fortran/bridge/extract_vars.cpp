@@ -2544,6 +2544,33 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
           m = cp.getVar();
           continue;
         }
+        // The three box peels ``asAssumedShapeAlias`` (trace_utils.cpp)
+        // already walks, needed when the inlined dummy binds to a BOXED
+        // actual section rather than a bare ref:
+        //   * ``fir.embox`` -- internal-subprogram inlining wraps the
+        //     actual section in a box so the assumed-shape callee dummy
+        //     sees a ``fir.box`` (FUNCTION-result inline path: ``getv_q``
+        //     bound to ``q(:, ig)``).
+        //   * ``fir.load`` -- the actual is a section of a POINTER/
+        //     ALLOCATABLE whose descriptor is loaded from its box-slot
+        //     (``deexx(:, ii)``, ``deexx`` a local allocatable -> the
+        //     inlined ``add_nlxx_pot`` dummy ``deexx``).
+        //   * ``fir.rebox`` -- box retype that doesn't change storage.
+        // Without these the walk stops before the ``hlfir.designate``
+        // below and the dummy leaks as a program arg / free symbol
+        // instead of registering as a ``section_alias``.
+        if (auto eb = mlir::dyn_cast<fir::EmboxOp>(def)) {
+          m = eb.getMemref();
+          continue;
+        }
+        if (auto ld = mlir::dyn_cast<fir::LoadOp>(def)) {
+          m = ld.getMemref();
+          continue;
+        }
+        if (auto rb = mlir::dyn_cast<fir::ReboxOp>(def)) {
+          m = rb.getBox();
+          continue;
+        }
         break;
       }
       if (auto* defOp = m.getDefiningOp()) {
