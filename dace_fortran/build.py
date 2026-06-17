@@ -102,17 +102,32 @@ def _flang_intrinsic_modules_path(flang_bin: str) -> Optional[Path]:
 
 
 def _entry_proc_name(entry: Optional[str]) -> Optional[str]:
-    """Demangle a Flang entry symbol to its Fortran procedure name.
+    """Reduce any accepted entry spelling to its bare Fortran procedure name.
 
-    Flang mangles uppercase tag letters (``M`` module, ``F`` function,
-    ``S`` submodule, ``P`` procedure) around lowercased identifiers,
-    so the procedure name is the segment after the last ``P``
-    (``_QPmain`` -> ``main``; ``_QMmymodPbar`` -> ``bar``).  ``None``
-    passes through (no root selection needed).
+    Three forms reach this helper (see :func:`build_sdfg`):
+
+    * the friendly ``module::proc`` qualifier -- the procedure is the
+      segment after ``::`` (``mo_solve_nonhydro::solve_nh`` -> ``solve_nh``);
+    * a mangled Flang symbol -- Flang wraps uppercase tag letters (``M``
+      module, ``F`` function, ``S`` submodule, ``P`` procedure) around
+      lowercased identifiers, so the procedure is the segment after the
+      last ``P`` (``_QPmain`` -> ``main``; ``_QMmymodPbar`` -> ``bar``);
+    * a plain Fortran name -- returned unchanged.
+
+    The bare name is what selects the root file (the ``.f90`` whose
+    ``subroutine``/``function`` defines it).  ``None`` passes through (no
+    root selection needed).
     """
     if not entry:
         return None
-    return entry.rsplit("P", 1)[-1] if "P" in entry else entry
+    # Friendly ``module::proc`` form: the procedure follows ``::``.
+    if "::" in entry:
+        return entry.rsplit("::", 1)[-1]
+    # Mangled flang symbol ``_QM<mod>P<proc>`` / ``_QP<proc>``.
+    if entry.startswith("_Q") and "P" in entry:
+        return entry.rsplit("P", 1)[-1]
+    # Already a plain Fortran name.
+    return entry
 
 
 _PROC_RE = re.compile(
