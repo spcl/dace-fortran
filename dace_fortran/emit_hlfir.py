@@ -102,6 +102,14 @@ def _parse_compile_commands(cc_path: Path):
         # skipped.  Suffix already lower-cased, so ``.F90`` is covered.
         if src.suffix.lower() not in (".f90", ".f", ".for"):
             continue
+        # Skip entries whose source no longer exists.  ``bear`` captures
+        # cmake's compiler-ABI probe TUs (``CMakeFortranCompilerABI.F90``
+        # under ``/usr/share/cmake-*/Modules``), whose throw-away sources are
+        # gone once configure finishes -- they are never part of any project
+        # USE-closure, and a non-existent source can't be emitted anyway, so
+        # the closure scan + flang invocation must never see them.
+        if not src.is_file():
+            continue
         # Recorded command may be a string ("cc -I/x foo.c") or a list.
         cmd = e["command"] if "command" in e else " ".join(e.get("arguments", []))
         tokens = shlex.split(cmd) if isinstance(cmd, str) else list(cmd)

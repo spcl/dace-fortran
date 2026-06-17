@@ -25,6 +25,8 @@ is a separate (and currently unoptimised) step, so no SDFG is built here.
 """
 import os
 import re
+import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -32,8 +34,16 @@ import pytest
 from _util import have_flang
 
 _ENTRY = "mo_solve_nonhydro::solve_nh"  # friendly name; emit() resolves it
-_ENTRY_SYM = "solve_nh"  # its mangled flang symbol
+_ENTRY_MODULE = "mo_solve_nonhydro"  # the defining module
+_ENTRY_PROC = "solve_nh"  # the plain Fortran procedure name
 _STUBS_DIR = Path(__file__).parent / "stubs"
+
+# flang mangles a module procedure to ``_QM<module>P<proc>`` (subroutine) or
+# ``...F<proc>`` (function); the emitted HLFIR never carries the bare name.
+# Match the mangled symbol (or a bare name, as a defensive fallback).
+_ENTRY_DEF_RE = re.compile(
+    rf"func\.func\s+(?!private\b)@(?:_QM{_ENTRY_MODULE}[PF])?{_ENTRY_PROC}\s*\(",
+    re.IGNORECASE)
 
 
 def _resolve_compile_commands() -> Path | None:
@@ -73,7 +83,7 @@ pytestmark = [
 ]
 
 
-def test_solve_nonhydro_emits_hlfir(tmp_path):
+def test_solve_nonhydro_emits_hlfir():
     """flang cpp-preprocesses + emits HLFIR for the dycore, driven entirely
     by the per-TU -cpp / -I / -D flags from compile_commands.json, with the
     ``mpi`` / ``netcdf`` stubs standing in for their unreadable ``.mod``."""
@@ -89,11 +99,19 @@ def test_solve_nonhydro_emits_hlfir(tmp_path):
         pytest.skip(_SETUP_HINT)
     from dace_fortran.emit_hlfir import emit
     stubs = [_STUBS_DIR / "mpi_stub.f90", _STUBS_DIR / "netcdf_stub.f90"]
-    # entry= restricts the ~900-TU ICON database to solve_nh's USE-closure;
-    # the plain Fortran name is resolved to the mangled symbol from the sources.
-    out = emit(compile_commands=cc, out_dir=tmp_path / "hlfir", stubs=stubs, entry=_ENTRY)
-    # The dycore's func must appear in one of the emitted .hlfir files --
-    # i.e. flang got through the preprocessor + frontend on solve_nh.
-    func_re = re.compile(rf"func\.func\s+(?!private\b)@{re.escape(_ENTRY_SYM)}\s*\(")
-    assert any(func_re.search(p.read_text()) for p in out if p.suffix == ".hlfir"), \
-        f"no emitted .hlfir defines {_ENTRY_SYM} ({len(out)} TUs emitted)"
+    # Emit the ~150-TU USE-closure into a private scratch dir and tear it down
+    # in full afterwards: a closure of this size is ~hundreds of MB of .hlfir
+    # + .mod, and the only assertion is on the entry symbol's presence, so
+    # nothing is worth keeping.  ``ignore_cleanup_errors`` keeps a teardown
+    # race (concurrent disk sweep) from turning a green run red.
+    scratch = tempfile.mkdtemp(prefix="dycore_hlfir_")
+    try:
+        # entry= restricts the ~900-TU ICON database to solve_nh's USE-closure;
+        # the plain Fortran name is resolved to the mangled symbol from the sources.
+        out = emit(compile_commands=cc, out_dir=Path(scratch), stubs=stubs, entry=_ENTRY)
+        # The dycore's func must appear in one of the emitted .hlfir files --
+        # i.e. flang got through the preprocessor + frontend on solve_nh.
+        assert any(_ENTRY_DEF_RE.search(p.read_text()) for p in out if p.suffix == ".hlfir"), \
+            f"no emitted .hlfir defines {_ENTRY_PROC} ({len(out)} TUs emitted)"
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
