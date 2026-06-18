@@ -67,6 +67,27 @@ def _build(src: str, tmp: Path, name: str, entry: str):
     return build_sdfg(src, sdfg_dir, name=name, entry=entry).build()
 
 
+def _expanded_mpi_call_codes(sdfg):
+    """Expand the SDFG's MPI library nodes and return the CPP tasklet code
+    strings that actually issue an ``MPI_Send`` / ``MPI_Recv`` (etc.).
+
+    The communicator each point-to-point op runs on is baked into the
+    expansion's C code (``MPI_Send(..., <comm>)``), not into a node
+    property, so verifying the comm without ``mpirun`` means inspecting the
+    expanded tasklet source.  Guards the ``Send``/``Recv`` ``_grid``
+    contract: a wired user communicator must emit ``_grid`` (the cartesian
+    sub-comm), and the default path must fall back to ``MPI_COMM_WORLD``."""
+    import dace
+    sdfg.expand_library_nodes()
+    codes = []
+    for nd, _ in sdfg.all_nodes_recursive():
+        if isinstance(nd, dace.sdfg.nodes.Tasklet):
+            code = nd.code.as_string or ""
+            if "MPI_Send(" in code or "MPI_Recv(" in code:
+                codes.append(code)
+    return codes
+
+
 def test_send_recv_lower_to_mpi_libnodes(tmp_path: Path):
     """``MPI_Send`` / ``MPI_Recv`` on MPI_COMM_WORLD become DaCe
     ``Send`` / ``Recv`` nodes with the canonical connectors, and the
@@ -91,6 +112,15 @@ def test_send_recv_lower_to_mpi_libnodes(tmp_path: Path):
     assert "call" not in kinds
 
     sdfg.validate()
+
+    # Default communicator: with no ``_grid`` connector wired, the expanded
+    # Send/Recv must fall back to ``MPI_COMM_WORLD`` (and must NOT reference
+    # a ``_grid`` that does not exist).
+    codes = _expanded_mpi_call_codes(sdfg)
+    assert len(codes) == 2, f"expected 1 Send + 1 Recv tasklet, got {len(codes)}"
+    for code in codes:
+        assert "MPI_COMM_WORLD" in code, f"default Send/Recv must use MPI_COMM_WORLD: {code!r}"
+        assert "_grid" not in code, f"no ``_grid`` should appear without a user comm: {code!r}"
 
 
 _NONBLOCKING = """
@@ -187,3 +217,15 @@ def test_runtime_communicator_lowers_to_grid_connector(tmp_path: Path):
     assert sdfg.symbols['dace_user_comm'].ctype == 'MPI_Comm'
 
     sdfg.validate()
+
+    # The wired ``_grid`` connector must actually drive the emitted MPI call:
+    # the expanded Send must issue ``MPI_Send(..., _grid)`` on the user
+    # communicator's cartesian sub-comm, NOT ``MPI_COMM_WORLD``.  (Regression
+    # guard: send.py/recv.py once materialised ``_grid`` but still hardcoded
+    # ``MPI_COMM_WORLD`` in the call, mis-routing every user-comm Send/Recv
+    # onto the world communicator -> deadlock under ``mpirun``.)
+    codes = _expanded_mpi_call_codes(sdfg)
+    assert len(codes) == 1, f"expected 1 Send tasklet, got {len(codes)}"
+    assert "_grid" in codes[0], f"user-comm Send must use ``_grid``: {codes[0]!r}"
+    assert "MPI_COMM_WORLD" not in codes[0], (
+        f"user-comm Send must NOT fall back to MPI_COMM_WORLD: {codes[0]!r}")
