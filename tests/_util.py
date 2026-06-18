@@ -171,7 +171,10 @@ def f2py_compile(
     # exceeds the 132-col free-form limit on gfortran <=13, so lift the
     # cap there (append, don't clobber a caller's FFLAGS).
     env = {**os.environ, "FFLAGS": (os.environ.get("FFLAGS", "") + " -ffree-line-length-none").strip()}
-    subprocess.check_call(cmd, cwd=out_dir, env=env)
+    # Retry the reference build on transient ENOMEM (swap-thrash fork failures
+    # under heavy parallel load); shared single-source retry policy in _helpers.
+    from _helpers import f2py_build_with_retry
+    f2py_build_with_retry(cmd, cwd=out_dir, mod_name=mod_name, env=env)
     if str(out_dir) not in sys.path:
         sys.path.insert(0, str(out_dir))
     __import__(mod_name)

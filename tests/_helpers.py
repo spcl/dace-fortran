@@ -32,6 +32,35 @@ import pytest
 _F2PY_BUILD_ATTEMPTS = 3
 
 
+def f2py_build_with_retry(cmd, *, cwd, mod_name, env=None):
+    """Run an ``f2py -c`` build *command* with bounded retry on transient
+    resource-exhaustion (a ``fork``/``exec`` ENOMEM under swap thrash, not a
+    source error).  Drops any half-written extension and backs off between
+    attempts; a genuine, reproducible compile error still fails every attempt
+    and raises ``RuntimeError`` with the full compiler diagnostic.  Safe ONLY
+    for the deterministic *reference* build -- never the SDFG build or the
+    numerical comparison (retrying those would mask real regressions).
+
+    Single source of truth for the retry policy: shared by ``f2py`` here and
+    ``f2py_compile`` in ``_util`` so the two reference-build paths can never
+    drift (the un-hardened second path was the cause of a safety-net flake)."""
+    cwd = Path(cwd)
+    for attempt in range(1, _F2PY_BUILD_ATTEMPTS + 1):
+        proc = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True)
+        if proc.returncode == 0:
+            return
+        if attempt == _F2PY_BUILD_ATTEMPTS:
+            raise RuntimeError(
+                f"f2py reference build for {mod_name!r} failed after "
+                f"{_F2PY_BUILD_ATTEMPTS} attempts (rc={proc.returncode}).\n"
+                f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}")
+        # Drop any half-written extension and back off so the resource
+        # spike (swap thrash / fork ENOMEM) can clear before retrying.
+        for stale in cwd.glob(f"{mod_name}*.so"):
+            stale.unlink()
+        time.sleep(2 * attempt)
+
+
 def f2py(src_text: str, out_dir: Path, mod_name: str):
     """Compile ``src_text`` as a Python extension via ``numpy.f2py`` and
     return the imported module.  Skips the test if gfortran or meson is
@@ -46,20 +75,7 @@ def f2py(src_text: str, out_dir: Path, mod_name: str):
     src_file.write_text(src_text)
     cmd = [sys.executable, "-m", "numpy.f2py", "-c",
            str(src_file), "-m", mod_name, "--quiet"]
-    for attempt in range(1, _F2PY_BUILD_ATTEMPTS + 1):
-        proc = subprocess.run(cmd, cwd=out_dir, capture_output=True, text=True)
-        if proc.returncode == 0:
-            break
-        if attempt == _F2PY_BUILD_ATTEMPTS:
-            raise RuntimeError(
-                f"f2py reference build for {mod_name!r} failed after "
-                f"{_F2PY_BUILD_ATTEMPTS} attempts (rc={proc.returncode}).\n"
-                f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}")
-        # Drop any half-written extension and back off so the resource
-        # spike (swap thrash / fork ENOMEM) can clear before retrying.
-        for stale in out_dir.glob(f"{mod_name}*.so"):
-            stale.unlink()
-        time.sleep(2 * attempt)
+    f2py_build_with_retry(cmd, cwd=out_dir, mod_name=mod_name)
     if str(out_dir) not in sys.path:
         sys.path.insert(0, str(out_dir))
     __import__(mod_name)
