@@ -50,7 +50,7 @@ def _compile_reference(out_dir: Path) -> ctypes.CDLL:
     ``test_aes_graupel_numerical_correctness._compile_reference``)."""
     out_dir.mkdir(parents=True, exist_ok=True)
     so_path = out_dir / "libgraupel_ref.so"
-    flags = ["-O0", "-fno-fast-math", "-ffp-contract=off", "-fPIC"]
+    flags = ["-O0", "-fno-fast-math", "-ffp-contract=off", "-fPIC", "-ffree-line-length-none"]
     ordered = [
         _AES / "mo_kind.f90",
         _AES / "mo_physical_constants.f90",
