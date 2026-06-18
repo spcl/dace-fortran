@@ -226,6 +226,26 @@ def emit_assign(builder, ctx: '_Ctx', n, region):
             new_reads = {ac.array_name for ac in n.accesses if ac.is_read and ac.array_name in builder.arrays}
             new_writes = ({n.target} if (n.target_is_array and n.target in builder.arrays) else set())
             new_writes |= {ac.array_name for ac in n.accesses if ac.is_write and ac.array_name in builder.arrays}
+            # A reassigned SCALAR temp has the same WAR/WAW hazard as an array
+            # but is invisible to the array-only sets above.  Fortran reuses a
+            # scalar freely (``tmp = rho_i(i); u = tmp*x; tmp = rho_i(i-1);
+            # v = tmp*y``); the bridge maps every use of ``tmp`` onto one DaCe
+            # scalar, so the second write + its reads share storage with the
+            # first.  DaCe expresses scalar dataflow as values, not ordered
+            # memory, so two writes to one scalar in a state carry no ordering
+            # and the scheduler may hoist the second write before the first
+            # write's reads -- the NPB-LU viscous-flux miscompile (``u21i`` read
+            # ``rho_i(i-1)`` instead of ``rho_i(i)``).  Add the scalar *target*
+            # to ``new_writes`` so a re-store of an already-read/written scalar
+            # forces a new state (each scalar is then written at most once per
+            # state -> no intra-state WAR).  Deliberately NOT adding scalar
+            # *reads* to ``new_reads``: a scalar RAW (``b = a+1`` after
+            # ``a = ...``) is already serialised by the shared AccessNode edge,
+            # and splitting on it would fragment almost every straight-line
+            # block.  ``prior_reads`` / ``prior_writes`` above already see scalar
+            # AccessNodes, so WAR/WAW resolve correctly.
+            if n.target in builder.scalars:
+                new_writes |= {n.target}
             # RAW: new reads vs prior writes (state-edge would chain through
             # the shared AccessNode anyway, but be explicit).
             # WAR: new writes vs prior reads.
@@ -470,6 +490,44 @@ def _sibling_rw_hazard(assigns) -> bool:
     return False
 
 
+def _scalar_reassign_in_state(state, a, builder) -> bool:
+    """True if emitting assign ``a`` would RE-WRITE a scalar whose prior
+    value is still live (already read or written) in ``state``.
+
+    The reused-scalar WAR/WAW that ``_sibling_rw_hazard`` cannot see:
+    Fortran reuses a scalar freely (``tmp = rho_i(i); u = tmp*x;
+    tmp = rho_i(i-1); v = tmp*y``), but ``accesses`` only carries ARRAY
+    AccessInfo -- the scalar target and scalar reads come from a separate
+    token scan in ``emit_tasklet`` -- so the sibling-list test never sees
+    ``tmp``'s two writes.  The bridge maps every use of ``tmp`` onto ONE
+    DaCe scalar; two writes to it in a single state carry no ordering, so
+    DaCe's scheduler may hoist the second write before the first write's
+    reads (the NPB-LU viscous-flux miscompile: ``u21i`` read ``rho_i(i-1)``
+    instead of ``rho_i(i)``).  Splitting a new state at the re-write makes
+    each scalar written at most once per state, so the interstate edge
+    orders the second write after the first write's reads.
+
+    Granular by design: only the WAR/WAW re-write of a scalar already in
+    the state triggers a split -- a benign scalar RAW (``b = a+1`` after
+    ``a = ...``) is already serialised by the shared AccessNode edge and is
+    NOT split on (else nearly every straight-line loop body would shatter
+    into one-state-per-assign).  Mirror of ``emit_assign``'s realised-graph
+    guard for the ``has_structured`` / IF-body path; keep the two in sync.
+    """
+    tgt = getattr(a, 'target', None)
+    if tgt is None or tgt not in builder.scalars:
+        return False
+    from dace.sdfg.nodes import Tasklet, AccessNode
+    for nd in state.nodes():
+        if isinstance(nd, AccessNode) and nd.data == tgt:
+            # tgt already WRITTEN (WAW) or READ (WAR) in this state.
+            if any(isinstance(e.src, Tasklet) for e in state.in_edges(nd)):
+                return True
+            if any(isinstance(e.dst, Tasklet) for e in state.out_edges(nd)):
+                return True
+    return False
+
+
 def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
     """Fortran DO loop -> LoopRegion with exact Fortran bounds."""
     # Flush any pending scalar assigns from earlier siblings INTO the
@@ -690,10 +748,11 @@ def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
             else:
                 emit_tasklet(builder, st, a, i, iter_map, indirect_syms)
 
-        if not serialise:
-            for idx, a in enumerate(compute_assigns):
-                _emit_one(body, a, idx)
-        else:
+        if serialise:
+            # Array RW hazard among siblings (``_sibling_rw_hazard``):
+            # one state per assign so state-edge ordering enforces Fortran
+            # order.  (Conservative full serialisation; also subsumes any
+            # scalar reuse in the body.)
             prev = body
             for idx, a in enumerate(compute_assigns):
                 if idx == 0:
@@ -703,6 +762,18 @@ def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
                 loop.add_edge(prev, nxt, InterstateEdge())
                 _emit_one(nxt, a, idx)
                 prev = nxt
+        else:
+            # No array hazard, but a reused SCALAR temp (``tmp = a; .. ;
+            # tmp = b; ..``) still races in one state -- start a new state
+            # only at the re-write point so each scalar is written at most
+            # once per state.  Granular: most assigns stay fused in ``body``.
+            prev = body
+            for idx, a in enumerate(compute_assigns):
+                if idx > 0 and _scalar_reassign_in_state(prev, a, builder):
+                    nxt = loop.add_state(f"body_{builder.nid()}")
+                    loop.add_edge(prev, nxt, InterstateEdge())
+                    prev = nxt
+                _emit_one(prev, a, idx)
 
 
 def _stage_cond_scalar(builder, ctx, region, pre, sym, cond, cond_accesses):

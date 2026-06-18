@@ -30,23 +30,17 @@ build / link / config-init path is the gate; the exact values just
 pin that the solver did something).
 
 ``test_lu_numerical_correctness`` -- full reference-vs-SDFG element-
-wise comparison.  Currently ``xfail-strict-false`` until the bridge
-closes two gaps surfaced by exercising the SDFG run:
-
-* ``dt`` (the SSOR time step) is read inside ``ssor`` but does not
-  appear in the SDFG's ``arglist`` / ``symbols`` / ``arrays``.  Some
-  upstream simplification drops it before the bindings layer sees
-  it, so the SDFG behaves as if ``dt=0`` and the SSOR sweep is a
-  no-op.
-* Inner-subroutine iteration variables (``blts_i`` / ``buts_i`` /
-  ``jacld_j`` / ``jacu_i`` / ``ssor_k`` / ...) leak into the
-  top-level SDFG's ``free_symbols``.  They should be local to their
-  containing NestedSDFGs.
-
-Until both are fixed the SDFG-side ``rsdnm`` diverges from the
-reference by ~6 orders of magnitude; the comparison stays xfail.
-The reference-side test pins the harness so when those bridge fixes
-land the comparison auto-flips.
+wise comparison.  Was xfail (~34% per-component residual error)
+until a reused-scalar WAR/WAW hazard in the ``rhs`` viscous flux was
+closed.  The flux reassigns one temp ``tmp = rho_i(i); ...; tmp =
+rho_i(i-1)`` with live reads of the first value in between; the
+bridge collapsed both writes onto one DaCe scalar with no intra-state
+ordering, so the ``*i`` velocities read ``rho_i(i-1)`` rather than
+``rho_i(i)`` -- a ~0.2%/step boundary divergence compounding to ~34%
+over the 50 SSOR steps.  Fixed by ``emit_cfg._scalar_reassign_in_state``
+(split a new state at a scalar re-write while the prior value is
+live); now bit-exact at every itmax.  See
+``tests/scalar_reuse_war_test.py`` for the minimal reproducer.
 """
 import ctypes
 import shutil
@@ -204,36 +198,6 @@ def test_lu_reference_runs(tmp_path):
     np.testing.assert_allclose(rsdnm, expected, rtol=1e-2, err_msg=f"rsdnm drifted: got {rsdnm}")
 
 
-@pytest.mark.xfail(strict=False,
-                   reason=("After the 7-commit dt-flow chain (a724cf0 -> dc35458) the "
-                           "structural gaps are closed: dt appears in the SDFG arglist as "
-                           "a non-transient (1,)-Array, 266 tasklets read it via "
-                           "``_in_dt`` connectors, the d/a/b/c matrices receive jacld's "
-                           "writes (no longer dropped by walkSCFBeforeRegion), and the "
-                           "free_symbols leaks closed.  The remaining divergence -- "
-                           "rsdnm ~ 1e5 vs reference ~1e-2, ~6 orders -- is rooted in "
-                           "the SSOR iteration loop being effectively a no-op: ``istep`` "
-                           "has only 11 mentions in the SDFG JSON and ``itmax`` only 7, "
-                           "vs the >100 expected for a 50-iter loop that reads/writes "
-                           "rsd / d-matrix per step.  The do istep loop is likely "
-                           "collapsed, peeled to a single iteration, or its iterations "
-                           "share state with each other in a way that effectively makes "
-                           "later iterations no-ops.  Likely root: the bridge's "
-                           "interstate-edge sequencing across the do istep loop body's "
-                           "many call sites (rhs/l2norm/jacld+blts/jacu+buts/u-update) "
-                           "doesn't carry the updated u/rsd values forward.\n\nWAS: \n"
-                           "(1) ``dt`` is "
-                           "read inside ``ssor`` but does not appear in the SDFG's "
-                           "arglist / symbols / arrays (some upstream simplification "
-                           "drops it before bindings see it), so the SDFG behaves as if "
-                           "``dt=0`` and the SSOR sweep is a no-op.  (2) Inner-subroutine "
-                           "iteration variables (``blts_i`` / ``buts_i`` / ``jacld_j`` / "
-                           "``jacu_i`` / ``ssor_k`` / ...) leak into the top-level SDFG's "
-                           "free_symbols when they should be local to their containing "
-                           "NestedSDFGs.  Until both close the SDFG-side rsdnm diverges "
-                           "from the reference by ~6 orders of magnitude.  The reference "
-                           "side is pinned by ``test_lu_reference_runs``; when these fixes "
-                           "land the comparison auto-flips."))
 def test_lu_numerical_correctness(tmp_path):
     """End-to-end gfortran-reference vs SDFG element-wise rsdnm match.
 
@@ -242,6 +206,18 @@ def test_lu_numerical_correctness(tmp_path):
     test reads ``rsdnm`` from the SDFG kwargs dict (the bridge
     surfaces module-level state as Array kwargs) and from the
     gfortran reference's accessor wrapper (``get_rsdnm_c``).
+
+    Was xfail (~34% per-component residual error, compounding over the
+    50 SSOR steps from a ~0.2%/step divergence at the boundary cells).
+    Root cause: a reused-scalar WAR/WAW hazard -- the ``rhs`` viscous
+    flux reassigns ``tmp = rho_i(i); ...; tmp = rho_i(i-1)`` with live
+    reads of the first value in between; the bridge collapsed both
+    writes onto one DaCe scalar with no intra-state ordering, so the
+    ``*i`` velocities read ``rho_i(i-1)`` instead of ``rho_i(i)``.
+    Fixed by ``emit_cfg._scalar_reassign_in_state`` (split a new state
+    at a scalar re-write while the prior value is live).  Now bit-exact
+    at every itmax; see ``tests/scalar_reuse_war_test.py`` for the
+    minimal reproducer.
     """
     rsdnm_ref = _run_reference(tmp_path)
     sdfg = _build_sdfg(tmp_path)
