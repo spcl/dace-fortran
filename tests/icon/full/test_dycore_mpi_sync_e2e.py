@@ -1,6 +1,8 @@
-"""2-rank dycore + real-MPI halo-exchange ``sync_patch_array`` e2e.
+"""Dycore + real-MPI halo-exchange ``sync_patch_array`` e2e (2 ranks/pair).
 
-Runs under ``mpirun --oversubscribe -n 2``.  Each rank owns one
+Runs under ``mpirun --oversubscribe`` at any even rank count (CI uses
+``-n 4``): COMM_WORLD is split into adjacent 2-rank pairs and each pair
+runs the symmetric halo swap independently.  Each rank owns one
 block of a per-rank ``(nproma, nlev, 2)`` ``field``; block 1 is the
 "owned" data, block 2 is the "halo" that the neighbor fills in via
 the sync.  The dycore writes block 1 from a deterministic per-rank
@@ -27,9 +29,9 @@ full ICON build.  Key points the user asked for:
     comparison (1-ULP envelope + bit-exact hard check, matching the
     standalone single-rank dycore convention from this session).
 
-Skipped automatically when run under fewer than 2 ranks so the
-default ``pytest tests/`` (which is single-rank) doesn't trip on
-it.
+Skipped automatically when run under an odd rank count or fewer than
+2 ranks so the default ``pytest tests/`` (which is single-rank) doesn't
+trip on it.
 """
 import ctypes
 import shutil
@@ -246,13 +248,21 @@ def test_dycore_with_real_mpi_sync_2rank(tmp_path: Path):
     comm = MPI.COMM_WORLD
     rank = comm.Get_rank()
     size = comm.Get_size()
-    if size != 2:
-        pytest.skip("needs exactly 2 ranks "
-                    "(mpirun --oversubscribe -n 2 ...)")
+    # The halo exchange is a symmetric 2-rank swap.  Run it on a 2-rank
+    # sub-communicator so the test runs (does not skip) at any even rank
+    # count -- CI launches ``mpirun -n 4``: COMM_WORLD splits into adjacent
+    # pairs {0,1}, {2,3}, ... and each pair does an independent exchange.
+    # This also proves the communicator is correctly scoped: a rank must
+    # receive from its pair partner, never leak across to the other pair.
+    if size < 2 or size % 2 != 0:
+        pytest.skip("needs an even rank count >= 2 "
+                    "(mpirun --oversubscribe -n 2 / -n 4 ...)")
+    pair = comm.Split(color=rank // 2, key=rank)
+    partner_world = rank ^ 1  # the other world rank sharing this pair
 
     # tmp_path is a pytest fixture; on rank 0 it's freshly minted,
-    # on rank 1 it's a DIFFERENT path under the same parent.  Pin
-    # both ranks to rank 0's path so the .so artefacts are shared.
+    # on the other ranks it's a DIFFERENT path under the same parent.
+    # Pin every rank to rank 0's path so the .so artefacts are shared.
     tmp_path_str = str(tmp_path) if rank == 0 else None
     tmp_path = Path(comm.bcast(tmp_path_str, root=0))
 
@@ -340,7 +350,9 @@ def test_dycore_with_real_mpi_sync_2rank(tmp_path: Path):
     field_sdfg = field_init.copy(order='F')
     field_ref = field_init.copy(order='F')
     alpha = 2.5
-    mpi_comm_int = ctypes.c_int(comm.py2f())  # Fortran MPI handle
+    # Hand the kernel the PAIR communicator (not COMM_WORLD): the halo
+    # swap must run within {rank, partner_world}.
+    mpi_comm_int = ctypes.c_int(pair.py2f())  # Fortran MPI handle
 
     argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int,
                 ctypes.c_void_p, ctypes.c_double, ctypes.c_int]
@@ -370,9 +382,12 @@ def test_dycore_with_real_mpi_sync_2rank(tmp_path: Path):
     # rank's computed block 1 (which we can reconstruct locally by
     # repeating the deterministic dycore formula on the neighbor's
     # initial data).  This is the actual proof that MPI ran and
-    # the halo was filled correctly.
+    # the halo was filled correctly.  The neighbour is the rank's pair
+    # partner (``partner_world``), whose per-rank input seed is
+    # ``42 + partner_world`` -- so at -n 4 a leak across pairs (e.g. rank
+    # 0 receiving rank 2's data) is caught here.
     other_rank_init = np.asfortranarray(
-        np.random.default_rng(seed=42 + (1 - rank)).standard_normal(
+        np.random.default_rng(seed=42 + partner_world).standard_normal(
             (nproma, nlev, nblks)))
     expected_halo = other_rank_init[:, :, 0].copy()
     for k in range(nlev):
