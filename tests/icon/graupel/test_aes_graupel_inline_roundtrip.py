@@ -83,7 +83,6 @@ def test_aes_graupel_inline_single_tu(tmp_path):
     assert "FUNCTION" in text.upper() or "SUBROUTINE" in text.upper()
 
 
-@pytest.mark.long
 def test_aes_graupel_inline_roundtrip_numerical(tmp_path):
     """``graupel_run`` reference vs SDFG built from the fparser-inlined
     single TU: element-wise compare of every INOUT prognostic + OUT

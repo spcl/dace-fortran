@@ -88,7 +88,6 @@ def _compile_reference(out_dir: Path) -> ctypes.CDLL:
     return ctypes.CDLL(str(so_path))
 
 
-@pytest.mark.long
 def test_aes_graupel_e2e_numerical(tmp_path):
     """``graupel_run`` reference vs SDFG: element-wise compare of
     every INOUT prognostic + every OUT diagnostic for seeded random

@@ -125,19 +125,30 @@ import pytest
 # session and is a no-op when a build (developer tree or CI cache
 # restore) is already present.
 def pytest_collection_modifyitems(config, items):
-    """Pin every ICON-build test onto a SINGLE xdist worker.
+    """Mark every ICON-build test ``long`` and pin them onto ONE xdist worker.
 
-    The ``icon_build`` fixture configures + ``make``s ICON once per
-    worker (session-scoped).  Under ``pytest -n auto`` that would mean
-    one ICON build per worker that happens to receive an ICON test --
-    wasteful, and a cross-worker race on the shared tmp build dir
-    (the file lock in ``ensure_icon_built`` makes it safe, but still
-    serialises).  Assigning all ICON tests the same ``xdist_group``
-    makes ``--dist loadgroup`` schedule them onto ONE worker, so ICON
-    builds exactly once.  No-op without xdist / loadgroup.
+    The ``icon_build`` fixture configures + ``make``s ICON from source
+    (session-scoped) -- minutes of wall time.  Two things follow from
+    any test that requests it, applied here in one place so future
+    ``icon_build`` consumers inherit both automatically:
+
+    * ``long`` -- the full ICON-from-source build is too slow for a
+      routine local "run all" sweep, so it is tagged ``long`` and
+      excluded with ``-m "not long"``.  CI does NOT filter ``long``
+      (it runs ``-m "not mpi"``), so CI still builds + runs these.
+      Marking the *test* (not the dir) means deselecting ``long``
+      never instantiates the session fixture, so no ICON build fires.
+    * ``xdist_group("icon_build")`` -- under ``pytest -n auto`` an
+      unpinned ICON test could land on any worker, building ICON once
+      per such worker (wasteful; a cross-worker race on the shared tmp
+      build dir, serialised by ``ensure_icon_built``'s file lock).  One
+      shared ``xdist_group`` makes ``--dist loadgroup`` schedule them
+      onto ONE worker, so ICON builds exactly once.  No-op without
+      xdist / loadgroup.
     """
     for item in items:
         if "icon_build" in getattr(item, "fixturenames", ()):  # uses the fixture
+            item.add_marker(pytest.mark.long)
             item.add_marker(pytest.mark.xdist_group("icon_build"))
 
 

@@ -183,7 +183,6 @@ def _run_sdfg(sdfg):
     return kw['rsdnm']
 
 
-@pytest.mark.long
 def test_lu_reference_runs(tmp_path):
     """gfortran reference compiles, initialises, and runs to completion.
 
@@ -205,7 +204,6 @@ def test_lu_reference_runs(tmp_path):
     np.testing.assert_allclose(rsdnm, expected, rtol=1e-2, err_msg=f"rsdnm drifted: got {rsdnm}")
 
 
-@pytest.mark.long
 @pytest.mark.xfail(strict=False,
                    reason=("After the 7-commit dt-flow chain (a724cf0 -> dc35458) the "
                            "structural gaps are closed: dt appears in the SDFG arglist as "

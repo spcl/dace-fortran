@@ -49,7 +49,6 @@ _LU_KERNELS = ("ssor", "rhs", "jacld", "jacu", "blts", "buts", "erhs")
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
 
-@pytest.mark.long
 def test_lu_single_file_builds(tmp_path):
     """The bridge ingests just ``lu.F90`` and emits an SDFG rooted at
     ``lu::dolu``."""

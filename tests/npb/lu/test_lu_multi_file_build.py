@@ -53,7 +53,6 @@ _LU_KERNELS = ("ssor", "rhs", "jacld", "jacu", "blts", "buts", "erhs")
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
 
-@pytest.mark.long
 @pytest.mark.parametrize("merge_engine", ["fparser", "regex"])
 def test_lu_multi_file_builds(tmp_path, merge_engine):
     """The bridge ingests ``[lu.F90, useapplu.F90]`` and emits an SDFG

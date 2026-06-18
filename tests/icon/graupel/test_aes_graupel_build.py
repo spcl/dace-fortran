@@ -44,7 +44,6 @@ _ENTRY = "mo_aes_graupel::graupel_run"
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
 
-@pytest.mark.long
 def test_aes_graupel_multi_file_build(tmp_path):
     """The bridge ingests the 4-module aes_graupel project and emits a
     validated SDFG rooted at ``mo_aes_graupel::graupel_run``."""
