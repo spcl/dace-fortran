@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_on_root, build_sdfg, have_flang
 
 pytestmark = [
     pytest.mark.mpi,
@@ -69,11 +69,15 @@ def test_ring_send_recv_numeric(tmp_path: Path):
         pytest.skip("MPI Send/Recv e2e needs >= 2 ranks (mpirun --oversubscribe -n 2 ...)")
 
     # Build + name the SDFG only on rank 0; distributed_compile shares
-    # the compiled artifact with the other ranks.
-    sdfg = None
-    if rank == 0:
-        sdfg = build_sdfg(_RING, tmp_path / "sdfg", name="ring", entry="ring_mod::ring").build()
-        sdfg.name = "mpi_ring"
+    # the compiled artifact with the other ranks.  ``build_on_root`` guards
+    # the rank-0 bridge build so a build failure fails every rank instead of
+    # leaving them blocked in distributed_compile's broadcast.
+    def _build_ring():
+        s = build_sdfg(_RING, tmp_path / "sdfg", name="ring", entry="ring_mod::ring").build()
+        s.name = "mpi_ring"
+        return s
+
+    sdfg = build_on_root(comm, _build_ring, broadcast=False)
     func = utils.distributed_compile(sdfg, comm)
 
     n = 8
@@ -124,10 +128,12 @@ def test_nonblocking_ring_numeric(tmp_path: Path):
     if size < 2:
         pytest.skip("MPI Isend/Irecv e2e needs >= 2 ranks (mpirun --oversubscribe -n 2 ...)")
 
-    sdfg = None
-    if rank == 0:
-        sdfg = build_sdfg(_NB_RING, tmp_path / "sdfg", name="nbring", entry="nbring_mod::nbring").build()
-        sdfg.name = "mpi_nbring"
+    def _build_nbring():
+        s = build_sdfg(_NB_RING, tmp_path / "sdfg", name="nbring", entry="nbring_mod::nbring").build()
+        s.name = "mpi_nbring"
+        return s
+
+    sdfg = build_on_root(comm, _build_nbring, broadcast=False)
     func = utils.distributed_compile(sdfg, comm)
 
     n = 8

@@ -336,6 +336,54 @@ def build_sdfg(source: str,
     return builder
 
 
+def build_on_root(comm, build_fn, *, root: int = 0, broadcast: bool = True):
+    """Run ``build_fn`` on a single MPI rank and turn a build *failure* into a
+    clean all-rank error instead of a collective deadlock.
+
+    The MPI e2e tests build artefacts (SDFG / ``.so``) on ``root`` only and
+    then share them via a collective (``comm.bcast`` / ``distributed_compile``
+    / ``comm.Barrier``); the non-root ranks block at that collective.  If the
+    build raises, pytest catches the exception on ``root`` -- the process
+    stays alive -- so ``mpirun`` never sees a dead rank and the waiting ranks
+    hang at the collective forever (the run only ends when CI times out).
+
+    Here ``root`` runs the build inside a guard and broadcasts a
+    ``(error, result)`` envelope BEFORE any other collective: on failure every
+    rank raises the same :class:`RuntimeError` (carrying ``root``'s traceback),
+    so the whole job fails fast and ``mpirun`` exits non-zero -- no hang.
+
+    :param comm: the MPI communicator every rank participates in.
+    :param build_fn: zero-arg callable, run only on ``root``.
+    :param root: the rank that performs the build (default 0).
+    :param broadcast: when True (default) ``build_fn``'s return value (which
+        must be picklable -- typically ``.so`` path strings) is returned on
+        every rank; when False it is returned only on ``root`` (``None``
+        elsewhere) -- for a non-picklable result (e.g. an ``SDFG``) consumed by
+        a following collective such as :func:`dace.sdfg.utils.distributed_compile`.
+        Either way a build failure is broadcast and re-raised on all ranks.
+    :returns: ``build_fn()``'s result (on every rank when ``broadcast``, else
+        on ``root`` only).
+    """
+    import traceback
+    rank = comm.Get_rank()
+    error = None
+    result = None
+    if rank == root:
+        try:
+            result = build_fn()
+        except BaseException as exc:  # noqa: BLE001 -- re-raised on every rank
+            error = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
+    if broadcast:
+        error, result = comm.bcast((error, result), root=root)
+    else:
+        error = comm.bcast(error, root=root)
+    if error is not None:
+        raise RuntimeError(
+            f"MPI build on rank {root} failed; all ranks abort to avoid a "
+            f"collective deadlock. Rank {root} traceback:\n{error}")
+    return result
+
+
 def run_passes_dump(source: str, out_dir: Path, name: str = "src", pipeline: str = "builtin.module()") -> str:
     """Compile Fortran to HLFIR, run the given pipeline, return the IR dump.
 

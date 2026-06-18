@@ -42,7 +42,7 @@ import dace
 import numpy as np
 import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_on_root, build_sdfg, have_flang
 from dace_fortran.bindings import build_fortran_library
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.external import Arg, clear_external_registry, keep_external
@@ -266,11 +266,10 @@ def test_dycore_with_real_mpi_sync_2rank(tmp_path: Path):
     tmp_path_str = str(tmp_path) if rank == 0 else None
     tmp_path = Path(comm.bcast(tmp_path_str, root=0))
 
-    # Build phase: rank 0 only.
-    sync_so_str = None
-    sdfg_so_str = None
-    ref_so_str = None
-    if rank == 0:
+    # Build phase: rank 0 only.  ``build_on_root`` broadcasts the artefact
+    # paths -- or a build *failure* -- so the other ranks never block at the
+    # barrier below waiting for artefacts a failed build will never produce.
+    def _build_artifacts():
         sync_build_dir = tmp_path / "sync_mpi_build"
         sync_so = _build_sync_mpi_lib(sync_build_dir)
         sync_so_str = str(sync_so)
@@ -325,12 +324,12 @@ def test_dycore_with_real_mpi_sync_2rank(tmp_path: Path):
         # --- Reference build ---
         ref_so = _build_ref_lib(tmp_path / "ref", sync_so, sync_build_dir)
         ref_so_str = str(ref_so)
+        return sync_so_str, sdfg_so_str, ref_so_str
 
-    # Broadcast paths + barrier so rank 1 only proceeds once the
-    # artefacts exist on the shared filesystem.
-    sync_so_str = comm.bcast(sync_so_str, root=0)
-    sdfg_so_str = comm.bcast(sdfg_so_str, root=0)
-    ref_so_str = comm.bcast(ref_so_str, root=0)
+    sync_so_str, sdfg_so_str, ref_so_str = build_on_root(comm, _build_artifacts)
+
+    # Barrier so every rank only proceeds once the artefacts exist on the
+    # shared filesystem (``build_on_root`` already broadcast their paths).
     comm.Barrier()
 
     # Both ranks load both .so files and drive them through ctypes.

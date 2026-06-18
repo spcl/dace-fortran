@@ -30,7 +30,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_on_root, build_sdfg, have_flang
 from dace_fortran.bindings import (
     FlattenPlan,
     OriginalArg,
@@ -124,8 +124,9 @@ def test_user_comm_split_send_recv(tmp_path: Path):
     # broadcast the ``.so`` path; all ranks load the same artifact.
     # (``sdfg.compile`` uses a shared ``.dacecache`` build dir, so
     # concurrent multi-rank builds would race the cmake cache.)
-    so_path = None
-    if wrank == 0:
+    # ``build_on_root`` broadcasts a build *failure* too, so a broken
+    # build fails every rank instead of leaving them stuck at the barrier.
+    def _build_lib():
         sdfg_dir = tmp_path / "sdfg"
         sdfg_dir.mkdir(parents=True, exist_ok=True)
         builder = build_sdfg(_KERNEL, sdfg_dir, name="sr_usercomm", entry="sr_usercomm_mod::sr_usercomm")
@@ -137,8 +138,9 @@ def test_user_comm_split_send_recv(tmp_path: Path):
         driver_path.write_text(_DRIVER)
         lib = build_fortran_library(sdfg, _IFACE, plan, str(tmp_path / "lib"),
                                     name="sr_usercomm", extra_sources=[driver_path])
-        so_path = str(lib.so_path)
-    so_path = world.bcast(so_path, root=0)
+        return str(lib.so_path)
+
+    so_path = build_on_root(world, _build_lib)
     world.Barrier()
 
     dll = ctypes.CDLL(so_path)
