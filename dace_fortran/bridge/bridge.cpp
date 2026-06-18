@@ -582,6 +582,14 @@ NB_MODULE(hlfir_bridge, m) {
       .def_ro("bounds_remap_source", &VarInfo::bounds_remap_source)
       .def_ro("bounds_remap_total_extent", &VarInfo::bounds_remap_total_extent)
       .def_ro("bounds_remap_source_subset", &VarInfo::bounds_remap_source_subset)
+      .def_ro("unbindable_section", &VarInfo::unbindable_section)
+      .def_ro("aos_origin_mod", &VarInfo::aos_origin_mod)
+      .def_ro("aos_origin_struct", &VarInfo::aos_origin_struct)
+      .def_ro("aos_member_path", &VarInfo::aos_member_path)
+      .def_ro("aos_outer_rank", &VarInfo::aos_outer_rank)
+      .def_ro("global_alloc_inside", &VarInfo::global_alloc_inside)
+      .def_ro("aos_struct_pointer", &VarInfo::aos_struct_pointer)
+      .def_ro("aos_member_pointer", &VarInfo::aos_member_pointer)
       .def("__repr__", [](const VarInfo& v) {
         std::string s = "<" + v.role + " '" + v.fortran_name + "'";
         if (v.rank > 0) {

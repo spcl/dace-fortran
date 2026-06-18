@@ -558,8 +558,17 @@ def array_read_to_dace_expr(builder, assign_node, iter_map: dict, sdfg=None) -> 
             if not already_subscripted and ri < len(reads) and tok == reads[ri].array_name:
                 ac = reads[ri]
                 ri += 1
-                parts = [_remap_token(raw, iter_map) for raw in ac.index_exprs]
-                out.append(_format_offset_subset(ac.array_name, parts))
+                # Section-alias dummy (``igkp`` <- ``igk_exx(:, current_k)``):
+                # resolve to the SOURCE array + spliced index list so the
+                # interstate-edge read references real storage.  The alias has
+                # no descriptor / ``offset_<alias>_d<i>`` symbols of its own
+                # (``descriptors.py`` skips it), so emitting the bare alias
+                # name here leaks ``igkp`` + ``offset_igkp_d0`` as unresolved
+                # free symbols.  QE ``init_us_2``'s ``iv = igk_(ig)``
+                # value-symbol read, reached after ``add_nlxx_pot`` inlines it.
+                eff_name, eff_ac = resolve_section_alias(builder, ac.array_name, ac)
+                parts = [_remap_token(raw, iter_map) for raw in (eff_ac.index_exprs or [])]
+                out.append(_format_offset_subset(eff_name, parts))
             elif not already_subscripted and sdfg_is_len1_array(sdfg, tok):
                 # A logical scalar kept as a length-1 Array (inout/out module
                 # global like ``kunit`` / ``npool``, or a complex intent(in)):
@@ -652,6 +661,16 @@ def indirect_to_dace(builder, expr: str, iter_map: dict, indirect_syms: dict | N
         if start == 0 and end == len(expr):
             if indirect_syms:
                 parts = [_rewrite_inner_indirects(p, indirect_syms) for p in parts]
+            # Section-alias dummy read on an interstate edge: resolve to the
+            # source array + spliced dim_map (same gap as
+            # ``array_read_to_dace_expr`` -- the alias has no offset symbols).
+            v = builder.arrays.get(arr)
+            if v is not None and getattr(v, 'role', '') == 'section_alias':
+                from types import SimpleNamespace
+                _src, _sp = resolve_section_alias(
+                    builder, arr,
+                    SimpleNamespace(index_exprs=parts, index_vars=[''] * len(parts)))
+                arr, parts = _src, list(_sp.index_exprs)
             return _format_offset_subset(arr, [_remap_token(p, iter_map) for p in parts])
     return expr
 

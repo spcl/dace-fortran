@@ -1309,6 +1309,13 @@ class SDFGBuilder:
                     shape=shape,
                     intent=(v.intent if v is not None else ''),
                     is_written=bool(getattr(v, 'is_written', False)),
+                    aos_origin_mod=getattr(v, 'aos_origin_mod', '') if v is not None else '',
+                    aos_origin_struct=getattr(v, 'aos_origin_struct', '') if v is not None else '',
+                    aos_member_path=getattr(v, 'aos_member_path', '') if v is not None else '',
+                    aos_outer_rank=int(getattr(v, 'aos_outer_rank', 0)) if v is not None else 0,
+                    global_alloc_inside=bool(getattr(v, 'global_alloc_inside', False)) if v is not None else False,
+                    aos_struct_pointer=bool(getattr(v, 'aos_struct_pointer', False)) if v is not None else False,
+                    aos_member_pointer=bool(getattr(v, 'aos_member_pointer', False)) if v is not None else False,
                 ))
         # Free symbols carrying module-global provenance: a scalar
         # module global the bridge lifted into a shape / bound symbol

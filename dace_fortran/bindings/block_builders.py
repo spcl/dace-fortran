@@ -282,6 +282,8 @@ def _fortran_c_value_type(dtype: str) -> str:
         'float32': 'real(c_float)',
         'float64': 'real(c_double)',
         'bool': 'logical(c_bool)',
+        'complex64': 'complex(c_float_complex)',
+        'complex128': 'complex(c_double_complex)',
     }
     if dtype not in table:
         raise ValueError(f"_fortran_c_value_type: unsupported scalar dtype {dtype!r} -- "
@@ -495,6 +497,24 @@ def build_wrapper_head(frozen: FrozenSignature,
         kw = "allocatable, target" if a.rank > 0 else "target"
         scratch_lines.append(f"    {ftype}, {kw} :: {a.sdfg_name}{spec}")
 
+    # Module-global AoS-struct component SoA buffers: a wrapper-local
+    # ``allocatable, target`` per arg, plus a loop index + one cap per member
+    # dim (filled in build_wrapper_body / drained in build_wrapper_tail).
+    for a in _aos_module_args(frozen):
+        ftype = _fortran_c_value_type(a.dtype)
+        spec = "(" + ", ".join(":" for _ in range(a.rank)) + ")" if a.rank else ""
+        scratch_lines.append(f"    {ftype}, allocatable, target :: {a.sdfg_name}{spec}")
+        it, caps, _mrank, _elem = _aos_loop_pieces(a)
+        int_names = ([it] if it else []) + caps  # scalar-struct (outer_rank 0): no loop vars
+        if int_names:
+            scratch_lines.append(f"    integer(c_int) :: {', '.join(int_names)}")
+
+    # Absent-optional data buffers with no host source: a degenerate local.
+    for a in _unsourced_array_args(frozen, iface, plan):
+        ftype = _fortran_c_value_type(a.dtype)
+        spec = "(" + ", ".join(":" for _ in range(a.rank)) + ")"
+        scratch_lines.append(f"    {ftype}, allocatable, target :: {a.sdfg_name}{spec}")
+
     bridge_decls, _, _, _ = _build_logical_bridges(frozen, iface)
     if bridge_decls:
         scratch_lines = scratch_lines + bridge_decls
@@ -613,7 +633,31 @@ def build_wrapper_body(frozen: FrozenSignature,
                 # array assign.
                 dims = ", ".join(a.shape) if a.shape else "1"
                 body.append(f"    allocate({a.sdfg_name}({dims}))")
-            body.append(f"    {a.sdfg_name} = {alias}")
+            if getattr(a, 'global_alloc_inside', False):
+                # The kernel ALLOCATEs this global itself: the host alias holds
+                # no data on entry (reading it would be UB).  The ``allocate``
+                # above gives the SDFG its buffer; the kernel fills it; the
+                # write-back assigns it to the host global on exit.
+                body.append(f"    ! {a.sdfg_name}: kernel-allocated, no copy-in "
+                            f"(host alias unallocated on entry)")
+            else:
+                body.append(f"    {a.sdfg_name} = {alias}")
+
+    aos_args = _aos_module_args(frozen)
+    if aos_args:
+        body.append("")
+        body.append("    ! ----- Module-global AoS-struct components (AoS->SoA) -----")
+        for a in aos_args:
+            body.extend(_render_aos_copy_in(a))
+
+    unsourced = _unsourced_array_args(frozen, iface, plan)
+    if unsourced:
+        body.append("")
+        body.append("    ! ----- Absent-optional buffers (degenerate, no host source) -----")
+        for a in unsourced:
+            dims = ", ".join("1" for _ in range(a.rank))
+            body.append(f"    allocate({a.sdfg_name}({dims}))")
+            body.append(f"    {a.sdfg_name} = {_zero_literal(a.dtype)}")
 
     comm_args = [a for a in frozen.args if a.kind == 'mpi_comm']
     if comm_args:
@@ -772,6 +816,18 @@ def build_wrapper_tail(frozen: FrozenSignature,
         rhs = f"{actual}(1)" if tuple(a.shape) == ('1', ) else actual
         module_writeback_lines.append(f"    {alias} = {rhs}")
 
+    # Module-global AoS-struct components: pack the SoA buffer back into the
+    # host struct (only if WRITTEN) and always deallocate the buffer allocated
+    # in the body's copy-in.
+    aos_out_lines: List[str] = []
+    for a in _aos_module_args(frozen):
+        if a.is_written:
+            aos_out_lines.extend(_render_aos_copy_out(a))
+        else:
+            aos_out_lines.append(f"    deallocate({a.sdfg_name})")
+    for a in _unsourced_array_args(frozen, iface, plan):
+        aos_out_lines.append(f"    deallocate({a.sdfg_name})")
+
     bridge_block = ""
     if bridge_copy_out:
         bridge_block = "\n    ! ----- logical(c_bool) -> LOGICAL bridge (copy-out + dealloc) -----\n" + "\n".join(
@@ -782,15 +838,19 @@ def build_wrapper_tail(frozen: FrozenSignature,
         writeback_block = "\n    ! ----- Write-back for kernel-written module globals -----\n" + "\n".join(
             module_writeback_lines)
 
-    if not copy_out_lines and not bridge_copy_out and not module_writeback_lines:
+    if (not copy_out_lines and not bridge_copy_out and not module_writeback_lines
+            and not aos_out_lines):
         return call_block
 
     copy_out_block = ""
     if copy_out_lines:
         copy_out_block = "\n    ! ----- Copy-out for writeable deep-copy entries -----\n" + "\n".join(copy_out_lines)
+    aos_out_block = ""
+    if aos_out_lines:
+        aos_out_block = "\n    ! ----- AoS-struct component copy-out / dealloc -----\n" + "\n".join(aos_out_lines)
     marker = f"  end subroutine {iface.entry}_dace"
     pre, post = call_block.split(marker, 1)
-    return pre + copy_out_block + bridge_block + writeback_block + "\n" + marker + post
+    return pre + copy_out_block + bridge_block + writeback_block + aos_out_block + "\n" + marker + post
 
 
 # ---------------------------------------------------------------------------
@@ -842,6 +902,13 @@ def assemble_module(iface: OriginalInterface, frozen: FrozenSignature, blocks: d
         by_mod.setdefault(mod, []).append(f"{_module_symbol_alias(sym)} => {member}")
     for mod, renames in sorted(by_mod.items()):
         use_lines.append(f"  use {mod}, only: {', '.join(sorted(set(renames)))}")
+    # Module-global AoS-struct components: import the HOST STRUCT plainly
+    # (the copy loop references ``becxx(i)%k`` directly, no ``__mod`` alias).
+    aos_by_mod: dict = {}
+    for a in _aos_module_args(frozen):
+        aos_by_mod.setdefault(a.aos_origin_mod, set()).add(a.aos_origin_struct)
+    for mod, structs in sorted(aos_by_mod.items()):
+        use_lines.append(f"  use {mod}, only: {', '.join(sorted(structs))}")
     use_statements = "\n".join(use_lines)
     wrapper_body = (blocks['wrapper_head'] + "\n" + blocks['wrapper_body'] + "\n" + blocks['wrapper_tail'])
     return _load("module.f90.in").format(
@@ -1107,6 +1174,191 @@ def _orphan_module_args(frozen: FrozenSignature, iface: OriginalInterface, plan:
     return out
 
 
+def _aos_module_args(frozen: FrozenSignature):
+    """SDFG args that are the SoA image of a MODULE-LEVEL array-of-structs
+    global component (``becxx_k`` <- ``becxx(:)%k``).  Identified by the
+    bridge-stamped ``aos_origin_struct`` provenance on the FrozenArg.  The
+    binding ``use``-imports the host struct and marshals it with an AoS<->SoA
+    copy loop (not the plain ``x = x__mod`` assign of a flat module global).
+
+    Restricted to ARRAY args: a rank-0 struct member (``dfftt%ngm``) reaches the
+    SDFG as a by-VALUE free symbol, not a ``c_loc`` data buffer -- it keeps its
+    free-symbol / scalar-member sourcing and must NOT be re-declared here as an
+    ``allocatable`` (a duplicate-declaration error).
+    """
+    return [a for a in frozen.args
+            if getattr(a, 'aos_origin_struct', '') and getattr(a, 'rank', 0) > 0]
+
+
+def _unsourced_array_args(frozen: FrozenSignature, iface: OriginalInterface,
+                          plan: FlattenPlan):
+    """Array SDFG args with NO host source -- not a wrapper dummy, not a
+    struct-flatten companion, not a module global, not an AoS component.
+
+    These are the data buffers of ABSENT inlined-callee optionals (QE's
+    ``becphi`` -- ``becphi_r`` survives as a program arg even though the
+    matching ``becphi_r_present`` folds to 0).  The wrapper must still pass a
+    valid ``c_loc`` pointer, so we declare a shape-degenerate, zero-filled local
+    -- correct whenever the kernel does not read it (the optional is absent).
+    Without this they reach ``c_loc(becphi_r)`` undeclared -> a compile error.
+    """
+    declared = {f for entry in plan.entries for f in entry.recipe.flat_names}
+    declared |= {a.sdfg_name for a, _m, _mem in _orphan_module_args(frozen, iface, plan)}
+    declared |= {a.sdfg_name for a in _aos_module_args(frozen)}
+    declared |= {a.name for a in iface.args}
+    return [a for a in frozen.args
+            if a.kind == 'array' and getattr(a, 'rank', 0) > 0
+            and a.sdfg_name not in declared
+            and not getattr(a, 'aos_origin_struct', '')]
+
+
+def _zero_literal(dtype: str) -> str:
+    """The neutral fill literal for ``dtype`` -- ``.false.`` for LOGICAL (where
+    ``= 0`` is an INTEGER->LOGICAL extension warning), ``0`` for everything else
+    (Fortran promotes the integer 0 to real / complex)."""
+    return ".false." if dtype == 'bool' else "0"
+
+
+def _present(expr: str, is_pointer: bool) -> str:
+    """Definedness test for a POINTER (``associated``) vs ALLOCATABLE
+    (``allocated``) -- using the wrong intrinsic is a hard Fortran type error."""
+    return f"associated({expr})" if is_pointer else f"allocated({expr})"
+
+
+def _aos_loop_pieces(a):
+    """Loop var / per-member-dim cap-var names + the host element accessor for
+    an AoS-component arg.  ``aos_outer_rank == 1`` (a 1-D record array): the
+    element index is the SoA buffer's LEADING dim, matching the bridge's
+    ``[element-dims..., member-dims...]`` layout.  ``aos_outer_rank == 0`` (a
+    SCALAR struct global, ``vcut``/``dfftt``): no element loop -- ``it``/``caps``
+    are empty and the accessor is the bare ``struct%member``."""
+    base = a.sdfg_name
+    member_rank = a.rank - a.aos_outer_rank
+    if a.aos_outer_rank == 0:
+        return None, [], member_rank, f"{a.aos_origin_struct}%{a.aos_member_path}"
+    # Fortran identifiers must start with a letter (no leading ``_``).
+    it = f"aos_{base}_i"
+    caps = [f"aos_{base}_c{j}" for j in range(member_rank)]
+    # ``becxx(<it>)%k`` (member_path is ``%``-joined: ``k`` / ``a%b``).
+    elem = f"{a.aos_origin_struct}({it})%{a.aos_member_path}"
+    return it, caps, member_rank, elem
+
+
+def _render_aos_copy_in(a) -> List[str]:
+    """``allocate`` the SoA buffer (per-member-dim cap = max over elements) +
+    pack the host AoS component into it.  Skips the data copy when the kernel
+    allocates the component itself (``global_alloc_inside`` -- host has no
+    data yet) but still allocates a non-degenerate buffer."""
+    it, caps, mrank, elem = _aos_loop_pieces(a)
+    if a.aos_outer_rank == 0:
+        # SCALAR struct global member (``vcut%corrected``, ``dfftt%nl``): the
+        # member may be a POINTER or an ALLOCATABLE that is unassociated /
+        # unallocated on entry (no single intrinsic guards both), so marshal a
+        # shape-degenerate, zero-filled buffer -- valid storage for ``c_loc``,
+        # the right rank, and correct whenever the kernel does not READ it (the
+        # vexx no-op path).  Value marshalling of a live scalar-struct member is
+        # a separate extension; this keeps the wrapper compilable + crash-free.
+        dims = ", ".join("1" for _ in range(a.rank)) if a.rank else ""
+        out = [f"    ! ----- scalar-struct member (degenerate): {a.sdfg_name} <- "
+               f"{a.aos_origin_struct}%{a.aos_member_path} -----"]
+        if a.rank:
+            out.append(f"    allocate({a.sdfg_name}({dims}))")
+        out.append(f"    {a.sdfg_name} = {_zero_literal(a.dtype)}")
+        return out
+    struct = a.aos_origin_struct
+    sp = _present(struct, a.aos_struct_pointer)          # struct allocated/associated?
+    mp = _present(elem, a.aos_member_pointer)            # element's component defined?
+    if mrank == 0:
+        # SCALAR member of a record array (``upf(:)%tvanp`` -- a plain LOGICAL /
+        # INTEGER per element, NOT allocatable).  Gather one value per element
+        # into a rank-1 SoA buffer.  No member ``allocated`` guard (the member is
+        # a fixed scalar); the OUTER struct may itself be unallocated on entry
+        # (no-op path) -> degenerate size-1 buffer.
+        zero = _zero_literal(a.dtype)
+        out = [f"    ! ----- AoS->SoA gather (scalar member): {a.sdfg_name} <- "
+               f"{struct}(:)%{a.aos_member_path} -----"]
+        out.append(f"    if ({sp}) then")
+        out.append(f"      allocate({a.sdfg_name}(size({struct})))")
+        out.append(f"      do {it} = 1, size({struct})")
+        out.append(f"        {a.sdfg_name}({it}) = {elem}")
+        out.append(f"      end do")
+        out.append(f"    else")
+        out.append(f"      allocate({a.sdfg_name}(1)); {a.sdfg_name} = {zero}")
+        out.append(f"    end if")
+        return out
+    # member_rank > 0: a 2D+ ALLOCATABLE / POINTER component per element
+    # (``becxx(:)%k``, ``ke(:)%k``).  Cap = max member extent over elements;
+    # both the struct and each element's component are guarded (no-op path
+    # leaves them unallocated / unassociated).
+    out = [f"    ! ----- AoS->SoA copy-in: {a.sdfg_name} <- {struct}(:)%{a.aos_member_path} -----"]
+    for c in caps:
+        out.append(f"    {c} = 0")
+    out.append(f"    if ({sp}) then")
+    out.append(f"      do {it} = 1, size({struct})")
+    if not a.global_alloc_inside:
+        out.append(f"        if ({mp}) then")
+        for j, c in enumerate(caps):
+            out.append(f"          {c} = max({c}, size({elem}, {j + 1}))")
+        out.append(f"        end if")
+    out.append(f"      end do")
+    out.append(f"    end if")
+    for c in caps:
+        out.append(f"    if ({c} == 0) {c} = 1")
+    cap_dims = ", ".join(caps)
+    out.append(f"    if ({sp}) then")
+    out.append(f"      allocate({a.sdfg_name}(size({struct}), {cap_dims}))")
+    out.append(f"    else")
+    out.append(f"      allocate({a.sdfg_name}(1, {cap_dims}))")
+    out.append(f"    end if")
+    out.append(f"    {a.sdfg_name} = {_zero_literal(a.dtype)}")
+    if not a.global_alloc_inside:
+        slc = ", ".join(f"1:size({elem}, {j + 1})" for j in range(mrank))
+        out.append(f"    if ({sp}) then")
+        out.append(f"      do {it} = 1, size({struct})")
+        out.append(f"        if ({mp}) &")
+        out.append(f"          {a.sdfg_name}({it}, {slc}) = {elem}")
+        out.append(f"      end do")
+        out.append(f"    end if")
+    return out
+
+
+def _render_aos_copy_out(a) -> List[str]:
+    """Pack the SoA buffer back into the host AoS component (only when the arg
+    is WRITTEN), allocating each component first if the kernel created it."""
+    it, caps, mrank, elem = _aos_loop_pieces(a)
+    if a.aos_outer_rank == 0:
+        # Degenerate scalar-struct member: nothing was packed in, just release
+        # the buffer (no write-back -- the no-op path never writes it).
+        return [f"    deallocate({a.sdfg_name})"]
+    struct = a.aos_origin_struct
+    sp = _present(struct, a.aos_struct_pointer)
+    mp = _present(elem, a.aos_member_pointer)
+    if mrank == 0:
+        # Scalar member of a record array: scatter one value per element back.
+        out = [f"    ! ----- SoA->AoS scatter (scalar member): {struct}(:)%"
+               f"{a.aos_member_path} <- {a.sdfg_name} -----"]
+        out.append(f"    if ({sp}) then")
+        out.append(f"      do {it} = 1, size({struct})")
+        out.append(f"        {elem} = {a.sdfg_name}({it})")
+        out.append(f"      end do")
+        out.append(f"    end if")
+        out.append(f"    deallocate({a.sdfg_name})")
+        return out
+    out = [f"    ! ----- SoA->AoS copy-out: {struct}(:)%{a.aos_member_path} <- {a.sdfg_name} -----"]
+    out.append(f"    if ({sp}) then")
+    out.append(f"      do {it} = 1, size({struct})")
+    if a.global_alloc_inside:
+        alloc_dims = ", ".join(f"size({a.sdfg_name}, {a.aos_outer_rank + j + 1})" for j in range(mrank))
+        out.append(f"        if (.not. {mp}) allocate({elem}({alloc_dims}))")
+    slc = ", ".join(f"1:size({elem}, {j + 1})" for j in range(mrank))
+    out.append(f"        if ({mp}) &")
+    out.append(f"          {elem} = {a.sdfg_name}({it}, {slc})")
+    out.append(f"      end do")
+    out.append(f"    end if")
+    out.append(f"    deallocate({a.sdfg_name})")
+    return out
+
+
 def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dummy_set: set,
                           iface: OriginalInterface) -> List[str]:
     """Emit one assignment per free SDFG symbol from the caller's
@@ -1181,6 +1433,15 @@ def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dumm
         # ``__mod`` alias  --  assign from that import.
         if sym in _module_sources:
             out.append(f"    {sym} = int({_module_symbol_alias(sym)}, c_int)")
+            continue
+        # An OPTIONAL-presence flag (``<dummy>_present``, registered by the
+        # bridge for every ``present(x)`` fold) with no provider: the optional
+        # is not forwarded across the wrapper boundary, so it is ABSENT.
+        # Fortran ``present()`` of an omitted optional is ``.false.`` -> 0.
+        # (Inlined-callee optionals -- QE ``becphi``/``becpsi``, ``run_on_gpu``
+        # -- bottom out here; defaulting absent matches the no-op call path.)
+        if sym.endswith("_present"):
+            out.append(f"    {sym} = 0  ! optional absent (not forwarded by wrapper)")
             continue
         out.append(f"    ! TODO: no plan entry gives size for free symbol {sym!r}")
     return out

@@ -2148,15 +2148,31 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
             outDtype = "bool";
             return true;
           }
+          // Fortran ``COMPLEX(kind)`` lowers to ``mlir::ComplexType`` over an
+          // f32/f64 element.  A complex ALLOCATABLE struct member (QE's
+          // ``bec_type%k :: COMPLEX(DP), ALLOCATABLE(:,:)``) would otherwise
+          // fall through ``return false`` -> the member's per-field VarInfo is
+          // never synthesised -> the section-alias bound to it (``becxx(i)%k``)
+          // dangles (``KeyError: 'becxx_k'``).  Emit the canonical DaCe name so
+          // ``descriptors.DTYPE`` maps it (NOT the ``ty.print()`` ``complex<f64>``
+          // spelling, which also works but is less explicit).
+          if (auto ct = mlir::dyn_cast<mlir::ComplexType>(elemTy)) {
+            auto et = ct.getElementType();
+            if (et.isF32()) { outDtype = "complex64"; return true; }
+            if (et.isF64()) { outDtype = "complex128"; return true; }
+            return false;
+          }
           return false;
         };
         std::set<std::string> emittedFlatNames;
         std::function<void(mlir::Value, fir::RecordType,
-                            const std::string&, const std::string&, int)>
+                            const std::string&, const std::string&,
+                            const std::string&, int)>
             walkLevel = [&](mlir::Value designateResult,
                             fir::RecordType levelRec,
                             const std::string& flatNameBase,
-                            const std::string& mangledBase, int depth) {
+                            const std::string& mangledBase,
+                            const std::string& memberPath, int depth) {
               if (depth > 8) return;  // bounded recursion
               // Collect user designates of designateResult that
               // carry a component attribute -- each one is one
@@ -2225,7 +2241,10 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
                 if (auto childRec = mlir::dyn_cast<fir::RecordType>(
                         childMemberTy)) {
                   walkLevel(childDg.getResult(), childRec, newFlat,
-                            newMangled, depth + 1);
+                            newMangled,
+                            memberPath.empty() ? childName
+                                               : memberPath + "%" + childName,
+                            depth + 1);
                   continue;
                 }
                 // Leaf -- emit a VarInfo if the dtype is
@@ -2252,6 +2271,10 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
                 // bridge.
                 if (auto b = mlir::dyn_cast<fir::BoxType>(childMemberTy))
                   childMemberTy = b.getEleTy();
+                // A ``fir.box<fir.ptr<...>>`` member is a Fortran POINTER; a
+                // ``fir.box<fir.heap<...>>`` is an ALLOCATABLE.  The binding
+                // guards them with ``associated()`` vs ``allocated()``.
+                bool memberIsPointer = mlir::isa<fir::PointerType>(childMemberTy);
                 if (auto h = mlir::dyn_cast<fir::HeapType>(childMemberTy))
                   childMemberTy = h.getEleTy();
                 if (auto p = mlir::dyn_cast<fir::PointerType>(childMemberTy))
@@ -2322,13 +2345,56 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
                 std::string dtype;
                 if (!dtypeFor(elemTy, dtype)) continue;
                 mv.dtype = dtype;
+                // Marshalling provenance: this flat array is the SoA image of
+                // a module-global AoS struct component.  The binding sources
+                // it from the host struct with an AoS<->SoA copy loop (not a
+                // direct ``x = x__mod`` assign).  ``aos_outer_rank`` = number
+                // of leading record-array dims (the per-element loop depth).
+                // Both a TRUE array-of-structs (``becxx(:)`` -> ``seqExtents``
+                // non-empty, ``aos_outer_rank>=1``) and a SCALAR struct global
+                // (``vcut``/``dfftt`` -> ``seqExtents`` empty, ``aos_outer_rank
+                // == 0``) take the AoS marshalling path: the binding ``USE``-
+                // imports the host struct and copies ``<flat> <- <struct>[
+                // (elem)]%<member>``.  The scalar case is just the rank-0
+                // degenerate (no element loop).  Without tagging the scalar
+                // members the binding never DECLARES the ``vcut_a`` / ``dfftt_nl``
+                // wrapper locals it passes ``c_loc`` of -> undeclared-symbol
+                // compile error.
+                {
+                  auto org = decodeModuleGlobalSymbol(globalSym);
+                  if (!org.first.empty()) {
+                    mv.aos_origin_mod = org.first;
+                    mv.aos_origin_struct = org.second;
+                    mv.aos_member_path =
+                        memberPath.empty() ? childName
+                                           : memberPath + "%" + childName;
+                    mv.aos_outer_rank = static_cast<int>(seqExtents.size());
+                    mv.aos_member_pointer = memberIsPointer;
+                    // The enclosing struct global is itself a POINTER
+                    // (``type(t), POINTER :: tabxx(:)``) vs ALLOCATABLE -- the
+                    // outer marshalling guard picks ``associated`` / ``allocated``.
+                    mv.aos_struct_pointer = isPointerAttr;
+                    // Allocation provenance (binding correctness): if the
+                    // kernel ALLOCATEs the AoS global itself (``allocate(
+                    // becxx(...))``), the host has no data to copy IN and the
+                    // binding must allocate the host global before copy-OUT.
+                    mv.global_alloc_inside =
+                        !collectAllocSites(globalSym, module).empty();
+                    // Write provenance (binding copy-OUT): a kernel store to
+                    // ANY element of the AoS global (``becxx(i)%k(:,jb) = ...``,
+                    // possibly through an inlined dummy) roots a designate at
+                    // the global decl.  When written, the binding must pack the
+                    // SoA buffer back into the host component on exit.
+                    mv.is_written = globalIsWritten(globalSym, module);
+                  }
+                }
                 vars.push_back(std::move(mv));
               }
             };
         // Kick off the recursive walk from the struct declare's
         // own result (the FIRST level of designates).
         walkLevel(op.getResult(0), rec, v.fortran_name,
-                  v.mangled_name, 0);
+                  v.mangled_name, "", 0);
       }
       continue;
     } else {
@@ -2637,8 +2703,141 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
             bool is_trivial_section = !triplets.empty();
             unsigned surviving = 0;
             unsigned cursor = 0;
+            // Whole-dimension ``:`` triplet of an ALLOCATABLE / POINTER
+            // base.  Flang renders the full dim as
+            // ``box_dims#0 : box_dims#0 + extent - 1 : 1`` -- the lower
+            // bound is the descriptor's RUNTIME lower bound (a
+            // ``fir.box_dims`` result #0), not a literal ``1``.
+            // ``traceConstInt`` can't fold it, so the generic path below
+            // would wrongly clear ``is_trivial_section`` AND leave ``lo``
+            // empty (-> ``0:?`` -> ``allOk`` false -> the alias bails and
+            // the dummy leaks as a program arg).  This is the QE
+            // ``add_nlxx_pot`` case: ``deexx(:, ii)`` /
+            // ``big_result(:, ibnd)`` -- full-dim sections of caller-local
+            // allocatables passed to an inlined dummy.  Detect it
+            // precisely (lo is a box_dims lower-bound result, stride == 1)
+            // and treat it as a full, TRIVIAL dim: the section_alias maps
+            // the dummy's 1-based subscript straight onto the source dim,
+            // so the descriptor's runtime lower bound is immaterial (the
+            // source array is itself 1-based in its own SDFG frame).
+            auto isWholeBoxDim = [](mlir::Value loV, mlir::Value stV) -> bool {
+              auto bd = mlir::dyn_cast_or_null<fir::BoxDimsOp>(
+                  loV.getDefiningOp());
+              if (!bd || loV != bd.getResult(0)) return false;
+              auto stC = traceConstInt(stV);
+              return stC && *stC == 1;
+            };
+            // The whole-box-dim treatment is only sound for a PLAIN
+            // allocatable / pointer base.  When the section reaches its
+            // storage THROUGH a struct-component designate
+            // (``becxx(ikq) % k(:, jbnd)``: a section of an allocatable
+            // component of a MODULE-level array-of-structs), ``traceToDecl``
+            // renders the source as a flattened ``<parent>_<member>`` name
+            // (``becxx_k``) that is NOT a registered SDFG array, so a
+            // section_alias onto it would dangle (``KeyError`` at codegen).
+            // That component-member-section case is the separate
+            // struct-member-section gap; leave it on its existing
+            // (leak-as-arg) path until that lands.
+            auto baseThroughComponent = [](mlir::Value v) -> bool {
+              for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
+                auto *d = v.getDefiningOp();
+                if (!d) return false;
+                if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(d)) {
+                  if (dg.getComponentAttr()) return true;
+                  v = dg.getMemref();
+                  continue;
+                }
+                if (auto ld = mlir::dyn_cast<fir::LoadOp>(d)) {
+                  v = ld.getMemref();
+                  continue;
+                }
+                if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
+                  v = cv.getValue();
+                  continue;
+                }
+                if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
+                  v = ba.getVal();
+                  continue;
+                }
+                if (auto rb = mlir::dyn_cast<fir::ReboxOp>(d)) {
+                  v = rb.getBox();
+                  continue;
+                }
+                if (auto eb = mlir::dyn_cast<fir::EmboxOp>(d)) {
+                  v = eb.getMemref();
+                  continue;
+                }
+                return false;
+              }
+              return false;
+            };
+            bool baseIsComponent = baseThroughComponent(sec.getMemref());
+            // AoS element indices on PARENT designates of a struct-component
+            // section.  ``becxx(ikq) % k(:, jbnd)``: the section ``sec`` only
+            // carries ``k``'s own (:, jbnd) dims, but the flattened source
+            // ``becxx_k`` is shaped [element-dims..., member-dims...], so the
+            // element index ``ikq`` (living on the ``becxx(ikq)`` element
+            // designate above the ``%k`` component) is a DROPPED-scalar source
+            // dim that must PREPEND the member's dim_map.  Walk the base chain
+            // collecting every element designate's (all-scalar) indices,
+            // outermost-first.  Empty for a scalar-struct component
+            // (``becpsi % k`` -- no element designate) so that path is
+            // unaffected.
+            std::vector<std::string> aosElemIdx;
+            {
+              mlir::Value w = sec.getMemref();
+              std::vector<std::vector<std::string>> levels;
+              for (int i = 0; i < limits::kSsaBackWalkDepth && w; ++i) {
+                auto* d = w.getDefiningOp();
+                if (!d) break;
+                if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(d)) {
+                  if (!dg.getComponentAttr()) {
+                    auto trip = dg.getIsTriplet();
+                    bool allScalar = true;
+                    for (auto t : trip)
+                      if (t) { allScalar = false; break; }
+                    if (allScalar && !dg.getIndices().empty()) {
+                      std::vector<std::string> here;
+                      bool ok = true;
+                      for (auto iv : dg.getIndices()) {
+                        auto s = renderBound(iv);
+                        if (s.empty()) { ok = false; break; }
+                        here.push_back(s);
+                      }
+                      if (ok) levels.push_back(std::move(here));
+                    }
+                  }
+                  w = dg.getMemref();
+                  continue;
+                }
+                if (auto ld = mlir::dyn_cast<fir::LoadOp>(d)) { w = ld.getMemref(); continue; }
+                if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) { w = cv.getValue(); continue; }
+                if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) { w = ba.getVal(); continue; }
+                if (auto rb = mlir::dyn_cast<fir::ReboxOp>(d)) { w = rb.getBox(); continue; }
+                if (auto eb = mlir::dyn_cast<fir::EmboxOp>(d)) { w = eb.getMemref(); continue; }
+                break;
+              }
+              // ``levels`` is innermost-first; the outermost element designate
+              // is the leading source dim, so emit in reverse.
+              for (auto it = levels.rbegin(); it != levels.rend(); ++it)
+                for (auto& s : *it) aosElemIdx.push_back(s);
+            }
             for (unsigned d = 0; d < triplets.size(); ++d) {
               if (triplets[d] && cursor + 2 < secIdx.size()) {
+                if (isWholeBoxDim(secIdx[cursor], secIdx[cursor + 2])) {
+                  // Full dim, offset 0.  Render ``0:<extent>`` from the
+                  // box_dims extent (result #1) so ``allOk`` passes; the
+                  // subset is unused on the section_alias path but keeps
+                  // the view_alias fallback (rank mismatch) correct.
+                  auto bd = mlir::cast<fir::BoxDimsOp>(
+                      secIdx[cursor].getDefiningOp());
+                  std::string ext = traceExtentExpr(bd.getResult(1));
+                  subset.push_back(ext.empty() ? std::string(":")
+                                               : ("0:" + ext));
+                  dim_map.push_back("_d" + std::to_string(surviving++));
+                  cursor += 3;
+                  continue;
+                }
                 std::string lo = renderBound(secIdx[cursor]);
                 std::string hi = renderBound(secIdx[cursor + 1]);
                 std::string st = renderBound(secIdx[cursor + 2]);
@@ -2688,6 +2887,22 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
                 cursor += 1;
               }
             }
+            // Prepend the AoS element indices as leading DROPPED-scalar source
+            // dims so dim_map / subset cover ``becxx_k``'s element dim(s).
+            // dim_map keeps the 1-based Fortran expr (spliced into index_exprs
+            // and offset uniformly by ``build_memlet_index``); subset is the
+            // 0-based DaCe form for the view_alias fallback.
+            if (!aosElemIdx.empty()) {
+              std::vector<std::string> dm, ss;
+              for (auto& e : aosElemIdx) {
+                dm.push_back(e);
+                ss.push_back("(" + e + ")-1");
+              }
+              for (auto& s : dim_map) dm.push_back(s);
+              for (auto& s : subset) ss.push_back(s);
+              dim_map = std::move(dm);
+              subset = std::move(ss);
+            }
             // Only mark as view_alias when every dim's subset
             // resolved to a closed-form expression; bail on
             // ``?`` entries so we don't emit broken memlets.
@@ -2697,6 +2912,15 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
                 allOk = false;
                 break;
               }
+            // Inlined-callee section of a struct COMPONENT whose flattened
+            // source isn't a representable array (the AoS-global
+            // ``becxx(ikq) % k(:, jbnd)`` case: a whole-dim section whose
+            // box-dims lower bound left ``subset`` as ``0:?``).  The dummy is
+            // the kernel's own internal data, not a true external input, so
+            // flag it for ``descriptors.py`` to register as a read-only
+            // transient rather than leak it as a required program argument.
+            if (!allOk && baseIsComponent)
+              v.unbindable_section = true;
             if (allOk) {
               // If the resolved source name collides with
               // the alias's own ``fortran_name``, rename
@@ -2992,6 +3216,13 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
           v.intent = "inout";
           v.const_data.clear();
           recordModuleOrigin();
+          // Allocation provenance (binding copy-IN correctness): if the kernel
+          // ALLOCATEs this module global itself (``allocate(gbuf(n))``), the
+          // host has NO data on entry -- the binding must skip the copy-in
+          // ``gbuf = gbuf__mod`` (reading an unallocated host array is UB) and
+          // rely on the kernel's own allocate.  The copy-OUT ``gbuf__mod =
+          // gbuf`` still runs (allocatable assignment auto-allocates the host).
+          v.global_alloc_inside = !collectAllocSites(sym, module).empty();
         }
         // A WRITTEN function-scope SAVE-local (``_QF`` -- e.g. ``logical ::
         // bla = .false.`` that Fortran implicitly SAVEs) is private to its
@@ -3398,6 +3629,25 @@ FortranInterfaceInfo extractFortranInterface(mlir::ModuleOp module,
                               d.getUniqName().str());
   });
   auto addUseFromMangled = [&](llvm::StringRef mangled) {
+    // Only TRUE module data (``_QM<mod>E<name>`` -- the first uppercase scope
+    // letter after ``_QM`` is ``E``).  A module-PROCEDURE local / dummy
+    // (``_QM<mod>F<proc>E<name>``) also decodes to a non-empty (mod, name)
+    // pair via ``decodeModuleGlobalSymbol``, but its "module"
+    // (``<mod>F<proc>``) is bogus -- the entity is the entry's own argument
+    // / shape symbol, NOT host-shared module data, and emitting a ``use`` for
+    // it makes the binding reference a non-existent ``.mod``.
+    {
+      llvm::StringRef s = mangled;
+      if (s.consume_front("_QM")) {
+        bool moduleScope = false;
+        for (char ch : s)
+          if (std::isupper(static_cast<unsigned char>(ch))) {
+            moduleScope = (ch == 'E');
+            break;
+          }
+        if (!moduleScope) return;
+      }
+    }
     auto md = decodeModuleGlobalSymbol(mangled.str());
     if (!md.first.empty() && !md.second.empty())
       out.used_modules[md.first].insert(md.second);

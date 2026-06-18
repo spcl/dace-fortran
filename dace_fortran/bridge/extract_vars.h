@@ -104,6 +104,50 @@ struct VarInfo {
   bool bounds_remap_view = false;
   std::string bounds_remap_source;
   std::string bounds_remap_total_extent;
+  /// True when this is an INLINED-callee array dummy bound to a section
+  /// the bridge can't represent as a view  --  specifically a section of
+  /// a struct COMPONENT whose flattened ``<parent>_<member>`` source is
+  /// not a registered array (the QE module-level array-of-structs global
+  /// ``becxx(ikq) % k(:, jbnd)``: an allocatable component of a global
+  /// AoS, never allocated in-kernel).  For an inlined callee the dummy is
+  /// the kernel's own internal data, NEVER a true external input, so
+  /// leaking it as a program argument is wrong (it demands data the caller
+  /// can't supply).  ``descriptors.py`` registers such a var as a
+  /// read-only TRANSIENT (full-view SoA, no copy-back) instead  --  the
+  /// reads are dead on every path that doesn't allocate the global, so the
+  /// transient is never observed.  See the section-alias detection in
+  /// ``extract_vars.cpp`` (component-base guard) for where it is set.
+  bool unbindable_section = false;
+  /// Marshalling metadata for a flattened component of a MODULE-LEVEL
+  /// array-of-structs global (QE ``us_exx`` ``TYPE(bec_type),ALLOCATABLE::
+  /// becxx(:)`` accessed as ``becxx(ikq)%k``).  ``walkLevel`` synthesises a
+  /// flat per-component array (``becxx_k``, shaped [outer-AoS-dims...,
+  /// member-dims...]); these fields tell the binding to source it from the
+  /// host struct with an AoS<->SoA copy loop instead of a direct
+  /// ``x = x__mod`` assign.  All empty/0 for ordinary vars.
+  ///   * ``aos_origin_mod``    -- Fortran module owning the global (``us_exx``)
+  ///   * ``aos_origin_struct`` -- the AoS global's Fortran name (``becxx``)
+  ///   * ``aos_member_path``   -- ``%``-joined component path (``k`` /
+  ///                              ``inner%k``) from the struct to this leaf
+  ///   * ``aos_outer_rank``    -- number of leading AoS (record-array) dims
+  ///                              (the per-element loop nest depth)
+  ///   * ``global_alloc_inside`` -- the kernel itself ALLOCATEs the component
+  ///                              (``collectAllocSites`` non-empty): the
+  ///                              binding must allocate the host global before
+  ///                              copy-out and skip copy-in (no host data yet).
+  std::string aos_origin_mod;
+  std::string aos_origin_struct;
+  std::string aos_member_path;
+  int aos_outer_rank = 0;
+  bool global_alloc_inside = false;
+  /// AoS marshalling guards: the enclosing struct global (``aos_struct_pointer``)
+  /// and the component itself (``aos_member_pointer``) may be a Fortran POINTER
+  /// rather than ALLOCATABLE -- the binding must guard with ``associated()`` not
+  /// ``allocated()`` (the wrong intrinsic is a hard type error), and the outer
+  /// guard lets an UNALLOCATED/UNASSOCIATED global fall back to a degenerate
+  /// buffer instead of an undefined ``size()``.
+  bool aos_struct_pointer = false;
+  bool aos_member_pointer = false;
   /// Per-source-dim subset of the parent array that the bounds-remap
   /// view covers, rendered as 0-based DaCe subset strings (one entry
   /// per source dim, e.g. ``{"0:nrows", "(c0)-1:(c0)-1+ncols"}`` for

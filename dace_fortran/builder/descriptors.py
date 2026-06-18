@@ -402,6 +402,14 @@ def add_descriptors(builder, sdfg: SDFG):
             # (1,)-Array surfacing on the SDFG signature).
             from dace_fortran.builder import _global_is_baked_constant
             transient = (v.intent == '' and _global_is_baked_constant(v))
+            # An inlined-callee dummy bound to an unrepresentable struct-
+            # component section (AoS-global ``becxx(ikq)%k``) is the kernel's
+            # OWN internal data, never a true external input -- register it as a
+            # read-only transient (full-view SoA, no copy-back) instead of
+            # leaking it onto the SDFG signature as a required argument.  Its
+            # reads are dead on every path that doesn't allocate the global.
+            if getattr(v, 'unbindable_section', False):
+                transient = True
             is_length_one = len(dims) == 1 and dims[0] == 1
             if transient and is_length_one:
                 sdfg.add_scalar(v.fortran_name, dtype=dt(v.dtype), transient=True)

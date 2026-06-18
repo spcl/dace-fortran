@@ -66,6 +66,27 @@ class FrozenArg:
     from_struct_member: Optional[str] = None
     layout: str = 'same'
     is_written: bool = False
+    # Marshalling provenance for a flattened component of a MODULE-LEVEL
+    # array-of-structs global (QE ``us_exx`` ``TYPE(bec_type),ALLOCATABLE::
+    # becxx(:)``, accessed ``becxx(ikq)%k``).  This arg is the SoA image
+    # (``becxx_k``, shape [element-dims..., member-dims...]); the binding
+    # sources it from the host struct with an AoS<->SoA copy loop
+    # (``do i; becxx_k(i,:,:) = becxx(i)%k; end do``) instead of a direct
+    # ``x = x__mod`` assign.  Empty for ordinary args.
+    #   aos_origin_mod    -- module owning the global (``us_exx``)
+    #   aos_origin_struct -- the AoS global's name (``becxx``)
+    #   aos_member_path   -- ``%``-joined component path (``k`` / ``a%b``)
+    #   aos_outer_rank    -- number of leading record-array (element) dims
+    #   global_alloc_inside -- kernel ALLOCATEs the component: binding
+    #                          allocates the host global before copy-out and
+    #                          skips copy-in (host has no data yet).
+    aos_origin_mod: str = ''
+    aos_origin_struct: str = ''
+    aos_member_path: str = ''
+    aos_outer_rank: int = 0
+    global_alloc_inside: bool = False
+    aos_struct_pointer: bool = False
+    aos_member_pointer: bool = False
 
     def to_dict(self) -> dict:
         """Serialise to a JSON-safe dict (``shape`` tuple becomes a list)."""
