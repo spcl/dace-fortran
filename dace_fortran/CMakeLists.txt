@@ -210,6 +210,7 @@ target_link_libraries(hlfir_bridge_core PUBLIC
 add_library(hlfir_bridge_passes STATIC
     passes/Passes.cpp
     passes/PropagateShapes.cpp
+    passes/VersionShapeScalars.cpp
     passes/InlineAll.cpp
     passes/LowerFirSelectCase.cpp
     passes/FlattenStructs.cpp

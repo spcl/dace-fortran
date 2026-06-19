@@ -86,6 +86,7 @@ def build_fortran_library(
     extra_sources: Sequence = (),
     mode: str = "debug",
     flags: Sequence = None,
+    extra_flags: Sequence = (),
     verify: bool = True,
     bind_c_shim: bool = False,
     bind_c_shim_debug_prints: bool = False,
@@ -118,6 +119,11 @@ def build_fortran_library(
     :param flags: explicit optimisation/fp flag list, overriding
                   ``mode`` entirely (``-shared``/``-fPIC``/``-fopenmp``
                   are always added).
+    :param extra_flags: additional gfortran flags appended to the
+                  mode/``flags`` set (kept, not replaced).  Use for
+                  legacy-source allowances such as
+                  ``-fallow-argument-mismatch`` when a ``prelude_source``
+                  carries an implicit-interface type mismatch.
     :param verify: run the frozen-signature drift check (default on).
     :param bind_c_shim: when ``True``, auto-generate ``<entry>_c.f90``
                        -- a ``bind(c, name='<entry>_c')`` wrapper
@@ -213,7 +219,8 @@ def build_fortran_library(
     # reordering: modules the binding ``use``s must precede it, and
     # sources that ``use`` the binding must follow it.
     cmd = [
-        "gfortran", *_SHARED_FLAGS, *opt_flags, "-fopenmp", f"-J{out_dir}",
+        "gfortran", *_SHARED_FLAGS, *opt_flags, *extra_flags, "-fopenmp",
+        f"-J{out_dir}",
         *[str(s) for s in prelude_sources],
         str(bindings_f90),
         *([str(shim_f90)] if shim_f90 else []),

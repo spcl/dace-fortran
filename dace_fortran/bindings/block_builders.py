@@ -414,7 +414,7 @@ def build_wrapper_head(frozen: FrozenSignature,
                     f" intent({a.intent or 'in'}) :: {a.name}")
         return (f"    {a.fortran_type},"
                 f" intent({a.intent or 'inout'}), target :: {a.name}"
-                f"{_dim_spec(a.shape)}")
+                f"{_dim_spec(a.shape, {d.lower() for d in outer_dummy_names})}")
 
     outer_dummy_decls = "\n".join(_outer_decl(a) for a in iface.args)
 
@@ -471,6 +471,12 @@ def build_wrapper_head(frozen: FrozenSignature,
     # ``already has basic type`` error.  Skip any free symbol that is
     # also a flat companion.
     flat_names = {f for entry in plan.entries for f in entry.recipe.flat_names}
+    # A symbol that is ALSO an orphan / AoS module-global arg is already given a
+    # ``target`` local by those paths (``uspp_param::lmaxq`` -- a module global the
+    # bridge ALSO lifted into a dimension free-symbol).  Re-declaring it here is a
+    # duplicate ``already has basic type`` error, so skip it (the orphan decl wins).
+    module_arg_names = ({a.sdfg_name for a, _m, _mem in _orphan_module_args(frozen, iface, plan)}
+                        | {a.sdfg_name for a in _aos_module_args(frozen)})
 
     def _local_decl(s: str) -> str:
         """Wrapper-local Fortran decl for one free symbol.  Mirrors the
@@ -484,7 +490,8 @@ def build_wrapper_head(frozen: FrozenSignature,
         return _fortran_c_value_type(sym_dtype.get(s, 'int32'))
 
     symbol_decls = "\n".join(f"    {_local_decl(s)} :: {s}" for s in frozen.free_symbols
-                             if s not in outer_dummy_set and s not in flat_names)
+                             if s not in outer_dummy_set and s not in flat_names
+                             and s not in module_arg_names)
     if max_loop_rank:
         iter_decl = "    integer(c_int) :: " + ", ".join(f"i{d + 1}" for d in range(max_loop_rank))
         symbol_decls = (symbol_decls + "\n" + iter_decl) if symbol_decls else iter_decl
@@ -514,6 +521,11 @@ def build_wrapper_head(frozen: FrozenSignature,
         ftype = _fortran_c_value_type(a.dtype)
         spec = "(" + ", ".join(":" for _ in range(a.rank)) + ")"
         scratch_lines.append(f"    {ftype}, allocatable, target :: {a.sdfg_name}{spec}")
+
+    # Unsourced scalar optionals + undeclared shape symbols (declarations only;
+    # values are written in build_wrapper_body).
+    for name, ftype, _rhs in _extra_local_symbols(frozen, iface, plan):
+        scratch_lines.append(f"    {ftype} :: {name}")
 
     bridge_decls, _, _, _ = _build_logical_bridges(frozen, iface)
     if bridge_decls:
@@ -616,31 +628,82 @@ def build_wrapper_body(frozen: FrozenSignature,
         body.append("    ! ----- LOGICAL -> logical(c_bool) bridge (copy-in) -----")
         body.extend(copy_in_lines)
 
+    # Symbol population is SPLIT by data dependency.  The orphan / AoS /
+    # unsourced blocks below emit ``allocate(buf(<shape syms>))``; a shape sym
+    # sourced from a module global / dummy / constant (``nqs``, ``nks``,
+    # ``dfftt_ngm``, ``qvan_init_nij`` ...) must be assigned BEFORE those
+    # allocates, while a buffer-EXTENT sym (``becxx_k_d0 = size(becxx_k)``) can
+    # only be assigned AFTER its buffer exists.  So input-derived assignments go
+    # up here; buffer-derived ones stay at the tail (emitted after the allocates).
+    sym_lines = _build_symbol_assigns(frozen, plan, outer_dummy_set, iface)
+    extra_syms = _extra_local_symbols(frozen, iface, plan)
+    _buffer_names = {a.sdfg_name for a, _m, _mem in _orphan_module_args(frozen, iface, plan)
+                     if a.rank > 0}
+    _buffer_names |= {a.sdfg_name for a in _aos_module_args(frozen)}
+    _buffer_names |= {a.sdfg_name for a in _unsourced_array_args(frozen, iface, plan)}
+
+    def _buffer_derived(rhs: str) -> bool:
+        # A symbol whose RHS reads ``size``/``lbound`` of a buffer this wrapper
+        # allocates below cannot be assigned until that buffer exists.
+        return any(re.search(r'\b' + re.escape(b) + r'\b', rhs) for b in _buffer_names)
+
+    early_syms = [ln for ln in sym_lines if not _buffer_derived(ln)]
+    late_syms = [ln for ln in sym_lines if _buffer_derived(ln)]
+    early_extra = [(n, ft, r) for (n, ft, r) in extra_syms if not _buffer_derived(r)]
+    late_extra = [(n, ft, r) for (n, ft, r) in extra_syms if _buffer_derived(r)]
+    if early_syms or early_extra:
+        body.append("")
+        body.append("    ! ----- Symbol population (input-derived; before allocates) -----")
+        body.extend(early_syms)
+        for name, _ftype, rhs in early_extra:
+            body.append(f"    {name} = {rhs}")
+
     orphans = _orphan_module_args(frozen, iface, plan)
     if orphans:
         body.append("")
         body.append("    ! ----- Module-global args sourced from use-imports -----")
         for a, _mod, _member in orphans:
             alias = _module_symbol_alias(a.sdfg_name)
-            if a.rank > 0:
-                # Allocate to the SDFG arg's own concrete extent
-                # (``FrozenArg.shape``)  --  NOT ``size(alias)``: the
-                # source can be a *scalar* module global (ICON timer
-                # handles, ``i_am_accel_node``) the bridge lifted to a
-                # length-1 array, and ``size(scalar)`` is a hard
-                # Fortran error.  Scalar-source -> scalar broadcast
-                # into the length-1 buffer; array-source -> conformant
-                # array assign.
-                dims = ", ".join(a.shape) if a.shape else "1"
-                body.append(f"    allocate({a.sdfg_name}({dims}))")
-            if getattr(a, 'global_alloc_inside', False):
+            alloc_inside = getattr(a, 'global_alloc_inside', False)
+            is_alloc = getattr(a, 'module_origin_allocatable', False)
+            is_ptr = getattr(a, 'module_origin_pointer', False)
+            # A host global with DEFERRED storage (ALLOCATABLE / POINTER) may be
+            # unallocated on entry: the kernel only reads it under a condition
+            # that the no-op path doesn't take, so the caller need not allocate
+            # it.  Its declared SDFG extents are its OWN size symbols
+            # (``egrp_pairs(egrp_pairs_d0, ...)`` where ``egrp_pairs_d0 ==
+            # size(egrp_pairs)``), so an explicit allocate is also circular.
+            # Handle both: guard the copy with ``allocated``/``associated`` and
+            # auto-(re)allocate from the host when present, else fall back to a
+            # degenerate buffer so ``c_loc`` stays valid.
+            deferred = (is_alloc or is_ptr) and not alloc_inside and a.rank > 0
+            if alloc_inside:
                 # The kernel ALLOCATEs this global itself: the host alias holds
-                # no data on entry (reading it would be UB).  The ``allocate``
-                # above gives the SDFG its buffer; the kernel fills it; the
-                # write-back assigns it to the host global on exit.
+                # no data on entry (reading it would be UB).  The allocate gives
+                # the SDFG its buffer; the kernel fills it; the write-back
+                # assigns it to the host global on exit.
+                if a.rank > 0:
+                    dims = ", ".join(a.shape) if a.shape else "1"
+                    body.append(f"    allocate({a.sdfg_name}({dims}))")
                 body.append(f"    ! {a.sdfg_name}: kernel-allocated, no copy-in "
                             f"(host alias unallocated on entry)")
+            elif deferred:
+                degen = ", ".join("1" for _ in range(a.rank))
+                body.append(f"    if ({_present(alias, is_ptr)}) then")
+                body.append(f"      {a.sdfg_name} = {alias}")
+                body.append(f"    else")
+                body.append(f"      allocate({a.sdfg_name}({degen}))  "
+                            f"! host unallocated (absent on no-op path)")
+                body.append(f"    end if")
             else:
+                # Static / explicit-shape array (always present) or a scalar
+                # module global.  Allocate to the SDFG arg's own concrete extent
+                # (``FrozenArg.shape``) -- NOT ``size(alias)``: the source can be
+                # a *scalar* module global the bridge lifted to a length-1 array,
+                # and ``size(scalar)`` is a hard Fortran error.
+                if a.rank > 0:
+                    dims = ", ".join(a.shape) if a.shape else "1"
+                    body.append(f"    allocate({a.sdfg_name}({dims}))")
                 body.append(f"    {a.sdfg_name} = {alias}")
 
     aos_args = _aos_module_args(frozen)
@@ -678,11 +741,15 @@ def build_wrapper_body(frozen: FrozenSignature,
             f"    dace_user_comm_size_err = dace_mpi_comm_size({_USER_COMM_SYMBOL_NAME}, dace_user_comm_size_buf)")
         body.append(f"    {_USER_COMM_SIZE_SYMBOL_NAME} = int(dace_user_comm_size_buf, c_long_long)")
 
-    sym_lines = _build_symbol_assigns(frozen, plan, outer_dummy_set, iface)
-    if sym_lines:
+    # Buffer-derived symbols: the EXTENT of a wrapper-allocated buffer
+    # (``becxx_k_d0 = size(becxx_k)``), valid only now that the allocates above
+    # have run.  Input-derived symbols were emitted before the allocates.
+    if late_syms or late_extra:
         body.append("")
-        body.append("    ! ----- Symbol population -----")
-        body.extend(sym_lines)
+        body.append("    ! ----- Symbol population (buffer-derived; after allocates) -----")
+        body.extend(late_syms)
+        for name, _ftype, rhs in late_extra:
+            body.append(f"    {name} = {rhs}")
     return "\n".join(body)
 
 
@@ -927,7 +994,32 @@ def assemble_module(iface: OriginalInterface, frozen: FrozenSignature, blocks: d
 # ---------------------------------------------------------------------------
 
 
-def _dim_spec(shape) -> str:
+def _shape_references_non_dummy(shape, dummy_set_lower: set) -> bool:
+    """True iff an explicit extent in ``shape`` names an identifier that is NOT
+    one of this wrapper's dummies.
+
+    A Fortran explicit-shape *dummy* bound may reference only other dummies (and
+    literals / intrinsics) -- NOT a local variable.  The binding localizes some
+    module globals (e.g. ICON/QE ``npol``, ``max_ibands``) as wrapper locals,
+    so a dummy whose extent uses one (``psi(lda*npol, max_ibands)``) is illegal:
+    gfortran rejects "Variable 'npol' cannot appear in the expression".  Such a
+    dummy is rendered assumed-size instead (the wrapper only ``c_loc``-s it, so
+    the declared extents are unused; see ``_dim_spec``).
+    """
+    for s in shape or ():
+        if not s or s == '?':
+            continue  # assumed-shape placeholder -- a separate, legal form
+        # Identifiers that are variable references (not ``name(`` calls).
+        for m in re.finditer(r"[A-Za-z_]\w*", s):
+            ident, end = m.group(0), m.end()
+            if end < len(s) and s[end] == '(':
+                continue  # intrinsic / function call, not a bound variable
+            if ident.lower() not in dummy_set_lower:
+                return True
+    return False
+
+
+def _dim_spec(shape, dummy_set_lower: set = None) -> str:
     """Render the dimension spec suffix for an outer dummy's
     declaration as a *postfix* shape (``name(d1,d2)``), not a
     ``dimension(...)`` attribute.  Postfix is the only form that
@@ -938,10 +1030,14 @@ def _dim_spec(shape) -> str:
 
     Assumed-shape dummies render the surviving ``?`` placeholders as
     ``:``; explicit extents pass through.  An empty shape leaves the
-    declaration as a scalar (no suffix).
+    declaration as a scalar (no suffix).  When ``dummy_set_lower`` is
+    given and an explicit extent references a non-dummy (an illegal
+    dummy bound), the whole array collapses to assumed-size ``(*)``.
     """
     if not shape:
         return ""
+    if dummy_set_lower is not None and _shape_references_non_dummy(shape, dummy_set_lower):
+        return "(*)"
     return f"({','.join(s if s != '?' else ':' for s in shape)})"
 
 
@@ -1210,6 +1306,61 @@ def _unsourced_array_args(frozen: FrozenSignature, iface: OriginalInterface,
             if a.kind == 'array' and getattr(a, 'rank', 0) > 0
             and a.sdfg_name not in declared
             and not getattr(a, 'aos_origin_struct', '')]
+
+
+def _extra_local_symbols(frozen: FrozenSignature, iface: OriginalInterface,
+                         plan: FlattenPlan):
+    """Symbols the SDFG call / binding-allocate shape-exprs reference that NO
+    existing decl path covers:
+
+    * (a) an unsourced SCALAR / symbol arg -- the VALUE of an absent
+      inlined-callee optional (QE ``run_on_gpu_``: ``run_on_gpu__present`` folds
+      to 0 but the value slot survives), not a wrapper dummy and not a free symbol.
+    * (b) a bare-identifier SHAPE symbol of a binding-allocated arg that is
+      neither a free symbol nor a dummy (``nks`` -- a ``klist`` module global used
+      only inside a scratch ``allocate``; ``qvan_init_nij`` -- a dim derived in an
+      inlined function, with no host source).
+
+    Returns ``(name, fortran_type, rhs)``: a module-origin symbol is sourced from
+    its ``__mod`` import; everything else degrades to a degenerate default (1 for a
+    dim, ``.false.``/0 for an absent scalar) -- valid because none is READ on the
+    no-op path.  (NOTE: the ASSIGNMENT ordering vs the binding-allocates that use
+    these is the separate symbol-population-hoist work; this only makes the wrapper
+    COMPILE by declaring + sourcing them.)
+    """
+    sources = effective_module_sources(frozen, iface)
+    outer = {a.name for a in iface.args}
+    flat = {f for e in plan.entries for f in e.recipe.flat_names}
+    declared = set(frozen.free_symbols) | outer | flat
+    # Every name with a wrapper-local / dummy decl already: array args (all reach
+    # a decl via flat / orphan / aos / unsourced), the orphan + aos SCALAR locals
+    # (rank-0 module globals like ``lmaxq`` -- declared ``target`` by the orphan
+    # path), the comm pgrid params.
+    declared |= {a.sdfg_name for a in frozen.args if a.kind == 'array'}
+    declared |= {a.sdfg_name for a, _m, _mem in _orphan_module_args(frozen, iface, plan)}
+    declared |= {a.sdfg_name for a in _aos_module_args(frozen)}
+    declared |= {a.sdfg_name for a in _unsourced_array_args(frozen, iface, plan)}
+    declared |= {_USER_COMM_SYMBOL_NAME, _USER_COMM_SIZE_SYMBOL_NAME}
+    ident = re.compile(r'^[A-Za-z_]\w*$')
+
+    def _rhs(name: str, dtype: str, is_dim: bool) -> str:
+        if name in sources:
+            alias = _module_symbol_alias(name)
+            return f"int({alias}, c_int)" if dtype != 'bool' else alias
+        return "1" if is_dim else _zero_literal(dtype)
+
+    out: dict = {}
+    # (a) unsourced scalar / symbol args
+    for a in frozen.args:
+        if a.kind in ('scalar', 'symbol') and a.sdfg_name not in declared:
+            out[a.sdfg_name] = (_fortran_c_value_type(a.dtype), _rhs(a.sdfg_name, a.dtype, False))
+    # (b) bare-identifier shape symbols of any arg
+    for a in frozen.args:
+        for s in (getattr(a, 'shape', ()) or ()):
+            s = str(s)
+            if ident.match(s) and s not in declared and s not in out:
+                out[s] = ("integer(c_int)", _rhs(s, 'int32', True))
+    return [(n, ft, rhs) for n, (ft, rhs) in out.items()]
 
 
 def _zero_literal(dtype: str) -> str:

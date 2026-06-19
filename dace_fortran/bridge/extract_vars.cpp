@@ -3201,6 +3201,16 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
         if (!origin.first.empty()) {
           v.module_origin_mod = origin.first;
           v.module_origin_name = origin.second;
+          // Storage class from the global's box kind, so the binding can guard a
+          // deferred-storage host (``allocated`` / ``associated``) and leave a
+          // static global's copy unconditional.
+          if (gop) {
+            if (auto bt = mlir::dyn_cast<fir::BoxType>(gop.getType())) {
+              mlir::Type inner = bt.getEleTy();
+              v.module_origin_pointer = mlir::isa<fir::PointerType>(inner);
+              v.module_origin_allocatable = mlir::isa<fir::HeapType>(inner);
+            }
+          }
         }
       };
       if (written) {

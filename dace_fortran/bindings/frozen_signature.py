@@ -87,6 +87,11 @@ class FrozenArg:
     global_alloc_inside: bool = False
     aos_struct_pointer: bool = False
     aos_member_pointer: bool = False
+    # Storage class of a module-origin global: a copy-in is guarded with
+    # ``allocated`` (allocatable) / ``associated`` (pointer) so an unallocated
+    # host is not read; both false = static global, copied unconditionally.
+    module_origin_allocatable: bool = False
+    module_origin_pointer: bool = False
 
     def to_dict(self) -> dict:
         """Serialise to a JSON-safe dict (``shape`` tuple becomes a list)."""

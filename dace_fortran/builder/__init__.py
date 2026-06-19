@@ -261,6 +261,13 @@ DEFAULT_PIPELINE = (
     # access; relying on alias semantics is unsafe under this pass).
     "hlfir-rewrite-pointer-assigns,"
     "hlfir-propagate-shapes,"
+    # SSA-version a straight-line reassigned scalar used as an array shape
+    # (``m=base*2; ALLOCATE(x(m)); m=m+3; ALLOCATE(y(m))`` -> x sizes from ``m``,
+    # y from ``m_2``, both immutable).  Without this both bind to the mutable
+    # ``m`` and a later whole-array op over x's shape runs off the end.  Refuses
+    # (clear error) when the reassignment is in a loop / branch.  Runs after
+    # inlining so all ALLOCATEs are straight-line in the entry function.
+    "hlfir-version-shape-scalars,"
     # Lift array-reducing intrinsics (sum/maxval/minval/product/any/all)
     # that appear as INLINE expression operands into a preceding
     # scalar-temp assign.  ``buildExpr`` can't render reductions in a
@@ -1316,6 +1323,8 @@ class SDFGBuilder:
                     global_alloc_inside=bool(getattr(v, 'global_alloc_inside', False)) if v is not None else False,
                     aos_struct_pointer=bool(getattr(v, 'aos_struct_pointer', False)) if v is not None else False,
                     aos_member_pointer=bool(getattr(v, 'aos_member_pointer', False)) if v is not None else False,
+                    module_origin_allocatable=bool(getattr(v, 'module_origin_allocatable', False)) if v is not None else False,
+                    module_origin_pointer=bool(getattr(v, 'module_origin_pointer', False)) if v is not None else False,
                 ))
         # Free symbols carrying module-global provenance: a scalar
         # module global the bridge lifted into a shape / bound symbol

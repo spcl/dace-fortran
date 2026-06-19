@@ -578,6 +578,8 @@ NB_MODULE(hlfir_bridge, m) {
       .def_ro("view_dim_map", &VarInfo::view_dim_map)
       .def_ro("module_origin_mod", &VarInfo::module_origin_mod)
       .def_ro("module_origin_name", &VarInfo::module_origin_name)
+      .def_ro("module_origin_allocatable", &VarInfo::module_origin_allocatable)
+      .def_ro("module_origin_pointer", &VarInfo::module_origin_pointer)
       .def_ro("bounds_remap_view", &VarInfo::bounds_remap_view)
       .def_ro("bounds_remap_source", &VarInfo::bounds_remap_source)
       .def_ro("bounds_remap_total_extent", &VarInfo::bounds_remap_total_extent)

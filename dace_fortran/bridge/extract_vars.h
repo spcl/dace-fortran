@@ -89,6 +89,14 @@ struct VarInfo {
   /// (those carry ``const_data`` instead).
   std::string module_origin_mod;
   std::string module_origin_name;
+  /// Storage class of the module-origin global (``fir.global`` box kind):
+  /// ``module_origin_allocatable`` for ``ALLOCATABLE``, ``module_origin_pointer``
+  /// for ``POINTER``, both false for a static / explicit-shape global.  A copy-in
+  /// binding guards a deferred-storage host with ``allocated`` / ``associated``
+  /// respectively so an unallocated host (a conditionally-used global, absent on
+  /// the kernel's no-op path) is not read; a static global is always present.
+  bool module_origin_allocatable = false;
+  bool module_origin_pointer = false;
   /// Fortran 2003 bounds-remapping pointer view metadata, populated when
   /// ``hlfir-mark-bounds-remap-views`` tagged this pointer's declare.
   /// ``bounds_remap_view`` is the gate; the other two fields are

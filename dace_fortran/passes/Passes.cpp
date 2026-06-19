@@ -31,6 +31,9 @@ void registerAllBridgePasses() {
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
     return createPropagateShapesPass();
   });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
+    return createVersionShapeScalarsPass();
+  });
   mlir::registerPass(
       []() -> std::unique_ptr<mlir::Pass> { return createInlineAllPass(); });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
