@@ -3032,6 +3032,31 @@ std::vector<ASTNode> extractAST(mlir::ModuleOp module,
       // (Phase H).  ``needsAllocatedTracker`` keys on the
       // declare's full uniq_name.
       if (!needsAllocatedTracker(op.getUniqName().str(), module)) return;
+      // A MODULE-GLOBAL allocatable that is READ via ``ALLOCATED(...)`` but
+      // never allocated in-kernel gets its allocation state from the CALLER
+      // (the caller allocates the host before the call).  Forcing the tracker
+      // to ``0`` here would make every ``ALLOCATED(g)`` read false regardless
+      // of the host, folding the kernel's branch.  Instead leave it a FREE
+      // input symbol: the binding sources it from the host's real
+      // ``allocated`` / ``associated`` (see ``_build_symbol_assigns``).  A
+      // module global the kernel DOES allocate itself (``global_alloc_inside``,
+      // e.g. QE ``coulomb_fac``) has an ALLOCATE site, so it keeps the ``0``
+      // init below.
+      {
+        llvm::StringRef u = op.getUniqName();
+        bool moduleScope = u.consume_front("_QM");
+        if (moduleScope) {
+          moduleScope = false;
+          for (char ch : u)
+            if (std::isupper(static_cast<unsigned char>(ch))) {
+              moduleScope = (ch == 'E');
+              break;
+            }
+        }
+        if (moduleScope &&
+            collectAllocSites(op.getUniqName().str(), module).empty())
+          return;
+      }
       allocNames.push_back(std::move(raw));
     });
     std::sort(allocNames.begin(), allocNames.end());

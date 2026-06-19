@@ -246,3 +246,6 @@ tests/icon/full/icon-model/
 
 # Local session planning scratch (not repo content)
 WORK_PACKAGES.md
+# ICON-O PPM vertical tracer flux kernel as a self-contained single TU,
+# built directly (no icon-model submodule).  See tests/ppm_vflux_test.py.
+!tests/ppm_vflux_single_tu.f90

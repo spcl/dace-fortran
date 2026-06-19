@@ -115,7 +115,15 @@ def correct_for_function_calls(ast: f03.Program):
 
         # TODO: Add ref.
         sc_type, _ = sc.children
-        sc_type_spec = analysis.find_real_ident_spec(sc_type.string, scope_spec, alias_map)
+        sc_type_spec = analysis.search_real_ident_spec(sc_type.string, scope_spec, alias_map)
+        if not sc_type_spec:
+            # An unresolved constructor / call name -- e.g. ICON's external
+            # ``p_mpi_wtime`` (from ``mo_mpi`` when its source is absent).
+            # Strict mode asserts as before; with external-USE tolerance on we
+            # leave the node untouched for reachability pruning to drop.
+            if not analysis.TOLERATE_EXTERNAL_USES:
+                raise AssertionError(f"cannot find {sc_type.string} / {scope_spec}")
+            continue
         sc_decl = alias_map[sc_type_spec]
         if isinstance(sc_decl, (f03.Function_Stmt, f03.Interface_Stmt, f03.Stmt_Function_Stmt)):
             # If the constructor's name resolves to a function, it's a function reference.

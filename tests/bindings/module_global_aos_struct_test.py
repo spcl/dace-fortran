@@ -23,7 +23,6 @@ from _util import have_flang
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
-
 # --- READ: out(:) += becxx(1)%k(:, jb), via an inlined callee ---------------
 _SRC_READ = """
 module bec_read_mod
@@ -91,8 +90,10 @@ end subroutine run_read_aos_ref
 
 def _compile_so(out_so, *sources, mod_dir, link_so=None):
     import subprocess
-    cmd = ["gfortran", "-shared", "-fPIC", "-O0", "-fno-fast-math", "-ffp-contract=off",
-           "-ffree-line-length-none", f"-J{mod_dir}"]
+    cmd = [
+        "gfortran", "-shared", "-fPIC", "-O0", "-fno-fast-math", "-ffp-contract=off", "-ffree-line-length-none",
+        f"-J{mod_dir}"
+    ]
     cmd += [str(s) for s in sources]
     cmd += ["-o", str(out_so)]
     if link_so is not None:
@@ -118,8 +119,7 @@ def _build_module(src, name, entry, tmp_path):
     so_path = Path(compiled._lib._library_filename)
     iface = build_auto_interface(sdfg._fortran_interface_raw, sdfg.name)
     binding = tmp_path / f"{name}_bindings.f90"
-    emit_bindings(sdfg._frozen_signature, iface, plan, str(binding),
-                  tuple(getattr(compiled, "_sig", None) or ()))
+    emit_bindings(sdfg._frozen_signature, iface, plan, str(binding), tuple(getattr(compiled, "_sig", None) or ()))
     return builder, sdfg, so_path, binding
 
 
@@ -170,8 +170,7 @@ def test_read_aos_module_global_e2e(tmp_path):
     if shutil.which("gfortran") is None:
         pytest.skip("gfortran required")
 
-    builder, _sdfg, so_path, binding = _build_module(
-        _SRC_READ, "read_aos", _ENTRY_READ, tmp_path)
+    builder, _sdfg, so_path, binding = _build_module(_SRC_READ, "read_aos", _ENTRY_READ, tmp_path)
 
     # The read-only AoS component must NOT be marked written (copy-in only).
     meta = _var_meta(builder, "becxx_k")
@@ -181,8 +180,7 @@ def test_read_aos_module_global_e2e(tmp_path):
     assert meta.is_written is False
     assert meta.global_alloc_inside is False
 
-    sdfg_lib, ref_lib = _link_pair(
-        _SRC_READ, "read_aos", _DRIVER_READ, _REF_DRIVER_READ, so_path, binding, tmp_path)
+    sdfg_lib, ref_lib = _link_pair(_SRC_READ, "read_aos", _DRIVER_READ, _REF_DRIVER_READ, so_path, binding, tmp_path)
 
     n, jb, nelem, k0, k1 = 5, 2, 3, 5, 4
     rng = np.random.default_rng(0)
@@ -191,8 +189,8 @@ def test_read_aos_module_global_e2e(tmp_path):
 
     def _run(fn):
         out = out0.copy(order="F")
-        fn(ctypes.c_int(n), ctypes.c_int(jb), ctypes.c_int(nelem), ctypes.c_int(k0),
-           ctypes.c_int(k1), kvals.ctypes.data_as(ctypes.c_void_p), out.ctypes.data_as(ctypes.c_void_p))
+        fn(ctypes.c_int(n), ctypes.c_int(jb), ctypes.c_int(nelem), ctypes.c_int(k0), ctypes.c_int(k1),
+           kvals.ctypes.data_as(ctypes.c_void_p), out.ctypes.data_as(ctypes.c_void_p))
         return out
 
     out_sdfg = _run(sdfg_lib.run_read_aos)
@@ -282,8 +280,7 @@ def test_write_aos_module_global_e2e(tmp_path):
     if shutil.which("gfortran") is None:
         pytest.skip("gfortran required")
 
-    builder, _sdfg, so_path, binding = _build_module(
-        _SRC_WRITE, "write_aos", _ENTRY_WRITE, tmp_path)
+    builder, _sdfg, so_path, binding = _build_module(_SRC_WRITE, "write_aos", _ENTRY_WRITE, tmp_path)
 
     # The store through the inlined dummy must surface as a written AoS arg.
     meta = _var_meta(builder, "becxx_k")
@@ -293,8 +290,8 @@ def test_write_aos_module_global_e2e(tmp_path):
     # The generated binding must emit the copy-OUT, not just a deallocate.
     assert "copy-out" in binding.read_text()
 
-    sdfg_lib, ref_lib = _link_pair(
-        _SRC_WRITE, "write_aos", _DRIVER_WRITE, _REF_DRIVER_WRITE, so_path, binding, tmp_path)
+    sdfg_lib, ref_lib = _link_pair(_SRC_WRITE, "write_aos", _DRIVER_WRITE, _REF_DRIVER_WRITE, so_path, binding,
+                                   tmp_path)
 
     n, jb, nelem, k0, k1 = 5, 2, 3, 5, 4
     rng = np.random.default_rng(1)
@@ -302,8 +299,8 @@ def test_write_aos_module_global_e2e(tmp_path):
 
     def _run(fn):
         kout = np.asfortranarray(np.zeros((k0, k1)))
-        fn(ctypes.c_int(n), ctypes.c_int(jb), ctypes.c_int(nelem), ctypes.c_int(k0),
-           ctypes.c_int(k1), src.ctypes.data_as(ctypes.c_void_p), kout.ctypes.data_as(ctypes.c_void_p))
+        fn(ctypes.c_int(n), ctypes.c_int(jb), ctypes.c_int(nelem), ctypes.c_int(k0), ctypes.c_int(k1),
+           src.ctypes.data_as(ctypes.c_void_p), kout.ctypes.data_as(ctypes.c_void_p))
         return kout
 
     k_sdfg = _run(sdfg_lib.run_write_aos)
@@ -382,8 +379,7 @@ def test_alloc_inside_module_global_e2e(tmp_path):
     if shutil.which("gfortran") is None:
         pytest.skip("gfortran required")
 
-    builder, _sdfg, so_path, binding = _build_module(
-        _SRC_ALLOC, "make_g", _ENTRY_ALLOC, tmp_path)
+    builder, _sdfg, so_path, binding = _build_module(_SRC_ALLOC, "make_g", _ENTRY_ALLOC, tmp_path)
 
     meta = _var_meta(builder, "gbuf")
     assert meta.intent == "inout"
@@ -395,8 +391,7 @@ def test_alloc_inside_module_global_e2e(tmp_path):
     assert "kernel-allocated, no copy-in" in text
     assert "gbuf__mod = gbuf" in text
 
-    sdfg_lib, ref_lib = _link_pair(
-        _SRC_ALLOC, "make_g", _DRIVER_ALLOC, _REF_DRIVER_ALLOC, so_path, binding, tmp_path)
+    sdfg_lib, ref_lib = _link_pair(_SRC_ALLOC, "make_g", _DRIVER_ALLOC, _REF_DRIVER_ALLOC, so_path, binding, tmp_path)
 
     n, val = 6, 2.5
 
@@ -409,3 +404,217 @@ def test_alloc_inside_module_global_e2e(tmp_path):
     g_ref = _run(ref_lib.run_make_g_ref)
     np.testing.assert_allclose(g_ref, val * np.arange(1, n + 1), rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(g_sdfg, g_ref, rtol=1e-12, atol=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# PRESENCE: a kernel that branches on ALLOCATED / ASSOCIATED of a module global.
+# Flang lowers both to the same box_addr/cmpi-ne shape, which the bridge folds
+# to a ``<g>_allocated`` FREE symbol (no in-kernel allocate to maintain it).
+# The binding must source that symbol from the REAL host
+# (``allocated``/``associated``) so a caller-unallocated global drives the
+# kernel's ABSENT branch: the defensive copy-in passes a degenerate DATA buffer
+# (which would otherwise look "present"), but the presence symbol must carry the
+# host's TRUE state.  Each test runs PRESENT (kernel uses the data) and ABSENT
+# (kernel takes the fallback) through the generated binding vs a plain reference.
+# ---------------------------------------------------------------------------
+_SRC_ALLOC_PRESENT = """
+module pres_alloc_mod
+  implicit none
+  real(8), allocatable :: gbuf(:)
+contains
+  subroutine sum_if_present(n, r)
+    integer, intent(in) :: n
+    real(8), intent(out) :: r
+    integer :: i
+    if (allocated(gbuf)) then
+      r = 0.0d0
+      do i = 1, n
+        r = r + gbuf(i)
+      end do
+    else
+      r = -1.0d0
+    end if
+  end subroutine sum_if_present
+end module pres_alloc_mod
+"""
+_ENTRY_ALLOC_PRESENT = "pres_alloc_mod::sum_if_present"
+
+_DRIVER_ALLOC_PRESENT = """
+subroutine run_alloc_present(n, present, nelem, vals, r) bind(c, name='run_alloc_present')
+  use iso_c_binding
+  use pres_alloc_mod, only: gbuf
+  use sum_if_present_dace_bindings, only: sum_if_present_dace, sum_if_present_dace_finalize
+  implicit none
+  integer(c_int), value :: n, present, nelem
+  real(c_double), intent(in) :: vals(nelem)
+  real(c_double), intent(out) :: r
+  if (allocated(gbuf)) deallocate(gbuf)
+  if (present /= 0) then
+    allocate(gbuf(nelem))
+    gbuf = vals
+  end if
+  call sum_if_present_dace(n, r)
+  call sum_if_present_dace_finalize()
+end subroutine run_alloc_present
+"""
+
+_REF_DRIVER_ALLOC_PRESENT = """
+subroutine run_alloc_present_ref(n, present, nelem, vals, r) bind(c, name='run_alloc_present_ref')
+  use iso_c_binding
+  use pres_alloc_mod, only: gbuf, sum_if_present
+  implicit none
+  integer(c_int), value :: n, present, nelem
+  real(c_double), intent(in) :: vals(nelem)
+  real(c_double), intent(out) :: r
+  if (allocated(gbuf)) deallocate(gbuf)
+  if (present /= 0) then
+    allocate(gbuf(nelem))
+    gbuf = vals
+  end if
+  call sum_if_present(n, r)
+end subroutine run_alloc_present_ref
+"""
+
+
+def test_allocated_module_global_presence_e2e(tmp_path):
+    """Kernel branches on ``ALLOCATED(gbuf)`` of an allocatable module global.
+    The binding must source ``gbuf_allocated`` from ``allocated(gbuf__mod)``;
+    an absent (caller-unallocated) host must drive the kernel's ``else`` branch
+    (``r = -1``) -- without host sourcing the symbol is uninitialised and the
+    branch is undefined."""
+    import ctypes
+    import shutil
+
+    import numpy as np
+
+    if shutil.which("gfortran") is None:
+        pytest.skip("gfortran required")
+
+    builder, _sdfg, so_path, binding = _build_module(_SRC_ALLOC_PRESENT, "sum_if_present", _ENTRY_ALLOC_PRESENT,
+                                                     tmp_path)
+
+    # The presence symbol is sourced from the REAL host, not left as a TODO.
+    text = binding.read_text()
+    assert "gbuf_allocated = int(merge(1, 0, allocated(" in text, \
+        f"presence symbol not sourced from host allocated():\n{text}"
+
+    sdfg_lib, ref_lib = _link_pair(_SRC_ALLOC_PRESENT, "sum_if_present", _DRIVER_ALLOC_PRESENT,
+                                   _REF_DRIVER_ALLOC_PRESENT, so_path, binding, tmp_path)
+
+    n, nelem = 3, 3
+    vals = np.asfortranarray(np.array([1.0, 2.0, 4.0]))
+
+    def _run(fn, present):
+        r = np.asfortranarray(np.array([0.0]))
+        fn(ctypes.c_int(n), ctypes.c_int(present), ctypes.c_int(nelem), vals.ctypes.data_as(ctypes.c_void_p),
+           r.ctypes.data_as(ctypes.c_void_p))
+        return r[0]
+
+    for present, expect in ((1, 7.0), (0, -1.0)):  # present -> sum=7; absent -> -1
+        r_ref = _run(ref_lib.run_alloc_present_ref, present)
+        r_sdfg = _run(sdfg_lib.run_alloc_present, present)
+        assert r_ref == expect, f"reference wrong for present={present}: {r_ref}"
+        assert r_sdfg == r_ref, f"SDFG-via-binding != reference for present={present}"
+
+
+_SRC_ASSOC_PRESENT = """
+module pres_ptr_mod
+  implicit none
+  real(8), dimension(:), pointer :: gptr => null()
+contains
+  subroutine sum_if_assoc(n, r)
+    integer, intent(in) :: n
+    real(8), intent(out) :: r
+    integer :: i
+    if (associated(gptr)) then
+      r = 0.0d0
+      do i = 1, n
+        r = r + gptr(i)
+      end do
+    else
+      r = -2.0d0
+    end if
+  end subroutine sum_if_assoc
+end module pres_ptr_mod
+"""
+_ENTRY_ASSOC_PRESENT = "pres_ptr_mod::sum_if_assoc"
+
+_DRIVER_ASSOC_PRESENT = """
+subroutine run_assoc_present(n, present, nelem, vals, r) bind(c, name='run_assoc_present')
+  use iso_c_binding
+  use pres_ptr_mod, only: gptr
+  use sum_if_assoc_dace_bindings, only: sum_if_assoc_dace, sum_if_assoc_dace_finalize
+  implicit none
+  integer(c_int), value :: n, present, nelem
+  real(c_double), intent(in) :: vals(nelem)
+  real(c_double), intent(out) :: r
+  if (associated(gptr)) then
+    deallocate(gptr)
+    nullify(gptr)
+  end if
+  if (present /= 0) then
+    allocate(gptr(nelem))
+    gptr = vals
+  end if
+  call sum_if_assoc_dace(n, r)
+  call sum_if_assoc_dace_finalize()
+end subroutine run_assoc_present
+"""
+
+_REF_DRIVER_ASSOC_PRESENT = """
+subroutine run_assoc_present_ref(n, present, nelem, vals, r) bind(c, name='run_assoc_present_ref')
+  use iso_c_binding
+  use pres_ptr_mod, only: gptr, sum_if_assoc
+  implicit none
+  integer(c_int), value :: n, present, nelem
+  real(c_double), intent(in) :: vals(nelem)
+  real(c_double), intent(out) :: r
+  if (associated(gptr)) then
+    deallocate(gptr)
+    nullify(gptr)
+  end if
+  if (present /= 0) then
+    allocate(gptr(nelem))
+    gptr = vals
+  end if
+  call sum_if_assoc(n, r)
+end subroutine run_assoc_present_ref
+"""
+
+
+def test_associated_pointer_module_global_presence_e2e(tmp_path):
+    """Kernel branches on ``ASSOCIATED(gptr)`` of a POINTER module global.  The
+    binding must source ``gptr_allocated`` from ``associated(gptr__mod)`` (the
+    pointer companion of ``allocated``); an unassociated host drives the kernel's
+    ``else`` branch (``r = -2``)."""
+    import ctypes
+    import shutil
+
+    import numpy as np
+
+    if shutil.which("gfortran") is None:
+        pytest.skip("gfortran required")
+
+    builder, _sdfg, so_path, binding = _build_module(_SRC_ASSOC_PRESENT, "sum_if_assoc", _ENTRY_ASSOC_PRESENT, tmp_path)
+
+    text = binding.read_text()
+    assert "gptr_allocated = int(merge(1, 0, associated(" in text, \
+        f"presence symbol not sourced from host associated():\n{text}"
+
+    sdfg_lib, ref_lib = _link_pair(_SRC_ASSOC_PRESENT, "sum_if_assoc", _DRIVER_ASSOC_PRESENT, _REF_DRIVER_ASSOC_PRESENT,
+                                   so_path, binding, tmp_path)
+
+    n, nelem = 3, 3
+    vals = np.asfortranarray(np.array([1.0, 2.0, 4.0]))
+
+    def _run(fn, present):
+        r = np.asfortranarray(np.array([0.0]))
+        fn(ctypes.c_int(n), ctypes.c_int(present), ctypes.c_int(nelem), vals.ctypes.data_as(ctypes.c_void_p),
+           r.ctypes.data_as(ctypes.c_void_p))
+        return r[0]
+
+    for present, expect in ((1, 7.0), (0, -2.0)):  # present -> sum=7; absent -> -2
+        r_ref = _run(ref_lib.run_assoc_present_ref, present)
+        r_sdfg = _run(sdfg_lib.run_assoc_present, present)
+        assert r_ref == expect, f"reference wrong for present={present}: {r_ref}"
+        assert r_sdfg == r_ref, f"SDFG-via-binding != reference for present={present}"

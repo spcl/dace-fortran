@@ -46,6 +46,10 @@ testing = [
     "pytest-xdist",
     "coverage",
     "numpy",
+    # numpy's f2py uses meson as its build backend on Python >= 3.12; the
+    # numerical-reference builds skip without it (``meson not available``).
+    "meson",
+    "ninja",
 ]
 linting = [
     "flake8",

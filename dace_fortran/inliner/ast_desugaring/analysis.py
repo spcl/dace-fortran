@@ -1,5 +1,6 @@
 # Copyright 2019-2025 ETH Zurich and the DaCe authors. All rights reserved.
 
+import contextlib
 import math
 import operator
 import sys
@@ -203,6 +204,31 @@ def identifier_specs(ast: f03.Program) -> types.SPEC_TABLE:
     return ident_map
 
 
+#: When True, :func:`alias_specs` does not assert on a ``USE`` of a module
+#: (or of a name from a module) that is absent from the parsed sources --
+#: it skips aliasing that import and leaves the name unresolved.  This lets
+#: the inliner ingest a kernel whose enclosing module ``USE``s an external
+#: library that has no Fortran source on the search path (ICON: ``netcdf``,
+#: ``mpi``, ``cdi`` ...): the import is left dangling and the reachability
+#: pruning then drops the (unused) procedures that referenced it.  Enabled
+#: only around the inliner pipeline (see
+#: :func:`dace_fortran.fparser_inliner.inline_to_ast`); default-off keeps the
+#: strict resolution the upstream desugaring tests rely on.
+TOLERATE_EXTERNAL_USES = False
+
+
+@contextlib.contextmanager
+def tolerate_external_uses(enabled: bool = True):
+    """Temporarily toggle :data:`TOLERATE_EXTERNAL_USES` (see its docstring)."""
+    global TOLERATE_EXTERNAL_USES
+    prev = TOLERATE_EXTERNAL_USES
+    TOLERATE_EXTERNAL_USES = enabled
+    try:
+        yield
+    finally:
+        TOLERATE_EXTERNAL_USES = prev
+
+
 def alias_specs(ast: f03.Program) -> types.SPEC_TABLE:
     """
     Builds a comprehensive map of all identifiers, resolving `USE` statements, `ONLY` clauses,
@@ -222,7 +248,13 @@ def alias_specs(ast: f03.Program) -> types.SPEC_TABLE:
         scope_spec = find_scope_spec(stmt)
         use_spec = scope_spec + (mod_name, )
 
-        assert mod_spec in ident_map, mod_spec
+        if mod_spec not in ident_map:
+            # An external module with no Fortran source on the search path
+            # (e.g. ICON's ``netcdf`` / ``mpi``).  When tolerating, leave its
+            # imports unresolved and let pruning drop the code that used them.
+            if TOLERATE_EXTERNAL_USES:
+                continue
+            assert mod_spec in ident_map, mod_spec
         # The module's name cannot be used as an identifier in this scope anymore, so just point to the module.
         alias_map[use_spec] = ident_map[mod_spec]
 
@@ -256,7 +288,13 @@ def alias_specs(ast: f03.Program) -> types.SPEC_TABLE:
                     # If there is an interface and a subroutine of the same name, the interface is selected.
                     tgt_spec = mod_spec + (INTERFACE_NAMESPACE, tgt)
                 # `tgt_spec` must have already been resolved if we have sorted the modules properly.
-                assert tgt_spec in alias_map, f"{src_spec} => {tgt_spec}"
+                if tgt_spec not in alias_map:
+                    # A specific name imported from a module that is present but
+                    # does not define it (e.g. a partial external/stub module).
+                    # Tolerate as above: leave it unresolved for pruning to drop.
+                    if TOLERATE_EXTERNAL_USES:
+                        continue
+                    assert tgt_spec in alias_map, f"{src_spec} => {tgt_spec}"
                 alias_map[src_spec] = alias_map[tgt_spec]
 
     for dt in walk(ast, f03.Derived_Type_Stmt):
@@ -281,7 +319,10 @@ def alias_specs(ast: f03.Program) -> types.SPEC_TABLE:
     return alias_map
 
 
-def search_real_ident_spec(ident: str, in_spec: types.SPEC, alias_map: types.SPEC_TABLE, node_types: Optional[Union[Base, tuple[Base]]] = None) -> Optional[types.SPEC]:
+def search_real_ident_spec(ident: str,
+                           in_spec: types.SPEC,
+                           alias_map: types.SPEC_TABLE,
+                           node_types: Optional[Union[Base, tuple[Base]]] = None) -> Optional[types.SPEC]:
     """
     Searches for the canonical (real) specifier for an identifier string within a given scope.
     It traverses up the scope hierarchy until the identifier is found in the alias map.
@@ -294,18 +335,23 @@ def search_real_ident_spec(ident: str, in_spec: types.SPEC, alias_map: types.SPE
     """
     k = in_spec + (ident, )
     if k in alias_map:
-        if (node_types is None) or isinstance(alias_map[k], node_types): # if type specified, only return if node matches desired type
+        if (node_types is None) or isinstance(
+                alias_map[k], node_types):  # if type specified, only return if node matches desired type
             return ident_spec(alias_map[k])
     k = in_spec + (INTERFACE_NAMESPACE, ident)
     if k in alias_map:
-        if (node_types is None) or isinstance(alias_map[k], node_types): # if type specified, only return if node matches desired type
+        if (node_types is None) or isinstance(
+                alias_map[k], node_types):  # if type specified, only return if node matches desired type
             return ident_spec(alias_map[k])
     if not in_spec:
         return None
     return search_real_ident_spec(ident, in_spec[:-1], alias_map)
 
 
-def find_real_ident_spec(ident: str, in_spec: types.SPEC, alias_map: types.SPEC_TABLE, node_types: Optional[Union[Base, tuple[Base]]] = None) -> types.SPEC:
+def find_real_ident_spec(ident: str,
+                         in_spec: types.SPEC,
+                         alias_map: types.SPEC_TABLE,
+                         node_types: Optional[Union[Base, tuple[Base]]] = None) -> types.SPEC:
     """
     A wrapper around `search_real_ident_spec` that asserts an identifier is always found.
 
@@ -794,7 +840,8 @@ def interface_specs(ast: f03.Program, alias_map: types.SPEC_TABLE) -> Dict[types
                 fns.append(utils.find_name_of_stmt(fn))
             elif isinstance(fn, f03.Procedure_Stmt):
                 fns.extend(nm.string for nm in walk(fn, f03.Name))
-        fn_specs = tuple(find_real_ident_spec(f, scope_spec, alias_map, (f03.Function_Stmt, f03.Subroutine_Stmt)) for f in fns)
+        fn_specs = tuple(
+            find_real_ident_spec(f, scope_spec, alias_map, (f03.Function_Stmt, f03.Subroutine_Stmt)) for f in fns)
         assert ifspec not in fn_specs
         iface_map[ifspec] = fn_specs
 

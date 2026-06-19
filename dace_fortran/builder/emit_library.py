@@ -374,10 +374,26 @@ def emit_libcall(builder, ctx, n, region):
         # plumb the flag onto the node so ``SpecializeMatMul`` passes
         # it through to ``Gemm(transA=True)`` and the BLAS call does
         # the transpose in-place.
+        #
+        # Configure ``transA`` / ``transB`` as the node's declared Properties
+        # AFTER a plain ``MatMul(name)`` construction -- NOT as ``__init__``
+        # keyword arguments.  The DaCe ``MatMul`` ABI varies (some builds expose
+        # only ``MatMul(name, location=...)``), so passing ``transA=`` raises
+        # ``MatMul.__init__() got an unexpected keyword argument 'transA'``.
+        # Assigning a declared Property is the ABI-stable, DaCe-compatible way;
+        # the connectors stay the canonical ``_a`` / ``_b`` / ``_c``.
         opts = getattr(n, 'options', None) or {}
-        node = cls(f"{spec.name}_{n.target}_{builder.nid()}",
-                   transA=bool(opts.get('transA', False)),
-                   transB=bool(opts.get('transB', False)))
+        tA = bool(opts.get('transA', False))
+        tB = bool(opts.get('transB', False))
+        node = cls(f"{spec.name}_{n.target}_{builder.nid()}")
+        if tA or tB:
+            if not (hasattr(type(node), 'transA') and hasattr(type(node), 'transB')):
+                raise RuntimeError("MATMUL(TRANSPOSE(...)) needs a DaCe MatMul exposing "
+                                   "transA/transB Properties (the transpose folds into the "
+                                   f"GEMM/GEMV call); the installed {type(node).__module__}."
+                                   f"{type(node).__name__} exposes none")
+            node.transA = tA
+            node.transB = tB
     else:
         node = cls(f"{spec.name}_{n.target}_{builder.nid()}")
     state.add_node(node)

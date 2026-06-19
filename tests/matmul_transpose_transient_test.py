@@ -137,3 +137,32 @@ end module
     sdfg(a=A, q=q, scalar=np.float64(2.0), res=res)
     expected = (A.T @ q) / 2.0
     np.testing.assert_allclose(res, expected)
+
+
+def test_matmul_transpose_libnode_is_dace_compatible(tmp_path):
+    """The emitted ``MATMUL(TRANSPOSE(A), q)`` library node must be DaCe-ABI
+    compatible: built via a plain ``MatMul(name)`` construction with ``transA``
+    set as the node's declared *Property* -- NOT passed as an ``__init__``
+    keyword argument, which raised ``MatMul.__init__() got an unexpected keyword
+    argument 'transA'`` on a DaCe build whose ``MatMul`` constructor does not
+    take it.  Also pins the canonical ``_a`` / ``_b`` / ``_c`` connectors."""
+    src = """
+module m
+contains
+  subroutine mmt_node(a, q, tmp)
+    real(kind=8), intent(in) :: a(3, 3), q(3)
+    real(kind=8), intent(out) :: tmp(3)
+    tmp = MATMUL(TRANSPOSE(a), q)
+  end subroutine
+end module
+"""
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="mmt_node", entry="m::mmt_node").build()
+    matmuls = [n for n, _ in sdfg.all_nodes_recursive() if type(n).__name__ == "MatMul"]
+    assert len(matmuls) == 1, f"expected exactly one MatMul lib node, got {len(matmuls)}"
+    mm = matmuls[0]
+    # The transpose folded onto the node as its declared Property (A-side).
+    assert getattr(mm, "transA", False) is True, "transA must be set as a Property"
+    assert getattr(mm, "transB", False) is False
+    # Canonical DaCe matmul connector names.
+    assert set(mm.in_connectors) == {"_a", "_b"}, dict(mm.in_connectors)
+    assert set(mm.out_connectors) == {"_c"}, dict(mm.out_connectors)

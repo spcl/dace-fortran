@@ -24,7 +24,21 @@ concurrency:
 jobs:
   test-fortran:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
+    # Two runners from one definition (shared setup, no duplication):
+    #   * ``fast``  -- the routine sweep: every test EXCEPT ``mpi`` and
+    #                  ``long`` (uploads coverage).  Keeps PR feedback quick.
+    #   * ``heavy`` -- the second runner: the ``long`` tests (ICON built from
+    #                  source + the ICON-O fparser single-TU extractions) and
+    #                  the multi-rank ``mpi`` tests, run as SEPARATE steps.
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [fast, heavy]
+    name: test-fortran (${{ matrix.suite }})
     runs-on: ubuntu-24.04
+    # The heavy suite builds ICON from source and runs the ~9 GB-peak
+    # fparser ocean extractions; give it generous headroom.
+    timeout-minutes: ${{ matrix.suite == 'heavy' && 180 || 60 }}
     env:
       # Disable hwloc's GL/X11 backend so ``from mpi4py import MPI``
       # (MPI_Init -> hwloc topology) doesn't probe a (possibly absent /
@@ -90,7 +104,8 @@ jobs:
         rm -rf .dacecache tests/.dacecache
         python -m pip install --upgrade pip
         # nanobind is a CMake-configure-time requirement of the bridge;
-        # meson is the f2py backend on Python >=3.12 (numerical refs).
+        # meson is the f2py backend on Python >=3.12 (numerical refs) AND
+        # the build backend for the icon-model meson configure path.
         pip install nanobind numpy meson ninja
         pip install -e ".[testing]" pytest-xdist coverage
         # mpi4py (built against the openmpi installed above) drives the
@@ -102,25 +117,20 @@ jobs:
         # First access of a builder-backed symbol triggers the CMake build.
         python -c "import dace_fortran; dace_fortran.SDFGBuilder"
 
-    - name: Run Fortran frontend tests
+    # ----- fast runner: the routine sweep (no mpi, no long) -----
+    - name: Run Fortran frontend tests (fast sweep)
+      if: ${{ matrix.suite == 'fast' }}
       run: |
         export COVERAGE_RCFILE=`pwd`/.coveragerc
-        # Main xdist sweep, excluding the multi-rank ``mpi`` tests
-        # (they need mpirun, not an xdist worker).  ``--dist loadgroup``
-        # honours the ``xdist_group`` markers so all ICON-build tests
-        # land on ONE worker (ICON gets configured + built exactly
-        # once); ungrouped tests distribute normally.
-        pytest -n auto --dist loadgroup -m "not mpi" \
+        # Main xdist sweep, excluding the multi-rank ``mpi`` tests (they
+        # need mpirun, not an xdist worker) and the ``long`` tests
+        # (ICON-from-source builds + ICON-O fparser extractions -- run on
+        # the ``heavy`` runner below).  ``--dist loadgroup`` honours the
+        # ``xdist_group`` markers so grouped tests share one worker.
+        pytest -n auto --dist loadgroup -m "not mpi and not long" \
           --cov-report=xml --cov=dace_fortran --tb=short tests/
         coverage report || true
         coverage xml || true
-        # MPI tests: 4 ranks oversubscribed onto the runner's cores
-        # (GH runners have few slots, but the mpi tests are tiny).  4
-        # ranks is required so the non-default-communicator e2e
-        # (MPI_Comm_split by rank%2) actually runs -- it skips below 4;
-        # the ring tests run a ring of `size` and work at 4 too.
-        mpirun --oversubscribe -n 4 python -m pytest -m mpi \
-          -p no:cacheprovider --tb=short tests/
         reachable=0
         ping -W 2 -c 1 codecov.io || reachable=$?
         if [ $reachable -eq 0 ]; then
@@ -128,3 +138,27 @@ jobs:
         else
           echo "Codecov.io is unreachable"
         fi
+
+    # ----- heavy runner: long tests + mpi tests, run separately -----
+    - name: Run long tests (ICON-from-source + ICON-O fparser extractions)
+      if: ${{ matrix.suite == 'heavy' }}
+      run: |
+        # The ``long`` tests, excluding the multi-rank ``mpi`` ones (run in
+        # the next step under mpirun).  ``--dist loadgroup`` keeps each heavy
+        # family on ONE worker (ICON is configured + built exactly once via
+        # the ``icon_build`` group; the ICON-O fparser extractions share the
+        # ``ocean_fparser`` group and run one-at-a-time, each in its own
+        # memory-capped subprocess), so at most one of each runs concurrently.
+        pytest -n auto --dist loadgroup -m "long and not mpi" \
+          -p no:cacheprovider --tb=short tests/
+
+    - name: Run MPI tests (multi-rank, under mpirun)
+      if: ${{ matrix.suite == 'heavy' }}
+      run: |
+        # MPI tests: 4 ranks oversubscribed onto the runner's cores
+        # (GH runners have few slots, but the mpi tests are tiny).  4
+        # ranks is required so the non-default-communicator e2e
+        # (MPI_Comm_split by rank%2) actually runs -- it skips below 4;
+        # the ring tests run a ring of `size` and work at 4 too.
+        mpirun --oversubscribe -n 4 python -m pytest -m mpi \
+          -p no:cacheprovider --tb=short tests/

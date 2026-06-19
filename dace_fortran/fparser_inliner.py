@@ -36,6 +36,9 @@ that want to inspect / further-transform the tree before serialisation.
 """
 import argparse
 import logging
+import re
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple, Union
 
@@ -578,6 +581,65 @@ def restore_cross_module_uses(ast: f03.Program) -> f03.Program:
     return ast
 
 
+def _keep_external_noop_specs(ast: f03.Program, names: Iterable[str]) -> List[types.SPEC]:
+    """Resolve a caller-supplied list of *external* procedure names to the
+    ``make_noop`` specs that stub them.
+
+    A name matches a subprogram either exactly or as the generic it belongs to
+    -- ICON's generic interfaces expand to ``<generic>_<suffix>`` specifics
+    (``sync_patch_array`` -> ``sync_patch_array_3d_dp`` ...), so a single
+    ``sync_patch_array`` entry stubs the whole family.  Stubbing (emptying the
+    body) keeps the call site valid while dropping the procedure's internals --
+    e.g. the halo-exchange ``%exchange_data`` type-bound call that has no
+    Fortran source -- so they are never inlined.  The list is passed in by the
+    caller (not hardcoded here)."""
+    targets = {n.lower() for n in names}
+    if not targets:
+        return []
+    specs: List[types.SPEC] = []
+    for fn in walk(ast, (f03.Subroutine_Stmt, f03.Function_Stmt)):
+        spec = analysis.ident_spec(fn)
+        nm = spec[-1].lower()
+        if nm in targets or any(nm.startswith(t + "_") for t in targets):
+            specs.append(spec)
+    return specs
+
+
+#: ``/group/ obj, obj, ...`` segment of a ``NAMELIST`` statement.
+_NAMELIST_GROUP_RE = re.compile(r"/\s*(\w+)\s*/\s*([^/]+)")
+
+
+def _prune_namelists_to_declared(ast: f03.Program) -> None:
+    """Rewrite each surviving ``NAMELIST`` statement to reference only the
+    variables still declared after pruning; drop a namelist that loses all of
+    its objects.
+
+    A namelist is a supported construct (its READ lowers to an I/O node, and a
+    namelist variable is an ordinary variable populated by that read).  But
+    entity-level pruning legitimately drops the namelist parameters a kernel
+    does not use (a module declares hundreds of config variables across many
+    namelist groups; the kernel touches only a few).  Without this pass the
+    emitted TU would still *name* the dropped variables in their namelist
+    statements -- "No explicit type declared for ...".  Run AFTER pruning so
+    the surviving-declaration set is final; the namelists that retain a live
+    variable (e.g. ``/ocean_dynamics_nml/ n_zlev``) are kept intact."""
+    declared = {
+        nm.string.lower()
+        for ed in walk(ast, f03.Entity_Decl)
+        for nm in (next(iter(children_of_type(ed, f03.Name)), None), ) if nm is not None
+    }
+    for nml in list(walk(ast, f03.Namelist_Stmt)):
+        groups = []
+        for grp, objs in _NAMELIST_GROUP_RE.findall(str(nml)):
+            kept = [o.strip() for o in objs.split(",") if o.strip().lower() in declared]
+            if kept:
+                groups.append(f"/{grp}/ {', '.join(kept)}")
+        if not groups:
+            utils.remove_self(nml)
+        elif " ".join(groups) != str(nml).split("NAMELIST", 1)[-1].strip():
+            utils.replace_node(nml, f03.Namelist_Stmt(get_reader("NAMELIST " + " ".join(groups))))
+
+
 def create_fparser_ast(cfg: ParseConfig) -> f03.Program:
     """Parse the configured sources into one combined, lowercased fparser
     AST (the first stage of the inliner pipeline)."""
@@ -781,15 +843,100 @@ def _entry_to_spec(source: str, entry: Optional[str]) -> Optional[types.SPEC]:
     return _demangle_spec(_resolve_entry(source, entry))
 
 
+#: A standalone ``CONTIGUOUS :: a, b`` attribute statement.  fparser's f2008
+#: grammar does not accept it as a stand-alone declaration, so it aborts the
+#: whole file parse.  DaCe assumes contiguous storage, so the attribute is
+#: semantically inert -- :func:`_cpp_expand_one` comments these lines out (kept
+#: as comments to preserve line numbers) after preprocessing so the module
+#: stays parseable.
+_STANDALONE_CONTIGUOUS_RE = re.compile(r"(?im)^([ \t]*)CONTIGUOUS([ \t]*::.*)$")
+
+
+def _strip_unparseable_attrs(text: str) -> str:
+    """Comment out Fortran attribute statements that are inert under DaCe's
+    contiguous-storage assumption but that fparser cannot parse (currently
+    the standalone ``CONTIGUOUS :: ...`` statement ICON emits behind its
+    ``USE_CONTIGUOUS`` cpp guard)."""
+    return _STANDALONE_CONTIGUOUS_RE.sub(r"\1! CONTIGUOUS\2", text)
+
+
+def _cpp_expand_one(name: str, content: str, *, defines: List[str], include_dirs: List[Path], flang: str) -> str:
+    """Run the C preprocessor (via flang ``-cpp -E -P``) over one source's
+    text and return the expanded Fortran.
+
+    fparser parses standard Fortran and does *not* run cpp, so a source
+    that carries cpp ``#include`` directives (e.g. ICON's
+    ``#include "icon_definitions.inc"`` / the DSL macros in
+    ``iconfor_dsl_definitions.inc``) or ``#ifdef`` arms cannot be parsed
+    directly -- it raises before the inliner gets a chance to resolve the
+    ``USE`` graph.  Expanding cpp up front turns the source into pure
+    Fortran, mirroring the ``-cpp -U_OPENMP -U_OPENACC -I... -D...`` flags
+    flang gets in the regex/codebase compile path
+    (:data:`dace_fortran.flang_codebase` / ``emit_hlfir.py:328``) -- except
+    here flang only preprocesses (``-E``) instead of compiling.  ``-P``
+    suppresses ``# <line> "<file>"`` linemarkers, which fparser would also
+    reject.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        # Capital ``.F90`` makes cpp unambiguous; keep the basename so flang
+        # diagnostics name the right source.
+        stem = Path(name).stem or "src"
+        srcf = Path(td) / f"{stem}.F90"
+        srcf.write_text(content)
+        # ``#include "x.inc"`` resolves relative to the source dir first, then
+        # ``-I`` dirs.  The source's real directory (when ``name`` is a path)
+        # carries co-located includes, so add it to the search path too.
+        local = Path(name).parent
+        inc = ([local] if local.is_dir() else []) + list(include_dirs)
+        cmd = [flang, "-cpp", "-E", "-P", "-U_OPENMP", "-U_OPENACC"]
+        cmd += [f"-D{d}" for d in defines]
+        cmd += [f"-I{Path(d)}" for d in inc]
+        cmd += [str(srcf)]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise RuntimeError(f"cpp preprocessing failed for {name!r} (exit {proc.returncode}):\n"
+                               f"{proc.stderr.strip()}")
+        return _strip_unparseable_attrs(proc.stdout)
+
+
+def cpp_expand_sources(src_map: Dict[str, str],
+                       *,
+                       defines: Iterable[str] = (),
+                       include_dirs: Iterable[Union[str, Path]] = (),
+                       flang: str = "flang-new-21") -> Dict[str, str]:
+    """Preprocess every source in a ``{name: content}`` map through the C
+    preprocessor and return the expanded map.
+
+    This is the cpp pre-pass that lets :func:`inline_to_single_tu` /
+    :func:`inline_to_ast` ingest real ICON sources (which ``#include`` the
+    DSL macro headers) -- pass ``expand_cpp=True`` to those entry points to
+    apply it automatically.  ``defines`` selects ``#ifdef`` arms (e.g. the
+    ``__LVECTOR__`` cpp twin); ``include_dirs`` must contain the directory
+    holding the ``.inc`` headers (ICON: ``src/include``).
+    """
+    defs = list(defines)
+    incs = [Path(d) for d in include_dirs]
+    return {
+        name: _cpp_expand_one(name, content, defines=defs, include_dirs=incs, flang=flang)
+        for name, content in src_map.items()
+    }
+
+
 def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
                   entry: Optional[str] = None,
                   *,
+                  expand_cpp: bool = False,
+                  defines: Iterable[str] = (),
+                  include_dirs: Iterable[Union[str, Path]] = (),
+                  flang: str = "flang-new-21",
                   make_noop: Union[None, types.SPEC, List[types.SPEC]] = None,
+                  keep_external: Iterable[str] = (),
                   consolidate_global_data: bool = False,
                   rename_uniquely: bool = False,
                   do_not_prune_type_components: bool = False,
                   checkpoint_dir: Union[None, str, Path] = None,
                   include_builtins: bool = True,
+                  tolerate_external_uses: bool = False,
                   optimize: bool = True) -> f03.Program:
     """Run the full inliner pipeline and return the combined fparser AST.
 
@@ -798,11 +945,27 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
     sources).  ``entry`` selects the root procedure (and thus what is kept
     by pruning); ``None`` keeps every top-level subprogram.
 
+    ``keep_external`` is a caller-supplied list of procedure names to treat as
+    external -- never inlined.  Each name (and its generic-interface specifics,
+    e.g. ``sync_patch_array`` -> ``sync_patch_array_3d_dp``) is stubbed to an
+    empty body, so its internals (the halo-exchange ``%exchange_data``
+    type-bound call, MPI, I/O) never enter the TU.  The list is passed in by
+    the caller so nothing ICON-specific is hardcoded in the inliner.
+
+    ``tolerate_external_uses`` lets the pipeline ingest a kernel whose
+    enclosing module ``USE``s an external library with no Fortran source on
+    the search path (ICON: ``netcdf`` / ``mpi`` / ``cdi``): such imports are
+    left unresolved and the reachability pruning drops the procedures that
+    referenced them (see
+    :data:`dace_fortran.inliner.ast_desugaring.analysis.TOLERATE_EXTERNAL_USES`).
+
     ``optimize=False`` skips the constant-propagation / branch-pruning
     optimization passes (see :func:`run_fparser_transformations`) -- used by
     the HLFIR build-path merge, which only needs a valid inlined single TU.
     """
     src_map = _normalize_sources(sources)
+    if expand_cpp:
+        src_map = cpp_expand_sources(src_map, defines=defines, include_dirs=include_dirs, flang=flang)
     spec = _entry_to_spec(_concat_sources(src_map), entry)
     cfg = ParseConfig(
         sources=dict(src_map),
@@ -815,8 +978,16 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
     )
     if include_builtins:
         cfg.sources.setdefault("_builtins.f90", BUILTINS)
-    ast = create_fparser_ast(cfg)
-    ast = run_fparser_transformations(ast, cfg, optimize=optimize)
+    with analysis.tolerate_external_uses(tolerate_external_uses):
+        ast = create_fparser_ast(cfg)
+        if keep_external:
+            # Stub the caller's external procedures (and their generic
+            # specifics) BEFORE the transformations inline them.
+            cfg.make_noop = list(cfg.make_noop or []) + _keep_external_noop_specs(ast, keep_external)
+        ast = run_fparser_transformations(ast, cfg, optimize=optimize)
+        # NAMELIST statements survive pruning but may name variables pruning
+        # dropped; rewrite them to the surviving declarations (or drop empties).
+        _prune_namelists_to_declared(ast)
     assert ast.children, "Nothing remains in this AST after pruning."
     return ast
 
@@ -827,12 +998,18 @@ def inline_to_single_tu(sources: Union[Dict[str, str], Iterable[Union[str, Path]
                         output: Union[None, str, Path] = None,
                         out_dir: Union[None, str, Path] = None,
                         name: str = "inlined",
+                        expand_cpp: bool = False,
+                        defines: Iterable[str] = (),
+                        include_dirs: Iterable[Union[str, Path]] = (),
+                        flang: str = "flang-new-21",
                         make_noop: Union[None, types.SPEC, List[types.SPEC]] = None,
+                        keep_external: Iterable[str] = (),
                         consolidate_global_data: bool = False,
                         rename_uniquely: bool = False,
                         do_not_prune_type_components: bool = False,
                         checkpoint_dir: Union[None, str, Path] = None,
-                        include_builtins: bool = True) -> Path:
+                        include_builtins: bool = True,
+                        tolerate_external_uses: bool = False) -> Path:
     """Inline a multi-file Fortran project into ONE self-contained ``.f90``
     and return the path to it.
 
@@ -865,12 +1042,18 @@ def inline_to_single_tu(sources: Union[Dict[str, str], Iterable[Union[str, Path]
     """
     ast = inline_to_ast(sources,
                         entry,
+                        expand_cpp=expand_cpp,
+                        defines=defines,
+                        include_dirs=include_dirs,
+                        flang=flang,
                         make_noop=make_noop,
+                        keep_external=keep_external,
                         consolidate_global_data=consolidate_global_data,
                         rename_uniquely=rename_uniquely,
                         do_not_prune_type_components=do_not_prune_type_components,
                         checkpoint_dir=checkpoint_dir,
-                        include_builtins=include_builtins)
+                        include_builtins=include_builtins,
+                        tolerate_external_uses=tolerate_external_uses)
     f90 = ast.tofortran()
 
     if output is not None:
