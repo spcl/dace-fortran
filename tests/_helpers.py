@@ -31,6 +31,18 @@ import pytest
 #: never the SDFG build or the numerical comparison.
 _F2PY_BUILD_ATTEMPTS = 3
 
+#: A *successful* (rc=0) f2py build can still emit an extension that is
+#: missing the requested routine: under the same swap-thrash pressure that
+#: causes the ENOMEM fork failures above, crackfortran can drop a routine
+#: (in practice the most complex signature -- e.g. a ``DIMENSION(n, lev+1)``
+#: dummy) yet f2py still exits 0 with an importable, *incomplete* module.
+#: That surfaces much later as a cryptic ``AttributeError: module '<m>' has
+#: no attribute '<sub>'`` in the calling test -- a flake indistinguishable
+#: from a real bug.  Detect it at import time and rebuild under a FRESH
+#: extension name (re-importing a same-named CPython extension in one
+#: process is the f2py-teardown SIGABRT hazard) within this budget.
+_F2PY_IMPORT_ATTEMPTS = 3
+
 
 def f2py_build_with_retry(cmd, *, cwd, mod_name, env=None):
     """Run an ``f2py -c`` build *command* with bounded retry on transient
@@ -50,15 +62,59 @@ def f2py_build_with_retry(cmd, *, cwd, mod_name, env=None):
         if proc.returncode == 0:
             return
         if attempt == _F2PY_BUILD_ATTEMPTS:
-            raise RuntimeError(
-                f"f2py reference build for {mod_name!r} failed after "
-                f"{_F2PY_BUILD_ATTEMPTS} attempts (rc={proc.returncode}).\n"
-                f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}")
+            raise RuntimeError(f"f2py reference build for {mod_name!r} failed after "
+                               f"{_F2PY_BUILD_ATTEMPTS} attempts (rc={proc.returncode}).\n"
+                               f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}")
         # Drop any half-written extension and back off so the resource
         # spike (swap thrash / fork ENOMEM) can clear before retrying.
         for stale in cwd.glob(f"{mod_name}*.so"):
             stale.unlink()
         time.sleep(2 * attempt)
+
+
+def f2py_build_and_import(src_file, *, out_dir, mod_name, only=None, extra_args=(), env=None):
+    """Build ``src_file`` via ``numpy.f2py -c`` and import the resulting
+    extension, returning the imported module.
+
+    Hardens the reference build against two distinct heavy-parallel-load
+    failure modes, neither of which is a real source error:
+
+    * transient ``fork``/``exec`` ENOMEM (rc != 0) -- handled per-build by
+      :func:`f2py_build_with_retry`; and
+    * an rc=0 but *incomplete* module that is missing the routine(s) named
+      in ``only`` (see ``_F2PY_IMPORT_ATTEMPTS``) -- detected here and
+      rebuilt under a fresh extension name.
+
+    ``only`` is the tuple of routine names f2py should wrap (and that this
+    function then verifies are present on the imported module); ``extra_args``
+    are invariant f2py flags (e.g. ``--f90flags=...``) carried on every
+    attempt.  A genuinely un-wrappable routine fails every attempt and raises
+    a clear ``RuntimeError`` naming the missing routine and what *was*
+    wrapped, instead of leaking an ``AttributeError`` into the caller.
+    """
+    out_dir = Path(out_dir)
+    base = [sys.executable, "-m", "numpy.f2py", "-c", str(src_file)]
+    only_args = ["only:", *only, ":"] if only else []
+    if str(out_dir) not in sys.path:
+        sys.path.insert(0, str(out_dir))
+    expected = tuple(only) if only else ()
+    incomplete = None
+    for attempt in range(1, _F2PY_IMPORT_ATTEMPTS + 1):
+        ext_name = mod_name if attempt == 1 else f"{mod_name}_r{attempt}"
+        cmd = [*base, "-m", ext_name, "--quiet", *extra_args, *only_args]
+        f2py_build_with_retry(cmd, cwd=out_dir, mod_name=ext_name, env=env)
+        __import__(ext_name)
+        mod = sys.modules[ext_name]
+        missing = [s for s in expected if not hasattr(mod, s)]
+        if not missing:
+            return mod
+        wrapped = sorted(n for n in vars(mod) if not n.startswith("_"))
+        incomplete = (ext_name, missing, wrapped)
+        for stale in out_dir.glob(f"{ext_name}*.so"):
+            stale.unlink()
+    raise RuntimeError(f"f2py reference {mod_name!r} built (rc=0) but is missing requested "
+                       f"routine(s) {incomplete[1]} after {_F2PY_IMPORT_ATTEMPTS} attempts; "
+                       f"wrapped names = {incomplete[2]}")
 
 
 def f2py(src_text: str, out_dir: Path, mod_name: str):
@@ -73,13 +129,7 @@ def f2py(src_text: str, out_dir: Path, mod_name: str):
     out_dir.mkdir(parents=True, exist_ok=True)
     src_file = out_dir / f"{mod_name}.f90"
     src_file.write_text(src_text)
-    cmd = [sys.executable, "-m", "numpy.f2py", "-c",
-           str(src_file), "-m", mod_name, "--quiet"]
-    f2py_build_with_retry(cmd, cwd=out_dir, mod_name=mod_name)
-    if str(out_dir) not in sys.path:
-        sys.path.insert(0, str(out_dir))
-    __import__(mod_name)
-    return sys.modules[mod_name]
+    return f2py_build_and_import(src_file, out_dir=out_dir, mod_name=mod_name)
 
 
 def sdfg_call_args(sdfg, int_values: dict) -> dict:

@@ -159,26 +159,26 @@ def f2py_compile(
         src_file.write_text(src_text)
     else:
         src_file = src
-    cmd = [sys.executable, "-m", "numpy.f2py", "-c", str(src_file), "-m", mod_name, "--quiet"]
-    if extra_f90flags:
-        cmd.append(f"--f90flags={extra_f90flags}")
-    if only:
-        # f2py's filter form is ``only: name1 name2 :`` as trailing positional args.
-        cmd += ["only:", *only, ":"]
+    extra_args = [f"--f90flags={extra_f90flags}"] if extra_f90flags else []
     # numpy's f2py meson backend (Python>=3.12) ignores ``--f90flags``;
     # meson reads ``FFLAGS`` for the Fortran compiler's default args.
     # f2py emits a single-line ``SUBROUTINE foo(<many args>)`` that
     # exceeds the 132-col free-form limit on gfortran <=13, so lift the
     # cap there (append, don't clobber a caller's FFLAGS).
     env = {**os.environ, "FFLAGS": (os.environ.get("FFLAGS", "") + " -ffree-line-length-none").strip()}
-    # Retry the reference build on transient ENOMEM (swap-thrash fork failures
-    # under heavy parallel load); shared single-source retry policy in _helpers.
-    from _helpers import f2py_build_with_retry
-    f2py_build_with_retry(cmd, cwd=out_dir, mod_name=mod_name, env=env)
-    if str(out_dir) not in sys.path:
-        sys.path.insert(0, str(out_dir))
-    __import__(mod_name)
-    return sys.modules[mod_name]
+    # Build + import via the shared single-source policy in _helpers: retries
+    # the reference build on transient ENOMEM (swap-thrash fork failures under
+    # heavy parallel load) AND rebuilds under a fresh extension name when an
+    # rc=0 build emits a module missing the requested ``only`` routine (the
+    # crackfortran-dropped-routine flake that surfaced ``flux_ref`` missing
+    # ``outer_flux`` under ``-n auto``).
+    from _helpers import f2py_build_and_import
+    return f2py_build_and_import(src_file,
+                                 out_dir=out_dir,
+                                 mod_name=mod_name,
+                                 only=only,
+                                 extra_args=extra_args,
+                                 env=env)
 
 
 def compile_to_hlfir(source: str,
@@ -378,9 +378,8 @@ def build_on_root(comm, build_fn, *, root: int = 0, broadcast: bool = True):
     else:
         error = comm.bcast(error, root=root)
     if error is not None:
-        raise RuntimeError(
-            f"MPI build on rank {root} failed; all ranks abort to avoid a "
-            f"collective deadlock. Rank {root} traceback:\n{error}")
+        raise RuntimeError(f"MPI build on rank {root} failed; all ranks abort to avoid a "
+                           f"collective deadlock. Rank {root} traceback:\n{error}")
     return result
 
 
