@@ -883,15 +883,14 @@ class SDFGBuilder:
         return sdfg
 
     def _zero_init_unwritten_transients(self, sdfg) -> None:
-        """Mark ``setzero=True`` on every read of a transient that is never
-        written anywhere in the SDFG.
+        """Explicitly zero-initialise every transient that is read but never
+        written anywhere in the SDFG, via a dedicated entry state.
 
         The SDFG validator warns "Use of uninitialized transient" for any
         transient access node with no incoming edge (``in_degree == 0``)
-        that is read (``out_degree > 0``) unless the node carries
-        ``setzero``.  In bridge-generated SDFGs the producer-less read-only
-        transients are precisely the externally-modelled / default-init
-        data:
+        that is read (``out_degree > 0``).  In bridge-generated SDFGs the
+        producer-less read-only transients are precisely the externally-
+        modelled / default-init data:
 
           * ``g_<struct>_<member>`` companions for MODULE-LEVEL struct
             globals (minted by ``hlfir-flatten-structs``; the data is the
@@ -900,37 +899,111 @@ class SDFGBuilder:
 
         A genuine local-scalar transient is always WRITTEN before it is read
         (it holds a computed value), so it has an in-edge and is untouched
-        here.  Marking the producer-less ones ``setzero`` gives a
-        deterministic zero allocation -- matching Fortran's default-init of
-        an untouched module global -- and removes the spurious warning
-        without weakening the check for true read-before-write locals.
+        here.  The producer-less ones model Fortran's default-init of an
+        untouched module global, so a deterministic zero is the correct
+        value.
+
+        Design: rather than flip the ``AccessNode.setzero`` allocation flag
+        (which only zeroes when that node happens to BE the array's
+        allocation site -- unreliable for a transient read across several
+        states or from inside a loop body, and easy to silently skip), emit
+        an EXPLICIT zero store into each such transient in a single entry
+        state placed before the current start block.  The validator walks
+        states DFS from the start block, so the entry-state write registers
+        the transient as initialised before any read is checked (silencing
+        the warning) AND the value is provably zero at every read.
         """
+        from dace import nodes as dace_nodes
+        from dace import data as dace_data
         # A transient is "written" iff some access node for it has an
         # incoming edge in any state.  Collect the written set first so a
         # transient written in a LATER state than its first read is not
         # mistaken for producer-less.
-        from dace import nodes as dace_nodes
-        from dace import data as dace_data
         written = set()
         for state in sdfg.states():
             for node in state.nodes():
                 if isinstance(node, dace_nodes.AccessNode) and state.in_degree(node) > 0:
                     written.add(node.data)
+        # Arrays whose element was frozen into a value-symbol must stay
+        # readable as their seeded value -- zeroing them would corrupt the
+        # symbol.  (They are normally kwargs / baked constants, but guard.)
+        value_symbol_arrays = {arr for arr, _ in (getattr(self, "_value_symbol_provenance", None) or {}).values()}
+        targets = {}  # name -> descriptor, deduplicated across states
+        read_nodes = {}  # name -> list of producer-less read AccessNodes
         for state in sdfg.states():
             for node in state.nodes():
                 if not isinstance(node, dace_nodes.AccessNode):
                     continue
-                desc = sdfg.arrays.get(node.data)
+                name = node.data
+                desc = sdfg.arrays.get(name)
                 if desc is None or not getattr(desc, 'transient', False):
                     continue
-                # Views / References / Streams carry their own
-                # initialisation semantics in the validator -- leave them.
+                # Views / References / Streams carry their own init
+                # semantics in the validator -- leave them.
                 if isinstance(desc, (dace_data.View, dace_data.Reference, dace_data.Stream)):
                     continue
-                # Only producer-less reads (never written anywhere, read here).
-                if node.data in written or state.out_degree(node) == 0:
+                # Baked constants already hold their data (and are exempt from
+                # the warning); writing zero would clobber them.
+                if name in sdfg.constants_prop or name in value_symbol_arrays:
                     continue
-                node.setzero = True
+                # Only producer-less reads (never written anywhere, read here).
+                if name in written or state.out_degree(node) == 0:
+                    continue
+                targets[name] = desc
+                read_nodes.setdefault(name, []).append(node)
+        if not targets:
+            return
+        init_state = None
+        for name, desc in targets.items():
+            # A statically zero-sized transient (a ``dimension(0)`` empty
+            # array, e.g. the source of ``MINVAL`` over an empty set) has no
+            # element to store: an explicit init map would be a 0:0 no-op
+            # (and trip DaCe's empty-range warning).  ``setzero`` is trivially
+            # correct there -- there is no data either way -- so use it to keep
+            # the validator quiet without an empty map.
+            if self._static_zero_size(desc):
+                for node in read_nodes[name]:
+                    node.setzero = True
+                continue
+            if init_state is None:
+                init_state = sdfg.add_state_before(sdfg.start_state, "init_unwritten_globals", is_start_block=True)
+            self._zero_init_transient(init_state, name, desc)
+
+    @staticmethod
+    def _static_zero_size(desc) -> bool:
+        """True iff ``desc`` has a statically zero extent in some dimension
+        (a ``dimension(0)`` empty array), so it holds no elements to init."""
+        import dace
+        for ext in getattr(desc, 'shape', ()):  # symbolic extents -> not static-zero
+            try:
+                if int(dace.symbolic.pystr_to_symbolic(ext)) == 0:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
+    def _zero_init_transient(self, state, name, desc) -> None:
+        """Emit an explicit zero store into transient ``name`` in ``state``.
+
+        A scalar gets a single ``_out = 0`` tasklet; an array gets a mapped
+        tasklet writing zero over its full (possibly symbolic) shape.
+        """
+        from dace import Memlet
+        from dace import data as dace_data
+        if isinstance(desc, dace_data.Scalar):
+            wnode = state.add_access(name)
+            tasklet = state.add_tasklet(f"zinit_{name}", set(), {"_out"}, "_out = 0")
+            state.add_edge(tasklet, "_out", wnode, None, Memlet(data=name, subset="0"))
+            return
+        ranges = {f"__zi{d}": f"0:{ext}" for d, ext in enumerate(desc.shape)}
+        state.add_mapped_tasklet(
+            name=f"zinit_{name}",
+            map_ranges=ranges,
+            inputs={},
+            code="_out = 0",
+            outputs={"_out": Memlet(data=name, subset=", ".join(ranges))},
+            external_edges=True,
+        )
 
     def _register_constants(self, sdfg: SDFG):
         """Attach Flang's constant-pool data to the SDFG.

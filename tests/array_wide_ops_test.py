@@ -342,20 +342,23 @@ end subroutine
 
 
 # --------------------------------------------------------------------------
-# Known gap: a library op feeding ANOTHER library op (matmul -> reduction)
+# A library op feeding ANOTHER library op (general composition matrix).
+#
+# An array-result library op's result has no Fortran-source name, so a
+# consuming library op (reduction or non-fusing linalg) would resolve to an
+# empty source.  ``LiftReductionOperands`` materialises the inner op into a
+# named transient (``<scope>QQlift_linalg_N`` + ``hlfir.as_expr``) and
+# ``traceToDecl`` peels the as_expr, so EVERY library-feeding-library shape
+# works uniformly.  These pin the general design across the intrinsic family.
 # --------------------------------------------------------------------------
-@pytest.mark.xfail(reason="reduction directly over an array-result library op "
-                   "(SUM(MATMUL(a,b))) needs the matmul materialised into a "
-                   "named transient before the reduce; tracked as M2/array-"
-                   "result-linalg-lift. Library ops compose with ARITHMETIC in "
-                   "both directions (c+MATMUL, MATMUL(a+b,q)); only library-"
-                   "feeding-library is unsupported. Real code writes "
-                   "tmp=MATMUL(a,b); s=SUM(tmp).",
-                   strict=True)
 def test_inline_reduction_of_matmul(tmp_path):
     """``out = c + SUM(MATMUL(a, b))`` -- a reduction whose source is an
-    array-result library op.  The matmul result has no Fortran-source
-    name, so the reduce node's source resolves empty."""
+    array-result library op.  The matmul result has no Fortran-source name,
+    so the LiftReductionOperands pass materialises it into a named transient
+    (``<scope>QQlift_linalg_N``) via ``hlfir.assign <matmul> to <decl>`` +
+    ``hlfir.as_expr``; the reduce then reads that array (``traceToDecl``
+    peels the ``as_expr``), and the reduction itself lifts to a scalar temp
+    that the ``c + s`` broadcast consumes."""
     src = """
 module m
 contains
@@ -373,3 +376,135 @@ end module
     out = np.zeros(2, dtype=np.float64, order='F')
     sdfg(a=A, b=B, c=c, out=out)
     np.testing.assert_allclose(out, c + np.sum(A @ B))
+
+
+def test_inline_maxval_of_matmul(tmp_path):
+    """``out = MAXVAL(MATMUL(a, b))`` -- a different reduction (max) over an
+    array-result linalg op.  Same materialise-then-reduce path as ``SUM``."""
+    src = """
+module m
+contains
+  subroutine max_of_mm(a, b, out)
+    real(kind=8), intent(in) :: a(2, 2), b(2, 2)
+    real(kind=8), intent(out) :: out
+    out = maxval(matmul(a, b))
+  end subroutine
+end module
+"""
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="max_of_mm", entry="m::max_of_mm").build()
+    A = np.array([[1.0, 2.0], [3.0, 4.0]], order='F')
+    B = np.array([[5.0, 6.0], [7.0, 8.0]], order='F')
+    out = np.zeros(1, dtype=np.float64, order='F')
+    sdfg(a=A, b=B, out=out)
+    np.testing.assert_allclose(out[0], np.max(A @ B))
+
+
+def test_inline_product_of_matmul(tmp_path):
+    """``out = PRODUCT(MATMUL(a, b))`` -- reduction family completeness."""
+    src = """
+module m
+contains
+  subroutine prod_of_mm(a, b, out)
+    real(kind=8), intent(in) :: a(2, 2), b(2, 2)
+    real(kind=8), intent(out) :: out
+    out = product(matmul(a, b))
+  end subroutine
+end module
+"""
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="prod_of_mm", entry="m::prod_of_mm").build()
+    A = np.array([[1.0, 2.0], [3.0, 4.0]], order='F')
+    B = np.array([[5.0, 6.0], [7.0, 8.0]], order='F')
+    out = np.zeros(1, dtype=np.float64, order='F')
+    sdfg(a=A, b=B, out=out)
+    np.testing.assert_allclose(out[0], np.prod(A @ B))
+
+
+def test_inline_matmul_of_matmul(tmp_path):
+    """``out = MATMUL(MATMUL(a, b), c)`` -- LINALG over LINALG (non-fusing).
+    The inner matmul materialises into a named transient that the OUTER
+    matmul (the whole-RHS libcall) reads as its first operand."""
+    src = """
+module m
+contains
+  subroutine mm_of_mm(a, b, c, out)
+    real(kind=8), intent(in) :: a(2, 2), b(2, 2), c(2, 2)
+    real(kind=8), intent(out) :: out(2, 2)
+    out = matmul(matmul(a, b), c)
+  end subroutine
+end module
+"""
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="mm_of_mm", entry="m::mm_of_mm").build()
+    A = np.array([[1.0, 2.0], [3.0, 4.0]], order='F')
+    B = np.array([[5.0, 6.0], [7.0, 8.0]], order='F')
+    C = np.array([[2.0, 0.0], [1.0, 3.0]], order='F')
+    out = np.zeros((2, 2), dtype=np.float64, order='F')
+    sdfg(a=A, b=B, c=C, out=out)
+    np.testing.assert_allclose(out, (A @ B) @ C)
+
+
+def test_inline_dot_product_of_matmul(tmp_path):
+    """``out = DOT_PRODUCT(MATMUL(a, v), w)`` -- a scalar-result library op
+    (dot_product) whose first operand is an array-result matmul."""
+    src = """
+module m
+contains
+  subroutine dot_of_mv(a, v, w, out)
+    real(kind=8), intent(in) :: a(2, 2), v(2), w(2)
+    real(kind=8), intent(out) :: out
+    out = dot_product(matmul(a, v), w)
+  end subroutine
+end module
+"""
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="dot_of_mv", entry="m::dot_of_mv").build()
+    A = np.array([[1.0, 2.0], [3.0, 4.0]], order='F')
+    v = np.array([5.0, 6.0], order='F')
+    w = np.array([7.0, 8.0], order='F')
+    out = np.zeros(1, dtype=np.float64, order='F')
+    sdfg(a=A, v=v, w=w, out=out)
+    np.testing.assert_allclose(out[0], np.dot(A @ v, w))
+
+
+def test_inline_sum_of_matmul_transpose(tmp_path):
+    """``out = SUM(MATMUL(TRANSPOSE(a), b))`` -- the inner TRANSPOSE feeding
+    the MATMUL stays FUSED (single GEMM with the transpose flag, NOT
+    materialised), while the matmul result feeds the outer SUM, which DOES
+    materialise it.  Pins that the fusion exception coexists with the
+    general lift."""
+    src = """
+module m
+contains
+  subroutine sum_mmT(a, b, out)
+    real(kind=8), intent(in) :: a(2, 2), b(2, 2)
+    real(kind=8), intent(out) :: out
+    out = sum(matmul(transpose(a), b))
+  end subroutine
+end module
+"""
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="sum_mmT", entry="m::sum_mmT").build()
+    A = np.array([[1.0, 2.0], [3.0, 4.0]], order='F')
+    B = np.array([[5.0, 6.0], [7.0, 8.0]], order='F')
+    out = np.zeros(1, dtype=np.float64, order='F')
+    sdfg(a=A, b=B, out=out)
+    np.testing.assert_allclose(out[0], np.sum(A.T @ B))
+
+
+def test_inline_sum_of_dim_reduction(tmp_path):
+    """``out = SUM(MAXVAL(a, dim=1))`` -- a reduction over a DIM-reduction
+    (an array-result reduction).  The inner ``MAXVAL(a, dim=1)`` materialises
+    into a named transient that the outer ``SUM`` reduces."""
+    src = """
+module m
+contains
+  subroutine sum_maxdim(a, out)
+    real(kind=8), intent(in) :: a(2, 3)
+    real(kind=8), intent(out) :: out
+    out = sum(maxval(a, dim=1))
+  end subroutine
+end module
+"""
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="sum_maxdim", entry="m::sum_maxdim").build()
+    A = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], order='F')
+    out = np.zeros(1, dtype=np.float64, order='F')
+    sdfg(a=A, out=out)
+    # MAXVAL(a, dim=1) reduces the FIRST Fortran dim -> max over each column.
+    np.testing.assert_allclose(out[0], np.sum(np.max(A, axis=0)))

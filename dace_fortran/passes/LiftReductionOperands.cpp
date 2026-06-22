@@ -265,58 +265,67 @@ struct LiftReductionOperandsPass
     // collectNestedLiftable would not have collected it but the
     // safety check stays explicit).
     if (!isScalar) {
-      if (isLiftableLinalgOp(redOp)) {
-        // The existing ``hlfir.elemental + hlfir.apply <libcall>``
-        // materialisation in ``bridge/ast/control_flow.cpp:251+``
-        // already pre-emits a ``_libtmp_<gid>`` transient for any
-        // libcall-result the elemental's body reads.  Any matmul /
-        // transpose / dot_product whose consumers include
-        // ``hlfir.apply`` (inside an elemental) or
-        // ``hlfir.shape_of`` (the shape feed for the same elemental)
-        // is handled there -- DON'T loud-error.
-        //
-        // Skip the loud error when ANY user is one of the elemental-
-        // consumer indicators (apply / shape_of / consuming assign
-        // / liftable op for fusion).  Only fail when NONE of the
-        // users hint at an elemental / whole-assign / fusion path
-        // -- those are the truly unmodelled inline shapes (e.g.
-        // matmul fed directly to an arith op outside an elemental,
-        // which we haven't seen in any workload yet).
-        //
-        // Required because some Flang versions / pipeline configs
-        // lower ``2.0 - matmul(a, b)`` through op shapes that
-        // include intermediate ops (arith.subf wrapping the
-        // matmul without an explicit hlfir.elemental, etc.); the
-        // ANY-allowed gate keeps the pass from breaking those
-        // patterns where the downstream elemental machinery still
-        // does the right thing.
-        bool anyIndicator = false;
-        bool anyUnhandled = false;
-        for (auto *user : redOp->getResult(0).getUsers()) {
-          if (mlir::isa<hlfir::ApplyOp>(user) ||
-              mlir::isa<hlfir::ShapeOfOp>(user) ||
-              mlir::isa<hlfir::AssignOp>(user) || isLiftableOp(user)) {
-            anyIndicator = true;
-            continue;
-          }
-          if (user->getName().getStringRef() == "hlfir.destroy") continue;
-          anyUnhandled = true;
+      // GENERAL array-result lift.  A library op's array result is not a
+      // Fortran-source array, so any consumer that needs a NAMED array
+      // operand would otherwise resolve to an empty source.  Materialise the
+      // op once into ``<scope>QQlift_linalg_N`` + ``hlfir.as_expr`` (a real
+      // local transient) and let the consumer read it through the as_expr
+      // (``traceToDecl`` peels the as_expr back to the declare).  This makes
+      // ALL library-op-feeding-library-op compositions work uniformly:
+      //
+      //   SUM(MATMUL(a,b))            reduction over linalg
+      //   MAXVAL(MATMUL(a,b))         "
+      //   MATMUL(MATMUL(a,b), c)      linalg over linalg (non-fusing)
+      //   DOT_PRODUCT(MATMUL(a,b), v) "
+      //   SUM(MAXVAL(a, dim=1))       reduction over a dim-reduction
+      //
+      // Consumers that must NOT be lifted here:
+      //   * hlfir.apply / hlfir.shape_of  -- an enclosing hlfir.elemental's
+      //     body; control_flow.cpp's ``_libtmp_`` path already pre-emits a
+      //     transient for the libcall result it reads element-by-element.
+      //   * the GEMM transpose-flag fusion: a ``hlfir.transpose`` feeding a
+      //     ``hlfir.matmul`` / ``matmul_transpose`` is rendered as ONE GEMM
+      //     (with the transpose flag) by the libcall dispatcher.
+      //   * a consuming ``hlfir.assign`` (the op is already stored to a
+      //     named local) or ``hlfir.destroy`` (bufferization cleanup).
+      bool needsMaterialise = false;
+      bool anyArithInline = false;
+      for (auto* user : redOp->getResult(0).getUsers()) {
+        if (isReductionOp(user)) {
+          needsMaterialise = true;
+        } else if (isLiftableLinalgOp(user)) {
+          bool fusedTranspose =
+              mlir::isa<hlfir::TransposeOp>(redOp) &&
+              mlir::isa<hlfir::MatmulOp, hlfir::MatmulTransposeOp>(user);
+          if (!fusedTranspose) needsMaterialise = true;
+        } else if (mlir::isa<hlfir::ApplyOp>(user) ||
+                   mlir::isa<hlfir::ShapeOfOp>(user) ||
+                   mlir::isa<hlfir::AssignOp>(user)) {
+          // handled by the elemental ``_libtmp_`` path / whole-assign.
+        } else if (user->getName().getStringRef() == "hlfir.destroy") {
+          // bufferization cleanup -- ignore.
+        } else {
+          anyArithInline = true;
         }
-        if (anyUnhandled && !anyIndicator) {
-          redOp->emitError()
-              << "hlfir-lift-reduction-operands: inline "
-              << redOp->getName().getStringRef()
-              << " inside a larger expression not yet supported.  "
-              << "Workaround: assign the linalg result to a Fortran "
-              << "local first ``tmp = MATMUL(TRANSPOSE(A), q); res = "
-              << "tmp / scalar``, then the libcall dispatcher routes "
-              << "the whole-assign matmul through its GEMM lib node "
-              << "(with the transpose flag).  TODO: extend "
-              << "traceToDecl to peel ``hlfir.as_expr`` (or wire "
-              << "hlfir-optimized-bufferization upstream of this "
-              << "pass) to lift inline matmul automatically.";
-          signalPassFailure();
-        }
+      }
+      if (needsMaterialise) {
+        liftArrayResult(consumer, redOp, liftCounter, arrayRank, arrayEltTy);
+        return;
+      }
+      // A linalg result fed STRAIGHT into a bare arith op (no elemental, no
+      // library consumer) is the one inline shape the bridge still can't
+      // render element-wise -- surface it loudly rather than emit a ``?``
+      // tasklet.  (Array-result reductions only reach arith through an
+      // enclosing elemental, which the ``_libtmp_`` path handles.)
+      if (isLiftableLinalgOp(redOp) && anyArithInline) {
+        redOp->emitError()
+            << "hlfir-lift-reduction-operands: inline "
+            << redOp->getName().getStringRef()
+            << " fed directly into a scalar/arith expression (no enclosing "
+            << "elemental) is not yet supported.  Workaround: assign the "
+            << "library result to a Fortran local first "
+            << "(``tmp = MATMUL(...); res = tmp / scalar``).";
+        signalPassFailure();
       }
       return;
     }
@@ -419,7 +428,24 @@ struct LiftReductionOperandsPass
     auto arrTy = fir::SequenceType::get(shape, eltTy);
     auto refTy = fir::ReferenceType::get(arrTy);
     auto alloca = b.create<fir::AllocaOp>(loc, arrTy);
-    std::string uniqName = "_QQlift_linalg_" + std::to_string(gid);
+    // Give the temp the enclosing function's LOCAL-scope uniq_name stem
+    // (``_QM<mod>F<func>E...`` / ``_QF<func>E...``) rather than a bare
+    // ``_QQlift_linalg_N``.  The descriptor layer classifies an intent-
+    // empty ARRAY as a function-local TRANSIENT (vs a caller-bindable
+    // module global) via ``_global_is_baked_constant``, whose proxy is the
+    // ``F`` / ``EC`` scope marker in the mangled name.  A scope-less name
+    // bottoms out as a module global and leaks onto the SDFG signature as a
+    // required kwarg.  Steal the stem (up to and including the last ``E``)
+    // from any existing declare in this function so the synthesized local
+    // is scoped correctly across module-procedure / free-function forms.
+    std::string scopePrefix;
+    func.walk([&](hlfir::DeclareOp d) {
+      if (!scopePrefix.empty()) return;
+      auto un = d.getUniqName().str();
+      auto e = un.rfind('E');
+      if (e != std::string::npos) scopePrefix = un.substr(0, e + 1);
+    });
+    std::string uniqName = scopePrefix + "QQlift_linalg_" + std::to_string(gid);
     mlir::NamedAttrList attrs;
     attrs.append("uniq_name", mlir::StringAttr::get(ctx, uniqName));
     // Build a shape value for hlfir.declare -- one fir.shape with
