@@ -79,6 +79,10 @@ class OriginalArg:
     rank: int
     shape: Tuple[str, ...] = field(default_factory=tuple)
     intent: str = ''  # 'in' | 'out' | 'inout' | ''
+    # Dummy declared OPTIONAL.  The wrapper declares it ``optional`` and
+    # forwards the caller's actual ``present(<name>)`` into the kernel's
+    # ``<name>_present`` symbol (rather than defaulting it absent).
+    optional: bool = False
     # When fortran_type == 'type(<name>)', this points at the
     # DerivedType entry in ``OriginalInterface.struct_types``.
     struct_type: Optional[str] = None
@@ -149,9 +153,14 @@ def build_auto_interface(raw: dict, entry: str) -> OriginalInterface:
         # ``OriginalInterface`` shape used by the velocity_full e2e).
         if rank > 0 and not shape:
             shape = (":", ) * rank
-        args.append(OriginalArg(name=a["name"], fortran_type=fortran_type,
-                                rank=rank, shape=shape,
-                                intent=a["intent"], struct_type=struct_type))
+        args.append(
+            OriginalArg(name=a["name"],
+                        fortran_type=fortran_type,
+                        rank=rank,
+                        shape=shape,
+                        intent=a["intent"],
+                        optional=bool(a.get("optional", False)),
+                        struct_type=struct_type))
     used_modules = {mod: tuple(syms) for mod, syms in raw["used_modules"].items()}
     struct_types = {}
     for sname, st in raw.get("struct_types", {}).items():
@@ -167,16 +176,13 @@ def build_auto_interface(raw: dict, entry: str) -> OriginalInterface:
                 fortran_type = f"type({nested_name})"
             else:
                 fortran_type = _DTYPE_TO_FORTRAN_C.get(m["dtype"], "??")
-            members.append(Member(
-                name=m["name"],
-                fortran_type=fortran_type,
-                rank=int(m["rank"]),
-                shape=tuple(m["shape"]),
-                struct_name=nested_name or None,
-            ))
-        struct_types[sname] = DerivedType(name=st["name"],
-                                          module=st["module"] or None,
-                                          members=tuple(members))
-    return OriginalInterface(entry=entry, args=tuple(args),
-                             struct_types=struct_types,
-                             used_modules=used_modules)
+            members.append(
+                Member(
+                    name=m["name"],
+                    fortran_type=fortran_type,
+                    rank=int(m["rank"]),
+                    shape=tuple(m["shape"]),
+                    struct_name=nested_name or None,
+                ))
+        struct_types[sname] = DerivedType(name=st["name"], module=st["module"] or None, members=tuple(members))
+    return OriginalInterface(entry=entry, args=tuple(args), struct_types=struct_types, used_modules=used_modules)

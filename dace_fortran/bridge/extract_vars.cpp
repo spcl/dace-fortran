@@ -3781,6 +3781,8 @@ FortranInterfaceInfo extractFortranInterface(mlir::ModuleOp module,
         a.intent = "in";
       else if (bitEnumContainsAny(f, fir::FortranVariableFlagsEnum::intent_out))
         a.intent = "out";
+      if (bitEnumContainsAny(f, fir::FortranVariableFlagsEnum::optional))
+        a.optional = true;
     }
 
     // Peel box / ref / heap / pointer wrappers, then a SequenceType for
