@@ -72,6 +72,22 @@ def f2py_build_with_retry(cmd, *, cwd, mod_name, env=None):
         time.sleep(2 * attempt)
 
 
+def _f2py_routine_present(mod, name: str) -> bool:
+    """True if ``name`` is wrapped on the imported f2py module.  A *free*
+    subroutine lands as a top-level attribute (``mod.name``); a *module*
+    subroutine nests one level under its Fortran module's namespace object
+    (``mod.<fmodule>.name``), so check both."""
+    if hasattr(mod, name):
+        return True
+    for nm in vars(mod):
+        if nm.startswith("_"):
+            continue
+        ns = getattr(mod, nm)
+        if callable(getattr(ns, name, None)):
+            return True
+    return False
+
+
 def f2py_build_and_import(src_file, *, out_dir, mod_name, only=None, extra_args=(), env=None):
     """Build ``src_file`` via ``numpy.f2py -c`` and import the resulting
     extension, returning the imported module.
@@ -105,7 +121,7 @@ def f2py_build_and_import(src_file, *, out_dir, mod_name, only=None, extra_args=
         f2py_build_with_retry(cmd, cwd=out_dir, mod_name=ext_name, env=env)
         __import__(ext_name)
         mod = sys.modules[ext_name]
-        missing = [s for s in expected if not hasattr(mod, s)]
+        missing = [s for s in expected if not _f2py_routine_present(mod, s)]
         if not missing:
             return mod
         wrapped = sorted(n for n in vars(mod) if not n.startswith("_"))
