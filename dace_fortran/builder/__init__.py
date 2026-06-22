@@ -868,11 +868,69 @@ class SDFGBuilder:
         # every ``__sym_<arr>_<idx>`` must be constant in the symbol's scope
         # (no write would change the value it froze).  Run on the final graph.
         self._check_value_symbols_constant(sdfg)
+        # Zero-init producer-less read-only transients (e.g. the ``g_<name>``
+        # companions FlattenStructs mints for module-level struct globals,
+        # and unbindable section-alias transients): they are READ but never
+        # written anywhere in the SDFG, so the validator flags them as
+        # "uninitialized transient".  They model Fortran module-global
+        # default state, so a deterministic zero allocation is the correct
+        # (and warning-silencing) semantics.  See ``_zero_init_unwritten_transients``.
+        self._zero_init_unwritten_transients(sdfg)
         # Validate the SDFG exactly as returned -- after every mutation
         # (post-gen passes, frozen-signature snapshot, auto-dim retype) --
         # so a caller never receives an unvalidated graph.
         sdfg.validate()
         return sdfg
+
+    def _zero_init_unwritten_transients(self, sdfg) -> None:
+        """Mark ``setzero=True`` on every read of a transient that is never
+        written anywhere in the SDFG.
+
+        The SDFG validator warns "Use of uninitialized transient" for any
+        transient access node with no incoming edge (``in_degree == 0``)
+        that is read (``out_degree > 0``) unless the node carries
+        ``setzero``.  In bridge-generated SDFGs the producer-less read-only
+        transients are precisely the externally-modelled / default-init
+        data:
+
+          * ``g_<struct>_<member>`` companions for MODULE-LEVEL struct
+            globals (minted by ``hlfir-flatten-structs``; the data is the
+            module's persistent state, default-initialised to zero), and
+          * read-only section-alias transients (``unbindable_section``).
+
+        A genuine local-scalar transient is always WRITTEN before it is read
+        (it holds a computed value), so it has an in-edge and is untouched
+        here.  Marking the producer-less ones ``setzero`` gives a
+        deterministic zero allocation -- matching Fortran's default-init of
+        an untouched module global -- and removes the spurious warning
+        without weakening the check for true read-before-write locals.
+        """
+        # A transient is "written" iff some access node for it has an
+        # incoming edge in any state.  Collect the written set first so a
+        # transient written in a LATER state than its first read is not
+        # mistaken for producer-less.
+        from dace import nodes as dace_nodes
+        from dace import data as dace_data
+        written = set()
+        for state in sdfg.states():
+            for node in state.nodes():
+                if isinstance(node, dace_nodes.AccessNode) and state.in_degree(node) > 0:
+                    written.add(node.data)
+        for state in sdfg.states():
+            for node in state.nodes():
+                if not isinstance(node, dace_nodes.AccessNode):
+                    continue
+                desc = sdfg.arrays.get(node.data)
+                if desc is None or not getattr(desc, 'transient', False):
+                    continue
+                # Views / References / Streams carry their own
+                # initialisation semantics in the validator -- leave them.
+                if isinstance(desc, (dace_data.View, dace_data.Reference, dace_data.Stream)):
+                    continue
+                # Only producer-less reads (never written anywhere, read here).
+                if node.data in written or state.out_degree(node) == 0:
+                    continue
+                node.setzero = True
 
     def _register_constants(self, sdfg: SDFG):
         """Attach Flang's constant-pool data to the SDFG.
@@ -1050,9 +1108,8 @@ class SDFGBuilder:
         # Invariant: this is the program entry, so ``ctx.cur`` is the freshly
         # minted (empty) start state -- the symbol-generation assignments are
         # the first thing that happens, before any allocation can read them.
-        assert ctx.cur.is_empty(), (
-            "value-symbol seeding must own the first interstate edge from an "
-            "empty start state; found a non-empty start block")
+        assert ctx.cur.is_empty(), ("value-symbol seeding must own the first interstate edge from an "
+                                    "empty start state; found a non-empty start block")
         dst = sdfg.add_state(f"value_symbol_seed_{self.nid()}")
         sdfg.add_edge(ctx.cur, dst, InterstateEdge(assignments=seeds))
         ctx.cur = dst
@@ -1323,7 +1380,8 @@ class SDFGBuilder:
                     global_alloc_inside=bool(getattr(v, 'global_alloc_inside', False)) if v is not None else False,
                     aos_struct_pointer=bool(getattr(v, 'aos_struct_pointer', False)) if v is not None else False,
                     aos_member_pointer=bool(getattr(v, 'aos_member_pointer', False)) if v is not None else False,
-                    module_origin_allocatable=bool(getattr(v, 'module_origin_allocatable', False)) if v is not None else False,
+                    module_origin_allocatable=bool(getattr(v, 'module_origin_allocatable', False))
+                    if v is not None else False,
                     module_origin_pointer=bool(getattr(v, 'module_origin_pointer', False)) if v is not None else False,
                 ))
         # Free symbols carrying module-global provenance: a scalar

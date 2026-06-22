@@ -129,15 +129,42 @@ static void collectNestedLiftable(
   if (!rootOp) return;
   llvm::SmallVector<mlir::Operation *, 8> stack;
   llvm::SmallPtrSet<mlir::Operation *, 16> seen;
-  for (auto v : rootOp->getOperands())
-    if (auto *def = v.getDefiningOp())
-      if (seen.insert(def).second) stack.push_back(def);
+
+  // True iff ``desc`` is ``anc`` itself or nested anywhere inside it.
+  auto containedIn = [](mlir::Operation* anc, mlir::Operation* desc) {
+    for (mlir::Operation* o = desc; o; o = o->getParentOp())
+      if (o == anc) return true;
+    return false;
+  };
+
+  // Push every op that FEEDS ``op``: its direct operands, PLUS any value
+  // captured by ``op``'s nested regions but defined OUTSIDE them.  The
+  // second case is the crux of the ``c + MAXVAL(a+b-1)`` broadcast: the
+  // reduction's scalar result is loop-invariant, so flang computes it
+  // ONCE outside the consuming ``hlfir.elemental`` and the elemental's
+  // body references it as a region capture -- NOT as an operand of the
+  // elemental op.  An operands-only walk silently skips it, the lift
+  // never fires, and ``buildExpr`` later renders the inline reduction as
+  // ``?`` (``emit_tasklet`` then aborts).  Walking ``op``'s regions and
+  // collecting externally-defined captures (``containedIn`` excludes the
+  // per-element body ops, which must NOT be hoisted) closes that gap.
+  // ``op->walk`` visits ``op`` itself first, so its direct operands are
+  // covered by the same loop (their defs are never contained in ``op``).
+  auto pushFeeders = [&](mlir::Operation* op) {
+    op->walk([&](mlir::Operation* inner) {
+      for (auto v : inner->getOperands()) {
+        auto* def = v.getDefiningOp();
+        if (!def || containedIn(op, def)) continue;
+        if (seen.insert(def).second) stack.push_back(def);
+      }
+    });
+  };
+
+  pushFeeders(rootOp);
   while (!stack.empty()) {
     auto *op = stack.pop_back_val();
     if (isLiftableOp(op)) out.push_back(op);
-    for (auto v : op->getOperands())
-      if (auto *def = v.getDefiningOp())
-        if (seen.insert(def).second) stack.push_back(def);
+    pushFeeders(op);
   }
 }
 

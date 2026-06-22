@@ -209,3 +209,53 @@ end module
     assert "g_used" in sdfg.arrays
     assert "g_unused" not in sdfg.arrays, \
         "unaccessed fields should not be registered"
+
+
+def test_module_level_struct_field_no_uninitialized_transient_warning(tmp_path):
+    """The ``g_<member>`` companions for a module-level struct global are
+    READ-ONLY transients (the module's persistent state, never written
+    inside the SDFG).  The SDFG validator used to flag every such read as
+    ``WARNING: Use of uninitialized transient "g_<name>"`` -- spurious
+    noise, since the data models Fortran's default-initialised module
+    global.  ``_zero_init_unwritten_transients`` now marks producer-less
+    read-only transients ``setzero`` (deterministic zero alloc), which
+    silences the warning AND makes the value deterministic.  This pins
+    that no such UserWarning is emitted while building."""
+    import warnings
+    src = """
+module m
+  type :: t
+    real(kind=8) :: c
+    real(kind=8) :: v(3)
+  end type
+  type(t) :: g
+contains
+  subroutine driver(out)
+    real(kind=8), intent(out) :: out
+    out = g % c + sum(g % v)
+  end subroutine
+end module
+"""
+    with warnings.catch_warnings():
+        # Any "uninitialized transient" warning during build -> test failure.
+        warnings.simplefilter("error", UserWarning)
+        sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
+    # Every transient that is NEVER written anywhere in the SDFG but is
+    # read (producer-less read-only -- the module-global companion class,
+    # e.g. the read-only scalar ``g_c``) must carry ``setzero`` on its
+    # reads.  Members the kernel materialises (e.g. ``g_v`` via the
+    # ``sum``) are written and stay untouched.
+    from dace import nodes as dace_nodes
+    written = {
+        node.data
+        for state in sdfg.states()
+        for node in state.nodes() if isinstance(node, dace_nodes.AccessNode) and state.in_degree(node) > 0
+    }
+    producerless_reads = 0
+    for state in sdfg.states():
+        for node in state.nodes():
+            if (isinstance(node, dace_nodes.AccessNode) and node.data not in written
+                    and sdfg.arrays[node.data].transient and state.out_degree(node) > 0):
+                assert node.setzero is True, f"{node.data} producer-less read must be setzero"
+                producerless_reads += 1
+    assert producerless_reads, "expected a producer-less g_<member> read (e.g. g_c)"
