@@ -298,8 +298,10 @@ def test_build_sdfg_for_icon_solve_nh(tmp_path: Path):
         cache_dir=_CACHE_DIR,
     )
     dace_fortran.clear_external_registry()
-    for sym in _ICON_EXTERNAL_STUBS:
-        dace_fortran.keep_external(sym, stub=True)
+    # Don't-inline + DON'T-emit every infrastructure procedure: the
+    # unified policy's ignore list drops their calls (the bridge stubs
+    # the body, the SDFG never sees the call).
+    dace_fortran.apply_external_functions(do_not_emit=_ICON_EXTERNAL_STUBS)
     try:
         sdfg = dace_fortran.build_sdfg_from_hlfir(
             hlfir, entry=_SOLVE_NH_ENTRY)

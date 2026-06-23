@@ -61,6 +61,11 @@ end module lib
         ("lib", "base", "a"),
         ("lib", "ext"),
         ("lib", "ext", "b"),
+        # Direct inherited access: ``ext_obj % a`` resolves the parent's
+        # component (and likewise any inherited type-bound procedure) without
+        # naming the parent type.
+        ("lib", "ext", "a"),
+        # Explicit parent-subobject access: ``ext_obj % base % a``.
         ("lib", "ext", "base"),
         ("lib", "ext", "base", "a"),
     }

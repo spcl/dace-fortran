@@ -86,6 +86,120 @@ END SUBROUTINE main
     SourceCodeBuilder().add_file(got).check_with_gfortran()
 
 
+def test_procedure_replacer_inherited_type_bound():
+    """A type-bound procedure (and a data component) inherited via ``EXTENDS``
+    resolves directly on the child -- ``child_obj % gid(i)`` deconstructs to the
+    *base* procedure, and ``child_obj % a`` reads the *base* component, without
+    naming the parent type.
+
+    Regression test for the alias map only registering the explicit
+    parent-subobject access (``child % base % member``) and not the direct
+    inherited access (``child % member``): an inherited type-bound FUNCTION call
+    then crashed component resolution in ``correct_for_function_calls``.
+    """
+    sources, _ = (SourceCodeBuilder().add_file("""
+module base_mod
+  implicit none
+  type :: t_base
+    integer :: a
+  contains
+    procedure :: gid => base_gid
+  end type t_base
+contains
+  pure integer function base_gid(this, i)
+    class(t_base), intent(in) :: this
+    integer, intent(in) :: i
+    base_gid = this%a + i
+  end function base_gid
+end module base_mod
+
+module deriv_mod
+  use base_mod, only: t_base
+  implicit none
+  type, extends(t_base) :: t_deriv
+    integer :: b
+  end type t_deriv
+end module deriv_mod
+
+subroutine main(obj, i, out)
+  use deriv_mod, only: t_deriv
+  implicit none
+  type(t_deriv), intent(in) :: obj
+  integer, intent(in) :: i
+  integer, intent(out) :: out
+  out = obj%gid(i) + obj%a + obj%b
+end subroutine main
+""").check_with_gfortran().get())
+    ast = parse_and_improve(sources)
+    # The pass that crashed pre-fix on the inherited type-bound function call.
+    ast = cleanup.correct_for_function_calls(ast)
+    ast = desugaring.deconstruct_procedure_calls(ast)
+
+    got = ast.tofortran()
+    # The inherited type-bound call resolves to the BASE concrete procedure.
+    assert "base_gid_deconproc" in got
+    # The inherited data component survives as an ordinary component read.
+    assert "obj % a" in got
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
+
+
+def test_procedure_replacer_overrides_inherited_type_bound():
+    """A child that overrides an inherited binding wins: ``child_obj % gid(i)``
+    resolves to the child's own procedure, not the parent's.  Guards the direct
+    inherited-access registration against clobbering a member the child declares
+    itself."""
+    sources, _ = (SourceCodeBuilder().add_file("""
+module base_mod
+  implicit none
+  type :: t_base
+    integer :: a
+  contains
+    procedure :: gid => base_gid
+  end type t_base
+contains
+  pure integer function base_gid(this, i)
+    class(t_base), intent(in) :: this
+    integer, intent(in) :: i
+    base_gid = this%a + i
+  end function base_gid
+end module base_mod
+
+module deriv_mod
+  use base_mod, only: t_base
+  implicit none
+  type, extends(t_base) :: t_deriv
+    integer :: b
+  contains
+    procedure :: gid => deriv_gid
+  end type t_deriv
+contains
+  pure integer function deriv_gid(this, i)
+    class(t_deriv), intent(in) :: this
+    integer, intent(in) :: i
+    deriv_gid = this%b - i
+  end function deriv_gid
+end module deriv_mod
+
+subroutine main(obj, i, out)
+  use deriv_mod, only: t_deriv
+  implicit none
+  type(t_deriv), intent(in) :: obj
+  integer, intent(in) :: i
+  integer, intent(out) :: out
+  out = obj%gid(i)
+end subroutine main
+""").check_with_gfortran().get())
+    ast = parse_and_improve(sources)
+    ast = cleanup.correct_for_function_calls(ast)
+    ast = desugaring.deconstruct_procedure_calls(ast)
+
+    got = ast.tofortran()
+    # The override wins; the parent's procedure is not selected.
+    assert "deriv_gid_deconproc" in got
+    assert "base_gid_deconproc" not in got
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
+
+
 def test_procedure_replacer_nested():
     """
     Tests that nested type-bound procedures are correctly replaced.

@@ -15,7 +15,9 @@ import numpy as np
 import pytest
 
 from _util import build_sdfg, f2py_compile, have_flang
-from dace_fortran.external import (Arg, clear_external_registry, inline_external, keep_external)
+from dace_fortran.external import (Arg, apply_external_functions, clear_external_registry, inline_external,
+                                   keep_external)
+from dace_fortran.external_functions import ExternalFunction
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
@@ -66,9 +68,9 @@ end module caller_mod
     # away and the call would disappear).
     clear_external_registry()
     try:
-        keep_external("add_one",
-                      args=(Arg(kind="array", dtype="float64",
-                                intent="inout"), Arg(kind="scalar", dtype="int32", intent="in")))
+        # Declare add_one external via the unified policy; the arg plan
+        # (array inout, scalar in) is derived from the HLFIR call site.
+        apply_external_functions([ExternalFunction("add_one")])
         caller_sdfg = build_sdfg(caller_src, tmp_path / "caller", name="caller", entry="caller_mod::caller").build()
     finally:
         clear_external_registry()
@@ -88,10 +90,10 @@ end module caller_mod
     assert len(ext_sites) == 1, (f"expected exactly one ExternalCall for add_one before inline, "
                                  f"got {len(ext_sites)}")
 
-    # Re-register so the lookup inside inline_external resolves.
-    keep_external("add_one",
-                  args=(Arg(kind="array", dtype="float64",
-                            intent="inout"), Arg(kind="scalar", dtype="int32", intent="in")))
+    # Re-declare so the lookup inside inline_external resolves (only the
+    # registered ``c_name`` matters here -- inline_external takes the
+    # connector order from the callee SDFG's arglist, not the args).
+    apply_external_functions([ExternalFunction("add_one")])
     try:
         replaced = inline_external(caller_sdfg, "add_one", callee_sdfg=callee_sdfg)
     finally:

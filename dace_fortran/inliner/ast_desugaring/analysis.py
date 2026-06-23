@@ -10,7 +10,7 @@ from typing import Optional, Tuple, List, Dict, Union, Set
 import fparser.two.Fortran2003 as f03
 import fparser.two.Fortran2008 as f08
 import numpy as np
-from fparser.two.utils import Base, walk, BinaryOpBase, UnaryOpBase
+from fparser.two.utils import Base, walk, BinaryOpBase, UnaryOpBase, NoMatchError
 
 from . import types, utils, optimizations
 from .. import ast_utils
@@ -312,7 +312,17 @@ def alias_specs(ast: f03.Program) -> types.SPEC_TABLE:
         for k, v in alias_map.items():
             if k[:len(base_dtspec)] != base_dtspec:
                 continue
+            # Explicit parent-subobject access: ``child % base % member`` (the
+            # base type is reachable as a component named after itself).
             updates[dtspec + k[len(base_dtspec) - 1:]] = v
+            # Direct inherited access: ``child % member``.  A type extension
+            # exposes the parent's components AND type-bound procedures directly
+            # on the child, so the inherited name resolves without naming the
+            # parent.  Never clobber a member the child declares itself (an
+            # overriding binding or a same-named component already in the map).
+            direct = dtspec + k[len(base_dtspec):]
+            if direct != dtspec and direct not in alias_map:
+                updates.setdefault(direct, v)
         alias_map.update(updates)
 
     assert set(ident_map.keys()).issubset(alias_map.keys())
@@ -473,6 +483,11 @@ def _eval_int_literal(x: Union[f03.Signed_Int_Literal_Constant, f03.Int_Literal_
                       alias_map: types.SPEC_TABLE) -> types.NUMPY_INTS_TYPES:
     """Evaluates an integer literal constant, resolving its kind if specified."""
     num, kind = x.children
+    if isinstance(kind, f03.Name):
+        # A named integer kind, e.g. ``1_wp`` / ``0_i8`` -- normalise to its
+        # string so the width checks and the kind-parameter lookup below work
+        # (mirrors :func:`_eval_real_literal`).
+        kind = kind.string
     if kind is None:
         kind = 4
     if str(kind) == "c_int":
@@ -659,7 +674,16 @@ def find_type_of_entity(node: Union[f03.Entity_Decl, f03.Component_Decl],
     elif isinstance(typ, f03.Declaration_Type_Spec):
         _, typ_name_node = typ.children
         typ_name = typ_name_node.string if isinstance(typ_name_node, f03.Name) else str(typ_name_node)
-        spec = find_real_ident_spec(typ_name, ident_spec(node), alias_map)
+        spec = search_real_ident_spec(typ_name, ident_spec(node), alias_map)
+        if spec is None:
+            # An unresolvable declared type -- a ``CLASS(*)`` unlimited
+            # polymorphic component (``typ_name == '*'``) or a type whose
+            # definition has no source (external).  When tolerating externals,
+            # report it as match-anything so pruning can proceed; strict mode
+            # asserts as before.
+            if TOLERATE_EXTERNAL_USES:
+                return types.TYPE_SPEC(('*', ), '')
+            spec = find_real_ident_spec(typ_name, ident_spec(node), alias_map)
 
     is_arg = False
     scope_spec = find_scope_spec(node)
@@ -840,8 +864,18 @@ def interface_specs(ast: f03.Program, alias_map: types.SPEC_TABLE) -> Dict[types
                 fns.append(utils.find_name_of_stmt(fn))
             elif isinstance(fn, f03.Procedure_Stmt):
                 fns.extend(nm.string for nm in walk(fn, f03.Name))
-        fn_specs = tuple(
-            find_real_ident_spec(f, scope_spec, alias_map, (f03.Function_Stmt, f03.Subroutine_Stmt)) for f in fns)
+        fn_specs = []
+        for f in fns:
+            spec = search_real_ident_spec(f, scope_spec, alias_map, (f03.Function_Stmt, f03.Subroutine_Stmt))
+            if spec is None:
+                # A module procedure named by a generic interface whose specific
+                # has no source / was pruned away (a surviving unresolved
+                # generic while tolerating externals).  Drop it from the map.
+                if TOLERATE_EXTERNAL_USES:
+                    continue
+                assert spec, f"cannot find {f} / {scope_spec}"
+            fn_specs.append(spec)
+        fn_specs = tuple(fn_specs)
         assert ifspec not in fn_specs
         iface_map[ifspec] = fn_specs
 
@@ -880,7 +914,16 @@ def _compute_argument_signature(args, scope_spec: types.SPEC,
             elif isinstance(x, f03.Logical_Literal_Constant):
                 return types.TYPE_SPEC('LOGICAL')
             elif isinstance(x, f03.Name):
-                x_spec = find_real_ident_spec(x.string, scope_spec, alias_map)
+                x_spec = search_real_ident_spec(x.string, scope_spec, alias_map)
+                if x_spec is None:
+                    # An unresolved external symbol used as a call argument --
+                    # e.g. an MPI constant (``mpi_max`` / ``mpi_sum``) inside a
+                    # stubbed/unreachable wrapper.  When tolerating externals,
+                    # treat its type as match-anything so signature computation
+                    # proceeds; strict mode asserts as before.
+                    if TOLERATE_EXTERNAL_USES:
+                        return MATCH_ALL
+                    x_spec = find_real_ident_spec(x.string, scope_spec, alias_map)
                 return find_type_of_entity(alias_map[x_spec], alias_map)
             elif isinstance(x, f03.Data_Ref):
                 return find_type_dataref(x, scope_spec, alias_map)
@@ -1093,9 +1136,25 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
             return None
         root, _, _ = _dataref_root(dref, scope_spec, alias_map)
         loc = search_real_local_alias_spec(root, alias_map)
-        assert loc
+        if not loc:
+            # An unresolvable root (an external/sourceless name while tolerating
+            # externals): we cannot derive a component spec, so take the
+            # pessimistic path, same as the array-subscript case above.
+            if TOLERATE_EXTERNAL_USES:
+                return None
+            assert loc
         root_spec = ident_spec(alias_map[loc])
-        comp_spec = find_dataref_component_spec(dref, scope_spec, alias_map)
+        try:
+            comp_spec = find_dataref_component_spec(dref, scope_spec, alias_map)
+        except AssertionError:
+            # A component that does not resolve -- this reference lives in code
+            # unreachable from the entry (e.g. a solver-setup routine merged via
+            # a module-level object declaration) that the later reachability
+            # prune will drop.  While tolerating externals, take the pessimistic
+            # path instead of failing the whole optimization.
+            if not TOLERATE_EXTERNAL_USES:
+                raise
+            return None
         return root_spec, comp_spec
 
     def _integrate_subresults(tp: Dict[types.SPEC, types.LITERAL_TYPES], tm: Set[types.SPEC]):
@@ -1129,9 +1188,18 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
             xtyp = find_type_of_entity(xdecl, alias_map) if isinstance(xdecl, f03.Entity_Decl) else None
             if (pointer and xtyp and xtyp.pointer) or value:
                 par = x.parent
-                utils.replace_node(x, utils.copy_fparser_node(plus[spec]))
+                new = utils.copy_fparser_node(plus[spec])
+                utils.replace_node(x, new)
                 if isinstance(par, (f03.Data_Ref, f03.Part_Ref)):
-                    utils.replace_node(par, f03.Data_Ref(par.tofortran()))
+                    try:
+                        utils.replace_node(par, f03.Data_Ref(par.tofortran()))
+                    except NoMatchError:
+                        # Folding the known value here would yield an array
+                        # section followed by a re-subscript (e.g.
+                        # ``a(:,:,b)(i,j)``), which fparser cannot represent.
+                        # The fold is best-effort -- undo it and leave the
+                        # reference unfolded so the TU stays valid.
+                        utils.replace_node(new, x)
         elif isinstance(x, f03.Data_Ref):
             spec = _root_comp(x)
             if spec not in plus:
@@ -1148,9 +1216,16 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
             xtyp = find_type_dataref(x, scope_spec, alias_map)
             if (pointer and xtyp.pointer) or value:
                 par = x.parent
-                utils.replace_node(x, utils.copy_fparser_node(plus[spec]))
+                new = utils.copy_fparser_node(plus[spec])
+                utils.replace_node(x, new)
                 if isinstance(par, (f03.Data_Ref, f03.Part_Ref)):
-                    utils.replace_node(par, f03.Data_Ref(par.tofortran()))
+                    try:
+                        utils.replace_node(par, f03.Data_Ref(par.tofortran()))
+                    except NoMatchError:
+                        # See the sibling branch above: an unrepresentable
+                        # section-then-resubscript fold is undone and left
+                        # unfolded so the TU stays valid.
+                        utils.replace_node(new, x)
         elif isinstance(x, f03.Part_Ref):
             par, subsc = x.children
             _inject_knowns(par, value=False, pointer=True)
@@ -1220,14 +1295,25 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
         lspec, ltyp = None, None
         if isinstance(lv, f03.Name):
             loc = search_real_local_alias_spec(lv, alias_map)
-            assert loc
-            lspec = ident_spec(alias_map[loc])
-            if isinstance(alias_map[lspec], f03.Entity_Decl):
-                ltyp = find_type_of_entity(alias_map[lspec], alias_map)
+            if not loc:
+                # Unresolvable target while tolerating externals -- leave
+                # lspec/ltyp as None so the const tracking below skips it.
+                if not TOLERATE_EXTERNAL_USES:
+                    assert loc
+            else:
+                lspec = ident_spec(alias_map[loc])
+                if isinstance(alias_map[lspec], f03.Entity_Decl):
+                    ltyp = find_type_of_entity(alias_map[lspec], alias_map)
         elif isinstance(lv, f03.Data_Ref):
             lspec = _root_comp(lv)
-            scope_spec = find_scope_spec(lv)
-            ltyp = find_type_dataref(lv, scope_spec, alias_map)
+            if lspec is not None:
+                # Only resolve the lvalue's type when its root/component
+                # resolved; if _root_comp took the pessimistic (None) path on an
+                # unresolvable reference (dead, soon-to-be-pruned code while
+                # tolerating externals), there is nothing to track and
+                # find_type_dataref would fail on the same reference.
+                scope_spec = find_scope_spec(lv)
+                ltyp = find_type_dataref(lv, scope_spec, alias_map)
         if lspec and ltyp:
             rval = _const_eval_basic_type(rv, alias_map)
             if rval is None:
@@ -1245,14 +1331,25 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
         lspec, ltyp = None, None
         if isinstance(lv, f03.Name):
             loc = search_real_local_alias_spec(lv, alias_map)
-            assert loc
-            lspec = ident_spec(alias_map[loc])
-            if isinstance(alias_map[lspec], f03.Entity_Decl):
-                ltyp = find_type_of_entity(alias_map[lspec], alias_map)
+            if not loc:
+                # Unresolvable target while tolerating externals -- leave
+                # lspec/ltyp as None so the const tracking below skips it.
+                if not TOLERATE_EXTERNAL_USES:
+                    assert loc
+            else:
+                lspec = ident_spec(alias_map[loc])
+                if isinstance(alias_map[lspec], f03.Entity_Decl):
+                    ltyp = find_type_of_entity(alias_map[lspec], alias_map)
         elif isinstance(lv, (f03.Data_Ref, f03.Data_Pointer_Object)):
             lspec = _root_comp(lv)
-            scope_spec = find_scope_spec(lv)
-            ltyp = find_type_dataref(lv, scope_spec, alias_map)
+            if lspec is not None:
+                # Only resolve the lvalue's type when its root/component
+                # resolved; if _root_comp took the pessimistic (None) path on an
+                # unresolvable reference (dead, soon-to-be-pruned code while
+                # tolerating externals), there is nothing to track and
+                # find_type_dataref would fail on the same reference.
+                scope_spec = find_scope_spec(lv)
+                ltyp = find_type_dataref(lv, scope_spec, alias_map)
         if lspec and ltyp and ltyp.pointer:
             plus[lspec] = rv
             if lspec in minus:

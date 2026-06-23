@@ -36,12 +36,13 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional, Sequence, Union
+from typing import List, Optional, Sequence, Union
 
 from dace import SDFG
 
 from dace_fortran.build_bridge import hb  # noqa: F401  -- ensures the bridge is built
-from dace_fortran.external import Arg, ExternalSignature, keep_external, register_external  # noqa: F401
+from dace_fortran.external import (Arg, ExternalSignature, keep_external, register_external,  # noqa: F401
+                                   registered_names)
 from dace_fortran.hlfir_to_sdfg import DEFAULT_PIPELINE, SDFGBuilder
 from dace_fortran.preprocess import preprocess_fortran_source
 
@@ -214,6 +215,18 @@ def _resolve_entry(source: str, entry: Optional[str]) -> str:
     return _mangle(*procs[0])
 
 
+def _merge_external_names(external_names: Sequence[str] = ()) -> List[str]:
+    """The procedure names the module-merge must keep external (NOT inline) =
+    any explicit ``external_names`` unioned with every name in the bridge's
+    external registry (:func:`dace_fortran.external.registered_names`).
+
+    Sourcing from the registry is what makes a single ``keep_external`` /
+    ``apply_external_functions`` declaration govern BOTH halves of the build:
+    the merge stubs the procedure's body, and the bridge later externalises the
+    surviving call.  Order-stable and de-duplicated."""
+    return list(dict.fromkeys([*external_names, *registered_names()]))
+
+
 def _emit_hlfir(source: str,
                 out_dir: Path,
                 name: str,
@@ -222,12 +235,23 @@ def _emit_hlfir(source: str,
                 preprocess: bool,
                 merge_entry: Optional[str] = None,
                 merge_engine: str = "regex",
+                external_names: Sequence[str] = (),
                 defines: Sequence[str] = (),
                 kind_map: dict = None,
                 kind_passthrough: bool = False) -> Path:
     """Write ``source`` to ``<out_dir>/<name>.F90``, preprocess
     (module-merge + opt-in rewrites), ``flang -fc1 -cpp -emit-hlfir``
     it, and return the ``.hlfir`` path.
+
+    The module-merge keeps every procedure registered as external (via
+    ``keep_external`` / ``apply_external_functions``) OUT of the inlined TU:
+    its body is stubbed to empty so halo-exchange / MPI / I/O internals never
+    reach flang.  Those names are sourced from the bridge's external registry
+    (:func:`dace_fortran.external.registered_names`, unioned with any explicit
+    ``external_names``), so one registration governs BOTH the merge and the
+    later ``externalize_symbols`` / ``ExternalCall`` lowering -- the merge no
+    longer relies on the post-merge bridge pass alone to keep externals
+    external.
 
     ``out_dir`` is the merge search path -- ``merge_used_modules``
     inlines any ``.f90`` staged there by ``build_sdfg_from_files`` so
@@ -246,6 +270,9 @@ def _emit_hlfir(source: str,
     ``compile_commands.json``.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
+    # The bridge's external registry is the single source of truth: every
+    # registered external (emit or stub) must NOT be inlined by the merge.
+    merge_external = _merge_external_names(external_names)
     # ``.F90`` routes through flang's built-in preprocessor by extension
     # convention; combined with ``-cpp`` this stays consistent if a
     # future flang changes its default.
@@ -256,6 +283,7 @@ def _emit_hlfir(source: str,
                                   merge=merge,
                                   merge_engine=merge_engine,
                                   merge_entry=merge_entry,
+                                  external_names=merge_external,
                                   if_intvar=preprocess,
                                   kind_map=kind_map,
                                   kind_passthrough=kind_passthrough))

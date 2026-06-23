@@ -63,7 +63,14 @@ def make_practically_constant_global_vars_constants(ast: f03.Program) -> f03.Pro
                 # Everything else unsupported for now.
                 continue
             loc = analysis.search_real_local_alias_spec(a, alias_map)
-            assert loc
+            if not loc:
+                # An argument name with no resolvable source (e.g. an external
+                # MPI handle like ``mpi_comm_world`` passed to ``mpi_abort``).
+                # When tolerating externals it cannot be a local constant
+                # candidate anyway -- skip it.
+                if analysis.TOLERATE_EXTERNAL_USES:
+                    continue
+                assert loc
             var = alias_map[loc]
             assert isinstance(var, f03.Entity_Decl)
             var_spec = analysis.ident_spec(var)
@@ -133,8 +140,21 @@ def make_practically_constant_arguments_constants(ast: f03.Program, keepers: Lis
         kwargs = tuple(a.children for a in args if isinstance(a, f03.Actual_Arg_Spec))
         kwargs = {k.string: v for k, v in kwargs}
         fnspec = analysis.search_real_local_alias_spec(fn, alias_map)
-        assert fnspec, fn
+        if not fnspec:
+            # A call to a procedure with no resolvable source (e.g. an external
+            # MPI routine like ``mpi_abort`` reached through a stubbed error
+            # path).  When tolerating externals, its argument usage cannot be
+            # analysed -- skip it (pruning drops the dead path later).
+            if analysis.TOLERATE_EXTERNAL_USES:
+                continue
+            assert fnspec, fn
         fnstmt = alias_map[fnspec]
+        if isinstance(fnstmt, f03.Interface_Stmt):
+            # The call resolves to a generic interface whose specifics were left
+            # unresolved (tolerating externals -- e.g. a kept-external halo
+            # generic, or a ``dbg_print`` reached from dead code): a generic has
+            # no dummy-argument list of its own, so there is nothing to analyse.
+            continue
         fnspec = analysis.ident_spec(fnstmt)
         if fnspec in keepers:
             # The "entry-point" functions arguments are fair game for external usage.

@@ -292,8 +292,25 @@ def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
         all_cand_sigs: List[Tuple[types.SPEC, Tuple[types.TYPE_SPEC, ...]]] = []
 
         bspec = dref_type.spec + (bname.string, )
+        # A type-bound procedure inherited via ``EXTENDS`` is registered (by the
+        # alias map) under the child type, but proc_map/genc_map key bindings by
+        # the type that physically declares them.  Remap an inherited binding
+        # spec back to the base binding's own spec so the concrete-procedure
+        # lookup resolves it (a child that overrides the binding keeps its own,
+        # because then ``bspec`` is already in proc_map/genc_map).
+        if bspec not in proc_map and bspec not in genc_map and bspec in alias_map:
+            inherited = alias_map[bspec]
+            if isinstance(inherited, (f03.Specific_Binding, f03.Generic_Binding)):
+                bspec = analysis.ident_spec(inherited)
         if bspec in genc_map and genc_map[bspec]:
             for cand in genc_map[bspec]:
+                # An external type-bound procedure candidate -- its concrete
+                # target has no Fortran source (e.g. ICON's MPI halo
+                # ``%exchange_data`` -> ``exchange_data_4de1_dp``).  Skip it
+                # when tolerating externals; if none of the candidates resolve
+                # the call is left for pruning to drop.
+                if analysis.TOLERATE_EXTERNAL_USES and proc_map.get(cand) not in alias_map:
+                    continue
                 cand_stmt = alias_map[proc_map[cand]]
                 cand_spec = analysis.ident_spec(cand_stmt)
                 # TODO: Add ref.
@@ -309,10 +326,16 @@ def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
                     bspec = cand
                     break
         if bspec not in proc_map:
+            # The type-bound call did not resolve to any concrete procedure with
+            # source.  When tolerating externals, leave the call untouched for
+            # reachability pruning to drop (it lives in a stubbed/unreachable
+            # wrapper, e.g. the halo-exchange path).
+            if analysis.TOLERATE_EXTERNAL_USES:
+                continue
             print(f"{bspec} / {args_sig}")
             for c in all_cand_sigs:
                 print(f"...> {c}")
-        assert bspec in proc_map, f"[in mod: {cmod}/{callsite}] {bspec} not found"
+            raise AssertionError(f"[in mod: {cmod}/{callsite}] {bspec} not found")
         pname = proc_map[bspec]
 
         # We are assumping that it's a subprogram defined directly inside a module.

@@ -28,7 +28,7 @@ treats every entry uniformly.
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import dace
 import dace.library
@@ -361,6 +361,48 @@ def keep_external(name: str,
                                               stub=stub,
                                               dynamic_extents_abi=dynamic_extents_abi,
                                               module_symbol_forward=tuple(module_symbol_forward)))
+
+
+def apply_external_functions(external_functions: Iterable["ExternalFunction"] = (),
+                             do_not_emit: Iterable[str] = ()) -> None:
+    """Register the bridge half of the unified external-function policy.
+
+    This is the bridge-side mirror of the inliner's
+    :func:`dace_fortran.fparser_inliner.inline_to_ast` /
+    :func:`dace_fortran.preprocess.merge_used_modules` ``external_functions`` /
+    ``do_not_emit`` parameters -- ONE policy, declared once per target, drives
+    both halves: the inliner stubs each named procedure's body (so its
+    unlowerable internals never enter the TU) and this populates the registry
+    that ``builder.emit_library.emit_call`` reads to lower the surviving call:
+
+    * each :class:`~dace_fortran.external_functions.ExternalFunction` becomes an
+      **emitted** external -- a ``CALL`` lowers to an :class:`ExternalCall`
+      library node bound to ``f.symbol`` (its ``c_function`` or ``name``), with
+      ``f.library`` linked in.  The argument order/identity comes from the HLFIR
+      call site (``args=()`` -> ``emit_call`` derives a conservative plan), so a
+      minimal ``ExternalFunction(name, c_function, library)`` is enough.  Rich
+      ABIs (AoS structs, ``MPI_Comm``, dynamic extents, intent narrowing) still
+      register an authored :class:`ExternalSignature` via :func:`keep_external`.
+    * each ``do_not_emit`` name becomes an **ignored** external -- ``stub=True``,
+      so the call is dropped (no node).  ``ignore`` is a subset of don't-inline.
+
+    Validation (no duplicate names, no name in both lists) runs first via
+    :func:`dace_fortran.external_functions.validate`, so an inconsistent policy
+    is rejected before any registration mutates the registry.
+
+    :param external_functions: procedures to emit as external calls.
+    :param do_not_emit: procedure names whose calls are dropped entirely.
+    """
+    from dace_fortran.external_functions import validate
+
+    external_functions = list(external_functions)
+    do_not_emit = list(do_not_emit)
+    validate(external_functions, do_not_emit)
+    for f in external_functions:
+        keep_external(f.name, c_name=f.symbol,
+                      libraries=(f.library, ) if f.library else ())
+    for name in do_not_emit:
+        keep_external(name, stub=True)
 
 
 def lookup_external(name: str) -> Optional[ExternalSignature]:

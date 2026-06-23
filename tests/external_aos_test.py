@@ -18,6 +18,13 @@ particular memory layout, each call-site argument falls into one of:
 The first case is what unblocks the ``solve_nh`` halo externalisation, so it is
 pinned here; the deep-copy case is marked ``xfail`` until the binding wrap is
 wired.
+
+API note: the plain-array cases declare the external through the unified policy
+(:func:`dace_fortran.apply_external_functions` + one
+:class:`~dace_fortran.external_functions.ExternalFunction`) -- HLFIR derives the
+shallow pointer plan.  The AoS / ``per_member_soa`` cases keep
+:func:`keep_external` with an authored :class:`~dace_fortran.external.Arg`
+list, because the AoS memory layout is an ABI fact HLFIR cannot infer.
 """
 import os
 import subprocess
@@ -28,7 +35,8 @@ import pytest
 
 from _helpers import xfail
 from _util import build_sdfg, have_flang
-from dace_fortran.external import Arg, clear_external_registry, keep_external
+from dace_fortran.external import Arg, apply_external_functions, clear_external_registry, keep_external
+from dace_fortran.external_functions import ExternalFunction
 
 #: Standalone "fake" mo_velocity_advection (full velocity_tendencies + its USE
 #: closure as one file).  Vendored in-repo at
@@ -87,10 +95,9 @@ end module
 """
     clear_external_registry()
     try:
-        keep_external("ext_scale",
-                      args=(Arg(kind="array", dtype="float64", intent="inout"),
-                            Arg(kind="scalar", dtype="int32", intent="in")),
-                      libraries=(str(so),))
+        # Plain array + scalar -> the unified policy's derived plan (array
+        # inout pointer, scalar by-value) is exactly the zero-copy shape.
+        apply_external_functions([ExternalFunction("ext_scale", library=str(so))])
         sdfg = build_sdfg(src, tmp_path, name="kern",
                           entry="m_alias::kern").build()
         u = np.arange(8, dtype=np.float64)
@@ -242,10 +249,9 @@ end module
 """
     clear_external_registry()
     try:
-        keep_external("ext_scale",
-                      args=(Arg(kind="array", dtype="float64", intent="inout"),
-                            Arg(kind="scalar", dtype="int32", intent="in")),
-                      libraries=(str(so),))
+        # Plain array + scalar -> the unified policy derives the same
+        # shallow (no AoS buffer) pointer pass.
+        apply_external_functions([ExternalFunction("ext_scale", library=str(so))])
         sdfg = build_sdfg(src, tmp_path, name="kern",
                           entry="m_velptr::kern").build()
         # Shallow pass: the tasklet calls the external on the array pointer
@@ -347,9 +353,8 @@ def test_full_velocity_advection_external_call(tmp_path):
     so = _build_c_so(tmp_path, "ext_sync", "void ext_sync(double* a){(void)a;}")
     clear_external_registry()
     try:
-        keep_external("ext_sync",
-                      args=(Arg(kind="array", dtype="float64", intent="inout"),),
-                      libraries=(str(so),))
+        # Single plain array -> derived inout pointer (shallow pass).
+        apply_external_functions([ExternalFunction("ext_sync", library=str(so))])
         sdfg = build_sdfg(src, tmp_path, name="velext",
                           entry="mo_velocity_advection::velocity_tendencies").build()
         from dace_fortran.external import ExternalCall

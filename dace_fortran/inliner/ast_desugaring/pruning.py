@@ -312,6 +312,63 @@ def prune_coarsely(ast: f03.Program, keepers: Iterable[types.SPEC]) -> f03.Progr
     return ast
 
 
+def prune_dangling_interface_bodies(ast: f03.Program) -> f03.Program:
+    """Remove interface bodies left dangling by pruning.
+
+    An interface body (e.g. an ``ABSTRACT INTERFACE`` procedure) carries an
+    ``IMPORT`` of the host entities it needs.  When pruning drops a type/kind as
+    unused external baggage -- the halo-exchange comm-pattern abstract
+    interfaces (``interface_exchange_data_*``) import ``t_comm_pattern_collection``,
+    ``xfer_list``, ... -- the body is left importing a name that no longer
+    exists and cannot compile.  Such a body is also unreferenced (its DEFERRED
+    binding was pruned with its type), so drop it; then remove any abstract
+    interface block emptied as a result.
+
+    Gated by the caller on :data:`analysis.TOLERATE_EXTERNAL_USES`: with full
+    resolution every ``IMPORT`` name resolves, so this is a no-op."""
+    alias_map = analysis.alias_specs(ast)
+    for imp in list(walk(ast, f03.Import_Stmt)):
+        body = imp.parent.parent  # Specification_Part -> (Subroutine|Function)_Body
+        if not isinstance(body.parent, f03.Interface_Block):
+            continue
+        host_scope = analysis.find_scope_spec(body.parent)
+        if any(analysis.search_real_ident_spec(nm.string, host_scope, alias_map) is None
+               for nm in walk(imp, f03.Name)):
+            utils.remove_self(body)
+    # Drop generic-interface ``MODULE PROCEDURE`` members whose target subprogram
+    # was pruned away.  Reachability resolves a call ``init(x)`` to its specific
+    # (``init_zero_3d_dp``) and prunes the unused specifics, but their names
+    # linger in the generic's member list -- gfortran: "Procedure 'init_5d_l' in
+    # generic interface 'init' is neither function nor subroutine".  A name with
+    # no defined subprogram (interface bodies are not subprograms) is dangling.
+    defined: Set[str] = set()
+    for sp in walk(ast, (f03.Subroutine_Subprogram, f03.Function_Subprogram)):
+        stmt = ast_utils.atmost_one(ast_utils.children_of_type(sp, (f03.Subroutine_Stmt, f03.Function_Stmt)))
+        nm = utils.find_name_of_stmt(stmt) if stmt is not None else None
+        if nm:
+            defined.add(nm.lower())
+    for proc_stmt in list(walk(ast, f03.Procedure_Stmt)):
+        if not isinstance(proc_stmt.parent, f03.Interface_Block):
+            continue
+        name_list = proc_stmt.children[0]
+        names = walk(name_list, f03.Name)
+        kept = [nm for nm in names if nm.string.lower() in defined]
+        if len(kept) == len(names):
+            continue
+        if not kept:
+            utils.remove_self(proc_stmt)
+        else:
+            name_list.items = tuple(kept)
+    for iface in walk(ast, f03.Interface_Stmt):
+        name, = iface.children
+        if name and name != 'ABSTRACT':
+            continue
+        idef = iface.parent
+        if not idef.children[1:-1]:
+            utils.remove_self(idef)
+    return ast
+
+
 def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC]) -> f03.Program:
     """
     Performs a fine-grained pruning of the AST by tracing all usages from a set of
@@ -361,7 +418,17 @@ def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC]) -> f03.Pro
             keep_node = alias_map[nm_spec]
             if isinstance(keep_node, PRUNABLE_OBJECT_CLASSES):
                 _keep_from(keep_node.parent)
-        for dr in walk(node, f03.Data_Ref):
+        # Component accesses keep the components they touch.  A pointer-component
+        # WRITE ``this % comp => x`` puts ``this % comp`` on the LHS of ``=>``,
+        # which fparser wraps in a Data_Pointer_Object -- NOT a Data_Ref -- so it
+        # is invisible to ``walk(node, Data_Ref)``.  Without this a pointer
+        # component that is only ever assigned (the norm in a constructor) is
+        # pruned from its type, leaving the body referencing a member the type no
+        # longer declares.  A ``%``-bearing Data_Pointer_Object is the same kind
+        # of component reference; ``_lookup_dataref`` already accepts it.
+        comp_refs: List[Base] = list(walk(node, f03.Data_Ref))
+        comp_refs += [dpo for dpo in walk(node, f03.Data_Pointer_Object) if '%' in dpo.tofortran()]
+        for dr in comp_refs:
             root, rest = analysis._lookup_dataref(dr, alias_map)
             if rest and isinstance(rest[0], f03.Section_Subscript_List):
                 root, rest = f03.Part_Ref(f"{root.tofortran()}({rest[0].tofortran()})"), rest[1:]
