@@ -77,7 +77,11 @@ _SETUP_HINT = ("set ICON_DYCORE_CC to a built compile_commands.json, "
                "or run tests/icon/dycore/setup_icon_dycore.sh "
                "(populates tests/icon/dycore/.icon_build/compile_commands.json)")
 
+# Driven by a real ICON build's compile_commands.json -- the heavy CI lane
+# generates it (tests/icon/dycore/setup_icon_dycore.sh) before the long run,
+# so this belongs in the ``long`` lane (the fast lane has no such DB).
 pytestmark = [
+    pytest.mark.long,
     pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH"),
     pytest.mark.skipif(_resolve_compile_commands() is None, reason=_SETUP_HINT),
 ]

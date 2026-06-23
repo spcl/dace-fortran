@@ -32,17 +32,25 @@ from pathlib import Path
 
 import pytest
 
-from ._fc import (
+from icon.full._fc import (
     FORTRAN_COMPILERS,
     cpp_flag,
     fortran_compiler_flags,
     syntax_check_argv,
 )
-from ._icon_solve_nh_patch import (
+from icon.full._icon_solve_nh_patch import (
     SOLVE_NH_WRAPPER_NAME,
     apply_solve_nh_patch,
     write_patched_solve_nh,
 )
+
+# This test compiles the patched solve_nh against ICON's compiled ``.mod``
+# files, which are built by gfortran -- only gfortran can read them (flang's
+# HLFIR ``.mod`` format is binary-incompatible, see ``_fc.discover_fortran_
+# compilers``).  Parametrize gfortran-only so the flang slot is never emitted
+# as a runtime skip; the gfortran-format guard inside the test stays as a
+# defensive assertion.
+GFORTRAN_COMPILERS = [p for p in FORTRAN_COMPILERS if "gfortran" in (p.id or "")]
 
 
 _HERE = Path(__file__).resolve().parent
@@ -60,6 +68,13 @@ def _real_source() -> Path:
 
 _HAVE_ICON = _real_source().is_file()
 _HAVE_ICON_MODS = (_ICON_BUILD / "mod").is_dir()
+
+
+# Every test here reads ICON's real ``mo_solve_nonhydro`` source through the
+# icon-model submodule (the patch-side tests via ``_real_source()``, the
+# compile tests additionally via the ``icon_build`` fixture), which only the
+# heavy CI lane checks out -> ``long``.
+pytestmark = pytest.mark.long
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +179,7 @@ def test_write_patched_solve_nh(tmp_path: Path):
 
 @pytest.mark.skipif(not _HAVE_ICON,
                     reason="icon-model submodule not checked out")
-@pytest.mark.parametrize("fc", FORTRAN_COMPILERS)
+@pytest.mark.parametrize("fc", GFORTRAN_COMPILERS)
 def test_patched_source_parses_through_fortran_compiler(fc, tmp_path: Path, icon_build):
     """The Fortran compiler accepts the patched file (syntax-only)
     against ICON's own ``.mod`` files.  Parametrized over every

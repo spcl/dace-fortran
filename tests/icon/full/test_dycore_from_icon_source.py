@@ -242,9 +242,15 @@ _ICON_EXTERNAL_STUBS = (
 )
 
 
-pytestmark = pytest.mark.skipif(
-    not (_HAVE_FLANG and _HAVE_OPENMPI),
-    reason="needs flang-new-21 + OpenMPI")
+# Reads ICON's real ``mo_solve_nonhydro`` source through the icon-model
+# submodule (HLFIR emit / SDFG build / compile-commands parse), which only the
+# heavy CI lane checks out -> ``long``.
+pytestmark = [
+    pytest.mark.long,
+    pytest.mark.skipif(
+        not (_HAVE_FLANG and _HAVE_OPENMPI),
+        reason="needs flang-new-21 + OpenMPI"),
+]
 
 
 @pytest.mark.skipif(
