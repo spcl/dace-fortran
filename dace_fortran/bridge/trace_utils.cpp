@@ -195,6 +195,19 @@ std::string traceToDecl(mlir::Value val, int max) {
       val = ba.getVal();
       continue;
     }
+    // ``hlfir.as_expr %var`` retypes a materialised variable (a declare /
+    // box) as an ``!hlfir.expr`` value WITHOUT moving the storage -- the
+    // underlying array is ``%var``'s declare.  Walk through to the variable
+    // so a reduction / libcall whose source is a lifted array-result temp
+    // resolves to that transient's name.  The LiftReductionOperands pass
+    // materialises an inline array-result library op (``SUM(MATMUL(a,b))``,
+    // ``...(TRANSPOSE(a))``, ...) as ``hlfir.assign <op> to <decl>`` +
+    // ``hlfir.as_expr <decl>`` and rewrites the consuming reduction to read
+    // the as_expr; without this peel the reduce source name would be empty.
+    if (auto ae = mlir::dyn_cast<hlfir::AsExprOp>(d)) {
+      val = ae.getVar();
+      continue;
+    }
     // Section / element designates (``a(lo:hi)``, ``a(i)``)  --  walk
     // through to the underlying memref so a reduce over an
     // ``hlfir.any %levmask(i_startblk:i_endblk, jk)`` resolves its

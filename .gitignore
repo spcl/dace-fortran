@@ -241,8 +241,12 @@ _all_tests/
 !tests/external_to_modules/**/*.f90
 !tests/string_enum_to_integer/**/*.f90
 
-# External ICON source clone used by the self-building ICON tests (not tracked)
-tests/icon/full/icon-model/
+# icon-model is a registered git submodule (see .gitmodules), pinned to the
+# ICON release tag icon-2026.04-public.  Its build artifacts are still ignored
+# so an on-demand ``make`` under the checkout doesn't dirty the submodule.
+tests/icon/full/icon-model/build/
+tests/icon/full/icon-model/**/*.o
+tests/icon/full/icon-model/**/*.mod
 
 # Local session planning scratch (not repo content)
 WORK_PACKAGES.md

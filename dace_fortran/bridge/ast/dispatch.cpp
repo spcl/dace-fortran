@@ -282,6 +282,48 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
       auto dst = assign.getOperand(1);
       bool dst_is_array = isArrayRef(dst.getType());
       bool src_is_array = isArrayRef(src.getType());
+      // Whole-array ELEMENTWISE assign inside the loop body
+      // (``a = a*2``, ``a = a - 1`` in a ``do while``).  The RHS is an
+      // ``hlfir.elemental`` whose result type is an ``!hlfir.expr<?>``
+      // (so ``src_is_array`` is true), but it is NOT a plain
+      // array-to-array copy: ``buildCopyNode`` would ``traceToDecl``
+      // the elemental result, get an empty name, and emit a
+      // ``kind="copy"`` node with ``reduce_src=""`` -- which blows up
+      // at ``emit_library.emit_copy`` (``sdfg.arrays[""]`` KeyError).
+      // Mirror the structured ``buildAST`` dispatch (the
+      // ``hlfir.elemental`` case): expand to the element-wise
+      // map+assign (``buildElementalAssign``), with the MERGE-libcall
+      // shape checked first.  Without this, every whole-array
+      // element-wise op in a ``do while`` body miscompiled.
+      if (auto* sop = src.getDefiningOp()) {
+        if (auto elem = mlir::dyn_cast<hlfir::ElementalOp>(sop)) {
+          auto merge_built = buildMergeLibcall(assign, elem);
+          if (!merge_built.empty()) {
+            for (auto& n : merge_built) out.push_back(std::move(n));
+          } else {
+            for (auto& n : buildElementalAssign(assign, elem))
+              out.push_back(std::move(n));
+          }
+          continue;
+        }
+        // Scalar-reducing intrinsic as the RHS (``tmp = MAXVAL(a)``).
+        // Inside a ``do while`` body this is how an inline reduction
+        // (``out = out + MAXVAL(a)``) reaches us: LiftReductionOperands
+        // hoists the reduction into a ``_QQred_lift_N = MAXVAL(a)`` temp
+        // assign placed in the loop body, then the consuming elemental
+        // reads the lifted scalar.  Route the lifted assign through the
+        // SAME reduce lowering the structured dispatch uses -- without
+        // this it falls to ``buildAssignNode`` and the reduction RHS
+        // renders as ``?`` (``emit_scalar_assign`` aborts).
+        {
+          bool redMatched = false;
+          auto redNodes = buildReductionAssignNodes(assign, sop, redMatched);
+          if (redMatched) {
+            for (auto& n : redNodes) out.push_back(std::move(n));
+            continue;
+          }
+        }
+      }
       if (dst_is_array && src_is_array) {
         out.push_back(buildCopyNode(assign));
       } else if (dst_is_array && !src_is_array && isConstantZero(src)) {
@@ -1580,6 +1622,156 @@ static void materialiseCondReductions(mlir::Value condVal,
   }
 }
 
+std::vector<ASTNode> buildReductionAssignNodes(hlfir::AssignOp assign,
+                                               mlir::Operation* sd,
+                                               bool& matched) {
+  std::vector<ASTNode> nodes;
+  matched = false;
+  if (!sd) return nodes;
+
+  // Scalar reductions land as their own dedicated op; pattern-
+  // match each one and hand the shared reduce-lowering helper
+  // the right wcr + identity.
+  auto opName = sd->getName().getStringRef();
+  struct RedEntry {
+    llvm::StringRef op;
+    llvm::StringRef wcr;       // DaCe wcr lambda string
+    llvm::StringRef identity;  // initial accumulator value (float-typed)
+    llvm::StringRef py_op;     // Python binary op for
+                               // section-reduce loop body;
+                               // empty -> fall back to
+                               // buildReduceNode (whole-array)
+  };
+  // Identity strings here are the FLOAT-TYPED defaults.  The
+  // ``identityForType`` helper below specialises them per
+  // element type because ``inf`` / ``-inf`` cast to an integer
+  // is undefined behaviour: at -O3 the compiler folds it to
+  // INT_MAX/INT_MIN; at -O0 the un-folded ``INFINITY`` to
+  // ``int`` conversion gives INT_MIN regardless of intent,
+  // breaking integer MINVAL (e.g. NPB LU's class-S tests
+  // surface this as ``MINVAL(arr) == -2147483648`` at -O0).
+  // Identity strings use the bare ``inf`` token (not
+  // ``math.inf``) so DaCe's cppunparse -- which maps
+  // ``inf`` -> ``INFINITY`` via _py2c_reserved -- emits
+  // a valid C++ literal in the section-reduce init
+  // tasklet.  The whole-array Reduce path's eval()
+  // namespace is patched with ``inf=math.inf`` for
+  // the same string.
+  static const RedEntry kRedTable[] = {
+      {"hlfir.sum", "lambda a, b: a + b", "0", "+"},
+      {"hlfir.product", "lambda a, b: a * b", "1", "*"},
+      {"hlfir.minval", "lambda a, b: min(a, b)", "inf", "min"},
+      {"hlfir.maxval", "lambda a, b: max(a, b)", "-inf", "max"},
+      // Logical reductions  --  ANY / ALL on ``fir.logical``
+      // arrays (ICON's levelmask / maskflag patterns).
+      {"hlfir.any", "lambda a, b: a or b", "False", "or"},
+      {"hlfir.all", "lambda a, b: a and b", "True", "and"},
+      // ``hlfir.count`` is intentionally absent  --  handled
+      // in ``kLibTable`` above as a ``CountLibraryNode``
+      // libcall (covers Fortran COUNT's int-cast semantics
+      // and the optional ``dim`` argument).
+  };
+  // Pick the type-correct identity literal for the reduction
+  // op's element type.  MINVAL / MAXVAL on integer arrays must
+  // initialise with INT_MAX / INT_MIN; ``inf`` / ``-inf`` to
+  // int is undefined behaviour and breaks at -O0 (see
+  // ``tests/integer_reduction_identity_test.py``).
+  auto identityForType = [&](const RedEntry& entry,
+                             mlir::Type elemTy) -> std::string {
+    // Shared with the condition-reduction materialiser: SUM / PRODUCT /
+    // ALL / ANY identities pass through; MINVAL / MAXVAL pick the
+    // type-correct sentinel (float ``inf`` -> cppunparse INFINITY;
+    // integer -> width-correct INT_MAX / INT_MIN literal, since ``inf``
+    // cast to int is UB at -O0).
+    return reductionIdentityForType(entry.identity, elemTy);
+  };
+  // Compute the reduction's element type once; ``sd`` is the
+  // hlfir.minval / maxval / sum / ... op.  Its result type is
+  // the per-element scalar type for these "reduce to scalar"
+  // ops.
+  mlir::Type redElemTy;
+  if (sd->getNumResults() > 0) redElemTy = sd->getResult(0).getType();
+  for (auto& e : kRedTable) {
+    if (opName == e.op) {
+      // If the reduction source is a section designate
+      // (``mask(lo:hi, jk)``) we can't use DaCe's Reduce
+      // node directly  --  it reduces whole arrays.  Fall
+      // back to a loop-accumulator lowering when a
+      // Python op is available.
+      bool emitted = false;
+      if (!e.py_op.empty() && sd->getNumOperands() > 0) {
+        auto srcVal = sd->getOperand(0);
+        // Peel ``fir.convert`` chains so a section
+        // designate hidden behind a box rebox (the
+        // shape canonicalisation that shows up after
+        // ``hlfir-rewrite-sequence-association``  --
+        // ``box<array<NxT>>`` -> ``box<array<?xT>>``)
+        // still matches the section-reduce path.
+        // Safe because at this point ``srcVal`` is
+        // a box/ref of an array element type  --  the
+        // converts here are shape-bookkeeping only,
+        // never value-altering casts (which only
+        // appear at scalar value sites).
+        while (auto cv = mlir::dyn_cast_or_null<fir::ConvertOp>(
+                   srcVal.getDefiningOp())) {
+          srcVal = cv.getValue();
+        }
+        if (auto* srcOp = srcVal.getDefiningOp()) {
+          if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(srcOp)) {
+            bool hasTrip = false;
+            for (bool t : dg.getIsTriplet())
+              if (t) {
+                hasTrip = true;
+                break;
+              }
+            if (hasTrip) {
+              auto built = buildSectionReduceAssign(
+                  assign, dg, e.py_op.str(), identityForType(e, redElemTy));
+              if (!built.empty()) {
+                for (auto& bn : built) nodes.push_back(std::move(bn));
+                emitted = true;
+              }
+            }
+          }
+        }
+      }
+      // Mode-C for ANY reduction op whose source is an
+      // ``hlfir.elemental`` (compound boolean expression for
+      // ANY/ALL, element-wise arithmetic like ``SUM(q ** 2)``
+      // for SUM/PRODUCT/MINVAL/MAXVAL).  ``traceToDecl``
+      // returns "" for an elemental result -- the plain
+      // Reduce path then explodes with ``reduction source ''
+      // not registered``.  Materialise the elemental into a
+      // transient via a per-element loop and route the
+      // Reduce over the transient.  ``buildElementalAnyAllReduce``
+      // is op-agnostic (its name is historical -- the wcr +
+      // identity arguments make it work for any reduction)
+      // so we route SUM/PRODUCT/MINVAL/MAXVAL the same way.
+      // QE's ``vcut_get`` (3 occurrences of ``SUM(... ** 2)``)
+      // was the surfacing case.
+      if (!emitted && sd->getNumOperands() > 0) {
+        auto srcVal = sd->getOperand(0);
+        if (auto* srcOp = srcVal.getDefiningOp())
+          if (auto elem_src = mlir::dyn_cast<hlfir::ElementalOp>(srcOp)) {
+            auto built = buildElementalAnyAllReduce(
+                assign, elem_src, e.wcr.str(), identityForType(e, redElemTy));
+            if (!built.empty()) {
+              for (auto& bn : built) nodes.push_back(std::move(bn));
+              emitted = true;
+            }
+          }
+      }
+      if (!emitted) {
+        nodes.push_back(buildReduceNode(assign, sd, e.wcr.str(),
+                                        identityForType(e, redElemTy)));
+      }
+      matched = true;
+      break;
+    }
+  }
+  return nodes;
+}
+
 std::vector<ASTNode> buildAST(mlir::Block& block) {
   std::vector<ASTNode> nodes;
 
@@ -2507,150 +2699,18 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
         }
         if (libMatched) continue;
 
-        // Scalar reductions land as their own dedicated op; pattern-
-        // match each one and hand the shared reduce-lowering helper
-        // the right wcr + identity.
-        auto opName = sd->getName().getStringRef();
-        struct RedEntry {
-          llvm::StringRef op;
-          llvm::StringRef wcr;       // DaCe wcr lambda string
-          llvm::StringRef identity;  // initial accumulator value (float-typed)
-          llvm::StringRef py_op;     // Python binary op for
-                                     // section-reduce loop body;
-                                     // empty -> fall back to
-                                     // buildReduceNode (whole-array)
-        };
-        // Identity strings here are the FLOAT-TYPED defaults.  The
-        // ``identityForType`` helper below specialises them per
-        // element type because ``inf`` / ``-inf`` cast to an integer
-        // is undefined behaviour: at -O3 the compiler folds it to
-        // INT_MAX/INT_MIN; at -O0 the un-folded ``INFINITY`` to
-        // ``int`` conversion gives INT_MIN regardless of intent,
-        // breaking integer MINVAL (e.g. NPB LU's class-S tests
-        // surface this as ``MINVAL(arr) == -2147483648`` at -O0).
-        // Identity strings use the bare ``inf`` token (not
-        // ``math.inf``) so DaCe's cppunparse -- which maps
-        // ``inf`` -> ``INFINITY`` via _py2c_reserved -- emits
-        // a valid C++ literal in the section-reduce init
-        // tasklet.  The whole-array Reduce path's eval()
-        // namespace is patched with ``inf=math.inf`` for
-        // the same string.
-        static const RedEntry kRedTable[] = {
-            {"hlfir.sum", "lambda a, b: a + b", "0", "+"},
-            {"hlfir.product", "lambda a, b: a * b", "1", "*"},
-            {"hlfir.minval", "lambda a, b: min(a, b)", "inf", "min"},
-            {"hlfir.maxval", "lambda a, b: max(a, b)", "-inf", "max"},
-            // Logical reductions  --  ANY / ALL on ``fir.logical``
-            // arrays (ICON's levelmask / maskflag patterns).
-            {"hlfir.any", "lambda a, b: a or b", "False", "or"},
-            {"hlfir.all", "lambda a, b: a and b", "True", "and"},
-            // ``hlfir.count`` is intentionally absent  --  handled
-            // in ``kLibTable`` above as a ``CountLibraryNode``
-            // libcall (covers Fortran COUNT's int-cast semantics
-            // and the optional ``dim`` argument).
-        };
-        // Pick the type-correct identity literal for the reduction
-        // op's element type.  MINVAL / MAXVAL on integer arrays must
-        // initialise with INT_MAX / INT_MIN; ``inf`` / ``-inf`` to
-        // int is undefined behaviour and breaks at -O0 (see
-        // ``tests/integer_reduction_identity_test.py``).
-        auto identityForType = [&](const RedEntry& entry,
-                                   mlir::Type elemTy) -> std::string {
-          // Shared with the condition-reduction materialiser: SUM / PRODUCT /
-          // ALL / ANY identities pass through; MINVAL / MAXVAL pick the
-          // type-correct sentinel (float ``inf`` -> cppunparse INFINITY;
-          // integer -> width-correct INT_MAX / INT_MIN literal, since ``inf``
-          // cast to int is UB at -O0).
-          return reductionIdentityForType(entry.identity, elemTy);
-        };
-        // Compute the reduction's element type once; ``sd`` is the
-        // hlfir.minval / maxval / sum / ... op.  Its result type is
-        // the per-element scalar type for these "reduce to scalar"
-        // ops.
-        mlir::Type redElemTy;
-        if (sd->getNumResults() > 0) redElemTy = sd->getResult(0).getType();
-        bool matched = false;
-        for (auto& e : kRedTable) {
-          if (opName == e.op) {
-            // If the reduction source is a section designate
-            // (``mask(lo:hi, jk)``) we can't use DaCe's Reduce
-            // node directly  --  it reduces whole arrays.  Fall
-            // back to a loop-accumulator lowering when a
-            // Python op is available.
-            bool emitted = false;
-            if (!e.py_op.empty() && sd->getNumOperands() > 0) {
-              auto srcVal = sd->getOperand(0);
-              // Peel ``fir.convert`` chains so a section
-              // designate hidden behind a box rebox (the
-              // shape canonicalisation that shows up after
-              // ``hlfir-rewrite-sequence-association``  --
-              // ``box<array<NxT>>`` -> ``box<array<?xT>>``)
-              // still matches the section-reduce path.
-              // Safe because at this point ``srcVal`` is
-              // a box/ref of an array element type  --  the
-              // converts here are shape-bookkeeping only,
-              // never value-altering casts (which only
-              // appear at scalar value sites).
-              while (auto cv = mlir::dyn_cast_or_null<fir::ConvertOp>(
-                         srcVal.getDefiningOp())) {
-                srcVal = cv.getValue();
-              }
-              if (auto* srcOp = srcVal.getDefiningOp()) {
-                if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(srcOp)) {
-                  bool hasTrip = false;
-                  for (bool t : dg.getIsTriplet())
-                    if (t) {
-                      hasTrip = true;
-                      break;
-                    }
-                  if (hasTrip) {
-                    auto built = buildSectionReduceAssign(
-                        assign, dg, e.py_op.str(),
-                        identityForType(e, redElemTy));
-                    if (!built.empty()) {
-                      for (auto& bn : built) nodes.push_back(std::move(bn));
-                      emitted = true;
-                    }
-                  }
-                }
-              }
-            }
-            // Mode-C for ANY reduction op whose source is an
-            // ``hlfir.elemental`` (compound boolean expression for
-            // ANY/ALL, element-wise arithmetic like ``SUM(q ** 2)``
-            // for SUM/PRODUCT/MINVAL/MAXVAL).  ``traceToDecl``
-            // returns "" for an elemental result -- the plain
-            // Reduce path then explodes with ``reduction source ''
-            // not registered``.  Materialise the elemental into a
-            // transient via a per-element loop and route the
-            // Reduce over the transient.  ``buildElementalAnyAllReduce``
-            // is op-agnostic (its name is historical -- the wcr +
-            // identity arguments make it work for any reduction)
-            // so we route SUM/PRODUCT/MINVAL/MAXVAL the same way.
-            // QE's ``vcut_get`` (3 occurrences of ``SUM(... ** 2)``)
-            // was the surfacing case.
-            if (!emitted && sd->getNumOperands() > 0) {
-              auto srcVal = sd->getOperand(0);
-              if (auto* srcOp = srcVal.getDefiningOp())
-                if (auto elem_src = mlir::dyn_cast<hlfir::ElementalOp>(srcOp)) {
-                  auto built = buildElementalAnyAllReduce(
-                      assign, elem_src, e.wcr.str(),
-                      identityForType(e, redElemTy));
-                  if (!built.empty()) {
-                    for (auto& bn : built) nodes.push_back(std::move(bn));
-                    emitted = true;
-                  }
-                }
-            }
-            if (!emitted) {
-              nodes.push_back(buildReduceNode(assign, sd, e.wcr.str(),
-                                              identityForType(e, redElemTy)));
-            }
-            matched = true;
-            break;
-          }
+        // Scalar reductions (sum / product / minval / maxval / any /
+        // all) land as their own dedicated op.  The routing (section /
+        // elemental / whole-array source) lives in the shared
+        // ``buildReductionAssignNodes`` helper so the ``scf.while`` body
+        // walker reaches it identically for a reduction inside a
+        // ``do while`` body.
+        {
+          bool redMatched = false;
+          auto redNodes = buildReductionAssignNodes(assign, sd, redMatched);
+          for (auto& n : redNodes) nodes.push_back(std::move(n));
+          if (redMatched) continue;
         }
-        if (matched) continue;
       }
       nodes.push_back(buildAssignNode(assign));
       continue;

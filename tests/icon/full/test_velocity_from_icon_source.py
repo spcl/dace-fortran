@@ -140,7 +140,15 @@ def _icon_compile_args() -> dict:
     return {"defines": list(_ICON_DEFINES_FALLBACK), "include_dirs": [_ICON_SRC / "src/include"]}
 
 
-pytestmark = pytest.mark.skipif(not (_HAVE_FLANG and _HAVE_OPENMPI), reason="needs flang-new-21 + OpenMPI")
+# Reads ICON's real velocity source through the icon-model submodule (HLFIR
+# emit + SDFG build), which only the heavy CI lane checks out -> ``long``.
+# The self-contained single-TU velocity e2e correctness tests
+# (``test_velocity_full*.py``, in-tree ``velocity_full.f90``) stay in the fast
+# lane.
+pytestmark = [
+    pytest.mark.long,
+    pytest.mark.skipif(not (_HAVE_FLANG and _HAVE_OPENMPI), reason="needs flang-new-21 + OpenMPI"),
+]
 
 # ---------------------------------------------------------------------------
 # Headline test: build the velocity SDFG from BOTH a stub source and

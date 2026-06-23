@@ -347,7 +347,7 @@ class HLFIRModule {
   /// (pre-flatten), so Python can auto-derive an ``OriginalInterface``
   /// instead of the caller hand-writing one.  MUST be read before
   /// ``hlfir-flatten-structs`` runs.  Shape:
-  ///   {"args": [{"name", "dtype", "intent", "rank", "shape",
+  ///   {"args": [{"name", "dtype", "intent", "optional", "rank", "shape",
   ///              "is_struct", "struct_name", "struct_module"}, ...],
   ///    "used_modules": {mod: [syms], ...},
   ///    "struct_types": {struct_name: {"name": ..., "module": ...,
@@ -373,6 +373,7 @@ class HLFIRModule {
       d["name"] = a.name;
       d["dtype"] = a.dtype;
       d["intent"] = a.intent;
+      d["optional"] = a.optional;
       d["rank"] = a.rank;
       nb::list sh;
       for (auto& s : a.shape_symbols) sh.append(s);

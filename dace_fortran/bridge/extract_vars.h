@@ -239,6 +239,8 @@ struct FortranArgInfo {
   std::string dtype;    // element dtype (``complex128`` / ``float64`` / ...)
                         // empty for a derived-type arg (see ``is_struct``)
   std::string intent;   // ``in`` / ``out`` / ``inout`` / ``""``
+  bool optional = false;  // dummy declared OPTIONAL (Fortran ``present(x)``
+                          // companion ``<name>_present`` is a real symbol)
   int rank = 0;
   std::vector<std::string> shape_symbols;  // per-dim extent symbol / literal
   bool is_struct = false;       // derived-type dummy

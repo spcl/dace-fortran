@@ -166,3 +166,54 @@ end module
     # Canonical DaCe matmul connector names.
     assert set(mm.in_connectors) == {"_a", "_b"}, dict(mm.in_connectors)
     assert set(mm.out_connectors) == {"_c"}, dict(mm.out_connectors)
+
+
+def test_matmul_transpose_b_side_whole_assign(tmp_path):
+    """B-side fold ``C = MATMUL(A, TRANSPOSE(B))``.  Flang lowers this to the
+    same ``hlfir.matmul_transpose`` op (operands swapped) the A-side uses, so
+    the bridge threads ``transB=True`` onto the GEMM node -- no transient
+    ``B^T`` is materialised.  Result must match ``A @ B.T``."""
+    src = """
+module m
+contains
+  subroutine mmt_b(a, b, c)
+    real(kind=8), intent(in) :: a(4, 3), b(5, 3)
+    real(kind=8), intent(out) :: c(4, 5)
+    c = MATMUL(a, TRANSPOSE(b))
+  end subroutine
+end module
+"""
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="mmt_b", entry="m::mmt_b").build()
+    rng = np.random.default_rng(2)
+    A = np.asfortranarray(rng.standard_normal((4, 3)))
+    B = np.asfortranarray(rng.standard_normal((5, 3)))
+    C = np.zeros((4, 5), dtype=np.float64, order='F')
+    sdfg(a=A, b=B, c=C)
+    np.testing.assert_allclose(C, A @ B.T)
+
+
+def test_matmul_transpose_b_side_libnode_transB(tmp_path):
+    """The B-side ``MATMUL(A, TRANSPOSE(B))`` folds onto a SINGLE GEMM node
+    with ``transB`` set as its declared Property (``transA`` clear), no
+    transient ``Transpose`` node -- the symmetric counterpart to the A-side
+    ``transA`` fold."""
+    src = """
+module m
+contains
+  subroutine mmt_b_node(a, b, c)
+    real(kind=8), intent(in) :: a(4, 3), b(5, 3)
+    real(kind=8), intent(out) :: c(4, 5)
+    c = MATMUL(a, TRANSPOSE(b))
+  end subroutine
+end module
+"""
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="mmt_b_node", entry="m::mmt_b_node").build()
+    matmuls = [n for n, _ in sdfg.all_nodes_recursive() if type(n).__name__ == "MatMul"]
+    assert len(matmuls) == 1, f"expected exactly one MatMul lib node, got {len(matmuls)}"
+    mm = matmuls[0]
+    assert getattr(mm, "transB", False) is True, "transB must be set as a Property"
+    assert getattr(mm, "transA", False) is False
+    transposes = [n for n, _ in sdfg.all_nodes_recursive() if "Transpose" in type(n).__name__]
+    assert not transposes, f"B-side fold must allocate no transient transpose, got {transposes}"
+    assert set(mm.in_connectors) == {"_a", "_b"}, dict(mm.in_connectors)
+    assert set(mm.out_connectors) == {"_c"}, dict(mm.out_connectors)

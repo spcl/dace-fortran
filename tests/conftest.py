@@ -145,6 +145,14 @@ def pytest_collection_modifyitems(config, items):
       shared ``xdist_group`` makes ``--dist loadgroup`` schedule them
       onto ONE worker, so ICON builds exactly once.  No-op without
       xdist / loadgroup.
+
+    Tests that read ICON's real source through the icon-model submodule but
+    do NOT build it (HLFIR emit / SDFG build / compile-commands parse) carry
+    an explicit module-level ``pytest.mark.long`` instead -- they still need
+    the submodule (checked out only by the heavy CI lane), so they belong in
+    the same lane.  The self-contained single-TU velocity e2e correctness
+    tests (in-tree ``velocity_full.f90``, no submodule) deliberately stay in
+    the fast lane.
     """
     for item in items:
         if "icon_build" in getattr(item, "fixturenames", ()):  # uses the fixture

@@ -363,6 +363,43 @@ def _enum_literal_case_clause(literal: str) -> str:
     return f"CASE ('{lower}', '{upper}')"
 
 
+def _optional_local_name(sdfg_name: str) -> str:
+    """Wrapper-local that holds a forwarded OPTIONAL outer dummy's data.
+
+    The outer dummy is declared ``optional`` so the caller may omit it;
+    referencing it when absent (by-value scalar, or ``c_loc`` on an array)
+    is undefined.  We route the data through this guarded local instead --
+    set from the actual when ``present(...)``, else a degenerate zero -- so
+    the value/pointer the SDFG receives is always valid storage.
+    """
+    return f"{sdfg_name}__opt"
+
+
+def _optional_outer_dummies(frozen: FrozenSignature, iface: OriginalInterface) -> list:
+    """``(OriginalArg, FrozenArg)`` for every wrapper outer dummy declared
+    OPTIONAL whose presence the SDFG branches on via ``<name>_present``.
+
+    Scoped to SCALAR optionals: their value reaches the SDFG by value, so a
+    guarded local (see :func:`_optional_local_name`) -- set from the actual
+    when ``present(...)``, degenerate otherwise -- is all that is needed to
+    never reference an omitted optional.  ARRAY optionals additionally need
+    their ``<name>_d<i>`` extent symbols guarded (``size(absent)`` is UB), a
+    larger change left as follow-up; until then an array optional keeps the
+    default-absent presence.  Empty for the common no-optional kernel."""
+    optional_names = {a.name.lower() for a in iface.args if getattr(a, 'optional', False)}
+    if not optional_names:
+        return []
+    by_name = {a.name.lower(): a for a in iface.args}
+    pairs = []
+    for fa in frozen.args:
+        if fa.kind != 'scalar' or getattr(fa, 'rank', 0) != 0:
+            continue
+        fn = (fa.fortran_name or '').lower()
+        if fn in optional_names:
+            pairs.append((by_name[fn], fa))
+    return pairs
+
+
 def build_wrapper_head(frozen: FrozenSignature,
                        iface: OriginalInterface,
                        plan: FlattenPlan,
@@ -412,8 +449,9 @@ def build_wrapper_head(frozen: FrozenSignature,
             max_len = max((len(lit) for lit in literals), default=1)
             return (f"    character(len={max_len}),"
                     f" intent({a.intent or 'in'}) :: {a.name}")
+        opt = ", optional" if getattr(a, 'optional', False) else ""
         return (f"    {a.fortran_type},"
-                f" intent({a.intent or 'inout'}), target :: {a.name}"
+                f" intent({a.intent or 'inout'}), target{opt} :: {a.name}"
                 f"{_dim_spec(a.shape, {d.lower() for d in outer_dummy_names})}")
 
     outer_dummy_decls = "\n".join(_outer_decl(a) for a in iface.args)
@@ -527,6 +565,13 @@ def build_wrapper_head(frozen: FrozenSignature,
     # values are written in build_wrapper_body).
     for name, ftype, _rhs in _extra_local_symbols(frozen, iface, plan):
         scratch_lines.append(f"    {ftype} :: {name}")
+
+    # Guarded scalar locals for FORWARDED optional outer dummies: the by-value
+    # data the SDFG reads routes through these so an omitted optional is never
+    # referenced.  Filled in build_wrapper_body, passed in build_wrapper_tail.
+    for _oa, fa in _optional_outer_dummies(frozen, iface):
+        local = _optional_local_name(fa.sdfg_name)
+        scratch_lines.append(f"    {_fortran_c_value_type(fa.dtype)} :: {local}")
 
     bridge_decls, _, _, _ = _build_logical_bridges(frozen, iface)
     if bridge_decls:
@@ -722,6 +767,18 @@ def build_wrapper_body(frozen: FrozenSignature,
             body.append(f"    allocate({a.sdfg_name}({dims}))")
             body.append(f"    {a.sdfg_name} = {_zero_literal(a.dtype)}")
 
+    optional_dummies = _optional_outer_dummies(frozen, iface)
+    if optional_dummies:
+        body.append("")
+        body.append("    ! ----- Forwarded optional dummies: guarded data local -----")
+        for oa, fa in optional_dummies:
+            local = _optional_local_name(fa.sdfg_name)
+            body.append(f"    if (present({oa.name})) then")
+            body.append(f"      {local} = {oa.name}")
+            body.append(f"    else")
+            body.append(f"      {local} = {_zero_literal(fa.dtype)}")
+            body.append(f"    end if")
+
     comm_args = [a for a in frozen.args if a.kind == 'mpi_comm']
     if comm_args:
         body.append("")
@@ -801,6 +858,12 @@ def build_wrapper_tail(frozen: FrozenSignature,
             fa = frozen_by_fortran.get(a.name.lower())
             sdfg_name = fa.sdfg_name if fa is not None else a.name
             name_override[sdfg_name] = _enum_local_name(a.name)
+
+    # Forwarded optional dummies pass their guarded local (set from the actual
+    # when present, degenerate otherwise) -- never the outer dummy directly,
+    # which is undefined to reference when the caller omitted it.
+    for _oa, fa in _optional_outer_dummies(frozen, iface):
+        name_override[fa.sdfg_name] = _optional_local_name(fa.sdfg_name)
 
     # The C interface declares every array arg as ``type(c_ptr), value``
     # (see ``build_c_interface``).  Wrap each array actual with
@@ -1528,6 +1591,10 @@ def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dumm
     """
     _module_sources = effective_module_sources(frozen, iface)
     arg_by_sdfg = {a.sdfg_name: a for a in frozen.args}
+    # SCALAR outer dummies declared OPTIONAL -- their ``<name>_present``
+    # companion is forwarded from the caller's actual ``present(<name>)`` (M1),
+    # not defaulted.  Same scoping as the guarded-local data path.
+    outer_optional_set = {oa.name for oa, _fa in _optional_outer_dummies(frozen, iface)}
     # Cap symbols of aos_alloc recipes are populated by the pack-in
     # code (``render_aos_alloc_pack_in`` writes ``cap_<m> = max_i(...)``)
     # before the SDFG call  --  skip them here so we don't emit a stray
@@ -1605,12 +1672,20 @@ def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dumm
                 out.append(f"    {sym} = int(merge(1, 0, {present}), c_int)")
                 continue
         # An OPTIONAL-presence flag (``<dummy>_present``, registered by the
-        # bridge for every ``present(x)`` fold) with no provider: the optional
-        # is not forwarded across the wrapper boundary, so it is ABSENT.
-        # Fortran ``present()`` of an omitted optional is ``.false.`` -> 0.
-        # (Inlined-callee optionals -- QE ``becphi``/``becpsi``, ``run_on_gpu``
-        # -- bottom out here; defaulting absent matches the no-op call path.)
+        # bridge for every ``present(x)`` fold).
         if sym.endswith("_present"):
+            base = sym[:-len("_present")]
+            # The wrapper's OWN optional dummy: forward the caller's actual
+            # ``present(base)`` (the outer dummy is declared OPTIONAL, see
+            # ``_outer_decl``) so a PROVIDED optional reads as present and the
+            # kernel takes the right branch -- not the hardwired absent default.
+            if base in outer_optional_set:
+                out.append(f"    {sym} = int(merge(1, 0, present({base})), c_int)")
+                continue
+            # No provider and not a wrapper dummy: an inlined-callee optional
+            # (QE ``becphi``/``becpsi``, ``run_on_gpu``) bottoming out here.
+            # Fortran ``present()`` of an omitted optional is ``.false.`` -> 0,
+            # which also matches the no-op call path.
             out.append(f"    {sym} = 0  ! optional absent (not forwarded by wrapper)")
             continue
         out.append(f"    ! TODO: no plan entry gives size for free symbol {sym!r}")

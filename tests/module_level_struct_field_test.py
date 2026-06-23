@@ -209,3 +209,68 @@ end module
     assert "g_used" in sdfg.arrays
     assert "g_unused" not in sdfg.arrays, \
         "unaccessed fields should not be registered"
+
+
+def test_module_level_struct_field_no_uninitialized_transient_warning(tmp_path):
+    """The ``g_<member>`` companions for a module-level struct global are
+    READ-ONLY transients (the module's persistent state, never written
+    inside the SDFG).  The SDFG validator used to flag every such read as
+    ``WARNING: Use of uninitialized transient "g_<name>"`` -- spurious
+    noise, since the data models Fortran's default-initialised module
+    global.  ``_zero_init_unwritten_transients`` now emits an EXPLICIT zero
+    store into each such transient in a dedicated entry state (rather than
+    flipping the ``setzero`` allocation flag, which only fires when the
+    read node happens to be the array's allocation site).  This pins that
+    (a) no ``uninitialized transient`` UserWarning is emitted while
+    building, and (b) the read-only companions are genuinely zero-stored in
+    an entry ``init_unwritten_globals`` state."""
+    import warnings
+    src = """
+module m
+  type :: t
+    real(kind=8) :: c
+    real(kind=8) :: v(3)
+  end type
+  type(t) :: g
+contains
+  subroutine driver(out)
+    real(kind=8), intent(out) :: out
+    out = g % c + sum(g % v)
+  end subroutine
+end module
+"""
+    with warnings.catch_warnings():
+        # Any "uninitialized transient" warning during build -> test failure.
+        warnings.simplefilter("error", UserWarning)
+        sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
+    from dace import nodes as dace_nodes
+    # An explicit entry state must hold the zero stores.
+    init_states = [s for s in sdfg.states() if s.label == "init_unwritten_globals"]
+    assert init_states, "expected a dedicated init_unwritten_globals entry state"
+    init_state = init_states[0]
+    # The names the init state writes (every producer-less read-only
+    # companion, e.g. the scalar ``g_c``), and the values it writes (zero).
+    zero_inited = set()
+    for node in init_state.nodes():
+        if isinstance(node, dace_nodes.AccessNode) and init_state.in_degree(node) > 0:
+            zero_inited.add(node.data)
+    for node in init_state.nodes():
+        if isinstance(node, dace_nodes.Tasklet):
+            assert node.code.as_string.strip(
+            ) == "_out = 0", f"init tasklet must store zero, got {node.code.as_string!r}"
+    assert "g_c" in zero_inited, f"read-only g_c must be zero-initialised: {sorted(zero_inited)}"
+    # Contract: every transient that is read but never written OUTSIDE the
+    # init state must be covered by an init-state zero store (this is exactly
+    # what keeps the validator quiet).
+    written_outside = {
+        node.data
+        for state in sdfg.states() if state is not init_state for node in state.nodes()
+        if isinstance(node, dace_nodes.AccessNode) and state.in_degree(node) > 0
+    }
+    for state in sdfg.states():
+        if state is init_state:
+            continue
+        for node in state.nodes():
+            if (isinstance(node, dace_nodes.AccessNode) and node.data not in written_outside
+                    and sdfg.arrays[node.data].transient and state.out_degree(node) > 0):
+                assert node.data in zero_inited, f"{node.data} read-only transient must be zero-initialised in entry state"

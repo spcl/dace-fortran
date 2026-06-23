@@ -1,0 +1,5 @@
+[submodule "tests/icon/full/icon-model"]
+	path = tests/icon/full/icon-model
+	url = https://gitlab.dkrz.de/icon/icon-model.git
+	branch = icon-2026.04-public
+	shallow = true

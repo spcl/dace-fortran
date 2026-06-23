@@ -48,9 +48,11 @@ jobs:
     steps:
     - uses: actions/checkout@v4
       with:
-        # The ICON-integration tests build the icon-model submodule on
-        # demand (the ``icon_build`` fixture); fetch it here.
-        submodules: recursive
+        # Don't fetch submodules on the shared checkout: only the heavy suite
+        # needs the icon-model submodule (the fast lane's tests never touch it),
+        # so the fast lane skips the ICON clone entirely.  The heavy suite
+        # shallow + recursive checks it out in a dedicated step below.
+        submodules: false
 
     - uses: actions/setup-python@v5
       with:
@@ -71,12 +73,12 @@ jobs:
         sudo apt-get install -y \
           llvm-21-dev libmlir-21-dev mlir-21-tools \
           libflang-21-dev flang-21 clang-21 \
-          cmake ninja-build gfortran libgomp1 \
+          build-essential cmake ninja-build gfortran libgomp1 \
           libopenmpi-dev openmpi-bin \
           libnetcdff-dev libnetcdf-dev libhdf5-dev \
           libfyaml-dev libxml2-dev liblapack-dev libblas-dev \
           pkg-config perl python3 \
-          bear autoconf automake
+          bear autoconf automake m4 rsync zlib1g-dev
         # The ICON-integration tests configure + ``make`` the
         # icon-model submodule on demand (the ``icon_build`` fixture).
         # GRIB2/eccodes is DISABLED in that build (the dycore tests
@@ -92,11 +94,41 @@ jobs:
         # /usr/lib/llvm-21/bin (on PATH above).  Fall back to a symlink
         # only if a packaging change drops that name.
         command -v flang-new-21 || sudo ln -sf /usr/lib/llvm-21/bin/flang-21 /usr/local/bin/flang-new-21
+        # OpenMPI ships the Fortran wrapper as both ``mpifort`` and the legacy
+        # ``mpif90``; the multi-rank MPI tests probe ``mpif90`` by name.  Symlink
+        # it to mpifort if a packaging change ever drops the legacy alias.
+        command -v mpif90 || sudo ln -sf "$(command -v mpifort)" /usr/local/bin/mpif90
         # Use the runner's default gfortran (older GCC, 132-col
         # free-form limit).  gfortran-15 is not in the noble apt repo,
         # and the version no longer matters: the bindings e2e tests
         # pass -ffree-line-length-none (FLANG_PORTABLE_FFLAGS) so the
         # long generated signatures compile on any gfortran.
+
+    - name: Verify toolchain is complete (fail fast on a missing dependency)
+      run: |
+        # ``flang-new-21`` is on PATH only in steps AFTER the one that appended
+        # /usr/lib/llvm-21/bin to $GITHUB_PATH, so this must be its own step.
+        # Asserting every required tool up front turns a silently-skipped test
+        # (e.g. "needs flang-new-21 + OpenMPI") into a loud, fail-fast setup
+        # error -- so a provisioning regression can never masquerade as a green
+        # run with hidden skips.
+        missing=0
+        # flang HLFIR bridge + Fortran/MPI/C-C++ toolchain + ICON build tools
+        # (mpicc/mpicxx/mpifort + make/perl/python3 drive the icon_build fixture).
+        for t in flang-new-21 clang-21 gfortran gcc g++ make cmake ninja \
+                 mpicc mpicxx mpifort mpif90 perl python3 \
+                 bear autoconf automake aclocal m4 rsync pkg-config; do
+          if command -v "$t" >/dev/null 2>&1; then
+            printf '  ok    %-12s %s\n' "$t" "$(command -v "$t")"
+          else
+            printf '  MISS  %s\n' "$t"; missing=1
+          fi
+        done
+        # OpenMPI Fortran headers the ``mpi`` library stub is built against
+        # (find_openmpi_include probes for mpif-config.h).
+        test -f /usr/lib/x86_64-linux-gnu/openmpi/include/mpif-config.h \
+          || { echo '  MISS  openmpi mpif-config.h'; missing=1; }
+        [ "$missing" = 0 ] || { echo 'Toolchain incomplete -- see MISS lines above'; exit 1; }
 
     - name: Install Python dependencies
       run: |
@@ -138,6 +170,33 @@ jobs:
         else
           echo "Codecov.io is unreachable"
         fi
+
+    # ----- heavy runner: check out the ICON submodule (public externals only) -----
+    - name: Check out icon-model submodule (heavy only)
+      if: ${{ matrix.suite == 'heavy' }}
+      run: |
+        # icon-model is pinned to the ICON release tag icon-2026.04-public
+        # (recorded in .gitmodules).  Shallow + recursive: the icon_build fixture
+        # and setup_icon_dycore.sh both CONFIGURE + ``make`` ICON, which compiles
+        # its externals, so every external must be present.  All ICON externals
+        # are publicly cloneable from gitlab.dkrz.de and ``--depth 1`` keeps the
+        # whole tree small (~640 MB).  ``_have_icon()`` keys on
+        # mo_solve_nonhydro.f90, so this is what flips the ICON-from-source long
+        # tests from skipped to run.
+        git submodule update --init --recursive --depth 1 tests/icon/full/icon-model
+
+    - name: Generate dycore compile_commands.json (heavy only)
+      if: ${{ matrix.suite == 'heavy' }}
+      run: |
+        # The dycore-parse test (tests/icon/dycore/test_solve_nonhydro_parse.py)
+        # emits HLFIR for ICON's mo_solve_nonhydro driven by the per-TU
+        # -cpp / -I / -D flags captured in a REAL ICON build's
+        # compile_commands.json.  ``bear`` wraps a configure + ``make`` of the
+        # icon-model submodule (make is allowed to fail after the dycore TU is
+        # reached -- we only need its compile command), populating
+        # tests/icon/dycore/.icon_build/compile_commands.json so the test RUNS
+        # instead of skipping.  SKIP_APT=1: deps are already installed above.
+        SKIP_APT=1 bash tests/icon/dycore/setup_icon_dycore.sh
 
     # ----- heavy runner: long tests + mpi tests, run separately -----
     - name: Run long tests (ICON-from-source + ICON-O fparser extractions)

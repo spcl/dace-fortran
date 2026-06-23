@@ -21,6 +21,19 @@ ASTNode buildMemsetNode(hlfir::AssignOp assign);
 ASTNode buildReduceNode(hlfir::AssignOp assign, mlir::Operation *redOp,
                         std::string_view wcr, std::string_view identity);
 
+/// Build the AST nodes for an ``hlfir.assign`` whose RHS op ``sd`` is a
+/// scalar-reducing intrinsic (sum / product / minval / maxval / any /
+/// all), routing section / elemental / whole-array sources to the right
+/// lowering.  Shared by the structured ``buildAST`` dispatch and the
+/// ``scf.while`` body walker (``walkSCFBeforeRegion``) so a reduction
+/// lands identically at top level or inside a ``do while`` body (the
+/// latter reached via a ``_QQred_lift_N`` temp the
+/// LiftReductionOperands pass hoists into the loop).  ``matched`` is set
+/// true iff ``sd`` was a recognised reduction op; returns the nodes.
+std::vector<ASTNode> buildReductionAssignNodes(hlfir::AssignOp assign,
+                                               mlir::Operation* sd,
+                                               bool& matched);
+
 std::vector<ASTNode> buildSectionReduceAssign(hlfir::AssignOp assign,
                                               hlfir::DesignateOp src,
                                               std::string_view pyOp,

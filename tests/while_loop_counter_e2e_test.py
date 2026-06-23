@@ -77,3 +77,70 @@ end module m
     sdfg(out_arr=out, n=np.int32(N))
     expected = np.arange(1, N + 1, dtype=np.int32) * 7
     np.testing.assert_array_equal(out, expected)
+
+
+def test_do_while_whole_array_elementwise_in_body(tmp_path):
+    """``a = a * 2`` (a whole-array ELEMENTWISE op) inside a ``do while``
+    body must build + run.  Regression for the do-while miscompile:
+
+    flang lowers ``do while`` to an UNSTRUCTURED CFG, which the bridge
+    reconstructs via the ``scf.while`` body walker.  That walker's
+    ``hlfir.assign`` handler routed every array<-array assign straight
+    to ``buildCopyNode`` -- but a whole-array elementwise RHS is an
+    ``hlfir.elemental`` (result type ``!hlfir.expr<?>``, so ``is_array``
+    is true) and NOT a plain copy.  ``buildCopyNode`` then traced the
+    elemental result to an empty name and emitted ``kind="copy"`` with
+    ``reduce_src=""`` -> ``KeyError: ''`` at ``emit_copy``
+    (``sdfg.arrays[""]``).  The structured ``do`` / ``if`` paths built
+    it correctly as ``[loop][assign expr='(a*2)']``; only ``do while``
+    miscompiled.  The walker now mirrors the structured dispatch and
+    expands the elemental to the same map+assign.
+
+    Counts i = 0,1,2 -> ``a`` doubled three times -> ``a * 8``."""
+    src = """
+module m
+  implicit none
+contains
+  subroutine scale_loop(a, n)
+    integer, intent(in) :: n
+    real(kind=8), intent(inout) :: a(n)
+    integer :: i
+    i = 0
+    do while (i < 3)
+      a = a * 2.0d0
+      i = i + 1
+    end do
+  end subroutine scale_loop
+end module m
+"""
+    N = 4
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="scale_loop", entry="m::scale_loop").build()
+    a = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64, order='F')
+    sdfg(a=a, n=np.int32(N))
+    np.testing.assert_array_equal(a, np.array([1.0, 2.0, 3.0, 4.0]) * 8.0)
+
+
+def test_do_while_whole_array_decrement_in_body(tmp_path):
+    """``a = a - 1`` whole-array elementwise op in a ``do while`` whose
+    condition reads the array (``sum(a) > 0``).  Second shape of the
+    same miscompile -- the convergence-style loop where each iteration
+    mutates the whole array the condition tests."""
+    src = """
+module m
+  implicit none
+contains
+  subroutine drain(a, n)
+    integer, intent(in) :: n
+    real(kind=8), intent(inout) :: a(n)
+    do while (sum(a) > 0.0d0)
+      a = a - 1.0d0
+    end do
+  end subroutine drain
+end module m
+"""
+    N = 3
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="drain", entry="m::drain").build()
+    # start all 2.0 -> after iter1 all 1.0 (sum 3>0), iter2 all 0.0 (sum 0, stop)
+    a = np.full((N, ), 2.0, dtype=np.float64, order='F')
+    sdfg(a=a, n=np.int32(N))
+    np.testing.assert_array_equal(a, np.zeros(N, dtype=np.float64))
