@@ -240,6 +240,9 @@ _all_tests/
 # files.
 !tests/external_to_modules/**/*.f90
 !tests/string_enum_to_integer/**/*.f90
+# Vendored Fortran LULESH (GPL-v3 third-party fixture, see tests/lulesh/NOTICE.md)
+# driving the inliner whole-program merge + a kernel e2e numerical check.
+!tests/lulesh/**/*.f90
 
 # icon-model is a registered git submodule (see .gitmodules), pinned to the
 # ICON release tag icon-2026.04-public.  Its build artifacts are still ignored

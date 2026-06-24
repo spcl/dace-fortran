@@ -18,6 +18,17 @@ from . import types
 from . import utils
 from .. import ast_utils
 
+#: GNU/g77-extension procedures that gfortran provides but that are neither
+#: standard Fortran intrinsics (``fparser`` ``Intrinsic_Name`` does not match
+#: them) nor defined in any ``USE``-able module -- they are bare external
+#: library calls.  ``rand``/``irand`` (Park-Miller ``minstd`` PRNG) and
+#: ``srand`` (its seeder) are the canonical examples.  Their semantics differ
+#: across compilers (flang does not implement them at all), so the pipeline
+#: treats them as external calls lowered to their C-library equivalents rather
+#: than trying to resolve a Fortran definition.  Extend as other g77 externals
+#: (``etime``, ``getenv``, ...) are encountered.
+EXTERNAL_BUILTIN_PROCEDURES = frozenset({"rand", "irand", "srand"})
+
 
 def correct_for_function_calls(ast: f03.Program):
     """
@@ -117,6 +128,12 @@ def correct_for_function_calls(ast: f03.Program):
         sc_type, _ = sc.children
         sc_type_spec = analysis.search_real_ident_spec(sc_type.string, scope_spec, alias_map)
         if not sc_type_spec:
+            if sc_type.string.lower() in EXTERNAL_BUILTIN_PROCEDURES:
+                # A bare g77-extension call (e.g. ``rand()``) mis-parsed as a
+                # structure constructor: it has no Fortran definition to resolve,
+                # so reclassify it as an (external) function reference.
+                utils.replace_node(sc, f03.Function_Reference(sc.tofortran()))
+                continue
             # An unresolved constructor / call name -- e.g. ICON's external
             # ``p_mpi_wtime`` (from ``mo_mpi`` when its source is absent).
             # Strict mode asserts as before; with external-USE tolerance on we
