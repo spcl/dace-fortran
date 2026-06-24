@@ -116,6 +116,13 @@ KERNELS = [
     ("coriolis_pv",
      "ocean/math/mo_scalar_product.f90",
      "mo_scalar_product::nonlinear_coriolis_3d_fast_scalar", 273),
+    # Ocean horizontal velocity advection (NOT ICON's atmosphere
+    # mo_velocity_advection::velocity_tendencies -- a distinct kernel covered by
+    # tests/icon/full).  The rotational ("inUse") form: vorticity flux (inlines
+    # nonlinear_coriolis_3d, same compute as coriolis_pv) + kinetic-energy grad.
+    ("ocean_veloc_adv",
+     "ocean/dynamics/mo_ocean_velocity_advection.f90",
+     "mo_ocean_velocity_advection::veloc_adv_horz_mimetic_rot", 102),
 ]
 
 #: Checked-in single-TU artifacts: ``(key, filename, module::procedure)``.
@@ -127,6 +134,8 @@ SINGLE_TU_ARTIFACTS = [
      "mo_ocean_tracer_transport_vert::upwind_vflux_ppm_onBlock"),
     ("coriolis_pv", "coriolis_pv_single_tu.f90",
      "mo_scalar_product::nonlinear_coriolis_3d_fast_scalar"),
+    ("ocean_veloc_adv", "ocean_veloc_adv_single_tu.f90",
+     "mo_ocean_velocity_advection::veloc_adv_horz_mimetic_rot"),
 ]
 
 _EXTRACT_SCRIPT = _HERE / "_extract_single_tu.py"
