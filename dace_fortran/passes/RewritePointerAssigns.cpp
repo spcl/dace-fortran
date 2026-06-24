@@ -283,6 +283,38 @@ struct RebindChain {
   llvm::SmallVector<ChainStep, 2> chain;
 };
 
+/// If ``t`` is a (ref / ptr / heap / box) wrapper around a DERIVED-TYPE
+/// (``fir.type``) value -- and NOT an array of one -- return that record
+/// type; otherwise null.  Used to distinguish a pointer rebound to a whole
+/// derived-type member (``p => x%a%in_domain``, whose reads are component
+/// selects ``p%c``) from a pointer rebound to an array section (whose reads
+/// are index access and compose through ``mergeIndices``).  The component
+/// case can't collapse to a flat index list -- it re-roots the user's
+/// designate on the target ref directly.
+static fir::RecordType recordRefOf(mlir::Type t) {
+  mlir::Type inner = t;
+  for (;;) {
+    if (auto r = mlir::dyn_cast<fir::ReferenceType>(inner)) {
+      inner = r.getEleTy();
+      continue;
+    }
+    if (auto p = mlir::dyn_cast<fir::PointerType>(inner)) {
+      inner = p.getEleTy();
+      continue;
+    }
+    if (auto h = mlir::dyn_cast<fir::HeapType>(inner)) {
+      inner = h.getEleTy();
+      continue;
+    }
+    if (auto b = mlir::dyn_cast<fir::BaseBoxType>(inner)) {
+      inner = b.getEleTy();
+      continue;
+    }
+    break;
+  }
+  return mlir::dyn_cast<fir::RecordType>(inner);
+}
+
 /// Trace a rebind value back through ``fir.embox``/``fir.rebox``/
 /// ``fir.convert``/``hlfir.designate`` ops to the originating
 /// ``hlfir.declare``.  Each designate encountered is captured into
@@ -316,6 +348,16 @@ static RebindChain traceRebindChain(mlir::Value v) {
       // is reported as unsupported (parent == nullptr).  Same gap class as
       // the bounds-remap-view source trace in extract_vars.cpp.
       v = ld.getMemref();
+      continue;
+    }
+    if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(def)) {
+      // POINTER-to-derived parent reached through ``fir.box_addr`` of a
+      // loaded descriptor: ``designate(box_addr(load %ptr_decl)){comp}``.
+      // The box_addr unwraps the box to its raw data pointer; walk through
+      // it (like ``fir.load``) so a rebind whose target is a member of a
+      // POINTER dummy (``p => patch%verts%in_domain``) reaches the parent
+      // declare instead of bailing (parent == nullptr) at this op.
+      v = ba.getVal();
       continue;
     }
     if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(def)) {
@@ -979,6 +1021,26 @@ struct RewritePointerAssignsPass
       if (ld->getBlock() == rebindStore->getBlock() &&
           ld->isBeforeInBlock(rebindStore))
         return;
+      // When the pointer aliases a whole DERIVED-TYPE member
+      // (``p => x%a%in_domain``), the rebind target is a record ref, not an
+      // array, and its reads are component selects (``p%c``) that can't
+      // compose through ``mergeIndices`` (which collapses array sections to a
+      // flat index list and would drop the component).  Capture the target
+      // ref directly: the outermost chain designate's result is the
+      // already-computed ``x%a%in_domain``, which dominates every read after
+      // the rebind store and survives cleanup (``deadReaders`` is
+      // use_empty-swept and we add a live user below).  Reads then re-root on
+      // this target instead of on the parent's index storage.
+      mlir::Value recordTarget;
+      if (!chain.chain.empty() &&
+          recordRefOf(chain.chain.front().dg.getResult().getType()))
+        recordTarget = chain.chain.front().dg.getResult();
+      auto retagTo = [](mlir::OpBuilder& b, mlir::Location loc, mlir::Value v,
+                        mlir::Type want) -> mlir::Value {
+        if (v.getType() == want) return v;
+        return b.create<fir::ConvertOp>(loc, want, v).getResult();
+      };
+
       // Snapshot users  --  we rewrite in place and the user
       // list mutates as we go.
       llvm::SmallVector<mlir::Operation *, 4> userOps;
@@ -987,6 +1049,23 @@ struct RewritePointerAssignsPass
         if (auto userDg = mlir::dyn_cast<hlfir::DesignateOp>(uu)) {
           mlir::OpBuilder b(userDg);
           auto loc = userDg.getLoc();
+          // Record-member target: never run the index-merge path (it drops
+          // the component and emits an invalid designate).  Re-root the
+          // designate on the target ref directly -- but only when the user's
+          // memref type matches the target exactly, so the clone verifies
+          // (the common record read goes load -> box_addr -> designate, where
+          // the component designate is a user of box_addr, handled below; a
+          // direct designate on the loaded box is left alone rather than
+          // risk a mistyped op).
+          if (recordTarget) {
+            if (userDg.getMemref().getType() == recordTarget.getType()) {
+              auto* cloned = b.clone(*userDg.getOperation());
+              cloned->setOperand(0, recordTarget);
+              userDg.getResult().replaceAllUsesWith(cloned->getResult(0));
+              deadReaders.push_back(userDg);
+            }
+            continue;
+          }
           llvm::SmallVector<mlir::Value, 6> merged;
           if (!mergeIndices(chain, userDg.getIndices(), b, loc, merged))
             continue;  // leave userDg alive; bail-loud
@@ -1005,6 +1084,17 @@ struct RewritePointerAssignsPass
           mlir::OpBuilder b(ba);
           auto loc = ba.getLoc();
           mlir::Value replacement;
+          // Record-member target: box_addr of the loaded descriptor yields
+          // the member's raw address = the target ref (retagged to the
+          // box_addr's result type).  Downstream component designates then
+          // read ``target%c`` directly.
+          if (recordTarget) {
+            replacement =
+                retagTo(b, loc, recordTarget, ba.getResult().getType());
+            ba.getResult().replaceAllUsesWith(replacement);
+            deadReaders.push_back(ba);
+            continue;
+          }
           if (chain.chain.empty()) {
             // Whole rebind  --  box_addr resolves directly
             // to the parent's ref.

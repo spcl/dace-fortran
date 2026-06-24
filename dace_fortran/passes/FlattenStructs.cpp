@@ -389,6 +389,37 @@ static mlir::Type rewrapWith(mlir::Type shell, mlir::Type newInner) {
   return newInner;
 }
 
+/// True when a struct-typed LOCAL declare is a rebindable runtime
+/// DESCRIPTOR rather than OWNED storage.
+///
+/// An owned local struct lowers to plain storage: ``type(t) :: s`` ->
+/// ``ref<record>`` and ``type(t) :: s(N)`` -> ``ref<array<record>>``.  A
+/// ``POINTER`` / ``ALLOCATABLE`` derived-type local lowers to a box
+/// descriptor: ``type(t), pointer :: p`` -> ``ref<box<ptr<record>>>``
+/// (``allocatable`` -> ``ref<box<heap<record>>>``).  Its data aliases
+/// another object's storage (set by ``p => x`` / ``allocate(p)``), so its
+/// member reads run THROUGH the descriptor (a ``fir.load`` of the box,
+/// then designate), not off the declare.  Splitting it into static
+/// per-member companions is unsound -- the companions are disconnected
+/// from the live pointee, and ``splitLocal``'s scalar path would even
+/// mistype them (alloca ``i32`` vs ``rewrapWith``-ed ``box<ptr<i32>>``
+/// declare).  ``hlfir-rewrite-pointer-assigns`` + the bridge's view path
+/// own these; ``isLocallyFlattenable`` skips them.
+///
+/// Note: this gates on the OUTER indirection only.  A plain owned local
+/// whose MEMBERS are pointer/allocatable arrays (``ref<record>`` outer)
+/// still flattens via the Phase 5a/5b member companions -- those are
+/// reached after peeling just ``ref`` (+ optional outer array), so the
+/// remaining type is the record itself, not a box.
+static bool isIndirectStructLocal(mlir::Type declaredTy) {
+  mlir::Type inner = declaredTy;
+  if (auto ref = mlir::dyn_cast<fir::ReferenceType>(inner))
+    inner = ref.getEleTy();
+  if (auto seq = mlir::dyn_cast<fir::SequenceType>(inner))
+    inner = seq.getEleTy();
+  return mlir::isa<fir::BaseBoxType, fir::PointerType, fir::HeapType>(inner);
+}
+
 /// Emit a fir.shape for a static extent list, inserting arith.constant ops
 /// for each extent.  Returns the shape SSA value.  Empty extents -> null
 /// (scalar  --  no shape needed).
@@ -2326,7 +2357,12 @@ struct FlattenStructsPass
       llvm::SmallPtrSet<mlir::Operation *, 8> chainDead;
       chainDead.insert(ld);
       chainDead.insert(elemDg);
-      chainDead.insert(innerDg);
+      // NB: ``innerDg`` is deliberately NOT tracked here -- it is erased
+      // INLINE in the rewrite loop (after ``replaceAllUsesWith``), so adding
+      // it to ``deadOps`` would make the trailing ``use_empty()`` sweep
+      // dereference the freed op (a non-deterministic SmallPtrSet iteration ->
+      // flaky heap corruption).  ``elemDg`` / ``ld`` / the member-chain hops
+      // are erased ONLY by that guarded sweep, so they stay.
       mlir::Value v = ld.getMemref();
       while (true) {
         auto *d = v.getDefiningOp();
@@ -2338,6 +2374,16 @@ struct FlattenStructsPass
         chainDead.insert(md);
         v = md.getMemref();
       }
+      // Follow inlined-callee alias declares (``%alias = hlfir.declare
+      // %blockarg#N ...``) back to the block-arg declare: after
+      // ``hlfir-inline-all`` the access roots at the callee's dummy alias, not
+      // the outer block arg (e.g. ICON-O coriolis' ``operators_coefficients``
+      // reached through the inlined ``rot_vertex_ocean_3d``'s ``p_op_coeff``).
+      while (argDecls.find(v) == argDecls.end()) {
+        auto adcl = mlir::dyn_cast_or_null<hlfir::DeclareOp>(v.getDefiningOp());
+        if (!adcl) break;
+        v = adcl.getMemref();
+      }
       auto it = argDecls.find(v);
       if (it == argDecls.end()) return;
 
@@ -2348,24 +2394,32 @@ struct FlattenStructsPass
       auto elemRec = mlir::dyn_cast<fir::RecordType>(refTy.getEleTy());
       if (!elemRec) return;
 
-      // Verify the inner record has only scalar leaves (no allocatable /
-      // pointer / array / sub-record members).  If anything looks like an
-      // alloc-array-of-records inner member, skip -- that's the
-      // ``LiftAllocArrayOfRecords`` lane.
-      bool scalarOnly = true;
+      // Verify the inner record has only FLAT leaves: a plain scalar OR a
+      // STATIC array of a plain scalar (e.g. ICON-O's
+      // ``t_cartesian_coordinates :: x(3)``).  Reject allocatable / pointer /
+      // record / dynamic-array / character members -- those are other lanes
+      // (e.g. ``LiftAllocArrayOfRecords``).  A static-array leaf flattens to a
+      // companion whose trailing dims are the member's extents and whose
+      // whole-member read (``%x``) becomes a trailing contiguous section.
+      auto isFlatLeaf = [](mlir::Type t) -> bool {
+        if (isSimpleScalar(t)) return true;
+        if (auto seq = mlir::dyn_cast<fir::SequenceType>(t)) {
+          for (auto d : seq.getShape())
+            if (d == fir::SequenceType::getUnknownExtent()) return false;
+          return isSimpleScalar(seq.getEleTy());
+        }
+        return false;
+      };
+      bool flatLeavesOnly = true;
       mlir::Type matchedInnerTy;
       for (auto &p : elemRec.getTypeList()) {
-        // Member type must be a plain scalar: integer / float / complex /
-        // logical -- not an array, box, record, ptr, or heap.
-        if (mlir::isa<fir::SequenceType, fir::BoxType, fir::RecordType,
-                      fir::HeapType, fir::PointerType, fir::ReferenceType,
-                      fir::CharacterType>(p.second)) {
-          scalarOnly = false;
+        if (!isFlatLeaf(p.second)) {
+          flatLeavesOnly = false;
           break;
         }
         if (p.first == innerName) matchedInnerTy = p.second;
       }
-      if (!scalarOnly || !matchedInnerTy) return;
+      if (!flatLeavesOnly || !matchedInnerTy) return;
 
       Key key;
       key.root = v.getAsOpaquePointer();
@@ -2398,7 +2452,15 @@ struct FlattenStructsPass
       // time and the bindings layer is expected to populate them.
       llvm::SmallVector<int64_t, 4> dynShape(
           outerRank, fir::SequenceType::getUnknownExtent());
-      auto arrTy = fir::SequenceType::get(dynShape, innerTy);
+      // Array leaf (``x(3)``): append the member's STATIC extents as trailing
+      // companion dims and flatten to its element type, so ``c%e(i,j)%x``
+      // maps to a contiguous trailing section ``c_e_x(i, j, 1:3:1)``.
+      mlir::Type leafEleTy = innerTy;
+      if (auto memSeq = mlir::dyn_cast<fir::SequenceType>(innerTy)) {
+        for (auto d : memSeq.getShape()) dynShape.push_back(d);
+        leafEleTy = memSeq.getEleTy();
+      }
+      auto arrTy = fir::SequenceType::get(dynShape, leafEleTy);
       auto heapTy = fir::HeapType::get(arrTy);
       auto boxTy = fir::BoxType::get(heapTy);
       auto refBoxTy = fir::ReferenceType::get(boxTy);
@@ -2425,24 +2487,69 @@ struct FlattenStructsPass
 
       for (auto &site : kv.second) {
         mlir::OpBuilder sb(site.innerDg);
-        // Load the box, then designate the element at the original indices.
-        auto loadedBox = sb.create<fir::LoadOp>(site.innerDg.getLoc(),
-                                                  decl.getResult(0));
-        // Construct a fresh designate over the companion box at the same
-        // indices.  ``hlfir.designate`` for an element access takes the
-        // memref, the indices, optional component, and either a shape or
-        // a typeparam; here we only need memref + indices.
-        auto elemRefTy = fir::ReferenceType::get(innerTy);
-        llvm::SmallVector<mlir::Value, 4> idxs(site.elemDg.getIndices().begin(),
-                                                site.elemDg.getIndices().end());
-        // Use the 7-argument convenience build (element access only,
-        // no component / shape / triplets / substring / complex_part).
-        auto newDg = sb.create<hlfir::DesignateOp>(
-            site.innerDg.getLoc(), elemRefTy, loadedBox.getResult(),
-            /*indices=*/idxs,
-            /*typeparams=*/mlir::ValueRange{},
-            /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
-        site.innerDg.getResult().replaceAllUsesWith(newDg.getResult());
+        auto loc = site.innerDg.getLoc();
+        // Load the box, then designate over the companion at the original
+        // element indices.
+        auto loadedBox = sb.create<fir::LoadOp>(loc, decl.getResult(0));
+        mlir::Value repl;
+        if (auto memSeq = mlir::dyn_cast<fir::SequenceType>(innerTy)) {
+          // Array leaf: the WHOLE-member read (``%x``) maps to a trailing
+          // contiguous SECTION of the companion -- the original element
+          // indices (scalar) followed by a ``1:extent:1`` triplet per member
+          // dim.  Result type mirrors the original member designate's
+          // (``ref<array<N x T>>``).
+          auto idxTy = sb.getIndexType();
+          auto toIndex = [&](mlir::Value v) -> mlir::Value {
+            return v.getType() == idxTy
+                       ? v
+                       : sb.create<fir::ConvertOp>(loc, idxTy, v).getResult();
+          };
+          llvm::SmallVector<mlir::Value, 8> indices;
+          llvm::SmallVector<bool, 4> trip;
+          for (auto v : site.elemDg.getIndices()) {
+            indices.push_back(toIndex(v));
+            trip.push_back(false);
+          }
+          llvm::SmallVector<mlir::Value, 2> shapeDims;
+          for (auto d : memSeq.getShape()) {
+            auto c1 = sb.create<mlir::arith::ConstantOp>(loc, idxTy,
+                                                         sb.getIndexAttr(1));
+            auto cN = sb.create<mlir::arith::ConstantOp>(loc, idxTy,
+                                                         sb.getIndexAttr(d));
+            indices.push_back(c1.getResult());
+            indices.push_back(cN.getResult());
+            indices.push_back(c1.getResult());
+            trip.push_back(true);
+            shapeDims.push_back(cN.getResult());
+          }
+          auto shp = sb.create<fir::ShapeOp>(loc, mlir::ValueRange{shapeDims})
+                         .getResult();
+          auto newDg = sb.create<hlfir::DesignateOp>(
+              loc, /*resultType0=*/site.innerDg.getResult().getType(),
+              /*memref=*/loadedBox.getResult(),
+              /*component=*/mlir::StringAttr{},
+              /*component_shape=*/mlir::Value{},
+              /*indices=*/mlir::ValueRange{indices},
+              /*is_triplet=*/sb.getDenseBoolArrayAttr(trip),
+              /*substring=*/mlir::ValueRange{},
+              /*complex_part=*/mlir::BoolAttr{},
+              /*shape=*/shp,
+              /*typeparams=*/mlir::ValueRange{},
+              /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
+          repl = newDg.getResult();
+        } else {
+          // Scalar leaf: element access (7-arg convenience build).
+          auto elemRefTy = fir::ReferenceType::get(innerTy);
+          llvm::SmallVector<mlir::Value, 4> idxs(
+              site.elemDg.getIndices().begin(), site.elemDg.getIndices().end());
+          auto newDg = sb.create<hlfir::DesignateOp>(
+              loc, elemRefTy, loadedBox.getResult(),
+              /*indices=*/idxs,
+              /*typeparams=*/mlir::ValueRange{},
+              /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
+          repl = newDg.getResult();
+        }
+        site.innerDg.getResult().replaceAllUsesWith(repl);
         site.innerDg.erase();
       }
       changed = true;
@@ -3185,10 +3292,30 @@ struct FlattenStructsPass
                   // designate on the boxed value.
                   if (hasComponentReachable(ld.getResult())) return true;
                 }
+                if (auto dcl = mlir::dyn_cast<hlfir::DeclareOp>(u)) {
+                  // Inlined-callee alias declare (``%alias = hlfir.declare
+                  // %arg#N ...``): after ``hlfir-inline-all`` the callee's
+                  // dummy reads designate over this alias, not the block arg
+                  // directly.  Follow it so an AoS struct dummy whose only
+                  // component accesses come through an inlined alias (e.g.
+                  // ICON-O coriolis' ``vn_dual(i,j,k)%x`` inside the inlined
+                  // ``rot_vertex_ocean_3d``) is still recognised as
+                  // component-accessed and flattened -- otherwise it is
+                  // silently skipped and the access leaks as an unregistered
+                  // flat-companion name (``p_vn_dual_x``) at the libcall.
+                  if (hasComponentReachable(dcl.getResult(0))) return true;
+                }
               }
               return false;
             };
-        if (!hasComponentReachable(argDecl.getResult(0))) continue;
+        // Seed from BOTH declare results: a static-shape inlined alias
+        // re-declares result #0 (``declare %arg#0``), but a dynamic-extent
+        // dummy's alias re-declares the raw memref result #1 with a fresh box
+        // (``declare %arg#1(%shape)``).  Check both so the dynamic case is
+        // not missed.
+        if (!hasComponentReachable(argDecl.getResult(0)) &&
+            !hasComponentReachable(argDecl.getResult(1)))
+          continue;
       }
 
       Plan p;
@@ -3578,26 +3705,57 @@ struct FlattenStructsPass
     // symbol later on.
     if (outerIsArray) {
       llvm::SmallVector<hlfir::DesignateOp, 16> designates;
-      for (auto *u : argDecl.getResult(0).getUsers()) {
-        auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u);
-        if (!dg) continue;
-        bool hasComponent = false;
-        for (auto nm : {"component_name", "component"})
-          if (dg->getAttrOfType<mlir::StringAttr>(nm)) {
-            hasComponent = true;
-            break;
+      // Collect designates rooted at ``argDecl`` OR any inlined-callee ALIAS
+      // declare of it (``%alias = hlfir.declare %argDecl#0 ...``).  After
+      // ``hlfir-inline-all`` the callee's reads designate over the alias, not
+      // the block arg directly, so without following aliases the AoS-member
+      // accesses (``vn_dual(i,j,k)%x`` inside an inlined
+      // ``rot_vertex_ocean_3d``) are never rewritten to the flat companion --
+      // the access keeps its struct designate and the bridge emits a
+      // WHOLE-array memlet on the companion (losing the element indices), which
+      // fails downstream (e.g. a libcall over the un-indexed multi-dim
+      // companion).  Mirrors the alias-following the scalar-struct
+      // ``rewriteChainsRootedAt`` path does. Seed from BOTH declare results
+      // (see the gate above): static aliases re-declare result #0,
+      // dynamic-extent aliases re-declare the raw memref result #1.
+      llvm::SmallVector<mlir::Value, 4> roots{argDecl.getResult(0),
+                                              argDecl.getResult(1)};
+      llvm::SmallVector<hlfir::DeclareOp, 4> aliasDecls;
+      llvm::SmallPtrSet<mlir::Operation*, 8> seen;
+      for (unsigned ri = 0; ri < roots.size(); ++ri) {
+        for (auto* u : roots[ri].getUsers()) {
+          if (auto adcl = mlir::dyn_cast<hlfir::DeclareOp>(u)) {
+            if (adcl != argDecl && seen.insert(adcl).second) {
+              aliasDecls.push_back(adcl);
+              roots.push_back(adcl.getResult(0));
+            }
+            continue;
           }
-        if (hasComponent) {
-          designates.push_back(dg);
-          continue;
+          auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u);
+          if (!dg) continue;
+          bool hasComponent = false;
+          for (auto nm : {"component_name", "component"})
+            if (dg->getAttrOfType<mlir::StringAttr>(nm)) {
+              hasComponent = true;
+              break;
+            }
+          if (hasComponent) {
+            designates.push_back(dg);
+            continue;
+          }
+          // Pure indexed designate (A(i) on AoS dummy)  --  collect children.
+          for (auto* cu : dg.getResult().getUsers())
+            if (auto cdg = mlir::dyn_cast<hlfir::DesignateOp>(cu))
+              designates.push_back(cdg);
         }
-        // Pure indexed designate (A(i) on AoS dummy)  --  collect children.
-        for (auto *cu : dg.getResult().getUsers())
-          if (auto cdg = mlir::dyn_cast<hlfir::DesignateOp>(cu))
-            designates.push_back(cdg);
       }
       for (auto dg : designates)
         rewriteDesignate(dg, memberBase, concatMembers);
+      // Drop now-dead inlined alias declares so ``argDecl`` becomes erasable
+      // (the alias is the only remaining user keeping the block arg live).
+      for (auto adcl : aliasDecls)
+        if (adcl.getResult(0).use_empty() && adcl.getResult(1).use_empty())
+          adcl.erase();
     } else {
       rewriteChainsRootedAt(argDecl, memberBase);
     }
@@ -4584,6 +4742,13 @@ struct FlattenStructsPass
     auto rec =
         peelToRecord(decl.getResult(0).getType(), outerIsArray, outerShape);
     if (!rec) return false;
+    // Only OWNED struct storage flattens locally.  ``peelToRecord`` peels
+    // through box/ptr/heap, so it also reaches the record of a POINTER /
+    // ALLOCATABLE derived-type local -- but that is a rebindable runtime
+    // descriptor whose member reads run through the box, not the declare
+    // (see isIndirectStructLocal).  Leave those to the pointer-rewrite /
+    // view path; flattening them yields dead, mistyped companions.
+    if (isIndirectStructLocal(decl.getResult(0).getType())) return false;
     for (auto d : outerShape)
       if (d == fir::SequenceType::getUnknownExtent()) return false;
     // Phase 5c-A: AoS + allocatable member.  Permitted when every
@@ -4615,7 +4780,19 @@ struct FlattenStructsPass
     llvm::SmallVector<int64_t, 4> initialDims(outerShape.begin(),
                                               outerShape.end());
     llvm::SmallVector<FlatLeaf, 8> leaves;
-    return collectFlatLeaves(rec, prefix, initialDims, leaves);
+    if (!collectFlatLeaves(rec, prefix, initialDims, leaves)) return false;
+    // The LOCAL nested path (``splitLocal``) cannot own an
+    // allocatable/pointer LEAF (``box<heap|ptr<...>>``): it has no caller
+    // bindings to supply the descriptor (unlike the dummy-arg nested path,
+    // which receives one per leaf) and no local allocate-flow synthesis, so
+    // it would emit an attr-less box declare (verifier-invalid) and, even
+    // with the attr, leave the companion box unallocated -- a silent
+    // miscompile.  A box leaf is a rebindable descriptor, not owned static
+    // storage (cf. ``isIndirectStructLocal``); defer the whole struct to the
+    // loud downstream path rather than half-flatten it.
+    for (auto& leaf : leaves)
+      if (mlir::isa<fir::BaseBoxType>(leaf.leafTy)) return false;
+    return true;
   }
 
   void splitLocal(hlfir::DeclareOp decl) {

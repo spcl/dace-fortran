@@ -3,6 +3,7 @@ flat per-member companions (uniform case) or into a single ELLPACK-style
 combined array (jagged case) before SDFG generation sees it."""
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from _util import build_sdfg, have_flang, run_passes_dump
@@ -72,3 +73,197 @@ def test_jagged_struct_arg_packs_into_2d(tmp_path):
     # row of the combined array should be present.
     assert ir.count("fir.coordinate_of") >= 4, (
         f"expected four fir.coordinate_of ops (one per jagged member):\n{ir[:1500]}")
+
+
+# ----------------------------------------------------------------------------
+# Negative case: a POINTER / ALLOCATABLE derived-type LOCAL is a rebindable
+# runtime descriptor (``ref<box<ptr|heap<record>>>``), NOT owned storage, so
+# ``hlfir-flatten-structs`` must NOT split it into static per-member
+# companions.  Regression for a verifier crash where ``splitLocal``
+# synthesised a companion whose ``hlfir.declare`` first result type was
+# ``ref<box<ptr<i32>>>`` (``rewrapWith`` over the pointer shell) while its
+# memref alloca was a plain ``ref<i32>``: "'hlfir.declare' op first result
+# type is inconsistent with variable properties: expected '!fir.ref<i32>'".
+# Mirrors ICON-O coriolis' ``verts_in_domain => patch%verts%in_domain`` then
+# scalar-member reads ``... = verts_in_domain%start_block``.
+#
+# We assert at the flatten-structs boundary (``run_passes_dump``): before the
+# fix this throws the verifier error; after it, the pass succeeds, the OWNED
+# ``s`` still splits into per-member companions, and the descriptor local is
+# left intact for the pointer-rewrite / view path.  (Full end-to-end lowering
+# of the direct pointer-member READ is a separate pointer-rebind-fold concern,
+# not this gate.)
+# ----------------------------------------------------------------------------
+
+_FLATTEN_ONLY = "hlfir-flatten-structs"
+
+
+def test_pointer_scalar_struct_local_not_flattened(tmp_path):
+    src = """
+module lib
+  implicit none
+  type subset
+    integer :: start_index
+    integer :: end_index
+  end type subset
+end module lib
+
+subroutine main(out)
+  use lib
+  implicit none
+  integer, intent(out) :: out
+  type(subset), target :: s
+  type(subset), pointer :: p
+  s%start_index = 3
+  s%end_index = 9
+  p => s
+  out = p%end_index - p%start_index
+end subroutine main
+"""
+    # Throws "inconsistent with variable properties" before the fix.
+    ir = run_passes_dump(src, tmp_path, name="main", pipeline=_FLATTEN_ONLY)
+
+    # OWNED ``s`` is split into per-member companions.
+    assert "Es_start_index" in ir and "Es_end_index" in ir, (
+        f"owned struct local should still flatten into companions:\n{ir[:1200]}")
+    # Descriptor local ``p`` is left intact -- NOT split into companions, and
+    # its pointer declare survives for the downstream pointer-rewrite path.
+    assert "Ep_start_index" not in ir and "Ep_end_index" not in ir, (
+        f"POINTER struct local must NOT be locally flattened:\n{ir[:1200]}")
+    assert '"_QFmainEp"' in ir, f"pointer local declare should survive:\n{ir[:1200]}"
+
+
+def test_allocatable_scalar_struct_local_not_flattened(tmp_path):
+    src = """
+module lib
+  implicit none
+  type subset
+    integer :: lo
+    integer :: hi
+  end type subset
+end module lib
+
+subroutine main(out)
+  use lib
+  implicit none
+  integer, intent(out) :: out
+  type(subset), allocatable :: a
+  type(subset), target :: s
+  s%lo = 4
+  s%hi = 11
+  allocate(a)
+  a%lo = s%lo
+  a%hi = s%hi
+  out = a%hi - a%lo
+  deallocate(a)
+end subroutine main
+"""
+    ir = run_passes_dump(src, tmp_path, name="main", pipeline=_FLATTEN_ONLY)
+    # OWNED ``s`` flattens; ALLOCATABLE descriptor ``a`` is left intact.
+    assert "Es_lo" in ir and "Es_hi" in ir, (f"owned struct local should still flatten:\n{ir[:1200]}")
+    assert "Ea_lo" not in ir and "Ea_hi" not in ir, (
+        f"ALLOCATABLE struct local must NOT be locally flattened:\n{ir[:1200]}")
+
+
+# ----------------------------------------------------------------------------
+# Multi-dim array-of-struct with a static-ARRAY leaf member (the ICON-O
+# ``t_cartesian_coordinates :: x(3)`` shape), accessed WHOLE (``%x`` for a
+# ``dot_product``) through an INLINED callee, must flatten to a multi-dim SoA
+# companion ``field_x(i,j,k,3)`` -- not leak the un-flattened struct as an
+# unregistered libcall arg name (the coriolis ``p_vn_dual_x`` KeyError).  This
+# exercises: (a) the AoS gate following inlined-callee alias declares on BOTH
+# declare results (static alias on #0, dynamic-extent alias on #1); (b) the AoS
+# concat designate-rewrite following the alias so the element indices survive
+# (else the libcall gets a WHOLE-array memlet and fails "dot product only
+# supported on 1-dimensional arrays").
+# ----------------------------------------------------------------------------
+
+_AOS_ARR_MEMBER_SRC = """
+module lib
+  implicit none
+  type cc
+    real(8) :: x(3)
+  end type cc
+contains
+  subroutine inner(field, out)
+    type(cc), intent(in) :: field(4, 2, 5)
+    real(8), intent(out) :: out
+    out = dot_product(field(2, 1, 3) % x, field(2, 1, 3) % x)
+  end subroutine inner
+
+  subroutine driver(field, out)
+    type(cc), intent(in) :: field(4, 2, 5)
+    real(8), intent(out) :: out
+    call inner(field, out)
+  end subroutine driver
+end module lib
+"""
+
+
+def test_inlined_multidim_aos_array_member_flattens_to_soa(tmp_path):
+    sdfg = build_sdfg(_AOS_ARR_MEMBER_SRC, tmp_path / "sdfg", name="driver", entry="lib::driver").build()
+    # Companion is the AoS dims followed by the member extent: (4, 2, 5, 3).
+    assert "field_x" in sdfg.arrays, f"missing SoA companion; arrays={sorted(sdfg.arrays)}"
+    assert tuple(sdfg.arrays["field_x"].shape) == (4, 2, 5, 3), sdfg.arrays["field_x"].shape
+
+    # Drive the flattened SDFG directly (the struct dummy became field_x).  The
+    # accessed element is field(2,1,3) -> 0-based (1,0,2); its 3-vector is x.
+    field_x = np.zeros((4, 2, 5, 3), order="F", dtype=np.float64)
+    field_x[1, 0, 2, :] = [3.0, 4.0, 12.0]
+    out = np.zeros(1, dtype=np.float64)
+    sdfg(field_x=field_x, out=out)
+    # dot_product(v, v) = 9 + 16 + 144 = 169.
+    assert abs(out[0] - 169.0) < 1e-12, out[0]
+
+
+# ----------------------------------------------------------------------------
+# Gate #7: a struct dummy whose member is a POINTER-array-of-records
+# (``type(cc), pointer :: e(:,:)``) with an inner static-array leaf ``x(3)``,
+# accessed WHOLE (``c%e(i,j)%x`` for a ``dot_product``) through an INLINED
+# callee.  The multi-dim-AoR splitter (``splitMultiDimAoRScalarMembers``) now
+# flattens it to a dynamic SoA companion ``c_e_x(d0, d1, 3)`` -- the pointer
+# member's runtime extents become the leading companion dims and the member
+# extent the trailing dim, with the whole-member read rewritten to a trailing
+# contiguous section ``c_e_x(i, j, 1:3:1)``.  Regression for the coriolis
+# ``operators_coefficients_edge2vert_coeff_cc_t_x`` KeyError.  Needs: array-leaf
+# support in the scalar-member splitter + walk-back alias-following.
+# ----------------------------------------------------------------------------
+
+_PTR_AOR_ARR_MEMBER_SRC = """
+module lib
+  implicit none
+  type cc
+    real(8) :: x(3)
+  end type cc
+  type coeff
+    type(cc), pointer :: e(:, :)
+  end type coeff
+contains
+  subroutine inner(c, out)
+    type(coeff), intent(in) :: c
+    real(8), intent(out) :: out
+    out = dot_product(c % e(2, 1) % x, c % e(2, 1) % x)
+  end subroutine inner
+
+  subroutine driver(c, out)
+    type(coeff), intent(in) :: c
+    real(8), intent(out) :: out
+    call inner(c, out)
+  end subroutine driver
+end module lib
+"""
+
+
+def test_inlined_pointer_aor_array_member_flattens_to_dynamic_soa(tmp_path):
+    sdfg = build_sdfg(_PTR_AOR_ARR_MEMBER_SRC, tmp_path / "sdfg", name="driver", entry="lib::driver").build()
+    assert "c_e_x" in sdfg.arrays, f"missing pointer-AoR SoA companion; arrays={sorted(sdfg.arrays)}"
+    # Two runtime pointer-array dims + the static member extent (3).
+    assert len(sdfg.arrays["c_e_x"].shape) == 3
+    assert str(sdfg.arrays["c_e_x"].shape[-1]) == "3"
+
+    d0, d1 = 4, 2
+    c_e_x = np.zeros((d0, d1, 3), order="F", dtype=np.float64)
+    c_e_x[1, 0, :] = [3.0, 4.0, 12.0]  # c%e(2,1)%x -> 0-based (1,0,:)
+    out = np.zeros(1, dtype=np.float64)
+    sdfg(c_e_x=c_e_x, out=out, c_e_x_d0=d0, c_e_x_d1=d1)
+    assert abs(out[0] - 169.0) < 1e-12, out[0]
