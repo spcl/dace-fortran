@@ -61,6 +61,10 @@ end module lib
         ("lib", "base", "a"),
         ("lib", "ext"),
         ("lib", "ext", "b"),
+        # Direct inherited access -- Fortran flattens the base type's components
+        # into the derived type, so ``ext`` instances reach ``a`` as ``x % a``.
+        ("lib", "ext", "a"),
+        # Parent-component access -- ``x % base % a`` keeps the base type name.
         ("lib", "ext", "base"),
         ("lib", "ext", "base", "a"),
     }

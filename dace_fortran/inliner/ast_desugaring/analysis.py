@@ -312,7 +312,17 @@ def alias_specs(ast: f03.Program) -> types.SPEC_TABLE:
         for k, v in alias_map.items():
             if k[:len(base_dtspec)] != base_dtspec:
                 continue
+            # Parent-component access: ``derived % base_type_name % comp`` keeps
+            # the base type name as an explicit selector.
             updates[dtspec + k[len(base_dtspec) - 1:]] = v
+            # Direct inherited access: Fortran flattens an extended type's
+            # inherited components and type-bound procedures into the derived
+            # type's own namespace, so ``derived % comp`` must resolve too.  A
+            # member the derived type redefines (override) already owns its key
+            # and must NOT be shadowed by the inherited one.
+            rel = k[len(base_dtspec):]
+            if rel and dtspec + rel not in alias_map:
+                updates[dtspec + rel] = v
         alias_map.update(updates)
 
     assert set(ident_map.keys()).issubset(alias_map.keys())
@@ -908,7 +918,13 @@ def _compute_argument_signature(args, scope_spec: types.SPEC,
                     # stubbed/unreachable wrapper.  Treat its type as
                     # match-anything so signature computation proceeds.
                     return MATCH_ALL
-                return find_type_of_entity(alias_map[x_spec], alias_map)
+                t = find_type_of_entity(alias_map[x_spec], alias_map)
+                if t is None and TOLERATE_EXTERNAL_USES:
+                    # The name resolves to a non-data entity (e.g. a type-bound
+                    # procedure such as ``group_id`` used as an actual argument):
+                    # it has no value type, so treat it as match-anything.
+                    return MATCH_ALL
+                return t
             elif isinstance(x, f03.Data_Ref):
                 return find_type_dataref(x, scope_spec, alias_map)
             elif isinstance(x, f03.Part_Ref):

@@ -1,6 +1,71 @@
 # Copyright 2019-2025 ETH Zurich and the DaCe authors. All rights reserved.
+from dace_fortran.fparser_inliner import inline_to_ast
 from dace_fortran.inliner.ast_desugaring import cleanup
 from inliner.fortran_test_helper import SourceCodeBuilder, parse_and_improve
+
+
+# A type-bound (elemental) function INHERITED via EXTENDS and called through a
+# component -- ``self % trans % gid(i)`` -- is syntactically indistinguishable
+# from array-component access, so it must be resolved by following the
+# inheritance chain.  This is the ICON-O free-surface solver pattern
+# (``this % trans % globalID_loc(i, j)`` where ``t_trivial_transfer`` EXTENDS
+# ``t_transfer``), which previously asserted ``cannot find globalid_loc`` while
+# extracting the ocean dynamical core.
+_INHERITED_TYPE_BOUND_FN = """
+module m_base
+  implicit none
+  type, abstract :: t_base
+    integer :: data(10)
+  contains
+    procedure :: gid => base_gid
+  end type
+contains
+  pure elemental function base_gid(this, i) result(g)
+    class(t_base), intent(in) :: this
+    integer, intent(in) :: i
+    integer :: g
+    g = this%data(i) + 1
+  end function
+end module
+module m_triv
+  use m_base, only: t_base
+  implicit none
+  type, extends(t_base) :: t_triv
+  end type
+end module
+module m_lhs
+  use m_triv, only: t_triv
+  implicit none
+  type :: t_lhs
+    type(t_triv) :: trans
+  end type
+contains
+  subroutine kernel(self, i, out)
+    type(t_lhs), intent(in) :: self
+    integer, intent(in) :: i
+    integer, intent(out) :: out
+    out = self%trans%gid(i)
+  end subroutine
+end module
+"""
+
+
+def test_inherited_type_bound_function_through_component_resolves():
+    """A type-bound function inherited via EXTENDS and called through a
+    component must resolve without asserting.
+
+    Exercises two fixes together: (1) the EXTENDS-inheritance alias mapping
+    registers the inherited binding under the derived type's own namespace
+    (``analysis.alias_specs``), so ``correct_for_function_calls`` can classify
+    ``self % trans % gid(i)`` as a call; (2) the constant-argument optimizer
+    skips the type-bound call it cannot statically resolve instead of asserting.
+    """
+    ast = inline_to_ast({"m.f90": _INHERITED_TYPE_BOUND_FN}, entry="m_lhs::kernel",
+                        tolerate_external_uses=True)
+    out = ast.tofortran().lower().replace(" ", "")
+    # The inherited type-bound function call survives as a valid reference
+    # (callable once its -- possibly stubbed -- target is present in the TU).
+    assert "trans%gid(i)" in out
 
 
 def test_globally_unique_names():

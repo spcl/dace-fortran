@@ -129,6 +129,11 @@ def make_practically_constant_arguments_constants(ast: f03.Program, keepers: Lis
         if isinstance(fn, f03.Intrinsic_Name):
             # Cannot do anything with intrinsic functions.
             continue
+        if not isinstance(fn, f03.Name):
+            # A type-bound function call (``a % b % f(...)``): the optimizer
+            # cannot statically resolve which concrete procedure it dispatches
+            # to, so its arguments stay undecidable (skip -- conservative).
+            continue
         args = args.children if args else tuple()
         kwargs = tuple(a.children for a in args if isinstance(a, f03.Actual_Arg_Spec))
         kwargs = {k.string: v for k, v in kwargs}
