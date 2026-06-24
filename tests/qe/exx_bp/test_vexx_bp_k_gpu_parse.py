@@ -110,6 +110,75 @@ def _restore_fft_interfaces(source: str) -> str:
     return out
 
 
+def _make_paw_flag_public(source: str) -> str:
+    """Make ``paw_has_init_paw_fockrnl`` PUBLIC for the binding ``use``.
+
+    The kernel reads the module SAVE flag ``paw_has_init_paw_fockrnl``
+    (``MODULE paw_exx``, behind the ``okpaw`` gate -- never taken on the
+    no-op path), so the generated binding sources it from the host via
+    ``use paw_exx, only: <local> => paw_has_init_paw_fockrnl``.  Fortran
+    forbids USE-importing a ``PRIVATE`` entity, so the import won't compile.
+
+    Unlike the ``fft_interfaces`` restore, this is NOT a pruner artifact --
+    the flag is ``PRIVATE`` in real QE too.  And ``PRIVATE`` is a
+    source-level access attribute that does NOT survive into FIR (it does
+    not change linkage), so the FIR-based bridge / binding pipeline cannot
+    see it to degenerate the symbol automatically; the only place to resolve
+    it is the source.  Promoting it to PUBLIC changes nothing semantically
+    (the flag is never read on the no-op path) -- it only makes the host
+    symbol USE-accessible to the wrapper.  No-op once it is already public.
+    """
+    return source.replace("LOGICAL, PRIVATE :: paw_has_init_paw_fockrnl", "LOGICAL, PUBLIC :: paw_has_init_paw_fockrnl")
+
+
+# C-callable driver that initialises the QE module state (shared with the
+# gfortran reference via ``init_vexx_bp_k_gpu_state_c``), then dispatches into
+# the SDFG through its GENERATED Fortran binding ``vexx_bp_k_gpu_dace`` rather
+# than the original kernel.  The binding marshals every USE'd module global
+# (mp_exx all_start/all_end/ibands/..., the becxx AoS struct, ...) from the
+# real host on entry / back on exit, so the SDFG sees the same no-op state the
+# reference does.
+_SDFG_DRIVER = r"""
+subroutine run_vexx_dace_c(lda, n, m, npol_in, max_ibands_in, psi, hpsi) &
+    bind(c, name="run_vexx_dace_c")
+  ! ``, intrinsic`` selects the real iso_c_binding even though the QE
+  ! checkpoint stubs a same-named module (which lacks ``c_int``).
+  use, intrinsic :: iso_c_binding
+  use kinds, only: dp
+  use becmod, only: bec_type
+  use us_exx, only: becxx
+  use noncollin_module, only: npol
+  use mp_exx, only: max_ibands
+  use vexx_bp_k_gpu_dace_bindings, only: vexx_bp_k_gpu_dace, vexx_bp_k_gpu_dace_finalize
+  implicit none
+  integer(c_int), value :: lda, n, m, npol_in, max_ibands_in
+  complex(dp), intent(inout) :: psi(lda*npol_in, max_ibands_in)
+  complex(dp), intent(inout) :: hpsi(lda*npol_in, max_ibands_in)
+  type(bec_type) :: becpsi
+  interface
+    subroutine init_vexx_bp_k_gpu_state_c(lda, n, m, npol_in, max_ibands_in) &
+        bind(c, name="init_vexx_bp_k_gpu_state_c")
+      use, intrinsic :: iso_c_binding
+      integer(c_int), value :: lda, n, m, npol_in, max_ibands_in
+    end subroutine
+  end interface
+  call init_vexx_bp_k_gpu_state_c(lda, n, m, npol_in, max_ibands_in)
+  ! becxx is the module-global AoS struct the binding copies in via
+  ! size(becxx); allocate a degenerate element so the copy is valid.
+  if (allocated(becxx)) deallocate(becxx)
+  allocate(becxx(1))
+  allocate(becxx(1)%k(1,1));  becxx(1)%k = (0.0_dp, 0.0_dp)
+  ! becpsi is a required wrapper arg (the wrapper c_loc's its components).
+  allocate(becpsi%r(1,1));    becpsi%r = 0.0_dp
+  allocate(becpsi%k(1,1));    becpsi%k = (0.0_dp, 0.0_dp)
+  allocate(becpsi%nc(1,1,1)); becpsi%nc = (0.0_dp, 0.0_dp)
+  becpsi%nbnd = 1
+  call vexx_bp_k_gpu_dace(lda, n, m, psi, hpsi, becpsi)
+  call vexx_bp_k_gpu_dace_finalize()
+end subroutine run_vexx_dace_c
+"""
+
+
 def test_restore_fft_interfaces_unblocks_flang_parse(tmp_path):
     """``_restore_fft_interfaces`` rewrites the source to a flang-parseable form.
 
@@ -250,56 +319,80 @@ def test_vexx_bp_k_gpu_reference_runs(tmp_path):
     np.testing.assert_array_equal(hpsi_out, hpsi_in)
 
 
-@pytest.mark.xfail(strict=False,
-                   reason=("The SDFG now BUILDS (``test_vexx_bp_k_gpu_parses`` passes), so the "
-                           "comparison harness is fully wired.  Remaining gap is at the SDFG "
-                           "CALL: ``KeyError: Missing program argument 'add_nlxx_pot_deexx'``.  "
-                           "``hpsi(lda)`` / ``deexx(nkb)`` are DUMMY args of the inlined "
-                           "``add_nlxx_pot`` (lines 1216-1227); at the call site the caller "
-                           "passes sections of its own locals (``hpsi(:,ii)`` and "
-                           "``deexx(:,ii)``, ``deexx`` being a local ALLOCATABLE allocated only "
-                           "under ``okvan``).  The inliner leaks these dummies as program "
-                           "arguments (``add_nlxx_pot_deexx (nkb,)`` / ``add_nlxx_pot_hpsi "
-                           "(lda,)``) instead of binding them as section-aliases of the "
-                           "caller's locals -- the QE inlined-dummy-bound-to-local-section gap "
-                           "(plan Ext 1/2/4).  Once those bind as transients/section-aliases "
-                           "this auto-flips to a clean element-wise compare on the no-op path."))
 def test_vexx_bp_k_gpu_numerical_correctness(tmp_path):
-    """End-to-end gfortran-reference vs SDFG element-wise comparison.
+    """End-to-end numerical correctness for ``vexx_bp_k_gpu`` THROUGH the
+    generated Fortran binding.
 
-    Both sides see byte-identical deterministic complex inputs from a
-    seeded ``numpy.random.default_rng``.  No-op path init (see
-    ``test_vexx_bp_k_gpu_reference_runs``) makes the expected output
-    the identity ``hpsi_out == hpsi_in``; the comparison is therefore
-    a "did the SDFG also produce identity?" check, which is exactly
-    what we want at this gate (a non-no-op path would force opinion on
-    QE module-state semantics).
+    The kernel USE-imports dozens of QE module globals (mp_exx, exx_base,
+    us_exx, ...); a direct DaCe call would have to hand-supply ~80
+    module-global arrays plus hundreds of free symbols, so the e2e path
+    goes through the emitted ``vexx_bp_k_gpu_dace`` binding, which marshals
+    all that state from the real host on entry / back on exit -- exactly
+    how the kernel would run in production.
 
-    SDFG module-level state is initialised by the bridge's auto-dim
-    symbol / bindings layer from the integer kwargs ``max_ibands``,
-    ``npol`` passed alongside ``lda`` / ``n`` / ``m``.  When the
-    pruner starts inlining the ``fwfft_y`` / ``invfft_y`` specifics
-    behind the empty ``fft_interfaces`` block, the linker-stub seam
-    in the caller wrapper folds to a no-op too.
+    Both sides see byte-identical seeded random complex ``psi`` / ``hpsi``
+    (``numpy.random.default_rng``) and the SAME no-op module state from
+    ``init_vexx_bp_k_gpu_state_c`` (noncolin / okvan / okpaw = .false.,
+    negrp = 1, nqs = 0, nibands = [0]).  On that path the kernel reduces to
+    ``hpsi = hpsi_d`` (identity, see ``test_vexx_bp_k_gpu_reference_runs``),
+    so the SDFG-via-binding output must match the gfortran reference
+    element-wise -- pinning that the inlined-dummy section-aliasing, the
+    becxx AoS-struct marshalling, and the module-global copy-in/out all
+    lower correctly end to end.
     """
-    import numpy as np
-    _, init, run = _compile_reference(tmp_path)
+    import ctypes
 
-    # SDFG build (the current xfail gate).
-    src = _restore_fft_interfaces(_SRC.read_text())
-    sdfg = dace_fortran.build_sdfg(src, out_dir=str(tmp_path / "sdfg"), entry=_ENTRY, name="vexx_bp_k_gpu")
+    import numpy as np
+
+    from _util import build_sdfg
+    from dace_fortran.bindings.build_fortran_library import build_fortran_library
+    from dace_fortran.bindings.flatten_plan import FlattenPlan
+    from dace_fortran.bindings.fortran_interface import build_auto_interface
 
     lda, n, m, npol, max_ibands = 4, 4, 1, 1, 1
+
+    # --- gfortran reference (identity on the no-op path) ---
+    # ``_compile_reference`` writes ``qe_ref.f90`` / ``libvexx_ref.so`` into
+    # ``tmp_path`` directly; those names don't collide with the SDFG side's
+    # ``qe.f90`` / ``sdfg`` / ``lib`` / ``driver.f90``.
+    _, init, run = _compile_reference(tmp_path)
     init(lda, n, m, npol, max_ibands)
     psi_ref, hpsi_ref = _make_random_inputs(lda, npol, max_ibands)
-    psi_sdfg = psi_ref.copy(order="F")
-    hpsi_sdfg = hpsi_ref.copy(order="F")
+    psi_dace = psi_ref.copy(order="F")
+    hpsi_dace = hpsi_ref.copy(order="F")
     run(lda, n, m, psi_ref.ctypes.data, hpsi_ref.ctypes.data)
-    sdfg(lda=np.int32(lda),
-         n=np.int32(n),
-         m=np.int32(m),
-         psi=psi_sdfg,
-         hpsi=hpsi_sdfg,
-         max_ibands=np.int32(max_ibands),
-         npol=np.int32(npol))
-    np.testing.assert_allclose(hpsi_sdfg, hpsi_ref, rtol=1e-12, atol=1e-12)
+
+    # --- SDFG-via-binding ---
+    src = _make_paw_flag_public(_restore_fft_interfaces(_SRC.read_text()))
+    src_path = tmp_path / "qe.f90"
+    src_path.write_text(src)
+
+    builder = build_sdfg(src, tmp_path / "sdfg", name="vexx_bp_k_gpu", entry=_ENTRY)
+    plan = FlattenPlan.from_dict(builder.module.get_flatten_plan())
+    sdfg = builder.build()
+    sdfg.name = "vexx_bp_k_gpu"
+    iface = build_auto_interface(sdfg._fortran_interface_raw, sdfg.name)
+
+    driver_path = tmp_path / "driver.f90"
+    driver_path.write_text(_SDFG_DRIVER)
+
+    lib = build_fortran_library(
+        sdfg,
+        iface,
+        plan,
+        str(tmp_path / "lib"),
+        name="vexx_lib",
+        prelude_sources=[src_path],
+        extra_sources=[_CALLER, driver_path],
+        # The pruned ``qvan2`` has an implicit-interface COMPLEX->REAL
+        # arg-kind mismatch (qg) behind ``IF(okvan)`` -- never run on the
+        # no-op path; matches the reference build's permissive flag.
+        extra_flags=["-fallow-argument-mismatch"])
+    dace_lib = lib.load()
+
+    fn = dace_lib.run_vexx_dace_c
+    fn.restype = None
+    fn.argtypes = [ctypes.c_int] * 5 + [ctypes.c_void_p, ctypes.c_void_p]
+    fn(lda, n, m, npol, max_ibands, psi_dace.ctypes.data, hpsi_dace.ctypes.data)
+
+    np.testing.assert_allclose(hpsi_dace, hpsi_ref, rtol=1e-12, atol=1e-12)

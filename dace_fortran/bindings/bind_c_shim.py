@@ -517,7 +517,12 @@ def emit_bind_c_shim(iface: OriginalInterface,
     body_block = "\n".join(body_parts)
 
     use_lines = [
-        "  use iso_c_binding", *struct_use_lines, *module_forward_use_lines,
+        # ``, intrinsic`` forces the real intrinsic module even when a
+        # USE-imported source stubs a same-named ``iso_c_binding`` (matches the
+        # generated bindings module; the shim needs the real ``c_*`` kinds).
+        "  use, intrinsic :: iso_c_binding",
+        *struct_use_lines,
+        *module_forward_use_lines,
         f"  use {bind_mod}, only: {entry}_dace, {entry}_dace_finalize"
     ]
     lines = [
