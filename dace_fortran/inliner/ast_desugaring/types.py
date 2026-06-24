@@ -63,6 +63,21 @@ class TYPE_SPEC:
             # If it's an argument and intent is not specified, it can be both input and output.
             self.inp, self.out = True, True
 
+    def copy(self) -> "TYPE_SPEC":
+        """Return an independent copy.  Use this wherever a derived signature
+        element is mutated in place (``shape`` / ``keyword``) so a shared
+        sentinel such as the match-anything ``MATCH_ALL`` is never corrupted."""
+        other = TYPE_SPEC(self.spec)
+        other.shape = self.shape
+        other.optional = self.optional
+        other.pointer = self.pointer
+        other.inp = self.inp
+        other.out = self.out
+        other.alloc = self.alloc
+        other.const = self.const
+        other.keyword = self.keyword
+        return other
+
     @staticmethod
     def _parse_shape(attrs: str) -> Tuple[str, ...]:
         """

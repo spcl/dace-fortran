@@ -294,6 +294,13 @@ def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
         bspec = dref_type.spec + (bname.string, )
         if bspec in genc_map and genc_map[bspec]:
             for cand in genc_map[bspec]:
+                # An external type-bound procedure candidate -- its concrete
+                # target has no Fortran source (e.g. ICON's MPI halo
+                # ``%exchange_data`` -> ``exchange_data_4de1_dp``).  Skip it
+                # when tolerating externals; if none of the candidates resolve
+                # the call is left for pruning to drop.
+                if analysis.TOLERATE_EXTERNAL_USES and proc_map.get(cand) not in alias_map:
+                    continue
                 cand_stmt = alias_map[proc_map[cand]]
                 cand_spec = analysis.ident_spec(cand_stmt)
                 # TODO: Add ref.
@@ -309,11 +316,21 @@ def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
                     bspec = cand
                     break
         if bspec not in proc_map:
-            print(f"{bspec} / {args_sig}")
-            for c in all_cand_sigs:
-                print(f"...> {c}")
-        assert bspec in proc_map, f"[in mod: {cmod}/{callsite}] {bspec} not found"
+            # The type-bound call did not resolve to any concrete procedure with
+            # source.  When tolerating externals, leave the call untouched for
+            # reachability pruning to drop (it lives in a stubbed/unreachable
+            # wrapper, e.g. the halo-exchange path).
+            if analysis.TOLERATE_EXTERNAL_USES:
+                continue
+            cand_dump = "".join(f"\n...> {c}" for c in all_cand_sigs)
+            raise AssertionError(f"[in mod: {cmod}/{callsite}] {bspec} not found for {args_sig}{cand_dump}")
         pname = proc_map[bspec]
+        # A specific binding may name a concrete procedure that itself has no
+        # source (an external such as the MPI halo primitive).  Mirror the
+        # generic-candidate guard above and drop it for pruning rather than
+        # emitting a ``use`` of a missing symbol that would fail to compile.
+        if analysis.TOLERATE_EXTERNAL_USES and pname not in alias_map:
+            continue
 
         # We are assumping that it's a subprogram defined directly inside a module.
         assert len(pname) == 2

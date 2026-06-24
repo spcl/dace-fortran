@@ -201,6 +201,10 @@ _all_tests/
 # mo_kind + mo_physical_constants).  Kept under tests/icon/graupel/ as
 # the canonical bridge test for the AES microphysics scheme.
 !tests/icon/graupel/**/*.f90
+# ICON-O ocean single-TU extraction fixtures (PPM vertical flux + Coriolis):
+# the committed, gfortran-compiling .f90 each kernel is extracted to, against
+# which tests/icon/ocean/test_extract_single_tu.py checks for drift.
+!tests/icon/ocean/**/*.f90
 # QE exx_bp::vexx_bp_k_gpu parse anchor (pre-processed flat .f90 from the
 # f2dace-qe-source repo's pruning pipeline).  Kept under tests/qe/exx_bp/.
 !tests/qe/exx_bp/**/*.f90

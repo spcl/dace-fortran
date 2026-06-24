@@ -366,6 +366,17 @@ def find_real_ident_spec(ident: str,
     return spec
 
 
+def find_real_ident_spec_tolerant(ident: str, in_spec: types.SPEC, alias_map: types.SPEC_TABLE) -> Optional[types.SPEC]:
+    """Resolve ``ident`` to its canonical spec with a single lookup.  Under
+    :data:`TOLERATE_EXTERNAL_USES` an unresolved external symbol returns ``None``
+    (the caller substitutes a match-anything type) instead of asserting;
+    otherwise this asserts exactly like :func:`find_real_ident_spec`."""
+    spec = search_real_ident_spec(ident, in_spec, alias_map)
+    if spec is None and not TOLERATE_EXTERNAL_USES:
+        raise AssertionError(f"cannot find {ident} / {in_spec}")
+    return spec
+
+
 def _find_type_decl_node(node: f03.Entity_Decl):
     anc = node.parent
     while anc and not ast_utils.atmost_one(
@@ -659,7 +670,14 @@ def find_type_of_entity(node: Union[f03.Entity_Decl, f03.Component_Decl],
     elif isinstance(typ, f03.Declaration_Type_Spec):
         _, typ_name_node = typ.children
         typ_name = typ_name_node.string if isinstance(typ_name_node, f03.Name) else str(typ_name_node)
-        spec = find_real_ident_spec(typ_name, ident_spec(node), alias_map)
+        spec = find_real_ident_spec_tolerant(typ_name, ident_spec(node), alias_map)
+        if spec is None:
+            # An unresolvable declared type under tolerance -- a ``CLASS(*)``
+            # unlimited polymorphic component (``typ_name == '*'``) or a type
+            # whose definition has no source (external).  Use the match-anything
+            # spec but KEEP the entity's real shape/attributes (built below) so
+            # downstream subscript/component tracing does not crash on it.
+            spec = ('*', )
 
     is_arg = False
     scope_spec = find_scope_spec(node)
@@ -753,7 +771,10 @@ def find_type_dataref(dref: Union[f03.Name, f03.Part_Ref, f03.Data_Ref, f03.Data
     def _subscripted_type(t: types.TYPE_SPEC, pref: f03.Part_Ref):
         pname, subs = pref.children
         if not t.shape:
-            assert not subs, f"{t} / {pname}, {t.spec}, {dref}"
+            # A match-anything type (external / ``CLASS(*)`` under tolerance) has
+            # an unknown rank, so allow subscripts on it; a genuine scalar cannot
+            # be indexed and still asserts.
+            assert not subs or (TOLERATE_EXTERNAL_USES and t.spec == ('*', )), f"{t} / {pname}, {t.spec}, {dref}"
         elif subs:
             t.shape = tuple(s.tofortran() for s in subs.children if ':' in s.tofortran())
         return t
@@ -762,6 +783,9 @@ def find_type_dataref(dref: Union[f03.Name, f03.Part_Ref, f03.Data_Ref, f03.Data
         return _subscripted_type(cur_type, dref)
     for comp in rest:
         assert isinstance(comp, (f03.Name, f03.Part_Ref))
+        if TOLERATE_EXTERNAL_USES and cur_type.spec == ('*', ):
+            # Cannot trace a component of a match-anything type; stay match-anything.
+            return MATCH_ALL
         part_name = comp.children[0] if isinstance(comp, f03.Part_Ref) else comp
         comp_spec = find_real_ident_spec(part_name.string, cur_type.spec, alias_map)
         assert comp_spec in alias_map, f"cannot find {comp_spec} / {dref} in {scope_spec}"
@@ -863,9 +887,6 @@ def _compute_argument_signature(args, scope_spec: types.SPEC,
     if not args:
         return tuple()
 
-    # Define MATCH_ALL locally as it's only used for signature matching logic
-    MATCH_ALL = types.TYPE_SPEC(('*', ), '')
-
     args_sig = []
     for c in args.children:
 
@@ -880,7 +901,13 @@ def _compute_argument_signature(args, scope_spec: types.SPEC,
             elif isinstance(x, f03.Logical_Literal_Constant):
                 return types.TYPE_SPEC('LOGICAL')
             elif isinstance(x, f03.Name):
-                x_spec = find_real_ident_spec(x.string, scope_spec, alias_map)
+                x_spec = find_real_ident_spec_tolerant(x.string, scope_spec, alias_map)
+                if x_spec is None:
+                    # An unresolved external symbol used as a call argument --
+                    # e.g. an MPI constant (``mpi_max`` / ``mpi_sum``) inside a
+                    # stubbed/unreachable wrapper.  Treat its type as
+                    # match-anything so signature computation proceeds.
+                    return MATCH_ALL
                 return find_type_of_entity(alias_map[x_spec], alias_map)
             elif isinstance(x, f03.Data_Ref):
                 return find_type_dataref(x, scope_spec, alias_map)
@@ -888,7 +915,8 @@ def _compute_argument_signature(args, scope_spec: types.SPEC,
                 part_name, subsc = x.children
                 orig_type = find_type_dataref(part_name, scope_spec, alias_map)
                 if not orig_type.shape:
-                    assert not subsc
+                    # A match-anything type has unknown rank, so tolerate subscripts.
+                    assert not subsc or (TOLERATE_EXTERNAL_USES and orig_type.spec == ('*', ))
                     return orig_type
                 if not subsc:
                     return orig_type
@@ -899,6 +927,7 @@ def _compute_argument_signature(args, scope_spec: types.SPEC,
                 kw, val = x.children
                 t = _deduct_type(val)
                 if isinstance(kw, f03.Name):
+                    t = t.copy()  # never mutate a shared sentinel (e.g. MATCH_ALL)
                     t.keyword = kw.string
                 return t
             elif isinstance(x, f03.Intrinsic_Function_Reference):
@@ -930,7 +959,7 @@ def _compute_argument_signature(args, scope_spec: types.SPEC,
                 return MATCH_ALL
             elif isinstance(x, f03.Array_Constructor):
                 _, items, _ = x.children
-                t = _deduct_type(items.children[0]) if items.children else MATCH_ALL
+                t = (_deduct_type(items.children[0]) if items.children else MATCH_ALL).copy()
                 t.shape += (':', )
                 return t
             else:
@@ -974,8 +1003,11 @@ MATCH_ALL = types.TYPE_SPEC(('*', ), '')  # TODO: Hacky; `_does_type_signature_m
 
 
 def _does_part_matches(g: types.TYPE_SPEC, c: types.TYPE_SPEC) -> bool:
-    if c == MATCH_ALL:
-        # Consider them matched.
+    if c.spec == ('*', ) or (TOLERATE_EXTERNAL_USES and g.spec == ('*', )):
+        # A match-anything candidate parameter matches any argument; under
+        # tolerance an unresolved external argument matches any parameter.  Use
+        # a value check on the spec (TYPE_SPEC has no value ``__eq__``, so an
+        # identity check against the MATCH_ALL singleton would miss copies).
         return True
     if len(g.shape) != len(c.shape):
         # Both's ranks must match
