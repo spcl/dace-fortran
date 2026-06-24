@@ -18,7 +18,7 @@ from dace_fortran.bindings.flatten_plan import (
     FlattenPlan,
     strip_index_args,
 )
-from dace_fortran.bindings.fortran_interface import OriginalInterface
+from dace_fortran.bindings.fortran_interface import DerivedType, OriginalInterface
 from dace_fortran.bindings.frozen_signature import FrozenSignature
 from dace_fortran.bindings.loop_copy import (
     _fortran_type,
@@ -1575,6 +1575,58 @@ def _render_aos_copy_out(a) -> List[str]:
     return out
 
 
+def _struct_member_symbol_sources(iface: OriginalInterface) -> Dict[str, str]:
+    """Map a struct dummy's member free-symbols to the Fortran
+    expression that reads them from the caller's actual struct.
+
+    A struct member used ONLY symbolically  --  a loop bound
+    (``do i = 1, dfftt%ngm``) or an array extent
+    (``g(3, dfftt%ngm)``)  --  is lifted by ``hlfir-flatten-structs``
+    to a free SDFG symbol with NO ``FlattenEntry`` (only members read
+    as *values* get a data entry, cf. ``struct_of_scalars`` ``cst%rg``).
+    The plan-driven ``scalar_member`` / ``flat_shapes`` paths therefore
+    never source it, and it falls through to the unresolved-symbol
+    TODO.  This rebuilds the bridge's member-symbol names from the
+    static ``iface.struct_types`` layout and pairs each with its ``%``
+    read so the symbol-population block can assign it directly.
+
+    The bridge joins an access path with ``_`` (``FlattenStructs.cpp``
+    ``designateChainPath``; the ``member.replace('%', '_')`` convention
+    pinned by ``struct_of_scalars_test``), so for struct dummy ``d``:
+
+      * scalar member ``d%m`` (rank 0)      -> ``d_m``             = ``d%m``
+      * array  member ``d%a`` extent dim i  -> ``d_a_d<i>``        = ``size(d%a, dim=i+1)``
+      * array  member ``d%a`` lbound dim i  -> ``offset_d_a_d<i>`` = ``lbound(d%a, dim=i+1)``
+
+    Nested derived-type members recurse with the joined path
+    (``d_inner_m`` <- ``d%inner%m``).
+    """
+    sources: Dict[str, str] = {}
+
+    def walk(st: DerivedType, sym_prefix: str, access: str) -> None:
+        for m in st.members:
+            msym = f"{sym_prefix}_{m.name}"
+            macc = f"{access}%{m.name}"
+            if m.struct_name:
+                nested = iface.struct_types.get(m.struct_name)
+                if nested is not None:
+                    walk(nested, msym, macc)
+                continue
+            if m.rank == 0:
+                sources[msym] = macc
+                continue
+            for i in range(m.rank):
+                sources[f"{msym}_d{i}"] = f"size({macc}, dim={i + 1})"
+                sources[f"offset_{msym}_d{i}"] = f"lbound({macc}, dim={i + 1})"
+
+    for a in iface.args:
+        if a.struct_type:
+            st = iface.struct_types.get(a.struct_type)
+            if st is not None:
+                walk(st, a.name, a.name)
+    return sources
+
+
 def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dummy_set: set,
                           iface: OriginalInterface) -> List[str]:
     """Emit one assignment per free SDFG symbol from the caller's
@@ -1590,6 +1642,12 @@ def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dumm
     are themselves outer dummies are left for the caller to pass.
     """
     _module_sources = effective_module_sources(frozen, iface)
+    # Struct-member free symbols (a member used only as a loop bound /
+    # array extent, so the flatten pass lifted it to a free symbol with
+    # no FlattenEntry  --  QE ``dfftt%ngm`` / ``dfftt%nnr`` /
+    # ``size(dfftt%nl_d)``).  Sourced from the static ``struct_types``
+    # layout as the last resort below.
+    _struct_member_sources = _struct_member_symbol_sources(iface)
     arg_by_sdfg = {a.sdfg_name: a for a in frozen.args}
     # SCALAR outer dummies declared OPTIONAL -- their ``<name>_present``
     # companion is forwarded from the caller's actual ``present(<name>)`` (M1),
@@ -1687,6 +1745,12 @@ def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dumm
             # Fortran ``present()`` of an omitted optional is ``.false.`` -> 0,
             # which also matches the no-op call path.
             out.append(f"    {sym} = 0  ! optional absent (not forwarded by wrapper)")
+            continue
+        # A struct dummy's member used only symbolically: no plan entry,
+        # but the static struct layout names it (``dfftt%ngm`` ->
+        # ``dfftt_ngm``).  Read it straight from the caller's struct.
+        if sym in _struct_member_sources:
+            out.append(f"    {sym} = int({_struct_member_sources[sym]}, c_int)")
             continue
         out.append(f"    ! TODO: no plan entry gives size for free symbol {sym!r}")
     return out

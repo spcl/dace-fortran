@@ -118,6 +118,65 @@ def test_emit_shim_rank2_array_extents(tmp_path: Path):
     assert "call c_f_pointer(a_p, a, [m, n])" in text
 
 
+def test_emit_shim_forwards_module_var_array_extents(tmp_path: Path):
+    """A flat array dummy whose static shape references *module*
+    variables (ICON ocean ``tracer(nproma, n_zlev)``, ``w(nproma,
+    n_zlev + 1)``) -- not scalar dummy args -- must forward those
+    extents as ``integer(c_int), value`` C args so the ``c_f_pointer``
+    shape constructor resolves.  Before the fix the bare ``nproma`` /
+    ``n_zlev`` reached gfortran undeclared (``Symbol 'n_zlev' has no
+    IMPLICIT type``).
+
+    Distinct extents are forwarded once (shared across arrays) and
+    prepended to the C-ABI arg list (extents first).  An expression
+    extent (``n_zlev + 1``) contributes only its identifier; a scalar
+    dummy already in scope (``vt``) is NOT re-forwarded."""
+    iface = OriginalInterface(
+        entry="ppm",
+        args=(
+            OriginalArg(name="vt", fortran_type="integer(c_int)", rank=0, intent="in"),
+            OriginalArg(name="tracer", fortran_type="real(c_double)", rank=2,
+                        shape=("nproma", "n_zlev"), intent="in"),
+            OriginalArg(name="w", fortran_type="real(c_double)", rank=2,
+                        shape=("nproma", "n_zlev + 1"), intent="in"),
+            OriginalArg(name="flux", fortran_type="real(c_double)", rank=2,
+                        shape=("nproma", "n_zlev"), intent="out"),
+        ),
+    )
+    text = emit_bind_c_shim(iface, str(tmp_path / "ppm_c.f90")).read_text()
+    # Each distinct module-var extent forwarded once, as a value arg.
+    assert "integer(c_int), value :: nproma" in text
+    assert "integer(c_int), value :: n_zlev" in text
+    assert text.count("integer(c_int), value :: nproma") == 1
+    assert text.count("integer(c_int), value :: n_zlev") == 1
+    # Prepended (extents first), ahead of the scalar dummy + array ptrs.
+    assert ("subroutine ppm_c(nproma, n_zlev, vt, tracer_p, w_p, flux_p) "
+            "bind(c, name='ppm_c')" in text)
+    # The c_f_pointer shapes resolve against the forwarded names;
+    # the ``n_zlev + 1`` expression rides verbatim.
+    assert "call c_f_pointer(tracer_p, tracer, [nproma, n_zlev])" in text
+    assert "call c_f_pointer(w_p, w, [nproma, n_zlev + 1])" in text
+    assert "call c_f_pointer(flux_p, flux, [nproma, n_zlev])" in text
+
+
+def test_emit_shim_scalar_dummy_extent_not_forwarded(tmp_path: Path):
+    """An array sized by a scalar *dummy* (``a(n)`` with ``n`` an
+    ``intent(in)`` arg) stays on the existing path -- ``n`` is already in
+    scope, so it is NOT additionally forwarded as a module-var extent."""
+    iface = OriginalInterface(
+        entry="kern",
+        args=(
+            OriginalArg(name="n", fortran_type="integer(c_int)", rank=0, intent="in"),
+            OriginalArg(name="a", fortran_type="real(c_double)", rank=1,
+                        shape=("n", ), intent="inout"),
+        ),
+    )
+    text = emit_bind_c_shim(iface, str(tmp_path / "kern_c.f90")).read_text()
+    # Header is unchanged from the pre-fix shape (no spurious extent arg).
+    assert "subroutine kern_c(n, a_p) bind(c, name='kern_c')" in text
+    assert "call c_f_pointer(a_p, a, [n])" in text
+
+
 def test_emit_shim_dynamic_shape_struct_member(tmp_path: Path):
     """A struct member with a dynamic extent (``'?'`` in
     :attr:`Member.shape`) is now handled by the v2 shim emitter:
