@@ -1,13 +1,14 @@
 # Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
 """End-to-end tests for the public ``inline_to_single_tu`` API plus the
 user-requested extra patterns (only_clause, rename, collision,
-nested_types, helper_proc, keep_external, cycle, generic_interface,
+nested_types, helper_proc, do_not_emit, cycle, generic_interface,
 private_public).
 
 Each test inlines a small multi-module project into one self-contained
 ``.f90`` and asserts the right code survives / is dropped, then (when
 ``gfortran`` is present) compiles the result to prove it is a valid TU.
 """
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -394,6 +395,42 @@ end subroutine run
     assert _compiles(out)
 
 
+def test_do_not_emit_leaves_procedure_external():
+    """The unified external-function policy's ``do_not_emit=[names]``
+    param leaves a procedure external on the public inliner API -- its
+    body is emptied (same effect as the low-level ``make_noop`` above)
+    but addressed by plain call-site name, not ``(module, name)``."""
+    sources = {
+        "lib.f90": """
+module lib
+  implicit none
+contains
+  subroutine logit(x)
+    real, intent(in) :: x
+    print *, x
+  end subroutine logit
+  real function compute(x)
+    real, intent(in) :: x
+    call logit(x)
+    compute = x + 1.0
+  end function compute
+end module lib
+""",
+        "driver.f90": """
+subroutine run(a)
+  use lib, only: compute
+  implicit none
+  real, intent(inout) :: a
+  a = compute(a)
+end subroutine run
+""",
+    }
+    out = _inline_text(sources, "run", do_not_emit=["logit"], include_builtins=False)
+    # logit is kept external -- its body (the PRINT) is stripped.
+    assert "PRINT" not in out.upper()
+    assert _compiles(out)
+
+
 def test_inline_to_single_tu_writes_file(tmp_path):
     """The headline API writes a single ``.f90`` and returns its path."""
     sources = {
@@ -473,3 +510,72 @@ end module lib
     out = _inline_text(sources, "lib::run", include_builtins=False)
     assert "SUBROUTINE run" in out
     assert "other" not in out.lower()
+
+
+def test_pointer_component_of_extension_type_survives_pruning():
+    """Root-cause regression: a POINTER component of an ``EXTENDS`` type that is
+    written only via ``=>`` in a constructor must not be pruned.
+
+    ICON-O's solver constructors (``lhs_primal_flip_flop_construct`` setting
+    ``this % patch_2d => ...`` on ``t_primal_flip_flop_lhs``, which extends the
+    abstract ``t_lhs_agen``) hit this: the pointer-assignment LHS is a fparser
+    ``Data_Pointer_Object`` (not a ``Data_Ref``), so the entity-level prune did
+    not see the component as used and dropped it from the type -- leaving the
+    body referencing a member the type no longer declared.  This is the smaller
+    analogue: ``t_lhs`` extends ``t_lhs_base`` and carries a ``t_grid`` pointer
+    set in ``lhs_construct`` and read in ``lhs_area``; the single TU must keep
+    ``grid`` and compile."""
+    sources = {
+        "geom.f90": """
+module geom
+  implicit none
+  type :: t_grid
+    real :: area
+  end type t_grid
+end module geom
+""",
+        "operators.f90": """
+module operators
+  use geom, only: t_grid
+  implicit none
+  type, abstract :: t_lhs_base
+    logical :: is_const
+  end type t_lhs_base
+  type, extends(t_lhs_base) :: t_lhs
+    integer :: level
+    type(t_grid), pointer :: grid => null()
+  end type t_lhs
+contains
+  subroutine lhs_construct(this, g)
+    class(t_lhs), intent(inout) :: this
+    type(t_grid), target, intent(in) :: g
+    this % is_const = .false.
+    this % level = 1
+    this % grid => g
+  end subroutine lhs_construct
+  real function lhs_area(this)
+    class(t_lhs), intent(in) :: this
+    lhs_area = this % grid % area
+  end function lhs_area
+end module operators
+""",
+        "driver.f90": """
+subroutine run(a)
+  use geom, only: t_grid
+  use operators, only: t_lhs, lhs_construct, lhs_area
+  implicit none
+  real, intent(inout) :: a
+  type(t_lhs) :: op
+  type(t_grid), target :: g
+  g % area = a
+  call lhs_construct(op, g)
+  a = lhs_area(op)
+end subroutine run
+""",
+    }
+    out = _inline_text(sources, "run", include_builtins=False)
+    # The pointer component (and the type it points at) must survive in the type
+    # definition, not merely appear in the constructor body.
+    tdef = re.search(r"EXTENDS\(t_lhs_base\) :: t_lhs\b.*?END TYPE t_lhs\b", out, re.S)
+    assert tdef and "GRID" in tdef.group(0).upper(), f"pointer component pruned from t_lhs:\n{out}"
+    assert _compiles(out)

@@ -27,6 +27,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from dace_fortran.external_functions import ExternalFunction
 from dace_fortran.flang_codebase import find_openmpi_include
 
 import shutil
@@ -86,19 +87,45 @@ OCEAN_DEFINES = [
 ]
 
 #: ICON service procedures that are genuinely external to a compute kernel and
-#: must NOT be inlined: the MPI halo exchange, terminal read/write (error/log
-#: I/O), and timers.  Passed to the inliner's ``keep_external=`` so they are
-#: stubbed (their MPI / type-bound-procedure / I/O internals never enter the
-#: TU).  Everything else -- including the real operators a kernel calls such as
-#: ``get_index_range`` and ``rot_vertex_ocean_3d`` -- is INLINED.  Passed
-#: MANUALLY (the inliner hardcodes nothing); ocean kernels that don't call any
-#: of these (e.g. the PPM block kernel) are simply unaffected.
-OCEAN_KEEP_EXTERNAL = [
-    "sync_patch_array",       # MPI halo exchange (generic: sync_patch_array_3d_dp, ...)
-    "sync_patch_array_mult",  # MPI multi-field halo exchange
-    "exchange_data",          # MPI halo primitive underneath the syncs (exchange_data_r3d, ...)
-    "dbg_print",              # terminal write (debug print)
-    "finish", "message", "warning",  # terminal write (error / log)
+#: must NOT be inlined.  The unified external-function policy (see
+#: :mod:`dace_fortran.external_functions`) splits them into two collections,
+#: declared ONCE here and consumed by both inliner engines and the bridge:
+#:
+#: * ``OCEAN_EXTERNAL_FUNCTIONS`` -- don't-inline + the bridge EMITs an external
+#:   call (the MPI halo exchange: the real boundary of a standalone kernel).
+#: * ``OCEAN_DO_NOT_EMIT`` -- don't-inline + the bridge DROPs the call (terminal
+#:   read/write error/log I/O and timers: pure side-effects, no numerics).
+#:
+#: At the inliner both lists are stubbed identically (opener+spec+END kept, body
+#: emptied via ``make_noop``) so their MPI / type-bound-procedure / I/O internals
+#: never enter the TU.  Everything else -- including the real operators a kernel
+#: calls such as ``get_index_range`` and ``rot_vertex_ocean_3d`` -- is INLINED.
+#: Declared MANUALLY (the inliner hardcodes nothing); ocean kernels that don't
+#: call any of these (e.g. the PPM block kernel) are simply unaffected.  The
+#: solver-subsystem entries (``ocean_solve_*`` / ``*_construct``) are needed only
+#: by the full dynamical-core driver, whose core is built on Fortran VIRTUAL
+#: DISPATCH that neither our inliner nor flang can turn into static dataflow, so
+#: the whole subsystem is externalised as one opaque black box (pinned by
+#: ``tests/hlfir_devirtualization_test.py``).
+OCEAN_EXTERNAL_FUNCTIONS = [
+    ExternalFunction("sync_patch_array"),       # MPI halo exchange (generic: sync_patch_array_3d_dp, ...)
+    ExternalFunction("sync_patch_array_mult"),  # MPI multi-field halo exchange
+    ExternalFunction("exchange_data"),          # MPI halo primitive underneath the syncs (exchange_data_r3d, ...)
+    ExternalFunction("work_mpi_barrier"),       # MPI collective barrier (mo_mpi: MPI_Barrier)
+    ExternalFunction("p_barrier"),              # MPI collective barrier (mo_mpi wrapper, timer-gated)
+    ExternalFunction("p_max"),                  # MPI global reduction (mo_mpi: MPI_Allreduce, MPI_MAX)
+    ExternalFunction("p_min"),                  # MPI global reduction (mo_mpi: MPI_Allreduce, MPI_MIN)
+    ExternalFunction("p_sum"),                  # MPI global reduction (mo_mpi: MPI_Allreduce, MPI_SUM)
+    ExternalFunction("ocean_solve_construct"),          # runtime factory (ALLOCATE+dispatch); ONCE (is_init guard)
+    ExternalFunction("trivial_transfer_construct"),     # transfer-object construct; ONCE (is_init guard)
+    ExternalFunction("lhs_primal_flip_flop_construct"), # LHS re-init; PER LEVEL (static bind, kept external for a clean boundary)
+    ExternalFunction("ocean_solve_solve"),              # the linear solve; PER LEVEL (dispatches act/lhs/trans on abstract bases)
+]
+#: DON'T-EMIT = externalised (NOT inlined) and the bridge DROPs the call: pure
+#: side-effects with no numerics -- terminal I/O (debug / error / log) and timers.
+OCEAN_DO_NOT_EMIT = [
+    "dbg_print",                      # terminal write (debug print)
+    "finish", "message", "warning",   # terminal write (error / log)
     "timer_start", "timer_stop", "new_timer", "delete_timer",  # timers
 ]
 # NOTE: rot_vertex_ocean_3d is INLINED (it is pure vorticity compute, no MPI in

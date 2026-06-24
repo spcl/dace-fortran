@@ -37,6 +37,7 @@ Non-supported shapes that today raise
     members (the same v2 boundary that ``MarshalExternalStructs``
     rejects with its strict ``isInlineFlatMember`` check).
 """
+import re
 from pathlib import Path
 from typing import List
 
@@ -46,6 +47,11 @@ from dace_fortran.bindings.fortran_interface import (
     OriginalArg,
     OriginalInterface,
 )
+
+# A Fortran identifier inside a shape expression (``nproma``, the
+# ``n_zlev`` of ``n_zlev + 1``).  Used to recover the module-variable
+# extents a flat array dummy's static shape references.
+_SHAPE_IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 
 
 class UnsupportedShimInterfaceError(NotImplementedError):
@@ -67,6 +73,48 @@ def _shape_literal(shape) -> str:
     """``[d1, d2, ...]`` Fortran array constructor for the
     ``c_f_pointer`` extent argument."""
     return "[" + ", ".join(str(s) for s in shape) + "]"
+
+
+def _free_shape_symbols(iface: OriginalInterface) -> List[str]:
+    """Identifiers a flat array dummy's *static* shape references that
+    are NOT themselves scalar dummy args  --  Fortran *module*
+    variables the kernel declared its array extents with (ICON ocean
+    ``tracer(nproma, n_zlev)`` -> ``nproma`` / ``n_zlev``; ``w(nproma,
+    n_zlev + 1)`` -> the same two).
+
+    A derived-type dummy rides its member-shape constants via the
+    struct's module ``use`` line (``NX`` / ``NY``, see
+    :func:`_struct_module_use`); a *flat* array dummy has no struct
+    module to import from, so the bare extent names reach the
+    ``c_f_pointer`` shape constructor undeclared (gfortran:
+    ``Symbol 'n_zlev' has no IMPLICIT type``).  We forward each across
+    the C ABI as an ``integer(c_int), value`` arg the caller supplies,
+    so the shape resolves with no module dependency  --  robust against
+    the per-library module-copy hazard (the caller passes the actual
+    extent rather than the shim reading a possibly-stale module copy of
+    ``nproma``).
+
+    Assumed-shape (``:``) dummies are excluded: they already take
+    runtime extents through the ``<name>_d<i>`` dynamic path in
+    :func:`_emit_flat_arg`.  Pure-literal extents (``g(3, ...)``)
+    contribute no identifier.  Returns the distinct symbols in
+    first-appearance order.
+    """
+    scalar_dummies = {a.name for a in iface.args if a.rank == 0 and a.struct_type is None}
+    seen: set = set()
+    out: List[str] = []
+    for a in iface.args:
+        if a.struct_type is not None or a.rank == 0:
+            continue
+        if any(s in ("?", "*", ":") for s in a.shape):
+            continue  # dynamic -- per-dim extent args cover it
+        for entry in a.shape:
+            for ident in _SHAPE_IDENT_RE.findall(str(entry)):
+                if ident in scalar_dummies or ident in seen:
+                    continue
+                seen.add(ident)
+                out.append(ident)
+    return out
 
 
 def _is_inline_flat_member(m: Member) -> bool:
@@ -468,6 +516,26 @@ def emit_bind_c_shim(iface: OriginalInterface,
             struct_use_lines.append(u)
             seen_struct_uses.add(u)
         _collect_nested_struct_modules(iface, st, struct_use_lines, seen_struct_uses)
+
+    # Forward the module-variable extents a flat array dummy's static
+    # shape references (``tracer(nproma, n_zlev)``) as ``integer(c_int),
+    # value`` C args, declared ahead of the array pointers so the
+    # ``c_f_pointer`` shape constructors resolve.  Prepended (extents
+    # first) to a deterministic C-ABI arg order; skipped when the name
+    # is already an arg (a scalar dummy or a ``<name>_d<i>`` dynamic
+    # extent).  Struct member-shape constants are NOT included here --
+    # they ride the struct's module ``use`` line.
+    existing_args = set(header_args)
+    shape_sym_args: List[str] = []
+    shape_sym_decls: List[str] = []
+    for sym in _free_shape_symbols(iface):
+        if sym in existing_args:
+            continue
+        existing_args.add(sym)
+        shape_sym_args.append(sym)
+        shape_sym_decls.append(f"  integer(c_int), value :: {sym}")
+    header_args = shape_sym_args + header_args
+    decls_value = shape_sym_decls + decls_value
 
     # Forward Fortran module globals across the C ABI -- under
     # default ELF+gfortran linking, every shared library that USEs a

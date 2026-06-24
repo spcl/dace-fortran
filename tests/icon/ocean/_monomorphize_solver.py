@@ -1,0 +1,154 @@
+"""Produce the DE-POLYMORPHED (monomorphised) ICON-O surface solver source.
+
+The dynamical-core surface solve (``solve_free_sfc_ab_mimetic``) drives the
+``t_ocean_solve`` subsystem, whose core is Fortran VIRTUAL DISPATCH on three
+abstract axes -- the backend (``t_ocean_solve_backend``), the transfer
+(``t_transfer``) and the LHS generator (``t_lhs_agen``).  flang lowers every
+such call to ``fir.dispatch`` (a runtime vtable lookup) which an SDFG has no
+node for, so the single-TU extraction (``_extract_single_tu.py``) keeps the
+whole subsystem EXTERNAL -- one opaque black box.
+
+This module takes the opposite route for the same sources: it DE-POLYMORPHISES
+them with the static-vtable monomorphisation engine
+(``dace_fortran.inliner.ast_desugaring.monomorphize_rewrite``).  Given the
+locked real-ICON spec it
+
+  * expands the ``t_ocean_solve%act`` backend factory into a static type-tag +
+    an ``if``-ladder over the seven concrete backend arms (gmres / cg / cgj /
+    cgo / bicgstab / mres / legacy_gmres), cloning each shared interposer
+    (``solve`` / ``construct`` / ``dump_matrix``) once per arm, and
+  * retypes every ``CLASS(t_transfer)`` / ``CLASS(t_lhs_agen)`` declaration to
+    the one concrete type the construction site pins
+    (``t_trivial_transfer`` / ``t_primal_flip_flop_lhs``).
+
+The result carries ZERO ``fir.dispatch`` -- static dataflow an SDFG can lower.
+The CLI writes it to ``dycore_solver_monomorphized.f90`` (committed; a drift
+test regenerates and byte-compares).  Shared by the generator entry point and
+the drift guard so neither re-derives the spec.
+"""
+import os
+import re
+from pathlib import Path
+
+import fparser.two.Fortran2003 as f03
+
+from dace_fortran.inliner.ast_desugaring.monomorphize import parse_program
+from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import (
+    AxisSpec,
+    monomorphize,
+    MonomorphizationSpec,
+)
+
+_HERE = Path(__file__).resolve().parent
+#: The pinned ICON checkout (shared with the atmosphere / single-TU tests).
+ICON_SRC = Path(os.environ.get("ICON_SRC", str(_HERE.parent / "full" / "icon-model")))
+SOLVER_DIR = ICON_SRC / "src" / "ocean" / "math"
+
+#: Committed de-polymorphised artifact.
+ARTIFACT = _HERE / "dycore_solver_monomorphized.f90"
+
+_CPP = re.compile(r"^\s*#")
+
+#: The real-ICON monomorphisation spec (hand-written, per the locked design; a
+#: later pass auto-generates it from the construction site).  The backend is a
+#: runtime-allocated ladder; the transfer and lhs-agen axes are each pinned to
+#: the one concrete type the kernel's construction site selects, so they retype.
+REAL_ICON_SPEC = MonomorphizationSpec(axes=[
+    AxisSpec(base="t_transfer", strategy="retype", concrete="t_trivial_transfer"),
+    AxisSpec(base="t_lhs_agen", strategy="retype", concrete="t_primal_flip_flop_lhs"),
+    AxisSpec(base="t_ocean_solve_backend", strategy="ladder"),
+])
+
+#: Modules whose *type definitions* feed the rewrite's arm/transfer/lhs sets
+#: (their heavy bodies are not needed to plan or to retype).
+_TYPEDEF_MODULES = [
+    "mo_ocean_solve_gmres.f90",
+    "mo_ocean_solve_cg.f90",
+    "mo_ocean_solve_cgj.f90",
+    "mo_ocean_solve_cgo.f90",
+    "mo_ocean_solve_bicgStab.f90",
+    "mo_ocean_solve_minres.f90",
+    "mo_ocean_solve_legacy_gmres.f90",
+    "mo_ocean_solve_transfer.f90",
+    "mo_ocean_solve_transfer_trivial.f90",
+    "mo_ocean_solve_transfer_subset.f90",
+    "mo_ocean_solve_lhs_type.f90",
+    "mo_ocean_solve_lhs_surface_height.f90",
+    "mo_ocean_solve_lhs_zstar.f90",
+    "mo_ocean_solve_lhs_primal_flip_flop.f90",
+    "mo_ocean_solve_lhs.f90",
+]
+
+#: The container + backend-interposer *bodies* the driver rewrites.
+_BODY_MODULES = ["mo_ocean_solve.f90", "mo_ocean_solve_backend.f90"]
+
+
+def have_icon_solver() -> bool:
+    """True when the ocean-solver sources are checked out."""
+    return (SOLVER_DIR / "mo_ocean_solve_backend.f90").is_file()
+
+
+def _strip_cpp(text: str) -> str:
+    return "\n".join(line for line in text.splitlines() if not _CPP.match(line))
+
+
+def _src(name: str) -> str:
+    return _strip_cpp((SOLVER_DIR / name).read_text())
+
+
+def _extract_types(text: str) -> str:
+    """Just the ``TYPE ... END TYPE`` blocks (defs + bindings) -- enough for the
+    rewrite to learn each axis's arm set without the heavy bodies."""
+    out, depth, buf = [], 0, []
+    for line in text.splitlines():
+        s = line.strip().upper()
+        starts = bool(re.match(r"TYPE\s*,|TYPE\s*::|TYPE\s+[A-Z]", s)) and "END TYPE" not in s
+        if depth == 0 and starts:
+            depth, buf = 1, [line]
+            continue
+        if depth > 0:
+            buf.append(line)
+            if s.startswith("END TYPE"):
+                depth = 0
+                out.append("\n".join(buf))
+    return "\n".join(out)
+
+
+def _rewrite_program() -> f03.Program:
+    """The real container + backend interposer bodies plus the arm / transfer /
+    lhs type defs the plan + retype need, assembled into one parse unit."""
+    bodies = [_src(m) for m in _BODY_MODULES]
+    typedefs = "\n".join(_extract_types(_src(m)) for m in _TYPEDEF_MODULES)
+    return parse_program("\n".join(bodies) + f"\nmodule zz_icon_typedefs\n{typedefs}\nend module\n")
+
+
+def depolymorphize_solver():
+    """Run the monomorphisation driver on the real ICON solver sources and
+    return ``(fortran_source, stats)`` -- the de-polymorphised source text and
+    the rewrite statistics (``components_rewritten`` / ``interposers_cloned`` /
+    ``declarations_retyped``)."""
+    prog = _rewrite_program()
+    stats = monomorphize(prog, REAL_ICON_SPEC)
+    header = ("! AUTO-GENERATED by tests/icon/ocean/_monomorphize_solver.py -- do not edit.\n"
+              "! De-polymorphised ICON-O surface solver: the t_ocean_solve_backend factory\n"
+              "! lowered to a static type-tag if-ladder over its 7 concrete arms, and the\n"
+              "! t_transfer / t_lhs_agen axes retyped to their pinned concrete types.\n"
+              "! ZERO fir.dispatch remains -- static dataflow an SDFG can lower.\n")
+    return header + str(prog) + "\n", stats
+
+
+def main() -> int:
+    if not have_icon_solver():
+        print("icon-model submodule not checked out; nothing to generate.")
+        return 1
+    source, stats = depolymorphize_solver()
+    ARTIFACT.write_text(source)
+    print(f"wrote {ARTIFACT} ({len(source.splitlines())} lines)")
+    print(f"  components_rewritten={stats.components_rewritten} "
+          f"interposers_cloned={stats.interposers_cloned} "
+          f"declarations_retyped={stats.declarations_retyped}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

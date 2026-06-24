@@ -51,7 +51,17 @@ install -m755 "$HERE/config/generic_flang" "$ICON_DIR/config/generic/flang"
 
 # 4. Configure for compile_commands capture only -- disable components the
 #    dycore does not need so make reaches mo_solve_nonhydro sooner.
+#
+#    LIBS override: ICON's config wrappers hardcode ``-leccodes`` into ``LIBS``
+#    (for GRIB2), and autoconf's "whether the Fortran compiler works" probe
+#    LINKS its trivial program against the full ``LIBS`` -- so with GRIB2
+#    disabled (eccodes intentionally NOT in this lean dep set) that probe fails
+#    with "Fortran compiler cannot create executables" before any ICON source
+#    is touched.  The wrappers take ``LIBS=${LIBS-...}``, so exporting it here
+#    (eccodes dropped; every remaining lib is apt-installed) wins and lets the
+#    probe link.  GRIB2 is off anyway, so the dycore TU never needs eccodes.
 mkdir -p "$BUILD_DIR" && cd "$BUILD_DIR"
+LIBS="${LIBS:--lxml2 -lfyaml -llapack -lblas -lnetcdff -lnetcdf -lstdc++}" \
 "$ICON_DIR/config/generic/${ICON_FC:-gcc}" \
   --disable-ecrad --disable-art --disable-jsbach --disable-coupling \
   --disable-grib2 --disable-rttov --without-external-yac

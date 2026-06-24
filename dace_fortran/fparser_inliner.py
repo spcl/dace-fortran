@@ -39,6 +39,7 @@ import logging
 import re
 import subprocess
 import tempfile
+import warnings
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple, Union
 
@@ -48,6 +49,7 @@ from fparser.two.C99Preprocessor import CPP_CLASS_NAMES
 from fparser.two.parser import ParserFactory
 from fparser.two.utils import Base, FortranSyntaxError, walk
 
+from dace_fortran.external_functions import ExternalFunction, dont_inline_names, validate
 from dace_fortran.inliner.ast_desugaring import (analysis, cleanup, desugaring, optimizations, pruning, types, utils)
 from dace_fortran.inliner.ast_utils import atmost_one, children_of_type, singular
 
@@ -135,6 +137,27 @@ INTRINSIC_MODULE_NAMES = frozenset({
     "iso_c_binding", "iso_fortran_env", "ieee_arithmetic", "ieee_exceptions", "ieee_features", "omp_lib",
     "omp_lib_kinds", "openacc", "mpi", "mpi_f08"
 })
+
+#: The subset of the above that are EXTERNAL LIBRARIES (MPI / OpenMP / OpenACC)
+#: rather than Fortran-standard intrinsic modules.  flang supplies them when it
+#: compiles, so they are preserved by default -- but under
+#: ``tolerate_external_uses`` (a self-contained kernel extraction) their ``USE``s
+#: are DROPPED like any other unresolved external library: the kernel
+#: externalises all communication / synchronisation, the directives are
+#: pre-stripped (``-U_OPENMP -U_OPENACC``), and no ``.mod`` is on a downstream
+#: gfortran's path.  This is exactly the ``netcdf`` / ``mpi`` / ``cdi`` set the
+#: tolerate mode is documented to ingest-then-drop.
+EXTERNAL_LIBRARY_MODULE_NAMES = frozenset({"omp_lib", "omp_lib_kinds", "openacc", "mpi", "mpi_f08"})
+
+
+def _preserved_intrinsic_modules() -> frozenset:
+    """The compiler-provided modules whose ``USE`` is captured before the
+    pipeline and restored after.  Under ``tolerate_external_uses`` the external
+    -library group (:data:`EXTERNAL_LIBRARY_MODULE_NAMES`) is excluded so those
+    ``USE``s are dropped, not resurrected -- see that constant's note."""
+    if analysis.TOLERATE_EXTERNAL_USES:
+        return INTRINSIC_MODULE_NAMES - EXTERNAL_LIBRARY_MODULE_NAMES
+    return INTRINSIC_MODULE_NAMES
 
 
 def strip_builtin_stub_modules(ast: f03.Program) -> f03.Program:
@@ -391,9 +414,10 @@ def collect_intrinsic_uses(ast: f03.Program) -> Dict[Tuple[str, ...], List[str]]
     """Record every ``USE`` of a compiler-provided intrinsic module
     (:data:`INTRINSIC_MODULE_NAMES`), keyed by the qualified name of the scope
     that holds it.  Run BEFORE the pipeline, which strips these ``USE``s."""
+    preserved = _preserved_intrinsic_modules()
     captured: Dict[Tuple[str, ...], List[str]] = {}
     for use in walk(ast, f03.Use_Stmt):
-        if _module_name_of_use(use) not in INTRINSIC_MODULE_NAMES:
+        if _module_name_of_use(use) not in preserved:
             continue
         scope = use.parent
         while scope is not None and not isinstance(scope, _SCOPE_CLASSES):
@@ -416,8 +440,9 @@ def restore_intrinsic_uses(ast: f03.Program, captured: Dict[Tuple[str, ...], Lis
     #    names (``ONLY: c_int``) -- they neither import what the stub lacked
     #    (``c_double_complex``) nor carry the ``, INTRINSIC`` attribute, so flang
     #    rejects them.  We replace the lot with the captured originals.
+    preserved = _preserved_intrinsic_modules()
     for use in list(walk(ast, f03.Use_Stmt)):
-        if _module_name_of_use(use) in INTRINSIC_MODULE_NAMES:
+        if _module_name_of_use(use) in preserved:
             utils.remove_self(use)
     # 2. Restore the original intrinsic ``USE``s at their scopes (matched by
     #    qualified name); a module-level ``USE`` is host-associated into every
@@ -453,6 +478,16 @@ def collect_external_interfaces(ast: f03.Program) -> Dict[Tuple[str, ...], List[
     defined = _defined_proc_names(ast)
     captured: Dict[Tuple[str, ...], List[str]] = {}
     for ib in walk(ast, f03.Interface_Block):
+        # An ABSTRACT INTERFACE declares deferred-binding *templates* (referenced
+        # by ``PROCEDURE(name), DEFERRED``), never an external link-time
+        # procedure that a call binds to -- so it is not the kind of declaration
+        # this capture/restore preserves.  Worse, restoring one would resurrect a
+        # body whose ``IMPORT``ed types were pruned as dead baggage (ICON's
+        # comm-pattern ``interface_exchange_data_*`` import ``t_comm_pattern_collection``,
+        # ``t_ptr_3d_dp``, ...), leaving a dangling ``IMPORT`` that cannot compile.
+        istmt = ib.children[0]
+        if isinstance(istmt, f03.Interface_Stmt) and istmt.children[0] == 'ABSTRACT':
+            continue
         decl = {
             nm
             for nm in (utils.find_name_of_stmt(s) for s in walk(ib, (f03.Function_Stmt, f03.Subroutine_Stmt))) if nm
@@ -579,6 +614,32 @@ def restore_cross_module_uses(ast: f03.Program) -> f03.Program:
         for mod, procs in sorted(mod_procs.items()):
             _prepend_use(target, f"use {mod}, only: {', '.join(sorted(procs))}")
     return ast
+
+
+def _resolve_dont_inline_names(keep_external: Iterable[str], external_functions: Iterable[ExternalFunction],
+                               do_not_emit: Iterable[str]) -> Set[str]:
+    """Union the (lower-cased) don't-inline names the inliner must stub.
+
+    The external-function policy (see :mod:`dace_fortran.external_functions`)
+    is two collections: ``external_functions`` (don't-inline + the bridge EMITs
+    an external call) and ``do_not_emit`` (don't-inline + the bridge DROPs the
+    call).  The inliner treats both the same -- it only needs the *names* not to
+    inline -- so this returns their validated union (:func:`dont_inline_names`).
+
+    ``keep_external`` is the deprecated predecessor parameter; it is kept as a
+    thin backward-compatible shim meaning exactly ``do_not_emit`` (the bridge,
+    not the inliner, decides emit-vs-drop), and warns when used."""
+    validate(external_functions, do_not_emit)
+    names = dont_inline_names(external_functions, do_not_emit)
+    keep_external = list(keep_external)
+    if keep_external:
+        warnings.warn(
+            "inline_to_ast/inline_to_single_tu(keep_external=...) is deprecated; "
+            "pass do_not_emit=[names] (or external_functions=[ExternalFunction(...)]) instead.",
+            DeprecationWarning,
+            stacklevel=3)
+        names |= {n.lower() for n in keep_external}
+    return names
 
 
 def _keep_external_noop_specs(ast: f03.Program, names: Iterable[str]) -> List[types.SPEC]:
@@ -734,7 +795,21 @@ def run_fparser_transformations(ast: f03.Program, cfg: ParseConfig, *, optimize:
         ast_f90_old, ast_f90_new = ast_f90_new, ast.tofortran()
     if walk(ast, f03.Interface_Stmt):
         _checkpoint_ast(cfg, 'ast_v1.error.f90', ast)
-        raise RuntimeError("Could not remove all the interfaces from AST")
+        if not analysis.TOLERATE_EXTERNAL_USES:
+            raise RuntimeError("Could not remove all the interfaces from AST")
+        # Tolerating externals: a generic interface whose calls could not all be
+        # resolved to a specific is left in place.  This happens for a
+        # kept-external halo generic (e.g. ``sync_patch_array_mult``) called only
+        # from code unreachable from the entry, with operands whose type the
+        # matcher cannot infer -- the call survives coarse (module-level) pruning
+        # but the fine reachability prune below drops it.  An unresolved generic
+        # is still valid Fortran (the interface plus its stubbed module
+        # procedures resolve at the call site), and the final gfortran gate
+        # rejects a genuinely uncompilable TU, so this is safe to leave.
+        surviving = sorted({utils.find_name_of_stmt(i)
+                            for i in walk(ast, f03.Interface_Stmt) if utils.find_name_of_stmt(i)})
+        logger.warning("Left %d generic interface(s) unresolved while tolerating externals: %s",
+                       len(surviving), ", ".join(surviving))
     ast = cleanup.correct_for_function_calls(ast)
     _checkpoint_ast(cfg, 'ast_v2.f90', ast)
 
@@ -763,6 +838,13 @@ def run_fparser_transformations(ast: f03.Program, cfg: ParseConfig, *, optimize:
         ast_f90_old, ast_f90_new = ast_f90_new, ast.tofortran()
     logger.debug("FParser Op: AST-size settled at %d lines.", len(ast_f90_new.splitlines()))
     _checkpoint_ast(cfg, 'ast_v3.f90', ast)
+
+    if analysis.TOLERATE_EXTERNAL_USES:
+        # Drop interface bodies left dangling by pruning external baggage -- the
+        # halo-exchange comm-pattern abstract interfaces whose IMPORTed comm
+        # types were pruned away.  A no-op under full resolution.
+        ast = pruning.prune_dangling_interface_bodies(ast)
+        _checkpoint_ast(cfg, 'ast_v3b.f90', ast)
 
     if cfg.consolidate_global_data:
         logger.debug("FParser Op: Consolidating the global variables of the AST...")
@@ -931,6 +1013,8 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
                   flang: str = "flang-new-21",
                   make_noop: Union[None, types.SPEC, List[types.SPEC]] = None,
                   keep_external: Iterable[str] = (),
+                  external_functions: Iterable[ExternalFunction] = (),
+                  do_not_emit: Iterable[str] = (),
                   consolidate_global_data: bool = False,
                   rename_uniquely: bool = False,
                   do_not_prune_type_components: bool = False,
@@ -945,12 +1029,18 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
     sources).  ``entry`` selects the root procedure (and thus what is kept
     by pruning); ``None`` keeps every top-level subprogram.
 
-    ``keep_external`` is a caller-supplied list of procedure names to treat as
-    external -- never inlined.  Each name (and its generic-interface specifics,
-    e.g. ``sync_patch_array`` -> ``sync_patch_array_3d_dp``) is stubbed to an
-    empty body, so its internals (the halo-exchange ``%exchange_data``
-    type-bound call, MPI, I/O) never enter the TU.  The list is passed in by
-    the caller so nothing ICON-specific is hardcoded in the inliner.
+    ``external_functions`` / ``do_not_emit`` declare the external-function
+    policy (see :mod:`dace_fortran.external_functions`): procedures that are NOT
+    inlined.  ``external_functions`` are :class:`ExternalFunction` specs the
+    bridge later emits as external calls; ``do_not_emit`` are plain names whose
+    calls the bridge drops.  The inliner treats both identically -- it only
+    needs the *names* (and their generic-interface specifics, e.g.
+    ``sync_patch_array`` -> ``sync_patch_array_3d_dp``) -- stubbing each to an
+    empty body so its internals (the halo-exchange ``%exchange_data`` type-bound
+    call, MPI, I/O) never enter the TU.  Nothing ICON-specific is hardcoded.
+
+    ``keep_external`` is the deprecated predecessor of ``do_not_emit`` -- a plain
+    name list, kept as a backward-compatible shim (it warns).
 
     ``tolerate_external_uses`` lets the pipeline ingest a kernel whose
     enclosing module ``USE``s an external library with no Fortran source on
@@ -978,12 +1068,13 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
     )
     if include_builtins:
         cfg.sources.setdefault("_builtins.f90", BUILTINS)
+    dont_inline = _resolve_dont_inline_names(keep_external, external_functions, do_not_emit)
     with analysis.tolerate_external_uses(tolerate_external_uses):
         ast = create_fparser_ast(cfg)
-        if keep_external:
-            # Stub the caller's external procedures (and their generic
+        if dont_inline:
+            # Stub the policy's non-inlined procedures (and their generic
             # specifics) BEFORE the transformations inline them.
-            cfg.make_noop = list(cfg.make_noop or []) + _keep_external_noop_specs(ast, keep_external)
+            cfg.make_noop = list(cfg.make_noop or []) + _keep_external_noop_specs(ast, dont_inline)
         ast = run_fparser_transformations(ast, cfg, optimize=optimize)
         # NAMELIST statements survive pruning but may name variables pruning
         # dropped; rewrite them to the surviving declarations (or drop empties).
@@ -1004,6 +1095,8 @@ def inline_to_single_tu(sources: Union[Dict[str, str], Iterable[Union[str, Path]
                         flang: str = "flang-new-21",
                         make_noop: Union[None, types.SPEC, List[types.SPEC]] = None,
                         keep_external: Iterable[str] = (),
+                        external_functions: Iterable[ExternalFunction] = (),
+                        do_not_emit: Iterable[str] = (),
                         consolidate_global_data: bool = False,
                         rename_uniquely: bool = False,
                         do_not_prune_type_components: bool = False,
@@ -1048,6 +1141,8 @@ def inline_to_single_tu(sources: Union[Dict[str, str], Iterable[Union[str, Path]
                         flang=flang,
                         make_noop=make_noop,
                         keep_external=keep_external,
+                        external_functions=external_functions,
+                        do_not_emit=do_not_emit,
                         consolidate_global_data=consolidate_global_data,
                         rename_uniquely=rename_uniquely,
                         do_not_prune_type_components=do_not_prune_type_components,

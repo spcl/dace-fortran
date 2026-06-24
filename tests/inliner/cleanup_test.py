@@ -63,9 +63,10 @@ def test_inherited_type_bound_function_through_component_resolves():
     ast = inline_to_ast({"m.f90": _INHERITED_TYPE_BOUND_FN}, entry="m_lhs::kernel",
                         tolerate_external_uses=True)
     out = ast.tofortran().lower().replace(" ", "")
-    # The inherited type-bound function call survives as a valid reference
-    # (callable once its -- possibly stubbed -- target is present in the TU).
-    assert "trans%gid(i)" in out
+    # The inherited type-bound function call resolves to the BASE concrete
+    # procedure: ``self%trans%gid(i)`` deconstructs to ``base_gid(self%trans, i)``
+    # (the EXTENDS-remapped binding), not a leftover type-bound reference.
+    assert "base_gid_deconproc" in out
 
 
 def test_globally_unique_names():

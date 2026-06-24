@@ -42,7 +42,8 @@ def main(argv):
     os.environ.setdefault("UCX_VFS_ENABLE", "n")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    from icon.ocean._ocean_harness import OCEAN_DEFINES, OCEAN_KEEP_EXTERNAL, SRC, ocean_search_dirs
+    from icon.ocean._ocean_harness import (OCEAN_DEFINES, OCEAN_DO_NOT_EMIT,
+                                            OCEAN_EXTERNAL_FUNCTIONS, SRC, ocean_search_dirs)
     from dace_fortran import inline_to_single_tu
     from dace_fortran.preprocess import merge_used_modules
 
@@ -60,7 +61,8 @@ def main(argv):
         log("inline_to_single_tu(expand_cpp, tolerate_external_uses)")
         tu = inline_to_single_tu({str(mp): merged}, entry=entry, out_dir=out_dir, name="kernel_tu",
                                  expand_cpp=True, defines=OCEAN_DEFINES, include_dirs=[SRC / "include"],
-                                 keep_external=OCEAN_KEEP_EXTERNAL, tolerate_external_uses=True)
+                                 external_functions=OCEAN_EXTERNAL_FUNCTIONS,
+                                 do_not_emit=OCEAN_DO_NOT_EMIT, tolerate_external_uses=True)
         n = len(Path(tu).read_text().splitlines())
         log(f"  single TU: {n} lines in {time.time()-t0:.0f}s")
         print(f"TU_PATH: {tu}", flush=True)

@@ -49,9 +49,16 @@ _LAZY = {
     # Not in the lazy facade -- it has no single function to surface.
     "register_external": "dace_fortran.external",
     "keep_external": "dace_fortran.external",
+    "apply_external_functions": "dace_fortran.external",
     "ExternalSignature": "dace_fortran.external",
     "Arg": "dace_fortran.external",
     "clear_external_registry": "dace_fortran.external",
+    # Unified external-function policy (parse-time declaration; pure-stdlib).
+    # ``ExternalFunction`` is deliberately distinct from the internal
+    # ``dace_fortran.external.ExternalCall`` SDFG *library node* and
+    # ``ExternalSignature`` ABI record -- no name conflict.  See the
+    # ``dace_fortran.external_functions`` module docstring.
+    "ExternalFunction": "dace_fortran.external_functions",
     # Lower-level / advanced.
     "SDFGBuilder": "dace_fortran.hlfir_to_sdfg",
     "generate_sdfg": "dace_fortran.hlfir_to_sdfg",

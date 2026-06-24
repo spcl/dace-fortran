@@ -1,0 +1,250 @@
+"""Shared harness for the ICON-O ocean kernel end-to-end numerical tests.
+
+For one ocean single-TU kernel it builds two shared libraries that share the
+SAME flat C ABI and drives both from one set of random ctypes buffers:
+
+  DUT  -- the kernel lowered to a DaCe SDFG, compiled, and reached through the
+          AUTO-GENERATED ``bind(c)`` shim (``build_fortran_library(
+          bind_c_shim=True)``).
+  REF  -- the ORIGINAL Fortran kernel, reached through the SAME shim
+          *retargeted* to ``call <kernel>`` instead of ``call <entry>_dace``
+          (:func:`_retarget_shim`).  Identical flat->struct reconstruction, so
+          identical C ABI -- an apples-to-apples comparison with no
+          hand-authored per-kernel caller.
+
+Each kernel runs in its OWN subprocess (:func:`run_kernel_e2e`), mirroring the
+``extract_single_tu`` pattern: the SDFG ``.so`` is dlopen'd ``RTLD_GLOBAL`` so
+the DaCe runtime initialises, which would otherwise leak symbols into a later
+in-process flang/MLIR build of the next kernel and corrupt it.  Process
+isolation makes both the load mode and the MLIR build per-kernel-clean.
+"""
+import ctypes
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import traceback
+from pathlib import Path
+
+import numpy as np
+
+_HERE = Path(__file__).resolve().parent
+
+# Fortran C-ABI type -> (numpy dtype, ctypes value type).
+_NP = {"real(c_double)": np.float64, "integer(c_int)": np.int32, "logical(c_bool)": np.int8}
+_CT = {"real(c_double)": ctypes.c_double, "integer(c_int)": ctypes.c_int, "logical(c_bool)": ctypes.c_bool}
+
+
+def _retarget_shim(shim: str, dace_name: str, entry: str) -> str:
+    """Rewrite the auto ``<dace_name>_c`` shim into a ``<dace_name>_ref_c`` that
+    calls the ORIGINAL kernel ``entry`` (``module::proc``) instead of the
+    ``<dace_name>_dace`` binding.  The flat->struct reconstruction (header,
+    ``c_f_pointer`` aliases, struct alloc + copy-in) is reused verbatim; only
+    the ``use`` line, the final ``call`` and the subroutine name change.
+
+    ``logical(c_bool)`` value args are coerced to the kernel's default
+    ``LOGICAL`` (kind 4) at the call site -- the C ABI keeps logicals as
+    ``c_bool``, and the conversion to the callee's logical kind happens here, the
+    same way the binding wrapper handles it for the SDFG path."""
+    mod, proc = entry.split("::")
+    proc = proc.lower()
+    bool_args = set(re.findall(r"logical\(c_bool\),\s*value\s*::\s*(\w+)", shim))
+    out = []
+    for ln in shim.splitlines():
+        if ln.strip().startswith(f"use {dace_name}_dace_bindings"):
+            out.append(f"  use {mod}, only: {proc}")
+            continue
+        if f"call {dace_name}_dace_finalize()" in ln:
+            continue
+        m = re.match(rf"(\s*)call {dace_name}_dace\((.*)\)\s*$", ln)
+        if m:
+            indent, arglist = m.group(1), m.group(2)
+            args = [a.strip() for a in arglist.split(",")]
+            args = [f"logical({a})" if a in bool_args else a for a in args]
+            out.append(f"{indent}call {proc}({', '.join(args)})")
+            continue
+        ln = ln.replace(f"subroutine {dace_name}_c(", f"subroutine {dace_name}_ref_c(")
+        ln = ln.replace(f"end subroutine {dace_name}_c", f"end subroutine {dace_name}_ref_c")
+        ln = ln.replace(f"name='{dace_name}_c'", f"name='{dace_name}_ref_c'")
+        out.append(ln)
+    return "\n".join(out) + "\n"
+
+
+def _parse_abi(shim: str):
+    """Recover the shim's flat C ABI: ``(header_args, value_ftype, ptr_ftype,
+    ptr_shape_expr, dim_symbols)``.  ``dim_symbols`` are the identifiers any
+    ``c_f_pointer`` shape references -- the array extents the caller supplies."""
+    m = re.search(r"subroutine\s+\w+\(([^)]*)\)\s*bind", shim, re.S)
+    header = [a.strip() for a in m.group(1).replace("&", " ").split(",") if a.strip()]
+    value_ftype = {
+        name: ftype
+        for ftype, name in re.findall(r"(integer\(c_int\)|real\(c_double\)|logical\(c_bool\)),\s*value\s*::\s*(\w+)",
+                                      shim)
+    }
+    ptr_ftype, ptr_shape = {}, {}
+    for p, local, shp in re.findall(r"call c_f_pointer\((\w+),\s*(\w+),\s*\[([^\]]*)\]\)", shim):
+        ptr_shape[p] = shp
+        dt = re.search(rf"(real\(c_double\)|integer\(c_int\)|logical\(c_bool\)),\s*pointer\s*::\s*{local}\b", shim)
+        ptr_ftype[p] = dt.group(1)
+    dim_symbols = set()
+    for shp in ptr_shape.values():
+        dim_symbols |= set(re.findall(r"[A-Za-z_]\w*", shp))
+    return header, value_ftype, ptr_ftype, ptr_shape, dim_symbols
+
+
+def _invoke(so_path, call_plan, bufs, sym, sdfg_so=None):
+    # The SDFG .so is dlopen'd RTLD_GLOBAL first so the DaCe runtime (OpenMP
+    # offload init, etc.) is live and its symbols resolve for the binding .so.
+    if sdfg_so is not None:
+        ctypes.CDLL(str(sdfg_so), mode=ctypes.RTLD_GLOBAL)
+    cdll = ctypes.CDLL(str(so_path))
+    fn = getattr(cdll, sym)
+    argtypes, args = [], []
+    for kind, arg, ct, *rest in call_plan:
+        argtypes.append(ct)
+        args.append(bufs[arg].ctypes.data_as(ct) if kind == "ptr" else ct(rest[0]))
+    fn.argtypes = argtypes
+    fn.restype = None
+    fn(*args)
+
+
+def _run_in_fork(so_path, call_plan, inputs, ptr_args, sym, save_prefix: Path, sdfg_so=None):
+    """Load ``so_path`` and run ``sym`` in a forked child on a fresh copy of
+    ``inputs``, saving each output buffer to ``<save_prefix>_<arg>.npy``, then
+    ``os._exit`` so the child's (occasionally heap-corrupting) ctypes/DaCe-
+    runtime teardown never runs.  Loading the DUT (DaCe runtime) and the REF
+    (plain gfortran) ``.so``s in SEPARATE processes also avoids the
+    nondeterministic cross-allocator double-free seen when both share one
+    process.  Returns the child's wait status (0 == clean)."""
+    pid = os.fork()
+    if pid == 0:
+        code = 0
+        try:
+            bufs = {k: v.copy() for k, v in inputs.items()}
+            _invoke(so_path, call_plan, bufs, sym, sdfg_so=sdfg_so)
+            for k in ptr_args:
+                np.save(f"{save_prefix}_{k}.npy", bufs[k])
+        except BaseException:
+            traceback.print_exc()
+            code = 1
+        os._exit(code)
+    _, status = os.waitpid(pid, 0)
+    return status
+
+
+def _build_and_compare(tu_path: Path, entry: str, scalar_overrides: dict, n: int, seed: int, out: Path):
+    """The worker body (runs in a subprocess): build DUT + REF, drive both,
+    return ``(max_diff, n_changed)``.  Imports are deferred so the module loads
+    cheaply in the parent (which only orchestrates the subprocess)."""
+    from dace_fortran.build import build_sdfg
+    from dace_fortran.bindings import build_fortran_library
+
+    sdfg = build_sdfg(tu_path.read_text(), entry=entry, name=tu_path.stem, out_dir=str(out / "sdfg"))
+    dace_name = sdfg.name  # bind(c) symbols + SDFG exports key off this, NOT name=
+    lib = build_fortran_library(sdfg, out_dir=str(out / "lib"), prelude_sources=[tu_path], bind_c_shim=True)
+    shim = Path(lib.bind_c_shim_f90).read_text()
+
+    ref_shim = out / f"{dace_name}_ref_c.f90"
+    ref_shim.write_text(_retarget_shim(shim, dace_name, entry))
+    ref_so = out / f"lib{dace_name}_ref.so"
+    r = subprocess.run([
+        "gfortran", "-shared", "-fPIC", "-ffree-line-length-none", "-fallow-argument-mismatch", "-o",
+        str(ref_so),
+        str(tu_path),
+        str(ref_shim)
+    ],
+                       capture_output=True,
+                       text=True,
+                       cwd=str(out))
+    if r.returncode != 0:
+        raise RuntimeError(f"reference .so compile failed:\n{r.stderr[-3000:]}")
+
+    header, value_ftype, ptr_ftype, ptr_shape, dim_symbols = _parse_abi(shim)
+    dimvals = {s: n for s in dim_symbols}
+
+    rng = np.random.default_rng(seed)
+    inputs, call_plan = {}, []
+    for arg in header:
+        if arg in ptr_shape:
+            shape = tuple(int(eval(tok, {}, dimvals)) for tok in ptr_shape[arg].split(","))
+            npdt = _NP[ptr_ftype[arg]]
+            if npdt == np.float64:
+                base = np.asfortranarray(rng.uniform(-1.0, 1.0, shape).astype(npdt))
+            else:  # integer count / index array -> in-bounds [1, n]
+                base = np.asfortranarray(rng.integers(1, n + 1, shape).astype(npdt))
+            inputs[arg] = base
+            call_plan.append(("ptr", arg, ctypes.c_void_p))
+        else:
+            ft = value_ftype[arg]
+            v = scalar_overrides.get(arg, n if arg in dim_symbols else (60.0 if ft == "real(c_double)" else 0))
+            call_plan.append(("val", arg, _CT[ft], v))
+
+    ptr_args = list(ptr_shape)
+    sd = _run_in_fork(lib.so_path, call_plan, inputs, ptr_args, f"{dace_name}_c", out / "dut", sdfg_so=lib.sdfg_so)
+    sr = _run_in_fork(ref_so, call_plan, inputs, ptr_args, f"{dace_name}_ref_c", out / "ref")
+
+    dut = {k: np.load(out / f"dut_{k}.npy") for k in ptr_args if (out / f"dut_{k}.npy").exists()}
+    ref = {k: np.load(out / f"ref_{k}.npy") for k in ptr_args if (out / f"ref_{k}.npy").exists()}
+    missing = [k for k in ptr_args if k not in dut or k not in ref]
+    if missing:
+        raise RuntimeError(f"run did not produce all outputs (dut status={sd}, ref status={sr}); "
+                           f"missing {missing[:5]}")
+
+    max_diff, n_changed = 0.0, 0
+    for arg in ptr_args:
+        d, rf = dut[arg], ref[arg]
+        max_diff = max(max_diff, float(np.abs(d.astype(np.float64) - rf.astype(np.float64)).max()))
+        if not np.array_equal(d, inputs[arg]):
+            n_changed += 1
+    return max_diff, n_changed
+
+
+def run_kernel_e2e(tu_path: Path, entry: str, *, scalar_overrides=None, n: int = 8, seed: int = 0) -> dict:
+    """Run one kernel's e2e build+compare in an isolated subprocess.  Returns
+    ``{passed, max_diff, n_changed, output}``.  ``passed`` is False (with the
+    captured output) on any build / lowering / compile / run failure -- a
+    kernel that does not yet lower surfaces here rather than crashing pytest."""
+    out = Path(tempfile.mkdtemp(prefix="ocean_e2e_", dir=str(_HERE.parent.parent.parent / "_session_scratch")))
+    env = dict(os.environ)
+    # tests/ (for icon.ocean) + repo root (for dace_fortran) on the child path.
+    env["PYTHONPATH"] = os.pathsep.join([str(_HERE.parents[1]), str(_HERE.parents[2]), env.get("PYTHONPATH", "")])
+    env["TMPDIR"] = str(out)
+    env.setdefault("UCX_VFS_ENABLE", "n")
+    proc = subprocess.run([
+        sys.executable,
+        str(Path(__file__).resolve()),
+        str(tu_path.resolve()), entry,
+        json.dumps(scalar_overrides or {}),
+        str(n),
+        str(seed),
+        str(out)
+    ],
+                          capture_output=True,
+                          text=True,
+                          env=env)
+    output = proc.stdout + "\n" + proc.stderr
+    passed = any(ln.startswith("RESULT: PASS") for ln in proc.stdout.splitlines())
+    max_diff = next((float(ln.split(":", 1)[1]) for ln in proc.stdout.splitlines() if ln.startswith("MAXDIFF:")), None)
+    n_changed = next((int(ln.split(":", 1)[1]) for ln in proc.stdout.splitlines() if ln.startswith("CHANGED:")), 0)
+    return {"passed": passed, "max_diff": max_diff, "n_changed": n_changed, "output": output}
+
+
+def _main(argv):
+    tu_path, entry, overrides_json, n, seed, out = argv[1:7]
+    try:
+        max_diff, n_changed = _build_and_compare(Path(tu_path), entry, json.loads(overrides_json), int(n), int(seed),
+                                                 Path(out))
+        print(f"MAXDIFF: {max_diff}", flush=True)
+        print(f"CHANGED: {n_changed}", flush=True)
+        print("RESULT: PASS", flush=True)
+        return 0
+    except Exception:
+        traceback.print_exc()
+        print("RESULT: FAIL", flush=True)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main(sys.argv))

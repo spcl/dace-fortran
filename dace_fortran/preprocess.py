@@ -41,7 +41,7 @@ inside a character literal is never touched.
 
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 # A REAL-literal exponent whose value is a whole number (``**2.0``,
 # ``**3.0``, ``**2.0_JPRB``, ``**2.0D0``, ``**2.``).  Only this form is
@@ -787,7 +787,133 @@ def _used_modules(text: str) -> list:
     return out
 
 
-def merge_used_modules(source: str, *, search_dirs=()) -> str:
+#: A ``SUBROUTINE`` / ``FUNCTION`` opener (any leading prefix keywords +
+#: typed-function forms), capturing the procedure name.  Shared by the
+#: procedure indexer and the external-procedure body stubber.
+_PROC_OPEN_RE = re.compile(
+    r"^\s*(?:RECURSIVE\s+|PURE\s+|ELEMENTAL\s+|IMPURE\s+)*"
+    r"(?:SUBROUTINE|FUNCTION|REAL\s*FUNCTION|"
+    r"INTEGER\s*FUNCTION|LOGICAL\s*FUNCTION|"
+    r"DOUBLE\s+PRECISION\s+FUNCTION|"
+    r"(?:REAL|INTEGER|LOGICAL|COMPLEX|CHARACTER)\s*\(\s*[^)]*\)\s+FUNCTION)\s+"
+    r"([A-Za-z]\w*)",
+    re.IGNORECASE,
+)
+
+#: ``END SUBROUTINE`` / ``END FUNCTION`` (optionally naming the procedure).
+_PROC_END_RE = re.compile(r"^\s*END\s*(?:SUBROUTINE|FUNCTION)\b", re.IGNORECASE)
+
+#: A ``CONTAINS`` line opening a scope's internal-subprogram part.
+_CONTAINS_RE = re.compile(r"^\s*CONTAINS\b", re.IGNORECASE)
+
+#: An ``INTERFACE`` block opener (named / operator / ``ABSTRACT`` forms).  Its
+#: nested ``SUBROUTINE`` / ``FUNCTION`` declarations are specification part, not
+#: the enclosing procedure's executable body -- the stubber consumes the whole
+#: ``INTERFACE`` ... ``END INTERFACE`` block as a unit so those nested openers
+#: are not mistaken for the start of the body (the ICON ``bind(c)`` halo
+#: wrappers that forward to a C++ impl carry exactly this shape).
+_INTERFACE_OPEN_RE = re.compile(r"^\s*(?:ABSTRACT\s+)?INTERFACE\b", re.IGNORECASE)
+_INTERFACE_END_RE = re.compile(r"^\s*END\s*INTERFACE\b", re.IGNORECASE)
+
+#: A specification-part statement (declarations / attributes / interfaces) --
+#: everything legal *before* the first executable statement of a procedure.
+#: The external-body stubber keeps these (so the empty stub still declares its
+#: dummy arguments) and drops everything after the first non-matching line.  A
+#: leading ``&`` keeps continuation lines of a multi-line declaration / opener.
+_SPEC_LINE_RE = re.compile(
+    r"^\s*(?:&|USE\b|IMPLICIT\b|INTEGER\b|REAL\b|DOUBLE\s+PRECISION\b|COMPLEX\b|LOGICAL\b|"
+    r"CHARACTER\b|TYPE\b|CLASS\b|PROCEDURE\b|INTERFACE\b|END\s+INTERFACE\b|END\s+TYPE\b|"
+    r"MODULE\s+PROCEDURE\b|PARAMETER\b|DIMENSION\b|ALLOCATABLE\b|POINTER\b|TARGET\b|"
+    r"INTENT\b|OPTIONAL\b|SAVE\b|EXTERNAL\b|INTRINSIC\b|COMMON\b|DATA\b|NAMELIST\b|"
+    r"IMPORT\b|VALUE\b|VOLATILE\b|ASYNCHRONOUS\b|SEQUENCE\b|GENERIC\b|ENUM\b|ENUMERATOR\b|"
+    r"EQUIVALENCE\b|BIND\b|CONTIGUOUS\b)",
+    re.IGNORECASE,
+)
+
+
+def _stub_procedure_bodies(text: str, names) -> str:
+    """Empty the executable body of every procedure whose name matches
+    ``names`` -- exactly, or as the generic an ICON interface dispatches over
+    (``sync_patch_array`` -> ``sync_patch_array_3d_dp``) -- keeping its opener,
+    specification part, and matching ``END``.
+
+    The regex-merge analogue of the fparser inliner's ``make_noop``
+    (:func:`dace_fortran.fparser_inliner._keep_external_noop_specs`): a kept-
+    external procedure stays *declared* (its dummy arguments are still typed,
+    so the in-TU call site is legal Fortran), but its internals -- halo
+    exchange, MPI, I/O -- never enter the translation unit.  The bridge then
+    lowers the call through its external registry.  A stubbed procedure's whole
+    body is dropped -- including any internal ``CONTAINS`` subprograms (the
+    nesting-aware ``END`` scan keeps only the procedure's own closing ``END``);
+    external halo/sync procedures are leaves, so this rarely matters.  Matching
+    is case-insensitive and nothing ICON-specific is hardcoded -- the names
+    come from the caller's policy."""
+    targets = {n.lower() for n in names}
+    if not targets:
+        return text
+
+    def _is_target(nm: str) -> bool:
+        nm = nm.lower()
+        return nm in targets or any(nm.startswith(t + "_") for t in targets)
+
+    lines = text.splitlines(keepends=True)
+    out: list = []
+    i, n = 0, len(lines)
+    while i < n:
+        code = _code_of(lines[i].rstrip("\r\n"))
+        m = _PROC_OPEN_RE.match(code)
+        if not m or not _is_target(m.group(1)):
+            out.append(lines[i])
+            i += 1
+            continue
+        # Keep the opener, then the contiguous specification part (so the dummy
+        # arguments stay declared); stop at the first executable statement, a
+        # nested subprogram, ``CONTAINS``, or the matching ``END``.
+        out.append(lines[i])
+        i += 1
+        while i < n:
+            c = _code_of(lines[i].rstrip("\r\n"))
+            if _INTERFACE_OPEN_RE.match(c):
+                # Keep the whole INTERFACE block verbatim (nesting-aware): its
+                # nested procedure declarations are spec, not the body, so the
+                # ``_PROC_OPEN_RE`` lines inside must NOT end spec collection.
+                depth_if = 0
+                while i < n:
+                    ci = _code_of(lines[i].rstrip("\r\n"))
+                    out.append(lines[i])
+                    i += 1
+                    if _INTERFACE_OPEN_RE.match(ci):
+                        depth_if += 1
+                    elif _INTERFACE_END_RE.match(ci):
+                        depth_if -= 1
+                        if depth_if == 0:
+                            break
+                continue
+            if _PROC_END_RE.match(c) or _CONTAINS_RE.match(c) or _PROC_OPEN_RE.match(c):
+                break
+            if c.strip() and not _SPEC_LINE_RE.match(c):
+                break  # first executable statement -- body ends here
+            out.append(lines[i])
+            i += 1
+        # Drop everything up to (and keep) the matching ``END`` of this
+        # procedure, tracking nesting so an internal subprogram's own ``END``
+        # is not mistaken for it.
+        depth = 1
+        while i < n:
+            c = _code_of(lines[i].rstrip("\r\n"))
+            if _PROC_OPEN_RE.match(c):
+                depth += 1
+            elif _PROC_END_RE.match(c):
+                depth -= 1
+                if depth == 0:
+                    out.append(lines[i])
+                    i += 1
+                    break
+            i += 1
+    return "".join(out)
+
+
+def merge_used_modules(source: str, *, search_dirs=(), external_functions=(), do_not_emit=()) -> str:
     """Inline every ``USE``-d module's real source into ``source``,
     producing one self-contained translation unit.
 
@@ -803,12 +929,27 @@ def merge_used_modules(source: str, *, search_dirs=()) -> str:
     transformed.  Idempotent: re-running finds the modules already
     inlined and adds nothing.
 
+    ``external_functions`` / ``do_not_emit`` are the external-function policy
+    (see :mod:`dace_fortran.external_functions`): names of procedures that must
+    NOT be inlined.  When their defining module is spliced in, their bodies are
+    stubbed to empty (:func:`_stub_procedure_bodies`) so the halo-exchange /
+    MPI / I/O internals never enter the TU -- the regex-merge parallel of the
+    fparser inliner's ``make_noop``.  The bridge lowers the surviving call
+    through its external registry.
+
     :param source: the entry Fortran source text.
     :param search_dirs: directories scanned (recursively, ``*.f90`` /
         ``*.F90`` / ``*.incf``) for module definitions.
+    :param external_functions: :class:`ExternalFunction` specs (don't-inline +
+        the bridge EMITs an external call); only their ``name`` is read here.
+    :param do_not_emit: plain names (don't-inline + the bridge DROPs the call).
     :returns: a single-TU source, or ``source`` unchanged.
     """
     from pathlib import Path
+
+    from dace_fortran.external_functions import dont_inline_names, validate
+    validate(external_functions, do_not_emit)
+    dont_inline = dont_inline_names(external_functions, do_not_emit)
 
     in_source = {nm for nm, _ in _module_blocks(source)}
     index: dict = {}
@@ -849,7 +990,7 @@ def merge_used_modules(source: str, *, search_dirs=()) -> str:
                 stack.append((dep, False))
 
     if not order:
-        return source
+        return _stub_procedure_bodies(source, dont_inline) if dont_inline else source
     # Ensure a newline between every block so a module whose final
     # ``END MODULE`` line lacks a trailing ``\n`` (a common shape for
     # human-edited files) does not glue into the next block's
@@ -861,7 +1002,8 @@ def merge_used_modules(source: str, *, search_dirs=()) -> str:
             parts.append("\n")
     parts.append("\n")
     parts.append(source)
-    return "".join(parts)
+    merged = "".join(parts)
+    return _stub_procedure_bodies(merged, dont_inline) if dont_inline else merged
 
 
 # ``EXTERNAL`` declaration: ``EXTERNAL`` keyword followed by zero or
@@ -906,15 +1048,7 @@ def _index_procedures_in_modules(search_dirs) -> dict:
     """
     from pathlib import Path
     index: dict = {}
-    proc_open = re.compile(
-        r"^\s*(?:RECURSIVE\s+|PURE\s+|ELEMENTAL\s+|IMPURE\s+)*"
-        r"(?:SUBROUTINE|FUNCTION|REAL\s*FUNCTION|"
-        r"INTEGER\s*FUNCTION|LOGICAL\s*FUNCTION|"
-        r"DOUBLE\s+PRECISION\s+FUNCTION|"
-        r"(?:REAL|INTEGER|LOGICAL|COMPLEX|CHARACTER)\s*\(\s*[^)]*\)\s+FUNCTION)\s+"
-        r"([A-Za-z]\w*)",
-        re.IGNORECASE,
-    )
+    proc_open = _PROC_OPEN_RE
     for d in search_dirs:
         d = Path(d)
         if d.is_file():
@@ -1407,7 +1541,8 @@ def rewrite_string_enum_to_integer(source: str) -> tuple:
     return "".join(out), enum_maps
 
 
-def _fparser_merge(source: str, *, search_dirs=(), entry: Optional[str] = None) -> str:
+def _fparser_merge(source: str, *, search_dirs=(), entry: Optional[str] = None,
+                   external_names: Iterable[str] = ()) -> str:
     """Single-TU merge via the fparser inliner engine (opt-in).
 
     Sibling of :func:`merge_used_modules`: instead of the regex
@@ -1420,6 +1555,12 @@ def _fparser_merge(source: str, *, search_dirs=(), entry: Optional[str] = None) 
     ``entry`` (when given) restricts pruning to the entry's USE-closure;
     ``None`` keeps every top-level subprogram (a faithful whole-project
     single-TU merge).
+
+    ``external_names`` are procedures to keep external (NOT inlined): each is
+    stubbed to an empty body so its internals never enter the TU (the inliner's
+    ``make_noop`` path).  The build path sources these from the bridge's
+    external registry, so a ``keep_external`` / ``apply_external_functions``
+    declaration drives both the merge and the SDFG-construction step.
     """
     from dace_fortran.fparser_inliner import inline_to_ast, strip_builtin_stub_modules
 
@@ -1451,7 +1592,8 @@ def _fparser_merge(source: str, *, search_dirs=(), entry: Optional[str] = None) 
     # elimination, so skip the inliner's const-propagation optimizers (which
     # also matches the legacy regex merge's "splice and let flang inline"
     # semantics and avoids optimizer fragilities on inlined-call patterns).
-    ast = inline_to_ast(src_map, entry, include_builtins=True, optimize=False)
+    ast = inline_to_ast(src_map, entry, include_builtins=True, optimize=False,
+                        do_not_emit=external_names)
     # A whole-project merge (``entry is None``) keeps every top-level unit,
     # including the injected intrinsic-module stubs; strip them so flang's own
     # ``iso_c_binding`` / ``iso_fortran_env`` are used without a collision.
@@ -1466,6 +1608,7 @@ def preprocess_fortran_source(source: str,
                               merge: bool = True,
                               merge_engine: str = "regex",
                               merge_entry: Optional[str] = None,
+                              external_names: Iterable[str] = (),
                               if_intvar: bool = False,
                               kind_map: dict = None,
                               kind_passthrough: bool = False) -> str:
@@ -1503,6 +1646,13 @@ def preprocess_fortran_source(source: str,
     :param merge_entry: entry procedure for the ``"fparser"`` engine's
         pruning (plain name / ``module::proc`` / mangled symbol); ``None``
         keeps every top-level subprogram.  Ignored by the regex engine.
+    :param external_names: procedures to keep external (NOT inlined) at the
+        merge stage -- their bodies are stubbed to empty in BOTH engines (the
+        regex :func:`_stub_procedure_bodies` / the fparser ``make_noop``), so
+        halo-exchange / MPI / I/O internals never enter the TU.  The build path
+        sources these from the bridge's external registry so a single
+        ``keep_external`` / ``apply_external_functions`` declaration governs
+        both the merge and the SDFG-construction step (no hand-syncing).
     :param if_intvar: also run the opt-in integer-IF rewrite.
     :param kind_map: per-alias override forwarded to
         ``normalize_kind_parameters`` -- ``{"wp": 4}`` for an fp32
@@ -1514,9 +1664,11 @@ def preprocess_fortran_source(source: str,
     """
     if merge:
         if merge_engine == "fparser":
-            source = _fparser_merge(source, search_dirs=search_dirs, entry=merge_entry)
+            source = _fparser_merge(source, search_dirs=search_dirs, entry=merge_entry,
+                                    external_names=external_names)
         elif merge_engine == "regex":
-            source = merge_used_modules(source, search_dirs=search_dirs)
+            source = merge_used_modules(source, search_dirs=search_dirs,
+                                        do_not_emit=external_names)
         else:
             raise ValueError(f"merge_engine must be 'regex' or 'fparser', got {merge_engine!r}")
     source = strip_openmp_directives(source)

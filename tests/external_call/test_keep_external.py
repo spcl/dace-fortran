@@ -1,12 +1,17 @@
-"""End-to-end coverage for :func:`dace_fortran.keep_external`.
+"""End-to-end coverage for the unified external-function policy and its
+rich-ABI escape hatch :func:`dace_fortran.keep_external`.
 
-A convenience wrapper around :func:`register_external` that surfaces
-the "leave this procedure external" intent without the
-``ExternalSignature`` boilerplate at the call site.  These tests
-mirror the ``foo``-style coverage of ``test_external_call.py``:
-compile a separately-built ``bind(c)`` Fortran subroutine into a
-``.so``, mark it via ``keep_external``, build the SDFG, run it,
-and assert the array was mutated as the external function expects.
+The simple cases -- a plain ``bind(c)`` callee whose argument plan the
+bridge can derive from the HLFIR call site -- are declared with
+:func:`dace_fortran.apply_external_functions` and one
+:class:`~dace_fortran.external_functions.ExternalFunction` (call-site
+name + the ``.so`` that exports the symbol).  The ``kind='comm'`` cases
+at the bottom keep :func:`keep_external`'s authored
+:class:`~dace_fortran.external.Arg` list: an ``MPI_Comm`` handle is an
+ABI fact HLFIR cannot infer, so it stays on the rich path.  Each test
+compiles a separately-built ``bind(c)`` Fortran subroutine into a
+``.so``, declares it external, builds the SDFG, runs it, and asserts the
+array was mutated as the external function expects.
 """
 import shutil
 import subprocess
@@ -16,7 +21,9 @@ import numpy as np
 import pytest
 
 from _util import build_sdfg, have_flang
-from dace_fortran.external import (Arg, ExternalCall, clear_external_registry, keep_external, lookup_external)
+from dace_fortran.external import (Arg, ExternalCall, apply_external_functions, clear_external_registry,
+                                   keep_external, lookup_external)
+from dace_fortran.external_functions import ExternalFunction
 
 pytestmark = [
     pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH"),
@@ -58,9 +65,9 @@ end module run_mod
 
 
 def test_keep_external_lowers_to_externalcall(tmp_path: Path):
-    """A ``keep_external`` registration produces the same
-    :class:`ExternalCall` library node that :func:`register_external`
-    does -- it is the same registry behind both."""
+    """An :func:`apply_external_functions` declaration produces an
+    :class:`ExternalCall` library node bound to the supplied ``.so`` --
+    the same registry the rich :func:`keep_external` path populates."""
     clear_external_registry()
     bar_f90 = tmp_path / "bar.f90"
     bar_f90.write_text(_BAR_F90)
@@ -69,14 +76,10 @@ def test_keep_external_lowers_to_externalcall(tmp_path: Path):
     # a prior flang invocation left in the repo root.
     subprocess.check_call(["gfortran", "-shared", "-fPIC", "-o", str(libbar), str(bar_f90)], cwd=str(tmp_path))
 
-    keep_external(
-        "bar",
-        args=[Arg(kind="array", dtype="float64", intent="inout"),
-              Arg(kind="scalar", dtype="int32", intent="in")],
-        libraries=[str(libbar)],
-    )
+    # Don't-inline + emit ``bar``; the arg plan (array inout, scalar in)
+    # is derived from the HLFIR call site.
+    apply_external_functions([ExternalFunction("bar", library=str(libbar))])
 
-    # Same registry -> the same signature surfaces under either lookup.
     sig = lookup_external("bar")
     assert sig is not None and sig.c_name == "bar"
 
@@ -96,20 +99,17 @@ def test_keep_external_lowers_to_externalcall(tmp_path: Path):
 
 
 def test_keep_external_defaults_c_name_to_fortran_name(tmp_path: Path):
-    """When ``c_name`` is omitted it falls back to the Fortran call-site
-    name -- the common case where both names are identical."""
+    """When ``c_function`` is omitted :attr:`ExternalFunction.symbol`
+    falls back to the Fortran call-site name -- the common case where
+    both names are identical."""
     clear_external_registry()
     bar_f90 = tmp_path / "bar.f90"
     bar_f90.write_text(_BAR_F90)
     libbar = tmp_path / "libbar.so"
     subprocess.check_call(["gfortran", "-shared", "-fPIC", "-o", str(libbar), str(bar_f90)], cwd=str(tmp_path))
 
-    # No c_name= -> defaults to "bar".
-    keep_external(
-        "bar",
-        args=[Arg(kind="array", dtype="float64"), Arg(kind="scalar", dtype="int32")],
-        libraries=[str(libbar)],
-    )
+    # No c_function= -> the emitted symbol defaults to "bar".
+    apply_external_functions([ExternalFunction("bar", library=str(libbar))])
     assert lookup_external("bar").c_name == "bar"
 
     sdfg = build_sdfg(_KERNEL, tmp_path / "sdfg", name="run", entry="run_mod::run").build()
@@ -123,17 +123,19 @@ def test_keep_external_defaults_c_name_to_fortran_name(tmp_path: Path):
     np.testing.assert_allclose(a, expected, rtol=1e-12, atol=1e-12)
 
 
-def test_keep_external_empty_args_passthrough():
-    """No-args registration is legal -- the signature is stored as-is
-    and the registry survives a second lookup without rewriting it."""
+def test_apply_external_functions_empty_args_passthrough():
+    """A minimal :class:`ExternalFunction` (name only) registers a
+    no-args, no-libraries signature -- the bridge derives the arg plan
+    from HLFIR, so nothing is authored here.  ``c_function`` overrides
+    the emitted symbol; re-declaring the same name replaces the entry."""
     clear_external_registry()
-    keep_external("noop")
+    apply_external_functions([ExternalFunction("noop")])
     sig = lookup_external("noop")
     assert sig is not None and sig.c_name == "noop"
     assert sig.args == () and sig.libraries == ()
-    # Idempotent on the registry: re-registering with the same name
-    # replaces the entry but does not corrupt the lookup.
-    keep_external("noop", c_name="other_sym")
+    # Idempotent on the registry: re-declaring the same name with an
+    # explicit ``c_function`` replaces the entry but does not corrupt it.
+    apply_external_functions([ExternalFunction("noop", c_function="other_sym")])
     assert lookup_external("noop").c_name == "other_sym"
     clear_external_registry()
     assert lookup_external("noop") is None

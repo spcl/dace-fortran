@@ -292,6 +292,16 @@ def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
         all_cand_sigs: List[Tuple[types.SPEC, Tuple[types.TYPE_SPEC, ...]]] = []
 
         bspec = dref_type.spec + (bname.string, )
+        # A type-bound procedure inherited via ``EXTENDS`` is registered (by the
+        # alias map) under the child type, but proc_map/genc_map key bindings by
+        # the type that physically declares them.  Remap an inherited binding
+        # spec back to the base binding's own spec so the concrete-procedure
+        # lookup resolves it (a child that overrides the binding keeps its own,
+        # because then ``bspec`` is already in proc_map/genc_map).
+        if bspec not in proc_map and bspec not in genc_map and bspec in alias_map:
+            inherited = alias_map[bspec]
+            if isinstance(inherited, (f03.Specific_Binding, f03.Generic_Binding)):
+                bspec = analysis.ident_spec(inherited)
         if bspec in genc_map and genc_map[bspec]:
             for cand in genc_map[bspec]:
                 # An external type-bound procedure candidate -- its concrete

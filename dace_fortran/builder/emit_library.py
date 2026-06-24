@@ -1230,7 +1230,7 @@ def emit_call(builder, ctx, n, region):
     :raises ValueError: registered arg count disagrees with the call.
     """
     import dace
-    from dace_fortran.external import ExternalCall, lookup_external
+    from dace_fortran.external import Arg, ExternalCall, lookup_external
 
     # Normalise the bridge's callee name to the registry key the user
     # registered.  The C++ side may hand us an MLIR symbol (leading
@@ -1265,6 +1265,42 @@ def emit_call(builder, ctx, n, region):
     names = list(n.call_args)
     groups = list(n.aos_marshal_groups)  # flat [start, count, ...]
     group_pairs = [(groups[i], groups[i + 1]) for i in range(0, len(groups), 2)]
+
+    # A minimal ``ExternalFunction(name, c_function, library)`` registers
+    # ``args=()`` (via ``apply_external_functions`` / ``keep_external``): the
+    # call's argument order and identity already live in the HLFIR
+    # (``n.call_args``), so the only thing missing is each operand's C-ABI
+    # shape.  Synthesise a conservative authored signature from the call site
+    # and let the normal path below build the node from it -- so the derived
+    # case shares the SAME plan / connector / body / decl-types code as a
+    # hand-authored ``ExternalSignature``.  Each SDFG array crosses as an
+    # ``inout`` pointer (an external is opaque -> assume it both reads and
+    # writes: a missed write is a correctness bug, an over-declared one only
+    # costs optimisation -- see ``Arg.intent``); a scalar / free symbol crosses
+    # by value (read-only).  AoS-struct marshalling has no single natural ABI,
+    # so it still needs an authored ``Arg(kind='aos')``.
+    if not sig.args and names:
+        from dataclasses import replace
+        from dace.data import Scalar
+        if group_pairs:
+            raise ValueError(
+                f"external {callee!r}: the call site marshalled a derived-type "
+                f"argument (aos), which has no default C ABI.  Register an "
+                f"authored signature -- e.g. keep_external({callee!r}, "
+                f"args=[..., Arg(kind='aos', c_abi=...)]) -- instead of a bare "
+                f"ExternalFunction.")
+        derived: list = []
+        for name in names:
+            desc = ctx.sdfg.arrays.get(name)
+            if desc is not None and not isinstance(desc, Scalar):
+                derived.append(Arg(kind='array', dtype=desc.dtype.to_string(),
+                                   intent='inout'))
+            else:
+                dt = desc.dtype if desc is not None else ctx.sdfg.symbols.get(name)
+                derived.append(Arg(kind='scalar',
+                                   dtype=dt.to_string() if dt is not None else 'int32',
+                                   intent='in'))
+        sig = replace(sig, args=tuple(derived))
 
     # Expand ``sig.args`` to a per-call-arg plan.  An ``aos`` signature arg was
     # split by ``hlfir-marshal-external-structs`` into the struct's member

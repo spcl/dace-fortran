@@ -172,8 +172,10 @@ def _build_sdfg_from_real_icon(tmp_path: Path):
         cache_dir=_CACHE_DIR,
     )
     dace_fortran.clear_external_registry()
-    for sym in _ICON_EXTERNAL_STUBS:
-        dace_fortran.keep_external(sym, stub=True)
+    # Don't-inline + DON'T-emit the infrastructure procedures (error
+    # reporting, timer hooks): the unified policy's ignore list drops
+    # their calls so their unlowerable bodies never reach the bridge.
+    dace_fortran.apply_external_functions(do_not_emit=_ICON_EXTERNAL_STUBS)
     try:
         return dace_fortran.build_sdfg_from_hlfir(hlfir, entry=_VELOCITY_ENTRY)
     finally:
