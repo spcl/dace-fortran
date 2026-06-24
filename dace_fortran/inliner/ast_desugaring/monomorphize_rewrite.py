@@ -66,17 +66,30 @@ def _parse_exec(text: str) -> List[f03.Base]:
     return list(exe[0].children) if exe else []
 
 
-def _expanded_decls(var: str, plan: MonomorphizationPlan) -> List[f03.Type_Declaration_Stmt]:
-    """``integer :: v__tag`` + one ``type(arm), allocatable :: v__arm`` per arm."""
+def _expanded_decls(var: str, plan: MonomorphizationPlan, stack_slots: bool = False) -> List[f03.Type_Declaration_Stmt]:
+    """``integer :: v__tag`` + one ``type(arm), allocatable :: v__arm`` per arm.
+
+    With ``stack_slots`` the per-arm slot is a plain (non-allocatable) stack object:
+    after monomorphisation the allocatable is no longer needed (the polymorphism is
+    gone) and the dace-fortran bridge cannot lower an allocatable derived-type
+    scalar, so stack slots are what make the rewritten kernel SDFG-lowerable."""
+    attr = "" if stack_slots else ", allocatable"
     lines = [f"integer :: {_tag_var(var)}"]
     for arm in plan.arms:
-        lines.append(f"type({arm.type_name}), allocatable :: {_arm_slot(var, arm.type_name)}")
+        lines.append(f"type({arm.type_name}){attr} :: {_arm_slot(var, arm.type_name)}")
     return _parse_decls("\n".join(lines))
 
 
-def _allocation_rewrite(var: str, alloc_type: str, plan: MonomorphizationPlan) -> List[f03.Base]:
-    """``allocate(concrete :: v)`` -> ``v__tag = <tag>`` + ``allocate(v__<arm>)``."""
+def _allocation_rewrite(var: str,
+                        alloc_type: str,
+                        plan: MonomorphizationPlan,
+                        stack_slots: bool = False) -> List[f03.Base]:
+    """``allocate(concrete :: v)`` -> ``v__tag = <tag>`` + ``allocate(v__<arm>)``.
+    With ``stack_slots`` the slot is a stack object, so only the tag is set (no
+    ``allocate``)."""
     tag, arm = _find_arm(plan, alloc_type)
+    if stack_slots:
+        return _parse_exec(f"{_tag_var(var)} = {tag}")
     return _parse_exec(f"{_tag_var(var)} = {tag}\nallocate({_arm_slot(var, arm)})")
 
 
@@ -118,7 +131,7 @@ def _locally_constructed(scope: f03.Base, plan: MonomorphizationPlan) -> Set[str
     return out
 
 
-def monomorphize_local_dispatch(program: f03.Program, plan: MonomorphizationPlan) -> int:
+def monomorphize_local_dispatch(program: f03.Program, plan: MonomorphizationPlan, stack_slots: bool = False) -> int:
     """Rewrite ``CLASS(plan.abstract_base)`` *local-variable* dispatch in ``program``
     into the static emit-all-always ladder, in place.  Returns the number of
     polymorphic locals rewritten (so callers can detect a no-op).
@@ -127,7 +140,10 @@ def monomorphize_local_dispatch(program: f03.Program, plan: MonomorphizationPlan
     ``ALLOCATE(concrete :: v)`` -- the tag construction site.  This deliberately
     excludes a ``CLASS(base)`` dummy argument (e.g. a shared interposer's
     passed-object), which carries no local construction and is the clone/retype
-    primitives' responsibility, not local-variable dispatch's."""
+    primitives' responsibility, not local-variable dispatch's.
+
+    With ``stack_slots`` the per-arm slots are plain stack objects (no allocatable,
+    no ``allocate``) -- the form the dace-fortran bridge can lower to an SDFG."""
     base = plan.abstract_base
     deferred = {d.lower() for d in plan.deferred}
     rewritten = 0
@@ -148,14 +164,14 @@ def monomorphize_local_dispatch(program: f03.Program, plan: MonomorphizationPlan
             continue
 
         for decl, decl_names in targets:
-            expanded = [d for v in decl_names for d in _expanded_decls(v, plan)]
+            expanded = [d for v in decl_names for d in _expanded_decls(v, plan, stack_slots)]
             replace_node(decl, expanded)
 
         for var in names:
             for alloc in walk(scope, f03.Allocate_Stmt):
                 alloc_type, alloc_list, _ = alloc.children
                 if alloc_type is not None and var.lower() in {str(n).lower() for n in walk(alloc_list, f03.Name)}:
-                    replace_node(alloc, _allocation_rewrite(var, str(alloc_type), plan))
+                    replace_node(alloc, _allocation_rewrite(var, str(alloc_type), plan, stack_slots))
 
             for call in walk(scope, f03.Call_Stmt):
                 designator = call.children[0]
@@ -177,11 +193,16 @@ def _parse_component_decls(text: str) -> List[f03.Data_Component_Def_Stmt]:
     return list(walk(prog, f03.Data_Component_Def_Stmt))
 
 
-def _expanded_component_decls(slot: str, plan: MonomorphizationPlan) -> List[f03.Data_Component_Def_Stmt]:
-    """``integer :: act__tag`` + one ``type(arm), allocatable :: act__arm`` component per arm."""
+def _expanded_component_decls(slot: str,
+                              plan: MonomorphizationPlan,
+                              stack_slots: bool = False) -> List[f03.Data_Component_Def_Stmt]:
+    """``integer :: act__tag`` + one ``type(arm), allocatable :: act__arm`` component per arm.
+    With ``stack_slots`` the per-arm component is a plain (non-allocatable) member -- the
+    SDFG-lowerable form (see :func:`_expanded_decls`)."""
+    attr = "" if stack_slots else ", allocatable"
     lines = [f"integer :: {_tag_var(slot)}"]
     for arm in plan.arms:
-        lines.append(f"type({arm.type_name}), allocatable :: {_arm_slot(slot, arm.type_name)}")
+        lines.append(f"type({arm.type_name}){attr} :: {_arm_slot(slot, arm.type_name)}")
     return _parse_component_decls("\n".join(lines))
 
 
@@ -238,12 +259,15 @@ def _slot_statement_ladder(stmt: f03.Base, slot_names: Set[str],
     return _parse_exec("\n".join(lines))
 
 
-def monomorphize_component_dispatch(program: f03.Program, plan: MonomorphizationPlan) -> int:
+def monomorphize_component_dispatch(program: f03.Program, plan: MonomorphizationPlan, stack_slots: bool = False) -> int:
     """Rewrite dispatch on a ``CLASS(plan.abstract_base)`` *component* (e.g. ICON's
     ``t_ocean_solve%act``): expand the container type's component into a tag + one
     concrete allocatable per arm, then route ``ALLOCATE(concrete :: obj%slot)`` and
     ``CALL obj%slot%binding(args)`` through the emit-all static ladder, in place.
-    Returns the number of polymorphic components expanded."""
+    Returns the number of polymorphic components expanded.
+
+    With ``stack_slots`` the per-arm components are plain stack members and the factory
+    only sets the tag (no ``allocate``) -- the SDFG-lowerable form."""
     base = plan.abstract_base
     slots = _component_slots(program, base)
     if not slots:
@@ -252,10 +276,10 @@ def monomorphize_component_dispatch(program: f03.Program, plan: Monomorphization
 
     # 1. expand the container component into a tag + one concrete slot per arm.
     for comp, names in slots:
-        replace_node(comp, [d for n in names for d in _expanded_component_decls(n, plan)])
+        replace_node(comp, [d for n in names for d in _expanded_component_decls(n, plan, stack_slots)])
 
-    # 2. factory ALLOCATE(concrete :: prefix%slot) -> set the tag + allocate the
-    #    matching concrete slot.
+    # 2. factory ALLOCATE(concrete :: prefix%slot) -> set the tag (+ allocate the
+    #    matching concrete slot, unless the slots are stack objects).
     for alloc in walk(program, f03.Allocate_Stmt):
         alloc_type, alloc_list, _ = alloc.children
         if alloc_type is None:
@@ -267,8 +291,9 @@ def monomorphize_component_dispatch(program: f03.Program, plan: Monomorphization
             if tail.lower() not in slot_names:
                 continue
             tag, arm = _find_arm(plan, str(alloc_type))
-            replace_node(alloc,
-                         _parse_exec(f"{prefix}%{_tag_var(tail)} = {tag}\nallocate({prefix}%{_arm_slot(tail, arm)})"))
+            set_tag = f"{prefix}%{_tag_var(tail)} = {tag}"
+            rewrite = set_tag if stack_slots else f"{set_tag}\nallocate({prefix}%{_arm_slot(tail, arm)})"
+            replace_node(alloc, _parse_exec(rewrite))
             break
 
     # 3. every other statement referencing the slot -> ladder over the tag with
@@ -494,13 +519,17 @@ class MonomorphizationStats:
     declarations_retyped: int = 0
 
 
-def monomorphize(program: f03.Program, spec: MonomorphizationSpec) -> MonomorphizationStats:
+def monomorphize(program: f03.Program, spec: MonomorphizationSpec, stack_slots: bool = False) -> MonomorphizationStats:
     """Apply ``spec`` to ``program`` in place, collapsing every listed polymorphic
     axis into static dispatch, and return the per-strategy rewrite counts.
 
     Order: the analyzer plans are taken from the *pristine* AST first; then retype
     axes run (pure declaration rewrites that make member accesses concrete), then
     ladder axes (slot expansion + tag ladder + interposer clone) using those plans.
+
+    With ``stack_slots`` the ladder's per-arm slots are plain stack objects rather
+    than allocatables -- the form the dace-fortran bridge can lower to an SDFG (an
+    allocatable derived-type scalar is rejected by the HLFIR pass pipeline).
 
     Raises :class:`UnsupportedProgram` (from the analyzer) if a ladder axis's
     hierarchy is outside the soundly-monomorphisable class, or ``ValueError`` for a
@@ -528,8 +557,8 @@ def monomorphize(program: f03.Program, spec: MonomorphizationSpec) -> Monomorphi
         if plan is None:
             raise ValueError(f"ladder axis `{axis.base}` has no dispatch plan: the abstract base is "
                              f"absent, non-polymorphic, or has no concrete arm in this translation unit")
-        stats.locals_rewritten += monomorphize_local_dispatch(program, plan)
-        stats.components_rewritten += monomorphize_component_dispatch(program, plan)
+        stats.locals_rewritten += monomorphize_local_dispatch(program, plan, stack_slots)
+        stats.components_rewritten += monomorphize_component_dispatch(program, plan, stack_slots)
         stats.interposers_cloned += clone_shared_interposers(program, plan)
 
     return stats
