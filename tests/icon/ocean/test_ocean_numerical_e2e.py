@@ -57,11 +57,12 @@ _KERNELS = [
     pytest.param("coriolis_pv",
                  "coriolis_pv_single_tu.f90",
                  "mo_scalar_product::nonlinear_coriolis_3d_fast_scalar", {},
-                 marks=pytest.mark.xfail(reason="lowers/binds/compiles/runs through the auto shim now (struct "
-                                         "reconstruction fixed); SDFG and Fortran reference agree (max_diff==0) "
-                                         "but random [1, n] mesh data drives empty loops so n_changed==0 trips "
-                                         "the vacuous guard.  Needs a controlled valid-mesh fixture, tracked "
-                                         "separately from the shim.",
+                 marks=pytest.mark.xfail(reason="DUT executes and is correct on in-bounds outputs (p_vn_dual_x "
+                                         "bit-identical, vort_v agrees to 1e-14 once the kernel's own OOB is "
+                                         "avoided); full bit-exact vort_flux is blocked by the kernel reading/"
+                                         "writing OUT OF BOUNDS on synthetic indices (z_vt(4) vs bnd_edges, the "
+                                         "no_dual_edges+vertex_edge additive index) -- needs a valid-mesh "
+                                         "fixture so every index lands in bounds, tracked next.",
                                          strict=True),
                  id="coriolis_pv"),
     pytest.param("ocean_veloc_adv",

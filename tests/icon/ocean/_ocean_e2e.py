@@ -74,8 +74,12 @@ def _retarget_shim(shim: str, dace_name: str, entry: str) -> str:
 
 def _parse_abi(shim: str):
     """Recover the shim's flat C ABI: ``(header_args, value_ftype, ptr_ftype,
-    ptr_shape_expr, dim_symbols)``.  ``dim_symbols`` are the identifiers any
-    ``c_f_pointer`` shape references -- the array extents the caller supplies."""
+    ptr_shape_expr, dim_symbols, ptr_local)``.  ``dim_symbols`` are the
+    identifiers any ``c_f_pointer`` shape references -- the array extents the
+    caller supplies.  ``ptr_local`` maps each pointer header arg (``<x>_p``)
+    to its readable ``c_f_pointer`` local name (``<x>``), the key
+    :func:`run_kernel_e2e`'s ``array_overrides`` uses to pin a buffer's
+    contents."""
     m = re.search(r"subroutine\s+\w+\(([^)]*)\)\s*bind", shim, re.S)
     header = [a.strip() for a in m.group(1).replace("&", " ").split(",") if a.strip()]
     value_ftype = {
@@ -83,15 +87,16 @@ def _parse_abi(shim: str):
         for ftype, name in re.findall(r"(integer\(c_int\)|real\(c_double\)|logical\(c_bool\)),\s*value\s*::\s*(\w+)",
                                       shim)
     }
-    ptr_ftype, ptr_shape = {}, {}
+    ptr_ftype, ptr_shape, ptr_local = {}, {}, {}
     for p, local, shp in re.findall(r"call c_f_pointer\((\w+),\s*(\w+),\s*\[([^\]]*)\]\)", shim):
         ptr_shape[p] = shp
+        ptr_local[p] = local
         dt = re.search(rf"(real\(c_double\)|integer\(c_int\)|logical\(c_bool\)),\s*pointer\s*::\s*{local}\b", shim)
         ptr_ftype[p] = dt.group(1)
     dim_symbols = set()
     for shp in ptr_shape.values():
         dim_symbols |= set(re.findall(r"[A-Za-z_]\w*", shp))
-    return header, value_ftype, ptr_ftype, ptr_shape, dim_symbols
+    return header, value_ftype, ptr_ftype, ptr_shape, dim_symbols, ptr_local
 
 
 def _invoke(so_path, call_plan, bufs, sym, sdfg_so=None):
@@ -134,7 +139,8 @@ def _run_in_fork(so_path, call_plan, inputs, ptr_args, sym, save_prefix: Path, s
     return status
 
 
-def _build_and_compare(tu_path: Path, entry: str, scalar_overrides: dict, n: int, seed: int, out: Path):
+def _build_and_compare(tu_path: Path, entry: str, scalar_overrides: dict, array_overrides: dict, float_range: tuple,
+                       n: int, seed: int, out: Path):
     """The worker body (runs in a subprocess): build DUT + REF, drive both,
     return ``(max_diff, n_changed)``.  Imports are deferred so the module loads
     cheaply in the parent (which only orchestrates the subprocess)."""
@@ -161,7 +167,7 @@ def _build_and_compare(tu_path: Path, entry: str, scalar_overrides: dict, n: int
     if r.returncode != 0:
         raise RuntimeError(f"reference .so compile failed:\n{r.stderr[-3000:]}")
 
-    header, value_ftype, ptr_ftype, ptr_shape, dim_symbols = _parse_abi(shim)
+    header, value_ftype, ptr_ftype, ptr_shape, dim_symbols, ptr_local = _parse_abi(shim)
     dimvals = {s: n for s in dim_symbols}
 
     rng = np.random.default_rng(seed)
@@ -170,8 +176,11 @@ def _build_and_compare(tu_path: Path, entry: str, scalar_overrides: dict, n: int
         if arg in ptr_shape:
             shape = tuple(int(eval(tok, {}, dimvals)) for tok in ptr_shape[arg].split(","))
             npdt = _NP[ptr_ftype[arg]]
-            if npdt == np.float64:
-                base = np.asfortranarray(rng.uniform(-1.0, 1.0, shape).astype(npdt))
+            override = array_overrides.get(ptr_local[arg])
+            if override is not None:  # pinned to a constant (e.g. a valid loop bound)
+                base = np.asfortranarray(np.full(shape, override, dtype=npdt))
+            elif npdt == np.float64:
+                base = np.asfortranarray(rng.uniform(float_range[0], float_range[1], shape).astype(npdt))
             else:  # integer count / index array -> in-bounds [1, n]
                 base = np.asfortranarray(rng.integers(1, n + 1, shape).astype(npdt))
             inputs[arg] = base
@@ -195,13 +204,25 @@ def _build_and_compare(tu_path: Path, entry: str, scalar_overrides: dict, n: int
     max_diff, n_changed = 0.0, 0
     for arg in ptr_args:
         d, rf = dut[arg], ref[arg]
-        max_diff = max(max_diff, float(np.abs(d.astype(np.float64) - rf.astype(np.float64)).max()))
+        diff = float(np.abs(d.astype(np.float64) - rf.astype(np.float64)).max())
+        # Python ``max(0.0, nan) == 0.0`` silently swallows a NaN/Inf DUT, so a
+        # diverged or overflowed output would masquerade as a perfect match.
+        # Carry a non-finite diff forward so it fails the tolerance check.
+        if not np.isfinite(diff) or diff > max_diff:
+            max_diff = diff
         if not np.array_equal(d, inputs[arg]):
             n_changed += 1
     return max_diff, n_changed
 
 
-def run_kernel_e2e(tu_path: Path, entry: str, *, scalar_overrides=None, n: int = 8, seed: int = 0) -> dict:
+def run_kernel_e2e(tu_path: Path,
+                   entry: str,
+                   *,
+                   scalar_overrides=None,
+                   array_overrides=None,
+                   float_range=(-1.0, 1.0),
+                   n: int = 8,
+                   seed: int = 0) -> dict:
     """Run one kernel's e2e build+compare in an isolated subprocess.  Returns
     ``{passed, max_diff, n_changed, output}``.  ``passed`` is False (with the
     captured output) on any build / lowering / compile / run failure -- a
@@ -217,6 +238,8 @@ def run_kernel_e2e(tu_path: Path, entry: str, *, scalar_overrides=None, n: int =
         str(Path(__file__).resolve()),
         str(tu_path.resolve()), entry,
         json.dumps(scalar_overrides or {}),
+        json.dumps(array_overrides or {}),
+        json.dumps(list(float_range)),
         str(n),
         str(seed),
         str(out)
@@ -232,10 +255,11 @@ def run_kernel_e2e(tu_path: Path, entry: str, *, scalar_overrides=None, n: int =
 
 
 def _main(argv):
-    tu_path, entry, overrides_json, n, seed, out = argv[1:7]
+    tu_path, entry, overrides_json, array_overrides_json, float_range_json, n, seed, out = argv[1:9]
     try:
-        max_diff, n_changed = _build_and_compare(Path(tu_path), entry, json.loads(overrides_json), int(n), int(seed),
-                                                 Path(out))
+        max_diff, n_changed = _build_and_compare(Path(tu_path), entry, json.loads(overrides_json),
+                                                 json.loads(array_overrides_json), tuple(json.loads(float_range_json)),
+                                                 int(n), int(seed), Path(out))
         print(f"MAXDIFF: {max_diff}", flush=True)
         print(f"CHANGED: {n_changed}", flush=True)
         print("RESULT: PASS", flush=True)

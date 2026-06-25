@@ -144,9 +144,45 @@ void setAllocAlias(const std::string &raw, const std::string &alias) {
 
 void clearAllocAliases() { kAllocAlias.clear(); }
 
+// True iff ``mr`` (a declare's memref) leads -- through the usual
+// reinterpret peels -- to an ``hlfir.designate`` that selects a struct
+// COMPONENT.  This distinguishes an INLINED-call dummy bound to a caller
+// struct member (``call get_index_range(patch % edges % in_domain, ...)``
+// after ``hlfir-inline-all`` splices the callee body in) from an entry
+// dummy (memref is a block argument) or a local (memref is an alloca) --
+// neither of those leads to a designate.  ``traceToDecl`` uses it to
+// resolve such an alias to the caller-side member path rather than the
+// inlined dummy's own ``<dummy>_call<idx>`` name, which nothing sources.
+static bool leadsToComponentDesignate(mlir::Value mr) {
+  for (int i = 0; i < limits::kAliasMemrefWalkDepth && mr; ++i) {
+    auto* d = mr.getDefiningOp();
+    if (!d) return false;
+    if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(d))
+      return static_cast<bool>(dg.getComponentAttr());
+    if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
+      mr = cv.getValue();
+      continue;
+    }
+    if (auto ld = mlir::dyn_cast<fir::LoadOp>(d)) {
+      mr = ld.getMemref();
+      continue;
+    }
+    if (auto rb = mlir::dyn_cast<fir::ReboxOp>(d)) {
+      mr = rb.getBox();
+      continue;
+    }
+    if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
+      mr = ba.getVal();
+      continue;
+    }
+    return false;
+  }
+  return false;
+}
+
 std::string traceToDecl(mlir::Value val, int max) {
   for (int i = 0; i < max && val; ++i) {
-    auto *d = val.getDefiningOp();
+    auto* d = val.getDefiningOp();
     if (!d) break;
     if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(d)) {
       // Walk through inlined assumed-shape aliases to the outer
@@ -154,6 +190,20 @@ std::string traceToDecl(mlir::Value val, int max) {
       // the real storage by its caller-side name.
       if (auto outer = asAssumedShapeAlias(dc)) {
         val = outer.getResult(0);
+        continue;
+      }
+      // Inlined-call dummy bound to a struct-MEMBER actual argument
+      // (``get_index_range(patch % edges % in_domain, ...)``): the dummy
+      // declare's memref leads to a component designate of the caller's
+      // struct.  ``asAssumedShapeAlias`` can't fold it (it looks for a
+      // whole outer declare, not a member designate), so walk through to
+      // that designate -- the symbol then resolves to the caller-side flat
+      // path (``patch_3d_p_patch_2d_edges_in_domain_start_index``), which
+      // the binding's ``_struct_member_symbol_sources`` sources, instead of
+      // the inlined dummy's unsourced ``subset_range_call<idx>`` name (gate
+      // #11).  Gated on a dummy scope so only inlined aliases match.
+      if (dc.getDummyScope() && leadsToComponentDesignate(dc.getMemref())) {
+        val = dc.getMemref();
         continue;
       }
       return allocAliasFor(extractName(dc.getUniqName().str()));
