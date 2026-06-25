@@ -101,7 +101,7 @@ end subroutine foo
 apply_external_functions([ExternalFunction("foo", library="libfoo.so")])
 sdfg = build_sdfg(kernel_src, out_dir, name="run", entry="run_mod::run").build()
 # CALL foo(a, n) lowered to an ExternalCall("foo"); the SDFG .so links libfoo.so
-# (rpath) so it resolves at load with no LD_PRELOAD.
+# (rpath) so the symbol resolves at load time directly.
 sdfg(a=a, n=n)
 ```
 
