@@ -1798,13 +1798,17 @@ struct FlattenStructsPass
         }
       }
 
-      // A member is a zero-copy ``c_f_pointer`` alias only when its data is
-      // contiguous.  For a rank-0 struct each member is a single contiguous
-      // block (alias ``c_loc(st%m)``).  For an AoS (the outer is an array),
-      // ``outer(i)%m`` strides by the struct size, so it is contiguous only
-      // when the struct has exactly one member; any multi-member AoS member
-      // is strided and must be deep-copied (allocate + scatter/gather loop).
-      bool memberAliasable = (outerRank == 0) || (rec.getTypeList().size() == 1);
+      // A member is a zero-copy ``c_f_pointer`` alias only for a rank-0 struct,
+      // where ``c_loc(st%m)`` is a single contiguous block whose shape IS the
+      // member's own dims.  For an AoS (the outer is an array) the alias is
+      // invalid even when the struct has ONE member: although ``outer(:)%m`` is
+      // then contiguous in memory, that memory is member-FIRST
+      // (``[m_dims..., outer_dims...]``) while the SoA companion's shape is
+      // member-LAST (``[outer_dims..., m_dims...]``), so a flat reinterpret
+      // would TRANSPOSE the data (``t_cartesian_coordinates%x`` over an AoS of
+      // velocity vectors).  Every AoS member is therefore deep-copied (allocate
+      // + gather loop), which materialises the member-last layout correctly.
+      bool memberAliasable = (outerRank == 0);
       int logicalKind = memberLogicalKind(memTy);
 
       auto recipe = b.getDictionaryAttr({

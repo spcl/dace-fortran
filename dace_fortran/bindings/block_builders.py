@@ -1098,12 +1098,18 @@ def _dim_spec(shape, dummy_set_lower: set = None) -> str:
     ``:``; explicit extents pass through.  An empty shape leaves the
     declaration as a scalar (no suffix).  When ``dummy_set_lower`` is
     given and an explicit extent references a non-dummy (an illegal
-    dummy bound), the whole array collapses to assumed-size ``(*)``.
+    dummy bound), the whole array collapses to assumed-SHAPE ``(:,:,:)``
+    -- which drops the illegal explicit bounds but KEEPS the rank (and
+    carries the actual's bounds, so ``size(dummy, dim=k)`` and a rank-N
+    element reference ``dummy(i,j,k)%m`` both stay valid).  Assumed-size
+    ``(*)`` would collapse to rank 1 and break a deep-copied AoS member
+    (``t_cartesian_coordinates%x`` over an AoS) whose gather loop indexes
+    the dummy by its full rank and sizes it per dim.
     """
     if not shape:
         return ""
     if dummy_set_lower is not None and _shape_references_non_dummy(shape, dummy_set_lower):
-        return "(*)"
+        return "(" + ",".join(":" for _ in shape) + ")"
     return f"({','.join(s if s != '?' else ':' for s in shape)})"
 
 
@@ -1621,7 +1627,14 @@ def _struct_member_symbol_sources(iface: OriginalInterface) -> Dict[str, str]:
             if m.struct_name:
                 nested = iface.struct_types.get(m.struct_name)
                 if nested is not None:
-                    walk(nested, msym, macc)
+                    # An array-of-records member (a pointer/allocatable array of
+                    # a derived type -- ICON ``patch_3d%p_patch_2d(:)``) must be
+                    # INDEXED to reach a single record before descending into
+                    # its scalar members, else ``patch_3d%p_patch_2d%edges%...``
+                    # is a rank-1 reference assigned to a rank-0 symbol.  The
+                    # kernel reads the (single-domain) first element -- the same
+                    # constant record index the access generator prepends.
+                    walk(nested, msym, f"{macc}(1)" if m.rank > 0 else macc)
                 continue
             if m.rank == 0:
                 sources[msym] = macc
