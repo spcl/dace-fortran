@@ -267,3 +267,61 @@ def test_inlined_pointer_aor_array_member_flattens_to_dynamic_soa(tmp_path):
     out = np.zeros(1, dtype=np.float64)
     sdfg(c_e_x=c_e_x, out=out, c_e_x_d0=d0, c_e_x_d1=d1)
     assert abs(out[0] - 169.0) < 1e-12, out[0]
+
+
+# ----------------------------------------------------------------------------
+# Gate #8 (sub-classes A/C): a SCALAR member nested under a POINTER-ARRAY-OF-
+# RECORDS intermediate (and a further nested record), used only SYMBOLICALLY
+# (a ``DO`` loop bound), must register as a caller-bound SDFG free symbol --
+# not surface as an ``unresolved free symbol``.  This is the ICON-O
+# ``patch_3d%p_patch_2d(jb)%edges%in_domain%start_block`` shape: ``p2d`` is
+# ``type(grid), pointer :: p2d(:)`` (a runtime pointer array the flatten pass
+# cannot statically split), so the nested scalar is left as a live designate
+# chain.  ``traceToDecl`` already renders the flat name
+# ``patch_p2d_in_domain_<m>`` at the loop-bound use site, but with no backing
+# VarInfo nothing declares the symbol.  ``extract_vars`` synthesises one
+# ``role=symbol`` VarInfo per such integer member-scalar rooted at a struct
+# dummy.  Contrast ``test_*`` above for the WHOLE-array DATA-member path: this
+# gate is the SCALAR-as-symbol path.  (The direct member ``d%n`` resolves via
+# the flatten companion ``d_n``; this exercises the nested chain the flatten
+# pass leaves intact.)
+# ----------------------------------------------------------------------------
+
+_NESTED_AOR_SCALAR_SYMBOL_SRC = """
+module lib
+  implicit none
+  type subset
+    integer :: start_block
+    integer :: end_block
+  end type subset
+  type grid
+    type(subset) :: in_domain
+  end type grid
+  type patch3d
+    type(grid), pointer :: p2d(:)
+  end type patch3d
+contains
+  subroutine inner(patch, out)
+    type(patch3d), intent(in) :: patch
+    real(8), intent(out) :: out
+    integer :: jb
+    out = 0.0d0
+    do jb = patch % p2d(1) % in_domain % start_block, patch % p2d(1) % in_domain % end_block
+      out = out + 1.0d0
+    end do
+  end subroutine inner
+end module lib
+"""
+
+
+def test_nested_aor_scalar_member_loop_bound_registers_as_symbol(tmp_path):
+    sdfg = build_sdfg(_NESTED_AOR_SCALAR_SYMBOL_SRC, tmp_path / "sdfg", name="inner", entry="lib::inner").build()
+    syms = set(sdfg.symbols)
+    # Both nested-struct scalar bounds resolve as caller-bound free symbols.
+    for m in ("start_block", "end_block"):
+        name = f"patch_p2d_in_domain_{m}"
+        assert name in syms, (f"nested struct-member loop bound {name!r} should register as an SDFG "
+                              f"symbol; symbols={sorted(syms)}")
+    # The struct dummy was NOT statically flattened (pointer-array intermediate),
+    # so no per-member data companion was minted -- the bounds are pure symbols.
+    assert "patch_p2d_in_domain_start_block" not in sdfg.arrays

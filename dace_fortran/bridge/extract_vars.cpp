@@ -3599,6 +3599,170 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
 
     vars.push_back(std::move(v));
   }
+
+  // ---- Synthesise companion VarInfos for NESTED struct MEMBERS (scalar or
+  // array) reached through a POINTER-/ALLOCATABLE-ARRAY-OF-RECORDS intermediate
+  // and/or further nested records, whose flattened ``<root>_<m1>_..._<leaf>``
+  // name has NO backing declare.
+  //
+  // ``hlfir-flatten-structs`` splits a DIRECT struct member (``d%n`` -> declare
+  // ``d_n``; an array member -> a flat array declare) into a companion the
+  // later passes pick up.  But a member reached through a runtime pointer-array
+  // element  --  ICON-O ``patch_3d%p_patch_2d(jb)%edges%in_domain%start_block``
+  // (scalar) or ``patch_3d%p_patch_1d(jb)%dolic_e(je,jk)`` (array)  --  is left
+  // as a live designate chain (the flatten pass can't statically split the
+  // pointer element).  ``traceToDecl`` already renders the flat name at the use
+  // site, so the value / memlet flows, but with no VarInfo nothing declares it
+  // and it surfaces as an ``unresolved free symbol`` at the SDFG.  Mint one
+  // VarInfo per such name:
+  //   * INTEGER scalar leaf -> ``role=symbol`` (a loop bound / index /
+  //     condition, or the RHS of a symbol assignment).  The bindings'
+  //     ``_struct_member_symbol_sources`` sources it from the caller's struct.
+  //   * array leaf -> a deferred-shape ``role=array`` companion the caller
+  //     binds from ``<root>%...%<member>``.
+  //
+  // Gate (kept narrow so the python ``unresolved free symbol`` diagnostic still
+  // catches genuinely-collapsed-to-bare-root chains): the flat name is (1) the
+  // multi-segment name of an actual component-designate chain, (2) rooted at a
+  // struct-typed DUMMY arg (a caller-bindable descriptor -- NOT a local, which
+  // ``splitLocal`` flattens, nor a module global, which the category-3 walk
+  // above already backs), and (3) NOT already backed by a VarInfo.  A member
+  // scalar is used either as a loop bound / index / condition (collected into
+  // ``symbolNames``) OR only as the RHS of a symbol assignment
+  // (``i_startidx = subset%start_index``, never collected) -- both surface the
+  // same flat free symbol downstream, so we don't gate on ``symbolNames``;
+  // integer member scalars are uniformly modelled as symbols (a symbol is legal
+  // in both a tasklet body and a memlet subset).
+  {
+    // Walk a designate's memref back through the reinterpret hops to its root
+    // declare; true iff that root is a struct-typed DUMMY (has a dummy scope).
+    auto rootedAtStructDummy = [](hlfir::DesignateOp dg) -> bool {
+      mlir::Value v = dg.getMemref();
+      for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
+        auto* d = v.getDefiningOp();
+        if (!d) return false;
+        if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(d)) {
+          if (!dc.getDummyScope()) {
+            v = dc.getMemref();
+            continue;
+          }  // inlined alias
+          return mlir::isa<fir::RecordType>(
+              peelTypeLayers(dc.getResult(0).getType()));
+        }
+        if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
+          v = cv.getValue();
+          continue;
+        }
+        if (auto ld = mlir::dyn_cast<fir::LoadOp>(d)) {
+          v = ld.getMemref();
+          continue;
+        }
+        if (auto rb = mlir::dyn_cast<fir::ReboxOp>(d)) {
+          v = rb.getBox();
+          continue;
+        }
+        if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
+          v = ba.getVal();
+          continue;
+        }
+        if (auto co = mlir::dyn_cast<fir::CoordinateOp>(d)) {
+          v = co.getRef();
+          continue;
+        }
+        if (auto inner = mlir::dyn_cast<hlfir::DesignateOp>(d)) {
+          v = inner.getMemref();
+          continue;
+        }
+        return false;
+      }
+      return false;
+    };
+    // Element mlir::Type -> DaCe dtype string, mirroring the main VarInfo
+    // loop's classification (line ~2004) so a synthesised companion keys the
+    // same ``descriptors.DTYPE`` entry as a flattened one.
+    auto dtypeStr = [](mlir::Type t) -> std::string {
+      if (t.isF64()) return "float64";
+      if (t.isF32()) return "float32";
+      if (t.isInteger(8)) return "int8";
+      if (t.isInteger(16)) return "int16";
+      if (t.isInteger(32)) return "int32";
+      if (t.isInteger(64)) return "int64";
+      if (t.isInteger(1) || mlir::isa<fir::LogicalType>(t)) return "bool";
+      if (auto ct = mlir::dyn_cast<mlir::ComplexType>(t)) {
+        if (ct.getElementType().isF32()) return "complex64";
+        if (ct.getElementType().isF64()) return "complex128";
+      }
+      return {};
+    };
+    std::set<std::string> existingNames;
+    for (auto& vv : vars) existingNames.insert(vv.fortran_name);
+    // One representative WHOLE-MEMBER component designate per flat name (the
+    // selector carrying the member's full type), keyed by the flat name.
+    llvm::StringMap<hlfir::DesignateOp> memberDg;
+    module.walk([&](hlfir::DesignateOp dg) {
+      if (!dg.getComponentAttr()) return;  // element / section, not a member
+      std::string flat = traceToDecl(dg.getResult());
+      if (flat.empty() || flat.find('_') == std::string::npos) return;
+      if (!rootedAtStructDummy(dg)) return;
+      // Prefer the WHOLE-MEMBER selector (no own indices) so an array member's
+      // full SequenceType is visible; a scalar member has no indices either.
+      auto it = memberDg.find(flat);
+      if (it == memberDg.end() || dg.getIndices().empty()) memberDg[flat] = dg;
+    });
+    for (auto& kv : memberDg) {
+      std::string s = kv.first().str();
+      if (existingNames.count(s)) continue;
+      mlir::Type peeled = peelTypeLayers(kv.second.getResult().getType());
+      if (auto seq = mlir::dyn_cast<fir::SequenceType>(peeled)) {
+        // (B) Array DATA member nested under a pointer-/alloc-array-of-records
+        // intermediate (``patch%p1d(jb)%dolic(i,j)``): register a
+        // deferred-shape array companion the caller binds from
+        // ``<root>%...%<member>``.  A DIRECT struct array member is split by
+        // the flatten pass into a flat declare; the nested one is left as a
+        // designate chain, so the memlet names ``<flat>`` with no backing
+        // array.
+        std::string dt = dtypeStr(seq.getEleTy());
+        if (dt.empty()) continue;  // unsupported element type
+        VarInfo mv;
+        mv.fortran_name = s;
+        mv.mangled_name = s;
+        mv.dtype = dt;
+        mv.rank = seq.getShape().size();
+        mv.intent = "in";
+        mv.role = "array";
+        for (int didx = 0; didx < mv.rank; ++didx) {
+          int64_t ext = seq.getShape()[didx];
+          if (ext == fir::SequenceType::getUnknownExtent()) {
+            mv.is_dynamic = true;
+            mv.shape_symbols.push_back(s + "_d" + std::to_string(didx));
+          } else {
+            mv.shape_symbols.push_back(std::to_string(ext));
+          }
+          mv.lower_bounds.push_back("1");
+        }
+        vars.push_back(std::move(mv));
+        existingNames.insert(s);
+        continue;
+      }
+      // (A/C) Integer scalar member used symbolically.
+      if (!mlir::isa<mlir::IntegerType>(peeled)) continue;
+      VarInfo mv;
+      mv.fortran_name = s;
+      mv.mangled_name = s;
+      unsigned w = mlir::cast<mlir::IntegerType>(peeled).getWidth();
+      mv.dtype = (w == 64)   ? "int64"
+                 : (w == 16) ? "int16"
+                 : (w == 8)  ? "int8"
+                             : "int32";
+      mv.rank = 0;
+      mv.intent = "in";  // caller-bound free symbol, not an internal transient
+      mv.role = "symbol";
+      symbolNames.insert(s);
+      vars.push_back(std::move(mv));
+      existingNames.insert(s);
+    }
+  }
+
   // De-duplicate the collected value-symbols: the same array-element extent
   // (``__sym_nrdmax_jg``) can size several arrays, but each symbol is seeded
   // and constancy-checked once.
