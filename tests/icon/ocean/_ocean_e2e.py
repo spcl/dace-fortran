@@ -227,7 +227,11 @@ def run_kernel_e2e(tu_path: Path,
     ``{passed, max_diff, n_changed, output}``.  ``passed`` is False (with the
     captured output) on any build / lowering / compile / run failure -- a
     kernel that does not yet lower surfaces here rather than crashing pytest."""
-    out = Path(tempfile.mkdtemp(prefix="ocean_e2e_", dir=str(_HERE.parent.parent.parent / "_session_scratch")))
+    # ``_session_scratch`` is gitignored, so it is absent on a fresh checkout
+    # (CI) -- create it before carving a per-run tempdir out of it.
+    scratch_root = _HERE.parent.parent.parent / "_session_scratch"
+    scratch_root.mkdir(parents=True, exist_ok=True)
+    out = Path(tempfile.mkdtemp(prefix="ocean_e2e_", dir=str(scratch_root)))
     env = dict(os.environ)
     # tests/ (for icon.ocean) + repo root (for dace_fortran) on the child path.
     env["PYTHONPATH"] = os.pathsep.join([str(_HERE.parents[1]), str(_HERE.parents[2]), env.get("PYTHONPATH", "")])

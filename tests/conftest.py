@@ -39,6 +39,19 @@ os.environ.setdefault("HWLOC_COMPONENTS", "-gl")
 os.environ.setdefault("OMPI_MCA_pml", "ob1")
 os.environ.setdefault("OMPI_MCA_btl", "self,vader")
 os.environ.setdefault("UCX_VFS_ENABLE", "n")
+# ``pml=ob1`` + ``btl=self,vader`` steer point-to-point onto shared memory, but
+# two more components still probe hardware at ``MPI_Init`` and block forever on a
+# node without the matching fabric (the symptom: pytest sits at 0% CPU on a
+# socket read while importing a kernel that pulls in mpi4py): the UCX one-sided
+# OSC component, and the OFI/libfabric matching layer (MTL) enumerating network
+# providers.  Pin both off, disable vader's CMA/xpmem single-copy probe (a
+# kernel-module capability check), and steer PMIx onto its in-process ``hash``
+# data store so the shared-memory ``gds`` never blocks.  ``setdefault`` so a
+# real launcher's configuration still wins.
+os.environ.setdefault("OMPI_MCA_osc", "^ucx")
+os.environ.setdefault("OMPI_MCA_mtl", "^ofi")
+os.environ.setdefault("OMPI_MCA_btl_vader_single_copy_mechanism", "none")
+os.environ.setdefault("PMIX_MCA_gds", "hash")
 
 # Raise the stack size to the hard limit (typically ``unlimited`` on Linux)
 # for every test process.  Deeply-nested fully-inlined kernels (cloudsc,
