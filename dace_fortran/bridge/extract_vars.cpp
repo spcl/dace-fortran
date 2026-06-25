@@ -3864,16 +3864,18 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
         std::string dt = dtypeStr(seq.getEleTy());
         if (dt.empty()) continue;  // unsupported element type
         int memberRank = static_cast<int>(seq.getShape().size());
-        // Record dims: ``expandDesignateChain`` PREPENDS the pointer-array
-        // record index (``p_patch_1d(1)`` -> leading flat dim), so the access
-        // is rank ``record_dims + member_rank``.  Recover the structured path
-        // to (a) register the companion at that full rank and (b) drive the
-        // dummy-rooted AoS marshalling so ``_render_aos_copy_in`` binds the
-        // data.  Only ``outer_rank == 1`` (one record-array level) is bound by
-        // the existing single-loop AoS machinery; a scalar-struct-nested member
-        // (``outer_rank == 0``) keeps its own rank, and a multi-record chain
-        // (``>= 2``, no coriolis case) falls back to plain registration (and
-        // surfaces loudly rather than silently mis-shaping).
+        // Record dims: ``expandDesignateChain`` PREPENDS the record-array
+        // index/indices, so the access is rank ``record_dims + member_rank``.
+        // Recover the structured path to (a) register the companion at that
+        // full rank and (b) drive the dummy-rooted AoS marshalling so
+        // ``_render_aos_copy_in`` binds the data.  A SINGLE record segment may
+        // carry ONE index (a pointer-array-of-records indexed once --
+        // ``patch_3d % p_patch_1d(1) % dolic_e``) OR SEVERAL (a multi-dim
+        // cartesian array member -- ``p_diag % p_vn_dual(i,j,k) % x``, gate
+        // #12c); both are bound by the AoS gather over that segment's indices.
+        // A scalar-struct-nested member (no record index) keeps its own rank,
+        // and a multi-SEGMENT chain (``a % b(i) % c(j)``, no ocean case yet)
+        // falls back to plain registration rather than silently mis-shaping.
         MemberChain mc = walkMemberChain(kv.second);
         VarInfo mv;
         mv.fortran_name = s;
@@ -3881,7 +3883,13 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
         mv.dtype = dt;
         mv.intent = "in";
         mv.role = "array";
-        int recDims = (mc.ok && mc.outer_rank == 1) ? 1 : 0;
+        int recSeg = -1, recSegCount = 0;
+        for (int i = 0; i < static_cast<int>(mc.record_dims.size()); ++i)
+          if (mc.record_dims[i] > 0) {
+            ++recSegCount;
+            if (recSeg < 0) recSeg = i;
+          }
+        int recDims = (mc.ok && recSegCount == 1) ? mc.record_dims[recSeg] : 0;
         // Leading record dim(s): runtime extent (= ``size(<record-array>)``),
         // resolved caller-side from the allocated SoA buffer by
         // ``_sym_from_intrinsic``.
@@ -3902,17 +3910,16 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
           mv.lower_bounds.push_back("1");
         }
         mv.rank = static_cast<int>(mv.shape_symbols.size());
-        if (recDims == 1) {
-          // The record-array segment (the one carrying the prepended index):
-          // ``aos_origin_struct`` is the host expression up to and including it
-          // (``patch_3d % p_patch_1d``); ``aos_member_path`` is the rest
-          // (``dolic_e`` / ``edges%vertex_blk``).  ``aos_origin_mod`` stays
-          // EMPTY -- a dummy root needs no ``use`` import (unlike the QE
-          // module-global AoS path).
-          int recIdx = 0;
-          while (recIdx < static_cast<int>(mc.record_dims.size()) &&
-                 mc.record_dims[recIdx] == 0)
-            ++recIdx;
+        if (recDims >= 1) {
+          // The record-array segment (the one carrying the prepended
+          // index/indices): ``aos_origin_struct`` is the host expression up to
+          // and including it (``patch_3d % p_patch_1d`` / ``p_diag %
+          // p_vn_dual``); ``aos_member_path`` is the rest (``dolic_e`` /
+          // ``edges%vertex_blk`` / ``x``).  ``aos_origin_mod`` stays EMPTY -- a
+          // dummy root needs no ``use`` import (unlike the QE module-global AoS
+          // path).  ``aos_outer_rank`` is the segment's index count (1 for a
+          // single-index record array, N for an N-dim cartesian array member).
+          int recIdx = recSeg;
           std::string originStruct = mc.root_dummy;
           for (int i = 0; i <= recIdx; ++i) originStruct += " % " + mc.names[i];
           std::string memberPath;
@@ -3920,7 +3927,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
             memberPath += (memberPath.empty() ? "" : "%") + mc.names[i];
           mv.aos_origin_struct = originStruct;
           mv.aos_member_path = memberPath;
-          mv.aos_outer_rank = 1;
+          mv.aos_outer_rank = recDims;
           mv.aos_struct_pointer = mc.is_pointer[recIdx];
           mv.aos_member_pointer = mc.is_pointer.back();
         }
