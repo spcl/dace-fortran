@@ -1277,6 +1277,30 @@ def _sym_from_intrinsic(sym: str, frozen: FrozenSignature) -> Optional[Tuple[str
     return None
 
 
+def _sym_from_array_extent(sym: str, frozen: FrozenSignature) -> Optional[Tuple[str, int]]:
+    """A free symbol that is a NAMED extent of an array arg -- e.g. ``n_zlev``
+    is the 2nd dim of ``vn(nproma, n_zlev, nblks_e)``.
+
+    Unlike :func:`_sym_from_intrinsic` (which matches only the bridge-minted
+    ``<arr>_d<i>`` extent names), this matches a symbol that carries its own
+    Fortran name and appears verbatim in some array arg's ``shape``.  The array
+    dimension is the GROUND TRUTH for the SDFG's memory layout, so sourcing the
+    symbol from ``size(<arr>, dim=i+1)`` MUST take precedence over a same-named
+    module global: ICON's ``mo_ocean_nml::n_zlev`` is unset (0) in an extracted
+    kernel, and reading it would size SDFG transients (``z_vort_internal(n_zlev)``)
+    to zero -> out-of-bounds writes.  Returns ``(fortran_expr, dim)`` or None.
+    """
+    for a in frozen.args:
+        if a.kind != "array":
+            continue
+        shape = tuple(str(s) for s in (a.shape or ()))
+        if sym in shape:
+            expr = a.from_struct_member or a.fortran_name
+            if expr:
+                return (expr, shape.index(sym) + 1)
+    return None
+
+
 def _module_symbol_alias(sym: str) -> str:
     """Local rename for a module-sourced free symbol's import.
 
@@ -1789,6 +1813,15 @@ def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dumm
         if intr is not None:
             fn, expr, dim = intr
             out.append(f"    {sym} = int({fn}({expr}, dim={dim}), c_int)")
+            continue
+        # A NAMED array extent (``n_zlev`` = ``size(vn, dim=2)``).  Must beat the
+        # module-global fallback below: the SDFG sized its arrays/transients by
+        # this symbol, so it has to equal the actual allocation, not a (possibly
+        # unset) namelist global of the same name.
+        ext = _sym_from_array_extent(sym, frozen)
+        if ext is not None:
+            expr, dim = ext
+            out.append(f"    {sym} = int(size({expr}, dim={dim}), c_int)")
             continue
         # Last resort: a Fortran module global the kernel reads
         # directly (no dummy to query).  Bridge-auto-detected (or
