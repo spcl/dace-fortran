@@ -286,8 +286,25 @@ std::string traceToDecl(mlir::Value val, int max) {
       continue;
     }
     if (auto s = mlir::dyn_cast<mlir::arith::SelectOp>(d)) {
-      val = s.getTrueValue();
-      continue;
+      // Follow the select ONLY for the extent CLAMP idiom -- ``max(x, 0)`` /
+      // ``select(cmp(x, 0), x, 0)`` -- where ONE branch is the constant ZERO
+      // and the OTHER is the real value (Flang clamps a computed extent to be
+      // non-negative this way).  A genuine ``MIN(a, b)`` / ``MAX(a, b)`` --
+      // even against a non-zero constant (``MIN(x, 100)``) -- is NOT an alias
+      // to one branch: following it would silently drop the other operand AND
+      // any subscript (a struct-member array element ``dolic_e(je, jb)`` ->
+      // bare
+      // ``..._dolic_e``).  Leave those for the min/max idiom in
+      // ``buildIndexExpr`` / ``buildExpr`` to render.
+      auto trueC = traceConstInt(s.getTrueValue());
+      auto falseC = traceConstInt(s.getFalseValue());
+      bool trueZero = trueC && *trueC == 0;
+      bool falseZero = falseC && *falseC == 0;
+      if (trueZero != falseZero) {
+        val = trueZero ? s.getFalseValue() : s.getTrueValue();
+        continue;
+      }
+      break;
     }
     break;
   }
