@@ -27,14 +27,14 @@
 #include "flang/Optimizer/Dialect/FIROps.h"
 #include "flang/Optimizer/Dialect/FIRType.h"
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringSet.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/StringSet.h"
 #include "passes/Passes.h"
 
 namespace hlfir_bridge {
@@ -79,8 +79,10 @@ static bool isBoxOfScalarArray(mlir::Type t) {
   auto box = mlir::dyn_cast<fir::BoxType>(t);
   if (!box) return false;
   mlir::Type inner = box.getEleTy();
-  if (auto heap = mlir::dyn_cast<fir::HeapType>(inner)) inner = heap.getEleTy();
-  else if (auto ptr = mlir::dyn_cast<fir::PointerType>(inner)) inner = ptr.getEleTy();
+  if (auto heap = mlir::dyn_cast<fir::HeapType>(inner))
+    inner = heap.getEleTy();
+  else if (auto ptr = mlir::dyn_cast<fir::PointerType>(inner))
+    inner = ptr.getEleTy();
   if (auto seq = mlir::dyn_cast<fir::SequenceType>(inner))
     return isScalarMember(seq.getEleTy());
   return false;
@@ -103,7 +105,7 @@ static bool isRecursiveInlineFlatMember(mlir::Type t) {
   if (isBoxOfScalarArray(t)) return true;
   if (auto rec = mlir::dyn_cast<fir::RecordType>(t)) {
     if (rec.getTypeList().empty()) return false;
-    for (auto &p : rec.getTypeList())
+    for (auto& p : rec.getTypeList())
       if (!isRecursiveInlineFlatMember(p.second)) return false;
     return true;
   }
@@ -114,7 +116,7 @@ static bool isRecursiveInlineFlatMember(mlir::Type t) {
 /// :func:`isRecursiveInlineFlatMember`).
 static bool allRecursiveInlineFlatMembers(fir::RecordType rec) {
   if (rec.getTypeList().empty()) return false;
-  for (auto &p : rec.getTypeList())
+  for (auto& p : rec.getTypeList())
     if (!isRecursiveInlineFlatMember(p.second)) return false;
   return true;
 }
@@ -169,7 +171,7 @@ struct MarshalExternalStructsPass
     // ``emit_call`` then fired even though the struct shape was
     // perfectly marshalable.
     auto matchesRegistered = [&](llvm::StringRef sym) {
-      for (auto &kv : externals) {
+      for (auto& kv : externals) {
         llvm::StringRef n = kv.getKey();
         if (sym == n) return true;
         std::string p1 = ("P" + n).str();
@@ -213,11 +215,10 @@ struct MarshalExternalStructsPass
   /// arg type to the box pointee.  The existing
   /// ``allRecursiveInlineFlatMembers`` check guarantees every leaf is
   /// either inline-flat or box-of-scalar-array.
-  static void enumerateLeaves(
-      fir::RecordType rec, mlir::MLIRContext *ctx,
-      llvm::ArrayRef<mlir::StringAttr> prefix,
-      llvm::SmallVectorImpl<ExpandedLeaf>& leaves) {
-    for (auto &p : rec.getTypeList()) {
+  static void enumerateLeaves(fir::RecordType rec, mlir::MLIRContext* ctx,
+                              llvm::ArrayRef<mlir::StringAttr> prefix,
+                              llvm::SmallVectorImpl<ExpandedLeaf>& leaves) {
+    for (auto& p : rec.getTypeList()) {
       auto name = mlir::StringAttr::get(ctx, p.first);
       if (mlir::isa<fir::RecordType>(p.second) &&
           !isBoxOfScalarArray(p.second)) {
@@ -251,7 +252,7 @@ struct MarshalExternalStructsPass
   /// Rewrite ``fn``'s declaration to take each scalar-struct arg's members
   /// individually, tag the grouping, and expand every call site.
   void marshal(mlir::func::FuncOp fn, mlir::ModuleOp module) {
-    auto *ctx = fn.getContext();
+    auto* ctx = fn.getContext();
 
     // Plan: per original arg, whether it is a scalar struct and the
     // ordered list of *leaf* members (recursive flatten of nested
@@ -268,7 +269,7 @@ struct MarshalExternalStructsPass
         int64_t start = static_cast<int64_t>(newArgTys.size());
         llvm::SmallVector<ExpandedLeaf, 4> leaves;
         enumerateLeaves(rec, ctx, /*prefix=*/{}, leaves);
-        for (auto &leaf : leaves) {
+        for (auto& leaf : leaves) {
           // Per-leaf arg type.  For a box-typed leaf the callee
           // expects the box pointee (the data buffer pointer
           // ``fir.box_addr`` extracts at the call site); for an
@@ -310,9 +311,8 @@ struct MarshalExternalStructsPass
   /// level leaf produces one ``hlfir.designate``; a nested-record leaf
   /// produces one designate per path element, chained through the
   /// intermediate record references.
-  void rewriteCall(
-      fir::CallOp call, llvm::ArrayRef<bool> isStruct,
-      llvm::ArrayRef<llvm::SmallVector<ExpandedLeaf, 4>> members) {
+  void rewriteCall(fir::CallOp call, llvm::ArrayRef<bool> isStruct,
+                   llvm::ArrayRef<llvm::SmallVector<ExpandedLeaf, 4>> members) {
     mlir::OpBuilder b(call);
     auto loc = call.getLoc();
     auto args = call.getArgs();
@@ -326,14 +326,14 @@ struct MarshalExternalStructsPass
         // record, and so on.
         auto baseRec = mlir::cast<fir::RecordType>(
             mlir::cast<fir::ReferenceType>(base.getType()).getEleTy());
-        for (auto &leaf : members[i]) {
+        for (auto& leaf : members[i]) {
           mlir::Value cursor = base;
           fir::RecordType cursorRec = baseRec;
           for (size_t pi = 0; pi < leaf.path.size(); ++pi) {
             mlir::StringAttr comp = leaf.path[pi];
             // Lookup the next type in the cursorRec's member list.
             mlir::Type nextTy;
-            for (auto &p : cursorRec.getTypeList())
+            for (auto& p : cursorRec.getTypeList())
               if (p.first == comp.getValue()) {
                 nextTy = p.second;
                 break;
@@ -372,8 +372,7 @@ struct MarshalExternalStructsPass
                 /*typeparams=*/mlir::ValueRange{},
                 /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
             cursor = dg.getResult();
-            if (!isLast)
-              cursorRec = mlir::cast<fir::RecordType>(nextTy);
+            if (!isLast) cursorRec = mlir::cast<fir::RecordType>(nextTy);
           }
           // Box-typed leaf: at this point ``cursor`` is a ``ref<box<...>>``
           // (the address of the box descriptor stored inside the
@@ -387,7 +386,7 @@ struct MarshalExternalStructsPass
             auto box = mlir::cast<fir::BoxType>(leaf.type);
             auto loaded = b.create<fir::LoadOp>(loc, cursor);
             auto addr = b.create<fir::BoxAddrOp>(loc, box.getEleTy(),
-                                                  loaded.getResult());
+                                                 loaded.getResult());
             cursor = addr.getResult();
           }
           newOperands.push_back(cursor);

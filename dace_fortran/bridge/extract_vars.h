@@ -90,11 +90,12 @@ struct VarInfo {
   std::string module_origin_mod;
   std::string module_origin_name;
   /// Storage class of the module-origin global (``fir.global`` box kind):
-  /// ``module_origin_allocatable`` for ``ALLOCATABLE``, ``module_origin_pointer``
-  /// for ``POINTER``, both false for a static / explicit-shape global.  A copy-in
-  /// binding guards a deferred-storage host with ``allocated`` / ``associated``
-  /// respectively so an unallocated host (a conditionally-used global, absent on
-  /// the kernel's no-op path) is not read; a static global is always present.
+  /// ``module_origin_allocatable`` for ``ALLOCATABLE``,
+  /// ``module_origin_pointer`` for ``POINTER``, both false for a static /
+  /// explicit-shape global.  A copy-in binding guards a deferred-storage host
+  /// with ``allocated`` / ``associated`` respectively so an unallocated host (a
+  /// conditionally-used global, absent on the kernel's no-op path) is not read;
+  /// a static global is always present.
   bool module_origin_allocatable = false;
   bool module_origin_pointer = false;
   /// Fortran 2003 bounds-remapping pointer view metadata, populated when
@@ -148,9 +149,10 @@ struct VarInfo {
   std::string aos_member_path;
   int aos_outer_rank = 0;
   bool global_alloc_inside = false;
-  /// AoS marshalling guards: the enclosing struct global (``aos_struct_pointer``)
-  /// and the component itself (``aos_member_pointer``) may be a Fortran POINTER
-  /// rather than ALLOCATABLE -- the binding must guard with ``associated()`` not
+  /// AoS marshalling guards: the enclosing struct global
+  /// (``aos_struct_pointer``) and the component itself (``aos_member_pointer``)
+  /// may be a Fortran POINTER rather than ALLOCATABLE -- the binding must guard
+  /// with ``associated()`` not
   /// ``allocated()`` (the wrong intrinsic is a hard type error), and the outer
   /// guard lets an UNALLOCATED/UNASSOCIATED global fall back to a degenerate
   /// buffer instead of an undefined ``size()``.
@@ -183,9 +185,9 @@ std::pair<std::string, std::string> decodeModuleGlobalSymbol(
 
 /// An array *element value* used where the SDFG needs a symbol -- a
 /// data-access dimension or bound, e.g. ICON's ``z_raylfac(nrdmax(jg))`` whose
-/// extent is the runtime-indexed element ``nrdmax(jg)``.  Collapsing that to the
-/// bare array name would make ``nrdmax`` both a data descriptor and a symbol
-/// (DaCe rejects it), so the bridge mints a distinct mangled symbol
+/// extent is the runtime-indexed element ``nrdmax(jg)``.  Collapsing that to
+/// the bare array name would make ``nrdmax`` both a data descriptor and a
+/// symbol (DaCe rejects it), so the bridge mints a distinct mangled symbol
 /// ``__sym_<array>_<index>`` and records it here.  The SDFG builder then (a)
 /// seeds the symbol from the element read and (b) asserts the element is
 /// constant in the symbol's scope -- a write after the symbol is frozen would
@@ -205,7 +207,7 @@ struct ValueSymbol {
 /// disables qualification (legacy / standalone callers).
 std::vector<VarInfo> extractVariables(
     mlir::ModuleOp module, std::vector<ValueSymbol>* value_symbols = nullptr,
-    const std::string &entry_symbol = "");
+    const std::string& entry_symbol = "");
 
 /// Prepare per-thread extraction state shared by ``extractVariables``
 /// and ``extractAST``: clears mangling overrides, installs entry F-scope,
@@ -225,7 +227,7 @@ std::vector<VarInfo> extractVariables(
 /// fail fast with an explicit diagnostic instead of producing wrong
 /// numerics.
 void prepareExtractionState(mlir::ModuleOp module,
-                            const std::string &entry_symbol);
+                            const std::string& entry_symbol);
 
 /// One entry-subroutine dummy argument, in the caller's pre-flatten view.
 /// Produced by ``extractFortranInterface`` so the binding emitter can
@@ -235,17 +237,17 @@ void prepareExtractionState(mlir::ModuleOp module,
 /// destroys the struct dummy's AoS view and reorders nothing the caller
 /// would recognise.
 struct FortranArgInfo {
-  std::string name;     // Fortran dummy name (``pts``)
-  std::string dtype;    // element dtype (``complex128`` / ``float64`` / ...)
-                        // empty for a derived-type arg (see ``is_struct``)
-  std::string intent;   // ``in`` / ``out`` / ``inout`` / ``""``
+  std::string name;       // Fortran dummy name (``pts``)
+  std::string dtype;      // element dtype (``complex128`` / ``float64`` / ...)
+                          // empty for a derived-type arg (see ``is_struct``)
+  std::string intent;     // ``in`` / ``out`` / ``inout`` / ``""``
   bool optional = false;  // dummy declared OPTIONAL (Fortran ``present(x)``
                           // companion ``<name>_present`` is a real symbol)
   int rank = 0;
   std::vector<std::string> shape_symbols;  // per-dim extent symbol / literal
-  bool is_struct = false;       // derived-type dummy
-  std::string struct_name;      // ``point`` when ``is_struct``
-  std::string struct_module;    // defining module (``mo_pt``) or ``""``
+  bool is_struct = false;                  // derived-type dummy
+  std::string struct_name;                 // ``point`` when ``is_struct``
+  std::string struct_module;  // defining module (``mo_pt``) or ``""``
 };
 
 /// One field of a Fortran derived type used as an entry dummy.  Populated
@@ -255,9 +257,9 @@ struct FortranArgInfo {
 /// (``build_auto_interface``) so a struct-arg interface can be auto-derived
 /// rather than hand-authored.
 struct FortranMemberInfo {
-  std::string name;     // member name (``a``)
-  std::string dtype;    // scalar element dtype, empty for unsupported (nested
-                        // struct, complex, character)
+  std::string name;   // member name (``a``)
+  std::string dtype;  // scalar element dtype, empty for unsupported (nested
+                      // struct, complex, character)
   int rank = 0;
   std::vector<std::string> shape_symbols;  // static-shape literal ints / "?"
   std::string struct_name;    // for a nested-derived-type member: the
@@ -272,9 +274,9 @@ struct FortranMemberInfo {
 
 /// One derived-type layout the entry's dummies reference.
 struct FortranStructLayout {
-  std::string name;     // ``t_fld``
-  std::string module;   // defining module (``mo_fld``), or ``""`` for a
-                        // host-associated / program-local type
+  std::string name;    // ``t_fld``
+  std::string module;  // defining module (``mo_fld``), or ``""`` for a
+                       // host-associated / program-local type
   std::vector<FortranMemberInfo> members;
 };
 
@@ -331,9 +333,9 @@ std::string allocAliasName(const std::string& fortran, unsigned site);
 /// Every ``fir.allocmem`` whose ``uniq_name`` is ``<declName>.alloc`` (the
 /// ALLOCATE sites of one allocatable), in IR walk order.  When ``idx`` is
 /// given the result comes from that prebuilt index instead of a module walk.
-std::vector<fir::AllocMemOp> collectAllocSites(const std::string& declName,
-                                               mlir::ModuleOp module,
-                                               const AllocSitesIndex* idx = nullptr);
+std::vector<fir::AllocMemOp> collectAllocSites(
+    const std::string& declName, mlir::ModuleOp module,
+    const AllocSitesIndex* idx = nullptr);
 
 /// True iff the ALLOCATE sites are mutually exclusive  --  each in a
 /// different branch of one common ``scf.if`` / ``fir.if`` (a conditional

@@ -83,7 +83,7 @@ inline constexpr int kShapeWalkDepth = 20;
 /// Name of the shape-hint attribute that PropagateShapes attaches to
 /// assumed-shape dummy declares.  Value is an ArrayAttr of StringAttrs,
 /// one per dimension (empty string if that dim disagreed across callers).
-inline constexpr const char *kShapeHintAttr = "hlfir_bridge.shape_hint";
+inline constexpr const char* kShapeHintAttr = "hlfir_bridge.shape_hint";
 
 /// Per-dim lower-bound hint stamped by ``hlfir-flatten-structs`` on a
 /// synthesised flat-companion declare.  A nested array member's
@@ -93,7 +93,7 @@ inline constexpr const char *kShapeHintAttr = "hlfir_bridge.shape_hint";
 /// here so ``resolveLowerBounds`` recovers it instead of defaulting
 /// the companion's dims to 1.  ArrayAttr of StringAttrs, one per
 /// flattened dim (decimal lb, or "1" for the default).
-inline constexpr const char *kLbHintAttr = "hlfir_bridge.lb_hint";
+inline constexpr const char* kLbHintAttr = "hlfir_bridge.lb_hint";
 
 /// Extract the short Fortran name from Flang's mangled unique name.
 ///   "_QFcompute_z_v_grad_wEnproma" -> "nproma"
@@ -104,7 +104,7 @@ inline constexpr const char *kLbHintAttr = "hlfir_bridge.lb_hint";
 /// ``_QFinner_loopsEinp`` both -> ``inp``).  Without the override the
 /// view-alias edge that links the inlined dummy back to the caller's
 /// storage self-loops.
-std::string extractName(const std::string &mangled);
+std::string extractName(const std::string& mangled);
 
 /// Register ``mangled -> shortName`` so subsequent ``extractName`` calls
 /// for that exact mangled name return ``shortName`` instead of the
@@ -112,8 +112,8 @@ std::string extractName(const std::string &mangled);
 /// short-name collisions between a caller declare and an inlined-
 /// callee dummy declare that aliases the caller's storage.  Per
 /// thread.
-void setManglingOverride(const std::string &mangled,
-                         const std::string &shortName);
+void setManglingOverride(const std::string& mangled,
+                         const std::string& shortName);
 
 /// Drop every mangling-override binding.  Called at the start of each
 /// ``extractVariables`` / ``extractAST`` invocation so a previous
@@ -127,7 +127,7 @@ void clearManglingOverrides();
 /// Set once per build, immediately after ``set_entry_symbol``;
 /// cleared together with the override map on each fresh extract.
 /// Per thread.
-void setEntryScope(const std::string &scope);
+void setEntryScope(const std::string& scope);
 
 /// Register the set of short names that COLLIDE across multiple F-scopes
 /// in the current module.  ``extractName`` consults this set to decide
@@ -140,12 +140,12 @@ void setEntryScope(const std::string &scope);
 /// Called by ``extractVariables`` after the upfront short-name walk;
 /// cleared together with the override map on each fresh extract.
 /// Per thread.
-void setShortNameCollisions(const std::set<std::string> &collisions);
+void setShortNameCollisions(const std::set<std::string>& collisions);
 
 /// Extract the F-segment of a Fortran mangled name -- the procedure
 /// scope between the last ``F`` and the last ``E``.  Returns "" for
 /// names without an F segment (module globals, type-info metadata).
-std::string getFScope(const std::string &uniq);
+std::string getFScope(const std::string& uniq);
 
 /// Trace an SSA value backwards to the hlfir.declare / fir.declare that
 /// introduced it.  Peels fir.convert -> fir.load -> arith.select transparently.
@@ -164,12 +164,12 @@ std::string traceToDecl(mlir::Value val, int max = limits::kTraceToDeclMax);
 /// Look up the active alias for a raw allocatable name (the unaliased
 /// Fortran name returned by walking the declare chain).  Returns the
 /// raw name unchanged if no alias is set, the alias otherwise.
-std::string allocAliasFor(const std::string &raw);
+std::string allocAliasFor(const std::string& raw);
 
 /// Bind ``raw`` (the Fortran allocatable's base name) to ``alias`` for
 /// subsequent ``traceToDecl`` calls.  ``alias == raw`` resets the alias.
 /// Per thread.
-void setAllocAlias(const std::string &raw, const std::string &alias);
+void setAllocAlias(const std::string& raw, const std::string& alias);
 
 /// Drop every alloc-alias binding (used at module-walk start so each
 /// extractAST call sees a clean state).
@@ -201,7 +201,7 @@ std::string traceExtentExpr(mlir::Value v);
 /// expression -- without this, the leaves stay as length-1 Array
 /// scalars and the expression string from ``traceExtentExpr``
 /// references undeclared SDFG names.
-void collectExtentExprScalars(mlir::Value v, std::set<std::string> &out);
+void collectExtentExprScalars(mlir::Value v, std::set<std::string>& out);
 
 /// Canonical name of the SDFG symbol standing in for a constant-indexed
 /// element read ``<array>(<i1>, <i2>, ...)``.  This is the single source
@@ -210,8 +210,8 @@ void collectExtentExprScalars(mlir::Value v, std::set<std::string> &out);
 /// ``traceExtentExpr``) and the ``symbol_init`` side agree.  One index per
 /// dimension: ``dims(1)`` -> ``__sym_dims_1``, ``shp(1,2,1)`` ->
 /// ``__sym_shp_1_2_1``.
-std::string posSymbolName(const std::string &array,
-                          const std::vector<int64_t> &one_based_idxs);
+std::string posSymbolName(const std::string& array,
+                          const std::vector<int64_t>& one_based_idxs);
 
 /// If ``v`` is a ``fir.load`` of a ``hlfir.designate`` selecting a single
 /// element at compile-time-constant indices (``arr(7)`` or ``shp(1,2,1)``),
@@ -232,8 +232,8 @@ constIndexedElementLoad(mlir::Value v);
 /// idempotent (the position-symbol registry already dedups).
 void forEachConstIndexedElement(
     mlir::Value v,
-    const std::function<void(const std::string &, const std::vector<int64_t> &)>
-        &fn);
+    const std::function<void(const std::string&, const std::vector<int64_t>&)>&
+        fn);
 
 /// Decoded ``hlfir.declare`` / ``fir.declare`` shape operand.  Per the
 /// FIR/HLFIR op defs it is exactly one of:

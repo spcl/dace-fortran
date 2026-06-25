@@ -61,7 +61,7 @@ struct RejectPolymorphismPass
 
   void runOnOperation() override {
     bool failed = false;
-    getOperation().walk([&](mlir::Operation *op) {
+    getOperation().walk([&](mlir::Operation* op) {
       if (auto d = mlir::dyn_cast<fir::DispatchOp>(op)) {
         d.emitError(
             "hlfir-reject-polymorphism: ``fir.dispatch`` op "

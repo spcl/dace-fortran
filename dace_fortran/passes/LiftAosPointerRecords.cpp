@@ -55,7 +55,6 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
-
 #include "passes/Passes.h"
 
 namespace hlfir_bridge {
@@ -111,7 +110,7 @@ struct Rebind {
 
 static std::optional<int64_t> constInt(mlir::Value v) {
   if (!v) return std::nullopt;
-  auto *def = v.getDefiningOp();
+  auto* def = v.getDefiningOp();
   if (!def) return std::nullopt;
   if (auto cst = mlir::dyn_cast<mlir::arith::ConstantOp>(def))
     if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue()))
@@ -127,7 +126,8 @@ static mlir::Type elemTypeOfPtrMember(fir::BoxType boxTy) {
   auto inner = boxTy.getEleTy();
   if (auto p = mlir::dyn_cast<fir::PointerType>(inner)) inner = p.getEleTy();
   if (auto h = mlir::dyn_cast<fir::HeapType>(inner)) inner = h.getEleTy();
-  if (auto seq = mlir::dyn_cast<fir::SequenceType>(inner)) return seq.getEleTy();
+  if (auto seq = mlir::dyn_cast<fir::SequenceType>(inner))
+    return seq.getEleTy();
   return inner;
 }
 
@@ -234,12 +234,11 @@ static std::optional<Candidate> matchCandidate(hlfir::DeclareOp d) {
   c.seqTy = seqTy;
   c.recordTy = recordTy;
   c.N = N;
-  for (auto &member : recordTy.getTypeList()) {
+  for (auto& member : recordTy.getTypeList()) {
     auto boxTy = mlir::dyn_cast<fir::BoxType>(member.second);
     if (!boxTy) return std::nullopt;
     auto inner = boxTy.getEleTy();
-    if (!mlir::isa<fir::PointerType>(inner) &&
-        !mlir::isa<fir::HeapType>(inner))
+    if (!mlir::isa<fir::PointerType>(inner) && !mlir::isa<fir::HeapType>(inner))
       return std::nullopt;
     c.members.push_back({member.first, boxTy});
   }
@@ -249,7 +248,7 @@ static std::optional<Candidate> matchCandidate(hlfir::DeclareOp d) {
 
 static hlfir::DeclareOp traceTarget(mlir::Value v) {
   for (int hop = 0; hop < 128 && v; ++hop) {
-    auto *def = v.getDefiningOp();
+    auto* def = v.getDefiningOp();
     if (!def) return {};
     if (auto rb = mlir::dyn_cast<fir::ReboxOp>(def)) {
       v = rb.getBox();
@@ -276,7 +275,7 @@ static hlfir::DeclareOp traceTarget(mlir::Value v) {
 }
 
 static std::optional<Rebind> matchRebindStore(fir::StoreOp store,
-                                              const Candidate &cand) {
+                                              const Candidate& cand) {
   auto memberSlot = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
       store.getMemref().getDefiningOp());
   if (!memberSlot) return std::nullopt;
@@ -310,14 +309,10 @@ static std::optional<Rebind> matchRebindStore(fir::StoreOp store,
 /// Create a top-level static-shape concat transient ``q_<member>`` at the
 /// start of ``func``.  Returns the resulting ``hlfir.declare`` (whose
 /// ``result(0)`` is the storage view used by all designates).
-static hlfir::DeclareOp createConcatStorage(mlir::OpBuilder &b,
-                                            mlir::Location loc,
-                                            mlir::func::FuncOp func,
-                                            Candidate &cand,
-                                            const MemberSpec &member,
-                                            const InnerShape &innerShape,
-                                            mlir::Operation *insertAfter,
-                                            int64_t allocId) {
+static hlfir::DeclareOp createConcatStorage(
+    mlir::OpBuilder& b, mlir::Location loc, mlir::func::FuncOp func,
+    Candidate& cand, const MemberSpec& member, const InnerShape& innerShape,
+    mlir::Operation* insertAfter, int64_t allocId) {
   mlir::OpBuilder::InsertionGuard g(b);
   if (insertAfter)
     b.setInsertionPointAfter(insertAfter);
@@ -333,8 +328,8 @@ static hlfir::DeclareOp createConcatStorage(mlir::OpBuilder &b,
   // constant; dynamic dims re-use the captured SSA extent, or fall
   // back to ``fir.box_dims`` on the captured ``boxSource``.
   llvm::SmallVector<mlir::Value, 4> extents;
-  auto outerC =
-      b.create<mlir::arith::ConstantOp>(loc, b.getIndexAttr(cand.N)).getResult();
+  auto outerC = b.create<mlir::arith::ConstantOp>(loc, b.getIndexAttr(cand.N))
+                    .getResult();
   extents.push_back(outerC);
   auto idxTy = b.getIndexType();
   for (size_t d = 0; d < innerShape.shape.size(); ++d) {
@@ -383,11 +378,11 @@ static hlfir::DeclareOp createConcatStorage(mlir::OpBuilder &b,
 ///
 /// ``directionCopyIn = true``  copies ``target(i...)`` into ``concat(c, i...)``
 /// ``directionCopyIn = false`` copies ``concat(c, i...)`` into ``target(i...)``
-static void emitCopyLoop(mlir::OpBuilder &b, mlir::Location loc,
-                         mlir::Operation *insertBefore,
+static void emitCopyLoop(mlir::OpBuilder& b, mlir::Location loc,
+                         mlir::Operation* insertBefore,
                          hlfir::DeclareOp concatDecl, int64_t outerC,
                          hlfir::DeclareOp targetDecl,
-                         const InnerShape &innerShape, bool directionCopyIn) {
+                         const InnerShape& innerShape, bool directionCopyIn) {
   mlir::OpBuilder::InsertionGuard g(b);
   b.setInsertionPoint(insertBefore);
   auto idxTy = b.getIndexType();
@@ -395,15 +390,15 @@ static void emitCopyLoop(mlir::OpBuilder &b, mlir::Location loc,
       b.create<mlir::arith::ConstantOp>(loc, b.getIndexAttr(1)).getResult();
   // Outer index as a 1-based literal (hlfir.designate uses Fortran 1-based
   // subscripts).
-  auto outerVal =
-      b.create<mlir::arith::ConstantOp>(loc, b.getIndexAttr(outerC)).getResult();
+  auto outerVal = b.create<mlir::arith::ConstantOp>(loc, b.getIndexAttr(outerC))
+                      .getResult();
 
   llvm::SmallVector<mlir::Value, 4> ivs;
   for (size_t d = 0; d < innerShape.shape.size(); ++d) {
     mlir::Value hi;
     if (innerShape.shape[d] != fir::SequenceType::getUnknownExtent()) {
-      hi = b.create<mlir::arith::ConstantOp>(loc,
-                                             b.getIndexAttr(innerShape.shape[d]))
+      hi = b.create<mlir::arith::ConstantOp>(
+                loc, b.getIndexAttr(innerShape.shape[d]))
                .getResult();
     } else if (innerShape.extentVals[d]) {
       hi = innerShape.extentVals[d];
@@ -478,8 +473,9 @@ static void emitCopyLoop(mlir::OpBuilder &b, mlir::Location loc,
 /// We replace each ``%dg`` with a fresh designate over the matching
 /// concat declare and let later canonicalisation prune the now-dead
 /// load / box_addr / slot chain.
-static void rewriteAccess(mlir::OpBuilder &b, hlfir::DesignateOp innerDg,
-                          mlir::Value outerIdxVal, hlfir::DeclareOp concatDecl) {
+static void rewriteAccess(mlir::OpBuilder& b, hlfir::DesignateOp innerDg,
+                          mlir::Value outerIdxVal,
+                          hlfir::DeclareOp concatDecl) {
   mlir::OpBuilder::InsertionGuard g(b);
   b.setInsertionPoint(innerDg);
   auto idxTy = b.getIndexType();
@@ -500,20 +496,21 @@ static void rewriteAccess(mlir::OpBuilder &b, hlfir::DesignateOp innerDg,
 /// through ``q(idx)%member`` to a direct designate over the matching
 /// concat declare.  Returns the count of rewritten access chains.
 static unsigned rewriteAllAccesses(
-    mlir::OpBuilder &b, Candidate &cand,
-    const llvm::DenseMap<llvm::StringRef, hlfir::DeclareOp> &concatByMember) {
+    mlir::OpBuilder& b, Candidate& cand,
+    const llvm::DenseMap<llvm::StringRef, hlfir::DeclareOp>& concatByMember) {
   unsigned rewritten = 0;
   // Snapshot users -- replaceAllUsesWith below would invalidate a live
   // user iterator.
   llvm::SmallVector<hlfir::DesignateOp, 8> elemDesignates;
-  for (auto *u : cand.aosDecl.getResult(0).getUsers())
+  for (auto* u : cand.aosDecl.getResult(0).getUsers())
     if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u))
       if (dg.getIndices().size() == 1) elemDesignates.push_back(dg);
   for (auto elemDg : elemDesignates) {
     auto outerIdx = elemDg.getIndices()[0];
     llvm::SmallVector<hlfir::DesignateOp, 4> memberDgs;
-    for (auto *u : elemDg.getResult().getUsers())
-      if (auto md = mlir::dyn_cast<hlfir::DesignateOp>(u)) memberDgs.push_back(md);
+    for (auto* u : elemDg.getResult().getUsers())
+      if (auto md = mlir::dyn_cast<hlfir::DesignateOp>(u))
+        memberDgs.push_back(md);
     for (auto memberDg : memberDgs) {
       auto memberOpt = memberDg.getComponent();
       if (!memberOpt.has_value()) continue;
@@ -524,17 +521,17 @@ static unsigned rewriteAllAccesses(
       // Each box load gives a box value; element designates on that
       // box are the access leaves we rewrite.
       llvm::SmallVector<fir::LoadOp, 4> loads;
-      for (auto *u : memberDg.getResult().getUsers())
+      for (auto* u : memberDg.getResult().getUsers())
         if (auto ld = mlir::dyn_cast<fir::LoadOp>(u)) loads.push_back(ld);
       for (auto load : loads) {
         llvm::SmallVector<hlfir::DesignateOp, 4> innerDgs;
-        for (auto *u : load.getResult().getUsers())
+        for (auto* u : load.getResult().getUsers())
           if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u))
             innerDgs.push_back(dg);
         // box_addr -> element designate chain (some flang paths).
-        for (auto *u : load.getResult().getUsers())
+        for (auto* u : load.getResult().getUsers())
           if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(u))
-            for (auto *uu : ba.getResult().getUsers())
+            for (auto* uu : ba.getResult().getUsers())
               if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(uu))
                 innerDgs.push_back(dg);
         for (auto innerDg : innerDgs) {
@@ -578,11 +575,11 @@ struct LiftAosPointerRecordsPass
       if (auto c = matchCandidate(d)) cands.push_back(*c);
     });
     int allocId = 0;
-    for (auto &c : cands) processCandidate(func, c, allocId);
+    for (auto& c : cands) processCandidate(func, c, allocId);
   }
 
-  void processCandidate(mlir::func::FuncOp func, Candidate &cand,
-                        int &allocId) {
+  void processCandidate(mlir::func::FuncOp func, Candidate& cand,
+                        int& allocId) {
     llvm::SmallVector<Rebind, 8> rebinds;
     func.walk([&](fir::StoreOp store) {
       if (auto r = matchRebindStore(store, cand)) rebinds.push_back(*r);
@@ -594,20 +591,20 @@ struct LiftAosPointerRecordsPass
     // test suite regardless of whether materialisation runs (the
     // materialiser bails when shapes can't fold to static integers).
     {
-      auto *ctx = func.getContext();
+      auto* ctx = func.getContext();
       std::string key =
           ("hlfir.aos_ptr_records." + cand.aosDecl.getUniqName().str());
       llvm::SmallVector<mlir::Attribute, 8> entries;
-      for (auto &r : rebinds) {
+      for (auto& r : rebinds) {
         llvm::SmallVector<mlir::NamedAttribute, 3> kv;
         kv.push_back({mlir::StringAttr::get(ctx, "outer"),
-                      mlir::IntegerAttr::get(
-                          mlir::IntegerType::get(ctx, 64), r.outerIdx)});
+                      mlir::IntegerAttr::get(mlir::IntegerType::get(ctx, 64),
+                                             r.outerIdx)});
         kv.push_back({mlir::StringAttr::get(ctx, "member"),
                       mlir::StringAttr::get(ctx, r.memberName)});
-        kv.push_back({mlir::StringAttr::get(ctx, "target"),
-                      mlir::StringAttr::get(
-                          ctx, r.targetDecl.getUniqName().str())});
+        kv.push_back(
+            {mlir::StringAttr::get(ctx, "target"),
+             mlir::StringAttr::get(ctx, r.targetDecl.getUniqName().str())});
         entries.push_back(mlir::DictionaryAttr::get(ctx, kv));
       }
       func->setAttr(key, mlir::ArrayAttr::get(ctx, entries));
@@ -619,7 +616,7 @@ struct LiftAosPointerRecordsPass
     // unambiguous); we cross-check by comparing the resolved shapes
     // before deciding the materialisation is safe.
     llvm::DenseMap<llvm::StringRef, InnerShape> shapeByMember;
-    for (auto &r : rebinds) {
+    for (auto& r : rebinds) {
       auto memberKey = llvm::StringRef(r.memberName);
       if (shapeByMember.count(memberKey)) continue;
       auto s = innerShapeFromTargetDecl(r.targetDecl);
@@ -627,11 +624,11 @@ struct LiftAosPointerRecordsPass
       shapeByMember.try_emplace(memberKey, *s);
     }
     // Validate cross-rebind shape consistency.
-    for (auto &r : rebinds) {
+    for (auto& r : rebinds) {
       auto memberKey = llvm::StringRef(r.memberName);
       auto resolved = innerShapeFromTargetDecl(r.targetDecl);
       if (!resolved) return;
-      auto &recorded = shapeByMember.find(memberKey)->second;
+      auto& recorded = shapeByMember.find(memberKey)->second;
       if (resolved->shape != recorded.shape) return;
     }
 
@@ -642,31 +639,30 @@ struct LiftAosPointerRecordsPass
     // must be visible (so its uniq_name is in scope for our derived
     // name).  Targets dominated by their hlfir.declare ops feed the
     // concat's per-dim extents.
-    mlir::Operation *insertAfter = cand.aosDecl.getOperation();
+    mlir::Operation* insertAfter = cand.aosDecl.getOperation();
     auto pushDep = [&](mlir::Value v) {
       if (!v) return;
-      auto *def = v.getDefiningOp();
+      auto* def = v.getDefiningOp();
       if (!def) return;
       if (insertAfter->isBeforeInBlock(def)) insertAfter = def;
     };
-    for (auto &kv : shapeByMember) {
+    for (auto& kv : shapeByMember) {
       for (auto v : kv.second.extentVals) pushDep(v);
       pushDep(kv.second.boxSource);
     }
     // Per-rebind: also account for the target declare itself, which is
     // the SSA producer of any box-source the copy loops will read.
-    for (auto &r : rebinds) {
+    for (auto& r : rebinds) {
       pushDep(r.targetDecl.getResult(0));
       pushDep(r.targetDecl.getResult(1));
     }
     llvm::DenseMap<llvm::StringRef, hlfir::DeclareOp> concatByMember;
-    for (auto &spec : cand.members) {
+    for (auto& spec : cand.members) {
       auto memberKey = llvm::StringRef(spec.name);
       auto sIt = shapeByMember.find(memberKey);
       if (sIt == shapeByMember.end()) continue;  // member never rebound
-      auto declare =
-          createConcatStorage(b, func.getLoc(), func, cand, spec, sIt->second,
-                              insertAfter, allocId++);
+      auto declare = createConcatStorage(b, func.getLoc(), func, cand, spec,
+                                         sIt->second, insertAfter, allocId++);
       if (!declare) return;
       concatByMember[memberKey] = declare;
       insertAfter = declare.getOperation();
@@ -674,10 +670,10 @@ struct LiftAosPointerRecordsPass
 
     // Copy-in: at each rebind store's location, emit the loop nest;
     // erase the store so the pointer slot is no longer written.
-    for (auto &r : rebinds) {
+    for (auto& r : rebinds) {
       auto it = concatByMember.find(r.memberName);
       if (it == concatByMember.end()) continue;
-      auto &shape = shapeByMember.find(r.memberName)->second;
+      auto& shape = shapeByMember.find(r.memberName)->second;
       emitCopyLoop(b, r.store.getLoc(), r.store, it->second, r.outerIdx,
                    r.targetDecl, shape, /*directionCopyIn=*/true);
       r.store.erase();
@@ -690,10 +686,10 @@ struct LiftAosPointerRecordsPass
     llvm::SmallVector<mlir::func::ReturnOp, 4> returns;
     func.walk([&](mlir::func::ReturnOp ret) { returns.push_back(ret); });
     for (auto ret : returns) {
-      for (auto &r : rebinds) {
+      for (auto& r : rebinds) {
         auto it = concatByMember.find(r.memberName);
         if (it == concatByMember.end()) continue;
-        auto &shape = shapeByMember.find(r.memberName)->second;
+        auto& shape = shapeByMember.find(r.memberName)->second;
         emitCopyLoop(b, ret.getLoc(), ret, it->second, r.outerIdx, r.targetDecl,
                      shape, /*directionCopyIn=*/false);
       }

@@ -148,6 +148,6 @@ struct ASTNode {
 /// in lockstep so an inlined-callee dummy gets the same name in the
 /// VarInfo list and in the AST node ``target`` / ``expr`` fields.
 std::vector<ASTNode> extractAST(mlir::ModuleOp module,
-                                const std::string &entry_symbol = "");
+                                const std::string& entry_symbol = "");
 
 }  // namespace hlfir_bridge

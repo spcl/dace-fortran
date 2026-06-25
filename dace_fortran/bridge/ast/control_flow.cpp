@@ -43,13 +43,13 @@ namespace hlfir_bridge {
 // be a single 2800-line file.
 std::vector<ASTNode> buildMergeLibcall(hlfir::AssignOp assign,
                                        hlfir::ElementalOp elem) {
-  auto &region = elem.getRegion();
+  auto& region = elem.getRegion();
   if (region.empty()) return {};
-  auto &block = region.front();
+  auto& block = region.front();
 
   // Find the yield_element and confirm its operand is an arith.select.
   mlir::Value yielded;
-  for (auto &op : block)
+  for (auto& op : block)
     if (auto y = mlir::dyn_cast<hlfir::YieldElementOp>(op)) {
       yielded = y.getElementValue();
       break;
@@ -75,17 +75,17 @@ std::vector<ASTNode> buildMergeLibcall(hlfir::AssignOp assign,
   auto traceLoadSource = [](mlir::Value v) -> std::string {
     // Walk through any fir.convert wrappers at the top.
     for (int i = 0; i < 8; ++i) {
-      auto *op = v.getDefiningOp();
+      auto* op = v.getDefiningOp();
       if (!op) return "";
       auto cv = mlir::dyn_cast<fir::ConvertOp>(op);
       if (!cv) break;
       v = cv.getValue();
     }
-    auto *op = v.getDefiningOp();
+    auto* op = v.getDefiningOp();
     if (!op) return "";
     auto ld = mlir::dyn_cast<fir::LoadOp>(op);
     if (!ld) return "";
-    auto *md = ld.getMemref().getDefiningOp();
+    auto* md = ld.getMemref().getDefiningOp();
     if (!md) return "";
     if (mlir::isa<hlfir::DesignateOp>(md) || mlir::isa<hlfir::DeclareOp>(md))
       return traceToDecl(ld.getMemref());
@@ -136,9 +136,9 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign,
 
   // Synthetic iter names for each shape dimension.
   auto shape = elem.getShape();
-  auto &region = elem.getRegion();
+  auto& region = elem.getRegion();
   if (region.empty()) return {};
-  auto &block = region.front();
+  auto& block = region.front();
   unsigned rank = block.getNumArguments();
 
   std::vector<std::string> iter_names;
@@ -236,7 +236,7 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign,
 
   // Walk the body's yield_element to produce the RHS string.
   mlir::Value yielded;
-  for (auto &op : block)
+  for (auto& op : block)
     if (auto y = mlir::dyn_cast<hlfir::YieldElementOp>(op)) {
       yielded = y.getElementValue();
       break;
@@ -257,11 +257,11 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign,
     std::function<void(mlir::Value, int)> findApplies = [&](mlir::Value v,
                                                             int depth) {
       if (depth > 40 || !v) return;
-      auto *op = v.getDefiningOp();
+      auto* op = v.getDefiningOp();
       if (!op) return;
       if (auto apply = mlir::dyn_cast<hlfir::ApplyOp>(op)) {
         auto src = apply.getExpr();
-        if (auto *srcOp = src.getDefiningOp()) {
+        if (auto* srcOp = src.getDefiningOp()) {
           // Inner elemental -> existing path inlines the body.
           // Walk the body's yielded value (where the real applies
           // live) -- ``findApplies(src, ...)`` would just recurse on
@@ -274,9 +274,9 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign,
           // ``kHlfirExprToTransient`` and the inner apply renders as
           // ``?`` in the consuming tasklet body.
           if (auto inner_elem = mlir::dyn_cast<hlfir::ElementalOp>(srcOp)) {
-            auto &iregion = inner_elem.getRegion();
+            auto& iregion = inner_elem.getRegion();
             if (!iregion.empty()) {
-              for (auto &iop : iregion.front()) {
+              for (auto& iop : iregion.front()) {
                 if (auto iy = mlir::dyn_cast<hlfir::YieldElementOp>(iop)) {
                   findApplies(iy.getElementValue(), depth + 1);
                   break;
@@ -286,7 +286,7 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign,
             return;
           }
           // Recognised libcall expr-producer -> materialise.
-          if (const char *callee = libcallNameForExprOp(srcOp)) {
+          if (const char* callee = libcallNameForExprOp(srcOp)) {
             if (!kHlfirExprToTransient.count(srcOp)) {
               std::string tmp = "_libtmp_" + std::to_string(kLibTmpCounter++);
               kHlfirExprToTransient[srcOp] = tmp;
@@ -301,7 +301,7 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign,
               decl.target_is_array = !shape.empty();
               AccessInfo shapeInfo;
               shapeInfo.array_name = tmp;
-              for (auto &s : shape) shapeInfo.index_exprs.push_back(s);
+              for (auto& s : shape) shapeInfo.index_exprs.push_back(s);
               decl.accesses.push_back(std::move(shapeInfo));
               preNodes.push_back(std::move(decl));
 
@@ -323,11 +323,11 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign,
               if (auto cshOp = mlir::dyn_cast<hlfir::CShiftOp>(srcOp)) {
                 auto arrName = traceToDecl(cshOp.getArray());
                 if (arrName.empty())
-                  if (auto *ad = cshOp.getArray().getDefiningOp())
+                  if (auto* ad = cshOp.getArray().getDefiningOp())
                     if (auto ae = mlir::dyn_cast<hlfir::ElementalOp>(ad)) {
                       auto [trName, mat] = materialiseElementalForLibcall(ae);
                       if (!trName.empty()) {
-                        for (auto &mn : mat) preNodes.push_back(std::move(mn));
+                        for (auto& mn : mat) preNodes.push_back(std::move(mn));
                         arrName = std::move(trName);
                       }
                     }
@@ -359,13 +359,13 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign,
                   // declare.  Materialise the elemental
                   // into a synthetic transient and pass
                   // its name as the libcall arg.
-                  if (auto *od = operand.getDefiningOp()) {
+                  if (auto* od = operand.getDefiningOp()) {
                     if (auto inner_elem =
                             mlir::dyn_cast<hlfir::ElementalOp>(od)) {
                       auto [trName, mat_nodes] =
                           materialiseElementalForLibcall(inner_elem);
                       if (!trName.empty()) {
-                        for (auto &mn : mat_nodes)
+                        for (auto& mn : mat_nodes)
                           preNodes.push_back(std::move(mn));
                         n = std::move(trName);
                       }
@@ -394,8 +394,7 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign,
                       if (it != kHlfirExprToTransient.end()) {
                         innerTr = it->second;
                       } else {
-                        innerTr = "_libtmp_" +
-                                  std::to_string(kLibTmpCounter++);
+                        innerTr = "_libtmp_" + std::to_string(kLibTmpCounter++);
                         kHlfirExprToTransient[od] = innerTr;
                         mlir::Type irty = od->getResult(0).getType();
                         auto ishape = exprResultShape(irty);
@@ -407,7 +406,7 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign,
                         idecl.target_is_array = !ishape.empty();
                         AccessInfo ishapeInfo;
                         ishapeInfo.array_name = innerTr;
-                        for (auto &s : ishape)
+                        for (auto& s : ishape)
                           ishapeInfo.index_exprs.push_back(s);
                         idecl.accesses.push_back(std::move(ishapeInfo));
                         preNodes.push_back(std::move(idecl));
@@ -560,7 +559,7 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
   // symbol).  Suppress the wrap for the duration of this walk; the
   // f32-vs-f64 distinction doesn't change comparison outcomes.
   SuppressFloatCastGuard floatCastGuard;
-  auto *def = val.getDefiningOp();
+  auto* def = val.getDefiningOp();
   if (!def) return "?";
   // A reduction op materialised into a scalar by ``materialiseCondReductions``
   // (Reduce lib-node before the branch) renders as the bare scalar -- the
@@ -644,13 +643,13 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
           total *= *ce;
           if (total > 64) return "?";
         }
-        auto &region = elem.getRegion();
+        auto& region = elem.getRegion();
         if (region.empty()) return "?";
-        auto &block = region.front();
+        auto& block = region.front();
         if (block.getNumArguments() != extents.size()) return "?";
         // Find the yield_element op in the body once.
         mlir::Value yielded;
-        for (auto &op : block) {
+        for (auto& op : block) {
           if (auto y = mlir::dyn_cast<hlfir::YieldElementOp>(op)) {
             yielded = y.getElementValue();
             break;
@@ -664,7 +663,10 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
         std::vector<int64_t> cur(extents.size(), 1);
         auto incCur = [&]() -> bool {
           for (int i = static_cast<int>(extents.size()) - 1; i >= 0; --i) {
-            if (cur[i] < extents[i]) { cur[i]++; return true; }
+            if (cur[i] < extents[i]) {
+              cur[i]++;
+              return true;
+            }
             cur[i] = 1;
           }
           return false;
@@ -807,7 +809,7 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
   if (auto ld = mlir::dyn_cast<fir::LoadOp>(def)) {
     mlir::Value mem = ld.getMemref();
     for (int i = 0; i < 128 && mem; ++i) {
-      auto *md = mem.getDefiningOp();
+      auto* md = mem.getDefiningOp();
       if (!md) break;
       if (auto cv = mlir::dyn_cast<fir::ConvertOp>(md)) {
         mem = cv.getValue();
@@ -886,7 +888,8 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
   // elemental-unfold above renders each term via this builder) then emits
   // ``(float64(i) - i_real) ** 2`` with whole-array ``i`` / ``i_real``
   // operands, which C++ codegen rejects as ``int* - double*``.
-  if ((nm == "math.fpowi" || nm == "math.powf" || nm == "math.powi" || nm == "math.ipowi") &&
+  if ((nm == "math.fpowi" || nm == "math.powf" || nm == "math.powi" ||
+       nm == "math.ipowi") &&
       def->getNumOperands() == 2) {
     return "(" + buildExprWithSubscripts(def->getOperand(0), d + 1) + " ** " +
            buildExprWithSubscripts(def->getOperand(1), d + 1) + ")";
@@ -911,7 +914,7 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
 /// condition, or ``"?"`` when the shape isn't understood).
 std::string buildBoolExpr(mlir::Value val, int d) {
   if (d > limits::kBuildExprDepth) return "?";
-  auto *def = val.getDefiningOp();
+  auto* def = val.getDefiningOp();
   if (!def) return "?";
 
   // Synthetic scalars for scf.if results.  The assignments we emit for
@@ -981,7 +984,7 @@ std::string buildBoolExpr(mlir::Value val, int d) {
       if (rhsZero) {
         mlir::Value cur = cmp.getLhs();
         for (int i = 0; i < limits::kConvertChainDepth && cur; ++i) {
-          auto *cd = cur.getDefiningOp();
+          auto* cd = cur.getDefiningOp();
           if (!cd) break;
           if (auto cv = mlir::dyn_cast<fir::ConvertOp>(cd)) {
             cur = cv.getValue();
@@ -990,10 +993,10 @@ std::string buildBoolExpr(mlir::Value val, int d) {
           break;
         }
         if (cur) {
-          if (auto *cd = cur.getDefiningOp()) {
+          if (auto* cd = cur.getDefiningOp()) {
             if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(cd)) {
               auto src = ba.getVal();
-              if (auto *sd = src.getDefiningOp())
+              if (auto* sd = src.getDefiningOp())
                 if (auto ld = mlir::dyn_cast<fir::LoadOp>(sd))
                   src = ld.getMemref();
               auto arrName = traceToDecl(src);
@@ -1018,7 +1021,7 @@ std::string buildBoolExpr(mlir::Value val, int d) {
   // ``xori %x, true`` is Flang's lowering of ``.not. x``.  Otherwise
   // boolean xor  --  Python has no operator, use ``!=``.
   if (nm == "arith.xori" && def->getNumOperands() == 2) {
-    auto *rhsDef = def->getOperand(1).getDefiningOp();
+    auto* rhsDef = def->getOperand(1).getDefiningOp();
     if (auto c = mlir::dyn_cast_or_null<mlir::arith::ConstantOp>(rhsDef))
       if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue()))
         if (ia.getInt() == 1)
@@ -1074,11 +1077,11 @@ std::string scfSynthName(mlir::Value v) {
 }
 
 static bool isScfIfResult(mlir::Value v) {
-  auto *def = v.getDefiningOp();
+  auto* def = v.getDefiningOp();
   return def && mlir::isa<mlir::scf::IfOp>(def);
 }
 
-std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block &block);
+std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block);
 
 /// Helper: convert a yielded value to a string for writing into a synthetic
 /// scalar.  scf.yield of an i32 constant / boolean / computed expression  --

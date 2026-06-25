@@ -71,7 +71,7 @@ struct FoldElementAliasesPass
     getOperation().walk([&](hlfir::DeclareOp decl) {
       if (decl.getShape()) return;  // has shape  --  not an alias
       auto memref = decl.getMemref();
-      auto *mrd = memref.getDefiningOp();
+      auto* mrd = memref.getDefiningOp();
       if (!mrd) return;
       auto designate = mlir::dyn_cast<hlfir::DesignateOp>(mrd);
       if (!designate) return;
@@ -98,7 +98,7 @@ struct FoldElementAliasesPass
       // We only need to confirm a declare exists at the chain
       // root  --  the replacement target stays the element
       // designate ``memref``, regardless of intermediate hops.
-      auto *base = designate.getMemref().getDefiningOp();
+      auto* base = designate.getMemref().getDefiningOp();
       for (int hop = 0; hop < 8 && base; ++hop) {
         if (mlir::isa<hlfir::DeclareOp>(base)) break;
         if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(base)) {

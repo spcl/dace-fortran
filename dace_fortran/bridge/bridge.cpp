@@ -6,22 +6,22 @@
 // via the MLIR pass pipeline parser.  Nothing here walks the IR.
 // ============================================================================
 
-#include <algorithm>
-#include <cctype>
-
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/map.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
+#include <algorithm>
+#include <cctype>
+
 // MLIR core
+#include "llvm/Support/thread.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/OwningOpRef.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Pass/PassRegistry.h"
-#include "llvm/Support/thread.h"
 
 // Flang FIR + HLFIR
 #include "flang/Optimizer/Dialect/FIRDialect.h"
@@ -269,7 +269,7 @@ class HLFIRModule {
   nb::object shallow_alias_report() {
     nb::list out;
     if (!module_) return out;
-    for (const auto &info : computeShallowAliasReport(*module_)) {
+    for (const auto& info : computeShallowAliasReport(*module_)) {
       nb::dict d;
       d["name"] = info.name;
       d["shallow_aliasable"] = info.shallow_aliasable;
@@ -503,8 +503,8 @@ class HLFIRModule {
   /// mangling of it, mirroring ``emit_call``'s callee normalisation.  Returns
   /// the symbol names actually stripped (so the caller can verify its registry
   /// reached the module).
-  std::vector<std::string>
-  externalize_symbols(const std::vector<std::string>& names) {
+  std::vector<std::string> externalize_symbols(
+      const std::vector<std::string>& names) {
     if (!module_)
       throw std::runtime_error("externalize_symbols: no module parsed");
     std::vector<std::string> stripped;
@@ -584,7 +584,8 @@ NB_MODULE(hlfir_bridge, m) {
       .def_ro("bounds_remap_view", &VarInfo::bounds_remap_view)
       .def_ro("bounds_remap_source", &VarInfo::bounds_remap_source)
       .def_ro("bounds_remap_total_extent", &VarInfo::bounds_remap_total_extent)
-      .def_ro("bounds_remap_source_subset", &VarInfo::bounds_remap_source_subset)
+      .def_ro("bounds_remap_source_subset",
+              &VarInfo::bounds_remap_source_subset)
       .def_ro("unbindable_section", &VarInfo::unbindable_section)
       .def_ro("aos_origin_mod", &VarInfo::aos_origin_mod)
       .def_ro("aos_origin_struct", &VarInfo::aos_origin_struct)

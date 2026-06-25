@@ -153,7 +153,7 @@ struct RebindInfo {
 /// Walk a function and collect every distinct ``(parent_decl, member)``
 /// pair where the member is alloc-array-of-records.
 static void discoverLiftTargets(mlir::func::FuncOp func,
-                                llvm::SmallVectorImpl<LiftTarget> &out) {
+                                llvm::SmallVectorImpl<LiftTarget>& out) {
   llvm::StringMap<unsigned> seen;
 
   func.walk([&](hlfir::DesignateOp dg) {
@@ -171,7 +171,7 @@ static void discoverLiftTargets(mlir::func::FuncOp func,
     mlir::Value mr = dg.getMemref();
     hlfir::DeclareOp parentDecl;
     for (int hops = 0; hops < limits::kAliasMemrefWalkDepth && mr; ++hops) {
-      auto *def = mr.getDefiningOp();
+      auto* def = mr.getDefiningOp();
       if (!def) break;
       if (auto d = mlir::dyn_cast<hlfir::DeclareOp>(def)) {
         parentDecl = d;
@@ -234,13 +234,13 @@ static ElemMatch matchElementSelect(mlir::Value v, hlfir::DeclareOp parent,
   // inlined ``stuff`` alias declare between ``designate(elem_idx)``
   // and ``designate{"<inner>"}``).
   for (int hops = 0; hops < limits::kAliasMemrefWalkDepth && v; ++hops) {
-    auto *vd = v.getDefiningOp();
+    auto* vd = v.getDefiningOp();
     if (!vd) return r;
     auto aliasDecl = mlir::dyn_cast<hlfir::DeclareOp>(vd);
     if (!aliasDecl) break;
     v = aliasDecl.getMemref();
   }
-  auto *def = v.getDefiningOp();
+  auto* def = v.getDefiningOp();
   if (!def) return r;
   auto elemDg = mlir::dyn_cast<hlfir::DesignateOp>(def);
   if (!elemDg) return r;
@@ -253,10 +253,10 @@ static ElemMatch matchElementSelect(mlir::Value v, hlfir::DeclareOp parent,
   // The memref must trace back to load(designate %parent{"<member>"}).
   mlir::Value mr = elemDg.getMemref();
   for (int hops = 0; hops < limits::kAliasMemrefWalkDepth && mr; ++hops) {
-    auto *mdef = mr.getDefiningOp();
+    auto* mdef = mr.getDefiningOp();
     if (!mdef) return r;
     if (auto ld = mlir::dyn_cast<fir::LoadOp>(mdef)) {
-      auto *ldef = ld.getMemref().getDefiningOp();
+      auto* ldef = ld.getMemref().getDefiningOp();
       if (auto memberDg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(ldef)) {
         auto comp = memberDg.getComponentAttr();
         if (!comp || comp.str() != memberName.str()) return r;
@@ -286,7 +286,7 @@ static ElemMatch matchElementSelect(mlir::Value v, hlfir::DeclareOp parent,
 /// Match ``hlfir.designate <elem_value>{"<inner_member>"}``.
 /// Returns the inner-member designate op, or null.
 static hlfir::DesignateOp matchInnerMember(mlir::Value v) {
-  auto *def = v.getDefiningOp();
+  auto* def = v.getDefiningOp();
   if (!def) return {};
   auto dg = mlir::dyn_cast<hlfir::DesignateOp>(def);
   if (!dg) return {};
@@ -300,7 +300,7 @@ static hlfir::DesignateOp matchInnerMember(mlir::Value v) {
 ///   * ``fir.rebox %inner_box`` similarly.
 static std::pair<hlfir::DeclareOp, hlfir::DesignateOp> parseEmboxSource(
     mlir::Value emboxVal) {
-  auto *def = emboxVal.getDefiningOp();
+  auto* def = emboxVal.getDefiningOp();
   while (def) {
     if (auto rb = mlir::dyn_cast<fir::ReboxOp>(def)) {
       def = rb.getBox().getDefiningOp();
@@ -316,7 +316,7 @@ static std::pair<hlfir::DeclareOp, hlfir::DesignateOp> parseEmboxSource(
   if (!embox) return {{}, {}};
 
   mlir::Value src = embox.getMemref();
-  auto *srcDef = src.getDefiningOp();
+  auto* srcDef = src.getDefiningOp();
   if (!srcDef) return {{}, {}};
 
   // The embox source may be a designate of a storage declare, or the
@@ -325,7 +325,7 @@ static std::pair<hlfir::DeclareOp, hlfir::DesignateOp> parseEmboxSource(
     // Walk the slice's memref back to the storage declare.
     mlir::Value mr = sliceDg.getMemref();
     for (int hops = 0; hops < limits::kAliasMemrefWalkDepth && mr; ++hops) {
-      auto *mdef = mr.getDefiningOp();
+      auto* mdef = mr.getDefiningOp();
       if (!mdef) break;
       if (auto d = mlir::dyn_cast<hlfir::DeclareOp>(mdef)) return {d, sliceDg};
       if (auto cv = mlir::dyn_cast<fir::ConvertOp>(mdef)) {
@@ -352,7 +352,7 @@ static std::pair<hlfir::DeclareOp, hlfir::DesignateOp> parseEmboxSource(
 /// ``fir.do_loop`` can be recognised as a wildcard rebind.
 static mlir::Value traceToCounterAlloca(mlir::Value v) {
   for (int i = 0; i < limits::kConvertChainDepth && v; ++i) {
-    auto *def = v.getDefiningOp();
+    auto* def = v.getDefiningOp();
     if (!def) return {};
     if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def)) {
       v = cv.getValue();
@@ -368,16 +368,16 @@ static mlir::Value traceToCounterAlloca(mlir::Value v) {
 
 /// True iff ``op`` has a ``fir.do_loop`` ancestor anywhere up the
 /// region tree.
-static fir::DoLoopOp findEnclosingDoLoop(mlir::Operation *op) {
-  for (auto *p = op->getParentOp(); p; p = p->getParentOp())
+static fir::DoLoopOp findEnclosingDoLoop(mlir::Operation* op) {
+  for (auto* p = op->getParentOp(); p; p = p->getParentOp())
     if (auto dl = mlir::dyn_cast<fir::DoLoopOp>(p)) return dl;
   return {};
 }
 
 /// Walk a function and collect every rebind store targeting an
 /// inner-pointer-member of ``target.parent``'s alloc-array-of-records.
-static void collectRebinds(mlir::func::FuncOp func, LiftTarget &target,
-                           llvm::SmallVectorImpl<RebindInfo> &out) {
+static void collectRebinds(mlir::func::FuncOp func, LiftTarget& target,
+                           llvm::SmallVectorImpl<RebindInfo>& out) {
   func.walk([&](fir::StoreOp store) {
     // The dest must be the inner-member designate.
     auto destDg = matchInnerMember(store.getMemref());
@@ -424,24 +424,24 @@ static void collectRebinds(mlir::func::FuncOp func, LiftTarget &target,
 /// Idx matching is structural: same SSA value, OR same constant.
 ///
 /// Returns the first matching rebind, or null on no match.
-static RebindInfo *findRebind(llvm::SmallVectorImpl<RebindInfo> &rebinds,
+static RebindInfo* findRebind(llvm::SmallVectorImpl<RebindInfo>& rebinds,
                               mlir::Value elemIdx,
                               llvm::StringRef innerMemberName) {
   // Try same-value match first.
-  for (auto &r : rebinds) {
+  for (auto& r : rebinds) {
     if (r.innerMemberName != innerMemberName.str()) continue;
     if (r.elemIdx == elemIdx) return &r;
   }
   // Constant-value fallback.
   std::optional<int64_t> needed;
-  if (auto *def = elemIdx.getDefiningOp())
+  if (auto* def = elemIdx.getDefiningOp())
     if (auto cst = mlir::dyn_cast<mlir::arith::ConstantOp>(def))
       if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue()))
         needed = ia.getInt();
   if (needed) {
-    for (auto &r : rebinds) {
+    for (auto& r : rebinds) {
       if (r.innerMemberName != innerMemberName.str()) continue;
-      if (auto *def = r.elemIdx.getDefiningOp())
+      if (auto* def = r.elemIdx.getDefiningOp())
         if (auto cst = mlir::dyn_cast<mlir::arith::ConstantOp>(def))
           if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue()))
             if (ia.getInt() == *needed) return &r;
@@ -455,7 +455,7 @@ static RebindInfo *findRebind(llvm::SmallVectorImpl<RebindInfo> &rebinds,
   // for any element index ``I``.  Match on inner_member name alone
   // and let ``buildLiftedAccess`` substitute the access's elemIdx
   // into the slice's loop-iter-referencing scalar slots.
-  for (auto &r : rebinds) {
+  for (auto& r : rebinds) {
     if (!r.isLoopIter) continue;
     if (r.innerMemberName != innerMemberName.str()) continue;
     return &r;
@@ -489,9 +489,9 @@ static RebindInfo *findRebind(llvm::SmallVectorImpl<RebindInfo> &rebinds,
 /// indices (rebased by ``lo - 1`` if non-1, but for ``(:, :, jg)``
 /// the lower bounds are 1, so no rebase).  Scalar entries pass
 /// through verbatim from the slice.
-static mlir::Value buildLiftedAccess(mlir::OpBuilder &b,
+static mlir::Value buildLiftedAccess(mlir::OpBuilder& b,
                                      hlfir::DesignateOp accessDg,
-                                     RebindInfo &rebind,
+                                     RebindInfo& rebind,
                                      mlir::Value accessElemIdx) {
   auto loc = accessDg.getLoc();
   b.setInsertionPoint(accessDg);
@@ -565,8 +565,8 @@ static mlir::Value buildLiftedAccess(mlir::OpBuilder &b,
 
 /// Walk a function for every access through the lifted chain and
 /// rewrite each one.  Returns true if any rewrite happened.
-static bool rewriteAccesses(mlir::func::FuncOp func, LiftTarget &target,
-                            llvm::SmallVectorImpl<RebindInfo> &rebinds) {
+static bool rewriteAccesses(mlir::func::FuncOp func, LiftTarget& target,
+                            llvm::SmallVectorImpl<RebindInfo>& rebinds) {
   // Pattern to match the access shape:
   //   ``%addr = hlfir.designate %inner_box (<access_indices>)``
   //   where ``%inner_box = fir.load %field_addr``
@@ -578,7 +578,7 @@ static bool rewriteAccesses(mlir::func::FuncOp func, LiftTarget &target,
 
   struct Job {
     hlfir::DesignateOp accessDg;
-    RebindInfo *rebind;
+    RebindInfo* rebind;
     mlir::Value accessElemIdx;
   };
   llvm::SmallVector<Job, 8> jobs;
@@ -589,7 +589,7 @@ static bool rewriteAccesses(mlir::func::FuncOp func, LiftTarget &target,
     if (accessDg.getIndices().empty()) return;
 
     // Walk the memref: must be a load of an inner-member designate.
-    auto *mdef = accessDg.getMemref().getDefiningOp();
+    auto* mdef = accessDg.getMemref().getDefiningOp();
     auto ld = mlir::dyn_cast_or_null<fir::LoadOp>(mdef);
     if (!ld) return;
     auto innerDg = matchInnerMember(ld.getMemref());
@@ -599,7 +599,7 @@ static bool rewriteAccesses(mlir::func::FuncOp func, LiftTarget &target,
     if (!em.elemDg) return;
 
     // Find the matching rebind.
-    RebindInfo *r =
+    RebindInfo* r =
         findRebind(rebinds, em.elemIdx, innerDg.getComponentAttr().str());
     if (!r) return;
 
@@ -607,7 +607,7 @@ static bool rewriteAccesses(mlir::func::FuncOp func, LiftTarget &target,
   });
 
   mlir::DominanceInfo dom(func);
-  for (auto &job : jobs) {
+  for (auto& job : jobs) {
     // The rewrite roots the access at the rebind's backing-storage declare, so
     // that declare must dominate the access.  An access is matched to a rebind
     // by (element index, inner-member name) only; when the same pointer member
@@ -615,7 +615,8 @@ static bool rewriteAccesses(mlir::func::FuncOp func, LiftTarget &target,
     // time level inside a loop), the matched rebind's storage may be defined
     // after -- or off the dominating path of -- this access.  Rewriting anyway
     // would produce ``operand does not dominate this use``; skip it instead and
-    // leave the original pointer-chain access for hlfir-rewrite-pointer-assigns.
+    // leave the original pointer-chain access for
+    // hlfir-rewrite-pointer-assigns.
     if (!dom.dominates(job.rebind->storageDecl.getOperation(),
                        job.accessDg.getOperation()))
       continue;
@@ -666,15 +667,15 @@ struct AliasInfo {
 
 /// Walk a function and find every inlined-callee alias declare whose
 /// memref chain matches the (parent, member) target.
-static void collectAliases(mlir::func::FuncOp func, LiftTarget &target,
-                           llvm::SmallVectorImpl<AliasInfo> &out) {
+static void collectAliases(mlir::func::FuncOp func, LiftTarget& target,
+                           llvm::SmallVectorImpl<AliasInfo>& out) {
   func.walk([&](hlfir::DeclareOp decl) {
     if (decl == target.parent) return;
     // The alias's memref must peel back through rebox / load to
     // an inner-member designate chain.
     mlir::Value mr = decl.getMemref();
     for (int hops = 0; hops < limits::kAliasMemrefWalkDepth && mr; ++hops) {
-      auto *mdef = mr.getDefiningOp();
+      auto* mdef = mr.getDefiningOp();
       if (!mdef) return;
       if (auto rb = mlir::dyn_cast<fir::ReboxOp>(mdef)) {
         mr = rb.getBox();
@@ -706,22 +707,22 @@ static void collectAliases(mlir::func::FuncOp func, LiftTarget &target,
 
 /// Find an alias matching ``(elemIdx, innerMemberName)``, using the
 /// same SSA-value-or-constant matching as ``findRebind``.
-static AliasInfo *findAlias(llvm::SmallVectorImpl<AliasInfo> &aliases,
+static AliasInfo* findAlias(llvm::SmallVectorImpl<AliasInfo>& aliases,
                             mlir::Value elemIdx,
                             llvm::StringRef innerMemberName) {
-  for (auto &a : aliases) {
+  for (auto& a : aliases) {
     if (a.innerMemberName != innerMemberName.str()) continue;
     if (a.elemIdx == elemIdx) return &a;
   }
   std::optional<int64_t> needed;
-  if (auto *def = elemIdx.getDefiningOp())
+  if (auto* def = elemIdx.getDefiningOp())
     if (auto cst = mlir::dyn_cast<mlir::arith::ConstantOp>(def))
       if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue()))
         needed = ia.getInt();
   if (!needed) return nullptr;
-  for (auto &a : aliases) {
+  for (auto& a : aliases) {
     if (a.innerMemberName != innerMemberName.str()) continue;
-    if (auto *def = a.elemIdx.getDefiningOp())
+    if (auto* def = a.elemIdx.getDefiningOp())
       if (auto cst = mlir::dyn_cast<mlir::arith::ConstantOp>(def))
         if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue()))
           if (ia.getInt() == *needed) return &a;
@@ -733,19 +734,19 @@ static AliasInfo *findAlias(llvm::SmallVectorImpl<AliasInfo> &aliases,
 /// shape but use the bare load chain instead of the alias declare.
 /// Rewrite each one to use the alias's result.
 static bool redirectAccessesToAliases(
-    mlir::func::FuncOp func, LiftTarget &target,
-    llvm::SmallVectorImpl<AliasInfo> &aliases) {
+    mlir::func::FuncOp func, LiftTarget& target,
+    llvm::SmallVectorImpl<AliasInfo>& aliases) {
   if (aliases.empty()) return false;
   bool changed = false;
   mlir::OpBuilder b(func.getContext());
 
-  llvm::SmallVector<std::pair<hlfir::DesignateOp, AliasInfo *>, 8> jobs;
+  llvm::SmallVector<std::pair<hlfir::DesignateOp, AliasInfo*>, 8> jobs;
   func.walk([&](hlfir::DesignateOp accessDg) {
     // Element access: no component, has indices.
     if (accessDg.getComponentAttr()) return;
     if (accessDg.getIndices().empty()) return;
     // Memref must be a load of inner-member designate.
-    auto *mdef = accessDg.getMemref().getDefiningOp();
+    auto* mdef = accessDg.getMemref().getDefiningOp();
     auto ld = mlir::dyn_cast_or_null<fir::LoadOp>(mdef);
     if (!ld) return;
     auto innerDg = matchInnerMember(ld.getMemref());
@@ -754,7 +755,7 @@ static bool redirectAccessesToAliases(
                                  target.memberName);
     if (!em.elemDg) return;
     // Find matching alias.
-    AliasInfo *a =
+    AliasInfo* a =
         findAlias(aliases, em.elemIdx, innerDg.getComponentAttr().str());
     if (!a) return;
     // Skip if this access is already rooted at the alias.
@@ -763,7 +764,7 @@ static bool redirectAccessesToAliases(
   });
 
   mlir::DominanceInfo dom(func);
-  for (auto &[accessDg, a] : jobs) {
+  for (auto& [accessDg, a] : jobs) {
     // The alias declare must dominate the access it is rerouted to.  Aliases
     // are matched to accesses by (element index, inner-member name) only, so a
     // per-iteration alias materialised inside a loop can match an access on a
@@ -793,10 +794,10 @@ static bool redirectAccessesToAliases(
 /// elem-select / load chains have no remaining users for the lifted
 /// member.  Erase the rebind stores and the runtime allocate /
 /// deallocate calls so downstream passes don't choke.
-static void cleanup(mlir::func::FuncOp func, LiftTarget &target,
-                    llvm::SmallVectorImpl<RebindInfo> &rebinds) {
+static void cleanup(mlir::func::FuncOp func, LiftTarget& target,
+                    llvm::SmallVectorImpl<RebindInfo>& rebinds) {
   // Erase rebind stores (their dest designates have no users now).
-  for (auto &r : rebinds) {
+  for (auto& r : rebinds) {
     if (r.storeOp) r.storeOp.erase();
   }
 
@@ -815,7 +816,7 @@ static void cleanup(mlir::func::FuncOp func, LiftTarget &target,
     if (call.getNumOperands() == 0) return;
     mlir::Value arg = call.getOperand(0);
     for (int hops = 0; hops < limits::kAliasMemrefWalkDepth && arg; ++hops) {
-      auto *def = arg.getDefiningOp();
+      auto* def = arg.getDefiningOp();
       if (!def) break;
       if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def)) {
         arg = cv.getValue();
@@ -859,7 +860,7 @@ struct LiftAllocArrayOfRecordsPass
     getOperation().walk([&](mlir::func::FuncOp func) {
       llvm::SmallVector<LiftTarget, 4> targets;
       discoverLiftTargets(func, targets);
-      for (auto &t : targets) {
+      for (auto& t : targets) {
         llvm::SmallVector<RebindInfo, 4> rebinds;
         collectRebinds(func, t, rebinds);
         if (!rebinds.empty()) {

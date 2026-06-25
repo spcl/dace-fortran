@@ -78,6 +78,9 @@
 //       in the default list must be added via ``HLFIR_ERROR_HELPERS``.
 // ============================================================================
 
+#include <cstdlib>
+#include <string>
+
 #include "flang/Optimizer/Dialect/FIROps.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -88,9 +91,6 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "passes/Passes.h"
-
-#include <cstdlib>
-#include <string>
 
 #define DEBUG_TYPE "strip-error-helpers"
 
@@ -112,14 +112,14 @@ namespace {
 // environment variable: a comma-separated list of additional lowercase
 // names appended to this default set.
 static const char* const kDefaultErrorHelpers[] = {
-    "errore",            // Quantum ESPRESSO
-    "error",             // generic; many codes
-    "finish",            // ICON
-    "abor1",             // ECMWF IFS
-    "abor1_sfx",         // ECMWF IFS SURFEX
-    "upf_error",         // Quantum ESPRESSO UPF
-    "radiation_abort",   // ECRAD
-    "dwarning",          // ECRAD
+    "errore",           // Quantum ESPRESSO
+    "error",            // generic; many codes
+    "finish",           // ICON
+    "abor1",            // ECMWF IFS
+    "abor1_sfx",        // ECMWF IFS SURFEX
+    "upf_error",        // Quantum ESPRESSO UPF
+    "radiation_abort",  // ECRAD
+    "dwarning",         // ECRAD
     // ---- Diagnostic timing / annotation subroutines.  These are not
     // error abort paths but they're equally orthogonal to the bridge's
     // numerical-equivalence contract: they wrap timing instrumentation
@@ -129,10 +129,10 @@ static const char* const kDefaultErrorHelpers[] = {
     // out of ``hlfir-inline-all``.  Same trailing-``P``-segment
     // demangling as the error helpers, so module-procedure forms
     // (``_QMtiming_modPstart_clock``) match the same entries.
-    "start_clock",       // Quantum ESPRESSO timing
-    "stop_clock",        // Quantum ESPRESSO timing
-    "nvtxstartrange",    // NVIDIA NVTX range marker (QE GPU port)
-    "nvtxendrange",      // NVIDIA NVTX range marker (QE GPU port)
+    "start_clock",     // Quantum ESPRESSO timing
+    "stop_clock",      // Quantum ESPRESSO timing
+    "nvtxstartrange",  // NVIDIA NVTX range marker (QE GPU port)
+    "nvtxendrange",    // NVIDIA NVTX range marker (QE GPU port)
 };
 
 // ---------------------------------------------------------------------------
@@ -149,9 +149,8 @@ static const char* const kDefaultErrorHelpers[] = {
 /// case-insensitive.
 static std::string demangleTail(llvm::StringRef sym) {
   auto last_p = sym.rfind('P');
-  llvm::StringRef tail = last_p == llvm::StringRef::npos
-                            ? sym
-                            : sym.substr(last_p + 1);
+  llvm::StringRef tail =
+      last_p == llvm::StringRef::npos ? sym : sym.substr(last_p + 1);
   // ``_QQ`` / numeric mangled suffixes never carry a tail ``P`` in the
   // function-name segment, so the rfind('P') is safe for the cases we
   // care about.  Lowercase manually (StringRef has no .lower()).
@@ -193,7 +192,9 @@ struct StripErrorHelpersPass
                                mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(StripErrorHelpersPass)
 
-  llvm::StringRef getArgument() const final { return "hlfir-strip-error-helpers"; }
+  llvm::StringRef getArgument() const final {
+    return "hlfir-strip-error-helpers";
+  }
   llvm::StringRef getDescription() const final {
     return "Delete fir.call ops whose callee matches a known abort-style "
            "error helper name (errore, finish, abor1, ...).  Runs before "
@@ -218,8 +219,8 @@ struct StripErrorHelpersPass
       // zero / success value) -- we don't speculate on the return type.
       if (call->getNumResults() != 0) {
         LLVM_DEBUG(llvm::dbgs()
-                   << "StripErrorHelpers: refusing to strip "
-                   << *sym << " -- call has " << call->getNumResults()
+                   << "StripErrorHelpers: refusing to strip " << *sym
+                   << " -- call has " << call->getNumResults()
                    << " result(s); needs explicit rewrite\n");
         return;
       }
@@ -229,9 +230,8 @@ struct StripErrorHelpersPass
 
     for (auto call : toErase) call->erase();
 
-    LLVM_DEBUG(llvm::dbgs()
-               << "StripErrorHelpers: erased " << toErase.size()
-               << " error-helper call site(s)\n");
+    LLVM_DEBUG(llvm::dbgs() << "StripErrorHelpers: erased " << toErase.size()
+                            << " error-helper call site(s)\n");
   }
 };
 

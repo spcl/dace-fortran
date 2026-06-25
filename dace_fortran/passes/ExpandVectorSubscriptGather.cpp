@@ -261,13 +261,13 @@ struct ExpandVectorSubscriptGatherPass
     // Pattern: yield_element of fir.load of hlfir.designate of a
     // declare; the declare's uniq_name is the source array.
     std::string srcName = "expr";
-    if (auto &elemBlock = elem.getRegion().front(); !elemBlock.empty()) {
-      for (auto &op : elemBlock) {
+    if (auto& elemBlock = elem.getRegion().front(); !elemBlock.empty()) {
+      for (auto& op : elemBlock) {
         auto y = mlir::dyn_cast<hlfir::YieldElementOp>(op);
         if (!y) continue;
         auto v = y.getElementValue();
         for (int i = 0; i < 128 && v; ++i) {
-          auto *d = v.getDefiningOp();
+          auto* d = v.getDefiningOp();
           if (!d) break;
           if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
             v = cv.getValue();
@@ -369,7 +369,7 @@ struct ExpandVectorSubscriptGatherPass
     //    rewrite step so the IR re-verifies cleanly.
     assoc.erase();
     // Clean up cleanup ops that became no-ops.
-    getOperation().walk([&](mlir::Operation *op) {
+    getOperation().walk([&](mlir::Operation* op) {
       if (auto endA = mlir::dyn_cast<hlfir::EndAssociateOp>(op)) {
         // After RAUW, end_associate's operand is decl#0  --  not a temp
         // it owns.  Erase it; finalisation is handled by SDFG

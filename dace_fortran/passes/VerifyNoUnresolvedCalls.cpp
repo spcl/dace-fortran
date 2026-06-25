@@ -93,7 +93,7 @@ struct VerifyNoUnresolvedCallsPass
     // Deduplicate while preserving first-seen order so the message
     // isn't noisy when a single missing callee is called many times.
     llvm::StringSet<> seen;
-    for (auto &n : unresolved) {
+    for (auto& n : unresolved) {
       if (seen.insert(n).second) {
         msg += " ";
         msg += n;

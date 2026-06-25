@@ -93,7 +93,9 @@ struct StripCharacterRuntimePass
                                mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(StripCharacterRuntimePass)
 
-  llvm::StringRef getArgument() const final { return "hlfir-strip-character-runtime"; }
+  llvm::StringRef getArgument() const final {
+    return "hlfir-strip-character-runtime";
+  }
   llvm::StringRef getDescription() const final {
     return "Delete fir.call ops to flang's _FortranACharacter* runtime "
            "(string compare / Trim / Adjust / ...) -- the bridge's "
@@ -113,11 +115,11 @@ struct StripCharacterRuntimePass
       mlir::OpBuilder builder(call);
       bool allReplaced = true;
       for (auto res : call.getResults()) {
-        mlir::Value repl = makeReplacement(builder, call.getLoc(), res.getType());
+        mlir::Value repl =
+            makeReplacement(builder, call.getLoc(), res.getType());
         if (!repl) {
-          LLVM_DEBUG(llvm::dbgs()
-                     << "StripCharacterRuntime: refusing to strip " << name
-                     << " -- result type unsupported\n");
+          LLVM_DEBUG(llvm::dbgs() << "StripCharacterRuntime: refusing to strip "
+                                  << name << " -- result type unsupported\n");
           allReplaced = false;
           break;
         }

@@ -45,15 +45,14 @@ namespace hlfir_bridge {
 /// MLIR location, so the diagnostic names what to add a handler for and
 /// where.  Pass ``__func__`` as ``fn`` for ``buildExpr: unhandled HLFIR
 /// op 'hlfir.assoc' at <source.f90:42:5>``.
-[[noreturn]] inline void throwUnhandled(mlir::Operation *op, const char *fn) {
+[[noreturn]] inline void throwUnhandled(mlir::Operation* op, const char* fn) {
   std::string opName = op ? op->getName().getStringRef().str() : "<null>";
   std::string loc;
   if (op) {
     llvm::raw_string_ostream os(loc);
     op->getLoc().print(os);
   }
-  throw std::runtime_error(std::string(fn) +
-                           ": unhandled HLFIR op '" + opName +
+  throw std::runtime_error(std::string(fn) + ": unhandled HLFIR op '" + opName +
                            "' at " + (loc.empty() ? "<unknown loc>" : loc) +
                            ".  Add a handler in the corresponding "
                            "bridge/ast/*.cpp file (search for the helper "
@@ -76,25 +75,26 @@ inline thread_local llvm::DenseMap<mlir::Value, std::string> kScfValueMap;
 /// (Flang lowers some ``DO WHILE`` counters as bare allocas without a
 /// surrounding ``hlfir.declare``).  Names are ``__al_<N>``.
 inline thread_local int kAllocaCounter = 0;
-inline thread_local llvm::DenseMap<mlir::Operation *, std::string> kAllocaMap;
+inline thread_local llvm::DenseMap<mlir::Operation*, std::string> kAllocaMap;
 
 /// Map from a libcall-producing ``hlfir`` op (``hlfir.matmul`` /
 /// ``hlfir.transpose`` / ``hlfir.dot_product``) inlined inside an
 /// ``hlfir.elemental`` body to the synthetic transient name that
 /// ``buildElementalAssign`` materialises ahead of the elemental loop.
 /// ``buildExpr`` consults this map when handling ``hlfir.apply``.
-inline thread_local std::map<mlir::Operation *, std::string>
+inline thread_local std::map<mlir::Operation*, std::string>
     kHlfirExprToTransient;
 
 /// Map from a reduction op (``hlfir.sum`` / ``minval`` / ``maxval`` /
 /// ``product``) appearing in an IF / loop CONDITION to the scalar transient its
 /// result was materialised into -- a Reduce LIBRARY NODE emitted before the
 /// branch (operand elemental(s) materialised to a transient via for-loops
-/// first).  ``buildExpr`` / ``buildExprWithSubscripts`` / ``collectReadAccesses``
-/// consult this so the condition reads the bare scalar (``s > eps``) instead of
-/// inline-unrolling the reduction into the condition expression.  See
+/// first).  ``buildExpr`` / ``buildExprWithSubscripts`` /
+/// ``collectReadAccesses`` consult this so the condition reads the bare scalar
+/// (``s > eps``) instead of inline-unrolling the reduction into the condition
+/// expression.  See
 /// ``materialiseCondReductions`` in dispatch.cpp.
-inline thread_local std::map<mlir::Operation *, std::string>
+inline thread_local std::map<mlir::Operation*, std::string>
     kCondReductionScalars;
 
 /// Position-array registry: ``__sym_<arr>_<i1>_<i2>...`` symbol minted by
@@ -259,15 +259,15 @@ std::string allocaSynthName(mlir::Value memref);
 /// value on an interstate edge at SDFG entry.  The N-D overload handles
 /// a multi-dimensional element (``shp(1,2,1)``); the 1-D overload is the
 /// common ``arr(7)`` case.  See ``expressions.cpp``.
-std::string internPosSymbol(const std::string &array,
-                            const std::vector<int64_t> &one_based_idxs);
-std::string internPosSymbol(const std::string &array, int64_t one_based_idx);
+std::string internPosSymbol(const std::string& array,
+                            const std::vector<int64_t>& one_based_idxs);
+std::string internPosSymbol(const std::string& array, int64_t one_based_idx);
 
 /// Capture the LHS of an ``hlfir.assign`` whose destination is either
 /// a bare ``hlfir.declare`` or an ``hlfir.designate`` selecting one
 /// element of an array.  Writes the resolved name into ``node.target``
 /// and records per-dim ``AccessInfo``.  See ``expressions.cpp``.
-void captureElementDesignateWrite(mlir::Value dest, ASTNode &node);
+void captureElementDesignateWrite(mlir::Value dest, ASTNode& node);
 
 /// Render an ``arith::cmpi`` / ``cmpf`` predicate as a Python
 /// comparison operator.  See ``control_flow.cpp``.
@@ -276,7 +276,7 @@ std::string cmpfPredStr(mlir::arith::CmpFPredicate p);
 
 /// Walk a block of HLFIR ops into a list of ``ASTNode``s -- the
 /// recursive backbone of AST extraction.  See ``elementals.cpp``.
-std::vector<ASTNode> buildAST(mlir::Block &block);
+std::vector<ASTNode> buildAST(mlir::Block& block);
 
 /// Resolve the ``d``-th extent of a ``fir.shape`` / ``fir.shape_shift``
 /// to a name (constant literal, declared symbol, or synthetic).  Empty
@@ -287,13 +287,13 @@ std::string resolveExtent(mlir::Value shape, unsigned d);
 /// read it touches to ``accesses``.  Used by ``buildLibCallNode`` so
 /// the libcall's tasklet picks up every input array.  See
 /// ``elementals.cpp``.
-void collectReadAccesses(mlir::Value v, std::vector<AccessInfo> &accesses,
+void collectReadAccesses(mlir::Value v, std::vector<AccessInfo>& accesses,
                          int depth);
 
 /// Map an ``hlfir.matmul`` / ``hlfir.transpose`` / ``hlfir.dot_product``
 /// op to the libcall name DaCe's runtime exposes.  See
 /// ``elementals.cpp``.
-const char *libcallNameForExprOp(mlir::Operation *op);
+const char* libcallNameForExprOp(mlir::Operation* op);
 
 /// Render the result-type shape of an ``hlfir.expr<...>`` value as
 /// per-dim extent strings.  Empty vector when the type isn't an
@@ -307,7 +307,7 @@ std::string exprDtypeString(mlir::Type ty);
 /// Push / pop ``(blockArg, syntheticName)`` pairs on the elemental
 /// index-substitution stack used by ``resolveIndex``.  See
 /// ``expressions.cpp``.
-std::vector<std::pair<mlir::Value, std::string>> &indexStack();
+std::vector<std::pair<mlir::Value, std::string>>& indexStack();
 
 /// Peel ``fir.ref<...>`` / ``fir.box<...>`` / ``fir.heap<...>`` /
 /// ``fir.ptr<...>`` wrappers off a type.  See ``assigns.cpp``.

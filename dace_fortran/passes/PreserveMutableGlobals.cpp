@@ -224,8 +224,8 @@ struct PreserveMutableGlobalsPass
 
     LLVM_DEBUG(llvm::dbgs()
                << "PreserveMutableGlobals: cleared " << clearedInputs
-               << " INPUT body(ies); kept " << mutableKept
-               << " MUTABLE + " << constantKept << " constant\n");
+               << " INPUT body(ies); kept " << mutableKept << " MUTABLE + "
+               << constantKept << " constant\n");
   }
 };
 

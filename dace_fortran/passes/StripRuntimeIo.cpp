@@ -151,7 +151,8 @@ struct StripRuntimeIoPass
 
   llvm::StringRef getArgument() const final { return "hlfir-strip-runtime-io"; }
   llvm::StringRef getDescription() const final {
-    return "Delete fir.call ops to flang's _FortranAio* I/O runtime that target "
+    return "Delete fir.call ops to flang's _FortranAio* I/O runtime that "
+           "target "
            "stdout / stderr (WRITE * / PRINT / stop_clock diagnostic).  File-"
            "bound IO chains (anything reaching a SetFile call) are preserved "
            "for the AST-extraction-time recognizer.";
@@ -202,11 +203,11 @@ struct StripRuntimeIoPass
         mlir::OpBuilder builder(call);
         bool allReplaced = true;
         for (auto res : call.getResults()) {
-          mlir::Value repl = makeReplacement(builder, call.getLoc(), res.getType());
+          mlir::Value repl =
+              makeReplacement(builder, call.getLoc(), res.getType());
           if (!repl) {
-            LLVM_DEBUG(llvm::dbgs()
-                       << "StripRuntimeIo: refusing to strip " << name
-                       << " -- result type unsupported\n");
+            LLVM_DEBUG(llvm::dbgs() << "StripRuntimeIo: refusing to strip "
+                                    << name << " -- result type unsupported\n");
             allReplaced = false;
             break;
           }
@@ -218,9 +219,8 @@ struct StripRuntimeIoPass
 
     for (auto call : toErase) call->erase();
 
-    LLVM_DEBUG(llvm::dbgs()
-               << "StripRuntimeIo: erased " << toErase.size()
-               << " stdout-bound _FortranAio* call(s)\n");
+    LLVM_DEBUG(llvm::dbgs() << "StripRuntimeIo: erased " << toErase.size()
+                            << " stdout-bound _FortranAio* call(s)\n");
   }
 };
 

@@ -183,8 +183,7 @@ struct UnwrapEvalInMemPass
         if (srcLoad && &innerOp == srcLoad.getOperation()) continue;
         auto* clone = innerOp.clone(mapper);
         parentBlock->getOperations().insert(insertPoint, clone);
-        for (auto pair :
-             llvm::zip(innerOp.getResults(), clone->getResults()))
+        for (auto pair : llvm::zip(innerOp.getResults(), clone->getResults()))
           mapper.map(std::get<0>(pair), std::get<1>(pair));
       }
       // Find the cloned source declare's result (whatever the original
@@ -210,8 +209,7 @@ struct UnwrapEvalInMemPass
       // ``hlfir.apply`` to extract each element.
       llvm::SmallVector<hlfir::ApplyOp, 4> applies;
       for (auto* user : op.getResult().getUsers())
-        if (auto a = mlir::dyn_cast<hlfir::ApplyOp>(user))
-          applies.push_back(a);
+        if (auto a = mlir::dyn_cast<hlfir::ApplyOp>(user)) applies.push_back(a);
       for (auto a : applies) {
         mlir::OpBuilder ab(a);
         auto elemTy = a.getResult().getType();
@@ -326,8 +324,8 @@ struct UnwrapEvalInMemPass
       if (!save) continue;
 
       // The value being saved must be a ``fir.load`` of a declare.
-      auto load = mlir::dyn_cast_or_null<fir::LoadOp>(
-          save.getValue().getDefiningOp());
+      auto load =
+          mlir::dyn_cast_or_null<fir::LoadOp>(save.getValue().getDefiningOp());
       if (!load) continue;
       auto srcDecl = traceToDeclareResult(load.getMemref());
       if (!srcDecl) continue;

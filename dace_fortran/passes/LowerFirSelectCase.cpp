@@ -49,7 +49,7 @@ namespace {
 /// Build the boolean condition for one non-``unit`` case attribute.
 /// Returns nullptr if the tag shape isn't recognised  --  callers should
 /// then leave the original ``fir.select_case`` in place.
-mlir::Value buildCaseCondition(mlir::OpBuilder &b, mlir::Location loc,
+mlir::Value buildCaseCondition(mlir::OpBuilder& b, mlir::Location loc,
                                mlir::Value selector, mlir::Attribute tag,
                                mlir::ValueRange cmpOps) {
   bool isFloat = mlir::isa<mlir::FloatType>(selector.getType());
@@ -107,7 +107,7 @@ mlir::LogicalResult rewriteSelectCase(fir::SelectCaseOp sel) {
 
   // Find the default destination (``unit`` case) and pre-compute the
   // list of non-default case indices.
-  mlir::Block *defaultDest = nullptr;
+  mlir::Block* defaultDest = nullptr;
   llvm::SmallVector<unsigned, 4> nonDefault;
   for (unsigned i = 0; i < cases.size(); ++i) {
     if (mlir::isa<mlir::UnitAttr>(cases[i]))
@@ -122,19 +122,19 @@ mlir::LogicalResult rewriteSelectCase(fir::SelectCaseOp sel) {
   // default (which Flang always emits)  --  bail otherwise.
   if (!defaultDest) return mlir::failure();
 
-  mlir::Block *parentBlock = sel->getBlock();
-  mlir::Region *region = parentBlock->getParent();
+  mlir::Block* parentBlock = sel->getBlock();
+  mlir::Region* region = parentBlock->getParent();
 
   // First non-default case: build the cmp + cond_br BEFORE ``sel``,
   // then erase ``sel``.  Subsequent cases live in fresh blocks chained
   // via cond_br fall-throughs.
   mlir::OpBuilder b(sel);
-  mlir::Block *currentCheck = parentBlock;
+  mlir::Block* currentCheck = parentBlock;
 
   for (unsigned k = 0; k < nonDefault.size(); ++k) {
     unsigned i = nonDefault[k];
     auto tag = cases[i];
-    mlir::Block *succ = sel.getSuccessor(i);
+    mlir::Block* succ = sel.getSuccessor(i);
     auto cmpOps = sel.getCompareOperands(operands, i);
     if (!cmpOps) return mlir::failure();
 
@@ -146,7 +146,7 @@ mlir::LogicalResult rewriteSelectCase(fir::SelectCaseOp sel) {
     if (!cond) return mlir::failure();
 
     bool isLast = (k == nonDefault.size() - 1);
-    mlir::Block *failDest;
+    mlir::Block* failDest;
     if (isLast) {
       failDest = defaultDest;
     } else {

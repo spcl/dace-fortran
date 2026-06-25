@@ -129,7 +129,7 @@ static int traceStaticRank(mlir::Value v) {
       // the dedicated helper rather than checking shape sizes.
       if (!seq.hasUnknownShape()) return seq.getDimension();
     }
-    auto *d = v.getDefiningOp();
+    auto* d = v.getDefiningOp();
     if (!d) break;
     if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
       v = cv.getValue();
@@ -195,7 +195,7 @@ struct FoldAssumedRankQueriesPass
     // loop bound become a literal so the dummy doesn't carry a
     // free shape symbol into the SDFG signature.
     auto dimAsIndex = [](mlir::Value v) -> std::optional<int64_t> {
-      auto *d = v.getDefiningOp();
+      auto* d = v.getDefiningOp();
       if (!d) return std::nullopt;
       auto cst = mlir::dyn_cast<mlir::arith::ConstantOp>(d);
       if (!cst) return std::nullopt;
@@ -204,8 +204,7 @@ struct FoldAssumedRankQueriesPass
       // ``fir.box_dims``'s dim operand is ``index``-typed in the
       // post-canonicalize shape; accept both attribute kinds.
       auto attr = cst.getValue();
-      if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(attr))
-        return ia.getInt();
+      if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(attr)) return ia.getInt();
       return std::nullopt;
     };
     auto extentAt = [](mlir::Value v, int64_t dim) -> std::optional<int64_t> {
@@ -230,7 +229,7 @@ struct FoldAssumedRankQueriesPass
           // keep tracing back through the def chain in case an
           // earlier ancestor carries the concrete extent.
         }
-        auto *def = v.getDefiningOp();
+        auto* def = v.getDefiningOp();
         if (!def) break;
         if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def)) {
           v = cv.getValue();
@@ -266,10 +265,10 @@ struct FoldAssumedRankQueriesPass
       // lower bound; the rank-aware ``hlfir.declare`` re-stamps
       // bounds when needed and that re-stamp is what reaches
       // user code, not this raw query).
-      auto lb = b.create<mlir::arith::ConstantOp>(
-          op.getLoc(), idxTy, b.getIndexAttr(1));
-      auto exC = b.create<mlir::arith::ConstantOp>(
-          op.getLoc(), idxTy, b.getIndexAttr(*ext));
+      auto lb = b.create<mlir::arith::ConstantOp>(op.getLoc(), idxTy,
+                                                  b.getIndexAttr(1));
+      auto exC = b.create<mlir::arith::ConstantOp>(op.getLoc(), idxTy,
+                                                   b.getIndexAttr(*ext));
       op.getLowerBound().replaceAllUsesWith(lb.getResult());
       op.getExtent().replaceAllUsesWith(exC.getResult());
       // Leave byte-stride to canonicalize -- replace only the two
@@ -293,8 +292,8 @@ struct FoldAssumedRankQueriesPass
       if (rank < 0) continue;
       b.setInsertionPoint(op);
       auto resTy = op.getResult().getType();
-      auto cst = b.create<mlir::arith::ConstantOp>(
-          op.getLoc(), resTy, b.getIntegerAttr(resTy, 0));
+      auto cst = b.create<mlir::arith::ConstantOp>(op.getLoc(), resTy,
+                                                   b.getIntegerAttr(resTy, 0));
       op.getResult().replaceAllUsesWith(cst.getResult());
       op.erase();
     }

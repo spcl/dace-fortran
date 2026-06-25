@@ -35,6 +35,8 @@
 // body; any remaining dead callees are removed with --symbol-dce.
 // ============================================================================
 
+#include <cstdlib>
+
 #include "flang/Optimizer/Dialect/FIROps.h"
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
 #include "llvm/ADT/SmallVector.h"
@@ -46,8 +48,6 @@
 #include "mlir/Interfaces/CallInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/InliningUtils.h"
-
-#include <cstdlib>
 #include "passes/Passes.h"
 
 #define DEBUG_TYPE "inline-all"
@@ -69,18 +69,18 @@ namespace {
 struct AggressiveInlinerInterface : public mlir::InlinerInterface {
   using mlir::InlinerInterface::InlinerInterface;
 
-  bool isLegalToInline(mlir::Operation *call, mlir::Operation *callable,
+  bool isLegalToInline(mlir::Operation* call, mlir::Operation* callable,
                        bool wouldBeCloned) const final {
     return true;
   }
-  bool isLegalToInline(mlir::Region *dest, mlir::Region *src,
+  bool isLegalToInline(mlir::Region* dest, mlir::Region* src,
                        bool wouldBeCloned,
-                       mlir::IRMapping &valueMapping) const final {
+                       mlir::IRMapping& valueMapping) const final {
     return true;
   }
-  bool isLegalToInline(mlir::Operation *op, mlir::Region *dest,
+  bool isLegalToInline(mlir::Operation* op, mlir::Region* dest,
                        bool wouldBeCloned,
-                       mlir::IRMapping &valueMapping) const final {
+                       mlir::IRMapping& valueMapping) const final {
     return true;
   }
 
@@ -121,7 +121,7 @@ struct InlineAllPass
   /// When ``rootsOnly`` is set, only calls whose enclosing function is a
   /// public root are inlined; calls inside private helpers are left for a
   /// later round, after the helper is inlined into a root.
-  unsigned sweep(mlir::ModuleOp module, mlir::SymbolTable &symTab,
+  unsigned sweep(mlir::ModuleOp module, mlir::SymbolTable& symTab,
                  bool rootsOnly) {
     unsigned inlined = 0;
     AggressiveInlinerInterface interface(module.getContext());
@@ -161,9 +161,8 @@ struct InlineAllPass
       // module.
       if (callee.getBody().getBlocks().size() > 1) {
         if (std::getenv("HLFIR_INLINE_TRACE")) {
-          llvm::errs() << "InlineAll: SKIP multi-block "
-                       << callee.getSymName() << " ("
-                       << callee.getBody().getBlocks().size()
+          llvm::errs() << "InlineAll: SKIP multi-block " << callee.getSymName()
+                       << " (" << callee.getBody().getBlocks().size()
                        << " blocks)\n";
           llvm::errs().flush();
         }
@@ -199,9 +198,9 @@ struct InlineAllPass
       // Inserting at ``inlineBlock`` instead demotes the caller's
       // original entry block and drops its block-argument list,
       // which then trips func.func's signature verifier.
-      auto cloneCallback = [](mlir::OpBuilder &builder, mlir::Region *src,
-                              mlir::Block *inlineBlock, mlir::Block *postBlock,
-                              mlir::IRMapping &mapper, bool shouldClone) {
+      auto cloneCallback = [](mlir::OpBuilder& builder, mlir::Region* src,
+                              mlir::Block* inlineBlock, mlir::Block* postBlock,
+                              mlir::IRMapping& mapper, bool shouldClone) {
         if (shouldClone) {
           src->cloneInto(inlineBlock->getParent(), postBlock->getIterator(),
                          mapper);
@@ -232,7 +231,7 @@ struct InlineAllPass
   /// a helper body is freed as soon as its last caller has absorbed it rather
   /// than lingering until the end of the pipeline.  Returns the number erased.
   unsigned pruneDeadPrivateFuncs(mlir::ModuleOp module,
-                                 mlir::SymbolTable &symTab) {
+                                 mlir::SymbolTable& symTab) {
     mlir::SymbolTableCollection collection;
     mlir::SymbolUserMap users(collection, module);
     llvm::SmallVector<mlir::func::FuncOp, 64> dead;
@@ -251,7 +250,10 @@ struct InlineAllPass
     // ordinary entry-less module behaves as before.
     bool rootsOnly = false;
     for (auto f : module.getOps<mlir::func::FuncOp>())
-      if (!f.isPrivate()) { rootsOnly = true; break; }
+      if (!f.isPrivate()) {
+        rootsOnly = true;
+        break;
+      }
 
     // Fixed-point iteration.  Each round inlines one level of calls into the
     // roots and frees the helpers it just absorbed; repeat until no more

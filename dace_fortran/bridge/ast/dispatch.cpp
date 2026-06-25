@@ -95,8 +95,9 @@ static ASTNode buildScfIfAsConditional(mlir::scf::IfOp ifOp) {
 // ``traceConstInt`` / ``buildIndexExpr`` come in via ``ast_helpers.h``.
 static std::string traceLoopIter(fir::DoLoopOp loop);
 // Materialise SUM/MINVAL/MAXVAL/PRODUCT reduction sub-terms of a condition into
-// Reduce lib-nodes before the branch (definition further down); forward-declared
-// for the scf.while break-condition walker above its definition.
+// Reduce lib-nodes before the branch (definition further down);
+// forward-declared for the scf.while break-condition walker above its
+// definition.
 static void materialiseCondReductions(mlir::Value condVal,
                                       std::vector<ASTNode>& nodes);
 // 0-based per-dim DaCe subset strings for a section designate (defined in
@@ -378,17 +379,20 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
         n.loop_bound = std::to_string(*c);
       } else {
         auto sym = traceToDecl(doLoop.getUpperBound());
-        if (!sym.empty()) n.loop_bound = sym;
-        else n.loop_bound = buildIndexExpr(doLoop.getUpperBound(), 0);
+        if (!sym.empty())
+          n.loop_bound = sym;
+        else
+          n.loop_bound = buildIndexExpr(doLoop.getUpperBound(), 0);
       }
       n.loop_lower = traceLB(doLoop.getLowerBound());
       if (n.loop_lower < 0) {
         auto sym = traceToDecl(doLoop.getLowerBound());
-        if (!sym.empty()) n.loop_lower_expr = sym;
-        else n.loop_lower_expr = buildIndexExpr(doLoop.getLowerBound(), 0);
+        if (!sym.empty())
+          n.loop_lower_expr = sym;
+        else
+          n.loop_lower_expr = buildIndexExpr(doLoop.getLowerBound(), 0);
       }
-      if (auto stepC = traceConstInt(doLoop.getStep()))
-        n.loop_step = *stepC;
+      if (auto stepC = traceConstInt(doLoop.getStep())) n.loop_step = *stepC;
       static thread_local int kSCFDoLoopIterCounter = 0;
       bool pushedBlockArg = false;
       auto& loopBlock = doLoop.getRegion().front();
@@ -545,16 +549,44 @@ static std::string blasCalleeTag(const std::string& callee) {
   std::string low = normaliseBlasName(callee);
   static const std::set<std::string> recognised = {
       // L1
-      "daxpy", "saxpy", "dscal", "sscal", "ddot", "sdot",
-      "dnrm2", "snrm2", "dasum", "sasum", "idamax", "isamax",
-      "dcopy", "scopy", "dswap", "sswap",
+      "daxpy",
+      "saxpy",
+      "dscal",
+      "sscal",
+      "ddot",
+      "sdot",
+      "dnrm2",
+      "snrm2",
+      "dasum",
+      "sasum",
+      "idamax",
+      "isamax",
+      "dcopy",
+      "scopy",
+      "dswap",
+      "sswap",
       // L2
-      "dgemv", "sgemv", "dger", "sger",
-      "dtrsv", "strsv", "dtrmv", "strmv", "dsymv", "ssymv",
+      "dgemv",
+      "sgemv",
+      "dger",
+      "sger",
+      "dtrsv",
+      "strsv",
+      "dtrmv",
+      "strmv",
+      "dsymv",
+      "ssymv",
       // L3
-      "dgemm", "sgemm",
-      "dtrsm", "strsm", "dtrmm", "strmm",
-      "dsymm", "ssymm", "dsyrk", "ssyrk",
+      "dgemm",
+      "sgemm",
+      "dtrsm",
+      "strsm",
+      "dtrmm",
+      "strmm",
+      "dsymm",
+      "ssymm",
+      "dsyrk",
+      "ssyrk",
   };
   if (recognised.count(low)) return low;
   return std::string{};
@@ -565,9 +597,8 @@ static std::string blasCalleeTag(const std::string& callee) {
 static std::string lapackCalleeTag(const std::string& callee) {
   std::string low = normaliseBlasName(callee);
   static const std::set<std::string> recognised = {
-      "dgetrf", "sgetrf", "dpotrf", "spotrf",
-      "dpotrs", "spotrs",
-      "dgeqrf", "sgeqrf", "dorgqr", "sorgqr",
+      "dgetrf", "sgetrf", "dpotrf", "spotrf", "dpotrs",
+      "spotrs", "dgeqrf", "sgeqrf", "dorgqr", "sorgqr",
   };
   if (recognised.count(low)) return low;
   return std::string{};
@@ -586,21 +617,66 @@ static std::string lapackCalleeTag(const std::string& callee) {
 static const std::set<std::string>& knownBlasNames() {
   static const std::set<std::string> names = {
       // Real BLAS routines we *would* recognise once their handlers ship.
-      "drotg", "srotg", "drot", "srot", "drotmg", "srotmg", "drotm", "srotm",
-      "dnrm2", "snrm2", "scnrm2", "dznrm2",
-      "dasum", "sasum", "scasum", "dzasum",
-      "idamax", "isamax", "icamax", "izamax",
-      "dswap", "sswap", "dcopy", "scopy",
+      "drotg",
+      "srotg",
+      "drot",
+      "srot",
+      "drotmg",
+      "srotmg",
+      "drotm",
+      "srotm",
+      "dnrm2",
+      "snrm2",
+      "scnrm2",
+      "dznrm2",
+      "dasum",
+      "sasum",
+      "scasum",
+      "dzasum",
+      "idamax",
+      "isamax",
+      "icamax",
+      "izamax",
+      "dswap",
+      "sswap",
+      "dcopy",
+      "scopy",
       "dsdot",
       // Already recognised in ``blasCalleeTag`` -- listed so the detector
       // recognises THEM as BLAS and routes through the normal path.
-      "daxpy", "saxpy", "dscal", "sscal", "ddot", "sdot",
-      "dgemv", "sgemv", "dgemm", "sgemm",
+      "daxpy",
+      "saxpy",
+      "dscal",
+      "sscal",
+      "ddot",
+      "sdot",
+      "dgemv",
+      "sgemv",
+      "dgemm",
+      "sgemm",
       // BLAS L2 / L3 routines whose handlers are pending:
-      "dger", "sger", "dsymv", "ssymv", "dsbmv", "ssbmv",
-      "dtrmv", "strmv", "dtrsv", "strsv", "dgbmv", "sgbmv",
-      "dsymm", "ssymm", "dsyrk", "ssyrk", "dsyr2k", "ssyr2k",
-      "dtrmm", "strmm", "dtrsm", "strsm",
+      "dger",
+      "sger",
+      "dsymv",
+      "ssymv",
+      "dsbmv",
+      "ssbmv",
+      "dtrmv",
+      "strmv",
+      "dtrsv",
+      "strsv",
+      "dgbmv",
+      "sgbmv",
+      "dsymm",
+      "ssymm",
+      "dsyrk",
+      "ssyrk",
+      "dsyr2k",
+      "ssyr2k",
+      "dtrmm",
+      "strmm",
+      "dtrsm",
+      "strsm",
   };
   return names;
 }
@@ -608,11 +684,9 @@ static const std::set<std::string>& knownBlasNames() {
 static const std::set<std::string>& knownLapackNames() {
   static const std::set<std::string> names = {
       "dgetrf", "sgetrf", "dgetri", "sgetri", "dgetrs", "sgetrs",
-      "dgesv", "sgesv",
-      "dpotrf", "spotrf", "dpotrs", "spotrs", "dpotri", "spotri",
-      "dposv", "sposv",
-      "dsyev", "ssyev", "dsyevd", "ssyevd",
-      "dgeev", "sgeev", "dgesvd", "sgesvd",
+      "dgesv",  "sgesv",  "dpotrf", "spotrf", "dpotrs", "spotrs",
+      "dpotri", "spotri", "dposv",  "sposv",  "dsyev",  "ssyev",
+      "dsyevd", "ssyevd", "dgeev",  "sgeev",  "dgesvd", "sgesvd",
       "dgeqrf", "sgeqrf", "dorgqr", "sorgqr", "dormqr", "sormqr",
   };
   return names;
@@ -654,7 +728,8 @@ static std::string qeFftCalleeTag(const std::string& callee) {
   if (p != std::string::npos && low.rfind("_qm", 0) == 0)
     low = low.substr(p + 1);
   if (low == "fwfft" || low == "fwfft_y" || low == "fwfft_b") return "forward";
-  if (low == "invfft" || low == "invfft_y" || low == "invfft_b") return "backward";
+  if (low == "invfft" || low == "invfft_y" || low == "invfft_b")
+    return "backward";
   return std::string{};
 }
 
@@ -710,7 +785,8 @@ static std::string qePencilCalleeTag(const std::string& callee) {
 /// ``c`` (arg 0) as the input buffer and ``cout`` (arg 5) as the
 /// output; the ``isign`` runtime sign is read literally when
 /// available (and otherwise defaults to ``forward``).
-static ASTNode buildQePencilCallNode(fir::CallOp call, const std::string& axisTag) {
+static ASTNode buildQePencilCallNode(fir::CallOp call,
+                                     const std::string& axisTag) {
   ASTNode n;
   auto args = call.getArgOperands();
   if (args.size() < 6) return n;
@@ -734,8 +810,8 @@ static ASTNode buildQePencilCallNode(fir::CallOp call, const std::string& axisTa
   return n;
 }
 
-/// Returns ``"xy"`` or ``"yz"`` for QE's ``fft_scatter_xy`` / ``fft_scatter_yz``
-/// alltoall transposes, else empty.
+/// Returns ``"xy"`` or ``"yz"`` for QE's ``fft_scatter_xy`` /
+/// ``fft_scatter_yz`` alltoall transposes, else empty.
 static std::string qeScatterCalleeTag(const std::string& callee) {
   std::string low = normaliseBlasName(callee);
   auto p = low.find('p');
@@ -752,7 +828,8 @@ static std::string qeScatterCalleeTag(const std::string& callee) {
 /// builder already lowers to :class:`Alltoall`; ``desc`` is the
 /// descriptor (ignored at recognition), ``f_in`` (arg 1) is the send
 /// buffer, ``f_aux`` (arg 2) is the receive buffer.
-static ASTNode buildQeScatterCallNode(fir::CallOp call, const std::string& plane) {
+static ASTNode buildQeScatterCallNode(fir::CallOp call,
+                                      const std::string& plane) {
   ASTNode n;
   auto args = call.getArgOperands();
   if (args.size() < 5) return n;
@@ -773,7 +850,8 @@ static ASTNode buildQeScatterCallNode(fir::CallOp call, const std::string& plane
 /// Build an ``fftcall`` ASTNode for a recognised QE FFT call.  The buffer
 /// is the 2nd argument (after the ``fft_kind`` literal).  We do not look
 /// at the descriptor or ``howmany`` for the recognition first cut.
-static ASTNode buildQeFftCallNode(fir::CallOp call, const std::string& direction) {
+static ASTNode buildQeFftCallNode(fir::CallOp call,
+                                  const std::string& direction) {
   ASTNode n;
   auto args = call.getArgOperands();
   if (args.size() < 2) return n;
@@ -823,13 +901,14 @@ static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
   n.callee = routine;
   auto args = call.getArgOperands();
 
-  auto push = [&](mlir::Value v) {
-    n.call_args.push_back(resolveCallArg(v));
-  };
+  auto push = [&](mlir::Value v) { n.call_args.push_back(resolveCallArg(v)); };
 
   if (routine == "daxpy" || routine == "saxpy") {
     // axpy(n, alpha, x, incx, y, incy) -- in-place y := alpha*x + y
-    if (args.size() < 6) { n.kind.clear(); return n; }
+    if (args.size() < 6) {
+      n.kind.clear();
+      return n;
+    }
     push(args[1]);  // alpha
     push(args[2]);  // x
     push(args[4]);  // y (inout)
@@ -837,7 +916,10 @@ static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
   }
   if (routine == "dscal" || routine == "sscal") {
     // scal(n, alpha, x, incx) -- in-place x := alpha*x
-    if (args.size() < 4) { n.kind.clear(); return n; }
+    if (args.size() < 4) {
+      n.kind.clear();
+      return n;
+    }
     push(args[1]);  // alpha
     push(args[2]);  // x
     return n;
@@ -853,82 +935,106 @@ static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
   }
   if (routine == "dgemv" || routine == "sgemv") {
     // gemv(trans, m, n, alpha, A, lda, x, incx, beta, y, incy)
-    if (args.size() < 11) { n.kind.clear(); return n; }
+    if (args.size() < 11) {
+      n.kind.clear();
+      return n;
+    }
     n.expr = resolveCallArg(args[0]);  // trans char (literal)
-    push(args[3]);  // alpha
-    push(args[4]);  // A
-    push(args[6]);  // x
-    push(args[8]);  // beta
-    push(args[9]);  // y (inout)
+    push(args[3]);                     // alpha
+    push(args[4]);                     // A
+    push(args[6]);                     // x
+    push(args[8]);                     // beta
+    push(args[9]);                     // y (inout)
     return n;
   }
   if (routine == "dgemm" || routine == "sgemm") {
     // gemm(transa, transb, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc)
-    if (args.size() < 13) { n.kind.clear(); return n; }
-    n.expr = resolveCallArg(args[0]) + "," + resolveCallArg(args[1]);  // transA,transB
-    push(args[5]);   // alpha
-    push(args[6]);   // A
-    push(args[8]);   // B
-    push(args[10]);  // beta
-    push(args[11]);  // C (inout)
+    if (args.size() < 13) {
+      n.kind.clear();
+      return n;
+    }
+    n.expr = resolveCallArg(args[0]) + "," +
+             resolveCallArg(args[1]);  // transA,transB
+    push(args[5]);                     // alpha
+    push(args[6]);                     // A
+    push(args[8]);                     // B
+    push(args[10]);                    // beta
+    push(args[11]);                    // C (inout)
     return n;
   }
-  if (routine == "dnrm2" || routine == "snrm2" ||
-      routine == "dasum" || routine == "sasum" ||
-      routine == "idamax" || routine == "isamax") {
-    // ?nrm2(n, x, incx) / ?asum(n, x, incx) / i?amax(n, x, incx) -- scalar result;
-    // the assign-side handler picks up the result variable.
+  if (routine == "dnrm2" || routine == "snrm2" || routine == "dasum" ||
+      routine == "sasum" || routine == "idamax" || routine == "isamax") {
+    // ?nrm2(n, x, incx) / ?asum(n, x, incx) / i?amax(n, x, incx) -- scalar
+    // result; the assign-side handler picks up the result variable.
     n.kind.clear();
     return n;
   }
   if (routine == "dcopy" || routine == "scopy") {
     // copy(n, x, incx, y, incy) -- y := x
-    if (args.size() < 5) { n.kind.clear(); return n; }
+    if (args.size() < 5) {
+      n.kind.clear();
+      return n;
+    }
     push(args[1]);  // x
     push(args[3]);  // y (out)
     return n;
   }
   if (routine == "dswap" || routine == "sswap") {
     // swap(n, x, incx, y, incy) -- x, y := y, x
-    if (args.size() < 5) { n.kind.clear(); return n; }
+    if (args.size() < 5) {
+      n.kind.clear();
+      return n;
+    }
     push(args[1]);  // x (inout)
     push(args[3]);  // y (inout)
     return n;
   }
   if (routine == "dger" || routine == "sger") {
     // ger(m, n, alpha, x, incx, y, incy, A, lda) -- A := alpha*x*y' + A
-    if (args.size() < 9) { n.kind.clear(); return n; }
+    if (args.size() < 9) {
+      n.kind.clear();
+      return n;
+    }
     push(args[2]);  // alpha
     push(args[3]);  // x
     push(args[5]);  // y
     push(args[7]);  // A (inout)
     return n;
   }
-  if (routine == "dtrsv" || routine == "strsv" ||
-      routine == "dtrmv" || routine == "strmv") {
+  if (routine == "dtrsv" || routine == "strsv" || routine == "dtrmv" ||
+      routine == "strmv") {
     // trsv/trmv(uplo, trans, diag, n, A, lda, x, incx)
-    if (args.size() < 8) { n.kind.clear(); return n; }
+    if (args.size() < 8) {
+      n.kind.clear();
+      return n;
+    }
     n.expr = resolveCallArg(args[0]) + "," + resolveCallArg(args[1]) + "," +
              resolveCallArg(args[2]);  // uplo,trans,diag
-    push(args[4]);  // A
-    push(args[6]);  // x (inout)
+    push(args[4]);                     // A
+    push(args[6]);                     // x (inout)
     return n;
   }
   if (routine == "dsymv" || routine == "ssymv") {
     // symv(uplo, n, alpha, A, lda, x, incx, beta, y, incy)
-    if (args.size() < 10) { n.kind.clear(); return n; }
+    if (args.size() < 10) {
+      n.kind.clear();
+      return n;
+    }
     n.expr = resolveCallArg(args[0]);  // uplo
-    push(args[2]);  // alpha
-    push(args[3]);  // A
-    push(args[5]);  // x
-    push(args[7]);  // beta
-    push(args[8]);  // y (inout)
+    push(args[2]);                     // alpha
+    push(args[3]);                     // A
+    push(args[5]);                     // x
+    push(args[7]);                     // beta
+    push(args[8]);                     // y (inout)
     return n;
   }
-  if (routine == "dtrsm" || routine == "strsm" ||
-      routine == "dtrmm" || routine == "strmm") {
+  if (routine == "dtrsm" || routine == "strsm" || routine == "dtrmm" ||
+      routine == "strmm") {
     // trsm/trmm(side, uplo, trans, diag, m, n, alpha, A, lda, B, ldb)
-    if (args.size() < 11) { n.kind.clear(); return n; }
+    if (args.size() < 11) {
+      n.kind.clear();
+      return n;
+    }
     n.expr = resolveCallArg(args[0]) + "," + resolveCallArg(args[1]) + "," +
              resolveCallArg(args[2]) + "," + resolveCallArg(args[3]);
     push(args[6]);  // alpha
@@ -938,18 +1044,24 @@ static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
   }
   if (routine == "dsymm" || routine == "ssymm") {
     // symm(side, uplo, m, n, alpha, A, lda, B, ldb, beta, C, ldc)
-    if (args.size() < 12) { n.kind.clear(); return n; }
+    if (args.size() < 12) {
+      n.kind.clear();
+      return n;
+    }
     n.expr = resolveCallArg(args[0]) + "," + resolveCallArg(args[1]);
-    push(args[4]);  // alpha
-    push(args[5]);  // A
-    push(args[7]);  // B
-    push(args[9]);  // beta
-    push(args[10]); // C (inout)
+    push(args[4]);   // alpha
+    push(args[5]);   // A
+    push(args[7]);   // B
+    push(args[9]);   // beta
+    push(args[10]);  // C (inout)
     return n;
   }
   if (routine == "dsyrk" || routine == "ssyrk") {
     // syrk(uplo, trans, n, k, alpha, A, lda, beta, C, ldc)
-    if (args.size() < 10) { n.kind.clear(); return n; }
+    if (args.size() < 10) {
+      n.kind.clear();
+      return n;
+    }
     n.expr = resolveCallArg(args[0]) + "," + resolveCallArg(args[1]);
     push(args[4]);  // alpha
     push(args[5]);  // A
@@ -962,7 +1074,8 @@ static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
 }
 
 /// Build the ``ASTNode`` for a recognised LAPACK call.
-static ASTNode buildLapackCallNode(fir::CallOp call, const std::string& routine) {
+static ASTNode buildLapackCallNode(fir::CallOp call,
+                                   const std::string& routine) {
   ASTNode n;
   n.kind = "lapackcall";
   n.callee = routine;
@@ -970,23 +1083,33 @@ static ASTNode buildLapackCallNode(fir::CallOp call, const std::string& routine)
 
   if (routine == "dgetrf" || routine == "sgetrf") {
     // getrf(m, n, A, lda, ipiv, info) -- LU factorisation
-    if (args.size() < 6) { n.kind.clear(); return n; }
-    n.call_args.push_back(resolveCallArg(args[2]));  // A (inout: factor in place)
+    if (args.size() < 6) {
+      n.kind.clear();
+      return n;
+    }
+    n.call_args.push_back(
+        resolveCallArg(args[2]));  // A (inout: factor in place)
     n.call_args.push_back(resolveCallArg(args[4]));  // ipiv (out)
     n.call_args.push_back(resolveCallArg(args[5]));  // info (out)
     return n;
   }
   if (routine == "dpotrf" || routine == "spotrf") {
     // potrf(uplo, n, A, lda, info) -- Cholesky factorisation
-    if (args.size() < 5) { n.kind.clear(); return n; }
-    n.expr = resolveCallArg(args[0]);  // 'U' or 'L'
+    if (args.size() < 5) {
+      n.kind.clear();
+      return n;
+    }
+    n.expr = resolveCallArg(args[0]);                // 'U' or 'L'
     n.call_args.push_back(resolveCallArg(args[2]));  // A (inout)
     n.call_args.push_back(resolveCallArg(args[4]));  // info (out)
     return n;
   }
   if (routine == "dpotrs" || routine == "spotrs") {
     // potrs(uplo, n, nrhs, A, lda, B, ldb, info)
-    if (args.size() < 8) { n.kind.clear(); return n; }
+    if (args.size() < 8) {
+      n.kind.clear();
+      return n;
+    }
     n.expr = resolveCallArg(args[0]);                // 'U' or 'L'
     n.call_args.push_back(resolveCallArg(args[3]));  // A
     n.call_args.push_back(resolveCallArg(args[5]));  // B (inout)
@@ -995,7 +1118,10 @@ static ASTNode buildLapackCallNode(fir::CallOp call, const std::string& routine)
   }
   if (routine == "dgeqrf" || routine == "sgeqrf") {
     // geqrf(m, n, A, lda, tau, work, lwork, info)
-    if (args.size() < 8) { n.kind.clear(); return n; }
+    if (args.size() < 8) {
+      n.kind.clear();
+      return n;
+    }
     n.call_args.push_back(resolveCallArg(args[2]));  // A (inout)
     n.call_args.push_back(resolveCallArg(args[4]));  // tau (out)
     n.call_args.push_back(resolveCallArg(args[7]));  // info (out)
@@ -1003,7 +1129,10 @@ static ASTNode buildLapackCallNode(fir::CallOp call, const std::string& routine)
   }
   if (routine == "dorgqr" || routine == "sorgqr") {
     // orgqr(m, n, k, A, lda, tau, work, lwork, info)
-    if (args.size() < 9) { n.kind.clear(); return n; }
+    if (args.size() < 9) {
+      n.kind.clear();
+      return n;
+    }
     n.call_args.push_back(resolveCallArg(args[3]));  // A (inout)
     n.call_args.push_back(resolveCallArg(args[5]));  // tau (in)
     n.call_args.push_back(resolveCallArg(args[8]));  // info (out)
@@ -1148,10 +1277,22 @@ static std::string ioLiteralString(mlir::Value v) {
   for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
     auto* d = v.getDefiningOp();
     if (!d) break;
-    if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) { v = cv.getValue(); continue; }
-    if (auto co = mlir::dyn_cast<fir::CoordinateOp>(d)) { v = co.getRef(); continue; }
-    if (auto hd = mlir::dyn_cast<hlfir::DeclareOp>(d)) { v = hd.getMemref(); continue; }
-    if (auto fd = mlir::dyn_cast<fir::DeclareOp>(d)) { v = fd.getMemref(); continue; }
+    if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
+      v = cv.getValue();
+      continue;
+    }
+    if (auto co = mlir::dyn_cast<fir::CoordinateOp>(d)) {
+      v = co.getRef();
+      continue;
+    }
+    if (auto hd = mlir::dyn_cast<hlfir::DeclareOp>(d)) {
+      v = hd.getMemref();
+      continue;
+    }
+    if (auto fd = mlir::dyn_cast<fir::DeclareOp>(d)) {
+      v = fd.getMemref();
+      continue;
+    }
     if (auto ad = mlir::dyn_cast<fir::AddrOfOp>(d))
       return decodeCharLiteralSymbol(ad.getSymbol().getRootReference().str());
     break;
@@ -1189,10 +1330,14 @@ static mlir::Value ioInsertedAt(mlir::Value agg, int64_t idx) {
 /// ``{groupName, count, members, defIoTable}``; ``members`` is an array of
 /// ``{name, box}`` pairs built by a second insert-value chain.  A member's
 /// name is its Fortran variable name, which is also its SDFG array name.
-static void extractNamelist(mlir::Value descRef, std::string& group, std::vector<std::string>& members) {
+static void extractNamelist(mlir::Value descRef, std::string& group,
+                            std::vector<std::string>& members) {
   for (int i = 0; i < limits::kSsaBackWalkDepth && descRef; ++i) {
     auto* d = descRef.getDefiningOp();
-    if (auto cv = mlir::dyn_cast_or_null<fir::ConvertOp>(d)) { descRef = cv.getValue(); continue; }
+    if (auto cv = mlir::dyn_cast_or_null<fir::ConvertOp>(d)) {
+      descRef = cv.getValue();
+      continue;
+    }
     break;
   }
   mlir::Value top = ioStoredValue(descRef);
@@ -1204,7 +1349,8 @@ static void extractNamelist(mlir::Value descRef, std::string& group, std::vector
   // chain is built bottom-up, so collect (index, name) and sort ascending.
   std::vector<std::pair<int64_t, std::string>> byIndex;
   for (int i = 0; i < limits::kSsaBackWalkDepth && memberArr; ++i) {
-    auto iv = mlir::dyn_cast_or_null<fir::InsertValueOp>(memberArr.getDefiningOp());
+    auto iv =
+        mlir::dyn_cast_or_null<fir::InsertValueOp>(memberArr.getDefiningOp());
     if (!iv) break;
     auto coor = iv.getCoor();
     if (coor.size() == 2)
@@ -1266,10 +1412,14 @@ static std::string fftw3CalleeTag(const std::string& callee) {
   // Strip optional trailing underscore (older Fortran external mangling).
   while (!s.empty() && s.back() == '_') s.pop_back();
   std::string low = llvm::StringRef(s).lower();
-  if (low == "fftw_plan_dft_2d" || low == "fftwf_plan_dft_2d") return "fft_plan_2d";
-  if (low == "fftw_plan_dft_3d" || low == "fftwf_plan_dft_3d") return "fft_plan_3d";
-  if (low == "fftw_execute_dft" || low == "fftwf_execute_dft") return "fft_execute";
-  if (low == "fftw_destroy_plan" || low == "fftwf_destroy_plan") return "fft_destroy";
+  if (low == "fftw_plan_dft_2d" || low == "fftwf_plan_dft_2d")
+    return "fft_plan_2d";
+  if (low == "fftw_plan_dft_3d" || low == "fftwf_plan_dft_3d")
+    return "fft_plan_3d";
+  if (low == "fftw_execute_dft" || low == "fftwf_execute_dft")
+    return "fft_execute";
+  if (low == "fftw_destroy_plan" || low == "fftwf_destroy_plan")
+    return "fft_destroy";
   return std::string{};
 }
 
@@ -1293,8 +1443,10 @@ static ASTNode buildFftw3CallNode(fir::CallOp call, const std::string& fftOp,
     info.rank = rank;
     for (int i = 0; i < rank; ++i) {
       std::string dim;
-      if (auto c = traceConstInt(args[i])) dim = std::to_string(*c);
-      else dim = traceToDecl(args[i]);
+      if (auto c = traceConstInt(args[i]))
+        dim = std::to_string(*c);
+      else
+        dim = traceToDecl(args[i]);
       info.dims.push_back(dim);
     }
     // Sign: FFTW_FORWARD = -1, FFTW_BACKWARD = +1.
@@ -1344,15 +1496,18 @@ static ASTNode buildFftw3CallNode(fir::CallOp call, const std::string& fftOp,
 /// arrays).  Only statements with a literal file and >=1 data item are
 /// emitted -- a stdout write or a runtime-named file has no bindable filename
 /// and is dropped.
-static void recognizeIoCall(fir::CallOp call, llvm::StringRef c, IoState& s, std::vector<ASTNode>& nodes) {
+static void recognizeIoCall(fir::CallOp call, llvm::StringRef c, IoState& s,
+                            std::vector<ASTNode>& nodes) {
   auto args = call.getArgOperands();
   if (c.contains("SetFile")) {
     if (args.size() >= 2) s.open_file = ioLiteralString(args[1]);
-  } else if (c.contains("BeginExternalListInput") || c.contains("BeginExternalFormattedInput")) {
+  } else if (c.contains("BeginExternalListInput") ||
+             c.contains("BeginExternalFormattedInput")) {
     s.op = "read";
     s.stmt_file = s.open_file;
     s.items.clear();
-  } else if (c.contains("BeginExternalListOutput") || c.contains("BeginExternalFormattedOutput")) {
+  } else if (c.contains("BeginExternalListOutput") ||
+             c.contains("BeginExternalFormattedOutput")) {
     s.op = "write";
     s.stmt_file = s.open_file;
     s.items.clear();
@@ -1363,7 +1518,8 @@ static void recognizeIoCall(fir::CallOp call, llvm::StringRef c, IoState& s, std
     s.group.clear();
     s.items.clear();
     if (args.size() >= 2) extractNamelist(args[1], s.group, s.items);
-  } else if ((c.contains("Input") || c.contains("Output")) && !c.contains("Begin") && !c.contains("Ascii")) {
+  } else if ((c.contains("Input") || c.contains("Output")) &&
+             !c.contains("Begin") && !c.contains("Ascii")) {
     // A transfer item: Input/OutputDescriptor(box) or the scalar
     // Input/OutputReal*/Integer*(ref); operand 1 is the data.
     if (!s.op.empty() && args.size() >= 2) {
@@ -1429,7 +1585,10 @@ static std::string tryMaterialiseAllAnyCond(mlir::Value condVal,
   for (int i = 0; i < 8 && v; ++i) {
     auto* d = v.getDefiningOp();
     if (!d) break;
-    if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) { v = cv.getValue(); continue; }
+    if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
+      v = cv.getValue();
+      continue;
+    }
     if (d->getName().getStringRef() == "hlfir.no_reassoc" &&
         d->getNumOperands() == 1) {
       v = d->getOperand(0);
@@ -1554,7 +1713,8 @@ static void materialiseCondReductions(mlir::Value condVal,
       mlir::Value src = op->getOperand(0);
       auto* srcDef = src.getDefiningOp();
       std::string srcName;
-      std::string srcSubset;  // non-empty -> reduce a VIEW of this parent section
+      std::string
+          srcSubset;  // non-empty -> reduce a VIEW of this parent section
       if (srcDef)
         if (auto elem = mlir::dyn_cast<hlfir::ElementalOp>(srcDef)) {
           auto [tr, prelude] = materialiseElementalForLibcall(elem);
@@ -1563,11 +1723,13 @@ static void materialiseCondReductions(mlir::Value condVal,
             srcName = tr;
           }
         }
-      // A SECTION / sliced source (``MINVAL(kmin(iv, :))`` -- a row; ``m(:, j)``
+      // A SECTION / sliced source (``MINVAL(kmin(iv, :))`` -- a row; ``m(:,
+      // j)``
       // -- a column) reduces the SECTION, not the whole array.  Render the
       // section's 0-based per-dim subset and reduce a VIEW of it (correct row /
       // column stride + shape) -- emit_reduce synthesises the View from the
-      // parent + this subset.  ``traceToDecl`` on the designate names the parent.
+      // parent + this subset.  ``traceToDecl`` on the designate names the
+      // parent.
       if (srcName.empty())
         if (auto dg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(srcDef)) {
           auto parts = renderDesignateSubsetStrings(dg);
@@ -1579,8 +1741,7 @@ static void materialiseCondReductions(mlir::Value condVal,
           }
         }
       // Whole named array (declare / load, not a designate).
-      if (srcName.empty() &&
-          !(srcDef && mlir::isa<hlfir::DesignateOp>(srcDef)))
+      if (srcName.empty() && !(srcDef && mlir::isa<hlfir::DesignateOp>(srcDef)))
         srcName = traceToDecl(src);
       if (!srcName.empty()) {
         mlir::Type elemTy = op->getResult(0).getType();
@@ -2076,8 +2237,7 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
             n.callee = "norm2";
             if (auto* dd = dst.getDefiningOp())
               if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(dd))
-                n.target =
-                    allocAliasFor(extractName(decl.getUniqName().str()));
+                n.target = allocAliasFor(extractName(decl.getUniqName().str()));
             if (n.target.empty()) n.target = traceToDecl(dst);
             n.target_is_array = false;
             auto args = call.getArgOperands();
@@ -2235,7 +2395,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
                   auto sr = mlir::dyn_cast<fir::SaveResultOp>(u);
                   if (!sr) continue;
                   auto* srdef = sr.getValue().getDefiningOp();
-                  auto call = srdef ? mlir::dyn_cast<fir::CallOp>(srdef) : fir::CallOp{};
+                  auto call = srdef ? mlir::dyn_cast<fir::CallOp>(srdef)
+                                    : fir::CallOp{};
                   if (!call) continue;
                   auto ref = call.getCallee();
                   if (!ref) continue;
@@ -2244,7 +2405,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
                   ref->print(os);
                   std::string tag = fftw3CalleeTag(cs);
                   if (tag != "fft_plan_2d" && tag != "fft_plan_3d") continue;
-                  // Confirmed: this assign is the user's ``plan = fftw_plan_dft_*``.
+                  // Confirmed: this assign is the user's ``plan =
+                  // fftw_plan_dft_*``.
                   is_fft_plan_assign = true;
                   std::string planVar = traceToDecl(dst);
                   if (!planVar.empty()) {
@@ -2253,12 +2415,15 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
                     auto args = call.getArgOperands();
                     for (int i = 0; i < info.rank; ++i) {
                       std::string dim;
-                      if (auto c = traceConstInt(args[i])) dim = std::to_string(*c);
-                      else dim = traceToDecl(args[i]);
+                      if (auto c = traceConstInt(args[i]))
+                        dim = std::to_string(*c);
+                      else
+                        dim = traceToDecl(args[i]);
                       info.dims.push_back(dim);
                     }
                     int sign = 0;
-                    if (auto c = traceConstInt(args[info.rank + 2])) sign = (int)*c;
+                    if (auto c = traceConstInt(args[info.rank + 2]))
+                      sign = (int)*c;
                     info.direction = (sign == -1) ? "forward" : "backward";
                     fft_plans[planVar] = info;
                   }
@@ -2639,11 +2804,10 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
               // qualify.  For ``matmul_transpose``: only arg 1
               // qualifies (LHS transpose is already in the op
               // itself).
-              bool isMatmulFamily = (e.callee == "matmul" ||
-                                     e.callee == "matmul_transpose");
-              bool foldsViaBlas =
-                  (e.callee == "matmul" && i < 2) ||
-                  (e.callee == "matmul_transpose" && i == 1);
+              bool isMatmulFamily =
+                  (e.callee == "matmul" || e.callee == "matmul_transpose");
+              bool foldsViaBlas = (e.callee == "matmul" && i < 2) ||
+                                  (e.callee == "matmul_transpose" && i == 1);
               if (auto tp = mlir::dyn_cast<hlfir::TransposeOp>(od);
                   tp && isMatmulFamily && foldsViaBlas) {
                 // Defer to buildLibCallNode -- it will see the
@@ -2901,11 +3065,10 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
         // Recognised + supported routines are caught above; reaching here
         // means the callee is in the library-prefix universe but not in
         // the supported set.
-        bool isSupported =
-            !mpiCalleeTag(n.callee).empty() ||
-            !fftw3CalleeTag(n.callee).empty() ||
-            !blasCalleeTag(n.callee).empty() ||
-            !lapackCalleeTag(n.callee).empty();
+        bool isSupported = !mpiCalleeTag(n.callee).empty() ||
+                           !fftw3CalleeTag(n.callee).empty() ||
+                           !blasCalleeTag(n.callee).empty() ||
+                           !lapackCalleeTag(n.callee).empty();
         if (!isSupported) {
           ASTNode un;
           un.kind = "unsupported_libcall";
@@ -2938,8 +3101,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       // local AoS buffer for the external.
       if (auto ref = call.getCallee())
         if (auto mod = call->getParentOfType<mlir::ModuleOp>())
-          if (auto fn = mod.lookupSymbol<mlir::func::FuncOp>(
-                  ref->getLeafReference()))
+          if (auto fn =
+                  mod.lookupSymbol<mlir::func::FuncOp>(ref->getLeafReference()))
             if (auto g = fn->getAttrOfType<mlir::DenseI64ArrayAttr>(
                     "hlfir.aos_marshal_groups"))
               n.aos_marshal_groups.assign(g.asArrayRef().begin(),
@@ -3001,10 +3164,11 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       // Association`` / ``ExpandVectorSubscriptGather`` synthesise a
       // ``__assoc_scalar`` alloca + ``fir.store %val`` reaching here).  When
       // ``%val`` reads an array ELEMENT (esp. an allocatable, ``x(k,1)``),
-      // ``buildExpr`` renders the BARE parent name by design -- the subscript is
-      // supplied by the AccessInfo + ``emit_tasklet``'s per-occurrence connector
-      // wiring.  Without these reads the assign looks scalar and the element
-      // leaks as a bare ``x`` pointer (QE ``paw_newdxx`` Gate H) / an unwired
+      // ``buildExpr`` renders the BARE parent name by design -- the subscript
+      // is supplied by the AccessInfo + ``emit_tasklet``'s per-occurrence
+      // connector wiring.  Without these reads the assign looks scalar and the
+      // element leaks as a bare ``x`` pointer (QE ``paw_newdxx`` Gate H) / an
+      // unwired
       // ``_in_x_0`` free symbol.  SCOPED to the ``__assoc_scalar`` synthesised
       // target so it doesn't perturb other top-level stores (e.g. the
       // ``prhoc_d`` reshaping pointer-rebind, whose value-collect would mint a
@@ -3023,7 +3187,7 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
 // ---------------------------------------------------------------------------
 
 std::vector<ASTNode> extractAST(mlir::ModuleOp module,
-                                const std::string &entry_symbol) {
+                                const std::string& entry_symbol) {
   // Fresh synthetic-name counters / maps per module so two consecutive
   // extractAST calls don't interleave __sc_5 / __al_2 across unrelated
   // SDFGs.

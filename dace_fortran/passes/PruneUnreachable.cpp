@@ -24,8 +24,8 @@
 // *every* type, so a binding a reachable dispatch genuinely needs is never
 // erased (devirtualisation downstream still finds it); only bindings no
 // reachable dispatch could ever select are dropped.  The procedures themselves
-// are left for ``symbol-dce`` to remove -- it accounts for every reference kind,
-// avoiding dangling-symbol bugs.
+// are left for ``symbol-dce`` to remove -- it accounts for every reference
+// kind, avoiding dangling-symbol bugs.
 //
 // The dispatch tables are not the only hold, though: flang also emits, per
 // derived type, a ``linkonce_odr`` binding-table vtable
@@ -41,22 +41,23 @@
 // entry's live data genuinely uses.
 //
 // This does NOT remove a procedure the entry's call graph genuinely reaches --
-// e.g. a hash table reached transitively through a halo-exchange wrapper is live
-// and survives, by design.  The pass only unsticks the dead dispatch tables.
+// e.g. a hash table reached transitively through a halo-exchange wrapper is
+// live and survives, by design.  The pass only unsticks the dead dispatch
+// tables.
 //
 // Runs before ``symbol-dce`` and the structurizing passes.  A no-op for an
 // ordinary single-procedure input (no dispatch tables, nothing unreachable).
 // ============================================================================
 
 #include "flang/Optimizer/Dialect/FIROps.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/SymbolTable.h"
-#include "mlir/Pass/Pass.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/SymbolTable.h"
+#include "mlir/Pass/Pass.h"
 #include "passes/Passes.h"
 
 namespace hlfir_bridge {
@@ -68,7 +69,9 @@ struct PruneUnreachablePass
                                mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(PruneUnreachablePass)
 
-  llvm::StringRef getArgument() const final { return "hlfir-prune-unreachable"; }
+  llvm::StringRef getArgument() const final {
+    return "hlfir-prune-unreachable";
+  }
   llvm::StringRef getDescription() const final {
     return "Erase dispatch-table (fir.dt_entry) bindings the entry never "
            "dynamically invokes, so symbol-dce can drop the unreachable "
@@ -86,9 +89,8 @@ struct PruneUnreachablePass
     llvm::SmallVector<mlir::func::FuncOp, 8> roots;
     module.walk([&](mlir::func::FuncOp f) {
       bySym[f.getSymName()] = f;
-      if (!f.isDeclaration() &&
-          mlir::SymbolTable::getSymbolVisibility(f) ==
-              mlir::SymbolTable::Visibility::Public)
+      if (!f.isDeclaration() && mlir::SymbolTable::getSymbolVisibility(f) ==
+                                    mlir::SymbolTable::Visibility::Public)
         roots.push_back(f);
     });
     if (roots.empty()) return;  // no entry point to anchor reachability
@@ -106,7 +108,7 @@ struct PruneUnreachablePass
     // own table entries below, so ``fir-polymorphic-op`` can still devirtualise
     // a monomorphic dispatch (and ``hlfir-reject-polymorphism`` reject a truly
     // runtime one with a clear error).
-    llvm::SmallPtrSet<mlir::Operation *, 32> reachable;
+    llvm::SmallPtrSet<mlir::Operation*, 32> reachable;
     llvm::StringSet<> reachedMethods;
     llvm::SmallVector<mlir::func::FuncOp, 64> work(roots.begin(), roots.end());
     auto enqueue = [&](mlir::func::FuncOp f) {
@@ -115,18 +117,19 @@ struct PruneUnreachablePass
     while (!work.empty()) {
       mlir::func::FuncOp f = work.pop_back_val();
       if (!reachable.insert(f.getOperation()).second) continue;
-      f.walk([&](mlir::Operation *op) {
+      f.walk([&](mlir::Operation* op) {
         // Walk direct-call edges only.  This set exists solely to collect the
         // methods reachable ``fir.dispatch`` ops invoke, so it must stay tight:
         // following ``fir.address_of`` would drag in whole OOP infrastructure
-        // clusters whose own ``fir.dispatch`` ops re-mark their methods reached,
-        // keeping the dispatch tables alive and defeating the prune.  The
-        // trade-off is that a procedure reached only as a proc-pointer value
-        // (``fir.address_of`` + indirect call) is not scanned for the methods it
-        // dispatches; should it dispatch one whose binding is then pruned,
-        // ``fir-polymorphic-op`` / ``hlfir-reject-polymorphism`` surface it as a
-        // clear error rather than a miscompile.  No reachable dispatch observed
-        // so far depends on such a binding.
+        // clusters whose own ``fir.dispatch`` ops re-mark their methods
+        // reached, keeping the dispatch tables alive and defeating the prune.
+        // The trade-off is that a procedure reached only as a proc-pointer
+        // value
+        // (``fir.address_of`` + indirect call) is not scanned for the methods
+        // it dispatches; should it dispatch one whose binding is then pruned,
+        // ``fir-polymorphic-op`` / ``hlfir-reject-polymorphism`` surface it as
+        // a clear error rather than a miscompile.  No reachable dispatch
+        // observed so far depends on such a binding.
         if (auto c = mlir::dyn_cast<fir::CallOp>(op)) {
           if (auto callee = c.getCallee()) enqueue(funcForRef(*callee));
         } else if (auto fc = mlir::dyn_cast<mlir::func::CallOp>(op)) {
@@ -150,12 +153,12 @@ struct PruneUnreachablePass
 
     // Privatise the compiler-generated ``linkonce_odr`` RTTI globals (per-type
     // binding-table vtables ``E.v.<type>``, descriptors ``E.dt.``, components
-    // ``E.c.``, ...).  Their ``fir.address_of`` elements are the *other* hold on
-    // the unreachable bound procedures, and being non-private they are
+    // ``E.c.``, ...).  Their ``fir.address_of`` elements are the *other* hold
+    // on the unreachable bound procedures, and being non-private they are
     // symbol-dce roots.  ``linkonce_odr`` is flang's "discard if unused"
-    // linkage, so privatising lets the following ``symbol-dce`` drop the ones no
-    // reachable code references (and only those -- a descriptor the entry's live
-    // data uses stays referenced and survives).
+    // linkage, so privatising lets the following ``symbol-dce`` drop the ones
+    // no reachable code references (and only those -- a descriptor the entry's
+    // live data uses stays referenced and survives).
     module.walk([&](fir::GlobalOp g) {
       std::optional<llvm::StringRef> link = g.getLinkName();
       if (link && *link == "linkonce_odr")

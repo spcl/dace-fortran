@@ -49,7 +49,7 @@ std::string buildIndexExpr(mlir::Value v, int d) {
     if (!resolved.empty()) return resolved;
     return "?";
   }
-  auto *def = v.getDefiningOp();
+  auto* def = v.getDefiningOp();
 
   // fir.convert is transparent.
   if (auto conv = mlir::dyn_cast<fir::ConvertOp>(def))
@@ -64,8 +64,7 @@ std::string buildIndexExpr(mlir::Value v, int d) {
   // treats these as transparent; mirror it here.)
   {
     auto cn = def->getName().getStringRef();
-    if ((cn == "arith.extsi" || cn == "arith.extui" ||
-         cn == "arith.trunci") &&
+    if ((cn == "arith.extsi" || cn == "arith.extui" || cn == "arith.trunci") &&
         def->getNumOperands() == 1)
       return buildIndexExpr(def->getOperand(0), d + 1);
   }
@@ -78,11 +77,11 @@ std::string buildIndexExpr(mlir::Value v, int d) {
   // ``buildExpr`` (expressions.cpp).
   if (auto apply = mlir::dyn_cast<hlfir::ApplyOp>(def)) {
     auto src = apply.getExpr();
-    if (auto *sd = src.getDefiningOp())
+    if (auto* sd = src.getDefiningOp())
       if (auto inner_elem = mlir::dyn_cast<hlfir::ElementalOp>(sd)) {
-        auto &ireg = inner_elem.getRegion();
+        auto& ireg = inner_elem.getRegion();
         if (!ireg.empty()) {
-          auto &iblock = ireg.front();
+          auto& iblock = ireg.front();
           auto apply_idxs = apply.getIndices();
           unsigned pushed = 0;
           for (unsigned i = 0;
@@ -92,7 +91,7 @@ std::string buildIndexExpr(mlir::Value v, int d) {
             ++pushed;
           }
           std::string result = "?";
-          for (auto &iop : iblock)
+          for (auto& iop : iblock)
             if (auto y = mlir::dyn_cast<hlfir::YieldElementOp>(iop)) {
               result = buildIndexExpr(y.getElementValue(), d + 1);
               break;
@@ -107,7 +106,7 @@ std::string buildIndexExpr(mlir::Value v, int d) {
   // access via hlfir.designate on another array.
   if (auto ld = mlir::dyn_cast<fir::LoadOp>(def)) {
     auto mem = ld.getMemref();
-    if (auto *md = mem.getDefiningOp()) {
+    if (auto* md = mem.getDefiningOp()) {
       if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(md)) {
         // Struct field load used as an index (``arr(g % idx)``):
         // the designate has a component attribute and no
@@ -193,7 +192,7 @@ std::string buildIndexExpr(mlir::Value v, int d) {
                     isMutable = true;
                     return;
                   }
-                  auto *ld = lhs.getDefiningOp();
+                  auto* ld = lhs.getDefiningOp();
                   if (!ld) break;
                   if (auto innerDg = mlir::dyn_cast<hlfir::DesignateOp>(ld)) {
                     lhs = innerDg.getMemref();
@@ -245,7 +244,7 @@ std::string buildIndexExpr(mlir::Value v, int d) {
           if (!chainArr.empty() && chainDims.size() > dg.getIndices().size()) {
             std::string cs = chainArr + "[";
             bool cfirst = true;
-            for (auto &de : chainDims) {
+            for (auto& de : chainDims) {
               if (!cfirst) cs += ",";
               cs += de.expr.empty() ? "?" : de.expr;
               cfirst = false;
@@ -309,7 +308,7 @@ std::string buildIndexExpr(mlir::Value v, int d) {
     // Walk operand 0 back to a declare so we can name the array.
     mlir::Value arrayVal = def->getOperand(0);
     for (int hop = 0; hop < limits::kTraceToDeclMax && arrayVal; ++hop) {
-      auto *adef = arrayVal.getDefiningOp();
+      auto* adef = arrayVal.getDefiningOp();
       if (!adef) break;
       if (auto cv = mlir::dyn_cast<fir::ConvertOp>(adef)) {
         arrayVal = cv.getValue();
@@ -330,7 +329,7 @@ std::string buildIndexExpr(mlir::Value v, int d) {
     // to ``offset_<arr>_d<dim>`` instead of leaking ``?`` into the
     // do-loop upper-bound expression (E10).
     if (arrName.empty()) {
-      if (auto *adef = arrayVal.getDefiningOp())
+      if (auto* adef = arrayVal.getDefiningOp())
         if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(adef))
           arrName = extractName(decl.getUniqName().str());
     }
@@ -341,7 +340,7 @@ std::string buildIndexExpr(mlir::Value v, int d) {
       bool hasAllocmem = false;
       int allocmemCount = 0;
       fir::AllocMemOp allocOp;
-      if (auto *adef = arrayVal.getDefiningOp()) {
+      if (auto* adef = arrayVal.getDefiningOp()) {
         if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(adef)) {
           std::string allocName = decl.getUniqName().str() + ".alloc";
           if (auto mod = decl->getParentOfType<mlir::ModuleOp>()) {
@@ -349,7 +348,10 @@ std::string buildIndexExpr(mlir::Value v, int d) {
               if (auto un = a.getUniqName())
                 if (un->str() == allocName) {
                   ++allocmemCount;
-                  if (!hasAllocmem) { hasAllocmem = true; allocOp = a; }
+                  if (!hasAllocmem) {
+                    hasAllocmem = true;
+                    allocOp = a;
+                  }
                 }
             });
           }
@@ -408,7 +410,7 @@ std::string buildIndexExpr(mlir::Value v, int d) {
         // a synthetic shape symbol.
         if (resIdx == 1) {
           mlir::Value shapeVal;
-          if (auto *adef = arrayVal.getDefiningOp()) {
+          if (auto* adef = arrayVal.getDefiningOp()) {
             if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(adef)) {
               shapeVal = decl.getShape();
               if (!shapeVal) {
@@ -419,7 +421,8 @@ std::string buildIndexExpr(mlir::Value v, int d) {
           }
           if (shapeVal) {
             unsigned udim = static_cast<unsigned>(*dimC);
-            if (auto sh = mlir::dyn_cast<fir::ShapeOp>(shapeVal.getDefiningOp())) {
+            if (auto sh =
+                    mlir::dyn_cast<fir::ShapeOp>(shapeVal.getDefiningOp())) {
               if (udim < sh.getExtents().size()) {
                 auto te = traceExtentExpr(sh.getExtents()[udim]);
                 if (!te.empty() && te != "?") return te;
@@ -453,8 +456,11 @@ std::string buildIndexExpr(mlir::Value v, int d) {
   // ``build_memlet_index`` takes the closed-form expression branch.
   auto nm = def->getName().getStringRef();
   static const std::map<llvm::StringRef, std::string> int_bin = {
-      {"arith.addi", " + "},   {"arith.subi", " - "},   {"arith.muli", " * "},
-      {"arith.divsi", " // "}, {"arith.divui", " // "},
+      {"arith.addi", " + "},
+      {"arith.subi", " - "},
+      {"arith.muli", " * "},
+      {"arith.divsi", " // "},
+      {"arith.divui", " // "},
       // ``MOD(i, k)`` in an index expression (``arr(mod(i,2)+1)``)
       // lowers to ``arith.remsi`` / ``arith.remui``.  Render as Python
       // ``%`` -- sympy maps it to ``Mod``, which the memlet-subset
@@ -463,7 +469,8 @@ std::string buildIndexExpr(mlir::Value v, int d) {
       // which every valid array index is (index >= lbound >= 1, and
       // ``mod(i,k)+1`` only produces a valid subscript when ``i`` is
       // non-negative).
-      {"arith.remsi", " % "},  {"arith.remui", " % "},
+      {"arith.remsi", " % "},
+      {"arith.remui", " % "},
   };
   if (auto it = int_bin.find(nm);
       it != int_bin.end() && def->getNumOperands() == 2) {
@@ -508,7 +515,7 @@ std::string buildIndexExpr(mlir::Value v, int d) {
   //   pred gt + (true=lhs, false=rhs) -> ``max(lhs, rhs)``
   //   pred gt + (true=rhs, false=lhs) -> ``min(lhs, rhs)``
   if (auto sel = mlir::dyn_cast<mlir::arith::SelectOp>(def)) {
-    auto *cdef = sel.getCondition().getDefiningOp();
+    auto* cdef = sel.getCondition().getDefiningOp();
     if (auto cmp = mlir::dyn_cast_or_null<mlir::arith::CmpIOp>(cdef)) {
       using P = mlir::arith::CmpIPredicate;
       auto pred = cmp.getPredicate();
@@ -522,7 +529,7 @@ std::string buildIndexExpr(mlir::Value v, int d) {
       if (is_lt || is_gt) {
         bool true_is_lhs = (cmp.getLhs() == sel.getTrueValue());
         bool true_is_rhs = (cmp.getRhs() == sel.getTrueValue());
-        const char *fn = nullptr;
+        const char* fn = nullptr;
         if (is_lt && true_is_lhs)
           fn = "min";
         else if (is_lt && true_is_rhs)
@@ -603,7 +610,7 @@ ASTNode buildAssignNode(hlfir::AssignOp assign) {
         AccessInfo wa;
         wa.array_name = node.target;
         wa.is_write = true;
-        for (auto &de : dims) {
+        for (auto& de : dims) {
           wa.index_vars.push_back(de.var);
           wa.index_exprs.push_back(de.expr);
         }
@@ -643,7 +650,7 @@ ASTNode buildAssignNode(hlfir::AssignOp assign) {
   std::function<void(mlir::Value, int)> collectReads = [&](mlir::Value v,
                                                            int depth) {
     if (depth > 40) return;
-    auto *op = v.getDefiningOp();
+    auto* op = v.getDefiningOp();
     if (!op) return;
     if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(op)) {
       // Use ``expandDesignateChain`` so AoR shapes
@@ -659,7 +666,7 @@ ASTNode buildAssignNode(hlfir::AssignOp assign) {
       AccessInfo ra;
       ra.array_name = arr;
       ra.is_read = true;
-      for (auto &de : dims) {
+      for (auto& de : dims) {
         ra.index_vars.push_back(de.var);
         ra.index_exprs.push_back(de.expr);
       }
@@ -680,11 +687,11 @@ ASTNode buildAssignNode(hlfir::AssignOp assign) {
     // references a free-floating array name.
     if (auto apply = mlir::dyn_cast<hlfir::ApplyOp>(op)) {
       auto src = apply.getExpr();
-      if (auto *sd = src.getDefiningOp()) {
+      if (auto* sd = src.getDefiningOp()) {
         if (auto inner_elem = mlir::dyn_cast<hlfir::ElementalOp>(sd)) {
-          auto &ireg = inner_elem.getRegion();
+          auto& ireg = inner_elem.getRegion();
           if (!ireg.empty()) {
-            auto &iblock = ireg.front();
+            auto& iblock = ireg.front();
             auto apply_idxs = apply.getIndices();
             unsigned pushed = 0;
             for (unsigned i = 0;
@@ -693,7 +700,7 @@ ASTNode buildAssignNode(hlfir::AssignOp assign) {
               indexStack().push_back({iblock.getArgument(i), name});
               ++pushed;
             }
-            for (auto &iop : iblock)
+            for (auto& iop : iblock)
               if (auto y = mlir::dyn_cast<hlfir::YieldElementOp>(iop))
                 collectReads(y.getElementValue(), depth + 1);
             for (unsigned i = 0; i < pushed; ++i) indexStack().pop_back();
@@ -713,7 +720,7 @@ ASTNode buildAssignNode(hlfir::AssignOp assign) {
     // idiom (in particular when t != cmp.lhs or f != cmp.rhs, which
     // is the actual conditional-select shape).
     if (auto sel = mlir::dyn_cast<mlir::arith::SelectOp>(op)) {
-      auto *cdef = sel.getCondition().getDefiningOp();
+      auto* cdef = sel.getCondition().getDefiningOp();
       bool isMinMax = false;
       if (auto cmp = mlir::dyn_cast_or_null<mlir::arith::CmpFOp>(cdef)) {
         using P = mlir::arith::CmpFPredicate;
@@ -791,7 +798,7 @@ bool isArrayRef(mlir::Type t) {
 /// True iff ``v`` traces back to an ``arith.constant`` with value zero
 /// (integer zero or floating-point +0.0 / -0.0).
 bool isConstantZero(mlir::Value v) {
-  auto *def = v.getDefiningOp();
+  auto* def = v.getDefiningOp();
   if (!def) return false;
   if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def))
     return isConstantZero(cv.getValue());
@@ -833,7 +840,7 @@ ASTNode buildCopyNode(hlfir::AssignOp assign) {
 /// split section assignments off from plain indexed designates before
 /// the reduce / elemental dispatch.
 hlfir::DesignateOp asSectionDesignate(mlir::Value v) {
-  auto *def = v.getDefiningOp();
+  auto* def = v.getDefiningOp();
   if (!def) return {};
   auto dg = mlir::dyn_cast<hlfir::DesignateOp>(def);
   if (!dg) return {};
@@ -859,7 +866,7 @@ struct DesignateDim {
 /// undefined) when an operand can't be lowered to a string  --  caller
 /// must decide whether that's recoverable or a hard error.
 static bool parseDesignateDims(hlfir::DesignateOp dg,
-                               std::vector<DesignateDim> &out) {
+                               std::vector<DesignateDim>& out) {
   auto triplets = dg.getIsTriplet();
   auto idxs = dg.getIndices();
   unsigned cursor = 0;
@@ -905,7 +912,7 @@ std::vector<ASTNode> buildSectionScalarAssign(hlfir::AssignOp assign,
   std::vector<DesignateDim> dims;
   if (!parseDesignateDims(dst, dims)) return {};
   unsigned tripletRank = 0;
-  for (auto &d : dims)
+  for (auto& d : dims)
     if (d.isTriplet) ++tripletRank;
   if (tripletRank == 0) return {};
 
@@ -930,7 +937,7 @@ std::vector<ASTNode> buildSectionScalarAssign(hlfir::AssignOp assign,
   wa.is_write = true;
   {
     unsigned tDim = 0;
-    for (auto &d : dims) {
+    for (auto& d : dims) {
       if (d.isTriplet) {
         wa.index_vars.push_back(iter_names[tDim]);
         wa.index_exprs.push_back(iter_names[tDim]);
@@ -960,7 +967,7 @@ std::vector<ASTNode> buildSectionScalarAssign(hlfir::AssignOp assign,
   std::function<void(mlir::Value, int)> collectScalarRhsReads =
       [&](mlir::Value v, int depth) {
         if (depth > 40) return;
-        auto *op = v.getDefiningOp();
+        auto* op = v.getDefiningOp();
         if (!op) return;
         if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(op)) {
           AccessInfo ra;
@@ -1026,7 +1033,7 @@ std::vector<ASTNode> buildSectionScalarAssign(hlfir::AssignOp assign,
 std::vector<ASTNode> buildSectionToSectionAssign(hlfir::AssignOp assign,
                                                  mlir::Value dst) {
   auto srcVal = assign.getOperand(0);
-  auto *srcDef = srcVal.getDefiningOp();
+  auto* srcDef = srcVal.getDefiningOp();
   if (!srcDef) return {};
 
   // Destination form parallels the src dispatch below: a designate
@@ -1037,7 +1044,7 @@ std::vector<ASTNode> buildSectionToSectionAssign(hlfir::AssignOp assign,
   // (LHS bare decl, RHS section) lower to a per-element loop
   // instead of falling through to ``buildCopyNode`` (which would
   // copy the whole 3D companion).
-  auto *dstDef = dst.getDefiningOp();
+  auto* dstDef = dst.getDefiningOp();
   if (!dstDef) return {};
   auto dstDg = mlir::dyn_cast<hlfir::DesignateOp>(dstDef);
   auto dstDecl = mlir::dyn_cast<hlfir::DeclareOp>(dstDef);
@@ -1085,7 +1092,7 @@ std::vector<ASTNode> buildSectionToSectionAssign(hlfir::AssignOp assign,
     srcName = traceToDecl(srcDg.getMemref());
     if (srcName.empty()) return {};
     if (!parseDesignateDims(srcDg, srcDims)) return {};
-    for (auto &d : srcDims)
+    for (auto& d : srcDims)
       if (d.isTriplet) ++srcTC;
   } else {
     // Bare declare: synthesise per-dim full-extent triplets matching
@@ -1155,7 +1162,7 @@ std::vector<ASTNode> buildSectionToSectionAssign(hlfir::AssignOp assign,
   // it (silently flattening to stride 1 would compute the wrong
   // elements, e.g. ``arr(1:9:2)`` covering 5 odd indices vs. the first
   // 5 contiguous indices a stride-1 lowering would touch).
-  auto dimStrideStr = [](const DesignateDim &d) -> std::string {
+  auto dimStrideStr = [](const DesignateDim& d) -> std::string {
     if (!d.strideExpr.empty()) return d.strideExpr;
     return std::to_string(d.strideConst);
   };
@@ -1187,7 +1194,7 @@ std::vector<ASTNode> buildSectionToSectionAssign(hlfir::AssignOp assign,
   std::vector<std::string> dstLoExprs;
   {
     unsigned tDim = 0;
-    for (auto &d : dstDims) {
+    for (auto& d : dstDims) {
       if (d.isTriplet) {
         dstLoExprs.push_back(d.lo);
         wa.index_vars.push_back(iter_names[tDim]);
@@ -1209,7 +1216,7 @@ std::vector<ASTNode> buildSectionToSectionAssign(hlfir::AssignOp assign,
   ra.is_read = true;
   {
     unsigned tDim = 0;
-    for (auto &d : srcDims) {
+    for (auto& d : srcDims) {
       if (d.isTriplet) {
         std::string ix;
         if (d.lo == dstLoExprs[tDim]) {
@@ -1249,9 +1256,9 @@ std::vector<ASTNode> buildSectionToSectionAssign(hlfir::AssignOp assign,
   // hold the real bounds, which has been the long-standing path.
   ASTNode current = inner;
   {
-    const auto &boundsSide = dstDg ? dstDims : srcDims;
+    const auto& boundsSide = dstDg ? dstDims : srcDims;
     std::vector<std::pair<std::string, std::string>> bounds;
-    for (auto &d : boundsSide)
+    for (auto& d : boundsSide)
       if (d.isTriplet) bounds.push_back({d.lo, d.hi});
     for (int i = (int)bounds.size() - 1; i >= 0; --i) {
       ASTNode wrap;
@@ -1277,13 +1284,13 @@ std::vector<ASTNode> buildSectionToSectionAssign(hlfir::AssignOp assign,
 /// resolved  --  caller falls back to the default assign handler.
 std::vector<ASTNode> buildWholeArrayScalarBroadcast(hlfir::AssignOp assign) {
   auto dst = assign.getOperand(1);
-  auto *dDef = dst.getDefiningOp();
+  auto* dDef = dst.getDefiningOp();
   if (!dDef) return {};
   auto decl = mlir::dyn_cast<hlfir::DeclareOp>(dDef);
   if (!decl) return {};
   auto shape = decl.getShape();
   if (!shape) return {};
-  auto *shDef = shape.getDefiningOp();
+  auto* shDef = shape.getDefiningOp();
   if (!shDef) return {};
 
   // Collect per-dim extent operands.  ``fir.shape`` lists them flat;
@@ -1376,7 +1383,7 @@ ASTNode buildMemsetNode(hlfir::AssignOp assign) {
 /// trace it via ``traceConstInt`` and stash it in ``reduce_axes`` (0-based,
 /// same convention as ``buildReduceNode``).  ``emit_libcall`` reads it
 /// back and converts to Fortran 1-based for the library-node constructor.
-ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation *srcOp,
+ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation* srcOp,
                          std::string_view callee) {
   ASTNode n;
   n.kind = "libcall";
@@ -1406,7 +1413,7 @@ ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation *srcOp,
   auto resolveSliceSubset =
       [&](mlir::Value operand, llvm::StringRef calleeName,
           unsigned argIdx) -> std::pair<std::string, std::string> {
-    auto *def = operand.getDefiningOp();
+    auto* def = operand.getDefiningOp();
     if (!def) return {traceToDecl(operand), std::string{}};
     auto dg = mlir::dyn_cast<hlfir::DesignateOp>(def);
     if (!dg) return {traceToDecl(operand), std::string{}};
@@ -1506,7 +1513,7 @@ ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation *srcOp,
     unsigned flatCursor = 0;
     for (size_t d = 0; d < dims.size(); ++d) {
       if (!sub.empty()) sub += ", ";
-      const auto &dim = dims[d];
+      const auto& dim = dims[d];
       if (dim.isTriplet) {
         // DaCe 0-based half-open: lo - 1 : hi : stride.  Drop
         // the explicit ``:1`` stride to keep the common case
@@ -1572,8 +1579,7 @@ ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation *srcOp,
       n.call_arg_subsets.push_back(sub);
     };
     auto pushDim = [&](mlir::Value dim_val) {
-      if (auto c = traceConstInt(dim_val))
-        n.reduce_axes.push_back(*c - 1);
+      if (auto c = traceConstInt(dim_val)) n.reduce_axes.push_back(*c - 1);
     };
     auto pushBack = [&](mlir::Value back_val) {
       if (auto c = traceConstInt(back_val))
@@ -1611,12 +1617,12 @@ ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation *srcOp,
       } else {
         auto sExpr = buildIndexExpr(shiftVal, 0);
         if (sExpr.empty() || sExpr == "?")
-          throw std::runtime_error("hlfir.cshift: cannot resolve shift expression");
+          throw std::runtime_error(
+              "hlfir.cshift: cannot resolve shift expression");
         n.options["shift"] = sExpr;
       }
       if (auto dim = cshOp.getDim()) {
-        if (auto c = traceConstInt(dim))
-          n.reduce_axes.push_back(*c - 1);
+        if (auto c = traceConstInt(dim)) n.reduce_axes.push_back(*c - 1);
       }
     }
   } else {
@@ -1646,11 +1652,10 @@ ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation *srcOp,
       // routes the matmul through the un-transposed source -- BLAS
       // handles the transpose in-place via ``CblasTrans`` /
       // ``CUBLAS_OP_T``.
-      bool eligibleForFold =
-          (callee == "matmul" && argIdx < 2) ||
-          (callee == "matmul_transpose" && argIdx == 1);
+      bool eligibleForFold = (callee == "matmul" && argIdx < 2) ||
+                             (callee == "matmul_transpose" && argIdx == 1);
       if (eligibleForFold) {
-        if (auto *def = operand.getDefiningOp()) {
+        if (auto* def = operand.getDefiningOp()) {
           if (auto trans = mlir::dyn_cast<hlfir::TransposeOp>(def)) {
             n.options[argIdx == 0 ? "transA" : "transB"] = "true";
             operand = trans.getArray();
@@ -1716,7 +1721,7 @@ std::vector<ASTNode> buildSectionReduceAssign(hlfir::AssignOp assign,
     dims.push_back(d);
   }
   unsigned sectionRank = 0;
-  for (auto &d : dims)
+  for (auto& d : dims)
     if (d.isTriplet) sectionRank++;
   if (sectionRank == 0) return {};
 
@@ -1730,7 +1735,7 @@ std::vector<ASTNode> buildSectionReduceAssign(hlfir::AssignOp assign,
   auto dst = assign.getOperand(1);
   std::string tgtName;
   hlfir::DesignateOp tgtDg;
-  if (auto *dd = dst.getDefiningOp())
+  if (auto* dd = dst.getDefiningOp())
     tgtDg = mlir::dyn_cast<hlfir::DesignateOp>(dd);
   if (tgtDg)
     tgtName = traceToDecl(tgtDg.getMemref());
@@ -1761,7 +1766,7 @@ std::vector<ASTNode> buildSectionReduceAssign(hlfir::AssignOp assign,
   srcRead.array_name = srcName;
   srcRead.is_read = true;
   unsigned sectionIdx = 0;
-  for (auto &d : dims) {
+  for (auto& d : dims) {
     if (d.isTriplet) {
       srcRead.index_vars.push_back(iterNames[sectionIdx]);
       srcRead.index_exprs.push_back(iterNames[sectionIdx]);

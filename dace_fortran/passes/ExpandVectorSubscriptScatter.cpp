@@ -91,8 +91,8 @@ struct ExpandVectorSubscriptScatterPass
       // ``hlfir.elemental_addr`` lives for vector-subscripted
       // assignments).  We only fire on the elemental_addr shape.
       bool found = false;
-      for (auto &block : op.getLhsRegion())
-        for (auto &inner : block)
+      for (auto& block : op.getLhsRegion())
+        for (auto& inner : block)
           if (mlir::isa<hlfir::ElementalAddrOp>(inner)) {
             found = true;
             break;
@@ -110,8 +110,8 @@ struct ExpandVectorSubscriptScatterPass
 
     // --- Locate the elemental_addr inside the destination (lhs) region.
     hlfir::ElementalAddrOp eaddr;
-    for (auto &block : op.getLhsRegion())
-      for (auto &inner : block)
+    for (auto& block : op.getLhsRegion())
+      for (auto& inner : block)
         if (auto e = mlir::dyn_cast<hlfir::ElementalAddrOp>(inner)) {
           eaddr = e;
           break;
@@ -140,8 +140,8 @@ struct ExpandVectorSubscriptScatterPass
 
     // --- Find the source region's yielded value (rhs region).
     mlir::Value srcVal;
-    for (auto &block : op.getRhsRegion())
-      for (auto &inner : block)
+    for (auto& block : op.getRhsRegion())
+      for (auto& inner : block)
         if (auto y = mlir::dyn_cast<hlfir::YieldOp>(inner))
           srcVal = y.getEntity();
     if (!srcVal) {
@@ -187,14 +187,14 @@ struct ExpandVectorSubscriptScatterPass
     //     lhs).  Records original->clone in ``map`` so cloned uses
     //     inside loops resolve to the new ops.
     if (srcIsExpr) {
-      auto &rhsBlock = op.getRhsRegion().front();
-      for (auto &inner : rhsBlock) {
+      auto& rhsBlock = op.getRhsRegion().front();
+      for (auto& inner : rhsBlock) {
         if (mlir::isa<hlfir::YieldOp>(inner)) break;
         b.clone(inner, map);
       }
     }
-    auto &lhsBlock = op.getLhsRegion().front();
-    for (auto &inner : lhsBlock) {
+    auto& lhsBlock = op.getLhsRegion().front();
+    for (auto& inner : lhsBlock) {
       if (mlir::isa<hlfir::ElementalAddrOp>(inner)) break;
       b.clone(inner, map);
     }
@@ -223,7 +223,7 @@ struct ExpandVectorSubscriptScatterPass
     // each side references.
     auto traceRoot = [](mlir::Value v) -> hlfir::DeclareOp {
       for (int i = 0; i < 128 && v; ++i) {
-        auto *d = v.getDefiningOp();
+        auto* d = v.getDefiningOp();
         if (!d) return {};
         if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
           v = cv.getValue();
@@ -245,7 +245,7 @@ struct ExpandVectorSubscriptScatterPass
     // LHS root: the elemental_addr body yields a designate of the
     // destination  --  chase through to its declare.
     hlfir::DeclareOp lhsRoot;
-    for (auto &inner : eaddr.getBody().front())
+    for (auto& inner : eaddr.getBody().front())
       if (auto y = mlir::dyn_cast<hlfir::YieldOp>(inner)) {
         lhsRoot = traceRoot(y.getEntity());
         break;
@@ -255,7 +255,7 @@ struct ExpandVectorSubscriptScatterPass
     // contains the data-array designate; recurse into the
     // elemental's region to find it.
     hlfir::DeclareOp rhsRoot;
-    if (auto *def = srcVal.getDefiningOp()) {
+    if (auto* def = srcVal.getDefiningOp()) {
       if (auto elem = mlir::dyn_cast<hlfir::ElementalOp>(def)) {
         elem.walk([&](hlfir::DesignateOp dg) {
           if (rhsRoot) return;
@@ -296,13 +296,13 @@ struct ExpandVectorSubscriptScatterPass
       // identical: yield -> designate -> declare).
       std::string dstName = "expr";
       {
-        auto &eblock = eaddr.getBody().front();
-        for (auto &inner : eblock) {
+        auto& eblock = eaddr.getBody().front();
+        for (auto& inner : eblock) {
           auto y = mlir::dyn_cast<hlfir::YieldOp>(inner);
           if (!y) continue;
           mlir::Value v = y.getEntity();
           for (int i = 0; i < 128 && v; ++i) {
-            auto *d = v.getDefiningOp();
+            auto* d = v.getDefiningOp();
             if (!d) break;
             if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
               v = cv.getValue();
@@ -438,10 +438,10 @@ struct ExpandVectorSubscriptScatterPass
     }
 
     // Destination: clone elemental_addr body inline.
-    auto &eblock = eaddr.getBody().front();
+    auto& eblock = eaddr.getBody().front();
     map.map(eblock.getArgument(0), iv);
     mlir::Value destAddr;
-    for (auto &inner : eblock) {
+    for (auto& inner : eblock) {
       if (auto y = mlir::dyn_cast<hlfir::YieldOp>(inner)) {
         destAddr = map.lookupOrDefault(y.getEntity());
         break;

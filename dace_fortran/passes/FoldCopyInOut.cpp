@@ -71,7 +71,7 @@ struct SectionShape {
   mlir::Value tripStride;
 };
 
-static bool parseSimpleSection(hlfir::DesignateOp dg, SectionShape &out) {
+static bool parseSimpleSection(hlfir::DesignateOp dg, SectionShape& out) {
   auto trip = dg.getIsTripletAttr();
   if (!trip) return false;
   auto tripFlags = trip.asArrayRef();
@@ -106,7 +106,7 @@ static bool parseSimpleSection(hlfir::DesignateOp dg, SectionShape &out) {
 /// ``std::nullopt`` if the value isn't a constant.
 static std::optional<int64_t> traceConstIndex(mlir::Value v) {
   if (!v) return std::nullopt;
-  auto *def = v.getDefiningOp();
+  auto* def = v.getDefiningOp();
   if (!def) return std::nullopt;
   if (auto cst = mlir::dyn_cast<mlir::arith::ConstantOp>(def)) {
     if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue()))
@@ -162,7 +162,7 @@ struct FoldCopyInOutPass
     // 2) Walk users of ``cin#0`` (the box copy) for the
     // ``fir.box_addr`` and from there for the alias declare.
     fir::BoxAddrOp boxAddr;
-    for (auto *u : cin.getResult(0).getUsers()) {
+    for (auto* u : cin.getResult(0).getUsers()) {
       if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(u)) {
         boxAddr = ba;
         break;
@@ -171,7 +171,7 @@ struct FoldCopyInOutPass
     if (!boxAddr) return;
 
     hlfir::DeclareOp aliasDecl;
-    for (auto *u : boxAddr.getResult().getUsers()) {
+    for (auto* u : boxAddr.getResult().getUsers()) {
       if (auto d = mlir::dyn_cast<hlfir::DeclareOp>(u)) {
         aliasDecl = d;
         break;
@@ -193,7 +193,7 @@ struct FoldCopyInOutPass
     llvm::SmallVector<hlfir::DesignateOp, 8> aliasUseDgs;
     bool foreignUse = false;
     for (mlir::Value res : {aliasDecl.getResult(0), aliasDecl.getResult(1)}) {
-      for (auto *u : res.getUsers()) {
+      for (auto* u : res.getUsers()) {
         if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u)) {
           aliasUseDgs.push_back(dg);
         } else {
@@ -227,7 +227,7 @@ struct FoldCopyInOutPass
       cin.erase();
       // The temp box is typically a ``fir.alloca`` whose only
       // users were the copy_in / copy_out pair.  Erase if dead.
-      if (auto *def = temp.getDefiningOp())
+      if (auto* def = temp.getDefiningOp())
         if (def->use_empty()) def->erase();
     }
   }
@@ -265,7 +265,7 @@ struct FoldCopyInOutPass
     if (cin.getResult(0).use_empty() && cin.getResult(1).use_empty()) {
       mlir::Value temp = cin.getTempBox();
       cin.erase();
-      if (auto *def = temp.getDefiningOp())
+      if (auto* def = temp.getDefiningOp())
         if (def->use_empty()) def->erase();
     }
   }
@@ -276,7 +276,7 @@ struct FoldCopyInOutPass
   /// access side (so ``%alias(1:N:1)`` whole-array becomes
   /// ``%parent(scalars..., 1:N:1)``).
   void rewriteAccess(hlfir::DesignateOp useDg, mlir::Value parent,
-                     const SectionShape &sec, mlir::OpBuilder &b) {
+                     const SectionShape& sec, mlir::OpBuilder& b) {
     b.setInsertionPoint(useDg);
     auto loc = useDg.getLoc();
 

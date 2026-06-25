@@ -48,7 +48,7 @@ struct DefaultIntentPass
   }
 
   void runOnOperation() override {
-    auto *ctx = &getContext();
+    auto* ctx = &getContext();
     using Flags = fir::FortranVariableFlagsEnum;
     auto hasIntent = [](Flags f) {
       return bitEnumContainsAny(f, Flags::intent_in) ||
@@ -58,10 +58,10 @@ struct DefaultIntentPass
 
     getOperation().walk([&](mlir::func::FuncOp func) {
       if (func.isExternal()) return;
-      auto &block = func.front();
+      auto& block = func.front();
       for (auto arg : block.getArguments()) {
         hlfir::DeclareOp decl;
-        for (auto *u : arg.getUsers())
+        for (auto* u : arg.getUsers())
           if (auto d = mlir::dyn_cast<hlfir::DeclareOp>(u)) {
             decl = d;
             break;

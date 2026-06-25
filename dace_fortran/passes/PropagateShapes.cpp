@@ -52,7 +52,7 @@ namespace {
 /// Find the first hlfir.declare that uses `formal` as its memref operand.
 /// This is the dummy argument's declaration inside the callee body.
 static hlfir::DeclareOp findEntryDeclare(mlir::Value formal) {
-  for (auto *user : formal.getUsers())
+  for (auto* user : formal.getUsers())
     if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(user)) return decl;
   return {};
 }
@@ -71,7 +71,7 @@ static llvm::SmallVector<mlir::Value, 4> traceShapeAtCallSite(
     mlir::Value actual) {
   mlir::Value v = actual;
   for (int i = 0; i < limits::kShapeWalkDepth && v; ++i) {
-    auto *def = v.getDefiningOp();
+    auto* def = v.getDefiningOp();
     if (!def) break;
 
     if (auto rebox = mlir::dyn_cast<fir::ReboxOp>(def)) {
@@ -107,7 +107,7 @@ static llvm::SmallVector<mlir::Value, 4> traceShapeAtCallSite(
 ///   existing empty or absent -> take new
 ///   existing == new          -> keep
 ///   existing != new          -> ""  (disagreement, fall back to synthetic)
-static mlir::ArrayAttr mergeHint(mlir::MLIRContext *ctx,
+static mlir::ArrayAttr mergeHint(mlir::MLIRContext* ctx,
                                  mlir::ArrayAttr existing,
                                  llvm::ArrayRef<std::string> fresh) {
   llvm::SmallVector<mlir::Attribute, 4> out;
@@ -150,9 +150,9 @@ struct PropagateShapesPass
   }
 
   /// One sweep.  Returns true if it changed any attributes.
-  bool sweep(mlir::ModuleOp module, mlir::SymbolTable &symTab) {
+  bool sweep(mlir::ModuleOp module, mlir::SymbolTable& symTab) {
     bool changed = false;
-    auto *ctx = module.getContext();
+    auto* ctx = module.getContext();
 
     module.walk([&](fir::CallOp call) {
       auto sym = call.getCallee();
@@ -180,7 +180,7 @@ struct PropagateShapesPass
 
         // Don't bother if *every* name is empty.
         bool anyKnown = false;
-        for (auto &n : names)
+        for (auto& n : names)
           if (!n.empty()) {
             anyKnown = true;
             break;

@@ -13,12 +13,12 @@ ASTNode buildAssignNode(hlfir::AssignOp assign);
 
 ASTNode buildCopyNode(hlfir::AssignOp assign);
 
-ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation *srcOp,
+ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation* srcOp,
                          std::string_view callee);
 
 ASTNode buildMemsetNode(hlfir::AssignOp assign);
 
-ASTNode buildReduceNode(hlfir::AssignOp assign, mlir::Operation *redOp,
+ASTNode buildReduceNode(hlfir::AssignOp assign, mlir::Operation* redOp,
                         std::string_view wcr, std::string_view identity);
 
 /// Build the AST nodes for an ``hlfir.assign`` whose RHS op ``sd`` is a
@@ -49,7 +49,7 @@ ASTNode buildSelectCaseChain(fir::SelectCaseOp sel);
 
 std::vector<ASTNode> buildWholeArrayScalarBroadcast(hlfir::AssignOp assign);
 
-void collectReadAccesses(mlir::Value v, std::vector<AccessInfo> &accesses,
+void collectReadAccesses(mlir::Value v, std::vector<AccessInfo>& accesses,
                          int depth);
 
 std::string exprDtypeString(mlir::Type ty);
@@ -64,7 +64,7 @@ std::string resolveIndex(mlir::Value idx);
 
 std::string scfSynthName(mlir::Value v);
 
-std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block &block);
+std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block);
 
 std::string yieldedExpr(mlir::Value v);
 

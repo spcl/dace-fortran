@@ -28,8 +28,8 @@ namespace hlfir_bridge {
 static thread_local std::unordered_map<std::string, std::string>
     kManglingOverride;
 
-void setManglingOverride(const std::string &mangled,
-                         const std::string &shortName) {
+void setManglingOverride(const std::string& mangled,
+                         const std::string& shortName) {
   kManglingOverride[mangled] = shortName;
 }
 
@@ -47,13 +47,13 @@ void clearManglingOverrides() {
   kShortNameCollisions.clear();
 }
 
-void setEntryScope(const std::string &scope) { kEntryScope = scope; }
+void setEntryScope(const std::string& scope) { kEntryScope = scope; }
 
-void setShortNameCollisions(const std::set<std::string> &collisions) {
+void setShortNameCollisions(const std::set<std::string>& collisions) {
   kShortNameCollisions = collisions;
 }
 
-std::string getFScope(const std::string &uniq) {
+std::string getFScope(const std::string& uniq) {
   // Fortran mangled-name shape: ``_QM<mod>F<func>E<name>`` (with
   // optional nested ``F`` segments for procedure-internal
   // procedures).  Take the F immediately before the last E.
@@ -64,7 +64,7 @@ std::string getFScope(const std::string &uniq) {
   return uniq.substr(fP + 1, eP - fP - 1);
 }
 
-std::string extractName(const std::string &m) {
+std::string extractName(const std::string& m) {
   auto it = kManglingOverride.find(m);
   if (it != kManglingOverride.end()) return it->second;
   auto p = m.rfind('E');
@@ -130,12 +130,12 @@ std::string extractName(const std::string &m) {
 // access lands on the currently-live SDFG transient.
 static thread_local std::unordered_map<std::string, std::string> kAllocAlias;
 
-std::string allocAliasFor(const std::string &raw) {
+std::string allocAliasFor(const std::string& raw) {
   auto it = kAllocAlias.find(raw);
   return it == kAllocAlias.end() ? raw : it->second;
 }
 
-void setAllocAlias(const std::string &raw, const std::string &alias) {
+void setAllocAlias(const std::string& raw, const std::string& alias) {
   if (alias == raw)
     kAllocAlias.erase(raw);
   else
@@ -319,18 +319,17 @@ std::string traceToDecl(mlir::Value val, int max) {
           bool wantPtr = false;
           if (auto attrs = dg.getFortranAttrs()) {
             auto fa = *attrs;
-            wantPtr =
-                bitEnumContainsAny(fa,
-                    fir::FortranVariableFlagsEnum::pointer) ||
-                bitEnumContainsAny(fa,
-                    fir::FortranVariableFlagsEnum::allocatable);
+            wantPtr = bitEnumContainsAny(
+                          fa, fir::FortranVariableFlagsEnum::pointer) ||
+                      bitEnumContainsAny(
+                          fa, fir::FortranVariableFlagsEnum::allocatable);
           }
           if (wantPtr) {
             // Search the enclosing func.func / module for a declare
             // whose uniq_name's E-scope short tail equals
             // ``<parent>__<member>``.  Found -> use its name.
             std::string doubleU = parent + "__" + comp.getValue().str();
-            auto *func =
+            auto* func =
                 dg->getParentOfType<mlir::func::FuncOp>().getOperation();
             bool found = false;
             if (func) {
@@ -380,7 +379,7 @@ std::string traceToDecl(mlir::Value val, int max) {
 
 std::optional<int64_t> traceConstInt(mlir::Value v) {
   for (int i = 0; i < limits::kTraceConstIntMax; ++i) {
-    auto *d = v.getDefiningOp();
+    auto* d = v.getDefiningOp();
     if (!d) break;
     if (auto c = mlir::dyn_cast<mlir::arith::ConstantOp>(d))
       if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue()))
@@ -396,7 +395,7 @@ std::optional<int64_t> traceConstInt(mlir::Value v) {
     // / ``MIN`` (also lowered as ``arith.select`` over a cmp) and
     // collapse a non-constant bound to its first operand.
     if (auto s = mlir::dyn_cast<mlir::arith::SelectOp>(d)) {
-      auto *fdef = s.getFalseValue().getDefiningOp();
+      auto* fdef = s.getFalseValue().getDefiningOp();
       bool false_is_zero = false;
       if (fdef) {
         if (auto c = mlir::dyn_cast<mlir::arith::ConstantOp>(fdef))
@@ -413,8 +412,8 @@ std::optional<int64_t> traceConstInt(mlir::Value v) {
   return std::nullopt;
 }
 
-std::string posSymbolName(const std::string &array,
-                          const std::vector<int64_t> &one_based_idxs) {
+std::string posSymbolName(const std::string& array,
+                          const std::vector<int64_t>& one_based_idxs) {
   // Keep in lockstep with ``internPosSymbol`` (ast/expressions.cpp): the
   // descriptor-shape side mints the name here, the AST builder mints the
   // matching ``symbol_init`` there, and they must agree.  Each 1-based
@@ -429,7 +428,7 @@ std::optional<std::pair<std::string, std::vector<int64_t>>>
 constIndexedElementLoad(mlir::Value v) {
   if (!v) return std::nullopt;
   for (int i = 0; i < limits::kConvertChainDepth && v; ++i) {
-    auto *d = v.getDefiningOp();
+    auto* d = v.getDefiningOp();
     if (auto cv = mlir::dyn_cast_or_null<fir::ConvertOp>(d)) {
       v = cv.getValue();
       continue;
@@ -438,8 +437,8 @@ constIndexedElementLoad(mlir::Value v) {
   }
   auto ld = mlir::dyn_cast_or_null<fir::LoadOp>(v.getDefiningOp());
   if (!ld) return std::nullopt;
-  auto dg =
-      mlir::dyn_cast_or_null<hlfir::DesignateOp>(ld.getMemref().getDefiningOp());
+  auto dg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
+      ld.getMemref().getDefiningOp());
   if (!dg) return std::nullopt;
   auto idxs = dg.getIndices();
   if (idxs.empty()) return std::nullopt;
@@ -460,21 +459,21 @@ constIndexedElementLoad(mlir::Value v) {
 
 static void forEachConstIndexedElementImpl(
     mlir::Value v,
-    const std::function<void(const std::string &, const std::vector<int64_t> &)>
-        &fn,
-    int depth, llvm::SmallPtrSet<mlir::Operation *, 32> *visited = nullptr) {
+    const std::function<void(const std::string&, const std::vector<int64_t>&)>&
+        fn,
+    int depth, llvm::SmallPtrSet<mlir::Operation*, 32>* visited = nullptr) {
   if (depth > limits::kTraceToDeclMax || !v) return;
   if (auto e = constIndexedElementLoad(v)) {
     fn(e->first, e->second);
     return;
   }
-  auto *def = v.getDefiningOp();
+  auto* def = v.getDefiningOp();
   if (!def) return;
   // Branches into every operand: on a shared-subexpression DAG the depth cap
   // alone is not enough (a diamond re-explores exponentially), so mark each op
   // once.  The callback (``internPosSymbol``) is idempotent, so visiting a
   // shared element leaf once instead of twice is behaviour-preserving.
-  llvm::SmallPtrSet<mlir::Operation *, 32> seen;
+  llvm::SmallPtrSet<mlir::Operation*, 32> seen;
   if (!visited) visited = &seen;
   if (!visited->insert(def).second) return;
   // Recurse through the same wrapper / arithmetic / max-min / select op
@@ -491,15 +490,15 @@ static void forEachConstIndexedElementImpl(
 
 void forEachConstIndexedElement(
     mlir::Value v,
-    const std::function<void(const std::string &, const std::vector<int64_t> &)>
-        &fn) {
+    const std::function<void(const std::string&, const std::vector<int64_t>&)>&
+        fn) {
   forEachConstIndexedElementImpl(v, fn, 0);
 }
 
 static std::string traceExtentExprMemo(
-    mlir::Value v, llvm::DenseMap<mlir::Operation *, std::string> &memo) {
+    mlir::Value v, llvm::DenseMap<mlir::Operation*, std::string>& memo) {
   if (!v) return "";
-  auto *def = v.getDefiningOp();
+  auto* def = v.getDefiningOp();
   if (!def) return "";
 
   // Extent expressions are DAGs (a shared grid-parameter sub-expression feeds
@@ -509,128 +508,127 @@ static std::string traceExtentExprMemo(
   // defining op so each subexpression is built exactly once.
   if (auto it = memo.find(def); it != memo.end()) return it->second;
   std::string result = [&]() -> std::string {
+    // Transparent peels.
+    if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def))
+      return traceExtentExprMemo(cv.getValue(), memo);
 
-  // Transparent peels.
-  if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def))
-    return traceExtentExprMemo(cv.getValue(), memo);
-
-  // ``fir.box_dims`` extent result of an array descriptor: render as that
-  // array's synthetic extent symbol ``<name>_d<dim>``.  A transient sized
-  // from another array's *runtime* extent -- e.g. the AoS-of-pointer-records
-  // gather temp (``LiftAosPointerRecords``), whose inner shape is recovered
-  // via ``fir.box_dims`` on a rebind target's assumed-shape box -- must reuse
-  // the source array's extent symbol.  Otherwise the extent falls through to
-  // ``"?"`` and the caller mints a fresh ``<temp>_d<i>`` that no passed array
-  // backs, so the call-time auto-fill defaults it to ``1`` and the transient
-  // is under-allocated (heap overflow).  ``fir.box_dims`` yields
-  // ``(lowerBound, extent, byteStride)``; only result #1 is an extent.
-  if (auto bd = mlir::dyn_cast<fir::BoxDimsOp>(def)) {
-    if (v == bd.getResult(1)) {
-      if (auto dim = traceConstInt(bd.getDim())) {
-        auto base = traceToDecl(bd.getVal());
-        if (!base.empty())
-          return base + "_d" + std::to_string(*dim);
+    // ``fir.box_dims`` extent result of an array descriptor: render as that
+    // array's synthetic extent symbol ``<name>_d<dim>``.  A transient sized
+    // from another array's *runtime* extent -- e.g. the AoS-of-pointer-records
+    // gather temp (``LiftAosPointerRecords``), whose inner shape is recovered
+    // via ``fir.box_dims`` on a rebind target's assumed-shape box -- must reuse
+    // the source array's extent symbol.  Otherwise the extent falls through to
+    // ``"?"`` and the caller mints a fresh ``<temp>_d<i>`` that no passed array
+    // backs, so the call-time auto-fill defaults it to ``1`` and the transient
+    // is under-allocated (heap overflow).  ``fir.box_dims`` yields
+    // ``(lowerBound, extent, byteStride)``; only result #1 is an extent.
+    if (auto bd = mlir::dyn_cast<fir::BoxDimsOp>(def)) {
+      if (v == bd.getResult(1)) {
+        if (auto dim = traceConstInt(bd.getDim())) {
+          auto base = traceToDecl(bd.getVal());
+          if (!base.empty()) return base + "_d" + std::to_string(*dim);
+        }
       }
-    }
-    return "";
-  }
-
-  // Constant integer literal.
-  if (auto cst = mlir::dyn_cast<mlir::arith::ConstantOp>(def))
-    if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue()))
-      return std::to_string(ia.getInt());
-
-  // Load of a Fortran scalar -- render as its short name.  A load of a
-  // constant-indexed array element (``dims(1)``) becomes its position
-  // symbol so the shape stays symbolic; promoting the whole array would
-  // collide it with its own data descriptor.
-  if (auto ld = mlir::dyn_cast<fir::LoadOp>(def)) {
-    if (auto e = constIndexedElementLoad(v))
-      return posSymbolName(e->first, e->second);
-    auto mem = ld.getMemref();
-    auto *md = mem.getDefiningOp();
-    if (!md) return "";
-    if (mlir::isa<hlfir::DeclareOp>(md) || mlir::isa<fir::DeclareOp>(md)) {
-      return traceToDecl(mem);
-    }
-    return "";
-  }
-
-  // ``arith.select`` over an ``arith.cmpi`` is BOTH Flang's
-  // non-negativity clamp on an extent AND a genuine Fortran
-  // ``MAX``/``MIN`` -- they must be told apart:
-  //
-  //   * Clamp ``max(ext, 0)``: ``select(ext sgt 0, ext, 0)`` -- the
-  //     false arm is the constant ``0``.  Array extents are
-  //     non-negative by construction, so this is dead defensive code;
-  //     drop the wrap and return the underlying extent (keeps shapes
-  //     readable -- ``klon`` not ``max(klon, 0)`` -- and lets sympy
-  //     fold).
-  //   * Genuine ``MAX(a, b)`` / ``MIN(a, b)``:
-  //     ``select(a sgt b, a, b)`` / ``select(a slt b, a, b)`` -- the
-  //     two arms are the operands.  Render ``max(a, b)`` / ``min(a, b)``
-  //     so a real two-operand bound (``allocate(x(max(n, 1)))``)
-  //     survives instead of being dropped.
-  //
-  // The cmp operands must match the select arms; otherwise it is some
-  // other conditional we don't model.
-  if (auto sel = mlir::dyn_cast<mlir::arith::SelectOp>(def)) {
-    auto *cdef = sel.getCondition().getDefiningOp();
-    auto cmp = cdef ? mlir::dyn_cast<mlir::arith::CmpIOp>(cdef) : nullptr;
-    if (!cmp || cmp.getLhs() != sel.getTrueValue() ||
-        cmp.getRhs() != sel.getFalseValue())
       return "";
-    using P = mlir::arith::CmpIPredicate;
-    auto pred = cmp.getPredicate();
-    bool falseIsZero = false;
-    if (auto *fdef = sel.getFalseValue().getDefiningOp())
-      if (auto c = mlir::dyn_cast<mlir::arith::ConstantOp>(fdef))
-        if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue()))
-          falseIsZero = (ia.getInt() == 0);
-    if (falseIsZero && (pred == P::sgt || pred == P::sge))
-      return traceExtentExprMemo(sel.getTrueValue(), memo);  // non-neg clamp
-    auto a = traceExtentExprMemo(sel.getTrueValue(), memo);
-    auto b = traceExtentExprMemo(sel.getFalseValue(), memo);
-    if (a.empty() || b.empty()) return "";
-    if (pred == P::sgt || pred == P::sge || pred == P::ugt || pred == P::uge)
-      return "max(" + a + ", " + b + ")";
-    if (pred == P::slt || pred == P::sle || pred == P::ult || pred == P::ule)
-      return "min(" + a + ", " + b + ")";
+    }
+
+    // Constant integer literal.
+    if (auto cst = mlir::dyn_cast<mlir::arith::ConstantOp>(def))
+      if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue()))
+        return std::to_string(ia.getInt());
+
+    // Load of a Fortran scalar -- render as its short name.  A load of a
+    // constant-indexed array element (``dims(1)``) becomes its position
+    // symbol so the shape stays symbolic; promoting the whole array would
+    // collide it with its own data descriptor.
+    if (auto ld = mlir::dyn_cast<fir::LoadOp>(def)) {
+      if (auto e = constIndexedElementLoad(v))
+        return posSymbolName(e->first, e->second);
+      auto mem = ld.getMemref();
+      auto* md = mem.getDefiningOp();
+      if (!md) return "";
+      if (mlir::isa<hlfir::DeclareOp>(md) || mlir::isa<fir::DeclareOp>(md)) {
+        return traceToDecl(mem);
+      }
+      return "";
+    }
+
+    // ``arith.select`` over an ``arith.cmpi`` is BOTH Flang's
+    // non-negativity clamp on an extent AND a genuine Fortran
+    // ``MAX``/``MIN`` -- they must be told apart:
+    //
+    //   * Clamp ``max(ext, 0)``: ``select(ext sgt 0, ext, 0)`` -- the
+    //     false arm is the constant ``0``.  Array extents are
+    //     non-negative by construction, so this is dead defensive code;
+    //     drop the wrap and return the underlying extent (keeps shapes
+    //     readable -- ``klon`` not ``max(klon, 0)`` -- and lets sympy
+    //     fold).
+    //   * Genuine ``MAX(a, b)`` / ``MIN(a, b)``:
+    //     ``select(a sgt b, a, b)`` / ``select(a slt b, a, b)`` -- the
+    //     two arms are the operands.  Render ``max(a, b)`` / ``min(a, b)``
+    //     so a real two-operand bound (``allocate(x(max(n, 1)))``)
+    //     survives instead of being dropped.
+    //
+    // The cmp operands must match the select arms; otherwise it is some
+    // other conditional we don't model.
+    if (auto sel = mlir::dyn_cast<mlir::arith::SelectOp>(def)) {
+      auto* cdef = sel.getCondition().getDefiningOp();
+      auto cmp = cdef ? mlir::dyn_cast<mlir::arith::CmpIOp>(cdef) : nullptr;
+      if (!cmp || cmp.getLhs() != sel.getTrueValue() ||
+          cmp.getRhs() != sel.getFalseValue())
+        return "";
+      using P = mlir::arith::CmpIPredicate;
+      auto pred = cmp.getPredicate();
+      bool falseIsZero = false;
+      if (auto* fdef = sel.getFalseValue().getDefiningOp())
+        if (auto c = mlir::dyn_cast<mlir::arith::ConstantOp>(fdef))
+          if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue()))
+            falseIsZero = (ia.getInt() == 0);
+      if (falseIsZero && (pred == P::sgt || pred == P::sge))
+        return traceExtentExprMemo(sel.getTrueValue(), memo);  // non-neg clamp
+      auto a = traceExtentExprMemo(sel.getTrueValue(), memo);
+      auto b = traceExtentExprMemo(sel.getFalseValue(), memo);
+      if (a.empty() || b.empty()) return "";
+      if (pred == P::sgt || pred == P::sge || pred == P::ugt || pred == P::uge)
+        return "max(" + a + ", " + b + ")";
+      if (pred == P::slt || pred == P::sle || pred == P::ult || pred == P::ule)
+        return "min(" + a + ", " + b + ")";
+      return "";
+    }
+
+    // Binary integer arithmetic.  Render parenthesised so the result
+    // composes cleanly when nested.  ``arith.max*i`` / ``arith.min*i`` are
+    // the direct MAX/MIN lowering (vs the select-over-cmp form above).
+    auto nm = def->getName().getStringRef();
+    static const std::map<llvm::StringRef, std::string> bin = {
+        {"arith.addi", " + "},   {"arith.subi", " - "},   {"arith.muli", " * "},
+        {"arith.divsi", " // "}, {"arith.divui", " // "},
+    };
+    if (auto it = bin.find(nm); it != bin.end() && def->getNumOperands() == 2) {
+      auto l = traceExtentExprMemo(def->getOperand(0), memo);
+      auto r = traceExtentExprMemo(def->getOperand(1), memo);
+      if (l.empty() || r.empty()) return "";
+      return "(" + l + it->second + r + ")";
+    }
+    if ((nm == "arith.maxsi" || nm == "arith.maxui" || nm == "arith.minsi" ||
+         nm == "arith.minui") &&
+        def->getNumOperands() == 2) {
+      auto l = traceExtentExprMemo(def->getOperand(0), memo);
+      auto r = traceExtentExprMemo(def->getOperand(1), memo);
+      if (l.empty() || r.empty()) return "";
+      const char* fn =
+          (nm == "arith.maxsi" || nm == "arith.maxui") ? "max" : "min";
+      return std::string(fn) + "(" + l + ", " + r + ")";
+    }
+
     return "";
-  }
-
-  // Binary integer arithmetic.  Render parenthesised so the result
-  // composes cleanly when nested.  ``arith.max*i`` / ``arith.min*i`` are
-  // the direct MAX/MIN lowering (vs the select-over-cmp form above).
-  auto nm = def->getName().getStringRef();
-  static const std::map<llvm::StringRef, std::string> bin = {
-      {"arith.addi", " + "},   {"arith.subi", " - "},   {"arith.muli", " * "},
-      {"arith.divsi", " // "}, {"arith.divui", " // "},
-  };
-  if (auto it = bin.find(nm); it != bin.end() && def->getNumOperands() == 2) {
-    auto l = traceExtentExprMemo(def->getOperand(0), memo);
-    auto r = traceExtentExprMemo(def->getOperand(1), memo);
-    if (l.empty() || r.empty()) return "";
-    return "(" + l + it->second + r + ")";
-  }
-  if ((nm == "arith.maxsi" || nm == "arith.maxui" || nm == "arith.minsi" ||
-       nm == "arith.minui") &&
-      def->getNumOperands() == 2) {
-    auto l = traceExtentExprMemo(def->getOperand(0), memo);
-    auto r = traceExtentExprMemo(def->getOperand(1), memo);
-    if (l.empty() || r.empty()) return "";
-    const char *fn = (nm == "arith.maxsi" || nm == "arith.maxui") ? "max" : "min";
-    return std::string(fn) + "(" + l + ", " + r + ")";
-  }
-
-  return "";
   }();
   memo[def] = result;
   return result;
 }
 
 std::string traceExtentExpr(mlir::Value v) {
-  llvm::DenseMap<mlir::Operation *, std::string> memo;
+  llvm::DenseMap<mlir::Operation*, std::string> memo;
   return traceExtentExprMemo(v, memo);
 }
 
@@ -641,10 +639,10 @@ std::string traceExtentExpr(mlir::Value v) {
 // defining op once so the walk is linear in the DAG size; the public entry
 // seeds a fresh set and threads it through.
 static void collectExtentExprScalarsRec(
-    mlir::Value v, std::set<std::string> &out,
-    llvm::SmallPtrSet<mlir::Operation *, 32> &visited) {
+    mlir::Value v, std::set<std::string>& out,
+    llvm::SmallPtrSet<mlir::Operation*, 32>& visited) {
   if (!v) return;
-  auto *def = v.getDefiningOp();
+  auto* def = v.getDefiningOp();
   if (!def || !visited.insert(def).second) return;
   if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def)) {
     collectExtentExprScalarsRec(cv.getValue(), out, visited);
@@ -653,7 +651,7 @@ static void collectExtentExprScalarsRec(
   if (mlir::isa<mlir::arith::ConstantOp>(def)) return;
   if (auto ld = mlir::dyn_cast<fir::LoadOp>(def)) {
     auto mem = ld.getMemref();
-    if (auto *md = mem.getDefiningOp())
+    if (auto* md = mem.getDefiningOp())
       if (mlir::isa<hlfir::DeclareOp>(md) || mlir::isa<fir::DeclareOp>(md)) {
         auto n = traceToDecl(mem);
         if (!n.empty()) out.insert(n);
@@ -677,8 +675,8 @@ static void collectExtentExprScalarsRec(
   }
 }
 
-void collectExtentExprScalars(mlir::Value v, std::set<std::string> &out) {
-  llvm::SmallPtrSet<mlir::Operation *, 32> visited;
+void collectExtentExprScalars(mlir::Value v, std::set<std::string>& out) {
+  llvm::SmallPtrSet<mlir::Operation*, 32> visited;
   collectExtentExprScalarsRec(v, out, visited);
 }
 
@@ -738,12 +736,11 @@ hlfir::DeclareOp asAssumedShapeAlias(hlfir::DeclareOp decl) {
   int innerRank = rankOfDeclResult(decl.getResult(0));
   auto mr = decl.getMemref();
   for (int i = 0; i < limits::kAliasMemrefWalkDepth && mr; ++i) {
-    auto *d = mr.getDefiningOp();
+    auto* d = mr.getDefiningOp();
     if (!d) break;
     if (auto outer = mlir::dyn_cast<hlfir::DeclareOp>(d)) {
       int outerRank = rankOfDeclResult(outer.getResult(0));
-      if (innerRank > 0 && outerRank > 0 && innerRank != outerRank)
-        return {};
+      if (innerRank > 0 && outerRank > 0 && innerRank != outerRank) return {};
       return outer;
     }
     if (auto conv = mlir::dyn_cast<fir::ConvertOp>(d)) {
@@ -791,7 +788,7 @@ hlfir::DeclareOp asAssumedShapeAlias(hlfir::DeclareOp decl) {
 ShapeOperandInfo classifyShapeOperand(mlir::Value shape) {
   ShapeOperandInfo si;
   if (!shape) return si;
-  auto *def = shape.getDefiningOp();
+  auto* def = shape.getDefiningOp();
   if (auto sh = mlir::dyn_cast_or_null<fir::ShapeOp>(def)) {
     si.kind = ShapeOperandInfo::Shape;
     for (auto e : sh.getExtents()) si.extents.push_back(e);

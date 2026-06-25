@@ -85,6 +85,8 @@
 //
 // ============================================================================
 
+#include <cstdlib>
+
 #include "flang/Optimizer/Dialect/FIROps.h"
 #include "flang/Optimizer/Dialect/FIRType.h"
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
@@ -98,8 +100,6 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Pass/Pass.h"
 #include "passes/Passes.h"
-
-#include <cstdlib>
 
 #define DEBUG_TYPE "mark-bounds-remap-views"
 
@@ -121,7 +121,7 @@ static constexpr llvm::StringLiteral kBoundsRemapViewAttr =
 /// this otherwise valid rebinds look like shifted ones.
 static mlir::Value peelConverts(mlir::Value v) {
   for (int hops = 0; v && hops < 8; ++hops) {
-    auto *def = v.getDefiningOp();
+    auto* def = v.getDefiningOp();
     if (!def) return v;
     if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def)) {
       v = cv.getValue();
@@ -175,7 +175,7 @@ static bool isPointerBox(mlir::Type ty) {
 /// the originating ``hlfir.declare``.  Stops on anything else.
 static hlfir::DeclareOp findDeclareThroughChain(mlir::Value v) {
   for (int hops = 0; v && hops < 16; ++hops) {
-    auto *def = v.getDefiningOp();
+    auto* def = v.getDefiningOp();
     if (!def) return {};
     if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def)) {
       v = cv.getValue();
@@ -212,9 +212,10 @@ static mlir::Value findStoreTargetForRebox(fir::ReboxOp rebox) {
   llvm::SmallVector<mlir::Value, 4> work{rebox.getResult()};
   for (int hops = 0; !work.empty() && hops < 16; ++hops) {
     mlir::Value v = work.pop_back_val();
-    for (auto *user : v.getUsers()) {
+    for (auto* user : v.getUsers()) {
       if (auto st = mlir::dyn_cast<fir::StoreOp>(user)) return st.getMemref();
-      if (auto cv = mlir::dyn_cast<fir::ConvertOp>(user)) work.push_back(cv.getResult());
+      if (auto cv = mlir::dyn_cast<fir::ConvertOp>(user))
+        work.push_back(cv.getResult());
     }
   }
   return {};
@@ -229,7 +230,9 @@ struct MarkBoundsRemapViewsPass
                                mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(MarkBoundsRemapViewsPass)
 
-  llvm::StringRef getArgument() const final { return "hlfir-mark-bounds-remap-views"; }
+  llvm::StringRef getArgument() const final {
+    return "hlfir-mark-bounds-remap-views";
+  }
   llvm::StringRef getDescription() const final {
     return "Tag the LHS pointer declare of every Fortran 2003 bounds-"
            "remapping pointer assignment (``ptr(1:N*K) => target(...)``) "
@@ -262,7 +265,7 @@ struct MarkBoundsRemapViewsPass
       mlir::Value mem = embox.getMemref();
       mlir::Type sourceTy = mem.getType();
       for (int hop = 0; hop < 8; ++hop) {
-        if (auto *def = mem.getDefiningOp()) {
+        if (auto* def = mem.getDefiningOp()) {
           if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def)) {
             mem = cv.getValue();
             sourceTy = mem.getType();
@@ -296,30 +299,34 @@ struct MarkBoundsRemapViewsPass
       // Shape operand must be ``shape_shift`` with all LB == 1.
       mlir::Value shape = embox.getShape();
       if (!shape) return;
-      auto shiftOp = mlir::dyn_cast_or_null<fir::ShapeShiftOp>(shape.getDefiningOp());
+      auto shiftOp =
+          mlir::dyn_cast_or_null<fir::ShapeShiftOp>(shape.getDefiningOp());
       if (!shiftOp) return;
       auto pairs = shiftOp.getPairs();
       bool allLbOne = true;
       for (size_t i = 0; i + 1 < pairs.size(); i += 2)
-        if (!isConstantOne(pairs[i])) { allLbOne = false; break; }
+        if (!isConstantOne(pairs[i])) {
+          allLbOne = false;
+          break;
+        }
       if (!allLbOne) return;
 
       // Locate the store target and trace to the pointer declare.
       mlir::Value storeTarget;
-      for (auto *u : embox.getResult().getUsers()) {
+      for (auto* u : embox.getResult().getUsers()) {
         if (auto st = mlir::dyn_cast<fir::StoreOp>(u)) {
           storeTarget = st.getMemref();
           break;
         }
       }
       if (!storeTarget) return;
-      auto ptrDecl = mlir::dyn_cast_or_null<hlfir::DeclareOp>(
-          storeTarget.getDefiningOp());
+      auto ptrDecl =
+          mlir::dyn_cast_or_null<hlfir::DeclareOp>(storeTarget.getDefiningOp());
       if (!ptrDecl) ptrDecl = findDeclareThroughChain(storeTarget);
       if (!ptrDecl) return;
 
       ptrDecl->setAttr(kBoundsRemapViewAttr,
-                        mlir::UnitAttr::get(&getContext()));
+                       mlir::UnitAttr::get(&getContext()));
       ++tagged;
     });
 
@@ -337,7 +344,8 @@ struct MarkBoundsRemapViewsPass
       //     not a plain ``fir.shape`` (no LB).
       mlir::Value shape = rebox.getShape();
       if (!shape) return;
-      auto shiftOp = mlir::dyn_cast_or_null<fir::ShapeShiftOp>(shape.getDefiningOp());
+      auto shiftOp =
+          mlir::dyn_cast_or_null<fir::ShapeShiftOp>(shape.getDefiningOp());
       if (!shiftOp) return;
 
       // (4) Every lb in the shape_shift must resolve to constant 1.
@@ -345,7 +353,10 @@ struct MarkBoundsRemapViewsPass
       auto pairs = shiftOp.getPairs();
       bool allLbOne = true;
       for (size_t i = 0; i + 1 < pairs.size(); i += 2)
-        if (!isConstantOne(pairs[i])) { allLbOne = false; break; }
+        if (!isConstantOne(pairs[i])) {
+          allLbOne = false;
+          break;
+        }
       if (!allLbOne) return;
 
       // (5) Locate the store target -- the pointer's box-ref.
@@ -353,8 +364,8 @@ struct MarkBoundsRemapViewsPass
       if (!storeTarget) return;
 
       // (6) Walk back from the store target to the pointer's declare.
-      auto ptrDecl = mlir::dyn_cast_or_null<hlfir::DeclareOp>(
-          storeTarget.getDefiningOp());
+      auto ptrDecl =
+          mlir::dyn_cast_or_null<hlfir::DeclareOp>(storeTarget.getDefiningOp());
       if (!ptrDecl) {
         // Sometimes there's a ``fir.convert`` between -- walk through.
         ptrDecl = findDeclareThroughChain(storeTarget);
@@ -367,20 +378,18 @@ struct MarkBoundsRemapViewsPass
       // arithmetic.  Idempotent  --  re-running the pass is a no-op
       // because ``setAttr`` overwrites with the same unit.
       ptrDecl->setAttr(kBoundsRemapViewAttr,
-                        mlir::UnitAttr::get(&getContext()));
+                       mlir::UnitAttr::get(&getContext()));
       ++tagged;
 
       if (std::getenv("HLFIR_BOUNDS_REMAP_TRACE")) {
-        llvm::errs() << "MarkBoundsRemapViews: tagged "
-                     << ptrDecl.getUniqName() << " (rebox rank "
-                     << inRank << " -> " << outRank << ")\n";
+        llvm::errs() << "MarkBoundsRemapViews: tagged " << ptrDecl.getUniqName()
+                     << " (rebox rank " << inRank << " -> " << outRank << ")\n";
         llvm::errs().flush();
       }
     });
 
-    LLVM_DEBUG(llvm::dbgs()
-               << "MarkBoundsRemapViews: tagged " << tagged
-               << " bounds-remap-view pointer declare(s)\n");
+    LLVM_DEBUG(llvm::dbgs() << "MarkBoundsRemapViews: tagged " << tagged
+                            << " bounds-remap-view pointer declare(s)\n");
   }
 };
 
