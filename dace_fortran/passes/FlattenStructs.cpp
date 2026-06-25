@@ -2103,6 +2103,11 @@ struct FlattenStructsPass
     // companions with inline allocmem/freemem); only if it cannot fire does
     // the diagnostic below report the unsupported shape.
     splitLocalAoRScalarMembers(func);
+    // The never-allocated LOCAL alloc-AoR variant (any leaf type, incl
+    // pointer/allocatable arrays) -- structural access only, caller supplies
+    // the assumed-shape extents.  Additive: fires only where the allocate-
+    // driven scalar handler above bails.
+    splitLocalNoAllocAoRMembers(func);
     diagnoseLocalAoRScalarInnerMembers(func);
 
     // Step 0.5: (B) split an allocatable array-of-records struct-dummy member
@@ -2888,6 +2893,322 @@ struct FlattenStructsPass
       func.walk([&](mlir::Operation* op) {
         if (mlir::isa<hlfir::DesignateOp, fir::ConvertOp, fir::LoadOp,
                       fir::EmboxOp, fir::ShapeOp, fir::ZeroOp>(op) &&
+            op->use_empty())
+          nowDead.push_back(op);
+      });
+      for (auto* op : nowDead) {
+        op->erase();
+        progress = true;
+      }
+    }
+    return true;
+  }
+
+  /// (A.1b) LOCAL-rooted alloc-array-of-records member that is NEVER allocated
+  /// (purely structural access -- ``call f(p%items(1))`` / ``x = p%items(1)%w``
+  /// with no ``allocate(p%items(...))``), whose leaf member may be ANY flat
+  /// type: scalar, static array, OR a pointer/allocatable scalar/array
+  /// (``real, pointer :: w(:,:)``).
+  ///
+  /// ``splitLocalAoRScalarMembers`` bails here -- it requires an ``Allocate``
+  /// runtime call to size the companion and admits scalar leaves only; the
+  /// dummy paths bail too (local root).  Flatten each
+  /// ``<root>%<path>(idx...)%<member>`` to ONE local allocatable companion
+  /// ``<root>_<path>_<member>`` of shape ``[AoR-dims..., member-dims...]`` (all
+  /// runtime ``?`` -- no ``allocmem``; the bridge synthesises ``_d<i>`` extent
+  /// symbols the caller supplies, exactly as for the never-allocated assumed-
+  /// shape contract).  A SCALAR / static-array leaf rewrites its member
+  /// designate to a companion element / trailing-section designate; a
+  /// POINTER / ALLOCATABLE leaf (whose member designate yields a *box* that is
+  /// then ``load``ed and indexed) instead rewrites that ``load`` to a box
+  /// SECTION over the companion ``[idx..., :, ...]`` so both the read and any
+  /// inlined dummy that aliased the pointer route to the one companion.
+  ///
+  /// :returns: true if at least one member was rewritten.
+  bool splitLocalNoAllocAoRMembers(mlir::func::FuncOp func) {
+    auto& block = func.front();
+    auto* ctx = func.getContext();
+    auto idxTy = mlir::IndexType::get(ctx);
+
+    llvm::DenseSet<mlir::Value> argDeclResults;
+    for (unsigned i = 0; i < block.getNumArguments(); ++i)
+      for (auto* u : block.getArgument(i).getUsers())
+        if (auto d = mlir::dyn_cast<hlfir::DeclareOp>(u))
+          argDeclResults.insert(d.getResult(0));
+
+    // Decompose a leaf member type into (scalar element type, extents).  Empty
+    // extents = scalar leaf.  ``dynamic`` is set when the leaf is a pointer /
+    // allocatable (box) whose member designate yields a box that must be
+    // load-and-sectioned rather than directly replaced.  Returns null type if
+    // the member is not a flat leaf (nested record / character / ...).
+    auto leafEle = [](mlir::Type t, llvm::SmallVectorImpl<int64_t>& dims,
+                      bool& isBox) -> mlir::Type {
+      isBox = false;
+      if (isSimpleScalar(t)) return t;
+      if (auto seq = mlir::dyn_cast<fir::SequenceType>(t)) {
+        if (!isSimpleScalar(seq.getEleTy())) return nullptr;
+        for (auto d : seq.getShape())
+          if (d == fir::SequenceType::getUnknownExtent())
+            return nullptr;
+          else
+            dims.push_back(d);
+        return seq.getEleTy();
+      }
+      if (auto box = mlir::dyn_cast<fir::BaseBoxType>(t)) {
+        mlir::Type inner = box.getEleTy();
+        if (auto h = mlir::dyn_cast<fir::HeapType>(inner))
+          inner = h.getEleTy();
+        else if (auto p = mlir::dyn_cast<fir::PointerType>(inner))
+          inner = p.getEleTy();
+        else
+          return nullptr;
+        isBox = true;
+        if (auto seq = mlir::dyn_cast<fir::SequenceType>(inner)) {
+          if (!isSimpleScalar(seq.getEleTy())) return nullptr;
+          for (auto d : seq.getShape()) dims.push_back(d);  // ? allowed
+          return seq.getEleTy();
+        }
+        if (isSimpleScalar(inner)) return inner;
+      }
+      return nullptr;
+    };
+
+    using RPKey = std::pair<void*, std::vector<std::string>>;
+    struct Site {
+      hlfir::DesignateOp innerDg, elemDg;
+    };
+    struct PathInfo {
+      hlfir::DeclareOp rootDecl;
+      unsigned rank = 0;
+      std::map<std::string, std::pair<mlir::Type, llvm::SmallVector<Site, 8>>>
+          members;
+    };
+    std::map<RPKey, PathInfo> byPath;
+
+    func.walk([&](hlfir::DesignateOp innerDg) {
+      auto innerComp = innerDg.getComponentAttr();
+      if (!innerComp || !innerDg.getIndices().empty()) return;
+      auto innerName = innerComp.getValue().str();
+      auto elemDg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
+          innerDg.getMemref().getDefiningOp());
+      if (!elemDg || elemDg.getComponentAttr() || elemDg.getIndices().empty())
+        return;
+      auto ld = mlir::dyn_cast_or_null<fir::LoadOp>(
+          elemDg.getMemref().getDefiningOp());
+      if (!ld) return;
+      llvm::SmallVector<std::string, 4> walkedPath;
+      mlir::Value v = ld.getMemref();
+      while (auto md = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
+                 v.getDefiningOp())) {
+        if (!md.getComponentAttr()) break;
+        walkedPath.push_back(md.getComponentAttr().getValue().str());
+        v = md.getMemref();
+      }
+      if (argDeclResults.contains(v)) return;  // dummy case
+      auto rootDecl =
+          mlir::dyn_cast_or_null<hlfir::DeclareOp>(v.getDefiningOp());
+      if (!rootDecl || !mlir::isa_and_nonnull<fir::AllocaOp>(
+                           rootDecl.getMemref().getDefiningOp()))
+        return;
+      auto refTy =
+          mlir::dyn_cast<fir::ReferenceType>(elemDg.getResult().getType());
+      if (!refTy) return;
+      auto elemRec = mlir::dyn_cast<fir::RecordType>(refTy.getEleTy());
+      if (!elemRec) return;
+      mlir::Type matchedTy;
+      for (auto& p : elemRec.getTypeList()) {
+        llvm::SmallVector<int64_t, 4> d;
+        bool b;
+        if (!leafEle(p.second, d, b)) return;  // a non-flat leaf -> not ours
+        if (p.first == innerName) matchedTy = p.second;
+      }
+      if (!matchedTy) return;
+      RPKey k{v.getAsOpaquePointer(),
+              std::vector<std::string>(walkedPath.rbegin(), walkedPath.rend())};
+      auto& pi = byPath[k];
+      pi.rootDecl = rootDecl;
+      pi.rank = elemDg.getIndices().size();
+      auto& mem = pi.members[innerName];
+      mem.first = matchedTy;
+      mem.second.push_back({innerDg, elemDg});
+    });
+    if (byPath.empty()) return false;
+
+    llvm::SmallPtrSet<mlir::Operation*, 32> deadOps;
+    bool changed = false;
+    for (auto& kv : byPath) {
+      auto& pi = kv.second;
+      unsigned rank = pi.rank;
+      auto demangledBase = demangleVarName(pi.rootDecl.getUniqName());
+      std::string rootUniq = pi.rootDecl.getUniqName().str();
+      auto ePos = rootUniq.rfind('E');
+      std::string scopePrefix = ePos == std::string::npos
+                                    ? std::string()
+                                    : rootUniq.substr(0, ePos + 1);
+
+      for (auto& m : pi.members) {
+        const std::string& innerName = m.first;
+        mlir::Type innerTy = m.second.first;
+        auto& siteList = m.second.second;
+        llvm::SmallVector<int64_t, 4> leafDims;
+        bool leafIsBox = false;
+        mlir::Type leafEleTy = leafEle(innerTy, leafDims, leafIsBox);
+        if (!leafEleTy) continue;
+
+        // Companion shape: AoR record dims (runtime ?) ++ leaf dims.
+        llvm::SmallVector<int64_t, 6> compShape(
+            rank, fir::SequenceType::getUnknownExtent());
+        for (auto d : leafDims) compShape.push_back(d);
+        auto arrTy = fir::SequenceType::get(compShape, leafEleTy);
+        auto heapTy = fir::HeapType::get(arrTy);
+        auto boxTy = fir::BoxType::get(heapTy);
+        auto refBoxTy = fir::ReferenceType::get(boxTy);
+        auto shapeTy = fir::ShapeType::get(ctx, compShape.size());
+
+        std::string name = demangledBase;
+        for (auto& p : kv.first.second) name += "_" + p;
+        name += "_" + innerName;
+        std::string uniqName = scopePrefix + name;
+        auto loc = pi.rootDecl.getLoc();
+
+        // Local allocatable companion, zero-init descriptor, NO allocmem -- the
+        // bridge symbolises its ``?`` extents (caller-supplied), matching the
+        // never-allocated assumed-shape contract.
+        mlir::OpBuilder b(pi.rootDecl);
+        b.setInsertionPointAfter(pi.rootDecl);
+        auto boxAlloca = b.create<fir::AllocaOp>(loc, boxTy);
+        auto zero = b.create<fir::ZeroOp>(loc, heapTy);
+        llvm::SmallVector<mlir::Value, 6> zeroDims(
+            compShape.size(),
+            b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(0)));
+        auto shape0 = b.create<fir::ShapeOp>(loc, shapeTy, zeroDims);
+        auto embox0 = b.create<fir::EmboxOp>(loc, boxTy, zero, shape0);
+        b.create<fir::StoreOp>(loc, embox0, boxAlloca);
+        mlir::NamedAttrList attrs;
+        attrs.append("uniq_name", mlir::StringAttr::get(ctx, uniqName));
+        attrs.append("fortran_attrs",
+                     fir::FortranVariableFlagsAttr::get(
+                         ctx, fir::FortranVariableFlagsEnum::allocatable));
+        attrs.append(declareSegments(b, /*hasShape=*/false));
+        auto decl =
+            b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{refBoxTy, refBoxTy},
+                                       mlir::ValueRange{boxAlloca}, attrs);
+
+        for (auto& site : siteList) {
+          auto sloc = site.innerDg.getLoc();
+          llvm::SmallVector<mlir::Value, 4> elemIdx(
+              site.elemDg.getIndices().begin(), site.elemDg.getIndices().end());
+          auto toIndex = [&](mlir::OpBuilder& sb,
+                             mlir::Value vv) -> mlir::Value {
+            return vv.getType() == idxTy
+                       ? vv
+                       : sb.create<fir::ConvertOp>(sloc, idxTy, vv).getResult();
+          };
+          if (!leafIsBox) {
+            // Scalar / static-array leaf: replace the member designate.
+            mlir::OpBuilder sb(site.innerDg);
+            auto loadedBox = sb.create<fir::LoadOp>(sloc, decl.getResult(0));
+            mlir::Value repl;
+            if (auto memSeq = mlir::dyn_cast<fir::SequenceType>(innerTy)) {
+              llvm::SmallVector<mlir::Value, 8> indices;
+              llvm::SmallVector<bool, 4> trip;
+              for (auto vv : elemIdx) {
+                indices.push_back(toIndex(sb, vv));
+                trip.push_back(false);
+              }
+              llvm::SmallVector<mlir::Value, 2> shapeDims;
+              auto c1 = sb.create<mlir::arith::ConstantOp>(sloc, idxTy,
+                                                           sb.getIndexAttr(1));
+              for (auto d : memSeq.getShape()) {
+                auto cN = sb.create<mlir::arith::ConstantOp>(
+                    sloc, idxTy, sb.getIndexAttr(d));
+                indices.push_back(c1);
+                indices.push_back(cN);
+                indices.push_back(c1);
+                trip.push_back(true);
+                shapeDims.push_back(cN);
+              }
+              auto shp =
+                  sb.create<fir::ShapeOp>(sloc, mlir::ValueRange{shapeDims});
+              repl = sb.create<hlfir::DesignateOp>(
+                           sloc, site.innerDg.getResult().getType(),
+                           loadedBox.getResult(), mlir::StringAttr{},
+                           mlir::Value{}, mlir::ValueRange{indices},
+                           sb.getDenseBoolArrayAttr(trip), mlir::ValueRange{},
+                           mlir::BoolAttr{}, shp, mlir::ValueRange{},
+                           fir::FortranVariableFlagsAttr{})
+                         .getResult();
+            } else {
+              auto elemRefTy = fir::ReferenceType::get(innerTy);
+              repl = sb.create<hlfir::DesignateOp>(
+                           sloc, elemRefTy, loadedBox.getResult(), elemIdx,
+                           mlir::ValueRange{}, fir::FortranVariableFlagsAttr{})
+                         .getResult();
+            }
+            site.innerDg.getResult().replaceAllUsesWith(repl);
+            deadOps.insert(site.innerDg);
+            deadOps.insert(site.elemDg);
+            changed = true;
+            continue;
+          }
+          // Pointer / allocatable leaf: the member designate yields a box that
+          // is ``load``ed, then indexed.  Replace that LOAD with a box SECTION
+          // over the companion ``[idx..., :leaf-dims:]`` so the loaded box (and
+          // anything aliasing it, e.g. an inlined dummy) points at the
+          // companion's per-element slab.
+          for (auto* u : llvm::to_vector(site.innerDg.getResult().getUsers())) {
+            auto ldBox = mlir::dyn_cast<fir::LoadOp>(u);
+            if (!ldBox) continue;
+            mlir::OpBuilder sb(ldBox);
+            auto loadedComp = sb.create<fir::LoadOp>(sloc, decl.getResult(0));
+            llvm::SmallVector<mlir::Value, 8> indices;
+            llvm::SmallVector<bool, 4> trip;
+            for (auto vv : elemIdx) {
+              indices.push_back(toIndex(sb, vv));
+              trip.push_back(false);
+            }
+            auto c1 = sb.create<mlir::arith::ConstantOp>(sloc, idxTy,
+                                                         sb.getIndexAttr(1));
+            llvm::SmallVector<mlir::Value, 2> shapeDims;
+            for (unsigned d = 0; d < leafDims.size(); ++d) {
+              auto cd = sb.create<mlir::arith::ConstantOp>(
+                  sloc, idxTy, sb.getIndexAttr(rank + d));
+              auto bd = sb.create<fir::BoxDimsOp>(sloc, idxTy, idxTy, idxTy,
+                                                  loadedComp.getResult(), cd);
+              indices.push_back(c1);
+              indices.push_back(bd.getResult(1));  // extent
+              indices.push_back(c1);
+              trip.push_back(true);
+              shapeDims.push_back(bd.getResult(1));
+            }
+            auto shp =
+                sb.create<fir::ShapeOp>(sloc, mlir::ValueRange{shapeDims});
+            // Section box result must match the original loaded pointer box so
+            // downstream ``designate``s / aliases keep their type.
+            auto sectionDg = sb.create<hlfir::DesignateOp>(
+                sloc, ldBox.getResult().getType(), loadedComp.getResult(),
+                mlir::StringAttr{}, mlir::Value{}, mlir::ValueRange{indices},
+                sb.getDenseBoolArrayAttr(trip), mlir::ValueRange{},
+                mlir::BoolAttr{}, shp, mlir::ValueRange{},
+                fir::FortranVariableFlagsAttr{});
+            ldBox.getResult().replaceAllUsesWith(sectionDg.getResult());
+            deadOps.insert(ldBox);
+          }
+          deadOps.insert(site.innerDg);
+          deadOps.insert(site.elemDg);
+          changed = true;
+        }
+      }
+    }
+    if (!changed) return false;
+    for (auto* op : deadOps)
+      if (op->use_empty()) op->erase();
+    bool progress = true;
+    while (progress) {
+      progress = false;
+      llvm::SmallVector<mlir::Operation*, 16> nowDead;
+      func.walk([&](mlir::Operation* op) {
+        if (mlir::isa<hlfir::DesignateOp, fir::ConvertOp, fir::LoadOp>(op) &&
             op->use_empty())
           nowDead.push_back(op);
       });
