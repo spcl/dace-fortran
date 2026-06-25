@@ -153,7 +153,7 @@ void clearAllocAliases() { kAllocAlias.clear(); }
 // neither of those leads to a designate.  ``traceToDecl`` uses it to
 // resolve such an alias to the caller-side member path rather than the
 // inlined dummy's own ``<dummy>_call<idx>`` name, which nothing sources.
-static bool leadsToComponentDesignate(mlir::Value mr) {
+bool leadsToComponentDesignate(mlir::Value mr) {
   for (int i = 0; i < limits::kAliasMemrefWalkDepth && mr; ++i) {
     auto* d = mr.getDefiningOp();
     if (!d) return false;

@@ -3645,7 +3645,18 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
           if (!dc.getDummyScope()) {
             v = dc.getMemref();
             continue;
-          }  // inlined alias
+          }  // inlined alias (no dummy scope)
+          // Inlined-call dummy bound to a struct MEMBER (``inner(diag % pvd,
+          // ...)``): its declare has a dummy scope but its memref is a
+          // component designate of the caller's struct.  Walk THROUGH to the
+          // outer struct (gate #12, mirroring gate #11 in traceToDecl) -- the
+          // access is rooted at the OUTER struct dummy ``diag``, not the
+          // inlined ``pvd`` dummy whose own type is a record ARRAY (a
+          // SequenceType, so the RecordType check below would wrongly fail).
+          if (leadsToComponentDesignate(dc.getMemref())) {
+            v = dc.getMemref();
+            continue;
+          }
           return mlir::isa<fir::RecordType>(
               peelTypeLayers(dc.getResult(0).getType()));
         }
@@ -3733,6 +3744,15 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
         if (!d) break;
         if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(d)) {
           if (!dc.getDummyScope()) {  // inlined alias -- keep walking
+            v = dc.getMemref();
+            continue;
+          }
+          // Inlined-call dummy bound to a struct MEMBER (gate #12): walk
+          // through to the caller's struct so the chain collects the member
+          // segment (``diag % pvd``) and roots at the OUTER dummy ``diag``,
+          // not the inlined ``pvd`` dummy -- the prepended pvd(i) record
+          // index then attaches to the ``pvd`` segment (outer_rank == 1).
+          if (leadsToComponentDesignate(dc.getMemref())) {
             v = dc.getMemref();
             continue;
           }

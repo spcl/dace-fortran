@@ -270,6 +270,20 @@ llvm::SmallVector<mlir::Value, 4> extractExtents(mlir::Value shape);
 /// the inner (callee) frame to the outer (caller) frame.
 hlfir::DeclareOp asAssumedShapeAlias(hlfir::DeclareOp decl);
 
+/// True iff ``mr`` (a declare's memref) leads -- through the usual
+/// reinterpret peels (convert / load / rebox / box_addr) -- to an
+/// ``hlfir.designate`` selecting a struct COMPONENT.  Identifies an
+/// INLINED-call dummy bound to a caller struct member
+/// (``get_index_range(patch % edges % in_domain, ...)`` /
+/// ``inner(diag % pvd, ...)`` after ``hlfir-inline-all``): such a dummy's
+/// declare has a dummy scope but its memref is a component designate of
+/// the caller's struct, NOT a block arg (entry dummy) or alloca (local).
+/// Callers walk THROUGH such an alias to the caller-side member so the
+/// access resolves to the outer struct path rather than the inlined
+/// dummy's own name (gate #11 in ``traceToDecl``; reused by
+/// ``rootedAtStructDummy`` / ``walkMemberChain`` for gate #12).
+bool leadsToComponentDesignate(mlir::Value mr);
+
 /// Per-dimension lower-bound constants for an ``hlfir.declare``.
 /// Returns the constants stored in a ``fir.shape_shift`` operand, or
 /// a vector of ``1``s (Fortran default) of length ``rank`` when the

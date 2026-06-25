@@ -1410,6 +1410,70 @@ ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation *srcOp,
     if (!def) return {traceToDecl(operand), std::string{}};
     auto dg = mlir::dyn_cast<hlfir::DesignateOp>(def);
     if (!dg) return {traceToDecl(operand), std::string{}};
+    // Whole-member cartesian / AoS companion read (gate #12):
+    // ``dot_product(diag % pvd(i) % x, ...)`` -- the ``%x`` designate selects
+    // the WHOLE array member (no triplet, no own indices) but ``traceToDecl``
+    // resolved it to a FLATTENED companion (``diag_pvd_x``) carrying the outer
+    // element index(es) prepended.  The element subscript lives on the MEMREF
+    // (``pvd(i)``), so the generic path below (which keys off the operand's own
+    // triplets) would read the whole multi-dim companion -- a 1-D-only libcall
+    // like dot_product then fails validation.  Build the element subset
+    // ``[<outer idx>, 0:<member extent>]`` from the memref's element designate
+    // + the member's static extents.
+    if (dg.getComponentAttr() && dg.getIsTriplet().empty()) {
+      mlir::Type resTy = dg.getResult().getType();
+      if (auto rt = mlir::dyn_cast<fir::ReferenceType>(resTy))
+        resTy = rt.getEleTy();
+      if (auto seq = mlir::dyn_cast<fir::SequenceType>(resTy)) {
+        bool staticMember = true;
+        for (auto ext : seq.getShape())
+          if (ext == fir::SequenceType::getUnknownExtent())
+            staticMember = false;
+        mlir::Value mv = dg.getMemref();
+        for (int i = 0; staticMember && i < limits::kSsaBackWalkDepth && mv;
+             ++i) {
+          auto* d = mv.getDefiningOp();
+          if (!d) break;
+          if (auto idg = mlir::dyn_cast<hlfir::DesignateOp>(d)) {
+            if (!idg.getComponentAttr() && !idg.getIndices().empty()) {
+              std::vector<DesignateDim> edims;
+              if (parseDesignateDims(idg, edims)) {
+                std::string sub;
+                for (auto& ed : edims)
+                  if (!ed.isTriplet) {
+                    if (!sub.empty()) sub += ", ";
+                    sub += "(" + ed.scalarIdx + " - 1)";
+                  }
+                for (auto ext : seq.getShape()) {
+                  if (!sub.empty()) sub += ", ";
+                  sub += "0:" + std::to_string(ext);
+                }
+                return {traceToDecl(operand), sub};
+              }
+            }
+            mv = idg.getMemref();
+            continue;
+          }
+          if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
+            mv = cv.getValue();
+            continue;
+          }
+          if (auto ld = mlir::dyn_cast<fir::LoadOp>(d)) {
+            mv = ld.getMemref();
+            continue;
+          }
+          if (auto rb = mlir::dyn_cast<fir::ReboxOp>(d)) {
+            mv = rb.getBox();
+            continue;
+          }
+          if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
+            mv = ba.getVal();
+            continue;
+          }
+          break;
+        }
+      }
+    }
     auto triplets = dg.getIsTriplet();
     if (triplets.empty()) return {traceToDecl(operand), std::string{}};
     bool anyTriplet = false;
