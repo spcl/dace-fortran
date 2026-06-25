@@ -800,6 +800,12 @@ def find_type_dataref(dref: Union[f03.Name, f03.Part_Ref, f03.Data_Ref, f03.Data
         comp_spec = find_real_ident_spec(part_name.string, cur_type.spec, alias_map)
         assert comp_spec in alias_map, f"cannot find {comp_spec} / {dref} in {scope_spec}"
         cur_type = find_type_of_entity(alias_map[comp_spec], alias_map)
+        if cur_type is None:
+            # A component whose declaration carries no resolvable type (an
+            # externalized / opaque member reached under tolerance): stay
+            # match-anything, consistent with the spec==('*',) branch above.
+            assert TOLERATE_EXTERNAL_USES, f"{comp_spec} / {dref} in {scope_spec}"
+            return MATCH_ALL
         if isinstance(comp, f03.Part_Ref):
             cur_type = _subscripted_type(cur_type, comp)
         assert cur_type
@@ -1267,11 +1273,15 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
         lv, op, rv = node.children
         lspec, ltyp = None, None
         if isinstance(lv, f03.Name):
+            # An LHS name that does not resolve to a local declaration (a module
+            # global, or a name from an externalized/stubbed scope in a large
+            # closure) is simply not a tracked local constant -- leave
+            # lspec/ltyp None so the `if lspec and ltyp` guard below skips it.
             loc = search_real_local_alias_spec(lv, alias_map)
-            assert loc
-            lspec = ident_spec(alias_map[loc])
-            if isinstance(alias_map[lspec], f03.Entity_Decl):
-                ltyp = find_type_of_entity(alias_map[lspec], alias_map)
+            if loc:
+                lspec = ident_spec(alias_map[loc])
+                if isinstance(alias_map[lspec], f03.Entity_Decl):
+                    ltyp = find_type_of_entity(alias_map[lspec], alias_map)
         elif isinstance(lv, f03.Data_Ref):
             lspec = _root_comp(lv)
             scope_spec = find_scope_spec(lv)
@@ -1292,11 +1302,13 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
         lv, _, rv = node.children
         lspec, ltyp = None, None
         if isinstance(lv, f03.Name):
+            # Same as the assignment case above: an unresolvable LHS pointer name
+            # is not a tracked local -- leave lspec/ltyp None and skip below.
             loc = search_real_local_alias_spec(lv, alias_map)
-            assert loc
-            lspec = ident_spec(alias_map[loc])
-            if isinstance(alias_map[lspec], f03.Entity_Decl):
-                ltyp = find_type_of_entity(alias_map[lspec], alias_map)
+            if loc:
+                lspec = ident_spec(alias_map[loc])
+                if isinstance(alias_map[lspec], f03.Entity_Decl):
+                    ltyp = find_type_of_entity(alias_map[lspec], alias_map)
         elif isinstance(lv, (f03.Data_Ref, f03.Data_Pointer_Object)):
             lspec = _root_comp(lv)
             scope_spec = find_scope_spec(lv)
@@ -1390,9 +1402,11 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
             loop_var, _ = loop_var
             assert isinstance(loop_var, f03.Name)
             loop_var_spec = search_real_local_alias_spec(loop_var, alias_map)
-            assert loop_var_spec
-            loop_var_spec = ident_spec(alias_map[loop_var_spec])
-            _integrate_subresults({}, {loop_var_spec})
+            # An unresolvable loop variable (externalized scope) is not a tracked
+            # local -- there is nothing to mark non-constant, so skip it.
+            if loop_var_spec:
+                loop_var_spec = ident_spec(alias_map[loop_var_spec])
+                _integrate_subresults({}, {loop_var_spec})
     elif isinstance(
             node, (f03.Name, *types.LITERAL_CLASSES, f03.Char_Literal_Constant, f03.Data_Ref, f03.Part_Ref,
                    f03.Return_Stmt, f03.Write_Stmt, f08.Error_Stop_Stmt, f03.Exit_Stmt, f03.Actual_Arg_Spec,
@@ -1404,6 +1418,12 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
         allocs = allocs.children if allocs else tuple()
         shape_bounds = []
         for al in allocs:
+            # ``ALLOCATE(a(n))`` parses to an ``Allocation`` node (object,
+            # shape-spec list); a scalar ``ALLOCATE(b)`` parses to a bare
+            # ``Name`` with no shape to unpack.  Only the former carries shape
+            # bounds to inject (cf. monomorphize_rewrite's Name/Allocation split).
+            if not isinstance(al, f03.Allocation):
+                continue
             _, shape = al.children
             if shape:
                 shape_bounds.extend(sb for sb in shape.children)

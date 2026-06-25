@@ -169,9 +169,18 @@ def make_practically_constant_arguments_constants(ast: f03.Program, keepers: Lis
         assert len(args) <= len(fnargs), f"Cannot pass more arguments({len(args)}) than defined ({len(fnargs)})"
 
         # Iterate through the dummy arguments to match them with actual arguments from the call site.
-        for a in fnargs:
-            aspec = analysis.search_real_local_alias_spec(a, alias_map)
-            assert aspec
+        # Resolve every dummy's declaration up front: the matching below is
+        # POSITIONAL, so a single unresolvable dummy (e.g. an externalized /
+        # stubbed callee reached through the dycore closure, whose declaration
+        # the alias map no longer carries) would misalign the whole call.  When
+        # that happens, mark every resolvable dummy of this callee UNDECIDABLE
+        # (so it is never folded) and skip the call -- conservative, never an
+        # unsafe fold.
+        dummy_specs = [analysis.search_real_local_alias_spec(a, alias_map) for a in fnargs]
+        if any(s is None for s in dummy_specs):
+            fnargs_undecidables.update(s for s in dummy_specs if s is not None)
+            continue
+        for a, aspec in zip(fnargs, dummy_specs):
             adecl = alias_map[aspec]
             atype = analysis.find_type_of_entity(adecl, alias_map)
             assert atype
