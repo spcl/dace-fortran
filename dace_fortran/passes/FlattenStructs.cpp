@@ -2856,7 +2856,7 @@ struct FlattenStructsPass
               /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
           site.innerDg.getResult().replaceAllUsesWith(newDg.getResult());
           deadOps.insert(site.innerDg);
-          deadOps.insert(site.elemDg);
+          if (site.elemDg) deadOps.insert(site.elemDg);
         }
         changed = true;
       }
@@ -2989,13 +2989,29 @@ struct FlattenStructsPass
       auto innerComp = innerDg.getComponentAttr();
       if (!innerComp || !innerDg.getIndices().empty()) return;
       auto innerName = innerComp.getValue().str();
-      auto elemDg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
-          innerDg.getMemref().getDefiningOp());
-      if (!elemDg || elemDg.getComponentAttr() || elemDg.getIndices().empty())
+      auto* mdef = innerDg.getMemref().getDefiningOp();
+      hlfir::DesignateOp elemDg;  // null in the rank-0 scalar-struct case.
+      fir::LoadOp ld;
+      fir::RecordType elemRec;
+      if (auto ed = mlir::dyn_cast_or_null<hlfir::DesignateOp>(mdef)) {
+        // (a) element designate of an alloc-array-of-records.
+        if (ed.getComponentAttr() || ed.getIndices().empty()) return;
+        elemDg = ed;
+        ld =
+            mlir::dyn_cast_or_null<fir::LoadOp>(ed.getMemref().getDefiningOp());
+        if (auto refTy =
+                mlir::dyn_cast<fir::ReferenceType>(ed.getResult().getType()))
+          elemRec = mlir::dyn_cast<fir::RecordType>(refTy.getEleTy());
+      } else if (auto l = mlir::dyn_cast_or_null<fir::LoadOp>(mdef)) {
+        // (b) direct load of a SCALAR allocatable / class struct box
+        // (``class(t),allocatable :: p`` -> ``p%n``): rank 0, no element index.
+        ld = l;
+        elemRec =
+            mlir::dyn_cast<fir::RecordType>(unwrapAll(l.getResult().getType()));
+      } else {
         return;
-      auto ld = mlir::dyn_cast_or_null<fir::LoadOp>(
-          elemDg.getMemref().getDefiningOp());
-      if (!ld) return;
+      }
+      if (!ld || !elemRec) return;
       llvm::SmallVector<std::string, 4> walkedPath;
       mlir::Value v = ld.getMemref();
       while (auto md = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
@@ -3010,24 +3026,23 @@ struct FlattenStructsPass
       if (!rootDecl || !mlir::isa_and_nonnull<fir::AllocaOp>(
                            rootDecl.getMemref().getDefiningOp()))
         return;
-      auto refTy =
-          mlir::dyn_cast<fir::ReferenceType>(elemDg.getResult().getType());
-      if (!refTy) return;
-      auto elemRec = mlir::dyn_cast<fir::RecordType>(refTy.getEleTy());
-      if (!elemRec) return;
+      // Per-member: only the ACCESSED member must be a flat leaf -- other
+      // members (an EXTENDS parent record, an unaccessed allocatable, ...) are
+      // irrelevant to THIS member's companion (each access is its own site).
       mlir::Type matchedTy;
-      for (auto& p : elemRec.getTypeList()) {
-        llvm::SmallVector<int64_t, 4> d;
-        bool b;
-        if (!leafEle(p.second, d, b)) return;  // a non-flat leaf -> not ours
-        if (p.first == innerName) matchedTy = p.second;
-      }
-      if (!matchedTy) return;
+      for (auto& p : elemRec.getTypeList())
+        if (p.first == innerName) {
+          matchedTy = p.second;
+          break;
+        }
+      llvm::SmallVector<int64_t, 4> probeDims;
+      bool probeBox;
+      if (!matchedTy || !leafEle(matchedTy, probeDims, probeBox)) return;
       RPKey k{v.getAsOpaquePointer(),
               std::vector<std::string>(walkedPath.rbegin(), walkedPath.rend())};
       auto& pi = byPath[k];
       pi.rootDecl = rootDecl;
-      pi.rank = elemDg.getIndices().size();
+      pi.rank = elemDg ? elemDg.getIndices().size() : 0;
       auto& mem = pi.members[innerName];
       mem.first = matchedTy;
       mem.second.push_back({innerDg, elemDg});
@@ -3054,6 +3069,35 @@ struct FlattenStructsPass
         bool leafIsBox = false;
         mlir::Type leafEleTy = leafEle(innerTy, leafDims, leafIsBox);
         if (!leafEleTy) continue;
+
+        // Rank-0 scalar struct with a SCALAR leaf (``class(t),allocatable ::
+        // p``
+        // -> ``p%n``): a plain scalar local transient (no box / array). Rewrite
+        // every member designate -- read or assign target -- to its declare
+        // ref.
+        if (rank == 0 && leafDims.empty() && !leafIsBox) {
+          std::string name0 = demangledBase;
+          for (auto& p : kv.first.second) name0 += "_" + p;
+          name0 += "_" + innerName;
+          auto loc0 = pi.rootDecl.getLoc();
+          mlir::OpBuilder b0(pi.rootDecl);
+          b0.setInsertionPointAfter(pi.rootDecl);
+          auto refEle = fir::ReferenceType::get(leafEleTy);
+          auto sAlloca = b0.create<fir::AllocaOp>(loc0, leafEleTy);
+          mlir::NamedAttrList attrs0;
+          attrs0.append("uniq_name",
+                        mlir::StringAttr::get(ctx, scopePrefix + name0));
+          attrs0.append(declareSegments(b0, /*hasShape=*/false));
+          auto sDecl =
+              b0.create<hlfir::DeclareOp>(loc0, mlir::TypeRange{refEle, refEle},
+                                          mlir::ValueRange{sAlloca}, attrs0);
+          for (auto& site : siteList) {
+            site.innerDg.getResult().replaceAllUsesWith(sDecl.getResult(0));
+            deadOps.insert(site.innerDg);
+          }
+          changed = true;
+          continue;
+        }
 
         // Companion shape: AoR record dims (runtime ?) ++ leaf dims.
         llvm::SmallVector<int64_t, 6> compShape(
@@ -3096,8 +3140,10 @@ struct FlattenStructsPass
 
         for (auto& site : siteList) {
           auto sloc = site.innerDg.getLoc();
-          llvm::SmallVector<mlir::Value, 4> elemIdx(
-              site.elemDg.getIndices().begin(), site.elemDg.getIndices().end());
+          llvm::SmallVector<mlir::Value, 4> elemIdx;
+          if (site.elemDg)  // null for a rank-0 scalar-struct member
+            elemIdx.assign(site.elemDg.getIndices().begin(),
+                           site.elemDg.getIndices().end());
           auto toIndex = [&](mlir::OpBuilder& sb,
                              mlir::Value vv) -> mlir::Value {
             return vv.getType() == idxTy
@@ -3147,7 +3193,7 @@ struct FlattenStructsPass
             }
             site.innerDg.getResult().replaceAllUsesWith(repl);
             deadOps.insert(site.innerDg);
-            deadOps.insert(site.elemDg);
+            if (site.elemDg) deadOps.insert(site.elemDg);
             changed = true;
             continue;
           }
@@ -3195,7 +3241,7 @@ struct FlattenStructsPass
             deadOps.insert(ldBox);
           }
           deadOps.insert(site.innerDg);
-          deadOps.insert(site.elemDg);
+          if (site.elemDg) deadOps.insert(site.elemDg);
           changed = true;
         }
       }
