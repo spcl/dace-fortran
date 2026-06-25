@@ -68,8 +68,13 @@ _KERNELS = [
     pytest.param("ocean_veloc_adv",
                  "ocean_veloc_adv_single_tu.f90",
                  "mo_ocean_velocity_advection::veloc_adv_horz_mimetic_rot", {},
-                 marks=pytest.mark.xfail(reason="embeds nonlinear_coriolis_3d_fast_scalar; same vacuous-loop "
-                                         "(random mesh -> n_changed==0) limitation as coriolis_pv",
+                 marks=pytest.mark.xfail(reason="lowers + binds + runs + writes veloc_adv_horz_e (gate #12d: the "
+                                         "rank-3 cartesian p_diag%p_vn_dual member now marshals).  Not yet bit-exact: "
+                                         "it embeds nonlinear_coriolis_3d_fast_scalar, so it inherits coriolis_pv's "
+                                         "synthetic-mesh hazard -- pinning every connectivity/bound array to a "
+                                         "degenerate-consistent mesh drops max|d| 4.2->1.0 but a residual remains "
+                                         "(the kernel's own uninitialized/OOB reads on a non-physical mesh).  Needs "
+                                         "the same valid-mesh fixture as coriolis_pv, tracked there.",
                                          strict=True),
                  id="ocean_veloc_adv"),
 ]
