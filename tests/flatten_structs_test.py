@@ -325,3 +325,39 @@ def test_nested_aor_scalar_member_loop_bound_registers_as_symbol(tmp_path):
     # The struct dummy was NOT statically flattened (pointer-array intermediate),
     # so no per-member data companion was minted -- the bounds are pure symbols.
     assert "patch_p2d_in_domain_start_block" not in sdfg.arrays
+
+
+_NESTED_AOR_ARRAY_MEMBER_SRC = """
+module lib
+  implicit none
+  type vert
+    integer, pointer :: dolic(:, :)
+  end type vert
+  type patch3d
+    type(vert), pointer :: p1d(:)
+  end type patch3d
+contains
+  subroutine inner(patch, i, j, out)
+    type(patch3d), intent(in) :: patch
+    integer, intent(in) :: i, j
+    integer, intent(out) :: out
+    out = patch % p1d(1) % dolic(i, j)
+  end subroutine inner
+end module lib
+"""
+
+
+def test_nested_aor_array_member_registers_with_record_dim(tmp_path):
+    # An array member reached through a runtime pointer-array-of-records element
+    # (``patch % p1d(1) % dolic(i,j)``) is left as a live designate chain by the
+    # flatten pass.  ``expandDesignateChain`` PREPENDS the record index, so the
+    # companion must register at ``record_dim + member_rank`` (here 1 + 2 = 3) --
+    # otherwise the top per-dim offset symbol is never registered and the build
+    # raises ``unresolved free symbol``.  The build succeeding IS the binding
+    # assertion (the AoS<->SoA marshalling fields source the data caller-side).
+    sdfg = build_sdfg(_NESTED_AOR_ARRAY_MEMBER_SRC, tmp_path / "sdfg", name="inner", entry="lib::inner").build()
+    assert "patch_p1d_dolic" in sdfg.arrays, (f"nested pointer-AoR array member companion missing; "
+                                              f"arrays={sorted(sdfg.arrays)}")
+    shape = sdfg.arrays["patch_p1d_dolic"].shape
+    assert len(shape) == 3, (f"companion must carry the prepended record dim (rank 1+2=3), got rank "
+                             f"{len(shape)}: {shape}")

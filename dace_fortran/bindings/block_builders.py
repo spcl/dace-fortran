@@ -1033,9 +1033,13 @@ def assemble_module(iface: OriginalInterface, frozen: FrozenSignature, blocks: d
         use_lines.append(f"  use {mod}, only: {', '.join(sorted(set(renames)))}")
     # Module-global AoS-struct components: import the HOST STRUCT plainly
     # (the copy loop references ``becxx(i)%k`` directly, no ``__mod`` alias).
+    # A DUMMY-rooted AoS component (``patch_3d % p_patch_1d(i) % dolic_e``, with
+    # an EMPTY ``aos_origin_mod``) needs no import -- its root struct is already
+    # a wrapper argument -- so it is skipped here.
     aos_by_mod: dict = {}
     for a in _aos_module_args(frozen):
-        aos_by_mod.setdefault(a.aos_origin_mod, set()).add(a.aos_origin_struct)
+        if a.aos_origin_mod:
+            aos_by_mod.setdefault(a.aos_origin_mod, set()).add(a.aos_origin_struct)
     for mod, structs in sorted(aos_by_mod.items()):
         use_lines.append(f"  use {mod}, only: {', '.join(sorted(structs))}")
     use_statements = "\n".join(use_lines)
@@ -1333,11 +1337,18 @@ def _orphan_module_args(frozen: FrozenSignature, iface: OriginalInterface, plan:
 
 
 def _aos_module_args(frozen: FrozenSignature):
-    """SDFG args that are the SoA image of a MODULE-LEVEL array-of-structs
-    global component (``becxx_k`` <- ``becxx(:)%k``).  Identified by the
-    bridge-stamped ``aos_origin_struct`` provenance on the FrozenArg.  The
-    binding ``use``-imports the host struct and marshals it with an AoS<->SoA
-    copy loop (not the plain ``x = x__mod`` assign of a flat module global).
+    """SDFG args that are the SoA image of an array-of-structs component,
+    marshalled with an AoS<->SoA copy loop.  Identified by the bridge-stamped
+    ``aos_origin_struct`` provenance on the FrozenArg.  Two origins share this
+    path (the copy machinery is origin-agnostic -- it only string-builds
+    ``<struct>(i)%<member>``):
+
+      * a MODULE-LEVEL global (``becxx_k`` <- ``becxx(:)%k``): ``aos_origin_mod``
+        is set, so the binding ``use``-imports the host struct.
+      * a DUMMY-rooted nested member through a pointer-array-of-records
+        (``patch_3d_p_patch_1d_dolic_e`` <- ``patch_3d % p_patch_1d(i) % dolic_e``):
+        ``aos_origin_struct`` is a ``%``-expression and ``aos_origin_mod`` is
+        empty (the root is already a wrapper argument -- no import).
 
     Restricted to ARRAY args: a rank-0 struct member (``dfftt%ngm``) reaches the
     SDFG as a by-VALUE free symbol, not a ``c_loc`` data buffer -- it keeps its

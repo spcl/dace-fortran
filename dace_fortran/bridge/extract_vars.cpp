@@ -3694,6 +3694,100 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
       }
       return {};
     };
+    // The structured component path of a nested-AoR array member, recovered by
+    // walking a leaf whole-member designate's memref back to its dummy root.
+    // ``names`` / ``is_pointer`` / ``record_dims`` are parallel, root->leaf;
+    // ``record_dims[i]`` is the count of array (record) subscripts that index
+    // segment ``i`` (the pointer-/alloc-array-of-records level whose element
+    // designate ``expandDesignateChain`` prepends to the flat access).  Drives
+    // the dummy-rooted AoS marshalling fields (``aos_origin_struct`` etc.) that
+    // let the EXISTING ``_render_aos_copy_in`` bind the member's data.
+    struct MemberChain {
+      bool ok = false;
+      std::string root_dummy;
+      std::vector<std::string> names;
+      std::vector<bool> is_pointer;
+      std::vector<int> record_dims;
+      int outer_rank = 0;
+    };
+    // box<ptr<...>> = Fortran POINTER, box<heap<...>> = ALLOCATABLE; the
+    // binding guards them with ``associated`` vs ``allocated`` (wrong one is a
+    // hard type error).  Mirrors walkLevel's member-pointer classification.
+    auto boxIsPointer = [](mlir::Type t) -> bool {
+      if (auto rt = mlir::dyn_cast<fir::ReferenceType>(t)) t = rt.getEleTy();
+      if (auto bt = mlir::dyn_cast<fir::BoxType>(t)) t = bt.getEleTy();
+      return mlir::isa<fir::PointerType>(t);
+    };
+    auto walkMemberChain = [&](hlfir::DesignateOp leaf) -> MemberChain {
+      MemberChain mc;
+      auto leafComp = leaf.getComponentAttr();
+      if (!leafComp) return mc;
+      // Collected leaf->root, reversed before return.
+      std::vector<std::string> namesR{leafComp.getValue().str()};
+      std::vector<bool> ptrR{boxIsPointer(leaf.getResult().getType())};
+      std::vector<int> recR{0};
+      mlir::Value v = leaf.getMemref();
+      int pendingRec = 0;  // record subscripts seen, awaiting their component
+      for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
+        auto* d = v.getDefiningOp();
+        if (!d) break;
+        if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(d)) {
+          if (!dc.getDummyScope()) {  // inlined alias -- keep walking
+            v = dc.getMemref();
+            continue;
+          }
+          mc.root_dummy = extractName(dc.getUniqName().str());
+          mc.ok = !mc.root_dummy.empty();
+          break;
+        }
+        if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
+          v = cv.getValue();
+          continue;
+        }
+        if (auto ld = mlir::dyn_cast<fir::LoadOp>(d)) {
+          v = ld.getMemref();
+          continue;
+        }
+        if (auto rb = mlir::dyn_cast<fir::ReboxOp>(d)) {
+          v = rb.getBox();
+          continue;
+        }
+        if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
+          v = ba.getVal();
+          continue;
+        }
+        if (auto co = mlir::dyn_cast<fir::CoordinateOp>(d)) {
+          v = co.getRef();
+          continue;
+        }
+        if (auto dg2 = mlir::dyn_cast<hlfir::DesignateOp>(d)) {
+          if (auto comp = dg2.getComponentAttr()) {
+            // A component selector -- the pending record subscripts (and any
+            // it carries directly) index THIS segment.
+            namesR.push_back(comp.getValue().str());
+            ptrR.push_back(boxIsPointer(dg2.getResult().getType()));
+            recR.push_back(pendingRec +
+                           static_cast<int>(dg2.getIndices().size()));
+            pendingRec = 0;
+          } else {
+            // A pure element/record-index designate over a loaded box: its
+            // subscripts index the component reached next (root-ward).
+            pendingRec += static_cast<int>(dg2.getIndices().size());
+          }
+          v = dg2.getMemref();
+          continue;
+        }
+        break;
+      }
+      if (!mc.ok) return mc;
+      for (int i = static_cast<int>(namesR.size()) - 1; i >= 0; --i) {
+        mc.names.push_back(namesR[i]);
+        mc.is_pointer.push_back(ptrR[i]);
+        mc.record_dims.push_back(recR[i]);
+        mc.outer_rank += recR[i];
+      }
+      return mc;
+    };
     std::set<std::string> existingNames;
     for (auto& vv : vars) existingNames.insert(vv.fortran_name);
     // One representative WHOLE-MEMBER component designate per flat name (the
@@ -3715,30 +3809,73 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
       mlir::Type peeled = peelTypeLayers(kv.second.getResult().getType());
       if (auto seq = mlir::dyn_cast<fir::SequenceType>(peeled)) {
         // (B) Array DATA member nested under a pointer-/alloc-array-of-records
-        // intermediate (``patch%p1d(jb)%dolic(i,j)``): register a
-        // deferred-shape array companion the caller binds from
-        // ``<root>%...%<member>``.  A DIRECT struct array member is split by
-        // the flatten pass into a flat declare; the nested one is left as a
-        // designate chain, so the memlet names ``<flat>`` with no backing
-        // array.
+        // intermediate (``patch_3d%p_patch_1d(1)%dolic_e(je,jb)``): register a
+        // deferred-shape array companion the caller binds from the host.  A
+        // DIRECT struct array member is split by the flatten pass into a flat
+        // declare; the nested one is left as a designate chain, so the memlet
+        // names ``<flat>`` with no backing array.
         std::string dt = dtypeStr(seq.getEleTy());
         if (dt.empty()) continue;  // unsupported element type
+        int memberRank = static_cast<int>(seq.getShape().size());
+        // Record dims: ``expandDesignateChain`` PREPENDS the pointer-array
+        // record index (``p_patch_1d(1)`` -> leading flat dim), so the access
+        // is rank ``record_dims + member_rank``.  Recover the structured path
+        // to (a) register the companion at that full rank and (b) drive the
+        // dummy-rooted AoS marshalling so ``_render_aos_copy_in`` binds the
+        // data.  Only ``outer_rank == 1`` (one record-array level) is bound by
+        // the existing single-loop AoS machinery; a scalar-struct-nested member
+        // (``outer_rank == 0``) keeps its own rank, and a multi-record chain
+        // (``>= 2``, no coriolis case) falls back to plain registration (and
+        // surfaces loudly rather than silently mis-shaping).
+        MemberChain mc = walkMemberChain(kv.second);
         VarInfo mv;
         mv.fortran_name = s;
         mv.mangled_name = s;
         mv.dtype = dt;
-        mv.rank = seq.getShape().size();
         mv.intent = "in";
         mv.role = "array";
-        for (int didx = 0; didx < mv.rank; ++didx) {
+        int recDims = (mc.ok && mc.outer_rank == 1) ? 1 : 0;
+        // Leading record dim(s): runtime extent (= ``size(<record-array>)``),
+        // resolved caller-side from the allocated SoA buffer by
+        // ``_sym_from_intrinsic``.
+        for (int rd = 0; rd < recDims; ++rd) {
+          mv.is_dynamic = true;
+          mv.shape_symbols.push_back(s + "_d" + std::to_string(rd));
+          mv.lower_bounds.push_back("1");
+        }
+        for (int didx = 0; didx < memberRank; ++didx) {
           int64_t ext = seq.getShape()[didx];
           if (ext == fir::SequenceType::getUnknownExtent()) {
             mv.is_dynamic = true;
-            mv.shape_symbols.push_back(s + "_d" + std::to_string(didx));
+            mv.shape_symbols.push_back(s + "_d" +
+                                       std::to_string(recDims + didx));
           } else {
             mv.shape_symbols.push_back(std::to_string(ext));
           }
           mv.lower_bounds.push_back("1");
+        }
+        mv.rank = static_cast<int>(mv.shape_symbols.size());
+        if (recDims == 1) {
+          // The record-array segment (the one carrying the prepended index):
+          // ``aos_origin_struct`` is the host expression up to and including it
+          // (``patch_3d % p_patch_1d``); ``aos_member_path`` is the rest
+          // (``dolic_e`` / ``edges%vertex_blk``).  ``aos_origin_mod`` stays
+          // EMPTY -- a dummy root needs no ``use`` import (unlike the QE
+          // module-global AoS path).
+          int recIdx = 0;
+          while (recIdx < static_cast<int>(mc.record_dims.size()) &&
+                 mc.record_dims[recIdx] == 0)
+            ++recIdx;
+          std::string originStruct = mc.root_dummy;
+          for (int i = 0; i <= recIdx; ++i) originStruct += " % " + mc.names[i];
+          std::string memberPath;
+          for (int i = recIdx + 1; i < static_cast<int>(mc.names.size()); ++i)
+            memberPath += (memberPath.empty() ? "" : "%") + mc.names[i];
+          mv.aos_origin_struct = originStruct;
+          mv.aos_member_path = memberPath;
+          mv.aos_outer_rank = 1;
+          mv.aos_struct_pointer = mc.is_pointer[recIdx];
+          mv.aos_member_pointer = mc.is_pointer.back();
         }
         vars.push_back(std::move(mv));
         existingNames.insert(s);
