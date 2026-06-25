@@ -23,7 +23,7 @@ cross-module kernels will use, just on the NPB instead.
 
 This test is the **first** of the NPB suite under ``tests/npb/``.  New
 benchmarks (BT / CG / EP / FT / MG / SP) drop into sibling folders on
-the same pattern -- see ``tests/npb/README.md``.
+the same pattern.
 """
 import json
 from pathlib import Path

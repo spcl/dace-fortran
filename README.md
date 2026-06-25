@@ -269,6 +269,34 @@ or branch is refused with a clear error rather than silently emitting a mutable
 shape. Non-hazards (accumulate-then-allocate-once; loop bounds and subscripts
 that mint a `fir.shape` but never an `fir.allocmem` extent) are left untouched.
 
+### 4. External-call policy (calls left un-inlined)
+
+Some `CALL`s should not be pulled into the translation unit — their internals
+are unlowerable (MPI, polymorphic dispatch, string scans) or they target a
+separately-compiled `bind(c)` library. A single declaration drives both halves
+of the toolchain: the inliner stubs the named procedure's body (keeping its
+interface) so its internals never enter the TU, and the bridge then either
+**emits** the surviving `CALL` as an `ExternalCall` library node
+(`dace_fortran/external.py`) bound to a C-ABI symbol, or **drops** it. Three
+behaviours: *inline* (default), *don't-inline + emit*, *don't-inline + ignore*
+(structural invariant `ignore ⊆ don't-inline`).
+
+Declare it once with `apply_external_functions(EXTERNAL, IGNORE)`, where
+`EXTERNAL` is a list of `ExternalFunction(name, c_function=…, library=…)` and
+`IGNORE` is the drop list (`finish`, `message`, timers, …). The emitted call's
+argument plan is **derived from the HLFIR call site** (array → `inout` pointer,
+scalar / free-symbol → by-value), so you supply only what HLFIR can't know: the
+`extern "C"` symbol and the `.so` that exports it (linked into the SDFG library
+via rpath, resolving at load time). The contract: an emitted target must be
+`bind(c, name="…")` — Fortran name mangling is compiler-specific and a `.mod`
+is not C-consumable, so a stable C symbol (native or a thin forwarding shim) is
+the only portable handle. When the C ABI carries facts HLFIR cannot infer —
+whole derived-type (AoS) struct args, an `MPI_Comm` handle, per-leaf dynamic
+extents, cross-library module-global forwarding, or intent narrowing — register
+an authored `ExternalSignature` via `keep_external(name, c_name=…, args=…,
+libraries=…)` (the same registry `apply_external_functions` uses under the
+hood). See `tests/external_call/` and `tests/external_aos_test.py`.
+
 ## Prerequisites
 
 - **LLVM / Flang 21** — `flang-new-21` (validated against LLVM 21.1.8; the
@@ -360,9 +388,9 @@ dace_fortran.register_external("foo", dace_fortran.ExternalSignature(
 ```
 
 For end-to-end real-codebase recipes (ICON from source, Quantum ESPRESSO
-`exx`), see `docs/ICON_INTEGRATION.md`, `docs/CODEBASE_HELPERS.md`,
-`docs/external_call_policy.md`, and the worked examples under `tests/icon/full/`
-and `tests/qe/`.
+`exx`), see `docs/ICON_INTEGRATION.md`, `docs/CODEBASE_HELPERS.md`, the
+external-call policy above (§4), and the worked examples under
+`tests/external_call/`, `tests/icon/full/`, and `tests/qe/`.
 
 ## Build-system integration
 
@@ -452,7 +480,7 @@ dace_fortran/
 cmake/                     DaceFortran.cmake (CMake integration)
 autotools/                 dace_fortran.m4 + dace_fortran.mk
 scripts/                   ICON build/configure helpers
-docs/                      CODEBASE_HELPERS, ICON_INTEGRATION, external_call_policy, …
+docs/                      CODEBASE_HELPERS, ICON_INTEGRATION, …
 tests/                     test corpora (see Testing)
 ```
 
