@@ -150,6 +150,32 @@ def _is_inline_flat_member(m: Member) -> bool:
     return m.rank >= 0
 
 
+def _is_value_record(iface: OriginalInterface, struct_name: str) -> bool:
+    """``True`` iff ``struct_name`` is a flat fixed-size *value* record --
+    every member is a non-struct, fully-static-shape leaf (the canonical
+    case is ``t_cartesian_coordinates`` with its single ``x(3)``).
+
+    An ARRAY of such a record (``p_vn_dual(:,:,:)``, a struct member
+    ``edge2vert_coeff_cc_t(:,:,:,:)``) is reconstructed *element-wise*
+    (``arr(i)%x(j) = flat(i, j)``) rather than by whole-array
+    ``arr%x`` descent, which Fortran forbids ("two or more part
+    references with nonzero rank").  A *container* record (``t_patch_vert``
+    -- multiple members, nested records, dynamic-shape allocatable members)
+    returns ``False``: it is indexed at element ``(1)`` and descended into,
+    not scattered.  Distinguishing the two needs no pointer/allocatable
+    flag -- a value record's members are all static-shape scalars/arrays;
+    a container's are not."""
+    st = iface.struct_types.get(struct_name)
+    if st is None or not st.members:
+        return False
+    for m in st.members:
+        if m.struct_name:
+            return False
+        if any(s in ("?", "*", ":") for s in m.shape):
+            return False
+    return True
+
+
 def _validate_struct_layout_recursive(iface: OriginalInterface, st: DerivedType, arg_name: str, path: str):
     """Walk ``st`` (and every nested derived-type member) and raise
     :class:`UnsupportedShimInterfaceError` on the first leaf the
@@ -249,10 +275,67 @@ def _emit_flat_arg(a: OriginalArg, header_args: List[str], decls_value: List[str
     call_args.append(a.name)
 
 
+def _emit_value_record_array(iface: OriginalInterface, vt_name: str, outer_rank: int, inst_path: str, flat_prefix: str,
+                             intent: str, header_args: List[str], decls_value: List[str], decls_ptr: List[str],
+                             decls_local: List[str], c_f_calls: List[str], copy_in: List[str], copy_out: List[str]):
+    """Reconstruct an ARRAY of a value record (``_is_value_record``,
+    e.g. ``t_cartesian_coordinates``) element-wise.  ``outer_rank`` is the
+    rank of the array carrying the record (the dummy's rank for a top-level
+    ``p_vn_dual(:,:,:)``, the member's rank for a nested
+    ``edge2vert_coeff_cc_t(:,:,:,:)``); ``inst_path`` is the Fortran array
+    instance to assemble.
+
+    The outer extents ride as ``integer(c_int), value`` args
+    ``<flat>_d<i>`` (the C caller supplies the array dims).  Per value
+    member ``v`` a flat C slot ``<flat>_<v>`` of rank ``outer_rank +
+    v.rank`` carries the SoA companion -- outer dims first, member dims
+    last, matching the wrapper's ``arr(i1..)%v(j1..) = flat(i1.., j1..)``
+    gather -- so the shim's scatter is its exact inverse.  ``intent``
+    (inherited from the outermost dummy) selects scatter (copy-in) and/or
+    gather (copy-out).
+
+    The ``allocate(inst(d0, ...))`` runs in ``copy_in`` ahead of the
+    scatter: a top-level allocatable local or a nested pointer member both
+    accept it."""
+    st = iface.struct_types[vt_name]
+    ext_names = [f"{flat_prefix}_d{i}" for i in range(outer_rank)]
+    for en in ext_names:
+        header_args.append(en)
+        decls_value.append(f"  integer(c_int), value :: {en}")
+    copy_in.append(f"  allocate({inst_path}({', '.join(ext_names)}))")
+    for v in st.members:
+        flat_name = f"{flat_prefix}_{v.name}"
+        ptr_name = f"{flat_name}_p"
+        header_args.append(ptr_name)
+        decls_ptr.append(f"  type(c_ptr), value :: {ptr_name}")
+        total_rank = outer_rank + v.rank
+        shape_toks = list(ext_names) + [str(s) for s in v.shape]
+        decls_local.append(f"  {v.fortran_type}, pointer :: {flat_name}({', '.join(':' for _ in range(total_rank))})")
+        c_f_calls.append(f"  call c_f_pointer({ptr_name}, {flat_name}, [{', '.join(shape_toks)}])")
+        idx = [f"{flat_name}_i{k}" for k in range(total_rank)]
+        decls_local.append(f"  integer :: {', '.join(idx)}")
+        outer_idx, inner_idx = idx[:outer_rank], idx[outer_rank:]
+        lhs = f"{inst_path}({', '.join(outer_idx)})%{v.name}"
+        if inner_idx:
+            lhs += f"({', '.join(inner_idx)})"
+        rhs = f"{flat_name}({', '.join(idx)})"
+        opens = ["  " + "  " * k + f"do {idx[k]} = 1, {shape_toks[k]}" for k in range(total_rank)]
+        closes = ["  " + "  " * (total_rank - 1 - k) + "end do" for k in range(total_rank)]
+        body = "  " + "  " * total_rank
+        if intent in ("in", "inout", ""):
+            copy_in.extend(opens)
+            copy_in.append(f"{body}{lhs} = {rhs}")
+            copy_in.extend(closes)
+        if intent in ("out", "inout"):
+            copy_out.extend(opens)
+            copy_out.append(f"{body}{rhs} = {lhs}")
+            copy_out.extend(closes)
+
+
 def _emit_struct_members_recursive(iface: OriginalInterface, st: DerivedType, inst_path: str, flat_prefix: str,
                                    intent: str, header_args: List[str], decls_value: List[str], decls_ptr: List[str],
                                    decls_local: List[str], c_f_calls: List[str], copy_in: List[str],
-                                   copy_out: List[str]):
+                                   copy_out: List[str], shape_syms: set):
     """Walk ``st``'s members; for each leaf emit a C-ABI slot plus
     the matching ``c_f_pointer`` alias + copy-in / copy-out, for each
     nested-struct member descend into the nested layout with extended
@@ -260,15 +343,54 @@ def _emit_struct_members_recursive(iface: OriginalInterface, st: DerivedType, in
     (``a%cells%foo``) used in struct-field assignments; ``flat_prefix``
     is the C-ABI naming root (``a_cells_foo``) used for header arg
     names and local pointer names; ``intent`` is inherited from the
-    outermost dummy."""
+    outermost dummy.
+
+    ``shape_syms`` is the set of flat names a *flat array dummy*'s shape
+    references (see :func:`_free_shape_symbols`).  A scalar member whose
+    flat name lands in that set (``patch_3d_p_patch_2d_nblks_e``, which is
+    both ``patch_3d%p_patch_2d(1)%nblks_e`` AND the trailing extent of
+    ``vn(nproma, n_zlev, patch_3d_p_patch_2d_nblks_e)``) is forwarded
+    ONCE, by value, under that name -- the array ``c_f_pointer`` shapes
+    reference the same scalar directly, and the shape-symbol forwarding
+    skips it as already-present.  Emitting it as a length-1 pointer alias
+    instead would both double-declare the name and leave the array shapes
+    referencing a rank-1 pointer where a scalar extent is required."""
     for m in st.members:
         if m.struct_name:
-            nested = iface.struct_types[m.struct_name]
-            _emit_struct_members_recursive(iface, nested, f"{inst_path}%{m.name}", f"{flat_prefix}_{m.name}", intent,
-                                           header_args, decls_value, decls_ptr, decls_local, c_f_calls, copy_in,
-                                           copy_out)
+            if m.rank == 0:
+                # Scalar nested record (``edges``, ``in_domain``): descend in
+                # place, no index, no alloc.
+                nested = iface.struct_types[m.struct_name]
+                _emit_struct_members_recursive(iface, nested, f"{inst_path}%{m.name}", f"{flat_prefix}_{m.name}",
+                                               intent, header_args, decls_value, decls_ptr, decls_local, c_f_calls,
+                                               copy_in, copy_out, shape_syms)
+            elif _is_value_record(iface, m.struct_name):
+                # Array of a value record (``edge2vert_coeff_cc_t(:,:,:,:)``
+                # of ``t_cartesian_coordinates``): scatter element-wise.
+                _emit_value_record_array(iface, m.struct_name, m.rank, f"{inst_path}%{m.name}",
+                                         f"{flat_prefix}_{m.name}", intent, header_args, decls_value, decls_ptr,
+                                         decls_local, c_f_calls, copy_in, copy_out)
+            else:
+                # Array of a container record (``p_patch_1d(:)`` /
+                # ``p_patch_2d(:)`` of ``t_patch_vert`` / ``t_patch``).  The
+                # ICON ocean kernels are single-patch -- the record array is
+                # only ever indexed ``(1)`` -- so allocate the pointer array
+                # to size 1 and descend into element ``(1)``; the wrapper's
+                # ``1..size`` AoS gather then round-trips through size 1.
+                copy_in.append(f"  allocate({inst_path}%{m.name}(1))")
+                nested = iface.struct_types[m.struct_name]
+                _emit_struct_members_recursive(iface, nested, f"{inst_path}%{m.name}(1)", f"{flat_prefix}_{m.name}",
+                                               intent, header_args, decls_value, decls_ptr, decls_local, c_f_calls,
+                                               copy_in, copy_out, shape_syms)
             continue
         flat_name = f"{flat_prefix}_{m.name}"
+        if m.rank == 0 and intent in ('in', '') and flat_name in shape_syms:
+            # Scalar member that is also a flat array dummy's extent: one
+            # by-value arg, shared by the struct copy and the array shapes.
+            header_args.append(flat_name)
+            decls_value.append(f"  {m.fortran_type}, value :: {flat_name}")
+            copy_in.append(f"  {inst_path}%{m.name} = {flat_name}")
+            continue
         ptr_name = f"{flat_name}_p"
         is_dynamic = any(s in ('?', '*', ':') for s in m.shape)
         if is_dynamic:
@@ -326,7 +448,7 @@ def _emit_struct_members_recursive(iface: OriginalInterface, st: DerivedType, in
 
 def _emit_struct_arg(a: OriginalArg, st: DerivedType, iface: OriginalInterface, header_args: List[str],
                      decls_value: List[str], decls_ptr: List[str], decls_local: List[str], c_f_calls: List[str],
-                     copy_in: List[str], copy_out: List[str], call_args: List[str]):
+                     copy_in: List[str], copy_out: List[str], call_args: List[str], shape_syms: set):
     """Append the per-member split for a derived-type argument.
 
     The dummy becomes a local ``type(<struct>), target :: <name>``;
@@ -349,8 +471,25 @@ def _emit_struct_arg(a: OriginalArg, st: DerivedType, iface: OriginalInterface, 
       copy preserves the per_member_soa no-pack contract on the
       outer side.
     """
+    if a.rank > 0:
+        # Array-of-record dummy.  A value record (``p_vn_dual(:,:,:)`` of
+        # ``t_cartesian_coordinates``) scatters element-wise into a local
+        # allocatable; a top-level container-record array has no kernel here
+        # and would need the size-1 record path -- reject it loudly rather
+        # than silently emit a rank-mismatched scalar instance.
+        if not _is_value_record(iface, a.struct_type):
+            raise UnsupportedShimInterfaceError(f"bind(c) shim: dummy {a.name!r} is an array (rank {a.rank}) of the "
+                                                f"container record {a.struct_type!r}; only arrays of flat value "
+                                                f"records (every member a static-shape leaf) are reconstructed "
+                                                f"element-wise today.")
+        _emit_value_record_array(iface, a.struct_type, a.rank, a.name, a.name, a.intent, header_args, decls_value,
+                                 decls_ptr, decls_local, c_f_calls, copy_in, copy_out)
+        shape = ", ".join(":" for _ in range(a.rank))
+        decls_local.append(f"  {a.fortran_type}, allocatable, target :: {a.name}({shape})")
+        call_args.append(a.name)
+        return
     _emit_struct_members_recursive(iface, st, a.name, a.name, a.intent, header_args, decls_value, decls_ptr,
-                                   decls_local, c_f_calls, copy_in, copy_out)
+                                   decls_local, c_f_calls, copy_in, copy_out, shape_syms)
     decls_local.append(f"  {a.fortran_type}, target :: {a.name}")
     call_args.append(a.name)
 
@@ -500,13 +639,17 @@ def emit_bind_c_shim(iface: OriginalInterface,
     call_args: List[str] = []
     struct_use_lines: List[str] = []
     seen_struct_uses = set()
+    # Flat names a flat array dummy's shape references -- a scalar struct
+    # member that coincides with one is forwarded by value (and shared with
+    # the array shapes) instead of as a length-1 pointer alias.
+    shape_syms = set(_free_shape_symbols(iface))
     for a in iface.args:
         if a.struct_type is None:
             _emit_flat_arg(a, header_args, decls_value, decls_ptr, decls_local, c_f_calls, call_args)
             continue
         st = iface.struct_types[a.struct_type]
         _emit_struct_arg(a, st, iface, header_args, decls_value, decls_ptr, decls_local, c_f_calls, copy_in, copy_out,
-                         call_args)
+                         call_args, shape_syms)
         # Pick up the ``use`` line for the struct's defining module
         # AND every nested-derived-type member's module so the shim
         # can spell ``type(<struct>)`` / ``type(<nested>)`` and any

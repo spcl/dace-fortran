@@ -266,6 +266,90 @@ def test_emit_shim_struct_with_static_array_members(tmp_path: Path):
     assert "use mo_fields, only: t_fields, NX, NY" in text
 
 
+def test_emit_shim_value_record_array_scatters_elementwise(tmp_path: Path):
+    """A dummy that is an ARRAY of a flat *value* record (single
+    static-shape member, like ``t_cartesian_coordinates%x(3)``) is
+    reconstructed element-wise: a local allocatable instance, a flat
+    companion of rank ``outer + member`` sized outer-dims-first /
+    member-last, and nested scatter (copy-in) + gather (copy-out) loops --
+    NOT an illegal whole-array ``arr%x`` descent (two nonzero-rank part
+    references)."""
+    iface = OriginalInterface(
+        entry="kern",
+        args=(OriginalArg(name="p",
+                          fortran_type="type(t_cc)",
+                          rank=2,
+                          intent="inout",
+                          struct_type="t_cc",
+                          shape=(":", ":")), ),
+        struct_types={
+            "t_cc":
+            DerivedType(name="t_cc",
+                        module="mo_cc",
+                        members=(Member(name="x", fortran_type="real(c_double)", rank=1, shape=("3", )), ))
+        },
+        used_modules={"mo_cc": ("t_cc", )},
+    )
+    text = emit_bind_c_shim(iface, str(tmp_path / "kern_c.f90")).read_text()
+    # Local allocatable array instance + outer-extent value args.
+    assert "type(t_cc), allocatable, target :: p(:, :)" in text
+    assert "integer(c_int), value :: p_d0" in text
+    assert "integer(c_int), value :: p_d1" in text
+    # Flat companion: rank outer(2) + member(1), sized [outer..., 3].
+    assert "real(c_double), pointer :: p_x(:, :, :)" in text
+    assert "call c_f_pointer(p_x_p, p_x, [p_d0, p_d1, 3])" in text
+    assert "allocate(p(p_d0, p_d1))" in text
+    # Element-wise scatter (copy-in) then gather (copy-out, inout).
+    assert "p(p_x_i0, p_x_i1)%x(p_x_i2) = p_x(p_x_i0, p_x_i1, p_x_i2)" in text
+    assert "p_x(p_x_i0, p_x_i1, p_x_i2) = p(p_x_i0, p_x_i1)%x(p_x_i2)" in text
+    # The struct array (not the flat slots) is passed to _dace.
+    assert "call kern_dace(p)" in text
+
+
+def test_emit_shim_pointer_array_record_indexed_and_scalar_extent_by_value(tmp_path: Path):
+    """A struct dummy with a rank-1 pointer-array-of-record member
+    (``p1d(:)`` of a multi-member *container*) is allocated to size 1 and
+    descended at element ``(1)`` (the ICON single-patch idiom).  A scalar
+    member that is ALSO a flat array dummy's extent rides ONCE by value --
+    shared by the struct copy and the array's ``c_f_pointer`` shape -- not
+    as a duplicate length-1 pointer alias that would double-declare the
+    name and leave the array shape referencing a rank-1 pointer."""
+    iface = OriginalInterface(
+        entry="kern",
+        args=(
+            OriginalArg(name="patch", fortran_type="type(t_patch3d)", rank=0, intent="in", struct_type="t_patch3d"),
+            OriginalArg(name="fld", fortran_type="real(c_double)", rank=1, intent="inout", shape=("patch_p1d_nblk", )),
+        ),
+        struct_types={
+            "t_patch3d":
+            DerivedType(name="t_patch3d",
+                        module="mo_dom",
+                        members=(Member(name="p1d",
+                                        fortran_type="type(t_pv)",
+                                        rank=1,
+                                        shape=("?", ),
+                                        struct_name="t_pv"), )),
+            "t_pv":
+            DerivedType(name="t_pv",
+                        module="mo_dom",
+                        members=(Member(name="nblk", fortran_type="integer(c_int)", rank=0),
+                                 Member(name="dolic", fortran_type="integer(c_int)", rank=2, shape=("?", "?")))),
+        },
+        used_modules={"mo_dom": ("t_patch3d", "t_pv")},
+    )
+    text = emit_bind_c_shim(iface, str(tmp_path / "kern_c.f90")).read_text()
+    # Pointer-array-of-record member allocated to size 1, descended at (1).
+    assert "allocate(patch%p1d(1))" in text
+    assert "patch%p1d(1)%nblk = patch_p1d_nblk" in text
+    assert "allocate(patch%p1d(1)%dolic(patch_p1d_dolic_d0, patch_p1d_dolic_d1))" in text
+    assert "patch%p1d(1)%dolic = patch_p1d_dolic" in text
+    # The scalar member is also fld's extent -> by value, once; no pointer alias.
+    assert "integer(c_int), value :: patch_p1d_nblk" in text
+    assert text.count("patch_p1d_nblk") == 4  # header arg + decl + struct copy + array shape
+    assert "integer(c_int), pointer :: patch_p1d_nblk(:)" not in text
+    assert "call c_f_pointer(fld_p, fld, [patch_p1d_nblk])" in text
+
+
 # ---------------------------------------------------------------------------
 #  End-to-end: the auto-shim produces a Fortran-callable ``.so`` whose
 #  ``<entry>_c`` symbol numerically matches a gfortran reference.

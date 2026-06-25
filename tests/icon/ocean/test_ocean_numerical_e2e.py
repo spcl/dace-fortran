@@ -13,12 +13,18 @@ module-variable-extent forwarding fix (``tracer(nproma, n_zlev)`` ->
 ``c_f_pointer`` resolves) and the struct-member AoS->SoA marshalling
 (``t_verticaladvection_ppm_coefficients``'s nine pointer members).
 
-ppm_vflux lowers + binds today.  coriolis_pv / veloc_adv_horz currently fail to
-LOWER (a bridge HLFIR pass mis-types the ``edgeOfVertex_index`` indirect-index
-scalar: ``'hlfir.declare' op first result type is inconsistent ... expected
-'!fir.ref<i32>'``) -- a bridge bug, not a binding gap -- so they are xfail until
-that lands; veloc_adv_horz embeds the same coriolis routine, hence the same
-root cause.
+ppm_vflux lowers + binds today.  coriolis_pv / veloc_adv_horz now lower, bind,
+compile and RUN through the auto shim (the bridge mis-typing and the
+flat-C-ABI struct reconstruction -- pointer-array-of-record patches indexed
+``(1)``, arrays of ``t_cartesian_coordinates`` scattered element-wise -- are
+fixed): the SDFG path and the original-Fortran reference execute identically
+(``max_diff == 0``).  They stay xfail only because the test feeds RANDOM
+``[1, n]`` mesh data, which for this index-heavy stencil drives empty loops
+(``start_block > end_block`` / ``get_index_range`` returns an empty range) so no
+output buffer changes -- ``n_changed == 0`` trips the vacuous-test guard.  A
+non-vacuous run needs a controlled valid-mesh fixture (single in-domain block,
+small edge range, ``no_dual_edges`` in bounds), tracked separately from the
+shim; veloc_adv_horz embeds the same coriolis routine.
 """
 import shutil
 
@@ -51,18 +57,18 @@ _KERNELS = [
     pytest.param("coriolis_pv",
                  "coriolis_pv_single_tu.f90",
                  "mo_scalar_product::nonlinear_coriolis_3d_fast_scalar", {},
-                 marks=pytest.mark.xfail(reason="hlfir-flatten-structs mis-types the i32 scalar "
-                                         "edgeOfVertex_index (read from the flattened allocatable member "
-                                         "patch%verts%edge_idx(...)): 'hlfir.declare op first result type "
-                                         "inconsistent ... expected !fir.ref<i32>'.  Bridge pass bug, not "
-                                         "a binding gap; needs a FlattenStructs.cpp fix + rebuild.",
+                 marks=pytest.mark.xfail(reason="lowers/binds/compiles/runs through the auto shim now (struct "
+                                         "reconstruction fixed); SDFG and Fortran reference agree (max_diff==0) "
+                                         "but random [1, n] mesh data drives empty loops so n_changed==0 trips "
+                                         "the vacuous guard.  Needs a controlled valid-mesh fixture, tracked "
+                                         "separately from the shim.",
                                          strict=True),
                  id="coriolis_pv"),
     pytest.param("ocean_veloc_adv",
                  "ocean_veloc_adv_single_tu.f90",
                  "mo_ocean_velocity_advection::veloc_adv_horz_mimetic_rot", {},
-                 marks=pytest.mark.xfail(reason="embeds nonlinear_coriolis_3d_fast_scalar; same "
-                                         "hlfir-flatten-structs edgeOfVertex_index mis-typing bug",
+                 marks=pytest.mark.xfail(reason="embeds nonlinear_coriolis_3d_fast_scalar; same vacuous-loop "
+                                         "(random mesh -> n_changed==0) limitation as coriolis_pv",
                                          strict=True),
                  id="ocean_veloc_adv"),
 ]
