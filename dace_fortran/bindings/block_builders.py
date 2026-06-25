@@ -550,8 +550,8 @@ def build_wrapper_head(frozen: FrozenSignature,
         ftype = _fortran_c_value_type(a.dtype)
         spec = "(" + ", ".join(":" for _ in range(a.rank)) + ")" if a.rank else ""
         scratch_lines.append(f"    {ftype}, allocatable, target :: {a.sdfg_name}{spec}")
-        it, caps, _mrank, _elem = _aos_loop_pieces(a)
-        int_names = ([it] if it else []) + caps  # scalar-struct (outer_rank 0): no loop vars
+        its, caps, _mrank, _elem = _aos_loop_pieces(a)
+        int_names = its + caps  # scalar-struct (outer_rank 0): no loop vars
         if int_names:
             scratch_lines.append(f"    integer(c_int) :: {', '.join(int_names)}")
 
@@ -1453,22 +1453,36 @@ def _present(expr: str, is_pointer: bool) -> str:
 
 
 def _aos_loop_pieces(a):
-    """Loop var / per-member-dim cap-var names + the host element accessor for
-    an AoS-component arg.  ``aos_outer_rank == 1`` (a 1-D record array): the
-    element index is the SoA buffer's LEADING dim, matching the bridge's
-    ``[element-dims..., member-dims...]`` layout.  ``aos_outer_rank == 0`` (a
-    SCALAR struct global, ``vcut``/``dfftt``): no element loop -- ``it``/``caps``
-    are empty and the accessor is the bare ``struct%member``."""
+    """Per-outer-dim loop vars / per-member-dim cap-var names + the host element
+    accessor for an AoS-component arg.  ``aos_outer_rank == N`` (an N-D record
+    array): N element-index loop vars ``aos_<base>_i0 .. aos_<base>_i{N-1}`` are
+    the SoA buffer's LEADING dims, matching the bridge's ``[element-dims...,
+    member-dims...]`` layout (N=1 for a 1-D record array ``becxx(:)``; N>1 for an
+    N-D cartesian array member ``p_diag % p_vn_dual(:,:,:)``).  ``aos_outer_rank
+    == 0`` (a SCALAR struct global, ``vcut``/``dfftt``): no element loop --
+    ``its``/``caps`` are empty and the accessor is the bare ``struct%member``."""
     base = a.sdfg_name
     member_rank = a.rank - a.aos_outer_rank
     if a.aos_outer_rank == 0:
-        return None, [], member_rank, f"{a.aos_origin_struct}%{a.aos_member_path}"
+        return [], [], member_rank, f"{a.aos_origin_struct}%{a.aos_member_path}"
     # Fortran identifiers must start with a letter (no leading ``_``).
-    it = f"aos_{base}_i"
+    its = [f"aos_{base}_i{k}" for k in range(a.aos_outer_rank)]
     caps = [f"aos_{base}_c{j}" for j in range(member_rank)]
-    # ``becxx(<it>)%k`` (member_path is ``%``-joined: ``k`` / ``a%b``).
-    elem = f"{a.aos_origin_struct}({it})%{a.aos_member_path}"
-    return it, caps, member_rank, elem
+    # ``becxx(i0)%k`` / ``p_diag % p_vn_dual(i0,i1,i2)%x`` (member_path is
+    # ``%``-joined: ``k`` / ``x`` / ``a%b``).
+    elem = f"{a.aos_origin_struct}({', '.join(its)})%{a.aos_member_path}"
+    return its, caps, member_rank, elem
+
+
+def _aos_member_is_static(a) -> bool:
+    """True when the AoS component is a fixed-shape VALUE member -- every member
+    dim a compile-time literal (``t_cartesian_coordinates%x(3)``) -- rather than
+    an ALLOCATABLE / POINTER component (whose extents the bridge always registers
+    as symbols).  A static member is unconditionally present (no
+    ``allocated``/``associated`` guard) and its extents ARE the literals, so the
+    copy skips the per-element cap-max scan and the member-present guard."""
+    member_dims = a.shape[a.aos_outer_rank:]
+    return bool(member_dims) and all(str(d).isdigit() for d in member_dims)
 
 
 def _render_aos_copy_in(a) -> List[str]:
@@ -1476,7 +1490,7 @@ def _render_aos_copy_in(a) -> List[str]:
     pack the host AoS component into it.  Skips the data copy when the kernel
     allocates the component itself (``global_alloc_inside`` -- host has no
     data yet) but still allocates a non-degenerate buffer."""
-    it, caps, mrank, elem = _aos_loop_pieces(a)
+    its, caps, mrank, elem = _aos_loop_pieces(a)
     if a.aos_outer_rank == 0:
         # SCALAR struct global member (``vcut%corrected``, ``dfftt%nl``): the
         # member may be a POINTER or an ALLOCATABLE that is unassociated /
@@ -1496,59 +1510,86 @@ def _render_aos_copy_in(a) -> List[str]:
         return out
     struct = a.aos_origin_struct
     sp = _present(struct, a.aos_struct_pointer)  # struct allocated/associated?
-    mp = _present(elem, a.aos_member_pointer)  # element's component defined?
+    zero = _zero_literal(a.dtype)
+    # N nested element loops + matching closers; outer-dim allocate specs.
+    do_open = [f"      do {itv} = 1, size({struct}, {k + 1})" for k, itv in enumerate(its)]
+    do_close = ["      end do" for _ in its]
+    outer_dims = ", ".join(f"size({struct}, {k + 1})" for k in range(len(its)))
+    one_dims = ", ".join("1" for _ in its)
+    idx = ", ".join(its)
     if mrank == 0:
         # SCALAR member of a record array (``upf(:)%tvanp`` -- a plain LOGICAL /
         # INTEGER per element, NOT allocatable).  Gather one value per element
-        # into a rank-1 SoA buffer.  No member ``allocated`` guard (the member is
+        # into the N-D SoA buffer.  No member ``allocated`` guard (the member is
         # a fixed scalar); the OUTER struct may itself be unallocated on entry
         # (no-op path) -> degenerate size-1 buffer.
-        zero = _zero_literal(a.dtype)
         out = [
             f"    ! ----- AoS->SoA gather (scalar member): {a.sdfg_name} <- "
             f"{struct}(:)%{a.aos_member_path} -----"
         ]
         out.append(f"    if ({sp}) then")
-        out.append(f"      allocate({a.sdfg_name}(size({struct})))")
-        out.append(f"      do {it} = 1, size({struct})")
-        out.append(f"        {a.sdfg_name}({it}) = {elem}")
-        out.append(f"      end do")
+        out.append(f"      allocate({a.sdfg_name}({outer_dims}))")
+        out += do_open
+        out.append(f"        {a.sdfg_name}({idx}) = {elem}")
+        out += do_close
         out.append(f"    else")
-        out.append(f"      allocate({a.sdfg_name}(1)); {a.sdfg_name} = {zero}")
+        out.append(f"      allocate({a.sdfg_name}({one_dims})); {a.sdfg_name} = {zero}")
+        out.append(f"    end if")
+        return out
+    if _aos_member_is_static(a):
+        # Fixed-shape VALUE member (``t_cartesian_coordinates%x(3)``): always
+        # present (no allocated/associated guard) with literal extents, so skip
+        # the cap-max scan and gather every element directly.  Buffer is
+        # [outer-dims..., literal-member-dims...].
+        member_dims = list(a.shape[a.aos_outer_rank:])
+        cap_dims = ", ".join(member_dims)
+        slc = ", ".join(f"1:{d}" for d in member_dims)
+        out = [
+            f"    ! ----- AoS->SoA copy-in (static value member): {a.sdfg_name} <- "
+            f"{struct}(:)%{a.aos_member_path} -----"
+        ]
+        out.append(f"    if ({sp}) then")
+        out.append(f"      allocate({a.sdfg_name}({outer_dims}, {cap_dims})); {a.sdfg_name} = {zero}")
+        out += do_open
+        out.append(f"        {a.sdfg_name}({idx}, {slc}) = {elem}")
+        out += do_close
+        out.append(f"    else")
+        out.append(f"      allocate({a.sdfg_name}({one_dims}, {cap_dims})); {a.sdfg_name} = {zero}")
         out.append(f"    end if")
         return out
     # member_rank > 0: a 2D+ ALLOCATABLE / POINTER component per element
     # (``becxx(:)%k``, ``ke(:)%k``).  Cap = max member extent over elements;
     # both the struct and each element's component are guarded (no-op path
     # leaves them unallocated / unassociated).
+    mp = _present(elem, a.aos_member_pointer)  # element's component defined?
     out = [f"    ! ----- AoS->SoA copy-in: {a.sdfg_name} <- {struct}(:)%{a.aos_member_path} -----"]
     for c in caps:
         out.append(f"    {c} = 0")
     out.append(f"    if ({sp}) then")
-    out.append(f"      do {it} = 1, size({struct})")
+    out += do_open
     if not a.global_alloc_inside:
         out.append(f"        if ({mp}) then")
         for j, c in enumerate(caps):
             out.append(f"          {c} = max({c}, size({elem}, {j + 1}))")
         out.append(f"        end if")
-    out.append(f"      end do")
+    out += do_close
     out.append(f"    end if")
     for c in caps:
         out.append(f"    if ({c} == 0) {c} = 1")
     cap_dims = ", ".join(caps)
     out.append(f"    if ({sp}) then")
-    out.append(f"      allocate({a.sdfg_name}(size({struct}), {cap_dims}))")
+    out.append(f"      allocate({a.sdfg_name}({outer_dims}, {cap_dims}))")
     out.append(f"    else")
-    out.append(f"      allocate({a.sdfg_name}(1, {cap_dims}))")
+    out.append(f"      allocate({a.sdfg_name}({one_dims}, {cap_dims}))")
     out.append(f"    end if")
-    out.append(f"    {a.sdfg_name} = {_zero_literal(a.dtype)}")
+    out.append(f"    {a.sdfg_name} = {zero}")
     if not a.global_alloc_inside:
         slc = ", ".join(f"1:size({elem}, {j + 1})" for j in range(mrank))
         out.append(f"    if ({sp}) then")
-        out.append(f"      do {it} = 1, size({struct})")
+        out += do_open
         out.append(f"        if ({mp}) &")
-        out.append(f"          {a.sdfg_name}({it}, {slc}) = {elem}")
-        out.append(f"      end do")
+        out.append(f"          {a.sdfg_name}({idx}, {slc}) = {elem}")
+        out += do_close
         out.append(f"    end if")
     return out
 
@@ -1556,14 +1597,16 @@ def _render_aos_copy_in(a) -> List[str]:
 def _render_aos_copy_out(a) -> List[str]:
     """Pack the SoA buffer back into the host AoS component (only when the arg
     is WRITTEN), allocating each component first if the kernel created it."""
-    it, caps, mrank, elem = _aos_loop_pieces(a)
+    its, caps, mrank, elem = _aos_loop_pieces(a)
     if a.aos_outer_rank == 0:
         # Degenerate scalar-struct member: nothing was packed in, just release
         # the buffer (no write-back -- the no-op path never writes it).
         return [f"    deallocate({a.sdfg_name})"]
     struct = a.aos_origin_struct
     sp = _present(struct, a.aos_struct_pointer)
-    mp = _present(elem, a.aos_member_pointer)
+    do_open = [f"      do {itv} = 1, size({struct}, {k + 1})" for k, itv in enumerate(its)]
+    do_close = ["      end do" for _ in its]
+    idx = ", ".join(its)
     if mrank == 0:
         # Scalar member of a record array: scatter one value per element back.
         out = [
@@ -1571,22 +1614,39 @@ def _render_aos_copy_out(a) -> List[str]:
             f"{a.aos_member_path} <- {a.sdfg_name} -----"
         ]
         out.append(f"    if ({sp}) then")
-        out.append(f"      do {it} = 1, size({struct})")
-        out.append(f"        {elem} = {a.sdfg_name}({it})")
-        out.append(f"      end do")
+        out += do_open
+        out.append(f"        {elem} = {a.sdfg_name}({idx})")
+        out += do_close
         out.append(f"    end if")
         out.append(f"    deallocate({a.sdfg_name})")
         return out
+    if _aos_member_is_static(a):
+        # Fixed-shape VALUE member (``%x(3)``): always present, literal extents;
+        # scatter every element back unconditionally.
+        member_dims = list(a.shape[a.aos_outer_rank:])
+        slc = ", ".join(f"1:{d}" for d in member_dims)
+        out = [
+            f"    ! ----- SoA->AoS copy-out (static value member): {struct}(:)%"
+            f"{a.aos_member_path} <- {a.sdfg_name} -----"
+        ]
+        out.append(f"    if ({sp}) then")
+        out += do_open
+        out.append(f"        {elem} = {a.sdfg_name}({idx}, {slc})")
+        out += do_close
+        out.append(f"    end if")
+        out.append(f"    deallocate({a.sdfg_name})")
+        return out
+    mp = _present(elem, a.aos_member_pointer)
     out = [f"    ! ----- SoA->AoS copy-out: {struct}(:)%{a.aos_member_path} <- {a.sdfg_name} -----"]
     out.append(f"    if ({sp}) then")
-    out.append(f"      do {it} = 1, size({struct})")
+    out += do_open
     if a.global_alloc_inside:
         alloc_dims = ", ".join(f"size({a.sdfg_name}, {a.aos_outer_rank + j + 1})" for j in range(mrank))
         out.append(f"        if (.not. {mp}) allocate({elem}({alloc_dims}))")
     slc = ", ".join(f"1:size({elem}, {j + 1})" for j in range(mrank))
     out.append(f"        if ({mp}) &")
-    out.append(f"          {elem} = {a.sdfg_name}({it}, {slc})")
-    out.append(f"      end do")
+    out.append(f"          {elem} = {a.sdfg_name}({idx}, {slc})")
+    out += do_close
     out.append(f"    end if")
     out.append(f"    deallocate({a.sdfg_name})")
     return out
