@@ -175,6 +175,15 @@ bool leadsToComponentDesignate(mlir::Value mr) {
       mr = ba.getVal();
       continue;
     }
+    // ``hlfir.copy_in`` -- Flang copies a non-contiguous actual (a pointer
+    // member ``p_diag % p_vn_dual``) into a contiguous temp before passing
+    // it to a procedure; the inlined dummy then aliases that temp.  Peel to
+    // the original variable so the chain reaches the caller's component
+    // designate (gate #12b).
+    if (auto cp = mlir::dyn_cast<hlfir::CopyInOp>(d)) {
+      mr = cp.getVar();
+      continue;
+    }
     return false;
   }
   return false;
@@ -243,6 +252,14 @@ std::string traceToDecl(mlir::Value val, int max) {
     // name is the box's source declare, so we walk through.
     if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
       val = ba.getVal();
+      continue;
+    }
+    // ``hlfir.copy_in`` -- Flang's contiguous-buffer temp for a
+    // non-contiguous actual (pointer member ``p_diag % p_vn_dual``).  Walk to
+    // the original variable so an inlined dummy aliasing the temp resolves to
+    // the caller's storage name (gate #12b; mirrors extract_vars.cpp:2609).
+    if (auto cp = mlir::dyn_cast<hlfir::CopyInOp>(d)) {
+      val = cp.getVar();
       continue;
     }
     // ``hlfir.as_expr %var`` retypes a materialised variable (a declare /

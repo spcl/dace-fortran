@@ -3646,6 +3646,16 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
             v = dc.getMemref();
             continue;
           }  // inlined alias (no dummy scope)
+          // Inlined-call dummy aliasing another (whole-array) inlined dummy --
+          // ICON-O veloc_adv's TRIPLE inlining chains ``vn_dual`` -> coriolis
+          // ``p_vn_dual`` -> coriolis_3d ``p_vn_dual`` before the ``p_diag %``
+          // component hop.  Resolve each dummy->dummy hop via
+          // ``asAssumedShapeAlias`` (as traceToDecl does) so the walk reaches
+          // the final component designate (gate #12b).
+          if (auto outer = asAssumedShapeAlias(dc)) {
+            v = outer.getResult(0);
+            continue;
+          }
           // Inlined-call dummy bound to a struct MEMBER (``inner(diag % pvd,
           // ...)``): its declare has a dummy scope but its memref is a
           // component designate of the caller's struct.  Walk THROUGH to the
@@ -3674,6 +3684,10 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
         }
         if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
           v = ba.getVal();
+          continue;
+        }
+        if (auto cp = mlir::dyn_cast<hlfir::CopyInOp>(d)) {  // gate #12b
+          v = cp.getVar();
           continue;
         }
         if (auto co = mlir::dyn_cast<fir::CoordinateOp>(d)) {
@@ -3747,6 +3761,15 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
             v = dc.getMemref();
             continue;
           }
+          // Inlined dummy aliasing another (whole-array) inlined dummy -- the
+          // veloc_adv multi-inline chain (gate #12b).  Resolve dummy->dummy
+          // hops via ``asAssumedShapeAlias`` so the chain reaches the final
+          // ``p_diag %`` component hop instead of stopping at an intermediate
+          // inlined dummy.
+          if (auto outer = asAssumedShapeAlias(dc)) {
+            v = outer.getResult(0);
+            continue;
+          }
           // Inlined-call dummy bound to a struct MEMBER (gate #12): walk
           // through to the caller's struct so the chain collects the member
           // segment (``diag % pvd``) and roots at the OUTER dummy ``diag``,
@@ -3774,6 +3797,10 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module,
         }
         if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
           v = ba.getVal();
+          continue;
+        }
+        if (auto cp = mlir::dyn_cast<hlfir::CopyInOp>(d)) {  // gate #12b
+          v = cp.getVar();
           continue;
         }
         if (auto co = mlir::dyn_cast<fir::CoordinateOp>(d)) {

@@ -58,3 +58,53 @@ def test_nested_cartesian_member_in_inlined_dot_product(tmp_path):
     registers and the dot-product reads a 1-D element slice."""
     sdfg = build_sdfg(_SRC, entry="m::outer", name="nested_cc_dot", out_dir=str(tmp_path))
     assert "diag_pvd_x" in sdfg.arrays, f"nested cartesian companion not registered: {sorted(sdfg.arrays)}"
+
+
+# Multi-level inlining + ``hlfir.copy_in`` (gate #12b): ``outer`` passes the
+# POINTER member ``diag % pvd`` down through an intermediate inlined ``mid``
+# before the ``inner`` dot-product.  Flang copies the non-contiguous pointer
+# actual into a contiguous temp (``hlfir.copy_in``) at the call boundary, and
+# the cartesian dummy aliases that temp through a CHAIN of inlined dummies --
+# the alias walk must peel ``copy_in`` AND hop dummy->dummy
+# (``asAssumedShapeAlias``) to reach ``diag % pvd``, mirroring ICON-O
+# veloc_adv's veloc -> coriolis_3d -> coriolis_fast_scalar -> rot_vertex nest.
+_SRC_MULTI = """\
+module m2
+  implicit none
+  type :: t_cc
+    real(8) :: x(3)
+  end type t_cc
+  type :: t_diag
+    type(t_cc), pointer, dimension(:) :: pvd
+  end type t_diag
+contains
+  subroutine inner(pvd, n, out)
+    type(t_cc), intent(in) :: pvd(:)
+    integer, intent(in) :: n
+    real(8), intent(out) :: out(n)
+    integer :: i
+    do i = 1, n
+      out(i) = dot_product(pvd(i) % x, pvd(i) % x)
+    end do
+  end subroutine inner
+  subroutine mid(pvd, n, out)
+    type(t_cc), intent(in) :: pvd(:)
+    integer, intent(in) :: n
+    real(8), intent(out) :: out(n)
+    call inner(pvd, n, out)
+  end subroutine mid
+  subroutine outer(diag, n, out)
+    type(t_diag), intent(inout) :: diag
+    integer, intent(in) :: n
+    real(8), intent(out) :: out(n)
+    call mid(diag % pvd, n, out)
+  end subroutine outer
+end module m2
+"""
+
+
+def test_nested_cartesian_member_through_multilevel_inline_copyin(tmp_path):
+    """The cartesian companion still registers when the pointer member flows
+    through MULTIPLE inlined levels + a ``hlfir.copy_in`` contiguous temp."""
+    sdfg = build_sdfg(_SRC_MULTI, entry="m2::outer", name="nested_cc_multi", out_dir=str(tmp_path))
+    assert "diag_pvd_x" in sdfg.arrays, f"nested cartesian companion not registered: {sorted(sdfg.arrays)}"
