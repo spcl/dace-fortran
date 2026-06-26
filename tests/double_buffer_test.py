@@ -109,6 +109,50 @@ end subroutine
     np.testing.assert_allclose(out_sdfg, out_ref, rtol=0, atol=0)
 
 
+def test_dbuf_in_kernel_swap_rejected(tmp_path):
+    """A double-buffer kernel that ROTATES the time-level indices itself (an
+    in-kernel ``swap(nnow, nnew)``) cannot be lane-split: the static per-symbol
+    companions (``s_prog_nnow_w`` / ``s_prog_nnew_w``) are bound to one physical
+    buffer each at call time and cannot be re-pointed mid-kernel.  The bridge must
+    reject it loudly rather than silently miscompile -- the time-level rotation
+    belongs in the driver (ICON's ``CALL swap(nnow, nnew)`` lives in
+    mo_nh_stepping, outside solve_nonhydro)."""
+    src = """
+module dbuf_swap_mod
+  implicit none
+  type t_prog
+    real(kind=8) :: w(2, 3)
+  end type t_prog
+  type t_state
+    type(t_prog), allocatable :: prog(:)
+  end type t_state
+contains
+  subroutine kernel(s, nnow, nnew, out)
+    type(t_state), intent(inout) :: s
+    integer, intent(inout)       :: nnow, nnew
+    real(kind=8), intent(inout)  :: out(2, 3)
+    integer :: i, j, itmp
+    do j = 1, 3
+      do i = 1, 2
+        s%prog(nnew)%w(i, j) = s%prog(nnow)%w(i, j) * 2.0d0
+        out(i, j) = s%prog(nnew)%w(i, j)
+      end do
+    end do
+    ! in-kernel time-level swap -- belongs in the driver; the static lane split
+    ! cannot represent it, so the bridge must reject.
+    itmp = nnow
+    nnow = nnew
+    nnew = itmp
+  end subroutine
+end module
+"""
+    with pytest.raises(RuntimeError) as exc:
+        build_sdfg(src, tmp_path / 'sdfg', name='kernel', entry='kernel').build()
+    msg = str(exc.value).lower()
+    assert ("pipeline failed" in msg or "swap" in msg or "time-level" in msg
+            or "reassigned" in msg), f"expected an in-kernel-swap rejection, got: {msg}"
+
+
 def test_dbuf_split_multi_member(tmp_path):
     """Struct with two inner array members.  Each (member, idx_sym)
     pair gets its own companion -- four total: ``s_prog_nnow_{w,vn}``

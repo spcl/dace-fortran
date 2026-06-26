@@ -3481,6 +3481,9 @@ struct FlattenStructsPass
     };
     std::map<Key, llvm::SmallVector<hlfir::DesignateOp, 4>> sites;
     llvm::SmallPtrSet<mlir::Operation*, 32> deadOps;
+    // Base address (declared-variable memref) of each buffer-index symbol, for
+    // the in-kernel-mutation reject below.
+    std::map<std::string, mlir::Value> symAddr;
     bool bail = false;
 
     func.walk([&](hlfir::DesignateOp elemDg) {
@@ -3519,6 +3522,23 @@ struct FlattenStructsPass
         bail = true;
         return;
       }
+      // Record the index symbol's declared base address (peel the subscript
+      // i32->i64 convert, the load, and any element/component designates) so
+      // the reject below can see if it is written inside the kernel.
+      if (!symAddr.count(sym)) {
+        mlir::Value idxVal = elemDg.getIndices()[0];
+        while (auto cv = mlir::dyn_cast_or_null<fir::ConvertOp>(
+                   idxVal.getDefiningOp()))
+          idxVal = cv.getValue();
+        if (auto ld =
+                mlir::dyn_cast_or_null<fir::LoadOp>(idxVal.getDefiningOp())) {
+          mlir::Value m = ld.getMemref();
+          while (auto dg2 = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
+                     m.getDefiningOp()))
+            m = dg2.getMemref();
+          symAddr[sym] = m;
+        }
+      }
       Key key;
       key.root = v.getAsOpaquePointer();
       key.path.assign(walkedPath.rbegin(), walkedPath.rend());
@@ -3545,6 +3565,51 @@ struct FlattenStructsPass
         symsPerPath;
     for (auto& kv : sites) {
       symsPerPath[{kv.first.root, kv.first.path}].insert(kv.first.sym);
+    }
+
+    // In-kernel time-level-swap REJECT.  The split binds each per-symbol lane
+    // to one physical buffer element ONCE at call time and leaves the
+    // time-level rotation to the driver (ICON: ``CALL swap(nnow, nnew)`` lives
+    // in mo_nh_stepping, OUTSIDE solve_nonhydro).  If a toggle symbol is
+    // instead REASSIGNED inside the kernel -- an in-kernel swap/rotation -- the
+    // static lanes cannot be re-pointed mid-kernel, so the split would silently
+    // miscompile.  Detect a write (``fir.store`` / ``hlfir.assign`` to the
+    // symbol's address, directly or through an element/component designate) on
+    // any toggling symbol and fail loudly instead.
+    std::function<bool(mlir::Value)> addressIsStored =
+        [&](mlir::Value addr) -> bool {
+      if (!addr) return false;
+      for (auto* u : addr.getUsers()) {
+        if (auto st = mlir::dyn_cast<fir::StoreOp>(u)) {
+          if (st.getMemref() == addr) return true;
+        } else if (auto as = mlir::dyn_cast<hlfir::AssignOp>(u)) {
+          if (as.getLhs() == addr) return true;
+        } else if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u)) {
+          if (dg.getMemref() == addr && addressIsStored(dg.getResult()))
+            return true;
+        }
+      }
+      return false;
+    };
+    for (auto& [path, syms] : symsPerPath) {
+      if (syms.size() < 2) continue;  // not a double buffer -- regular AoR path
+      for (auto& s : syms) {
+        auto it = symAddr.find(s);
+        if (it != symAddr.end() && addressIsStored(it->second)) {
+          func.emitError("double-buffer time-level index `" + s +
+                         "` is reassigned inside the kernel (an in-kernel swap "
+                         "/ time-level "
+                         "rotation): the static per-symbol buffer split binds "
+                         "each lane to "
+                         "one buffer at call time and cannot re-point it "
+                         "mid-kernel.  Keep "
+                         "the rotation (e.g. `swap(nnow, nnew)`) in the "
+                         "driver, outside the "
+                         "extracted kernel.");
+          signalPassFailure();
+          return false;
+        }
+      }
     }
 
     bool changed = false;
