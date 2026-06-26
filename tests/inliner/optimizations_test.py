@@ -106,6 +106,37 @@ END MODULE main
     SourceCodeBuilder().add_file(got).check_with_gfortran()
 
 
+def test_constant_resolving_named_kind_int_literal():
+    """
+    An integer literal with a *named* kind (`5_i8`) must const-fold the same as
+    a real literal with a named kind -- the kind Name has to be normalized to
+    its string form before the kind-resolution comparisons, or evaluation
+    crashes on an unhashable Name.
+    """
+    sources, _ = (SourceCodeBuilder().add_file("""
+subroutine main
+  implicit none
+  integer, parameter :: i8 = 4
+  integer :: a = -1
+  a = 5_i8 + 3_i8
+end subroutine main
+""").check_with_gfortran().get())
+    ast = parse_and_improve(sources)
+    ast = optimizations.const_eval_nodes(ast)
+
+    got = ast.tofortran()
+    want = """
+SUBROUTINE main
+  IMPLICIT NONE
+  INTEGER, PARAMETER :: i8 = 4
+  INTEGER :: a = - 1
+  a = 8
+END SUBROUTINE main
+""".strip()
+    assert got == want
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
+
+
 def test_constant_resolving_non_expressions():
     """
     Tests that constants are resolved in non-expression contexts, such as

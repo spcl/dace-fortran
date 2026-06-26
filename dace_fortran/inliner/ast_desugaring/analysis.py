@@ -10,7 +10,7 @@ from typing import Optional, Tuple, List, Dict, Union, Set
 import fparser.two.Fortran2003 as f03
 import fparser.two.Fortran2008 as f08
 import numpy as np
-from fparser.two.utils import Base, walk, BinaryOpBase, UnaryOpBase
+from fparser.two.utils import Base, walk, BinaryOpBase, UnaryOpBase, NoMatchError
 
 from . import types, utils, optimizations
 from .. import ast_utils
@@ -376,12 +376,15 @@ def find_real_ident_spec(ident: str,
     return spec
 
 
-def find_real_ident_spec_tolerant(ident: str, in_spec: types.SPEC, alias_map: types.SPEC_TABLE) -> Optional[types.SPEC]:
+def find_real_ident_spec_tolerant(ident: str,
+                                  in_spec: types.SPEC,
+                                  alias_map: types.SPEC_TABLE,
+                                  node_types: Optional[Union[Base, tuple[Base]]] = None) -> Optional[types.SPEC]:
     """Resolve ``ident`` to its canonical spec with a single lookup.  Under
     :data:`TOLERATE_EXTERNAL_USES` an unresolved external symbol returns ``None``
     (the caller substitutes a match-anything type) instead of asserting;
     otherwise this asserts exactly like :func:`find_real_ident_spec`."""
-    spec = search_real_ident_spec(ident, in_spec, alias_map)
+    spec = search_real_ident_spec(ident, in_spec, alias_map, node_types)
     if spec is None and not TOLERATE_EXTERNAL_USES:
         raise AssertionError(f"cannot find {ident} / {in_spec}")
     return spec
@@ -494,6 +497,10 @@ def _eval_int_literal(x: Union[f03.Signed_Int_Literal_Constant, f03.Int_Literal_
                       alias_map: types.SPEC_TABLE) -> types.NUMPY_INTS_TYPES:
     """Evaluates an integer literal constant, resolving its kind if specified."""
     num, kind = x.children
+    # A named kind (`0_wp`, `1_i8`) parses as a Name node; normalize it to its
+    # string form before the comparisons below, mirroring _eval_real_literal.
+    if isinstance(kind, f03.Name):
+        kind = kind.string
     if kind is None:
         kind = 4
     if str(kind) == "c_int":
@@ -563,7 +570,15 @@ def _const_eval_basic_type(expr: Base, alias_map: types.SPEC_TABLE) -> Optional[
         _, iexpr = init.children
         if f"{iexpr}" == 'NULL()': return None
         val = _const_eval_basic_type(iexpr, alias_map)
-        assert val is not None
+        if val is None:
+            # A self-contained program's PARAMETER always has a constant
+            # initializer (the assert is a real invariant); in a large
+            # tolerate-externals closure the initializer can reference an
+            # unresolved external entity, so the entity is simply not a
+            # compile-time constant here -- return None per this evaluator's
+            # contract instead of asserting.
+            assert TOLERATE_EXTERNAL_USES
+            return None
         return optimizations._val_2_np_lit(val, typ.spec)
     elif isinstance(expr, f03.Intrinsic_Function_Reference):
         intr, args = expr.children
@@ -880,8 +895,15 @@ def interface_specs(ast: f03.Program, alias_map: types.SPEC_TABLE) -> Dict[types
                 fns.append(utils.find_name_of_stmt(fn))
             elif isinstance(fn, f03.Procedure_Stmt):
                 fns.extend(nm.string for nm in walk(fn, f03.Name))
+        # A generic interface in a large tolerate-externals closure can name a
+        # specific procedure that lives in an externalized/stubbed module
+        # (ICON's `init => init_zero_1d_dp` from a not-on-path `mo_fortran_tools`).
+        # Such a member resolves to None and is simply dropped -- it is not in
+        # the parsed AST, so the pruner has nothing to keep for it.
         fn_specs = tuple(
-            find_real_ident_spec(f, scope_spec, alias_map, (f03.Function_Stmt, f03.Subroutine_Stmt)) for f in fns)
+            s
+            for s in (find_real_ident_spec_tolerant(f, scope_spec, alias_map, (f03.Function_Stmt, f03.Subroutine_Stmt))
+                      for f in fns) if s is not None)
         assert ifspec not in fn_specs
         iface_map[ifspec] = fn_specs
 
@@ -1147,7 +1169,13 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
             return None
         root, _, _ = _dataref_root(dref, scope_spec, alias_map)
         loc = search_real_local_alias_spec(root, alias_map)
-        assert loc
+        if not loc:
+            # A data-ref rooted in a module global or an externalized/stubbed
+            # scope (large tolerate-externals closure) has no local alias to
+            # anchor a component spec -- take the pessimistic path, same as the
+            # array-subscript case above. Every caller treats a None return as
+            # "not a tracked local constant".
+            return None
         root_spec = ident_spec(alias_map[loc])
         comp_spec = find_dataref_component_spec(dref, scope_spec, alias_map)
         return root_spec, comp_spec
@@ -1162,6 +1190,29 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
             if k in minus:
                 minus.remove(k)
             plus[k] = v
+
+    def _subst_and_renorm(target: Base, value: Base):
+        """Replace ``target`` with a copy of ``value`` and renormalize the
+        enclosing data/part-ref by reparsing its text.
+
+        When the substitution yields a form fparser cannot represent -- e.g. an
+        array-section value indexed by the use site (a pointer ``p =>
+        a(:,:,k)`` used as ``p(i,j)`` substitutes to ``a(:,:,k)(i,j)``, which
+        is not valid Fortran) -- revert and leave the reference symbolic. The
+        locally-constant-variable substitution is a best-effort optimization,
+        so skipping a non-representable case only forfeits a folding
+        opportunity; it never changes semantics."""
+        par = target.parent
+        injected = utils.copy_fparser_node(value)
+        saved = utils.copy_fparser_node(target)
+        utils.replace_node(target, injected)
+        if isinstance(par, (f03.Data_Ref, f03.Part_Ref)):
+            try:
+                normalized = f03.Data_Ref(par.tofortran())
+            except NoMatchError:
+                utils.replace_node(injected, saved)
+                return
+            utils.replace_node(par, normalized)
 
     def _inject_knowns(x: Base, value: bool = True, pointer: bool = True):
         if isinstance(x, (*types.LITERAL_CLASSES, f03.Char_Literal_Constant, f03.Write_Stmt, f03.Close_Stmt,
@@ -1182,10 +1233,7 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
             xdecl = alias_map[loc]
             xtyp = find_type_of_entity(xdecl, alias_map) if isinstance(xdecl, f03.Entity_Decl) else None
             if (pointer and xtyp and xtyp.pointer) or value:
-                par = x.parent
-                utils.replace_node(x, utils.copy_fparser_node(plus[spec]))
-                if isinstance(par, (f03.Data_Ref, f03.Part_Ref)):
-                    utils.replace_node(par, f03.Data_Ref(par.tofortran()))
+                _subst_and_renorm(x, plus[spec])
         elif isinstance(x, f03.Data_Ref):
             spec = _root_comp(x)
             if spec not in plus:
@@ -1201,10 +1249,7 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
             scope_spec = find_scope_spec(x)
             xtyp = find_type_dataref(x, scope_spec, alias_map)
             if (pointer and xtyp.pointer) or value:
-                par = x.parent
-                utils.replace_node(x, utils.copy_fparser_node(plus[spec]))
-                if isinstance(par, (f03.Data_Ref, f03.Part_Ref)):
-                    utils.replace_node(par, f03.Data_Ref(par.tofortran()))
+                _subst_and_renorm(x, plus[spec])
         elif isinstance(x, f03.Part_Ref):
             par, subsc = x.children
             _inject_knowns(par, value=False, pointer=True)
