@@ -66,6 +66,33 @@ def _parse_exec(text: str) -> List[f03.Base]:
     return list(exe[0].children) if exe else []
 
 
+def _parse_expr(text: str) -> f03.Base:
+    """Parse one Fortran expression (via a throwaway assignment) and return its node."""
+    _, _, rhs = _parse_exec(f"zz_x = {text}")[0].children
+    return rhs
+
+
+def _rewrite_allocated_queries(program: f03.Program, slot_names: Set[str]) -> None:
+    """``ALLOCATED(<prefix>%<slot>)`` -> ``(<prefix>%<slot>__tag /= 0)``.
+
+    After a component is laddered into a tag + per-arm concrete slots it has no
+    allocation status of its own; the tag (set at the construction site, 0 before)
+    *is* the "is it constructed?" status. These guards are the ``IF
+    (ALLOCATED(this%act)) CALL finish(...)`` init checks -- an ``If_Stmt`` the slot
+    ladder (Call/Assignment/Pointer-assignment only) never visits."""
+    for fref in walk(program, (f03.Intrinsic_Function_Reference, f03.Function_Reference)):
+        name, args = fref.children
+        if str(name).upper() != "ALLOCATED" or args is None:
+            continue
+        arg = next(iter(args.children), None)
+        if not isinstance(arg, f03.Data_Ref):
+            continue
+        prefix, tail = _ref_prefix_and_tail(arg)
+        if tail.lower() not in slot_names:
+            continue
+        replace_node(fref, _parse_expr(f"{prefix}%{_tag_var(tail)} /= 0"))
+
+
 def _expanded_decls(var: str, plan: MonomorphizationPlan, stack_slots: bool = False) -> List[f03.Type_Declaration_Stmt]:
     """``integer :: v__tag`` + one ``type(arm), allocatable :: v__arm`` per arm.
 
@@ -197,7 +224,10 @@ def _expanded_component_decls(slot: str,
     With ``stack_slots`` the per-arm component is a plain (non-allocatable) member -- the
     SDFG-lowerable form (see :func:`_expanded_decls`)."""
     attr = "" if stack_slots else ", allocatable"
-    lines = [f"integer :: {_tag_var(slot)}"]
+    # The tag defaults to 0 ("not constructed") so an `ALLOCATED(this%act)` guard
+    # rewritten to `this%act__tag /= 0` reads correctly before the construction
+    # site sets it (a derived-type component is otherwise undefined until set).
+    lines = [f"integer :: {_tag_var(slot)} = 0"]
     for arm in plan.arms:
         lines.append(f"type({arm.type_name}){attr} :: {_arm_slot(slot, arm.type_name)}")
     return _parse_component_decls("\n".join(lines))
@@ -289,6 +319,10 @@ def monomorphize_component_dispatch(program: f03.Program, plan: Monomorphization
             rewrite = set_tag if stack_slots else f"{set_tag}\nallocate({prefix}%{_arm_slot(tail, arm)})"
             replace_node(alloc, _parse_exec(rewrite))
             break
+
+    # 2b. ALLOCATED(prefix%slot) init guards -> the tag check (the slot has no
+    #     allocation status of its own once laddered).
+    _rewrite_allocated_queries(program, slot_names)
 
     # 3. every other statement referencing the slot -> ladder over the tag with
     #    `%slot` retargeted to `%slot__arm`.  This subsumes dispatch (the call

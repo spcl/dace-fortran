@@ -814,3 +814,24 @@ def test_driver_still_rejects_class_star_inside_a_laddered_axis():
     prog = parse_program(AXIS_WITH_CLASS_STAR)
     with pytest.raises(UnsupportedProgram, match="unlimited polymorphic"):
         monomorphize(prog, MonomorphizationSpec(axes=[AxisSpec(base="pbase", strategy="ladder")]))
+
+
+def test_driver_rewrites_allocated_guard_on_laddered_component():
+    """``ALLOCATED(this%act)`` -- the "is it constructed?" guard, an ``If_Stmt`` the
+    slot ladder never visits -- is rewritten to the tag check once the component is
+    laddered (the slot has no allocation status of its own). The tag defaults to 0."""
+    prog = parse_program(COMBINED_SRC)
+    # add a construct/solve pair with the canonical init guards on the component
+    src = COMBINED_SRC.replace(
+        "  subroutine container_go(this, x)", "  subroutine container_check(this)\n"
+        "    class(container), intent(inout) :: this\n"
+        "    if (allocated(this%act)) return\n"
+        "    if (.not. allocated(this%act)) return\n"
+        "  end subroutine\n"
+        "  subroutine container_go(this, x)")
+    prog = parse_program(src)
+    monomorphize(prog, COMBINED_SPEC)
+    text = str(prog)
+    assert "ALLOCATED(this % act)" not in text  # bare component query gone
+    assert "this % act__tag /= 0" in text  # rewritten to the tag check
+    assert "INTEGER :: act__tag = 0" in text  # tag defaults to unconstructed
