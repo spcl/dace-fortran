@@ -515,6 +515,69 @@ These items, and the per-construct support matrix, are tracked in
   intra-TU fusion; cross-TU is the binding emitter's concern).
 - Unstructured `GOTO` (it does not lift to `scf`).
 
+## Transformation examples (Fortran→Fortran)
+
+Concrete before→after for the key source-text transforms (the conceptual tables
+are above; every snippet below is exercised by a test in `tests/inliner/`).
+
+**Type-bound call → free call** (`deconstruct_procedure_calls`). The type loses
+its `CONTAINS` block (becomes pure data); each `obj%bind(a)` becomes a free call
+with `obj` threaded as the first argument:
+
+```fortran
+type Square ; real::side ; contains ; procedure::area ; end type   ! before
+a = s%area(1.0)
+! after:  TYPE :: Square ; REAL :: side ; END TYPE   (no CONTAINS)
+a = area(s, 1.0)
+```
+
+**Local constant propagation** (`exploit_locally_constant_variables`). Constant
+and pointer values are folded into later uses — but a pointer passed as an
+**actual argument is left intact** (a POINTER dummy needs a pointer actual, not
+its target expression):
+
+```fortran
+ptr => data ; x = ptr + 1.    →    x = data + 1.        ! folded in an expression
+ptr => data ; call f(ptr)      →    call f(ptr)          ! NOT f(data) — pointer kept
+```
+
+**Stubbing & the external-call / IO-binding policy.** The callee shell (and its
+call sites) always survive; only the body is rewritten. Pick the variant by what
+the procedure *is*:
+
+```fortran
+make_noop / do_not_emit  : SUBROUTINE log(x) ; END           ! body emptied; bridge keeps/DROPs the call
+make_return_false        : LOGICAL FUNCTION isRestart() ; isRestart = .FALSE. ; END
+ExternalFunction("sync_patch_array", c_function=…, library=…) ! body emptied; bridge EMITS a bind(c) call
+```
+
+`do_not_emit` is for pure side-effects (IO, timers, `finish`); `ExternalFunction`
+is for calls the runtime must still make (MPI halo) — bound to a `bind(c)` symbol,
+typically via a thin hand-written shim. One generic name stubs the whole specific
+family (`sync_patch_array` ⇒ `sync_patch_array_3d_dp`, …).
+
+**AoS → SoA flatten** (`hlfir-flatten-structs`). A derived-type access becomes a
+plain per-member array indexed by the record index (7 variants: scalar dummy,
+array-of-records, multi-dim, nested connectivity, pointer/allocatable box-section,
+local never-allocated, double-buffer):
+
+```fortran
+type(t) :: p(:) ; ... = p(i)%w     →     ... = p_w(i)
+```
+
+**Monomorphization** (`monomorphize(program, spec)`) — removes Fortran virtual
+dispatch (`fir.dispatch`, which has no SDFG node) so a CLASS-heavy kernel like the
+ICON-O solver becomes lowerable. Two strategies:
+
+```fortran
+! retype: pin a CLASS to one concrete type at its construction site
+CLASS(t_transfer), POINTER :: trans   →   TYPE(t_trivial_transfer), POINTER :: trans
+
+! ladder: a runtime factory over a closed arm-set → static type-tag if-ladder
+call s%apply(x)   →   IF (s__tag==1) CALL gmres_apply(s__t_gmres, x)
+                      ELSE IF (s__tag==2) CALL cg_apply(s__t_cg, x) ...
+```
+
 ## License
 
 BSD 3-Clause. Copyright ETH Zurich and the DaCe authors (see `AUTHORS` /
