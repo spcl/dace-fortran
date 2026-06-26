@@ -217,6 +217,24 @@ def test_strip_openmp_acc_sentinels():
     assert "do i = 1, n" in out and "a(i) = a(i) + 1.0D0" in out
 
 
+def test_strip_vendor_dir_directives():
+    """``!DIR$`` vendor directives (Intel/Cray IVDEP / ATTRIBUTES) flang-new does
+    not recognise and warns on -- they are dropped like the accelerator sentinels,
+    while the real code is preserved."""
+    src = ("subroutine k(a, n)\n"
+           "  real(8) :: a(n)\n"
+           "  integer :: i, n\n"
+           "!DIR$ IVDEP\n"
+           "  do i = 1, n\n"
+           "!DIR$ ATTRIBUTES ALIGN : 64 :: a\n"
+           "    a(i) = a(i) + 1.0D0\n"
+           "  end do\n"
+           "end subroutine\n")
+    out = strip_openmp_directives(src)
+    assert "!DIR$" not in out and "IVDEP" not in out
+    assert "do i = 1, n" in out and "a(i) = a(i) + 1.0D0" in out
+
+
 def test_strip_openmp_continuation_and_conditional():
     src = ("subroutine k\n"
            "  integer :: i\n"

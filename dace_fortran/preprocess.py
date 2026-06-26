@@ -321,6 +321,12 @@ _OMP_SENTINEL_RE = re.compile(r"^\s*!\s*\$\s*(?:omp|acc|cuf)\b", re.IGNORECASE)
 #: ``!$ACC``) is left for the sentinel rule to handle.
 _OMP_COND_LINE_RE = re.compile(r"^\s*!\s*\$[ \t]+\S")
 
+#: Vendor loop/vectorization directives in a comment: Intel/Cray ``!DIR$ IVDEP``,
+#: ``!DIR$ ATTRIBUTES ...``, etc.  flang-new does not recognise them and warns on
+#: every one (ICON's dycore carries hundreds: ``[-Wignored-directive]`` spam).  We
+#: never honour them, so drop them like the accelerator sentinels above.
+_VENDOR_DIRECTIVE_RE = re.compile(r"^\s*!\s*DIR\$", re.IGNORECASE)
+
 #: ICON cpp include that pulls in the ``ICON_OMP_*`` / ``ICON_HAMOCC_OMP_*``
 #: macros (``#include "omp_definitions.inc"``, ``"hamocc_omp_definitions.inc"``).
 #: With the bridge not running cpp, the include line itself would crash
@@ -435,6 +441,8 @@ def strip_openmp_directives(source: str) -> str:
         if _OMP_COND_LINE_RE.match(line):
             continue
         if _OMP_INCLUDE_RE.match(line):
+            continue
+        if _VENDOR_DIRECTIVE_RE.match(line):
             continue
         out.append(line)
     return "".join(out)
@@ -1541,7 +1549,10 @@ def rewrite_string_enum_to_integer(source: str) -> tuple:
     return "".join(out), enum_maps
 
 
-def _fparser_merge(source: str, *, search_dirs=(), entry: Optional[str] = None,
+def _fparser_merge(source: str,
+                   *,
+                   search_dirs=(),
+                   entry: Optional[str] = None,
                    external_names: Iterable[str] = ()) -> str:
     """Single-TU merge via the fparser inliner engine (opt-in).
 
@@ -1592,8 +1603,7 @@ def _fparser_merge(source: str, *, search_dirs=(), entry: Optional[str] = None,
     # elimination, so skip the inliner's const-propagation optimizers (which
     # also matches the legacy regex merge's "splice and let flang inline"
     # semantics and avoids optimizer fragilities on inlined-call patterns).
-    ast = inline_to_ast(src_map, entry, include_builtins=True, optimize=False,
-                        do_not_emit=external_names)
+    ast = inline_to_ast(src_map, entry, include_builtins=True, optimize=False, do_not_emit=external_names)
     # A whole-project merge (``entry is None``) keeps every top-level unit,
     # including the injected intrinsic-module stubs; strip them so flang's own
     # ``iso_c_binding`` / ``iso_fortran_env`` are used without a collision.
@@ -1664,11 +1674,9 @@ def preprocess_fortran_source(source: str,
     """
     if merge:
         if merge_engine == "fparser":
-            source = _fparser_merge(source, search_dirs=search_dirs, entry=merge_entry,
-                                    external_names=external_names)
+            source = _fparser_merge(source, search_dirs=search_dirs, entry=merge_entry, external_names=external_names)
         elif merge_engine == "regex":
-            source = merge_used_modules(source, search_dirs=search_dirs,
-                                        do_not_emit=external_names)
+            source = merge_used_modules(source, search_dirs=search_dirs, do_not_emit=external_names)
         else:
             raise ValueError(f"merge_engine must be 'regex' or 'fparser', got {merge_engine!r}")
     source = strip_openmp_directives(source)

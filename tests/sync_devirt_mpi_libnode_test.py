@@ -99,3 +99,108 @@ def test_devirtualized_sync_inlines_pack_keeps_only_mpi_libnodes(tmp_path):
     # The pack loop (buf*2) is inlined as real SDFG compute, not externalised.
     assert any(isinstance(n, dace.nodes.Tasklet) for n, _ in sdfg.all_nodes_recursive()), \
         "expected the pack-loop compute inlined as tasklets"
+
+
+#: Closer to the real ICON atmosphere layering: a ``sync_patch_array`` entry ->
+#: the generic ``exchange_data`` interface -> a wrapper (``exchange_data_r3d``)
+#: that does the VTABLE DISPATCH on an abstract ``CLASS(t_comm_pattern)`` dummy ->
+#: the concrete arm's pack + raw MPI. The dispatch lives one level down from the
+#: retyped pointer, so the bridge's inline-all + fir-polymorphic-op must resolve
+#: it once the wrapper is inlined into the concrete-typed caller.
+_ATMO_SRC = """
+module mo_comm
+  implicit none
+  type, abstract :: t_comm_pattern
+    integer :: n
+  contains
+    procedure(exch_i), deferred :: exchange_data_r3d
+  end type
+  abstract interface
+    subroutine exch_i(p_pat, recv, partner, tag)
+      import t_comm_pattern
+      class(t_comm_pattern), intent(in) :: p_pat
+      real(8), intent(inout) :: recv(:)
+      integer, intent(in) :: partner, tag
+    end subroutine
+  end interface
+  type, extends(t_comm_pattern) :: t_comm_pattern_orig
+  contains
+    procedure :: exchange_data_r3d => orig_exchange_data_r3d
+  end type
+  interface exchange_data
+    module procedure exchange_data_r3d_wrap
+  end interface
+contains
+  subroutine exchange_data_r3d_wrap(p_pat, recv, partner, tag)
+    class(t_comm_pattern), intent(in) :: p_pat
+    real(8), intent(inout) :: recv(:)
+    integer, intent(in) :: partner, tag
+    call p_pat%exchange_data_r3d(recv, partner, tag)
+  end subroutine
+  subroutine orig_exchange_data_r3d(p_pat, recv, partner, tag)
+    class(t_comm_pattern_orig), intent(in) :: p_pat
+    real(8), intent(inout) :: recv(:)
+    integer, intent(in) :: partner, tag
+    integer :: i, ierr, req
+    integer, parameter :: MPI_COMM_WORLD = 0
+    integer, parameter :: MPI_DOUBLE_PRECISION = 17
+    external :: mpi_isend, mpi_irecv, mpi_wait
+    do i = 1, p_pat%n
+      recv(i) = recv(i) * 2.0d0
+    end do
+    call mpi_isend(recv, p_pat%n, MPI_DOUBLE_PRECISION, partner, tag, MPI_COMM_WORLD, req, ierr)
+    call mpi_irecv(recv, p_pat%n, MPI_DOUBLE_PRECISION, partner, tag, MPI_COMM_WORLD, req, ierr)
+    call mpi_wait(req, ierr)
+  end subroutine
+end module
+
+subroutine sync_patch_array(p_pat, arr, partner, tag)
+  use mo_comm
+  implicit none
+  class(t_comm_pattern), pointer, intent(in) :: p_pat
+  real(8), intent(inout) :: arr(:)
+  integer, intent(in) :: partner, tag
+  call exchange_data(p_pat, arr, partner, tag)
+end subroutine
+"""
+
+
+def _devirt_build_atmo(tmp_path):
+    """Devirtualize the comm-pattern axis then build the sync_patch_array SDFG."""
+    prog = parse_program(_ATMO_SRC)
+    monomorphize(
+        prog,
+        MonomorphizationSpec(
+            axes=[AxisSpec(base="t_comm_pattern", strategy="retype", concrete="t_comm_pattern_orig")]))
+    return build_sdfg(str(prog), tmp_path / "sdfg", name="atmo_sync", entry="sync_patch_array").build()
+
+
+def test_atmosphere_sync_patch_array_devirtualized_to_mpi_libnodes(tmp_path):
+    """The atmosphere ``sync_patch_array`` layering (generic interface -> wrapper
+    vtable dispatch -> concrete pack + MPI) lowers with the pack inlined and only
+    the MPI primitives left, as ``dace.libraries.mpi`` library nodes."""
+    import dace
+    from dace.libraries.mpi.nodes.node import MPINode
+
+    sdfg = _devirt_build_atmo(tmp_path)
+    mpi = sorted({type(n).__name__ for n, _ in sdfg.all_nodes_recursive() if isinstance(n, MPINode)})
+    assert mpi == ["Irecv", "Isend", "Wait"], f"expected Isend/Irecv/Wait libnodes, got {mpi}"
+    assert any(isinstance(n, dace.nodes.Tasklet) for n, _ in sdfg.all_nodes_recursive()), \
+        "expected the pack compute inlined as tasklets"
+
+
+def test_sync_patch_array_is_not_external_anymore(tmp_path):
+    """``sync_patch_array`` / ``exchange_data`` are NO LONGER externalised -- they
+    are devirtualized + inlined, so the SDFG carries no ``ExternalCall`` library
+    node for them. The only external boundary is the MPI primitives, as MPI
+    library nodes (not opaque external calls)."""
+    from dace.libraries.mpi.nodes.node import MPINode
+    from dace_fortran.external import ExternalCall
+
+    sdfg = _devirt_build_atmo(tmp_path)
+    ext_names = {n.name.lower() for n, _ in sdfg.all_nodes_recursive() if isinstance(n, ExternalCall)}
+    assert not any("sync" in nm or "exchange" in nm for nm in ext_names), \
+        f"sync_patch_array / exchange_data must NOT be external; got ExternalCall names {sorted(ext_names)}"
+    # the only external boundary is MPI, and it is a real MPI library node
+    assert any(isinstance(n, MPINode) for n, _ in sdfg.all_nodes_recursive()), \
+        "the MPI primitives should remain, as dace.libraries.mpi library nodes"
