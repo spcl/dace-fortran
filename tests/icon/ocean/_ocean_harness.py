@@ -116,10 +116,15 @@ OCEAN_EXTERNAL_FUNCTIONS = [
     ExternalFunction("p_max"),  # MPI global reduction (mo_mpi: MPI_Allreduce, MPI_MAX)
     ExternalFunction("p_min"),  # MPI global reduction (mo_mpi: MPI_Allreduce, MPI_MIN)
     ExternalFunction("p_sum"),  # MPI global reduction (mo_mpi: MPI_Allreduce, MPI_SUM)
+    ExternalFunction("setup_comm_pattern"),  # MPI comm-pattern INIT (deferred p_pat%setup on abstract t_comm_pattern,
+    #                                          mo_communication_factory): pure comm-topology setup, no numerics
     ExternalFunction("ocean_solve_construct"),  # runtime factory (ALLOCATE+dispatch); ONCE (is_init guard)
     ExternalFunction("trivial_transfer_construct"),  # transfer-object construct; ONCE (is_init guard)
-    ExternalFunction(
-        "lhs_primal_flip_flop_construct"),  # LHS re-init; PER LEVEL (static bind, kept external for a clean boundary)
+    ExternalFunction("subset_transfer_construct"),  # subset transfer construct = raw MPI comm-topology INIT
+    #                                                 (mpi_isend/recv/waitall/comm_split to exchange index ownership);
+    #                                                 pure comm init, no numerics -- sibling of trivial_transfer_construct
+    ExternalFunction("lhs_primal_flip_flop_construct"
+                     ),  # LHS re-init; PER LEVEL (static bind, kept external for a clean boundary)
     ExternalFunction("ocean_solve_solve"),  # the linear solve; PER LEVEL (dispatches act/lhs/trans on abstract bases)
 ]
 #: DON'T-EMIT = externalised (NOT inlined) and the bridge DROPs the call: pure
@@ -164,6 +169,15 @@ KERNELS = [
     # nonlinear_coriolis_3d, same compute as coriolis_pv) + kinetic-energy grad.
     ("ocean_veloc_adv", "ocean/dynamics/mo_ocean_velocity_advection.f90",
      "mo_ocean_velocity_advection::veloc_adv_horz_mimetic_rot", 102),
+    # The free-surface surface-pressure solver driver: the dynamical-core
+    # keystone.  Its ~137k-line closure exercises the full external policy --
+    # the MPI halo (sync_patch_array / exchange_data / p_*), MPI comm-pattern
+    # INIT (setup_comm_pattern / subset_transfer_construct: pure comm-topology
+    # setup, no numerics), terminal IO / timers (do_not_emit), and the restart
+    # config queries (isRestart / isInitFromRestart -> .FALSE.) -- and inlines
+    # everything else (the Krylov backend ladder + the mimetic operator apply).
+    ("solve_free_sfc", "ocean/dynamics/mo_ocean_ab_timestepping_mimetic.f90",
+     "mo_ocean_ab_timestepping_mimetic::solve_free_sfc_ab_mimetic", 191),
 ]
 
 #: Checked-in single-TU artifacts: ``(key, filename, module::procedure)``.
@@ -174,6 +188,7 @@ SINGLE_TU_ARTIFACTS = [
     ("ppm_vflux", "ppm_vflux_single_tu.f90", "mo_ocean_tracer_transport_vert::upwind_vflux_ppm_onBlock"),
     ("coriolis_pv", "coriolis_pv_single_tu.f90", "mo_scalar_product::nonlinear_coriolis_3d_fast_scalar"),
     ("ocean_veloc_adv", "ocean_veloc_adv_single_tu.f90", "mo_ocean_velocity_advection::veloc_adv_horz_mimetic_rot"),
+    ("solve_free_sfc", "solve_free_sfc_single_tu.f90", "mo_ocean_ab_timestepping_mimetic::solve_free_sfc_ab_mimetic"),
 ]
 
 _EXTRACT_SCRIPT = _HERE / "_extract_single_tu.py"
