@@ -18,7 +18,7 @@ import fparser.two.Fortran2003 as f03
 from fparser.two.utils import walk
 
 from _util import _FLANG, have_flang
-from dace_fortran.inliner.ast_desugaring.monomorphize import analyze, parse_program
+from dace_fortran.inliner.ast_desugaring.monomorphize import analyze, parse_program, UnsupportedProgram
 from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import (AxisSpec, clone_shared_interposers, monomorphize,
                                                                       MonomorphizationSpec,
                                                                       monomorphize_component_dispatch,
@@ -746,3 +746,71 @@ def test_driver_rejects_ladder_axis_absent_from_unit():
     prog = parse_program(COMBINED_SRC)
     with pytest.raises(ValueError, match="no dispatch plan"):
         monomorphize(prog, MonomorphizationSpec(axes=[AxisSpec(base="t_nonexistent", strategy="ladder")]))
+
+
+#: A generic container keyed on ``CLASS(*)`` -- the kind a large extraction
+#: closure routinely pulls in (hash table / key-value store) but the spec never
+#: monomorphises. It must not trip the ``CLASS(*)`` rejection.
+UNRELATED_CLASS_STAR = """
+module bag
+  implicit none
+  type :: store
+    class(*), pointer :: val => null()
+  end type
+contains
+  subroutine put(s, v)
+    type(store), intent(inout) :: s
+    class(*), pointer, intent(in) :: v
+    s%val => v
+  end subroutine
+end module
+"""
+
+
+def test_driver_tolerates_class_star_outside_monomorphised_axes():
+    """An unrelated ``CLASS(*)`` container the spec never rewrites must not reject
+    the program -- the ladder structurally depends only on its own base + arms."""
+    prog = parse_program(COMBINED_SRC + UNRELATED_CLASS_STAR)
+    stats = monomorphize(prog, COMBINED_SPEC)  # must not raise
+    assert stats.interposers_cloned == 2  # the laddered axis still collapsed
+    text = str(prog)
+    assert "INTEGER :: act__tag" in text
+    assert "CLASS(*), POINTER :: val" in text  # the container passed through untouched
+
+
+#: ``CLASS(*)`` *inside* a laddered axis's own arm: still unsound, still rejected.
+AXIS_WITH_CLASS_STAR = """
+module m2
+  implicit none
+  type, abstract :: pbase
+  contains
+    procedure(run_i), deferred :: run
+  end type
+  abstract interface
+    subroutine run_i(this, x)
+      import pbase
+      class(pbase), intent(inout) :: this
+      real, intent(inout) :: x
+    end subroutine
+  end interface
+  type, extends(pbase) :: parm
+    class(*), pointer :: payload => null()
+  contains
+    procedure :: run => parm_run
+  end type
+contains
+  subroutine parm_run(this, x)
+    class(parm), intent(inout) :: this
+    real, intent(inout) :: x
+    x = x + 1.0
+  end subroutine
+end module
+"""
+
+
+def test_driver_still_rejects_class_star_inside_a_laddered_axis():
+    """The scoped check still fires where it matters: ``CLASS(*)`` in the laddered
+    base's own arm has no closed subtype set and is rejected."""
+    prog = parse_program(AXIS_WITH_CLASS_STAR)
+    with pytest.raises(UnsupportedProgram, match="unlimited polymorphic"):
+        monomorphize(prog, MonomorphizationSpec(axes=[AxisSpec(base="pbase", strategy="ladder")]))

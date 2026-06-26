@@ -534,7 +534,14 @@ def monomorphize(program: f03.Program, spec: MonomorphizationSpec, stack_slots: 
 
     # Plans are pure data (names), so reading them from the pristine AST keeps the
     # ladder independent of the retype rewrites that run between here and its use.
-    plans = {p.abstract_base.lower(): p for p in analyze(program)} if ladder_axes else {}
+    # Scope the analysis to the spec's ladder axes: a large extraction closure
+    # carries unrelated dispatch roots / generic CLASS(*) containers the spec
+    # never rewrites, and validating those would reject a hierarchy the pass does
+    # not touch.
+    plans = ({
+        p.abstract_base.lower(): p
+        for p in analyze(program, only_bases=[a.base for a in ladder_axes])
+    } if ladder_axes else {})
 
     stats = MonomorphizationStats()
     for axis in retype_axes:

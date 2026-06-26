@@ -22,7 +22,7 @@ mis-compiled.  The accepted class (locked design):
 """
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 import fparser.two.Fortran2003 as f03
 from fparser.api import get_reader
@@ -110,24 +110,46 @@ def read_type_info(dtd: f03.Derived_Type_Def) -> TypeInfo:
     return TypeInfo(name, abstract, parent, deferred, overrides)
 
 
-def reject_unlimited_polymorphic(ast: f03.Program) -> None:
-    for spec in walk(ast, f03.Declaration_Type_Spec):
-        if str(spec).replace(" ", "").upper() == "CLASS(*)":
-            raise UnsupportedProgram(
-                "unlimited polymorphic `CLASS(*)` has no closed set of concrete "
-                "subtypes to enumerate into dispatch arms")
+def reject_unlimited_polymorphic(ast: f03.Program, scopes: Optional[List[f03.Base]] = None) -> None:
+    """Reject ``CLASS(*)`` -- it has no closed subtype set to ladder over.
+
+    With ``scopes`` given, only ``CLASS(*)`` *within those nodes* is rejected
+    (the monomorphised axis's base + arm type definitions). A large extraction
+    closure routinely pulls in unrelated generic containers -- a hash table /
+    key-value store keyed on ``CLASS(*)``, the comm-pattern infra -- that are
+    nowhere near the laddered axes and are externalised downstream; rejecting on
+    those is a false positive. Without ``scopes``, the whole program is scanned
+    (the strict, axis-agnostic check the standalone analysis tests rely on)."""
+    roots = scopes if scopes is not None else [ast]
+    for root in roots:
+        for spec in walk(root, f03.Declaration_Type_Spec):
+            if str(spec).replace(" ", "").upper() == "CLASS(*)":
+                raise UnsupportedProgram("unlimited polymorphic `CLASS(*)` has no closed set of concrete "
+                                         "subtypes to enumerate into dispatch arms")
 
 
-def analyze(ast: f03.Program) -> List[MonomorphizationPlan]:
+def analyze(ast: f03.Program, only_bases: Optional[Iterable[str]] = None) -> List[MonomorphizationPlan]:
     """Return one :class:`MonomorphizationPlan` per monomorphisable abstract base,
     or raise :class:`UnsupportedProgram` if the program uses polymorphism in a
     shape the pass cannot soundly rewrite.
 
     A program with no abstract dispatch yields ``[]`` (nothing to do -- not an
-    error)."""
-    reject_unlimited_polymorphic(ast)
+    error).
 
-    types = {ti.name: ti for ti in (read_type_info(d) for d in walk(ast, f03.Derived_Type_Def))}
+    ``only_bases`` restricts the analysis to the named abstract bases (the spec's
+    ladder axes) -- their plans are built and their hierarchies validated, and
+    the ``CLASS(*)`` rejection is scoped to *their* type definitions. This is what
+    :func:`monomorphize` passes: a large extraction closure pulls in unrelated
+    dispatch roots and generic ``CLASS(*)`` containers that the spec never
+    rewrites, and validating those would reject the whole program for a hierarchy
+    the pass never touches. With ``only_bases`` ``None`` the whole program is
+    validated (the axis-agnostic mode the standalone analysis tests use)."""
+    only = {b.lower() for b in only_bases} if only_bases is not None else None
+    if only is None:
+        reject_unlimited_polymorphic(ast)
+
+    dtds = {read_type_info(d).name: d for d in walk(ast, f03.Derived_Type_Def)}
+    types = {name: read_type_info(d) for name, d in dtds.items()}
     children: Dict[str, List[TypeInfo]] = {}
     for ti in types.values():
         if ti.parent is not None:
@@ -137,38 +159,42 @@ def analyze(ast: f03.Program) -> List[MonomorphizationPlan]:
     for name, base in types.items():
         if not base.deferred:
             continue  # not a dispatch root -- nothing deferred to resolve
+        if only is not None and name not in only:
+            continue  # a dispatch root the spec does not monomorphise -- leave it
 
         # single-level guard: the abstract base must be a root.
         if base.parent is not None:
-            raise UnsupportedProgram(
-                f"abstract base `{name}` itself extends `{base.parent}`: inheritance "
-                f"depth > 1 is not supported (single-level hierarchies only)")
+            raise UnsupportedProgram(f"abstract base `{name}` itself extends `{base.parent}`: inheritance "
+                                     f"depth > 1 is not supported (single-level hierarchies only)")
 
         kids = children.get(name, [])
         for kid in kids:
             if children.get(kid.name):
                 grand = sorted(g.name for g in children[kid.name])
-                raise UnsupportedProgram(
-                    f"subtype `{kid.name}` of `{name}` is itself extended by {grand}: "
-                    f"inheritance depth > 1 is not supported (single-level only)")
+                raise UnsupportedProgram(f"subtype `{kid.name}` of `{name}` is itself extended by {grand}: "
+                                         f"inheritance depth > 1 is not supported (single-level only)")
             if kid.abstract:
-                raise UnsupportedProgram(
-                    f"subtype `{kid.name}` of `{name}` is itself abstract: only "
-                    f"concrete leaf subtypes can become dispatch arms")
+                raise UnsupportedProgram(f"subtype `{kid.name}` of `{name}` is itself abstract: only "
+                                         f"concrete leaf subtypes can become dispatch arms")
 
         if not kids:
-            raise UnsupportedProgram(
-                f"abstract base `{name}` has no concrete subtype in the translation "
-                f"unit: there is nothing to dispatch to")
+            raise UnsupportedProgram(f"abstract base `{name}` has no concrete subtype in the translation "
+                                     f"unit: there is nothing to dispatch to")
 
         arms: List[ConcreteArm] = []
         for kid in kids:
             missing = sorted(d for d in base.deferred if d not in kid.overrides)
             if missing:
-                raise UnsupportedProgram(
-                    f"concrete subtype `{kid.name}` does not override deferred "
-                    f"binding(s) {missing} of `{name}`")
+                raise UnsupportedProgram(f"concrete subtype `{kid.name}` does not override deferred "
+                                         f"binding(s) {missing} of `{name}`")
             arms.append(ConcreteArm(kid.name, {d: kid.overrides[d] for d in base.deferred}))
+
+        if only is not None:
+            # Scoped CLASS(*) check: the ladder structurally depends only on this
+            # base and its concrete arm type definitions, so an unsound CLASS(*)
+            # would have to live in one of those. CLASS(*) elsewhere in the
+            # closure is untouched by the rewrite (and externalised downstream).
+            reject_unlimited_polymorphic(ast, scopes=[dtds[name]] + [dtds[kid.name] for kid in kids])
 
         plans.append(MonomorphizationPlan(name, sorted(base.deferred), arms))
 
