@@ -292,6 +292,74 @@ def test_dycore_step_inlines_sync_and_devirtualizes(tmp_path):
     assert any(isinstance(n, dace.nodes.Tasklet) for n, _ in sdfg.all_nodes_recursive())
 
 
+#: A full dycore TIMESTEP: a predictor stage (stencil on h) + halo sync, then a
+#: corrector stage (stencil on vn using h) + halo sync -- multiple fields, multiple
+#: exchange rounds, the shape of ICON's mo_solve_nonhydro substep sequence. Each
+#: sync is the devirtualized comm pattern; the real ICON solve_nonhydro is the
+#: production target (needs the atmosphere extraction harness + monomorphize
+#: pre-pass), of which this is the controlled stand-in.
+_DYCORE_TIMESTEP_SRC = _DYCORE_STEP_SRC.split("end module", 1)[0] + """end module
+
+subroutine dycore_timestep(p_pat, h, vn, tmp, n, partner, tag)
+  use mo_comm
+  implicit none
+  class(t_comm_pattern), pointer, intent(in) :: p_pat
+  real(8), intent(inout) :: h(:), vn(:), tmp(:)
+  integer, intent(in) :: n, partner, tag
+  integer :: i
+  ! PREDICTOR: divergence-like update of h, then halo exchange
+  do i = 2, n - 1
+    tmp(i) = h(i) - 0.5d0 * (h(i + 1) - h(i - 1))
+  end do
+  call sync_patch_array(p_pat, tmp, partner, tag)
+  ! CORRECTOR: gradient update of vn using the synced h, then halo exchange
+  do i = 2, n - 1
+    vn(i) = vn(i) - 0.25d0 * (tmp(i + 1) - tmp(i - 1))
+  end do
+  call sync_patch_array(p_pat, vn, partner, tag)
+  do i = 1, n
+    h(i) = tmp(i)
+  end do
+end subroutine dycore_timestep
+"""
+
+
+def test_full_dycore_timestep_sync_not_external(tmp_path):
+    """A full dycore-timestep shape (predictor stencil -> halo sync -> corrector
+    stencil -> halo sync, two fields, two exchange rounds). With the comm pattern
+    devirtualized, EVERY ``sync_patch_array`` inlines: the stencils and the syncs'
+    packs are real SDFG compute, the SDFG carries NO ExternalCall for any sync, and
+    the only external boundary is the MPI primitives -- as ``dace.libraries.mpi``
+    library nodes, two exchange rounds' worth (>= 2 Isend / Irecv / Wait each).
+
+    This is the controlled stand-in for ICON's ``mo_solve_nonhydro``; the real
+    end-to-end build is the production target (atmosphere extraction harness +
+    monomorphize pre-pass)."""
+    import dace
+    from dace.libraries.mpi.nodes.node import MPINode
+    from dace.libraries.mpi.nodes.isend import Isend
+    from dace.libraries.mpi.nodes.irecv import Irecv
+    from dace_fortran.external import ExternalCall
+
+    prog = parse_program(_DYCORE_TIMESTEP_SRC)
+    monomorphize(
+        prog,
+        MonomorphizationSpec(axes=[AxisSpec(base="t_comm_pattern", strategy="retype", concrete="t_comm_pattern_orig")]))
+    sdfg = build_sdfg(str(prog), tmp_path / "sdfg", name="dycore_timestep", entry="dycore_timestep").build()
+
+    nodes = [n for n, _ in sdfg.all_nodes_recursive()]
+    # NO sync / exchange is an external call.
+    ext = {n.name.lower() for n in nodes if isinstance(n, ExternalCall)}
+    assert not any("sync" in nm or "exchange" in nm for nm in ext), \
+        f"no sync may be external; got ExternalCall names {sorted(ext)}"
+    # Two exchange rounds -> at least two Isend and two Irecv MPI library nodes.
+    assert sum(isinstance(n, Isend) for n in nodes) >= 2, "expected >=2 Isend (two sync rounds)"
+    assert sum(isinstance(n, Irecv) for n in nodes) >= 2, "expected >=2 Irecv (two sync rounds)"
+    assert any(isinstance(n, MPINode) for n in nodes)
+    # the dycore stencils are inlined as real compute.
+    assert any(isinstance(n, dace.nodes.Tasklet) for n in nodes)
+
+
 def test_sync_patch_array_is_not_external_anymore(tmp_path):
     """``sync_patch_array`` / ``exchange_data`` are NO LONGER externalised -- they
     are devirtualized + inlined, so the SDFG carries no ``ExternalCall`` library
