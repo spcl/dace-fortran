@@ -766,12 +766,21 @@ def find_dataref_component_spec(dref: Union[f03.Name, f03.Data_Ref], scope_spec:
     _, root_type, rest = _dataref_root(dref, scope_spec, alias_map)
     cur_type = root_type
     for comp in rest[:-1]:
+        if cur_type.spec == MATCH_ALL.spec:
+            # A component of an externalised/unresolvable type (MATCH_ALL has no
+            # members to resolve against) is itself unknown -- return MATCH_ALL,
+            # mirroring find_type_dataref. Strict mode keeps the assert.
+            assert TOLERATE_EXTERNAL_USES
+            return MATCH_ALL.spec
         part_name = comp.children[0] if isinstance(comp, f03.Part_Ref) else comp
         comp_spec = find_real_ident_spec(part_name.string, cur_type.spec, alias_map)
         assert comp_spec in alias_map, f"cannot find: {comp_spec} / {dref} in {scope_spec}"
         cur_type = find_type_of_entity(alias_map[comp_spec], alias_map)
         assert cur_type
 
+    if cur_type.spec == MATCH_ALL.spec:
+        assert TOLERATE_EXTERNAL_USES
+        return MATCH_ALL.spec
     comp = rest[-1]
     part_name = comp.children[0] if isinstance(comp, f03.Part_Ref) else comp
     comp_spec = find_real_ident_spec(part_name.string, cur_type.spec, alias_map)

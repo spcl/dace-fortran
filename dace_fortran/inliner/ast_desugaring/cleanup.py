@@ -99,6 +99,12 @@ def correct_for_function_calls(ast: f03.Program):
                 dref = pr.parent
                 scope_spec = analysis.find_scope_spec(dref)
                 comp_spec = analysis.find_dataref_component_spec(dref, scope_spec, alias_map)
+                if comp_spec not in alias_map:
+                    # A component of an externalised/unresolvable type (MATCH_ALL,
+                    # under tolerate-externals): it is a genuine member access on
+                    # an opaque type, not a disguised function call -- leave the
+                    # data-ref as-is.
+                    continue
                 comp_type_spec = analysis.find_type_of_entity(alias_map[comp_spec], alias_map)
                 if not comp_type_spec:
                     # If no type can be found for the component, it's likely a function call.
