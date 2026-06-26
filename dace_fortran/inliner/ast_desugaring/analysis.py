@@ -1501,7 +1501,14 @@ def _track_local_consts(node: Union[Base, List[Base]], alias_map: types.SPEC_TAB
         _, args = node.children
         args = args.children if args else tuple()
         for a in args:
-            _inject_knowns(a)
+            # A bare Name actual argument is left untouched (mirror the
+            # _inject_knowns call-argument handler): substituting a pointer
+            # variable with its target breaks a POINTER dummy -- the actual
+            # must itself be a pointer, not the pointer's target expression --
+            # and value-substituting an arg the callee writes (INTENT OUT/INOUT)
+            # would be wrong.
+            if not isinstance(a, f03.Name):
+                _inject_knowns(a)
         _, args = node.children
         args = args.children if args else tuple()
         for a in args:

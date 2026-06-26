@@ -961,6 +961,41 @@ END SUBROUTINE main
     SourceCodeBuilder().add_file(got).check_with_gfortran()
 
 
+def test_local_pointer_not_substituted_as_call_argument():
+    """
+    A locally-constant pointer must NOT have its target substituted in when it
+    is passed as an actual argument: the callee's dummy may be a POINTER, and a
+    pointer's target expression is not itself a pointer (invalid Fortran). Its
+    uses in plain expressions are still folded.
+    """
+    sources, _ = (SourceCodeBuilder().add_file("""
+subroutine main()
+  implicit none
+  real, target :: data = 0.
+  real, pointer :: ptr => null()
+
+  ptr => data
+  call use_ptr(ptr)
+contains
+  subroutine use_ptr(q)
+    real, pointer :: q
+    q = 1.0
+  end subroutine use_ptr
+end subroutine main
+""").check_with_gfortran().get())
+    ast = parse_and_improve(sources)
+    ast = optimizations.exploit_locally_constant_variables(ast)
+
+    got = ast.tofortran()
+    # The pointer association is kept and the call still passes the POINTER
+    # variable -- NOT its target `data` (which would not compile: `data` is a
+    # TARGET, not a POINTER).
+    assert "ptr => data" in got
+    assert "CALL use_ptr(ptr)" in got
+    assert "use_ptr(data)" not in got
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
+
+
 def test_replace_case_selector_consts():
     """
     Tests that constants in CASE selectors are replaced.
