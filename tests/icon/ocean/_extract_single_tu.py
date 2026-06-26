@@ -42,8 +42,8 @@ def main(argv):
     os.environ.setdefault("UCX_VFS_ENABLE", "n")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    from icon.ocean._ocean_harness import (OCEAN_DEFINES, OCEAN_DO_NOT_EMIT,
-                                            OCEAN_EXTERNAL_FUNCTIONS, SRC, ocean_search_dirs)
+    from icon.ocean._ocean_harness import (OCEAN_DEFINES, OCEAN_DO_NOT_EMIT, OCEAN_RETURN_FALSE,
+                                           OCEAN_EXTERNAL_FUNCTIONS, SRC, ocean_search_dirs)
     from dace_fortran import inline_to_single_tu
     from dace_fortran.preprocess import merge_used_modules
 
@@ -59,10 +59,17 @@ def main(argv):
         log(f"  {len(merged.splitlines())} lines merged")
 
         log("inline_to_single_tu(expand_cpp, tolerate_external_uses)")
-        tu = inline_to_single_tu({str(mp): merged}, entry=entry, out_dir=out_dir, name="kernel_tu",
-                                 expand_cpp=True, defines=OCEAN_DEFINES, include_dirs=[SRC / "include"],
+        tu = inline_to_single_tu({str(mp): merged},
+                                 entry=entry,
+                                 out_dir=out_dir,
+                                 name="kernel_tu",
+                                 expand_cpp=True,
+                                 defines=OCEAN_DEFINES,
+                                 include_dirs=[SRC / "include"],
                                  external_functions=OCEAN_EXTERNAL_FUNCTIONS,
-                                 do_not_emit=OCEAN_DO_NOT_EMIT, tolerate_external_uses=True)
+                                 do_not_emit=OCEAN_DO_NOT_EMIT,
+                                 make_return_false=OCEAN_RETURN_FALSE,
+                                 tolerate_external_uses=True)
         n = len(Path(tu).read_text().splitlines())
         log(f"  single TU: {n} lines in {time.time()-t0:.0f}s")
         print(f"TU_PATH: {tu}", flush=True)
@@ -76,7 +83,9 @@ def main(argv):
         cf = cdir / Path(tu).name
         shutil.copy(tu, cf)
         r = subprocess.run(["gfortran", "-fsyntax-only", "-ffree-line-length-none", cf.name],
-                           cwd=str(cdir), capture_output=True, text=True)
+                           cwd=str(cdir),
+                           capture_output=True,
+                           text=True)
         if r.returncode != 0:
             print(r.stderr[-4000:], flush=True)
             print(f"RESULT: FAIL compile after {time.time()-t0:.0f}s", flush=True)

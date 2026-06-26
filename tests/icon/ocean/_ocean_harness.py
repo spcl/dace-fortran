@@ -108,25 +108,43 @@ OCEAN_DEFINES = [
 #: the whole subsystem is externalised as one opaque black box (pinned by
 #: ``tests/hlfir_devirtualization_test.py``).
 OCEAN_EXTERNAL_FUNCTIONS = [
-    ExternalFunction("sync_patch_array"),       # MPI halo exchange (generic: sync_patch_array_3d_dp, ...)
+    ExternalFunction("sync_patch_array"),  # MPI halo exchange (generic: sync_patch_array_3d_dp, ...)
     ExternalFunction("sync_patch_array_mult"),  # MPI multi-field halo exchange
-    ExternalFunction("exchange_data"),          # MPI halo primitive underneath the syncs (exchange_data_r3d, ...)
-    ExternalFunction("work_mpi_barrier"),       # MPI collective barrier (mo_mpi: MPI_Barrier)
-    ExternalFunction("p_barrier"),              # MPI collective barrier (mo_mpi wrapper, timer-gated)
-    ExternalFunction("p_max"),                  # MPI global reduction (mo_mpi: MPI_Allreduce, MPI_MAX)
-    ExternalFunction("p_min"),                  # MPI global reduction (mo_mpi: MPI_Allreduce, MPI_MIN)
-    ExternalFunction("p_sum"),                  # MPI global reduction (mo_mpi: MPI_Allreduce, MPI_SUM)
-    ExternalFunction("ocean_solve_construct"),          # runtime factory (ALLOCATE+dispatch); ONCE (is_init guard)
-    ExternalFunction("trivial_transfer_construct"),     # transfer-object construct; ONCE (is_init guard)
-    ExternalFunction("lhs_primal_flip_flop_construct"), # LHS re-init; PER LEVEL (static bind, kept external for a clean boundary)
-    ExternalFunction("ocean_solve_solve"),              # the linear solve; PER LEVEL (dispatches act/lhs/trans on abstract bases)
+    ExternalFunction("exchange_data"),  # MPI halo primitive underneath the syncs (exchange_data_r3d, ...)
+    ExternalFunction("work_mpi_barrier"),  # MPI collective barrier (mo_mpi: MPI_Barrier)
+    ExternalFunction("p_barrier"),  # MPI collective barrier (mo_mpi wrapper, timer-gated)
+    ExternalFunction("p_max"),  # MPI global reduction (mo_mpi: MPI_Allreduce, MPI_MAX)
+    ExternalFunction("p_min"),  # MPI global reduction (mo_mpi: MPI_Allreduce, MPI_MIN)
+    ExternalFunction("p_sum"),  # MPI global reduction (mo_mpi: MPI_Allreduce, MPI_SUM)
+    ExternalFunction("ocean_solve_construct"),  # runtime factory (ALLOCATE+dispatch); ONCE (is_init guard)
+    ExternalFunction("trivial_transfer_construct"),  # transfer-object construct; ONCE (is_init guard)
+    ExternalFunction(
+        "lhs_primal_flip_flop_construct"),  # LHS re-init; PER LEVEL (static bind, kept external for a clean boundary)
+    ExternalFunction("ocean_solve_solve"),  # the linear solve; PER LEVEL (dispatches act/lhs/trans on abstract bases)
 ]
 #: DON'T-EMIT = externalised (NOT inlined) and the bridge DROPs the call: pure
 #: side-effects with no numerics -- terminal I/O (debug / error / log) and timers.
 OCEAN_DO_NOT_EMIT = [
-    "dbg_print",                      # terminal write (debug print)
-    "finish", "message", "warning",   # terminal write (error / log)
-    "timer_start", "timer_stop", "new_timer", "delete_timer",  # timers
+    "dbg_print",  # terminal write (debug print)
+    "finish",
+    "message",
+    "warning",  # terminal write (error / log)
+    "timer_start",
+    "timer_stop",
+    "new_timer",
+    "delete_timer",  # timers
+]
+#: LOGICAL config-query functions stubbed to return ``.FALSE.`` (NOT inlined,
+#: body replaced with ``<result> = .FALSE.``).  The dycore's first-timestep
+#: init guard is `IF (timestep==1 .AND. .NOT.(isRestart() .OR.
+#: isInitFromRestart()))`; for the standalone (no-restart) extraction both
+#: queries are false, so the guard faithfully reduces to `timestep==1`.
+#: Inlining their real bodies instead would drag in mo_master_config's
+#: `my_model_do_restart` plus the mo_impl_constants NORMAL_RESTART /
+#: INIT_FROM_RESTART parameters (restart bookkeeping, no dycore numerics).
+OCEAN_RETURN_FALSE = [
+    "isrestart",
+    "isinitfromrestart",
 ]
 # NOTE: rot_vertex_ocean_3d is INLINED (it is pure vorticity compute, no MPI in
 # its body).  Inlining it pulls in its host module's USE closure (mo_mpi
@@ -137,18 +155,14 @@ OCEAN_DO_NOT_EMIT = [
 #: The ICON-O kernels currently extracted.  Each entry is
 #: ``(key, source-relative-to-src, module::procedure, body-line-count)``.
 KERNELS = [
-    ("ppm_vflux",
-     "ocean/tracer_transport/mo_ocean_tracer_transport_vert.f90",
+    ("ppm_vflux", "ocean/tracer_transport/mo_ocean_tracer_transport_vert.f90",
      "mo_ocean_tracer_transport_vert::upwind_vflux_ppm_onBlock", 339),
-    ("coriolis_pv",
-     "ocean/math/mo_scalar_product.f90",
-     "mo_scalar_product::nonlinear_coriolis_3d_fast_scalar", 273),
+    ("coriolis_pv", "ocean/math/mo_scalar_product.f90", "mo_scalar_product::nonlinear_coriolis_3d_fast_scalar", 273),
     # Ocean horizontal velocity advection (NOT ICON's atmosphere
     # mo_velocity_advection::velocity_tendencies -- a distinct kernel covered by
     # tests/icon/full).  The rotational ("inUse") form: vorticity flux (inlines
     # nonlinear_coriolis_3d, same compute as coriolis_pv) + kinetic-energy grad.
-    ("ocean_veloc_adv",
-     "ocean/dynamics/mo_ocean_velocity_advection.f90",
+    ("ocean_veloc_adv", "ocean/dynamics/mo_ocean_velocity_advection.f90",
      "mo_ocean_velocity_advection::veloc_adv_horz_mimetic_rot", 102),
 ]
 
@@ -157,12 +171,9 @@ KERNELS = [
 #: stage (handled elsewhere) has a stable input; the extraction test
 #: regenerates them and checks for drift.
 SINGLE_TU_ARTIFACTS = [
-    ("ppm_vflux", "ppm_vflux_single_tu.f90",
-     "mo_ocean_tracer_transport_vert::upwind_vflux_ppm_onBlock"),
-    ("coriolis_pv", "coriolis_pv_single_tu.f90",
-     "mo_scalar_product::nonlinear_coriolis_3d_fast_scalar"),
-    ("ocean_veloc_adv", "ocean_veloc_adv_single_tu.f90",
-     "mo_ocean_velocity_advection::veloc_adv_horz_mimetic_rot"),
+    ("ppm_vflux", "ppm_vflux_single_tu.f90", "mo_ocean_tracer_transport_vert::upwind_vflux_ppm_onBlock"),
+    ("coriolis_pv", "coriolis_pv_single_tu.f90", "mo_scalar_product::nonlinear_coriolis_3d_fast_scalar"),
+    ("ocean_veloc_adv", "ocean_veloc_adv_single_tu.f90", "mo_ocean_velocity_advection::veloc_adv_horz_mimetic_rot"),
 ]
 
 _EXTRACT_SCRIPT = _HERE / "_extract_single_tu.py"
@@ -190,8 +201,12 @@ def extract_single_tu(source_relpath: str, entry: str, out_dir: Path, mem_gb: fl
     # any set/dict-iteration order leaking into emitted names would flake it.
     env["PYTHONHASHSEED"] = "0"
     proc = subprocess.run(
-        [sys.executable, str(_EXTRACT_SCRIPT), source_relpath, entry, str(out_dir), str(mem_gb)],
-        capture_output=True, text=True, env=env, cwd=str(out_dir))
+        [sys.executable, str(_EXTRACT_SCRIPT), source_relpath, entry,
+         str(out_dir), str(mem_gb)],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=str(out_dir))
     out = proc.stdout + "\n" + proc.stderr
     tu_path, tu_lines = None, None
     for line in proc.stdout.splitlines():

@@ -240,6 +240,10 @@ class ParseConfig:
         self.sources: Dict[str, str] = sources
         self.entry_points: List[types.SPEC] = entry_points
         self.config_injections: list = []
+        #: Lower-cased names of stubbed LOGICAL functions whose body is replaced
+        #: with ``<result> = .FALSE.`` (a subset of ``make_noop``); populated by
+        #: :func:`inline_to_ast` from its ``make_return_false`` argument.
+        self.make_return_false: Set[str] = set()
         self.do_not_prune: List[types.SPEC] = do_not_prune
         self.do_not_rename: List[types.SPEC] = do_not_rename
         self.make_noop: List[types.SPEC] = make_noop
@@ -666,6 +670,17 @@ def _keep_external_noop_specs(ast: f03.Program, names: Iterable[str]) -> List[ty
     return specs
 
 
+def _function_result_name(fn: f03.Function_Stmt) -> str:
+    """The name of a function's result variable: the ``RESULT(name)`` suffix
+    when present, else the function's own name."""
+    suffix = atmost_one(children_of_type(fn, f03.Suffix))
+    if suffix is not None:
+        result = atmost_one(children_of_type(suffix, f03.Name))
+        if result is not None:
+            return result.string
+    return utils.find_name_of_stmt(fn)
+
+
 #: ``/group/ obj, obj, ...`` segment of a ``NAMELIST`` statement.
 _NAMELIST_GROUP_RE = re.compile(r"/\s*(\w+)\s*/\s*([^/]+)")
 
@@ -764,6 +779,13 @@ def run_fparser_transformations(ast: f03.Program, cfg: ParseConfig, *, optimize:
             expart = atmost_one(children_of_type(fn.parent, f03.Execution_Part))
             if expart:
                 utils.remove_self(expart)
+            # A return-false stub keeps a valid body so the (kept) call sites
+            # still bind: replace the emptied body with `<result> = .FALSE.`
+            # instead of leaving the LOGICAL result undefined.
+            if isinstance(fn, f03.Function_Stmt) and fnspec[-1].lower() in cfg.make_return_false:
+                result = _function_result_name(fn)
+                end = fn.parent.children[-1]  # End_Function_Stmt stays last
+                utils.replace_node(end, (f03.Execution_Part(get_reader(f"{result} = .FALSE.\n")), end))
         if noop_missed:
             logger.warning("The following functions could not be found for making no-op: %s", noop_missed)
 
@@ -806,10 +828,11 @@ def run_fparser_transformations(ast: f03.Program, cfg: ParseConfig, *, optimize:
         # is still valid Fortran (the interface plus its stubbed module
         # procedures resolve at the call site), and the final gfortran gate
         # rejects a genuinely uncompilable TU, so this is safe to leave.
-        surviving = sorted({utils.find_name_of_stmt(i)
-                            for i in walk(ast, f03.Interface_Stmt) if utils.find_name_of_stmt(i)})
-        logger.warning("Left %d generic interface(s) unresolved while tolerating externals: %s",
-                       len(surviving), ", ".join(surviving))
+        surviving = sorted(
+            {utils.find_name_of_stmt(i)
+             for i in walk(ast, f03.Interface_Stmt) if utils.find_name_of_stmt(i)})
+        logger.warning("Left %d generic interface(s) unresolved while tolerating externals: %s", len(surviving),
+                       ", ".join(surviving))
     ast = cleanup.correct_for_function_calls(ast)
     _checkpoint_ast(cfg, 'ast_v2.f90', ast)
 
@@ -1012,6 +1035,7 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
                   include_dirs: Iterable[Union[str, Path]] = (),
                   flang: str = "flang-new-21",
                   make_noop: Union[None, types.SPEC, List[types.SPEC]] = None,
+                  make_return_false: Iterable[str] = (),
                   keep_external: Iterable[str] = (),
                   external_functions: Iterable[ExternalFunction] = (),
                   do_not_emit: Iterable[str] = (),
@@ -1069,6 +1093,9 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
     if include_builtins:
         cfg.sources.setdefault("_builtins.f90", BUILTINS)
     dont_inline = _resolve_dont_inline_names(keep_external, external_functions, do_not_emit)
+    # Return-false stubs are also non-inlined (stubbed), then assigned .FALSE.
+    cfg.make_return_false = {n.lower() for n in make_return_false}
+    dont_inline |= cfg.make_return_false
     with analysis.tolerate_external_uses(tolerate_external_uses):
         ast = create_fparser_ast(cfg)
         if dont_inline:
@@ -1094,6 +1121,7 @@ def inline_to_single_tu(sources: Union[Dict[str, str], Iterable[Union[str, Path]
                         include_dirs: Iterable[Union[str, Path]] = (),
                         flang: str = "flang-new-21",
                         make_noop: Union[None, types.SPEC, List[types.SPEC]] = None,
+                        make_return_false: Iterable[str] = (),
                         keep_external: Iterable[str] = (),
                         external_functions: Iterable[ExternalFunction] = (),
                         do_not_emit: Iterable[str] = (),
@@ -1122,6 +1150,8 @@ def inline_to_single_tu(sources: Union[Dict[str, str], Iterable[Union[str, Path]
     :param out_dir: directory for the default output filename.
     :param name: base name of the default output file.
     :param make_noop: subprogram specs to replace with an empty body.
+    :param make_return_false: names of LOGICAL functions to stub so their body
+        is ``<result> = .FALSE.`` (NOT inlined; the kept call sites still bind).
     :param consolidate_global_data: gather module-level variables into one
         derived type passed by argument.
     :param rename_uniquely: rename subprograms / variables to globally
@@ -1140,6 +1170,7 @@ def inline_to_single_tu(sources: Union[Dict[str, str], Iterable[Union[str, Path]
                         include_dirs=include_dirs,
                         flang=flang,
                         make_noop=make_noop,
+                        make_return_false=make_return_false,
                         keep_external=keep_external,
                         external_functions=external_functions,
                         do_not_emit=do_not_emit,
