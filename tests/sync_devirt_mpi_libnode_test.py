@@ -170,8 +170,7 @@ def _devirt_build_atmo(tmp_path):
     prog = parse_program(_ATMO_SRC)
     monomorphize(
         prog,
-        MonomorphizationSpec(
-            axes=[AxisSpec(base="t_comm_pattern", strategy="retype", concrete="t_comm_pattern_orig")]))
+        MonomorphizationSpec(axes=[AxisSpec(base="t_comm_pattern", strategy="retype", concrete="t_comm_pattern_orig")]))
     return build_sdfg(str(prog), tmp_path / "sdfg", name="atmo_sync", entry="sync_patch_array").build()
 
 
@@ -187,6 +186,110 @@ def test_atmosphere_sync_patch_array_devirtualized_to_mpi_libnodes(tmp_path):
     assert mpi == ["Irecv", "Isend", "Wait"], f"expected Isend/Irecv/Wait libnodes, got {mpi}"
     assert any(isinstance(n, dace.nodes.Tasklet) for n, _ in sdfg.all_nodes_recursive()), \
         "expected the pack compute inlined as tasklets"
+
+
+#: A dycore substep: a stencil update on a field, a halo exchange via
+#: ``sync_patch_array`` (the devirtualized comm pattern), then a copy-back -- the
+#: shape of one ICON dynamical-core timestep stage. ``sync_patch_array`` lives in
+#: the module so a caller (``dycore_step``) has its explicit interface (a
+#: polymorphic / pointer dummy requires one).
+_DYCORE_STEP_SRC = """
+module mo_comm
+  implicit none
+  type, abstract :: t_comm_pattern
+    integer :: n
+  contains
+    procedure(exch_i), deferred :: exchange_data_r3d
+  end type
+  abstract interface
+    subroutine exch_i(p_pat, recv, partner, tag)
+      import t_comm_pattern
+      class(t_comm_pattern), intent(in) :: p_pat
+      real(8), intent(inout) :: recv(:)
+      integer, intent(in) :: partner, tag
+    end subroutine
+  end interface
+  type, extends(t_comm_pattern) :: t_comm_pattern_orig
+  contains
+    procedure :: exchange_data_r3d => orig_exchange_data_r3d
+  end type
+  interface exchange_data
+    module procedure exchange_data_r3d_wrap
+  end interface
+contains
+  subroutine exchange_data_r3d_wrap(p_pat, recv, partner, tag)
+    class(t_comm_pattern), intent(in) :: p_pat
+    real(8), intent(inout) :: recv(:)
+    integer, intent(in) :: partner, tag
+    call p_pat%exchange_data_r3d(recv, partner, tag)
+  end subroutine
+  subroutine orig_exchange_data_r3d(p_pat, recv, partner, tag)
+    class(t_comm_pattern_orig), intent(in) :: p_pat
+    real(8), intent(inout) :: recv(:)
+    integer, intent(in) :: partner, tag
+    integer :: i, ierr, req
+    integer, parameter :: MPI_COMM_WORLD = 0
+    integer, parameter :: MPI_DOUBLE_PRECISION = 17
+    external :: mpi_isend, mpi_irecv, mpi_wait
+    do i = 1, p_pat%n
+      recv(i) = recv(i) * 2.0d0
+    end do
+    call mpi_isend(recv, p_pat%n, MPI_DOUBLE_PRECISION, partner, tag, MPI_COMM_WORLD, req, ierr)
+    call mpi_irecv(recv, p_pat%n, MPI_DOUBLE_PRECISION, partner, tag, MPI_COMM_WORLD, req, ierr)
+    call mpi_wait(req, ierr)
+  end subroutine
+  subroutine sync_patch_array(p_pat, arr, partner, tag)
+    class(t_comm_pattern), pointer, intent(in) :: p_pat
+    real(8), intent(inout) :: arr(:)
+    integer, intent(in) :: partner, tag
+    call exchange_data(p_pat, arr, partner, tag)
+  end subroutine
+end module
+
+subroutine dycore_step(p_pat, h, hnew, n, partner, tag)
+  use mo_comm
+  implicit none
+  class(t_comm_pattern), pointer, intent(in) :: p_pat
+  real(8), intent(inout) :: h(:), hnew(:)
+  integer, intent(in) :: n, partner, tag
+  integer :: i
+  ! divergence-like stencil update -- real dycore compute
+  do i = 2, n - 1
+    hnew(i) = h(i) - 0.5d0 * (h(i + 1) - h(i - 1))
+  end do
+  ! halo exchange -- devirtualized + inlined, NOT an external sync
+  call sync_patch_array(p_pat, hnew, partner, tag)
+  do i = 1, n
+    h(i) = hnew(i)
+  end do
+end subroutine
+"""
+
+
+def test_dycore_step_inlines_sync_and_devirtualizes(tmp_path):
+    """End-to-end on a dycore-substep shape (stencil update -> halo sync ->
+    copy-back): with the comm pattern devirtualized, ``sync_patch_array`` inlines
+    so the stencil AND the sync's pack are real SDFG compute, and the only
+    external calls are the MPI primitives, as ``dace.libraries.mpi`` library
+    nodes -- no ExternalCall for the sync."""
+    import dace
+    from dace.libraries.mpi.nodes.node import MPINode
+    from dace_fortran.external import ExternalCall
+
+    prog = parse_program(_DYCORE_STEP_SRC)
+    monomorphize(
+        prog,
+        MonomorphizationSpec(axes=[AxisSpec(base="t_comm_pattern", strategy="retype", concrete="t_comm_pattern_orig")]))
+    sdfg = build_sdfg(str(prog), tmp_path / "sdfg", name="dycore_step", entry="dycore_step").build()
+
+    # The sync's MPI primitives are libnodes; the sync itself is not external.
+    mpi = sorted({type(n).__name__ for n, _ in sdfg.all_nodes_recursive() if isinstance(n, MPINode)})
+    assert mpi == ["Irecv", "Isend", "Wait"], f"expected MPI libnodes, got {mpi}"
+    ext = {n.name.lower() for n, _ in sdfg.all_nodes_recursive() if isinstance(n, ExternalCall)}
+    assert not any("sync" in nm or "exchange" in nm for nm in ext), \
+        f"sync must be inlined, not external; got ExternalCall names {sorted(ext)}"
+    # the dycore stencil compute is in the SDFG
+    assert any(isinstance(n, dace.nodes.Tasklet) for n, _ in sdfg.all_nodes_recursive())
 
 
 def test_sync_patch_array_is_not_external_anymore(tmp_path):
