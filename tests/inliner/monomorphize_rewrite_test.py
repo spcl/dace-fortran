@@ -816,6 +816,96 @@ def test_driver_still_rejects_class_star_inside_a_laddered_axis():
         monomorphize(prog, MonomorphizationSpec(axes=[AxisSpec(base="pbase", strategy="ladder")]))
 
 
+#: Container/dispatch in one module, the shared interposer + arms in another --
+#: the ladder's redirected direct call is then cross-module and needs an import.
+CROSS_MODULE_SRC = """
+module backend_mod
+  implicit none
+  type, abstract :: base
+  contains
+    procedure(run_i), deferred :: act_impl
+    procedure :: run => base_run
+  end type
+  abstract interface
+    subroutine run_i(this, x)
+      import base
+      class(base), intent(inout) :: this
+      real, intent(inout) :: x
+    end subroutine
+  end interface
+  type, extends(base) :: t_gmres
+  contains
+    procedure :: act_impl => gmres_impl
+  end type
+  type, extends(base) :: t_cg
+  contains
+    procedure :: act_impl => cg_impl
+  end type
+contains
+  subroutine base_run(this, x)
+    class(base), intent(inout) :: this
+    real, intent(inout) :: x
+    call this%act_impl(x)
+  end subroutine
+  subroutine gmres_impl(this, x)
+    class(t_gmres), intent(inout) :: this
+    real, intent(inout) :: x
+    x = x + 1.0
+  end subroutine
+  subroutine cg_impl(this, x)
+    class(t_cg), intent(inout) :: this
+    real, intent(inout) :: x
+    x = x * 3.0
+  end subroutine
+end module
+
+module container_mod
+  use backend_mod
+  implicit none
+  type :: container
+    class(base), allocatable :: act
+  contains
+    procedure :: setup => container_setup
+    procedure :: go => container_go
+  end type
+contains
+  subroutine container_setup(this, sel)
+    class(container), intent(inout) :: this
+    integer, intent(in) :: sel
+    if (sel == 1) then
+      allocate(t_gmres :: this%act)
+    else
+      allocate(t_cg :: this%act)
+    end if
+  end subroutine
+  subroutine container_go(this, x)
+    class(container), intent(inout) :: this
+    real, intent(inout) :: x
+    call this%act%run(x)
+  end subroutine
+end module
+"""
+
+
+@pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
+def test_driver_imports_cross_module_clone_at_call_site(tmp_path: Path):
+    """When the ladder redirects a dispatch to a per-arm clone in the interposer's
+    module but the call site is in a DIFFERENT module, the direct call needs an
+    explicit interface -- otherwise flang rejects keyword args and the pruner drops
+    the clone. The rewrite imports the clone at the call site so the result still
+    compiles."""
+    prog = parse_program(CROSS_MODULE_SRC)
+    monomorphize(prog, MonomorphizationSpec(axes=[AxisSpec(base="base", strategy="ladder")]))
+    text = str(prog)
+    # the redirected call site (container_go, in container_mod) imports the clones
+    # that live in backend_mod
+    assert "USE backend_mod, ONLY: base_run__t_gmres" in text
+    assert "USE backend_mod, ONLY: base_run__t_cg" in text
+    # and the whole thing is legal, compilable Fortran (the explicit interface)
+    (tmp_path / "cm.f90").write_text(text)
+    subprocess.check_call(["gfortran", "-fsyntax-only", "-ffree-line-length-none", "cm.f90"], cwd=str(tmp_path))
+
+
 def test_driver_rewrites_allocated_guard_on_laddered_component():
     """``ALLOCATED(this%act)`` -- the "is it constructed?" guard, an ``If_Stmt`` the
     slot ladder never visits -- is rewritten to the tag check once the component is

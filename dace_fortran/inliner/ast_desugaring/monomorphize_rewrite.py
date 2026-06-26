@@ -29,11 +29,13 @@ from dataclasses import dataclass
 from typing import List, Optional, Set, Tuple
 
 import fparser.two.Fortran2003 as f03
+from fparser.api import get_reader
 from fparser.two.utils import walk
 
 from dace_fortran.inliner import ast_utils
 from dace_fortran.inliner.ast_desugaring.monomorphize import analyze, MonomorphizationPlan, parse_program
-from dace_fortran.inliner.ast_desugaring.utils import (append_children, find_name_of_node, remove_self, replace_node)
+from dace_fortran.inliner.ast_desugaring.utils import (append_children, find_name_of_node, prepend_children,
+                                                       remove_self, replace_node)
 
 SCOPES = (f03.Subroutine_Subprogram, f03.Function_Subprogram)
 
@@ -380,6 +382,40 @@ def _clone_interposer(sub: f03.Base, proc: str, base: str, arm_type: str, clone_
     return walk(prog, SCOPES)[0]
 
 
+def _enclosing_of_type(node: f03.Base, types_: tuple) -> Optional[f03.Base]:
+    p = node.parent
+    while p is not None and not isinstance(p, types_):
+        p = p.parent
+    return p
+
+
+def _module_name_of(node: f03.Base) -> Optional[str]:
+    """Lower-cased name of the module / main program that lexically contains ``node``."""
+    mod = _enclosing_of_type(node, (f03.Module, f03.Main_Program))
+    if mod is None:
+        return None
+    stmt = ast_utils.atmost_one(ast_utils.children_of_type(mod, (f03.Module_Stmt, f03.Program_Stmt)))
+    return str(stmt.children[1]).lower() if stmt is not None else None
+
+
+def _ensure_use(sub: f03.Base, module: str, name: str) -> None:
+    """Add ``USE <module>, ONLY: <name>`` to subprogram ``sub`` if not already there.
+
+    A monomorphised ladder redirects a (formerly type-bound, explicit-interface)
+    dispatch to a direct call of a per-arm clone that lives in the interposer's
+    module. When the call site is in a *different* module the direct call needs an
+    explicit interface, or flang rejects the keyword arguments and the pruner drops
+    the clone as unreferenced -- so import the clone at the call site."""
+    spec = ast_utils.atmost_one(ast_utils.children_of_type(sub, f03.Specification_Part))
+    if spec is not None:
+        for u in ast_utils.children_of_type(spec, f03.Use_Stmt):
+            if name.lower() in str(u).lower() and module.lower() in str(u).lower():
+                return
+        prepend_children(spec, f03.Use_Stmt(f"USE {module}, ONLY: {name}"))
+    else:
+        append_children(sub, f03.Specification_Part(get_reader(f"use {module}, only: {name}\n")))
+
+
 def clone_shared_interposers(program: f03.Program, plan: MonomorphizationPlan) -> int:
     """Specialise the base's shared interposers per arm so their internal dispatch
     resolves statically.  After :func:`monomorphize_component_dispatch`, a dispatch on a
@@ -414,16 +450,23 @@ def clone_shared_interposers(program: f03.Program, plan: MonomorphizationPlan) -
         if sub is None:
             continue
         clone_name = f"{proc}__{arm_type}"
-        clones[(proc, arm_type)] = clone_name
+        # The clone lands in the interposer's own module (appended to sub.parent).
+        clones[(proc, arm_type)] = (clone_name, _module_name_of(sub))
         append_children(sub.parent, _clone_interposer(sub, proc, plan.abstract_base, arm_type, clone_name))
 
     for call, obj, proc, arm_type in redirects:
         if (proc, arm_type) not in clones:
             continue
+        clone_name, clone_mod = clones[(proc, arm_type)]
+        # Capture the call's scope/module BEFORE replacing it (replace detaches it).
+        call_sub = _enclosing_of_type(call, SCOPES)
+        call_mod = _module_name_of(call)
         args = call.children[1]
         argstr = ', '.join(str(a) for a in args.children) if args is not None else ''
         callee = str(obj) + (f", {argstr}" if argstr else "")
-        replace_node(call, _parse_exec(f"call {clones[(proc, arm_type)]}({callee})"))
+        replace_node(call, _parse_exec(f"call {clone_name}({callee})"))
+        if call_sub is not None and clone_mod is not None and call_mod != clone_mod:
+            _ensure_use(call_sub, clone_mod, clone_name)
 
     # the original interposers are now dead (every dispatch was redirected to a
     # concrete clone); drop each fully-redirected one + its base TBP binding so no
