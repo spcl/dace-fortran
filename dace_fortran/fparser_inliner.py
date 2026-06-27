@@ -782,14 +782,6 @@ def run_fparser_transformations(ast: f03.Program, cfg: ParseConfig, *, optimize:
     captured_external_interfaces = collect_external_interfaces(ast)
     _checkpoint_ast(cfg, 'ast_v0.f90', ast)
 
-    if cfg.rename_specifics:
-        # Disambiguate a specific procedure that shares its name with its generic
-        # interface BEFORE externalisation / interface deconstruction (which the
-        # collision otherwise breaks -- a dangling ``USE ... => <name>``).
-        n = cleanup.rename_clashing_specifics(ast, cfg.rename_specifics)
-        if n:
-            logger.debug("FParser Op: renamed %d generic/specific name-clash specific(s)", n)
-
     if cfg.make_noop:
         logger.debug("FParser Op: Making certain functions no-op in the AST...")
         noop_missed: Set[types.SPEC] = set(cfg.make_noop)
@@ -1144,6 +1136,14 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
     dont_inline |= cfg.make_return_false
     with analysis.tolerate_external_uses(tolerate_external_uses):
         ast = create_fparser_ast(cfg)
+        if cfg.rename_specifics:
+            # Disambiguate a specific procedure that shares its name with its
+            # generic interface BEFORE the make-noop specs are resolved below --
+            # so externalising the generic stubs the RENAMED specific (otherwise
+            # its body, and any external it reaches, would survive).
+            n = cleanup.rename_clashing_specifics(ast, cfg.rename_specifics)
+            if n:
+                logger.debug("FParser Op: renamed %d generic/specific name-clash specific(s)", n)
         if dont_inline:
             # Stub the policy's non-inlined procedures (and their generic
             # specifics) BEFORE the transformations inline them.
