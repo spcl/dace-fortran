@@ -956,3 +956,54 @@ end subroutine {fn_name}
             utils.remove_self(fn)
 
     return ast
+
+
+def rename_clashing_specifics(ast: f03.Program, renames: Dict[str, str]) -> int:
+    """Rename a specific module procedure that shares its name with the generic
+    interface it belongs to.
+
+    A generic interface may legally share its name with one of its own specific
+    procedures (ICON's ``mo_mpi`` declares ``INTERFACE p_wait`` whose
+    ``MODULE PROCEDURE`` list includes a specific *also* named ``p_wait``).  That
+    name sharing breaks once the inliner externalises / renames the generic's
+    specifics: the bare specific name becomes ambiguous (generic vs specific) and
+    the emitted ``USE ... => p_wait`` dangles.
+
+    ``renames`` maps ``old -> new``; for each, when ``old`` is the name of BOTH a
+    generic interface and a specific (sub)program, the *specific* procedure
+    definition and its ``MODULE PROCEDURE`` entry are renamed to ``new`` -- the
+    generic interface name and the (generic-dispatched) call sites are left
+    alone, so calls still resolve through the generic to the renamed specific.
+    A name that is not such a source-defined collision is skipped (so an external
+    name -- e.g. a raw ``mpi_*`` symbol with no definition in the unit -- is never
+    touched).  Returns the number of specifics renamed."""
+    renamed = 0
+    for old, new in renames.items():
+        old = old.lower()
+
+        def _generic_name(ib: f03.Interface_Block) -> Optional[str]:
+            st = ast_utils.atmost_one(ast_utils.children_of_type(ib, f03.Interface_Stmt))
+            head = st.children[0] if st is not None else None
+            return str(head).lower() if isinstance(head, f03.Name) else None
+
+        generics = [ib for ib in walk(ast, f03.Interface_Block) if _generic_name(ib) == old]
+        specifics = [
+            sp for sp in walk(ast, (f03.Subroutine_Subprogram, f03.Function_Subprogram))
+            if (utils.find_name_of_node(sp) or "").lower() == old
+        ]
+        if not (generics and specifics):
+            continue  # not a generic/specific collision defined in this unit -- leave it
+
+        for sp in specifics:
+            for stmt in walk(sp, (f03.Subroutine_Stmt, f03.Function_Stmt)):
+                utils.replace_node(stmt.children[1], f03.Name(new))
+            for endst in walk(sp, (f03.End_Subroutine_Stmt, f03.End_Function_Stmt)):
+                if endst.children[1] is not None:
+                    utils.replace_node(endst.children[1], f03.Name(new))
+            renamed += 1
+        for ib in generics:
+            for ps in walk(ib, f03.Procedure_Stmt):
+                for nm in walk(ps.children[0], f03.Name):
+                    if str(nm).lower() == old:
+                        utils.replace_node(nm, f03.Name(new))
+    return renamed

@@ -212,7 +212,8 @@ class ParseConfig:
                  consolidate_global_data: bool = False,
                  rename_uniquely: bool = False,
                  do_not_prune_type_components: bool = False,
-                 monomorphize: bool = True):
+                 monomorphize: bool = True,
+                 rename_specifics: Optional[Dict[str, str]] = None):
         # Make the configs canonical, by processing the various types upfront.
         if not sources:
             sources = {}
@@ -259,6 +260,11 @@ class ParseConfig:
         #: has no live abstract dispatch (the common case) and when the dispatch
         #: has been externalised away.
         self.monomorphize = monomorphize
+        #: ``old -> new`` renames for a specific module procedure that shares its
+        #: name with the generic interface it belongs to (see
+        #: :func:`cleanup.rename_clashing_specifics`).  Applied before the
+        #: externalisation / interface deconstruction that the collision breaks.
+        self.rename_specifics: Dict[str, str] = dict(rename_specifics or {})
 
     def set_all_possible_entry_points_from(self, ast: f03.Program):
         """Treat every top-level subprogram / main program as an entry point
@@ -776,6 +782,14 @@ def run_fparser_transformations(ast: f03.Program, cfg: ParseConfig, *, optimize:
     captured_external_interfaces = collect_external_interfaces(ast)
     _checkpoint_ast(cfg, 'ast_v0.f90', ast)
 
+    if cfg.rename_specifics:
+        # Disambiguate a specific procedure that shares its name with its generic
+        # interface BEFORE externalisation / interface deconstruction (which the
+        # collision otherwise breaks -- a dangling ``USE ... => <name>``).
+        n = cleanup.rename_clashing_specifics(ast, cfg.rename_specifics)
+        if n:
+            logger.debug("FParser Op: renamed %d generic/specific name-clash specific(s)", n)
+
     if cfg.make_noop:
         logger.debug("FParser Op: Making certain functions no-op in the AST...")
         noop_missed: Set[types.SPEC] = set(cfg.make_noop)
@@ -1074,6 +1088,7 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
                   include_builtins: bool = True,
                   tolerate_external_uses: bool = False,
                   monomorphize: bool = True,
+                  rename_specifics: Optional[Dict[str, str]] = None,
                   optimize: bool = True) -> f03.Program:
     """Run the full inliner pipeline and return the combined fparser AST.
 
@@ -1119,6 +1134,7 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
         rename_uniquely=rename_uniquely,
         do_not_prune_type_components=do_not_prune_type_components,
         monomorphize=monomorphize,
+        rename_specifics=rename_specifics,
     )
     if include_builtins:
         cfg.sources.setdefault("_builtins.f90", BUILTINS)
@@ -1161,7 +1177,8 @@ def inline_to_single_tu(sources: Union[Dict[str, str], Iterable[Union[str, Path]
                         checkpoint_dir: Union[None, str, Path] = None,
                         include_builtins: bool = True,
                         tolerate_external_uses: bool = False,
-                        monomorphize: bool = True) -> Path:
+                        monomorphize: bool = True,
+                        rename_specifics: Optional[Dict[str, str]] = None) -> Path:
     """Inline a multi-file Fortran project into ONE self-contained ``.f90``
     and return the path to it.
 
@@ -1211,7 +1228,8 @@ def inline_to_single_tu(sources: Union[Dict[str, str], Iterable[Union[str, Path]
                         checkpoint_dir=checkpoint_dir,
                         include_builtins=include_builtins,
                         tolerate_external_uses=tolerate_external_uses,
-                        monomorphize=monomorphize)
+                        monomorphize=monomorphize,
+                        rename_specifics=rename_specifics)
     f90 = ast.tofortran()
 
     if output is not None:
