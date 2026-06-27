@@ -1095,3 +1095,36 @@ if __name__ == "__main__":
     test_exploit_locally_constant_pointers()
     test_replace_case_selector_consts()
     test_constant_function_evaluation()
+
+
+def test_const_eval_keyword_value_matching_keyword_name():
+    """A ``kw=value`` actual argument whose VALUE name equals the keyword name
+    (e.g. ``use_g2g=use_g2g``, where the value is a module PARAMETER and the
+    keyword is the callee's dummy of the same name) must still resolve + fold the
+    value to the parameter's constant.
+
+    Regression: the keyword-skip in ``search_scope_spec`` / ``search_local_alias_spec``
+    compared NAMES (``kw.string == node.string``) instead of node IDENTITY, so the
+    value reference was wrongly treated as "a keyword" and left unresolved -- which
+    later let pruning drop the parameter and leave a dangling reference (the ICON
+    halo ``p_irecv(..., use_g2g=use_g2g)`` non-OpenACC build)."""
+    sources, _ = (SourceCodeBuilder().add_file("""
+module m
+  implicit none
+  logical, parameter :: use_g2g = .false.
+contains
+  subroutine main(x)
+    real, intent(inout) :: x
+    call recv(x, use_g2g=use_g2g)
+  end subroutine main
+  subroutine recv(x, use_g2g)
+    real, intent(inout) :: x
+    logical, intent(in) :: use_g2g
+  end subroutine recv
+end module m
+""").check_with_gfortran().get())
+    ast = parse_and_improve(sources)
+    ast = optimizations.const_eval_nodes(ast)
+    got = ast.tofortran()
+    # the value reference folded to the parameter's constant (not left symbolic)
+    assert "use_g2g = .FALSE." in got, got

@@ -82,8 +82,11 @@ def search_scope_spec(node: Base) -> Optional[types.SPEC]:
         return search_scope_spec(scope)
     elif isinstance(par, f03.Actual_Arg_Spec):
         kw, _ = par.children
-        if kw.string == node.string:
+        if node is kw:
             # We're describing a keyword, which is not really an identifiable object.
+            # Identity, NOT name equality: a ``kw=value`` argument whose value name
+            # happens to equal the keyword (e.g. ``use_g2g=use_g2g``) must still
+            # resolve the VALUE name to its real declaration.
             return None
     if isinstance(scope, f03.Stmt_Function_Stmt):
         stmt = scope
@@ -138,9 +141,11 @@ def search_local_alias_spec(node: f03.Name) -> Optional[types.SPEC]:
         if name.upper() in {'KIND', 'LEN'}:
             return None
     elif isinstance(par, f03.Actual_Arg_Spec):
-        # Keywords cannot be aliased.
+        # Keywords cannot be aliased.  Identity, NOT name equality: the VALUE of a
+        # ``kw=value`` argument whose value name equals the keyword (e.g.
+        # ``use_g2g=use_g2g``) is a real reference and must alias normally.
         kw, _ = par.children
-        if kw.string == node.string:
+        if node is kw:
             return None
     return scope_spec + (name, )
 
