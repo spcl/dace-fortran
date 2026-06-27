@@ -19,10 +19,9 @@ from fparser.two.utils import walk
 
 from _util import _FLANG, have_flang
 from dace_fortran.inliner.ast_desugaring.monomorphize import analyze, parse_program, UnsupportedProgram
-from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import (AxisSpec, clone_shared_interposers, monomorphize,
-                                                                      MonomorphizationSpec,
-                                                                      monomorphize_component_dispatch,
-                                                                      monomorphize_local_dispatch, retype_to_concrete)
+from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import (
+    AxisSpec, clone_shared_interposers, discover_axes, LADDER, monomorphize, monomorphize_auto, MonomorphizationSpec,
+    MonomorphizationStats, monomorphize_component_dispatch, monomorphize_local_dispatch, RETYPE, retype_to_concrete)
 
 SRC = """
 module m
@@ -925,3 +924,140 @@ def test_driver_rewrites_allocated_guard_on_laddered_component():
     assert "ALLOCATED(this % act)" not in text  # bare component query gone
     assert "this % act__tag /= 0" in text  # rewritten to the tag check
     assert "INTEGER :: act__tag = 0" in text  # tag defaults to unconstructed
+
+
+# ---------------------------------------------------------------------------
+# Auto-discovery: the default, spec-free pass (discover_axes / monomorphize_auto).
+# ---------------------------------------------------------------------------
+
+#: A single-arm abstract dispatch -- ICON's standard-build halo after the cpp
+#: pre-pass strips ``t_comm_pattern_yaxt``, leaving ONE concrete arm.  No
+#: construction site: the comm pattern is built once at model init (externalised),
+#: so the kernel only ever holds the abstract dummy.  The sound collapse is to
+#: retype to the lone arm.
+SINGLE_ARM_SRC = """
+module mo_comm
+  type, abstract :: t_comm_pattern
+  contains
+    procedure(exch_i), deferred :: exchange_data_r3d
+  end type
+  abstract interface
+    subroutine exch_i(p_pat, arr)
+      import t_comm_pattern
+      class(t_comm_pattern), intent(in) :: p_pat
+      real, intent(inout) :: arr(:)
+    end subroutine
+  end interface
+  type, extends(t_comm_pattern) :: t_comm_pattern_orig
+  contains
+    procedure :: exchange_data_r3d => orig_exchange
+  end type
+contains
+  subroutine orig_exchange(p_pat, arr)
+    class(t_comm_pattern_orig), intent(in) :: p_pat
+    real, intent(inout) :: arr(:)
+    arr = arr + 1.0
+  end subroutine
+  subroutine sync(p_pat, arr)
+    class(t_comm_pattern), intent(in) :: p_pat
+    real, intent(inout) :: arr(:)
+    call p_pat%exchange_data_r3d(arr)
+  end subroutine
+end module
+"""
+
+
+def test_discover_single_arm_picks_retype():
+    """A single-arm abstract base with live dispatch is auto-collapsed by RETYPE to
+    the lone arm -- the ICON halo case (yaxt cpp'd out)."""
+    prog = parse_program(SINGLE_ARM_SRC)
+    axes = discover_axes(prog)
+    assert len(axes) == 1
+    axis = axes[0]
+    assert axis.base == "t_comm_pattern"
+    assert axis.strategy == RETYPE
+    assert axis.concrete == "t_comm_pattern_orig"
+
+
+def test_monomorphize_auto_retypes_single_arm_dispatch():
+    """``monomorphize_auto`` (no spec) retypes the abstract dummy to the concrete arm
+    so ``p_pat%exchange_data_r3d`` becomes a static bind, leaving no ``CLASS`` outside
+    the (untouched) abstract interface signature."""
+    prog = parse_program(SINGLE_ARM_SRC)
+    stats = monomorphize_auto(prog)
+    assert stats.declarations_retyped == 1  # the `sync` dummy; the interface stays polymorphic
+    text = str(prog)
+    # the concrete dummy is now TYPE(...), and the abstract interface signature is left alone
+    sync_body = text.lower().split("subroutine sync")[1].split("end subroutine")[0]
+    assert "type(t_comm_pattern_orig)" in sync_body
+    assert "class(t_comm_pattern)" not in sync_body
+    assert "class(t_comm_pattern)" in text.lower()  # the deferred interface dummy survives
+
+
+def test_discover_no_live_dispatch_is_noop():
+    """When the dispatch has been externalised away (no ``%binding`` call survives),
+    discovery finds nothing -- so the default pass never perturbs a kernel whose
+    halo was black-boxed (the ocean policy)."""
+    # same hierarchy, but the only dispatcher's body is emptied (as make_noop would)
+    stubbed = SINGLE_ARM_SRC.replace("    call p_pat%exchange_data_r3d(arr)\n", "")
+    prog = parse_program(stubbed)
+    assert discover_axes(prog) == []
+    stats = monomorphize_auto(prog)
+    assert stats.declarations_retyped == 0 and stats.components_rewritten == 0
+
+
+def test_discover_multi_arm_with_construction_picks_ladder():
+    """Two concrete arms WITH an in-unit ``ALLOCATE(arm :: ..)`` construction site are
+    auto-collapsed by LADDER (the tag is set at construction)."""
+    prog = parse_program(COMBINED_SRC)  # container%act over t_gmres / t_cg, constructed in container_setup
+    axes = discover_axes(prog)
+    bases = {a.base: a for a in axes}
+    assert "base" in bases
+    assert bases["base"].strategy == LADDER
+
+
+def test_discover_multi_arm_without_construction_is_skipped():
+    """Two arms but NO in-unit construction: the runtime arm cannot be inferred, so
+    the axis is left polymorphic (an explicit spec must pin it) rather than guessed."""
+    # strip the only construction site (container_setup's ALLOCATEs)
+    no_ctor = COMBINED_SRC.replace("      allocate(t_gmres :: this%act)",
+                                   "      continue").replace("      allocate(t_cg :: this%act)", "      continue")
+    prog = parse_program(no_ctor)
+    axes = discover_axes(prog)
+    assert all(a.base != "base" for a in axes), "multi-arm axis with no construction must not be auto-collapsed"
+
+
+#: The abstract base + live dispatch, but NO concrete arm in the unit -- the arm
+#: is built by an externalised factory and so is absent from the closure (the
+#: ICON ocean policy).  Without an arm to retype to, the pass must be a no-op.
+_NO_ARM_SRC = """
+module mo_comm
+  type, abstract :: t_comm_pattern
+  contains
+    procedure(exch_i), deferred :: exchange_data_r3d
+  end type
+  abstract interface
+    subroutine exch_i(p_pat, arr)
+      import t_comm_pattern
+      class(t_comm_pattern), intent(in) :: p_pat
+      real, intent(inout) :: arr(:)
+    end subroutine
+  end interface
+contains
+  subroutine sync(p_pat, arr)
+    class(t_comm_pattern), intent(in) :: p_pat
+    real, intent(inout) :: arr(:)
+    call p_pat%exchange_data_r3d(arr)
+  end subroutine
+end module
+"""
+
+
+def test_discover_skips_base_without_concrete_arm():
+    """A base with deferred bindings and live dispatch but NO concrete arm present
+    (its factory is externalised) is skipped -- ``analyze`` rejects "no concrete
+    subtype" and the pass is a precise no-op.  This is the arm-present gate that
+    keeps a kernel whose halo arm is absent (ICON ocean) untouched."""
+    prog = parse_program(_NO_ARM_SRC)
+    assert discover_axes(prog) == []
+    assert monomorphize_auto(prog) == MonomorphizationStats()

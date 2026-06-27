@@ -51,6 +51,7 @@ from fparser.two.utils import Base, FortranSyntaxError, walk
 
 from dace_fortran.external_functions import ExternalFunction, dont_inline_names, validate
 from dace_fortran.inliner.ast_desugaring import (analysis, cleanup, desugaring, optimizations, pruning, types, utils)
+from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import monomorphize_auto
 from dace_fortran.inliner.ast_utils import atmost_one, children_of_type, singular
 
 logger = logging.getLogger(__name__)
@@ -210,7 +211,8 @@ class ParseConfig:
                  ast_checkpoint_dir: Union[None, str, Path] = None,
                  consolidate_global_data: bool = False,
                  rename_uniquely: bool = False,
-                 do_not_prune_type_components: bool = False):
+                 do_not_prune_type_components: bool = False,
+                 monomorphize: bool = True):
         # Make the configs canonical, by processing the various types upfront.
         if not sources:
             sources = {}
@@ -251,6 +253,12 @@ class ParseConfig:
         self.consolidate_global_data = consolidate_global_data
         self.rename_uniquely = rename_uniquely
         self.do_not_prune_type_components = do_not_prune_type_components
+        #: Run the single-level abstract-dispatch monomorphisation pass (default
+        #: on, always): collapse a ``CLASS(base)`` virtual dispatch the bridge
+        #: cannot lower into a static call.  A precise no-op when the program
+        #: has no live abstract dispatch (the common case) and when the dispatch
+        #: has been externalised away.
+        self.monomorphize = monomorphize
 
     def set_all_possible_entry_points_from(self, ast: f03.Program):
         """Treat every top-level subprogram / main program as an entry point
@@ -789,6 +797,26 @@ def run_fparser_transformations(ast: f03.Program, cfg: ParseConfig, *, optimize:
         if noop_missed:
             logger.warning("The following functions could not be found for making no-op: %s", noop_missed)
 
+    if cfg.monomorphize:
+        # Collapse single-level abstract type-bound dispatch (ICON's halo
+        # ``t_comm_pattern``) into static calls BEFORE the procedure-call
+        # deconstruction resolves them and BEFORE pruning (which, seeing a
+        # still-polymorphic dispatch, would drop the concrete arm overrides as
+        # unreferenced): a retyped concrete passed-object makes every
+        # ``p_pat%exchange_data_*`` a static bind the inliner then inlines,
+        # instead of a ``fir.dispatch`` the bridge rejects.  A precise no-op
+        # unless the unit has live abstract dispatch with a concrete arm present
+        # (a kernel whose halo is externalised, or whose arm is built by an
+        # externalised factory, has no arm to retype to).  Runs always; only the
+        # fparser path devirtualises (the regex merge cannot, and the bridge's
+        # polymorphism reject is the loud backstop if dispatch reaches it from
+        # any other path).
+        stats = monomorphize_auto(ast)
+        if any(
+            (stats.locals_rewritten, stats.components_rewritten, stats.interposers_cloned, stats.declarations_retyped)):
+            logger.debug("FParser Op: monomorphised abstract dispatch: %s", stats)
+            _checkpoint_ast(cfg, 'ast_v0b.f90', ast)
+
     logger.debug("FParser Op: Removing local indirections from AST...")
     ast = desugaring.deconstruct_enums(ast)
     ast = desugaring.deconstruct_associations(ast)
@@ -1045,6 +1073,7 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
                   checkpoint_dir: Union[None, str, Path] = None,
                   include_builtins: bool = True,
                   tolerate_external_uses: bool = False,
+                  monomorphize: bool = True,
                   optimize: bool = True) -> f03.Program:
     """Run the full inliner pipeline and return the combined fparser AST.
 
@@ -1089,6 +1118,7 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
         consolidate_global_data=consolidate_global_data,
         rename_uniquely=rename_uniquely,
         do_not_prune_type_components=do_not_prune_type_components,
+        monomorphize=monomorphize,
     )
     if include_builtins:
         cfg.sources.setdefault("_builtins.f90", BUILTINS)
@@ -1130,7 +1160,8 @@ def inline_to_single_tu(sources: Union[Dict[str, str], Iterable[Union[str, Path]
                         do_not_prune_type_components: bool = False,
                         checkpoint_dir: Union[None, str, Path] = None,
                         include_builtins: bool = True,
-                        tolerate_external_uses: bool = False) -> Path:
+                        tolerate_external_uses: bool = False,
+                        monomorphize: bool = True) -> Path:
     """Inline a multi-file Fortran project into ONE self-contained ``.f90``
     and return the path to it.
 
@@ -1179,7 +1210,8 @@ def inline_to_single_tu(sources: Union[Dict[str, str], Iterable[Union[str, Path]
                         do_not_prune_type_components=do_not_prune_type_components,
                         checkpoint_dir=checkpoint_dir,
                         include_builtins=include_builtins,
-                        tolerate_external_uses=tolerate_external_uses)
+                        tolerate_external_uses=tolerate_external_uses,
+                        monomorphize=monomorphize)
     f90 = ast.tofortran()
 
     if output is not None:

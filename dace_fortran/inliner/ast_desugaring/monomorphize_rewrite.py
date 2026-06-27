@@ -24,6 +24,7 @@ concrete allocatable per arm:
 (The shared-interposer-clone and sibling-axis retype cases build on these primitives
 and follow.)
 """
+import logging
 import re
 from dataclasses import dataclass
 from typing import List, Optional, Set, Tuple
@@ -33,9 +34,12 @@ from fparser.api import get_reader
 from fparser.two.utils import walk
 
 from dace_fortran.inliner import ast_utils
-from dace_fortran.inliner.ast_desugaring.monomorphize import analyze, MonomorphizationPlan, parse_program
+from dace_fortran.inliner.ast_desugaring.monomorphize import (analyze, MonomorphizationPlan, parse_program,
+                                                              read_type_info, UnsupportedProgram)
 from dace_fortran.inliner.ast_desugaring.utils import (append_children, find_name_of_node, prepend_children,
                                                        remove_self, replace_node)
+
+logger = logging.getLogger(__name__)
 
 SCOPES = (f03.Subroutine_Subprogram, f03.Function_Subprogram)
 
@@ -635,4 +639,288 @@ def monomorphize(program: f03.Program, spec: MonomorphizationSpec, stack_slots: 
         stats.components_rewritten += monomorphize_component_dispatch(program, plan, stack_slots)
         stats.interposers_cloned += clone_shared_interposers(program, plan)
 
+    return stats
+
+
+# ---------------------------------------------------------------------------
+# Auto-discovery: the default fparser pass.
+#
+# The driver above takes a hand-written spec.  In the inliner pipeline we want
+# monomorphisation to run *by default and always*, with no per-kernel spec --
+# so single-level abstract dispatch (ICON's halo ``t_comm_pattern``) collapses
+# to static calls the bridge can lower, and nobody has to remember to ask for
+# it.  :func:`discover_axes` finds every soundly-monomorphisable axis in a
+# program and picks its strategy; :func:`monomorphize_auto` applies them.
+# ---------------------------------------------------------------------------
+
+
+def _dispatch_binding_names(program: f03.Program) -> Set[str]:
+    """Lower-cased binding names that appear in a live type-bound dispatch
+    ``obj%binding(...)`` -- a :class:`Procedure_Designator` (a ``CALL obj%b`` or
+    a function-reference ``obj%b(...)``) anywhere in the program."""
+    names: Set[str] = set()
+    for des in walk(program, f03.Procedure_Designator):
+        names.add(str(des.children[2]).lower())
+    return names
+
+
+def _has_inunit_construction(program: f03.Program, plan: MonomorphizationPlan) -> bool:
+    """True if some arm of ``plan`` is constructed in this unit via
+    ``ALLOCATE(arm :: ...)`` -- the tag source a ladder needs.  Without it a
+    ladder would leave every tag 0 (no arm runs), so a multi-arm axis with no
+    in-unit construction is not laddered (see :func:`discover_axes`)."""
+    arms = {a.type_name.lower() for a in plan.arms}
+    for alloc in walk(program, f03.Allocate_Stmt):
+        alloc_type = alloc.children[0]
+        if alloc_type is not None and str(alloc_type).lower() in arms:
+            return True
+    return False
+
+
+def discover_axes(program: f03.Program) -> List[AxisSpec]:
+    """Find every single-level abstract dispatch axis in ``program`` that the
+    pass can soundly collapse, and pick a strategy for each.
+
+    An axis is considered only when it has *live dispatch* (a deferred binding
+    of the abstract base is actually invoked as ``obj%binding(...)``) AND its
+    concrete arm(s) are present in the unit.  The arm-present requirement is the
+    key gate: a kernel that externalises its halo (or whose concrete arm is
+    built by an externalised factory and so is absent from the closure) has no
+    arm to retype to, :func:`analyze` rejects the base, and the pass is a
+    precise no-op -- it never perturbs such a kernel.
+
+    Strategy selection (sound by construction):
+
+      * exactly one concrete arm -> :data:`RETYPE` to it (every ``CLASS(base)``
+        becomes ``TYPE(arm)``; trivially correct -- only one runtime type
+        exists).  This is ICON's standard-build halo: ``t_comm_pattern`` with
+        ``t_comm_pattern_yaxt`` cpp'd out, leaving ``t_comm_pattern_orig``.
+      * two or more arms with in-unit construction -> :data:`LADDER` over the
+        tags set at the ``ALLOCATE(arm :: ..)`` sites.
+      * two or more arms, no in-unit construction -> *skipped* (logged): the
+        runtime arm cannot be inferred, so neither retype (which one?) nor a
+        ladder (no tag) is sound.  An explicit :class:`MonomorphizationSpec`
+        must pin it.
+
+    A dispatch root outside the soundly-monomorphisable class (multi-level,
+    ``CLASS(*)`` in its own definition, a missing override) is skipped too --
+    :func:`analyze` rejects it and the rejection is swallowed per axis, leaving
+    it for downstream externalisation / the bridge's polymorphism reject."""
+    live = _dispatch_binding_names(program)
+    if not live:
+        return []
+
+    # Candidate bases: abstract dispatch roots (a type with deferred bindings)
+    # at least one of whose deferred bindings is live.
+    candidates: List[str] = []
+    for dtd in walk(program, f03.Derived_Type_Def):
+        ti = read_type_info(dtd)
+        if ti.deferred and any(d in live for d in ti.deferred):
+            candidates.append(ti.name)
+
+    axes: List[AxisSpec] = []
+    for base in sorted(set(candidates)):
+        try:
+            plans = analyze(program, only_bases=[base])
+        except UnsupportedProgram as exc:
+            logger.debug("monomorphize: skipping abstract base `%s` (not soundly monomorphisable: %s)", base, exc)
+            continue
+        if not plans:
+            continue
+        plan = plans[0]
+        if len(plan.arms) == 1:
+            axes.append(AxisSpec(base, RETYPE, concrete=plan.arms[0].type_name))
+        elif _has_inunit_construction(program, plan):
+            axes.append(AxisSpec(base, LADDER))
+        else:
+            logger.warning(
+                "monomorphize: abstract base `%s` has %d concrete arms (%s) but no in-unit construction; "
+                "cannot infer the runtime arm -- leaving the dispatch polymorphic (pin it with an explicit "
+                "MonomorphizationSpec if it must lower)", base, len(plan.arms),
+                ", ".join(a.type_name for a in plan.arms))
+    return axes
+
+
+def _module_of(program: f03.Program, type_name: str) -> Optional[f03.Module]:
+    """The :class:`Module` whose specification part defines ``type_name``."""
+    for mod in walk(program, f03.Module):
+        spec = ast_utils.atmost_one(ast_utils.children_of_type(mod, f03.Specification_Part))
+        if spec is None:
+            continue
+        for dtd in ast_utils.children_of_type(spec, f03.Derived_Type_Def):
+            if read_type_info(dtd).name == type_name.lower():
+                return mod
+    return None
+
+
+def _module_name(mod: f03.Module) -> str:
+    stmt = ast_utils.singular(ast_utils.children_of_type(mod, f03.Module_Stmt))
+    return str(stmt.children[1]).lower()
+
+
+def _toposort_type_defs(spec: f03.Specification_Part) -> None:
+    """Reorder the derived-type definitions in ``spec`` so a type appears after
+    every local type it depends on (its ``EXTENDS`` parent and any local type
+    used as a component).  After consolidation a container that was retyped to a
+    formerly-downstream arm would otherwise be "used before defined"."""
+    dtds = list(ast_utils.children_of_type(spec, f03.Derived_Type_Def))
+    if len(dtds) < 2:
+        return
+    local = {read_type_info(d).name: d for d in dtds}
+
+    def deps(dtd: f03.Derived_Type_Def) -> Set[str]:
+        ti = read_type_info(dtd)
+        out = {ti.parent} if ti.parent in local else set()
+        for ts in walk(dtd, f03.Declaration_Type_Spec):
+            tname = str(ts.children[1]).lower() if len(ts.children) > 1 else None
+            if tname in local and tname != ti.name:
+                out.add(tname)
+        return out
+
+    # Stable DFS post-order topo-sort (a back-edge from a self/cyclic ref is
+    # ignored -- it can only be a recursive pointer, which Fortran allows).
+    ordered: List[f03.Derived_Type_Def] = []
+    seen: Set[str] = set()
+    onstack: Set[str] = set()
+
+    def visit(name: str) -> None:
+        if name in seen:
+            return
+        seen.add(name)
+        onstack.add(name)
+        for d in sorted(deps(local[name])):
+            if d not in onstack:
+                visit(d)
+        onstack.discard(name)
+        ordered.append(local[name])
+
+    for d in dtds:
+        visit(read_type_info(d).name)
+
+    if [id(d) for d in ordered] == [id(d) for d in dtds]:
+        return  # already in dependency order
+    # Re-thread the spec: keep the non-type-def items in place and splice the
+    # topo-ordered type defs back in right after the USE / IMPLICIT prologue
+    # (derived-type defs must follow IMPLICIT, and precede the declarations that
+    # use them).
+    non_dtd = [c for c in spec.children if c not in dtds]
+    ins = 0
+    for i, c in enumerate(non_dtd):
+        if isinstance(c, (f03.Use_Stmt, f03.Implicit_Part)):
+            ins = i + 1
+    new_content = non_dtd[:ins] + ordered + non_dtd[ins:]
+    spec.content[:] = new_content
+    for c in new_content:
+        c.parent = spec
+
+
+def _redirect_uses(program: f03.Program, old_mod: str, new_mod: str) -> None:
+    """Rewrite every ``USE old_mod[...]`` to ``USE new_mod[...]`` (its symbols
+    now live in ``new_mod`` after a module merge); a self-``USE`` of the merged
+    module is dropped."""
+    for use in walk(program, f03.Use_Stmt):
+        nm = ast_utils.atmost_one(ast_utils.children_of_type(use, f03.Name))
+        if nm is None or str(nm).lower() != old_mod.lower():
+            continue
+        enclosing = _module_name_of(use)
+        if enclosing == new_mod.lower():
+            remove_self(use)  # the symbols are now local to this module
+        else:
+            replace_node(
+                use,
+                f03.Use_Stmt(re.sub(r'\b' + re.escape(old_mod) + r'\b', new_mod, str(use), count=1,
+                                    flags=re.IGNORECASE)))
+
+
+def consolidate_arm_module(program: f03.Program, base_type: str, arm_type: str) -> bool:
+    """Merge the module that defines ``arm_type`` into the module that defines
+    ``base_type``, so a retyped container in the base module no longer creates a
+    circular module dependency on the (formerly downstream) arm.
+
+    Moves the arm module's type definitions + declarations into the base
+    module's specification part, its procedures into the base module's
+    ``CONTAINS``, redirects every ``USE`` of the arm module to the base module,
+    drops the now-empty arm module, and topologically re-orders the merged type
+    defs.  A no-op (returns ``False``) when the two types already share a module.
+    """
+    base_mod = _module_of(program, base_type)
+    arm_mod = _module_of(program, arm_type)
+    if base_mod is None or arm_mod is None or base_mod is arm_mod:
+        return False
+    base_name, arm_name = _module_name(base_mod), _module_name(arm_mod)
+
+    base_spec = ast_utils.singular(ast_utils.children_of_type(base_mod, f03.Specification_Part))
+    arm_spec = ast_utils.atmost_one(ast_utils.children_of_type(arm_mod, f03.Specification_Part))
+
+    # 1. Move the arm spec's declarations (everything but its IMPLICIT and a
+    #    self-or-base USE) into the base spec.
+    if arm_spec is not None:
+        for child in list(arm_spec.children):
+            if isinstance(child, f03.Implicit_Part):
+                continue
+            if isinstance(child, f03.Use_Stmt):
+                nm = ast_utils.atmost_one(ast_utils.children_of_type(child, f03.Name))
+                if nm is not None and str(nm).lower() in (base_name, arm_name):
+                    continue  # base symbols are already in scope post-merge
+            remove_self(child)
+            append_children(base_spec, child)
+
+    # 2. Move the arm module's procedures into the base module's CONTAINS.  A
+    #    new ``Module_Subprogram_Part`` must be inserted BEFORE the module's
+    #    ``END MODULE`` (appending to the module would orphan it after the end
+    #    statement).
+    arm_sub = ast_utils.atmost_one(ast_utils.children_of_type(arm_mod, f03.Module_Subprogram_Part))
+    if arm_sub is not None:
+        base_sub = ast_utils.atmost_one(ast_utils.children_of_type(base_mod, f03.Module_Subprogram_Part))
+        subs = [c for c in arm_sub.children if isinstance(c, SCOPES)]
+        if base_sub is None:
+            for s in subs:
+                remove_self(s)
+            new_part = f03.Module_Subprogram_Part(
+                get_reader("contains\n" + "\n".join(s.tofortran() for s in subs) + "\n"))
+            end_stmt = ast_utils.singular(ast_utils.children_of_type(base_mod, f03.End_Module_Stmt))
+            base_mod.content.insert(base_mod.children.index(end_stmt), new_part)
+            new_part.parent = base_mod
+        else:
+            for s in subs:
+                remove_self(s)
+                append_children(base_sub, s)
+
+    # 3. Redirect USEs, drop the emptied arm module, order the merged types.
+    remove_self(arm_mod)
+    _redirect_uses(program, arm_name, base_name)
+    _toposort_type_defs(base_spec)
+
+    # 4. The retype may have rewritten ``CLASS(base)`` -> ``TYPE(arm)`` in scopes
+    #    in OTHER modules (ICON's halo wrappers live in a third module, separate
+    #    from both the base type and the arm).  Those now name the arm type but
+    #    may not import it -- it lives in the base module post-merge.  Import it.
+    for sub in walk(program, SCOPES):
+        if _module_name_of(sub) == base_name:
+            continue
+        if any(
+                len(ts.children) > 1 and str(ts.children[1]).lower() == arm_type.lower()
+                for ts in walk(sub, f03.Declaration_Type_Spec)):
+            _ensure_use(sub, base_name, arm_type)
+    return True
+
+
+def monomorphize_auto(program: f03.Program, stack_slots: bool = False) -> MonomorphizationStats:
+    """Discover and collapse every soundly-monomorphisable single-level abstract
+    dispatch axis in ``program``, in place -- the default, spec-free pass.
+
+    Returns the per-strategy rewrite counts (all-zero when the program has no
+    live abstract dispatch with a concrete arm present, the common case)."""
+    axes = discover_axes(program)
+    if not axes:
+        return MonomorphizationStats()
+    logger.debug("monomorphize: auto-collapsing %d axis(es): %s", len(axes),
+                 ", ".join(f"{a.base}->{a.strategy}" for a in axes))
+    stats = monomorphize(program, MonomorphizationSpec(axes), stack_slots=stack_slots)
+    # Co-locate each arm's definition with its base so a retyped container in the
+    # base module doesn't depend circularly on the (formerly downstream) arm.
+    for axis in axes:
+        if axis.strategy == RETYPE and axis.concrete is not None:
+            if consolidate_arm_module(program, axis.base, axis.concrete):
+                logger.debug("monomorphize: consolidated arm `%s` into base `%s`'s module", axis.concrete, axis.base)
     return stats
