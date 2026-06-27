@@ -1087,7 +1087,13 @@ def _does_part_matches(g: types.TYPE_SPEC, c: types.TYPE_SPEC) -> bool:
         return t, 1
 
     def _subsumes(b: types.SPEC, s: types.SPEC) -> bool:
-        """If `b` subsumes `s`."""
+        """If `b` subsumes `s` -- for generic resolution this is type-kind-rank
+        equality (Fortran requires an EXACT kind match to select a specific from a
+        generic interface).  ``DOUBLE PRECISION`` and ``REAL(8)`` are the same kind,
+        so the spelling is normalised before comparing widths; the widths must be
+        EQUAL, not merely ``>=`` -- otherwise a ``REAL(8)`` dummy would also match a
+        ``REAL(4)`` actual and, with first-match resolution over a generic's
+        specifics, an sp argument would wrongly bind the dp specific."""
         if b == s:
             return True
         if len(b) != 1 or len(s) != 1:
@@ -1096,7 +1102,7 @@ def _does_part_matches(g: types.TYPE_SPEC, c: types.TYPE_SPEC) -> bool:
         b, s = b[0], s[0]
         b, bw = _real_num_type(b)
         s, sw = _real_num_type(s)
-        return b == s and bw >= sw
+        return b == s and bw == sw
 
     return _subsumes(c.spec, g.spec)
 

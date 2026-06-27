@@ -1499,3 +1499,46 @@ if __name__ == "__main__":
     test_deconstruct_statement_functions()
     test_goto_statements()
     test_operator_overloading()
+
+
+def test_generic_resolution_matches_exact_real_kind():
+    """Resolving a generic interface to a specific must match the REAL KIND
+    exactly: an sp (REAL(4)) actual argument binds the sp specific, not the dp
+    (REAL(8)) one -- even when the dp specific is listed first.
+
+    Regression: the signature matcher used width subsumption (dummy width >=
+    actual width), so a REAL(8) dummy also matched a REAL(4) actual; with
+    first-match resolution an sp argument wrongly bound the dp specific (ICON's
+    mixed-precision halo `p_isend(send_buf_sp, ...)` -> p_isend_dp type mismatch)."""
+    sources, _ = (SourceCodeBuilder().add_file("""
+module m
+  implicit none
+  integer, parameter :: sp = 4, dp = 8
+  interface p_isend
+    module procedure p_isend_dp
+    module procedure p_isend_sp
+  end interface
+contains
+  subroutine p_isend_dp(buf, n)
+    real(dp), intent(in) :: buf(:)
+    integer, intent(in) :: n
+  end subroutine
+  subroutine p_isend_sp(buf, n)
+    real(sp), intent(in) :: buf(:)
+    integer, intent(in) :: n
+  end subroutine
+  subroutine kern(n)
+    integer, intent(in) :: n
+    real(sp) :: sbuf(10)
+    real(dp) :: dbuf(10)
+    call p_isend(sbuf, n)
+    call p_isend(dbuf, n)
+  end subroutine
+end module
+""").check_with_gfortran().get())
+    ast = parse_and_improve(sources)
+    ast = desugaring.deconstruct_interface_calls(ast)
+    got = ast.tofortran().lower()
+    # the sp buffer call resolves to the sp specific (exact kind), the dp to dp
+    assert "call p_isend_sp(sbuf" in got, got
+    assert "call p_isend_dp(dbuf" in got, got
