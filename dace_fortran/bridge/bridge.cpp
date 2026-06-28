@@ -20,6 +20,7 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/OwningOpRef.h"
 #include "mlir/Parser/Parser.h"
+#include "mlir/Pass/PassInstrumentation.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Pass/PassRegistry.h"
 
@@ -172,6 +173,20 @@ class HLFIRModule {
     mlir::PassManager pm(&ctx_);
     if (mlir::failed(mlir::parsePassPipeline(pipeline, pm)))
       throw std::runtime_error("run_passes: bad pipeline: " + pipeline);
+    // Diagnostic knob (DACE_HLFIR_TRACE_PASSES): print each pass name + the op
+    // it runs on to stderr as it starts, so the LAST line before a crash /
+    // verifier failure identifies the culprit pass -- the only practical way to
+    // locate a bad rewrite in a multi-minute pipeline over a huge inlined
+    // kernel.  Off unless the env var is set.
+    if (std::getenv("DACE_HLFIR_TRACE_PASSES")) {
+      struct PassTracer : public mlir::PassInstrumentation {
+        void runBeforePass(mlir::Pass* pass, mlir::Operation* op) override {
+          llvm::errs() << "HLFIR_PASS_TRACE before: " << pass->getName() << " on "
+                       << op->getName() << "\n";
+        }
+      };
+      pm.addInstrumentation(std::make_unique<PassTracer>());
+    }
     // Disable MLIR's multithreaded pass execution so every nested
     // ``OperationPass<FuncOp>`` runs serially on the same big-stack
     // worker we set up below.  With multithreading on, MLIR spins up
