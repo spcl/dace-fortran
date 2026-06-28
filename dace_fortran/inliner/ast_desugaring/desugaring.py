@@ -221,6 +221,25 @@ def deconstruct_interface_calls(ast: f03.Program) -> f03.Program:
                                                                            f03.Interface_Block)
         utils.remove_self(alias_map[ui].parent)
 
+    # Revert any temporary ``<name>_deconiface_tmp`` rename whose generic interface
+    # could NOT be resolved to a specific -- an unresolvable external generic (the
+    # ``iso_c_binding`` stub's empty ``c_loc``), or one whose signature matcher
+    # failed (a keyword-argument call to ICON's ``smooth_oncells``).  A resolved
+    # call already had its name replaced by the specific above, so only the
+    # unresolved temporaries remain; restoring the original generic name keeps
+    # valid Fortran (the generic + call compile / stay external) instead of an
+    # undefined ``_tmp`` symbol.
+    tmp_suffix = f"_{SUFFIX}_tmp"
+    for nm in list(walk(ast, f03.Name)):
+        if not nm.string.endswith(tmp_suffix):
+            continue
+        orig = nm.string[:-len(tmp_suffix)]
+        if isinstance(nm.parent, f03.Rename):
+            # The ``<name>_deconiface_tmp => <name>`` USE import: restore plain ``<name>``.
+            utils.replace_node(nm.parent, f03.Name(orig))
+        else:
+            utils.replace_node(nm, f03.Name(orig))
+
     ast = pruning.consolidate_uses(ast)
     return ast
 

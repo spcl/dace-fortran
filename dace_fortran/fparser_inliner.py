@@ -485,6 +485,14 @@ def _defined_proc_names(ast: f03.Program) -> Set[str]:
     return names
 
 
+def _interface_block_decl_names(ib: f03.Interface_Block) -> Set[str]:
+    """The lower-cased names of the procedures an ``INTERFACE`` block declares."""
+    return {
+        nm.lower()
+        for nm in (utils.find_name_of_stmt(s) for s in walk(ib, (f03.Function_Stmt, f03.Subroutine_Stmt))) if nm
+    }
+
+
 def collect_external_interfaces(ast: f03.Program) -> Dict[Tuple[str, ...], List[str]]:
     """Capture ``INTERFACE`` blocks that declare *external* procedures -- an
     explicit interface for a procedure with no definition anywhere in the
@@ -506,11 +514,7 @@ def collect_external_interfaces(ast: f03.Program) -> Dict[Tuple[str, ...], List[
         istmt = ib.children[0]
         if isinstance(istmt, f03.Interface_Stmt) and istmt.children[0] == 'ABSTRACT':
             continue
-        decl = {
-            nm
-            for nm in (utils.find_name_of_stmt(s) for s in walk(ib, (f03.Function_Stmt, f03.Subroutine_Stmt))) if nm
-        }
-        decl = {n.lower() for n in decl}
+        decl = _interface_block_decl_names(ib)
         # Skip a generic interface (no procedure bodies -> ``MODULE PROCEDURE``)
         # and any interface a locally-defined procedure backs (the pipeline
         # resolves / inlines that one correctly).
@@ -537,6 +541,22 @@ def restore_external_interfaces(ast: f03.Program, captured: Dict[Tuple[str, ...]
         if not blocks:
             continue
         spec = atmost_one(children_of_type(scope, f03.Specification_Part))
+        # The pipeline may have left a MANGLED in-place copy of a captured block
+        # (``remove_access_and_bind_statements`` strips its ``BIND(C)``, const-eval
+        # folds its kinds) which no longer matches the verbatim capture -- so it
+        # would not be deduped by text and the restore would add a SECOND
+        # declaration of the same external procedure (a compile error).  Drop any
+        # existing block that overlaps a captured block's procedure names first;
+        # the verbatim capture re-added below is the single source of truth.
+        captured_names = {
+            n
+            for text in blocks
+            for n in _interface_block_decl_names(f03.Interface_Block(get_reader(text)))
+        }
+        if spec is not None:
+            for ib in list(walk(spec, f03.Interface_Block)):
+                if _interface_block_decl_names(ib) & captured_names:
+                    utils.remove_self(ib)
         present = {str(ib) for ib in walk(spec, f03.Interface_Block)} if spec is not None else set()
         for text in blocks:
             if text in present:
@@ -1230,7 +1250,18 @@ def inline_to_single_tu(sources: Union[Dict[str, str], Iterable[Union[str, Path]
                         tolerate_external_uses=tolerate_external_uses,
                         monomorphize=monomorphize,
                         rename_specifics=rename_specifics)
+    # Drop the injected intrinsic-module stubs (``iso_c_binding`` / ``iso_fortran_env``)
+    # before serialising: they exist only so ``USE`` resolves during parsing, but a
+    # PARTIAL stub (the ``iso_c_binding`` one defines just ``c_int``) shadows the real
+    # intrinsic at compile time, so a kept C-interop ``USE iso_c_binding, ONLY: c_ptr``
+    # would fail to resolve ``c_ptr``.  Removed, a plain ``USE`` falls back to the
+    # compiler's intrinsic module -- exactly as the whole-project merge path does.
+    ast = strip_builtin_stub_modules(ast)
     f90 = ast.tofortran()
+    # fparser serialises a no-argument ``SUBROUTINE foo() BIND(C)`` without its
+    # (mandatory) empty parentheses; restore them on the final text so an emitted
+    # external C interface (ICON's ``util_abort``) compiles.
+    f90 = re.sub(r'(?im)^(\s*SUBROUTINE\s+\w+)\s+(BIND\s*\()', r'\1() \2', f90)
 
     if output is not None:
         out_path = Path(output)

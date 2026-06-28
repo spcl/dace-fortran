@@ -1542,3 +1542,35 @@ end module
     # the sp buffer call resolves to the sp specific (exact kind), the dp to dp
     assert "call p_isend_sp(sbuf" in got, got
     assert "call p_isend_dp(dbuf" in got, got
+
+
+def test_interface_replacer_reverts_unresolvable_generic():
+    """A call to a generic interface that CANNOT be resolved to a specific -- an
+    external generic with no in-project candidate (the injected ``iso_c_binding``
+    stub's empty ``INTERFACE c_loc``), or one whose signature matcher fails -- must
+    have its temporary ``<name>_deconiface_tmp`` rename REVERTED, leaving the
+    original generic name (valid Fortran resolved by the compiler), not a dangling
+    ``_deconiface_tmp`` symbol."""
+    sources, _ = (SourceCodeBuilder().add_file("""
+module ext
+  implicit none
+  interface op  ! external generic: no candidate to resolve to
+  end interface op
+end module ext
+
+module use_ext
+  use ext, only: op
+  implicit none
+contains
+  subroutine kern(x)
+    real, intent(inout) :: x
+    x = op(x)
+  end subroutine
+end module use_ext
+""").get())
+    ast = parse_and_improve(sources)
+    ast = desugaring.deconstruct_interface_calls(ast)
+    got = ast.tofortran().lower()
+    assert "deconiface_tmp" not in got, got
+    assert "x = op(x)" in got, got
+    assert "only: op" in got, got

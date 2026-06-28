@@ -449,6 +449,82 @@ END SUBROUTINE main
     SourceCodeBuilder().add_file(got).check_with_gfortran()
 
 
+def test_use_consolidation_keeps_host_associated_import_for_specless_subprogram():
+    """A module-level ``USE`` whose symbol is host-associated into a contained
+    subprogram that has NO ``Specification_Part`` (a body of only host-associated
+    references -- ICON's ``mo_mpi`` ``abort_mpi`` referencing ``mpi_comm_world``)
+    must be retained at the module level: the subprogram has nowhere to host the
+    import, so consolidating it away would dangle the symbol."""
+    sources, _ = (SourceCodeBuilder().add_file("""
+module consts
+  implicit none
+  integer, parameter :: kk = 7
+end module consts
+
+module lib
+  use consts
+  implicit none
+  integer :: out
+contains
+  subroutine s  ! no Specification_Part: only a host-associated reference
+    out = kk
+  end subroutine s
+end module lib
+
+subroutine main
+  use lib, only: s
+  call s
+end subroutine main
+""").check_with_gfortran().get())
+    ast = parse_and_improve(sources)
+    ast = pruning.consolidate_uses(ast)
+    got = ast.tofortran()
+    # `kk` stays resolvable: the module-level `use consts` survives (it is the
+    # only place the host-associated `kk` can be imported), so the serialised
+    # Fortran still compiles rather than referencing an undefined `kk`.
+    assert "USE consts" in got
+    assert "out = kk" in got
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
+
+
+def test_prune_keeps_specifics_of_referenced_generic_interface():
+    """A call that references a generic INTERFACE which was NOT resolved to a
+    specific (``deconstruct_interface_calls`` could not pick one -- a keyword-arg
+    call to ICON's ``smooth_oncells``) must keep the interface's ``MODULE
+    PROCEDURE`` specifics, so the generic stays bindable instead of emptied to a
+    dangling interface.  Here the call is left generic (no deconstruct pass)."""
+    sources, _ = (SourceCodeBuilder().add_file("""
+module m
+  implicit none
+  interface gen
+    module procedure spec_a
+    module procedure spec_b
+  end interface
+contains
+  subroutine spec_a(x)
+    real, intent(inout) :: x(:)
+    x = x + 1.0
+  end subroutine
+  subroutine spec_b(x)
+    real, intent(inout) :: x(:, :)
+    x = x + 1.0
+  end subroutine
+  subroutine caller(y)
+    real, intent(inout) :: y(:)
+    call gen(y)
+  end subroutine
+end module m
+""").check_with_gfortran().get())
+    ast = parse_and_improve(sources)
+    # No deconstruct_interface_calls: ``gen(y)`` stays a reference to the generic.
+    ast = pruning.prune_unused_objects(ast, [("m", "caller")])
+    got = ast.tofortran()
+    # Both specifics survive (kept via the interface), so the generic compiles.
+    assert "SUBROUTINE spec_a" in got, got
+    assert "SUBROUTINE spec_b" in got, got
+    SourceCodeBuilder().add_file(got).check_with_gfortran()
+
+
 if __name__ == "__main__":
     test_branch_pruning()
     test_object_pruning()
@@ -458,3 +534,5 @@ if __name__ == "__main__":
     test_use_consolidation_with_potential_ambiguity()
     test_use_consolidation_with_type_extension()
     test_uses_allows_indirect_aliasing()
+    test_use_consolidation_keeps_host_associated_import_for_specless_subprogram()
+    test_prune_keeps_specifics_of_referenced_generic_interface()

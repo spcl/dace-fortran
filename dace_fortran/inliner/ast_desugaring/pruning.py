@@ -13,6 +13,20 @@ from . import analysis
 from .. import ast_utils
 
 
+def _nearest_scope_with_spec_part(node: Base) -> Optional[Base]:
+    """The nearest enclosing scope (module / main program / subprogram) of
+    ``node`` that has a ``Specification_Part``.  A consolidated ``USE`` can only
+    live in such a scope; a contained subprogram whose body is only
+    host-associated references has none, so its imports bubble up to here."""
+    p: Optional[Base] = node
+    while p is not None:
+        if isinstance(p, (f03.Module, f03.Main_Program, f03.Function_Subprogram, f03.Subroutine_Subprogram)):
+            if any(isinstance(c, f03.Specification_Part) for c in p.children):
+                return p
+        p = p.parent
+    return None
+
+
 def consolidate_uses(ast: f03.Program, alias_map: Optional[types.SPEC_TABLE] = None) -> f03.Program:
     """
     Rewrites all `USE` statements in the program to be more explicit.
@@ -54,8 +68,13 @@ def consolidate_uses(ast: f03.Program, alias_map: Optional[types.SPEC_TABLE] = N
             box = alias_map[sc_spec].parent
             if box is not sp.parent and isinstance(
                     box, (f03.Function_Subprogram, f03.Subroutine_Subprogram, f03.Main_Program)):
-                # If `nm` is imported, it should happen in a deeper subprogram.
-                continue
+                # `nm` is used in a deeper subprogram: consolidate it there, when
+                # that subprogram's own Specification_Part is processed -- UNLESS
+                # it has none (a body of only host-associated references), in
+                # which case the import must be retained at the nearest enclosing
+                # scope that does (here), or it would be dropped and dangle.
+                if _nearest_scope_with_spec_part(box) is not sp.parent:
+                    continue
             spec = analysis.search_real_ident_spec(nm.string, sc_spec, alias_map)
             if not spec or spec not in alias_map:
                 continue
@@ -332,8 +351,7 @@ def prune_dangling_interface_bodies(ast: f03.Program) -> f03.Program:
         if not isinstance(body.parent, f03.Interface_Block):
             continue
         host_scope = analysis.find_scope_spec(body.parent)
-        if any(analysis.search_real_ident_spec(nm.string, host_scope, alias_map) is None
-               for nm in walk(imp, f03.Name)):
+        if any(analysis.search_real_ident_spec(nm.string, host_scope, alias_map) is None for nm in walk(imp, f03.Name)):
             utils.remove_self(body)
     # Drop generic-interface ``MODULE PROCEDURE`` members whose target subprogram
     # was pruned away.  Reachability resolves a call ``init(x)`` to its specific
@@ -408,8 +426,14 @@ def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC]) -> f03.Pro
             for j in reversed(range(len(scope_spec))):
                 anc_spec = scope_spec[:j + 1]
                 if anc_spec in survivors: continue
+                # A scope spec can carry the synthetic ``INTERFACE_NAMESPACE``
+                # pseudo-segment, which namespaces interface members but is not
+                # itself an object -- so it is absent from ``alias_map``.  Skip
+                # any ancestor that does not resolve (mirrors the ``nm_spec``
+                # guard below) rather than indexing it blindly.
+                anc_node = alias_map.get(anc_spec)
+                if anc_node is None: continue
                 survivors.add(anc_spec)
-                anc_node = alias_map[anc_spec]
                 if isinstance(anc_node, PRUNABLE_OBJECT_CLASSES):
                     _keep_from(anc_node.parent)
 
@@ -417,6 +441,16 @@ def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC]) -> f03.Pro
             survivors.add(nm_spec)
             keep_node = alias_map[nm_spec]
             if isinstance(keep_node, PRUNABLE_OBJECT_CLASSES):
+                _keep_from(keep_node.parent)
+            elif isinstance(keep_node, f03.Interface_Stmt):
+                # A reference to a generic INTERFACE that survived UNRESOLVED
+                # (deconstruct_interface_calls could not pick a specific -- a
+                # keyword-argument call to ICON's ``smooth_oncells``) keeps the
+                # whole interface block: its ``MODULE PROCEDURE`` names recurse to
+                # the candidate specifics, so the interface stays bindable rather
+                # than being emptied to a dangling generic.  A resolved generic is
+                # unused (its calls now name the specific), so this never fires for
+                # it.
                 _keep_from(keep_node.parent)
         # Component accesses keep the components they touch.  A pointer-component
         # WRITE ``this % comp => x`` puts ``this % comp`` on the LHS of ``=>``,

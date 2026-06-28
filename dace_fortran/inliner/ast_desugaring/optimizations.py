@@ -160,6 +160,16 @@ def make_practically_constant_arguments_constants(ast: f03.Program, keepers: Lis
             # generic, or a ``dbg_print`` reached from dead code): a generic has
             # no dummy-argument list of its own, so there is nothing to analyse.
             continue
+        anc = fnstmt.parent
+        while anc is not None and not isinstance(anc, f03.Interface_Block):
+            anc = anc.parent
+        if anc is not None:
+            # The call resolves to a procedure declared in an INTERFACE block --
+            # an EXTERNAL (e.g. BIND(C)) declaration with no body in this project
+            # (ICON's ``util_exit`` / ocean C externals).  Like the generic case
+            # above there is nothing to fold (a later pass reaching its non-existent
+            # Execution_Part would assert); skip it.
+            continue
         fnspec = analysis.ident_spec(fnstmt)
         if fnspec in keepers:
             # The "entry-point" functions arguments are fair game for external usage.

@@ -491,6 +491,67 @@ end module drv
     assert _compiles(out)
 
 
+def test_external_interface_not_duplicated_after_pipeline_mangles_inplace():
+    """The full single-TU path (``optimize=True``) processes a call to an
+    external interface (``deconstruct_interface_calls`` renames it, const-eval
+    folds the interface body's kinds, ``remove_access_and_bind_statements``
+    strips its ``BIND(C)``) so the in-place copy no longer matches the verbatim
+    captured original.  ``restore_external_interfaces`` must drop that mangled
+    copy and re-add exactly one declaration -- and a no-argument ``BIND(C)``
+    subroutine must keep its (fparser-dropped) ``()``.  This is the ICON
+    ``mo_mpi`` -> ``mo_util_system`` (``util_exit`` / ``util_abort``) pattern."""
+    from dace_fortran.fparser_inliner import inline_to_single_tu
+    sources = {
+        "s.f90":
+        """
+module mo_util_system
+  use iso_c_binding, only: c_int
+  implicit none
+  interface
+    subroutine util_exit(exit_no) bind(C)
+      import c_int
+      implicit none
+      integer(c_int), value :: exit_no
+    end subroutine util_exit
+    subroutine util_abort() bind(C)
+      implicit none
+    end subroutine util_abort
+  end interface
+end module mo_util_system
+
+module mo_mpi
+  use mo_util_system, only: util_exit, util_abort
+  implicit none
+contains
+  subroutine abort_mpi  ! no Specification_Part: only host-associated externals
+    call util_abort()
+    call util_exit(1)
+  end subroutine abort_mpi
+end module mo_mpi
+
+module m_driver
+contains
+  subroutine run()
+    use mo_mpi, only: abort_mpi
+    call abort_mpi()
+  end subroutine run
+end module m_driver
+""",
+    }
+    with TemporaryDirectory() as td:
+        tu = inline_to_single_tu(sources,
+                                 entry="m_driver::run",
+                                 out_dir=Path(td),
+                                 name="tu",
+                                 tolerate_external_uses=True)
+        out = Path(tu).read_text()
+    # Exactly one declaration of the external ``util_exit`` survives.
+    assert len(re.findall(r"(?im)^\s*SUBROUTINE\s+util_exit\b", out)) == 1, out
+    # The no-arg ``util_abort`` keeps the parentheses ``BIND(C)`` requires.
+    assert re.search(r"(?im)^\s*SUBROUTINE\s+util_abort\s*\(\s*\)\s+BIND", out), out
+    assert _compiles(out)
+
+
 # --------------------------------------------------------------------------
 # strip_builtin_stub_modules
 # --------------------------------------------------------------------------
