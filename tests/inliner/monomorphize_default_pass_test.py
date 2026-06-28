@@ -268,3 +268,86 @@ def test_retype_consolidates_into_types_only_base_with_third_module_wrapper(tmp_
     src.write_text(out)
     subprocess.check_call(["gfortran", "-fsyntax-only", "-ffree-line-length-none", "consolidated3.f90"],
                           cwd=str(tmp_path))
+
+
+#: The arm type is referenced by a COMPONENT of a type in YET ANOTHER module
+#: (``m_domain``'s ``t_patch`` holds a ``CLASS(t_base), POINTER :: comm`` -- ICON's
+#: ``mo_model_domain``'s ``t_patch%comm_pat_*``).  After the retype the component
+#: names the arm, and consolidation must import the arm into ``m_domain`` at the
+#: MODULE level so the type definition sees it (host association then covers any
+#: subprograms in that module too).
+_CYCLE_COMPONENT_SRC = """
+module m_types
+  implicit none
+  type, abstract :: t_base
+  contains
+    procedure(ie), deferred :: exch
+  end type
+  abstract interface
+    subroutine ie(p,a)
+      import t_base
+      class(t_base), intent(in) :: p
+      real, intent(inout) :: a(:)
+    end subroutine
+  end interface
+end module
+module m_orig
+  use m_types
+  implicit none
+  type, extends(t_base) :: t_orig
+  contains
+    procedure :: exch => orig_exch
+  end type
+contains
+  subroutine orig_exch(p, a)
+    class(t_orig), intent(in) :: p
+    real, intent(inout) :: a(:)
+    a = a + 1.0
+  end subroutine
+end module
+module m_domain
+  use m_types
+  implicit none
+  type :: t_patch
+    class(t_base), pointer :: comm => null()
+  end type
+end module
+module m_wrap
+  use m_types
+  implicit none
+contains
+  subroutine wrap(p, a)
+    class(t_base), intent(in) :: p
+    real, intent(inout) :: a(:)
+    call p%exch(a)
+  end subroutine
+end module
+module m_use
+  use m_types
+  use m_orig
+  use m_domain
+  use m_wrap
+  implicit none
+contains
+  subroutine kern(pt, a)
+    type(t_patch), intent(in) :: pt
+    real, intent(inout) :: a(:)
+    call wrap(pt%comm, a)
+  end subroutine
+end module
+"""
+
+
+@pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
+def test_retype_imports_arm_into_module_with_component(tmp_path: Path):
+    """When the arm type is used as a type COMPONENT in a separate module
+    (``mo_model_domain``'s ``t_patch%comm_pat_*`` shape), consolidation imports the
+    arm into that module so the type def resolves it -- producing compilable
+    Fortran."""
+    ast = inline_to_ast({"s.f90": _CYCLE_COMPONENT_SRC}, entry="m_use::kern")
+    out = ast.tofortran()
+    assert "module m_orig" not in out.lower()
+    assert not walk(ast, f03.Procedure_Designator)
+    src = tmp_path / "comp.f90"
+    src.write_text(out)
+    subprocess.check_call(["gfortran", "-fsyntax-only", "-ffree-line-length-none", "comp.f90"], cwd=str(tmp_path))

@@ -891,17 +891,20 @@ def consolidate_arm_module(program: f03.Program, base_type: str, arm_type: str) 
     _redirect_uses(program, arm_name, base_name)
     _toposort_type_defs(base_spec)
 
-    # 4. The retype may have rewritten ``CLASS(base)`` -> ``TYPE(arm)`` in scopes
-    #    in OTHER modules (ICON's halo wrappers live in a third module, separate
-    #    from both the base type and the arm).  Those now name the arm type but
-    #    may not import it -- it lives in the base module post-merge.  Import it.
-    for sub in walk(program, SCOPES):
-        if _module_name_of(sub) == base_name:
+    # 4. The retype may have rewritten ``CLASS(base)`` -> ``TYPE(arm)`` anywhere in
+    #    OTHER modules: in a halo wrapper's dummy (a third module's subprogram) AND
+    #    in a type COMPONENT (ICON's ``t_patch%comm_pat_*`` in ``mo_model_domain``).
+    #    Those now name the arm type but may not import it -- it lives in the base
+    #    module post-merge.  Import it at the MODULE level (host association then
+    #    covers the module's subprograms too).
+    arm_l = arm_type.lower()
+    for mod in walk(program, f03.Module):
+        if _module_name(mod) == base_name:
             continue
         if any(
-                len(ts.children) > 1 and str(ts.children[1]).lower() == arm_type.lower()
-                for ts in walk(sub, f03.Declaration_Type_Spec)):
-            _ensure_use(sub, base_name, arm_type)
+                len(ts.children) > 1 and str(ts.children[1]).lower() == arm_l
+                for ts in walk(mod, f03.Declaration_Type_Spec)):
+            _ensure_use(mod, base_name, arm_type)
     return True
 
 
