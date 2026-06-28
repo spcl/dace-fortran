@@ -1,34 +1,17 @@
-"""Shared configuration for the ICON atmosphere dynamical-core
-``input -> single TU`` extraction (``mo_solve_nonhydro::solve_nh``).
+"""ICON atmosphere ``solve_nonhydro`` ``input -> single TU`` extraction config.
 
-This mirrors the ocean harness (:mod:`icon.ocean._ocean_harness`) but for the
-atmosphere solver, with one deliberate difference: the halo exchange
-(``sync_patch_array`` / ``exchange_data``) is **inlined**, not externalised.
+The solver extracts in two halo modes (see :mod:`icon._halo_modes`):
+``external`` black-boxes ``sync_patch_array`` / ``exchange_data``; ``inlined``
+inlines the halo and devirtualises the ``t_comm_pattern`` dispatch, leaving only
+the MPI point-to-point.  The single concrete arm comes for free under the
+standard CPU defines: ``t_comm_pattern_yaxt`` lives behind ``#ifdef HAVE_YAXT``
+(undefined), so the cpp pre-pass leaves only ``t_comm_pattern_orig`` for the
+default monomorphisation pass to retype to.
 
-ICON's halo dispatches through the abstract ``t_comm_pattern`` over two arms --
-``t_comm_pattern_orig`` and ``t_comm_pattern_yaxt`` -- but ``t_comm_pattern_yaxt``
-lives entirely behind ``#ifdef HAVE_YAXT`` (module body, both factory
-``ALLOCATE`` arms, the ``TYPE IS`` selector).  The standard CPU build does not
-define ``HAVE_YAXT``, so after the cpp pre-pass only ``t_comm_pattern_orig``
-remains -- a single concrete arm.  The inliner's default monomorphisation pass
-(:func:`dace_fortran.inliner.ast_desugaring.monomorphize_rewrite.monomorphize_auto`)
-then retypes ``CLASS(t_comm_pattern)`` to ``TYPE(t_comm_pattern_orig)``, turning
-``p_pat%exchange_data_*`` into a static call the inliner inlines -- so the pack
-loop lands inline and the only thing left at the halo boundary is the raw MPI
-point-to-point (mapped to ``dace.libraries.mpi`` libnodes when the TU is lowered
-to an SDFG, exactly as ``tests/sync_devirt_mpi_libnode_test.py`` proves in
-miniature).
-
-What stays external is only the genuine leaves: terminal I/O + timers
-(``do_not_emit``), the MPI *collectives* (``p_max`` / ``p_min`` / ``p_sum`` /
-``p_barrier`` -- global reductions / barriers, no per-cell numerics), the
-comm-pattern *construction* (``setup_comm_pattern`` -- pure comm-topology setup
-done once at model init, its result a marshalled input), and
-``velocity_tendencies`` (the inner kernel, separately bound at link time).
-
-This chat owns the ``input -> single TU`` stage only; lowering the TU to an SDFG
-is a separate concern.  The extraction is slow (the merged closure is ~140k
-lines) and memory-heavy, so it runs in a memory-capped subprocess.
+Non-halo externals (both modes): the inner ``velocity_tendencies`` kernel
+(separately bound), the MPI collectives, the comm-pattern construction, and
+terminal I/O / timers.  Slow (~140k-line closure) and memory-heavy, so the
+extraction runs in a memory-capped subprocess.
 """
 import os
 import shutil

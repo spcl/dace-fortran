@@ -88,32 +88,14 @@ OCEAN_DEFINES = [
     "NO_MPI_CHOICE_ARG",
 ]
 
-#: ICON service procedures that are genuinely external to a compute kernel and
-#: must NOT be inlined.  The unified external-function policy (see
-#: :mod:`dace_fortran.external_functions`) splits them into two collections,
-#: declared ONCE here and consumed by both inliner engines and the bridge:
-#:
-#: * ``OCEAN_EXTERNAL_FUNCTIONS`` -- don't-inline + the bridge EMITs an external
-#:   call (the MPI halo exchange: the real boundary of a standalone kernel).
-#: * ``OCEAN_DO_NOT_EMIT`` -- don't-inline + the bridge DROPs the call (terminal
-#:   read/write error/log I/O and timers: pure side-effects, no numerics).
-#:
-#: At the inliner both lists are stubbed identically (opener+spec+END kept, body
-#: emptied via ``make_noop``) so their MPI / type-bound-procedure / I/O internals
-#: never enter the TU.  Everything else -- including the real operators a kernel
-#: calls such as ``get_index_range`` and ``rot_vertex_ocean_3d`` -- is INLINED.
-#: Declared MANUALLY (the inliner hardcodes nothing); ocean kernels that don't
-#: call any of these (e.g. the PPM block kernel) are simply unaffected.  The
-#: solver-subsystem entries (``ocean_solve_*`` / ``*_construct``) are needed only
-#: by the full dynamical-core driver, whose core is built on Fortran VIRTUAL
-#: DISPATCH that neither our inliner nor flang can turn into static dataflow, so
-#: the whole subsystem is externalised as one opaque black box (pinned by
+#: NON-HALO ocean externals (don't-inline; the bridge emits an external call).
+#: The HALO subset (``sync_patch_array`` / ``sync_patch_array_mult`` /
+#: ``exchange_data``) is added per mode by :func:`ocean_config` -- "external"
+#: black-boxes it (the callback boundary), "inlined" devirtualises it leaving
+#: only the MPI point-to-point.  The solver subsystem (``ocean_solve_*`` /
+#: ``*_construct``) is built on Fortran virtual dispatch neither the inliner nor
+#: flang can statically lower, so it stays one opaque black box (pinned by
 #: ``tests/hlfir_devirtualization_test.py``).
-#: NON-HALO ocean externals.  The HALO subset (``sync_patch_array`` /
-#: ``sync_patch_array_mult`` / ``exchange_data``) is added per mode by
-#: :func:`ocean_config` -- "external" black-boxes the halo (the current ocean
-#: policy / the callback boundary), "inlined" devirtualises it leaving only the
-#: MPI point-to-point (the atmosphere policy).  Both must extract to a compiling TU.
 OCEAN_BASE_EXTERNAL_FUNCTIONS = [
     ExternalFunction("work_mpi_barrier"),  # MPI collective barrier (mo_mpi: MPI_Barrier)
     ExternalFunction("p_barrier"),  # MPI collective barrier (mo_mpi wrapper, timer-gated)
