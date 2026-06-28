@@ -97,11 +97,6 @@ OCEAN_DEFINES = [
 #: flang can statically lower, so it stays one opaque black box (pinned by
 #: ``tests/hlfir_devirtualization_test.py``).
 OCEAN_BASE_EXTERNAL_FUNCTIONS = [
-    ExternalFunction("work_mpi_barrier"),  # MPI collective barrier (mo_mpi: MPI_Barrier)
-    ExternalFunction("p_barrier"),  # MPI collective barrier (mo_mpi wrapper, timer-gated)
-    ExternalFunction("p_max"),  # MPI global reduction (mo_mpi: MPI_Allreduce, MPI_MAX)
-    ExternalFunction("p_min"),  # MPI global reduction (mo_mpi: MPI_Allreduce, MPI_MIN)
-    ExternalFunction("p_sum"),  # MPI global reduction (mo_mpi: MPI_Allreduce, MPI_SUM)
     ExternalFunction("setup_comm_pattern"),  # MPI comm-pattern INIT (deferred p_pat%setup on abstract t_comm_pattern,
     #                                          mo_communication_factory): pure comm-topology setup, no numerics
     ExternalFunction("ocean_solve_construct"),  # runtime factory (ALLOCATE+dispatch); ONCE (is_init guard)
@@ -116,6 +111,7 @@ OCEAN_BASE_EXTERNAL_FUNCTIONS = [
 #: DON'T-EMIT = externalised (NOT inlined) and the bridge DROPs the call: pure
 #: side-effects with no numerics -- terminal I/O (debug / error / log) and timers.
 OCEAN_DO_NOT_EMIT = [
+    "work_mpi_barrier",  # timer-gated MPI barrier -- pure profiling sync, no numerics
     "dbg_print",  # terminal write (debug print)
     "finish",
     "message",
@@ -151,6 +147,7 @@ def ocean_config(halo_mode: str) -> dict:
         make_return_false=OCEAN_BASE_RETURN_FALSE + h["return_false"],
         do_not_emit=OCEAN_DO_NOT_EMIT,
         defines=OCEAN_DEFINES,
+        extra_sources=h["extra_sources"],
     )
 
 

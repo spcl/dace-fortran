@@ -68,6 +68,9 @@ def main(argv):
         # until the retype makes the arm genuinely reachable (its exchange bodies
         # inlined), after which normal pruning keeps exactly what is needed.
         sources = {str(mp): merged}
+        for name, content in cfg["extra_sources"].items():
+            sources[str(out_dir / name)] = content
+            log(f"  spliced extra source {name} ({len(content.splitlines())} lines)")
         entry_mod = entry.split("::")[0]
         use_lines = []
         for rel in cfg["force_include"]:
@@ -109,10 +112,15 @@ def main(argv):
         cdir.mkdir(exist_ok=True)
         cf = cdir / Path(tu).name
         shutil.copy(tu, cf)
-        r = subprocess.run(["gfortran", "-fsyntax-only", "-ffree-line-length-none", cf.name],
-                           cwd=str(cdir),
-                           capture_output=True,
-                           text=True)
+        # ``-fallow-argument-mismatch``: the inlined halo leaves raw, interface-less
+        # ``mpi_*`` calls whose buffer argument is REAL(8) / REAL(4) / INTEGER / a
+        # scalar or array across the type-specific wrappers -- exactly the
+        # type-generic external every real MPI build compiles with this flag.
+        r = subprocess.run(
+            ["gfortran", "-fsyntax-only", "-ffree-line-length-none", "-fallow-argument-mismatch", cf.name],
+            cwd=str(cdir),
+            capture_output=True,
+            text=True)
         if r.returncode != 0:
             print(r.stderr[-6000:], flush=True)
             print(f"RESULT: FAIL compile after {time.time()-t0:.0f}s", flush=True)

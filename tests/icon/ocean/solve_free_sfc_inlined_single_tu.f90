@@ -4,6 +4,14 @@ MODULE mo_dbg_nml
   NAMELIST /dbg_index_nml/ idbg_mxmn
   CONTAINS
 END MODULE mo_dbg_nml
+MODULE mo_decomposition_tools
+  IMPLICIT NONE
+  TYPE :: t_grid_domain_decomp_info
+    INTEGER, ALLOCATABLE :: glb_index(:)
+    INTEGER, POINTER :: decomp_domain(:, :)
+  END TYPE
+  CONTAINS
+END MODULE mo_decomposition_tools
 MODULE mo_dynamics_config
   IMPLICIT NONE
   INTEGER :: nold(10)
@@ -44,12 +52,330 @@ MODULE mo_ext_data_types
   TYPE :: t_external_data
   END TYPE t_external_data
 END MODULE mo_ext_data_types
+MODULE mo_grid_config
+  IMPLICIT NONE
+  INTEGER :: n_dom
+  CONTAINS
+END MODULE mo_grid_config
+MODULE mo_impl_constants
+  IMPLICIT NONE
+  INTEGER, PARAMETER :: max_char_length = 1024
+END MODULE mo_impl_constants
+MODULE mo_io_units
+  IMPLICIT NONE
+  INTEGER, PARAMETER :: filename_max = 1024
+  CONTAINS
+  FUNCTION find_next_free_unit(istart, istop) RESULT(iunit)
+    INTEGER :: iunit
+    INTEGER, INTENT(IN) :: istart, istop
+    INTEGER :: kstart, kstop
+    LOGICAL :: lfound, lopened
+    INTEGER :: i
+    lfound = .FALSE.
+    kstart = 10
+    kstop = 99
+    DO i = kstart, kstop
+      INQUIRE(UNIT = i, OPENED = lopened)
+      IF (.NOT. lopened) THEN
+        iunit = i
+        lfound = .TRUE.
+        EXIT
+      END IF
+    END DO
+    IF (.NOT. lfound) THEN
+      iunit = (- 1)
+    END IF
+  END FUNCTION find_next_free_unit
+END MODULE mo_io_units
+MODULE mo_master_config
+  IMPLICIT NONE
+  CONTAINS
+  LOGICAL FUNCTION isrestart()
+    isrestart = .FALSE.
+  END FUNCTION isrestart
+  LOGICAL FUNCTION isinitfromrestart()
+    isinitfromrestart = .FALSE.
+  END FUNCTION isinitfromrestart
+END MODULE mo_master_config
+MODULE mo_math_types
+  USE iso_c_binding, ONLY: c_int64_t
+  IMPLICIT NONE
+  TYPE :: t_cartesian_coordinates
+    REAL(KIND = 8) :: x(3)
+  END TYPE t_cartesian_coordinates
+  TYPE :: t_geographical_coordinates
+    REAL(KIND = 8) :: lon
+    REAL(KIND = 8) :: lat
+  END TYPE t_geographical_coordinates
+  CONTAINS
+END MODULE mo_math_types
+MODULE mo_ocean_initialization
+  IMPLICIT NONE
+  CONTAINS
+  FUNCTION is_initial_timestep(timestep)
+    USE mo_master_config, ONLY: isinitfromrestart, isrestart
+    INTEGER :: timestep
+    LOGICAL :: is_initial_timestep
+    IF (timestep == 1 .AND. .NOT. (isrestart() .OR. isinitfromrestart())) THEN
+      is_initial_timestep = .TRUE.
+    ELSE
+      is_initial_timestep = .FALSE.
+    END IF
+  END FUNCTION is_initial_timestep
+END MODULE mo_ocean_initialization
+MODULE mo_ocean_nml
+  IMPLICIT NONE
+  INTEGER :: n_zlev
+  INTEGER :: i_bc_veloc_lateral = 0
+  INTEGER :: i_bc_veloc_top = 1
+  INTEGER :: i_bc_veloc_bot = 1
+  LOGICAL :: use_ssh_in_momentum_eq = .TRUE.
+  INTEGER :: nonlinearcoriolis_type = 200
+  LOGICAL :: l_anticipated_vorticity = .FALSE.
+  INTEGER :: iswm_oce = 0
+  REAL(KIND = 8) :: ab_const = 0.1D0
+  REAL(KIND = 8) :: ab_beta = 0.6D0
+  REAL(KIND = 8) :: ab_gam = 0.6D0
+  REAL(KIND = 8) :: solver_tolerance = 1D-14
+  REAL(KIND = 8) :: massmatrix_solver_tolerance = 1D-11
+  INTEGER :: solver_max_restart_iterations = 100
+  INTEGER :: solver_max_iter_per_restart = 200
+  INTEGER :: solver_max_iter_per_restart_sp = 200
+  REAL(KIND = 4) :: solver_tolerance_sp = 1E-11
+  LOGICAL :: use_absolute_solver_tolerance = .TRUE.
+  INTEGER :: select_transfer = 0
+  INTEGER :: select_solver = 4
+  INTEGER :: solver_firstguess = 2
+  LOGICAL :: l_solver_compare = .FALSE.
+  INTEGER :: solver_comp_nsteps = 100
+  REAL(KIND = 8) :: solver_tolerance_comp = 1D-30
+  LOGICAL :: l_lhs_direct = .FALSE.
+  INTEGER :: select_lhs = 1
+  INTEGER :: fast_performance_level = 50
+  INTEGER :: mass_matrix_inversion_type = 0
+  INTEGER :: velocitydiffusion_order = 1
+  INTEGER :: laplacian_form = 1
+  LOGICAL :: l_rigid_lid = .FALSE.
+  LOGICAL :: l_edge_based = .TRUE.
+  INTEGER :: horizonatlvelocity_verticaladvection_form = 1
+  LOGICAL :: createsolvermatrix = .FALSE.
+  NAMELIST /ocean_dynamics_nml/ ab_beta, ab_const, ab_gam, i_bc_veloc_bot, i_bc_veloc_lateral, i_bc_veloc_top, use_ssh_in_momentum_eq, iswm_oce, l_rigid_lid, l_edge_based, n_zlev, select_solver, use_absolute_solver_tolerance, solver_max_iter_per_restart, solver_max_restart_iterations, solver_tolerance, solver_max_iter_per_restart_sp, solver_tolerance_sp, select_lhs, select_transfer, l_lhs_direct, l_solver_compare, solver_tolerance_comp, solver_comp_nsteps, massmatrix_solver_tolerance, fast_performance_level, mass_matrix_inversion_type, nonlinearcoriolis_type, horizonatlvelocity_verticaladvection_form, solver_firstguess, createsolvermatrix
+  INTEGER :: ppscheme_type = 4
+  INTEGER :: vert_mix_type = 1
+  REAL(KIND = 8) :: verticalviscosity_timeweight = 0.0D0
+  REAL(KIND = 8) :: velocity_richardsoncoeff = 0.005D0
+  REAL(KIND = 8) :: biharmonicvort_weight = 1.0D0
+  REAL(KIND = 8) :: biharmonicdiv_weight = 1.0D0
+  REAL(KIND = 8) :: harmonicvort_weight = 1.0D0
+  REAL(KIND = 8) :: harmonicdiv_weight = 1.0D0
+  NAMELIST /ocean_horizontal_diffusion_nml/ laplacian_form, velocitydiffusion_order, harmonicvort_weight, harmonicdiv_weight, biharmonicvort_weight, biharmonicdiv_weight
+  NAMELIST /ocean_vertical_diffusion_nml/ ppscheme_type, vert_mix_type, verticalviscosity_timeweight, velocity_richardsoncoeff
+  REAL(KIND = 8) :: oceanreferencedensity = 1025.022D0
+  REAL(KIND = 8) :: oceanreferencedensity_inv
+  NAMELIST /ocean_physics_nml/ oceanreferencedensity
+  INTEGER :: iforc_oce = 0
+  INTEGER :: forcing_windstress_u_type = 0
+  INTEGER :: forcing_smooth_steps = 1
+  REAL(KIND = 8) :: forcing_windstress_weight = 1.0D0
+  NAMELIST /ocean_forcing_nml/ forcing_windstress_u_type, iforc_oce, forcing_smooth_steps, forcing_windstress_weight
+  CONTAINS
+END MODULE mo_ocean_nml
+MODULE mo_ocean_physics_types
+  IMPLICIT NONE
+  TYPE :: t_ho_params
+    REAL(KIND = 8), POINTER :: harmonicviscosity_coeff(:, :, :), biharmonicviscosity_coeff(:, :, :)
+    REAL(KIND = 8), POINTER :: a_veloc_v(:, :, :)
+    REAL(KIND = 8) :: a_veloc_v_back
+    REAL(KIND = 8), POINTER, DIMENSION(:, :, :) :: velocity_windmixing
+    REAL(KIND = 8) :: bottom_drag_coeff
+  END TYPE t_ho_params
+  TYPE(t_ho_params), PUBLIC, TARGET :: v_params
+  CONTAINS
+END MODULE mo_ocean_physics_types
+MODULE mo_ocean_solve_aux
+  IMPLICIT NONE
+  TYPE :: t_ocean_solve_parm
+    REAL(KIND = 8) :: tol
+    INTEGER :: pt, nr, m, nblk, nblk_a, nidx, nidx_e
+    LOGICAL :: use_atol
+  END TYPE t_ocean_solve_parm
+  CONTAINS
+  SUBROUTINE ocean_solve_parm_init(this, pt, nr, m, nblk, nblk_a, nidx, nidx_e, tol, use_atol)
+    CLASS(t_ocean_solve_parm), INTENT(INOUT) :: this
+    INTEGER, INTENT(IN) :: pt, nr, m, nblk, nblk_a, nidx, nidx_e
+    REAL(KIND = 8), INTENT(IN) :: tol
+    LOGICAL :: use_atol
+    this % pt = 60
+    this % nr = nr
+    this % m = m
+    this % nblk = nblk
+    this % nblk_a = nblk_a
+    this % nidx = nidx
+    this % nidx_e = nidx_e
+    this % tol = tol
+    this % use_atol = use_atol
+  END SUBROUTINE ocean_solve_parm_init
+END MODULE mo_ocean_solve_aux
+MODULE mo_ocean_solve_lhs_type
+  IMPLICIT NONE
+  TYPE, ABSTRACT :: t_lhs_agen
+    LOGICAL :: is_const, use_shortcut
+    LOGICAL :: is_init = .FALSE.
+  END TYPE t_lhs_agen
+END MODULE mo_ocean_solve_lhs_type
+MODULE mo_ocean_solve_transfer
+  IMPLICIT NONE
+  TYPE, ABSTRACT :: t_transfer
+  END TYPE t_transfer
+  CONTAINS
+END MODULE mo_ocean_solve_transfer
+MODULE mo_ocean_surface_types
+  USE mo_math_types, ONLY: t_cartesian_coordinates
+  IMPLICIT NONE
+  TYPE :: t_ocean_surface
+    REAL(KIND = 8), POINTER :: topbc_windstress_u(:, :), topbc_windstress_v(:, :)
+    TYPE(t_cartesian_coordinates), ALLOCATABLE :: topbc_windstress_cc(:, :)
+  END TYPE t_ocean_surface
+  TYPE :: t_atmos_for_ocean
+  END TYPE t_atmos_for_ocean
+END MODULE mo_ocean_surface_types
+MODULE mo_ocean_types
+  USE mo_math_types, ONLY: t_cartesian_coordinates
+  TYPE :: t_hydro_ocean_prog
+    REAL(KIND = 8), POINTER, DIMENSION(:, :) :: h
+    REAL(KIND = 8), POINTER, DIMENSION(:, :, :) :: vn
+  END TYPE t_hydro_ocean_prog
+  TYPE :: t_hydro_ocean_diag
+    REAL(KIND = 8), POINTER, DIMENSION(:, :, :) :: rho, kin, press_hyd
+    REAL(KIND = 8), POINTER, DIMENSION(:, :) :: thick_c
+    TYPE(t_cartesian_coordinates), POINTER, DIMENSION(:, :, :) :: p_vn
+    REAL(KIND = 8), POINTER, DIMENSION(:, :, :) :: zgrad_rho, w
+    REAL(KIND = 8), POINTER, DIMENSION(:, :, :) :: vn_pred, vn_pred_ptp, veloc_adv_horz, veloc_adv_vert, laplacian_horz, laplacian_vert, grad, press_grad
+    REAL(KIND = 8), POINTER, DIMENSION(:, :, :) :: vort
+    TYPE(t_cartesian_coordinates), POINTER, DIMENSION(:, :, :) :: p_vn_dual
+    REAL(KIND = 8), POINTER, DIMENSION(:, :) :: thick_e
+  END TYPE t_hydro_ocean_diag
+  TYPE :: t_hydro_ocean_aux
+    REAL(KIND = 8), POINTER, DIMENSION(:, :, :) :: g_n, g_nm1, g_nimd
+    REAL(KIND = 8), POINTER, DIMENSION(:, :) :: bc_bot_vn, bc_top_vn, bc_top_windstress
+    REAL(KIND = 8), POINTER, DIMENSION(:, :) :: bc_top_u, bc_top_v, bc_total_top_potential
+    REAL(KIND = 8), POINTER, DIMENSION(:, :) :: p_rhs_sfc_eq
+    TYPE(t_cartesian_coordinates), POINTER, DIMENSION(:, :) :: bc_top_veloc_cc
+  END TYPE t_hydro_ocean_aux
+  TYPE :: t_operator_coeff
+    REAL(KIND = 8), POINTER, DIMENSION(:, :, :, :) :: div_coeff
+    REAL(KIND = 8), POINTER, DIMENSION(:, :, :, :) :: rot_coeff
+    REAL(KIND = 8), POINTER, DIMENSION(:, :, :) :: grad_coeff
+    REAL(KIND = 8), POINTER, DIMENSION(:, :, :) :: averagecellstoedges
+    INTEGER, POINTER, DIMENSION(:, :, :) :: bnd_edges_per_vertex
+    INTEGER, POINTER, DIMENSION(:, :, :, :) :: vertex_bnd_edge_idx
+    INTEGER, POINTER, DIMENSION(:, :, :, :) :: vertex_bnd_edge_blk
+    INTEGER, POINTER, DIMENSION(:, :, :, :) :: boundaryedge_coefficient_index
+    REAL(KIND = 8), POINTER, DIMENSION(:, :, :, :) :: edge2edge_viacell_coeff
+    REAL(KIND = 8), POINTER, DIMENSION(:, :, :) :: edge2edge_viacell_coeff_all
+    REAL(KIND = 8), POINTER, DIMENSION(:, :, :, :) :: edge2edge_viavert_coeff
+    TYPE(t_cartesian_coordinates), POINTER, DIMENSION(:, :, :, :) :: edge2cell_coeff_cc_t
+    TYPE(t_cartesian_coordinates), POINTER, DIMENSION(:, :, :, :) :: edge2vert_coeff_cc
+    TYPE(t_cartesian_coordinates), POINTER, DIMENSION(:, :, :, :) :: edge2vert_coeff_cc_t
+  END TYPE t_operator_coeff
+  TYPE :: t_solvercoeff_singleprecision
+  END TYPE t_solvercoeff_singleprecision
+  TYPE :: t_hydro_ocean_state
+    TYPE(t_hydro_ocean_prog), POINTER :: p_prog(:)
+    TYPE(t_hydro_ocean_diag) :: p_diag
+    TYPE(t_hydro_ocean_aux) :: p_aux
+  END TYPE t_hydro_ocean_state
+END MODULE mo_ocean_types
+MODULE mo_operator_ocean_coeff_3d
+  IMPLICIT NONE
+  INTEGER, PUBLIC :: no_dual_edges
+  INTEGER, PUBLIC :: no_primal_edges
+  CONTAINS
+END MODULE mo_operator_ocean_coeff_3d
+MODULE mo_parallel_config
+  IMPLICIT NONE
+  INTEGER :: nproma = 0
+  INTEGER :: n_ghost_rows = 1
+  LOGICAL :: l_log_checks = .FALSE.
+  LOGICAL :: p_test_run = .FALSE.
+  INTEGER :: itype_exch_barrier = 0
+  INTEGER :: iorder_sendrecv = 1
+  CONTAINS
+  ELEMENTAL INTEGER FUNCTION blk_no(j)
+    INTEGER, INTENT(IN) :: j
+    blk_no = MAX((ABS(j) - 1) / nproma + 1, 1)
+  END FUNCTION blk_no
+  ELEMENTAL INTEGER FUNCTION idx_no(j)
+    INTEGER, INTENT(IN) :: j
+    IF (j == 0) THEN
+      idx_no = 0
+    ELSE
+      idx_no = SIGN(MOD(ABS(j) - 1, nproma) + 1, j)
+    END IF
+  END FUNCTION idx_no
+END MODULE mo_parallel_config
+MODULE mo_real_timer
+  USE iso_c_binding, ONLY: c_loc
+  IMPLICIT NONE
+  CONTAINS
+  SUBROUTINE timer_start(it)
+    INTEGER, INTENT(IN) :: it
+  END SUBROUTINE timer_start
+  SUBROUTINE timer_stop(it)
+    INTEGER, INTENT(IN) :: it
+  END SUBROUTINE timer_stop
+END MODULE mo_real_timer
+MODULE mo_run_config
+  IMPLICIT NONE
+  REAL(KIND = 8) :: dtime
+  INTEGER :: timers_level
+  LOGICAL :: activate_sync_timers
+  CONTAINS
+END MODULE mo_run_config
+MODULE mo_timer
+  IMPLICIT NONE
+  INTEGER :: timer_exch_data, timer_exch_data_wait
+  INTEGER :: timer_barrier
+  INTEGER :: timer_ab_expl, timer_ab_rhs4sfc
+  INTEGER :: timer_extra1, timer_extra2, timer_extra3, timer_extra4
+  CONTAINS
+END MODULE mo_timer
+MODULE mo_util_stride
+  USE iso_c_binding, ONLY: c_size_t
+  USE iso_c_binding, ONLY: c_int, c_ptr
+  USE iso_c_binding, ONLY: c_int, c_ptr
+  IMPLICIT NONE
+  INTERFACE
+    SUBROUTINE util_stride_1d(f_out, elemsize, p1, p2) BIND(C)
+      USE iso_c_binding, ONLY: c_int, c_ptr
+      IMPLICIT NONE
+      INTEGER(KIND = c_int), INTENT(OUT) :: f_out
+      INTEGER(KIND = c_int), VALUE, INTENT(IN) :: elemsize
+      TYPE(c_ptr), VALUE, INTENT(IN) :: p1, p2
+    END SUBROUTINE util_stride_1d
+    SUBROUTINE util_stride_2d(f_out, elemsize, p1, p2, p3) BIND(C)
+      USE iso_c_binding, ONLY: c_int, c_ptr
+      IMPLICIT NONE
+      INTEGER(KIND = c_int), INTENT(OUT) :: f_out(2)
+      INTEGER(KIND = c_int), VALUE, INTENT(IN) :: elemsize
+      TYPE(c_ptr), VALUE, INTENT(IN) :: p1, p2, p3
+    END SUBROUTINE util_stride_2d
+    FUNCTION util_get_ptrdiff(a, b) RESULT(s) BIND(C, NAME = 'util_get_ptrdiff')
+      USE iso_c_binding, ONLY: c_size_t
+      IMPLICIT NONE
+      INTEGER(KIND = c_size_t), INTENT(IN) :: a, b
+      INTEGER(KIND = c_size_t) :: s
+    END FUNCTION util_get_ptrdiff
+  END INTERFACE
+END MODULE mo_util_stride
 MODULE mo_fortran_tools
   USE iso_c_binding, ONLY: c_ptr, c_f_pointer, c_loc, c_null_ptr
   IMPLICIT NONE
   TYPE :: t_ptr_3d_dp
+    REAL(KIND = 8), POINTER :: p(:, :, :) => NULL()
   END TYPE t_ptr_3d_dp
   TYPE :: t_ptr_3d_sp
+    REAL(KIND = 4), POINTER :: p(:, :, :) => NULL()
   END TYPE t_ptr_3d_sp
   INTERFACE init
     MODULE PROCEDURE init_zero_1d_dp
@@ -521,6 +847,66 @@ MODULE mo_fortran_tools
       END DO
     END DO
   END SUBROUTINE init_5d_l
+  SUBROUTINE insert_dimension_r_dp_3_2_s(ptr_out, ptr_in, in_shape, new_dim_rank)
+    INTEGER, INTENT(IN) :: in_shape(2), new_dim_rank
+    REAL(KIND = 8), POINTER, INTENT(OUT) :: ptr_out(:, :, :)
+    REAL(KIND = 8), TARGET, INTENT(IN) :: ptr_in
+    INTEGER :: out_shape(3), i
+    TYPE(c_ptr) :: cptr
+    out_shape(1 : 2) = in_shape
+    cptr = c_loc(ptr_in)
+    DO i = 3, 3, - 1
+      out_shape(i) = out_shape(i - 1)
+    END DO
+    out_shape(2) = 1
+    CALL c_f_pointer(cptr, ptr_out, out_shape)
+  END SUBROUTINE insert_dimension_r_dp_3_2_s
+  SUBROUTINE insert_dimension_r_dp_3_2(ptr_out, ptr_in, new_dim_rank)
+    USE mo_util_stride, ONLY: util_stride_1d, util_stride_2d
+    REAL(KIND = 8), POINTER, INTENT(OUT) :: ptr_out(:, :, :)
+    REAL(KIND = 8), TARGET, INTENT(IN) :: ptr_in(:, :)
+    INTEGER, INTENT(IN) :: new_dim_rank
+    INTEGER :: base_shape(2), in_shape(2), in_stride(2), out_shape(3), out_stride(3), i
+    IF (SIZE(ptr_in) > 0) THEN
+      in_shape = SHAPE(ptr_in)
+      in_stride(1) = 1
+      in_stride(2) = in_shape(1)
+      IF (in_shape(1) > 1 .AND. in_shape(2) > 1) THEN
+        CALL util_stride_2d(in_stride, 8, c_loc(ptr_in(1, 1)), c_loc(ptr_in(2, 1)), c_loc(ptr_in(1, 2)))
+        base_shape(1) = in_stride(2)
+      ELSE IF (in_shape(1) > 1) THEN
+        CALL util_stride_1d(in_stride(1), 8, c_loc(ptr_in(1, 1)), c_loc(ptr_in(2, 1)))
+        base_shape(1) = in_stride(1) * in_shape(1)
+      ELSE IF (in_shape(2) > 1) THEN
+        CALL util_stride_1d(in_stride(2), 8, c_loc(ptr_in(1, 1)), c_loc(ptr_in(1, 2)))
+        base_shape(1) = in_stride(2)
+      ELSE
+        base_shape(1) = in_shape(1)
+      END IF
+      base_shape(2) = in_shape(2)
+      CALL insert_dimension_r_dp_3_2_s(ptr_out, ptr_in(1, 1), base_shape, 2)
+      IF (in_stride(1) > 1 .OR. in_stride(2) > in_shape(1) .OR. base_shape(1) /= in_shape(1)) THEN
+        out_stride(1) = in_stride(1)
+        out_stride(2) = 1
+        out_shape(1 : 2) = in_shape
+        DO i = 3, 3, - 1
+          out_shape(i) = out_shape(i - 1)
+          out_stride(i) = out_stride(i - 1)
+        END DO
+        out_stride(2) = 1
+        out_shape(2) = 1
+        out_shape = (out_shape - 1) * out_stride + 1
+        ptr_out => ptr_out(: out_shape(1) : out_stride(1), : out_shape(2) : out_stride(2), : out_shape(3) : out_stride(3))
+      END IF
+    ELSE
+      out_shape(1 : 2) = SHAPE(ptr_in)
+      DO i = 3, 3, - 1
+        out_shape(i) = out_shape(i - 1)
+      END DO
+      out_shape(2) = 1
+      CALL c_f_pointer(c_null_ptr, ptr_out, out_shape)
+    END IF
+  END SUBROUTINE insert_dimension_r_dp_3_2
   PURE SUBROUTINE set_acc_host_or_device(lzacc, lacc)
     LOGICAL, INTENT(OUT) :: lzacc
     LOGICAL, INTENT(IN), OPTIONAL :: lacc
@@ -533,39 +919,906 @@ MODULE mo_fortran_tools
     acc_async_queue = opt_acc_async_queue
   END SUBROUTINE set_acc_async_queue
 END MODULE mo_fortran_tools
-MODULE mo_grid_config
+MODULE mo_util_system
+  USE iso_c_binding, ONLY: c_int, c_char, c_null_char
   IMPLICIT NONE
-  INTEGER :: n_dom
+  INTERFACE
+    SUBROUTINE util_exit(exit_no) BIND(C)
+      IMPORT :: c_int
+      IMPLICIT NONE
+      INTEGER(KIND = c_int), VALUE :: exit_no
+    END SUBROUTINE util_exit
+    SUBROUTINE util_abort() BIND(C)
+      IMPLICIT NONE
+    END SUBROUTINE util_abort
+  END INTERFACE
   CONTAINS
-END MODULE mo_grid_config
-MODULE mo_impl_constants
+END MODULE mo_util_system
+MODULE mo_mpi
+  USE, INTRINSIC :: iso_c_binding, ONLY: c_char, c_signed_char, c_int, c_bool
+  USE mo_util_system, ONLY: util_exit
   IMPLICIT NONE
-  INTEGER, PARAMETER :: max_char_length = 1024
-END MODULE mo_impl_constants
-MODULE mo_master_config
-  IMPLICIT NONE
+  INTEGER :: p_error
+  INTEGER :: p_status(6)
+  INTEGER, ALLOCATABLE, SAVE :: p_request(:)
+  INTEGER :: p_irequest
+  INTEGER :: p_mrequest
+  INTEGER :: process_mpi_all_comm
+  INTEGER :: process_mpi_all_size
+  INTEGER :: my_process_mpi_all_id
+  INTEGER :: process_mpi_all_test_id
+  LOGICAL :: process_is_mpi_parallel
+  LOGICAL :: process_is_stdio
+  INTEGER :: my_mpi_function
+  INTEGER :: num_test_procs
+  INTEGER :: p_work_pe0
+  INTEGER :: p_pe_work
+  INTEGER :: p_comm_work
+  INTEGER :: p_comm_work_test
+  INTEGER :: p_pe = 0
+  INTEGER :: p_real_dp = 0
+  INTEGER :: p_real_sp = 0
+  INTEGER, PUBLIC :: comm_lev = 0, glob_comm(0 : 10), comm_proc0(0 : 10)
+  CHARACTER(LEN = *), PARAMETER :: modname = 'mo_mpi'
   CONTAINS
-  LOGICAL FUNCTION isrestart()
-    isrestart = .FALSE.
-  END FUNCTION isrestart
-  LOGICAL FUNCTION isinitfromrestart()
-    isinitfromrestart = .FALSE.
-  END FUNCTION isinitfromrestart
-END MODULE mo_master_config
-MODULE mo_math_types
-  USE iso_c_binding, ONLY: c_int64_t
+  FUNCTION get_comm_acc_queue()
+    INTEGER :: get_comm_acc_queue
+    get_comm_acc_queue = 1
+  END FUNCTION
+  SUBROUTINE acc_wait_comms(queue)
+    INTEGER, INTENT(IN) :: queue
+  END SUBROUTINE
+  INTEGER FUNCTION get_my_mpi_work_communicator()
+    get_my_mpi_work_communicator = p_comm_work
+  END FUNCTION get_my_mpi_work_communicator
+  LOGICAL FUNCTION my_process_is_stdio()
+    my_process_is_stdio = process_is_stdio
+  END FUNCTION my_process_is_stdio
+  LOGICAL FUNCTION my_process_is_mpi_test()
+    my_process_is_mpi_test = (my_mpi_function == 1)
+  END FUNCTION my_process_is_mpi_test
+  LOGICAL FUNCTION my_process_is_mpi_parallel()
+    my_process_is_mpi_parallel = process_is_mpi_parallel
+  END FUNCTION my_process_is_mpi_parallel
+  LOGICAL FUNCTION my_process_is_mpi_seq()
+    my_process_is_mpi_seq = .FALSE.
+  END FUNCTION my_process_is_mpi_seq
+  SUBROUTINE finish(name, text)
+    CHARACTER(LEN = *), INTENT(IN) :: name
+    CHARACTER(LEN = *), INTENT(IN) :: text
+  END SUBROUTINE finish
+  SUBROUTINE abort_mpi
+    CALL mpi_abort(0, 1, p_error)
+    IF (p_error /= 0) THEN
+      WRITE(0, '(a)') ' MPI_ABORT failed.'
+      WRITE(0, '(a,i4)') ' Error =  ', p_error
+    END IF
+    CALL util_exit(1)
+  END SUBROUTINE abort_mpi
+  FUNCTION p_comm_size(communicator)
+    INTEGER :: p_comm_size
+    INTEGER, INTENT(IN) :: communicator
+    CHARACTER(LEN = *), PARAMETER :: routine = modname // '::p_comm_size'
+    INTEGER :: ierr
+    CALL mpi_comm_size(communicator, p_comm_size, ierr)
+    IF (ierr /= 0) CALL finish(routine, 'Error in MPI_COMM_SIZE operation!')
+  END FUNCTION p_comm_size
+  SUBROUTINE p_send_dp(t_buffer, p_destination, p_tag, p_count, comm, use_g2g)
+    REAL(KIND = 8), INTENT(IN) :: t_buffer
+    INTEGER, INTENT(IN) :: p_destination, p_tag
+    INTEGER, OPTIONAL, INTENT(IN) :: p_count, comm
+    LOGICAL, OPTIONAL, INTENT(IN) :: use_g2g
+    LOGICAL :: loc_use_g2g
+    INTEGER :: p_comm, icount
+    p_comm = comm
+    icount = p_count
+    loc_use_g2g = .FALSE.
+    CALL mpi_send(t_buffer, icount, p_real_dp, p_destination, 1, p_comm, p_error)
+  END SUBROUTINE p_send_dp
+  SUBROUTINE p_send_sp(t_buffer, p_destination, p_tag, p_count, comm, use_g2g)
+    REAL(KIND = 4), INTENT(IN) :: t_buffer
+    INTEGER, INTENT(IN) :: p_destination, p_tag
+    INTEGER, OPTIONAL, INTENT(IN) :: p_count, comm
+    LOGICAL, OPTIONAL, INTENT(IN) :: use_g2g
+    LOGICAL :: loc_use_g2g
+    INTEGER :: p_comm, icount
+    p_comm = comm
+    icount = p_count
+    loc_use_g2g = .FALSE.
+    CALL mpi_send(t_buffer, icount, p_real_sp, p_destination, 1, p_comm, p_error)
+  END SUBROUTINE p_send_sp
+  SUBROUTINE p_send_dp_3d(t_buffer, p_destination, p_tag, p_count, comm)
+    REAL(KIND = 8), INTENT(IN) :: t_buffer(:, :, :)
+    INTEGER, INTENT(IN) :: p_destination, p_tag
+    INTEGER, OPTIONAL, INTENT(IN) :: p_count, comm
+    INTEGER :: p_comm, icount
+    p_comm = process_mpi_all_comm
+    icount = SIZE(t_buffer)
+    CALL mpi_send(t_buffer, icount, p_real_dp, p_destination, 1, p_comm, p_error)
+  END SUBROUTINE p_send_dp_3d
+  SUBROUTINE p_send_sp_3d(t_buffer, p_destination, p_tag, p_count, comm)
+    REAL(KIND = 4), INTENT(IN) :: t_buffer(:, :, :)
+    INTEGER, INTENT(IN) :: p_destination, p_tag
+    INTEGER, OPTIONAL, INTENT(IN) :: p_count, comm
+    INTEGER :: p_comm, icount
+    p_comm = process_mpi_all_comm
+    icount = SIZE(t_buffer)
+    CALL mpi_send(t_buffer, icount, p_real_sp, p_destination, 1, p_comm, p_error)
+  END SUBROUTINE p_send_sp_3d
+  SUBROUTINE p_inc_request
+    INTEGER, ALLOCATABLE :: tmp(:)
+    p_irequest = p_irequest + 1
+    IF (p_irequest > p_mrequest) THEN
+      ALLOCATE(tmp(p_mrequest))
+      tmp(:) = p_request(:)
+      DEALLOCATE(p_request)
+      ALLOCATE(p_request(p_mrequest + 4096))
+      p_request(1 : p_mrequest) = tmp(:)
+      p_mrequest = p_mrequest + 4096
+      DEALLOCATE(tmp)
+    END IF
+  END SUBROUTINE p_inc_request
+  SUBROUTINE p_isend_dp(t_buffer, p_destination, p_tag, p_count, comm, request, use_g2g)
+    REAL(KIND = 8), INTENT(INOUT) :: t_buffer
+    INTEGER, INTENT(IN) :: p_destination, p_tag
+    INTEGER, OPTIONAL, INTENT(IN) :: p_count, comm
+    INTEGER, INTENT(INOUT), OPTIONAL :: request
+    LOGICAL, OPTIONAL, INTENT(IN) :: use_g2g
+    LOGICAL :: loc_use_g2g
+    INTEGER :: p_comm, icount, out_request
+    p_comm = comm
+    icount = p_count
+    loc_use_g2g = .FALSE.
+    CALL mpi_isend(t_buffer, icount, p_real_dp, p_destination, 1, p_comm, out_request, p_error)
+    CALL p_inc_request
+    p_request(p_irequest) = out_request
+  END SUBROUTINE p_isend_dp
+  SUBROUTINE p_isend_sp(t_buffer, p_destination, p_tag, p_count, comm, request, use_g2g)
+    REAL(KIND = 4), INTENT(INOUT) :: t_buffer
+    INTEGER, INTENT(IN) :: p_destination, p_tag
+    INTEGER, OPTIONAL, INTENT(IN) :: p_count, comm
+    INTEGER, INTENT(INOUT), OPTIONAL :: request
+    LOGICAL, OPTIONAL, INTENT(IN) :: use_g2g
+    LOGICAL :: loc_use_g2g
+    INTEGER :: p_comm, out_request, icount
+    p_comm = comm
+    icount = p_count
+    loc_use_g2g = .FALSE.
+    CALL mpi_isend(t_buffer, icount, p_real_sp, p_destination, 1, p_comm, out_request, p_error)
+    CALL p_inc_request
+    p_request(p_irequest) = out_request
+  END SUBROUTINE p_isend_sp
+  SUBROUTINE p_recv_dp(t_buffer, p_source, p_tag, p_count, comm, use_g2g)
+    REAL(KIND = 8), INTENT(OUT) :: t_buffer
+    INTEGER, INTENT(IN) :: p_source, p_tag
+    INTEGER, OPTIONAL, INTENT(IN) :: p_count, comm
+    LOGICAL, OPTIONAL, INTENT(IN) :: use_g2g
+    LOGICAL :: loc_use_g2g
+    INTEGER :: p_comm, icount
+    p_comm = comm
+    icount = p_count
+    loc_use_g2g = .FALSE.
+    CALL mpi_recv(t_buffer, icount, p_real_dp, p_source, 1, p_comm, p_status, p_error)
+  END SUBROUTINE p_recv_dp
+  SUBROUTINE p_recv_sp(t_buffer, p_source, p_tag, p_count, comm, use_g2g)
+    REAL(KIND = 4), INTENT(OUT) :: t_buffer
+    INTEGER, INTENT(IN) :: p_source, p_tag
+    INTEGER, OPTIONAL, INTENT(IN) :: p_count, comm
+    LOGICAL, OPTIONAL, INTENT(IN) :: use_g2g
+    LOGICAL :: loc_use_g2g
+    INTEGER :: p_comm, icount
+    p_comm = comm
+    icount = p_count
+    loc_use_g2g = .FALSE.
+    CALL mpi_recv(t_buffer, icount, p_real_sp, p_source, 1, p_comm, p_status, p_error)
+  END SUBROUTINE p_recv_sp
+  SUBROUTINE p_recv_dp_3d(t_buffer, p_source, p_tag, p_count, comm)
+    REAL(KIND = 8), INTENT(OUT) :: t_buffer(:, :, :)
+    INTEGER, INTENT(IN) :: p_source, p_tag
+    INTEGER, OPTIONAL, INTENT(IN) :: p_count, comm
+    INTEGER :: p_comm, icount
+    p_comm = process_mpi_all_comm
+    icount = SIZE(t_buffer)
+    CALL mpi_recv(t_buffer, icount, p_real_dp, p_source, 1, p_comm, p_status, p_error)
+  END SUBROUTINE p_recv_dp_3d
+  SUBROUTINE p_recv_sp_3d(t_buffer, p_source, p_tag, p_count, comm)
+    REAL(KIND = 4), INTENT(OUT) :: t_buffer(:, :, :)
+    INTEGER, INTENT(IN) :: p_source, p_tag
+    INTEGER, OPTIONAL, INTENT(IN) :: p_count, comm
+    INTEGER :: p_comm, icount
+    p_comm = process_mpi_all_comm
+    icount = SIZE(t_buffer)
+    CALL mpi_recv(t_buffer, icount, p_real_sp, p_source, 1, p_comm, p_status, p_error)
+  END SUBROUTINE p_recv_sp_3d
+  SUBROUTINE p_irecv_dp(t_buffer, p_source, p_tag, p_count, comm, use_g2g)
+    REAL(KIND = 8), INTENT(INOUT) :: t_buffer
+    INTEGER, INTENT(IN) :: p_source, p_tag
+    INTEGER, OPTIONAL, INTENT(IN) :: p_count, comm
+    LOGICAL, OPTIONAL, INTENT(IN) :: use_g2g
+    LOGICAL :: loc_use_g2g
+    INTEGER :: p_comm, icount
+    p_comm = comm
+    icount = p_count
+    loc_use_g2g = .FALSE.
+    CALL p_inc_request
+    CALL mpi_irecv(t_buffer, icount, p_real_dp, p_source, 1, p_comm, p_request(p_irequest), p_error)
+  END SUBROUTINE p_irecv_dp
+  SUBROUTINE p_irecv_sp(t_buffer, p_source, p_tag, p_count, comm, use_g2g)
+    REAL(KIND = 4), INTENT(INOUT) :: t_buffer
+    INTEGER, INTENT(IN) :: p_source, p_tag
+    INTEGER, OPTIONAL, INTENT(IN) :: p_count, comm
+    LOGICAL, OPTIONAL, INTENT(IN) :: use_g2g
+    LOGICAL :: loc_use_g2g
+    INTEGER :: p_comm, icount
+    p_comm = comm
+    icount = p_count
+    loc_use_g2g = .FALSE.
+    CALL p_inc_request
+    CALL mpi_irecv(t_buffer, icount, p_real_sp, p_source, 1, p_comm, p_request(p_irequest), p_error)
+  END SUBROUTINE p_irecv_sp
+  SUBROUTINE p_bcast_dp_3d(t_buffer, p_source, comm)
+    REAL(KIND = 8) :: t_buffer(:, :, :)
+    INTEGER, INTENT(IN) :: p_source
+    INTEGER, OPTIONAL, INTENT(IN) :: comm
+    INTEGER :: p_comm
+    p_comm = comm
+    IF (process_mpi_all_size == 1) THEN
+      RETURN
+    ELSE
+      CALL mpi_bcast(t_buffer, SIZE(t_buffer), p_real_dp, p_source, p_comm, p_error)
+    END IF
+  END SUBROUTINE p_bcast_dp_3d
+  SUBROUTINE p_bcast_sp_3d(t_buffer, p_source, comm)
+    REAL(KIND = 4) :: t_buffer(:, :, :)
+    INTEGER, INTENT(IN) :: p_source
+    INTEGER, OPTIONAL, INTENT(IN) :: comm
+    INTEGER :: p_comm
+    p_comm = comm
+    IF (process_mpi_all_size == 1) THEN
+      RETURN
+    ELSE
+      CALL mpi_bcast(t_buffer, SIZE(t_buffer), p_real_sp, p_source, p_comm, p_error)
+    END IF
+  END SUBROUTINE p_bcast_sp_3d
+  SUBROUTINE p_wait_noarg
+    IF (p_irequest > 0) CALL mpi_waitall(p_irequest, p_request, 1, p_error)
+    p_irequest = 0
+  END SUBROUTINE p_wait_noarg
+  SUBROUTINE p_barrier(comm)
+    INTEGER, INTENT(IN), OPTIONAL :: comm
+    INTEGER :: com
+    com = 0
+    com = comm
+    CALL mpi_barrier(com, p_error)
+    IF (p_error /= 0) THEN
+      WRITE(0, '(a,i4,a)') ' MPI_BARRIER on ', my_process_mpi_all_id, ' failed.'
+      WRITE(0, '(a,i4)') ' Error = ', p_error
+      CALL abort_mpi
+    END IF
+  END SUBROUTINE p_barrier
+  SUBROUTINE work_mpi_barrier
+  END SUBROUTINE work_mpi_barrier
+  FUNCTION p_sum_dp_0d(zfield, comm, root) RESULT(p_sum)
+    REAL(KIND = 8) :: p_sum
+    REAL(KIND = 8), INTENT(IN) :: zfield
+    INTEGER, INTENT(IN) :: comm
+    INTEGER, INTENT(IN), OPTIONAL :: root
+    INTEGER :: p_comm
+    p_comm = comm
+    IF (my_process_is_mpi_parallel()) THEN
+      CALL mpi_allreduce(zfield, p_sum, 1, p_real_dp, 3, p_comm, p_error)
+    ELSE
+      p_sum = zfield
+    END IF
+  END FUNCTION p_sum_dp_0d
+  SUBROUTINE p_minmax_common_dp(in_field, out_field, n, op, loc_op, proc_id, keyval, comm, root)
+    INTEGER, INTENT(IN) :: n, op, loc_op
+    REAL(KIND = 8), INTENT(IN) :: in_field(n)
+    REAL(KIND = 8), INTENT(OUT) :: out_field(n)
+    INTEGER, OPTIONAL, INTENT(INOUT) :: proc_id(n)
+    INTEGER, OPTIONAL, INTENT(INOUT) :: keyval(n)
+    INTEGER, OPTIONAL, INTENT(IN) :: root
+    INTEGER, OPTIONAL, INTENT(IN) :: comm
+    INTEGER :: p_comm, comm_size
+    p_comm = comm
+    comm_size = p_comm_size(comm)
+    IF (comm_size > 1) THEN
+      CALL mpi_reduce(in_field, out_field, 1, p_real_dp, op, root, p_comm, p_error)
+    ELSE
+      out_field = in_field
+    END IF
+  END SUBROUTINE p_minmax_common_dp
+  FUNCTION p_max_dp_0d(zfield, proc_id, keyval, comm, root) RESULT(p_max)
+    REAL(KIND = 8) :: p_max
+    REAL(KIND = 8), INTENT(IN) :: zfield
+    INTEGER, OPTIONAL, INTENT(INOUT) :: proc_id
+    INTEGER, OPTIONAL, INTENT(INOUT) :: keyval
+    INTEGER, OPTIONAL, INTENT(IN) :: root
+    INTEGER, OPTIONAL, INTENT(IN) :: comm
+    REAL(KIND = 8) :: temp_in(1), temp_out(1)
+    temp_in(1) = zfield
+    CALL p_minmax_common_dp(temp_in, temp_out, 1, 1, 11, comm = comm, root = root)
+    p_max = temp_out(1)
+  END FUNCTION p_max_dp_0d
+  FUNCTION p_min_dp_0d(zfield, proc_id, keyval, comm, root) RESULT(p_min)
+    REAL(KIND = 8) :: p_min
+    REAL(KIND = 8), INTENT(IN) :: zfield
+    INTEGER, OPTIONAL, INTENT(INOUT) :: proc_id
+    INTEGER, OPTIONAL, INTENT(INOUT) :: keyval
+    INTEGER, OPTIONAL, INTENT(IN) :: root
+    INTEGER, OPTIONAL, INTENT(IN) :: comm
+    REAL(KIND = 8) :: temp_in(1), temp_out(1)
+    temp_in(1) = zfield
+    CALL p_minmax_common_dp(temp_in, temp_out, 1, 2, 12, comm = comm, root = root)
+    p_min = temp_out(1)
+  END FUNCTION p_min_dp_0d
+END MODULE mo_mpi
+MODULE mo_communication_types
   IMPLICIT NONE
-  TYPE :: t_cartesian_coordinates
-    REAL(KIND = 8) :: x(3)
-  END TYPE t_cartesian_coordinates
-  TYPE :: t_geographical_coordinates
-    REAL(KIND = 8) :: lon
-    REAL(KIND = 8) :: lat
-  END TYPE t_geographical_coordinates
+  TYPE, ABSTRACT :: t_comm_pattern
+  END TYPE t_comm_pattern
+  TYPE, EXTENDS(t_comm_pattern) :: t_comm_pattern_orig
+    INTEGER :: n_recv
+    INTEGER :: n_pnts
+    INTEGER :: n_send
+    INTEGER :: np_recv
+    INTEGER :: np_send
+    INTEGER :: comm
+    INTEGER, ALLOCATABLE :: recv_limits(:)
+    INTEGER, ALLOCATABLE :: recv_src(:)
+    INTEGER, ALLOCATABLE :: recv_dst_blk(:)
+    INTEGER, ALLOCATABLE :: recv_dst_idx(:)
+    INTEGER, ALLOCATABLE :: send_limits(:)
+    INTEGER, ALLOCATABLE :: send_src_blk(:)
+    INTEGER, ALLOCATABLE :: send_src_idx(:)
+    INTEGER, ALLOCATABLE :: pelist_send(:)
+    INTEGER, ALLOCATABLE :: pelist_recv(:)
+    INTEGER, ALLOCATABLE :: send_startidx(:)
+    INTEGER, ALLOCATABLE :: send_count(:)
+    INTEGER, ALLOCATABLE :: recv_startidx(:)
+    INTEGER, ALLOCATABLE :: recv_count(:)
+  END TYPE t_comm_pattern_orig
+  TYPE :: t_p_comm_pattern
+    TYPE(t_comm_pattern_orig), POINTER :: p
+  END TYPE t_p_comm_pattern
+  CHARACTER(LEN = *), PARAMETER :: modname = "mo_communication_orig"
   CONTAINS
-END MODULE mo_math_types
+  SUBROUTINE exchange_data_r3d(p_pat, lacc, recv, send, add)
+    USE mo_mpi, ONLY: acc_wait_comms, get_comm_acc_queue, my_process_is_mpi_seq, p_barrier, p_irecv_dp_deconiface_9 => p_irecv_dp, p_isend_dp_deconiface_11 => p_isend_dp, p_isend_dp_deconiface_13 => p_isend_dp, p_recv_dp_deconiface_12 => p_recv_dp, p_send_dp_deconiface_10 => p_send_dp, p_wait_noarg_deconiface_14 => p_wait_noarg
+    USE mo_parallel_config, ONLY: iorder_sendrecv, itype_exch_barrier, nproma
+    USE mo_run_config, ONLY: activate_sync_timers
+    USE mo_real_timer, ONLY: timer_start, timer_stop
+    USE mo_timer, ONLY: timer_barrier, timer_exch_data, timer_exch_data_wait
+    USE mo_exception, ONLY: finish
+    CLASS(t_comm_pattern_orig), TARGET, INTENT(INOUT) :: p_pat
+    LOGICAL, INTENT(IN) :: lacc
+    REAL(KIND = 8), INTENT(INOUT), TARGET :: recv(:, :, :)
+    REAL(KIND = 8), INTENT(IN), OPTIONAL, TARGET :: send(:, :, :)
+    REAL(KIND = 8), INTENT(IN), OPTIONAL, TARGET :: add(:, :, :)
+    CHARACTER(LEN = *), PARAMETER :: routine = modname // "::exchange_data_r3d"
+    REAL(KIND = 8) :: send_buf(SIZE(recv, 2), p_pat % n_send), recv_buf(SIZE(recv, 2), p_pat % n_recv)
+    INTEGER :: i, k, np, irs, iss, pid, icount, ndim2
+    IF (my_process_is_mpi_seq()) THEN
+      CALL exchange_data_r3d_seq(p_pat, lacc, recv, send, add)
+      RETURN
+    END IF
+    IF (itype_exch_barrier == 1 .OR. itype_exch_barrier == 3) THEN
+      IF (activate_sync_timers) CALL timer_start(timer_barrier)
+      CALL p_barrier(p_pat % comm)
+      IF (activate_sync_timers) CALL timer_stop(timer_barrier)
+    END IF
+    IF (activate_sync_timers) CALL timer_start(timer_exch_data)
+    IF (SIZE(recv, 1) /= nproma) THEN
+      CALL finish(routine, 'Illegal first dimension of data array')
+    END IF
+    ndim2 = SIZE(recv, 2)
+    IF (iorder_sendrecv == 1 .OR. iorder_sendrecv == 3) THEN
+      DO np = 1, p_pat % np_recv
+        pid = p_pat % pelist_recv(np)
+        irs = p_pat % recv_startidx(np)
+        icount = p_pat % recv_count(np) * ndim2
+        CALL p_irecv_dp_deconiface_9(recv_buf(1, irs), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
+      END DO
+    END IF
+    IF (ndim2 == 1) THEN
+      DO i = 1, p_pat % n_send
+        send_buf(1, i) = send(p_pat % send_src_idx(i), 1, p_pat % send_src_blk(i))
+      END DO
+    ELSE
+      DO i = 1, p_pat % n_send
+        send_buf(1 : ndim2, i) = send(p_pat % send_src_idx(i), 1 : ndim2, p_pat % send_src_blk(i))
+      END DO
+    END IF
+    IF (iorder_sendrecv == 1) THEN
+      DO np = 1, p_pat % np_send
+        pid = p_pat % pelist_send(np)
+        iss = p_pat % send_startidx(np)
+        icount = p_pat % send_count(np) * ndim2
+        CALL p_send_dp_deconiface_10(send_buf(1, iss), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
+      END DO
+    ELSE IF (iorder_sendrecv == 2) THEN
+      DO np = 1, p_pat % np_send
+        pid = p_pat % pelist_send(np)
+        iss = p_pat % send_startidx(np)
+        icount = p_pat % send_count(np) * ndim2
+        CALL p_isend_dp_deconiface_11(send_buf(1, iss), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
+      END DO
+      DO np = 1, p_pat % np_recv
+        pid = p_pat % pelist_recv(np)
+        irs = p_pat % recv_startidx(np)
+        icount = p_pat % recv_count(np) * ndim2
+        CALL p_recv_dp_deconiface_12(recv_buf(1, irs), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
+      END DO
+    ELSE IF (iorder_sendrecv == 3) THEN
+      DO np = 1, p_pat % np_send
+        pid = p_pat % pelist_send(np)
+        iss = p_pat % send_startidx(np)
+        icount = p_pat % send_count(np) * ndim2
+        CALL p_isend_dp_deconiface_13(send_buf(1, iss), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
+      END DO
+    END IF
+    IF (activate_sync_timers) CALL timer_start(timer_exch_data_wait)
+    CALL p_wait_noarg_deconiface_14
+    IF (activate_sync_timers) CALL timer_stop(timer_exch_data_wait)
+    IF (itype_exch_barrier == 2 .OR. itype_exch_barrier == 3) THEN
+      IF (activate_sync_timers) CALL timer_start(timer_barrier)
+      CALL p_barrier(p_pat % comm)
+      IF (activate_sync_timers) CALL timer_stop(timer_barrier)
+    END IF
+    IF (ndim2 == 1) THEN
+      k = 1
+      DO i = 1, p_pat % n_pnts
+        recv(p_pat % recv_dst_idx(i), 1, p_pat % recv_dst_blk(i)) = recv_buf(1, p_pat % recv_src(i)) + add(p_pat % recv_dst_idx(i), 1, p_pat % recv_dst_blk(i))
+      END DO
+    ELSE
+      DO i = 1, p_pat % n_pnts
+        recv(p_pat % recv_dst_idx(i), :, p_pat % recv_dst_blk(i)) = recv_buf(:, p_pat % recv_src(i)) + add(p_pat % recv_dst_idx(i), 1 : ndim2, p_pat % recv_dst_blk(i))
+      END DO
+    END IF
+    CALL acc_wait_comms(get_comm_acc_queue())
+    IF (activate_sync_timers) CALL timer_stop(timer_exch_data)
+  END SUBROUTINE exchange_data_r3d
+  SUBROUTINE exchange_data_s3d(p_pat, lacc, recv, send, add)
+    USE mo_mpi, ONLY: acc_wait_comms, get_comm_acc_queue, my_process_is_mpi_seq, p_barrier, p_irecv_sp_deconiface_15 => p_irecv_sp, p_isend_sp_deconiface_17 => p_isend_sp, p_isend_sp_deconiface_19 => p_isend_sp, p_recv_sp_deconiface_18 => p_recv_sp, p_send_sp_deconiface_16 => p_send_sp, p_wait_noarg_deconiface_20 => p_wait_noarg
+    USE mo_parallel_config, ONLY: iorder_sendrecv, itype_exch_barrier, nproma
+    USE mo_run_config, ONLY: activate_sync_timers
+    USE mo_real_timer, ONLY: timer_start, timer_stop
+    USE mo_timer, ONLY: timer_barrier, timer_exch_data, timer_exch_data_wait
+    USE mo_exception, ONLY: finish
+    CLASS(t_comm_pattern_orig), TARGET, INTENT(INOUT) :: p_pat
+    LOGICAL, INTENT(IN) :: lacc
+    REAL(KIND = 4), INTENT(INOUT), TARGET :: recv(:, :, :)
+    REAL(KIND = 4), INTENT(IN), OPTIONAL, TARGET :: send(:, :, :)
+    REAL(KIND = 4), INTENT(IN), OPTIONAL, TARGET :: add(:, :, :)
+    CHARACTER(LEN = *), PARAMETER :: routine = modname // "::exchange_data_s3d"
+    REAL(KIND = 4) :: send_buf(SIZE(recv, 2), p_pat % n_send), recv_buf(SIZE(recv, 2), p_pat % n_recv)
+    INTEGER :: i, k, np, irs, iss, pid, icount, ndim2
+    IF (my_process_is_mpi_seq()) THEN
+      CALL exchange_data_s3d_seq(p_pat, .FALSE., recv, send, add)
+      RETURN
+    END IF
+    IF (itype_exch_barrier == 1 .OR. itype_exch_barrier == 3) THEN
+      IF (activate_sync_timers) CALL timer_start(timer_barrier)
+      CALL p_barrier(p_pat % comm)
+      IF (activate_sync_timers) CALL timer_stop(timer_barrier)
+    END IF
+    IF (activate_sync_timers) CALL timer_start(timer_exch_data)
+    IF (SIZE(recv, 1) /= nproma) THEN
+      CALL finish(routine, 'Illegal first dimension of data array')
+    END IF
+    ndim2 = SIZE(recv, 2)
+    IF (iorder_sendrecv == 1 .OR. iorder_sendrecv == 3) THEN
+      DO np = 1, p_pat % np_recv
+        pid = p_pat % pelist_recv(np)
+        irs = p_pat % recv_startidx(np)
+        icount = p_pat % recv_count(np) * ndim2
+        CALL p_irecv_sp_deconiface_15(recv_buf(1, irs), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
+      END DO
+    END IF
+    IF (ndim2 == 1) THEN
+      DO i = 1, p_pat % n_send
+        send_buf(1, i) = send(p_pat % send_src_idx(i), 1, p_pat % send_src_blk(i))
+      END DO
+    ELSE
+      DO i = 1, p_pat % n_send
+        send_buf(1 : ndim2, i) = send(p_pat % send_src_idx(i), 1 : ndim2, p_pat % send_src_blk(i))
+      END DO
+    END IF
+    IF (iorder_sendrecv == 1) THEN
+      DO np = 1, p_pat % np_send
+        pid = p_pat % pelist_send(np)
+        iss = p_pat % send_startidx(np)
+        icount = p_pat % send_count(np) * ndim2
+        CALL p_send_sp_deconiface_16(send_buf(1, iss), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
+      END DO
+    ELSE IF (iorder_sendrecv == 2) THEN
+      DO np = 1, p_pat % np_send
+        pid = p_pat % pelist_send(np)
+        iss = p_pat % send_startidx(np)
+        icount = p_pat % send_count(np) * ndim2
+        CALL p_isend_sp_deconiface_17(send_buf(1, iss), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
+      END DO
+      DO np = 1, p_pat % np_recv
+        pid = p_pat % pelist_recv(np)
+        irs = p_pat % recv_startidx(np)
+        icount = p_pat % recv_count(np) * ndim2
+        CALL p_recv_sp_deconiface_18(recv_buf(1, irs), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
+      END DO
+    ELSE IF (iorder_sendrecv == 3) THEN
+      DO np = 1, p_pat % np_send
+        pid = p_pat % pelist_send(np)
+        iss = p_pat % send_startidx(np)
+        icount = p_pat % send_count(np) * ndim2
+        CALL p_isend_sp_deconiface_19(send_buf(1, iss), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
+      END DO
+    END IF
+    IF (activate_sync_timers) CALL timer_start(timer_exch_data_wait)
+    CALL p_wait_noarg_deconiface_20
+    IF (activate_sync_timers) CALL timer_stop(timer_exch_data_wait)
+    IF (itype_exch_barrier == 2 .OR. itype_exch_barrier == 3) THEN
+      IF (activate_sync_timers) CALL timer_start(timer_barrier)
+      CALL p_barrier(p_pat % comm)
+      IF (activate_sync_timers) CALL timer_stop(timer_barrier)
+    END IF
+    IF (ndim2 == 1) THEN
+      k = 1
+      DO i = 1, p_pat % n_pnts
+        recv(p_pat % recv_dst_idx(i), 1, p_pat % recv_dst_blk(i)) = recv_buf(1, p_pat % recv_src(i)) + add(p_pat % recv_dst_idx(i), 1, p_pat % recv_dst_blk(i))
+      END DO
+    ELSE
+      DO i = 1, p_pat % n_pnts
+        recv(p_pat % recv_dst_idx(i), :, p_pat % recv_dst_blk(i)) = recv_buf(:, p_pat % recv_src(i)) + add(p_pat % recv_dst_idx(i), 1 : ndim2, p_pat % recv_dst_blk(i))
+      END DO
+    END IF
+    CALL acc_wait_comms(get_comm_acc_queue())
+    IF (activate_sync_timers) CALL timer_stop(timer_exch_data)
+  END SUBROUTINE exchange_data_s3d
+  SUBROUTINE exchange_data_r3d_seq(p_pat, lacc, recv, send, add)
+    USE mo_mpi, ONLY: my_process_is_mpi_seq
+    USE mo_exception, ONLY: finish
+    CLASS(t_comm_pattern_orig), INTENT(IN), TARGET :: p_pat
+    LOGICAL, INTENT(IN) :: lacc
+    REAL(KIND = 8), INTENT(INOUT), TARGET :: recv(:, :, :)
+    REAL(KIND = 8), INTENT(IN), OPTIONAL, TARGET :: send(:, :, :)
+    REAL(KIND = 8), INTENT(IN), OPTIONAL, TARGET :: add(:, :, :)
+    CHARACTER(LEN = *), PARAMETER :: routine = modname // ":exchange_data_r3d_seq"
+    INTEGER :: i, k, ndim2
+    INTEGER, POINTER :: recv_src(:)
+    INTEGER, POINTER :: recv_dst_blk(:)
+    INTEGER, POINTER :: recv_dst_idx(:)
+    INTEGER, POINTER :: send_src_blk(:)
+    INTEGER, POINTER :: send_src_idx(:)
+    recv_src => p_pat % recv_src(:)
+    recv_dst_blk => p_pat % recv_dst_blk(:)
+    recv_dst_idx => p_pat % recv_dst_idx(:)
+    send_src_blk => p_pat % send_src_blk(:)
+    send_src_idx => p_pat % send_src_idx(:)
+    IF (.NOT. my_process_is_mpi_seq()) THEN
+      CALL finish(routine, "Internal error: sequential routine called in parallel run!")
+    END IF
+    IF ((p_pat % np_recv /= 1) .OR. (p_pat % np_send /= 1)) THEN
+      CALL finish(routine, "Internal error: inconsistent no. send/receive peers!")
+    END IF
+    IF ((p_pat % recv_limits(1) - p_pat % recv_limits(0)) /= (p_pat % send_limits(1) - p_pat % send_limits(0))) THEN
+      CALL finish(routine, "Internal error: inconsistent sender/receiver size!")
+    END IF
+    IF ((p_pat % recv_limits(0) /= 0) .OR. (p_pat % send_limits(0) /= 0)) THEN
+      CALL finish(routine, "Internal error: inconsistent sender/receiver start position!")
+    END IF
+    IF ((p_pat % recv_limits(1) /= p_pat % n_recv) .OR. (p_pat % n_recv /= p_pat % n_send)) THEN
+      CALL finish(routine, "Internal error: inconsistent counts for sender/receiver!")
+    END IF
+    ndim2 = SIZE(recv, 2)
+    IF (PRESENT(add)) THEN
+      DO k = 1, ndim2
+        DO i = 1, p_pat % n_pnts
+          recv(recv_dst_idx(i), k, recv_dst_blk(i)) = add(recv_dst_idx(i), k, recv_dst_blk(i)) + send(send_src_idx(recv_src(i)), k, send_src_blk(recv_src(i)))
+        END DO
+      END DO
+    ELSE
+      DO k = 1, ndim2
+        DO i = 1, p_pat % n_pnts
+          recv(recv_dst_idx(i), k, recv_dst_blk(i)) = send(send_src_idx(recv_src(i)), k, send_src_blk(recv_src(i)))
+        END DO
+      END DO
+    END IF
+  END SUBROUTINE exchange_data_r3d_seq
+  SUBROUTINE exchange_data_s3d_seq(p_pat, lacc, recv, send, add)
+    USE mo_mpi, ONLY: my_process_is_mpi_seq
+    USE mo_exception, ONLY: finish
+    CLASS(t_comm_pattern_orig), INTENT(IN), TARGET :: p_pat
+    LOGICAL, INTENT(IN) :: lacc
+    REAL(KIND = 4), INTENT(INOUT), TARGET :: recv(:, :, :)
+    REAL(KIND = 4), INTENT(IN), OPTIONAL, TARGET :: send(:, :, :)
+    REAL(KIND = 4), INTENT(IN), OPTIONAL, TARGET :: add(:, :, :)
+    CHARACTER(LEN = *), PARAMETER :: routine = modname // ":exchange_data_s3d_seq"
+    INTEGER :: i, k, ndim2
+    INTEGER, POINTER :: recv_src(:)
+    INTEGER, POINTER :: recv_dst_blk(:)
+    INTEGER, POINTER :: recv_dst_idx(:)
+    INTEGER, POINTER :: send_src_blk(:)
+    INTEGER, POINTER :: send_src_idx(:)
+    recv_src => p_pat % recv_src(:)
+    recv_dst_blk => p_pat % recv_dst_blk(:)
+    recv_dst_idx => p_pat % recv_dst_idx(:)
+    send_src_blk => p_pat % send_src_blk(:)
+    send_src_idx => p_pat % send_src_idx(:)
+    IF (.NOT. my_process_is_mpi_seq()) THEN
+      CALL finish(routine, "Internal error: sequential routine called in parallel run!")
+    END IF
+    IF ((p_pat % np_recv /= 1) .OR. (p_pat % np_send /= 1)) THEN
+      CALL finish(routine, "Internal error: inconsistent no. send/receive peers!")
+    END IF
+    IF ((p_pat % recv_limits(1) - p_pat % recv_limits(0)) /= (p_pat % send_limits(1) - p_pat % send_limits(0))) THEN
+      CALL finish(routine, "Internal error: inconsistent sender/receiver size!")
+    END IF
+    IF ((p_pat % recv_limits(0) /= 0) .OR. (p_pat % send_limits(0) /= 0)) THEN
+      CALL finish(routine, "Internal error: inconsistent sender/receiver start position!")
+    END IF
+    IF ((p_pat % recv_limits(1) /= p_pat % n_recv) .OR. (p_pat % n_recv /= p_pat % n_send)) THEN
+      CALL finish(routine, "Internal error: inconsistent counts for sender/receiver!")
+    END IF
+    ndim2 = SIZE(recv, 2)
+    IF (PRESENT(add)) THEN
+      DO k = 1, ndim2
+        DO i = 1, p_pat % n_pnts
+          recv(recv_dst_idx(i), k, recv_dst_blk(i)) = add(recv_dst_idx(i), k, recv_dst_blk(i)) + send(send_src_idx(recv_src(i)), k, send_src_blk(recv_src(i)))
+        END DO
+      END DO
+    ELSE
+      DO k = 1, ndim2
+        DO i = 1, p_pat % n_pnts
+          recv(recv_dst_idx(i), k, recv_dst_blk(i)) = send(send_src_idx(recv_src(i)), k, send_src_blk(recv_src(i)))
+        END DO
+      END DO
+    END IF
+  END SUBROUTINE exchange_data_s3d_seq
+  SUBROUTINE exchange_data_mult_mixprec(p_pat, lacc, nfields_dp, ndim2tot_dp, nfields_sp, ndim2tot_sp, recv_dp, send_dp, recv_sp, send_sp, nshift)
+    USE mo_fortran_tools, ONLY: t_ptr_3d_dp, t_ptr_3d_sp
+    USE mo_parallel_config, ONLY: iorder_sendrecv, itype_exch_barrier
+    USE mo_run_config, ONLY: activate_sync_timers
+    USE mo_real_timer, ONLY: timer_start, timer_stop
+    USE mo_timer, ONLY: timer_barrier, timer_exch_data, timer_exch_data_wait
+    USE mo_mpi, ONLY: acc_wait_comms, get_comm_acc_queue, my_process_is_mpi_seq, p_barrier, p_irecv_dp_deconiface_33 => p_irecv_dp, p_irecv_sp_deconiface_34 => p_irecv_sp, p_isend_dp_deconiface_37 => p_isend_dp, p_isend_dp_deconiface_41 => p_isend_dp, p_isend_sp_deconiface_38 => p_isend_sp, p_isend_sp_deconiface_42 => p_isend_sp, p_recv_dp_deconiface_39 => p_recv_dp, p_recv_sp_deconiface_40 => p_recv_sp, p_send_dp_deconiface_35 => p_send_dp, p_send_sp_deconiface_36 => p_send_sp, p_wait_noarg_deconiface_43 => p_wait_noarg
+    CLASS(t_comm_pattern_orig), TARGET, INTENT(INOUT) :: p_pat
+    LOGICAL, INTENT(IN) :: lacc
+    INTEGER, INTENT(IN) :: nfields_dp, ndim2tot_dp, nfields_sp, ndim2tot_sp
+    TYPE(t_ptr_3d_dp), INTENT(IN), OPTIONAL :: recv_dp(:)
+    TYPE(t_ptr_3d_dp), INTENT(IN), OPTIONAL :: send_dp(:)
+    TYPE(t_ptr_3d_sp), INTENT(IN), OPTIONAL :: recv_sp(:)
+    TYPE(t_ptr_3d_sp), INTENT(IN), OPTIONAL :: send_sp(:)
+    INTEGER, OPTIONAL, INTENT(IN) :: nshift
+    INTEGER :: ndim2_dp(nfields_dp), noffset_dp(nfields_dp), ndim2_sp(nfields_sp), noffset_sp(nfields_sp)
+    REAL(KIND = 8) :: send_buf_dp(ndim2tot_dp, p_pat % n_send), recv_buf_dp(ndim2tot_dp, p_pat % n_recv)
+    REAL(KIND = 4) :: send_buf_sp(ndim2tot_sp, p_pat % n_send), recv_buf_sp(ndim2tot_sp, p_pat % n_recv)
+    INTEGER :: i, k, kshift_dp(nfields_dp), kshift_sp(nfields_sp), jb, ik, jl, n, np, irs, iss, pid, icount, accum
+    LOGICAL :: lsend
+    INTEGER, POINTER :: recv_src(:)
+    INTEGER, POINTER :: recv_dst_blk(:)
+    INTEGER, POINTER :: recv_dst_idx(:)
+    INTEGER, POINTER :: send_src_blk(:)
+    INTEGER, POINTER :: send_src_idx(:)
+    INTEGER :: n_send, n_pnts
+    recv_src => p_pat % recv_src(:)
+    recv_dst_blk => p_pat % recv_dst_blk(:)
+    recv_dst_idx => p_pat % recv_dst_idx(:)
+    send_src_blk => p_pat % send_src_blk(:)
+    send_src_idx => p_pat % send_src_idx(:)
+    n_send = p_pat % n_send
+    n_pnts = p_pat % n_pnts
+    IF (itype_exch_barrier == 1 .OR. itype_exch_barrier == 3) THEN
+      IF (activate_sync_timers) CALL timer_start(timer_barrier)
+      CALL p_barrier(p_pat % comm)
+      IF (activate_sync_timers) CALL timer_stop(timer_barrier)
+    END IF
+    IF (activate_sync_timers) CALL timer_start(timer_exch_data)
+    lsend = .FALSE.
+    kshift_dp = nshift
+    kshift_sp = nshift
+    IF (my_process_is_mpi_seq()) THEN
+      DO n = 1, nfields_dp
+        CALL exchange_data_r3d_seq(p_pat, lacc, recv_dp(n) % p)
+      END DO
+      DO n = 1, nfields_sp
+        CALL exchange_data_s3d_seq(p_pat, lacc, recv_sp(n) % p)
+      END DO
+      IF (activate_sync_timers) CALL timer_stop(timer_exch_data)
+      RETURN
+    END IF
+    IF ((iorder_sendrecv == 1 .OR. iorder_sendrecv == 3) .AND. .NOT. my_process_is_mpi_seq()) THEN
+      DO np = 1, p_pat % np_recv
+        pid = p_pat % pelist_recv(np)
+        irs = p_pat % recv_startidx(np)
+        icount = p_pat % recv_count(np) * ndim2tot_dp
+        IF (icount > 0) CALL p_irecv_dp_deconiface_33(recv_buf_dp(1, irs), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
+        icount = p_pat % recv_count(np) * ndim2tot_sp
+        IF (icount > 0) CALL p_irecv_sp_deconiface_34(recv_buf_sp(1, irs), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
+      END DO
+    END IF
+    DO n = 1, nfields_dp
+      IF (SIZE(recv_dp(n) % p, 2) == 1) kshift_dp(n) = 0
+    END DO
+    DO n = 1, nfields_sp
+      IF (SIZE(recv_sp(n) % p, 2) == 1) kshift_sp(n) = 0
+    END DO
+    accum = 0
+    DO n = 1, nfields_dp
+      noffset_dp(n) = accum
+      ndim2_dp(n) = SIZE(recv_dp(n) % p, 2) - kshift_dp(n)
+      accum = accum + ndim2_dp(n)
+    END DO
+    accum = 0
+    DO n = 1, nfields_sp
+      noffset_sp(n) = accum
+      ndim2_sp(n) = SIZE(recv_sp(n) % p, 2) - kshift_sp(n)
+      accum = accum + ndim2_sp(n)
+    END DO
+    DO i = 1, n_send
+      jb = send_src_blk(i)
+      jl = send_src_idx(i)
+      DO n = 1, nfields_dp
+        DO k = 1, ndim2_dp(n)
+          send_buf_dp(k + noffset_dp(n), i) = recv_dp(n) % p(jl, k + kshift_dp(n), jb)
+        END DO
+      END DO
+      DO n = 1, nfields_sp
+        DO k = 1, ndim2_sp(n)
+          send_buf_sp(k + noffset_sp(n), i) = recv_sp(n) % p(jl, k + kshift_sp(n), jb)
+        END DO
+      END DO
+    END DO
+    IF (iorder_sendrecv == 1) THEN
+      DO np = 1, p_pat % np_send
+        pid = p_pat % pelist_send(np)
+        iss = p_pat % send_startidx(np)
+        icount = p_pat % send_count(np) * ndim2tot_dp
+        IF (icount > 0) CALL p_send_dp_deconiface_35(send_buf_dp(1, iss), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
+        icount = p_pat % send_count(np) * ndim2tot_sp
+        IF (icount > 0) CALL p_send_sp_deconiface_36(send_buf_sp(1, iss), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
+      END DO
+    ELSE IF (iorder_sendrecv == 2) THEN
+      DO np = 1, p_pat % np_send
+        pid = p_pat % pelist_send(np)
+        iss = p_pat % send_startidx(np)
+        icount = p_pat % send_count(np) * ndim2tot_dp
+        IF (icount > 0) CALL p_isend_dp_deconiface_37(send_buf_dp(1, iss), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
+        icount = p_pat % send_count(np) * ndim2tot_sp
+        IF (icount > 0) CALL p_isend_sp_deconiface_38(send_buf_sp(1, iss), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
+      END DO
+      DO np = 1, p_pat % np_recv
+        pid = p_pat % pelist_recv(np)
+        irs = p_pat % recv_startidx(np)
+        icount = p_pat % recv_count(np) * ndim2tot_dp
+        IF (icount > 0) CALL p_recv_dp_deconiface_39(recv_buf_dp(1, irs), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
+        icount = p_pat % recv_count(np) * ndim2tot_sp
+        IF (icount > 0) CALL p_recv_sp_deconiface_40(recv_buf_sp(1, irs), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
+      END DO
+    ELSE IF (iorder_sendrecv == 3) THEN
+      DO np = 1, p_pat % np_send
+        pid = p_pat % pelist_send(np)
+        iss = p_pat % send_startidx(np)
+        icount = p_pat % send_count(np) * ndim2tot_dp
+        IF (icount > 0) CALL p_isend_dp_deconiface_41(send_buf_dp(1, iss), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
+        icount = p_pat % send_count(np) * ndim2tot_sp
+        IF (icount > 0) CALL p_isend_sp_deconiface_42(send_buf_sp(1, iss), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
+      END DO
+    END IF
+    IF (activate_sync_timers) CALL timer_start(timer_exch_data_wait)
+    CALL p_wait_noarg_deconiface_43
+    IF (activate_sync_timers) CALL timer_stop(timer_exch_data_wait)
+    IF (itype_exch_barrier == 2 .OR. itype_exch_barrier == 3) THEN
+      IF (activate_sync_timers) CALL timer_start(timer_barrier)
+      CALL p_barrier(p_pat % comm)
+      IF (activate_sync_timers) CALL timer_stop(timer_barrier)
+    END IF
+    DO i = 1, n_pnts
+      jb = recv_dst_blk(i)
+      jl = recv_dst_idx(i)
+      ik = recv_src(i)
+      DO n = 1, nfields_dp
+        DO k = 1, ndim2_dp(n)
+          recv_dp(n) % p(jl, k + kshift_dp(n), jb) = recv_buf_dp(k + noffset_dp(n), ik)
+        END DO
+      END DO
+      DO n = 1, nfields_sp
+        DO k = 1, ndim2_sp(n)
+          recv_sp(n) % p(jl, k + kshift_sp(n), jb) = recv_buf_sp(k + noffset_sp(n), ik)
+        END DO
+      END DO
+    END DO
+    CALL acc_wait_comms(get_comm_acc_queue())
+    IF (activate_sync_timers) CALL timer_stop(timer_exch_data)
+  END SUBROUTINE exchange_data_mult_mixprec
+END MODULE mo_communication_types
+MODULE mo_communication
+  IMPLICIT NONE
+  CHARACTER(LEN = *), PARAMETER :: modname = "mo_communication"
+  CONTAINS
+  SUBROUTINE exchange_data_r3d(p_pat, lacc, recv, send, add)
+    USE mo_communication_types, ONLY: exchange_data_r3d_deconproc_1 => exchange_data_r3d, t_comm_pattern_orig
+    TYPE(t_comm_pattern_orig), POINTER :: p_pat
+    LOGICAL, INTENT(IN) :: lacc
+    REAL(KIND = 8), INTENT(INOUT), TARGET :: recv(:, :, :)
+    REAL(KIND = 8), INTENT(IN), OPTIONAL, TARGET :: send(:, :, :)
+    REAL(KIND = 8), INTENT(IN), OPTIONAL, TARGET :: add(:, :, :)
+    CALL exchange_data_r3d_deconproc_1(p_pat, lacc, recv, send, add)
+  END SUBROUTINE exchange_data_r3d
+  SUBROUTINE exchange_data_s3d(p_pat, lacc, recv, send, add)
+    USE mo_communication_types, ONLY: exchange_data_s3d_deconproc_2 => exchange_data_s3d, t_comm_pattern_orig
+    TYPE(t_comm_pattern_orig), POINTER :: p_pat
+    LOGICAL, INTENT(IN) :: lacc
+    REAL(KIND = 4), INTENT(INOUT), TARGET :: recv(:, :, :)
+    REAL(KIND = 4), INTENT(IN), OPTIONAL, TARGET :: send(:, :, :)
+    REAL(KIND = 4), INTENT(IN), OPTIONAL, TARGET :: add(:, :, :)
+    CALL exchange_data_s3d_deconproc_2(p_pat, .FALSE., recv, send, add)
+  END SUBROUTINE exchange_data_s3d
+  SUBROUTINE exchange_data_mult_mixprec(p_pat, lacc, nfields_dp, ndim2tot_dp, nfields_sp, ndim2tot_sp, recv1_dp, send1_dp, recv2_dp, send2_dp, recv3_dp, send3_dp, recv4_dp, send4_dp, recv5_dp, send5_dp, recv1_sp, send1_sp, recv2_sp, send2_sp, recv3_sp, send3_sp, recv4_sp, send4_sp, recv5_sp, send5_sp, recv4d_dp, send4d_dp, recv4d_sp, send4d_sp, recv3d_arr_dp, recv3d_arr_sp, nshift)
+    USE mo_communication_types, ONLY: exchange_data_mult_mixprec_deconproc_16 => exchange_data_mult_mixprec, t_comm_pattern_orig
+    USE mo_fortran_tools, ONLY: t_ptr_3d_dp, t_ptr_3d_sp
+    USE mo_exception, ONLY: finish
+    TYPE(t_comm_pattern_orig), INTENT(INOUT) :: p_pat
+    LOGICAL, INTENT(IN) :: lacc
+    REAL(KIND = 8), INTENT(INOUT), TARGET, OPTIONAL :: recv1_dp(:, :, :), recv2_dp(:, :, :), recv3_dp(:, :, :), recv4_dp(:, :, :), recv5_dp(:, :, :), recv4d_dp(:, :, :, :)
+    REAL(KIND = 8), INTENT(IN), TARGET, OPTIONAL :: send1_dp(:, :, :), send2_dp(:, :, :), send3_dp(:, :, :), send4_dp(:, :, :), send5_dp(:, :, :), send4d_dp(:, :, :, :)
+    REAL(KIND = 4), INTENT(INOUT), TARGET, OPTIONAL :: recv1_sp(:, :, :), recv2_sp(:, :, :), recv3_sp(:, :, :), recv4_sp(:, :, :), recv5_sp(:, :, :), recv4d_sp(:, :, :, :)
+    REAL(KIND = 4), INTENT(IN), TARGET, OPTIONAL :: send1_sp(:, :, :), send2_sp(:, :, :), send3_sp(:, :, :), send4_sp(:, :, :), send5_sp(:, :, :), send4d_sp(:, :, :, :)
+    TYPE(t_ptr_3d_dp), INTENT(INOUT), OPTIONAL :: recv3d_arr_dp(:)
+    TYPE(t_ptr_3d_sp), INTENT(INOUT), OPTIONAL :: recv3d_arr_sp(:)
+    INTEGER, INTENT(IN) :: nfields_dp, ndim2tot_dp, nfields_sp, ndim2tot_sp
+    INTEGER, OPTIONAL, INTENT(IN) :: nshift
+    TYPE(t_ptr_3d_dp) :: recv_dp(nfields_dp)
+    TYPE(t_ptr_3d_sp) :: recv_sp(nfields_sp)
+    INTEGER :: i, i_dp, i_sp
+    LOGICAL :: lsend
+    CHARACTER(LEN = *), PARAMETER :: routine = modname // "::exchange_data_mult_mixprec"
+    lsend = .FALSE.
+    i_dp = 0
+    i_sp = 0
+    DO i = 1, SIZE(recv4d_dp, 4)
+      i_dp = i_dp + 1
+      recv_dp(i_dp) % p => recv4d_dp(:, :, :, i)
+    END DO
+    i_dp = i_dp + 1
+    recv_dp(i_dp) % p => recv1_dp
+    i_dp = i_dp + 1
+    recv_dp(i_dp) % p => recv2_dp
+    i_dp = i_dp + 1
+    recv_dp(i_dp) % p => recv3_dp
+    i_dp = i_dp + 1
+    recv_dp(i_dp) % p => recv4_dp
+    i_dp = i_dp + 1
+    recv_dp(i_dp) % p => recv5_dp
+    DO i = 1, SIZE(recv3d_arr_dp)
+      i_dp = i_dp + 1
+      recv_dp(i_dp) % p => recv3d_arr_dp(i) % p
+    END DO
+    DO i = 1, SIZE(recv4d_sp, 4)
+      i_sp = i_sp + 1
+      recv_sp(i_sp) % p => recv4d_sp(:, :, :, i)
+    END DO
+    i_sp = i_sp + 1
+    recv_sp(i_sp) % p => recv1_sp
+    i_sp = i_sp + 1
+    recv_sp(i_sp) % p => recv2_sp
+    i_sp = i_sp + 1
+    recv_sp(i_sp) % p => recv3_sp
+    i_sp = i_sp + 1
+    recv_sp(i_sp) % p => recv4_sp
+    i_sp = i_sp + 1
+    recv_sp(i_sp) % p => recv5_sp
+    DO i = 1, SIZE(recv3d_arr_sp)
+      i_sp = i_sp + 1
+      recv_sp(i_sp) % p => recv3d_arr_sp(i) % p
+    END DO
+    IF (i_dp /= nfields_dp) CALL finish(routine, "internal error nfields_dp")
+    IF (i_sp /= nfields_sp) CALL finish(routine, "internal error nfields_sp")
+    CALL exchange_data_mult_mixprec_deconproc_16(p_pat, lacc, nfields_dp, ndim2tot_dp, nfields_sp, ndim2tot_sp, recv_dp = recv_dp, recv_sp = recv_sp, nshift = nshift)
+  END SUBROUTINE exchange_data_mult_mixprec
+END MODULE mo_communication
 MODULE mo_model_domain
   USE mo_math_types, ONLY: t_cartesian_coordinates, t_geographical_coordinates
+  USE mo_decomposition_tools, ONLY: t_grid_domain_decomp_info
+  USE mo_communication_types, ONLY: t_comm_pattern_orig, t_p_comm_pattern
   IMPLICIT NONE
   TYPE :: t_subset_range
     INTEGER :: start_block
@@ -586,6 +1839,7 @@ MODULE mo_model_domain
     INTEGER, ALLOCATABLE :: edge_idx(:, :, :)
     INTEGER, ALLOCATABLE :: edge_blk(:, :, :)
     TYPE(t_geographical_coordinates), ALLOCATABLE :: center(:, :)
+    TYPE(t_grid_domain_decomp_info) :: decomp_info
     TYPE(t_subset_range) :: all
     TYPE(t_subset_range) :: owned
     TYPE(t_subset_range) :: in_domain
@@ -603,6 +1857,7 @@ MODULE mo_model_domain
     REAL(KIND = 8), ALLOCATABLE :: inv_primal_edge_length(:, :)
     REAL(KIND = 8), ALLOCATABLE :: inv_dual_edge_length(:, :)
     REAL(KIND = 8), ALLOCATABLE :: f_e(:, :)
+    TYPE(t_grid_domain_decomp_info) :: decomp_info
     TYPE(t_subset_range) :: all
     TYPE(t_subset_range) :: owned
     TYPE(t_subset_range) :: in_domain
@@ -613,16 +1868,29 @@ MODULE mo_model_domain
     INTEGER, ALLOCATABLE :: num_edges(:, :)
     TYPE(t_geographical_coordinates), ALLOCATABLE :: vertex(:, :)
     REAL(KIND = 8), ALLOCATABLE :: f_v(:, :)
+    TYPE(t_grid_domain_decomp_info) :: decomp_info
     TYPE(t_subset_range) :: owned
     TYPE(t_subset_range) :: in_domain
   END TYPE t_grid_vertices
   TYPE :: t_patch
+    INTEGER :: n_patch_cells
+    INTEGER :: n_patch_edges
+    INTEGER :: n_patch_verts
+    INTEGER :: n_patch_cells_g
+    INTEGER :: n_patch_edges_g
+    INTEGER :: n_patch_verts_g
     INTEGER :: alloc_cell_blocks
+    INTEGER :: nblks_c
     INTEGER :: nblks_e
     INTEGER :: nblks_v
     TYPE(t_grid_cells) :: cells
     TYPE(t_grid_edges) :: edges
     TYPE(t_grid_vertices) :: verts
+    TYPE(t_comm_pattern_orig), POINTER :: comm_pat_c
+    TYPE(t_comm_pattern_orig), POINTER :: comm_pat_c1
+    TYPE(t_comm_pattern_orig), POINTER :: comm_pat_e
+    TYPE(t_comm_pattern_orig), POINTER :: comm_pat_v
+    TYPE(t_p_comm_pattern) :: comm_pat_work2test(3)
   END TYPE t_patch
   TYPE :: t_patch_vert
     REAL(KIND = 8), ALLOCATABLE :: del_zlev_m(:)
@@ -661,361 +1929,6 @@ MODULE mo_grid_subset
     END IF
   END SUBROUTINE get_index_range
 END MODULE mo_grid_subset
-MODULE mo_mpi
-  USE, INTRINSIC :: iso_c_binding, ONLY: c_char, c_signed_char, c_int, c_bool
-  IMPLICIT NONE
-  LOGICAL :: process_is_mpi_parallel
-  LOGICAL :: process_is_stdio
-  INTEGER :: p_pe_work
-  INTEGER :: p_comm_work
-  CONTAINS
-  INTEGER FUNCTION get_my_mpi_work_communicator()
-    get_my_mpi_work_communicator = p_comm_work
-  END FUNCTION get_my_mpi_work_communicator
-  LOGICAL FUNCTION my_process_is_stdio()
-    my_process_is_stdio = process_is_stdio
-  END FUNCTION my_process_is_stdio
-  LOGICAL FUNCTION my_process_is_mpi_parallel()
-    my_process_is_mpi_parallel = process_is_mpi_parallel
-  END FUNCTION my_process_is_mpi_parallel
-  SUBROUTINE work_mpi_barrier
-  END SUBROUTINE work_mpi_barrier
-  FUNCTION p_sum_dp_0d(zfield, comm, root) RESULT(p_sum)
-    REAL(KIND = 8) :: p_sum
-    REAL(KIND = 8), INTENT(IN) :: zfield
-    INTEGER, INTENT(IN) :: comm
-    INTEGER, INTENT(IN), OPTIONAL :: root
-  END FUNCTION p_sum_dp_0d
-  FUNCTION p_max_dp_0d(zfield, proc_id, keyval, comm, root) RESULT(p_max)
-    REAL(KIND = 8) :: p_max
-    REAL(KIND = 8), INTENT(IN) :: zfield
-    INTEGER, OPTIONAL, INTENT(INOUT) :: proc_id
-    INTEGER, OPTIONAL, INTENT(INOUT) :: keyval
-    INTEGER, OPTIONAL, INTENT(IN) :: root
-    INTEGER, OPTIONAL, INTENT(IN) :: comm
-  END FUNCTION p_max_dp_0d
-  FUNCTION p_min_dp_0d(zfield, proc_id, keyval, comm, root) RESULT(p_min)
-    REAL(KIND = 8) :: p_min
-    REAL(KIND = 8), INTENT(IN) :: zfield
-    INTEGER, OPTIONAL, INTENT(INOUT) :: proc_id
-    INTEGER, OPTIONAL, INTENT(INOUT) :: keyval
-    INTEGER, OPTIONAL, INTENT(IN) :: root
-    INTEGER, OPTIONAL, INTENT(IN) :: comm
-  END FUNCTION p_min_dp_0d
-END MODULE mo_mpi
-MODULE mo_ocean_initialization
-  IMPLICIT NONE
-  CONTAINS
-  FUNCTION is_initial_timestep(timestep)
-    USE mo_master_config, ONLY: isinitfromrestart, isrestart
-    INTEGER :: timestep
-    LOGICAL :: is_initial_timestep
-    IF (timestep == 1 .AND. .NOT. (isrestart() .OR. isinitfromrestart())) THEN
-      is_initial_timestep = .TRUE.
-    ELSE
-      is_initial_timestep = .FALSE.
-    END IF
-  END FUNCTION is_initial_timestep
-END MODULE mo_ocean_initialization
-MODULE mo_ocean_nml
-  IMPLICIT NONE
-  INTEGER :: n_zlev
-  INTEGER :: i_bc_veloc_lateral = 0
-  INTEGER :: i_bc_veloc_top = 1
-  INTEGER :: i_bc_veloc_bot = 1
-  LOGICAL :: use_ssh_in_momentum_eq = .TRUE.
-  INTEGER :: nonlinearcoriolis_type = 200
-  LOGICAL :: l_anticipated_vorticity = .FALSE.
-  INTEGER :: iswm_oce = 0
-  REAL(KIND = 8) :: ab_const = 0.1D0
-  REAL(KIND = 8) :: ab_beta = 0.6D0
-  REAL(KIND = 8) :: ab_gam = 0.6D0
-  REAL(KIND = 8) :: solver_tolerance = 1D-14
-  REAL(KIND = 8) :: massmatrix_solver_tolerance = 1D-11
-  INTEGER :: solver_max_restart_iterations = 100
-  INTEGER :: solver_max_iter_per_restart = 200
-  INTEGER :: solver_max_iter_per_restart_sp = 200
-  REAL(KIND = 4) :: solver_tolerance_sp = 1E-11
-  LOGICAL :: use_absolute_solver_tolerance = .TRUE.
-  INTEGER :: select_transfer = 0
-  INTEGER :: select_solver = 4
-  INTEGER :: solver_firstguess = 2
-  LOGICAL :: l_solver_compare = .FALSE.
-  INTEGER :: solver_comp_nsteps = 100
-  REAL(KIND = 8) :: solver_tolerance_comp = 1D-30
-  LOGICAL :: l_lhs_direct = .FALSE.
-  INTEGER :: select_lhs = 1
-  INTEGER :: fast_performance_level = 50
-  INTEGER :: mass_matrix_inversion_type = 0
-  INTEGER :: velocitydiffusion_order = 1
-  INTEGER :: laplacian_form = 1
-  LOGICAL :: l_rigid_lid = .FALSE.
-  LOGICAL :: l_edge_based = .TRUE.
-  INTEGER :: horizonatlvelocity_verticaladvection_form = 1
-  LOGICAL :: createsolvermatrix = .FALSE.
-  NAMELIST /ocean_dynamics_nml/ ab_beta, ab_const, ab_gam, i_bc_veloc_bot, i_bc_veloc_lateral, i_bc_veloc_top, use_ssh_in_momentum_eq, iswm_oce, l_rigid_lid, l_edge_based, n_zlev, select_solver, use_absolute_solver_tolerance, solver_max_iter_per_restart, solver_max_restart_iterations, solver_tolerance, solver_max_iter_per_restart_sp, solver_tolerance_sp, select_lhs, select_transfer, l_lhs_direct, l_solver_compare, solver_tolerance_comp, solver_comp_nsteps, massmatrix_solver_tolerance, fast_performance_level, mass_matrix_inversion_type, nonlinearcoriolis_type, horizonatlvelocity_verticaladvection_form, solver_firstguess, createsolvermatrix
-  INTEGER :: ppscheme_type = 4
-  INTEGER :: vert_mix_type = 1
-  REAL(KIND = 8) :: verticalviscosity_timeweight = 0.0D0
-  REAL(KIND = 8) :: velocity_richardsoncoeff = 0.005D0
-  REAL(KIND = 8) :: biharmonicvort_weight = 1.0D0
-  REAL(KIND = 8) :: biharmonicdiv_weight = 1.0D0
-  REAL(KIND = 8) :: harmonicvort_weight = 1.0D0
-  REAL(KIND = 8) :: harmonicdiv_weight = 1.0D0
-  NAMELIST /ocean_horizontal_diffusion_nml/ laplacian_form, velocitydiffusion_order, harmonicvort_weight, harmonicdiv_weight, biharmonicvort_weight, biharmonicdiv_weight
-  NAMELIST /ocean_vertical_diffusion_nml/ ppscheme_type, vert_mix_type, verticalviscosity_timeweight, velocity_richardsoncoeff
-  REAL(KIND = 8) :: oceanreferencedensity = 1025.022D0
-  REAL(KIND = 8) :: oceanreferencedensity_inv
-  NAMELIST /ocean_physics_nml/ oceanreferencedensity
-  INTEGER :: iforc_oce = 0
-  INTEGER :: forcing_windstress_u_type = 0
-  INTEGER :: forcing_smooth_steps = 1
-  REAL(KIND = 8) :: forcing_windstress_weight = 1.0D0
-  NAMELIST /ocean_forcing_nml/ forcing_windstress_u_type, iforc_oce, forcing_smooth_steps, forcing_windstress_weight
-  CONTAINS
-END MODULE mo_ocean_nml
-MODULE mo_ocean_physics_types
-  IMPLICIT NONE
-  TYPE :: t_ho_params
-    REAL(KIND = 8), POINTER :: harmonicviscosity_coeff(:, :, :), biharmonicviscosity_coeff(:, :, :)
-    REAL(KIND = 8), POINTER :: a_veloc_v(:, :, :)
-    REAL(KIND = 8) :: a_veloc_v_back
-    REAL(KIND = 8), POINTER, DIMENSION(:, :, :) :: velocity_windmixing
-    REAL(KIND = 8) :: bottom_drag_coeff
-  END TYPE t_ho_params
-  TYPE(t_ho_params), PUBLIC, TARGET :: v_params
-  CONTAINS
-END MODULE mo_ocean_physics_types
-MODULE mo_ocean_solve_aux
-  IMPLICIT NONE
-  TYPE :: t_ocean_solve_parm
-    REAL(KIND = 8) :: tol
-    INTEGER :: pt, nr, m, nblk, nblk_a, nidx, nidx_e
-    LOGICAL :: use_atol
-  END TYPE t_ocean_solve_parm
-  CONTAINS
-  SUBROUTINE ocean_solve_parm_init(this, pt, nr, m, nblk, nblk_a, nidx, nidx_e, tol, use_atol)
-    CLASS(t_ocean_solve_parm), INTENT(INOUT) :: this
-    INTEGER, INTENT(IN) :: pt, nr, m, nblk, nblk_a, nidx, nidx_e
-    REAL(KIND = 8), INTENT(IN) :: tol
-    LOGICAL :: use_atol
-    this % pt = 60
-    this % nr = nr
-    this % m = m
-    this % nblk = nblk
-    this % nblk_a = nblk_a
-    this % nidx = nidx
-    this % nidx_e = nidx_e
-    this % tol = tol
-    this % use_atol = use_atol
-  END SUBROUTINE ocean_solve_parm_init
-END MODULE mo_ocean_solve_aux
-MODULE mo_ocean_solve_lhs
-  IMPLICIT NONE
-  CHARACTER(LEN = *), PARAMETER :: module_name = "mo_ocean_solve_lhs"
-  TYPE :: t_lhs
-    INTEGER :: nblk_loc, nidx_loc
-    REAL(KIND = 8), ALLOCATABLE, DIMENSION(:, :, :) :: coef_l_wp
-    INTEGER, ALLOCATABLE, DIMENSION(:, :, :) :: blk_loc, idx_loc
-  END TYPE t_lhs
-  CONTAINS
-  SUBROUTINE lhs_dump_matrix(this, id, prefix, lprecon, lacc)
-    USE mo_fortran_tools, ONLY: set_acc_host_or_device
-    USE mo_exception, ONLY: finish
-    USE mo_mpi, ONLY: p_pe_work
-    CLASS(t_lhs), INTENT(IN), TARGET :: this
-    INTEGER, INTENT(IN) :: id
-    LOGICAL, INTENT(IN) :: lprecon
-    LOGICAL, INTENT(IN), OPTIONAL :: lacc
-    CHARACTER(LEN = *), INTENT(IN) :: prefix
-    CHARACTER(LEN = 128) :: filename
-    INTEGER :: inz, iblk, iidx
-    INTEGER, PARAMETER :: fileno = 501
-    CHARACTER(LEN = *), PARAMETER :: routine = module_name // "::lhs_dump_matrix()"
-    LOGICAL :: lzacc
-    CALL set_acc_host_or_device(lzacc, lacc)
-    IF (lprecon) CALL finish(routine, "cannot dump preconditioner matrix if no precon present")
-    WRITE(filename, "(A,I0.4,A,i0.4,a)") TRIM(prefix) // "_", id, "_", p_pe_work, ".txt"
-    OPEN(UNIT = fileno, FILE = TRIM(filename), STATUS = 'new')
-    DO inz = 1, SIZE(this % coef_l_wp, 3)
-      DO iblk = 1, this % nblk_loc
-        DO iidx = 1, this % nidx_loc
-          WRITE(501, "(2(a,2(i8.8,a)),es12.5)") "(", iidx, ":", iblk, "), ", "(", this % idx_loc(iidx, iblk, inz), ":", this % blk_loc(iidx, iblk, inz), ")", this % coef_l_wp(iidx, iblk, inz)
-        END DO
-      END DO
-    END DO
-    CLOSE(UNIT = fileno)
-  END SUBROUTINE lhs_dump_matrix
-END MODULE mo_ocean_solve_lhs
-MODULE mo_ocean_solve_lhs_type
-  IMPLICIT NONE
-  TYPE, ABSTRACT :: t_lhs_agen
-    LOGICAL :: is_const, use_shortcut
-    LOGICAL :: is_init = .FALSE.
-  END TYPE t_lhs_agen
-END MODULE mo_ocean_solve_lhs_type
-MODULE mo_ocean_solve_transfer
-  IMPLICIT NONE
-  TYPE, ABSTRACT :: t_transfer
-  END TYPE t_transfer
-  CONTAINS
-END MODULE mo_ocean_solve_transfer
-MODULE mo_ocean_solve_backend
-  USE mo_ocean_solve_lhs, ONLY: t_lhs
-  USE mo_ocean_solve_transfer, ONLY: t_transfer
-  IMPLICIT NONE
-  CHARACTER(LEN = *), PARAMETER :: this_mod_name = 'mo_ocean_solve_backend'
-  TYPE, ABSTRACT :: t_ocean_solve_backend
-    TYPE(t_lhs) :: lhs
-    CLASS(t_transfer), POINTER :: trans => NULL()
-  END TYPE t_ocean_solve_backend
-  CONTAINS
-  SUBROUTINE ocean_solve_backend_dump_matrix(this, id, lprecon, lacc)
-    USE mo_fortran_tools, ONLY: set_acc_host_or_device
-    USE mo_exception, ONLY: finish
-    USE mo_ocean_solve_lhs, ONLY: lhs_dump_matrix_deconproc_40 => lhs_dump_matrix, lhs_dump_matrix_deconproc_41 => lhs_dump_matrix
-    CLASS(t_ocean_solve_backend), INTENT(INOUT) :: this
-    INTEGER, INTENT(IN) :: id
-    LOGICAL, INTENT(IN) :: lprecon
-    LOGICAL, INTENT(IN), OPTIONAL :: lacc
-    CHARACTER(LEN = *), PARAMETER :: routine = this_mod_name // "::ocean_solve_t::ocean_solve_dump_matrix()"
-    LOGICAL :: lzacc
-    CALL set_acc_host_or_device(lzacc, lacc)
-    IF (.NOT. ASSOCIATED(this % trans)) CALL finish(routine, "ocean_solve_t was not initialized")
-    IF (lprecon) THEN
-      CALL lhs_dump_matrix_deconproc_40(this % lhs, id, "ocean_matrix_precon_", .TRUE., lacc = lzacc)
-    ELSE
-      CALL lhs_dump_matrix_deconproc_41(this % lhs, id, "ocean_matrix_lhs_", .FALSE., lacc = lzacc)
-    END IF
-  END SUBROUTINE ocean_solve_backend_dump_matrix
-END MODULE mo_ocean_solve_backend
-MODULE mo_ocean_solve
-  USE mo_ocean_solve_backend, ONLY: t_ocean_solve_backend
-  IMPLICIT NONE
-  TYPE :: t_ocean_solve
-    CLASS(t_ocean_solve_backend), ALLOCATABLE :: act
-    REAL(KIND = 8), ALLOCATABLE, DIMENSION(:, :), PUBLIC :: x_loc_wp
-    REAL(KIND = 8), POINTER, DIMENSION(:, :), PUBLIC :: b_loc_wp
-    REAL(KIND = 8), ALLOCATABLE, DIMENSION(:), PUBLIC :: res_loc_wp
-    CHARACTER(LEN = 64), PUBLIC :: sol_type_name
-    LOGICAL, PUBLIC :: is_init = .FALSE.
-  END TYPE t_ocean_solve
-  CONTAINS
-  SUBROUTINE ocean_solve_dump_matrix(this, id, lprecon_in, lacc)
-    USE mo_fortran_tools, ONLY: set_acc_host_or_device
-    USE mo_ocean_solve_backend, ONLY: ocean_solve_backend_dump_matrix_deconproc_44 => ocean_solve_backend_dump_matrix
-    CLASS(t_ocean_solve), INTENT(INOUT) :: this
-    INTEGER, INTENT(IN) :: id
-    LOGICAL, INTENT(IN), OPTIONAL :: lprecon_in
-    LOGICAL, INTENT(IN), OPTIONAL :: lacc
-    LOGICAL :: lprecon
-    LOGICAL :: lzacc
-    CALL set_acc_host_or_device(lzacc, lacc)
-    lprecon = .FALSE.
-    CALL ocean_solve_backend_dump_matrix_deconproc_44(this % act, id, lprecon, lacc = lzacc)
-  END SUBROUTINE ocean_solve_dump_matrix
-  SUBROUTINE ocean_solve_construct(this, st, par, par_sp, lhs_agen, trans, lacc)
-    USE mo_ocean_solve_aux, ONLY: t_ocean_solve_parm
-    USE mo_ocean_solve_lhs_type, ONLY: t_lhs_agen
-    USE mo_ocean_solve_transfer, ONLY: t_transfer
-    CLASS(t_ocean_solve), TARGET, INTENT(INOUT) :: this
-    INTEGER, INTENT(IN) :: st
-    TYPE(t_ocean_solve_parm), INTENT(IN) :: par, par_sp
-    CLASS(t_lhs_agen), TARGET, INTENT(IN) :: lhs_agen
-    CLASS(t_transfer), TARGET, INTENT(IN) :: trans
-    LOGICAL, INTENT(IN), OPTIONAL :: lacc
-  END SUBROUTINE ocean_solve_construct
-  SUBROUTINE ocean_solve_solve(this, niter, niter_sp, lacc)
-    CLASS(t_ocean_solve), INTENT(INOUT) :: this
-    INTEGER, INTENT(OUT) :: niter, niter_sp
-    LOGICAL, INTENT(IN), OPTIONAL :: lacc
-  END SUBROUTINE ocean_solve_solve
-END MODULE mo_ocean_solve
-MODULE mo_ocean_solve_subset_transfer
-  USE mo_ocean_solve_transfer, ONLY: t_transfer
-  IMPLICIT NONE
-  TYPE, EXTENDS(t_transfer) :: t_subset_transfer
-  END TYPE t_subset_transfer
-  CONTAINS
-  SUBROUTINE subset_transfer_construct(this, sync_type, patch_2d, redfac, mode, lacc)
-    USE mo_model_domain, ONLY: t_patch
-    CLASS(t_subset_transfer), INTENT(INOUT) :: this
-    INTEGER, INTENT(IN) :: sync_type, redfac, mode
-    TYPE(t_patch), POINTER :: patch_2d
-    LOGICAL, INTENT(IN), OPTIONAL :: lacc
-  END SUBROUTINE subset_transfer_construct
-END MODULE mo_ocean_solve_subset_transfer
-MODULE mo_ocean_solve_trivial_transfer
-  USE mo_ocean_solve_transfer, ONLY: t_transfer
-  IMPLICIT NONE
-  TYPE, EXTENDS(t_transfer) :: t_trivial_transfer
-  END TYPE t_trivial_transfer
-  CONTAINS
-  SUBROUTINE trivial_transfer_construct(this, sync_type, patch_2d, lacc)
-    USE mo_model_domain, ONLY: t_patch
-    CLASS(t_trivial_transfer), INTENT(INOUT) :: this
-    INTEGER, INTENT(IN) :: sync_type
-    TYPE(t_patch), POINTER :: patch_2d
-    LOGICAL, INTENT(IN), OPTIONAL :: lacc
-  END SUBROUTINE trivial_transfer_construct
-END MODULE mo_ocean_solve_trivial_transfer
-MODULE mo_ocean_surface_types
-  USE mo_math_types, ONLY: t_cartesian_coordinates
-  IMPLICIT NONE
-  TYPE :: t_ocean_surface
-    REAL(KIND = 8), POINTER :: topbc_windstress_u(:, :), topbc_windstress_v(:, :)
-    TYPE(t_cartesian_coordinates), ALLOCATABLE :: topbc_windstress_cc(:, :)
-  END TYPE t_ocean_surface
-  TYPE :: t_atmos_for_ocean
-  END TYPE t_atmos_for_ocean
-END MODULE mo_ocean_surface_types
-MODULE mo_ocean_types
-  USE mo_math_types, ONLY: t_cartesian_coordinates
-  TYPE :: t_hydro_ocean_prog
-    REAL(KIND = 8), POINTER, DIMENSION(:, :) :: h
-    REAL(KIND = 8), POINTER, DIMENSION(:, :, :) :: vn
-  END TYPE t_hydro_ocean_prog
-  TYPE :: t_hydro_ocean_diag
-    REAL(KIND = 8), POINTER, DIMENSION(:, :, :) :: rho, kin, press_hyd
-    REAL(KIND = 8), POINTER, DIMENSION(:, :) :: thick_c
-    TYPE(t_cartesian_coordinates), POINTER, DIMENSION(:, :, :) :: p_vn
-    REAL(KIND = 8), POINTER, DIMENSION(:, :, :) :: zgrad_rho, w
-    REAL(KIND = 8), POINTER, DIMENSION(:, :, :) :: vn_pred, vn_pred_ptp, veloc_adv_horz, veloc_adv_vert, laplacian_horz, laplacian_vert, grad, press_grad
-    REAL(KIND = 8), POINTER, DIMENSION(:, :, :) :: vort
-    TYPE(t_cartesian_coordinates), POINTER, DIMENSION(:, :, :) :: p_vn_dual
-    REAL(KIND = 8), POINTER, DIMENSION(:, :) :: thick_e
-  END TYPE t_hydro_ocean_diag
-  TYPE :: t_hydro_ocean_aux
-    REAL(KIND = 8), POINTER, DIMENSION(:, :, :) :: g_n, g_nm1, g_nimd
-    REAL(KIND = 8), POINTER, DIMENSION(:, :) :: bc_bot_vn, bc_top_vn, bc_top_windstress
-    REAL(KIND = 8), POINTER, DIMENSION(:, :) :: bc_top_u, bc_top_v, bc_total_top_potential
-    REAL(KIND = 8), POINTER, DIMENSION(:, :) :: p_rhs_sfc_eq
-    TYPE(t_cartesian_coordinates), POINTER, DIMENSION(:, :) :: bc_top_veloc_cc
-  END TYPE t_hydro_ocean_aux
-  TYPE :: t_operator_coeff
-    REAL(KIND = 8), POINTER, DIMENSION(:, :, :, :) :: div_coeff
-    REAL(KIND = 8), POINTER, DIMENSION(:, :, :, :) :: rot_coeff
-    REAL(KIND = 8), POINTER, DIMENSION(:, :, :) :: grad_coeff
-    REAL(KIND = 8), POINTER, DIMENSION(:, :, :) :: averagecellstoedges
-    INTEGER, POINTER, DIMENSION(:, :, :) :: bnd_edges_per_vertex
-    INTEGER, POINTER, DIMENSION(:, :, :, :) :: vertex_bnd_edge_idx
-    INTEGER, POINTER, DIMENSION(:, :, :, :) :: vertex_bnd_edge_blk
-    INTEGER, POINTER, DIMENSION(:, :, :, :) :: boundaryedge_coefficient_index
-    REAL(KIND = 8), POINTER, DIMENSION(:, :, :, :) :: edge2edge_viacell_coeff
-    REAL(KIND = 8), POINTER, DIMENSION(:, :, :) :: edge2edge_viacell_coeff_all
-    REAL(KIND = 8), POINTER, DIMENSION(:, :, :, :) :: edge2edge_viavert_coeff
-    TYPE(t_cartesian_coordinates), POINTER, DIMENSION(:, :, :, :) :: edge2cell_coeff_cc_t
-    TYPE(t_cartesian_coordinates), POINTER, DIMENSION(:, :, :, :) :: edge2vert_coeff_cc
-    TYPE(t_cartesian_coordinates), POINTER, DIMENSION(:, :, :, :) :: edge2vert_coeff_cc_t
-  END TYPE t_operator_coeff
-  TYPE :: t_solvercoeff_singleprecision
-  END TYPE t_solvercoeff_singleprecision
-  TYPE :: t_hydro_ocean_state
-    TYPE(t_hydro_ocean_prog), POINTER :: p_prog(:)
-    TYPE(t_hydro_ocean_diag) :: p_diag
-    TYPE(t_hydro_ocean_aux) :: p_aux
-  END TYPE t_hydro_ocean_state
-END MODULE mo_ocean_types
 MODULE mo_ocean_pp_scheme
   IMPLICIT NONE
   CONTAINS
@@ -1067,17 +1980,142 @@ MODULE mo_ocean_pp_scheme
     END DO
   END SUBROUTINE icon_pp_edge_vnpredict_scheme
 END MODULE mo_ocean_pp_scheme
-MODULE mo_operator_ocean_coeff_3d
+MODULE mo_ocean_solve_lhs
   IMPLICIT NONE
-  INTEGER, PUBLIC :: no_dual_edges
-  INTEGER, PUBLIC :: no_primal_edges
+  CHARACTER(LEN = *), PARAMETER :: module_name = "mo_ocean_solve_lhs"
+  TYPE :: t_lhs
+    INTEGER :: nblk_loc, nidx_loc
+    REAL(KIND = 8), ALLOCATABLE, DIMENSION(:, :, :) :: coef_l_wp
+    INTEGER, ALLOCATABLE, DIMENSION(:, :, :) :: blk_loc, idx_loc
+  END TYPE t_lhs
   CONTAINS
-END MODULE mo_operator_ocean_coeff_3d
-MODULE mo_parallel_config
+  SUBROUTINE lhs_dump_matrix(this, id, prefix, lprecon, lacc)
+    USE mo_fortran_tools, ONLY: set_acc_host_or_device
+    USE mo_exception, ONLY: finish
+    USE mo_mpi, ONLY: p_pe_work
+    CLASS(t_lhs), INTENT(IN), TARGET :: this
+    INTEGER, INTENT(IN) :: id
+    LOGICAL, INTENT(IN) :: lprecon
+    LOGICAL, INTENT(IN), OPTIONAL :: lacc
+    CHARACTER(LEN = *), INTENT(IN) :: prefix
+    CHARACTER(LEN = 128) :: filename
+    INTEGER :: inz, iblk, iidx
+    INTEGER, PARAMETER :: fileno = 501
+    CHARACTER(LEN = *), PARAMETER :: routine = module_name // "::lhs_dump_matrix()"
+    LOGICAL :: lzacc
+    CALL set_acc_host_or_device(lzacc, lacc)
+    IF (lprecon) CALL finish(routine, "cannot dump preconditioner matrix if no precon present")
+    WRITE(filename, "(A,I0.4,A,i0.4,a)") TRIM(prefix) // "_", id, "_", p_pe_work, ".txt"
+    OPEN(UNIT = fileno, FILE = TRIM(filename), STATUS = 'new')
+    DO inz = 1, SIZE(this % coef_l_wp, 3)
+      DO iblk = 1, this % nblk_loc
+        DO iidx = 1, this % nidx_loc
+          WRITE(501, "(2(a,2(i8.8,a)),es12.5)") "(", iidx, ":", iblk, "), ", "(", this % idx_loc(iidx, iblk, inz), ":", this % blk_loc(iidx, iblk, inz), ")", this % coef_l_wp(iidx, iblk, inz)
+        END DO
+      END DO
+    END DO
+    CLOSE(UNIT = fileno)
+  END SUBROUTINE lhs_dump_matrix
+END MODULE mo_ocean_solve_lhs
+MODULE mo_ocean_solve_backend
+  USE mo_ocean_solve_lhs, ONLY: t_lhs
+  USE mo_ocean_solve_transfer, ONLY: t_transfer
   IMPLICIT NONE
-  INTEGER :: nproma = 0
+  CHARACTER(LEN = *), PARAMETER :: this_mod_name = 'mo_ocean_solve_backend'
+  TYPE, ABSTRACT :: t_ocean_solve_backend
+    TYPE(t_lhs) :: lhs
+    CLASS(t_transfer), POINTER :: trans => NULL()
+  END TYPE t_ocean_solve_backend
   CONTAINS
-END MODULE mo_parallel_config
+  SUBROUTINE ocean_solve_backend_dump_matrix(this, id, lprecon, lacc)
+    USE mo_fortran_tools, ONLY: set_acc_host_or_device
+    USE mo_exception, ONLY: finish
+    USE mo_ocean_solve_lhs, ONLY: lhs_dump_matrix_deconproc_56 => lhs_dump_matrix, lhs_dump_matrix_deconproc_57 => lhs_dump_matrix
+    CLASS(t_ocean_solve_backend), INTENT(INOUT) :: this
+    INTEGER, INTENT(IN) :: id
+    LOGICAL, INTENT(IN) :: lprecon
+    LOGICAL, INTENT(IN), OPTIONAL :: lacc
+    CHARACTER(LEN = *), PARAMETER :: routine = this_mod_name // "::ocean_solve_t::ocean_solve_dump_matrix()"
+    LOGICAL :: lzacc
+    CALL set_acc_host_or_device(lzacc, lacc)
+    IF (.NOT. ASSOCIATED(this % trans)) CALL finish(routine, "ocean_solve_t was not initialized")
+    IF (lprecon) THEN
+      CALL lhs_dump_matrix_deconproc_56(this % lhs, id, "ocean_matrix_precon_", .TRUE., lacc = lzacc)
+    ELSE
+      CALL lhs_dump_matrix_deconproc_57(this % lhs, id, "ocean_matrix_lhs_", .FALSE., lacc = lzacc)
+    END IF
+  END SUBROUTINE ocean_solve_backend_dump_matrix
+END MODULE mo_ocean_solve_backend
+MODULE mo_ocean_solve
+  USE mo_ocean_solve_backend, ONLY: t_ocean_solve_backend
+  IMPLICIT NONE
+  TYPE :: t_ocean_solve
+    CLASS(t_ocean_solve_backend), ALLOCATABLE :: act
+    REAL(KIND = 8), ALLOCATABLE, DIMENSION(:, :), PUBLIC :: x_loc_wp
+    REAL(KIND = 8), POINTER, DIMENSION(:, :), PUBLIC :: b_loc_wp
+    REAL(KIND = 8), ALLOCATABLE, DIMENSION(:), PUBLIC :: res_loc_wp
+    CHARACTER(LEN = 64), PUBLIC :: sol_type_name
+    LOGICAL, PUBLIC :: is_init = .FALSE.
+  END TYPE t_ocean_solve
+  CONTAINS
+  SUBROUTINE ocean_solve_dump_matrix(this, id, lprecon_in, lacc)
+    USE mo_fortran_tools, ONLY: set_acc_host_or_device
+    USE mo_ocean_solve_backend, ONLY: ocean_solve_backend_dump_matrix_deconproc_60 => ocean_solve_backend_dump_matrix
+    CLASS(t_ocean_solve), INTENT(INOUT) :: this
+    INTEGER, INTENT(IN) :: id
+    LOGICAL, INTENT(IN), OPTIONAL :: lprecon_in
+    LOGICAL, INTENT(IN), OPTIONAL :: lacc
+    LOGICAL :: lprecon
+    LOGICAL :: lzacc
+    CALL set_acc_host_or_device(lzacc, lacc)
+    lprecon = .FALSE.
+    CALL ocean_solve_backend_dump_matrix_deconproc_60(this % act, id, lprecon, lacc = lzacc)
+  END SUBROUTINE ocean_solve_dump_matrix
+  SUBROUTINE ocean_solve_construct(this, st, par, par_sp, lhs_agen, trans, lacc)
+    USE mo_ocean_solve_aux, ONLY: t_ocean_solve_parm
+    USE mo_ocean_solve_lhs_type, ONLY: t_lhs_agen
+    USE mo_ocean_solve_transfer, ONLY: t_transfer
+    CLASS(t_ocean_solve), TARGET, INTENT(INOUT) :: this
+    INTEGER, INTENT(IN) :: st
+    TYPE(t_ocean_solve_parm), INTENT(IN) :: par, par_sp
+    CLASS(t_lhs_agen), TARGET, INTENT(IN) :: lhs_agen
+    CLASS(t_transfer), TARGET, INTENT(IN) :: trans
+    LOGICAL, INTENT(IN), OPTIONAL :: lacc
+  END SUBROUTINE ocean_solve_construct
+  SUBROUTINE ocean_solve_solve(this, niter, niter_sp, lacc)
+    CLASS(t_ocean_solve), INTENT(INOUT) :: this
+    INTEGER, INTENT(OUT) :: niter, niter_sp
+    LOGICAL, INTENT(IN), OPTIONAL :: lacc
+  END SUBROUTINE ocean_solve_solve
+END MODULE mo_ocean_solve
+MODULE mo_ocean_solve_subset_transfer
+  USE mo_ocean_solve_transfer, ONLY: t_transfer
+  IMPLICIT NONE
+  TYPE, EXTENDS(t_transfer) :: t_subset_transfer
+  END TYPE t_subset_transfer
+  CONTAINS
+  SUBROUTINE subset_transfer_construct(this, sync_type, patch_2d, redfac, mode, lacc)
+    USE mo_model_domain, ONLY: t_patch
+    CLASS(t_subset_transfer), INTENT(INOUT) :: this
+    INTEGER, INTENT(IN) :: sync_type, redfac, mode
+    TYPE(t_patch), POINTER :: patch_2d
+    LOGICAL, INTENT(IN), OPTIONAL :: lacc
+  END SUBROUTINE subset_transfer_construct
+END MODULE mo_ocean_solve_subset_transfer
+MODULE mo_ocean_solve_trivial_transfer
+  USE mo_ocean_solve_transfer, ONLY: t_transfer
+  IMPLICIT NONE
+  TYPE, EXTENDS(t_transfer) :: t_trivial_transfer
+  END TYPE t_trivial_transfer
+  CONTAINS
+  SUBROUTINE trivial_transfer_construct(this, sync_type, patch_2d, lacc)
+    USE mo_model_domain, ONLY: t_patch
+    CLASS(t_trivial_transfer), INTENT(INOUT) :: this
+    INTEGER, INTENT(IN) :: sync_type
+    TYPE(t_patch), POINTER :: patch_2d
+    LOGICAL, INTENT(IN), OPTIONAL :: lacc
+  END SUBROUTINE trivial_transfer_construct
+END MODULE mo_ocean_solve_trivial_transfer
 MODULE mo_ocean_thermodyn
   IMPLICIT NONE
   CONTAINS
@@ -1161,23 +2199,6 @@ MODULE mo_primal_flip_flop_lhs
     LOGICAL, INTENT(IN), OPTIONAL :: lacc
   END SUBROUTINE lhs_primal_flip_flop_construct
 END MODULE mo_primal_flip_flop_lhs
-MODULE mo_real_timer
-  USE iso_c_binding, ONLY: c_loc
-  IMPLICIT NONE
-  CONTAINS
-  SUBROUTINE timer_start(it)
-    INTEGER, INTENT(IN) :: it
-  END SUBROUTINE timer_start
-  SUBROUTINE timer_stop(it)
-    INTEGER, INTENT(IN) :: it
-  END SUBROUTINE timer_stop
-END MODULE mo_real_timer
-MODULE mo_run_config
-  IMPLICIT NONE
-  REAL(KIND = 8) :: dtime
-  INTEGER :: timers_level
-  CONTAINS
-END MODULE mo_run_config
 MODULE mo_statistics
   IMPLICIT NONE
   CHARACTER(LEN = *), PARAMETER :: module_name = "mo_statistics"
@@ -1260,7 +2281,7 @@ MODULE mo_statistics
     max_value = (- 1D+16)
   END SUBROUTINE init_min_max
   SUBROUTINE gather_minmaxmean(min_value, max_value, sum_value, number_of_values, minmaxmean)
-    USE mo_mpi, ONLY: get_my_mpi_work_communicator, my_process_is_mpi_parallel, p_max_dp_0d_deconiface_25 => p_max_dp_0d, p_min_dp_0d_deconiface_24 => p_min_dp_0d, p_sum_dp_0d_deconiface_26 => p_sum_dp_0d, p_sum_dp_0d_deconiface_27 => p_sum_dp_0d
+    USE mo_mpi, ONLY: get_my_mpi_work_communicator, my_process_is_mpi_parallel, p_max_dp_0d_deconiface_71 => p_max_dp_0d, p_min_dp_0d_deconiface_70 => p_min_dp_0d, p_sum_dp_0d_deconiface_72 => p_sum_dp_0d, p_sum_dp_0d_deconiface_73 => p_sum_dp_0d
     REAL(KIND = 8), INTENT(IN) :: min_value, max_value, sum_value
     INTEGER, INTENT(IN) :: number_of_values
     REAL(KIND = 8), INTENT(OUT) :: minmaxmean(3)
@@ -1268,10 +2289,10 @@ MODULE mo_statistics
     INTEGER :: communicator
     IF (my_process_is_mpi_parallel()) THEN
       communicator = get_my_mpi_work_communicator()
-      minmaxmean(1) = p_min_dp_0d_deconiface_24(min_value, comm = communicator)
-      minmaxmean(2) = p_max_dp_0d_deconiface_25(max_value, comm = communicator)
-      global_number_of_values = p_sum_dp_0d_deconiface_26(REAL(number_of_values, 8), comm = communicator)
-      minmaxmean(3) = p_sum_dp_0d_deconiface_27(sum_value, comm = communicator) / global_number_of_values
+      minmaxmean(1) = p_min_dp_0d_deconiface_70(min_value, comm = communicator)
+      minmaxmean(2) = p_max_dp_0d_deconiface_71(max_value, comm = communicator)
+      global_number_of_values = p_sum_dp_0d_deconiface_72(REAL(number_of_values, 8), comm = communicator)
+      minmaxmean(3) = p_sum_dp_0d_deconiface_73(sum_value, comm = communicator) / global_number_of_values
     ELSE
       minmaxmean(1) = min_value
       minmaxmean(2) = max_value
@@ -1319,6 +2340,8 @@ MODULE mo_surface_height_lhs
 END MODULE mo_surface_height_lhs
 MODULE mo_sync
   IMPLICIT NONE
+  INTEGER, SAVE :: log_unit = - 1
+  LOGICAL, SAVE :: do_sync_checks = .TRUE.
   INTERFACE sync_patch_array_mult
     MODULE PROCEDURE sync_patch_array_mult_f3din_sp
     MODULE PROCEDURE sync_patch_array_mult_f3din_f4din_sp
@@ -1328,21 +2351,51 @@ MODULE mo_sync
     MODULE PROCEDURE sync_patch_array_mult_f3din_f3din_arr_dp
   END INTERFACE
   CONTAINS
+  FUNCTION comm_pat_of_type(p_patch, typ) RESULT(p_pat)
+    USE mo_model_domain, ONLY: t_patch
+    USE mo_communication_types, ONLY: t_comm_pattern_orig
+    USE mo_exception, ONLY: finish
+    INTEGER, INTENT(IN) :: typ
+    TYPE(t_patch), TARGET, INTENT(IN) :: p_patch
+    TYPE(t_comm_pattern_orig), POINTER :: p_pat
+    IF (typ == 1) THEN
+      p_pat => p_patch % comm_pat_c
+    ELSE IF (typ == 2) THEN
+      p_pat => p_patch % comm_pat_e
+    ELSE IF (typ == 3) THEN
+      p_pat => p_patch % comm_pat_v
+    ELSE IF (typ == 4) THEN
+      p_pat => p_patch % comm_pat_c1
+    ELSE
+      CALL finish('comm_pat_of_type', 'Illegal type parameter')
+    END IF
+  END FUNCTION comm_pat_of_type
   SUBROUTINE sync_patch_array_3d_dp(typ, p_patch, arr, lacc, opt_varname)
     USE mo_model_domain, ONLY: t_patch
+    USE mo_parallel_config, ONLY: p_test_run
+    USE mo_mpi, ONLY: my_process_is_mpi_parallel
+    USE mo_communication, ONLY: exchange_data_r3d_deconiface_76 => exchange_data_r3d
     INTEGER, INTENT(IN) :: typ
     TYPE(t_patch), TARGET, INTENT(IN) :: p_patch
     REAL(KIND = 8), INTENT(INOUT) :: arr(:, :, :)
     LOGICAL, INTENT(IN) :: lacc
     CHARACTER(LEN = *), TARGET, INTENT(IN), OPTIONAL :: opt_varname
+    IF (p_test_run .AND. do_sync_checks) CALL check_patch_array_3d_dp(typ, p_patch, arr, lacc = lacc, opt_varname = opt_varname)
+    IF (my_process_is_mpi_parallel()) THEN
+      CALL exchange_data_r3d_deconiface_76(p_pat = comm_pat_of_type(p_patch, typ), lacc = lacc, recv = arr)
+    END IF
   END SUBROUTINE sync_patch_array_3d_dp
   SUBROUTINE sync_patch_array_2d_dp(typ, p_patch, arr, lacc, opt_varname)
     USE mo_model_domain, ONLY: t_patch
+    USE mo_fortran_tools, ONLY: insert_dimension_r_dp_3_2_deconiface_81 => insert_dimension_r_dp_3_2
     INTEGER, INTENT(IN) :: typ
     TYPE(t_patch), INTENT(IN) :: p_patch
     REAL(KIND = 8), TARGET, INTENT(INOUT) :: arr(:, :)
     LOGICAL, INTENT(IN) :: lacc
     CHARACTER*(*), INTENT(IN), OPTIONAL :: opt_varname
+    REAL(KIND = 8), POINTER :: arr3(:, :, :)
+    CALL insert_dimension_r_dp_3_2_deconiface_81(arr3, arr, 2)
+    CALL sync_patch_array_3d_dp(1, p_patch, arr3, lacc = lacc, opt_varname = opt_varname)
   END SUBROUTINE sync_patch_array_2d_dp
   SUBROUTINE sync_patch_array_mult_f3din_dp(typ, p_patch, nfields, lacc, f3din1, f3din2, f3din3, f3din4, f3din5, opt_varname)
     USE mo_model_domain, ONLY: t_patch
@@ -1353,6 +2406,7 @@ MODULE mo_sync
     REAL(KIND = 8), TARGET, INTENT(INOUT) :: f3din1(:, :, :)
     REAL(KIND = 8), TARGET, OPTIONAL, INTENT(INOUT) :: f3din2(:, :, :), f3din3(:, :, :), f3din4(:, :, :), f3din5(:, :, :)
     CHARACTER(LEN = *), TARGET, INTENT(IN), OPTIONAL :: opt_varname
+    CALL sync_patch_array_mult_mixprec(typ = 3, p_patch = p_patch, nfields_sp = 0, nfields_dp = 3, lacc = lacc, f3din1_dp = f3din1, f3din2_dp = f3din2, f3din3_dp = f3din3, f3din4_dp = f3din4, f3din5_dp = f3din5, opt_varname = opt_varname)
   END SUBROUTINE sync_patch_array_mult_f3din_dp
   SUBROUTINE sync_patch_array_mult_f3din_f4din_dp(typ, p_patch, nfields, lacc, f3din1, f3din2, f3din3, f3din4, f3din5, f4din, opt_varname)
     USE mo_model_domain, ONLY: t_patch
@@ -1363,6 +2417,7 @@ MODULE mo_sync
     REAL(KIND = 8), TARGET, INTENT(INOUT) :: f4din(:, :, :, :)
     REAL(KIND = 8), TARGET, OPTIONAL, INTENT(INOUT) :: f3din1(:, :, :), f3din2(:, :, :), f3din3(:, :, :), f3din4(:, :, :), f3din5(:, :, :)
     CHARACTER(LEN = *), TARGET, INTENT(IN), OPTIONAL :: opt_varname
+    CALL sync_patch_array_mult_mixprec(typ = typ, p_patch = p_patch, nfields_sp = 0, nfields_dp = nfields, lacc = lacc, f3din1_dp = f3din1, f3din2_dp = f3din2, f3din3_dp = f3din3, f3din4_dp = f3din4, f3din5_dp = f3din5, f4din_dp = f4din, opt_varname = opt_varname)
   END SUBROUTINE sync_patch_array_mult_f3din_f4din_dp
   SUBROUTINE sync_patch_array_mult_f3din_f3din_arr_dp(typ, p_patch, nfields, lacc, f3din1, f3din2, f3din3, f3din4, f3din5, f3din_arr, opt_varname)
     USE mo_model_domain, ONLY: t_patch
@@ -1374,6 +2429,7 @@ MODULE mo_sync
     REAL(KIND = 8), TARGET, OPTIONAL, INTENT(INOUT) :: f3din1(:, :, :), f3din2(:, :, :), f3din3(:, :, :), f3din4(:, :, :), f3din5(:, :, :)
     TYPE(t_ptr_3d_dp), INTENT(INOUT) :: f3din_arr(:)
     CHARACTER(LEN = *), TARGET, INTENT(IN), OPTIONAL :: opt_varname
+    CALL sync_patch_array_mult_mixprec(typ = typ, p_patch = p_patch, nfields_sp = 0, nfields_dp = nfields, lacc = lacc, f3din1_dp = f3din1, f3din2_dp = f3din2, f3din3_dp = f3din3, f3din4_dp = f3din4, f3din5_dp = f3din5, f3din_arr_dp = f3din_arr, opt_varname = opt_varname)
   END SUBROUTINE sync_patch_array_mult_f3din_f3din_arr_dp
   SUBROUTINE sync_patch_array_mult_f3din_sp(typ, p_patch, nfields, lacc, f3din1, f3din2, f3din3, f3din4, f3din5, opt_varname)
     USE mo_model_domain, ONLY: t_patch
@@ -1384,6 +2440,7 @@ MODULE mo_sync
     REAL(KIND = 4), TARGET, INTENT(INOUT) :: f3din1(:, :, :)
     REAL(KIND = 4), TARGET, OPTIONAL, INTENT(INOUT) :: f3din2(:, :, :), f3din3(:, :, :), f3din4(:, :, :), f3din5(:, :, :)
     CHARACTER(LEN = *), TARGET, INTENT(IN), OPTIONAL :: opt_varname
+    CALL sync_patch_array_mult_mixprec(typ = typ, p_patch = p_patch, nfields_sp = nfields, nfields_dp = 0, lacc = lacc, f3din1_sp = f3din1, f3din2_sp = f3din2, f3din3_sp = f3din3, f3din4_sp = f3din4, f3din5_sp = f3din5, opt_varname = opt_varname)
   END SUBROUTINE sync_patch_array_mult_f3din_sp
   SUBROUTINE sync_patch_array_mult_f3din_f4din_sp(typ, p_patch, nfields, lacc, f3din1, f3din2, f3din3, f3din4, f3din5, f4din, opt_varname)
     USE mo_model_domain, ONLY: t_patch
@@ -1394,6 +2451,7 @@ MODULE mo_sync
     REAL(KIND = 4), TARGET, INTENT(INOUT) :: f4din(:, :, :, :)
     REAL(KIND = 4), TARGET, OPTIONAL, INTENT(INOUT) :: f3din1(:, :, :), f3din2(:, :, :), f3din3(:, :, :), f3din4(:, :, :), f3din5(:, :, :)
     CHARACTER(LEN = *), TARGET, INTENT(IN), OPTIONAL :: opt_varname
+    CALL sync_patch_array_mult_mixprec(typ = typ, p_patch = p_patch, nfields_sp = nfields, nfields_dp = 0, lacc = lacc, f3din1_sp = f3din1, f3din2_sp = f3din2, f3din3_sp = f3din3, f3din4_sp = f3din4, f3din5_sp = f3din5, f4din_sp = f4din, opt_varname = opt_varname)
   END SUBROUTINE sync_patch_array_mult_f3din_f4din_sp
   SUBROUTINE sync_patch_array_mult_f3din_f3din_arr_sp(typ, p_patch, nfields, lacc, f3din1, f3din2, f3din3, f3din4, f3din5, f3din_arr, opt_varname)
     USE mo_model_domain, ONLY: t_patch
@@ -1405,7 +2463,456 @@ MODULE mo_sync
     REAL(KIND = 4), TARGET, OPTIONAL, INTENT(INOUT) :: f3din1(:, :, :), f3din2(:, :, :), f3din3(:, :, :), f3din4(:, :, :), f3din5(:, :, :)
     TYPE(t_ptr_3d_sp), INTENT(INOUT) :: f3din_arr(:)
     CHARACTER(LEN = *), TARGET, INTENT(IN), OPTIONAL :: opt_varname
+    CALL sync_patch_array_mult_mixprec(typ = typ, p_patch = p_patch, nfields_sp = nfields, nfields_dp = 0, lacc = lacc, f3din1_sp = f3din1, f3din2_sp = f3din2, f3din3_sp = f3din3, f3din4_sp = f3din4, f3din5_sp = f3din5, f3din_arr_sp = f3din_arr, opt_varname = opt_varname)
   END SUBROUTINE sync_patch_array_mult_f3din_f3din_arr_sp
+  SUBROUTINE sync_patch_array_mult_mixprec(typ, p_patch, nfields_dp, nfields_sp, lacc, f3din1_dp, f3din2_dp, f3din3_dp, f3din4_dp, f3din5_dp, f3din1_sp, f3din2_sp, f3din3_sp, f3din4_sp, f3din5_sp, f4din_dp, f4din_sp, f3din_arr_sp, f3din_arr_dp, opt_varname)
+    USE mo_model_domain, ONLY: t_patch
+    USE mo_fortran_tools, ONLY: t_ptr_3d_dp, t_ptr_3d_sp
+    USE mo_communication_types, ONLY: t_comm_pattern_orig
+    USE mo_parallel_config, ONLY: p_test_run
+    USE mo_mpi, ONLY: my_process_is_mpi_parallel
+    USE mo_communication, ONLY: exchange_data_mult_mixprec
+    INTEGER, INTENT(IN) :: typ
+    TYPE(t_patch), INTENT(IN), TARGET :: p_patch
+    INTEGER, INTENT(IN) :: nfields_dp, nfields_sp
+    LOGICAL, INTENT(IN) :: lacc
+    REAL(KIND = 8), OPTIONAL, INTENT(INOUT) :: f3din1_dp(:, :, :), f3din2_dp(:, :, :), f3din3_dp(:, :, :), f3din4_dp(:, :, :), f3din5_dp(:, :, :), f4din_dp(:, :, :, :)
+    REAL(KIND = 4), OPTIONAL, INTENT(INOUT) :: f3din1_sp(:, :, :), f3din2_sp(:, :, :), f3din3_sp(:, :, :), f3din4_sp(:, :, :), f3din5_sp(:, :, :), f4din_sp(:, :, :, :)
+    TYPE(t_ptr_3d_dp), INTENT(INOUT), OPTIONAL :: f3din_arr_dp(:)
+    TYPE(t_ptr_3d_sp), INTENT(INOUT), OPTIONAL :: f3din_arr_sp(:)
+    TYPE(t_comm_pattern_orig), POINTER :: p_pat
+    CHARACTER(LEN = *), TARGET, INTENT(IN), OPTIONAL :: opt_varname
+    INTEGER :: i
+    INTEGER :: ndim2tot_dp, ndim2tot_sp
+    IF (typ == 1) THEN
+      p_pat => p_patch % comm_pat_c
+    ELSE IF (typ == 2) THEN
+      p_pat => p_patch % comm_pat_e
+    ELSE IF (typ == 3) THEN
+      p_pat => p_patch % comm_pat_v
+    ELSE IF (typ == 4) THEN
+      p_pat => p_patch % comm_pat_c1
+    END IF
+    IF (p_test_run .AND. do_sync_checks) THEN
+      IF (PRESENT(f4din_dp)) THEN
+        DO i = 1, SIZE(f4din_dp, 4)
+          CALL check_patch_array_3d_dp(typ, p_patch, f4din_dp(:, :, :, i), lacc = lacc, opt_varname = opt_varname)
+        END DO
+      END IF
+      IF (PRESENT(f4din_sp)) THEN
+        DO i = 1, SIZE(f4din_sp, 4)
+          CALL check_patch_array_3d_sp(typ, p_patch, f4din_sp(:, :, :, i), lacc = lacc, opt_varname = opt_varname)
+        END DO
+      END IF
+      IF (PRESENT(f3din1_dp)) CALL check_patch_array_3d_dp(typ, p_patch, f3din1_dp, lacc = lacc, opt_varname = opt_varname)
+      IF (PRESENT(f3din2_dp)) CALL check_patch_array_3d_dp(typ, p_patch, f3din2_dp, lacc = lacc, opt_varname = opt_varname)
+      IF (PRESENT(f3din3_dp)) CALL check_patch_array_3d_dp(typ, p_patch, f3din3_dp, lacc = lacc, opt_varname = opt_varname)
+      IF (PRESENT(f3din4_dp)) CALL check_patch_array_3d_dp(typ, p_patch, f3din4_dp, lacc = lacc, opt_varname = opt_varname)
+      IF (PRESENT(f3din5_dp)) CALL check_patch_array_3d_dp(typ, p_patch, f3din5_dp, lacc = lacc, opt_varname = opt_varname)
+      IF (PRESENT(f3din1_sp)) CALL check_patch_array_3d_sp(typ, p_patch, f3din1_sp, lacc = lacc, opt_varname = opt_varname)
+      IF (PRESENT(f3din2_sp)) CALL check_patch_array_3d_sp(typ, p_patch, f3din2_sp, lacc = lacc, opt_varname = opt_varname)
+      IF (PRESENT(f3din3_sp)) CALL check_patch_array_3d_sp(typ, p_patch, f3din3_sp, lacc = lacc, opt_varname = opt_varname)
+      IF (PRESENT(f3din4_sp)) CALL check_patch_array_3d_sp(typ, p_patch, f3din4_sp, lacc = lacc, opt_varname = opt_varname)
+      IF (PRESENT(f3din5_sp)) CALL check_patch_array_3d_sp(typ, p_patch, f3din5_sp, lacc = lacc, opt_varname = opt_varname)
+      IF (PRESENT(f3din_arr_dp)) THEN
+        DO i = 1, SIZE(f3din_arr_dp)
+          CALL check_patch_array_3d_dp(typ = typ, p_patch = p_patch, arr = f3din_arr_dp(i) % p, lacc = lacc, opt_varname = opt_varname)
+        END DO
+      END IF
+      IF (PRESENT(f3din_arr_sp)) THEN
+        DO i = 1, SIZE(f3din_arr_sp)
+          CALL check_patch_array_3d_sp(typ, p_patch, f3din_arr_sp(i) % p, lacc = lacc, opt_varname = opt_varname)
+        END DO
+      END IF
+    END IF
+    IF (my_process_is_mpi_parallel()) THEN
+      IF (PRESENT(f4din_dp)) THEN
+        ndim2tot_dp = SIZE(f4din_dp, 4) * SIZE(f4din_dp, 2)
+      ELSE
+        ndim2tot_dp = 0
+      END IF
+      IF (PRESENT(f3din1_dp)) ndim2tot_dp = ndim2tot_dp + SIZE(f3din1_dp, 2)
+      IF (PRESENT(f3din2_dp)) ndim2tot_dp = ndim2tot_dp + SIZE(f3din2_dp, 2)
+      IF (PRESENT(f3din3_dp)) ndim2tot_dp = ndim2tot_dp + SIZE(f3din3_dp, 2)
+      IF (PRESENT(f3din4_dp)) ndim2tot_dp = ndim2tot_dp + SIZE(f3din4_dp, 2)
+      IF (PRESENT(f3din5_dp)) ndim2tot_dp = ndim2tot_dp + SIZE(f3din5_dp, 2)
+      IF (PRESENT(f3din_arr_dp)) THEN
+        DO i = 1, SIZE(f3din_arr_dp)
+          ndim2tot_dp = ndim2tot_dp + SIZE(f3din_arr_dp(i) % p, 2)
+        END DO
+      END IF
+      IF (PRESENT(f4din_sp)) THEN
+        ndim2tot_sp = SIZE(f4din_sp, 4) * SIZE(f4din_sp, 2)
+      ELSE
+        ndim2tot_sp = 0
+      END IF
+      IF (PRESENT(f3din1_sp)) ndim2tot_sp = ndim2tot_sp + SIZE(f3din1_sp, 2)
+      IF (PRESENT(f3din2_sp)) ndim2tot_sp = ndim2tot_sp + SIZE(f3din2_sp, 2)
+      IF (PRESENT(f3din3_sp)) ndim2tot_sp = ndim2tot_sp + SIZE(f3din3_sp, 2)
+      IF (PRESENT(f3din4_sp)) ndim2tot_sp = ndim2tot_sp + SIZE(f3din4_sp, 2)
+      IF (PRESENT(f3din5_sp)) ndim2tot_sp = ndim2tot_sp + SIZE(f3din5_sp, 2)
+      IF (PRESENT(f3din_arr_sp)) THEN
+        DO i = 1, SIZE(f3din_arr_sp)
+          ndim2tot_sp = ndim2tot_sp + SIZE(f3din_arr_sp(i) % p, 2)
+        END DO
+      END IF
+      CALL exchange_data_mult_mixprec(p_pat = p_pat, lacc = lacc, nfields_dp = nfields_dp, ndim2tot_dp = ndim2tot_dp, nfields_sp = nfields_sp, ndim2tot_sp = ndim2tot_sp, recv1_dp = f3din1_dp, recv2_dp = f3din2_dp, recv3_dp = f3din3_dp, recv4_dp = f3din4_dp, recv5_dp = f3din5_dp, recv1_sp = f3din1_sp, recv2_sp = f3din2_sp, recv3_sp = f3din3_sp, recv4_sp = f3din4_sp, recv5_sp = f3din5_sp, recv4d_dp = f4din_dp, recv4d_sp = f4din_sp, recv3d_arr_dp = f3din_arr_dp, recv3d_arr_sp = f3din_arr_sp)
+    END IF
+  END SUBROUTINE sync_patch_array_mult_mixprec
+  SUBROUTINE check_patch_array_3d_sp(typ, p_patch, arr, lacc, opt_varname)
+    USE mo_model_domain, ONLY: t_patch
+    USE mo_parallel_config, ONLY: blk_no, idx_no, l_log_checks, n_ghost_rows, nproma, p_test_run
+    USE mo_communication_types, ONLY: t_comm_pattern_orig
+    USE mo_io_units, ONLY: filename_max, find_next_free_unit
+    USE mo_exception, ONLY: finish
+    USE mo_mpi, ONLY: comm_lev, comm_proc0, glob_comm, my_process_is_mpi_test, num_test_procs, p_bcast_sp_3d_deconiface_85 => p_bcast_sp_3d, p_bcast_sp_3d_deconiface_87 => p_bcast_sp_3d, p_bcast_sp_3d_deconiface_89 => p_bcast_sp_3d, p_comm_work_test, p_pe, p_pe_work, p_recv_sp_3d_deconiface_88 => p_recv_sp_3d, p_send_sp_3d_deconiface_86 => p_send_sp_3d, p_work_pe0, process_mpi_all_test_id
+    USE mo_communication, ONLY: exchange_data_s3d_deconiface_84 => exchange_data_s3d
+    INTEGER, INTENT(IN) :: typ
+    TYPE(t_patch), INTENT(IN), TARGET :: p_patch
+    REAL(KIND = 4), INTENT(IN) :: arr(:, :, :)
+    LOGICAL, INTENT(IN) :: lacc
+    CHARACTER(LEN = *), INTENT(IN), OPTIONAL :: opt_varname
+    REAL(KIND = 4), ALLOCATABLE :: arr_g(:, :, :)
+    INTEGER :: j, jb, jl, jb_g, jl_g, n, ndim2, ndim3, nblks_g, flag, jk
+    INTEGER :: ityp, ndim, ndim_g, jk_min_err
+    INTEGER :: nerr(0 : n_ghost_rows), shape_recv(3)
+    INTEGER, POINTER :: p_glb_index(:), p_decomp_domain(:, :)
+    TYPE(t_comm_pattern_orig), POINTER :: p_pat_work2test
+    LOGICAL :: l_my_process_is_mpi_test
+    CHARACTER(LEN = 256) :: varname, cfmt
+    INTEGER :: varname_tlen
+    CHARACTER(LEN = filename_max) :: log_file
+    REAL(KIND = 4) :: absmax
+    LOGICAL :: sync_error
+    ityp = (- 1)
+    ndim = (- 1)
+    ndim_g = (- 1)
+    sync_error = .FALSE.
+    NULLIFY(p_glb_index, p_decomp_domain)
+    IF (.NOT. p_test_run) RETURN
+    varname = opt_varname
+    varname_tlen = LEN(opt_varname)
+    IF (UBOUND(arr, 1) /= nproma) THEN
+      CALL finish('sync_patch_array', 'first dimension /= nproma')
+    END IF
+    ndim2 = UBOUND(arr, 2)
+    ndim3 = UBOUND(arr, 3)
+    IF (typ == 1 .OR. typ == 4) THEN
+      ndim = p_patch % n_patch_cells
+      ndim_g = p_patch % n_patch_cells_g
+      p_glb_index => p_patch % cells % decomp_info % glb_index
+      p_decomp_domain => p_patch % cells % decomp_info % decomp_domain
+      ityp = typ
+      p_pat_work2test => p_patch % comm_pat_work2test(1) % p
+    ELSE IF (typ == 2) THEN
+      ndim = p_patch % n_patch_edges
+      ndim_g = p_patch % n_patch_edges_g
+      p_glb_index => p_patch % edges % decomp_info % glb_index
+      p_decomp_domain => p_patch % edges % decomp_info % decomp_domain
+      ityp = typ
+      p_pat_work2test => p_patch % comm_pat_work2test(3) % p
+    ELSE IF (typ == 3) THEN
+      ndim = p_patch % n_patch_verts
+      ndim_g = p_patch % n_patch_verts_g
+      p_glb_index => p_patch % verts % decomp_info % glb_index
+      p_decomp_domain => p_patch % verts % decomp_info % decomp_domain
+      ityp = typ
+      p_pat_work2test => p_patch % comm_pat_work2test(2) % p
+    ELSE IF (typ == 0) THEN
+      IF (ndim3 == p_patch % nblks_c) THEN
+        ndim = p_patch % n_patch_cells
+        ndim_g = p_patch % n_patch_cells_g
+        p_glb_index => p_patch % cells % decomp_info % glb_index
+        p_decomp_domain => p_patch % cells % decomp_info % decomp_domain
+        ityp = 1
+        p_pat_work2test => p_patch % comm_pat_work2test(1) % p
+      ELSE IF (ndim3 == p_patch % nblks_e) THEN
+        ndim = p_patch % n_patch_edges
+        ndim_g = p_patch % n_patch_edges_g
+        p_glb_index => p_patch % edges % decomp_info % glb_index
+        p_decomp_domain => p_patch % edges % decomp_info % decomp_domain
+        ityp = 2
+        p_pat_work2test => p_patch % comm_pat_work2test(3) % p
+      ELSE IF (ndim3 == p_patch % nblks_v) THEN
+        ndim = p_patch % n_patch_verts
+        ndim_g = p_patch % n_patch_verts_g
+        p_glb_index => p_patch % verts % decomp_info % glb_index
+        p_decomp_domain => p_patch % verts % decomp_info % decomp_domain
+        ityp = 3
+        p_pat_work2test => p_patch % comm_pat_work2test(2) % p
+      ELSE
+        CALL finish('check_patch_array', 'typ==0 but unknown blocksize of array')
+      END IF
+    ELSE
+      CALL finish('sync_patch_array', 'Illegal type parameter')
+    END IF
+    nblks_g = (ndim_g - 1) / nproma + 1
+    l_my_process_is_mpi_test = my_process_is_mpi_test()
+    IF (num_test_procs > 1) THEN
+      shape_recv = SHAPE(arr)
+      ALLOCATE(arr_g(shape_recv(1), shape_recv(2), shape_recv(3)))
+      CALL exchange_data_s3d_deconiface_84(p_pat = p_pat_work2test, lacc = .FALSE., recv = arr_g, send = arr)
+      IF (l_my_process_is_mpi_test) THEN
+        jk_min_err = HUGE(jk_min_err)
+        DO jb = 1, ndim3
+          DO jk = 1, ndim2
+            DO jl = 1, nproma
+              IF (p_decomp_domain(jl, jb) == 0) THEN
+                sync_error = sync_error .OR. arr(jl, jk, jb) /= arr_g(jl, jk, jb)
+                jk_min_err = MIN(jk_min_err, MERGE(jk, jk_min_err, arr(jl, jk, jb) /= arr_g(jl, jk, jb)))
+              END IF
+            END DO
+          END DO
+        END DO
+      END IF
+    ELSE IF (l_my_process_is_mpi_test) THEN
+      ALLOCATE(arr_g(nproma, ndim2, nblks_g))
+      DO j = 1, ndim
+        jb = blk_no(j)
+        jl = idx_no(j)
+        jb_g = blk_no(p_glb_index(j))
+        jl_g = idx_no(p_glb_index(j))
+        arr_g(jl_g, 1 : ndim2, jb_g) = arr(jl, 1 : ndim2, jb)
+      END DO
+      IF (comm_lev == 0) THEN
+        CALL p_bcast_sp_3d_deconiface_85(arr_g(:, :, 1 : nblks_g), process_mpi_all_test_id, comm = p_comm_work_test)
+      ELSE
+        CALL p_send_sp_3d_deconiface_86(arr_g(:, :, 1 : nblks_g), comm_proc0(comm_lev) + p_work_pe0, 1)
+      END IF
+      DEALLOCATE(arr_g)
+    ELSE
+      ALLOCATE(arr_g(nproma, ndim2, nblks_g))
+      IF (comm_lev == 0) THEN
+        CALL p_bcast_sp_3d_deconiface_87(arr_g(:, :, 1 : nblks_g), process_mpi_all_test_id, comm = p_comm_work_test)
+      ELSE
+        IF (p_pe_work == comm_proc0(comm_lev)) CALL p_recv_sp_3d_deconiface_88(arr_g(:, :, 1 : nblks_g), process_mpi_all_test_id, 1)
+        CALL p_bcast_sp_3d_deconiface_89(arr_g(:, :, 1 : nblks_g), 0, comm = glob_comm(comm_lev))
+      END IF
+      nerr(:) = 0
+      absmax = 0.0
+      DO j = 1, ndim
+        jb = blk_no(j)
+        jl = idx_no(j)
+        jb_g = blk_no(p_glb_index(j))
+        jl_g = idx_no(p_glb_index(j))
+        flag = p_decomp_domain(jl, jb)
+        flag = MAX(flag, 0)
+        flag = MIN(flag, UBOUND(nerr, 1))
+        DO n = 1, ndim2
+          IF (arr(jl, n, jb) /= arr_g(jl_g, n, jb_g)) THEN
+            nerr(flag) = nerr(flag) + 1
+            IF (flag == 0) THEN
+              sync_error = .TRUE.
+              absmax = MAX(absmax, ABS(arr(jl, n, jb) - arr_g(jl_g, n, jb_g)))
+              IF (l_log_checks) THEN
+                WRITE(log_unit, '(2a,5i7,3e18.10)') varname, 'sync error location:', jb, jl, jb_g, jl_g, n, arr(jl, n, jb), arr_g(jl_g, n, jb_g), ABS(arr(jl, n, jb) - arr_g(jl_g, n, jb_g))
+              END IF
+            END IF
+          END IF
+        END DO
+      END DO
+      IF (l_log_checks) THEN
+        IF (log_unit < 0) THEN
+          WRITE(log_file, '(''log'',i4.4,''.txt'')') p_pe
+          log_unit = find_next_free_unit(10, 99)
+          OPEN(UNIT = log_unit, FILE = log_file)
+        END IF
+        n = n_ghost_rows
+        WRITE(cfmt, '(a,i3,a)') '(', n + 1, 'i8,'' '',2a)'
+        IF (ALL(arr == 0.0)) THEN
+          WRITE(log_unit, cfmt) nerr(0 : n), varname(1 : varname_tlen), ': ALL 0 !!!'
+        ELSE
+          WRITE(log_unit, cfmt) nerr(0 : n), varname(1 : varname_tlen)
+        END IF
+        IF (absmax > 0.0) WRITE(log_unit, *) 'Max abs inner err:', absmax
+      END IF
+      DEALLOCATE(arr_g)
+    END IF
+    IF (sync_error) THEN
+      IF (num_test_procs > 1) WRITE(0, '(2a,i0)') varname(1 : varname_tlen), ' sync error in level jk = ', jk_min_err
+      IF (l_log_checks) THEN
+        CLOSE(UNIT = log_unit)
+      END IF
+      CALL finish('sync_patch_array', 'Out of sync detected!')
+    END IF
+  END SUBROUTINE check_patch_array_3d_sp
+  SUBROUTINE check_patch_array_3d_dp(typ, p_patch, arr, lacc, opt_varname)
+    USE mo_model_domain, ONLY: t_patch
+    USE mo_parallel_config, ONLY: blk_no, idx_no, l_log_checks, n_ghost_rows, nproma, p_test_run
+    USE mo_communication_types, ONLY: t_comm_pattern_orig
+    USE mo_io_units, ONLY: filename_max, find_next_free_unit
+    USE mo_exception, ONLY: finish
+    USE mo_mpi, ONLY: comm_lev, comm_proc0, glob_comm, my_process_is_mpi_test, num_test_procs, p_bcast_dp_3d_deconiface_91 => p_bcast_dp_3d, p_bcast_dp_3d_deconiface_93 => p_bcast_dp_3d, p_bcast_dp_3d_deconiface_95 => p_bcast_dp_3d, p_comm_work_test, p_pe, p_pe_work, p_recv_dp_3d_deconiface_94 => p_recv_dp_3d, p_send_dp_3d_deconiface_92 => p_send_dp_3d, p_work_pe0, process_mpi_all_test_id
+    USE mo_communication, ONLY: exchange_data_r3d_deconiface_90 => exchange_data_r3d
+    INTEGER, INTENT(IN) :: typ
+    TYPE(t_patch), INTENT(IN), TARGET :: p_patch
+    REAL(KIND = 8), INTENT(IN) :: arr(:, :, :)
+    LOGICAL, INTENT(IN) :: lacc
+    CHARACTER(LEN = *), INTENT(IN), OPTIONAL :: opt_varname
+    REAL(KIND = 8), ALLOCATABLE :: arr_g(:, :, :)
+    INTEGER :: j, jb, jl, jb_g, jl_g, n, ndim2, ndim3, nblks_g, flag, jk
+    INTEGER :: ityp, ndim, ndim_g, jk_min_err
+    INTEGER :: nerr(0 : n_ghost_rows), shape_recv(3)
+    INTEGER, POINTER :: p_glb_index(:), p_decomp_domain(:, :)
+    TYPE(t_comm_pattern_orig), POINTER :: p_pat_work2test
+    LOGICAL :: l_my_process_is_mpi_test
+    CHARACTER(LEN = 256) :: varname, cfmt
+    INTEGER :: varname_tlen
+    CHARACTER(LEN = filename_max) :: log_file
+    REAL(KIND = 8) :: absmax
+    LOGICAL :: sync_error
+    ityp = (- 1)
+    ndim = (- 1)
+    ndim_g = (- 1)
+    sync_error = .FALSE.
+    NULLIFY(p_glb_index, p_decomp_domain)
+    IF (.NOT. p_test_run) RETURN
+    varname = opt_varname
+    varname_tlen = LEN(opt_varname)
+    IF (UBOUND(arr, 1) /= nproma) THEN
+      CALL finish('sync_patch_array', 'first dimension /= nproma')
+    END IF
+    ndim2 = UBOUND(arr, 2)
+    ndim3 = UBOUND(arr, 3)
+    IF (typ == 1 .OR. typ == 4) THEN
+      ndim = p_patch % n_patch_cells
+      ndim_g = p_patch % n_patch_cells_g
+      p_glb_index => p_patch % cells % decomp_info % glb_index
+      p_decomp_domain => p_patch % cells % decomp_info % decomp_domain
+      ityp = typ
+      p_pat_work2test => p_patch % comm_pat_work2test(1) % p
+    ELSE IF (typ == 2) THEN
+      ndim = p_patch % n_patch_edges
+      ndim_g = p_patch % n_patch_edges_g
+      p_glb_index => p_patch % edges % decomp_info % glb_index
+      p_decomp_domain => p_patch % edges % decomp_info % decomp_domain
+      ityp = typ
+      p_pat_work2test => p_patch % comm_pat_work2test(3) % p
+    ELSE IF (typ == 3) THEN
+      ndim = p_patch % n_patch_verts
+      ndim_g = p_patch % n_patch_verts_g
+      p_glb_index => p_patch % verts % decomp_info % glb_index
+      p_decomp_domain => p_patch % verts % decomp_info % decomp_domain
+      ityp = typ
+      p_pat_work2test => p_patch % comm_pat_work2test(2) % p
+    ELSE IF (typ == 0) THEN
+      IF (ndim3 == p_patch % nblks_c) THEN
+        ndim = p_patch % n_patch_cells
+        ndim_g = p_patch % n_patch_cells_g
+        p_glb_index => p_patch % cells % decomp_info % glb_index
+        p_decomp_domain => p_patch % cells % decomp_info % decomp_domain
+        ityp = 1
+        p_pat_work2test => p_patch % comm_pat_work2test(1) % p
+      ELSE IF (ndim3 == p_patch % nblks_e) THEN
+        ndim = p_patch % n_patch_edges
+        ndim_g = p_patch % n_patch_edges_g
+        p_glb_index => p_patch % edges % decomp_info % glb_index
+        p_decomp_domain => p_patch % edges % decomp_info % decomp_domain
+        ityp = 2
+        p_pat_work2test => p_patch % comm_pat_work2test(3) % p
+      ELSE IF (ndim3 == p_patch % nblks_v) THEN
+        ndim = p_patch % n_patch_verts
+        ndim_g = p_patch % n_patch_verts_g
+        p_glb_index => p_patch % verts % decomp_info % glb_index
+        p_decomp_domain => p_patch % verts % decomp_info % decomp_domain
+        ityp = 3
+        p_pat_work2test => p_patch % comm_pat_work2test(2) % p
+      ELSE
+        CALL finish('check_patch_array', 'typ==0 but unknown blocksize of array')
+      END IF
+    ELSE
+      CALL finish('sync_patch_array', 'Illegal type parameter')
+    END IF
+    nblks_g = (ndim_g - 1) / nproma + 1
+    l_my_process_is_mpi_test = my_process_is_mpi_test()
+    IF (num_test_procs > 1) THEN
+      shape_recv = SHAPE(arr)
+      ALLOCATE(arr_g(shape_recv(1), shape_recv(2), shape_recv(3)))
+      CALL exchange_data_r3d_deconiface_90(p_pat = p_pat_work2test, lacc = .FALSE., recv = arr_g, send = arr)
+      IF (l_my_process_is_mpi_test) THEN
+        jk_min_err = HUGE(jk_min_err)
+        DO jb = 1, ndim3
+          DO jk = 1, ndim2
+            DO jl = 1, nproma
+              IF (p_decomp_domain(jl, jb) == 0) THEN
+                sync_error = sync_error .OR. arr(jl, jk, jb) /= arr_g(jl, jk, jb)
+                jk_min_err = MIN(jk_min_err, MERGE(jk, jk_min_err, arr(jl, jk, jb) /= arr_g(jl, jk, jb)))
+              END IF
+            END DO
+          END DO
+        END DO
+      END IF
+    ELSE IF (l_my_process_is_mpi_test) THEN
+      ALLOCATE(arr_g(nproma, ndim2, nblks_g))
+      DO j = 1, ndim
+        jb = blk_no(j)
+        jl = idx_no(j)
+        jb_g = blk_no(p_glb_index(j))
+        jl_g = idx_no(p_glb_index(j))
+        arr_g(jl_g, 1 : ndim2, jb_g) = arr(jl, 1 : ndim2, jb)
+      END DO
+      IF (comm_lev == 0) THEN
+        CALL p_bcast_dp_3d_deconiface_91(arr_g(:, :, 1 : nblks_g), process_mpi_all_test_id, comm = p_comm_work_test)
+      ELSE
+        CALL p_send_dp_3d_deconiface_92(arr_g(:, :, 1 : nblks_g), comm_proc0(comm_lev) + p_work_pe0, 1)
+      END IF
+      DEALLOCATE(arr_g)
+    ELSE
+      ALLOCATE(arr_g(nproma, ndim2, nblks_g))
+      IF (comm_lev == 0) THEN
+        CALL p_bcast_dp_3d_deconiface_93(arr_g(:, :, 1 : nblks_g), process_mpi_all_test_id, comm = p_comm_work_test)
+      ELSE
+        IF (p_pe_work == comm_proc0(comm_lev)) CALL p_recv_dp_3d_deconiface_94(arr_g(:, :, 1 : nblks_g), process_mpi_all_test_id, 1)
+        CALL p_bcast_dp_3d_deconiface_95(arr_g(:, :, 1 : nblks_g), 0, comm = glob_comm(comm_lev))
+      END IF
+      nerr(:) = 0
+      absmax = 0.0D0
+      DO j = 1, ndim
+        jb = blk_no(j)
+        jl = idx_no(j)
+        jb_g = blk_no(p_glb_index(j))
+        jl_g = idx_no(p_glb_index(j))
+        flag = p_decomp_domain(jl, jb)
+        flag = MAX(flag, 0)
+        flag = MIN(flag, UBOUND(nerr, 1))
+        DO n = 1, ndim2
+          IF (arr(jl, n, jb) /= arr_g(jl_g, n, jb_g)) THEN
+            nerr(flag) = nerr(flag) + 1
+            IF (flag == 0) THEN
+              sync_error = .TRUE.
+              absmax = MAX(absmax, ABS(arr(jl, n, jb) - arr_g(jl_g, n, jb_g)))
+              IF (l_log_checks) THEN
+                WRITE(log_unit, '(2a,5i7,3e18.10)') varname, 'sync error location:', jb, jl, jb_g, jl_g, n, arr(jl, n, jb), arr_g(jl_g, n, jb_g), ABS(arr(jl, n, jb) - arr_g(jl_g, n, jb_g))
+              END IF
+            END IF
+          END IF
+        END DO
+      END DO
+      IF (l_log_checks) THEN
+        IF (log_unit < 0) THEN
+          WRITE(log_file, '(''log'',i4.4,''.txt'')') p_pe
+          log_unit = find_next_free_unit(10, 99)
+          OPEN(UNIT = log_unit, FILE = log_file)
+        END IF
+        n = n_ghost_rows
+        WRITE(cfmt, '(a,i3,a)') '(', n + 1, 'i8,'' '',2a)'
+        IF (ALL(arr == 0.0D0)) THEN
+          WRITE(log_unit, cfmt) nerr(0 : n), varname(1 : varname_tlen), ': ALL 0 !!!'
+        ELSE
+          WRITE(log_unit, cfmt) nerr(0 : n), varname(1 : varname_tlen)
+        END IF
+        IF (absmax > 0.0D0) WRITE(log_unit, *) 'Max abs inner err:', absmax
+      END IF
+      DEALLOCATE(arr_g)
+    END IF
+    IF (sync_error) THEN
+      IF (num_test_procs > 1) WRITE(0, '(2a,i0)') varname(1 : varname_tlen), ' sync error in level jk = ', jk_min_err
+      IF (l_log_checks) THEN
+        CLOSE(UNIT = log_unit)
+      END IF
+      CALL finish('sync_patch_array', 'Out of sync detected!')
+    END IF
+  END SUBROUTINE check_patch_array_3d_dp
 END MODULE mo_sync
 MODULE mo_ocean_math_operators
   IMPLICIT NONE
@@ -1814,7 +3321,7 @@ MODULE mo_ocean_math_operators
   SUBROUTINE smooth_oncells_3d(patch_3d, in_value, out_value, smooth_weights, has_missvalue, missvalue)
     USE mo_model_domain, ONLY: t_patch_3d, t_subset_range
     USE mo_grid_subset, ONLY: get_index_range
-    USE mo_sync, ONLY: sync_patch_array_3d_dp_deconiface_44 => sync_patch_array_3d_dp
+    USE mo_sync, ONLY: sync_patch_array_3d_dp_deconiface_132 => sync_patch_array_3d_dp
     TYPE(t_patch_3d), TARGET, INTENT(IN) :: patch_3d
     REAL(KIND = 8), INTENT(IN) :: in_value(:, :, :)
     REAL(KIND = 8), INTENT(INOUT) :: out_value(:, :, :)
@@ -1882,13 +3389,13 @@ MODULE mo_ocean_math_operators
         END DO
       END DO
     END IF
-    CALL sync_patch_array_3d_dp_deconiface_44(1, patch_3d % p_patch_2d(1), out_value, lacc = .FALSE.)
+    CALL sync_patch_array_3d_dp_deconiface_132(1, patch_3d % p_patch_2d(1), out_value, lacc = .FALSE.)
   END SUBROUTINE smooth_oncells_3d
   SUBROUTINE smooth_oncells_2d(patch_3d, in_value, out_value, smooth_weights, has_missvalue, missvalue, lacc)
     USE mo_model_domain, ONLY: t_patch_3d, t_subset_range
     USE mo_fortran_tools, ONLY: set_acc_host_or_device
     USE mo_grid_subset, ONLY: get_index_range
-    USE mo_sync, ONLY: sync_patch_array_2d_dp_deconiface_45 => sync_patch_array_2d_dp
+    USE mo_sync, ONLY: sync_patch_array_2d_dp_deconiface_133 => sync_patch_array_2d_dp
     TYPE(t_patch_3d), TARGET, INTENT(IN) :: patch_3d
     REAL(KIND = 8), INTENT(IN) :: in_value(:, :)
     REAL(KIND = 8), INTENT(INOUT) :: out_value(:, :)
@@ -1959,7 +3466,7 @@ MODULE mo_ocean_math_operators
         END DO
       END DO
     END IF
-    CALL sync_patch_array_2d_dp_deconiface_45(1, patch_3d % p_patch_2d(1), out_value, lacc = lzacc)
+    CALL sync_patch_array_2d_dp_deconiface_133(1, patch_3d % p_patch_2d(1), out_value, lacc = lzacc)
   END SUBROUTINE smooth_oncells_2d
 END MODULE mo_ocean_math_operators
 MODULE mo_scalar_product
@@ -1973,7 +3480,7 @@ MODULE mo_scalar_product
     USE mo_ocean_types, ONLY: t_operator_coeff
     USE mo_fortran_tools, ONLY: set_acc_host_or_device
     USE mo_ocean_math_operators, ONLY: rot_vertex_ocean_3d
-    USE mo_sync, ONLY: sync_patch_array_3d_dp_deconiface_46 => sync_patch_array_3d_dp
+    USE mo_sync, ONLY: sync_patch_array_3d_dp_deconiface_134 => sync_patch_array_3d_dp
     USE mo_grid_subset, ONLY: get_index_range
     USE mo_operator_ocean_coeff_3d, ONLY: no_dual_edges
     TYPE(t_patch_3d), POINTER, INTENT(IN) :: patch_3d
@@ -2001,7 +3508,7 @@ MODULE mo_scalar_product
     startlevel = 1
     CALL set_acc_host_or_device(lzacc, lacc)
     CALL rot_vertex_ocean_3d(patch_3d, vn, p_vn_dual, operators_coefficients, vort_v, lacc = lzacc)
-    CALL sync_patch_array_3d_dp_deconiface_46(3, patch_2d, vort_v, lacc = lzacc)
+    CALL sync_patch_array_3d_dp_deconiface_134(3, patch_2d, vort_v, lacc = lzacc)
     IF (.NOT. l_anticipated_vorticity) THEN
       DO blockno = edges_in_domain % start_block, edges_in_domain % end_block
         CALL get_index_range(edges_in_domain, blockno, start_edge_index, end_edge_index)
@@ -2092,7 +3599,7 @@ MODULE mo_scalar_product
     USE mo_ocean_types, ONLY: t_operator_coeff
     USE mo_fortran_tools, ONLY: set_acc_host_or_device
     USE mo_ocean_math_operators, ONLY: rot_vertex_ocean_3d
-    USE mo_sync, ONLY: sync_patch_array_3d_dp_deconiface_47 => sync_patch_array_3d_dp
+    USE mo_sync, ONLY: sync_patch_array_3d_dp_deconiface_135 => sync_patch_array_3d_dp
     USE mo_grid_subset, ONLY: get_index_range
     USE mo_operator_ocean_coeff_3d, ONLY: no_dual_edges
     TYPE(t_patch_3d), POINTER, INTENT(IN) :: patch_3d
@@ -2122,7 +3629,7 @@ MODULE mo_scalar_product
     startlevel = 1
     endlevel = n_zlev
     CALL rot_vertex_ocean_3d(patch_3d, vn, p_vn_dual, operators_coefficients, vort_v)
-    CALL sync_patch_array_3d_dp_deconiface_47(3, patch_2d, vort_v, lacc = lzacc)
+    CALL sync_patch_array_3d_dp_deconiface_135(3, patch_2d, vort_v, lacc = lzacc)
     DO blockno = edges_in_domain % start_block, edges_in_domain % end_block
       CALL get_index_range(edges_in_domain, blockno, start_edge_index, end_edge_index)
       level_loop:DO level = startlevel, endlevel
@@ -2599,12 +4106,6 @@ MODULE mo_scalar_product
     END DO
   END SUBROUTINE map_vector_center2prismtop_onblock
 END MODULE mo_scalar_product
-MODULE mo_timer
-  IMPLICIT NONE
-  INTEGER :: timer_ab_expl, timer_ab_rhs4sfc
-  INTEGER :: timer_extra1, timer_extra2, timer_extra3, timer_extra4
-  CONTAINS
-END MODULE mo_timer
 MODULE mo_util_dbg_prnt
   IMPLICIT NONE
   INTERFACE dbg_print
@@ -2674,7 +4175,7 @@ MODULE mo_ocean_boundcond
     USE mo_ocean_nml, ONLY: forcing_smooth_steps, forcing_windstress_weight, i_bc_veloc_top, iswm_oce, oceanreferencedensity
     USE mo_grid_subset, ONLY: get_index_range
     USE mo_exception, ONLY: finish
-    USE mo_util_dbg_prnt, ONLY: dbg_print_2d_deconiface_50 => dbg_print_2d
+    USE mo_util_dbg_prnt, ONLY: dbg_print_2d_deconiface_138 => dbg_print_2d
     TYPE(t_patch_3d), TARGET, INTENT(IN) :: patch_3d
     TYPE(t_hydro_ocean_state), INTENT(INOUT) :: ocean_state
     TYPE(t_operator_coeff), INTENT(IN) :: p_op_coeff
@@ -2723,7 +4224,7 @@ MODULE mo_ocean_boundcond
       CALL finish("top_bound_cond_horz_veloc", "unknown i_bc_veloc_top")
     END SELECT
     idt_src = 3
-    CALL dbg_print_2d_deconiface_50('top bound.cond. vn', ocean_state % p_aux % bc_top_vn, str_module, idt_src, in_subset = patch_2d % edges % owned)
+    CALL dbg_print_2d_deconiface_138('top bound.cond. vn', ocean_state % p_aux % bc_top_vn, str_module, idt_src, in_subset = patch_2d % edges % owned)
   END SUBROUTINE top_bound_cond_horz_veloc_onedges
   SUBROUTINE top_bound_cond_horz_veloc_fromcells(patch_3d, ocean_state, p_op_coeff, p_oce_sfc, lacc)
     USE mo_model_domain, ONLY: t_patch, t_patch_3d, t_subset_range
@@ -2735,8 +4236,8 @@ MODULE mo_ocean_boundcond
     USE mo_ocean_nml, ONLY: forcing_smooth_steps, forcing_windstress_weight, i_bc_veloc_top, iswm_oce, oceanreferencedensity
     USE mo_grid_subset, ONLY: get_index_range
     USE mo_exception, ONLY: finish
-    USE mo_scalar_product, ONLY: map_cell2edges_3d_1level_deconiface_51 => map_cell2edges_3d_1level
-    USE mo_util_dbg_prnt, ONLY: dbg_print_2d_deconiface_52 => dbg_print_2d, dbg_print_2d_deconiface_53 => dbg_print_2d, dbg_print_2d_deconiface_54 => dbg_print_2d
+    USE mo_scalar_product, ONLY: map_cell2edges_3d_1level_deconiface_139 => map_cell2edges_3d_1level
+    USE mo_util_dbg_prnt, ONLY: dbg_print_2d_deconiface_140 => dbg_print_2d, dbg_print_2d_deconiface_141 => dbg_print_2d, dbg_print_2d_deconiface_142 => dbg_print_2d
     TYPE(t_patch_3d), TARGET, INTENT(IN) :: patch_3d
     TYPE(t_hydro_ocean_state), INTENT(INOUT) :: ocean_state
     TYPE(t_operator_coeff), INTENT(IN) :: p_op_coeff
@@ -2804,12 +4305,12 @@ MODULE mo_ocean_boundcond
     CASE DEFAULT
       CALL finish("top_bound_cond_horz_veloc", "unknown i_bc_veloc_top")
     END SELECT
-    CALL map_cell2edges_3d_1level_deconiface_51(patch_3d, ocean_state % p_aux % bc_top_veloc_cc, ocean_state % p_aux % bc_top_vn, p_op_coeff, level = 1, lacc = lzacc)
+    CALL map_cell2edges_3d_1level_deconiface_139(patch_3d, ocean_state % p_aux % bc_top_veloc_cc, ocean_state % p_aux % bc_top_vn, p_op_coeff, level = 1, lacc = lzacc)
     idt_src = 2
-    CALL dbg_print_2d_deconiface_52('top bound.cond. u', ocean_state % p_aux % bc_top_u, str_module, idt_src, in_subset = patch_2d % cells % owned)
-    CALL dbg_print_2d_deconiface_53('top bound.cond. v', ocean_state % p_aux % bc_top_v, str_module, idt_src, in_subset = patch_2d % cells % owned)
+    CALL dbg_print_2d_deconiface_140('top bound.cond. u', ocean_state % p_aux % bc_top_u, str_module, idt_src, in_subset = patch_2d % cells % owned)
+    CALL dbg_print_2d_deconiface_141('top bound.cond. v', ocean_state % p_aux % bc_top_v, str_module, idt_src, in_subset = patch_2d % cells % owned)
     idt_src = 3
-    CALL dbg_print_2d_deconiface_54('top bound.cond. vn', ocean_state % p_aux % bc_top_vn, str_module, idt_src, in_subset = patch_2d % edges % owned)
+    CALL dbg_print_2d_deconiface_142('top bound.cond. vn', ocean_state % p_aux % bc_top_vn, str_module, idt_src, in_subset = patch_2d % edges % owned)
   END SUBROUTINE top_bound_cond_horz_veloc_fromcells
   SUBROUTINE velocitybottomboundarycondition_onblock(patch_3d, blockno, start_edge_index, end_edge_index, vn_old, vn_pred, bc_bot_vn, lacc)
     USE mo_model_domain, ONLY: t_patch_3d
@@ -2889,7 +4390,7 @@ MODULE mo_ocean_velocity_advection
   SUBROUTINE veloc_adv_vert_mimetic(patch_3d, p_diag, ocean_coefficients, veloc_adv_vert_e, lacc)
     USE mo_model_domain, ONLY: t_patch_3d
     USE mo_ocean_types, ONLY: t_hydro_ocean_diag, t_operator_coeff
-    USE mo_fortran_tools, ONLY: init_zero_3d_dp_deconiface_55 => init_zero_3d_dp, set_acc_host_or_device
+    USE mo_fortran_tools, ONLY: init_zero_3d_dp_deconiface_143 => init_zero_3d_dp, set_acc_host_or_device
     USE mo_ocean_nml, ONLY: horizonatlvelocity_verticaladvection_form
     USE mo_exception, ONLY: finish
     TYPE(t_patch_3d), TARGET, INTENT(IN) :: patch_3d
@@ -2907,7 +4408,7 @@ MODULE mo_ocean_velocity_advection
     CASE (3)
       CALL veloc_adv_vert_rot(patch_3d, p_diag, ocean_coefficients, veloc_adv_vert_e)
     CASE (0)
-      CALL init_zero_3d_dp_deconiface_55(veloc_adv_vert_e, lacc = lzacc)
+      CALL init_zero_3d_dp_deconiface_143(veloc_adv_vert_e, lacc = lzacc)
     CASE DEFAULT
       CALL finish("veloc_adv_vert_mimetic", "unknown HorizonatlVelocity_VerticalAdvection_form")
     END SELECT
@@ -2919,7 +4420,7 @@ MODULE mo_ocean_velocity_advection
     USE mo_scalar_product, ONLY: nonlinear_coriolis_3d
     USE mo_grid_subset, ONLY: get_index_range
     USE mo_ocean_math_operators, ONLY: grad_fd_norm_oce_3d_onblock
-    USE mo_util_dbg_prnt, ONLY: dbg_print_3d_deconiface_56 => dbg_print_3d, dbg_print_3d_deconiface_57 => dbg_print_3d, dbg_print_3d_deconiface_58 => dbg_print_3d
+    USE mo_util_dbg_prnt, ONLY: dbg_print_3d_deconiface_144 => dbg_print_3d, dbg_print_3d_deconiface_145 => dbg_print_3d, dbg_print_3d_deconiface_146 => dbg_print_3d
     TYPE(t_patch_3d), POINTER, INTENT(IN) :: patch_3d
     REAL(KIND = 8), POINTER, INTENT(INOUT) :: vn(:, :, :)
     TYPE(t_hydro_ocean_diag) :: p_diag
@@ -2941,17 +4442,17 @@ MODULE mo_ocean_velocity_advection
       CALL grad_fd_norm_oce_3d_onblock(p_diag % kin, patch_3d, ocean_coefficients % grad_coeff(:, :, blockno), p_diag % grad(:, :, blockno), start_edge_index, end_edge_index, blockno, lacc = lzacc)
     END DO
     idt_src = 3
-    CALL dbg_print_3d_deconiface_56('HorzMimRot: kin energy', p_diag % kin, str_module, idt_src, patch_2d % cells % owned)
-    CALL dbg_print_3d_deconiface_57('HorzMimRot: vorticity', p_diag % vort, str_module, idt_src, patch_2d % verts % owned)
-    CALL dbg_print_3d_deconiface_58('HorzMimRot: grad kin en', p_diag % grad, str_module, idt_src, patch_2d % edges % owned)
+    CALL dbg_print_3d_deconiface_144('HorzMimRot: kin energy', p_diag % kin, str_module, idt_src, patch_2d % cells % owned)
+    CALL dbg_print_3d_deconiface_145('HorzMimRot: vorticity', p_diag % vort, str_module, idt_src, patch_2d % verts % owned)
+    CALL dbg_print_3d_deconiface_146('HorzMimRot: grad kin en', p_diag % grad, str_module, idt_src, patch_2d % edges % owned)
   END SUBROUTINE veloc_adv_horz_mimetic_rot
   SUBROUTINE calculate_only_kineticgrad(patch_3d, vn, p_diag, veloc_adv_horz_e, ocean_coefficients)
     USE mo_model_domain, ONLY: t_patch, t_patch_3d, t_subset_range
     USE mo_ocean_types, ONLY: t_hydro_ocean_diag, t_operator_coeff
-    USE mo_fortran_tools, ONLY: init_zero_3d_dp_deconiface_59 => init_zero_3d_dp
+    USE mo_fortran_tools, ONLY: init_zero_3d_dp_deconiface_147 => init_zero_3d_dp
     USE mo_grid_subset, ONLY: get_index_range
     USE mo_ocean_math_operators, ONLY: grad_fd_norm_oce_3d_onblock
-    USE mo_util_dbg_prnt, ONLY: dbg_print_3d_deconiface_60 => dbg_print_3d, dbg_print_3d_deconiface_61 => dbg_print_3d
+    USE mo_util_dbg_prnt, ONLY: dbg_print_3d_deconiface_148 => dbg_print_3d, dbg_print_3d_deconiface_149 => dbg_print_3d
     TYPE(t_patch_3d), TARGET :: patch_3d
     REAL(KIND = 8), POINTER, INTENT(INOUT) :: vn(:, :, :)
     TYPE(t_hydro_ocean_diag) :: p_diag
@@ -2962,14 +4463,14 @@ MODULE mo_ocean_velocity_advection
     TYPE(t_patch), POINTER :: patch_2d
     patch_2d => patch_3d % p_patch_2d(1)
     edges_in_domain => patch_2d % edges % in_domain
-    CALL init_zero_3d_dp_deconiface_59(veloc_adv_horz_e, lacc = .FALSE.)
+    CALL init_zero_3d_dp_deconiface_147(veloc_adv_horz_e, lacc = .FALSE.)
     DO blockno = edges_in_domain % start_block, edges_in_domain % end_block
       CALL get_index_range(edges_in_domain, blockno, start_edge_index, end_edge_index)
       CALL grad_fd_norm_oce_3d_onblock(p_diag % kin, patch_3d, ocean_coefficients % grad_coeff(:, :, blockno), p_diag % grad(:, :, blockno), start_edge_index, end_edge_index, blockno)
     END DO
     idt_src = 3
-    CALL dbg_print_3d_deconiface_60('HorzMimRot: kin energy', p_diag % kin, str_module, idt_src, patch_2d % cells % owned)
-    CALL dbg_print_3d_deconiface_61('HorzMimRot: grad kin en', p_diag % grad, str_module, idt_src, patch_2d % edges % owned)
+    CALL dbg_print_3d_deconiface_148('HorzMimRot: kin energy', p_diag % kin, str_module, idt_src, patch_2d % cells % owned)
+    CALL dbg_print_3d_deconiface_149('HorzMimRot: grad kin en', p_diag % grad, str_module, idt_src, patch_2d % edges % owned)
   END SUBROUTINE calculate_only_kineticgrad
   SUBROUTINE veloc_adv_horz_mimetic_classiccgrid(patch_3d, vn, p_diag, veloc_adv_horz_e, ocean_coefficients)
     USE mo_model_domain, ONLY: t_patch, t_patch_3d, t_subset_range
@@ -2977,9 +4478,9 @@ MODULE mo_ocean_velocity_advection
     USE mo_ocean_nml, ONLY: n_zlev
     USE mo_ocean_types, ONLY: t_hydro_ocean_diag, t_operator_coeff
     USE mo_ocean_math_operators, ONLY: grad_fd_norm_oce_3d_onblock, rot_vertex_ocean_3d
-    USE mo_sync, ONLY: sync_patch_array_3d_dp_deconiface_62 => sync_patch_array_3d_dp
+    USE mo_sync, ONLY: sync_patch_array_3d_dp_deconiface_150 => sync_patch_array_3d_dp
     USE mo_grid_subset, ONLY: get_index_range
-    USE mo_util_dbg_prnt, ONLY: dbg_print_2d_deconiface_65 => dbg_print_2d, dbg_print_3d_deconiface_63 => dbg_print_3d, dbg_print_3d_deconiface_64 => dbg_print_3d, dbg_print_3d_deconiface_66 => dbg_print_3d, dbg_print_3d_deconiface_67 => dbg_print_3d
+    USE mo_util_dbg_prnt, ONLY: dbg_print_2d_deconiface_153 => dbg_print_2d, dbg_print_3d_deconiface_151 => dbg_print_3d, dbg_print_3d_deconiface_152 => dbg_print_3d, dbg_print_3d_deconiface_154 => dbg_print_3d, dbg_print_3d_deconiface_155 => dbg_print_3d
     TYPE(t_patch_3d), TARGET, INTENT(IN) :: patch_3d
     REAL(KIND = 8), INTENT(INOUT) :: vn(1 : nproma, 1 : n_zlev, 1 : patch_3d % p_patch_2d(1) % nblks_e)
     TYPE(t_hydro_ocean_diag) :: p_diag
@@ -2997,7 +4498,7 @@ MODULE mo_ocean_velocity_advection
     edges_in_domain => patch_2d % edges % in_domain
     edge_levels => patch_3d % p_patch_1d(1) % dolic_e
     CALL rot_vertex_ocean_3d(patch_3d, vn, p_diag % p_vn_dual, ocean_coefficients, p_diag % vort)
-    CALL sync_patch_array_3d_dp_deconiface_62(3, patch_2d, p_diag % vort, lacc = .FALSE.)
+    CALL sync_patch_array_3d_dp_deconiface_150(3, patch_2d, p_diag % vort, lacc = .FALSE.)
     DO blockno = edges_in_domain % start_block, edges_in_domain % end_block
       CALL get_index_range(edges_in_domain, blockno, start_edge_index, end_edge_index)
       DO je = start_edge_index, end_edge_index
@@ -3020,11 +4521,11 @@ MODULE mo_ocean_velocity_advection
       CALL grad_fd_norm_oce_3d_onblock(p_diag % kin, patch_3d, ocean_coefficients % grad_coeff(:, :, blockno), p_diag % grad(:, :, blockno), start_edge_index, end_edge_index, blockno)
     END DO
     idt_src = 3
-    CALL dbg_print_3d_deconiface_63('advHorCgrid: kin energy', p_diag % kin, str_module, idt_src, patch_2d % cells % owned)
-    CALL dbg_print_3d_deconiface_64('advHorCgrid: vorticity', p_diag % vort, str_module, idt_src, patch_2d % verts % owned)
-    CALL dbg_print_2d_deconiface_65('advHorCgrid: f_e', patch_2d % edges % f_e, str_module, idt_src, patch_2d % edges % owned)
-    CALL dbg_print_3d_deconiface_66('advHorCgrid: grad kin en', p_diag % grad, str_module, idt_src, patch_2d % edges % owned)
-    CALL dbg_print_3d_deconiface_67('advHorCgrid: veloc_adv_horz_e', veloc_adv_horz_e, str_module, idt_src, patch_2d % edges % owned)
+    CALL dbg_print_3d_deconiface_151('advHorCgrid: kin energy', p_diag % kin, str_module, idt_src, patch_2d % cells % owned)
+    CALL dbg_print_3d_deconiface_152('advHorCgrid: vorticity', p_diag % vort, str_module, idt_src, patch_2d % verts % owned)
+    CALL dbg_print_2d_deconiface_153('advHorCgrid: f_e', patch_2d % edges % f_e, str_module, idt_src, patch_2d % edges % owned)
+    CALL dbg_print_3d_deconiface_154('advHorCgrid: grad kin en', p_diag % grad, str_module, idt_src, patch_2d % edges % owned)
+    CALL dbg_print_3d_deconiface_155('advHorCgrid: veloc_adv_horz_e', veloc_adv_horz_e, str_module, idt_src, patch_2d % edges % owned)
   END SUBROUTINE veloc_adv_horz_mimetic_classiccgrid
   SUBROUTINE veloc_adv_vert_rot(patch_3d, p_diag, ocean_coefficients, veloc_adv_vert_e)
     USE mo_model_domain, ONLY: t_patch, t_patch_3d, t_subset_range
@@ -3033,9 +4534,9 @@ MODULE mo_ocean_velocity_advection
     USE mo_ocean_nml, ONLY: n_zlev
     USE mo_math_types, ONLY: t_cartesian_coordinates
     USE mo_grid_subset, ONLY: get_index_range
-    USE mo_scalar_product, ONLY: map_cell2edges_3d_mlevels_deconiface_74 => map_cell2edges_3d_mlevels, map_scalar_prismtop2center_onblock, map_vector_center2prismtop_onblock
+    USE mo_scalar_product, ONLY: map_cell2edges_3d_mlevels_deconiface_162 => map_cell2edges_3d_mlevels, map_scalar_prismtop2center_onblock, map_vector_center2prismtop_onblock
     USE mo_ocean_math_operators, ONLY: verticaldiv_vector_onfulllevels_on_block
-    USE mo_util_dbg_prnt, ONLY: dbg_print, dbg_print_3d_deconiface_75 => dbg_print_3d
+    USE mo_util_dbg_prnt, ONLY: dbg_print, dbg_print_3d_deconiface_163 => dbg_print_3d
     TYPE(t_patch_3d), TARGET, INTENT(IN) :: patch_3d
     TYPE(t_hydro_ocean_diag) :: p_diag
     TYPE(t_operator_coeff), INTENT(IN) :: ocean_coefficients
@@ -3074,9 +4575,9 @@ MODULE mo_ocean_velocity_advection
     CALL dbg_print('VertAdvect x(1)', z_adv_u_m(:, :, :) % x(1), str_module, idt_src, patch_2d % cells % owned)
     CALL dbg_print('VertAdvect x(2)', z_adv_u_m(:, :, :) % x(2), str_module, idt_src, patch_2d % cells % owned)
     CALL dbg_print('VertAdvect x(3)', z_adv_u_m(:, :, :) % x(3), str_module, idt_src, patch_2d % cells % owned)
-    CALL map_cell2edges_3d_mlevels_deconiface_74(patch_3d, z_adv_u_m, veloc_adv_vert_e, ocean_coefficients)
+    CALL map_cell2edges_3d_mlevels_deconiface_162(patch_3d, z_adv_u_m, veloc_adv_vert_e, ocean_coefficients)
     idt_src = 3
-    CALL dbg_print_3d_deconiface_75('VertMimRot: V.Adv. Final', veloc_adv_vert_e, str_module, idt_src, patch_2d % edges % owned)
+    CALL dbg_print_3d_deconiface_163('VertMimRot: V.Adv. Final', veloc_adv_vert_e, str_module, idt_src, patch_2d % edges % owned)
   END SUBROUTINE veloc_adv_vert_rot
   SUBROUTINE veloc_adv_vert_mimetic_rot(patch_3d, p_diag, p_op_coeff, veloc_adv_vert_e, lacc)
     USE mo_model_domain, ONLY: t_patch, t_patch_3d, t_subset_range
@@ -3087,8 +4588,8 @@ MODULE mo_ocean_velocity_advection
     USE mo_fortran_tools, ONLY: set_acc_host_or_device
     USE mo_grid_subset, ONLY: get_index_range
     USE mo_ocean_math_operators, ONLY: verticalderiv_vec_midlevel_on_block
-    USE mo_scalar_product, ONLY: map_cell2edges_3d_mlevels_deconiface_76 => map_cell2edges_3d_mlevels, map_vec_prismtop2center_on_block
-    USE mo_util_dbg_prnt, ONLY: dbg_print_3d_deconiface_77 => dbg_print_3d
+    USE mo_scalar_product, ONLY: map_cell2edges_3d_mlevels_deconiface_164 => map_cell2edges_3d_mlevels, map_vec_prismtop2center_on_block
+    USE mo_util_dbg_prnt, ONLY: dbg_print_3d_deconiface_165 => dbg_print_3d
     TYPE(t_patch_3d), TARGET, INTENT(IN) :: patch_3d
     TYPE(t_hydro_ocean_diag) :: p_diag
     TYPE(t_operator_coeff), INTENT(IN) :: p_op_coeff
@@ -3131,9 +4632,9 @@ MODULE mo_ocean_velocity_advection
       END DO
       CALL map_vec_prismtop2center_on_block(patch_3d, z_adv_u_i, z_adv_u_m(:, :, blockno), blockno, start_index, end_index, lacc = lzacc)
     END DO
-    CALL map_cell2edges_3d_mlevels_deconiface_76(patch_3d, z_adv_u_m, veloc_adv_vert_e, p_op_coeff, lacc = lzacc)
+    CALL map_cell2edges_3d_mlevels_deconiface_164(patch_3d, z_adv_u_m, veloc_adv_vert_e, p_op_coeff, lacc = lzacc)
     idt_src = 3
-    CALL dbg_print_3d_deconiface_77('VertMimRot: V.Adv. Final', veloc_adv_vert_e, str_module, idt_src, patch_2d % edges % owned)
+    CALL dbg_print_3d_deconiface_165('VertMimRot: V.Adv. Final', veloc_adv_vert_e, str_module, idt_src, patch_2d % edges % owned)
   END SUBROUTINE veloc_adv_vert_mimetic_rot
   SUBROUTINE veloc_adv_vert_mimetic_div(patch_3d, p_diag, ocean_coefficients, veloc_adv_vert_e)
     USE mo_model_domain, ONLY: t_patch, t_patch_3d, t_subset_range
@@ -3141,11 +4642,11 @@ MODULE mo_ocean_velocity_advection
     USE mo_parallel_config, ONLY: nproma
     USE mo_ocean_nml, ONLY: n_zlev
     USE mo_math_types, ONLY: t_cartesian_coordinates
-    USE mo_fortran_tools, ONLY: init, init_zero_3d_dp_deconiface_78 => init_zero_3d_dp
+    USE mo_fortran_tools, ONLY: init, init_zero_3d_dp_deconiface_166 => init_zero_3d_dp
     USE mo_grid_subset, ONLY: get_index_range
-    USE mo_scalar_product, ONLY: map_cell2edges_3d_mlevels_deconiface_79 => map_cell2edges_3d_mlevels
-    USE mo_sync, ONLY: sync_patch_array_3d_dp_deconiface_80 => sync_patch_array_3d_dp
-    USE mo_util_dbg_prnt, ONLY: dbg_print_3d_deconiface_81 => dbg_print_3d
+    USE mo_scalar_product, ONLY: map_cell2edges_3d_mlevels_deconiface_167 => map_cell2edges_3d_mlevels
+    USE mo_sync, ONLY: sync_patch_array_3d_dp_deconiface_168 => sync_patch_array_3d_dp
+    USE mo_util_dbg_prnt, ONLY: dbg_print_3d_deconiface_169 => dbg_print_3d
     TYPE(t_patch_3d), TARGET, INTENT(IN) :: patch_3d
     TYPE(t_hydro_ocean_diag) :: p_diag
     TYPE(t_operator_coeff), INTENT(IN) :: ocean_coefficients
@@ -3166,7 +4667,7 @@ MODULE mo_ocean_velocity_advection
     CALL init(z_adv_u_i(1 : nproma, 1 : n_zlev + 1, 1 : patch_2d % alloc_cell_blocks) % x(1), lacc = .FALSE.)
     CALL init(z_adv_u_i(1 : nproma, 1 : n_zlev + 1, 1 : patch_2d % alloc_cell_blocks) % x(2), lacc = .FALSE.)
     CALL init(z_adv_u_i(1 : nproma, 1 : n_zlev + 1, 1 : patch_2d % alloc_cell_blocks) % x(3), lacc = .FALSE.)
-    CALL init_zero_3d_dp_deconiface_78(z_w_diff(1 : nproma, 1 : n_zlev - 1, 1 : patch_2d % alloc_cell_blocks), lacc = .FALSE.)
+    CALL init_zero_3d_dp_deconiface_166(z_w_diff(1 : nproma, 1 : n_zlev - 1, 1 : patch_2d % alloc_cell_blocks), lacc = .FALSE.)
     DO blockno = all_cells % start_block, all_cells % end_block
       CALL get_index_range(all_cells, blockno, start_index, end_index)
       DO jc = start_index, end_index
@@ -3184,10 +4685,10 @@ MODULE mo_ocean_velocity_advection
         END IF
       END DO
     END DO
-    CALL map_cell2edges_3d_mlevels_deconiface_79(patch_3d, z_adv_u_i, veloc_adv_vert_e, ocean_coefficients)
-    CALL sync_patch_array_3d_dp_deconiface_80(2, patch_2d, veloc_adv_vert_e, lacc = .FALSE.)
+    CALL map_cell2edges_3d_mlevels_deconiface_167(patch_3d, z_adv_u_i, veloc_adv_vert_e, ocean_coefficients)
+    CALL sync_patch_array_3d_dp_deconiface_168(2, patch_2d, veloc_adv_vert_e, lacc = .FALSE.)
     idt_src = 3
-    CALL dbg_print_3d_deconiface_81('VertMimDiv: VelAdv Final', veloc_adv_vert_e, str_module, idt_src, patch_2d % edges % owned)
+    CALL dbg_print_3d_deconiface_169('VertMimDiv: VelAdv Final', veloc_adv_vert_e, str_module, idt_src, patch_2d % edges % owned)
   END SUBROUTINE veloc_adv_vert_mimetic_div
 END MODULE mo_ocean_velocity_advection
 MODULE mo_ocean_velocity_diffusion
@@ -3202,7 +4703,7 @@ MODULE mo_ocean_velocity_diffusion
     USE mo_fortran_tools, ONLY: set_acc_host_or_device
     USE mo_ocean_nml, ONLY: laplacian_form, velocitydiffusion_order
     USE mo_exception, ONLY: finish
-    USE mo_util_dbg_prnt, ONLY: dbg_print_3d_deconiface_82 => dbg_print_3d
+    USE mo_util_dbg_prnt, ONLY: dbg_print_3d_deconiface_170 => dbg_print_3d
     TYPE(t_patch_3d), TARGET :: patch_3d
     REAL(KIND = 8) :: vn_in(:, :, :)
     TYPE(t_ho_params) :: physics_parameters
@@ -3219,7 +4720,7 @@ MODULE mo_ocean_velocity_diffusion
         CALL veloc_diff_harmonic_div_grad(patch_3d, physics_parameters % harmonicviscosity_coeff, p_diag, operators_coeff, laplacian_vn_out)
       ELSE IF (laplacian_form == 1) THEN
         CALL veloc_diff_harmonic_curl_curl(patch_3d = patch_3d, u_vec_e = vn_in, vort = p_diag % vort, div_coeff = operators_coeff % div_coeff, harmonicdiffusion = laplacian_vn_out, k_h = physics_parameters % harmonicviscosity_coeff, lacc = lzacc)
-        CALL dbg_print_3d_deconiface_82('laplacian_vn_out:', laplacian_vn_out, str_module, 4, in_subset = patch_3d % p_patch_2d(1) % edges % owned)
+        CALL dbg_print_3d_deconiface_170('laplacian_vn_out:', laplacian_vn_out, str_module, 4, in_subset = patch_3d % p_patch_2d(1) % edges % owned)
       END IF
     ELSE IF (velocitydiffusion_order == 2 .OR. velocitydiffusion_order == 21) THEN
       IF (laplacian_form == 2) THEN
@@ -3241,7 +4742,7 @@ MODULE mo_ocean_velocity_diffusion
     USE mo_math_types, ONLY: t_cartesian_coordinates
     USE mo_ocean_math_operators, ONLY: div_vector_ontriangle, grad_vector
     USE mo_sync, ONLY: sync_patch_array_mult
-    USE mo_scalar_product, ONLY: map_cell2edges_3d_mlevels_deconiface_83 => map_cell2edges_3d_mlevels
+    USE mo_scalar_product, ONLY: map_cell2edges_3d_mlevels_deconiface_171 => map_cell2edges_3d_mlevels
     TYPE(t_patch_3d), TARGET, INTENT(IN) :: patch_3d
     REAL(KIND = 8) :: grad_coeff(:, :, :)
     TYPE(t_hydro_ocean_diag) :: p_diag
@@ -3257,7 +4758,7 @@ MODULE mo_ocean_velocity_diffusion
     CALL grad_vector(cellvector = p_diag % p_vn, patch_3d = patch_3d, grad_coeff = grad_coeff, gradvector = z_grad_u)
     CALL div_vector_ontriangle(patch_3d = patch_3d, edgevector = z_grad_u, divvector = z_div_grad_u, div_coeff = operators_coeff % div_coeff)
     CALL sync_patch_array_mult(1, patch_2d, 3, lacc = .FALSE., f3din1 = z_div_grad_u(:, :, :) % x(1), f3din2 = z_div_grad_u(:, :, :) % x(2), f3din3 = z_div_grad_u(:, :, :) % x(3))
-    CALL map_cell2edges_3d_mlevels_deconiface_83(patch_3d, z_div_grad_u, laplacian_vn_out, operators_coeff)
+    CALL map_cell2edges_3d_mlevels_deconiface_171(patch_3d, z_div_grad_u, laplacian_vn_out, operators_coeff)
   END SUBROUTINE veloc_diff_harmonic_div_grad
   SUBROUTINE veloc_diff_biharmonic_div_grad(patch_3d, physics_parameters, p_diag, operators_coeff, laplacian_vn_out)
     USE mo_model_domain, ONLY: t_patch, t_patch_3d, t_subset_range
@@ -3266,10 +4767,10 @@ MODULE mo_ocean_velocity_diffusion
     USE mo_parallel_config, ONLY: nproma
     USE mo_ocean_nml, ONLY: n_zlev
     USE mo_math_types, ONLY: t_cartesian_coordinates
-    USE mo_fortran_tools, ONLY: init_zero_3d_dp_deconiface_84 => init_zero_3d_dp, init_zero_3d_dp_deconiface_85 => init_zero_3d_dp, init_zero_3d_dp_deconiface_86 => init_zero_3d_dp, init_zero_3d_dp_deconiface_87 => init_zero_3d_dp
+    USE mo_fortran_tools, ONLY: init_zero_3d_dp_deconiface_172 => init_zero_3d_dp, init_zero_3d_dp_deconiface_173 => init_zero_3d_dp, init_zero_3d_dp_deconiface_174 => init_zero_3d_dp, init_zero_3d_dp_deconiface_175 => init_zero_3d_dp
     USE mo_grid_subset, ONLY: get_index_range
-    USE mo_sync, ONLY: sync_patch_array_3d_dp_deconiface_88 => sync_patch_array_3d_dp, sync_patch_array_3d_dp_deconiface_90 => sync_patch_array_3d_dp, sync_patch_array_3d_dp_deconiface_92 => sync_patch_array_3d_dp
-    USE mo_ocean_math_operators, ONLY: div_oce_3d_mlevels_deconiface_89 => div_oce_3d_mlevels, div_oce_3d_mlevels_deconiface_91 => div_oce_3d_mlevels, grad_fd_norm_oce_3d
+    USE mo_sync, ONLY: sync_patch_array_3d_dp_deconiface_176 => sync_patch_array_3d_dp, sync_patch_array_3d_dp_deconiface_178 => sync_patch_array_3d_dp, sync_patch_array_3d_dp_deconiface_180 => sync_patch_array_3d_dp
+    USE mo_ocean_math_operators, ONLY: div_oce_3d_mlevels_deconiface_177 => div_oce_3d_mlevels, div_oce_3d_mlevels_deconiface_179 => div_oce_3d_mlevels, grad_fd_norm_oce_3d
     TYPE(t_patch_3d), TARGET, INTENT(IN) :: patch_3d
     TYPE(t_ho_params), INTENT(IN) :: physics_parameters
     TYPE(t_hydro_ocean_diag) :: p_diag
@@ -3291,10 +4792,10 @@ MODULE mo_ocean_velocity_diffusion
     edges_in_domain => patch_2d % edges % in_domain
     start_level = 1
     end_level = n_zlev
-    CALL init_zero_3d_dp_deconiface_84(z_grad_u_normal(1 : nproma, 1 : n_zlev, 1 : patch_3d % p_patch_2d(1) % nblks_e), lacc = .FALSE.)
-    CALL init_zero_3d_dp_deconiface_85(z_grad_u_normal_ptp(1 : nproma, 1 : n_zlev, 1 : patch_3d % p_patch_2d(1) % nblks_e), lacc = .FALSE.)
-    CALL init_zero_3d_dp_deconiface_86(grad_div_e(1 : nproma, 1 : n_zlev, 1 : patch_3d % p_patch_2d(1) % nblks_e), lacc = .FALSE.)
-    CALL init_zero_3d_dp_deconiface_87(div_c(1 : nproma, 1 : n_zlev, 1 : patch_3d % p_patch_2d(1) % alloc_cell_blocks), lacc = .FALSE.)
+    CALL init_zero_3d_dp_deconiface_172(z_grad_u_normal(1 : nproma, 1 : n_zlev, 1 : patch_3d % p_patch_2d(1) % nblks_e), lacc = .FALSE.)
+    CALL init_zero_3d_dp_deconiface_173(z_grad_u_normal_ptp(1 : nproma, 1 : n_zlev, 1 : patch_3d % p_patch_2d(1) % nblks_e), lacc = .FALSE.)
+    CALL init_zero_3d_dp_deconiface_174(grad_div_e(1 : nproma, 1 : n_zlev, 1 : patch_3d % p_patch_2d(1) % nblks_e), lacc = .FALSE.)
+    CALL init_zero_3d_dp_deconiface_175(div_c(1 : nproma, 1 : n_zlev, 1 : patch_3d % p_patch_2d(1) % alloc_cell_blocks), lacc = .FALSE.)
     DO blockno = all_edges % start_block, all_edges % end_block
       CALL get_index_range(all_edges, blockno, start_edge_index, end_edge_index)
       DO edge_index = start_edge_index, end_edge_index
@@ -3308,11 +4809,11 @@ MODULE mo_ocean_velocity_diffusion
         END DO
       END DO
     END DO
-    CALL sync_patch_array_3d_dp_deconiface_88(2, patch_2d, z_grad_u_normal, lacc = .FALSE.)
-    CALL div_oce_3d_mlevels_deconiface_89(z_grad_u_normal, patch_3d, operators_coeff % div_coeff, div_c)
+    CALL sync_patch_array_3d_dp_deconiface_176(2, patch_2d, z_grad_u_normal, lacc = .FALSE.)
+    CALL div_oce_3d_mlevels_deconiface_177(z_grad_u_normal, patch_3d, operators_coeff % div_coeff, div_c)
     CALL grad_fd_norm_oce_3d(div_c, patch_3d, operators_coeff % grad_coeff, grad_div_e)
-    CALL sync_patch_array_3d_dp_deconiface_90(2, patch_2d, grad_div_e, lacc = .FALSE.)
-    CALL div_oce_3d_mlevels_deconiface_91(grad_div_e, patch_3d, operators_coeff % div_coeff, div_c)
+    CALL sync_patch_array_3d_dp_deconiface_178(2, patch_2d, grad_div_e, lacc = .FALSE.)
+    CALL div_oce_3d_mlevels_deconiface_179(grad_div_e, patch_3d, operators_coeff % div_coeff, div_c)
     DO blockno = edges_in_domain % start_block, edges_in_domain % end_block
       CALL get_index_range(edges_in_domain, blockno, start_edge_index, end_edge_index)
       DO edge_index = start_edge_index, end_edge_index
@@ -3328,7 +4829,7 @@ MODULE mo_ocean_velocity_diffusion
     DO level = 1, n_zlev
       WRITE(*, *) 'Biharmonic divgrad', level, MAXVAL(laplacian_vn_out(:, level, :)), MINVAL(laplacian_vn_out(:, level, :))
     END DO
-    CALL sync_patch_array_3d_dp_deconiface_92(2, patch_2d, laplacian_vn_out, lacc = .FALSE.)
+    CALL sync_patch_array_3d_dp_deconiface_180(2, patch_2d, laplacian_vn_out, lacc = .FALSE.)
   END SUBROUTINE veloc_diff_biharmonic_div_grad
   SUBROUTINE veloc_diff_harmonic_curl_curl(patch_3d, u_vec_e, vort, div_coeff, nabla2_vec_e, harmonicdiffusion, k_h, lacc)
     USE mo_model_domain, ONLY: t_patch, t_patch_3d, t_subset_range
@@ -3336,7 +4837,7 @@ MODULE mo_ocean_velocity_diffusion
     USE mo_ocean_nml, ONLY: harmonicdiv_weight, harmonicvort_weight, n_zlev
     USE mo_exception, ONLY: finish
     USE mo_fortran_tools, ONLY: set_acc_host_or_device
-    USE mo_ocean_math_operators, ONLY: div_oce_3d_mlevels_deconiface_93 => div_oce_3d_mlevels
+    USE mo_ocean_math_operators, ONLY: div_oce_3d_mlevels_deconiface_181 => div_oce_3d_mlevels
     USE mo_grid_subset, ONLY: get_index_range
     TYPE(t_patch_3d), TARGET :: patch_3d
     REAL(KIND = 8) :: u_vec_e(:, :, :)
@@ -3364,7 +4865,7 @@ MODULE mo_ocean_velocity_diffusion
     END IF
     start_level = 1
     CALL set_acc_host_or_device(lzacc, lacc)
-    CALL div_oce_3d_mlevels_deconiface_93(u_vec_e, patch_3d, div_coeff, z_div_c, subset_range = patch_2d % cells % all, lacc = lzacc)
+    CALL div_oce_3d_mlevels_deconiface_181(u_vec_e, patch_3d, div_coeff, z_div_c, subset_range = patch_2d % cells % all, lacc = lzacc)
     DO blockno = edges_in_domain % start_block, edges_in_domain % end_block
       CALL get_index_range(edges_in_domain, blockno, start_index, end_index)
       nabla2(:, :) = 0.0D0
@@ -3389,8 +4890,8 @@ MODULE mo_ocean_velocity_diffusion
     USE mo_ocean_nml, ONLY: biharmonicdiv_weight, biharmonicvort_weight, n_zlev, velocitydiffusion_order
     USE mo_math_types, ONLY: t_cartesian_coordinates
     USE mo_fortran_tools, ONLY: set_acc_host_or_device
-    USE mo_sync, ONLY: sync_patch_array_3d_dp_deconiface_94 => sync_patch_array_3d_dp, sync_patch_array_mult_f3din_dp_deconiface_96 => sync_patch_array_mult_f3din_dp
-    USE mo_ocean_math_operators, ONLY: div_oce_3d_mlevels_deconiface_95 => div_oce_3d_mlevels, map_edges2vert_3d, rot_vertex_ocean_3d
+    USE mo_sync, ONLY: sync_patch_array_3d_dp_deconiface_182 => sync_patch_array_3d_dp, sync_patch_array_mult_f3din_dp_deconiface_184 => sync_patch_array_mult_f3din_dp
+    USE mo_ocean_math_operators, ONLY: div_oce_3d_mlevels_deconiface_183 => div_oce_3d_mlevels, map_edges2vert_3d, rot_vertex_ocean_3d
     USE mo_grid_subset, ONLY: get_index_range
     TYPE(t_patch_3d), TARGET :: patch_3d
     TYPE(t_ho_params) :: physics_parameters
@@ -3416,15 +4917,15 @@ MODULE mo_ocean_velocity_diffusion
     start_level = 1
     end_level = n_zlev
     CALL veloc_diff_harmonic_curl_curl(patch_3d = patch_3d, u_vec_e = u_vec_e, vort = vort, div_coeff = operators_coeff % div_coeff, nabla2_vec_e = z_nabla2_e, lacc = lzacc)
-    CALL sync_patch_array_3d_dp_deconiface_94(2, patch_2d, z_nabla2_e, lacc = lzacc)
-    CALL div_oce_3d_mlevels_deconiface_95(z_nabla2_e, patch_3d, operators_coeff % div_coeff, z_div_c, subset_range = patch_2d % cells % all, lacc = lzacc)
+    CALL sync_patch_array_3d_dp_deconiface_182(2, patch_2d, z_nabla2_e, lacc = lzacc)
+    CALL div_oce_3d_mlevels_deconiface_183(z_nabla2_e, patch_3d, operators_coeff % div_coeff, z_div_c, subset_range = patch_2d % cells % all, lacc = lzacc)
     CALL map_edges2vert_3d(patch_2d, z_nabla2_e, operators_coeff % edge2vert_coeff_cc, p_nabla2_dual, lacc = lzacc)
     DO blockno = 1, patch_3d % p_patch_2d(1) % nblks_v
       p_nabla2_dual_x(:, :, blockno) = p_nabla2_dual(:, :, blockno) % x(1)
       p_nabla2_dual_y(:, :, blockno) = p_nabla2_dual(:, :, blockno) % x(2)
       p_nabla2_dual_z(:, :, blockno) = p_nabla2_dual(:, :, blockno) % x(3)
     END DO
-    CALL sync_patch_array_mult_f3din_dp_deconiface_96(3, patch_2d, 3, lacc = lzacc, f3din1 = p_nabla2_dual_x, f3din2 = p_nabla2_dual_y, f3din3 = p_nabla2_dual_z)
+    CALL sync_patch_array_mult_f3din_dp_deconiface_184(3, patch_2d, 3, lacc = lzacc, f3din1 = p_nabla2_dual_x, f3din2 = p_nabla2_dual_y, f3din3 = p_nabla2_dual_z)
     DO blockno = 1, patch_3d % p_patch_2d(1) % nblks_v
       p_nabla2_dual(:, :, blockno) % x(1) = p_nabla2_dual_x(:, :, blockno)
       p_nabla2_dual(:, :, blockno) % x(2) = p_nabla2_dual_y(:, :, blockno)
@@ -3537,15 +5038,15 @@ MODULE mo_ocean_ab_timestepping_mimetic
   SUBROUTINE init_free_sfc_ab_mimetic(patch_3d, ocean_state, op_coeffs, solvercoeff_sp, lacc)
     USE mo_model_domain, ONLY: t_patch, t_patch_3d
     USE mo_ocean_types, ONLY: t_hydro_ocean_state, t_operator_coeff, t_solvercoeff_singleprecision
-    USE mo_ocean_solve_aux, ONLY: ocean_solve_parm_init_deconproc_51 => ocean_solve_parm_init, t_ocean_solve_parm
+    USE mo_ocean_solve_aux, ONLY: ocean_solve_parm_init_deconproc_67 => ocean_solve_parm_init, t_ocean_solve_parm
     USE mo_fortran_tools, ONLY: set_acc_host_or_device
     USE mo_parallel_config, ONLY: nproma
     USE mo_ocean_nml, ONLY: l_solver_compare, select_solver, select_transfer, solver_max_iter_per_restart, solver_max_iter_per_restart_sp, solver_max_restart_iterations, solver_tolerance, solver_tolerance_comp, solver_tolerance_sp, use_absolute_solver_tolerance
     USE mo_exception, ONLY: finish
-    USE mo_surface_height_lhs, ONLY: lhs_surface_height_construct_deconproc_52 => lhs_surface_height_construct
-    USE mo_ocean_solve_trivial_transfer, ONLY: trivial_transfer_construct_deconproc_53 => trivial_transfer_construct, trivial_transfer_construct_deconproc_57 => trivial_transfer_construct
-    USE mo_ocean_solve, ONLY: ocean_solve_construct_deconproc_54 => ocean_solve_construct, ocean_solve_construct_deconproc_56 => ocean_solve_construct, ocean_solve_construct_deconproc_58 => ocean_solve_construct
-    USE mo_ocean_solve_subset_transfer, ONLY: subset_transfer_construct_deconproc_55 => subset_transfer_construct
+    USE mo_surface_height_lhs, ONLY: lhs_surface_height_construct_deconproc_68 => lhs_surface_height_construct
+    USE mo_ocean_solve_trivial_transfer, ONLY: trivial_transfer_construct_deconproc_69 => trivial_transfer_construct, trivial_transfer_construct_deconproc_73 => trivial_transfer_construct
+    USE mo_ocean_solve, ONLY: ocean_solve_construct_deconproc_70 => ocean_solve_construct, ocean_solve_construct_deconproc_72 => ocean_solve_construct, ocean_solve_construct_deconproc_74 => ocean_solve_construct
+    USE mo_ocean_solve_subset_transfer, ONLY: subset_transfer_construct_deconproc_71 => subset_transfer_construct
     TYPE(t_patch_3d), POINTER, INTENT(IN) :: patch_3d
     TYPE(t_hydro_ocean_state), TARGET, INTENT(INOUT) :: ocean_state
     TYPE(t_operator_coeff), INTENT(IN), TARGET :: op_coeffs
@@ -3559,7 +5060,7 @@ MODULE mo_ocean_ab_timestepping_mimetic
     CALL set_acc_host_or_device(lzacc, lacc)
     IF (free_sfc_solver % is_init) RETURN
     patch_2d => patch_3d % p_patch_2d(1)
-    CALL ocean_solve_parm_init_deconproc_51(par, 60, 1, 800, patch_2d % cells % in_domain % end_block, patch_2d % alloc_cell_blocks, nproma, patch_2d % cells % in_domain % end_index, solver_tolerance, use_absolute_solver_tolerance)
+    CALL ocean_solve_parm_init_deconproc_67(par, 60, 1, 800, patch_2d % cells % in_domain % end_block, patch_2d % alloc_cell_blocks, nproma, patch_2d % cells % in_domain % end_index, solver_tolerance, use_absolute_solver_tolerance)
     par_sp % nidx = (- 1)
     sol_type = 21
     SELECT CASE (select_solver)
@@ -3598,21 +5099,21 @@ MODULE mo_ocean_ab_timestepping_mimetic
     CASE DEFAULT
       CALL finish(method_name, "Unknown solver")
     END SELECT
-    CALL lhs_surface_height_construct_deconproc_52(free_sfc_solver_lhs, patch_3d, ocean_state % p_diag % thick_e, op_coeffs, solvercoeff_sp, lacc = lzacc)
+    CALL lhs_surface_height_construct_deconproc_68(free_sfc_solver_lhs, patch_3d, ocean_state % p_diag % thick_e, op_coeffs, solvercoeff_sp, lacc = lzacc)
     SELECT CASE (select_transfer)
     CASE (0)
-      CALL trivial_transfer_construct_deconproc_53(free_sfc_solver_trans_triv, 11, patch_2d, lacc = lzacc)
-      CALL ocean_solve_construct_deconproc_54(free_sfc_solver, sol_type, par, par_sp, free_sfc_solver_lhs, free_sfc_solver_trans_triv, lacc = lzacc)
+      CALL trivial_transfer_construct_deconproc_69(free_sfc_solver_trans_triv, 11, patch_2d, lacc = lzacc)
+      CALL ocean_solve_construct_deconproc_70(free_sfc_solver, sol_type, par, par_sp, free_sfc_solver_lhs, free_sfc_solver_trans_triv, lacc = lzacc)
     CASE DEFAULT
       trans_mode = MERGE(71, 70, select_transfer .GT. 0)
-      CALL subset_transfer_construct_deconproc_55(free_sfc_solver_trans_sub, 11, patch_2d, ABS(select_transfer), trans_mode, lacc = lzacc)
-      CALL ocean_solve_construct_deconproc_56(free_sfc_solver, sol_type, par, par_sp, free_sfc_solver_lhs, free_sfc_solver_trans_sub, lacc = lzacc)
+      CALL subset_transfer_construct_deconproc_71(free_sfc_solver_trans_sub, 11, patch_2d, ABS(select_transfer), trans_mode, lacc = lzacc)
+      CALL ocean_solve_construct_deconproc_72(free_sfc_solver, sol_type, par, par_sp, free_sfc_solver_lhs, free_sfc_solver_trans_sub, lacc = lzacc)
     END SELECT
     IF (l_solver_compare) THEN
-      CALL trivial_transfer_construct_deconproc_57(free_sfc_solver_trans_triv, 11, patch_2d, lacc = lzacc)
+      CALL trivial_transfer_construct_deconproc_73(free_sfc_solver_trans_triv, 11, patch_2d, lacc = lzacc)
       par % tol = solver_tolerance_comp
       par_sp % nidx = (- 1)
-      CALL ocean_solve_construct_deconproc_58(free_sfc_solver_comp, 24, par, par_sp, free_sfc_solver_lhs, free_sfc_solver_trans_triv, lacc = lzacc)
+      CALL ocean_solve_construct_deconproc_74(free_sfc_solver_comp, 24, par, par_sp, free_sfc_solver_lhs, free_sfc_solver_trans_triv, lacc = lzacc)
     END IF
   END SUBROUTINE init_free_sfc_ab_mimetic
   SUBROUTINE solve_free_sfc_ab_mimetic(patch_3d, ocean_state, p_ext_data, p_as, p_oce_sfc, p_phys_param, timestep, op_coeffs, solvercoeff_sp, ret_status, lacc)
@@ -3623,7 +5124,7 @@ MODULE mo_ocean_ab_timestepping_mimetic
     USE mo_ocean_physics_types, ONLY: t_ho_params
     USE mo_impl_constants, ONLY: max_char_length
     USE mo_fortran_tools, ONLY: set_acc_host_or_device
-    USE mo_util_dbg_prnt, ONLY: dbg_print_2d_deconiface_101 => dbg_print_2d, dbg_print_2d_deconiface_97 => dbg_print_2d, dbg_print_2d_deconiface_99 => dbg_print_2d, dbg_print_3d_deconiface_100 => dbg_print_3d, dbg_print_3d_deconiface_105 => dbg_print_3d, dbg_print_3d_deconiface_98 => dbg_print_3d, debug_print_maxminmean
+    USE mo_util_dbg_prnt, ONLY: dbg_print_2d_deconiface_185 => dbg_print_2d, dbg_print_2d_deconiface_187 => dbg_print_2d, dbg_print_2d_deconiface_189 => dbg_print_2d, dbg_print_3d_deconiface_186 => dbg_print_3d, dbg_print_3d_deconiface_188 => dbg_print_3d, dbg_print_3d_deconiface_193 => dbg_print_3d, debug_print_maxminmean
     USE mo_dynamics_config, ONLY: nnew, nold
     USE mo_ocean_boundcond, ONLY: top_bound_cond_horz_veloc
     USE mo_run_config, ONLY: timers_level
@@ -3633,11 +5134,11 @@ MODULE mo_ocean_ab_timestepping_mimetic
     USE mo_ocean_nml, ONLY: createsolvermatrix, l_rigid_lid, l_solver_compare, solver_comp_nsteps, solver_firstguess, solver_tolerance
     USE mo_ocean_math_operators, ONLY: smooth_oncells
     USE mo_grid_subset, ONLY: get_index_range
-    USE mo_ocean_solve, ONLY: ocean_solve_dump_matrix_deconproc_61 => ocean_solve_dump_matrix, ocean_solve_solve_deconproc_59 => ocean_solve_solve, ocean_solve_solve_deconproc_60 => ocean_solve_solve
+    USE mo_ocean_solve, ONLY: ocean_solve_dump_matrix_deconproc_77 => ocean_solve_dump_matrix, ocean_solve_solve_deconproc_75 => ocean_solve_solve, ocean_solve_solve_deconproc_76 => ocean_solve_solve
     USE mo_dbg_nml, ONLY: idbg_mxmn
     USE mo_exception, ONLY: message, warning
-    USE mo_statistics, ONLY: minmaxmean_2d_inrange_deconiface_102 => minmaxmean_2d_inrange, minmaxmean_2d_inrange_deconiface_103 => minmaxmean_2d_inrange, minmaxmean_2d_inrange_deconiface_106 => minmaxmean_2d_inrange, print_2dvalue_location_deconiface_107 => print_2dvalue_location, print_2dvalue_location_deconiface_108 => print_2dvalue_location
-    USE mo_sync, ONLY: sync_patch_array_2d_dp_deconiface_104 => sync_patch_array_2d_dp
+    USE mo_statistics, ONLY: minmaxmean_2d_inrange_deconiface_190 => minmaxmean_2d_inrange, minmaxmean_2d_inrange_deconiface_191 => minmaxmean_2d_inrange, minmaxmean_2d_inrange_deconiface_194 => minmaxmean_2d_inrange, print_2dvalue_location_deconiface_195 => print_2dvalue_location, print_2dvalue_location_deconiface_196 => print_2dvalue_location
+    USE mo_sync, ONLY: sync_patch_array_2d_dp_deconiface_192 => sync_patch_array_2d_dp
     USE mo_mpi, ONLY: work_mpi_barrier
     TYPE(t_patch_3d), POINTER, INTENT(IN) :: patch_3d
     TYPE(t_hydro_ocean_state), TARGET, INTENT(INOUT) :: ocean_state
@@ -3668,10 +5169,10 @@ MODULE mo_ocean_ab_timestepping_mimetic
     all_cells => patch_2d % cells % all
     IF (.NOT. free_sfc_solver % is_init) CALL init_free_sfc_ab_mimetic(patch_3d, ocean_state, op_coeffs, solvercoeff_sp, lacc = lzacc)
     ret_status = 0
-    CALL dbg_print_2d_deconiface_97('on entry: h-old', ocean_state % p_prog(nold(1)) % h, str_module, 3, in_subset = patch_2d % cells % owned)
-    CALL dbg_print_3d_deconiface_98('on entry: vn-old', ocean_state % p_prog(nold(1)) % vn, str_module, 3, in_subset = patch_2d % edges % owned)
-    CALL dbg_print_2d_deconiface_99('on entry: h-new', ocean_state % p_prog(nnew(1)) % h, str_module, 2, in_subset = patch_2d % cells % owned)
-    CALL dbg_print_3d_deconiface_100('on entry: vn-new', ocean_state % p_prog(nnew(1)) % vn, str_module, 2, in_subset = patch_2d % edges % owned)
+    CALL dbg_print_2d_deconiface_185('on entry: h-old', ocean_state % p_prog(nold(1)) % h, str_module, 3, in_subset = patch_2d % cells % owned)
+    CALL dbg_print_3d_deconiface_186('on entry: vn-old', ocean_state % p_prog(nold(1)) % vn, str_module, 3, in_subset = patch_2d % edges % owned)
+    CALL dbg_print_2d_deconiface_187('on entry: h-new', ocean_state % p_prog(nnew(1)) % h, str_module, 2, in_subset = patch_2d % cells % owned)
+    CALL dbg_print_3d_deconiface_188('on entry: vn-new', ocean_state % p_prog(nnew(1)) % vn, str_module, 2, in_subset = patch_2d % edges % owned)
     CALL top_bound_cond_horz_veloc(patch_3d, ocean_state, op_coeffs, p_oce_sfc, lacc = lzacc)
     IF (timers_level >= 3) CALL timer_start(timer_ab_expl)
     CALL calculate_explicit_term_ab(patch_3d, ocean_state, p_phys_param, is_initial_timestep(timestep), op_coeffs, p_as, lacc = lzacc)
@@ -3708,8 +5209,8 @@ MODULE mo_ocean_ab_timestepping_mimetic
         free_sfc_solver_comp % x_loc_wp(:, :) = free_sfc_solver % x_loc_wp(:, :)
         free_sfc_solver_comp % b_loc_wp => free_sfc_solver % b_loc_wp
       END IF
-      CALL dbg_print_2d_deconiface_101('bef ocean_solve(' // TRIM(free_sfc_solver % sol_type_name) // '): h-old', ocean_state % p_prog(nold(1)) % h(:, :), str_module, idt_src, in_subset = owned_cells)
-      CALL ocean_solve_solve_deconproc_59(free_sfc_solver, n_it, n_it_sp, lacc = lzacc)
+      CALL dbg_print_2d_deconiface_189('bef ocean_solve(' // TRIM(free_sfc_solver % sol_type_name) // '): h-old', ocean_state % p_prog(nold(1)) % h(:, :), str_module, idt_src, in_subset = owned_cells)
+      CALL ocean_solve_solve_deconproc_75(free_sfc_solver, n_it, n_it_sp, lacc = lzacc)
       rn = MERGE(free_sfc_solver % res_loc_wp(1), 0.0D0, n_it .NE. 0)
       IF (idbg_mxmn >= 0) THEN
         IF (n_it_sp .NE. - 2) THEN
@@ -3727,28 +5228,28 @@ MODULE mo_ocean_ab_timestepping_mimetic
           END DO
         END DO
         IF (l_is_compare_step) THEN
-          CALL ocean_solve_solve_deconproc_60(free_sfc_solver_comp, n_it, n_it_sp, lacc = lzacc)
+          CALL ocean_solve_solve_deconproc_76(free_sfc_solver_comp, n_it, n_it_sp, lacc = lzacc)
           rn = MERGE(free_sfc_solver_comp % res_loc_wp(1), 0.0D0, n_it .NE. 0)
           WRITE(string, '(a,i4,a,e28.20)') 'SUM of ocean_solve iteration =', n_it - 1, ', residual =', rn
           CALL message('ocean_solve(' // TRIM(free_sfc_solver_comp % sol_type_name) // '): surface height', TRIM(string))
           free_sfc_solver_comp % x_loc_wp(:, :) = free_sfc_solver % x_loc_wp(:, :) - free_sfc_solver_comp % x_loc_wp(:, :)
-          minmaxmean(:) = minmaxmean_2d_inrange_deconiface_102(values = free_sfc_solver_comp % x_loc_wp(:, :), in_subset = owned_cells)
+          minmaxmean(:) = minmaxmean_2d_inrange_deconiface_190(values = free_sfc_solver_comp % x_loc_wp(:, :), in_subset = owned_cells)
           WRITE(string, "(a,3(e12.3,'  '))") "comparison of solutions: (min/max/mean)", minmaxmean(:)
           CALL message('ocean_solve(' // TRIM(free_sfc_solver_comp % sol_type_name) // '): surface height', TRIM(string))
           free_sfc_solver_comp % x_loc_wp(:, :) = free_sfc_solver_comp % x_loc_wp(:, :) * free_sfc_solver_comp % x_loc_wp(:, :)
-          minmaxmean(:) = minmaxmean_2d_inrange_deconiface_103(values = free_sfc_solver_comp % x_loc_wp(:, :), in_subset = owned_cells)
+          minmaxmean(:) = minmaxmean_2d_inrange_deconiface_191(values = free_sfc_solver_comp % x_loc_wp(:, :), in_subset = owned_cells)
           WRITE(string, "(a,3(e12.3,'  '))") "comparison of solutions (squared): (min/max/mean)", SQRT(minmaxmean(:))
           CALL message('ocean_solve(' // TRIM(free_sfc_solver_comp % sol_type_name) // '): surface height', TRIM(string))
         END IF
-        IF (createsolvermatrix) CALL ocean_solve_dump_matrix_deconproc_61(free_sfc_solver, timestep, lacc = lzacc)
-        CALL sync_patch_array_2d_dp_deconiface_104(1, patch_2d, ocean_state % p_prog(nnew(1)) % h, lacc = lzacc)
-        CALL dbg_print_3d_deconiface_105('vn-new', ocean_state % p_prog(nnew(1)) % vn, str_module, 2, in_subset = owned_edges)
-        minmaxmean(:) = minmaxmean_2d_inrange_deconiface_106(values = ocean_state % p_prog(nnew(1)) % h(:, :), in_subset = owned_cells)
+        IF (createsolvermatrix) CALL ocean_solve_dump_matrix_deconproc_77(free_sfc_solver, timestep, lacc = lzacc)
+        CALL sync_patch_array_2d_dp_deconiface_192(1, patch_2d, ocean_state % p_prog(nnew(1)) % h, lacc = lzacc)
+        CALL dbg_print_3d_deconiface_193('vn-new', ocean_state % p_prog(nnew(1)) % vn, str_module, 2, in_subset = owned_edges)
+        minmaxmean(:) = minmaxmean_2d_inrange_deconiface_194(values = ocean_state % p_prog(nnew(1)) % h(:, :), in_subset = owned_cells)
         CALL debug_print_maxminmean('h-new after ocean solver', minmaxmean, str_module, 1)
         IF (minmaxmean(1) + patch_3d % p_patch_1d(1) % del_zlev_m(1) <= 0.05D0) THEN
           CALL warning(method_name, "height below min_top_height")
-          CALL print_2dvalue_location_deconiface_107(ocean_state % p_prog(nnew(1)) % h(:, :), minmaxmean(1), owned_cells)
-          CALL print_2dvalue_location_deconiface_108(ocean_state % p_prog(nnew(2)) % h(:, :), minmaxmean(1), owned_cells)
+          CALL print_2dvalue_location_deconiface_195(ocean_state % p_prog(nnew(1)) % h(:, :), minmaxmean(1), owned_cells)
+          CALL print_2dvalue_location_deconiface_196(ocean_state % p_prog(nnew(2)) % h(:, :), minmaxmean(1), owned_cells)
           CALL work_mpi_barrier
           ret_status = 1
         END IF
@@ -3771,7 +5272,7 @@ MODULE mo_ocean_ab_timestepping_mimetic
     USE mo_dynamics_config, ONLY: nnew, nold
     USE mo_ocean_nml, ONLY: iswm_oce, mass_matrix_inversion_type
     USE mo_ocean_thermodyn, ONLY: calc_internal_press_grad
-    USE mo_util_dbg_prnt, ONLY: dbg_print_2d_deconiface_113 => dbg_print_2d, dbg_print_3d_deconiface_109 => dbg_print_3d, dbg_print_3d_deconiface_110 => dbg_print_3d, dbg_print_3d_deconiface_111 => dbg_print_3d, dbg_print_3d_deconiface_112 => dbg_print_3d, dbg_print_3d_deconiface_114 => dbg_print_3d, dbg_print_3d_deconiface_115 => dbg_print_3d, dbg_print_3d_deconiface_116 => dbg_print_3d, dbg_print_3d_deconiface_117 => dbg_print_3d, dbg_print_3d_deconiface_118 => dbg_print_3d, dbg_print_3d_deconiface_119 => dbg_print_3d, dbg_print_3d_deconiface_120 => dbg_print_3d, dbg_print_3d_deconiface_121 => dbg_print_3d, dbg_print_3d_deconiface_122 => dbg_print_3d, dbg_print_3d_deconiface_123 => dbg_print_3d
+    USE mo_util_dbg_prnt, ONLY: dbg_print_2d_deconiface_201 => dbg_print_2d, dbg_print_3d_deconiface_197 => dbg_print_3d, dbg_print_3d_deconiface_198 => dbg_print_3d, dbg_print_3d_deconiface_199 => dbg_print_3d, dbg_print_3d_deconiface_200 => dbg_print_3d, dbg_print_3d_deconiface_202 => dbg_print_3d, dbg_print_3d_deconiface_203 => dbg_print_3d, dbg_print_3d_deconiface_204 => dbg_print_3d, dbg_print_3d_deconiface_205 => dbg_print_3d, dbg_print_3d_deconiface_206 => dbg_print_3d, dbg_print_3d_deconiface_207 => dbg_print_3d, dbg_print_3d_deconiface_208 => dbg_print_3d, dbg_print_3d_deconiface_209 => dbg_print_3d, dbg_print_3d_deconiface_210 => dbg_print_3d, dbg_print_3d_deconiface_211 => dbg_print_3d
     USE mo_grid_config, ONLY: n_dom
     USE mo_ocean_velocity_diffusion, ONLY: velocity_diffusion
     TYPE(t_patch_3d), POINTER, INTENT(IN) :: patch_3d
@@ -3800,11 +5301,11 @@ MODULE mo_ocean_ab_timestepping_mimetic
       ocean_state % p_diag % laplacian_vert = 0.0D0
     END IF
     idt_src = 3
-    CALL dbg_print_3d_deconiface_109('density', ocean_state % p_diag % rho, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % cells % owned)
-    CALL dbg_print_3d_deconiface_110('internal pressure', ocean_state % p_diag % press_hyd, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % cells % owned)
-    CALL dbg_print_3d_deconiface_111('internal press grad', ocean_state % p_diag % press_grad, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % edges % owned)
+    CALL dbg_print_3d_deconiface_197('density', ocean_state % p_diag % rho, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % cells % owned)
+    CALL dbg_print_3d_deconiface_198('internal pressure', ocean_state % p_diag % press_hyd, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % cells % owned)
+    CALL dbg_print_3d_deconiface_199('internal press grad', ocean_state % p_diag % press_grad, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % edges % owned)
     idt_src = 4
-    CALL dbg_print_3d_deconiface_112('kinetic energy', ocean_state % p_diag % kin, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % cells % owned)
+    CALL dbg_print_3d_deconiface_200('kinetic energy', ocean_state % p_diag % kin, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % cells % owned)
     IF (timers_level >= 5) CALL timer_start(timer_extra3)
     CALL velocity_diffusion(patch_3d, ocean_state % p_prog(nold(1)) % vn, p_phys_param, ocean_state % p_diag, op_coeffs, ocean_state % p_diag % laplacian_horz, lacc = lzacc)
     IF (timers_level >= 5) CALL timer_stop(timer_extra3)
@@ -3817,21 +5318,21 @@ MODULE mo_ocean_ab_timestepping_mimetic
     IF (timers_level >= 4) CALL timer_stop(timer_extra4)
     idt_src = 3
     idt_src = 4
-    CALL dbg_print_2d_deconiface_113('bc_top_vn', ocean_state % p_aux % bc_top_vn, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % edges % owned)
-    CALL dbg_print_3d_deconiface_114('horizontal advection', ocean_state % p_diag % veloc_adv_horz, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % edges % owned)
-    CALL dbg_print_3d_deconiface_115('horizontal grad', ocean_state % p_diag % grad, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % edges % owned)
-    CALL dbg_print_3d_deconiface_116('vertical advection', ocean_state % p_diag % veloc_adv_vert, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % edges % owned)
-    CALL dbg_print_3d_deconiface_117('VelocDiff: LaPlacHorz', ocean_state % p_diag % laplacian_horz, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % edges % owned)
+    CALL dbg_print_2d_deconiface_201('bc_top_vn', ocean_state % p_aux % bc_top_vn, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % edges % owned)
+    CALL dbg_print_3d_deconiface_202('horizontal advection', ocean_state % p_diag % veloc_adv_horz, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % edges % owned)
+    CALL dbg_print_3d_deconiface_203('horizontal grad', ocean_state % p_diag % grad, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % edges % owned)
+    CALL dbg_print_3d_deconiface_204('vertical advection', ocean_state % p_diag % veloc_adv_vert, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % edges % owned)
+    CALL dbg_print_3d_deconiface_205('VelocDiff: LaPlacHorz', ocean_state % p_diag % laplacian_horz, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % edges % owned)
     IF (iswm_oce /= 1) THEN
-      CALL dbg_print_3d_deconiface_118('vn_pred', ocean_state % p_diag % vn_pred, str_module, 2, in_subset = patch_3d % p_patch_2d(n_dom) % edges % owned)
+      CALL dbg_print_3d_deconiface_206('vn_pred', ocean_state % p_diag % vn_pred, str_module, 2, in_subset = patch_3d % p_patch_2d(n_dom) % edges % owned)
     ELSE
-      CALL dbg_print_3d_deconiface_119('VelocDiff: LaPlacVert', ocean_state % p_diag % laplacian_vert, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % edges % owned)
+      CALL dbg_print_3d_deconiface_207('VelocDiff: LaPlacVert', ocean_state % p_diag % laplacian_vert, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % edges % owned)
     END IF
     idt_src = 5
-    CALL dbg_print_3d_deconiface_120('vn(nold)', ocean_state % p_prog(nold(1)) % vn, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % edges % owned)
-    CALL dbg_print_3d_deconiface_121('G_n+1/2 - g_nimd', ocean_state % p_aux % g_nimd, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % edges % owned)
-    CALL dbg_print_3d_deconiface_122('G_n', ocean_state % p_aux % g_n, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % edges % owned)
-    CALL dbg_print_3d_deconiface_123('G_n-1', ocean_state % p_aux % g_nm1, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % edges % owned)
+    CALL dbg_print_3d_deconiface_208('vn(nold)', ocean_state % p_prog(nold(1)) % vn, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % edges % owned)
+    CALL dbg_print_3d_deconiface_209('G_n+1/2 - g_nimd', ocean_state % p_aux % g_nimd, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % edges % owned)
+    CALL dbg_print_3d_deconiface_210('G_n', ocean_state % p_aux % g_n, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % edges % owned)
+    CALL dbg_print_3d_deconiface_211('G_n-1', ocean_state % p_aux % g_nm1, str_module, idt_src, in_subset = patch_3d % p_patch_2d(n_dom) % edges % owned)
   END SUBROUTINE calculate_explicit_term_ab
   SUBROUTINE explicit_vn_pred(patch_3d, ocean_state, op_coeffs, p_phys_param, is_first_timestep, lacc)
     USE mo_model_domain, ONLY: t_patch, t_patch_3d, t_subset_range
@@ -3886,7 +5387,7 @@ MODULE mo_ocean_ab_timestepping_mimetic
     USE mo_parallel_config, ONLY: nproma
     USE mo_ocean_nml, ONLY: ab_beta, iswm_oce, mass_matrix_inversion_type, n_zlev
     USE mo_grid_config, ONLY: n_dom
-    USE mo_sync, ONLY: sync_patch_array_3d_dp_deconiface_124 => sync_patch_array_3d_dp
+    USE mo_sync, ONLY: sync_patch_array_3d_dp_deconiface_212 => sync_patch_array_3d_dp
     USE mo_grid_subset, ONLY: get_index_range
     USE mo_ocean_math_operators, ONLY: grad_fd_norm_oce_2d_onblock
     USE mo_dynamics_config, ONLY: nold
@@ -3908,7 +5409,7 @@ MODULE mo_ocean_ab_timestepping_mimetic
       z_e(:, :, :) = ocean_state % p_diag % veloc_adv_horz(:, :, :) + ocean_state % p_diag % veloc_adv_vert(:, :, :)
       WRITE(0, *) 'ADV before:', MAXVAL(z_e(:, 1, :)), MINVAL(z_e(:, 1, :))
       ocean_state % p_diag % veloc_adv_horz = invert_mass_matrix(patch_3d, ocean_state, op_coeffs, z_e)
-      CALL sync_patch_array_3d_dp_deconiface_124(2, patch_2d, z_e, lacc = .FALSE.)
+      CALL sync_patch_array_3d_dp_deconiface_212(2, patch_2d, z_e, lacc = .FALSE.)
       WRITE(0, *) 'ADV after:', MAXVAL(ocean_state % p_diag % veloc_adv_horz(:, 1, :)), MINVAL(ocean_state % p_diag % veloc_adv_horz(:, 1, :))
     END IF
     DO blockno = edges_in_domain % start_block, edges_in_domain % end_block
@@ -4053,10 +5554,10 @@ MODULE mo_ocean_ab_timestepping_mimetic
     USE mo_fortran_tools, ONLY: set_acc_host_or_device
     USE mo_grid_subset, ONLY: get_index_range
     USE mo_dynamics_config, ONLY: nold
-    USE mo_sync, ONLY: sync_patch_array_3d_dp_deconiface_125 => sync_patch_array_3d_dp
-    USE mo_scalar_product, ONLY: map_edges2edges_viacell_2d_constz_deconiface_127 => map_edges2edges_viacell_2d_constz, map_edges2edges_viacell_3d_mlev_const_z_deconiface_126 => map_edges2edges_viacell_3d_mlev_const_z
+    USE mo_sync, ONLY: sync_patch_array_3d_dp_deconiface_213 => sync_patch_array_3d_dp
+    USE mo_scalar_product, ONLY: map_edges2edges_viacell_2d_constz_deconiface_215 => map_edges2edges_viacell_2d_constz, map_edges2edges_viacell_3d_mlev_const_z_deconiface_214 => map_edges2edges_viacell_3d_mlev_const_z
     USE mo_ocean_math_operators, ONLY: div_oce_3d_general_onblock, div_oce_3d_ontriangles_onblock
-    USE mo_util_dbg_prnt, ONLY: dbg_print_2d_deconiface_132 => dbg_print_2d, dbg_print_3d_deconiface_128 => dbg_print_3d, dbg_print_3d_deconiface_129 => dbg_print_3d, dbg_print_3d_deconiface_130 => dbg_print_3d, dbg_print_3d_deconiface_131 => dbg_print_3d
+    USE mo_util_dbg_prnt, ONLY: dbg_print_2d_deconiface_220 => dbg_print_2d, dbg_print_3d_deconiface_216 => dbg_print_3d, dbg_print_3d_deconiface_217 => dbg_print_3d, dbg_print_3d_deconiface_218 => dbg_print_3d, dbg_print_3d_deconiface_219 => dbg_print_3d
     TYPE(t_patch_3d), TARGET, INTENT(IN) :: patch_3d
     TYPE(t_hydro_ocean_state), TARGET :: ocean_state
     TYPE(t_operator_coeff), INTENT(IN) :: op_coeffs
@@ -4126,11 +5627,11 @@ MODULE mo_ocean_ab_timestepping_mimetic
         END DO
       END IF
     ELSE
-      CALL sync_patch_array_3d_dp_deconiface_125(2, patch_2d, z_vn_ab, lacc = lzacc)
+      CALL sync_patch_array_3d_dp_deconiface_213(2, patch_2d, z_vn_ab, lacc = lzacc)
       IF (iswm_oce /= 1) THEN
-        CALL map_edges2edges_viacell_3d_mlev_const_z_deconiface_126(patch_3d, z_vn_ab, op_coeffs, z_e, lacc = lzacc)
+        CALL map_edges2edges_viacell_3d_mlev_const_z_deconiface_214(patch_3d, z_vn_ab, op_coeffs, z_e, lacc = lzacc)
       ELSE
-        CALL map_edges2edges_viacell_2d_constz_deconiface_127(patch_3d, z_vn_ab(:, 1, :), op_coeffs, z_e(:, 1, :), lacc = lzacc)
+        CALL map_edges2edges_viacell_2d_constz_deconiface_215(patch_3d, z_vn_ab(:, 1, :), op_coeffs, z_e(:, 1, :), lacc = lzacc)
       END IF
     END IF
     IF (patch_2d % cells % max_connectivity == 3) THEN
@@ -4165,22 +5666,22 @@ MODULE mo_ocean_ab_timestepping_mimetic
       END DO
     END IF
     idt_src = 3
-    CALL dbg_print_3d_deconiface_128('RHS thick_e', patch_3d % p_patch_1d(1) % prism_thick_e, str_module, idt_src, in_subset = patch_3d % p_patch_2d(1) % edges % owned)
-    CALL dbg_print_3d_deconiface_129('RHS thick_c', patch_3d % p_patch_1d(1) % prism_thick_c, str_module, idt_src, in_subset = patch_3d % p_patch_2d(1) % cells % owned)
-    CALL dbg_print_3d_deconiface_130('RHS z_vn_ab', z_vn_ab, str_module, idt_src, in_subset = patch_3d % p_patch_2d(1) % edges % owned)
-    CALL dbg_print_3d_deconiface_131('RHS z_e', z_e, str_module, idt_src, in_subset = patch_3d % p_patch_2d(1) % edges % owned)
+    CALL dbg_print_3d_deconiface_216('RHS thick_e', patch_3d % p_patch_1d(1) % prism_thick_e, str_module, idt_src, in_subset = patch_3d % p_patch_2d(1) % edges % owned)
+    CALL dbg_print_3d_deconiface_217('RHS thick_c', patch_3d % p_patch_1d(1) % prism_thick_c, str_module, idt_src, in_subset = patch_3d % p_patch_2d(1) % cells % owned)
+    CALL dbg_print_3d_deconiface_218('RHS z_vn_ab', z_vn_ab, str_module, idt_src, in_subset = patch_3d % p_patch_2d(1) % edges % owned)
+    CALL dbg_print_3d_deconiface_219('RHS z_e', z_e, str_module, idt_src, in_subset = patch_3d % p_patch_2d(1) % edges % owned)
     idt_src = 2
-    CALL dbg_print_2d_deconiface_132('RHS final', ocean_state % p_aux % p_rhs_sfc_eq, str_module, idt_src, in_subset = patch_3d % p_patch_2d(1) % cells % owned)
+    CALL dbg_print_2d_deconiface_220('RHS final', ocean_state % p_aux % p_rhs_sfc_eq, str_module, idt_src, in_subset = patch_3d % p_patch_2d(1) % cells % owned)
   END SUBROUTINE fill_rhs4surface_eq_ab
   FUNCTION invert_mass_matrix(patch_3d, ocean_state, op_coeffs, rhs_e) RESULT(inv_flip_flop_e)
     USE mo_model_domain, ONLY: t_patch, t_patch_3d
     USE mo_ocean_types, ONLY: t_hydro_ocean_state, t_operator_coeff
     USE mo_impl_constants, ONLY: max_char_length
-    USE mo_ocean_solve_aux, ONLY: ocean_solve_parm_init_deconproc_64 => ocean_solve_parm_init, t_ocean_solve_parm
-    USE mo_primal_flip_flop_lhs, ONLY: lhs_primal_flip_flop_construct_deconproc_62 => lhs_primal_flip_flop_construct, lhs_primal_flip_flop_construct_deconproc_66 => lhs_primal_flip_flop_construct
-    USE mo_ocean_solve_trivial_transfer, ONLY: trivial_transfer_construct_deconproc_63 => trivial_transfer_construct
+    USE mo_ocean_solve_aux, ONLY: ocean_solve_parm_init_deconproc_80 => ocean_solve_parm_init, t_ocean_solve_parm
+    USE mo_primal_flip_flop_lhs, ONLY: lhs_primal_flip_flop_construct_deconproc_78 => lhs_primal_flip_flop_construct, lhs_primal_flip_flop_construct_deconproc_82 => lhs_primal_flip_flop_construct
+    USE mo_ocean_solve_trivial_transfer, ONLY: trivial_transfer_construct_deconproc_79 => trivial_transfer_construct
     USE mo_ocean_nml, ONLY: massmatrix_solver_tolerance, n_zlev, solver_max_iter_per_restart, solver_max_restart_iterations
-    USE mo_ocean_solve, ONLY: ocean_solve_construct_deconproc_65 => ocean_solve_construct, ocean_solve_solve_deconproc_67 => ocean_solve_solve
+    USE mo_ocean_solve, ONLY: ocean_solve_construct_deconproc_81 => ocean_solve_construct, ocean_solve_solve_deconproc_83 => ocean_solve_solve
     USE mo_dbg_nml, ONLY: idbg_mxmn
     USE mo_exception, ONLY: message
     TYPE(t_patch_3d), TARGET, INTENT(IN) :: patch_3d
@@ -4194,18 +5695,18 @@ MODULE mo_ocean_ab_timestepping_mimetic
     TYPE(t_patch), POINTER :: patch_2d
     TYPE(t_ocean_solve_parm) :: par, par_sp
     IF (.NOT. inv_mm_solver % is_init) THEN
-      CALL lhs_primal_flip_flop_construct_deconproc_62(inv_mm_solver_lhs, patch_3d, op_coeffs, (- 999))
+      CALL lhs_primal_flip_flop_construct_deconproc_78(inv_mm_solver_lhs, patch_3d, op_coeffs, (- 999))
       patch_2d => patch_3d % p_patch_2d(1)
-      CALL trivial_transfer_construct_deconproc_63(inv_mm_solver_trans, 12, patch_2d)
-      CALL ocean_solve_parm_init_deconproc_64(par, 60, solver_max_restart_iterations, solver_max_iter_per_restart, patch_2d % cells % in_domain % end_block, SIZE(rhs_e, 3), SIZE(rhs_e, 1), patch_2d % edges % in_domain % end_index, massmatrix_solver_tolerance, .TRUE.)
+      CALL trivial_transfer_construct_deconproc_79(inv_mm_solver_trans, 12, patch_2d)
+      CALL ocean_solve_parm_init_deconproc_80(par, 60, solver_max_restart_iterations, solver_max_iter_per_restart, patch_2d % cells % in_domain % end_block, SIZE(rhs_e, 3), SIZE(rhs_e, 1), patch_2d % edges % in_domain % end_index, massmatrix_solver_tolerance, .TRUE.)
       par_sp % nidx = (- 1)
-      CALL ocean_solve_construct_deconproc_65(inv_mm_solver, 21, par, par_sp, inv_mm_solver_lhs, inv_mm_solver_trans)
+      CALL ocean_solve_construct_deconproc_81(inv_mm_solver, 21, par, par_sp, inv_mm_solver_lhs, inv_mm_solver_trans)
     END IF
     DO jk = 1, n_zlev
-      CALL lhs_primal_flip_flop_construct_deconproc_66(inv_mm_solver_lhs, patch_3d, op_coeffs, jk)
+      CALL lhs_primal_flip_flop_construct_deconproc_82(inv_mm_solver_lhs, patch_3d, op_coeffs, jk)
       inv_mm_solver % x_loc_wp(:, :) = 0.0D0
       inv_mm_solver % b_loc_wp => rhs_e(:, jk, :)
-      CALL ocean_solve_solve_deconproc_67(inv_mm_solver, n_it, n_it_sp)
+      CALL ocean_solve_solve_deconproc_83(inv_mm_solver, n_it, n_it_sp)
       rn = MERGE((inv_mm_solver % res_loc_wp(1)), 0.0D0, n_it .GT. 0)
       inv_flip_flop_e(:, jk, :) = inv_mm_solver % x_loc_wp(:, :)
       IF (idbg_mxmn >= 1) THEN

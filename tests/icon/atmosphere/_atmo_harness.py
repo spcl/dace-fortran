@@ -84,14 +84,7 @@ ATMO_DEFINES = [
 #: MPI point-to-point.  Both modes must extract to a compiling TU.
 ATMO_BASE_EXTERNAL_FUNCTIONS = [
     ExternalFunction("velocity_tendencies"),  # the inner kernel; separately bound at link time
-    ExternalFunction("p_max"),  # MPI global reduction (mo_mpi: MPI_Allreduce, MPI_MAX)
-    ExternalFunction("p_min"),  # MPI global reduction (mo_mpi: MPI_Allreduce, MPI_MIN)
-    ExternalFunction("p_sum"),  # MPI global reduction (mo_mpi: MPI_Allreduce, MPI_SUM)
-    ExternalFunction("p_barrier"),  # MPI collective barrier (mo_mpi wrapper, timer-gated)
-    ExternalFunction("global_max"),  # MPI global reduction wrapper
-    ExternalFunction("global_min"),  # MPI global reduction wrapper
-    ExternalFunction("global_sum"),  # MPI global reduction wrapper
-    ExternalFunction("setup_comm_pattern"),  # comm-pattern INIT (pure comm-topology setup, no numerics)
+    ExternalFunction("setup_comm_pattern"),  # comm-pattern INIT (the construction boundary, a marshalled input)
 ]
 
 #: DON'T-EMIT (externalised + the bridge DROPs the call): pure side-effects with
@@ -129,6 +122,7 @@ def atmo_config(halo_mode: str) -> dict:
         make_return_false=ATMO_BASE_RETURN_FALSE + h["return_false"],
         do_not_emit=ATMO_DO_NOT_EMIT,
         defines=ATMO_DEFINES,
+        extra_sources=h["extra_sources"],
     )
 
 
