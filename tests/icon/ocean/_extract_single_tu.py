@@ -18,6 +18,7 @@ Usage:
     _extract_single_tu.py <source_relpath> <module::entry> <out_dir> [mem_gb]
 """
 import os
+import re
 import resource
 import shutil
 import subprocess
@@ -30,6 +31,7 @@ from pathlib import Path
 def main(argv):
     source_relpath, entry, out_dir = argv[1], argv[2], Path(argv[3])
     mem_gb = float(argv[4]) if len(argv) > 4 else 10.0
+    halo_mode = argv[5] if len(argv) > 5 else "external"
     # Cap the SOFT address-space limit only, leaving the inherited HARD limit
     # untouched.  Raising the hard limit raises ValueError on a host that already
     # constrains it (e.g. a CI cgroup) -- and that would crash before any RESULT
@@ -42,33 +44,57 @@ def main(argv):
     os.environ.setdefault("UCX_VFS_ENABLE", "n")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    from icon.ocean._ocean_harness import (OCEAN_DEFINES, OCEAN_DO_NOT_EMIT, OCEAN_RETURN_FALSE,
-                                           OCEAN_EXTERNAL_FUNCTIONS, SRC, ocean_search_dirs)
+    from icon.ocean._ocean_harness import ocean_config, SRC, ocean_search_dirs
     from dace_fortran import inline_to_single_tu
     from dace_fortran.preprocess import merge_used_modules
+
+    cfg = ocean_config(halo_mode)
 
     def log(m):
         print(f"[{time.strftime('%H:%M:%S')}] {m}", flush=True)
 
     t0 = time.time()
     try:
-        log(f"merge_used_modules ({source_relpath})")
+        log(f"merge_used_modules ({source_relpath}) [halo={halo_mode}]")
         merged = merge_used_modules((SRC / source_relpath).read_text(), search_dirs=ocean_search_dirs())
         mp = out_dir / "merged.F90"
         mp.write_text(merged)
         log(f"  {len(merged.splitlines())} lines merged")
 
-        log("inline_to_single_tu(expand_cpp, tolerate_external_uses)")
-        tu = inline_to_single_tu({str(mp): merged},
+        # In the "inlined" halo mode the concrete comm-pattern arm is force-included
+        # (it is reached only via the externalised factory) and kept alive past the
+        # early USE-reachability prune via a USE injection into the entry module --
+        # the monomorphisation pass then has it to retype to.  No-op for "external".
+        sources = {str(mp): merged}
+        entry_mod = entry.split("::")[0]
+        use_lines = []
+        for rel in cfg["force_include"]:
+            content = (SRC / rel).read_text()
+            sources[str(SRC / rel)] = content
+            m = re.search(r"(?im)^\s*MODULE\s+(\w+)\s*$", content)
+            if m:
+                use_lines.append(f"  USE {m.group(1)}")
+            log(f"  force-included {rel} (module {m.group(1) if m else '?'})")
+        if use_lines:
+            merged, nsub = re.subn(rf"(?im)^(\s*MODULE\s+{re.escape(entry_mod)}\s*$)",
+                                   lambda mm: mm.group(1) + "\n" + "\n".join(use_lines),
+                                   merged,
+                                   count=1)
+            sources[str(mp)] = merged
+            log(f"  injected {len(use_lines)} force-include USE(s) into module {entry_mod} (matched {nsub})")
+
+        log(f"inline_to_single_tu(expand_cpp, tolerate_external_uses, monomorphize) [halo={halo_mode}]")
+        tu = inline_to_single_tu(sources,
                                  entry=entry,
                                  out_dir=out_dir,
                                  name="kernel_tu",
                                  expand_cpp=True,
-                                 defines=OCEAN_DEFINES,
+                                 defines=cfg["defines"],
                                  include_dirs=[SRC / "include"],
-                                 external_functions=OCEAN_EXTERNAL_FUNCTIONS,
-                                 do_not_emit=OCEAN_DO_NOT_EMIT,
-                                 make_return_false=OCEAN_RETURN_FALSE,
+                                 external_functions=cfg["external_functions"],
+                                 do_not_emit=cfg["do_not_emit"],
+                                 make_return_false=cfg["make_return_false"],
+                                 rename_specifics=cfg["rename_specifics"],
                                  tolerate_external_uses=True)
         n = len(Path(tu).read_text().splitlines())
         log(f"  single TU: {n} lines in {time.time()-t0:.0f}s")

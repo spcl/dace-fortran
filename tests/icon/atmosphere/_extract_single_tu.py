@@ -32,6 +32,7 @@ from pathlib import Path
 def main(argv):
     source_relpath, entry, out_dir = argv[1], argv[2], Path(argv[3])
     mem_gb = float(argv[4]) if len(argv) > 4 else 12.0
+    halo_mode = argv[5] if len(argv) > 5 else "inlined"
     hard = resource.getrlimit(resource.RLIMIT_AS)[1]
     cap = int(mem_gb * 1024**3)
     if hard != resource.RLIM_INFINITY:
@@ -40,18 +41,18 @@ def main(argv):
     os.environ.setdefault("UCX_VFS_ENABLE", "n")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    from icon.atmosphere._atmo_harness import (ATMO_DEFINES, ATMO_DO_NOT_EMIT, ATMO_RETURN_FALSE,
-                                               ATMO_EXTERNAL_FUNCTIONS, ATMO_FORCE_INCLUDE_MODULES,
-                                               ATMO_RENAME_SPECIFICS, SRC, atmo_search_dirs)
+    from icon.atmosphere._atmo_harness import atmo_config, SRC, atmo_search_dirs
     from dace_fortran import inline_to_single_tu
     from dace_fortran.preprocess import merge_used_modules
+
+    cfg = atmo_config(halo_mode)
 
     def log(m):
         print(f"[{time.strftime('%H:%M:%S')}] {m}", flush=True)
 
     t0 = time.time()
     try:
-        log(f"merge_used_modules ({source_relpath})")
+        log(f"merge_used_modules ({source_relpath}) [halo={halo_mode}]")
         merged = merge_used_modules((SRC / source_relpath).read_text(), search_dirs=atmo_search_dirs())
         mp = out_dir / "merged.F90"
         mp.write_text(merged)
@@ -69,7 +70,7 @@ def main(argv):
         sources = {str(mp): merged}
         entry_mod = entry.split("::")[0]
         use_lines = []
-        for rel in ATMO_FORCE_INCLUDE_MODULES:
+        for rel in cfg["force_include"]:
             content = (SRC / rel).read_text()
             sources[str(SRC / rel)] = content
             m = re.search(r"(?im)^\s*MODULE\s+(\w+)\s*$", content)
@@ -90,12 +91,12 @@ def main(argv):
                                  out_dir=out_dir,
                                  name="kernel_tu",
                                  expand_cpp=True,
-                                 defines=ATMO_DEFINES,
+                                 defines=cfg["defines"],
                                  include_dirs=[SRC / "include"],
-                                 external_functions=ATMO_EXTERNAL_FUNCTIONS,
-                                 do_not_emit=ATMO_DO_NOT_EMIT,
-                                 make_return_false=ATMO_RETURN_FALSE,
-                                 rename_specifics=ATMO_RENAME_SPECIFICS,
+                                 external_functions=cfg["external_functions"],
+                                 do_not_emit=cfg["do_not_emit"],
+                                 make_return_false=cfg["make_return_false"],
+                                 rename_specifics=cfg["rename_specifics"],
                                  checkpoint_dir=(os.environ.get("ATMO_CHECKPOINT_DIR") or None),
                                  tolerate_external_uses=True)
         n = len(Path(tu).read_text().splitlines())

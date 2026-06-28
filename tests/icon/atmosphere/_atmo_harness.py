@@ -37,6 +37,8 @@ from pathlib import Path
 from dace_fortran.external_functions import ExternalFunction
 from dace_fortran.flang_codebase import find_openmpi_include
 
+from icon._halo_modes import halo_config
+
 _HERE = Path(__file__).resolve().parent
 #: ``tests/icon/full/icon-model`` holds the pinned ICON checkout (shared with the
 #: ocean + velocity tests).  ``ICON_SRC`` overrides it.
@@ -92,22 +94,13 @@ ATMO_DEFINES = [
     "NO_MPI_CHOICE_ARG",
 ]
 
-#: EXTERNAL (don't-inline, bridge EMITs an external call): the genuine leaves of
-#: a standalone dycore kernel.  The halo exchange is deliberately ABSENT -- it is
-#: inlined and devirtualised (see the module docstring), unlike the ocean harness
-#: which black-boxes it.  What remains is the inner velocity kernel, the MPI
-#: collectives, and the comm-pattern construction.
-ATMO_EXTERNAL_FUNCTIONS = [
+#: NON-HALO external leaves of the standalone dycore kernel: the inner velocity
+#: kernel, the MPI collectives / reductions, and the comm-pattern construction.
+#: The HALO externals are added per mode (:func:`atmo_externals`) -- "external"
+#: black-boxes ``sync_patch_array`` / ``exchange_data``, "inlined" leaves only the
+#: MPI point-to-point.  Both modes must extract to a compiling TU.
+ATMO_BASE_EXTERNAL_FUNCTIONS = [
     ExternalFunction("velocity_tendencies"),  # the inner kernel; separately bound at link time
-    # MPI point-to-point: the halo-exchange leaves left after the comm pattern is
-    # devirtualised and the pack/gather inlined -- "only MPI calls remain".  These
-    # are mo_mpi wrappers over mpi_isend/irecv/wait/send/recv.
-    ExternalFunction("p_isend"),
-    ExternalFunction("p_irecv"),
-    ExternalFunction("p_wait"),
-    ExternalFunction("p_send"),
-    ExternalFunction("p_recv"),
-    # MPI collectives / reductions (global, no per-cell numerics).
     ExternalFunction("p_max"),  # MPI global reduction (mo_mpi: MPI_Allreduce, MPI_MAX)
     ExternalFunction("p_min"),  # MPI global reduction (mo_mpi: MPI_Allreduce, MPI_MIN)
     ExternalFunction("p_sum"),  # MPI global reduction (mo_mpi: MPI_Allreduce, MPI_SUM)
@@ -116,18 +109,6 @@ ATMO_EXTERNAL_FUNCTIONS = [
     ExternalFunction("global_min"),  # MPI global reduction wrapper
     ExternalFunction("global_sum"),  # MPI global reduction wrapper
     ExternalFunction("setup_comm_pattern"),  # comm-pattern INIT (pure comm-topology setup, no numerics)
-]
-
-#: Concrete comm-pattern arm module to FORCE-INCLUDE in the merge closure.  The
-#: abstract ``t_comm_pattern`` is reached from ``solve_nh`` (via the halo
-#: wrappers), but its single concrete arm ``t_comm_pattern_orig`` lives in
-#: ``mo_communication_orig`` -- reached only through the comm-pattern *factory*,
-#: which runs at model init and is externalised.  Without the arm in the
-#: closure the monomorphisation pass has nothing to retype to, so we splice the
-#: arm module in explicitly; ``t_comm_pattern_yaxt`` stays cpp'd out (no
-#: ``HAVE_YAXT``), keeping a single arm.
-ATMO_FORCE_INCLUDE_MODULES = [
-    "parallel_infrastructure/mo_communication_orig.f90",
 ]
 
 #: DON'T-EMIT (externalised + the bridge DROPs the call): pure side-effects with
@@ -148,24 +129,25 @@ ATMO_DO_NOT_EMIT = [
     "delete_timer",
 ]
 
-#: Specific-procedure renames to break generic/specific name collisions before
-#: externalisation.  ICON's ``mo_mpi`` declares ``INTERFACE p_wait`` whose
-#: ``MODULE PROCEDURE`` list includes a specific *also* named ``p_wait`` (the
-#: no-argument wait); externalising the generic leaves a dangling ``USE ... =>
-#: p_wait``.  Renaming the specific disambiguates it (the generic + call sites
-#: stay, dispatching to the renamed specific).
-ATMO_RENAME_SPECIFICS = {
-    "p_wait": "p_wait_noarg",
-}
+#: Non-halo LOGICAL config queries stubbed to ``.FALSE.`` (none for atmosphere;
+#: the halo's ``my_process_is_mpi_seq`` is added per mode by :func:`atmo_config`).
+ATMO_BASE_RETURN_FALSE: list = []
 
-#: LOGICAL config queries stubbed to ``.FALSE.`` (NOT inlined).  ICON's halo
-#: ``exchange_data_*`` bodies branch ``IF (my_process_is_mpi_seq()) THEN <local
-#: copy> ELSE <MPI isend/irecv/wait>``; pinning ``my_process_is_mpi_seq`` to
-#: ``.FALSE.`` selects the real MPI halo path (the point we want -- "only MPI
-#: calls remain"), so the seq local-copy arm folds away.
-ATMO_RETURN_FALSE: list = [
-    "my_process_is_mpi_seq",
-]
+
+def atmo_config(halo_mode: str) -> dict:
+    """Full atmosphere extraction config for the given halo mode (see
+    :mod:`icon._halo_modes`): the non-halo base externals merged with the
+    mode-specific halo pieces."""
+    h = halo_config(halo_mode)
+    return dict(
+        external_functions=ATMO_BASE_EXTERNAL_FUNCTIONS + h["external_functions"],
+        force_include=h["force_include"],
+        rename_specifics=h["rename_specifics"],
+        make_return_false=ATMO_BASE_RETURN_FALSE + h["return_false"],
+        do_not_emit=ATMO_DO_NOT_EMIT,
+        defines=ATMO_DEFINES,
+    )
+
 
 #: The atmosphere kernels extracted.  Each entry is
 #: ``(key, source-relative-to-src, module::procedure, body-line-count)``.
@@ -173,15 +155,21 @@ KERNELS = [
     ("solve_nonhydro", "atm_dyn_iconam/mo_solve_nonhydro.f90", "mo_solve_nonhydro::solve_nh", 0),
 ]
 
-#: Checked-in single-TU artifacts: ``(key, filename, module::procedure)``.
+#: Checked-in single-TU artifacts, one per (kernel, halo mode):
+#: ``(key, halo_mode, filename, module::procedure)``.
 SINGLE_TU_ARTIFACTS = [
-    ("solve_nonhydro", "solve_nonhydro_single_tu.f90", "mo_solve_nonhydro::solve_nh"),
+    ("solve_nonhydro", "inlined", "solve_nonhydro_inlined_single_tu.f90", "mo_solve_nonhydro::solve_nh"),
+    ("solve_nonhydro", "external", "solve_nonhydro_external_single_tu.f90", "mo_solve_nonhydro::solve_nh"),
 ]
 
 _EXTRACT_SCRIPT = _HERE / "_extract_single_tu.py"
 
 
-def extract_single_tu(source_relpath: str, entry: str, out_dir: Path, mem_gb: float = 12.0) -> dict:
+def extract_single_tu(source_relpath: str,
+                      entry: str,
+                      out_dir: Path,
+                      halo_mode: str = "inlined",
+                      mem_gb: float = 12.0) -> dict:
     """Extract one atmosphere kernel into a single, gfortran-compiling ``.f90`` in
     a memory-capped subprocess (the fparser parse of the merged closure peaks near
     9 GB, so it must not OOM the host) and return a result dict with keys
@@ -205,8 +193,10 @@ def extract_single_tu(source_relpath: str, entry: str, out_dir: Path, mem_gb: fl
     env.setdefault("UCX_VFS_ENABLE", "n")
     env["PYTHONHASHSEED"] = "0"
     proc = subprocess.run(
-        [sys.executable, str(_EXTRACT_SCRIPT), source_relpath, entry,
-         str(out_dir), str(mem_gb)],
+        [sys.executable,
+         str(_EXTRACT_SCRIPT), source_relpath, entry,
+         str(out_dir),
+         str(mem_gb), halo_mode],
         capture_output=True,
         text=True,
         env=env,

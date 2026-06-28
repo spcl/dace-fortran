@@ -29,7 +29,11 @@ from icon.atmosphere._atmo_harness import (HAVE_FLANG, HAVE_OPENMPI, KERNELS, SI
                                            have_icon_atmo)
 
 _HERE = Path(__file__).resolve().parent
-_ARTIFACT_FILE = {a[0]: a[1] for a in SINGLE_TU_ARTIFACTS}
+_SOURCE = {k[0]: k[1] for k in KERNELS}
+
+#: One case per ``(key, halo_mode, filename, entry)`` -- the solver in BOTH halo
+#: modes (inlined = MPI-only, external = halo black-boxed / callback boundary).
+_CASES = SINGLE_TU_ARTIFACTS
 
 pytestmark = [
     pytest.mark.long,
@@ -41,19 +45,19 @@ pytestmark = [
 
 
 @pytest.mark.xdist_group("atmo_fparser")
-@pytest.mark.parametrize("key,source,entry", [k[:3] for k in KERNELS], ids=[k[0] for k in KERNELS])
-def test_extract_compiles_and_matches_committed(tmp_path, key, source, entry):
-    """Extract ``solve_nonhydro`` into a compiling single TU (halo inlined +
-    devirtualised, MPI the only external leaf) and check it against the committed
-    artifact."""
-    res = extract_single_tu(source, entry, tmp_path / key)
+@pytest.mark.parametrize("key,halo_mode,filename,entry", _CASES, ids=[f"{c[0]}-{c[1]}" for c in _CASES])
+def test_extract_compiles_and_matches_committed(tmp_path, key, halo_mode, filename, entry):
+    """Extract ``solve_nonhydro`` in one halo mode into a compiling single TU and
+    check it against the committed artifact -- both the inlined (MPI-only) and
+    external (callback boundary) halo modes must always be correct."""
+    res = extract_single_tu(_SOURCE[key], entry, tmp_path / f"{key}_{halo_mode}", halo_mode=halo_mode)
     assert res["passed"], \
-        f"{key}: extraction did not produce a compiling single TU.\n{res['output'][-4000:]}"
+        f"{key}[{halo_mode}]: extraction did not produce a compiling single TU.\n{res['output'][-4000:]}"
     # the ~140k-line closure must prune to the kernel by orders of magnitude.
     assert res["tu_lines"] is not None and res["tu_lines"] < 50_000, \
-        f"{key}: pruned TU is {res['tu_lines']} lines -- pruning did not converge"
-    committed = _HERE / _ARTIFACT_FILE[key]
+        f"{key}[{halo_mode}]: pruned TU is {res['tu_lines']} lines -- pruning did not converge"
+    committed = _HERE / filename
     assert committed.is_file(), \
-        f"{key}: no committed artifact {committed.name}; save the extracted TU into this folder"
+        f"{key}[{halo_mode}]: no committed artifact {committed.name}; save the extracted TU into this folder"
     assert Path(res["tu_path"]).read_text() == committed.read_text(), \
-        f"{key}: extracted TU drifted from committed {committed.name}; regenerate it"
+        f"{key}[{halo_mode}]: extracted TU drifted from committed {committed.name}; regenerate it"
