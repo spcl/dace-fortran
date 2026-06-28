@@ -618,6 +618,60 @@ def emit_mpi(builder, ctx, n, region):
         state.add_edge(node, '_outbuffer', state.add_write(recvbuf), None, Memlet.from_array(recvbuf, recv_desc))
         return
 
+    def _wire_user_comm(node, comm):
+        """Thread an optional user communicator into a collective node via the
+        ``_grid`` connector (a ``FortranProcessGrid`` built from the Fortran comm
+        at init), matching the point-to-point ``_wire_grid`` contract.  No-op for
+        the default ``MPI_COMM_WORLD`` (``comm`` is ``None``)."""
+        if comm is None:
+            return
+        _install_user_pgrid(ctx, comm)
+        node.add_in_connector('_grid', dace.dtypes.opaque("MPI_Comm"))
+        state.add_memlet_path(acc(builder, state, _USER_PGRID_NAME),
+                              node,
+                              dst_conn='_grid',
+                              memlet=Memlet(data=_USER_PGRID_NAME, subset='0'))
+
+    if n.callee == 'mpi_barrier':
+        # ``call_args``: [] or [comm].  Pure synchronisation, no data buffers --
+        # the node carries side effects so it is not pruned.
+        from dace.libraries.mpi.nodes.barrier import Barrier
+        node = Barrier(f'_mpi_barrier_{builder.nid()}')
+        state.add_node(node)
+        _wire_user_comm(node, n.call_args[0] if n.call_args else None)
+        return
+
+    if n.callee == 'mpi_allreduce':
+        # ``call_args``: [sendbuf, recvbuf, op] + optional comm.  ``op`` is the
+        # Fortran operand name (``mpi_max`` / ``mpi_min`` / ``mpi_sum``).
+        from dace.libraries.mpi.nodes.allreduce import Allreduce
+        sendbuf, recvbuf, opname = n.call_args[0], n.call_args[1], n.call_args[2]
+        low = opname.lower()
+        op = 'MPI_MAX' if 'max' in low else 'MPI_MIN' if 'min' in low else 'MPI_SUM'
+        node = Allreduce(f'_mpi_allreduce_{builder.nid()}', op=op)
+        state.add_node(node)
+        send_desc = ctx.sdfg.arrays[sendbuf]
+        recv_desc = ctx.sdfg.arrays[recvbuf]
+        state.add_edge(state.add_read(sendbuf), None, node, '_inbuffer', Memlet.from_array(sendbuf, send_desc))
+        state.add_edge(node, '_outbuffer', state.add_write(recvbuf), None, Memlet.from_array(recvbuf, recv_desc))
+        _wire_user_comm(node, n.call_args[3] if len(n.call_args) > 3 else None)
+        return
+
+    if n.callee == 'mpi_bcast':
+        # ``call_args``: [buffer, root] + optional comm.  Broadcast in place
+        # (the same buffer is read on root and written on the others).
+        from dace.libraries.mpi.nodes.bcast import Bcast
+        buffer, root = n.call_args[0], n.call_args[1]
+        node = Bcast(f'_mpi_bcast_{builder.nid()}')
+        state.add_node(node)
+        bdesc = ctx.sdfg.arrays[buffer]
+        rdesc = ctx.sdfg.arrays[root]
+        state.add_edge(state.add_read(buffer), None, node, '_inbuffer', Memlet.from_array(buffer, bdesc))
+        state.add_edge(state.add_read(root), None, node, '_root', Memlet.from_array(root, rdesc))
+        state.add_edge(node, '_outbuffer', state.add_write(buffer), None, Memlet.from_array(buffer, bdesc))
+        _wire_user_comm(node, n.call_args[2] if len(n.call_args) > 2 else None)
+        return
+
     buffer, partner, tag = n.call_args[0], n.call_args[1], n.call_args[2]
     bdesc = ctx.sdfg.arrays[buffer]
     bptr = dace.pointer(bdesc.dtype)
@@ -1186,6 +1240,15 @@ def emit_fft(builder, ctx, n, region):
 
     in_desc = ctx.sdfg.arrays[in_arr]
     out_desc = ctx.sdfg.arrays[out_arr]
+    # QE convention: ``fwfft`` is the UN-normalized forward transform
+    # (factor 1), ``invfft`` the inverse with a 1/N normalization. The FFT lib
+    # node's pure DFT expansion applies ``factor`` as the output coefficient and
+    # otherwise leaves it at 1.0, so the inverse MUST set 1/N here -- without it
+    # ``invfft(fwfft(x))`` is off by N per inverse transform (the vexx exchange
+    # chain has two inverse FFTs -> the emitted result was off by exactly
+    # N^2 = nrxxs^2). N is the transform length (the flat DFT size over nnr).
+    if is_inverse:
+        node.factor = 1 / in_desc.total_size
     # Use ``add_read`` / ``add_write`` (fresh nodes) rather than the cached
     # ``acc`` helper: when the Fortran source is in-place (the same array
     # for ``in`` and ``out``) the cache returns one shared access node and

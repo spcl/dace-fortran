@@ -507,7 +507,8 @@ static std::string mpiCalleeTag(const std::string& callee) {
   if (s.rfind("_QP", 0) == 0) s.erase(0, 3);  // external/global mangling
   std::string low = llvm::StringRef(s).lower();
   if (low == "mpi_send" || low == "mpi_recv" || low == "mpi_isend" ||
-      low == "mpi_irecv" || low == "mpi_wait" || low == "mpi_alltoall")
+      low == "mpi_irecv" || low == "mpi_wait" || low == "mpi_alltoall" ||
+      low == "mpi_barrier" || low == "mpi_allreduce" || low == "mpi_bcast")
     return low;
   return std::string{};
 }
@@ -1198,6 +1199,53 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
     bool isDefault = commName.empty() || low.rfind("__", 0) == 0 ||
                      low.find("mpi_comm_world") != std::string::npos;
     if (!isDefault) n.call_args.push_back(commName);
+    return n;
+  }
+
+  // Decode a (possibly default-WORLD) communicator operand: returns the name to
+  // append to ``call_args`` (empty -> default ``MPI_COMM_WORLD``, append nothing).
+  auto commArg = [&](mlir::Value v) -> std::string {
+    std::string name = traceToDecl(v);
+    std::string low = llvm::StringRef(name).lower();
+    bool isDefault = name.empty() || low.rfind("__", 0) == 0 ||
+                     low.find("mpi_comm_world") != std::string::npos;
+    return isDefault ? std::string{} : name;
+  };
+
+  if (mpiOp == "mpi_barrier") {
+    // MPI_Barrier(comm, ierr) -- pure synchronisation, no data.
+    if (args.empty())
+      throw std::runtime_error("MPI mpi_barrier: no communicator argument");
+    n.call_args = {};
+    std::string c = commArg(args[0]);
+    if (!c.empty()) n.call_args.push_back(c);
+    return n;
+  }
+
+  if (mpiOp == "mpi_allreduce") {
+    // MPI_Allreduce(sendbuf, recvbuf, count, datatype, op, comm, ierr)
+    if (args.size() < 7)
+      throw std::runtime_error("MPI mpi_allreduce: unexpected argument count " +
+                               std::to_string(args.size()));
+    std::string sendbuf = resolve(args[0], "sendbuf");
+    std::string recvbuf = resolve(args[1], "recvbuf");
+    std::string op = traceToDecl(args[4]);  // MPI_MAX / MPI_MIN / MPI_SUM / ...
+    n.call_args = {sendbuf, recvbuf, op};
+    std::string c = commArg(args[5]);
+    if (!c.empty()) n.call_args.push_back(c);
+    return n;
+  }
+
+  if (mpiOp == "mpi_bcast") {
+    // MPI_Bcast(buffer, count, datatype, root, comm, ierr)
+    if (args.size() < 6)
+      throw std::runtime_error("MPI mpi_bcast: unexpected argument count " +
+                               std::to_string(args.size()));
+    std::string buffer = resolve(args[0], "buffer");
+    std::string root = resolve(args[3], "root");
+    n.call_args = {buffer, root};
+    std::string c = commArg(args[4]);
+    if (!c.empty()) n.call_args.push_back(c);
     return n;
   }
 
