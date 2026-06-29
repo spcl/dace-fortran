@@ -199,6 +199,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/SymbolTable.h"
+#include "mlir/IR/Verifier.h"
 #include "mlir/Pass/Pass.h"
 #include "passes/Passes.h"
 #include "passes/shallow_alias.h"
@@ -1131,6 +1132,127 @@ struct AliasPrefix {
   llvm::SmallVector<mlir::Value, 4> indices;
 };
 
+/// Compose a Fortran array SECTION that an inlined-callee dummy was bound to,
+/// folding it into one designate over the flat companion.
+///
+/// Shape handled (the ubiquitous ICON ``_onBlock`` idiom -- an outer routine
+/// loops over blocks and passes a per-block 2-D slice of a 3-D field member to
+/// a worker that indexes it element-wise):
+///
+///   leaf    = designate(section, L...)       ! dummy(i, j)      -- element/section
+///   section = designate(aliasRoot, S...)     ! member(:, :, blk) -- leading
+///                                             !   full-range unit-stride
+///                                             !   triplets + trailing scalars
+///   aliasRoot resolves via ``aliasPrefixes`` to a flat companion in ``leafBase``
+///
+/// ``walkDesignateChain`` / the alias-prefix walk both bail on the section's
+/// triplets, which used to drop the fixed scalar dim (``blk``) entirely and
+/// leave a rank-mismatched ``companion(i, j)`` designate (2 indices over the
+/// rank-3 companion).  This composes positionally instead: each full-range
+/// unit-stride triplet dim is filled by the next leaf index; each scalar dim is
+/// kept -- yielding ``companion(i, j, blk)`` whose index count matches the
+/// companion rank.
+///
+/// Returns true if it rewrote the leaf; false (no IR change) for any shape
+/// outside the contract, so the caller's generic path runs unchanged.
+static bool rewriteSectionedAliasLeaf(
+    hlfir::DesignateOp leaf, const llvm::StringMap<mlir::Value>& leafBase,
+    const llvm::DenseMap<mlir::Value, AliasPrefix>& aliasPrefixes) {
+  // The leaf must read a SECTION: its memref is a designate carrying triplets.
+  auto section =
+      mlir::dyn_cast_or_null<hlfir::DesignateOp>(leaf.getMemref().getDefiningOp());
+  if (!section) return false;
+  auto secTripAttr = section.getIsTripletAttr();
+  if (!secTripAttr) return false;
+  auto trips = secTripAttr.asArrayRef();
+  bool anyTrip = false;
+  for (bool b : trips) anyTrip |= b;
+  if (!anyTrip) return false;
+
+  // The section's base must resolve to a flat companion via a WHOLE-member
+  // alias prefix (the inlined-callee dummy declare bound to the whole member,
+  // no extra scalar selectors) so the section dims map 1:1 onto the companion.
+  auto pit = aliasPrefixes.find(section.getMemref());
+  if (pit == aliasPrefixes.end()) return false;
+  const AliasPrefix& pref = pit->second;
+  if (!pref.indices.empty()) return false;
+  std::string path;
+  for (auto& c : pref.path) {
+    if (!path.empty()) path += "_";
+    path += c;
+  }
+  if (path.empty()) return false;
+  auto lbIt = leafBase.find(path);
+  if (lbIt == leafBase.end()) return false;
+  mlir::Value newBase = lbIt->second;
+
+  // Decode the section's per-dim selectors from its flat ``indices`` list (a
+  // triplet dim consumes 3 entries: lb, ub, step; a scalar dim consumes 1) and
+  // the leaf's selectors likewise.  The leaf supplies one selector per section
+  // TRIPLET dim, in order.
+  auto secIdx = section.getIndices();
+  auto leafIdx = leaf.getIndices();
+  auto leafTripAttr = leaf.getIsTripletAttr();
+  llvm::ArrayRef<bool> leafTrips =
+      leafTripAttr ? leafTripAttr.asArrayRef() : llvm::ArrayRef<bool>{};
+
+  llvm::SmallVector<mlir::Value, 8> outIdx;
+  llvm::SmallVector<bool, 4> outTrip;
+  unsigned si = 0, li = 0, leafDim = 0;
+  for (bool t : trips) {
+    if (!t) {
+      // Scalar section selector (``blk``): kept verbatim.
+      if (si >= secIdx.size()) return false;
+      outIdx.push_back(secIdx[si++]);
+      outTrip.push_back(false);
+      continue;
+    }
+    // Full-range unit-stride triplet required (lb == 1 && step == 1) so the
+    // consuming leaf index maps directly onto this companion dim; bail
+    // otherwise (the generic path leaves a valid nested chain).
+    if (si + 2 >= secIdx.size()) return false;
+    auto lbC = traceConstInt(secIdx[si]);
+    auto stepC = traceConstInt(secIdx[si + 2]);
+    si += 3;
+    if (!lbC || *lbC != 1 || !stepC || *stepC != 1) return false;
+    bool leafIsTrip = leafDim < leafTrips.size() && leafTrips[leafDim];
+    if (leafIsTrip) {
+      if (li + 2 >= leafIdx.size()) return false;
+      outIdx.push_back(leafIdx[li]);
+      outIdx.push_back(leafIdx[li + 1]);
+      outIdx.push_back(leafIdx[li + 2]);
+      outTrip.push_back(true);
+      li += 3;
+    } else {
+      if (li >= leafIdx.size()) return false;
+      outIdx.push_back(leafIdx[li++]);
+      outTrip.push_back(false);
+    }
+    ++leafDim;
+  }
+  // Every leaf selector must have been consumed (one per section triplet dim).
+  if (li != leafIdx.size()) return false;
+
+  bool anyOutTrip = false;
+  for (bool b : outTrip) anyOutTrip |= b;
+  mlir::OpBuilder rb(leaf);
+  auto newOp = rb.create<hlfir::DesignateOp>(
+      leaf.getLoc(), /*result_type=*/leaf.getResult().getType(),
+      /*memref=*/newBase,
+      /*component=*/mlir::StringAttr{},
+      /*component_shape=*/mlir::Value{},
+      /*indices=*/mlir::ValueRange{outIdx},
+      /*is_triplet=*/rb.getDenseBoolArrayAttr(outTrip),
+      /*substring=*/mlir::ValueRange{},
+      /*complex_part=*/mlir::BoolAttr{},
+      /*shape=*/anyOutTrip ? leaf.getShape() : mlir::Value{},
+      /*typeparams=*/mlir::ValueRange{},
+      /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
+  leaf.getResult().replaceAllUsesWith(newOp.getResult());
+  leaf.erase();
+  return true;
+}
+
 /// Rewrite a multi-level ``hlfir.designate`` chain ending at ``leaf``
 /// (e.g. ``designate{"x"}.designate{"inner"} %o`` for ``o%inner%x``)
 /// to read directly from the path-flattened declare named in
@@ -1143,6 +1265,14 @@ struct AliasPrefix {
 static bool rewriteDesignateChain(
     hlfir::DesignateOp leaf, const llvm::StringMap<mlir::Value>& leafBase,
     const llvm::DenseMap<mlir::Value, AliasPrefix>* aliasPrefixes = nullptr) {
+  // An inlined-callee dummy bound to a per-block SECTION of a flattened member
+  // (``member(:, :, blk)``) needs the section's scalar dim composed back in;
+  // neither ``walkDesignateChain`` nor the alias-prefix walk below carry it
+  // (both bail on the section's triplets).  Handle that shape first.
+  if (aliasPrefixes &&
+      rewriteSectionedAliasLeaf(leaf, leafBase, *aliasPrefixes))
+    return true;
+
   llvm::SmallVector<mlir::Value, 4> intermediateIndices;
   std::string path = walkDesignateChain(leaf, intermediateIndices);
 
@@ -1686,6 +1816,22 @@ struct FlattenStructsPass
   void runOnOperation() override {
     planEntries.clear();
     getOperation().walk([this](mlir::func::FuncOp f) { flattenFunc(f); });
+
+    // DEBUG (env-gated): after flattening, run each op's own verifier and
+    // print the ones that now fail -- the exact malformation the pass-manager
+    // verifier rejects -- with the memref's defining op so the producing
+    // rewrite can be located.
+    if (std::getenv("DACE_FLATTEN_DEBUG_DESIGNATE")) {
+      getOperation().walk([](mlir::Operation* op) {
+        if (mlir::succeeded(mlir::verify(op))) return;
+        llvm::errs() << "FLATTEN_BAD_OP loc=" << op->getLoc() << "\n";
+        llvm::errs() << "  op: " << *op << "\n";
+        for (auto operand : op->getOperands())
+          if (auto* def = operand.getDefiningOp())
+            llvm::errs() << "  operand def: " << *def << "\n";
+      });
+    }
+
     if (planEntries.empty()) return;
 
     // Stamp the plan as ``hlfir.flatten_plan = {entries = [...]}``.
