@@ -248,6 +248,104 @@ namespace hlfir_bridge {
 
 namespace {
 
+/// Static presence of an OPTIONAL dummy, resolved after ``hlfir-inline-all``.
+/// Once a call is inlined, an omitted optional flows in as ``fir.absent`` and a
+/// passed one as a concrete box/embox of the actual; only the ENTRY function's
+/// own optionals stay genuinely runtime.
+enum class OptPresence { Absent, Present, Unknown };
+
+/// Trace a ``fir.is_present`` operand back through the declare / convert /
+/// rebox / load / box_addr chain the inliner leaves, classifying it as
+/// statically Absent (``fir.absent``), statically Present (boxed/declared from
+/// a concrete address), or Unknown (a genuine runtime optional -- an entry-arg
+/// with ``fir.optional``, or a value we can't prove).  Sound by construction:
+/// only the two definite cases are ever returned non-Unknown.
+static OptPresence traceOptionalPresence(mlir::Value v) {
+  for (unsigned i = 0; i < 16 && v; ++i) {
+    if (auto ba = mlir::dyn_cast<mlir::BlockArgument>(v)) {
+      auto* owner = ba.getOwner();
+      auto func = mlir::dyn_cast_or_null<mlir::func::FuncOp>(owner->getParentOp());
+      if (func && owner->isEntryBlock()) {
+        // An entry-arg flagged ``fir.optional`` is the real runtime case; any
+        // other entry arg is unconditionally present.
+        if (func.getArgAttr(ba.getArgNumber(), "fir.optional"))
+          return OptPresence::Unknown;
+        return OptPresence::Present;
+      }
+      return OptPresence::Unknown;
+    }
+    auto* d = v.getDefiningOp();
+    if (!d) return OptPresence::Unknown;
+    if (mlir::isa<fir::AbsentOp>(d)) return OptPresence::Absent;
+    // Boxing / addressing a concrete object proves presence.
+    if (mlir::isa<fir::EmboxOp, fir::AllocaOp, fir::AllocMemOp, fir::AddrOfOp,
+                  hlfir::DesignateOp>(d))
+      return OptPresence::Present;
+    if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) { v = cv.getValue(); continue; }
+    if (auto rb = mlir::dyn_cast<fir::ReboxOp>(d)) { v = rb.getBox(); continue; }
+    if (auto ld = mlir::dyn_cast<fir::LoadOp>(d)) { v = ld.getMemref(); continue; }
+    if (auto bx = mlir::dyn_cast<fir::BoxAddrOp>(d)) { v = bx.getVal(); continue; }
+    if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(d)) { v = decl.getMemref(); continue; }
+    return OptPresence::Unknown;
+  }
+  return OptPresence::Unknown;
+}
+
+/// Fold every ``fir.if`` whose condition is a statically-resolvable
+/// ``PRESENT(optional)`` down to its live branch, hoisting that branch's body
+/// in front of the ``if`` and erasing the conditional.
+///
+/// ICON's ``_onBlock`` subset idiom rebinds a pointer in both arms of such a
+/// guard (``IF (PRESENT(subset_range)) cells_subset => subset_range ELSE
+/// cells_subset => patch%cells%in_domain``) -- a runtime selection between two
+/// rebind targets, which the View model can't represent.  After
+/// ``hlfir-inline-all`` each inlined copy's ``PRESENT`` is compile-time
+/// constant, so exactly one branch is live; folding it here makes the rebind
+/// straight-line (one store, its target computed BEFORE the reads it must
+/// dominate) so the per-pointer rewrite below handles it normally.
+///
+/// Done explicitly rather than via ``canonicalize`` for two reasons: plain
+/// canonicalize does NOT fold ``fir.is_present`` (the operand sits behind
+/// ``hlfir.declare``, not a bare ``fir.absent``), and a general canonicalize
+/// at this pipeline slot would run before ``hlfir-preserve-mutable-globals``
+/// and prematurely fold mutable-global loads.  This touches only
+/// ``is_present``-conditioned ``fir.if`` ops.  Fixpoint loop with a fresh walk
+/// per fold so erasing a dead branch never leaves a stale ``IfOp`` handle.
+static void foldPresenceGuardedIfs(mlir::func::FuncOp func) {
+  while (true) {
+    fir::IfOp target;
+    OptPresence presence = OptPresence::Unknown;
+    func.walk([&](fir::IfOp ifOp) {
+      if (target) return;
+      auto isPresent = mlir::dyn_cast_or_null<fir::IsPresentOp>(
+          ifOp.getCondition().getDefiningOp());
+      if (!isPresent) return;
+      auto p = traceOptionalPresence(isPresent.getVal());
+      if (p == OptPresence::Unknown) return;
+      target = ifOp;
+      presence = p;
+    });
+    if (!target) return;
+
+    mlir::Region& live = (presence == OptPresence::Present)
+                             ? target.getThenRegion()
+                             : target.getElseRegion();
+    if (!live.empty()) {
+      mlir::Block& blk = live.front();
+      if (auto* term = blk.getTerminator(); term && target.getNumResults())
+        for (auto [res, val] :
+             llvm::zip(target.getResults(), term->getOperands()))
+          res.replaceAllUsesWith(val);
+      // Hoist the live body (sans terminator) just before the ``if``, keeping
+      // source order so each moved op's operands still dominate it.
+      llvm::SmallVector<mlir::Operation*, 8> body;
+      for (auto& o : blk.without_terminator()) body.push_back(&o);
+      for (auto* o : body) o->moveBefore(target);
+    }
+    target.erase();
+  }
+}
+
 /// One step of an ``hlfir.designate`` chain captured during a
 /// rebind-value trace.  Records the indices and per-dim triplet
 /// flags exactly as flang lowered them, so ``mergeIndices`` can
@@ -493,6 +591,12 @@ struct RewritePointerAssignsPass
   }
 
   void runOnOperation() override {
+    // First collapse any ``PRESENT(optional)``-guarded ``fir.if`` to its live
+    // branch (statically known post-inline) so a pointer rebound in both arms
+    // becomes a single straight-line rebind whose target dominates its reads.
+    getOperation().walk(
+        [](mlir::func::FuncOp f) { foldPresenceGuardedIfs(f); });
+
     // Collect candidates first; rewriting mutates the IR and would
     // invalidate a fused walk.
     llvm::SmallVector<hlfir::DeclareOp, 8> ptrDecls;
