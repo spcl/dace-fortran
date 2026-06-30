@@ -11,7 +11,9 @@
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/StringSet.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/BuiltinOps.h"
 
 namespace hlfir_bridge {
 
@@ -25,11 +27,9 @@ namespace hlfir_bridge {
 // self-loop.  ``extract_vars`` populates this map with
 // ``mangled -> unique_short_name`` for the colliding entries; every
 // subsequent ``extractName`` call resolves to the unique form.
-static thread_local std::unordered_map<std::string, std::string>
-    kManglingOverride;
+static thread_local std::unordered_map<std::string, std::string> kManglingOverride;
 
-void setManglingOverride(const std::string& mangled,
-                         const std::string& shortName) {
+void setManglingOverride(const std::string& mangled, const std::string& shortName) {
   kManglingOverride[mangled] = shortName;
 }
 
@@ -41,17 +41,25 @@ void setManglingOverride(const std::string& mangled,
 static thread_local std::string kEntryScope;
 static thread_local std::set<std::string> kShortNameCollisions;
 
+// Cache of every ``hlfir.declare`` uniq_name in the module, built lazily on
+// first ``flatCompanionName`` query and invalidated per build (in
+// ``clearManglingOverrides``).  Lets a component-designate name resolve to the
+// flattened companion's OWN declare name only when that companion actually
+// exists, without an O(declares) walk per access.
+static thread_local llvm::StringSet<> kModuleDeclUniqs;
+static thread_local bool kModuleDeclUniqsBuilt = false;
+
 void clearManglingOverrides() {
   kManglingOverride.clear();
   kEntryScope.clear();
   kShortNameCollisions.clear();
+  kModuleDeclUniqs.clear();
+  kModuleDeclUniqsBuilt = false;
 }
 
 void setEntryScope(const std::string& scope) { kEntryScope = scope; }
 
-void setShortNameCollisions(const std::set<std::string>& collisions) {
-  kShortNameCollisions = collisions;
-}
+void setShortNameCollisions(const std::set<std::string>& collisions) { kShortNameCollisions = collisions; }
 
 std::string getFScope(const std::string& uniq) {
   // Fortran mangled-name shape: ``_QM<mod>F<func>E<name>`` (with
@@ -153,40 +161,136 @@ void clearAllocAliases() { kAllocAlias.clear(); }
 // neither of those leads to a designate.  ``traceToDecl`` uses it to
 // resolve such an alias to the caller-side member path rather than the
 // inlined dummy's own ``<dummy>_call<idx>`` name, which nothing sources.
-bool leadsToComponentDesignate(mlir::Value mr) {
-  for (int i = 0; i < limits::kAliasMemrefWalkDepth && mr; ++i) {
-    auto* d = mr.getDefiningOp();
-    if (!d) return false;
-    if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(d))
-      return static_cast<bool>(dg.getComponentAttr());
-    if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
-      mr = cv.getValue();
+// Single source of truth for the storage-transparent reinterpret peel shared by
+// every access-path walker.  ``fir.convert`` (type erase), ``fir.load`` (deref a
+// ref/box), ``fir.embox`` (wrap a ref/ptr into a box -- e.g. a polymorphic
+// ``CLASS(t)`` dummy bound to a pointer member), ``fir.rebox`` (retype a box),
+// ``fir.box_addr`` (data ptr out of a box), ``hlfir.copy_in`` (contiguous temp of
+// a non-contiguous actual), ``fir.coordinate_of`` (sub-element address), and
+// ``hlfir.as_expr`` (materialised-variable-as-expr) ALL preserve the underlying
+// storage identity.  Callers peel to the first non-transparent op (designate /
+// declare / alloca / block-arg / arith) and handle it themselves.  Centralising
+// the set here is what stops the per-loop subsets from drifting (the ICON halo
+// gather's ``fir.embox`` gap -- a class dummy bound to ``p_patch % comm_pat_c``
+// whose member reads must resolve to ``p_patch_comm_pat_c_*`` rather than the
+// inlined dummy's local name -- was exactly such a drift).
+mlir::Value peelBoxReinterpret(mlir::Value v, int maxDepth) {
+  for (int i = 0; i < maxDepth && v; ++i) {
+    auto* d = v.getDefiningOp();
+    if (!d) break;
+    if (auto c = mlir::dyn_cast<fir::ConvertOp>(d)) {
+      v = c.getValue();
       continue;
     }
-    if (auto ld = mlir::dyn_cast<fir::LoadOp>(d)) {
-      mr = ld.getMemref();
+    if (auto l = mlir::dyn_cast<fir::LoadOp>(d)) {
+      v = l.getMemref();
+      continue;
+    }
+    if (auto eb = mlir::dyn_cast<fir::EmboxOp>(d)) {
+      v = eb.getMemref();
       continue;
     }
     if (auto rb = mlir::dyn_cast<fir::ReboxOp>(d)) {
-      mr = rb.getBox();
+      v = rb.getBox();
       continue;
     }
     if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
-      mr = ba.getVal();
+      v = ba.getVal();
       continue;
     }
-    // ``hlfir.copy_in`` -- Flang copies a non-contiguous actual (a pointer
-    // member ``p_diag % p_vn_dual``) into a contiguous temp before passing
-    // it to a procedure; the inlined dummy then aliases that temp.  Peel to
-    // the original variable so the chain reaches the caller's component
-    // designate (gate #12b).
     if (auto cp = mlir::dyn_cast<hlfir::CopyInOp>(d)) {
-      mr = cp.getVar();
+      v = cp.getVar();
       continue;
     }
-    return false;
+    if (auto co = mlir::dyn_cast<fir::CoordinateOp>(d)) {
+      v = co.getRef();
+      continue;
+    }
+    if (auto ae = mlir::dyn_cast<hlfir::AsExprOp>(d)) {
+      v = ae.getVar();
+      continue;
+    }
+    break;  // designate / declare / alloca / block-arg / arith -- caller handles
   }
-  return false;
+  return v;
+}
+
+bool leadsToComponentDesignate(mlir::Value mr) {
+  // Peel the shared storage-transparent reinterprets, then the terminal must be
+  // an ``hlfir.designate`` selecting a struct COMPONENT.  Using the shared peel
+  // (vs an inline op cascade) keeps this gate in lock-step with the other
+  // access-path walkers -- the ``fir.embox`` polymorphic-class-dummy case
+  // resolves here because ``peelBoxReinterpret`` covers embox.
+  mr = peelBoxReinterpret(mr);
+  auto* d = mr ? mr.getDefiningOp() : nullptr;
+  auto dg = d ? mlir::dyn_cast<hlfir::DesignateOp>(d) : nullptr;
+  return dg && static_cast<bool>(dg.getComponentAttr());
+}
+
+// True iff some ``hlfir.declare`` in ``anyOp``'s module has uniq_name
+// ``uniq``.  Backed by a per-build cache (see ``kModuleDeclUniqs``).
+static bool moduleHasDeclare(mlir::Operation* anyOp, llvm::StringRef uniq) {
+  if (!kModuleDeclUniqsBuilt) {
+    if (auto mod = anyOp->getParentOfType<mlir::ModuleOp>()) {
+      mod.walk([&](hlfir::DeclareOp dc) { kModuleDeclUniqs.insert(dc.getUniqName()); });
+      kModuleDeclUniqsBuilt = true;
+    }
+  }
+  return kModuleDeclUniqs.contains(uniq);
+}
+
+// A component designate ``base % member`` over a FLATTENED struct must resolve
+// to the SAME name the companion was registered under -- ``extractName(<base
+// uniq>_<member>)`` -- not a re-composition ``extractName(base) + "_" +
+// member``.  The two diverge when the base and its companion have different
+// cross-scope collision status: e.g. a runtime-local AoS whose base declare was
+// erased in one inlined scope (so its short no longer collides -> bare) while
+// the companion survives in two scopes (collides -> scope-qualified).  Resolve
+// the companion declare's own name by construction whenever such a declare
+// exists; return "" otherwise (member of a non-flattened struct -> the caller
+// keeps the plain ``parent_member`` composition).
+static std::string flatCompanionName(hlfir::DesignateOp dg, llvm::StringRef member) {
+  // Peel the memref to the base declare's uniq_name, mirroring the transparent
+  // walk ``traceToDecl`` does so we land on the same storage declare its
+  // ``parent`` would (incl. assumed-shape aliases -> outer storage).
+  mlir::Value v = dg.getMemref();
+  std::string baseUniq;
+  for (int i = 0; i < 64 && v; ++i) {
+    auto* d = v.getDefiningOp();
+    if (!d) break;
+    if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(d)) {
+      if (auto outer = asAssumedShapeAlias(dc)) {
+        v = outer.getResult(0);
+        continue;
+      }
+      baseUniq = dc.getUniqName().str();
+      break;
+    }
+    if (auto dc = mlir::dyn_cast<fir::DeclareOp>(d)) {
+      baseUniq = dc.getUniqName().str();
+      break;
+    }
+    // Shared storage-transparent peel -- runs before the designate case below
+    // (a designate value returns unchanged, so a nested-component parent still
+    // falls through to the multi-level guard).
+    if (mlir::Value peeled = peelBoxReinterpret(v); peeled != v) {
+      v = peeled;
+      continue;
+    }
+    if (auto pd = mlir::dyn_cast<hlfir::DesignateOp>(d)) {
+      // A nested component parent (``a % b % member``) is a multi-level path
+      // the single-underscore companion convention doesn't cover -- leave it
+      // to the caller's recursive composition.
+      if (pd.getComponentAttr()) return {};
+      v = pd.getMemref();
+      continue;
+    }
+    break;
+  }
+  if (baseUniq.empty()) return {};
+  std::string compUniq = baseUniq + "_" + member.str();
+  if (!moduleHasDeclare(dg.getOperation(), compUniq)) return {};
+  return extractName(compUniq);
 }
 
 std::string traceToDecl(mlir::Value val, int max) {
@@ -217,62 +321,14 @@ std::string traceToDecl(mlir::Value val, int max) {
       }
       return allocAliasFor(extractName(dc.getUniqName().str()));
     }
-    if (auto dc = mlir::dyn_cast<fir::DeclareOp>(d))
-      return allocAliasFor(extractName(dc.getUniqName().str()));
-    if (auto c = mlir::dyn_cast<fir::ConvertOp>(d)) {
-      val = c.getValue();
-      continue;
-    }
-    if (auto l = mlir::dyn_cast<fir::LoadOp>(d)) {
-      val = l.getMemref();
-      continue;
-    }
-    if (auto co = mlir::dyn_cast<fir::CoordinateOp>(d)) {
-      val = co.getRef();
-      continue;
-    }
-    // ``fir.rebox`` retypes an existing box (e.g. section view box
-    // -> ``box<ptr<...>>`` for a Fortran ``ptr => slice`` rebind);
-    // it doesn't change the underlying storage.  Walk through so a
-    // downstream designate over the reboxed value still resolves
-    // to the parent's name.  Same role as the
-    // ``hlfir-rewrite-pointer-assigns`` slice-target forwarding:
-    // pointer reads land back on the parent array.
-    if (auto rb = mlir::dyn_cast<fir::ReboxOp>(d)) {
-      val = rb.getBox();
-      continue;
-    }
-    if (auto eb = mlir::dyn_cast<fir::EmboxOp>(d)) {
-      val = eb.getMemref();
-      continue;
-    }
-    // ``fir.box_addr`` extracts the data pointer from a descriptor
-    // (heap / ptr underlying the box).  Flang emits it for every
-    // allocatable / pointer dereference; the underlying storage
-    // name is the box's source declare, so we walk through.
-    if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
-      val = ba.getVal();
-      continue;
-    }
-    // ``hlfir.copy_in`` -- Flang's contiguous-buffer temp for a
-    // non-contiguous actual (pointer member ``p_diag % p_vn_dual``).  Walk to
-    // the original variable so an inlined dummy aliasing the temp resolves to
-    // the caller's storage name (gate #12b; mirrors extract_vars.cpp:2609).
-    if (auto cp = mlir::dyn_cast<hlfir::CopyInOp>(d)) {
-      val = cp.getVar();
-      continue;
-    }
-    // ``hlfir.as_expr %var`` retypes a materialised variable (a declare /
-    // box) as an ``!hlfir.expr`` value WITHOUT moving the storage -- the
-    // underlying array is ``%var``'s declare.  Walk through to the variable
-    // so a reduction / libcall whose source is a lifted array-result temp
-    // resolves to that transient's name.  The LiftReductionOperands pass
-    // materialises an inline array-result library op (``SUM(MATMUL(a,b))``,
-    // ``...(TRANSPOSE(a))``, ...) as ``hlfir.assign <op> to <decl>`` +
-    // ``hlfir.as_expr <decl>`` and rewrites the consuming reduction to read
-    // the as_expr; without this peel the reduce source name would be empty.
-    if (auto ae = mlir::dyn_cast<hlfir::AsExprOp>(d)) {
-      val = ae.getVar();
+    if (auto dc = mlir::dyn_cast<fir::DeclareOp>(d)) return allocAliasFor(extractName(dc.getUniqName().str()));
+    // Storage-transparent box reinterprets (convert / load / coord / rebox /
+    // embox / box_addr / copy_in / as_expr) go through the shared peel -- the
+    // single source of truth (see ``peelBoxReinterpret``).  Runs before the
+    // designate / select-clamp cases below; the peel returns those values
+    // unchanged so each still falls through to its dedicated handler.
+    if (mlir::Value peeled = peelBoxReinterpret(val); peeled != val) {
+      val = peeled;
       continue;
     }
     // Section / element designates (``a(lo:hi)``, ``a(i)``)  --  walk
@@ -300,6 +356,11 @@ std::string traceToDecl(mlir::Value val, int max) {
     // lookup.
     if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(d)) {
       if (auto comp = dg.getComponentAttr()) {
+        // Prefer the flattened companion declare's OWN registered name when it
+        // exists -- correct-by-construction vs. re-composing from the base
+        // (see ``flatCompanionName``).  Falls through to the composition below
+        // for non-flattened struct members (no companion declare).
+        if (std::string cn = flatCompanionName(dg, comp.getValue()); !cn.empty()) return cn;
         auto parent = traceToDecl(dg.getMemref(), max - i);
         if (!parent.empty()) {
           // Flat-name construction is just string join ``parent_member``.
@@ -319,29 +380,25 @@ std::string traceToDecl(mlir::Value val, int max) {
           bool wantPtr = false;
           if (auto attrs = dg.getFortranAttrs()) {
             auto fa = *attrs;
-            wantPtr = bitEnumContainsAny(
-                          fa, fir::FortranVariableFlagsEnum::pointer) ||
-                      bitEnumContainsAny(
-                          fa, fir::FortranVariableFlagsEnum::allocatable);
+            wantPtr = bitEnumContainsAny(fa, fir::FortranVariableFlagsEnum::pointer) ||
+                      bitEnumContainsAny(fa, fir::FortranVariableFlagsEnum::allocatable);
           }
           if (wantPtr) {
             // Search the enclosing func.func / module for a declare
             // whose uniq_name's E-scope short tail equals
             // ``<parent>__<member>``.  Found -> use its name.
             std::string doubleU = parent + "__" + comp.getValue().str();
-            auto* func =
-                dg->getParentOfType<mlir::func::FuncOp>().getOperation();
+            auto* func = dg->getParentOfType<mlir::func::FuncOp>().getOperation();
             bool found = false;
             if (func) {
-              mlir::dyn_cast<mlir::func::FuncOp>(func).walk(
-                  [&](hlfir::DeclareOp candidate) {
-                    if (found) return;
-                    auto un = candidate.getUniqName().str();
-                    auto eP = un.rfind('E');
-                    if (eP == std::string::npos) return;
-                    std::string tail = un.substr(eP + 1);
-                    if (tail == doubleU) found = true;
-                  });
+              mlir::dyn_cast<mlir::func::FuncOp>(func).walk([&](hlfir::DeclareOp candidate) {
+                if (found) return;
+                auto un = candidate.getUniqName().str();
+                auto eP = un.rfind('E');
+                if (eP == std::string::npos) return;
+                std::string tail = un.substr(eP + 1);
+                if (tail == doubleU) found = true;
+              });
             }
             if (found) return doubleU;
           }
@@ -382,8 +439,7 @@ std::optional<int64_t> traceConstInt(mlir::Value v) {
     auto* d = v.getDefiningOp();
     if (!d) break;
     if (auto c = mlir::dyn_cast<mlir::arith::ConstantOp>(d))
-      if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue()))
-        return ia.getInt();
+      if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue())) return ia.getInt();
     if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
       v = cv.getValue();
       continue;
@@ -399,8 +455,7 @@ std::optional<int64_t> traceConstInt(mlir::Value v) {
       bool false_is_zero = false;
       if (fdef) {
         if (auto c = mlir::dyn_cast<mlir::arith::ConstantOp>(fdef))
-          if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue()))
-            false_is_zero = (ia.getInt() == 0);
+          if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue())) false_is_zero = (ia.getInt() == 0);
       }
       if (false_is_zero) {
         v = s.getTrueValue();
@@ -412,8 +467,7 @@ std::optional<int64_t> traceConstInt(mlir::Value v) {
   return std::nullopt;
 }
 
-std::string posSymbolName(const std::string& array,
-                          const std::vector<int64_t>& one_based_idxs) {
+std::string posSymbolName(const std::string& array, const std::vector<int64_t>& one_based_idxs) {
   // Keep in lockstep with ``internPosSymbol`` (ast/expressions.cpp): the
   // descriptor-shape side mints the name here, the AST builder mints the
   // matching ``symbol_init`` there, and they must agree.  Each 1-based
@@ -424,8 +478,7 @@ std::string posSymbolName(const std::string& array,
   return s;
 }
 
-std::optional<std::pair<std::string, std::vector<int64_t>>>
-constIndexedElementLoad(mlir::Value v) {
+std::optional<std::pair<std::string, std::vector<int64_t>>> constIndexedElementLoad(mlir::Value v) {
   if (!v) return std::nullopt;
   for (int i = 0; i < limits::kConvertChainDepth && v; ++i) {
     auto* d = v.getDefiningOp();
@@ -437,8 +490,7 @@ constIndexedElementLoad(mlir::Value v) {
   }
   auto ld = mlir::dyn_cast_or_null<fir::LoadOp>(v.getDefiningOp());
   if (!ld) return std::nullopt;
-  auto dg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
-      ld.getMemref().getDefiningOp());
+  auto dg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(ld.getMemref().getDefiningOp());
   if (!dg) return std::nullopt;
   auto idxs = dg.getIndices();
   if (idxs.empty()) return std::nullopt;
@@ -458,10 +510,8 @@ constIndexedElementLoad(mlir::Value v) {
 }
 
 static void forEachConstIndexedElementImpl(
-    mlir::Value v,
-    const std::function<void(const std::string&, const std::vector<int64_t>&)>&
-        fn,
-    int depth, llvm::SmallPtrSet<mlir::Operation*, 32>* visited = nullptr) {
+    mlir::Value v, const std::function<void(const std::string&, const std::vector<int64_t>&)>& fn, int depth,
+    llvm::SmallPtrSet<mlir::Operation*, 32>* visited = nullptr) {
   if (depth > limits::kTraceToDeclMax || !v) return;
   if (auto e = constIndexedElementLoad(v)) {
     fn(e->first, e->second);
@@ -478,25 +528,19 @@ static void forEachConstIndexedElementImpl(
   if (!visited->insert(def).second) return;
   // Recurse through the same wrapper / arithmetic / max-min / select op
   // set ``traceExtentExpr`` renders, so every element leaf is reached.
-  if (mlir::isa<fir::ConvertOp, mlir::arith::SelectOp, mlir::arith::CmpIOp,
-                mlir::arith::AddIOp, mlir::arith::SubIOp, mlir::arith::MulIOp,
-                mlir::arith::DivSIOp, mlir::arith::DivUIOp,
-                mlir::arith::MaxSIOp, mlir::arith::MaxUIOp,
-                mlir::arith::MinSIOp, mlir::arith::MinUIOp>(def)) {
-    for (auto op : def->getOperands())
-      forEachConstIndexedElementImpl(op, fn, depth + 1, visited);
+  if (mlir::isa<fir::ConvertOp, mlir::arith::SelectOp, mlir::arith::CmpIOp, mlir::arith::AddIOp, mlir::arith::SubIOp,
+                mlir::arith::MulIOp, mlir::arith::DivSIOp, mlir::arith::DivUIOp, mlir::arith::MaxSIOp,
+                mlir::arith::MaxUIOp, mlir::arith::MinSIOp, mlir::arith::MinUIOp>(def)) {
+    for (auto op : def->getOperands()) forEachConstIndexedElementImpl(op, fn, depth + 1, visited);
   }
 }
 
-void forEachConstIndexedElement(
-    mlir::Value v,
-    const std::function<void(const std::string&, const std::vector<int64_t>&)>&
-        fn) {
+void forEachConstIndexedElement(mlir::Value v,
+                                const std::function<void(const std::string&, const std::vector<int64_t>&)>& fn) {
   forEachConstIndexedElementImpl(v, fn, 0);
 }
 
-static std::string traceExtentExprMemo(
-    mlir::Value v, llvm::DenseMap<mlir::Operation*, std::string>& memo) {
+static std::string traceExtentExprMemo(mlir::Value v, llvm::DenseMap<mlir::Operation*, std::string>& memo) {
   if (!v) return "";
   auto* def = v.getDefiningOp();
   if (!def) return "";
@@ -509,8 +553,7 @@ static std::string traceExtentExprMemo(
   if (auto it = memo.find(def); it != memo.end()) return it->second;
   std::string result = [&]() -> std::string {
     // Transparent peels.
-    if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def))
-      return traceExtentExprMemo(cv.getValue(), memo);
+    if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def)) return traceExtentExprMemo(cv.getValue(), memo);
 
     // ``fir.box_dims`` extent result of an array descriptor: render as that
     // array's synthetic extent symbol ``<name>_d<dim>``.  A transient sized
@@ -534,16 +577,14 @@ static std::string traceExtentExprMemo(
 
     // Constant integer literal.
     if (auto cst = mlir::dyn_cast<mlir::arith::ConstantOp>(def))
-      if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue()))
-        return std::to_string(ia.getInt());
+      if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue())) return std::to_string(ia.getInt());
 
     // Load of a Fortran scalar -- render as its short name.  A load of a
     // constant-indexed array element (``dims(1)``) becomes its position
     // symbol so the shape stays symbolic; promoting the whole array would
     // collide it with its own data descriptor.
     if (auto ld = mlir::dyn_cast<fir::LoadOp>(def)) {
-      if (auto e = constIndexedElementLoad(v))
-        return posSymbolName(e->first, e->second);
+      if (auto e = constIndexedElementLoad(v)) return posSymbolName(e->first, e->second);
       auto mem = ld.getMemref();
       auto* md = mem.getDefiningOp();
       if (!md) return "";
@@ -574,25 +615,20 @@ static std::string traceExtentExprMemo(
     if (auto sel = mlir::dyn_cast<mlir::arith::SelectOp>(def)) {
       auto* cdef = sel.getCondition().getDefiningOp();
       auto cmp = cdef ? mlir::dyn_cast<mlir::arith::CmpIOp>(cdef) : nullptr;
-      if (!cmp || cmp.getLhs() != sel.getTrueValue() ||
-          cmp.getRhs() != sel.getFalseValue())
-        return "";
+      if (!cmp || cmp.getLhs() != sel.getTrueValue() || cmp.getRhs() != sel.getFalseValue()) return "";
       using P = mlir::arith::CmpIPredicate;
       auto pred = cmp.getPredicate();
       bool falseIsZero = false;
       if (auto* fdef = sel.getFalseValue().getDefiningOp())
         if (auto c = mlir::dyn_cast<mlir::arith::ConstantOp>(fdef))
-          if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue()))
-            falseIsZero = (ia.getInt() == 0);
+          if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue())) falseIsZero = (ia.getInt() == 0);
       if (falseIsZero && (pred == P::sgt || pred == P::sge))
         return traceExtentExprMemo(sel.getTrueValue(), memo);  // non-neg clamp
       auto a = traceExtentExprMemo(sel.getTrueValue(), memo);
       auto b = traceExtentExprMemo(sel.getFalseValue(), memo);
       if (a.empty() || b.empty()) return "";
-      if (pred == P::sgt || pred == P::sge || pred == P::ugt || pred == P::uge)
-        return "max(" + a + ", " + b + ")";
-      if (pred == P::slt || pred == P::sle || pred == P::ult || pred == P::ule)
-        return "min(" + a + ", " + b + ")";
+      if (pred == P::sgt || pred == P::sge || pred == P::ugt || pred == P::uge) return "max(" + a + ", " + b + ")";
+      if (pred == P::slt || pred == P::sle || pred == P::ult || pred == P::ule) return "min(" + a + ", " + b + ")";
       return "";
     }
 
@@ -610,14 +646,12 @@ static std::string traceExtentExprMemo(
       if (l.empty() || r.empty()) return "";
       return "(" + l + it->second + r + ")";
     }
-    if ((nm == "arith.maxsi" || nm == "arith.maxui" || nm == "arith.minsi" ||
-         nm == "arith.minui") &&
+    if ((nm == "arith.maxsi" || nm == "arith.maxui" || nm == "arith.minsi" || nm == "arith.minui") &&
         def->getNumOperands() == 2) {
       auto l = traceExtentExprMemo(def->getOperand(0), memo);
       auto r = traceExtentExprMemo(def->getOperand(1), memo);
       if (l.empty() || r.empty()) return "";
-      const char* fn =
-          (nm == "arith.maxsi" || nm == "arith.maxui") ? "max" : "min";
+      const char* fn = (nm == "arith.maxsi" || nm == "arith.maxui") ? "max" : "min";
       return std::string(fn) + "(" + l + ", " + r + ")";
     }
 
@@ -638,9 +672,8 @@ std::string traceExtentExpr(mlir::Value v) {
 // subtrees, which is exponential on a real kernel.  ``visited`` marks each
 // defining op once so the walk is linear in the DAG size; the public entry
 // seeds a fresh set and threads it through.
-static void collectExtentExprScalarsRec(
-    mlir::Value v, std::set<std::string>& out,
-    llvm::SmallPtrSet<mlir::Operation*, 32>& visited) {
+static void collectExtentExprScalarsRec(mlir::Value v, std::set<std::string>& out,
+                                        llvm::SmallPtrSet<mlir::Operation*, 32>& visited) {
   if (!v) return;
   auto* def = v.getDefiningOp();
   if (!def || !visited.insert(def).second) return;
@@ -666,8 +699,8 @@ static void collectExtentExprScalarsRec(
     return;
   }
   auto nm = def->getName().getStringRef();
-  if ((nm == "arith.addi" || nm == "arith.subi" || nm == "arith.muli" ||
-       nm == "arith.divsi" || nm == "arith.divui" || nm == "arith.cmpi") &&
+  if ((nm == "arith.addi" || nm == "arith.subi" || nm == "arith.muli" || nm == "arith.divsi" || nm == "arith.divui" ||
+       nm == "arith.cmpi") &&
       def->getNumOperands() == 2) {
     collectExtentExprScalarsRec(def->getOperand(0), out, visited);
     collectExtentExprScalarsRec(def->getOperand(1), out, visited);
@@ -729,8 +762,7 @@ hlfir::DeclareOp asAssumedShapeAlias(hlfir::DeclareOp decl) {
       }
       break;
     }
-    if (auto seq = mlir::dyn_cast<fir::SequenceType>(t))
-      return seq.getDimension();
+    if (auto seq = mlir::dyn_cast<fir::SequenceType>(t)) return seq.getDimension();
     return 0;
   };
   int innerRank = rankOfDeclResult(decl.getResult(0));

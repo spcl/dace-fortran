@@ -112,8 +112,7 @@ std::string extractName(const std::string& mangled);
 /// short-name collisions between a caller declare and an inlined-
 /// callee dummy declare that aliases the caller's storage.  Per
 /// thread.
-void setManglingOverride(const std::string& mangled,
-                         const std::string& shortName);
+void setManglingOverride(const std::string& mangled, const std::string& shortName);
 
 /// Drop every mangling-override binding.  Called at the start of each
 /// ``extractVariables`` / ``extractAST`` invocation so a previous
@@ -210,8 +209,7 @@ void collectExtentExprScalars(mlir::Value v, std::set<std::string>& out);
 /// ``traceExtentExpr``) and the ``symbol_init`` side agree.  One index per
 /// dimension: ``dims(1)`` -> ``__sym_dims_1``, ``shp(1,2,1)`` ->
 /// ``__sym_shp_1_2_1``.
-std::string posSymbolName(const std::string& array,
-                          const std::vector<int64_t>& one_based_idxs);
+std::string posSymbolName(const std::string& array, const std::vector<int64_t>& one_based_idxs);
 
 /// If ``v`` is a ``fir.load`` of a ``hlfir.designate`` selecting a single
 /// element at compile-time-constant indices (``arr(7)`` or ``shp(1,2,1)``),
@@ -219,8 +217,7 @@ std::string posSymbolName(const std::string& array,
 /// index, a section/triplet, or not an element load).  Used to recognise
 /// an array element feeding a shape extent so it is lifted to a position
 /// symbol instead of resolving to the whole array's name.
-std::optional<std::pair<std::string, std::vector<int64_t>>>
-constIndexedElementLoad(mlir::Value v);
+std::optional<std::pair<std::string, std::vector<int64_t>>> constIndexedElementLoad(mlir::Value v);
 
 /// Walk an extent SSA value (the same op set ``traceExtentExpr`` handles:
 /// convert / select / cmp / addi-subi-muli-divsi-divui / maxsi-minsi-etc /
@@ -230,10 +227,8 @@ constIndexedElementLoad(mlir::Value v);
 /// in the shape -- not just the ones that also appear in a loop bound --
 /// so each shape symbol gets its ``symbol_init``.  ``fn`` should be
 /// idempotent (the position-symbol registry already dedups).
-void forEachConstIndexedElement(
-    mlir::Value v,
-    const std::function<void(const std::string&, const std::vector<int64_t>&)>&
-        fn);
+void forEachConstIndexedElement(mlir::Value v,
+                                const std::function<void(const std::string&, const std::vector<int64_t>&)>& fn);
 
 /// Decoded ``hlfir.declare`` / ``fir.declare`` shape operand.  Per the
 /// FIR/HLFIR op defs it is exactly one of:
@@ -269,6 +264,22 @@ llvm::SmallVector<mlir::Value, 4> extractExtents(mlir::Value shape);
 /// as its own SDFG data container, (b) walk index expressions through
 /// the inner (callee) frame to the outer (caller) frame.
 hlfir::DeclareOp asAssumedShapeAlias(hlfir::DeclareOp decl);
+
+/// Peel the storage-transparent reinterpret ops off ``v`` and return the
+/// underlying memref value, stopping at the first op that is NOT a transparent
+/// box/reference wrapper (``hlfir.designate``, ``hlfir.declare``, ``fir.alloca``,
+/// a block argument, arithmetic, ...).  The peeled ops -- ``fir.convert``,
+/// ``fir.load``, ``fir.embox``, ``fir.rebox``, ``fir.box_addr``,
+/// ``hlfir.copy_in``, ``fir.coordinate_of``, ``hlfir.as_expr`` -- all preserve
+/// the underlying storage identity, so EVERY storage/access-path walker peels
+/// the SAME set.  This is the single source of truth for that peel: hand-rolling
+/// per-loop subsets is what caused the ``fir.embox`` resolution gap (a
+/// polymorphic ``CLASS(t)`` dummy bound to a pointer member emboxes the actual,
+/// and a walker missing the embox peel stopped early and kept the dummy's local
+/// name) and the latent ``as_expr``/``coord``/``copy_in`` gaps.  Callers handle
+/// the terminal designate/declare and any semantic alias (``asAssumedShapeAlias``,
+/// the inlined-dummy component gate) themselves.  ``maxDepth`` bounds the walk.
+mlir::Value peelBoxReinterpret(mlir::Value v, int maxDepth = limits::kAliasMemrefWalkDepth);
 
 /// True iff ``mr`` (a declare's memref) leads -- through the usual
 /// reinterpret peels (convert / load / rebox / box_addr) -- to an
