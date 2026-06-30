@@ -461,6 +461,16 @@ def _install_user_pgrid(ctx, comm_arg: str):
     from dace_fortran.data import FortranProcessGrid
 
     sdfg = ctx.sdfg
+    # Track every comm scalar converted to the user pgrid so a post-emit sweep
+    # (:func:`drop_user_comm_scalar_nodes`) can remove its now-orphan access
+    # nodes + the dead ``<local> = comm`` copy tasklets.  The descriptor is
+    # popped here, but the wrapper-body assignment that wrote the comm local
+    # (``com = comm`` in ``p_barrier``, ``p_comm = comm`` in ``p_isend`` &c.)
+    # persists as a dangling access node otherwise -- the ICON halo inlines
+    # several such wrappers, each with its own comm copy.
+    if not hasattr(sdfg, "_fortran_dropped_comms"):
+        sdfg._fortran_dropped_comms = set()
+    sdfg._fortran_dropped_comms.add(comm_arg)
     if _USER_PGRID_NAME in sdfg.arrays:
         # Already installed by an earlier MPI call in the same kernel.
         # Still need to remove the orphan ``comm`` scalar -- it might be
@@ -514,6 +524,35 @@ def _install_user_pgrid(ctx, comm_arg: str):
     sdfg._fortran_user_comm_source = comm_arg
 
 
+def drop_user_comm_scalar_nodes(sdfg):
+    """Post-emit sweep removing the orphan access nodes (+ dead ``<local> = comm``
+    copy tasklets) of comm scalars converted to the user process grid.
+
+    :func:`_install_user_pgrid` pops each comm scalar's DESCRIPTOR -- the MPI
+    library nodes wire to the ``dace_user_pgrid`` connector instead -- but the
+    wrapper-body assignment that wrote the comm local (``com = comm`` in
+    ``p_barrier``, ``p_comm = comm`` in ``p_isend``/``p_irecv``/...) persists as a
+    dangling access node whose ``desc()`` then ``KeyError``s in
+    ``prune_unused_arrays``.  Drop those nodes; a copy tasklet left with no live
+    output is dead and is dropped too (its now-unused comm read source prunes
+    normally).  Must run AFTER all emit and BEFORE ``prune_unused_arrays``."""
+    import dace
+
+    dropped = getattr(sdfg, "_fortran_dropped_comms", None)
+    if not dropped:
+        return
+    targets = [(parent, node) for node, parent in sdfg.all_nodes_recursive()
+               if isinstance(node, dace.nodes.AccessNode) and node.data in dropped]
+    for state, node in targets:
+        if node not in state.nodes():
+            continue  # already removed via an earlier node's writer sweep
+        writers = [e.src for e in state.in_edges(node) if isinstance(e.src, dace.nodes.Tasklet)]
+        state.remove_node(node)  # also removes incident edges
+        for w in writers:
+            if w in state.nodes() and state.out_degree(w) == 0:
+                state.remove_node(w)
+
+
 def emit_mpi(builder, ctx, n, region):
     """Lower a recognised Fortran MPI point-to-point call
     (``kind == 'mpicall'``) to a ``dace.libraries.mpi`` library node.
@@ -523,6 +562,7 @@ def emit_mpi(builder, ctx, n, region):
     * ``mpi_send`` / ``mpi_recv``  -- ``[buffer, partner, tag]``
     * ``mpi_isend`` / ``mpi_irecv`` -- ``[buffer, partner, tag, request]``
     * ``mpi_wait``                 -- ``[request]``
+    * ``mpi_waitall``              -- ``[requests]`` (array of requests; count derived)
 
     ``partner`` is the dest rank for (i)send, the source rank for
     (i)recv.  count is implicit in the buffer memlet, the MPI datatype
@@ -603,6 +643,28 @@ def emit_mpi(builder, ctx, n, region):
                                   memlet=Memlet.simple(sname, "0:1", num_accesses=1))
         return
 
+    if n.callee == 'mpi_waitall':
+        # ``MPI_Waitall`` over an array of requests.  The producers (isend/irecv into
+        # that request array) and this waitall share the per-name ``_mpireq_<req>``
+        # opaque transient, so the read here is an explicit dataflow dependency that
+        # orders the waitall after them (reinforced by the ``__mpi_order`` chain).
+        # ``Waitall`` has only a ``_request`` input (no status outputs) and derives the
+        # count from the request memlet's element count.
+        from dace.libraries.mpi.nodes.wait import Waitall
+        (req, ) = n.call_args
+        rname = _req_array(req)
+        node = Waitall(f'_mpi_waitall_{builder.nid()}')
+        node.in_connectors = {
+            c: (dace.pointer(dace.dtypes.opaque("MPI_Request")) if c == '_request' else t)
+            for c, t in node.in_connectors.items()
+        }
+        state.add_node(node)
+        state.add_memlet_path(acc(builder, state, rname),
+                              node,
+                              dst_conn='_request',
+                              memlet=Memlet.simple(rname, "0:1", num_accesses=1))
+        return
+
     if n.callee == 'mpi_alltoall':
         # ``call_args``: [sendbuf, recvbuf, optional comm].  The Alltoall
         # library node has fixed ``_inbuffer`` / ``_outbuffer`` connectors
@@ -619,18 +681,31 @@ def emit_mpi(builder, ctx, n, region):
         return
 
     def _wire_user_comm(node, comm):
-        """Thread an optional user communicator into a collective node via the
-        ``_grid`` connector (a ``FortranProcessGrid`` built from the Fortran comm
-        at init), matching the point-to-point ``_wire_grid`` contract.  No-op for
-        the default ``MPI_COMM_WORLD`` (``comm`` is ``None``)."""
+        """Thread an optional user communicator into an MPI node via a ``_comm``
+        input connector carrying an ``opaque(MPI_Comm)`` value.
+
+        The Fortran ``INTEGER`` communicator handle ``comm`` is converted to a C
+        ``MPI_Comm`` by a ``CommF2c`` dataflow node (``MPI_Comm_f2c``); the result
+        is WRITTEN into an ``opaque(MPI_Comm)`` transient and READ by ``node``'s
+        ``_comm`` connector.  The communicator is thus a first-class opaque value
+        that flows through the graph -- no Cartesian ``MPI_Cart_create`` (the
+        exchange is plain point-to-point on the pattern's own comm), no dropped
+        scalar, and multiple distinct communicators are supported naturally.
+        Library nodes resolve ``_comm`` ahead of ``_grid`` (see ``resolve_comm``).
+        No-op for the default ``MPI_COMM_WORLD`` (``comm`` is ``None``)."""
         if comm is None:
             return
-        _install_user_pgrid(ctx, comm)
-        node.add_in_connector('_grid', dace.dtypes.opaque("MPI_Comm"))
-        state.add_memlet_path(acc(builder, state, _USER_PGRID_NAME),
-                              node,
-                              dst_conn='_grid',
-                              memlet=Memlet(data=_USER_PGRID_NAME, subset='0'))
+        from dace.libraries.mpi.nodes.comm_f2c import CommF2c
+        sd = ctx.sdfg
+        cname = f'__mpicomm_{builder.nid()}'
+        sd.add_scalar(cname, dace.dtypes.opaque("MPI_Comm"), transient=True)
+        f2c = CommF2c(f'_mpi_commf2c_{builder.nid()}')
+        state.add_node(f2c)
+        state.add_edge(acc(builder, state, comm), None, f2c, '_fcomm', Memlet(data=comm, subset='0'))
+        cw = state.add_access(cname)
+        state.add_edge(f2c, '_comm', cw, None, Memlet(data=cname, subset='0'))
+        node.add_in_connector('_comm', dace.dtypes.opaque("MPI_Comm"))
+        state.add_edge(cw, None, node, '_comm', Memlet(data=cname, subset='0'))
 
     if n.callee == 'mpi_barrier':
         # ``call_args``: [] or [comm].  Pure synchronisation, no data buffers --
@@ -685,37 +760,13 @@ def emit_mpi(builder, ctx, n, region):
     # request); one extra entry is the comm.
     _comm_base = 4 if n.callee in ('mpi_isend', 'mpi_irecv') else 3
     comm = n.call_args[_comm_base] if len(n.call_args) > _comm_base else None
-    if comm is not None:
-        # Replace the opaque-MPI_Comm scalar wiring with a
-        # ``FortranProcessGrid`` whose ``MPI_Cart_create`` parent is the
-        # user-supplied communicator.  At ``__dace_init`` time the
-        # bindings wrapper converts the Fortran integer comm to a C
-        # ``MPI_Comm`` and passes it as the ``__user_comm`` symbol; the
-        # pgrid's ``init_code`` then runs
-        # ``MPI_Cart_create(__user_comm, ...)`` and the resulting
-        # cartesian sub-comm lives in ``__state->__user_pgrid``.  Every
-        # MPI library node wires ``_comm`` (matching the stock
-        # Send/Recv connector contract) to an access node on
-        # ``__user_pgrid`` -- the codegen substitutes the
-        # ``__state->__user_pgrid`` reference, so the C tasklet line
-        # ``MPI_Send(..., _comm)`` invokes on the cartesian comm.
-        _install_user_pgrid(ctx, comm)
 
     def _wire_grid(node):
-        """Add a ``_grid`` input connector + memlet wired to the
-        ``FortranProcessGrid`` access node when a user communicator is
-        present (no-op for default ``MPI_COMM_WORLD``).  Matches the
-        collective nodes' ``_grid`` connector contract -- the point-to-point
-        node's expansion resolves the communicator via
-        ``input_descriptor_name(node, .., '_grid')`` and emits the cartesian
-        sub-comm, identical to Bcast/Scatter/Gather."""
-        if comm is None:
-            return
-        node.add_in_connector('_grid', dace.dtypes.opaque("MPI_Comm"))
-        state.add_memlet_path(acc(builder, state, _USER_PGRID_NAME),
-                              node,
-                              dst_conn='_grid',
-                              memlet=Memlet(data=_USER_PGRID_NAME, subset='0'))
+        """Wire the optional user communicator into the point-to-point node via a
+        ``_comm`` connector (an ``opaque(MPI_Comm)`` ``CommF2c``-d from the Fortran
+        handle); shares ``_wire_user_comm`` with the collectives.  No-op for the
+        default ``MPI_COMM_WORLD`` (``comm`` is ``None``)."""
+        _wire_user_comm(node, comm)
 
     if n.callee == 'mpi_send':
         from dace.libraries.mpi.nodes.send import Send
@@ -1346,23 +1397,19 @@ def emit_call(builder, ctx, n, region):
         from dataclasses import replace
         from dace.data import Scalar
         if group_pairs:
-            raise ValueError(
-                f"external {callee!r}: the call site marshalled a derived-type "
-                f"argument (aos), which has no default C ABI.  Register an "
-                f"authored signature -- e.g. keep_external({callee!r}, "
-                f"args=[..., Arg(kind='aos', c_abi=...)]) -- instead of a bare "
-                f"ExternalFunction.")
+            raise ValueError(f"external {callee!r}: the call site marshalled a derived-type "
+                             f"argument (aos), which has no default C ABI.  Register an "
+                             f"authored signature -- e.g. keep_external({callee!r}, "
+                             f"args=[..., Arg(kind='aos', c_abi=...)]) -- instead of a bare "
+                             f"ExternalFunction.")
         derived: list = []
         for name in names:
             desc = ctx.sdfg.arrays.get(name)
             if desc is not None and not isinstance(desc, Scalar):
-                derived.append(Arg(kind='array', dtype=desc.dtype.to_string(),
-                                   intent='inout'))
+                derived.append(Arg(kind='array', dtype=desc.dtype.to_string(), intent='inout'))
             else:
                 dt = desc.dtype if desc is not None else ctx.sdfg.symbols.get(name)
-                derived.append(Arg(kind='scalar',
-                                   dtype=dt.to_string() if dt is not None else 'int32',
-                                   intent='in'))
+                derived.append(Arg(kind='scalar', dtype=dt.to_string() if dt is not None else 'int32', intent='in'))
         sig = replace(sig, args=tuple(derived))
 
     # Expand ``sig.args`` to a per-call-arg plan.  An ``aos`` signature arg was

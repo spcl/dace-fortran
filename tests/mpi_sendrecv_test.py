@@ -174,58 +174,57 @@ def test_isend_irecv_wait_lower_to_mpi_libnodes(tmp_path: Path):
     sdfg.validate()
 
 
-def test_runtime_communicator_lowers_to_grid_connector(tmp_path: Path):
-    """A non-default (runtime dummy) communicator is supported via a
-    :class:`FortranProcessGrid` descriptor: the ``Send`` node gains an
-    ``opaque(MPI_Comm)`` ``_grid`` in-connector wired to
-    ``dace_user_pgrid`` -- the same process-grid connector contract the
-    collective nodes (Bcast/Scatter/Gather) use, so point-to-point and
-    collective ops thread the communicator identically.  The pgrid's
-    parent comm is the ``dace_user_comm`` symbol the bindings wrapper
-    populates from ``MPI_Comm_f2c`` at ``__dace_init`` time.  The original
-    Fortran integer ``comm`` dummy is dropped from ``sdfg.arrays`` -- the C
-    MPI_Comm value flows through the pgrid's parent-comm symbol, not
-    through a kernel call arg."""
+def test_runtime_communicator_lowers_to_comm_connector(tmp_path: Path):
+    """A non-default (runtime dummy) communicator flows as opaque dataflow.
+
+    The Fortran ``integer`` comm handle is converted by a ``CommF2c`` node
+    (``MPI_Comm_f2c``) into an ``opaque(MPI_Comm)`` value that feeds the
+    ``Send`` node's ``_comm`` in-connector.  The communicator is a first-class
+    value the SDFG reads (from the Fortran handle) and writes (to ``_comm``),
+    so multiple distinct communicators are supported and the host can pass /
+    receive one across the boundary.  The Fortran handle is KEPT in
+    ``sdfg.arrays`` (``CommF2c`` reads it) -- this supersedes the legacy
+    process-grid path, which dropped the handle and wired a ``_grid``
+    cartesian sub-comm connector instead."""
     import dace
     from dace.libraries.mpi.nodes.send import Send
-    from dace_fortran.data import FortranProcessGrid
+    from dace.libraries.mpi.nodes.comm_f2c import CommF2c
 
     sdfg = _build(_USER_COMM, tmp_path, "sr_usercomm", "sr_usercomm")
 
     sends = [n for n, _ in sdfg.all_nodes_recursive() if isinstance(n, Send)]
     assert len(sends) == 1, f"expected 1 Send node, got {len(sends)}"
-    assert '_grid' in sends[0].in_connectors
+    # Communicator threads in via an opaque(MPI_Comm) ``_comm`` connector, not
+    # the legacy ``_grid`` process-grid connector.
+    assert '_comm' in sends[0].in_connectors
+    assert '_grid' not in sends[0].in_connectors
+    assert isinstance(sends[0].in_connectors['_comm'], dace.dtypes.opaque)
+    assert sends[0].in_connectors['_comm'].ctype == 'MPI_Comm'
 
-    # The orphan Fortran ``integer`` comm dummy was removed -- a
-    # FortranProcessGrid descriptor took its place.
-    assert 'comm' not in sdfg.arrays, (
-        "the Fortran integer ``comm`` dummy should be dropped from "
-        "sdfg.arrays once the pgrid takes over wiring")
-    assert 'dace_user_pgrid' in sdfg.arrays
-    pgrid = sdfg.arrays['dace_user_pgrid']
-    assert isinstance(pgrid, FortranProcessGrid)
-    assert pgrid.parent_comm_symbol == 'dace_user_comm'
+    # Exactly one CommF2c node, reading the Fortran integer ``comm`` handle on
+    # ``_fcomm`` and producing the opaque(MPI_Comm) the Send consumes.
+    f2cs = [n for n, _ in sdfg.all_nodes_recursive() if isinstance(n, CommF2c)]
+    assert len(f2cs) == 1, f"expected 1 CommF2c node, got {len(f2cs)}"
+    fcomm_srcs = [
+        e.data.data for st in sdfg.states() for n in st.nodes()
+        if isinstance(n, CommF2c) for e in st.in_edges(n) if e.dst_conn == '_fcomm'
+    ]
+    assert fcomm_srcs == ['comm'], f"CommF2c must read the Fortran comm handle, got {fcomm_srcs}"
 
-    # Init/exit code references our pgrid (via state).
-    assert 'dace_user_pgrid' in sdfg.init_code['frame'].code
-    assert 'dace_user_pgrid' in sdfg.exit_code['frame'].code
-
-    # ``dace_user_comm`` is now an opaque(MPI_Comm) symbol the bindings
-    # wrapper must populate from ``MPI_Comm_f2c``.
-    assert 'dace_user_comm' in sdfg.symbols
-    assert isinstance(sdfg.symbols['dace_user_comm'], dace.dtypes.opaque)
-    assert sdfg.symbols['dace_user_comm'].ctype == 'MPI_Comm'
+    # The Fortran integer ``comm`` handle is KEPT (read by CommF2c), and no
+    # process grid is created -- the opaque-dataflow path replaces it.
+    assert 'comm' in sdfg.arrays, "the Fortran integer comm handle is read by CommF2c, so it is kept"
+    assert 'dace_user_pgrid' not in sdfg.arrays, "the process-grid path is superseded by CommF2c/_comm"
 
     sdfg.validate()
 
-    # The wired ``_grid`` connector must actually drive the emitted MPI call:
-    # the expanded Send must issue ``MPI_Send(..., _grid)`` on the user
-    # communicator's cartesian sub-comm, NOT ``MPI_COMM_WORLD``.  (Regression
-    # guard: send.py/recv.py once materialised ``_grid`` but still hardcoded
-    # ``MPI_COMM_WORLD`` in the call, mis-routing every user-comm Send/Recv
-    # onto the world communicator -> deadlock under ``mpirun``.)
+    # The wired ``_comm`` connector must actually drive the emitted MPI call:
+    # the expanded Send must issue ``MPI_Send(..., _comm)`` on the user
+    # communicator, NOT ``MPI_COMM_WORLD``.  (Regression guard: send.py/recv.py
+    # once materialised the connector but still hardcoded ``MPI_COMM_WORLD`` in
+    # the call, mis-routing every user-comm Send/Recv onto the world
+    # communicator -> deadlock under ``mpirun``.)
     codes = _expanded_mpi_call_codes(sdfg)
     assert len(codes) == 1, f"expected 1 Send tasklet, got {len(codes)}"
-    assert "_grid" in codes[0], f"user-comm Send must use ``_grid``: {codes[0]!r}"
-    assert "MPI_COMM_WORLD" not in codes[0], (
-        f"user-comm Send must NOT fall back to MPI_COMM_WORLD: {codes[0]!r}")
+    assert "_comm" in codes[0], f"user-comm Send must use ``_comm``: {codes[0]!r}"
+    assert "MPI_COMM_WORLD" not in codes[0], (f"user-comm Send must NOT fall back to MPI_COMM_WORLD: {codes[0]!r}")
