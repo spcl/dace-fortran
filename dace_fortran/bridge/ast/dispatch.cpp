@@ -328,7 +328,19 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
       if (dst_is_array && src_is_array) {
         out.push_back(buildCopyNode(assign));
       } else if (dst_is_array && !src_is_array && isConstantZero(src)) {
-        out.push_back(buildMemsetNode(assign));
+        // A section zero-fill (``a(:, :, blockno) = 0``) must write ONLY the
+        // section via the loop-based scalar broadcast -- a whole-array memset
+        // clobbers the out-of-section elements (ICON ``rot_vec_v(:, :, blockno)
+        // = 0`` inside a block loop was zeroing EVERY block, dropping the
+        // caller's out-of-domain intent(inout) data).  Only a WHOLE-array dest
+        // (no triplet designate) becomes a memset.
+        std::vector<ASTNode> secNodes;
+        if (auto sec = asSectionDesignate(dst))
+          secNodes = buildSectionScalarAssign(assign, sec);
+        if (!secNodes.empty())
+          for (auto& sn : secNodes) out.push_back(std::move(sn));
+        else
+          out.push_back(buildMemsetNode(assign));
       } else {
         out.push_back(buildAssignNode(assign));
       }
@@ -2553,8 +2565,12 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
         nodes.push_back(buildCopyNode(assign));
         continue;
       }
-      // Scalar-zero -> array fill: MemsetLibraryNode.
-      if (dst_is_array && !src_is_array && isConstantZero(src)) {
+      // Scalar-zero -> array fill: MemsetLibraryNode -- but ONLY for a WHOLE
+      // array.  A section zero-fill (``a(:, :, blockno) = 0``) falls through to
+      // the section-scalar loop below; a whole-array memset would clobber the
+      // out-of-section elements (ICON ``rot_vec_v(:, :, blockno) = 0`` in a
+      // block loop dropped every other block's intent(inout) data).
+      if (dst_is_array && !src_is_array && isConstantZero(src) && !asSectionDesignate(dst)) {
         nodes.push_back(buildMemsetNode(assign));
         continue;
       }

@@ -13,18 +13,22 @@ module-variable-extent forwarding fix (``tracer(nproma, n_zlev)`` ->
 ``c_f_pointer`` resolves) and the struct-member AoS->SoA marshalling
 (``t_verticaladvection_ppm_coefficients``'s nine pointer members).
 
-ppm_vflux lowers + binds today.  coriolis_pv / veloc_adv_horz now lower, bind,
-compile and RUN through the auto shim (the bridge mis-typing and the
-flat-C-ABI struct reconstruction -- pointer-array-of-record patches indexed
-``(1)``, arrays of ``t_cartesian_coordinates`` scattered element-wise -- are
-fixed): the SDFG path and the original-Fortran reference execute identically
-(``max_diff == 0``).  They stay xfail only because the test feeds RANDOM
-``[1, n]`` mesh data, which for this index-heavy stencil drives empty loops
-(``start_block > end_block`` / ``get_index_range`` returns an empty range) so no
-output buffer changes -- ``n_changed == 0`` trips the vacuous-test guard.  A
-non-vacuous run needs a controlled valid-mesh fixture (single in-domain block,
-small edge range, ``no_dual_edges`` in bounds), tracked separately from the
-shim; veloc_adv_horz embeds the same coriolis routine.
+**ppm_vflux and coriolis_pv are BIT-EXACT (``max_diff == 0``) and PASS.**  Three
+fixes landed the coriolis class: (1) the ``edge2edge_viavert_coeff`` d3 offset
+(a struct-member lower-bound mis-inferred as 0 from a mutated accumulator's init
+-- ``traceConstIntThroughLoad`` no longer folds a target with a non-constant
+write); (2) section zero-fills (``rot_vec_v(:, :, blockno) = 0``) now write only
+the section via the loop broadcast instead of a whole-array memset that clobbered
+the caller's out-of-domain ``intent(inout)`` data; (3) the reference shim seeds
+the ICON grid-dimension module globals (``nproma`` / ``n_zlev``) from the C-ABI
+extents, mirroring ICON's namelist init (else the isolated reference reads them
+as 0 and sizes its automatic locals to zero -> OOB).  No ``int_fill`` needed:
+random in-bounds ``[1, n]`` indices are read identically on both sides.
+
+veloc_adv_horz still xfails -- it embeds the (now-correct) coriolis routine but
+adds its own velocity-advection connectivity that reads out of bounds on the
+random synthetic mesh (a remaining veloc_adv-specific lowering bug); tracked in
+``project_ocean_e2e_uninit_module_dims_rootcause``.
 """
 import shutil
 
@@ -55,34 +59,21 @@ _KERNELS = [
                      "vertical_limiter_type": 1,
                      "dtime": 60.0,
                  },
-                 marks=pytest.mark.xfail(reason="same RANDOM-synthetic-mesh blocker as coriolis_pv/ocean_veloc_adv: "
-                                         "DUT builds+runs but diverges from the reference (max|d|~2.9), and on some "
-                                         "hosts the reference kernel OOB-writes on the non-physical mesh and aborts "
-                                         "(heap corruption).  Needs the shared valid-mesh fixture; until then this is "
-                                         "the same expected failure as the other two.",
-                                         strict=False),
                  id="ppm_vflux"),
     pytest.param("coriolis_pv",
                  "coriolis_pv_single_tu.f90",
                  "mo_scalar_product::nonlinear_coriolis_3d_fast_scalar", {},
-                 marks=pytest.mark.xfail(reason="DUT executes and is correct on in-bounds outputs (p_vn_dual_x "
-                                         "bit-identical, vort_v agrees to 1e-14 once the kernel's own OOB is "
-                                         "avoided); full bit-exact vort_flux is blocked by the kernel reading/"
-                                         "writing OUT OF BOUNDS on synthetic indices (z_vt(4) vs bnd_edges, the "
-                                         "no_dual_edges+vertex_edge additive index) -- needs a valid-mesh "
-                                         "fixture so every index lands in bounds, tracked next.",
-                                         strict=True),
                  id="coriolis_pv"),
     pytest.param("ocean_veloc_adv",
                  "ocean_veloc_adv_single_tu.f90",
                  "mo_ocean_velocity_advection::veloc_adv_horz_mimetic_rot", {},
-                 marks=pytest.mark.xfail(reason="lowers + binds + runs + writes veloc_adv_horz_e (gate #12d: the "
-                                         "rank-3 cartesian p_diag%p_vn_dual member now marshals).  Not yet bit-exact: "
-                                         "it embeds nonlinear_coriolis_3d_fast_scalar, so it inherits coriolis_pv's "
-                                         "synthetic-mesh hazard -- pinning every connectivity/bound array to a "
-                                         "degenerate-consistent mesh drops max|d| 4.2->1.0 but a residual remains "
-                                         "(the kernel's own uninitialized/OOB reads on a non-physical mesh).  Needs "
-                                         "the same valid-mesh fixture as coriolis_pv, tracked there.",
+                 marks=pytest.mark.xfail(reason="coriolis_pv + ppm_vflux are now bit-exact (edge2edge d3 offset + "
+                                         "section-zero-fill bridge fixes + reference module-dim init).  veloc_adv "
+                                         "embeds nonlinear_coriolis_3d_fast_scalar AND adds its own velocity-advection "
+                                         "connectivity, which still reads OUT OF BOUNDS on the random synthetic mesh "
+                                         "(max|d|~2e183 overflow); a degenerate in-bounds fixture (int_fill=1) avoids "
+                                         "the OOB but leaves a residual ~1.72 -> a remaining lowering bug specific to "
+                                         "veloc_adv, tracked in project_ocean_e2e_uninit_module_dims_rootcause.",
                                          strict=True),
                  id="ocean_veloc_adv"),
 ]

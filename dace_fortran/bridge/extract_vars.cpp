@@ -733,9 +733,15 @@ static std::optional<int64_t> traceConstIntThroughLoad(mlir::Value v, mlir::func
   auto targetName = traceToDecl(target);
   const FuncWrites& w = funcWritesFor(func, writeCache);
   std::optional<int64_t> result;
+  bool anyNonConst = false;
+  size_t nWrites = 0;
   auto consider = [&](mlir::Value writeVal) {
-    if (auto c = traceConstIntThroughLoad(writeVal, func, writeCache, depth + 1, visited))
+    ++nWrites;
+    if (auto c = traceConstIntThroughLoad(writeVal, func, writeCache, depth + 1, visited)) {
       if (!result || *c < *result) result = c;
+    } else {
+      anyNonConst = true;
+    }
   };
   if (!targetName.empty()) {
     if (auto it = w.byName.find(targetName); it != w.byName.end())
@@ -743,7 +749,18 @@ static std::optional<int64_t> traceConstIntThroughLoad(mlir::Value v, mlir::func
   } else if (auto it = w.byValue.find(target); it != w.byValue.end()) {
     for (auto wv : it->second) consider(wv);
   }
-  if (result) return result;
+  // A target WRITTEN with a NON-constant value (a mutated accumulator like
+  // ``ictr = ictr + 1``, or a runtime / module-global source) is NOT a fixed
+  // literal: its constant inits (``ictr = 0``) do NOT determine its value at the
+  // access, so folding them poisons the lower-bound inference.  ICON's
+  // ``edge2edge_viavert_coeff(.., ictr)`` (ictr initialised to 0 then
+  // incremented) otherwise mis-infers lb=0 -> offset 0 -> an off-by-one read of
+  // that pointer member.  Only a target whose EVERY write folds -- a
+  // single-store inlined-callee dummy, or several constant call-site stores --
+  // yields a bound.  A DIRECT literal index (``a(-10)``) never reaches here (it
+  // folds at ``traceConstInt`` above), so genuine explicit negative bounds are
+  // unaffected.
+  if (result && !(anyNonConst && nWrites > 1)) return result;
 
   // No store reached -- the load may read a declare that aliases an
   // ``hlfir.associate`` (inlined by-value dummy with no explicit
@@ -3137,7 +3154,20 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
         // fills, not a transient read from uninitialised memory.  Function-
         // scope SAVE-locals (``_QF``) are excluded -- the caller can't bind
         // them.  ``v.intent.empty()`` keeps dummy-arg shadows untouched.
-        if (v.const_data.empty() && v.intent.empty() && gop && !isParameter && isModuleScope) v.intent = "inout";
+        //
+        // A module global that is ALSO a free SYMBOL (``v.role == "symbol"`` --
+        // a dimension like ``nproma``/``n_zlev`` that appears as an array extent,
+        // or an index offset ``collectIntegerScalarReads`` promoted) must NOT
+        // additionally become a zero-init ``inout`` DATA descriptor: the data
+        // container shadows the symbol, so the kernel's local automatic arrays
+        // (``this_vort_flux(n_zlev, 2)``) size from the 0-init data instead of
+        // the ``size()``-derived symbol -> 0-length transient -> OOB.  It stays a
+        // pure free symbol; ``recordModuleOrigin`` below still runs so the
+        // binding can populate the symbol from the module global
+        // (``<sym> = <sym>__mod``) when it is not derivable from a passed array's
+        // extent.
+        if (v.const_data.empty() && v.intent.empty() && v.role != "symbol" && gop && !isParameter && isModuleScope)
+          v.intent = "inout";
         // Record provenance for every read-only module global (initialised
         // or not), so the binding ``USE``-imports it.  An initialised
         // read-only global that took the ``const_data`` path bakes its

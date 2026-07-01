@@ -36,6 +36,19 @@ _HERE = Path(__file__).resolve().parent
 _NP = {"real(c_double)": np.float64, "integer(c_int)": np.int32, "logical(c_bool)": np.int8}
 _CT = {"real(c_double)": ctypes.c_double, "integer(c_int)": ctypes.c_int, "logical(c_bool)": ctypes.c_bool}
 
+# ICON keeps the grid DIMENSION parameters in module globals that the model
+# sets from its namelist at init.  An extracted kernel called in isolation reads
+# them UNINITIALISED (BSS = 0), which sizes the kernel's automatic local arrays
+# (``this_vort_flux(n_zlev, 2)``) to zero -> out-of-bounds.  The SDFG path is
+# immune (the bridge derives these as free symbols from the array extents), so a
+# faithful reference caller must set the module globals the same way ICON's
+# namelist read does -- from the C-ABI extent args the shim already receives.
+# Map each such value arg to the module that owns the same-named global.
+_ICON_MODULE_DIMS = {
+    "nproma": "mo_parallel_config",
+    "n_zlev": "mo_ocean_nml",
+}
+
 
 def _retarget_shim(shim: str, dace_name: str, entry: str) -> str:
     """Rewrite the auto ``<dace_name>_c`` shim into a ``<dace_name>_ref_c`` that
@@ -47,20 +60,32 @@ def _retarget_shim(shim: str, dace_name: str, entry: str) -> str:
     ``logical(c_bool)`` value args are coerced to the kernel's default
     ``LOGICAL`` (kind 4) at the call site -- the C ABI keeps logicals as
     ``c_bool``, and the conversion to the callee's logical kind happens here, the
-    same way the binding wrapper handles it for the SDFG path."""
+    same way the binding wrapper handles it for the SDFG path.
+
+    Grid DIMENSION module globals (:data:`_ICON_MODULE_DIMS`) the kernel reads
+    are seeded from the matching C-ABI extent arg before the call, mirroring
+    ICON's namelist init -- otherwise the isolated reference reads them as 0."""
     mod, proc = entry.split("::")
     proc = proc.lower()
     bool_args = set(re.findall(r"logical\(c_bool\),\s*value\s*::\s*(\w+)", shim))
+    value_args = set(re.findall(r"value\s*::\s*(\w+)", shim))
+    dim_globals = {a: m for a, m in _ICON_MODULE_DIMS.items() if a in value_args}
     out = []
     for ln in shim.splitlines():
         if ln.strip().startswith(f"use {dace_name}_dace_bindings"):
             out.append(f"  use {mod}, only: {proc}")
+            # ``<arg>__refmod => <module>::<arg>`` rename avoids clashing with the
+            # shim's same-named value dummy; seeded just before the call below.
+            for a, m in dim_globals.items():
+                out.append(f"  use {m}, only: {a}__refmod => {a}")
             continue
         if f"call {dace_name}_dace_finalize()" in ln:
             continue
         m = re.match(rf"(\s*)call {dace_name}_dace\((.*)\)\s*$", ln)
         if m:
             indent, arglist = m.group(1), m.group(2)
+            for a in dim_globals:
+                out.append(f"{indent}{a}__refmod = {a}")
             args = [a.strip() for a in arglist.split(",")]
             args = [f"logical({a})" if a in bool_args else a for a in args]
             out.append(f"{indent}call {proc}({', '.join(args)})")
@@ -139,8 +164,15 @@ def _run_in_fork(so_path, call_plan, inputs, ptr_args, sym, save_prefix: Path, s
     return status
 
 
-def _build_and_compare(tu_path: Path, entry: str, scalar_overrides: dict, array_overrides: dict, float_range: tuple,
-                       n: int, seed: int, out: Path):
+def _build_and_compare(tu_path: Path,
+                       entry: str,
+                       scalar_overrides: dict,
+                       array_overrides: dict,
+                       float_range: tuple,
+                       n: int,
+                       seed: int,
+                       out: Path,
+                       int_fill=None):
     """The worker body (runs in a subprocess): build DUT + REF, drive both,
     return ``(max_diff, n_changed)``.  Imports are deferred so the module loads
     cheaply in the parent (which only orchestrates the subprocess)."""
@@ -181,13 +213,20 @@ def _build_and_compare(tu_path: Path, entry: str, scalar_overrides: dict, array_
                 base = np.asfortranarray(np.full(shape, override, dtype=npdt))
             elif npdt == np.float64:
                 base = np.asfortranarray(rng.uniform(float_range[0], float_range[1], shape).astype(npdt))
+            elif int_fill is not None:  # degenerate valid mesh: every count/index/bound == int_fill
+                # A single in-domain block, one edge/vertex per connectivity slot, and every
+                # connectivity index pointing at element ``int_fill`` -> exactly one in-bounds
+                # iteration everywhere (no vacuous empty range, no out-of-bounds composite index).
+                base = np.asfortranarray(np.full(shape, int_fill, dtype=npdt))
             else:  # integer count / index array -> in-bounds [1, n]
                 base = np.asfortranarray(rng.integers(1, n + 1, shape).astype(npdt))
             inputs[arg] = base
             call_plan.append(("ptr", arg, ctypes.c_void_p))
         else:
             ft = value_ftype[arg]
-            v = scalar_overrides.get(arg, n if arg in dim_symbols else (60.0 if ft == "real(c_double)" else 0))
+            int_default = int_fill if int_fill is not None else 0
+            v = scalar_overrides.get(arg, n if arg in dim_symbols else
+                                     (60.0 if ft == "real(c_double)" else int_default))
             call_plan.append(("val", arg, _CT[ft], v))
 
     ptr_args = list(ptr_shape)
@@ -222,7 +261,8 @@ def run_kernel_e2e(tu_path: Path,
                    array_overrides=None,
                    float_range=(-1.0, 1.0),
                    n: int = 8,
-                   seed: int = 0) -> dict:
+                   seed: int = 0,
+                   int_fill=None) -> dict:
     """Run one kernel's e2e build+compare in an isolated subprocess.  Returns
     ``{passed, max_diff, n_changed, output}``.  ``passed`` is False (with the
     captured output) on any build / lowering / compile / run failure -- a
@@ -246,7 +286,8 @@ def run_kernel_e2e(tu_path: Path,
         json.dumps(list(float_range)),
         str(n),
         str(seed),
-        str(out)
+        str(out),
+        json.dumps(int_fill)
     ],
                           capture_output=True,
                           text=True,
@@ -259,11 +300,11 @@ def run_kernel_e2e(tu_path: Path,
 
 
 def _main(argv):
-    tu_path, entry, overrides_json, array_overrides_json, float_range_json, n, seed, out = argv[1:9]
+    tu_path, entry, overrides_json, array_overrides_json, float_range_json, n, seed, out, int_fill_json = argv[1:10]
     try:
         max_diff, n_changed = _build_and_compare(Path(tu_path), entry, json.loads(overrides_json),
                                                  json.loads(array_overrides_json), tuple(json.loads(float_range_json)),
-                                                 int(n), int(seed), Path(out))
+                                                 int(n), int(seed), Path(out), json.loads(int_fill_json))
         print(f"MAXDIFF: {max_diff}", flush=True)
         print(f"CHANGED: {n_changed}", flush=True)
         print("RESULT: PASS", flush=True)
