@@ -519,7 +519,7 @@ static std::string mpiCalleeTag(const std::string& callee) {
   if (s.rfind("_QP", 0) == 0) s.erase(0, 3);  // external/global mangling
   std::string low = llvm::StringRef(s).lower();
   if (low == "mpi_send" || low == "mpi_recv" || low == "mpi_isend" ||
-      low == "mpi_irecv" || low == "mpi_wait" || low == "mpi_alltoall" ||
+      low == "mpi_irecv" || low == "mpi_wait" || low == "mpi_waitall" || low == "mpi_alltoall" ||
       low == "mpi_barrier" || low == "mpi_allreduce" || low == "mpi_bcast")
     return low;
   return std::string{};
@@ -1193,6 +1193,18 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
     if (args.empty())
       throw std::runtime_error("MPI mpi_wait: no request argument");
     n.call_args = {resolve(args[0], "request")};
+    return n;
+  }
+
+  if (mpiOp == "mpi_waitall") {
+    // MPI_Waitall(count, array_of_requests, array_of_statuses, ierr).  The bridge
+    // threads completion through the per-request-NAME opaque transient (same as
+    // mpi_wait); ``array_of_requests`` resolves to its base array name, so a waitall
+    // on ``p_request(:)`` consumes the ``_mpireq_p_request`` token the matching
+    // isend/irecv producers wrote.  count / statuses are not modelled here (the
+    // dataflow token + the __mpi_order chain order the waitall after its producers).
+    if (args.size() < 2) throw std::runtime_error("MPI mpi_waitall: expected (count, requests, ...)");
+    n.call_args = {resolve(args[1], "requests")};
     return n;
   }
 
