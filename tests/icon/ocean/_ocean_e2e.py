@@ -36,21 +36,37 @@ _HERE = Path(__file__).resolve().parent
 _NP = {"real(c_double)": np.float64, "integer(c_int)": np.int32, "logical(c_bool)": np.int8}
 _CT = {"real(c_double)": ctypes.c_double, "integer(c_int)": ctypes.c_int, "logical(c_bool)": ctypes.c_bool}
 
-# ICON keeps the grid DIMENSION parameters in module globals that the model
-# sets from its namelist at init.  An extracted kernel called in isolation reads
-# them UNINITIALISED (BSS = 0), which sizes the kernel's automatic local arrays
-# (``this_vort_flux(n_zlev, 2)``) to zero -> out-of-bounds.  The SDFG path is
-# immune (the bridge derives these as free symbols from the array extents), so a
-# faithful reference caller must set the module globals the same way ICON's
-# namelist read does -- from the C-ABI extent args the shim already receives.
-# Map each such value arg to the module that owns the same-named global.
-_ICON_MODULE_DIMS = {
-    "nproma": "mo_parallel_config",
-    "n_zlev": "mo_ocean_nml",
-}
+
+def _size_derived_module_dims(binding: str):
+    """The ICON grid-DIMENSION module globals the DUT binding derives from an
+    array extent -- ``n_zlev = int(size(psi_c, dim=2), c_int)`` for the
+    ``mo_ocean_nml::n_zlev`` global, ``nproma`` from ``mo_parallel_config``, etc.
+
+    ICON sets these from its namelist at model init; an extracted kernel called
+    in isolation reads them UNINITIALISED (BSS = 0), which sizes the kernel's
+    automatic local arrays (``this_vort_flux(n_zlev, 2)``) to zero -> OOB.  The
+    SDFG path is immune (the bridge derives them as free symbols from the array
+    extents -- the ``size(...)`` lines this parses), so a faithful reference
+    caller must seed them the same way.  Every array extent in this harness is
+    the mesh size ``n``, so the reference sets each to ``n``.
+
+    Returns ``[(sym, module), ...]``.  Only module-origin syms (those the binding
+    imports as ``<sym>__mod => <sym>``) that ALSO carry a ``size()`` derivation
+    qualify -- a module-SOURCED global (``no_dual_edges = int(no_dual_edges__mod,
+    c_int)``) reads the same module default on both sides, so it needs no seed."""
+    sym_module = {}
+    for module, renames in re.findall(r"use\s+(\w+),\s*only:\s*([^\n]+)", binding):
+        for _alias, sym in re.findall(r"(\w+)__mod\s*=>\s*(\w+)", renames):
+            sym_module[sym] = module
+    seen, out = set(), []
+    for sym in re.findall(r"^\s*(\w+)\s*=\s*int\(size\(\w+,\s*dim=\d+\),\s*c_int\)", binding, re.M):
+        if sym in sym_module and sym not in seen:
+            seen.add(sym)
+            out.append((sym, sym_module[sym]))
+    return out
 
 
-def _retarget_shim(shim: str, dace_name: str, entry: str) -> str:
+def _retarget_shim(shim: str, dace_name: str, entry: str, module_dims=None, n_val=None) -> str:
     """Rewrite the auto ``<dace_name>_c`` shim into a ``<dace_name>_ref_c`` that
     calls the ORIGINAL kernel ``entry`` (``module::proc``) instead of the
     ``<dace_name>_dace`` binding.  The flat->struct reconstruction (header,
@@ -62,30 +78,30 @@ def _retarget_shim(shim: str, dace_name: str, entry: str) -> str:
     ``c_bool``, and the conversion to the callee's logical kind happens here, the
     same way the binding wrapper handles it for the SDFG path.
 
-    Grid DIMENSION module globals (:data:`_ICON_MODULE_DIMS`) the kernel reads
-    are seeded from the matching C-ABI extent arg before the call, mirroring
+    Grid DIMENSION module globals (``module_dims`` = ``[(sym, module), ...]`` from
+    :func:`_size_derived_module_dims`) the kernel reads are seeded to ``n_val``
+    (the mesh size -- every extent in this harness) before the call, mirroring
     ICON's namelist init -- otherwise the isolated reference reads them as 0."""
     mod, proc = entry.split("::")
     proc = proc.lower()
+    module_dims = module_dims or []
     bool_args = set(re.findall(r"logical\(c_bool\),\s*value\s*::\s*(\w+)", shim))
-    value_args = set(re.findall(r"value\s*::\s*(\w+)", shim))
-    dim_globals = {a: m for a, m in _ICON_MODULE_DIMS.items() if a in value_args}
     out = []
     for ln in shim.splitlines():
         if ln.strip().startswith(f"use {dace_name}_dace_bindings"):
             out.append(f"  use {mod}, only: {proc}")
-            # ``<arg>__refmod => <module>::<arg>`` rename avoids clashing with the
-            # shim's same-named value dummy; seeded just before the call below.
-            for a, m in dim_globals.items():
-                out.append(f"  use {m}, only: {a}__refmod => {a}")
+            # ``<sym>__refmod => <module>::<sym>`` rename avoids clashing with any
+            # same-named shim local; seeded just before the call below.
+            for sym, module in module_dims:
+                out.append(f"  use {module}, only: {sym}__refmod => {sym}")
             continue
         if f"call {dace_name}_dace_finalize()" in ln:
             continue
         m = re.match(rf"(\s*)call {dace_name}_dace\((.*)\)\s*$", ln)
         if m:
             indent, arglist = m.group(1), m.group(2)
-            for a in dim_globals:
-                out.append(f"{indent}{a}__refmod = {a}")
+            for sym, _module in module_dims:
+                out.append(f"{indent}{sym}__refmod = {n_val}")
             args = [a.strip() for a in arglist.split(",")]
             args = [f"logical({a})" if a in bool_args else a for a in args]
             out.append(f"{indent}call {proc}({', '.join(args)})")
@@ -183,9 +199,14 @@ def _build_and_compare(tu_path: Path,
     dace_name = sdfg.name  # bind(c) symbols + SDFG exports key off this, NOT name=
     lib = build_fortran_library(sdfg, out_dir=str(out / "lib"), prelude_sources=[tu_path], bind_c_shim=True)
     shim = Path(lib.bind_c_shim_f90).read_text()
+    # Seed the reference's grid-dimension module globals (nproma / n_zlev) the DUT
+    # binding derives from array extents -- else the isolated reference reads them
+    # as 0 and OOBs.  Recovered from the binding's ``<sym> = int(size(...))`` lines.
+    binding_files = list((out / "lib").glob("*bindings.f90"))
+    module_dims = _size_derived_module_dims(binding_files[0].read_text()) if binding_files else []
 
     ref_shim = out / f"{dace_name}_ref_c.f90"
-    ref_shim.write_text(_retarget_shim(shim, dace_name, entry))
+    ref_shim.write_text(_retarget_shim(shim, dace_name, entry, module_dims, n))
     ref_so = out / f"lib{dace_name}_ref.so"
     r = subprocess.run([
         "gfortran", "-shared", "-fPIC", "-ffree-line-length-none", "-fallow-argument-mismatch", "-o",
