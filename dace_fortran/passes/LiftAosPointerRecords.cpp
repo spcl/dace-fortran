@@ -45,6 +45,8 @@
 
 #include <optional>
 #include <string>
+#include <tuple>
+#include <variant>
 
 #include "flang/Optimizer/Dialect/FIROps.h"
 #include "flang/Optimizer/Dialect/FIRType.h"
@@ -106,6 +108,7 @@ struct Rebind {
   std::string memberName;
   hlfir::DeclareOp targetDecl;
   fir::StoreOp store;
+  mlir::Value boxValue;  ///< the pointer box assigned by the rebind (the view's target box)
 };
 
 static std::optional<int64_t> constInt(mlir::Value v) {
@@ -385,6 +388,7 @@ static std::optional<Rebind> matchRebindStore(fir::StoreOp store, const Candidat
   r.outerIdx = *outerC;
   r.memberName = memberName.str();
   r.store = store;
+  r.boxValue = store.getValue();
   r.targetDecl = traceTarget(store.getValue());
   if (!r.targetDecl) return std::nullopt;
   return r;
@@ -526,20 +530,9 @@ static void emitCopyLoop(mlir::OpBuilder& b, mlir::Location loc, mlir::Operation
   (void)idxTy;
 }
 
-/// Rewrite every access through ``q(idx)%member`` to designate over
-/// ``q_<member>(idx, ...)``.  The shape we recognise:
-///
-///   %elem = hlfir.designate %aosDecl (idx)
-///   %slot = hlfir.designate %elem{member} {pointer}
-///   %box  = fir.load %slot          -- target box
-///   %addr = fir.box_addr %box       -- raw data pointer (sometimes)
-///   %dg   = hlfir.designate %box (i, j, ...)  -- element ref
-///                          OR
-///           hlfir.designate %addr (i, j, ...)
-///
-/// We replace each ``%dg`` with a fresh designate over the matching
-/// concat declare and let later canonicalisation prune the now-dead
-/// load / box_addr / slot chain.
+/// Rewrite one element designate ``q(idx)%m(i, j, ...)`` (reached through the box
+/// load) to a direct scalar designate over ``concat(idx, i, j, ...)``.  Scalar
+/// subscripts only -- safe to feed loop bounds / conditions / interstate edges.
 static void rewriteAccess(mlir::OpBuilder& b, hlfir::DesignateOp innerDg, mlir::Value outerIdxVal,
                           hlfir::DeclareOp concatDecl) {
   mlir::OpBuilder::InsertionGuard g(b);
@@ -551,25 +544,91 @@ static void rewriteAccess(mlir::OpBuilder& b, hlfir::DesignateOp innerDg, mlir::
   llvm::SmallVector<mlir::Value, 5> newIdxs;
   newIdxs.push_back(outerCast);
   for (auto idx : innerDg.getIndices()) newIdxs.push_back(idx);
-  auto newDg = b.create<hlfir::DesignateOp>(innerDg.getLoc(), innerDg.getResult().getType(), concatDecl.getResult(0),
-                                            mlir::ValueRange{newIdxs});
+  auto newDg = b.create<hlfir::DesignateOp>(innerDg.getLoc(), innerDg.getResult().getType(),
+                                            concatDecl.getResult(0), mlir::ValueRange{newIdxs});
   innerDg.getResult().replaceAllUsesWith(newDg.getResult());
 }
 
-/// Walk all uses of ``q``'s declare and rewrite every access chain
-/// through ``q(idx)%member`` to a direct designate over the matching
-/// concat declare.  Returns the count of rewritten access chains.
+/// Build a box of the gather-buffer slice ``concat(idx, 1:d1:1, ...)`` -- the
+/// idx-th rebind target's worth of the concat -- typed to match the original
+/// pointer box ``loadBoxTy`` so it can replace a ``fir.load`` of ``q(idx)%member``
+/// directly.  Every whole-box use (element designate, ``fir.box_dims`` shape
+/// query, ``fir.rebox``) then retargets to the concat with no per-use rewrite.
+static mlir::Value buildConcatSliceBox(mlir::OpBuilder& b, mlir::Location loc, hlfir::DeclareOp concatDecl,
+                                       mlir::Value outerIdx, mlir::Type loadBoxTy) {
+  // The original access is a box load, so the type is a box; bail (no rewrite)
+  // if not.  Reuse the concat declare's already-resolved per-dim extents: the
+  // leading dim is the outer N, the rest the inner shape, with any dynamic inner
+  // extent already materialised (as ``box_dims`` on the rebind target) at the
+  // concat's creation site -- which dominates every read site we rewrite here.
+  auto loadBox = mlir::dyn_cast<fir::BoxType>(loadBoxTy);
+  if (!loadBox) return {};
+  auto shapeOp = concatDecl.getShape() ? concatDecl.getShape().getDefiningOp<fir::ShapeOp>() : nullptr;
+  if (!shapeOp || shapeOp.getExtents().size() < 2) return {};
+  auto allExtents = shapeOp.getExtents();
+  auto idxTy = b.getIndexType();
+  mlir::Value outerCast = outerIdx;
+  if (outerCast.getType() != idxTy) outerCast = b.create<fir::ConvertOp>(loc, idxTy, outerCast).getResult();
+  mlir::Value one = b.create<mlir::arith::ConstantOp>(loc, b.getIndexAttr(1)).getResult();
+  using Subscript = std::variant<mlir::Value, std::tuple<mlir::Value, mlir::Value, mlir::Value>>;
+  llvm::SmallVector<Subscript, 5> subs;
+  subs.push_back(outerCast);  // scalar outer index -> drops the N dim
+  llvm::SmallVector<mlir::Value, 4> extents;
+  for (unsigned d = 1; d < allExtents.size(); ++d) {  // skip the leading outer-N dim
+    mlir::Value ext = allExtents[d];
+    if (ext.getType() != idxTy) ext = b.create<fir::ConvertOp>(loc, idxTy, ext).getResult();
+    extents.push_back(ext);
+    subs.push_back(std::make_tuple(one, ext, one));  // full inner range 1:ext:1
+  }
+  mlir::Value shape = b.create<fir::ShapeOp>(loc, extents).getResult();
+  mlir::Type innerEle = loadBox.getEleTy();
+  if (auto pt = mlir::dyn_cast<fir::PointerType>(innerEle))
+    innerEle = pt.getEleTy();
+  else if (auto ht = mlir::dyn_cast<fir::HeapType>(innerEle))
+    innerEle = ht.getEleTy();
+  auto sliceBoxTy = fir::BoxType::get(innerEle);
+  mlir::Value sliceBox = b.create<hlfir::DesignateOp>(loc, sliceBoxTy, concatDecl.getResult(0), llvm::StringRef{},
+                                                      mlir::Value{}, subs, mlir::ValueRange{}, std::optional<bool>{},
+                                                      shape, mlir::ValueRange{}, fir::FortranVariableFlagsAttr{})
+                             .getResult();
+  if (sliceBox.getType() != loadBoxTy) sliceBox = b.create<fir::ConvertOp>(loc, loadBoxTy, sliceBox).getResult();
+  return sliceBox;
+}
+
+/// Replace every box load of ``q(idx)%member`` with a slice box of the gather
+/// buffer (``concat(idx, ...)``).  Element designates, shape queries and reboxes
+/// over that box then all read the concat; the now-dead load / member-slot /
+/// element-designate chain is swept by ``eraseDeadAosChain``.  Reads reach the
+/// slot directly or behind a re-``hlfir.declare`` / ``fir.rebox`` / ``fir.embox`` /
+/// ``fir.convert`` alias the fresh flang IR interposes -- follow those forward.
 static unsigned rewriteAllAccesses(mlir::OpBuilder& b, Candidate& cand,
                                    const llvm::DenseMap<llvm::StringRef, hlfir::DeclareOp>& concatByMember) {
   unsigned rewritten = 0;
-  // Snapshot users -- replaceAllUsesWith below would invalidate a live
-  // user iterator.
   llvm::SmallVector<hlfir::DesignateOp, 8> elemDesignates;
-  for (auto* u : cand.aosDecl.getResult(0).getUsers())
-    if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u))
-      if (dg.getIndices().size() == 1) elemDesignates.push_back(dg);
+  llvm::SmallVector<mlir::Value, 4> aliasRoots{cand.aosDecl.getResult(0), cand.aosDecl.getResult(1)};
+  llvm::SmallPtrSet<mlir::Operation*, 8> seenAlias;
+  for (size_t ai = 0; ai < aliasRoots.size(); ++ai) {
+    mlir::Value root = aliasRoots[ai];
+    if (!root) continue;
+    for (auto* u : root.getUsers()) {
+      if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u)) {
+        if (dg.getIndices().size() == 1) elemDesignates.push_back(dg);
+      } else if (auto rd = mlir::dyn_cast<hlfir::DeclareOp>(u)) {
+        if (seenAlias.insert(rd).second) {
+          aliasRoots.push_back(rd.getResult(0));
+          aliasRoots.push_back(rd.getResult(1));
+        }
+      } else if (auto rb = mlir::dyn_cast<fir::ReboxOp>(u)) {
+        if (seenAlias.insert(rb).second) aliasRoots.push_back(rb.getResult());
+      } else if (auto eb = mlir::dyn_cast<fir::EmboxOp>(u)) {
+        if (seenAlias.insert(eb).second) aliasRoots.push_back(eb.getResult());
+      } else if (auto cv = mlir::dyn_cast<fir::ConvertOp>(u)) {
+        if (seenAlias.insert(cv).second) aliasRoots.push_back(cv.getResult());
+      }
+    }
+  }
   for (auto elemDg : elemDesignates) {
-    auto outerIdx = elemDg.getIndices()[0];
+    mlir::Value outerIdx = elemDg.getIndices()[0];
     llvm::SmallVector<hlfir::DesignateOp, 4> memberDgs;
     for (auto* u : elemDg.getResult().getUsers())
       if (auto md = mlir::dyn_cast<hlfir::DesignateOp>(u)) memberDgs.push_back(md);
@@ -579,29 +638,98 @@ static unsigned rewriteAllAccesses(mlir::OpBuilder& b, Candidate& cand,
       auto memberName = memberOpt->getValue();
       auto it = concatByMember.find(memberName);
       if (it == concatByMember.end()) continue;
-      auto concatDecl = it->second;
-      // Each box load gives a box value; element designates on that
-      // box are the access leaves we rewrite.
       llvm::SmallVector<fir::LoadOp, 4> loads;
       for (auto* u : memberDg.getResult().getUsers())
         if (auto ld = mlir::dyn_cast<fir::LoadOp>(u)) loads.push_back(ld);
       for (auto load : loads) {
+        // Step 1: rewrite the element designates (scalar) reached through the box
+        // load -- directly or behind a ``fir.box_addr`` / ``fir.rebox`` /
+        // ``fir.convert`` reinterpret -- to direct designates over the concat.
+        // Scalar subscripts keep loop bounds and conditions (interstate edges)
+        // range-free, so element-only kernels (Graupel ``q``) need no view.
         llvm::SmallVector<hlfir::DesignateOp, 4> innerDgs;
-        for (auto* u : load.getResult().getUsers())
-          if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u)) innerDgs.push_back(dg);
-        // box_addr -> element designate chain (some flang paths).
-        for (auto* u : load.getResult().getUsers())
-          if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(u))
-            for (auto* uu : ba.getResult().getUsers())
-              if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(uu)) innerDgs.push_back(dg);
+        llvm::SmallVector<mlir::Operation*, 8> peelOps;
+        llvm::SmallVector<mlir::Value, 4> boxVals{load.getResult()};
+        llvm::SmallPtrSet<mlir::Operation*, 8> seenBox;
+        for (size_t bi = 0; bi < boxVals.size(); ++bi)
+          for (auto* u : boxVals[bi].getUsers()) {
+            if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u)) {
+              innerDgs.push_back(dg);
+            } else if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(u)) {
+              if (seenBox.insert(ba).second) {
+                boxVals.push_back(ba.getResult());
+                peelOps.push_back(ba);
+              }
+            } else if (auto rb = mlir::dyn_cast<fir::ReboxOp>(u)) {
+              if (seenBox.insert(rb).second) {
+                boxVals.push_back(rb.getResult());
+                peelOps.push_back(rb);
+              }
+            } else if (auto cv = mlir::dyn_cast<fir::ConvertOp>(u)) {
+              if (seenBox.insert(cv).second) {
+                boxVals.push_back(cv.getResult());
+                peelOps.push_back(cv);
+              }
+            }
+          }
         for (auto innerDg : innerDgs) {
-          rewriteAccess(b, innerDg, outerIdx, concatDecl);
+          rewriteAccess(b, innerDg, outerIdx, it->second);
+          innerDg.erase();
           rewritten++;
+        }
+        // Erase the now-dead reinterpret chain (innermost first) so the load's
+        // surviving users are only genuine whole-box uses.
+        for (int pi = static_cast<int>(peelOps.size()) - 1; pi >= 0; --pi)
+          if (peelOps[pi]->use_empty()) peelOps[pi]->erase();
+        // Step 2: any surviving whole-box use -- a ``fir.box_dims`` shape query or
+        // a whole-array rebox/pass -- cannot be an element designate, so re-point
+        // it at a concat slice box.  Element-only loads are use-empty here, so no
+        // range view is created for them (keeps Graupel ``q`` conditions scalar).
+        if (!load.getResult().use_empty()) {
+          b.setInsertionPointAfter(load);
+          mlir::Value sliceBox =
+              buildConcatSliceBox(b, load.getLoc(), it->second, outerIdx, load.getResult().getType());
+          if (sliceBox) {
+            load.getResult().replaceAllUsesWith(sliceBox);
+            rewritten++;
+          }
         }
       }
     }
   }
   return rewritten;
+}
+
+/// After the gather replaces every read with a concat slice box and the copy-in
+/// erases the rebind stores, the AoS pointer array's designate / load / box
+/// chain is dead.  Sweep the use-less VALUE-producing ops in the forest rooted at
+/// the AoS declare so the lowered SDFG never mints the flattened
+/// ``<aos>_<member>`` symbol those dead designates would surface.  Side-effecting
+/// stores (no results, so trivially ``use_empty``) are skipped -- the copy-in
+/// already erased the rebinds, and sweeping a store would double-free it.
+static void eraseDeadAosChain(Candidate& cand) {
+  llvm::SmallPtrSet<mlir::Operation*, 32> seen;
+  llvm::SmallVector<mlir::Operation*, 32> forest{cand.aosDecl.getOperation()};
+  seen.insert(cand.aosDecl.getOperation());
+  llvm::SmallVector<mlir::Value, 8> roots{cand.aosDecl.getResult(0), cand.aosDecl.getResult(1)};
+  for (size_t i = 0; i < roots.size(); ++i) {
+    if (!roots[i]) continue;
+    for (auto* u : roots[i].getUsers())
+      if (seen.insert(u).second) {
+        forest.push_back(u);
+        for (auto res : u->getResults()) roots.push_back(res);
+      }
+  }
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (auto*& op : forest)
+      if (op && op->getNumResults() > 0 && op->use_empty()) {
+        op->erase();
+        op = nullptr;
+        changed = true;
+      }
+  }
 }
 
 // --------------------------------------------------------------------------
@@ -661,6 +789,10 @@ struct LiftAosPointerRecordsPass
       func->setAttr(key, mlir::ArrayAttr::get(ctx, entries));
     }
 
+    // Gather path: materialise a flat ``(N, inner...)`` concat transient and copy
+    // each rebind target in / out, rewriting accesses to index it.  Required when a
+    // read index is a runtime value (no single target to alias) -- e.g. a
+    // runtime-indexed select over the rebound pointers.
     // Per-member inner shape -- resolve from the FIRST rebind's
     // target.  Subsequent rebinds for the same member are required to
     // share the same shape (so the concat array's inner dims are
@@ -751,6 +883,7 @@ struct LiftAosPointerRecordsPass
       mlir::Operation* term = rebindBlock[i]->getTerminator();
       emitCopyLoop(b, term->getLoc(), term, it->second, r.outerIdx, r.targetDecl, shape, /*directionCopyIn=*/false);
     }
+    eraseDeadAosChain(cand);
   }
 };
 
