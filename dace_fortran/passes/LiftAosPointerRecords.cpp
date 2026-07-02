@@ -100,6 +100,12 @@ struct Candidate {
   fir::SequenceType seqTy;
   fir::RecordType recordTy;
   int64_t N;
+  /// The outer extent didn't fold to a compile-time constant (a DYNAMIC-extent
+  /// AoS -- ICON ``recv_sp(nfields_sp)`` where ``nfields_sp`` is a runtime
+  /// dummy).  ``N`` is left 0 by ``matchCandidate`` and filled in from the max
+  /// 1-based rebind index in ``processCandidate`` (the concat only needs to
+  /// cover the static ``recv1..recvM`` rebind slots the access loop indexes).
+  bool dynamicExtent = false;
   llvm::SmallVector<MemberSpec, 4> members;
 };
 
@@ -215,6 +221,28 @@ static mlir::Type elemTypeOfPtrMember(fir::BoxType boxTy) {
   return inner;
 }
 
+/// Placeholder inner shape from the member box TYPE alone, for a matched AoS
+/// with NO rebinds (the dead ``recv_sp`` exchange scaffolding when
+/// ``nfields_sp`` folds to 0).  With no rebind target there is no source for
+/// the assumed-shape ``?x?...`` extents, but every access to such an AoS is in
+/// a 0-trip exchange loop (dead, never executed), so a size-1 record per inner
+/// dim is a safe, fully-static placeholder: it keeps the concat transient
+/// static (no dynamic extents to resolve), registers the ``<name>_p``
+/// descriptor the dead accesses need, and is never touched at runtime.
+static std::optional<InnerShape> innerShapeFromMemberBox(fir::BoxType boxTy) {
+  auto inner = boxTy.getEleTy();
+  if (auto p = mlir::dyn_cast<fir::PointerType>(inner)) inner = p.getEleTy();
+  if (auto h = mlir::dyn_cast<fir::HeapType>(inner)) inner = h.getEleTy();
+  auto seq = mlir::dyn_cast<fir::SequenceType>(inner);
+  if (!seq) return std::nullopt;
+  InnerShape s;
+  s.elemTy = seq.getEleTy();
+  unsigned rank = seq.getShape().size();
+  s.shape.assign(rank, 1);
+  s.extentVals.assign(rank, mlir::Value{});
+  return s;
+}
+
 /// Resolve a rebind target's static inner shape.  The target is the
 /// declare that owns the original storage (e.g. ``qa(n, k)``); its
 /// memref type is a ``ref<array<? x ? x f64>>`` (assumed-shape from
@@ -319,14 +347,29 @@ static std::optional<Candidate> matchCandidate(hlfir::DeclareOp d) {
         if (shapeOp.getExtents().size() == 1)
           if (auto c = constIntForwarded(shapeOp.getExtents()[0])) N = *c;
   }
-  if (N == fir::SequenceType::getUnknownExtent() || N <= 0) return std::nullopt;
+  // ``N`` still UNKNOWN after the constant-forward attempt is a DYNAMIC-extent
+  // AoS: ICON ``recv_sp(nfields_sp)`` where ``nfields_sp`` is a runtime dummy
+  // that never folds (unlike ``recv_dp``'s ``nfields_dp`` in the ``seq``
+  // variants).  Don't skip it -- its ``recv_sp(k)%p`` accesses (a
+  // ``DO k = 1, nfields_sp`` exchange loop) still emit ``<name>_p`` SDFG access
+  // nodes, so the flat transient MUST be registered or ``prune_unused_arrays``
+  // hits a KeyError on the dangling access.  The rebinds are the STATIC
+  // ``recv1_sp .. recvM_sp`` slots and the loop index is bounded by
+  // ``nfields_sp <= M``, so ``processCandidate`` fills ``N`` with the max
+  // 1-based rebind index -- a static ``(M, inner)`` concat that covers every
+  // access.  A genuinely EMPTY static AoS (``N == 0``) gets a size-1 placeholder
+  // in ``createConcatStorage`` (all uses dead).  Only a negative extent is
+  // unliftable.
+  bool dynamicExtent = (N == fir::SequenceType::getUnknownExtent());
+  if (!dynamicExtent && N < 0) return std::nullopt;
   auto recordTy = mlir::dyn_cast<fir::RecordType>(seqTy.getEleTy());
   if (!recordTy) return std::nullopt;
   Candidate c;
   c.aosDecl = d;
   c.seqTy = seqTy;
   c.recordTy = recordTy;
-  c.N = N;
+  c.N = dynamicExtent ? 0 : N;  // dynamic: filled from the max rebind index in processCandidate
+  c.dynamicExtent = dynamicExtent;
   for (auto& member : recordTy.getTypeList()) {
     auto boxTy = mlir::dyn_cast<fir::BoxType>(member.second);
     if (!boxTy) return std::nullopt;
@@ -410,8 +453,13 @@ static hlfir::DeclareOp createConcatStorage(mlir::OpBuilder& b, mlir::Location l
   else
     b.setInsertionPointToStart(&func.getBody().front());
 
+  // An EMPTY AoS (``cand.N == 0``) allocates a size-1 PLACEHOLDER outer dim: a
+  // zero-extent transient trips DaCe's memlet/shape validation, and every use
+  // of this storage is in a dead 0-trip loop, so a 1-record placeholder that is
+  // never touched is the safe registration.
+  int64_t allocN = cand.N > 0 ? cand.N : 1;
   llvm::SmallVector<int64_t, 4> typeDims;
-  typeDims.push_back(cand.N);
+  typeDims.push_back(allocN);
   for (auto d : innerShape.shape) typeDims.push_back(d);
   auto seqTy = fir::SequenceType::get(typeDims, innerShape.elemTy);
 
@@ -419,7 +467,7 @@ static hlfir::DeclareOp createConcatStorage(mlir::OpBuilder& b, mlir::Location l
   // constant; dynamic dims re-use the captured SSA extent, or fall
   // back to ``fir.box_dims`` on the captured ``boxSource``.
   llvm::SmallVector<mlir::Value, 4> extents;
-  auto outerC = b.create<mlir::arith::ConstantOp>(loc, b.getIndexAttr(cand.N)).getResult();
+  auto outerC = b.create<mlir::arith::ConstantOp>(loc, b.getIndexAttr(allocN)).getResult();
   extents.push_back(outerC);
   auto idxTy = b.getIndexType();
   for (size_t d = 0; d < innerShape.shape.size(); ++d) {
@@ -767,7 +815,47 @@ struct LiftAosPointerRecordsPass
     func.walk([&](fir::StoreOp store) {
       if (auto r = matchRebindStore(store, cand)) rebinds.push_back(*r);
     });
-    if (rebinds.empty()) return;
+    if (rebinds.empty()) {
+      // A matched AoS-of-pointer-records with NO rebinds is DEAD exchange
+      // scaffolding: ICON ``recv_sp`` when ``nfields_sp`` folds to 0 (no
+      // single-precision fields this config) is allocated but never rebound.
+      // After ``hlfir-inline-all`` folds the exchange worker into the caller,
+      // its ``recv_sp(k)%p`` reads survive as 0-trip-loop bodies (dead, never
+      // executed) -- so the AoS declare is NOT ``use_empty`` and cannot simply
+      // be erased.  Those dead accesses still emit ``<name>_p`` SDFG access
+      // nodes, so the flat transient MUST be registered here -- otherwise
+      // ``hlfir-flatten-structs`` mints a broken ``recv_sp_p`` companion for the
+      // unsupported AoS-of-pointer shape and ``prune_unused_arrays`` KeyErrors
+      // on the dangling access.  With no rebind target to derive the
+      // assumed-shape inner extents from, size each member concat to a size-1
+      // placeholder from the member box TYPE (``innerShapeFromMemberBox``); the
+      // accesses are all dead, so the placeholder is never touched and
+      // ``prune_unused_arrays`` then drops the whole concat as unused.
+      mlir::OpBuilder b(func.getContext());
+      llvm::DenseMap<llvm::StringRef, hlfir::DeclareOp> concatByMember;
+      mlir::Operation* insertAfter = cand.aosDecl.getOperation();
+      for (auto& spec : cand.members) {
+        auto s = innerShapeFromMemberBox(spec.boxTy);
+        if (!s) break;
+        auto declare = createConcatStorage(b, func.getLoc(), func, cand, spec, *s, insertAfter, allocId++);
+        if (!declare) break;
+        concatByMember[llvm::StringRef(spec.name)] = declare;
+        insertAfter = declare.getOperation();
+      }
+      if (concatByMember.size() == cand.members.size()) rewriteAllAccesses(b, cand, concatByMember);
+      eraseDeadAosChain(cand);
+      return;
+    }
+
+    // DYNAMIC-extent AoS (matchCandidate couldn't fold the outer extent): size
+    // the concat by the max 1-based rebind index -- the rebinds are the static
+    // ``recv1_sp .. recvM_sp`` slots and the exchange loop index is bounded by
+    // ``nfields_sp <= M``, so a static ``(M, inner)`` concat covers every access.
+    if (cand.dynamicExtent) {
+      int64_t maxIdx = 0;
+      for (auto& r : rebinds) maxIdx = std::max<int64_t>(maxIdx, r.outerIdx);
+      cand.N = maxIdx;
+    }
 
     // Stamp the recognition attribute on the function unconditionally
     // -- this surfaces the matched candidates to debug tools and the

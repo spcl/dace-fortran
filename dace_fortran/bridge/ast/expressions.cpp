@@ -752,6 +752,17 @@ std::string buildExpr(mlir::Value val, int d) {
           if (auto outer = asAssumedShapeAlias(decl))
             shapeVal = outer.getShape();
         }
+      } else if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(adef)) {
+        // A sectioned designate carries the RESULT's per-dim extents on its own
+        // ``shape`` operand -- most importantly the LiftAos concat SLICE-BOX
+        // (``concat(idx, 1:d1, 1:d2, ...)`` replacing ``recv_dp(idx)%p``).  That
+        // slice already dropped the concat's leading N dim, so its dim ``k`` is
+        // the concat's dim ``k+1``; ``SIZE`` / ``UBOUND`` on it must read THIS
+        // shape (yielding the rebind target's real extent, e.g. ``recv1_dp_d1``
+        // = the vertical level count) rather than falling through to a synthetic
+        // ``<concat>_d<k>`` symbol that no caller binds (leaks as an unresolved
+        // free symbol at the SDFG signature).
+        shapeVal = dg.getShape();
       }
     }
 

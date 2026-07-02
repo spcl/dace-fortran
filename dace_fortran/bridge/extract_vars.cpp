@@ -2270,7 +2270,22 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
                     mv.role = "symbol";
                   else
                     mv.role = "scalar";
-                  for (size_t d = 0; d < mv.shape_symbols.size(); ++d) mv.lower_bounds.push_back("1");
+                  // A member dim whose EXTENT is runtime (a deferred-shape
+                  // ALLOCATABLE / POINTER member -- ICON's comm-pattern
+                  // ``recv_limits(0:n)``, type ``box<heap<array<?xi32>>>``) has
+                  // a runtime LOWER BOUND too: it is fixed by the ``ALLOCATE``,
+                  // not the type.  Leave that dim's offset symbol FREE ("?") so
+                  // the bindings fill ``lbound(arr, dim)`` at call time, exactly
+                  // as a deferred-shape dummy allocatable already does (see
+                  // ``descriptors.py::_offset_value``).  Baking "1" here
+                  // mis-lowers a 0-based member's ``arr(0)`` to ``[0 - 1] = -1``
+                  // -- a negative out-of-bounds subset at ``sdfg.validate``.  A
+                  // dim with a STATIC (compile-time integer) extent keeps the
+                  // Fortran-default lower bound 1.
+                  for (auto& ext : mv.shape_symbols) {
+                    bool staticExtent = !ext.empty() && ext.find_first_not_of("0123456789") == std::string::npos;
+                    mv.lower_bounds.push_back(staticExtent ? "1" : "?");
+                  }
                   std::string dtype;
                   if (!dtypeFor(elemTy, dtype)) continue;
                   mv.dtype = dtype;
@@ -3771,10 +3786,19 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
           if (ext == fir::SequenceType::getUnknownExtent()) {
             mv.is_dynamic = true;
             mv.shape_symbols.push_back(s + "_d" + std::to_string(recDims + didx));
+            // A deferred-EXTENT member dim (ALLOCATABLE / POINTER member, e.g.
+            // ICON's comm-pattern ``recv_limits(0:n)`` = ``box<heap<array<?>>>``)
+            // has a runtime LOWER BOUND too -- fixed by the ``ALLOCATE``, not the
+            // type.  Leave its offset symbol FREE ("?") so the bindings fill
+            // ``lbound(arr, dim)`` at call time (as a deferred-shape dummy
+            // allocatable already does).  Baking "1" mis-lowers a 0-based
+            // member's ``arr(0)`` to ``[0 - 1] = -1`` -- a negative out-of-bounds
+            // subset that fails ``sdfg.validate``.
+            mv.lower_bounds.push_back("?");
           } else {
             mv.shape_symbols.push_back(std::to_string(ext));
+            mv.lower_bounds.push_back("1");
           }
-          mv.lower_bounds.push_back("1");
         }
         mv.rank = static_cast<int>(mv.shape_symbols.size());
         if (recDims >= 1) {
