@@ -20,6 +20,11 @@ class _Ctx:
         # downstream emitters (``emit_cond`` / ``emit_tasklet``) can
         # substitute iterators referenced in conditions or RHS expressions.
         self.iter_map = {}
+        # Per-request-array count of isend/irecv posted (base name -> N).  Used
+        # by ``emit_mpi`` as the MPI_Waitall count when the bridge could not
+        # render the Fortran count arg (a by-reference integer literal traces to
+        # "?"); a straight-line waitall then waits on exactly the posts emitted.
+        self.mpi_req_posts = {}
 
     def ensure(self, region=None):
         """Make ``self.cur`` a writable ``SDFGState``: create the start

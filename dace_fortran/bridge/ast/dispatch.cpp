@@ -1155,6 +1155,37 @@ static ASTNode buildLapackCallNode(fir::CallOp call,
   return n;
 }
 
+/// Slot index (1-based Fortran) + declared extent of an MPI request argument,
+/// so the Python emitter can size the shared ``_mpireq_<base>`` request transient
+/// to the WHOLE request array and address the right slot.  ``reqs(k)`` ->
+/// ``(buildExpr(k), extent-of-reqs)``; a scalar request ``sreq`` -> ``("1", "1")``.
+/// Without this, every ``reqs(k)`` collapses onto ``_mpireq_reqs[0]`` and
+/// ``MPI_Waitall`` waits on only the last-written request (silently dropping the
+/// receives -- see the request-array collapse fix).
+static std::pair<std::string, std::string> mpiRequestSlotExtent(mlir::Value reqVal) {
+  std::string slot = "1";
+  mlir::Value base = reqVal;
+  if (auto dg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(reqVal.getDefiningOp())) {
+    auto idxs = dg.getIndices();
+    if (idxs.size() == 1) slot = buildExpr(idxs[0], 0);
+    base = dg.getMemref();
+  }
+  std::string extent = "1";
+  mlir::Type ty = base.getType();
+  for (int i = 0; i < 4; ++i) {
+    if (auto refTy = mlir::dyn_cast<fir::ReferenceType>(ty)) { ty = refTy.getEleTy(); continue; }
+    if (auto boxTy = mlir::dyn_cast<fir::BaseBoxType>(ty)) { ty = boxTy.getEleTy(); continue; }
+    if (auto heapTy = mlir::dyn_cast<fir::HeapType>(ty)) { ty = heapTy.getEleTy(); continue; }
+    break;
+  }
+  if (auto seqTy = mlir::dyn_cast<fir::SequenceType>(ty)) {
+    auto shape = seqTy.getShape();
+    if (shape.size() == 1 && shape[0] != fir::SequenceType::getUnknownExtent())
+      extent = std::to_string(shape[0]);
+  }
+  return {slot, extent};
+}
+
 /// Build an ``mpicall`` ASTNode for a recognised MPI point-to-point
 /// call.  ``call_args`` layout (the names the Python builder wires to
 /// the DaCe library node's connectors):
@@ -1205,6 +1236,15 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
     // dataflow token + the __mpi_order chain order the waitall after its producers).
     if (args.size() < 2) throw std::runtime_error("MPI mpi_waitall: expected (count, requests, ...)");
     n.call_args = {resolve(args[1], "requests")};
+    // The waitall waits on ``count`` (args[0]) requests of the ``requests`` array;
+    // the emitter reads ``_mpireq_<base>[0:count]`` so the node emits
+    // ``MPI_Waitall(count, ...)`` -- not the collapsed ``count=1``.  A loop-built
+    // request set names its count variable (``nreq``); a by-reference integer
+    // literal has no name -> ``buildExpr`` renders "?" and the emitter falls back
+    // to the emitted post count (correct for a straight-line waitall).
+    std::string reqCount = traceToDecl(args[0]);
+    n.options["mpi_req_count"] = reqCount.empty() ? buildExpr(args[0], 0) : reqCount;
+    n.options["mpi_req_extent"] = mpiRequestSlotExtent(args[1]).second;
     return n;
   }
 
@@ -1292,15 +1332,17 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
   // ``opaque(MPI_Comm)`` ``_comm`` connector into the libnode.
   std::string commName = traceToDecl(args[5]);
   std::string low = llvm::StringRef(commName).lower();
-  bool isDefault = commName.empty() || low.rfind("__", 0) == 0 ||
-                   low.find("mpi_comm_world") != std::string::npos;
+  bool isDefault = commName.empty() || low.rfind("__", 0) == 0 || low.find("mpi_comm_world") != std::string::npos;
 
   n.call_args = {buf, partner, tag};
   if (mpiOp == "mpi_isend" || mpiOp == "mpi_irecv") {
-    if (args.size() < 7)
-      throw std::runtime_error("MPI " + mpiOp +
-                               ": expected a request argument");
+    if (args.size() < 7) throw std::runtime_error("MPI " + mpiOp + ": expected a request argument");
     n.call_args.push_back(resolve(args[6], "request"));
+    // Preserve the request slot ``reqs(k)`` so this isend/irecv writes its
+    // MPI_Request to ``_mpireq_<base>[k-1]`` instead of collapsing onto slot 0.
+    auto se = mpiRequestSlotExtent(args[6]);
+    n.options["mpi_req_slot"] = se.first;
+    n.options["mpi_req_extent"] = se.second;
   }
   if (!isDefault) n.call_args.push_back(commName);
   return n;

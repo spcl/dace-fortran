@@ -610,13 +610,28 @@ def emit_mpi(builder, ctx, n, region):
     state.add_edge(state.add_read(_tok), None, _seq, "_o_in", Memlet(f"{_tok}[0]"))
     state.add_edge(_seq, "_o_out", state.add_write(_tok), None, Memlet(f"{_tok}[0]"))
 
-    def _req_array(req: str) -> str:
-        """Ensure the per-request ``opaque(MPI_Request)`` transient
-        exists; return its name (shared by the Isend/Irecv producer and
-        the matching Wait consumer)."""
+    # Request slot / extent / count preserved by the C++ bridge
+    # (dispatch.cpp ``mpiRequestSlotExtent``) so an ``MPI_Waitall`` over a
+    # request ARRAY addresses every slot instead of collapsing onto slot 0.
+    _opts = dict(n.options) if n.options else {}
+    # Count isend/irecv posts per request array, so a straight-line waitall can
+    # recover its count if the bridge rendered the Fortran count arg as "?" (a
+    # by-reference integer literal has no traceable name).
+    if n.callee in ('mpi_isend', 'mpi_irecv'):
+        _rbase = n.call_args[3]
+        ctx.mpi_req_posts[_rbase] = ctx.mpi_req_posts.get(_rbase, 0) + 1
+
+    def _req_array(req: str, extent: str = "1") -> str:
+        """Ensure the per-request ``opaque(MPI_Request)`` transient exists;
+        return its name (shared by the Isend/Irecv producers and the matching
+        Wait/Waitall consumer).  Sized to the request array's declared ``extent``
+        so ``MPI_Waitall`` over ``reqs(1:n)`` can wait on every posted request
+        (a scalar request defaults to extent 1)."""
         name = f"_mpireq_{req}"
         if name not in ctx.sdfg.arrays:
-            ctx.sdfg.add_array(name, [1], dace.dtypes.opaque("MPI_Request"), transient=True)
+            ctx.sdfg.add_array(name, [dace.symbolic.pystr_to_symbolic(extent)],
+                               dace.dtypes.opaque("MPI_Request"),
+                               transient=True)
         return name
 
     if n.callee == 'mpi_wait':
@@ -652,17 +667,25 @@ def emit_mpi(builder, ctx, n, region):
         # count from the request memlet's element count.
         from dace.libraries.mpi.nodes.wait import Waitall
         (req, ) = n.call_args
-        rname = _req_array(req)
+        rname = _req_array(req, _opts.get("mpi_req_extent", "1"))
         node = Waitall(f'_mpi_waitall_{builder.nid()}')
         node.in_connectors = {
             c: (dace.pointer(dace.dtypes.opaque("MPI_Request")) if c == '_request' else t)
             for c, t in node.in_connectors.items()
         }
         state.add_node(node)
+        # Read ``_mpireq_<base>[0:count]`` so the node derives ``count`` from the
+        # memlet element count and emits ``MPI_Waitall(count, ...)`` -- waiting on
+        # every posted request, not just the last-written slot.  Prefer the
+        # bridge-rendered Fortran count; fall back to the emitted post count when
+        # it was an untraceable by-ref literal ("?").
+        _count = _opts.get("mpi_req_count", "")
+        if (not _count) or ("?" in _count):
+            _count = str(ctx.mpi_req_posts.get(req, 1))
         state.add_memlet_path(acc(builder, state, rname),
                               node,
                               dst_conn='_request',
-                              memlet=Memlet.simple(rname, "0:1", num_accesses=1))
+                              memlet=Memlet(f"{rname}[0:{_count}]"))
         return
 
     if n.callee == 'mpi_alltoall':
@@ -788,7 +811,7 @@ def emit_mpi(builder, ctx, n, region):
         _wire_grid(node)
     elif n.callee == 'mpi_isend':
         from dace.libraries.mpi.nodes.isend import Isend
-        rname = _req_array(n.call_args[3])
+        rname = _req_array(n.call_args[3], _opts.get("mpi_req_extent", "1"))
         node = Isend(f'_mpi_isend_{builder.nid()}')
         node.in_connectors = {c: (bptr if c == '_buffer' else t) for c, t in node.in_connectors.items()}
         node.out_connectors = {
@@ -799,11 +822,13 @@ def emit_mpi(builder, ctx, n, region):
         state.add_memlet_path(acc(builder, state, buffer), node, dst_conn='_buffer', memlet=buf_memlet)
         state.add_memlet_path(acc(builder, state, partner), node, dst_conn='_dest', memlet=partner_memlet)
         state.add_memlet_path(acc(builder, state, tag), node, dst_conn='_tag', memlet=tag_memlet)
-        state.add_edge(node, '_request', acc(builder, state, rname), None, Memlet.simple(rname, "0:1", num_accesses=1))
+        # Write this request to its 1-based slot ``reqs(k)`` -> ``_mpireq[k-1]``.
+        _slot0 = f"({_opts.get('mpi_req_slot', '1')}) - 1"
+        state.add_edge(node, '_request', acc(builder, state, rname), None, Memlet(f"{rname}[{_slot0}]"))
         _wire_grid(node)
     elif n.callee == 'mpi_irecv':
         from dace.libraries.mpi.nodes.irecv import Irecv
-        rname = _req_array(n.call_args[3])
+        rname = _req_array(n.call_args[3], _opts.get("mpi_req_extent", "1"))
         node = Irecv(f'_mpi_irecv_{builder.nid()}')
         node.out_connectors = {
             c: (bptr if c == '_buffer' else dace.pointer(dace.dtypes.opaque("MPI_Request")) if c == '_request' else t)
@@ -813,7 +838,9 @@ def emit_mpi(builder, ctx, n, region):
         state.add_memlet_path(acc(builder, state, partner), node, dst_conn='_src', memlet=partner_memlet)
         state.add_memlet_path(acc(builder, state, tag), node, dst_conn='_tag', memlet=tag_memlet)
         state.add_memlet_path(node, acc(builder, state, buffer), src_conn='_buffer', memlet=buf_memlet)
-        state.add_edge(node, '_request', acc(builder, state, rname), None, Memlet.simple(rname, "0:1", num_accesses=1))
+        # Write this request to its 1-based slot ``reqs(k)`` -> ``_mpireq[k-1]``.
+        _slot0 = f"({_opts.get('mpi_req_slot', '1')}) - 1"
+        state.add_edge(node, '_request', acc(builder, state, rname), None, Memlet(f"{rname}[{_slot0}]"))
         _wire_grid(node)
     else:
         raise NotImplementedError(f"MPI op {n.callee!r} not supported")
