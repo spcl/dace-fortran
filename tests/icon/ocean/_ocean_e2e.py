@@ -208,8 +208,14 @@ def _build_and_compare(tu_path: Path,
     ref_shim = out / f"{dace_name}_ref_c.f90"
     ref_shim.write_text(_retarget_shim(shim, dace_name, entry, module_dims, n))
     ref_so = out / f"lib{dace_name}_ref.so"
+    # No ``-fallow-argument-mismatch``: it silences REAL argument-type errors, so a
+    # genuine ABI mismatch between the shim and the kernel would compile to a wrong
+    # call instead of failing loudly.  The pure-compute ocean kernels have no such
+    # mismatch; a kernel with dual-typed MPI buffers (``solve_nh``'s real*8/real*4
+    # ``mpi_recv``) is made sound with ``TYPE(*)`` assumed-type interfaces in the MPI
+    # stub, not by suppressing the diagnostic.
     r = subprocess.run([
-        "gfortran", "-shared", "-fPIC", "-ffree-line-length-none", "-fallow-argument-mismatch", "-o",
+        "gfortran", "-shared", "-fPIC", "-ffree-line-length-none", "-o",
         str(ref_so),
         str(tu_path),
         str(ref_shim)
