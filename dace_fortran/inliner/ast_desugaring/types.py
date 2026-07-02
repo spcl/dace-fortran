@@ -134,6 +134,9 @@ class TYPE_SPEC:
             'REAL4': 'REAL(kind=4)',
             'REAL8': 'REAL(kind=8)',
             'REAL': 'REAL(kind=4)',
+            'COMPLEX4': 'COMPLEX(kind=4)',
+            'COMPLEX8': 'COMPLEX(kind=8)',
+            'COMPLEX': 'COMPLEX(kind=4)',
             'LOGICAL': 'LOGICAL',
         }
         typ = self.spec[-1]

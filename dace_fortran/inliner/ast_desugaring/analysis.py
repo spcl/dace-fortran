@@ -679,7 +679,7 @@ def find_type_of_entity(node: Union[f03.Entity_Decl, f03.Component_Decl],
 
     extra_dim = None
     if isinstance(typ, f03.Intrinsic_Type_Spec):
-        ACCEPTED_TYPES = {'INTEGER', 'REAL', 'DOUBLE PRECISION', 'LOGICAL', 'CHARACTER'}
+        ACCEPTED_TYPES = {'INTEGER', 'REAL', 'COMPLEX', 'DOUBLE PRECISION', 'DOUBLE COMPLEX', 'LOGICAL', 'CHARACTER'}
         typ_name, kind = typ.children
         assert typ_name in ACCEPTED_TYPES, typ_name
 
@@ -687,15 +687,22 @@ def find_type_of_entity(node: Union[f03.Entity_Decl, f03.Component_Decl],
             assert typ_name == 'CHARACTER'
             extra_dim = (':', )
         elif isinstance(kind, f03.Kind_Selector):
-            assert typ_name in {'INTEGER', 'REAL', 'LOGICAL'}
-            _, kind, _ = kind.children
+            assert typ_name in {'INTEGER', 'REAL', 'COMPLEX', 'LOGICAL'}
+            # ``(KIND = expr)`` parses to 3 children ('(', expr, ')'); the
+            # star-kind form ``TYPE*N`` to 2 children ('*', expr).
+            kind = kind.children[1] if len(kind.children) == 3 else kind.children[-1]
             kind_val = _const_eval_basic_type(kind, alias_map) or 4
+            # For COMPLEX the kind names the width of EACH real component
+            # (COMPLEX(4) -> COMPLEX4 -> 2xFP32; COMPLEX(8) -> COMPLEX8 -> 2xFP64),
+            # matching the REAL suffix convention.
             typ_name = f"{typ_name}{int(kind_val)}"
         elif kind is None:
-            if typ_name in {'INTEGER', 'REAL'}:
+            if typ_name in {'INTEGER', 'REAL', 'COMPLEX'}:
                 typ_name = f"{typ_name}4"
             elif typ_name == 'DOUBLE PRECISION':
                 typ_name = "REAL8"
+            elif typ_name == 'DOUBLE COMPLEX':
+                typ_name = "COMPLEX8"
         spec = (typ_name, )
     elif isinstance(typ, f03.Declaration_Type_Spec):
         _, typ_name_node = typ.children
@@ -1084,6 +1091,12 @@ def _does_part_matches(g: types.TYPE_SPEC, c: types.TYPE_SPEC) -> bool:
         elif t.startswith('INTEGER'):
             w = int(t.removeprefix('INTEGER'))
             return 'INTEGER', w
+        elif t == 'COMPLEX':
+            return 'COMPLEX', 4
+        elif t.startswith('COMPLEX'):
+            # Suffix is the component kind (COMPLEX8 -> 2xFP64), mirroring REAL.
+            w = int(t.removeprefix('COMPLEX'))
+            return 'COMPLEX', w
         return t, 1
 
     def _subsumes(b: types.SPEC, s: types.SPEC) -> bool:
