@@ -128,6 +128,22 @@ std::string extractName(const std::string& m) {
   // canonical "MLIR mangled -> Python-side name" helper) so the
   // raw mangled names in the IR stay intact.
   std::replace(name.begin(), name.end(), '.', '_');
+
+  // A double-underscore identifier is invalid as a Fortran dummy (Fortran names
+  // can't start with ``_``) AND reserved in C++ -- flang/pass-synthesised temps
+  // like ``__assoc_scalar_N`` (the value-materialised gather temp minted by
+  // ``ExpandVectorSubscriptGather``) start with one and, when they reach the
+  // SDFG signature, make the generated Fortran binding uncompilable
+  // (``integer(c_int), value :: __assoc_scalar_198`` is a syntax error).  Prefix
+  // a letter so the emitted name is a valid identifier in BOTH the SDFG C++
+  // codegen and the Fortran binding.  Scoped to the ``__`` prefix (not a bare
+  // leading ``_``): single-underscore names are the bridge's own internal
+  // markers (``_in_*`` / flatten-companion intermediates) that never reach the
+  // Fortran signature, and renaming them here desyncs downstream shape-symbol
+  // construction (``a_w_0_d0`` resolution).  A real Fortran user name never
+  // starts with ``__``, so this is collision-free; done at this canonical
+  // boundary so every reference to the same declare renames consistently.
+  if (name.rfind("__", 0) == 0) name = "f" + name;
   return name;
 }
 
