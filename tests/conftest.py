@@ -213,9 +213,39 @@ def icon_build():
 # crashing finaliser while preserving pytest's verdict and exit code.
 _pytest_exitstatus = [0]
 
+#: Repo root -- ``tests/conftest.py`` -> parent -> parent.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _clean_stray_mods():
+    """Remove stray Fortran ``*.mod`` files that flang / gfortran drop into the
+    repo-root CWD during SDFG builds and reference compiles.
+
+    They are gitignored build artifacts, but a leftover silently poisons a
+    later gfortran compile that ``USE``s the same module: a flang-format
+    ``iso_c_binding.mod`` (or ``constants.mod`` &c.) sitting in the module
+    search path makes gfortran abort with "is not a GNU Fortran module file".
+    Only the repo-root TOP LEVEL is swept (``glob`` not ``rglob``) so
+    legitimate module trees under ``.dacecache`` / ``_session_scratch`` /
+    ``icon-model`` build dirs are never touched.  Run both at conftest import
+    (clear a previous crashed run's residue before this run builds) and at
+    session finish (leave a clean tree)."""
+    for mod in _REPO_ROOT.glob("*.mod"):
+        try:
+            mod.unlink()
+        except OSError:
+            pass
+
+
+# Defensive pre-clean: a prior crashed / ``os._exit``-ed run may have left
+# poison ``.mod`` files in the root that would break this run's gfortran e2e
+# compiles before its own teardown ever runs.
+_clean_stray_mods()
+
 
 def pytest_sessionfinish(session, exitstatus):
     _pytest_exitstatus[0] = int(exitstatus)
+    _clean_stray_mods()
 
 
 @pytest.hookimpl(trylast=True)
