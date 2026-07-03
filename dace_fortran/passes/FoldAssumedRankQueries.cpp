@@ -149,13 +149,10 @@ static int traceStaticRank(mlir::Value v) {
 }
 
 struct FoldAssumedRankQueriesPass
-    : public mlir::PassWrapper<FoldAssumedRankQueriesPass,
-                               mlir::OperationPass<mlir::ModuleOp>> {
+    : public mlir::PassWrapper<FoldAssumedRankQueriesPass, mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(FoldAssumedRankQueriesPass)
 
-  llvm::StringRef getArgument() const final {
-    return "hlfir-fold-assumed-rank-queries";
-  }
+  llvm::StringRef getArgument() const final { return "hlfir-fold-assumed-rank-queries"; }
   llvm::StringRef getDescription() const final {
     return "Fold fir.box_rank / fir.is_assumed_size on concrete-rank "
            "actuals so SELECT RANK dispatches reduce to a single branch.";
@@ -177,9 +174,8 @@ struct FoldAssumedRankQueriesPass
       // ``fir.box_rank`` returns ``i8`` per the op definition, but
       // build the constant with the result type so the rewrite
       // tolerates any width Flang chose at lowering time.
-      auto cst = b.create<mlir::arith::ConstantOp>(
-          op.getLoc(), resTy,
-          b.getIntegerAttr(resTy, static_cast<int64_t>(rank)));
+      auto cst =
+          b.create<mlir::arith::ConstantOp>(op.getLoc(), resTy, b.getIntegerAttr(resTy, static_cast<int64_t>(rank)));
       op.getResult().replaceAllUsesWith(cst.getResult());
       op.erase();
     }
@@ -265,10 +261,8 @@ struct FoldAssumedRankQueriesPass
       // lower bound; the rank-aware ``hlfir.declare`` re-stamps
       // bounds when needed and that re-stamp is what reaches
       // user code, not this raw query).
-      auto lb = b.create<mlir::arith::ConstantOp>(op.getLoc(), idxTy,
-                                                  b.getIndexAttr(1));
-      auto exC = b.create<mlir::arith::ConstantOp>(op.getLoc(), idxTy,
-                                                   b.getIndexAttr(*ext));
+      auto lb = b.create<mlir::arith::ConstantOp>(op.getLoc(), idxTy, b.getIndexAttr(1));
+      auto exC = b.create<mlir::arith::ConstantOp>(op.getLoc(), idxTy, b.getIndexAttr(*ext));
       op.getLowerBound().replaceAllUsesWith(lb.getResult());
       op.getExtent().replaceAllUsesWith(exC.getResult());
       // Leave byte-stride to canonicalize -- replace only the two
@@ -292,8 +286,7 @@ struct FoldAssumedRankQueriesPass
       if (rank < 0) continue;
       b.setInsertionPoint(op);
       auto resTy = op.getResult().getType();
-      auto cst = b.create<mlir::arith::ConstantOp>(op.getLoc(), resTy,
-                                                   b.getIntegerAttr(resTy, 0));
+      auto cst = b.create<mlir::arith::ConstantOp>(op.getLoc(), resTy, b.getIntegerAttr(resTy, 0));
       op.getResult().replaceAllUsesWith(cst.getResult());
       op.erase();
     }

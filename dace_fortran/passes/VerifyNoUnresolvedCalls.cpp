@@ -43,9 +43,8 @@ static bool isAllowedCallee(llvm::StringRef name) {
   if (name.starts_with("_Fortran")) return true;
   // Common libm entries Flang lowers math intrinsics to.
   static const llvm::StringSet<> kLibm = {
-      "sinf",   "cosf",  "tanf",   "expf",  "logf",  "sqrtf", "powf",
-      "sin",    "cos",   "tan",    "exp",   "log",   "sqrt",  "pow",
-      "atan2f", "atan2", "hypotf", "hypot", "fabsf", "fabs",
+      "sinf", "cosf", "tanf", "expf", "logf",   "sqrtf", "powf",   "sin",   "cos",   "tan",
+      "exp",  "log",  "sqrt", "pow",  "atan2f", "atan2", "hypotf", "hypot", "fabsf", "fabs",
   };
   if (kLibm.contains(name)) return true;
   // C stdlib we might legitimately leave in the IR.
@@ -55,13 +54,10 @@ static bool isAllowedCallee(llvm::StringRef name) {
 }
 
 struct VerifyNoUnresolvedCallsPass
-    : public mlir::PassWrapper<VerifyNoUnresolvedCallsPass,
-                               mlir::OperationPass<mlir::ModuleOp>> {
+    : public mlir::PassWrapper<VerifyNoUnresolvedCallsPass, mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(VerifyNoUnresolvedCallsPass)
 
-  llvm::StringRef getArgument() const final {
-    return "hlfir-verify-no-unresolved-calls";
-  }
+  llvm::StringRef getArgument() const final { return "hlfir-verify-no-unresolved-calls"; }
   llvm::StringRef getDescription() const final {
     return "Fail if any fir.call still resolves to an external "
            "declaration outside the runtime/intrinsic allowlist.";
@@ -79,17 +75,14 @@ struct VerifyNoUnresolvedCallsPass
       unresolved.push_back(name.str());
     };
     module.walk([&](fir::CallOp call) {
-      if (auto sym = call.getCallee())
-        checkCallee(sym->getLeafReference().getValue());
+      if (auto sym = call.getCallee()) checkCallee(sym->getLeafReference().getValue());
     });
     // func.call is the canonical form too  --  belt-and-suspenders.
-    module.walk(
-        [&](mlir::func::CallOp call) { checkCallee(call.getCallee()); });
+    module.walk([&](mlir::func::CallOp call) { checkCallee(call.getCallee()); });
 
     if (unresolved.empty()) return;
 
-    std::string msg =
-        "unresolved calls after inlining (missing HLFIR inputs?):";
+    std::string msg = "unresolved calls after inlining (missing HLFIR inputs?):";
     // Deduplicate while preserving first-seen order so the message
     // isn't noisy when a single missing callee is called many times.
     llvm::StringSet<> seen;

@@ -72,8 +72,7 @@ class ExternalFunction:
         return self.c_function or self.name
 
 
-def dont_inline_names(external_functions: Iterable[ExternalFunction] = (),
-                      do_not_emit: Iterable[str] = ()) -> Set[str]:
+def dont_inline_names(external_functions: Iterable[ExternalFunction] = (), do_not_emit: Iterable[str] = ()) -> Set[str]:
     """The (lower-cased) union of names that must NOT be inlined: every emitted
     external function's :attr:`ExternalFunction.name` plus every ``do_not_emit``
     name.
@@ -86,8 +85,7 @@ def dont_inline_names(external_functions: Iterable[ExternalFunction] = (),
     return names
 
 
-def validate(external_functions: Iterable[ExternalFunction] = (),
-             do_not_emit: Iterable[str] = ()) -> None:
+def validate(external_functions: Iterable[ExternalFunction] = (), do_not_emit: Iterable[str] = ()) -> None:
     """Reject an inconsistent policy: a name that is both emitted and ignored
     (ambiguous intent), or a duplicate ``name`` across the emitted specs.
 

@@ -137,13 +137,10 @@ static llvm::StringRef traceToGlobalSym(mlir::Value v) {
 }
 
 struct PreserveMutableGlobalsPass
-    : public mlir::PassWrapper<PreserveMutableGlobalsPass,
-                               mlir::OperationPass<mlir::ModuleOp>> {
+    : public mlir::PassWrapper<PreserveMutableGlobalsPass, mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(PreserveMutableGlobalsPass)
 
-  llvm::StringRef getArgument() const final {
-    return "hlfir-preserve-mutable-globals";
-  }
+  llvm::StringRef getArgument() const final { return "hlfir-preserve-mutable-globals"; }
   llvm::StringRef getDescription() const final {
     return "Classify fir.global ops as INPUT vs MUTABLE based on whether "
            "the IR writes them; clear init bodies of INPUTs so sccp "
@@ -222,10 +219,8 @@ struct PreserveMutableGlobalsPass
       ++clearedInputs;
     });
 
-    LLVM_DEBUG(llvm::dbgs()
-               << "PreserveMutableGlobals: cleared " << clearedInputs
-               << " INPUT body(ies); kept " << mutableKept << " MUTABLE + "
-               << constantKept << " constant\n");
+    LLVM_DEBUG(llvm::dbgs() << "PreserveMutableGlobals: cleared " << clearedInputs << " INPUT body(ies); kept "
+                            << mutableKept << " MUTABLE + " << constantKept << " constant\n");
   }
 };
 

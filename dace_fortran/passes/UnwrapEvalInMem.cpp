@@ -78,14 +78,10 @@ namespace hlfir_bridge {
 
 namespace {
 
-struct UnwrapEvalInMemPass
-    : public mlir::PassWrapper<UnwrapEvalInMemPass,
-                               mlir::OperationPass<mlir::ModuleOp>> {
+struct UnwrapEvalInMemPass : public mlir::PassWrapper<UnwrapEvalInMemPass, mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(UnwrapEvalInMemPass)
 
-  llvm::StringRef getArgument() const final {
-    return "hlfir-unwrap-eval-in-mem";
-  }
+  llvm::StringRef getArgument() const final { return "hlfir-unwrap-eval-in-mem"; }
   llvm::StringRef getDescription() const final {
     return "Lower hlfir.eval_in_mem to fir.alloca + body + reads so the "
            "bridge's existing emitter handles array-valued expression "
@@ -103,8 +99,7 @@ struct UnwrapEvalInMemPass
         v = cv.getValue();
         continue;
       }
-      if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(def))
-        return dc.getResult(0);
+      if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(def)) return dc.getResult(0);
       return {};
     }
     return {};
@@ -193,8 +188,7 @@ struct UnwrapEvalInMemPass
       // expect an ``!hlfir.expr``, which we no longer produce.
       llvm::SmallVector<hlfir::DestroyOp, 2> destroys;
       for (auto* user : op.getResult().getUsers())
-        if (auto d = mlir::dyn_cast<hlfir::DestroyOp>(user))
-          destroys.push_back(d);
+        if (auto d = mlir::dyn_cast<hlfir::DestroyOp>(user)) destroys.push_back(d);
       for (auto d : destroys) d.erase();
 
       // Rewrite ``hlfir.apply %expr (%i)`` users to
@@ -214,11 +208,10 @@ struct UnwrapEvalInMemPass
         mlir::OpBuilder ab(a);
         auto elemTy = a.getResult().getType();
         auto eltRefTy = fir::ReferenceType::get(elemTy);
-        auto designate = ab.create<hlfir::DesignateOp>(
-            a.getLoc(), eltRefTy, /*memref=*/cloned,
-            /*indices=*/a.getIndices(),
-            /*typeparams=*/mlir::ValueRange{},
-            /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
+        auto designate = ab.create<hlfir::DesignateOp>(a.getLoc(), eltRefTy, /*memref=*/cloned,
+                                                       /*indices=*/a.getIndices(),
+                                                       /*typeparams=*/mlir::ValueRange{},
+                                                       /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
         auto loaded = ab.create<fir::LoadOp>(a.getLoc(), designate.getResult());
         a.getResult().replaceAllUsesWith(loaded.getResult());
         a.erase();
@@ -239,17 +232,16 @@ struct UnwrapEvalInMemPass
     auto alloca = builder.create<fir::AllocaOp>(loc, arrTy);
     std::string name = "_eval_in_mem_" + std::to_string(counter++);
     auto refTy = fir::ReferenceType::get(arrTy);
-    auto declare = builder.create<hlfir::DeclareOp>(
-        loc,
-        /*resultType0=*/refTy,
-        /*resultType1=*/refTy,
-        /*memref=*/alloca.getResult(),
-        /*shape=*/op.getShape(),
-        /*typeparams=*/op.getTypeparams(),
-        /*dummy_scope=*/mlir::Value{},
-        /*uniq_name=*/builder.getStringAttr(name),
-        /*fortran_attrs=*/fir::FortranVariableFlagsAttr{},
-        /*data_attr=*/cuf::DataAttributeAttr{});
+    auto declare = builder.create<hlfir::DeclareOp>(loc,
+                                                    /*resultType0=*/refTy,
+                                                    /*resultType1=*/refTy,
+                                                    /*memref=*/alloca.getResult(),
+                                                    /*shape=*/op.getShape(),
+                                                    /*typeparams=*/op.getTypeparams(),
+                                                    /*dummy_scope=*/mlir::Value{},
+                                                    /*uniq_name=*/builder.getStringAttr(name),
+                                                    /*fortran_attrs=*/fir::FortranVariableFlagsAttr{},
+                                                    /*data_attr=*/cuf::DataAttributeAttr{});
 
     mapper.map(bufArg, declare.getResult(0));
     for (auto& innerOp : llvm::make_early_inc_range(*entry)) {
@@ -261,8 +253,7 @@ struct UnwrapEvalInMemPass
     }
     llvm::SmallVector<hlfir::DestroyOp, 2> destroys;
     for (auto* user : op.getResult().getUsers())
-      if (auto d = mlir::dyn_cast<hlfir::DestroyOp>(user))
-        destroys.push_back(d);
+      if (auto d = mlir::dyn_cast<hlfir::DestroyOp>(user)) destroys.push_back(d);
     for (auto d : destroys) d.erase();
     op.getResult().replaceAllUsesWith(declare.getResult(0));
     op.erase();
@@ -324,8 +315,7 @@ struct UnwrapEvalInMemPass
       if (!save) continue;
 
       // The value being saved must be a ``fir.load`` of a declare.
-      auto load =
-          mlir::dyn_cast_or_null<fir::LoadOp>(save.getValue().getDefiningOp());
+      auto load = mlir::dyn_cast_or_null<fir::LoadOp>(save.getValue().getDefiningOp());
       if (!load) continue;
       auto srcDecl = traceToDeclareResult(load.getMemref());
       if (!srcDecl) continue;
@@ -347,15 +337,13 @@ struct UnwrapEvalInMemPass
         // not yet flatten through to per-member access.
         llvm::SmallVector<hlfir::AsExprOp, 2> asExprs;
         for (auto* u : bufDecl.getResult(0).getUsers())
-          if (auto ae = mlir::dyn_cast<hlfir::AsExprOp>(u))
-            asExprs.push_back(ae);
+          if (auto ae = mlir::dyn_cast<hlfir::AsExprOp>(u)) asExprs.push_back(ae);
         for (auto ae : asExprs) {
           // Drop any ``hlfir.destroy`` users of the expr (no expr to
           // destroy once we splice the wrapper out).
           llvm::SmallVector<hlfir::DestroyOp, 2> destroys;
           for (auto* eu : ae.getResult().getUsers())
-            if (auto d = mlir::dyn_cast<hlfir::DestroyOp>(eu))
-              destroys.push_back(d);
+            if (auto d = mlir::dyn_cast<hlfir::DestroyOp>(eu)) destroys.push_back(d);
           for (auto d : destroys) d.erase();
           ae.getResult().replaceAllUsesWith(srcDecl);
           ae.erase();
@@ -363,8 +351,7 @@ struct UnwrapEvalInMemPass
         // Any remaining ref-typed users of the declare get
         // re-pointed at the source declare directly.
         bufDecl.getResult(0).replaceAllUsesWith(srcDecl);
-        if (!bufDecl.getResult(1).use_empty())
-          bufDecl.getResult(1).replaceAllUsesWith(srcDecl);
+        if (!bufDecl.getResult(1).use_empty()) bufDecl.getResult(1).replaceAllUsesWith(srcDecl);
         bufDecl.erase();
       }
 
@@ -403,8 +390,6 @@ struct UnwrapEvalInMemPass
 
 }  // anonymous namespace
 
-std::unique_ptr<mlir::Pass> createUnwrapEvalInMemPass() {
-  return std::make_unique<UnwrapEvalInMemPass>();
-}
+std::unique_ptr<mlir::Pass> createUnwrapEvalInMemPass() { return std::make_unique<UnwrapEvalInMemPass>(); }
 
 }  // namespace hlfir_bridge

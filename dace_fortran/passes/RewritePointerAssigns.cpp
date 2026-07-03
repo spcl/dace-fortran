@@ -268,8 +268,7 @@ static OptPresence traceOptionalPresence(mlir::Value v) {
       if (func && owner->isEntryBlock()) {
         // An entry-arg flagged ``fir.optional`` is the real runtime case; any
         // other entry arg is unconditionally present.
-        if (func.getArgAttr(ba.getArgNumber(), "fir.optional"))
-          return OptPresence::Unknown;
+        if (func.getArgAttr(ba.getArgNumber(), "fir.optional")) return OptPresence::Unknown;
         return OptPresence::Present;
       }
       return OptPresence::Unknown;
@@ -278,14 +277,28 @@ static OptPresence traceOptionalPresence(mlir::Value v) {
     if (!d) return OptPresence::Unknown;
     if (mlir::isa<fir::AbsentOp>(d)) return OptPresence::Absent;
     // Boxing / addressing a concrete object proves presence.
-    if (mlir::isa<fir::EmboxOp, fir::AllocaOp, fir::AllocMemOp, fir::AddrOfOp,
-                  hlfir::DesignateOp>(d))
+    if (mlir::isa<fir::EmboxOp, fir::AllocaOp, fir::AllocMemOp, fir::AddrOfOp, hlfir::DesignateOp>(d))
       return OptPresence::Present;
-    if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) { v = cv.getValue(); continue; }
-    if (auto rb = mlir::dyn_cast<fir::ReboxOp>(d)) { v = rb.getBox(); continue; }
-    if (auto ld = mlir::dyn_cast<fir::LoadOp>(d)) { v = ld.getMemref(); continue; }
-    if (auto bx = mlir::dyn_cast<fir::BoxAddrOp>(d)) { v = bx.getVal(); continue; }
-    if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(d)) { v = decl.getMemref(); continue; }
+    if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
+      v = cv.getValue();
+      continue;
+    }
+    if (auto rb = mlir::dyn_cast<fir::ReboxOp>(d)) {
+      v = rb.getBox();
+      continue;
+    }
+    if (auto ld = mlir::dyn_cast<fir::LoadOp>(d)) {
+      v = ld.getMemref();
+      continue;
+    }
+    if (auto bx = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
+      v = bx.getVal();
+      continue;
+    }
+    if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(d)) {
+      v = decl.getMemref();
+      continue;
+    }
     return OptPresence::Unknown;
   }
   return OptPresence::Unknown;
@@ -317,8 +330,7 @@ static void foldPresenceGuardedIfs(mlir::func::FuncOp func) {
     OptPresence presence = OptPresence::Unknown;
     func.walk([&](fir::IfOp ifOp) {
       if (target) return;
-      auto isPresent = mlir::dyn_cast_or_null<fir::IsPresentOp>(
-          ifOp.getCondition().getDefiningOp());
+      auto isPresent = mlir::dyn_cast_or_null<fir::IsPresentOp>(ifOp.getCondition().getDefiningOp());
       if (!isPresent) return;
       auto p = traceOptionalPresence(isPresent.getVal());
       if (p == OptPresence::Unknown) return;
@@ -327,15 +339,11 @@ static void foldPresenceGuardedIfs(mlir::func::FuncOp func) {
     });
     if (!target) return;
 
-    mlir::Region& live = (presence == OptPresence::Present)
-                             ? target.getThenRegion()
-                             : target.getElseRegion();
+    mlir::Region& live = (presence == OptPresence::Present) ? target.getThenRegion() : target.getElseRegion();
     if (!live.empty()) {
       mlir::Block& blk = live.front();
       if (auto* term = blk.getTerminator(); term && target.getNumResults())
-        for (auto [res, val] :
-             llvm::zip(target.getResults(), term->getOperands()))
-          res.replaceAllUsesWith(val);
+        for (auto [res, val] : llvm::zip(target.getResults(), term->getOperands())) res.replaceAllUsesWith(val);
       // Hoist the live body (sans terminator) just before the ``if``, keeping
       // source order so each moved op's operands still dominate it.
       llvm::SmallVector<mlir::Operation*, 8> body;
@@ -515,8 +523,7 @@ static RebindChain traceRebindChain(mlir::Value v) {
 /// ``index``.  The ``step`` and ``hi`` are not used in element
 /// rebasing (they only shape extents, which DaCe gets from the
 /// parent declare's own shape).
-static bool mergeIndices(const RebindChain& c, mlir::ValueRange access_indices,
-                         mlir::OpBuilder& b, mlir::Location loc,
+static bool mergeIndices(const RebindChain& c, mlir::ValueRange access_indices, mlir::OpBuilder& b, mlir::Location loc,
                          llvm::SmallVectorImpl<mlir::Value>& out) {
   if (c.chain.empty()) {
     for (auto v : access_indices) out.push_back(v);
@@ -529,8 +536,7 @@ static bool mergeIndices(const RebindChain& c, mlir::ValueRange access_indices,
   };
   auto rebase = [&](mlir::Value access_idx, mlir::Value lo) -> mlir::Value {
     // Constant-fold ``lo == 1`` to keep the IR clean.
-    if (auto loCst = mlir::dyn_cast_or_null<mlir::arith::ConstantOp>(
-            lo.getDefiningOp())) {
+    if (auto loCst = mlir::dyn_cast_or_null<mlir::arith::ConstantOp>(lo.getDefiningOp())) {
       if (auto a = mlir::dyn_cast<mlir::IntegerAttr>(loCst.getValue())) {
         if (a.getInt() == 1) return toIndex(access_idx);
       }
@@ -539,16 +545,14 @@ static bool mergeIndices(const RebindChain& c, mlir::ValueRange access_indices,
     mlir::Value loIdx = toIndex(lo);
     auto c1 = b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(1));
     auto adj = b.create<mlir::arith::SubIOp>(loc, loIdx, c1.getResult());
-    return b.create<mlir::arith::AddIOp>(loc, aIdx, adj.getResult())
-        .getResult();
+    return b.create<mlir::arith::AddIOp>(loc, aIdx, adj.getResult()).getResult();
   };
 
   // Apply each chain step in INNER-first order.  Walk
   // ``chain.back()`` (innermost) first; result becomes the input
   // for the next-outer step (towards chain[0]).  Final result is
   // the index list against the parent's storage.
-  llvm::SmallVector<mlir::Value, 6> cur(access_indices.begin(),
-                                        access_indices.end());
+  llvm::SmallVector<mlir::Value, 6> cur(access_indices.begin(), access_indices.end());
   for (auto it = c.chain.rbegin(); it != c.chain.rend(); ++it) {
     const ChainStep& s = *it;
     llvm::SmallVector<mlir::Value, 6> next;
@@ -576,13 +580,10 @@ static bool mergeIndices(const RebindChain& c, mlir::ValueRange access_indices,
 }
 
 struct RewritePointerAssignsPass
-    : public mlir::PassWrapper<RewritePointerAssignsPass,
-                               mlir::OperationPass<mlir::ModuleOp>> {
+    : public mlir::PassWrapper<RewritePointerAssignsPass, mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(RewritePointerAssignsPass)
 
-  llvm::StringRef getArgument() const final {
-    return "hlfir-rewrite-pointer-assigns";
-  }
+  llvm::StringRef getArgument() const final { return "hlfir-rewrite-pointer-assigns"; }
   llvm::StringRef getDescription() const final {
     return "Collapse Fortran ``ptr => target`` rebinds under the "
            "strict-no-aliasing assumption: every use of ``ptr`` after "
@@ -594,8 +595,7 @@ struct RewritePointerAssignsPass
     // First collapse any ``PRESENT(optional)``-guarded ``fir.if`` to its live
     // branch (statically known post-inline) so a pointer rebound in both arms
     // becomes a single straight-line rebind whose target dominates its reads.
-    getOperation().walk(
-        [](mlir::func::FuncOp f) { foldPresenceGuardedIfs(f); });
+    getOperation().walk([](mlir::func::FuncOp f) { foldPresenceGuardedIfs(f); });
 
     // Collect candidates first; rewriting mutates the IR and would
     // invalidate a fused walk.
@@ -603,8 +603,7 @@ struct RewritePointerAssignsPass
     getOperation().walk([&](hlfir::DeclareOp d) {
       auto attrs = d.getFortranAttrs();
       if (!attrs) return;
-      if (bitEnumContainsAny(*attrs, fir::FortranVariableFlagsEnum::pointer))
-        ptrDecls.push_back(d);
+      if (bitEnumContainsAny(*attrs, fir::FortranVariableFlagsEnum::pointer)) ptrDecls.push_back(d);
     });
 
     for (auto ptrDecl : ptrDecls) rewrite(ptrDecl);
@@ -623,8 +622,7 @@ struct RewritePointerAssignsPass
     getOperation().walk([&](hlfir::DeclareOp d) {
       auto attrs = d.getFortranAttrs();
       if (!attrs) return;
-      if (!bitEnumContainsAny(*attrs, fir::FortranVariableFlagsEnum::pointer))
-        return;
+      if (!bitEnumContainsAny(*attrs, fir::FortranVariableFlagsEnum::pointer)) return;
       if (d.getResult(0).use_empty() && d.getResult(1).use_empty()) d.erase();
     });
   }
@@ -683,18 +681,15 @@ struct RewritePointerAssignsPass
 
       // Skip the initial nullify on either rebind form.
       if (auto embox = mlir::dyn_cast_or_null<fir::EmboxOp>(valDef))
-        if (mlir::isa_and_nonnull<fir::ZeroOp>(
-                embox.getMemref().getDefiningOp()))
-          continue;
+        if (mlir::isa_and_nonnull<fir::ZeroOp>(embox.getMemref().getDefiningOp())) continue;
 
       nonNullifyStores.push_back(st);
     }
 
     // Order the non-nullify stores in IR-walk order so "last"
     // means last observable rebind.
-    std::sort(
-        nonNullifyStores.begin(), nonNullifyStores.end(),
-        [](fir::StoreOp a, fir::StoreOp b) { return a->isBeforeInBlock(b); });
+    std::sort(nonNullifyStores.begin(), nonNullifyStores.end(),
+              [](fir::StoreOp a, fir::StoreOp b) { return a->isBeforeInBlock(b); });
 
     // Interleaved-rebind detection: a read between two rebinds observes
     // the EARLIER target.  The bridge lowers a rebind as a View (or a
@@ -714,8 +709,7 @@ struct RewritePointerAssignsPass
       mlir::DominanceInfo dom;
       for (auto ld : loads) {
         if (!dom.dominates(effective, ld.getOperation())) {
-          ld.emitError("hlfir-rewrite-pointer-assigns: pointer ``" +
-                       ptrDecl.getUniqName().str() +
+          ld.emitError("hlfir-rewrite-pointer-assigns: pointer ``" + ptrDecl.getUniqName().str() +
                        "`` is read between two rebind sites (interleaved "
                        "rebind)  --  the bridge lowers a rebind as a View of "
                        "a single source, so a read that may observe an "
@@ -761,8 +755,7 @@ struct RewritePointerAssignsPass
       auto* def = lb.getDefiningOp();
       if (!def) return false;
       if (auto c = mlir::dyn_cast<mlir::arith::ConstantOp>(def)) {
-        if (auto a = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue()))
-          return a.getInt() == 1;
+        if (auto a = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue())) return a.getInt() == 1;
       }
       return false;
     };
@@ -779,9 +772,7 @@ struct RewritePointerAssignsPass
       return bd.getVal() == srcBox;
     };
     auto isIdentityShift = [&](mlir::Operation* shapeDef, mlir::Value srcBox) {
-      auto checkLb = [&](mlir::Value lb) {
-        return isConstantOne(lb) || isBoxDimsLowerBoundOfSource(lb, srcBox);
-      };
+      auto checkLb = [&](mlir::Value lb) { return isConstantOne(lb) || isBoxDimsLowerBoundOfSource(lb, srcBox); };
       if (auto s = mlir::dyn_cast_or_null<fir::ShiftOp>(shapeDef)) {
         for (mlir::Value lb : s.getOrigins())
           if (!checkLb(lb)) return false;
@@ -805,12 +796,10 @@ struct RewritePointerAssignsPass
       auto* def = lb.getDefiningOp();
       if (!def) return std::nullopt;
       if (auto c = mlir::dyn_cast<mlir::arith::ConstantOp>(def))
-        if (auto a = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue()))
-          return a.getInt();
+        if (auto a = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue())) return a.getInt();
       return std::nullopt;
     };
-    auto tryExtractConstLbs = [&](mlir::Operation* shapeDef,
-                                  llvm::SmallVectorImpl<int64_t>& out) -> bool {
+    auto tryExtractConstLbs = [&](mlir::Operation* shapeDef, llvm::SmallVectorImpl<int64_t>& out) -> bool {
       out.clear();
       if (auto s = mlir::dyn_cast_or_null<fir::ShiftOp>(shapeDef)) {
         for (mlir::Value lb : s.getOrigins()) {
@@ -844,8 +833,8 @@ struct RewritePointerAssignsPass
       if (auto rb = mlir::dyn_cast<fir::ReboxOp>(def)) {
         if (mlir::Value shape = rb.getShape()) {
           auto* shapeDef = shape.getDefiningOp();
-          bool isShift = mlir::isa_and_nonnull<fir::ShiftOp>(shapeDef) ||
-                         mlir::isa_and_nonnull<fir::ShapeShiftOp>(shapeDef);
+          bool isShift =
+              mlir::isa_and_nonnull<fir::ShiftOp>(shapeDef) || mlir::isa_and_nonnull<fir::ShapeShiftOp>(shapeDef);
           if (isShift && !isIdentityShift(shapeDef, rb.getBox())) {
             // Bounds remap (``w(0:n-1) => src(1:n)``): the rebox shift
             // rebases the pointer's lower bound.  If every lb is a
@@ -888,8 +877,8 @@ struct RewritePointerAssignsPass
       if (auto eb = mlir::dyn_cast<fir::EmboxOp>(def)) {
         if (mlir::Value shape = eb.getShape()) {
           auto* shapeDef = shape.getDefiningOp();
-          bool isShift = mlir::isa_and_nonnull<fir::ShiftOp>(shapeDef) ||
-                         mlir::isa_and_nonnull<fir::ShapeShiftOp>(shapeDef);
+          bool isShift =
+              mlir::isa_and_nonnull<fir::ShiftOp>(shapeDef) || mlir::isa_and_nonnull<fir::ShapeShiftOp>(shapeDef);
           // A plain whole-array rebind onto an allocatable/pointer member
           // (``my_arr2 => my_arr%w``) is NOT a bounds remap: flang emboxes
           // ``fir.box_addr %srcBox`` and re-asserts the source's OWN runtime
@@ -955,8 +944,7 @@ struct RewritePointerAssignsPass
         if (other == ptrDecl) return;
         auto attrs = other.getFortranAttrs();
         if (!attrs) return;
-        if (!bitEnumContainsAny(*attrs, fir::FortranVariableFlagsEnum::pointer))
-          return;
+        if (!bitEnumContainsAny(*attrs, fir::FortranVariableFlagsEnum::pointer)) return;
         // Walk other.getMemref() back through hlfir.declare /
         // fir.convert chain and check if it reaches ptrDecl's
         // results.
@@ -1038,22 +1026,18 @@ struct RewritePointerAssignsPass
         }
       }
       if (tagAsView) {
-        ptrDecl->setAttr("hlfir_bridge.pointer_view",
-                         mlir::UnitAttr::get(&getContext()));
+        ptrDecl->setAttr("hlfir_bridge.pointer_view", mlir::UnitAttr::get(&getContext()));
         // Bounds-remap lower bound(s) captured during the value-chain
         // walk (``w(0:n-1) => src(1:n)``): forward them to extract_vars,
         // which surfaces them as the view's ``lower_bounds`` so
         // descriptors.py stamps ``offset_<w>_d<d> = lb``.  Absent for a
         // default-lb section rebind (identity shift -> remapLbs empty).
         if (!remapLbs.empty())
-          ptrDecl->setAttr(
-              "hlfir_bridge.pointer_view_lb",
-              mlir::DenseI64ArrayAttr::get(&getContext(), remapLbs));
+          ptrDecl->setAttr("hlfir_bridge.pointer_view_lb", mlir::DenseI64ArrayAttr::get(&getContext(), remapLbs));
         return;
       }
       if (tagScalarView) {
-        ptrDecl->setAttr("hlfir_bridge.pointer_view_scalar",
-                         mlir::UnitAttr::get(&getContext()));
+        ptrDecl->setAttr("hlfir_bridge.pointer_view_scalar", mlir::UnitAttr::get(&getContext()));
         return;
       }
     }
@@ -1072,15 +1056,13 @@ struct RewritePointerAssignsPass
       return;
     }
 
-    ptrDecl.emitWarning()
-        << "hlfir-rewrite-pointer-assigns: collapsing pointer "
-        << "rebind ``" << ptrDecl.getUniqName().str() << " => "
-        << chain.parent.getUniqName().str()
-        << "(...chain...)`` under the strict-no-aliasing "
-        << "assumption.  Every access through the pointer is "
-        << "rewritten to a direct designate of the parent's "
-        << "storage; if your program relies on alias semantics "
-        << "this rewrite is unsafe.";
+    ptrDecl.emitWarning() << "hlfir-rewrite-pointer-assigns: collapsing pointer "
+                          << "rebind ``" << ptrDecl.getUniqName().str() << " => " << chain.parent.getUniqName().str()
+                          << "(...chain...)`` under the strict-no-aliasing "
+                          << "assumption.  Every access through the pointer is "
+                          << "rewritten to a direct designate of the parent's "
+                          << "storage; if your program relies on alias semantics "
+                          << "this rewrite is unsafe.";
 
     // Unified rewrite: for every ``fir.load %ptrDecl#0`` (and
     // every load through an aliased pointer declare  --  the
@@ -1117,9 +1099,7 @@ struct RewritePointerAssignsPass
       // "different blocks"  --  treat them as "after" since they
       // can only execute after the enclosing block reaches
       // the loop.
-      if (ld->getBlock() == rebindStore->getBlock() &&
-          ld->isBeforeInBlock(rebindStore))
-        return;
+      if (ld->getBlock() == rebindStore->getBlock() && ld->isBeforeInBlock(rebindStore)) return;
       // When the pointer aliases a whole DERIVED-TYPE member
       // (``p => x%a%in_domain``), the rebind target is a record ref, not an
       // array, and its reads are component selects (``p%c``) that can't
@@ -1131,11 +1111,9 @@ struct RewritePointerAssignsPass
       // use_empty-swept and we add a live user below).  Reads then re-root on
       // this target instead of on the parent's index storage.
       mlir::Value recordTarget;
-      if (!chain.chain.empty() &&
-          recordRefOf(chain.chain.front().dg.getResult().getType()))
+      if (!chain.chain.empty() && recordRefOf(chain.chain.front().dg.getResult().getType()))
         recordTarget = chain.chain.front().dg.getResult();
-      auto retagTo = [](mlir::OpBuilder& b, mlir::Location loc, mlir::Value v,
-                        mlir::Type want) -> mlir::Value {
+      auto retagTo = [](mlir::OpBuilder& b, mlir::Location loc, mlir::Value v, mlir::Type want) -> mlir::Value {
         if (v.getType() == want) return v;
         return b.create<fir::ConvertOp>(loc, want, v).getResult();
       };
@@ -1170,11 +1148,10 @@ struct RewritePointerAssignsPass
             continue;  // leave userDg alive; bail-loud
                        // path or downstream surfaces
                        // the unsupported shape
-          auto newDg = b.create<hlfir::DesignateOp>(
-              loc,
-              /*result_type=*/userDg.getResult().getType(),
-              /*memref=*/chain.parent.getResult(0),
-              /*indices=*/mlir::ValueRange{merged});
+          auto newDg = b.create<hlfir::DesignateOp>(loc,
+                                                    /*result_type=*/userDg.getResult().getType(),
+                                                    /*memref=*/chain.parent.getResult(0),
+                                                    /*indices=*/mlir::ValueRange{merged});
           userDg.getResult().replaceAllUsesWith(newDg.getResult());
           deadReaders.push_back(userDg);
           continue;
@@ -1188,8 +1165,7 @@ struct RewritePointerAssignsPass
           // box_addr's result type).  Downstream component designates then
           // read ``target%c`` directly.
           if (recordTarget) {
-            replacement =
-                retagTo(b, loc, recordTarget, ba.getResult().getType());
+            replacement = retagTo(b, loc, recordTarget, ba.getResult().getType());
             ba.getResult().replaceAllUsesWith(replacement);
             deadReaders.push_back(ba);
             continue;
@@ -1206,20 +1182,16 @@ struct RewritePointerAssignsPass
             // (``ptr => arr(i)``) and the rare
             // scalar-view-of-section.
             llvm::SmallVector<mlir::Value, 6> merged;
-            if (!mergeIndices(chain, /*access_indices=*/{}, b, loc, merged))
-              continue;
+            if (!mergeIndices(chain, /*access_indices=*/{}, b, loc, merged)) continue;
             // Result type follows the original box_addr's
             // result; designate yields a ref into the
             // parent's storage at the chain's position.
-            replacement =
-                b.create<hlfir::DesignateOp>(loc, ba.getResult().getType(),
-                                             chain.parent.getResult(0),
-                                             mlir::ValueRange{merged})
-                    .getResult();
+            replacement = b.create<hlfir::DesignateOp>(loc, ba.getResult().getType(), chain.parent.getResult(0),
+                                                       mlir::ValueRange{merged})
+                              .getResult();
           }
           if (replacement.getType() != ba.getResult().getType()) {
-            replacement = b.create<fir::ConvertOp>(
-                loc, ba.getResult().getType(), replacement);
+            replacement = b.create<fir::ConvertOp>(loc, ba.getResult().getType(), replacement);
           }
           ba.getResult().replaceAllUsesWith(replacement);
           deadReaders.push_back(ba);
@@ -1235,9 +1207,8 @@ struct RewritePointerAssignsPass
           // place (the external then connects to the target array, not an
           // unnameable copy buffer).  A chained / sectioned rebind keeps its
           // copy  --  that may be a genuine non-contiguous materialisation.
-          llvm::SmallVector<mlir::Operation*, 2> boxUsers(
-              cin.getResult(0).getUsers().begin(),
-              cin.getResult(0).getUsers().end());
+          llvm::SmallVector<mlir::Operation*, 2> boxUsers(cin.getResult(0).getUsers().begin(),
+                                                          cin.getResult(0).getUsers().end());
           // Only fold when the rebind is a whole contiguous target AND every
           // use of the copied box is a box_addr (so eliding the copy is
           // complete -- a non-box_addr use would dangle once copy_in/out go).
@@ -1256,15 +1227,13 @@ struct RewritePointerAssignsPass
               // box, which does not fir.convert to a ref/ptr).
               mlir::Value replacement = chain.parent.getResult(1);
               if (replacement.getType() != ba.getResult().getType())
-                replacement = b.create<fir::ConvertOp>(
-                    ba.getLoc(), ba.getResult().getType(), replacement);
+                replacement = b.create<fir::ConvertOp>(ba.getLoc(), ba.getResult().getType(), replacement);
               ba.getResult().replaceAllUsesWith(replacement);
               deadReaders.push_back(ba);
             }
             // Drop the matching copy_out (it consumes the copy_in flag).
-            llvm::SmallVector<mlir::Operation*, 2> flagUsers(
-                cin.getResult(1).getUsers().begin(),
-                cin.getResult(1).getUsers().end());
+            llvm::SmallVector<mlir::Operation*, 2> flagUsers(cin.getResult(1).getUsers().begin(),
+                                                             cin.getResult(1).getUsers().end());
             for (auto* fu : flagUsers)
               if (mlir::isa<hlfir::CopyOutOp>(fu)) deadReaders.push_back(fu);
             deadReaders.push_back(cin);
@@ -1311,8 +1280,7 @@ struct RewritePointerAssignsPass
 
     // Erase use-empty alias declares.
     for (auto alias : aliasesToErase) {
-      if (alias.getResult(0).use_empty() && alias.getResult(1).use_empty())
-        alias.erase();
+      if (alias.getResult(0).use_empty() && alias.getResult(1).use_empty()) alias.erase();
     }
 
     // Erase the rebind store + the entire alloca/init chain feeding
@@ -1335,8 +1303,7 @@ struct RewritePointerAssignsPass
     }
     for (auto* op : deadInit) op->erase();
 
-    if (ptrDecl.getResult(0).use_empty() && ptrDecl.getResult(1).use_empty())
-      ptrDecl.erase();
+    if (ptrDecl.getResult(0).use_empty() && ptrDecl.getResult(1).use_empty()) ptrDecl.erase();
 
     // Sweep the dangling embox + zero_bits + alloca if no users
     // remain.
@@ -1347,8 +1314,6 @@ struct RewritePointerAssignsPass
 
 }  // namespace
 
-std::unique_ptr<mlir::Pass> createRewritePointerAssignsPass() {
-  return std::make_unique<RewritePointerAssignsPass>();
-}
+std::unique_ptr<mlir::Pass> createRewritePointerAssignsPass() { return std::make_unique<RewritePointerAssignsPass>(); }
 
 }  // namespace hlfir_bridge

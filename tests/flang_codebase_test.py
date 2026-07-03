@@ -33,13 +33,11 @@ from dace_fortran.flang_codebase import (
 # local out-of-tree checkout.  The BUILD dir is owned by the
 # ``icon_build`` fixture (root conftest.py), which builds into TMP
 # storage on demand -- no repo-tree pollution.
-_ICON_SRC = Path(os.environ.get(
-    "ICON_SRC", str(Path(__file__).resolve().parent / "icon" / "full" / "icon-model")))
+_ICON_SRC = Path(os.environ.get("ICON_SRC", str(Path(__file__).resolve().parent / "icon" / "full" / "icon-model")))
 _VELOCITY_SRC = _ICON_SRC / "src" / "atm_dyn_iconam" / "mo_velocity_advection.f90"
 _VELOCITY_BAK = _VELOCITY_SRC.with_suffix(".f90.bak")
 
-_CACHE_DIR = Path(os.environ.get(
-    "DACE_FORTRAN_CACHE", str(Path(tempfile.gettempdir()) / "dace-fortran-cache")))
+_CACHE_DIR = Path(os.environ.get("DACE_FORTRAN_CACHE", str(Path(tempfile.gettempdir()) / "dace-fortran-cache")))
 
 # Prefer the pristine ``.bak`` if a developer left one; otherwise the
 # submodule's own (pristine) source is fine.
@@ -134,8 +132,7 @@ def test_extract_make_compile_args_for_icon_velocity(icon_build):
     assert src_include in args["include_dirs"]
 
 
-@pytest.mark.skipif(not (_HAVE_FLANG and _HAVE_OPENMPI),
-                    reason="needs flang-new-21 + OpenMPI")
+@pytest.mark.skipif(not (_HAVE_FLANG and _HAVE_OPENMPI), reason="needs flang-new-21 + OpenMPI")
 def test_prepare_translation_unit_flang_clean_on_icon_velocity(tmp_path: Path, icon_build):
     """Compose a TU for ICON's real ``mo_velocity_advection.f90`` via
     the helpers and verify flang-21 lowers it to HLFIR with zero

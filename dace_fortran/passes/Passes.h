@@ -23,6 +23,7 @@ std::unique_ptr<mlir::Pass> createInlineAllPass();
 std::unique_ptr<mlir::Pass> createLowerFirSelectCasePass();
 std::unique_ptr<mlir::Pass> createFlattenStructsPass();
 std::unique_ptr<mlir::Pass> createSplitAoRDummiesPass();
+std::unique_ptr<mlir::Pass> createEliminateDoubleBufferTogglePass();
 std::unique_ptr<mlir::Pass> createDefaultIntentPass();
 std::unique_ptr<mlir::Pass> createVerifyNoUnresolvedCallsPass();
 std::unique_ptr<mlir::Pass> createFoldElementAliasesPass();

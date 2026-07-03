@@ -21,8 +21,7 @@ import pytest
 
 from _util import build_sdfg, have_flang
 
-pytestmark = pytest.mark.skipif(not have_flang(),
-                                reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
 
 def test_mod_in_array_index(tmp_path):
@@ -44,8 +43,7 @@ SUBROUTINE mod_idx(a, out, n, m)
 END SUBROUTINE
 END MODULE mod_idx_mod
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="mod_idx",
-                      entry="mod_idx_mod::mod_idx").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="mod_idx", entry="mod_idx_mod::mod_idx").build()
     a = np.array([10.0, 20.0, 30.0], dtype=np.float64, order="F")
     out = np.zeros(5, dtype=np.float64, order="F")
     sdfg(a=a, out=out, n=np.int32(3), m=np.int32(5))
@@ -76,8 +74,7 @@ SUBROUTINE k4_idx(a, out, n)
 END SUBROUTINE
 END MODULE k4_idx_mod
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="k4_idx",
-                      entry="k4_idx_mod::k4_idx").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="k4_idx", entry="k4_idx_mod::k4_idx").build()
     a = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64, order="F")
     out = np.zeros(1, dtype=np.float64)
     sdfg(a=a, out=out, n=np.int32(4))
@@ -102,8 +99,7 @@ SUBROUTINE mod_idx_2d(a, out, n, m)
 END SUBROUTINE
 END MODULE mod_idx_2d_mod
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="mod_idx_2d",
-                      entry="mod_idx_2d_mod::mod_idx_2d").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="mod_idx_2d", entry="mod_idx_2d_mod::mod_idx_2d").build()
     a = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float64, order="F")
     out = np.zeros(3, dtype=np.float64, order="F")
     sdfg(a=a, out=out, n=np.int32(3), m=np.int32(3))

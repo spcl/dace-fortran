@@ -28,95 +28,41 @@ void registerAllBridgePasses() {
   // registered by the Flang dialect to know how to inline fir.call.
   mlir::registerPass([]() { return mlir::createInlinerPass(); });
 
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createPropagateShapesPass();
-  });
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createVersionShapeScalarsPass();
-  });
-  mlir::registerPass(
-      []() -> std::unique_ptr<mlir::Pass> { return createInlineAllPass(); });
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createLowerFirSelectCasePass();
-  });
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createFlattenStructsPass();
-  });
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createSplitAoRDummiesPass();
-  });
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createDefaultIntentPass();
-  });
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createVerifyNoUnresolvedCallsPass();
-  });
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createFoldElementAliasesPass();
-  });
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createFoldCopyInOutPass();
-  });
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createExpandVectorSubscriptGatherPass();
-  });
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createExpandVectorSubscriptScatterPass();
-  });
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createRejectPolymorphismPass();
-  });
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createRewritePointerAssignsPass();
-  });
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createRewriteSequenceAssociationPass();
-  });
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createLiftReductionOperandsPass();
-  });
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createLiftAllocArrayOfRecordsPass();
-  });
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createLiftAosPointerRecordsPass();
-  });
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createPruneUnreachablePass();
-  });
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createMarshalExternalStructsPass();
-  });
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createUnwrapEvalInMemPass();
-  });
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createStripErrorHelpersPass();
-  });
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createStripRuntimeIoPass();
-  });
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createStripCharacterRuntimePass();
-  });
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createPreserveMutableGlobalsPass();
-  });
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createMarkBoundsRemapViewsPass();
-  });
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return createFoldAssumedRankQueriesPass();
-  });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createPropagateShapesPass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createVersionShapeScalarsPass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createInlineAllPass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createLowerFirSelectCasePass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createFlattenStructsPass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createSplitAoRDummiesPass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createEliminateDoubleBufferTogglePass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createDefaultIntentPass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createVerifyNoUnresolvedCallsPass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createFoldElementAliasesPass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createFoldCopyInOutPass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createExpandVectorSubscriptGatherPass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createExpandVectorSubscriptScatterPass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createRejectPolymorphismPass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createRewritePointerAssignsPass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createRewriteSequenceAssociationPass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createLiftReductionOperandsPass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createLiftAllocArrayOfRecordsPass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createLiftAosPointerRecordsPass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createPruneUnreachablePass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createMarshalExternalStructsPass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createUnwrapEvalInMemPass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createStripErrorHelpersPass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createStripRuntimeIoPass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createStripCharacterRuntimePass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createPreserveMutableGlobalsPass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createMarkBoundsRemapViewsPass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createFoldAssumedRankQueriesPass(); });
   // Flang's polymorphic-op conversion: statically devirtualises
   // ``fir.dispatch`` / ``fir.select_type`` ops whose target is
   // resolvable at compile time.  Run BEFORE
   // ``hlfir-reject-polymorphism`` so legitimately-monomorphic
   // dispatches succeed; surviving ops after the conversion are
   // truly runtime-polymorphic and get rejected.
-  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> {
-    return fir::createPolymorphicOpConversion();
-  });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return fir::createPolymorphicOpConversion(); });
 }
 
 }  // namespace hlfir_bridge

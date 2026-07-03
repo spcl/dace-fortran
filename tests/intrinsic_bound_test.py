@@ -223,9 +223,7 @@ MODULE test_bounds
     END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src,
-                      tmp_path,
-                      name='intrinsic_bound_test_function',
+    sdfg = build_sdfg(src, tmp_path, name='intrinsic_bound_test_function',
                       entry='intrinsic_bound_test_function').build()
 
     size = 4
@@ -270,9 +268,7 @@ MODULE test_bounds
     END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src,
-                      tmp_path,
-                      name='intrinsic_bound_test_function',
+    sdfg = build_sdfg(src, tmp_path, name='intrinsic_bound_test_function',
                       entry='intrinsic_bound_test_function').build()
 
     size = 4
@@ -326,9 +322,7 @@ MODULE test_bounds
     END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src,
-                      tmp_path,
-                      name='intrinsic_bound_test_function',
+    sdfg = build_sdfg(src, tmp_path, name='intrinsic_bound_test_function',
                       entry='intrinsic_bound_test_function').build()
 
     size = 4

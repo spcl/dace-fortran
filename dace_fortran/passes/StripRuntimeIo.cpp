@@ -118,16 +118,14 @@ static constexpr llvm::StringLiteral kFortranIoPrefix = "_FortranAio";
 /// Build a benign constant of ``ty`` immediately before ``call`` to
 /// replace one of its results.  Returns ``nullptr`` if the result type
 /// isn't one of the three the Fortran I/O runtime is known to produce.
-static mlir::Value makeReplacement(mlir::OpBuilder& builder, mlir::Location loc,
-                                   mlir::Type ty) {
+static mlir::Value makeReplacement(mlir::OpBuilder& builder, mlir::Location loc, mlir::Type ty) {
   // ``i1`` (per-item ``Output*`` / ``Input*`` status) and ``i32``
   // (final ``EndIoStatement`` iostat code) -> a plain ``arith.constant``
   // of zero.  Zero is also the canonical "no error" iostat value, so
   // any user that reads ``WRITE(..., IOSTAT=ios)`` into a variable sees
   // the success path.
   if (auto intTy = mlir::dyn_cast<mlir::IntegerType>(ty)) {
-    return builder.create<mlir::arith::ConstantOp>(
-        loc, builder.getIntegerAttr(intTy, 0));
+    return builder.create<mlir::arith::ConstantOp>(loc, builder.getIntegerAttr(intTy, 0));
   }
   // ``!fir.ref<i8>`` (the IO cookie threaded between ``Begin*`` and
   // subsequent ``Output*`` / ``End*`` calls) -> ``fir.zero_bits``,
@@ -144,9 +142,7 @@ static mlir::Value makeReplacement(mlir::OpBuilder& builder, mlir::Location loc,
 // The pass.
 // ---------------------------------------------------------------------------
 
-struct StripRuntimeIoPass
-    : public mlir::PassWrapper<StripRuntimeIoPass,
-                               mlir::OperationPass<mlir::ModuleOp>> {
+struct StripRuntimeIoPass : public mlir::PassWrapper<StripRuntimeIoPass, mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(StripRuntimeIoPass)
 
   llvm::StringRef getArgument() const final { return "hlfir-strip-runtime-io"; }
@@ -203,11 +199,9 @@ struct StripRuntimeIoPass
         mlir::OpBuilder builder(call);
         bool allReplaced = true;
         for (auto res : call.getResults()) {
-          mlir::Value repl =
-              makeReplacement(builder, call.getLoc(), res.getType());
+          mlir::Value repl = makeReplacement(builder, call.getLoc(), res.getType());
           if (!repl) {
-            LLVM_DEBUG(llvm::dbgs() << "StripRuntimeIo: refusing to strip "
-                                    << name << " -- result type unsupported\n");
+            LLVM_DEBUG(llvm::dbgs() << "StripRuntimeIo: refusing to strip " << name << " -- result type unsupported\n");
             allReplaced = false;
             break;
           }
@@ -219,15 +213,12 @@ struct StripRuntimeIoPass
 
     for (auto call : toErase) call->erase();
 
-    LLVM_DEBUG(llvm::dbgs() << "StripRuntimeIo: erased " << toErase.size()
-                            << " stdout-bound _FortranAio* call(s)\n");
+    LLVM_DEBUG(llvm::dbgs() << "StripRuntimeIo: erased " << toErase.size() << " stdout-bound _FortranAio* call(s)\n");
   }
 };
 
 }  // anonymous namespace
 
-std::unique_ptr<mlir::Pass> createStripRuntimeIoPass() {
-  return std::make_unique<StripRuntimeIoPass>();
-}
+std::unique_ptr<mlir::Pass> createStripRuntimeIoPass() { return std::make_unique<StripRuntimeIoPass>(); }
 
 }  // namespace hlfir_bridge

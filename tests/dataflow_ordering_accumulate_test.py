@@ -128,8 +128,7 @@ def test_prefix_scan_early_save_vs_late_produced(tmp_path: Path):
     """``flux(jk+1)=flux(jk)+(qn-q0)*g`` where ``q0`` is saved early and
     ``qn`` produced in a later loop, per block.  Must equal gfortran."""
     ref = _f2py(_PREFIX_SCAN, tmp_path / "ref", "scan_ref")
-    sdfg = build_sdfg(_PREFIX_SCAN, _mkd(tmp_path / "sdfg"), name="outer",
-                      entry="prefix_scan_mod::outer").build()
+    sdfg = build_sdfg(_PREFIX_SCAN, _mkd(tmp_path / "sdfg"), name="outer", entry="prefix_scan_mod::outer").build()
 
     klon, klev, nb = 1, 40, 4
     rng = np.random.default_rng(0)
@@ -204,8 +203,7 @@ def test_very_long_accumulate_tasklet(tmp_path: Path):
     early-saved (``s0``) and late-produced (``sn``) operand, prefix-
     scanned.  Pins the CLOUDSC ``ZQXN2D-ZQX0+...`` increment shape."""
     ref = _f2py(_LONG_TASKLET, tmp_path / "ref", "long_ref")
-    sdfg = build_sdfg(_LONG_TASKLET, _mkd(tmp_path / "sdfg"), name="kern",
-                      entry="long_tasklet_mod::kern").build()
+    sdfg = build_sdfg(_LONG_TASKLET, _mkd(tmp_path / "sdfg"), name="kern", entry="long_tasklet_mod::kern").build()
 
     n, klev = 1, 50
     rng = np.random.default_rng(1)

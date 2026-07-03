@@ -29,9 +29,7 @@ from _util import have_flang
 
 from dace_fortran import build_sdfg_from_files
 
-
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
-
 
 _SRC = """
 module m_array_return
@@ -64,7 +62,5 @@ def test_whole_array_assignment_from_function_return(tmp_path):
     """The bridge builds an SDFG for the ``tmp = make3(src(i))`` pattern."""
     src = tmp_path / "m.f90"
     src.write_text(_SRC)
-    sdfg = build_sdfg_from_files(
-        [src], entry="m_array_return::kern",
-        name="array_return", out_dir=tmp_path / "build")
+    sdfg = build_sdfg_from_files([src], entry="m_array_return::kern", name="array_return", out_dir=tmp_path / "build")
     sdfg.validate()

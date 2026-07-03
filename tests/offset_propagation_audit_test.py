@@ -72,8 +72,9 @@ subroutine two_outer(arr, out)
 end subroutine two_outer
 """
     sdfg = _build(src, tmp_path, "two_outer")
-    assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0') == -4, (f"2-level inline literal should propagate -4; got "
-                                                             f"{dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0')}")
+    assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0') == -4, (
+        f"2-level inline literal should propagate -4; got "
+        f"{dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0')}")
     arr = np.asfortranarray(np.array([10, 20, 30, 40, 50], dtype=np.int32))
     out = np.zeros(1, dtype=np.int32, order='F')
     sdfg(arr=arr, out=out, arr_d0=np.int64(5))
@@ -94,8 +95,9 @@ subroutine assumed_lb(arr, n, out)
 end subroutine assumed_lb
 """
     sdfg = _build(src, tmp_path, "assumed_lb")
-    assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0') == -5, (f"explicit arr(-5:) lower bound should specialise to -5; got "
-                                                     f"{dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0')}")
+    assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0') == -5, (
+        f"explicit arr(-5:) lower bound should specialise to -5; got "
+        f"{dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0')}")
     # Buffer arr(-5..5): 11 elements; arr(-5)=buf[0], arr(-3)=buf[2],
     # arr(0)=buf[5].
     arr = np.asfortranarray(np.array([(i - 5) * 10 for i in range(11)], dtype=np.int32))
@@ -127,7 +129,7 @@ subroutine sec_assign(out)
 end subroutine sec_assign
 """
     sdfg = _build(src, tmp_path, "sec_assign")
-    consts = dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants))
+    consts = dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants))
     assert consts.get('offset_dst_d0') == -3, (f"dst lower bound should be -3; got {consts.get('offset_dst_d0')}")
     assert consts.get('offset_src_d0') == -3, (f"src lower bound should be -3; got {consts.get('offset_src_d0')}")
     out = np.zeros(7, dtype=np.int32, order='F')
@@ -157,8 +159,9 @@ subroutine read_member(p, out)
 end subroutine read_member
 """
     sdfg = _build(src, tmp_path, "read_member")
-    assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_p_tbl_d0') == -7, (f"struct allocatable member literal -7 should specialise; got "
-                                                       f"{dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_p_tbl_d0')}")
+    assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_p_tbl_d0') == -7, (
+        f"struct allocatable member literal -7 should specialise; got "
+        f"{dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_p_tbl_d0')}")
     # p_tbl(-7..5): 13 elements.
     tbl = np.asfortranarray(np.array([(i - 7) for i in range(13)], dtype=np.int32))
     out = np.zeros(1, dtype=np.int32, order='F')
@@ -184,8 +187,9 @@ subroutine computed_dummy(arr, out)
 end subroutine computed_dummy
 """
     sdfg = _build(src, tmp_path, "computed_dummy")
-    assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0') == -5, (f"PARAMETER arithmetic should fold to literal -5; got "
-                                                             f"{dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0')}")
+    assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0') == -5, (
+        f"PARAMETER arithmetic should fold to literal -5; got "
+        f"{dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0')}")
     # arr(lb-1) = arr(-5).  Buffer arr(-5..5): 11 elements,
     # offset -5 -> arr(-5) reads buf[0].
     arr = np.asfortranarray(np.array([777] + [0] * 10, dtype=np.int32))

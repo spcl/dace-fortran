@@ -34,7 +34,6 @@ from _util import have_flang
 
 from dace_fortran import build_sdfg_from_files
 
-
 _HERE = Path(__file__).resolve().parent
 
 # The driver entry, addressed by its Fortran ``module::procedure`` name
@@ -72,6 +71,5 @@ def test_lu_multi_file_builds(tmp_path, merge_engine):
     # benign-looking but empty SDFG.  ``sdfg.to_json()`` returns the
     # canonical dict; stringify it once for a substring scan.
     sdfg_text = json.dumps(sdfg.to_json()).lower()
-    assert any(k in sdfg_text for k in _LU_KERNELS), (
-        f"built SDFG does not reference any of {_LU_KERNELS}; the "
-        "multi-file merge likely dropped lu.F90's body.")
+    assert any(k in sdfg_text for k in _LU_KERNELS), (f"built SDFG does not reference any of {_LU_KERNELS}; the "
+                                                      "multi-file merge likely dropped lu.F90's body.")

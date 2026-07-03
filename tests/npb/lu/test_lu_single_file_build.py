@@ -33,7 +33,6 @@ from _util import have_flang
 
 from dace_fortran import build_sdfg_from_files
 
-
 _HERE = Path(__file__).resolve().parent
 
 # Flang lowercases module names: ``MODULE lu`` -> ``_QMlu``, public procedure
@@ -60,6 +59,5 @@ def test_lu_single_file_builds(tmp_path):
     )
     sdfg.validate()
     sdfg_text = json.dumps(sdfg.to_json()).lower()
-    assert any(k in sdfg_text for k in _LU_KERNELS), (
-        f"built SDFG does not reference any of {_LU_KERNELS}; the "
-        "single-file build likely dropped lu.F90's body.")
+    assert any(k in sdfg_text for k in _LU_KERNELS), (f"built SDFG does not reference any of {_LU_KERNELS}; the "
+                                                      "single-file build likely dropped lu.F90's body.")

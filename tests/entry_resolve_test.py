@@ -27,7 +27,8 @@ def _src(tmp_path, name, text):
 
 
 def test_resolve_module_subroutine(tmp_path):
-    s = _src(tmp_path, "m", """
+    s = _src(
+        tmp_path, "m", """
 module mo_solve_nonhydro
   implicit none
 contains
@@ -46,7 +47,8 @@ def test_resolve_free_subroutine(tmp_path):
 
 def test_resolve_skips_interface_blocks(tmp_path):
     # An ``interface`` declaration of ``bar`` must not count as a definition.
-    s = _src(tmp_path, "i", """
+    s = _src(
+        tmp_path, "i", """
 module mo_a
   interface
     subroutine bar(x)

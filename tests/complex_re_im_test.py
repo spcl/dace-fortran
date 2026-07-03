@@ -24,8 +24,7 @@ import pytest
 
 from _util import build_sdfg, have_flang
 
-pytestmark = pytest.mark.skipif(not have_flang(),
-                                reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
 
 # ===========================================================================
@@ -52,8 +51,7 @@ SUBROUTINE cplx_re_scalar(z, out)
 END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_re_scalar",
-                      entry="cplx_re_scalar_mod::cplx_re_scalar").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_re_scalar", entry="cplx_re_scalar_mod::cplx_re_scalar").build()
     z = np.array([3 + 4j], dtype=np.complex128)  # scalar dummy, by-ref bind
     out_arr = np.zeros(1, dtype=np.float64)
     sdfg(z=z, out=out_arr)
@@ -73,8 +71,7 @@ SUBROUTINE cplx_im_scalar(z, out)
 END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_im_scalar",
-                      entry="cplx_im_scalar_mod::cplx_im_scalar").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_im_scalar", entry="cplx_im_scalar_mod::cplx_im_scalar").build()
     z = np.array([3 + 4j], dtype=np.complex128)
     out_arr = np.zeros(1, dtype=np.float64)
     sdfg(z=z, out=out_arr)
@@ -94,8 +91,7 @@ SUBROUTINE cplx_re_elem(z, out)
 END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_re_elem",
-                      entry="cplx_re_elem_mod::cplx_re_elem").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_re_elem", entry="cplx_re_elem_mod::cplx_re_elem").build()
     z = np.array([3 + 4j], dtype=np.complex128, order="F")
     out_arr = np.zeros(1, dtype=np.float64)
     sdfg(z=z, out=out_arr)
@@ -115,8 +111,7 @@ SUBROUTINE cplx_im_elem(z, out)
 END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_im_elem",
-                      entry="cplx_im_elem_mod::cplx_im_elem").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_im_elem", entry="cplx_im_elem_mod::cplx_im_elem").build()
     z = np.array([3 + 4j], dtype=np.complex128, order="F")
     out_arr = np.zeros(1, dtype=np.float64)
     sdfg(z=z, out=out_arr)
@@ -141,8 +136,7 @@ SUBROUTINE cplx_arr_split(z, out_re, out_im, n)
 END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_arr_split",
-                      entry="cplx_arr_split_mod::cplx_arr_split").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_arr_split", entry="cplx_arr_split_mod::cplx_arr_split").build()
     z = np.array([1 + 2j, 3 + 4j, 5 + 6j], dtype=np.complex128, order="F")
     out_re = np.zeros(3, dtype=np.float64, order="F")
     out_im = np.zeros(3, dtype=np.float64, order="F")
@@ -219,8 +213,7 @@ SUBROUTINE cplx_signature(z, n)
 END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_signature",
-                      entry="cplx_signature_mod::cplx_signature").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_signature", entry="cplx_signature_mod::cplx_signature").build()
     arglist = sdfg.arglist()
     assert 'z' in arglist
     # No spurious split arrays
@@ -231,8 +224,7 @@ END MODULE
     # dtype is complex128 (16-byte)
     import dace
     z_arr = arglist['z']
-    assert z_arr.dtype == dace.complex128, (
-        f"expected dace.complex128, got {z_arr.dtype}")
+    assert z_arr.dtype == dace.complex128, (f"expected dace.complex128, got {z_arr.dtype}")
 
 
 # ===========================================================================
@@ -251,8 +243,7 @@ SUBROUTINE cplx_k4(z, out_re, out_im)
 END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_k4",
-                      entry="cplx_k4_mod::cplx_k4").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="cplx_k4", entry="cplx_k4_mod::cplx_k4").build()
     z = np.array([1.5 + 2.5j], dtype=np.complex64, order="F")
     out_re = np.zeros(1, dtype=np.float32)
     out_im = np.zeros(1, dtype=np.float32)
@@ -289,8 +280,7 @@ SUBROUTINE im_dual_use(z, sums, n)
 END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="im_dual_use",
-                      entry="im_dual_use_mod::im_dual_use").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="im_dual_use", entry="im_dual_use_mod::im_dual_use").build()
     z = np.array([1 + 2j, 3 + 4j, 5 + 6j], dtype=np.complex128, order="F")
     sums = np.zeros(1, dtype=np.float64)
     sdfg(z=z, sums=sums, n=np.int32(3))

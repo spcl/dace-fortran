@@ -219,8 +219,7 @@ class ExternalSignature:
     # outer's caller wrote.  See the velocity e2e ASan ODR-violation
     # diagnostic for the per-library Fortran-module-globals issue
     # this contract addresses.
-    module_symbol_forward: Tuple[Tuple[str, str, str, int], ...] = field(
-        default_factory=tuple)
+    module_symbol_forward: Tuple[Tuple[str, str, str, int], ...] = field(default_factory=tuple)
     # When true, ``emit_call`` prepends one ``int`` extent per
     # dynamic-shape dim ahead of every dynamic-shape leaf -- the C
     # ABI :func:`dace_fortran.bindings.emit_bind_c_shim` exports
@@ -266,9 +265,7 @@ def _link_flags(libraries: Tuple[str, ...]) -> List[str]:
     """
     so_paths = [Path(lib).resolve() for lib in libraries]
     rpath_dirs = list(dict.fromkeys(p.parent for p in so_paths))
-    return (["-Wl,--no-as-needed"]
-            + [str(p) for p in so_paths]
-            + [f"-Wl,-rpath,{d}" for d in rpath_dirs])
+    return (["-Wl,--no-as-needed"] + [str(p) for p in so_paths] + [f"-Wl,-rpath,{d}" for d in rpath_dirs])
 
 
 def _apply_linker_config():
@@ -355,12 +352,14 @@ def keep_external(name: str,
         rationale (per-library Fortran-module-globals issue exposed
         by the velocity dycore + external e2e ASan diagnostic).
     """
-    register_external(name, ExternalSignature(c_name=c_name or name,
-                                              args=tuple(args),
-                                              libraries=tuple(libraries),
-                                              stub=stub,
-                                              dynamic_extents_abi=dynamic_extents_abi,
-                                              module_symbol_forward=tuple(module_symbol_forward)))
+    register_external(
+        name,
+        ExternalSignature(c_name=c_name or name,
+                          args=tuple(args),
+                          libraries=tuple(libraries),
+                          stub=stub,
+                          dynamic_extents_abi=dynamic_extents_abi,
+                          module_symbol_forward=tuple(module_symbol_forward)))
 
 
 def apply_external_functions(external_functions: Iterable["ExternalFunction"] = (),
@@ -399,8 +398,7 @@ def apply_external_functions(external_functions: Iterable["ExternalFunction"] = 
     do_not_emit = list(do_not_emit)
     validate(external_functions, do_not_emit)
     for f in external_functions:
-        keep_external(f.name, c_name=f.symbol,
-                      libraries=(f.library, ) if f.library else ())
+        keep_external(f.name, c_name=f.symbol, libraries=(f.library, ) if f.library else ())
     for name in do_not_emit:
         keep_external(name, stub=True)
 
@@ -423,8 +421,7 @@ def registered_names() -> List[str]:
     return list(_REGISTRY)
 
 
-def inline_external(sdfg: 'dace.SDFG', name: str,
-                    callee_sdfg: 'dace.SDFG') -> int:
+def inline_external(sdfg: 'dace.SDFG', name: str, callee_sdfg: 'dace.SDFG') -> int:
     """Swap every ``ExternalCall`` library node for ``name`` in ``sdfg``
     with a :class:`dace.sdfg.nodes.NestedSDFG` wrapping ``callee_sdfg``.
 
@@ -459,8 +456,7 @@ def inline_external(sdfg: 'dace.SDFG', name: str,
     targets = []
     for state in sdfg.all_states():
         for node in list(state.nodes()):
-            if (isinstance(node, ExternalCall)
-                    and node.c_name == target_c_name):
+            if (isinstance(node, ExternalCall) and node.c_name == target_c_name):
                 targets.append((state, node))
     if not targets:
         return 0
@@ -484,8 +480,7 @@ def inline_external(sdfg: 'dace.SDFG', name: str,
             out_map.setdefault(callee_args[i], e)
         # Symbol mapping: every callee free symbol that's also live in
         # the caller passes through identity-named.
-        symbol_mapping = {s: s for s in callee_sdfg.free_symbols
-                          if s in sdfg.symbols or s in sdfg.arrays}
+        symbol_mapping = {s: s for s in callee_sdfg.free_symbols if s in sdfg.symbols or s in sdfg.arrays}
         nested = state.add_nested_sdfg(
             callee_sdfg,
             inputs=set(in_map.keys()),
@@ -494,11 +489,9 @@ def inline_external(sdfg: 'dace.SDFG', name: str,
             name=f"{name}_inlined_{replaced}",
         )
         for conn, e in in_map.items():
-            state.add_memlet_path(e.src, nested, dst_conn=conn,
-                                  memlet=e.data)
+            state.add_memlet_path(e.src, nested, dst_conn=conn, memlet=e.data)
         for conn, e in out_map.items():
-            state.add_memlet_path(nested, e.dst, src_conn=conn,
-                                  memlet=e.data)
+            state.add_memlet_path(nested, e.dst, src_conn=conn, memlet=e.data)
         for e in in_edges + out_edges:
             state.remove_edge(e)
         state.remove_node(node)
@@ -515,7 +508,6 @@ def clear_external_registry():
         import dace
         dace.Config.set("compiler", "linker", "args", value=_ORIG_LINKER_ARGS)
         _ORIG_LINKER_ARGS = None
-
 
 
 @dace.library.expansion

@@ -468,7 +468,9 @@ def test_e2e_rank1_cbool_passthrough(tmp_path: Path):
     """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    sdfg = build_sdfg(_module_wrap(_CBOOL_KERNEL, "flip_cbool_mod"), sdfg_dir, name="flip_cbool",
+    sdfg = build_sdfg(_module_wrap(_CBOOL_KERNEL, "flip_cbool_mod"),
+                      sdfg_dir,
+                      name="flip_cbool",
                       entry="flip_cbool_mod::flip_cbool").build()
     sdfg.name = "flip_cbool"
     compiled = sdfg.compile()

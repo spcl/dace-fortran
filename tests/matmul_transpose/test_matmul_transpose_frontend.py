@@ -47,8 +47,7 @@ def test_matmul_of_transpose_lhs_default_lowering(tmp_path):
     sdfg = _build("matmul_transpose_probe.f90", "matmul_transpose_run", tmp_path)
     classes = _classes(sdfg)
     assert "MatMul" in classes, sorted(classes)
-    mm_nodes = [n for s in sdfg.states() for n in s.nodes()
-                if type(n).__name__ == "MatMul"]
+    mm_nodes = [n for s in sdfg.states() for n in s.nodes() if type(n).__name__ == "MatMul"]
     assert any(getattr(n, 'transA', False) is True for n in mm_nodes), \
         "expected at least one MatMul with transA=True (A-transpose folded in)"
     # No Transpose libcall should appear -- the fused path replaces it.
@@ -67,8 +66,7 @@ def test_matmul_with_transpose_rhs(tmp_path):
         f"expected exactly one MatMul, got {_count(sdfg, 'MatMul')}"
     assert _count(sdfg, "Transpose") == 0, \
         f"expected zero Transpose libcalls (B-transpose folds via transB), got {_count(sdfg, 'Transpose')}"
-    mm = [n for s in sdfg.states() for n in s.nodes()
-          if type(n).__name__ == "MatMul"][0]
+    mm = [n for s in sdfg.states() for n in s.nodes() if type(n).__name__ == "MatMul"][0]
     assert mm.transB is True, f"expected transB=True, got {mm.transB}"
 
 
@@ -82,7 +80,6 @@ def test_matmul_both_transposed(tmp_path):
         f"expected zero Transpose libcalls (both fold via BLAS flags), got {_count(sdfg, 'Transpose')}"
     assert _count(sdfg, "MatMul") == 1, \
         f"expected exactly one MatMul, got {_count(sdfg, 'MatMul')}"
-    mm_nodes = [n for s in sdfg.states() for n in s.nodes()
-                if type(n).__name__ == "MatMul"]
+    mm_nodes = [n for s in sdfg.states() for n in s.nodes() if type(n).__name__ == "MatMul"]
     assert mm_nodes[0].transA is True and mm_nodes[0].transB is True, \
         f"MatMul should have transA=True transB=True, got transA={mm_nodes[0].transA} transB={mm_nodes[0].transB}"

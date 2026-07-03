@@ -38,9 +38,7 @@ def test_rejects_empty_name():
 def test_dont_inline_names_is_lowercased_union():
     fns = [ExternalFunction("Sync_Patch_Array"), ExternalFunction("exchange_data")]
     ignore = ["Finish", "timer_start"]
-    assert dont_inline_names(fns, ignore) == {
-        "sync_patch_array", "exchange_data", "finish", "timer_start"
-    }
+    assert dont_inline_names(fns, ignore) == {"sync_patch_array", "exchange_data", "finish", "timer_start"}
 
 
 def test_dont_inline_names_empty():

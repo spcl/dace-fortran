@@ -88,8 +88,7 @@ subroutine probe(cond, n, m, out)
 end subroutine probe
 end module probe_mod
 """
-    sdfg = _run(tmp_path, src, [(1, 5, 3), (0, 5, 3), (1, 2, 7), (0, 2, 7)],
-                ["cond", "n", "m"])
+    sdfg = _run(tmp_path, src, [(1, 5, 3), (0, 5, 3), (1, 2, 7), (0, 2, 7)], ["cond", "n", "m"])
     # Single array, not versioned, with the branch-extent symbol shape.
     assert "a" in sdfg.arrays and "a_alloc1" not in sdfg.arrays
     assert str(sdfg.arrays["a"].shape) == "(a_d0,)"
@@ -126,8 +125,7 @@ subroutine probe(sel, n1, n2, n3, n4, out)
 end subroutine probe
 end module probe_mod
 """
-    sdfg = _run(tmp_path, src,
-                [(1, 5, 3, 7, 2), (2, 5, 3, 7, 2), (3, 5, 3, 7, 2), (4, 5, 3, 7, 2)],
+    sdfg = _run(tmp_path, src, [(1, 5, 3, 7, 2), (2, 5, 3, 7, 2), (3, 5, 3, 7, 2), (4, 5, 3, 7, 2)],
                 ["sel", "n1", "n2", "n3", "n4"])
     assert "a_alloc1" not in sdfg.arrays
     assert str(sdfg.arrays["a"].shape) == "(a_d0,)"
@@ -214,8 +212,7 @@ subroutine probe(n1, n2, n3, n4, out)
 end subroutine probe
 end module probe_mod
 """
-    sdfg = _run(tmp_path, src, [(5, 3, 7, 2), (1, 9, 4, 6)],
-                ["n1", "n2", "n3", "n4"])
+    sdfg = _run(tmp_path, src, [(5, 3, 7, 2), (1, 9, 4, 6)], ["n1", "n2", "n3", "n4"])
     assert {"a", "a_alloc1", "a_alloc2", "a_alloc3"} <= set(sdfg.arrays)
 
 
@@ -258,10 +255,9 @@ subroutine probe(cond, n, m, k, out)
 end subroutine probe
 end module probe_mod
 """
-    sdfg = _run(tmp_path, src, [(1, 5, 3, 4), (0, 5, 3, 4)],
-                ["cond", "n", "m", "k"])
-    assert str(sdfg.arrays["a"].shape) == "(a_d0,)"   # conditional buffer
-    assert "a_alloc1" in sdfg.arrays                  # realloc buffer
+    sdfg = _run(tmp_path, src, [(1, 5, 3, 4), (0, 5, 3, 4)], ["cond", "n", "m", "k"])
+    assert str(sdfg.arrays["a"].shape) == "(a_d0,)"  # conditional buffer
+    assert "a_alloc1" in sdfg.arrays  # realloc buffer
 
 
 @_SIZE_LOOP_FORMS
@@ -299,8 +295,7 @@ subroutine probe(cond, n, n2, m, out)
 end subroutine probe
 end module probe_mod
 """
-    sdfg = _run(tmp_path, src, [(1, 5, 8, 3), (0, 5, 8, 3), (1, 2, 6, 9)],
-                ["cond", "n", "n2", "m"])
+    sdfg = _run(tmp_path, src, [(1, 5, 8, 3), (0, 5, 8, 3), (1, 2, 6, 9)], ["cond", "n", "n2", "m"])
     # post-IF buffer is the merged then-last/else class (conditional);
     # the then's first (freed) buffer is a separate transient.
     assert "a_alloc1" in sdfg.arrays
@@ -335,4 +330,4 @@ subroutine probe(n, out)
 end subroutine probe
 end module probe_mod
 """
-    _run(tmp_path, src, [(5,), (3,), (8,)], ["n"])
+    _run(tmp_path, src, [(5, ), (3, ), (8, )], ["n"])

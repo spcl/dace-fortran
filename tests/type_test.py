@@ -871,8 +871,7 @@ end subroutine kernel
     out_v1_ref = np.zeros(1, dtype=np.float64)
     out_v2_ref = np.zeros(1, dtype=np.float64)
 
-    sdfg(out_v1=out_v1_sdfg, out_v2=out_v2_sdfg,
-         i_idx=i_idx, blk_idx=blk_idx, k_idx=k_idx)
+    sdfg(out_v1=out_v1_sdfg, out_v2=out_v2_sdfg, i_idx=i_idx, blk_idx=blk_idx, k_idx=k_idx)
     ref.kernel(out_v1_ref, out_v2_ref, i_idx, blk_idx, k_idx)
 
     np.testing.assert_allclose(out_v1_sdfg, out_v1_ref, rtol=0, atol=0)

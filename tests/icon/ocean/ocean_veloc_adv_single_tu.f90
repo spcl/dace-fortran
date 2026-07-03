@@ -175,7 +175,7 @@ MODULE mo_ocean_math_operators
     start_level = 1
     CALL set_acc_host_or_device(lzacc, lacc)
     DO blockno = verts_in_domain % start_block, verts_in_domain % end_block
-      CALL get_index_range(patch_2d % verts % in_domain, blockno, start_index_v, end_index_v)
+      CALL get_index_range(verts_in_domain, blockno, start_index_v, end_index_v)
       rot_vec_v(:, :, blockno) = 0.0D0
       DO vertexindex = start_index_v, end_index_v
         end_level = patch_3d % p_patch_1d(1) % vertex_bottomlevel(vertexindex, blockno)
@@ -239,7 +239,7 @@ MODULE mo_scalar_product
     USE mo_ocean_types, ONLY: t_operator_coeff
     USE mo_fortran_tools, ONLY: set_acc_host_or_device
     USE mo_ocean_math_operators, ONLY: rot_vertex_ocean_3d
-    USE mo_sync, ONLY: sync_patch_array_3d_dp_deconiface_72 => sync_patch_array_3d_dp
+    USE mo_sync, ONLY: sync_patch_array_3d_dp_deconiface_38 => sync_patch_array_3d_dp
     USE mo_grid_subset, ONLY: get_index_range
     USE mo_operator_ocean_coeff_3d, ONLY: no_dual_edges
     TYPE(t_patch_3d), POINTER, INTENT(IN) :: patch_3d
@@ -267,10 +267,10 @@ MODULE mo_scalar_product
     startlevel = 1
     CALL set_acc_host_or_device(lzacc, lacc)
     CALL rot_vertex_ocean_3d(patch_3d, vn, p_vn_dual, operators_coefficients, vort_v, lacc = lzacc)
-    CALL sync_patch_array_3d_dp_deconiface_72(3, patch_3d % p_patch_2d(1), vort_v, lacc = lzacc)
+    CALL sync_patch_array_3d_dp_deconiface_38(3, patch_2d, vort_v, lacc = lzacc)
     IF (.NOT. l_anticipated_vorticity) THEN
       DO blockno = edges_in_domain % start_block, edges_in_domain % end_block
-        CALL get_index_range(patch_2d % edges % in_domain, blockno, start_edge_index, end_edge_index)
+        CALL get_index_range(edges_in_domain, blockno, start_edge_index, end_edge_index)
         DO je = start_edge_index, end_edge_index
           vertex1_idx = patch_2d % edges % vertex_idx(je, blockno, 1)
           vertex1_blk = patch_2d % edges % vertex_blk(je, blockno, 1)
@@ -306,7 +306,7 @@ MODULE mo_scalar_product
     ELSE IF (l_anticipated_vorticity) THEN
       vort_flux_old(:, :, :) = 0.0D0
       DO blockno = edges_in_domain % start_block, edges_in_domain % end_block
-        CALL get_index_range(patch_2d % edges % in_domain, blockno, start_edge_index, end_edge_index)
+        CALL get_index_range(edges_in_domain, blockno, start_edge_index, end_edge_index)
         DO je = start_edge_index, end_edge_index
           this_vort_flux(:, :) = 0.0D0
           vertex1_idx = patch_2d % edges % vertex_idx(je, blockno, 1)
@@ -358,7 +358,7 @@ MODULE mo_scalar_product
     USE mo_ocean_types, ONLY: t_operator_coeff
     USE mo_fortran_tools, ONLY: set_acc_host_or_device
     USE mo_ocean_math_operators, ONLY: rot_vertex_ocean_3d
-    USE mo_sync, ONLY: sync_patch_array_3d_dp_deconiface_73 => sync_patch_array_3d_dp
+    USE mo_sync, ONLY: sync_patch_array_3d_dp_deconiface_39 => sync_patch_array_3d_dp
     USE mo_grid_subset, ONLY: get_index_range
     USE mo_operator_ocean_coeff_3d, ONLY: no_dual_edges
     TYPE(t_patch_3d), POINTER, INTENT(IN) :: patch_3d
@@ -388,9 +388,9 @@ MODULE mo_scalar_product
     startlevel = 1
     endlevel = n_zlev
     CALL rot_vertex_ocean_3d(patch_3d, vn, p_vn_dual, operators_coefficients, vort_v)
-    CALL sync_patch_array_3d_dp_deconiface_73(3, patch_3d % p_patch_2d(1), vort_v, lacc = lzacc)
+    CALL sync_patch_array_3d_dp_deconiface_39(3, patch_2d, vort_v, lacc = lzacc)
     DO blockno = edges_in_domain % start_block, edges_in_domain % end_block
-      CALL get_index_range(patch_2d % edges % in_domain, blockno, start_edge_index, end_edge_index)
+      CALL get_index_range(edges_in_domain, blockno, start_edge_index, end_edge_index)
       level_loop:DO level = startlevel, endlevel
         edge_idx_loop:DO je = start_edge_index, end_edge_index
           IF (patch_3d % lsm_e(je, level, blockno) == (- 2)) THEN
@@ -440,7 +440,7 @@ MODULE mo_ocean_velocity_advection
     USE mo_scalar_product, ONLY: nonlinear_coriolis_3d
     USE mo_grid_subset, ONLY: get_index_range
     USE mo_ocean_math_operators, ONLY: grad_fd_norm_oce_3d_onblock
-    USE mo_util_dbg_prnt, ONLY: dbg_print_3d_deconiface_74 => dbg_print_3d, dbg_print_3d_deconiface_75 => dbg_print_3d, dbg_print_3d_deconiface_76 => dbg_print_3d
+    USE mo_util_dbg_prnt, ONLY: dbg_print_3d_deconiface_40 => dbg_print_3d, dbg_print_3d_deconiface_41 => dbg_print_3d, dbg_print_3d_deconiface_42 => dbg_print_3d
     TYPE(t_patch_3d), POINTER, INTENT(IN) :: patch_3d
     REAL(KIND = 8), POINTER, INTENT(INOUT) :: vn(:, :, :)
     TYPE(t_hydro_ocean_diag) :: p_diag
@@ -458,12 +458,12 @@ MODULE mo_ocean_velocity_advection
     CALL set_acc_host_or_device(lzacc, lacc)
     CALL nonlinear_coriolis_3d(patch_3d, vn, p_diag % p_vn_dual, p_diag % vort, ocean_coefficients, veloc_adv_horz_e, lacc = lzacc)
     DO blockno = edges_in_domain % start_block, edges_in_domain % end_block
-      CALL get_index_range(patch_2d % edges % in_domain, blockno, start_edge_index, end_edge_index)
+      CALL get_index_range(edges_in_domain, blockno, start_edge_index, end_edge_index)
       CALL grad_fd_norm_oce_3d_onblock(p_diag % kin, patch_3d, ocean_coefficients % grad_coeff(:, :, blockno), p_diag % grad(:, :, blockno), start_edge_index, end_edge_index, blockno, lacc = lzacc)
     END DO
     idt_src = 3
-    CALL dbg_print_3d_deconiface_74('HorzMimRot: kin energy', p_diag % kin, str_module, 3, patch_2d % cells % owned)
-    CALL dbg_print_3d_deconiface_75('HorzMimRot: vorticity', p_diag % vort, str_module, 3, patch_2d % verts % owned)
-    CALL dbg_print_3d_deconiface_76('HorzMimRot: grad kin en', p_diag % grad, str_module, 3, patch_2d % edges % owned)
+    CALL dbg_print_3d_deconiface_40('HorzMimRot: kin energy', p_diag % kin, str_module, idt_src, patch_2d % cells % owned)
+    CALL dbg_print_3d_deconiface_41('HorzMimRot: vorticity', p_diag % vort, str_module, idt_src, patch_2d % verts % owned)
+    CALL dbg_print_3d_deconiface_42('HorzMimRot: grad kin en', p_diag % grad, str_module, idt_src, patch_2d % edges % owned)
   END SUBROUTINE veloc_adv_horz_mimetic_rot
 END MODULE mo_ocean_velocity_advection

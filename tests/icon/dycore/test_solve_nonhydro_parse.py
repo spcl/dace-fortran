@@ -41,9 +41,7 @@ _STUBS_DIR = Path(__file__).parent / "stubs"
 # flang mangles a module procedure to ``_QM<module>P<proc>`` (subroutine) or
 # ``...F<proc>`` (function); the emitted HLFIR never carries the bare name.
 # Match the mangled symbol (or a bare name, as a defensive fallback).
-_ENTRY_DEF_RE = re.compile(
-    rf"func\.func\s+(?!private\b)@(?:_QM{_ENTRY_MODULE}[PF])?{_ENTRY_PROC}\s*\(",
-    re.IGNORECASE)
+_ENTRY_DEF_RE = re.compile(rf"func\.func\s+(?!private\b)@(?:_QM{_ENTRY_MODULE}[PF])?{_ENTRY_PROC}\s*\(", re.IGNORECASE)
 
 
 def _resolve_compile_commands() -> Path | None:

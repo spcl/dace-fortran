@@ -49,48 +49,32 @@ namespace {
 /// Build the boolean condition for one non-``unit`` case attribute.
 /// Returns nullptr if the tag shape isn't recognised  --  callers should
 /// then leave the original ``fir.select_case`` in place.
-mlir::Value buildCaseCondition(mlir::OpBuilder& b, mlir::Location loc,
-                               mlir::Value selector, mlir::Attribute tag,
+mlir::Value buildCaseCondition(mlir::OpBuilder& b, mlir::Location loc, mlir::Value selector, mlir::Attribute tag,
                                mlir::ValueRange cmpOps) {
   bool isFloat = mlir::isa<mlir::FloatType>(selector.getType());
 
   auto cmpEq = [&](mlir::Value v) {
-    return isFloat ? b.create<mlir::arith::CmpFOp>(
-                          loc, mlir::arith::CmpFPredicate::OEQ, selector, v)
-                         .getResult()
-                   : b.create<mlir::arith::CmpIOp>(
-                          loc, mlir::arith::CmpIPredicate::eq, selector, v)
-                         .getResult();
+    return isFloat ? b.create<mlir::arith::CmpFOp>(loc, mlir::arith::CmpFPredicate::OEQ, selector, v).getResult()
+                   : b.create<mlir::arith::CmpIOp>(loc, mlir::arith::CmpIPredicate::eq, selector, v).getResult();
   };
   auto cmpGe = [&](mlir::Value v) {
-    return isFloat ? b.create<mlir::arith::CmpFOp>(
-                          loc, mlir::arith::CmpFPredicate::OGE, selector, v)
-                         .getResult()
-                   : b.create<mlir::arith::CmpIOp>(
-                          loc, mlir::arith::CmpIPredicate::sge, selector, v)
-                         .getResult();
+    return isFloat ? b.create<mlir::arith::CmpFOp>(loc, mlir::arith::CmpFPredicate::OGE, selector, v).getResult()
+                   : b.create<mlir::arith::CmpIOp>(loc, mlir::arith::CmpIPredicate::sge, selector, v).getResult();
   };
   auto cmpLe = [&](mlir::Value v) {
-    return isFloat ? b.create<mlir::arith::CmpFOp>(
-                          loc, mlir::arith::CmpFPredicate::OLE, selector, v)
-                         .getResult()
-                   : b.create<mlir::arith::CmpIOp>(
-                          loc, mlir::arith::CmpIPredicate::sle, selector, v)
-                         .getResult();
+    return isFloat ? b.create<mlir::arith::CmpFOp>(loc, mlir::arith::CmpFPredicate::OLE, selector, v).getResult()
+                   : b.create<mlir::arith::CmpIOp>(loc, mlir::arith::CmpIPredicate::sle, selector, v).getResult();
   };
 
-  if (mlir::isa<fir::PointIntervalAttr>(tag) && cmpOps.size() == 1)
-    return cmpEq(cmpOps[0]);
+  if (mlir::isa<fir::PointIntervalAttr>(tag) && cmpOps.size() == 1) return cmpEq(cmpOps[0]);
   if (mlir::isa<fir::ClosedIntervalAttr>(tag) && cmpOps.size() == 2) {
     // ``case(b:c)`` lowers as ``(selector >= b) AND (selector <= c)``.
     mlir::Value ge = cmpGe(cmpOps[0]);
     mlir::Value le = cmpLe(cmpOps[1]);
     return b.create<mlir::arith::AndIOp>(loc, ge, le);
   }
-  if (mlir::isa<fir::LowerBoundAttr>(tag) && cmpOps.size() == 1)
-    return cmpGe(cmpOps[0]);
-  if (mlir::isa<fir::UpperBoundAttr>(tag) && cmpOps.size() == 1)
-    return cmpLe(cmpOps[0]);
+  if (mlir::isa<fir::LowerBoundAttr>(tag) && cmpOps.size() == 1) return cmpGe(cmpOps[0]);
+  if (mlir::isa<fir::UpperBoundAttr>(tag) && cmpOps.size() == 1) return cmpLe(cmpOps[0]);
   return mlir::Value();
 }
 
@@ -138,9 +122,7 @@ mlir::LogicalResult rewriteSelectCase(fir::SelectCaseOp sel) {
     auto cmpOps = sel.getCompareOperands(operands, i);
     if (!cmpOps) return mlir::failure();
 
-    b.setInsertionPoint(currentCheck, currentCheck == parentBlock
-                                          ? sel->getIterator()
-                                          : currentCheck->end());
+    b.setInsertionPoint(currentCheck, currentCheck == parentBlock ? sel->getIterator() : currentCheck->end());
 
     mlir::Value cond = buildCaseCondition(b, loc, selector, tag, *cmpOps);
     if (!cond) return mlir::failure();
@@ -155,9 +137,7 @@ mlir::LogicalResult rewriteSelectCase(fir::SelectCaseOp sel) {
       // block; reset to the current check's terminator slot.
     }
 
-    b.setInsertionPoint(currentCheck, currentCheck == parentBlock
-                                          ? sel->getIterator()
-                                          : currentCheck->end());
+    b.setInsertionPoint(currentCheck, currentCheck == parentBlock ? sel->getIterator() : currentCheck->end());
     b.create<mlir::cf::CondBranchOp>(loc, cond, succ, failDest);
 
     currentCheck = failDest;
@@ -174,9 +154,7 @@ mlir::LogicalResult rewriteSelectCase(fir::SelectCaseOp sel) {
   return mlir::success();
 }
 
-struct LowerFirSelectCasePass
-    : public mlir::PassWrapper<LowerFirSelectCasePass,
-                               mlir::OperationPass<mlir::ModuleOp>> {
+struct LowerFirSelectCasePass : public mlir::PassWrapper<LowerFirSelectCasePass, mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LowerFirSelectCasePass)
 
   llvm::StringRef getArgument() const final { return "lower-fir-select-case"; }
@@ -203,8 +181,6 @@ struct LowerFirSelectCasePass
 
 }  // anonymous namespace
 
-std::unique_ptr<mlir::Pass> createLowerFirSelectCasePass() {
-  return std::make_unique<LowerFirSelectCasePass>();
-}
+std::unique_ptr<mlir::Pass> createLowerFirSelectCasePass() { return std::make_unique<LowerFirSelectCasePass>(); }
 
 }  // namespace hlfir_bridge

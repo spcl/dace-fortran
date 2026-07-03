@@ -374,7 +374,15 @@ static std::optional<Candidate> matchCandidate(hlfir::DeclareOp d) {
     auto boxTy = mlir::dyn_cast<fir::BoxType>(member.second);
     if (!boxTy) return std::nullopt;
     auto inner = boxTy.getEleTy();
-    if (!mlir::isa<fir::PointerType>(inner) && !mlir::isa<fir::HeapType>(inner)) return std::nullopt;
+    // Only POINTER members (``fir.ptr``) belong to this pass -- it lifts the
+    // ``q(c)%m => target`` rebind pattern.  An ALLOCATABLE member
+    // (``fir.heap``) is never rebound with ``=>``; it is allocated with
+    // ``allocate(A(i)%m(...))`` and belongs to flatten-structs' Phase 5c-A
+    // (padded AoS companion) / ``hlfir-lift-alloc-array-of-records``.  Matching
+    // a heap member here mints a bogus size-1 placeholder companion via the
+    // ``rebinds.empty()`` "dead exchange" path and silently steals the live
+    // member reads, so leave it for the alloc path.
+    if (!mlir::isa<fir::PointerType>(inner)) return std::nullopt;
     c.members.push_back({member.first, boxTy});
   }
   if (c.members.empty()) return std::nullopt;
@@ -592,8 +600,8 @@ static void rewriteAccess(mlir::OpBuilder& b, hlfir::DesignateOp innerDg, mlir::
   llvm::SmallVector<mlir::Value, 5> newIdxs;
   newIdxs.push_back(outerCast);
   for (auto idx : innerDg.getIndices()) newIdxs.push_back(idx);
-  auto newDg = b.create<hlfir::DesignateOp>(innerDg.getLoc(), innerDg.getResult().getType(),
-                                            concatDecl.getResult(0), mlir::ValueRange{newIdxs});
+  auto newDg = b.create<hlfir::DesignateOp>(innerDg.getLoc(), innerDg.getResult().getType(), concatDecl.getResult(0),
+                                            mlir::ValueRange{newIdxs});
   innerDg.getResult().replaceAllUsesWith(newDg.getResult());
 }
 

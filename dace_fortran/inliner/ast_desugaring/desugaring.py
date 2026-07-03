@@ -730,13 +730,13 @@ def deconstruct_goto_statements(ast: f03.Program) -> f03.Program:
     """
     Attempts to convert `GOTO` statements into structured `IF` or `DO WHILE` construct(s).
 
-    All `GOTO`-target pairs are first collated and classified as forward or backward jumps. Each 
-    jump is then deconstructed individually by the corresponding forward/backward helper function. 
+    All `GOTO`-target pairs are first collated and classified as forward or backward jumps. Each
+    jump is then deconstructed individually by the corresponding forward/backward helper function.
 
-    NOTE: The order in which `GOTO`s are deconstructed affects correctness. All backward `GOTO`s 
-    should be deconstructed before forward `GOTO`s. Backward `GOTO`s should also be processed in 
+    NOTE: The order in which `GOTO`s are deconstructed affects correctness. All backward `GOTO`s
+    should be deconstructed before forward `GOTO`s. Backward `GOTO`s should also be processed in
     descending order of the line number of the `GOTO` statement.
-    (This ordering ensures correct control flow due to the addition of `DO WHILE` loop constructs 
+    (This ordering ensures correct control flow due to the addition of `DO WHILE` loop constructs
     in backward `GOTO` deconstruction.)
 
     NOTE: Only GOTOs in the subtree from parent of target are currently implemented.
@@ -832,11 +832,11 @@ def deconstruct_forward_goto_statements(ancestor_subroutine: Union[f03.Function_
     Current implementation:
     - A boolean variable (e.g., `goto_10`) is created for each `GOTO`, and initialized to `.false.` .
     - The `GOTO` is replaced by an assignment setting the flag to `.true.`.
-    - The AST is traversed upwards from the replaced `GOTO` to the parent containing the target `CONTINUE`, 
+    - The AST is traversed upwards from the replaced `GOTO` to the parent containing the target `CONTINUE`,
       adding conditional execution/exits to code between `GOTO` and `CONTINUE` for the following cases:
-      + If parent is a loop construct and does not contain target `CONTINUE`, add a conditional `EXIT` that 
+      + If parent is a loop construct and does not contain target `CONTINUE`, add a conditional `EXIT` that
         executes if flag is `.true.`.
-      + Otherwise, conditional execution is added to succeeding code until `CONTINUE` statement, to execute 
+      + Otherwise, conditional execution is added to succeeding code until `CONTINUE` statement, to execute
         only if flag is `.false.`.
 
     NOTE: Only `GOTO`s in the subtree from parent of `CONTINUE` are currently implemented.
@@ -901,22 +901,22 @@ def deconstruct_forward_goto_statements(ancestor_subroutine: Union[f03.Function_
 def deconstruct_backward_goto_statements(ancestor_subroutine: Union[f03.Function_Subprogram, f03.Subroutine_Subprogram],
                                          goto: f03.Goto_Stmt, target: f03.Continue_Stmt):
     """
-    Replaces backward-facing `GOTO` statements (i.e. forward jumps) with `DO WHILE` loop and structured 
+    Replaces backward-facing `GOTO` statements (i.e. forward jumps) with `DO WHILE` loop and structured
     control flow with an introduced boolean flag variables.
 
-    If backward `GOTO` is already in a `DO WHILE` block implemented for the same target `CONTINUE`, the 
+    If backward `GOTO` is already in a `DO WHILE` block implemented for the same target `CONTINUE`, the
     existing `DO WHILE` and boolean flag is reused.
 
     Current implementation:
     - If not existing, a boolean flag (e.g., `goto_10`) is created for each `CONTINUE`.
     - If not existing, the `CONTINUE` is replaced with a statement setting boolean flag to `.true.`.
-    - If not existing, the code between `CONTINUE` and the last `GOTO` targeting it (highest line number) 
-      is wrapped in a `DO WHILE` block, which executes when the flag is `.true.`. Upon entry to the loop 
+    - If not existing, the code between `CONTINUE` and the last `GOTO` targeting it (highest line number)
+      is wrapped in a `DO WHILE` block, which executes when the flag is `.true.`. Upon entry to the loop
       block, the flag is set to `.false.`.
-    - The `GOTO` is replaced by an assignment setting the flag to `.true.`. 
-    - The AST is traversed upwards from the replaced `GOTO` to the added `DO WHILE`, adding conditional 
+    - The `GOTO` is replaced by an assignment setting the flag to `.true.`.
+    - The AST is traversed upwards from the replaced `GOTO` to the added `DO WHILE`, adding conditional
       execution/exits to the succeeding code after the `GOTO` (similar to foward `GOTO`s):
-      + If parent is a loop construct that is NOT the added `DO WHILE`, add a conditional `EXIT` that 
+      + If parent is a loop construct that is NOT the added `DO WHILE`, add a conditional `EXIT` that
         executes if flag is `.true.`.
       + Otherwise, conditional execution is added to succeeding code to execute if flag is `.false.`.
 
@@ -1047,10 +1047,10 @@ def add_condition_to_node_execution(cond: Union[str, UnaryOpBase, BinaryOpBase],
 def deconstruct_external_statements(ast: f03.Program) -> f03.Program:
     """
     Attemps to convert `EXTERNAL` statements to `USE` statements.
-    Raises warning if target module/subroutine/function is not found in program. In this case, the target 
+    Raises warning if target module/subroutine/function is not found in program. In this case, the target
     likely requires a library node that should be created separately.
 
-    If target subroutine/function is in the program but not contained in a module, the subroutine/function 
+    If target subroutine/function is in the program but not contained in a module, the subroutine/function
     is wrapped in a new module with similar name (e.g. `foo_module`).
 
     :param ast: The Fortran AST to modify.

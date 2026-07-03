@@ -63,16 +63,12 @@ end subroutine halo_step
     np.testing.assert_array_equal(buf, np.full(n, 1.0 + 42.0 + 42.0))
 
 
-@pytest.mark.xfail(reason="a bare intent(inout) scalar lowers to a by-value SDFG scalar the bindings "
-                   "pass input-only -- a value generated inside cannot be returned through it; "
-                   "use the 1-element array carrier above",
-                   strict=True)
-def test_sdfg_generated_comm_returned_via_inout_scalar(tmp_path: Path):
-    """Pin the contract boundary: a BARE ``intent(inout)`` scalar handle does NOT
-    round-trip a value generated inside the SDFG.  The bridge lowers it to a
-    by-value SDFG scalar, so the bindings have no buffer to write back into (the
-    caller would have to pass a Python ``int``, which is immutable / by-value).
-    The supported shape is the 1-element array carrier
+def test_sdfg_generated_comm_not_returned_via_inout_scalar(tmp_path: Path):
+    """Contract: a BARE ``intent(inout)`` scalar does NOT round-trip a value
+    generated inside the SDFG.  The bridge lowers it to a by-value SDFG scalar the
+    bindings pass input-only, so a value produced inside is used internally (``buf``
+    reflects it) but the caller's scalar is left unchanged.  The supported shape for
+    a returned handle is the 1-element array carrier
     (:func:`test_sdfg_generated_comm_returned_via_array_carrier`)."""
     src = """
 subroutine halo_step_scalar(comm, buf, n)
@@ -95,6 +91,7 @@ end subroutine halo_step_scalar
     comm = np.int32(0)
     buf = np.ones(n, dtype=np.float64)
     sdfg(comm=comm, buf=buf, n=n)
-    # unreachable as a passing assertion: a bare scalar cannot carry the
-    # generated handle back (xfail-strict pins this).
-    assert int(comm) == 42
+    # By-value: the caller's bare scalar is NOT written back -- comm stays 0 ...
+    assert int(comm) == 0
+    # ... but the internally-generated ``comm = 42`` WAS used, so buf += 42.
+    np.testing.assert_array_equal(buf, np.full(n, 1.0 + 42.0))

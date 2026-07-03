@@ -1,6 +1,9 @@
 default_language_version:
   python: python3
 
+# The vendored ICON submodule is never ours to reformat.
+exclude: '^tests/icon/full/icon-model/'
+
 repos:
 - repo: https://github.com/pre-commit/pre-commit-hooks
   rev: v5.0.0
@@ -8,7 +11,13 @@ repos:
   - id: check-merge-conflict
   - id: check-yaml
   - id: end-of-file-fixer
+    # The committed .f90 single-TU fixtures are byte-compared by drift-guard tests
+    # against fresh inliner output, so a whitespace hook must never mutate them.
+    exclude: '\.(f90|F90)$'
   - id: trailing-whitespace
+    exclude: '\.(f90|F90)$'
+
+# --- Python: yapf (column_limit=120 in .style.yapf) ---
 - repo: https://github.com/google/yapf
   rev: v0.43.0
   hooks:
@@ -17,3 +26,26 @@ repos:
       language: python
       entry: yapf
       types: [python]
+
+# --- C++ / Fortran: the locally-installed clang-format / fprettify, so the hook
+#     formats with the SAME version the code was written against (no mirror-version
+#     skew, no churn on the existing tree).  Both read the repo-root config files
+#     (.clang-format, .fprettify.rc).  CI installs both before running pre-commit. ---
+- repo: local
+  hooks:
+    - id: clang-format
+      name: clang-format (.clang-format, ColumnLimit 120)
+      entry: clang-format
+      language: system
+      args: ['-i']
+      files: '\.(cpp|h)$'
+    - id: fprettify
+      name: fprettify (.fprettify.rc, line-length 120)
+      entry: fprettify
+      language: system
+      args: ['-c', '.fprettify.rc']
+      files: '\.(f90|F90)$'
+      # Every .f90 in the repo is a drift-guarded generated single-TU fixture or a
+      # deliberately-shaped parser/bridge test vector -- not library source.  Narrow
+      # this exclude to opt a hand-written Fortran directory into formatting.
+      exclude: '^tests/'

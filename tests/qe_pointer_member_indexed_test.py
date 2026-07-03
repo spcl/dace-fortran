@@ -59,12 +59,10 @@ END MODULE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="run", entry="m::run").build()
     nx, ny, nz = 3, 4, 5
-    corrected = np.asfortranarray(
-        np.arange(nx * ny * nz, dtype=np.float64).reshape((nx, ny, nz)))
+    corrected = np.asfortranarray(np.arange(nx * ny * nz, dtype=np.float64).reshape((nx, ny, nz)))
     res = np.zeros(1, dtype=np.float64)
     # Fortran 1-based (2,3,4) -> 0-based (1,2,3)
-    sdfg(vcut_corrected=corrected, j1=np.int32(2), j2=np.int32(3),
-         j3=np.int32(4), res=res)
+    sdfg(vcut_corrected=corrected, j1=np.int32(2), j2=np.int32(3), j3=np.int32(4), res=res)
     np.testing.assert_allclose(res[0], corrected[1, 2, 3])
 
 
@@ -110,8 +108,7 @@ END MODULE
     # ``asfortranarray`` of the reshape, not ``reshape(order="F")`` -- the
     # latter returns a non-owning view, which DaCe rejects as a program
     # argument (analyzability).  Mirrors the sibling test above.
-    corrected = np.asfortranarray(
-        np.arange(nx * ny * nz, dtype=np.float64).reshape((nx, ny, nz)))
+    corrected = np.asfortranarray(np.arange(nx * ny * nz, dtype=np.float64).reshape((nx, ny, nz)))
     ng = 2
     # q chosen so SUM(q**2) <= cutoff**2 (take the ELSE branch) and
     # NINT(q) lands inside [1, n].

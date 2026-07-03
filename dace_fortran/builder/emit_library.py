@@ -676,12 +676,21 @@ def emit_mpi(builder, ctx, n, region):
         state.add_node(node)
         # Read ``_mpireq_<base>[0:count]`` so the node derives ``count`` from the
         # memlet element count and emits ``MPI_Waitall(count, ...)`` -- waiting on
-        # every posted request, not just the last-written slot.  Prefer the
-        # bridge-rendered Fortran count; fall back to the emitted post count when
-        # it was an untraceable by-ref literal ("?").
-        _count = _opts.get("mpi_req_count", "")
-        if (not _count) or ("?" in _count):
-            _count = str(ctx.mpi_req_posts.get(req, 1))
+        # every posted request, not just the last-written slot.  A straight-line
+        # ``mpi_waitall(2, reqs)`` renders its literal count as an untraceable
+        # by-ref temporary (not the value ``2``), so prefer the concrete emitted
+        # post count (exact, and correct even for an over-sized request array);
+        # otherwise fall back to the request-array extent the transient is sized
+        # to (a fixed ``2`` for ``reqs(2)``, a symbolic ``nreq`` for a loop-built
+        # set), and only then the bridge-rendered count.
+        _posts = ctx.mpi_req_posts.get(req, 0)
+        _extent = _opts.get("mpi_req_extent", "") or ""
+        if _posts > 1:
+            _count = str(_posts)
+        elif _extent and "?" not in _extent:
+            _count = _extent
+        else:
+            _count = _opts.get("mpi_req_count", "") or str(max(_posts, 1))
         state.add_memlet_path(acc(builder, state, rname),
                               node,
                               dst_conn='_request',

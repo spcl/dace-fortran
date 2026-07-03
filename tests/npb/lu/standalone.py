@@ -6,12 +6,15 @@ from dace_fortran.bindings import emit_bindings, FlattenPlan
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 
 HERE = Path(__file__).resolve().parent
-OUT = HERE / "lu_out"          # absolute: _emit_hlfir runs flang with cwd=out_dir
+OUT = HERE / "lu_out"  # absolute: _emit_hlfir runs flang with cwd=out_dir
 LU = HERE / "lu.F90"
 
 # 1. Load lu.F90 and generate the SDFG.  Entry = module::procedure.
 sdfg = dace_fortran.build_sdfg_from_files(
-    [LU], entry="lu::dolu", name="lu", out_dir=OUT / "hlfir",
+    [LU],
+    entry="lu::dolu",
+    name="lu",
+    out_dir=OUT / "hlfir",
 )
 
 # 2. Save the SDFG.

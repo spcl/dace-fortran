@@ -179,8 +179,14 @@ def test_supported_two_concrete_enumerates_both_arms():
     assert plan.deferred == ["init", "solve"]
     arms = {a.type_name: a.bindings for a in plan.arms}
     assert arms == {
-        "t_gmres": {"init": "gmres_init", "solve": "gmres_solve"},
-        "t_cg": {"init": "cg_init", "solve": "cg_solve"},
+        "t_gmres": {
+            "init": "gmres_init",
+            "solve": "gmres_solve"
+        },
+        "t_cg": {
+            "init": "cg_init",
+            "solve": "cg_solve"
+        },
     }
 
 

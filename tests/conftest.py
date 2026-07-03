@@ -185,8 +185,7 @@ def icon_build():
     (never silently skips).
     """
     here = Path(__file__).resolve().parent
-    icon_src = Path(os.environ.get(
-        "ICON_SRC", str(here / "icon" / "full" / "icon-model")))
+    icon_src = Path(os.environ.get("ICON_SRC", str(here / "icon" / "full" / "icon-model")))
     if not (icon_src / "configure").is_file():
         pytest.skip("icon-model submodule not checked out (run "
                     "`git submodule update --init tests/icon/full/icon-model`)")

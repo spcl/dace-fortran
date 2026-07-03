@@ -76,13 +76,10 @@ static constexpr unsigned kPassPipelineStackBytes = 2u * 1024u * 1024u * 1024u;
 class HLFIRModule {
  public:
   HLFIRModule() {
-    registry_.insert<fir::FIROpsDialect, hlfir::hlfirDialect,
-                     mlir::arith::ArithDialect, mlir::func::FuncDialect,
-                     mlir::scf::SCFDialect, mlir::math::MathDialect,
-                     mlir::complex::ComplexDialect, mlir::DLTIDialect,
-                     mlir::cf::ControlFlowDialect, mlir::vector::VectorDialect,
-                     mlir::affine::AffineDialect, mlir::omp::OpenMPDialect,
-                     mlir::acc::OpenACCDialect, mlir::LLVM::LLVMDialect>();
+    registry_.insert<fir::FIROpsDialect, hlfir::hlfirDialect, mlir::arith::ArithDialect, mlir::func::FuncDialect,
+                     mlir::scf::SCFDialect, mlir::math::MathDialect, mlir::complex::ComplexDialect, mlir::DLTIDialect,
+                     mlir::cf::ControlFlowDialect, mlir::vector::VectorDialect, mlir::affine::AffineDialect,
+                     mlir::omp::OpenMPDialect, mlir::acc::OpenACCDialect, mlir::LLVM::LLVMDialect>();
     // Attach DialectInlinerInterface for every dialect we may need to
     // inline across.  Flang's InitFIR.h makes the same three calls in
     // ``registerNonCodegenDialects`` + ``addFIRExtensions``  --  without
@@ -98,8 +95,7 @@ class HLFIRModule {
     // Reset the cached entry symbol -- a previous module's entry name
     // must not leak into the freshly parsed one (D1).
     entry_symbol_.clear();
-    module_ =
-        mlir::parseSourceString<mlir::ModuleOp>(llvm::StringRef(t), &ctx_);
+    module_ = mlir::parseSourceString<mlir::ModuleOp>(llvm::StringRef(t), &ctx_);
     return static_cast<bool>(module_);
   }
 
@@ -120,23 +116,19 @@ class HLFIRModule {
   bool parse_files(const std::vector<std::string>& paths) {
     entry_symbol_.clear();
     if (paths.empty()) return false;
-    module_ =
-        mlir::parseSourceFile<mlir::ModuleOp>(llvm::StringRef(paths[0]), &ctx_);
+    module_ = mlir::parseSourceFile<mlir::ModuleOp>(llvm::StringRef(paths[0]), &ctx_);
     if (!module_) return false;
     if (paths.size() == 1) return true;
 
     auto& baseBody = module_->getBodyRegion().front();
     mlir::SymbolTable baseTab(*module_);
     auto symName = [](mlir::Operation* op) -> llvm::StringRef {
-      if (auto a = op->getAttrOfType<mlir::StringAttr>(
-              mlir::SymbolTable::getSymbolAttrName()))
-        return a.getValue();
+      if (auto a = op->getAttrOfType<mlir::StringAttr>(mlir::SymbolTable::getSymbolAttrName())) return a.getValue();
       return {};
     };
 
     for (size_t i = 1; i < paths.size(); ++i) {
-      auto extra = mlir::parseSourceFile<mlir::ModuleOp>(
-          llvm::StringRef(paths[i]), &ctx_);
+      auto extra = mlir::parseSourceFile<mlir::ModuleOp>(llvm::StringRef(paths[i]), &ctx_);
       if (!extra) return false;
       auto& extraBody = extra->getBodyRegion().front();
 
@@ -147,8 +139,7 @@ class HLFIRModule {
           if (auto* existing = baseTab.lookup(nm)) {
             auto existingFn = mlir::dyn_cast<mlir::func::FuncOp>(existing);
             auto newFn = mlir::dyn_cast<mlir::func::FuncOp>(&op);
-            if (existingFn && newFn && existingFn.isDeclaration() &&
-                !newFn.isDeclaration()) {
+            if (existingFn && newFn && existingFn.isDeclaration() && !newFn.isDeclaration()) {
               baseTab.erase(existingFn);  // replace decl with def
             } else {
               op.erase();  // keep base's version
@@ -181,8 +172,7 @@ class HLFIRModule {
     if (std::getenv("DACE_HLFIR_TRACE_PASSES")) {
       struct PassTracer : public mlir::PassInstrumentation {
         void runBeforePass(mlir::Pass* pass, mlir::Operation* op) override {
-          llvm::errs() << "HLFIR_PASS_TRACE before: " << pass->getName() << " on "
-                       << op->getName() << "\n";
+          llvm::errs() << "HLFIR_PASS_TRACE before: " << pass->getName() << " on " << op->getName() << "\n";
         }
       };
       pm.addInstrumentation(std::make_unique<PassTracer>());
@@ -247,8 +237,7 @@ class HLFIRModule {
   std::vector<std::string> list_functions() {
     std::vector<std::string> names;
     if (!module_) return names;
-    module_->walk(
-        [&](mlir::func::FuncOp f) { names.push_back(f.getSymName().str()); });
+    module_->walk([&](mlir::func::FuncOp f) { names.push_back(f.getSymName().str()); });
     return names;
   }
 
@@ -338,8 +327,7 @@ class HLFIRModule {
       entryDict["writeback_intent"] = asStr(entry.get("writeback_intent"));
 
       nb::dict recipeDict;
-      if (auto recipe = mlir::dyn_cast_or_null<mlir::DictionaryAttr>(
-              entry.get("recipe"))) {
+      if (auto recipe = mlir::dyn_cast_or_null<mlir::DictionaryAttr>(entry.get("recipe"))) {
         recipeDict["flat_names"] = asStrList(recipe.get("flat_names"));
         recipeDict["read_exprs"] = asStrList(recipe.get("read_exprs"));
         recipeDict["write_expr"] = asStr(recipe.get("write_expr"));
@@ -349,8 +337,7 @@ class HLFIRModule {
         recipeDict["scratch_dtype"] = asStr(recipe.get("scratch_dtype"));
         recipeDict["aos_alloc"] = asBool(recipe.get("aos_alloc"));
         recipeDict["cap_symbol"] = asStr(recipe.get("cap_symbol"));
-        recipeDict["source_logical_kind"] =
-            (int64_t)asInt(recipe.get("source_logical_kind"));
+        recipeDict["source_logical_kind"] = (int64_t)asInt(recipe.get("source_logical_kind"));
       }
       entryDict["recipe"] = recipeDict;
       entries.append(entryDict);
@@ -432,8 +419,7 @@ class HLFIRModule {
   /// ``hlfir-inline-all`` has finished folding into the entry.
   /// Raises if the entry isn't in the module.
   void set_entry_symbol(const std::string& name) {
-    if (!module_)
-      throw std::runtime_error("set_entry_symbol: no module parsed");
+    if (!module_) throw std::runtime_error("set_entry_symbol: no module parsed");
     // Accept a PLAIN Fortran procedure name (the user-facing contract) as
     // well as a flang-mangled symbol.  A name without the ``_Q`` prefix is
     // resolved against the module's function symbols by demangling each to
@@ -444,25 +430,21 @@ class HLFIRModule {
     std::string target = name;
     if (name.rfind("_Q", 0) != 0) {
       std::string want = name;
-      std::transform(want.begin(), want.end(), want.begin(),
-                     [](unsigned char c) { return std::tolower(c); });
+      std::transform(want.begin(), want.end(), want.begin(), [](unsigned char c) { return std::tolower(c); });
       std::vector<std::string> matches;
       module_->walk([&](mlir::func::FuncOp f) {
         std::string sym = f.getSymName().str();
         if (sym.rfind("_Q", 0) != 0) return;
         auto p = sym.rfind('P');
-        std::string proc =
-            (p != std::string::npos && p > 1) ? sym.substr(p + 1) : sym;
+        std::string proc = (p != std::string::npos && p > 1) ? sym.substr(p + 1) : sym;
         if (proc == want) matches.push_back(sym);
       });
       if (matches.size() == 1) {
         target = matches[0];
       } else if (matches.empty()) {
-        throw std::runtime_error(
-            "set_entry_symbol: no Fortran procedure named '" + name + "'");
+        throw std::runtime_error("set_entry_symbol: no Fortran procedure named '" + name + "'");
       } else {
-        std::string msg =
-            "set_entry_symbol: entry '" + name + "' is ambiguous (";
+        std::string msg = "set_entry_symbol: entry '" + name + "' is ambiguous (";
         for (size_t i = 0; i < matches.size(); ++i) {
           if (i) msg += ", ";
           msg += matches[i];
@@ -474,16 +456,13 @@ class HLFIRModule {
     bool found = false;
     module_->walk([&](mlir::func::FuncOp f) {
       if (f.getSymName() == target) {
-        mlir::SymbolTable::setSymbolVisibility(
-            f, mlir::SymbolTable::Visibility::Public);
+        mlir::SymbolTable::setSymbolVisibility(f, mlir::SymbolTable::Visibility::Public);
         found = true;
       } else {
-        mlir::SymbolTable::setSymbolVisibility(
-            f, mlir::SymbolTable::Visibility::Private);
+        mlir::SymbolTable::setSymbolVisibility(f, mlir::SymbolTable::Visibility::Private);
       }
     });
-    if (!found)
-      throw std::runtime_error("set_entry_symbol: '" + target + "' not found");
+    if (!found) throw std::runtime_error("set_entry_symbol: '" + target + "' not found");
     // Cache the entry symbol so ``extract_variables`` can install the
     // original F-scope into ``trace_utils.cpp::kEntryScope`` -- later
     // passes (``hlfir-flatten-structs``' SoA rename, etc.) may change
@@ -518,10 +497,8 @@ class HLFIRModule {
   /// mangling of it, mirroring ``emit_call``'s callee normalisation.  Returns
   /// the symbol names actually stripped (so the caller can verify its registry
   /// reached the module).
-  std::vector<std::string> externalize_symbols(
-      const std::vector<std::string>& names) {
-    if (!module_)
-      throw std::runtime_error("externalize_symbols: no module parsed");
+  std::vector<std::string> externalize_symbols(const std::vector<std::string>& names) {
+    if (!module_) throw std::runtime_error("externalize_symbols: no module parsed");
     std::vector<std::string> stripped;
     module_->walk([&](mlir::func::FuncOp f) {
       if (f.isDeclaration()) return;
@@ -548,13 +525,10 @@ class HLFIRModule {
   /// args as array-of-structs and must be expanded to per-member arguments
   /// (deep-copy marshalling).  Stored as a module attribute the pass reads.
   void set_external_symbols(const std::vector<std::string>& names) {
-    if (!module_)
-      throw std::runtime_error("set_external_symbols: no module parsed");
+    if (!module_) throw std::runtime_error("set_external_symbols: no module parsed");
     llvm::SmallVector<mlir::Attribute, 4> attrs;
-    for (const std::string& n : names)
-      attrs.push_back(mlir::StringAttr::get(&ctx_, n));
-    module_->getOperation()->setAttr("hlfir.external_symbols",
-                                     mlir::ArrayAttr::get(&ctx_, attrs));
+    for (const std::string& n : names) attrs.push_back(mlir::StringAttr::get(&ctx_, n));
+    module_->getOperation()->setAttr("hlfir.external_symbols", mlir::ArrayAttr::get(&ctx_, attrs));
   }
 
  private:
@@ -599,8 +573,7 @@ NB_MODULE(hlfir_bridge, m) {
       .def_ro("bounds_remap_view", &VarInfo::bounds_remap_view)
       .def_ro("bounds_remap_source", &VarInfo::bounds_remap_source)
       .def_ro("bounds_remap_total_extent", &VarInfo::bounds_remap_total_extent)
-      .def_ro("bounds_remap_source_subset",
-              &VarInfo::bounds_remap_source_subset)
+      .def_ro("bounds_remap_source_subset", &VarInfo::bounds_remap_source_subset)
       .def_ro("unbindable_section", &VarInfo::unbindable_section)
       .def_ro("aos_origin_mod", &VarInfo::aos_origin_mod)
       .def_ro("aos_origin_struct", &VarInfo::aos_origin_struct)
@@ -615,8 +588,7 @@ NB_MODULE(hlfir_bridge, m) {
           s += "(";
           for (size_t i = 0; i < v.shape_symbols.size(); ++i) {
             if (i) s += ",";
-            if (i < v.lower_bounds.size() && v.lower_bounds[i] != "1")
-              s += v.lower_bounds[i] + ":";
+            if (i < v.lower_bounds.size() && v.lower_bounds[i] != "1") s += v.lower_bounds[i] + ":";
             s += v.shape_symbols[i];
           }
           s += ")";
@@ -666,20 +638,16 @@ NB_MODULE(hlfir_bridge, m) {
       .def_ro("else_children", &ASTNode::else_children)
       .def("__repr__", [](const ASTNode& n) {
         if (n.kind == "loop")
-          return std::string("Loop(") + n.loop_iter + "=" +
-                 std::to_string(n.loop_lower) + ":" + n.loop_bound + ", " +
+          return std::string("Loop(") + n.loop_iter + "=" + std::to_string(n.loop_lower) + ":" + n.loop_bound + ", " +
                  std::to_string(n.children.size()) + " children)";
         if (n.kind == "assign")
-          return std::string("Assign(") + n.target + " = " +
-                 n.expr.substr(0, 40) + (n.expr.size() > 40 ? "..." : "") + ")";
-        if (n.kind == "conditional")
-          return std::string("If(") + n.condition + ")";
+          return std::string("Assign(") + n.target + " = " + n.expr.substr(0, 40) + (n.expr.size() > 40 ? "..." : "") +
+                 ")";
+        if (n.kind == "conditional") return std::string("If(") + n.condition + ")";
         if (n.kind == "call") return std::string("Call(") + n.callee + ")";
         if (n.kind == "reduce")
-          return std::string("Reduce(") + n.target + " = reduce(" +
-                 n.reduce_src + ", wcr=" + n.reduce_wcr + ")";
-        if (n.kind == "copy")
-          return std::string("Copy(") + n.target + " <- " + n.reduce_src + ")";
+          return std::string("Reduce(") + n.target + " = reduce(" + n.reduce_src + ", wcr=" + n.reduce_wcr + ")";
+        if (n.kind == "copy") return std::string("Copy(") + n.target + " <- " + n.reduce_src + ")";
         if (n.kind == "memset") return std::string("Memset(") + n.target + ")";
         if (n.kind == "libcall") {
           std::string s = "LibCall(" + n.target + " = " + n.callee + "(";
@@ -698,8 +666,7 @@ NB_MODULE(hlfir_bridge, m) {
   nb::class_<HLFIRModule>(m, "HLFIRModule")
       .def(nb::init<>())
       .def("parse", &HLFIRModule::parse, "Parse HLFIR from a string")
-      .def("parse_file", &HLFIRModule::parse_file,
-           "Parse HLFIR from a file path")
+      .def("parse_file", &HLFIRModule::parse_file, "Parse HLFIR from a file path")
       .def("parse_files", &HLFIRModule::parse_files,
            "Parse multiple HLFIR files and merge them into one module "
            "(dedup by symbol name; definition wins over declaration)")
@@ -707,15 +674,12 @@ NB_MODULE(hlfir_bridge, m) {
            "Run an mlir-opt-syntax pipeline "
            "(e.g. 'builtin.module(hlfir-propagate-shapes)')")
       .def("dump", &HLFIRModule::dump, "Return the current IR as a string")
-      .def("get_variables", &HLFIRModule::get_variables,
-           "Classify all hlfir.declare ops -> list[VarInfo]")
+      .def("get_variables", &HLFIRModule::get_variables, "Classify all hlfir.declare ops -> list[VarInfo]")
       .def("get_value_symbols", &HLFIRModule::get_value_symbols,
            "Array-element values promoted to symbols -> list[ValueSymbol] "
            "(call after get_variables)")
-      .def("get_ast", &HLFIRModule::get_ast,
-           "Recursive AST of the subroutine body -> list[ASTNode]")
-      .def("list_functions", &HLFIRModule::list_functions,
-           "Names of every top-level func.func still in the module")
+      .def("get_ast", &HLFIRModule::get_ast, "Recursive AST of the subroutine body -> list[ASTNode]")
+      .def("list_functions", &HLFIRModule::list_functions, "Names of every top-level func.func still in the module")
       .def("set_entry_symbol", &HLFIRModule::set_entry_symbol,
            "Mark the named function public and everything else private so "
            "symbol-dce can drop post-inlining dead siblings")

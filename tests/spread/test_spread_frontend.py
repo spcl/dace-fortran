@@ -21,7 +21,8 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 def test_spread_1d_to_2d_recognised(tmp_path):
     """``SPREAD(v, DIM=1, NCOPIES=3)`` -> a single Broadcast lib node, dim=1."""
     src = (_HERE / "spread_1d_to_2d_probe.f90").read_text()
-    sdfg = dace_fortran.build_sdfg(src, out_dir=str(tmp_path / "sdfg"),
+    sdfg = dace_fortran.build_sdfg(src,
+                                   out_dir=str(tmp_path / "sdfg"),
                                    entry="spread_1d_to_2d_mod::spread_1d_to_2d",
                                    name="spread_1d_to_2d")
     sdfg.validate()

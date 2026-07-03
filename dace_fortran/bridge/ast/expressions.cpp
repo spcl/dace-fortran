@@ -118,6 +118,37 @@ std::string lowerIsPresent(mlir::Value operand) {
         cur = ld.getMemref();
         continue;
       }
+      // Conditionally-selected actual: passing a POINTER / ALLOCATABLE
+      // component to an OPTIONAL dummy is PRESENT iff associated/allocated,
+      // which Flang lowers to ``%r = fir.if %assoc -> box { yield <present box>
+      // } else { yield fir.absent }``.  So ``present(dummy) == %assoc``.
+      // Recurse on each branch's yield: equal presence -> that constant;
+      // then-present + else-absent -> the presence IS the (rendered) condition
+      // (the box-addr ``/= null`` associated check, which ``buildBoolExpr``
+      // renders as the array's ``_allocated`` tracker); the mirror -> its
+      // negation.  Without this the ``fir.if`` is an unhandled root and the
+      // guard leaked ``?`` (ocean ``veloc_diff_harmonic_curl_curl``'s
+      // ``PRESENT(k_h)`` on the ``harmonicviscosity_coeff`` pointer actual).
+      if (auto ifop = mlir::dyn_cast<fir::IfOp>(d)) {
+        auto branchYield = [](mlir::Region& r) -> mlir::Value {
+          if (r.empty()) return {};
+          auto* term = r.back().getTerminator();
+          if (term && term->getNumOperands() == 1) return term->getOperand(0);
+          return {};
+        };
+        mlir::Value tv = branchYield(ifop.getThenRegion());
+        mlir::Value ev = branchYield(ifop.getElseRegion());
+        if (tv && ev) {
+          std::string te = lowerIsPresent(tv);
+          std::string ee = lowerIsPresent(ev);
+          if (!te.empty() && te == ee) return te;
+          std::string cond = buildBoolExpr(ifop.getCondition(), 0);
+          bool condOk = !cond.empty() && cond.find('?') == std::string::npos;
+          if (condOk && te == "1" && ee == "0") return cond;
+          if (condOk && te == "0" && ee == "1") return "(not " + cond + ")";
+        }
+        break;
+      }
       // A concrete data reference reached through the wrappers above is
       // a PRESENT actual argument.  After ``hlfir-inline-all`` splices
       // an OPTIONAL dummy bound to a present actual, the dummy's declare
@@ -127,9 +158,7 @@ std::string lowerIsPresent(mlir::Value operand) {
       // (``alloca`` / ``allocmem`` / module ``addr_of``).  Absence only
       // ever appears as ``fir.absent`` (handled above), so any such
       // concrete root is present -> ``1``.
-      if (mlir::isa<hlfir::DesignateOp, fir::AllocaOp, fir::AllocMemOp,
-                    fir::AddrOfOp>(d))
-        return "1";
+      if (mlir::isa<hlfir::DesignateOp, fir::AllocaOp, fir::AllocMemOp, fir::AddrOfOp>(d)) return "1";
       break;
     }
     // Block argument  --  that's the storage root.  The declare we
@@ -140,8 +169,7 @@ std::string lowerIsPresent(mlir::Value operand) {
       bool isOpt = false;
       if (lastDecl)
         if (auto a = lastDecl.getFortranAttrs())
-          isOpt =
-              bitEnumContainsAny(*a, fir::FortranVariableFlagsEnum::optional);
+          isOpt = bitEnumContainsAny(*a, fir::FortranVariableFlagsEnum::optional);
       if (isOpt) {
         auto n = extractName(lastDecl.getUniqName().str());
         return allocAliasFor(n) + "_present";
@@ -205,8 +233,7 @@ std::string lowerIsPresent(mlir::Value operand) {
 ///      ``i`` needs ``(lb_outer - 1)`` added so the final memlet
 ///      ``(i + lb_outer - 1) - offset_outer_d0`` collapses to
 ///      ``i - 1`` after specialise (correct for the callee's view).
-std::string buildDesignateIndexExpr(hlfir::DesignateOp dg, unsigned dim,
-                                    mlir::Value idx, int depth) {
+std::string buildDesignateIndexExpr(hlfir::DesignateOp dg, unsigned dim, mlir::Value idx, int depth) {
   std::string raw = buildIndexExpr(idx, depth);
   auto memref = dg.getMemref();
   auto* defOp = memref.getDefiningOp();
@@ -289,8 +316,7 @@ std::string buildDesignateIndexExpr(hlfir::DesignateOp dg, unsigned dim,
           // load-of-designate path.  Use that closed-form so the
           // memlet stays expressible: rebase = ``+ (lo - 1)``.
           auto loExpr = buildIndexExpr(idxOps[cursor], depth + 1);
-          if (!loExpr.empty() && loExpr != "?")
-            raw = "(" + raw + " + " + loExpr + " - 1)";
+          if (!loExpr.empty() && loExpr != "?") raw = "(" + raw + " + " + loExpr + " - 1)";
         }
       }
     }
@@ -433,8 +459,7 @@ std::string allocaSynthName(mlir::Value memref) {
 /// always yields the same symbol  --  callers can safely use this
 /// anywhere the load result was needed before.  ``posSymbolName`` is the
 /// shared name format (also used by the descriptor-shape side).
-std::string internPosSymbol(const std::string& array,
-                            const std::vector<int64_t>& one_based_idxs) {
+std::string internPosSymbol(const std::string& array, const std::vector<int64_t>& one_based_idxs) {
   auto k = std::make_pair(array, one_based_idxs);
   auto it = kPosSymbolRegistry.find(k);
   if (it != kPosSymbolRegistry.end()) return it->second;
@@ -463,9 +488,7 @@ std::string buildExpr(mlir::Value val, int d) {
   // CONDITION that ``materialiseCondReductions`` lowered to a Reduce lib-node
   // renders as the bare scalar transient (``s``); the inline-unroll is
   // bypassed.
-  if (auto it = kCondReductionScalars.find(def);
-      it != kCondReductionScalars.end())
-    return it->second;
+  if (auto it = kCondReductionScalars.find(def); it != kCondReductionScalars.end()) return it->second;
 
   // ``fir.do_loop`` result: the loop is processed at the higher
   // ``kind="loop"`` AST level; downstream reads of the loop's
@@ -526,8 +549,7 @@ std::string buildExpr(mlir::Value val, int d) {
       // counter via a convert (``%init = fir.convert %c1``, not a
       // load -- Strategy 1 doesn't fire).
       auto& body = doLoop.getRegion().front();
-      mlir::Value iterArg =
-          body.getArgument(iterIdx + 1);  // +1: skip induction
+      mlir::Value iterArg = body.getArgument(iterIdx + 1);  // +1: skip induction
       for (auto& op : body) {
         if (auto st = mlir::dyn_cast<fir::StoreOp>(op)) {
           if (st.getValue() == iterArg) {
@@ -547,15 +569,13 @@ std::string buildExpr(mlir::Value val, int d) {
   // Real-world ICON code hits this when an array dummy is passed to
   // a polymorphic helper via an assumed-shape interface  --  Flang
   // wraps the actual through ``fir.embox`` at the call site.
-  if (auto eb = mlir::dyn_cast<fir::EmboxOp>(def))
-    return buildExpr(eb.getMemref(), d + 1);
+  if (auto eb = mlir::dyn_cast<fir::EmboxOp>(def)) return buildExpr(eb.getMemref(), d + 1);
 
   // ``hlfir.as_expr`` lifts a named variable / temporary into an
   // HLFIR-expr value (used when an op-class wants
   // ``hlfir.expr<...>`` rather than ``fir.ref<...>``).  Transparent
   // for expression building: the underlying variable IS the value.
-  if (auto ae = mlir::dyn_cast<hlfir::AsExprOp>(def))
-    return buildExpr(ae.getVar(), d + 1);
+  if (auto ae = mlir::dyn_cast<hlfir::AsExprOp>(def)) return buildExpr(ae.getVar(), d + 1);
 
   // ``hlfir.declare`` registers a Fortran name on a memref.  When
   // referenced in an expression, the name itself is the read --
@@ -571,14 +591,12 @@ std::string buildExpr(mlir::Value val, int d) {
   // CHARACTER descriptor.  The pointer half is the underlying
   // string; downstream Fortran arithmetic / concat works against
   // the character data itself, so forward to it.
-  if (auto ebc = mlir::dyn_cast<fir::EmboxCharOp>(def))
-    return buildExpr(ebc.getMemref(), d + 1);
+  if (auto ebc = mlir::dyn_cast<fir::EmboxCharOp>(def)) return buildExpr(ebc.getMemref(), d + 1);
 
   // ``fir.box_addr`` pulls the data pointer out of a box descriptor.
   // Forward through to the boxed value (peeling through any embox
   // we just installed above).
-  if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(def))
-    return buildExpr(ba.getVal(), d + 1);
+  if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(def)) return buildExpr(ba.getVal(), d + 1);
 
   // ``fir.zero_bits`` (class name ``fir::ZeroOp``) produces an
   // all-zero value of any Fortran type -- used for uninitialized
@@ -618,8 +636,7 @@ std::string buildExpr(mlir::Value val, int d) {
   // CHARACTER descriptor.  The char-data half (operand 0) is what
   // an expression context wants; the length is a separate use that
   // the bridge tracks via the box itself.
-  if (auto uc = mlir::dyn_cast<fir::UnboxCharOp>(def))
-    return buildExpr(uc.getOperand(), d + 1);
+  if (auto uc = mlir::dyn_cast<fir::UnboxCharOp>(def)) return buildExpr(uc.getOperand(), d + 1);
 
   // ``hlfir.concat`` is the Fortran ``//`` string concatenation
   // operator.  Map to Python ``+`` so the tasklet body uses the
@@ -672,8 +689,7 @@ std::string buildExpr(mlir::Value val, int d) {
               // ref; trace through that to the declare.
               auto src = ba.getVal();
               if (auto* sd = src.getDefiningOp())
-                if (auto ld = mlir::dyn_cast<fir::LoadOp>(sd))
-                  src = ld.getMemref();
+                if (auto ld = mlir::dyn_cast<fir::LoadOp>(sd)) src = ld.getMemref();
               auto arrName = traceToDecl(src);
               if (!arrName.empty()) return arrName + "_allocated";
             }
@@ -733,8 +749,7 @@ std::string buildExpr(mlir::Value val, int d) {
     // loop-bound expression (E10).
     if (arrName.empty()) {
       if (auto* adef = arrayVal.getDefiningOp())
-        if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(adef))
-          arrName = extractName(decl.getUniqName().str());
+        if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(adef)) arrName = extractName(decl.getUniqName().str());
     }
     if (!dimC || arrName.empty()) return "?";
     unsigned dim = static_cast<unsigned>(*dimC);
@@ -749,8 +764,7 @@ std::string buildExpr(mlir::Value val, int d) {
       if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(adef)) {
         shapeVal = decl.getShape();
         if (!shapeVal) {
-          if (auto outer = asAssumedShapeAlias(decl))
-            shapeVal = outer.getShape();
+          if (auto outer = asAssumedShapeAlias(decl)) shapeVal = outer.getShape();
         }
       } else if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(adef)) {
         // A sectioned designate carries the RESULT's per-dim extents on its own
@@ -804,8 +818,7 @@ std::string buildExpr(mlir::Value val, int d) {
           if (!eb) continue;
           auto sh = eb.getShape();
           if (!sh) continue;
-          if (auto ss = mlir::dyn_cast_or_null<fir::ShapeShiftOp>(
-                  sh.getDefiningOp())) {
+          if (auto ss = mlir::dyn_cast_or_null<fir::ShapeShiftOp>(sh.getDefiningOp())) {
             out = ss;
             break;
           }
@@ -817,8 +830,7 @@ std::string buildExpr(mlir::Value val, int d) {
     // Lower bound (#0):
     if (resIdx == 0) {
       if (shapeVal) {
-        if (auto ss =
-                mlir::dyn_cast<fir::ShapeShiftOp>(shapeVal.getDefiningOp())) {
+        if (auto ss = mlir::dyn_cast<fir::ShapeShiftOp>(shapeVal.getDefiningOp())) {
           auto ops = ss->getOperands();
           unsigned lbIdx = 2 * dim;
           if (lbIdx < ops.size()) {
@@ -869,8 +881,7 @@ std::string buildExpr(mlir::Value val, int d) {
             if (!te.empty() && te != "?") return te;
           }
         }
-        if (auto ss =
-                mlir::dyn_cast<fir::ShapeShiftOp>(shapeVal.getDefiningOp())) {
+        if (auto ss = mlir::dyn_cast<fir::ShapeShiftOp>(shapeVal.getDefiningOp())) {
           auto ops = ss->getOperands();
           unsigned extIdx = 2 * dim + 1;
           if (extIdx < ops.size()) {
@@ -913,14 +924,11 @@ std::string buildExpr(mlir::Value val, int d) {
       {"fir.mulc", " * "},
       {"fir.divc", " / "},
   };
-  if (auto it = bin_ops.find(nm);
-      it != bin_ops.end() && def->getNumOperands() == 2) {
-    return "(" + buildExpr(def->getOperand(0), d + 1) + it->second +
-           buildExpr(def->getOperand(1), d + 1) + ")";
+  if (auto it = bin_ops.find(nm); it != bin_ops.end() && def->getNumOperands() == 2) {
+    return "(" + buildExpr(def->getOperand(0), d + 1) + it->second + buildExpr(def->getOperand(1), d + 1) + ")";
   }
 
-  if (nm == "arith.negf" && def->getNumOperands() == 1)
-    return "(-" + buildExpr(def->getOperand(0), d + 1) + ")";
+  if (nm == "arith.negf" && def->getNumOperands() == 1) return "(-" + buildExpr(def->getOperand(0), d + 1) + ")";
 
   // Fortran ``conjg(z)`` lowers to:
   //     %im  = fir.extract_value %z, [1] : complex<T> -> T
@@ -942,14 +950,12 @@ std::string buildExpr(mlir::Value val, int d) {
     if (coords.size() == 1) {
       if (auto coordAttr = mlir::dyn_cast<mlir::IntegerAttr>(coords[0]))
         if (coordAttr.getInt() == 1) {
-          if (auto inner = mlir::dyn_cast_or_null<fir::InsertValueOp>(
-                  ins.getAdt().getDefiningOp())) {
+          if (auto inner = mlir::dyn_cast_or_null<fir::InsertValueOp>(ins.getAdt().getDefiningOp())) {
             auto innerCoords = inner.getCoor();
             if (innerCoords.size() == 1)
               if (auto a0 = mlir::dyn_cast<mlir::IntegerAttr>(innerCoords[0]))
                 if (a0.getInt() == 0)
-                  if (mlir::isa_and_nonnull<fir::UndefOp>(
-                          inner.getAdt().getDefiningOp())) {
+                  if (mlir::isa_and_nonnull<fir::UndefOp>(inner.getAdt().getDefiningOp())) {
                     // Use the ``re + 1j*im`` form
                     // rather than ``complex(re, im)``:
                     // DaCe's tasklet C++ codegen
@@ -960,8 +966,8 @@ std::string buildExpr(mlir::Value val, int d) {
                     // ``1j`` literal arithmetic via
                     // its complex-arithmetic
                     // rewrites.
-                    return "((" + buildExpr(inner.getVal(), d + 1) +
-                           ") + 1j * (" + buildExpr(ins.getVal(), d + 1) + "))";
+                    return "((" + buildExpr(inner.getVal(), d + 1) + ") + 1j * (" + buildExpr(ins.getVal(), d + 1) +
+                           "))";
                   }
           }
         }
@@ -972,15 +978,12 @@ std::string buildExpr(mlir::Value val, int d) {
         if (coordAttr.getInt() == 1) {
           auto val = ins.getVal();
           auto adt = ins.getAdt();
-          if (auto neg = mlir::dyn_cast_or_null<mlir::arith::NegFOp>(
-                  val.getDefiningOp())) {
-            if (auto ext = mlir::dyn_cast_or_null<fir::ExtractValueOp>(
-                    neg.getOperand().getDefiningOp())) {
+          if (auto neg = mlir::dyn_cast_or_null<mlir::arith::NegFOp>(val.getDefiningOp())) {
+            if (auto ext = mlir::dyn_cast_or_null<fir::ExtractValueOp>(neg.getOperand().getDefiningOp())) {
               auto extCoords = ext.getCoor();
               bool extIsImag = false;
               if (extCoords.size() == 1)
-                if (auto a = mlir::dyn_cast<mlir::IntegerAttr>(extCoords[0]))
-                  extIsImag = (a.getInt() == 1);
+                if (auto a = mlir::dyn_cast<mlir::IntegerAttr>(extCoords[0])) extIsImag = (a.getInt() == 1);
               if (extIsImag && ext.getAdt() == adt) {
                 // Emit ``conj(<expr>)``  --  DaCe's tasklet
                 // codegen routes the bare name through
@@ -1025,15 +1028,11 @@ std::string buildExpr(mlir::Value val, int d) {
   // Elementwise min / max  --  arith.minimumf / maximumf produce IEEE-min/max
   // (NaN-propagating); arith.minnumf / maxnumf are the numeric variants.
   static const std::map<llvm::StringRef, std::string> minmax_ops = {
-      {"arith.minimumf", "min"}, {"arith.maximumf", "max"},
-      {"arith.minnumf", "min"},  {"arith.maxnumf", "max"},
-      {"arith.minsi", "min"},    {"arith.maxsi", "max"},
-      {"arith.minui", "min"},    {"arith.maxui", "max"},
+      {"arith.minimumf", "min"}, {"arith.maximumf", "max"}, {"arith.minnumf", "min"}, {"arith.maxnumf", "max"},
+      {"arith.minsi", "min"},    {"arith.maxsi", "max"},    {"arith.minui", "min"},   {"arith.maxui", "max"},
   };
-  if (auto it = minmax_ops.find(nm);
-      it != minmax_ops.end() && def->getNumOperands() == 2) {
-    return it->second + "(" + buildExpr(def->getOperand(0), d + 1) + ", " +
-           buildExpr(def->getOperand(1), d + 1) + ")";
+  if (auto it = minmax_ops.find(nm); it != minmax_ops.end() && def->getNumOperands() == 2) {
+    return it->second + "(" + buildExpr(def->getOperand(0), d + 1) + ", " + buildExpr(def->getOperand(1), d + 1) + ")";
   }
 
   // Elementwise math intrinsics -> bare Python names.  DaCe's tasklet
@@ -1077,8 +1076,7 @@ std::string buildExpr(mlir::Value val, int d) {
       {"llvm.intr.sin", "sin"},
       {"llvm.intr.cos", "cos"},
   };
-  if (auto it = unary_math.find(nm);
-      it != unary_math.end() && def->getNumOperands() == 1) {
+  if (auto it = unary_math.find(nm); it != unary_math.end() && def->getNumOperands() == 1) {
     return it->second + "(" + buildExpr(def->getOperand(0), d + 1) + ")";
   }
 
@@ -1095,8 +1093,7 @@ std::string buildExpr(mlir::Value val, int d) {
       "math.ipowi",
   };
   if (pow_ops.count(nm) && def->getNumOperands() == 2) {
-    return "(" + buildExpr(def->getOperand(0), d + 1) + " ** " +
-           buildExpr(def->getOperand(1), d + 1) + ")";
+    return "(" + buildExpr(def->getOperand(0), d + 1) + " ** " + buildExpr(def->getOperand(1), d + 1) + ")";
   }
 
   // ``hlfir.no_reassoc`` is a transparency wrapper Flang emits around
@@ -1117,10 +1114,8 @@ std::string buildExpr(mlir::Value val, int d) {
       // min/max idiom shape).
       {"math.copysign", "copysign"},
   };
-  if (auto it = binary_math.find(nm);
-      it != binary_math.end() && def->getNumOperands() == 2) {
-    return it->second + "(" + buildExpr(def->getOperand(0), d + 1) + ", " +
-           buildExpr(def->getOperand(1), d + 1) + ")";
+  if (auto it = binary_math.find(nm); it != binary_math.end() && def->getNumOperands() == 2) {
+    return it->second + "(" + buildExpr(def->getOperand(0), d + 1) + ", " + buildExpr(def->getOperand(1), d + 1) + ")";
   }
 
   // Runtime / LLVM intrinsic calls that Flang sometimes emits for
@@ -1228,8 +1223,7 @@ std::string buildExpr(mlir::Value val, int d) {
           {"llvm.fabs.f64", "abs"},
           {"llvm.fabs.f32", "abs"},
       };
-      if (auto it = unary_calls.find(cname);
-          it != unary_calls.end() && call.getNumOperands() >= 1) {
+      if (auto it = unary_calls.find(cname); it != unary_calls.end() && call.getNumOperands() >= 1) {
         return it->second + "(" + buildExpr(call.getOperand(0), d + 1) + ")";
       }
       // Type-converting casts  --  Fortran NINT(x) / INT(x).
@@ -1254,10 +1248,8 @@ std::string buildExpr(mlir::Value val, int d) {
           {"llvm.lrint.i64.f64", "int64"},
           {"llvm.lrint.i64.f32", "int64"},
       };
-      if (auto it = cast_calls.find(cname);
-          it != cast_calls.end() && call.getNumOperands() >= 1) {
-        return it->second + "(round(" + buildExpr(call.getOperand(0), d + 1) +
-               "))";
+      if (auto it = cast_calls.find(cname); it != cast_calls.end() && call.getNumOperands() >= 1) {
+        return it->second + "(round(" + buildExpr(call.getOperand(0), d + 1) + "))";
       }
       // ``AINT(x)`` truncating to a float result -- LLVM emits
       // ``llvm.trunc.f{32,64}``.  Render as ``float{32,64}(int(x))``
@@ -1265,15 +1257,12 @@ std::string buildExpr(mlir::Value val, int d) {
       // restores the kind.  Likewise for ``ANINT`` -> ``llvm.round``,
       // ``FLOOR`` -> ``llvm.floor``, ``CEILING`` -> ``llvm.ceil``.
       static const std::map<llvm::StringRef, std::string> float_round = {
-          {"llvm.trunc.f64", "trunc"},     {"llvm.trunc.f32", "trunc"},
-          {"llvm.round.f64", "round"},     {"llvm.round.f32", "round"},
-          {"llvm.floor.f64", "floor"},     {"llvm.floor.f32", "floor"},
-          {"llvm.ceil.f64", "ceil"},       {"llvm.ceil.f32", "ceil"},
-          {"llvm.rint.f64", "round"},      {"llvm.rint.f32", "round"},
-          {"llvm.nearbyint.f64", "round"}, {"llvm.nearbyint.f32", "round"},
+          {"llvm.trunc.f64", "trunc"}, {"llvm.trunc.f32", "trunc"},     {"llvm.round.f64", "round"},
+          {"llvm.round.f32", "round"}, {"llvm.floor.f64", "floor"},     {"llvm.floor.f32", "floor"},
+          {"llvm.ceil.f64", "ceil"},   {"llvm.ceil.f32", "ceil"},       {"llvm.rint.f64", "round"},
+          {"llvm.rint.f32", "round"},  {"llvm.nearbyint.f64", "round"}, {"llvm.nearbyint.f32", "round"},
       };
-      if (auto it = float_round.find(cname);
-          it != float_round.end() && call.getNumOperands() >= 1) {
+      if (auto it = float_round.find(cname); it != float_round.end() && call.getNumOperands() >= 1) {
         return it->second + "(" + buildExpr(call.getOperand(0), d + 1) + ")";
       }
       // Complex division  --  flang lowers ``a / b`` on COMPLEX(8) to
@@ -1283,13 +1272,10 @@ std::string buildExpr(mlir::Value val, int d) {
       // complex operands; reconstruct the original complex
       // operand identities and emit ``(complex_a / complex_b)``
       // at the tasklet level.
-      if ((cname == "__divdc3" || cname == "__divsc3") &&
-          call.getNumOperands() == 4) {
+      if ((cname == "__divdc3" || cname == "__divsc3") && call.getNumOperands() == 4) {
         auto extractSource = [](mlir::Value re, mlir::Value im) -> mlir::Value {
-          auto reOp =
-              mlir::dyn_cast_or_null<fir::ExtractValueOp>(re.getDefiningOp());
-          auto imOp =
-              mlir::dyn_cast_or_null<fir::ExtractValueOp>(im.getDefiningOp());
+          auto reOp = mlir::dyn_cast_or_null<fir::ExtractValueOp>(re.getDefiningOp());
+          auto imOp = mlir::dyn_cast_or_null<fir::ExtractValueOp>(im.getDefiningOp());
           if (!reOp || !imOp) return {};
           if (reOp.getAdt() != imOp.getAdt()) return {};
           return reOp.getAdt();
@@ -1297,42 +1283,35 @@ std::string buildExpr(mlir::Value val, int d) {
         auto srcA = extractSource(call.getOperand(0), call.getOperand(1));
         auto srcB = extractSource(call.getOperand(2), call.getOperand(3));
         if (srcA && srcB) {
-          return "(" + buildExpr(srcA, d + 1) + " / " + buildExpr(srcB, d + 1) +
-                 ")";
+          return "(" + buildExpr(srcA, d + 1) + " / " + buildExpr(srcB, d + 1) + ")";
         }
       }
       // Two-arg ATAN2 runtime fallback.
       if (cname == "atan2" && call.getNumOperands() >= 2) {
-        return "atan2(" + buildExpr(call.getOperand(0), d + 1) + ", " +
-               buildExpr(call.getOperand(1), d + 1) + ")";
+        return "atan2(" + buildExpr(call.getOperand(0), d + 1) + ", " + buildExpr(call.getOperand(1), d + 1) + ")";
       }
       // Fortran MOD on real operands  --  truncated-quotient
       // remainder.  Maps directly to ``std::fmod`` (in ``<cmath>``,
       // pulled in via ``<dace/dace.h>``); integer MOD lowers to
       // ``arith.remsi`` and never reaches this fir.call branch.
-      if ((cname == "_FortranAModReal4" || cname == "_FortranAModReal8") &&
-          call.getNumOperands() >= 2) {
-        return "fmod(" + buildExpr(call.getOperand(0), d + 1) + ", " +
-               buildExpr(call.getOperand(1), d + 1) + ")";
+      if ((cname == "_FortranAModReal4" || cname == "_FortranAModReal8") && call.getNumOperands() >= 2) {
+        return "fmod(" + buildExpr(call.getOperand(0), d + 1) + ", " + buildExpr(call.getOperand(1), d + 1) + ")";
       }
       // Fortran SCALE(x, n)  --  returns ``x * 2^n``.  Maps to
       // ``dace::math::ldexp`` (templated; ``std::ldexp``
       // internally).  Runtime-call signature is ``(x, n,
       // src_file_ptr, src_line)``  --  first two operands are
       // semantic.
-      if ((cname == "_FortranAScale4" || cname == "_FortranAScale8") &&
-          call.getNumOperands() >= 2) {
-        return "ldexp(" + buildExpr(call.getOperand(0), d + 1) + ", " +
-               buildExpr(call.getOperand(1), d + 1) + ")";
+      if ((cname == "_FortranAScale4" || cname == "_FortranAScale8") && call.getNumOperands() >= 2) {
+        return "ldexp(" + buildExpr(call.getOperand(0), d + 1) + ", " + buildExpr(call.getOperand(1), d + 1) + ")";
       }
       // Fortran EXPONENT(x)  --  returns ``e`` such that
       // ``x = mantissa * 2^e`` with ``0.5 <= |mantissa| < 1``.
       // ``dace::math::ilogb`` provides this via ``std::frexp``
       // (returns ``int`` directly so callers can use the result
       // in a tasklet-integer context).
-      if ((cname == "_FortranAExponent4_4" || cname == "_FortranAExponent8_4" ||
-           cname == "_FortranAExponent4_8" || cname == "_FortranAExponent8_8" ||
-           cname == "_FortranAExponent4" || cname == "_FortranAExponent8") &&
+      if ((cname == "_FortranAExponent4_4" || cname == "_FortranAExponent8_4" || cname == "_FortranAExponent4_8" ||
+           cname == "_FortranAExponent8_8" || cname == "_FortranAExponent4" || cname == "_FortranAExponent8") &&
           call.getNumOperands() >= 1) {
         return "ilogb(" + buildExpr(call.getOperand(0), d + 1) + ")";
       }
@@ -1341,12 +1320,10 @@ std::string buildExpr(mlir::Value val, int d) {
       // ``py_mod`` internally; ``floor`` for floats, sign-aware
       // ``((a%b)+b)%b`` for ints).  Required because Python's
       // ``%`` on int floors but C++'s ``%`` on int truncates.
-      if ((cname == "_FortranAModuloReal4" || cname == "_FortranAModuloReal8" ||
-           cname == "_FortranAModuloInteger4" ||
+      if ((cname == "_FortranAModuloReal4" || cname == "_FortranAModuloReal8" || cname == "_FortranAModuloInteger4" ||
            cname == "_FortranAModuloInteger8") &&
           call.getNumOperands() >= 2) {
-        return "floor_mod(" + buildExpr(call.getOperand(0), d + 1) + ", " +
-               buildExpr(call.getOperand(1), d + 1) + ")";
+        return "floor_mod(" + buildExpr(call.getOperand(0), d + 1) + ", " + buildExpr(call.getOperand(1), d + 1) + ")";
       }
       // Fortran ``base ** exponent`` lowers to a runtime ``pow``
       // helper when the operands are typed combinations the IEEE
@@ -1369,13 +1346,11 @@ std::string buildExpr(mlir::Value val, int d) {
       // ``(0.D0, -1.D0) ** nhtol(ih, nt)`` surfaces this as
       // ``_FortranAzpowi`` and previously yielded a ``?`` tasklet
       // body because the ``fir.call`` had no handler.
-      if ((cname == "_FortranAzpowi" || cname == "_FortranAzpowk" ||
-           cname == "_FortranAcpowi" || cname == "_FortranAcpowk" ||
-           cname == "_FortranAdpowi" || cname == "_FortranAdpowk" ||
+      if ((cname == "_FortranAzpowi" || cname == "_FortranAzpowk" || cname == "_FortranAcpowi" ||
+           cname == "_FortranAcpowk" || cname == "_FortranAdpowi" || cname == "_FortranAdpowk" ||
            cname == "_FortranAspowi" || cname == "_FortranAspowk") &&
           call.getNumOperands() >= 2) {
-        return "(" + buildExpr(call.getOperand(0), d + 1) + " ** " +
-               buildExpr(call.getOperand(1), d + 1) + ")";
+        return "(" + buildExpr(call.getOperand(0), d + 1) + " ** " + buildExpr(call.getOperand(1), d + 1) + ")";
       }
     }
   }
@@ -1391,10 +1366,8 @@ std::string buildExpr(mlir::Value val, int d) {
   if (auto conv = mlir::dyn_cast<fir::ConvertOp>(def)) {
     auto inT = conv.getValue().getType();
     auto outT = conv.getRes().getType();
-    bool inIsInt = inT.isInteger(8) || inT.isInteger(16) || inT.isInteger(32) ||
-                   inT.isInteger(64);
-    bool outIsInt = outT.isInteger(8) || outT.isInteger(16) ||
-                    outT.isInteger(32) || outT.isInteger(64);
+    bool inIsInt = inT.isInteger(8) || inT.isInteger(16) || inT.isInteger(32) || inT.isInteger(64);
+    bool outIsInt = outT.isInteger(8) || outT.isInteger(16) || outT.isInteger(32) || outT.isInteger(64);
     bool inIsFloat = mlir::isa<mlir::FloatType>(inT);
     bool outIsFloat = mlir::isa<mlir::FloatType>(outT);
     // Float -> integer: explicit truncating cast.  Use ``dace.intN``
@@ -1407,9 +1380,7 @@ std::string buildExpr(mlir::Value val, int d) {
     // arithmetic site.  Tag with ``float64`` / ``float32`` so the
     // intent is explicit when the surrounding op is integer too.
     if (inIsInt && outIsFloat) {
-      const char* cast = mlir::cast<mlir::FloatType>(outT).getWidth() == 32
-                             ? "float32"
-                             : "float64";
+      const char* cast = mlir::cast<mlir::FloatType>(outT).getWidth() == 32 ? "float32" : "float64";
       return std::string(cast) + "(" + buildExpr(conv.getValue(), d + 1) + ")";
     }
     // Float -> wider float (f32 -> f64): wrap in an explicit
@@ -1427,8 +1398,7 @@ std::string buildExpr(mlir::Value val, int d) {
       auto outW = mlir::cast<mlir::FloatType>(outT).getWidth();
       if (inW < outW && !kSuppressFloatCast) {
         const char* cast = inW == 32 ? "float32" : "float64";
-        return std::string(cast) + "(" + buildExpr(conv.getValue(), d + 1) +
-               ")";
+        return std::string(cast) + "(" + buildExpr(conv.getValue(), d + 1) + ")";
       }
       if (inW < outW) return buildExpr(conv.getValue(), d + 1);
     }
@@ -1473,17 +1443,14 @@ std::string buildExpr(mlir::Value val, int d) {
       if (auto c = mlir::dyn_cast_or_null<mlir::arith::ConstantOp>(rhs))
         if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue())) {
           auto v = ia.getInt();
-          if (v == 1 || v == -1)
-            return "(not " + buildExpr(def->getOperand(0), d + 1) + ")";
+          if (v == 1 || v == -1) return "(not " + buildExpr(def->getOperand(0), d + 1) + ")";
         }
-      return "(" + buildExpr(def->getOperand(0), d + 1) +
-             " != " + buildExpr(def->getOperand(1), d + 1) + ")";
+      return "(" + buildExpr(def->getOperand(0), d + 1) + " != " + buildExpr(def->getOperand(1), d + 1) + ")";
     }
     // Bitwise XOR: Fortran ``ieor(a, b)`` and the bitwise-NOT idiom
     // ``xori a, -1`` (Flang's lowering of ``ibclr``'s mask
     // construction step).
-    return "(" + buildExpr(def->getOperand(0), d + 1) + " ^ " +
-           buildExpr(def->getOperand(1), d + 1) + ")";
+    return "(" + buildExpr(def->getOperand(0), d + 1) + " ^ " + buildExpr(def->getOperand(1), d + 1) + ")";
   }
 
   // Bitwise AND / OR  --  for non-i1 operands these are ``iand`` / ``ior``
@@ -1510,8 +1477,7 @@ std::string buildExpr(mlir::Value val, int d) {
       if (b != "?") return b;
     } else {
       const char* op = (nm == "arith.andi") ? " & " : " | ";
-      return "(" + buildExpr(def->getOperand(0), d + 1) + op +
-             buildExpr(def->getOperand(1), d + 1) + ")";
+      return "(" + buildExpr(def->getOperand(0), d + 1) + op + buildExpr(def->getOperand(1), d + 1) + ")";
     }
   }
 
@@ -1525,23 +1491,18 @@ std::string buildExpr(mlir::Value val, int d) {
   // ``logical_left_shift`` / ``logical_right_shift`` runtime helpers,
   // which shift via the unsigned type.
   if (nm == "arith.shrsi" && def->getNumOperands() == 2) {
-    return "(" + buildExpr(def->getOperand(0), d + 1) + " >> " +
-           buildExpr(def->getOperand(1), d + 1) + ")";
+    return "(" + buildExpr(def->getOperand(0), d + 1) + " >> " + buildExpr(def->getOperand(1), d + 1) + ")";
   }
-  if ((nm == "arith.shli" || nm == "arith.shrui") &&
-      def->getNumOperands() == 2) {
-    const char* fn =
-        (nm == "arith.shli") ? "logical_left_shift" : "logical_right_shift";
-    return std::string(fn) + "(" + buildExpr(def->getOperand(0), d + 1) + ", " +
-           buildExpr(def->getOperand(1), d + 1) + ")";
+  if ((nm == "arith.shli" || nm == "arith.shrui") && def->getNumOperands() == 2) {
+    const char* fn = (nm == "arith.shli") ? "logical_left_shift" : "logical_right_shift";
+    return std::string(fn) + "(" + buildExpr(def->getOperand(0), d + 1) + ", " + buildExpr(def->getOperand(1), d + 1) +
+           ")";
   }
 
   // Integer remainder  --  ``arith.remsi`` / ``arith.remui``  --  used by some
   // Fortran ``mod`` lowerings on integers.
-  if ((nm == "arith.remsi" || nm == "arith.remui") &&
-      def->getNumOperands() == 2) {
-    return "(" + buildExpr(def->getOperand(0), d + 1) + " % " +
-           buildExpr(def->getOperand(1), d + 1) + ")";
+  if ((nm == "arith.remsi" || nm == "arith.remui") && def->getNumOperands() == 2) {
+    return "(" + buildExpr(def->getOperand(0), d + 1) + " % " + buildExpr(def->getOperand(1), d + 1) + ")";
   }
 
   // Scalar min / max idiom: Flang lowers ``min(a, b)`` on f32/f64 to
@@ -1557,10 +1518,8 @@ std::string buildExpr(mlir::Value val, int d) {
         fn = "min";
       else if (pred == P::OGT || pred == P::UGT)
         fn = "max";
-      if (fn && cmp.getLhs() == sel.getTrueValue() &&
-          cmp.getRhs() == sel.getFalseValue()) {
-        return std::string(fn) + "(" + buildExpr(cmp.getLhs(), d + 1) + ", " +
-               buildExpr(cmp.getRhs(), d + 1) + ")";
+      if (fn && cmp.getLhs() == sel.getTrueValue() && cmp.getRhs() == sel.getFalseValue()) {
+        return std::string(fn) + "(" + buildExpr(cmp.getLhs(), d + 1) + ", " + buildExpr(cmp.getRhs(), d + 1) + ")";
       }
     }
     // Same idiom for integer min / max via arith.cmpi.
@@ -1572,10 +1531,8 @@ std::string buildExpr(mlir::Value val, int d) {
         fn = "min";
       else if (pred == P::sgt || pred == P::ugt)
         fn = "max";
-      if (fn && cmp.getLhs() == sel.getTrueValue() &&
-          cmp.getRhs() == sel.getFalseValue()) {
-        return std::string(fn) + "(" + buildExpr(cmp.getLhs(), d + 1) + ", " +
-               buildExpr(cmp.getRhs(), d + 1) + ")";
+      if (fn && cmp.getLhs() == sel.getTrueValue() && cmp.getRhs() == sel.getFalseValue()) {
+        return std::string(fn) + "(" + buildExpr(cmp.getLhs(), d + 1) + ", " + buildExpr(cmp.getRhs(), d + 1) + ")";
       }
     }
     // Inlined integer Fortran MODULO collapse:
@@ -1609,26 +1566,19 @@ std::string buildExpr(mlir::Value val, int d) {
       mlir::Value b = rem.getRhs();
       if (add.getRhs() != b) break;
       // andi = (cmpi ne r 0, cmpi slt (xori a b) 0)  -- order-agnostic
-      auto cm0 = mlir::dyn_cast_or_null<mlir::arith::CmpIOp>(
-          andi.getLhs().getDefiningOp());
-      auto cm1 = mlir::dyn_cast_or_null<mlir::arith::CmpIOp>(
-          andi.getRhs().getDefiningOp());
+      auto cm0 = mlir::dyn_cast_or_null<mlir::arith::CmpIOp>(andi.getLhs().getDefiningOp());
+      auto cm1 = mlir::dyn_cast_or_null<mlir::arith::CmpIOp>(andi.getRhs().getDefiningOp());
       if (!cm0 || !cm1) break;
       auto isNeR = [&](mlir::arith::CmpIOp c) {
-        return c.getPredicate() == mlir::arith::CmpIPredicate::ne &&
-               c.getLhs() == rem.getResult();
+        return c.getPredicate() == mlir::arith::CmpIPredicate::ne && c.getLhs() == rem.getResult();
       };
       auto isSltXori = [&](mlir::arith::CmpIOp c) {
         if (c.getPredicate() != mlir::arith::CmpIPredicate::slt) return false;
-        auto x = mlir::dyn_cast_or_null<mlir::arith::XOrIOp>(
-            c.getLhs().getDefiningOp());
-        return x && ((x.getLhs() == a && x.getRhs() == b) ||
-                     (x.getLhs() == b && x.getRhs() == a));
+        auto x = mlir::dyn_cast_or_null<mlir::arith::XOrIOp>(c.getLhs().getDefiningOp());
+        return x && ((x.getLhs() == a && x.getRhs() == b) || (x.getLhs() == b && x.getRhs() == a));
       };
-      if (!((isNeR(cm0) && isSltXori(cm1)) || (isNeR(cm1) && isSltXori(cm0))))
-        break;
-      return "floor_mod(" + buildExpr(a, d + 1) + ", " + buildExpr(b, d + 1) +
-             ")";
+      if (!((isNeR(cm0) && isSltXori(cm1)) || (isNeR(cm1) && isSltXori(cm0)))) break;
+      return "floor_mod(" + buildExpr(a, d + 1) + ", " + buildExpr(b, d + 1) + ")";
     } while (false);
     // Generic ternary fallback  --  Fortran ``MERGE(t, f, mask)`` lowers
     // to a bare ``arith.select`` (and the SIZE/LBOUND/UBOUND clamps
@@ -1649,8 +1599,8 @@ std::string buildExpr(mlir::Value val, int d) {
       condExpr = buildBoolExpr(sel.getCondition(), d + 1);
     }
     if (condExpr == "?") condExpr = buildExpr(sel.getCondition(), d + 1);
-    return "(" + buildExpr(sel.getTrueValue(), d + 1) + " if " + condExpr +
-           " else " + buildExpr(sel.getFalseValue(), d + 1) + ")";
+    return "(" + buildExpr(sel.getTrueValue(), d + 1) + " if " + condExpr + " else " +
+           buildExpr(sel.getFalseValue(), d + 1) + ")";
   }
 
   if (auto ld = mlir::dyn_cast<fir::LoadOp>(def)) {
@@ -1666,8 +1616,7 @@ std::string buildExpr(mlir::Value val, int d) {
     // shape the ``fir.extract_value`` complex handler emits for
     // ``REAL(z)`` / ``AIMAG(z)``, which ``cppunparse`` maps to
     // ``std::complex<T>::real()`` / ``::imag()``.
-    if (auto dg =
-            mlir::dyn_cast_or_null<hlfir::DesignateOp>(mem.getDefiningOp())) {
+    if (auto dg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(mem.getDefiningOp())) {
       if (auto cp = dg.getComplexPart()) {
         // ``dg.getMemref()`` is the COMPLEX value's declare addr (a
         // ``fir.ref<complex<T>>``) for the scalar case, or an
@@ -1679,8 +1628,7 @@ std::string buildExpr(mlir::Value val, int d) {
         // name it (e.g. a complex temporary).
         std::string base = traceToDecl(dg.getMemref());
         if (base.empty()) base = buildExpr(dg.getMemref(), d + 1);
-        if (!base.empty() && base != "?")
-          return "(" + base + (*cp ? ".imag()" : ".real()") + ")";
+        if (!base.empty() && base != "?") return "(" + base + (*cp ? ".imag()" : ".real()") + ")";
         return "?";
       }
     }
@@ -1739,8 +1687,7 @@ std::string buildExpr(mlir::Value val, int d) {
   if (auto cst = mlir::dyn_cast<mlir::arith::ConstantOp>(def)) {
     if (auto f = mlir::dyn_cast<mlir::FloatAttr>(cst.getValue())) {
       bool isF32 = false;
-      if (auto ft = mlir::dyn_cast<mlir::FloatType>(cst.getType()))
-        isF32 = ft.getWidth() == 32;
+      if (auto ft = mlir::dyn_cast<mlir::FloatType>(cst.getType())) isF32 = ft.getWidth() == 32;
       std::string lit;
       if (isF32) {
         // The constant is genuinely f32.  Print the SHORTEST
@@ -1806,10 +1753,8 @@ std::string buildExpr(mlir::Value val, int d) {
       // compiler-side overload resolution can pick the wrong ``max``.
       // Force a trailing ``.0`` so the literal is unambiguously
       // floating-point.
-      if (lit.find('.') == std::string::npos &&
-          lit.find('e') == std::string::npos &&
-          lit.find('E') == std::string::npos &&
-          lit.find("nan") == std::string::npos &&
+      if (lit.find('.') == std::string::npos && lit.find('e') == std::string::npos &&
+          lit.find('E') == std::string::npos && lit.find("nan") == std::string::npos &&
           lit.find("inf") == std::string::npos)
         lit += ".0";
       // Wrap f32-typed constants in ``dace.float32(...)`` so the
@@ -1824,8 +1769,7 @@ std::string buildExpr(mlir::Value val, int d) {
       if (isF32 && !kSuppressFloatCast) return "float32(" + lit + ")";
       return lit;
     }
-    if (auto i = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue()))
-      return std::to_string(i.getInt());
+    if (auto i = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue())) return std::to_string(i.getInt());
   }
 
   // hlfir.apply %elem, %i  --  read one element of an hlfir.elemental expr
@@ -1858,8 +1802,7 @@ std::string buildExpr(mlir::Value val, int d) {
           // synthetic names if we have them, otherwise pass the
           // Value through resolveIndex so callers see the same
           // iter names the outer elemental already set up.
-          for (unsigned i = 0;
-               i < block.getNumArguments() && i < apply_idxs.size(); ++i) {
+          for (unsigned i = 0; i < block.getNumArguments() && i < apply_idxs.size(); ++i) {
             auto name = resolveIndex(apply_idxs[i]);
             indexStack().push_back({block.getArgument(i), name});
             ++pushed;
@@ -1963,8 +1906,7 @@ std::string buildExpr(mlir::Value val, int d) {
       auto& block = region.front();
       for (auto& op : block) {
         if (auto y = mlir::dyn_cast<mlir::scf::YieldOp>(op)) {
-          if (resultIdx < y.getNumOperands())
-            return buildExpr(y.getOperand(resultIdx), d + 1);
+          if (resultIdx < y.getNumOperands()) return buildExpr(y.getOperand(resultIdx), d + 1);
         }
       }
       return "?";
@@ -1996,8 +1938,7 @@ std::string buildExpr(mlir::Value val, int d) {
     std::string loc;
     llvm::raw_string_ostream os(loc);
     def->getLoc().print(os);
-    llvm::errs() << "[buildExpr unhandled-op] op=" << op_name << " at " << loc
-                 << "\n";
+    llvm::errs() << "[buildExpr unhandled-op] op=" << op_name << " at " << loc << "\n";
   }
   return "?";
 }

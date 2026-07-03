@@ -136,8 +136,12 @@ def test_user_comm_split_send_recv(tmp_path: Path):
         sdfg.compile()
         driver_path = tmp_path / "driver.f90"
         driver_path.write_text(_DRIVER)
-        lib = build_fortran_library(sdfg, _IFACE, plan, str(tmp_path / "lib"),
-                                    name="sr_usercomm", extra_sources=[driver_path])
+        lib = build_fortran_library(sdfg,
+                                    _IFACE,
+                                    plan,
+                                    str(tmp_path / "lib"),
+                                    name="sr_usercomm",
+                                    extra_sources=[driver_path])
         return str(lib.so_path)
 
     so_path = build_on_root(world, _build_lib)
@@ -148,8 +152,12 @@ def test_user_comm_split_send_recv(tmp_path: Path):
     dll.run_sr.argtypes = [
         ctypes.POINTER(ctypes.c_double),
         ctypes.POINTER(ctypes.c_double),
-        ctypes.c_int, ctypes.c_int, ctypes.c_int,
-        ctypes.c_int, ctypes.c_int, ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
     ]
 
     n = 8
@@ -158,7 +166,12 @@ def test_user_comm_split_send_recv(tmp_path: Path):
     dll.run_sr(
         buf.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
         rbuf.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
-        n, partner, partner, 7, split.py2f(), crank,
+        n,
+        partner,
+        partner,
+        7,
+        split.py2f(),
+        crank,
     )
 
     # Partner is the other world rank of the same parity: 0<->2, 1<->3.

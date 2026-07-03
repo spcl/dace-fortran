@@ -86,8 +86,10 @@ def _write(tmp: Path, **named) -> list:
 def test_two_files_driver_plus_module(tmp_path: Path, merge_engine):
     """Driver + one ``USE``-d module, files given out of order (both engines)."""
     files = _write(tmp_path / "src", driver=_DRIVER, mod_add=_MOD_ADD)
-    sdfg = build_sdfg_from_files(list(reversed(files)), entry="run",
-                                 name="run", out_dir=tmp_path / "b",
+    sdfg = build_sdfg_from_files(list(reversed(files)),
+                                 entry="run",
+                                 name="run",
+                                 out_dir=tmp_path / "b",
                                  merge_engine=merge_engine)
     n = 16
     rng = np.random.default_rng(0)
@@ -101,10 +103,11 @@ def test_two_files_driver_plus_module(tmp_path: Path, merge_engine):
 @pytest.mark.parametrize("merge_engine", ["fparser", "regex"])
 def test_three_files_transitive_use(tmp_path: Path, merge_engine):
     """Driver USEs mod_scale which USEs mod_add -> transitive inline (both engines)."""
-    files = _write(tmp_path / "src", mod_add=_MOD_ADD, mod_scale=_MOD_SCALE,
-                   driver=_DRIVER_CHAIN)
-    sdfg = build_sdfg_from_files(files, entry="run_chain",
-                                 name="run_chain", out_dir=tmp_path / "b",
+    files = _write(tmp_path / "src", mod_add=_MOD_ADD, mod_scale=_MOD_SCALE, driver=_DRIVER_CHAIN)
+    sdfg = build_sdfg_from_files(files,
+                                 entry="run_chain",
+                                 name="run_chain",
+                                 out_dir=tmp_path / "b",
                                  merge_engine=merge_engine)
     n = 8
     rng = np.random.default_rng(1)
@@ -151,8 +154,7 @@ contains
 end module drv
 """
     files = _write(tmp_path / "src", driver=driver, mod_add=_MOD_ADD)
-    sdfg = build_sdfg_from_files(files, entry="drv::run", name="run",
-                                 out_dir=tmp_path / "b", merge_engine=merge_engine)
+    sdfg = build_sdfg_from_files(files, entry="drv::run", name="run", out_dir=tmp_path / "b", merge_engine=merge_engine)
     n = 12
     rng = np.random.default_rng(2)
     x = np.asfortranarray(rng.random(n))

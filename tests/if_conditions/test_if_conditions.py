@@ -22,8 +22,7 @@ import pytest
 
 from _util import build_sdfg, have_flang
 
-pytestmark = pytest.mark.skipif(not have_flang(),
-                                reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
 
 def test_if_scalar_compare_basic(tmp_path):
@@ -44,8 +43,7 @@ SUBROUTINE if_scalar(n, x, out)
   END DO
 END SUBROUTINE
 """
-    sdfg = build_sdfg(src, tmp_path / 'sdfg', name='if_scalar',
-                      entry='if_scalar').build()
+    sdfg = build_sdfg(src, tmp_path / 'sdfg', name='if_scalar', entry='if_scalar').build()
     out = np.zeros(4, dtype=np.float64, order='F')
     sdfg(n=np.int32(4), x=np.float64(2.5), out=out)
     np.testing.assert_array_equal(out, [1.0, 2.0, 3.0, 4.0])
@@ -71,8 +69,7 @@ SUBROUTINE if_array_elem(n, a, out)
   END DO
 END SUBROUTINE
 """
-    sdfg = build_sdfg(src, tmp_path / 'sdfg', name='if_array_elem',
-                      entry='if_array_elem').build()
+    sdfg = build_sdfg(src, tmp_path / 'sdfg', name='if_array_elem', entry='if_array_elem').build()
     a = np.array([0.5, 1.5, 2.0, 0.1], dtype=np.float64, order='F')
     out = np.zeros(4, dtype=np.float64, order='F')
     sdfg(n=np.int32(4), a=a, out=out)
@@ -101,8 +98,7 @@ SUBROUTINE if_max3(n, a, b, c, out)
   END DO
 END SUBROUTINE
 """
-    sdfg = build_sdfg(src, tmp_path / 'sdfg', name='if_max3',
-                      entry='if_max3').build()
+    sdfg = build_sdfg(src, tmp_path / 'sdfg', name='if_max3', entry='if_max3').build()
     a = np.array([0.0, 0.5, 1e-7, 0.0], dtype=np.float64, order='F')
     b = np.array([0.0, 0.0, 1e-8, 0.0], dtype=np.float64, order='F')
     c = np.array([1e-9, 0.0, 1e-9, 1e-7], dtype=np.float64, order='F')
@@ -136,8 +132,7 @@ SUBROUTINE if_chain(n, a, b, c, out)
   END DO
 END SUBROUTINE
 """
-    sdfg = build_sdfg(src, tmp_path / 'sdfg', name='if_chain',
-                      entry='if_chain').build()
+    sdfg = build_sdfg(src, tmp_path / 'sdfg', name='if_chain', entry='if_chain').build()
     a = np.array([0.5, -0.5, 1.0, 0.1], dtype=np.float64, order='F')
     b = np.array([0.5, 0.5, 2.0, 2.0], dtype=np.float64, order='F')
     out = np.zeros(4, dtype=np.float64, order='F')
@@ -170,12 +165,9 @@ SUBROUTINE if_2d(n, m, mat, threshold, out)
   END DO
 END SUBROUTINE
 """
-    sdfg = build_sdfg(src, tmp_path / 'sdfg', name='if_2d',
-                      entry='if_2d').build()
-    mat = np.array([[0.5, 2.5], [1.5, 0.1], [3.0, 0.0]],
-                   dtype=np.float64, order='F')
+    sdfg = build_sdfg(src, tmp_path / 'sdfg', name='if_2d', entry='if_2d').build()
+    mat = np.array([[0.5, 2.5], [1.5, 0.1], [3.0, 0.0]], dtype=np.float64, order='F')
     out = np.zeros((3, 2), dtype=np.float64, order='F')
-    sdfg(n=np.int32(3), m=np.int32(2), mat=mat,
-         threshold=np.float64(1.0), out=out)
+    sdfg(n=np.int32(3), m=np.int32(2), mat=mat, threshold=np.float64(1.0), out=out)
     expected = np.where(mat > 1.0, mat * 2.0, 0.0).astype(np.float64)
     np.testing.assert_allclose(out, expected)

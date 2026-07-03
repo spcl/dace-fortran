@@ -54,8 +54,7 @@ def test_array_value_as_dimension_symbol(tmp_path: Path):
     array's extent.  The extent becomes a mangled symbol ``__sym_sizes_sel``
     (distinct from the ``sizes`` data descriptor), seeded from ``sizes(sel)``;
     the result matches the reference computation."""
-    sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="avd",
-                      entry="array_value_as_dim_mod::array_value_as_dim").build()
+    sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="avd", entry="array_value_as_dim_mod::array_value_as_dim").build()
     assert "sizes" in sdfg.arrays  # the array stays a data descriptor
     assert "sizes" not in sdfg.symbols, "array name leaked in as a symbol"
     assert "__sym_sizes_sel" in sdfg.symbols, \

@@ -102,9 +102,9 @@ def test_send_recv_lower_to_mpi_libnodes(tmp_path: Path):
     assert len(sends) == 1, f"expected 1 Send node, got {len(sends)}"
     assert len(recvs) == 1, f"expected 1 Recv node, got {len(recvs)}"
 
-    assert set(sends[0].in_connectors) == {"_buffer", "_dest", "_tag"}
+    assert set(sends[0].in_connectors) == {"_buffer", "_dest", "_tag", "_comm"}
     assert not sends[0].out_connectors
-    assert set(recvs[0].in_connectors) == {"_src", "_tag"}
+    assert set(recvs[0].in_connectors) == {"_src", "_tag", "_comm"}
     assert set(recvs[0].out_connectors) == {"_buffer"}
 
     # No leftover opaque ``call`` node for the recognised MPI calls.
@@ -113,13 +113,14 @@ def test_send_recv_lower_to_mpi_libnodes(tmp_path: Path):
 
     sdfg.validate()
 
-    # Default communicator: with no ``_grid`` connector wired, the expanded
-    # Send/Recv must fall back to ``MPI_COMM_WORLD`` (and must NOT reference
-    # a ``_grid`` that does not exist).
+    # Communicator dataflow: the Fortran comm (here the default MPI_COMM_WORLD)
+    # is threaded into the expanded Send/Recv through the ``_comm`` connector fed
+    # by a CommF2c node (feature 93cc5f2) -- it is NOT hardcoded into the tasklet,
+    # and no ``_grid`` (process-grid) is referenced without a user comm.
     codes = _expanded_mpi_call_codes(sdfg)
     assert len(codes) == 2, f"expected 1 Send + 1 Recv tasklet, got {len(codes)}"
     for code in codes:
-        assert "MPI_COMM_WORLD" in code, f"default Send/Recv must use MPI_COMM_WORLD: {code!r}"
+        assert "_comm" in code, f"Send/Recv must use the threaded _comm connector: {code!r}"
         assert "_grid" not in code, f"no ``_grid`` should appear without a user comm: {code!r}"
 
 
@@ -206,8 +207,8 @@ def test_runtime_communicator_lowers_to_comm_connector(tmp_path: Path):
     f2cs = [n for n, _ in sdfg.all_nodes_recursive() if isinstance(n, CommF2c)]
     assert len(f2cs) == 1, f"expected 1 CommF2c node, got {len(f2cs)}"
     fcomm_srcs = [
-        e.data.data for st in sdfg.states() for n in st.nodes()
-        if isinstance(n, CommF2c) for e in st.in_edges(n) if e.dst_conn == '_fcomm'
+        e.data.data for st in sdfg.states() for n in st.nodes() if isinstance(n, CommF2c) for e in st.in_edges(n)
+        if e.dst_conn == '_fcomm'
     ]
     assert fcomm_srcs == ['comm'], f"CommF2c must read the Fortran comm handle, got {fcomm_srcs}"
 

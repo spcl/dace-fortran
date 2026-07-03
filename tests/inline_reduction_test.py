@@ -220,9 +220,11 @@ end subroutine kernel
         f.write_text(src)
         h = _P(td) / "k.hlfir"
         subprocess.check_call([
-            "flang-new-21", "-fc1", "-fintrinsic-modules-path",
-            "/usr/lib/llvm-21/include/flang", "-emit-hlfir",
-            str(f), "-o", str(h)], cwd=td)
+            "flang-new-21", "-fc1", "-fintrinsic-modules-path", "/usr/lib/llvm-21/include/flang", "-emit-hlfir",
+            str(f), "-o",
+            str(h)
+        ],
+                              cwd=td)
         mod = hb.HLFIRModule()
         mod.parse_file(str(h))
         mod.set_entry_symbol("kernel")

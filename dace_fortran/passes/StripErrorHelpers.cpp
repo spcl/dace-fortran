@@ -115,6 +115,8 @@ static const char* const kDefaultErrorHelpers[] = {
     "errore",           // Quantum ESPRESSO
     "error",            // generic; many codes
     "finish",           // ICON
+    "abort_mpi",        // ICON -- wraps MPI_Abort; noreturn error-abort path
+    "mpi_abort",        // bare MPI_Abort (if the abort_mpi wrapper was inlined first)
     "abor1",            // ECMWF IFS
     "abor1_sfx",        // ECMWF IFS SURFEX
     "upf_error",        // Quantum ESPRESSO UPF
@@ -149,8 +151,7 @@ static const char* const kDefaultErrorHelpers[] = {
 /// case-insensitive.
 static std::string demangleTail(llvm::StringRef sym) {
   auto last_p = sym.rfind('P');
-  llvm::StringRef tail =
-      last_p == llvm::StringRef::npos ? sym : sym.substr(last_p + 1);
+  llvm::StringRef tail = last_p == llvm::StringRef::npos ? sym : sym.substr(last_p + 1);
   // ``_QQ`` / numeric mangled suffixes never carry a tail ``P`` in the
   // function-name segment, so the rfind('P') is safe for the cases we
   // care about.  Lowercase manually (StringRef has no .lower()).
@@ -187,14 +188,10 @@ static llvm::StringSet<> buildMatchSet() {
 // The pass.
 // ---------------------------------------------------------------------------
 
-struct StripErrorHelpersPass
-    : public mlir::PassWrapper<StripErrorHelpersPass,
-                               mlir::OperationPass<mlir::ModuleOp>> {
+struct StripErrorHelpersPass : public mlir::PassWrapper<StripErrorHelpersPass, mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(StripErrorHelpersPass)
 
-  llvm::StringRef getArgument() const final {
-    return "hlfir-strip-error-helpers";
-  }
+  llvm::StringRef getArgument() const final { return "hlfir-strip-error-helpers"; }
   llvm::StringRef getDescription() const final {
     return "Delete fir.call ops whose callee matches a known abort-style "
            "error helper name (errore, finish, abor1, ...).  Runs before "
@@ -218,10 +215,8 @@ struct StripErrorHelpersPass
       // need a more surgical rewrite (replace the call with a constant
       // zero / success value) -- we don't speculate on the return type.
       if (call->getNumResults() != 0) {
-        LLVM_DEBUG(llvm::dbgs()
-                   << "StripErrorHelpers: refusing to strip " << *sym
-                   << " -- call has " << call->getNumResults()
-                   << " result(s); needs explicit rewrite\n");
+        LLVM_DEBUG(llvm::dbgs() << "StripErrorHelpers: refusing to strip " << *sym << " -- call has "
+                                << call->getNumResults() << " result(s); needs explicit rewrite\n");
         return;
       }
 
@@ -230,15 +225,12 @@ struct StripErrorHelpersPass
 
     for (auto call : toErase) call->erase();
 
-    LLVM_DEBUG(llvm::dbgs() << "StripErrorHelpers: erased " << toErase.size()
-                            << " error-helper call site(s)\n");
+    LLVM_DEBUG(llvm::dbgs() << "StripErrorHelpers: erased " << toErase.size() << " error-helper call site(s)\n");
   }
 };
 
 }  // anonymous namespace
 
-std::unique_ptr<mlir::Pass> createStripErrorHelpersPass() {
-  return std::make_unique<StripErrorHelpersPass>();
-}
+std::unique_ptr<mlir::Pass> createStripErrorHelpersPass() { return std::make_unique<StripErrorHelpersPass>(); }
 
 }  // namespace hlfir_bridge

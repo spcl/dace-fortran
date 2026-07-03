@@ -1,11 +1,3 @@
-MODULE mo_decomposition_tools
-  IMPLICIT NONE
-  TYPE :: t_grid_domain_decomp_info
-    INTEGER, ALLOCATABLE :: glb_index(:)
-    INTEGER, POINTER :: decomp_domain(:, :)
-  END TYPE
-  CONTAINS
-END MODULE mo_decomposition_tools
 MODULE mo_dynamics_config
   IMPLICIT NONE
   LOGICAL :: ldeepatmo
@@ -117,32 +109,6 @@ MODULE mo_intp_data_strc
     REAL(KIND = 8), ALLOCATABLE :: nudgecoeff_e(:, :)
   END TYPE t_int_state
 END MODULE mo_intp_data_strc
-MODULE mo_io_units
-  IMPLICIT NONE
-  INTEGER, PARAMETER :: filename_max = 1024
-  CONTAINS
-  FUNCTION find_next_free_unit(istart, istop) RESULT(iunit)
-    INTEGER :: iunit
-    INTEGER, INTENT(IN) :: istart, istop
-    INTEGER :: kstart, kstop
-    LOGICAL :: lfound, lopened
-    INTEGER :: i
-    lfound = .FALSE.
-    kstart = 10
-    kstop = 99
-    DO i = kstart, kstop
-      INQUIRE(UNIT = i, OPENED = lopened)
-      IF (.NOT. lopened) THEN
-        iunit = i
-        lfound = .TRUE.
-        EXIT
-      END IF
-    END DO
-    IF (.NOT. lfound) THEN
-      iunit = (- 1)
-    END IF
-  END FUNCTION find_next_free_unit
-END MODULE mo_io_units
 MODULE mo_lib_grid_geometry_info
   IMPLICIT NONE
   TYPE :: t_grid_geometry_info
@@ -344,8 +310,6 @@ END MODULE mo_nonhydrostatic_config
 MODULE mo_parallel_config
   IMPLICIT NONE
   INTEGER :: nproma = 0
-  INTEGER :: n_ghost_rows = 1
-  LOGICAL :: l_log_checks = .FALSE.
   LOGICAL :: p_test_run = .FALSE.
   LOGICAL :: use_dycore_barrier = .FALSE.
   INTEGER :: itype_exch_barrier = 0
@@ -356,18 +320,6 @@ MODULE mo_parallel_config
     INTEGER :: new_nproma
     new_nproma = MIN(nproma, 256)
   END FUNCTION cpu_min_nproma
-  ELEMENTAL INTEGER FUNCTION blk_no(j)
-    INTEGER, INTENT(IN) :: j
-    blk_no = MAX((ABS(j) - 1) / nproma + 1, 1)
-  END FUNCTION blk_no
-  ELEMENTAL INTEGER FUNCTION idx_no(j)
-    INTEGER, INTENT(IN) :: j
-    IF (j == 0) THEN
-      idx_no = 0
-    ELSE
-      idx_no = SIGN(MOD(ABS(j) - 1, nproma) + 1, j)
-    END IF
-  END FUNCTION idx_no
 END MODULE mo_parallel_config
 MODULE mo_prepadv_types
   IMPLICIT NONE
@@ -426,20 +378,11 @@ MODULE mo_mpi
   INTEGER, ALLOCATABLE, SAVE :: p_request(:)
   INTEGER :: p_irequest
   INTEGER :: p_mrequest
-  INTEGER :: process_mpi_all_comm
   INTEGER :: process_mpi_all_size
   INTEGER :: my_process_mpi_all_id
-  INTEGER :: process_mpi_all_test_id
   LOGICAL :: process_is_mpi_parallel
-  INTEGER :: my_mpi_function
-  INTEGER :: num_test_procs
-  INTEGER :: p_work_pe0
-  INTEGER :: p_pe_work
-  INTEGER :: p_comm_work_test
-  INTEGER :: p_pe = 0
   INTEGER :: p_real_dp = 0
   INTEGER :: p_real_sp = 0
-  INTEGER, PUBLIC :: comm_lev = 0, glob_comm(0 : 10), comm_proc0(0 : 10)
   CONTAINS
   FUNCTION get_comm_acc_queue()
     INTEGER :: get_comm_acc_queue
@@ -448,9 +391,6 @@ MODULE mo_mpi
   SUBROUTINE acc_wait_comms(queue)
     INTEGER, INTENT(IN) :: queue
   END SUBROUTINE
-  LOGICAL FUNCTION my_process_is_mpi_test()
-    my_process_is_mpi_test = (my_mpi_function == 1)
-  END FUNCTION my_process_is_mpi_test
   LOGICAL FUNCTION my_process_is_mpi_parallel()
     my_process_is_mpi_parallel = process_is_mpi_parallel
   END FUNCTION my_process_is_mpi_parallel
@@ -492,15 +432,6 @@ MODULE mo_mpi
     loc_use_g2g = .FALSE.
     CALL mpi_send(t_buffer, icount, p_real_sp, p_destination, 1, p_comm, p_error)
   END SUBROUTINE p_send_sp
-  SUBROUTINE p_send_dp_3d(t_buffer, p_destination, p_tag, p_count, comm)
-    REAL(KIND = 8), INTENT(IN) :: t_buffer(:, :, :)
-    INTEGER, INTENT(IN) :: p_destination, p_tag
-    INTEGER, OPTIONAL, INTENT(IN) :: p_count, comm
-    INTEGER :: p_comm, icount
-    p_comm = process_mpi_all_comm
-    icount = SIZE(t_buffer)
-    CALL mpi_send(t_buffer, icount, p_real_dp, p_destination, 1, p_comm, p_error)
-  END SUBROUTINE p_send_dp_3d
   SUBROUTINE p_inc_request
     INTEGER, ALLOCATABLE :: tmp(:)
     p_irequest = p_irequest + 1
@@ -568,15 +499,6 @@ MODULE mo_mpi
     loc_use_g2g = .FALSE.
     CALL mpi_recv(t_buffer, icount, p_real_sp, p_source, 1, p_comm, p_status, p_error)
   END SUBROUTINE p_recv_sp
-  SUBROUTINE p_recv_dp_3d(t_buffer, p_source, p_tag, p_count, comm)
-    REAL(KIND = 8), INTENT(OUT) :: t_buffer(:, :, :)
-    INTEGER, INTENT(IN) :: p_source, p_tag
-    INTEGER, OPTIONAL, INTENT(IN) :: p_count, comm
-    INTEGER :: p_comm, icount
-    p_comm = process_mpi_all_comm
-    icount = SIZE(t_buffer)
-    CALL mpi_recv(t_buffer, icount, p_real_dp, p_source, 1, p_comm, p_status, p_error)
-  END SUBROUTINE p_recv_dp_3d
   SUBROUTINE p_irecv_dp(t_buffer, p_source, p_tag, p_count, comm, use_g2g)
     REAL(KIND = 8), INTENT(INOUT) :: t_buffer
     INTEGER, INTENT(IN) :: p_source, p_tag
@@ -603,18 +525,6 @@ MODULE mo_mpi
     CALL p_inc_request
     CALL mpi_irecv(t_buffer, icount, p_real_sp, p_source, 1, p_comm, p_request(p_irequest), p_error)
   END SUBROUTINE p_irecv_sp
-  SUBROUTINE p_bcast_dp_3d(t_buffer, p_source, comm)
-    REAL(KIND = 8) :: t_buffer(:, :, :)
-    INTEGER, INTENT(IN) :: p_source
-    INTEGER, OPTIONAL, INTENT(IN) :: comm
-    INTEGER :: p_comm
-    p_comm = comm
-    IF (process_mpi_all_size == 1) THEN
-      RETURN
-    ELSE
-      CALL mpi_bcast(t_buffer, SIZE(t_buffer), p_real_dp, p_source, p_comm, p_error)
-    END IF
-  END SUBROUTINE p_bcast_dp_3d
   SUBROUTINE p_wait_noarg
     IF (p_irequest > 0) CALL mpi_waitall(p_irequest, p_request, 1, p_error)
     p_irequest = 0
@@ -659,9 +569,6 @@ MODULE mo_communication_types
     INTEGER, ALLOCATABLE :: recv_startidx(:)
     INTEGER, ALLOCATABLE :: recv_count(:)
   END TYPE t_comm_pattern_orig
-  TYPE :: t_p_comm_pattern
-    TYPE(t_comm_pattern_orig), POINTER :: p
-  END TYPE t_p_comm_pattern
   CHARACTER(LEN = *), PARAMETER :: modname = "mo_communication_orig"
   CONTAINS
   SUBROUTINE exchange_data_r3d(p_pat, lacc, recv, send, add)
@@ -680,7 +587,7 @@ MODULE mo_communication_types
     REAL(KIND = 8) :: send_buf(SIZE(recv, 2), p_pat % n_send), recv_buf(SIZE(recv, 2), p_pat % n_recv)
     INTEGER :: i, k, np, irs, iss, pid, icount, ndim2
     IF (my_process_is_mpi_seq()) THEN
-      CALL exchange_data_r3d_seq(p_pat, lacc, recv, send, add)
+      CALL exchange_data_r3d_seq(p_pat, .TRUE., recv, send, add)
       RETURN
     END IF
     IF (itype_exch_barrier == 1 .OR. itype_exch_barrier == 3) THEN
@@ -909,7 +816,7 @@ MODULE mo_communication_types
         irs = p_pat % recv_startidx(np)
         icount = p_pat % recv_count(np) * ndim2tot_dp
         IF (icount > 0) CALL p_irecv_dp_deconiface_34(recv_buf_dp(1, irs), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
-        icount = p_pat % recv_count(np) * 0
+        icount = p_pat % recv_count(np) * ndim2tot_sp
         IF (icount > 0) CALL p_irecv_sp_deconiface_35(recv_buf_sp(1, irs), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
       END DO
     END IF
@@ -951,7 +858,7 @@ MODULE mo_communication_types
         iss = p_pat % send_startidx(np)
         icount = p_pat % send_count(np) * ndim2tot_dp
         IF (icount > 0) CALL p_send_dp_deconiface_36(send_buf_dp(1, iss), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
-        icount = p_pat % send_count(np) * 0
+        icount = p_pat % send_count(np) * ndim2tot_sp
         IF (icount > 0) CALL p_send_sp_deconiface_37(send_buf_sp(1, iss), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
       END DO
     ELSE IF (iorder_sendrecv == 2) THEN
@@ -960,7 +867,7 @@ MODULE mo_communication_types
         iss = p_pat % send_startidx(np)
         icount = p_pat % send_count(np) * ndim2tot_dp
         IF (icount > 0) CALL p_isend_dp_deconiface_38(send_buf_dp(1, iss), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
-        icount = p_pat % send_count(np) * 0
+        icount = p_pat % send_count(np) * ndim2tot_sp
         IF (icount > 0) CALL p_isend_sp_deconiface_39(send_buf_sp(1, iss), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
       END DO
       DO np = 1, p_pat % np_recv
@@ -968,7 +875,7 @@ MODULE mo_communication_types
         irs = p_pat % recv_startidx(np)
         icount = p_pat % recv_count(np) * ndim2tot_dp
         IF (icount > 0) CALL p_recv_dp_deconiface_40(recv_buf_dp(1, irs), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
-        icount = p_pat % recv_count(np) * 0
+        icount = p_pat % recv_count(np) * ndim2tot_sp
         IF (icount > 0) CALL p_recv_sp_deconiface_41(recv_buf_sp(1, irs), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
       END DO
     ELSE IF (iorder_sendrecv == 3) THEN
@@ -977,7 +884,7 @@ MODULE mo_communication_types
         iss = p_pat % send_startidx(np)
         icount = p_pat % send_count(np) * ndim2tot_dp
         IF (icount > 0) CALL p_isend_dp_deconiface_42(send_buf_dp(1, iss), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
-        icount = p_pat % send_count(np) * 0
+        icount = p_pat % send_count(np) * ndim2tot_sp
         IF (icount > 0) CALL p_isend_sp_deconiface_43(send_buf_sp(1, iss), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
       END DO
     END IF
@@ -1019,7 +926,7 @@ MODULE mo_communication
     REAL(KIND = 8), INTENT(INOUT), TARGET :: recv(:, :, :)
     REAL(KIND = 8), INTENT(IN), OPTIONAL, TARGET :: send(:, :, :)
     REAL(KIND = 8), INTENT(IN), OPTIONAL, TARGET :: add(:, :, :)
-    CALL exchange_data_r3d_deconproc_0(p_pat, lacc, recv, send, add)
+    CALL exchange_data_r3d_deconproc_0(p_pat, .TRUE., recv, send, add)
   END SUBROUTINE exchange_data_r3d
   SUBROUTINE exchange_data_mult_mixprec(p_pat, lacc, nfields_dp, ndim2tot_dp, nfields_sp, ndim2tot_sp, recv1_dp, send1_dp, recv2_dp, send2_dp, recv3_dp, send3_dp, recv4_dp, send4_dp, recv5_dp, send5_dp, recv1_sp, send1_sp, recv2_sp, send2_sp, recv3_sp, send3_sp, recv4_sp, send4_sp, recv5_sp, send5_sp, recv4d_dp, send4d_dp, recv4d_sp, send4d_sp, recv3d_arr_dp, recv3d_arr_sp, nshift)
     USE mo_communication_types, ONLY: exchange_data_mult_mixprec_deconproc_15 => exchange_data_mult_mixprec, t_comm_pattern_orig
@@ -1037,58 +944,28 @@ MODULE mo_communication
     INTEGER, OPTIONAL, INTENT(IN) :: nshift
     TYPE(t_ptr_3d_dp) :: recv_dp(nfields_dp)
     TYPE(t_ptr_3d_sp) :: recv_sp(nfields_sp)
-    INTEGER :: i, i_dp, i_sp
+    INTEGER :: i_dp, i_sp
     LOGICAL :: lsend
     CHARACTER(LEN = *), PARAMETER :: routine = modname // "::exchange_data_mult_mixprec"
     lsend = .FALSE.
     i_dp = 0
     i_sp = 0
-    DO i = 1, SIZE(recv4d_dp, 4)
-      i_dp = i_dp + 1
-      recv_dp(i_dp) % p => recv4d_dp(:, :, :, i)
-    END DO
-    i_dp = i_dp + 1
+    i_dp = 1
     recv_dp(i_dp) % p => recv1_dp
-    i_dp = i_dp + 1
+    i_dp = 2
     recv_dp(i_dp) % p => recv2_dp
-    i_dp = i_dp + 1
-    recv_dp(i_dp) % p => recv3_dp
-    i_dp = i_dp + 1
-    recv_dp(i_dp) % p => recv4_dp
-    i_dp = i_dp + 1
-    recv_dp(i_dp) % p => recv5_dp
-    DO i = 1, SIZE(recv3d_arr_dp)
-      i_dp = i_dp + 1
-      recv_dp(i_dp) % p => recv3d_arr_dp(i) % p
-    END DO
-    DO i = 1, SIZE(recv4d_sp, 4)
-      i_sp = i_sp + 1
-      recv_sp(i_sp) % p => recv4d_sp(:, :, :, i)
-    END DO
-    i_sp = i_sp + 1
-    recv_sp(i_sp) % p => recv1_sp
-    i_sp = i_sp + 1
-    recv_sp(i_sp) % p => recv2_sp
-    i_sp = i_sp + 1
-    recv_sp(i_sp) % p => recv3_sp
-    i_sp = i_sp + 1
-    recv_sp(i_sp) % p => recv4_sp
-    i_sp = i_sp + 1
-    recv_sp(i_sp) % p => recv5_sp
-    DO i = 1, SIZE(recv3d_arr_sp)
-      i_sp = i_sp + 1
-      recv_sp(i_sp) % p => recv3d_arr_sp(i) % p
-    END DO
+    IF (PRESENT(recv3_dp)) THEN
+      i_dp = 3
+      recv_dp(i_dp) % p => recv3_dp
+    END IF
     IF (i_dp /= nfields_dp) CALL finish(routine, "internal error nfields_dp")
-    IF (i_sp /= 0) CALL finish(routine, "internal error nfields_sp")
-    CALL exchange_data_mult_mixprec_deconproc_15(p_pat, .TRUE., nfields_dp, ndim2tot_dp, 0, 0, recv_dp = recv_dp, recv_sp = recv_sp, nshift = nshift)
+    CALL exchange_data_mult_mixprec_deconproc_15(p_pat, .TRUE., nfields_dp, ndim2tot_dp, 0, ndim2tot_sp, recv_dp = recv_dp, recv_sp = recv_sp, nshift = nshift)
   END SUBROUTINE exchange_data_mult_mixprec
 END MODULE mo_communication
 MODULE mo_model_domain
-  USE mo_decomposition_tools, ONLY: t_grid_domain_decomp_info
   USE mo_math_types, ONLY: t_tangent_vectors
   USE mo_lib_grid_geometry_info, ONLY: t_grid_geometry_info
-  USE mo_communication_types, ONLY: t_comm_pattern_orig, t_p_comm_pattern
+  USE mo_communication_types, ONLY: t_comm_pattern_orig
   IMPLICIT NONE
   TYPE :: t_grid_cells
     INTEGER, ALLOCATABLE :: neighbor_idx(:, :, :)
@@ -1099,7 +976,6 @@ MODULE mo_model_domain
     INTEGER, ALLOCATABLE :: end_index(:)
     INTEGER, ALLOCATABLE :: start_block(:)
     INTEGER, ALLOCATABLE :: end_block(:)
-    TYPE(t_grid_domain_decomp_info) :: decomp_info
   END TYPE t_grid_cells
   TYPE :: t_grid_edges
     INTEGER, ALLOCATABLE :: cell_idx(:, :, :)
@@ -1118,7 +994,6 @@ MODULE mo_model_domain
     INTEGER, ALLOCATABLE :: end_index(:)
     INTEGER, ALLOCATABLE :: start_block(:)
     INTEGER, ALLOCATABLE :: end_block(:)
-    TYPE(t_grid_domain_decomp_info) :: decomp_info
   END TYPE t_grid_edges
   TYPE :: t_grid_vertices
     INTEGER, ALLOCATABLE :: cell_idx(:, :, :)
@@ -1127,18 +1002,11 @@ MODULE mo_model_domain
     INTEGER, ALLOCATABLE :: end_index(:)
     INTEGER, ALLOCATABLE :: start_block(:)
     INTEGER, ALLOCATABLE :: end_block(:)
-    TYPE(t_grid_domain_decomp_info) :: decomp_info
   END TYPE t_grid_vertices
   TYPE :: t_patch
     INTEGER :: id
     TYPE(t_grid_geometry_info) :: geometry_info
     INTEGER :: n_childdom
-    INTEGER :: n_patch_cells
-    INTEGER :: n_patch_edges
-    INTEGER :: n_patch_verts
-    INTEGER :: n_patch_cells_g
-    INTEGER :: n_patch_edges_g
-    INTEGER :: n_patch_verts_g
     INTEGER :: nblks_c
     INTEGER :: nblks_e
     INTEGER :: nblks_v
@@ -1150,10 +1018,7 @@ MODULE mo_model_domain
     TYPE(t_grid_edges) :: edges
     TYPE(t_grid_vertices) :: verts
     TYPE(t_comm_pattern_orig), POINTER :: comm_pat_c
-    TYPE(t_comm_pattern_orig), POINTER :: comm_pat_c1
     TYPE(t_comm_pattern_orig), POINTER :: comm_pat_e
-    TYPE(t_comm_pattern_orig), POINTER :: comm_pat_v
-    TYPE(t_p_comm_pattern) :: comm_pat_work2test(3)
   END TYPE t_patch
   CONTAINS
 END MODULE mo_model_domain
@@ -1263,275 +1128,15 @@ MODULE mo_math_gradients
 END MODULE mo_math_gradients
 MODULE mo_sync
   IMPLICIT NONE
-  INTEGER, SAVE :: log_unit = - 1
   LOGICAL, SAVE :: do_sync_checks = .TRUE.
   CONTAINS
-  FUNCTION comm_pat_of_type(p_patch, typ) RESULT(p_pat)
-    USE mo_model_domain, ONLY: t_patch
-    USE mo_communication_types, ONLY: t_comm_pattern_orig
-    USE mo_exception, ONLY: finish
-    INTEGER, INTENT(IN) :: typ
-    TYPE(t_patch), TARGET, INTENT(IN) :: p_patch
-    TYPE(t_comm_pattern_orig), POINTER :: p_pat
-    IF (typ == 1) THEN
-      p_pat => p_patch % comm_pat_c
-    ELSE IF (typ == 2) THEN
-      p_pat => p_patch % comm_pat_e
-    ELSE IF (typ == 3) THEN
-      p_pat => p_patch % comm_pat_v
-    ELSE IF (typ == 4) THEN
-      p_pat => p_patch % comm_pat_c1
-    ELSE
-      CALL finish('comm_pat_of_type', 'Illegal type parameter')
-    END IF
-  END FUNCTION comm_pat_of_type
-  SUBROUTINE sync_patch_array_3d_dp(typ, p_patch, arr, lacc, opt_varname)
-    USE mo_model_domain, ONLY: t_patch
-    USE mo_parallel_config, ONLY: p_test_run
-    USE mo_mpi, ONLY: my_process_is_mpi_parallel
-    USE mo_communication, ONLY: exchange_data_r3d_deconiface_77 => exchange_data_r3d
-    INTEGER, INTENT(IN) :: typ
-    TYPE(t_patch), TARGET, INTENT(IN) :: p_patch
-    REAL(KIND = 8), INTENT(INOUT) :: arr(:, :, :)
-    LOGICAL, INTENT(IN) :: lacc
-    CHARACTER(LEN = *), TARGET, INTENT(IN), OPTIONAL :: opt_varname
-    IF (p_test_run .AND. do_sync_checks) CALL check_patch_array_3d_dp(typ, p_patch, arr, lacc = .TRUE., opt_varname = opt_varname)
-    IF (my_process_is_mpi_parallel()) THEN
-      CALL exchange_data_r3d_deconiface_77(p_pat = comm_pat_of_type(p_patch, typ), lacc = .TRUE., recv = arr)
-    END IF
-  END SUBROUTINE sync_patch_array_3d_dp
-  SUBROUTINE sync_patch_array_mult_f3din_dp(typ, p_patch, nfields, lacc, f3din1, f3din2, f3din3, f3din4, f3din5, opt_varname)
-    USE mo_model_domain, ONLY: t_patch
-    INTEGER, INTENT(IN) :: typ
-    TYPE(t_patch), INTENT(IN), TARGET :: p_patch
-    INTEGER, INTENT(IN) :: nfields
-    LOGICAL, INTENT(IN) :: lacc
-    REAL(KIND = 8), TARGET, INTENT(INOUT) :: f3din1(:, :, :)
-    REAL(KIND = 8), TARGET, OPTIONAL, INTENT(INOUT) :: f3din2(:, :, :), f3din3(:, :, :), f3din4(:, :, :), f3din5(:, :, :)
-    CHARACTER(LEN = *), TARGET, INTENT(IN), OPTIONAL :: opt_varname
-    CALL sync_patch_array_mult_mixprec(typ = typ, p_patch = p_patch, nfields_sp = 0, nfields_dp = nfields, lacc = .TRUE., f3din1_dp = f3din1, f3din2_dp = f3din2, f3din3_dp = f3din3, f3din4_dp = f3din4, f3din5_dp = f3din5, opt_varname = opt_varname)
-  END SUBROUTINE sync_patch_array_mult_f3din_dp
-  SUBROUTINE sync_patch_array_mult_mixprec(typ, p_patch, nfields_dp, nfields_sp, lacc, f3din1_dp, f3din2_dp, f3din3_dp, f3din4_dp, f3din5_dp, f3din1_sp, f3din2_sp, f3din3_sp, f3din4_sp, f3din5_sp, f4din_dp, f4din_sp, f3din_arr_sp, f3din_arr_dp, opt_varname)
-    USE mo_model_domain, ONLY: t_patch
-    USE mo_fortran_tools, ONLY: t_ptr_3d_dp, t_ptr_3d_sp
-    USE mo_communication_types, ONLY: t_comm_pattern_orig
-    USE mo_parallel_config, ONLY: p_test_run
-    USE mo_mpi, ONLY: my_process_is_mpi_parallel
-    USE mo_communication, ONLY: exchange_data_mult_mixprec
-    INTEGER, INTENT(IN) :: typ
-    TYPE(t_patch), INTENT(IN), TARGET :: p_patch
-    INTEGER, INTENT(IN) :: nfields_dp, nfields_sp
-    LOGICAL, INTENT(IN) :: lacc
-    REAL(KIND = 8), OPTIONAL, INTENT(INOUT) :: f3din1_dp(:, :, :), f3din2_dp(:, :, :), f3din3_dp(:, :, :), f3din4_dp(:, :, :), f3din5_dp(:, :, :), f4din_dp(:, :, :, :)
-    REAL(KIND = 4), OPTIONAL, INTENT(INOUT) :: f3din1_sp(:, :, :), f3din2_sp(:, :, :), f3din3_sp(:, :, :), f3din4_sp(:, :, :), f3din5_sp(:, :, :), f4din_sp(:, :, :, :)
-    TYPE(t_ptr_3d_dp), INTENT(INOUT), OPTIONAL :: f3din_arr_dp(:)
-    TYPE(t_ptr_3d_sp), INTENT(INOUT), OPTIONAL :: f3din_arr_sp(:)
-    TYPE(t_comm_pattern_orig), POINTER :: p_pat
-    CHARACTER(LEN = *), TARGET, INTENT(IN), OPTIONAL :: opt_varname
-    INTEGER :: ndim2tot_dp, ndim2tot_sp
-    IF (typ == 1) THEN
-      p_pat => p_patch % comm_pat_c
-    ELSE IF (typ == 2) THEN
-      p_pat => p_patch % comm_pat_e
-    ELSE IF (typ == 3) THEN
-      p_pat => p_patch % comm_pat_v
-    ELSE IF (typ == 4) THEN
-      p_pat => p_patch % comm_pat_c1
-    END IF
-    IF (p_test_run .AND. do_sync_checks) THEN
-      CALL check_patch_array_3d_dp(typ, p_patch, f3din1_dp, lacc = .TRUE., opt_varname = opt_varname)
-      CALL check_patch_array_3d_dp(typ, p_patch, f3din2_dp, lacc = .TRUE., opt_varname = opt_varname)
-      CALL check_patch_array_3d_dp(typ, p_patch, f3din3_dp, lacc = .TRUE., opt_varname = opt_varname)
-      CALL check_patch_array_3d_dp(typ, p_patch, f3din4_dp, lacc = .TRUE., opt_varname = opt_varname)
-      CALL check_patch_array_3d_dp(typ, p_patch, f3din5_dp, lacc = .TRUE., opt_varname = opt_varname)
-    END IF
-    IF (my_process_is_mpi_parallel()) THEN
-      ndim2tot_dp = 0
-      ndim2tot_dp = 0 + SIZE(f3din1_dp, 2)
-      ndim2tot_dp = ndim2tot_dp + SIZE(f3din2_dp, 2)
-      ndim2tot_dp = ndim2tot_dp + SIZE(f3din3_dp, 2)
-      ndim2tot_dp = ndim2tot_dp + SIZE(f3din4_dp, 2)
-      ndim2tot_dp = ndim2tot_dp + SIZE(f3din5_dp, 2)
-      ndim2tot_sp = 0
-      CALL exchange_data_mult_mixprec(p_pat = p_pat, lacc = .TRUE., nfields_dp = nfields_dp, ndim2tot_dp = ndim2tot_dp, nfields_sp = 0, ndim2tot_sp = 0, recv1_dp = f3din1_dp, recv2_dp = f3din2_dp, recv3_dp = f3din3_dp, recv4_dp = f3din4_dp, recv5_dp = f3din5_dp, recv1_sp = f3din1_sp, recv2_sp = f3din2_sp, recv3_sp = f3din3_sp, recv4_sp = f3din4_sp, recv5_sp = f3din5_sp, recv4d_dp = f4din_dp, recv4d_sp = f4din_sp, recv3d_arr_dp = f3din_arr_dp, recv3d_arr_sp = f3din_arr_sp)
-    END IF
-  END SUBROUTINE sync_patch_array_mult_mixprec
   SUBROUTINE check_patch_array_3d_dp(typ, p_patch, arr, lacc, opt_varname)
     USE mo_model_domain, ONLY: t_patch
-    USE mo_parallel_config, ONLY: blk_no, idx_no, l_log_checks, n_ghost_rows, nproma, p_test_run
-    USE mo_communication_types, ONLY: t_comm_pattern_orig
-    USE mo_io_units, ONLY: filename_max, find_next_free_unit
-    USE mo_exception, ONLY: finish
-    USE mo_mpi, ONLY: comm_lev, comm_proc0, glob_comm, my_process_is_mpi_test, num_test_procs, p_bcast_dp_3d_deconiface_92 => p_bcast_dp_3d, p_bcast_dp_3d_deconiface_94 => p_bcast_dp_3d, p_bcast_dp_3d_deconiface_96 => p_bcast_dp_3d, p_comm_work_test, p_pe, p_pe_work, p_recv_dp_3d_deconiface_95 => p_recv_dp_3d, p_send_dp_3d_deconiface_93 => p_send_dp_3d, p_work_pe0, process_mpi_all_test_id
-    USE mo_communication, ONLY: exchange_data_r3d_deconiface_91 => exchange_data_r3d
     INTEGER, INTENT(IN) :: typ
     TYPE(t_patch), INTENT(IN), TARGET :: p_patch
     REAL(KIND = 8), INTENT(IN) :: arr(:, :, :)
     LOGICAL, INTENT(IN) :: lacc
     CHARACTER(LEN = *), INTENT(IN), OPTIONAL :: opt_varname
-    REAL(KIND = 8), ALLOCATABLE :: arr_g(:, :, :)
-    INTEGER :: j, jb, jl, jb_g, jl_g, n, ndim2, ndim3, nblks_g, flag, jk
-    INTEGER :: ityp, ndim, ndim_g, jk_min_err
-    INTEGER :: nerr(0 : n_ghost_rows), shape_recv(3)
-    INTEGER, POINTER :: p_glb_index(:), p_decomp_domain(:, :)
-    TYPE(t_comm_pattern_orig), POINTER :: p_pat_work2test
-    LOGICAL :: l_my_process_is_mpi_test
-    CHARACTER(LEN = 256) :: varname, cfmt
-    INTEGER :: varname_tlen
-    CHARACTER(LEN = filename_max) :: log_file
-    REAL(KIND = 8) :: absmax
-    LOGICAL :: sync_error
-    ityp = (- 1)
-    ndim = (- 1)
-    ndim_g = (- 1)
-    sync_error = .FALSE.
-    NULLIFY(p_glb_index, p_decomp_domain)
-    IF (.NOT. p_test_run) RETURN
-    varname = opt_varname
-    varname_tlen = LEN(opt_varname)
-    IF (UBOUND(arr, 1) /= nproma) THEN
-      CALL finish('sync_patch_array', 'first dimension /= nproma')
-    END IF
-    ndim2 = UBOUND(arr, 2)
-    ndim3 = UBOUND(arr, 3)
-    IF (typ == 1 .OR. typ == 4) THEN
-      ndim = p_patch % n_patch_cells
-      ndim_g = p_patch % n_patch_cells_g
-      p_glb_index => p_patch % cells % decomp_info % glb_index
-      p_decomp_domain => p_patch % cells % decomp_info % decomp_domain
-      ityp = typ
-      p_pat_work2test => p_patch % comm_pat_work2test(1) % p
-    ELSE IF (typ == 2) THEN
-      ndim = p_patch % n_patch_edges
-      ndim_g = p_patch % n_patch_edges_g
-      p_glb_index => p_patch % edges % decomp_info % glb_index
-      p_decomp_domain => p_patch % edges % decomp_info % decomp_domain
-      ityp = typ
-      p_pat_work2test => p_patch % comm_pat_work2test(3) % p
-    ELSE IF (typ == 3) THEN
-      ndim = p_patch % n_patch_verts
-      ndim_g = p_patch % n_patch_verts_g
-      p_glb_index => p_patch % verts % decomp_info % glb_index
-      p_decomp_domain => p_patch % verts % decomp_info % decomp_domain
-      ityp = typ
-      p_pat_work2test => p_patch % comm_pat_work2test(2) % p
-    ELSE IF (typ == 0) THEN
-      IF (ndim3 == p_patch % nblks_c) THEN
-        ndim = p_patch % n_patch_cells
-        ndim_g = p_patch % n_patch_cells_g
-        p_glb_index => p_patch % cells % decomp_info % glb_index
-        p_decomp_domain => p_patch % cells % decomp_info % decomp_domain
-        ityp = 1
-        p_pat_work2test => p_patch % comm_pat_work2test(1) % p
-      ELSE IF (ndim3 == p_patch % nblks_e) THEN
-        ndim = p_patch % n_patch_edges
-        ndim_g = p_patch % n_patch_edges_g
-        p_glb_index => p_patch % edges % decomp_info % glb_index
-        p_decomp_domain => p_patch % edges % decomp_info % decomp_domain
-        ityp = 2
-        p_pat_work2test => p_patch % comm_pat_work2test(3) % p
-      ELSE IF (ndim3 == p_patch % nblks_v) THEN
-        ndim = p_patch % n_patch_verts
-        ndim_g = p_patch % n_patch_verts_g
-        p_glb_index => p_patch % verts % decomp_info % glb_index
-        p_decomp_domain => p_patch % verts % decomp_info % decomp_domain
-        ityp = 3
-        p_pat_work2test => p_patch % comm_pat_work2test(2) % p
-      ELSE
-        CALL finish('check_patch_array', 'typ==0 but unknown blocksize of array')
-      END IF
-    ELSE
-      CALL finish('sync_patch_array', 'Illegal type parameter')
-    END IF
-    nblks_g = (ndim_g - 1) / nproma + 1
-    l_my_process_is_mpi_test = my_process_is_mpi_test()
-    IF (num_test_procs > 1) THEN
-      shape_recv = SHAPE(arr)
-      ALLOCATE(arr_g(shape_recv(1), shape_recv(2), shape_recv(3)))
-      CALL exchange_data_r3d_deconiface_91(p_pat = p_pat_work2test, lacc = .FALSE., recv = arr_g, send = arr)
-      IF (l_my_process_is_mpi_test) THEN
-        jk_min_err = HUGE(jk_min_err)
-        DO jb = 1, ndim3
-          DO jk = 1, ndim2
-            DO jl = 1, nproma
-              IF (p_decomp_domain(jl, jb) == 0) THEN
-                sync_error = sync_error .OR. arr(jl, jk, jb) /= arr_g(jl, jk, jb)
-                jk_min_err = MIN(jk_min_err, MERGE(jk, jk_min_err, arr(jl, jk, jb) /= arr_g(jl, jk, jb)))
-              END IF
-            END DO
-          END DO
-        END DO
-      END IF
-    ELSE IF (l_my_process_is_mpi_test) THEN
-      ALLOCATE(arr_g(nproma, ndim2, nblks_g))
-      DO j = 1, ndim
-        jb = blk_no(j)
-        jl = idx_no(j)
-        jb_g = blk_no(p_glb_index(j))
-        jl_g = idx_no(p_glb_index(j))
-        arr_g(jl_g, 1 : ndim2, jb_g) = arr(jl, 1 : ndim2, jb)
-      END DO
-      IF (comm_lev == 0) THEN
-        CALL p_bcast_dp_3d_deconiface_92(arr_g(:, :, 1 : nblks_g), process_mpi_all_test_id, comm = p_comm_work_test)
-      ELSE
-        CALL p_send_dp_3d_deconiface_93(arr_g(:, :, 1 : nblks_g), comm_proc0(comm_lev) + p_work_pe0, 1)
-      END IF
-      DEALLOCATE(arr_g)
-    ELSE
-      ALLOCATE(arr_g(nproma, ndim2, nblks_g))
-      IF (comm_lev == 0) THEN
-        CALL p_bcast_dp_3d_deconiface_94(arr_g(:, :, 1 : nblks_g), process_mpi_all_test_id, comm = p_comm_work_test)
-      ELSE
-        IF (p_pe_work == comm_proc0(comm_lev)) CALL p_recv_dp_3d_deconiface_95(arr_g(:, :, 1 : nblks_g), process_mpi_all_test_id, 1)
-        CALL p_bcast_dp_3d_deconiface_96(arr_g(:, :, 1 : nblks_g), 0, comm = glob_comm(comm_lev))
-      END IF
-      nerr(:) = 0
-      absmax = 0.0D0
-      DO j = 1, ndim
-        jb = blk_no(j)
-        jl = idx_no(j)
-        jb_g = blk_no(p_glb_index(j))
-        jl_g = idx_no(p_glb_index(j))
-        flag = p_decomp_domain(jl, jb)
-        flag = MAX(flag, 0)
-        flag = MIN(flag, UBOUND(nerr, 1))
-        DO n = 1, ndim2
-          IF (arr(jl, n, jb) /= arr_g(jl_g, n, jb_g)) THEN
-            nerr(flag) = nerr(flag) + 1
-            IF (flag == 0) THEN
-              sync_error = .TRUE.
-              absmax = MAX(absmax, ABS(arr(jl, n, jb) - arr_g(jl_g, n, jb_g)))
-              IF (l_log_checks) THEN
-                WRITE(log_unit, '(2a,5i7,3e18.10)') varname, 'sync error location:', jb, jl, jb_g, jl_g, n, arr(jl, n, jb), arr_g(jl_g, n, jb_g), ABS(arr(jl, n, jb) - arr_g(jl_g, n, jb_g))
-              END IF
-            END IF
-          END IF
-        END DO
-      END DO
-      IF (l_log_checks) THEN
-        IF (log_unit < 0) THEN
-          WRITE(log_file, '(''log'',i4.4,''.txt'')') p_pe
-          log_unit = find_next_free_unit(10, 99)
-          OPEN(UNIT = log_unit, FILE = log_file)
-        END IF
-        n = n_ghost_rows
-        WRITE(cfmt, '(a,i3,a)') '(', n + 1, 'i8,'' '',2a)'
-        IF (ALL(arr == 0.0D0)) THEN
-          WRITE(log_unit, cfmt) nerr(0 : n), varname(1 : varname_tlen), ': ALL 0 !!!'
-        ELSE
-          WRITE(log_unit, cfmt) nerr(0 : n), varname(1 : varname_tlen)
-        END IF
-        IF (absmax > 0.0D0) WRITE(log_unit, *) 'Max abs inner err:', absmax
-      END IF
-      DEALLOCATE(arr_g)
-    END IF
-    IF (sync_error) THEN
-      IF (num_test_procs > 1) WRITE(0, '(2a,i0)') varname(1 : varname_tlen), ' sync error in level jk = ', jk_min_err
-      IF (l_log_checks) THEN
-        CLOSE(UNIT = log_unit)
-      END IF
-      CALL finish('sync_patch_array', 'Out of sync detected!')
-    END IF
   END SUBROUTINE check_patch_array_3d_dp
 END MODULE mo_sync
 MODULE mo_velocity_advection
@@ -1576,10 +1181,11 @@ MODULE mo_solve_nonhydro
     USE mo_parallel_config, ONLY: cpu_min_nproma, nproma, p_test_run, use_dycore_barrier
     USE mo_vertical_grid, ONLY: nflat_gradp, nrdmax
     USE mo_nonhydrostatic_config, ONLY: divdamp_fac, divdamp_fac2, divdamp_fac3, divdamp_fac4, divdamp_fac_o2, divdamp_order, divdamp_type, divdamp_z, divdamp_z2, divdamp_z3, divdamp_z4, iadv_rhotheta, igradp_method, itime_scheme, kstart_dd3d, kstart_moist, ndyn_substeps_var, rayleigh_type, rhotheta_offctr, veladv_offctr
+    USE mo_communication_types, ONLY: t_comm_pattern_orig
     USE mo_fortran_tools, ONLY: assert_acc_device_only, init_zero_contiguous_dp
     USE mo_real_timer, ONLY: timer_start, timer_stop
     USE mo_timer, ONLY: timer_barrier, timer_solve_nh, timer_solve_nh_cellcomp, timer_solve_nh_edgecomp, timer_solve_nh_exch, timer_solve_nh_vimpl, timer_solve_nh_vnupd
-    USE mo_mpi, ONLY: my_process_is_mpi_all_seq, work_mpi_barrier
+    USE mo_mpi, ONLY: my_process_is_mpi_all_seq, my_process_is_mpi_parallel, work_mpi_barrier
     USE mo_run_config, ONLY: ltimer, lvert_nest, timers_level
     USE mo_vertical_coord_table, ONLY: vct_a
     USE mo_interpol_config, ONLY: nudge_max_coeff
@@ -1588,11 +1194,12 @@ MODULE mo_solve_nonhydro
     USE mo_grid_config, ONLY: l_limited_area
     USE mo_loopindices, ONLY: get_indices_c, get_indices_e
     USE mo_init_vgrid, ONLY: nflatlev
-    USE mo_icon_interpolation_scalar, ONLY: cells2verts_scalar_dp_deconiface_133 => cells2verts_scalar_dp, cells2verts_scalar_dp_deconiface_134 => cells2verts_scalar_dp
-    USE mo_math_gradients, ONLY: grad_green_gauss_cell_dycore_deconiface_135 => grad_green_gauss_cell_dycore
+    USE mo_icon_interpolation_scalar, ONLY: cells2verts_scalar_dp_deconiface_127 => cells2verts_scalar_dp, cells2verts_scalar_dp_deconiface_128 => cells2verts_scalar_dp
+    USE mo_math_gradients, ONLY: grad_green_gauss_cell_dycore_deconiface_129 => grad_green_gauss_cell_dycore
     USE mo_initicon_config, ONLY: iau_wgt_dyn, is_iau_active
     USE mo_gridref_config, ONLY: grf_intmethod_e
-    USE mo_sync, ONLY: sync_patch_array_3d_dp_deconiface_137 => sync_patch_array_3d_dp, sync_patch_array_3d_dp_deconiface_139 => sync_patch_array_3d_dp, sync_patch_array_mult_f3din_dp_deconiface_136 => sync_patch_array_mult_f3din_dp, sync_patch_array_mult_f3din_dp_deconiface_138 => sync_patch_array_mult_f3din_dp, sync_patch_array_mult_f3din_dp_deconiface_140 => sync_patch_array_mult_f3din_dp
+    USE mo_sync, ONLY: check_patch_array_3d_dp, do_sync_checks
+    USE mo_communication, ONLY: exchange_data_mult_mixprec, exchange_data_r3d_deconiface_77 => exchange_data_r3d
     TYPE(t_nh_state), TARGET, INTENT(INOUT) :: p_nh
     TYPE(t_int_state), TARGET, INTENT(IN) :: p_int
     TYPE(t_patch), TARGET, INTENT(INOUT) :: p_patch
@@ -1629,6 +1236,17 @@ MODULE mo_solve_nonhydro
     INTEGER :: nproma_gradp, nblks_gradp, npromz_gradp, nlen_gradp, jk_start
     LOGICAL :: lvn_only, lvn_pos
     LOGICAL :: l_vert_nested, l_child_vertnest
+    INTEGER, POINTER, CONTIGUOUS :: icidx(:, :, :), icblk(:, :, :), ieidx(:, :, :), ieblk(:, :, :), ividx(:, :, :), ivblk(:, :, :), ikidx(:, :, :, :), iqidx(:, :, :), iqblk(:, :, :), iplev(:), ipeidx(:), ipeblk(:)
+    TYPE(t_comm_pattern_orig), POINTER :: p_pat_inl0_inl1
+    INTEGER :: ndim2tot_dp_inl0_inl1, ndim2tot_sp_inl0_inl1
+    TYPE(t_comm_pattern_orig), POINTER :: p_pat_inl2
+    TYPE(t_comm_pattern_orig), POINTER :: p_pat_inl0_inl3
+    INTEGER :: ndim2tot_dp_inl0_inl3, ndim2tot_sp_inl0_inl3
+    TYPE(t_comm_pattern_orig), POINTER :: p_pat_inl4
+    TYPE(t_comm_pattern_orig), POINTER :: p_pat_inl0_inl5
+    INTEGER :: ndim2tot_dp_inl0_inl5, ndim2tot_sp_inl0_inl5
+    TYPE(t_comm_pattern_orig), POINTER :: p_pat_fn1
+    TYPE(t_comm_pattern_orig), POINTER :: p_pat_fn2
     CALL assert_acc_device_only("solve_nh", lacc)
     IF (use_dycore_barrier) THEN
       CALL timer_start(timer_barrier)
@@ -1656,6 +1274,18 @@ MODULE mo_solve_nonhydro
     r_dtimensubsteps = 1.0D0 / (dtime * REAL(ndyn_substeps_var(jg), 8))
     nlev = p_patch % nlev
     nlevp1 = p_patch % nlevp1
+    icidx => p_patch % edges % cell_idx
+    icblk => p_patch % edges % cell_blk
+    ieidx => p_patch % cells % edge_idx
+    ieblk => p_patch % cells % edge_blk
+    ividx => p_patch % edges % vertex_idx
+    ivblk => p_patch % edges % vertex_blk
+    ikidx => p_nh % metrics % vertidx_gradp
+    iqidx => p_patch % edges % quad_idx
+    iqblk => p_patch % edges % quad_blk
+    iplev => p_nh % metrics % pg_vertidx
+    ipeidx => p_nh % metrics % pg_edgeidx
+    ipeblk => p_nh % metrics % pg_edgeblk
     DO jk = 2, nrdmax(jg)
       z_raylfac(jk) = 1.0D0 / (1.0D0 + dtime * p_nh % metrics % rayleigh_w(jk))
     END DO
@@ -1694,6 +1324,8 @@ MODULE mo_solve_nonhydro
     wgt_nnew_vel = 0.5D0 + veladv_offctr
     wgt_nnew_rth = 0.5D0 + rhotheta_offctr
     wgt_nnow_rth = 1.0D0 - wgt_nnew_rth
+    p_pat_fn1 => p_patch % comm_pat_e
+    p_pat_fn2 => p_patch % comm_pat_c
     DO istep = 1, 2
       IF (istep == 1) THEN
         IF (itime_scheme >= 6 .OR. l_init .OR. l_recompute) THEN
@@ -1830,10 +1462,10 @@ MODULE mo_solve_nonhydro
       END IF
       IF (istep == 1) THEN
         IF (iadv_rhotheta == 1) THEN
-          CALL cells2verts_scalar_dp_deconiface_133(p_nh % prog(nnow) % rho, p_patch, p_int % cells_aw_verts, z_rho_v, lacc = .TRUE., opt_rlend = (- 5))
-          CALL cells2verts_scalar_dp_deconiface_134(p_nh % prog(nnow) % theta_v, p_patch, p_int % cells_aw_verts, z_theta_v_v, lacc = .TRUE., opt_rlend = (- 5))
+          CALL cells2verts_scalar_dp_deconiface_127(p_nh % prog(nnow) % rho, p_patch, p_int % cells_aw_verts, z_rho_v, lacc = .TRUE., opt_rlend = (- 5))
+          CALL cells2verts_scalar_dp_deconiface_128(p_nh % prog(nnow) % theta_v, p_patch, p_int % cells_aw_verts, z_theta_v_v, lacc = .TRUE., opt_rlend = (- 5))
         ELSE IF (iadv_rhotheta == 2) THEN
-          CALL grad_green_gauss_cell_dycore_deconiface_135(z_rth_pr, p_patch, p_int, z_grad_rth, lacc = .TRUE., opt_rlstart = 3, opt_rlend = (- 5), opt_acc_async = .TRUE.)
+          CALL grad_green_gauss_cell_dycore_deconiface_129(z_rth_pr, p_patch, p_int, z_grad_rth, lacc = .TRUE., opt_rlstart = 3, opt_rlend = (- 5), opt_acc_async = .TRUE.)
         END IF
       END IF
       IF (istep == 1) THEN
@@ -1870,8 +1502,8 @@ MODULE mo_solve_nonhydro
           ELSE
             DO je = i_startidx, i_endidx
               DO jk = 1, nlev
-                z_rho_e(je, jk, jb) = p_int % c_lin_e(je, 1, jb) * p_nh % prog(nnow) % rho(p_patch % edges % cell_idx(je, jb, 1), jk, p_patch % edges % cell_blk(je, jb, 1)) + p_int % c_lin_e(je, 2, jb) * p_nh % prog(nnow) % rho(p_patch % edges % cell_idx(je, jb, 2), jk, p_patch % edges % cell_blk(je, jb, 2)) - dtime * (p_nh % prog(nnow) % vn(je, jk, jb) * p_patch % edges % inv_dual_edge_length(je, jb) * (p_nh % prog(nnow) % rho(p_patch % edges % cell_idx(je, jb, 2), jk, p_patch % edges % cell_blk(je, jb, 2)) - p_nh % prog(nnow) % rho(p_patch % edges % cell_idx(je, jb, 1), jk, p_patch % edges % cell_blk(je, jb, 1))) + p_nh % diag % vt(je, jk, jb) * p_patch % edges % inv_primal_edge_length(je, jb) * p_patch % edges % tangent_orientation(je, jb) * (z_rho_v(p_patch % edges % vertex_idx(je, jb, 2), jk, p_patch % edges % vertex_blk(je, jb, 2)) - z_rho_v(p_patch % edges % vertex_idx(je, jb, 1), jk, p_patch % edges % vertex_blk(je, jb, 1))))
-                z_theta_v_e(je, jk, jb) = p_int % c_lin_e(je, 1, jb) * p_nh % prog(nnow) % theta_v(p_patch % edges % cell_idx(je, jb, 1), jk, p_patch % edges % cell_blk(je, jb, 1)) + p_int % c_lin_e(je, 2, jb) * p_nh % prog(nnow) % theta_v(p_patch % edges % cell_idx(je, jb, 2), jk, p_patch % edges % cell_blk(je, jb, 2)) - dtime * (p_nh % prog(nnow) % vn(je, jk, jb) * p_patch % edges % inv_dual_edge_length(je, jb) * (p_nh % prog(nnow) % theta_v(p_patch % edges % cell_idx(je, jb, 2), jk, p_patch % edges % cell_blk(je, jb, 2)) - p_nh % prog(nnow) % theta_v(p_patch % edges % cell_idx(je, jb, 1), jk, p_patch % edges % cell_blk(je, jb, 1))) + p_nh % diag % vt(je, jk, jb) * p_patch % edges % inv_primal_edge_length(je, jb) * p_patch % edges % tangent_orientation(je, jb) * (z_theta_v_v(p_patch % edges % vertex_idx(je, jb, 2), jk, p_patch % edges % vertex_blk(je, jb, 2)) - z_theta_v_v(p_patch % edges % vertex_idx(je, jb, 1), jk, p_patch % edges % vertex_blk(je, jb, 1))))
+                z_rho_e(je, jk, jb) = p_int % c_lin_e(je, 1, jb) * p_nh % prog(nnow) % rho(icidx(je, jb, 1), jk, icblk(je, jb, 1)) + p_int % c_lin_e(je, 2, jb) * p_nh % prog(nnow) % rho(icidx(je, jb, 2), jk, icblk(je, jb, 2)) - dtime * (p_nh % prog(nnow) % vn(je, jk, jb) * p_patch % edges % inv_dual_edge_length(je, jb) * (p_nh % prog(nnow) % rho(icidx(je, jb, 2), jk, icblk(je, jb, 2)) - p_nh % prog(nnow) % rho(icidx(je, jb, 1), jk, icblk(je, jb, 1))) + p_nh % diag % vt(je, jk, jb) * p_patch % edges % inv_primal_edge_length(je, jb) * p_patch % edges % tangent_orientation(je, jb) * (z_rho_v(ividx(je, jb, 2), jk, ivblk(je, jb, 2)) - z_rho_v(ividx(je, jb, 1), jk, ivblk(je, jb, 1))))
+                z_theta_v_e(je, jk, jb) = p_int % c_lin_e(je, 1, jb) * p_nh % prog(nnow) % theta_v(icidx(je, jb, 1), jk, icblk(je, jb, 1)) + p_int % c_lin_e(je, 2, jb) * p_nh % prog(nnow) % theta_v(icidx(je, jb, 2), jk, icblk(je, jb, 2)) - dtime * (p_nh % prog(nnow) % vn(je, jk, jb) * p_patch % edges % inv_dual_edge_length(je, jb) * (p_nh % prog(nnow) % theta_v(icidx(je, jb, 2), jk, icblk(je, jb, 2)) - p_nh % prog(nnow) % theta_v(icidx(je, jb, 1), jk, icblk(je, jb, 1))) + p_nh % diag % vt(je, jk, jb) * p_patch % edges % inv_primal_edge_length(je, jb) * p_patch % edges % tangent_orientation(je, jb) * (z_theta_v_v(ividx(je, jb, 2), jk, ivblk(je, jb, 2)) - z_theta_v_v(ividx(je, jb, 1), jk, ivblk(je, jb, 1))))
               END DO
             END DO
           END IF
@@ -1885,7 +1517,7 @@ MODULE mo_solve_nonhydro
           CALL get_indices_e(p_patch, jb, i_startblk, i_endblk, i_startidx, i_endidx, rl_start, rl_end)
           DO je = i_startidx, i_endidx
             DO jk = kstart_dd3d(jg), nlev
-              z_graddiv_vn(jk, je, jb) = z_graddiv_vn(jk, je, jb) + p_nh % metrics % hmask_dd3d(je, jb) * p_nh % metrics % scalfac_dd3d(jk) * p_patch % edges % inv_dual_edge_length(je, jb) * (z_dwdz_dd(p_patch % edges % cell_idx(je, jb, 2), jk, p_patch % edges % cell_blk(je, jb, 2)) - z_dwdz_dd(p_patch % edges % cell_idx(je, jb, 1), jk, p_patch % edges % cell_blk(je, jb, 1)))
+              z_graddiv_vn(jk, je, jb) = z_graddiv_vn(jk, je, jb) + p_nh % metrics % hmask_dd3d(je, jb) * p_nh % metrics % scalfac_dd3d(jk) * p_patch % edges % inv_dual_edge_length(je, jb) * (z_dwdz_dd(icidx(je, jb, 2), jk, icblk(je, jb, 2)) - z_dwdz_dd(icidx(je, jb, 1), jk, icblk(je, jb, 1)))
             END DO
           END DO
         END DO
@@ -1904,39 +1536,39 @@ MODULE mo_solve_nonhydro
           END IF
           DO je = i_startidx, i_endidx
             DO jk = 1, nflatlev(jg) - 1
-              z_gradh_exner(je, jk, jb) = p_patch % edges % inv_dual_edge_length(je, jb) * p_nh % metrics % deepatmo_gradh_mc(jk) * (z_exner_ex_pr(p_patch % edges % cell_idx(je, jb, 2), jk, p_patch % edges % cell_blk(je, jb, 2)) - z_exner_ex_pr(p_patch % edges % cell_idx(je, jb, 1), jk, p_patch % edges % cell_blk(je, jb, 1)))
+              z_gradh_exner(je, jk, jb) = p_patch % edges % inv_dual_edge_length(je, jb) * p_nh % metrics % deepatmo_gradh_mc(jk) * (z_exner_ex_pr(icidx(je, jb, 2), jk, icblk(je, jb, 2)) - z_exner_ex_pr(icidx(je, jb, 1), jk, icblk(je, jb, 1)))
             END DO
           END DO
           IF (igradp_method <= 3) THEN
             DO je = i_startidx, i_endidx
               DO jk = nflatlev(jg), nflat_gradp(jg)
-                z_gradh_exner(je, jk, jb) = p_patch % edges % inv_dual_edge_length(je, jb) * p_nh % metrics % deepatmo_gradh_mc(jk) * (z_exner_ex_pr(p_patch % edges % cell_idx(je, jb, 2), jk, p_patch % edges % cell_blk(je, jb, 2)) - z_exner_ex_pr(p_patch % edges % cell_idx(je, jb, 1), jk, p_patch % edges % cell_blk(je, jb, 1))) - p_nh % metrics % ddxn_z_full(je, jk, jb) * (p_int % c_lin_e(je, 1, jb) * z_dexner_dz_c(1, p_patch % edges % cell_idx(je, jb, 1), jk, p_patch % edges % cell_blk(je, jb, 1)) + p_int % c_lin_e(je, 2, jb) * z_dexner_dz_c(1, p_patch % edges % cell_idx(je, jb, 2), jk, p_patch % edges % cell_blk(je, jb, 2)))
+                z_gradh_exner(je, jk, jb) = p_patch % edges % inv_dual_edge_length(je, jb) * p_nh % metrics % deepatmo_gradh_mc(jk) * (z_exner_ex_pr(icidx(je, jb, 2), jk, icblk(je, jb, 2)) - z_exner_ex_pr(icidx(je, jb, 1), jk, icblk(je, jb, 1))) - p_nh % metrics % ddxn_z_full(je, jk, jb) * (p_int % c_lin_e(je, 1, jb) * z_dexner_dz_c(1, icidx(je, jb, 1), jk, icblk(je, jb, 1)) + p_int % c_lin_e(je, 2, jb) * z_dexner_dz_c(1, icidx(je, jb, 2), jk, icblk(je, jb, 2)))
               END DO
             END DO
             DO je = i_startidx, i_endidx
               DO jk = nflat_gradp(jg) + 1, nlev
-                z_gradh_exner(je, jk, jb) = p_patch % edges % inv_dual_edge_length(je, jb) * p_nh % metrics % deepatmo_gradh_mc(jk) * (z_exner_ex_pr(p_patch % edges % cell_idx(je, jb, 2), p_nh % metrics % vertidx_gradp(je, 2, jk, jb), p_patch % edges % cell_blk(je, jb, 2)) + p_nh % metrics % zdiff_gradp(je, 2, jk, jb) * (z_dexner_dz_c(1, p_patch % edges % cell_idx(je, jb, 2), p_nh % metrics % vertidx_gradp(je, 2, jk, jb), p_patch % edges % cell_blk(je, jb, 2)) + p_nh % metrics % zdiff_gradp(je, 2, jk, jb) * z_dexner_dz_c(2, p_patch % edges % cell_idx(je, jb, 2), p_nh % metrics % vertidx_gradp(je, 2, jk, jb), p_patch % edges % cell_blk(je, jb, 2))) - (z_exner_ex_pr(p_patch % edges % cell_idx(je, jb, 1), p_nh % metrics % vertidx_gradp(je, 1, jk, jb), p_patch % edges % cell_blk(je, jb, 1)) + p_nh % metrics % zdiff_gradp(je, 1, jk, jb) * (z_dexner_dz_c(1, p_patch % edges % cell_idx(je, jb, 1), p_nh % metrics % vertidx_gradp(je, 1, jk, jb), p_patch % edges % cell_blk(je, jb, 1)) + p_nh % metrics % zdiff_gradp(je, 1, jk, jb) * z_dexner_dz_c(2, p_patch % edges % cell_idx(je, jb, 1), p_nh % metrics % vertidx_gradp(je, 1, jk, jb), p_patch % edges % cell_blk(je, jb, 1)))))
+                z_gradh_exner(je, jk, jb) = p_patch % edges % inv_dual_edge_length(je, jb) * p_nh % metrics % deepatmo_gradh_mc(jk) * (z_exner_ex_pr(icidx(je, jb, 2), ikidx(je, 2, jk, jb), icblk(je, jb, 2)) + p_nh % metrics % zdiff_gradp(je, 2, jk, jb) * (z_dexner_dz_c(1, icidx(je, jb, 2), ikidx(je, 2, jk, jb), icblk(je, jb, 2)) + p_nh % metrics % zdiff_gradp(je, 2, jk, jb) * z_dexner_dz_c(2, icidx(je, jb, 2), ikidx(je, 2, jk, jb), icblk(je, jb, 2))) - (z_exner_ex_pr(icidx(je, jb, 1), ikidx(je, 1, jk, jb), icblk(je, jb, 1)) + p_nh % metrics % zdiff_gradp(je, 1, jk, jb) * (z_dexner_dz_c(1, icidx(je, jb, 1), ikidx(je, 1, jk, jb), icblk(je, jb, 1)) + p_nh % metrics % zdiff_gradp(je, 1, jk, jb) * z_dexner_dz_c(2, icidx(je, jb, 1), ikidx(je, 1, jk, jb), icblk(je, jb, 1)))))
               END DO
             END DO
           ELSE IF (igradp_method == 4 .OR. igradp_method == 5) THEN
             DO je = i_startidx, i_endidx
               DO jk = nflatlev(jg), nlev
-                z_gradh_exner(je, jk, jb) = p_patch % edges % inv_dual_edge_length(je, jb) * p_nh % metrics % deepatmo_gradh_mc(jk) * (z_exner_ex_pr(p_patch % edges % cell_idx(je, jb, 2), p_nh % metrics % vertidx_gradp(je, 2, jk, jb) - 1, p_patch % edges % cell_blk(je, jb, 2)) * p_nh % metrics % coeff_gradp(je, 5, jk, jb) + z_exner_ex_pr(p_patch % edges % cell_idx(je, jb, 2), p_nh % metrics % vertidx_gradp(je, 2, jk, jb), p_patch % edges % cell_blk(je, jb, 2)) * p_nh % metrics % coeff_gradp(je, 6, jk, jb) + z_exner_ex_pr(p_patch % edges % cell_idx(je, jb, 2), p_nh % metrics % vertidx_gradp(je, 2, jk, jb) + 1, p_patch % edges % cell_blk(je, jb, 2)) * p_nh % metrics % coeff_gradp(je, 7, jk, jb) + z_exner_ex_pr(p_patch % edges % cell_idx(je, jb, 2), p_nh % metrics % vertidx_gradp(je, 2, jk, jb) + 2, p_patch % edges % cell_blk(je, jb, 2)) * p_nh % metrics % coeff_gradp(je, 8, jk, jb) - (z_exner_ex_pr(p_patch % edges % cell_idx(je, jb, 1), p_nh % metrics % vertidx_gradp(je, 1, jk, jb) - 1, p_patch % edges % cell_blk(je, jb, 1)) * p_nh % metrics % coeff_gradp(je, 1, jk, jb) + z_exner_ex_pr(p_patch % edges % cell_idx(je, jb, 1), p_nh % metrics % vertidx_gradp(je, 1, jk, jb), p_patch % edges % cell_blk(je, jb, 1)) * p_nh % metrics % coeff_gradp(je, 2, jk, jb) + z_exner_ex_pr(p_patch % edges % cell_idx(je, jb, 1), p_nh % metrics % vertidx_gradp(je, 1, jk, jb) + 1, p_patch % edges % cell_blk(je, jb, 1)) * p_nh % metrics % coeff_gradp(je, 3, jk, jb) + z_exner_ex_pr(p_patch % edges % cell_idx(je, jb, 1), p_nh % metrics % vertidx_gradp(je, 1, jk, jb) + 2, p_patch % edges % cell_blk(je, jb, 1)) * p_nh % metrics % coeff_gradp(je, 4, jk, jb)))
+                z_gradh_exner(je, jk, jb) = p_patch % edges % inv_dual_edge_length(je, jb) * p_nh % metrics % deepatmo_gradh_mc(jk) * (z_exner_ex_pr(icidx(je, jb, 2), ikidx(je, 2, jk, jb) - 1, icblk(je, jb, 2)) * p_nh % metrics % coeff_gradp(je, 5, jk, jb) + z_exner_ex_pr(icidx(je, jb, 2), ikidx(je, 2, jk, jb), icblk(je, jb, 2)) * p_nh % metrics % coeff_gradp(je, 6, jk, jb) + z_exner_ex_pr(icidx(je, jb, 2), ikidx(je, 2, jk, jb) + 1, icblk(je, jb, 2)) * p_nh % metrics % coeff_gradp(je, 7, jk, jb) + z_exner_ex_pr(icidx(je, jb, 2), ikidx(je, 2, jk, jb) + 2, icblk(je, jb, 2)) * p_nh % metrics % coeff_gradp(je, 8, jk, jb) - (z_exner_ex_pr(icidx(je, jb, 1), ikidx(je, 1, jk, jb) - 1, icblk(je, jb, 1)) * p_nh % metrics % coeff_gradp(je, 1, jk, jb) + z_exner_ex_pr(icidx(je, jb, 1), ikidx(je, 1, jk, jb), icblk(je, jb, 1)) * p_nh % metrics % coeff_gradp(je, 2, jk, jb) + z_exner_ex_pr(icidx(je, jb, 1), ikidx(je, 1, jk, jb) + 1, icblk(je, jb, 1)) * p_nh % metrics % coeff_gradp(je, 3, jk, jb) + z_exner_ex_pr(icidx(je, jb, 1), ikidx(je, 1, jk, jb) + 2, icblk(je, jb, 1)) * p_nh % metrics % coeff_gradp(je, 4, jk, jb)))
               END DO
             END DO
           END IF
           IF (igradp_method == 3) THEN
             DO je = i_startidx, i_endidx
-              z_theta1 = p_nh % prog(nnow) % theta_v(p_patch % edges % cell_idx(je, jb, 1), p_nh % metrics % vertidx_gradp(je, 1, nlev, jb), p_patch % edges % cell_blk(je, jb, 1)) + p_nh % metrics % zdiff_gradp(je, 1, nlev, jb) * (p_nh % diag % theta_v_ic(p_patch % edges % cell_idx(je, jb, 1), p_nh % metrics % vertidx_gradp(je, 1, nlev, jb), p_patch % edges % cell_blk(je, jb, 1)) - p_nh % diag % theta_v_ic(p_patch % edges % cell_idx(je, jb, 1), p_nh % metrics % vertidx_gradp(je, 1, nlev, jb) + 1, p_patch % edges % cell_blk(je, jb, 1))) * p_nh % metrics % inv_ddqz_z_full(p_patch % edges % cell_idx(je, jb, 1), p_nh % metrics % vertidx_gradp(je, 1, nlev, jb), p_patch % edges % cell_blk(je, jb, 1))
-              z_theta2 = p_nh % prog(nnow) % theta_v(p_patch % edges % cell_idx(je, jb, 2), p_nh % metrics % vertidx_gradp(je, 2, nlev, jb), p_patch % edges % cell_blk(je, jb, 2)) + p_nh % metrics % zdiff_gradp(je, 2, nlev, jb) * (p_nh % diag % theta_v_ic(p_patch % edges % cell_idx(je, jb, 2), p_nh % metrics % vertidx_gradp(je, 2, nlev, jb), p_patch % edges % cell_blk(je, jb, 2)) - p_nh % diag % theta_v_ic(p_patch % edges % cell_idx(je, jb, 2), p_nh % metrics % vertidx_gradp(je, 2, nlev, jb) + 1, p_patch % edges % cell_blk(je, jb, 2))) * p_nh % metrics % inv_ddqz_z_full(p_patch % edges % cell_idx(je, jb, 2), p_nh % metrics % vertidx_gradp(je, 2, nlev, jb), p_patch % edges % cell_blk(je, jb, 2))
+              z_theta1 = p_nh % prog(nnow) % theta_v(icidx(je, jb, 1), ikidx(je, 1, nlev, jb), icblk(je, jb, 1)) + p_nh % metrics % zdiff_gradp(je, 1, nlev, jb) * (p_nh % diag % theta_v_ic(icidx(je, jb, 1), ikidx(je, 1, nlev, jb), icblk(je, jb, 1)) - p_nh % diag % theta_v_ic(icidx(je, jb, 1), ikidx(je, 1, nlev, jb) + 1, icblk(je, jb, 1))) * p_nh % metrics % inv_ddqz_z_full(icidx(je, jb, 1), ikidx(je, 1, nlev, jb), icblk(je, jb, 1))
+              z_theta2 = p_nh % prog(nnow) % theta_v(icidx(je, jb, 2), ikidx(je, 2, nlev, jb), icblk(je, jb, 2)) + p_nh % metrics % zdiff_gradp(je, 2, nlev, jb) * (p_nh % diag % theta_v_ic(icidx(je, jb, 2), ikidx(je, 2, nlev, jb), icblk(je, jb, 2)) - p_nh % diag % theta_v_ic(icidx(je, jb, 2), ikidx(je, 2, nlev, jb) + 1, icblk(je, jb, 2))) * p_nh % metrics % inv_ddqz_z_full(icidx(je, jb, 2), ikidx(je, 2, nlev, jb), icblk(je, jb, 2))
               z_hydro_corr(je, jb) = 0.00976135730211817D0 * p_patch % edges % inv_dual_edge_length(je, jb) * (z_theta2 - z_theta1) * 4.0D0 / (z_theta1 + z_theta2) ** 2
             END DO
           ELSE IF (igradp_method == 5) THEN
             DO je = i_startidx, i_endidx
-              ikp1 = MIN(nlev, p_nh % metrics % vertidx_gradp(je, 1, nlev, jb) + 2)
-              ikp2 = MIN(nlev, p_nh % metrics % vertidx_gradp(je, 2, nlev, jb) + 2)
-              z_theta1 = p_nh % prog(nnow) % theta_v(p_patch % edges % cell_idx(je, jb, 1), p_nh % metrics % vertidx_gradp(je, 1, nlev, jb) - 1, p_patch % edges % cell_blk(je, jb, 1)) * p_nh % metrics % coeff_gradp(je, 1, nlev, jb) + p_nh % prog(nnow) % theta_v(p_patch % edges % cell_idx(je, jb, 1), p_nh % metrics % vertidx_gradp(je, 1, nlev, jb), p_patch % edges % cell_blk(je, jb, 1)) * p_nh % metrics % coeff_gradp(je, 2, nlev, jb) + p_nh % prog(nnow) % theta_v(p_patch % edges % cell_idx(je, jb, 1), p_nh % metrics % vertidx_gradp(je, 1, nlev, jb) + 1, p_patch % edges % cell_blk(je, jb, 1)) * p_nh % metrics % coeff_gradp(je, 3, nlev, jb) + p_nh % prog(nnow) % theta_v(p_patch % edges % cell_idx(je, jb, 1), ikp1, p_patch % edges % cell_blk(je, jb, 1)) * p_nh % metrics % coeff_gradp(je, 4, nlev, jb)
-              z_theta2 = p_nh % prog(nnow) % theta_v(p_patch % edges % cell_idx(je, jb, 2), p_nh % metrics % vertidx_gradp(je, 2, nlev, jb) - 1, p_patch % edges % cell_blk(je, jb, 2)) * p_nh % metrics % coeff_gradp(je, 5, nlev, jb) + p_nh % prog(nnow) % theta_v(p_patch % edges % cell_idx(je, jb, 2), p_nh % metrics % vertidx_gradp(je, 2, nlev, jb), p_patch % edges % cell_blk(je, jb, 2)) * p_nh % metrics % coeff_gradp(je, 6, nlev, jb) + p_nh % prog(nnow) % theta_v(p_patch % edges % cell_idx(je, jb, 2), p_nh % metrics % vertidx_gradp(je, 2, nlev, jb) + 1, p_patch % edges % cell_blk(je, jb, 2)) * p_nh % metrics % coeff_gradp(je, 7, nlev, jb) + p_nh % prog(nnow) % theta_v(p_patch % edges % cell_idx(je, jb, 2), ikp2, p_patch % edges % cell_blk(je, jb, 2)) * p_nh % metrics % coeff_gradp(je, 8, nlev, jb)
+              ikp1 = MIN(nlev, ikidx(je, 1, nlev, jb) + 2)
+              ikp2 = MIN(nlev, ikidx(je, 2, nlev, jb) + 2)
+              z_theta1 = p_nh % prog(nnow) % theta_v(icidx(je, jb, 1), ikidx(je, 1, nlev, jb) - 1, icblk(je, jb, 1)) * p_nh % metrics % coeff_gradp(je, 1, nlev, jb) + p_nh % prog(nnow) % theta_v(icidx(je, jb, 1), ikidx(je, 1, nlev, jb), icblk(je, jb, 1)) * p_nh % metrics % coeff_gradp(je, 2, nlev, jb) + p_nh % prog(nnow) % theta_v(icidx(je, jb, 1), ikidx(je, 1, nlev, jb) + 1, icblk(je, jb, 1)) * p_nh % metrics % coeff_gradp(je, 3, nlev, jb) + p_nh % prog(nnow) % theta_v(icidx(je, jb, 1), ikp1, icblk(je, jb, 1)) * p_nh % metrics % coeff_gradp(je, 4, nlev, jb)
+              z_theta2 = p_nh % prog(nnow) % theta_v(icidx(je, jb, 2), ikidx(je, 2, nlev, jb) - 1, icblk(je, jb, 2)) * p_nh % metrics % coeff_gradp(je, 5, nlev, jb) + p_nh % prog(nnow) % theta_v(icidx(je, jb, 2), ikidx(je, 2, nlev, jb), icblk(je, jb, 2)) * p_nh % metrics % coeff_gradp(je, 6, nlev, jb) + p_nh % prog(nnow) % theta_v(icidx(je, jb, 2), ikidx(je, 2, nlev, jb) + 1, icblk(je, jb, 2)) * p_nh % metrics % coeff_gradp(je, 7, nlev, jb) + p_nh % prog(nnow) % theta_v(icidx(je, jb, 2), ikp2, icblk(je, jb, 2)) * p_nh % metrics % coeff_gradp(je, 8, nlev, jb)
               z_hydro_corr(je, jb) = 0.00976135730211817D0 * p_patch % edges % inv_dual_edge_length(je, jb) * (z_theta2 - z_theta1) * 4.0D0 / (z_theta1 + z_theta2) ** 2
             END DO
           END IF
@@ -1952,7 +1584,7 @@ MODULE mo_solve_nonhydro
           ishift = (jb - 1) * nproma_gradp
           DO je = 1, nlen_gradp
             ie = ishift + je
-            z_gradh_exner(p_nh % metrics % pg_edgeidx(ie), p_nh % metrics % pg_vertidx(ie), p_nh % metrics % pg_edgeblk(ie)) = z_gradh_exner(p_nh % metrics % pg_edgeidx(ie), p_nh % metrics % pg_vertidx(ie), p_nh % metrics % pg_edgeblk(ie)) + p_nh % metrics % pg_exdist(ie) * z_hydro_corr(p_nh % metrics % pg_edgeidx(ie), p_nh % metrics % pg_edgeblk(ie))
+            z_gradh_exner(ipeidx(ie), iplev(ie), ipeblk(ie)) = z_gradh_exner(ipeidx(ie), iplev(ie), ipeblk(ie)) + p_nh % metrics % pg_exdist(ie) * z_hydro_corr(ipeidx(ie), ipeblk(ie))
           END DO
         END DO
       END IF
@@ -1996,7 +1628,7 @@ MODULE mo_solve_nonhydro
           IF (divdamp_order == 4 .OR. divdamp_order == 24) THEN
             DO je = i_startidx, i_endidx
               DO jk = 1, nlev
-                z_graddiv2_vn(je, jk) = p_int % geofac_grdiv(je, 1, jb) * z_graddiv_vn(jk, je, jb) + p_int % geofac_grdiv(je, 2, jb) * z_graddiv_vn(jk, p_patch % edges % quad_idx(je, jb, 1), p_patch % edges % quad_blk(je, jb, 1)) + p_int % geofac_grdiv(je, 3, jb) * z_graddiv_vn(jk, p_patch % edges % quad_idx(je, jb, 2), p_patch % edges % quad_blk(je, jb, 2)) + p_int % geofac_grdiv(je, 4, jb) * z_graddiv_vn(jk, p_patch % edges % quad_idx(je, jb, 3), p_patch % edges % quad_blk(je, jb, 3)) + p_int % geofac_grdiv(je, 5, jb) * z_graddiv_vn(jk, p_patch % edges % quad_idx(je, jb, 4), p_patch % edges % quad_blk(je, jb, 4))
+                z_graddiv2_vn(je, jk) = p_int % geofac_grdiv(je, 1, jb) * z_graddiv_vn(jk, je, jb) + p_int % geofac_grdiv(je, 2, jb) * z_graddiv_vn(jk, iqidx(je, jb, 1), iqblk(je, jb, 1)) + p_int % geofac_grdiv(je, 3, jb) * z_graddiv_vn(jk, iqidx(je, jb, 2), iqblk(je, jb, 2)) + p_int % geofac_grdiv(je, 4, jb) * z_graddiv_vn(jk, iqidx(je, jb, 3), iqblk(je, jb, 3)) + p_int % geofac_grdiv(je, 5, jb) * z_graddiv_vn(jk, iqidx(je, jb, 4), iqblk(je, jb, 4))
               END DO
             END DO
           END IF
@@ -2112,9 +1744,27 @@ MODULE mo_solve_nonhydro
         CALL timer_start(timer_solve_nh_exch)
       END IF
       IF (istep == 1) THEN
-        CALL sync_patch_array_mult_f3din_dp_deconiface_136(2, p_patch, 2, lacc = .TRUE., f3din1 = p_nh % prog(nnew) % vn, f3din2 = z_rho_e, opt_varname = "vn_nnew and z_rho_e")
+        p_pat_inl0_inl1 => p_patch % comm_pat_e
+        IF (p_test_run .AND. do_sync_checks) THEN
+          CALL check_patch_array_3d_dp(2, p_patch, p_nh % prog(nnew) % vn, lacc = .TRUE., opt_varname = "vn_nnew and z_rho_e")
+          CALL check_patch_array_3d_dp(2, p_patch, z_rho_e, lacc = .TRUE., opt_varname = "vn_nnew and z_rho_e")
+        END IF
+        IF (my_process_is_mpi_parallel()) THEN
+          ndim2tot_dp_inl0_inl1 = 0
+          ndim2tot_dp_inl0_inl1 = ndim2tot_dp_inl0_inl1 + SIZE(p_nh % prog(nnew) % vn, 2)
+          ndim2tot_dp_inl0_inl1 = ndim2tot_dp_inl0_inl1 + SIZE(z_rho_e, 2)
+          ndim2tot_dp_inl0_inl1 = ndim2tot_dp_inl0_inl1 + 0
+          ndim2tot_dp_inl0_inl1 = ndim2tot_dp_inl0_inl1 + 0
+          ndim2tot_dp_inl0_inl1 = ndim2tot_dp_inl0_inl1 + 0
+          ndim2tot_sp_inl0_inl1 = 0
+          CALL exchange_data_mult_mixprec(p_pat = p_pat_inl0_inl1, lacc = .TRUE., nfields_dp = 2, ndim2tot_dp = ndim2tot_dp_inl0_inl1, nfields_sp = 0, ndim2tot_sp = ndim2tot_sp_inl0_inl1, recv1_dp = p_nh % prog(nnew) % vn, recv2_dp = z_rho_e)
+        END IF
       ELSE
-        CALL sync_patch_array_3d_dp_deconiface_137(2, p_patch, p_nh % prog(nnew) % vn, lacc = .TRUE., opt_varname = "vn_nnew")
+        IF (p_test_run .AND. do_sync_checks) CALL check_patch_array_3d_dp(2, p_patch, p_nh % prog(nnew) % vn, lacc = .TRUE., opt_varname = "vn_nnew")
+        IF (my_process_is_mpi_parallel()) THEN
+          p_pat_inl2 => p_pat_fn1
+          CALL exchange_data_r3d_deconiface_77(p_pat = p_pat_inl2, lacc = .TRUE., recv = p_nh % prog(nnew) % vn)
+        END IF
       END IF
       IF (timers_level > 5) THEN
         CALL timer_stop(timer_solve_nh_exch)
@@ -2129,22 +1779,22 @@ MODULE mo_solve_nonhydro
         IF (istep == 1) THEN
           DO je = i_startidx, i_endidx
             DO jk = 1, nlev
-              z_vn_avg(je, jk) = p_int % e_flx_avg(je, 1, jb) * p_nh % prog(nnew) % vn(je, jk, jb) + p_int % e_flx_avg(je, 2, jb) * p_nh % prog(nnew) % vn(p_patch % edges % quad_idx(je, jb, 1), jk, p_patch % edges % quad_blk(je, jb, 1)) + p_int % e_flx_avg(je, 3, jb) * p_nh % prog(nnew) % vn(p_patch % edges % quad_idx(je, jb, 2), jk, p_patch % edges % quad_blk(je, jb, 2)) + p_int % e_flx_avg(je, 4, jb) * p_nh % prog(nnew) % vn(p_patch % edges % quad_idx(je, jb, 3), jk, p_patch % edges % quad_blk(je, jb, 3)) + p_int % e_flx_avg(je, 5, jb) * p_nh % prog(nnew) % vn(p_patch % edges % quad_idx(je, jb, 4), jk, p_patch % edges % quad_blk(je, jb, 4))
-              z_graddiv_vn(jk, je, jb) = p_int % geofac_grdiv(je, 1, jb) * p_nh % prog(nnew) % vn(je, jk, jb) + p_int % geofac_grdiv(je, 2, jb) * p_nh % prog(nnew) % vn(p_patch % edges % quad_idx(je, jb, 1), jk, p_patch % edges % quad_blk(je, jb, 1)) + p_int % geofac_grdiv(je, 3, jb) * p_nh % prog(nnew) % vn(p_patch % edges % quad_idx(je, jb, 2), jk, p_patch % edges % quad_blk(je, jb, 2)) + p_int % geofac_grdiv(je, 4, jb) * p_nh % prog(nnew) % vn(p_patch % edges % quad_idx(je, jb, 3), jk, p_patch % edges % quad_blk(je, jb, 3)) + p_int % geofac_grdiv(je, 5, jb) * p_nh % prog(nnew) % vn(p_patch % edges % quad_idx(je, jb, 4), jk, p_patch % edges % quad_blk(je, jb, 4))
-              p_nh % diag % vt(je, jk, jb) = p_int % rbf_vec_coeff_e(1, je, jb) * p_nh % prog(nnew) % vn(p_patch % edges % quad_idx(je, jb, 1), jk, p_patch % edges % quad_blk(je, jb, 1)) + p_int % rbf_vec_coeff_e(2, je, jb) * p_nh % prog(nnew) % vn(p_patch % edges % quad_idx(je, jb, 2), jk, p_patch % edges % quad_blk(je, jb, 2)) + p_int % rbf_vec_coeff_e(3, je, jb) * p_nh % prog(nnew) % vn(p_patch % edges % quad_idx(je, jb, 3), jk, p_patch % edges % quad_blk(je, jb, 3)) + p_int % rbf_vec_coeff_e(4, je, jb) * p_nh % prog(nnew) % vn(p_patch % edges % quad_idx(je, jb, 4), jk, p_patch % edges % quad_blk(je, jb, 4))
+              z_vn_avg(je, jk) = p_int % e_flx_avg(je, 1, jb) * p_nh % prog(nnew) % vn(je, jk, jb) + p_int % e_flx_avg(je, 2, jb) * p_nh % prog(nnew) % vn(iqidx(je, jb, 1), jk, iqblk(je, jb, 1)) + p_int % e_flx_avg(je, 3, jb) * p_nh % prog(nnew) % vn(iqidx(je, jb, 2), jk, iqblk(je, jb, 2)) + p_int % e_flx_avg(je, 4, jb) * p_nh % prog(nnew) % vn(iqidx(je, jb, 3), jk, iqblk(je, jb, 3)) + p_int % e_flx_avg(je, 5, jb) * p_nh % prog(nnew) % vn(iqidx(je, jb, 4), jk, iqblk(je, jb, 4))
+              z_graddiv_vn(jk, je, jb) = p_int % geofac_grdiv(je, 1, jb) * p_nh % prog(nnew) % vn(je, jk, jb) + p_int % geofac_grdiv(je, 2, jb) * p_nh % prog(nnew) % vn(iqidx(je, jb, 1), jk, iqblk(je, jb, 1)) + p_int % geofac_grdiv(je, 3, jb) * p_nh % prog(nnew) % vn(iqidx(je, jb, 2), jk, iqblk(je, jb, 2)) + p_int % geofac_grdiv(je, 4, jb) * p_nh % prog(nnew) % vn(iqidx(je, jb, 3), jk, iqblk(je, jb, 3)) + p_int % geofac_grdiv(je, 5, jb) * p_nh % prog(nnew) % vn(iqidx(je, jb, 4), jk, iqblk(je, jb, 4))
+              p_nh % diag % vt(je, jk, jb) = p_int % rbf_vec_coeff_e(1, je, jb) * p_nh % prog(nnew) % vn(iqidx(je, jb, 1), jk, iqblk(je, jb, 1)) + p_int % rbf_vec_coeff_e(2, je, jb) * p_nh % prog(nnew) % vn(iqidx(je, jb, 2), jk, iqblk(je, jb, 2)) + p_int % rbf_vec_coeff_e(3, je, jb) * p_nh % prog(nnew) % vn(iqidx(je, jb, 3), jk, iqblk(je, jb, 3)) + p_int % rbf_vec_coeff_e(4, je, jb) * p_nh % prog(nnew) % vn(iqidx(je, jb, 4), jk, iqblk(je, jb, 4))
             END DO
           END DO
         ELSE IF (itime_scheme >= 5) THEN
           DO je = i_startidx, i_endidx
             DO jk = 1, nlev
-              z_vn_avg(je, jk) = p_int % e_flx_avg(je, 1, jb) * p_nh % prog(nnew) % vn(je, jk, jb) + p_int % e_flx_avg(je, 2, jb) * p_nh % prog(nnew) % vn(p_patch % edges % quad_idx(je, jb, 1), jk, p_patch % edges % quad_blk(je, jb, 1)) + p_int % e_flx_avg(je, 3, jb) * p_nh % prog(nnew) % vn(p_patch % edges % quad_idx(je, jb, 2), jk, p_patch % edges % quad_blk(je, jb, 2)) + p_int % e_flx_avg(je, 4, jb) * p_nh % prog(nnew) % vn(p_patch % edges % quad_idx(je, jb, 3), jk, p_patch % edges % quad_blk(je, jb, 3)) + p_int % e_flx_avg(je, 5, jb) * p_nh % prog(nnew) % vn(p_patch % edges % quad_idx(je, jb, 4), jk, p_patch % edges % quad_blk(je, jb, 4))
-              p_nh % diag % vt(je, jk, jb) = p_int % rbf_vec_coeff_e(1, je, jb) * p_nh % prog(nnew) % vn(p_patch % edges % quad_idx(je, jb, 1), jk, p_patch % edges % quad_blk(je, jb, 1)) + p_int % rbf_vec_coeff_e(2, je, jb) * p_nh % prog(nnew) % vn(p_patch % edges % quad_idx(je, jb, 2), jk, p_patch % edges % quad_blk(je, jb, 2)) + p_int % rbf_vec_coeff_e(3, je, jb) * p_nh % prog(nnew) % vn(p_patch % edges % quad_idx(je, jb, 3), jk, p_patch % edges % quad_blk(je, jb, 3)) + p_int % rbf_vec_coeff_e(4, je, jb) * p_nh % prog(nnew) % vn(p_patch % edges % quad_idx(je, jb, 4), jk, p_patch % edges % quad_blk(je, jb, 4))
+              z_vn_avg(je, jk) = p_int % e_flx_avg(je, 1, jb) * p_nh % prog(nnew) % vn(je, jk, jb) + p_int % e_flx_avg(je, 2, jb) * p_nh % prog(nnew) % vn(iqidx(je, jb, 1), jk, iqblk(je, jb, 1)) + p_int % e_flx_avg(je, 3, jb) * p_nh % prog(nnew) % vn(iqidx(je, jb, 2), jk, iqblk(je, jb, 2)) + p_int % e_flx_avg(je, 4, jb) * p_nh % prog(nnew) % vn(iqidx(je, jb, 3), jk, iqblk(je, jb, 3)) + p_int % e_flx_avg(je, 5, jb) * p_nh % prog(nnew) % vn(iqidx(je, jb, 4), jk, iqblk(je, jb, 4))
+              p_nh % diag % vt(je, jk, jb) = p_int % rbf_vec_coeff_e(1, je, jb) * p_nh % prog(nnew) % vn(iqidx(je, jb, 1), jk, iqblk(je, jb, 1)) + p_int % rbf_vec_coeff_e(2, je, jb) * p_nh % prog(nnew) % vn(iqidx(je, jb, 2), jk, iqblk(je, jb, 2)) + p_int % rbf_vec_coeff_e(3, je, jb) * p_nh % prog(nnew) % vn(iqidx(je, jb, 3), jk, iqblk(je, jb, 3)) + p_int % rbf_vec_coeff_e(4, je, jb) * p_nh % prog(nnew) % vn(iqidx(je, jb, 4), jk, iqblk(je, jb, 4))
             END DO
           END DO
         ELSE
           DO je = i_startidx, i_endidx
             DO jk = 1, nlev
-              z_vn_avg(je, jk) = p_int % e_flx_avg(je, 1, jb) * p_nh % prog(nnew) % vn(je, jk, jb) + p_int % e_flx_avg(je, 2, jb) * p_nh % prog(nnew) % vn(p_patch % edges % quad_idx(je, jb, 1), jk, p_patch % edges % quad_blk(je, jb, 1)) + p_int % e_flx_avg(je, 3, jb) * p_nh % prog(nnew) % vn(p_patch % edges % quad_idx(je, jb, 2), jk, p_patch % edges % quad_blk(je, jb, 2)) + p_int % e_flx_avg(je, 4, jb) * p_nh % prog(nnew) % vn(p_patch % edges % quad_idx(je, jb, 3), jk, p_patch % edges % quad_blk(je, jb, 3)) + p_int % e_flx_avg(je, 5, jb) * p_nh % prog(nnew) % vn(p_patch % edges % quad_idx(je, jb, 4), jk, p_patch % edges % quad_blk(je, jb, 4))
+              z_vn_avg(je, jk) = p_int % e_flx_avg(je, 1, jb) * p_nh % prog(nnew) % vn(je, jk, jb) + p_int % e_flx_avg(je, 2, jb) * p_nh % prog(nnew) % vn(iqidx(je, jb, 1), jk, iqblk(je, jb, 1)) + p_int % e_flx_avg(je, 3, jb) * p_nh % prog(nnew) % vn(iqidx(je, jb, 2), jk, iqblk(je, jb, 2)) + p_int % e_flx_avg(je, 4, jb) * p_nh % prog(nnew) % vn(iqidx(je, jb, 3), jk, iqblk(je, jb, 3)) + p_int % e_flx_avg(je, 5, jb) * p_nh % prog(nnew) % vn(iqidx(je, jb, 4), jk, iqblk(je, jb, 4))
             END DO
           END DO
         END IF
@@ -2236,13 +1886,13 @@ MODULE mo_solve_nonhydro
       IF (istep == 1 .OR. itime_scheme >= 5) THEN
         rl_start = 3
         rl_end = (- 5)
-        i_startblk = p_patch % cells % start_block(3)
-        i_endblk = p_patch % cells % end_block((- 5))
+        i_startblk = p_patch % cells % start_block(rl_start)
+        i_endblk = p_patch % cells % end_block(rl_end)
         DO jb = i_startblk, i_endblk
           CALL get_indices_c(p_patch, jb, i_startblk, i_endblk, i_startidx, i_endidx, rl_start, rl_end)
           DO jc = i_startidx, i_endidx
             DO jk = nflatlev(jg), nlev
-              z_w_concorr_mc(jc, jk) = p_int % e_bln_c_s(jc, 1, jb) * z_w_concorr_me(p_patch % cells % edge_idx(jc, jb, 1), jk, p_patch % cells % edge_blk(jc, jb, 1)) + p_int % e_bln_c_s(jc, 2, jb) * z_w_concorr_me(p_patch % cells % edge_idx(jc, jb, 2), jk, p_patch % cells % edge_blk(jc, jb, 2)) + p_int % e_bln_c_s(jc, 3, jb) * z_w_concorr_me(p_patch % cells % edge_idx(jc, jb, 3), jk, p_patch % cells % edge_blk(jc, jb, 3))
+              z_w_concorr_mc(jc, jk) = p_int % e_bln_c_s(jc, 1, jb) * z_w_concorr_me(ieidx(jc, jb, 1), jk, ieblk(jc, jb, 1)) + p_int % e_bln_c_s(jc, 2, jb) * z_w_concorr_me(ieidx(jc, jb, 2), jk, ieblk(jc, jb, 2)) + p_int % e_bln_c_s(jc, 3, jb) * z_w_concorr_me(ieidx(jc, jb, 3), jk, ieblk(jc, jb, 3))
             END DO
           END DO
           DO jk = nflatlev(jg) + 1, nlev
@@ -2272,8 +1922,8 @@ MODULE mo_solve_nonhydro
         CALL get_indices_c(p_patch, jb, i_startblk, i_endblk, i_startidx, i_endidx, rl_start, rl_end)
         DO jc = i_startidx, i_endidx
           DO jk = 1, nlev
-            z_flxdiv_mass(jc, jk) = p_nh % metrics % deepatmo_divh_mc(jk) * (p_nh % diag % mass_fl_e(p_patch % cells % edge_idx(jc, jb, 1), jk, p_patch % cells % edge_blk(jc, jb, 1)) * p_int % geofac_div(jc, 1, jb) + p_nh % diag % mass_fl_e(p_patch % cells % edge_idx(jc, jb, 2), jk, p_patch % cells % edge_blk(jc, jb, 2)) * p_int % geofac_div(jc, 2, jb) + p_nh % diag % mass_fl_e(p_patch % cells % edge_idx(jc, jb, 3), jk, p_patch % cells % edge_blk(jc, jb, 3)) * p_int % geofac_div(jc, 3, jb))
-            z_flxdiv_theta(jc, jk) = p_nh % metrics % deepatmo_divh_mc(jk) * (z_theta_v_fl_e(p_patch % cells % edge_idx(jc, jb, 1), jk, p_patch % cells % edge_blk(jc, jb, 1)) * p_int % geofac_div(jc, 1, jb) + z_theta_v_fl_e(p_patch % cells % edge_idx(jc, jb, 2), jk, p_patch % cells % edge_blk(jc, jb, 2)) * p_int % geofac_div(jc, 2, jb) + z_theta_v_fl_e(p_patch % cells % edge_idx(jc, jb, 3), jk, p_patch % cells % edge_blk(jc, jb, 3)) * p_int % geofac_div(jc, 3, jb))
+            z_flxdiv_mass(jc, jk) = p_nh % metrics % deepatmo_divh_mc(jk) * (p_nh % diag % mass_fl_e(ieidx(jc, jb, 1), jk, ieblk(jc, jb, 1)) * p_int % geofac_div(jc, 1, jb) + p_nh % diag % mass_fl_e(ieidx(jc, jb, 2), jk, ieblk(jc, jb, 2)) * p_int % geofac_div(jc, 2, jb) + p_nh % diag % mass_fl_e(ieidx(jc, jb, 3), jk, ieblk(jc, jb, 3)) * p_int % geofac_div(jc, 3, jb))
+            z_flxdiv_theta(jc, jk) = p_nh % metrics % deepatmo_divh_mc(jk) * (z_theta_v_fl_e(ieidx(jc, jb, 1), jk, ieblk(jc, jb, 1)) * p_int % geofac_div(jc, 1, jb) + z_theta_v_fl_e(ieidx(jc, jb, 2), jk, ieblk(jc, jb, 2)) * p_int % geofac_div(jc, 2, jb) + z_theta_v_fl_e(ieidx(jc, jb, 3), jk, ieblk(jc, jb, 3)) * p_int % geofac_div(jc, 3, jb))
           END DO
         END DO
         IF (l_vert_nested .AND. istep == 1) THEN
@@ -2440,8 +2090,8 @@ MODULE mo_solve_nonhydro
       IF (l_limited_area .OR. jg > 1) THEN
         rl_start = 1
         rl_end = 4
-        i_startblk = p_patch % cells % start_block(1)
-        i_endblk = p_patch % cells % end_block(4)
+        i_startblk = p_patch % cells % start_block(rl_start)
+        i_endblk = p_patch % cells % end_block(rl_end)
         DO jb = i_startblk, i_endblk
           CALL get_indices_c(p_patch, jb, i_startblk, i_endblk, i_startidx, i_endidx, rl_start, rl_end)
           IF (istep == 1 .AND. my_process_is_mpi_all_seq()) THEN
@@ -2498,12 +2148,45 @@ MODULE mo_solve_nonhydro
       END IF
       IF (istep == 1) THEN
         IF (divdamp_type >= 3) THEN
-          CALL sync_patch_array_mult_f3din_dp_deconiface_138(1, p_patch, 2, lacc = .TRUE., f3din1 = p_nh % prog(nnew) % w, f3din2 = z_dwdz_dd, opt_varname = "w_nnew and z_dwdz_dd")
+          p_pat_inl0_inl3 => p_patch % comm_pat_c
+          IF (p_test_run .AND. do_sync_checks) THEN
+            CALL check_patch_array_3d_dp(1, p_patch, p_nh % prog(nnew) % w, lacc = .TRUE., opt_varname = "w_nnew and z_dwdz_dd")
+            CALL check_patch_array_3d_dp(1, p_patch, z_dwdz_dd, lacc = .TRUE., opt_varname = "w_nnew and z_dwdz_dd")
+          END IF
+          IF (my_process_is_mpi_parallel()) THEN
+            ndim2tot_dp_inl0_inl3 = 0
+            ndim2tot_dp_inl0_inl3 = ndim2tot_dp_inl0_inl3 + SIZE(p_nh % prog(nnew) % w, 2)
+            ndim2tot_dp_inl0_inl3 = ndim2tot_dp_inl0_inl3 + SIZE(z_dwdz_dd, 2)
+            ndim2tot_dp_inl0_inl3 = ndim2tot_dp_inl0_inl3 + 0
+            ndim2tot_dp_inl0_inl3 = ndim2tot_dp_inl0_inl3 + 0
+            ndim2tot_dp_inl0_inl3 = ndim2tot_dp_inl0_inl3 + 0
+            ndim2tot_sp_inl0_inl3 = 0
+            CALL exchange_data_mult_mixprec(p_pat = p_pat_inl0_inl3, lacc = .TRUE., nfields_dp = 2, ndim2tot_dp = ndim2tot_dp_inl0_inl3, nfields_sp = 0, ndim2tot_sp = ndim2tot_sp_inl0_inl3, recv1_dp = p_nh % prog(nnew) % w, recv2_dp = z_dwdz_dd)
+          END IF
         ELSE
-          CALL sync_patch_array_3d_dp_deconiface_139(1, p_patch, p_nh % prog(nnew) % w, lacc = .TRUE., opt_varname = "w_nnew")
+          IF (p_test_run .AND. do_sync_checks) CALL check_patch_array_3d_dp(1, p_patch, p_nh % prog(nnew) % w, lacc = .TRUE., opt_varname = "w_nnew")
+          IF (my_process_is_mpi_parallel()) THEN
+            p_pat_inl4 => p_pat_fn2
+            CALL exchange_data_r3d_deconiface_77(p_pat = p_pat_inl4, lacc = .TRUE., recv = p_nh % prog(nnew) % w)
+          END IF
         END IF
       ELSE
-        CALL sync_patch_array_mult_f3din_dp_deconiface_140(1, p_patch, 3, lacc = .TRUE., f3din1 = p_nh % prog(nnew) % rho, f3din2 = p_nh % prog(nnew) % exner, f3din3 = p_nh % prog(nnew) % w, opt_varname = "rho, exner, w_nnew")
+        p_pat_inl0_inl5 => p_patch % comm_pat_c
+        IF (p_test_run .AND. do_sync_checks) THEN
+          CALL check_patch_array_3d_dp(1, p_patch, p_nh % prog(nnew) % rho, lacc = .TRUE., opt_varname = "rho, exner, w_nnew")
+          CALL check_patch_array_3d_dp(1, p_patch, p_nh % prog(nnew) % exner, lacc = .TRUE., opt_varname = "rho, exner, w_nnew")
+          CALL check_patch_array_3d_dp(1, p_patch, p_nh % prog(nnew) % w, lacc = .TRUE., opt_varname = "rho, exner, w_nnew")
+        END IF
+        IF (my_process_is_mpi_parallel()) THEN
+          ndim2tot_dp_inl0_inl5 = 0
+          ndim2tot_dp_inl0_inl5 = ndim2tot_dp_inl0_inl5 + SIZE(p_nh % prog(nnew) % rho, 2)
+          ndim2tot_dp_inl0_inl5 = ndim2tot_dp_inl0_inl5 + SIZE(p_nh % prog(nnew) % exner, 2)
+          ndim2tot_dp_inl0_inl5 = ndim2tot_dp_inl0_inl5 + SIZE(p_nh % prog(nnew) % w, 2)
+          ndim2tot_dp_inl0_inl5 = ndim2tot_dp_inl0_inl5 + 0
+          ndim2tot_dp_inl0_inl5 = ndim2tot_dp_inl0_inl5 + 0
+          ndim2tot_sp_inl0_inl5 = 0
+          CALL exchange_data_mult_mixprec(p_pat = p_pat_inl0_inl5, lacc = .TRUE., nfields_dp = 3, ndim2tot_dp = ndim2tot_dp_inl0_inl5, nfields_sp = 0, ndim2tot_sp = ndim2tot_sp_inl0_inl5, recv1_dp = p_nh % prog(nnew) % rho, recv2_dp = p_nh % prog(nnew) % exner, recv3_dp = p_nh % prog(nnew) % w)
+        END IF
       END IF
       IF (timers_level > 5) CALL timer_stop(timer_solve_nh_exch)
     END DO

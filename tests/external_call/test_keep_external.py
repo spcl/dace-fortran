@@ -21,8 +21,8 @@ import numpy as np
 import pytest
 
 from _util import build_sdfg, have_flang
-from dace_fortran.external import (Arg, ExternalCall, apply_external_functions, clear_external_registry,
-                                   keep_external, lookup_external)
+from dace_fortran.external import (Arg, ExternalCall, apply_external_functions, clear_external_registry, keep_external,
+                                   lookup_external)
 from dace_fortran.external_functions import ExternalFunction
 
 pytestmark = [

@@ -165,8 +165,7 @@ def _run_sdfg(sdfg):
     # on the SDFG side -- the bridge surfaces module-level scalars as
     # one-element arrays).  ``inorm`` is a free symbol so the bridge
     # resolves it via the kwarg name.
-    for name, value in (('nx0', _NX0), ('ny0', _NY0), ('nz0', _NZ0), ('itmax', _ITMAX),
-                        ('omega', _OMEGA), ('dt', _DT)):
+    for name, value in (('nx0', _NX0), ('ny0', _NY0), ('nz0', _NZ0), ('itmax', _ITMAX), ('omega', _OMEGA), ('dt', _DT)):
         if name in kw:
             kw[name][...] = value
     if 'tolrsd' in kw:

@@ -36,9 +36,7 @@ namespace hlfir_bridge {
 
 namespace {
 
-struct DefaultIntentPass
-    : public mlir::PassWrapper<DefaultIntentPass,
-                               mlir::OperationPass<mlir::ModuleOp>> {
+struct DefaultIntentPass : public mlir::PassWrapper<DefaultIntentPass, mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(DefaultIntentPass)
 
   llvm::StringRef getArgument() const final { return "hlfir-default-intent"; }
@@ -51,8 +49,7 @@ struct DefaultIntentPass
     auto* ctx = &getContext();
     using Flags = fir::FortranVariableFlagsEnum;
     auto hasIntent = [](Flags f) {
-      return bitEnumContainsAny(f, Flags::intent_in) ||
-             bitEnumContainsAny(f, Flags::intent_out) ||
+      return bitEnumContainsAny(f, Flags::intent_in) || bitEnumContainsAny(f, Flags::intent_out) ||
              bitEnumContainsAny(f, Flags::intent_inout);
     };
 
@@ -73,8 +70,7 @@ struct DefaultIntentPass
         if (hasIntent(flags)) continue;
 
         flags = flags | Flags::intent_inout;
-        decl->setAttr("fortran_attrs",
-                      fir::FortranVariableFlagsAttr::get(ctx, flags));
+        decl->setAttr("fortran_attrs", fir::FortranVariableFlagsAttr::get(ctx, flags));
       }
     });
   }
@@ -82,8 +78,6 @@ struct DefaultIntentPass
 
 }  // anonymous namespace
 
-std::unique_ptr<mlir::Pass> createDefaultIntentPass() {
-  return std::make_unique<DefaultIntentPass>();
-}
+std::unique_ptr<mlir::Pass> createDefaultIntentPass() { return std::make_unique<DefaultIntentPass>(); }
 
 }  // namespace hlfir_bridge

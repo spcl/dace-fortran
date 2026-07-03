@@ -239,8 +239,7 @@ static bool isSimpleScalar(mlir::Type t) {
   if (t.isF32() || t.isF64()) return true;
   // Match every integer width that ``extract_vars.cpp`` knows how
   // to map to a DaCe dtype (int8/16/32/64) so the predicates agree.
-  if (t.isInteger(8) || t.isInteger(16) || t.isInteger(32) || t.isInteger(64))
-    return true;
+  if (t.isInteger(8) || t.isInteger(16) || t.isInteger(32) || t.isInteger(64)) return true;
   // Fortran ``LOGICAL(KIND=N)`` lowers to ``fir.logical<N>``  --  a
   // distinct MLIR type from IntegerType.  Storage is N bytes (1, 2,
   // 4, 8); ``extract_vars.cpp`` maps each kind to the matching
@@ -323,8 +322,7 @@ static bool isAllocatableScalarMember(mlir::Type t) {
 /// and for the final companion pointee type.
 static bool isFlatMemberType(mlir::Type t) {
   if (isSimpleScalar(t)) return true;
-  if (auto seq = mlir::dyn_cast<fir::SequenceType>(t))
-    return isSimpleScalar(seq.getEleTy());
+  if (auto seq = mlir::dyn_cast<fir::SequenceType>(t)) return isSimpleScalar(seq.getEleTy());
   if (isAllocatableArrayMember(t)) return true;
   return false;
 }
@@ -332,9 +330,8 @@ static bool isFlatMemberType(mlir::Type t) {
 /// Pull the enclosed RecordType out of a declared HLFIR type and report
 /// whether it is wrapped in an outer fir.array (array-of-struct case).
 /// Returns null if the peeled type is not a record.
-static fir::RecordType peelToRecord(
-    mlir::Type declaredTy, bool& outerIsArray,
-    llvm::SmallVectorImpl<int64_t>& outerShape) {
+static fir::RecordType peelToRecord(mlir::Type declaredTy, bool& outerIsArray,
+                                    llvm::SmallVectorImpl<int64_t>& outerShape) {
   outerIsArray = false;
   outerShape.clear();
   auto peeled = unwrapAll(declaredTy);
@@ -354,9 +351,7 @@ static fir::RecordType peelToRecord(
 /// ...>.  Fortran derived types have a SINGLE declared shape per member
 /// that applies to every instance, so per-instance offset uniformity is
 /// automatic  --  no per-element check needed.
-static mlir::Type companionPointee(bool outerIsArray,
-                                   llvm::ArrayRef<int64_t> outerShape,
-                                   mlir::Type memberTy) {
+static mlir::Type companionPointee(bool outerIsArray, llvm::ArrayRef<int64_t> outerShape, mlir::Type memberTy) {
   bool memberIsArray = mlir::isa<fir::SequenceType>(memberTy);
   if (outerIsArray && memberIsArray) {
     auto memSeq = mlir::cast<fir::SequenceType>(memberTy);
@@ -375,18 +370,14 @@ static mlir::Type companionPointee(bool outerIsArray,
 /// ``fir.class<newT>`` to preserve the polymorphic tag (degrades
 /// gracefully to ``fir.box`` only if explicit).
 static mlir::Type rewrapWith(mlir::Type shell, mlir::Type newInner) {
-  if (auto x = mlir::dyn_cast<fir::ClassType>(shell))
-    return fir::ClassType::get(rewrapWith(x.getEleTy(), newInner));
-  if (auto x = mlir::dyn_cast<fir::BoxType>(shell))
-    return fir::BoxType::get(rewrapWith(x.getEleTy(), newInner));
+  if (auto x = mlir::dyn_cast<fir::ClassType>(shell)) return fir::ClassType::get(rewrapWith(x.getEleTy(), newInner));
+  if (auto x = mlir::dyn_cast<fir::BoxType>(shell)) return fir::BoxType::get(rewrapWith(x.getEleTy(), newInner));
   if (auto x = mlir::dyn_cast<fir::ReferenceType>(shell))
     return fir::ReferenceType::get(rewrapWith(x.getEleTy(), newInner));
-  if (auto x = mlir::dyn_cast<fir::HeapType>(shell))
-    return fir::HeapType::get(rewrapWith(x.getEleTy(), newInner));
+  if (auto x = mlir::dyn_cast<fir::HeapType>(shell)) return fir::HeapType::get(rewrapWith(x.getEleTy(), newInner));
   if (auto x = mlir::dyn_cast<fir::PointerType>(shell))
     return fir::PointerType::get(rewrapWith(x.getEleTy(), newInner));
-  if (auto seq = mlir::dyn_cast<fir::SequenceType>(shell))
-    return fir::SequenceType::get(seq.getShape(), newInner);
+  if (auto seq = mlir::dyn_cast<fir::SequenceType>(shell)) return fir::SequenceType::get(seq.getShape(), newInner);
   return newInner;
 }
 
@@ -414,27 +405,64 @@ static mlir::Type rewrapWith(mlir::Type shell, mlir::Type newInner) {
 /// remaining type is the record itself, not a box.
 static bool isIndirectStructLocal(mlir::Type declaredTy) {
   mlir::Type inner = declaredTy;
-  if (auto ref = mlir::dyn_cast<fir::ReferenceType>(inner))
-    inner = ref.getEleTy();
-  if (auto seq = mlir::dyn_cast<fir::SequenceType>(inner))
-    inner = seq.getEleTy();
-  return mlir::isa<fir::BaseBoxType, fir::PointerType, fir::HeapType>(inner);
+  if (auto ref = mlir::dyn_cast<fir::ReferenceType>(inner)) inner = ref.getEleTy();
+  // A runtime-sized PLAIN local array's ``hlfir.declare`` result #0 is a
+  // ``fir.box<array<record>>`` -- still OWNED storage whose descriptor merely
+  // carries the runtime extents, NOT a rebindable pointer/allocatable.  Peel
+  // the box and judge by what is INSIDE it: only a ``ptr`` / ``heap`` (set by
+  // ``p => x`` / ``allocate``) is a genuinely indirect, rebindable local.  A
+  // static local keeps its ``ref<array<record>>`` shape and never hits the box
+  // peel, so its classification is unchanged.
+  if (auto box = mlir::dyn_cast<fir::BaseBoxType>(inner)) inner = box.getEleTy();
+  if (auto seq = mlir::dyn_cast<fir::SequenceType>(inner)) inner = seq.getEleTy();
+  return mlir::isa<fir::PointerType, fir::HeapType>(inner);
 }
 
 /// Emit a fir.shape for a static extent list, inserting arith.constant ops
 /// for each extent.  Returns the shape SSA value.  Empty extents -> null
 /// (scalar  --  no shape needed).
-static mlir::Value emitStaticShape(mlir::OpBuilder& b, mlir::Location loc,
-                                   llvm::ArrayRef<int64_t> extents) {
+static mlir::Value emitStaticShape(mlir::OpBuilder& b, mlir::Location loc, llvm::ArrayRef<int64_t> extents) {
   if (extents.empty()) return {};
   auto idxTy = b.getIndexType();
   llvm::SmallVector<mlir::Value, 4> dims;
   for (auto e : extents) {
-    dims.push_back(
-        b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(e)));
+    dims.push_back(b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(e)));
   }
   auto shapeTy = fir::ShapeType::get(b.getContext(), extents.size());
   return b.create<fir::ShapeOp>(loc, shapeTy, dims);
+}
+
+/// Recover the outer array's per-dim extent SSA values from a LOCAL declare's
+/// ``fir.shape`` operand -- one Value per outer dim (a literal for a static
+/// dim, the live runtime extent for a dynamic dim).  Empty when the declare
+/// has no shape, or its shape isn't a plain ``fir.shape`` (a ``fir.shapeshift``
+/// with non-default lower bounds is not threaded here).  This is what lets a
+/// runtime-sized local AoS flatten: the companion alloca / shape reuse these
+/// live extents instead of baking static literals.
+static llvm::SmallVector<mlir::Value, 4> outerExtentValues(hlfir::DeclareOp decl) {
+  llvm::SmallVector<mlir::Value, 4> out;
+  auto sh = decl.getShape();
+  if (!sh) return out;
+  if (auto so = sh.getDefiningOp<fir::ShapeOp>()) out.assign(so.getExtents().begin(), so.getExtents().end());
+  return out;
+}
+
+/// Build the companion ``fir.alloca`` for ``pointee``, threading a live extent
+/// operand for every dim the type marks unknown (``fullExtVals`` is one Value
+/// per pointee dim, leading-outer then trailing-member).  A fully-static
+/// pointee gets a plain no-operand alloca -- byte-identical to the prior
+/// behavior, so static locals are unaffected.
+static fir::AllocaOp makeCompanionAlloca(mlir::OpBuilder& b, mlir::Location loc, mlir::Type pointee,
+                                         llvm::ArrayRef<mlir::Value> fullExtVals) {
+  auto seq = mlir::dyn_cast<fir::SequenceType>(pointee);
+  if (!seq) return b.create<fir::AllocaOp>(loc, pointee);
+  llvm::SmallVector<mlir::Value, 4> dynOps;
+  auto shp = seq.getShape();
+  for (unsigned i = 0; i < shp.size() && i < fullExtVals.size(); ++i)
+    if (shp[i] == fir::SequenceType::getUnknownExtent()) dynOps.push_back(fullExtVals[i]);
+  if (dynOps.empty()) return b.create<fir::AllocaOp>(loc, pointee);
+  return b.create<fir::AllocaOp>(loc, pointee, /*typeparams=*/mlir::ValueRange{},
+                                 /*shape=*/dynOps);
 }
 
 /// Extract the extents if `t` peels to a fir.array with all-static dims,
@@ -601,8 +629,7 @@ struct FlatLeaf {
 /// Env-gated (``DACE_HLFIR_DEBUG_FLATTEN``) diagnostic: report the member path
 /// and type at which ``collectFlatLeaves`` bails, so the disqualifying member
 /// of a struct is visible.  Temporary aid for the ICON struct-flatten work.
-static void logFlatBail(const llvm::SmallVectorImpl<std::string>& prefix,
-                        const char* reason, mlir::Type t) {
+static void logFlatBail(const llvm::SmallVectorImpl<std::string>& prefix, const char* reason, mlir::Type t) {
   if (!std::getenv("DACE_HLFIR_DEBUG_FLATTEN")) return;
   std::string path;
   for (auto& p : prefix) {
@@ -622,12 +649,9 @@ static void logFlatBail(const llvm::SmallVectorImpl<std::string>& prefix,
 /// erases the struct dummy when no users remain, so a kept-alive accessed
 /// member never dangles.  The local-instance / struct-assign callers keep
 /// all-or-nothing.
-static bool collectFlatLeaves(fir::RecordType rec,
-                              llvm::SmallVectorImpl<std::string>& prefix,
-                              llvm::SmallVectorImpl<int64_t>& outerDims,
-                              llvm::SmallVectorImpl<FlatLeaf>& out,
-                              llvm::SmallPtrSetImpl<mlir::Type>& visited,
-                              int depth = 0, bool partial = false) {
+static bool collectFlatLeaves(fir::RecordType rec, llvm::SmallVectorImpl<std::string>& prefix,
+                              llvm::SmallVectorImpl<int64_t>& outerDims, llvm::SmallVectorImpl<FlatLeaf>& out,
+                              llvm::SmallPtrSetImpl<mlir::Type>& visited, int depth = 0, bool partial = false) {
   if (depth > kFlattenMaxDepth) return false;
   // Mark this record as in-progress so a downstream pointer member
   // whose pointee re-enters the same type (mutual recursion: ``type a_t
@@ -660,8 +684,7 @@ static bool collectFlatLeaves(fir::RecordType rec,
     // Admit allocatable/pointer scalars alongside the regular flat
     // shapes  --  ``replaceStructArgNested``'s BoxType leaf branch
     // already produces the right declare for either rank.
-    if (isFlatMemberType(pair.second) ||
-        isAllocatableScalarMember(pair.second)) {
+    if (isFlatMemberType(pair.second) || isAllocatableScalarMember(pair.second)) {
       FlatLeaf leaf;
       leaf.path.assign(prefix.begin(), prefix.end());
       // Compose the leaf's flat companion shape:
@@ -673,8 +696,7 @@ static bool collectFlatLeaves(fir::RecordType rec,
       if (auto seq = mlir::dyn_cast<fir::SequenceType>(leafEle)) {
         for (auto d : seq.getShape()) {
           if (d == fir::SequenceType::getUnknownExtent()) {
-            logFlatBail(prefix, "dynamic-extent static array leaf",
-                        pair.second);
+            logFlatBail(prefix, "dynamic-extent static array leaf", pair.second);
             prefix.pop_back();
             return false;  // dynamic extents in the
                            // leaf require a runtime
@@ -695,8 +717,7 @@ static bool collectFlatLeaves(fir::RecordType rec,
       }
       out.push_back(std::move(leaf));
     } else if (auto innerRec = mlir::dyn_cast<fir::RecordType>(pair.second)) {
-      if (!collectFlatLeaves(innerRec, prefix, outerDims, out, visited,
-                             depth + 1, partial)) {
+      if (!collectFlatLeaves(innerRec, prefix, outerDims, out, visited, depth + 1, partial)) {
         prefix.pop_back();
         return false;
       }
@@ -722,8 +743,7 @@ static bool collectFlatLeaves(fir::RecordType rec,
         theseDims.push_back(d);
       }
       for (auto d : theseDims) outerDims.push_back(d);
-      bool ok = collectFlatLeaves(innerRec, prefix, outerDims, out, visited,
-                                  depth + 1, partial);
+      bool ok = collectFlatLeaves(innerRec, prefix, outerDims, out, visited, depth + 1, partial);
       for (size_t i = 0; i < theseDims.size(); ++i) outerDims.pop_back();
       if (!ok) {
         prefix.pop_back();
@@ -734,9 +754,7 @@ static bool collectFlatLeaves(fir::RecordType rec,
       // through this path.  Bail so the pass leaves the
       // struct untouched and the loud-failure throw in
       // extract_vars points at the right gap.
-      logFlatBail(prefix,
-                  "unsupported member (box/char/alloc-array-of-records)",
-                  pair.second);
+      logFlatBail(prefix, "unsupported member (box/char/alloc-array-of-records)", pair.second);
       prefix.pop_back();
       if (partial) continue;  // skip this member, keep flattening siblings
       return false;
@@ -749,23 +767,18 @@ static bool collectFlatLeaves(fir::RecordType rec,
 /// Top-level entry point for the flat-leaf walker.  Internal
 /// callers always start with empty ``outerDims``.  Forwards to
 /// the recursive form above.
-static bool collectFlatLeaves(fir::RecordType rec,
-                              llvm::SmallVectorImpl<std::string>& prefix,
-                              llvm::SmallVectorImpl<FlatLeaf>& out,
-                              int depth = 0, bool partial = false) {
+static bool collectFlatLeaves(fir::RecordType rec, llvm::SmallVectorImpl<std::string>& prefix,
+                              llvm::SmallVectorImpl<FlatLeaf>& out, int depth = 0, bool partial = false) {
   llvm::SmallVector<int64_t, 4> outerDims;
   llvm::SmallPtrSet<mlir::Type, 4> visited;
-  return collectFlatLeaves(rec, prefix, outerDims, out, visited, depth,
-                           partial);
+  return collectFlatLeaves(rec, prefix, outerDims, out, visited, depth, partial);
 }
 
 /// Entry point that threads a caller-provided ``outerDims`` (used by
 /// ``splitLocal`` / the AoS-allocatable pre-flatten check to seed the
 /// outer record's array extents).
-static bool collectFlatLeaves(fir::RecordType rec,
-                              llvm::SmallVectorImpl<std::string>& prefix,
-                              llvm::SmallVectorImpl<int64_t>& outerDims,
-                              llvm::SmallVectorImpl<FlatLeaf>& out,
+static bool collectFlatLeaves(fir::RecordType rec, llvm::SmallVectorImpl<std::string>& prefix,
+                              llvm::SmallVectorImpl<int64_t>& outerDims, llvm::SmallVectorImpl<FlatLeaf>& out,
                               int depth = 0) {
   llvm::SmallPtrSet<mlir::Type, 4> visited;
   return collectFlatLeaves(rec, prefix, outerDims, out, visited, depth);
@@ -779,8 +792,7 @@ static bool collectFlatLeaves(fir::RecordType rec,
 /// used when per-member flattening would produce differently-shaped siblings.
 /// Scalar and non-1-D members are reported unsupported, so the caller falls
 /// back to the per-member path.
-static bool isJaggedScalarStruct(fir::RecordType rec, mlir::Type& eleTy,
-                                 llvm::SmallVectorImpl<int64_t>& extents) {
+static bool isJaggedScalarStruct(fir::RecordType rec, mlir::Type& eleTy, llvm::SmallVectorImpl<int64_t>& extents) {
   eleTy = nullptr;
   extents.clear();
 
@@ -832,8 +844,7 @@ static std::string demangleVarName(llvm::StringRef uniqName) {
 /// emitter expects (``in`` / ``out`` / ``inout`` / ``""``).  The
 /// emitter uses ``inout`` and ``out`` to gate copy-out code  --  ``in``
 /// and empty are both read-only.
-static std::string extractIntent(
-    std::optional<fir::FortranVariableFlagsEnum> flagsOpt) {
+static std::string extractIntent(std::optional<fir::FortranVariableFlagsEnum> flagsOpt) {
   if (!flagsOpt) return "";
   auto flags = *flagsOpt;
   auto has = [&](fir::FortranVariableFlagsEnum f) {
@@ -915,8 +926,7 @@ static mlir::Type memberElementType(mlir::Type memTy) {
 /// array members report their true rank.
 static int memberRank(mlir::Type memTy) {
   mlir::Type core = peelMemberWrappers(memTy);
-  if (auto seq = mlir::dyn_cast<fir::SequenceType>(core))
-    return seq.getShape().size();
+  if (auto seq = mlir::dyn_cast<fir::SequenceType>(core)) return seq.getShape().size();
   return 0;
 }
 
@@ -979,12 +989,10 @@ static int memberLogicalKind(mlir::Type memTy) {
 /// FlatLeaf naming the synth produces); empty string if the chain
 /// has no component step at all, or if a triplet section appears
 /// at a non-leaf level.
-static std::string walkDesignateChain(
-    hlfir::DesignateOp leaf,
-    llvm::SmallVectorImpl<mlir::Value>& intermediateIndices) {
+static std::string walkDesignateChain(hlfir::DesignateOp leaf,
+                                      llvm::SmallVectorImpl<mlir::Value>& intermediateIndices) {
   llvm::SmallVector<std::string, 4> compsRev;
-  llvm::SmallVector<llvm::SmallVector<mlir::Value, 4>, 4>
-      intermediateIdxGroupsRev;
+  llvm::SmallVector<llvm::SmallVector<mlir::Value, 4>, 4> intermediateIdxGroupsRev;
   hlfir::DesignateOp cur = leaf;
   for (int i = 0; i < kFlattenMaxDepth && cur; ++i) {
     mlir::StringAttr compAttr;
@@ -1009,8 +1017,7 @@ static std::string walkDesignateChain(
       if (auto trip = cur.getIsTripletAttr())
         for (bool t : trip.asArrayRef())
           if (t) return "";
-      llvm::SmallVector<mlir::Value, 4> these(cur.getIndices().begin(),
-                                              cur.getIndices().end());
+      llvm::SmallVector<mlir::Value, 4> these(cur.getIndices().begin(), cur.getIndices().end());
       intermediateIdxGroupsRev.push_back(std::move(these));
     }
     // Walk to parent.
@@ -1025,8 +1032,7 @@ static std::string walkDesignateChain(
     if (!joined.empty()) joined += "_";
     joined += *it;
   }
-  for (auto it = intermediateIdxGroupsRev.rbegin();
-       it != intermediateIdxGroupsRev.rend(); ++it)
+  for (auto it = intermediateIdxGroupsRev.rbegin(); it != intermediateIdxGroupsRev.rend(); ++it)
     intermediateIndices.append(it->begin(), it->end());
   return joined;
 }
@@ -1034,8 +1040,7 @@ static std::string walkDesignateChain(
 /// Backwards-compatible wrapper used by callers that only need the
 /// path (no merged indices)  --  keeps the original entry point shape
 /// while ``walkDesignateChain`` is the canonical implementation.
-static std::string designateChainPath(hlfir::DesignateOp leaf,
-                                      hlfir::DesignateOp& outAnchor) {
+static std::string designateChainPath(hlfir::DesignateOp leaf, hlfir::DesignateOp& outAnchor) {
   llvm::SmallVector<mlir::Value, 4> ignored;
   auto joined = walkDesignateChain(leaf, ignored);
   outAnchor = leaf;
@@ -1062,8 +1067,7 @@ static std::string designateChainPath(hlfir::DesignateOp leaf,
 /// lb,ext pairs, ``fir.shift`` -> lbs).  A non-constant lb comes back
 /// as ``"?"``.  Returns the flat outer-first lb-string vector, or an
 /// empty vector if the chain has no component step.
-static llvm::SmallVector<std::string, 4> collectChainLowerBounds(
-    hlfir::DesignateOp leaf) {
+static llvm::SmallVector<std::string, 4> collectChainLowerBounds(hlfir::DesignateOp leaf) {
   // Per-designate lb groups, leaf-first (reversed at the end).
   llvm::SmallVector<llvm::SmallVector<std::string, 4>, 4> groupsRev;
   bool sawComponent = false;
@@ -1110,13 +1114,11 @@ static llvm::SmallVector<std::string, 4> collectChainLowerBounds(
       if (lbs.size() != nIdx) lbs.assign(nIdx, "1");
       groupsRev.push_back(std::move(lbs));
     }
-    cur = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
-        cur.getMemref().getDefiningOp());
+    cur = mlir::dyn_cast_or_null<hlfir::DesignateOp>(cur.getMemref().getDefiningOp());
   }
   llvm::SmallVector<std::string, 4> flat;
   if (!sawComponent) return flat;
-  for (auto it = groupsRev.rbegin(); it != groupsRev.rend(); ++it)
-    flat.append(it->begin(), it->end());
+  for (auto it = groupsRev.rbegin(); it != groupsRev.rend(); ++it) flat.append(it->begin(), it->end());
   return flat;
 }
 
@@ -1155,12 +1157,10 @@ struct AliasPrefix {
 ///
 /// Returns true if it rewrote the leaf; false (no IR change) for any shape
 /// outside the contract, so the caller's generic path runs unchanged.
-static bool rewriteSectionedAliasLeaf(
-    hlfir::DesignateOp leaf, const llvm::StringMap<mlir::Value>& leafBase,
-    const llvm::DenseMap<mlir::Value, AliasPrefix>& aliasPrefixes) {
+static bool rewriteSectionedAliasLeaf(hlfir::DesignateOp leaf, const llvm::StringMap<mlir::Value>& leafBase,
+                                      const llvm::DenseMap<mlir::Value, AliasPrefix>& aliasPrefixes) {
   // The leaf must read a SECTION: its memref is a designate carrying triplets.
-  auto section =
-      mlir::dyn_cast_or_null<hlfir::DesignateOp>(leaf.getMemref().getDefiningOp());
+  auto section = mlir::dyn_cast_or_null<hlfir::DesignateOp>(leaf.getMemref().getDefiningOp());
   if (!section) return false;
   auto secTripAttr = section.getIsTripletAttr();
   if (!secTripAttr) return false;
@@ -1193,8 +1193,7 @@ static bool rewriteSectionedAliasLeaf(
   auto secIdx = section.getIndices();
   auto leafIdx = leaf.getIndices();
   auto leafTripAttr = leaf.getIsTripletAttr();
-  llvm::ArrayRef<bool> leafTrips =
-      leafTripAttr ? leafTripAttr.asArrayRef() : llvm::ArrayRef<bool>{};
+  llvm::ArrayRef<bool> leafTrips = leafTripAttr ? leafTripAttr.asArrayRef() : llvm::ArrayRef<bool>{};
 
   llvm::SmallVector<mlir::Value, 8> outIdx;
   llvm::SmallVector<bool, 4> outTrip;
@@ -1236,18 +1235,17 @@ static bool rewriteSectionedAliasLeaf(
   bool anyOutTrip = false;
   for (bool b : outTrip) anyOutTrip |= b;
   mlir::OpBuilder rb(leaf);
-  auto newOp = rb.create<hlfir::DesignateOp>(
-      leaf.getLoc(), /*result_type=*/leaf.getResult().getType(),
-      /*memref=*/newBase,
-      /*component=*/mlir::StringAttr{},
-      /*component_shape=*/mlir::Value{},
-      /*indices=*/mlir::ValueRange{outIdx},
-      /*is_triplet=*/rb.getDenseBoolArrayAttr(outTrip),
-      /*substring=*/mlir::ValueRange{},
-      /*complex_part=*/mlir::BoolAttr{},
-      /*shape=*/anyOutTrip ? leaf.getShape() : mlir::Value{},
-      /*typeparams=*/mlir::ValueRange{},
-      /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
+  auto newOp = rb.create<hlfir::DesignateOp>(leaf.getLoc(), /*result_type=*/leaf.getResult().getType(),
+                                             /*memref=*/newBase,
+                                             /*component=*/mlir::StringAttr{},
+                                             /*component_shape=*/mlir::Value{},
+                                             /*indices=*/mlir::ValueRange{outIdx},
+                                             /*is_triplet=*/rb.getDenseBoolArrayAttr(outTrip),
+                                             /*substring=*/mlir::ValueRange{},
+                                             /*complex_part=*/mlir::BoolAttr{},
+                                             /*shape=*/anyOutTrip ? leaf.getShape() : mlir::Value{},
+                                             /*typeparams=*/mlir::ValueRange{},
+                                             /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
   leaf.getResult().replaceAllUsesWith(newOp.getResult());
   leaf.erase();
   return true;
@@ -1262,16 +1260,13 @@ static bool rewriteSectionedAliasLeaf(
 /// declare whose source threads through embox/convert into a
 /// designate chain rooted at ``decl`` (the type_arg2 / type_array
 /// shape).  Returns true if the rewrite fired.
-static bool rewriteDesignateChain(
-    hlfir::DesignateOp leaf, const llvm::StringMap<mlir::Value>& leafBase,
-    const llvm::DenseMap<mlir::Value, AliasPrefix>* aliasPrefixes = nullptr) {
+static bool rewriteDesignateChain(hlfir::DesignateOp leaf, const llvm::StringMap<mlir::Value>& leafBase,
+                                  const llvm::DenseMap<mlir::Value, AliasPrefix>* aliasPrefixes = nullptr) {
   // An inlined-callee dummy bound to a per-block SECTION of a flattened member
   // (``member(:, :, blk)``) needs the section's scalar dim composed back in;
   // neither ``walkDesignateChain`` nor the alias-prefix walk below carry it
   // (both bail on the section's triplets).  Handle that shape first.
-  if (aliasPrefixes &&
-      rewriteSectionedAliasLeaf(leaf, leafBase, *aliasPrefixes))
-    return true;
+  if (aliasPrefixes && rewriteSectionedAliasLeaf(leaf, leafBase, *aliasPrefixes)) return true;
 
   llvm::SmallVector<mlir::Value, 4> intermediateIndices;
   std::string path = walkDesignateChain(leaf, intermediateIndices);
@@ -1283,8 +1278,7 @@ static bool rewriteDesignateChain(
     hlfir::DesignateOp cur = leaf;
     for (int i = 0; i < kFlattenMaxDepth && cur; ++i) {
       auto memref = cur.getMemref();
-      auto nextDg =
-          mlir::dyn_cast_or_null<hlfir::DesignateOp>(memref.getDefiningOp());
+      auto nextDg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(memref.getDefiningOp());
       if (!nextDg) {
         auto pit = aliasPrefixes->find(memref);
         if (pit != aliasPrefixes->end()) {
@@ -1299,8 +1293,7 @@ static bool rewriteDesignateChain(
             joined += path;
           }
           path = std::move(joined);
-          llvm::SmallVector<mlir::Value, 4> merged(pref.indices.begin(),
-                                                   pref.indices.end());
+          llvm::SmallVector<mlir::Value, 4> merged(pref.indices.begin(), pref.indices.end());
           merged.append(intermediateIndices.begin(), intermediateIndices.end());
           intermediateIndices = std::move(merged);
         }
@@ -1366,11 +1359,9 @@ static bool rewriteDesignateChain(
   mlir::OpBuilder rb(leaf);
   auto loc = leaf.getLoc();
   if (leaf.getIndices().empty()) {
-    if (auto memberSeqTy = mlir::dyn_cast<fir::SequenceType>(
-            fir::unwrapRefType(leaf.getResult().getType()))) {
+    if (auto memberSeqTy = mlir::dyn_cast<fir::SequenceType>(fir::unwrapRefType(leaf.getResult().getType()))) {
       auto idxTy = rb.getIndexType();
-      auto c1 =
-          rb.create<mlir::arith::ConstantOp>(loc, idxTy, rb.getIndexAttr(1));
+      auto c1 = rb.create<mlir::arith::ConstantOp>(loc, idxTy, rb.getIndexAttr(1));
       llvm::SmallVector<mlir::Value, 8> sliceIndices;
       llvm::SmallVector<bool, 4> isTriplet;
       for (auto idx : intermediateIndices) {
@@ -1379,37 +1370,33 @@ static bool rewriteDesignateChain(
       }
       for (auto d : memberSeqTy.getShape()) {
         if (d == fir::SequenceType::getUnknownExtent()) return false;
-        auto cN =
-            rb.create<mlir::arith::ConstantOp>(loc, idxTy, rb.getIndexAttr(d));
+        auto cN = rb.create<mlir::arith::ConstantOp>(loc, idxTy, rb.getIndexAttr(d));
         sliceIndices.push_back(c1.getResult());
         sliceIndices.push_back(cN.getResult());
         sliceIndices.push_back(c1.getResult());
         isTriplet.push_back(true);
       }
-      auto newOp = rb.create<hlfir::DesignateOp>(
-          loc,
-          /*result_type=*/leaf.getResult().getType(),
-          /*memref=*/newBase,
-          /*component=*/mlir::StringAttr{},
-          /*component_shape=*/mlir::Value{},
-          /*indices=*/mlir::ValueRange{sliceIndices},
-          /*is_triplet=*/rb.getDenseBoolArrayAttr(isTriplet),
-          /*substring=*/mlir::ValueRange{},
-          /*complex_part=*/mlir::BoolAttr{},
-          /*shape=*/leaf.getShape(),
-          /*typeparams=*/mlir::ValueRange{},
-          /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
+      auto newOp = rb.create<hlfir::DesignateOp>(loc,
+                                                 /*result_type=*/leaf.getResult().getType(),
+                                                 /*memref=*/newBase,
+                                                 /*component=*/mlir::StringAttr{},
+                                                 /*component_shape=*/mlir::Value{},
+                                                 /*indices=*/mlir::ValueRange{sliceIndices},
+                                                 /*is_triplet=*/rb.getDenseBoolArrayAttr(isTriplet),
+                                                 /*substring=*/mlir::ValueRange{},
+                                                 /*complex_part=*/mlir::BoolAttr{},
+                                                 /*shape=*/leaf.getShape(),
+                                                 /*typeparams=*/mlir::ValueRange{},
+                                                 /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
       leaf.getResult().replaceAllUsesWith(newOp.getResult());
       leaf.erase();
       return true;
     }
   }
 
-  llvm::SmallVector<mlir::Value, 6> merged(intermediateIndices.begin(),
-                                           intermediateIndices.end());
+  llvm::SmallVector<mlir::Value, 6> merged(intermediateIndices.begin(), intermediateIndices.end());
   for (auto v : leaf.getIndices()) merged.push_back(v);
-  auto newOp = rb.create<hlfir::DesignateOp>(loc, leaf.getResult().getType(),
-                                             newBase, mlir::ValueRange{merged});
+  auto newOp = rb.create<hlfir::DesignateOp>(loc, leaf.getResult().getType(), newBase, mlir::ValueRange{merged});
   leaf.getResult().replaceAllUsesWith(newOp.getResult());
   leaf.erase();
   return true;
@@ -1423,8 +1410,7 @@ static bool rewriteDesignateChain(
 /// rooted at the alias declare needs the ``("pprog", "w") + [i]``
 /// prefix prepended so the rewrite designs into the right flat
 /// companion.  Triplet sections on intermediate steps are out of scope.
-static std::optional<AliasPrefix> traceAliasPrefixToDecl(
-    hlfir::DeclareOp other, hlfir::DeclareOp decl) {
+static std::optional<AliasPrefix> traceAliasPrefixToDecl(hlfir::DeclareOp other, hlfir::DeclareOp decl) {
   llvm::SmallVector<std::string, 4> pathRev;
   llvm::SmallVector<llvm::SmallVector<mlir::Value, 4>, 4> indexGroupsRev;
   mlir::Value mr = other.getMemref();
@@ -1434,10 +1420,8 @@ static std::optional<AliasPrefix> traceAliasPrefixToDecl(
     if (auto outer = mlir::dyn_cast<hlfir::DeclareOp>(d)) {
       if (outer == decl) {
         AliasPrefix info;
-        for (auto it = pathRev.rbegin(); it != pathRev.rend(); ++it)
-          info.path.push_back(*it);
-        for (auto it = indexGroupsRev.rbegin(); it != indexGroupsRev.rend();
-             ++it)
+        for (auto it = pathRev.rbegin(); it != pathRev.rend(); ++it) info.path.push_back(*it);
+        for (auto it = indexGroupsRev.rbegin(); it != indexGroupsRev.rend(); ++it)
           info.indices.append(it->begin(), it->end());
         return info;
       }
@@ -1481,8 +1465,7 @@ static std::optional<AliasPrefix> traceAliasPrefixToDecl(
       if (auto trip = dg.getIsTripletAttr())
         for (bool t : trip.asArrayRef())
           if (t) return std::nullopt;
-      llvm::SmallVector<mlir::Value, 4> these(dg.getIndices().begin(),
-                                              dg.getIndices().end());
+      llvm::SmallVector<mlir::Value, 4> these(dg.getIndices().begin(), dg.getIndices().end());
       indexGroupsRev.push_back(std::move(these));
       mr = dg.getMemref();
       continue;
@@ -1498,8 +1481,7 @@ static std::optional<AliasPrefix> traceAliasPrefixToDecl(
 /// path (``splitLocal``) and the dummy-arg path
 /// (``replaceStructArgNested``)  --  both produce the same ``leafBase``
 /// shape and need the same rewrite logic.
-static void rewriteChainsRootedAt(
-    hlfir::DeclareOp decl, const llvm::StringMap<mlir::Value>& leafBase) {
+static void rewriteChainsRootedAt(hlfir::DeclareOp decl, const llvm::StringMap<mlir::Value>& leafBase) {
   auto func = decl->getParentOfType<mlir::func::FuncOp>();
   if (!func) return;
 
@@ -1598,18 +1580,44 @@ static void rewriteChainsRootedAt(
     auto decl = mlir::dyn_cast_or_null<hlfir::DeclareOp>(declOp);
     if (!decl) continue;
     llvm::SmallVector<mlir::Attribute, 4> attrs;
-    for (auto& s : lbs)
-      attrs.push_back(mlir::StringAttr::get(decl.getContext(), s));
-    decl->setAttr(hlfir_bridge::kLbHintAttr,
-                  mlir::ArrayAttr::get(decl.getContext(), attrs));
+    for (auto& s : lbs) attrs.push_back(mlir::StringAttr::get(decl.getContext(), s));
+    decl->setAttr(hlfir_bridge::kLbHintAttr, mlir::ArrayAttr::get(decl.getContext(), attrs));
   }
 
-  for (auto dg : chainLeaves)
-    rewriteDesignateChain(dg, leafBase, &aliasPrefixes);
+  for (auto dg : chainLeaves) rewriteDesignateChain(dg, leafBase, &aliasPrefixes);
 }
 
-static void rewriteDesignate(hlfir::DesignateOp dg,
-                             const llvm::StringMap<mlir::Value>& memberBase,
+/// Append ``dg``'s subscripts onto ``outIdx`` / ``outTrip``, preserving the
+/// triplet structure: a triplet subscript consumes three operands
+/// (lb, ub, step) and contributes ONE ``true`` flag; a scalar subscript
+/// consumes one operand and contributes ONE ``false`` flag.  A null
+/// ``is_triplet`` attr (the common scalar-only case) means every index is a
+/// scalar.  This lets the concat rewrite merge a SECTION parent
+/// (``A(:,:,:)%x(1)``) without miscounting its triplet operands as scalar
+/// indices.
+static void appendDesignateSubscripts(hlfir::DesignateOp dg, llvm::SmallVectorImpl<mlir::Value>& outIdx,
+                                      llvm::SmallVectorImpl<bool>& outTrip) {
+  auto idx = dg.getIndices();
+  auto tripAttr = dg.getIsTripletAttr();
+  if (!tripAttr) {
+    for (auto v : idx) {
+      outIdx.push_back(v);
+      outTrip.push_back(false);
+    }
+    return;
+  }
+  unsigned o = 0;
+  for (bool t : tripAttr.asArrayRef()) {
+    outIdx.push_back(idx[o++]);
+    if (t) {
+      outIdx.push_back(idx[o++]);
+      outIdx.push_back(idx[o++]);
+    }
+    outTrip.push_back(t);
+  }
+}
+
+static void rewriteDesignate(hlfir::DesignateOp dg, const llvm::StringMap<mlir::Value>& memberBase,
                              const llvm::StringSet<>& concatMembers = {}) {
   // The hlfir.designate op prints the component as ``{"name"}`` but stores
   // it under the attribute key ``component_name``  --  depending on the HLFIR
@@ -1635,8 +1643,7 @@ static void rewriteDesignate(hlfir::DesignateOp dg,
   bool isConcat = concatMembers.count(compAttr.getValue());
   if (isConcat) {
     auto parentMemref = dg.getMemref();
-    auto parentDg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
-        parentMemref.getDefiningOp());
+    auto parentDg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(parentMemref.getDefiningOp());
     if (parentDg) {
       // Verify parent is a pure indexed access (no component).
       bool parentHasComponent = false;
@@ -1648,14 +1655,38 @@ static void rewriteDesignate(hlfir::DesignateOp dg,
       if (!parentHasComponent && !parentDg.getIndices().empty()) {
         mlir::OpBuilder rb(dg);
         if (!dg.getIndices().empty()) {
-          // Element access: ``A(i)%w(j, k)`` -> flat
-          // designate ``A_w(i, j, k)``.
-          llvm::SmallVector<mlir::Value, 8> mergedIndices;
-          for (auto idx : parentDg.getIndices()) mergedIndices.push_back(idx);
-          for (auto idx : dg.getIndices()) mergedIndices.push_back(idx);
-          auto newOp = rb.create<hlfir::DesignateOp>(
-              dg.getLoc(), dg.getResult().getType(), newBase,
-              mlir::ValueRange{mergedIndices});
+          // Merge the parent outer access with this member access into one
+          // flat designate.  Element parent (``A(i)%w(j, k)`` -> ``A_w(i, j,
+          // k)``) and SECTION parent (``A(:,:,:)%x(1)`` -> ``A_x(:,:,:,1)``)
+          // are both handled by preserving each side's triplet flags -- else a
+          // sectioned parent's lb/ub/step triplet operands get miscounted as
+          // scalar indices and the rank check fails.
+          llvm::SmallVector<mlir::Value, 12> mergedIndices;
+          llvm::SmallVector<bool, 6> mergedTriplet;
+          appendDesignateSubscripts(parentDg, mergedIndices, mergedTriplet);
+          appendDesignateSubscripts(dg, mergedIndices, mergedTriplet);
+          bool anyTriplet = llvm::any_of(mergedTriplet, [](bool t) { return t; });
+          hlfir::DesignateOp newOp;
+          if (anyTriplet) {
+            // A sectioned access yields an array: build via the long-form
+            // builder so we can pass ``is_triplet`` and the result ``shape``.
+            newOp = rb.create<hlfir::DesignateOp>(dg.getLoc(),
+                                                  /*result_type=*/dg.getResult().getType(),
+                                                  /*memref=*/newBase,
+                                                  /*component=*/mlir::StringAttr{},
+                                                  /*component_shape=*/mlir::Value{},
+                                                  /*indices=*/mlir::ValueRange{mergedIndices},
+                                                  /*is_triplet=*/rb.getDenseBoolArrayAttr(mergedTriplet),
+                                                  /*substring=*/mlir::ValueRange{},
+                                                  /*complex_part=*/mlir::BoolAttr{},
+                                                  /*shape=*/dg.getShape(),
+                                                  /*typeparams=*/mlir::ValueRange{},
+                                                  /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
+          } else {
+            // All-scalar element access  --  short-form builder, unchanged.
+            newOp = rb.create<hlfir::DesignateOp>(dg.getLoc(), dg.getResult().getType(), newBase,
+                                                  mlir::ValueRange{mergedIndices});
+          }
           dg.getResult().replaceAllUsesWith(newOp.getResult());
           dg.erase();
           if (parentDg.getResult().use_empty()) parentDg.erase();
@@ -1665,8 +1696,7 @@ static void rewriteDesignate(hlfir::DesignateOp dg,
         // ``A_w(i, 1:M:1, 1:M:1, ...)``  --  scalar outer index,
         // triplet over every inner dim.  The result type
         // stays the original member type (``ref<array<M, ...>>``).
-        auto memberSeqTy = mlir::dyn_cast<fir::SequenceType>(
-            fir::unwrapRefType(dg.getResult().getType()));
+        auto memberSeqTy = mlir::dyn_cast<fir::SequenceType>(fir::unwrapRefType(dg.getResult().getType()));
         if (!memberSeqTy) {
           // Whole scalar component (rare)  --  same as
           // empty-indices old behaviour: replace use.
@@ -1677,22 +1707,19 @@ static void rewriteDesignate(hlfir::DesignateOp dg,
         }
         auto loc = dg.getLoc();
         auto idxTy = rb.getIndexType();
-        auto c1 =
-            rb.create<mlir::arith::ConstantOp>(loc, idxTy, rb.getIndexAttr(1));
+        auto c1 = rb.create<mlir::arith::ConstantOp>(loc, idxTy, rb.getIndexAttr(1));
         llvm::SmallVector<mlir::Value, 8> sliceIndices;
         llvm::SmallVector<bool, 4> isTriplet;
-        for (auto idx : parentDg.getIndices()) {
-          sliceIndices.push_back(idx);
-          isTriplet.push_back(false);
-        }
+        // Preserve the parent's triplet structure (a sectioned outer,
+        // ``A(:,:,:)%w``, keeps its triplets; an element outer stays scalar).
+        appendDesignateSubscripts(parentDg, sliceIndices, isTriplet);
         for (auto d : memberSeqTy.getShape()) {
           if (d == fir::SequenceType::getUnknownExtent()) {
             // Cannot construct a static-bound triplet  --
             // bail to the safe fallback.
             return;
           }
-          auto cN = rb.create<mlir::arith::ConstantOp>(loc, idxTy,
-                                                       rb.getIndexAttr(d));
+          auto cN = rb.create<mlir::arith::ConstantOp>(loc, idxTy, rb.getIndexAttr(d));
           sliceIndices.push_back(c1.getResult());
           sliceIndices.push_back(cN.getResult());
           sliceIndices.push_back(c1.getResult());
@@ -1700,19 +1727,18 @@ static void rewriteDesignate(hlfir::DesignateOp dg,
         }
         // Build via the long-form ``hlfir.designate`` builder
         // so we can pass ``is_triplet`` directly.
-        auto newOp = rb.create<hlfir::DesignateOp>(
-            loc,
-            /*result_type=*/dg.getResult().getType(),
-            /*memref=*/newBase,
-            /*component=*/mlir::StringAttr{},
-            /*component_shape=*/mlir::Value{},
-            /*indices=*/mlir::ValueRange{sliceIndices},
-            /*is_triplet=*/rb.getDenseBoolArrayAttr(isTriplet),
-            /*substring=*/mlir::ValueRange{},
-            /*complex_part=*/mlir::BoolAttr{},
-            /*shape=*/dg.getShape(),
-            /*typeparams=*/mlir::ValueRange{},
-            /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
+        auto newOp = rb.create<hlfir::DesignateOp>(loc,
+                                                   /*result_type=*/dg.getResult().getType(),
+                                                   /*memref=*/newBase,
+                                                   /*component=*/mlir::StringAttr{},
+                                                   /*component_shape=*/mlir::Value{},
+                                                   /*indices=*/mlir::ValueRange{sliceIndices},
+                                                   /*is_triplet=*/rb.getDenseBoolArrayAttr(isTriplet),
+                                                   /*substring=*/mlir::ValueRange{},
+                                                   /*complex_part=*/mlir::BoolAttr{},
+                                                   /*shape=*/dg.getShape(),
+                                                   /*typeparams=*/mlir::ValueRange{},
+                                                   /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
         dg.getResult().replaceAllUsesWith(newOp.getResult());
         dg.erase();
         if (parentDg.getResult().use_empty()) parentDg.erase();
@@ -1733,8 +1759,7 @@ static void rewriteDesignate(hlfir::DesignateOp dg,
     // matches them (the plain per-element companion); a rank-0 struct (no
     // parent index) or a differently-shaped companion (e.g. the aos_alloc
     // packed form) keeps the bare alias.
-    auto parentDg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
-        dg.getMemref().getDefiningOp());
+    auto parentDg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(dg.getMemref().getDefiningOp());
     bool parentHasComponent = false;
     if (parentDg)
       for (auto nm : {"component_name", "component"})
@@ -1743,16 +1768,19 @@ static void rewriteDesignate(hlfir::DesignateOp dg,
           break;
         }
     if (parentDg && !parentHasComponent && !parentDg.getIndices().empty()) {
-      auto compSeq = mlir::dyn_cast<fir::SequenceType>(
-          fir::unwrapRefType(newBase.getType()));
-      if (compSeq &&
-          compSeq.getShape().size() == parentDg.getIndices().size()) {
+      // ``newBase`` is the companion's HLFIR variable form: ``ref<array<...>>``
+      // for a static companion, ``box<array<...>>`` for a runtime-sized one.
+      // Peel both so the per-element index application fires in either case --
+      // otherwise a dynamic companion's box would alias the WHOLE array onto
+      // the scalar use and a later ``fir.load`` faults on the box.
+      mlir::Type compInner = fir::unwrapRefType(newBase.getType());
+      if (auto box = mlir::dyn_cast<fir::BaseBoxType>(compInner)) compInner = box.getEleTy();
+      auto compSeq = mlir::dyn_cast<fir::SequenceType>(compInner);
+      if (compSeq && compSeq.getShape().size() == parentDg.getIndices().size()) {
         mlir::OpBuilder rb(dg);
-        llvm::SmallVector<mlir::Value, 4> outerIdx(
-            parentDg.getIndices().begin(), parentDg.getIndices().end());
+        llvm::SmallVector<mlir::Value, 4> outerIdx(parentDg.getIndices().begin(), parentDg.getIndices().end());
         auto newOp =
-            rb.create<hlfir::DesignateOp>(dg.getLoc(), dg.getResult().getType(),
-                                          newBase, mlir::ValueRange{outerIdx});
+            rb.create<hlfir::DesignateOp>(dg.getLoc(), dg.getResult().getType(), newBase, mlir::ValueRange{outerIdx});
         dg.getResult().replaceAllUsesWith(newOp.getResult());
         dg.erase();
         if (parentDg.getResult().use_empty()) parentDg.erase();
@@ -1777,9 +1805,7 @@ static void rewriteDesignate(hlfir::DesignateOp dg,
 // The pass
 // ---------------------------------------------------------------------------
 
-struct FlattenStructsPass
-    : public mlir::PassWrapper<FlattenStructsPass,
-                               mlir::OperationPass<mlir::ModuleOp>> {
+struct FlattenStructsPass : public mlir::PassWrapper<FlattenStructsPass, mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(FlattenStructsPass)
 
   /// When true, only the AoR-element-access splits run; the
@@ -1794,9 +1820,7 @@ struct FlattenStructsPass
   /// the scalar-struct flatten on top.
   bool splitOnly = false;
 
-  llvm::StringRef getArgument() const final {
-    return splitOnly ? "hlfir-split-aor-dummies" : "hlfir-flatten-structs";
-  }
+  llvm::StringRef getArgument() const final { return splitOnly ? "hlfir-split-aor-dummies" : "hlfir-flatten-structs"; }
   llvm::StringRef getDescription() const final {
     if (splitOnly)
       return "Run only the alloc-array-of-records dummy splits "
@@ -1827,8 +1851,7 @@ struct FlattenStructsPass
         llvm::errs() << "FLATTEN_BAD_OP loc=" << op->getLoc() << "\n";
         llvm::errs() << "  op: " << *op << "\n";
         for (auto operand : op->getOperands())
-          if (auto* def = operand.getDefiningOp())
-            llvm::errs() << "  operand def: " << *def << "\n";
+          if (auto* def = operand.getDefiningOp()) llvm::errs() << "  operand def: " << *def << "\n";
       });
     }
 
@@ -1855,18 +1878,25 @@ struct FlattenStructsPass
   /// they're skipped here so the plan has exactly one recipe per flat
   /// companion.  When every member is excluded the function emits
   /// nothing.
-  void recordStructArgEntry(hlfir::DeclareOp argDecl, fir::RecordType rec,
-                            llvm::StringRef intentStr,
-                            bool outerIsArray = false,
-                            llvm::ArrayRef<int64_t> outerShape = {},
+  void recordStructArgEntry(hlfir::DeclareOp argDecl, fir::RecordType rec, llvm::StringRef intentStr,
+                            bool outerIsArray = false, llvm::ArrayRef<int64_t> outerShape = {},
                             const llvm::StringSet<>& excludeMembers = {}) {
     auto* ctx = argDecl.getContext();
     mlir::Builder b(ctx);
-    auto mkStr = [&](llvm::StringRef s) -> mlir::Attribute {
-      return b.getStringAttr(s);
-    };
+    auto mkStr = [&](llvm::StringRef s) -> mlir::Attribute { return b.getStringAttr(s); };
 
     std::string outerName = demangleVarName(argDecl.getUniqName());
+    // ``outerName`` names the SDFG flat companion (``p_prog_nnow_rho``).  The
+    // SOURCE expression the binding reads from is normally the same identifier,
+    // but a double-buffer per-symbol dummy (``p_prog_nnow``, minted by
+    // ``splitDoubleBufferMembers``) is NOT a real Fortran-side variable -- it
+    // stands for ``p%prog(nnow)``.  The split records that real source path on
+    // the dummy declare as ``hlfir_bridge.dbuf_source``; use it for every
+    // read / shape / outer expression so the binding aliases the actual storage
+    // (``c_loc(p%prog(nnow)%rho)``), while the flat name keeps ``outerName``.
+    std::string sourceBase = outerName;
+    if (auto srcAttr = argDecl->getAttrOfType<mlir::StringAttr>("hlfir_bridge.dbuf_source"))
+      sourceBase = srcAttr.getValue().str();
     // Outer type: dump the declared type as MLIR text  --  the Python
     // side uses it only for commentary, so round-tripping the MLIR
     // form is sufficient.
@@ -1903,7 +1933,7 @@ struct FlattenStructsPass
 
       // read_expr: ``<outer>($i1, ..., $iOR)%<member>($iOR+1, ..., $iTotal)``
       // Scalar outer + scalar member: just ``<outer>%<member>``.
-      std::string read = outerName.c_str();
+      std::string read = sourceBase;
       if (outerRank > 0) {
         read += "(";
         for (unsigned i = 1; i <= outerRank; ++i) {
@@ -1932,11 +1962,10 @@ struct FlattenStructsPass
       llvm::SmallVector<mlir::Attribute, 4> shapeExprs;
       if (totalRank > 0) {
         for (unsigned i = 1; i <= outerRank; ++i) {
-          std::string s =
-              "size(" + outerName + ", dim=" + std::to_string((int)i) + ")";
+          std::string s = "size(" + sourceBase + ", dim=" + std::to_string((int)i) + ")";
           shapeExprs.push_back(mkStr(s));
         }
-        std::string sampleOuter = outerName;
+        std::string sampleOuter = sourceBase;
         if (outerRank > 0) {
           sampleOuter += "(";
           for (unsigned i = 0; i < outerRank; ++i) {
@@ -1946,8 +1975,7 @@ struct FlattenStructsPass
           sampleOuter += ")";
         }
         for (int i = 1; i <= memRank; ++i) {
-          std::string s = ("size(" + sampleOuter + "%" + memName.str() +
-                           ", dim=" + std::to_string(i) + ")");
+          std::string s = ("size(" + sampleOuter + "%" + memName.str() + ", dim=" + std::to_string(i) + ")");
           shapeExprs.push_back(mkStr(s));
         }
       }
@@ -1975,14 +2003,13 @@ struct FlattenStructsPass
           b.getNamedAttr("scratch_dtype", mkStr(scratchDtype)),
           b.getNamedAttr("aos_alloc", b.getBoolAttr(false)),
           b.getNamedAttr("cap_symbol", mkStr("")),
-          b.getNamedAttr("source_logical_kind",
-                         b.getI64IntegerAttr(logicalKind)),
+          b.getNamedAttr("source_logical_kind", b.getI64IntegerAttr(logicalKind)),
       });
 
-      // Per-member outer_expr ``<outer>%<member>`` so the
-      // emitter renders one ``c_f_pointer(c_loc(<outer>%<member>),
+      // Per-member outer_expr ``<source>%<member>`` so the
+      // emitter renders one ``c_f_pointer(c_loc(<source>%<member>),
       // <flat>, [...])`` per entry without ambiguity.
-      std::string outerExpr = outerName + "%" + memName.str();
+      std::string outerExpr = sourceBase + "%" + memName.str();
 
       auto entry = b.getDictionaryAttr({
           b.getNamedAttr("outer_expr", mkStr(outerExpr)),
@@ -2016,14 +2043,11 @@ struct FlattenStructsPass
   /// correct: a leaf's rank / dtype no longer leaks onto its
   /// siblings.  ``collectFlatLeaves`` rejects unsupported leaf shapes
   /// upstream.
-  void recordNestedStructArgEntry(hlfir::DeclareOp argDecl,
-                                  llvm::ArrayRef<FlatLeaf> leaves,
+  void recordNestedStructArgEntry(hlfir::DeclareOp argDecl, llvm::ArrayRef<FlatLeaf> leaves,
                                   llvm::StringRef intentStr) {
     auto* ctx = argDecl.getContext();
     mlir::Builder b(ctx);
-    auto mkStr = [&](llvm::StringRef s) -> mlir::Attribute {
-      return b.getStringAttr(s);
-    };
+    auto mkStr = [&](llvm::StringRef s) -> mlir::Attribute { return b.getStringAttr(s); };
 
     std::string outerName = demangleVarName(argDecl.getUniqName());
     std::string outerType;
@@ -2087,8 +2111,7 @@ struct FlattenStructsPass
           b.getNamedAttr("scratch_dtype", mkStr(scratchDtype)),
           b.getNamedAttr("aos_alloc", b.getBoolAttr(false)),
           b.getNamedAttr("cap_symbol", mkStr("")),
-          b.getNamedAttr("source_logical_kind",
-                         b.getI64IntegerAttr(logicalKind)),
+          b.getNamedAttr("source_logical_kind", b.getI64IntegerAttr(logicalKind)),
       });
 
       auto entry = b.getDictionaryAttr({
@@ -2111,14 +2134,11 @@ struct FlattenStructsPass
   /// to the SDFG.  The bridge declares the data block-arg with
   /// type ``ref<array<N x ?xT>>`` so the inner extent surfaces as a
   /// runtime symbol (``cap_<base>_<member>``) on the SDFG signature.
-  void recordAosAllocEntry(hlfir::DeclareOp argDecl, fir::RecordType rec,
-                           llvm::StringRef memName, llvm::StringRef intentStr,
-                           llvm::ArrayRef<int64_t> outerShape) {
+  void recordAosAllocEntry(hlfir::DeclareOp argDecl, fir::RecordType rec, llvm::StringRef memName,
+                           llvm::StringRef intentStr, llvm::ArrayRef<int64_t> outerShape) {
     auto* ctx = argDecl.getContext();
     mlir::Builder b(ctx);
-    auto mkStr = [&](llvm::StringRef s) -> mlir::Attribute {
-      return b.getStringAttr(s);
-    };
+    auto mkStr = [&](llvm::StringRef s) -> mlir::Attribute { return b.getStringAttr(s); };
 
     std::string outerName = demangleVarName(argDecl.getUniqName());
     std::string outerType;
@@ -2137,8 +2157,7 @@ struct FlattenStructsPass
 
     std::string scratchDtype = "float64";
     if (memTy)
-      if (std::string dt = dtypeName(memberElementType(memTy)); !dt.empty())
-        scratchDtype = dt;
+      if (std::string dt = dtypeName(memberElementType(memTy)); !dt.empty()) scratchDtype = dt;
     int logicalKind = memTy ? memberLogicalKind(memTy) : 0;
 
     std::string flatName = outerName + "_" + memName.str();
@@ -2167,8 +2186,7 @@ struct FlattenStructsPass
     // pack-in code computes it directly.
     llvm::SmallVector<mlir::Attribute, 2> shapeExprs;
     for (unsigned i = 1; i <= outerRank; ++i) {
-      std::string s =
-          "size(" + outerName + ", dim=" + std::to_string((int)i) + ")";
+      std::string s = "size(" + outerName + ", dim=" + std::to_string((int)i) + ")";
       shapeExprs.push_back(mkStr(s));
     }
     shapeExprs.push_back(mkStr(capName));
@@ -2272,8 +2290,7 @@ struct FlattenStructsPass
       if (splitMD || splitArgs) {
         auto& block = func.front();
         auto newInputs = llvm::to_vector(block.getArgumentTypes());
-        func.setType(mlir::FunctionType::get(
-            func.getContext(), newInputs, func.getFunctionType().getResults()));
+        func.setType(mlir::FunctionType::get(func.getContext(), newInputs, func.getFunctionType().getResults()));
       }
       return;
     }
@@ -2286,8 +2303,7 @@ struct FlattenStructsPass
     if (splitMD || splitArgs || rewroteArgs) {
       auto& block = func.front();
       auto newInputs = llvm::to_vector(block.getArgumentTypes());
-      func.setType(mlir::FunctionType::get(
-          func.getContext(), newInputs, func.getFunctionType().getResults()));
+      func.setType(mlir::FunctionType::get(func.getContext(), newInputs, func.getFunctionType().getResults()));
       mlir::SymbolTable::setSymbolName(func, (func.getName() + "_soa").str());
     }
 
@@ -2362,8 +2378,7 @@ struct FlattenStructsPass
     // components in ``leaf.path``.  Resolves the per-step result
     // type by looking up each component in the running record
     // type's member list.
-    auto buildLeafDesignate = [&](mlir::Value base,
-                                  const FlatLeaf& leaf) -> mlir::Value {
+    auto buildLeafDesignate = [&](mlir::Value base, const FlatLeaf& leaf) -> mlir::Value {
       mlir::Value cur = base;
       for (auto& component : leaf.path) {
         auto curRec = mlir::dyn_cast<fir::RecordType>(unwrapAll(cur.getType()));
@@ -2390,19 +2405,18 @@ struct FlattenStructsPass
           if (exts.empty()) return {};
           fieldShape = emitStaticShape(b, loc, exts);
         }
-        auto newOp = b.create<hlfir::DesignateOp>(
-            loc,
-            /*resultType0=*/refFieldTy,
-            /*memref=*/cur,
-            /*component=*/componentAttr,
-            /*component_shape=*/fieldShape,
-            /*indices=*/mlir::ValueRange{},
-            /*is_triplet=*/mlir::DenseBoolArrayAttr{},
-            /*substring=*/mlir::ValueRange{},
-            /*complex_part=*/mlir::BoolAttr{},
-            /*shape=*/fieldShape,
-            /*typeparams=*/mlir::ValueRange{},
-            /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
+        auto newOp = b.create<hlfir::DesignateOp>(loc,
+                                                  /*resultType0=*/refFieldTy,
+                                                  /*memref=*/cur,
+                                                  /*component=*/componentAttr,
+                                                  /*component_shape=*/fieldShape,
+                                                  /*indices=*/mlir::ValueRange{},
+                                                  /*is_triplet=*/mlir::DenseBoolArrayAttr{},
+                                                  /*substring=*/mlir::ValueRange{},
+                                                  /*complex_part=*/mlir::BoolAttr{},
+                                                  /*shape=*/fieldShape,
+                                                  /*typeparams=*/mlir::ValueRange{},
+                                                  /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
         cur = newOp.getResult();
       }
       return cur;
@@ -2458,8 +2472,7 @@ struct FlattenStructsPass
     auto* ctx = func.getContext();
 
     // Map: ``argDecl.getResult(0)`` -> demangled base + argDecl.
-    llvm::DenseMap<mlir::Value, std::pair<std::string, hlfir::DeclareOp>>
-        argDecls;
+    llvm::DenseMap<mlir::Value, std::pair<std::string, hlfir::DeclareOp>> argDecls;
     for (unsigned i = 0; i < block.getNumArguments(); ++i) {
       hlfir::DeclareOp argDecl;
       for (auto* u : block.getArgument(i).getUsers())
@@ -2468,8 +2481,7 @@ struct FlattenStructsPass
           break;
         }
       if (!argDecl) continue;
-      argDecls.try_emplace(argDecl.getResult(0),
-                           demangleVarName(argDecl.getUniqName()), argDecl);
+      argDecls.try_emplace(argDecl.getResult(0), demangleVarName(argDecl.getUniqName()), argDecl);
     }
     if (argDecls.empty()) return false;
 
@@ -2494,8 +2506,7 @@ struct FlattenStructsPass
     std::map<Key, mlir::Type> innerScalarTy;
     // Track per-(root, path) the AoR's element record type so we can verify
     // it has only scalar leaves.
-    std::map<std::pair<void*, std::vector<std::string>>, fir::RecordType>
-        elemRecByPath;
+    std::map<std::pair<void*, std::vector<std::string>>, fir::RecordType> elemRecByPath;
 
     func.walk([&](hlfir::DesignateOp innerDg) {
       // Inner-member designate: has component, no subscripts.
@@ -2505,15 +2516,13 @@ struct FlattenStructsPass
       auto innerName = innerComp.getValue().str();
 
       // Memref must be an element designate: subscripts, no component.
-      auto elemDg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
-          innerDg.getMemref().getDefiningOp());
+      auto elemDg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(innerDg.getMemref().getDefiningOp());
       if (!elemDg) return;
       if (elemDg.getComponentAttr()) return;
       if (elemDg.getIndices().empty()) return;
 
       // Element designate's memref must be a loaded box.
-      auto ld = mlir::dyn_cast_or_null<fir::LoadOp>(
-          elemDg.getMemref().getDefiningOp());
+      auto ld = mlir::dyn_cast_or_null<fir::LoadOp>(elemDg.getMemref().getDefiningOp());
       if (!ld) return;
 
       // Walk back via the member-designate chain to a function-arg declare.
@@ -2552,8 +2561,7 @@ struct FlattenStructsPass
       if (it == argDecls.end()) return;
 
       // Element record type comes from the elemDg result (ref<RecordType>).
-      auto refTy =
-          mlir::dyn_cast<fir::ReferenceType>(elemDg.getResult().getType());
+      auto refTy = mlir::dyn_cast<fir::ReferenceType>(elemDg.getResult().getType());
       if (!refTy) return;
       auto elemRec = mlir::dyn_cast<fir::RecordType>(refTy.getEleTy());
       if (!elemRec) return;
@@ -2614,8 +2622,7 @@ struct FlattenStructsPass
       // Dynamic shape -- the bridge's allocatable-array path will
       // synth shape symbols (``<name>_d0``, ``_d1``, ...) at extract
       // time and the bindings layer is expected to populate them.
-      llvm::SmallVector<int64_t, 4> dynShape(
-          outerRank, fir::SequenceType::getUnknownExtent());
+      llvm::SmallVector<int64_t, 4> dynShape(outerRank, fir::SequenceType::getUnknownExtent());
       // Array leaf (``x(3)``): append the member's STATIC extents as trailing
       // companion dims and flatten to its element type, so ``c%e(i,j)%x``
       // maps to a contiguous trailing section ``c_e_x(i, j, 1:3:1)``.
@@ -2642,12 +2649,10 @@ struct FlattenStructsPass
       mlir::NamedAttrList attrs;
       attrs.append("uniq_name", mlir::StringAttr::get(ctx, name));
       attrs.append("fortran_attrs",
-                   fir::FortranVariableFlagsAttr::get(
-                       ctx, fir::FortranVariableFlagsEnum::allocatable));
+                   fir::FortranVariableFlagsAttr::get(ctx, fir::FortranVariableFlagsEnum::allocatable));
       attrs.append(declareSegments(b, /*hasShape=*/false));
-      auto decl = b.create<hlfir::DeclareOp>(
-          argDecl.getLoc(), mlir::TypeRange{refBoxTy, refBoxTy},
-          mlir::ValueRange{newArg}, attrs);
+      auto decl = b.create<hlfir::DeclareOp>(argDecl.getLoc(), mlir::TypeRange{refBoxTy, refBoxTy},
+                                             mlir::ValueRange{newArg}, attrs);
 
       for (auto& site : kv.second) {
         mlir::OpBuilder sb(site.innerDg);
@@ -2664,9 +2669,7 @@ struct FlattenStructsPass
           // (``ref<array<N x T>>``).
           auto idxTy = sb.getIndexType();
           auto toIndex = [&](mlir::Value v) -> mlir::Value {
-            return v.getType() == idxTy
-                       ? v
-                       : sb.create<fir::ConvertOp>(loc, idxTy, v).getResult();
+            return v.getType() == idxTy ? v : sb.create<fir::ConvertOp>(loc, idxTy, v).getResult();
           };
           llvm::SmallVector<mlir::Value, 8> indices;
           llvm::SmallVector<bool, 4> trip;
@@ -2676,41 +2679,35 @@ struct FlattenStructsPass
           }
           llvm::SmallVector<mlir::Value, 2> shapeDims;
           for (auto d : memSeq.getShape()) {
-            auto c1 = sb.create<mlir::arith::ConstantOp>(loc, idxTy,
-                                                         sb.getIndexAttr(1));
-            auto cN = sb.create<mlir::arith::ConstantOp>(loc, idxTy,
-                                                         sb.getIndexAttr(d));
+            auto c1 = sb.create<mlir::arith::ConstantOp>(loc, idxTy, sb.getIndexAttr(1));
+            auto cN = sb.create<mlir::arith::ConstantOp>(loc, idxTy, sb.getIndexAttr(d));
             indices.push_back(c1.getResult());
             indices.push_back(cN.getResult());
             indices.push_back(c1.getResult());
             trip.push_back(true);
             shapeDims.push_back(cN.getResult());
           }
-          auto shp = sb.create<fir::ShapeOp>(loc, mlir::ValueRange{shapeDims})
-                         .getResult();
-          auto newDg = sb.create<hlfir::DesignateOp>(
-              loc, /*resultType0=*/site.innerDg.getResult().getType(),
-              /*memref=*/loadedBox.getResult(),
-              /*component=*/mlir::StringAttr{},
-              /*component_shape=*/mlir::Value{},
-              /*indices=*/mlir::ValueRange{indices},
-              /*is_triplet=*/sb.getDenseBoolArrayAttr(trip),
-              /*substring=*/mlir::ValueRange{},
-              /*complex_part=*/mlir::BoolAttr{},
-              /*shape=*/shp,
-              /*typeparams=*/mlir::ValueRange{},
-              /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
+          auto shp = sb.create<fir::ShapeOp>(loc, mlir::ValueRange{shapeDims}).getResult();
+          auto newDg = sb.create<hlfir::DesignateOp>(loc, /*resultType0=*/site.innerDg.getResult().getType(),
+                                                     /*memref=*/loadedBox.getResult(),
+                                                     /*component=*/mlir::StringAttr{},
+                                                     /*component_shape=*/mlir::Value{},
+                                                     /*indices=*/mlir::ValueRange{indices},
+                                                     /*is_triplet=*/sb.getDenseBoolArrayAttr(trip),
+                                                     /*substring=*/mlir::ValueRange{},
+                                                     /*complex_part=*/mlir::BoolAttr{},
+                                                     /*shape=*/shp,
+                                                     /*typeparams=*/mlir::ValueRange{},
+                                                     /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
           repl = newDg.getResult();
         } else {
           // Scalar leaf: element access (7-arg convenience build).
           auto elemRefTy = fir::ReferenceType::get(innerTy);
-          llvm::SmallVector<mlir::Value, 4> idxs(
-              site.elemDg.getIndices().begin(), site.elemDg.getIndices().end());
-          auto newDg = sb.create<hlfir::DesignateOp>(
-              loc, elemRefTy, loadedBox.getResult(),
-              /*indices=*/idxs,
-              /*typeparams=*/mlir::ValueRange{},
-              /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
+          llvm::SmallVector<mlir::Value, 4> idxs(site.elemDg.getIndices().begin(), site.elemDg.getIndices().end());
+          auto newDg = sb.create<hlfir::DesignateOp>(loc, elemRefTy, loadedBox.getResult(),
+                                                     /*indices=*/idxs,
+                                                     /*typeparams=*/mlir::ValueRange{},
+                                                     /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
           repl = newDg.getResult();
         }
         site.innerDg.getResult().replaceAllUsesWith(repl);
@@ -2749,8 +2746,7 @@ struct FlattenStructsPass
     llvm::DenseSet<mlir::Value> argDeclResults;
     for (unsigned i = 0; i < block.getNumArguments(); ++i)
       for (auto* u : block.getArgument(i).getUsers())
-        if (auto d = mlir::dyn_cast<hlfir::DeclareOp>(u))
-          argDeclResults.insert(d.getResult(0));
+        if (auto d = mlir::dyn_cast<hlfir::DeclareOp>(u)) argDeclResults.insert(d.getResult(0));
 
     // (root declare result, member path incl. AoR member as last hop).
     using RPKey = std::pair<void*, std::vector<std::string>>;
@@ -2761,8 +2757,7 @@ struct FlattenStructsPass
       hlfir::DeclareOp rootDecl;
       unsigned rank = 0;
       // inner member name -> (scalar type, access sites).
-      std::map<std::string, std::pair<mlir::Type, llvm::SmallVector<Site, 8>>>
-          members;
+      std::map<std::string, std::pair<mlir::Type, llvm::SmallVector<Site, 8>>> members;
     };
     std::map<RPKey, PathInfo> byPath;
 
@@ -2770,43 +2765,33 @@ struct FlattenStructsPass
       auto innerComp = innerDg.getComponentAttr();
       if (!innerComp || !innerDg.getIndices().empty()) return;
       auto innerName = innerComp.getValue().str();
-      auto elemDg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
-          innerDg.getMemref().getDefiningOp());
-      if (!elemDg || elemDg.getComponentAttr() || elemDg.getIndices().empty())
-        return;
-      auto ld = mlir::dyn_cast_or_null<fir::LoadOp>(
-          elemDg.getMemref().getDefiningOp());
+      auto elemDg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(innerDg.getMemref().getDefiningOp());
+      if (!elemDg || elemDg.getComponentAttr() || elemDg.getIndices().empty()) return;
+      auto ld = mlir::dyn_cast_or_null<fir::LoadOp>(elemDg.getMemref().getDefiningOp());
       if (!ld) return;
       llvm::SmallVector<std::string, 4> walkedPath;
       mlir::Value v = ld.getMemref();
-      while (auto md = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
-                 v.getDefiningOp())) {
+      while (auto md = mlir::dyn_cast_or_null<hlfir::DesignateOp>(v.getDefiningOp())) {
         if (!md.getComponentAttr()) break;
         walkedPath.push_back(md.getComponentAttr().getValue().str());
         v = md.getMemref();
       }
       if (argDeclResults.contains(v)) return;  // dummy case
-      auto rootDecl =
-          mlir::dyn_cast_or_null<hlfir::DeclareOp>(v.getDefiningOp());
-      if (!rootDecl || !mlir::isa_and_nonnull<fir::AllocaOp>(
-                           rootDecl.getMemref().getDefiningOp()))
-        return;
-      auto refTy =
-          mlir::dyn_cast<fir::ReferenceType>(elemDg.getResult().getType());
+      auto rootDecl = mlir::dyn_cast_or_null<hlfir::DeclareOp>(v.getDefiningOp());
+      if (!rootDecl || !mlir::isa_and_nonnull<fir::AllocaOp>(rootDecl.getMemref().getDefiningOp())) return;
+      auto refTy = mlir::dyn_cast<fir::ReferenceType>(elemDg.getResult().getType());
       if (!refTy) return;
       auto elemRec = mlir::dyn_cast<fir::RecordType>(refTy.getEleTy());
       if (!elemRec) return;
       mlir::Type matchedTy;
       for (auto& p : elemRec.getTypeList()) {
-        if (mlir::isa<fir::SequenceType, fir::BoxType, fir::ReferenceType,
-                      fir::HeapType, fir::PointerType, fir::RecordType,
-                      fir::CharacterType>(p.second))
+        if (mlir::isa<fir::SequenceType, fir::BoxType, fir::ReferenceType, fir::HeapType, fir::PointerType,
+                      fir::RecordType, fir::CharacterType>(p.second))
           return;  // not a pure-scalar element record
         if (p.first == innerName) matchedTy = p.second;
       }
       if (!matchedTy) return;
-      RPKey k{v.getAsOpaquePointer(),
-              std::vector<std::string>(walkedPath.rbegin(), walkedPath.rend())};
+      RPKey k{v.getAsOpaquePointer(), std::vector<std::string>(walkedPath.rbegin(), walkedPath.rend())};
       auto& pi = byPath[k];
       pi.rootDecl = rootDecl;
       pi.rank = elemDg.getIndices().size();
@@ -2818,21 +2803,16 @@ struct FlattenStructsPass
 
     // Match a runtime-call box operand back to its (root, path): peel
     // ``fir.convert``, then walk the member-designate chain to the root.
-    auto boxPathRoot = [&](mlir::Value boxOperand)
-        -> std::pair<void*, std::vector<std::string>> {
+    auto boxPathRoot = [&](mlir::Value boxOperand) -> std::pair<void*, std::vector<std::string>> {
       mlir::Value v = boxOperand;
-      while (auto cv =
-                 mlir::dyn_cast_or_null<fir::ConvertOp>(v.getDefiningOp()))
-        v = cv.getValue();
+      while (auto cv = mlir::dyn_cast_or_null<fir::ConvertOp>(v.getDefiningOp())) v = cv.getValue();
       llvm::SmallVector<std::string, 4> p;
-      while (auto md = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
-                 v.getDefiningOp())) {
+      while (auto md = mlir::dyn_cast_or_null<hlfir::DesignateOp>(v.getDefiningOp())) {
         if (!md.getComponentAttr()) break;
         p.push_back(md.getComponentAttr().getValue().str());
         v = md.getMemref();
       }
-      return {v.getAsOpaquePointer(),
-              std::vector<std::string>(p.rbegin(), p.rend())};
+      return {v.getAsOpaquePointer(), std::vector<std::string>(p.rbegin(), p.rend())};
     };
 
     // Collect the SetBounds / Allocate / Deallocate runtime calls per path.
@@ -2859,12 +2839,9 @@ struct FlattenStructsPass
       if (isSB) {
         // SetBounds(box, dim_i32, lo_i64, hi_i64).
         if (call.getArgs().size() >= 4) {
-          if (auto dimC = mlir::dyn_cast_or_null<mlir::arith::ConstantOp>(
-                  call.getArgs()[1].getDefiningOp())) {
+          if (auto dimC = mlir::dyn_cast_or_null<mlir::arith::ConstantOp>(call.getArgs()[1].getDefiningOp())) {
             auto dimAttr = mlir::dyn_cast<mlir::IntegerAttr>(dimC.getValue());
-            if (dimAttr)
-              rt.bounds[dimAttr.getInt()] = {call.getArgs()[2],
-                                             call.getArgs()[3]};
+            if (dimAttr) rt.bounds[dimAttr.getInt()] = {call.getArgs()[2], call.getArgs()[3]};
           }
         }
         rt.setBounds.push_back(call);
@@ -2899,8 +2876,7 @@ struct FlattenStructsPass
         mlir::Type innerTy = m.second.first;
         auto& siteList = m.second.second;
 
-        llvm::SmallVector<int64_t, 4> dynShape(
-            rank, fir::SequenceType::getUnknownExtent());
+        llvm::SmallVector<int64_t, 4> dynShape(rank, fir::SequenceType::getUnknownExtent());
         auto arrTy = fir::SequenceType::get(dynShape, innerTy);
         auto heapTy = fir::HeapType::get(arrTy);
         auto boxTy = fir::BoxType::get(heapTy);
@@ -2918,9 +2894,7 @@ struct FlattenStructsPass
         // array name unchanged.
         std::string rootUniq = pi.rootDecl.getUniqName().str();
         auto ePos = rootUniq.rfind('E');
-        std::string scopePrefix = ePos == std::string::npos
-                                      ? std::string()
-                                      : rootUniq.substr(0, ePos + 1);
+        std::string scopePrefix = ePos == std::string::npos ? std::string() : rootUniq.substr(0, ePos + 1);
         std::string uniqName = scopePrefix + name;
         auto loc = pi.rootDecl.getLoc();
 
@@ -2929,48 +2903,40 @@ struct FlattenStructsPass
         b.setInsertionPointAfter(pi.rootDecl);
         auto boxAlloca = b.create<fir::AllocaOp>(loc, boxTy);
         auto zero = b.create<fir::ZeroOp>(loc, heapTy);
-        llvm::SmallVector<mlir::Value, 4> zeroDims(
-            rank,
-            b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(0)));
+        llvm::SmallVector<mlir::Value, 4> zeroDims(rank,
+                                                   b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(0)));
         auto shape0 = b.create<fir::ShapeOp>(loc, shapeTy, zeroDims);
         auto embox0 = b.create<fir::EmboxOp>(loc, boxTy, zero, shape0);
         b.create<fir::StoreOp>(loc, embox0, boxAlloca);
         mlir::NamedAttrList attrs;
         attrs.append("uniq_name", mlir::StringAttr::get(ctx, uniqName));
         attrs.append("fortran_attrs",
-                     fir::FortranVariableFlagsAttr::get(
-                         ctx, fir::FortranVariableFlagsEnum::allocatable));
+                     fir::FortranVariableFlagsAttr::get(ctx, fir::FortranVariableFlagsEnum::allocatable));
         attrs.append(declareSegments(b, /*hasShape=*/false));
         auto decl =
-            b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{refBoxTy, refBoxTy},
-                                       mlir::ValueRange{boxAlloca}, attrs);
+            b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{refBoxTy, refBoxTy}, mlir::ValueRange{boxAlloca}, attrs);
 
         // (b) inline allocmem just before the original Allocate call.
         mlir::OpBuilder ab(rt.allocate);
         auto aloc = rt.allocate.getLoc();
-        auto one64 = ab.create<mlir::arith::ConstantOp>(
-            aloc, i64Ty, ab.getI64IntegerAttr(1));
-        auto zeroIdx =
-            ab.create<mlir::arith::ConstantOp>(aloc, idxTy, ab.getIndexAttr(0));
+        auto one64 = ab.create<mlir::arith::ConstantOp>(aloc, i64Ty, ab.getI64IntegerAttr(1));
+        auto zeroIdx = ab.create<mlir::arith::ConstantOp>(aloc, idxTy, ab.getIndexAttr(0));
         llvm::SmallVector<mlir::Value, 4> extents;
         for (unsigned d = 0; d < rank; ++d) {
           auto [lo, hi] = rt.bounds[d];
           auto diff = ab.create<mlir::arith::SubIOp>(aloc, hi, lo);
           auto ext64 = ab.create<mlir::arith::AddIOp>(aloc, diff, one64);
           auto extIdx = ab.create<fir::ConvertOp>(aloc, idxTy, ext64);
-          auto cmp = ab.create<mlir::arith::CmpIOp>(
-              aloc, mlir::arith::CmpIPredicate::sgt, extIdx, zeroIdx);
-          extents.push_back(
-              ab.create<mlir::arith::SelectOp>(aloc, cmp, extIdx, zeroIdx));
+          auto cmp = ab.create<mlir::arith::CmpIOp>(aloc, mlir::arith::CmpIPredicate::sgt, extIdx, zeroIdx);
+          extents.push_back(ab.create<mlir::arith::SelectOp>(aloc, cmp, extIdx, zeroIdx));
         }
         // The bridge recognises an allocatable's storage by an allocmem
         // whose ``uniq_name`` is ``<decl-uniq_name>.alloc`` (see
         // bridge/ast/expressions.cpp); without it the allocmem falls
         // through to buildExpr as an unhandled op.
         std::string allocName = uniqName + ".alloc";
-        auto am = ab.create<fir::AllocMemOp>(
-            aloc, arrTy, /*uniq_name=*/llvm::StringRef(allocName),
-            mlir::ValueRange{}, extents);
+        auto am = ab.create<fir::AllocMemOp>(aloc, arrTy, /*uniq_name=*/llvm::StringRef(allocName), mlir::ValueRange{},
+                                             extents);
         am->setAttr("fir.must_be_heap", ab.getBoolAttr(true));
         auto shapeA = ab.create<fir::ShapeOp>(aloc, shapeTy, extents);
         auto eboxA = ab.create<fir::EmboxOp>(aloc, boxTy, am, shapeA);
@@ -2991,15 +2957,12 @@ struct FlattenStructsPass
         // companion box at the same indices (reads and writes alike).
         for (auto& site : siteList) {
           mlir::OpBuilder sb(site.innerDg);
-          auto loadedBox =
-              sb.create<fir::LoadOp>(site.innerDg.getLoc(), decl.getResult(0));
+          auto loadedBox = sb.create<fir::LoadOp>(site.innerDg.getLoc(), decl.getResult(0));
           auto elemRefTy = fir::ReferenceType::get(innerTy);
-          llvm::SmallVector<mlir::Value, 4> idxs(
-              site.elemDg.getIndices().begin(), site.elemDg.getIndices().end());
-          auto newDg = sb.create<hlfir::DesignateOp>(
-              site.innerDg.getLoc(), elemRefTy, loadedBox.getResult(), idxs,
-              /*typeparams=*/mlir::ValueRange{},
-              /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
+          llvm::SmallVector<mlir::Value, 4> idxs(site.elemDg.getIndices().begin(), site.elemDg.getIndices().end());
+          auto newDg = sb.create<hlfir::DesignateOp>(site.innerDg.getLoc(), elemRefTy, loadedBox.getResult(), idxs,
+                                                     /*typeparams=*/mlir::ValueRange{},
+                                                     /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
           site.innerDg.getResult().replaceAllUsesWith(newDg.getResult());
           deadOps.insert(site.innerDg);
           if (site.elemDg) deadOps.insert(site.elemDg);
@@ -3023,8 +2986,7 @@ struct FlattenStructsPass
         if (!res.use_empty())
           if (auto it = mlir::dyn_cast<mlir::IntegerType>(res.getType())) {
             mlir::OpBuilder pb(op);
-            res.replaceAllUsesWith(pb.create<mlir::arith::ConstantOp>(
-                op->getLoc(), it, mlir::IntegerAttr::get(it, 0)));
+            res.replaceAllUsesWith(pb.create<mlir::arith::ConstantOp>(op->getLoc(), it, mlir::IntegerAttr::get(it, 0)));
           }
     for (auto* op : deadOps)
       if (op->use_empty()) op->erase();
@@ -3037,8 +2999,7 @@ struct FlattenStructsPass
       progress = false;
       llvm::SmallVector<mlir::Operation*, 16> nowDead;
       func.walk([&](mlir::Operation* op) {
-        if (mlir::isa<hlfir::DesignateOp, fir::ConvertOp, fir::LoadOp,
-                      fir::EmboxOp, fir::ShapeOp, fir::ZeroOp>(op) &&
+        if (mlir::isa<hlfir::DesignateOp, fir::ConvertOp, fir::LoadOp, fir::EmboxOp, fir::ShapeOp, fir::ZeroOp>(op) &&
             op->use_empty())
           nowDead.push_back(op);
       });
@@ -3079,16 +3040,14 @@ struct FlattenStructsPass
     llvm::DenseSet<mlir::Value> argDeclResults;
     for (unsigned i = 0; i < block.getNumArguments(); ++i)
       for (auto* u : block.getArgument(i).getUsers())
-        if (auto d = mlir::dyn_cast<hlfir::DeclareOp>(u))
-          argDeclResults.insert(d.getResult(0));
+        if (auto d = mlir::dyn_cast<hlfir::DeclareOp>(u)) argDeclResults.insert(d.getResult(0));
 
     // Decompose a leaf member type into (scalar element type, extents).  Empty
     // extents = scalar leaf.  ``dynamic`` is set when the leaf is a pointer /
     // allocatable (box) whose member designate yields a box that must be
     // load-and-sectioned rather than directly replaced.  Returns null type if
     // the member is not a flat leaf (nested record / character / ...).
-    auto leafEle = [](mlir::Type t, llvm::SmallVectorImpl<int64_t>& dims,
-                      bool& isBox) -> mlir::Type {
+    auto leafEle = [](mlir::Type t, llvm::SmallVectorImpl<int64_t>& dims, bool& isBox) -> mlir::Type {
       isBox = false;
       if (isSimpleScalar(t)) return t;
       if (auto seq = mlir::dyn_cast<fir::SequenceType>(t)) {
@@ -3126,8 +3085,7 @@ struct FlattenStructsPass
     struct PathInfo {
       hlfir::DeclareOp rootDecl;
       unsigned rank = 0;
-      std::map<std::string, std::pair<mlir::Type, llvm::SmallVector<Site, 8>>>
-          members;
+      std::map<std::string, std::pair<mlir::Type, llvm::SmallVector<Site, 8>>> members;
     };
     std::map<RPKey, PathInfo> byPath;
 
@@ -3143,35 +3101,28 @@ struct FlattenStructsPass
         // (a) element designate of an alloc-array-of-records.
         if (ed.getComponentAttr() || ed.getIndices().empty()) return;
         elemDg = ed;
-        ld =
-            mlir::dyn_cast_or_null<fir::LoadOp>(ed.getMemref().getDefiningOp());
-        if (auto refTy =
-                mlir::dyn_cast<fir::ReferenceType>(ed.getResult().getType()))
+        ld = mlir::dyn_cast_or_null<fir::LoadOp>(ed.getMemref().getDefiningOp());
+        if (auto refTy = mlir::dyn_cast<fir::ReferenceType>(ed.getResult().getType()))
           elemRec = mlir::dyn_cast<fir::RecordType>(refTy.getEleTy());
       } else if (auto l = mlir::dyn_cast_or_null<fir::LoadOp>(mdef)) {
         // (b) direct load of a SCALAR allocatable / class struct box
         // (``class(t),allocatable :: p`` -> ``p%n``): rank 0, no element index.
         ld = l;
-        elemRec =
-            mlir::dyn_cast<fir::RecordType>(unwrapAll(l.getResult().getType()));
+        elemRec = mlir::dyn_cast<fir::RecordType>(unwrapAll(l.getResult().getType()));
       } else {
         return;
       }
       if (!ld || !elemRec) return;
       llvm::SmallVector<std::string, 4> walkedPath;
       mlir::Value v = ld.getMemref();
-      while (auto md = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
-                 v.getDefiningOp())) {
+      while (auto md = mlir::dyn_cast_or_null<hlfir::DesignateOp>(v.getDefiningOp())) {
         if (!md.getComponentAttr()) break;
         walkedPath.push_back(md.getComponentAttr().getValue().str());
         v = md.getMemref();
       }
       if (argDeclResults.contains(v)) return;  // dummy case
-      auto rootDecl =
-          mlir::dyn_cast_or_null<hlfir::DeclareOp>(v.getDefiningOp());
-      if (!rootDecl || !mlir::isa_and_nonnull<fir::AllocaOp>(
-                           rootDecl.getMemref().getDefiningOp()))
-        return;
+      auto rootDecl = mlir::dyn_cast_or_null<hlfir::DeclareOp>(v.getDefiningOp());
+      if (!rootDecl || !mlir::isa_and_nonnull<fir::AllocaOp>(rootDecl.getMemref().getDefiningOp())) return;
       // Per-member: only the ACCESSED member must be a flat leaf -- other
       // members (an EXTENDS parent record, an unaccessed allocatable, ...) are
       // irrelevant to THIS member's companion (each access is its own site).
@@ -3184,8 +3135,7 @@ struct FlattenStructsPass
       llvm::SmallVector<int64_t, 4> probeDims;
       bool probeBox;
       if (!matchedTy || !leafEle(matchedTy, probeDims, probeBox)) return;
-      RPKey k{v.getAsOpaquePointer(),
-              std::vector<std::string>(walkedPath.rbegin(), walkedPath.rend())};
+      RPKey k{v.getAsOpaquePointer(), std::vector<std::string>(walkedPath.rbegin(), walkedPath.rend())};
       auto& pi = byPath[k];
       pi.rootDecl = rootDecl;
       pi.rank = elemDg ? elemDg.getIndices().size() : 0;
@@ -3203,9 +3153,7 @@ struct FlattenStructsPass
       auto demangledBase = demangleVarName(pi.rootDecl.getUniqName());
       std::string rootUniq = pi.rootDecl.getUniqName().str();
       auto ePos = rootUniq.rfind('E');
-      std::string scopePrefix = ePos == std::string::npos
-                                    ? std::string()
-                                    : rootUniq.substr(0, ePos + 1);
+      std::string scopePrefix = ePos == std::string::npos ? std::string() : rootUniq.substr(0, ePos + 1);
 
       for (auto& m : pi.members) {
         const std::string& innerName = m.first;
@@ -3231,12 +3179,10 @@ struct FlattenStructsPass
           auto refEle = fir::ReferenceType::get(leafEleTy);
           auto sAlloca = b0.create<fir::AllocaOp>(loc0, leafEleTy);
           mlir::NamedAttrList attrs0;
-          attrs0.append("uniq_name",
-                        mlir::StringAttr::get(ctx, scopePrefix + name0));
+          attrs0.append("uniq_name", mlir::StringAttr::get(ctx, scopePrefix + name0));
           attrs0.append(declareSegments(b0, /*hasShape=*/false));
           auto sDecl =
-              b0.create<hlfir::DeclareOp>(loc0, mlir::TypeRange{refEle, refEle},
-                                          mlir::ValueRange{sAlloca}, attrs0);
+              b0.create<hlfir::DeclareOp>(loc0, mlir::TypeRange{refEle, refEle}, mlir::ValueRange{sAlloca}, attrs0);
           for (auto& site : siteList) {
             site.innerDg.getResult().replaceAllUsesWith(sDecl.getResult(0));
             deadOps.insert(site.innerDg);
@@ -3246,8 +3192,7 @@ struct FlattenStructsPass
         }
 
         // Companion shape: AoR record dims (runtime ?) ++ leaf dims.
-        llvm::SmallVector<int64_t, 6> compShape(
-            rank, fir::SequenceType::getUnknownExtent());
+        llvm::SmallVector<int64_t, 6> compShape(rank, fir::SequenceType::getUnknownExtent());
         for (auto d : leafDims) compShape.push_back(d);
         auto arrTy = fir::SequenceType::get(compShape, leafEleTy);
         auto heapTy = fir::HeapType::get(arrTy);
@@ -3268,33 +3213,26 @@ struct FlattenStructsPass
         b.setInsertionPointAfter(pi.rootDecl);
         auto boxAlloca = b.create<fir::AllocaOp>(loc, boxTy);
         auto zero = b.create<fir::ZeroOp>(loc, heapTy);
-        llvm::SmallVector<mlir::Value, 6> zeroDims(
-            compShape.size(),
-            b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(0)));
+        llvm::SmallVector<mlir::Value, 6> zeroDims(compShape.size(),
+                                                   b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(0)));
         auto shape0 = b.create<fir::ShapeOp>(loc, shapeTy, zeroDims);
         auto embox0 = b.create<fir::EmboxOp>(loc, boxTy, zero, shape0);
         b.create<fir::StoreOp>(loc, embox0, boxAlloca);
         mlir::NamedAttrList attrs;
         attrs.append("uniq_name", mlir::StringAttr::get(ctx, uniqName));
         attrs.append("fortran_attrs",
-                     fir::FortranVariableFlagsAttr::get(
-                         ctx, fir::FortranVariableFlagsEnum::allocatable));
+                     fir::FortranVariableFlagsAttr::get(ctx, fir::FortranVariableFlagsEnum::allocatable));
         attrs.append(declareSegments(b, /*hasShape=*/false));
         auto decl =
-            b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{refBoxTy, refBoxTy},
-                                       mlir::ValueRange{boxAlloca}, attrs);
+            b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{refBoxTy, refBoxTy}, mlir::ValueRange{boxAlloca}, attrs);
 
         for (auto& site : siteList) {
           auto sloc = site.innerDg.getLoc();
           llvm::SmallVector<mlir::Value, 4> elemIdx;
           if (site.elemDg)  // null for a rank-0 scalar-struct member
-            elemIdx.assign(site.elemDg.getIndices().begin(),
-                           site.elemDg.getIndices().end());
-          auto toIndex = [&](mlir::OpBuilder& sb,
-                             mlir::Value vv) -> mlir::Value {
-            return vv.getType() == idxTy
-                       ? vv
-                       : sb.create<fir::ConvertOp>(sloc, idxTy, vv).getResult();
+            elemIdx.assign(site.elemDg.getIndices().begin(), site.elemDg.getIndices().end());
+          auto toIndex = [&](mlir::OpBuilder& sb, mlir::Value vv) -> mlir::Value {
+            return vv.getType() == idxTy ? vv : sb.create<fir::ConvertOp>(sloc, idxTy, vv).getResult();
           };
           if (!leafIsBox) {
             // Scalar / static-array leaf: replace the member designate.
@@ -3309,32 +3247,25 @@ struct FlattenStructsPass
                 trip.push_back(false);
               }
               llvm::SmallVector<mlir::Value, 2> shapeDims;
-              auto c1 = sb.create<mlir::arith::ConstantOp>(sloc, idxTy,
-                                                           sb.getIndexAttr(1));
+              auto c1 = sb.create<mlir::arith::ConstantOp>(sloc, idxTy, sb.getIndexAttr(1));
               for (auto d : memSeq.getShape()) {
-                auto cN = sb.create<mlir::arith::ConstantOp>(
-                    sloc, idxTy, sb.getIndexAttr(d));
+                auto cN = sb.create<mlir::arith::ConstantOp>(sloc, idxTy, sb.getIndexAttr(d));
                 indices.push_back(c1);
                 indices.push_back(cN);
                 indices.push_back(c1);
                 trip.push_back(true);
                 shapeDims.push_back(cN);
               }
-              auto shp =
-                  sb.create<fir::ShapeOp>(sloc, mlir::ValueRange{shapeDims});
-              repl = sb.create<hlfir::DesignateOp>(
-                           sloc, site.innerDg.getResult().getType(),
-                           loadedBox.getResult(), mlir::StringAttr{},
-                           mlir::Value{}, mlir::ValueRange{indices},
-                           sb.getDenseBoolArrayAttr(trip), mlir::ValueRange{},
-                           mlir::BoolAttr{}, shp, mlir::ValueRange{},
-                           fir::FortranVariableFlagsAttr{})
+              auto shp = sb.create<fir::ShapeOp>(sloc, mlir::ValueRange{shapeDims});
+              repl = sb.create<hlfir::DesignateOp>(sloc, site.innerDg.getResult().getType(), loadedBox.getResult(),
+                                                   mlir::StringAttr{}, mlir::Value{}, mlir::ValueRange{indices},
+                                                   sb.getDenseBoolArrayAttr(trip), mlir::ValueRange{}, mlir::BoolAttr{},
+                                                   shp, mlir::ValueRange{}, fir::FortranVariableFlagsAttr{})
                          .getResult();
             } else {
               auto elemRefTy = fir::ReferenceType::get(innerTy);
-              repl = sb.create<hlfir::DesignateOp>(
-                           sloc, elemRefTy, loadedBox.getResult(), elemIdx,
-                           mlir::ValueRange{}, fir::FortranVariableFlagsAttr{})
+              repl = sb.create<hlfir::DesignateOp>(sloc, elemRefTy, loadedBox.getResult(), elemIdx, mlir::ValueRange{},
+                                                   fir::FortranVariableFlagsAttr{})
                          .getResult();
             }
             site.innerDg.getResult().replaceAllUsesWith(repl);
@@ -3359,30 +3290,24 @@ struct FlattenStructsPass
               indices.push_back(toIndex(sb, vv));
               trip.push_back(false);
             }
-            auto c1 = sb.create<mlir::arith::ConstantOp>(sloc, idxTy,
-                                                         sb.getIndexAttr(1));
+            auto c1 = sb.create<mlir::arith::ConstantOp>(sloc, idxTy, sb.getIndexAttr(1));
             llvm::SmallVector<mlir::Value, 2> shapeDims;
             for (unsigned d = 0; d < leafDims.size(); ++d) {
-              auto cd = sb.create<mlir::arith::ConstantOp>(
-                  sloc, idxTy, sb.getIndexAttr(rank + d));
-              auto bd = sb.create<fir::BoxDimsOp>(sloc, idxTy, idxTy, idxTy,
-                                                  loadedComp.getResult(), cd);
+              auto cd = sb.create<mlir::arith::ConstantOp>(sloc, idxTy, sb.getIndexAttr(rank + d));
+              auto bd = sb.create<fir::BoxDimsOp>(sloc, idxTy, idxTy, idxTy, loadedComp.getResult(), cd);
               indices.push_back(c1);
               indices.push_back(bd.getResult(1));  // extent
               indices.push_back(c1);
               trip.push_back(true);
               shapeDims.push_back(bd.getResult(1));
             }
-            auto shp =
-                sb.create<fir::ShapeOp>(sloc, mlir::ValueRange{shapeDims});
+            auto shp = sb.create<fir::ShapeOp>(sloc, mlir::ValueRange{shapeDims});
             // Section box result must match the original loaded pointer box so
             // downstream ``designate``s / aliases keep their type.
             auto sectionDg = sb.create<hlfir::DesignateOp>(
-                sloc, ldBox.getResult().getType(), loadedComp.getResult(),
-                mlir::StringAttr{}, mlir::Value{}, mlir::ValueRange{indices},
-                sb.getDenseBoolArrayAttr(trip), mlir::ValueRange{},
-                mlir::BoolAttr{}, shp, mlir::ValueRange{},
-                fir::FortranVariableFlagsAttr{});
+                sloc, ldBox.getResult().getType(), loadedComp.getResult(), mlir::StringAttr{}, mlir::Value{},
+                mlir::ValueRange{indices}, sb.getDenseBoolArrayAttr(trip), mlir::ValueRange{}, mlir::BoolAttr{}, shp,
+                mlir::ValueRange{}, fir::FortranVariableFlagsAttr{});
             ldBox.getResult().replaceAllUsesWith(sectionDg.getResult());
             deadOps.insert(ldBox);
           }
@@ -3400,9 +3325,7 @@ struct FlattenStructsPass
       progress = false;
       llvm::SmallVector<mlir::Operation*, 16> nowDead;
       func.walk([&](mlir::Operation* op) {
-        if (mlir::isa<hlfir::DesignateOp, fir::ConvertOp, fir::LoadOp>(op) &&
-            op->use_empty())
-          nowDead.push_back(op);
+        if (mlir::isa<hlfir::DesignateOp, fir::ConvertOp, fir::LoadOp>(op) && op->use_empty()) nowDead.push_back(op);
       });
       for (auto* op : nowDead) {
         op->erase();
@@ -3446,8 +3369,7 @@ struct FlattenStructsPass
     llvm::DenseSet<mlir::Value> argDeclResults;
     for (unsigned i = 0; i < block.getNumArguments(); ++i)
       for (auto* u : block.getArgument(i).getUsers())
-        if (auto d = mlir::dyn_cast<hlfir::DeclareOp>(u))
-          argDeclResults.insert(d.getResult(0));
+        if (auto d = mlir::dyn_cast<hlfir::DeclareOp>(u)) argDeclResults.insert(d.getResult(0));
 
     llvm::SmallVector<hlfir::DesignateOp, 4> hits;
     func.walk([&](hlfir::DesignateOp innerDg) {
@@ -3456,19 +3378,16 @@ struct FlattenStructsPass
       if (!innerComp) return;
       if (!innerDg.getIndices().empty()) return;
       // Memref must be an element designate.
-      auto elemDg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
-          innerDg.getMemref().getDefiningOp());
+      auto elemDg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(innerDg.getMemref().getDefiningOp());
       if (!elemDg) return;
       if (elemDg.getComponentAttr()) return;
       if (elemDg.getIndices().empty()) return;
       // Element designate's memref must be a loaded box.
-      auto ld = mlir::dyn_cast_or_null<fir::LoadOp>(
-          elemDg.getMemref().getDefiningOp());
+      auto ld = mlir::dyn_cast_or_null<fir::LoadOp>(elemDg.getMemref().getDefiningOp());
       if (!ld) return;
       // Walk the member-chain to its root declare.
       mlir::Value v = ld.getMemref();
-      while (auto md = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
-                 v.getDefiningOp())) {
+      while (auto md = mlir::dyn_cast_or_null<hlfir::DesignateOp>(v.getDefiningOp())) {
         if (!md.getComponentAttr()) break;
         v = md.getMemref();
       }
@@ -3476,24 +3395,20 @@ struct FlattenStructsPass
       // LOCAL-case candidate: the root is a hlfir.declare whose memref is
       // a ``fir.alloca`` (we deliberately ignore ``fir.allocmem`` here --
       // that lives in a different lane).
-      auto rootDecl =
-          mlir::dyn_cast_or_null<hlfir::DeclareOp>(v.getDefiningOp());
+      auto rootDecl = mlir::dyn_cast_or_null<hlfir::DeclareOp>(v.getDefiningOp());
       if (!rootDecl) return;
-      if (!mlir::isa_and_nonnull<fir::AllocaOp>(
-              rootDecl.getMemref().getDefiningOp()))
-        return;
+      if (!mlir::isa_and_nonnull<fir::AllocaOp>(rootDecl.getMemref().getDefiningOp())) return;
       // Verify the element record type holds only scalar leaves -- mirrors
       // the dummy-case scalarOnly check so we only fire on the genuine
       // ``t_tangent_vectors{v1: f64, v2: f64}``-style pattern.
-      auto refTy =
-          mlir::dyn_cast<fir::ReferenceType>(elemDg.getResult().getType());
+      auto refTy = mlir::dyn_cast<fir::ReferenceType>(elemDg.getResult().getType());
       if (!refTy) return;
       auto elemRec = mlir::dyn_cast<fir::RecordType>(refTy.getEleTy());
       if (!elemRec) return;
       for (auto& p : elemRec.getTypeList()) {
         mlir::Type mt = p.second;
-        if (mlir::isa<fir::SequenceType, fir::BoxType, fir::ReferenceType,
-                      fir::HeapType, fir::PointerType, fir::RecordType>(mt))
+        if (mlir::isa<fir::SequenceType, fir::BoxType, fir::ReferenceType, fir::HeapType, fir::PointerType,
+                      fir::RecordType>(mt))
           return;
       }
       hits.push_back(innerDg);
@@ -3506,27 +3421,26 @@ struct FlattenStructsPass
     // every site -- one location is enough for the user to find the
     // pattern.
     auto first = hits.front();
-    first.emitError()
-        << "hlfir-flatten-structs: LOCAL alloc-array-of-records with "
-        << "SCALAR inner members not yet supported.  "
-        << "Detected on inner-member designate of ``"
-        << first.getComponentAttr().getValue() << "``.  The dummy-case rewrite "
-        << "(``splitMultiDimAoRScalarMembers``) synthesises per-inner-"
-        << "member function-argument companions and relies on the "
-        << "caller-side bindings to marshal strided views; the local "
-        << "case additionally requires rewriting the synthesised "
-        << "``_FortranAAllocatable{SetBounds,Allocate,Deallocate}`` "
-        << "runtime calls to drive per-member companion allocations "
-        << "(different element types -> different strides, no shared "
-        << "heap).  "
-        << "TODO[project_alloc_array_of_records_scalar_inner]: extend "
-        << "splitMultiDimAoRScalarMembers to accept local-declare "
-        << "roots and rewrite the ``_FortranAAllocatable*`` runtime "
-        << "calls per-companion.  "
-        << "Workaround: hoist the local struct + its allocate/deallocate "
-        << "out to a caller (becomes the dummy case, which IS supported), "
-        << "or split the AoR field out of the struct into a top-level "
-        << "allocatable of the inner-member scalar type.";
+    first.emitError() << "hlfir-flatten-structs: LOCAL alloc-array-of-records with "
+                      << "SCALAR inner members not yet supported.  "
+                      << "Detected on inner-member designate of ``" << first.getComponentAttr().getValue()
+                      << "``.  The dummy-case rewrite "
+                      << "(``splitMultiDimAoRScalarMembers``) synthesises per-inner-"
+                      << "member function-argument companions and relies on the "
+                      << "caller-side bindings to marshal strided views; the local "
+                      << "case additionally requires rewriting the synthesised "
+                      << "``_FortranAAllocatable{SetBounds,Allocate,Deallocate}`` "
+                      << "runtime calls to drive per-member companion allocations "
+                      << "(different element types -> different strides, no shared "
+                      << "heap).  "
+                      << "TODO[project_alloc_array_of_records_scalar_inner]: extend "
+                      << "splitMultiDimAoRScalarMembers to accept local-declare "
+                      << "roots and rewrite the ``_FortranAAllocatable*`` runtime "
+                      << "calls per-companion.  "
+                      << "Workaround: hoist the local struct + its allocate/deallocate "
+                      << "out to a caller (becomes the dummy case, which IS supported), "
+                      << "or split the AoR field out of the struct into a top-level "
+                      << "allocatable of the inner-member scalar type.";
     signalPassFailure();
   }
 
@@ -3599,8 +3513,7 @@ struct FlattenStructsPass
     // Map: ``argDecl.getResult(0)`` -> demangled base name + argDecl.  Walked
     // back-edges from element-designate sites must terminate at one of these
     // root declares to be admissible.
-    llvm::DenseMap<mlir::Value, std::pair<std::string, hlfir::DeclareOp>>
-        argDecls;
+    llvm::DenseMap<mlir::Value, std::pair<std::string, hlfir::DeclareOp>> argDecls;
     for (unsigned i = 0; i < block.getNumArguments(); ++i) {
       hlfir::DeclareOp argDecl;
       for (auto* u : block.getArgument(i).getUsers())
@@ -3609,8 +3522,7 @@ struct FlattenStructsPass
           break;
         }
       if (!argDecl) continue;
-      argDecls.try_emplace(argDecl.getResult(0),
-                           demangleVarName(argDecl.getUniqName()), argDecl);
+      argDecls.try_emplace(argDecl.getResult(0), demangleVarName(argDecl.getUniqName()), argDecl);
     }
     if (argDecls.empty()) return false;
 
@@ -3634,7 +3546,7 @@ struct FlattenStructsPass
 
     func.walk([&](hlfir::DesignateOp elemDg) {
       if (bail) return;
-      if (elemDg.getComponentAttr()) return;  // member access, not subscript
+      if (elemDg.getComponentAttr()) return;        // member access, not subscript
       if (elemDg.getIndices().size() != 1) return;  // 1-D AoR only
       // Walk back from the loaded box through zero or more
       // ``hlfir.designate{"<member>"}`` hops to a function-arg declare.
@@ -3656,12 +3568,10 @@ struct FlattenStructsPass
         v = md.getMemref();
       }
       auto it = argDecls.find(v);
-      if (it == argDecls.end())
-        return;  // chain doesn't terminate at a func arg
+      if (it == argDecls.end()) return;  // chain doesn't terminate at a func arg
       // The element type at the AoR access must be a record so the new
       // dummy below has a meaningful elemRec to typestamp.
-      auto refTy =
-          mlir::dyn_cast<fir::ReferenceType>(elemDg.getResult().getType());
+      auto refTy = mlir::dyn_cast<fir::ReferenceType>(elemDg.getResult().getType());
       if (!refTy || !mlir::isa<fir::RecordType>(refTy.getEleTy())) return;
       std::string sym = traceToDecl(elemDg.getIndices()[0]);
       if (sym.empty()) {
@@ -3673,15 +3583,10 @@ struct FlattenStructsPass
       // the reject below can see if it is written inside the kernel.
       if (!symAddr.count(sym)) {
         mlir::Value idxVal = elemDg.getIndices()[0];
-        while (auto cv = mlir::dyn_cast_or_null<fir::ConvertOp>(
-                   idxVal.getDefiningOp()))
-          idxVal = cv.getValue();
-        if (auto ld =
-                mlir::dyn_cast_or_null<fir::LoadOp>(idxVal.getDefiningOp())) {
+        while (auto cv = mlir::dyn_cast_or_null<fir::ConvertOp>(idxVal.getDefiningOp())) idxVal = cv.getValue();
+        if (auto ld = mlir::dyn_cast_or_null<fir::LoadOp>(idxVal.getDefiningOp())) {
           mlir::Value m = ld.getMemref();
-          while (auto dg2 = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
-                     m.getDefiningOp()))
-            m = dg2.getMemref();
+          while (auto dg2 = mlir::dyn_cast_or_null<hlfir::DesignateOp>(m.getDefiningOp())) m = dg2.getMemref();
           symAddr[sym] = m;
         }
       }
@@ -3707,8 +3612,7 @@ struct FlattenStructsPass
     // skip sites that don't meet the >=2 threshold; those fall
     // through to the regular AoR flatten path in
     // ``planAndReplaceStructArgs``.
-    std::map<std::pair<void*, std::vector<std::string>>, std::set<std::string>>
-        symsPerPath;
+    std::map<std::pair<void*, std::vector<std::string>>, std::set<std::string>> symsPerPath;
     for (auto& kv : sites) {
       symsPerPath[{kv.first.root, kv.first.path}].insert(kv.first.sym);
     }
@@ -3722,8 +3626,7 @@ struct FlattenStructsPass
     // miscompile.  Detect a write (``fir.store`` / ``hlfir.assign`` to the
     // symbol's address, directly or through an element/component designate) on
     // any toggling symbol and fail loudly instead.
-    std::function<bool(mlir::Value)> addressIsStored =
-        [&](mlir::Value addr) -> bool {
+    std::function<bool(mlir::Value)> addressIsStored = [&](mlir::Value addr) -> bool {
       if (!addr) return false;
       for (auto* u : addr.getUsers()) {
         if (auto st = mlir::dyn_cast<fir::StoreOp>(u)) {
@@ -3731,8 +3634,7 @@ struct FlattenStructsPass
         } else if (auto as = mlir::dyn_cast<hlfir::AssignOp>(u)) {
           if (as.getLhs() == addr) return true;
         } else if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u)) {
-          if (dg.getMemref() == addr && addressIsStored(dg.getResult()))
-            return true;
+          if (dg.getMemref() == addr && addressIsStored(dg.getResult())) return true;
         }
       }
       return false;
@@ -3772,8 +3674,7 @@ struct FlattenStructsPass
         continue;
       }
       auto& [demangledBase, argDecl] = rootIt->second;
-      auto refTy =
-          mlir::cast<fir::ReferenceType>(kv.second[0].getResult().getType());
+      auto refTy = mlir::cast<fir::ReferenceType>(kv.second[0].getResult().getType());
       auto elemRec = mlir::cast<fir::RecordType>(refTy.getEleTy());
       auto refElem = fir::ReferenceType::get(elemRec);
 
@@ -3787,15 +3688,25 @@ struct FlattenStructsPass
       for (auto& p : kv.first.path) name += "_" + p;
       name += "_" + kv.first.sym;
 
+      // The real Fortran source this per-symbol lane stands for:
+      // ``<base>%<path...>(<sym>)`` (e.g. ``p%prog(nnow)``).  The flatten-plan
+      // recorder reads this off the declare so the binding aliases the actual
+      // storage instead of the synthetic dummy name (which is not a real
+      // Fortran-side variable).
+      std::string sourceExpr = demangledBase;
+      for (size_t i = 0; i < kv.first.path.size(); ++i) {
+        sourceExpr += "%" + kv.first.path[i];
+        if (i + 1 == kv.first.path.size()) sourceExpr += "(" + kv.first.sym + ")";
+      }
+
       mlir::NamedAttrList attrs;
       attrs.append("uniq_name", mlir::StringAttr::get(ctx, name));
       attrs.append(declareSegments(b, /*hasShape=*/false));
-      auto decl = b.create<hlfir::DeclareOp>(argDecl.getLoc(),
-                                             mlir::TypeRange{refElem, refElem},
+      auto decl = b.create<hlfir::DeclareOp>(argDecl.getLoc(), mlir::TypeRange{refElem, refElem},
                                              mlir::ValueRange{newArg}, attrs);
+      decl->setAttr("hlfir_bridge.dbuf_source", mlir::StringAttr::get(ctx, sourceExpr));
 
-      for (auto elemDg : kv.second)
-        elemDg.getResult().replaceAllUsesWith(decl.getResult(0));
+      for (auto elemDg : kv.second) elemDg.getResult().replaceAllUsesWith(decl.getResult(0));
       for (auto elemDg : kv.second) elemDg.erase();
       changed = true;
     }
@@ -3845,8 +3756,7 @@ struct FlattenStructsPass
 
       bool outerIsArray = false;
       llvm::SmallVector<int64_t, 4> outerShape;
-      auto rec = peelToRecord(argDecl.getResult(0).getType(), outerIsArray,
-                              outerShape);
+      auto rec = peelToRecord(argDecl.getResult(0).getType(), outerIsArray, outerShape);
       if (!rec) continue;
       // AoS dummy args: dynamic-extent outer dims (assumed-shape
       // ``arr(n)``) are now supported -- ``replaceStructArg``'s
@@ -3873,8 +3783,7 @@ struct FlattenStructsPass
       // their access path goes through a ``fir.load`` before any
       // designate user.
       if (outerIsArray) {
-        std::function<bool(mlir::Value)> hasComponentReachable =
-            [&](mlir::Value v) -> bool {
+        std::function<bool(mlir::Value)> hasComponentReachable = [&](mlir::Value v) -> bool {
           for (auto* u : v.getUsers()) {
             if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u)) {
               if (dg.getComponentAttr()) return true;
@@ -3908,9 +3817,7 @@ struct FlattenStructsPass
         // dummy's alias re-declares the raw memref result #1 with a fresh box
         // (``declare %arg#1(%shape)``).  Check both so the dynamic case is
         // not missed.
-        if (!hasComponentReachable(argDecl.getResult(0)) &&
-            !hasComponentReachable(argDecl.getResult(1)))
-          continue;
+        if (!hasComponentReachable(argDecl.getResult(0)) && !hasComponentReachable(argDecl.getResult(1))) continue;
       }
 
       Plan p;
@@ -3918,8 +3825,7 @@ struct FlattenStructsPass
       p.rec = rec;
       p.outerIsArray = outerIsArray;
       p.outerShape.assign(outerShape.begin(), outerShape.end());
-      if (!outerIsArray &&
-          isJaggedScalarStruct(rec, p.jaggedEleTy, p.jaggedExtents))
+      if (!outerIsArray && isJaggedScalarStruct(rec, p.jaggedEleTy, p.jaggedExtents))
         p.jagged = true;
       else if (!allMembersFlattenable(rec)) {
         // Nested branch: the struct has at least one record-
@@ -3952,8 +3858,7 @@ struct FlattenStructsPass
         // member would simply not flatten in this path).
         bool collected;
         if (outerIsArray) {
-          collected = collectFlatLeaves(rec, prefix, outerDimsForCollect,
-                                        leaves, /*depth=*/0);
+          collected = collectFlatLeaves(rec, prefix, outerDimsForCollect, leaves, /*depth=*/0);
         } else {
           collected = collectFlatLeaves(rec, prefix, leaves, /*depth=*/0,
                                         /*partial=*/true);
@@ -3977,8 +3882,7 @@ struct FlattenStructsPass
       // unpacks back on intent(out)/(inout).
       if (outerIsArray) {
         for (auto& pair : rec.getTypeList())
-          if (isAllocatableArrayMember(pair.second))
-            p.aosAllocMembers.push_back(pair.first);
+          if (isAllocatableArrayMember(pair.second)) p.aosAllocMembers.push_back(pair.first);
       }
       plans.push_back({i, p});
     }
@@ -3992,8 +3896,7 @@ struct FlattenStructsPass
       auto idx = entry.first;
       auto& p = entry.second;
       if (p.jagged) {
-        replaceStructArgJagged(func, idx, p.argDecl, p.rec, p.jaggedEleTy,
-                               p.jaggedExtents);
+        replaceStructArgJagged(func, idx, p.argDecl, p.rec, p.jaggedEleTy, p.jaggedExtents);
         // Jagged path is not represented in the plan yet.
         continue;
       }
@@ -4002,8 +3905,7 @@ struct FlattenStructsPass
         // dummy with one block arg per leaf and record the
         // matching FlattenEntry so the bindings emitter can
         // alias every leaf via its full ``%``-path.
-        std::string intentStrNested =
-            extractIntent(p.argDecl.getFortranAttrs());
+        std::string intentStrNested = extractIntent(p.argDecl.getFortranAttrs());
         recordNestedStructArgEntry(p.argDecl, p.leaves, intentStrNested);
         replaceStructArgNested(func, idx, p.argDecl, p.leaves);
         continue;
@@ -4037,12 +3939,9 @@ struct FlattenStructsPass
       // allocatable member.  Then emit the regular entry
       // covering the non-allocatable members (skipped via the
       // exclude set).
-      for (auto& m : p.aosAllocMembers)
-        recordAosAllocEntry(p.argDecl, p.rec, m, intentStr, p.outerShape);
-      recordStructArgEntry(p.argDecl, p.rec, intentStr, p.outerIsArray,
-                           p.outerShape, aosAllocSet);
-      replaceStructArg(func, idx, p.argDecl, p.rec, p.outerIsArray,
-                       p.outerShape, aosAllocSet);
+      for (auto& m : p.aosAllocMembers) recordAosAllocEntry(p.argDecl, p.rec, m, intentStr, p.outerShape);
+      recordStructArgEntry(p.argDecl, p.rec, intentStr, p.outerIsArray, p.outerShape, aosAllocSet);
+      replaceStructArg(func, idx, p.argDecl, p.rec, p.outerIsArray, p.outerShape, aosAllocSet);
     }
     return true;
   }
@@ -4051,10 +3950,8 @@ struct FlattenStructsPass
   // Struct dummy arguments
   // -------------------------------------------------------------------
 
-  void replaceStructArg(mlir::func::FuncOp func, unsigned argIdx,
-                        hlfir::DeclareOp argDecl, fir::RecordType rec,
-                        bool outerIsArray = false,
-                        llvm::ArrayRef<int64_t> outerShape = {},
+  void replaceStructArg(mlir::func::FuncOp func, unsigned argIdx, hlfir::DeclareOp argDecl, fir::RecordType rec,
+                        bool outerIsArray = false, llvm::ArrayRef<int64_t> outerShape = {},
                         const llvm::StringSet<>& aosAllocMembers = {}) {
     auto& block = func.front();
     auto loc = argDecl.getLoc();
@@ -4093,8 +3990,7 @@ struct FlattenStructsPass
           continue;
 
         // Pointee shape: outer extents (static) x {?} (cap, runtime).
-        llvm::SmallVector<int64_t, 4> exts(outerShape.begin(),
-                                           outerShape.end());
+        llvm::SmallVector<int64_t, 4> exts(outerShape.begin(), outerShape.end());
         exts.push_back(fir::SequenceType::getUnknownExtent());
         auto pointee = fir::SequenceType::get(exts, eleTy);
         auto refTy = fir::ReferenceType::get(pointee);
@@ -4138,20 +4034,16 @@ struct FlattenStructsPass
         capAttrs.append("uniq_name", mlir::StringAttr::get(ctx, capName));
         capAttrs.append(declareSegments(b, /*hasShape=*/false));
         auto capDecl =
-            b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{idxRefTy, idxRefTy},
-                                       mlir::ValueRange{capArg}, capAttrs);
+            b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{idxRefTy, idxRefTy}, mlir::ValueRange{capArg}, capAttrs);
 
         // Load the cap value to use it in the data declare's
         // shape op.
-        auto capVal =
-            b.create<fir::LoadOp>(loc, capDecl.getResult(0)).getResult();
+        auto capVal = b.create<fir::LoadOp>(loc, capDecl.getResult(0)).getResult();
 
         // Build the shape op: outer (static) + cap (runtime).
         llvm::SmallVector<mlir::Value, 4> dims;
         for (auto e : outerShape)
-          dims.push_back(
-              b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(e))
-                  .getResult());
+          dims.push_back(b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(e)).getResult());
         dims.push_back(capVal);
         auto shapeTy = fir::ShapeType::get(ctx, dims.size());
         auto shape = b.create<fir::ShapeOp>(loc, shapeTy, dims).getResult();
@@ -4161,8 +4053,7 @@ struct FlattenStructsPass
         attrs.append(declareSegments(b, /*hasShape=*/true));
 
         auto newDecl =
-            b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{boxTy, refTy},
-                                       mlir::ValueRange{dataArg, shape}, attrs);
+            b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{boxTy, refTy}, mlir::ValueRange{dataArg, shape}, attrs);
 
         aosAllocFlatBase[memName] = newDecl.getResult(0);
         continue;
@@ -4182,8 +4073,7 @@ struct FlattenStructsPass
       // the caller-supplied extent symbol -- the bindings layer
       // populates that symbol at the call boundary.
       auto extentsForShape = staticArrayExtents(pointee);
-      bool hasDynExtent =
-          mlir::isa<fir::SequenceType>(pointee) && extentsForShape.empty();
+      bool hasDynExtent = mlir::isa<fir::SequenceType>(pointee) && extentsForShape.empty();
 
       bool memberIsArray = mlir::isa<fir::SequenceType>(memTy);
       bool concat = outerIsArray && memberIsArray;
@@ -4220,9 +4110,7 @@ struct FlattenStructsPass
             auto ld = b.create<fir::LoadOp>(loc, al.getResult());
             dims.push_back(ld.getResult());
           } else {
-            dims.push_back(
-                b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(d))
-                    .getResult());
+            dims.push_back(b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(d)).getResult());
           }
         }
         auto shapeTy = fir::ShapeType::get(ctx, dims.size());
@@ -4234,8 +4122,7 @@ struct FlattenStructsPass
       if (shape) operands.push_back(shape);
 
       mlir::NamedAttrList attrs;
-      attrs.append("uniq_name",
-                   mlir::StringAttr::get(ctx, baseName + "_" + memName));
+      attrs.append("uniq_name", mlir::StringAttr::get(ctx, baseName + "_" + memName));
       // Pointer / allocatable struct member: the declare carries
       // the shape in its runtime box descriptor, not as a static
       // shape op.  Without the matching Fortran attr,
@@ -4248,11 +4135,9 @@ struct FlattenStructsPass
       if (auto box = mlir::dyn_cast<fir::BoxType>(memTy)) {
         if (mlir::isa<fir::PointerType, fir::HeapType>(box.getEleTy())) {
           bool isPointer = mlir::isa<fir::PointerType>(box.getEleTy());
-          attrs.append(
-              "fortran_attrs",
-              fir::FortranVariableFlagsAttr::get(
-                  ctx, isPointer ? fir::FortranVariableFlagsEnum::pointer
-                                 : fir::FortranVariableFlagsEnum::allocatable));
+          attrs.append("fortran_attrs",
+                       fir::FortranVariableFlagsAttr::get(ctx, isPointer ? fir::FortranVariableFlagsEnum::pointer
+                                                                         : fir::FortranVariableFlagsEnum::allocatable));
         }
       }
       attrs.append(declareSegments(b, /*hasShape=*/shape != nullptr));
@@ -4267,8 +4152,7 @@ struct FlattenStructsPass
         firstResultTy = fir::BoxType::get(pointee);
       }
       auto newDecl =
-          b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{firstResultTy, refTy},
-                                     mlir::ValueRange(operands), attrs);
+          b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{firstResultTy, refTy}, mlir::ValueRange(operands), attrs);
 
       memberBase[memName] = newDecl.getResult(0);
       ++memberCount;
@@ -4311,8 +4195,7 @@ struct FlattenStructsPass
       // ``rewriteChainsRootedAt`` path does. Seed from BOTH declare results
       // (see the gate above): static aliases re-declare result #0,
       // dynamic-extent aliases re-declare the raw memref result #1.
-      llvm::SmallVector<mlir::Value, 4> roots{argDecl.getResult(0),
-                                              argDecl.getResult(1)};
+      llvm::SmallVector<mlir::Value, 4> roots{argDecl.getResult(0), argDecl.getResult(1)};
       llvm::SmallVector<hlfir::DeclareOp, 4> aliasDecls;
       llvm::SmallPtrSet<mlir::Operation*, 8> seen;
       for (unsigned ri = 0; ri < roots.size(); ++ri) {
@@ -4338,17 +4221,14 @@ struct FlattenStructsPass
           }
           // Pure indexed designate (A(i) on AoS dummy)  --  collect children.
           for (auto* cu : dg.getResult().getUsers())
-            if (auto cdg = mlir::dyn_cast<hlfir::DesignateOp>(cu))
-              designates.push_back(cdg);
+            if (auto cdg = mlir::dyn_cast<hlfir::DesignateOp>(cu)) designates.push_back(cdg);
         }
       }
-      for (auto dg : designates)
-        rewriteDesignate(dg, memberBase, concatMembers);
+      for (auto dg : designates) rewriteDesignate(dg, memberBase, concatMembers);
       // Drop now-dead inlined alias declares so ``argDecl`` becomes erasable
       // (the alias is the only remaining user keeping the block arg live).
       for (auto adcl : aliasDecls)
-        if (adcl.getResult(0).use_empty() && adcl.getResult(1).use_empty())
-          adcl.erase();
+        if (adcl.getResult(0).use_empty() && adcl.getResult(1).use_empty()) adcl.erase();
     } else {
       rewriteChainsRootedAt(argDecl, memberBase);
     }
@@ -4356,8 +4236,7 @@ struct FlattenStructsPass
     // Erase the old declare; if other ops still reference its results
     // something went sideways and we leave the block arg in place rather
     // than breaking the IR.
-    if (!argDecl.getResult(0).use_empty() || !argDecl.getResult(1).use_empty())
-      return;
+    if (!argDecl.getResult(0).use_empty() || !argDecl.getResult(1).use_empty()) return;
     argDecl.erase();
     if (!block.getArgument(argIdx).use_empty()) return;
     block.eraseArgument(argIdx);
@@ -4381,8 +4260,7 @@ struct FlattenStructsPass
   /// any inlined-callee alias of it) and rewrites it via the shared
   /// ``rewriteChainsRootedAt`` helper.  Erases the old declare and
   /// the original block arg if all uses cleared.
-  void replaceStructArgNested(mlir::func::FuncOp func, unsigned argIdx,
-                              hlfir::DeclareOp argDecl,
+  void replaceStructArgNested(mlir::func::FuncOp func, unsigned argIdx, hlfir::DeclareOp argDecl,
                               llvm::ArrayRef<FlatLeaf> leaves) {
     auto& block = func.front();
     auto loc = argDecl.getLoc();
@@ -4435,21 +4313,17 @@ struct FlattenStructsPass
         // ``fir.heap`` (allocatable) or ``fir.ptr`` (pointer).
         bool isPointer = mlir::isa<fir::PointerType>(box.getEleTy());
         fortranAttrs = fir::FortranVariableFlagsAttr::get(
-            ctx, isPointer ? fir::FortranVariableFlagsEnum::pointer
-                           : fir::FortranVariableFlagsEnum::allocatable);
+            ctx, isPointer ? fir::FortranVariableFlagsEnum::pointer : fir::FortranVariableFlagsEnum::allocatable);
       }
 
       llvm::SmallVector<mlir::Value, 2> operands{newArg};
       if (leafShape) operands.push_back(leafShape);
       mlir::NamedAttrList attrs;
-      attrs.append("uniq_name",
-                   mlir::StringAttr::get(ctx, demangledBase + "_" + suffix));
+      attrs.append("uniq_name", mlir::StringAttr::get(ctx, demangledBase + "_" + suffix));
       if (fortranAttrs) attrs.append("fortran_attrs", fortranAttrs);
       attrs.append(declareSegments(b, /*hasShape=*/leafShape != nullptr));
 
-      auto newDecl =
-          b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{refTy, refTy},
-                                     mlir::ValueRange(operands), attrs);
+      auto newDecl = b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{refTy, refTy}, mlir::ValueRange(operands), attrs);
 
       leafBase[joinedKey] = newDecl.getResult(0);
     }
@@ -4463,8 +4337,7 @@ struct FlattenStructsPass
     // Erase the original struct declare + block arg if all uses
     // cleared.  If something still references the old declare,
     // leave both in place so the IR stays valid.
-    if (!argDecl.getResult(0).use_empty() || !argDecl.getResult(1).use_empty())
-      return;
+    if (!argDecl.getResult(0).use_empty() || !argDecl.getResult(1).use_empty()) return;
     argDecl.erase();
     if (!block.getArgument(argIdx).use_empty()) return;
     block.eraseArgument(argIdx);
@@ -4474,10 +4347,8 @@ struct FlattenStructsPass
   /// type with differing extents) into a single 2-D companion of shape
   /// ``[numMembers x max(extents)]``.  Access to member `m` at index `j`
   /// becomes ``combined(rowIdx(m), j)``  --  an ELLPACK-style padded view.
-  void replaceStructArgJagged(mlir::func::FuncOp func, unsigned argIdx,
-                              hlfir::DeclareOp argDecl, fir::RecordType rec,
-                              mlir::Type eleTy,
-                              llvm::ArrayRef<int64_t> extents) {
+  void replaceStructArgJagged(mlir::func::FuncOp func, unsigned argIdx, hlfir::DeclareOp argDecl, fir::RecordType rec,
+                              mlir::Type eleTy, llvm::ArrayRef<int64_t> extents) {
     auto& block = func.front();
     auto loc = argDecl.getLoc();
     auto* ctx = func.getContext();
@@ -4504,9 +4375,8 @@ struct FlattenStructsPass
     mlir::NamedAttrList attrs;
     attrs.append("uniq_name", mlir::StringAttr::get(ctx, baseName + "_packed"));
     attrs.append(declareSegments(b, /*hasShape=*/true));
-    auto combinedDecl = b.create<hlfir::DeclareOp>(
-        loc, mlir::TypeRange{combinedRef, combinedRef},
-        mlir::ValueRange{combinedArg, combinedShape}, attrs);
+    auto combinedDecl = b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{combinedRef, combinedRef},
+                                                   mlir::ValueRange{combinedArg, combinedShape}, attrs);
 
     // Per-member aliased view into a single row of the combined array.
     // fir.coordinate_of rank-reduces the 2-D combined ref to a 1-D row
@@ -4521,18 +4391,13 @@ struct FlattenStructsPass
       auto memSeq = mlir::cast<fir::SequenceType>(pair.second);
       int64_t ext = memSeq.getShape()[0];
 
-      auto rowConst =
-          b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(rowIdx));
+      auto rowConst = b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(rowIdx));
 
-      auto rowRefTy =
-          fir::ReferenceType::get(fir::SequenceType::get({maxExt}, eleTy));
-      auto rowPtr = b.create<fir::CoordinateOp>(
-          loc, rowRefTy, combinedDecl.getResult(0), mlir::ValueRange{rowConst});
+      auto rowRefTy = fir::ReferenceType::get(fir::SequenceType::get({maxExt}, eleTy));
+      auto rowPtr = b.create<fir::CoordinateOp>(loc, rowRefTy, combinedDecl.getResult(0), mlir::ValueRange{rowConst});
 
-      auto memberRefTy =
-          fir::ReferenceType::get(fir::SequenceType::get({ext}, eleTy));
-      auto casted =
-          b.create<fir::ConvertOp>(loc, memberRefTy, rowPtr.getResult());
+      auto memberRefTy = fir::ReferenceType::get(fir::SequenceType::get({ext}, eleTy));
+      auto casted = b.create<fir::ConvertOp>(loc, memberRefTy, rowPtr.getResult());
 
       // Synthesise a per-member ``hlfir.declare`` so ``traceToDecl``
       // can stop at the member view rather than walking through
@@ -4544,12 +4409,10 @@ struct FlattenStructsPass
       // so the verifier accepts the static-extent member type.
       auto memberShape = emitStaticShape(b, loc, llvm::ArrayRef<int64_t>{ext});
       mlir::NamedAttrList memberAttrs;
-      memberAttrs.append("uniq_name",
-                         mlir::StringAttr::get(ctx, baseName + "_" + memName));
+      memberAttrs.append("uniq_name", mlir::StringAttr::get(ctx, baseName + "_" + memName));
       memberAttrs.append(declareSegments(b, /*hasShape=*/true));
-      auto memberDecl = b.create<hlfir::DeclareOp>(
-          loc, mlir::TypeRange{memberRefTy, memberRefTy},
-          mlir::ValueRange{casted.getResult(), memberShape}, memberAttrs);
+      auto memberDecl = b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{memberRefTy, memberRefTy},
+                                                   mlir::ValueRange{casted.getResult(), memberShape}, memberAttrs);
 
       memberBase[memName] = memberDecl.getResult(0);
       ++rowIdx;
@@ -4558,12 +4421,10 @@ struct FlattenStructsPass
     // Rewrite each component-selecting designate to the member's view.
     llvm::SmallVector<hlfir::DesignateOp, 8> designates;
     for (auto* u : argDecl.getResult(0).getUsers())
-      if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u))
-        designates.push_back(dg);
+      if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u)) designates.push_back(dg);
     for (auto dg : designates) rewriteDesignate(dg, memberBase);
 
-    if (!argDecl.getResult(0).use_empty() || !argDecl.getResult(1).use_empty())
-      return;
+    if (!argDecl.getResult(0).use_empty() || !argDecl.getResult(1).use_empty()) return;
     argDecl.erase();
     if (!block.getArgument(argIdx).use_empty()) return;
     block.eraseArgument(argIdx);
@@ -4604,8 +4465,7 @@ struct FlattenStructsPass
   //   deallocate + re-allocate cycle, for example) all get the
   //   same flat name.  ``allocAliasName`` in extract_vars.cpp then
   //   mints ``<flat>_alloc1``, ``<flat>_alloc2``, ... per site.
-  void renameMemberAllocmems(hlfir::DeclareOp decl, llvm::StringRef memName,
-                             llvm::StringRef flatName) {
+  void renameMemberAllocmems(hlfir::DeclareOp decl, llvm::StringRef memName, llvm::StringRef flatName) {
     auto* ctx = decl.getContext();
     std::string newAlloc = (flatName + ".alloc").str();
 
@@ -4625,8 +4485,7 @@ struct FlattenStructsPass
       for (int i = 0; i < kFlattenMaxDepth && v; ++i) {
         auto* d = v.getDefiningOp();
         if (!d) return false;
-        if (auto outer = mlir::dyn_cast<hlfir::DeclareOp>(d))
-          return outer == decl;
+        if (auto outer = mlir::dyn_cast<hlfir::DeclareOp>(d)) return outer == decl;
         if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
           v = cv.getValue();
           continue;
@@ -4757,8 +4616,7 @@ struct FlattenStructsPass
   ///   downstream handling for ``box_addr`` returns a
   ///   ``fir.ptr<...>`` that doesn't match the static 2D
   ///   companion.  Future TODO if real code hits this.
-  void collapseAosAllocReads(hlfir::DeclareOp decl, llvm::StringRef memName,
-                             mlir::Value flatBase) {
+  void collapseAosAllocReads(hlfir::DeclareOp decl, llvm::StringRef memName, mlir::Value flatBase) {
     // Phase 5c-B: also recognise inlined-callee aliased declares.
     // When ``hlfir-inline-all`` splices a module-contained
     // ``call kernel(A)`` body into the caller, the kernel's
@@ -4795,8 +4653,7 @@ struct FlattenStructsPass
     // the runtime ``cap_<base>_<member>`` symbol (true-boundary case)
     // or the static extent (uniform-const case).
     auto companionExtent = [](mlir::Value base, unsigned dim) -> mlir::Value {
-      auto declOp =
-          mlir::dyn_cast_or_null<hlfir::DeclareOp>(base.getDefiningOp());
+      auto declOp = mlir::dyn_cast_or_null<hlfir::DeclareOp>(base.getDefiningOp());
       if (!declOp || !declOp.getShape()) return {};
       auto* shapeDef = declOp.getShape().getDefiningOp();
       if (auto sh = mlir::dyn_cast_or_null<fir::ShapeOp>(shapeDef)) {
@@ -4819,8 +4676,7 @@ struct FlattenStructsPass
       llvm::SmallVector<mlir::Operation*, 16> eraseRest;
       func.walk([&](fir::LoadOp load) {
         // Is this a load of a per-instance member designate?
-        auto memDg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
-            load.getMemref().getDefiningOp());
+        auto memDg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(load.getMemref().getDefiningOp());
         if (!memDg) return;
         mlir::StringAttr compAttr;
         for (auto nm : {"component_name", "component"})
@@ -4829,8 +4685,7 @@ struct FlattenStructsPass
             break;
           }
         if (!compAttr || compAttr.getValue() != memName) return;
-        auto parent = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
-            memDg.getMemref().getDefiningOp());
+        auto parent = mlir::dyn_cast_or_null<hlfir::DesignateOp>(memDg.getMemref().getDefiningOp());
         if (!parent) return;
         if (!isDeclOrAlias(parent.getMemref())) return;
         // parent must be element-form (no triplets).
@@ -4840,8 +4695,7 @@ struct FlattenStructsPass
 
         // Collect the outer indices (typically a single
         // scalar i for a 1-D AoS).
-        llvm::SmallVector<mlir::Value, 4> outerIdx(parent.getIndices().begin(),
-                                                   parent.getIndices().end());
+        llvm::SmallVector<mlir::Value, 4> outerIdx(parent.getIndices().begin(), parent.getIndices().end());
 
         // For each user of the loaded box: if it's an
         // element-form designate, rewrite to a direct
@@ -4857,21 +4711,15 @@ struct FlattenStructsPass
           if (auto bd = mlir::dyn_cast<fir::BoxDimsOp>(u)) {
             auto memberDimC = traceConstInt(bd.getDim());
             if (!memberDimC) continue;
-            mlir::Value ext = companionExtent(
-                flatBase, outerIdx.size() + static_cast<unsigned>(*memberDimC));
+            mlir::Value ext = companionExtent(flatBase, outerIdx.size() + static_cast<unsigned>(*memberDimC));
             if (!ext) continue;
             mlir::OpBuilder b(bd);
             bd.getResult(1).replaceAllUsesWith(ext);
             auto one = [&]() {
-              return b
-                  .create<mlir::arith::ConstantOp>(
-                      bd.getLoc(), b.getIndexType(), b.getIndexAttr(1))
-                  .getResult();
+              return b.create<mlir::arith::ConstantOp>(bd.getLoc(), b.getIndexType(), b.getIndexAttr(1)).getResult();
             };
-            if (!bd.getResult(0).use_empty())
-              bd.getResult(0).replaceAllUsesWith(one());
-            if (!bd.getResult(2).use_empty())
-              bd.getResult(2).replaceAllUsesWith(one());
+            if (!bd.getResult(0).use_empty()) bd.getResult(0).replaceAllUsesWith(one());
+            if (!bd.getResult(2).use_empty()) bd.getResult(2).replaceAllUsesWith(one());
             eraseInner.push_back(bd);
             continue;
           }
@@ -4891,8 +4739,7 @@ struct FlattenStructsPass
           auto idxTy = b.getIndexType();
           auto toIndex = [&](mlir::Value v) {
             if (v.getType() == idxTy) return v;
-            return b.create<fir::ConvertOp>(inner.getLoc(), idxTy, v)
-                .getResult();
+            return b.create<fir::ConvertOp>(inner.getLoc(), idxTy, v).getResult();
           };
           llvm::SmallVector<mlir::Value, 4> mergedIdx;
           for (auto v : outerIdx) mergedIdx.push_back(toIndex(v));
@@ -4900,9 +4747,8 @@ struct FlattenStructsPass
 
           // Build the new designate.  Result type stays
           // the inner designate's result type (element ref).
-          auto newDg = b.create<hlfir::DesignateOp>(
-              inner.getLoc(), inner.getResult().getType(), flatBase,
-              mlir::ValueRange{mergedIdx});
+          auto newDg = b.create<hlfir::DesignateOp>(inner.getLoc(), inner.getResult().getType(), flatBase,
+                                                    mlir::ValueRange{mergedIdx});
           inner.getResult().replaceAllUsesWith(newDg.getResult());
           eraseInner.push_back(inner);
         }
@@ -4941,9 +4787,7 @@ struct FlattenStructsPass
   /// Returns ``nullopt`` if the matching allocate isn't found or
   /// its size isn't constant  --  in which case the caller falls back
   /// to the global cap ``M``.
-  static std::optional<int64_t> aosAllocSizeAt(hlfir::DeclareOp decl,
-                                               llvm::StringRef memName,
-                                               int64_t targetIdx) {
+  static std::optional<int64_t> aosAllocSizeAt(hlfir::DeclareOp decl, llvm::StringRef memName, int64_t targetIdx) {
     std::optional<int64_t> found;
     if (auto func = decl->getParentOfType<mlir::func::FuncOp>()) {
       func.walk([&](hlfir::DesignateOp memDg) -> mlir::WalkResult {
@@ -4953,13 +4797,10 @@ struct FlattenStructsPass
             compAttr = a;
             break;
           }
-        if (!compAttr || compAttr.getValue() != memName)
-          return mlir::WalkResult::advance();
-        auto parent = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
-            memDg.getMemref().getDefiningOp());
+        if (!compAttr || compAttr.getValue() != memName) return mlir::WalkResult::advance();
+        auto parent = mlir::dyn_cast_or_null<hlfir::DesignateOp>(memDg.getMemref().getDefiningOp());
         if (!parent) return mlir::WalkResult::advance();
-        if (parent.getMemref() != decl.getResult(0) &&
-            parent.getMemref() != decl.getResult(1))
+        if (parent.getMemref() != decl.getResult(0) && parent.getMemref() != decl.getResult(1))
           return mlir::WalkResult::advance();
         for (bool t : parent.getIsTriplet())
           if (t) return mlir::WalkResult::advance();
@@ -5000,14 +4841,11 @@ struct FlattenStructsPass
     return found;
   }
 
-  void rewriteAosWholeMemberAssign(hlfir::DeclareOp decl,
-                                   llvm::StringRef memName,
-                                   mlir::Value flatBase, int64_t M) {
+  void rewriteAosWholeMemberAssign(hlfir::DeclareOp decl, llvm::StringRef memName, mlir::Value flatBase, int64_t M) {
     if (auto func = decl->getParentOfType<mlir::func::FuncOp>()) {
       llvm::SmallVector<hlfir::AssignOp, 4> dead;
       func.walk([&](hlfir::AssignOp op) {
-        auto memDg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
-            op.getLhs().getDefiningOp());
+        auto memDg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(op.getLhs().getDefiningOp());
         if (!memDg) return;
         mlir::StringAttr compAttr;
         for (auto nm : {"component_name", "component"})
@@ -5016,12 +4854,9 @@ struct FlattenStructsPass
             break;
           }
         if (!compAttr || compAttr.getValue() != memName) return;
-        auto parent = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
-            memDg.getMemref().getDefiningOp());
+        auto parent = mlir::dyn_cast_or_null<hlfir::DesignateOp>(memDg.getMemref().getDefiningOp());
         if (!parent) return;
-        if (parent.getMemref() != decl.getResult(0) &&
-            parent.getMemref() != decl.getResult(1))
-          return;
+        if (parent.getMemref() != decl.getResult(0) && parent.getMemref() != decl.getResult(1)) return;
         // parent must be element-form (no triplets).
         for (bool t : parent.getIsTriplet())
           if (t) return;
@@ -5039,8 +4874,7 @@ struct FlattenStructsPass
         int64_t sectionBound = M;
         if (parent.getIndices().size() == 1) {
           if (auto pi = traceConstInt(parent.getIndices().front())) {
-            if (auto specific = aosAllocSizeAt(decl, memName, *pi))
-              sectionBound = *specific;
+            if (auto specific = aosAllocSizeAt(decl, memName, *pi)) sectionBound = *specific;
           }
         }
 
@@ -5052,10 +4886,8 @@ struct FlattenStructsPass
           if (v.getType() == idxTy) return v;
           return b.create<fir::ConvertOp>(loc, idxTy, v).getResult();
         };
-        auto c1 =
-            b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(1));
-        auto cBound = b.create<mlir::arith::ConstantOp>(
-            loc, idxTy, b.getIndexAttr(sectionBound));
+        auto c1 = b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(1));
+        auto cBound = b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(sectionBound));
 
         llvm::SmallVector<mlir::Value, 6> indices;
         llvm::SmallVector<bool, 4> tripletFlags;
@@ -5070,30 +4902,26 @@ struct FlattenStructsPass
 
         // Result type: box<array<sectionBound x T>>  --  a row
         // view shaped to match the per-instance live region.
-        auto flatTy =
-            mlir::cast<fir::ReferenceType>(flatBase.getType()).getEleTy();
+        auto flatTy = mlir::cast<fir::ReferenceType>(flatBase.getType()).getEleTy();
         auto flatSeq = mlir::cast<fir::SequenceType>(flatTy);
         auto eleTy = flatSeq.getEleTy();
         auto rowSeqTy = fir::SequenceType::get({sectionBound}, eleTy);
         auto boxTy = fir::BoxType::get(rowSeqTy);
 
-        auto newShape =
-            b.create<fir::ShapeOp>(loc, mlir::ValueRange{cBound.getResult()})
-                .getResult();
+        auto newShape = b.create<fir::ShapeOp>(loc, mlir::ValueRange{cBound.getResult()}).getResult();
 
-        auto sectionDg = b.create<hlfir::DesignateOp>(
-            loc,
-            /*resultType0=*/boxTy,
-            /*memref=*/flatBase,
-            /*component=*/mlir::StringAttr{},
-            /*component_shape=*/mlir::Value{},
-            /*indices=*/mlir::ValueRange{indices},
-            /*is_triplet=*/b.getDenseBoolArrayAttr(tripletFlags),
-            /*substring=*/mlir::ValueRange{},
-            /*complex_part=*/mlir::BoolAttr{},
-            /*shape=*/newShape,
-            /*typeparams=*/mlir::ValueRange{},
-            /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
+        auto sectionDg = b.create<hlfir::DesignateOp>(loc,
+                                                      /*resultType0=*/boxTy,
+                                                      /*memref=*/flatBase,
+                                                      /*component=*/mlir::StringAttr{},
+                                                      /*component_shape=*/mlir::Value{},
+                                                      /*indices=*/mlir::ValueRange{indices},
+                                                      /*is_triplet=*/b.getDenseBoolArrayAttr(tripletFlags),
+                                                      /*substring=*/mlir::ValueRange{},
+                                                      /*complex_part=*/mlir::BoolAttr{},
+                                                      /*shape=*/newShape,
+                                                      /*typeparams=*/mlir::ValueRange{},
+                                                      /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
 
         // Build the new assign with the section LHS.  The RHS
         // stays as-is (scalar or src array of matching shape).
@@ -5113,8 +4941,7 @@ struct FlattenStructsPass
     if (auto func = decl->getParentOfType<mlir::func::FuncOp>()) {
       func.walk([&](hlfir::AssignOp op) {
         mlir::Value lhs = op.getLhs();
-        auto memDg =
-            mlir::dyn_cast_or_null<hlfir::DesignateOp>(lhs.getDefiningOp());
+        auto memDg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(lhs.getDefiningOp());
         if (!memDg) return;
         mlir::StringAttr compAttr;
         for (auto nm : {"component_name", "component"})
@@ -5123,12 +4950,9 @@ struct FlattenStructsPass
             break;
           }
         if (!compAttr || compAttr.getValue() != memName) return;
-        auto parent = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
-            memDg.getMemref().getDefiningOp());
+        auto parent = mlir::dyn_cast_or_null<hlfir::DesignateOp>(memDg.getMemref().getDefiningOp());
         if (!parent) return;
-        if (parent.getMemref() != decl.getResult(0) &&
-            parent.getMemref() != decl.getResult(1))
-          return;
+        if (parent.getMemref() != decl.getResult(0) && parent.getMemref() != decl.getResult(1)) return;
         op.setRealloc(false);
       });
     }
@@ -5145,8 +4969,7 @@ struct FlattenStructsPass
   ///   * Any subsequent ``fir.zero_bits`` + ``fir.embox`` + store
   ///     pattern (the post-deallocate "set descriptor to null"
   ///     sequence flang inserts)  --  erase.
-  void eraseAosAllocDeallocChain(hlfir::DeclareOp decl,
-                                 llvm::StringRef memName) {
+  void eraseAosAllocDeallocChain(hlfir::DeclareOp decl, llvm::StringRef memName) {
     llvm::SmallVector<mlir::Operation*, 16> deadOps;
     if (auto func = decl->getParentOfType<mlir::func::FuncOp>()) {
       func.walk([&](hlfir::DesignateOp memDg) {
@@ -5157,12 +4980,9 @@ struct FlattenStructsPass
             break;
           }
         if (!compAttr || compAttr.getValue() != memName) return;
-        auto parent = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
-            memDg.getMemref().getDefiningOp());
+        auto parent = mlir::dyn_cast_or_null<hlfir::DesignateOp>(memDg.getMemref().getDefiningOp());
         if (!parent) return;
-        if (parent.getMemref() != decl.getResult(0) &&
-            parent.getMemref() != decl.getResult(1))
-          return;
+        if (parent.getMemref() != decl.getResult(0) && parent.getMemref() != decl.getResult(1)) return;
         for (auto* u : memDg.getResult().getUsers())
           if (auto st = mlir::dyn_cast<fir::StoreOp>(u)) deadOps.push_back(st);
       });
@@ -5194,10 +5014,8 @@ struct FlattenStructsPass
                 break;
               }
             if (compAttr && compAttr.getValue() == memName) {
-              auto parent = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
-                  memDg.getMemref().getDefiningOp());
-              if (parent && (parent.getMemref() == decl.getResult(0) ||
-                             parent.getMemref() == decl.getResult(1))) {
+              auto parent = mlir::dyn_cast_or_null<hlfir::DesignateOp>(memDg.getMemref().getDefiningOp());
+              if (parent && (parent.getMemref() == decl.getResult(0) || parent.getMemref() == decl.getResult(1))) {
                 deadOps.push_back(fm);
               }
             }
@@ -5230,8 +5048,7 @@ struct FlattenStructsPass
     bool uniform;   ///< true iff every allocate uses the same constant
   };
 
-  static std::optional<AosAllocConstSize> aosAllocMaxConstSize(
-      hlfir::DeclareOp decl, llvm::StringRef memName) {
+  static std::optional<AosAllocConstSize> aosAllocMaxConstSize(hlfir::DeclareOp decl, llvm::StringRef memName) {
     std::optional<int64_t> maxSeen, minSeen;
     bool anySite = false;
     // Walk all hlfir.designate ops that index into ``decl`` via an
@@ -5252,68 +5069,64 @@ struct FlattenStructsPass
     // differs from the cap and the simple ``1:M:1`` triplet
     // would over-write padding with stale data).
     if (auto func = decl->getParentOfType<mlir::func::FuncOp>()) {
-      mlir::WalkResult result =
-          func.walk([&](hlfir::DesignateOp memDg) -> mlir::WalkResult {
-            // Check this is the member designate (A(i){memName}).
-            mlir::StringAttr compAttr;
-            for (auto nm : {"component_name", "component"})
-              if (auto a = memDg->getAttrOfType<mlir::StringAttr>(nm)) {
-                compAttr = a;
-                break;
-              }
-            if (!compAttr || compAttr.getValue() != memName)
-              return mlir::WalkResult::advance();
+      mlir::WalkResult result = func.walk([&](hlfir::DesignateOp memDg) -> mlir::WalkResult {
+        // Check this is the member designate (A(i){memName}).
+        mlir::StringAttr compAttr;
+        for (auto nm : {"component_name", "component"})
+          if (auto a = memDg->getAttrOfType<mlir::StringAttr>(nm)) {
+            compAttr = a;
+            break;
+          }
+        if (!compAttr || compAttr.getValue() != memName) return mlir::WalkResult::advance();
 
-            // Parent must be a per-instance designate of decl.
-            auto parent = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
-                memDg.getMemref().getDefiningOp());
-            if (!parent) return mlir::WalkResult::advance();
-            if (parent.getMemref() != decl.getResult(0) &&
-                parent.getMemref() != decl.getResult(1))
-              return mlir::WalkResult::advance();
-            // parent should be element-form (no triplets).
-            for (bool t : parent.getIsTriplet())
-              if (t) return mlir::WalkResult::advance();
+        // Parent must be a per-instance designate of decl.
+        auto parent = mlir::dyn_cast_or_null<hlfir::DesignateOp>(memDg.getMemref().getDefiningOp());
+        if (!parent) return mlir::WalkResult::advance();
+        if (parent.getMemref() != decl.getResult(0) && parent.getMemref() != decl.getResult(1))
+          return mlir::WalkResult::advance();
+        // parent should be element-form (no triplets).
+        for (bool t : parent.getIsTriplet())
+          if (t) return mlir::WalkResult::advance();
 
-            // Look for an allocate-store chain on memDg.
-            for (auto* u : memDg.getResult().getUsers()) {
-              auto store = mlir::dyn_cast<fir::StoreOp>(u);
-              if (!store) continue;
-              mlir::Value v = store.getValue();
-              for (int i = 0; i < kFlattenMaxDepth && v; ++i) {
-                auto* d = v.getDefiningOp();
-                if (!d) break;
-                if (auto am = mlir::dyn_cast<fir::AllocMemOp>(d)) {
-                  // Recover the size: allocmem typically takes
-                  // a single ``%size`` operand for a 1-D array.
-                  auto sizes = am.getShape();
-                  if (sizes.size() != 1) {
-                    maxSeen.reset();
-                    return mlir::WalkResult::interrupt();
-                  }
-                  auto sz = traceConstInt(sizes.front());
-                  if (!sz) {
-                    maxSeen.reset();
-                    return mlir::WalkResult::interrupt();
-                  }
-                  anySite = true;
-                  if (!maxSeen || *sz > *maxSeen) maxSeen = *sz;
-                  if (!minSeen || *sz < *minSeen) minSeen = *sz;
-                  break;
-                }
-                if (auto eb = mlir::dyn_cast<fir::EmboxOp>(d)) {
-                  v = eb.getMemref();
-                  continue;
-                }
-                if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
-                  v = cv.getValue();
-                  continue;
-                }
-                break;
+        // Look for an allocate-store chain on memDg.
+        for (auto* u : memDg.getResult().getUsers()) {
+          auto store = mlir::dyn_cast<fir::StoreOp>(u);
+          if (!store) continue;
+          mlir::Value v = store.getValue();
+          for (int i = 0; i < kFlattenMaxDepth && v; ++i) {
+            auto* d = v.getDefiningOp();
+            if (!d) break;
+            if (auto am = mlir::dyn_cast<fir::AllocMemOp>(d)) {
+              // Recover the size: allocmem typically takes
+              // a single ``%size`` operand for a 1-D array.
+              auto sizes = am.getShape();
+              if (sizes.size() != 1) {
+                maxSeen.reset();
+                return mlir::WalkResult::interrupt();
               }
+              auto sz = traceConstInt(sizes.front());
+              if (!sz) {
+                maxSeen.reset();
+                return mlir::WalkResult::interrupt();
+              }
+              anySite = true;
+              if (!maxSeen || *sz > *maxSeen) maxSeen = *sz;
+              if (!minSeen || *sz < *minSeen) minSeen = *sz;
+              break;
             }
-            return mlir::WalkResult::advance();
-          });
+            if (auto eb = mlir::dyn_cast<fir::EmboxOp>(d)) {
+              v = eb.getMemref();
+              continue;
+            }
+            if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
+              v = cv.getValue();
+              continue;
+            }
+            break;
+          }
+        }
+        return mlir::WalkResult::advance();
+      });
       if (result.wasInterrupted()) return std::nullopt;
     }
     if (!anySite || !maxSeen) return std::nullopt;
@@ -5324,14 +5137,10 @@ struct FlattenStructsPass
     auto* def = decl.getMemref().getDefiningOp();
     auto alloca = mlir::dyn_cast_or_null<fir::AllocaOp>(def);
     if (!alloca) return false;
-    // Static shape only  --  building a companion fir.alloca for a runtime-
-    // sized array would need the original shape operands threaded through.
-    if (alloca.getNumOperands() != 0) return false;
 
     bool outerIsArray = false;
     llvm::SmallVector<int64_t, 4> outerShape;
-    auto rec =
-        peelToRecord(decl.getResult(0).getType(), outerIsArray, outerShape);
+    auto rec = peelToRecord(decl.getResult(0).getType(), outerIsArray, outerShape);
     if (!rec) return false;
     // Only OWNED struct storage flattens locally.  ``peelToRecord`` peels
     // through box/ptr/heap, so it also reaches the record of a POINTER /
@@ -5340,8 +5149,26 @@ struct FlattenStructsPass
     // (see isIndirectStructLocal).  Leave those to the pointer-rewrite /
     // view path; flattening them yields dead, mistyped companions.
     if (isIndirectStructLocal(decl.getResult(0).getType())) return false;
+    // Runtime-sized outer array (dynamic alloca operands or an unknown type
+    // extent): the companion ``fir.alloca`` threads the live shape operands
+    // through (``outerExtentValues`` + ``makeCompanionAlloca``).  Supported
+    // ONLY when (a) no member is an allocatable array -- the Phase-5c
+    // alloc-member AoS path still needs a static outer extent to size its 2D
+    // companion -- (b) the declare's shape is a plain ``fir.shape`` so the
+    // extents are recoverable, and (c) every member is directly flattenable
+    // (the single-level companion path threads the runtime extents; the
+    // nested-leaf path still bakes static shapes, so a runtime-sized nested
+    // struct stays deferred).  Otherwise fall through to the loud downstream
+    // path rather than emit a mistyped companion.
+    bool runtimeSized = alloca.getNumOperands() != 0;
     for (auto d : outerShape)
-      if (d == fir::SequenceType::getUnknownExtent()) return false;
+      if (d == fir::SequenceType::getUnknownExtent()) runtimeSized = true;
+    if (runtimeSized) {
+      for (auto& pair : rec.getTypeList())
+        if (isAllocatableArrayMember(pair.second)) return false;
+      if (!decl.getShape() || !decl.getShape().getDefiningOp<fir::ShapeOp>()) return false;
+      if (!allMembersFlattenable(rec)) return false;
+    }
     // Phase 5c-A: AoS + allocatable member.  Permitted when every
     // ``allocate(A(i)%<member>(M))`` site uses the SAME compile-
     // time constant ``M`` across all instances.  Then the flat
@@ -5368,8 +5195,7 @@ struct FlattenStructsPass
     // them as leading dims (matching what ``splitLocal`` does
     // when it builds the alloca below).
     llvm::SmallVector<std::string, 4> prefix;
-    llvm::SmallVector<int64_t, 4> initialDims(outerShape.begin(),
-                                              outerShape.end());
+    llvm::SmallVector<int64_t, 4> initialDims(outerShape.begin(), outerShape.end());
     llvm::SmallVector<FlatLeaf, 8> leaves;
     if (!collectFlatLeaves(rec, prefix, initialDims, leaves)) return false;
     // The LOCAL nested path (``splitLocal``) cannot own an
@@ -5393,8 +5219,7 @@ struct FlattenStructsPass
 
     bool outerIsArray = false;
     llvm::SmallVector<int64_t, 4> outerShape;
-    auto rec =
-        peelToRecord(decl.getResult(0).getType(), outerIsArray, outerShape);
+    auto rec = peelToRecord(decl.getResult(0).getType(), outerIsArray, outerShape);
     auto shape = decl.getShape();
     auto baseName = decl.getUniqName().str();
 
@@ -5412,8 +5237,7 @@ struct FlattenStructsPass
     bool nested = !allMembersFlattenable(rec);
     if (nested) {
       llvm::SmallVector<std::string, 4> prefix;
-      llvm::SmallVector<int64_t, 4> initialDims(outerShape.begin(),
-                                                outerShape.end());
+      llvm::SmallVector<int64_t, 4> initialDims(outerShape.begin(), outerShape.end());
       llvm::SmallVector<FlatLeaf, 8> leaves;
       if (!collectFlatLeaves(rec, prefix, initialDims, leaves)) return;
 
@@ -5455,12 +5279,10 @@ struct FlattenStructsPass
         llvm::SmallVector<mlir::Value, 2> operands{newAlloca};
         if (leafShape) operands.push_back(leafShape);
         mlir::NamedAttrList attrs;
-        attrs.append("uniq_name",
-                     mlir::StringAttr::get(ctx, baseName + "_" + suffix));
+        attrs.append("uniq_name", mlir::StringAttr::get(ctx, baseName + "_" + suffix));
         attrs.append(declareSegments(b, /*hasShape=*/leafShape != nullptr));
         auto newDecl =
-            b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{declTy, declTy},
-                                       mlir::ValueRange(operands), attrs);
+            b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{declTy, declTy}, mlir::ValueRange(operands), attrs);
         leafBase[joinedKey] = newDecl.getResult(0);
       }
 
@@ -5511,8 +5333,7 @@ struct FlattenStructsPass
           continue;
 
         // Concat shape: outerShape x {M}.
-        llvm::SmallVector<int64_t, 4> exts(outerShape.begin(),
-                                           outerShape.end());
+        llvm::SmallVector<int64_t, 4> exts(outerShape.begin(), outerShape.end());
         exts.push_back(M);
         auto pointee = fir::SequenceType::get(exts, eleTy);
         auto refTy = fir::ReferenceType::get(pointee);
@@ -5525,10 +5346,8 @@ struct FlattenStructsPass
         attrs.append("uniq_name", mlir::StringAttr::get(ctx, flatName));
         attrs.append(declareSegments(b, /*hasShape=*/true));
 
-        llvm::SmallVector<mlir::Value, 2> ops{newAlloca.getResult(),
-                                              memberShape};
-        auto newDecl = b.create<hlfir::DeclareOp>(
-            loc, mlir::TypeRange{refTy, refTy}, mlir::ValueRange{ops}, attrs);
+        llvm::SmallVector<mlir::Value, 2> ops{newAlloca.getResult(), memberShape};
+        auto newDecl = b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{refTy, refTy}, mlir::ValueRange{ops}, attrs);
         memberBase[memName] = newDecl.getResult(0);
         concatMembers.insert(memName);  // tells designate rewriter
                                         // to merge outer + inner indices
@@ -5598,19 +5417,16 @@ struct FlattenStructsPass
         // allocatable / pointer handling) key on this flag.
         auto box = mlir::cast<fir::BoxType>(memTy);
         bool isPointer = mlir::isa<fir::PointerType>(box.getEleTy());
-        auto attrFlag = isPointer ? fir::FortranVariableFlagsEnum::pointer
-                                  : fir::FortranVariableFlagsEnum::allocatable;
+        auto attrFlag = isPointer ? fir::FortranVariableFlagsEnum::pointer : fir::FortranVariableFlagsEnum::allocatable;
 
         std::string flatName = baseName + "_" + memName;
         mlir::NamedAttrList attrs;
         attrs.append("uniq_name", mlir::StringAttr::get(ctx, flatName));
-        attrs.append("fortran_attrs",
-                     fir::FortranVariableFlagsAttr::get(ctx, attrFlag));
+        attrs.append("fortran_attrs", fir::FortranVariableFlagsAttr::get(ctx, attrFlag));
         attrs.append(declareSegments(b, /*hasShape=*/false));
 
-        auto newDecl = b.create<hlfir::DeclareOp>(
-            loc, mlir::TypeRange{refTy, refTy},
-            mlir::ValueRange{newAlloca.getResult()}, attrs);
+        auto newDecl = b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{refTy, refTy},
+                                                  mlir::ValueRange{newAlloca.getResult()}, attrs);
         memberBase[memName] = newDecl.getResult(0);
 
         // Bug fix (Phase 5a): flang names the per-allocate
@@ -5638,60 +5454,88 @@ struct FlattenStructsPass
       auto pointee = companionPointee(outerIsArray, outerShape, memTy);
       if (!pointee) continue;
 
-      auto newAlloca = b.create<fir::AllocaOp>(loc, pointee);
-
       bool memberIsArray = mlir::isa<fir::SequenceType>(memTy);
       bool concat = outerIsArray && memberIsArray;
       mlir::Type res1Ty = fir::ReferenceType::get(pointee);
-      // For the concat case, both result types must be the flat
-      // ref  --  using ``rewrapWith`` would produce the nested form
-      // ``ref<array<N x array<M, ...>>>`` which the verifier
-      // rejects against the alloca's flat ref.
-      mlir::Type res0Ty =
-          concat ? res1Ty : rewrapWith(decl.getResult(0).getType(), memTy);
 
-      // Pick the shape operand.  Concat members need a fresh
-      // ``fir.shape`` over the concatenated extent list  --  the
-      // original ``decl.getShape()`` only carries the outer
-      // dim(s).
+      bool outerDynamic = false;
+      for (auto d : outerShape)
+        if (d == fir::SequenceType::getUnknownExtent()) outerDynamic = true;
+
+      // Result #0 is the HLFIR "variable" form.  For the concat case it must be
+      // the flat companion (``rewrapWith`` would produce the nested
+      // ``ref<array<N x array<M, ...>>>`` the verifier rejects against the flat
+      // alloca); a runtime-sized companion's variable form is a
+      // ``box<array<?x...>>`` (descriptor-aware), a static one a plain
+      // ``ref<array<...>>``.  The non-concat case keeps the outer declare's own
+      // wrapping (already a box for a dynamic outer, a ref for a static one).
+      mlir::Type res0Ty;
+      if (concat)
+        res0Ty = outerDynamic ? mlir::Type(fir::BoxType::get(pointee)) : res1Ty;
+      else
+        res0Ty = rewrapWith(decl.getResult(0).getType(), memTy);
+
+      // The member's own extents must be static on the local path -- a dynamic
+      // member dim is unsupported here (bail, as before).  Gathered once, up
+      // front, since both the concat shape and the scalar-outer member shape
+      // need them.
+      llvm::SmallVector<int64_t, 4> memExts;
+      if (memberIsArray) {
+        bool allStatic = true;
+        for (auto d : mlir::cast<fir::SequenceType>(memTy).getShape()) {
+          if (d == fir::SequenceType::getUnknownExtent()) {
+            allStatic = false;
+            break;
+          }
+          memExts.push_back(d);
+        }
+        if (!allStatic) continue;
+      }
+
+      // Build the companion alloca and pick its shape operand.  A runtime-sized
+      // outer array threads its live extents (one Value per outer dim, from the
+      // declare's ``fir.shape``) into BOTH the alloca and a fresh ``fir.shape``:
+      // a plain no-operand alloca over a dynamic pointee, or a static-literal
+      // shape baking ``-1`` for the unknown dims, is verifier-invalid.  A fully
+      // static outer keeps the prior plain-alloca + ``emitStaticShape`` path
+      // verbatim (the hot path, byte-for-byte unchanged).
+      mlir::Value newAlloca;
       mlir::Value memberShape = shape;
-      if (concat) {
-        auto memSeq = mlir::cast<fir::SequenceType>(memTy);
-        llvm::SmallVector<int64_t, 6> exts(outerShape.begin(),
-                                           outerShape.end());
-        bool allStatic = true;
-        for (auto d : memSeq.getShape()) {
-          if (d == fir::SequenceType::getUnknownExtent()) {
-            allStatic = false;
-            break;
-          }
-          exts.push_back(d);
+      if (outerDynamic) {
+        // outerDynamic implies outerIsArray, so the declare carries the live
+        // outer extents.  ``fullExtVals`` is aligned 1:1 with the pointee dims:
+        // the outer extents, then (concat only) the static member extents.
+        llvm::SmallVector<mlir::Value, 6> fullExtVals = outerExtentValues(decl);
+        if (concat)
+          for (auto e : memExts)
+            fullExtVals.push_back(b.create<mlir::arith::ConstantOp>(loc, b.getIndexType(), b.getIndexAttr(e)));
+        newAlloca = makeCompanionAlloca(b, loc, pointee, fullExtVals);
+        if (concat) {
+          // Fresh shape over outer+member  --  ``decl.getShape()`` only carries
+          // the outer dim(s).
+          auto shTy = fir::ShapeType::get(ctx, fullExtVals.size());
+          memberShape = b.create<fir::ShapeOp>(loc, shTy, fullExtVals);
+          concatMembers.insert(memName);
         }
-        if (!allStatic) continue;
-        memberShape = emitStaticShape(b, loc, exts);
-        concatMembers.insert(memName);
-      } else if (!outerIsArray && memberIsArray) {
-        // Scalar outer + array member: the new declare needs a
-        // shape over the MEMBER's own extents.  The outer
-        // declare's ``shape`` is null for a plain
-        // ``type(t) :: x``, so without a fresh ``fir.shape``
-        // the synthesised ``hlfir.declare`` for
-        // ``x_arr_field`` would have a raw address base AND
-        // no shape operand  --  which the verifier rejects with
-        // "must have a shape operand that is a shape or
-        // shapeshift".
-        auto memSeq = mlir::cast<fir::SequenceType>(memTy);
-        llvm::SmallVector<int64_t, 4> exts;
-        bool allStatic = true;
-        for (auto d : memSeq.getShape()) {
-          if (d == fir::SequenceType::getUnknownExtent()) {
-            allStatic = false;
-            break;
-          }
-          exts.push_back(d);
+        // outer-array + scalar member: pointee is ``array<outer x scalar>`` and
+        // ``decl.getShape()`` already describes it  --  keep memberShape =
+        // shape.
+      } else {
+        newAlloca = b.create<fir::AllocaOp>(loc, pointee);
+        if (concat) {
+          llvm::SmallVector<int64_t, 6> exts(outerShape.begin(), outerShape.end());
+          for (auto e : memExts) exts.push_back(e);
+          memberShape = emitStaticShape(b, loc, exts);
+          concatMembers.insert(memName);
+        } else if (!outerIsArray && memberIsArray) {
+          // Scalar outer + array member: the new declare needs a shape over the
+          // MEMBER's own extents.  The outer declare's ``shape`` is null for a
+          // plain ``type(t) :: x``, so without a fresh ``fir.shape`` the
+          // synthesised ``hlfir.declare`` for ``x_arr_field`` would have a raw
+          // address base AND no shape operand  --  which the verifier rejects
+          // with "must have a shape operand that is a shape or shapeshift".
+          memberShape = emitStaticShape(b, loc, memExts);
         }
-        if (!allStatic) continue;
-        memberShape = emitStaticShape(b, loc, exts);
       }
 
       llvm::SmallVector<mlir::Value, 2> operands;
@@ -5699,13 +5543,11 @@ struct FlattenStructsPass
       if (memberShape) operands.push_back(memberShape);
 
       mlir::NamedAttrList attrs;
-      attrs.append("uniq_name",
-                   mlir::StringAttr::get(ctx, baseName + "_" + memName));
+      attrs.append("uniq_name", mlir::StringAttr::get(ctx, baseName + "_" + memName));
       attrs.append(declareSegments(b, /*hasShape=*/memberShape != nullptr));
 
       auto newDecl =
-          b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{res0Ty, res1Ty},
-                                     mlir::ValueRange(operands), attrs);
+          b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{res0Ty, res1Ty}, mlir::ValueRange(operands), attrs);
 
       memberBase[memName] = newDecl.getResult(0);
     }
@@ -5739,8 +5581,7 @@ struct FlattenStructsPass
             designates.push_back(dg);
           } else {
             for (auto* cu : dg.getResult().getUsers())
-              if (auto cdg = mlir::dyn_cast<hlfir::DesignateOp>(cu))
-                designates.push_back(cdg);
+              if (auto cdg = mlir::dyn_cast<hlfir::DesignateOp>(cu)) designates.push_back(cdg);
           }
         } else if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(u)) {
           aliasDecls.push_back(dc);
@@ -5760,9 +5601,7 @@ struct FlattenStructsPass
     // (the next op down the chain) are already gone before we
     // try to erase its source.
     for (auto* w : llvm::reverse(wrapperOps))
-      if (llvm::all_of(w->getResults(),
-                       [](mlir::Value v) { return v.use_empty(); }))
-        w->erase();
+      if (llvm::all_of(w->getResults(), [](mlir::Value v) { return v.use_empty(); })) w->erase();
 
     if (decl.getResult(0).use_empty() && decl.getResult(1).use_empty()) {
       auto* allocaOp = decl.getMemref().getDefiningOp();
@@ -5784,8 +5623,7 @@ std::vector<ShallowAliasInfo> computeShallowAliasReport(mlir::ModuleOp module) {
     auto rec = mlir::dyn_cast<fir::RecordType>(p);
     if (!rec || !seen.insert(rec.getName()).second) return;
     ShallowAlias sa = analyzeShallowAlias(rec);
-    out.push_back({rec.getName().str(), sa.ok, sa.ok ? sa.count : 0,
-                   sa.ok ? dtypeName(sa.elem) : std::string()});
+    out.push_back({rec.getName().str(), sa.ok, sa.ok ? sa.count : 0, sa.ok ? dtypeName(sa.elem) : std::string()});
   };
   module.walk([&](mlir::Operation* op) {
     for (auto t : op->getResultTypes()) consider(t);
@@ -5797,9 +5635,7 @@ std::vector<ShallowAliasInfo> computeShallowAliasReport(mlir::ModuleOp module) {
   return out;
 }
 
-std::unique_ptr<mlir::Pass> createFlattenStructsPass() {
-  return std::make_unique<FlattenStructsPass>();
-}
+std::unique_ptr<mlir::Pass> createFlattenStructsPass() { return std::make_unique<FlattenStructsPass>(); }
 
 std::unique_ptr<mlir::Pass> createSplitAoRDummiesPass() {
   auto p = std::make_unique<FlattenStructsPass>();

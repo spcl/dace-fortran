@@ -95,8 +95,7 @@ static bool feedsAllocateExtent(mlir::Value v) {
       // Arithmetic / convert / clamp that an extent expression threads through
       // (``m * 2``, kind conversions, Flang's ``max(ext, 0)`` =
       // ``arith.select(cmpi, ext, 0)`` guard).  Follow the result.
-      if (mlir::isa<fir::ConvertOp, mlir::arith::MulIOp, mlir::arith::AddIOp,
-                    mlir::arith::SubIOp, mlir::arith::DivSIOp,
+      if (mlir::isa<fir::ConvertOp, mlir::arith::MulIOp, mlir::arith::AddIOp, mlir::arith::SubIOp, mlir::arith::DivSIOp,
                     mlir::arith::SelectOp>(u)) {
         if (seen.insert(u).second)
           for (auto r : u->getResults()) work.push_back(r);
@@ -126,19 +125,15 @@ static mlir::OpOperand* writeTargetOperand(mlir::Operation* op) {
 /// enclosing ``op``, or null if ``op`` is not inside a loop.
 static mlir::Operation* enclosingLoop(mlir::Operation* op) {
   for (mlir::Operation* p = op->getParentOp(); p; p = p->getParentOp())
-    if (mlir::isa<fir::DoLoopOp, mlir::scf::ForOp, mlir::scf::WhileOp>(p))
-      return p;
+    if (mlir::isa<fir::DoLoopOp, mlir::scf::ForOp, mlir::scf::WhileOp>(p)) return p;
   return nullptr;
 }
 
 struct VersionShapeScalarsPass
-    : public mlir::PassWrapper<VersionShapeScalarsPass,
-                               mlir::OperationPass<mlir::ModuleOp>> {
+    : public mlir::PassWrapper<VersionShapeScalarsPass, mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(VersionShapeScalarsPass)
 
-  llvm::StringRef getArgument() const final {
-    return "hlfir-version-shape-scalars";
-  }
+  llvm::StringRef getArgument() const final { return "hlfir-version-shape-scalars"; }
   llvm::StringRef getDescription() const final {
     return "SSA-version a scalar reassigned (in a straight line) AFTER an "
            "array "
@@ -156,8 +151,7 @@ struct VersionShapeScalarsPass
       // after that allocation?".  Built once per function.
       llvm::DenseMap<mlir::Operation*, unsigned> order;
       unsigned idx = 0;
-      func.walk<mlir::WalkOrder::PreOrder>(
-          [&](mlir::Operation* op) { order[op] = idx++; });
+      func.walk<mlir::WalkOrder::PreOrder>([&](mlir::Operation* op) { order[op] = idx++; });
       // Snapshot declares first: we mutate the IR (insert new declares) while
       // iterating, so collect candidates before rewriting.
       llvm::SmallVector<hlfir::DeclareOp, 16> declares;
@@ -174,15 +168,11 @@ struct VersionShapeScalarsPass
   /// allocated from it in a straight line; refuse (``failure``) if that
   /// post-allocation reassignment is in a loop / branch; otherwise leave it
   /// untouched (``success``).
-  mlir::LogicalResult versionOne(
-      hlfir::DeclareOp decl,
-      const llvm::DenseMap<mlir::Operation*, unsigned>& order) {
+  mlir::LogicalResult versionOne(hlfir::DeclareOp decl, const llvm::DenseMap<mlir::Operation*, unsigned>& order) {
     // Scalar integer local only.  ``hlfir.declare`` result #0 is the entity;
     // a scalar integer is ``!fir.ref<iN>`` (no box / sequence).
-    auto refTy =
-        mlir::dyn_cast<fir::ReferenceType>(decl.getResult(0).getType());
-    if (!refTy || !mlir::isa<mlir::IntegerType>(refTy.getEleTy()))
-      return mlir::success();
+    auto refTy = mlir::dyn_cast<fir::ReferenceType>(decl.getResult(0).getType());
+    if (!refTy || !mlir::isa<mlir::IntegerType>(refTy.getEleTy())) return mlir::success();
 
     // Collect writes / loads against EITHER declare result (#0 entity, #1 raw
     // memref -- a scalar uses them interchangeably).  A Fortran scalar
@@ -209,11 +199,8 @@ struct VersionShapeScalarsPass
     // this scalar.
     unsigned earliestAlloc = std::numeric_limits<unsigned>::max();
     for (auto ld : loads)
-      if (feedsAllocateExtent(ld.getResult()))
-        earliestAlloc =
-            std::min(earliestAlloc, order.lookup(ld.getOperation()));
-    if (earliestAlloc == std::numeric_limits<unsigned>::max())
-      return mlir::success();  // not used as an array extent
+      if (feedsAllocateExtent(ld.getResult())) earliestAlloc = std::min(earliestAlloc, order.lookup(ld.getOperation()));
+    if (earliestAlloc == std::numeric_limits<unsigned>::max()) return mlir::success();  // not used as an array extent
 
     // Hazard = a reassignment ordered AFTER an array was allocated from the
     // scalar.  Only then does the array's (mutable) extent symbol diverge from
@@ -234,21 +221,18 @@ struct VersionShapeScalarsPass
     mlir::Block* blk = stores.front()->getBlock();
     for (auto* st : stores) {
       if (st->getBlock() != blk || enclosingLoop(st)) {
-        return decl.emitError()
-               << "shape variable '" << extractShortName(decl)
-               << "' is reassigned inside a loop or conditional branch AFTER "
-                  "an "
-                  "array was allocated from it, so the array's extent symbol "
-                  "mutates while the array is live and cannot be SSA-versioned "
-                  "in a straight line.  Hoist the size to a single assignment "
-                  "before the allocation, or pass it as an explicit dimension.";
+        return decl.emitError() << "shape variable '" << extractShortName(decl)
+                                << "' is reassigned inside a loop or conditional branch AFTER "
+                                   "an "
+                                   "array was allocated from it, so the array's extent symbol "
+                                   "mutates while the array is live and cannot be SSA-versioned "
+                                   "in a straight line.  Hoist the size to a single assignment "
+                                   "before the allocation, or pass it as an explicit dimension.";
       }
     }
 
     // Order stores by position in the block (program order).
-    llvm::sort(stores, [&](mlir::Operation* a, mlir::Operation* b) {
-      return a->isBeforeInBlock(b);
-    });
+    llvm::sort(stores, [&](mlir::Operation* a, mlir::Operation* b) { return a->isBeforeInBlock(b); });
 
     // Forward pass: the first store keeps ``decl``; each subsequent store
     // starts a fresh version.  A load reads the version of the most recent
@@ -278,8 +262,7 @@ struct VersionShapeScalarsPass
       current = makeVersion(builder, decl, version);
       // The store WRITES the new version; its value operand (the RHS load)
       // was already redirected to the prior version above.
-      if (auto* operand = writeTargetOperand(&op))
-        redirectMemref(*operand, decl, current);
+      if (auto* operand = writeTargetOperand(&op)) redirectMemref(*operand, decl, current);
     }
     return mlir::success();
   }
@@ -294,8 +277,7 @@ struct VersionShapeScalarsPass
 
   /// Point a load/store memref operand that currently references ``from``'s
   /// result at the matching result of ``to`` (entity #0 / raw #1 preserved).
-  static void redirectMemref(mlir::OpOperand& operand, hlfir::DeclareOp from,
-                             hlfir::DeclareOp to) {
+  static void redirectMemref(mlir::OpOperand& operand, hlfir::DeclareOp from, hlfir::DeclareOp to) {
     if (from == to) return;
     mlir::Value v = operand.get();
     if (v == from.getResult(0))
@@ -307,27 +289,22 @@ struct VersionShapeScalarsPass
   /// Clone ``orig``'s ``fir.alloca`` + ``hlfir.declare`` with a ``_<version>``
   /// suffix on the ``uniq_name`` (so ``traceToDecl`` names it ``m_<version>``),
   /// inserted right after the original declare so it dominates every later use.
-  static hlfir::DeclareOp makeVersion(mlir::OpBuilder& builder,
-                                      hlfir::DeclareOp orig, unsigned version) {
+  static hlfir::DeclareOp makeVersion(mlir::OpBuilder& builder, hlfir::DeclareOp orig, unsigned version) {
     builder.setInsertionPointAfter(orig);
     mlir::Location loc = orig.getLoc();
-    std::string newUniq =
-        orig.getUniqName().str() + "_" + std::to_string(version);
+    std::string newUniq = orig.getUniqName().str() + "_" + std::to_string(version);
 
     // Fresh storage of the same scalar type, declared under the versioned name
     // (``traceToDecl`` reads the entity after the final ``E`` -> ``m_<n>``).
     auto memTy = mlir::cast<fir::ReferenceType>(orig.getResult(1).getType());
     auto alloca = builder.create<fir::AllocaOp>(loc, memTy.getEleTy());
-    auto decl = builder.create<hlfir::DeclareOp>(
-        loc, alloca.getResult(), newUniq, /*shape=*/mlir::Value{});
+    auto decl = builder.create<hlfir::DeclareOp>(loc, alloca.getResult(), newUniq, /*shape=*/mlir::Value{});
     return decl;
   }
 };
 
 }  // anonymous namespace
 
-std::unique_ptr<mlir::Pass> createVersionShapeScalarsPass() {
-  return std::make_unique<VersionShapeScalarsPass>();
-}
+std::unique_ptr<mlir::Pass> createVersionShapeScalarsPass() { return std::make_unique<VersionShapeScalarsPass>(); }
 
 }  // namespace hlfir_bridge

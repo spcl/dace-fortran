@@ -12,8 +12,7 @@ import pytest
 
 from _util import build_sdfg, have_flang
 
-pytestmark = pytest.mark.skipif(not have_flang(),
-                                reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
 
 def test_cshift_whole_array_positive(tmp_path):
@@ -51,8 +50,7 @@ SUBROUTINE csh_neg(arr, res, n)
 END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="csh_neg",
-                      entry="csh_neg_mod::csh_neg").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="csh_neg", entry="csh_neg_mod::csh_neg").build()
     arr = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float64, order="F")
     res = np.zeros(5, dtype=np.float64, order="F")
     sdfg(arr=arr, res=res, n=np.int32(5))
@@ -71,8 +69,7 @@ contains
   end subroutine
 end module
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="cshe",
-                      entry="m::cshe").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="cshe", entry="m::cshe").build()
     arr = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float64, order="F")
     res = np.zeros(5, dtype=np.float64, order="F")
     sdfg(arr=arr, res=res)

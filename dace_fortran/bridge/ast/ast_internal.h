@@ -13,13 +13,12 @@ ASTNode buildAssignNode(hlfir::AssignOp assign);
 
 ASTNode buildCopyNode(hlfir::AssignOp assign);
 
-ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation* srcOp,
-                         std::string_view callee);
+ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation* srcOp, std::string_view callee);
 
 ASTNode buildMemsetNode(hlfir::AssignOp assign);
 
-ASTNode buildReduceNode(hlfir::AssignOp assign, mlir::Operation* redOp,
-                        std::string_view wcr, std::string_view identity);
+ASTNode buildReduceNode(hlfir::AssignOp assign, mlir::Operation* redOp, std::string_view wcr,
+                        std::string_view identity);
 
 /// Build the AST nodes for an ``hlfir.assign`` whose RHS op ``sd`` is a
 /// scalar-reducing intrinsic (sum / product / minval / maxval / any /
@@ -30,27 +29,20 @@ ASTNode buildReduceNode(hlfir::AssignOp assign, mlir::Operation* redOp,
 /// latter reached via a ``_QQred_lift_N`` temp the
 /// LiftReductionOperands pass hoists into the loop).  ``matched`` is set
 /// true iff ``sd`` was a recognised reduction op; returns the nodes.
-std::vector<ASTNode> buildReductionAssignNodes(hlfir::AssignOp assign,
-                                               mlir::Operation* sd,
-                                               bool& matched);
+std::vector<ASTNode> buildReductionAssignNodes(hlfir::AssignOp assign, mlir::Operation* sd, bool& matched);
 
-std::vector<ASTNode> buildSectionReduceAssign(hlfir::AssignOp assign,
-                                              hlfir::DesignateOp src,
-                                              std::string_view pyOp,
+std::vector<ASTNode> buildSectionReduceAssign(hlfir::AssignOp assign, hlfir::DesignateOp src, std::string_view pyOp,
                                               std::string_view identity);
 
-std::vector<ASTNode> buildSectionScalarAssign(hlfir::AssignOp assign,
-                                              hlfir::DesignateOp dst);
+std::vector<ASTNode> buildSectionScalarAssign(hlfir::AssignOp assign, hlfir::DesignateOp dst);
 
-std::vector<ASTNode> buildSectionToSectionAssign(hlfir::AssignOp assign,
-                                                 mlir::Value dst);
+std::vector<ASTNode> buildSectionToSectionAssign(hlfir::AssignOp assign, mlir::Value dst);
 
 ASTNode buildSelectCaseChain(fir::SelectCaseOp sel);
 
 std::vector<ASTNode> buildWholeArrayScalarBroadcast(hlfir::AssignOp assign);
 
-void collectReadAccesses(mlir::Value v, std::vector<AccessInfo>& accesses,
-                         int depth);
+void collectReadAccesses(mlir::Value v, std::vector<AccessInfo>& accesses, int depth);
 
 std::string exprDtypeString(mlir::Type ty);
 
@@ -68,25 +60,19 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block);
 
 std::string yieldedExpr(mlir::Value v);
 
-std::vector<ASTNode> buildMergeLibcall(hlfir::AssignOp assign,
-                                       hlfir::ElementalOp elem);
+std::vector<ASTNode> buildMergeLibcall(hlfir::AssignOp assign, hlfir::ElementalOp elem);
 
-std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign,
-                                          hlfir::ElementalOp elem);
+std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign, hlfir::ElementalOp elem);
 
-std::vector<ASTNode> buildElementalCountLibcall(hlfir::AssignOp assign,
-                                                hlfir::ElementalOp elem);
+std::vector<ASTNode> buildElementalCountLibcall(hlfir::AssignOp assign, hlfir::ElementalOp elem);
 
-std::vector<ASTNode> buildElementalAnyAllReduce(hlfir::AssignOp assign,
-                                                hlfir::ElementalOp elem,
-                                                std::string_view wcr,
+std::vector<ASTNode> buildElementalAnyAllReduce(hlfir::AssignOp assign, hlfir::ElementalOp elem, std::string_view wcr,
                                                 std::string_view identity);
 
 /// Materialise an ``hlfir.elemental`` into a synthetic transient with
 /// the elemental's element dtype (general libcall-over-elemental
 /// path).  Returns ``{transient_name, AST_nodes}`` on success; empty
 /// on failure.
-std::pair<std::string, std::vector<ASTNode>> materialiseElementalForLibcall(
-    hlfir::ElementalOp elem);
+std::pair<std::string, std::vector<ASTNode>> materialiseElementalForLibcall(hlfir::ElementalOp elem);
 
 }  // namespace hlfir_bridge

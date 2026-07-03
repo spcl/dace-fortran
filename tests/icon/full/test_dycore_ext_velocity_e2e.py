@@ -52,7 +52,6 @@ pytestmark = [
     pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
 ]
 
-
 _INNER_SRC = """
 subroutine inner_axpy(n, a, x, y)
   implicit none
@@ -66,7 +65,6 @@ subroutine inner_axpy(n, a, x, y)
   end do
 end subroutine inner_axpy
 """
-
 
 # Outer (dycore) kernel.  Two pre/post adjustments around the
 # external call so the test exercises a real delta between the outer's
@@ -96,7 +94,6 @@ subroutine outer_wrapper(n, a, x, y)
   end do
 end subroutine outer_wrapper
 """
-
 
 # Reference ``bind(c)`` driver around the un-transformed Fortran
 # sources -- same C ABI as the SDFG's ``outer_wrapper_c`` so ``ctypes``
@@ -129,8 +126,7 @@ def test_dycore_outer_calls_inner_via_sibling_sdfg(tmp_path: Path):
     inner_sdfg_dir = inner_dir / "sdfg"
     inner_sdfg_dir.mkdir(parents=True, exist_ok=True)
     clear_external_registry()
-    inner_sdfg = build_sdfg(_INNER_SRC, inner_sdfg_dir, name="inner_axpy",
-                            entry="inner_axpy").build()
+    inner_sdfg = build_sdfg(_INNER_SRC, inner_sdfg_dir, name="inner_axpy", entry="inner_axpy").build()
     inner_sdfg.name = "inner_axpy"
     inner_sdfg.build_folder = str(inner_dir / "dacecache")
     # Wrapper lib uses a *distinct* basename (``libinner_axpy_wrap.so``)
@@ -144,10 +140,8 @@ def test_dycore_outer_calls_inner_via_sibling_sdfg(tmp_path: Path):
         args=(
             OriginalArg(name="n", fortran_type="integer(c_int)", rank=0, intent="in"),
             OriginalArg(name="a", fortran_type="real(c_double)", rank=0, intent="in"),
-            OriginalArg(name="x", fortran_type="real(c_double)", rank=1,
-                        shape=("n", ), intent="in"),
-            OriginalArg(name="y", fortran_type="real(c_double)", rank=1,
-                        shape=("n", ), intent="inout"),
+            OriginalArg(name="x", fortran_type="real(c_double)", rank=1, shape=("n", ), intent="in"),
+            OriginalArg(name="y", fortran_type="real(c_double)", rank=1, shape=("n", ), intent="inout"),
         ),
     )
     inner_lib = build_fortran_library(
@@ -179,9 +173,7 @@ def test_dycore_outer_calls_inner_via_sibling_sdfg(tmp_path: Path):
         outer_dir.mkdir(parents=True, exist_ok=True)
         outer_sdfg_dir = outer_dir / "sdfg"
         outer_sdfg_dir.mkdir(parents=True, exist_ok=True)
-        outer_sdfg = build_sdfg(_OUTER_SRC, outer_sdfg_dir,
-                                name="outer_wrapper",
-                                entry="outer_wrapper").build()
+        outer_sdfg = build_sdfg(_OUTER_SRC, outer_sdfg_dir, name="outer_wrapper", entry="outer_wrapper").build()
         outer_sdfg.name = "outer_wrapper"
         outer_sdfg.build_folder = str(outer_dir / "dacecache")
         outer_lib = build_fortran_library(

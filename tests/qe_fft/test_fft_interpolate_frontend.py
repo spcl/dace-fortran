@@ -23,18 +23,15 @@ def _build_and_assert(entry: str, expected_kind: str, tmp_path):
     name = entry.split("::")[-1]
     sdfg = dace_fortran.build_sdfg(src, out_dir=str(tmp_path / name), entry=entry, name=name)
     sdfg.validate()
-    matches = [n for s in sdfg.states() for n in s.nodes()
-               if type(n).__name__ == "FFTInterpolate"]
+    matches = [n for s in sdfg.states() for n in s.nodes() if type(n).__name__ == "FFTInterpolate"]
     assert matches, "no FFTInterpolate lib node emitted"
     assert matches[0].dtype_kind == expected_kind, \
         f"expected dtype_kind={expected_kind!r}, got {matches[0].dtype_kind!r}"
 
 
 def test_fft_interpolate_complex_recognised(tmp_path):
-    _build_and_assert("fft_interpolate_probe::run_fft_interpolate_complex",
-                      "complex", tmp_path)
+    _build_and_assert("fft_interpolate_probe::run_fft_interpolate_complex", "complex", tmp_path)
 
 
 def test_fft_interpolate_real_recognised(tmp_path):
-    _build_and_assert("fft_interpolate_probe::run_fft_interpolate_real",
-                      "real", tmp_path)
+    _build_and_assert("fft_interpolate_probe::run_fft_interpolate_real", "real", tmp_path)

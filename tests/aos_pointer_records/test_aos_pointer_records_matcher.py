@@ -80,10 +80,8 @@ def test_materialisation_emits_concat_declare(tmp_path):
     into the actual IR rewrite.
     """
     mod = _post_pass_module("aos_single_pointer_member_probe.f90", "m::run", tmp_path)
-    assert _materialisation_landed(mod), (
-        "expected an `_QXaos_lift_` concat declare in the post-pass module; "
-        "the materialisation step did not emit one"
-    )
+    assert _materialisation_landed(mod), ("expected an `_QXaos_lift_` concat declare in the post-pass module; "
+                                          "the materialisation step did not emit one")
 
 
 def test_materialisation_handles_two_members(tmp_path):
@@ -93,3 +91,26 @@ def test_materialisation_handles_two_members(tmp_path):
     # 2 concat declares (one per member)
     assert sum(1 for l in concat_lines if 'hlfir.declare' in l) >= 2, \
         f"expected 2 concat declares; got: {concat_lines!r}"
+
+
+def test_allocatable_member_aos_not_matched(tmp_path):
+    """An AoS whose member is ALLOCATABLE (``fir.heap``), not POINTER
+    (``fir.ptr``), must NOT be matched by ``hlfir-lift-aos-pointer-records``.
+
+    The pass lifts the ``q(c)%m => target`` pointer-rebind pattern; an
+    allocatable member is never rebound with ``=>`` -- it is allocated with
+    ``allocate(a(i)%w(...))`` and belongs to flatten-structs' Phase 5c-A
+    padded-companion path.  Matching it here fires the ``rebinds.empty()``
+    "dead exchange scaffolding" branch, which mints a bogus size-1 placeholder
+    companion ``_QXaos_lift_..._w_0`` (shape ``(N, 1)``) and rewrites the live
+    ``a(i)%w(j)`` reads onto it -- producing an out-of-bounds
+    ``a_w_0[1, 1]`` memlet (and, at an SDFG boundary, an unbound
+    ``a_w_0_d0`` free symbol).  Regression guard for that double-companion
+    bug: assert neither the recognition attribute nor an ``_QXaos_lift_``
+    companion is emitted for the allocatable-member shape.
+    """
+    mod = _post_pass_module("aos_allocatable_member_probe.f90", "m::run", tmp_path)
+    assert not _has_attr(mod, "hlfir.aos_ptr_records."), \
+        "matcher wrongly recognised an allocatable-member AoS as pointer-records"
+    assert not _materialisation_landed(mod), \
+        "matcher wrongly minted an _QXaos_lift_ companion for an allocatable-member AoS"

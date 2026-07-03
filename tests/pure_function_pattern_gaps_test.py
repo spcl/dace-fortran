@@ -45,9 +45,7 @@ from _util import have_flang
 
 from dace_fortran import build_sdfg_from_files
 
-
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
-
 
 # ---------------------------------------------------------------------------
 # Pattern A -- array fn return used inside an arithmetic expression.
@@ -82,9 +80,7 @@ def test_array_fn_return_in_arithmetic(tmp_path):
     """Array RHS = arr + array_fn(...)."""
     src = tmp_path / "m.f90"
     src.write_text(_PAT_A)
-    sdfg = build_sdfg_from_files(
-        [src], entry="m_pat_a::kern",
-        name="pat_a", out_dir=tmp_path / "build")
+    sdfg = build_sdfg_from_files([src], entry="m_pat_a::kern", name="pat_a", out_dir=tmp_path / "build")
     sdfg.validate()
 
 
@@ -125,9 +121,7 @@ def test_dummy_shaped_fn_return(tmp_path):
     """Local array = fn(...) where fn's return shape is a dummy expression."""
     src = tmp_path / "m.f90"
     src.write_text(_PAT_C)
-    sdfg = build_sdfg_from_files(
-        [src], entry="m_pat_c::kern",
-        name="pat_c", out_dir=tmp_path / "build")
+    sdfg = build_sdfg_from_files([src], entry="m_pat_c::kern", name="pat_c", out_dir=tmp_path / "build")
     sdfg.validate()
 
 
@@ -172,9 +166,7 @@ def test_fn_returns_derived_type(tmp_path):
     """A PURE FUNCTION whose return is a small derived type."""
     src = tmp_path / "m.f90"
     src.write_text(_PAT_F)
-    sdfg = build_sdfg_from_files(
-        [src], entry="m_pat_f::kern",
-        name="pat_f", out_dir=tmp_path / "build")
+    sdfg = build_sdfg_from_files([src], entry="m_pat_f::kern", name="pat_f", out_dir=tmp_path / "build")
     sdfg.validate()
 
 
@@ -209,7 +201,5 @@ def test_slice_lhs_array_fn_return(tmp_path):
     """``arr(1:3, i) = fn(...)`` where fn returns a fixed-shape array."""
     src = tmp_path / "m.f90"
     src.write_text(_PAT_I)
-    sdfg = build_sdfg_from_files(
-        [src], entry="m_pat_i::kern",
-        name="pat_i", out_dir=tmp_path / "build")
+    sdfg = build_sdfg_from_files([src], entry="m_pat_i::kern", name="pat_i", out_dir=tmp_path / "build")
     sdfg.validate()

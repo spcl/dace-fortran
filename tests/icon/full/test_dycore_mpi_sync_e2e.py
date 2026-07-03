@@ -50,19 +50,14 @@ from dace_fortran.external import Arg, clear_external_registry, keep_external
 pytestmark = [
     pytest.mark.mpi,
     pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH"),
-    pytest.mark.skipif(shutil.which("mpifort") is None,
-                       reason="mpifort not on PATH (need an MPI Fortran wrapper)"),
+    pytest.mark.skipif(shutil.which("mpifort") is None, reason="mpifort not on PATH (need an MPI Fortran wrapper)"),
 ]
-
 
 # Matching FP-conservative flags across every build layer so SDFG +
 # gfortran arithmetic match bit-for-bit -- same convention as the
 # standalone single-rank dycore test.
-_O0_FFLAGS = ("-O0", "-fno-fast-math", "-ffp-contract=off",
-              "-ffree-line-length-none")
-_O0_CXX_FLAGS = ("-O0", "-fno-fast-math", "-ffp-contract=off",
-                 "-fPIC", "-Wno-unused-parameter", "-Wno-unused-label")
-
+_O0_FFLAGS = ("-O0", "-fno-fast-math", "-ffp-contract=off", "-ffree-line-length-none")
+_O0_CXX_FLAGS = ("-O0", "-fno-fast-math", "-ffp-contract=off", "-fPIC", "-Wno-unused-parameter", "-Wno-unused-label")
 
 # Dummy halo-exchange ``sync_patch_array``.  ICON-shaped (Fortran
 # subroutine taking ``(tag, field, comm)``) but the body is the
@@ -142,7 +137,6 @@ contains
 end module mo_sync_mpi
 """
 
-
 # Standalone dycore: per-rank computation on block 1 (owned), then
 # the sync fills block 2 (halo) from the neighbor's block 1.
 _DYCORE_SRC = r"""
@@ -169,7 +163,6 @@ contains
   end subroutine dycore_with_sync
 end module mo_dycore_mpi
 """
-
 
 # Reference-side ``bind(c)`` driver -- same ABI as the SDFG-emitted
 # bind_c_shim (extents-first, scalars-last per
@@ -201,14 +194,12 @@ def _build_sync_mpi_lib(build_dir: Path) -> Path:
     src.write_text(_SYNC_MPI_SRC)
     so_path = build_dir / "libsync_mpi.so"
     subprocess.check_call(
-        ["mpifort", "-shared", "-fPIC", *_O0_FFLAGS,
-         f"-J{build_dir}", str(src), "-o", str(so_path)],
-        cwd=build_dir)
+        ["mpifort", "-shared", "-fPIC", *_O0_FFLAGS, f"-J{build_dir}",
+         str(src), "-o", str(so_path)], cwd=build_dir)
     return so_path
 
 
-def _build_ref_lib(build_dir: Path, sync_so: Path,
-                   sync_build_dir: Path) -> Path:
+def _build_ref_lib(build_dir: Path, sync_so: Path, sync_build_dir: Path) -> Path:
     """Compile the gfortran reference: ``mo_dycore_mpi`` +
     ``dycore_with_sync_ref_c`` driver, linked against the same
     real-MPI sync library the SDFG path uses.  ``-I<sync_build_dir>``
@@ -219,14 +210,13 @@ def _build_ref_lib(build_dir: Path, sync_so: Path,
     driver_src = build_dir / "driver.f90"
     driver_src.write_text(_REF_DRIVER_SRC)
     so_path = build_dir / "libdycore_ref.so"
-    subprocess.check_call(
-        ["mpifort", "-shared", "-fPIC", *_O0_FFLAGS,
-         f"-J{build_dir}", f"-I{sync_build_dir}",
-         str(dycore_src), str(driver_src),
-         f"-L{sync_so.parent}", f"-Wl,-rpath,{sync_so.parent}",
-         f"-l:{sync_so.name}",
-         "-o", str(so_path)],
-        cwd=build_dir)
+    subprocess.check_call([
+        "mpifort", "-shared", "-fPIC", *_O0_FFLAGS, f"-J{build_dir}", f"-I{sync_build_dir}",
+        str(dycore_src),
+        str(driver_src), f"-L{sync_so.parent}", f"-Wl,-rpath,{sync_so.parent}", f"-l:{sync_so.name}", "-o",
+        str(so_path)
+    ],
+                          cwd=build_dir)
     return so_path
 
 
@@ -280,28 +270,23 @@ def test_dycore_with_real_mpi_sync_2rank(tmp_path: Path):
             "sync_patch_array",
             c_name="sync_patch_array_c",
             args=(
-                Arg(kind="scalar", dtype="int32", intent="in"),       # tag
-                Arg(kind="array", dtype="float64", intent="inout"),    # field
-                Arg(kind="scalar", dtype="int32", intent="in"),       # comm
+                Arg(kind="scalar", dtype="int32", intent="in"),  # tag
+                Arg(kind="array", dtype="float64", intent="inout"),  # field
+                Arg(kind="scalar", dtype="int32", intent="in"),  # comm
             ),
             libraries=(sync_so_str, ),
             dynamic_extents_abi=True,
         )
         _orig_cxx_args = dace.Config.get("compiler", "cpu", "args")
-        dace.Config.set("compiler", "cpu", "args",
-                        value=" ".join(_O0_CXX_FLAGS))
+        dace.Config.set("compiler", "cpu", "args", value=" ".join(_O0_CXX_FLAGS))
         try:
             sdfg_dir = tmp_path / "sdfg"
             sdfg_dir.mkdir(parents=True, exist_ok=True)
             full_src = _SYNC_MPI_SRC + _DYCORE_SRC
-            sdfg = build_sdfg(
-                full_src, sdfg_dir,
-                name="dycore_with_sync",
-                entry="dycore_with_sync").build()
+            sdfg = build_sdfg(full_src, sdfg_dir, name="dycore_with_sync", entry="dycore_with_sync").build()
             sdfg.name = "dycore_with_sync"
             sdfg.build_folder = str(sdfg_dir / "dacecache")
-            iface = build_auto_interface(
-                sdfg._fortran_interface_raw, "dycore_with_sync")
+            iface = build_auto_interface(sdfg._fortran_interface_raw, "dycore_with_sync")
             # The bridge needs mo_sync_mpi's body as a prelude so
             # the bind_c_shim's USE statement resolves at gfortran
             # link time.
@@ -353,8 +338,7 @@ def test_dycore_with_real_mpi_sync_2rank(tmp_path: Path):
     # swap must run within {rank, partner_world}.
     mpi_comm_int = ctypes.c_int(pair.py2f())  # Fortran MPI handle
 
-    argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int,
-                ctypes.c_void_p, ctypes.c_double, ctypes.c_int]
+    argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_double, ctypes.c_int]
     sdfg_fn = sdfg_lib_obj.dycore_with_sync_c
     sdfg_fn.restype = None
     sdfg_fn.argtypes = argtypes
@@ -362,19 +346,16 @@ def test_dycore_with_real_mpi_sync_2rank(tmp_path: Path):
     ref_fn.restype = None
     ref_fn.argtypes = argtypes
 
-    sdfg_fn(nproma, nlev, nblks, field_sdfg.ctypes.data,
-            ctypes.c_double(alpha), mpi_comm_int)
-    ref_fn(nproma, nlev, nblks, field_ref.ctypes.data,
-           ctypes.c_double(alpha), mpi_comm_int)
+    sdfg_fn(nproma, nlev, nblks, field_sdfg.ctypes.data, ctypes.c_double(alpha), mpi_comm_int)
+    ref_fn(nproma, nlev, nblks, field_ref.ctypes.data, ctypes.c_double(alpha), mpi_comm_int)
 
     # Per-rank bit-exact agreement on both the owned block (block
     # 1, local compute) and the halo block (block 2, filled via the
     # MPI Sendrecv).  A mis-routed comm or a swapped neighbor
     # immediately diverges; a correctness regression in the SDFG
     # codegen shows up as a >1 ULP diff.
-    one_ulp_rtol = 2 ** -52
-    np.testing.assert_allclose(field_sdfg, field_ref,
-                               rtol=one_ulp_rtol, atol=0.0)
+    one_ulp_rtol = 2**-52
+    np.testing.assert_allclose(field_sdfg, field_ref, rtol=one_ulp_rtol, atol=0.0)
     np.testing.assert_array_equal(field_sdfg, field_ref)
 
     # Sanity check the halo: rank's block 2 must equal the OTHER
@@ -386,15 +367,15 @@ def test_dycore_with_real_mpi_sync_2rank(tmp_path: Path):
     # ``42 + partner_world`` -- so at -n 4 a leak across pairs (e.g. rank
     # 0 receiving rank 2's data) is caught here.
     other_rank_init = np.asfortranarray(
-        np.random.default_rng(seed=42 + partner_world).standard_normal(
-            (nproma, nlev, nblks)))
+        np.random.default_rng(seed=42 + partner_world).standard_normal((nproma, nlev, nblks)))
     expected_halo = other_rank_init[:, :, 0].copy()
     for k in range(nlev):
         for i in range(nproma):
-            expected_halo[i, k] = (expected_halo[i, k] * alpha +
-                                   np.sqrt(float((i + 1) + (k + 1))))
-    np.testing.assert_allclose(field_sdfg[:, :, 1], expected_halo,
-                               rtol=one_ulp_rtol, atol=0.0,
+            expected_halo[i, k] = (expected_halo[i, k] * alpha + np.sqrt(float((i + 1) + (k + 1))))
+    np.testing.assert_allclose(field_sdfg[:, :, 1],
+                               expected_halo,
+                               rtol=one_ulp_rtol,
+                               atol=0.0,
                                err_msg=("halo (block 2) does NOT match "
                                         "the neighbor's computed block 1 -- "
                                         "MPI_Sendrecv probably mis-fired"))

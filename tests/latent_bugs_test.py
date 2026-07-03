@@ -18,8 +18,7 @@ import pytest
 
 from _util import build_sdfg, have_flang
 
-pytestmark = pytest.mark.skipif(not have_flang(),
-                                reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
 
 # ---------------------------------------------------------------------------
@@ -49,8 +48,7 @@ SUBROUTINE while_arr(a, thr, n, count)
 END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="while_arr",
-                      entry="while_arr_mod::while_arr").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="while_arr", entry="while_arr_mod::while_arr").build()
     a = np.array([2.0, 3.0, 1.5, 0.5, 4.0], dtype=np.float64, order="F")
     thr = 1.0
     count_arr = np.array([0], dtype=np.int32)
@@ -84,8 +82,7 @@ SUBROUTINE neg_zero_div(out_pos_inf, out_neg_inf)
 END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="neg_zero_div",
-                      entry="neg_zero_div_mod::neg_zero_div").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="neg_zero_div", entry="neg_zero_div_mod::neg_zero_div").build()
     pos = np.zeros(1, dtype=np.float64)
     neg = np.zeros(1, dtype=np.float64)
     sdfg(out_pos_inf=pos, out_neg_inf=neg)
@@ -131,14 +128,12 @@ SUBROUTINE emit_neg_zero(out)
 END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="emit_neg_zero",
-                      entry="emit_neg_zero_mod::emit_neg_zero").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="emit_neg_zero", entry="emit_neg_zero_mod::emit_neg_zero").build()
     out = np.zeros(1, dtype=np.float64)
     sdfg(out=out)
     assert out[0] == 0.0
-    assert math.copysign(1.0, out[0]) == -1.0, (
-        f"expected -0.0 (sign bit set), got {out[0]} with sign "
-        f"{math.copysign(1.0, out[0])}")
+    assert math.copysign(1.0, out[0]) == -1.0, (f"expected -0.0 (sign bit set), got {out[0]} with sign "
+                                                f"{math.copysign(1.0, out[0])}")
 
 
 # ---------------------------------------------------------------------------
@@ -160,8 +155,7 @@ SUBROUTINE emit_pos_inf(out)
 END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="emit_pos_inf",
-                      entry="emit_pos_inf_mod::emit_pos_inf").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="emit_pos_inf", entry="emit_pos_inf_mod::emit_pos_inf").build()
     out = np.zeros(1, dtype=np.float64)
     sdfg(out=out)
     assert np.isposinf(out[0]), f"expected +inf, got {out[0]}"
@@ -180,8 +174,7 @@ SUBROUTINE emit_neg_inf(out)
 END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="emit_neg_inf",
-                      entry="emit_neg_inf_mod::emit_neg_inf").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="emit_neg_inf", entry="emit_neg_inf_mod::emit_neg_inf").build()
     out = np.zeros(1, dtype=np.float64)
     sdfg(out=out)
     assert np.isneginf(out[0]), f"expected -inf, got {out[0]}"
@@ -202,8 +195,7 @@ SUBROUTINE emit_nan(out)
 END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="emit_nan",
-                      entry="emit_nan_mod::emit_nan").build()
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="emit_nan", entry="emit_nan_mod::emit_nan").build()
     out = np.zeros(1, dtype=np.float64)
     sdfg(out=out)
     assert np.isnan(out[0]), f"expected NaN, got {out[0]}"
@@ -230,7 +222,9 @@ SUBROUTINE mixed_triplet_assign(s_y, out, i, n)
 END SUBROUTINE
 END MODULE
 """
-    sdfg = build_sdfg(src, tmp_path / "sdfg", name="mixed_triplet_assign",
+    sdfg = build_sdfg(src,
+                      tmp_path / "sdfg",
+                      name="mixed_triplet_assign",
                       entry="mixed_triplet_assign_mod::mixed_triplet_assign").build()
     s_y = np.zeros((10, 100), order="F", dtype=np.float64)
     s_y[3, :5] = [1.0, 2.0, 3.0, 4.0, 5.0]

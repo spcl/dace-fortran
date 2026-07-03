@@ -109,12 +109,10 @@ static std::optional<int64_t> traceConstIndex(mlir::Value v) {
   auto* def = v.getDefiningOp();
   if (!def) return std::nullopt;
   if (auto cst = mlir::dyn_cast<mlir::arith::ConstantOp>(def)) {
-    if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue()))
-      return ia.getInt();
+    if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue())) return ia.getInt();
     return std::nullopt;
   }
-  if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def))
-    return traceConstIndex(cv.getValue());
+  if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def)) return traceConstIndex(cv.getValue());
   return std::nullopt;
 }
 
@@ -124,9 +122,7 @@ static bool isConstOne(mlir::Value v) {
   return c.has_value() && *c == 1;
 }
 
-struct FoldCopyInOutPass
-    : public mlir::PassWrapper<FoldCopyInOutPass,
-                               mlir::OperationPass<mlir::ModuleOp>> {
+struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(FoldCopyInOutPass)
 
   llvm::StringRef getArgument() const final { return "hlfir-fold-copy-in-out"; }
@@ -214,9 +210,7 @@ struct FoldCopyInOutPass
       if (op.getOperand(1) == cin.getResult(1)) copyOuts.push_back(op);
     });
 
-    if (aliasDecl.getResult(0).use_empty() &&
-        aliasDecl.getResult(1).use_empty())
-      aliasDecl.erase();
+    if (aliasDecl.getResult(0).use_empty() && aliasDecl.getResult(1).use_empty()) aliasDecl.erase();
 
     if (boxAddr.getResult().use_empty()) boxAddr.erase();
 
@@ -247,9 +241,7 @@ struct FoldCopyInOutPass
     // rebinds).  A copy_in of a plain contiguous array is left to the
     // section path / untouched.
     auto attrs = srcDecl.getFortranAttrs();
-    if (!attrs ||
-        !bitEnumContainsAny(*attrs, fir::FortranVariableFlagsEnum::pointer))
-      return;
+    if (!attrs || !bitEnumContainsAny(*attrs, fir::FortranVariableFlagsEnum::pointer)) return;
     // The copy box and the source box share the same type
     // (``box<ptr<array<?>>>``), so the replacement is type-safe and the
     // downstream ``fir.box_addr`` now extracts the source view's data.
@@ -275,8 +267,7 @@ struct FoldCopyInOutPass
   /// indices folded in.  Preserves triplets / shape on the alias-
   /// access side (so ``%alias(1:N:1)`` whole-array becomes
   /// ``%parent(scalars..., 1:N:1)``).
-  void rewriteAccess(hlfir::DesignateOp useDg, mlir::Value parent,
-                     const SectionShape& sec, mlir::OpBuilder& b) {
+  void rewriteAccess(hlfir::DesignateOp useDg, mlir::Value parent, const SectionShape& sec, mlir::OpBuilder& b) {
     b.setInsertionPoint(useDg);
     auto loc = useDg.getLoc();
 
@@ -296,15 +287,13 @@ struct FoldCopyInOutPass
       if (!lo.getType().isIndex()) {
         lo = b.create<fir::ConvertOp>(loc, b.getIndexType(), lo);
       }
-      mlir::Value one = b.create<mlir::arith::ConstantOp>(loc, b.getIndexType(),
-                                                          b.getIndexAttr(1));
+      mlir::Value one = b.create<mlir::arith::ConstantOp>(loc, b.getIndexType(), b.getIndexAttr(1));
       loMinusOne = b.create<mlir::arith::SubIOp>(loc, lo, one);
     }
 
     // Build the new index list: parent's scalar prefix + shifted
     // alias indices + (no scalars after triplet in this scope).
-    llvm::SmallVector<mlir::Value, 6> newIndices(sec.scalars.begin(),
-                                                 sec.scalars.end());
+    llvm::SmallVector<mlir::Value, 6> newIndices(sec.scalars.begin(), sec.scalars.end());
     // Walk the alias designate's own indices.  Each may be a
     // scalar or a triplet (``%alias(1:N:1)`` whole-array shape).
     // Triplet flags on the alias side carry over verbatim  --  we
@@ -313,8 +302,7 @@ struct FoldCopyInOutPass
     auto aliasIdx = useDg.getIndices();
     llvm::SmallVector<bool, 4> newTripFlags;
     // Scalar prefix from the section is non-triplet.
-    for (size_t i = 0; i < sec.scalars.size(); ++i)
-      newTripFlags.push_back(false);
+    for (size_t i = 0; i < sec.scalars.size(); ++i) newTripFlags.push_back(false);
 
     if (!aliasTripAttr || aliasTripAttr.asArrayRef().empty()) {
       // No triplets on alias use; all alias-supplied indices
@@ -323,8 +311,7 @@ struct FoldCopyInOutPass
       for (auto idx : aliasIdx) {
         mlir::Value shifted = idx;
         if (loMinusOne) {
-          if (!idx.getType().isIndex())
-            shifted = b.create<fir::ConvertOp>(loc, b.getIndexType(), idx);
+          if (!idx.getType().isIndex()) shifted = b.create<fir::ConvertOp>(loc, b.getIndexType(), idx);
           shifted = b.create<mlir::arith::AddIOp>(loc, shifted, loMinusOne);
         }
         newIndices.push_back(shifted);
@@ -340,10 +327,8 @@ struct FoldCopyInOutPass
           auto shift = [&](mlir::Value v) {
             if (!loMinusOne) return v;
             mlir::Value vc = v;
-            if (!v.getType().isIndex())
-              vc = b.create<fir::ConvertOp>(loc, b.getIndexType(), v);
-            return (mlir::Value)b.create<mlir::arith::AddIOp>(loc, vc,
-                                                              loMinusOne);
+            if (!v.getType().isIndex()) vc = b.create<fir::ConvertOp>(loc, b.getIndexType(), v);
+            return (mlir::Value)b.create<mlir::arith::AddIOp>(loc, vc, loMinusOne);
           };
           newIndices.push_back(shift(aliasIdx[cursor]));
           newIndices.push_back(shift(aliasIdx[cursor + 1]));
@@ -354,9 +339,7 @@ struct FoldCopyInOutPass
           if (cursor + 1 > aliasIdx.size()) return;
           mlir::Value shifted = aliasIdx[cursor];
           if (loMinusOne) {
-            if (!shifted.getType().isIndex())
-              shifted =
-                  b.create<fir::ConvertOp>(loc, b.getIndexType(), shifted);
+            if (!shifted.getType().isIndex()) shifted = b.create<fir::ConvertOp>(loc, b.getIndexType(), shifted);
             shifted = b.create<mlir::arith::AddIOp>(loc, shifted, loMinusOne);
           }
           newIndices.push_back(shifted);
@@ -374,8 +357,7 @@ struct FoldCopyInOutPass
         /*component_shape=*/mlir::Value{},
         /*indices=*/mlir::ValueRange{newIndices},
         /*is_triplet=*/
-        (newTripFlags.empty() ? mlir::DenseBoolArrayAttr{}
-                              : b.getDenseBoolArrayAttr(newTripFlags)),
+        (newTripFlags.empty() ? mlir::DenseBoolArrayAttr{} : b.getDenseBoolArrayAttr(newTripFlags)),
         /*substring=*/mlir::ValueRange{},
         /*complex_part=*/mlir::BoolAttr{},
         /*shape=*/useDg.getShape(),
@@ -388,8 +370,6 @@ struct FoldCopyInOutPass
 
 }  // namespace
 
-std::unique_ptr<mlir::Pass> createFoldCopyInOutPass() {
-  return std::make_unique<FoldCopyInOutPass>();
-}
+std::unique_ptr<mlir::Pass> createFoldCopyInOutPass() { return std::make_unique<FoldCopyInOutPass>(); }
 
 }  // namespace hlfir_bridge

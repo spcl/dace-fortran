@@ -152,8 +152,9 @@ end module read_alloc_mod
 
     # Inference should pick -5 as the lower bound (most-negative literal
     # designate index in the body).
-    assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0') == -5, (f"expected offset_arr_d0 inferred to -5; got "
-                                                             f"{dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0')}")
+    assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0') == -5, (
+        f"expected offset_arr_d0 inferred to -5; got "
+        f"{dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0')}")
 
     out = np.zeros(4, dtype=np.int32, order='F')
     sdfg(out=out)
@@ -187,7 +188,7 @@ end module zero_based_mod
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(src, sdfg_dir, name="zero_based", entry="zero_based_mod::zero_based").build()
     sdfg.validate()
-    assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0') == 0
+    assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0') == 0
 
     out = np.zeros(3, dtype=np.int32, order='F')
     sdfg(out=out)
@@ -225,7 +226,7 @@ end module icon_edge_blocks_mod
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(src, sdfg_dir, name="icon_edge_blocks", entry="icon_edge_blocks_mod::icon_edge_blocks").build()
     sdfg.validate()
-    assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_end_block_d0') == -13
+    assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_end_block_d0') == -13
 
     out = np.zeros(3, dtype=np.int32, order='F')
     sdfg(out=out)
@@ -260,9 +261,9 @@ end module mixed_bounds_mod
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(src, sdfg_dir, name="mixed_bounds", entry="mixed_bounds_mod::mixed_bounds").build()
     sdfg.validate()
-    assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0') == -4
+    assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0') == -4
     # dim 1 has no literal index below 1, so stays at default 1
-    assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d1') == 1
+    assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d1') == 1
 
     out = np.zeros(4, dtype=np.int32, order='F')
     sdfg(out=out)
@@ -300,8 +301,9 @@ end module sym_idx_mod
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(src, sdfg_dir, name="sym_idx", entry="sym_idx_mod::sym_idx").build()
     sdfg.validate()
-    assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0') == -5, (f"shape_shift inference should pick -5 from ALLOCATE(arr(-5:5)); "
-                                                     f"got {dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0')}")
+    assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0') == -5, (
+        f"shape_shift inference should pick -5 from ALLOCATE(arr(-5:5)); "
+        f"got {dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0')}")
     out = np.zeros(11, dtype=np.int32, order='F')
     sdfg(out=out)
     expected = np.array([(i - 5) * 100 for i in range(11)], dtype=np.int32)
@@ -333,8 +335,9 @@ end module read_dummy_mod
     sdfg = build_sdfg(src, sdfg_dir, name="read_dummy", entry="read_dummy_mod::read_dummy").build()
     sdfg.validate()
     # literal-index inference sees -3 as the most-negative literal
-    assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0') == -3, (f"expected offset_arr_d0 == -3 (most-negative literal); "
-                                                             f"got {dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0')}")
+    assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0') == -3, (
+        f"expected offset_arr_d0 == -3 (most-negative literal); "
+        f"got {dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0')}")
 
     # Buffer is allocated 1-based by numpy; caller positions data
     # so that what the SDFG reads at offset (arr[N - (-3)] = arr[N+3])
@@ -524,7 +527,7 @@ end module param_bound_mod
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(src, sdfg_dir, name="param_bound", entry="param_bound_mod::param_bound").build()
     sdfg.validate()
-    assert dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants)).get('offset_arr_d0') == -8
+    assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0') == -8
 
     arr = np.asfortranarray(np.array([(i - 8) * 100 for i in range(14)], dtype=np.int32))  # arr(-8) = -800, etc
     out = np.zeros(3, dtype=np.int32, order='F')

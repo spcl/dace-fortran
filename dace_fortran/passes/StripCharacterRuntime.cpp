@@ -79,23 +79,18 @@ static constexpr llvm::StringLiteral kFortranCharPrefix = "_FortranACharacter";
 /// replace one of its results.  Returns ``nullptr`` if the result
 /// type isn't one of the integer types the Fortran character
 /// runtime is known to produce (currently always ``i32``).
-static mlir::Value makeReplacement(mlir::OpBuilder& builder, mlir::Location loc,
-                                   mlir::Type ty) {
+static mlir::Value makeReplacement(mlir::OpBuilder& builder, mlir::Location loc, mlir::Type ty) {
   if (auto intTy = mlir::dyn_cast<mlir::IntegerType>(ty)) {
-    return builder.create<mlir::arith::ConstantOp>(
-        loc, builder.getIntegerAttr(intTy, 0));
+    return builder.create<mlir::arith::ConstantOp>(loc, builder.getIntegerAttr(intTy, 0));
   }
   return {};
 }
 
 struct StripCharacterRuntimePass
-    : public mlir::PassWrapper<StripCharacterRuntimePass,
-                               mlir::OperationPass<mlir::ModuleOp>> {
+    : public mlir::PassWrapper<StripCharacterRuntimePass, mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(StripCharacterRuntimePass)
 
-  llvm::StringRef getArgument() const final {
-    return "hlfir-strip-character-runtime";
-  }
+  llvm::StringRef getArgument() const final { return "hlfir-strip-character-runtime"; }
   llvm::StringRef getDescription() const final {
     return "Delete fir.call ops to flang's _FortranACharacter* runtime "
            "(string compare / Trim / Adjust / ...) -- the bridge's "
@@ -115,11 +110,10 @@ struct StripCharacterRuntimePass
       mlir::OpBuilder builder(call);
       bool allReplaced = true;
       for (auto res : call.getResults()) {
-        mlir::Value repl =
-            makeReplacement(builder, call.getLoc(), res.getType());
+        mlir::Value repl = makeReplacement(builder, call.getLoc(), res.getType());
         if (!repl) {
-          LLVM_DEBUG(llvm::dbgs() << "StripCharacterRuntime: refusing to strip "
-                                  << name << " -- result type unsupported\n");
+          LLVM_DEBUG(llvm::dbgs() << "StripCharacterRuntime: refusing to strip " << name
+                                  << " -- result type unsupported\n");
           allReplaced = false;
           break;
         }
@@ -130,16 +124,12 @@ struct StripCharacterRuntimePass
 
     for (auto call : toErase) call->erase();
 
-    LLVM_DEBUG(llvm::dbgs()
-               << "StripCharacterRuntime: erased " << toErase.size()
-               << " _FortranACharacter* call(s)\n");
+    LLVM_DEBUG(llvm::dbgs() << "StripCharacterRuntime: erased " << toErase.size() << " _FortranACharacter* call(s)\n");
   }
 };
 
 }  // anonymous namespace
 
-std::unique_ptr<mlir::Pass> createStripCharacterRuntimePass() {
-  return std::make_unique<StripCharacterRuntimePass>();
-}
+std::unique_ptr<mlir::Pass> createStripCharacterRuntimePass() { return std::make_unique<StripCharacterRuntimePass>(); }
 
 }  // namespace hlfir_bridge

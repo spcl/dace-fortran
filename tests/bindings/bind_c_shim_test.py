@@ -40,7 +40,6 @@ pytestmark = [
     pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
 ]
 
-
 # ---------------------------------------------------------------------------
 #  Emitter structural checks (text-only -- no compile, no link).
 # ---------------------------------------------------------------------------
@@ -54,10 +53,8 @@ def test_emit_shim_scalar_in_array_in_out(tmp_path: Path):
         entry="kern",
         args=(
             OriginalArg(name="n", fortran_type="integer(c_int)", rank=0, intent="in"),
-            OriginalArg(name="x", fortran_type="real(c_double)", rank=1,
-                        shape=("n", ), intent="in"),
-            OriginalArg(name="y", fortran_type="real(c_double)", rank=1,
-                        shape=("n", ), intent="out"),
+            OriginalArg(name="x", fortran_type="real(c_double)", rank=1, shape=("n", ), intent="in"),
+            OriginalArg(name="y", fortran_type="real(c_double)", rank=1, shape=("n", ), intent="out"),
         ),
     )
     out = emit_bind_c_shim(iface, str(tmp_path / "kern_c.f90"))
@@ -78,8 +75,7 @@ def test_emit_shim_scalar_in_array_in_out(tmp_path: Path):
     assert "call kern_dace(n, x, y)" in text
     assert "call kern_dace_finalize()" in text
     # USE statement targets the right binding module.
-    assert ("use kern_dace_bindings, only: kern_dace, kern_dace_finalize"
-            in text)
+    assert ("use kern_dace_bindings, only: kern_dace, kern_dace_finalize" in text)
 
 
 def test_emit_shim_scalar_output_is_length1_array(tmp_path: Path):
@@ -90,8 +86,7 @@ def test_emit_shim_scalar_output_is_length1_array(tmp_path: Path):
         entry="reduce",
         args=(
             OriginalArg(name="n", fortran_type="integer(c_int)", rank=0, intent="in"),
-            OriginalArg(name="x", fortran_type="real(c_double)", rank=1,
-                        shape=("n", ), intent="in"),
+            OriginalArg(name="x", fortran_type="real(c_double)", rank=1, shape=("n", ), intent="in"),
             OriginalArg(name="s", fortran_type="real(c_double)", rank=0, intent="out"),
         ),
     )
@@ -109,8 +104,7 @@ def test_emit_shim_rank2_array_extents(tmp_path: Path):
         args=(
             OriginalArg(name="m", fortran_type="integer(c_int)", rank=0, intent="in"),
             OriginalArg(name="n", fortran_type="integer(c_int)", rank=0, intent="in"),
-            OriginalArg(name="a", fortran_type="real(c_double)", rank=2,
-                        shape=("m", "n"), intent="inout"),
+            OriginalArg(name="a", fortran_type="real(c_double)", rank=2, shape=("m", "n"), intent="inout"),
         ),
     )
     text = emit_bind_c_shim(iface, str(tmp_path / "mat_c.f90")).read_text()
@@ -135,12 +129,9 @@ def test_emit_shim_forwards_module_var_array_extents(tmp_path: Path):
         entry="ppm",
         args=(
             OriginalArg(name="vt", fortran_type="integer(c_int)", rank=0, intent="in"),
-            OriginalArg(name="tracer", fortran_type="real(c_double)", rank=2,
-                        shape=("nproma", "n_zlev"), intent="in"),
-            OriginalArg(name="w", fortran_type="real(c_double)", rank=2,
-                        shape=("nproma", "n_zlev + 1"), intent="in"),
-            OriginalArg(name="flux", fortran_type="real(c_double)", rank=2,
-                        shape=("nproma", "n_zlev"), intent="out"),
+            OriginalArg(name="tracer", fortran_type="real(c_double)", rank=2, shape=("nproma", "n_zlev"), intent="in"),
+            OriginalArg(name="w", fortran_type="real(c_double)", rank=2, shape=("nproma", "n_zlev + 1"), intent="in"),
+            OriginalArg(name="flux", fortran_type="real(c_double)", rank=2, shape=("nproma", "n_zlev"), intent="out"),
         ),
     )
     text = emit_bind_c_shim(iface, str(tmp_path / "ppm_c.f90")).read_text()
@@ -167,8 +158,7 @@ def test_emit_shim_scalar_dummy_extent_not_forwarded(tmp_path: Path):
         entry="kern",
         args=(
             OriginalArg(name="n", fortran_type="integer(c_int)", rank=0, intent="in"),
-            OriginalArg(name="a", fortran_type="real(c_double)", rank=1,
-                        shape=("n", ), intent="inout"),
+            OriginalArg(name="a", fortran_type="real(c_double)", rank=1, shape=("n", ), intent="inout"),
         ),
     )
     text = emit_bind_c_shim(iface, str(tmp_path / "kern_c.f90")).read_text()
@@ -188,19 +178,13 @@ def test_emit_shim_dynamic_shape_struct_member(tmp_path: Path):
     extents and element-copies in / out per ``intent``."""
     iface = OriginalInterface(
         entry="kern",
-        args=(
-            OriginalArg(name="st", fortran_type="type(t_state)", rank=0,
-                        intent="inout", struct_type="t_state"),
-        ),
+        args=(OriginalArg(name="st", fortran_type="type(t_state)", rank=0, intent="inout", struct_type="t_state"), ),
         struct_types={
             "t_state":
             DerivedType(
                 name="t_state",
                 module="mo_state",
-                members=(Member(name="u",
-                                fortran_type="real(c_double)",
-                                rank=1,
-                                shape=("?", )), ),
+                members=(Member(name="u", fortran_type="real(c_double)", rank=1, shape=("?", )), ),
             )
         },
         used_modules={"mo_state": ("t_state", )},
@@ -225,27 +209,21 @@ def test_emit_shim_struct_with_static_array_members(tmp_path: Path):
     ``inout``) written back by copy-out."""
     iface = OriginalInterface(
         entry="kern",
-        args=(
-            OriginalArg(name="fld", fortran_type="type(t_fields)", rank=0,
-                        intent="inout", struct_type="t_fields"),
-        ),
+        args=(OriginalArg(name="fld", fortran_type="type(t_fields)", rank=0, intent="inout", struct_type="t_fields"), ),
         struct_types={
             "t_fields":
             DerivedType(
                 name="t_fields",
                 module="mo_fields",
                 members=(
-                    Member(name="a", fortran_type="real(c_double)",
-                           rank=2, shape=("NX", "NY")),
-                    Member(name="b", fortran_type="real(c_double)",
-                           rank=2, shape=("NX", "NY")),
+                    Member(name="a", fortran_type="real(c_double)", rank=2, shape=("NX", "NY")),
+                    Member(name="b", fortran_type="real(c_double)", rank=2, shape=("NX", "NY")),
                 ),
             )
         },
         used_modules={"mo_fields": ("t_fields", "NX", "NY")},
     )
-    text = emit_bind_c_shim(iface,
-                            str(tmp_path / "kern_c.f90")).read_text()
+    text = emit_bind_c_shim(iface, str(tmp_path / "kern_c.f90")).read_text()
     # One C-ABI slot per member.
     assert "subroutine kern_c(fld_a_p, fld_b_p) bind(c, name='kern_c')" in text
     assert "type(c_ptr), value :: fld_a_p" in text
@@ -500,17 +478,18 @@ end subroutine shim_kern_c
 # nested struct, an allocatable member, ...).
 _STRUCT_IFACE = OriginalInterface(
     entry="shim_kern",
-    args=(OriginalArg(name="fld", fortran_type="type(t_shim_fields)",
-                      rank=0, intent="inout",
+    args=(OriginalArg(name="fld",
+                      fortran_type="type(t_shim_fields)",
+                      rank=0,
+                      intent="inout",
                       struct_type="t_shim_fields"), ),
     struct_types={
         "t_shim_fields":
-        DerivedType(name="t_shim_fields", module="mo_shim_fields",
+        DerivedType(name="t_shim_fields",
+                    module="mo_shim_fields",
                     members=(
-                        Member(name="a", fortran_type="real(c_double)",
-                               rank=2, shape=("NX", "NY")),
-                        Member(name="b", fortran_type="real(c_double)",
-                               rank=2, shape=("NX", "NY")),
+                        Member(name="a", fortran_type="real(c_double)", rank=2, shape=("NX", "NY")),
+                        Member(name="b", fortran_type="real(c_double)", rank=2, shape=("NX", "NY")),
                     ))
     },
     used_modules={"mo_shim_fields": ("t_shim_fields", "NX", "NY")},
@@ -533,8 +512,7 @@ def test_bind_c_shim_e2e_struct_two_real_array(tmp_path: Path):
 
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    builder = build_sdfg(_STRUCT_KERNEL_SRC, sdfg_dir, name=name,
-                         entry=f"_QP{name}")
+    builder = build_sdfg(_STRUCT_KERNEL_SRC, sdfg_dir, name=name, entry=f"_QP{name}")
     plan_dict = builder.module.get_flatten_plan()
     sdfg = builder.build()
     sdfg.name = name

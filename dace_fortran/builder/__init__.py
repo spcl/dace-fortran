@@ -227,6 +227,14 @@ DEFAULT_PIPELINE = (
     # flatten below resolves cleanly to the flat leaf.  The full
     # ``hlfir-flatten-structs`` re-runs the splits (idempotent no-op)
     # and adds ``planAndReplaceStructArgs`` on top.
+    # Unroll the constant-trip loop that reassigns a double-buffer time-level
+    # toggle (ICON solve_nh's ``nvar = nnow`` predictor / ``nvar = nnew``
+    # corrector) and substitute the toggle away, so only the stable time-level
+    # symbols (``nnow`` / ``nnew``) index the ``prog`` double buffer.  Without
+    # this, ``hlfir-split-aor-dummies`` rejects the reassigned toggle (a static
+    # per-symbol lane cannot be re-pointed mid-kernel).  Runs BEFORE the split;
+    # a no-op on any function that does not assign a double-buffer toggle.
+    "hlfir-eliminate-double-buffer-toggle,"
     "hlfir-split-aor-dummies,"
     # Expand the struct argument of a registered external (``keep_external``)
     # call into its individual members, so flatten-structs turns each into the
@@ -846,6 +854,13 @@ class SDFGBuilder:
         # bridge generated for the bindings ``c_loc`` aliasing path
         # survives even if the SDFG dataflow itself never reads it.
         from dace_fortran.builder.prune_unused_arrays import prune_unused_arrays
+        # Drop the orphan access nodes of comm scalars converted to the user
+        # process grid (their descriptors were popped at MPI-node emit; the
+        # wrapper-body ``<local> = comm`` copy tasklets still reference them).
+        # Must precede prune_unused_arrays, which would otherwise KeyError on
+        # the dangling ``desc()``.
+        from dace_fortran.builder.emit_library import drop_user_comm_scalar_nodes
+        drop_user_comm_scalar_nodes(sdfg)
         _plan_raw = self.module.get_flatten_plan() or {}
         _binding_keep = {
             f

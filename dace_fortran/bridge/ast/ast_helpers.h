@@ -52,8 +52,8 @@ namespace hlfir_bridge {
     llvm::raw_string_ostream os(loc);
     op->getLoc().print(os);
   }
-  throw std::runtime_error(std::string(fn) + ": unhandled HLFIR op '" + opName +
-                           "' at " + (loc.empty() ? "<unknown loc>" : loc) +
+  throw std::runtime_error(std::string(fn) + ": unhandled HLFIR op '" + opName + "' at " +
+                           (loc.empty() ? "<unknown loc>" : loc) +
                            ".  Add a handler in the corresponding "
                            "bridge/ast/*.cpp file (search for the helper "
                            "name) or update the op coverage in "
@@ -82,8 +82,7 @@ inline thread_local llvm::DenseMap<mlir::Operation*, std::string> kAllocaMap;
 /// ``hlfir.elemental`` body to the synthetic transient name that
 /// ``buildElementalAssign`` materialises ahead of the elemental loop.
 /// ``buildExpr`` consults this map when handling ``hlfir.apply``.
-inline thread_local std::map<mlir::Operation*, std::string>
-    kHlfirExprToTransient;
+inline thread_local std::map<mlir::Operation*, std::string> kHlfirExprToTransient;
 
 /// Map from a reduction op (``hlfir.sum`` / ``minval`` / ``maxval`` /
 /// ``product``) appearing in an IF / loop CONDITION to the scalar transient its
@@ -94,8 +93,7 @@ inline thread_local std::map<mlir::Operation*, std::string>
 /// (``s > eps``) instead of inline-unrolling the reduction into the condition
 /// expression.  See
 /// ``materialiseCondReductions`` in dispatch.cpp.
-inline thread_local std::map<mlir::Operation*, std::string>
-    kCondReductionScalars;
+inline thread_local std::map<mlir::Operation*, std::string> kCondReductionScalars;
 
 /// Position-array registry: ``__sym_<arr>_<i1>_<i2>...`` symbol minted by
 /// ``buildIndexExpr`` / the extent resolver for each ``arr(consts)`` it
@@ -103,9 +101,7 @@ inline thread_local std::map<mlir::Operation*, std::string>
 /// (array, per-dim 1-based constant indices) so a multi-dimensional
 /// element (``shp(1,2,1)``) gets its own symbol and the AST builder can
 /// emit the matching multi-dim ``symbol_init`` read.
-inline thread_local std::map<std::pair<std::string, std::vector<int64_t>>,
-                             std::string>
-    kPosSymbolRegistry;
+inline thread_local std::map<std::pair<std::string, std::vector<int64_t>>, std::string> kPosSymbolRegistry;
 
 /// Synthetic-transient counter used by elemental walks
 /// (``__libcall_tmp_<N>``).
@@ -135,9 +131,7 @@ inline thread_local bool kBoolExprNoSubscripts = false;
 /// chain handler).
 struct NoSubscriptGuard {
   bool prev;
-  NoSubscriptGuard() : prev(kBoolExprNoSubscripts) {
-    kBoolExprNoSubscripts = true;
-  }
+  NoSubscriptGuard() : prev(kBoolExprNoSubscripts) { kBoolExprNoSubscripts = true; }
   ~NoSubscriptGuard() { kBoolExprNoSubscripts = prev; }
 };
 
@@ -175,9 +169,7 @@ inline thread_local bool kSuppressFloatCast = false;
 /// RAII guard scoping ``kSuppressFloatCast = true``.
 struct SuppressFloatCastGuard {
   bool prev;
-  SuppressFloatCastGuard() : prev(kSuppressFloatCast) {
-    kSuppressFloatCast = true;
-  }
+  SuppressFloatCastGuard() : prev(kSuppressFloatCast) { kSuppressFloatCast = true; }
   ~SuppressFloatCastGuard() { kSuppressFloatCast = prev; }
 };
 
@@ -218,8 +210,7 @@ std::string buildBoolExpr(mlir::Value val, int d);
 /// Render the ``dim``-th index expression of an ``hlfir.designate``,
 /// applying section / assumed-shape lower-bound rebases.  See
 /// ``expressions.cpp``.
-std::string buildDesignateIndexExpr(hlfir::DesignateOp dg, unsigned dim,
-                                    mlir::Value idx, int depth);
+std::string buildDesignateIndexExpr(hlfir::DesignateOp dg, unsigned dim, mlir::Value idx, int depth);
 
 /// Per-dim AccessInfo entry produced by ``expandDesignateChain``.
 struct DimEntry {
@@ -235,8 +226,7 @@ struct DimEntry {
 /// ``buildElementalCountLibcall`` / ``buildElementalAnyAllReduce``
 /// so the access list always matches the underlying array even when
 /// the inner designate is a rank-reduced view.  See ``elementals.cpp``.
-std::pair<std::string, std::vector<DimEntry>> expandDesignateChain(
-    hlfir::DesignateOp innermost);
+std::pair<std::string, std::vector<DimEntry>> expandDesignateChain(hlfir::DesignateOp innermost);
 
 /// Resolve an SSA index to its source name when we're inside an
 /// elemental body (the elemental's block argument is a tracked synth
@@ -259,8 +249,7 @@ std::string allocaSynthName(mlir::Value memref);
 /// value on an interstate edge at SDFG entry.  The N-D overload handles
 /// a multi-dimensional element (``shp(1,2,1)``); the 1-D overload is the
 /// common ``arr(7)`` case.  See ``expressions.cpp``.
-std::string internPosSymbol(const std::string& array,
-                            const std::vector<int64_t>& one_based_idxs);
+std::string internPosSymbol(const std::string& array, const std::vector<int64_t>& one_based_idxs);
 std::string internPosSymbol(const std::string& array, int64_t one_based_idx);
 
 /// Capture the LHS of an ``hlfir.assign`` whose destination is either
@@ -287,8 +276,7 @@ std::string resolveExtent(mlir::Value shape, unsigned d);
 /// read it touches to ``accesses``.  Used by ``buildLibCallNode`` so
 /// the libcall's tasklet picks up every input array.  See
 /// ``elementals.cpp``.
-void collectReadAccesses(mlir::Value v, std::vector<AccessInfo>& accesses,
-                         int depth);
+void collectReadAccesses(mlir::Value v, std::vector<AccessInfo>& accesses, int depth);
 
 /// Map an ``hlfir.matmul`` / ``hlfir.transpose`` / ``hlfir.dot_product``
 /// op to the libcall name DaCe's runtime exposes.  See

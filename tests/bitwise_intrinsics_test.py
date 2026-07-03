@@ -83,13 +83,11 @@ end subroutine
         r = (u << np.uint32(s)) if s >= 0 else (u >> np.uint32(-s))
         return np.int32(r)
 
-    for x_in, s_in in [(-182, -2), (-1, -1), (12345, -5), (-99999, -7),
-                       (255, 4), (-255, 3), (1, 31)]:
+    for x_in, s_in in [(-182, -2), (-1, -1), (12345, -5), (-99999, -7), (255, 4), (-255, 3), (1, 31)]:
         o_var = np.zeros(1, np.int32)
         o_negc = np.zeros(1, np.int32)
         o_negx = np.zeros(1, np.int32)
-        sdfg(x=np.int32(x_in), s=np.int32(s_in),
-             o_var=o_var, o_negconst=o_negc, o_negx=o_negx)
+        sdfg(x=np.int32(x_in), s=np.int32(s_in), o_var=o_var, o_negconst=o_negc, o_negx=o_negx)
         assert int(o_var[0]) == int(fortran_ishft(x_in, s_in)), (x_in, s_in)
         assert int(o_negc[0]) == int(fortran_ishft(x_in, -2)), x_in
         assert int(o_negx[0]) == int(fortran_ishft(-100, -2))

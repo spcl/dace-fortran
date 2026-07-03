@@ -69,13 +69,10 @@ namespace hlfir_bridge {
 namespace {
 
 struct ExpandVectorSubscriptScatterPass
-    : public mlir::PassWrapper<ExpandVectorSubscriptScatterPass,
-                               mlir::OperationPass<mlir::ModuleOp>> {
+    : public mlir::PassWrapper<ExpandVectorSubscriptScatterPass, mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ExpandVectorSubscriptScatterPass)
 
-  llvm::StringRef getArgument() const final {
-    return "hlfir-expand-vector-subscript-scatter";
-  }
+  llvm::StringRef getArgument() const final { return "hlfir-expand-vector-subscript-scatter"; }
   llvm::StringRef getDescription() const final {
     return "Replace hlfir.region_assign whose destination region uses "
            "hlfir.elemental_addr (Fortran scatter ``d(cols) = source``) "
@@ -120,12 +117,10 @@ struct ExpandVectorSubscriptScatterPass
 
     // --- Constant rank-1 extent guard.
     auto shapeOper = eaddr.getShape();
-    auto shapeOp =
-        mlir::dyn_cast_or_null<fir::ShapeOp>(shapeOper.getDefiningOp());
+    auto shapeOp = mlir::dyn_cast_or_null<fir::ShapeOp>(shapeOper.getDefiningOp());
     if (!shapeOp || shapeOp.getExtents().size() != 1) {
       return op.emitError("hlfir-expand-vector-subscript-scatter: rank-")
-             << (shapeOp ? shapeOp.getExtents().size() : 0)
-             << " scatter not yet supported (rank-1 only)";
+             << (shapeOp ? shapeOp.getExtents().size() : 0) << " scatter not yet supported (rank-1 only)";
     }
     mlir::Value extent = shapeOp.getExtents()[0];
     // ``cstExt`` is non-null only when the extent folds to a
@@ -135,18 +130,15 @@ struct ExpandVectorSubscriptScatterPass
     // contiguous ``fir.ref``, the loop bound can be a runtime
     // symbol  --  each iteration reassigns one indirection-symbol
     // slot, exactly the pattern DaCe LoopRegions support natively.
-    auto cstExt =
-        mlir::dyn_cast_or_null<mlir::arith::ConstantOp>(extent.getDefiningOp());
+    auto cstExt = mlir::dyn_cast_or_null<mlir::arith::ConstantOp>(extent.getDefiningOp());
 
     // --- Find the source region's yielded value (rhs region).
     mlir::Value srcVal;
     for (auto& block : op.getRhsRegion())
       for (auto& inner : block)
-        if (auto y = mlir::dyn_cast<hlfir::YieldOp>(inner))
-          srcVal = y.getEntity();
+        if (auto y = mlir::dyn_cast<hlfir::YieldOp>(inner)) srcVal = y.getEntity();
     if (!srcVal) {
-      return op.emitError(
-          "hlfir-expand-vector-subscript-scatter: source region has no yield");
+      return op.emitError("hlfir-expand-vector-subscript-scatter: source region has no yield");
     }
     // Source can be:
     //   * a contiguous ``fir.ref<!fir.array<NxT>>`` (constant-shape
@@ -161,16 +153,13 @@ struct ExpandVectorSubscriptScatterPass
     bool srcIsExpr = false;
     mlir::Type eleTy;
     auto peelToSeq = [](mlir::Type t) -> fir::SequenceType {
-      if (auto r = mlir::dyn_cast<fir::ReferenceType>(t))
-        return mlir::dyn_cast<fir::SequenceType>(r.getEleTy());
-      if (auto b = mlir::dyn_cast<fir::BoxType>(t))
-        return mlir::dyn_cast<fir::SequenceType>(b.getEleTy());
+      if (auto r = mlir::dyn_cast<fir::ReferenceType>(t)) return mlir::dyn_cast<fir::SequenceType>(r.getEleTy());
+      if (auto b = mlir::dyn_cast<fir::BoxType>(t)) return mlir::dyn_cast<fir::SequenceType>(b.getEleTy());
       return {};
     };
     if (auto seqTy = peelToSeq(srcVal.getType())) {
       eleTy = seqTy.getEleTy();
-    } else if (auto exprTy =
-                   mlir::dyn_cast<hlfir::ExprType>(srcVal.getType())) {
+    } else if (auto exprTy = mlir::dyn_cast<hlfir::ExprType>(srcVal.getType())) {
       srcIsExpr = true;
       eleTy = exprTy.getElementType();
     } else {
@@ -337,44 +326,37 @@ struct ExpandVectorSubscriptScatterPass
       // lhs region; using it would dangle the new declare.
       std::optional<int64_t> staticExt;
       if (cstExt)
-        if (auto a = mlir::dyn_cast<mlir::IntegerAttr>(cstExt.getValue()))
-          staticExt = a.getInt();
-      int64_t typeExt =
-          staticExt.value_or(fir::SequenceType::getUnknownExtent());
+        if (auto a = mlir::dyn_cast<mlir::IntegerAttr>(cstExt.getValue())) staticExt = a.getInt();
+      int64_t typeExt = staticExt.value_or(fir::SequenceType::getUnknownExtent());
       auto seqTy = fir::SequenceType::get({typeExt}, eleTy);
       fir::AllocaOp alloca;
       if (staticExt.has_value()) {
         alloca = b.create<fir::AllocaOp>(loc, seqTy);
       } else {
-        alloca =
-            b.create<fir::AllocaOp>(loc, seqTy, /*uniqName=*/llvm::StringRef{},
-                                    /*bindcName=*/llvm::StringRef{},
-                                    /*typeparams=*/mlir::ValueRange{},
-                                    /*shape=*/mlir::ValueRange{mappedExtent});
+        alloca = b.create<fir::AllocaOp>(loc, seqTy, /*uniqName=*/llvm::StringRef{},
+                                         /*bindcName=*/llvm::StringRef{},
+                                         /*typeparams=*/mlir::ValueRange{},
+                                         /*shape=*/mlir::ValueRange{mappedExtent});
       }
-      std::string uniqName = "_QF" + enclName + "E" + dstName + "_scatter_" +
-                             std::to_string(kScatterCounter++);
-      auto newShape =
-          b.create<fir::ShapeOp>(loc, mlir::ValueRange{mappedExtent});
+      std::string uniqName = "_QF" + enclName + "E" + dstName + "_scatter_" + std::to_string(kScatterCounter++);
+      auto newShape = b.create<fir::ShapeOp>(loc, mlir::ValueRange{mappedExtent});
       hlfir::DeclareOp declOp;
       if (staticExt.has_value()) {
-        declOp = b.create<hlfir::DeclareOp>(loc, alloca.getResult(), uniqName,
-                                            newShape.getResult());
+        declOp = b.create<hlfir::DeclareOp>(loc, alloca.getResult(), uniqName, newShape.getResult());
       } else {
         // Dynamic-extent declare: result#0 is a ``fir.box`` so
         // downstream designate carries the runtime shape; the
         // explicit-types builder pins both result types.
         auto refTy = fir::ReferenceType::get(seqTy);
         auto boxTy = fir::BoxType::get(seqTy);
-        declOp = b.create<hlfir::DeclareOp>(
-            loc, /*resultType0=*/boxTy, /*resultType1=*/refTy,
-            /*memref=*/alloca.getResult(),
-            /*shape=*/newShape.getResult(),
-            /*typeparams=*/mlir::ValueRange{},
-            /*dummy_scope=*/mlir::Value{},
-            /*uniq_name=*/b.getStringAttr(uniqName),
-            /*fortran_attrs=*/fir::FortranVariableFlagsAttr{},
-            /*data_attr=*/cuf::DataAttributeAttr{});
+        declOp = b.create<hlfir::DeclareOp>(loc, /*resultType0=*/boxTy, /*resultType1=*/refTy,
+                                            /*memref=*/alloca.getResult(),
+                                            /*shape=*/newShape.getResult(),
+                                            /*typeparams=*/mlir::ValueRange{},
+                                            /*dummy_scope=*/mlir::Value{},
+                                            /*uniq_name=*/b.getStringAttr(uniqName),
+                                            /*fortran_attrs=*/fir::FortranVariableFlagsAttr{},
+                                            /*data_attr=*/cuf::DataAttributeAttr{});
       }
       srcRefBase = declOp.getResult(0);
 
@@ -387,12 +369,9 @@ struct ExpandVectorSubscriptScatterPass
         b.setInsertionPointToStart(gloop.getBody());
         mlir::Value giv = gloop.getInductionVar();
         mlir::Value mappedSrc = map.lookupOrDefault(srcVal);
-        auto applied = b.create<hlfir::ApplyOp>(
-            loc, eleTy, mappedSrc, mlir::ValueRange{giv},
-            /*typeparams=*/mlir::ValueRange{});
-        auto dst =
-            b.create<hlfir::DesignateOp>(loc, fir::ReferenceType::get(eleTy),
-                                         srcRefBase, mlir::ValueRange{giv});
+        auto applied = b.create<hlfir::ApplyOp>(loc, eleTy, mappedSrc, mlir::ValueRange{giv},
+                                                /*typeparams=*/mlir::ValueRange{});
+        auto dst = b.create<hlfir::DesignateOp>(loc, fir::ReferenceType::get(eleTy), srcRefBase, mlir::ValueRange{giv});
         b.create<hlfir::AssignOp>(loc, applied.getResult(), dst.getResult());
       }
     } else {
@@ -426,14 +405,12 @@ struct ExpandVectorSubscriptScatterPass
     mlir::Value srcLoadVal;
     if (readByApply) {
       mlir::Value mappedSrc = map.lookupOrDefault(srcVal);
-      auto applied =
-          b.create<hlfir::ApplyOp>(loc, eleTy, mappedSrc, mlir::ValueRange{iv},
-                                   /*typeparams=*/mlir::ValueRange{});
+      auto applied = b.create<hlfir::ApplyOp>(loc, eleTy, mappedSrc, mlir::ValueRange{iv},
+                                              /*typeparams=*/mlir::ValueRange{});
       srcLoadVal = applied.getResult();
     } else {
       auto srcAddr =
-          b.create<hlfir::DesignateOp>(loc, fir::ReferenceType::get(eleTy),
-                                       srcRefBase, mlir::ValueRange{iv});
+          b.create<hlfir::DesignateOp>(loc, fir::ReferenceType::get(eleTy), srcRefBase, mlir::ValueRange{iv});
       srcLoadVal = b.create<fir::LoadOp>(loc, srcAddr.getResult()).getResult();
     }
 

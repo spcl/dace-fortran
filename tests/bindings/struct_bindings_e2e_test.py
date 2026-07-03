@@ -786,12 +786,19 @@ def test_e2e_array_of_mixed_type_structs_deepcopy(tmp_path: Path):
     """``type(item){a:real, n:int} :: items(N)`` -> two typed SoA companions,
     both deep-copied.  Kernel updates both members; result must match the
     gfortran reference for both the real and integer arrays."""
-    sdfg_lib = _build_sdfg_lib(tmp_path, kernel_src=_MIX_SRC, types_src=_MIX_TYPES_SRC, name="kern_mix",
-                               entry="kern_mix_mod::kern_mix", driver_src=_MIX_DRIVER)
+    sdfg_lib = _build_sdfg_lib(tmp_path,
+                               kernel_src=_MIX_SRC,
+                               types_src=_MIX_TYPES_SRC,
+                               name="kern_mix",
+                               entry="kern_mix_mod::kern_mix",
+                               driver_src=_MIX_DRIVER)
     sdfg_lib.run_mix.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_int)]
     sdfg_lib.run_mix.restype = None
-    ref_lib = _build_reference_lib(tmp_path, types_src=_MIX_TYPES_SRC, kernel_src=_MIX_KERNEL_SRC,
-                                   ref_driver_src=_MIX_REF_DRIVER_SRC, name="kern_mix")
+    ref_lib = _build_reference_lib(tmp_path,
+                                   types_src=_MIX_TYPES_SRC,
+                                   kernel_src=_MIX_KERNEL_SRC,
+                                   ref_driver_src=_MIX_REF_DRIVER_SRC,
+                                   name="kern_mix")
     ref_lib.run_mix_ref.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_int)]
     ref_lib.run_mix_ref.restype = None
 
@@ -878,12 +885,19 @@ def test_e2e_array_of_structs_read_only_copy_in(tmp_path: Path):
     """``type(point) :: pts(N)`` passed ``intent(in)``: the deepcopy scatters
     the members in (no copy-back) and the kernel writes a separate output
     array.  Output must match the reference."""
-    sdfg_lib = _build_sdfg_lib(tmp_path, kernel_src=_RO_SRC, types_src=_AOS_TYPES_SRC, name="kern_ro",
-                               entry="kern_ro_mod::kern_ro", driver_src=_RO_DRIVER)
+    sdfg_lib = _build_sdfg_lib(tmp_path,
+                               kernel_src=_RO_SRC,
+                               types_src=_AOS_TYPES_SRC,
+                               name="kern_ro",
+                               entry="kern_ro_mod::kern_ro",
+                               driver_src=_RO_DRIVER)
     sdfg_lib.run_ro.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double)]
     sdfg_lib.run_ro.restype = None
-    ref_lib = _build_reference_lib(tmp_path, types_src=_AOS_TYPES_SRC, kernel_src=_RO_KERNEL_SRC,
-                                   ref_driver_src=_RO_REF_DRIVER_SRC, name="kern_ro")
+    ref_lib = _build_reference_lib(tmp_path,
+                                   types_src=_AOS_TYPES_SRC,
+                                   kernel_src=_RO_KERNEL_SRC,
+                                   ref_driver_src=_RO_REF_DRIVER_SRC,
+                                   name="kern_ro")
     ref_lib.run_ro_ref.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double)]
     ref_lib.run_ro_ref.restype = None
 
@@ -1007,15 +1021,20 @@ def test_e2e_array_of_jagged_alloc_structs_deepcopy(tmp_path: Path):
     binding's ``max``).  Verifies the runtime-cap pack/unpack round-trips
     the live data and that ``size(a(i)%w)`` resolved to the companion cap
     (no ``a_d0`` symbol leak), against a gfortran reference."""
-    sdfg_lib = _build_sdfg_lib(tmp_path, kernel_src=_JAG_TYPES_SRC + _JAG_KERNEL_SRC,
-                               types_src=_JAG_TYPES_SRC, name="kern_jag",
-                               entry="kern_jag_mod::kern_jag", driver_src=_JAG_DRIVER)
+    sdfg_lib = _build_sdfg_lib(tmp_path,
+                               kernel_src=_JAG_TYPES_SRC + _JAG_KERNEL_SRC,
+                               types_src=_JAG_TYPES_SRC,
+                               name="kern_jag",
+                               entry="kern_jag_mod::kern_jag",
+                               driver_src=_JAG_DRIVER)
     sdfg_lib.run_jag.argtypes = [ctypes.POINTER(ctypes.c_double)]
     sdfg_lib.run_jag.restype = None
 
-    ref_lib = _build_reference_lib(tmp_path, types_src=_JAG_TYPES_SRC,
+    ref_lib = _build_reference_lib(tmp_path,
+                                   types_src=_JAG_TYPES_SRC,
                                    kernel_src=_JAG_KERNEL_SRC,
-                                   ref_driver_src=_JAG_REF_DRIVER, name="kern_jag")
+                                   ref_driver_src=_JAG_REF_DRIVER,
+                                   name="kern_jag")
     ref_lib.run_jag_ref.argtypes = [ctypes.POINTER(ctypes.c_double)]
     ref_lib.run_jag_ref.restype = None
 

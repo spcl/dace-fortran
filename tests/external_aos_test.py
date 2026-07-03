@@ -42,9 +42,8 @@ from dace_fortran.external_functions import ExternalFunction
 #: closure as one file).  Vendored in-repo at
 #: ``tests/icon/full/velocity_full.f90``; override with
 #: ``VELOCITY_FULL_F90`` to point at an out-of-tree copy.
-_VELOCITY_FULL = Path(os.environ.get(
-    "VELOCITY_FULL_F90",
-    str(Path(__file__).resolve().parent / "icon" / "full" / "velocity_full.f90")))
+_VELOCITY_FULL = Path(
+    os.environ.get("VELOCITY_FULL_F90", str(Path(__file__).resolve().parent / "icon" / "full" / "velocity_full.f90")))
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
@@ -59,16 +58,14 @@ def _build_c_so(out_dir: Path, name: str, csrc: str) -> Path:
     """
     (out_dir / f"{name}.c").write_text(csrc)
     so = out_dir / f"lib{name}.so"
-    subprocess.check_call(["gcc", "-shared", "-fPIC", "-o", str(so),
-                           str(out_dir / f"{name}.c")])
+    subprocess.check_call(["gcc", "-shared", "-fPIC", "-o", str(so), str(out_dir / f"{name}.c")])
     return so
 
 
 def test_aliasable_array_member_no_copy(tmp_path):
     """A flattened struct array-member reaches a plain-array external as the
     SoA pointer directly  --  no copy (the ICON double-buffering shape)."""
-    so = _build_c_so(tmp_path, "ext_scale",
-                     "void ext_scale(double* a, int n)"
+    so = _build_c_so(tmp_path, "ext_scale", "void ext_scale(double* a, int n)"
                      "{ for (int i = 0; i < n; ++i) a[i] *= 2.0; }")
     src = """
 module m_alias
@@ -98,8 +95,7 @@ end module
         # Plain array + scalar -> the unified policy's derived plan (array
         # inout pointer, scalar by-value) is exactly the zero-copy shape.
         apply_external_functions([ExternalFunction("ext_scale", library=str(so))])
-        sdfg = build_sdfg(src, tmp_path, name="kern",
-                          entry="m_alias::kern").build()
+        sdfg = build_sdfg(src, tmp_path, name="kern", entry="m_alias::kern").build()
         u = np.arange(8, dtype=np.float64)
         v = np.ones(8, dtype=np.float64)
         sdfg(s_u=u, s_v=v, n=np.int32(8))
@@ -116,9 +112,9 @@ def test_scalar_member_struct_aos_external(tmp_path):
     generates a C tasklet that packs them into a local AoS buffer, calls the
     external, and unpacks the result back into the SoA flats  --  so the SDFG
     only ever sees the SoA arrays."""
-    so = _build_c_so(tmp_path, "ext_swap",
-                     "struct pt{double f1;double f2;};"
-                     "void ext_swap(struct pt* p){double t=p->f1;p->f1=p->f2;p->f2=t;}")
+    so = _build_c_so(
+        tmp_path, "ext_swap", "struct pt{double f1;double f2;};"
+        "void ext_swap(struct pt* p){double t=p->f1;p->f1=p->f2;p->f2=t;}")
     src = """
 module m_aos
   use iso_c_binding
@@ -143,14 +139,12 @@ end module
 """
     clear_external_registry()
     try:
-        keep_external("ext_swap",
-                      args=(Arg(kind="aos", intent="inout"),),
-                      libraries=(str(so),))
-        sdfg = build_sdfg(src, tmp_path, name="kern",
-                          entry="m_aos::kern").build()
-        f1 = np.array([3.0]); f2 = np.array([5.0])
+        keep_external("ext_swap", args=(Arg(kind="aos", intent="inout"), ), libraries=(str(so), ))
+        sdfg = build_sdfg(src, tmp_path, name="kern", entry="m_aos::kern").build()
+        f1 = np.array([3.0])
+        f2 = np.array([5.0])
         sdfg(s_f1=f1, s_f2=f2)
-        np.testing.assert_allclose(f1, 5.0)        # swapped
+        np.testing.assert_allclose(f1, 5.0)  # swapped
         np.testing.assert_allclose(f2, 3.0 + 1.0)  # +1 then swapped
     finally:
         clear_external_registry()
@@ -162,10 +156,10 @@ def test_array_member_struct_aos_external(tmp_path):
     arrays; emit_call packs them into a local AoS buffer with array fields
     (element-loop copies), calls the external, and unpacks  --  exercising the
     array-member path (the ICON velocity ``state_t`` shape)."""
-    so = _build_c_so(tmp_path, "ext_state",
-                     "struct state_t { double u[4]; double v[4]; };"
-                     "void ext_state(struct state_t* p)"
-                     "{ for (int i = 0; i < 4; ++i) p->u[i] += p->v[i]; }")
+    so = _build_c_so(
+        tmp_path, "ext_state", "struct state_t { double u[4]; double v[4]; };"
+        "void ext_state(struct state_t* p)"
+        "{ for (int i = 0; i < 4; ++i) p->u[i] += p->v[i]; }")
     src = """
 module m_vel
   use iso_c_binding
@@ -190,11 +184,8 @@ end module
 """
     clear_external_registry()
     try:
-        keep_external("ext_state",
-                      args=(Arg(kind="aos", intent="inout"),),
-                      libraries=(str(so),))
-        sdfg = build_sdfg(src, tmp_path, name="kern",
-                          entry="m_vel::kern").build()
+        keep_external("ext_state", args=(Arg(kind="aos", intent="inout"), ), libraries=(str(so), ))
+        sdfg = build_sdfg(src, tmp_path, name="kern", entry="m_vel::kern").build()
         u = np.array([1.0, 2.0, 3.0, 4.0])
         v = np.array([10.0, 20.0, 30.0, 40.0])
         sdfg(s_u=u, s_v=v)
@@ -223,8 +214,7 @@ def test_velocity_field_array_external_is_shallow(tmp_path):
     copy): hlfir-rewrite-pointer-assigns folds the rebind's copy_in/copy_out
     straight to the contiguous target, so the external reads / writes it in
     place."""
-    so = _build_c_so(tmp_path, "ext_scale",
-                     "void ext_scale(double* a, int n)"
+    so = _build_c_so(tmp_path, "ext_scale", "void ext_scale(double* a, int n)"
                      "{ for (int i = 0; i < n; ++i) a[i] *= 2.0; }")
     src = """
 module m_velptr
@@ -252,8 +242,7 @@ end module
         # Plain array + scalar -> the unified policy derives the same
         # shallow (no AoS buffer) pointer pass.
         apply_external_functions([ExternalFunction("ext_scale", library=str(so))])
-        sdfg = build_sdfg(src, tmp_path, name="kern",
-                          entry="m_velptr::kern").build()
+        sdfg = build_sdfg(src, tmp_path, name="kern", entry="m_velptr::kern").build()
         # Shallow pass: the tasklet calls the external on the array pointer
         # directly -- no AoS struct buffer / element copies.
         body = _external_call_body(sdfg)
@@ -270,14 +259,16 @@ def test_velocity_state_t_whole_struct_external(tmp_path):
     field members) passed whole to an AoS external.  Confirms the deep-copy
     marshalling handles the actual velocity-tendencies state struct: four
     members, multi-dim arrays, packed into one AoS buffer and unpacked."""
-    so = _build_c_so(tmp_path, "ext_velstate",
-                     "struct state_t { double u[16]; double v[16];"
-                     "                 double w[16]; double p[16]; };"
-                     "void ext_velstate(struct state_t* s) {"
-                     "  for (int i = 0; i < 16; ++i) {"
-                     "    s->u[i] += s->v[i];"   # u += v (elementwise)
-                     "    s->p[i]  = s->w[i] * 2.0;"  # p = 2w
-                     "  } }")
+    so = _build_c_so(
+        tmp_path,
+        "ext_velstate",
+        "struct state_t { double u[16]; double v[16];"
+        "                 double w[16]; double p[16]; };"
+        "void ext_velstate(struct state_t* s) {"
+        "  for (int i = 0; i < 16; ++i) {"
+        "    s->u[i] += s->v[i];"  # u += v (elementwise)
+        "    s->p[i]  = s->w[i] * 2.0;"  # p = 2w
+        "  } }")
     src = """
 module m_velstate
   use iso_c_binding
@@ -305,11 +296,8 @@ end module
 """
     clear_external_registry()
     try:
-        keep_external("ext_velstate",
-                      args=(Arg(kind="aos", intent="inout"),),
-                      libraries=(str(so),))
-        sdfg = build_sdfg(src, tmp_path, name="kern",
-                          entry="m_velstate::kern").build()
+        keep_external("ext_velstate", args=(Arg(kind="aos", intent="inout"), ), libraries=(str(so), ))
+        sdfg = build_sdfg(src, tmp_path, name="kern", entry="m_velstate::kern").build()
         rng = np.random.default_rng(0)
         u = np.asfortranarray(rng.random((4, 4)))
         v = np.asfortranarray(rng.random((4, 4)))
@@ -317,18 +305,19 @@ end module
         p = np.asfortranarray(rng.random((4, 4)))
         u_in, v_in, w_in = u.copy(), v.copy(), w.copy()
         sdfg(st_u=u, st_v=v, st_w=w, st_p=p)
-        expect_u = u_in.copy(); expect_u.flat[0] += 1.0   # st%u(1,1) += 1
-        expect_u = expect_u + v_in                         # u += v
+        expect_u = u_in.copy()
+        expect_u.flat[0] += 1.0  # st%u(1,1) += 1
+        expect_u = expect_u + v_in  # u += v
         np.testing.assert_allclose(u, expect_u)
         np.testing.assert_allclose(p, w_in * 2.0)
-        np.testing.assert_allclose(v, v_in)                # untouched
+        np.testing.assert_allclose(v, v_in)  # untouched
     finally:
         clear_external_registry()
 
 
 @pytest.mark.skipif(not _VELOCITY_FULL.is_file(),
                     reason="full velocity fake f90 not present "
-                           "(set VELOCITY_FULL_F90)")
+                    "(set VELOCITY_FULL_F90)")
 def test_full_velocity_advection_external_call(tmp_path):
     """Add an external call to the FULL ``mo_velocity_advection`` fake f90 and
     confirm it builds and the call reaches a real pointer-contiguous prognostic
@@ -339,15 +328,15 @@ def test_full_velocity_advection_external_call(tmp_path):
     src = _VELOCITY_FULL.read_text()
     use_line = "    USE mo_loopindices, ONLY: get_indices_c, get_indices_e"
     assert use_line in src, "velocity fake f90 layout changed; update injection"
-    src = src.replace(use_line, use_line + """
+    src = src.replace(
+        use_line, use_line + """
     INTERFACE
       SUBROUTINE ext_sync(a) BIND(C, name="ext_sync")
         USE iso_c_binding
         REAL(c_double), INTENT(INOUT) :: a(*)
       END SUBROUTINE ext_sync
     END INTERFACE""", 1)
-    src = src.replace("  END SUBROUTINE velocity_tendencies",
-                      "    CALL ext_sync(p_prog%w)\n"
+    src = src.replace("  END SUBROUTINE velocity_tendencies", "    CALL ext_sync(p_prog%w)\n"
                       "  END SUBROUTINE velocity_tendencies", 1)
 
     so = _build_c_so(tmp_path, "ext_sync", "void ext_sync(double* a){(void)a;}")
@@ -355,11 +344,9 @@ def test_full_velocity_advection_external_call(tmp_path):
     try:
         # Single plain array -> derived inout pointer (shallow pass).
         apply_external_functions([ExternalFunction("ext_sync", library=str(so))])
-        sdfg = build_sdfg(src, tmp_path, name="velext",
-                          entry="mo_velocity_advection::velocity_tendencies").build()
+        sdfg = build_sdfg(src, tmp_path, name="velext", entry="mo_velocity_advection::velocity_tendencies").build()
         from dace_fortran.external import ExternalCall
-        node = next((n for st in sdfg.all_states() for n in st.nodes()
-                     if isinstance(n, ExternalCall)), None)
+        node = next((n for st in sdfg.all_states() for n in st.nodes() if isinstance(n, ExternalCall)), None)
         assert node is not None, "external call not lowered in full velocity"
         assert "struct" not in node.body, f"expected shallow pass, got:\n{node.body}"
         st = next(s for s in sdfg.all_states() if node in s.nodes())
@@ -378,11 +365,11 @@ def test_dycore_mixed_shallow_and_deepcopy(tmp_path):
     struct member) is packed into a local AoS buffer, passed, and unpacked.  So
     only the one ``blk`` array takes a real deep copy; everything else is
     shallow."""
-    so = _build_c_so(tmp_path, "ext_mixed",
-                     "struct t_blk { double arr[8]; };"
-                     "void ext_mixed(double* w, int n, struct t_blk* blk) {"
-                     "  for (int i = 0; i < n; ++i) w[i] *= 2.0;"
-                     "  for (int i = 0; i < 8; ++i) blk->arr[i] += 1.0; }")
+    so = _build_c_so(
+        tmp_path, "ext_mixed", "struct t_blk { double arr[8]; };"
+        "void ext_mixed(double* w, int n, struct t_blk* blk) {"
+        "  for (int i = 0; i < n; ++i) w[i] *= 2.0;"
+        "  for (int i = 0; i < 8; ++i) blk->arr[i] += 1.0; }")
     src = """
 module m_dycore
   use iso_c_binding
@@ -414,12 +401,11 @@ end module
     clear_external_registry()
     try:
         keep_external("ext_mixed",
-                      args=(Arg(kind="array", dtype="float64", intent="inout"),
-                            Arg(kind="scalar", dtype="int32", intent="in"),
-                            Arg(kind="aos", intent="inout")),
-                      libraries=(str(so),))
-        sdfg = build_sdfg(src, tmp_path, name="kern",
-                          entry="m_dycore::kern").build()
+                      args=(Arg(kind="array", dtype="float64",
+                                intent="inout"), Arg(kind="scalar", dtype="int32",
+                                                     intent="in"), Arg(kind="aos", intent="inout")),
+                      libraries=(str(so), ))
+        sdfg = build_sdfg(src, tmp_path, name="kern", entry="m_dycore::kern").build()
         body = _external_call_body(sdfg)
         assert "_a0_o" in body and "struct" in body, \
             f"expected shallow w + AoS buffer for blk, got:\n{body}"
@@ -427,10 +413,12 @@ end module
         vn = np.ones(16, dtype=np.float64)
         arr = np.arange(8, dtype=np.float64)
         sdfg(s_w=w, s_vn=vn, s_blk_arr=arr)
-        exp_arr = np.arange(8, dtype=np.float64); exp_arr[0] += 1.0; exp_arr += 1.0
-        np.testing.assert_allclose(w, np.arange(16) * 2.0)   # field: shallow x2
-        np.testing.assert_allclose(arr, exp_arr)             # blk: deep-copy roundtrip
-        np.testing.assert_allclose(vn, 1.0)                  # untouched
+        exp_arr = np.arange(8, dtype=np.float64)
+        exp_arr[0] += 1.0
+        exp_arr += 1.0
+        np.testing.assert_allclose(w, np.arange(16) * 2.0)  # field: shallow x2
+        np.testing.assert_allclose(arr, exp_arr)  # blk: deep-copy roundtrip
+        np.testing.assert_allclose(vn, 1.0)  # untouched
     finally:
         clear_external_registry()
 
@@ -444,7 +432,6 @@ end module
 #  members -- :func:`emit_call`'s structured diagnostic continues to
 #  point at :func:`dace_fortran.external.inline_external` for those.
 # ---------------------------------------------------------------------------
-
 
 # Shared kernel source for the v2.1 test pair.  The outer struct
 # ``outer_t`` has a *nested* derived-type member ``inner_t``; the
@@ -491,16 +478,13 @@ def test_v2_aos_external_with_nested_struct(tmp_path):
     from dace_fortran.external import ExternalCall
     clear_external_registry()
     try:
-        keep_external("ext_v2",
-                      args=(Arg(kind="aos", intent="inout"), ))
-        sdfg = build_sdfg(_V2_NESTED_SRC, tmp_path, name="kern",
-                          entry="m_v2::kern").build()
+        keep_external("ext_v2", args=(Arg(kind="aos", intent="inout"), ))
+        sdfg = build_sdfg(_V2_NESTED_SRC, tmp_path, name="kern", entry="m_v2::kern").build()
         # Locate the external-call node and check the three leaves
         # (``ip%u``, ``ip%v``, ``scale``) are wired in declaration order.
         # The SoA flats inherit the outer struct's name prefix and the
         # full member path: ``s_ip_u``, ``s_ip_v``, ``s_scale``.
-        node = next((n for st in sdfg.all_states() for n in st.nodes()
-                     if isinstance(n, ExternalCall)), None)
+        node = next((n for st in sdfg.all_states() for n in st.nodes() if isinstance(n, ExternalCall)), None)
         assert node is not None, "external call not lowered for nested struct"
         st = next(s for s in sdfg.all_states() if node in s.nodes())
         touched = {e.data.data for e in st.in_edges(node)} | \
@@ -558,14 +542,11 @@ def test_v2_aos_external_with_allocatable_member(tmp_path):
     from dace_fortran.external import ExternalCall
     clear_external_registry()
     try:
-        keep_external("ext_v2_alloc",
-                      args=(Arg(kind="aos", intent="inout"), ))
-        sdfg = build_sdfg(_V2_ALLOCATABLE_SRC, tmp_path, name="kern",
-                          entry="m_v2_alloc::kern").build()
+        keep_external("ext_v2_alloc", args=(Arg(kind="aos", intent="inout"), ))
+        sdfg = build_sdfg(_V2_ALLOCATABLE_SRC, tmp_path, name="kern", entry="m_v2_alloc::kern").build()
         # The external-call lowering produced one ExternalCall node
         # with the per-leaf marshal-expansion shape.
-        ext = next((n for st in sdfg.all_states() for n in st.nodes()
-                    if isinstance(n, ExternalCall)), None)
+        ext = next((n for st in sdfg.all_states() for n in st.nodes() if isinstance(n, ExternalCall)), None)
         assert ext is not None, "marshal expansion did not produce an ExternalCall"
     finally:
         clear_external_registry()
@@ -594,8 +575,7 @@ def test_aos_external_per_member_soa_skips_aos_buffer(tmp_path):
     pattern reaches both an opaque C library that speaks SoA *and* a
     sibling SDFG -- the decoupling of Fortran-side ``kind`` from the
     C-side ABI is what closes the gap."""
-    so = _build_c_so(tmp_path, "ext_per_member",
-                     "void ext_per_member(double* u, double* v)"
+    so = _build_c_so(tmp_path, "ext_per_member", "void ext_per_member(double* u, double* v)"
                      "{ for (int i = 0; i < 4; ++i) u[i] += v[i]; }")
     # Note: the *Fortran* call passes the whole struct ``s`` so the
     # marshal pass tags it as an aos group of 2 members; the
@@ -626,11 +606,9 @@ end module
     clear_external_registry()
     try:
         keep_external("ext_per_member",
-                      args=(Arg(kind="aos", intent="inout",
-                                c_abi="per_member_soa"), ),
+                      args=(Arg(kind="aos", intent="inout", c_abi="per_member_soa"), ),
                       libraries=(str(so), ))
-        sdfg = build_sdfg(src, tmp_path, name="kern",
-                          entry="m_perm::kern").build()
+        sdfg = build_sdfg(src, tmp_path, name="kern", entry="m_perm::kern").build()
         u = np.array([1.0, 2.0, 3.0, 4.0])
         v = np.array([10.0, 20.0, 30.0, 40.0])
         sdfg(s_u=u, s_v=v)
@@ -640,19 +618,15 @@ end module
 
         # Body contract: no ``_aosbuf`` struct, no AoS pack/unpack.
         from dace_fortran.external import ExternalCall
-        node = next((n for st in sdfg.all_states() for n in st.nodes()
-                     if isinstance(n, ExternalCall)), None)
+        node = next((n for st in sdfg.all_states() for n in st.nodes() if isinstance(n, ExternalCall)), None)
         assert node is not None
-        assert "_aosbuf" not in node.body, (
-            f"per_member_soa path emitted an AoS buffer; body=\n{node.body}")
+        assert "_aosbuf" not in node.body, (f"per_member_soa path emitted an AoS buffer; body=\n{node.body}")
         # The leaves are forwarded verbatim in marshal-expansion order;
         # the per-member ``ctype*`` decl shape (not ``void*``) is the
         # other half of the contract.
-        assert "double*" in node.c_decl, (
-            f"per_member_soa decl should expand to per-leaf pointers; "
-            f"got {node.c_decl!r}")
-        assert "void *" not in node.c_decl, (
-            f"per_member_soa decl should not surface ``void *``; "
-            f"got {node.c_decl!r}")
+        assert "double*" in node.c_decl, (f"per_member_soa decl should expand to per-leaf pointers; "
+                                          f"got {node.c_decl!r}")
+        assert "void *" not in node.c_decl, (f"per_member_soa decl should not surface ``void *``; "
+                                             f"got {node.c_decl!r}")
     finally:
         clear_external_registry()

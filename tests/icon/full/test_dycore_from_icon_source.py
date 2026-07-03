@@ -39,7 +39,6 @@ from ._icon_sync_iso_c_build import (
     build_icon_sync_iso_c_so,
 )
 
-
 #: Per-test xfail/skip register for flang-new-21 bugs that don't have
 #: a workaround yet.  Keys are the test ID's ``fc`` parameter; values
 #: are the flang issue summary the test would otherwise expose.  Move
@@ -47,7 +46,6 @@ from ._icon_sync_iso_c_build import (
 #: -- our wrapper sources don't trip any known flang-21 ICE on the
 #: full-compile path.
 _FLANG_KNOWN_BUGS: dict = {}
-
 
 #: Minimal stubs for the modules ``icon_sync_iso_c.f90`` USEs.  Used
 #: when we want a per-compiler ``.mod`` to compile against without
@@ -129,14 +127,12 @@ def _fc_pic_flag(fc_name: str) -> str:
 
 _HERE = Path(__file__).resolve().parent
 _ICON_SRC = Path(os.environ.get("ICON_SRC", str(_HERE / "icon-model")))
-_ICON_BUILD = Path(os.environ.get(
-    "ICON_BUILD", str(_ICON_SRC / "build" / "stock_cpu")))
+_ICON_BUILD = Path(os.environ.get("ICON_BUILD", str(_ICON_SRC / "build" / "stock_cpu")))
 
 _SOLVE_NH_SRC = _ICON_SRC / "src" / "atm_dyn_iconam" / "mo_solve_nonhydro.f90"
 _SOLVE_NH_BAK = _SOLVE_NH_SRC.with_suffix(".f90.bak")
 
-_CACHE_DIR = Path(os.environ.get(
-    "DACE_FORTRAN_CACHE", str(Path.home() / ".cache" / "dace-fortran")))
+_CACHE_DIR = Path(os.environ.get("DACE_FORTRAN_CACHE", str(Path.home() / ".cache" / "dace-fortran")))
 
 _SOLVE_NH_TARGET = "src/atm_dyn_iconam/mo_solve_nonhydro.o"
 _SOLVE_NH_ENTRY = "mo_solve_nonhydro::solve_nh"
@@ -175,21 +171,28 @@ def _icon_search_dirs() -> list:
 #: solve_nonhydro.o.  Same set the velocity test uses; both objects
 #: compile under the same configure.
 _ICON_DEFINES_FALLBACK = (
-    "HAVE_CDI_GRIB2", "HAVE_FC_ATTRIBUTE_CONTIGUOUS",
-    "ICON_MPI_SUBVERSION=1", "ICON_MPI_VERSION=3",
-    "__HAVE_QUAD_PRECISION", "__ICON__", "__LOOP_EXCHANGE",
-    "__NO_ICON_COMIN__", "__NO_ICON_OCEAN__", "__NO_ICON_TESTBED__",
-    "__NO_ICON_WAVES__", "__NO_JSBACH_HD__", "__NO_JSBACH__",
-    "__NO_QUINCY__", "__NO_RAGNAROK__",
+    "HAVE_CDI_GRIB2",
+    "HAVE_FC_ATTRIBUTE_CONTIGUOUS",
+    "ICON_MPI_SUBVERSION=1",
+    "ICON_MPI_VERSION=3",
+    "__HAVE_QUAD_PRECISION",
+    "__ICON__",
+    "__LOOP_EXCHANGE",
+    "__NO_ICON_COMIN__",
+    "__NO_ICON_OCEAN__",
+    "__NO_ICON_TESTBED__",
+    "__NO_ICON_WAVES__",
+    "__NO_JSBACH_HD__",
+    "__NO_JSBACH__",
+    "__NO_QUINCY__",
+    "__NO_RAGNAROK__",
 )
 
 
 def _icon_compile_args() -> dict:
     if (_ICON_BUILD / "Makefile").is_file():
-        return dace_fortran.extract_make_compile_args(
-            makefile_dir=_ICON_BUILD, target=_SOLVE_NH_TARGET)
-    return {"defines": list(_ICON_DEFINES_FALLBACK),
-            "include_dirs": [_ICON_SRC / "src/include"]}
+        return dace_fortran.extract_make_compile_args(makefile_dir=_ICON_BUILD, target=_SOLVE_NH_TARGET)
+    return {"defines": list(_ICON_DEFINES_FALLBACK), "include_dirs": [_ICON_SRC / "src/include"]}
 
 
 #: ICON utility procedures whose bodies the bridge can't lower
@@ -202,10 +205,18 @@ def _icon_compile_args() -> dict:
 _ICON_EXTERNAL_STUBS = (
     # mo_exception -- diagnostic / error termination; no numerical
     # effect.  Body has LEN_TRIM string scans the bridge can't lower.
-    "finish", "message", "message_text", "warning",
-    "print_status", "print_value", "init_logger",
+    "finish",
+    "message",
+    "message_text",
+    "warning",
+    "print_status",
+    "print_value",
+    "init_logger",
     # mo_real_timer / mo_timer -- profiling hooks.
-    "timer_start", "timer_stop", "new_timer", "delete_timer",
+    "timer_start",
+    "timer_stop",
+    "new_timer",
+    "delete_timer",
     # mo_mpi -- MPI sync barrier.
     "work_mpi_barrier",
     # mo_sync's halo-exchange entry points -- the procedures
@@ -221,11 +232,16 @@ _ICON_EXTERNAL_STUBS = (
     # to a thin iso_c wrapper that forwards to Fortran
     # ``sync_patch_array`` at runtime; until then, the bridge emits
     # an opaque ExternalCall library node.
-    "sync_patch_array_2d_sp", "sync_patch_array_2d_dp",
-    "sync_patch_array_2d_int", "sync_patch_array_2d_bool",
-    "sync_patch_array_3d_sp", "sync_patch_array_3d_dp",
-    "sync_patch_array_3d_int", "sync_patch_array_3d_bool",
-    "sync_patch_array_4de1_sp", "sync_patch_array_4de1_dp",
+    "sync_patch_array_2d_sp",
+    "sync_patch_array_2d_dp",
+    "sync_patch_array_2d_int",
+    "sync_patch_array_2d_bool",
+    "sync_patch_array_3d_sp",
+    "sync_patch_array_3d_dp",
+    "sync_patch_array_3d_int",
+    "sync_patch_array_3d_bool",
+    "sync_patch_array_4de1_sp",
+    "sync_patch_array_4de1_dp",
     "sync_patch_array_mult_f3din_sp",
     "sync_patch_array_mult_f3din_f4din_sp",
     "sync_patch_array_mult_f3din_f3din_arr_sp",
@@ -233,30 +249,29 @@ _ICON_EXTERNAL_STUBS = (
     "sync_patch_array_mult_f3din_f4din_dp",
     "sync_patch_array_mult_f3din_f3din_arr_dp",
     "sync_patch_array_mult_mixprec",
-    "check_patch_array_2d_sp", "check_patch_array_2d_dp",
-    "check_patch_array_3d_sp", "check_patch_array_3d_dp",
-    "check_patch_array_4d_sp", "check_patch_array_4d_dp",
+    "check_patch_array_2d_sp",
+    "check_patch_array_2d_dp",
+    "check_patch_array_3d_sp",
+    "check_patch_array_3d_dp",
+    "check_patch_array_4d_sp",
+    "check_patch_array_4d_dp",
     # mo_velocity_advection -- the headline external.  Resolves at
     # link time to the inner velocity binding's bind-C entry point.
     "velocity_tendencies",
 )
-
 
 # Reads ICON's real ``mo_solve_nonhydro`` source through the icon-model
 # submodule (HLFIR emit / SDFG build / compile-commands parse), which only the
 # heavy CI lane checks out -> ``long``.
 pytestmark = [
     pytest.mark.long,
-    pytest.mark.skipif(
-        not (_HAVE_FLANG and _HAVE_OPENMPI),
-        reason="needs flang-new-21 + OpenMPI"),
+    pytest.mark.skipif(not (_HAVE_FLANG and _HAVE_OPENMPI), reason="needs flang-new-21 + OpenMPI"),
 ]
 
 
-@pytest.mark.skipif(
-    not _have_icon(),
-    reason="icon-model submodule not checked out; run "
-           "`git submodule update --init --recursive` to pull it")
+@pytest.mark.skipif(not _have_icon(),
+                    reason="icon-model submodule not checked out; run "
+                    "`git submodule update --init --recursive` to pull it")
 def test_emit_hlfir_for_icon_solve_nh(tmp_path: Path):
     """``emit_hlfir_from_codebase`` produces a non-trivial HLFIR for
     ICON's real ``mo_solve_nonhydro.f90``.  Sanity check before
@@ -278,9 +293,7 @@ def test_emit_hlfir_for_icon_solve_nh(tmp_path: Path):
     assert out.stat().st_size > 100 * 1024 * 1024
 
 
-@pytest.mark.skipif(
-    not _have_icon(),
-    reason="icon-model submodule not checked out")
+@pytest.mark.skipif(not _have_icon(), reason="icon-model submodule not checked out")
 def test_build_sdfg_for_icon_solve_nh(tmp_path: Path):
     """Build a DaCe SDFG from ICON's real ``mo_solve_nonhydro``.
 
@@ -309,8 +322,7 @@ def test_build_sdfg_for_icon_solve_nh(tmp_path: Path):
     # the body, the SDFG never sees the call).
     dace_fortran.apply_external_functions(do_not_emit=_ICON_EXTERNAL_STUBS)
     try:
-        sdfg = dace_fortran.build_sdfg_from_hlfir(
-            hlfir, entry=_SOLVE_NH_ENTRY)
+        sdfg = dace_fortran.build_sdfg_from_hlfir(hlfir, entry=_SOLVE_NH_ENTRY)
     finally:
         dace_fortran.clear_external_registry()
 
@@ -415,10 +427,9 @@ END MODULE mo_sync
     else:  # gfortran
         mod_out_flag = ["-J", str(tmp_path)]
     subprocess.check_call(
-        [fc_path, *syntax_argv,
-         *fortran_compiler_flags(fc_name),
-         *mod_out_flag,
-         str(stubs), str(_SYNC_WRAPPER_SRC)],
+        [fc_path, *syntax_argv, *fortran_compiler_flags(fc_name), *mod_out_flag,
+         str(stubs),
+         str(_SYNC_WRAPPER_SRC)],
         cwd=str(tmp_path))
 
 
@@ -462,24 +473,23 @@ def test_sync_iso_c_wrapper_full_compile_link(fc, tmp_path: Path):
     pic = _fc_pic_flag(fc_name)
 
     # Compile stubs -> stubs.o + per-compiler .mod files.
-    subprocess.check_call(
-        [fc_path, "-c", pic,
-         *fortran_compiler_flags(fc_name),
-         *_fc_mod_flag(fc_name, mod_dir),
-         str(stubs), "-o", str(tmp_path / "stubs.o")],
-        cwd=str(tmp_path),
-        env=env_with_flang_runtime(fc_name))
+    subprocess.check_call([
+        fc_path, "-c", pic, *fortran_compiler_flags(fc_name), *_fc_mod_flag(fc_name, mod_dir),
+        str(stubs), "-o",
+        str(tmp_path / "stubs.o")
+    ],
+                          cwd=str(tmp_path),
+                          env=env_with_flang_runtime(fc_name))
 
     # Compile wrapper against those .mods.
     wrapper_obj = tmp_path / "icon_sync_iso_c.o"
-    subprocess.check_call(
-        [fc_path, "-c", pic,
-         *fortran_compiler_flags(fc_name),
-         f"-I{mod_dir}",
-         *_fc_mod_flag(fc_name, mod_dir),
-         str(_SYNC_WRAPPER_SRC), "-o", str(wrapper_obj)],
-        cwd=str(tmp_path),
-        env=env_with_flang_runtime(fc_name))
+    subprocess.check_call([
+        fc_path, "-c", pic, *fortran_compiler_flags(fc_name), f"-I{mod_dir}", *_fc_mod_flag(fc_name, mod_dir),
+        str(_SYNC_WRAPPER_SRC), "-o",
+        str(wrapper_obj)
+    ],
+                          cwd=str(tmp_path),
+                          env=env_with_flang_runtime(fc_name))
 
     # Link wrapper + stubs into a .so (no main entry needed -- the
     # shared object exports the bind(c) symbols for runtime
@@ -487,8 +497,8 @@ def test_sync_iso_c_wrapper_full_compile_link(fc, tmp_path: Path):
     so_path = tmp_path / "libicon_sync_iso_c_test.so"
     subprocess.check_call(
         [fc_path, "-shared", pic,
-         str(wrapper_obj), str(tmp_path / "stubs.o"),
-         "-o", str(so_path)],
+         str(wrapper_obj), str(tmp_path / "stubs.o"), "-o",
+         str(so_path)],
         cwd=str(tmp_path),
         env=env_with_flang_runtime(fc_name))
 
@@ -497,21 +507,19 @@ def test_sync_iso_c_wrapper_full_compile_link(fc, tmp_path: Path):
     # in a portable form (works for nvfortran's output too).
     sym_out = subprocess.check_output(["nm", "-D", str(so_path)], text=True)
     for sym in (
-        "sync_patch_array_3d_dp_c",
-        "sync_patch_array_mult_2_dp_c",
-        "sync_patch_array_mult_3_dp_c",
-        "sync_patch_array_mult_mixprec_1sp_1dp_c",
+            "sync_patch_array_3d_dp_c",
+            "sync_patch_array_mult_2_dp_c",
+            "sync_patch_array_mult_3_dp_c",
+            "sync_patch_array_mult_mixprec_1sp_1dp_c",
     ):
         # Strict ``T`` (text, defined) marker so an UNDEFINED symbol
         # (which would mean the wrapper's bind(c) didn't actually
         # materialise) fails the test.
-        assert f" T {sym}" in sym_out, (
-            f"{fc_name} produced a .so MISSING the bind-C symbol "
-            f"{sym!r}; nm -D output:\n{sym_out}")
+        assert f" T {sym}" in sym_out, (f"{fc_name} produced a .so MISSING the bind-C symbol "
+                                        f"{sym!r}; nm -D output:\n{sym_out}")
 
 
-@pytest.mark.skipif(not _have_icon(),
-                    reason="icon-model submodule not checked out")
+@pytest.mark.skipif(not _have_icon(), reason="icon-model submodule not checked out")
 def test_sync_iso_c_wrapper_builds_against_icon_mods(tmp_path: Path, icon_build):
     """Build the wrapper into ``libicon_sync_iso_c.so`` against ICON's
     own ``.mod`` files.  The ``icon_build`` fixture configures + builds
@@ -522,10 +530,10 @@ def test_sync_iso_c_wrapper_builds_against_icon_mods(tmp_path: Path, icon_build)
     # Sanity: ELF, has our bind(c) symbols
     output = subprocess.check_output(["nm", "-D", str(so_path)], text=True)
     for sym in (
-        "sync_patch_array_3d_dp_c",
-        "sync_patch_array_mult_2_dp_c",
-        "sync_patch_array_mult_3_dp_c",
-        "sync_patch_array_mult_mixprec_1sp_1dp_c",
+            "sync_patch_array_3d_dp_c",
+            "sync_patch_array_mult_2_dp_c",
+            "sync_patch_array_mult_3_dp_c",
+            "sync_patch_array_mult_mixprec_1sp_1dp_c",
     ):
         assert f" T {sym}" in output, \
             f"wrapper .so missing bind-C symbol {sym!r}; got:\n{output}"
@@ -539,10 +547,10 @@ def test_sync_iso_c_wrapper_pins_bind_c_signatures():
     bind-C names independently of whether the SDFG build path runs."""
     src = _SYNC_WRAPPER_SRC.read_text()
     for sym in (
-        "sync_patch_array_3d_dp_c",
-        "sync_patch_array_mult_2_dp_c",
-        "sync_patch_array_mult_3_dp_c",
-        "sync_patch_array_mult_mixprec_1sp_1dp_c",
+            "sync_patch_array_3d_dp_c",
+            "sync_patch_array_mult_2_dp_c",
+            "sync_patch_array_mult_3_dp_c",
+            "sync_patch_array_mult_mixprec_1sp_1dp_c",
     ):
         assert f"name='{sym}'" in src, \
             f"wrapper missing bind-C entry {sym!r}"

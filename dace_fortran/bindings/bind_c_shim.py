@@ -332,10 +332,93 @@ def _emit_value_record_array(iface: OriginalInterface, vt_name: str, outer_rank:
             copy_out.extend(closes)
 
 
-def _emit_struct_members_recursive(iface: OriginalInterface, st: DerivedType, inst_path: str, flat_prefix: str,
-                                   intent: str, header_args: List[str], decls_value: List[str], decls_ptr: List[str],
-                                   decls_local: List[str], c_f_calls: List[str], copy_in: List[str],
-                                   copy_out: List[str], shape_syms: set):
+#: A double-buffer lane's source expression, ``<prefix>%<aor>(<sym>)%<leaf>``
+#: (e.g. ``p%prog(nnow)%rho``).  Emitted by ``splitDoubleBufferMembers`` /
+#: ``recordStructArgEntry``: the literal ``(<sym>)`` only appears for a static
+#: per-time-level lane, so this never matches a plain AoS member (whose
+#: ``outer_expr`` is ``arr%w`` with the index riding ``$i`` placeholders).
+_DBUF_OUTER_RE = re.compile(r'^(?P<prefix>.+)%(?P<aor>\w+)\((?P<sym>\w+)\)%(?P<leaf>.+)$')
+
+
+def _build_dbuf_map(plan) -> dict:
+    """Group the FlattenPlan's double-buffer lane recipes by their
+    ``(struct-instance prefix, AoR member)`` so the shim can reconstruct the
+    array-of-records with each per-time-level lane populated from its own
+    C-ABI buffer.
+
+    Returns ``{(prefix, aor): {sym: [leaf_info, ...]}}`` where ``leaf_info``
+    is ``{leaf, flat, rank, dtype, intent}``.  Empty when ``plan`` is None or
+    carries no double-buffer lanes."""
+    dbuf: dict = {}
+    if plan is None:
+        return dbuf
+    for e in plan.entries:
+        m = _DBUF_OUTER_RE.match(e.outer_expr)
+        if not m:
+            continue
+        r = e.recipe
+        if not r.flat_names:
+            continue
+        info = {
+            'leaf': m['leaf'],
+            'flat': r.flat_names[0],
+            'rank': r.rank,
+            'dtype': r.scratch_dtype,
+            'intent': e.writeback_intent,
+        }
+        dbuf.setdefault((m['prefix'], m['aor']), {}).setdefault(m['sym'], []).append(info)
+    return dbuf
+
+
+def _emit_double_buffer_member(inst_path: str, aor: str, syms: dict, header_args: List[str], decls_value: List[str],
+                               decls_ptr: List[str], decls_local: List[str], c_f_calls: List[str], copy_in: List[str],
+                               copy_out: List[str]):
+    """Reconstruct an ICON double-buffer AoR member (``p%prog``) from the SDFG's
+    per-time-level lane buffers.  The bridge split ``prog(nnow)`` / ``prog(nnew)``
+    into static lanes (``p_prog_nnow_rho`` / ``p_prog_nnew_rho``); the binding
+    aliases each lane back to ``p%prog(<sym>)%<leaf>``, so the shim must allocate
+    the record array large enough for every time-level index and populate each
+    one from its own C-ABI buffer.  ``syms`` maps each index symbol (already a
+    by-value C-ABI scalar arg) to its leaf buffers."""
+    sym_names = sorted(syms)
+    max_expr = sym_names[0] if len(sym_names) == 1 else "max(" + ", ".join(sym_names) + ")"
+    copy_in.append(f"  allocate({inst_path}%{aor}({max_expr}))")
+    for sym in sym_names:
+        for info in syms[sym]:
+            flat, leaf, rank = info['flat'], info['leaf'], info['rank']
+            ftype = _MOD_FORWARD_SCALAR_FTYPE.get(info['dtype'], 'real(c_double)')
+            ext_names = [f"{flat}_d{i}" for i in range(rank)]
+            for en in ext_names:
+                header_args.append(en)
+                decls_value.append(f"  integer(c_int), value :: {en}")
+            ptr = f"{flat}_p"
+            header_args.append(ptr)
+            decls_ptr.append(f"  type(c_ptr), value :: {ptr}")
+            dim_colons = "(" + ", ".join(":" for _ in range(rank)) + ")"
+            decls_local.append(f"  {ftype}, pointer :: {flat}{dim_colons}")
+            c_f_calls.append(f"  call c_f_pointer({ptr}, {flat}, [{', '.join(ext_names)}])")
+            extents = "(" + ", ".join(ext_names) + ")"
+            copy_in.append(f"  allocate({inst_path}%{aor}({sym})%{leaf}{extents})")
+            if info['intent'] in ('', 'in', 'inout'):
+                copy_in.append(f"  {inst_path}%{aor}({sym})%{leaf} = {flat}")
+            if info['intent'] in ('out', 'inout'):
+                copy_out.append(f"  {flat} = {inst_path}%{aor}({sym})%{leaf}")
+
+
+def _emit_struct_members_recursive(iface: OriginalInterface,
+                                   st: DerivedType,
+                                   inst_path: str,
+                                   flat_prefix: str,
+                                   intent: str,
+                                   header_args: List[str],
+                                   decls_value: List[str],
+                                   decls_ptr: List[str],
+                                   decls_local: List[str],
+                                   c_f_calls: List[str],
+                                   copy_in: List[str],
+                                   copy_out: List[str],
+                                   shape_syms: set,
+                                   dbuf_map: dict = None):
     """Walk ``st``'s members; for each leaf emit a C-ABI slot plus
     the matching ``c_f_pointer`` alias + copy-in / copy-out, for each
     nested-struct member descend into the nested layout with extended
@@ -370,6 +453,13 @@ def _emit_struct_members_recursive(iface: OriginalInterface, st: DerivedType, in
                 _emit_value_record_array(iface, m.struct_name, m.rank, f"{inst_path}%{m.name}",
                                          f"{flat_prefix}_{m.name}", intent, header_args, decls_value, decls_ptr,
                                          decls_local, c_f_calls, copy_in, copy_out)
+            elif dbuf_map and (inst_path, m.name) in dbuf_map:
+                # ICON double-buffer AoR (``p%prog(nnow)`` / ``p%prog(nnew)``):
+                # the bridge split it into per-time-level lanes.  Allocate the
+                # record array to cover every time-level index and populate
+                # each one from its own C-ABI lane buffer.
+                _emit_double_buffer_member(inst_path, m.name, dbuf_map[(inst_path, m.name)], header_args, decls_value,
+                                           decls_ptr, decls_local, c_f_calls, copy_in, copy_out)
             else:
                 # Array of a container record (``p_patch_1d(:)`` /
                 # ``p_patch_2d(:)`` of ``t_patch_vert`` / ``t_patch``).  The
@@ -381,7 +471,7 @@ def _emit_struct_members_recursive(iface: OriginalInterface, st: DerivedType, in
                 nested = iface.struct_types[m.struct_name]
                 _emit_struct_members_recursive(iface, nested, f"{inst_path}%{m.name}(1)", f"{flat_prefix}_{m.name}",
                                                intent, header_args, decls_value, decls_ptr, decls_local, c_f_calls,
-                                               copy_in, copy_out, shape_syms)
+                                               copy_in, copy_out, shape_syms, dbuf_map)
             continue
         flat_name = f"{flat_prefix}_{m.name}"
         if m.rank == 0 and intent in ('in', '') and flat_name in shape_syms:
@@ -446,9 +536,19 @@ def _emit_struct_members_recursive(iface: OriginalInterface, st: DerivedType, in
                 copy_out.append(f"  {flat_name} = {inst_path}%{m.name}")
 
 
-def _emit_struct_arg(a: OriginalArg, st: DerivedType, iface: OriginalInterface, header_args: List[str],
-                     decls_value: List[str], decls_ptr: List[str], decls_local: List[str], c_f_calls: List[str],
-                     copy_in: List[str], copy_out: List[str], call_args: List[str], shape_syms: set):
+def _emit_struct_arg(a: OriginalArg,
+                     st: DerivedType,
+                     iface: OriginalInterface,
+                     header_args: List[str],
+                     decls_value: List[str],
+                     decls_ptr: List[str],
+                     decls_local: List[str],
+                     c_f_calls: List[str],
+                     copy_in: List[str],
+                     copy_out: List[str],
+                     call_args: List[str],
+                     shape_syms: set,
+                     dbuf_map: dict = None):
     """Append the per-member split for a derived-type argument.
 
     The dummy becomes a local ``type(<struct>), target :: <name>``;
@@ -489,7 +589,7 @@ def _emit_struct_arg(a: OriginalArg, st: DerivedType, iface: OriginalInterface, 
         call_args.append(a.name)
         return
     _emit_struct_members_recursive(iface, st, a.name, a.name, a.intent, header_args, decls_value, decls_ptr,
-                                   decls_local, c_f_calls, copy_in, copy_out, shape_syms)
+                                   decls_local, c_f_calls, copy_in, copy_out, shape_syms, dbuf_map)
     decls_local.append(f"  {a.fortran_type}, target :: {a.name}")
     call_args.append(a.name)
 
@@ -570,7 +670,8 @@ def _emit_module_symbol_forward(module_symbol_forward, header_args: List[str], d
 def emit_bind_c_shim(iface: OriginalInterface,
                      out_path: str,
                      debug_prints: bool = False,
-                     module_symbol_forward=()) -> Path:
+                     module_symbol_forward=(),
+                     plan=None) -> Path:
     """Emit ``<entry>_c.f90`` -- a thin ``bind(c)`` wrapper around the
     binding module's ``<entry>_dace`` procedure.
 
@@ -643,13 +744,18 @@ def emit_bind_c_shim(iface: OriginalInterface,
     # member that coincides with one is forwarded by value (and shared with
     # the array shapes) instead of as a length-1 pointer alias.
     shape_syms = set(_free_shape_symbols(iface))
+    # Double-buffer AoR lanes (ICON ``p%prog(nnow)`` / ``p%prog(nnew)``) the
+    # bridge split into static per-time-level companions, grouped by their
+    # ``(struct-instance, AoR member)`` so the struct reconstruction can
+    # allocate + populate every time-level element from its own lane buffer.
+    dbuf_map = _build_dbuf_map(plan)
     for a in iface.args:
         if a.struct_type is None:
             _emit_flat_arg(a, header_args, decls_value, decls_ptr, decls_local, c_f_calls, call_args)
             continue
         st = iface.struct_types[a.struct_type]
         _emit_struct_arg(a, st, iface, header_args, decls_value, decls_ptr, decls_local, c_f_calls, copy_in, copy_out,
-                         call_args, shape_syms)
+                         call_args, shape_syms, dbuf_map)
         # Pick up the ``use`` line for the struct's defining module
         # AND every nested-derived-type member's module so the shim
         # can spell ``type(<struct>)`` / ``type(<nested>)`` and any

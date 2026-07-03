@@ -37,6 +37,15 @@ dependencies = [
     "fparser > 0.2",
     "networkx",
     "numpy",
+    # Formatters + git-hook runner are core deps so a plain ``pip install -e .``
+    # makes ``pre-commit run`` (clang-format / yapf / fprettify) work out of the
+    # box.  yapf and clang-format are version-pinned so a local run agrees with the
+    # CI ``format`` job (see .pre-commit-config.yaml, .style.yapf, .clang-format,
+    # .fprettify.rc).
+    "pre-commit",
+    "yapf==0.43.0",
+    "fprettify",
+    "clang-format~=21.1",
 ]
 
 [project.optional-dependencies]
@@ -52,8 +61,8 @@ testing = [
     "ninja",
 ]
 linting = [
+    # Formatters / pre-commit moved to core ``dependencies`` (always available).
     "flake8",
-    "pre-commit",
 ]
 dev = [
     "dace-fortran[testing,linting]",

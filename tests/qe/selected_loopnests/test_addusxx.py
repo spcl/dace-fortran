@@ -51,7 +51,6 @@ from _util import build_sdfg, have_flang
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
-
 # Small symbolic problem sizes -- a correctness test, not a benchmark.
 # ``ncol = nh*nh`` qgm columns, ``nbeta = nat*nh`` projector entries.
 _NGMS, _NH, _NAT, _NT, _NM, _NRHO = 5, 3, 3, 2, 7, 9
@@ -199,8 +198,7 @@ def _inputs(seed_base: int = 0):
 
     ofsbeta = (np.arange(_NAT) * _NH).astype(np.int32)
     ityp = np.array([1, _NT, _NT], dtype=np.int32)
-    ijtoh = np.asfortranarray(
-        (np.arange(_NH)[:, None] * _NH + np.arange(_NH) + 1).astype(np.int32))
+    ijtoh = np.asfortranarray((np.arange(_NH)[:, None] * _NH + np.arange(_NH) + 1).astype(np.int32))
     mill1 = rng.integers(1, _NM + 1, _NGMS, dtype=np.int32)
     mill2 = rng.integers(1, _NM + 1, _NGMS, dtype=np.int32)
     mill3 = rng.integers(1, _NM + 1, _NGMS, dtype=np.int32)
@@ -214,9 +212,21 @@ def _inputs(seed_base: int = 0):
     eigts2 = np.asfortranarray(complex_stream(_NM * _NAT, seed=6).reshape(_NM, _NAT))
     eigts3 = np.asfortranarray(complex_stream(_NM * _NAT, seed=7).reshape(_NM, _NAT))
     rhoc = complex_stream(_NRHO, seed=8)
-    return dict(ofsbeta=ofsbeta, ityp=ityp, ijtoh=ijtoh, mill1=mill1, mill2=mill2,
-                mill3=mill3, nlmap=nlmap, becphi=becphi, becpsi=becpsi, qgm=qgm,
-                eigqts=eigqts, eigts1=eigts1, eigts2=eigts2, eigts3=eigts3, rhoc=rhoc)
+    return dict(ofsbeta=ofsbeta,
+                ityp=ityp,
+                ijtoh=ijtoh,
+                mill1=mill1,
+                mill2=mill2,
+                mill3=mill3,
+                nlmap=nlmap,
+                becphi=becphi,
+                becpsi=becpsi,
+                qgm=qgm,
+                eigqts=eigqts,
+                eigts1=eigts1,
+                eigts2=eigts2,
+                eigts3=eigts3,
+                rhoc=rhoc)
 
 
 def _ref(d: dict, scatter: bool) -> np.ndarray:
@@ -234,8 +244,8 @@ def _ref(d: dict, scatter: bool) -> np.ndarray:
                 aux1 += d["qgm"][:, col] * d["becpsi"][ijkb0 + jh]
             aux2 += aux1 * np.conj(d["becphi"][ijkb0 + ih])
         for g in range(_NGMS):
-            sf = (d["eigqts"][na] * d["eigts1"][d["mill1"][g] - 1, na]
-                  * d["eigts2"][d["mill2"][g] - 1, na] * d["eigts3"][d["mill3"][g] - 1, na])
+            sf = (d["eigqts"][na] * d["eigts1"][d["mill1"][g] - 1, na] * d["eigts2"][d["mill2"][g] - 1, na] *
+                  d["eigts3"][d["mill3"][g] - 1, na])
             tgt = (int(d["nlmap"][g]) - 1) if scatter else g
             out[tgt] += aux2[g] * sf
     return out
@@ -243,8 +253,12 @@ def _ref(d: dict, scatter: bool) -> np.ndarray:
 
 def _dims() -> dict:
     """The SDFG's shape symbols, passed alongside the arrays."""
-    return dict(ngms=np.int32(_NGMS), nh=np.int32(_NH), nat=np.int32(_NAT),
-                nt=np.int32(_NT), nm=np.int32(_NM), nrho=np.int32(_NRHO))
+    return dict(ngms=np.int32(_NGMS),
+                nh=np.int32(_NH),
+                nat=np.int32(_NAT),
+                nt=np.int32(_NT),
+                nm=np.int32(_NM),
+                nrho=np.int32(_NRHO))
 
 
 @pytest.mark.parametrize("indir", ["single", "double"])
@@ -255,12 +269,24 @@ def test_addusxx_aos(tmp_path, indir):
     rhoc = np.asfortranarray(d["rhoc"].copy())
 
     sdfg = build_sdfg(_aos_src("nlmap(g)" if indir == "double" else "g"),
-                      tmp_path, name="addusxx_aos", entry="addusxx_aos_mod::addusxx_aos").build()
-    sdfg(**_dims(), ofsbeta=d["ofsbeta"], ityp=d["ityp"], ijtoh=d["ijtoh"],
-         becphi=np.asfortranarray(d["becphi"]), becpsi=np.asfortranarray(d["becpsi"]),
-         qgm=d["qgm"], eigqts=np.asfortranarray(d["eigqts"]),
-         eigts1=d["eigts1"], eigts2=d["eigts2"], eigts3=d["eigts3"],
-         mill1=d["mill1"], mill2=d["mill2"], mill3=d["mill3"], nlmap=d["nlmap"],
+                      tmp_path,
+                      name="addusxx_aos",
+                      entry="addusxx_aos_mod::addusxx_aos").build()
+    sdfg(**_dims(),
+         ofsbeta=d["ofsbeta"],
+         ityp=d["ityp"],
+         ijtoh=d["ijtoh"],
+         becphi=np.asfortranarray(d["becphi"]),
+         becpsi=np.asfortranarray(d["becpsi"]),
+         qgm=d["qgm"],
+         eigqts=np.asfortranarray(d["eigqts"]),
+         eigts1=d["eigts1"],
+         eigts2=d["eigts2"],
+         eigts3=d["eigts3"],
+         mill1=d["mill1"],
+         mill2=d["mill2"],
+         mill3=d["mill3"],
+         nlmap=d["nlmap"],
          rhoc=rhoc)
     np.testing.assert_allclose(rhoc, ref, rtol=1e-11, atol=1e-12)
 
@@ -274,8 +300,7 @@ def test_addusxx_soa(tmp_path, indir):
     rhoc_im = np.asfortranarray(d["rhoc"].imag.copy())
 
     def split(name):
-        return (np.asfortranarray(d[name].real.copy()),
-                np.asfortranarray(d[name].imag.copy()))
+        return (np.asfortranarray(d[name].real.copy()), np.asfortranarray(d[name].imag.copy()))
 
     becphi_re, becphi_im = split("becphi")
     becpsi_re, becpsi_im = split("becpsi")
@@ -286,15 +311,32 @@ def test_addusxx_soa(tmp_path, indir):
     eigts3_re, eigts3_im = split("eigts3")
 
     sdfg = build_sdfg(_soa_src("nlmap(g)" if indir == "double" else "g"),
-                      tmp_path, name="addusxx_soa", entry="addusxx_soa_mod::addusxx_soa").build()
-    sdfg(**_dims(), ofsbeta=d["ofsbeta"], ityp=d["ityp"], ijtoh=d["ijtoh"],
-         becphi_re=becphi_re, becphi_im=becphi_im,
-         becpsi_re=becpsi_re, becpsi_im=becpsi_im,
-         qgm_re=qgm_re, qgm_im=qgm_im, eigqts_re=eigqts_re, eigqts_im=eigqts_im,
-         eigts1_re=eigts1_re, eigts1_im=eigts1_im,
-         eigts2_re=eigts2_re, eigts2_im=eigts2_im,
-         eigts3_re=eigts3_re, eigts3_im=eigts3_im,
-         mill1=d["mill1"], mill2=d["mill2"], mill3=d["mill3"], nlmap=d["nlmap"],
-         rhoc_re=rhoc_re, rhoc_im=rhoc_im)
+                      tmp_path,
+                      name="addusxx_soa",
+                      entry="addusxx_soa_mod::addusxx_soa").build()
+    sdfg(**_dims(),
+         ofsbeta=d["ofsbeta"],
+         ityp=d["ityp"],
+         ijtoh=d["ijtoh"],
+         becphi_re=becphi_re,
+         becphi_im=becphi_im,
+         becpsi_re=becpsi_re,
+         becpsi_im=becpsi_im,
+         qgm_re=qgm_re,
+         qgm_im=qgm_im,
+         eigqts_re=eigqts_re,
+         eigqts_im=eigqts_im,
+         eigts1_re=eigts1_re,
+         eigts1_im=eigts1_im,
+         eigts2_re=eigts2_re,
+         eigts2_im=eigts2_im,
+         eigts3_re=eigts3_re,
+         eigts3_im=eigts3_im,
+         mill1=d["mill1"],
+         mill2=d["mill2"],
+         mill3=d["mill3"],
+         nlmap=d["nlmap"],
+         rhoc_re=rhoc_re,
+         rhoc_im=rhoc_im)
     np.testing.assert_allclose(rhoc_re, ref.real, rtol=1e-11, atol=1e-12)
     np.testing.assert_allclose(rhoc_im, ref.imag, rtol=1e-11, atol=1e-12)

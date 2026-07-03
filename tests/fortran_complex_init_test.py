@@ -105,17 +105,13 @@ end subroutine main
     assert z[1] == np.complex128(-7.0 + 8.0j)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=CompilationError,
-    reason="DaCe's tasklet codegen renders a complex literal with its complex128 "
-           "`1j` imaginary unit, so a single-precision COMPLEX literal emits an "
-           "uncompilable `float32 + complex128 * float32`.  Frontend ingestion is "
-           "correct (see test_fortran_frontend_complex_init); this is a DaCe "
-           "SDFG->C++ codegen limitation, not a frontend one.",
-)
-def test_single_complex_literal_codegen_xfail(tmp_path):
-    """Building the SDFG succeeds (types ingest); *running* it hits the codegen bug."""
+def test_single_complex_literal_codegen_raises(tmp_path):
+    """Frontend ingestion is correct (see ``test_fortran_frontend_complex_init``),
+    but *running* hits a DaCe SDFG->C++ codegen limitation: the tasklet codegen
+    renders a complex literal with a complex128 ``1j`` imaginary unit, so a
+    single-precision COMPLEX literal emits an uncompilable
+    ``float32 + complex128 * float32``.  Pinned as a loud ``CompilationError`` (not
+    silent wrong values) -- a DaCe-fork codegen limit, not a frontend one."""
     src = """
 subroutine main(c)
   integer, parameter :: sp = kind(1.0)
@@ -128,4 +124,5 @@ end subroutine main
     # Frontend ingestion is still correct even though codegen will fail.
     assert sdfg.arrays['c'].dtype == dace.complex64
     c = np.zeros(2, order="F", dtype=np.complex64)
-    sdfg(c=c)  # <- triggers DaCe codegen + C++ compile -> CompilationError
+    with pytest.raises(CompilationError):
+        sdfg(c=c)  # triggers DaCe codegen + C++ compile -> CompilationError

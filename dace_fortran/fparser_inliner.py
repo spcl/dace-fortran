@@ -50,7 +50,8 @@ from fparser.two.parser import ParserFactory
 from fparser.two.utils import Base, FortranSyntaxError, walk
 
 from dace_fortran.external_functions import ExternalFunction, dont_inline_names, validate
-from dace_fortran.inliner.ast_desugaring import (analysis, cleanup, desugaring, optimizations, pruning, types, utils)
+from dace_fortran.inliner.ast_desugaring import (analysis, cleanup, desugaring, optimizations, pruning,
+                                                 specialize_at_source as specialize_at_source_mod, types, utils)
 from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import monomorphize_auto
 from dace_fortran.inliner.ast_utils import atmost_one, children_of_type, singular
 
@@ -151,14 +152,33 @@ INTRINSIC_MODULE_NAMES = frozenset({
 EXTERNAL_LIBRARY_MODULE_NAMES = frozenset({"omp_lib", "omp_lib_kinds", "openacc", "mpi", "mpi_f08"})
 
 
-def _preserved_intrinsic_modules() -> frozenset:
+def _preserved_intrinsic_modules(ast: Optional[f03.Program] = None) -> frozenset:
     """The compiler-provided modules whose ``USE`` is captured before the
     pipeline and restored after.  Under ``tolerate_external_uses`` the external
     -library group (:data:`EXTERNAL_LIBRARY_MODULE_NAMES`) is excluded so those
-    ``USE``s are dropped, not resurrected -- see that constant's note."""
-    if analysis.TOLERATE_EXTERNAL_USES:
-        return INTRINSIC_MODULE_NAMES - EXTERNAL_LIBRARY_MODULE_NAMES
-    return INTRINSIC_MODULE_NAMES
+    ``USE``s are dropped, not resurrected -- see that constant's note.
+
+    EXCEPTION: an external-library module that is ACTUALLY PROVIDED as a stub
+    ``MODULE`` in the merged closure is NOT external here -- the inlined halo
+    mode injects a real ``module mpi`` (see ``tests/icon/_halo_modes._MPI_STUB``),
+    so gfortran gets its ``.mod`` from that stub and ``USE mpi`` must SURVIVE:
+    ``mo_mpi`` resolves the raw ``mpi_recv`` / ``mpi_irecv`` / ``mpi_send`` /
+    ``mpi_isend`` calls against the stub's assumed-type interfaces instead of
+    leaving them implicit externals (which forces the unsound
+    ``-fallow-argument-mismatch`` on the reference build).  In the external halo
+    mode no such stub is provided and ``mo_mpi`` is not inlined, so the group is
+    still dropped as before.  Pass ``ast`` to enable the provided-module check."""
+    if not analysis.TOLERATE_EXTERNAL_USES:
+        return INTRINSIC_MODULE_NAMES
+    preserved = INTRINSIC_MODULE_NAMES - EXTERNAL_LIBRARY_MODULE_NAMES
+    if ast is not None:
+        provided = set()
+        for ms in walk(ast, f03.Module_Stmt):
+            nm = next(iter(children_of_type(ms, f03.Name)), None)
+            if nm is not None:
+                provided.add(nm.string.lower())
+        preserved = preserved | (EXTERNAL_LIBRARY_MODULE_NAMES & provided)
+    return frozenset(preserved)
 
 
 def strip_builtin_stub_modules(ast: f03.Program) -> f03.Program:
@@ -213,7 +233,8 @@ class ParseConfig:
                  rename_uniquely: bool = False,
                  do_not_prune_type_components: bool = False,
                  monomorphize: bool = True,
-                 rename_specifics: Optional[Dict[str, str]] = None):
+                 rename_specifics: Optional[Dict[str, str]] = None,
+                 specialize_at_source: Optional[Iterable[str]] = None):
         # Make the configs canonical, by processing the various types upfront.
         if not sources:
             sources = {}
@@ -265,6 +286,16 @@ class ParseConfig:
         #: :func:`cleanup.rename_clashing_specifics`).  Applied before the
         #: externalisation / interface deconstruction that the collision breaks.
         self.rename_specifics: Dict[str, str] = dict(rename_specifics or {})
+        #: Names of subprograms to SPECIALIZE to their call sites by source-level
+        #: inlining (per-call-site monomorphization), in addition to the structural
+        #: module merge.  Used for ICON's halo ``sync_patch_array`` family, whose
+        #: runtime-selected ``p_pat => p_patch%comm_pat_<typ>`` rebind the bridge
+        #: cannot lower while ``typ`` is symbolic: inlining the wrapper lets the call
+        #: site's compile-time-constant ``typ`` flow in so the constant-fold /
+        #: branch-prune collapses the ladder to a single-source rebind BEFORE the
+        #: bridge's pointer-rewrite (HLFIR inlining is too late).  See
+        #: :mod:`inliner.ast_desugaring.specialize_at_source`.
+        self.specialize_at_source: List[str] = [n.lower() for n in (specialize_at_source or [])]
 
     def set_all_possible_entry_points_from(self, ast: f03.Program):
         """Treat every top-level subprogram / main program as an entry point
@@ -432,7 +463,7 @@ def collect_intrinsic_uses(ast: f03.Program) -> Dict[Tuple[str, ...], List[str]]
     """Record every ``USE`` of a compiler-provided intrinsic module
     (:data:`INTRINSIC_MODULE_NAMES`), keyed by the qualified name of the scope
     that holds it.  Run BEFORE the pipeline, which strips these ``USE``s."""
-    preserved = _preserved_intrinsic_modules()
+    preserved = _preserved_intrinsic_modules(ast)
     captured: Dict[Tuple[str, ...], List[str]] = {}
     for use in walk(ast, f03.Use_Stmt):
         if _module_name_of_use(use) not in preserved:
@@ -458,7 +489,7 @@ def restore_intrinsic_uses(ast: f03.Program, captured: Dict[Tuple[str, ...], Lis
     #    names (``ONLY: c_int``) -- they neither import what the stub lacked
     #    (``c_double_complex``) nor carry the ``, INTRINSIC`` attribute, so flang
     #    rejects them.  We replace the lot with the captured originals.
-    preserved = _preserved_intrinsic_modules()
+    preserved = _preserved_intrinsic_modules(ast)
     for use in list(walk(ast, f03.Use_Stmt)):
         if _module_name_of_use(use) in preserved:
             utils.remove_self(use)
@@ -890,6 +921,20 @@ def run_fparser_transformations(ast: f03.Program, cfg: ParseConfig, *, optimize:
     ast = cleanup.correct_for_function_calls(ast)
     _checkpoint_ast(cfg, 'ast_v2.f90', ast)
 
+    # Specialize the configured targets (ICON's halo ``sync_patch_array`` family)
+    # to their call sites by source-level inlining.  Runs AFTER generic-interface /
+    # type-bound resolution (so call names are the concrete specifics) and BEFORE
+    # the constant-fold / branch-prune loop below, which then collapses the
+    # now-constant ``typ`` ladder the wrappers carry into a single-source pointer
+    # rebind the bridge can lower.  A no-op when ``specialize_at_source`` is empty.
+    if cfg.specialize_at_source:
+        n_sub, n_fun = specialize_at_source_mod.specialize_at_source(ast, cfg.specialize_at_source)
+        if n_sub or n_fun:
+            logger.debug("FParser Op: specialized-at-source %d subprogram call(s) + %d function ref(s): %s", n_sub,
+                         n_fun, cfg.specialize_at_source)
+            ast = pruning.prune_coarsely(ast, cfg.do_not_prune)
+            _checkpoint_ast(cfg, 'ast_v2b.f90', ast)
+
     ast_f90_old, ast_f90_new = None, ast.tofortran()
     while not ast_f90_old or ast_f90_old != ast_f90_new:
         logger.debug("FParser Op: Coarsely pruning the AST...")
@@ -1101,6 +1146,7 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
                   tolerate_external_uses: bool = False,
                   monomorphize: bool = True,
                   rename_specifics: Optional[Dict[str, str]] = None,
+                  specialize_at_source: Iterable[str] = (),
                   optimize: bool = True) -> f03.Program:
     """Run the full inliner pipeline and return the combined fparser AST.
 
@@ -1147,6 +1193,7 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
         do_not_prune_type_components=do_not_prune_type_components,
         monomorphize=monomorphize,
         rename_specifics=rename_specifics,
+        specialize_at_source=specialize_at_source,
     )
     if include_builtins:
         cfg.sources.setdefault("_builtins.f90", BUILTINS)
@@ -1176,29 +1223,31 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
     return ast
 
 
-def inline_to_single_tu(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
-                        entry: Optional[str] = None,
-                        *,
-                        output: Union[None, str, Path] = None,
-                        out_dir: Union[None, str, Path] = None,
-                        name: str = "inlined",
-                        expand_cpp: bool = False,
-                        defines: Iterable[str] = (),
-                        include_dirs: Iterable[Union[str, Path]] = (),
-                        flang: str = "flang-new-21",
-                        make_noop: Union[None, types.SPEC, List[types.SPEC]] = None,
-                        make_return_false: Iterable[str] = (),
-                        keep_external: Iterable[str] = (),
-                        external_functions: Iterable[ExternalFunction] = (),
-                        do_not_emit: Iterable[str] = (),
-                        consolidate_global_data: bool = False,
-                        rename_uniquely: bool = False,
-                        do_not_prune_type_components: bool = False,
-                        checkpoint_dir: Union[None, str, Path] = None,
-                        include_builtins: bool = True,
-                        tolerate_external_uses: bool = False,
-                        monomorphize: bool = True,
-                        rename_specifics: Optional[Dict[str, str]] = None) -> Path:
+def inline_to_single_tu(
+    sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
+    entry: Optional[str] = None,
+    *,
+    output: Union[None, str, Path] = None,
+    out_dir: Union[None, str, Path] = None,
+    name: str = "inlined",
+    expand_cpp: bool = False,
+    defines: Iterable[str] = (),
+    include_dirs: Iterable[Union[str, Path]] = (),
+    flang: str = "flang-new-21",
+    make_noop: Union[None, types.SPEC, List[types.SPEC]] = None,
+    make_return_false: Iterable[str] = (),
+    keep_external: Iterable[str] = (),
+    external_functions: Iterable[ExternalFunction] = (),
+    do_not_emit: Iterable[str] = (),
+    consolidate_global_data: bool = False,
+    rename_uniquely: bool = False,
+    do_not_prune_type_components: bool = False,
+    checkpoint_dir: Union[None, str, Path] = None,
+    include_builtins: bool = True,
+    tolerate_external_uses: bool = False,
+    monomorphize: bool = True,
+    rename_specifics: Optional[Dict[str, str]] = None,
+    specialize_at_source: Iterable[str] = ()) -> Path:
     """Inline a multi-file Fortran project into ONE self-contained ``.f90``
     and return the path to it.
 
@@ -1249,7 +1298,8 @@ def inline_to_single_tu(sources: Union[Dict[str, str], Iterable[Union[str, Path]
                         include_builtins=include_builtins,
                         tolerate_external_uses=tolerate_external_uses,
                         monomorphize=monomorphize,
-                        rename_specifics=rename_specifics)
+                        rename_specifics=rename_specifics,
+                        specialize_at_source=specialize_at_source)
     # Drop the injected intrinsic-module stubs (``iso_c_binding`` / ``iso_fortran_env``)
     # before serialising: they exist only so ``USE`` resolves during parsing, but a
     # PARTIAL stub (the ``iso_c_binding`` one defines just ``c_int``) shadows the real

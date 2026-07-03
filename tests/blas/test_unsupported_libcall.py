@@ -27,7 +27,8 @@ def test_drot_raises_clear_error(tmp_path):
     """Unsupported BLAS routine yields a precise NotImplementedError."""
     src = _SRC.read_text()
     with pytest.raises(NotImplementedError) as exc:
-        dace_fortran.build_sdfg(src, out_dir=str(tmp_path / "sdfg"),
+        dace_fortran.build_sdfg(src,
+                                out_dir=str(tmp_path / "sdfg"),
                                 entry="unsupported_blas_probe::run_drot",
                                 name="run_drot")
     msg = str(exc.value)

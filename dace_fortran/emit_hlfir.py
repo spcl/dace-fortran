@@ -34,11 +34,9 @@ from typing import List, Optional, Sequence
 #: ``MODULE <name>`` opener at the top of a Fortran source.  Used for
 #: the (fallback) ``--source`` topo-sort when no ``compile_commands.json``
 #: artefact is supplied.
-_MODULE_DEF_RE = re.compile(r"^\s*MODULE\s+([A-Za-z_]\w*)\s*$",
-                            re.IGNORECASE | re.MULTILINE)
+_MODULE_DEF_RE = re.compile(r"^\s*MODULE\s+([A-Za-z_]\w*)\s*$", re.IGNORECASE | re.MULTILINE)
 #: ``USE <name>`` -- captured for the same fallback topo-sort.
-_USE_DEP_RE = re.compile(r"^\s*USE[\s,]*(?:INTRINSIC\s*::\s*)?\s*([A-Za-z_]\w*)",
-                         re.IGNORECASE | re.MULTILINE)
+_USE_DEP_RE = re.compile(r"^\s*USE[\s,]*(?:INTRINSIC\s*::\s*)?\s*([A-Za-z_]\w*)", re.IGNORECASE | re.MULTILINE)
 
 
 def _topo_order(sources: Sequence[Path]) -> List[Path]:
@@ -119,13 +117,21 @@ def _parse_compile_commands(cc_path: Path):
         while i < len(tokens):
             t = tokens[i]
             if t == "-I":
-                includes.append(tokens[i + 1]); i += 2; continue
+                includes.append(tokens[i + 1])
+                i += 2
+                continue
             if t.startswith("-I"):
-                includes.append(t[2:]); i += 1; continue
+                includes.append(t[2:])
+                i += 1
+                continue
             if t == "-D":
-                defines.append(tokens[i + 1]); i += 2; continue
+                defines.append(tokens[i + 1])
+                i += 2
+                continue
             if t.startswith("-D"):
-                defines.append(t[2:]); i += 1; continue
+                defines.append(t[2:])
+                i += 1
+                continue
             i += 1
         out.append((src, includes, defines))
     return out
@@ -153,9 +159,8 @@ _MOD_OPEN_RE = re.compile(r"^\s*module\s+([a-z_]\w*)\s*$", re.IGNORECASE)
 _MOD_END_RE = re.compile(r"^\s*end\s+module\b", re.IGNORECASE)
 _INTERFACE_RE = re.compile(r"^\s*(abstract\s+)?interface\b", re.IGNORECASE)
 _END_INTERFACE_RE = re.compile(r"^\s*end\s+interface\b", re.IGNORECASE)
-_SUBR_DEF_RE = re.compile(
-    r"^\s*(?:(?:recursive|pure|impure|elemental|module)\s+)*subroutine\s+([a-z_]\w*)",
-    re.IGNORECASE)
+_SUBR_DEF_RE = re.compile(r"^\s*(?:(?:recursive|pure|impure|elemental|module)\s+)*subroutine\s+([a-z_]\w*)",
+                          re.IGNORECASE)
 
 
 def _scan_subroutine_defs(text: str):
@@ -300,11 +305,7 @@ def _select_use_closure(parsed, root_module: str):
     return [t for t in parsed if t[0] in needed]
 
 
-def _flang_emit(flang: str,
-                src: Path,
-                out_dir: Path,
-                includes: Sequence[str],
-                defines: Sequence[str]):
+def _flang_emit(flang: str, src: Path, out_dir: Path, includes: Sequence[str], defines: Sequence[str]):
     """Run one ``flang -fc1 -emit-hlfir`` invocation.  ``cwd`` and
     ``-J/-I`` all point at ``out_dir`` so flang only ever sees the
     ``.mod`` files it wrote itself -- with ``cwd`` set to ``out_dir`` the
@@ -325,8 +326,7 @@ def _flang_emit(flang: str,
     the ``out_dir``-first search order already prevents cross-format
     collisions, so hermetic mode buys nothing here."""
     out_dir = out_dir.resolve()
-    cmd = [flang, "-fc1", "-cpp", "-U_OPENMP", "-U_OPENACC",
-           "-J", str(out_dir), "-I", str(out_dir)]
+    cmd = [flang, "-fc1", "-cpp", "-U_OPENMP", "-U_OPENACC", "-J", str(out_dir), "-I", str(out_dir)]
     for d in includes:
         cmd += ["-I", str(d)]
     for d in defines:
@@ -405,43 +405,56 @@ def emit(*,
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(
-        prog="python -m dace_fortran.emit_hlfir",
-        description="Emit HLFIR for a Fortran project so "
-                    "dace_fortran.build_sdfg_from_hlfir can consume it.")
-    p.add_argument("compile_commands", nargs="?", type=Path,
+    p = argparse.ArgumentParser(prog="python -m dace_fortran.emit_hlfir",
+                                description="Emit HLFIR for a Fortran project so "
+                                "dace_fortran.build_sdfg_from_hlfir can consume it.")
+    p.add_argument("compile_commands",
+                   nargs="?",
+                   type=Path,
                    help="path to a cmake / ninja compile_commands.json "
-                        "(use -DCMAKE_EXPORT_COMPILE_COMMANDS=ON when "
-                        "configuring) -- preferred path; build order + "
-                        "-I/-D flags inferred from this artefact.")
-    p.add_argument("--source", action="append", default=[], type=Path,
+                   "(use -DCMAKE_EXPORT_COMPILE_COMMANDS=ON when "
+                   "configuring) -- preferred path; build order + "
+                   "-I/-D flags inferred from this artefact.")
+    p.add_argument("--source",
+                   action="append",
+                   default=[],
+                   type=Path,
                    dest="sources",
                    help="fallback: explicit .f90 file (repeat) when no "
-                        "compile_commands.json is available; ordering "
-                        "derived by USE-graph topo-sort.")
-    p.add_argument("--stub", action="append", default=[], type=Path,
+                   "compile_commands.json is available; ordering "
+                   "derived by USE-graph topo-sort.")
+    p.add_argument("--stub",
+                   action="append",
+                   default=[],
+                   type=Path,
                    dest="stubs",
                    help="flang-buildable stub source for an external "
-                        "module flang has no shipped .mod for "
-                        "(mpi / netcdf / hdf5 / ...); compiled first.")
-    p.add_argument("--include", action="append", default=[], type=Path,
+                   "module flang has no shipped .mod for "
+                   "(mpi / netcdf / hdf5 / ...); compiled first.")
+    p.add_argument("--include",
+                   action="append",
+                   default=[],
+                   type=Path,
                    dest="extra_includes",
                    help="extra -I path (--source mode only; "
-                        "compile_commands inherits its own -I list).")
-    p.add_argument("--define", "-D", action="append", default=[],
-                   dest="extra_defines", metavar="NAME[=val]",
+                   "compile_commands inherits its own -I list).")
+    p.add_argument("--define",
+                   "-D",
+                   action="append",
+                   default=[],
+                   dest="extra_defines",
+                   metavar="NAME[=val]",
                    help="extra -D cpp macro for flang's preprocessor "
-                        "(repeat); the only way to set cpp config in "
-                        "--source mode, and an augment in compile_commands "
-                        "mode.")
-    p.add_argument("--entry", default=None,
+                   "(repeat); the only way to set cpp config in "
+                   "--source mode, and an augment in compile_commands "
+                   "mode.")
+    p.add_argument("--entry",
+                   default=None,
                    help="mangled entry symbol (_QMmodPproc); restricts a "
-                        "compile_commands run to that entry's USE-closure "
-                        "instead of emitting every TU.")
-    p.add_argument("--out", required=True, type=Path,
-                   help="output directory; .hlfir + .mod files land here.")
-    p.add_argument("--flang", default="flang-new-21",
-                   help="flang binary to drive (default: flang-new-21).")
+                   "compile_commands run to that entry's USE-closure "
+                   "instead of emitting every TU.")
+    p.add_argument("--out", required=True, type=Path, help="output directory; .hlfir + .mod files land here.")
+    p.add_argument("--flang", default="flang-new-21", help="flang binary to drive (default: flang-new-21).")
     args = p.parse_args(argv)
     if shutil.which(args.flang) is None:
         p.error(f"flang binary {args.flang!r} not on PATH")

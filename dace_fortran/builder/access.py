@@ -667,9 +667,8 @@ def indirect_to_dace(builder, expr: str, iter_map: dict, indirect_syms: dict | N
             v = builder.arrays.get(arr)
             if v is not None and getattr(v, 'role', '') == 'section_alias':
                 from types import SimpleNamespace
-                _src, _sp = resolve_section_alias(
-                    builder, arr,
-                    SimpleNamespace(index_exprs=parts, index_vars=[''] * len(parts)))
+                _src, _sp = resolve_section_alias(builder, arr,
+                                                  SimpleNamespace(index_exprs=parts, index_vars=[''] * len(parts)))
                 arr, parts = _src, list(_sp.index_exprs)
             return _format_offset_subset(arr, [_remap_token(p, iter_map) for p in parts])
     return expr

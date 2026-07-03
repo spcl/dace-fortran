@@ -111,8 +111,7 @@ namespace {
 /// when its rebind is a bounds-remapping (rank-reshaping) view of a
 /// parent array.  Downstream consumers read this attribute to know to
 /// (a) skip index-rewriting and (b) emit an SDFG ``View`` node.
-static constexpr llvm::StringLiteral kBoundsRemapViewAttr =
-    "hlfir_bridge.bounds_remap_view";
+static constexpr llvm::StringLiteral kBoundsRemapViewAttr = "hlfir_bridge.bounds_remap_view";
 
 /// Walk ``v`` through any number of ``fir.convert`` ops and return
 /// the underlying value.  flang routes ``arith.constant 1 : i64``
@@ -142,8 +141,7 @@ static bool isConstantOne(mlir::Value v) {
   if (!v) return false;
   auto cst = mlir::dyn_cast_or_null<mlir::arith::ConstantOp>(v.getDefiningOp());
   if (!cst) return false;
-  if (auto i = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue()))
-    return i.getInt() == 1;
+  if (auto i = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue())) return i.getInt() == 1;
   return false;
 }
 
@@ -158,8 +156,7 @@ static int boxedArrayRank(mlir::Type ty) {
   // type in ``!fir.ptr<...>``.
   if (auto p = mlir::dyn_cast<fir::PointerType>(elt)) elt = p.getElementType();
   if (auto h = mlir::dyn_cast<fir::HeapType>(elt)) elt = h.getElementType();
-  if (auto seq = mlir::dyn_cast<fir::SequenceType>(elt))
-    return static_cast<int>(seq.getDimension());
+  if (auto seq = mlir::dyn_cast<fir::SequenceType>(elt)) return static_cast<int>(seq.getDimension());
   return -1;
 }
 
@@ -214,8 +211,7 @@ static mlir::Value findStoreTargetForRebox(fir::ReboxOp rebox) {
     mlir::Value v = work.pop_back_val();
     for (auto* user : v.getUsers()) {
       if (auto st = mlir::dyn_cast<fir::StoreOp>(user)) return st.getMemref();
-      if (auto cv = mlir::dyn_cast<fir::ConvertOp>(user))
-        work.push_back(cv.getResult());
+      if (auto cv = mlir::dyn_cast<fir::ConvertOp>(user)) work.push_back(cv.getResult());
     }
   }
   return {};
@@ -226,13 +222,10 @@ static mlir::Value findStoreTargetForRebox(fir::ReboxOp rebox) {
 // ---------------------------------------------------------------------------
 
 struct MarkBoundsRemapViewsPass
-    : public mlir::PassWrapper<MarkBoundsRemapViewsPass,
-                               mlir::OperationPass<mlir::ModuleOp>> {
+    : public mlir::PassWrapper<MarkBoundsRemapViewsPass, mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(MarkBoundsRemapViewsPass)
 
-  llvm::StringRef getArgument() const final {
-    return "hlfir-mark-bounds-remap-views";
-  }
+  llvm::StringRef getArgument() const final { return "hlfir-mark-bounds-remap-views"; }
   llvm::StringRef getDescription() const final {
     return "Tag the LHS pointer declare of every Fortran 2003 bounds-"
            "remapping pointer assignment (``ptr(1:N*K) => target(...)``) "
@@ -292,15 +285,13 @@ struct MarkBoundsRemapViewsPass
         }
         break;
       }
-      if (auto seq = mlir::dyn_cast<fir::SequenceType>(sourceTy))
-        inRank = static_cast<int>(seq.getDimension());
+      if (auto seq = mlir::dyn_cast<fir::SequenceType>(sourceTy)) inRank = static_cast<int>(seq.getDimension());
       if (inRank <= 0 || inRank == outRank) return;
 
       // Shape operand must be ``shape_shift`` with all LB == 1.
       mlir::Value shape = embox.getShape();
       if (!shape) return;
-      auto shiftOp =
-          mlir::dyn_cast_or_null<fir::ShapeShiftOp>(shape.getDefiningOp());
+      auto shiftOp = mlir::dyn_cast_or_null<fir::ShapeShiftOp>(shape.getDefiningOp());
       if (!shiftOp) return;
       auto pairs = shiftOp.getPairs();
       bool allLbOne = true;
@@ -320,13 +311,11 @@ struct MarkBoundsRemapViewsPass
         }
       }
       if (!storeTarget) return;
-      auto ptrDecl =
-          mlir::dyn_cast_or_null<hlfir::DeclareOp>(storeTarget.getDefiningOp());
+      auto ptrDecl = mlir::dyn_cast_or_null<hlfir::DeclareOp>(storeTarget.getDefiningOp());
       if (!ptrDecl) ptrDecl = findDeclareThroughChain(storeTarget);
       if (!ptrDecl) return;
 
-      ptrDecl->setAttr(kBoundsRemapViewAttr,
-                       mlir::UnitAttr::get(&getContext()));
+      ptrDecl->setAttr(kBoundsRemapViewAttr, mlir::UnitAttr::get(&getContext()));
       ++tagged;
     });
 
@@ -344,8 +333,7 @@ struct MarkBoundsRemapViewsPass
       //     not a plain ``fir.shape`` (no LB).
       mlir::Value shape = rebox.getShape();
       if (!shape) return;
-      auto shiftOp =
-          mlir::dyn_cast_or_null<fir::ShapeShiftOp>(shape.getDefiningOp());
+      auto shiftOp = mlir::dyn_cast_or_null<fir::ShapeShiftOp>(shape.getDefiningOp());
       if (!shiftOp) return;
 
       // (4) Every lb in the shape_shift must resolve to constant 1.
@@ -364,8 +352,7 @@ struct MarkBoundsRemapViewsPass
       if (!storeTarget) return;
 
       // (6) Walk back from the store target to the pointer's declare.
-      auto ptrDecl =
-          mlir::dyn_cast_or_null<hlfir::DeclareOp>(storeTarget.getDefiningOp());
+      auto ptrDecl = mlir::dyn_cast_or_null<hlfir::DeclareOp>(storeTarget.getDefiningOp());
       if (!ptrDecl) {
         // Sometimes there's a ``fir.convert`` between -- walk through.
         ptrDecl = findDeclareThroughChain(storeTarget);
@@ -377,26 +364,22 @@ struct MarkBoundsRemapViewsPass
       // to discover the parent array and the per-rebind offset
       // arithmetic.  Idempotent  --  re-running the pass is a no-op
       // because ``setAttr`` overwrites with the same unit.
-      ptrDecl->setAttr(kBoundsRemapViewAttr,
-                       mlir::UnitAttr::get(&getContext()));
+      ptrDecl->setAttr(kBoundsRemapViewAttr, mlir::UnitAttr::get(&getContext()));
       ++tagged;
 
       if (std::getenv("HLFIR_BOUNDS_REMAP_TRACE")) {
-        llvm::errs() << "MarkBoundsRemapViews: tagged " << ptrDecl.getUniqName()
-                     << " (rebox rank " << inRank << " -> " << outRank << ")\n";
+        llvm::errs() << "MarkBoundsRemapViews: tagged " << ptrDecl.getUniqName() << " (rebox rank " << inRank << " -> "
+                     << outRank << ")\n";
         llvm::errs().flush();
       }
     });
 
-    LLVM_DEBUG(llvm::dbgs() << "MarkBoundsRemapViews: tagged " << tagged
-                            << " bounds-remap-view pointer declare(s)\n");
+    LLVM_DEBUG(llvm::dbgs() << "MarkBoundsRemapViews: tagged " << tagged << " bounds-remap-view pointer declare(s)\n");
   }
 };
 
 }  // anonymous namespace
 
-std::unique_ptr<mlir::Pass> createMarkBoundsRemapViewsPass() {
-  return std::make_unique<MarkBoundsRemapViewsPass>();
-}
+std::unique_ptr<mlir::Pass> createMarkBoundsRemapViewsPass() { return std::make_unique<MarkBoundsRemapViewsPass>(); }
 
 }  // namespace hlfir_bridge

@@ -14,8 +14,7 @@ from _util import build_sdfg, f2py_compile, have_flang
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not available")
 
 
-def _build(src: str, tmp: Path, name: str, entry: str | None = None,
-           pipeline: str | None = "hlfir-propagate-shapes"):
+def _build(src: str, tmp: Path, name: str, entry: str | None = None, pipeline: str | None = "hlfir-propagate-shapes"):
     tmp.mkdir(parents=True, exist_ok=True)
     return build_sdfg(src, tmp, name=name, pipeline=pipeline, entry=entry).build()
 

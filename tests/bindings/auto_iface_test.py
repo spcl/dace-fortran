@@ -42,9 +42,9 @@ def test_auto_iface_flat_matches_handwritten(tmp_path):
     assert auto.used_modules == {}
     assert auto.args == (
         OriginalArg(name="n", fortran_type="integer(c_int)", rank=0, shape=(), intent="in"),
-        OriginalArg(name="a", fortran_type="complex(c_double)", rank=1, shape=("1",), intent="in"),
-        OriginalArg(name="x", fortran_type="complex(c_double)", rank=1, shape=("n",), intent="in"),
-        OriginalArg(name="y", fortran_type="complex(c_double)", rank=1, shape=("n",), intent="inout"),
+        OriginalArg(name="a", fortran_type="complex(c_double)", rank=1, shape=("1", ), intent="in"),
+        OriginalArg(name="x", fortran_type="complex(c_double)", rank=1, shape=("n", ), intent="in"),
+        OriginalArg(name="y", fortran_type="complex(c_double)", rank=1, shape=("n", ), intent="inout"),
     )
 
 
@@ -110,7 +110,7 @@ end module kern_aos_mod
     arg = auto.args[0]
     assert arg.name == "pts" and arg.fortran_type == "type(point)"
     assert arg.struct_type == "point" and arg.rank == 1
-    assert auto.used_modules == {"mo_pt": ("point",)}
+    assert auto.used_modules == {"mo_pt": ("point", )}
 
 
 def test_auto_iface_drives_compilable_binding(tmp_path):
@@ -185,8 +185,6 @@ end module kern_fld_mod
     # ``5`` by HLFIR; the auto-iface surfaces them as the integer
     # literals the bridge sees post-resolution).
     assert st.members == (
-        Member(name="a", fortran_type="real(c_double)",
-               rank=2, shape=("4", "5")),
-        Member(name="tag", fortran_type="integer(c_int)",
-               rank=1, shape=("4", )),
+        Member(name="a", fortran_type="real(c_double)", rank=2, shape=("4", "5")),
+        Member(name="tag", fortran_type="integer(c_int)", rank=1, shape=("4", )),
     )

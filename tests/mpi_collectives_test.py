@@ -41,14 +41,19 @@ def test_collectives_lower_to_mpi_libnodes(tmp_path: Path):
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(_COLLECTIVES, sdfg_dir, name="collectives", entry="collectives").build()
 
-    nodes = {cls: [n for n, _ in sdfg.all_nodes_recursive() if isinstance(n, cls)] for cls in (Barrier, Allreduce, Bcast)}
+    nodes = {
+        cls: [n for n, _ in sdfg.all_nodes_recursive() if isinstance(n, cls)]
+        for cls in (Barrier, Allreduce, Bcast)
+    }
     assert len(nodes[Barrier]) == 1 and len(nodes[Allreduce]) == 1 and len(nodes[Bcast]) == 1, \
         f"expected one of each collective, got { {c.__name__: len(v) for c, v in nodes.items()} }"
 
     assert nodes[Allreduce][0].op == "MPI_SUM"
-    assert set(nodes[Allreduce][0].in_connectors) == {"_inbuffer"}
-    assert set(nodes[Bcast][0].in_connectors) == {"_inbuffer", "_root"}
-    assert not nodes[Barrier][0].in_connectors  # pure sync, no data
+    # The Fortran communicator is threaded into every collective via a CommF2c
+    # dataflow node feeding a ``_comm`` connector (bridge feature 93cc5f2).
+    assert set(nodes[Allreduce][0].in_connectors) == {"_inbuffer", "_comm"}
+    assert set(nodes[Bcast][0].in_connectors) == {"_inbuffer", "_root", "_comm"}
+    assert set(nodes[Barrier][0].in_connectors) == {"_comm"}  # only the communicator
 
     assert "call" not in [getattr(n, "kind", None) for n, _ in sdfg.all_nodes_recursive()]
     sdfg.validate()

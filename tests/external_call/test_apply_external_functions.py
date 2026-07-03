@@ -25,19 +25,18 @@ from dace_fortran.external import (Arg, ExternalCall, apply_external_functions, 
                                    lookup_external, registered_names)
 from dace_fortran.external_functions import ExternalFunction
 
-
 # ---------------------------------------------------------------------------
 # contract -- registry population (no toolchain needed)
 # ---------------------------------------------------------------------------
+
 
 def test_apply_registers_emitted_external():
     """An ``ExternalFunction`` becomes an emitted (non-stub) registration whose
     ``c_name`` is its symbol and whose library is linked."""
     clear_external_registry()
     try:
-        apply_external_functions(
-            [ExternalFunction("sync_patch_array", c_function="sync_c",
-                              library="/tmp/libhalo.so")], [])
+        apply_external_functions([ExternalFunction("sync_patch_array", c_function="sync_c", library="/tmp/libhalo.so")],
+                                 [])
         sig = lookup_external("sync_patch_array")
         assert sig is not None
         assert sig.c_name == "sync_c"
@@ -78,11 +77,9 @@ def test_apply_both_lists_together():
     """Both collections register in one call; ``registered_names`` lists all."""
     clear_external_registry()
     try:
-        apply_external_functions(
-            [ExternalFunction("sync_patch_array"), ExternalFunction("exchange_data")],
-            ["finish", "dbg_print"])
-        assert set(registered_names()) == {
-            "sync_patch_array", "exchange_data", "finish", "dbg_print"}
+        apply_external_functions([ExternalFunction("sync_patch_array"),
+                                  ExternalFunction("exchange_data")], ["finish", "dbg_print"])
+        assert set(registered_names()) == {"sync_patch_array", "exchange_data", "finish", "dbg_print"}
         assert lookup_external("sync_patch_array").stub is False
         assert lookup_external("finish").stub is True
     finally:
@@ -95,8 +92,7 @@ def test_apply_validates_name_in_both():
     clear_external_registry()
     try:
         with pytest.raises(ValueError, match="both"):
-            apply_external_functions([ExternalFunction("sync_patch_array")],
-                                     ["sync_patch_array"])
+            apply_external_functions([ExternalFunction("sync_patch_array")], ["sync_patch_array"])
         assert registered_names() == [], "rejected before mutating the registry"
     finally:
         clear_external_registry()
@@ -107,8 +103,7 @@ def test_apply_validates_duplicate_emit_name():
     clear_external_registry()
     try:
         with pytest.raises(ValueError, match="duplicate"):
-            apply_external_functions(
-                [ExternalFunction("foo"), ExternalFunction("foo")], [])
+            apply_external_functions([ExternalFunction("foo"), ExternalFunction("foo")], [])
     finally:
         clear_external_registry()
 
@@ -161,8 +156,7 @@ def _build_libbar(tmp_path: Path) -> Path:
     bar_f90 = tmp_path / "bar.f90"
     bar_f90.write_text(_BAR_F90)
     libbar = tmp_path / "libbar.so"
-    subprocess.check_call(["gfortran", "-shared", "-fPIC", "-o", str(libbar), str(bar_f90)],
-                          cwd=str(tmp_path))
+    subprocess.check_call(["gfortran", "-shared", "-fPIC", "-o", str(libbar), str(bar_f90)], cwd=str(tmp_path))
     return libbar
 
 
@@ -181,8 +175,7 @@ def test_bare_external_function_lowers_and_runs(tmp_path: Path, _m):
         sig = lookup_external("bar")
         assert sig is not None and sig.c_name == "bar" and sig.args == ()
 
-        sdfg = build_sdfg(_KERNEL, tmp_path / "sdfg", name="run",
-                          entry="run_mod::run").build()
+        sdfg = build_sdfg(_KERNEL, tmp_path / "sdfg", name="run", entry="run_mod::run").build()
         sdfg.name = "ext_apply_bare_run"
         calls = [nd for nd, _ in sdfg.all_nodes_recursive() if isinstance(nd, ExternalCall)]
         assert len(calls) == 1 and calls[0].c_name == "bar"
@@ -202,8 +195,7 @@ def _external_call_node(tmp_path, libbar, register):
     """Build the ``_KERNEL`` SDFG under the ``register`` callback (which sets up
     the registry) and return its single :class:`ExternalCall` node."""
     register(libbar)
-    sdfg = build_sdfg(_KERNEL, tmp_path / register.__name__, name="run",
-                      entry="run_mod::run").build()
+    sdfg = build_sdfg(_KERNEL, tmp_path / register.__name__, name="run", entry="run_mod::run").build()
     calls = [nd for nd, _ in sdfg.all_nodes_recursive() if isinstance(nd, ExternalCall)]
     assert len(calls) == 1
     return calls[0]
@@ -224,10 +216,11 @@ def test_derived_node_matches_authored(tmp_path: Path, _m):
 
     def authored(lib):
         clear_external_registry()
-        keep_external("bar",
-                      args=[Arg(kind="array", dtype="float64", intent="inout"),
-                            Arg(kind="scalar", dtype="int32", intent="in")],
-                      libraries=[str(lib)])
+        keep_external(
+            "bar",
+            args=[Arg(kind="array", dtype="float64", intent="inout"),
+                  Arg(kind="scalar", dtype="int32", intent="in")],
+            libraries=[str(lib)])
 
     try:
         derived = _external_call_node(tmp_path, libbar, bare)

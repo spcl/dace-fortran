@@ -236,8 +236,7 @@ static std::optional<int64_t> traceStoredConstant(mlir::Value memref) {
 /// these to a ``fir.address_of @<global>`` + ``fir.load`` chain.  The
 /// global's body is a tiny region whose terminating ``fir.has_value``
 /// op carries the initial value.
-static std::optional<int64_t> traceGlobalInitialiser(mlir::SymbolRefAttr name,
-                                                     mlir::Operation* anchor) {
+static std::optional<int64_t> traceGlobalInitialiser(mlir::SymbolRefAttr name, mlir::Operation* anchor) {
   auto module = anchor->getParentOfType<mlir::ModuleOp>();
   if (!module) return std::nullopt;
   auto sym = module.lookupSymbol(name.getLeafReference());
@@ -245,8 +244,7 @@ static std::optional<int64_t> traceGlobalInitialiser(mlir::SymbolRefAttr name,
   if (!global) return std::nullopt;
   if (global.getRegion().empty()) return std::nullopt;
   for (auto& op : global.getRegion().front()) {
-    if (auto hv = mlir::dyn_cast<fir::HasValueOp>(op))
-      return traceConstIndex(hv.getResval());
+    if (auto hv = mlir::dyn_cast<fir::HasValueOp>(op)) return traceConstIndex(hv.getResval());
   }
   return std::nullopt;
 }
@@ -278,8 +276,7 @@ static std::optional<int64_t> traceConstIndex(mlir::Value v) {
     auto* def = v.getDefiningOp();
     if (!def) return std::nullopt;
     if (auto c = mlir::dyn_cast<mlir::arith::ConstantOp>(def)) {
-      if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue()))
-        return ia.getInt();
+      if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue())) return ia.getInt();
       return std::nullopt;
     }
     if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def)) {
@@ -317,8 +314,7 @@ static std::optional<int64_t> traceConstIndex(mlir::Value v) {
       if (t && f && *t == *f) return *t;
       // Otherwise resolve via the condition: ``select sgt(x,0), x, 0``
       // (flang's nonneg-extent clamp) folds when x is a known constant.
-      if (auto cmp = mlir::dyn_cast_or_null<mlir::arith::CmpIOp>(
-              sel.getCondition().getDefiningOp())) {
+      if (auto cmp = mlir::dyn_cast_or_null<mlir::arith::CmpIOp>(sel.getCondition().getDefiningOp())) {
         auto lhs = traceConstIndex(cmp.getLhs());
         auto rhs = traceConstIndex(cmp.getRhs());
         if (!lhs || !rhs) return std::nullopt;
@@ -352,15 +348,13 @@ static std::optional<int64_t> traceConstIndex(mlir::Value v) {
     }
     if (auto ld = mlir::dyn_cast<fir::LoadOp>(def)) {
       // Try the ``__assoc_scalar`` (alloca + single store) path first.
-      if (auto fromStore = traceStoredConstant(ld.getMemref()))
-        return fromStore;
+      if (auto fromStore = traceStoredConstant(ld.getMemref())) return fromStore;
       // Fall through to the address_of @global path.
       mlir::Value mem = ld.getMemref();
       for (int j = 0; j < 8 && mem; ++j) {
         auto* d = mem.getDefiningOp();
         if (!d) return std::nullopt;
-        if (auto ao = mlir::dyn_cast<fir::AddrOfOp>(d))
-          return traceGlobalInitialiser(ao.getSymbol(), def);
+        if (auto ao = mlir::dyn_cast<fir::AddrOfOp>(d)) return traceGlobalInitialiser(ao.getSymbol(), def);
         if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
           mem = cv.getValue();
           continue;
@@ -394,8 +388,7 @@ static hlfir::DesignateOp matchSeqAdapter(fir::ConvertOp conv) {
   if (!dstSeq) return {};
   if (mlir::isa<fir::SequenceType>(srcEle)) return {};
   if (srcEle != dstSeq.getEleTy()) return {};
-  auto dg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(
-      conv.getValue().getDefiningOp());
+  auto dg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(conv.getValue().getDefiningOp());
   if (!dg) return {};
   // Must be element form (any-triplet -> already a section, skip).
   for (bool b : dg.getIsTriplet())
@@ -405,13 +398,10 @@ static hlfir::DesignateOp matchSeqAdapter(fir::ConvertOp conv) {
 }
 
 struct RewriteSequenceAssociationPass
-    : public mlir::PassWrapper<RewriteSequenceAssociationPass,
-                               mlir::OperationPass<mlir::ModuleOp>> {
+    : public mlir::PassWrapper<RewriteSequenceAssociationPass, mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(RewriteSequenceAssociationPass)
 
-  llvm::StringRef getArgument() const final {
-    return "hlfir-rewrite-sequence-association";
-  }
+  llvm::StringRef getArgument() const final { return "hlfir-rewrite-sequence-association"; }
   llvm::StringRef getDescription() const final {
     return "Replace Fortran sequence-association adapters "
            "(scalar element passed to array dummy) with an "
@@ -449,8 +439,7 @@ struct RewriteSequenceAssociationPass
     // extent value and emit a ``box<array<?xT>>`` section.
     auto shapeVal = formalDecl.getShape();
     if (!shapeVal) return;
-    auto shapeOp =
-        mlir::dyn_cast_or_null<fir::ShapeOp>(shapeVal.getDefiningOp());
+    auto shapeOp = mlir::dyn_cast_or_null<fir::ShapeOp>(shapeVal.getDefiningOp());
     if (!shapeOp || shapeOp.getExtents().size() != 1) return;
     mlir::Value extentVal = shapeOp.getExtents()[0];
     auto Nopt = traceConstIndex(extentVal);
@@ -488,9 +477,8 @@ struct RewriteSequenceAssociationPass
     for (mlir::Value r : {formalDecl.getResult(0), formalDecl.getResult(1)})
       for (auto* u : r.getUsers())
         if (mlir::isa<hlfir::DesignateOp>(u)) elementAccess = true;
-    if (auto Nconst = traceConstIndex(
-            mlir::dyn_cast<fir::ShapeOp>(formalDecl.getShape().getDefiningOp())
-                .getExtents()[0]);
+    if (auto Nconst =
+            traceConstIndex(mlir::dyn_cast<fir::ShapeOp>(formalDecl.getShape().getDefiningOp()).getExtents()[0]);
         elementAccess && Nconst && *Nconst > 0) {
       int64_t N = *Nconst;
       mlir::OpBuilder b(formalDecl);  // insertion point: before the declare
@@ -501,33 +489,25 @@ struct RewriteSequenceAssociationPass
         return b.create<fir::ConvertOp>(loc, idxTy, v).getResult();
       };
       mlir::Value loIdx = toIndex(lo);
-      auto c1 =
-          b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(1));
-      auto cN =
-          b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(N));
-      auto cNm1 =
-          b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(N - 1));
-      mlir::Value hi =
-          b.create<mlir::arith::AddIOp>(loc, loIdx, cNm1).getResult();
+      auto c1 = b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(1));
+      auto cN = b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(N));
+      auto cNm1 = b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(N - 1));
+      mlir::Value hi = b.create<mlir::arith::AddIOp>(loc, loIdx, cNm1).getResult();
       auto refTy = mlir::cast<fir::ReferenceType>(conv.getResult().getType());
       auto eleTy = mlir::cast<fir::SequenceType>(refTy.getEleTy()).getEleTy();
       auto boxTy = fir::BoxType::get(fir::SequenceType::get({N}, eleTy));
-      mlir::Value sectionShape =
-          b.create<fir::ShapeOp>(loc, mlir::ValueRange{cN.getResult()})
-              .getResult();
+      mlir::Value sectionShape = b.create<fir::ShapeOp>(loc, mlir::ValueRange{cN.getResult()}).getResult();
       llvm::SmallVector<mlir::Value, 6> tripletOps{loIdx, hi, c1.getResult()};
       llvm::SmallVector<bool, 6> isTriplet{true};
       for (size_t i = 1; i < eltDg.getIndices().size(); ++i) {
         tripletOps.push_back(toIndex(eltDg.getIndices()[i]));
         isTriplet.push_back(false);
       }
-      auto sectionDg = b.create<hlfir::DesignateOp>(
-          loc, boxTy, eltDg.getMemref(), mlir::StringAttr{}, mlir::Value{},
-          mlir::ValueRange{tripletOps}, b.getDenseBoolArrayAttr(isTriplet),
-          mlir::ValueRange{}, mlir::BoolAttr{}, sectionShape,
-          mlir::ValueRange{}, fir::FortranVariableFlagsAttr{});
-      auto boxAddr =
-          b.create<fir::BoxAddrOp>(loc, refTy, sectionDg.getResult());
+      auto sectionDg = b.create<hlfir::DesignateOp>(loc, boxTy, eltDg.getMemref(), mlir::StringAttr{}, mlir::Value{},
+                                                    mlir::ValueRange{tripletOps}, b.getDenseBoolArrayAttr(isTriplet),
+                                                    mlir::ValueRange{}, mlir::BoolAttr{}, sectionShape,
+                                                    mlir::ValueRange{}, fir::FortranVariableFlagsAttr{});
+      auto boxAddr = b.create<fir::BoxAddrOp>(loc, refTy, sectionDg.getResult());
       formalDecl.getMemrefMutable().assign(boxAddr.getResult());
       conv.erase();
       if (eltDg.getResult().use_empty()) eltDg.erase();
@@ -558,32 +538,24 @@ struct RewriteSequenceAssociationPass
     mlir::Value hi;
     mlir::Value sectionShape;
     fir::SequenceType sectionSeqTy;
-    auto convDstSeq = mlir::cast<fir::SequenceType>(
-        mlir::cast<fir::ReferenceType>(conv.getResult().getType()).getEleTy());
+    auto convDstSeq =
+        mlir::cast<fir::SequenceType>(mlir::cast<fir::ReferenceType>(conv.getResult().getType()).getEleTy());
     auto eleTy = convDstSeq.getEleTy();
     if (Nopt) {
       int64_t N = *Nopt;
-      auto cN =
-          b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(N));
-      auto cNm1 =
-          b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(N - 1));
+      auto cN = b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(N));
+      auto cNm1 = b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(N - 1));
       hi = b.create<mlir::arith::AddIOp>(loc, loIdx, cNm1).getResult();
-      sectionShape =
-          b.create<fir::ShapeOp>(loc, mlir::ValueRange{cN.getResult()})
-              .getResult();
+      sectionShape = b.create<fir::ShapeOp>(loc, mlir::ValueRange{cN.getResult()}).getResult();
       sectionSeqTy = fir::SequenceType::get({N}, eleTy);
     } else {
       // Runtime-extent path.  ``hi = lo + extent - 1`` with the
       // extent value carried straight from the formal declare.
       mlir::Value extentIdx = toIndex(extentVal);
-      auto extentMinus1 =
-          b.create<mlir::arith::SubIOp>(loc, extentIdx, c1.getResult())
-              .getResult();
+      auto extentMinus1 = b.create<mlir::arith::SubIOp>(loc, extentIdx, c1.getResult()).getResult();
       hi = b.create<mlir::arith::AddIOp>(loc, loIdx, extentMinus1).getResult();
-      sectionShape =
-          b.create<fir::ShapeOp>(loc, mlir::ValueRange{extentIdx}).getResult();
-      sectionSeqTy = fir::SequenceType::get(
-          {fir::SequenceType::getUnknownExtent()}, eleTy);
+      sectionShape = b.create<fir::ShapeOp>(loc, mlir::ValueRange{extentIdx}).getResult();
+      sectionSeqTy = fir::SequenceType::get({fir::SequenceType::getUnknownExtent()}, eleTy);
     }
     auto boxTy = fir::BoxType::get(sectionSeqTy);
 
@@ -597,19 +569,18 @@ struct RewriteSequenceAssociationPass
       tripletOps.push_back(toIndex(eltDg.getIndices()[i]));
       isTriplet.push_back(false);
     }
-    auto sectionDg = b.create<hlfir::DesignateOp>(
-        loc,
-        /*resultType0=*/boxTy,
-        /*memref=*/parent,
-        /*component=*/mlir::StringAttr{},
-        /*component_shape=*/mlir::Value{},
-        /*indices=*/mlir::ValueRange{tripletOps},
-        /*is_triplet=*/b.getDenseBoolArrayAttr(isTriplet),
-        /*substring=*/mlir::ValueRange{},
-        /*complex_part=*/mlir::BoolAttr{},
-        /*shape=*/sectionShape,
-        /*typeparams=*/mlir::ValueRange{},
-        /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
+    auto sectionDg = b.create<hlfir::DesignateOp>(loc,
+                                                  /*resultType0=*/boxTy,
+                                                  /*memref=*/parent,
+                                                  /*component=*/mlir::StringAttr{},
+                                                  /*component_shape=*/mlir::Value{},
+                                                  /*indices=*/mlir::ValueRange{tripletOps},
+                                                  /*is_triplet=*/b.getDenseBoolArrayAttr(isTriplet),
+                                                  /*substring=*/mlir::ValueRange{},
+                                                  /*complex_part=*/mlir::BoolAttr{},
+                                                  /*shape=*/sectionShape,
+                                                  /*typeparams=*/mlir::ValueRange{},
+                                                  /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
 
     // Step 5: redirect uses of the formal declare's results to the
     // new section view.  The declare emits two results (box view
@@ -634,15 +605,10 @@ struct RewriteSequenceAssociationPass
         // parent), so the section box is contiguous and ``box_addr`` is
         // valid.  A non-box target (e.g. a different box kind) keeps the
         // plain convert.
-        if (mlir::isa<fir::ReferenceType>(r.getType()) &&
-            mlir::isa<fir::BaseBoxType>(sectionResult.getType())) {
-          replacement =
-              b.create<fir::BoxAddrOp>(loc, r.getType(), sectionResult)
-                  .getResult();
+        if (mlir::isa<fir::ReferenceType>(r.getType()) && mlir::isa<fir::BaseBoxType>(sectionResult.getType())) {
+          replacement = b.create<fir::BoxAddrOp>(loc, r.getType(), sectionResult).getResult();
         } else {
-          replacement =
-              b.create<fir::ConvertOp>(loc, r.getType(), sectionResult)
-                  .getResult();
+          replacement = b.create<fir::ConvertOp>(loc, r.getType(), sectionResult).getResult();
         }
       }
       r.replaceAllUsesWith(replacement);

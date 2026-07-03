@@ -95,7 +95,7 @@ def test_devirtualized_sync_inlines_pack_keeps_only_mpi_libnodes(tmp_path):
 
     # Only MPI remains external, and as dace.libraries.mpi nodes -- not opaque calls.
     mpi = sorted({type(n).__name__ for n, _ in sdfg.all_nodes_recursive() if isinstance(n, MPINode)})
-    assert mpi == ["Irecv", "Isend", "Wait"], f"expected Isend/Irecv/Wait libnodes, got {mpi}"
+    assert mpi == ["CommF2c", "Irecv", "Isend", "Wait"], f"expected Isend/Irecv/Wait libnodes, got {mpi}"
     # The pack loop (buf*2) is inlined as real SDFG compute, not externalised.
     assert any(isinstance(n, dace.nodes.Tasklet) for n, _ in sdfg.all_nodes_recursive()), \
         "expected the pack-loop compute inlined as tasklets"
@@ -183,7 +183,7 @@ def test_atmosphere_sync_patch_array_devirtualized_to_mpi_libnodes(tmp_path):
 
     sdfg = _devirt_build_atmo(tmp_path)
     mpi = sorted({type(n).__name__ for n, _ in sdfg.all_nodes_recursive() if isinstance(n, MPINode)})
-    assert mpi == ["Irecv", "Isend", "Wait"], f"expected Isend/Irecv/Wait libnodes, got {mpi}"
+    assert mpi == ["CommF2c", "Irecv", "Isend", "Wait"], f"expected Isend/Irecv/Wait libnodes, got {mpi}"
     assert any(isinstance(n, dace.nodes.Tasklet) for n, _ in sdfg.all_nodes_recursive()), \
         "expected the pack compute inlined as tasklets"
 
@@ -284,7 +284,7 @@ def test_dycore_step_inlines_sync_and_devirtualizes(tmp_path):
 
     # The sync's MPI primitives are libnodes; the sync itself is not external.
     mpi = sorted({type(n).__name__ for n, _ in sdfg.all_nodes_recursive() if isinstance(n, MPINode)})
-    assert mpi == ["Irecv", "Isend", "Wait"], f"expected MPI libnodes, got {mpi}"
+    assert mpi == ["CommF2c", "Irecv", "Isend", "Wait"], f"expected MPI libnodes, got {mpi}"
     ext = {n.name.lower() for n, _ in sdfg.all_nodes_recursive() if isinstance(n, ExternalCall)}
     assert not any("sync" in nm or "exchange" in nm for nm in ext), \
         f"sync must be inlined, not external; got ExternalCall names {sorted(ext)}"

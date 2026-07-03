@@ -103,6 +103,12 @@ ATMO_DO_NOT_EMIT = [
     "timer_stop",
     "new_timer",
     "delete_timer",
+    # The halo DEBUG sync check: a redundant reference exchange + comparison gated
+    # by ``IF (p_test_run .AND. do_sync_checks)``.  Pure debug (no numerics; its
+    # body is multi-block with ``finish`` + MPI test-mode collectives), and it is
+    # called with absent optional fields in the multi-field sync -- stub it so the
+    # ``sync_patch_array_mult`` specialization does not drag it in.
+    "check_patch_array_3d_dp",
 ]
 
 #: Non-halo LOGICAL config queries stubbed to ``.FALSE.`` (none for atmosphere;
@@ -123,6 +129,7 @@ def atmo_config(halo_mode: str) -> dict:
         do_not_emit=ATMO_DO_NOT_EMIT,
         defines=ATMO_DEFINES,
         extra_sources=h["extra_sources"],
+        specialize_at_source=h["specialize_at_source"],
     )
 
 

@@ -44,7 +44,6 @@ import pytest
 
 import dace_fortran
 
-
 _REPRO_SRC = """\
 MODULE m_repro_types
   IMPLICIT NONE

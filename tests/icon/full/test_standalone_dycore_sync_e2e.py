@@ -41,7 +41,6 @@ from dace_fortran.bindings import build_fortran_library
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.external import Arg, clear_external_registry, keep_external
 
-
 # Matching ``-O0 -fno-fast-math -ffp-contract=off`` flags pinned on
 # BOTH sides of the dycore comparison:
 #
@@ -61,16 +60,13 @@ from dace_fortran.external import Arg, clear_external_registry, keep_external
 # codegen regression but tolerant enough to absorb the residual
 # integer-to-double conversion ordering at the ``sqrt(real(i+j+k,
 # c_double))`` site.
-_O0_FFLAGS = ("-O0", "-fno-fast-math", "-ffp-contract=off",
-              "-ffree-line-length-none")
-_O0_CXX_FLAGS = ("-O0", "-fno-fast-math", "-ffp-contract=off",
-                 "-fPIC", "-Wno-unused-parameter", "-Wno-unused-label")
+_O0_FFLAGS = ("-O0", "-fno-fast-math", "-ffp-contract=off", "-ffree-line-length-none")
+_O0_CXX_FLAGS = ("-O0", "-fno-fast-math", "-ffp-contract=off", "-fPIC", "-Wno-unused-parameter", "-Wno-unused-label")
 
 pytestmark = [
     pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH"),
     pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
 ]
-
 
 # Fortran-side sync module.  The "original" ``sync_patch_array_noop``
 # does NOT carry ``bind(c)``; the dycore CALLs it through the regular
@@ -101,7 +97,6 @@ contains
 end module mo_sync_helpers_noop
 """
 
-
 # Standalone dycore.  Two ``sync_patch_array_noop`` CALLs flank a
 # triply-nested in-place computation that the SDFG codegen must lower
 # faithfully for the bit-exact comparison to hold.  The shape comes
@@ -131,7 +126,6 @@ contains
   end subroutine standalone_dycore
 end module mo_standalone_dycore
 """
-
 
 # Reference-side ``bind(c)`` driver.  Mirrors the bind_c_shim's
 # convention exactly (extents first, pointer next, scalars last) so
@@ -165,8 +159,7 @@ def _build_sync_lib(tmp_path: Path) -> tuple[Path, Path]:
     so_path = build_dir / "libsync_noop.so"
     subprocess.check_call(
         ["gfortran", "-shared", "-fPIC", "-O2", f"-J{build_dir}",
-         str(src), "-o", str(so_path)],
-        cwd=build_dir)
+         str(src), "-o", str(so_path)], cwd=build_dir)
     return so_path, build_dir
 
 
@@ -191,8 +184,8 @@ def test_standalone_dycore_with_sync_external(tmp_path: Path):
         "sync_patch_array_noop",
         c_name="sync_patch_array_noop_c",
         args=(
-            Arg(kind="scalar", dtype="int32", intent="in"),         # tag
-            Arg(kind="array", dtype="float64", intent="inout"),     # field
+            Arg(kind="scalar", dtype="int32", intent="in"),  # tag
+            Arg(kind="array", dtype="float64", intent="inout"),  # field
         ),
         libraries=(str(sync_so), ),
         dynamic_extents_abi=True,
@@ -203,8 +196,7 @@ def test_standalone_dycore_with_sync_external(tmp_path: Path):
     #     restore so unrelated tests run later in this session
     #     aren't affected.
     _orig_cxx_args = dace.Config.get("compiler", "cpu", "args")
-    dace.Config.set("compiler", "cpu", "args",
-                    value=" ".join(_O0_CXX_FLAGS))
+    dace.Config.set("compiler", "cpu", "args", value=" ".join(_O0_CXX_FLAGS))
     try:
         # 3. Build the SDFG of the standalone dycore + bind_c_shim.
         sdfg_dir = tmp_path / "sdfg"
@@ -213,14 +205,10 @@ def test_standalone_dycore_with_sync_external(tmp_path: Path):
         # ``use`` in mo_standalone_dycore; concat both Fortran sources
         # so flang sees them in one parse.
         full_src = _SYNC_NOOP_SRC + _DYCORE_SRC
-        sdfg = build_sdfg(
-            full_src, sdfg_dir,
-            name="standalone_dycore",
-            entry="standalone_dycore").build()
+        sdfg = build_sdfg(full_src, sdfg_dir, name="standalone_dycore", entry="standalone_dycore").build()
         sdfg.name = "standalone_dycore"
         sdfg.build_folder = str(sdfg_dir / "dacecache")
-        iface = build_auto_interface(
-            sdfg._fortran_interface_raw, "standalone_dycore")
+        iface = build_auto_interface(sdfg._fortran_interface_raw, "standalone_dycore")
         # The sync source must also be a prelude so the bind_c_shim's
         # ``use mo_sync_helpers_noop`` resolves at gfortran link time.
         sync_prelude = sdfg_dir / "sync_noop.f90"
@@ -256,8 +244,7 @@ def test_standalone_dycore_with_sync_external(tmp_path: Path):
     driver_ref = ref_dir / "driver.f90"
     driver_ref.write_text(_REF_DRIVER_SRC)
     ref_so = ref_dir / "libdycore_ref.so"
-    gfortran_compile_so(
-        ref_so, sync_ref, dycore_ref, driver_ref, mod_dir=ref_dir)
+    gfortran_compile_so(ref_so, sync_ref, dycore_ref, driver_ref, mod_dir=ref_dir)
     ref_lib = ctypes.CDLL(str(ref_so))
 
     # 5. Random input -> bit-exact comparison.  Fortran-order arrays
@@ -274,8 +261,7 @@ def test_standalone_dycore_with_sync_external(tmp_path: Path):
     # ahead of the pointer; scalar inputs come last in source order.
     # The hand-authored ref driver mirrors this exactly so the same
     # argtypes apply to both.
-    argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int,
-                ctypes.c_void_p, ctypes.c_double]
+    argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_double]
     sdfg_fn = sdfg_so_lib.standalone_dycore_c
     sdfg_fn.restype = None
     sdfg_fn.argtypes = argtypes
@@ -299,9 +285,8 @@ def test_standalone_dycore_with_sync_external(tmp_path: Path):
     # an FMA leak through ``-ffp-contract``, a swapped operand
     # order) escapes the check.  ``atol = 0`` keeps small-magnitude
     # entries honest.
-    one_ulp_rtol = 2 ** -52  # ~2.22e-16
-    np.testing.assert_allclose(field_sdfg, field_ref,
-                               rtol=one_ulp_rtol, atol=0.0)
+    one_ulp_rtol = 2**-52  # ~2.22e-16
+    np.testing.assert_allclose(field_sdfg, field_ref, rtol=one_ulp_rtol, atol=0.0)
     # Hard guarantee on this kernel today: bit-exact.  Loosen this
     # to ``assert_allclose`` if a future flang version reorders the
     # ``a*b + sqrt(c)`` chain and only 1 ULP can be sustained.

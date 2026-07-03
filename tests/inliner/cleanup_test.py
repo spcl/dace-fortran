@@ -3,7 +3,6 @@ from dace_fortran.fparser_inliner import inline_to_ast
 from dace_fortran.inliner.ast_desugaring import cleanup
 from inliner.fortran_test_helper import SourceCodeBuilder, parse_and_improve
 
-
 # A type-bound (elemental) function INHERITED via EXTENDS and called through a
 # component -- ``self % trans % gid(i)`` -- is syntactically indistinguishable
 # from array-component access, so it must be resolved by following the
@@ -60,8 +59,7 @@ def test_inherited_type_bound_function_through_component_resolves():
     ``self % trans % gid(i)`` as a call; (2) the constant-argument optimizer
     skips the type-bound call it cannot statically resolve instead of asserting.
     """
-    ast = inline_to_ast({"m.f90": _INHERITED_TYPE_BOUND_FN}, entry="m_lhs::kernel",
-                        tolerate_external_uses=True)
+    ast = inline_to_ast({"m.f90": _INHERITED_TYPE_BOUND_FN}, entry="m_lhs::kernel", tolerate_external_uses=True)
     out = ast.tofortran().lower().replace(" ", "")
     # The inherited type-bound function call resolves to the BASE concrete
     # procedure: ``self%trans%gid(i)`` deconstructs to ``base_gid(self%trans, i)``

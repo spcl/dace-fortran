@@ -76,21 +76,21 @@ class FortranLibrary:
 
 
 def build_fortran_library(
-    sdfg,
-    iface: OriginalInterface = None,
-    plan: FlattenPlan = None,
-    out_dir: str = None,
-    *,
-    name: str = None,
-    prelude_sources: Sequence = (),
-    extra_sources: Sequence = (),
-    mode: str = "debug",
-    flags: Sequence = None,
-    extra_flags: Sequence = (),
-    verify: bool = True,
-    bind_c_shim: bool = False,
-    bind_c_shim_debug_prints: bool = False,
-    bind_c_shim_module_symbol_forward=(),
+        sdfg,
+        iface: OriginalInterface = None,
+        plan: FlattenPlan = None,
+        out_dir: str = None,
+        *,
+        name: str = None,
+        prelude_sources: Sequence = (),
+        extra_sources: Sequence = (),
+        mode: str = "debug",
+        flags: Sequence = None,
+        extra_flags: Sequence = (),
+        verify: bool = True,
+        bind_c_shim: bool = False,
+        bind_c_shim_debug_prints: bool = False,
+        bind_c_shim_module_symbol_forward=(),
 ) -> FortranLibrary:
     """Emit + verify + link a Fortran-callable library for ``sdfg``.
 
@@ -210,23 +210,21 @@ def build_fortran_library(
     shim_f90 = None
     if bind_c_shim:
         shim_f90 = out_dir / f"{iface.entry}_c.f90"
-        emit_bind_c_shim(iface, str(shim_f90),
+        emit_bind_c_shim(iface,
+                         str(shim_f90),
                          debug_prints=bind_c_shim_debug_prints,
-                         module_symbol_forward=bind_c_shim_module_symbol_forward)
+                         module_symbol_forward=bind_c_shim_module_symbol_forward,
+                         plan=plan)
 
     so_path = out_dir / f"lib{name}.so"
     # gfortran compiles sources left-to-right with no dependency
     # reordering: modules the binding ``use``s must precede it, and
     # sources that ``use`` the binding must follow it.
     cmd = [
-        "gfortran", *_SHARED_FLAGS, *opt_flags, *extra_flags, "-fopenmp",
-        f"-J{out_dir}",
+        "gfortran", *_SHARED_FLAGS, *opt_flags, *extra_flags, "-fopenmp", f"-J{out_dir}",
         *[str(s) for s in prelude_sources],
-        str(bindings_f90),
-        *([str(shim_f90)] if shim_f90 else []),
-        *[str(s) for s in extra_sources], "-o",
+        str(bindings_f90), *([str(shim_f90)] if shim_f90 else []), *[str(s) for s in extra_sources], "-o",
         str(so_path), f"-L{sdfg_so.parent}", f"-Wl,-rpath,{sdfg_so.parent}", f"-l:{sdfg_so.name}"
     ]
     subprocess.check_call(cmd, cwd=out_dir)
-    return FortranLibrary(so_path=so_path, sdfg_so=sdfg_so,
-                          bindings_f90=bindings_f90, bind_c_shim_f90=shim_f90)
+    return FortranLibrary(so_path=so_path, sdfg_so=sdfg_so, bindings_f90=bindings_f90, bind_c_shim_f90=shim_f90)

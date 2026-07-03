@@ -78,8 +78,7 @@ namespace {
 /// inline use via the libcall emit path.
 static bool isReductionOp(mlir::Operation* op) {
   if (!op) return false;
-  return mlir::isa<hlfir::SumOp, hlfir::ProductOp, hlfir::MinvalOp,
-                   hlfir::MaxvalOp, hlfir::AnyOp, hlfir::AllOp>(op);
+  return mlir::isa<hlfir::SumOp, hlfir::ProductOp, hlfir::MinvalOp, hlfir::MaxvalOp, hlfir::AnyOp, hlfir::AllOp>(op);
 }
 
 /// True iff ``op`` is one of the dense-linalg intrinsics that the
@@ -106,15 +105,12 @@ static bool isReductionOp(mlir::Operation* op) {
 /// element-by-element.
 static bool isLiftableLinalgOp(mlir::Operation* op) {
   if (!op) return false;
-  return mlir::isa<hlfir::MatmulOp, hlfir::MatmulTransposeOp,
-                   hlfir::TransposeOp, hlfir::DotProductOp>(op);
+  return mlir::isa<hlfir::MatmulOp, hlfir::MatmulTransposeOp, hlfir::TransposeOp, hlfir::DotProductOp>(op);
 }
 
 /// True iff ``op`` is an op the pass should lift -- reduction or
 /// liftable linalg.
-static bool isLiftableOp(mlir::Operation* op) {
-  return isReductionOp(op) || isLiftableLinalgOp(op);
-}
+static bool isLiftableOp(mlir::Operation* op) { return isReductionOp(op) || isLiftableLinalgOp(op); }
 
 /// Find every liftable op transitively used by ``rootOp`` (the RHS of
 /// an assign) -- except the rootOp itself.  "Liftable" covers both
@@ -124,8 +120,7 @@ static bool isLiftableOp(mlir::Operation* op) {
 /// inner ops before outer (lifting an inner ``matmul`` to a temp
 /// before its consumer is rewritten avoids dangling references in
 /// the outer rewrite).
-static void collectNestedLiftable(
-    mlir::Operation* rootOp, llvm::SmallVectorImpl<mlir::Operation*>& out) {
+static void collectNestedLiftable(mlir::Operation* rootOp, llvm::SmallVectorImpl<mlir::Operation*>& out) {
   if (!rootOp) return;
   llvm::SmallVector<mlir::Operation*, 8> stack;
   llvm::SmallPtrSet<mlir::Operation*, 16> seen;
@@ -169,13 +164,10 @@ static void collectNestedLiftable(
 }
 
 struct LiftReductionOperandsPass
-    : public mlir::PassWrapper<LiftReductionOperandsPass,
-                               mlir::OperationPass<mlir::ModuleOp>> {
+    : public mlir::PassWrapper<LiftReductionOperandsPass, mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LiftReductionOperandsPass)
 
-  llvm::StringRef getArgument() const final {
-    return "hlfir-lift-reduction-operands";
-  }
+  llvm::StringRef getArgument() const final { return "hlfir-lift-reduction-operands"; }
   llvm::StringRef getDescription() const final {
     return "Lift array-reducing intrinsics that appear as inline "
            "expression operands into a preceding scalar-temp assign, "
@@ -295,11 +287,9 @@ struct LiftReductionOperandsPass
           needsMaterialise = true;
         } else if (isLiftableLinalgOp(user)) {
           bool fusedTranspose =
-              mlir::isa<hlfir::TransposeOp>(redOp) &&
-              mlir::isa<hlfir::MatmulOp, hlfir::MatmulTransposeOp>(user);
+              mlir::isa<hlfir::TransposeOp>(redOp) && mlir::isa<hlfir::MatmulOp, hlfir::MatmulTransposeOp>(user);
           if (!fusedTranspose) needsMaterialise = true;
-        } else if (mlir::isa<hlfir::ApplyOp>(user) ||
-                   mlir::isa<hlfir::ShapeOfOp>(user) ||
+        } else if (mlir::isa<hlfir::ApplyOp>(user) || mlir::isa<hlfir::ShapeOfOp>(user) ||
                    mlir::isa<hlfir::AssignOp>(user)) {
           // handled by the elemental ``_libtmp_`` path / whole-assign.
         } else if (user->getName().getStringRef() == "hlfir.destroy") {
@@ -318,13 +308,11 @@ struct LiftReductionOperandsPass
       // tasklet.  (Array-result reductions only reach arith through an
       // enclosing elemental, which the ``_libtmp_`` path handles.)
       if (isLiftableLinalgOp(redOp) && anyArithInline) {
-        redOp->emitError()
-            << "hlfir-lift-reduction-operands: inline "
-            << redOp->getName().getStringRef()
-            << " fed directly into a scalar/arith expression (no enclosing "
-            << "elemental) is not yet supported.  Workaround: assign the "
-            << "library result to a Fortran local first "
-            << "(``tmp = MATMUL(...); res = tmp / scalar``).";
+        redOp->emitError() << "hlfir-lift-reduction-operands: inline " << redOp->getName().getStringRef()
+                           << " fed directly into a scalar/arith expression (no enclosing "
+                           << "elemental) is not yet supported.  Workaround: assign the "
+                           << "library result to a Fortran local first "
+                           << "(``tmp = MATMUL(...); res = tmp / scalar``).";
         signalPassFailure();
       }
       return;
@@ -347,9 +335,8 @@ struct LiftReductionOperandsPass
     // operandSegmentSizes for hlfir.declare: memref + (no shape) +
     // (no typeparams) + (no dummy_scope).
     attrs.append("operandSegmentSizes", b.getDenseI32ArrayAttr({1, 0, 0, 0}));
-    auto decl =
-        b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{allocaTy, allocaTy},
-                                   mlir::ValueRange{alloca.getResult()}, attrs);
+    auto decl = b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{allocaTy, allocaTy},
+                                           mlir::ValueRange{alloca.getResult()}, attrs);
 
     // Emit the lifted assign and load IMMEDIATELY AFTER the
     // reduction op  --  placing them at the consumer's location would
@@ -365,8 +352,7 @@ struct LiftReductionOperandsPass
     // routes through the existing reduce-emit machinery; consuming
     // sites read the scalar load uniformly.
     b.setInsertionPointAfter(redOp);
-    auto liftedAssign =
-        b.create<hlfir::AssignOp>(loc, redOp->getResult(0), decl.getResult(0));
+    auto liftedAssign = b.create<hlfir::AssignOp>(loc, redOp->getResult(0), decl.getResult(0));
     auto load = b.create<fir::LoadOp>(loc, decl.getResult(0));
 
     // Replace every existing use of ``redOp`` with the load,
@@ -387,10 +373,8 @@ struct LiftReductionOperandsPass
   /// when the operand came from a normal Fortran-source array
   /// declaration -- so no per-consumer rewrite is needed beyond
   /// ``replaceAllUsesExcept``.
-  void liftArrayResult(
-      hlfir::AssignOp consumer, mlir::Operation* redOp,
-      llvm::DenseMap<mlir::func::FuncOp, unsigned>& liftCounter, int64_t rank,
-      mlir::Type eltTy) {
+  void liftArrayResult(hlfir::AssignOp consumer, mlir::Operation* redOp,
+                       llvm::DenseMap<mlir::func::FuncOp, unsigned>& liftCounter, int64_t rank, mlir::Type eltTy) {
     auto func = consumer->getParentOfType<mlir::func::FuncOp>();
     if (!func || rank <= 0 || !eltTy) return;
 
@@ -416,8 +400,7 @@ struct LiftReductionOperandsPass
       return;
     }
     for (auto d : shape)
-      if (d == mlir::ShapedType::kDynamic ||
-          d == fir::SequenceType::getUnknownExtent())
+      if (d == mlir::ShapedType::kDynamic || d == fir::SequenceType::getUnknownExtent())
         return;  // dynamic shape -- can't pre-allocate statically.
 
     // ``fir.alloca !fir.array<N x T>`` + ``hlfir.declare`` at the
@@ -452,17 +435,15 @@ struct LiftReductionOperandsPass
     // the constant extents from ``shape``.
     llvm::SmallVector<mlir::Value, 4> extents;
     for (auto d : shape) {
-      auto c = b.create<mlir::arith::ConstantOp>(loc, b.getIndexType(),
-                                                 b.getIndexAttr(d));
+      auto c = b.create<mlir::arith::ConstantOp>(loc, b.getIndexType(), b.getIndexAttr(d));
       extents.push_back(c);
     }
     auto shapeOp = b.create<fir::ShapeOp>(loc, extents);
     // operandSegmentSizes for hlfir.declare: memref(1) + shape(1) +
     // typeparams(0) + dummy_scope(0).
     attrs.append("operandSegmentSizes", b.getDenseI32ArrayAttr({1, 1, 0, 0}));
-    auto decl = b.create<hlfir::DeclareOp>(
-        loc, mlir::TypeRange{refTy, refTy},
-        mlir::ValueRange{alloca.getResult(), shapeOp.getResult()}, attrs);
+    auto decl = b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{refTy, refTy},
+                                           mlir::ValueRange{alloca.getResult(), shapeOp.getResult()}, attrs);
 
     // Emit ``hlfir.assign <op-result> to <decl#0>`` immediately
     // after the linalg op, then convert the materialised variable
@@ -475,8 +456,7 @@ struct LiftReductionOperandsPass
     // ``hlfir.as_expr`` round-trip recovers the type so use
     // replacement is a simple SSA swap.
     b.setInsertionPointAfter(redOp);
-    auto liftedAssign =
-        b.create<hlfir::AssignOp>(loc, redOp->getResult(0), decl.getResult(0));
+    auto liftedAssign = b.create<hlfir::AssignOp>(loc, redOp->getResult(0), decl.getResult(0));
     auto asExpr = b.create<hlfir::AsExprOp>(loc, resTy, decl.getResult(0),
                                             /*mustFree=*/mlir::Value{});
 
@@ -489,8 +469,6 @@ struct LiftReductionOperandsPass
 
 }  // namespace
 
-std::unique_ptr<mlir::Pass> createLiftReductionOperandsPass() {
-  return std::make_unique<LiftReductionOperandsPass>();
-}
+std::unique_ptr<mlir::Pass> createLiftReductionOperandsPass() { return std::make_unique<LiftReductionOperandsPass>(); }
 
 }  // namespace hlfir_bridge

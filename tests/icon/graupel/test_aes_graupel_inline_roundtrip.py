@@ -133,14 +133,35 @@ def test_aes_graupel_inline_roundtrip_numerical(tmp_path):
     pflx_sdfg = f64_2d()
     prr_sdfg, pri_sdfg, prs_sdfg, prg_sdfg, pre_sdfg = (f64_1d() for _ in range(5))
 
-    sdfg(nvec=np.int32(ivec), ke=np.int32(k_v), ivstart=np.int32(ivs), ivend=np.int32(ive), kstart=np.int32(ks),
-         dt=np.float64(dt), dz=bufs_sdfg['dz'], t=bufs_sdfg['t'], p=bufs_sdfg['p'], rho=bufs_sdfg['rho'],
-         qv=bufs_sdfg['qv'], qc=bufs_sdfg['qc'], qi=bufs_sdfg['qi'], qr=bufs_sdfg['qr'], qs=bufs_sdfg['qs'],
-         qg=bufs_sdfg['qg'], qnc=bufs_sdfg['qnc'], prr_gsp=prr_sdfg, pri_gsp=pri_sdfg, prs_gsp=prs_sdfg,
-         prg_gsp=prg_sdfg, pflx=pflx_sdfg, pre_gsp=pre_sdfg)
+    sdfg(nvec=np.int32(ivec),
+         ke=np.int32(k_v),
+         ivstart=np.int32(ivs),
+         ivend=np.int32(ive),
+         kstart=np.int32(ks),
+         dt=np.float64(dt),
+         dz=bufs_sdfg['dz'],
+         t=bufs_sdfg['t'],
+         p=bufs_sdfg['p'],
+         rho=bufs_sdfg['rho'],
+         qv=bufs_sdfg['qv'],
+         qc=bufs_sdfg['qc'],
+         qi=bufs_sdfg['qi'],
+         qr=bufs_sdfg['qr'],
+         qs=bufs_sdfg['qs'],
+         qg=bufs_sdfg['qg'],
+         qnc=bufs_sdfg['qnc'],
+         prr_gsp=prr_sdfg,
+         pri_gsp=pri_sdfg,
+         prs_gsp=prs_sdfg,
+         prg_gsp=prg_sdfg,
+         pflx=pflx_sdfg,
+         pre_gsp=pre_sdfg)
 
     for nm in ('t', 'qv', 'qc', 'qi', 'qr', 'qs', 'qg'):
-        np.testing.assert_allclose(bufs_sdfg[nm], bufs_ref[nm], rtol=1e-10, atol=1e-12,
+        np.testing.assert_allclose(bufs_sdfg[nm],
+                                   bufs_ref[nm],
+                                   rtol=1e-10,
+                                   atol=1e-12,
                                    err_msg=f"prognostic {nm} drifted")
     np.testing.assert_allclose(pflx_sdfg, pflx_ref, rtol=1e-10, atol=1e-12)
     np.testing.assert_allclose(prr_sdfg, prr_ref, rtol=1e-10, atol=1e-12)

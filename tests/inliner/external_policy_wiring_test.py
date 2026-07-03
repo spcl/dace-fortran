@@ -31,9 +31,10 @@ def _gfortran_compiles(src_text: str) -> bool:
     with TemporaryDirectory() as td:
         f = Path(td) / "tu.f90"
         f.write_text(src_text)
-        r = subprocess.run(
-            ["gfortran", "-fsyntax-only", "-ffree-line-length-none", str(f)],
-            cwd=td, capture_output=True)
+        r = subprocess.run(["gfortran", "-fsyntax-only", "-ffree-line-length-none",
+                            str(f)],
+                           cwd=td,
+                           capture_output=True)
         if r.returncode != 0:
             print(r.stderr.decode())
         return r.returncode == 0
@@ -67,14 +68,13 @@ contains
 end module mo_halo
 """
 
-
 # ---------------------------------------------------------------------------
 # fparser engine -- external_functions / do_not_emit / keep_external parity
 # ---------------------------------------------------------------------------
 
+
 def _fparser_out(**kw) -> str:
-    return inline_to_ast({"mo_halo.f90": _HALO_MODULE}, entry="mo_halo::do_step",
-                         **kw).tofortran().lower()
+    return inline_to_ast({"mo_halo.f90": _HALO_MODULE}, entry="mo_halo::do_step", **kw).tofortran().lower()
 
 
 def test_fparser_baseline_keeps_external_body():
@@ -114,8 +114,7 @@ def test_fparser_validate_rejects_name_in_both():
     """An emitted name that is also in ``do_not_emit`` is an inconsistent
     policy -- rejected before any parsing."""
     with pytest.raises(ValueError, match="both"):
-        _fparser_out(external_functions=[ExternalFunction("halo_exchange")],
-                     do_not_emit=["halo_exchange"])
+        _fparser_out(external_functions=[ExternalFunction("halo_exchange")], do_not_emit=["halo_exchange"])
 
 
 # ---------------------------------------------------------------------------
@@ -146,8 +145,7 @@ def test_regex_merge_stubs_external_body(tmp_path):
     spliced ``halo_exchange`` is emptied -- opener + spec + END kept, the
     ``+ 1.0`` body gone -- while the call site survives."""
     _write_halo(tmp_path)
-    merged = merge_used_modules(_CALLER, search_dirs=[tmp_path],
-                                external_functions=[ExternalFunction("halo_exchange")])
+    merged = merge_used_modules(_CALLER, search_dirs=[tmp_path], external_functions=[ExternalFunction("halo_exchange")])
     flat = merged.replace(" ", "").lower()
     assert "subroutinehalo_exchange" in flat, "the procedure stays declared"
     assert "callhalo_exchange" in flat, "the call site survives"
@@ -158,8 +156,7 @@ def test_regex_merge_stubs_external_body(tmp_path):
 def test_regex_merge_do_not_emit_same_as_external_functions(tmp_path):
     """``do_not_emit`` stubs identically to ``external_functions`` (names only)."""
     _write_halo(tmp_path)
-    a = merge_used_modules(_CALLER, search_dirs=[tmp_path],
-                           external_functions=[ExternalFunction("halo_exchange")])
+    a = merge_used_modules(_CALLER, search_dirs=[tmp_path], external_functions=[ExternalFunction("halo_exchange")])
     b = merge_used_modules(_CALLER, search_dirs=[tmp_path], do_not_emit=["halo_exchange"])
     assert a == b
 
@@ -188,7 +185,8 @@ end module mo_sync
     caller = ("module mo_c\n  use mo_sync, only: sync_patch_array_3d_dp\n"
               "contains\n  subroutine r(a)\n    real, intent(inout) :: a(:)\n"
               "    call sync_patch_array_3d_dp(a)\n  end subroutine r\nend module mo_c\n")
-    merged = merge_used_modules(caller, search_dirs=[tmp_path],
+    merged = merge_used_modules(caller,
+                                search_dirs=[tmp_path],
                                 external_functions=[ExternalFunction("sync_patch_array")])
     flat = merged.replace(" ", "").lower()
     assert "subroutinesync_patch_array_3d_dp" in flat
@@ -226,8 +224,7 @@ end module mo_wrap
               "contains\n  subroutine r(tag, d0, p)\n    integer(c_int), value :: tag, d0\n"
               "    type(c_ptr), value :: p\n    call halo_via_c(tag, d0, p)\n"
               "  end subroutine r\nend module mo_c\n")
-    merged = merge_used_modules(caller, search_dirs=[tmp_path],
-                                external_functions=[ExternalFunction("halo_via_c")])
+    merged = merge_used_modules(caller, search_dirs=[tmp_path], external_functions=[ExternalFunction("halo_via_c")])
     flat = merged.replace(" ", "").lower()
     assert "subroutinehalo_via_c" in flat, "the procedure stays declared"
     assert "interface" in flat and "endinterface" in flat, "the interface block survives whole"
@@ -241,8 +238,7 @@ def test_regex_merge_stubbed_tu_compiles(tmp_path):
     """The stubbed single-TU is still valid Fortran: an empty-bodied
     ``halo_exchange`` with its dummy argument declared compiles standalone."""
     _write_halo(tmp_path)
-    merged = merge_used_modules(_CALLER, search_dirs=[tmp_path],
-                                external_functions=[ExternalFunction("halo_exchange")])
+    merged = merge_used_modules(_CALLER, search_dirs=[tmp_path], external_functions=[ExternalFunction("halo_exchange")])
     assert _gfortran_compiles(merged), "stubbed merged TU must compile"
 
 
@@ -251,11 +247,14 @@ def test_regex_merge_stubbed_tu_compiles(tmp_path):
 # BOTH merge engines, and the build path sources them from the bridge registry
 # ---------------------------------------------------------------------------
 
+
 def test_preprocess_source_threads_external_names_regex(tmp_path):
     """``preprocess_fortran_source`` forwards ``external_names`` to the regex
     merge -- the spliced external body is stubbed."""
     _write_halo(tmp_path)
-    out = preprocess_fortran_source(_CALLER, search_dirs=[tmp_path], merge_engine="regex",
+    out = preprocess_fortran_source(_CALLER,
+                                    search_dirs=[tmp_path],
+                                    merge_engine="regex",
                                     external_names=["halo_exchange"]).replace(" ", "").lower()
     assert "subroutinehalo_exchange" in out
     assert "a(i)=a(i)+1.0" not in out, "regex merge must stub the external body"
@@ -264,7 +263,9 @@ def test_preprocess_source_threads_external_names_regex(tmp_path):
 def test_preprocess_source_threads_external_names_fparser(tmp_path):
     """Same through the fparser engine (``make_noop`` path)."""
     _write_halo(tmp_path)
-    out = preprocess_fortran_source(_CALLER, search_dirs=[tmp_path], merge_engine="fparser",
+    out = preprocess_fortran_source(_CALLER,
+                                    search_dirs=[tmp_path],
+                                    merge_engine="fparser",
                                     merge_entry="mo_user::run",
                                     external_names=["halo_exchange"]).replace(" ", "").lower()
     assert "callhalo_exchange" in out, "the external call must survive"
@@ -274,8 +275,7 @@ def test_preprocess_source_threads_external_names_fparser(tmp_path):
 def test_preprocess_source_no_external_names_keeps_body(tmp_path):
     """Default (no policy) keeps the spliced body -- the threading is opt-in."""
     _write_halo(tmp_path)
-    out = preprocess_fortran_source(_CALLER, search_dirs=[tmp_path],
-                                    merge_engine="regex").replace(" ", "").lower()
+    out = preprocess_fortran_source(_CALLER, search_dirs=[tmp_path], merge_engine="regex").replace(" ", "").lower()
     assert "a(i)=a(i)+1.0" in out
 
 

@@ -1,0 +1,58 @@
+name: Format Check
+
+on:
+  push:
+    branches: [main, ci-fix]
+  pull_request:
+    branches: [main, ci-fix]
+  merge_group:
+    branches: [main, ci-fix]
+
+concurrency:
+  group: format-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    # Skip on the no-ci label, mirroring the test workflow.
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: false
+        # Full history so a PR can be diffed against its base commit.
+        fetch-depth: 0
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install formatters (pinned to match the local toolchain)
+      run: |
+        # clang-format from PyPI ships the binary as the bare ``clang-format`` name
+        # the pre-commit hook invokes; ~=21.1 matches the version the C++ was written
+        # against, so the check never disagrees with a local ``pre-commit run``.
+        python -m pip install --upgrade pip
+        pip install pre-commit fprettify 'clang-format~=21.1'
+
+    - name: Check formatting of CHANGED files
+      run: |
+        # pre-commit reformats in place and exits non-zero if any hook changed a
+        # file -- i.e. the file was not correctly formatted.  Only files changed in
+        # this PR / push are checked (matching "all changed files follow the rules"),
+        # so legacy not-yet-reformatted files never fail CI until they are touched.
+        # --show-diff-on-failure prints exactly what is mis-formatted.
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          FROM="${{ github.event.pull_request.base.sha }}"
+        else
+          FROM="${{ github.event.before }}"
+        fi
+        TO="${{ github.sha }}"
+        # New branch / force-push / shallow base: ``before`` may be unset or absent;
+        # fall back to the parent commit.
+        if [ -z "$FROM" ] || ! git cat-file -e "${FROM}^{commit}" 2>/dev/null; then
+          FROM="$(git rev-parse 'HEAD~1' 2>/dev/null || echo HEAD)"
+        fi
+        echo "Checking files changed in ${FROM}..${TO}"
+        pre-commit run --show-diff-on-failure --color=always --from-ref "$FROM" --to-ref "$TO"

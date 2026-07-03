@@ -41,8 +41,7 @@ namespace hlfir_bridge {
 // added to the build's compile list  --  CMakeLists.txt deliberately omits
 // it.  The split is purely for readability: the AST builder used to
 // be a single 2800-line file.
-std::vector<ASTNode> buildMergeLibcall(hlfir::AssignOp assign,
-                                       hlfir::ElementalOp elem) {
+std::vector<ASTNode> buildMergeLibcall(hlfir::AssignOp assign, hlfir::ElementalOp elem) {
   auto& region = elem.getRegion();
   if (region.empty()) return {};
   auto& block = region.front();
@@ -55,8 +54,7 @@ std::vector<ASTNode> buildMergeLibcall(hlfir::AssignOp assign,
       break;
     }
   if (!yielded) return {};
-  auto sel =
-      mlir::dyn_cast_or_null<mlir::arith::SelectOp>(yielded.getDefiningOp());
+  auto sel = mlir::dyn_cast_or_null<mlir::arith::SelectOp>(yielded.getDefiningOp());
   if (!sel) return {};
 
   // Each of the three operands must trace back to a fir.load of an
@@ -87,8 +85,7 @@ std::vector<ASTNode> buildMergeLibcall(hlfir::AssignOp assign,
     if (!ld) return "";
     auto* md = ld.getMemref().getDefiningOp();
     if (!md) return "";
-    if (mlir::isa<hlfir::DesignateOp>(md) || mlir::isa<hlfir::DeclareOp>(md))
-      return traceToDecl(ld.getMemref());
+    if (mlir::isa<hlfir::DesignateOp>(md) || mlir::isa<hlfir::DeclareOp>(md)) return traceToDecl(ld.getMemref());
     return "";
   };
 
@@ -102,8 +99,7 @@ std::vector<ASTNode> buildMergeLibcall(hlfir::AssignOp assign,
   lib.callee = "merge";
   auto dest = assign.getOperand(1);
   if (auto dd = dest.getDefiningOp())
-    if (auto declOp = mlir::dyn_cast<hlfir::DeclareOp>(dd))
-      lib.target = extractName(declOp.getUniqName().str());
+    if (auto declOp = mlir::dyn_cast<hlfir::DeclareOp>(dd)) lib.target = extractName(declOp.getUniqName().str());
   if (lib.target.empty()) lib.target = traceToDecl(dest);
   lib.target_is_array = isArrayRef(dest.getType());
   // MergeLibraryNode connector order: ``_t``, ``_f``, ``_mask``.
@@ -122,8 +118,7 @@ std::vector<ASTNode> buildMergeLibcall(hlfir::AssignOp assign,
 /// ``buildExpr`` consults ``indexStack()`` to resolve an elemental block
 /// arg to its synthetic name, so the inner ``buildAssignNode``-style walk
 /// sees ``a[ei0]`` etc. as a normal array read with a normal iter var.
-std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign,
-                                          hlfir::ElementalOp elem) {
+std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign, hlfir::ElementalOp elem) {
   // Target array (LHS of the assign).
   ASTNode inner;
   inner.kind = "assign";
@@ -143,8 +138,7 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign,
 
   std::vector<std::string> iter_names;
   iter_names.reserve(rank);
-  for (unsigned i = 0; i < rank; ++i)
-    iter_names.push_back("ei" + std::to_string(i));
+  for (unsigned i = 0; i < rank; ++i) iter_names.push_back("ei" + std::to_string(i));
 
   // Push block-arg -> synthetic-name pairs so resolveIndex sees them
   // everywhere we walk the body.
@@ -254,8 +248,7 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign,
   // as a regular Fortran-style read of the transient.
   std::vector<ASTNode> preNodes;
   if (yielded) {
-    std::function<void(mlir::Value, int)> findApplies = [&](mlir::Value v,
-                                                            int depth) {
+    std::function<void(mlir::Value, int)> findApplies = [&](mlir::Value v, int depth) {
       if (depth > 40 || !v) return;
       auto* op = v.getDefiningOp();
       if (!op) return;
@@ -337,12 +330,10 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign,
                   lib.options["shift"] = std::to_string(*c);
                 else {
                   auto sExpr = buildIndexExpr(shiftVal, 0);
-                  if (!sExpr.empty() && sExpr != "?")
-                    lib.options["shift"] = sExpr;
+                  if (!sExpr.empty() && sExpr != "?") lib.options["shift"] = sExpr;
                 }
                 if (auto dim = cshOp.getDim())
-                  if (auto c = traceConstInt(dim))
-                    lib.reduce_axes.push_back(*c - 1);
+                  if (auto c = traceConstInt(dim)) lib.reduce_axes.push_back(*c - 1);
                 preNodes.push_back(std::move(lib));
                 return;
               }
@@ -360,13 +351,10 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign,
                   // into a synthetic transient and pass
                   // its name as the libcall arg.
                   if (auto* od = operand.getDefiningOp()) {
-                    if (auto inner_elem =
-                            mlir::dyn_cast<hlfir::ElementalOp>(od)) {
-                      auto [trName, mat_nodes] =
-                          materialiseElementalForLibcall(inner_elem);
+                    if (auto inner_elem = mlir::dyn_cast<hlfir::ElementalOp>(od)) {
+                      auto [trName, mat_nodes] = materialiseElementalForLibcall(inner_elem);
                       if (!trName.empty()) {
-                        for (auto& mn : mat_nodes)
-                          preNodes.push_back(std::move(mn));
+                        for (auto& mn : mat_nodes) preNodes.push_back(std::move(mn));
                         n = std::move(trName);
                       }
                     }
@@ -406,8 +394,7 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign,
                         idecl.target_is_array = !ishape.empty();
                         AccessInfo ishapeInfo;
                         ishapeInfo.array_name = innerTr;
-                        for (auto& s : ishape)
-                          ishapeInfo.index_exprs.push_back(s);
+                        for (auto& s : ishape) ishapeInfo.index_exprs.push_back(s);
                         idecl.accesses.push_back(std::move(ishapeInfo));
                         preNodes.push_back(std::move(idecl));
 
@@ -564,12 +551,9 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
   // A reduction op materialised into a scalar by ``materialiseCondReductions``
   // (Reduce lib-node before the branch) renders as the bare scalar -- the
   // inline-unroll reduction table below is bypassed for it.
-  if (auto it = kCondReductionScalars.find(def);
-      it != kCondReductionScalars.end())
-    return it->second;
+  if (auto it = kCondReductionScalars.find(def); it != kCondReductionScalars.end()) return it->second;
 
-  if (auto conv = mlir::dyn_cast<fir::ConvertOp>(def))
-    return buildExprWithSubscripts(conv.getValue(), d + 1);
+  if (auto conv = mlir::dyn_cast<fir::ConvertOp>(def)) return buildExprWithSubscripts(conv.getValue(), d + 1);
   // ``hlfir.no_reassoc`` is Fortran's reassociation-blocker wrapper
   // Flang inserts around expressions whose order the standard says
   // must be preserved (parenthesised expressions like
@@ -617,9 +601,7 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
       if (opName != e.op) continue;
       if (def->getNumOperands() == 0) return "?";
       auto src = def->getOperand(0);
-      while (auto cv =
-                 mlir::dyn_cast_or_null<fir::ConvertOp>(src.getDefiningOp()))
-        src = cv.getValue();
+      while (auto cv = mlir::dyn_cast_or_null<fir::ConvertOp>(src.getDefiningOp())) src = cv.getValue();
       auto* sd = src.getDefiningOp();
       if (!sd) return "?";
 
@@ -676,8 +658,7 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
           // Push iter -> value bindings for each block arg.
           unsigned pushed = 0;
           for (unsigned i = 0; i < block.getNumArguments(); ++i) {
-            indexStack().push_back(
-                {block.getArgument(i), std::to_string(cur[i])});
+            indexStack().push_back({block.getArgument(i), std::to_string(cur[i])});
             ++pushed;
           }
           std::string es = buildExprWithSubscripts(yielded, d + 1);
@@ -850,19 +831,16 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
   // fails to compile.  Handles the math.* and complex.* ops Flang
   // emits for Fortran's intrinsic library.
   static const std::map<llvm::StringRef, std::string> unary_intrinsics = {
-      {"math.absf", "abs"},  {"math.absi", "abs"},    {"math.sqrt", "sqrt"},
-      {"math.exp", "exp"},   {"math.exp2", "exp2"},   {"math.log", "log"},
-      {"math.log2", "log2"}, {"math.log10", "log10"}, {"math.sin", "sin"},
-      {"math.cos", "cos"},   {"math.tan", "tan"},     {"math.asin", "asin"},
-      {"math.acos", "acos"}, {"math.atan", "atan"},   {"math.sinh", "sinh"},
-      {"math.cosh", "cosh"}, {"math.tanh", "tanh"},   {"math.floor", "floor"},
-      {"math.ceil", "ceil"}, {"math.round", "round"}, {"math.trunc", "trunc"},
+      {"math.absf", "abs"},    {"math.absi", "abs"},    {"math.sqrt", "sqrt"}, {"math.exp", "exp"},
+      {"math.exp2", "exp2"},   {"math.log", "log"},     {"math.log2", "log2"}, {"math.log10", "log10"},
+      {"math.sin", "sin"},     {"math.cos", "cos"},     {"math.tan", "tan"},   {"math.asin", "asin"},
+      {"math.acos", "acos"},   {"math.atan", "atan"},   {"math.sinh", "sinh"}, {"math.cosh", "cosh"},
+      {"math.tanh", "tanh"},   {"math.floor", "floor"}, {"math.ceil", "ceil"}, {"math.round", "round"},
+      {"math.trunc", "trunc"},
   };
   auto unm = def->getName().getStringRef();
-  if (auto it = unary_intrinsics.find(unm);
-      it != unary_intrinsics.end() && def->getNumOperands() == 1)
-    return it->second + "(" +
-           buildExprWithSubscripts(def->getOperand(0), d + 1) + ")";
+  if (auto it = unary_intrinsics.find(unm); it != unary_intrinsics.end() && def->getNumOperands() == 1)
+    return it->second + "(" + buildExprWithSubscripts(def->getOperand(0), d + 1) + ")";
 
   // Binary arith  --  recurse through the subscript-aware builder.
   static const std::map<llvm::StringRef, std::string> bin_ops = {
@@ -871,11 +849,9 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
       {"arith.subi", " - "}, {"arith.divsi", " // "}, {"arith.divui", " // "},
   };
   auto nm = def->getName().getStringRef();
-  if (auto it = bin_ops.find(nm);
-      it != bin_ops.end() && def->getNumOperands() == 2)
-    return "(" + buildExprWithSubscripts(def->getOperand(0), d + 1) +
-           it->second + buildExprWithSubscripts(def->getOperand(1), d + 1) +
-           ")";
+  if (auto it = bin_ops.find(nm); it != bin_ops.end() && def->getNumOperands() == 2)
+    return "(" + buildExprWithSubscripts(def->getOperand(0), d + 1) + it->second +
+           buildExprWithSubscripts(def->getOperand(1), d + 1) + ")";
   if (nm == "arith.negf" && def->getNumOperands() == 1)
     return "(-" + buildExprWithSubscripts(def->getOperand(0), d + 1) + ")";
 
@@ -888,8 +864,7 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
   // elemental-unfold above renders each term via this builder) then emits
   // ``(float64(i) - i_real) ** 2`` with whole-array ``i`` / ``i_real``
   // operands, which C++ codegen rejects as ``int* - double*``.
-  if ((nm == "math.fpowi" || nm == "math.powf" || nm == "math.powi" ||
-       nm == "math.ipowi") &&
+  if ((nm == "math.fpowi" || nm == "math.powf" || nm == "math.powi" || nm == "math.ipowi") &&
       def->getNumOperands() == 2) {
     return "(" + buildExprWithSubscripts(def->getOperand(0), d + 1) + " ** " +
            buildExprWithSubscripts(def->getOperand(1), d + 1) + ")";
@@ -940,12 +915,10 @@ std::string buildBoolExpr(mlir::Value val, int d) {
   // fir.convert (i1 <-> i1 kind, i8 -> i1, ...) and arith.trunci / extui
   // are transparent here  --  DaCe codegen treats any non-zero integer as
   // True inside a Python condition, so the cast is a no-op.
-  if (auto conv = mlir::dyn_cast<fir::ConvertOp>(def))
-    return buildBoolExpr(conv.getValue(), d + 1);
+  if (auto conv = mlir::dyn_cast<fir::ConvertOp>(def)) return buildBoolExpr(conv.getValue(), d + 1);
   auto nm2 = def->getName().getStringRef();
   if (nm2 == "arith.trunci" || nm2 == "arith.extui" || nm2 == "arith.extsi") {
-    if (def->getNumOperands() == 1)
-      return buildBoolExpr(def->getOperand(0), d + 1);
+    if (def->getNumOperands() == 1) return buildBoolExpr(def->getOperand(0), d + 1);
   }
 
   // Pick the operand-renderer once for every leaf in this bool tree:
@@ -967,8 +940,7 @@ std::string buildBoolExpr(mlir::Value val, int d) {
   if (auto cmp = mlir::dyn_cast<mlir::arith::CmpFOp>(def)) {
     auto pred = cmpfPredStr(cmp.getPredicate());
     if (pred.empty()) return "?";
-    return "(" + leafExpr(cmp.getLhs(), d + 1) + " " + pred + " " +
-           leafExpr(cmp.getRhs(), d + 1) + ")";
+    return "(" + leafExpr(cmp.getLhs(), d + 1) + " " + pred + " " + leafExpr(cmp.getRhs(), d + 1) + ")";
   }
   if (auto cmp = mlir::dyn_cast<mlir::arith::CmpIOp>(def)) {
     // ALLOCATED(arr) idiom: ``cmpi ne, convert(box_addr(load %decl)), 0``.
@@ -997,8 +969,7 @@ std::string buildBoolExpr(mlir::Value val, int d) {
             if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(cd)) {
               auto src = ba.getVal();
               if (auto* sd = src.getDefiningOp())
-                if (auto ld = mlir::dyn_cast<fir::LoadOp>(sd))
-                  src = ld.getMemref();
+                if (auto ld = mlir::dyn_cast<fir::LoadOp>(sd)) src = ld.getMemref();
               auto arrName = traceToDecl(src);
               if (!arrName.empty()) return arrName + "_allocated";
             }
@@ -1008,30 +979,24 @@ std::string buildBoolExpr(mlir::Value val, int d) {
     }
     auto pred = cmpiPredStr(cmp.getPredicate());
     if (pred.empty()) return "?";
-    return "(" + leafExpr(cmp.getLhs(), d + 1) + " " + pred + " " +
-           leafExpr(cmp.getRhs(), d + 1) + ")";
+    return "(" + leafExpr(cmp.getLhs(), d + 1) + " " + pred + " " + leafExpr(cmp.getRhs(), d + 1) + ")";
   }
   auto nm = def->getName().getStringRef();
   if (nm == "arith.andi" && def->getNumOperands() == 2)
-    return "(" + buildBoolExpr(def->getOperand(0), d + 1) + " and " +
-           buildBoolExpr(def->getOperand(1), d + 1) + ")";
+    return "(" + buildBoolExpr(def->getOperand(0), d + 1) + " and " + buildBoolExpr(def->getOperand(1), d + 1) + ")";
   if (nm == "arith.ori" && def->getNumOperands() == 2)
-    return "(" + buildBoolExpr(def->getOperand(0), d + 1) + " or " +
-           buildBoolExpr(def->getOperand(1), d + 1) + ")";
+    return "(" + buildBoolExpr(def->getOperand(0), d + 1) + " or " + buildBoolExpr(def->getOperand(1), d + 1) + ")";
   // ``xori %x, true`` is Flang's lowering of ``.not. x``.  Otherwise
   // boolean xor  --  Python has no operator, use ``!=``.
   if (nm == "arith.xori" && def->getNumOperands() == 2) {
     auto* rhsDef = def->getOperand(1).getDefiningOp();
     if (auto c = mlir::dyn_cast_or_null<mlir::arith::ConstantOp>(rhsDef))
       if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue()))
-        if (ia.getInt() == 1)
-          return "(not " + buildBoolExpr(def->getOperand(0), d + 1) + ")";
-    return "(" + buildBoolExpr(def->getOperand(0), d + 1) +
-           " != " + buildBoolExpr(def->getOperand(1), d + 1) + ")";
+        if (ia.getInt() == 1) return "(not " + buildBoolExpr(def->getOperand(0), d + 1) + ")";
+    return "(" + buildBoolExpr(def->getOperand(0), d + 1) + " != " + buildBoolExpr(def->getOperand(1), d + 1) + ")";
   }
   if (auto c = mlir::dyn_cast<mlir::arith::ConstantOp>(def))
-    if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue()))
-      return ia.getInt() ? "True" : "False";
+    if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue())) return ia.getInt() ? "True" : "False";
 
   // Bool-tree leaf: any non-bool op reached at the bottom of the
   // recursion (typically a ``fir.load`` of an i1 / fir.logical) goes

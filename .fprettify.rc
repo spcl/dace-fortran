@@ -1,0 +1,4 @@
+# fprettify config -- shared by .pre-commit-config.yaml and the format-check CI.
+# Keys MUST use dash form (line_length= is rejected by configargparse).
+indent=2
+line-length=120

@@ -45,8 +45,7 @@ from dace_fortran import build_sdfg_from_project
 _HERE = Path(__file__).resolve().parent
 _JACOBI_DIR = _HERE / "jacobi"
 _CSR_DIR = _HERE / "csr_spmv"
-_JACOBI_STUBS = [_JACOBI_DIR / "stubs" / "mpi_stub.f90",
-                 _JACOBI_DIR / "stubs" / "netcdf_stub.f90"]
+_JACOBI_STUBS = [_JACOBI_DIR / "stubs" / "mpi_stub.f90", _JACOBI_DIR / "stubs" / "netcdf_stub.f90"]
 
 
 def _have(*tools: str) -> bool:
@@ -61,14 +60,12 @@ def _has_netcdf_fortran() -> bool:
 
 def _assert_inlined(sdfg, helper: str):
     arr_names = " ".join(sdfg.arrays.keys()).lower()
-    assert helper not in arr_names, (
-        f"{helper} should have been inlined; appeared in SDFG arrays: "
-        f"{sorted(sdfg.arrays.keys())}")
+    assert helper not in arr_names, (f"{helper} should have been inlined; appeared in SDFG arrays: "
+                                     f"{sorted(sdfg.arrays.keys())}")
 
 
 @pytest.mark.skipif(
-    not (_have("flang-new-21", "bear", "autoreconf", "automake", "mpif90", "nf-config")
-         and _has_netcdf_fortran()),
+    not (_have("flang-new-21", "bear", "autoreconf", "automake", "mpif90", "nf-config") and _has_netcdf_fortran()),
     reason="flang-new-21 / bear / autotools / MPI / netcdf-fortran missing",
 )
 def test_jacobi_autotools_bear(tmp_path: Path):
@@ -106,8 +103,7 @@ def test_csr_spmv_cmake(tmp_path: Path):
     project with no per-project plumbing."""
     build = tmp_path / "build"
     build.mkdir(parents=True, exist_ok=True)
-    subprocess.check_call(["cmake", "-S", str(_CSR_DIR), "-B", str(build),
-                           "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"])
+    subprocess.check_call(["cmake", "-S", str(_CSR_DIR), "-B", str(build), "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"])
     subprocess.check_call(["cmake", "--build", str(build), "--target", "csr_demo"])
 
     sdfg = build_sdfg_from_project(build / "compile_commands.json",

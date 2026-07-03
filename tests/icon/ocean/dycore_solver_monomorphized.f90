@@ -27,7 +27,7 @@ MODULE mo_ocean_solve
   CHARACTER(LEN = *), PARAMETER :: this_mod_name = 'mo_ocean_solve'
   TYPE :: t_ocean_solve
     PRIVATE
-    INTEGER :: act__tag
+    INTEGER :: act__tag = 0
     TYPE(t_ocean_solve_gmres), ALLOCATABLE :: act__t_ocean_solve_gmres
     TYPE(t_ocean_solve_cg), ALLOCATABLE :: act__t_ocean_solve_cg
     TYPE(t_ocean_solve_cgj), ALLOCATABLE :: act__t_ocean_solve_cgj
@@ -48,6 +48,13 @@ MODULE mo_ocean_solve
   END TYPE t_ocean_solve
   CONTAINS
   SUBROUTINE ocean_solve_dump_matrix(this, id, lprecon_in, lacc)
+    USE mo_ocean_solve_backend, ONLY: ocean_solve_backend_dump_matrix__t_ocean_solve_legacy_gmres
+    USE mo_ocean_solve_backend, ONLY: ocean_solve_backend_dump_matrix__t_ocean_solve_mres
+    USE mo_ocean_solve_backend, ONLY: ocean_solve_backend_dump_matrix__t_ocean_solve_bicgstab
+    USE mo_ocean_solve_backend, ONLY: ocean_solve_backend_dump_matrix__t_ocean_solve_cgo
+    USE mo_ocean_solve_backend, ONLY: ocean_solve_backend_dump_matrix__t_ocean_solve_cgj
+    USE mo_ocean_solve_backend, ONLY: ocean_solve_backend_dump_matrix__t_ocean_solve_cg
+    USE mo_ocean_solve_backend, ONLY: ocean_solve_backend_dump_matrix__t_ocean_solve_gmres
     CLASS(t_ocean_solve), INTENT(INOUT) :: this
     INTEGER, INTENT(IN) :: id
     LOGICAL, INTENT(IN), OPTIONAL :: lprecon_in
@@ -75,6 +82,13 @@ MODULE mo_ocean_solve
     END IF
   END SUBROUTINE ocean_solve_dump_matrix
   SUBROUTINE ocean_solve_construct(this, st, par, par_sp, lhs_agen, trans, lacc)
+    USE mo_ocean_solve_backend, ONLY: ocean_solve_backend_construct__t_ocean_solve_legacy_gmres
+    USE mo_ocean_solve_backend, ONLY: ocean_solve_backend_construct__t_ocean_solve_mres
+    USE mo_ocean_solve_backend, ONLY: ocean_solve_backend_construct__t_ocean_solve_bicgstab
+    USE mo_ocean_solve_backend, ONLY: ocean_solve_backend_construct__t_ocean_solve_cgo
+    USE mo_ocean_solve_backend, ONLY: ocean_solve_backend_construct__t_ocean_solve_cgj
+    USE mo_ocean_solve_backend, ONLY: ocean_solve_backend_construct__t_ocean_solve_cg
+    USE mo_ocean_solve_backend, ONLY: ocean_solve_backend_construct__t_ocean_solve_gmres
     CLASS(t_ocean_solve), TARGET, INTENT(INOUT) :: this
     INTEGER, INTENT(IN) :: st
     TYPE(t_ocean_solve_parm), INTENT(IN) :: par, par_sp
@@ -84,7 +98,7 @@ MODULE mo_ocean_solve
     LOGICAL :: lzacc
     CHARACTER(LEN = *), PARAMETER :: routine = this_mod_name // "::t_ocean_solve::ocean_solve_construct()"
     CALL set_acc_host_or_device(lzacc, lacc)
-    IF (ALLOCATED(this % act)) CALL finish(routine, "already initialized!")
+    IF (this % act__tag /= 0) CALL finish(routine, "already initialized!")
     IF (ltimer) THEN
       this % timer_init = new_timer("solver init")
       CALL timer_start(this % timer_init)
@@ -234,13 +248,20 @@ MODULE mo_ocean_solve
     this % is_init = .TRUE.
   END SUBROUTINE ocean_solve_construct
   SUBROUTINE ocean_solve_solve(this, niter, niter_sp, lacc)
+    USE mo_ocean_solve_backend, ONLY: ocean_solve_backend_solve__t_ocean_solve_legacy_gmres
+    USE mo_ocean_solve_backend, ONLY: ocean_solve_backend_solve__t_ocean_solve_mres
+    USE mo_ocean_solve_backend, ONLY: ocean_solve_backend_solve__t_ocean_solve_bicgstab
+    USE mo_ocean_solve_backend, ONLY: ocean_solve_backend_solve__t_ocean_solve_cgo
+    USE mo_ocean_solve_backend, ONLY: ocean_solve_backend_solve__t_ocean_solve_cgj
+    USE mo_ocean_solve_backend, ONLY: ocean_solve_backend_solve__t_ocean_solve_cg
+    USE mo_ocean_solve_backend, ONLY: ocean_solve_backend_solve__t_ocean_solve_gmres
     CLASS(t_ocean_solve), INTENT(INOUT) :: this
     INTEGER, INTENT(OUT) :: niter, niter_sp
     LOGICAL, INTENT(IN), OPTIONAL :: lacc
     LOGICAL :: lzacc
     CHARACTER(LEN = *), PARAMETER :: routine = this_mod_name // '::t_ocean_solve::ocean_solve'
     CALL set_acc_host_or_device(lzacc, lacc)
-    IF (.NOT. ALLOCATED(this % act)) CALL finish(routine, "solve needs to be initialized")
+    IF (.NOT. this % act__tag /= 0) CALL finish(routine, "solve needs to be initialized")
     IF (ltimer) CALL timer_start(this % timer)
     IF (this % act__tag == 1) THEN
       this % act__t_ocean_solve_gmres % b_loc_wp => this % b_loc_wp

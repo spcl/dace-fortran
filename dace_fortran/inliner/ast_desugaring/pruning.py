@@ -545,15 +545,22 @@ def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC]) -> f03.Pro
     return ast
 
 
-def prune_branches(ast: f03.Program) -> f03.Program:
+def prune_branches(ast: f03.Program, alias_map: Optional[types.SPEC_TABLE] = None) -> f03.Program:
     """
     Prunes dead branches from `If_Construct` and `If_Stmt` nodes by evaluating
     their conditional expressions at compile time.
 
     :param ast: The root of the fparser AST.
+    :param alias_map: Symbol table for resolving named constants in conditions; when
+        ``None`` it is built from ``ast`` (the whole-program case).  A caller holding
+        a freshly substituted FRAGMENT -- whose ``USE``d modules are not in the
+        fragment, so :func:`analysis.alias_specs` cannot run -- passes an empty map:
+        only literal (already-folded) ``.TRUE.``/``.FALSE.`` conditions then fold,
+        which is exactly what is wanted for pruning ``PRESENT(absent)``-dead branches.
     :return: The modified AST with dead branches removed.
     """
-    alias_map = analysis.alias_specs(ast)
+    if alias_map is None:
+        alias_map = analysis.alias_specs(ast)
     for ib in walk(ast, f03.If_Construct):
         _prune_branches_in_ifblock(ib, alias_map)
     for ib in walk(ast, f03.If_Stmt):

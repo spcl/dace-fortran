@@ -40,9 +40,7 @@ def test_fortran_frontend_optional(tmp_path):
 
     END SUBROUTINE intrinsic_optional_test_function2
 """
-    sdfg = build_sdfg(src,
-                      tmp_path,
-                      name='intrinsic_optional_test_function',
+    sdfg = build_sdfg(src, tmp_path, name='intrinsic_optional_test_function',
                       entry='intrinsic_optional_test_function').build()
 
     size = 4
@@ -96,9 +94,7 @@ def test_fortran_frontend_optional_complex(tmp_path):
 
     END SUBROUTINE intrinsic_optional_test_function2
 """
-    sdfg = build_sdfg(src,
-                      tmp_path,
-                      name='intrinsic_optional_test_function',
+    sdfg = build_sdfg(src, tmp_path, name='intrinsic_optional_test_function',
                       entry='intrinsic_optional_test_function').build()
 
     size = 5

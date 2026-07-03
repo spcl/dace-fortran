@@ -45,8 +45,7 @@ namespace {
 /// flatten pass and ``extract_vars`` agree on).
 static bool isScalarMember(mlir::Type t) {
   if (t.isF32() || t.isF64()) return true;
-  if (t.isInteger(8) || t.isInteger(16) || t.isInteger(32) || t.isInteger(64))
-    return true;
+  if (t.isInteger(8) || t.isInteger(16) || t.isInteger(32) || t.isInteger(64)) return true;
   if (mlir::isa<fir::LogicalType>(t)) return true;
   return false;
 }
@@ -83,8 +82,7 @@ static bool isBoxOfScalarArray(mlir::Type t) {
     inner = heap.getEleTy();
   else if (auto ptr = mlir::dyn_cast<fir::PointerType>(inner))
     inner = ptr.getEleTy();
-  if (auto seq = mlir::dyn_cast<fir::SequenceType>(inner))
-    return isScalarMember(seq.getEleTy());
+  if (auto seq = mlir::dyn_cast<fir::SequenceType>(inner)) return isScalarMember(seq.getEleTy());
   return false;
 }
 
@@ -136,13 +134,10 @@ static fir::RecordType scalarStructPointee(mlir::Type argTy) {
 }
 
 struct MarshalExternalStructsPass
-    : public mlir::PassWrapper<MarshalExternalStructsPass,
-                               mlir::OperationPass<mlir::ModuleOp>> {
+    : public mlir::PassWrapper<MarshalExternalStructsPass, mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(MarshalExternalStructsPass)
 
-  llvm::StringRef getArgument() const final {
-    return "hlfir-marshal-external-structs";
-  }
+  llvm::StringRef getArgument() const final { return "hlfir-marshal-external-structs"; }
   llvm::StringRef getDescription() const final {
     return "Expand struct arguments of registered external calls to per-member "
            "arguments (deep-copy SoA<->AoS marshalling); tags the callee with "
@@ -153,11 +148,9 @@ struct MarshalExternalStructsPass
     mlir::ModuleOp module = getOperation();
 
     llvm::StringSet<> externals;
-    if (auto a =
-            module->getAttrOfType<mlir::ArrayAttr>("hlfir.external_symbols"))
+    if (auto a = module->getAttrOfType<mlir::ArrayAttr>("hlfir.external_symbols"))
       for (auto e : a)
-        if (auto s = mlir::dyn_cast<mlir::StringAttr>(e))
-          externals.insert(s.getValue());
+        if (auto s = mlir::dyn_cast<mlir::StringAttr>(e)) externals.insert(s.getValue());
     if (externals.empty()) return;  // nothing registered -> no-op
 
     // Match the same fuzzy convention :func:`externalize_symbols`
@@ -215,18 +208,14 @@ struct MarshalExternalStructsPass
   /// arg type to the box pointee.  The existing
   /// ``allRecursiveInlineFlatMembers`` check guarantees every leaf is
   /// either inline-flat or box-of-scalar-array.
-  static void enumerateLeaves(fir::RecordType rec, mlir::MLIRContext* ctx,
-                              llvm::ArrayRef<mlir::StringAttr> prefix,
+  static void enumerateLeaves(fir::RecordType rec, mlir::MLIRContext* ctx, llvm::ArrayRef<mlir::StringAttr> prefix,
                               llvm::SmallVectorImpl<ExpandedLeaf>& leaves) {
     for (auto& p : rec.getTypeList()) {
       auto name = mlir::StringAttr::get(ctx, p.first);
-      if (mlir::isa<fir::RecordType>(p.second) &&
-          !isBoxOfScalarArray(p.second)) {
-        llvm::SmallVector<mlir::StringAttr, 4> next(prefix.begin(),
-                                                    prefix.end());
+      if (mlir::isa<fir::RecordType>(p.second) && !isBoxOfScalarArray(p.second)) {
+        llvm::SmallVector<mlir::StringAttr, 4> next(prefix.begin(), prefix.end());
         next.push_back(name);
-        enumerateLeaves(mlir::cast<fir::RecordType>(p.second), ctx, next,
-                        leaves);
+        enumerateLeaves(mlir::cast<fir::RecordType>(p.second), ctx, next, leaves);
         continue;
       }
       ExpandedLeaf leaf;
@@ -294,14 +283,12 @@ struct MarshalExternalStructsPass
     if (groups.empty()) return;
 
     fn.setType(mlir::FunctionType::get(ctx, newArgTys, fn.getResultTypes()));
-    fn->setAttr("hlfir.aos_marshal_groups",
-                mlir::DenseI64ArrayAttr::get(ctx, groups));
+    fn->setAttr("hlfir.aos_marshal_groups", mlir::DenseI64ArrayAttr::get(ctx, groups));
 
     llvm::SmallVector<fir::CallOp, 4> calls;
     module.walk([&](fir::CallOp c) {
       if (auto callee = c.getCallee())
-        if (callee->getLeafReference().getValue() == fn.getSymName())
-          calls.push_back(c);
+        if (callee->getLeafReference().getValue() == fn.getSymName()) calls.push_back(c);
     });
     for (auto call : calls) rewriteCall(call, isStruct, members);
   }
@@ -324,8 +311,7 @@ struct MarshalExternalStructsPass
         // intermediate designate -- the path's first element selects a
         // member of *this* record, the next selects from that member's
         // record, and so on.
-        auto baseRec = mlir::cast<fir::RecordType>(
-            mlir::cast<fir::ReferenceType>(base.getType()).getEleTy());
+        auto baseRec = mlir::cast<fir::RecordType>(mlir::cast<fir::ReferenceType>(base.getType()).getEleTy());
         for (auto& leaf : members[i]) {
           mlir::Value cursor = base;
           fir::RecordType cursorRec = baseRec;
@@ -358,19 +344,17 @@ struct MarshalExternalStructsPass
               if (auto seq = mlir::dyn_cast<fir::SequenceType>(nextTy)) {
                 llvm::SmallVector<mlir::Value, 4> dims;
                 for (auto e : seq.getShape())
-                  dims.push_back(b.create<mlir::arith::ConstantOp>(
-                      loc, b.getIndexType(), b.getIndexAttr(e)));
+                  dims.push_back(b.create<mlir::arith::ConstantOp>(loc, b.getIndexType(), b.getIndexAttr(e)));
                 memShape = b.create<fir::ShapeOp>(loc, dims);
               }
             }
-            auto dg = b.create<hlfir::DesignateOp>(
-                loc, refTy, cursor, /*component=*/comp,
-                /*component_shape=*/memShape, /*indices=*/mlir::ValueRange{},
-                /*is_triplet=*/b.getDenseBoolArrayAttr({}),
-                /*substring=*/mlir::ValueRange{},
-                /*complex_part=*/mlir::BoolAttr{}, /*shape=*/memShape,
-                /*typeparams=*/mlir::ValueRange{},
-                /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
+            auto dg = b.create<hlfir::DesignateOp>(loc, refTy, cursor, /*component=*/comp,
+                                                   /*component_shape=*/memShape, /*indices=*/mlir::ValueRange{},
+                                                   /*is_triplet=*/b.getDenseBoolArrayAttr({}),
+                                                   /*substring=*/mlir::ValueRange{},
+                                                   /*complex_part=*/mlir::BoolAttr{}, /*shape=*/memShape,
+                                                   /*typeparams=*/mlir::ValueRange{},
+                                                   /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
             cursor = dg.getResult();
             if (!isLast) cursorRec = mlir::cast<fir::RecordType>(nextTy);
           }
@@ -385,8 +369,7 @@ struct MarshalExternalStructsPass
           if (mlir::isa<fir::BoxType>(leaf.type)) {
             auto box = mlir::cast<fir::BoxType>(leaf.type);
             auto loaded = b.create<fir::LoadOp>(loc, cursor);
-            auto addr = b.create<fir::BoxAddrOp>(loc, box.getEleTy(),
-                                                 loaded.getResult());
+            auto addr = b.create<fir::BoxAddrOp>(loc, box.getEleTy(), loaded.getResult());
             cursor = addr.getResult();
           }
           newOperands.push_back(cursor);

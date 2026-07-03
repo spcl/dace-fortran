@@ -36,11 +36,9 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from .preprocess import merge_used_modules
 
-
 # ---------------------------------------------------------------------------
 # 1. Library stubs.
 # ---------------------------------------------------------------------------
-
 
 # Source for ``MODULE mpi`` that wraps OpenMPI's ``mpif-*.h`` parameter
 # headers.  Skips ``mpif-sizeof.h`` because flang-21 rejects its
@@ -78,7 +76,6 @@ MODULE mpi
 END MODULE mpi
 """
 
-
 # Probe locations for an OpenMPI install on common Linux distros.  The
 # first one whose ``mpif-config.h`` exists wins.  Callers can also pass
 # their own path through :func:`prepare_flang_translation_unit`.
@@ -109,14 +106,11 @@ def mpi_stub_source() -> str:
 # Netcdf-fortran isn't vendored: it's 4 MB and updates yearly, so we
 # fetch the upstream release tarball on first use and cache it.  Same
 # cache layout the bridge's own build uses (``~/.cache/dace-fortran``).
-_NETCDF_FORTRAN_URL = (
-    "https://github.com/Unidata/netcdf-fortran/archive/refs/tags/v{version}.tar.gz"
-)
+_NETCDF_FORTRAN_URL = ("https://github.com/Unidata/netcdf-fortran/archive/refs/tags/v{version}.tar.gz")
 _NETCDF_FORTRAN_DEFAULT_VERSION = "4.6.2"
 
 
-def vendor_netcdf_fortran(cache_dir: Path,
-                          version: str = _NETCDF_FORTRAN_DEFAULT_VERSION) -> Path:
+def vendor_netcdf_fortran(cache_dir: Path, version: str = _NETCDF_FORTRAN_DEFAULT_VERSION) -> Path:
     """Ensure netcdf-fortran source is unpacked under ``cache_dir``.
     Returns the path that should be added to flang's ``-I``.
 
@@ -142,9 +136,8 @@ def vendor_netcdf_fortran(cache_dir: Path,
     with tarfile.open(tarball) as t:
         t.extractall(cache_dir)
     if not fortran_dir.is_dir():
-        raise RuntimeError(
-            f"netcdf-fortran tarball did not extract a fortran/ "
-            f"subdirectory under {target}")
+        raise RuntimeError(f"netcdf-fortran tarball did not extract a fortran/ "
+                           f"subdirectory under {target}")
     return fortran_dir
 
 
@@ -159,9 +152,7 @@ def netcdf_stub_source(fortran_dir: Path) -> str:
         :func:`vendor_netcdf_fortran` (or an equivalent local copy).
     """
     fortran_dir = Path(fortran_dir)
-    return ((fortran_dir / "module_typesizes.F90").read_text()
-            + "\n"
-            + (fortran_dir / "netcdf4.F90").read_text())
+    return ((fortran_dir / "module_typesizes.F90").read_text() + "\n" + (fortran_dir / "netcdf4.F90").read_text())
 
 
 # Registry: name -> (stub source provider, include-path provider).  The
@@ -179,16 +170,14 @@ class LibraryStub:
     flags: Callable[..., List[str]]
 
 
-def _mpi_flags(openmpi_include: Optional[str] = None,
-               **_) -> List[str]:
+def _mpi_flags(openmpi_include: Optional[str] = None, **_) -> List[str]:
     """``-I`` flags for the MPI stub.  Auto-probes a standard OpenMPI
     install when ``openmpi_include`` isn't passed."""
     inc = openmpi_include or find_openmpi_include()
     if inc is None:
-        raise RuntimeError(
-            "MPI stub needs OpenMPI's include directory (with "
-            "mpif-config.h).  Pass openmpi_include=... or install "
-            "libopenmpi-dev.")
+        raise RuntimeError("MPI stub needs OpenMPI's include directory (with "
+                           "mpif-config.h).  Pass openmpi_include=... or install "
+                           "libopenmpi-dev.")
     return [f"-I{inc}"]
 
 
@@ -210,21 +199,13 @@ def _netcdf_flags(cache_dir: Optional[Path] = None, **_) -> List[str]:
 
 
 LIBRARY_STUBS: Dict[str, LibraryStub] = {
-    "mpi": LibraryStub(
-        name="mpi",
-        source=lambda **_: mpi_stub_source(),
-        flags=_mpi_flags),
-    "netcdf": LibraryStub(
-        name="netcdf",
-        source=_netcdf_source,
-        flags=_netcdf_flags),
+    "mpi": LibraryStub(name="mpi", source=lambda **_: mpi_stub_source(), flags=_mpi_flags),
+    "netcdf": LibraryStub(name="netcdf", source=_netcdf_source, flags=_netcdf_flags),
 }
-
 
 # ---------------------------------------------------------------------------
 # 2. Flang-21 bug patches (Fortran-text rewrites).
 # ---------------------------------------------------------------------------
-
 
 # ``CALL MPI_SIZEOF(arg, sz, err)`` -- flang-21's generic resolution
 # can't disambiguate the overload set in OpenMPI's ``mpif-sizeof.h``.
@@ -232,8 +213,7 @@ LIBRARY_STUBS: Dict[str, LibraryStub] = {
 # type, which is statically known, so we substitute the constant.
 _MPI_SIZEOF_RE = re.compile(
     r"(\s*)CALL\s+MPI_SIZEOF\s*\(\s*([A-Za-z_]\w*)\s*,\s*"
-    r"([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)",
-    re.IGNORECASE)
+    r"([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)", re.IGNORECASE)
 
 
 def patch_mpi_sizeof(source: str) -> str:
@@ -243,12 +223,14 @@ def patch_mpi_sizeof(source: str) -> str:
     -> 8 since ICON / IFS / ECRAD use double precision everywhere).
     Project-independent: any code using OpenMPI's ``MPI_SIZEOF`` hits
     the same flang false positive."""
+
     def _replace(m: re.Match) -> str:
         indent, arg, sz, err = m.group(1), m.group(2), m.group(3), m.group(4)
         small = any(k in arg.lower() for k in ("i4", "sp"))
         sz_val = 4 if small else 8
         return (f"{indent}{sz} = {sz_val}; {err} = 0  "
                 f"! flang-21 stub for MPI_SIZEOF({arg})")
+
     return _MPI_SIZEOF_RE.sub(_replace, source)
 
 
@@ -257,11 +239,9 @@ FLANG_BUG_PATCHES: Dict[str, Callable[[str], str]] = {
     "mpi_sizeof": patch_mpi_sizeof,
 }
 
-
 # ---------------------------------------------------------------------------
 # 3. Compile-arg extraction from a make / cmake build.
 # ---------------------------------------------------------------------------
-
 
 # A ``-Dfoo`` or ``-Dfoo=bar`` argument inside a compile line.
 _DEFINE_RE = re.compile(r"(?<!\S)-D([A-Za-z_][\w]*(?:=\S+)?)")
@@ -271,8 +251,7 @@ _INCLUDE_RE = re.compile(r"(?<!\S)-I(?:\s+|=?)(\S+)")
 _FORTRAN_SOURCE_RE = re.compile(r"(\S+\.[fF]9?0)(?:\s|$)")
 
 
-def extract_make_compile_args(makefile_dir: Path, target: str,
-                              make_program: str = "make") -> dict:
+def extract_make_compile_args(makefile_dir: Path, target: str, make_program: str = "make") -> dict:
     """Run ``make -n -B <target>`` in ``makefile_dir`` and parse the
     compile command for the source's ``-D`` defines, ``-I`` include
     dirs, and source path.
@@ -299,17 +278,15 @@ def extract_make_compile_args(makefile_dir: Path, target: str,
     artefact = makefile_dir / target
     if artefact.is_file():
         artefact.unlink()
-    out = subprocess.check_output(
-        [make_program, "-n", target],
-        cwd=str(makefile_dir),
-        stderr=subprocess.STDOUT,
-        text=True)
+    out = subprocess.check_output([make_program, "-n", target],
+                                  cwd=str(makefile_dir),
+                                  stderr=subprocess.STDOUT,
+                                  text=True)
     # Pick the first line that mentions a Fortran source -- ICON's
     # ``mpifort -c ... mo_velocity_advection.f90`` style.
     compile_line = None
     for ln in out.splitlines():
-        if _FORTRAN_SOURCE_RE.search(ln) and (" -c " in ln
-                                              or "-c " in ln.split()[0:]):
+        if _FORTRAN_SOURCE_RE.search(ln) and (" -c " in ln or "-c " in ln.split()[0:]):
             compile_line = ln
             break
     if compile_line is None:
@@ -319,9 +296,8 @@ def extract_make_compile_args(makefile_dir: Path, target: str,
                 compile_line = ln
                 break
     if compile_line is None:
-        raise RuntimeError(
-            f"could not find a Fortran compile line for {target!r} in the "
-            f"output of `{make_program} -n -B`")
+        raise RuntimeError(f"could not find a Fortran compile line for {target!r} in the "
+                           f"output of `{make_program} -n -B`")
     defines = sorted(set(_DEFINE_RE.findall(compile_line)))
     include_dirs = [Path(p) for p in _INCLUDE_RE.findall(compile_line)]
     src_match = _FORTRAN_SOURCE_RE.search(compile_line)
@@ -343,7 +319,7 @@ def prepare_flang_translation_unit(
     *,
     search_dirs: Sequence[Path] = (),
     library_stubs: Sequence[str] = (),
-    patches: Sequence[str] = ("mpi_sizeof",),
+    patches: Sequence[str] = ("mpi_sizeof", ),
     defines: Sequence[str] = (),
     include_dirs: Sequence[Path] = (),
     cache_dir: Optional[Path] = None,
@@ -395,13 +371,10 @@ def prepare_flang_translation_unit(
         try:
             stub = LIBRARY_STUBS[name]
         except KeyError as e:
-            raise KeyError(
-                f"unknown library stub {name!r}; available: "
-                f"{sorted(LIBRARY_STUBS)}") from e
-        pieces.append(stub.source(cache_dir=cache_dir,
-                                  openmpi_include=openmpi_include))
-        flags.extend(stub.flags(cache_dir=cache_dir,
-                                openmpi_include=openmpi_include))
+            raise KeyError(f"unknown library stub {name!r}; available: "
+                           f"{sorted(LIBRARY_STUBS)}") from e
+        pieces.append(stub.source(cache_dir=cache_dir, openmpi_include=openmpi_include))
+        flags.extend(stub.flags(cache_dir=cache_dir, openmpi_include=openmpi_include))
 
     pieces.append(merge_used_modules(entry_source, search_dirs=search_dirs))
     source = "\n".join(pieces)
@@ -410,9 +383,8 @@ def prepare_flang_translation_unit(
         try:
             source = FLANG_BUG_PATCHES[name](source)
         except KeyError as e:
-            raise KeyError(
-                f"unknown flang patch {name!r}; available: "
-                f"{sorted(FLANG_BUG_PATCHES)}") from e
+            raise KeyError(f"unknown flang patch {name!r}; available: "
+                           f"{sorted(FLANG_BUG_PATCHES)}") from e
 
     return source, flags
 
@@ -423,18 +395,18 @@ def prepare_flang_translation_unit(
 
 
 def emit_hlfir_from_codebase(
-    entry_source: str,
-    out_path: Path,
-    *,
-    search_dirs: Sequence[Path] = (),
-    library_stubs: Sequence[str] = (),
-    patches: Sequence[str] = ("mpi_sizeof",),
-    defines: Sequence[str] = (),
-    include_dirs: Sequence[Path] = (),
-    cache_dir: Optional[Path] = None,
-    openmpi_include: Optional[str] = None,
-    flang_program: str = "flang-new-21",
-    extra_flang_flags: Sequence[str] = (),
+        entry_source: str,
+        out_path: Path,
+        *,
+        search_dirs: Sequence[Path] = (),
+        library_stubs: Sequence[str] = (),
+        patches: Sequence[str] = ("mpi_sizeof", ),
+        defines: Sequence[str] = (),
+        include_dirs: Sequence[Path] = (),
+        cache_dir: Optional[Path] = None,
+        openmpi_include: Optional[str] = None,
+        flang_program: str = "flang-new-21",
+        extra_flang_flags: Sequence[str] = (),
 ) -> Path:
     """Compose a translation unit for ``entry_source`` via
     :func:`prepare_flang_translation_unit`, write it next to
@@ -472,8 +444,17 @@ def emit_hlfir_from_codebase(
     # gfortran's; a chance collision surfaces as ``Cannot use module
     # file for module X``.
     subprocess.check_call([
-        flang_program, "-fc1", "-cpp", "-U_OPENMP", "-U_OPENACC",
-        *flang_flags, *extra_flang_flags,
-        "-emit-hlfir", str(tu_path), "-o", str(out_path),
-    ], cwd=str(out_path.parent))
+        flang_program,
+        "-fc1",
+        "-cpp",
+        "-U_OPENMP",
+        "-U_OPENACC",
+        *flang_flags,
+        *extra_flang_flags,
+        "-emit-hlfir",
+        str(tu_path),
+        "-o",
+        str(out_path),
+    ],
+                          cwd=str(out_path.parent))
     return out_path

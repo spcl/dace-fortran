@@ -45,14 +45,10 @@ namespace hlfir_bridge {
 
 namespace {
 
-struct RejectPolymorphismPass
-    : public mlir::PassWrapper<RejectPolymorphismPass,
-                               mlir::OperationPass<mlir::ModuleOp>> {
+struct RejectPolymorphismPass : public mlir::PassWrapper<RejectPolymorphismPass, mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(RejectPolymorphismPass)
 
-  llvm::StringRef getArgument() const final {
-    return "hlfir-reject-polymorphism";
-  }
+  llvm::StringRef getArgument() const final { return "hlfir-reject-polymorphism"; }
   llvm::StringRef getDescription() const final {
     return "Refuse programs that contain ``fir.dispatch`` or "
            "``fir.select_type`` (runtime polymorphism).  The HLFIR "
@@ -112,8 +108,6 @@ struct RejectPolymorphismPass
 
 }  // namespace
 
-std::unique_ptr<mlir::Pass> createRejectPolymorphismPass() {
-  return std::make_unique<RejectPolymorphismPass>();
-}
+std::unique_ptr<mlir::Pass> createRejectPolymorphismPass() { return std::make_unique<RejectPolymorphismPass>(); }
 
 }  // namespace hlfir_bridge

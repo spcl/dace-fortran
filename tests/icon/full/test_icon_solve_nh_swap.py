@@ -52,11 +52,9 @@ from icon.full._icon_solve_nh_patch import (
 # defensive assertion.
 GFORTRAN_COMPILERS = [p for p in FORTRAN_COMPILERS if "gfortran" in (p.id or "")]
 
-
 _HERE = Path(__file__).resolve().parent
 _ICON_SRC = Path(os.environ.get("ICON_SRC", str(_HERE / "icon-model")))
-_ICON_BUILD = Path(os.environ.get(
-    "ICON_BUILD", str(_ICON_SRC / "build" / "stock_cpu")))
+_ICON_BUILD = Path(os.environ.get("ICON_BUILD", str(_ICON_SRC / "build" / "stock_cpu")))
 
 _PRISTINE = _ICON_SRC / "src" / "atm_dyn_iconam" / "mo_solve_nonhydro.f90"
 _PRISTINE_BAK = _PRISTINE.with_suffix(".f90.bak")
@@ -69,13 +67,11 @@ def _real_source() -> Path:
 _HAVE_ICON = _real_source().is_file()
 _HAVE_ICON_MODS = (_ICON_BUILD / "mod").is_dir()
 
-
 # Every test here reads ICON's real ``mo_solve_nonhydro`` source through the
 # icon-model submodule (the patch-side tests via ``_real_source()``, the
 # compile tests additionally via the ``icon_build`` fixture), which only the
 # heavy CI lane checks out -> ``long``.
 pytestmark = pytest.mark.long
-
 
 # ---------------------------------------------------------------------------
 # Patch-side tests (no ICON build required).
@@ -98,8 +94,7 @@ def test_patch_preserves_signature():
         are internal and intentionally excluded -- the patch adds one
         for ``iso_c_binding`` that doesn't affect external callers."""
         lines = src.splitlines()
-        start = next(i for i, ln in enumerate(lines)
-                     if "SUBROUTINE solve_nh " in ln and "(" in ln)
+        start = next(i for i, ln in enumerate(lines) if "SUBROUTINE solve_nh " in ln and "(" in ln)
         end = start
         while lines[end].rstrip().endswith("&"):
             end += 1
@@ -122,11 +117,10 @@ def test_patch_preserves_signature():
 
     pristine_sig = "\n".join(_signature_surface(pristine))
     patched_sig = "\n".join(_signature_surface(patched))
-    assert pristine_sig == patched_sig, (
-        "patched signature drifted from pristine -- ICON callers "
-        "would see a different surface.\nFirst differing chars:\n"
-        f"  pristine: {pristine_sig[:200]!r}\n"
-        f"  patched:  {patched_sig[:200]!r}")
+    assert pristine_sig == patched_sig, ("patched signature drifted from pristine -- ICON callers "
+                                         "would see a different surface.\nFirst differing chars:\n"
+                                         f"  pristine: {pristine_sig[:200]!r}\n"
+                                         f"  patched:  {patched_sig[:200]!r}")
 
 
 @pytest.mark.skipif(not _HAVE_ICON, reason="icon-model submodule not checked out")
@@ -138,10 +132,8 @@ def test_patched_body_calls_wrapper():
     # Forward EVERY one of solve_nh's 14 dummy args.  A regression
     # that drops one would silently leave it default-initialised on
     # the wrapper side.
-    for arg in ("p_nh", "p_patch", "p_int", "prep_adv",
-                "nnow", "nnew", "l_init", "l_recompute",
-                "lsave_mflx", "lprep_adv", "lclean_mflx",
-                "idyn_timestep", "jstep", "dtime", "lacc"):
+    for arg in ("p_nh", "p_patch", "p_int", "prep_adv", "nnow", "nnew", "l_init", "l_recompute", "lsave_mflx",
+                "lprep_adv", "lclean_mflx", "idyn_timestep", "jstep", "dtime", "lacc"):
         # ``arg`` appears multiple times (dummy decl + CALL site);
         # the forwarding CALL is what we check.  Trivial substring
         # match -- the order in the CALL is pinned by the template.
@@ -177,8 +169,7 @@ def test_write_patched_solve_nh(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _HAVE_ICON,
-                    reason="icon-model submodule not checked out")
+@pytest.mark.skipif(not _HAVE_ICON, reason="icon-model submodule not checked out")
 @pytest.mark.parametrize("fc", GFORTRAN_COMPILERS)
 def test_patched_source_parses_through_fortran_compiler(fc, tmp_path: Path, icon_build):
     """The Fortran compiler accepts the patched file (syntax-only)
@@ -230,17 +221,25 @@ def test_patched_source_parses_through_fortran_compiler(fc, tmp_path: Path, icon
     # Same -D set ICON's own configure uses; pulled into a list so we
     # can compose with the wrapper-INTERFACE-block requirements.
     defines = [
-        "-DHAVE_CDI_GRIB2", "-DHAVE_FC_ATTRIBUTE_CONTIGUOUS",
-        "-DICON_MPI_SUBVERSION=1", "-DICON_MPI_VERSION=3",
-        "-D__HAVE_QUAD_PRECISION", "-D__ICON__", "-D__LOOP_EXCHANGE",
-        "-D__NO_ICON_COMIN__", "-D__NO_ICON_OCEAN__",
-        "-D__NO_ICON_TESTBED__", "-D__NO_ICON_WAVES__",
-        "-D__NO_JSBACH_HD__", "-D__NO_JSBACH__", "-D__NO_QUINCY__",
+        "-DHAVE_CDI_GRIB2",
+        "-DHAVE_FC_ATTRIBUTE_CONTIGUOUS",
+        "-DICON_MPI_SUBVERSION=1",
+        "-DICON_MPI_VERSION=3",
+        "-D__HAVE_QUAD_PRECISION",
+        "-D__ICON__",
+        "-D__LOOP_EXCHANGE",
+        "-D__NO_ICON_COMIN__",
+        "-D__NO_ICON_OCEAN__",
+        "-D__NO_ICON_TESTBED__",
+        "-D__NO_ICON_WAVES__",
+        "-D__NO_JSBACH_HD__",
+        "-D__NO_JSBACH__",
+        "-D__NO_QUINCY__",
         "-D__NO_RAGNAROK__",
     ]
-    subprocess.check_call(
-        [fc_path, *syntax_check_argv(fc_name, tmp_path), cpp_flag(fc_name),
-         *fortran_compiler_flags(fc_name),
-         *include_flags, *defines,
-         str(out)],
-        cwd=str(tmp_path))
+    subprocess.check_call([
+        fc_path, *syntax_check_argv(fc_name, tmp_path),
+        cpp_flag(fc_name), *fortran_compiler_flags(fc_name), *include_flags, *defines,
+        str(out)
+    ],
+                          cwd=str(tmp_path))

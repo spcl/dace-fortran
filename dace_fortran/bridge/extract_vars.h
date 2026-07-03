@@ -180,8 +180,7 @@ struct VarInfo {
 ///     pair when ``sym`` is not a ``_QM..E..`` module global
 ///     (function-scope ``_QF..``, program ``_QP..``, the
 ///     ``_QQro`` constant pool, or any non-conforming name).
-std::pair<std::string, std::string> decodeModuleGlobalSymbol(
-    const std::string& sym);
+std::pair<std::string, std::string> decodeModuleGlobalSymbol(const std::string& sym);
 
 /// An array *element value* used where the SDFG needs a symbol -- a
 /// data-access dimension or bound, e.g. ICON's ``z_raylfac(nrdmax(jg))`` whose
@@ -205,9 +204,8 @@ struct ValueSymbol {
 /// ``set_entry_symbol``, e.g. ``_QMmodPkernel``); its F-scope anchors
 /// the on-demand scope qualification in ``extractName``.  Empty
 /// disables qualification (legacy / standalone callers).
-std::vector<VarInfo> extractVariables(
-    mlir::ModuleOp module, std::vector<ValueSymbol>* value_symbols = nullptr,
-    const std::string& entry_symbol = "");
+std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSymbol>* value_symbols = nullptr,
+                                      const std::string& entry_symbol = "");
 
 /// Prepare per-thread extraction state shared by ``extractVariables``
 /// and ``extractAST``: clears mangling overrides, installs entry F-scope,
@@ -226,8 +224,7 @@ std::vector<VarInfo> extractVariables(
 /// ``emit_tasklet`` and the symbolic walker cannot disambiguate, so we
 /// fail fast with an explicit diagnostic instead of producing wrong
 /// numerics.
-void prepareExtractionState(mlir::ModuleOp module,
-                            const std::string& entry_symbol);
+void prepareExtractionState(mlir::ModuleOp module, const std::string& entry_symbol);
 
 /// One entry-subroutine dummy argument, in the caller's pre-flatten view.
 /// Produced by ``extractFortranInterface`` so the binding emitter can
@@ -247,7 +244,7 @@ struct FortranArgInfo {
   std::vector<std::string> shape_symbols;  // per-dim extent symbol / literal
   bool is_struct = false;                  // derived-type dummy
   std::string struct_name;                 // ``point`` when ``is_struct``
-  std::string struct_module;  // defining module (``mo_pt``) or ``""``
+  std::string struct_module;               // defining module (``mo_pt``) or ``""``
 };
 
 /// One field of a Fortran derived type used as an entry dummy.  Populated
@@ -262,14 +259,14 @@ struct FortranMemberInfo {
                       // struct, complex, character)
   int rank = 0;
   std::vector<std::string> shape_symbols;  // static-shape literal ints / "?"
-  std::string struct_name;    // for a nested-derived-type member: the
-                              // member type's name (``t_grid_cells``).  Lets
-                              // the Python side look the layout up in
-                              // ``OriginalInterface.struct_types``;
-                              // populated only when the member is itself a
-                              // ``fir.RecordType``.  Empty otherwise.
-  std::string struct_module;  // defining module of the nested type
-                              // (``mo_model_domain``), or ``""``.
+  std::string struct_name;                 // for a nested-derived-type member: the
+                                           // member type's name (``t_grid_cells``).  Lets
+                                           // the Python side look the layout up in
+                                           // ``OriginalInterface.struct_types``;
+                                           // populated only when the member is itself a
+                                           // ``fir.RecordType``.  Empty otherwise.
+  std::string struct_module;               // defining module of the nested type
+                                           // (``mo_model_domain``), or ``""``.
 };
 
 /// One derived-type layout the entry's dummies reference.
@@ -297,8 +294,7 @@ struct FortranInterfaceInfo {
 /// as the caller sees it (pre-flatten).  ``entry`` is the mangled symbol
 /// (``_QPkernel``); empty selects the single public function.  Returns an
 /// empty ``args`` vector if the entry has no resolvable declares.
-FortranInterfaceInfo extractFortranInterface(mlir::ModuleOp module,
-                                             const std::string& entry);
+FortranInterfaceInfo extractFortranInterface(mlir::ModuleOp module, const std::string& entry);
 
 /// Index of every ``fir.allocmem`` keyed by its ``uniq_name``, built once with
 /// a single module walk.  Passing it to the helpers below replaces their
@@ -333,9 +329,8 @@ std::string allocAliasName(const std::string& fortran, unsigned site);
 /// Every ``fir.allocmem`` whose ``uniq_name`` is ``<declName>.alloc`` (the
 /// ALLOCATE sites of one allocatable), in IR walk order.  When ``idx`` is
 /// given the result comes from that prebuilt index instead of a module walk.
-std::vector<fir::AllocMemOp> collectAllocSites(
-    const std::string& declName, mlir::ModuleOp module,
-    const AllocSitesIndex* idx = nullptr);
+std::vector<fir::AllocMemOp> collectAllocSites(const std::string& declName, mlir::ModuleOp module,
+                                               const AllocSitesIndex* idx = nullptr);
 
 /// True iff the ALLOCATE sites are mutually exclusive  --  each in a
 /// different branch of one common ``scf.if`` / ``fir.if`` (a conditional
@@ -352,8 +347,7 @@ bool allocSitesInExclusiveBranches(const std::vector<fir::AllocMemOp>& sites);
 /// classes.  A class with >1 site is conditional (use a branch-dependent
 /// extent symbol); a singleton class uses the site's concrete shape.  See
 /// ALLOC_BUFFER_SSA_DESIGN.md.
-std::vector<std::vector<fir::AllocMemOp>> groupAllocSites(
-    const std::string& declName, mlir::ModuleOp module,
-    const AllocSitesIndex* idx = nullptr);
+std::vector<std::vector<fir::AllocMemOp>> groupAllocSites(const std::string& declName, mlir::ModuleOp module,
+                                                          const AllocSitesIndex* idx = nullptr);
 
 }  // namespace hlfir_bridge

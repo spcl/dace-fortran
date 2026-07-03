@@ -100,6 +100,7 @@ def main(argv):
                                  do_not_emit=cfg["do_not_emit"],
                                  make_return_false=cfg["make_return_false"],
                                  rename_specifics=cfg["rename_specifics"],
+                                 specialize_at_source=cfg["specialize_at_source"],
                                  checkpoint_dir=(os.environ.get("ATMO_CHECKPOINT_DIR") or None),
                                  tolerate_external_uses=True)
         n = len(Path(tu).read_text().splitlines())

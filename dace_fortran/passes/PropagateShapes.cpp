@@ -59,16 +59,13 @@ static hlfir::DeclareOp findEntryDeclare(mlir::Value formal) {
 
 /// True if a declare already has a local shape operand resolved to Fortran
 /// names  --  no need to propagate, we already know the shape.
-static bool hasLocalShape(hlfir::DeclareOp decl) {
-  return static_cast<bool>(decl.getShape());
-}
+static bool hasLocalShape(hlfir::DeclareOp decl) { return static_cast<bool>(decl.getShape()); }
 
 /// Walk backward from an actual argument through fir.rebox / fir.embox /
 /// fir.convert to find the shape that described the array at the call
 /// site.  Returns the extent SSA values, or empty if the chain breaks
 /// without finding a shape.
-static llvm::SmallVector<mlir::Value, 4> traceShapeAtCallSite(
-    mlir::Value actual) {
+static llvm::SmallVector<mlir::Value, 4> traceShapeAtCallSite(mlir::Value actual) {
   mlir::Value v = actual;
   for (int i = 0; i < limits::kShapeWalkDepth && v; ++i) {
     auto* def = v.getDefiningOp();
@@ -107,16 +104,13 @@ static llvm::SmallVector<mlir::Value, 4> traceShapeAtCallSite(
 ///   existing empty or absent -> take new
 ///   existing == new          -> keep
 ///   existing != new          -> ""  (disagreement, fall back to synthetic)
-static mlir::ArrayAttr mergeHint(mlir::MLIRContext* ctx,
-                                 mlir::ArrayAttr existing,
-                                 llvm::ArrayRef<std::string> fresh) {
+static mlir::ArrayAttr mergeHint(mlir::MLIRContext* ctx, mlir::ArrayAttr existing, llvm::ArrayRef<std::string> fresh) {
   llvm::SmallVector<mlir::Attribute, 4> out;
   out.reserve(fresh.size());
 
   for (size_t i = 0; i < fresh.size(); ++i) {
     llvm::StringRef old;
-    if (existing && i < existing.size())
-      old = mlir::cast<mlir::StringAttr>(existing[i]).getValue();
+    if (existing && i < existing.size()) old = mlir::cast<mlir::StringAttr>(existing[i]).getValue();
 
     llvm::StringRef neu(fresh[i]);
     llvm::StringRef chosen;
@@ -138,9 +132,7 @@ static mlir::ArrayAttr mergeHint(mlir::MLIRContext* ctx,
 // The pass
 // ---------------------------------------------------------------------------
 
-struct PropagateShapesPass
-    : public mlir::PassWrapper<PropagateShapesPass,
-                               mlir::OperationPass<mlir::ModuleOp>> {
+struct PropagateShapesPass : public mlir::PassWrapper<PropagateShapesPass, mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(PropagateShapesPass)
 
   llvm::StringRef getArgument() const final { return "hlfir-propagate-shapes"; }
@@ -213,8 +205,6 @@ struct PropagateShapesPass
 
 }  // anonymous namespace
 
-std::unique_ptr<mlir::Pass> createPropagateShapesPass() {
-  return std::make_unique<PropagateShapesPass>();
-}
+std::unique_ptr<mlir::Pass> createPropagateShapesPass() { return std::make_unique<PropagateShapesPass>(); }
 
 }  // namespace hlfir_bridge

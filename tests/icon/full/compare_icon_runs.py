@@ -116,27 +116,22 @@ def compare_files(stock_nc: Path, dace_nc: Path, rtol: float):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("stock_dir", type=Path,
-                    help="Experiment dir for the stock-Fortran ICON run.")
-    ap.add_argument("dace_dir", type=Path,
-                    help="Experiment dir for the DaCe-patched ICON run.")
-    ap.add_argument("--rtol", type=float, default=1e-12,
-                    help="Relative-difference threshold (default 1e-12).")
+    ap.add_argument("stock_dir", type=Path, help="Experiment dir for the stock-Fortran ICON run.")
+    ap.add_argument("dace_dir", type=Path, help="Experiment dir for the DaCe-patched ICON run.")
+    ap.add_argument("--rtol", type=float, default=1e-12, help="Relative-difference threshold (default 1e-12).")
     args = ap.parse_args()
 
     stock_files = {p.name: p for p in _list_outputs(args.stock_dir)}
     dace_files = {p.name: p for p in _list_outputs(args.dace_dir)}
     common = sorted(set(stock_files) & set(dace_files))
     if not common:
-        print("ERROR: no overlapping *.nc files between the two run dirs",
-              file=sys.stderr)
+        print("ERROR: no overlapping *.nc files between the two run dirs", file=sys.stderr)
         return 2
 
     print(f"Comparing {len(common)} file(s) at rtol={args.rtol:.0e}:")
     all_issues = []
     for name in common:
-        all_issues.extend(compare_files(stock_files[name], dace_files[name],
-                                        args.rtol))
+        all_issues.extend(compare_files(stock_files[name], dace_files[name], args.rtol))
 
     print()
     only_stock = sorted(set(stock_files) - set(dace_files))

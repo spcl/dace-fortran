@@ -87,8 +87,7 @@ def test_cloudsc_top_half_zsolqa_zsolqb(tmp_path, _f2py_top_half, _strict_fp_cpu
     # The on-disk file stays free-subroutine for the f2py reference
     # (``_f2py_top_half.cloudscouter`` resolves top-level).
     build_src = _module_wrap_drivers(src)
-    sdfg = build_sdfg(build_src, sdfg_dir, name="cloudsc_top_half",
-                      entry="cloudsc_top_half_mod::cloudscouter").build()
+    sdfg = build_sdfg(build_src, sdfg_dir, name="cloudsc_top_half", entry="cloudsc_top_half_mod::cloudscouter").build()
 
     rng = np.random.default_rng(42)
     inputs = get_inputs_physical(rng)

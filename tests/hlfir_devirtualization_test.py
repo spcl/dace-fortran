@@ -40,7 +40,6 @@ from _util import _FLANG, have_flang
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
-
 # A minimal abstract base + one concrete override.  The two *polymorphic* call
 # shapes that matter for the ocean solver are kept in their own TU so that the
 # only way a direct ``fir.call`` to the override could appear is genuine
@@ -145,9 +144,8 @@ def test_polymorphic_dispatch_lowers_to_fir_dispatch(tmp_path: Path):
     fir = _emit_fir(tmp_path, _POLY_SOURCE, "poly", optimize=False)
     # one fir.dispatch per polymorphic call site, none devirtualised.
     assert fir.count("fir.dispatch") == 2, "expected both polymorphic calls to lower to fir.dispatch"
-    assert _DIRECT_CALL not in fir, (
-        "a polymorphic call was devirtualised to a direct override call -- flang "
-        "behaviour changed; revisit the ocean solver externalisation policy")
+    assert _DIRECT_CALL not in fir, ("a polymorphic call was devirtualised to a direct override call -- flang "
+                                     "behaviour changed; revisit the ocean solver externalisation policy")
 
 
 def test_concrete_type_call_is_a_direct_bind(tmp_path: Path):
@@ -165,9 +163,8 @@ def test_optimised_pipeline_keeps_dispatch(tmp_path: Path):
     and inlining) does not turn either polymorphic shape into a direct call to
     the override -- the dispatch survives as a runtime vtable indirect."""
     fir = _emit_fir(tmp_path, _POLY_SOURCE, "poly", optimize=True)
-    assert _DIRECT_CALL not in fir, (
-        "an -O2 pass devirtualised the polymorphic call -- flang behaviour "
-        "changed; revisit the ocean solver externalisation policy")
+    assert _DIRECT_CALL not in fir, ("an -O2 pass devirtualised the polymorphic call -- flang behaviour "
+                                     "changed; revisit the ocean solver externalisation policy")
 
 
 def test_fir_polymorphic_op_lowers_dispatch_without_devirtualising(tmp_path: Path):
@@ -182,11 +179,9 @@ def test_fir_polymorphic_op_lowers_dispatch_without_devirtualising(tmp_path: Pat
     raw = tmp_path / "poly.fir"
     raw.write_text(_emit_fir(tmp_path, _POLY_SOURCE, "poly", optimize=False))
     lowered = subprocess.check_output(
-        [fir_opt, "--inline-all", "--fir-polymorphic-op", str(raw)],
-        cwd=str(tmp_path)).decode()
+        [fir_opt, "--inline-all", "--fir-polymorphic-op", str(raw)], cwd=str(tmp_path)).decode()
     # The high-level dispatch op is gone ...
     assert "fir.dispatch" not in lowered
     # ... but it was replaced by a runtime vtable indirect, NOT a direct call.
-    assert _DIRECT_CALL not in lowered, (
-        "--fir-polymorphic-op produced a direct call -- it now devirtualises; "
-        "revisit the ocean solver externalisation policy")
+    assert _DIRECT_CALL not in lowered, ("--fir-polymorphic-op produced a direct call -- it now devirtualises; "
+                                         "revisit the ocean solver externalisation policy")

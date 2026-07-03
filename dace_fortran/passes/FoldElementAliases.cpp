@@ -51,14 +51,10 @@ namespace hlfir_bridge {
 
 namespace {
 
-struct FoldElementAliasesPass
-    : public mlir::PassWrapper<FoldElementAliasesPass,
-                               mlir::OperationPass<mlir::ModuleOp>> {
+struct FoldElementAliasesPass : public mlir::PassWrapper<FoldElementAliasesPass, mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(FoldElementAliasesPass)
 
-  llvm::StringRef getArgument() const final {
-    return "hlfir-fold-element-aliases";
-  }
+  llvm::StringRef getArgument() const final { return "hlfir-fold-element-aliases"; }
   llvm::StringRef getDescription() const final {
     return "Erase hlfir.declare ops whose memref is an hlfir.designate of "
            "another declare (element-scoped aliases left behind by "
@@ -139,8 +135,6 @@ struct FoldElementAliasesPass
 
 }  // namespace
 
-std::unique_ptr<mlir::Pass> createFoldElementAliasesPass() {
-  return std::make_unique<FoldElementAliasesPass>();
-}
+std::unique_ptr<mlir::Pass> createFoldElementAliasesPass() { return std::make_unique<FoldElementAliasesPass>(); }
 
 }  // namespace hlfir_bridge

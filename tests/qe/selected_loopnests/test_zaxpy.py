@@ -34,21 +34,20 @@ from _util import build_sdfg, have_flang
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
-
 # (kind, indirection) -> Fortran kernel.  ``n`` = iteration count;
 # ``ymap`` / ``xmap`` are 1-based index maps; AoS uses complex(8),
 # SoA uses paired real(8) re/im arrays.
 _AOS = {
-    "direct":  "y(i) = y(i) + x(i)",
-    "gather":  "y(i) = y(i) + x(xmap(i))",
+    "direct": "y(i) = y(i) + x(i)",
+    "gather": "y(i) = y(i) + x(xmap(i))",
     "scatter": "y(ymap(i)) = y(ymap(i)) + x(i)",
-    "double":  "y(ymap(i)) = y(ymap(i)) + x(xmap(i))",
+    "double": "y(ymap(i)) = y(ymap(i)) + x(xmap(i))",
 }
 _SOA = {
-    "direct":  "yr(i) = yr(i) + xr(i)\n    yi(i) = yi(i) + xi(i)",
-    "gather":  "yr(i) = yr(i) + xr(xmap(i))\n    yi(i) = yi(i) + xi(xmap(i))",
+    "direct": "yr(i) = yr(i) + xr(i)\n    yi(i) = yi(i) + xi(i)",
+    "gather": "yr(i) = yr(i) + xr(xmap(i))\n    yi(i) = yi(i) + xi(xmap(i))",
     "scatter": "yr(ymap(i)) = yr(ymap(i)) + xr(i)\n    yi(ymap(i)) = yi(ymap(i)) + xi(i)",
-    "double":  "yr(ymap(i)) = yr(ymap(i)) + xr(xmap(i))\n    yi(ymap(i)) = yi(ymap(i)) + xi(xmap(i))",
+    "double": "yr(ymap(i)) = yr(ymap(i)) + xr(xmap(i))\n    yi(ymap(i)) = yi(ymap(i)) + xi(xmap(i))",
 }
 
 
@@ -125,8 +124,7 @@ def test_zaxpy_aos(tmp_path, indir):
     y = np.asfortranarray(complex_stream(_NY, seed=2))
     ref = _ref(indir, ymap, xmap, x, y)
 
-    sdfg = build_sdfg(_aos_src(_AOS[indir]), tmp_path, name="zaxpy_aos",
-                      entry="zaxpy_aos_mod::zaxpy_aos").build()
+    sdfg = build_sdfg(_aos_src(_AOS[indir]), tmp_path, name="zaxpy_aos", entry="zaxpy_aos_mod::zaxpy_aos").build()
     sdfg(n=np.int32(_N), ymap=ymap, xmap=xmap, x=x, y=y)
     np.testing.assert_allclose(y, ref, rtol=1e-12, atol=1e-12)
 
@@ -139,11 +137,12 @@ def test_zaxpy_soa(tmp_path, indir):
     x = complex_stream(_NX, seed=1)
     y = complex_stream(_NY, seed=2)
     ref = _ref(indir, ymap, xmap, x, y)
-    xr = np.asfortranarray(x.real.copy()); xi = np.asfortranarray(x.imag.copy())
-    yr = np.asfortranarray(y.real.copy()); yi = np.asfortranarray(y.imag.copy())
+    xr = np.asfortranarray(x.real.copy())
+    xi = np.asfortranarray(x.imag.copy())
+    yr = np.asfortranarray(y.real.copy())
+    yi = np.asfortranarray(y.imag.copy())
 
-    sdfg = build_sdfg(_soa_src(_SOA[indir]), tmp_path, name="zaxpy_soa",
-                      entry="zaxpy_soa_mod::zaxpy_soa").build()
+    sdfg = build_sdfg(_soa_src(_SOA[indir]), tmp_path, name="zaxpy_soa", entry="zaxpy_soa_mod::zaxpy_soa").build()
     sdfg(n=np.int32(_N), ymap=ymap, xmap=xmap, xr=xr, xi=xi, yr=yr, yi=yi)
     np.testing.assert_allclose(yr, ref.real, rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(yi, ref.imag, rtol=1e-12, atol=1e-12)

@@ -20,7 +20,6 @@ from typing import List, Optional
 
 import pytest
 
-
 # Standard prefixes the NVIDIA HPC SDK installs into.  ``nvhpc-25-7``
 # on Ubuntu lands under ``/opt/nvidia/hpc_sdk/Linux_x86_64/25.7/...``;
 # the version segment varies by release.
@@ -41,9 +40,7 @@ def _find_nvfortran() -> Optional[Path]:
         prefix_path = Path(prefix)
         if not prefix_path.is_dir():
             continue
-        versions = sorted(
-            (d for d in prefix_path.iterdir() if d.is_dir()),
-            key=lambda d: d.name, reverse=True)
+        versions = sorted((d for d in prefix_path.iterdir() if d.is_dir()), key=lambda d: d.name, reverse=True)
         for version_dir in versions:
             candidate = version_dir / "compilers" / "bin" / "nvfortran"
             if candidate.is_file():
@@ -71,9 +68,7 @@ def _looks_like_llvm_flang(path: str) -> bool:
     up by their own names.
     """
     try:
-        out = subprocess.check_output(
-            [path, "--version"], stderr=subprocess.STDOUT,
-            timeout=5).decode(errors="replace")
+        out = subprocess.check_output([path, "--version"], stderr=subprocess.STDOUT, timeout=5).decode(errors="replace")
     except (OSError, subprocess.SubprocessError):
         return False
     return "flang version" in out
@@ -131,13 +126,12 @@ def _make_params() -> List:
     """Build the ``pytest.param(...)`` list for the discovered set."""
     found = discover_fortran_compilers()
     if not found:
-        return [pytest.param(
-            ("gfortran", "gfortran"),
-            id="gfortran",
-            marks=[pytest.mark.skip(
-                reason="no Fortran compiler found on the host")])]
-    return [pytest.param((name, str(path)), id=name)
-            for name, path in found.items()]
+        return [
+            pytest.param(("gfortran", "gfortran"),
+                         id="gfortran",
+                         marks=[pytest.mark.skip(reason="no Fortran compiler found on the host")])
+        ]
+    return [pytest.param((name, str(path)), id=name) for name, path in found.items()]
 
 
 #: Parametrize value for tests that drive a Fortran compiler.  Each
@@ -225,6 +219,13 @@ def find_flang_runtime_dir() -> Optional[str]:
     for d in _FLANG_RT_DIRS:
         if (Path(d) / "libflang_rt.runtime.a").is_file():
             return d
+    # Standard apt / upstream ``llvm-{21,22}`` layout: the clang resource dir
+    # carries the flang runtime under a target-triple subdir whose spelling
+    # varies (``x86_64-pc-linux-gnu`` vs ``x86_64-unknown-linux-gnu``), so glob
+    # for it -- this is where CI's ``llvm-21`` install keeps the archive.
+    for base in Path("/usr/lib").glob("llvm-2*/lib/clang/*/lib/*"):
+        if (base / "libflang_rt.runtime.a").is_file():
+            return str(base)
     return None
 
 
@@ -248,10 +249,8 @@ def env_with_flang_runtime(fc_name: str) -> dict:
 #: can't find the runtime.  Surfaced as the ``reason`` of a
 #: ``pytest.skip`` so the test report carries the exact remediation
 #: hint.
-FLANG_RT_HINT = (
-    "flang-new-21 needs ``libflang_rt.runtime.a`` for a full link; "
-    "build it locally with the recipe at the top of the README's "
-    "Fortran-compiler matrix section, or symlink ROCm's "
-    "/opt/rocm-7.2.0/...x86_64-unknown-linux-gnu/libflang_rt.runtime.a "
-    "into a $LIBRARY_PATH directory."
-)
+FLANG_RT_HINT = ("flang-new-21 needs ``libflang_rt.runtime.a`` for a full link; "
+                 "build it locally with the recipe at the top of the README's "
+                 "Fortran-compiler matrix section, or symlink ROCm's "
+                 "/opt/rocm-7.2.0/...x86_64-unknown-linux-gnu/libflang_rt.runtime.a "
+                 "into a $LIBRARY_PATH directory.")

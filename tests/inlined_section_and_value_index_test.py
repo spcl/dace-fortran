@@ -40,7 +40,6 @@ from _util import build_sdfg, have_flang
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
-
 # (a) -------------------------------------------------------------------
 _SRC_SECTION = """
 MODULE m_seca
@@ -115,7 +114,7 @@ def test_value_symbol_index_on_pointer_member_is_one_based(tmp_path):
     # not an out-of-bounds segfault.  Mirrors graupel/getv's data path
     # (``i = NINT(section)`` then a 3-D pointer-member read).
     n, sz = 2, 4
-    data = np.asfortranarray(np.arange(float(sz ** 3)).reshape((sz, sz, sz)))
+    data = np.asfortranarray(np.arange(float(sz**3)).reshape((sz, sz, sz)))
     # selector j -> index (j, j, j), 1-based; j in 1..n, all < sz.
     sel = np.asfortranarray(np.array([[1.0, 2.0]] * 3, dtype=np.float64))  # (3, n)
     out = np.zeros(n, dtype=np.float64, order="F")

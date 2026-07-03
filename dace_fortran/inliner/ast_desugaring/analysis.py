@@ -345,7 +345,7 @@ def search_real_ident_spec(ident: str,
     :param ident: The identifier string to search for.
     :param in_spec: The spec of the scope to start the search from.
     :param alias_map: The complete alias map.
-    :param node_type: (Optional) A node type or a tuple of node types to which identifier should map. 
+    :param node_type: (Optional) A node type or a tuple of node types to which identifier should map.
     :return: The canonical spec of the identifier, or None if not found.
     """
     k = in_spec + (ident, )
@@ -373,7 +373,7 @@ def find_real_ident_spec(ident: str,
     :param ident: The identifier string to search for.
     :param in_spec: The spec of the scope to start the search from.
     :param alias_map: The complete alias map.
-    :param node_type: (Optional) A node type or a tuple of node types to which identifier should map. 
+    :param node_type: (Optional) A node type or a tuple of node types to which identifier should map.
     :return: The canonical spec of the identifier.
     """
     spec = search_real_ident_spec(ident, in_spec, alias_map, node_types)

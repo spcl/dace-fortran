@@ -250,8 +250,7 @@ contains
 end subroutine probe
 end module probe_mod
 """
-    s, r = _run_scalar_args(tmp_path, src,
-                            {"a": np.int32(3), "b": np.int32(4)}, (3, 4))
+    s, r = _run_scalar_args(tmp_path, src, {"a": np.int32(3), "b": np.int32(4)}, (3, 4))
     assert s[0] == 2 * (3 * 4 + 1) and s[1] == 2
     np.testing.assert_array_equal(s, r)
 
@@ -324,11 +323,11 @@ end module probe_mod
 # --- clampdim checks: Flang's non-negativity clamp max(ext,0) is dropped,
 #     but a genuine two-operand MAX/MIN extent must survive. ---
 
+
 def test_size_max_element_const(tmp_path):
     """``allocate(buf(max(dims(1), 1)))`` -- genuine MAX(element, const).
     The realised extent is ``Max(1, dims(1))``, not the dropped clamp."""
-    s, r, shape = _run(tmp_path, _alloc_iter_by("max(dims(1), 1)", "dims(1)"),
-                       [5, 3], shape_of="buf")
+    s, r, shape = _run(tmp_path, _alloc_iter_by("max(dims(1), 1)", "dims(1)"), [5, 3], shape_of="buf")
     assert "Max" in shape, shape
     assert s[0] == 2 * 5 and s[1] == 2
     np.testing.assert_array_equal(s, r)
@@ -338,9 +337,7 @@ def test_size_max_two_elements(tmp_path):
     """``allocate(buf(max(dims(1), dims(2))))`` -- MAX of two elements.
     A wrong handling (dropping the max / taking the false arm) would
     under-size the buffer and make ``buf(dims(1))`` out of bounds."""
-    s, r, shape = _run(tmp_path,
-                       _alloc_iter_by("max(dims(1), dims(2))", "dims(1)"),
-                       [5, 3], shape_of="buf")
+    s, r, shape = _run(tmp_path, _alloc_iter_by("max(dims(1), dims(2))", "dims(1)"), [5, 3], shape_of="buf")
     assert "Max" in shape, shape
     assert s[0] == 2 * 5
     np.testing.assert_array_equal(s, r)
@@ -350,9 +347,7 @@ def test_size_min_two_elements(tmp_path):
     """``allocate(buf(min(dims(1), dims(2))))`` -- MIN of two elements;
     verified through the descriptor (``Min(...)``) and a read at the
     smaller extent."""
-    s, r, shape = _run(tmp_path,
-                       _alloc_iter_by("min(dims(1), dims(2))", "dims(2)"),
-                       [5, 3], shape_of="buf")
+    s, r, shape = _run(tmp_path, _alloc_iter_by("min(dims(1), dims(2))", "dims(2)"), [5, 3], shape_of="buf")
     assert "Min" in shape, shape
     assert s[0] == 2 * 3
     np.testing.assert_array_equal(s, r)
@@ -386,7 +381,8 @@ end subroutine probe
 end module probe_mod
 """
     shp = np.asfortranarray(np.arange(1, 9, dtype=np.int32).reshape(2, 2, 2))
-    out_s = np.zeros(2); out_r = np.zeros(2)
+    out_s = np.zeros(2)
+    out_r = np.zeros(2)
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="probe", entry="probe_mod::probe").build()
     sdfg(ii=np.int32(1), jj=np.int32(2), kk=np.int32(1), shp=shp, out=out_s)
     assert out_s[0] == 2 * 3  # shp(1,2,1) == 3 (column-major), buf(3) = 6
@@ -420,7 +416,8 @@ end module probe_mod
 """
     n = 4
     shp = np.asfortranarray(np.arange(1, 9, dtype=np.int32).reshape(2, 2, 2))
-    out_s = np.zeros(n); out_r = np.zeros(n)
+    out_s = np.zeros(n)
+    out_r = np.zeros(n)
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="probe", entry="probe_mod::probe").build()
     assert "__sym_shp_1_2_1" in sdfg.symbols
     sdfg(n=np.int32(n), shp=shp, out=out_s)

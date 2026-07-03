@@ -64,14 +64,10 @@ namespace hlfir_bridge {
 
 namespace {
 
-struct PruneUnreachablePass
-    : public mlir::PassWrapper<PruneUnreachablePass,
-                               mlir::OperationPass<mlir::ModuleOp>> {
+struct PruneUnreachablePass : public mlir::PassWrapper<PruneUnreachablePass, mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(PruneUnreachablePass)
 
-  llvm::StringRef getArgument() const final {
-    return "hlfir-prune-unreachable";
-  }
+  llvm::StringRef getArgument() const final { return "hlfir-prune-unreachable"; }
   llvm::StringRef getDescription() const final {
     return "Erase dispatch-table (fir.dt_entry) bindings the entry never "
            "dynamically invokes, so symbol-dce can drop the unreachable "
@@ -89,8 +85,7 @@ struct PruneUnreachablePass
     llvm::SmallVector<mlir::func::FuncOp, 8> roots;
     module.walk([&](mlir::func::FuncOp f) {
       bySym[f.getSymName()] = f;
-      if (!f.isDeclaration() && mlir::SymbolTable::getSymbolVisibility(f) ==
-                                    mlir::SymbolTable::Visibility::Public)
+      if (!f.isDeclaration() && mlir::SymbolTable::getSymbolVisibility(f) == mlir::SymbolTable::Visibility::Public)
         roots.push_back(f);
     });
     if (roots.empty()) return;  // no entry point to anchor reachability
@@ -162,16 +157,13 @@ struct PruneUnreachablePass
     module.walk([&](fir::GlobalOp g) {
       std::optional<llvm::StringRef> link = g.getLinkName();
       if (link && *link == "linkonce_odr")
-        mlir::SymbolTable::setSymbolVisibility(
-            g, mlir::SymbolTable::Visibility::Private);
+        mlir::SymbolTable::setSymbolVisibility(g, mlir::SymbolTable::Visibility::Private);
     });
   }
 };
 
 }  // namespace
 
-std::unique_ptr<mlir::Pass> createPruneUnreachablePass() {
-  return std::make_unique<PruneUnreachablePass>();
-}
+std::unique_ptr<mlir::Pass> createPruneUnreachablePass() { return std::make_unique<PruneUnreachablePass>(); }
 
 }  // namespace hlfir_bridge

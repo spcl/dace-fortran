@@ -28,7 +28,6 @@ from _util import have_flang
 
 from dace_fortran import build_sdfg_from_files
 
-
 _HERE = Path(__file__).resolve().parent
 
 _GRAUPEL_SOURCES = [

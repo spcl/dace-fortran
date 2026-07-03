@@ -50,20 +50,19 @@ class FortranProcessGrid(ProcessGrid):
         allow_none=True,
         default=None,
         desc="SDFG symbol name carrying the C MPI_Comm to use as the "
-             "parent of MPI_Cart_create (top-level grid only).  When "
-             "None, falls back to the stock ProcessGrid behaviour "
-             "(MPI_COMM_WORLD).",
+        "parent of MPI_Cart_create (top-level grid only).  When "
+        "None, falls back to the stock ProcessGrid behaviour "
+        "(MPI_COMM_WORLD).",
     )
 
-    def __init__(self,
-                 name,
-                 shape,
-                 parent_comm_symbol=None,
-                 exact_grid=None,
-                 root=0):
-        super().__init__(name=name, is_subgrid=False, shape=shape,
-                         parent_grid=None, color=None,
-                         exact_grid=exact_grid, root=root)
+    def __init__(self, name, shape, parent_comm_symbol=None, exact_grid=None, root=0):
+        super().__init__(name=name,
+                         is_subgrid=False,
+                         shape=shape,
+                         parent_grid=None,
+                         color=None,
+                         exact_grid=exact_grid,
+                         root=root)
         self.parent_comm_symbol = parent_comm_symbol
 
     def init_code(self) -> str:
@@ -74,8 +73,7 @@ class FortranProcessGrid(ProcessGrid):
         (the stock behaviour)."""
         parent = self.parent_comm_symbol or "MPI_COMM_WORLD"
         ndim = len(self.shape)
-        dims_assigns = "\n".join(
-            f"__state->{self.name}_dims[{i}] = {s};" for i, s in enumerate(self.shape))
+        dims_assigns = "\n".join(f"__state->{self.name}_dims[{i}] = {s};" for i, s in enumerate(self.shape))
         return f"""
             {dims_assigns}
             int {self.name}_periods[{ndim}] = {{0}};

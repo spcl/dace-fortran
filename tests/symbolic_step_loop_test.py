@@ -55,8 +55,7 @@ def _build_and_run(src: str, tmp: Path, *, ref_kwargs: dict, sdfg_kwargs: dict, 
     ``ref_out_array``."""
     mod = f2py_compile(src, tmp / "ref", mod_name)
     sdfg = build_sdfg(src, tmp / "sdfg", name=mod_name, entry="kernel_mod::kernel").build()
-    sdfg_copy = {k: (v.copy() if isinstance(v, np.ndarray) else v)
-                 for k, v in sdfg_kwargs.items()}
+    sdfg_copy = {k: (v.copy() if isinstance(v, np.ndarray) else v) for k, v in sdfg_kwargs.items()}
     # ``kernel`` now lives in ``kernel_mod`` so f2py exposes it under the
     # module's submodule namespace.
     ref_out = mod.kernel_mod.kernel(**ref_kwargs)
@@ -89,11 +88,15 @@ end subroutine kernel
 end module kernel_mod
 """
     out = np.zeros(8, dtype=np.int32, order="F")
-    ref_out, sdfg = _build_and_run(
-        src, tmp_path,
-        ref_kwargs=dict(jstart=2, jend=20, batch=3, n=8), mod_name="kern_scalar_batch3",
-        sdfg_kwargs=dict(out=out, jstart=np.int32(2), jend=np.int32(20),
-                         batch=np.int32(3), n=np.int32(8)))
+    ref_out, sdfg = _build_and_run(src,
+                                   tmp_path,
+                                   ref_kwargs=dict(jstart=2, jend=20, batch=3, n=8),
+                                   mod_name="kern_scalar_batch3",
+                                   sdfg_kwargs=dict(out=out,
+                                                    jstart=np.int32(2),
+                                                    jend=np.int32(20),
+                                                    batch=np.int32(3),
+                                                    n=np.int32(8)))
     np.testing.assert_array_equal(sdfg["out"], ref_out)
     # Sanity: the batch=3 stride captured ``2, 5, 8, 11, 14, 17, 20``.
     expected = np.array([2, 5, 8, 11, 14, 17, 20, -1], dtype=np.int32)
@@ -124,11 +127,15 @@ end subroutine kernel
 end module kernel_mod
 """
     out = np.zeros(8, dtype=np.int32, order="F")
-    ref_out, sdfg = _build_and_run(
-        src, tmp_path,
-        ref_kwargs=dict(jstart=1, jend=5, batch=1, n=8), mod_name="kern_scalar_batch1",
-        sdfg_kwargs=dict(out=out, jstart=np.int32(1), jend=np.int32(5),
-                         batch=np.int32(1), n=np.int32(8)))
+    ref_out, sdfg = _build_and_run(src,
+                                   tmp_path,
+                                   ref_kwargs=dict(jstart=1, jend=5, batch=1, n=8),
+                                   mod_name="kern_scalar_batch1",
+                                   sdfg_kwargs=dict(out=out,
+                                                    jstart=np.int32(1),
+                                                    jend=np.int32(5),
+                                                    batch=np.int32(1),
+                                                    n=np.int32(8)))
     np.testing.assert_array_equal(sdfg["out"], ref_out)
     expected = np.array([1, 2, 3, 4, 5, -1, -1, -1], dtype=np.int32)
     np.testing.assert_array_equal(sdfg["out"], expected)
@@ -164,11 +171,15 @@ end module kernel_mod
 """
     stride_arr = np.array([2, 3, 5], dtype=np.int32, order="F")
     out = np.zeros(8, dtype=np.int32, order="F")
-    ref_out, sdfg = _build_and_run(
-        src, tmp_path,
-        ref_kwargs=dict(stride_arr=stride_arr, idx=2, n=8, m=3), mod_name="kern_array_stride",
-        sdfg_kwargs=dict(out=out, stride_arr=stride_arr,
-                         idx=np.int32(2), n=np.int32(8), m=np.int32(3)))
+    ref_out, sdfg = _build_and_run(src,
+                                   tmp_path,
+                                   ref_kwargs=dict(stride_arr=stride_arr, idx=2, n=8, m=3),
+                                   mod_name="kern_array_stride",
+                                   sdfg_kwargs=dict(out=out,
+                                                    stride_arr=stride_arr,
+                                                    idx=np.int32(2),
+                                                    n=np.int32(8),
+                                                    m=np.int32(3)))
     np.testing.assert_array_equal(sdfg["out"], ref_out)
     # stride=3: iterations 1, 4, 7.
     expected = np.array([1, 4, 7, -1, -1, -1, -1, -1], dtype=np.int32)
@@ -200,10 +211,11 @@ end subroutine kernel
         f.write_text(src)
         h = _P(td) / "k.hlfir"
         subprocess.check_call([
-            "flang-new-21", "-fc1", "-fintrinsic-modules-path",
-            "/usr/lib/llvm-21/include/flang", "-emit-hlfir",
-            str(f), "-o", str(h)
-        ], cwd=td)
+            "flang-new-21", "-fc1", "-fintrinsic-modules-path", "/usr/lib/llvm-21/include/flang", "-emit-hlfir",
+            str(f), "-o",
+            str(h)
+        ],
+                              cwd=td)
         mod = hb.HLFIRModule()
         mod.parse_file(str(h))
         mod.set_entry_symbol("kernel")

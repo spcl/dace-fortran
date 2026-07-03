@@ -68,9 +68,7 @@ def _missing_build_tools() -> list:
     return [t for t in need if shutil.which(t) is None]
 
 
-def ensure_icon_built(icon_src: Path,
-                      build_dir: Optional[Path] = None,
-                      jobs: Optional[int] = None) -> Optional[Path]:
+def ensure_icon_built(icon_src: Path, build_dir: Optional[Path] = None, jobs: Optional[int] = None) -> Optional[Path]:
     """Configure + ``make`` ICON under ``build_dir`` (default
     ``<icon_src>/build/stock_cpu``).  Idempotent: returns immediately
     when ``<build_dir>/mod`` already holds ``.mod`` files.
@@ -107,9 +105,8 @@ def ensure_icon_built(icon_src: Path,
 
     missing = _missing_build_tools()
     if missing:
-        raise RuntimeError(
-            "ICON build needs these tools on PATH: " + ", ".join(missing) +
-            ".  Install libopenmpi-dev openmpi-bin + perl + python3.")
+        raise RuntimeError("ICON build needs these tools on PATH: " + ", ".join(missing) +
+                           ".  Install libopenmpi-dev openmpi-bin + perl + python3.")
 
     build_dir.mkdir(parents=True, exist_ok=True)
     jobs = jobs or (os.cpu_count() or 4)
@@ -132,15 +129,13 @@ def ensure_icon_built(icon_src: Path,
         return _configure_and_make(icon_src, build_dir, jobs, key)
 
 
-def _configure_and_make(icon_src: Path, build_dir: Path, jobs: int,
-                        key: str) -> Path:
+def _configure_and_make(icon_src: Path, build_dir: Path, jobs: int, key: str) -> Path:
     """Run the stock-CPU configure + ``make`` (called under the build
     lock).  Factored out so the lock-held critical section is explicit."""
 
     # --- configure (stock CPU recipe) --------------------------------
     common_cflags = "-O0 -g -fno-fast-math -ffp-contract=off -fPIC"
-    fcflags = (common_cflags +
-               " -fbacktrace -ffree-line-length-none"
+    fcflags = (common_cflags + " -fbacktrace -ffree-line-length-none"
                " -I/usr/include -I/usr/include/hdf5/serial")
     cppflags = "-I/usr/include -I/usr/include/hdf5/serial -I/usr/include/libxml2"
     ldflags = "-L/usr/lib/x86_64-linux-gnu -L/usr/lib/x86_64-linux-gnu/hdf5/serial"
@@ -153,7 +148,9 @@ def _configure_and_make(icon_src: Path, build_dir: Path, jobs: int,
             " -lnetcdff -lnetcdf -lhdf5_hl -lhdf5 -lstdc++")
     configure_cmd = [
         str(icon_src / "configure"),
-        "CC=mpicc", "CXX=mpicxx", "FC=mpifort",
+        "CC=mpicc",
+        "CXX=mpicxx",
+        "FC=mpifort",
         f"CFLAGS={common_cflags}",
         f"CXXFLAGS={common_cflags}",
         f"FCFLAGS={fcflags}",
@@ -161,10 +158,14 @@ def _configure_and_make(icon_src: Path, build_dir: Path, jobs: int,
         f"LDFLAGS={ldflags}",
         f"LIBS={libs}",
         "MPI_LAUNCH=mpiexec",
-        "--disable-grib2", "--enable-loop-exchange", "--enable-openmp",
+        "--disable-grib2",
+        "--enable-loop-exchange",
+        "--enable-openmp",
         "--enable-bundled-python=mtime",
-        "--disable-jsbach", "--disable-ocean",
-        "--disable-coupling", "--disable-waves",
+        "--disable-jsbach",
+        "--disable-ocean",
+        "--disable-coupling",
+        "--disable-waves",
     ]
     subprocess.run(configure_cmd, cwd=build_dir, check=True)
 
@@ -172,9 +173,8 @@ def _configure_and_make(icon_src: Path, build_dir: Path, jobs: int,
     subprocess.run(["make", f"-j{jobs}"], cwd=build_dir, check=True)
 
     if not _have_mods(build_dir):
-        raise RuntimeError(
-            f"ICON make completed but no .mod files appeared under "
-            f"{build_dir / 'mod'} -- the build recipe may need updating.")
+        raise RuntimeError(f"ICON make completed but no .mod files appeared under "
+                           f"{build_dir / 'mod'} -- the build recipe may need updating.")
 
     _BUILT[key] = build_dir
     return build_dir

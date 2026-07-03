@@ -20,14 +20,15 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-
 _HERE = Path(__file__).resolve().parent
 _WRAPPER_SRC = _HERE / "icon_sync_iso_c.f90"
 
 
 def build_icon_sync_iso_c_so(
-    icon_build: Path, out_dir: Path,
-    *, fc: Optional[str] = None,
+    icon_build: Path,
+    out_dir: Path,
+    *,
+    fc: Optional[str] = None,
 ) -> Optional[Path]:
     """Compile and link the wrapper into ``out_dir / libicon_sync_iso_c.so``.
 
@@ -85,20 +86,15 @@ def build_icon_sync_iso_c_so(
     if "nvfortran" in fc_basename:
         base_flags = ["-O0", "-fpic", "-Kieee", "-Mnofma"]
     elif "flang" in fc_basename:
-        base_flags = ["-O0", "-fPIC", "-fno-fast-math",
-                      "-ffp-contract=off", "-ffree-line-length-none"]
+        base_flags = ["-O0", "-fPIC", "-fno-fast-math", "-ffp-contract=off", "-ffree-line-length-none"]
     else:  # gfortran (+ mpifort wrapping it)
-        base_flags = ["-O0", "-fPIC", "-fno-fast-math",
-                      "-ffp-contract=off", "-ffree-line-length-none"]
+        base_flags = ["-O0", "-fPIC", "-fno-fast-math", "-ffp-contract=off", "-ffree-line-length-none"]
     include_flags = [f"-I{d}" for d in mod_dirs]
     # Compile
     subprocess.check_call(
-        [fc, *base_flags, *include_flags,
-         "-c", str(_WRAPPER_SRC), "-o", str(obj_path)],
-        cwd=str(out_dir))
+        [fc, *base_flags, *include_flags, "-c",
+         str(_WRAPPER_SRC), "-o", str(obj_path)], cwd=str(out_dir))
     # Link (-shared is supported by all three).
     link_pic = "-fpic" if "nvfortran" in fc_basename else "-fPIC"
-    subprocess.check_call(
-        [fc, "-shared", link_pic, str(obj_path), "-o", str(so_path)],
-        cwd=str(out_dir))
+    subprocess.check_call([fc, "-shared", link_pic, str(obj_path), "-o", str(so_path)], cwd=str(out_dir))
     return so_path

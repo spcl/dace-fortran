@@ -89,13 +89,10 @@ namespace hlfir_bridge {
 namespace {
 
 struct ExpandVectorSubscriptGatherPass
-    : public mlir::PassWrapper<ExpandVectorSubscriptGatherPass,
-                               mlir::OperationPass<mlir::ModuleOp>> {
+    : public mlir::PassWrapper<ExpandVectorSubscriptGatherPass, mlir::OperationPass<mlir::ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ExpandVectorSubscriptGatherPass)
 
-  llvm::StringRef getArgument() const final {
-    return "hlfir-expand-vector-subscript-gather";
-  }
+  llvm::StringRef getArgument() const final { return "hlfir-expand-vector-subscript-gather"; }
   llvm::StringRef getDescription() const final {
     return "Replace hlfir.associate of an hlfir.elemental with an "
            "explicit alloca + gather DO loop so the bridge can name "
@@ -118,8 +115,7 @@ struct ExpandVectorSubscriptGatherPass
       // the inlined callee's by-ref dummy can take ``%a#0``.
       // The result type is a plain ``fir.ref<T>`` (rank 0); the
       // source is whatever scalar value (constant, fir.load, etc.).
-      if (mlir::isa<fir::ReferenceType>(op.getResult(0).getType()) &&
-          !mlir::isa<hlfir::ExprType>(src.getType())) {
+      if (mlir::isa<fir::ReferenceType>(op.getResult(0).getType()) && !mlir::isa<hlfir::ExprType>(src.getType())) {
         scalarTargets.push_back(op);
       }
     });
@@ -127,8 +123,7 @@ struct ExpandVectorSubscriptGatherPass
     for (auto assoc : elemTargets)
       if (mlir::failed(rewrite(assoc, counter++))) return signalPassFailure();
     for (auto assoc : scalarTargets)
-      if (mlir::failed(rewriteScalar(assoc, counter++)))
-        return signalPassFailure();
+      if (mlir::failed(rewriteScalar(assoc, counter++))) return signalPassFailure();
   }
 
   /// Materialise a scalar value-by-reference associate into a local
@@ -157,8 +152,7 @@ struct ExpandVectorSubscriptGatherPass
       } else
         enclName = sym;
     }
-    std::string uniqName =
-        "_QF" + enclName + "E__assoc_scalar_" + std::to_string(id);
+    std::string uniqName = "_QF" + enclName + "E__assoc_scalar_" + std::to_string(id);
 
     mlir::OpBuilder b(assoc);
     auto alloca = b.create<fir::AllocaOp>(loc, eleTy);
@@ -189,8 +183,7 @@ struct ExpandVectorSubscriptGatherPass
           "hlfir-expand-vector-subscript-gather: elemental has no shape "
           "operand  --  cannot determine gather extent");
     }
-    auto shapeOp =
-        mlir::dyn_cast_or_null<fir::ShapeOp>(shapeOper.getDefiningOp());
+    auto shapeOp = mlir::dyn_cast_or_null<fir::ShapeOp>(shapeOper.getDefiningOp());
     if (!shapeOp) {
       return assoc.emitError(
           "hlfir-expand-vector-subscript-gather: shape operand is not a "
@@ -202,20 +195,15 @@ struct ExpandVectorSubscriptGatherPass
     // ``d(cols2, cols)`` materialising a 2-D gather temp) follow
     // the same shape as the rank-1 case but build a nested
     // ``fir.do_loop`` tree below.
-    llvm::SmallVector<mlir::Value, 4> extents(shapeOp.getExtents().begin(),
-                                              shapeOp.getExtents().end());
+    llvm::SmallVector<mlir::Value, 4> extents(shapeOp.getExtents().begin(), shapeOp.getExtents().end());
     unsigned rank = (unsigned)extents.size();
-    llvm::SmallVector<int64_t, 4> staticExts(
-        rank, fir::SequenceType::getUnknownExtent());
+    llvm::SmallVector<int64_t, 4> staticExts(rank, fir::SequenceType::getUnknownExtent());
     bool allStatic = true;
     for (unsigned i = 0; i < rank; ++i) {
-      auto cstExt = mlir::dyn_cast_or_null<mlir::arith::ConstantOp>(
-          extents[i].getDefiningOp());
+      auto cstExt = mlir::dyn_cast_or_null<mlir::arith::ConstantOp>(extents[i].getDefiningOp());
       if (cstExt)
-        if (auto a = mlir::dyn_cast<mlir::IntegerAttr>(cstExt.getValue()))
-          staticExts[i] = a.getInt();
-      if (staticExts[i] == fir::SequenceType::getUnknownExtent())
-        allStatic = false;
+        if (auto a = mlir::dyn_cast<mlir::IntegerAttr>(cstExt.getValue())) staticExts[i] = a.getInt();
+      if (staticExts[i] == fir::SequenceType::getUnknownExtent()) allStatic = false;
     }
 
     mlir::OpBuilder b(assoc);
@@ -230,11 +218,10 @@ struct ExpandVectorSubscriptGatherPass
     if (allStatic) {
       alloca = b.create<fir::AllocaOp>(loc, seqTy);
     } else {
-      alloca =
-          b.create<fir::AllocaOp>(loc, seqTy, /*uniqName=*/llvm::StringRef{},
-                                  /*bindcName=*/llvm::StringRef{},
-                                  /*typeparams=*/mlir::ValueRange{},
-                                  /*shape=*/mlir::ValueRange{extents});
+      alloca = b.create<fir::AllocaOp>(loc, seqTy, /*uniqName=*/llvm::StringRef{},
+                                       /*bindcName=*/llvm::StringRef{},
+                                       /*typeparams=*/mlir::ValueRange{},
+                                       /*shape=*/mlir::ValueRange{extents});
     }
     // Derive a Flang-style mangled name so extractName + sdfg_name
     // parse it like any other local: ``_QF<encl>E<src>_gather_<n>``.
@@ -295,8 +282,7 @@ struct ExpandVectorSubscriptGatherPass
         break;
       }
     }
-    std::string uniqName =
-        "_QF" + enclName + "E" + srcName + "_gather_" + std::to_string(id);
+    std::string uniqName = "_QF" + enclName + "E" + srcName + "_gather_" + std::to_string(id);
     // Result-type convention (matches what flang itself emits for
     // assumed-shape declares):
     //   * all-static: result#0 = result#1 = ``fir.ref<array<...>>``
@@ -308,21 +294,19 @@ struct ExpandVectorSubscriptGatherPass
     hlfir::DeclareOp declOp;
     auto refTy = fir::ReferenceType::get(seqTy);
     if (allStatic) {
-      declOp = b.create<hlfir::DeclareOp>(loc, alloca.getResult(), uniqName,
-                                          shapeOper);
+      declOp = b.create<hlfir::DeclareOp>(loc, alloca.getResult(), uniqName, shapeOper);
     } else {
       auto boxTy = fir::BoxType::get(seqTy);
-      declOp = b.create<hlfir::DeclareOp>(
-          loc,
-          /*resultType0=*/boxTy,
-          /*resultType1=*/refTy,
-          /*memref=*/alloca.getResult(),
-          /*shape=*/shapeOper,
-          /*typeparams=*/mlir::ValueRange{},
-          /*dummy_scope=*/mlir::Value{},
-          /*uniq_name=*/b.getStringAttr(uniqName),
-          /*fortran_attrs=*/fir::FortranVariableFlagsAttr{},
-          /*data_attr=*/cuf::DataAttributeAttr{});
+      declOp = b.create<hlfir::DeclareOp>(loc,
+                                          /*resultType0=*/boxTy,
+                                          /*resultType1=*/refTy,
+                                          /*memref=*/alloca.getResult(),
+                                          /*shape=*/shapeOper,
+                                          /*typeparams=*/mlir::ValueRange{},
+                                          /*dummy_scope=*/mlir::Value{},
+                                          /*uniq_name=*/b.getStringAttr(uniqName),
+                                          /*fortran_attrs=*/fir::FortranVariableFlagsAttr{},
+                                          /*data_attr=*/cuf::DataAttributeAttr{});
     }
 
     // 2) Build the nested gather DO loop tree  --  one ``fir.do_loop``
@@ -342,12 +326,10 @@ struct ExpandVectorSubscriptGatherPass
     // Inner body: apply + designate + assign.  ``hlfir.apply`` on
     // an N-D elemental takes N index args matching the elemental's
     // block-arg list.
-    auto applied =
-        b.create<hlfir::ApplyOp>(loc, eleTy, src, mlir::ValueRange{ivs},
-                                 /*typeparams=*/mlir::ValueRange{});
-    auto dest = b.create<hlfir::DesignateOp>(
-        loc, fir::ReferenceType::get(eleTy), declOp.getResult(0),
-        mlir::ValueRange{ivs});
+    auto applied = b.create<hlfir::ApplyOp>(loc, eleTy, src, mlir::ValueRange{ivs},
+                                            /*typeparams=*/mlir::ValueRange{});
+    auto dest =
+        b.create<hlfir::DesignateOp>(loc, fir::ReferenceType::get(eleTy), declOp.getResult(0), mlir::ValueRange{ivs});
     b.create<hlfir::AssignOp>(loc, applied.getResult(), dest.getResult());
 
     // 3) Replace associate uses.  Match the result-type convention
@@ -359,8 +341,7 @@ struct ExpandVectorSubscriptGatherPass
     b.setInsertionPointAfter(assoc);
     auto falseI1 = b.create<mlir::arith::ConstantOp>(loc, b.getBoolAttr(false));
     assoc.getResult(0).replaceAllUsesWith(declOp.getResult(0));
-    assoc.getResult(1).replaceAllUsesWith(allStatic ? declOp.getResult(0)
-                                                    : declOp.getResult(1));
+    assoc.getResult(1).replaceAllUsesWith(allStatic ? declOp.getResult(0) : declOp.getResult(1));
     assoc.getResult(2).replaceAllUsesWith(falseI1.getResult());
 
     // 4) Erase the associate, plus any matching end_associate / destroy
@@ -374,8 +355,7 @@ struct ExpandVectorSubscriptGatherPass
         // After RAUW, end_associate's operand is decl#0  --  not a temp
         // it owns.  Erase it; finalisation is handled by SDFG
         // transient lifetime.
-        if (endA.getVar().getDefiningOp() == declOp.getOperation())
-          endA.erase();
+        if (endA.getVar().getDefiningOp() == declOp.getOperation()) endA.erase();
       }
     });
     // ``hlfir.destroy`` of the elemental can stay  --  DCE drops it later.
