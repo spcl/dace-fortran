@@ -115,11 +115,45 @@ ATMO_DO_NOT_EMIT = [
 #: the halo's ``my_process_is_mpi_seq`` is added per mode by :func:`atmo_config`).
 ATMO_BASE_RETURN_FALSE: list = []
 
+#: ``typename -> [component names]`` derived-type members that the INNER
+#: ``velocity_tendencies`` kernel reads but ``solve_nh`` does NOT, so the closure
+#: pruning would drop them from ``solve_nh``'s single-TU struct types.  Keeping
+#: them (``inline_to_single_tu(keep_type_components=...)``) makes the extracted
+#: ``t_patch`` / ``t_int_state`` / ``t_nh_diag`` / ``t_nh_metrics`` carry the
+#: UNION of members both kernels touch -- so when ``solve_nh`` calls
+#: ``velocity_tendencies`` as a per-member-SoA ``keep_external`` callback, the
+#: outer marshal-expansion leaf set equals the inner ``bind_c_shim`` slot set
+#: member-for-member (both in source declaration order).  The kept members are
+#: pass-through inputs on the ``solve_nh`` side (received from its caller and
+#: forwarded to velocity untouched).  Curated data (not code): the members
+#: ``velocity_tendencies`` reads minus the members ``solve_nh`` reads.
+ATMO_VELOCITY_UNION_COMPONENTS = {
+    "t_grid_edges": ["area_edge", "f_e", "fn_e", "ft_e"],
+    "t_grid_cells": ["area", "decomp_info"],
+    # ``decomp_info`` is itself a ``t_grid_domain_decomp_info`` record; velocity
+    # reads its ``owner_mask``.  Keep that nested member too -- otherwise the
+    # type prunes to an EMPTY record, which the marshaller rejects (an empty
+    # nested record is not inline-flat), breaking the whole ``t_patch`` group.
+    "t_grid_domain_decomp_info": ["owner_mask"],
+    "t_grid_vertices": ["edge_idx", "edge_blk"],
+    "t_int_state": ["geofac_rot", "geofac_n2s"],
+    "t_nh_diag": ["max_vcfl_dyn"],
+    "t_nh_metrics":
+    ["coeff_gradekin", "coeff1_dwdz", "coeff2_dwdz", "deepatmo_gradh_ifc", "deepatmo_invr_mc", "deepatmo_invr_ifc"],
+}
+
 
 def atmo_config(halo_mode: str) -> dict:
     """Full atmosphere extraction config for the given halo mode (see
     :mod:`icon._halo_modes`): the non-halo base externals merged with the
-    mode-specific halo pieces."""
+    mode-specific halo pieces.
+
+    The velocity-callback union (:data:`ATMO_VELOCITY_UNION_COMPONENTS`) is
+    applied only in ``inlined`` mode -- the mode the ``solve_nh`` +
+    ``velocity_tendencies`` per-member-SoA callback e2e drives.  The
+    ``external`` TU black-boxes the halo and is not a callback host, so it
+    needs no velocity-only pass-through members (keeping it lean also avoids a
+    needless re-pin of the external artifact)."""
     h = halo_config(halo_mode)
     return dict(
         external_functions=ATMO_BASE_EXTERNAL_FUNCTIONS + h["external_functions"],
@@ -130,6 +164,7 @@ def atmo_config(halo_mode: str) -> dict:
         defines=ATMO_DEFINES,
         extra_sources=h["extra_sources"],
         specialize_at_source=h["specialize_at_source"],
+        keep_type_components=(ATMO_VELOCITY_UNION_COMPONENTS if halo_mode == "inlined" else None),
     )
 
 

@@ -28,7 +28,7 @@ from pathlib import Path
 import pytest
 
 from _util import build_sdfg, have_flang
-from icon._halo_modes import HALO_INLINED_EXTRA_SOURCES
+from icon._halo_modes import _MPI_STUB
 
 from dace_fortran.bindings import build_fortran_library
 
@@ -52,16 +52,18 @@ def test_solve_nh_binding_compiles(tmp_path: Path):
     invalid = [a for a in sdfg.arglist() if a.startswith("_")]
     assert not invalid, f"SDFG signature carries Fortran-invalid names: {invalid[:5]}"
 
-    # Prepend the TYPE(*) MPI stub + give the inlined ``mo_mpi`` a ``use mpi`` so
-    # its dual-typed real*8/real*4 point-to-point calls resolve through one
-    # assumed-type interface (no -fallow).
+    # Prepend the FULL TYPE(*) MPI stub (constants + assumed-type interfaces) +
+    # give the inlined ``mo_mpi`` a ``use mpi`` so its dual-typed real*8/real*4
+    # point-to-point calls resolve through one assumed-type interface (no
+    # -fallow).  NB: the EXTRACTION uses a constants-only stub (fparser can't
+    # parse ``type(*)``); gfortran can, so the reference build here needs the
+    # full stub -- ``_MPI_STUB``, not ``HALO_INLINED_EXTRA_SOURCES``.
     tu_src = _TU.read_text()
     assert "MODULE mo_mpi\n" in tu_src, "inlined mo_mpi module anchor missing"
     use_mpi_tu = tmp_path / "solve_nh_usempi.f90"
     use_mpi_tu.write_text(tu_src.replace("MODULE mo_mpi\n", "MODULE mo_mpi\n  use mpi\n", 1))
-    stub_name, stub_content = next(iter(HALO_INLINED_EXTRA_SOURCES.items()))
-    stub = tmp_path / stub_name
-    stub.write_text(stub_content)
+    stub = tmp_path / "_mpi_stub.f90"
+    stub.write_text(_MPI_STUB)
 
     # ``prelude_sources`` compile left-to-right before the binding, so the stub
     # (module mpi) comes before the TU that ``use``s it.

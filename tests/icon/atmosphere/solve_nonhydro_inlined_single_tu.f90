@@ -1,3 +1,10 @@
+MODULE mo_decomposition_tools
+  IMPLICIT NONE
+  TYPE :: t_grid_domain_decomp_info
+    LOGICAL, ALLOCATABLE :: owner_mask(:, :)
+  END TYPE
+  CONTAINS
+END MODULE mo_decomposition_tools
 MODULE mo_dynamics_config
   IMPLICIT NONE
   LOGICAL :: ldeepatmo
@@ -104,6 +111,8 @@ MODULE mo_intp_data_strc
     REAL(KIND = 8), ALLOCATABLE :: rbf_vec_coeff_e(:, :, :)
     REAL(KIND = 8), ALLOCATABLE :: geofac_div(:, :, :)
     REAL(KIND = 8), ALLOCATABLE :: geofac_grdiv(:, :, :)
+    REAL(KIND = 8), ALLOCATABLE :: geofac_rot(:, :, :)
+    REAL(KIND = 8), ALLOCATABLE :: geofac_n2s(:, :, :)
     REAL(KIND = 8), ALLOCATABLE :: geofac_grg(:, :, :, :)
     REAL(KIND = 8), ALLOCATABLE :: pos_on_tplane_e(:, :, :, :)
     REAL(KIND = 8), ALLOCATABLE :: nudgecoeff_e(:, :)
@@ -262,15 +271,16 @@ MODULE mo_nonhydro_types
     REAL(KIND = 8), POINTER, CONTIGUOUS :: vn_incr(:, :, :), exner_incr(:, :, :), rho_incr(:, :, :), vt(:, :, :), ddt_exner_phy(:, :, :), ddt_vn_phy(:, :, :), exner_dyn_incr(:, :, :), vn_ie(:, :, :), w_concorr_c(:, :, :), mass_fl_e_sv(:, :, :), ddt_vn_apc_pc(:, :, :, :), ddt_vn_cor_pc(:, :, :, :), ddt_w_adv_pc(:, :, :, :)
     REAL(KIND = 8), POINTER, CONTIGUOUS :: ddt_vn_dyn(:, :, :) => NULL(), ddt_vn_dmp(:, :, :) => NULL(), ddt_vn_adv(:, :, :) => NULL(), ddt_vn_cor(:, :, :) => NULL(), ddt_vn_pgr(:, :, :) => NULL(), ddt_vn_phd(:, :, :) => NULL(), ddt_vn_iau(:, :, :) => NULL(), ddt_vn_ray(:, :, :) => NULL(), ddt_vn_grf(:, :, :) => NULL()
     LOGICAL :: ddt_vn_dyn_is_associated = .FALSE., ddt_vn_dmp_is_associated = .FALSE., ddt_vn_adv_is_associated = .FALSE., ddt_vn_cor_is_associated = .FALSE., ddt_vn_pgr_is_associated = .FALSE., ddt_vn_phd_is_associated = .FALSE., ddt_vn_iau_is_associated = .FALSE., ddt_vn_ray_is_associated = .FALSE., ddt_vn_grf_is_associated = .FALSE.
+    REAL(KIND = 8) :: max_vcfl_dyn = 0.0D0
   END TYPE t_nh_diag
   TYPE :: t_nh_ref
     REAL(KIND = 8), POINTER :: vn_ref(:, :, :), w_ref(:, :, :) => NULL()
   END TYPE t_nh_ref
   TYPE :: t_nh_metrics
     REAL(KIND = 8), POINTER, CONTIGUOUS :: rayleigh_w(:), rayleigh_vn(:), scalfac_dd3d(:), hmask_dd3d(:, :), vwind_expl_wgt(:, :), vwind_impl_wgt(:, :)
-    REAL(KIND = 8), POINTER, CONTIGUOUS :: ddxn_z_full(:, :, :), ddxt_z_full(:, :, :), ddqz_z_full_e(:, :, :), ddqz_z_half(:, :, :), inv_ddqz_z_full(:, :, :), wgtfac_c(:, :, :), wgtfac_e(:, :, :), wgtfacq_c(:, :, :), wgtfacq_e(:, :, :), wgtfacq1_c(:, :, :), zdiff_gradp(:, :, :, :), coeff_gradp(:, :, :, :), exner_exfac(:, :, :), theta_ref_mc(:, :, :), theta_ref_me(:, :, :), theta_ref_ic(:, :, :), exner_ref_mc(:, :, :), rho_ref_mc(:, :, :), rho_ref_me(:, :, :), d_exner_dz_ref_ic(:, :, :), d2dexdz2_fac1_mc(:, :, :), d2dexdz2_fac2_mc(:, :, :), pg_exdist(:) => NULL()
+    REAL(KIND = 8), POINTER, CONTIGUOUS :: ddxn_z_full(:, :, :), ddxt_z_full(:, :, :), ddqz_z_full_e(:, :, :), ddqz_z_half(:, :, :), inv_ddqz_z_full(:, :, :), wgtfac_c(:, :, :), wgtfac_e(:, :, :), wgtfacq_c(:, :, :), wgtfacq_e(:, :, :), wgtfacq1_c(:, :, :), coeff_gradekin(:, :, :), coeff1_dwdz(:, :, :), coeff2_dwdz(:, :, :), zdiff_gradp(:, :, :, :), coeff_gradp(:, :, :, :), exner_exfac(:, :, :), theta_ref_mc(:, :, :), theta_ref_me(:, :, :), theta_ref_ic(:, :, :), exner_ref_mc(:, :, :), rho_ref_mc(:, :, :), rho_ref_me(:, :, :), d_exner_dz_ref_ic(:, :, :), d2dexdz2_fac1_mc(:, :, :), d2dexdz2_fac2_mc(:, :, :), pg_exdist(:) => NULL()
     INTEGER, POINTER, CONTIGUOUS :: vertidx_gradp(:, :, :, :), pg_edgeidx(:), pg_edgeblk(:), pg_vertidx(:), bdy_halo_c_idx(:), bdy_halo_c_blk(:), bdy_mflx_e_idx(:), bdy_mflx_e_blk(:) => NULL()
-    REAL(KIND = 8), POINTER, CONTIGUOUS :: deepatmo_gradh_mc(:), deepatmo_divh_mc(:), deepatmo_divzu_mc(:), deepatmo_divzl_mc(:)
+    REAL(KIND = 8), POINTER, CONTIGUOUS :: deepatmo_gradh_mc(:), deepatmo_divh_mc(:), deepatmo_invr_mc(:), deepatmo_divzu_mc(:), deepatmo_divzl_mc(:), deepatmo_gradh_ifc(:), deepatmo_invr_ifc(:) => NULL()
     INTEGER :: pg_listdim
     INTEGER :: bdy_halo_c_dim
     INTEGER :: bdy_mflx_e_dim
@@ -963,6 +973,7 @@ MODULE mo_communication
   END SUBROUTINE exchange_data_mult_mixprec
 END MODULE mo_communication
 MODULE mo_model_domain
+  USE mo_decomposition_tools, ONLY: t_grid_domain_decomp_info
   USE mo_math_types, ONLY: t_tangent_vectors
   USE mo_lib_grid_geometry_info, ONLY: t_grid_geometry_info
   USE mo_communication_types, ONLY: t_comm_pattern_orig
@@ -972,10 +983,12 @@ MODULE mo_model_domain
     INTEGER, ALLOCATABLE :: neighbor_blk(:, :, :)
     INTEGER, ALLOCATABLE :: edge_idx(:, :, :)
     INTEGER, ALLOCATABLE :: edge_blk(:, :, :)
+    REAL(KIND = 8), POINTER :: area(:, :) => NULL()
     INTEGER, ALLOCATABLE :: start_index(:)
     INTEGER, ALLOCATABLE :: end_index(:)
     INTEGER, ALLOCATABLE :: start_block(:)
     INTEGER, ALLOCATABLE :: end_block(:)
+    TYPE(t_grid_domain_decomp_info) :: decomp_info
   END TYPE t_grid_cells
   TYPE :: t_grid_edges
     INTEGER, ALLOCATABLE :: cell_idx(:, :, :)
@@ -989,6 +1002,10 @@ MODULE mo_model_domain
     TYPE(t_tangent_vectors), ALLOCATABLE :: dual_normal_cell(:, :, :)
     REAL(KIND = 8), ALLOCATABLE :: inv_primal_edge_length(:, :)
     REAL(KIND = 8), ALLOCATABLE :: inv_dual_edge_length(:, :)
+    REAL(KIND = 8), ALLOCATABLE :: area_edge(:, :)
+    REAL(KIND = 8), ALLOCATABLE :: f_e(:, :)
+    REAL(KIND = 8), ALLOCATABLE :: fn_e(:, :)
+    REAL(KIND = 8), ALLOCATABLE :: ft_e(:, :)
     INTEGER, ALLOCATABLE :: refin_ctrl(:, :)
     INTEGER, ALLOCATABLE :: start_index(:)
     INTEGER, ALLOCATABLE :: end_index(:)
@@ -998,6 +1015,8 @@ MODULE mo_model_domain
   TYPE :: t_grid_vertices
     INTEGER, ALLOCATABLE :: cell_idx(:, :, :)
     INTEGER, ALLOCATABLE :: cell_blk(:, :, :)
+    INTEGER, ALLOCATABLE :: edge_idx(:, :, :)
+    INTEGER, ALLOCATABLE :: edge_blk(:, :, :)
     INTEGER, ALLOCATABLE :: start_index(:)
     INTEGER, ALLOCATABLE :: end_index(:)
     INTEGER, ALLOCATABLE :: start_block(:)

@@ -220,6 +220,45 @@ end subroutine run
     assert _compiles(out)
 
 
+def test_keep_type_components_preserves_unreferenced_members():
+    """``keep_type_components`` keeps EXACTLY the named derived-type members
+    through pruning even when the entry never references them, at their source
+    declaration order -- the hook that lets one kernel's single-TU carry the
+    union of struct members a sibling kernel also consumes.  Members neither
+    referenced nor named are still pruned."""
+    sources = {
+        "types_mod.f90":
+        """
+module types_mod
+  implicit none
+  type t_thing
+    real(kind=8), allocatable :: a(:)
+    real(kind=8), allocatable :: b(:)
+    real(kind=8), allocatable :: c(:)
+  end type t_thing
+end module types_mod
+""",
+        "driver.f90":
+        """
+subroutine run(t, out)
+  use types_mod, only: t_thing
+  implicit none
+  type(t_thing), intent(in) :: t
+  real(kind=8), intent(out) :: out
+  out = t % a(1)          ! only 'a' referenced
+end subroutine run
+""",
+    }
+    out = _inline_text(sources, "run", include_builtins=False, keep_type_components={"t_thing": ["b"]})
+    # 'a' (referenced) and 'b' (named to keep) survive; 'c' (neither) is pruned.
+    assert re.search(r"::\s*a\(", out), "referenced member 'a' should survive"
+    assert re.search(r"::\s*b\(", out), "kept member 'b' should survive"
+    assert not re.search(r"::\s*c\(", out), "unreferenced, unnamed member 'c' should be pruned"
+    # Kept members retain source declaration order (a before b).
+    assert out.index(":: a(") < out.index(":: b("), "kept members must retain declaration order"
+    assert _compiles(out)
+
+
 def test_helper_proc_transitively_pulled_in():
     """A helper procedure called only indirectly (through the entry's
     callee) is kept by the reachability-driven pruning."""

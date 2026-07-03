@@ -232,6 +232,7 @@ class ParseConfig:
                  consolidate_global_data: bool = False,
                  rename_uniquely: bool = False,
                  do_not_prune_type_components: bool = False,
+                 keep_type_components: Optional[Dict[str, Iterable[str]]] = None,
                  monomorphize: bool = True,
                  rename_specifics: Optional[Dict[str, str]] = None,
                  specialize_at_source: Optional[Iterable[str]] = None):
@@ -275,6 +276,22 @@ class ParseConfig:
         self.consolidate_global_data = consolidate_global_data
         self.rename_uniquely = rename_uniquely
         self.do_not_prune_type_components = do_not_prune_type_components
+        #: ``typename -> [component names]`` -- derived-type components to keep
+        #: through pruning EVEN when no body reference reaches them.  Unlike
+        #: :attr:`do_not_prune_type_components` (all-or-nothing over every type),
+        #: this preserves EXACTLY the named members, at their source declaration
+        #: positions (pruning removes non-survivors in place, so kept members
+        #: keep their relative order).  Used to make one kernel's extracted
+        #: single-TU carry the union of struct members a SIBLING kernel also
+        #: consumes, so a per-member-SoA callback ABI lines up member-for-member
+        #: on both sides (the marshal-expansion leaf order == the binding shim's
+        #: slot order, both being source declaration order).  Type / component
+        #: names are matched case-insensitively.  Resolved to
+        #: ``Component_Decl`` specs by :meth:`keep_named_type_components`.
+        self.keep_type_components: Dict[str, List[str]] = {
+            t.lower(): [c.lower() for c in comps]
+            for t, comps in (keep_type_components or {}).items()
+        }
         #: Run the single-level abstract-dispatch monomorphisation pass (default
         #: on, always): collapse a ``CLASS(base)`` virtual dispatch the bridge
         #: cannot lower into a static call.  A precise no-op when the program
@@ -311,6 +328,28 @@ class ParseConfig:
         ident_map = analysis.identifier_specs(ast)
         comp_specs = [k for k, v in ident_map.items() if isinstance(v, f03.Component_Decl)]
         self.do_not_prune = list({x for x in comp_specs + self.do_not_prune})
+
+    def keep_named_type_components(self, ast: f03.Program):
+        """Mark the specific derived-type components named in
+        :attr:`keep_type_components` to be preserved during pruning.
+
+        A component spec is ``(module, typename, component)`` (see
+        :func:`analysis.identifier_specs`); we match on the last two tuple
+        elements case-insensitively so the caller names only ``typename`` +
+        ``component`` (the defining module is resolved from wherever the type
+        lands after the merge).  Unmatched entries are ignored (a type the
+        merge pruned entirely before this runs contributes nothing)."""
+        if not self.keep_type_components:
+            return
+        ident_map = analysis.identifier_specs(ast)
+        keep: List[types.SPEC] = []
+        for spec, node in ident_map.items():
+            if not isinstance(node, f03.Component_Decl) or len(spec) < 2:
+                continue
+            tname, cname = spec[-2].lower(), spec[-1].lower()
+            if cname in self.keep_type_components.get(tname, ()):
+                keep.append(spec)
+        self.do_not_prune = list({x for x in keep + self.do_not_prune})
 
 
 def top_level_objects_map(ast: f03.Program, path: str) -> Dict[str, Base]:
@@ -496,8 +535,24 @@ def restore_intrinsic_uses(ast: f03.Program, captured: Dict[Tuple[str, ...], Lis
     # 2. Restore the original intrinsic ``USE``s at their scopes (matched by
     #    qualified name); a module-level ``USE`` is host-associated into every
     #    contained procedure, so the per-subprogram partials are not needed.
+    #
+    #    EXCEPTION: an external-library ``USE`` whose stub ``MODULE`` was folded
+    #    away and pruned during the pipeline (the inlined-halo ``module mpi``
+    #    constants stub: once ``mpi_status_size`` &c. fold to literals nothing
+    #    references it, so pruning drops it).  Restoring ``USE mpi`` then
+    #    dangles -- flang has no ``mpi.mod`` -- so skip restoring an
+    #    external-library ``USE`` whose module is no longer defined in the AST.
+    #    A genuine flang-provided intrinsic (``iso_c_binding`` &c.) has no
+    #    in-AST ``MODULE`` either but is NOT external-library, so it is still
+    #    restored.
+    still_defined = {(stmt.children[1].string.lower() if stmt else None)
+                     for m in walk(ast, f03.Module)
+                     for stmt in [atmost_one(children_of_type(m, f03.Module_Stmt))]}
     for scope in walk(ast, _SCOPE_CLASSES):
         for clause in captured.get(_scope_qualname(scope), []):
+            mod = _module_name_of_use(f03.Use_Stmt(clause))
+            if mod in EXTERNAL_LIBRARY_MODULE_NAMES and mod not in still_defined:
+                continue  # stub folded + pruned -> restoring would dangle
             _prepend_use(scope, clause)
     return ast
 
@@ -825,6 +880,11 @@ def run_fparser_transformations(ast: f03.Program, cfg: ParseConfig, *, optimize:
         cfg.set_all_possible_entry_points_from(ast)
     if cfg.do_not_prune_type_components:
         cfg.avoid_pruning_type_components(ast)
+    # Resolve + preserve the specific named union components (if any) BEFORE the
+    # first prune, so a sibling kernel's struct members survive even though this
+    # kernel's body never references them.  Runs after the all-components flag so
+    # both can coexist; a no-op when ``keep_type_components`` is empty.
+    cfg.keep_named_type_components(ast)
     # Intrinsic-module ``USE``s (``iso_c_binding`` for C-interop kinds/types, ...)
     # and external-procedure ``INTERFACE`` blocks (C-library declarations) are
     # stripped by the pipeline as "resolved internally" / "no candidate"; capture
@@ -1141,6 +1201,7 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
                   consolidate_global_data: bool = False,
                   rename_uniquely: bool = False,
                   do_not_prune_type_components: bool = False,
+                  keep_type_components: Optional[Dict[str, Iterable[str]]] = None,
                   checkpoint_dir: Union[None, str, Path] = None,
                   include_builtins: bool = True,
                   tolerate_external_uses: bool = False,
@@ -1191,6 +1252,7 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
         consolidate_global_data=consolidate_global_data,
         rename_uniquely=rename_uniquely,
         do_not_prune_type_components=do_not_prune_type_components,
+        keep_type_components=keep_type_components,
         monomorphize=monomorphize,
         rename_specifics=rename_specifics,
         specialize_at_source=specialize_at_source,
@@ -1242,6 +1304,7 @@ def inline_to_single_tu(
     consolidate_global_data: bool = False,
     rename_uniquely: bool = False,
     do_not_prune_type_components: bool = False,
+    keep_type_components: Optional[Dict[str, Iterable[str]]] = None,
     checkpoint_dir: Union[None, str, Path] = None,
     include_builtins: bool = True,
     tolerate_external_uses: bool = False,
@@ -1275,6 +1338,14 @@ def inline_to_single_tu(
         unique identifiers.
     :param do_not_prune_type_components: keep unused derived-type
         components.
+    :param keep_type_components: ``{typename: [component, ...]}`` -- keep
+        EXACTLY these derived-type components through pruning even when the
+        entry never references them (targeted counterpart of
+        ``do_not_prune_type_components``, which keeps all components of all
+        types).  Kept members retain their source declaration order.  Used to
+        make one kernel's single-TU carry the union of struct members a sibling
+        kernel also consumes, so a per-member-SoA callback ABI aligns on both
+        sides.  Type / component names are matched case-insensitively.
     :param checkpoint_dir: dump intermediate ASTs (``ast_v*.f90``) here.
     :param include_builtins: inject intrinsic-module stubs so ``USE
         iso_c_binding`` / ``iso_fortran_env`` resolve during parsing.
@@ -1294,6 +1365,7 @@ def inline_to_single_tu(
                         consolidate_global_data=consolidate_global_data,
                         rename_uniquely=rename_uniquely,
                         do_not_prune_type_components=do_not_prune_type_components,
+                        keep_type_components=keep_type_components,
                         checkpoint_dir=checkpoint_dir,
                         include_builtins=include_builtins,
                         tolerate_external_uses=tolerate_external_uses,
