@@ -1539,6 +1539,29 @@ def emit_call(builder, ctx, n, region):
         if gid is not None:
             desc = ctx.sdfg.arrays.get(name)
             if desc is None:
+                # A marshalled struct member the caller reads only as a SCALAR
+                # SYMBOL (an array extent / loop bound), so the bridge promoted
+                # it to ``sdfg.symbols`` rather than minting an SDFG array
+                # (ICON's ``t_patch%nlev`` / ``%nblks_e`` / ``%id`` -- used by
+                # the callee, but never as data on the caller side).  It crosses
+                # the C ABI BY VALUE, exactly as the inner ``bind_c_shim``
+                # declares a scalar struct member that is also an extent
+                # (``<type>, value :: <flat>``) and as a non-aos free-symbol arg
+                # already rides below.  Record a by-value leaf: no connector, no
+                # memlet, the symbol rendered in-scope at emit time.
+                if name in ctx.sdfg.symbols:
+                    sym_dt = ctx.sdfg.symbols[name]
+                    if group_c_abi.get(gid) != 'per_member_soa':
+                        raise ValueError(f"external {callee!r}: aos member {name!r} is a scalar "
+                                         f"symbol (extent / loop bound), which only the "
+                                         f"per_member_soa C ABI can forward by value; the "
+                                         f"aos_struct_ptr path needs a materialised array. "
+                                         f"Register this arg with c_abi='per_member_soa'.")
+                    group_members[gid].append((sym_dt.ctype, 1, None, None, (), name))
+                    if gid != prev_gid:
+                        logical_terms.append(('aos', gid))
+                    prev_gid = gid
+                    continue
                 raise ValueError(f"external {callee!r}: aos member {name!r} is not "
                                  f"an SDFG array")
             dt = desc.dtype
@@ -1572,7 +1595,7 @@ def emit_call(builder, ctx, n, region):
                 ptr_of[cout] = dt
                 edges.append((name, cout, 'w'))
             group_members[gid].append(
-                (ctype, nel, cin if reads else None, cout if writes else None, tuple(shape) if shape else ()))
+                (ctype, nel, cin if reads else None, cout if writes else None, tuple(shape) if shape else (), None))
             if gid != prev_gid:
                 logical_terms.append(('aos', gid))
             prev_gid = gid
@@ -1646,7 +1669,14 @@ def emit_call(builder, ctx, n, region):
             # each dynamic-shape leaf (``nel == 0``) gets one ``int``
             # extent per dim prepended to feed the shim's
             # ``c_f_pointer`` shape constructor.
-            for ct, nel, cin, cout, shape in mems:
+            for ct, nel, cin, cout, shape, by_value_sym in mems:
+                # A by-value symbol member (an extent / loop bound the caller
+                # never materialised as an array) rides its in-scope value,
+                # matching the inner shim's ``<type>, value`` slot -- no
+                # connector, no extent prefix.
+                if by_value_sym is not None:
+                    call_args_c.append(f"({ct})({_sym2c(by_value_sym)})")
+                    continue
                 tok = cout if cout is not None else cin
                 if sig.dynamic_extents_abi and nel == 0 and shape:
                     for s in shape:
@@ -1665,9 +1695,9 @@ def emit_call(builder, ctx, n, region):
         # as a pointer placeholder so the surrounding struct stays well-
         # formed and skip the pack/unpack lines below.
         fields = " ".join((f"{ct} m{k};" if nel == 1 else f"{ct}* m{k};" if nel == 0 else f"{ct} m{k}[{nel}];")
-                          for k, (ct, nel, _, _, _) in enumerate(mems))
+                          for k, (ct, nel, _, _, _, _) in enumerate(mems))
         body_lines.append(f"struct {{ {fields} }} {buf};")
-        for k, (ct, nel, cin, cout, _shape) in enumerate(mems):
+        for k, (ct, nel, cin, cout, _shape, _sym) in enumerate(mems):
             if cin is None or nel == 0:
                 continue
             if nel == 1:
@@ -1715,7 +1745,7 @@ def emit_call(builder, ctx, n, region):
     for gid, mems in group_members.items():
         if group_c_abi.get(gid, 'aos_struct_ptr') != 'aos_struct_ptr':
             continue
-        for k, (ct, nel, cin, cout, _shape) in enumerate(mems):
+        for k, (ct, nel, cin, cout, _shape, _sym) in enumerate(mems):
             if cout is None or nel == 0:
                 continue
             if nel == 1:
@@ -1758,7 +1788,12 @@ def emit_call(builder, ctx, n, region):
             cur_sig_arg = next(sig_arg_iter, None)  # consume the aos sig arg
         last_member_idx += 1
         if group_c_abi.get(gid) == 'per_member_soa':
-            ct, nel, _cin, _cout, shape = group_members[gid][last_member_idx]
+            ct, nel, _cin, _cout, shape, by_value_sym = group_members[gid][last_member_idx]
+            # A by-value symbol member is a scalar C arg (no ``*``, no
+            # extent prefix) -- matches the inner shim's ``value`` slot.
+            if by_value_sym is not None:
+                decl_types.append(ct)
+                continue
             if sig.dynamic_extents_abi and nel == 0 and shape:
                 decl_types.extend(["int"] * len(shape))
             decl_types.append(f"{ct}*")

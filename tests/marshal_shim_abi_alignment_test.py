@@ -1,0 +1,215 @@
+"""Milestone-1 ABI-alignment contract for the ICON velocity-callback shape:
+an OUTER kernel that calls an INNER kernel via ``keep_external(c_abi=
+'per_member_soa')`` must produce a marshalled per-member-SoA leaf sequence that
+EQUALS the INNER kernel's ``bind_c_shim`` slot sequence -- member-for-member,
+in order -- whenever both compile against the SAME (union) struct type.
+
+Both sides walk the struct's members in Fortran declaration order (the marshal
+pass over ``fir::RecordType::getTypeList()``; the shim over the bridge's
+identically-ordered type snapshot), so the sequences coincide iff every member
+CLASS is handled the same way on both sides.  This test pins that for every
+class the real ``t_patch`` carries:
+
+  * **scalar-symbol** (``nblks_e``): the caller uses it only as an array
+    extent, so it is an ``sdfg.symbols`` entry forwarded BY VALUE -- matching
+    the shim's ``<type>, value`` slot.
+  * **box-of-scalar-array pass-through, BOTH directions**: ``solve_only_a`` is
+    read by the OUTER only (the INNER declares it but never reads it);
+    ``velo_only_b`` is read by the INNER only (the OUTER synthesizes it as a
+    pass-through input and forwards it untouched).
+  * **value-record-array** (``pnc`` of ``t_tangent_vectors {v1, v2}``):
+    expands to one leaf PER record field on both sides.
+  * **pointer-to-record handle** (``comm_pat_c``): no SoA image; SKIPPED on
+    both sides (marshaller ``isPointerToRecordHandle`` / bridge-snapshot
+    ``pointerToRecordMember``), so it contributes NO leaf to either sequence.
+
+Build-only (no gfortran link, no run) so it stays fast.
+"""
+import re
+
+import pytest
+
+from _util import build_sdfg, have_flang
+from dace_fortran.bindings.bind_c_shim import emit_bind_c_shim
+from dace_fortran.bindings.fortran_interface import build_auto_interface
+from dace_fortran.external import Arg, ExternalCall, clear_external_registry, keep_external
+
+pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+
+# The shared UNION type text, identical on both sides.  ``t_patch`` carries one
+# member of every class the real ICON type mixes.
+_UNION_TYPES = """
+  type :: tv
+    real(c_double) :: v1
+    real(c_double) :: v2
+  end type
+  type :: t_cpat
+    integer(c_int) :: n_recv
+    integer(c_int), allocatable :: recv_limits(:)
+  end type
+  type :: t_edges
+    real(c_double), allocatable :: solve_only_a(:, :)
+    real(c_double), allocatable :: velo_only_b(:, :)
+    type(tv), allocatable :: pnc(:, :, :)
+  end type
+  type :: t_patch
+    integer(c_int) :: nblks_e
+    type(t_edges) :: edges
+    type(t_cpat), pointer :: comm_pat_c
+  end type
+"""
+
+_INNER_SRC = f"""
+module m_align_inner
+  use iso_c_binding
+  implicit none
+{_UNION_TYPES}
+contains
+  subroutine velo(p, je, jb, out)
+    type(t_patch), intent(in) :: p
+    integer(c_int), intent(in) :: je, jb
+    real(c_double), intent(out) :: out(p % nblks_e)
+    out(1) = p % edges % velo_only_b(je, jb) + p % edges % pnc(je, jb, 1) % v1
+  end subroutine
+end module
+"""
+
+_OUTER_SRC = f"""
+module m_align_outer
+  use iso_c_binding
+  implicit none
+{_UNION_TYPES}
+contains
+  subroutine driver(p, je, jb, acc)
+    type(t_patch), intent(in) :: p
+    integer(c_int), intent(in) :: je, jb
+    real(c_double), intent(out) :: acc(p % nblks_e)
+    interface
+      subroutine velo(pp, je, jb, o)
+        import :: t_patch, c_int, c_double
+        type(t_patch), intent(in) :: pp
+        integer(c_int), intent(in) :: je, jb
+        real(c_double), intent(out) :: o(*)
+      end subroutine
+    end interface
+    acc(1) = p % edges % solve_only_a(je, jb)
+    call velo(p, je, jb, acc)
+  end subroutine
+end module
+"""
+
+# The p_patch member leaves, in declaration order, that BOTH sides must emit
+# (the pointer handle ``comm_pat_c`` is deliberately absent -- skipped).
+_EXPECTED_PATCH_LEAVES = [
+    "nblks_e",
+    "edges_solve_only_a",
+    "edges_velo_only_b",
+    "edges_pnc_v1",
+    "edges_pnc_v2",
+]
+
+
+def _outer_patch_leaf_order(tmp_path):
+    """The OUTER external call's p_patch leaf sequence, in ABI order.  Recovered
+    from the ExternalCall body's argument list: a data leaf appears as its
+    connector (``_aI`` / ``_aI_o``) that memlets ``p_<leaf>``; a by-value symbol
+    member appears as ``(int)(p_<leaf>)``.  We map each back to its bare leaf
+    name and keep first-appearance order, restricted to ``p_`` (p_patch) leaves.
+    """
+    clear_external_registry()
+    keep_external("velo",
+                  args=(Arg(kind="aos", intent="in",
+                            c_abi="per_member_soa"), Arg(kind="scalar", dtype="int32",
+                                                         intent="in"), Arg(kind="scalar", dtype="int32", intent="in"),
+                        Arg(kind="array", dtype="float64", intent="inout")),
+                  dynamic_extents_abi=True)
+    try:
+        sdfg = build_sdfg(_OUTER_SRC, tmp_path / "outer", name="driver", entry="m_align_outer::driver").build()
+        sdfg.validate()
+        node = next((n for st in sdfg.all_states() for n in st.nodes() if isinstance(n, ExternalCall)), None)
+        assert node is not None, "no ExternalCall lowered"
+        st = next(s for s in sdfg.all_states() if node in s.nodes())
+        # connector -> the SDFG array it memlets (data leaves).
+        conn_to_arr = {}
+        for e in st.in_edges(node):
+            if e.dst_conn:
+                conn_to_arr[e.dst_conn] = e.data.data
+        for e in st.out_edges(node):
+            if e.src_conn:
+                conn_to_arr[e.src_conn] = e.data.data
+        order = []
+        seen = set()
+
+        def _add(name):
+            # ``name`` is a ``p_<leaf>`` flat name, possibly a dynamic-extent
+            # companion ``p_<leaf>_d<i>`` -- strip the extent suffix so the
+            # extent maps to its owning leaf (extents ride ahead of each leaf
+            # pointer, they are not distinct leaves).
+            if not name.startswith("p_"):
+                return
+            leaf = re.sub(r"_d\d+$", "", name[len("p_"):])
+            if leaf and leaf not in seen:
+                seen.add(leaf)
+                order.append(leaf)
+
+        # Walk the call body's argument tokens left-to-right.  The call is the
+        # last ``velo(...)`` statement; parse its arg list.
+        call = re.search(r"\bvelo\(([^;]*)\)\s*;", node.body)
+        assert call, f"velocity call not found in body:\n{node.body}"
+        for tok in call.group(1).split(","):
+            tok = tok.strip()
+            m = re.fullmatch(r"\(\w+\)\((\w+)\)", tok)  # by-value member / extent cast
+            if m:
+                _add(m.group(1))
+                continue
+            if tok in conn_to_arr:  # data-pointer connector
+                _add(conn_to_arr[tok])
+        return order
+    finally:
+        clear_external_registry()
+
+
+def _inner_patch_slot_order(tmp_path):
+    """The INNER bind_c_shim's p_patch slot sequence, in ABI order.  Recovered
+    from the shim header args: a member contributes a value/pointer slot named
+    ``p_<leaf>`` / ``p_<leaf>_p`` (dynamic extents ``p_<leaf>_d<i>`` ride ahead
+    but map to the same leaf).  Keep first-appearance order of ``p_`` leaves."""
+    clear_external_registry()
+    try:
+        sdfg = build_sdfg(_INNER_SRC, tmp_path / "inner", name="velo", entry="m_align_inner::velo").build()
+        sdfg.validate()
+        iface = build_auto_interface(sdfg._fortran_interface_raw, "velo")
+        text = emit_bind_c_shim(iface, str(tmp_path / "velo_c.f90")).read_text()
+        sig = re.search(r"subroutine\s+velo_c\(([^)]*)\)", text, re.S)
+        args = [a.strip() for a in sig.group(1).replace("&", " ").split(",") if a.strip()]
+        order = []
+        seen = set()
+        for a in args:
+            if not a.startswith("p_"):
+                continue
+            leaf = a[len("p_"):]
+            leaf = re.sub(r"_d\d+$", "", leaf)  # strip extent suffix
+            leaf = re.sub(r"_p$", "", leaf)  # strip pointer suffix
+            if leaf and leaf not in seen:
+                seen.add(leaf)
+                order.append(leaf)
+        return order
+    finally:
+        clear_external_registry()
+
+
+def test_outer_marshal_leaf_order_equals_inner_shim_slot_order(tmp_path):
+    """The OUTER per-member-SoA marshalled p_patch leaf sequence EQUALS the
+    INNER bind_c_shim slot sequence, member-for-member, covering scalar-symbol
+    (by value), box-of-scalar-array pass-through in both directions,
+    value-record-array (per field), and the skipped pointer-to-record handle."""
+    outer = _outer_patch_leaf_order(tmp_path)
+    inner = _inner_patch_slot_order(tmp_path)
+    assert outer == _EXPECTED_PATCH_LEAVES, \
+        f"OUTER p_patch leaf order drifted:\n  got      {outer}\n  expected {_EXPECTED_PATCH_LEAVES}"
+    assert inner == _EXPECTED_PATCH_LEAVES, \
+        f"INNER shim slot order drifted:\n  got      {inner}\n  expected {_EXPECTED_PATCH_LEAVES}"
+    assert outer == inner, f"outer/inner ABI desync:\n  outer {outer}\n  inner {inner}"
+    # The pointer-to-record handle is absent from BOTH (skipped on both sides).
+    assert not any("comm_pat" in leaf for leaf in outer + inner), \
+        "pointer-to-record handle leaked into a leaf sequence"

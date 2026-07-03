@@ -3939,6 +3939,22 @@ FortranInterfaceInfo extractFortranInterface(mlir::ModuleOp module, const std::s
         auto& slot = (out.struct_types[tname] = std::move(layout));
         std::vector<std::pair<fir::RecordType, std::pair<std::string, std::string>>> nested;
         for (auto& p : rec.getTypeList()) {
+          // Pointer-to-record HANDLE member (``box<ptr|heap<record>>`` --
+          // ICON's ``t_comm_pattern_orig, POINTER :: comm_pat_c``): a
+          // linked-structure reference with no SoA image.  The marshal
+          // pass (``MarshalExternalStructs.cpp::isPointerToRecordHandle``)
+          // and ``FlattenStructs`` (``pointerToRecordMember``) both SKIP
+          // it; the binding shim consumes THIS snapshot, so it must skip
+          // it too -- otherwise the shim would reconstruct the handle's
+          // whole pointee record (its own members become C slots) while
+          // the marshaller forwards none, desyncing the per-member-SoA
+          // C ABI.  Skipping keeps all three walkers aligned on ONE
+          // predicate.  (A box-of-record-ARRAY member -- a value-record
+          // array like ``primal_normal_cell`` -- is ``box<...<seq<
+          // record>>>``, for which ``pointerToRecordMember`` returns
+          // null, so it is NOT skipped here and marshals per record
+          // field as before.)
+          if (pointerToRecordMember(p.second)) continue;
           FortranMemberInfo m;
           m.name = p.first;
           mlir::Type mt = p.second;

@@ -613,3 +613,58 @@ def test_bind_c_shim_e2e_struct_two_real_array(tmp_path: Path):
     np.testing.assert_allclose(b_sdfg, b_ref, rtol=0, atol=0)
     # Sanity-check that the kernel actually fired (vs. pass-through).
     np.testing.assert_allclose(a_ref, a_init + b_init, rtol=0, atol=0)
+
+
+# ---------------------------------------------------------------------------
+#  Pointer-to-record HANDLE members in the bridge type snapshot.  A
+#  ``box<ptr|heap<record>>`` member (ICON's ``t_comm_pattern_orig, POINTER ::
+#  comm_pat_c``) has no SoA image; the marshal pass and FlattenStructs both
+#  SKIP it (one shared ``pointerToRecordMember`` predicate).  The bridge's
+#  struct-layout snapshot (``recordStructLayoutRecursive``) -- which feeds
+#  ``emit_bind_c_shim`` -- must skip it too, so the shim emits NO slots for the
+#  handle's pointee record; otherwise its per-member-SoA C ABI desyncs from the
+#  outer marshaller (which forwards none).  A value-record ARRAY member
+#  (``box<...<seq<record>>>``) is NOT a handle and stays.
+# ---------------------------------------------------------------------------
+_HANDLE_SNAPSHOT_SRC = """
+module m_handle_snap
+  use iso_c_binding
+  implicit none
+  type :: t_cpat
+    integer(c_int) :: n_recv
+    integer(c_int), allocatable :: recv_limits(:)
+  end type
+  type :: t_patch
+    integer(c_int) :: nblks_e
+    real(c_double), allocatable :: area(:, :)
+    type(t_cpat), pointer :: comm_pat_c
+  end type
+contains
+  subroutine kern(p, je, jb, out)
+    type(t_patch), intent(in) :: p
+    integer(c_int), intent(in) :: je, jb
+    real(c_double), intent(out) :: out
+    out = p % area(je, jb) + real(p % nblks_e, c_double)
+  end subroutine
+end module
+"""
+
+
+def test_snapshot_skips_pointer_to_record_handle_member(tmp_path):
+    """The bridge struct-layout snapshot omits a pointer-to-record handle
+    member, so the emitted shim reconstructs the real data members (``area``,
+    ``nblks_e``) but NONE of the handle's pointee record -- matching the
+    marshaller's skip so the per-member-SoA ABIs coincide."""
+    from dace_fortran.bindings.fortran_interface import build_auto_interface
+    sdfg_dir = tmp_path / "sdfg"
+    sdfg = build_sdfg(_HANDLE_SNAPSHOT_SRC, sdfg_dir, name="kern", entry="m_handle_snap::kern").build()
+    iface = build_auto_interface(sdfg._fortran_interface_raw, "kern")
+    # The handle member carries no layout the shim can reconstruct.
+    tp = iface.struct_types["t_patch"]
+    member_names = {m.name for m in tp.members}
+    assert "comm_pat_c" not in member_names, \
+        f"pointer-to-record handle leaked into the struct snapshot: {sorted(member_names)}"
+    assert {"nblks_e", "area"} <= member_names, f"real data members missing: {sorted(member_names)}"
+    text = emit_bind_c_shim(iface, str(tmp_path / "kern_c.f90")).read_text()
+    assert "comm_pat_c" not in text, "shim reconstructed the pointer-to-record handle"
+    assert "area" in text and "nblks_e" in text

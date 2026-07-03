@@ -840,3 +840,65 @@ def test_marshal_loud_fails_on_used_pointer_to_record_handle(tmp_path):
             f"expected a loud marshal failure, got: {msg[:300]}"
     finally:
         clear_external_registry()
+
+
+# ---------------------------------------------------------------------------
+#  A marshalled struct SCALAR member the caller reads ONLY as an array extent /
+#  loop bound is promoted by the bridge to an ``sdfg.symbols`` entry (not an
+#  ``sdfg.arrays`` entry).  emit_call must forward it across the per_member_soa
+#  C ABI BY VALUE -- matching the inner ``bind_c_shim``'s ``<type>, value``
+#  slot for a scalar struct member -- instead of raising "not an SDFG array".
+#  This is ICON's ``t_patch%nlev`` / ``%nblks_e`` / ``%id`` shape: velocity
+#  consumes them, solve_nh uses them only as extents.
+# ---------------------------------------------------------------------------
+_SYMBOL_MEMBER_SRC = """
+module m_symmem
+  use iso_c_binding
+  implicit none
+  type :: t
+    integer(c_int) :: n
+    real(c_double), allocatable :: a(:)
+  end type
+contains
+  subroutine kern(s, out)
+    type(t), intent(in) :: s
+    real(c_double), intent(out) :: out(s % n)
+    interface
+      subroutine ext_sym(pp)
+        import :: t
+        type(t), intent(in) :: pp
+      end subroutine
+    end interface
+    out(1) = s % a(1)
+    call ext_sym(s)
+  end subroutine
+end module
+"""
+
+
+def test_marshal_scalar_symbol_member_forwarded_by_value(tmp_path):
+    """A struct scalar member used only as an array extent lands in
+    ``sdfg.symbols`` (not ``sdfg.arrays``); the per_member_soa marshalling
+    forwards it BY VALUE -- a plain scalar C arg (no pointer), rendered from
+    the in-scope symbol -- so the outer call and the inner shim's ``value``
+    slot coincide."""
+    from dace_fortran.external import ExternalCall
+    clear_external_registry()
+    try:
+        keep_external("ext_sym",
+                      args=(Arg(kind="aos", intent="in", c_abi="per_member_soa"), ),
+                      dynamic_extents_abi=True)
+        sdfg = build_sdfg(_SYMBOL_MEMBER_SRC, tmp_path, name="kern", entry="m_symmem::kern").build()
+        sdfg.validate()
+        # The member ``n`` is a symbol, not an array.
+        assert "s_n" in sdfg.symbols and "s_n" not in sdfg.arrays, \
+            f"expected s_n as a symbol; symbols={('s_n' in sdfg.symbols)} arrays={('s_n' in sdfg.arrays)}"
+        node = next((n for st in sdfg.all_states() for n in st.nodes() if isinstance(n, ExternalCall)), None)
+        assert node is not None
+        # ``n`` crosses by value: the body renders (int)(s_n), and the decl
+        # carries a scalar ``int`` for it (not ``int*``).
+        assert "(s_n)" in node.body, f"symbol member not forwarded by value; body=\n{node.body}"
+        decl_args = [a.strip() for a in node.c_decl[node.c_decl.index('(') + 1:node.c_decl.rindex(')')].split(',')]
+        assert decl_args[0] == "int", f"first arg (symbol member n) should be scalar int, got {decl_args}"
+    finally:
+        clear_external_registry()
