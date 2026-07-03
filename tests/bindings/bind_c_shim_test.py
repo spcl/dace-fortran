@@ -18,6 +18,7 @@ Fortran glue.  These tests cover three things:
    to a gfortran reference compiled from the same source.
 """
 import ctypes
+import re
 import shutil
 from pathlib import Path
 
@@ -269,19 +270,69 @@ def test_emit_shim_value_record_array_scatters_elementwise(tmp_path: Path):
         used_modules={"mo_cc": ("t_cc", )},
     )
     text = emit_bind_c_shim(iface, str(tmp_path / "kern_c.f90")).read_text()
-    # Local allocatable array instance + outer-extent value args.
+    # Local allocatable array instance + PER-FIELD outer-extent value args
+    # (``<flat>_<field>_d<i>``): each field carries its own extents, matching
+    # the SDFG's one-independent-SoA-companion-per-field flatten.
     assert "type(t_cc), allocatable, target :: p(:, :)" in text
-    assert "integer(c_int), value :: p_d0" in text
-    assert "integer(c_int), value :: p_d1" in text
+    assert "integer(c_int), value :: p_x_d0" in text
+    assert "integer(c_int), value :: p_x_d1" in text
     # Flat companion: rank outer(2) + member(1), sized [outer..., 3].
     assert "real(c_double), pointer :: p_x(:, :, :)" in text
-    assert "call c_f_pointer(p_x_p, p_x, [p_d0, p_d1, 3])" in text
-    assert "allocate(p(p_d0, p_d1))" in text
+    assert "call c_f_pointer(p_x_p, p_x, [p_x_d0, p_x_d1, 3])" in text
+    # Shared allocate uses the first (only) field's extents.
+    assert "allocate(p(p_x_d0, p_x_d1))" in text
     # Element-wise scatter (copy-in) then gather (copy-out, inout).
     assert "p(p_x_i0, p_x_i1)%x(p_x_i2) = p_x(p_x_i0, p_x_i1, p_x_i2)" in text
     assert "p_x(p_x_i0, p_x_i1, p_x_i2) = p(p_x_i0, p_x_i1)%x(p_x_i2)" in text
     # The struct array (not the flat slots) is passed to _dace.
     assert "call kern_dace(p)" in text
+
+
+def test_emit_shim_value_record_array_multifield_per_field_extents(tmp_path: Path):
+    """A MULTI-field value record (``t_tangent_vectors {v1, v2}``, ICON's
+    ``primal_normal_cell``) array member emits PER-FIELD extents: each field
+    carries its own ``<flat>_<field>_d<i>`` block immediately ahead of its
+    pointer (``[v1_d.., v1_p, v2_d.., v2_p]``), mirroring the SDFG's one-
+    independent-SoA-companion-per-field flatten and ``emit_library``'s
+    per-leaf ``dynamic_extents_abi`` order -- so the outer emit_call and the
+    inner shim agree slot-for-slot.  A single shared allocate (the fields are
+    one array-of-records) uses the first field's extents."""
+    iface = OriginalInterface(
+        entry="kern",
+        args=(OriginalArg(name="s", fortran_type="type(t_edges)", rank=0, intent="in", struct_type="t_edges"), ),
+        struct_types={
+            "t_edges":
+            DerivedType(name="t_edges",
+                        module="mo_edges",
+                        members=(Member(name="pnc",
+                                        fortran_type="type(t_tv)",
+                                        rank=3,
+                                        shape=("?", "?", "?"),
+                                        struct_name="t_tv"), )),
+            "t_tv":
+            DerivedType(name="t_tv",
+                        module="mo_edges",
+                        members=(Member(name="v1", fortran_type="real(c_double)",
+                                        rank=0), Member(name="v2", fortran_type="real(c_double)", rank=0))),
+        },
+        used_modules={"mo_edges": ("t_edges", "t_tv")},
+    )
+    text = emit_bind_c_shim(iface, str(tmp_path / "kern_c.f90")).read_text()
+    # Per-field extents: each field gets its own ``_d<i>`` block.
+    for f in ("v1", "v2"):
+        for d in range(3):
+            assert f"integer(c_int), value :: s_pnc_{f}_d{d}" in text, f"missing per-field extent s_pnc_{f}_d{d}"
+        assert f"type(c_ptr), value :: s_pnc_{f}_p" in text
+        assert f"call c_f_pointer(s_pnc_{f}_p, s_pnc_{f}, [s_pnc_{f}_d0, s_pnc_{f}_d1, s_pnc_{f}_d2])" in text
+    # C-ABI arg order: each field's extents ride immediately before its
+    # pointer (v1_d0..d2, v1_p, then v2_d0..d2, v2_p) -- the exact per-leaf
+    # interleave emit_library's per_member_soa path emits.
+    sig = re.search(r"subroutine\s+kern_c\(([^)]*)\)", text, re.S).group(1).replace("&", " ")
+    order = [a.strip() for a in sig.split(",") if a.strip()]
+    assert order.index("s_pnc_v1_d0") < order.index("s_pnc_v1_p") < order.index("s_pnc_v2_d0") \
+        < order.index("s_pnc_v2_p"), f"per-field extent/pointer interleave wrong: {order}"
+    # Single shared allocate from the first field's extents.
+    assert "allocate(s%pnc(s_pnc_v1_d0, s_pnc_v1_d1, s_pnc_v1_d2))" in text
 
 
 def test_emit_shim_pointer_array_record_indexed_and_scalar_extent_by_value(tmp_path: Path):

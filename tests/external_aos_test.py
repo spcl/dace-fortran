@@ -552,6 +552,77 @@ def test_v2_aos_external_with_allocatable_member(tmp_path):
         clear_external_registry()
 
 
+# v2.2 marshal expansion: a struct with a box-of-VALUE-RECORD-ARRAY member
+# (ICON's ``t_patch%edges%primal_normal_cell(:,:,:)`` of ``t_tangent_vectors
+# {v1,v2}`` -- an allocatable ARRAY of a value record of scalars).  The member
+# is ALSO read element-wise in the body (``e(i,j,k)%v1``) so the flatten pass
+# mints the per-field SoA companions ``s_e_v1`` / ``s_e_v2``; the marshal
+# expansion emits ONE leaf per record FIELD (not one per member), each
+# resolving to its companion, matching ``bind_c_shim._emit_value_record_array``'s
+# per-field C slots so the outer emit_call and the inner shim agree.
+_V2_VALUE_RECORD_ARRAY_SRC = """
+module m_v2_vra
+  use iso_c_binding
+  implicit none
+  type :: tv
+    real(c_double) :: v1
+    real(c_double) :: v2
+  end type
+  type :: vra_t
+    type(tv), allocatable :: e(:, :, :)
+    integer(c_int) :: n
+  end type
+contains
+  subroutine kern(s, je, jb, acc)
+    type(vra_t), intent(inout) :: s
+    integer(c_int), intent(in) :: je, jb
+    real(c_double), intent(out) :: acc
+    interface
+      subroutine ext_v2_vra(p)
+        import :: vra_t
+        type(vra_t), intent(inout) :: p
+      end subroutine
+    end interface
+    acc = s % e(je, jb, 1) % v1 + s % e(je, jb, 2) % v2
+    call ext_v2_vra(s)
+  end subroutine
+end module
+"""
+
+
+def test_v2_aos_external_with_value_record_array_member(tmp_path):
+    """``Arg(kind='aos', c_abi='per_member_soa')`` on a callee whose struct
+    has a box-of-value-record-array member.  The marshal pass (``v2.2``:
+    ``isBoxOfScalarRecordArray`` + the per-field element+field designate in
+    ``rewriteCall``) expands the member into ONE leaf per record FIELD
+    (``v1`` / ``v2``), each resolving to the flatten pass's per-field SoA
+    companion (``s_e_v1`` / ``s_e_v2``) -- so the external call carries a
+    marshalling group and touches the per-field arrays, NOT the AoS box.
+
+    This is the milestone-1 anchor for the ICON ``solve_nh`` velocity
+    callback (``t_patch``'s ``primal_normal_cell`` is exactly this shape):
+    the outer SDFG BUILDS instead of raising ``'aos' arg has no marshalling
+    group`` in ``emit_call``."""
+    from dace_fortran.external import ExternalCall
+    clear_external_registry()
+    try:
+        keep_external("ext_v2_vra", args=(Arg(kind="aos", intent="inout", c_abi="per_member_soa"), ))
+        sdfg = build_sdfg(_V2_VALUE_RECORD_ARRAY_SRC, tmp_path, name="kern", entry="m_v2_vra::kern").build()
+        node = next((n for st in sdfg.all_states() for n in st.nodes() if isinstance(n, ExternalCall)), None)
+        assert node is not None, "marshal expansion did not produce an ExternalCall"
+        st = next(s for s in sdfg.all_states() if node in s.nodes())
+        touched = {e.data.data for e in st.in_edges(node)} | \
+                  {e.data.data for e in st.out_edges(node)}
+        # The two record fields cross as the per-field SoA companions, one
+        # leaf each -- NOT the AoS box, and NOT a single ``s_e`` member.
+        assert "s_e_v1" in touched and "s_e_v2" in touched, \
+            f"expected per-field SoA leaves s_e_v1 / s_e_v2, got {sorted(touched)}"
+        # The scalar member ``n`` also crosses (a plain inline-flat leaf).
+        assert "s_n" in touched, f"expected scalar member s_n, got {sorted(touched)}"
+    finally:
+        clear_external_registry()
+
+
 # ---------------------------------------------------------------------------
 #  Arg.c_abi axis (Fortran shape x C ABI shape, decoupled): the same
 #  ``state_t`` shape that test_array_member_struct_aos_external above
@@ -628,5 +699,144 @@ end module
                                           f"got {node.c_decl!r}")
         assert "void *" not in node.c_decl, (f"per_member_soa decl should not surface ``void *``; "
                                              f"got {node.c_decl!r}")
+    finally:
+        clear_external_registry()
+
+
+# ---------------------------------------------------------------------------
+#  Pointer-to-record HANDLE members (ICON ``t_patch%comm_pat_c`` -- a
+#  ``TYPE(t_comm_pattern_orig), POINTER`` halo descriptor).  A scalar
+#  pointer/allocatable to a record has no SoA image, so the flatten pass
+#  never mints a companion for it.  The marshaller SKIPS such a member
+#  (no leaf) when the callee only passes the whole pointer through, and
+#  FAILS LOUDLY when the callee actually reads its pointed-to data (which
+#  per-member-SoA marshalling can't supply).
+# ---------------------------------------------------------------------------
+
+# A ``t_patch``-shaped struct: a value-record-array data member
+# (``primal_normal_cell``, marshalled per field) PLUS a pointer-to-record
+# handle member (``comm_pat_c``).  The handle's DATA is never read here --
+# only ``primal_normal_cell`` is -- so the handle is a pure pass-through.
+_HANDLE_UNUSED_SRC = """
+module m_handle_ok
+  use iso_c_binding
+  implicit none
+  type :: tv
+    real(c_double) :: v1
+    real(c_double) :: v2
+  end type
+  type :: t_cpat
+    integer(c_int) :: n_recv
+    integer(c_int), allocatable :: recv_limits(:)
+  end type
+  type :: t_edges
+    type(tv), allocatable :: primal_normal_cell(:, :, :)
+  end type
+  type :: t_patch
+    type(t_edges) :: edges
+    type(t_cpat), pointer :: comm_pat_c
+  end type
+contains
+  subroutine kern(p, je, jb, acc)
+    type(t_patch), intent(in) :: p
+    integer(c_int), intent(in) :: je, jb
+    real(c_double), intent(out) :: acc
+    interface
+      subroutine ext_handle(pp)
+        import :: t_patch
+        type(t_patch), intent(in) :: pp
+      end subroutine
+    end interface
+    acc = p % edges % primal_normal_cell(je, jb, 1) % v1
+    call ext_handle(p)
+  end subroutine
+end module
+"""
+
+
+def test_marshal_skips_unused_pointer_to_record_handle(tmp_path):
+    """A pointer-to-record handle member (``comm_pat_c``) the callee only
+    passes through (never reads its data) is SKIPPED by the marshaller: no
+    leaf, no group entry -- the struct still marshals its real data members
+    (the value-record-array ``primal_normal_cell`` per field).  This is the
+    ICON ``t_patch`` shape: the halo comm-pattern pointer has no SoA image,
+    so dropping it is correct and lets the velocity-callback struct marshal."""
+    from dace_fortran.external import ExternalCall
+    clear_external_registry()
+    try:
+        keep_external("ext_handle",
+                      args=(Arg(kind="aos", intent="in", c_abi="per_member_soa"), ),
+                      dynamic_extents_abi=True)
+        sdfg = build_sdfg(_HANDLE_UNUSED_SRC, tmp_path, name="kern", entry="m_handle_ok::kern").build()
+        node = next((n for st in sdfg.all_states() for n in st.nodes() if isinstance(n, ExternalCall)), None)
+        assert node is not None, "marshal expansion did not produce an ExternalCall"
+        st = next(s for s in sdfg.all_states() if node in s.nodes())
+        touched = {e.data.data for e in st.in_edges(node)} | {e.data.data for e in st.out_edges(node)}
+        # The value-record fields cross; the comm-pattern handle does NOT.
+        assert "p_edges_primal_normal_cell_v1" in touched and "p_edges_primal_normal_cell_v2" in touched
+        assert not any("comm_pat" in t for t in touched), \
+            f"pointer-to-record handle should be skipped, but a comm_pat leaf crossed: {sorted(touched)}"
+    finally:
+        clear_external_registry()
+
+
+# Same struct, but now the callee READS the handle's pointed-to data
+# (``p%comm_pat_c%n_recv``).  Marshalling a linked-structure handle through
+# a runtime pointer is unsupported, and silently dropping a member whose
+# data is needed would corrupt the C ABI -- so the pass must fail loudly.
+_HANDLE_USED_SRC = """
+module m_handle_bad
+  use iso_c_binding
+  implicit none
+  type :: tv
+    real(c_double) :: v1
+    real(c_double) :: v2
+  end type
+  type :: t_cpat
+    integer(c_int) :: n_recv
+    integer(c_int), allocatable :: recv_limits(:)
+  end type
+  type :: t_edges
+    type(tv), allocatable :: primal_normal_cell(:, :, :)
+  end type
+  type :: t_patch
+    type(t_edges) :: edges
+    type(t_cpat), pointer :: comm_pat_c
+  end type
+contains
+  subroutine kern(p, je, jb, acc)
+    type(t_patch), intent(in) :: p
+    integer(c_int), intent(in) :: je, jb
+    real(c_double), intent(out) :: acc
+    interface
+      subroutine ext_handle(pp)
+        import :: t_patch
+        type(t_patch), intent(in) :: pp
+      end subroutine
+    end interface
+    acc = p % edges % primal_normal_cell(je, jb, 1) % v1 &
+        + real(p % comm_pat_c % n_recv, c_double)
+    call ext_handle(p)
+  end subroutine
+end module
+"""
+
+
+def test_marshal_loud_fails_on_used_pointer_to_record_handle(tmp_path):
+    """When the callee READS a pointer-to-record handle's pointed-to data
+    (``p%comm_pat_c%n_recv``), the marshaller must NOT silently drop the
+    member (the compiles-clean-then-corrupts hazard).  The pass emits an
+    error + ``signalPassFailure``; the build surfaces it as an exception
+    naming the offending member and the unsupported shape."""
+    clear_external_registry()
+    try:
+        keep_external("ext_handle",
+                      args=(Arg(kind="aos", intent="in", c_abi="per_member_soa"), ),
+                      dynamic_extents_abi=True)
+        with pytest.raises(Exception) as ei:
+            build_sdfg(_HANDLE_USED_SRC, tmp_path, name="kern", entry="m_handle_bad::kern").build()
+        msg = str(ei.value)
+        assert "pipeline failed" in msg or "pointer-to-record" in msg, \
+            f"expected a loud marshal failure, got: {msg[:300]}"
     finally:
         clear_external_registry()

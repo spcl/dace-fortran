@@ -24,6 +24,9 @@
 // follow-up (their designates need shape operands and an outer copy loop).
 // ============================================================================
 
+#include <functional>
+#include <string>
+
 #include "flang/Optimizer/Dialect/FIROps.h"
 #include "flang/Optimizer/Dialect/FIRType.h"
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
@@ -86,21 +89,61 @@ static bool isBoxOfScalarArray(mlir::Type t) {
   return false;
 }
 
+/// A record type all of whose members are simple scalars -- the
+/// element type of a *value-record array* member (ICON's
+/// ``t_tangent_vectors {v1:f64, v2:f64}``).  Distinct from a general
+/// nested record: this is the leaf record the value-record-array path
+/// scatters field-by-field, so every member must be a plain scalar
+/// (no nested records, no arrays, no boxes).
+static bool isScalarRecord(fir::RecordType rec) {
+  if (rec.getTypeList().empty()) return false;
+  for (auto& p : rec.getTypeList())
+    if (!isScalarMember(p.second)) return false;
+  return true;
+}
+
+/// A box-typed member whose box pointee is an array of a *value record
+/// of scalars* -- ICON's ``TYPE(t_tangent_vectors), ALLOCATABLE ::
+/// primal_normal_cell(:,:,:)`` (``box<heap<array<record{v1,v2}>>>``).
+/// Covers both allocatable (``heap``) and pointer (``ptr``) at any
+/// rank.  The flatten pass splits such a member into one per-record-
+/// FIELD SoA companion (``..._v1`` / ``..._v2``, each the AoS
+/// element rank), and ``bind_c_shim._emit_value_record_array`` emits
+/// one C-ABI slot per field; ``enumerateLeaves`` mirrors that by
+/// emitting one leaf per record field so the two ABIs coincide.
+static bool isBoxOfScalarRecordArray(mlir::Type t) {
+  auto box = mlir::dyn_cast<fir::BoxType>(t);
+  if (!box) return false;
+  mlir::Type inner = box.getEleTy();
+  if (auto heap = mlir::dyn_cast<fir::HeapType>(inner))
+    inner = heap.getEleTy();
+  else if (auto ptr = mlir::dyn_cast<fir::PointerType>(inner))
+    inner = ptr.getEleTy();
+  auto seq = mlir::dyn_cast<fir::SequenceType>(inner);
+  if (!seq) return false;
+  auto rec = mlir::dyn_cast<fir::RecordType>(seq.getEleTy());
+  return rec && isScalarRecord(rec);
+}
+
 /// Recursive variant of :func:`isInlineFlatMember`: also accepts a
 /// member that is itself a derived type whose every member satisfies
-/// this predicate, *and* (v2) a box-typed member whose pointee is a
-/// scalar-element array.  The expansion step (``marshal``) walks
-/// recursive-record members down to leaves and treats each
-/// box-member as its own leaf; ``rewriteCall`` emits the
-/// ``fir.load`` + ``fir.box_addr`` chain at the call site to extract
-/// the data pointer for the external.  The expanded function's
-/// per-leaf arg type is the box pointee (``fir.heap<seq<...>>`` or
-/// ``fir.ptr<seq<...>>``) -- not the box itself -- so the C ABI of
-/// each leaf collapses to a single ``<scalar>*`` pointer matching the
-/// per-member SoA slots the sibling-SDFG ``bind_c_shim`` produces.
+/// this predicate, a box-typed member whose pointee is a
+/// scalar-element array, *and* (v2.2) a box-typed member whose pointee
+/// is an array of a value record of scalars.  The expansion step
+/// (``marshal``) walks recursive-record members down to leaves and
+/// treats a box-of-scalar-array member as its own leaf and a
+/// box-of-value-record-array member as one leaf per record field;
+/// ``rewriteCall`` emits the designate chain for each.  The expanded
+/// function's per-leaf arg type is the box pointee (``fir.heap<seq<
+/// ...>>`` / ``fir.ptr<seq<...>>``) for a scalar-array leaf, or the
+/// per-field scalar ref for a value-record-array field leaf -- so the
+/// C ABI of each leaf collapses to a single ``<scalar>*`` pointer
+/// matching the per-member SoA slots the sibling-SDFG ``bind_c_shim``
+/// produces.
 static bool isRecursiveInlineFlatMember(mlir::Type t) {
   if (isInlineFlatMember(t)) return true;
   if (isBoxOfScalarArray(t)) return true;
+  if (isBoxOfScalarRecordArray(t)) return true;
   if (auto rec = mlir::dyn_cast<fir::RecordType>(t)) {
     if (rec.getTypeList().empty()) return false;
     for (auto& p : rec.getTypeList())
@@ -110,21 +153,57 @@ static bool isRecursiveInlineFlatMember(mlir::Type t) {
   return false;
 }
 
-/// True iff every member of ``rec`` is recursively inline-flat (see
-/// :func:`isRecursiveInlineFlatMember`).
+/// A SCALAR pointer / allocatable to a record -- ``box<ptr|heap<
+/// record>>`` (NOT an array; ``isBoxOfScalarRecordArray`` covers the
+/// array case).  This is a *linked-structure handle*: a reference to
+/// another aggregate (ICON's ``t_comm_pattern_orig, POINTER ::
+/// comm_pat_c`` -- a halo-exchange descriptor).  Such a member has no
+/// SoA image -- its data is reached only by chasing the pointer -- so
+/// the flatten pass never mints a companion for it (it is skipped,
+/// mirroring ``collectFlatLeaves``'s ``partial`` skip in
+/// ``FlattenStructs.cpp``).  The marshaller likewise emits NO leaf for
+/// it PROVIDED the callee does not read its data
+/// (``handleMemberDataUsed`` below); a handle whose data the callee
+/// actually needs is a genuine gap and fails loudly rather than
+/// silently dropping a live member.
+static bool isPointerToRecordHandle(mlir::Type t) {
+  auto box = mlir::dyn_cast<fir::BoxType>(t);
+  if (!box) return false;
+  mlir::Type inner = box.getEleTy();
+  if (auto heap = mlir::dyn_cast<fir::HeapType>(inner))
+    inner = heap.getEleTy();
+  else if (auto ptr = mlir::dyn_cast<fir::PointerType>(inner))
+    inner = ptr.getEleTy();
+  else
+    return false;  // a bare ``box<record>`` is not a pointer/allocatable handle
+  return mlir::isa<fir::RecordType>(inner);
+}
+
+/// True iff every member of ``rec`` is either recursively inline-flat
+/// (see :func:`isRecursiveInlineFlatMember`) or a skippable
+/// pointer-to-record handle (see :func:`isPointerToRecordHandle`).  At
+/// least one member must be genuinely marshalable (an all-handles
+/// record has nothing to expand and is not a marshal target).
 static bool allRecursiveInlineFlatMembers(fir::RecordType rec) {
   if (rec.getTypeList().empty()) return false;
-  for (auto& p : rec.getTypeList())
-    if (!isRecursiveInlineFlatMember(p.second)) return false;
-  return true;
+  bool anyMarshalable = false;
+  for (auto& p : rec.getTypeList()) {
+    if (isRecursiveInlineFlatMember(p.second))
+      anyMarshalable = true;
+    else if (!isPointerToRecordHandle(p.second))
+      return false;
+  }
+  return anyMarshalable;
 }
 
 /// The marshalable struct a reference type points at, or null.
 ///
-/// Accepts both v1 (every member directly inline-flat) and the v2.1
-/// recursive variant (nested derived types whose members are
-/// recursively inline-flat).  Box / pointer / allocatable members
-/// remain unsupported -- those are the full v2 boundary still to land.
+/// Accepts v1 (every member directly inline-flat), the v2.1 recursive
+/// variant (nested derived types whose members are recursively
+/// inline-flat), v2.2 (value-record-array members), and structs that
+/// additionally carry skippable pointer-to-record *handle* members
+/// (:func:`isPointerToRecordHandle`) as long as at least one member is
+/// genuinely marshalable.
 static fir::RecordType scalarStructPointee(mlir::Type argTy) {
   auto ref = mlir::dyn_cast<fir::ReferenceType>(argTy);
   if (!ref) return {};
@@ -191,11 +270,24 @@ struct MarshalExternalStructsPass
   /// caller's struct base down to this leaf; for a top-level member
   /// ``foo``, ``path`` is ``["foo"]``; for a nested ``ip%u``,
   /// ``path`` is ``["ip", "u"]``.  ``type`` is the leaf type (the
-  /// final scalar / static-shape array of scalar -- nested record
-  /// members never appear as leaves, they are walked through).
+  /// final scalar / static-shape array of scalar / box -- nested
+  /// record members never appear as leaves, they are walked through).
+  ///
+  /// A *value-record-array field* leaf (``recordField`` set) is the
+  /// v2.2 shape: the last path element is a record FIELD reached
+  /// through a box-of-value-record-array member.  ``path`` ends with
+  /// ``[..., member, field]``; ``type`` is the box member type (used
+  /// to build the ``fir.load`` chain) and ``recordFieldScalar`` is the
+  /// field's scalar type (the per-leaf callee arg type).
+  /// ``rewriteCall`` builds ``<member-box>`` -> load -> element(1..)
+  /// -> ``{field}`` for these, matching the flatten pass's per-field
+  /// companion (``..._<field>``) and ``bind_c_shim``'s per-field slot.
   struct ExpandedLeaf {
     llvm::SmallVector<mlir::StringAttr, 2> path;
     mlir::Type type;
+    bool recordField = false;
+    mlir::Type recordFieldScalar;  // valid iff ``recordField``
+    unsigned recordArrayRank = 0;  // AoS element rank of the box array (iff ``recordField``)
   };
 
   /// Recursively walk ``rec`` and append one :struct:`ExpandedLeaf`
@@ -212,6 +304,43 @@ struct MarshalExternalStructsPass
                               llvm::SmallVectorImpl<ExpandedLeaf>& leaves) {
     for (auto& p : rec.getTypeList()) {
       auto name = mlir::StringAttr::get(ctx, p.first);
+      // Pointer-to-record handle (``comm_pat_c`` -- a halo descriptor):
+      // no SoA image, emit no leaf.  ``allRecursiveInlineFlatMembers``
+      // already admitted the enclosing struct with such a member; the
+      // ``handleMemberUsed`` safety walk (in ``marshal``) fails loudly
+      // if the callee actually reads its data, so a silently-dropped
+      // LIVE member can't slip through.
+      if (isPointerToRecordHandle(p.second)) continue;
+      // Box of a value-record array (``primal_normal_cell(:,:,:)`` of
+      // ``t_tangent_vectors{v1,v2}``): expand ONE leaf per record
+      // FIELD.  Each field leaf's path is ``[...prefix, member,
+      // field]`` and it carries the field scalar + the AoS element
+      // rank so ``rewriteCall`` builds the element+field designate the
+      // flatten pass's ``..._<field>`` companion is derived from -- and
+      // ``bind_c_shim._emit_value_record_array`` emits one C slot per
+      // field, so the two ABIs coincide.
+      if (isBoxOfScalarRecordArray(p.second)) {
+        auto box = mlir::cast<fir::BoxType>(p.second);
+        mlir::Type inner = box.getEleTy();
+        if (auto heap = mlir::dyn_cast<fir::HeapType>(inner))
+          inner = heap.getEleTy();
+        else if (auto ptr = mlir::dyn_cast<fir::PointerType>(inner))
+          inner = ptr.getEleTy();
+        auto seq = mlir::cast<fir::SequenceType>(inner);
+        auto elemRec = mlir::cast<fir::RecordType>(seq.getEleTy());
+        for (auto& f : elemRec.getTypeList()) {
+          ExpandedLeaf leaf;
+          leaf.path.append(prefix.begin(), prefix.end());
+          leaf.path.push_back(name);
+          leaf.path.push_back(mlir::StringAttr::get(ctx, f.first));
+          leaf.type = p.second;  // the box member type (drives the load chain)
+          leaf.recordField = true;
+          leaf.recordFieldScalar = f.second;
+          leaf.recordArrayRank = seq.getShape().size();
+          leaves.push_back(std::move(leaf));
+        }
+        continue;
+      }
       if (mlir::isa<fir::RecordType>(p.second) && !isBoxOfScalarArray(p.second)) {
         llvm::SmallVector<mlir::StringAttr, 4> next(prefix.begin(), prefix.end());
         next.push_back(name);
@@ -238,6 +367,72 @@ struct MarshalExternalStructsPass
     return box.getEleTy();
   }
 
+  /// Safety gate for the skipped pointer-to-record handle members
+  /// (:func:`isPointerToRecordHandle`).  Returns the name of the first
+  /// handle member of ``structRec`` whose POINTED-TO data is actually
+  /// read/written in ``module`` -- i.e. some ``hlfir.designate``
+  /// selects a component of the handle's record after chasing the
+  /// pointer -- or empty if every handle is a pure pass-through
+  /// (only its whole-pointer value is used, e.g. forwarded to a
+  /// dropped ``sync`` call).  A non-empty result means the callee
+  /// genuinely needs that member's aggregate data, which the
+  /// per-member-SoA marshalling cannot supply (recursive record
+  /// flattening through a runtime pointer is unimplemented) -- the
+  /// caller then fails loudly rather than silently dropping a live
+  /// member (the compiles-clean-then-corrupts hazard).
+  ///
+  /// Detection: a handle's data is used iff some component designate
+  /// ``%d{"field"}`` has a memref that, peeling ``fir.load`` /
+  /// ``fir.box_addr`` / intermediate element designates, resolves to a
+  /// ``%h{"<handleMember>"}`` component designate (the handle selector
+  /// itself).  A bare ``%h{"<handleMember>"}`` with no further
+  /// component/element user is a pure pass-through and does NOT count.
+  static std::string handleMemberDataUsed(fir::RecordType structRec, mlir::ModuleOp module) {
+    llvm::StringSet<> handleNames;
+    for (auto& p : structRec.getTypeList())
+      if (isPointerToRecordHandle(p.second)) handleNames.insert(p.first);
+    if (handleNames.empty()) return {};
+
+    // Peel storage-transparent wrappers (load / box_addr) and
+    // intermediate element designates (no component) to reach the
+    // producing component designate, mirroring the bridge's
+    // ``traceToDecl`` peel.
+    std::function<mlir::Value(mlir::Value)> peel = [&](mlir::Value v) -> mlir::Value {
+      for (int i = 0; i < 16 && v; ++i) {
+        auto* d = v.getDefiningOp();
+        if (!d) break;
+        if (auto ld = mlir::dyn_cast<fir::LoadOp>(d)) {
+          v = ld.getMemref();
+          continue;
+        }
+        if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
+          v = ba.getVal();
+          continue;
+        }
+        if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(d)) {
+          if (dg.getComponentAttr()) break;  // a component selector -- stop here
+          v = dg.getMemref();                // element/section -- keep peeling
+          continue;
+        }
+        break;
+      }
+      return v;
+    };
+
+    std::string used;
+    module.walk([&](hlfir::DesignateOp dg) {
+      if (!used.empty()) return;
+      if (!dg.getComponentAttr()) return;  // only a component access reads record data
+      mlir::Value base = peel(dg.getMemref());
+      auto* bd = base ? base.getDefiningOp() : nullptr;
+      auto parent = mlir::dyn_cast_or_null<hlfir::DesignateOp>(bd);
+      if (!parent) return;
+      auto pc = parent.getComponentAttr();
+      if (pc && handleNames.contains(pc.getValue())) used = pc.getValue().str();
+    });
+    return used;
+  }
+
   /// Rewrite ``fn``'s declaration to take each scalar-struct arg's members
   /// individually, tag the grouping, and expand every call site.
   void marshal(mlir::func::FuncOp fn, mlir::ModuleOp module) {
@@ -255,15 +450,41 @@ struct MarshalExternalStructsPass
     for (mlir::Type t : fn.getArgumentTypes()) {
       auto rec = scalarStructPointee(t);
       if (rec) {
+        // Loud-fail gate: a pointer-to-record handle member the
+        // marshaller SKIPS (``comm_pat_c`` &c.) must be a pure
+        // pass-through -- if the callee actually reads its pointed-to
+        // data, dropping it would silently corrupt the C ABI.
+        if (std::string used = handleMemberDataUsed(rec, module); !used.empty()) {
+          fn.emitError() << "hlfir-marshal-external-structs: external '" << fn.getSymName()
+                         << "' takes a struct whose pointer-to-record member '" << used
+                         << "' has its data read/written -- marshalling a linked-structure "
+                            "handle through a runtime pointer is unsupported (recursive record "
+                            "flattening not implemented).  Restructure the callee to take the "
+                            "member's data as flat arrays, or drop the call.";
+          signalPassFailure();
+          return;
+        }
         int64_t start = static_cast<int64_t>(newArgTys.size());
         llvm::SmallVector<ExpandedLeaf, 4> leaves;
         enumerateLeaves(rec, ctx, /*prefix=*/{}, leaves);
         for (auto& leaf : leaves) {
-          // Per-leaf arg type.  For a box-typed leaf the callee
+          // Per-leaf arg type.  A value-record-array FIELD leaf's
+          // operand is an element+field designate ``<member>(1..)
+          // {field}`` (see ``rewriteCall``), whose result is the
+          // field's ``ref<scalar>`` -- so the callee arg is
+          // ``ref<fieldScalar>`` (the fir.call then verifies operand
+          // == arg).  The C ABI is a ``<scalar>*`` regardless (the
+          // binding emitter derives it from the SoA companion array,
+          // not this HLFIR arg type), matching ``bind_c_shim``'s
+          // per-field pointer slot.  For a box-typed leaf the callee
           // expects the box pointee (the data buffer pointer
           // ``fir.box_addr`` extracts at the call site); for an
           // inline-flat leaf the existing ``ref<scalar | static-array>``
           // shape is preserved.
+          if (leaf.recordField) {
+            newArgTys.push_back(fir::ReferenceType::get(leaf.recordFieldScalar));
+            continue;
+          }
           mlir::Type callTy = boxLeafCalleeType(leaf.type);
           if (mlir::isa<fir::BoxType>(leaf.type))
             newArgTys.push_back(callTy);
@@ -313,6 +534,70 @@ struct MarshalExternalStructsPass
         // record, and so on.
         auto baseRec = mlir::cast<fir::RecordType>(mlir::cast<fir::ReferenceType>(base.getType()).getEleTy());
         for (auto& leaf : members[i]) {
+          // A value-record-array field leaf ends its path with the
+          // record FIELD (``[...record-members..., box-member,
+          // field]``).  Walk the record members to the box member
+          // ``ref<box<...>>``, then build the element+field access the
+          // flatten pass's ``..._<field>`` companion is derived from:
+          // ``fir.load`` the box, designate element ``(1,1,...)`` (the
+          // AoS element rank, all-ones), then ``{field}``.  The result
+          // is ``ref<fieldScalar>`` -- ``traceToDecl`` composes the
+          // flat name ``<...>_<member>_<field>`` from the ``{field}``
+          // component regardless of the element indices, so the call
+          // arg resolves to the same SoA companion the callee's
+          // ``bind_c_shim`` reconstructs, and the fir.call verifies
+          // against the ``ref<fieldScalar>`` arg the type rewrite set.
+          if (leaf.recordField) {
+            mlir::Value cursor = base;
+            fir::RecordType cursorRec = baseRec;
+            // Walk every path element up to (but not including) the
+            // field -- the last-but-one is the box member.
+            for (size_t pi = 0; pi + 1 < leaf.path.size(); ++pi) {
+              mlir::StringAttr comp = leaf.path[pi];
+              mlir::Type nextTy;
+              for (auto& p : cursorRec.getTypeList())
+                if (p.first == comp.getValue()) {
+                  nextTy = p.second;
+                  break;
+                }
+              bool isBoxMember = (pi + 2 == leaf.path.size());
+              auto refTy = fir::ReferenceType::get(nextTy);
+              auto dg = b.create<hlfir::DesignateOp>(
+                  loc, refTy, cursor, /*component=*/comp, /*component_shape=*/mlir::Value{},
+                  /*indices=*/mlir::ValueRange{}, /*is_triplet=*/b.getDenseBoolArrayAttr({}),
+                  /*substring=*/mlir::ValueRange{}, /*complex_part=*/mlir::BoolAttr{}, /*shape=*/mlir::Value{},
+                  /*typeparams=*/mlir::ValueRange{}, /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
+              cursor = dg.getResult();
+              if (!isBoxMember) cursorRec = mlir::cast<fir::RecordType>(nextTy);
+            }
+            // ``cursor`` is now ``ref<box<heap|ptr<array<record>>>>``.
+            // Load the box, take an element at all-ones indices, then
+            // the field.
+            auto box = mlir::cast<fir::BoxType>(leaf.type);
+            mlir::Type boxInner = box.getEleTy();
+            if (auto heap = mlir::dyn_cast<fir::HeapType>(boxInner))
+              boxInner = heap.getEleTy();
+            else if (auto ptr = mlir::dyn_cast<fir::PointerType>(boxInner))
+              boxInner = ptr.getEleTy();
+            auto elemRec = mlir::cast<fir::RecordType>(mlir::cast<fir::SequenceType>(boxInner).getEleTy());
+            auto loaded = b.create<fir::LoadOp>(loc, cursor);
+            llvm::SmallVector<mlir::Value, 4> idxs;
+            auto c1 = b.create<mlir::arith::ConstantOp>(loc, b.getIndexType(), b.getIndexAttr(1));
+            for (unsigned d = 0; d < leaf.recordArrayRank; ++d) idxs.push_back(c1.getResult());
+            auto elemDg = b.create<hlfir::DesignateOp>(loc, fir::ReferenceType::get(elemRec), loaded.getResult(),
+                                                       /*indices=*/idxs,
+                                                       /*typeparams=*/mlir::ValueRange{},
+                                                       /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
+            mlir::StringAttr fieldComp = leaf.path.back();
+            auto fieldDg = b.create<hlfir::DesignateOp>(
+                loc, fir::ReferenceType::get(leaf.recordFieldScalar), elemDg.getResult(),
+                /*component=*/fieldComp, /*component_shape=*/mlir::Value{},
+                /*indices=*/mlir::ValueRange{}, /*is_triplet=*/b.getDenseBoolArrayAttr({}),
+                /*substring=*/mlir::ValueRange{}, /*complex_part=*/mlir::BoolAttr{}, /*shape=*/mlir::Value{},
+                /*typeparams=*/mlir::ValueRange{}, /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
+            newOperands.push_back(fieldDg.getResult());
+            continue;
+          }
           mlir::Value cursor = base;
           fir::RecordType cursorRec = baseRec;
           for (size_t pi = 0; pi < leaf.path.size(); ++pi) {

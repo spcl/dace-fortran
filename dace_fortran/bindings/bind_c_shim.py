@@ -285,26 +285,40 @@ def _emit_value_record_array(iface: OriginalInterface, vt_name: str, outer_rank:
     ``edge2vert_coeff_cc_t(:,:,:,:)``); ``inst_path`` is the Fortran array
     instance to assemble.
 
-    The outer extents ride as ``integer(c_int), value`` args
-    ``<flat>_d<i>`` (the C caller supplies the array dims).  Per value
-    member ``v`` a flat C slot ``<flat>_<v>`` of rank ``outer_rank +
-    v.rank`` carries the SoA companion -- outer dims first, member dims
-    last, matching the wrapper's ``arr(i1..)%v(j1..) = flat(i1.., j1..)``
-    gather -- so the shim's scatter is its exact inverse.  ``intent``
-    (inherited from the outermost dummy) selects scatter (copy-in) and/or
-    gather (copy-out).
+    Per value member ``v`` a flat C slot ``<flat>_<v>`` of rank
+    ``outer_rank + v.rank`` carries the SoA companion -- outer dims
+    first, member dims last, matching the wrapper's ``arr(i1..)%v(j1..)
+    = flat(i1.., j1..)`` gather -- so the shim's scatter is its exact
+    inverse.  ``intent`` (inherited from the outermost dummy) selects
+    scatter (copy-in) and/or gather (copy-out).
+
+    C-ABI ordering: the outer extents ride PER FIELD as
+    ``integer(c_int), value`` args ``<flat>_<v>_d<i>`` immediately
+    ahead of that field's pointer, so each field emits ``[<v>_d0..,
+    <v>_p]``.  This mirrors the SDFG side, where the flatten pass
+    lowers the value-record array to one INDEPENDENT SoA companion per
+    field (``..._v1`` / ``..._v2``), each with its OWN symbolic
+    extents; ``builder.emit_library``'s ``per_member_soa`` +
+    ``dynamic_extents_abi`` path emits those extents per-leaf
+    (``emit_library`` ~1651-1654 / ~1760-1764), so the two ABIs
+    coincide leaf-for-leaf.  The fields share one runtime allocation
+    (they are the same array-of-records) so the ``allocate`` uses the
+    FIRST field's extents; every field's extents are equal at runtime.
 
     The ``allocate(inst(d0, ...))`` runs in ``copy_in`` ahead of the
     scatter: a top-level allocatable local or a nested pointer member both
     accept it."""
     st = iface.struct_types[vt_name]
-    ext_names = [f"{flat_prefix}_d{i}" for i in range(outer_rank)]
-    for en in ext_names:
-        header_args.append(en)
-        decls_value.append(f"  integer(c_int), value :: {en}")
-    copy_in.append(f"  allocate({inst_path}({', '.join(ext_names)}))")
+    alloc_ext_names = None  # the first field's outer extents drive the shared allocate
     for v in st.members:
         flat_name = f"{flat_prefix}_{v.name}"
+        ext_names = [f"{flat_name}_d{i}" for i in range(outer_rank)]
+        for en in ext_names:
+            header_args.append(en)
+            decls_value.append(f"  integer(c_int), value :: {en}")
+        if alloc_ext_names is None:
+            alloc_ext_names = ext_names
+            copy_in.append(f"  allocate({inst_path}({', '.join(ext_names)}))")
         ptr_name = f"{flat_name}_p"
         header_args.append(ptr_name)
         decls_ptr.append(f"  type(c_ptr), value :: {ptr_name}")
