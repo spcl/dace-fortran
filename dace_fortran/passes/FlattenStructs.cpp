@@ -1855,6 +1855,16 @@ struct FlattenStructsPass : public mlir::PassWrapper<FlattenStructsPass, mlir::O
       });
     }
 
+    // Collect flatten entries the AoR-scalar-inner split stamped on its
+    // persistent companion declares (see ``splitMultiDimAoRScalarMembers``).
+    // The split runs in the ``hlfir-split-aor-dummies`` pre-pass; stamping the
+    // entry on the companion declare (not the transient ``planEntries``, which
+    // this full pass clears + re-emits) lets THIS pass's plan carry the gather
+    // entry that maps ``<flat>`` back to ``<base>%<path>(i)%<inner>``.
+    getOperation().walk([this](hlfir::DeclareOp d) {
+      if (auto e = d->getAttrOfType<mlir::DictionaryAttr>("hlfir_bridge.aor_flat_entry")) planEntries.push_back(e);
+    });
+
     if (planEntries.empty()) return;
 
     // Stamp the plan as ``hlfir.flatten_plan = {entries = [...]}``.
@@ -2653,6 +2663,89 @@ struct FlattenStructsPass : public mlir::PassWrapper<FlattenStructsPass, mlir::O
       attrs.append(declareSegments(b, /*hasShape=*/false));
       auto decl = b.create<hlfir::DeclareOp>(argDecl.getLoc(), mlir::TypeRange{refBoxTy, refBoxTy},
                                              mlir::ValueRange{newArg}, attrs);
+
+      // Record the FlattenEntry for this companion so the bindings wrapper
+      // GATHERS ``<base>%<path>(i)%<inner>`` into it (and scatters back for
+      // intent(inout)) instead of zero-stubbing.  ``collectFlatLeaves`` skips
+      // the value-record ARRAY member (dynamic box of records) on the nested
+      // path, so without this entry the companion is a real SDFG-boundary arg
+      // with no data source and the emitter allocates it size-1 zeroed -- the
+      // kernel then reads garbage/zero for every ``pnc(i)%v1``.  Mirrors the
+      // non-aliasable AoS form ``recordStructArgEntry`` emits (aliasable=false
+      // => allocate + element gather loop from the ``$i``-indexed read expr).
+      {
+        mlir::Builder pb(ctx);
+        auto mkStr = [&](llvm::StringRef s) -> mlir::Attribute { return pb.getStringAttr(s); };
+        // AoR source path ``<base>%<path0>%<path1>...`` (the array member).
+        std::string aorPath = demangledBase;
+        for (auto& seg : kv.first.path) aorPath += "%" + seg;
+        // read: ``<aorPath>($i1, ..., $iOuterRank)%<inner>[($iOR+1, ...)]``.
+        std::string read = aorPath + "(";
+        for (unsigned i = 1; i <= outerRank; ++i) {
+          if (i > 1) read += ", ";
+          read += "$i" + std::to_string((int)i);
+        }
+        read += ")%" + kv.first.inner;
+        int memRank = memberRank(innerTy);  // 0 scalar inner, >0 static-array inner (``%x(3)``)
+        int totalRank = (int)outerRank + memRank;
+        if (memRank > 0) {
+          read += "(";
+          for (int i = 1; i <= memRank; ++i) {
+            if (i > 1) read += ", ";
+            read += "$i" + std::to_string((int)outerRank + i);
+          }
+          read += ")";
+        }
+        // shape: outer AoR extents, then the inner member's own (static) dims.
+        llvm::SmallVector<mlir::Attribute, 4> shapeExprs;
+        for (unsigned i = 1; i <= outerRank; ++i)
+          shapeExprs.push_back(mkStr("size(" + aorPath + ", dim=" + std::to_string((int)i) + ")"));
+        if (memRank > 0) {
+          std::string sample = aorPath + "(";
+          for (unsigned i = 0; i < outerRank; ++i) {
+            if (i) sample += ", ";
+            sample += "1";
+          }
+          sample += ")%" + kv.first.inner;
+          for (int i = 1; i <= memRank; ++i)
+            shapeExprs.push_back(mkStr("size(" + sample + ", dim=" + std::to_string(i) + ")"));
+        }
+        std::string dtype = dtypeName(memberElementType(innerTy));
+        if (dtype.empty()) dtype = "float64";
+        std::string intentStr = extractIntent(argDecl.getFortranAttrs());
+        std::string outerType;
+        {
+          llvm::raw_string_ostream os(outerType);
+          argDecl.getResult(0).getType().print(os);
+        }
+        auto recipe = pb.getDictionaryAttr({
+            pb.getNamedAttr("flat_names", pb.getArrayAttr({mkStr(name)})),
+            pb.getNamedAttr("read_exprs", pb.getArrayAttr({mkStr(read)})),
+            pb.getNamedAttr("write_expr", mkStr("")),
+            pb.getNamedAttr("rank", pb.getI64IntegerAttr(totalRank)),
+            pb.getNamedAttr("shape_exprs", pb.getArrayAttr(shapeExprs)),
+            pb.getNamedAttr("aliasable", pb.getBoolAttr(false)),
+            pb.getNamedAttr("scratch_dtype", mkStr(dtype)),
+            pb.getNamedAttr("aos_alloc", pb.getBoolAttr(false)),
+            pb.getNamedAttr("cap_symbol", mkStr("")),
+            pb.getNamedAttr("source_logical_kind", pb.getI64IntegerAttr(memberLogicalKind(innerTy))),
+        });
+        auto entry = pb.getDictionaryAttr({
+            pb.getNamedAttr("outer_expr", mkStr(aorPath + "%" + kv.first.inner)),
+            pb.getNamedAttr("outer_type", mkStr(outerType)),
+            pb.getNamedAttr("writeback_intent", mkStr(intentStr)),
+            pb.getNamedAttr("recipe", recipe),
+        });
+        // Stamp the entry on the PERSISTENT companion declare rather than
+        // pushing to the transient ``planEntries``: this split runs in the
+        // ``hlfir-split-aor-dummies`` pre-pass, and the full
+        // ``hlfir-flatten-structs`` pass re-runs it as an idempotent no-op (the
+        // companions already exist) then RE-EMITS ``hlfir.flatten_plan`` from a
+        // freshly-cleared ``planEntries`` -- overwriting the pre-pass's plan.
+        // ``runOnOperation`` collects these stamps so the final plan carries the
+        // gather entry too (mirrors the ``hlfir_bridge.dbuf_source`` stamp).
+        decl->setAttr("hlfir_bridge.aor_flat_entry", entry);
+      }
 
       for (auto& site : kv.second) {
         mlir::OpBuilder sb(site.innerDg);
