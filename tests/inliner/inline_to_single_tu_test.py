@@ -259,6 +259,43 @@ end subroutine run
     assert _compiles(out)
 
 
+def test_entry_also_external_keeps_its_body():
+    """Invariant (A1): a procedure that is BOTH the extraction entry and named
+    in the external policy keeps its real ``Execution_Part`` -- entry specs are
+    subtracted from the resolved make-noop set.  Without this, the entry's body
+    would be stubbed empty, unreferencing everything it reads.  (ICON extracts
+    ``velocity_tendencies`` as its own single-TU while ``solve_nh`` registers it
+    as an external; both facts are true at once for the same procedure.)"""
+    sources = {
+        "lib.f90":
+        """
+module lib
+  implicit none
+contains
+  subroutine work(x)
+    real, intent(inout) :: x
+    x = x * 3.0 + 1.0
+  end subroutine work
+end module lib
+""",
+        "driver.f90":
+        """
+subroutine work_entry(a)
+  use lib, only: work
+  implicit none
+  real, intent(inout) :: a
+  a = a + 7.0
+  call work(a)
+end subroutine work_entry
+""",
+    }
+    # ``work_entry`` is the entry AND named as an external -- its body must survive.
+    out = _inline_text(sources, "work_entry", do_not_emit=["work_entry"], include_builtins=False)
+    assert "SUBROUTINE work_entry" in out
+    assert "+ 7.0" in out, "entry body must NOT be stubbed empty when entry is also an external"
+    assert _compiles(out)
+
+
 def test_helper_proc_transitively_pulled_in():
     """A helper procedure called only indirectly (through the entry's
     callee) is kept by the reachability-driven pruning."""

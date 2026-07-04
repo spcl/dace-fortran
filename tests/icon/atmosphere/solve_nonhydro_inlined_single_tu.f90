@@ -1031,6 +1031,7 @@ MODULE mo_model_domain
     INTEGER :: nblks_v
     INTEGER :: nlev
     INTEGER :: nlevp1
+    INTEGER :: nshift
     INTEGER :: nshift_total
     INTEGER :: nshift_child
     TYPE(t_grid_cells) :: cells

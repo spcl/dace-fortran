@@ -45,7 +45,7 @@ def main(argv):
     from dace_fortran import inline_to_single_tu
     from dace_fortran.preprocess import merge_used_modules
 
-    cfg = atmo_config(halo_mode)
+    cfg = atmo_config(halo_mode, entry)
 
     def log(m):
         print(f"[{time.strftime('%H:%M:%S')}] {m}", flush=True)

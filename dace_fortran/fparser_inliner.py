@@ -1275,8 +1275,17 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
                 logger.debug("FParser Op: renamed %d generic/specific name-clash specific(s)", n)
         if dont_inline:
             # Stub the policy's non-inlined procedures (and their generic
-            # specifics) BEFORE the transformations inline them.
-            cfg.make_noop = list(cfg.make_noop or []) + _keep_external_noop_specs(ast, dont_inline)
+            # specifics) BEFORE the transformations inline them.  NEVER stub an
+            # ENTRY POINT, even if it is also named as an external: a kernel
+            # extracted AS its own single-TU (e.g. ICON's ``velocity_tendencies``
+            # is both the extraction entry and a registered external of
+            # ``solve_nh``) must keep its real body -- an empty entry would
+            # unreference every struct it reads, so pruning would drop those
+            # types (and any ``keep_type_components`` members riding on them),
+            # yielding a body-less, member-stripped TU.  Entry specs are
+            # subtracted from the resolved noop set here.
+            noop_specs = [s for s in _keep_external_noop_specs(ast, dont_inline) if s not in cfg.entry_points]
+            cfg.make_noop = list(cfg.make_noop or []) + noop_specs
         ast = run_fparser_transformations(ast, cfg, optimize=optimize)
         # NAMELIST statements survive pruning but may name variables pruning
         # dropped; rewrite them to the surviving declarations (or drop empties).

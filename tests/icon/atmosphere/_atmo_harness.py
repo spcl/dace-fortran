@@ -128,6 +128,12 @@ ATMO_BASE_RETURN_FALSE: list = []
 #: forwarded to velocity untouched).  Curated data (not code): the members
 #: ``velocity_tendencies`` reads minus the members ``solve_nh`` reads.
 ATMO_VELOCITY_UNION_COMPONENTS = {
+    # ``t_patch`` top level: velocity reads ``p_patch % nshift`` (the singular
+    # field), which ``solve_nh`` does NOT (it uses ``nshift_total`` /
+    # ``nshift_child``).  All three co-exist in the real ``mo_model_domain``
+    # ``t_patch``; keep ``nshift`` so the union ``t_patch`` carries all three and
+    # matches the velocity-side TU member-for-member.
+    "t_patch": ["nshift"],
     "t_grid_edges": ["area_edge", "f_e", "fn_e", "ft_e"],
     "t_grid_cells": ["area", "decomp_info"],
     # ``decomp_info`` is itself a ``t_grid_domain_decomp_info`` record; velocity
@@ -142,19 +148,83 @@ ATMO_VELOCITY_UNION_COMPONENTS = {
     ["coeff_gradekin", "coeff1_dwdz", "coeff2_dwdz", "deepatmo_gradh_ifc", "deepatmo_invr_mc", "deepatmo_invr_ifc"],
 }
 
+#: The MIRROR of :data:`ATMO_VELOCITY_UNION_COMPONENTS`: derived-type members
+#: ``solve_nh`` reads but ``velocity_tendencies`` does NOT.  Passed as
+#: ``keep_type_components`` when extracting the INNER ``velocity_tendencies``
+#: single-TU (same ``mo_model_domain`` source), so velocity's ``t_patch`` /
+#: ``t_int_state`` / ``t_nh_diag`` / ``t_nh_metrics`` / ``t_nh_prog`` /
+#: ``t_grid_edges`` carry the IDENTICAL union of members as the ``solve_nh`` TU
+#: -- byte-for-byte member set + declaration order.  That makes the outer
+#: (``solve_nh``) marshal-expansion leaf sequence equal the inner
+#: (``velocity_tendencies``) ``bind_c_shim`` slot sequence member-for-member, so
+#: the per-member-SoA callback C ABI lines up.  ``comm_pat_c`` / ``comm_pat_e``
+#: are OMITTED: they are pointer-to-record HANDLES the marshaller + shim both
+#: skip (no SoA leaf), so keeping them on only one side does not desync the ABI,
+#: and dropping them avoids dragging the polymorphic comm-pattern arm into
+#: velocity's closure.
+ATMO_SOLVE_NH_UNION_COMPONENTS = {
+    "t_patch": ["geometry_info", "n_childdom", "nshift_total", "nshift_child"],
+    "t_grid_edges": ["primal_normal_cell", "dual_normal_cell", "refin_ctrl"],
+    # Nested record FIELDS that produce marshal leaves and so must exist on BOTH
+    # sides.  ``solve_nh`` reads ``edges % primal_normal_cell(..) % v1`` and
+    # ``patch % geometry_info % mean_cell_area``; velocity never touches those
+    # scalar fields, so pruning would empty ``t_tangent_vectors`` /
+    # ``t_grid_geometry_info`` on the velocity side -- leaving ``primal_normal_cell``
+    # an array of a ZERO-field record (0 leaves) against ``solve_nh``'s ``_v1`` /
+    # ``_v2`` (2 leaves), a per-member-SoA desync.  Keeping the fields makes both
+    # record types structurally identical, so both walks emit the same leaves.
+    "t_tangent_vectors": ["v1", "v2"],
+    "t_grid_geometry_info": ["mean_cell_area"],
+    "t_int_state": ["e_flx_avg", "geofac_div", "geofac_grg", "pos_on_tplane_e", "nudgecoeff_e"],
+    "t_nh_prog": ["rho", "exner", "theta_v"],
+    # The tail ``ddt_vn_{dmp,adv,cor,pgr,phd,iau,ray,grf}`` (+ ``_is_associated``
+    # flags) are the per-process vn tendency contributions solve_nh SUMS;
+    # velocity_tendencies writes only the ``_pc`` predictor/corrector arrays, so
+    # pruning drops them on the velocity side -- they are kept so the marshalled
+    # t_nh_diag leaf set matches solve_nh's member-for-member.
+    "t_nh_diag": [
+        "exner_pr", "mass_fl_e", "rho_ic", "theta_v_ic", "grf_tend_vn", "grf_tend_w", "grf_tend_rho", "grf_tend_mflx",
+        "grf_bdy_mflx", "grf_tend_thv", "vn_ie_int", "w_int", "w_ubc", "theta_v_ic_int", "theta_v_ic_ubc", "rho_ic_int",
+        "rho_ic_ubc", "mflx_ic_int", "mflx_ic_ubc", "vn_incr", "exner_incr", "rho_incr", "ddt_exner_phy", "ddt_vn_phy",
+        "exner_dyn_incr", "mass_fl_e_sv", "ddt_vn_dyn", "ddt_vn_dyn_is_associated", "ddt_vn_dmp", "ddt_vn_adv",
+        "ddt_vn_cor", "ddt_vn_pgr", "ddt_vn_phd", "ddt_vn_iau", "ddt_vn_ray", "ddt_vn_grf", "ddt_vn_dmp_is_associated",
+        "ddt_vn_pgr_is_associated", "ddt_vn_phd_is_associated", "ddt_vn_iau_is_associated", "ddt_vn_ray_is_associated",
+        "ddt_vn_grf_is_associated"
+    ],
+    "t_nh_metrics": [
+        "rayleigh_w", "rayleigh_vn", "scalfac_dd3d", "hmask_dd3d", "vwind_expl_wgt", "vwind_impl_wgt",
+        "inv_ddqz_z_full", "wgtfacq_c", "wgtfacq1_c", "zdiff_gradp", "coeff_gradp", "exner_exfac", "theta_ref_mc",
+        "theta_ref_me", "theta_ref_ic", "exner_ref_mc", "rho_ref_mc", "rho_ref_me", "d_exner_dz_ref_ic",
+        "d2dexdz2_fac1_mc", "d2dexdz2_fac2_mc", "pg_exdist", "vertidx_gradp", "pg_edgeidx", "pg_edgeblk", "pg_vertidx",
+        "bdy_halo_c_idx", "bdy_halo_c_blk", "bdy_mflx_e_idx", "bdy_mflx_e_blk", "deepatmo_divh_mc", "deepatmo_divzu_mc",
+        "deepatmo_divzl_mc", "pg_listdim", "bdy_halo_c_dim", "bdy_mflx_e_dim", "mask_prog_halo_c"
+    ],
+}
 
-def atmo_config(halo_mode: str) -> dict:
+
+def atmo_config(halo_mode: str, entry: str = "") -> dict:
     """Full atmosphere extraction config for the given halo mode (see
     :mod:`icon._halo_modes`): the non-halo base externals merged with the
     mode-specific halo pieces.
 
-    The velocity-callback union (:data:`ATMO_VELOCITY_UNION_COMPONENTS`) is
-    applied only in ``inlined`` mode -- the mode the ``solve_nh`` +
-    ``velocity_tendencies`` per-member-SoA callback e2e drives.  The
-    ``external`` TU black-boxes the halo and is not a callback host, so it
-    needs no velocity-only pass-through members (keeping it lean also avoids a
-    needless re-pin of the external artifact)."""
+    ``keep_type_components`` (the shared-union machinery) is applied only in
+    ``inlined`` mode -- the mode the ``solve_nh`` + ``velocity_tendencies``
+    per-member-SoA callback e2e drives; the ``external`` TU black-boxes the halo
+    and hosts no callback, so it needs no pass-through members.  Which union is
+    kept depends on the ENTRY being extracted:
+
+      * the OUTER ``solve_nh`` keeps :data:`ATMO_VELOCITY_UNION_COMPONENTS` (the
+        members velocity reads but solve_nh doesn't),
+      * the INNER ``velocity_tendencies`` keeps the MIRROR
+        :data:`ATMO_SOLVE_NH_UNION_COMPONENTS`,
+
+    so both single-TUs carry the IDENTICAL union of struct members from the same
+    ``mo_model_domain`` -- the precondition for the callback ABI to align
+    member-for-member."""
     h = halo_config(halo_mode)
+    keep = None
+    if halo_mode == "inlined":
+        keep = (ATMO_SOLVE_NH_UNION_COMPONENTS if "velocity_tendencies" in entry else ATMO_VELOCITY_UNION_COMPONENTS)
     return dict(
         external_functions=ATMO_BASE_EXTERNAL_FUNCTIONS + h["external_functions"],
         force_include=h["force_include"],
@@ -164,21 +234,29 @@ def atmo_config(halo_mode: str) -> dict:
         defines=ATMO_DEFINES,
         extra_sources=h["extra_sources"],
         specialize_at_source=h["specialize_at_source"],
-        keep_type_components=(ATMO_VELOCITY_UNION_COMPONENTS if halo_mode == "inlined" else None),
+        keep_type_components=keep,
     )
 
 
 #: The atmosphere kernels extracted.  Each entry is
 #: ``(key, source-relative-to-src, module::procedure, body-line-count)``.
+#: ``velocity_advection`` is the INNER ``velocity_tendencies`` kernel the
+#: ``solve_nh`` dycore calls as a per-member-SoA ``keep_external`` callback;
+#: extracted from the SAME ``mo_model_domain`` closure so its struct types match
+#: ``solve_nh``'s union (see :data:`ATMO_SOLVE_NH_UNION_COMPONENTS`).
 KERNELS = [
     ("solve_nonhydro", "atm_dyn_iconam/mo_solve_nonhydro.f90", "mo_solve_nonhydro::solve_nh", 0),
+    ("velocity_advection", "atm_dyn_iconam/mo_velocity_advection.f90", "mo_velocity_advection::velocity_tendencies", 0),
 ]
 
 #: Checked-in single-TU artifacts, one per (kernel, halo mode):
-#: ``(key, halo_mode, filename, module::procedure)``.
+#: ``(key, halo_mode, filename, module::procedure)``.  ``velocity_advection`` is
+#: extracted in ``inlined`` mode only (the callback-inner shape).
 SINGLE_TU_ARTIFACTS = [
     ("solve_nonhydro", "inlined", "solve_nonhydro_inlined_single_tu.f90", "mo_solve_nonhydro::solve_nh"),
     ("solve_nonhydro", "external", "solve_nonhydro_external_single_tu.f90", "mo_solve_nonhydro::solve_nh"),
+    ("velocity_advection", "inlined", "velocity_advection_inlined_single_tu.f90",
+     "mo_velocity_advection::velocity_tendencies"),
 ]
 
 _EXTRACT_SCRIPT = _HERE / "_extract_single_tu.py"
