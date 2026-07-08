@@ -232,6 +232,19 @@ class ExternalSignature:
     # pre-shim convention (the caller hand-authors a C external that
     # accepts raw pointers).
     dynamic_extents_abi: bool = False
+    # Flat names of rank-0 struct members the CALLEE's ``bind_c_shim`` forwards
+    # as a ``type(c_ptr), value`` POINTER (it dereferences them via
+    # ``c_f_pointer``) rather than by value -- every rank-0 member that is NOT a
+    # read-only flat-array-dummy extent (see
+    # :func:`dace_fortran.bindings.bind_c_shim.scalar_pointer_members`, which
+    # derives this from the callee interface).  ``emit_call`` passes the ADDRESS
+    # of a scratch cell for each such member even when the CALLER holds it only
+    # as an SDFG symbol (a promoted grid extent) -- otherwise the raw integer
+    # value would be reinterpreted as a pointer.  The caller thus conforms to
+    # the callee shim's per-member ABI (an SDFG-to-SDFG sibling-callee fact the
+    # marshal cannot infer from the caller's own symbol view).  Empty for
+    # hand-authored C externals.
+    callee_ptr_scalar_members: frozenset = field(default_factory=frozenset)
 
     def c_declaration(self) -> str:
         """The ``extern "C" void <c_name>(<types>);`` declaration."""
@@ -310,7 +323,8 @@ def keep_external(name: str,
                   libraries: Tuple[str, ...] = (),
                   stub: bool = False,
                   dynamic_extents_abi: bool = False,
-                  module_symbol_forward: Tuple[Tuple[str, str, str, int], ...] = ()):
+                  module_symbol_forward: Tuple[Tuple[str, str, str, int], ...] = (),
+                  callee_ptr_scalar_members: frozenset = frozenset()):
     """Mark ``name`` to be left external -- the bridge emits an
     :class:`ExternalCall` library node for every ``CALL name(...)``
     instead of inlining ``name`` 's body.
@@ -351,6 +365,13 @@ def keep_external(name: str,
         :attr:`ExternalSignature.module_symbol_forward` for the
         rationale (per-library Fortran-module-globals issue exposed
         by the velocity dycore + external e2e ASan diagnostic).
+    :param callee_ptr_scalar_members: flat names of rank-0 struct members
+        the callee's ``bind_c_shim`` takes as a ``type(c_ptr), value``
+        pointer -- pass
+        ``bind_c_shim.scalar_pointer_members(callee_iface)`` when wiring an
+        SDFG-to-SDFG sibling callee so ``emit_call`` passes each such member's
+        ADDRESS (not its value) even when the caller holds it as a symbol (see
+        :attr:`ExternalSignature.callee_ptr_scalar_members`).
     """
     register_external(
         name,
@@ -359,7 +380,8 @@ def keep_external(name: str,
                           libraries=tuple(libraries),
                           stub=stub,
                           dynamic_extents_abi=dynamic_extents_abi,
-                          module_symbol_forward=tuple(module_symbol_forward)))
+                          module_symbol_forward=tuple(module_symbol_forward),
+                          callee_ptr_scalar_members=frozenset(callee_ptr_scalar_members)))
 
 
 def apply_external_functions(external_functions: Iterable["ExternalFunction"] = (),

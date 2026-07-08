@@ -584,14 +584,20 @@ class SDFGBuilder:
         # otherwise be inlined into the entry, dragging its implementation (and
         # everything only it reaches) into the lowered code.  No-op when the
         # registry is empty, so ordinary single-procedure builds are unaffected.
-        from dace_fortran.external import registered_names
+        from dace_fortran.external import lookup_external, registered_names
         ext_names = registered_names()
         if ext_names:
             self.module.externalize_symbols(ext_names)
-            # Record the same names so hlfir-marshal-external-structs knows
-            # which calls take their struct args as array-of-structs and must
-            # be expanded to per-member arguments (deep-copy marshalling).
-            self.module.set_external_symbols(ext_names)
+            # Record the EMITTED externals so hlfir-marshal-external-structs
+            # knows which calls take their struct args as array-of-structs and
+            # must be expanded to per-member arguments (deep-copy marshalling).
+            # A do_not_emit (stub) callee is DROPPED -- its call never survives
+            # to need an ABI -- so it is excluded here: marshalling its struct
+            # args is pointless, and it would hard-fail the pass on an
+            # unmarshallable member (e.g. a debug routine's pointer-to-record
+            # ``patch``) for a call that will not exist.
+            emit_names = [n for n in ext_names if not lookup_external(n).stub]
+            self.module.set_external_symbols(emit_names)
 
         # Run bridge passes BEFORE extracting variables so assumed-shape
         # dummies pick up real names and the rest of the rewrites have

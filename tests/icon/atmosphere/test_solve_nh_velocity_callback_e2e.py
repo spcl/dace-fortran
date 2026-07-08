@@ -63,14 +63,17 @@ The remaining work for the bit-exact differential is wiring the inner velocity
 prog(nnew) + full diag + prep_adv, max diff exactly 0.0).  The bit-exact
 assertion is NOT weakened when that lands.
 """
+import re
 import shutil
 from pathlib import Path
 
 import pytest
 
-from _util import have_flang
+from _util import build_sdfg, have_flang
+from dace_fortran.bindings.bind_c_shim import emit_bind_c_shim, scalar_pointer_members
+from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.build import make_builder
-from dace_fortran.external import Arg, apply_external_functions, clear_external_registry, keep_external
+from dace_fortran.external import Arg, ExternalCall, apply_external_functions, clear_external_registry, keep_external
 from dace_fortran.flang_codebase import find_openmpi_include
 
 pytestmark = [
@@ -83,6 +86,8 @@ pytestmark = [
 _HERE = Path(__file__).resolve().parent
 _TU = _HERE / "solve_nonhydro_inlined_single_tu.f90"
 _ENTRY = "mo_solve_nonhydro::solve_nh"
+_VELOCITY_TU = _HERE / "velocity_advection_inlined_single_tu.f90"
+_VELOCITY_ENTRY = "mo_velocity_advection::velocity_tendencies"
 
 # The velocity callback registration: five derived types cross per-member SoA
 # (matching the inner SDFG's bind_c_shim), then three rank-3 arrays and the
@@ -145,3 +150,73 @@ def test_solve_nh_velocity_callback_outer_sdfg_builds(tmp_path: Path):
         assert ext, "outer SDFG built but emitted no external velocity_tendencies call"
     finally:
         clear_external_registry()
+
+
+@pytest.mark.xdist_group("atmo_solve_nh_callback")
+def test_callback_abi_aligns_slot_for_slot_with_inner_shim(tmp_path: Path):
+    """The OUTER solve_nh marshalled ``velocity_tendencies_c(...)`` call lines up
+    with the INNER velocity ``bind_c_shim`` slot-for-slot in COUNT and TYPE.
+
+    This is the real-scale SDFG-to-SDFG callback ABI gate (the synthetic
+    ``marshal_shim_abi_alignment_test`` at toy scale, here at full ``t_patch`` /
+    value-record scale).  Two facets, each guarding a distinct fix:
+
+    * COUNT -- the shim emits one ``<flat>_lb<i>`` slot per dim of EVERY dynamic
+      member (shape-driven), so the marshal must supply a free ``offset_<...>``
+      lb for every such dim.  Guards the ``extract_vars.cpp`` fix that gives a
+      deferred-shape ALLOCATABLE/POINTER dummy uniformly-free bounds (a literal
+      ``rho(jc,1,jb)`` access no longer folds dim-1 to ``1`` and drops its lb),
+      while value-record AoR companions (``primal_normal_cell_v1``) stay 1-based
+      and extent-only (no spurious lb).
+
+    * TYPE -- a grid-dim scalar member the shim declares ``type(c_ptr), value``
+      (it reads the member as struct data via ``c_f_pointer``) must be passed as
+      a materialised ``&_pv_<sym>`` pointer, NOT the raw by-value ``(int)(<sym>)``
+      the caller would emit for a promoted symbol.  Guards the marshal-conforms-
+      to-callee ``callee_ptr_scalar_members`` path.  A by-value slot there would
+      make the inner ``c_f_pointer`` dereference the integer value as an address.
+    """
+    clear_external_registry()
+    inner_builder = build_sdfg(_VELOCITY_TU.read_text(), tmp_path / "vel_sdfg", name="velocity_tendencies",
+                               entry=_VELOCITY_ENTRY)
+    inner_builder.build()
+    iface = build_auto_interface(inner_builder._fortran_interface_raw, "velocity_tendencies")
+    shim = emit_bind_c_shim(iface, str(tmp_path / "vel_c.f90")).read_text()
+    header = re.search(r"subroutine\s+velocity_tendencies_c\s*\(([^)]*)\)", shim, re.S)
+    inner_slots = [a.strip() for a in header.group(1).replace("&", " ").split(",") if a.strip()]
+    ptr_members = scalar_pointer_members(iface)
+
+    clear_external_registry()
+    keep_external(
+        "velocity_tendencies",
+        c_name="velocity_tendencies_c",
+        args=_VELOCITY_CALLBACK_ARGS,
+        dynamic_extents_abi=True,
+        callee_ptr_scalar_members=ptr_members,
+    )
+    apply_external_functions(do_not_emit=_DO_NOT_EMIT)
+    try:
+        outer = make_builder(_TU.read_text(), entry=_ENTRY, name="solve_nh_abi", out_dir=tmp_path / "sdfg").build()
+        node = next((n for st in outer.all_states() for n in st.nodes() if isinstance(n, ExternalCall)), None)
+        assert node is not None, "outer solve_nh SDFG emitted no velocity ExternalCall"
+        call = re.search(r"\bvelocity_tendencies_c\(([^;]*)\)\s*;", node.body)
+        outer_args = [a.strip() for a in call.group(1).split(",")]
+    finally:
+        clear_external_registry()
+
+    # COUNT: the marshalled call matches the inner shim slot-for-slot.  A drift
+    # here is a dropped ``_lb`` slot on a deferred-shape member (count too low)
+    # or a spurious lb on a value-record companion (count too high).
+    assert len(outer_args) == len(inner_slots), (
+        f"velocity callback ABI slot-count desync: inner shim {len(inner_slots)} vs "
+        f"outer marshal {len(outer_args)}")
+
+    # TYPE: each grid-dim scalar member the shim takes as a pointer marshals as a
+    # materialised ``&_pv_<sym>`` -- the member slot, distinct from that same
+    # symbol's legitimate by-value ``(int)(<sym>)`` use as ANOTHER array's extent.
+    for member in ("p_patch_id", "p_patch_n_childdom", "p_patch_nblks_c", "p_patch_nblks_e", "p_patch_nblks_v",
+                   "p_patch_nlev", "p_patch_nlevp1"):
+        assert member in ptr_members, f"{member} should be a callee pointer member"
+        assert f"&_pv_{member}" in outer_args, (
+            f"grid-dim member {member} must marshal as a materialised pointer (&_pv_{member}); the "
+            f"inner shim declares it type(c_ptr), value and dereferences via c_f_pointer")

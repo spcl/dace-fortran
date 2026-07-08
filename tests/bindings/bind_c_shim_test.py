@@ -171,12 +171,14 @@ def test_emit_shim_scalar_dummy_extent_not_forwarded(tmp_path: Path):
 def test_emit_shim_dynamic_shape_struct_member(tmp_path: Path):
     """A struct member with a dynamic extent (``'?'`` in
     :attr:`Member.shape`) is now handled by the v2 shim emitter:
-    each dim rides as a separate ``integer(c_int), value`` arg
-    named ``<flat>_d<i>`` and the ``c_f_pointer`` shape constructor
-    references them at runtime.  For ALLOCATABLE / POINTER members
-    the shim cannot ``=>``-alias uniformly (``=>`` is only valid for
-    POINTER), so it ``allocate``s the struct field at the runtime
-    extents and element-copies in / out per ``intent``."""
+    each dim rides as a separate ``integer(c_int), value`` LOWER-BOUND
+    then EXTENT pair named ``<flat>_lb<i>`` / ``<flat>_d<i>``, and the
+    ``c_f_pointer`` shape constructor references the extents at runtime.
+    For ALLOCATABLE / POINTER members the shim cannot ``=>``-alias
+    uniformly (``=>`` is only valid for POINTER), so it ``allocate``s
+    the struct field at its TRUE bounds ``(lb : lb + d - 1)`` -- carrying
+    the lower bound so a member ICON allocates with a non-default bound
+    survives -- and element-copies in / out per ``intent``."""
     iface = OriginalInterface(
         entry="kern",
         args=(OriginalArg(name="st", fortran_type="type(t_state)", rank=0, intent="inout", struct_type="t_state"), ),
@@ -191,14 +193,15 @@ def test_emit_shim_dynamic_shape_struct_member(tmp_path: Path):
         used_modules={"mo_state": ("t_state", )},
     )
     text = emit_bind_c_shim(iface, str(tmp_path / "kern_c.f90")).read_text()
-    # Per-dim extent arg precedes the pointer arg.
+    # Per-dim lower-bound then extent arg precede the pointer arg.
+    assert "integer(c_int), value :: st_u_lb0" in text
     assert "integer(c_int), value :: st_u_d0" in text
     assert "type(c_ptr), value :: st_u_p" in text
     # The c_f_pointer shape constructor references the extent arg.
     assert "call c_f_pointer(st_u_p, st_u, [st_u_d0])" in text
-    # Allocate at runtime extents, element copy-in (inout), element
-    # copy-out -- valid for both POINTER and ALLOCATABLE members.
-    assert "allocate(st%u(st_u_d0))" in text
+    # Allocate at the member's TRUE bounds ``(lb : lb + d - 1)``, element
+    # copy-in (inout), element copy-out -- valid for POINTER + ALLOCATABLE.
+    assert "allocate(st%u(st_u_lb0 : st_u_lb0 + st_u_d0 - 1))" in text
     assert "st%u = st_u" in text
     assert "st_u = st%u" in text
 
@@ -370,7 +373,8 @@ def test_emit_shim_pointer_array_record_indexed_and_scalar_extent_by_value(tmp_p
     # Pointer-array-of-record member allocated to size 1, descended at (1).
     assert "allocate(patch%p1d(1))" in text
     assert "patch%p1d(1)%nblk = patch_p1d_nblk" in text
-    assert "allocate(patch%p1d(1)%dolic(patch_p1d_dolic_d0, patch_p1d_dolic_d1))" in text
+    assert ("allocate(patch%p1d(1)%dolic(patch_p1d_dolic_lb0 : patch_p1d_dolic_lb0 + patch_p1d_dolic_d0 - 1, "
+            "patch_p1d_dolic_lb1 : patch_p1d_dolic_lb1 + patch_p1d_dolic_d1 - 1))") in text
     assert "patch%p1d(1)%dolic = patch_p1d_dolic" in text
     # The scalar member is also fld's extent -> by value, once; no pointer alias.
     assert "integer(c_int), value :: patch_p1d_nblk" in text

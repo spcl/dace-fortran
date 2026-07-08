@@ -1861,8 +1861,24 @@ struct FlattenStructsPass : public mlir::PassWrapper<FlattenStructsPass, mlir::O
     // entry on the companion declare (not the transient ``planEntries``, which
     // this full pass clears + re-emits) lets THIS pass's plan carry the gather
     // entry that maps ``<flat>`` back to ``<base>%<path>(i)%<inner>``.
-    getOperation().walk([this](hlfir::DeclareOp d) {
-      if (auto e = d->getAttrOfType<mlir::DictionaryAttr>("hlfir_bridge.aor_flat_entry")) planEntries.push_back(e);
+    // Collect ONE entry per flat companion.  The SAME value-record companion
+    // (``p_patch_edges_primal_normal_cell_v1``) can be reached from more than one
+    // function in the module -- a ``do_not_emit``'d external kept as a stub
+    // alongside its caller both take ``p_patch`` and both carry the AoR split's
+    // stamp -- and every stamp maps it back to the IDENTICAL AoS source, so a
+    // module-wide walk would push the same recipe twice and the bindings would
+    // double-declare the ``_v1`` / ``_v2`` companion.  Dedup by the companion's
+    // flat name (the reconstruction recipe is a function of the source path, so
+    // same name => same recipe).
+    llvm::DenseSet<mlir::Attribute> seenAorFlat;
+    getOperation().walk([&](hlfir::DeclareOp d) {
+      auto e = d->getAttrOfType<mlir::DictionaryAttr>("hlfir_bridge.aor_flat_entry");
+      if (!e) return;
+      mlir::Attribute key = e;
+      if (auto recipe = e.getAs<mlir::DictionaryAttr>("recipe"))
+        if (auto flatNames = recipe.getAs<mlir::ArrayAttr>("flat_names"))
+          if (!flatNames.empty()) key = flatNames[0];
+      if (seenAorFlat.insert(key).second) planEntries.push_back(e);
     });
 
     if (planEntries.empty()) return;

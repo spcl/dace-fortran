@@ -36,6 +36,38 @@ _HERE = Path(__file__).resolve().parent
 _NP = {"real(c_double)": np.float64, "integer(c_int)": np.int32, "logical(c_bool)": np.int8}
 _CT = {"real(c_double)": ctypes.c_double, "integer(c_int)": ctypes.c_int, "logical(c_bool)": ctypes.c_bool}
 
+# ICON refinement-control index arrays -- ``verts/cells/edges%{start,end}_{block,index}``
+# -- are ``ALLOCATABLE(:)`` but allocated ``(min_rl : max_rl)`` (a NEGATIVE lower bound)
+# and read at refinement-control levels that run negative (``end_block(-10)``).  The
+# bind_c shim now carries each array's per-dim lower bound (``<arr>_lb<i>``), so the
+# harness gives these arrays that negative lower bound and sizes them to span the whole
+# refin-ctrl level range instead of the mesh size ``n``.  ``[-16, 16]`` comfortably
+# covers ICON's levels (velocity's widest is the edges' ``[-10, 10]``); under
+# ``int_fill`` every slot is the single valid block / index, so the read is in-bounds
+# at any level and the binding's ``offset = lbound`` matches the SDFG's indexing.
+_REFIN_CTRL_RE = re.compile(r"_(?:start|end)_(?:block|index)$")
+_REFIN_CTRL_LBOUND = -16
+_REFIN_CTRL_EXTENT = 33
+
+
+def _refin_ctrl_flat(sym: str, suffix_re: str) -> str:
+    """The array flat name behind a per-dim extent (``_d<i>``) or lower-bound
+    (``_lb<i>``) C-ABI arg, for the refin-ctrl test.  ``re.sub`` of the given
+    suffix; returns the arg unchanged when it carries no such suffix."""
+    return re.sub(suffix_re, "", sym)
+
+
+def _module_symbol_map(binding: str) -> dict:
+    """``sym -> module`` for every ICON namelist/config global the DUT binding
+    imports as ``use <module>, only: <sym>__mod => <sym>``.  Shared by the
+    size-derived grid-dim seeding (:func:`_size_derived_module_dims`) and the
+    config-global seeding (:func:`_resolve_module_seeds`)."""
+    sym_module = {}
+    for module, renames in re.findall(r"use\s+(\w+),\s*only:\s*([^\n]+)", binding):
+        for _alias, sym in re.findall(r"(\w+)__mod\s*=>\s*(\w+)", renames):
+            sym_module[sym] = module
+    return sym_module
+
 
 def _size_derived_module_dims(binding: str):
     """The ICON grid-DIMENSION module globals the DUT binding derives from an
@@ -52,17 +84,42 @@ def _size_derived_module_dims(binding: str):
 
     Returns ``[(sym, module), ...]``.  Only module-origin syms (those the binding
     imports as ``<sym>__mod => <sym>``) that ALSO carry a ``size()`` derivation
-    qualify -- a module-SOURCED global (``no_dual_edges = int(no_dual_edges__mod,
-    c_int)``) reads the same module default on both sides, so it needs no seed."""
-    sym_module = {}
-    for module, renames in re.findall(r"use\s+(\w+),\s*only:\s*([^\n]+)", binding):
-        for _alias, sym in re.findall(r"(\w+)__mod\s*=>\s*(\w+)", renames):
-            sym_module[sym] = module
+    qualify -- a module-SOURCED global the DUT reads *directly* (``nproma =
+    int(nproma__mod, c_int)``) is instead seeded on BOTH sides via
+    :func:`_resolve_module_seeds`."""
+    sym_module = _module_symbol_map(binding)
     seen, out = set(), []
     for sym in re.findall(r"^\s*(\w+)\s*=\s*int\(size\(\w+,\s*dim=\d+\),\s*c_int\)", binding, re.M):
         if sym in sym_module and sym not in seen:
             seen.add(sym)
             out.append((sym, sym_module[sym]))
+    return out
+
+
+def _resolve_module_seeds(binding: str, seeds: dict):
+    """Resolve ``{fortran_sym: int_value}`` config-global seeds to
+    ``[(mangled_symbol, length, value), ...]`` for ctypes ``in_dll`` seeding on
+    BOTH the DUT and reference ``.so``.
+
+    Unlike the size-derived grid dims, some ICON config globals are read by the
+    DUT binding straight from the module (``nproma = int(nproma__mod, c_int)``;
+    ``nflatlev = nflatlev__mod``), so an isolated run reads them as BSS 0 on BOTH
+    sides -- ``nproma = 0`` sizes automatic locals to zero, ``nflatlev(jg) = 0``
+    makes ``DO jk = nflatlev, nlev`` start at 0, both out of bounds.  There is no
+    array extent to derive them from, so the test supplies the namelist values
+    (the policy) and the harness seeds both ``.so``s identically (the mechanism),
+    keeping the differential bit-exact.  ``length`` is the array extent from the
+    binding's ``allocate(<sym>(N))`` (a per-domain global like ``nflatlev(10)``),
+    else 1 for a scalar; every element is set to ``value``."""
+    sym_module = _module_symbol_map(binding)
+    out = []
+    for sym, value in seeds.items():
+        module = sym_module.get(sym)
+        if module is None:
+            raise KeyError(f"module-seed '{sym}' is not imported as '{sym}__mod => {sym}' in the binding")
+        m = re.search(rf"allocate\({sym}\((\d+)\)\)", binding)
+        length = int(m.group(1)) if m else 1
+        out.append((f"__{module}_MOD_{sym}", length, int(value)))
     return out
 
 
@@ -140,12 +197,20 @@ def _parse_abi(shim: str):
     return header, value_ftype, ptr_ftype, ptr_shape, dim_symbols, ptr_local
 
 
-def _invoke(so_path, call_plan, bufs, sym, sdfg_so=None):
+def _invoke(so_path, call_plan, bufs, sym, sdfg_so=None, module_seeds=None):
     # The SDFG .so is dlopen'd RTLD_GLOBAL first so the DaCe runtime (OpenMP
     # offload init, etc.) is live and its symbols resolve for the binding .so.
     if sdfg_so is not None:
         ctypes.CDLL(str(sdfg_so), mode=ctypes.RTLD_GLOBAL)
     cdll = ctypes.CDLL(str(so_path))
+    # ICON namelist/config globals the isolated kernel would otherwise read as
+    # BSS 0 (nproma block size, per-domain nflatlev/nrdmax) -- seeded here, after
+    # the .so loads and before the call, identically on the DUT and reference .so
+    # (see _resolve_module_seeds) so the differential stays bit-exact.
+    for mangled, length, value in (module_seeds or []):
+        cell = (ctypes.c_int * length).in_dll(cdll, mangled)
+        for i in range(length):
+            cell[i] = value
     fn = getattr(cdll, sym)
     argtypes, args = [], []
     for kind, arg, ct, *rest in call_plan:
@@ -156,7 +221,7 @@ def _invoke(so_path, call_plan, bufs, sym, sdfg_so=None):
     fn(*args)
 
 
-def _run_in_fork(so_path, call_plan, inputs, ptr_args, sym, save_prefix: Path, sdfg_so=None):
+def _run_in_fork(so_path, call_plan, inputs, ptr_args, sym, save_prefix: Path, sdfg_so=None, module_seeds=None):
     """Load ``so_path`` and run ``sym`` in a forked child on a fresh copy of
     ``inputs``, saving each output buffer to ``<save_prefix>_<arg>.npy``, then
     ``os._exit`` so the child's (occasionally heap-corrupting) ctypes/DaCe-
@@ -169,7 +234,7 @@ def _run_in_fork(so_path, call_plan, inputs, ptr_args, sym, save_prefix: Path, s
         code = 0
         try:
             bufs = {k: v.copy() for k, v in inputs.items()}
-            _invoke(so_path, call_plan, bufs, sym, sdfg_so=sdfg_so)
+            _invoke(so_path, call_plan, bufs, sym, sdfg_so=sdfg_so, module_seeds=module_seeds)
             for k in ptr_args:
                 np.save(f"{save_prefix}_{k}.npy", bufs[k])
         except BaseException:
@@ -188,22 +253,87 @@ def _build_and_compare(tu_path: Path,
                        n: int,
                        seed: int,
                        out: Path,
-                       int_fill=None):
+                       int_fill=None,
+                       module_seeds=None,
+                       do_not_emit=None,
+                       prelude_paths=None,
+                       inject_use_mpi=False):
     """The worker body (runs in a subprocess): build DUT + REF, drive both,
     return ``(max_diff, n_changed)``.  Imports are deferred so the module loads
-    cheaply in the parent (which only orchestrates the subprocess)."""
+    cheaply in the parent (which only orchestrates the subprocess).
+
+    ``do_not_emit`` (list of routine names) drops halo / MPI / sync / timer /
+    logging externals from the DUT SDFG (``apply_external_functions``) so a
+    single-rank dycore like ``solve_nh`` carries no MPI.  ``prelude_paths``
+    (extra ``.f90`` files) are compiled ahead of the TU on BOTH the DUT binding
+    and the REF -- the ``mpi`` module stub + its no-op point-to-point impls that
+    let the reference link and run single-rank without real MPI.
+    ``inject_use_mpi`` gives the inlined ``mo_mpi`` a ``use mpi`` so its
+    dual-typed real*8/real*4 calls resolve through the stub's one assumed-type
+    interface (no ``-fallow-argument-mismatch``)."""
+    import dace
+
     from dace_fortran.build import build_sdfg
     from dace_fortran.bindings import build_fortran_library
+    from dace_fortran.external import apply_external_functions, clear_external_registry
+
+    # Drop the halo / MPI / sync / timer externals from the DUT SDFG so no MPI
+    # survives in a single-rank run.  The REF keeps the (real, single-TU) bodies
+    # but their ``mpi_*`` leaves resolve to the no-op prelude impls below.
+    clear_external_registry()
+    if do_not_emit:
+        apply_external_functions(do_not_emit=list(do_not_emit))
+
+    # The reference build (and, for ``use mpi``, the DUT binding) compile these
+    # ahead of the TU: the ``mpi`` stub module + no-op point-to-point impls.
+    extra_prelude = [Path(p) for p in (prelude_paths or [])]
+
+    # Reference-TU fixup so the extracted single-TU is gfortran-EXECUTABLE (the
+    # SDFG build always reads the RAW ``tu_path`` -- the bridge resolves things its
+    # own way).  ``mo_mpi``'s inlined wrappers call one ``mpi_recv`` / ``mpi_isend``
+    # with both real*8 and real*4 buffers; a ``use mpi`` binds them to the stub's
+    # single ``type(*)`` assumed-type interface (no -fallow-argument-mismatch).
+    # The bridge's devirtualised call names (``<base>_deconiface_<N>`` /
+    # ``<base>_deconproc_<N>``) are NOT undefined -- each rides a ``USE <mod>,
+    # ONLY: <name> => <base>`` rename of an in-TU body -- so the TU compiles as-is;
+    # only the raw ``mpi_*`` leaves are genuinely undefined (no-op prelude impls).
+    ref_tu = tu_path
+    if inject_use_mpi:
+        src = tu_path.read_text()
+        if "MODULE mo_mpi\n" not in src:
+            raise RuntimeError("inject_use_mpi: inlined 'MODULE mo_mpi' anchor not found in TU")
+        ref_tu = out / f"{tu_path.stem}_ref.f90"
+        ref_tu.write_text(src.replace("MODULE mo_mpi\n", "MODULE mo_mpi\n  use mpi\n", 1))
+
+    # A bit-exact differential needs IEEE-strict FP on the DUT.  DaCe's default CPU
+    # args carry ``-ffast-math``, which contracts ``a*b+c`` into an FMA (and lets
+    # the compiler reassociate) -- so a dot-product-heavy kernel (ICON's rbf /
+    # cells2verts interpolation) rounds ~1 ulp away from the plain-gfortran
+    # reference.  Drop ``-ffast-math`` and pin ``-ffp-contract=off`` so the SDFG
+    # rounds bit-for-bit like the reference; this is a per-subprocess config change.
+    cpu_args = dace.Config.get("compiler", "cpu", "args").replace("-ffast-math", "")
+    if "-ffp-contract" not in cpu_args:
+        cpu_args += " -ffp-contract=off"
+    dace.Config.set("compiler", "cpu", "args", value=cpu_args)
 
     sdfg = build_sdfg(tu_path.read_text(), entry=entry, name=tu_path.stem, out_dir=str(out / "sdfg"))
+    clear_external_registry()  # DUT SDFG built -- drop the drop-list so it can't leak
     dace_name = sdfg.name  # bind(c) symbols + SDFG exports key off this, NOT name=
-    lib = build_fortran_library(sdfg, out_dir=str(out / "lib"), prelude_sources=[tu_path], bind_c_shim=True)
+    lib = build_fortran_library(sdfg,
+                                out_dir=str(out / "lib"),
+                                prelude_sources=[*extra_prelude, ref_tu],
+                                bind_c_shim=True)
     shim = Path(lib.bind_c_shim_f90).read_text()
     # Seed the reference's grid-dimension module globals (nproma / n_zlev) the DUT
     # binding derives from array extents -- else the isolated reference reads them
     # as 0 and OOBs.  Recovered from the binding's ``<sym> = int(size(...))`` lines.
     binding_files = list((out / "lib").glob("*bindings.f90"))
-    module_dims = _size_derived_module_dims(binding_files[0].read_text()) if binding_files else []
+    binding_text = binding_files[0].read_text() if binding_files else ""
+    module_dims = _size_derived_module_dims(binding_text) if binding_text else []
+    # Config globals the DUT binding reads straight from the module (nproma /
+    # nflatlev / ...) -- BSS 0 in isolation, so seeded on BOTH sides to the
+    # test-supplied namelist values.
+    seed_specs = _resolve_module_seeds(binding_text, module_seeds or {}) if binding_text else []
 
     ref_shim = out / f"{dace_name}_ref_c.f90"
     ref_shim.write_text(_retarget_shim(shim, dace_name, entry, module_dims, n))
@@ -214,20 +344,38 @@ def _build_and_compare(tu_path: Path,
     # mismatch; a kernel with dual-typed MPI buffers (``solve_nh``'s real*8/real*4
     # ``mpi_recv``) is made sound with ``TYPE(*)`` assumed-type interfaces in the MPI
     # stub, not by suppressing the diagnostic.
-    r = subprocess.run([
-        "gfortran", "-shared", "-fPIC", "-ffree-line-length-none", "-o",
-        str(ref_so),
-        str(tu_path),
-        str(ref_shim)
-    ],
-                       capture_output=True,
-                       text=True,
-                       cwd=str(out))
+    r = subprocess.run(
+        [
+            "gfortran",
+            "-shared",
+            "-fPIC",
+            "-ffree-line-length-none",
+            # IEEE-strict FP to match the DUT (``-ffp-contract=off`` above): no FMA
+            # contraction, no fast-math reassociation, so both sides round identically.
+            "-ffp-contract=off",
+            "-fno-fast-math",
+            "-o",
+            str(ref_so),
+            # Prelude (mpi stub module + no-op point-to-point impls) compiles ahead of
+            # the TU so its ``use mpi`` resolves and single-rank halo calls are no-ops.
+            *[str(p) for p in extra_prelude],
+            str(ref_tu),
+            str(ref_shim)
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(out))
     if r.returncode != 0:
         raise RuntimeError(f"reference .so compile failed:\n{r.stderr[-3000:]}")
 
     header, value_ftype, ptr_ftype, ptr_shape, dim_symbols, ptr_local = _parse_abi(shim)
-    dimvals = {s: n for s in dim_symbols}
+    # Refin-ctrl arrays span the full refin-ctrl level range, not the mesh size ``n`` --
+    # size their per-dim extent symbols (``<arr>_d<i>``) to ``_REFIN_CTRL_EXTENT`` so the
+    # negative lower bound (supplied below) leaves every read in bounds.
+    dimvals = {
+        s: (_REFIN_CTRL_EXTENT if _REFIN_CTRL_RE.search(_refin_ctrl_flat(s, r"_d\d+$")) else n)
+        for s in dim_symbols
+    }
 
     rng = np.random.default_rng(seed)
     inputs, call_plan = {}, []
@@ -251,14 +399,27 @@ def _build_and_compare(tu_path: Path,
             call_plan.append(("ptr", arg, ctypes.c_void_p))
         else:
             ft = value_ftype[arg]
-            int_default = int_fill if int_fill is not None else 0
-            v = scalar_overrides.get(arg, n if arg in dim_symbols else
-                                     (60.0 if ft == "real(c_double)" else int_default))
+            lb_flat = _refin_ctrl_flat(arg, r"_lb\d+$")
+            if lb_flat != arg:  # an array lower-bound arg ``<flat>_lb<i>``
+                v = scalar_overrides.get(arg, _REFIN_CTRL_LBOUND if _REFIN_CTRL_RE.search(lb_flat) else 1)
+            else:
+                # Extent args ride ``dimvals`` (refin-ctrl-aware) so the passed extent
+                # matches the buffer the ``c_f_pointer`` shape reconstructs.
+                int_default = int_fill if int_fill is not None else 0
+                v = scalar_overrides.get(
+                    arg, dimvals[arg] if arg in dim_symbols else (60.0 if ft == "real(c_double)" else int_default))
             call_plan.append(("val", arg, _CT[ft], v))
 
     ptr_args = list(ptr_shape)
-    sd = _run_in_fork(lib.so_path, call_plan, inputs, ptr_args, f"{dace_name}_c", out / "dut", sdfg_so=lib.sdfg_so)
-    sr = _run_in_fork(ref_so, call_plan, inputs, ptr_args, f"{dace_name}_ref_c", out / "ref")
+    sd = _run_in_fork(lib.so_path,
+                      call_plan,
+                      inputs,
+                      ptr_args,
+                      f"{dace_name}_c",
+                      out / "dut",
+                      sdfg_so=lib.sdfg_so,
+                      module_seeds=seed_specs)
+    sr = _run_in_fork(ref_so, call_plan, inputs, ptr_args, f"{dace_name}_ref_c", out / "ref", module_seeds=seed_specs)
 
     dut = {k: np.load(out / f"dut_{k}.npy") for k in ptr_args if (out / f"dut_{k}.npy").exists()}
     ref = {k: np.load(out / f"ref_{k}.npy") for k in ptr_args if (out / f"ref_{k}.npy").exists()}
@@ -289,11 +450,21 @@ def run_kernel_e2e(tu_path: Path,
                    float_range=(-1.0, 1.0),
                    n: int = 8,
                    seed: int = 0,
-                   int_fill=None) -> dict:
+                   int_fill=None,
+                   module_seeds=None,
+                   do_not_emit=None,
+                   prelude_paths=None,
+                   inject_use_mpi=False) -> dict:
     """Run one kernel's e2e build+compare in an isolated subprocess.  Returns
     ``{passed, max_diff, n_changed, output}``.  ``passed`` is False (with the
     captured output) on any build / lowering / compile / run failure -- a
-    kernel that does not yet lower surfaces here rather than crashing pytest."""
+    kernel that does not yet lower surfaces here rather than crashing pytest.
+
+    ``module_seeds`` (``{fortran_sym: int_value}``) seeds ICON config globals the
+    DUT binding reads straight from the module (``nproma``, per-domain
+    ``nflatlev`` / ``nrdmax``) on BOTH the DUT and reference ``.so`` -- an
+    isolated kernel reads them as BSS 0 (OOB), and there is no array extent to
+    derive them from, so the test supplies the namelist values."""
     # ``_session_scratch`` is gitignored, so it is absent on a fresh checkout
     # (CI) -- create it before carving a per-run tempdir out of it.
     scratch_root = _HERE.parent.parent.parent / "_session_scratch"
@@ -314,7 +485,11 @@ def run_kernel_e2e(tu_path: Path,
         str(n),
         str(seed),
         str(out),
-        json.dumps(int_fill)
+        json.dumps(int_fill),
+        json.dumps(module_seeds or {}),
+        json.dumps(list(do_not_emit or [])),
+        json.dumps([str(p) for p in (prelude_paths or [])]),
+        json.dumps(bool(inject_use_mpi))
     ],
                           capture_output=True,
                           text=True,
@@ -327,11 +502,22 @@ def run_kernel_e2e(tu_path: Path,
 
 
 def _main(argv):
-    tu_path, entry, overrides_json, array_overrides_json, float_range_json, n, seed, out, int_fill_json = argv[1:10]
+    (tu_path, entry, overrides_json, array_overrides_json, float_range_json, n, seed, out, int_fill_json,
+     module_seeds_json, do_not_emit_json, prelude_paths_json, inject_use_mpi_json) = argv[1:14]
     try:
-        max_diff, n_changed = _build_and_compare(Path(tu_path), entry, json.loads(overrides_json),
-                                                 json.loads(array_overrides_json), tuple(json.loads(float_range_json)),
-                                                 int(n), int(seed), Path(out), json.loads(int_fill_json))
+        max_diff, n_changed = _build_and_compare(Path(tu_path),
+                                                 entry,
+                                                 json.loads(overrides_json),
+                                                 json.loads(array_overrides_json),
+                                                 tuple(json.loads(float_range_json)),
+                                                 int(n),
+                                                 int(seed),
+                                                 Path(out),
+                                                 json.loads(int_fill_json),
+                                                 module_seeds=json.loads(module_seeds_json),
+                                                 do_not_emit=json.loads(do_not_emit_json),
+                                                 prelude_paths=json.loads(prelude_paths_json),
+                                                 inject_use_mpi=json.loads(inject_use_mpi_json))
         print(f"MAXDIFF: {max_diff}", flush=True)
         print(f"CHANGED: {n_changed}", flush=True)
         print("RESULT: PASS", flush=True)

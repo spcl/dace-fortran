@@ -71,6 +71,9 @@ module mpi
   integer, parameter :: mpi_double_precision = 17
   integer, parameter :: mpi_real = 13
   integer, parameter :: mpi_integer = 7
+  integer, parameter :: mpi_2real = 27
+  integer, parameter :: mpi_2double_precision = 28
+  integer, parameter :: mpi_2integer = 29
   integer, parameter :: mpi_byte = 1
   integer, parameter :: mpi_logical = 6
   integer, parameter :: mpi_character = 5
@@ -142,6 +145,72 @@ _MPI_CONSTS_STUB = _MPI_CONSTS + "end module mpi\n"
 #: Fed to the inlined-halo EXTRACTION (fparser).  Constants-only so it parses;
 #: the interfaces live in :data:`_MPI_STUB` for the gfortran reference build.
 HALO_INLINED_EXTRA_SOURCES = {"_mpi_consts_stub.f90": _MPI_CONSTS_STUB}
+
+#: NO-OP point-to-point + collective ``mpi_*`` implementations for a SINGLE-RANK
+#: GFORTRAN REFERENCE build (e.g. ``solve_nh`` standalone).  :data:`_MPI_STUB`
+#: only DECLARES the ``mpi_*`` calls (interfaces); a reference that RUNS the
+#: single-TU dycore also needs them DEFINED, or the halo path hits an undefined
+#: symbol.  Single-rank has no neighbours, so the point-to-point calls are
+#: no-ops: buffers are never sent/received and every owned cell keeps its value
+#: -- exactly what the DUT SDFG reproduces by dropping the halo (``do_not_emit``).
+#: External (module-less) so the linker resolves both ``mo_mpi``'s ``use mpi``
+#: assumed-type interface calls and the implicit-external collectives to these.
+#: Paired with the ``strip_deconiface`` reference transform (which resolves the
+#: ``p_*_deconiface_<N>`` wrappers to their real bodies, whose leaves are these).
+_MPI_NOOP_IMPL = """\
+subroutine mpi_recv(buf, count, datatype, source, tag, comm, status, ierror)
+  type(*), dimension(..) :: buf
+  integer, intent(in) :: count, datatype, source, tag, comm
+  integer, intent(out) :: status(*), ierror
+  ierror = 0
+end subroutine
+subroutine mpi_irecv(buf, count, datatype, source, tag, comm, request, ierror)
+  type(*), dimension(..) :: buf
+  integer, intent(in) :: count, datatype, source, tag, comm
+  integer, intent(out) :: request, ierror
+  request = 0; ierror = 0
+end subroutine
+subroutine mpi_send(buf, count, datatype, dest, tag, comm, ierror)
+  type(*), dimension(..) :: buf
+  integer, intent(in) :: count, datatype, dest, tag, comm
+  integer, intent(out) :: ierror
+  ierror = 0
+end subroutine
+subroutine mpi_isend(buf, count, datatype, dest, tag, comm, request, ierror)
+  type(*), dimension(..) :: buf
+  integer, intent(in) :: count, datatype, dest, tag, comm
+  integer, intent(out) :: request, ierror
+  request = 0; ierror = 0
+end subroutine
+subroutine mpi_waitall(count, array_of_requests, array_of_statuses, ierror)
+  integer, intent(in) :: count
+  integer, intent(inout) :: array_of_requests(*)
+  integer, intent(out) :: array_of_statuses(*), ierror
+  ierror = 0
+end subroutine
+subroutine mpi_barrier(comm, ierror)
+  integer, intent(in) :: comm
+  integer, intent(out) :: ierror
+  ierror = 0
+end subroutine
+subroutine mpi_abort(comm, errorcode, ierror)
+  integer, intent(in) :: comm, errorcode
+  integer, intent(out) :: ierror
+  ierror = 0
+end subroutine
+subroutine acc_wait_comms()
+end subroutine
+! ICON's C ``util_exit`` / ``util_abort`` (``BIND(C)`` error-path aborts): only
+! DECLARED (interface) in the single-TU, so the reference .so has them undefined
+! and won't dlopen.  A valid degenerate run never reaches the error path, so a
+! no-op stub (C linkage, matching the interface) lets the library load.
+subroutine util_exit(exit_no) bind(c, name="util_exit")
+  use iso_c_binding, only: c_int
+  integer(c_int), value :: exit_no
+end subroutine
+subroutine util_abort() bind(c, name="util_abort")
+end subroutine
+"""
 
 #: ``"inlined"`` mode -- source-level procedure-body inlining of the halo
 #: ``sync_patch_array`` family into their callers.  These wrappers select the comm

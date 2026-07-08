@@ -24,6 +24,7 @@ concrete allocatable per arm:
 (The shared-interposer-clone and sibling-axis retype cases build on these primitives
 and follow.)
 """
+import hashlib
 import logging
 import re
 from dataclasses import dataclass
@@ -36,6 +37,7 @@ from fparser.two.utils import walk
 from dace_fortran.inliner import ast_utils
 from dace_fortran.inliner.ast_desugaring.monomorphize import (analyze, MonomorphizationPlan, parse_program,
                                                               read_type_info, UnsupportedProgram)
+from dace_fortran.inliner.ast_desugaring.pruning import keep_sorted_used_modules
 from dace_fortran.inliner.ast_desugaring.utils import (append_children, find_name_of_node, prepend_children,
                                                        remove_self, replace_node)
 
@@ -50,6 +52,28 @@ def _tag_var(var: str) -> str:
 
 def _arm_slot(var: str, type_name: str) -> str:
     return f"{var}__{type_name}"
+
+
+#: Fortran 2008 caps an identifier at 63 characters.
+_FORTRAN_MAX_NAME = 63
+
+
+def _clone_name(proc: str, arm: str) -> str:
+    """Compose a per-arm interposer/constructor clone name ``proc__arm``, shortened
+    to stay within Fortran's 63-char identifier limit.  A ladder that composes
+    several dispatch axes (ICON's solver = backend x agen x transfer, whose shared
+    ``construct``/``solve`` interposer is cloned once per axis) chains a ``__<arm>``
+    suffix per axis and overruns the limit.  When it would, keep a readable prefix
+    of the full name plus a stable hash of it -- the definition and every redirected
+    call / ``USE`` all read the one computed name back from the clone dicts, so a
+    deterministic transform keeps them in agreement.  (Component slot names built by
+    :func:`_arm_slot` compose a single axis and never overrun, so they are left
+    verbatim -- other passes match them by the literal ``__<arm>`` tail.)"""
+    full = f"{proc}__{arm}"
+    if len(full) <= _FORTRAN_MAX_NAME:
+        return full
+    digest = hashlib.md5(full.encode()).hexdigest()[:8]
+    return f"{full[:_FORTRAN_MAX_NAME - len(digest) - 2]}__{digest}"
 
 
 def _find_arm(plan: MonomorphizationPlan, type_name: str) -> Tuple[int, str]:
@@ -225,18 +249,32 @@ def _parse_component_decls(text: str) -> List[f03.Data_Component_Def_Stmt]:
 
 def _expanded_component_decls(slot: str,
                               plan: MonomorphizationPlan,
-                              stack_slots: bool = False) -> List[f03.Data_Component_Def_Stmt]:
+                              stack_slots: bool = False,
+                              pointer: bool = False) -> List[f03.Data_Component_Def_Stmt]:
     """``integer :: act__tag`` + one ``type(arm), allocatable :: act__arm`` component per arm.
     With ``stack_slots`` the per-arm component is a plain (non-allocatable) member -- the
-    SDFG-lowerable form (see :func:`_expanded_decls`)."""
-    attr = "" if stack_slots else ", allocatable"
+    SDFG-lowerable form (see :func:`_expanded_decls`).  With ``pointer`` (an original
+    ``CLASS(base), POINTER`` slot bound by pointer association, ICON's ``t_lhs%trans`` /
+    ``%agen``) the per-arm component is itself a ``POINTER`` so the association's aliasing
+    is preserved -- and it lowers to a View, not a copy."""
+    if pointer:
+        attr, init = ", pointer", " => NULL()"
+    else:
+        attr, init = ("" if stack_slots else ", allocatable"), ""
     # The tag defaults to 0 ("not constructed") so an `ALLOCATED(this%act)` guard
     # rewritten to `this%act__tag /= 0` reads correctly before the construction
     # site sets it (a derived-type component is otherwise undefined until set).
     lines = [f"integer :: {_tag_var(slot)} = 0"]
     for arm in plan.arms:
-        lines.append(f"type({arm.type_name}){attr} :: {_arm_slot(slot, arm.type_name)}")
+        lines.append(f"type({arm.type_name}){attr} :: {_arm_slot(slot, arm.type_name)}{init}")
     return _parse_component_decls("\n".join(lines))
+
+
+def _component_is_pointer(comp: f03.Data_Component_Def_Stmt) -> bool:
+    """True if a derived-type component is declared ``POINTER`` (its arm slots must
+    then stay pointers so a ``this%slot => target`` association type-checks)."""
+    attrs = comp.children[1]
+    return attrs is not None and 'POINTER' in str(attrs).upper()
 
 
 def _component_slots(program: f03.Program, base: str) -> List[Tuple[f03.Data_Component_Def_Stmt, List[str]]]:
@@ -257,28 +295,145 @@ def _ref_prefix_and_tail(ref: f03.Data_Ref) -> Tuple[str, str]:
     return '%'.join(str(p) for p in parts[:-1]), str(parts[-1])
 
 
+def _member_prefix_and_tail(obj: f03.Base) -> Optional[Tuple[str, str]]:
+    """Split a member reference into (``a%b`` prefix, last component), for either a
+    ``Data_Ref`` (an rvalue path ``this%trans``) or a ``Data_Pointer_Object`` (a
+    pointer-assign LHS ``this%op``, whose children are ``(base, '%', name)``).
+    Returns ``None`` for a bare name (no ``%`` component selector)."""
+    if isinstance(obj, f03.Data_Ref):
+        return _ref_prefix_and_tail(obj)
+    if isinstance(obj, f03.Data_Pointer_Object):
+        parts = [c for c in obj.children if c != '%']
+        if len(parts) < 2:
+            return None
+        return '%'.join(str(p) for p in parts[:-1]), str(parts[-1])
+    return None
+
+
+def _stmt_refs_slot(node: f03.Base, slot_names: Set[str]) -> bool:
+    """True if ``node`` references a slot ``...%<slot>`` -- a ``<slot>`` appearing as
+    a *component* (a non-first part of a ``Data_Ref`` / ``Data_Pointer_Object``),
+    not merely a same-named local.  Used to find slot reads in an IF/else-if
+    condition, which the statement ladder (Call/Assign/Ptr-assign only) misses."""
+    for ref in walk(node, (f03.Data_Ref, f03.Data_Pointer_Object)):
+        parts = [c for c in ref.children if not isinstance(c, str)]
+        if any(str(p).lower() in slot_names for p in parts[1:]):
+            return True
+    return False
+
+
+def _slot_is_data_carrying(program: f03.Program, slot: str) -> bool:
+    """True if ``slot`` is read as a *data member* -- some ``...%slot%<member>`` where
+    ``slot`` is not the final path part, so ``<member>`` is a stored-component access
+    on it (ICON's ``this%trans%nidx``).  A whole-slot reference (``this%slot => x``) or
+    a dispatch receiver (``this%slot%binding(...)``, where ``slot`` is the receiver
+    ``Data_Ref``'s last part and the binding is the ``Procedure_Designator``'s own
+    child, not a ``Data_Ref`` part) does *not* count.
+
+    A data-carrying ``CLASS(base), POINTER`` slot is kept ``CLASS`` rather than
+    expanded away: its data reads then lower natively -- including declaration
+    dimensions (``REAL :: x_t(this%trans%nidx)``) and DO bounds a statement ladder
+    cannot reach, and without routing them through a per-arm ``POINTER`` (the
+    unflattened ptr-member-struct read) -- while only its dispatch is laddered."""
+    sl = slot.lower()
+    for ref in walk(program, f03.Data_Ref):
+        parts = ref.children
+        for i, part in enumerate(parts):
+            if str(part).lower() == sl and i < len(parts) - 1:
+                return True
+    return False
+
+
+def _stmt_has_slot_dispatch(node: f03.Base, slot_names: Set[str]) -> bool:
+    """True if ``node`` contains a type-bound dispatch through a slot -- a
+    ``Procedure_Designator`` ``...%slot%binding`` (a ``CALL`` or function-ref) whose
+    receiver ``Data_Ref`` ends in one of ``slot_names``.  This distinguishes a
+    dispatch through a kept-``CLASS`` hybrid slot (which must be laddered onto the
+    concrete per-arm pointer) from a plain data-member read of it (which stays)."""
+    for des in walk(node, f03.Procedure_Designator):
+        obj = des.children[0]
+        if isinstance(obj, f03.Data_Ref) and str(obj.children[-1]).lower() in slot_names:
+            return True
+    return False
+
+
 #: statement kinds that can reference a slot (dispatch, assignment, pointer-assign).
 SLOT_STMT_TYPES = (f03.Call_Stmt, f03.Assignment_Stmt, f03.Pointer_Assignment_Stmt)
 
 
-def _slot_statement_ladder(stmt: f03.Base, slot_names: Set[str],
-                           plan: MonomorphizationPlan) -> Optional[List[f03.Base]]:
+def _component_slot_owner_types(program: f03.Program, base: str) -> Set[str]:
+    """Lower-cased names of the derived types that DECLARE a ``CLASS(base)`` component
+    -- the types that OWN a laddered slot.  A component of the SAME name on any other
+    type (ICON's concrete ``t_p_comm_pattern_orig%p`` vs the abstract 18-arm
+    ``t_stack_op`` slot ``p``) is unrelated and must not be retargeted by the ladder."""
+    owners: Set[str] = set()
+    for comp, _ in _component_slots(program, base):
+        dtd = _enclosing_of_type(comp, (f03.Derived_Type_Def, ))
+        if dtd is not None:
+            owners.add(read_type_info(dtd).name)
+    return owners
+
+
+def _ref_path_type(scope: f03.Base, parts: List[f03.Base], dtds: dict) -> Optional[str]:
+    """Derived-type name a component path (``Data_Ref`` parts, each possibly
+    array-subscripted) resolves to, or ``None`` when unresolvable (an intrinsic, a
+    function result, or a name with no visible declaration).  Used to decide whether
+    a ``%slot`` reference sits on a slot-owning container."""
+
+    def base_name(node: f03.Base) -> Optional[str]:
+        if isinstance(node, f03.Name):
+            return str(node)
+        if isinstance(node, f03.Part_Ref) and isinstance(node.children[0], f03.Name):
+            return str(node.children[0])
+        return None
+
+    b = base_name(parts[0])
+    if b is None:
+        return None
+    t = _entity_declared_type(scope, b)
+    for p in parts[1:]:
+        if t is None:
+            return None
+        nm = base_name(p)
+        t = _component_type(dtds, t, nm) if nm else None
+    return t
+
+
+def _slot_statement_ladder(stmt: f03.Base,
+                           slot_names: Set[str],
+                           plan: MonomorphizationPlan,
+                           owner_types: Optional[Set[str]] = None,
+                           scope: Optional[f03.Base] = None,
+                           dtds: Optional[dict] = None,
+                           tinfos: Optional[dict] = None) -> Optional[List[f03.Base]]:
     """If ``stmt`` references a slot ``<prefix>%<slot>`` (anywhere, even buried in a
     sub-expression), return a tag ladder that re-emits ``stmt`` once per arm with
     every ``%slot`` retargeted to ``%slot__arm``; ``None`` if it touches no slot.
     Because each arm slot is a concrete ``TYPE``, every retargeted reference -- a
-    type-bound dispatch or a plain data-member access -- becomes a static bind."""
+    type-bound dispatch or a plain data-member access -- becomes a static bind.
+
+    When ``owner_types``/``scope`` are given, the ladder is TYPE-AWARE: a ``%slot``
+    reference whose container POSITIVELY resolves to a type that does not own the slot
+    (nor extend an owner) is left alone -- ``re.sub`` would otherwise corrupt an
+    unrelated same-named component (ICON's ``t_p_comm_pattern_orig%p``).  Conservative:
+    an unresolvable container (``None``) still ladders, preserving prior behaviour."""
     prefix = slot = None
+    container_parts: Optional[Tuple[f03.Base, ...]] = None
     for ref in walk(stmt, f03.Data_Ref):
         parts = ref.children
         for i, part in enumerate(parts):
             if i > 0 and str(part).lower() in slot_names:
                 prefix, slot = '%'.join(str(p) for p in parts[:i]), str(part)
+                container_parts = parts[:i]
                 break
         if slot is not None:
             break
     if slot is None:
         return None
+    if owner_types is not None and scope is not None and container_parts:
+        ctype = _ref_path_type(scope, list(container_parts), dtds or {})
+        if ctype is not None and not (owner_types & set(_arm_ancestor_rank(tinfos or {}, ctype))):
+            return None
 
     text = str(stmt)
     lines = []
@@ -293,23 +448,60 @@ def _slot_statement_ladder(stmt: f03.Base, slot_names: Set[str],
 
 
 def monomorphize_component_dispatch(program: f03.Program, plan: MonomorphizationPlan, stack_slots: bool = False) -> int:
-    """Rewrite dispatch on a ``CLASS(plan.abstract_base)`` *component* (e.g. ICON's
-    ``t_ocean_solve%act``): expand the container type's component into a tag + one
-    concrete allocatable per arm, then route ``ALLOCATE(concrete :: obj%slot)`` and
-    ``CALL obj%slot%binding(args)`` through the emit-all static ladder, in place.
-    Returns the number of polymorphic components expanded."""
+    """Rewrite dispatch on a ``CLASS(plan.abstract_base)`` *component*, in place, and
+    return the number of polymorphic components handled.
+
+    Two slot shapes, distinguished by whether the slot carries *data*:
+
+      * a *full-expansion* slot -- an ``ALLOCATE``-constructed one (ICON's
+        ``t_ocean_solve%act``), or a dispatch-only ``POINTER`` -- is replaced by a
+        tag + one concrete slot per arm, and *every* statement/condition that
+        references it is re-emitted per arm with ``%slot`` retargeted to
+        ``%slot__arm`` (so a data-member access on the now-gone slot goes through the
+        concrete per-arm slot); and
+      * a *hybrid* slot -- a ``CLASS(base), POINTER`` slot read as a data member
+        (``this%trans%nidx``, :func:`_slot_is_data_carrying`) -- KEEPS its ``CLASS``
+        component (its data reads lower natively, including declaration dimensions a
+        statement ladder cannot reach) and gains a tag + per-arm ``POINTER`` slots
+        beside it; only its *dispatch* (``CALL this%trans%into(...)``) is laddered.
+        The pointer association that sets the tag is completed by
+        :func:`devirtualize_pointer_flow`, which keeps the kept slot's association."""
     base = plan.abstract_base
     slots = _component_slots(program, base)
     if not slots:
         return 0
-    slot_names = {n.lower() for _, names in slots for n in names}
 
-    # 1. expand the container component into a tag + one concrete slot per arm.
+    # Classify each slot: a data-carrying POINTER slot is hybrid (kept CLASS); every
+    # other slot is fully expanded.
+    hybrid_names: Set[str] = set()
+    full_names: Set[str] = set()
     for comp, names in slots:
-        replace_node(comp, [d for n in names for d in _expanded_component_decls(n, plan, stack_slots)])
+        pointer = _component_is_pointer(comp)
+        for n in names:
+            (hybrid_names if pointer and _slot_is_data_carrying(program, n) else full_names).add(n.lower())
+
+    # The types that OWN a laddered slot (declare the ``CLASS(base)`` component) --
+    # captured NOW, before step 1 deletes a full slot's CLASS component.  The slot
+    # ladder's textual ``%slot`` retarget is restricted to these (and their
+    # extensions) so a same-named component on an unrelated type (ICON's concrete
+    # ``t_p_comm_pattern_orig%p`` vs the abstract 18-arm ``t_stack_op`` slot ``p``)
+    # is left alone.
+    owner_types = _component_slot_owner_types(program, base)
+
+    # 1. expand the container component.  A hybrid slot keeps its CLASS component and
+    #    adds the tag + per-arm POINTER slots beside it; a full slot is replaced by
+    #    them.  A ``POINTER`` slot expands to ``POINTER`` arm slots so the tag
+    #    source's ``this%slot => target`` type-checks and the aliasing survives.
+    for comp, names in slots:
+        pointer = _component_is_pointer(comp)
+        additions = [d for n in names for d in _expanded_component_decls(n, plan, stack_slots, pointer)]
+        if any(n.lower() in hybrid_names for n in names):
+            replace_node(comp, _parse_component_decls(str(comp)) + additions)
+        else:
+            replace_node(comp, additions)
 
     # 2. factory ALLOCATE(concrete :: prefix%slot) -> set the tag + allocate the
-    #    matching concrete slot.
+    #    matching concrete slot.  Only a full slot is ALLOCATE-constructed.
     for alloc in walk(program, f03.Allocate_Stmt):
         alloc_type, alloc_list, _ = alloc.children
         if alloc_type is None:
@@ -318,7 +510,7 @@ def monomorphize_component_dispatch(program: f03.Program, plan: Monomorphization
             if not isinstance(obj, f03.Data_Ref):
                 continue
             prefix, tail = _ref_prefix_and_tail(obj)
-            if tail.lower() not in slot_names:
+            if tail.lower() not in full_names:
                 continue
             tag, arm = _find_arm(plan, str(alloc_type))
             set_tag = f"{prefix}%{_tag_var(tail)} = {tag}"
@@ -326,18 +518,53 @@ def monomorphize_component_dispatch(program: f03.Program, plan: Monomorphization
             replace_node(alloc, _parse_exec(rewrite))
             break
 
-    # 2b. ALLOCATED(prefix%slot) init guards -> the tag check (the slot has no
-    #     allocation status of its own once laddered).
-    _rewrite_allocated_queries(program, slot_names)
+    # 2b. ALLOCATED(prefix%slot) init guards -> the tag check (full slots only; a
+    #     kept hybrid slot retains its own association status).
+    _rewrite_allocated_queries(program, full_names)
 
-    # 3. every other statement referencing the slot -> ladder over the tag with
-    #    `%slot` retargeted to `%slot__arm`.  This subsumes dispatch (the call
-    #    becomes a static concrete-TYPE bind), whole-statement data-member
-    #    assignment (`this%act%res_loc_wp => ...`) and a slot member buried in a
-    #    sub-expression (`call timer_start(this%act%lhs%timer)`), and -- unlike a
-    #    deferred-only dispatch rewrite -- ICON's non-deferred shared `this%act%solve`.
+    # Type maps for the ladder's owner-aware ``%slot`` retarget (``owner_types`` was
+    # captured before step 1 deleted the CLASS component).
+    dtds = {read_type_info(d).name: d for d in walk(program, f03.Derived_Type_Def)}
+    tinfos = {read_type_info(d).name: read_type_info(d) for d in walk(program, f03.Derived_Type_Def)}
+
+    # 3. Ladder executable CONSTRUCTS whose CONDITION reads a FULL slot member (an
+    #    `IF (this%act%...)` / else-if / one-line-IF) -- the statement ladder below
+    #    only visits Call/Assign/Ptr-assign, so a slot read in a condition would
+    #    survive as a reference to the expanded-away slot.  Re-emit the whole
+    #    enclosing construct once per arm; the shared `%slot`->`%slot__arm` retarget
+    #    covers its body too, so those inner statements are not re-laddered by step
+    #    4.  A hybrid slot's condition read (`IF (this%trans%is_solver_pe)`) is a
+    #    data read that stays on the kept CLASS slot; only a hybrid *dispatch* buried
+    #    in a condition (rare) needs laddering.
+    cond_units: List[f03.Base] = []
+    seen_units: Set[int] = set()
+    for carrier in walk(program, (f03.If_Then_Stmt, f03.Else_If_Stmt, f03.If_Stmt)):
+        if not (_stmt_refs_slot(carrier, full_names) or _stmt_has_slot_dispatch(carrier, hybrid_names)):
+            continue
+        unit = carrier if isinstance(carrier, f03.If_Stmt) else _enclosing_of_type(carrier, (f03.If_Construct, ))
+        if unit is not None and id(unit) not in seen_units:
+            seen_units.add(id(unit))
+            cond_units.append(unit)
+    for unit in cond_units:
+        ladder = _slot_statement_ladder(unit, full_names | hybrid_names, plan, owner_types,
+                                        _enclosing_of_type(unit, SCOPES), dtds, tinfos)
+        if ladder is not None:
+            replace_node(unit, ladder)
+
+    # 4. every other statement -> ladder over the tag with `%slot` retargeted to
+    #    `%slot__arm`.  A full slot is laddered on ANY reference (dispatch or data,
+    #    since its CLASS slot is gone): the call becomes a static concrete-TYPE bind,
+    #    a whole-statement data-member assignment (`this%act%res_loc_wp => ...`) and a
+    #    slot member buried in a sub-expression (`call timer_start(this%act%lhs%timer)`)
+    #    retarget too, as does ICON's non-deferred shared `this%act%solve`.  A hybrid
+    #    slot is laddered ONLY when the statement DISPATCHES through it
+    #    (`CALL this%trans%into(...)`); its plain data reads/writes stay on the kept
+    #    CLASS slot and lower natively.
     for stmt in walk(program, SLOT_STMT_TYPES):
-        ladder = _slot_statement_ladder(stmt, slot_names, plan)
+        if not (_stmt_refs_slot(stmt, full_names) or _stmt_has_slot_dispatch(stmt, hybrid_names)):
+            continue
+        ladder = _slot_statement_ladder(stmt, full_names | hybrid_names, plan, owner_types,
+                                        _enclosing_of_type(stmt, SCOPES), dtds, tinfos)
         if ladder is not None:
             replace_node(stmt, ladder)
 
@@ -453,7 +680,7 @@ def clone_shared_interposers(program: f03.Program, plan: MonomorphizationPlan) -
         sub = _find_subprogram(program, proc)
         if sub is None:
             continue
-        clone_name = f"{proc}__{arm_type}"
+        clone_name = _clone_name(proc, arm_type)
         # The clone lands in the interposer's own module (appended to sub.parent).
         clones[(proc, arm_type)] = (clone_name, _module_name_of(sub))
         append_children(sub.parent, _clone_interposer(sub, proc, plan.abstract_base, arm_type, clone_name))
@@ -543,6 +770,561 @@ def retype_to_concrete(program: f03.Program, base: str, concrete: str) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Pointer-association tag source.
+#
+# The ``ALLOCATE(arm :: slot)`` tag source (component dispatch) names the concrete
+# arm inline.  ICON's ``t_lhs%trans`` / ``%agen`` are instead ``CLASS(base),
+# POINTER`` slots bound by *pointer association* one interprocedural hop away: a
+# constructor ``ctor(this, .., dummy)`` with a ``CLASS(base), TARGET :: dummy``
+# does ``this%slot => dummy``, and the concrete arm arrives as the actual argument
+# at the call site (``CALL obj%ctor(.., a_concrete_local)``).  This clones the
+# constructor per concrete arm -- the dummy retyped to ``TYPE(arm)`` (so every
+# ``dummy%binding`` inside becomes a static bind) and the association rewritten to
+# set the slot's tag + associate the concrete per-arm slot -- and redirects each
+# call to the matching clone, mirroring :func:`clone_shared_interposers`.
+# ---------------------------------------------------------------------------
+
+
+def _arm_index(plan: MonomorphizationPlan, type_name: str) -> Optional[int]:
+    """1-based tag value for a concrete arm type, or ``None`` if it is not an arm."""
+    for i, arm in enumerate(plan.arms, start=1):
+        if arm.type_name.lower() == type_name.lower():
+            return i
+    return None
+
+
+def _specific_binding_targets(program: f03.Program) -> dict:
+    """``{binding_name: target_proc}`` for every specific (non-deferred) type-bound
+    procedure in the program -- maps an ``obj%binding`` dispatch to its procedure."""
+    out = {}
+    for binding in walk(program, f03.Specific_Binding):
+        _, _, _, bname, target = binding.children
+        if target is not None:
+            out[str(bname).lower()] = str(target).lower()
+    return out
+
+
+def _dummy_arg_names(sub: f03.Base) -> List[str]:
+    """Ordered dummy-argument names of subprogram ``sub``."""
+    stmt = ast_utils.atmost_one(ast_utils.children_of_type(sub, (f03.Subroutine_Stmt, f03.Function_Stmt)))
+    if stmt is None:
+        return []
+    dal = next(iter(walk(stmt, f03.Dummy_Arg_List)), None)
+    if dal is not None:
+        return [str(a) for a in dal.children]
+    # a single dummy is a lone Name in the statement, not a Dummy_Arg_List.
+    names = [str(n) for n in ast_utils.children_of_type(stmt, f03.Name)]
+    return names[1:] if names else []  # drop the subprogram's own name
+
+
+def _ptr_assoc_sites_by_dummy(scope: f03.Base, base: str) -> List[Tuple[str, str]]:
+    """``(slot, dummy)`` for each ``<prefix>%<slot> => <dummy>`` in ``scope`` whose
+    ``<dummy>`` is a plain-name ``CLASS(base)`` entity -- the pointer-association
+    tag sources.  Detected by the (still-``CLASS``) dummy rather than the slot name,
+    so it works after the slot component has been expanded away."""
+    spec = ast_utils.atmost_one(ast_utils.children_of_type(scope, f03.Specification_Part))
+    if spec is None:
+        return []
+    class_names = {n.lower() for _, ns in _class_locals(spec, base) for n in ns}
+    if not class_names:
+        return []
+    out = []
+    for pa in walk(scope, f03.Pointer_Assignment_Stmt):
+        lhs, _, rhs = pa.children
+        pt = _member_prefix_and_tail(lhs)
+        if pt is None:
+            continue
+        if isinstance(rhs, f03.Name) and str(rhs).lower() in class_names:
+            out.append((pt[1], str(rhs)))
+    return out
+
+
+def _arm_ancestor_rank(tinfos: dict, type_name: str) -> dict:
+    """``{lower-cased type name: inheritance depth}`` for ``type_name`` (depth 0) and
+    each of its ``EXTENDS`` ancestors (1, 2, ...).  Used to match a concrete type
+    against a ``SELECT TYPE`` ``CLASS IS`` guard: an ancestor matches, the nearest
+    (smallest depth) wins."""
+    rank: dict = {}
+    t, depth = type_name.lower(), 0
+    while t and t not in rank:
+        rank[t] = depth
+        ti = tinfos.get(t)
+        t = ti.parent if ti is not None else None
+        depth += 1
+    return rank
+
+
+def _resolve_select_type_on_dummy(scope: f03.Base, dummy: str, arm_type: str, tinfos: dict) -> None:
+    """Statically resolve every ``SELECT TYPE(dummy)`` in ``scope`` -- whose ``dummy``
+    a per-arm clone retyped from ``CLASS(base)`` to the concrete ``TYPE(arm_type)`` --
+    to its matching type-guard branch, in place.  A concrete selector is not
+    polymorphic, so the construct cannot survive (flang rejects it).  Fortran's
+    guard-matching picks ``TYPE IS (arm_type)`` (exact), else the nearest
+    ``CLASS IS (ancestor)``, else ``CLASS DEFAULT`` (else the construct is dropped)."""
+    rank = _arm_ancestor_rank(tinfos, arm_type)
+    for cst in list(walk(scope, f03.Select_Type_Construct)):
+        sel_stmt = cst.children[0]
+        assoc, selector = sel_stmt.children
+        if not (isinstance(selector, f03.Name) and str(selector).lower() == dummy.lower()):
+            continue
+        # split the flat construct into (guard, [body statements]) groups
+        groups: List[Tuple[f03.Type_Guard_Stmt, List[f03.Base]]] = []
+        for ch in cst.children[1:-1]:
+            if isinstance(ch, f03.Type_Guard_Stmt):
+                groups.append((ch, []))
+            elif groups:
+                groups[-1][1].append(ch)
+        chosen: Optional[List[f03.Base]] = None
+        default: Optional[List[f03.Base]] = None
+        best: Optional[int] = None
+        for guard, body in groups:
+            kind = str(guard.children[0]).upper()
+            gtype = str(guard.children[1]).lower() if guard.children[1] is not None else None
+            if kind == 'CLASS DEFAULT':
+                default = body
+            elif kind == 'TYPE IS' and gtype == arm_type.lower():
+                chosen, best = body, -1
+                break
+            elif kind == 'CLASS IS' and gtype in rank and (best is None or rank[gtype] < best):
+                chosen, best = body, rank[gtype]
+        body = chosen if chosen is not None else (default if default is not None else [])
+        stmts = _parse_exec("\n".join(str(s) for s in body)) if body else []
+        # `SELECT TYPE (s => dummy)` binds the branch body to `s`; the branch now runs
+        # directly on the concrete dummy, so rename `s` -> dummy in the spliced body.
+        if assoc is not None and stmts:
+            aname = str(assoc).lower()
+            for stmt in stmts:
+                for nm in walk(stmt, f03.Name):
+                    if str(nm).lower() == aname:
+                        replace_node(nm, f03.Name(dummy))
+        if stmts:
+            replace_node(cst, stmts)
+        else:
+            remove_self(cst)
+
+
+def _clone_ptr_constructor(sub: f03.Base, proc: str, base: str, arm_type: str, clone_name: str, dummy: str,
+                           plan: MonomorphizationPlan, hybrid_slots: Set[str], tinfos: dict) -> f03.Base:
+    """Clone constructor ``proc`` as ``clone_name`` with its ``CLASS(base)`` dummy
+    ``dummy`` retyped to ``TYPE(arm_type)``, and each ``this%slot => dummy``
+    association rewritten to set the tag + associate the concrete per-arm slot
+    (``this%slot__tag = <tag>`` + ``this%slot__arm => dummy``).  A concrete dummy
+    makes every ``dummy%binding`` call inside the body a static bind, so no further
+    body edits are needed for the association's own use.
+
+    A *hybrid* slot (kept ``CLASS`` for its data reads, in ``hybrid_slots``) KEEPS its
+    original ``this%slot => dummy`` association alongside the tag + per-arm assoc, so
+    the CLASS slot its data reads target is still bound (``TYPE(arm_type)`` dummy ->
+    ``CLASS(base)`` slot is a valid pointer association)."""
+    text = sub.tofortran()
+    text = re.sub(r'\b' + re.escape(proc) + r'\b', clone_name, text)
+    text = re.sub(r'CLASS\s*\(\s*' + re.escape(base) + r'\s*\)', f'TYPE({arm_type})', text, flags=re.IGNORECASE)
+    clone = walk(parse_program(f"module zz_tmp\ncontains\n{text}\nend module\n"), SCOPES)[0]
+    tag, arm = _find_arm(plan, arm_type)
+    for pa in list(walk(clone, f03.Pointer_Assignment_Stmt)):
+        lhs, _, rhs = pa.children
+        if not (isinstance(rhs, f03.Name) and str(rhs).lower() == dummy.lower()):
+            continue
+        pt = _member_prefix_and_tail(lhs)
+        if pt is None:
+            continue
+        prefix, slot = pt
+        assoc = f"{prefix}%{_tag_var(slot)} = {tag}\n{prefix}%{_arm_slot(slot, arm)} => {rhs}"
+        if slot.lower() in hybrid_slots:
+            assoc = f"{prefix}%{slot} => {rhs}\n{assoc}"
+        replace_node(pa, _parse_exec(assoc))
+    # The retyped (now concrete) dummy is no longer polymorphic, so any
+    # ``SELECT TYPE(dummy)`` in the body must be resolved to its matching guard
+    # branch -- flang rejects a ``SELECT TYPE`` on a non-polymorphic selector.
+    _resolve_select_type_on_dummy(clone, dummy, arm_type, tinfos)
+    return clone
+
+
+def _host_scope_specs(scope: f03.Base) -> List[f03.Specification_Part]:
+    """Specification parts visible from ``scope`` by host association -- the scope's
+    own, then each enclosing procedure's / module's, nearest first.  A concrete-arm
+    typed entity passed as an actual, or a dispatch receiver, is often a *module*
+    variable (ICON's ``free_sfc_solver`` / ``free_sfc_solver_trans_triv``), not a
+    local of the constructor's caller, so a type lookup must climb into the host."""
+    specs = []
+    node = scope
+    seen: Set[int] = set()
+    while node is not None and id(node) not in seen:
+        seen.add(id(node))
+        sp = ast_utils.atmost_one(ast_utils.children_of_type(node, f03.Specification_Part))
+        if sp is not None:
+            specs.append(sp)
+        node = _enclosing_of_type(node, SCOPES + (f03.Module, f03.Main_Program))
+    return specs
+
+
+def _lookup_entity_type(scope: f03.Base, name: str) -> Tuple[bool, Optional[Tuple[str, str]]]:
+    """``(declared, (kind, type_name) | None)`` for ``name`` visible from ``scope``
+    (own scope, then host association).  ``declared`` says whether any declaration
+    was found; the pair is ``('TYPE'|'CLASS', type)`` for a derived-type
+    declaration, else ``None`` (intrinsic).  The nearest scope wins -- a local
+    shadows a host entity -- so the search stops at the first scope declaring it."""
+    name_l = name.lower()
+    for spec in _host_scope_specs(scope):
+        for decl in walk(spec, f03.Type_Declaration_Stmt):
+            if name_l not in {str(e.children[0]).lower() for e in walk(decl, f03.Entity_Decl)}:
+                continue
+            ts = decl.children[0]
+            if isinstance(ts, f03.Declaration_Type_Spec) and ts.children[0] in ('TYPE', 'CLASS'):
+                return True, (str(ts.children[0]), str(ts.children[1]))
+            return True, None
+    return False, None
+
+
+def _entity_declared_type(scope: f03.Base, name: str) -> Optional[str]:
+    """Declared derived-type name of ``name`` visible from ``scope`` for a
+    ``TYPE(t)`` *or* ``CLASS(t)`` declaration (the type used to resolve a
+    dispatch), ``None`` for an intrinsic type or a missing declaration."""
+    _, info = _lookup_entity_type(scope, name)
+    return info[1].lower() if info is not None else None
+
+
+def _component_type(dtds: dict, type_name: str, comp: str) -> Optional[str]:
+    """Derived-type name of component ``comp`` of ``type_name`` (searching its
+    ``EXTENDS`` parents), ``None`` if absent or intrinsic."""
+    dtd = dtds.get(type_name.lower())
+    if dtd is None:
+        return None
+    for cdef in walk(dtd, f03.Data_Component_Def_Stmt):
+        comps = {str(cd.children[0]).lower() for cd in walk(cdef, f03.Component_Decl)}
+        if comp.lower() in comps:
+            ts = cdef.children[0]
+            if isinstance(ts, f03.Declaration_Type_Spec) and ts.children[0] in ('TYPE', 'CLASS'):
+                return str(ts.children[1]).lower()
+            return None
+    parent = read_type_info(dtd).parent
+    return _component_type(dtds, parent, comp) if parent else None
+
+
+def _type_of_ref(scope: f03.Base, ref: f03.Base, dtds: dict) -> Optional[str]:
+    """Derived-type name a reference resolves to: a bare ``Name`` (local/dummy) or a
+    member path ``a%b%c`` (each component's type walked through ``dtds``)."""
+    if isinstance(ref, f03.Name):
+        return _entity_declared_type(scope, str(ref))
+    if isinstance(ref, f03.Data_Ref):
+        parts = list(ref.children)
+        t = _entity_declared_type(scope, str(parts[0]))
+        for p in parts[1:]:
+            if t is None:
+                return None
+            t = _component_type(dtds, t, str(p))
+        return t
+    return None
+
+
+def _binding_target(tinfos: dict, type_name: str, binding: str) -> Optional[str]:
+    """Concrete procedure a static ``type_name%binding`` dispatch resolves to,
+    walking ``EXTENDS`` for an overriding binding.  ``None`` if the binding is
+    deferred at ``type_name`` (resolved only by the dynamic type -- not a static
+    caller of any one arm) or absent."""
+    t = type_name.lower()
+    b = binding.lower()
+    while t in tinfos:
+        ti = tinfos[t]
+        if b in ti.overrides:
+            return ti.overrides[b]
+        if b in ti.deferred:
+            return None
+        t = ti.parent
+    return None
+
+
+def _resolved_call_targets(program: f03.Program) -> Set[str]:
+    """Lower-cased procedure names that some ``Call_Stmt`` resolves to -- a direct
+    ``CALL proc`` or a statically-resolvable ``obj%binding`` dispatch.  A dispatch
+    whose receiver type cannot be resolved is treated conservatively (every arm
+    that overrides that binding is kept live) so a still-referenced constructor is
+    never dropped out from under a caller."""
+    tinfos = {read_type_info(d).name: read_type_info(d) for d in walk(program, f03.Derived_Type_Def)}
+    dtds = {read_type_info(d).name: d for d in walk(program, f03.Derived_Type_Def)}
+    targets: Set[str] = set()
+    for call in walk(program, f03.Call_Stmt):
+        des = call.children[0]
+        if isinstance(des, f03.Name):
+            targets.add(str(des).lower())
+        elif isinstance(des, f03.Procedure_Designator):
+            obj, _, binding = des.children
+            b = str(binding).lower()
+            scope = _enclosing_of_type(call, SCOPES)
+            tn = _type_of_ref(scope, obj, dtds) if scope is not None else None
+            tgt = _binding_target(tinfos, tn, b) if tn is not None else None
+            if tgt is not None:
+                targets.add(tgt)
+            elif tn is None:
+                # unresolved receiver: keep every overrider of this binding live.
+                for ti in tinfos.values():
+                    if b in ti.overrides:
+                        targets.add(ti.overrides[b])
+    return targets
+
+
+def _drop_use_only_import(program: f03.Program, name: str) -> None:
+    """Remove ``name`` from every ``USE mod, ONLY: ...`` import (dropping the whole
+    statement when it was the sole imported name).  Called when a cloned constructor
+    is deleted: an intermediate clone (an interposer specialised for the axis, later
+    re-specialised and dropped) is imported at earlier redirect sites via
+    :func:`_ensure_use`, and those imports would otherwise dangle."""
+    name_l = name.lower()
+    for use in list(walk(program, f03.Use_Stmt)):
+        if 'ONLY' not in str(use).upper():
+            continue
+        names = [str(n) for n in walk(use, f03.Name)]
+        imported = names[1:]  # names[0] is the module
+        if name_l not in {n.lower() for n in imported}:
+            continue
+        keep = [n for n in imported if n.lower() != name_l]
+        if keep:
+            replace_node(use, f03.Use_Stmt(f"USE {names[0]}, ONLY: {', '.join(keep)}"))
+        else:
+            remove_self(use)
+
+
+def _drop_dead_constructors(program: f03.Program, procs: Set[str]) -> None:
+    """Remove each constructor in ``procs`` and its ``binding => proc`` TBPs once no
+    call resolves to it, to a fixed point (a pass-through goes dead only after the
+    caller that still dispatches it is dropped).  A cloned original still holds the
+    pre-expansion ``this%slot => dummy`` -- referencing an expanded-away component --
+    and its ``dummy%binding`` calls stay polymorphic, so leaving a dead one would
+    fail to compile or reach the bridge's polymorphism reject."""
+    remaining = set(procs)
+    changed = True
+    while changed and remaining:
+        changed = False
+        live = _resolved_call_targets(program)
+        for proc in sorted(remaining):
+            if proc in live:
+                continue
+            for b in [
+                    b for b in walk(program, f03.Specific_Binding)
+                    if b.children[4] is not None and str(b.children[4]).lower() == proc
+            ]:
+                remove_self(b)
+            sub = _find_subprogram(program, proc)
+            if sub is not None:
+                remove_self(sub)
+            _drop_use_only_import(program, proc)
+            remaining.discard(proc)
+            changed = True
+
+
+def _callee_of(call: f03.Call_Stmt, scope: Optional[f03.Base], tinfos: dict,
+               dtds: dict) -> Tuple[Optional[str], Optional[f03.Base], bool]:
+    """``(proc_name, passed_object_or_None, has_passed_object)`` for a call: a
+    plain ``CALL proc`` (no passed object), or a type-bound dispatch ``obj%binding``
+    resolved *precisely* by ``obj``'s static type (:func:`_type_of_ref` +
+    :func:`_binding_target`).  Precision matters: a binding name is shared across
+    types (``bconstruct`` on every backend arm, ``construct`` on the solver, lhs
+    and transfers), so a name-keyed map would mis-resolve a laddered dispatch on a
+    concrete slot (``this%act__t_cg%bconstruct``) to the wrong arm's procedure."""
+    des = call.children[0]
+    if isinstance(des, f03.Name):
+        return str(des).lower(), None, False
+    if isinstance(des, f03.Procedure_Designator):
+        obj, _, binding = des.children
+        tn = _type_of_ref(scope, obj, dtds) if scope is not None else None
+        proc = _binding_target(tinfos, tn, str(binding)) if tn is not None else None
+        return proc, obj, True
+    return None, None, False
+
+
+def _dummy_is_dispatched(sub: f03.Base, dummy: str) -> bool:
+    """True if ``sub`` dispatches on its dummy ``dummy`` -- a ``dummy%binding(...)``
+    type-bound call (a :class:`Procedure_Designator` whose object is the bare dummy).
+    A plain ``dummy%member`` data read is a :class:`Data_Ref`, not a dispatch, so a
+    data-only ``CLASS(base)`` dummy (which compiles fine) is not cloned."""
+    d = dummy.lower()
+    for des in walk(sub, f03.Procedure_Designator):
+        obj = des.children[0]
+        if isinstance(obj, f03.Name) and str(obj).lower() == d:
+            return True
+    return False
+
+
+def _class_base_dummies(sub: f03.Base, base: str) -> dict:
+    """``{dummy_name: position}`` for each ``CLASS(base)`` *dummy argument* of
+    ``sub`` -- the arguments a concrete arm can flow into to be devirtualised."""
+    spec = ast_utils.atmost_one(ast_utils.children_of_type(sub, f03.Specification_Part))
+    if spec is None:
+        return {}
+    class_names = {n.lower() for _, ns in _class_locals(spec, base) for n in ns}
+    dummies = [d.lower() for d in _dummy_arg_names(sub)]
+    return {d: i for i, d in enumerate(dummies) if d in class_names}
+
+
+def devirtualize_pointer_flow(program: f03.Program, plan: MonomorphizationPlan) -> int:
+    """Devirtualise a pointer-association tag source (see the section comment) by
+    an interprocedural forward fixed point over concrete-arm argument flow.
+
+    A concrete arm reaches a ``this%slot => dummy`` association several call hops
+    from where its type is known: ICON seeds it with a typed local at the entry
+    (``ocean_solve_construct(.., a_trivial_transfer)``), which forwards it through
+    a *pass-through* constructor's ``CLASS(base)`` dummy, through the (already
+    laddered) backend dispatch, into ``lhs_construct``'s dummy, and finally into
+    ``this%trans => trans``.  Each round: find every call passing a concrete-arm
+    actual into a ``CLASS(base)`` dummy, clone the callee with that dummy retyped
+    to ``TYPE(arm)`` (so every ``dummy%binding`` inside is a static bind and any
+    ``this%slot => dummy`` becomes a tag set + concrete association), and redirect
+    the call.  Retyping the dummy makes the clone forward a *concrete* actual on
+    its own out-edges, exposing the next hop -- so the fixed point walks the whole
+    constructor chain.  Returns the number of ``(proc, arm)`` clones emitted."""
+    base = plan.abstract_base
+    # Only bases with a pointer-association tag source are devirtualised this way;
+    # an ``ALLOCATE``-constructed axis (ICON's ``%act``) is handled entirely by the
+    # component ladder, and running the flow fixed point on it would be a no-op at
+    # best and clone unrelated call chains at worst.
+    if not any(_ptr_assoc_sites_by_dummy(s, base) for s in walk(program, SCOPES)):
+        return 0
+    # Slots the component pass kept as CLASS (data-carrying hybrids) still appear as
+    # CLASS(base) components; their ``this%slot => dummy`` association is preserved
+    # (for the native data reads) in addition to the tag + per-arm pointer.
+    hybrid_slots = _slot_component_names(program, base)
+    cloned = {}  # (proc, arm) -> (clone_name, clone_mod)
+
+    changed = True
+    while changed:
+        changed = False
+        subs = {(find_name_of_node(s) or '').lower(): s for s in walk(program, SCOPES)}
+        tinfos = {read_type_info(d).name: read_type_info(d) for d in walk(program, f03.Derived_Type_Def)}
+        dtds = {read_type_info(d).name: d for d in walk(program, f03.Derived_Type_Def)}
+        flows = []  # (call, obj, proc, arm, dummy, passed_object)
+        for call in walk(program, f03.Call_Stmt):
+            scope = _enclosing_of_type(call, SCOPES)
+            proc, obj, passed_object = _callee_of(call, scope, tinfos, dtds)
+            if proc is None or proc not in subs:
+                continue
+            cbd = _class_base_dummies(subs[proc], base)
+            if not cbd:
+                continue
+            args = call.children[1]
+            actuals = list(args.children) if args is not None else []
+            for dummy, dummy_idx in cbd.items():
+                # passed-object binds dummy 0 (default PASS): actual for dummy k is
+                # at index k-1; a plain call has no passed object (index k).
+                actual_idx = dummy_idx - 1 if passed_object else dummy_idx
+                if actual_idx < 0 or actual_idx >= len(actuals):
+                    continue
+                actual = actuals[actual_idx]
+                if not isinstance(actual, f03.Name) or scope is None:
+                    continue
+                arm = _entity_concrete_type(scope, str(actual))
+                if arm is not None and _arm_index(plan, arm) is not None:
+                    flows.append((call, obj, proc, arm, dummy, passed_object))
+
+        for _, _, proc, arm, dummy, _ in flows:
+            if (proc, arm) in cloned:
+                continue
+            sub = subs[proc]
+            clone_name = _clone_name(proc, arm)
+            clone = _clone_ptr_constructor(sub, proc, base, arm, clone_name, dummy, plan, hybrid_slots, tinfos)
+            append_children(sub.parent, clone)
+            cloned[(proc, arm)] = (clone_name, _module_name_of(sub))
+            changed = True
+
+        for call, obj, proc, arm, _, passed_object in flows:
+            clone_name, clone_mod = cloned[(proc, arm)]
+            call_sub = _enclosing_of_type(call, SCOPES)
+            call_mod = _module_name_of(call)
+            args = call.children[1]
+            actuals = [str(a) for a in args.children] if args is not None else []
+            callee = ', '.join(([str(obj)] if passed_object else []) + actuals)
+            replace_node(call, _parse_exec(f"call {clone_name}({callee})"))
+            if call_sub is not None and clone_mod is not None and call_mod != clone_mod:
+                _ensure_use(call_sub, clone_mod, clone_name)
+
+    # Drop the now-dead originals (their post-expansion ``this%slot => dummy`` is
+    # invalid and their ``dummy%binding`` calls stay polymorphic).  Composed over
+    # axes this also clears the previous axis's partial clones: after the ``agen``
+    # flow redirects the entry to a ``(trans, agen)``-specialised clone, the
+    # ``trans``-only clone the ``trans`` flow left is dead and dropped here.
+    _drop_dead_constructors(program, {p for (p, _) in cloned})
+
+    return len(cloned)
+
+
+def devirtualize_dummy_dispatch(program: f03.Program, plan: MonomorphizationPlan) -> int:
+    """Devirtualise a dispatch on a ``CLASS(base)`` DUMMY of a helper that is CALLED
+    with a hybrid slot actual whose concrete arm is only known at runtime.
+
+    The component ladder devirtualises a slot DISPATCH (``CALL this%trans%into(...)``)
+    but leaves a slot PASS (``CALL restart(x, this%trans)``) on the kept CLASS slot, so
+    a ``dummy%binding`` inside the helper stays polymorphic (ICON's
+    ``ocean_restart_gmres(trans)%sync``).  For each call passing a hybrid slot into a
+    ``CLASS(base)`` dummy the helper DISPATCHES on, clone the helper per arm with that
+    dummy retyped to ``TYPE(arm)`` -- so every ``dummy%binding`` is a static bind -- and
+    replace the call with a tag ladder routing each arm to its clone with the matching
+    per-arm slot.  The direct concrete-arm-actual flow is handled by
+    :func:`devirtualize_pointer_flow`; this is its runtime-tag sibling for the kept
+    hybrid slot.  Returns the number of ``(proc, arm)`` clones emitted."""
+    base = plan.abstract_base
+    hybrid_slots = _slot_component_names(program, base)
+    if not hybrid_slots:
+        return 0
+    subs = {(find_name_of_node(s) or '').lower(): s for s in walk(program, SCOPES)}
+    tinfos = {read_type_info(d).name: read_type_info(d) for d in walk(program, f03.Derived_Type_Def)}
+    dtds = {read_type_info(d).name: d for d in walk(program, f03.Derived_Type_Def)}
+
+    # (call, proc, actual_idx, prefix, slot) for each hybrid-slot -> dispatched-dummy pass.
+    sites = []
+    for call in walk(program, f03.Call_Stmt):
+        scope = _enclosing_of_type(call, SCOPES)
+        proc, _, passed_object = _callee_of(call, scope, tinfos, dtds)
+        if proc is None or proc not in subs:
+            continue
+        cbd = _class_base_dummies(subs[proc], base)
+        if not cbd:
+            continue
+        args = call.children[1]
+        actuals = list(args.children) if args is not None else []
+        for dummy, dummy_idx in cbd.items():
+            if not _dummy_is_dispatched(subs[proc], dummy):
+                continue
+            actual_idx = dummy_idx - 1 if passed_object else dummy_idx
+            if actual_idx < 0 or actual_idx >= len(actuals):
+                continue
+            actual = actuals[actual_idx]
+            if not isinstance(actual, f03.Data_Ref):
+                continue  # a concrete-arm local Name is handled by devirtualize_pointer_flow
+            prefix, tail = _ref_prefix_and_tail(actual)
+            if tail.lower() not in hybrid_slots:
+                continue
+            sites.append((call, proc, actual_idx, prefix, tail))
+
+    clones = {}  # (proc, arm) -> (clone_name, clone_mod)
+    for _, proc, _, _, _ in sites:
+        for arm in plan.arms:
+            if (proc, arm.type_name) in clones:
+                continue
+            sub = subs[proc]
+            clone_name = _clone_name(proc, arm.type_name)
+            clones[(proc, arm.type_name)] = (clone_name, _module_name_of(sub))
+            append_children(sub.parent, _clone_interposer(sub, proc, base, arm.type_name, clone_name))
+
+    for call, proc, actual_idx, prefix, slot in sites:
+        call_sub = _enclosing_of_type(call, SCOPES)
+        call_mod = _module_name_of(call)
+        args = call.children[1]
+        actuals = [str(a) for a in args.children] if args is not None else []
+        lines = []
+        for tag, arm in enumerate(plan.arms, start=1):
+            clone_name, clone_mod = clones[(proc, arm.type_name)]
+            per = list(actuals)
+            per[actual_idx] = f"{prefix}%{_arm_slot(slot, arm.type_name)}"
+            lines.append(f"{'if' if tag == 1 else 'else if'} ({prefix}%{_tag_var(slot)} == {tag}) then")
+            lines.append(f"  call {clone_name}({', '.join(per)})")
+            if call_sub is not None and clone_mod is not None and call_mod != clone_mod:
+                _ensure_use(call_sub, clone_mod, clone_name)
+        lines.append("end if")
+        replace_node(call, _parse_exec("\n".join(lines)))
+
+    return len(clones)
+
+
+# ---------------------------------------------------------------------------
 # Driver: compose the four primitives over a per-translation-unit spec.
 #
 # A translation unit can carry several orthogonal polymorphic axes at once
@@ -592,6 +1374,8 @@ class MonomorphizationStats:
     components_rewritten: int = 0
     interposers_cloned: int = 0
     declarations_retyped: int = 0
+    pointer_constructors_cloned: int = 0
+    dummy_dispatch_cloned: int = 0
 
 
 def monomorphize(program: f03.Program, spec: MonomorphizationSpec, stack_slots: bool = False) -> MonomorphizationStats:
@@ -630,14 +1414,31 @@ def monomorphize(program: f03.Program, spec: MonomorphizationSpec, stack_slots: 
             raise ValueError(f"retype axis `{axis.base}` needs a concrete type to retype to")
         stats.declarations_retyped += retype_to_concrete(program, axis.base, axis.concrete)
 
+    ladder_plans = []
     for axis in ladder_axes:
         plan = plans.get(axis.base.lower())
         if plan is None:
             raise ValueError(f"ladder axis `{axis.base}` has no dispatch plan: the abstract base is "
                              f"absent, non-polymorphic, or has no concrete arm in this translation unit")
+        ladder_plans.append(plan)
         stats.locals_rewritten += monomorphize_local_dispatch(program, plan, stack_slots)
         stats.components_rewritten += monomorphize_component_dispatch(program, plan, stack_slots)
         stats.interposers_cloned += clone_shared_interposers(program, plan)
+
+    # Pointer-association devirtualisation runs as a second phase, after *every*
+    # axis's slots are expanded and dispatches laddered.  The transfer/lhs flow
+    # threads through the (now laddered) backend dispatch and through constructors
+    # that also carry the other pointer axis's dummy; running it only once both are
+    # in their expanded form keeps the interprocedural clones consistent.
+    for plan in ladder_plans:
+        stats.pointer_constructors_cloned += devirtualize_pointer_flow(program, plan)
+
+    # A kept hybrid slot can also be PASSED to a helper that dispatches on its
+    # CLASS(base) dummy (ICON's ocean_restart_gmres(trans)%sync) -- the runtime-tag
+    # sibling of the pointer flow above.  Runs last, once every slot is expanded and
+    # every construct-chain clone settled.
+    for plan in ladder_plans:
+        stats.dummy_dispatch_cloned += devirtualize_dummy_dispatch(program, plan)
 
     return stats
 
@@ -677,6 +1478,89 @@ def _has_inunit_construction(program: f03.Program, plan: MonomorphizationPlan) -
     return False
 
 
+def _entity_concrete_type(scope: f03.Base, name: str) -> Optional[str]:
+    """The concrete ``TYPE(t)`` name declared for entity ``name`` visible from
+    ``scope`` (a local, dummy, or host-associated *module* variable), or ``None``
+    when it is polymorphic (``CLASS(...)``) or intrinsic.  Reads the arm type of a
+    concrete actual passed to a pointer-assoc constructor (the ladder's tag
+    source); ICON declares those actuals as module variables, so the lookup climbs
+    into the host module (:func:`_lookup_entity_type`)."""
+    _, info = _lookup_entity_type(scope, name)
+    return str(info[1]) if (info is not None and info[0] == 'TYPE') else None
+
+
+def _ptr_assoc_slot_sites(scope: f03.Base, base: str,
+                          slot_names: Set[str]) -> List[Tuple[f03.Pointer_Assignment_Stmt, str, str]]:
+    """``(pointer_assign_stmt, slot, dummy_name)`` for each ``<prefix>%<slot> =>
+    <dummy>`` in ``scope`` where ``slot`` is one of ``slot_names`` and ``<dummy>``
+    is a plain-name entity declared ``CLASS(base)`` in ``scope`` -- the interior
+    of a constructor that pointer-associates an abstract slot to its (still
+    abstract) dummy.  This is the pointer-association analogue of an
+    ``ALLOCATE(arm :: slot)`` tag source, one interprocedural hop away: the
+    concrete arm arrives as the actual argument bound to ``<dummy>``."""
+    spec = ast_utils.atmost_one(ast_utils.children_of_type(scope, f03.Specification_Part))
+    if spec is None:
+        return []
+    class_names = {n.lower() for _, ns in _class_locals(spec, base) for n in ns}
+    if not class_names:
+        return []
+    out = []
+    for pa in walk(scope, f03.Pointer_Assignment_Stmt):
+        lhs, _, rhs = pa.children
+        pt = _member_prefix_and_tail(lhs)
+        if pt is None or pt[1].lower() not in slot_names:
+            continue
+        if isinstance(rhs, f03.Name) and str(rhs).lower() in class_names:
+            out.append((pa, pt[1], str(rhs)))
+    return out
+
+
+def _slot_component_names(program: f03.Program, base: str) -> Set[str]:
+    """Lower-cased names of every ``CLASS(base)`` derived-type *component* (the
+    stored slots a dispatch reads as ``obj%slot%binding``)."""
+    return {n.lower() for _, names in _component_slots(program, base) for n in names}
+
+
+def _has_concrete_arm_actual(program: f03.Program, plan: MonomorphizationPlan) -> bool:
+    """True if some call in the unit passes a concrete-arm-typed entity as an actual
+    argument -- the seed that lets the pointer-association ladder resolve a non-zero
+    tag (an ``ALLOCATE``-free axis whose arm never enters as a concrete actual could
+    not be laddered without silently no-oping).  The seed is frequently a *module*
+    variable (ICON's ``free_sfc_solver_trans_triv``), so the arm-typed names are
+    collected program-wide (any scope) rather than per call-site."""
+    arms = {a.type_name.lower() for a in plan.arms}
+    arm_typed: Set[str] = set()
+    for decl in walk(program, f03.Type_Declaration_Stmt):
+        ts = decl.children[0]
+        if isinstance(ts, f03.Declaration_Type_Spec) and ts.children[0] == 'TYPE' and str(
+                ts.children[1]).lower() in arms:
+            arm_typed |= {str(e.children[0]).lower() for e in walk(decl, f03.Entity_Decl)}
+    if not arm_typed:
+        return False
+    for call in walk(program, f03.Call_Stmt):
+        args = call.children[1]
+        if args is not None and any(str(a).lower() in arm_typed for a in walk(args, f03.Name)):
+            return True
+    return False
+
+
+def _has_pointer_assoc_construction(program: f03.Program, plan: MonomorphizationPlan) -> bool:
+    """True if ``plan``'s arms are constructed by *pointer association* -- a
+    ``<prefix>%<slot> => <class-dummy>`` inside a constructor, seeded by a
+    concrete-arm typed actual somewhere in the unit.  This is the tag source for
+    the pointer-association ladder, the interprocedural analogue of
+    :func:`_has_inunit_construction`'s ``ALLOCATE(arm :: slot)``.  Requires BOTH
+    an association site AND a concrete-arm actual so the ladder is guaranteed a
+    resolvable, non-zero tag rather than a silent no-op."""
+    base = plan.abstract_base
+    slot_names = _slot_component_names(program, base)
+    if not slot_names:
+        return False
+    if not any(_ptr_assoc_slot_sites(scope, base, slot_names) for scope in walk(program, SCOPES)):
+        return False
+    return _has_concrete_arm_actual(program, plan)
+
+
 def discover_axes(program: f03.Program) -> List[AxisSpec]:
     """Find every single-level abstract dispatch axis in ``program`` that the
     pass can soundly collapse, and pick a strategy for each.
@@ -695,12 +1579,15 @@ def discover_axes(program: f03.Program) -> List[AxisSpec]:
         becomes ``TYPE(arm)``; trivially correct -- only one runtime type
         exists).  This is ICON's standard-build halo: ``t_comm_pattern`` with
         ``t_comm_pattern_yaxt`` cpp'd out, leaving ``t_comm_pattern_orig``.
-      * two or more arms with in-unit construction -> :data:`LADDER` over the
-        tags set at the ``ALLOCATE(arm :: ..)`` sites.
-      * two or more arms, no in-unit construction -> *skipped* (logged): the
-        runtime arm cannot be inferred, so neither retype (which one?) nor a
-        ladder (no tag) is sound.  An explicit :class:`MonomorphizationSpec`
-        must pin it.
+      * two or more arms with a tag source -> :data:`LADDER`.  The tag is set
+        either at an ``ALLOCATE(arm :: slot)`` site (:func:`_has_inunit_construction`)
+        or, one interprocedural hop away, at a ``slot => dummy`` pointer
+        association whose dummy receives a concrete-arm actual
+        (:func:`_has_pointer_assoc_construction` -- ICON's ``t_lhs%trans`` /
+        ``%agen``, bound in ``lhs_construct`` from a typed local).
+      * two or more arms, no tag source -> *skipped* (logged): the runtime arm
+        cannot be inferred, so neither retype (which one?) nor a ladder (no tag)
+        is sound.  An explicit :class:`MonomorphizationSpec` must pin it.
 
     A dispatch root outside the soundly-monomorphisable class (multi-level,
     ``CLASS(*)`` in its own definition, a missing override) is skipped too --
@@ -709,6 +1596,17 @@ def discover_axes(program: f03.Program) -> List[AxisSpec]:
     live = _dispatch_binding_names(program)
     if not live:
         return []
+
+    # A generic dispatch (``obj%apply(...)``) invokes the generic's underlying
+    # specific binding (``GENERIC :: apply => lhs_wp``), so a live generic name
+    # makes its specific(s) live too.  Without this an abstract base dispatched
+    # ONLY through generics -- ICON's ``t_lhs_agen``, whose deferred ``lhs_wp`` /
+    # ``lhs_matrix_shortcut`` are reached solely as ``apply`` / ``matrix_shortcut``
+    # -- would never be discovered (its deferred names never appear in a dispatch).
+    for gb in walk(program, f03.Generic_Binding):
+        _, gname, plist = gb.children
+        if str(gname).lower() in live and plist is not None:
+            live |= {str(s).lower() for s in plist.children}
 
     # Candidate bases: abstract dispatch roots (a type with deferred bindings)
     # at least one of whose deferred bindings is live.
@@ -730,7 +1628,7 @@ def discover_axes(program: f03.Program) -> List[AxisSpec]:
         plan = plans[0]
         if len(plan.arms) == 1:
             axes.append(AxisSpec(base, RETYPE, concrete=plan.arms[0].type_name))
-        elif _has_inunit_construction(program, plan):
+        elif _has_inunit_construction(program, plan) or _has_pointer_assoc_construction(program, plan):
             axes.append(AxisSpec(base, LADDER))
         else:
             logger.warning(
@@ -832,6 +1730,43 @@ def _redirect_uses(program: f03.Program, old_mod: str, new_mod: str) -> None:
                                     flags=re.IGNORECASE)))
 
 
+def _module_scope_declared_names(mod: f03.Module) -> Set[str]:
+    """Lower-cased names DECLARED at ``mod``'s own specification-part scope (module
+    variables / named constants).  Names introduced only by ``USE`` (imports) or
+    inside a contained procedure are excluded -- they are not module-scope
+    definitions and would not clash as redefinitions on a merge."""
+    spec = ast_utils.atmost_one(ast_utils.children_of_type(mod, f03.Specification_Part))
+    if spec is None:
+        return set()
+    return {
+        str(ent.children[0]).lower()
+        for decl in ast_utils.children_of_type(spec, f03.Type_Declaration_Stmt)
+        for ent in walk(decl, f03.Entity_Decl)
+    }
+
+
+def _rename_module_scope_entity(mod: f03.Module, old: str, new: str) -> None:
+    """Rename a module-scope entity ``old`` -> ``new`` throughout ``mod`` (its
+    declaration and every reference), skipping any contained procedure that
+    declares its own ``old`` (a local shadow that binds to a different entity)."""
+    old_l = old.lower()
+    shadow = set()
+    for sub in walk(mod, SCOPES):
+        sp = ast_utils.atmost_one(ast_utils.children_of_type(sub, f03.Specification_Part))
+        if sp is not None and any(
+                str(ent.children[0]).lower() == old_l
+                for decl in ast_utils.children_of_type(sp, f03.Type_Declaration_Stmt)
+                for ent in walk(decl, f03.Entity_Decl)):
+            shadow.add(id(sub))
+    for nm in list(walk(mod, f03.Name)):
+        if str(nm).lower() != old_l:
+            continue
+        enc = _enclosing_of_type(nm, SCOPES)
+        if enc is not None and id(enc) in shadow:
+            continue
+        replace_node(nm, f03.Name(new))
+
+
 def consolidate_arm_module(program: f03.Program, base_type: str, arm_type: str) -> bool:
     """Merge the module that defines ``arm_type`` into the module that defines
     ``base_type``, so a retyped container in the base module no longer creates a
@@ -852,8 +1787,24 @@ def consolidate_arm_module(program: f03.Program, base_type: str, arm_type: str) 
     base_spec = ast_utils.singular(ast_utils.children_of_type(base_mod, f03.Specification_Part))
     arm_spec = ast_utils.atmost_one(ast_utils.children_of_type(arm_mod, f03.Specification_Part))
 
-    # 1. Move the arm spec's declarations (everything but its IMPLICIT and a
-    #    self-or-base USE) into the base spec.
+    # 0. Rename arm module-scope entities that collide with a base module-scope
+    #    name before merging -- else the merge creates two definitions of one
+    #    identifier in the base module.  A multi-arm ladder consolidates several
+    #    near-identical sibling modules (ICON's Krylov backends), each carrying the
+    #    same private ``this_mod_name`` PARAMETER; without this the base ends up
+    #    with N ``this_mod_name`` definitions.
+    for nm in sorted(_module_scope_declared_names(arm_mod) & _module_scope_declared_names(base_mod)):
+        _rename_module_scope_entity(arm_mod, nm, f"{nm}__{arm_name}")
+
+    # 1. Move the arm spec's declarations into the base spec.  A ``USE`` must
+    #    precede every declaration in a specification part, so imported symbols
+    #    are PREPENDED (ahead of the base's already-present type defs) while
+    #    everything else is appended.  Appending a moved ``USE`` after the base's
+    #    type definitions is illegal Fortran and -- worse -- makes ``alias_specs``
+    #    miss the import: the arm's host-associated types (ICON's
+    #    ``t_subset_range``, re-exported through ``mo_grid_subset``) then fail to
+    #    resolve in the moved subprograms and get dropped from their ``USE``s, so
+    #    the emitted TU references a type it never imports ("used before defined").
     if arm_spec is not None:
         for child in list(arm_spec.children):
             if isinstance(child, f03.Implicit_Part):
@@ -862,6 +1813,9 @@ def consolidate_arm_module(program: f03.Program, base_type: str, arm_type: str) 
                 nm = ast_utils.atmost_one(ast_utils.children_of_type(child, f03.Name))
                 if nm is not None and str(nm).lower() in (base_name, arm_name):
                     continue  # base symbols are already in scope post-merge
+                remove_self(child)
+                prepend_children(base_spec, child)
+                continue
             remove_self(child)
             append_children(base_spec, child)
 
@@ -889,6 +1843,15 @@ def consolidate_arm_module(program: f03.Program, base_type: str, arm_type: str) 
     # 3. Redirect USEs, drop the emptied arm module, order the merged types.
     remove_self(arm_mod)
     _redirect_uses(program, arm_name, base_name)
+    # A ``USE base`` now sitting *inside* the base module -- e.g. an ``_ensure_use``
+    # that imported a clone's callee from the base while the caller still lived in
+    # a (now-merged) arm module -- is a self-use once both are in the base, which
+    # a compiler rejects ("cannot USE a module currently being built").  Drop every
+    # such self-use (at module scope and in the contained procedures).
+    for use in list(walk(base_mod, f03.Use_Stmt)):
+        nm = ast_utils.atmost_one(ast_utils.children_of_type(use, f03.Name))
+        if nm is not None and str(nm).lower() == base_name:
+            remove_self(use)
     _toposort_type_defs(base_spec)
 
     # 4. The retype may have rewritten ``CLASS(base)`` -> ``TYPE(arm)`` anywhere in
@@ -919,11 +1882,42 @@ def monomorphize_auto(program: f03.Program, stack_slots: bool = False) -> Monomo
         return MonomorphizationStats()
     logger.debug("monomorphize: auto-collapsing %d axis(es): %s", len(axes),
                  ", ".join(f"{a.base}->{a.strategy}" for a in axes))
-    stats = monomorphize(program, MonomorphizationSpec(axes), stack_slots=stack_slots)
-    # Co-locate each arm's definition with its base so a retyped container in the
-    # base module doesn't depend circularly on the (formerly downstream) arm.
+    # Capture each ladder axis's concrete arm types from the pristine hierarchy,
+    # before the rewrite expands the component slot and drops the abstract
+    # bindings.  A ladder emits per-arm interposer clones AND direct per-arm
+    # binding calls into the base module (the dispatch site), so every arm's
+    # module must be consolidated into the base's the same way a retype's single
+    # arm is -- otherwise the base module names concrete arm types / procedures
+    # that live in formerly-downstream modules ("used before defined" + a
+    # circular USE, since each arm module already USEs the base to EXTEND it).
+    ladder_arms = {}
     for axis in axes:
-        if axis.strategy == RETYPE and axis.concrete is not None:
-            if consolidate_arm_module(program, axis.base, axis.concrete):
-                logger.debug("monomorphize: consolidated arm `%s` into base `%s`'s module", axis.concrete, axis.base)
+        if axis.strategy == LADDER:
+            plans = analyze(program, only_bases=[axis.base])
+            if plans:
+                ladder_arms[axis.base] = [arm.type_name for arm in plans[0].arms]
+    stats = monomorphize(program, MonomorphizationSpec(axes), stack_slots=stack_slots)
+    # Co-locate each arm's definition with its base module so a retyped container
+    # (RETYPE) or a per-arm interposer clone / direct binding call (LADDER) placed
+    # in the base module doesn't depend circularly on the (formerly downstream)
+    # arm module.
+    merged = False
+    for axis in axes:
+        arms = [axis.concrete] if axis.strategy == RETYPE and axis.concrete is not None else ladder_arms.get(
+            axis.base, [])
+        for arm in arms:
+            if consolidate_arm_module(program, axis.base, arm):
+                logger.debug("monomorphize: consolidated arm `%s` into base `%s`'s module", arm, axis.base)
+                merged = True
+    if merged:
+        # A merge folds the arm module's USE dependencies into the base module,
+        # so the base may now precede a module it newly depends on (e.g. the arm's
+        # ``USE mo_grid_subset`` for a host-associated type).  ``alias_specs``
+        # resolves USEs in document order and assumes the modules are topologically
+        # sorted; an out-of-order base leaves its inherited imports unresolved, so
+        # a re-exported host type (ICON's ``t_subset_range``, defined in
+        # ``mo_model_domain`` and re-exported via ``mo_grid_subset``) is dropped
+        # from the moved subprograms' ``USE``s ("used before defined").  Restore the
+        # topological module order the downstream resolution passes rely on.
+        keep_sorted_used_modules(program)
     return stats

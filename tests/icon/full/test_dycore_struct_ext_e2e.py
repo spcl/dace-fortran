@@ -461,16 +461,18 @@ def test_dycore_struct_ext_dynamic_shape_e2e(tmp_path: Path):
     u_ref = u_init.copy(order="F")
     v_ref = v_init.copy(order="F")
 
-    # SDFG side: the auto-generated outer ``bind_c_shim`` takes one
-    # ``int`` extent per dim ahead of every member pointer, in
-    # declaration order: ``(s_u_d0, s_u_p, s_v_d0, s_v_p)`` for the
-    # two 1-D members.  Reference driver was written to the same ABI
-    # but factored its single shared extent into one leading ``n``;
-    # call each lib with the signature it actually exports.
+    # SDFG side: the auto-generated outer ``bind_c_shim`` takes, per
+    # dynamic member, a lower-bound then an extent ``int`` ahead of the
+    # pointer -- ``(s_u_lb0, s_u_d0, s_u_p, s_v_lb0, s_v_d0, s_v_p)`` for
+    # the two 1-D ALLOCATABLE members (the shim now reconstructs every
+    # dynamic member at its TRUE bounds, so a non-default lower bound
+    # survives; here both are the default 1).  Reference driver is an
+    # independent hand shim that factored its single shared extent into
+    # one leading ``n``; call each lib with the signature it exports.
     sdfg_fn = sdfg_so.outer_state_dyn_c
     sdfg_fn.restype = None
-    sdfg_fn.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
-    sdfg_fn(n, u_sdfg.ctypes.data, n, v_sdfg.ctypes.data)
+    sdfg_fn.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+    sdfg_fn(1, n, u_sdfg.ctypes.data, 1, n, v_sdfg.ctypes.data)
     ref_fn = ref_lib.outer_state_dyn_c
     ref_fn.restype = None
     ref_fn.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p]

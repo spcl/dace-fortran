@@ -188,6 +188,12 @@ def _inner_patch_slot_order(tmp_path):
             if not a.startswith("p_"):
                 continue
             leaf = a[len("p_"):]
+            # A dynamic member rides a lower-bound + extent scalar per dim ahead
+            # of its pointer (``<flat>_lb<i>`` / ``<flat>_d<i>``); both collapse
+            # to the owning leaf, they are not distinct leaves (the OUTER's
+            # matching ``offset_<flat>_d<i>`` lower-bound token starts with
+            # ``offset_`` and is filtered out above).
+            leaf = re.sub(r"_lb\d+$", "", leaf)  # strip lower-bound suffix
             leaf = re.sub(r"_d\d+$", "", leaf)  # strip extent suffix
             leaf = re.sub(r"_p$", "", leaf)  # strip pointer suffix
             if leaf and leaf not in seen:

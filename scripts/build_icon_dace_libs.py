@@ -55,6 +55,7 @@ from icon.full.test_dycore_velocity_external_e2e import (
 
 from _util import build_sdfg
 from dace_fortran.bindings import build_fortran_library, FlattenPlan
+from dace_fortran.bindings.bind_c_shim import scalar_pointer_members
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.external import Arg, clear_external_registry, keep_external
 
@@ -175,6 +176,12 @@ def build_velocity_inner_wrap(velocity_source: Path, out_dir: Path, release: boo
         sdfg.name = "velocity_tendencies"
         sdfg.build_folder = str(sdfg_dir / "dacecache")
         iface = build_auto_interface(sdfg._fortran_interface_raw, "velocity_tendencies")
+        # Grid-dim scalar members the shim takes as ``type(c_ptr), value`` -- the
+        # OUTER dycore SDFG's velocity ``keep_external`` must pass their ADDRESS
+        # (``callee_ptr_scalar_members``), else its by-value marshal segfaults the
+        # inner ``c_f_pointer``.  Derived from the real callee iface here (the
+        # hand-authored ``_velocity_iface`` carries no ``struct_types``).
+        callee_ptr_members = scalar_pointer_members(iface)
         plan = FlattenPlan.from_dict(sdfg._flatten_plan_raw or {})
         lib = build_fortran_library(
             sdfg,
@@ -202,10 +209,11 @@ def build_velocity_inner_wrap(velocity_source: Path, out_dir: Path, release: boo
             f"  export LDFLAGS=\"-L{out_dir} -Wl,-rpath,{out_dir} "
             f"-l:{lib.so_path.name} ${{LDFLAGS-}}\"\n",
             flush=True)
-    return lib
+    return lib, callee_ptr_members
 
 
-def build_dycore_wrapper(velocity_source: Path, inner_lib_so: Path, out_dir: Path, release: bool):
+def build_dycore_wrapper(velocity_source: Path, inner_lib_so: Path, out_dir: Path, release: bool,
+                         callee_ptr_scalar_members: frozenset = frozenset()):
     """Build ``libdycore_wrapper.so`` -- the outer SDFG that calls
     ``velocity_tendencies`` (resolved at runtime from
     ``libvelocity_inner_wrap.so``) and a Fortran/C++ pair of
@@ -263,6 +271,7 @@ def build_dycore_wrapper(velocity_source: Path, inner_lib_so: Path, out_dir: Pat
         libraries=(str(inner_lib_so), ),
         dynamic_extents_abi=True,
         module_symbol_forward=_VELOCITY_MODULE_FORWARD,
+        callee_ptr_scalar_members=callee_ptr_scalar_members,
     )
     keep_external(
         "sync_patch_array",
@@ -348,12 +357,13 @@ def main():
         print("error: need gfortran + flang-new-21 on PATH", file=sys.stderr)
         return 1
 
-    inner_lib = build_velocity_inner_wrap(args.velocity_source, args.out_dir, release=args.release)
+    inner_lib, callee_ptr_members = build_velocity_inner_wrap(args.velocity_source, args.out_dir, release=args.release)
     if args.with_dycore:
         build_dycore_wrapper(args.velocity_source,
                              inner_lib.so_path,
                              args.out_dir / "_dycore_build",
-                             release=args.release)
+                             release=args.release,
+                             callee_ptr_scalar_members=callee_ptr_members)
     return 0
 
 

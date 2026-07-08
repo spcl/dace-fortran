@@ -929,8 +929,8 @@ def run_fparser_transformations(ast: f03.Program, cfg: ParseConfig, *, optimize:
         # polymorphism reject is the loud backstop if dispatch reaches it from
         # any other path).
         stats = monomorphize_auto(ast)
-        if any(
-            (stats.locals_rewritten, stats.components_rewritten, stats.interposers_cloned, stats.declarations_retyped)):
+        if any((stats.locals_rewritten, stats.components_rewritten, stats.interposers_cloned,
+                stats.declarations_retyped, stats.pointer_constructors_cloned, stats.dummy_dispatch_cloned)):
             logger.debug("FParser Op: monomorphised abstract dispatch: %s", stats)
             _checkpoint_ast(cfg, 'ast_v0b.f90', ast)
 

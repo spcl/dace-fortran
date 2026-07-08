@@ -1712,13 +1712,17 @@ def _struct_member_symbol_sources(iface: OriginalInterface) -> Dict[str, str]:
                 nested = iface.struct_types.get(m.struct_name)
                 if nested is not None:
                     # An array-of-records member (a pointer/allocatable array of
-                    # a derived type -- ICON ``patch_3d%p_patch_2d(:)``) must be
-                    # INDEXED to reach a single record before descending into
-                    # its scalar members, else ``patch_3d%p_patch_2d%edges%...``
-                    # is a rank-1 reference assigned to a rank-0 symbol.  The
-                    # kernel reads the (single-domain) first element -- the same
-                    # constant record index the access generator prepends.
-                    walk(nested, msym, f"{macc}(1)" if m.rank > 0 else macc)
+                    # a derived type -- ICON ``patch_3d%p_patch_2d(:)`` rank 1, or
+                    # a value-record array ``edge2vert_coeff_cc_t(:,:,:,:)`` rank 4)
+                    # must be INDEXED to reach a single record before descending
+                    # into its members, else ``patch_3d%p_patch_2d%edges%...`` is a
+                    # rank-1 reference assigned to a rank-0 symbol.  Index EVERY
+                    # dim (``(1)`` for rank 1, ``(1,1,1,1)`` for rank 4) -- a single
+                    # ``(1)`` on a multi-dim array-of-records is a rank mismatch.
+                    # The kernel reads the (single-domain) first element -- the
+                    # same constant record index the access generator prepends.
+                    idx1 = ", ".join(["1"] * m.rank)
+                    walk(nested, msym, f"{macc}({idx1})" if m.rank > 0 else macc)
                 continue
             if m.rank == 0:
                 sources[msym] = macc
@@ -1805,10 +1809,25 @@ def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dumm
         if sym in scalar_member:
             out.append(f"    {sym} = int({scalar_member[sym]}, c_int)")
             continue
+        # A struct-member array's lower-bound offset must be taken from the MEMBER
+        # itself (``lbound(p_patch%verts%end_block)``), NOT from the binding's
+        # ``c_f_pointer`` flat companion of the same name -- that alias is built
+        # ``c_f_pointer(c_loc(member), flat, [size])`` so its lbound is always 1.
+        # ``_sym_from_intrinsic`` below resolves the SDFG name to that flat local,
+        # so for a struct-member offset the member source (which spells the ``%``
+        # access, block_builders ``_struct_member_symbol_sources``) takes priority:
+        # an array ICON allocates with a non-default lower bound (the
+        # refinement-control index arrays ``verts/cells/edges%{start,end}_
+        # {block,index}``, allocated ``(min_rl : max_rl)``) otherwise gets offset 1
+        # and the SDFG's ``arr[(idx) - offset]`` reads out of bounds at negative
+        # ``rl``.  Extent symbols already read the member (via the flatten shape).
+        if _OFFSET_SYM_RE.match(sym) and sym in _struct_member_sources:
+            out.append(f"    {sym} = int({_struct_member_sources[sym]}, c_int)")
+            continue
         # No flatten-plan size expr: derive the value directly from the
         # caller's array via lbound/size (closes the gap for plain
-        # assumed-shape / non-default-lower-bound dummies, and is the
-        # ONLY path that ever populates an ``offset_<arr>_d<i>``).
+        # assumed-shape / non-default-lower-bound dummies, and the fallback
+        # path that populates a NON-struct ``offset_<arr>_d<i>``).
         intr = _sym_from_intrinsic(sym, frozen)
         if intr is not None:
             fn, expr, dim = intr

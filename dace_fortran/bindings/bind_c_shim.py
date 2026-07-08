@@ -498,10 +498,22 @@ def _emit_struct_members_recursive(iface: OriginalInterface,
         ptr_name = f"{flat_name}_p"
         is_dynamic = any(s in ('?', '*', ':') for s in m.shape)
         if is_dynamic:
-            # Extents ride ahead of the pointer, one ``integer(c_int),
-            # value`` arg per dim, named ``<flat>_d<i>``.
+            # Per dim, ahead of the pointer: the lower bound then the extent,
+            # both ``integer(c_int), value`` (``<flat>_lb<i>`` / ``<flat>_d<i>``).
+            # Carrying the lower bound lets the shim rebuild the member at its
+            # TRUE bounds, so the binding's ``offset_<member>_d<i> =
+            # lbound(member)`` (and the SDFG's ``arr[(idx) - offset]`` indexing)
+            # is correct for arrays ICON allocates with a non-default lower bound
+            # -- the refinement-control index arrays
+            # ``verts/cells/edges%{start,end}_{block,index}``, allocated
+            # ``(min_rl : max_rl)`` and read at negative ``rl``.  Defaulting the
+            # lower bound to 1 (the old behaviour) put ``end_block(-5)`` below
+            # bound 1.
+            lb_names = [f"{flat_name}_lb{i}" for i in range(m.rank)]
             ext_names = [f"{flat_name}_d{i}" for i in range(m.rank)]
-            for en in ext_names:
+            for lb, en in zip(lb_names, ext_names):
+                header_args.append(lb)
+                decls_value.append(f"  integer(c_int), value :: {lb}")
                 header_args.append(en)
                 decls_value.append(f"  integer(c_int), value :: {en}")
         header_args.append(ptr_name)
@@ -531,8 +543,15 @@ def _emit_struct_members_recursive(iface: OriginalInterface,
             # per_member_soa no-pack contract still holds on the
             # outer SDFG side (no AoS struct buffer is built --
             # only the per-leaf pointers cross the C ABI).
-            shape_tok = "(" + ", ".join(ext_names) + ")"
-            copy_in.append(f"  allocate({inst_path}%{m.name}{shape_tok})")
+            #
+            # Allocate at the member's TRUE bounds ``(lb : lb+d-1)`` (not the
+            # default ``(d)`` == ``(1:d)``) so ``lbound(<member>)`` -- which the
+            # binding reads into ``offset_<member>_d<i>`` -- is the real lower
+            # bound.  The whole-array copy from the 1-based flat companion is by
+            # position (Fortran intrinsic assignment is shape-conformable, not
+            # bound-matched), so ``member(lb)`` takes ``flat(1)``.
+            bounds_tok = "(" + ", ".join(f"{lb} : {lb} + {en} - 1" for lb, en in zip(lb_names, ext_names)) + ")"
+            copy_in.append(f"  allocate({inst_path}%{m.name}{bounds_tok})")
             if intent in ('in', 'inout', ''):
                 copy_in.append(f"  {inst_path}%{m.name} = {flat_name}")
             if intent in ('out', 'inout'):
@@ -679,6 +698,46 @@ def _emit_module_symbol_forward(module_symbol_forward, header_args: List[str], d
             shape_args = ", ".join(f"size({alias}, dim={d + 1})" for d in range(rank))
             c_f_calls.append(f"  call c_f_pointer({ptr}, {local}, [{shape_args}])")
             copy_in.append(f"  {alias} = {local}")
+
+
+def scalar_pointer_members(iface: OriginalInterface) -> frozenset:
+    """Flat names of the rank-0 struct members this shim forwards as a
+    ``type(c_ptr), value`` POINTER (aliased ``c_f_pointer(<x>_p, <x>, [1])``)
+    rather than ``integer(c_int), value`` BY VALUE.
+
+    A sibling-SDFG *caller* marshalling a struct argument to this shim
+    (``emit_library`` ``per_member_soa`` + ``dynamic_extents_abi``) must pass a
+    POINTER for each such member -- the address of a scratch cell holding the
+    value -- EVEN when the caller itself holds the member as an SDFG *symbol* (a
+    promoted grid extent / loop bound).  Passing the raw scalar value there,
+    where the shim declares ``type(c_ptr), value`` and dereferences it via
+    ``c_f_pointer``, would reinterpret the integer as an address.
+
+    A rank-0 member crosses BY VALUE only in the shim's single by-value case
+    (:func:`_emit_struct_members_recursive`): a read-only member that is ALSO a
+    flat-array-dummy extent (``flat_name in shape_syms``).  Every other rank-0
+    member is a pointer.  This mirrors that routine's routing exactly -- nested
+    rank-0 records are descended in place; rank>0 struct members are arrays of
+    records (value-record scatter / double-buffer AoR), whose leaves are arrays,
+    never scalars."""
+    shape_syms = set(_free_shape_symbols(iface))
+    out: set = set()
+
+    def walk(st: DerivedType, flat_prefix: str, intent: str):
+        for m in st.members:
+            flat_name = f"{flat_prefix}_{m.name}"
+            if m.struct_name:
+                if m.rank == 0:
+                    walk(iface.struct_types[m.struct_name], flat_name, intent)
+                continue
+            if m.rank == 0 and not (intent in ("in", "") and flat_name in shape_syms):
+                out.add(flat_name)
+
+    for a in iface.args:
+        if a.struct_type is None or a.rank != 0:
+            continue
+        walk(iface.struct_types[a.struct_type], a.name, a.intent)
+    return frozenset(out)
 
 
 def emit_bind_c_shim(iface: OriginalInterface,

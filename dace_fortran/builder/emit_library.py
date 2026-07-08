@@ -1673,13 +1673,44 @@ def emit_call(builder, ctx, n, region):
                 # A by-value symbol member (an extent / loop bound the caller
                 # never materialised as an array) rides its in-scope value,
                 # matching the inner shim's ``<type>, value`` slot -- no
-                # connector, no extent prefix.
+                # connector, no extent prefix.  EXCEPT when the callee shim
+                # takes this member as a ``type(c_ptr), value`` POINTER (it
+                # reads the member as struct data via ``c_f_pointer``, e.g. a
+                # grid dim the caller promoted to a symbol but the callee did
+                # not): then materialise the value in a scratch cell and pass
+                # its ADDRESS, so the callee dereferences a real int rather than
+                # the value reinterpreted as an address.  The marshal conforms
+                # to the callee shim's per-member ABI (``scalar_pointer_members``).
                 if by_value_sym is not None:
-                    call_args_c.append(f"({ct})({_sym2c(by_value_sym)})")
+                    if by_value_sym in sig.callee_ptr_scalar_members:
+                        scratch = f"_pv_{by_value_sym}"
+                        body_lines.append(f"{ct} {scratch} = ({ct})({_sym2c(by_value_sym)});")
+                        call_args_c.append(f"&{scratch}")
+                    else:
+                        call_args_c.append(f"({ct})({_sym2c(by_value_sym)})")
                     continue
                 tok = cout if cout is not None else cin
                 if sig.dynamic_extents_abi and nel == 0 and shape:
+                    # The inner bind_c_shim takes a ``<flat>_lb<i>`` lower-bound
+                    # slot ahead of each dynamic member's extent (bind_c_shim
+                    # ``_emit_struct_members_recursive``), so the marshal forwards
+                    # the leaf's lower bound then its extent, per dim.  The lower
+                    # bound IS the outer SDFG's ``offset_<extent-sym>`` symbol.  It
+                    # must be forwarded exactly when it is a genuinely FREE symbol
+                    # -- a caller-supplied bound the outer never resolved to a
+                    # constant (``builder.offset_values[...] is None``): that is a
+                    # real dynamic array member whose bound only the caller knows,
+                    # and the inner shim mints an ``_lb`` slot for it.  A
+                    # value-record SoA leaf (``pnc_v1``) is a synthesised 1-based
+                    # array: its offset folds to the constant 1, so it is NOT a
+                    # free symbol and the inner shim emits no ``_lb`` slot for it.
+                    # ``offset_<s>`` is transiently in ``sdfg.symbols`` for EVERY
+                    # array before pruning, so the free-value test -- not mere
+                    # symbol membership -- is the exact outer<->inner discriminator.
                     for s in shape:
+                        off = f"offset_{s}"
+                        if off in builder.offset_values and builder.offset_values[off] is None:
+                            call_args_c.append(f"(int)({off})")
                         call_args_c.append(f"(int)({_sym2c(s)})")
                 call_args_c.append(tok)
             continue
@@ -1790,12 +1821,24 @@ def emit_call(builder, ctx, n, region):
         if group_c_abi.get(gid) == 'per_member_soa':
             ct, nel, _cin, _cout, shape, by_value_sym = group_members[gid][last_member_idx]
             # A by-value symbol member is a scalar C arg (no ``*``, no
-            # extent prefix) -- matches the inner shim's ``value`` slot.
+            # extent prefix) -- matches the inner shim's ``value`` slot -- UNLESS
+            # the callee shim takes it as a ``type(c_ptr), value`` POINTER, where
+            # the body passes ``&scratch`` (mirror the body's materialisation).
             if by_value_sym is not None:
-                decl_types.append(ct)
+                decl_types.append(f"{ct}*" if by_value_sym in sig.callee_ptr_scalar_members else ct)
                 continue
             if sig.dynamic_extents_abi and nel == 0 and shape:
-                decl_types.extend(["int"] * len(shape))
+                # One ``int`` per dim for the extent, plus one more ahead of it
+                # for the lower bound whenever the leaf's ``offset_<extent-sym>``
+                # is a FREE (caller-supplied) symbol -- a genuine dynamic array
+                # member, not a synthesised 1-based value-record SoA field.  Same
+                # discriminator as the body marshal, so the arg count matches the
+                # inner shim's ``<flat>_lb<i>`` / ``<flat>_d<i>`` slot pair.
+                for s in shape:
+                    off = f"offset_{s}"
+                    if off in builder.offset_values and builder.offset_values[off] is None:
+                        decl_types.append("int")
+                    decl_types.append("int")
             decl_types.append(f"{ct}*")
         elif last_member_idx == 0:  # aos_struct_ptr: emit once per group
             decl_types.append("void *")

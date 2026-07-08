@@ -17,8 +17,9 @@ derived-type member that is an *allocatable array of a value record*,
 which is exactly the shape ICON's ``t_patch % edges % primal_normal_cell``
 carries and which ``hlfir-marshal-external-structs`` v2 expands into ONE
 per-record-FIELD SoA leaf each -- ``pnc_v1`` / ``pnc_v2`` (confirmed by the
-generated bind_c_shim entry ``inner_vrec_c(p_out_d0, p_out_p, p_pnc_v1_d0,
-p_pnc_v1_p, p_pnc_v2_d0, p_pnc_v2_p)``).
+generated bind_c_shim entry ``inner_vrec_c(p_out_lb0, p_out_d0, p_out_p,
+p_pnc_v1_d0, p_pnc_v1_p, p_pnc_v2_d0, p_pnc_v2_p)`` -- the plain allocatable
+``out`` carries a lower-bound slot, the value-record leaves do not).
 
 The build-only ABI test pins that the outer marshal leaf order equals the inner
 shim slot order.  This test additionally RUNS both paths and checks the value
@@ -122,16 +123,21 @@ end subroutine outer_vrec
 """
 
 # Reference C-ABI driver, matching the outer bind_c_shim's exact entry
-# ``outer_vrec_c(p_out_d0, p_out_p, p_pnc_v1_d0, p_pnc_v1_p, p_pnc_v2_d0,
-# p_pnc_v2_p)``.  Scatters the two SoA field arrays into the AoS ``pnc(i)%v1`` /
-# ``%v2`` before the call and gathers them back after -- the copy the SDFG's
+# ``outer_vrec_c(p_out_lb0, p_out_d0, p_out_p, p_pnc_v1_d0, p_pnc_v1_p,
+# p_pnc_v2_d0, p_pnc_v2_p)``.  ``out`` is a plain allocatable array member, so
+# the shim ABI carries its lower bound (``out_lb0``) ahead of the extent (the
+# bind_c_shim now reconstructs every dynamic member at its TRUE bounds so a
+# non-default lower bound survives); the value-record ``pnc`` crosses as
+# per-field SoA leaves (``v1`` / ``v2``) which carry no lower-bound slot.
+# Scatters the two SoA field arrays into the AoS ``pnc(i)%v1`` / ``%v2`` before
+# the call and gathers them back after -- the copy the SDFG's
 # _emit_value_record_array does automatically on the marshalled path.
 _REF_DRIVER_SRC = """
-subroutine outer_vrec_c(out_d0, out_p, v1_d0, v1_p, v2_d0, v2_p) bind(c, name="outer_vrec_c")
+subroutine outer_vrec_c(out_lb0, out_d0, out_p, v1_d0, v1_p, v2_d0, v2_p) bind(c, name="outer_vrec_c")
   use iso_c_binding
   use m_vrec
   implicit none
-  integer(c_int), value :: out_d0, v1_d0, v2_d0
+  integer(c_int), value :: out_lb0, out_d0, v1_d0, v2_d0
   type(c_ptr), value :: out_p, v1_p, v2_p
   type(patch_t), target :: p
   real(c_double), pointer :: out(:), v1(:), v2(:)
@@ -140,15 +146,18 @@ subroutine outer_vrec_c(out_d0, out_p, v1_d0, v1_p, v2_d0, v2_p) bind(c, name="o
   call c_f_pointer(out_p, out, [out_d0])
   call c_f_pointer(v1_p, v1, [v1_d0])
   call c_f_pointer(v2_p, v2, [v2_d0])
-  allocate(p%out(out_d0), p%pnc(out_d0))
+  ! ``out`` reconstructed at its true bounds ``(lb : lb + d - 1)``; the
+  ! whole-array copy is by position (shape-conformable), so ``p%out(out_lb0)``
+  ! takes ``out(1)``.  ``pnc`` is 1-based (no lb slot).
+  allocate(p%out(out_lb0 : out_lb0 + out_d0 - 1), p%pnc(out_d0))
+  p%out = out
   do i = 1, out_d0
-    p%out(i) = out(i)
     p%pnc(i)%v1 = v1(i)
     p%pnc(i)%v2 = v2(i)
   end do
   call outer_vrec(p)
+  out = p%out
   do i = 1, out_d0
-    out(i) = p%out(i)
     v1(i) = p%pnc(i)%v1
     v2(i) = p%pnc(i)%v2
   end do
@@ -231,12 +240,17 @@ def test_dycore_struct_ext_value_record_array_e2e(tmp_path: Path):
     out_sdfg, v1_sdfg, v2_sdfg = (a.copy(order="F") for a in (out_init, v1_init, v2_init))
     out_ref, v1_ref, v2_ref = (a.copy(order="F") for a in (out_init, v1_init, v2_init))
 
-    argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+    # ABI: out_lb0, out_d0, out_p, v1_d0, v1_p, v2_d0, v2_p.  ``out`` is a plain
+    # allocatable member, so its lower bound (1 here) rides ahead of the extent;
+    # the per-field value-record leaves carry only an extent, no lower bound.
+    argtypes = [
+        ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p
+    ]
     for so in (sdfg_so, ref_lib):
         so.outer_vrec_c.restype = None
         so.outer_vrec_c.argtypes = argtypes
-    sdfg_so.outer_vrec_c(n, out_sdfg.ctypes.data, n, v1_sdfg.ctypes.data, n, v2_sdfg.ctypes.data)
-    ref_lib.outer_vrec_c(n, out_ref.ctypes.data, n, v1_ref.ctypes.data, n, v2_ref.ctypes.data)
+    sdfg_so.outer_vrec_c(1, n, out_sdfg.ctypes.data, n, v1_sdfg.ctypes.data, n, v2_sdfg.ctypes.data)
+    ref_lib.outer_vrec_c(1, n, out_ref.ctypes.data, n, v1_ref.ctypes.data, n, v2_ref.ctypes.data)
 
     # out_final = 0.1*(10*out + 2*v1 - 3*v2) = out + 0.2*v1 - 0.3*v2 (v1/v2 read-only).
     expected = out_init + 0.2 * v1_init - 0.3 * v2_init

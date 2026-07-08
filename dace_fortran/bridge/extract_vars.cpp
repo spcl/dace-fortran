@@ -2452,12 +2452,9 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
     // Skip it for plain-ShapeOp declares; ShapeShiftOp (explicit
     // bounds) stays authoritative via the ``lbs[d] != "1"`` guard
     // inside the heuristic.
-    std::vector<bool> seenLit;
     bool plainShapeOp = op.getShape() && mlir::isa_and_nonnull<fir::ShapeOp>(op.getShape().getDefiningOp());
-    if (plainShapeOp)
-      seenLit.assign(v.rank, false);
-    else
-      inferLowerBoundsFromLiteralAccesses(op, v.lower_bounds, v.rank, writeCache, designatesByDecl, &seenLit);
+    if (!plainShapeOp)
+      inferLowerBoundsFromLiteralAccesses(op, v.lower_bounds, v.rank, writeCache, designatesByDecl);
 
     // Dummy-arg deferred-shape ALLOCATABLE/POINTER fallback: the
     // declare is a function block-arg, its declared type has no
@@ -2489,10 +2486,35 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
     }
     bool declHasNoShape = (op.getShape() == nullptr);
     if (v.rank > 0 && isDummyArg && isAllocOrPointerAttr && declHasNoShape) {
-      if ((int)v.lower_bounds.size() < v.rank) v.lower_bounds.resize(v.rank, "1");
-      for (int d = 0; d < v.rank; ++d) {
-        bool lit = (d < (int)seenLit.size()) && seenLit[d];
-        if (!lit && v.lower_bounds[d] == "1") v.lower_bounds[d] = "?";
+      if (op->hasAttr("hlfir_bridge.aor_flat_entry")) {
+        // A value-record AoR companion (``hlfir-split-aor-dummies``,
+        // ``primal_normal_cell_v1``): a SYNTHESISED SoA array, not a
+        // caller-allocated one.  ``bind_c_shim`` reconstructs it 1-based
+        // (``allocate(inst(d0, ...))``) and carries NO ``_lb`` slot -- an
+        // EXTENT-ONLY ABI.  Its lower bound is therefore statically 1 in every
+        // dim; folding it to 1 makes emit_library emit extent-only, matching
+        // the callee.  Freeing it (below) would mint a spurious ``_lb`` slot
+        // the inner shim never declares.  Same value-record vs
+        // genuine-dynamic-member split ``bind_c_shim`` makes via
+        // ``_is_value_record``.
+        v.lower_bounds.assign(v.rank, "1");
+      } else {
+        // A genuine deferred-shape ALLOCATABLE/POINTER dummy's bounds are set by
+        // the caller's ALLOCATE / pointer association -- invisible here -- so NO
+        // dim has a statically-known lower bound.  A literal-index access
+        // (``rho(jc, 1, jb)``) does NOT reveal the allocation bound: Fortran
+        // ``arr(1)`` addresses index 1 whatever ``lbound`` is, so the
+        // literal-access inference above is unsound for this class.  Discard it
+        // and leave EVERY dim free; descriptors.py stamps each
+        // ``offset_<arr>_d<i>`` as a free symbol the caller binds via
+        // ``lbound(arr, dim=...)`` (a direct ``sdfg()`` call defaults it to the
+        // 1-based Fortran bound, so numerics are unchanged).  Keeping ``"1"`` on
+        // a literal-accessed dim -- the old behaviour -- dropped that dim's
+        // ``_lb`` slot from the marshalled callback ABI while the callee's
+        // bind_c_shim (shape-driven, one ``_lb`` per dim of a dynamic member)
+        // still emitted it, desyncing an SDFG-to-SDFG velocity call
+        // slot-for-slot.
+        v.lower_bounds.assign(v.rank, "?");
       }
     }
 

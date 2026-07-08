@@ -323,6 +323,21 @@ def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
                 bspec = analysis.ident_spec(inherited)
         if bspec in genc_map and genc_map[bspec]:
             for cand in genc_map[bspec]:
+                # A generic's specific candidate is registered on the type that
+                # DECLARES the generic -- an abstract base, where the specific may
+                # be DEFERRED (no concrete procedure, absent from ``proc_map``).
+                # Resolve it on the CONCRETE receiver, which overrides it: after a
+                # monomorphize ladder the receiver is a per-arm concrete type
+                # (``this%trans__t_trivial_transfer%into``), so remap
+                # ``(base, spec)`` -> ``(receiver, spec)`` and walk inheritance
+                # (as ``bspec`` above) to the binding that names a real procedure.
+                rcand = dref_type.spec + (cand[-1], )
+                if rcand not in proc_map and rcand in alias_map:
+                    inherited_spec = alias_map[rcand]
+                    if isinstance(inherited_spec, (f03.Specific_Binding, f03.Generic_Binding)):
+                        rcand = analysis.ident_spec(inherited_spec)
+                if rcand in proc_map:
+                    cand = rcand
                 # An external type-bound procedure candidate -- its concrete
                 # target has no Fortran source (e.g. ICON's MPI halo
                 # ``%exchange_data`` -> ``exchange_data_4de1_dp``).  Skip it
