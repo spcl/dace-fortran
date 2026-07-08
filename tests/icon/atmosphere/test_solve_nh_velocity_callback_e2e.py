@@ -177,7 +177,9 @@ def test_callback_abi_aligns_slot_for_slot_with_inner_shim(tmp_path: Path):
       make the inner ``c_f_pointer`` dereference the integer value as an address.
     """
     clear_external_registry()
-    inner_builder = build_sdfg(_VELOCITY_TU.read_text(), tmp_path / "vel_sdfg", name="velocity_tendencies",
+    inner_builder = build_sdfg(_VELOCITY_TU.read_text(),
+                               tmp_path / "vel_sdfg",
+                               name="velocity_tendencies",
                                entry=_VELOCITY_ENTRY)
     inner_builder.build()
     iface = build_auto_interface(inner_builder._fortran_interface_raw, "velocity_tendencies")

@@ -62,10 +62,17 @@ def test_velocity_tendencies_numerical_e2e():
         int_fill=1,  # one in-domain block; every connectivity index -> element 1
         # ICON namelist: block size, and per-domain vertical indices >= 1
         # (nflatlev is a DO lower bound; BSS 0 would start jk at 0 -> OOB).
-        module_seeds={"nproma": 8, "nflatlev": 1, "nrdmax": 1},
+        module_seeds={
+            "nproma": 8,
+            "nflatlev": 1,
+            "nrdmax": 1
+        },
         # Real vertical column within the n=8 buffers so the vertical loops run
         # and fully initialise the kernel's automatic transients.
-        array_overrides={"p_patch_nlev": 7, "p_patch_nlevp1": 8},
+        array_overrides={
+            "p_patch_nlev": 7,
+            "p_patch_nlevp1": 8
+        },
     )
     assert res["passed"], f"velocity_tendencies build/lower/run failed:\n{res['output'][-3500:]}"
     assert res["n_changed"] > 0, "no output buffer changed -- the kernel did no work (test is vacuous)"

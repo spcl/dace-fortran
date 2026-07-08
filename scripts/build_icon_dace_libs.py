@@ -212,7 +212,10 @@ def build_velocity_inner_wrap(velocity_source: Path, out_dir: Path, release: boo
     return lib, callee_ptr_members
 
 
-def build_dycore_wrapper(velocity_source: Path, inner_lib_so: Path, out_dir: Path, release: bool,
+def build_dycore_wrapper(velocity_source: Path,
+                         inner_lib_so: Path,
+                         out_dir: Path,
+                         release: bool,
                          callee_ptr_scalar_members: frozenset = frozenset()):
     """Build ``libdycore_wrapper.so`` -- the outer SDFG that calls
     ``velocity_tendencies`` (resolved at runtime from
