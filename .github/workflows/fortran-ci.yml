@@ -24,27 +24,46 @@ concurrency:
 jobs:
   test-fortran:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    # Two runners from one definition (shared setup, no duplication):
-    #   * ``fast``  -- the routine sweep: every test EXCEPT ``mpi`` and
-    #                  ``long`` (uploads coverage).  Keeps PR feedback quick.
-    #   * ``heavy`` -- the second runner: the ``long`` tests (ICON built from
-    #                  source + the ICON-O fparser single-TU extractions) and
-    #                  the multi-rank ``mpi`` tests, run as SEPARATE steps.
+    # Three runners from one definition (shared setup, no duplication):
+    #   * ``fast``  -- the routine sweep: every test EXCEPT ``mpi``,
+    #                  ``long`` and ``integration`` (uploads coverage).
+    #                  Keeps PR feedback quick.
+    #   * ``heavy`` -- the ``long`` tests only: ICON built from source +
+    #                  the ICON-O fparser single-TU extractions.
+    #   * ``integration`` -- the ICON multi-node integration tests (per-call
+    #                  orig-vs-binding bit-exact, VERY SHORT run) PLUS the
+    #                  multi-rank ``mpi`` tests, run as SEPARATE steps.  Kept
+    #                  off fast/heavy so neither the quick PR sweep nor the
+    #                  ICON-from-source builds carry the mpirun-driven tests.
     strategy:
       fail-fast: false
       matrix:
-        suite: [fast, heavy]
+        suite: [fast, heavy, integration]
     name: test-fortran (${{ matrix.suite }})
     runs-on: ubuntu-24.04
     # The heavy suite builds ICON from source and runs the ~9 GB-peak
-    # fparser ocean extractions; give it generous headroom.
-    timeout-minutes: ${{ matrix.suite == 'heavy' && 180 || 60 }}
+    # fparser ocean extractions; the integration suite likewise builds ICON
+    # (same bear-wrapped configure + make) before its SHORT test run -- give
+    # both generous headroom.
+    timeout-minutes: ${{ (matrix.suite == 'heavy' || matrix.suite == 'integration') && 180 || 60 }}
     env:
       # Disable hwloc's GL/X11 backend so ``from mpi4py import MPI``
       # (MPI_Init -> hwloc topology) doesn't probe a (possibly absent /
       # hung) X display and block.  CPU/PCI topology -- all MPI needs --
       # is unaffected.
       HWLOC_COMPONENTS: "-gl"
+      # Anti-hang MPI transport pinning for the single-node GH runner: used by
+      # the ``integration`` suite's relocated ``-m mpi`` step (and any test
+      # that shells out to mpirun).  The ob1 PML over the shared-memory
+      # ``vader`` + ``self`` BTLs is the reliable single-node path -- it avoids
+      # UCX's FUSE/openib probing, a known MPI_Init hang source on CI.  Harmless
+      # on the non-MPI fast/heavy steps (the vars are simply unused there).
+      # ``MPI4PY_RC_INITIALIZE=0`` is deliberately NOT set: the mpi tests do
+      # ``from mpi4py import MPI; MPI.COMM_WORLD`` and rely on mpi4py's
+      # import-time MPI_Init.
+      OMPI_MCA_pml: "ob1"
+      OMPI_MCA_btl: "self,vader"
+      UCX_VFS_ENABLE: "n"
     steps:
     - uses: actions/checkout@v4
       with:
@@ -149,17 +168,19 @@ jobs:
         # First access of a builder-backed symbol triggers the CMake build.
         python -c "import dace_fortran; dace_fortran.SDFGBuilder"
 
-    # ----- fast runner: the routine sweep (no mpi, no long) -----
+    # ----- fast runner: the routine sweep (no mpi, no long, no integration) -----
     - name: Run Fortran frontend tests (fast sweep)
       if: ${{ matrix.suite == 'fast' }}
       run: |
         export COVERAGE_RCFILE=`pwd`/.coveragerc
         # Main xdist sweep, excluding the multi-rank ``mpi`` tests (they
-        # need mpirun, not an xdist worker) and the ``long`` tests
+        # need mpirun, not an xdist worker), the ``long`` tests
         # (ICON-from-source builds + ICON-O fparser extractions -- run on
-        # the ``heavy`` runner below).  ``--dist loadgroup`` honours the
-        # ``xdist_group`` markers so grouped tests share one worker.
-        pytest -n auto --dist loadgroup -m "not mpi and not long" \
+        # the ``heavy`` runner below) and the ``integration`` tests (ICON
+        # orig-vs-binding bit-exact -- run on the ``integration`` runner so
+        # they never leak into the quick PR sweep).  ``--dist loadgroup``
+        # honours the ``xdist_group`` markers so grouped tests share one worker.
+        pytest -n auto --dist loadgroup -m "not mpi and not long and not integration" \
           --cov-report=xml --cov=dace_fortran --tb=short tests/
         coverage report || true
         coverage xml || true
@@ -171,9 +192,9 @@ jobs:
           echo "Codecov.io is unreachable"
         fi
 
-    # ----- heavy runner: check out the ICON submodule (public externals only) -----
-    - name: Check out icon-model submodule (heavy only)
-      if: ${{ matrix.suite == 'heavy' }}
+    # ----- heavy + integration runners: check out the ICON submodule (public externals only) -----
+    - name: Check out icon-model submodule (heavy + integration)
+      if: ${{ matrix.suite == 'heavy' || matrix.suite == 'integration' }}
       run: |
         # icon-model is pinned to the ICON release tag icon-2026.04-public
         # (recorded in .gitmodules).  Shallow + recursive: the icon_build fixture
@@ -181,13 +202,16 @@ jobs:
         # its externals, so every external must be present.  All ICON externals
         # are publicly cloneable from gitlab.dkrz.de and ``--depth 1`` keeps the
         # whole tree small (~640 MB).  ``_have_icon()`` keys on
-        # mo_solve_nonhydro.f90, so this is what flips the ICON-from-source long
-        # tests from skipped to run.
+        # mo_solve_nonhydro.f90, so this is what flips the ICON-from-source
+        # ``long`` tests AND the ``integration`` tests from skipped to run.
         git submodule update --init --recursive --depth 1 tests/icon/full/icon-model
 
-    - name: Generate dycore compile_commands.json (heavy only)
-      if: ${{ matrix.suite == 'heavy' }}
+    - name: Generate dycore compile_commands.json (heavy + integration)
+      if: ${{ matrix.suite == 'heavy' || matrix.suite == 'integration' }}
       run: |
+        # Mirrors heavy for the integration runner: the short ICON integration
+        # tests need the same per-TU ICON compile flags, so building the fixture
+        # here keeps them RUNNING rather than silently skipping.
         # The dycore-parse test (tests/icon/dycore/test_solve_nonhydro_parse.py)
         # emits HLFIR for ICON's mo_solve_nonhydro driven by the per-TU
         # -cpp / -I / -D flags captured in a REAL ICON build's
@@ -198,26 +222,52 @@ jobs:
         # instead of skipping.  SKIP_APT=1: deps are already installed above.
         SKIP_APT=1 bash tests/icon/dycore/setup_icon_dycore.sh
 
-    # ----- heavy runner: long tests + mpi tests, run separately -----
+    # ----- heavy runner: long tests only (mpi moved to the integration runner) -----
     - name: Run long tests (ICON-from-source + ICON-O fparser extractions)
       if: ${{ matrix.suite == 'heavy' }}
       run: |
-        # The ``long`` tests, excluding the multi-rank ``mpi`` ones (run in
-        # the next step under mpirun).  ``--dist loadgroup`` keeps each heavy
-        # family on ONE worker (ICON is configured + built exactly once via
-        # the ``icon_build`` group; the ICON-O fparser extractions share the
-        # ``ocean_fparser`` group and run one-at-a-time, each in its own
-        # memory-capped subprocess), so at most one of each runs concurrently.
-        pytest -n auto --dist loadgroup -m "long and not mpi" \
+        # The ``long`` tests only.  ``not mpi`` and ``not integration`` keep the
+        # mpirun-driven families off this runner -- they now run on the
+        # ``integration`` runner below (``long`` is disjoint from the SHORT
+        # ``integration`` tests, so ``not integration`` is defensive: it pins
+        # the invariant that integration tests run on exactly one runner).
+        # ``--dist loadgroup`` keeps each heavy family on ONE worker (ICON is
+        # configured + built exactly once via the ``icon_build`` group; the
+        # ICON-O fparser extractions share the ``ocean_fparser`` group and run
+        # one-at-a-time, each in its own memory-capped subprocess), so at most
+        # one of each runs concurrently.
+        pytest -n auto --dist loadgroup -m "long and not mpi and not integration" \
           -p no:cacheprovider --tb=short tests/
 
-    - name: Run MPI tests (multi-rank, under mpirun)
-      if: ${{ matrix.suite == 'heavy' }}
+    # ----- integration runner: multi-rank mpi tests + short ICON integration tests -----
+    - name: Run multi-rank MPI tests under mpirun (integration only)
+      if: ${{ matrix.suite == 'integration' }}
       run: |
-        # MPI tests: 4 ranks oversubscribed onto the runner's cores
-        # (GH runners have few slots, but the mpi tests are tiny).  4
-        # ranks is required so the non-default-communicator e2e
-        # (MPI_Comm_split by rank%2) actually runs -- it skips below 4;
-        # the ring tests run a ring of `size` and work at 4 too.
+        # Relocated here from the heavy runner: the 2-rank/pair halo-exchange
+        # ``sync_patch_array`` e2e and the other ``mpi``-marked multi-rank
+        # tests.  4 ranks oversubscribed onto the runner's cores (GH runners
+        # have few slots, but the mpi tests are tiny); ``-n 4`` is required so
+        # the non-default-communicator e2e (MPI_Comm_split by rank%2) actually
+        # runs -- it skips below 4; the ring tests run a ring of `size` and
+        # work at 4 too.  Any ICON integration test that is ITSELF multi-rank
+        # carries the ``mpi`` marker (per the marker scheme) and therefore runs
+        # HERE under mpirun.  Anti-hang MPI transport env (OMPI_MCA_pml/btl,
+        # UCX_VFS_ENABLE, HWLOC_COMPONENTS) is set at the job level above.
         mpirun --oversubscribe -n 4 python -m pytest -m mpi \
+          -p no:cacheprovider --tb=short tests/
+
+    - name: Run short ICON integration tests (integration only)
+      if: ${{ matrix.suite == 'integration' }}
+      run: |
+        # The SHORT ICON integration tests that are NOT multi-rank: per-call
+        # duplicate-data original-vs-binding bit-exact checks.  Run as PLAIN
+        # pytest, NOT under mpirun -- a test needing mpirun coordination carries
+        # the ``mpi`` marker and ran in the step above; launching a non-MPI-aware
+        # pytest under ``mpirun -n 4`` would spawn 4 uncoordinated sessions that
+        # clobber each other's build / .dacecache dirs.  Sequential (no xdist):
+        # these build gfortran reference libs + SDFGs and the run is short, so
+        # serial execution avoids parallel-build races for a negligible cost.
+        # Together with the step above this covers ``-m "integration or mpi"``
+        # with no test run twice (mpi-and-integration tests run only above).
+        python -m pytest -m "integration and not mpi" \
           -p no:cacheprovider --tb=short tests/

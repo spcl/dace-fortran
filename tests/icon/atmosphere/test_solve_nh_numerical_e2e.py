@@ -102,6 +102,15 @@ def test_solve_nh_numerical_e2e(tmp_path: Path):
             "p_patch_nlev": 7,
             "p_patch_nlevp1": 8
         },
+        # ``mo_vertical_coord_table::vct_a`` (the vertical coordinate table) is a
+        # ``REAL(8), ALLOCATABLE`` module global the kernel indexes directly
+        # (``vct_a(jk)``, up to nlevp1); it is UNALLOCATED in an isolated run, so
+        # the stock reference OOB-reads (SEGV) and the SDFG reads a size-1
+        # defensive fallback.  It crosses no ABI slot, so -- like ``module_seeds``
+        # -- the harness allocates + fills it identically (a ramp; the value is
+        # inert here, only cross-side identity matters) on BOTH sides.  Sized
+        # generously past nlevp1 (8) so every ``vct_a(jk+1)`` stays in bounds.
+        module_array_seeds={"vct_a": 16},
         do_not_emit=_DO_NOT_EMIT,
         prelude_paths=[stub, noop],
         inject_use_mpi=True,

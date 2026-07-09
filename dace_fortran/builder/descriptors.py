@@ -127,6 +127,48 @@ def add_descriptors(builder, sdfg: SDFG):
     # fresh-copy nanobind property on every read, so we materialise the
     # rewritten list in a Python-side dict keyed by name and route the
     # downstream loops through it.
+    # Whole-array ``ptr => derived%pointer_member`` rebinds that the bridge
+    # left as PLAIN deferred transients (``role='array'``), not ``view_alias``.
+    # A rebind onto a POINTER / ALLOCATABLE member of a derived type (ICON
+    # ``iplev => p_nh%metrics%pg_vertidx``, ``icidx => p_patch%edges%cell_idx``)
+    # is out of scope for FlattenStructs (pointer members are not collapsed),
+    # so the rebind value keeps its component ``hlfir.designate`` chain and the
+    # view-tagging in RewritePointerAssigns -- whose whole-array arm needs an
+    # EMPTY chain -- never fires.  The target then stays a deferred ``iplev(:)``
+    # transient with a fresh, caller-UNBINDABLE ``iplev_d0`` shape symbol plus a
+    # whole-array copy-in from the source; the bindings emitter has no plan
+    # entry for ``iplev_d0`` and the SDFG allocates ``new int[iplev_d0]`` at an
+    # unset size, so the copy of ``pg_vertidx_d0`` elements overruns it.  The
+    # rebind aliases the WHOLE source at the same rank, so the deferred
+    # ``iplev(:)`` has exactly the source's shape: inherit the source's
+    # already-caller-bound extent symbols, exactly as the ``view_alias`` branch
+    # below does.  Only a target with a SINGLE source qualifies (interleaved
+    # rebinds are rejected upstream); the ``all == '?'`` guard restricts this to
+    # genuinely deferred targets, so a plain array copy is never mistaken for a
+    # rebind.
+    rebind_srcs: dict = {}
+
+    def _scan_rebinds(nodes):
+        for c in nodes:
+            # A whole-array ``ptr => src`` rebind surfaces as an ``assign`` whose
+            # RHS is the bare source name and which carries
+            # ``target_is_array == False`` -- a POINTER ASSOCIATION, not an
+            # array-VALUED assignment.  A genuine whole-array data COPY
+            # (``a = b``, both real arrays -- ICON ``p_nh%prog(nnew)%w =
+            # p_nh%diag%w_concorr_c``) carries ``target_is_array == True`` and
+            # writes a real, caller-bound array whose extent symbols are used
+            # elsewhere; inheriting a source shape onto it would orphan those.
+            # Gate on the pointer-association form so only true rebinds inherit.
+            if c.kind == 'assign' and not c.target_is_array and c.target in builder.arrays:
+                src = str(c.expr).strip()
+                if src.isidentifier() and src in builder.arrays:
+                    rebind_srcs.setdefault(c.target, set()).add(src)
+            _scan_rebinds(c.children)
+            _scan_rebinds(c.else_children)
+
+    _scan_rebinds(builder.ast)
+    ptr_rebind_src = {t: next(iter(s)) for t, s in rebind_srcs.items() if len(s) == 1}
+
     shape_syms = {}
     for v in builder.arrays.values():
         syms = list(v.shape_symbols)
@@ -143,6 +185,16 @@ def add_descriptors(builder, sdfg: SDFG):
         if (v.role == 'view_alias' and list(v.view_subset) == [''] and v.view_source in builder.arrays
                 and len(syms) == len(builder.arrays[v.view_source].shape_symbols)):
             syms = list(builder.arrays[v.view_source].shape_symbols)
+        # Plain (non-view) ``ptr => derived%pointer_member`` rebind target left
+        # deferred by the bridge: inherit the source's bound shape symbols (see
+        # the ``ptr_rebind_src`` construction above).  The deferred pointer has
+        # no real shape -- every dim is a synthetic placeholder (``?`` or the
+        # bridge-minted ``<name>_d<i>``), which is what marks it as a rebind
+        # target rather than a genuine concrete-shape array copied whole.
+        elif (v.fortran_name in ptr_rebind_src
+              and all(s == "?" or s == f"{v.fortran_name}_d{i}" for i, s in enumerate(syms))
+              and len(syms) == len(builder.arrays[ptr_rebind_src[v.fortran_name]].shape_symbols)):
+            syms = list(builder.arrays[ptr_rebind_src[v.fortran_name]].shape_symbols)
         for dim, s in enumerate(syms):
             if s == "?":
                 syms[dim] = f"{v.fortran_name}_d{dim}"

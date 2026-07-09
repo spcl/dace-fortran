@@ -2499,21 +2499,35 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
         v.lower_bounds.assign(v.rank, "1");
       } else {
         // A genuine deferred-shape ALLOCATABLE/POINTER dummy's bounds are set by
-        // the caller's ALLOCATE / pointer association -- invisible here -- so NO
-        // dim has a statically-known lower bound.  A literal-index access
+        // the caller's ALLOCATE / pointer association -- invisible here -- so a
+        // dim accessed only with symbolic or NON-NEGATIVE-literal subscripts has
+        // no statically-known lower bound.  A non-negative literal access
         // (``rho(jc, 1, jb)``) does NOT reveal the allocation bound: Fortran
-        // ``arr(1)`` addresses index 1 whatever ``lbound`` is, so the
-        // literal-access inference above is unsound for this class.  Discard it
-        // and leave EVERY dim free; descriptors.py stamps each
+        // ``arr(1)`` addresses index 1 whatever ``lbound`` is, so that class of
+        // dim is left free ("?"); descriptors.py stamps each
         // ``offset_<arr>_d<i>`` as a free symbol the caller binds via
-        // ``lbound(arr, dim=...)`` (a direct ``sdfg()`` call defaults it to the
-        // 1-based Fortran bound, so numerics are unchanged).  Keeping ``"1"`` on
-        // a literal-accessed dim -- the old behaviour -- dropped that dim's
-        // ``_lb`` slot from the marshalled callback ABI while the callee's
-        // bind_c_shim (shape-driven, one ``_lb`` per dim of a dynamic member)
-        // still emitted it, desyncing an SDFG-to-SDFG velocity call
-        // slot-for-slot.
-        v.lower_bounds.assign(v.rank, "?");
+        // ``lbound(arr, dim=...)``.  Freeing it (vs the old ``"1"``) keeps the
+        // dim's ``_lb`` slot in the marshalled callback ABI, matching the
+        // callee's bind_c_shim (one ``_lb`` per dim of a dynamic member) so an
+        // SDFG-to-SDFG velocity call stays slot-for-slot.
+        //
+        // EXCEPTION -- a NEGATIVE literal subscript (ICON's ``end_block(-10)``):
+        // unlike ``arr(1)``, ``arr(-10)`` is valid ONLY if ``lbound <= -10``, so
+        // it IS a sound static lower-bound constraint.  A direct ``sdfg()`` /
+        // bindings caller cannot recover the run-time bound (both default the
+        // free offset to 1, giving ``arr[-11]`` -- an out-of-bounds read that
+        // SEGVs).  ``inferLowerBoundsFromLiteralAccesses`` (run above) already
+        // folded such dims to the negative literal; keep that fold and free only
+        // the remaining dims.
+        for (int d = 0; d < v.rank; ++d) {
+          bool negFold =
+              d < (int)v.lower_bounds.size() && !v.lower_bounds[d].empty() && v.lower_bounds[d].front() == '-';
+          if (negFold) continue;
+          if (d < (int)v.lower_bounds.size())
+            v.lower_bounds[d] = "?";
+          else
+            v.lower_bounds.push_back("?");
+        }
       }
     }
 

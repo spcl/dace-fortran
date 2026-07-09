@@ -123,6 +123,59 @@ def _resolve_module_seeds(binding: str, seeds: dict):
     return out
 
 
+# Seeded allocatable-array buffers are kept alive for the child's lifetime -- the
+# descriptor's ``base_addr`` points into them, and the child ``os._exit``s before
+# any Fortran teardown, so they are never freed.
+_ALLOC_SEED_KEEPALIVE: list = []
+
+
+def _resolve_module_array_seeds(binding: str, seeds: dict):
+    """Resolve ``{fortran_sym: length}`` allocatable-module-ARRAY seeds to
+    ``[(mangled_symbol, length), ...]``.
+
+    Some ICON module globals are ``REAL(8), ALLOCATABLE`` (``mo_vertical_coord_
+    table::vct_a`` -- the vertical coordinate table) that the kernel indexes
+    directly (``vct_a(jk)``).  An isolated run leaves them UNALLOCATED (a null
+    descriptor), so the real reference OOB-reads / SEGVs and the SDFG reads the
+    binding's size-1 defensive fallback (garbage).  Neither crosses the bind(c)
+    ABI (module-direct reads), so -- like the scalar :func:`_resolve_module_seeds`
+    -- the test supplies the length and the harness allocates + fills the SAME
+    values on BOTH ``.so``s, keeping the differential bit-exact."""
+    sym_module = _module_symbol_map(binding)
+    out = []
+    for sym, length in seeds.items():
+        module = sym_module.get(sym)
+        if module is None:
+            raise KeyError(f"module-array-seed '{sym}' is not imported as '{sym}__mod => {sym}' in the binding")
+        out.append((f"__{module}_MOD_{sym}", int(length)))
+    return out
+
+
+def _seed_alloc_array(cdll, mangled: str, length: int):
+    """Allocate + fill a ``REAL(8), ALLOCATABLE :: <sym>(:)`` module global in a
+    loaded ``.so`` by writing its gfortran array descriptor in place.
+
+    Layout (gfortran 15, rank-1 allocatable, 64-byte descriptor): base_addr@0,
+    offset@8 (= -lbound), elem_len@16, dtype@24 {version:i32, rank:i8, type:i8,
+    attribute:i16}, span@32, dim0 {stride@40, lbound@48, ubound@56}.  The fill is
+    a deterministic ramp -- only IDENTITY across the two ``.so``s matters for
+    bit-exactness."""
+    buf = (ctypes.c_double * length)(*[float(i + 1) for i in range(length)])
+    _ALLOC_SEED_KEEPALIVE.append(buf)
+    addr = ctypes.addressof((ctypes.c_byte * 64).in_dll(cdll, mangled))
+    ctypes.c_void_p.from_address(addr + 0).value = ctypes.addressof(buf)
+    ctypes.c_ssize_t.from_address(addr + 8).value = -1  # offset = -lbound
+    ctypes.c_size_t.from_address(addr + 16).value = 8  # elem_len (real*8)
+    ctypes.c_int32.from_address(addr + 24).value = 0  # dtype.version
+    ctypes.c_int8.from_address(addr + 28).value = 1  # dtype.rank
+    ctypes.c_int8.from_address(addr + 29).value = 3  # dtype.type (BT_REAL)
+    ctypes.c_int16.from_address(addr + 30).value = 0  # dtype.attribute
+    ctypes.c_ssize_t.from_address(addr + 32).value = 8  # span
+    ctypes.c_ssize_t.from_address(addr + 40).value = 1  # dim0.stride
+    ctypes.c_ssize_t.from_address(addr + 48).value = 1  # dim0.lbound
+    ctypes.c_ssize_t.from_address(addr + 56).value = length  # dim0.ubound
+
+
 def _retarget_shim(shim: str, dace_name: str, entry: str, module_dims=None, n_val=None) -> str:
     """Rewrite the auto ``<dace_name>_c`` shim into a ``<dace_name>_ref_c`` that
     calls the ORIGINAL kernel ``entry`` (``module::proc``) instead of the
@@ -197,7 +250,7 @@ def _parse_abi(shim: str):
     return header, value_ftype, ptr_ftype, ptr_shape, dim_symbols, ptr_local
 
 
-def _invoke(so_path, call_plan, bufs, sym, sdfg_so=None, module_seeds=None):
+def _invoke(so_path, call_plan, bufs, sym, sdfg_so=None, module_seeds=None, array_seeds=None):
     # The SDFG .so is dlopen'd RTLD_GLOBAL first so the DaCe runtime (OpenMP
     # offload init, etc.) is live and its symbols resolve for the binding .so.
     if sdfg_so is not None:
@@ -211,6 +264,10 @@ def _invoke(so_path, call_plan, bufs, sym, sdfg_so=None, module_seeds=None):
         cell = (ctypes.c_int * length).in_dll(cdll, mangled)
         for i in range(length):
             cell[i] = value
+    # Allocatable module ARRAYS the kernel reads module-direct (``vct_a``) --
+    # unallocated in isolation; allocate + fill identically on both .so's.
+    for mangled, length in (array_seeds or []):
+        _seed_alloc_array(cdll, mangled, length)
     fn = getattr(cdll, sym)
     argtypes, args = [], []
     for kind, arg, ct, *rest in call_plan:
@@ -221,7 +278,15 @@ def _invoke(so_path, call_plan, bufs, sym, sdfg_so=None, module_seeds=None):
     fn(*args)
 
 
-def _run_in_fork(so_path, call_plan, inputs, ptr_args, sym, save_prefix: Path, sdfg_so=None, module_seeds=None):
+def _run_in_fork(so_path,
+                 call_plan,
+                 inputs,
+                 ptr_args,
+                 sym,
+                 save_prefix: Path,
+                 sdfg_so=None,
+                 module_seeds=None,
+                 array_seeds=None):
     """Load ``so_path`` and run ``sym`` in a forked child on a fresh copy of
     ``inputs``, saving each output buffer to ``<save_prefix>_<arg>.npy``, then
     ``os._exit`` so the child's (occasionally heap-corrupting) ctypes/DaCe-
@@ -234,7 +299,7 @@ def _run_in_fork(so_path, call_plan, inputs, ptr_args, sym, save_prefix: Path, s
         code = 0
         try:
             bufs = {k: v.copy() for k, v in inputs.items()}
-            _invoke(so_path, call_plan, bufs, sym, sdfg_so=sdfg_so, module_seeds=module_seeds)
+            _invoke(so_path, call_plan, bufs, sym, sdfg_so=sdfg_so, module_seeds=module_seeds, array_seeds=array_seeds)
             for k in ptr_args:
                 np.save(f"{save_prefix}_{k}.npy", bufs[k])
         except BaseException:
@@ -255,6 +320,7 @@ def _build_and_compare(tu_path: Path,
                        out: Path,
                        int_fill=None,
                        module_seeds=None,
+                       module_array_seeds=None,
                        do_not_emit=None,
                        prelude_paths=None,
                        inject_use_mpi=False):
@@ -334,6 +400,7 @@ def _build_and_compare(tu_path: Path,
     # nflatlev / ...) -- BSS 0 in isolation, so seeded on BOTH sides to the
     # test-supplied namelist values.
     seed_specs = _resolve_module_seeds(binding_text, module_seeds or {}) if binding_text else []
+    array_specs = _resolve_module_array_seeds(binding_text, module_array_seeds or {}) if binding_text else []
 
     ref_shim = out / f"{dace_name}_ref_c.f90"
     ref_shim.write_text(_retarget_shim(shim, dace_name, entry, module_dims, n))
@@ -418,8 +485,16 @@ def _build_and_compare(tu_path: Path,
                       f"{dace_name}_c",
                       out / "dut",
                       sdfg_so=lib.sdfg_so,
-                      module_seeds=seed_specs)
-    sr = _run_in_fork(ref_so, call_plan, inputs, ptr_args, f"{dace_name}_ref_c", out / "ref", module_seeds=seed_specs)
+                      module_seeds=seed_specs,
+                      array_seeds=array_specs)
+    sr = _run_in_fork(ref_so,
+                      call_plan,
+                      inputs,
+                      ptr_args,
+                      f"{dace_name}_ref_c",
+                      out / "ref",
+                      module_seeds=seed_specs,
+                      array_seeds=array_specs)
 
     dut = {k: np.load(out / f"dut_{k}.npy") for k in ptr_args if (out / f"dut_{k}.npy").exists()}
     ref = {k: np.load(out / f"ref_{k}.npy") for k in ptr_args if (out / f"ref_{k}.npy").exists()}
@@ -452,6 +527,7 @@ def run_kernel_e2e(tu_path: Path,
                    seed: int = 0,
                    int_fill=None,
                    module_seeds=None,
+                   module_array_seeds=None,
                    do_not_emit=None,
                    prelude_paths=None,
                    inject_use_mpi=False) -> dict:
@@ -489,7 +565,8 @@ def run_kernel_e2e(tu_path: Path,
         json.dumps(module_seeds or {}),
         json.dumps(list(do_not_emit or [])),
         json.dumps([str(p) for p in (prelude_paths or [])]),
-        json.dumps(bool(inject_use_mpi))
+        json.dumps(bool(inject_use_mpi)),
+        json.dumps(module_array_seeds or {})
     ],
                           capture_output=True,
                           text=True,
@@ -503,7 +580,7 @@ def run_kernel_e2e(tu_path: Path,
 
 def _main(argv):
     (tu_path, entry, overrides_json, array_overrides_json, float_range_json, n, seed, out, int_fill_json,
-     module_seeds_json, do_not_emit_json, prelude_paths_json, inject_use_mpi_json) = argv[1:14]
+     module_seeds_json, do_not_emit_json, prelude_paths_json, inject_use_mpi_json, module_array_seeds_json) = argv[1:15]
     try:
         max_diff, n_changed = _build_and_compare(Path(tu_path),
                                                  entry,
@@ -515,6 +592,7 @@ def _main(argv):
                                                  Path(out),
                                                  json.loads(int_fill_json),
                                                  module_seeds=json.loads(module_seeds_json),
+                                                 module_array_seeds=json.loads(module_array_seeds_json),
                                                  do_not_emit=json.loads(do_not_emit_json),
                                                  prelude_paths=json.loads(prelude_paths_json),
                                                  inject_use_mpi=json.loads(inject_use_mpi_json))

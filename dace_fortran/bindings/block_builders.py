@@ -1786,10 +1786,21 @@ def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dumm
     # ``$i`` placeholders (none for rank 0); strip them to the bare
     # path so the assignment reads ``p_patch%nlev`` directly.
     scalar_member: dict = {}
+    # Whether the binding declares each flat arg's local as a POINTER vs an
+    # ``allocatable, target`` scratch -- mirrors the struct-arg decl rule
+    # (``aliasable and source_logical_kind in (0, 1)`` -> pointer, else
+    # ``allocatable, target``).  Selects ``associated`` vs ``allocated`` for an
+    # ``_allocated`` presence fold so the emitted test is legal for BOTH storage
+    # classes (``allocated`` on a POINTER / ``associated`` on an ALLOCATABLE are
+    # hard gfortran type errors).  Args with no recipe (double-buffer lanes,
+    # which are ``c_f_pointer``'d pointers) default to POINTER.
+    arg_is_pointer_local: dict = {}
     for entry in plan.entries:
         r = entry.recipe
+        is_ptr_local = bool(r.aliasable and r.source_logical_kind in (0, 1))
         for flat in r.flat_names:
             flat_shapes[flat] = r.shape_exprs
+            arg_is_pointer_local[flat] = is_ptr_local
         if r.rank == 0 and len(r.flat_names) == 1 and r.read_exprs:
             scalar_member[r.flat_names[0]] = strip_index_args(r.read_exprs[0])
 
@@ -1863,6 +1874,20 @@ def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dumm
             if fa is not None and (getattr(fa, 'module_origin_allocatable', False)
                                    or getattr(fa, 'module_origin_pointer', False)):
                 present = _present(_module_symbol_alias(pres_base), getattr(fa, 'module_origin_pointer', False))
+                out.append(f"    {sym} = int(merge(1, 0, {present}), c_int)")
+                continue
+            # A STRUCT-MEMBER (or other aliased array) ``ASSOCIATED``/``ALLOCATED``
+            # fold the kernel branches on -- ICON gates the ``p_nh%prog(nnew)%w``
+            # output store on ``associated(...)``, and the pg / gradp copy-ins on
+            # the pg-array presence.  The binding ``c_f_pointer``s every array arg
+            # to a POINTER local from the reconstructed struct, so
+            # ``associated(<base>)`` is true exactly when the caller provided the
+            # member (the shim allocates it).  Leaving the flag unset defaults the
+            # branch OFF, dropping the output nondeterministically (uninitialised
+            # local read).  Only ``_allocated`` folds resolve this way; ``_present``
+            # (OPTIONAL dummy) keeps its own branch below.
+            if fa is not None and fa.kind == 'array' and sym.endswith("_allocated"):
+                present = _present(pres_base, arg_is_pointer_local.get(pres_base, True))
                 out.append(f"    {sym} = int(merge(1, 0, {present}), c_int)")
                 continue
         # An OPTIONAL-presence flag (``<dummy>_present``, registered by the

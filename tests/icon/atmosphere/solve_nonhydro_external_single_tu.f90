@@ -572,11 +572,11 @@ MODULE mo_solve_nonhydro
     USE mo_grid_config, ONLY: l_limited_area
     USE mo_loopindices, ONLY: get_indices_c, get_indices_e
     USE mo_init_vgrid, ONLY: nflatlev
-    USE mo_icon_interpolation_scalar, ONLY: cells2verts_scalar_dp_deconiface_45 => cells2verts_scalar_dp, cells2verts_scalar_dp_deconiface_46 => cells2verts_scalar_dp
-    USE mo_math_gradients, ONLY: grad_green_gauss_cell_dycore_deconiface_47 => grad_green_gauss_cell_dycore
+    USE mo_icon_interpolation_scalar, ONLY: cells2verts_scalar_dp_deconiface_39 => cells2verts_scalar_dp, cells2verts_scalar_dp_deconiface_40 => cells2verts_scalar_dp
+    USE mo_math_gradients, ONLY: grad_green_gauss_cell_dycore_deconiface_41 => grad_green_gauss_cell_dycore
     USE mo_initicon_config, ONLY: iau_wgt_dyn, is_iau_active
     USE mo_gridref_config, ONLY: grf_intmethod_e
-    USE mo_sync, ONLY: sync_patch_array_3d_dp_deconiface_49 => sync_patch_array_3d_dp, sync_patch_array_3d_dp_deconiface_51 => sync_patch_array_3d_dp, sync_patch_array_mult_f3din_dp_deconiface_48 => sync_patch_array_mult_f3din_dp, sync_patch_array_mult_f3din_dp_deconiface_50 => sync_patch_array_mult_f3din_dp, sync_patch_array_mult_f3din_dp_deconiface_52 => sync_patch_array_mult_f3din_dp
+    USE mo_sync, ONLY: sync_patch_array_3d_dp_deconiface_43 => sync_patch_array_3d_dp, sync_patch_array_3d_dp_deconiface_45 => sync_patch_array_3d_dp, sync_patch_array_mult_f3din_dp_deconiface_42 => sync_patch_array_mult_f3din_dp, sync_patch_array_mult_f3din_dp_deconiface_44 => sync_patch_array_mult_f3din_dp, sync_patch_array_mult_f3din_dp_deconiface_46 => sync_patch_array_mult_f3din_dp
     TYPE(t_nh_state), TARGET, INTENT(INOUT) :: p_nh
     TYPE(t_int_state), TARGET, INTENT(IN) :: p_int
     TYPE(t_patch), TARGET, INTENT(INOUT) :: p_patch
@@ -814,10 +814,10 @@ MODULE mo_solve_nonhydro
       END IF
       IF (istep == 1) THEN
         IF (iadv_rhotheta == 1) THEN
-          CALL cells2verts_scalar_dp_deconiface_45(p_nh % prog(nnow) % rho, p_patch, p_int % cells_aw_verts, z_rho_v, lacc = .TRUE., opt_rlend = (- 5))
-          CALL cells2verts_scalar_dp_deconiface_46(p_nh % prog(nnow) % theta_v, p_patch, p_int % cells_aw_verts, z_theta_v_v, lacc = .TRUE., opt_rlend = (- 5))
+          CALL cells2verts_scalar_dp_deconiface_39(p_nh % prog(nnow) % rho, p_patch, p_int % cells_aw_verts, z_rho_v, lacc = .TRUE., opt_rlend = (- 5))
+          CALL cells2verts_scalar_dp_deconiface_40(p_nh % prog(nnow) % theta_v, p_patch, p_int % cells_aw_verts, z_theta_v_v, lacc = .TRUE., opt_rlend = (- 5))
         ELSE IF (iadv_rhotheta == 2) THEN
-          CALL grad_green_gauss_cell_dycore_deconiface_47(z_rth_pr, p_patch, p_int, z_grad_rth, lacc = .TRUE., opt_rlstart = 3, opt_rlend = (- 5), opt_acc_async = .TRUE.)
+          CALL grad_green_gauss_cell_dycore_deconiface_41(z_rth_pr, p_patch, p_int, z_grad_rth, lacc = .TRUE., opt_rlstart = 3, opt_rlend = (- 5), opt_acc_async = .TRUE.)
         END IF
       END IF
       IF (istep == 1) THEN
@@ -1096,9 +1096,9 @@ MODULE mo_solve_nonhydro
         CALL timer_start(timer_solve_nh_exch)
       END IF
       IF (istep == 1) THEN
-        CALL sync_patch_array_mult_f3din_dp_deconiface_48(2, p_patch, 2, lacc = .TRUE., f3din1 = p_nh % prog(nnew) % vn, f3din2 = z_rho_e, opt_varname = "vn_nnew and z_rho_e")
+        CALL sync_patch_array_mult_f3din_dp_deconiface_42(2, p_patch, 2, lacc = .TRUE., f3din1 = p_nh % prog(nnew) % vn, f3din2 = z_rho_e, opt_varname = "vn_nnew and z_rho_e")
       ELSE
-        CALL sync_patch_array_3d_dp_deconiface_49(2, p_patch, p_nh % prog(nnew) % vn, lacc = .TRUE., opt_varname = "vn_nnew")
+        CALL sync_patch_array_3d_dp_deconiface_43(2, p_patch, p_nh % prog(nnew) % vn, lacc = .TRUE., opt_varname = "vn_nnew")
       END IF
       IF (timers_level > 5) THEN
         CALL timer_stop(timer_solve_nh_exch)
@@ -1482,12 +1482,12 @@ MODULE mo_solve_nonhydro
       END IF
       IF (istep == 1) THEN
         IF (divdamp_type >= 3) THEN
-          CALL sync_patch_array_mult_f3din_dp_deconiface_50(1, p_patch, 2, lacc = .TRUE., f3din1 = p_nh % prog(nnew) % w, f3din2 = z_dwdz_dd, opt_varname = "w_nnew and z_dwdz_dd")
+          CALL sync_patch_array_mult_f3din_dp_deconiface_44(1, p_patch, 2, lacc = .TRUE., f3din1 = p_nh % prog(nnew) % w, f3din2 = z_dwdz_dd, opt_varname = "w_nnew and z_dwdz_dd")
         ELSE
-          CALL sync_patch_array_3d_dp_deconiface_51(1, p_patch, p_nh % prog(nnew) % w, lacc = .TRUE., opt_varname = "w_nnew")
+          CALL sync_patch_array_3d_dp_deconiface_45(1, p_patch, p_nh % prog(nnew) % w, lacc = .TRUE., opt_varname = "w_nnew")
         END IF
       ELSE
-        CALL sync_patch_array_mult_f3din_dp_deconiface_52(1, p_patch, 3, lacc = .TRUE., f3din1 = p_nh % prog(nnew) % rho, f3din2 = p_nh % prog(nnew) % exner, f3din3 = p_nh % prog(nnew) % w, opt_varname = "rho, exner, w_nnew")
+        CALL sync_patch_array_mult_f3din_dp_deconiface_46(1, p_patch, 3, lacc = .TRUE., f3din1 = p_nh % prog(nnew) % rho, f3din2 = p_nh % prog(nnew) % exner, f3din3 = p_nh % prog(nnew) % w, opt_varname = "rho, exner, w_nnew")
       END IF
       IF (timers_level > 5) CALL timer_stop(timer_solve_nh_exch)
     END DO

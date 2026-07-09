@@ -93,6 +93,7 @@ markers = [
     "long: Slow test (e.g. builds ICON from source). CI runs it (CI filters only '-m \"not mpi\"'); routine local full-sweeps exclude it with '-m \"not long\"'.",
     "sequential: Test must be run sequentially (select with '-m \"sequential\"')",
     "mpi: Multi-rank MPI test; excluded from the normal sweep, run under mpirun (select with '-m \"mpi\"')",
+    "integration: ICON orig-vs-binding bit-exact integration test (per-call duplicate-data, VERY SHORT run); runs only on the CI 'integration' runner and is excluded from fast/heavy (select with '-m \"integration\"')",
     "xdist_group: pytest-xdist load-group marker (ICON-build tests share one worker via --dist loadgroup)",
 ]
 testpaths = ["tests"]

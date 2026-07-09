@@ -2,12 +2,14 @@
 binding.
 
 ICON's call site (``mo_nh_stepping.f90:3094``) stays untouched.
-Only the BODY of ``solve_nh`` in ``mo_solve_nonhydro.f90`` is patched
+``solve_nh`` in ``mo_solve_nonhydro.f90`` becomes a DIFFERENTIAL DRIVER
 -- the SUBROUTINE signature, the 14 dummy declarations, the USE
-statements all stay byte-for-byte identical -- and forwards to
-``solve_nh_dace_icon``, a free-standing wrapper that re-extracts
-pointers via ICON's real types and dispatches into our dycore SDFG's
-bind-C entry.
+statements all stay byte-for-byte identical -- that deep-copies the
+mutable state (``mo_solve_nh_diff``), forwards to ``solve_nh_dace_icon``
+(a free-standing wrapper that re-extracts pointers via ICON's real types
+and dispatches into our dycore SDFG's bind-C entry) as the DUT, runs the
+original body -- preserved verbatim as ``solve_nh_ref`` -- as the REF,
+and compares the two bit-for-bit.
 
 This test pins:
 
@@ -53,6 +55,9 @@ from icon.full._icon_solve_nh_patch import (
 GFORTRAN_COMPILERS = [p for p in FORTRAN_COMPILERS if "gfortran" in (p.id or "")]
 
 _HERE = Path(__file__).resolve().parent
+#: The differential helper module the patched ``solve_nh`` ``USE``s.  Compiled
+#: ahead of the patched source in the syntax check so its ``.mod`` is on hand.
+_DIFF_F90 = _HERE / "mo_solve_nh_diff.f90"
 _ICON_SRC = Path(os.environ.get("ICON_SRC", str(_HERE / "icon-model")))
 _ICON_BUILD = Path(os.environ.get("ICON_BUILD", str(_ICON_SRC / "build" / "stock_cpu")))
 
@@ -141,18 +146,44 @@ def test_patched_body_calls_wrapper():
 
 
 @pytest.mark.skipif(not _HAVE_ICON, reason="icon-model submodule not checked out")
-def test_original_body_dropped(tmp_path: Path):
-    """The unreachable original body is removed.  ICON's
-    ``solve_nh`` body has ~3000 lines; the patched file should be
-    much shorter."""
-    patched = apply_solve_nh_patch(_real_source().read_text())
+def test_differential_driver_injected():
+    """The differential patch KEEPS the ~3000-line original body as the
+    bit-exact REFERENCE (renamed ``solve_nh_ref``) and injects the driver
+    -- clone -> DUT (``solve_nh_dace_icon``) -> REF -> compare -> free --
+    as the new ``solve_nh``.  So the patched file GROWS by roughly the
+    driver block; it does NOT shrink.  (The OLD pure-forwarding design
+    dropped the body; the differential design runs it as the reference,
+    so the old ``< 0.5 * pristine`` shrink assertion is inverted here.)
+    Mirrors the structural pins in ``test_solve_nh_patch.py``."""
     pristine = _real_source().read_text()
-    # The patch SHOULD shrink the file substantially (3000-line
-    # body removed, replaced by ~50-line forwarding stub).
-    assert len(patched.splitlines()) < 0.5 * len(pristine.splitlines()), (
-        f"patched file ({len(patched.splitlines())} lines) is too "
-        f"close to pristine ({len(pristine.splitlines())} lines) -- "
-        "the original body wasn't dropped")
+    patched = apply_solve_nh_patch(pristine)
+
+    # The original body survives verbatim, renamed to solve_nh_ref, and is
+    # emitted AFTER the driver (ICON's call site resolves ``solve_nh``).  Match
+    # ``solve_nh_ref`` without a trailing ``(`` -- ICON's real header spells the
+    # signature ``solve_nh (...)`` with a space, so the rename keeps that space.
+    assert "SUBROUTINE solve_nh_ref" in patched
+    assert "END SUBROUTINE solve_nh_ref" in patched
+
+    # The differential harness is injected into the new solve_nh driver, which
+    # is emitted BEFORE the renamed reference body.
+    assert "USE mo_solve_nh_diff" in patched
+    assert "CALL clone_state_indep_prog(p_nh, nh_ref__dace)" in patched
+    assert f"CALL {SOLVE_NH_WRAPPER_NAME}(" in patched
+    assert "CALL solve_nh_ref(nh_ref__dace," in patched
+    assert "CALL compare_prog_nnew(p_nh, nh_ref__dace, nnew," in patched
+    assert patched.index("CALL clone_state_indep_prog(p_nh, nh_ref__dace)") < patched.index("SUBROUTINE solve_nh_ref")
+
+    # The file GROWS by ~the injected driver (USE helpers + local decls +
+    # clone/run-both/compare/free body), NOT shrinks -- and the growth is a
+    # small fraction of the file, so the ~3000-line body was not duplicated.
+    pristine_n = len(pristine.splitlines())
+    patched_n = len(patched.splitlines())
+    assert patched_n > pristine_n, ("the differential patch keeps the body as the REF, so the file must "
+                                    f"GROW: patched={patched_n} pristine={pristine_n}")
+    growth = patched_n - pristine_n
+    assert growth < pristine_n // 2, (f"patched grew by {growth} lines -- far more than the injected driver; "
+                                      "the original body may have been duplicated instead of renamed")
 
 
 @pytest.mark.skipif(not _HAVE_ICON, reason="icon-model submodule not checked out")
@@ -237,9 +268,16 @@ def test_patched_source_parses_through_fortran_compiler(fc, tmp_path: Path, icon
         "-D__NO_QUINCY__",
         "-D__NO_RAGNAROK__",
     ]
+    # The patched module ``USE``s ``mo_solve_nh_diff`` (the deep-copy / compare
+    # helpers), so its ``.mod`` must exist before the patched source is checked.
+    # ``mo_solve_nh_diff.f90`` ``use``s only ICON's own type modules, so it
+    # compiles against the same ICON ``.mod`` tree; passing it FIRST in the same
+    # invocation makes its module available to the patched source that follows
+    # (mirrors ``test_solve_nh_patch.py``'s ordered multi-source syntax check).
     subprocess.check_call([
         fc_path, *syntax_check_argv(fc_name, tmp_path),
         cpp_flag(fc_name), *fortran_compiler_flags(fc_name), *include_flags, *defines,
+        str(_DIFF_F90),
         str(out)
     ],
                           cwd=str(tmp_path))
