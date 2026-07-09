@@ -1707,10 +1707,25 @@ def emit_call(builder, ctx, n, region):
                     # ``offset_<s>`` is transiently in ``sdfg.symbols`` for EVERY
                     # array before pruning, so the free-value test -- not mere
                     # symbol membership -- is the exact outer<->inner discriminator.
+                    #
+                    # A dim whose bound folded to a NEGATIVE literal (ICON's
+                    # ``end_block(-10)``: ``inferLowerBoundsFromLiteralAccesses``
+                    # bakes the sound static lower bound so the direct ``sdfg()``
+                    # path indexes in-bounds) is STILL a genuine dynamic member --
+                    # the inner shim mints its ``_lb`` slot all the same -- so the
+                    # marshal must forward that folded literal, not skip it.  Only
+                    # the value-record 1-based leaf (offset folds to the constant
+                    # ``1``) is extent-only.  So: forward the ``_lb`` slot when the
+                    # offset is free OR a folded sub-1 literal; skip it only for
+                    # the concrete 1-based value-record leaf.
                     for s in shape:
                         off = f"offset_{s}"
-                        if off in builder.offset_values and builder.offset_values[off] is None:
-                            call_args_c.append(f"(int)({off})")
+                        if off in builder.offset_values:
+                            ov = builder.offset_values[off]
+                            if ov is None:
+                                call_args_c.append(f"(int)({off})")
+                            elif ov < 1:
+                                call_args_c.append(f"(int)({ov})")
                         call_args_c.append(f"(int)({_sym2c(s)})")
                 call_args_c.append(tok)
             continue
@@ -1829,15 +1844,19 @@ def emit_call(builder, ctx, n, region):
                 continue
             if sig.dynamic_extents_abi and nel == 0 and shape:
                 # One ``int`` per dim for the extent, plus one more ahead of it
-                # for the lower bound whenever the leaf's ``offset_<extent-sym>``
-                # is a FREE (caller-supplied) symbol -- a genuine dynamic array
-                # member, not a synthesised 1-based value-record SoA field.  Same
-                # discriminator as the body marshal, so the arg count matches the
-                # inner shim's ``<flat>_lb<i>`` / ``<flat>_d<i>`` slot pair.
+                # for the lower bound whenever the leaf is a genuine dynamic
+                # member -- ``offset_<extent-sym>`` FREE (caller-supplied) OR
+                # folded to a sub-1 literal (a negative ICON refinement bound) --
+                # and NOT a synthesised 1-based value-record SoA field (offset
+                # folds to constant 1).  Same discriminator as the body marshal,
+                # so the arg count matches the inner shim's ``<flat>_lb<i>`` /
+                # ``<flat>_d<i>`` slot pair.
                 for s in shape:
                     off = f"offset_{s}"
-                    if off in builder.offset_values and builder.offset_values[off] is None:
-                        decl_types.append("int")
+                    if off in builder.offset_values:
+                        ov = builder.offset_values[off]
+                        if ov is None or ov < 1:
+                            decl_types.append("int")
                     decl_types.append("int")
             decl_types.append(f"{ct}*")
         elif last_member_idx == 0:  # aos_struct_ptr: emit once per group

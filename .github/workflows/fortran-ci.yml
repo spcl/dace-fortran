@@ -269,5 +269,8 @@ jobs:
         # serial execution avoids parallel-build races for a negligible cost.
         # Together with the step above this covers ``-m "integration or mpi"``
         # with no test run twice (mpi-and-integration tests run only above).
+        # ``|| [ $? -eq 5 ]`` tolerates pytest's exit-5 (no tests collected) so
+        # an empty integration set never reds the lane -- a guard against a
+        # future removal of every integration test silently re-breaking CI.
         python -m pytest -m "integration and not mpi" \
-          -p no:cacheprovider --tb=short tests/
+          -p no:cacheprovider --tb=short tests/ || [ $? -eq 5 ]
