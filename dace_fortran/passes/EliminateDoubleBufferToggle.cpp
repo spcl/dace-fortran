@@ -187,7 +187,18 @@ struct UnrollCloner {
         }
         return;
       }
-      // Could not fold -> clone structurally (toggle stays; later split errors).
+      // --- non-constant fir.if ---
+      // A tracked slot's store is DROPPED (its value lives only in ``mem``), and
+      // its loads are forwarded only when the cloner walks them directly.  A
+      // structural clone of a non-constant ``fir.if`` copies the whole nested
+      // subtree in bulk, so a ``fir.load`` of a tracked slot inside it is copied
+      // verbatim -- reading a slot this pass never writes, which surfaces as an
+      // unpopulated free symbol (e.g. ICON ``solve_nh``'s ``istep`` inside the
+      // data-dependent ``ELSE IF (istep == 2 .AND. idyn == ndyn_substeps_var(jg))``
+      // exner_dyn_incr guard).  Spill the substituted tracked values back into
+      // their slots first so those bulk-cloned nested loads read the right value.
+      spillTrackedSlots(op->getLoc());
+      // fall through to the structural clone below.
     }
     // --- nested fir.do_loop: rebuild so tracked loads inside resolve ---
     if (auto loop = mlir::dyn_cast<fir::DoLoopOp>(op)) {
@@ -227,6 +238,17 @@ struct UnrollCloner {
     else
       b.create<fir::ResultOp>(loop.getLoc(), res);
     for (auto [o, n] : llvm::zip(loop.getResults(), nl.getResults())) vmap.map(o, n);
+  }
+
+  /// Materialise the current substituted value of every tracked slot back into
+  /// its memref, so that a subsequent bulk structural clone (of a non-constant
+  /// ``fir.if``) whose nested ``fir.load``s read those slots directly observe
+  /// the substituted value instead of a never-written slot.  ``mem`` already
+  /// holds the cloned (correctly-typed, induction-substituted) stored value for
+  /// each tracked slot, so storing it back is type-preserving.
+  void spillTrackedSlots(mlir::Location loc) {
+    for (auto& kv : mem)
+      if (kv.second) b.create<fir::StoreOp>(loc, kv.second, kv.first);
   }
 };
 
