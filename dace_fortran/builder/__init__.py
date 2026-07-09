@@ -754,6 +754,14 @@ class SDFGBuilder:
         # name), or ``None`` (unknown  --  symbol stays free, caller
         # passes it).
         self.offset_values: dict[str, int | str | None] = {}
+        # Whole-derived-type-OBJECT pointer rebinds (``params_oce => v_params``),
+        # populated by ``descriptors.scan_object_aliases`` during ``build()``.
+        # ``object_aliases``: {tgt_obj: src_obj} redirect edges (transitive);
+        # ``object_alias_defs``: rebind-store targets dropped at emit (no data);
+        # ``object_alias_flat_members``: {member_suffix: real_flat_name} unique.
+        self.object_aliases: dict[str, str] = {}
+        self.object_alias_defs: set[str] = set()
+        self.object_alias_flat_members: dict[str, str] = {}
 
     def build(self) -> SDFG:
         """Construct the SDFG, run the unconditional offset-symbol

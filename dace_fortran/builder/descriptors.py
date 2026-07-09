@@ -7,10 +7,125 @@ scalars (``__sc_N`` / ``__al_N``) that weren't in the original variable
 classification.
 """
 
+import re
 from types import SimpleNamespace
 
 import dace
 from dace import SDFG
+
+#: A pointer-ASSOCIATION right-hand side: a bare identifier or a flattened
+#: member chain (``patch_2d % edges % in_domain`` -> ``patch_2d_edges_in_domain``),
+#: optionally whole-array-indexed (``p_patch_2d(1)`` -> ``p_patch_2d[1]``).  It
+#: carries NO arithmetic -- an arithmetic RHS is a data assignment, not a
+#: ``=>`` rebind.  Used to tell an object/pointer rebind store apart from a
+#: value store when the bridge lowered ``obj_ptr => src`` as a plain assign.
+_REF_EXPR = re.compile(r"[A-Za-z_]\w*(?:\[[^\]]*\])?\Z")
+
+
+def scan_object_aliases(builder) -> None:
+    """Collect whole-derived-type-OBJECT pointer rebinds (``obj_ptr => src_obj``)
+    the bridge lowered as plain scalar ``assign`` nodes.
+
+    The target of such a rebind is a ``TYPE(...), POINTER`` object, not numeric
+    data, so it misses every array/view tag: it is absent from
+    ``builder.arrays`` / ``builder.scalars`` / ``builder.symbols`` and its RHS is
+    a bare reference (``params_oce => v_params``, ``this % patch_3d => patch_3d``,
+    ``edges_in_domain => patch_2d % edges % in_domain``).  Emitting the store as a
+    tasklet would fabricate a descriptor-less AccessNode that later crashes
+    ``read_and_write_sets`` / ``prune_unused_arrays``.
+
+    Three products land on ``builder``:
+
+    * ``object_aliases``  --  ``{tgt_obj: src_obj}`` for the WHOLE-object rebinds
+      whose RHS is a bare identifier, resolved transitively at access time
+      (``params_oce -> v_params``).
+    * ``object_alias_defs``  --  every rebind-store target name; the store itself
+      carries no SDFG data, so ``emit_scalar_assign`` returns early for these.
+    * ``object_alias_flat_members``  --  ``{member_suffix: flat_name}`` for the
+      UNIQUELY flattened struct members (from the bridge flatten plan), so a
+      member access on an aliased object whose own flat companion was never
+      materialised (``params_oce % a_veloc_v`` -> ``v_params % a_veloc_v``, which
+      has no descriptor) resolves to the real flattened storage of the SAME
+      derived type (``p_phys_param_a_veloc_v``).
+    """
+    known = set(builder.arrays) | set(builder.scalars) | set(builder.symbols)
+    aliases: dict = {}
+    defs: set = set()
+    non_desc_targets: set = set()
+
+    def visit(nodes):
+        for c in nodes:
+            if c.kind == "assign" and not c.target_is_array and c.target not in known:
+                # A SCALAR store into a name with no descriptor is a candidate
+                # opaque-struct-member sink (a write into an object the flatten
+                # pass never materialised); classified below.  Array-target
+                # stores route through ``emit_tasklet`` (which resolves object
+                # aliases), not the scalar early-return, so they are excluded.
+                non_desc_targets.add(c.target)
+                src = str(c.expr).strip()
+                if _REF_EXPR.match(src):
+                    # A pointer ASSOCIATION store, not a data assignment.  The
+                    # target names a POINTER (object or data pointer); the store
+                    # itself moves no SDFG data -- drop it at emit time.
+                    defs.add(c.target)
+                    if src.isidentifier() and src not in known:
+                        # Whole-OBJECT alias: ``tgt_obj => src_obj`` where the
+                        # source is itself an (unflattened) object.  Member
+                        # accesses on ``tgt_obj`` redirect through this edge.
+                        aliases[c.target] = src
+            visit(c.children)
+            visit(c.else_children)
+
+    visit(builder.ast)
+
+    # Uniquely flattened struct members, keyed by member suffix, from the bridge
+    # flatten plan.  ``outer_expr`` is ``<root>%<member>``; the flat name is
+    # ``<root>_<member>``.  A member that flattens under exactly ONE root is
+    # unambiguous, so an object-alias whose own flat companion is missing can
+    # borrow the real descriptor of the same derived type.  Ambiguous members
+    # (same suffix under two roots) are dropped so a wrong unification never fires.
+    plan = builder.module.get_flatten_plan() or {}
+    per_member: dict = {}
+    for e in plan.get("entries") or []:
+        outer = str(e.get("outer_expr") or "")
+        root = outer.split("%", 1)[0].strip()
+        if not root:
+            continue
+        recipe = e.get("recipe") or {}
+        for flat in recipe.get("flat_names") or []:
+            if flat.startswith(root + "_"):
+                per_member.setdefault(flat[len(root) + 1:], set()).add(flat)
+    flat_members = {m: next(iter(s)) for m, s in per_member.items() if len(s) == 1}
+
+    builder.object_aliases = aliases
+    builder.object_alias_defs = defs
+    builder.object_alias_flat_members = flat_members
+
+    # Value stores into OPAQUE (unflattened) struct members.  ``this % patch_3d
+    # => patch_3d`` (a rebind) is dropped above, but the same opaque solver
+    # struct also takes plain scalar stores (``this % is_const = 0``); those are
+    # not rebinds, yet their flat target (``free_sfc_solver_lhs_t_lhs_agen_is_const``)
+    # has no descriptor either and would fabricate a dangling AccessNode.  An
+    # opaque struct is one whose members are written but never materialised:
+    # detect it as a name prefix shared by TWO OR MORE distinct member sinks
+    # that (a) have no descriptor and (b) do NOT resolve to a real object-alias
+    # member.  A lone missing name never forms such a cluster, so a genuinely
+    # missing NUMERIC descriptor still surfaces loudly at emit rather than being
+    # silently swallowed here.
+    from dace_fortran.builder.access import resolve_object_member
+    sinks = {t for t in non_desc_targets if "_" in t and resolve_object_member(builder, t) is None}
+    prefix_sinks: dict = {}
+    for t in sinks:
+        parts = t.split("_")
+        for i in range(1, len(parts)):
+            prefix = "_".join(parts[:i])
+            if prefix and prefix not in known:
+                prefix_sinks.setdefault(prefix, set()).add(t)
+    opaque_owners = {p for p, members in prefix_sinks.items() if len(members) >= 2}
+    for t in sinks:
+        if any(t == owner or t.startswith(owner + "_") for owner in opaque_owners):
+            defs.add(t)
+
 
 DTYPE = {
     'float64': dace.float64,
@@ -114,6 +229,12 @@ def add_descriptors(builder, sdfg: SDFG):
     non-transient ``dace.data.Scalar`` so callers pass plain ``int`` /
     ``float`` and the C++ codegen reads ``x`` directly.
     """
+    # Whole-derived-type-OBJECT pointer rebinds (``params_oce => v_params``,
+    # ``this % patch_3d => patch_3d``): collect the alias edges + the flattened
+    # member index so member accesses on an aliased object resolve to the real
+    # source descriptor and the (data-less) rebind stores are dropped at emit.
+    scan_object_aliases(builder)
+
     # Named Fortran symbols (nproma, nlev, ...).
     for v in builder.symbols.values():
         sdfg.add_symbol(v.fortran_name, dt(v.dtype))

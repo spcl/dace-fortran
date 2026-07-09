@@ -21,7 +21,7 @@ import re
 from dace import Memlet
 
 from dace_fortran.builder.access import (acc, build_memlet_index, get_access, indirect_host, rename_iters,
-                                         resolve_section_alias)
+                                         resolve_object_member, resolve_section_alias)
 
 # Identifier scan that EXCLUDES the imaginary-unit suffix of a complex
 # literal: in ``(0.0) + 1j * (0.0)`` (how the bridge renders a Fortran
@@ -231,6 +231,19 @@ def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect
     tokens = _ident_tokens(assign_node.expr)
     r_arr = tokens & set(builder.arrays)
     r_scl = tokens & set(builder.scalars)
+    # Whole-object rebind member tokens (``params_oce_a_veloc_v`` ->
+    # ``p_phys_param_a_veloc_v``) carry no descriptor under their alias name, so
+    # they miss the ``builder.arrays`` / ``builder.scalars`` classification above
+    # and would leak as free symbols.  Classify each by the KIND of its resolved
+    # real descriptor while keeping the alias token as the connector key -- the
+    # memlet + access node redirect to the real name via ``resolve_section_alias``
+    # / ``acc``, so the connector name stays cosmetic.
+    for tok in tokens - r_arr - r_scl:
+        real = resolve_object_member(builder, tok)
+        if real in builder.arrays:
+            r_arr.add(tok)
+        elif real in builder.scalars:
+            r_scl.add(tok)
     # A name can collide between ``builder.arrays`` and
     # ``builder.scalars`` when ``extract_vars``'s inlined-callee
     # local disambiguation didn't rename a SCALAR dummy whose short
@@ -324,7 +337,10 @@ def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect
 
     for sc in sorted(r_scl):
         r = acc(builder, state, sc)
-        state.add_edge(r, None, t, f"_in_{sc}", Memlet(data=sc, subset="0"))
+        # The connector keeps the (cosmetic) alias token; the memlet + access
+        # node bind the REAL descriptor when ``sc`` is an object-rebind member.
+        eff_sc = resolve_object_member(builder, sc) or sc
+        state.add_edge(r, None, t, f"_in_{sc}", Memlet(data=eff_sc, subset="0"))
 
     # ----------------------------------------------------------------
     # Pick the write-side access node for the tasklet's output edge.
@@ -360,6 +376,13 @@ def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect
     eff_target = target
     if v_target is not None and getattr(v_target, 'role', '') == 'section_alias':
         eff_target = v_target.view_source
+    else:
+        # Whole-object rebind member write: retarget onto the real flattened
+        # descriptor of the aliased object (``params_oce_a_veloc_v`` ->
+        # ``p_phys_param_a_veloc_v``) so the live update lands on real storage.
+        obj_real = resolve_object_member(builder, target)
+        if obj_real is not None:
+            eff_target = obj_real
     cache = getattr(state, '_hlfir_access', None)
     is_self_update = (target in r_scl) or (target in reads_by_name) \
                   or (eff_target in reads_by_name)
@@ -385,9 +408,9 @@ def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect
     else:
         w = acc(builder, state, eff_target)
 
-    if target in builder.scalars:
+    if target in builder.scalars or eff_target in builder.scalars:
         # Scalar target: no buildable index, subset is always element 0.
-        state.add_edge(t, f"_out_{target}", w, None, Memlet(data=target, subset="0"))
+        state.add_edge(t, f"_out_{target}", w, None, Memlet(data=eff_target, subset="0"))
     else:
         ac = get_access(accesses, target, is_read=False)
         eff_nm, eff_ac = resolve_section_alias(builder, target, ac)
@@ -413,6 +436,18 @@ def emit_scalar_assign(builder, state, target: str, value: str):
     in its setup block.
     """
     value = str(value)
+    # Whole-OBJECT pointer rebind store (``params_oce => v_params``,
+    # ``this % patch_3d => patch_3d``): the bridge lowered a ``TYPE(...),POINTER``
+    # association as a plain assign, but a pointer association moves NO SDFG data
+    # -- the alias's member accesses resolve to the real source descriptor
+    # (``resolve_object_member``) on their own.  Emitting the store would
+    # ``acc(target)`` a descriptor-less AccessNode that later crashes
+    # ``prune_unused_arrays``.  Drop it, gated on the target having been
+    # REGISTERED as a rebind-store target in ``scan_object_aliases`` -- NOT on a
+    # merely-absent descriptor, so a genuinely-missing numeric descriptor still
+    # falls through and surfaces loudly below.
+    if target in (vars(builder).get("object_alias_defs") or set()):
+        return
     # A bare ``?`` in the rendered value means the C++ AST builder hit
     # ``buildIndexExpr`` / ``leafExpr`` for an operand it could not
     # trace -- a designate chain past ``kBuildIndexExprDepth``, a
@@ -519,8 +554,8 @@ def emit_scalar_assign(builder, state, target: str, value: str):
     # ``nm != target`` was wrong  --  ``i = i + 1`` genuinely needs a read
     # edge on the target itself.
     reads = [
-        nm for nm in sorted(tokens, key=len, reverse=True)
-        if nm in builder.scalars or _is_len1_scalar_view(builder, nm)
+        nm for nm in sorted(tokens, key=len, reverse=True) if nm in builder.scalars
+        or _is_len1_scalar_view(builder, nm) or resolve_object_member(builder, nm) in builder.scalars
     ]
 
     code = value
@@ -533,7 +568,11 @@ def emit_scalar_assign(builder, state, target: str, value: str):
 
     for nm in reads:
         r = acc(builder, state, nm)
-        state.add_edge(r, None, t, f"_in_{nm}", Memlet(data=nm, subset='0'))
+        # A whole-object rebind scalar member (``params_oce_a_veloc_v_back``)
+        # binds its real flattened descriptor; ``acc`` already redirected the
+        # node, so the memlet must name the real descriptor too.
+        eff_nm = resolve_object_member(builder, nm) or nm
+        state.add_edge(r, None, t, f"_in_{nm}", Memlet(data=eff_nm, subset='0'))
 
     # Self-update (``i = i + 1``): the read and write need DIFFERENT
     # access nodes so the state remains a DAG  --  ``Access(i_read) ->

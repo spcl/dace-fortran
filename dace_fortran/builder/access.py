@@ -68,6 +68,50 @@ def iter_view_dim_map(view_dim_map):
             yield src_dim, slot, None
 
 
+def resolve_object_member(builder, name: str):
+    """Real flat descriptor for a member access on a whole-OBJECT pointer-rebind
+    alias, or ``None`` when ``name`` is not such an access.
+
+    A whole-derived-type rebind (``params_oce => v_params``) makes
+    ``params_oce`` the SAME storage as ``v_params``, so ``params_oce % a_veloc_v``
+    (flattened to ``params_oce_a_veloc_v``) is the aliased object's ``a_veloc_v``
+    member.  Resolve the base transitively through ``builder.object_aliases``
+    (``params_oce -> v_params``) and:
+
+    * return ``<src>_<member>`` when the source's own flat companion exists, else
+    * borrow the UNIQUELY flattened member of the same derived type from the
+      bridge flatten plan (``v_params % a_veloc_v`` was never materialised, but
+      ``t_ho_params`` flattened once under ``p_phys_param`` ->
+      ``p_phys_param_a_veloc_v``).
+
+    Returns ``None`` when the base is not an object alias or the member cannot be
+    resolved unambiguously  --  the caller then keeps the original name so a
+    genuinely-missing numeric descriptor still surfaces loudly.
+    """
+    if name in builder.arrays or name in builder.scalars or name in builder.symbols:
+        return None
+    aliases = vars(builder).get("object_aliases") or {}
+    if not aliases:
+        return None
+    for base in sorted(aliases, key=len, reverse=True):
+        if name == base or not name.startswith(base + "_"):
+            continue
+        member = name[len(base) + 1:]
+        src = base
+        seen = {src}
+        while src in aliases and aliases[src] not in seen:
+            src = aliases[src]
+            seen.add(src)
+        cand = f"{src}_{member}"
+        if cand in builder.arrays or cand in builder.scalars:
+            return cand
+        hit = (vars(builder).get("object_alias_flat_members") or {}).get(member)
+        if hit is not None and (hit in builder.arrays or hit in builder.scalars):
+            return hit
+        return None
+    return None
+
+
 def resolve_section_alias(builder, array_name: str, access):
     """If ``array_name`` is a ``section_alias`` dummy (trivial section
     slice  --  full-range triplets + scalar drops only), return
@@ -82,6 +126,13 @@ def resolve_section_alias(builder, array_name: str, access):
     Splicing yields a Fortran-1-based index list that
     ``build_memlet_index`` then offsets uniformly.
     """
+    # Whole-object rebind member (``params_oce_a_veloc_v`` ->
+    # ``p_phys_param_a_veloc_v``): a pure RENAME onto the real flattened storage
+    # of the same derived type -- the indices are unchanged (same rank / shape),
+    # only the descriptor name and its ``offset_<arr>_d<i>`` symbols differ.
+    obj_real = resolve_object_member(builder, array_name)
+    if obj_real is not None:
+        return obj_real, access
     v = builder.arrays.get(array_name)
     if v is None or getattr(v, 'role', '') != 'section_alias':
         return array_name, access
@@ -194,6 +245,12 @@ def acc(builder, state, name: str):
     v_alias = builder.arrays.get(name)
     if v_alias is not None and getattr(v_alias, 'role', '') == 'section_alias':
         return acc(builder, state, v_alias.view_source)
+    # Whole-object rebind member: route the access node onto the real flattened
+    # descriptor of the aliased object (``params_oce_a_veloc_v`` has no
+    # descriptor of its own; ``p_phys_param_a_veloc_v`` is the real storage).
+    obj_real = resolve_object_member(builder, name)
+    if obj_real is not None:
+        return acc(builder, state, obj_real)
     cache = getattr(state, '_hlfir_access', None)
     if cache is None:
         cache = {}
