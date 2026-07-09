@@ -169,9 +169,18 @@ def test_differential_driver_injected():
     # is emitted BEFORE the renamed reference body.
     assert "USE mo_solve_nh_diff" in patched
     assert "CALL clone_state_indep_prog(p_nh, nh_ref__dace)" in patched
+    assert "CALL clone_prepadv_indep(prep_adv, prep_ref__dace)" in patched
     assert f"CALL {SOLVE_NH_WRAPPER_NAME}(" in patched
     assert "CALL solve_nh_ref(nh_ref__dace," in patched
+    # The per-call compare covers prog(nnew) AND prog(nnow) (the reference
+    # never assigns nnow -- a nnow diff means the DUT stomped the time level
+    # the next substep reads) + prep_adv + the full diag, and closes with the
+    # greppable TOTAL line (0 == bit-exact).
     assert "CALL compare_prog_nnew(p_nh, nh_ref__dace, nnew," in patched
+    assert "CALL compare_prog_nnew(p_nh, nh_ref__dace, nnow," in patched
+    assert "CALL compare_prepadv(prep_adv, prep_ref__dace," in patched
+    assert "CALL compare_diag(p_nh % diag, nh_ref__dace % diag," in patched
+    assert "[diff] solve_nh TOTAL: " in patched
     assert patched.index("CALL clone_state_indep_prog(p_nh, nh_ref__dace)") < patched.index("SUBROUTINE solve_nh_ref")
 
     # The file GROWS by ~the injected driver (USE helpers + local decls +

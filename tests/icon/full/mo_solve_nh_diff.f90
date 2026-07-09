@@ -11,12 +11,26 @@
 !> (``dst = src``) only shallow-copies the pointers -- both operands would then
 !> alias the SAME storage and the two runs would clobber each other.  The clone
 !> routines therefore allocate FRESH targets and copy the data (a genuine deep
-!> copy), leaving the read-only geometry (``metrics``/``int``/``patch``) and the
-!> write-before-read ``diag`` scratch shared.
+!> copy), leaving the read-only geometry (``metrics``/``ref``/``int``/``patch``)
+!> shared (audited: solve_nh + velocity_tendencies write none of it).
 !>
-!> ``solve_nh`` never assigns ``prog(nnow)`` (verified), so a clone with an
-!> independent ``prog`` is a sufficient reference input; ``prep_adv`` IS an
-!> accumulator (``vn_traj = vn_traj + ...``), so it is cloned as well.
+!> Mutated-state audit against the real ``solve_nh`` (mo_solve_nonhydro.f90) +
+!> its ``velocity_tendencies`` callback (mo_velocity_advection.f90):
+!>
+!>   * ``prog(nnew)``: vn / w / rho / exner / theta_v  (all five assigned);
+!>   * ``prog(nnow)``: NEVER assigned (verified: no LHS reference) -- cloned
+!>     anyway so the compare can catch a DUT that erroneously stomps it;
+!>   * ``prog%tracer`` / ``prog%tke``: never referenced by solve_nh;
+!>   * ``diag`` POINTER fields: exner_pr, mass_fl_e, mass_fl_e_sv, rho_ic,
+!>     theta_v_ic, vt, vn_ie, w_concorr_c, grf_bdy_mflx, exner_dyn_incr,
+!>     ddt_vn_{dyn,dmp,adv,cor,pgr,phd,iau,ray,grf}, the vertical-nesting
+!>     ``*_int`` slots, ``vn_ie_ubc`` (velocity callback), and the rank-4
+!>     ddt_vn_apc_pc / ddt_vn_cor_pc / ddt_w_adv_pc -- all cloned + compared;
+!>   * ``diag%max_vcfl_dyn`` (non-pointer scalar): a MAX-accumulator the
+!>     velocity callback carries ACROSS substeps -- value-copied by the shallow
+!>     ``dst = src`` and compared bit-exactly in ``compare_diag``;
+!>   * ``prep_adv``: an accumulator (``vn_traj = vn_traj + ...``), all four
+!>     fields cloned + compared.
 !>
 !> The module ``use``s only the ICON type modules, so it compiles unchanged
 !> against both the pruned single-TU types (standalone e2e) and ICON's real
@@ -163,6 +177,24 @@ contains
     end if
   end subroutine cmp_ptr4
 
+  !> BIT-EXACT comparison of two non-pointer scalars via raw IEEE bit patterns
+  !> (``diag%max_vcfl_dyn``: the vertical-CFL MAX-accumulator the velocity
+  !> callback carries across substeps -- ICON's substep adaptation reads it, so
+  !> a DUT/REF divergence here changes downstream control flow).
+  subroutine cmp_scalar(x, y, name, ndiff, maxabs)
+    real(wp), intent(in)      :: x, y
+    character(*), intent(in)  :: name
+    integer, intent(inout)    :: ndiff
+    real(wp), intent(inout)   :: maxabs
+    real(wp) :: d
+    if (transfer(x, 1_i8) /= transfer(y, 1_i8)) then
+      write (error_unit, '(A)') "  DIFF "//trim(name)//": scalar differs (bit-level)"
+      ndiff = ndiff + 1
+      d = abs(x - y)
+      if (d > maxabs) maxabs = d
+    end if
+  end subroutine cmp_scalar
+
   !> Deep-copy EVERY POINTER field of a ``t_nh_diag`` into ``dst`` so the two
   !> solves own independent diagnostic storage.  The shallow ``dst = src`` in the
   !> caller aliases every ``diag`` pointer; this re-points each to a fresh copy.
@@ -171,9 +203,17 @@ contains
   !> comparing ``diag`` (via ``compare_diag``) is what catches a velocity-callback
   !> divergence.  ``clone_ptr3`` / ``clone_ptr4`` no-op on unassociated pointers,
   !> so the ``ddt_vn_*`` fields left ``=> NULL()`` are handled safely.
+  !>
+  !> ``d`` is INTENT(INOUT), never INTENT(OUT): the caller's shallow ``dst = src``
+  !> has already value-copied every NON-pointer component, and INTENT(OUT) would
+  !> default-reinitialize them at entry -- zeroing the ``max_vcfl_dyn``
+  !> MAX-accumulator and flipping every ``ddt_vn_*_is_associated`` guard back to
+  !> .FALSE., which makes the reference run SKIP the ``ddt_vn_*`` stores the DUT
+  !> performs (a false diff).  This routine therefore only re-points POINTERs
+  !> and relies on the prior shallow copy for everything else.
   subroutine clone_diag_indep(s, d)
-    type(t_nh_diag), intent(in)  :: s
-    type(t_nh_diag), intent(out) :: d
+    type(t_nh_diag), intent(in)    :: s
+    type(t_nh_diag), intent(inout) :: d
     ! rank-3 fields
     call clone_ptr3(d%exner_pr,       s%exner_pr)
     call clone_ptr3(d%mass_fl_e,      s%mass_fl_e)
@@ -322,9 +362,11 @@ contains
     call free_ptr3(dst%vn_traj)
   end subroutine free_prepadv_clone
 
-  !> Compare the prognostic output of the two runs at time level ``nnew``
+  !> Compare the prognostic state of the two runs at time level ``nnew``
   !> (``vn``/``w``/``rho``/``theta_v``/``exner``).  ``ndiff`` returns the total
-  !> differing-element count; 0 == bit-exact.
+  !> differing-element count; 0 == bit-exact.  Also called with ``nnow`` by the
+  !> differential driver: solve_nh never assigns ``prog(nnow)`` (verified), so
+  !> any nnow diff means the DUT stomped state the reference dycore preserves.
   subroutine compare_prog_nnew(a, b, nnew, label, ndiff)
     type(t_nh_state), intent(in) :: a, b
     integer, intent(in)          :: nnew
@@ -339,7 +381,7 @@ contains
     call cmp_ptr3(a%prog(nnew)%theta_v, b%prog(nnew)%theta_v, label//":theta_v", ndiff, mx)
     call cmp_ptr3(a%prog(nnew)%exner,   b%prog(nnew)%exner,   label//":exner",   ndiff, mx)
     if (ndiff == 0) then
-      write (error_unit, '(A)') "  [diff] "//trim(label)//": prog(nnew) BIT-EXACT {vn,w,rho,theta_v,exner}"
+      write (error_unit, '(A)') "  [diff] "//trim(label)//": prog BIT-EXACT {vn,w,rho,theta_v,exner}"
     else
       write (error_unit, '(A,I0,A,ES12.5)') "  [diff] "//trim(label)//": ", ndiff, &
         " prognostic elements differ; max|delta|=", mx
@@ -366,12 +408,14 @@ contains
     end if
   end subroutine compare_prepadv
 
-  !> Compare EVERY POINTER field of the two runs' ``t_nh_diag`` bit-for-bit.
-  !> The velocity callback writes ``ddt_vn_apc_pc`` / ``ddt_vn_cor_pc`` /
-  !> ``ddt_w_adv_pc`` and solve_nh writes many of the rank-3 fields, so a
-  !> divergence in the velocity SDFG (or any diag-touching lowering) surfaces
-  !> here.  ``cmp_ptr3`` / ``cmp_ptr4`` skip fields unassociated in BOTH runs, so
-  !> the ``=> NULL()`` ``ddt_vn_*`` fields contribute nothing when unused.
+  !> Compare EVERY POINTER field of the two runs' ``t_nh_diag`` bit-for-bit,
+  !> plus the mutated non-pointer scalar ``max_vcfl_dyn`` (the velocity
+  !> callback's cross-substep MAX-accumulator).  The velocity callback writes
+  !> ``ddt_vn_apc_pc`` / ``ddt_vn_cor_pc`` / ``ddt_w_adv_pc`` and solve_nh
+  !> writes many of the rank-3 fields, so a divergence in the velocity SDFG
+  !> (or any diag-touching lowering) surfaces here.  ``cmp_ptr3`` / ``cmp_ptr4``
+  !> skip fields unassociated in BOTH runs, so the ``=> NULL()`` ``ddt_vn_*``
+  !> fields contribute nothing when unused.
   subroutine compare_diag(a, b, label, ndiff)
     type(t_nh_diag), intent(in) :: a, b
     character(*), intent(in)    :: label
@@ -421,6 +465,7 @@ contains
     call cmp_ptr4(a%ddt_vn_apc_pc,  b%ddt_vn_apc_pc,  label//":ddt_vn_apc_pc",  ndiff, mx)
     call cmp_ptr4(a%ddt_vn_cor_pc,  b%ddt_vn_cor_pc,  label//":ddt_vn_cor_pc",  ndiff, mx)
     call cmp_ptr4(a%ddt_w_adv_pc,   b%ddt_w_adv_pc,   label//":ddt_w_adv_pc",   ndiff, mx)
+    call cmp_scalar(a%max_vcfl_dyn, b%max_vcfl_dyn,   label//":max_vcfl_dyn",   ndiff, mx)
     if (ndiff == 0) then
       write (error_unit, '(A)') "  [diff] "//trim(label)//": diag BIT-EXACT (all fields)"
     else

@@ -24,6 +24,13 @@ re-points every ``diag`` pointer to a fresh target) so the velocity callback's
 ``ddt_vn_apc_pc`` / ``ddt_vn_cor_pc`` / ``ddt_w_adv_pc`` writes are compared too;
 the read-only geometry (``metrics``/``ref``/``patch``/``int``) stays shared
 (solve_nh writes none of it).
+
+The per-call compare covers prog(nnew) + prog(nnow) + prep_adv + the full diag
+(incl. the ``max_vcfl_dyn`` scalar the velocity callback MAX-accumulates across
+substeps).  prog(nnow) is compared even though the reference never assigns it:
+a DUT lowering that stomps the nnow time level would corrupt the NEXT substep
+while leaving the nnew compare green, so it must be pinned separately.  A
+single greppable TOTAL line closes each call; 0 == bit-exact, no tolerances.
 """
 import re
 from pathlib import Path
@@ -34,11 +41,13 @@ SOLVE_NH_WRAPPER_NAME = "solve_nh_dace_icon"
 
 #: USE statements the differential driver needs, inserted right after the
 #: SUBROUTINE header (before IMPLICIT NONE): the 1-byte ``c_bool`` for the
-#: ``LOGICAL(x, kind=1)`` casts at the DUT call, plus the deep-copy / compare
-#: helpers.  ``t_nh_state`` / ``t_prepare_adv`` are already in scope via the
-#: original's own ``USE mo_nonhydro_types`` / ``mo_prepadv_types``.
+#: ``LOGICAL(x, kind=1)`` casts at the DUT call, ``error_unit`` for the per-call
+#: TOTAL line, plus the deep-copy / compare helpers.  ``t_nh_state`` /
+#: ``t_prepare_adv`` are already in scope via the original's own
+#: ``USE mo_nonhydro_types`` / ``mo_prepadv_types``.
 _DIFF_USE = [
     "    USE iso_c_binding, ONLY: c_bool",
+    "    USE iso_fortran_env, ONLY: error_unit",
     "    USE mo_solve_nh_diff, ONLY: clone_state_indep_prog, free_state_clone, &",
     "                                clone_prepadv_indep, free_prepadv_clone, &",
     "                                compare_prog_nnew, compare_prepadv, compare_diag",
@@ -55,7 +64,8 @@ _DIFF_BLOCK = """\
     ! wrapper interface.  ``solve_nh_ref`` is the original body, renamed.
     TYPE(t_nh_state)    :: nh_ref__dace
     TYPE(t_prepare_adv) :: prep_ref__dace
-    INTEGER             :: ndiff_prog__dace, ndiff_prep__dace, ndiff_diag__dace
+    INTEGER             :: ndiff_prog__dace, ndiff_prognow__dace, ndiff_prep__dace, ndiff_diag__dace
+    INTEGER             :: ndiff_total__dace
     INTERFACE
       SUBROUTINE solve_nh_dace_icon(p_nh, p_patch, p_int, prep_adv, &
                                     nnow, nnew, &
@@ -107,10 +117,20 @@ _DIFF_BLOCK = """\
     ! Bit-exact comparison of the prognostic output + transport-prep fluxes +
     ! the FULL diagnostic state (the diff's clone deep-copies every diag field,
     ! so a velocity-callback divergence -- ddt_vn_apc_pc / ddt_vn_cor_pc /
-    ! ddt_w_adv_pc -- surfaces in compare_diag).
+    ! ddt_w_adv_pc -- surfaces in compare_diag, which also checks the
+    ! max_vcfl_dyn scalar that callback MAX-accumulates across substeps).
+    ! prog(nnow) is compared too: the reference never assigns it (verified), so
+    ! any nnow diff means the DUT stomped the time level the NEXT substep reads
+    ! -- a corruption the nnew compare alone cannot see.
     CALL compare_prog_nnew(p_nh, nh_ref__dace, nnew, 'solve_nh', ndiff_prog__dace)
+    CALL compare_prog_nnew(p_nh, nh_ref__dace, nnow, 'solve_nh:nnow', ndiff_prognow__dace)
     CALL compare_prepadv(prep_adv, prep_ref__dace, 'solve_nh', ndiff_prep__dace)
     CALL compare_diag(p_nh % diag, nh_ref__dace % diag, 'solve_nh', ndiff_diag__dace)
+
+    ! One greppable line per call: 0 == bit-exact across everything compared.
+    ndiff_total__dace = ndiff_prog__dace + ndiff_prognow__dace + ndiff_prep__dace + ndiff_diag__dace
+    WRITE (error_unit, '(A,I0,A)') "  [diff] solve_nh TOTAL: ", ndiff_total__dace, &
+      " differing elements (0 == bit-exact)"
 
     CALL free_state_clone(nh_ref__dace)
     CALL free_prepadv_clone(prep_ref__dace)
