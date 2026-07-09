@@ -435,6 +435,18 @@ def build_wrapper_head(frozen: FrozenSignature,
     outer_dummy_set = set(outer_dummy_names)
     enum_args = _enum_args(iface, enum_maps or {})
 
+    # An arg the ORIGINAL entry declared POINTER (e.g. ICON ocean
+    # ``REAL(8), POINTER, INTENT(INOUT) :: vn(:,:,:)``) carries a presence
+    # guard ``<name>_allocated`` in the SDFG free symbols, and its presence
+    # fold is emitted as ``merge(1, 0, associated(<name>))`` -- legal ONLY on a
+    # POINTER dummy.  Declaring such an arg plain ``target`` makes gfortran
+    # reject ``associated`` (``'pointer' argument ... must be a POINTER``), so
+    # mirror the pointer attribute.  ``c_loc`` accepts an associated POINTER, so
+    # the wrapper body is unaffected.  This matches the presence fold's own
+    # pointer-default (``arg_is_pointer_local.get(base, True)``).
+    _free_syms = set(frozen.free_symbols)
+    ptr_outer_args = {a.name for a in iface.args if f"{a.name}_allocated" in _free_syms}
+
     # An enum-mapped arg comes through ``rewrite_string_enum_to_integer``
     # as an ``INTEGER, INTENT(IN)`` dummy on the SDFG side, but the
     # caller's surface is still ``CHARACTER(LEN=N)`` -- the binding's
@@ -450,8 +462,9 @@ def build_wrapper_head(frozen: FrozenSignature,
             return (f"    character(len={max_len}),"
                     f" intent({a.intent or 'in'}) :: {a.name}")
         opt = ", optional" if getattr(a, 'optional', False) else ""
+        attr = "pointer" if a.name in ptr_outer_args else "target"
         return (f"    {a.fortran_type},"
-                f" intent({a.intent or 'inout'}), target{opt} :: {a.name}"
+                f" intent({a.intent or 'inout'}), {attr}{opt} :: {a.name}"
                 f"{_dim_spec(a.shape, {d.lower() for d in outer_dummy_names})}")
 
     outer_dummy_decls = "\n".join(_outer_decl(a) for a in iface.args)
