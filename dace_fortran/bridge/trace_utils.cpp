@@ -863,10 +863,17 @@ std::vector<std::optional<int64_t>> declareLowerBounds(hlfir::DeclareOp decl) {
   if (si.kind == ShapeOperandInfo::Shape) {
     // Plain fir.shape: every dim defaults to lbound=1.
     lbs.assign(si.rank, std::optional<int64_t>(1));
-  } else if (si.kind == ShapeOperandInfo::ShapeShift) {
+  } else if (si.kind == ShapeOperandInfo::ShapeShift || si.kind == ShapeOperandInfo::Shift) {
+    // fir.shape_shift (explicit-shape array, lb+extent) AND fir.shift
+    // (assumed-shape dummy with an explicit lower bound, ``a(0:)``) both
+    // carry per-dim lower bounds; classifyShapeOperand already extracts
+    // them into ``si.lbs``.  Trace each to its constant.  Dropping the
+    // fir.shift bound here defeated the assumed-shape alias offset rebase
+    // (expressions.cpp) -- the outer array's declared lb was lost and the
+    // aliased access defaulted to lbound=1, an off-by-(lb-1) read.
     for (auto lb : si.lbs) lbs.push_back(traceConstInt(lb));
   }
-  // fir.shift / no shape: leave empty (caller default), as before.
+  // no shape operand (pure box, runtime bounds): leave empty (caller default).
   return lbs;
 }
 
