@@ -3500,6 +3500,32 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       nodes.push_back(std::move(a));
       continue;
     }
+    // Result-producing HLFIR compute statements the bridge does not yet
+    // lower.  ``hlfir.where`` (masked WHERE assignment) and ``hlfir.forall``
+    // (FORALL) carry their assignments in nested regions this walker never
+    // recurses into; a bare ``hlfir.region_assign`` is the masked / forall
+    // element assign itself.  The vector-subscript SCATTER form of
+    // region_assign (LHS ``hlfir.elemental_addr``, Fortran ``d(cols) = src``)
+    // is rewritten into an explicit DO loop by the pipeline pass
+    // ``hlfir-expand-vector-subscript-scatter`` BEFORE AST extraction, so any
+    // op of these kinds that reaches here is a genuinely unhandled compute
+    // statement.  Falling through would SILENTLY DROP the assignment and
+    // miscompile the kernel to a wrong numerical result with no error
+    // (verified: ``WHERE (mask) a = b`` otherwise builds an SDFG with zero
+    // tasklets).  Throw a located diagnostic instead.  This is deliberately
+    // narrow: every OTHER unhandled op (pure-value producers, declares,
+    // ``hlfir.destroy`` temp cleanups, terminators, ops already consumed by an
+    // earlier handler) keeps falling through silently, so the passing corpus
+    // is unaffected.
+    if (mlir::isa<hlfir::WhereOp, hlfir::ForallOp, hlfir::RegionAssignOp>(&op)) {
+      std::string locStr;
+      llvm::raw_string_ostream locOS(locStr);
+      op.getLoc().print(locOS);
+      throw std::runtime_error("buildAST: unhandled compute statement '" + op.getName().getStringRef().str() +
+                               "' (hlfir.where / hlfir.forall / masked region_assign not lowered) at " +
+                               (locStr.empty() ? "<unknown loc>" : locStr) +
+                               "  --  this would silently drop the assignment and miscompile the kernel.");
+    }
   }
   return nodes;
 }
