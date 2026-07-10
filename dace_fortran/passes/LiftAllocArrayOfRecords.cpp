@@ -513,8 +513,19 @@ static mlir::Value buildLiftedAccess(mlir::OpBuilder& b, hlfir::DesignateOp acce
     unsigned accessCursor = 0;
     for (unsigned k = 0; k < sliceTriplets.size(); ++k) {
       if (sliceTriplets[k]) {
-        // Triplet  --  consume one access index.
+        // Triplet  --  consume one access index.  The access index is
+        // 1-based into the VIEW; the storage index is
+        // ``triplet_lo + (access - 1)``.  Every AoR slice rebind in the
+        // corpus uses a unit lower bound (``storage(:, :, jg)``), so the
+        // access index passes straight through.  A KNOWN non-unit lower
+        // bound would need a ``+ (lo - 1)`` rebase that isn't emitted
+        // here; rather than silently address the wrong element, bail so
+        // the access falls back to hlfir-rewrite-pointer-assigns.  A
+        // symbolic / unknown lower bound keeps the old unit assumption
+        // (unchanged behaviour).
         if (accessCursor >= accessIdxs.size()) return {};  // Shape mismatch: bail.
+        auto tripLo = traceConstInt(sliceIdxs[cursor]);
+        if (tripLo && *tripLo != 1) return {};  // non-unit slice lower bound: unsupported, fall back.
         newIdxs.push_back(accessIdxs[accessCursor++]);
         cursor += 3;
       } else {
