@@ -219,3 +219,145 @@ def test_outer_marshal_leaf_order_equals_inner_shim_slot_order(tmp_path):
     # The pointer-to-record handle is absent from BOTH (skipped on both sides).
     assert not any("comm_pat" in leaf for leaf in outer + inner), \
         "pointer-to-record handle leaked into a leaf sequence"
+
+
+# ---------------------------------------------------------------------------
+# Regression: concrete-NEGATIVE folded ``_lb`` slot for a callback member
+# (commit 9bf289a -- ICON ``end_block(-10)`` refinement-control pattern).
+#
+# A deferred-shape ALLOCATABLE struct member accessed at a literal negative
+# index (ICON's refinement-control arrays, e.g. ``edges%end_block(-10, jb)``)
+# has its lower bound STATICALLY INFERRED to that literal by the bridge
+# (``inferLowerBoundsFromLiteralAccesses``), so the outer builder folds
+# ``offset_<member>_d0`` to the concrete literal ``-10`` (not a free symbol).
+# The inner ``bind_c_shim`` still mints one ``<flat>_lb<i>`` slot per dim of a
+# dynamic member regardless, so the per-member-SoA marshal MUST forward that
+# folded literal as the member's dim-0 ``_lb`` slot -- otherwise the outer
+# emits one fewer slot than the inner shim reads (slot-count desync, the
+# capstone ``test_callback_abi_aligns_slot_for_slot_with_inner_shim`` failure
+# 925 vs 921).  Only a 1-based value-record leaf (offset folds to ``1``) stays
+# extent-only.  Build + string-inspect (no run) so it stays fast.
+# ---------------------------------------------------------------------------
+
+_NEG_LB_TYPES = """
+  type :: t_edges
+    integer(c_int), allocatable :: end_block(:, :)
+  end type
+  type :: t_patch
+    integer(c_int) :: nblks_e
+    type(t_edges) :: edges
+  end type
+"""
+
+_NEG_LB_INNER = f"""
+module m_neglb_inner
+  use iso_c_binding
+  implicit none
+{_NEG_LB_TYPES}
+contains
+  subroutine velo(p, je, jb, out)
+    type(t_patch), intent(in) :: p
+    integer(c_int), intent(in) :: je, jb
+    real(c_double), intent(out) :: out(4)
+    out(1) = real(p % edges % end_block(-10, jb), c_double) + real(p % nblks_e, c_double)
+  end subroutine
+end module
+"""
+
+_NEG_LB_OUTER = f"""
+module m_neglb_outer
+  use iso_c_binding
+  implicit none
+{_NEG_LB_TYPES}
+contains
+  subroutine driver(p, je, jb, acc)
+    type(t_patch), intent(in) :: p
+    integer(c_int), intent(in) :: je, jb
+    real(c_double), intent(out) :: acc(4)
+    interface
+      subroutine velo(pp, je, jb, o)
+        import :: t_patch, c_int, c_double
+        type(t_patch), intent(in) :: pp
+        integer(c_int), intent(in) :: je, jb
+        real(c_double), intent(out) :: o(*)
+      end subroutine
+    end interface
+    ! The OUTER's own literal-negative access folds end_block's dim-1 lower
+    ! bound to -10 in the outer builder, so the marshal sees offset<1.
+    acc(1) = real(p % edges % end_block(-10, jb), c_double) + real(p % nblks_e, c_double)
+    call velo(p, je, jb, acc)
+  end subroutine
+end module
+"""
+
+_NEG_LB_CALLBACK_ARGS = (
+    Arg(kind="aos", intent="in", c_abi="per_member_soa"),  # p
+    Arg(kind="scalar", dtype="int32", intent="in"),  # je
+    Arg(kind="scalar", dtype="int32", intent="in"),  # jb
+    Arg(kind="array", dtype="float64", intent="inout"),  # out / acc
+)
+
+
+def _neg_lb_inner_shim_slots(tmp_path):
+    """The INNER velo ``bind_c_shim`` header slot list, in order."""
+    clear_external_registry()
+    try:
+        builder = build_sdfg(_NEG_LB_INNER, tmp_path / "in", name="velo", entry="m_neglb_inner::velo")
+        builder.build()
+        iface = build_auto_interface(builder._fortran_interface_raw, "velo")
+        shim = emit_bind_c_shim(iface, str(tmp_path / "velo_c.f90")).read_text()
+        hdr = re.search(r"subroutine\s+velo_c\s*\(([^)]*)\)", shim, re.S)
+        return [a.strip() for a in hdr.group(1).replace("&", " ").split(",") if a.strip()]
+    finally:
+        clear_external_registry()
+
+
+def _neg_lb_outer_marshal_args(tmp_path):
+    """The OUTER driver's marshalled ``velo(...)`` ExternalCall argument list."""
+    clear_external_registry()
+    keep_external("velo", args=_NEG_LB_CALLBACK_ARGS, dynamic_extents_abi=True)
+    try:
+        sdfg = build_sdfg(_NEG_LB_OUTER, tmp_path / "out", name="driver", entry="m_neglb_outer::driver").build()
+        sdfg.validate()
+        node = next((n for st in sdfg.all_states() for n in st.nodes() if isinstance(n, ExternalCall)), None)
+        assert node is not None, "outer driver SDFG emitted no velo ExternalCall"
+        call = re.search(r"\bvelo\(([^;]*)\)\s*;", node.body)
+        assert call, f"velo call not found in body:\n{node.body}"
+        return [a.strip() for a in call.group(1).split(",")]
+    finally:
+        clear_external_registry()
+
+
+def test_neg_lbound_member_lb_slot_marshalled_with_folded_literal(tmp_path):
+    """A neg-folded member lower bound is marshalled as its ``_lb`` slot.
+
+    The shared ``t_edges%end_block(:, :)`` member is a deferred-shape
+    ALLOCATABLE accessed at ``end_block(-10, jb)``, so the outer builder folds
+    ``offset_p_edges_end_block_d0`` to the concrete literal ``-10``.  Two
+    facets, both guarding commit 9bf289a:
+
+    * LITERAL -- the outer per-member-SoA marshal must forward that folded
+      lower bound as the member's dim-0 ``_lb`` slot, spelled ``(int)(-10)``.
+      The pre-fix marshal skipped every non-free (folded) offset, dropping it.
+
+    * COUNT PARITY -- with the ``_lb`` slot forwarded the outer call has EXACTLY
+      as many args as the inner shim has slots; a dropped ``_lb`` makes the
+      outer one short (the capstone's 925-vs-921 slot-count desync at toy
+      scale)."""
+    inner_slots = _neg_lb_inner_shim_slots(tmp_path)
+    outer_args = _neg_lb_outer_marshal_args(tmp_path)
+
+    # Precondition: the inner shim mints a dim-0 ``_lb`` slot for the dynamic
+    # ``end_block`` member (one per dim, ahead of each extent).
+    assert "p_edges_end_block_lb0" in inner_slots, \
+        f"inner shim did not mint end_block dim-0 lb slot:\n{inner_slots}"
+
+    # LITERAL: the folded -10 lower bound rides as the member's dim-0 ``_lb``
+    # slot in the marshalled call.
+    assert "(int)(-10)" in outer_args, \
+        f"neg-folded end_block lower bound not marshalled as an _lb slot:\n{outer_args}"
+
+    # COUNT PARITY: outer marshal lines up slot-for-slot with the inner shim.
+    assert len(outer_args) == len(inner_slots), (
+        f"neg-lbound _lb slot desync: inner shim {len(inner_slots)} slots vs "
+        f"outer marshal {len(outer_args)} args\n  inner={inner_slots}\n  outer={outer_args}")

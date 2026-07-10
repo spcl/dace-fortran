@@ -650,3 +650,114 @@ end module
     assert 's%prog(nnow)%rho = s_prog_nnow_rho' in shim
     assert 's%prog(nnew)%rho = s_prog_nnew_rho' in shim
     assert __import__('pathlib').Path(lib.so_path).is_file()
+
+
+@pytest.mark.parametrize("jg, kmatch, fires", [(2, 7, True), (2, 8, False), (1, 5, True)])
+def test_dbuf_unroll_spills_tracked_istep_into_nonconstant_if(tmp_path, jg, kmatch, fires):
+    """ICON ``solve_nh`` ``exner_dyn_incr`` shape: inside the unrolled
+    ``DO istep = 1, 2`` double-buffer loop a NON-CONSTANT ``fir.if`` reads the
+    tracked induction slot ``istep`` in its condition
+    (``istep == 2 .AND. ndyn(jg) == kmatch`` -- data-dependent via the array
+    read).  ``EliminateDoubleBufferToggle`` unrolls + substitutes ``istep`` per
+    copy for directly-walked ops, but a data-dependent ``fir.if`` falls back to
+    a bulk ``b.clone()`` that copies nested ``fir.load %istep`` verbatim.
+
+    Before commit 32ca718 that read a slot the pass never writes: ``istep``
+    surfaced as an UNPOPULATED free symbol passed uninitialised, so the
+    ``istep == 2`` guard never fired and the DUT dropped the istep-2 update
+    (``+100``).  ``spillTrackedSlots`` now materialises each tracked slot's
+    substituted value back into its memref before the structural clone, so the
+    bulk-cloned nested loads read the right value.
+
+    Asserts (a) ``istep`` is fully eliminated from the SDFG free symbols (no
+    stray unpopulated symbol), and (b) the run is BIT-EXACT vs gfortran with the
+    ``istep == 2`` branch firing exactly when ``ndyn(jg) == kmatch``."""
+    src = """
+module dbuf_istep_mod
+  implicit none
+  type t_prog
+    real(kind=8) :: w(2, 3)
+  end type t_prog
+  type t_state
+    type(t_prog), allocatable :: prog(:)
+  end type t_state
+contains
+  subroutine kernel(s, nnow, nnew, out, ndyn, jg, kmatch)
+    type(t_state), intent(inout) :: s
+    integer, intent(in)          :: nnow, nnew, jg, kmatch
+    integer, intent(in)          :: ndyn(:)
+    real(kind=8), intent(inout)  :: out(2, 3)
+    integer :: i, j, istep, nvar
+    do istep = 1, 2
+      if (istep == 1) then
+        nvar = nnow
+      else
+        nvar = nnew
+      end if
+      do j = 1, 3
+        do i = 1, 2
+          out(i, j) = s%prog(nnow)%w(i, j) + s%prog(nvar)%w(i, j)
+        end do
+      end do
+      ! Non-constant fir.if (array-read condition) that also reads the tracked
+      ! istep slot -- the exner_dyn_incr istep-2 guard.
+      if (istep == 2 .and. ndyn(jg) == kmatch) then
+        do j = 1, 3
+          do i = 1, 2
+            out(i, j) = out(i, j) + 100.0d0
+          end do
+        end do
+      end if
+    end do
+  end subroutine
+end module
+
+subroutine wrapper(w_now, w_new, out, nnow, nnew, ndyn, nd, jg, kmatch)
+  use dbuf_istep_mod
+  implicit none
+  integer, intent(in)         :: nnow, nnew, nd, jg, kmatch
+  real(kind=8), intent(inout) :: w_now(2, 3), w_new(2, 3)
+  real(kind=8), intent(inout) :: out(2, 3)
+  integer, intent(in)         :: ndyn(nd)
+  type(t_state) :: s
+  allocate(s%prog(2))
+  s%prog(1)%w = w_now
+  s%prog(2)%w = w_new
+  call kernel(s, nnow, nnew, out, ndyn, jg, kmatch)
+  deallocate(s%prog)
+end subroutine
+"""
+    sdfg = build_sdfg(src, tmp_path / 'sdfg', name='kernel', entry='kernel').build()
+
+    # The toggle is eliminated AND the tracked induction slot is fully spilled:
+    # no ``istep`` remains as a free (would-be-uninitialised) symbol.
+    assert not any('istep' in str(s) for s in sdfg.free_symbols), \
+        f"istep survived as an unpopulated free symbol: {sorted(str(s) for s in sdfg.free_symbols)}"
+
+    ref = f2py_compile(src, tmp_path / 'ref', 'dbuf_istep_ref', only=('wrapper', ))
+
+    rng = np.random.default_rng(31)
+    w_now = np.asfortranarray(rng.standard_normal((2, 3)))
+    w_new = np.asfortranarray(rng.standard_normal((2, 3)))
+    ndyn = np.asfortranarray(np.array([5, 7, 9], dtype=np.int32))
+
+    out_sdfg = np.zeros((2, 3), order='F', dtype=np.float64)
+    sdfg(s_prog_nnow_w=w_now.copy(order='F'),
+         s_prog_nnew_w=w_new.copy(order='F'),
+         out=out_sdfg,
+         ndyn=ndyn.copy(order='F'),
+         jg=np.int32(jg),
+         kmatch=np.int32(kmatch),
+         nnow=np.int32(1),
+         nnew=np.int32(2))
+
+    out_ref = np.zeros((2, 3), order='F', dtype=np.float64)
+    # f2py infers ``nd`` from ``ndyn`` (dropped from the positional list).
+    ref.wrapper(w_now.copy(order='F'), w_new.copy(order='F'), out_ref, np.int32(1), np.int32(2), ndyn.copy(order='F'),
+                np.int32(jg), np.int32(kmatch))
+
+    np.testing.assert_array_equal(out_sdfg, out_ref)
+    # The istep-2 branch fires exactly when ndyn(jg) == kmatch: closed form
+    # (out overwritten each iter to prog(nnow)+prog(nvar), then +100 if fired).
+    expected = w_now + w_new + (100.0 if fires else 0.0)
+    np.testing.assert_array_equal(out_sdfg, expected)

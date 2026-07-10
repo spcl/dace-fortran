@@ -1,31 +1,30 @@
 """Whole-array assignment from a function returning a fixed-shape array.
 
-The bridge does not yet lower
+The bridge now lowers
 
 ::
 
     real(8) :: tmp(3)
     tmp = make3(x)              ! LHS = function call returning real(8) :: r(3)
 
-The right-hand side of the scalar-assign tasklet collapses to the bridge's
-``?`` unresolved-expression placeholder, which then fails Python ``ast.parse``
-inside :func:`dace.sdfg.SDFGState.add_tasklet`.
+(This once emitted the bridge's ``?`` unresolved-expression placeholder, which
+failed Python ``ast.parse`` inside the scalar-assign tasklet.  That gap is
+CLOSED -- the docstring previously claimed a ``strict=True`` xfail was pinned
+here, but no marker was present and the pattern lowers correctly, so this test
+now RUNS the SDFG and compares BIT-EXACT against gfortran/f2py instead of only
+building + validating.)
 
 This pattern shows up in production benchmarks  --  NPB-style PURE FUNCTIONs
 that return small fixed arrays as "multi-value" outputs (e.g. graupel's
 ``update = precip1(zeta, vc, ...)`` where ``precip1`` returns ``real(8) :: r(3)``
 holding (new_qx, new_p, new_vt) in one call).
-
-Pinned here as a ``strict=True`` xfail so the gap is tracked, with a faithful
-minimal reproducer.  When the bridge learns to lower the pattern, the
-assertion succeeds, ``strict=True`` raises ``XPASS`` -> ``FAILED``, and the
-marker must be removed as part of the fix.
 """
 from pathlib import Path
 
+import numpy as np
 import pytest
 
-from _util import have_flang
+from _util import f2py_compile, have_flang
 
 from dace_fortran import build_sdfg_from_files
 
@@ -59,8 +58,22 @@ end module m_array_return
 
 
 def test_whole_array_assignment_from_function_return(tmp_path):
-    """The bridge builds an SDFG for the ``tmp = make3(src(i))`` pattern."""
+    """``tmp = make3(src(i))`` (local array = fixed-shape fn return) lowers,
+    runs, and matches gfortran BIT-EXACT: ``out_arr(:,i)=[x, 2x, 3x]``."""
     src = tmp_path / "m.f90"
     src.write_text(_SRC)
     sdfg = build_sdfg_from_files([src], entry="m_array_return::kern", name="array_return", out_dir=tmp_path / "build")
     sdfg.validate()
+
+    n = 5
+    rng = np.random.default_rng(3)
+    src_arr = np.asfortranarray(rng.standard_normal(n))
+    out = np.zeros((3, n), order='F', dtype=np.float64)
+    sdfg(out_arr=out, src=src_arr, n=np.int32(n))
+
+    # gfortran reference of the same source (``out_arr`` intent(out) -> returned;
+    # ``n`` inferred from ``src``).  Each column is a single-multiply per row, so
+    # the SDFG and the reference are bit-identical.
+    ref = f2py_compile(_SRC, tmp_path / "ref", "array_return_ref", only=("kern", ))
+    out_ref = np.asfortranarray(ref.m_array_return.kern(src_arr.copy(order='F')))
+    np.testing.assert_array_equal(out, out_ref)

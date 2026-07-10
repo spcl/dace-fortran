@@ -1,8 +1,18 @@
-"""Verbatim port of f2dace/dev:tests/fortran/non-interactive/pointers_test.py."""
+"""Port of f2dace/dev:tests/fortran/non-interactive/pointers_test.py.
 
+A local ``TARGET`` derived-type object ``s`` has a rank-3 array member
+``s%w``; a contiguous pointer ``p_area`` is rebound to it (``p_area => s%w``)
+and then read.  The original port only built + validated the SDFG, so a
+miscompile of the pointer-to-struct-member rebind would have passed silently.
+This now DRIVES the compiled SDFG on numpy inputs and compares BIT-EXACT
+against the same source compiled by gfortran/f2py, plus the closed form the
+kernel encodes (``s%w(1,1,1)=5.5``; ``lout(1)=p_area(1,1,1)+lon(1)``; rest 0).
+"""
+
+import numpy as np
 import pytest
 
-from _util import build_sdfg, have_flang
+from _util import build_sdfg, f2py_compile, have_flang
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
@@ -27,3 +37,22 @@ subroutine main(lon, lout)
 end subroutine main
 """
     sdfg = build_sdfg(src, tmp_path, name='main').build()
+
+    rng = np.random.default_rng(5)
+    lon = np.asfortranarray(rng.standard_normal(10).astype(np.float32))
+    lout = np.zeros(10, dtype=np.float32, order='F')
+    sdfg(lon=lon, lout=lout)
+
+    # Reference: the same source compiled by gfortran/f2py (``lout`` is
+    # ``intent(out)`` so f2py returns it).  The pointer rebind must read
+    # ``s%w(1,1,1) = 5.5`` back through ``p_area`` -- a dropped/miscompiled
+    # rebind would leave lout(1) at 0 (or garbage).
+    ref = f2py_compile(src, tmp_path / 'ref', 'pointer_ref')
+    lout_ref = ref.main(lon.copy(order='F'))
+    np.testing.assert_array_equal(lout, lout_ref)
+
+    # Closed form the kernel encodes, single ``5.5 + lon(1)`` add (bit-exact
+    # in float32): only element 1 is written, the rest stay zero.
+    expected = np.zeros(10, dtype=np.float32)
+    expected[0] = np.float32(5.5) + lon[0]
+    np.testing.assert_array_equal(lout, expected)
