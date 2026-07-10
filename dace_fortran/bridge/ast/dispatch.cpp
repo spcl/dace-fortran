@@ -530,7 +530,8 @@ static std::string mpiCalleeTag(const std::string& callee) {
   std::string low = llvm::StringRef(s).lower();
   if (low == "mpi_send" || low == "mpi_recv" || low == "mpi_isend" || low == "mpi_irecv" || low == "mpi_wait" ||
       low == "mpi_waitall" || low == "mpi_alltoall" || low == "mpi_barrier" || low == "mpi_allreduce" ||
-      low == "mpi_bcast")
+      low == "mpi_bcast" || low == "mpi_comm_rank" || low == "mpi_comm_size" || low == "mpi_comm_split" ||
+      low == "mpi_abort" || low == "mpi_gatherv" || low == "mpi_gather" || low == "mpi_reduce")
     return low;
   return std::string{};
 }
@@ -1341,6 +1342,45 @@ static std::string collectiveBufferSubset(mlir::Value bufOp, mlir::Value countOp
   return std::string{};
 }
 
+/// DaCe-0-based subset of a SCALAR-ELEMENT point-to-point operand
+/// (``neighbors(i)`` -> ``(i) - 1``) so the ``_dest`` / ``_src`` / ``_tag`` /
+/// ``_root`` memlet reads that one element instead of collapsing onto the whole
+/// array.  Peels the ``fir.convert`` / ``fir.box_addr`` shims flang may wrap the
+/// element ref in, then requires a pure element ``hlfir.designate`` (every dim a
+/// scalar index, no triplet).  Empty for a whole-scalar operand (``dest``), an
+/// array section, or an un-renderable index -> the emitter marshals the whole
+/// array (previous behaviour).  The emit side reads it via ``call_arg_subsets``.
+static std::string mpiScalarElementSubset(mlir::Value v) {
+  for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
+    auto* d = v.getDefiningOp();
+    if (!d) break;
+    if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(d)) {
+      auto idxs = dg.getIndices();
+      if (idxs.empty()) return std::string{};  // component / whole-array designate
+      for (bool t : dg.getIsTriplet())
+        if (t) return std::string{};  // an array section, not a single element
+      std::string joined;
+      for (auto idx : idxs) {
+        std::string e = buildIndexExpr(idx, 0);
+        if (e.empty() || e == "?") return std::string{};
+        if (!joined.empty()) joined += ", ";
+        joined += "(" + e + ") - 1";
+      }
+      return joined;
+    }
+    if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
+      v = cv.getValue();
+      continue;
+    }
+    if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
+      v = ba.getVal();
+      continue;
+    }
+    break;
+  }
+  return std::string{};
+}
+
 static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
   ASTNode n;
   n.kind = "mpicall";
@@ -1452,6 +1492,91 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
     return n;
   }
 
+  if (mpiOp == "mpi_comm_rank") {
+    // MPI_Comm_rank(comm, rank, ierr) -- query this process's rank into ``rank``.
+    if (args.size() < 2) throw std::runtime_error("MPI mpi_comm_rank: expected (comm, rank, ...)");
+    n.call_args = {resolve(args[1], "rank")};
+    std::string c = commArg(args[0]);
+    if (!c.empty()) n.call_args.push_back(c);
+    return n;
+  }
+
+  if (mpiOp == "mpi_comm_size") {
+    // MPI_Comm_size(comm, size, ierr) -- query the communicator's rank count.
+    if (args.size() < 2) throw std::runtime_error("MPI mpi_comm_size: expected (comm, size, ...)");
+    n.call_args = {resolve(args[1], "size")};
+    std::string c = commArg(args[0]);
+    if (!c.empty()) n.call_args.push_back(c);
+    return n;
+  }
+
+  if (mpiOp == "mpi_comm_split") {
+    // MPI_Comm_split(comm, color, key, newcomm, ierr) -- split into sub-comms.
+    if (args.size() < 4) throw std::runtime_error("MPI mpi_comm_split: expected (comm, color, key, newcomm, ...)");
+    n.call_args = {resolve(args[1], "color"), resolve(args[2], "key"), resolve(args[3], "newcomm")};
+    std::string c = commArg(args[0]);
+    if (!c.empty()) n.call_args.push_back(c);
+    return n;
+  }
+
+  if (mpiOp == "mpi_abort") {
+    // MPI_Abort(comm, errorcode, ierr).  The errorcode is often a by-value
+    // literal (``mpi_abort(0, 1, ierr)``) that has no traceable name -- recover
+    // its value so the emitter can materialise a scalar for the ``_errorcode``
+    // connector; a variable errorcode rides ``call_args``.
+    if (args.size() < 2) throw std::runtime_error("MPI mpi_abort: expected (comm, errorcode, ...)");
+    std::string errorcode = traceToDecl(args[1]);
+    n.call_args = {errorcode};  // "" when the errorcode is a literal
+    if (errorcode.empty()) {
+      std::string lit = traceMpiCountExpr(args[1]);
+      n.options["mpi_errorcode"] = lit.empty() ? "1" : lit;
+    }
+    std::string c = commArg(args[0]);
+    if (!c.empty()) n.call_args.push_back(c);
+    return n;
+  }
+
+  if (mpiOp == "mpi_gatherv") {
+    // MPI_Gatherv(sbuf, scount, stype, rbuf, rcounts, displs, rtype, root, comm, ierr).
+    if (args.size() < 9)
+      throw std::runtime_error("MPI mpi_gatherv: unexpected argument count " + std::to_string(args.size()));
+    n.call_args = {resolve(args[0], "sendbuf"), resolve(args[3], "recvbuf"), resolve(args[4], "recvcounts"),
+                   resolve(args[5], "displs"), resolve(args[7], "root")};
+    // Send/recv buffers keep any section offset; the per-rank counts live in
+    // recvcounts/displs, so no whole-buffer count folding.  Root may be an array
+    // element (rare) -> element subset; else empty (whole scalar).
+    n.call_arg_subsets = {collectiveBufferSubset(args[0], mlir::Value{}),
+                          collectiveBufferSubset(args[3], mlir::Value{}), "", "", mpiScalarElementSubset(args[7])};
+    std::string c = commArg(args[8]);
+    if (!c.empty()) n.call_args.push_back(c);
+    return n;
+  }
+
+  if (mpiOp == "mpi_gather") {
+    // MPI_Gather(sbuf, scount, stype, rbuf, rcount, rtype, root, comm, ierr).
+    if (args.size() < 8)
+      throw std::runtime_error("MPI mpi_gather: unexpected argument count " + std::to_string(args.size()));
+    n.call_args = {resolve(args[0], "sendbuf"), resolve(args[3], "recvbuf"), resolve(args[6], "root")};
+    n.call_arg_subsets = {collectiveBufferSubset(args[0], args[1]), collectiveBufferSubset(args[3], mlir::Value{}),
+                          mpiScalarElementSubset(args[6])};
+    std::string c = commArg(args[7]);
+    if (!c.empty()) n.call_args.push_back(c);
+    return n;
+  }
+
+  if (mpiOp == "mpi_reduce") {
+    // MPI_Reduce(sendbuf, recvbuf, count, datatype, op, root, comm, ierr).
+    if (args.size() < 7)
+      throw std::runtime_error("MPI mpi_reduce: unexpected argument count " + std::to_string(args.size()));
+    std::string op = traceToDecl(args[4]);  // MPI_SUM / MPI_MAX / ... handle name
+    n.call_args = {resolve(args[0], "sendbuf"), resolve(args[1], "recvbuf"), op, resolve(args[5], "root")};
+    n.call_arg_subsets = {collectiveBufferSubset(args[0], args[2]), collectiveBufferSubset(args[1], args[2]), "",
+                          mpiScalarElementSubset(args[5])};
+    std::string c = commArg(args[6]);
+    if (!c.empty()) n.call_args.push_back(c);
+    return n;
+  }
+
   if (args.size() < 6)
     throw std::runtime_error("MPI " + mpiOp + ": unexpected argument count " + std::to_string(args.size()));
   bool isSendLike = (mpiOp == "mpi_send" || mpiOp == "mpi_isend");
@@ -1473,6 +1598,12 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
   bool isDefault = commName.empty() || low.rfind("__", 0) == 0 || low.find("mpi_comm_world") != std::string::npos;
 
   n.call_args = {buf, partner, tag};
+  // Render an indexed scalar dest/src/tag (``neighbors(i)``) as an element
+  // subset so the ``_dest`` / ``_src`` / ``_tag`` memlet reads element ``[i-1]``
+  // rather than collapsing onto the whole ``neighbors`` array (wrong rank).
+  // Parallel to the first three ``call_args``; empty entries keep the whole
+  // buffer / plain-scalar fallback.  The request / comm tail carries no subset.
+  n.call_arg_subsets = {"", mpiScalarElementSubset(args[3]), mpiScalarElementSubset(args[4])};
   if (mpiOp == "mpi_isend" || mpiOp == "mpi_irecv") {
     if (args.size() < 7) throw std::runtime_error("MPI " + mpiOp + ": expected a request argument");
     n.call_args.push_back(resolve(args[6], "request"));

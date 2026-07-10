@@ -850,11 +850,135 @@ def emit_mpi(builder, ctx, n, region):
         _wire_user_comm(node, n.call_args[2] if len(n.call_args) > 2 else None)
         return
 
+    if n.callee == 'mpi_comm_rank':
+        # ``call_args``: [rank] + optional comm.  Query-only: writes this
+        # process's rank to the Fortran integer scalar via ``_rank`` (no data
+        # inputs -- the communicator threads in through ``_comm``).
+        from dace.libraries.mpi.nodes.comm_rank import CommRank
+        rank = n.call_args[0]
+        node = CommRank(f'_mpi_comm_rank_{builder.nid()}')
+        state.add_node(node)
+        state.add_memlet_path(node,
+                              acc(builder, state, rank),
+                              src_conn='_rank',
+                              memlet=Memlet.simple(rank, "0:1", num_accesses=1))
+        _wire_user_comm(node, n.call_args[1] if len(n.call_args) > 1 else None)
+        return
+
+    if n.callee == 'mpi_comm_size':
+        # ``call_args``: [size] + optional comm.  Query-only: writes the
+        # communicator's rank count to the Fortran integer scalar via ``_size``.
+        from dace.libraries.mpi.nodes.comm_size import CommSize
+        size = n.call_args[0]
+        node = CommSize(f'_mpi_comm_size_{builder.nid()}')
+        state.add_node(node)
+        state.add_memlet_path(node,
+                              acc(builder, state, size),
+                              src_conn='_size',
+                              memlet=Memlet.simple(size, "0:1", num_accesses=1))
+        _wire_user_comm(node, n.call_args[1] if len(n.call_args) > 1 else None)
+        return
+
+    if n.callee == 'mpi_comm_split':
+        # ``call_args``: [color, key, newcomm] + optional comm.  Reads the int
+        # color/key, produces a first-class ``opaque(MPI_Comm)`` on ``_newcomm``
+        # written to a fresh transient (usable as a downstream ``_comm`` value).
+        from dace.libraries.mpi.nodes.comm_split import CommSplit
+        color, key, newcomm = n.call_args[0], n.call_args[1], n.call_args[2]
+        node = CommSplit(f'_mpi_comm_split_{builder.nid()}')
+        node.out_connectors = {
+            c: (dace.dtypes.opaque("MPI_Comm") if c == '_newcomm' else t)
+            for c, t in node.out_connectors.items()
+        }
+        state.add_node(node)
+        state.add_edge(state.add_read(color), None, node, '_color', Memlet.from_array(color, ctx.sdfg.arrays[color]))
+        state.add_edge(state.add_read(key), None, node, '_key', Memlet.from_array(key, ctx.sdfg.arrays[key]))
+        cname = f'__newcomm_{newcomm}_{builder.nid()}'
+        ctx.sdfg.add_scalar(cname, dace.dtypes.opaque("MPI_Comm"), transient=True)
+        state.add_edge(node, '_newcomm', state.add_write(cname), None, Memlet(data=cname, subset='0'))
+        _wire_user_comm(node, n.call_args[3] if len(n.call_args) > 3 else None)
+        return
+
+    if n.callee == 'mpi_abort':
+        # ``call_args``: [errorcode] + optional comm.  Side-effecting terminate;
+        # no data outputs.  A literal errorcode (``mpi_abort(0, 1, ierr)``) has
+        # no name -> the bridge stashed its value in ``mpi_errorcode`` and the
+        # emitter materialises a scalar to feed ``_errorcode``.
+        from dace.libraries.mpi.nodes.abort import Abort
+        errorcode = n.call_args[0]
+        node = Abort(f'_mpi_abort_{builder.nid()}')
+        state.add_node(node)
+        lit = _opts.get('mpi_errorcode', '')
+        if errorcode and not lit:
+            state.add_edge(state.add_read(errorcode), None, node, '_errorcode',
+                           Memlet.from_array(errorcode, ctx.sdfg.arrays[errorcode]))
+        else:
+            ename = f'_mpi_abort_code_{builder.nid()}'
+            ctx.sdfg.add_scalar(ename, dace.int32, transient=True)
+            seed = state.add_tasklet(f'_mpi_abort_code_t_{builder.nid()}', set(), {'_c'}, f'_c = {lit or 1}')
+            ew = acc(builder, state, ename)
+            state.add_edge(seed, '_c', ew, None, Memlet(f'{ename}[0]'))
+            state.add_edge(ew, None, node, '_errorcode', Memlet(f'{ename}[0]'))
+        _wire_user_comm(node, n.call_args[1] if len(n.call_args) > 1 else None)
+        return
+
+    if n.callee == 'mpi_gatherv':
+        # ``call_args``: [sendbuf, recvbuf, recvcounts, displs, root] + optional
+        # comm.  Variable-count gather to ``root``: each rank contributes
+        # ``recvcounts[rank]`` elements landing at ``displs[rank]`` in the root's
+        # ``recvbuf``.  Counts / displs are whole int32 arrays.
+        from dace.libraries.mpi.nodes.gatherv import Gatherv
+        sendbuf, recvbuf, recvcounts, displs, root = n.call_args[:5]
+        node = Gatherv(f'_mpi_gatherv_{builder.nid()}')
+        state.add_node(node)
+        state.add_edge(state.add_read(sendbuf), None, node, '_inbuffer', _buf_memlet(sendbuf, 0))
+        state.add_edge(state.add_read(recvcounts), None, node, '_recvcounts',
+                       Memlet.from_array(recvcounts, ctx.sdfg.arrays[recvcounts]))
+        state.add_edge(state.add_read(displs), None, node, '_displs',
+                       Memlet.from_array(displs, ctx.sdfg.arrays[displs]))
+        state.add_edge(state.add_read(root), None, node, '_root', _buf_memlet(root, 4))
+        state.add_edge(node, '_outbuffer', state.add_write(recvbuf), None, _buf_memlet(recvbuf, 1))
+        _wire_user_comm(node, n.call_args[5] if len(n.call_args) > 5 else None)
+        return
+
+    if n.callee == 'mpi_gather':
+        # ``call_args``: [sendbuf, recvbuf, root] + optional comm.  Fixed-count
+        # gather to ``root``; the node derives the per-rank count from the
+        # buffers.
+        from dace.libraries.mpi.nodes.gather import Gather
+        sendbuf, recvbuf, root = n.call_args[:3]
+        node = Gather(f'_mpi_gather_{builder.nid()}')
+        state.add_node(node)
+        state.add_edge(state.add_read(sendbuf), None, node, '_inbuffer', _buf_memlet(sendbuf, 0))
+        state.add_edge(state.add_read(root), None, node, '_root', _buf_memlet(root, 2))
+        state.add_edge(node, '_outbuffer', state.add_write(recvbuf), None, _buf_memlet(recvbuf, 1))
+        _wire_user_comm(node, n.call_args[3] if len(n.call_args) > 3 else None)
+        return
+
+    if n.callee == 'mpi_reduce':
+        # ``call_args``: [sendbuf, recvbuf, op, root] + optional comm.  Reduce to
+        # ``root`` only (cf. allreduce's all-ranks result); ``op`` maps through
+        # the exact ``resolve_mpi_op`` (raises on an identity-lost handle).
+        from dace.libraries.mpi.nodes.reduce import Reduce
+        sendbuf, recvbuf, opname, root = n.call_args[:4]
+        op = resolve_mpi_op(opname)
+        node = Reduce(f'_mpi_reduce_{builder.nid()}', op=op)
+        state.add_node(node)
+        state.add_edge(state.add_read(sendbuf), None, node, '_inbuffer', _buf_memlet(sendbuf, 0))
+        state.add_edge(state.add_read(root), None, node, '_root', _buf_memlet(root, 3))
+        state.add_edge(node, '_outbuffer', state.add_write(recvbuf), None, _buf_memlet(recvbuf, 1))
+        _wire_user_comm(node, n.call_args[4] if len(n.call_args) > 4 else None)
+        return
+
     buffer, partner, tag = n.call_args[0], n.call_args[1], n.call_args[2]
     bdesc = ctx.sdfg.arrays[buffer]
     bptr = dace.pointer(bdesc.dtype)
-    partner_memlet = Memlet.from_array(partner, ctx.sdfg.arrays[partner])
-    tag_memlet = Memlet.from_array(tag, ctx.sdfg.arrays[tag])
+    # ``_dest`` / ``_src`` / ``_tag`` route through the subset-aware ``_buf_memlet``
+    # so an indexed operand (``mpi_send(buf, n, dt, neighbors(i), tag, comm)``)
+    # reads element ``neighbors[i-1]`` -- the bridge stamps its element subset in
+    # ``call_arg_subsets[1]`` / ``[2]``; an empty subset keeps the whole scalar.
+    partner_memlet = _buf_memlet(partner, 1)
+    tag_memlet = _buf_memlet(tag, 2)
     buf_memlet = Memlet.from_array(buffer, bdesc)
 
     # Optional trailing user communicator (the C++ bridge appends it only
