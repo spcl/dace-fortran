@@ -239,17 +239,32 @@ struct ExpandVectorSubscriptScatterPass
         lhsRoot = traceRoot(y.getEntity());
         break;
       }
-    // RHS root: any ``hlfir.designate`` reachable from the source
-    // value's defining op.  For a gather elemental, the body
-    // contains the data-array designate; recurse into the
-    // elemental's region to find it.
+    // RHS root: the data array the gather reads.  Trace it from the
+    // element VALUE the gather elemental yields -- the same way the
+    // LHS root is chased -- so the DATA-array designate is followed
+    // and the index-array designate is never mistaken for the source.
+    // ``traceRoot`` walks ``designate.getMemref``, so the index
+    // operand (an ``hlfir.apply`` of a separate index elemental) is
+    // off the traced chain by construction.  This must not depend on
+    // flang hoisting the index computation into its own elemental --
+    // a correctness-critical alias check can't rest on IR layout.
+    // Fall back to the first data designate only if the elemental has
+    // no element-value terminator to trace.
     hlfir::DeclareOp rhsRoot;
     if (auto* def = srcVal.getDefiningOp()) {
       if (auto elem = mlir::dyn_cast<hlfir::ElementalOp>(def)) {
-        elem.walk([&](hlfir::DesignateOp dg) {
-          if (rhsRoot) return;
-          if (auto r = traceRoot(dg.getMemref())) rhsRoot = r;
-        });
+        auto& region = elem.getRegion();
+        if (!region.empty())
+          for (auto& inner : region.front())
+            if (auto y = mlir::dyn_cast<hlfir::YieldElementOp>(inner)) {
+              rhsRoot = traceRoot(y.getElementValue());
+              break;
+            }
+        if (!rhsRoot)
+          elem.walk([&](hlfir::DesignateOp dg) {
+            if (rhsRoot) return;
+            if (auto r = traceRoot(dg.getMemref())) rhsRoot = r;
+          });
       } else {
         rhsRoot = traceRoot(srcVal);
       }
