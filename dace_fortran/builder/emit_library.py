@@ -553,6 +553,54 @@ def drop_user_comm_scalar_nodes(sdfg):
                 state.remove_node(w)
 
 
+# Fortran MPI reduction-op handle name (``use mpi`` integer handle, lower-cased)
+# -> the C ``MPI_Op`` token baked into the generated reduction call.  Keyed on
+# the exact handle name so ``mpi_maxloc`` maps to ``MPI_MAXLOC`` (not ``MPI_MAX``
+# via a stray substring match) and a non-{max,min} op (``mpi_prod`` / the logical
+# and bitwise ops / ...) is never silently coerced to ``MPI_SUM``.
+MPI_REDUCE_OPS = {
+    "mpi_sum": "MPI_SUM",
+    "mpi_prod": "MPI_PROD",
+    "mpi_max": "MPI_MAX",
+    "mpi_min": "MPI_MIN",
+    "mpi_land": "MPI_LAND",
+    "mpi_lor": "MPI_LOR",
+    "mpi_band": "MPI_BAND",
+    "mpi_bor": "MPI_BOR",
+    "mpi_lxor": "MPI_LXOR",
+    "mpi_bxor": "MPI_BXOR",
+    "mpi_maxloc": "MPI_MAXLOC",
+    "mpi_minloc": "MPI_MINLOC",
+}
+
+
+def resolve_mpi_op(opname: str) -> str:
+    """Map a Fortran MPI reduction-op handle name to its C ``MPI_Op`` token.
+
+    ``opname`` is the name the bridge traced for the reduction op argument -- a
+    ``use mpi`` runtime handle (``mpi_sum`` / ``mpi_prod`` / ``mpi_maxloc`` /
+    ...) keeps its name; a leading ``MPI_`` upper-case spelling is accepted too.
+    Raises rather than silently reducing with the wrong operator (the previous
+    ``'max' in name`` heuristic mis-mapped ``mpi_maxloc`` -> ``MPI_MAX`` and
+    collapsed every other op onto ``MPI_SUM``).
+
+    :raises NotImplementedError: the op name is not a recognised MPI reduction
+        op.  This includes the case where the bridge could not recover the op
+        identity -- a Fortran ``parameter`` constant folds to an opaque
+        ``f__assoc_scalar_N`` temporary and a bare integer literal op has no
+        traceable name at all -- so the reduction operator is genuinely unknown
+        (a bridge-side limitation; a ``use mpi`` runtime handle keeps its name).
+    """
+    key = opname.lower()
+    if key in MPI_REDUCE_OPS:
+        return MPI_REDUCE_OPS[key]
+    raise NotImplementedError(
+        f"unrecognised MPI reduction op {opname!r}; supported: {', '.join(sorted(MPI_REDUCE_OPS))}. "
+        "If this is a folded Fortran `parameter` handle (opaque `f__assoc_scalar_*` name) or a bare "
+        "integer-literal op, the operator identity was lost upstream -- pass a `use mpi` runtime handle "
+        "so the name survives to the builder.")
+
+
 def emit_mpi(builder, ctx, n, region):
     """Lower a recognised Fortran MPI point-to-point call
     (``kind == 'mpicall'``) to a ``dace.libraries.mpi`` library node.
@@ -634,6 +682,54 @@ def emit_mpi(builder, ctx, n, region):
                                transient=True)
         return name
 
+    # ``call_arg_subsets`` is parallel to ``call_args`` (same convention as
+    # ``emit_libcall``): an empty entry marshals the whole array; a non-empty
+    # DaCe-0-based subset (e.g. ``"3:7"`` for a Fortran ``buf(4:7)`` section, or
+    # ``"0:4"`` for an explicit ``count=4``) marshals only that slice.  A sliced
+    # / offset collective buffer then starts at the right element and the
+    # library node derives the true ``count`` from the memlet
+    # (``subset.size_exact()``) instead of collapsing onto element 0.  The
+    # current bridge does not yet populate this for ``mpicall`` nodes (see
+    # ``buildMpiCallNode``), so every entry is empty and the fallback preserves
+    # the whole-array behaviour; honouring it here makes the emitter correct the
+    # moment the bridge carries the count / section.
+    _subsets = list(n.call_arg_subsets) if n.call_arg_subsets else []
+
+    def _buf_memlet(name, idx):
+        """Memlet for the collective buffer ``call_args[idx]`` honouring its
+        parallel ``call_arg_subsets`` entry (whole array when empty)."""
+        sub = _subsets[idx] if idx < len(_subsets) else ""
+        if sub:
+            return Memlet(f"{name}[{sub}]")
+        return Memlet.from_array(name, ctx.sdfg.arrays[name])
+
+    def _wire_user_comm(node, comm):
+        """Thread an optional user communicator into an MPI node via a ``_comm``
+        input connector carrying an ``opaque(MPI_Comm)`` value.
+
+        The Fortran ``INTEGER`` communicator handle ``comm`` is converted to a C
+        ``MPI_Comm`` by a ``CommF2c`` dataflow node (``MPI_Comm_f2c``); the result
+        is WRITTEN into an ``opaque(MPI_Comm)`` transient and READ by ``node``'s
+        ``_comm`` connector.  The communicator is thus a first-class opaque value
+        that flows through the graph -- no Cartesian ``MPI_Cart_create`` (the
+        exchange is plain point-to-point on the pattern's own comm), no dropped
+        scalar, and multiple distinct communicators are supported naturally.
+        Library nodes resolve ``_comm`` ahead of ``_grid`` (see ``resolve_comm``).
+        No-op for the default ``MPI_COMM_WORLD`` (``comm`` is ``None``)."""
+        if comm is None:
+            return
+        from dace.libraries.mpi.nodes.comm_f2c import CommF2c
+        sd = ctx.sdfg
+        cname = f'__mpicomm_{builder.nid()}'
+        sd.add_scalar(cname, dace.dtypes.opaque("MPI_Comm"), transient=True)
+        f2c = CommF2c(f'_mpi_commf2c_{builder.nid()}')
+        state.add_node(f2c)
+        state.add_edge(acc(builder, state, comm), None, f2c, '_fcomm', Memlet(data=comm, subset='0'))
+        cw = state.add_access(cname)
+        state.add_edge(f2c, '_comm', cw, None, Memlet(data=cname, subset='0'))
+        node.add_in_connector('_comm', dace.dtypes.opaque("MPI_Comm"))
+        state.add_edge(cw, None, node, '_comm', Memlet(data=cname, subset='0'))
+
     if n.callee == 'mpi_wait':
         from dace.libraries.mpi.nodes.wait import Wait
         (req, ) = n.call_args
@@ -698,7 +794,7 @@ def emit_mpi(builder, ctx, n, region):
         return
 
     if n.callee == 'mpi_alltoall':
-        # ``call_args``: [sendbuf, recvbuf, optional comm].  The Alltoall
+        # ``call_args``: [sendbuf, recvbuf] + optional comm.  The Alltoall
         # library node has fixed ``_inbuffer`` / ``_outbuffer`` connectors
         # and derives the count from the buffer memlets.
         from dace.libraries.mpi.nodes.alltoall import Alltoall
@@ -706,38 +802,14 @@ def emit_mpi(builder, ctx, n, region):
         recvbuf = n.call_args[1]
         node = Alltoall(f'_mpi_alltoall_{builder.nid()}')
         state.add_node(node)
-        send_desc = ctx.sdfg.arrays[sendbuf]
-        recv_desc = ctx.sdfg.arrays[recvbuf]
-        state.add_edge(state.add_read(sendbuf), None, node, '_inbuffer', Memlet.from_array(sendbuf, send_desc))
-        state.add_edge(node, '_outbuffer', state.add_write(recvbuf), None, Memlet.from_array(recvbuf, recv_desc))
+        state.add_edge(state.add_read(sendbuf), None, node, '_inbuffer', _buf_memlet(sendbuf, 0))
+        state.add_edge(node, '_outbuffer', state.add_write(recvbuf), None, _buf_memlet(recvbuf, 1))
+        # Thread the trailing user communicator (a non-default ``comm`` the
+        # bridge appended at ``call_args[2]``); default ``MPI_COMM_WORLD`` runs
+        # on the node's implicit world comm.  Previously this collective dropped
+        # the communicator entirely -> it always ran on ``MPI_COMM_WORLD``.
+        _wire_user_comm(node, n.call_args[2] if len(n.call_args) > 2 else None)
         return
-
-    def _wire_user_comm(node, comm):
-        """Thread an optional user communicator into an MPI node via a ``_comm``
-        input connector carrying an ``opaque(MPI_Comm)`` value.
-
-        The Fortran ``INTEGER`` communicator handle ``comm`` is converted to a C
-        ``MPI_Comm`` by a ``CommF2c`` dataflow node (``MPI_Comm_f2c``); the result
-        is WRITTEN into an ``opaque(MPI_Comm)`` transient and READ by ``node``'s
-        ``_comm`` connector.  The communicator is thus a first-class opaque value
-        that flows through the graph -- no Cartesian ``MPI_Cart_create`` (the
-        exchange is plain point-to-point on the pattern's own comm), no dropped
-        scalar, and multiple distinct communicators are supported naturally.
-        Library nodes resolve ``_comm`` ahead of ``_grid`` (see ``resolve_comm``).
-        No-op for the default ``MPI_COMM_WORLD`` (``comm`` is ``None``)."""
-        if comm is None:
-            return
-        from dace.libraries.mpi.nodes.comm_f2c import CommF2c
-        sd = ctx.sdfg
-        cname = f'__mpicomm_{builder.nid()}'
-        sd.add_scalar(cname, dace.dtypes.opaque("MPI_Comm"), transient=True)
-        f2c = CommF2c(f'_mpi_commf2c_{builder.nid()}')
-        state.add_node(f2c)
-        state.add_edge(acc(builder, state, comm), None, f2c, '_fcomm', Memlet(data=comm, subset='0'))
-        cw = state.add_access(cname)
-        state.add_edge(f2c, '_comm', cw, None, Memlet(data=cname, subset='0'))
-        node.add_in_connector('_comm', dace.dtypes.opaque("MPI_Comm"))
-        state.add_edge(cw, None, node, '_comm', Memlet(data=cname, subset='0'))
 
     if n.callee == 'mpi_barrier':
         # ``call_args``: [] or [comm].  Pure synchronisation, no data buffers --
@@ -750,17 +822,17 @@ def emit_mpi(builder, ctx, n, region):
 
     if n.callee == 'mpi_allreduce':
         # ``call_args``: [sendbuf, recvbuf, op] + optional comm.  ``op`` is the
-        # Fortran operand name (``mpi_max`` / ``mpi_min`` / ``mpi_sum``).
+        # Fortran reduction-op handle name (``mpi_sum`` / ``mpi_prod`` /
+        # ``mpi_maxloc`` / ...); ``resolve_mpi_op`` maps it to the exact
+        # ``MPI_Op`` and raises on an unrecognised / identity-lost op instead of
+        # silently reducing with ``MPI_SUM``.
         from dace.libraries.mpi.nodes.allreduce import Allreduce
         sendbuf, recvbuf, opname = n.call_args[0], n.call_args[1], n.call_args[2]
-        low = opname.lower()
-        op = 'MPI_MAX' if 'max' in low else 'MPI_MIN' if 'min' in low else 'MPI_SUM'
+        op = resolve_mpi_op(opname)
         node = Allreduce(f'_mpi_allreduce_{builder.nid()}', op=op)
         state.add_node(node)
-        send_desc = ctx.sdfg.arrays[sendbuf]
-        recv_desc = ctx.sdfg.arrays[recvbuf]
-        state.add_edge(state.add_read(sendbuf), None, node, '_inbuffer', Memlet.from_array(sendbuf, send_desc))
-        state.add_edge(node, '_outbuffer', state.add_write(recvbuf), None, Memlet.from_array(recvbuf, recv_desc))
+        state.add_edge(state.add_read(sendbuf), None, node, '_inbuffer', _buf_memlet(sendbuf, 0))
+        state.add_edge(node, '_outbuffer', state.add_write(recvbuf), None, _buf_memlet(recvbuf, 1))
         _wire_user_comm(node, n.call_args[3] if len(n.call_args) > 3 else None)
         return
 
@@ -771,11 +843,10 @@ def emit_mpi(builder, ctx, n, region):
         buffer, root = n.call_args[0], n.call_args[1]
         node = Bcast(f'_mpi_bcast_{builder.nid()}')
         state.add_node(node)
-        bdesc = ctx.sdfg.arrays[buffer]
         rdesc = ctx.sdfg.arrays[root]
-        state.add_edge(state.add_read(buffer), None, node, '_inbuffer', Memlet.from_array(buffer, bdesc))
+        state.add_edge(state.add_read(buffer), None, node, '_inbuffer', _buf_memlet(buffer, 0))
         state.add_edge(state.add_read(root), None, node, '_root', Memlet.from_array(root, rdesc))
-        state.add_edge(node, '_outbuffer', state.add_write(buffer), None, Memlet.from_array(buffer, bdesc))
+        state.add_edge(node, '_outbuffer', state.add_write(buffer), None, _buf_memlet(buffer, 0))
         _wire_user_comm(node, n.call_args[2] if len(n.call_args) > 2 else None)
         return
 

@@ -20,12 +20,23 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_mpi_alltoall_recognised(tmp_path):
+    from dace.libraries.mpi.nodes.alltoall import Alltoall
+
     src = _SRC.read_text()
     sdfg = dace_fortran.build_sdfg(src,
                                    out_dir=str(tmp_path / "sdfg"),
                                    entry="run_alltoall_mod::run_alltoall",
                                    name="run_alltoall")
     sdfg.validate()
-    classes = {type(n).__name__ for s in sdfg.states() for n in s.nodes()}
-    assert "Alltoall" in classes, \
-        f"expected an Alltoall lib node, got {sorted(classes)!r}"
+    alltoall = [n for s in sdfg.states() for n in s.nodes() if isinstance(n, Alltoall)]
+    assert len(alltoall) == 1, \
+        f"expected one Alltoall lib node, got {[type(n).__name__ for s in sdfg.states() for n in s.nodes()]!r}"
+
+    # The probe passes ``MPI_COMM_WORLD`` (a local ``parameter`` flang lowers to
+    # a synthetic scalar the bridge treats as a runtime communicator), so the
+    # Alltoall must thread it via a ``_comm`` connector -- exactly like the other
+    # collectives.  Previously the Alltoall path dropped the communicator
+    # entirely and always ran on ``MPI_COMM_WORLD`` regardless of the Fortran
+    # ``comm`` argument.
+    assert set(alltoall[0].in_connectors) == {"_inbuffer", "_comm"}, \
+        f"Alltoall must thread the user communicator, got {sorted(alltoall[0].in_connectors)!r}"
