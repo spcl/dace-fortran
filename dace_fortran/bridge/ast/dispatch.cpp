@@ -101,6 +101,13 @@ static void materialiseCondReductions(mlir::Value condVal, std::vector<ASTNode>&
 // 0-based per-dim DaCe subset strings for a section designate (defined in
 // extract_vars.cpp); used to feed a section-reduction's VIEW source.
 std::vector<std::string> renderDesignateSubsetStrings(hlfir::DesignateOp sec);
+// Lower a ``fir.call`` parked in an ``scf.while`` BEFORE region (a Fortran
+// DO-WHILE body call, or a call hoisted into the loop condition).  A bare
+// ``fir.call`` carries no MemoryEffectOpInterface, so without this the
+// walkSCFBeforeRegion pure-value guard would SILENTLY DROP it and the call
+// would never run in the SDFG.  Definition lives after the call builders +
+// IoState / FftPlanInfo structs (which the shared dispatch needs).
+static void dispatchScfWhileCall(fir::CallOp call, std::vector<ASTNode>& out);
 
 std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
   std::vector<ASTNode> out;
@@ -409,6 +416,17 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
       n.children = buildAST(loopBlock);
       if (pushedBlockArg) indexStack().pop_back();
       out.push_back(std::move(n));
+      continue;
+    }
+    // ``fir.call`` parked in the scf.while BEFORE region (a DO-WHILE body call,
+    // or a call hoisted into the loop condition).  ``fir.call`` carries no
+    // MemoryEffectOpInterface, so the pure-value guard below would treat it as
+    // effect-free and SILENTLY DROP it -- the call would never run in the SDFG.
+    // Route it through the SAME dispatch the structured ``buildAST`` uses
+    // (MPI / BLAS / LAPACK / FFT / I/O / generic external), so every call shape
+    // is recognised inside the loop too.
+    if (auto call = mlir::dyn_cast<fir::CallOp>(op)) {
+      dispatchScfWhileCall(call, out);
       continue;
     }
     // Pure-value ops -- no AST node, their values flow inline through
@@ -1191,6 +1209,138 @@ static std::pair<std::string, std::string> mpiRequestSlotExtent(mlir::Value reqV
 ///   isend(buf,count,dt,dest,tag,comm,request,ierr)
 ///   irecv(buf,count,dt,src,tag,comm,request,ierr)
 ///   wait (request,status,ierr)
+
+// The value stored into an alloca ``ref`` (definition further down the file);
+// used here to recover the value written into a materialised by-value scalar.
+static mlir::Value ioStoredValue(mlir::Value ref);
+
+/// Trace a collective-buffer operand back to its Fortran array SECTION
+/// designate (``buf(k:)``) through the ``fir.box_addr`` / ``fir.convert`` /
+/// ``fir.rebox`` shims flang wraps a section box in when passing it by
+/// reference.  Returns the section designate (>= 1 triplet dim) or null for a
+/// whole-array buffer.
+static hlfir::DesignateOp traceSectionDesignate(mlir::Value v) {
+  for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
+    if (auto dg = asSectionDesignate(v)) return dg;
+    auto* d = v.getDefiningOp();
+    if (!d) break;
+    if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
+      v = ba.getVal();
+      continue;
+    }
+    if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
+      v = cv.getValue();
+      continue;
+    }
+    if (auto rb = mlir::dyn_cast<fir::ReboxOp>(d)) {
+      v = rb.getBox();
+      continue;
+    }
+    break;
+  }
+  return {};
+}
+
+/// Read the ``i32`` initializer literal of a ``fir.global constant`` a by-ref
+/// operand address_of's (a folded Fortran ``parameter`` -- e.g. a broadcast
+/// ``count`` declared ``integer, parameter :: count = 4``).  Peels the
+/// ``hlfir.declare`` / ``fir.convert`` / ``fir.load`` shims to the
+/// ``fir.address_of``, then extracts the ``arith.constant`` feeding the
+/// global's ``fir.has_value`` terminator.  ``nullopt`` when not a global
+/// constant.
+static std::optional<int64_t> traceGlobalConstInt(mlir::Value v) {
+  for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
+    auto* d = v.getDefiningOp();
+    if (!d) break;
+    if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(d)) {
+      v = dc.getMemref();
+      continue;
+    }
+    if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
+      v = cv.getValue();
+      continue;
+    }
+    if (auto ld = mlir::dyn_cast<fir::LoadOp>(d)) {
+      v = ld.getMemref();
+      continue;
+    }
+    if (auto ao = mlir::dyn_cast<fir::AddrOfOp>(d)) {
+      auto mod = ao->getParentOfType<mlir::ModuleOp>();
+      if (!mod) return std::nullopt;
+      auto glob = mod.lookupSymbol<fir::GlobalOp>(ao.getSymbol().getRootReference());
+      if (!glob || !glob.getConstant() || glob.getRegion().empty()) return std::nullopt;
+      for (auto& op : glob.getRegion().front())
+        if (auto hv = mlir::dyn_cast<fir::HasValueOp>(op)) return traceConstInt(hv.getResval());
+      return std::nullopt;
+    }
+    break;
+  }
+  return std::nullopt;
+}
+
+/// Resolve a by-reference scalar MPI count operand to its integer value
+/// expression.  Flang passes the by-value count BY REFERENCE: a folded
+/// constant / computed value (``n-1``) is materialised as a single-store
+/// ``__assoc_scalar_N`` scalar (recover the stored value), and a folded
+/// ``parameter`` is a ``fir.global constant`` (read its initializer).  Returns
+/// only a CLEAN literal / symbolic expression; empty when the count survives
+/// solely as an opaque materialised scalar name (documented loss -> the emitter
+/// falls back to the whole array, transferring the declared extent).
+static std::string traceMpiCountExpr(mlir::Value ref) {
+  mlir::Value val = ref;
+  // Pre-pipeline: an ``hlfir.associate %v`` by-value temp -> its source value.
+  if (auto* d = ref.getDefiningOp())
+    if (auto assoc = mlir::dyn_cast<hlfir::AssociateOp>(d)) val = assoc.getSource();
+  if (auto c = traceConstInt(val)) return std::to_string(*c);
+  // Post-pipeline: the by-value temp is a materialised ``__assoc_scalar_N``
+  // written once with the value -- render the stored value's expression (a
+  // constant, or a clean symbolic form like ``n - 1``).
+  if (mlir::Value stored = ioStoredValue(ref)) {
+    if (auto c = traceConstInt(stored)) return std::to_string(*c);
+    auto e = buildIndexExpr(stored, 0);
+    if (!e.empty() && e != "?" && e.find("assoc_scalar") == std::string::npos) return e;
+  }
+  // A folded ``parameter`` count is a ``fir.global constant``.
+  if (auto gc = traceGlobalConstInt(ref)) return std::to_string(*gc);
+  return std::string{};
+}
+
+/// DaCe-0-based subset string for a collective-buffer operand, encoding the
+/// Fortran section offset (``buf(k:)``) and/or the explicit MPI element count.
+/// Empty result => whole array (the emitter's ``_buf_memlet`` fallback).  The
+/// emit side (builder/emit_library.py ``_buf_memlet``) reads it via the
+/// per-arg ``call_arg_subsets`` entry and derives the true count from
+/// ``subset.size_exact()``.
+///
+/// ``countOp`` may be null: pass it only when the count IS the buffer's element
+/// extent (``bcast`` / ``allreduce`` -- the whole buffer holds ``count``
+/// elements).  For ``alltoall`` the count is PER-RANK (the buffer holds
+/// ``count * comm_size`` elements), so a null ``countOp`` restricts the subset
+/// to the section offset and the whole-array count is left to the emitter.
+static std::string collectiveBufferSubset(mlir::Value bufOp, mlir::Value countOp) {
+  // A Fortran array SECTION (``buf(k:)``) already carries offset + extent as
+  // clean symbolic bounds -- prefer it (the MPI count of a sectioned buffer
+  // equals its section length), so the subset stays independent of the count
+  // arg's materialised scalar.
+  if (hlfir::DesignateOp sec = traceSectionDesignate(bufOp)) {
+    auto parts = renderDesignateSubsetStrings(sec);
+    std::string joined;
+    for (auto& p : parts) {
+      if (!joined.empty()) joined += ", ";
+      joined += p;
+    }
+    if (!joined.empty()) return joined;
+  }
+  // Whole-array buffer with an explicit element count (``buf(1:count)``):
+  // ``0:count``.  Empty when the count is not cleanly recoverable -> the
+  // emitter marshals the full declared extent (the Fortran count is lost).
+  if (countOp) {
+    std::string count = traceMpiCountExpr(countOp);
+    if (!count.empty()) return "0:" + count;
+  }
+  return std::string{};
+}
+
 static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
   ASTNode n;
   n.kind = "mpicall";
@@ -1238,6 +1388,13 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
     std::string sendbuf = resolve(args[0], "sendbuf");
     std::string recvbuf = resolve(args[3], "recvbuf");
     n.call_args = {sendbuf, recvbuf};
+    // Section offset (``sbuf(k:)``) only -> 0-based buffer subsets.  The
+    // alltoall count is PER-RANK (the buffer holds ``count * comm_size``
+    // elements), so DON'T fold it into the subset (null count) -- the emitter
+    // keeps the whole declared buffer and the Alltoall node derives the
+    // per-rank count from ``buffer_size / comm_size`` itself.
+    n.call_arg_subsets = {collectiveBufferSubset(args[0], mlir::Value{}),
+                          collectiveBufferSubset(args[3], mlir::Value{})};
     // comm decoding -- same rule as send/recv.  Append on a runtime/user comm.
     std::string commName = traceToDecl(args[6]);
     std::string low = llvm::StringRef(commName).lower();
@@ -1272,6 +1429,9 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
     std::string recvbuf = resolve(args[1], "recvbuf");
     std::string op = traceToDecl(args[4]);  // MPI_MAX / MPI_MIN / MPI_SUM / ...
     n.call_args = {sendbuf, recvbuf, op};
+    // Section offset (``sbuf(k:)``) + Fortran count -> 0-based buffer subsets
+    // (op arg carries no subset); empty => whole-array fallback.
+    n.call_arg_subsets = {collectiveBufferSubset(args[0], args[2]), collectiveBufferSubset(args[1], args[2]), ""};
     std::string c = commArg(args[5]);
     if (!c.empty()) n.call_args.push_back(c);
     return n;
@@ -1284,6 +1444,9 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
     std::string buffer = resolve(args[0], "buffer");
     std::string root = resolve(args[3], "root");
     n.call_args = {buffer, root};
+    // Section offset (``buf(k:)``) + Fortran count -> 0-based buffer subset
+    // (root arg carries no subset); empty => whole-array fallback.
+    n.call_arg_subsets = {collectiveBufferSubset(args[0], args[1]), ""};
     std::string c = commArg(args[4]);
     if (!c.empty()) n.call_args.push_back(c);
     return n;
@@ -1988,6 +2151,161 @@ std::vector<ASTNode> buildReductionAssignNodes(hlfir::AssignOp assign, mlir::Ope
     }
   }
   return nodes;
+}
+
+// Lower a ``fir.call`` into its ASTNode(s), pushing onto ``nodes``.  Shared by
+// the structured ``buildAST`` walk and the ``scf.while`` BEFORE-region walker
+// (via ``dispatchScfWhileCall``) so every call shape -- MPI / FFTW3 / QE FFT /
+// BLAS / LAPACK / unsupported-libcall / Fortran I/O / generic external -- is
+// recognised identically in both.  ``io_state`` / ``fft_plans`` thread the
+// Fortran-I/O and FFTW3 plan state machines across consecutive calls in one
+// block.
+static void dispatchCallOp(fir::CallOp call, std::vector<ASTNode>& nodes, IoState& io_state,
+                           std::map<std::string, FftPlanInfo>& fft_plans) {
+  ASTNode n;
+  n.kind = "call";
+  if (auto ref = call.getCallee()) {
+    std::string s;
+    llvm::raw_string_ostream os(s);
+    ref->print(os);
+    n.callee = s;
+  }
+  std::string mpiOp = mpiCalleeTag(n.callee);
+  if (!mpiOp.empty()) {
+    nodes.push_back(buildMpiCallNode(call, mpiOp));
+    return;
+  }
+  // FFTW3 plan-create / execute / destroy triple: consume all three;
+  // only the execute emits an ``fftcall`` ASTNode (the plan-create
+  // and destroy are absorbed -- the FFT lib node's expansion owns
+  // the plan lifecycle).
+  std::string fftOp = fftw3CalleeTag(n.callee);
+  if (!fftOp.empty()) {
+    auto fn = buildFftw3CallNode(call, fftOp, fft_plans);
+    if (!fn.kind.empty()) nodes.push_back(std::move(fn));
+    return;
+  }
+  // QE generic FFT (fwfft / invfft) and its specific subroutines
+  // (fwfft_y / invfft_y / fwfft_b / invfft_b).  Map to the same
+  // ``fftcall`` ASTNode the FFTW3 execute emits so ``emit_fft``
+  // handles both uniformly.
+  std::string qeDir = qeFftCalleeTag(n.callee);
+  if (!qeDir.empty()) {
+    auto qn = buildQeFftCallNode(call, qeDir);
+    if (!qn.kind.empty()) nodes.push_back(std::move(qn));
+    return;
+  }
+  // QE Fourier interpolation (fft_interpolate_real / _complex).
+  // ABI: fft_interpolate(dfft_in, v_in, dfft_out, v_out) -- we use
+  // operand 1 as the input array and operand 3 as the output array.
+  std::string qeIntr = qeFftInterpolateCalleeTag(n.callee);
+  if (!qeIntr.empty()) {
+    auto args = call.getArgOperands();
+    if (args.size() >= 4) {
+      std::string vin = traceToDecl(args[1]);
+      std::string vout = traceToDecl(args[3]);
+      if (!vin.empty() && !vout.empty()) {
+        ASTNode in;
+        in.kind = "fft_interpolate";
+        in.callee = qeIntr;  // "real" or "complex"
+        in.target = vout;
+        in.call_args = {vin, vout};
+        nodes.push_back(std::move(in));
+        return;
+      }
+    }
+  }
+  // QE per-axis pencil FFT (cft_1z / cft_1y / cft_1x).
+  std::string qePencil = qePencilCalleeTag(n.callee);
+  if (!qePencil.empty()) {
+    auto pn = buildQePencilCallNode(call, qePencil);
+    if (!pn.kind.empty()) nodes.push_back(std::move(pn));
+    return;
+  }
+  // QE pencil-pipeline scatter routines (fft_scatter_xy / fft_scatter_yz).
+  std::string qeScatter = qeScatterCalleeTag(n.callee);
+  if (!qeScatter.empty()) {
+    auto sn = buildQeScatterCallNode(call, qeScatter);
+    if (!sn.kind.empty()) nodes.push_back(std::move(sn));
+    return;
+  }
+  // BLAS routine call site (DAXPY / DSCAL / DGEMM / ...): emit a
+  // ``blascall`` ASTNode the Python builder lowers to the matching
+  // ``dace.libraries.blas`` library node.  ``ddot`` is special-cased
+  // -- the result-carrying assign handler picks it up at the
+  // matching ``hlfir.assign`` site instead.
+  std::string blasOp = blasCalleeTag(n.callee);
+  if (!blasOp.empty()) {
+    auto bn = buildBlasCallNode(call, blasOp);
+    if (!bn.kind.empty()) nodes.push_back(std::move(bn));
+    return;
+  }
+  // LAPACK routine call site (DGETRF / DPOTRF / ...).
+  std::string lapOp = lapackCalleeTag(n.callee);
+  if (!lapOp.empty()) {
+    auto ln = buildLapackCallNode(call, lapOp);
+    if (!ln.kind.empty()) nodes.push_back(std::move(ln));
+    return;
+  }
+  // Library-prefix near-miss: the callee matches a recognised library's
+  // call convention (MPI / FFTW3 / BLAS / LAPACK) but the specific
+  // routine isn't in our supported subset.  Emit an explicit
+  // ``unsupported_libcall`` ASTNode so the Python builder can raise a
+  // clear ``NotImplementedError`` (better than silently degrading to a
+  // generic ``call`` node that mints ``_out = ?`` placeholders).
+  std::string libFam = libraryFamilyTag(n.callee);
+  if (!libFam.empty()) {
+    // Recognised + supported routines are caught above; reaching here
+    // means the callee is in the library-prefix universe but not in
+    // the supported set.
+    bool isSupported = !mpiCalleeTag(n.callee).empty() || !fftw3CalleeTag(n.callee).empty() ||
+                       !blasCalleeTag(n.callee).empty() || !lapackCalleeTag(n.callee).empty();
+    if (!isSupported) {
+      ASTNode un;
+      un.kind = "unsupported_libcall";
+      un.callee = normaliseBlasName(n.callee);
+      un.expr = libFam;  // "mpi" / "fftw3" / "blas" / "lapack"
+      nodes.push_back(std::move(un));
+      return;
+    }
+  }
+  // Fortran I/O runtime call: advance the open/read/write/close state
+  // machine (see ``recognizeIoCall``).  Consumed here either way.
+  if (n.callee.find("_FortranAio") != std::string::npos) {
+    recognizeIoCall(call, n.callee, io_state, nodes);
+    return;
+  }
+  // Resolve each operand to a decl name so the Python builder can
+  // lower a registered external (bind(c)) call to a tasklet.
+  // Harmless for unregistered callees (the builder ignores them).
+  // A by-value integer-constant operand (e.g. ``CALL ext(a, 16)``) has no
+  // decl  --  emit its literal value so it reaches the C call by name
+  // rather than as an empty term.
+  for (auto v : call.getArgOperands()) {
+    std::string nm = traceToDecl(v);
+    if (nm.empty())
+      if (auto c = traceConstInt(v)) nm = std::to_string(*c);
+    n.call_args.push_back(nm);
+  }
+  // Carry the AoS-marshalling grouping the marshal pass tagged on the
+  // callee so emit_call can re-pack the (now-SoA-flat) member args into a
+  // local AoS buffer for the external.
+  if (auto ref = call.getCallee())
+    if (auto mod = call->getParentOfType<mlir::ModuleOp>())
+      if (auto fn = mod.lookupSymbol<mlir::func::FuncOp>(ref->getLeafReference()))
+        if (auto g = fn->getAttrOfType<mlir::DenseI64ArrayAttr>("hlfir.aos_marshal_groups"))
+          n.aos_marshal_groups.assign(g.asArrayRef().begin(), g.asArrayRef().end());
+  nodes.push_back(std::move(n));
+}
+
+// scf.while BEFORE-region ``fir.call`` handler: a Fortran DO-WHILE body call
+// (or a call hoisted into the loop condition) must still be lowered.  A loop
+// condition / body does not fold a multi-call Fortran-I/O region, so fresh
+// per-call I/O / FFT state is exact here.
+static void dispatchScfWhileCall(fir::CallOp call, std::vector<ASTNode>& out) {
+  IoState io_state;
+  std::map<std::string, FftPlanInfo> fft_plans;
+  dispatchCallOp(call, out, io_state, fft_plans);
 }
 
 std::vector<ASTNode> buildAST(mlir::Block& block) {
@@ -2981,140 +3299,7 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       continue;
     }
     if (auto call = mlir::dyn_cast<fir::CallOp>(op)) {
-      ASTNode n;
-      n.kind = "call";
-      if (auto ref = call.getCallee()) {
-        std::string s;
-        llvm::raw_string_ostream os(s);
-        ref->print(os);
-        n.callee = s;
-      }
-      std::string mpiOp = mpiCalleeTag(n.callee);
-      if (!mpiOp.empty()) {
-        nodes.push_back(buildMpiCallNode(call, mpiOp));
-        continue;
-      }
-      // FFTW3 plan-create / execute / destroy triple: consume all three;
-      // only the execute emits an ``fftcall`` ASTNode (the plan-create
-      // and destroy are absorbed -- the FFT lib node's expansion owns
-      // the plan lifecycle).
-      std::string fftOp = fftw3CalleeTag(n.callee);
-      if (!fftOp.empty()) {
-        auto fn = buildFftw3CallNode(call, fftOp, fft_plans);
-        if (!fn.kind.empty()) nodes.push_back(std::move(fn));
-        continue;
-      }
-      // QE generic FFT (fwfft / invfft) and its specific subroutines
-      // (fwfft_y / invfft_y / fwfft_b / invfft_b).  Map to the same
-      // ``fftcall`` ASTNode the FFTW3 execute emits so ``emit_fft``
-      // handles both uniformly.
-      std::string qeDir = qeFftCalleeTag(n.callee);
-      if (!qeDir.empty()) {
-        auto qn = buildQeFftCallNode(call, qeDir);
-        if (!qn.kind.empty()) nodes.push_back(std::move(qn));
-        continue;
-      }
-      // QE Fourier interpolation (fft_interpolate_real / _complex).
-      // ABI: fft_interpolate(dfft_in, v_in, dfft_out, v_out) -- we use
-      // operand 1 as the input array and operand 3 as the output array.
-      std::string qeIntr = qeFftInterpolateCalleeTag(n.callee);
-      if (!qeIntr.empty()) {
-        auto args = call.getArgOperands();
-        if (args.size() >= 4) {
-          std::string vin = traceToDecl(args[1]);
-          std::string vout = traceToDecl(args[3]);
-          if (!vin.empty() && !vout.empty()) {
-            ASTNode in;
-            in.kind = "fft_interpolate";
-            in.callee = qeIntr;  // "real" or "complex"
-            in.target = vout;
-            in.call_args = {vin, vout};
-            nodes.push_back(std::move(in));
-            continue;
-          }
-        }
-      }
-      // QE per-axis pencil FFT (cft_1z / cft_1y / cft_1x).
-      std::string qePencil = qePencilCalleeTag(n.callee);
-      if (!qePencil.empty()) {
-        auto pn = buildQePencilCallNode(call, qePencil);
-        if (!pn.kind.empty()) nodes.push_back(std::move(pn));
-        continue;
-      }
-      // QE pencil-pipeline scatter routines (fft_scatter_xy / fft_scatter_yz).
-      std::string qeScatter = qeScatterCalleeTag(n.callee);
-      if (!qeScatter.empty()) {
-        auto sn = buildQeScatterCallNode(call, qeScatter);
-        if (!sn.kind.empty()) nodes.push_back(std::move(sn));
-        continue;
-      }
-      // BLAS routine call site (DAXPY / DSCAL / DGEMM / ...): emit a
-      // ``blascall`` ASTNode the Python builder lowers to the matching
-      // ``dace.libraries.blas`` library node.  ``ddot`` is special-cased
-      // -- the result-carrying assign handler picks it up at the
-      // matching ``hlfir.assign`` site instead.
-      std::string blasOp = blasCalleeTag(n.callee);
-      if (!blasOp.empty()) {
-        auto bn = buildBlasCallNode(call, blasOp);
-        if (!bn.kind.empty()) nodes.push_back(std::move(bn));
-        continue;
-      }
-      // LAPACK routine call site (DGETRF / DPOTRF / ...).
-      std::string lapOp = lapackCalleeTag(n.callee);
-      if (!lapOp.empty()) {
-        auto ln = buildLapackCallNode(call, lapOp);
-        if (!ln.kind.empty()) nodes.push_back(std::move(ln));
-        continue;
-      }
-      // Library-prefix near-miss: the callee matches a recognised library's
-      // call convention (MPI / FFTW3 / BLAS / LAPACK) but the specific
-      // routine isn't in our supported subset.  Emit an explicit
-      // ``unsupported_libcall`` ASTNode so the Python builder can raise a
-      // clear ``NotImplementedError`` (better than silently degrading to a
-      // generic ``call`` node that mints ``_out = ?`` placeholders).
-      std::string libFam = libraryFamilyTag(n.callee);
-      if (!libFam.empty()) {
-        // Recognised + supported routines are caught above; reaching here
-        // means the callee is in the library-prefix universe but not in
-        // the supported set.
-        bool isSupported = !mpiCalleeTag(n.callee).empty() || !fftw3CalleeTag(n.callee).empty() ||
-                           !blasCalleeTag(n.callee).empty() || !lapackCalleeTag(n.callee).empty();
-        if (!isSupported) {
-          ASTNode un;
-          un.kind = "unsupported_libcall";
-          un.callee = normaliseBlasName(n.callee);
-          un.expr = libFam;  // "mpi" / "fftw3" / "blas" / "lapack"
-          nodes.push_back(std::move(un));
-          continue;
-        }
-      }
-      // Fortran I/O runtime call: advance the open/read/write/close state
-      // machine (see ``recognizeIoCall``).  Consumed here either way.
-      if (n.callee.find("_FortranAio") != std::string::npos) {
-        recognizeIoCall(call, n.callee, io_state, nodes);
-        continue;
-      }
-      // Resolve each operand to a decl name so the Python builder can
-      // lower a registered external (bind(c)) call to a tasklet.
-      // Harmless for unregistered callees (the builder ignores them).
-      // A by-value integer-constant operand (e.g. ``CALL ext(a, 16)``) has no
-      // decl  --  emit its literal value so it reaches the C call by name
-      // rather than as an empty term.
-      for (auto v : call.getArgOperands()) {
-        std::string nm = traceToDecl(v);
-        if (nm.empty())
-          if (auto c = traceConstInt(v)) nm = std::to_string(*c);
-        n.call_args.push_back(nm);
-      }
-      // Carry the AoS-marshalling grouping the marshal pass tagged on the
-      // callee so emit_call can re-pack the (now-SoA-flat) member args into a
-      // local AoS buffer for the external.
-      if (auto ref = call.getCallee())
-        if (auto mod = call->getParentOfType<mlir::ModuleOp>())
-          if (auto fn = mod.lookupSymbol<mlir::func::FuncOp>(ref->getLeafReference()))
-            if (auto g = fn->getAttrOfType<mlir::DenseI64ArrayAttr>("hlfir.aos_marshal_groups"))
-              n.aos_marshal_groups.assign(g.asArrayRef().begin(), g.asArrayRef().end());
-      nodes.push_back(std::move(n));
+      dispatchCallOp(call, nodes, io_state, fft_plans);
       continue;
     }
     if (auto whileOp = mlir::dyn_cast<mlir::scf::WhileOp>(op)) {

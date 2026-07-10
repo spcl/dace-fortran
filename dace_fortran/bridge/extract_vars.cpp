@@ -2511,18 +2511,34 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
         // callee's bind_c_shim (one ``_lb`` per dim of a dynamic member) so an
         // SDFG-to-SDFG velocity call stays slot-for-slot.
         //
-        // EXCEPTION -- a NEGATIVE literal subscript (ICON's ``end_block(-10)``):
-        // unlike ``arr(1)``, ``arr(-10)`` is valid ONLY if ``lbound <= -10``, so
-        // it IS a sound static lower-bound constraint.  A direct ``sdfg()`` /
+        // EXCEPTION -- a SUB-1 literal subscript, NEGATIVE *or* ZERO (ICON's
+        // ``end_block(-10)`` and 0-based ``arr(0)``): unlike ``arr(1)``,
+        // ``arr(-10)`` / ``arr(0)`` is valid ONLY if ``lbound <= that literal``,
+        // so it IS a sound static lower-bound constraint.  A direct ``sdfg()`` /
         // bindings caller cannot recover the run-time bound (both default the
-        // free offset to 1, giving ``arr[-11]`` -- an out-of-bounds read that
-        // SEGVs).  ``inferLowerBoundsFromLiteralAccesses`` (run above) already
-        // folded such dims to the negative literal; keep that fold and free only
-        // the remaining dims.
+        // free offset to 1, giving ``arr[-11]`` / ``arr[-1]`` -- an out-of-bounds
+        // read that SEGVs).  ``inferLowerBoundsFromLiteralAccesses`` (run above)
+        // already folded such dims to the literal; keep that fold and free only
+        // the remaining dims.  A literal >= 1 (``arr(1)``) does NOT reveal the
+        // bound (Fortran ``arr(1)`` addresses index 1 whatever ``lbound`` is) ->
+        // free it.  ABI-wise the marshal (commit 9bf289a) mints the ``_lb`` slot
+        // for a concrete offset < 1 the same as for a free offset, so preserving
+        // zero keeps the callback ABI slot-for-slot.
+        auto isSubOneLiteral = [](const std::string& s) -> bool {
+          if (s.empty()) return false;
+          bool neg = s.front() == '-';
+          size_t i = neg ? 1 : 0;
+          if (i >= s.size()) return false;  // a lone '-' is not a literal
+          for (size_t j = i; j < s.size(); ++j)
+            if (s[j] < '0' || s[j] > '9') return false;  // not a pure integer literal
+          if (neg) return true;                          // any negative is < 1
+          for (size_t j = i; j < s.size(); ++j)
+            if (s[j] != '0') return false;  // a non-negative literal is < 1 only when exactly zero
+          return true;
+        };
         for (int d = 0; d < v.rank; ++d) {
-          bool negFold =
-              d < (int)v.lower_bounds.size() && !v.lower_bounds[d].empty() && v.lower_bounds[d].front() == '-';
-          if (negFold) continue;
+          bool keepSubOneFold = d < (int)v.lower_bounds.size() && isSubOneLiteral(v.lower_bounds[d]);
+          if (keepSubOneFold) continue;
           if (d < (int)v.lower_bounds.size())
             v.lower_bounds[d] = "?";
           else
