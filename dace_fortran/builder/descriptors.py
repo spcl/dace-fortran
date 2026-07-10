@@ -21,6 +21,25 @@ from dace import SDFG
 #: value store when the bridge lowered ``obj_ptr => src`` as a plain assign.
 _REF_EXPR = re.compile(r"[A-Za-z_]\w*(?:\[[^\]]*\])?\Z")
 
+#: Reserved names the bridge's faithful scf.while walker mints and
+#: ``auto_declare_synth`` lazily registers as REAL SDFG scalars / symbols
+#: (``__sc_N`` scf.if results, ``__al_N`` scratch counters, ``__brk_N`` /
+#: ``__brkc_N`` break-continuation snapshots).  Because they are declared on
+#: the emit path -- AFTER ``scan_object_aliases`` snapshots the known
+#: names -- they would otherwise look like descriptor-less scalar sinks and be
+#: mis-swept into the opaque-struct-member alias set (two ``__brk_N`` / ``__sc_N``
+#: share a ``__brk`` / ``__sc`` prefix, tripping the >=2-sink opaque-owner
+#: heuristic), which drops their store and no-ops the loop.  Not Fortran-derived
+#: flat member names (those never start with ``__``), so excluding them narrows
+#: the alias heuristic to its real domain rather than special-casing.
+_SYNTH_SCALAR_PREFIXES = ("__sc_", "__al_", "__brk_", "__brkc_")
+
+
+def _is_synth_scalar(name: str) -> bool:
+    """True for a bridge-minted synthetic scalar / symbol (see
+    :data:`_SYNTH_SCALAR_PREFIXES`), lazily declared by ``auto_declare_synth``."""
+    return name.startswith(_SYNTH_SCALAR_PREFIXES)
+
 
 def scan_object_aliases(builder) -> None:
     """Collect whole-derived-type-OBJECT pointer rebinds (``obj_ptr => src_obj``)
@@ -55,12 +74,17 @@ def scan_object_aliases(builder) -> None:
 
     def visit(nodes):
         for c in nodes:
-            if c.kind == "assign" and not c.target_is_array and c.target not in known:
+            if c.kind == "assign" and not c.target_is_array and c.target not in known \
+                    and not _is_synth_scalar(c.target):
                 # A SCALAR store into a name with no descriptor is a candidate
                 # opaque-struct-member sink (a write into an object the flatten
                 # pass never materialised); classified below.  Array-target
                 # stores route through ``emit_tasklet`` (which resolves object
                 # aliases), not the scalar early-return, so they are excluded.
+                # Bridge synthetic scalars (``__brk_N`` / ``__sc_N`` / ...) are
+                # lazily declared REAL scalars/symbols, not opaque members -- see
+                # ``_SYNTH_SCALAR_PREFIXES`` -- so they are excluded here too,
+                # else the opaque-owner clustering drops their break/counter store.
                 non_desc_targets.add(c.target)
                 src = str(c.expr).strip()
                 if _REF_EXPR.match(src):
@@ -119,7 +143,12 @@ def scan_object_aliases(builder) -> None:
         parts = t.split("_")
         for i in range(1, len(parts)):
             prefix = "_".join(parts[:i])
-            if prefix and prefix not in known:
+            # An opaque-struct OWNER prefix must be a real identifier root; a run
+            # of underscores (``""`` / ``"_"`` from a leading-underscore name)
+            # is never a derived-type root, and clustering on it would unify
+            # every such name (the degenerate ``"_"`` that any two ``__``-prefixed
+            # synth transients share).
+            if prefix.strip("_") and prefix not in known:
                 prefix_sinks.setdefault(prefix, set()).add(t)
     opaque_owners = {p for p, members in prefix_sinks.items() if len(members) >= 2}
     for t in sinks:
@@ -810,8 +839,7 @@ def auto_declare_synth(builder, name: str, ctx):
     """
     if name in builder.scalars or name in builder.symbols:
         return
-    if not (name.startswith("__sc_") or name.startswith("__al_") or name.startswith("__brk_")
-            or name.startswith("__brkc_")):
+    if not _is_synth_scalar(name):
         return
     # Fake a VarInfo-like record so _add_descriptors-consistent paths work.
     # A ``SimpleNamespace`` is enough  --  scalar dispatch only reads
