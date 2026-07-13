@@ -2190,6 +2190,24 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
                     if (auto edg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(lu))
                       if (!edg.getComponentAttr()) scanRoots.push_back(edg.getResult());
                 }
+                // Whole-record POINTER rebind re-root (RewritePointerAssigns
+                // ``params_oce => v_params``): the re-rooted member reads/writes
+                // root on a ``fir.convert %declare : (ref<record>) -> ptr<record>``
+                // reinterpret (the ``box_addr`` retag), not the declare result
+                // directly.  Follow the convert so its component designates are
+                // discovered and each accessed field gets a VarInfo -- else the
+                // access NAME is minted (``traceToDecl`` peels the convert) but no
+                // DESCRIPTOR is registered, and the SDFG build fails with a
+                // KeyError on ``<base>_<member>``.
+                if (auto cv = mlir::dyn_cast_or_null<fir::ConvertOp>(u)) {
+                  mlir::Type inner = cv.getResult().getType();
+                  if (auto r = mlir::dyn_cast<fir::ReferenceType>(inner)) inner = r.getEleTy();
+                  else if (auto p = mlir::dyn_cast<fir::PointerType>(inner))
+                    inner = p.getElementType();
+                  else if (auto h = mlir::dyn_cast<fir::HeapType>(inner))
+                    inner = h.getElementType();
+                  if (mlir::isa<fir::RecordType>(inner)) scanRoots.push_back(cv.getResult());
+                }
               }
               for (auto root : scanRoots)
                 for (auto* u : root.getUsers()) {

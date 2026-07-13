@@ -1097,7 +1097,7 @@ struct RewritePointerAssignsPass
         }
         if (auto seq = mlir::dyn_cast<fir::SequenceType>(t)) {
           if (seq.getDimension() > 0) tagAsView = true;
-        } else {
+        } else if (!mlir::isa<fir::RecordType>(t)) {
           // Scalar pointer rebind (``tmp => x``, ``x`` a scalar TARGET):
           // the pointer peeled to a non-array element type.  Lower as a
           // length-1-array View of the target -- extract_vars emits ``tmp``
@@ -1105,6 +1105,11 @@ struct RewritePointerAssignsPass
           // length-1 Array (a View cannot alias a const Scalar source).
           tagScalarView = true;
         }
+        // A whole-RECORD pointer rebind (``params_oce => v_params``) is neither
+        // an array View nor a scalar View -- its reads/writes are ``p % member``
+        // component selects.  Leave it UNTAGGED so the rewrite path's
+        // ``recordTarget`` re-roots each ``p % m`` onto the target record
+        // (the empty-chain case handled alongside ``p => x % a % member``).
       }
       if (tagAsView) {
         ptrDecl->setAttr("hlfir_bridge.pointer_view", mlir::UnitAttr::get(&getContext()));
@@ -1194,10 +1199,80 @@ struct RewritePointerAssignsPass
       mlir::Value recordTarget;
       if (!chain.chain.empty() && recordRefOf(chain.chain.front().dg.getResult().getType()))
         recordTarget = chain.chain.front().dg.getResult();
+      // Whole-RECORD pointer rebind (``params_oce => v_params``, empty chain):
+      // the target IS the parent declare (a module global / dummy record), and
+      // ``p % member`` reads/writes re-root onto it -- the member spelling then
+      // matches the marshalled ``v_params % member`` used directly elsewhere.
+      else if (chain.chain.empty() && chain.parent && recordRefOf(ptrDecl.getResult(0).getType()))
+        recordTarget = chain.parent.getResult(0);
+      // A pointer rebound to an ARRAY member reached through a
+      // MULTI-designate struct-member chain (``p => patch_3d %
+      // p_patch_1d(1) % dolic_c`` whole, or ``... % zdistance(:, :, blk)``
+      // section).  ``mergeIndices`` + ``chain.parent`` can't handle these:
+      // the parent is the ROOT struct, not an indexable array, so a flat
+      // ``designate %patch_3d (...)`` is invalid.  Re-root reads on the
+      // MEMBER instead -- the exact spelling the struct flatten + marshal
+      // path already lowers for a direct ``s % m(...)`` access elsewhere in
+      // the kernel -- so the pointer collapses with no leftover transient.
+      // Two shapes, keyed on the outermost (section) designate:
+      //   * whole member (no triplet): its result is the member's box SLOT
+      //     (``!fir.ref<!fir.box<...>>``), identical in type to the pointer's
+      //     own slot -- redirect the pointer LOAD to it; element designates
+      //     downstream read the member box unchanged.
+      //   * section (>=1 triplet): its MEMREF is the addressed member box;
+      //     compose ONLY that section's indices with the access indices
+      //     (the fixed ``blk`` / ``jc`` selectors ride along) so each read
+      //     ``p(i, j)`` becomes a single ``designate(member, i, j, blk)``.
+      // ``recordRefOf`` (whole-RECORD member) is taken above; only ARRAY
+      // members reach here.  A plain single-designate section / whole-array
+      // rebind is already a P3 View (tagged + returned before the rewrite),
+      // so only STRUCT-MEMBER designate chains (``p => s % m`` /
+      // ``p => s % m(:,:,blk)``, any depth incl. a lone member designate)
+      // reach here and need re-rooting.
+      mlir::Value sectionMemberBox;  // section arm: loaded member box (s % m)
+      mlir::Value wholeMemberSlot;   // whole  arm: member box slot (ref<box>)
+      if (!recordTarget && !chain.chain.empty()) {
+        ChainStep& front = chain.chain.front();
+        bool frontHasTriplet = false;
+        for (bool t : front.triplets)
+          if (t) {
+            frontHasTriplet = true;
+            break;
+          }
+        if (frontHasTriplet) {
+          sectionMemberBox = front.dg.getMemref();
+        } else if (auto ref = mlir::dyn_cast<fir::ReferenceType>(front.dg.getResult().getType())) {
+          // Whole-member: the component designate yields the member's box
+          // SLOT (``!fir.ref<!fir.box<...>>``).  Accept any box element
+          // class (``ptr`` vs ``heap`` may differ from the pointer's own
+          // ``ptr`` slot) -- the reads re-root on a fresh load of it below.
+          // Restricted to an ARRAY member (the leak class); a scalar-member
+          // pointer keeps its own (scalar-view / element-rebind) path.
+          if (auto box = mlir::dyn_cast<fir::BaseBoxType>(ref.getEleTy())) {
+            mlir::Type inner = box.getEleTy();
+            if (auto p = mlir::dyn_cast<fir::PointerType>(inner)) inner = p.getElementType();
+            else if (auto h = mlir::dyn_cast<fir::HeapType>(inner))
+              inner = h.getElementType();
+            if (mlir::isa<fir::SequenceType>(inner)) wholeMemberSlot = front.dg.getResult();
+          }
+        }
+      }
       auto retagTo = [](mlir::OpBuilder& b, mlir::Location loc, mlir::Value v, mlir::Type want) -> mlir::Value {
         if (v.getType() == want) return v;
         return b.create<fir::ConvertOp>(loc, want, v).getResult();
       };
+
+      // Whole-member rebind: load the member's box ONCE, right before this
+      // pointer load (the member-slot designate at the rebind dominates it),
+      // so every element designate below re-roots on the member box.  A fresh
+      // load (not an operand redirect) so a ``heap`` member box binds cleanly
+      // to a ``ptr`` pointer read -- the redirect would leave the load's
+      // result typed for the wrong box class.
+      mlir::Value wholeMemberBox;
+      if (wholeMemberSlot) {
+        mlir::OpBuilder b(ld);
+        wholeMemberBox = b.create<fir::LoadOp>(ld.getLoc(), wholeMemberSlot).getResult();
+      }
 
       // Snapshot users  --  we rewrite in place and the user
       // list mutates as we go.
@@ -1224,6 +1299,36 @@ struct RewritePointerAssignsPass
             }
             continue;
           }
+          // Whole-member target: re-root the read on the loaded member box
+          // with the SAME indices -- ``p(i, j, k)`` becomes
+          // ``designate(s % m, i, j, k)``.  No index composition (a whole
+          // rebind preserves rank and bounds).
+          if (wholeMemberBox) {
+            auto wDg = b.create<hlfir::DesignateOp>(loc,
+                                                    /*result_type=*/userDg.getResult().getType(),
+                                                    /*memref=*/wholeMemberBox,
+                                                    /*indices=*/userDg.getIndices());
+            userDg.getResult().replaceAllUsesWith(wDg.getResult());
+            deadReaders.push_back(userDg);
+            continue;
+          }
+          // Array-section member target: compose ONLY the outermost section
+          // with the access indices and re-root on the member box, so
+          // ``p(i, j)`` becomes ``designate(s % m, i, j, blk)`` -- a single
+          // designate on the already-flattenable member.
+          if (sectionMemberBox) {
+            RebindChain sectionOnly;
+            sectionOnly.chain.push_back(chain.chain.front());
+            llvm::SmallVector<mlir::Value, 6> secMerged;
+            if (!mergeIndices(sectionOnly, userDg.getIndices(), b, loc, secMerged)) continue;
+            auto secDg = b.create<hlfir::DesignateOp>(loc,
+                                                      /*result_type=*/userDg.getResult().getType(),
+                                                      /*memref=*/sectionMemberBox,
+                                                      /*indices=*/mlir::ValueRange{secMerged});
+            userDg.getResult().replaceAllUsesWith(secDg.getResult());
+            deadReaders.push_back(userDg);
+            continue;
+          }
           llvm::SmallVector<mlir::Value, 6> merged;
           if (!mergeIndices(chain, userDg.getIndices(), b, loc, merged))
             continue;  // leave userDg alive; bail-loud
@@ -1238,9 +1343,24 @@ struct RewritePointerAssignsPass
           continue;
         }
         if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(uu)) {
+          // A section-member target composes indices per element designate;
+          // a whole-array ``box_addr`` of it has no single flat rewrite, so
+          // leave it (the surviving pointer keeps the read resolvable).  The
+          // ``chain.parent`` path below is invalid for a struct-member chain
+          // (parent is the root struct), so it must not run here.
+          if (sectionMemberBox) continue;
           mlir::OpBuilder b(ba);
           auto loc = ba.getLoc();
           mlir::Value replacement;
+          // Whole-member target: ``box_addr`` of the member box gives the
+          // member's raw data address directly.
+          if (wholeMemberBox) {
+            replacement = retagTo(b, loc, b.create<fir::BoxAddrOp>(loc, wholeMemberBox).getResult(),
+                                  ba.getResult().getType());
+            ba.getResult().replaceAllUsesWith(replacement);
+            deadReaders.push_back(ba);
+            continue;
+          }
           // Record-member target: box_addr of the loaded descriptor yields
           // the member's raw address = the target ref (retagged to the
           // box_addr's result type).  Downstream component designates then
