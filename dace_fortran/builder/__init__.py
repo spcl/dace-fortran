@@ -1309,6 +1309,7 @@ class SDFGBuilder:
         from dace_fortran.builder.scalar_shape_symbol_cleanup import RemoveScalarFortranShapeSymbols
         from dace_fortran.integer_power_exponents import IntegerizePowerExponents
         from dace.transformation.passes.unique_loop_iterators import UniqueLoopIterators
+        from dace.transformation.passes.prune_symbols import RemoveUnusedSymbols
 
         # Empty-region cleanup: any ControlFlowRegion (LoopRegion,
         # ConditionalBlock branch, the top-level SDFG, etc.) that
@@ -1329,6 +1330,27 @@ class SDFGBuilder:
         uniq_loop_iter_pass = UniqueLoopIterators()
         uniq_loop_iter_pass.assign_loop_iterator_post_value = True
         uniq_loop_iter_pass.apply_pass(sdfg, {})
+
+        # ``UniqueLoopIterators`` renames each ``LoopRegion``'s loop variable to
+        # a unique ``_loop_it_<N>``.  When the ORIGINAL name (an inlined
+        # helper's ``blockno`` iterating ``subset%start_block..end_block``) was
+        # shared by SIBLING loops in DISJOINT ``ConditionalBlock`` branches
+        # (``nonlinear_coriolis_3d_fast_scalar``'s two ``IF (.NOT.
+        # l_anticipated_vorticity) / ELSE IF`` block loops,
+        # ``smooth_oncells_2d``'s ``IF (has_missvalue)`` loop), the post-value
+        # assignment is SKIPPED for every one of them -- each sibling reads the
+        # name but sits in a non-own, non-downstream branch, so
+        # ``_post_value_needed`` classifies it as an external param.  After both
+        # rename to ``_loop_it_<N>`` the old name is left DECLARED in
+        # ``sdfg.symbols`` yet referenced NOWHERE -- a phantom free symbol the
+        # bindings layer can't source (``block_builders`` emits an unresolved
+        # ``<helper>_blockno`` TODO).  Prune every now-unused symbol.
+        # ``RemoveUnusedSymbols`` keeps any name still referenced by a
+        # descriptor shape / offset, memlet, tasklet, loop condition, or
+        # interstate edge (all genuine binding parameters, incl. a real Mode-1
+        # per-block index that IS read in an inlined body), so only true
+        # orphans are dropped.  ``recursive`` defaults to True on the pass.
+        RemoveUnusedSymbols().apply_pass(sdfg, {})
         # ``transient_only=True``: only fold LOCAL 1-element transients
         # (e.g. accumulators left as length-1 arrays by the bridge).  The
         # signature convention is preserved: ``intent(out)`` / ``inout``
