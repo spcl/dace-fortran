@@ -3840,10 +3840,46 @@ struct FlattenStructsPass : public mlir::PassWrapper<FlattenStructsPass, mlir::O
       // recorder reads this off the declare so the binding aliases the actual
       // storage instead of the synthetic dummy name (which is not a real
       // Fortran-side variable).
+      // Render the real Fortran source INDEX for the ``<base>(<idx>)`` caller
+      // path.  The lane ``sym`` (``traceToDecl`` of the index) is the declared
+      // NAME -- ``nnow`` for a scalar buffer symbol, or the array base ``nold``
+      // for an array-element buffer index (ICON ``INTEGER :: nold(10)`` accessed
+      // as ``p_prog(nold(1))``).  For the caller alias the index must keep any
+      // constant element subscript, else the binding aliases the whole ``nold``
+      // array -- an illegal vector-subscripted pointer component.  A plain
+      // scalar symbol falls through to ``traceToDecl`` (renders to itself).
+      auto renderBufferIndexExpr = [&](mlir::Value idx) -> std::string {
+        mlir::Value v = idx;
+        // The AoR index is ``convert*(load(designate(base, const...)))`` -- the
+        // loaded integer is widened (i32->i64) by one or more ``fir.convert``s
+        // before it subscripts ``p_prog``.  Peel the converts, then the load,
+        // to reach the ``hlfir.designate`` that carries the element subscript
+        // (mirrors the symAddr walk above).
+        while (auto cv = mlir::dyn_cast_or_null<fir::ConvertOp>(v.getDefiningOp())) v = cv.getValue();
+        if (auto ld = mlir::dyn_cast_or_null<fir::LoadOp>(v.getDefiningOp())) v = ld.getMemref();
+        if (auto dg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(v.getDefiningOp())) {
+          if (!dg.getComponentAttr() && !dg.getIndices().empty()) {
+            std::string base = traceToDecl(dg.getMemref());
+            std::string subs;
+            for (auto s : dg.getIndices()) {
+              std::optional<int64_t> c = traceConstInt(s);
+              if (!c) {
+                base.clear();  // non-constant subscript -- fall back to the bare symbol
+                break;
+              }
+              subs += (subs.empty() ? "" : ", ") + std::to_string(*c);
+            }
+            if (!base.empty()) return base + "(" + subs + ")";
+          }
+        }
+        return traceToDecl(idx);
+      };
+      std::string idxExpr = kv.second.empty() ? kv.first.sym : renderBufferIndexExpr(kv.second[0].getIndices()[0]);
+
       std::string sourceExpr = demangledBase;
       for (size_t i = 0; i < kv.first.path.size(); ++i) {
         sourceExpr += "%" + kv.first.path[i];
-        if (i + 1 == kv.first.path.size()) sourceExpr += "(" + kv.first.sym + ")";
+        if (i + 1 == kv.first.path.size()) sourceExpr += "(" + idxExpr + ")";
       }
 
       mlir::NamedAttrList attrs;
