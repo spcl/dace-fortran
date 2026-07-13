@@ -2201,7 +2201,8 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
                 // KeyError on ``<base>_<member>``.
                 if (auto cv = mlir::dyn_cast_or_null<fir::ConvertOp>(u)) {
                   mlir::Type inner = cv.getResult().getType();
-                  if (auto r = mlir::dyn_cast<fir::ReferenceType>(inner)) inner = r.getEleTy();
+                  if (auto r = mlir::dyn_cast<fir::ReferenceType>(inner))
+                    inner = r.getEleTy();
                   else if (auto p = mlir::dyn_cast<fir::PointerType>(inner))
                     inner = p.getElementType();
                   else if (auto h = mlir::dyn_cast<fir::HeapType>(inner))

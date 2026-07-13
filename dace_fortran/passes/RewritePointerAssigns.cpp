@@ -1250,7 +1250,8 @@ struct RewritePointerAssignsPass
           // pointer keeps its own (scalar-view / element-rebind) path.
           if (auto box = mlir::dyn_cast<fir::BaseBoxType>(ref.getEleTy())) {
             mlir::Type inner = box.getEleTy();
-            if (auto p = mlir::dyn_cast<fir::PointerType>(inner)) inner = p.getElementType();
+            if (auto p = mlir::dyn_cast<fir::PointerType>(inner))
+              inner = p.getElementType();
             else if (auto h = mlir::dyn_cast<fir::HeapType>(inner))
               inner = h.getElementType();
             if (mlir::isa<fir::SequenceType>(inner)) wholeMemberSlot = front.dg.getResult();
@@ -1355,8 +1356,8 @@ struct RewritePointerAssignsPass
           // Whole-member target: ``box_addr`` of the member box gives the
           // member's raw data address directly.
           if (wholeMemberBox) {
-            replacement = retagTo(b, loc, b.create<fir::BoxAddrOp>(loc, wholeMemberBox).getResult(),
-                                  ba.getResult().getType());
+            replacement =
+                retagTo(b, loc, b.create<fir::BoxAddrOp>(loc, wholeMemberBox).getResult(), ba.getResult().getType());
             ba.getResult().replaceAllUsesWith(replacement);
             deadReaders.push_back(ba);
             continue;
