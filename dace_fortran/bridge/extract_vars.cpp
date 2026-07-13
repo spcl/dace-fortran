@@ -1320,6 +1320,20 @@ void rejectOrRenameReservedShortNames(mlir::ModuleOp module) {
 // and is a no-op).  Extracted here so both ``extractVariables`` and
 // ``extractAST`` see post-rename names in the collision pre-walk.
 void runMultiCallsiteDisambiguation(mlir::ModuleOp module) {
+  // Peel exactly the wrapper set the section-alias recogniser walks
+  // (``v.role == "array"`` view-alias detection below, extract_vars.cpp
+  // ~2583): ``fir.convert`` / ``fir.box_addr`` / ``hlfir.copy_in`` /
+  // ``fir.embox`` / ``fir.load`` / ``fir.rebox``.  The two MUST agree: a
+  // dummy the recogniser turns into a ``section_alias`` but that this
+  // walk stops short of is NOT eligible for the ``_call<idx>`` rename, so
+  // its N inlined clones keep ONE shared ``uniq_name`` and collapse in
+  // ``builder.arrays`` (keyed by short ``fortran_name``).  When those
+  // clones bind to DIFFERENT sources (the ICON ``grad_fd_norm_oce_3d_onblock``
+  // output dummy ``grad_norm_psi_e``: one call-site -> a local transient,
+  // three -> the ``p_diag%grad`` component) the collapse SILENTLY DROPS the
+  // foreign clones' writes.  A subset peel here (only convert + box_addr)
+  // left every ``copy_in``-materialised section (Flang's contiguous-buffer
+  // pack for a non-contiguous actual) short of the designate.
   auto leadsToDesignate = [](mlir::Value v) -> bool {
     for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
       auto* d = v.getDefiningOp();
@@ -1330,6 +1344,22 @@ void runMultiCallsiteDisambiguation(mlir::ModuleOp module) {
       }
       if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
         v = ba.getVal();
+        continue;
+      }
+      if (auto cp = mlir::dyn_cast<hlfir::CopyInOp>(d)) {
+        v = cp.getVar();
+        continue;
+      }
+      if (auto eb = mlir::dyn_cast<fir::EmboxOp>(d)) {
+        v = eb.getMemref();
+        continue;
+      }
+      if (auto ld = mlir::dyn_cast<fir::LoadOp>(d)) {
+        v = ld.getMemref();
+        continue;
+      }
+      if (auto rb = mlir::dyn_cast<fir::ReboxOp>(d)) {
+        v = rb.getBox();
         continue;
       }
       if (mlir::isa<hlfir::DesignateOp>(d)) return true;
