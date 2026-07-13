@@ -4031,7 +4031,19 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
           // single-index record array, N for an N-dim cartesian array member).
           int recIdx = recSeg;
           std::string originStruct = mc.root_dummy;
-          for (int i = 0; i <= recIdx; ++i) originStruct += " % " + mc.names[i];
+          for (int i = 0; i <= recIdx; ++i) {
+            originStruct += " % " + mc.names[i];
+            // A constant record-array hop STRICTLY BEFORE the varying record
+            // segment (ICON single-patch ``p_patch_2d(1)`` shadowed by an inner
+            // record like ``primal_cart_normal``) is folded from the access
+            // memlet, but must KEEP its ``(1)`` subscript in the host source
+            // expression.  The varying leaf segment (``recIdx``) stays bare --
+            // ``_aos_loop_pieces`` appends its own element-index loop.  Emitting
+            // the outer hop bare (``p_patch_2d % edges % primal_cart_normal``)
+            // makes the binding reference a POINTER component to the right of a
+            // nonzero-rank part reference -- an illegal Fortran designator.
+            if (i < recIdx && mc.record_dims[i] > 0 && mc.record_const[i]) originStruct += "(1)";
+          }
           std::string memberPath;
           for (int i = recIdx + 1; i < static_cast<int>(mc.names.size()); ++i)
             memberPath += (memberPath.empty() ? "" : "%") + mc.names[i];
