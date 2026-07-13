@@ -56,6 +56,7 @@ void registerAllBridgePasses() {
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createPreserveMutableGlobalsPass(); });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createMarkBoundsRemapViewsPass(); });
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createFoldAssumedRankQueriesPass(); });
+  mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return createPruneNeverAllocatedMemberDerefPass(); });
   // Flang's polymorphic-op conversion: statically devirtualises
   // ``fir.dispatch`` / ``fir.select_type`` ops whose target is
   // resolvable at compile time.  Run BEFORE

@@ -171,7 +171,37 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign, hlfir::Element
   wa.array_name = inner.target;
   wa.is_write = true;
   if (auto dd = dest.getDefiningOp()) {
-    if (auto dstDg = mlir::dyn_cast<hlfir::DesignateOp>(dd)) {
+    // Whole-MEMBER array-component LHS (cartesian ``z_adv_u_i(jc, jk) % x``):
+    // the ``%x`` designate carries a component selector + a whole-member
+    // ``shape`` but NO triplet / element subscript, and its result is the
+    // member ARRAY (``!fir.array<3xf64>``).  The RECORD indices (jc, jk[, block])
+    // that must be pinned live on the PARENT AoR-element designate, and the
+    // member's own array dim(s) are exactly what the elemental iterates.  The
+    // generic triplet loop below sees an empty triplet list and emits a rank-0
+    // write memlet -> the whole companion array, which codegen lowers as a
+    // pointer connector (``double* _out = arr; _out = <scalar>`` -> a
+    // ``double* = double`` compile error).  Reuse ``expandDesignateChain`` (the
+    // READ-side flat-name + record-index walk that the ``%x`` reads already use)
+    // for the leading record dims, then append the elemental iters for the
+    // trailing member-array dims -- yielding a volume-1 per-component write that
+    // matches the sibling ``%x`` writes.
+    auto dstDgArrComp = mlir::dyn_cast<hlfir::DesignateOp>(dd);
+    if (dstDgArrComp && dstDgArrComp.getComponentAttr() && dstDgArrComp.getIsTriplet().empty() &&
+        dstDgArrComp.getIndices().empty() && isArrayRef(dstDgArrComp.getResult().getType())) {
+      auto [arr, recDims] = expandDesignateChain(dstDgArrComp);
+      if (!arr.empty()) {
+        inner.target = arr;
+        wa.array_name = arr;
+      }
+      for (auto& de : recDims) {
+        wa.index_vars.push_back(de.var);
+        wa.index_exprs.push_back(de.expr);
+      }
+      for (unsigned i = 0; i < rank; ++i) {
+        wa.index_vars.push_back(iter_names[i]);
+        wa.index_exprs.push_back(iter_names[i]);
+      }
+    } else if (auto dstDg = mlir::dyn_cast<hlfir::DesignateOp>(dd)) {
       auto triplets = dstDg.getIsTriplet();
       auto idxOps = dstDg.getIndices();
       unsigned cursor = 0;
@@ -943,40 +973,14 @@ std::string buildBoolExpr(mlir::Value val, int d) {
     return "(" + leafExpr(cmp.getLhs(), d + 1) + " " + pred + " " + leafExpr(cmp.getRhs(), d + 1) + ")";
   }
   if (auto cmp = mlir::dyn_cast<mlir::arith::CmpIOp>(def)) {
-    // ALLOCATED(arr) idiom: ``cmpi ne, convert(box_addr(load %decl)), 0``.
-    // Render as ``<decl>_allocated`` (the bridge-synthesised
-    // tracker symbol) instead of decomposing the cmp into
-    // ``<lhs> != <rhs>`` where the LHS resolves to ``?``.
-    // Same recognition as buildExpr's path in expressions.cpp;
-    // duplicated here because boolean contexts decompose before
-    // the LHS gets a whole-shape pattern match.
-    if (cmp.getPredicate() == mlir::arith::CmpIPredicate::ne) {
-      bool rhsZero = false;
-      if (auto c = traceConstInt(cmp.getRhs())) rhsZero = (*c == 0);
-      if (rhsZero) {
-        mlir::Value cur = cmp.getLhs();
-        for (int i = 0; i < limits::kConvertChainDepth && cur; ++i) {
-          auto* cd = cur.getDefiningOp();
-          if (!cd) break;
-          if (auto cv = mlir::dyn_cast<fir::ConvertOp>(cd)) {
-            cur = cv.getValue();
-            continue;
-          }
-          break;
-        }
-        if (cur) {
-          if (auto* cd = cur.getDefiningOp()) {
-            if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(cd)) {
-              auto src = ba.getVal();
-              if (auto* sd = src.getDefiningOp())
-                if (auto ld = mlir::dyn_cast<fir::LoadOp>(sd)) src = ld.getMemref();
-              auto arrName = traceToDecl(src);
-              if (!arrName.empty()) return arrName + "_allocated";
-            }
-          }
-        }
-      }
-    }
+    // ALLOCATED(arr) / ASSOCIATED(ptr) idiom: ``cmpi ne, convert(box_addr(load
+    // %decl)), 0``.  Render as ``<decl>_allocated`` (the bridge-synthesised
+    // tracker symbol) instead of decomposing the cmp into ``<lhs> != <rhs>``
+    // where the LHS resolves to ``?``.  Same ``matchAssociatedStatusBoxRef``
+    // the buildExpr path in expressions.cpp uses; recognised again here because
+    // boolean contexts decompose before the LHS gets a whole-shape match.
+    if (mlir::Value src = matchAssociatedStatusBoxRef(cmp))
+      if (auto arrName = traceToDecl(src); !arrName.empty()) return arrName + "_allocated";
     auto pred = cmpiPredStr(cmp.getPredicate());
     if (pred.empty()) return "?";
     return "(" + leafExpr(cmp.getLhs(), d + 1) + " " + pred + " " + leafExpr(cmp.getRhs(), d + 1) + ")";

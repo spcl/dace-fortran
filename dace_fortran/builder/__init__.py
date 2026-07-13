@@ -243,6 +243,19 @@ DEFAULT_PIPELINE = (
     # flatten-structs so the member designates feed the usual designate-rewrite;
     # a no-op when no external takes a struct.
     "hlfir-marshal-external-structs,"
+    # Erase a result-less ``fir.if`` guard whose entry block unconditionally
+    # dereferences an ALLOCATABLE / POINTER record member the module never
+    # allocates and never lets escape (ICON ocean's ``IF (createsolvermatrix)
+    # CALL ocean_solve_dump_matrix(...)`` reads ``free_sfc_solver % act``, a
+    # never-constructed ``CLASS(...), ALLOCATABLE`` backend).  Referencing an
+    # unallocated allocatable is Fortran-standard UB, so under the well-defined-
+    # input assumption any execution entering the guard is already source-UB and
+    # the branch may be deleted -- keyed on the provable non-allocation +
+    # non-escape invariant, never on the branch condition or a member name.
+    # Runs BEFORE flatten-structs so the flatten never mints companions for the
+    # dead chain (which would otherwise leak free symbols the bindings cannot
+    # bind).  See ``passes/PruneNeverAllocatedMemberDeref.cpp``.
+    "hlfir-prune-never-allocated-member-deref,"
     "hlfir-flatten-structs,"
     # Tag Fortran 2003 bounds-remapping pointer assignments
     # (``ptr(1:N*K) => target(:, slice)``) with
@@ -754,6 +767,12 @@ class SDFGBuilder:
         # name), or ``None`` (unknown  --  symbol stays free, caller
         # passes it).
         self.offset_values: dict[str, int | str | None] = {}
+        # Extent aliases: a ``fir.box_dims`` synthetic ``<arr>_d<i>`` (minted by
+        # an inlined ``SIZE(arr, i+1)``) equals the array's declared extent
+        # ``shape_symbols[i]`` for a concrete-shape array -- the runtime extent
+        # of a concrete dim IS its declared extent (bit-exact).  Populated by
+        # ``add_descriptors``; renamed post-emit exactly like the alias offsets.
+        self.extent_aliases: dict[str, str] = {}
         # Whole-derived-type-OBJECT pointer rebinds (``params_oce => v_params``),
         # populated by ``descriptors.scan_object_aliases`` during ``build()``.
         # ``object_aliases``: {tgt_obj: src_obj} redirect edges (transitive);
@@ -854,6 +873,28 @@ class SDFGBuilder:
             sdfg.replace(src, dst)
             if src in sdfg.symbols:
                 sdfg.symbols.pop(src)
+        # Extent aliases (``<arr>_d<i>`` == the array's declared extent
+        # ``shape_symbols[i]``): same symbol-to-symbol rename as the offset
+        # aliases above.  A ``box_dims`` synthetic from an inlined ``SIZE`` leaks
+        # as a free symbol when the descriptor is already concrete; collapse it
+        # onto the real extent so the signature carries only the declared extent.
+        for src, dst in self.extent_aliases.items():
+            if src not in sdfg.symbols and src not in sdfg.free_symbols:
+                continue
+            # The declared extent ``dst`` may already be a real signature symbol
+            # with its own Fortran kind -- a scalar argument used as a bound
+            # (``gbuf(n)`` with ``integer :: n`` -> int32).  ``replace`` re-adds
+            # ``dst`` with the synthetic's default int64 width, silently widening
+            # it, which then desyncs the generated interface param (int64) from
+            # the wrapper variable (the arg's real int32 kind) and fails the
+            # gfortran link.  The collapse is bit-exact (the extents are equal),
+            # so keep it, but restore ``dst``'s pre-existing kind afterwards.
+            dst_dtype = sdfg.symbols[dst] if dst in sdfg.symbols else None
+            sdfg.replace(src, dst)
+            if src in sdfg.symbols:
+                sdfg.symbols.pop(src)
+            if dst_dtype is not None:
+                sdfg.symbols[dst] = dst_dtype
         # Post-gen cleanups (Stage 4b in dace_fortran/README.md).
         # Run BEFORE the FrozenSignature snapshot so the snapshot
         # captures the post-cleanup signature (matters for the

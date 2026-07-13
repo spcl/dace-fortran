@@ -21,6 +21,7 @@
 
 #include "flang/Optimizer/Dialect/FIRType.h"
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/Value.h"
 
 namespace hlfir_bridge {
@@ -178,6 +179,16 @@ void clearAllocAliases();
 /// any number of fir.convert wrappings.  nullopt if not constant-foldable.
 std::optional<int64_t> traceConstInt(mlir::Value v);
 
+/// Recognise Flang's ``ASSOCIATED(ptr)`` / ``ALLOCATED(arr)`` lowering
+///   ``arith.cmpi ne, fir.convert*(fir.box_addr(fir.load? %boxref)), 0``
+/// and return ``%boxref`` -- the box reference ``traceToDecl`` names, to which
+/// the AST builder appends ``_allocated`` (the presence-tracker symbol).
+/// Returns a null ``mlir::Value`` when ``cmp`` is not that shape.  One matcher
+/// shared by the two AST-side recognisers (``buildExpr`` / ``buildBoolExpr``,
+/// which render the ``<name>_allocated`` read) and ``extract_vars`` (which
+/// mints the tracker's VarInfo for a nested struct-member pointer/allocatable).
+mlir::Value matchAssociatedStatusBoxRef(mlir::arith::CmpIOp cmp);
+
 /// Render an integer-typed SSA value as a Python expression string of
 /// Fortran scalar names + literals + arithmetic operators.  Used by
 /// ``resolveShapeSyms`` to surface a dynamic gather-temp extent
@@ -294,6 +305,49 @@ mlir::Value peelBoxReinterpret(mlir::Value v, int maxDepth = limits::kAliasMemre
 /// dummy's own name (gate #11 in ``traceToDecl``; reused by
 /// ``rootedAtStructDummy`` / ``walkMemberChain`` for gate #12).
 bool leadsToComponentDesignate(mlir::Value mr);
+
+/// If ``v`` (or the value it peels to through the shared box reinterprets) is a
+/// PURE ARRAY-OF-RECORDS SECTION designate -- triplet/scalar subscripts, NO
+/// component selector, a derived-type (``RecordType``) element -- whose own
+/// base leads (through box peels AND inlined whole-array-dummy aliases) to a
+/// struct COMPONENT, return that section; else null.  This is the narrow gate
+/// for the per-block AoR-section-with-``%member``-leaf shape: an inlined worker
+/// dummy bound to ``p_diag % p_vn(:, :, blockno)`` (a 3-D pointer array of
+/// ``t_cartesian_coordinates``) read as ``vec_in(jc, jk) % x(k)``.  The
+/// ``RecordType`` element requirement keeps a PLAIN-real member section
+/// (``rho(:, :, blockno)``) on its flattened-companion /
+/// ``rewriteSectionedAliasLeaf`` path, untouched.
+hlfir::DesignateOp asSectionOverComponent(mlir::Value v);
+
+/// ``asSectionOverComponent`` applied to ``decl``'s memref: the inlined
+/// AoR-section dummy (``vec_in``) whose box_addr/copy_in peels to the section.
+hlfir::DesignateOp asInlinedSectionOverComponent(hlfir::DeclareOp decl);
+
+/// Number of SCALAR (non-triplet) subscript dims of a section designate -- the
+/// fixed record indices (``blockno``) the AoR section pins.  ``vec_in`` over
+/// ``p_vn(:, :, blockno)`` -> 1.
+unsigned countScalarSectionDims(hlfir::DesignateOp sec);
+
+/// If ``decl`` is a LOCAL Fortran POINTER to a whole DERIVED-TYPE OBJECT
+/// (``type(t_subset_range), pointer :: cells_subset``) that is rebound once via
+/// ``ptr => <source>`` (``cells_subset => patch_3d % p_patch_2d(1) % cells %
+/// all``, or ``cells_subset => subset_range`` onto an inlined dummy that itself
+/// aliases such a component), return the SOURCE value the pointer was bound to
+/// -- the ``fir.store``'d box peeled to its source declare / component
+/// designate.  Null when ``decl`` is not a local record-object pointer, has no
+/// single unambiguous rebind, or the pointee is a scalar / array (a pointer
+/// VIEW, lowered by the ``view_alias`` mechanism -- left untouched here).
+///
+/// The three access-path walkers (``traceToDecl``, ``rootedAtStructDummy``,
+/// ``walkMemberChain``) FOLLOW this hop when their memref back-walk reaches such
+/// a local pointer declare, so ``cells_subset % start_block`` resolves to the
+/// caller-side flat name ``patch_3d_p_patch_2d_cells_all_start_block`` (rooted
+/// at the struct dummy ``patch_3d``) instead of the local pointer's own name.
+/// The continuation reuses the existing gate #11/#12 inlined-dummy hop, so a
+/// rebind onto LOCAL storage still roots at a non-dummy and stays unresolved
+/// for the diagnostic to catch.  Mirrors ``RewritePointerAssigns``'
+/// ``traceRebindChain`` peel set.
+mlir::Value traceLocalPointerRebindSource(hlfir::DeclareOp decl);
 
 /// Per-dimension lower-bound constants for an ``hlfir.declare``.
 /// Returns the constants stored in a ``fir.shape_shift`` operand, or

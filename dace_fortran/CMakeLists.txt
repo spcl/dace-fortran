@@ -236,6 +236,7 @@ add_library(hlfir_bridge_passes STATIC
     passes/PreserveMutableGlobals.cpp
     passes/MarkBoundsRemapViews.cpp
     passes/FoldAssumedRankQueries.cpp
+    passes/PruneNeverAllocatedMemberDeref.cpp
 )
 target_link_libraries(hlfir_bridge_passes PUBLIC
     hlfir_bridge_core

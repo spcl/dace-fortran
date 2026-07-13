@@ -421,6 +421,63 @@ static fir::RecordType recordRefOf(mlir::Type t) {
   return mlir::dyn_cast<fir::RecordType>(inner);
 }
 
+/// True when ``slotRefTy`` is a component member SLOT holding a RECORD
+/// POINTER/ALLOCATABLE: ``!fir.ref<!fir.box<!fir.ptr|heap<record>>>``.  This is
+/// the ``this%member => target`` derived-type rebind shape whose reads are
+/// component selects.  Array-data pointer members (``box<ptr<array<T>>>``) do
+/// NOT match -- those are owned by the array / view path, never re-rooted here.
+static bool isRecordPointerMemberSlot(mlir::Type slotRefTy) {
+  auto ref = mlir::dyn_cast<fir::ReferenceType>(slotRefTy);
+  if (!ref) return false;
+  auto box = mlir::dyn_cast<fir::BaseBoxType>(ref.getEleTy());
+  if (!box) return false;
+  mlir::Type inner = box.getEleTy();
+  if (auto p = mlir::dyn_cast<fir::PointerType>(inner)) return mlir::isa<fir::RecordType>(p.getEleTy());
+  if (auto h = mlir::dyn_cast<fir::HeapType>(inner)) return mlir::isa<fir::RecordType>(h.getEleTy());
+  return false;
+}
+
+/// True when ``v`` roots at OWNED storage visible in this function -- a
+/// ``fir.alloca`` / ``fir.allocmem`` or a module global (``fir.address_of``) --
+/// rather than a genuine runtime dummy (a function block-argument).  Walks the
+/// ``hlfir.declare`` / ``fir.convert`` / ``fir.embox`` / ``fir.box_addr`` /
+/// ``fir.rebox`` chain.  After ``hlfir-inline-all`` an inlined callee's dummy
+/// declare threads its ``memref`` to the caller's storage, so a ``this`` bound
+/// to a LOCAL struct resolves to that local; a real entry-function dummy bottoms
+/// out at a block-argument and is rejected.  Mirrors the intent of
+/// ``FlattenStructs``'s ``isIndirectStructLocal`` (owned, not a rebindable
+/// descriptor) but discriminates on the STORAGE ROOT rather than the outer type.
+static bool rootsAtOwnedStorage(mlir::Value v) {
+  for (int i = 0; i < 128 && v; ++i) {
+    if (mlir::isa<mlir::BlockArgument>(v)) return false;
+    auto* def = v.getDefiningOp();
+    if (!def) return false;
+    if (mlir::isa<fir::AllocaOp, fir::AllocMemOp, fir::AddrOfOp>(def)) return true;
+    if (auto d = mlir::dyn_cast<hlfir::DeclareOp>(def)) {
+      v = d.getMemref();
+      continue;
+    }
+    if (auto c = mlir::dyn_cast<fir::ConvertOp>(def)) {
+      v = c.getValue();
+      continue;
+    }
+    if (auto e = mlir::dyn_cast<fir::EmboxOp>(def)) {
+      v = e.getMemref();
+      continue;
+    }
+    if (auto b = mlir::dyn_cast<fir::BoxAddrOp>(def)) {
+      v = b.getVal();
+      continue;
+    }
+    if (auto r = mlir::dyn_cast<fir::ReboxOp>(def)) {
+      v = r.getBox();
+      continue;
+    }
+    return false;
+  }
+  return false;
+}
+
 /// Trace a rebind value back through ``fir.embox``/``fir.rebox``/
 /// ``fir.convert``/``hlfir.designate`` ops to the originating
 /// ``hlfir.declare``.  Each designate encountered is captured into
@@ -607,6 +664,30 @@ struct RewritePointerAssignsPass
     });
 
     for (auto ptrDecl : ptrDecls) rewrite(ptrDecl);
+
+    // Second candidate class: struct-member RECORD pointer rebinds
+    // (``this%member => target%...(...)``) whose base is an OWNED LOCAL struct.
+    // The slot is a component-designate STORE target (not a pointer declare), so
+    // neither the pointer-declare rewrite above, nor ``LiftAosPointerRecords``
+    // (needs an array outer), nor the Python object-alias path (bare-identifier
+    // RHS only) catches it.  Re-root each such read on the rebind target so it
+    // is byte-identical to the dummy-rooted spelling the descriptor mint already
+    // resolves (see rewriteMemberSlotRebind).  Collect first; rewriting mutates.
+    llvm::SmallVector<fir::StoreOp, 8> memberSlotStores;
+    getOperation().walk([&](fir::StoreOp st) {
+      auto slot = mlir::dyn_cast_or_null<hlfir::DesignateOp>(st.getMemref().getDefiningOp());
+      if (!slot || !slot.getComponent().has_value()) return;
+      if (!isRecordPointerMemberSlot(slot.getResult().getType())) return;
+      auto baseDecl = mlir::dyn_cast_or_null<hlfir::DeclareOp>(slot.getMemref().getDefiningOp());
+      if (!baseDecl || !rootsAtOwnedStorage(baseDecl.getResult(0))) return;
+      // Skip the initial nullify store (``embox(zero_bits)``); the rewrite keys
+      // off the real rebind and would then process the slot twice.
+      auto* valDef = st.getValue().getDefiningOp();
+      if (auto embox = mlir::dyn_cast_or_null<fir::EmboxOp>(valDef))
+        if (mlir::isa_and_nonnull<fir::ZeroOp>(embox.getMemref().getDefiningOp())) return;
+      memberSlotStores.push_back(st);
+    });
+    for (auto st : memberSlotStores) rewriteMemberSlotRebind(st);
 
     // Sweep: any pointer declare with use_empty results after
     // the rewrites is dead  --  erase to keep extract_vars clean.
@@ -1309,6 +1390,136 @@ struct RewritePointerAssignsPass
     // remain.
     if (auto* def = ptrAlloca.getDefiningOp())
       if (def->use_empty()) def->erase();
+  }
+
+  /// Re-root reads of a struct-member RECORD pointer rebind
+  /// (``this%member => target%...(...)``) onto the rebind target.
+  ///
+  /// flang lowers ``this%member`` (a POINTER derived-type slot) as
+  /// ``load(slot)`` -> ``box_addr`` -> component designates, all rooted at the
+  /// LOCAL struct.  The bridge's descriptor mint keys on the DUMMY-rooted
+  /// spelling (``patch_3d%p_patch_2d(1)%cells%max_connectivity``), so the
+  /// local-rooted read (``free_sfc_solver_lhs%patch_2d%cells%max_connectivity``)
+  /// never matches and its leaf scalar surfaces as a free symbol.  The rebind
+  /// target designate (``chain.front``) is the SAME storage as the dummy-rooted
+  /// reads and, being computed at the rebind site, dominates every read after
+  /// it.  Re-rooting each read on that target makes it byte-for-byte the
+  /// already-resolved spelling, so the existing mint fires unchanged and binds
+  /// the REAL value (bit-exact -- no new value is introduced).
+  ///
+  /// Conservative by construction: only the single-static-rebind, RECORD-target,
+  /// fully-dominated shape is re-rooted; every other shape (array-section /
+  /// whole-pointer-dummy / interleaved / non-dominated / unmodelled reader) is
+  /// left EXACTLY as-is.  This path never emits a new loud failure, so a
+  /// currently-building program cannot regress into a build error.
+  void rewriteMemberSlotRebind(fir::StoreOp store) {
+    auto slot0 = mlir::dyn_cast_or_null<hlfir::DesignateOp>(store.getMemref().getDefiningOp());
+    if (!slot0 || !slot0.getComponent().has_value()) return;
+    llvm::StringRef comp = slot0.getComponent()->getValue();
+
+    // Gather every designate of the same (base, component).  flang usually CSEs
+    // the store target and the read into one designate, but tolerate duplicates
+    // so no read is left dangling on an unbound slot after the store is erased.
+    mlir::Value base = slot0.getMemref();
+    llvm::SmallVector<hlfir::DesignateOp, 2> slotDesignates;
+    for (auto* u : base.getUsers())
+      if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u)) {
+        auto c = dg.getComponent();
+        if (c.has_value() && c->getValue() == comp) slotDesignates.push_back(dg);
+      }
+
+    llvm::SmallVector<fir::StoreOp, 4> slotStores;
+    llvm::SmallVector<fir::StoreOp, 4> nonNullifyStores;
+    llvm::SmallVector<fir::LoadOp, 4> loads;
+    for (auto dg : slotDesignates)
+      for (auto* u : dg.getResult().getUsers()) {
+        if (auto ld = mlir::dyn_cast<fir::LoadOp>(u)) {
+          loads.push_back(ld);
+        } else if (auto st = mlir::dyn_cast<fir::StoreOp>(u)) {
+          slotStores.push_back(st);
+          auto* valDef = st.getValue().getDefiningOp();
+          if (auto embox = mlir::dyn_cast_or_null<fir::EmboxOp>(valDef))
+            if (mlir::isa_and_nonnull<fir::ZeroOp>(embox.getMemref().getDefiningOp())) continue;  // nullify
+          nonNullifyStores.push_back(st);
+        } else {
+          return;  // unmodelled slot user -- decline, leave the rebind untouched
+        }
+      }
+
+    // Only the single observable rebind is handled.  A second observable rebind
+    // would need the interleaved-read analysis the pointer-declare path runs;
+    // here we simply decline (leaving the IR as it currently builds).
+    if (nonNullifyStores.size() != 1) return;
+    fir::StoreOp rebindStore = nonNullifyStores.front();
+
+    // Every read must be dominated by the rebind store, so re-rooting each is
+    // sound and the store is safe to erase.  A read not dominated (an earlier
+    // block, or a read of the still-unbound slot) -> decline, no mutation.
+    mlir::DominanceInfo dom;
+    for (auto ld : loads)
+      if (!dom.dominates(rebindStore.getOperation(), ld.getOperation())) return;
+
+    // Trace the stored box to (parent, chain).  Only a RECORD-target rebind --
+    // whose outermost chain designate yields a derived-type ref (e.g.
+    // ``patch_3d%p_patch_2d(1)``) -- re-roots here.  A whole-pointer-dummy
+    // rebind (empty chain) or an array-section target is declined: those reads
+    // are not plain component selects and need the array / view path.
+    RebindChain chain = traceRebindChain(rebindStore.getValue());
+    if (!chain.parent || chain.chain.empty()) return;
+    mlir::Value recordTarget = chain.chain.front().dg.getResult();
+    if (!recordRefOf(recordTarget.getType())) return;
+
+    // Validate BEFORE mutating: every read reaches the record either through a
+    // ``fir.box_addr`` of the loaded slot, or (rarely) a component designate
+    // directly on the loaded box whose memref type matches the target.
+    for (auto ld : loads)
+      for (auto* uu : ld.getResult().getUsers()) {
+        if (mlir::isa<fir::BoxAddrOp>(uu)) continue;
+        if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(uu))
+          if (dg.getMemref().getType() == recordTarget.getType()) continue;
+        return;  // unmodelled read shape -- decline (nothing mutated yet)
+      }
+
+    // Commit.  Re-root each read on the target designate; this mirrors the
+    // record-member re-root the pointer-declare path applies in its load-user
+    // rewrite (box_addr -> target ref; direct component designate -> cloned
+    // onto the target).
+    llvm::SmallVector<mlir::Operation*, 8> deadReaders;
+    for (auto ld : loads) {
+      llvm::SmallVector<mlir::Operation*, 4> userOps(ld.getResult().getUsers().begin(),
+                                                     ld.getResult().getUsers().end());
+      for (auto* uu : userOps) {
+        if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(uu)) {
+          mlir::OpBuilder b(ba);
+          mlir::Value repl = recordTarget;
+          if (repl.getType() != ba.getResult().getType())
+            repl = b.create<fir::ConvertOp>(ba.getLoc(), ba.getResult().getType(), repl).getResult();
+          ba.getResult().replaceAllUsesWith(repl);
+          deadReaders.push_back(ba);
+        } else if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(uu)) {
+          mlir::OpBuilder b(dg);
+          auto* cloned = b.clone(*dg.getOperation());
+          cloned->setOperand(0, recordTarget);
+          dg.getResult().replaceAllUsesWith(cloned->getResult(0));
+          deadReaders.push_back(dg);
+        }
+      }
+      deadReaders.push_back(ld);
+    }
+    for (auto* op : deadReaders)
+      if (op->use_empty()) op->erase();
+
+    // Erase the rebind + nullify store(s) and their now-dead value chain, then
+    // the dead slot designates.  The target designate (``recordTarget``) stays
+    // live -- the re-rooted reads reference it.
+    for (auto st : slotStores) {
+      mlir::Value storedVal = st.getValue();
+      st.erase();
+      if (auto* def = storedVal.getDefiningOp())
+        if (def->use_empty()) def->erase();
+    }
+    for (auto dg : slotDesignates)
+      if (dg.getResult().use_empty()) dg.erase();
   }
 };
 

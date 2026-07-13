@@ -174,6 +174,18 @@ def emit_assign(builder, ctx: '_Ctx', n, region):
         # plain ``i = i + 1`` passes through verbatim.
         rhs = array_read_to_dace_expr(builder, n, ctx.iter_map, ctx.sdfg)
         rhs = _strip_dace_casts(rhs)
+        # No-op symbol self-assignment (``x = x``): an inlined callee dummy
+        # bound to an actual that flattens to the SAME symbol name -- e.g. the
+        # nested block-loop inline ``grad_fd_norm_oce_3d_onblock(.., blockno)``
+        # whose ``blockno`` dummy and the enclosing loop var both mangle to
+        # ``grad_fd_norm_oce_3d_blockno``.  It moves no value, but materialising
+        # it as an inter-state edge assignment forces a spurious state AND makes
+        # DaCe codegen declare a local of the same name -- which shadows the
+        # free-symbol parameter of that name (a gfortran/-Werror hard error).
+        # The RHS is the target verbatim only for a genuine self-assign; a
+        # same-named length-1 array read renders ``x[0]`` and is NOT dropped.
+        if rhs.strip() == n.target:
+            return
         ctx.flush(builder, region)
         ctx.ensure(region)
         dst = region.add_state(f"post_{n.target}_{builder.nid()}")

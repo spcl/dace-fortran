@@ -897,21 +897,70 @@ std::vector<ASTNode> buildSectionScalarAssign(hlfir::AssignOp assign, hlfir::Des
   inner.target_is_array = true;
   inner.expr = buildExpr(assign.getOperand(0), 0);
 
+  // Per-dst-dim index: a triplet dim contributes its loop iter, a scalar dim
+  // its (Fortran 1-based) index expr.
+  std::vector<std::string> srcIdx;
+  {
+    unsigned tDim = 0;
+    for (auto& d : dims) srcIdx.push_back(d.isTriplet ? iter_names[tDim++] : d.scalarIdx);
+  }
+  // Compose parent actual-arg sections.  When the section-scalar-assign target
+  // is an INLINED DUMMY whose actual arg is itself a section
+  // (``div_vec_c(:, :) = 0`` inside a worker bound to ``z_div_c(:, :,
+  // blockno)``), ``traceToDecl`` already resolved ``dstName`` to the SOURCE
+  // array (``z_div_c``), so the write must carry the source's FULL rank: every
+  // parent section's fixed scalar dim (``blockno``) has to be spliced into the
+  // index at its source-dim position.  Each parent-section triplet dim consumes
+  // one running index entry (the dummy's surviving dim, already an iter); each
+  // parent scalar dim inserts its own index.  This is the section-target twin
+  // of the triplet/scalar parent walk ``expandDesignateChain`` runs for the
+  // element-write path -- without it the fill writes a rank-deficient memlet
+  // (``z_div_c[as_0, as_1]`` on a rank-3 array).  A direct (non-dummy) target
+  // has no parent section, so the walk is a no-op and the index is unchanged.
+  {
+    mlir::Value pv = dst.getMemref();
+    for (int hop = 0; hop < limits::kSsaBackWalkDepth && pv; ++hop) {
+      if (mlir::Value peeled = peelBoxReinterpret(pv); peeled != pv) {
+        pv = peeled;
+        continue;
+      }
+      auto* pdop = pv.getDefiningOp();
+      if (!pdop) break;
+      if (auto pdecl = mlir::dyn_cast<hlfir::DeclareOp>(pdop)) {
+        if (!pdecl.getDummyScope()) {  // inlined alias -- keep walking to the section
+          pv = pdecl.getMemref();
+          continue;
+        }
+        break;  // a real dummy scope: the section base bottoms out here
+      }
+      auto pdg = mlir::dyn_cast<hlfir::DesignateOp>(pdop);
+      if (!pdg) break;
+      if (pdg.getIsTriplet().empty()) {  // component / element hop, no dims to compose
+        pv = pdg.getMemref();
+        continue;
+      }
+      std::vector<DesignateDim> pdims;
+      if (!parseDesignateDims(pdg, pdims)) break;
+      std::vector<std::string> composed;
+      size_t cur = 0;
+      for (auto& pd : pdims) {
+        if (pd.isTriplet)
+          composed.push_back(cur < srcIdx.size() ? srcIdx[cur++] : std::string("?"));
+        else
+          composed.push_back(pd.scalarIdx);
+      }
+      for (; cur < srcIdx.size(); ++cur) composed.push_back(srcIdx[cur]);
+      srcIdx = std::move(composed);
+      pv = pdg.getMemref();
+    }
+  }
+
   AccessInfo wa;
   wa.array_name = dstName;
   wa.is_write = true;
-  {
-    unsigned tDim = 0;
-    for (auto& d : dims) {
-      if (d.isTriplet) {
-        wa.index_vars.push_back(iter_names[tDim]);
-        wa.index_exprs.push_back(iter_names[tDim]);
-        ++tDim;
-      } else {
-        wa.index_vars.push_back(d.scalarIdx);
-        wa.index_exprs.push_back(d.scalarIdx);
-      }
-    }
+  for (auto& idx : srcIdx) {
+    wa.index_vars.push_back(idx);
+    wa.index_exprs.push_back(idx);
   }
   inner.accesses.push_back(std::move(wa));
 

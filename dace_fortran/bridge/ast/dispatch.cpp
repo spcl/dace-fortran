@@ -51,6 +51,26 @@ namespace hlfir_bridge {
 // case regions with it); forward-declared here for ``walkSCFBeforeRegion``.
 static std::vector<ASTNode> buildIndexSwitchNodes(mlir::scf::IndexSwitchOp sw);
 
+// True for flang's OPTIONAL-arg present-select: ``%r = if %assoc -> T { yield
+// <present box/ref> } else { yield fir.absent }`` -- passing an associated
+// POINTER / ALLOCATABLE actual to an OPTIONAL dummy lowers to this value-select
+// (``present(dummy) == %assoc``).  Both arms are pure address marshalling with
+// no observable side effect, so the standalone conditional node the walker would
+// emit is dead weight (the arg value, if ever needed, is re-derived by
+// ``buildExpr`` / ``lowerIsPresent`` at the use site).  Keys purely on IR shape
+// (value-producing if + a ``fir.absent`` in the else terminator), so it never
+// touches a real Fortran ``IF``.  Templated to serve both ``fir::IfOp`` (the
+// pre-lift form) and ``mlir::scf::IfOp`` (should ``lift-cf-to-scf`` rewrite it).
+template <typename IfOpT>
+static bool isOptionalPresentSelect(IfOpT op) {
+  if (op.getNumResults() == 0) return false;
+  mlir::Region& e = op.getElseRegion();
+  if (e.empty()) return false;
+  auto* term = e.back().getTerminator();
+  if (!term || term->getNumOperands() != 1) return false;
+  return mlir::isa_and_nonnull<fir::AbsentOp>(term->getOperand(0).getDefiningOp());
+}
+
 static ASTNode buildScfIfAsConditional(mlir::scf::IfOp ifOp) {
   ASTNode c;
   c.kind = "conditional";
@@ -198,6 +218,7 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
   }
   for (auto& op : block) {
     if (auto ifOp = mlir::dyn_cast<mlir::scf::IfOp>(op)) {
+      if (isOptionalPresentSelect(ifOp)) continue;  // dead optional-present marshalling select
       out.push_back(buildScfIfAsConditional(ifOp));
       continue;
     }
@@ -219,6 +240,7 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
     // handler at the bottom of ``buildAST`` (line 2246) -- same
     // shape, just reached via the scf.while walker.
     if (auto firIfOp = mlir::dyn_cast<fir::IfOp>(op)) {
+      if (isOptionalPresentSelect(firIfOp)) continue;  // dead optional-present marshalling select
       ASTNode n;
       n.kind = "conditional";
       n.condition = buildBoolExpr(firIfOp.getCondition(), 0);
@@ -3350,6 +3372,7 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       continue;
     }
     if (auto ifOp = mlir::dyn_cast<fir::IfOp>(op)) {
+      if (isOptionalPresentSelect(ifOp)) continue;  // dead optional-present marshalling select
       // Allocatable deallocate-guard: ``fir.if (alloc_status != 0) {
       // fir.freemem, reset box to zero }``.  Carries no observable
       // side effect in the SDFG model (we treat allocatables as
@@ -3408,6 +3431,7 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       continue;
     }
     if (auto ifOp = mlir::dyn_cast<mlir::scf::IfOp>(op)) {
+      if (isOptionalPresentSelect(ifOp)) continue;  // dead optional-present marshalling select
       ASTNode n;
       n.kind = "conditional";
       // Materialise SUM / MINVAL / MAXVAL / PRODUCT reduction sub-terms of the
@@ -3689,7 +3713,19 @@ static std::string scfSwitchValueName(mlir::Value v) {
     }
     break;
   }
-  return scfSynthName(v);
+  // A while-carried exit reason was already stored into its synth by the
+  // ``scf.condition`` capture (see the ConditionOp handler in
+  // ``walkSCFBeforeRegion``) -- it lives in ``kScfValueMap``, so keep rendering
+  // it as that synth scalar.  A plain ``SELECT CASE`` selector (a module global
+  // / local var, possibly through a value-remap ``scf.if`` -- e.g. ocean's
+  // ``SELECT CASE (i_bc_veloc_top)`` whose selector is a two-arm remap of the
+  // namelist global) is NOT captured: render its real host-bound expression so
+  // the case conditions read the bound symbol instead of an unbacked ``__sc_N``
+  // that nothing ever assigns (an unresolved free symbol).
+  if (kScfValueMap.count(v)) return scfSynthName(v);
+  std::string e = buildExpr(v, 0);
+  if (!e.empty() && e != "?") return e;
+  return scfSynthName(v);  // last-resort: preserves the prior unbacked-synth behaviour
 }
 
 static std::vector<ASTNode> buildIndexSwitchNodes(mlir::scf::IndexSwitchOp sw) {

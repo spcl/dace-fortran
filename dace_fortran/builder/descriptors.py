@@ -72,6 +72,27 @@ def scan_object_aliases(builder) -> None:
     defs: set = set()
     non_desc_targets: set = set()
 
+    # Names READ anywhere in the AST (any is_read access, a reduction / copy
+    # source, or a call argument).  A section-RHS pointer-rebind store may be
+    # dropped only when its target companion is never read -- a rebind whose
+    # reads DO depend on the store's data must survive.  Collected once up front
+    # so the rebind classifier below is O(1).
+    read_names: set = set()
+
+    def collect_reads(nodes):
+        for c in nodes:
+            for a in (c.accesses or []):
+                if a.is_read and a.array_name:
+                    read_names.add(a.array_name)
+            if c.reduce_src:
+                read_names.add(c.reduce_src)
+            for arg in (c.call_args or []):
+                read_names.add(str(arg).split("[", 1)[0].strip())
+            collect_reads(c.children)
+            collect_reads(c.else_children)
+
+    collect_reads(builder.ast)
+
     def visit(nodes):
         for c in nodes:
             if c.kind == "assign" and not c.target_is_array and c.target not in known \
@@ -97,6 +118,31 @@ def scan_object_aliases(builder) -> None:
                         # source is itself an (unflattened) object.  Member
                         # accesses on ``tgt_obj`` redirect through this edge.
                         aliases[c.target] = src
+            elif c.kind == "assign" and not c.target_is_array and c.target in builder.arrays:
+                # Section-RHS pointer rebind onto a MATERIALISED array companion:
+                # ``inv_mm_solver % b_loc_wp => rhs_e(:, jk, :)`` flattens to a
+                # bare-name store ``inv_mm_solver_b_loc_wp = rhs_e`` whose target
+                # is a registered (deferred) RANK-2 companion but whose source
+                # ``rhs_e`` is RANK-3.  The section ``(:, jk, :)`` reshapes 3-D
+                # -> 2-D; the bridge left the slice off the flattened rebind, so
+                # the emit path renders a degenerate scalar ``companion[0] =
+                # ...`` -- a rank-1 memlet on the rank-2 array that fails
+                # ``validate``.  A ``=>`` association moves no data, and the rank
+                # CHANGE marks it as a (view) reshape rather than a same-rank
+                # whole-array copy that DOES move data (``iplev => metrics %
+                # pg_vertidx``, both rank-1, whose copy-in the reads depend on --
+                # left untouched).  Drop the rebind store ONLY when the companion
+                # is never READ (a live read would depend on the aliased data): a
+                # dead, write-only reshape target's degenerate store is pure
+                # noise.  ``emit_scalar_assign`` returns early for
+                # ``object_alias_defs`` targets.
+                src = str(c.expr).strip()
+                if _REF_EXPR.match(src) and c.target not in read_names:
+                    src_base = src.split("[", 1)[0]
+                    tgt_v = builder.arrays.get(c.target)
+                    src_v = builder.arrays.get(src_base)
+                    if tgt_v is not None and src_v is not None and tgt_v.rank != src_v.rank:
+                        defs.add(c.target)
             visit(c.children)
             visit(c.else_children)
 
@@ -349,6 +395,20 @@ def add_descriptors(builder, sdfg: SDFG):
             if s == "?":
                 syms[dim] = f"{v.fortran_name}_d{dim}"
         shape_syms[v.fortran_name] = syms
+        # A SEPARATE ``fir.box_dims`` synthetic ``<name>_d<i>`` -- minted by an
+        # inlined ``SIZE(arr, i+1)`` (e.g. the ``init_zero_3d_dp`` zero-fill) and
+        # rendered by trace_utils.cpp against dim i -- leaks as a free symbol
+        # when the array descriptor itself is already concrete.  For a
+        # concrete-extent dim the runtime extent equals the declared extent
+        # ``syms[i]`` (bit-exact), so bind the synthetic to it.  A deferred/
+        # allocatable dim keeps its own binding: there ``syms[i]`` IS that same
+        # synthetic (set just above) or a non-identifier (``?`` / literal /
+        # closed-form expr) -- ``ext == syn`` / ``not isidentifier`` skip those.
+        for i, ext in enumerate(syms):
+            syn = f"{v.fortran_name}_d{i}"
+            if ext == syn or not ext.isidentifier():
+                continue
+            builder.extent_aliases[syn] = ext
 
     # Closed-form extent expressions (``traceExtentExpr`` output for a
     # dynamic gather-temp first dim, e.g. ``"max((endcol - startcol) +
@@ -808,8 +868,6 @@ def emit_declare_transient(builder, ctx, n, region):
     ``b_d1`` that is symbolically distinct from ``b.shape[1]`` and the
     downstream lib node's same-dim validation rejects the mismatch.
     """
-    import re
-
     shape = list(n.accesses[0].index_exprs) if n.accesses else []
     resolved = []
     for entry in shape:

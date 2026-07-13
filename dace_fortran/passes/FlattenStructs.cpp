@@ -3635,6 +3635,39 @@ struct FlattenStructsPass : public mlir::PassWrapper<FlattenStructsPass, mlir::O
     }
     if (argDecls.empty()) return false;
 
+    // Resolve an access base through inline-alias ``hlfir.declare`` chains back
+    // to the block-arg-rooted declare registered in ``argDecls``.
+    //
+    // ``hlfir-inline-all`` (run BEFORE this split, pipeline builder L146 vs
+    // L238) re-declares a callee dummy over the caller-side declare result:
+    // ``%alias = hlfir.declare %root#0 {...callee...}`` -- and can nest
+    // (``%deep = hlfir.declare %alias#0``).  The back-walk above stops at the
+    // outermost such alias, which is ABSENT from ``argDecls`` (built only from
+    // the block-arg declares below), so an inlined-callee ``p%prog(idx)%m``
+    // access would miss the split and leak a rank-conflated flat companion.
+    // Follow the ``memref`` operand through the alias declares until the chain
+    // reaches the block-arg declare -- canonicalised onto its result #0, the
+    // ``argDecls`` key, regardless of which result an assumed-shape alias
+    // re-declared -- or a genuine non-alias root (returns a null Value, so the
+    // caller keeps the existing skip).  Mirrors the declare-over-declare hop in
+    // ``trace_utils.cpp::sectionBaseReachesComponent`` and the forward
+    // inline-alias follow in ``planAndReplaceStructArgs::hasComponentReachable``
+    // (same file); keys purely on structure (a declare aliasing a block arg),
+    // never on any variable name.
+    auto resolveInlineAlias = [&argDecls](mlir::Value v) -> mlir::Value {
+      for (int hop = 0; hop < limits::kAliasMemrefWalkDepth && v; ++hop) {
+        if (argDecls.count(v)) return v;
+        auto dc = mlir::dyn_cast_or_null<hlfir::DeclareOp>(v.getDefiningOp());
+        if (!dc) break;  // genuine non-alias root
+        // A block-arg-rooted declare re-boxes an entry-block argument; its
+        // result #0 is the ``argDecls`` key.
+        if (mlir::isa<mlir::BlockArgument>(dc.getMemref()) && argDecls.count(dc.getResult(0)))
+          return dc.getResult(0);
+        v = dc.getMemref();
+      }
+      return {};
+    };
+
     // Key: (root, access-order member path, index-symbol name).
     struct Key {
       void* root;
@@ -3676,6 +3709,12 @@ struct FlattenStructsPass : public mlir::PassWrapper<FlattenStructsPass, mlir::O
         chainDead.insert(md);
         v = md.getMemref();
       }
+      // Follow inline-alias declare chains (hlfir-inline-all) back to the
+      // block-arg declare, so an inlined-callee ``p%prog(idx)%m`` access binds
+      // to the SAME per-index companion as the entry's own block-arg-rooted
+      // access instead of leaking a rank-conflated flat companion.
+      v = resolveInlineAlias(v);
+      if (!v) return;  // chain doesn't terminate at a func arg
       auto it = argDecls.find(v);
       if (it == argDecls.end()) return;  // chain doesn't terminate at a func arg
       // The element type at the AoR access must be a record so the new
@@ -5332,6 +5371,38 @@ struct FlattenStructsPass : public mlir::PassWrapper<FlattenStructsPass, mlir::O
     auto shape = decl.getShape();
     auto baseName = decl.getUniqName().str();
 
+    // Companion uniq_name uniquer.  The flat companion for an
+    // array-of-records member ``base % m`` naturally wants
+    // ``<base>_<m>`` -- but a kernel may ALSO declare a REAL local of
+    // that exact name (ICON ocean's ``p_nabla2_dual`` AoR of
+    // ``t_cartesian_coordinates`` alongside a 3-D sync-scratch local
+    // ``p_nabla2_dual_x``).  Reusing the name would give two declares
+    // the same user-visible (demangled) name, so ``extract_vars`` binds
+    // the member access to the WRONG (real-local, lower-rank)
+    // descriptor and the member's trailing dim offset symbol
+    // (``offset_p_nabla2_dual_x_d3``) never registers.  Collect the
+    // demangled names of every existing declare in the enclosing
+    // function once, then hand out companion names that avoid them
+    // (and each other).  The no-collision case is preserved verbatim
+    // -- the returned name equals ``<base>_<m>`` -- so only a genuine
+    // clash pays the disambiguation ``_cc`` (cartesian-companion)
+    // suffix.
+    llvm::StringSet<> takenDemangled;
+    if (auto parentFunc = decl->getParentOfType<mlir::func::FuncOp>())
+      parentFunc.walk([&](hlfir::DeclareOp d) { takenDemangled.insert(demangleVarName(d.getUniqName())); });
+    auto mintCompanionName = [&](std::string cand) -> std::string {
+      if (takenDemangled.count(demangleVarName(cand))) {
+        std::string base = cand;
+        for (int n = 1; takenDemangled.count(demangleVarName(cand)); ++n) {
+          std::string suffix = "_cc";
+          if (n > 1) suffix += std::to_string(n);
+          cand = base + suffix;
+        }
+      }
+      takenDemangled.insert(demangleVarName(cand));
+      return cand;
+    };
+
     // Nested-record path: walk the path-leaf set and synthesise
     // one declare per leaf, indexed by the path-joined name
     // (``o_inner_x``).  The single-level path below stays the
@@ -5388,7 +5459,7 @@ struct FlattenStructsPass : public mlir::PassWrapper<FlattenStructsPass, mlir::O
         llvm::SmallVector<mlir::Value, 2> operands{newAlloca};
         if (leafShape) operands.push_back(leafShape);
         mlir::NamedAttrList attrs;
-        attrs.append("uniq_name", mlir::StringAttr::get(ctx, baseName + "_" + suffix));
+        attrs.append("uniq_name", mlir::StringAttr::get(ctx, mintCompanionName(baseName + "_" + suffix)));
         attrs.append(declareSegments(b, /*hasShape=*/leafShape != nullptr));
         auto newDecl =
             b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{declTy, declTy}, mlir::ValueRange(operands), attrs);
@@ -5652,7 +5723,7 @@ struct FlattenStructsPass : public mlir::PassWrapper<FlattenStructsPass, mlir::O
       if (memberShape) operands.push_back(memberShape);
 
       mlir::NamedAttrList attrs;
-      attrs.append("uniq_name", mlir::StringAttr::get(ctx, baseName + "_" + memName));
+      attrs.append("uniq_name", mlir::StringAttr::get(ctx, mintCompanionName(baseName + "_" + memName)));
       attrs.append(declareSegments(b, /*hasShape=*/memberShape != nullptr));
 
       auto newDecl =
@@ -5702,7 +5773,18 @@ struct FlattenStructsPass : public mlir::PassWrapper<FlattenStructsPass, mlir::O
         }
       }
     };
+    // Seed from BOTH declare results.  A runtime-sized outer array's
+    // ``hlfir.declare`` returns a ``(box, ref)`` pair; some member designates
+    // root at the raw ``ref`` (result #1) rather than the descriptor-aware
+    // ``box`` (result #0) -- notably the section pack/unpack loop
+    // ``p_nabla2_dual(:,:,blockno) % x(k)`` that copies an
+    // array-of-cartesian member into a flat sync buffer.  Walking result #0
+    // alone leaves those designates on the original struct, so they collapse
+    // downstream to the bare ``<base>_x`` name (colliding with the real
+    // 3-D local of that name) and the struct declare never clears.  Mirror
+    // the nested path (``rewriteChainsRootedAt``), which already seeds both.
     collectFrom(decl.getResult(0));
+    if (decl.getResult(1) != decl.getResult(0)) collectFrom(decl.getResult(1));
     for (auto dg : designates) rewriteDesignate(dg, memberBase, concatMembers);
     for (auto a : aliasDecls)
       if (a.getResult(0).use_empty() && a.getResult(1).use_empty()) a.erase();

@@ -3610,6 +3610,16 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
         if (!d) return false;
         if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(d)) {
           if (!dc.getDummyScope()) {
+            // Local whole-object POINTER rebound to a struct-dummy component
+            // (``cells_subset => patch_3d % ... % cells % all``): follow the
+            // rebind to the source chain (mirrors traceToDecl's hop) so the
+            // walk reaches the struct dummy instead of the local pointer's own
+            // alloca.  The source-rooted continuation (gate #12 below) still
+            // requires a struct DUMMY, so a rebind onto a LOCAL stays unrooted.
+            if (mlir::Value src = traceLocalPointerRebindSource(dc)) {
+              v = src;
+              continue;
+            }
             v = dc.getMemref();
             continue;
           }  // inlined alias (no dummy scope)
@@ -3621,6 +3631,16 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
           // the final component designate (gate #12b).
           if (auto outer = asAssumedShapeAlias(dc)) {
             v = outer.getResult(0);
+            continue;
+          }
+          // Inlined AoR-section dummy (``vec_in`` bound to ``p_diag % p_vn(:,
+          // :, blockno)``): peel the box_addr/copy_in memref to the PURE
+          // section over the ``p_vn`` component and walk into its base, so the
+          // access roots at the OUTER struct dummy (gate #12c-section, twin of
+          // #12).  Without it the walk stops at ``vec_in`` whose own type is a
+          // record ARRAY (SequenceType) and the RecordType check below fails.
+          if (auto sec = asInlinedSectionOverComponent(dc)) {
+            v = sec.getMemref();
             continue;
           }
           // Inlined-call dummy bound to a struct MEMBER (``inner(diag % pvd,
@@ -3684,6 +3704,18 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
       std::vector<std::string> names;
       std::vector<bool> is_pointer;
       std::vector<int> record_dims;
+      // Parallel to ``record_dims``: true when EVERY record subscript on the
+      // segment is a compile-time constant (``p_patch_2d(1)``).  A constant
+      // record subscript is folded away by the access-memlet builders
+      // (``resolveSliceSubset`` drops an outer constant record hop;
+      // ``expandDesignateChain`` likewise), so a constant-only record segment
+      // does NOT shape the flat companion.  Excluding it makes the descriptor
+      // rank agree with the memlet on both faces: a constant-only single-record
+      // member over-shapes the companion by 1 (``vertical_levels``); a constant
+      // segment ALONGSIDE a real record-indexed member inflates ``recSegCount``
+      // past one and collapses ``recDims`` to 0, dropping the member's real
+      // varying record dims (``dual_cart_normal(je,jb) % x``).
+      std::vector<bool> record_const;
       int outer_rank = 0;
     };
     // box<ptr<...>> = Fortran POINTER, box<heap<...>> = ALLOCATABLE; the
@@ -3694,6 +3726,26 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
       if (auto bt = mlir::dyn_cast<fir::BoxType>(t)) t = bt.getEleTy();
       return mlir::isa<fir::PointerType>(t);
     };
+    // True when EVERY scalar (non-triplet) subscript of an AoR section is a
+    // compile-time constant.  ``p_patch_2d(1)`` folds; ``dual_cart_normal(je,
+    // jb)`` does not.  A constant record subscript is baked away (absent from
+    // the access memlet -- the libcall ``resolveSliceSubset`` / the general
+    // ``expandDesignateChain`` both drop an outer constant record hop), so a
+    // constant-only record segment must not shape the flat companion.
+    auto sectionScalarsAllConst = [](hlfir::DesignateOp sec) -> bool {
+      auto trips = sec.getIsTriplet();
+      auto idxs = sec.getIndices();
+      unsigned cursor = 0;
+      for (bool t : trips) {
+        if (t) {
+          cursor += 3;
+        } else {
+          if (cursor < idxs.size() && !traceConstInt(idxs[cursor])) return false;
+          cursor += 1;
+        }
+      }
+      return true;
+    };
     auto walkMemberChain = [&](hlfir::DesignateOp leaf) -> MemberChain {
       MemberChain mc;
       auto leafComp = leaf.getComponentAttr();
@@ -3702,13 +3754,31 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
       std::vector<std::string> namesR{leafComp.getValue().str()};
       std::vector<bool> ptrR{boxIsPointer(leaf.getResult().getType())};
       std::vector<int> recR{0};
+      std::vector<bool> recConstR{true};
       mlir::Value v = leaf.getMemref();
       int pendingRec = 0;  // record subscripts seen, awaiting their component
+      // Const-ness of the pending record subscripts: true while every one seen
+      // since the last component flush is a compile-time constant.  Reset at
+      // each flush; cleared by any loop-varying subscript.
+      bool pendingConst = true;
+      auto allConstIdx = [](mlir::OperandRange idxs) -> bool {
+        for (mlir::Value iv : idxs)
+          if (!traceConstInt(iv)) return false;
+        return true;
+      };
       for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
         auto* d = v.getDefiningOp();
         if (!d) break;
         if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(d)) {
           if (!dc.getDummyScope()) {  // inlined alias -- keep walking
+            // Local whole-object POINTER rebind: follow ``ptr => source`` to the
+            // source chain (mirrors traceToDecl / rootedAtStructDummy) so the
+            // member chain collects the SOURCE segments (``p_patch_2d % cells %
+            // all``) and roots at the struct dummy ``patch_3d``.
+            if (mlir::Value src = traceLocalPointerRebindSource(dc)) {
+              v = src;
+              continue;
+            }
             v = dc.getMemref();
             continue;
           }
@@ -3719,6 +3789,20 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
           // inlined dummy.
           if (auto outer = asAssumedShapeAlias(dc)) {
             v = outer.getResult(0);
+            continue;
+          }
+          // Inlined AoR-section dummy (``vec_in`` bound to ``p_diag % p_vn(:,
+          // :, blockno)``): peel to the PURE section over the ``p_vn``
+          // component and count its FIXED scalar dim(s) (``blockno``) as record
+          // subscripts on the ``p_vn`` segment, then walk into the section base
+          // (into ``load(p_vn)`` -> ``p_diag`` -> root).  The element read
+          // ``vec_in(jc, jk)`` already added 2 triplet dims to ``pendingRec``;
+          // +1 scalar -> pendingRec == 3 flushes onto the ``p_vn`` segment
+          // (record_dims=[.., 3, ..], outer_rank 3).
+          if (auto sec = asInlinedSectionOverComponent(dc)) {
+            pendingRec += static_cast<int>(countScalarSectionDims(sec));
+            pendingConst = pendingConst && sectionScalarsAllConst(sec);
+            v = sec.getMemref();
             continue;
           }
           // Inlined-call dummy bound to a struct MEMBER (gate #12): walk
@@ -3743,17 +3827,32 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
           continue;
         }
         if (auto dg2 = mlir::dyn_cast<hlfir::DesignateOp>(d)) {
+          // A DIRECT AoR section (the worker fully inlined -- no ``vec_in``
+          // copy_in declare; the section ``p_vn(:, :, blockno)`` is indexed
+          // element-wise straight off the ``pvn3d`` alias).  Its triplet dims
+          // are the record head the inner element read already counted, so add
+          // ONLY the fixed scalar dim(s) (``blockno``) and walk into the base
+          // rather than counting all raw section operands as record subscripts.
+          if (auto sec = asSectionOverComponent(dg2.getResult())) {
+            pendingRec += static_cast<int>(countScalarSectionDims(sec));
+            pendingConst = pendingConst && sectionScalarsAllConst(sec);
+            v = sec.getMemref();
+            continue;
+          }
           if (auto comp = dg2.getComponentAttr()) {
             // A component selector -- the pending record subscripts (and any
             // it carries directly) index THIS segment.
             namesR.push_back(comp.getValue().str());
             ptrR.push_back(boxIsPointer(dg2.getResult().getType()));
             recR.push_back(pendingRec + static_cast<int>(dg2.getIndices().size()));
+            recConstR.push_back(pendingConst && allConstIdx(dg2.getIndices()));
             pendingRec = 0;
+            pendingConst = true;
           } else {
             // A pure element/record-index designate over a loaded box: its
             // subscripts index the component reached next (root-ward).
             pendingRec += static_cast<int>(dg2.getIndices().size());
+            pendingConst = pendingConst && allConstIdx(dg2.getIndices());
           }
           v = dg2.getMemref();
           continue;
@@ -3765,6 +3864,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
         mc.names.push_back(namesR[i]);
         mc.is_pointer.push_back(ptrR[i]);
         mc.record_dims.push_back(recR[i]);
+        mc.record_const.push_back(recConstR[i]);
         mc.outer_rank += recR[i];
       }
       return mc;
@@ -3784,10 +3884,58 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
       auto it = memberDg.find(flat);
       if (it == memberDg.end() || dg.getIndices().empty()) memberDg[flat] = dg;
     });
+    // True when this component read threads an inlined AoR section (the
+    // ``vec_in`` shape): only then recover the member's full array type from a
+    // scalar-ELEMENT witness (below).  Guards ordinary struct chains -- where a
+    // scalar integer member element must stay on the (A/C) symbol path -- from
+    // being reshaped into array companions.
+    auto readsThroughAoRSection = [&](hlfir::DesignateOp dg) -> bool {
+      mlir::Value v = dg.getMemref();
+      for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
+        if (asSectionOverComponent(v)) return true;
+        if (mlir::Value p = peelBoxReinterpret(v); p != v) {
+          v = p;
+          continue;
+        }
+        auto* d = v.getDefiningOp();
+        if (!d) return false;
+        if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(d)) {
+          if (asInlinedSectionOverComponent(dc)) return true;
+          if (auto outer = asAssumedShapeAlias(dc)) {
+            v = outer.getResult(0);
+            continue;
+          }
+          if (leadsToComponentDesignate(dc.getMemref())) {
+            v = dc.getMemref();
+            continue;
+          }
+          return false;
+        }
+        if (auto ds = mlir::dyn_cast<hlfir::DesignateOp>(d)) {
+          v = ds.getMemref();
+          continue;
+        }
+        return false;
+      }
+      return false;
+    };
     for (auto& kv : memberDg) {
       std::string s = kv.first().str();
       if (existingNames.count(s)) continue;
-      mlir::Type peeled = peelTypeLayers(kv.second.getResult().getType());
+      // When the ONLY witness selects a scalar ELEMENT of a fixed-shape array
+      // member (``vec_in(jc, jk) % x(k)`` -- the worker fully inlined, so no
+      // whole-member ``% x`` designate exists), recover the member's declared
+      // (array) type from the base record so the companion registers at the
+      // full member rank (rank-4 ``[d0, d1, d2, 3]``).  Only for AoR-section
+      // reads -- an ordinary ``arr(i) % code`` scalar member is untouched.
+      mlir::Type memberTy = kv.second.getResult().getType();
+      if (auto comp = kv.second.getComponentAttr();
+          comp && !kv.second.getIndices().empty() && readsThroughAoRSection(kv.second)) {
+        mlir::Type baseTy = peelTypeLayers(kv.second.getMemref().getType());
+        if (auto rec = mlir::dyn_cast<fir::RecordType>(baseTy))
+          if (mlir::Type ct = rec.getType(comp.getValue().str())) memberTy = ct;
+      }
+      mlir::Type peeled = peelTypeLayers(memberTy);
       if (auto seq = mlir::dyn_cast<fir::SequenceType>(peeled)) {
         // (B) Array DATA member nested under a pointer-/alloc-array-of-records
         // intermediate (``patch_3d%p_patch_1d(1)%dolic_e(je,jb)``): register a
@@ -3818,11 +3966,31 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
         mv.intent = "in";
         mv.role = "array";
         int recSeg = -1, recSegCount = 0;
-        for (int i = 0; i < static_cast<int>(mc.record_dims.size()); ++i)
-          if (mc.record_dims[i] > 0) {
-            ++recSegCount;
-            if (recSeg < 0) recSeg = i;
+        int nseg = static_cast<int>(mc.record_dims.size());
+        for (int i = 0; i < nseg; ++i) {
+          if (mc.record_dims[i] == 0) continue;
+          // ``resolveSliceSubset`` builds an AoR access memlet from the LEAF-MOST
+          // record-array element access only (``dual_cart_normal(je,jb) % x`` ->
+          // ``[je, jb, 0:3]``), folding away any OUTER record hop.  So a
+          // constant-only record segment that is SHADOWED by a leaf-ward (inner)
+          // record segment contributes no memlet dim -- excluding it here drops
+          // the spurious ``p_patch_2d(1)`` leading dim that was collapsing
+          // ``recSegCount`` to 2 (hence ``recDims`` to 0) and stripping
+          // ``dual_cart_normal``'s real record dims.  A constant record segment
+          // with NO inner record shadow (``patch_3d % p_patch_1d(1) % dolic_c``,
+          // accessed directly) DOES occupy a memlet dim, so it stays counted.
+          if (mc.record_const[i]) {
+            bool innerRecord = false;
+            for (int j = i + 1; j < nseg; ++j)
+              if (mc.record_dims[j] > 0) {
+                innerRecord = true;
+                break;
+              }
+            if (innerRecord) continue;
           }
+          ++recSegCount;
+          if (recSeg < 0) recSeg = i;
+        }
         int recDims = (mc.ok && recSegCount == 1) ? mc.record_dims[recSeg] : 0;
         // Leading record dim(s): runtime extent (= ``size(<record-array>)``),
         // resolved caller-side from the allocated SoA buffer by
@@ -3891,6 +4059,41 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
       vars.push_back(std::move(mv));
       existingNames.insert(s);
     }
+
+    // (D) Presence tracker for a nested struct-member POINTER/ALLOCATABLE the
+    // kernel branches on.  ``ASSOCIATED(in_subset % vertical_levels)`` (inlined
+    // ``minmaxmean``, ``in_subset`` bound to ``patch_3d % p_patch_2d(1) % cells
+    // % owned``) lowers to ``cmpi ne, box_addr(...), 0``, which the AST builder
+    // renders as ``<flat>_allocated``.  The (B) path above backs the member
+    // ARRAY companion, but that ``_allocated`` tracker symbol has no declare and
+    // leaks as an unresolved free symbol.  Mint a role=symbol int32 companion so
+    // it registers on the SDFG signature; the binding's
+    // ``_build_symbol_assigns`` ``_allocated`` fold sources it from the host
+    // member's ``associated(...)`` via the static struct layout.  Keyed on the
+    // status-read SHAPE + a struct-dummy-rooted component base -- never on a
+    // member name -- mirroring the int loop-bound member scalar mint above.
+    module.walk([&](mlir::arith::CmpIOp cmp) {
+      mlir::Value src = matchAssociatedStatusBoxRef(cmp);
+      if (!src) return;
+      auto* sd = src.getDefiningOp();
+      auto dg = sd ? mlir::dyn_cast<hlfir::DesignateOp>(sd) : nullptr;
+      if (!dg || !dg.getComponentAttr()) return;  // must be a member designate
+      if (!rootedAtStructDummy(dg)) return;        // rooted at a caller struct DUMMY
+      std::string flat = traceToDecl(src);
+      if (flat.empty() || flat.find('_') == std::string::npos) return;
+      std::string sym = flat + "_allocated";
+      if (existingNames.count(sym)) return;
+      VarInfo av;
+      av.fortran_name = sym;
+      av.mangled_name = sym;
+      av.dtype = "int32";  // presence flag (matches the local-allocatable tracker)
+      av.rank = 0;
+      av.intent = "in";  // caller-bound free symbol, not an internal transient
+      av.role = "symbol";
+      symbolNames.insert(sym);
+      vars.push_back(std::move(av));
+      existingNames.insert(sym);
+    });
   }
 
   // De-duplicate the collected value-symbols: the same array-element extent

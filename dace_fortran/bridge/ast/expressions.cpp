@@ -662,41 +662,9 @@ std::string buildExpr(mlir::Value val, int d) {
   // box_addr->convert chain) and read the per-allocatable companion
   // ``<arr>_allocated`` scalar that ``extract_vars`` registers and
   // the AST builder maintains at ALLOCATE / DEALLOCATE sites.
-  if (nm == "arith.cmpi" && def->getNumOperands() == 2) {
-    auto pred = def->getAttrOfType<mlir::IntegerAttr>("predicate");
-    constexpr int64_t kPredNe = 1;  // mlir::arith::CmpIPredicate::ne
-    if (pred && pred.getInt() == kPredNe) {
-      // Operand 1 must be a constant int 0 (the null pointer
-      // sentinel after the heap-addr->i64 cast).
-      bool rhsZero = false;
-      if (auto c = traceConstInt(def->getOperand(1))) rhsZero = (*c == 0);
-      if (rhsZero) {
-        // Operand 0: peel fir.convert back to find a fir.box_addr.
-        mlir::Value cur = def->getOperand(0);
-        for (int i = 0; i < limits::kConvertChainDepth && cur; ++i) {
-          auto* cd = cur.getDefiningOp();
-          if (!cd) break;
-          if (auto cv = mlir::dyn_cast<fir::ConvertOp>(cd)) {
-            cur = cv.getValue();
-            continue;
-          }
-          break;
-        }
-        if (cur) {
-          if (auto* cd = cur.getDefiningOp()) {
-            if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(cd)) {
-              // box_addr's operand is fir.load of a box
-              // ref; trace through that to the declare.
-              auto src = ba.getVal();
-              if (auto* sd = src.getDefiningOp())
-                if (auto ld = mlir::dyn_cast<fir::LoadOp>(sd)) src = ld.getMemref();
-              auto arrName = traceToDecl(src);
-              if (!arrName.empty()) return arrName + "_allocated";
-            }
-          }
-        }
-      }
-    }
+  if (auto cmp = mlir::dyn_cast<mlir::arith::CmpIOp>(def)) {
+    if (mlir::Value src = matchAssociatedStatusBoxRef(cmp))
+      if (auto arrName = traceToDecl(src); !arrName.empty()) return arrName + "_allocated";
   }
 
   // ``fir.box_dims %arr_decl, %dim``  --  Flang's lowering for SIZE /

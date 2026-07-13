@@ -237,6 +237,42 @@ std::pair<std::string, std::vector<DimEntry>> expandDesignateChain(hlfir::Design
   // flat name (``vcut_corrected``) only comes from ``traceToDecl`` on the
   // innermost RESULT, which walks the whole chain; record that we need it.
   bool sawComponentParent = false;
+  // Per-block AoR section hop (``vec_in`` over ``p_vn(:, :, blockno)``, read
+  // ``vec_in(jc, jk) % x(k)``): compose the section positionally into the
+  // access.  ``entries`` so far = [record head (jc, jk) paired with the
+  // section's TRIPLET dims] ++ [member tail (k)].  Each triplet dim is filled
+  // by the next head entry (already rebased against the section lo by
+  // ``buildDesignateIndexExpr``); each SCALAR dim (``blockno``) is inserted at
+  // its record position from the section's own subscript -- yielding
+  // [jc, jk, blockno, k] over the rank-4 companion.  Do NOT use the generic
+  // triplet loop below (it consumes only the triplet count and drops the
+  // member tail).
+  auto applySectionHop = [](hlfir::DesignateOp sec, std::vector<DimEntry>& entries) {
+    auto trips = sec.getIsTriplet();
+    unsigned T = 0;
+    for (bool t : trips)
+      if (t) ++T;
+    size_t split = std::min<size_t>(T, entries.size());
+    std::vector<DimEntry> head(entries.begin(), entries.begin() + split);
+    std::vector<DimEntry> tail(entries.begin() + split, entries.end());
+    std::vector<DimEntry> newRec;
+    size_t hi = 0, cur = 0;
+    auto sidx = sec.getIndices();
+    for (unsigned d = 0; d < trips.size(); ++d) {
+      if (trips[d]) {
+        newRec.push_back(hi < head.size() ? head[hi] : DimEntry{"?", "?"});
+        ++hi;
+        cur += 3;  // triplet subscript = (lo, hi, step)
+      } else {
+        mlir::Value s = cur < sidx.size() ? sidx[cur] : mlir::Value{};
+        std::string n = s ? resolveIndex(s) : std::string{};
+        newRec.push_back({n.empty() ? "?" : n, s ? buildIndexExpr(s, 0) : "?"});
+        cur += 1;  // scalar subscript = (idx)
+      }
+    }
+    entries = std::move(newRec);
+    entries.insert(entries.end(), tail.begin(), tail.end());
+  };
   mlir::Value parent_val = innermost.getMemref();
   for (int level = 0; level < limits::kAliasMemrefWalkDepth; ++level) {
     if (!parent_val) break;
@@ -245,6 +281,33 @@ std::pair<std::string, std::vector<DimEntry>> expandDesignateChain(hlfir::Design
     if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def)) {
       parent_val = cv.getValue();
       continue;
+    }
+    // Inlined AoR-section dummy parent (``vec_in`` -- a copy_in declare):
+    // the parent-walk otherwise BREAKS at this DeclareOp, dropping ``blockno``.
+    // Fire the section hop and continue root-ward to the ``p_vn`` component.
+    if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(def)) {
+      if (auto sec = asInlinedSectionOverComponent(dc)) {
+        applySectionHop(sec, entries);
+        parent_val = sec.getMemref();
+        continue;
+      }
+      // Inlined-call dummy bound to a struct-MEMBER actual (gate #12): after
+      // ``hlfir-inline-all`` folds a caller ``ptr => patch_3d % p_patch_2d(1) %
+      // cells % owned`` alias, the callee dummy (``in_subset``) declares straight
+      // onto that caller designate chain -- which carries a record-array index
+      // (``p_patch_2d(1)``) the dummy's own scope hides.  ``traceToDecl`` (flat
+      // name) and ``walkMemberChain`` (companion registration) both hop THROUGH to
+      // the caller chain via ``leadsToComponentDesignate``, so both count that
+      // record index; the parent-walk must hop too, or the record subscript is
+      // dropped and the memlet under-ranks its descriptor (the 2-D subset vs 3-D
+      // ``patch_3d_p_patch_2d_cells_owned_vertical_levels`` mismatch).  A member
+      // chain with no record-array index (``patch % edges % in_domain``) prepends
+      // nothing, so this is inert for the ordinary gate-#12 cases.
+      if (dc.getDummyScope() && leadsToComponentDesignate(dc.getMemref())) {
+        parent_val = dc.getMemref();
+        continue;
+      }
+      break;
     }
     // Pointer / allocatable dereference: ``fir.load`` between two
     // designates (QE L4 ``arr(ia) % box(ir)`` shape -- the inner
@@ -270,6 +333,15 @@ std::pair<std::string, std::vector<DimEntry>> expandDesignateChain(hlfir::Design
     // flag to every component parent reshapes that L4 access and breaks
     // its memlet subset.
     if (parent.getComponentAttr() && parent.getIndices().empty()) sawComponentParent = true;
+    // DIRECT AoR section parent (worker fully inlined -- no ``vec_in`` declare;
+    // ``p_vn(:, :, blockno)`` indexed straight off the ``pvn3d`` alias).  Same
+    // positional compose as the copy_in-declare case above; the generic triplet
+    // loop below would drop the member tail (``k``).
+    if (auto sec = asSectionOverComponent(parent.getResult())) {
+      applySectionHop(sec, entries);
+      parent_val = sec.getMemref();
+      continue;
+    }
     auto triplets = parent.getIsTriplet();
     if (triplets.empty()) {
       // Element designate (every dim is a scalar).  Two shapes

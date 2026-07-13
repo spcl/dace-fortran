@@ -1689,7 +1689,7 @@ def _render_aos_copy_out(a) -> List[str]:
     return out
 
 
-def _struct_member_symbol_sources(iface: OriginalInterface) -> Dict[str, str]:
+def _struct_member_symbol_sources(iface: OriginalInterface) -> Tuple[Dict[str, str], Dict[str, str]]:
     """Map a struct dummy's member free-symbols to the Fortran
     expression that reads them from the caller's actual struct.
 
@@ -1714,8 +1714,16 @@ def _struct_member_symbol_sources(iface: OriginalInterface) -> Dict[str, str]:
 
     Nested derived-type members recurse with the joined path
     (``d_inner_m`` <- ``d%inner%m``).
+
+    Returns ``(sources, member_paths)``.  ``member_paths`` maps EVERY leaf
+    member's symbol name (scalar or array, any rank) to its bare caller-side
+    ``%``-path -- the ``_allocated`` fold in :func:`_build_symbol_assigns` reads
+    it to spell an ``ASSOCIATED``/``ALLOCATED`` on a nested struct-member
+    POINTER/ALLOCATABLE the kernel branches on (no flat array arg backs such a
+    member, so its host path is only recoverable from the static layout).
     """
     sources: Dict[str, str] = {}
+    member_paths: Dict[str, str] = {}
 
     def walk(st: DerivedType, sym_prefix: str, access: str) -> None:
         for m in st.members:
@@ -1737,6 +1745,7 @@ def _struct_member_symbol_sources(iface: OriginalInterface) -> Dict[str, str]:
                     idx1 = ", ".join(["1"] * m.rank)
                     walk(nested, msym, f"{macc}({idx1})" if m.rank > 0 else macc)
                 continue
+            member_paths[msym] = macc
             if m.rank == 0:
                 sources[msym] = macc
                 continue
@@ -1749,7 +1758,7 @@ def _struct_member_symbol_sources(iface: OriginalInterface) -> Dict[str, str]:
             st = iface.struct_types.get(a.struct_type)
             if st is not None:
                 walk(st, a.name, a.name)
-    return sources
+    return sources, member_paths
 
 
 def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dummy_set: set,
@@ -1772,7 +1781,7 @@ def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dumm
     # no FlattenEntry  --  QE ``dfftt%ngm`` / ``dfftt%nnr`` /
     # ``size(dfftt%nl_d)``).  Sourced from the static ``struct_types``
     # layout as the last resort below.
-    _struct_member_sources = _struct_member_symbol_sources(iface)
+    _struct_member_sources, _struct_member_paths = _struct_member_symbol_sources(iface)
     arg_by_sdfg = {a.sdfg_name: a for a in frozen.args}
     # SCALAR outer dummies declared OPTIONAL -- their ``<name>_present``
     # companion is forwarded from the caller's actual ``present(<name>)`` (M1),
@@ -1901,6 +1910,19 @@ def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dumm
             # (OPTIONAL dummy) keeps its own branch below.
             if fa is not None and fa.kind == 'array' and sym.endswith("_allocated"):
                 present = _present(pres_base, arg_is_pointer_local.get(pres_base, True))
+                out.append(f"    {sym} = int(merge(1, 0, {present}), c_int)")
+                continue
+            # A NESTED struct-member POINTER/ALLOCATABLE the kernel branches on
+            # (ICON's inlined minmaxmean gates on ``ASSOCIATED(in_subset %
+            # vertical_levels)`` where ``in_subset`` is bound to ``patch_3d %
+            # p_patch_2d(1) % cells % owned``).  No flat array arg backs the
+            # member, so ``fa is None`` -- but the static struct layout knows how
+            # to spell the caller-side dotted path.  Source the tracker from that
+            # host member's definedness.  Pointer default (``associated``) mirrors
+            # the array-arg fold above: a struct-member pointer is the
+            # ``ASSOCIATED`` case the bridge folded into ``_allocated``.
+            if sym.endswith("_allocated") and pres_base in _struct_member_paths:
+                present = _present(_struct_member_paths[pres_base], True)
                 out.append(f"    {sym} = int(merge(1, 0, {present}), c_int)")
                 continue
         # An OPTIONAL-presence flag (``<dummy>_present``, registered by the

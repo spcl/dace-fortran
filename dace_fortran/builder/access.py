@@ -21,6 +21,7 @@ are reused everywhere that emits a subset string:
 """
 
 import re
+from types import SimpleNamespace
 
 # Process-level monotonic counter used to mint stable, grep-able names for
 # inline indirection loads (``<arr>_at<gid>``).  Kept process-level rather
@@ -103,7 +104,7 @@ def resolve_object_member(builder, name: str):
             src = aliases[src]
             seen.add(src)
         cand = f"{src}_{member}"
-        if cand in builder.arrays or cand in builder.scalars:
+        if cand in builder.arrays or cand in builder.scalars or cand in builder.symbols:
             return cand
         hit = (vars(builder).get("object_alias_flat_members") or {}).get(member)
         if hit is not None and (hit in builder.arrays or hit in builder.scalars):
@@ -139,7 +140,6 @@ def resolve_section_alias(builder, array_name: str, access):
     src = v.view_source
     if access is None:
         return src, access
-    from types import SimpleNamespace
     dummy_exprs = list(getattr(access, 'index_exprs', None) or [])
     dummy_vars = list(getattr(access, 'index_vars', None) or [])
     new_exprs, new_vars = [], []
@@ -205,7 +205,6 @@ def cc_alias_view_spec(builder, name: str):
     ``qgm(1:ngy, ijh)`` -> base ``['0', '(ijh)-1']`` + extent ``['dfftt_ngm']``
     -> slab ``['0:dfftt_ngm', '(ijh)-1']``.
     """
-    from types import SimpleNamespace
     v = builder.complex_component_aliases[name]
     src_v = builder.arrays.get(v.view_source)
     base = [str(s) for s in (v.view_subset or [])]
@@ -274,7 +273,6 @@ def acc(builder, state, name: str):
         if v is not None and getattr(v, 'bounds_remap_view', False) \
                 and v.bounds_remap_source \
                 and v.bounds_remap_source in state.parent.arrays:
-            from types import SimpleNamespace
             # Prefer the surfaced source-SECTION subset (carries the
             # column offset, e.g. ``a[0:nrows, (c0)-1:c1]``) so the
             # original -> view linking memlet covers exactly the aliased
@@ -723,7 +721,6 @@ def indirect_to_dace(builder, expr: str, iter_map: dict, indirect_syms: dict | N
             # ``array_read_to_dace_expr`` -- the alias has no offset symbols).
             v = builder.arrays.get(arr)
             if v is not None and getattr(v, 'role', '') == 'section_alias':
-                from types import SimpleNamespace
                 _src, _sp = resolve_section_alias(builder, arr,
                                                   SimpleNamespace(index_exprs=parts, index_vars=[''] * len(parts)))
                 arr, parts = _src, list(_sp.index_exprs)

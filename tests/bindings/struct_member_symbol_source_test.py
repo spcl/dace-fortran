@@ -60,11 +60,16 @@ def test_struct_member_symbol_sources_maps_scalar_and_extent():
     single-underscore member-symbol names and pairs each with its ``%``
     read: scalar member -> the member itself, array member -> a per-dim
     ``size`` (extent) and ``lbound`` (offset)."""
-    src = _struct_member_symbol_sources(_fft_iface())
+    src, paths = _struct_member_symbol_sources(_fft_iface())
     assert src["dfftt_ngm"] == "dfftt%ngm"
     assert src["dfftt_nnr"] == "dfftt%nnr"
     assert src["dfftt_nl_d_d0"] == "size(dfftt%nl_d, dim=1)"
     assert src["offset_dfftt_nl_d_d0"] == "lbound(dfftt%nl_d, dim=1)"
+    # ``member_paths`` carries every leaf member's bare ``%``-path (scalar AND
+    # array), so a nested pointer/allocatable member's ASSOCIATED/ALLOCATED
+    # tracker can spell the caller-side access.
+    assert paths["dfftt_ngm"] == "dfftt%ngm"
+    assert paths["dfftt_nl_d"] == "dfftt%nl_d"
 
 
 def test_struct_member_symbol_sources_recurses_nested():
@@ -84,8 +89,9 @@ def test_struct_member_symbol_sources_recurses_nested():
                         members=(Member(name="cnt", fortran_type="integer(c_int)", rank=0), )),
         },
     )
-    src = _struct_member_symbol_sources(iface)
+    src, paths = _struct_member_symbol_sources(iface)
     assert src["outer_inner_cnt"] == "outer%inner%cnt"
+    assert paths["outer_inner_cnt"] == "outer%inner%cnt"
 
 
 def test_symbol_population_sources_struct_member_loop_bounds():

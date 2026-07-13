@@ -243,6 +243,155 @@ bool leadsToComponentDesignate(mlir::Value mr) {
   return dg && static_cast<bool>(dg.getComponentAttr());
 }
 
+// Peel a section's base through box reinterprets, inlined whole-array-dummy
+// aliases (an inlined worker's whole-member dummy forwarding to a caller
+// member -- the ``mid``->``worker`` two-level inline ``p_vn`` -> ``pvn3d`` ->
+// section), and nested non-component designates; true iff it reaches an
+// ``hlfir.designate`` selecting a struct COMPONENT.  Stricter-peeling variant
+// of ``leadsToComponentDesignate``: the latter stops at the intermediate
+// inlined dummy declare an AoR section can sit behind.
+static bool sectionBaseReachesComponent(mlir::Value mr) {
+  for (int i = 0; i < limits::kAliasMemrefWalkDepth && mr; ++i) {
+    if (mlir::Value peeled = peelBoxReinterpret(mr); peeled != mr) {
+      mr = peeled;
+      continue;
+    }
+    auto* d = mr.getDefiningOp();
+    if (!d) return false;
+    if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(d)) {
+      if (dg.getComponentAttr()) return true;  // reached the struct member
+      mr = dg.getMemref();                      // nested section / element -- keep walking
+      continue;
+    }
+    if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(d)) {
+      if (auto outer = asAssumedShapeAlias(dc)) {
+        mr = outer.getResult(0);
+        continue;
+      }
+      mr = dc.getMemref();  // inlined whole-array dummy -> its caller-side source
+      continue;
+    }
+    return false;
+  }
+  return false;
+}
+
+hlfir::DesignateOp asSectionOverComponent(mlir::Value v) {
+  v = peelBoxReinterpret(v);
+  auto* d = v ? v.getDefiningOp() : nullptr;
+  auto sec = d ? mlir::dyn_cast<hlfir::DesignateOp>(d) : nullptr;
+  if (!sec) return {};
+  // A PURE section: triplet/scalar subscripts, no component selector.
+  if (sec.getIsTriplet().empty() || sec.getComponentAttr()) return {};
+  // AoR only: the section's element is a derived (record) type -- the
+  // ``t_cartesian_coordinates``-with-``%x`` shape.  A plain-real member
+  // section (``rho(:, :, blockno)``) is a flattened-companion +
+  // ``rewriteSectionedAliasLeaf`` case and must stay on that path.
+  mlir::Type et = sec.getResult().getType();
+  if (auto bt = mlir::dyn_cast<fir::BoxType>(et)) et = bt.getEleTy();
+  if (auto rt = mlir::dyn_cast<fir::ReferenceType>(et)) et = rt.getEleTy();
+  if (auto seq = mlir::dyn_cast<fir::SequenceType>(et)) et = seq.getEleTy();
+  if (!mlir::isa<fir::RecordType>(et)) return {};
+  if (!sectionBaseReachesComponent(sec.getMemref())) return {};
+  return sec;
+}
+
+hlfir::DesignateOp asInlinedSectionOverComponent(hlfir::DeclareOp decl) {
+  return asSectionOverComponent(decl.getMemref());
+}
+
+unsigned countScalarSectionDims(hlfir::DesignateOp sec) {
+  unsigned n = 0;
+  for (bool t : sec.getIsTriplet())
+    if (!t) ++n;
+  return n;
+}
+
+mlir::Value traceLocalPointerRebindSource(hlfir::DeclareOp decl) {
+  // Gate 1: a LOCAL Fortran POINTER -- the pointer attribute set, and NO dummy
+  // scope (an entry / inlined-callee pointer dummy is bound by its caller, not
+  // rebound here).
+  auto attrs = decl.getFortranAttrs();
+  if (!attrs || !bitEnumContainsAny(*attrs, fir::FortranVariableFlagsEnum::pointer)) return {};
+  if (decl.getDummyScope()) return {};
+  // Gate 2: the pointee is a whole DERIVED-TYPE OBJECT (a record behind
+  // ``box<ptr|heap<record>>``), NOT a scalar or array.  A record-object
+  // pointer's reads are component designates (``ptr % member``) that need the
+  // SOURCE struct's flat name; a scalar / array pointer VIEW (non-record
+  // pointee) is lowered by the ``view_alias`` mechanism and must keep its own
+  // name, so exclude it here.
+  mlir::Type pointee = decl.getResult(0).getType();
+  if (auto ref = mlir::dyn_cast<fir::ReferenceType>(pointee)) pointee = ref.getEleTy();
+  if (!pointerToRecordMember(pointee)) return {};
+  // Gate 3: exactly ONE non-nullify rebind store ``fir.store <box> to decl#0``.
+  // The initial ``embox(zero_bits)`` nullify is skipped; more than one live
+  // rebind is ambiguous (the reads could observe either target), so refuse and
+  // let the read keep its own name.
+  mlir::Value stored;
+  for (auto* u : decl.getResult(0).getUsers()) {
+    auto st = mlir::dyn_cast<fir::StoreOp>(u);
+    if (!st || st.getMemref() != decl.getResult(0)) continue;
+    if (auto eb = mlir::dyn_cast_or_null<fir::EmboxOp>(st.getValue().getDefiningOp()))
+      if (mlir::isa_and_nonnull<fir::ZeroOp>(eb.getMemref().getDefiningOp())) continue;
+    if (stored) return {};
+    stored = st.getValue();
+  }
+  if (!stored) return {};
+  // Peel the storage-transparent box reinterprets (embox / rebox / convert /
+  // box_addr / load) to the source declare or component designate -- the same
+  // op set ``RewritePointerAssigns::traceRebindChain`` peels.
+  mlir::Value src = peelBoxReinterpret(stored);
+  if (!src) return {};
+  // Gate 4: the source must root at a struct DUMMY -- it is either a component
+  // designate (``owned_cells => patch_2d % cells % owned``) or a struct DUMMY
+  // (``cells_subset => subset_range``, incl. the multi-hop dummy->dummy chain
+  // ``ontriangles`` forms where ``subset_range`` itself aliases the outer
+  // ``subset_range`` via ``asAssumedShapeAlias``).  A rebind onto a whole NAMED
+  // object (a module global / local variable -- ``p => g``, ``this % p => gi``)
+  // is left to the ``object_aliases`` mechanism (``traceToDecl`` keeps ``p`` so
+  // the store target stays ``p`` and the resolver maps ``p_arr -> g_arr``);
+  // following it here would rename the rebind's own store target and drop the
+  // alias edge.  The record-typed pointee (Gate 2) guarantees any dummy source
+  // is itself a record dummy, whose members are caller-bindable; the
+  // continuation (the caller's back-walk + gate #11/#12 hops) resolves the rest.
+  auto* sd = src.getDefiningOp();
+  if (auto dg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(sd))
+    return dg.getComponentAttr() ? src : mlir::Value{};
+  if (auto dc = mlir::dyn_cast_or_null<hlfir::DeclareOp>(sd))
+    return dc.getDummyScope() ? src : mlir::Value{};
+  return {};
+}
+
+mlir::Value matchAssociatedStatusBoxRef(mlir::arith::CmpIOp cmp) {
+  // The intrinsic lowers to a NE-against-null comparison.
+  if (cmp.getPredicate() != mlir::arith::CmpIPredicate::ne) return {};
+  bool rhsZero = false;
+  if (auto c = traceConstInt(cmp.getRhs())) rhsZero = (*c == 0);
+  if (!rhsZero) return {};
+  // Peel the heap-addr -> i64 ``fir.convert`` chain on the LHS back to the
+  // ``fir.box_addr``.
+  mlir::Value cur = cmp.getLhs();
+  for (int i = 0; i < limits::kConvertChainDepth && cur; ++i) {
+    auto* cd = cur.getDefiningOp();
+    if (!cd) break;
+    if (auto cv = mlir::dyn_cast<fir::ConvertOp>(cd)) {
+      cur = cv.getValue();
+      continue;
+    }
+    break;
+  }
+  auto* cd = cur ? cur.getDefiningOp() : nullptr;
+  auto ba = cd ? mlir::dyn_cast<fir::BoxAddrOp>(cd) : nullptr;
+  if (!ba) return {};
+  // ``box_addr``'s operand is the box, usually loaded from a box reference;
+  // trace through that ``fir.load`` so the returned value is what
+  // ``traceToDecl`` names.
+  mlir::Value src = ba.getVal();
+  if (auto* sd = src.getDefiningOp())
+    if (auto ld = mlir::dyn_cast<fir::LoadOp>(sd)) src = ld.getMemref();
+  return src;
+}
+
 // True iff some ``hlfir.declare`` in ``anyOp``'s module has uniq_name
 // ``uniq``.  Backed by a per-build cache (see ``kModuleDeclUniqs``).
 static bool moduleHasDeclare(mlir::Operation* anyOp, llvm::StringRef uniq) {
@@ -331,8 +480,30 @@ std::string traceToDecl(mlir::Value val, int max) {
       // the binding's ``_struct_member_symbol_sources`` sources, instead of
       // the inlined dummy's unsourced ``subset_range_call<idx>`` name (gate
       // #11).  Gated on a dummy scope so only inlined aliases match.
+      // Inlined AoR-section dummy (``vec_in`` bound to ``p_diag % p_vn(:, :,
+      // blockno)``): the dummy's box_addr/copy_in memref peels to a PURE
+      // section over the ``p_vn`` component.  ``leadsToComponentDesignate``
+      // is false here (the section has no component), so hop THROUGH the
+      // section to its base so the flat name resolves to the caller-side
+      // companion (``<root>_p_diag_p_vn_x``) the AoR mint registers, not the
+      // inlined dummy's bare ``vec_in_x`` (gate #11a, twin of #11).
+      if (dc.getDummyScope())
+        if (auto sec = asInlinedSectionOverComponent(dc)) {
+          val = sec.getMemref();
+          continue;
+        }
       if (dc.getDummyScope() && leadsToComponentDesignate(dc.getMemref())) {
         val = dc.getMemref();
+        continue;
+      }
+      // Local whole-object POINTER rebound to a struct-dummy component
+      // (``cells_subset => patch_3d % p_patch_2d(1) % cells % all``): follow the
+      // rebind to the source chain so ``cells_subset % start_block`` renders as
+      // the caller-side flat name ``patch_3d_p_patch_2d_cells_all_start_block``
+      // (which the member-symbol mint already registers) rather than the local
+      // pointer's own ``div_oce_3d_mlevels_cells_subset_start_block``.
+      if (mlir::Value src = traceLocalPointerRebindSource(dc)) {
+        val = src;
         continue;
       }
       return allocAliasFor(extractName(dc.getUniqName().str()));
