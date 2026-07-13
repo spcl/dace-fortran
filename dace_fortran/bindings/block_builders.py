@@ -1600,21 +1600,32 @@ def _render_aos_copy_in(a) -> List[str]:
     data yet) but still allocates a non-degenerate buffer."""
     its, caps, mrank, elem = _aos_loop_pieces(a)
     if a.aos_outer_rank == 0:
-        # SCALAR struct global member (``vcut%corrected``, ``dfftt%nl``): the
-        # member may be a POINTER or an ALLOCATABLE that is unassociated /
-        # unallocated on entry (no single intrinsic guards both), so marshal a
-        # shape-degenerate, zero-filled buffer -- valid storage for ``c_loc``,
-        # the right rank, and correct whenever the kernel does not READ it (the
-        # vexx no-op path).  Value marshalling of a live scalar-struct member is
-        # a separate extension; this keeps the wrapper compilable + crash-free.
-        dims = ", ".join("1" for _ in range(a.rank)) if a.rank else ""
-        out = [
-            f"    ! ----- scalar-struct member (degenerate): {a.sdfg_name} <- "
-            f"{a.aos_origin_struct}%{a.aos_member_path} -----"
-        ]
+        # SCALAR struct global member (``vcut%corrected``, ``dfftt%nl``,
+        # ICON-O's ``free_sfc_solver%x_loc_wp``): a POINTER / ALLOCATABLE member
+        # that may be unassociated / unallocated on entry.  When it IS defined,
+        # size the SoA companion from the LIVE member and copy it in, so a
+        # kernel that WRITES it with the member's real (mesh) extents stays in
+        # bounds -- the SDFG's descriptor dims are set from ``size(companion)``,
+        # so a shape-degenerate buffer under-allocates while the kernel's own
+        # (mesh-bounded) write loops overrun it and smash the heap.  When the
+        # member is NOT defined (a POINTER the kernel never reads -- the vexx
+        # no-op path, or a member whose allocator was stubbed out of the TU and
+        # the caller never rebuilt), fall back to a shape-degenerate,
+        # zero-filled buffer: valid ``c_loc`` storage of the right rank.
+        member = f"{a.aos_origin_struct}%{a.aos_member_path}"
+        zero = _zero_literal(a.dtype)
+        out = [f"    ! ----- scalar-struct member: {a.sdfg_name} <- {member} -----"]
         if a.rank:
-            out.append(f"    allocate({a.sdfg_name}({dims}))")
-        out.append(f"    {a.sdfg_name} = {_zero_literal(a.dtype)}")
+            mp = _present(member, a.aos_member_pointer)
+            live_dims = ", ".join(f"size({member}, {k + 1})" for k in range(a.rank))
+            degen_dims = ", ".join("1" for _ in range(a.rank))
+            out.append(f"    if ({mp}) then")
+            out.append(f"      allocate({a.sdfg_name}({live_dims})); {a.sdfg_name} = {member}")
+            out.append(f"    else")
+            out.append(f"      allocate({a.sdfg_name}({degen_dims})); {a.sdfg_name} = {zero}")
+            out.append(f"    end if")
+        else:
+            out.append(f"    {a.sdfg_name} = {zero}")
         return out
     struct = a.aos_origin_struct
     sp = _present(struct, a.aos_struct_pointer)  # struct allocated/associated?
@@ -1707,9 +1718,18 @@ def _render_aos_copy_out(a) -> List[str]:
     is WRITTEN), allocating each component first if the kernel created it."""
     its, caps, mrank, elem = _aos_loop_pieces(a)
     if a.aos_outer_rank == 0:
-        # Degenerate scalar-struct member: nothing was packed in, just release
-        # the buffer (no write-back -- the no-op path never writes it).
-        return [f"    deallocate({a.sdfg_name})"]
+        # Scalar-struct member: when the host member is defined, the companion
+        # was sized from it (copy-in above), so pack the kernel's writes back
+        # into it (conformable) before releasing the buffer.  When the member
+        # is undefined the companion is the shape-degenerate no-op buffer with
+        # nothing to write back.
+        out = []
+        if a.rank:
+            member = f"{a.aos_origin_struct}%{a.aos_member_path}"
+            mp = _present(member, a.aos_member_pointer)
+            out.append(f"    if ({mp}) {member} = {a.sdfg_name}")
+        out.append(f"    deallocate({a.sdfg_name})")
+        return out
     struct = a.aos_origin_struct
     sp = _present(struct, a.aos_struct_pointer)
     do_open = [f"      do {itv} = 1, size({struct}, {k + 1})" for k, itv in enumerate(its)]

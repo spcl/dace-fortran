@@ -176,7 +176,7 @@ def _seed_alloc_array(cdll, mangled: str, length: int):
     ctypes.c_ssize_t.from_address(addr + 56).value = length  # dim0.ubound
 
 
-def _retarget_shim(shim: str, dace_name: str, entry: str, module_dims=None, n_val=None) -> str:
+def _retarget_shim(shim: str, dace_name: str, entry: str, module_dims=None, n_val=None, solver_allocs=None) -> str:
     """Rewrite the auto ``<dace_name>_c`` shim into a ``<dace_name>_ref_c`` that
     calls the ORIGINAL kernel ``entry`` (``module::proc``) instead of the
     ``<dace_name>_dace`` binding.  The flat->struct reconstruction (header,
@@ -191,15 +191,33 @@ def _retarget_shim(shim: str, dace_name: str, entry: str, module_dims=None, n_va
     Grid DIMENSION module globals (``module_dims`` = ``[(sym, module), ...]`` from
     :func:`_size_derived_module_dims`) the kernel reads are seeded to ``n_val``
     (the mesh size -- every extent in this harness) before the call, mirroring
-    ICON's namelist init -- otherwise the isolated reference reads them as 0."""
+    ICON's namelist init -- otherwise the isolated reference reads them as 0.
+
+    ``solver_allocs`` (``[(object, component, dims), ...]``) builds the allocatable
+    work components of module-level DERIVED-TYPE solver objects the stock routine
+    reads.  A single-TU extraction stubs the solver's allocator
+    (``ocean_solve_construct``) to an empty body, so the real Fortran variable
+    (``free_sfc_solver%x_loc_wp``) stays unallocated and the stock write SEGVs; the
+    DUT SDFG supplies this scratch from its marshalling layer, so only the REF
+    needs it.  ``object`` lives in the entry's own module ``mod``; ``dims`` is a
+    Fortran extent expression that may reference the reconstructed dummy structs
+    (``patch_3d % p_patch_2d(1) % alloc_cell_blocks``) and the seeded grid-dim
+    globals (``nproma__refmod``), both in scope + populated before the call."""
     mod, proc = entry.split("::")
     proc = proc.lower()
     module_dims = module_dims or []
+    solver_allocs = solver_allocs or []
+    # Distinct solver objects to ``use`` from ``mod`` (dedup, order-preserving).
+    solver_objs = []
+    for obj, _comp, _dims in solver_allocs:
+        if obj not in solver_objs:
+            solver_objs.append(obj)
     bool_args = set(re.findall(r"logical\(c_bool\),\s*value\s*::\s*(\w+)", shim))
     out = []
     for ln in shim.splitlines():
         if ln.strip().startswith(f"use {dace_name}_dace_bindings"):
-            out.append(f"  use {mod}, only: {proc}")
+            extra = "".join(f", {o}" for o in solver_objs)
+            out.append(f"  use {mod}, only: {proc}{extra}")
             # ``<sym>__refmod => <module>::<sym>`` rename avoids clashing with any
             # same-named shim local; seeded just before the call below.
             for sym, module in module_dims:
@@ -212,6 +230,14 @@ def _retarget_shim(shim: str, dace_name: str, entry: str, module_dims=None, n_va
             indent, arglist = m.group(1), m.group(2)
             for sym, _module in module_dims:
                 out.append(f"{indent}{sym}__refmod = {n_val}")
+            # Build the stubbed solver objects' allocatable work arrays (the
+            # module-global reconstruction the empty ``ocean_solve_construct``
+            # skips); zero-init so a read-before-write of an unwritten slot
+            # (``res_loc_wp(1)`` when the solve stub leaves it untouched) is
+            # deterministic across the DUT and the reference.
+            for obj, comp, dims in solver_allocs:
+                out.append(f"{indent}if (.not. allocated({obj} % {comp})) allocate({obj} % {comp}({dims}))")
+                out.append(f"{indent}{obj} % {comp} = 0.0d0")
             args = [a.strip() for a in arglist.split(",")]
             args = [f"logical({a})" if a in bool_args else a for a in args]
             out.append(f"{indent}call {proc}({', '.join(args)})")
@@ -219,6 +245,57 @@ def _retarget_shim(shim: str, dace_name: str, entry: str, module_dims=None, n_va
         ln = ln.replace(f"subroutine {dace_name}_c(", f"subroutine {dace_name}_ref_c(")
         ln = ln.replace(f"end subroutine {dace_name}_c", f"end subroutine {dace_name}_ref_c")
         ln = ln.replace(f"name='{dace_name}_c'", f"name='{dace_name}_ref_c'")
+        out.append(ln)
+    return "\n".join(out) + "\n"
+
+
+def _inject_dut_solver_allocs(shim: str,
+                              dace_name: str,
+                              entry: str,
+                              module_dims=None,
+                              n_val=None,
+                              solver_allocs=None) -> str:
+    """Pre-allocate the stubbed module-global solver-scratch host members in the
+    DUT ``<dace_name>_c`` shim -- symmetric to :func:`_retarget_shim`'s REF-side
+    injection, but KEEPING the ``<dace_name>_dace`` (SDFG) call.
+
+    The single-TU extraction stubs ``ocean_solve_construct`` to an empty body, so
+    ``free_sfc_solver%x_loc_wp`` (+ twins) stay unallocated on entry.  The binding's
+    live-member marshalling sizes each SoA companion from ``size(host_member)``, so
+    the host member must be allocated at its real (mesh) shape here first; otherwise
+    the marshalling takes the degenerate ``(1,1)`` fallback and the kernel's
+    mesh-bounded writes overrun it and smash the heap.  Same ``(object, component,
+    dims)`` list the REF shim uses -- ``dims`` may reference the reconstructed dummy
+    structs (``patch_3d % p_patch_2d(1) % alloc_cell_blocks``) and the seeded
+    grid-dim globals (``nproma__refmod``), both in scope + populated before the
+    call."""
+    mod, _proc = entry.split("::")
+    module_dims = module_dims or []
+    solver_allocs = solver_allocs or []
+    if not solver_allocs:
+        return shim
+    solver_objs = []
+    for obj, _comp, _dims in solver_allocs:
+        if obj not in solver_objs:
+            solver_objs.append(obj)
+    out = []
+    for ln in shim.splitlines():
+        if ln.strip().startswith(f"use {dace_name}_dace_bindings"):
+            out.append(ln)
+            out.append(f"  use {mod}, only: {', '.join(solver_objs)}")
+            for sym, module in module_dims:
+                out.append(f"  use {module}, only: {sym}__refmod => {sym}")
+            continue
+        m = re.match(rf"(\s*)call {dace_name}_dace\((.*)\)\s*$", ln)
+        if m:
+            indent = m.group(1)
+            for sym, _module in module_dims:
+                out.append(f"{indent}{sym}__refmod = {n_val}")
+            for obj, comp, dims in solver_allocs:
+                out.append(f"{indent}if (.not. allocated({obj} % {comp})) allocate({obj} % {comp}({dims}))")
+                out.append(f"{indent}{obj} % {comp} = 0.0d0")
+            out.append(ln)
+            continue
         out.append(ln)
     return "\n".join(out) + "\n"
 
@@ -323,7 +400,8 @@ def _build_and_compare(tu_path: Path,
                        module_array_seeds=None,
                        do_not_emit=None,
                        prelude_paths=None,
-                       inject_use_mpi=False):
+                       inject_use_mpi=False,
+                       ref_solver_allocs=None):
     """The worker body (runs in a subprocess): build DUT + REF, drive both,
     return ``(max_diff, n_changed)``.  Imports are deferred so the module loads
     cheaply in the parent (which only orchestrates the subprocess).
@@ -402,8 +480,35 @@ def _build_and_compare(tu_path: Path,
     seed_specs = _resolve_module_seeds(binding_text, module_seeds or {}) if binding_text else []
     array_specs = _resolve_module_array_seeds(binding_text, module_array_seeds or {}) if binding_text else []
 
+    # DUT: pre-allocate the stubbed solver-scratch host members in the shim (the
+    # same list the REF shim builds) and re-link the DUT .so.  The binding's
+    # live-member marshalling then sizes each SoA companion from the real (mesh)
+    # member shape instead of the degenerate (1,1) fallback that the kernel's
+    # mesh-bounded writes would overrun (heap smash).  Mirrors the REF compile
+    # below; keeps the SDFG-linked ``<dace_name>_dace`` binding untouched.
+    dut_so_path = lib.so_path
+    if ref_solver_allocs:
+        dut_shim = out / f"{dace_name}_c_dut.f90"
+        dut_shim.write_text(
+            _inject_dut_solver_allocs(shim, dace_name, entry, module_dims, n, solver_allocs=ref_solver_allocs))
+        dut_so_path = out / f"lib{dace_name}_dut.so"
+        sdfg_so = Path(lib.sdfg_so)
+        rl = subprocess.run([
+            "gfortran", "-shared", "-fPIC", "-ffree-line-length-none", "-O3", "-g", "-fno-fast-math",
+            "-ffp-contract=off", "-frounding-math", "-fopenmp", f"-J{out}", *[str(p) for p in extra_prelude],
+            str(ref_tu),
+            str(lib.bindings_f90),
+            str(dut_shim), "-o",
+            str(dut_so_path), f"-L{sdfg_so.parent}", f"-Wl,-rpath,{sdfg_so.parent}", f"-l:{sdfg_so.name}"
+        ],
+                            capture_output=True,
+                            text=True,
+                            cwd=str(out))
+        if rl.returncode != 0:
+            raise RuntimeError(f"DUT solver-alloc relink failed:\n{rl.stderr[-3000:]}")
+
     ref_shim = out / f"{dace_name}_ref_c.f90"
-    ref_shim.write_text(_retarget_shim(shim, dace_name, entry, module_dims, n))
+    ref_shim.write_text(_retarget_shim(shim, dace_name, entry, module_dims, n, solver_allocs=ref_solver_allocs))
     ref_so = out / f"lib{dace_name}_ref.so"
     # No ``-fallow-argument-mismatch``: it silences REAL argument-type errors, so a
     # genuine ABI mismatch between the shim and the kernel would compile to a wrong
@@ -478,7 +583,7 @@ def _build_and_compare(tu_path: Path,
             call_plan.append(("val", arg, _CT[ft], v))
 
     ptr_args = list(ptr_shape)
-    sd = _run_in_fork(lib.so_path,
+    sd = _run_in_fork(dut_so_path,
                       call_plan,
                       inputs,
                       ptr_args,
@@ -530,7 +635,8 @@ def run_kernel_e2e(tu_path: Path,
                    module_array_seeds=None,
                    do_not_emit=None,
                    prelude_paths=None,
-                   inject_use_mpi=False) -> dict:
+                   inject_use_mpi=False,
+                   ref_solver_allocs=None) -> dict:
     """Run one kernel's e2e build+compare in an isolated subprocess.  Returns
     ``{passed, max_diff, n_changed, output}``.  ``passed`` is False (with the
     captured output) on any build / lowering / compile / run failure -- a
@@ -566,7 +672,8 @@ def run_kernel_e2e(tu_path: Path,
         json.dumps(list(do_not_emit or [])),
         json.dumps([str(p) for p in (prelude_paths or [])]),
         json.dumps(bool(inject_use_mpi)),
-        json.dumps(module_array_seeds or {})
+        json.dumps(module_array_seeds or {}),
+        json.dumps(ref_solver_allocs or [])
     ],
                           capture_output=True,
                           text=True,
@@ -580,7 +687,8 @@ def run_kernel_e2e(tu_path: Path,
 
 def _main(argv):
     (tu_path, entry, overrides_json, array_overrides_json, float_range_json, n, seed, out, int_fill_json,
-     module_seeds_json, do_not_emit_json, prelude_paths_json, inject_use_mpi_json, module_array_seeds_json) = argv[1:15]
+     module_seeds_json, do_not_emit_json, prelude_paths_json, inject_use_mpi_json, module_array_seeds_json,
+     ref_solver_allocs_json) = argv[1:16]
     try:
         max_diff, n_changed = _build_and_compare(Path(tu_path),
                                                  entry,
@@ -595,7 +703,8 @@ def _main(argv):
                                                  module_array_seeds=json.loads(module_array_seeds_json),
                                                  do_not_emit=json.loads(do_not_emit_json),
                                                  prelude_paths=json.loads(prelude_paths_json),
-                                                 inject_use_mpi=json.loads(inject_use_mpi_json))
+                                                 inject_use_mpi=json.loads(inject_use_mpi_json),
+                                                 ref_solver_allocs=json.loads(ref_solver_allocs_json))
         print(f"MAXDIFF: {max_diff}", flush=True)
         print(f"CHANGED: {n_changed}", flush=True)
         print("RESULT: PASS", flush=True)
