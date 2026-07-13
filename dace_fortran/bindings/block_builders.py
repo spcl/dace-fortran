@@ -703,7 +703,19 @@ def build_wrapper_body(frozen: FrozenSignature,
             body.append(f"      {local} = -1")
             body.append("    end select")
         body.append("")
-    body.append("    ! ----- Copy-in / alias per flatten entry -----")
+    # Copy-in / alias for each flatten entry (+ the LOGICAL-kind bridge copy-in)
+    # is BUILT here but DEFERRED -- appended to ``body`` only after the
+    # module-global reconstruction blocks below.  A double-buffer AoR alias
+    # (``c_f_pointer(c_loc(ocean_state%p_prog(nold(1))%h), ...)``) subscripts the
+    # record array with a module-global time-level symbol (``nold``/``nnew``);
+    # those are orphan module args, allocated + seeded only by the
+    # ``Module-global args sourced from use-imports`` block.  Emitting the alias
+    # first would subscript an unallocated ``nold`` -> SIGSEGV.  Copy-in reads no
+    # symbol / buffer this wrapper builds (its shapes are ``size(<member>)`` on
+    # the caller's storage), so it has no forward dependency on the blocks it now
+    # trails; the buffer-derived symbol block still follows it.
+    copyin: List[str] = []
+    copyin.append("    ! ----- Copy-in / alias per flatten entry -----")
     for entry in plan.entries:
         r = entry.recipe
         # Four mutually exclusive emitter shapes  --  see FlattenRecipe
@@ -712,19 +724,19 @@ def build_wrapper_body(frozen: FrozenSignature,
         # intrinsic LOGICAL-kind conversion (see ``build_wrapper_head``
         # for the rationale).
         if r.aos_alloc:
-            body.extend(render_aos_alloc_pack_in(r, entry.outer_expr))
+            copyin.extend(render_aos_alloc_pack_in(r, entry.outer_expr))
         elif r.aliasable and r.source_logical_kind in (0, 1):
-            body.extend(render_alias_calls(r))
+            copyin.extend(render_alias_calls(r))
         elif r.aliasable and r.source_logical_kind > 1:
-            body.extend(_render_logical_bridge_copy_in(r, entry.outer_expr))
+            copyin.extend(_render_logical_bridge_copy_in(r, entry.outer_expr))
         else:
-            body.extend(render_copy_in_loop(r))
+            copyin.extend(render_copy_in_loop(r))
 
     _, copy_in_lines, _, _ = _build_logical_bridges(frozen, iface)
     if copy_in_lines:
-        body.append("")
-        body.append("    ! ----- LOGICAL -> logical(c_bool) bridge (copy-in) -----")
-        body.extend(copy_in_lines)
+        copyin.append("")
+        copyin.append("    ! ----- LOGICAL -> logical(c_bool) bridge (copy-in) -----")
+        copyin.extend(copy_in_lines)
 
     # Symbol population is SPLIT by data dependency.  The orphan / AoS /
     # unsourced blocks below emit ``allocate(buf(<shape syms>))``; a shape sym
@@ -738,6 +750,17 @@ def build_wrapper_body(frozen: FrozenSignature,
     _buffer_names = {a.sdfg_name for a, _m, _mem in _orphan_module_args(frozen, iface, plan) if a.rank > 0}
     _buffer_names |= {a.sdfg_name for a in _aos_module_args(frozen)}
     _buffer_names |= {a.sdfg_name for a in _unsourced_array_args(frozen, iface, plan)}
+    # Copy-in / alias companions (``ocean_state_p_prog_nold_vn`` and friends) are
+    # also buffer-derived: a symbol reading their ``lbound`` / ``size`` -- notably a
+    # double-buffer lane's ``offset_<companion>_d<i> = lbound(<companion>, dim=i)``
+    # -- can only run AFTER the copy-in that ``c_f_pointer``-associates the
+    # companion, which now trails the module-global block.  Sorting those offsets
+    # into the late (post-copy-in) symbol block keeps them from reading an
+    # unassociated pointer (garbage lbound -> out-of-bounds SDFG index).  A symbol
+    # reading the STRUCT MEMBER instead (``size(ocean_state%p_prog(nold(1))%vn)``)
+    # does not textually contain the companion name, so it is unaffected.
+    if plan is not None:
+        _buffer_names |= {f for e in plan.entries for f in e.recipe.flat_names}
 
     def _buffer_derived(rhs: str) -> bool:
         # A symbol whose RHS reads ``size``/``lbound`` of a buffer this wrapper
@@ -849,6 +872,12 @@ def build_wrapper_body(frozen: FrozenSignature,
         body.append(
             f"    dace_user_comm_size_err = dace_mpi_comm_size({_USER_COMM_SYMBOL_NAME}, dace_user_comm_size_buf)")
         body.append(f"    {_USER_COMM_SIZE_SYMBOL_NAME} = int(dace_user_comm_size_buf, c_long_long)")
+
+    # ----- Copy-in / alias (deferred from the top of the body): now safe -- the
+    # module-global time-level indices (``nold``/``nnew``) its double-buffer
+    # aliases subscript have been allocated + seeded by the blocks above. -----
+    body.append("")
+    body.extend(copyin)
 
     # Buffer-derived symbols: the EXTENT of a wrapper-allocated buffer
     # (``becxx_k_d0 = size(becxx_k)``), valid only now that the allocates above
