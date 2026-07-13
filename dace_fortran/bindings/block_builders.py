@@ -10,9 +10,48 @@ depends on the flattening plan lives in ``loop_copy.py`` and is
 called from ``build_wrapper_body`` / ``build_wrapper_tail``.
 """
 
+import hashlib
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+#: gfortran (and the Fortran 2003+ standard) caps an identifier at 63 characters.
+#: There is no compiler flag to lift it, so any generated name longer than this
+#: must be renamed before the binding will compile.
+_FORTRAN_IDENT_LIMIT = 63
+
+
+def _shorten_long_idents(src: str, limit: int = _FORTRAN_IDENT_LIMIT) -> str:
+    """Rename every identifier longer than ``limit`` to a unique, deterministic
+    ``<=limit`` form, consistently across the whole binding.
+
+    The bridge flattens a deeply-inlined struct-member extent into a name like
+    ``verticalderiv_vec_midlevel_on_block_inv_prism_center_distance_d0`` (64
+    chars), which gfortran rejects.  These names are all binding-INTERNAL -- the
+    C ABI is positional and the ``bind(c)`` entry names are separate string
+    literals -- so a whole-word token rename cannot perturb linkage or the
+    reconstructed ``use`` imports (every real Fortran/ICON entity is already
+    ``<=limit``).  The rename keys off a blake2b digest of the full name, so it
+    is stable across runs and disambiguates names that share a truncated stem
+    (``..._distance_d0`` vs ``..._distance_d1``)."""
+    all_idents = set(re.findall(r"[A-Za-z_]\w*", src))
+    long_idents = sorted(i for i in all_idents if len(i) > limit)
+    if not long_idents:
+        return src
+    used = set(all_idents)
+    rename: Dict[str, str] = {}
+    for name in long_idents:
+        digest = hashlib.blake2b(name.encode(), digest_size=4).hexdigest()  # 8 hex chars
+        short = f"{name[:limit - 9]}_{digest}"
+        while short in used:  # digest collision -- vanishingly unlikely; re-hash
+            digest = hashlib.blake2b((short + name).encode(), digest_size=4).hexdigest()
+            short = f"{name[:limit - 9]}_{digest}"
+        rename[name] = short
+        used.add(short)
+    for name, short in rename.items():
+        src = re.sub(rf"\b{re.escape(name)}\b", short, src)
+    return src
+
 
 from dace_fortran.bindings.flatten_plan import (
     FlattenPlan,
@@ -1057,7 +1096,7 @@ def assemble_module(iface: OriginalInterface, frozen: FrozenSignature, blocks: d
         use_lines.append(f"  use {mod}, only: {', '.join(sorted(structs))}")
     use_statements = "\n".join(use_lines)
     wrapper_body = (blocks['wrapper_head'] + "\n" + blocks['wrapper_body'] + "\n" + blocks['wrapper_tail'])
-    return _load("module.f90.in").format(
+    module_src = _load("module.f90.in").format(
         entry=iface.entry,
         schema_version=frozen.schema_version,
         use_statements=use_statements,
@@ -1066,6 +1105,9 @@ def assemble_module(iface: OriginalInterface, frozen: FrozenSignature, blocks: d
         wrapper_body=wrapper_body,
         finalize_body=blocks['finalize'],
     )
+    # gfortran rejects identifiers over 63 chars; the bridge can flatten a
+    # deeply-inlined member extent past that.  Rename any such name uniquely.
+    return _shorten_long_idents(module_src)
 
 
 # ---------------------------------------------------------------------------
@@ -1898,16 +1940,31 @@ def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dumm
                 present = _present(_module_symbol_alias(pres_base), getattr(fa, 'module_origin_pointer', False))
                 out.append(f"    {sym} = int(merge(1, 0, {present}), c_int)")
                 continue
+            # An AoS-MATERIALISED companion (``aos_outer_rank > 0``: a nested
+            # record-array member -- ``patch_3d%p_patch_2d(:)%cells%owned%
+            # vertical_levels`` -- copied element-by-element into an
+            # ``allocatable, target`` SoA scratch the wrapper unconditionally
+            # allocates).  Its OWN local is therefore always allocated (so a
+            # test on it is meaningless) AND is an ALLOCATABLE, so
+            # ``associated(<local>)`` is a hard gfortran type error.  Source the
+            # presence from the HOST member via the caller-side dotted path,
+            # with the member's real storage class (``associated`` for a POINTER
+            # member, ``allocated`` for an ALLOCATABLE).
+            if fa is not None and fa.aos_outer_rank > 0 and sym.endswith("_allocated") \
+                    and pres_base in _struct_member_paths:
+                present = _present(_struct_member_paths[pres_base], fa.aos_member_pointer)
+                out.append(f"    {sym} = int(merge(1, 0, {present}), c_int)")
+                continue
             # A STRUCT-MEMBER (or other aliased array) ``ASSOCIATED``/``ALLOCATED``
             # fold the kernel branches on -- ICON gates the ``p_nh%prog(nnew)%w``
             # output store on ``associated(...)``, and the pg / gradp copy-ins on
-            # the pg-array presence.  The binding ``c_f_pointer``s every array arg
-            # to a POINTER local from the reconstructed struct, so
-            # ``associated(<base>)`` is true exactly when the caller provided the
-            # member (the shim allocates it).  Leaving the flag unset defaults the
-            # branch OFF, dropping the output nondeterministically (uninitialised
-            # local read).  Only ``_allocated`` folds resolve this way; ``_present``
-            # (OPTIONAL dummy) keeps its own branch below.
+            # the pg-array presence.  The binding ``c_f_pointer``s every DIRECTLY
+            # aliased array arg to a POINTER local from the reconstructed struct,
+            # so ``associated(<base>)`` is true exactly when the caller provided
+            # the member (the shim allocates it).  Leaving the flag unset defaults
+            # the branch OFF, dropping the output nondeterministically
+            # (uninitialised local read).  Only ``_allocated`` folds resolve this
+            # way; ``_present`` (OPTIONAL dummy) keeps its own branch below.
             if fa is not None and fa.kind == 'array' and sym.endswith("_allocated"):
                 present = _present(pres_base, arg_is_pointer_local.get(pres_base, True))
                 out.append(f"    {sym} = int(merge(1, 0, {present}), c_int)")
