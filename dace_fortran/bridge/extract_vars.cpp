@@ -4078,7 +4078,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
       auto* sd = src.getDefiningOp();
       auto dg = sd ? mlir::dyn_cast<hlfir::DesignateOp>(sd) : nullptr;
       if (!dg || !dg.getComponentAttr()) return;  // must be a member designate
-      if (!rootedAtStructDummy(dg)) return;        // rooted at a caller struct DUMMY
+      if (!rootedAtStructDummy(dg)) return;       // rooted at a caller struct DUMMY
       std::string flat = traceToDecl(src);
       if (flat.empty() || flat.find('_') == std::string::npos) return;
       std::string sym = flat + "_allocated";

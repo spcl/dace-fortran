@@ -260,7 +260,7 @@ static bool sectionBaseReachesComponent(mlir::Value mr) {
     if (!d) return false;
     if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(d)) {
       if (dg.getComponentAttr()) return true;  // reached the struct member
-      mr = dg.getMemref();                      // nested section / element -- keep walking
+      mr = dg.getMemref();                     // nested section / element -- keep walking
       continue;
     }
     if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(d)) {
@@ -355,10 +355,8 @@ mlir::Value traceLocalPointerRebindSource(hlfir::DeclareOp decl) {
   // is itself a record dummy, whose members are caller-bindable; the
   // continuation (the caller's back-walk + gate #11/#12 hops) resolves the rest.
   auto* sd = src.getDefiningOp();
-  if (auto dg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(sd))
-    return dg.getComponentAttr() ? src : mlir::Value{};
-  if (auto dc = mlir::dyn_cast_or_null<hlfir::DeclareOp>(sd))
-    return dc.getDummyScope() ? src : mlir::Value{};
+  if (auto dg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(sd)) return dg.getComponentAttr() ? src : mlir::Value{};
+  if (auto dc = mlir::dyn_cast_or_null<hlfir::DeclareOp>(sd)) return dc.getDummyScope() ? src : mlir::Value{};
   return {};
 }
 

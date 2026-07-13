@@ -3661,8 +3661,7 @@ struct FlattenStructsPass : public mlir::PassWrapper<FlattenStructsPass, mlir::O
         if (!dc) break;  // genuine non-alias root
         // A block-arg-rooted declare re-boxes an entry-block argument; its
         // result #0 is the ``argDecls`` key.
-        if (mlir::isa<mlir::BlockArgument>(dc.getMemref()) && argDecls.count(dc.getResult(0)))
-          return dc.getResult(0);
+        if (mlir::isa<mlir::BlockArgument>(dc.getMemref()) && argDecls.count(dc.getResult(0))) return dc.getResult(0);
         v = dc.getMemref();
       }
       return {};
