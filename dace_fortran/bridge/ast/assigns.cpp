@@ -633,6 +633,18 @@ ASTNode buildAssignNode(hlfir::AssignOp assign) {
     if (depth > 40) return;
     auto* op = v.getDefiningOp();
     if (!op) return;
+    // ``fir.box_dims`` reads only the descriptor's shape/bounds metadata --
+    // ``buildDesignateIndexExpr`` already renders those bounds as shape/offset
+    // SYMBOLS in the index exprs (``jc + offset_..._d0 - 1``), never a data
+    // element.  Recursing into its box operand re-hits the ARRAY's own
+    // designate and records a spurious WHOLE-array read (index ``[aos_idx]``
+    // only) -- a rank-1 memlet on the real rank-N array that fails
+    // ``sdfg.validate`` (the AoS-member ``patch_3d % p_patch_1d(1) % <member>``
+    // offset-in-subscript shape: one bogus read per non-1-based dim).  The box
+    // carries no data read of its own, so stop the walk here.  Match by op
+    // name (the same form the ``buildIndexExpr`` box_dims handler above uses) --
+    // a typed ``isa<fir::BoxDimsOp>`` does not catch this dialect's op here.
+    if (op->getName().getStringRef() == "fir.box_dims") return;
     if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(op)) {
       // Use ``expandDesignateChain`` so AoR shapes
       // (``arr(i) % x(2)`` -- a chain of two designates) produce an

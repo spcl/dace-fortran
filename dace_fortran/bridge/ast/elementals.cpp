@@ -496,6 +496,16 @@ void collectReadAccesses(mlir::Value v, std::vector<AccessInfo>& accesses, int d
   if (depth > 40) return;
   auto* op = v.getDefiningOp();
   if (!op) return;
+  // ``fir.box_dims`` reads only the descriptor's shape/bounds metadata, which
+  // the index-expr builder already renders as shape/offset SYMBOLS -- never a
+  // data element.  Recursing into its box operand re-hits the ARRAY's own
+  // designate and records a spurious WHOLE-array read (the AoS outer index
+  // only) -- a rank-1 memlet on the real rank-N array that fails
+  // ``sdfg.validate`` (the ``patch_3d % p_patch_1d(1) % <member>``
+  // offset-in-subscript shape broadcast through an ``hlfir.elemental``: one
+  // bogus read per non-1-based dim).  Stop the walk here.  Matched by op name
+  // (the same form the ``buildIndexExpr`` box_dims handler uses).
+  if (op->getName().getStringRef() == "fir.box_dims") return;
   // A reduction materialised into a scalar by ``materialiseCondReductions`` is
   // owned by its Reduce lib-node; its source array reads belong to that node,
   // NOT the condition.  Skip it -- the condition reads the bare scalar
