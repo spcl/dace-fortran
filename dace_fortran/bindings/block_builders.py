@@ -1361,7 +1361,7 @@ def _sym_from_intrinsic(sym: str, frozen: FrozenSignature) -> Optional[Tuple[str
     return None
 
 
-def _sym_from_array_extent(sym: str, frozen: FrozenSignature) -> Optional[Tuple[str, int]]:
+def _sym_from_array_extent(sym: str, frozen: FrozenSignature, exclude=None) -> Optional[Tuple[str, int]]:
     """A free symbol that is a NAMED extent of an array arg -- e.g. ``n_zlev``
     is the 2nd dim of ``vn(nproma, n_zlev, nblks_e)``.
 
@@ -1373,9 +1373,19 @@ def _sym_from_array_extent(sym: str, frozen: FrozenSignature) -> Optional[Tuple[
     module global: ICON's ``mo_ocean_nml::n_zlev`` is unset (0) in an extracted
     kernel, and reading it would size SDFG transients (``z_vort_internal(n_zlev)``)
     to zero -> out-of-bounds writes.  Returns ``(fortran_expr, dim)`` or None.
+
+    ``exclude`` (arg ``sdfg_name`` set) are the ABSENT-OPTIONAL args the binding
+    allocates as a degenerate ``(1,1,...)`` placeholder (no host source): their
+    extent is always 1, so deriving a blocking symbol (``nproma``, ``nblks_e``)
+    from one pins it to 1 and every ``size(<arr>, dim)`` transient collapses.
+    Skip them so the symbol falls to a PRESENT array's real extent (or the seeded
+    module global), the true SDFG layout.
     """
+    exclude = exclude or set()
     for a in frozen.args:
         if a.kind != "array":
+            continue
+        if a.sdfg_name in exclude:
             continue
         shape = tuple(str(s) for s in (a.shape or ()))
         if sym in shape:
@@ -1873,6 +1883,11 @@ def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dumm
     # ``size(dfftt%nl_d)``).  Sourced from the static ``struct_types``
     # layout as the last resort below.
     _struct_member_sources, _struct_member_paths = _struct_member_symbol_sources(iface)
+    # Absent-optional args are allocated as a degenerate ``(1,1,...)`` placeholder
+    # (no host source), so their extent is 1 -- a named blocking symbol
+    # (``nproma`` / ``nblks_e``) must NOT be sourced from one or every
+    # ``size(<arr>, dim)`` transient collapses to 1 and mesh-bounded writes smash.
+    _unsourced_names = {a.sdfg_name for a in _unsourced_array_args(frozen, iface, plan)}
     arg_by_sdfg = {a.sdfg_name: a for a in frozen.args}
     # SCALAR outer dummies declared OPTIONAL -- their ``<name>_present``
     # companion is forwarded from the caller's actual ``present(<name>)`` (M1),
@@ -1961,7 +1976,7 @@ def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dumm
         # module-global fallback below: the SDFG sized its arrays/transients by
         # this symbol, so it has to equal the actual allocation, not a (possibly
         # unset) namelist global of the same name.
-        ext = _sym_from_array_extent(sym, frozen)
+        ext = _sym_from_array_extent(sym, frozen, exclude=_unsourced_names)
         if ext is not None:
             expr, dim = ext
             out.append(f"    {sym} = int(size({expr}, dim={dim}), c_int)")

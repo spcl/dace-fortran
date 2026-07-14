@@ -176,7 +176,13 @@ def _seed_alloc_array(cdll, mangled: str, length: int):
     ctypes.c_ssize_t.from_address(addr + 56).value = length  # dim0.ubound
 
 
-def _retarget_shim(shim: str, dace_name: str, entry: str, module_dims=None, n_val=None, solver_allocs=None) -> str:
+def _retarget_shim(shim: str,
+                   dace_name: str,
+                   entry: str,
+                   module_dims=None,
+                   n_val=None,
+                   solver_allocs=None,
+                   pointer_members=None) -> str:
     """Rewrite the auto ``<dace_name>_c`` shim into a ``<dace_name>_ref_c`` that
     calls the ORIGINAL kernel ``entry`` (``module::proc``) instead of the
     ``<dace_name>_dace`` binding.  The flat->struct reconstruction (header,
@@ -236,7 +242,8 @@ def _retarget_shim(shim: str, dace_name: str, entry: str, module_dims=None, n_va
             # (``res_loc_wp(1)`` when the solve stub leaves it untouched) is
             # deterministic across the DUT and the reference.
             for obj, comp, dims in solver_allocs:
-                out.append(f"{indent}if (.not. allocated({obj} % {comp})) allocate({obj} % {comp}({dims}))")
+                guard = "associated" if (obj.lower(), comp.lower()) in (pointer_members or set()) else "allocated"
+                out.append(f"{indent}if (.not. {guard}({obj} % {comp})) allocate({obj} % {comp}({dims}))")
                 out.append(f"{indent}{obj} % {comp} = 0.0d0")
             args = [a.strip() for a in arglist.split(",")]
             args = [f"logical({a})" if a in bool_args else a for a in args]
@@ -254,7 +261,8 @@ def _inject_dut_solver_allocs(shim: str,
                               entry: str,
                               module_dims=None,
                               n_val=None,
-                              solver_allocs=None) -> str:
+                              solver_allocs=None,
+                              pointer_members=None) -> str:
     """Pre-allocate the stubbed module-global solver-scratch host members in the
     DUT ``<dace_name>_c`` shim -- symmetric to :func:`_retarget_shim`'s REF-side
     injection, but KEEPING the ``<dace_name>_dace`` (SDFG) call.
@@ -292,7 +300,12 @@ def _inject_dut_solver_allocs(shim: str,
             for sym, _module in module_dims:
                 out.append(f"{indent}{sym}__refmod = {n_val}")
             for obj, comp, dims in solver_allocs:
-                out.append(f"{indent}if (.not. allocated({obj} % {comp})) allocate({obj} % {comp}({dims}))")
+                # ``x_loc_wp`` / ``res_loc_wp`` are ALLOCATABLE, ``b_loc_wp`` is a
+                # POINTER (mixed kinds in ``t_ocean_solve``) -- pick the guard the
+                # member's kind accepts (``allocated`` rejects a pointer and vice
+                # versa), taken from the binding's own associated()/allocated() use.
+                guard = "associated" if (obj.lower(), comp.lower()) in (pointer_members or set()) else "allocated"
+                out.append(f"{indent}if (.not. {guard}({obj} % {comp})) allocate({obj} % {comp}({dims}))")
                 out.append(f"{indent}{obj} % {comp} = 0.0d0")
             out.append(ln)
             continue
@@ -479,6 +492,12 @@ def _build_and_compare(tu_path: Path,
     # test-supplied namelist values.
     seed_specs = _resolve_module_seeds(binding_text, module_seeds or {}) if binding_text else []
     array_specs = _resolve_module_array_seeds(binding_text, module_array_seeds or {}) if binding_text else []
+    # ``t_ocean_solve`` mixes ALLOCATABLE (``x_loc_wp`` / ``res_loc_wp``) and
+    # POINTER (``b_loc_wp``) scratch members; the shim's pre-alloc guard must match
+    # each member's kind (``allocated`` rejects a pointer and vice versa).  Recover
+    # the pointer members from the binding's own ``associated(obj % comp)`` guards.
+    pointer_members = {(o.lower(), c.lower())
+                       for o, c in re.findall(r"associated\(\s*(\w+)\s*%\s*(\w+)\s*\)", binding_text)}
 
     # DUT: pre-allocate the stubbed solver-scratch host members in the shim (the
     # same list the REF shim builds) and re-link the DUT .so.  The binding's
@@ -490,7 +509,13 @@ def _build_and_compare(tu_path: Path,
     if ref_solver_allocs:
         dut_shim = out / f"{dace_name}_c_dut.f90"
         dut_shim.write_text(
-            _inject_dut_solver_allocs(shim, dace_name, entry, module_dims, n, solver_allocs=ref_solver_allocs))
+            _inject_dut_solver_allocs(shim,
+                                      dace_name,
+                                      entry,
+                                      module_dims,
+                                      n,
+                                      solver_allocs=ref_solver_allocs,
+                                      pointer_members=pointer_members))
         dut_so_path = out / f"lib{dace_name}_dut.so"
         sdfg_so = Path(lib.sdfg_so)
         rl = subprocess.run([
@@ -508,7 +533,14 @@ def _build_and_compare(tu_path: Path,
             raise RuntimeError(f"DUT solver-alloc relink failed:\n{rl.stderr[-3000:]}")
 
     ref_shim = out / f"{dace_name}_ref_c.f90"
-    ref_shim.write_text(_retarget_shim(shim, dace_name, entry, module_dims, n, solver_allocs=ref_solver_allocs))
+    ref_shim.write_text(
+        _retarget_shim(shim,
+                       dace_name,
+                       entry,
+                       module_dims,
+                       n,
+                       solver_allocs=ref_solver_allocs,
+                       pointer_members=pointer_members))
     ref_so = out / f"lib{dace_name}_ref.so"
     # No ``-fallow-argument-mismatch``: it silences REAL argument-type errors, so a
     # genuine ABI mismatch between the shim and the kernel would compile to a wrong
@@ -549,6 +581,17 @@ def _build_and_compare(tu_path: Path,
         for s in dim_symbols
     }
 
+    # Structured per-array input buffers (a physically-consistent mesh's
+    # connectivity / subset-range arrays) can't ride argv as JSON, so
+    # ``run_kernel_e2e`` drops them into ``out`` as a sidecar .npz; load once and
+    # feed the same bytes to both the DUT and REF forks so the differential stays
+    # bit-exact.
+    mesh_buffers = {}
+    mesh_npz = out / "mesh_buffers.npz"
+    if mesh_npz.exists():
+        with np.load(mesh_npz) as zf:
+            mesh_buffers = {k: zf[k] for k in zf.files}
+
     rng = np.random.default_rng(seed)
     inputs, call_plan = {}, []
     for arg in header:
@@ -556,7 +599,13 @@ def _build_and_compare(tu_path: Path,
             shape = tuple(int(eval(tok, {}, dimvals)) for tok in ptr_shape[arg].split(","))
             npdt = _NP[ptr_ftype[arg]]
             override = array_overrides.get(ptr_local[arg])
-            if override is not None:  # pinned to a constant (e.g. a valid loop bound)
+            mesh_buf = mesh_buffers.get(ptr_local[arg])
+            if mesh_buf is not None:  # explicit per-element buffer (real mesh connectivity)
+                if tuple(mesh_buf.shape) != shape:
+                    raise ValueError(f"mesh buffer for {ptr_local[arg]!r} has shape "
+                                     f"{tuple(mesh_buf.shape)}, harness expects {shape}")
+                base = np.asfortranarray(mesh_buf.astype(npdt))
+            elif override is not None:  # pinned to a constant (e.g. a valid loop bound)
                 base = np.asfortranarray(np.full(shape, override, dtype=npdt))
             elif npdt == np.float64:
                 base = np.asfortranarray(rng.uniform(float_range[0], float_range[1], shape).astype(npdt))
@@ -610,14 +659,23 @@ def _build_and_compare(tu_path: Path,
 
     max_diff, n_changed = 0.0, 0
     for arg in ptr_args:
-        d, rf = dut[arg], ref[arg]
-        diff = float(np.abs(d.astype(np.float64) - rf.astype(np.float64)).max())
-        # Python ``max(0.0, nan) == 0.0`` silently swallows a NaN/Inf DUT, so a
-        # diverged or overflowed output would masquerade as a perfect match.
-        # Carry a non-finite diff forward so it fails the tolerance check.
-        if not np.isfinite(diff) or diff > max_diff:
-            max_diff = diff
-        if not np.array_equal(d, inputs[arg]):
+        d = dut[arg].astype(np.float64)
+        rf = ref[arg].astype(np.float64)
+        # Bit-exact comparison treats IDENTICAL non-finite results as equal: two NaNs
+        # (or the same signed Inf) at a position are the same bits, so a degenerate
+        # input that deterministically drives BOTH sides to the same Inf/NaN is not a
+        # divergence.  Only a genuine mismatch -- finite vs non-finite, +Inf vs -Inf,
+        # or a lone NaN -- diverges: those positions carry +Inf so max_diff fails the
+        # ``== 0.0`` gate instead of a real DUT overflow masquerading as a match.
+        equal = (d == rf) | (np.isnan(d) & np.isnan(rf))
+        if not equal.all():
+            with np.errstate(invalid="ignore"):
+                block = np.abs(d[~equal] - rf[~equal])
+            block[~np.isfinite(block)] = np.inf
+            diff = float(block.max())
+            if not np.isfinite(diff) or diff > max_diff:
+                max_diff = diff
+        if not np.array_equal(dut[arg], inputs[arg]):
             n_changed += 1
     return max_diff, n_changed
 
@@ -636,7 +694,8 @@ def run_kernel_e2e(tu_path: Path,
                    do_not_emit=None,
                    prelude_paths=None,
                    inject_use_mpi=False,
-                   ref_solver_allocs=None) -> dict:
+                   ref_solver_allocs=None,
+                   mesh_buffers=None) -> dict:
     """Run one kernel's e2e build+compare in an isolated subprocess.  Returns
     ``{passed, max_diff, n_changed, output}``.  ``passed`` is False (with the
     captured output) on any build / lowering / compile / run failure -- a
@@ -652,6 +711,11 @@ def run_kernel_e2e(tu_path: Path,
     scratch_root = _HERE.parent.parent.parent / "_session_scratch"
     scratch_root.mkdir(parents=True, exist_ok=True)
     out = Path(tempfile.mkdtemp(prefix="ocean_e2e_", dir=str(scratch_root)))
+    # numpy arrays can't be JSON-encoded onto the child's argv, so hand any structured
+    # input buffers to the worker as a sidecar .npz in the per-run ``out`` dir (already
+    # threaded to the child); ``_build_and_compare`` loads it and applies it to both forks.
+    if mesh_buffers:
+        np.savez(out / "mesh_buffers.npz", **mesh_buffers)
     env = dict(os.environ)
     # tests/ (for icon.ocean) + repo root (for dace_fortran) on the child path.
     env["PYTHONPATH"] = os.pathsep.join([str(_HERE.parents[1]), str(_HERE.parents[2]), env.get("PYTHONPATH", "")])
