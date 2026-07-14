@@ -838,7 +838,18 @@ def build_wrapper_body(frozen: FrozenSignature,
         body.append("")
         body.append("    ! ----- Absent-optional buffers (degenerate, no host source) -----")
         for a in unsourced:
-            dims = ", ".join("1" for _ in range(a.rank))
+            # Size the placeholder at the arg's REAL SDFG extent when the shape is
+            # fully recoverable: the SDFG may WRITE an absent-optional buffer that is
+            # actually an inlined-callee LOCAL exposed as a program arg (``vort_v`` /
+            # ``vort_flux`` zero-fills), and a degenerate ``(1,1,..)`` local overruns
+            # on any mesh-sized write.  The shape symbols (``nproma``/``n_zlev``/
+            # ``nblks_*``) are assigned above by ``_build_symbol_assigns``.  Fall back
+            # to ``(1,..)`` only when the shape is not fully symbol-recoverable.
+            shape = tuple(str(s) for s in (a.shape or ()))
+            if len(shape) == a.rank and all(shape):
+                dims = ", ".join(shape)
+            else:
+                dims = ", ".join("1" for _ in range(a.rank))
             body.append(f"    allocate({a.sdfg_name}({dims}))")
             body.append(f"    {a.sdfg_name} = {_zero_literal(a.dtype)}")
 
