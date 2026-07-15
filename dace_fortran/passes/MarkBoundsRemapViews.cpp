@@ -111,14 +111,14 @@ namespace {
 /// when its rebind is a bounds-remapping (rank-reshaping) view of a
 /// parent array.  Downstream consumers read this attribute to know to
 /// (a) skip index-rewriting and (b) emit an SDFG ``View`` node.
-static constexpr llvm::StringLiteral kBoundsRemapViewAttr = "hlfir_bridge.bounds_remap_view";
+constexpr llvm::StringLiteral kBoundsRemapViewAttr = "hlfir_bridge.bounds_remap_view";
 
 /// Walk ``v`` through any number of ``fir.convert`` ops and return
 /// the underlying value.  flang routes ``arith.constant 1 : i64``
 /// through ``fir.convert : (i64) -> index`` before passing it to
 /// ``shape_shift`` operands; the LB-equals-1 check must see through
 /// this otherwise valid rebinds look like shifted ones.
-static mlir::Value peelConverts(mlir::Value v) {
+mlir::Value peelConverts(mlir::Value v) {
   for (int hops = 0; v && hops < 8; ++hops) {
     auto* def = v.getDefiningOp();
     if (!def) return v;
@@ -136,7 +136,7 @@ static mlir::Value peelConverts(mlir::Value v) {
 /// natural Fortran default lower bound; rebinds whose explicit LB
 /// reduces to ``1`` represent no actual index shift and are safe
 /// to treat as views.
-static bool isConstantOne(mlir::Value v) {
+bool isConstantOne(mlir::Value v) {
   v = peelConverts(v);
   if (!v) return false;
   auto cst = mlir::dyn_cast_or_null<mlir::arith::ConstantOp>(v.getDefiningOp());
@@ -148,7 +148,7 @@ static bool isConstantOne(mlir::Value v) {
 /// Return the rank of the array element type inside a
 /// ``!fir.box<...>`` / ``!fir.box<!fir.ptr<...>>`` type, or
 /// ``-1`` when ``ty`` isn't a box-of-array.
-static int boxedArrayRank(mlir::Type ty) {
+int boxedArrayRank(mlir::Type ty) {
   auto box = mlir::dyn_cast<fir::BoxType>(ty);
   if (!box) return -1;
   mlir::Type elt = box.getEleTy();
@@ -162,7 +162,7 @@ static int boxedArrayRank(mlir::Type ty) {
 
 /// Return ``true`` if ``ty`` is ``!fir.box<!fir.ptr<...>>`` (pointer
 /// box, the LHS shape of a Fortran POINTER variable's box value).
-static bool isPointerBox(mlir::Type ty) {
+bool isPointerBox(mlir::Type ty) {
   auto box = mlir::dyn_cast<fir::BoxType>(ty);
   if (!box) return false;
   return mlir::isa<fir::PointerType>(box.getEleTy());
@@ -170,7 +170,7 @@ static bool isPointerBox(mlir::Type ty) {
 
 /// Walk ``v`` through ``fir.convert`` and ``fir.rebox`` ops to find
 /// the originating ``hlfir.declare``.  Stops on anything else.
-static hlfir::DeclareOp findDeclareThroughChain(mlir::Value v) {
+hlfir::DeclareOp findDeclareThroughChain(mlir::Value v) {
   for (int hops = 0; v && hops < 16; ++hops) {
     auto* def = v.getDefiningOp();
     if (!def) return {};
@@ -205,10 +205,10 @@ static hlfir::DeclareOp findDeclareThroughChain(mlir::Value v) {
 /// Walk ``rebox``'s users (through ``fir.convert``) to find a
 /// ``fir.store`` and return its memref operand.  Returns null if no
 /// such store exists in this lexical scope.
-static mlir::Value findStoreTargetForRebox(fir::ReboxOp rebox) {
+mlir::Value findStoreTargetForRebox(fir::ReboxOp rebox) {
   llvm::SmallVector<mlir::Value, 4> work{rebox.getResult()};
   for (int hops = 0; !work.empty() && hops < 16; ++hops) {
-    mlir::Value v = work.pop_back_val();
+    mlir::Value const v = work.pop_back_val();
     for (auto* user : v.getUsers()) {
       if (auto st = mlir::dyn_cast<fir::StoreOp>(user)) return st.getMemref();
       if (auto cv = mlir::dyn_cast<fir::ConvertOp>(user)) work.push_back(cv.getResult());
@@ -223,6 +223,7 @@ static mlir::Value findStoreTargetForRebox(fir::ReboxOp rebox) {
 
 struct MarkBoundsRemapViewsPass
     : public mlir::PassWrapper<MarkBoundsRemapViewsPass, mlir::OperationPass<mlir::ModuleOp>> {
+  // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(MarkBoundsRemapViewsPass)
 
   llvm::StringRef getArgument() const final { return "hlfir-mark-bounds-remap-views"; }
@@ -249,7 +250,7 @@ struct MarkBoundsRemapViewsPass
     // ref-array (not yet wrapped in a box).
     module.walk([&](fir::EmboxOp embox) {
       if (!isPointerBox(embox.getType())) return;
-      int outRank = boxedArrayRank(embox.getType());
+      int const outRank = boxedArrayRank(embox.getType());
       if (outRank <= 0) return;
 
       // The embox's memref carries the (possibly rank-laundered)
@@ -289,7 +290,7 @@ struct MarkBoundsRemapViewsPass
       if (inRank <= 0 || inRank == outRank) return;
 
       // Shape operand must be ``shape_shift`` with all LB == 1.
-      mlir::Value shape = embox.getShape();
+      mlir::Value const shape = embox.getShape();
       if (!shape) return;
       auto shiftOp = mlir::dyn_cast_or_null<fir::ShapeShiftOp>(shape.getDefiningOp());
       if (!shiftOp) return;
@@ -322,16 +323,16 @@ struct MarkBoundsRemapViewsPass
     module.walk([&](fir::ReboxOp rebox) {
       // (1) Output type must be a pointer-typed box.
       if (!isPointerBox(rebox.getType())) return;
-      int outRank = boxedArrayRank(rebox.getType());
+      int const outRank = boxedArrayRank(rebox.getType());
       if (outRank <= 0) return;
 
       // (2) Input rank must differ from output rank.
-      int inRank = boxedArrayRank(rebox.getBox().getType());
+      int const inRank = boxedArrayRank(rebox.getBox().getType());
       if (inRank <= 0 || inRank == outRank) return;
 
       // (3) Shape operand must be a ``fir.shape_shift`` (explicit LB)
       //     not a plain ``fir.shape`` (no LB).
-      mlir::Value shape = rebox.getShape();
+      mlir::Value const shape = rebox.getShape();
       if (!shape) return;
       auto shiftOp = mlir::dyn_cast_or_null<fir::ShapeShiftOp>(shape.getDefiningOp());
       if (!shiftOp) return;
@@ -348,7 +349,7 @@ struct MarkBoundsRemapViewsPass
       if (!allLbOne) return;
 
       // (5) Locate the store target -- the pointer's box-ref.
-      mlir::Value storeTarget = findStoreTargetForRebox(rebox);
+      mlir::Value const storeTarget = findStoreTargetForRebox(rebox);
       if (!storeTarget) return;
 
       // (6) Walk back from the store target to the pointer's declare.

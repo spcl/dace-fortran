@@ -60,7 +60,7 @@ namespace hlfir_bridge {
 namespace {
 
 /// Peel ``fir.convert`` chains and return the underlying value.
-static mlir::Value peelConvert(mlir::Value v) {
+mlir::Value peelConvert(mlir::Value v) {
   while (auto c = v.getDefiningOp<fir::ConvertOp>()) v = c.getValue();
   return v;
 }
@@ -68,7 +68,7 @@ static mlir::Value peelConvert(mlir::Value v) {
 /// Fold a value to a constant integer through ``arith.constant`` /
 /// ``arith.addi`` / ``arith.subi`` / ``arith.muli`` / ``fir.convert`` over
 /// constant operands.  Returns nullopt if it does not reduce to a constant.
-static std::optional<int64_t> foldConstInt(mlir::Value v) {
+std::optional<int64_t> foldConstInt(mlir::Value v) {
   if (!v) return std::nullopt;
   llvm::APInt ap;
   if (mlir::matchPattern(v, mlir::m_ConstantInt(&ap))) return ap.getSExtValue();
@@ -76,22 +76,25 @@ static std::optional<int64_t> foldConstInt(mlir::Value v) {
   if (!def) return std::nullopt;
   if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def)) return foldConstInt(cv.getValue());
   if (auto add = mlir::dyn_cast<mlir::arith::AddIOp>(def)) {
-    auto a = foldConstInt(add.getLhs()), b = foldConstInt(add.getRhs());
+    auto a = foldConstInt(add.getLhs());
+    auto b = foldConstInt(add.getRhs());
     if (a && b) return *a + *b;
   }
   if (auto sub = mlir::dyn_cast<mlir::arith::SubIOp>(def)) {
-    auto a = foldConstInt(sub.getLhs()), b = foldConstInt(sub.getRhs());
+    auto a = foldConstInt(sub.getLhs());
+    auto b = foldConstInt(sub.getRhs());
     if (a && b) return *a - *b;
   }
   if (auto mul = mlir::dyn_cast<mlir::arith::MulIOp>(def)) {
-    auto a = foldConstInt(mul.getLhs()), b = foldConstInt(mul.getRhs());
+    auto a = foldConstInt(mul.getLhs());
+    auto b = foldConstInt(mul.getRhs());
     if (a && b) return *a * *b;
   }
   return std::nullopt;
 }
 
 /// Evaluate an ``arith.cmpi`` whose operands fold to constants.
-static std::optional<bool> evalCmpi(mlir::Value cond) {
+std::optional<bool> evalCmpi(mlir::Value cond) {
   auto cmp = cond.getDefiningOp<mlir::arith::CmpIOp>();
   if (!cmp) {
     // A bare i1 constant condition.
@@ -99,7 +102,8 @@ static std::optional<bool> evalCmpi(mlir::Value cond) {
     if (mlir::matchPattern(cond, mlir::m_ConstantInt(&ap))) return ap != 0;
     return std::nullopt;
   }
-  auto l = foldConstInt(cmp.getLhs()), r = foldConstInt(cmp.getRhs());
+  auto l = foldConstInt(cmp.getLhs());
+  auto r = foldConstInt(cmp.getRhs());
   if (!l || !r) return std::nullopt;
   using P = mlir::arith::CmpIPredicate;
   switch (cmp.getPredicate()) {
@@ -138,7 +142,7 @@ struct UnrollCloner {
   const llvm::DenseSet<mlir::Value>& tracked;
   bool failed = false;
 
-  bool isTracked(mlir::Value slot) const { return tracked.count(slot); }
+  bool isTracked(mlir::Value slot) const { return tracked.contains(slot); }
 
   void processBlock(mlir::Block& body) {
     for (mlir::Operation& op : llvm::make_early_inc_range(body)) {
@@ -215,13 +219,13 @@ struct UnrollCloner {
     auto st = vmap.lookupOrDefault(loop.getStep());
     llvm::SmallVector<mlir::Value> init;
     for (auto v : loop.getInitArgs()) init.push_back(vmap.lookupOrDefault(v));
-    bool unordered = loop.getUnordered().value_or(false);
-    bool finalVal = loop.getFinalValue().has_value();
+    bool const unordered = loop.getUnordered().value_or(false);
+    bool const finalVal = loop.getFinalValue().has_value();
     auto nl = b.create<fir::DoLoopOp>(loop.getLoc(), lb, ub, st, unordered, finalVal, init);
     auto& ob = loop.getRegion().front();
     auto& nb = nl.getRegion().front();
     for (auto [o, n] : llvm::zip(ob.getArguments(), nb.getArguments())) vmap.map(o, n);
-    mlir::OpBuilder::InsertionGuard g(b);
+    mlir::OpBuilder::InsertionGuard const g(b);
     // The builder gave the new loop body a default ``fir.result`` terminator;
     // emit the cloned body before it, then re-point its operands.
     mlir::Operation* nterm = nb.empty() ? nullptr : nb.getTerminator();
@@ -254,6 +258,7 @@ struct UnrollCloner {
 
 struct EliminateDoubleBufferTogglePass
     : public mlir::PassWrapper<EliminateDoubleBufferTogglePass, mlir::OperationPass<mlir::ModuleOp>> {
+  // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(EliminateDoubleBufferTogglePass)
 
   llvm::StringRef getArgument() const final { return "hlfir-eliminate-double-buffer-toggle"; }
@@ -327,7 +332,7 @@ struct EliminateDoubleBufferTogglePass
       if (dg.getIndices().size() != 1) return;
       auto refTy = mlir::dyn_cast<fir::ReferenceType>(dg.getResult().getType());
       if (!refTy || !mlir::isa<fir::RecordType>(refTy.getEleTy())) return;
-      mlir::Value slot = indexSlot(dg.getIndices()[0]);
+      mlir::Value const slot = indexSlot(dg.getIndices()[0]);
       if (!slot) return;
       auto [root, path] = traceRootPath(dg);
       if (!root) return;
@@ -338,7 +343,7 @@ struct EliminateDoubleBufferTogglePass
     llvm::DenseSet<mlir::Value> toggleSlots;
     for (auto& [key, slots] : slotsPerGroup) {
       if (slots.size() < 2) continue;  // single index -> ordinary AoR access
-      for (mlir::Value slot : slots)
+      for (mlir::Value const slot : slots)
         if (addressIsStored(slot)) toggleSlots.insert(slot);
     }
     if (toggleSlots.empty()) return;
@@ -346,7 +351,7 @@ struct EliminateDoubleBufferTogglePass
     // 2. For each toggle slot, find the enclosing fir.do_loop of a store to it
     //    and unroll that loop (each loop unrolled at most once).
     llvm::DenseSet<mlir::Operation*> doneLoops;
-    for (mlir::Value slot : toggleSlots) {
+    for (mlir::Value const slot : toggleSlots) {
       for (auto* u : llvm::to_vector(slot.getUsers())) {
         bool isStore = false;
         if (auto st = mlir::dyn_cast<fir::StoreOp>(u))
@@ -355,7 +360,7 @@ struct EliminateDoubleBufferTogglePass
           isStore = as.getLhs() == slot;
         if (!isStore) continue;
         auto loop = u->getParentOfType<fir::DoLoopOp>();
-        if (!loop || doneLoops.count(loop)) continue;
+        if (!loop || doneLoops.contains(loop)) continue;
         doneLoops.insert(loop);
         unrollLoop(loop, toggleSlots);
       }
@@ -375,7 +380,7 @@ struct EliminateDoubleBufferTogglePass
       signalPassFailure();
       return;
     }
-    int64_t trips = (*step > 0) ? ((*hi - *lo) / *step + 1) : ((*lo - *hi) / (-*step) + 1);
+    int64_t const trips = (*step > 0) ? (((*hi - *lo) / *step) + 1) : (((*lo - *hi) / (-*step)) + 1);
     if (trips < 1 || trips > 64) return;  // degenerate / runaway guard
 
     // Tracked slots = the toggle slots + this loop's induction-mirror slots
@@ -384,7 +389,7 @@ struct EliminateDoubleBufferTogglePass
     auto& body = loop.getRegion().front();
     for (mlir::Operation& op : body) {
       if (auto st = mlir::dyn_cast<fir::StoreOp>(op)) {
-        mlir::Value v = peelConvert(st.getValue());
+        mlir::Value const v = peelConvert(st.getValue());
         for (auto ba : body.getArguments())
           if (v == ba) tracked.insert(st.getMemref());
       }
@@ -393,12 +398,12 @@ struct EliminateDoubleBufferTogglePass
     // Block args are [induction, iterArgs...]; the loop body terminator (and
     // the loop results) are [finalValue? nextInduction : (), nextIterArgs...].
     // Thread only the iter args between trips; compute the induction directly.
-    unsigned numIters = loop.getInitArgs().size();
+    unsigned const numIters = loop.getInitArgs().size();
     mlir::OpBuilder b(loop);
     llvm::SmallVector<mlir::Value> iterVals(loop.getInitArgs().begin(), loop.getInitArgs().end());
     llvm::SmallVector<mlir::Value> finalResults;
     for (int64_t t = 0; t < trips; ++t) {
-      int64_t ivVal = *lo + t * *step;
+      int64_t const ivVal = *lo + (t * *step);
       mlir::IRMapping vmap;
       auto ivConst = b.create<mlir::arith::ConstantIndexOp>(loop.getLoc(), ivVal);
       vmap.map(body.getArgument(0), ivConst);

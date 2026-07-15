@@ -152,13 +152,13 @@ struct RebindInfo {
 
 /// Walk a function and collect every distinct ``(parent_decl, member)``
 /// pair where the member is alloc-array-of-records.
-static void discoverLiftTargets(mlir::func::FuncOp func, llvm::SmallVectorImpl<LiftTarget>& out) {
+void discoverLiftTargets(mlir::func::FuncOp func, llvm::SmallVectorImpl<LiftTarget>& out) {
   llvm::StringMap<unsigned> seen;
 
   func.walk([&](hlfir::DesignateOp dg) {
     auto compAttr = dg.getComponentAttr();
     if (!compAttr) return;
-    std::string memberName = compAttr.str();
+    std::string const memberName = compAttr.str();
 
     auto resTy = dg.getResult().getType();
     mlir::Type peeled = resTy;
@@ -195,7 +195,7 @@ static void discoverLiftTargets(mlir::func::FuncOp func, llvm::SmallVectorImpl<L
     }
     if (!parentDecl) return;
 
-    std::string key = std::to_string(reinterpret_cast<uintptr_t>(parentDecl.getOperation())) + "::" + memberName;
+    std::string const key = std::to_string(reinterpret_cast<uintptr_t>(parentDecl.getOperation())) + "::" + memberName;
     auto [it, inserted] = seen.try_emplace(key, static_cast<unsigned>(out.size()));
     if (inserted) {
       LiftTarget t;
@@ -221,7 +221,7 @@ struct ElemMatch {
   hlfir::DesignateOp elemDg;
 };
 
-static ElemMatch matchElementSelect(mlir::Value v, hlfir::DeclareOp parent, llvm::StringRef memberName) {
+ElemMatch matchElementSelect(mlir::Value v, hlfir::DeclareOp parent, llvm::StringRef memberName) {
   ElemMatch r{};
   // Peel through any intermediate ``hlfir.declare`` aliases  --  inlined
   // callees materialise these on per-element selections (e.g. the
@@ -277,7 +277,7 @@ static ElemMatch matchElementSelect(mlir::Value v, hlfir::DeclareOp parent, llvm
 
 /// Match ``hlfir.designate <elem_value>{"<inner_member>"}``.
 /// Returns the inner-member designate op, or null.
-static hlfir::DesignateOp matchInnerMember(mlir::Value v) {
+hlfir::DesignateOp matchInnerMember(mlir::Value v) {
   auto* def = v.getDefiningOp();
   if (!def) return {};
   auto dg = mlir::dyn_cast<hlfir::DesignateOp>(def);
@@ -290,7 +290,7 @@ static hlfir::DesignateOp matchInnerMember(mlir::Value v) {
 /// Handles:
 ///   * ``fir.embox %slice`` where ``%slice = hlfir.designate %decl (...)``.
 ///   * ``fir.rebox %inner_box`` similarly.
-static std::pair<hlfir::DeclareOp, hlfir::DesignateOp> parseEmboxSource(mlir::Value emboxVal) {
+std::pair<hlfir::DeclareOp, hlfir::DesignateOp> parseEmboxSource(mlir::Value emboxVal) {
   auto* def = emboxVal.getDefiningOp();
   while (def) {
     if (auto rb = mlir::dyn_cast<fir::ReboxOp>(def)) {
@@ -306,7 +306,7 @@ static std::pair<hlfir::DeclareOp, hlfir::DesignateOp> parseEmboxSource(mlir::Va
   auto embox = mlir::dyn_cast_or_null<fir::EmboxOp>(def);
   if (!embox) return {{}, {}};
 
-  mlir::Value src = embox.getMemref();
+  mlir::Value const src = embox.getMemref();
   auto* srcDef = src.getDefiningOp();
   if (!srcDef) return {{}, {}};
 
@@ -340,7 +340,7 @@ static std::pair<hlfir::DeclareOp, hlfir::DesignateOp> parseEmboxSource(mlir::Va
 /// if the chain bottoms out at one, else null.  Used to identify when
 /// an SSA value is "the loop counter alloca" so a rebind inside a
 /// ``fir.do_loop`` can be recognised as a wildcard rebind.
-static mlir::Value traceToCounterAlloca(mlir::Value v) {
+mlir::Value traceToCounterAlloca(mlir::Value v) {
   for (int i = 0; i < limits::kConvertChainDepth && v; ++i) {
     auto* def = v.getDefiningOp();
     if (!def) return {};
@@ -358,7 +358,7 @@ static mlir::Value traceToCounterAlloca(mlir::Value v) {
 
 /// True iff ``op`` has a ``fir.do_loop`` ancestor anywhere up the
 /// region tree.
-static fir::DoLoopOp findEnclosingDoLoop(mlir::Operation* op) {
+fir::DoLoopOp findEnclosingDoLoop(mlir::Operation* op) {
   for (auto* p = op->getParentOp(); p; p = p->getParentOp())
     if (auto dl = mlir::dyn_cast<fir::DoLoopOp>(p)) return dl;
   return {};
@@ -366,7 +366,7 @@ static fir::DoLoopOp findEnclosingDoLoop(mlir::Operation* op) {
 
 /// Walk a function and collect every rebind store targeting an
 /// inner-pointer-member of ``target.parent``'s alloc-array-of-records.
-static void collectRebinds(mlir::func::FuncOp func, LiftTarget& target, llvm::SmallVectorImpl<RebindInfo>& out) {
+void collectRebinds(mlir::func::FuncOp func, LiftTarget& target, llvm::SmallVectorImpl<RebindInfo>& out) {
   func.walk([&](fir::StoreOp store) {
     // The dest must be the inner-member designate.
     auto destDg = matchInnerMember(store.getMemref());
@@ -412,8 +412,8 @@ static void collectRebinds(mlir::func::FuncOp func, LiftTarget& target, llvm::Sm
 /// Idx matching is structural: same SSA value, OR same constant.
 ///
 /// Returns the first matching rebind, or null on no match.
-static RebindInfo* findRebind(llvm::SmallVectorImpl<RebindInfo>& rebinds, mlir::Value elemIdx,
-                              llvm::StringRef innerMemberName) {
+RebindInfo* findRebind(llvm::SmallVectorImpl<RebindInfo>& rebinds, mlir::Value elemIdx,
+                       llvm::StringRef innerMemberName) {
   // Try same-value match first.
   for (auto& r : rebinds) {
     if (r.innerMemberName != innerMemberName.str()) continue;
@@ -475,8 +475,8 @@ static RebindInfo* findRebind(llvm::SmallVectorImpl<RebindInfo>& rebinds, mlir::
 /// indices (rebased by ``lo - 1`` if non-1, but for ``(:, :, jg)``
 /// the lower bounds are 1, so no rebase).  Scalar entries pass
 /// through verbatim from the slice.
-static mlir::Value buildLiftedAccess(mlir::OpBuilder& b, hlfir::DesignateOp accessDg, RebindInfo& rebind,
-                                     mlir::Value accessElemIdx) {
+mlir::Value buildLiftedAccess(mlir::OpBuilder& b, hlfir::DesignateOp accessDg, RebindInfo& rebind,
+                              mlir::Value accessElemIdx) {
   auto loc = accessDg.getLoc();
   b.setInsertionPoint(accessDg);
 
@@ -511,8 +511,8 @@ static mlir::Value buildLiftedAccess(mlir::OpBuilder& b, hlfir::DesignateOp acce
     auto sliceTriplets = rebind.sliceOp.getIsTriplet();
     unsigned cursor = 0;
     unsigned accessCursor = 0;
-    for (unsigned k = 0; k < sliceTriplets.size(); ++k) {
-      if (sliceTriplets[k]) {
+    for (bool const sliceTriplet : sliceTriplets) {
+      if (sliceTriplet) {
         // Triplet  --  consume one access index.  The access index is
         // 1-based into the VIEW; the storage index is
         // ``triplet_lo + (access - 1)``.  Every AoR slice rebind in the
@@ -556,7 +556,7 @@ static mlir::Value buildLiftedAccess(mlir::OpBuilder& b, hlfir::DesignateOp acce
 
 /// Walk a function for every access through the lifted chain and
 /// rewrite each one.  Returns true if any rewrite happened.
-static bool rewriteAccesses(mlir::func::FuncOp func, LiftTarget& target, llvm::SmallVectorImpl<RebindInfo>& rebinds) {
+bool rewriteAccesses(mlir::func::FuncOp func, LiftTarget& target, llvm::SmallVectorImpl<RebindInfo>& rebinds) {
   // Pattern to match the access shape:
   //   ``%addr = hlfir.designate %inner_box (<access_indices>)``
   //   where ``%inner_box = fir.load %field_addr``
@@ -594,7 +594,7 @@ static bool rewriteAccesses(mlir::func::FuncOp func, LiftTarget& target, llvm::S
     jobs.push_back({accessDg, r, em.elemIdx});
   });
 
-  mlir::DominanceInfo dom(func);
+  mlir::DominanceInfo const dom(func);
   for (auto& job : jobs) {
     // The rewrite roots the access at the rebind's backing-storage declare, so
     // that declare must dominate the access.  An access is matched to a rebind
@@ -652,7 +652,7 @@ struct AliasInfo {
 
 /// Walk a function and find every inlined-callee alias declare whose
 /// memref chain matches the (parent, member) target.
-static void collectAliases(mlir::func::FuncOp func, LiftTarget& target, llvm::SmallVectorImpl<AliasInfo>& out) {
+void collectAliases(mlir::func::FuncOp func, LiftTarget& target, llvm::SmallVectorImpl<AliasInfo>& out) {
   func.walk([&](hlfir::DeclareOp decl) {
     if (decl == target.parent) return;
     // The alias's memref must peel back through rebox / load to
@@ -690,8 +690,7 @@ static void collectAliases(mlir::func::FuncOp func, LiftTarget& target, llvm::Sm
 
 /// Find an alias matching ``(elemIdx, innerMemberName)``, using the
 /// same SSA-value-or-constant matching as ``findRebind``.
-static AliasInfo* findAlias(llvm::SmallVectorImpl<AliasInfo>& aliases, mlir::Value elemIdx,
-                            llvm::StringRef innerMemberName) {
+AliasInfo* findAlias(llvm::SmallVectorImpl<AliasInfo>& aliases, mlir::Value elemIdx, llvm::StringRef innerMemberName) {
   for (auto& a : aliases) {
     if (a.innerMemberName != innerMemberName.str()) continue;
     if (a.elemIdx == elemIdx) return &a;
@@ -714,8 +713,7 @@ static AliasInfo* findAlias(llvm::SmallVectorImpl<AliasInfo>& aliases, mlir::Val
 /// Walk the function for direct-chain accesses that match an alias's
 /// shape but use the bare load chain instead of the alias declare.
 /// Rewrite each one to use the alias's result.
-static bool redirectAccessesToAliases(mlir::func::FuncOp func, LiftTarget& target,
-                                      llvm::SmallVectorImpl<AliasInfo>& aliases) {
+bool redirectAccessesToAliases(mlir::func::FuncOp func, LiftTarget& target, llvm::SmallVectorImpl<AliasInfo>& aliases) {
   if (aliases.empty()) return false;
   bool changed = false;
   mlir::OpBuilder b(func.getContext());
@@ -734,6 +732,7 @@ static bool redirectAccessesToAliases(mlir::func::FuncOp func, LiftTarget& targe
     auto em = matchElementSelect(innerDg.getMemref(), target.parent, target.memberName);
     if (!em.elemDg) return;
     // Find matching alias.
+    // NOLINTNEXTLINE(misc-const-correctness): stored non-const into ``jobs`` (pair<..., AliasInfo*>).
     AliasInfo* a = findAlias(aliases, em.elemIdx, innerDg.getComponentAttr().str());
     if (!a) return;
     // Skip if this access is already rooted at the alias.
@@ -741,7 +740,7 @@ static bool redirectAccessesToAliases(mlir::func::FuncOp func, LiftTarget& targe
     jobs.push_back({accessDg, a});
   });
 
-  mlir::DominanceInfo dom(func);
+  mlir::DominanceInfo const dom(func);
   for (auto& [accessDg, a] : jobs) {
     // The alias declare must dominate the access it is rerouted to.  Aliases
     // are matched to accesses by (element index, inner-member name) only, so a
@@ -751,7 +750,7 @@ static bool redirectAccessesToAliases(mlir::func::FuncOp func, LiftTarget& targe
     if (!dom.dominates(a->aliasDecl.getOperation(), accessDg.getOperation())) continue;
     // Build replacement: ``hlfir.designate %alias (accessIdxs...)``.
     b.setInsertionPoint(accessDg);
-    llvm::SmallVector<mlir::Value, 4> idxs(accessDg.getIndices().begin(), accessDg.getIndices().end());
+    llvm::SmallVector<mlir::Value, 4> const idxs(accessDg.getIndices().begin(), accessDg.getIndices().end());
     auto newDg = b.create<hlfir::DesignateOp>(accessDg.getLoc(), accessDg.getResult().getType(),
                                               a->aliasDecl.getResult(0), mlir::ValueRange{idxs});
     accessDg.getResult().replaceAllUsesWith(newDg.getResult());
@@ -769,7 +768,7 @@ static bool redirectAccessesToAliases(mlir::func::FuncOp func, LiftTarget& targe
 /// elem-select / load chains have no remaining users for the lifted
 /// member.  Erase the rebind stores and the runtime allocate /
 /// deallocate calls so downstream passes don't choke.
-static void cleanup(mlir::func::FuncOp func, LiftTarget& target, llvm::SmallVectorImpl<RebindInfo>& rebinds) {
+void cleanup(mlir::func::FuncOp func, LiftTarget& target, llvm::SmallVectorImpl<RebindInfo>& rebinds) {
   // Erase rebind stores (their dest designates have no users now).
   for (auto& r : rebinds) {
     if (r.storeOp) r.storeOp.erase();
@@ -815,6 +814,7 @@ static void cleanup(mlir::func::FuncOp func, LiftTarget& target, llvm::SmallVect
 
 struct LiftAllocArrayOfRecordsPass
     : public mlir::PassWrapper<LiftAllocArrayOfRecordsPass, mlir::OperationPass<mlir::ModuleOp>> {
+  // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LiftAllocArrayOfRecordsPass)
 
   llvm::StringRef getArgument() const final { return "hlfir-lift-alloc-array-of-records"; }

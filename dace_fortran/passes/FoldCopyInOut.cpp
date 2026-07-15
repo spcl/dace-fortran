@@ -71,14 +71,14 @@ struct SectionShape {
   mlir::Value tripStride;
 };
 
-static bool parseSimpleSection(hlfir::DesignateOp dg, SectionShape& out) {
+bool parseSimpleSection(hlfir::DesignateOp dg, SectionShape& out) {
   auto trip = dg.getIsTripletAttr();
   if (!trip) return false;
   auto tripFlags = trip.asArrayRef();
   if (tripFlags.empty()) return false;
 
   unsigned tripletCount = 0;
-  for (bool t : tripFlags)
+  for (bool const t : tripFlags)
     if (t) tripletCount++;
   if (tripletCount != 1) return false;
 
@@ -104,7 +104,7 @@ static bool parseSimpleSection(hlfir::DesignateOp dg, SectionShape& out) {
 /// Trace ``v`` to a constant ``index``-typed integer if possible.
 /// Walks ``arith.constant`` and ``fir.convert`` shims.  Returns
 /// ``std::nullopt`` if the value isn't a constant.
-static std::optional<int64_t> traceConstIndex(mlir::Value v) {
+std::optional<int64_t> traceConstIndex(mlir::Value v) {
   if (!v) return std::nullopt;
   auto* def = v.getDefiningOp();
   if (!def) return std::nullopt;
@@ -117,12 +117,13 @@ static std::optional<int64_t> traceConstIndex(mlir::Value v) {
 }
 
 /// True when ``v`` is the integer constant ``1`` (any int width / index).
-static bool isConstOne(mlir::Value v) {
+bool isConstOne(mlir::Value v) {
   auto c = traceConstIndex(v);
   return c.has_value() && *c == 1;
 }
 
 struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::OperationPass<mlir::ModuleOp>> {
+  // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(FoldCopyInOutPass)
 
   llvm::StringRef getArgument() const final { return "hlfir-fold-copy-in-out"; }
@@ -177,9 +178,8 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
 
     // 3) Source's parent  --  the array we're slicing.  This is
     // the memref of the source designate.
-    mlir::Value parent = srcDg.getMemref();
+    mlir::Value const parent = srcDg.getMemref();
     mlir::OpBuilder b(aliasDecl);
-    mlir::Location loc = aliasDecl.getLoc();
 
     // 4) Rewrite uses of the alias declare's results.  Each
     // designate ``%alias #X (j)`` becomes ``%parent (scalars...,
@@ -188,7 +188,7 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
     // not handled in this scope  --  bail if encountered.
     llvm::SmallVector<hlfir::DesignateOp, 8> aliasUseDgs;
     bool foreignUse = false;
-    for (mlir::Value res : {aliasDecl.getResult(0), aliasDecl.getResult(1)}) {
+    for (mlir::Value const res : {aliasDecl.getResult(0), aliasDecl.getResult(1)}) {
       for (auto* u : res.getUsers()) {
         if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u)) {
           aliasUseDgs.push_back(dg);
@@ -217,7 +217,7 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
     for (auto co : copyOuts) co.erase();
 
     if (cin.getResult(0).use_empty() && cin.getResult(1).use_empty()) {
-      mlir::Value temp = cin.getTempBox();
+      mlir::Value const temp = cin.getTempBox();
       cin.erase();
       // The temp box is typically a ``fir.alloca`` whose only
       // users were the copy_in / copy_out pair.  Erase if dead.
@@ -255,7 +255,7 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
     for (auto co : copyOuts) co.erase();
 
     if (cin.getResult(0).use_empty() && cin.getResult(1).use_empty()) {
-      mlir::Value temp = cin.getTempBox();
+      mlir::Value const temp = cin.getTempBox();
       cin.erase();
       if (auto* def = temp.getDefiningOp())
         if (def->use_empty()) def->erase();
@@ -267,7 +267,7 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
   /// indices folded in.  Preserves triplets / shape on the alias-
   /// access side (so ``%alias(1:N:1)`` whole-array becomes
   /// ``%parent(scalars..., 1:N:1)``).
-  void rewriteAccess(hlfir::DesignateOp useDg, mlir::Value parent, const SectionShape& sec, mlir::OpBuilder& b) {
+  static void rewriteAccess(hlfir::DesignateOp useDg, mlir::Value parent, const SectionShape& sec, mlir::OpBuilder& b) {
     b.setInsertionPoint(useDg);
     auto loc = useDg.getLoc();
 
@@ -287,7 +287,7 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
       if (!lo.getType().isIndex()) {
         lo = b.create<fir::ConvertOp>(loc, b.getIndexType(), lo);
       }
-      mlir::Value one = b.create<mlir::arith::ConstantOp>(loc, b.getIndexType(), b.getIndexAttr(1));
+      mlir::Value const one = b.create<mlir::arith::ConstantOp>(loc, b.getIndexType(), b.getIndexAttr(1));
       loMinusOne = b.create<mlir::arith::SubIOp>(loc, lo, one);
     }
 
@@ -321,7 +321,7 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
       // Mixed: walk per-dim, push lo/hi/stride for triplets
       // (lo/hi shifted by ``lo-1``), scalar otherwise.
       unsigned cursor = 0;
-      for (bool isT : aliasTripAttr.asArrayRef()) {
+      for (bool const isT : aliasTripAttr.asArrayRef()) {
         if (isT) {
           if (cursor + 3 > aliasIdx.size()) return;
           auto shift = [&](mlir::Value v) {

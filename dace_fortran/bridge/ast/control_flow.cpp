@@ -89,9 +89,9 @@ std::vector<ASTNode> buildMergeLibcall(hlfir::AssignOp assign, hlfir::ElementalO
     return "";
   };
 
-  std::string mask_name = traceLoadSource(sel.getCondition());
-  std::string t_name = traceLoadSource(sel.getTrueValue());
-  std::string f_name = traceLoadSource(sel.getFalseValue());
+  std::string const mask_name = traceLoadSource(sel.getCondition());
+  std::string const t_name = traceLoadSource(sel.getTrueValue());
+  std::string const f_name = traceLoadSource(sel.getFalseValue());
   if (mask_name.empty() || t_name.empty() || f_name.empty()) return {};
 
   ASTNode lib;
@@ -134,7 +134,7 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign, hlfir::Element
   auto& region = elem.getRegion();
   if (region.empty()) return {};
   auto& block = region.front();
-  unsigned rank = block.getNumArguments();
+  unsigned const rank = block.getNumArguments();
 
   std::vector<std::string> iter_names;
   iter_names.reserve(rank);
@@ -144,7 +144,7 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign, hlfir::Element
   // everywhere we walk the body.
   unsigned pushed = 0;
   for (unsigned i = 0; i < rank; ++i) {
-    indexStack().push_back({block.getArgument(i), iter_names[i]});
+    indexStack().emplace_back(block.getArgument(i), iter_names[i]);
     ++pushed;
   }
 
@@ -206,7 +206,7 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign, hlfir::Element
       auto idxOps = dstDg.getIndices();
       unsigned cursor = 0;
       unsigned tDim = 0;
-      for (bool isT : triplets) {
+      for (bool const isT : triplets) {
         if (isT && tDim < rank && cursor + 3 <= idxOps.size()) {
           LowerAdj adj;
           if (auto lo = traceConstInt(idxOps[cursor])) {
@@ -216,12 +216,28 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign, hlfir::Element
             if (!loExpr.empty() && loExpr != "?") adj.expr = std::move(loExpr);
           }
           std::string ix = iter_names[tDim];
-          if (!adj.expr.empty())
-            ix = "(" + ix + " + " + adj.expr + " - 1)";
-          else if (adj.value > 0)
-            ix = "(" + ix + " + " + std::to_string(adj.value) + ")";
-          else if (adj.value < 0)
-            ix = "(" + ix + " - " + std::to_string(-adj.value) + ")";
+          if (!adj.expr.empty()) {
+            std::string adjusted = "(";
+            adjusted += ix;
+            adjusted += " + ";
+            adjusted += adj.expr;
+            adjusted += " - 1)";
+            ix = std::move(adjusted);
+          } else if (adj.value > 0) {
+            std::string adjusted = "(";
+            adjusted += ix;
+            adjusted += " + ";
+            adjusted += std::to_string(adj.value);
+            adjusted += ")";
+            ix = std::move(adjusted);
+          } else if (adj.value < 0) {
+            std::string adjusted = "(";
+            adjusted += ix;
+            adjusted += " - ";
+            adjusted += std::to_string(-adj.value);
+            adjusted += ")";
+            ix = std::move(adjusted);
+          }
           wa.index_vars.push_back(iter_names[tDim]);
           wa.index_exprs.push_back(std::move(ix));
           cursor += 3;
@@ -311,10 +327,10 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign, hlfir::Element
           // Recognised libcall expr-producer -> materialise.
           if (const char* callee = libcallNameForExprOp(srcOp)) {
             if (!kHlfirExprToTransient.count(srcOp)) {
-              std::string tmp = "_libtmp_" + std::to_string(kLibTmpCounter++);
+              std::string const tmp = "_libtmp_" + std::to_string(kLibTmpCounter++);
               kHlfirExprToTransient[srcOp] = tmp;
 
-              mlir::Type rty = srcOp->getResult(0).getType();
+              mlir::Type const rty = srcOp->getResult(0).getType();
               auto shape = exprResultShape(rty);
 
               ASTNode decl;
@@ -414,7 +430,7 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign, hlfir::Element
                       } else {
                         innerTr = "_libtmp_" + std::to_string(kLibTmpCounter++);
                         kHlfirExprToTransient[od] = innerTr;
-                        mlir::Type irty = od->getResult(0).getType();
+                        mlir::Type const irty = od->getResult(0).getType();
                         auto ishape = exprResultShape(irty);
 
                         ASTNode idecl;
@@ -466,7 +482,7 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign, hlfir::Element
   // the bare-name path emits just ``a``  --  same array, two different
   // forms in one tasklet body, which leaks ``ei0`` as a free symbol.
   {
-    NoSubscriptGuard g;
+    NoSubscriptGuard const g;
     inner.expr = yielded ? buildExpr(yielded, 0) : "?";
   }
 
@@ -575,7 +591,7 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
   // ``dace.float32(...)`` precision wrap (treats ``dace`` as a free
   // symbol).  Suppress the wrap for the duration of this walk; the
   // f32-vs-f64 distinction doesn't change comparison outcomes.
-  SuppressFloatCastGuard floatCastGuard;
+  SuppressFloatCastGuard const floatCastGuard;
   auto* def = val.getDefiningOp();
   if (!def) return "?";
   // A reduction op materialised into a scalar by ``materialiseCondReductions``
@@ -688,7 +704,7 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
           // Push iter -> value bindings for each block arg.
           unsigned pushed = 0;
           for (unsigned i = 0; i < block.getNumArguments(); ++i) {
-            indexStack().push_back({block.getArgument(i), std::to_string(cur[i])});
+            indexStack().emplace_back(block.getArgument(i), std::to_string(cur[i]));
             ++pushed;
           }
           std::string es = buildExprWithSubscripts(yielded, d + 1);
@@ -699,10 +715,24 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
         if (elems.empty()) return "?";
         std::string acc = elems[0];
         for (size_t i = 1; i < elems.size(); ++i) {
-          if (e.isBinop)
-            acc = "(" + acc + " " + e.pyOp.str() + " " + elems[i] + ")";
-          else
-            acc = e.pyOp.str() + "(" + acc + ", " + elems[i] + ")";
+          if (e.isBinop) {
+            std::string next = "(";
+            next += acc;
+            next += " ";
+            next += e.pyOp.str();
+            next += " ";
+            next += elems[i];
+            next += ")";
+            acc = std::move(next);
+          } else {
+            std::string next = e.pyOp.str();
+            next += "(";
+            next += acc;
+            next += ", ";
+            next += elems[i];
+            next += ")";
+            acc = std::move(next);
+          }
         }
         return acc;
       }
@@ -723,7 +753,7 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
       unsigned cursor = 0;
       int64_t totalExtent = 1;
       bool ok = true;
-      for (bool isT : triplets) {
+      for (bool const isT : triplets) {
         DimSpec ds;
         ds.isTriplet = isT;
         if (isT) {
@@ -738,7 +768,9 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
             ok = false;
             break;
           }
-          int64_t lo = *cLo, hi = *cHi, st = *cSt;
+          int64_t const lo = *cLo;
+          int64_t const hi = *cHi;
+          int64_t const st = *cSt;
           if (st > 0)
             for (int64_t v = lo; v <= hi; v += st) ds.values.push_back(v);
           else
@@ -798,10 +830,24 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
       if (elems.empty()) return "?";
       std::string acc = elems[0];
       for (size_t i = 1; i < elems.size(); ++i) {
-        if (e.isBinop)
-          acc = "(" + acc + " " + e.pyOp.str() + " " + elems[i] + ")";
-        else
-          acc = e.pyOp.str() + "(" + acc + ", " + elems[i] + ")";
+        if (e.isBinop) {
+          std::string next = "(";
+          next += acc;
+          next += " ";
+          next += e.pyOp.str();
+          next += " ";
+          next += elems[i];
+          next += ")";
+          acc = std::move(next);
+        } else {
+          std::string next = e.pyOp.str();
+          next += "(";
+          next += acc;
+          next += ", ";
+          next += elems[i];
+          next += ")";
+          acc = std::move(next);
+        }
       }
       return acc;
     }
@@ -907,7 +953,7 @@ std::string buildExprWithSubscripts(mlir::Value val, int d) {
   // whole "bare array pointer in a condition" class of bug -- ``buildExpr``
   // already knows how to spell every op; the only thing it would otherwise get
   // wrong in a condition context is stripping the leaf subscript.
-  ForceSubscriptsGuard _force;
+  ForceSubscriptsGuard const _force;
   return buildExpr(val, d + 1);
 }
 
@@ -962,7 +1008,7 @@ std::string buildBoolExpr(mlir::Value val, int d) {
   // parser, not a tasklet rewrite.  ``leafExpr`` is reused by the
   // cmp branches AND the last-resort fall-through so every leaf
   // threads through the same rendering decision.
-  bool bareNames = kBoolExprNoSubscripts;
+  bool const bareNames = kBoolExprNoSubscripts;
   auto leafExpr = [bareNames](mlir::Value v, int d) -> std::string {
     return bareNames ? buildExpr(v, d) : buildExprWithSubscripts(v, d);
   };
@@ -979,7 +1025,7 @@ std::string buildBoolExpr(mlir::Value val, int d) {
     // where the LHS resolves to ``?``.  Same ``matchAssociatedStatusBoxRef``
     // the buildExpr path in expressions.cpp uses; recognised again here because
     // boolean contexts decompose before the LHS gets a whole-shape match.
-    if (mlir::Value src = matchAssociatedStatusBoxRef(cmp))
+    if (mlir::Value const src = matchAssociatedStatusBoxRef(cmp))
       if (auto arrName = traceToDecl(src); !arrName.empty()) return arrName + "_allocated";
     auto pred = cmpiPredStr(cmp.getPredicate());
     if (pred.empty()) return "?";
@@ -1049,8 +1095,6 @@ static bool isScfIfResult(mlir::Value v) {
   auto* def = v.getDefiningOp();
   return def && mlir::isa<mlir::scf::IfOp>(def);
 }
-
-std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block);
 
 /// Helper: convert a yielded value to a string for writing into a synthetic
 /// scalar.  scf.yield of an i32 constant / boolean / computed expression  --

@@ -1,0 +1,38 @@
+# Focused modern-C++ review: real bugs, code smells, performance, and
+# modernization -- deliberately EXCLUDING over-engineered / OO-heavy and noisy
+# stylistic checks (cppcoreguidelines special-members / owning-memory / pro-*,
+# google/llvm/fuchsia house style, magic-numbers, identifier-length, cognitive
+# complexity, trailing-return-type).
+Checks: >
+  -*,
+  bugprone-*,
+  performance-*,
+  modernize-*,
+  readability-*,
+  misc-*,
+  clang-analyzer-*,
+  -bugprone-easily-swappable-parameters,
+  -modernize-use-trailing-return-type,
+  -modernize-avoid-c-arrays,
+  -modernize-use-nodiscard,
+  -modernize-return-braced-init-list,
+  -readability-magic-numbers,
+  -readability-identifier-length,
+  -readability-function-cognitive-complexity,
+  -readability-braces-around-statements,
+  -readability-named-parameter,
+  -readability-else-after-return,
+  -readability-implicit-bool-conversion,
+  -readability-qualified-auto,
+  -misc-non-private-member-variables-in-classes,
+  -misc-no-recursion,
+  -misc-include-cleaner,
+  -bugprone-narrowing-conversions,
+  -readability-avoid-nested-conditional-operator,
+  -readability-redundant-inline-specifier,
+  -readability-function-size,
+  -misc-header-include-cycle,
+  -misc-use-anonymous-namespace
+WarningsAsErrors: ''
+HeaderFilterRegex: 'dace_fortran/(bridge|passes)/.*\.(h|hpp)$'
+FormatStyle: file

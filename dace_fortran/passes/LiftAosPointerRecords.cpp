@@ -117,7 +117,7 @@ struct Rebind {
   mlir::Value boxValue;  ///< the pointer box assigned by the rebind (the view's target box)
 };
 
-static std::optional<int64_t> constInt(mlir::Value v) {
+std::optional<int64_t> constInt(mlir::Value v) {
   if (!v) return std::nullopt;
   auto* def = v.getDefiningOp();
   if (!def) return std::nullopt;
@@ -139,7 +139,7 @@ static std::optional<int64_t> constInt(mlir::Value v) {
 /// because the counter/dummy stores are never store-to-load forwarded).  The
 /// rebind setup is straight-line, so same-block nearest-store resolution is
 /// sufficient; cross-block shapes fall back to ``nullopt`` (candidate skipped).
-static std::optional<int64_t> constIntForwarded(mlir::Value v) {
+std::optional<int64_t> constIntForwarded(mlir::Value v) {
   auto isZeroConst = [](mlir::Value x) -> bool {
     if (auto c = x.getDefiningOp<mlir::arith::ConstantOp>())
       if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(c.getValue())) return ia.getInt() == 0;
@@ -213,7 +213,7 @@ static std::optional<int64_t> constIntForwarded(mlir::Value v) {
 /// shape itself is assumed-shape ``?x?...`` for a generic
 /// ``REAL, POINTER :: x(:,:)`` declaration, so the EXTENTS come from a
 /// rebind target instead -- see ``innerShapeFromTargetDecl``).
-static mlir::Type elemTypeOfPtrMember(fir::BoxType boxTy) {
+mlir::Type elemTypeOfPtrMember(fir::BoxType boxTy) {
   auto inner = boxTy.getEleTy();
   if (auto p = mlir::dyn_cast<fir::PointerType>(inner)) inner = p.getEleTy();
   if (auto h = mlir::dyn_cast<fir::HeapType>(inner)) inner = h.getEleTy();
@@ -229,7 +229,7 @@ static mlir::Type elemTypeOfPtrMember(fir::BoxType boxTy) {
 /// dim is a safe, fully-static placeholder: it keeps the concat transient
 /// static (no dynamic extents to resolve), registers the ``<name>_p``
 /// descriptor the dead accesses need, and is never touched at runtime.
-static std::optional<InnerShape> innerShapeFromMemberBox(fir::BoxType boxTy) {
+std::optional<InnerShape> innerShapeFromMemberBox(fir::BoxType boxTy) {
   auto inner = boxTy.getEleTy();
   if (auto p = mlir::dyn_cast<fir::PointerType>(inner)) inner = p.getEleTy();
   if (auto h = mlir::dyn_cast<fir::HeapType>(inner)) inner = h.getEleTy();
@@ -237,7 +237,7 @@ static std::optional<InnerShape> innerShapeFromMemberBox(fir::BoxType boxTy) {
   if (!seq) return std::nullopt;
   InnerShape s;
   s.elemTy = seq.getEleTy();
-  unsigned rank = seq.getShape().size();
+  unsigned const rank = seq.getShape().size();
   s.shape.assign(rank, 1);
   s.extentVals.assign(rank, mlir::Value{});
   return s;
@@ -258,7 +258,7 @@ static std::optional<InnerShape> innerShapeFromMemberBox(fir::BoxType boxTy) {
 /// declare.  Slots where the dim is dynamic AND no SSA extent is
 /// available leave ``extentVals[d]`` null -- the caller emits a
 /// ``fir.box_dims`` at the insertion point to recover it.
-static std::optional<InnerShape> innerShapeFromTargetDecl(hlfir::DeclareOp targetDecl) {
+std::optional<InnerShape> innerShapeFromTargetDecl(hlfir::DeclareOp targetDecl) {
   mlir::Type eleTy;
   unsigned rank = 0;
   // Find the element type + rank from whichever typed view of the
@@ -329,7 +329,7 @@ static std::optional<InnerShape> innerShapeFromTargetDecl(hlfir::DeclareOp targe
   return s;
 }
 
-static std::optional<Candidate> matchCandidate(hlfir::DeclareOp d) {
+std::optional<Candidate> matchCandidate(hlfir::DeclareOp d) {
   auto refTy = mlir::dyn_cast<fir::ReferenceType>(d.getMemref().getType());
   if (!refTy) return std::nullopt;
   auto seqTy = mlir::dyn_cast<fir::SequenceType>(refTy.getEleTy());
@@ -360,7 +360,7 @@ static std::optional<Candidate> matchCandidate(hlfir::DeclareOp d) {
   // access.  A genuinely EMPTY static AoS (``N == 0``) gets a size-1 placeholder
   // in ``createConcatStorage`` (all uses dead).  Only a negative extent is
   // unliftable.
-  bool dynamicExtent = (N == fir::SequenceType::getUnknownExtent());
+  bool const dynamicExtent = (N == fir::SequenceType::getUnknownExtent());
   if (!dynamicExtent && N < 0) return std::nullopt;
   auto recordTy = mlir::dyn_cast<fir::RecordType>(seqTy.getEleTy());
   if (!recordTy) return std::nullopt;
@@ -389,7 +389,7 @@ static std::optional<Candidate> matchCandidate(hlfir::DeclareOp d) {
   return c;
 }
 
-static hlfir::DeclareOp traceTarget(mlir::Value v) {
+hlfir::DeclareOp traceTarget(mlir::Value v) {
   for (int hop = 0; hop < 128 && v; ++hop) {
     auto* def = v.getDefiningOp();
     if (!def) return {};
@@ -417,7 +417,7 @@ static hlfir::DeclareOp traceTarget(mlir::Value v) {
   return {};
 }
 
-static std::optional<Rebind> matchRebindStore(fir::StoreOp store, const Candidate& cand) {
+std::optional<Rebind> matchRebindStore(fir::StoreOp store, const Candidate& cand) {
   auto memberSlot = mlir::dyn_cast_or_null<hlfir::DesignateOp>(store.getMemref().getDefiningOp());
   if (!memberSlot) return std::nullopt;
   auto memberOpt = memberSlot.getComponent();
@@ -452,10 +452,10 @@ static std::optional<Rebind> matchRebindStore(fir::StoreOp store, const Candidat
 /// Create a top-level static-shape concat transient ``q_<member>`` at the
 /// start of ``func``.  Returns the resulting ``hlfir.declare`` (whose
 /// ``result(0)`` is the storage view used by all designates).
-static hlfir::DeclareOp createConcatStorage(mlir::OpBuilder& b, mlir::Location loc, mlir::func::FuncOp func,
-                                            Candidate& cand, const MemberSpec& member, const InnerShape& innerShape,
-                                            mlir::Operation* insertAfter, int64_t allocId) {
-  mlir::OpBuilder::InsertionGuard g(b);
+hlfir::DeclareOp createConcatStorage(mlir::OpBuilder& b, mlir::Location loc, mlir::func::FuncOp func, Candidate& cand,
+                                     const MemberSpec& member, const InnerShape& innerShape,
+                                     mlir::Operation* insertAfter, int64_t allocId) {
+  mlir::OpBuilder::InsertionGuard const g(b);
   if (insertAfter)
     b.setInsertionPointAfter(insertAfter);
   else
@@ -465,7 +465,7 @@ static hlfir::DeclareOp createConcatStorage(mlir::OpBuilder& b, mlir::Location l
   // zero-extent transient trips DaCe's memlet/shape validation, and every use
   // of this storage is in a dead 0-trip loop, so a 1-record placeholder that is
   // never touched is the safe registration.
-  int64_t allocN = cand.N > 0 ? cand.N : 1;
+  int64_t const allocN = cand.N > 0 ? cand.N : 1;
   llvm::SmallVector<int64_t, 4> typeDims;
   typeDims.push_back(allocN);
   for (auto d : innerShape.shape) typeDims.push_back(d);
@@ -518,10 +518,9 @@ static hlfir::DeclareOp createConcatStorage(mlir::OpBuilder& b, mlir::Location l
 ///
 /// ``directionCopyIn = true``  copies ``target(i...)`` into ``concat(c, i...)``
 /// ``directionCopyIn = false`` copies ``concat(c, i...)`` into ``target(i...)``
-static void emitCopyLoop(mlir::OpBuilder& b, mlir::Location loc, mlir::Operation* insertBefore,
-                         hlfir::DeclareOp concatDecl, int64_t outerC, hlfir::DeclareOp targetDecl,
-                         const InnerShape& innerShape, bool directionCopyIn) {
-  mlir::OpBuilder::InsertionGuard g(b);
+void emitCopyLoop(mlir::OpBuilder& b, mlir::Location loc, mlir::Operation* insertBefore, hlfir::DeclareOp concatDecl,
+                  int64_t outerC, hlfir::DeclareOp targetDecl, const InnerShape& innerShape, bool directionCopyIn) {
+  mlir::OpBuilder::InsertionGuard const g(b);
   b.setInsertionPoint(insertBefore);
   auto idxTy = b.getIndexType();
   auto c1 = b.create<mlir::arith::ConstantOp>(loc, b.getIndexAttr(1)).getResult();
@@ -558,8 +557,8 @@ static void emitCopyLoop(mlir::OpBuilder& b, mlir::Location loc, mlir::Operation
   for (auto v : ivs) concatIdxs.push_back(v);
 
   auto elemRefTy = fir::ReferenceType::get(innerShape.elemTy);
-  mlir::Value srcRef = directionCopyIn ? targetDecl.getResult(0) : concatDecl.getResult(0);
-  mlir::Value dstRef = directionCopyIn ? concatDecl.getResult(0) : targetDecl.getResult(0);
+  mlir::Value const srcRef = directionCopyIn ? targetDecl.getResult(0) : concatDecl.getResult(0);
+  mlir::Value const dstRef = directionCopyIn ? concatDecl.getResult(0) : targetDecl.getResult(0);
   llvm::SmallVector<mlir::Value, 5> srcIdxs;
   llvm::SmallVector<mlir::Value, 5> dstIdxs;
   if (directionCopyIn) {
@@ -589,9 +588,9 @@ static void emitCopyLoop(mlir::OpBuilder& b, mlir::Location loc, mlir::Operation
 /// Rewrite one element designate ``q(idx)%m(i, j, ...)`` (reached through the box
 /// load) to a direct scalar designate over ``concat(idx, i, j, ...)``.  Scalar
 /// subscripts only -- safe to feed loop bounds / conditions / interstate edges.
-static void rewriteAccess(mlir::OpBuilder& b, hlfir::DesignateOp innerDg, mlir::Value outerIdxVal,
-                          hlfir::DeclareOp concatDecl) {
-  mlir::OpBuilder::InsertionGuard g(b);
+void rewriteAccess(mlir::OpBuilder& b, hlfir::DesignateOp innerDg, mlir::Value outerIdxVal,
+                   hlfir::DeclareOp concatDecl) {
+  mlir::OpBuilder::InsertionGuard const g(b);
   b.setInsertionPoint(innerDg);
   auto idxTy = b.getIndexType();
   mlir::Value outerCast = outerIdxVal;
@@ -610,8 +609,8 @@ static void rewriteAccess(mlir::OpBuilder& b, hlfir::DesignateOp innerDg, mlir::
 /// pointer box ``loadBoxTy`` so it can replace a ``fir.load`` of ``q(idx)%member``
 /// directly.  Every whole-box use (element designate, ``fir.box_dims`` shape
 /// query, ``fir.rebox``) then retargets to the concat with no per-use rewrite.
-static mlir::Value buildConcatSliceBox(mlir::OpBuilder& b, mlir::Location loc, hlfir::DeclareOp concatDecl,
-                                       mlir::Value outerIdx, mlir::Type loadBoxTy) {
+mlir::Value buildConcatSliceBox(mlir::OpBuilder& b, mlir::Location loc, hlfir::DeclareOp concatDecl,
+                                mlir::Value outerIdx, mlir::Type loadBoxTy) {
   // The original access is a box load, so the type is a box; bail (no rewrite)
   // if not.  Reuse the concat declare's already-resolved per-dim extents: the
   // leading dim is the outer N, the rest the inner shape, with any dynamic inner
@@ -625,7 +624,7 @@ static mlir::Value buildConcatSliceBox(mlir::OpBuilder& b, mlir::Location loc, h
   auto idxTy = b.getIndexType();
   mlir::Value outerCast = outerIdx;
   if (outerCast.getType() != idxTy) outerCast = b.create<fir::ConvertOp>(loc, idxTy, outerCast).getResult();
-  mlir::Value one = b.create<mlir::arith::ConstantOp>(loc, b.getIndexAttr(1)).getResult();
+  mlir::Value const one = b.create<mlir::arith::ConstantOp>(loc, b.getIndexAttr(1)).getResult();
   using Subscript = std::variant<mlir::Value, std::tuple<mlir::Value, mlir::Value, mlir::Value>>;
   llvm::SmallVector<Subscript, 5> subs;
   subs.push_back(outerCast);  // scalar outer index -> drops the N dim
@@ -636,7 +635,7 @@ static mlir::Value buildConcatSliceBox(mlir::OpBuilder& b, mlir::Location loc, h
     extents.push_back(ext);
     subs.push_back(std::make_tuple(one, ext, one));  // full inner range 1:ext:1
   }
-  mlir::Value shape = b.create<fir::ShapeOp>(loc, extents).getResult();
+  mlir::Value const shape = b.create<fir::ShapeOp>(loc, extents).getResult();
   mlir::Type innerEle = loadBox.getEleTy();
   if (auto pt = mlir::dyn_cast<fir::PointerType>(innerEle))
     innerEle = pt.getEleTy();
@@ -657,14 +656,14 @@ static mlir::Value buildConcatSliceBox(mlir::OpBuilder& b, mlir::Location loc, h
 /// element-designate chain is swept by ``eraseDeadAosChain``.  Reads reach the
 /// slot directly or behind a re-``hlfir.declare`` / ``fir.rebox`` / ``fir.embox`` /
 /// ``fir.convert`` alias the fresh flang IR interposes -- follow those forward.
-static unsigned rewriteAllAccesses(mlir::OpBuilder& b, Candidate& cand,
-                                   const llvm::DenseMap<llvm::StringRef, hlfir::DeclareOp>& concatByMember) {
+unsigned rewriteAllAccesses(mlir::OpBuilder& b, Candidate& cand,
+                            const llvm::DenseMap<llvm::StringRef, hlfir::DeclareOp>& concatByMember) {
   unsigned rewritten = 0;
   llvm::SmallVector<hlfir::DesignateOp, 8> elemDesignates;
   llvm::SmallVector<mlir::Value, 4> aliasRoots{cand.aosDecl.getResult(0), cand.aosDecl.getResult(1)};
   llvm::SmallPtrSet<mlir::Operation*, 8> seenAlias;
   for (size_t ai = 0; ai < aliasRoots.size(); ++ai) {
-    mlir::Value root = aliasRoots[ai];
+    mlir::Value const root = aliasRoots[ai];
     if (!root) continue;
     for (auto* u : root.getUsers()) {
       if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u)) {
@@ -684,7 +683,7 @@ static unsigned rewriteAllAccesses(mlir::OpBuilder& b, Candidate& cand,
     }
   }
   for (auto elemDg : elemDesignates) {
-    mlir::Value outerIdx = elemDg.getIndices()[0];
+    mlir::Value const outerIdx = elemDg.getIndices()[0];
     llvm::SmallVector<hlfir::DesignateOp, 4> memberDgs;
     for (auto* u : elemDg.getResult().getUsers())
       if (auto md = mlir::dyn_cast<hlfir::DesignateOp>(u)) memberDgs.push_back(md);
@@ -743,7 +742,7 @@ static unsigned rewriteAllAccesses(mlir::OpBuilder& b, Candidate& cand,
         // range view is created for them (keeps Graupel ``q`` conditions scalar).
         if (!load.getResult().use_empty()) {
           b.setInsertionPointAfter(load);
-          mlir::Value sliceBox =
+          mlir::Value const sliceBox =
               buildConcatSliceBox(b, load.getLoc(), it->second, outerIdx, load.getResult().getType());
           if (sliceBox) {
             load.getResult().replaceAllUsesWith(sliceBox);
@@ -763,7 +762,7 @@ static unsigned rewriteAllAccesses(mlir::OpBuilder& b, Candidate& cand,
 /// ``<aos>_<member>`` symbol those dead designates would surface.  Side-effecting
 /// stores (no results, so trivially ``use_empty``) are skipped -- the copy-in
 /// already erased the rebinds, and sweeping a store would double-free it.
-static void eraseDeadAosChain(Candidate& cand) {
+void eraseDeadAosChain(Candidate& cand) {
   llvm::SmallPtrSet<mlir::Operation*, 32> seen;
   llvm::SmallVector<mlir::Operation*, 32> forest{cand.aosDecl.getOperation()};
   seen.insert(cand.aosDecl.getOperation());
@@ -794,6 +793,7 @@ static void eraseDeadAosChain(Candidate& cand) {
 
 struct LiftAosPointerRecordsPass
     : public mlir::PassWrapper<LiftAosPointerRecordsPass, mlir::OperationPass<mlir::ModuleOp>> {
+  // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LiftAosPointerRecordsPass)
 
   llvm::StringRef getArgument() const final { return "hlfir-lift-aos-pointer-records"; }
@@ -809,7 +809,7 @@ struct LiftAosPointerRecordsPass
     }
   }
 
-  void processFunction(mlir::func::FuncOp func) {
+  static void processFunction(mlir::func::FuncOp func) {
     llvm::SmallVector<Candidate, 2> cands;
     func.walk([&](hlfir::DeclareOp d) {
       if (auto c = matchCandidate(d)) cands.push_back(*c);
@@ -818,7 +818,7 @@ struct LiftAosPointerRecordsPass
     for (auto& c : cands) processCandidate(func, c, allocId);
   }
 
-  void processCandidate(mlir::func::FuncOp func, Candidate& cand, int& allocId) {
+  static void processCandidate(mlir::func::FuncOp func, Candidate& cand, int& allocId) {
     llvm::SmallVector<Rebind, 8> rebinds;
     func.walk([&](fir::StoreOp store) {
       if (auto r = matchRebindStore(store, cand)) rebinds.push_back(*r);
@@ -871,7 +871,7 @@ struct LiftAosPointerRecordsPass
     // materialiser bails when shapes can't fold to static integers).
     {
       auto* ctx = func.getContext();
-      std::string key = ("hlfir.aos_ptr_records." + cand.aosDecl.getUniqName().str());
+      std::string const key = ("hlfir.aos_ptr_records." + cand.aosDecl.getUniqName().str());
       llvm::SmallVector<mlir::Attribute, 8> entries;
       for (auto& r : rebinds) {
         llvm::SmallVector<mlir::NamedAttribute, 3> kv;
@@ -897,7 +897,7 @@ struct LiftAosPointerRecordsPass
     llvm::DenseMap<llvm::StringRef, InnerShape> shapeByMember;
     for (auto& r : rebinds) {
       auto memberKey = llvm::StringRef(r.memberName);
-      if (shapeByMember.count(memberKey)) continue;
+      if (shapeByMember.contains(memberKey)) continue;
       auto s = innerShapeFromTargetDecl(r.targetDecl);
       if (!s) return;
       shapeByMember.try_emplace(memberKey, *s);

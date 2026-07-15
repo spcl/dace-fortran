@@ -73,13 +73,13 @@ namespace {
 /// ``_FortranACharacter`` is the prefix flang uses for every
 /// character-domain runtime entry point.  No non-character symbol
 /// shares this prefix.
-static constexpr llvm::StringLiteral kFortranCharPrefix = "_FortranACharacter";
+constexpr llvm::StringLiteral kFortranCharPrefix = "_FortranACharacter";
 
 /// Build a benign constant of ``ty`` immediately before ``call`` to
 /// replace one of its results.  Returns ``nullptr`` if the result
 /// type isn't one of the integer types the Fortran character
 /// runtime is known to produce (currently always ``i32``).
-static mlir::Value makeReplacement(mlir::OpBuilder& builder, mlir::Location loc, mlir::Type ty) {
+mlir::Value makeReplacement(mlir::OpBuilder& builder, mlir::Location loc, mlir::Type ty) {
   if (auto intTy = mlir::dyn_cast<mlir::IntegerType>(ty)) {
     return builder.create<mlir::arith::ConstantOp>(loc, builder.getIntegerAttr(intTy, 0));
   }
@@ -88,6 +88,7 @@ static mlir::Value makeReplacement(mlir::OpBuilder& builder, mlir::Location loc,
 
 struct StripCharacterRuntimePass
     : public mlir::PassWrapper<StripCharacterRuntimePass, mlir::OperationPass<mlir::ModuleOp>> {
+  // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(StripCharacterRuntimePass)
 
   llvm::StringRef getArgument() const final { return "hlfir-strip-character-runtime"; }
@@ -104,13 +105,13 @@ struct StripCharacterRuntimePass
     module.walk([&](fir::CallOp call) {
       auto sym = call.getCallee();
       if (!sym) return;
-      llvm::StringRef name = sym->getLeafReference().getValue();
+      llvm::StringRef const name = sym->getLeafReference().getValue();
       if (!name.starts_with(kFortranCharPrefix)) return;
 
       mlir::OpBuilder builder(call);
       bool allReplaced = true;
       for (auto res : call.getResults()) {
-        mlir::Value repl = makeReplacement(builder, call.getLoc(), res.getType());
+        mlir::Value const repl = makeReplacement(builder, call.getLoc(), res.getType());
         if (!repl) {
           LLVM_DEBUG(llvm::dbgs() << "StripCharacterRuntime: refusing to strip " << name
                                   << " -- result type unsupported\n");

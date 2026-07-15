@@ -37,6 +37,7 @@ namespace hlfir_bridge {
 namespace {
 
 struct DefaultIntentPass : public mlir::PassWrapper<DefaultIntentPass, mlir::OperationPass<mlir::ModuleOp>> {
+  // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(DefaultIntentPass)
 
   llvm::StringRef getArgument() const final { return "hlfir-default-intent"; }

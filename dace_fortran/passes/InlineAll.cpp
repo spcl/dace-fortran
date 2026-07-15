@@ -69,15 +69,15 @@ namespace {
 struct AggressiveInlinerInterface : public mlir::InlinerInterface {
   using mlir::InlinerInterface::InlinerInterface;
 
-  bool isLegalToInline(mlir::Operation* call, mlir::Operation* callable, bool wouldBeCloned) const final {
+  bool isLegalToInline(mlir::Operation* /*call*/, mlir::Operation* /*callable*/, bool /*wouldBeCloned*/) const final {
     return true;
   }
-  bool isLegalToInline(mlir::Region* dest, mlir::Region* src, bool wouldBeCloned,
-                       mlir::IRMapping& valueMapping) const final {
+  bool isLegalToInline(mlir::Region* /*dest*/, mlir::Region* /*src*/, bool /*wouldBeCloned*/,
+                       mlir::IRMapping& /*valueMapping*/) const final {
     return true;
   }
-  bool isLegalToInline(mlir::Operation* op, mlir::Region* dest, bool wouldBeCloned,
-                       mlir::IRMapping& valueMapping) const final {
+  bool isLegalToInline(mlir::Operation* /*op*/, mlir::Region* /*dest*/, bool /*wouldBeCloned*/,
+                       mlir::IRMapping& /*valueMapping*/) const final {
     return true;
   }
 
@@ -92,7 +92,7 @@ struct AggressiveInlinerInterface : public mlir::InlinerInterface {
   /// both avoids the crash and is the only correct answer there: an ``scf``
   /// region body must stay a single block, so the inliner cannot fall back
   /// to the block-splitting path.
-  bool allowSingleBlockOptimization(llvm::iterator_range<mlir::Region::iterator> inlinedBlocks) const final {
+  bool allowSingleBlockOptimization(llvm::iterator_range<mlir::Region::iterator> /*inlinedBlocks*/) const final {
     return true;
   }
 };
@@ -102,6 +102,7 @@ struct AggressiveInlinerInterface : public mlir::InlinerInterface {
 // ---------------------------------------------------------------------------
 
 struct InlineAllPass : public mlir::PassWrapper<InlineAllPass, mlir::OperationPass<mlir::ModuleOp>> {
+  // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(InlineAllPass)
 
   llvm::StringRef getArgument() const final { return "hlfir-inline-all"; }
@@ -115,7 +116,7 @@ struct InlineAllPass : public mlir::PassWrapper<InlineAllPass, mlir::OperationPa
   /// When ``rootsOnly`` is set, only calls whose enclosing function is a
   /// public root are inlined; calls inside private helpers are left for a
   /// later round, after the helper is inlined into a root.
-  unsigned sweep(mlir::ModuleOp module, mlir::SymbolTable& symTab, bool rootsOnly) {
+  static unsigned sweep(mlir::ModuleOp module, mlir::SymbolTable& symTab, bool rootsOnly) {
     unsigned inlined = 0;
     AggressiveInlinerInterface interface(module.getContext());
 
@@ -184,7 +185,7 @@ struct InlineAllPass : public mlir::PassWrapper<InlineAllPass, mlir::OperationPa
       // Inserting at ``inlineBlock`` instead demotes the caller's
       // original entry block and drops its block-argument list,
       // which then trips func.func's signature verifier.
-      auto cloneCallback = [](mlir::OpBuilder& builder, mlir::Region* src, mlir::Block* inlineBlock,
+      auto cloneCallback = [](mlir::OpBuilder& /*builder*/, mlir::Region* src, mlir::Block* inlineBlock,
                               mlir::Block* postBlock, mlir::IRMapping& mapper, bool shouldClone) {
         if (shouldClone) {
           src->cloneInto(inlineBlock->getParent(), postBlock->getIterator(), mapper);
@@ -212,9 +213,9 @@ struct InlineAllPass : public mlir::PassWrapper<InlineAllPass, mlir::OperationPa
   /// function-level effect of ``--symbol-dce`` run between inlining rounds, so
   /// a helper body is freed as soon as its last caller has absorbed it rather
   /// than lingering until the end of the pipeline.  Returns the number erased.
-  unsigned pruneDeadPrivateFuncs(mlir::ModuleOp module, mlir::SymbolTable& symTab) {
+  static unsigned pruneDeadPrivateFuncs(mlir::ModuleOp module, mlir::SymbolTable& symTab) {
     mlir::SymbolTableCollection collection;
-    mlir::SymbolUserMap users(collection, module);
+    mlir::SymbolUserMap const users(collection, module);
     llvm::SmallVector<mlir::func::FuncOp, 64> dead;
     for (auto f : module.getOps<mlir::func::FuncOp>())
       if (f.isPrivate() && users.useEmpty(f)) dead.push_back(f);
@@ -242,10 +243,11 @@ struct InlineAllPass : public mlir::PassWrapper<InlineAllPass, mlir::OperationPa
     // the max call-tree depth; in practice convergence is much faster.
     unsigned totalInlined = 0;
     for (int round = 0; round < 128; ++round) {
-      unsigned n = sweep(module, symTab, rootsOnly);
+      unsigned const n = sweep(module, symTab, rootsOnly);
       if (n == 0) break;
       totalInlined += n;
-      unsigned freed = rootsOnly ? pruneDeadPrivateFuncs(module, symTab) : 0;
+      // NOLINTNEXTLINE(clang-analyzer-deadcode.DeadStores): read only in the LLVM_DEBUG log below.
+      unsigned const freed = rootsOnly ? pruneDeadPrivateFuncs(module, symTab) : 0;
 
       LLVM_DEBUG(llvm::dbgs() << "InlineAll: round " << round << " inlined " << n << " call sites, freed " << freed
                               << " helpers\n");

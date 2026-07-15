@@ -62,7 +62,6 @@ ASTNode buildReduceNode(hlfir::AssignOp assign, mlir::Operation* redOp, std::str
 }
 
 /// Forward declare  --  called from buildWhileNode to recurse into the body.
-std::vector<ASTNode> buildAST(mlir::Block& block);
 
 /// Synthesise a chain of nested ``kind="conditional"`` AST nodes from a
 /// ``fir.select_case`` terminator.  Fortran ``SELECT CASE`` has no direct
@@ -81,10 +80,10 @@ std::vector<ASTNode> buildAST(mlir::Block& block);
 /// collapse into a single guard whose sub-predicates are OR-joined.
 ASTNode buildSelectCaseChain(fir::SelectCaseOp sel) {
   auto operands = sel.getOperands();
-  std::string xExpr = buildExprWithSubscripts(sel.getSelector(operands), 0);
+  std::string const xExpr = buildExprWithSubscripts(sel.getSelector(operands), 0);
 
   auto cases = sel.getCases();
-  unsigned numCases = cases.size();
+  unsigned const numCases = cases.size();
 
   // Per-case metadata for a first pass.
   struct CaseInfo {
@@ -106,7 +105,15 @@ ASTNode buildSelectCaseChain(fir::SelectCaseOp sel) {
     } else if (mlir::isa<fir::ClosedIntervalAttr>(tag) && cmpOps && cmpOps->size() >= 2) {
       auto lo = buildExprWithSubscripts((*cmpOps)[0], 0);
       auto hi = buildExprWithSubscripts((*cmpOps)[1], 0);
-      ci.guard = "((" + xExpr + " >= " + lo + ") and (" + xExpr + " <= " + hi + "))";
+      ci.guard = "((";
+      ci.guard += xExpr;
+      ci.guard += " >= ";
+      ci.guard += lo;
+      ci.guard += ") and (";
+      ci.guard += xExpr;
+      ci.guard += " <= ";
+      ci.guard += hi;
+      ci.guard += "))";
     } else if (mlir::isa<fir::LowerBoundAttr>(tag) && cmpOps && !cmpOps->empty()) {
       ci.guard = "(" + xExpr + " >= " + buildExprWithSubscripts((*cmpOps)[0], 0) + ")";
     } else if (mlir::isa<fir::UpperBoundAttr>(tag) && cmpOps && !cmpOps->empty()) {
@@ -183,7 +190,7 @@ std::string resolveExtent(mlir::Value shape, unsigned d) {
     ext = sh.getExtents()[d];
   } else if (auto ss = mlir::dyn_cast<fir::ShapeShiftOp>(def)) {
     auto ops = ss->getOperands();
-    unsigned idx = 2 * d + 1;
+    unsigned const idx = (2 * d) + 1;
     if (idx >= ops.size()) return "?";
     ext = ops[idx];
   } else {
@@ -250,22 +257,23 @@ std::pair<std::string, std::vector<DimEntry>> expandDesignateChain(hlfir::Design
   auto applySectionHop = [](hlfir::DesignateOp sec, std::vector<DimEntry>& entries) {
     auto trips = sec.getIsTriplet();
     unsigned T = 0;
-    for (bool t : trips)
+    for (bool const t : trips)
       if (t) ++T;
-    size_t split = std::min<size_t>(T, entries.size());
+    size_t const split = std::min<size_t>(T, entries.size());
     std::vector<DimEntry> head(entries.begin(), entries.begin() + split);
     std::vector<DimEntry> tail(entries.begin() + split, entries.end());
     std::vector<DimEntry> newRec;
-    size_t hi = 0, cur = 0;
+    size_t hi = 0;
+    size_t cur = 0;
     auto sidx = sec.getIndices();
-    for (unsigned d = 0; d < trips.size(); ++d) {
-      if (trips[d]) {
+    for (bool const trip : trips) {
+      if (trip) {
         newRec.push_back(hi < head.size() ? head[hi] : DimEntry{"?", "?"});
         ++hi;
         cur += 3;  // triplet subscript = (lo, hi, step)
       } else {
-        mlir::Value s = cur < sidx.size() ? sidx[cur] : mlir::Value{};
-        std::string n = s ? resolveIndex(s) : std::string{};
+        mlir::Value const s = cur < sidx.size() ? sidx[cur] : mlir::Value{};
+        std::string const n = s ? resolveIndex(s) : std::string{};
         newRec.push_back({n.empty() ? "?" : n, s ? buildIndexExpr(s, 0) : "?"});
         cur += 1;  // scalar subscript = (idx)
       }
@@ -366,8 +374,7 @@ std::pair<std::string, std::vector<DimEntry>> expandDesignateChain(hlfir::Design
       //     ``arr_x[i, 2]`` access carries both dims.
       std::vector<DimEntry> parent_entries;
       auto pidxOps = parent.getIndices();
-      for (unsigned d = 0; d < pidxOps.size(); ++d) {
-        auto idx = pidxOps[d];
+      for (auto idx : pidxOps) {
         auto n = resolveIndex(idx);
         parent_entries.push_back({n.empty() ? "?" : n, buildIndexExpr(idx, 0)});
       }
@@ -398,8 +405,8 @@ std::pair<std::string, std::vector<DimEntry>> expandDesignateChain(hlfir::Design
     size_t inner_i = 0;
     unsigned cursor = 0;
     auto pidxOps = parent.getIndices();
-    for (unsigned d = 0; d < triplets.size(); ++d) {
-      if (triplets[d]) {
+    for (bool const triplet : triplets) {
+      if (triplet) {
         if (inner_i < entries.size())
           new_entries.push_back(entries[inner_i]);
         else
@@ -430,8 +437,8 @@ std::pair<std::string, std::vector<DimEntry>> expandDesignateChain(hlfir::Design
     // (``arr(ia) % box(ir)``: the record index ``ia`` arrives here and
     // must PREPEND onto the element ``[ir]``, not overwrite it).
     bool allScalar = true;
-    for (unsigned d = 0; d < triplets.size(); ++d)
-      if (triplets[d]) {
+    for (bool const triplet : triplets)
+      if (triplet) {
         allScalar = false;
         break;
       }
@@ -546,7 +553,7 @@ void collectReadAccesses(mlir::Value v, std::vector<AccessInfo>& accesses, int d
         ra.is_read = true;
         for (auto idx : apply.getIndices()) {
           auto n = resolveIndex(idx);
-          std::string s = n.empty() ? std::string("?") : n;
+          std::string const s = n.empty() ? std::string("?") : n;
           ra.index_vars.push_back(s);
           ra.index_exprs.push_back(s);
         }
@@ -561,7 +568,7 @@ void collectReadAccesses(mlir::Value v, std::vector<AccessInfo>& accesses, int d
           unsigned pushed = 0;
           for (unsigned i = 0; i < iblock.getNumArguments() && i < apply_idxs.size(); ++i) {
             auto name = resolveIndex(apply_idxs[i]);
-            indexStack().push_back({iblock.getArgument(i), name});
+            indexStack().emplace_back(iblock.getArgument(i), name);
             ++pushed;
           }
           for (auto& iop : iblock)
@@ -638,9 +645,9 @@ const char* libcallNameForExprOp(mlir::Operation* op) {
 std::vector<std::string> exprResultShape(mlir::Type ty) {
   std::vector<std::string> out;
   if (auto e = mlir::dyn_cast<hlfir::ExprType>(ty)) {
-    for (int64_t d : e.getShape()) {
+    for (int64_t const d : e.getShape()) {
       if (d == hlfir::ExprType::getUnknownExtent())
-        out.push_back("?");
+        out.emplace_back("?");
       else
         out.push_back(std::to_string(d));
     }
@@ -714,7 +721,7 @@ static std::pair<std::string, std::vector<ASTNode>> materialiseElementalToTransi
   auto& region = elem.getRegion();
   if (region.empty()) return {{}, {}};
   auto& block = region.front();
-  unsigned rank = block.getNumArguments();
+  unsigned const rank = block.getNumArguments();
   auto shape = elem.getShape();
 
   std::string trName = std::string(prefix) + std::to_string(kSynthTransientCounter++);
@@ -727,7 +734,7 @@ static std::pair<std::string, std::vector<ASTNode>> materialiseElementalToTransi
   // MAXVAL of inline elementals (e.g. QE's
   // ``SUM((a - b) ** 2)``) through the same path needs the
   // elemental's real element type.
-  std::string dtype = exprDtypeString(elem.getType());
+  std::string const dtype = exprDtypeString(elem.getType());
 
   ASTNode decl;
   decl.kind = "declare_transient";
@@ -743,7 +750,7 @@ static std::pair<std::string, std::vector<ASTNode>> materialiseElementalToTransi
   for (unsigned i = 0; i < rank; ++i) iter_names.push_back("ei" + std::to_string(i));
   unsigned pushed = 0;
   for (unsigned i = 0; i < rank; ++i) {
-    indexStack().push_back({block.getArgument(i), iter_names[i]});
+    indexStack().emplace_back(block.getArgument(i), iter_names[i]);
     ++pushed;
   }
 
@@ -820,7 +827,8 @@ static std::pair<std::string, std::vector<ASTNode>> materialiseElementalToTransi
         auto* srcOp = src.getDefiningOp();
         if (!srcOp) return;
         if (kHlfirExprToTransient.count(srcOp)) return;
-        std::string wcr, identity;
+        std::string wcr;
+        std::string identity;
         if (!reduceWcrIdentity(srcOp, wcr, identity)) {
           // Not a reduction -- recurse into operands.  AND, when
           // the apply is over a nested ELEMENTAL, descend into
@@ -848,7 +856,7 @@ static std::pair<std::string, std::vector<ASTNode>> materialiseElementalToTransi
         // run ``materialiseElementalForLibcall`` to get a
         // transient that the reduce reads from; if it's a
         // named array, use ``traceToDecl`` directly.
-        mlir::Value redSrc = srcOp->getOperand(0);
+        mlir::Value const redSrc = srcOp->getOperand(0);
         std::string redSrcName;
         std::vector<ASTNode> srcMaterialNodes;
         if (auto* rsd = redSrc.getDefiningOp()) {
@@ -863,9 +871,9 @@ static std::pair<std::string, std::vector<ASTNode>> materialiseElementalToTransi
         if (redSrcName.empty()) redSrcName = traceToDecl(redSrc);
         if (redSrcName.empty()) return;  // can't materialise; skip
         // Mint the reduction's result transient.
-        std::string tmp = "_libtmp_" + std::to_string(kLibTmpCounter++);
+        std::string const tmp = "_libtmp_" + std::to_string(kLibTmpCounter++);
         kHlfirExprToTransient[srcOp] = tmp;
-        mlir::Type rty = srcOp->getResult(0).getType();
+        mlir::Type const rty = srcOp->getResult(0).getType();
         auto rshape = exprResultShape(rty);
         ASTNode decl;
         decl.kind = "declare_transient";
@@ -909,7 +917,7 @@ static std::pair<std::string, std::vector<ASTNode>> materialiseElementalToTransi
   if (yielded) {
     // Tasklet-body mode: comparisons / loads emit bare names so
     // emit_tasklet's per-occurrence connector wiring picks them up.
-    NoSubscriptGuard g;
+    NoSubscriptGuard const g;
     std::string b = buildBoolExpr(yielded, 0);
     if (b == "?") b = buildExpr(yielded, 0);
     body = b;
@@ -967,12 +975,12 @@ std::pair<std::string, std::vector<ASTNode>> materialiseElementalForLibcall(hlfi
   auto& region = elem.getRegion();
   if (region.empty()) return {{}, {}};
   auto& block = region.front();
-  unsigned rank = block.getNumArguments();
+  unsigned const rank = block.getNumArguments();
   auto shape = elem.getShape();
   if (!shape) return {{}, {}};
 
   std::string trName = "_libsrc_" + std::to_string(kSynthTransientCounter++);
-  std::string dtype = exprDtypeString(elem.getType());
+  std::string const dtype = exprDtypeString(elem.getType());
 
   ASTNode decl;
   decl.kind = "declare_transient";
@@ -988,7 +996,7 @@ std::pair<std::string, std::vector<ASTNode>> materialiseElementalForLibcall(hlfi
   for (unsigned i = 0; i < rank; ++i) iter_names.push_back("li" + std::to_string(i));
   unsigned pushed = 0;
   for (unsigned i = 0; i < rank; ++i) {
-    indexStack().push_back({block.getArgument(i), iter_names[i]});
+    indexStack().emplace_back(block.getArgument(i), iter_names[i]);
     ++pushed;
   }
 
@@ -1018,7 +1026,7 @@ std::pair<std::string, std::vector<ASTNode>> materialiseElementalForLibcall(hlfi
 
   std::string body;
   {
-    NoSubscriptGuard g;
+    NoSubscriptGuard const g;
     body = buildExpr(yielded, 0);
   }
   if (body == "?") {

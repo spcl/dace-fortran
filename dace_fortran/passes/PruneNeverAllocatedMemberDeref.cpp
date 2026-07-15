@@ -95,7 +95,7 @@ namespace {
 
 /// Peel fir.box / fir.class / fir.ref / fir.heap / fir.pointer down to the
 /// innermost element type.
-static mlir::Type unwrapAllWrappers(mlir::Type t) {
+mlir::Type unwrapAllWrappers(mlir::Type t) {
   for (;;) {
     mlir::Type inner = t;
     if (auto x = mlir::dyn_cast<fir::BaseBoxType>(t))
@@ -112,7 +112,7 @@ static mlir::Type unwrapAllWrappers(mlir::Type t) {
 }
 
 /// True when the designate reads an ALLOCATABLE or POINTER member.
-static bool isAllocatableOrPointer(hlfir::DesignateOp dg) {
+bool isAllocatableOrPointer(hlfir::DesignateOp dg) {
   auto attrs = dg.getFortranAttrs();
   if (!attrs) return false;
   return bitEnumContainsAny(*attrs, fir::FortranVariableFlagsEnum::allocatable) ||
@@ -123,12 +123,12 @@ static bool isAllocatableOrPointer(hlfir::DesignateOp dg) {
 /// written (``fir.store`` into it) or could escape (its address reaches a
 /// call / dispatch), or is consumed by any op we do not recognise as a pure
 /// read.  A plain ``fir.load`` is a read snapshot and terminates the walk.
-static bool slotWrittenOrEscaped(mlir::Value ref) {
+bool slotWrittenOrEscaped(mlir::Value ref) {
   llvm::SmallVector<mlir::Value, 8> work{ref};
   llvm::SmallPtrSet<mlir::Value, 8> seen{ref};
   while (!work.empty()) {
-    mlir::Value v = work.pop_back_val();
-    for (mlir::OpOperand& use : v.getUses()) {
+    mlir::Value const v = work.pop_back_val();
+    for (mlir::OpOperand const& use : v.getUses()) {
       mlir::Operation* op = use.getOwner();
       // Read snapshot of the descriptor -- safe, and the loaded box carries no
       // capability to re-allocate the caller's slot.
@@ -142,7 +142,7 @@ static bool slotWrittenOrEscaped(mlir::Value ref) {
       if (mlir::isa<fir::CallOp, mlir::func::CallOp, fir::DispatchOp>(op)) return true;
       // Address-preserving forwards: keep tracing the aliased ref.
       if (mlir::isa<fir::ConvertOp, hlfir::DeclareOp>(op)) {
-        for (mlir::Value r : op->getResults())
+        for (mlir::Value const r : op->getResults())
           if (seen.insert(r).second) work.push_back(r);
         continue;
       }
@@ -155,7 +155,7 @@ static bool slotWrittenOrEscaped(mlir::Value ref) {
 
 /// The result-less ``fir.if`` (no ``else``) that directly guards ``dg`` in its
 /// entry block, or null when ``dg`` is not so guarded.
-static fir::IfOp enclosingUnconditionalGuard(hlfir::DesignateOp dg) {
+fir::IfOp enclosingUnconditionalGuard(hlfir::DesignateOp dg) {
   auto guard = mlir::dyn_cast_or_null<fir::IfOp>(dg->getParentOp());
   if (!guard) return {};
   if (guard.getNumResults() != 0) return {};
@@ -169,6 +169,7 @@ static fir::IfOp enclosingUnconditionalGuard(hlfir::DesignateOp dg) {
 
 struct PruneNeverAllocatedMemberDerefPass
     : public mlir::PassWrapper<PruneNeverAllocatedMemberDerefPass, mlir::OperationPass<mlir::ModuleOp>> {
+  // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(PruneNeverAllocatedMemberDerefPass)
 
   llvm::StringRef getArgument() const final { return "hlfir-prune-never-allocated-member-deref"; }
@@ -196,7 +197,7 @@ struct PruneNeverAllocatedMemberDerefPass
       mlir::Type parentRec = unwrapAllWrappers(dg.getMemref().getType());
       auto rec = mlir::dyn_cast<fir::RecordType>(parentRec);
       if (!rec) return;
-      std::string key = (rec.getName() + "::" + compAttr.getValue()).str();
+      std::string const key = (rec.getName() + "::" + compAttr.getValue()).str();
       designatesBySlot[key].push_back(dg);
       // Candidate = allocatable/pointer member whose pointee is itself a record
       // (the "opaque object" shape); plain numeric allocatables are out of
@@ -219,7 +220,7 @@ struct PruneNeverAllocatedMemberDerefPass
           break;
         }
       if (unsafe) continue;
-      for (hlfir::DesignateOp dg : kv.second)
+      for (hlfir::DesignateOp const dg : kv.second)
         if (fir::IfOp guard = enclosingUnconditionalGuard(dg))
           if (guardSet.insert(guard.getOperation()).second) guards.push_back(guard);
     }

@@ -99,7 +99,7 @@ std::string extractName(const std::string& m) {
   // are detected by checking whether ``name`` already starts with
   // ``<scope>_``.
   if (!kEntryScope.empty()) {
-    std::string scope = getFScope(m);
+    std::string const scope = getFScope(m);
     if (!scope.empty() && scope != kEntryScope) {
       // Qualify ONLY when the short name actually collides across
       // scopes.  ``kShortNameCollisions`` is populated by
@@ -110,9 +110,9 @@ std::string extractName(const std::string& m) {
       // has ``tf2``'s OPTIONAL ``a`` folded by ``is_present`` so it
       // never reaches a tasklet, but ``tf2_a`` still landed on the
       // SDFG signature and broke the caller's ``a=5`` binding.
-      bool collides = kShortNameCollisions.count(name) > 0;
+      bool const collides = kShortNameCollisions.count(name) > 0;
       if (collides) {
-        std::string prefix = scope + "_";
+        std::string const prefix = scope + "_";
         if (name.compare(0, prefix.size(), prefix) != 0) name = prefix + name;
       }
     }
@@ -252,7 +252,7 @@ bool leadsToComponentDesignate(mlir::Value mr) {
 // inlined dummy declare an AoR section can sit behind.
 static bool sectionBaseReachesComponent(mlir::Value mr) {
   for (int i = 0; i < limits::kAliasMemrefWalkDepth && mr; ++i) {
-    if (mlir::Value peeled = peelBoxReinterpret(mr); peeled != mr) {
+    if (mlir::Value const peeled = peelBoxReinterpret(mr); peeled != mr) {
       mr = peeled;
       continue;
     }
@@ -302,7 +302,7 @@ hlfir::DesignateOp asInlinedSectionOverComponent(hlfir::DeclareOp decl) {
 
 unsigned countScalarSectionDims(hlfir::DesignateOp sec) {
   unsigned n = 0;
-  for (bool t : sec.getIsTriplet())
+  for (bool const t : sec.getIsTriplet())
     if (!t) ++n;
   return n;
 }
@@ -340,7 +340,7 @@ mlir::Value traceLocalPointerRebindSource(hlfir::DeclareOp decl) {
   // Peel the storage-transparent box reinterprets (embox / rebox / convert /
   // box_addr / load) to the source declare or component designate -- the same
   // op set ``RewritePointerAssigns::traceRebindChain`` peels.
-  mlir::Value src = peelBoxReinterpret(stored);
+  mlir::Value const src = peelBoxReinterpret(stored);
   if (!src) return {};
   // Gate 4: the source must root at a struct DUMMY -- it is either a component
   // designate (``owned_cells => patch_2d % cells % owned``) or a struct DUMMY
@@ -436,7 +436,7 @@ static std::string flatCompanionName(hlfir::DesignateOp dg, llvm::StringRef memb
     // Shared storage-transparent peel -- runs before the designate case below
     // (a designate value returns unchanged, so a nested-component parent still
     // falls through to the multi-level guard).
-    if (mlir::Value peeled = peelBoxReinterpret(v); peeled != v) {
+    if (mlir::Value const peeled = peelBoxReinterpret(v); peeled != v) {
       v = peeled;
       continue;
     }
@@ -451,7 +451,7 @@ static std::string flatCompanionName(hlfir::DesignateOp dg, llvm::StringRef memb
     break;
   }
   if (baseUniq.empty()) return {};
-  std::string compUniq = baseUniq + "_" + member.str();
+  std::string const compUniq = baseUniq + "_" + member.str();
   if (!moduleHasDeclare(dg.getOperation(), compUniq)) return {};
   return extractName(compUniq);
 }
@@ -500,7 +500,7 @@ std::string traceToDecl(mlir::Value val, int max) {
       // the caller-side flat name ``patch_3d_p_patch_2d_cells_all_start_block``
       // (which the member-symbol mint already registers) rather than the local
       // pointer's own ``div_oce_3d_mlevels_cells_subset_start_block``.
-      if (mlir::Value src = traceLocalPointerRebindSource(dc)) {
+      if (mlir::Value const src = traceLocalPointerRebindSource(dc)) {
         val = src;
         continue;
       }
@@ -512,7 +512,7 @@ std::string traceToDecl(mlir::Value val, int max) {
     // single source of truth (see ``peelBoxReinterpret``).  Runs before the
     // designate / select-clamp cases below; the peel returns those values
     // unchanged so each still falls through to its dedicated handler.
-    if (mlir::Value peeled = peelBoxReinterpret(val); peeled != val) {
+    if (mlir::Value const peeled = peelBoxReinterpret(val); peeled != val) {
       val = peeled;
       continue;
     }
@@ -581,7 +581,7 @@ std::string traceToDecl(mlir::Value val, int max) {
                 auto un = candidate.getUniqName().str();
                 auto eP = un.rfind('E');
                 if (eP == std::string::npos) return;
-                std::string tail = un.substr(eP + 1);
+                std::string const tail = un.substr(eP + 1);
                 if (tail == doubleU) found = true;
               });
             }
@@ -606,8 +606,8 @@ std::string traceToDecl(mlir::Value val, int max) {
       // ``buildIndexExpr`` / ``buildExpr`` to render.
       auto trueC = traceConstInt(s.getTrueValue());
       auto falseC = traceConstInt(s.getFalseValue());
-      bool trueZero = trueC && *trueC == 0;
-      bool falseZero = falseC && *falseC == 0;
+      bool const trueZero = trueC && *trueC == 0;
+      bool const falseZero = falseC && *falseC == 0;
       if (trueZero != falseZero) {
         val = trueZero ? s.getFalseValue() : s.getTrueValue();
         continue;
@@ -950,13 +950,13 @@ hlfir::DeclareOp asAssumedShapeAlias(hlfir::DeclareOp decl) {
     if (auto seq = mlir::dyn_cast<fir::SequenceType>(t)) return seq.getDimension();
     return 0;
   };
-  int innerRank = rankOfDeclResult(decl.getResult(0));
+  int const innerRank = rankOfDeclResult(decl.getResult(0));
   auto mr = decl.getMemref();
   for (int i = 0; i < limits::kAliasMemrefWalkDepth && mr; ++i) {
     auto* d = mr.getDefiningOp();
     if (!d) break;
     if (auto outer = mlir::dyn_cast<hlfir::DeclareOp>(d)) {
-      int outerRank = rankOfDeclResult(outer.getResult(0));
+      int const outerRank = rankOfDeclResult(outer.getResult(0));
       if (innerRank > 0 && outerRank > 0 && innerRank != outerRank) return {};
       return outer;
     }

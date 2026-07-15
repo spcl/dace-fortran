@@ -189,7 +189,7 @@ static std::optional<int64_t> traceConstIndex(mlir::Value v);
 /// re-declares aliasing the same underlying alloca.  Returns nullopt
 /// if the alloca has multiple stores (genuinely runtime-varying
 /// value) or the stored value isn't itself a foldable constant.
-static std::optional<int64_t> traceStoredConstant(mlir::Value memref) {
+std::optional<int64_t> traceStoredConstant(mlir::Value memref) {
   // Walk through hlfir.declare wrappers down to the underlying alloca.
   mlir::Value root = memref;
   for (int i = 0; i < 8; ++i) {
@@ -236,7 +236,7 @@ static std::optional<int64_t> traceStoredConstant(mlir::Value memref) {
 /// these to a ``fir.address_of @<global>`` + ``fir.load`` chain.  The
 /// global's body is a tiny region whose terminating ``fir.has_value``
 /// op carries the initial value.
-static std::optional<int64_t> traceGlobalInitialiser(mlir::SymbolRefAttr name, mlir::Operation* anchor) {
+std::optional<int64_t> traceGlobalInitialiser(mlir::SymbolRefAttr name, mlir::Operation* anchor) {
   auto module = anchor->getParentOfType<mlir::ModuleOp>();
   if (!module) return std::nullopt;
   auto sym = module.lookupSymbol(name.getLeafReference());
@@ -271,7 +271,7 @@ static std::optional<int64_t> traceGlobalInitialiser(mlir::SymbolRefAttr name, m
 /// a multi-store variable, ``fir.box_dims``, or any reference that's
 /// genuinely runtime-varying).  The caller falls back to the symbolic
 /// rewrite in that case.
-static std::optional<int64_t> traceConstIndex(mlir::Value v) {
+std::optional<int64_t> traceConstIndex(mlir::Value v) {
   for (int i = 0; i < 32 && v; ++i) {
     auto* def = v.getDefiningOp();
     if (!def) return std::nullopt;
@@ -311,7 +311,7 @@ static std::optional<int64_t> traceConstIndex(mlir::Value v) {
       // Both branches agree -> done.
       auto t = traceConstIndex(sel.getTrueValue());
       auto f = traceConstIndex(sel.getFalseValue());
-      if (t && f && *t == *f) return *t;
+      if (t && f && *t == *f) return t;
       // Otherwise resolve via the condition: ``select sgt(x,0), x, 0``
       // (flang's nonneg-extent clamp) folds when x is a known constant.
       if (auto cmp = mlir::dyn_cast_or_null<mlir::arith::CmpIOp>(sel.getCondition().getDefiningOp())) {
@@ -376,7 +376,7 @@ static std::optional<int64_t> traceConstIndex(mlir::Value v) {
 /// ``fir.ref<T>`` (rank 0) to ``fir.ref<fir.array<...xT>>`` (rank 1+),
 /// where the source is an element-form ``hlfir.designate``.  Returns
 /// the source designate on match, null otherwise.
-static hlfir::DesignateOp matchSeqAdapter(fir::ConvertOp conv) {
+hlfir::DesignateOp matchSeqAdapter(fir::ConvertOp conv) {
   auto srcTy = conv.getValue().getType();
   auto dstTy = conv.getResult().getType();
   auto srcRef = mlir::dyn_cast<fir::ReferenceType>(srcTy);
@@ -391,7 +391,7 @@ static hlfir::DesignateOp matchSeqAdapter(fir::ConvertOp conv) {
   auto dg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(conv.getValue().getDefiningOp());
   if (!dg) return {};
   // Must be element form (any-triplet -> already a section, skip).
-  for (bool b : dg.getIsTriplet())
+  for (bool const b : dg.getIsTriplet())
     if (b) return {};
   if (dg.getIndices().empty()) return {};
   return dg;
@@ -399,6 +399,7 @@ static hlfir::DesignateOp matchSeqAdapter(fir::ConvertOp conv) {
 
 struct RewriteSequenceAssociationPass
     : public mlir::PassWrapper<RewriteSequenceAssociationPass, mlir::OperationPass<mlir::ModuleOp>> {
+  // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(RewriteSequenceAssociationPass)
 
   llvm::StringRef getArgument() const final { return "hlfir-rewrite-sequence-association"; }
@@ -417,7 +418,7 @@ struct RewriteSequenceAssociationPass
   }
 
  private:
-  void rewrite(fir::ConvertOp conv) {
+  static void rewrite(fir::ConvertOp conv) {
     auto eltDg = matchSeqAdapter(conv);
     if (!eltDg) return;
 
@@ -441,7 +442,7 @@ struct RewriteSequenceAssociationPass
     if (!shapeVal) return;
     auto shapeOp = mlir::dyn_cast_or_null<fir::ShapeOp>(shapeVal.getDefiningOp());
     if (!shapeOp || shapeOp.getExtents().size() != 1) return;
-    mlir::Value extentVal = shapeOp.getExtents()[0];
+    mlir::Value const extentVal = shapeOp.getExtents()[0];
     auto Nopt = traceConstIndex(extentVal);
     if (Nopt && *Nopt <= 0) return;
 
@@ -455,9 +456,9 @@ struct RewriteSequenceAssociationPass
     // strides over.
     if (eltDg.getIndices().empty()) return;
     if (!eltDg.getIsTriplet().empty())
-      for (bool t : eltDg.getIsTriplet())
+      for (bool const t : eltDg.getIsTriplet())
         if (t) return;
-    mlir::Value lo = eltDg.getIndices()[0];
+    mlir::Value const lo = eltDg.getIndices()[0];
 
     // Element-access variant: an inlined callee that reads the formal's
     // individual elements (``cac (1)`` ... in ``acr3d (..., acco (1, k),
@@ -474,13 +475,13 @@ struct RewriteSequenceAssociationPass
     // pass-through scalar indices -- is already in scope; a runtime extent
     // is only defined after the declare and stays on the path below).
     bool elementAccess = false;
-    for (mlir::Value r : {formalDecl.getResult(0), formalDecl.getResult(1)})
+    for (mlir::Value const r : {formalDecl.getResult(0), formalDecl.getResult(1)})
       for (auto* u : r.getUsers())
         if (mlir::isa<hlfir::DesignateOp>(u)) elementAccess = true;
     if (auto Nconst =
             traceConstIndex(mlir::dyn_cast<fir::ShapeOp>(formalDecl.getShape().getDefiningOp()).getExtents()[0]);
         elementAccess && Nconst && *Nconst > 0) {
-      int64_t N = *Nconst;
+      int64_t const N = *Nconst;
       mlir::OpBuilder b(formalDecl);  // insertion point: before the declare
       auto loc = conv.getLoc();
       auto idxTy = b.getIndexType();
@@ -488,15 +489,15 @@ struct RewriteSequenceAssociationPass
         if (v.getType() == idxTy) return v;
         return b.create<fir::ConvertOp>(loc, idxTy, v).getResult();
       };
-      mlir::Value loIdx = toIndex(lo);
+      mlir::Value const loIdx = toIndex(lo);
       auto c1 = b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(1));
       auto cN = b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(N));
       auto cNm1 = b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(N - 1));
-      mlir::Value hi = b.create<mlir::arith::AddIOp>(loc, loIdx, cNm1).getResult();
+      mlir::Value const hi = b.create<mlir::arith::AddIOp>(loc, loIdx, cNm1).getResult();
       auto refTy = mlir::cast<fir::ReferenceType>(conv.getResult().getType());
       auto eleTy = mlir::cast<fir::SequenceType>(refTy.getEleTy()).getEleTy();
       auto boxTy = fir::BoxType::get(fir::SequenceType::get({N}, eleTy));
-      mlir::Value sectionShape = b.create<fir::ShapeOp>(loc, mlir::ValueRange{cN.getResult()}).getResult();
+      mlir::Value const sectionShape = b.create<fir::ShapeOp>(loc, mlir::ValueRange{cN.getResult()}).getResult();
       llvm::SmallVector<mlir::Value, 6> tripletOps{loIdx, hi, c1.getResult()};
       llvm::SmallVector<bool, 6> isTriplet{true};
       for (size_t i = 1; i < eltDg.getIndices().size(); ++i) {
@@ -529,7 +530,7 @@ struct RewriteSequenceAssociationPass
       if (v.getType() == idxTy) return v;
       return b.create<fir::ConvertOp>(loc, idxTy, v).getResult();
     };
-    mlir::Value loIdx = toIndex(lo);
+    mlir::Value const loIdx = toIndex(lo);
     auto c1 = b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(1));
 
     // Decide constant-N vs runtime-N variant.  The runtime variant
@@ -542,7 +543,7 @@ struct RewriteSequenceAssociationPass
         mlir::cast<fir::SequenceType>(mlir::cast<fir::ReferenceType>(conv.getResult().getType()).getEleTy());
     auto eleTy = convDstSeq.getEleTy();
     if (Nopt) {
-      int64_t N = *Nopt;
+      int64_t const N = *Nopt;
       auto cN = b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(N));
       auto cNm1 = b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(N - 1));
       hi = b.create<mlir::arith::AddIOp>(loc, loIdx, cNm1).getResult();
@@ -551,7 +552,7 @@ struct RewriteSequenceAssociationPass
     } else {
       // Runtime-extent path.  ``hi = lo + extent - 1`` with the
       // extent value carried straight from the formal declare.
-      mlir::Value extentIdx = toIndex(extentVal);
+      mlir::Value const extentIdx = toIndex(extentVal);
       auto extentMinus1 = b.create<mlir::arith::SubIOp>(loc, extentIdx, c1.getResult()).getResult();
       hi = b.create<mlir::arith::AddIOp>(loc, loIdx, extentMinus1).getResult();
       sectionShape = b.create<fir::ShapeOp>(loc, mlir::ValueRange{extentIdx}).getResult();

@@ -136,14 +136,14 @@ std::string lowerIsPresent(mlir::Value operand) {
           if (term && term->getNumOperands() == 1) return term->getOperand(0);
           return {};
         };
-        mlir::Value tv = branchYield(ifop.getThenRegion());
-        mlir::Value ev = branchYield(ifop.getElseRegion());
+        mlir::Value const tv = branchYield(ifop.getThenRegion());
+        mlir::Value const ev = branchYield(ifop.getElseRegion());
         if (tv && ev) {
           std::string te = lowerIsPresent(tv);
-          std::string ee = lowerIsPresent(ev);
+          std::string const ee = lowerIsPresent(ev);
           if (!te.empty() && te == ee) return te;
           std::string cond = buildBoolExpr(ifop.getCondition(), 0);
-          bool condOk = !cond.empty() && cond.find('?') == std::string::npos;
+          bool const condOk = !cond.empty() && cond.find('?') == std::string::npos;
           if (condOk && te == "1" && ee == "0") return cond;
           if (condOk && te == "0" && ee == "1") return "(not " + cond + ")";
         }
@@ -287,10 +287,11 @@ std::string buildDesignateIndexExpr(hlfir::DesignateOp dg, unsigned dim, mlir::V
       // (Without this, ``mill(1, off+1:blk)(k)`` dropped the ``+off``
       // rebase because ``triplets[dim=0]`` was the scalar dim, gathering
       // ``mill[1, k]`` instead of ``mill[1, off+k]``.)
-      unsigned cursor = 0, tripletSeen = 0;
+      unsigned cursor = 0;
+      unsigned tripletSeen = 0;
       bool found = false;
-      for (unsigned k = 0; k < triplets.size(); ++k) {
-        if (triplets[k]) {
+      for (bool const triplet : triplets) {
+        if (triplet) {
           if (tripletSeen == dim) {
             found = true;
             break;
@@ -304,7 +305,7 @@ std::string buildDesignateIndexExpr(hlfir::DesignateOp dg, unsigned dim, mlir::V
       auto idxOps = parentDg.getIndices();
       if (found && cursor < idxOps.size()) {
         if (auto lo = traceConstInt(idxOps[cursor])) {
-          int64_t adjust = *lo - 1;
+          int64_t const adjust = *lo - 1;
           if (adjust > 0)
             raw = "(" + raw + " + " + std::to_string(adjust) + ")";
           else if (adjust < 0)
@@ -332,8 +333,10 @@ std::string buildDesignateIndexExpr(hlfir::DesignateOp dg, unsigned dim, mlir::V
   auto outer = asAssumedShapeAlias(declOp);
   if (!outer) return raw;
   auto lbs = declareLowerBounds(outer);
-  if (dim >= lbs.size() || !lbs[dim]) return raw;
-  int64_t adjust = *lbs[dim] - 1;
+  if (dim >= lbs.size()) return raw;
+  auto const& lb = lbs[dim];
+  if (!lb) return raw;
+  int64_t const adjust = *lb - 1;
   if (adjust == 0) return raw;
   if (adjust > 0) return "(" + raw + " + " + std::to_string(adjust) + ")";
   return "(" + raw + " - " + std::to_string(-adjust) + ")";
@@ -516,7 +519,7 @@ std::string buildExpr(mlir::Value val, int d) {
     // ``kind="loop"`` AST level, so downstream reads of a loop
     // result resolve to "the accumulator after the loop ran".
     auto initArgs = doLoop.getInitArgs();
-    unsigned resultIdx = mlir::cast<mlir::OpResult>(val).getResultNumber();
+    unsigned const resultIdx = mlir::cast<mlir::OpResult>(val).getResultNumber();
     unsigned iterIdx = resultIdx;
     // When the op has the finalValue result, results[0] is the
     // induction var and results[1..] are the iter_args.  Detect by
@@ -549,7 +552,7 @@ std::string buildExpr(mlir::Value val, int d) {
       // counter via a convert (``%init = fir.convert %c1``, not a
       // load -- Strategy 1 doesn't fire).
       auto& body = doLoop.getRegion().front();
-      mlir::Value iterArg = body.getArgument(iterIdx + 1);  // +1: skip induction
+      mlir::Value const iterArg = body.getArgument(iterIdx + 1);  // +1: skip induction
       for (auto& op : body) {
         if (auto st = mlir::dyn_cast<fir::StoreOp>(op)) {
           if (st.getValue() == iterArg) {
@@ -663,7 +666,7 @@ std::string buildExpr(mlir::Value val, int d) {
   // ``<arr>_allocated`` scalar that ``extract_vars`` registers and
   // the AST builder maintains at ALLOCATE / DEALLOCATE sites.
   if (auto cmp = mlir::dyn_cast<mlir::arith::CmpIOp>(def)) {
-    if (mlir::Value src = matchAssociatedStatusBoxRef(cmp))
+    if (mlir::Value const src = matchAssociatedStatusBoxRef(cmp))
       if (auto arrName = traceToDecl(src); !arrName.empty()) return arrName + "_allocated";
   }
 
@@ -720,7 +723,7 @@ std::string buildExpr(mlir::Value val, int d) {
         if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(adef)) arrName = extractName(decl.getUniqName().str());
     }
     if (!dimC || arrName.empty()) return "?";
-    unsigned dim = static_cast<unsigned>(*dimC);
+    auto const dim = static_cast<unsigned>(*dimC);
 
     // Try to get the extent / lb from the declare's shape operand.
     // For inlined assumed-shape callee aliases (no shape on the
@@ -800,7 +803,7 @@ std::string buildExpr(mlir::Value val, int d) {
       if (shapeVal) {
         if (auto ss = mlir::dyn_cast<fir::ShapeShiftOp>(shapeVal.getDefiningOp())) {
           auto ops = ss->getOperands();
-          unsigned lbIdx = 2 * dim;
+          unsigned const lbIdx = 2 * dim;
           if (lbIdx < ops.size()) {
             auto s = buildIndexExpr(ops[lbIdx], d + 1);
             if (!s.empty() && s != "?") return s;
@@ -822,7 +825,7 @@ std::string buildExpr(mlir::Value val, int d) {
       }
       if (auto ss = resolveAllocShapeShift()) {
         auto ops = ss->getOperands();
-        unsigned lbIdx = 2 * dim;
+        unsigned const lbIdx = 2 * dim;
         if (lbIdx < ops.size())
           if (auto c = traceConstInt(ops[lbIdx])) return std::to_string(*c);
       }
@@ -851,7 +854,7 @@ std::string buildExpr(mlir::Value val, int d) {
         }
         if (auto ss = mlir::dyn_cast<fir::ShapeShiftOp>(shapeVal.getDefiningOp())) {
           auto ops = ss->getOperands();
-          unsigned extIdx = 2 * dim + 1;
+          unsigned const extIdx = (2 * dim) + 1;
           if (extIdx < ops.size()) {
             auto s = buildIndexExpr(ops[extIdx], d + 1);
             if (!s.empty() && s != "?") return s;
@@ -862,7 +865,7 @@ std::string buildExpr(mlir::Value val, int d) {
       }
       if (auto ss = resolveAllocShapeShift()) {
         auto ops = ss->getOperands();
-        unsigned extIdx = 2 * dim + 1;
+        unsigned const extIdx = (2 * dim) + 1;
         if (extIdx < ops.size())
           if (auto c = traceConstInt(ops[extIdx])) return std::to_string(*c);
       }
@@ -985,7 +988,7 @@ std::string buildExpr(mlir::Value val, int d) {
       auto coords = ext.getCoor();
       if (coords.size() == 1) {
         if (auto cAttr = mlir::dyn_cast<mlir::IntegerAttr>(coords[0])) {
-          int64_t c = cAttr.getInt();
+          int64_t const c = cAttr.getInt();
           if (c == 0) return "(" + buildExpr(ext.getAdt(), d + 1) + ".real())";
           if (c == 1) return "(" + buildExpr(ext.getAdt(), d + 1) + ".imag())";
         }
@@ -1105,7 +1108,7 @@ std::string buildExpr(mlir::Value val, int d) {
   if (auto call = mlir::dyn_cast<fir::CallOp>(def)) {
     auto callee = call.getCallee();
     if (callee) {
-      llvm::StringRef cname = callee->getRootReference().getValue();
+      llvm::StringRef const cname = callee->getRootReference().getValue();
       // Single-arg pass-through to a Python identifier (math /
       // bare runtime calls).
       static const std::map<llvm::StringRef, std::string> unary_calls = {
@@ -1334,10 +1337,10 @@ std::string buildExpr(mlir::Value val, int d) {
   if (auto conv = mlir::dyn_cast<fir::ConvertOp>(def)) {
     auto inT = conv.getValue().getType();
     auto outT = conv.getRes().getType();
-    bool inIsInt = inT.isInteger(8) || inT.isInteger(16) || inT.isInteger(32) || inT.isInteger(64);
-    bool outIsInt = outT.isInteger(8) || outT.isInteger(16) || outT.isInteger(32) || outT.isInteger(64);
-    bool inIsFloat = mlir::isa<mlir::FloatType>(inT);
-    bool outIsFloat = mlir::isa<mlir::FloatType>(outT);
+    bool const inIsInt = inT.isInteger(8) || inT.isInteger(16) || inT.isInteger(32) || inT.isInteger(64);
+    bool const outIsInt = outT.isInteger(8) || outT.isInteger(16) || outT.isInteger(32) || outT.isInteger(64);
+    bool const inIsFloat = mlir::isa<mlir::FloatType>(inT);
+    bool const outIsFloat = mlir::isa<mlir::FloatType>(outT);
     // Float -> integer: explicit truncating cast.  Use ``dace.intN``
     // so the C++ codegen lowers via ``static_cast<int{32,64}>``.
     if (inIsFloat && outIsInt) {
@@ -1405,7 +1408,7 @@ std::string buildExpr(mlir::Value val, int d) {
   // and lowers to Python ``^``.  MLIR's ``arith.constant true`` stores
   // the i1 value as -1 (all-bits set) on most targets, so match 1 / -1.
   if (nm == "arith.xori" && def->getNumOperands() == 2) {
-    bool i1_operands = def->getOperand(0).getType().isInteger(1);
+    bool const i1_operands = def->getOperand(0).getType().isInteger(1);
     auto* rhs = def->getOperand(1).getDefiningOp();
     if (i1_operands) {
       if (auto c = mlir::dyn_cast_or_null<mlir::arith::ConstantOp>(rhs))
@@ -1440,7 +1443,7 @@ std::string buildExpr(mlir::Value val, int d) {
       // ``buildExpr``, the tasklet renderer; emit_tasklet wires
       // ``a[i]`` subscripts through memlets and rewrites the
       // bare ``a`` to a ``_in_a_N`` connector).
-      NoSubscriptGuard _g;
+      NoSubscriptGuard const _g;
       auto b = buildBoolExpr(val, d + 1);
       if (b != "?") return b;
     } else {
@@ -1563,7 +1566,7 @@ std::string buildExpr(mlir::Value val, int d) {
     // outer ``buildExpr`` calls for the select's true / false sides.
     std::string condExpr;
     {
-      NoSubscriptGuard _g;
+      NoSubscriptGuard const _g;
       condExpr = buildBoolExpr(sel.getCondition(), d + 1);
     }
     if (condExpr == "?") condExpr = buildExpr(sel.getCondition(), d + 1);
@@ -1664,7 +1667,7 @@ std::string buildExpr(mlir::Value val, int d) {
         // f64-widened ``0.10000000149011612``.  Wrapped in
         // ``dace.float32(...)`` the two are bit-identical, but
         // the short form stays close to the Fortran source.
-        float fv = static_cast<float>(f.getValueAsDouble());
+        auto const fv = static_cast<float>(f.getValueAsDouble());
         for (int prec = 1; prec <= 9; ++prec) {
           std::ostringstream o;
           o << std::setprecision(prec) << fv;
@@ -1686,7 +1689,7 @@ std::string buildExpr(mlir::Value val, int d) {
         // bloats the generated C++ and surfaced as noise in graupel
         // constants the user flagged.  Try shortest -> longer and
         // accept the first that round-trips.
-        double dv = f.getValueAsDouble();
+        double const dv = f.getValueAsDouble();
         // ``-0.0`` short-circuit: IEEE 754 says ``-0.0 == +0.0`` so
         // the round-trip loop below would accept ``"0"`` -> +0.0 and
         // silently drop the sign.  But the sign IS observable in
@@ -1772,7 +1775,7 @@ std::string buildExpr(mlir::Value val, int d) {
           // iter names the outer elemental already set up.
           for (unsigned i = 0; i < block.getNumArguments() && i < apply_idxs.size(); ++i) {
             auto name = resolveIndex(apply_idxs[i]);
-            indexStack().push_back({block.getArgument(i), name});
+            indexStack().emplace_back(block.getArgument(i), name);
             ++pushed;
           }
           std::string result = "?";
@@ -1836,7 +1839,7 @@ std::string buildExpr(mlir::Value val, int d) {
     if (indices.empty()) return name;
     auto triplets = dg.getIsTriplet();
     bool anyTriplet = false;
-    for (bool t : triplets) {
+    for (bool const t : triplets) {
       if (t) {
         anyTriplet = true;
         break;
@@ -1879,9 +1882,9 @@ std::string buildExpr(mlir::Value val, int d) {
       }
       return "?";
     };
-    std::string thenVal = extractYield(ifOp.getThenRegion());
-    std::string elseVal = extractYield(ifOp.getElseRegion());
-    std::string condStr = buildExpr(ifOp.getCondition(), d + 1);
+    std::string const thenVal = extractYield(ifOp.getThenRegion());
+    std::string const elseVal = extractYield(ifOp.getElseRegion());
+    std::string const condStr = buildExpr(ifOp.getCondition(), d + 1);
     return "(" + thenVal + " if " + condStr + " else " + elseVal + ")";
   }
 
@@ -1902,7 +1905,7 @@ std::string buildExpr(mlir::Value val, int d) {
   // fallback paths.  Migration to explicit throws is captured in
   // ``tasks/audit_question_mark_emissions.md``.
   {
-    std::string op_name = def->getName().getStringRef().str();
+    std::string const op_name = def->getName().getStringRef().str();
     std::string loc;
     llvm::raw_string_ostream os(loc);
     def->getLoc().print(os);

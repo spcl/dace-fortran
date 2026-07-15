@@ -79,6 +79,7 @@ namespace hlfir_bridge {
 namespace {
 
 struct UnwrapEvalInMemPass : public mlir::PassWrapper<UnwrapEvalInMemPass, mlir::OperationPass<mlir::ModuleOp>> {
+  // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(UnwrapEvalInMemPass)
 
   llvm::StringRef getArgument() const final { return "hlfir-unwrap-eval-in-mem"; }
@@ -126,7 +127,7 @@ struct UnwrapEvalInMemPass : public mlir::PassWrapper<UnwrapEvalInMemPass, mlir:
   /// separate ``r``), fall back to a fresh alloca + body splice; the
   /// bridge's ``fir.save_result`` support is needed for that path and
   /// remains a separate item.
-  bool rewriteOne(hlfir::EvaluateInMemoryOp op, unsigned& counter) {
+  static bool rewriteOne(hlfir::EvaluateInMemoryOp op, unsigned& counter) {
     auto& body = op.getBody();
     if (body.empty()) return false;
     auto* entry = &body.front();
@@ -230,7 +231,7 @@ struct UnwrapEvalInMemPass : public mlir::PassWrapper<UnwrapEvalInMemPass, mlir:
     // support to lower correctly -- pinned as a follow-up.
     auto loc = op.getLoc();
     auto alloca = builder.create<fir::AllocaOp>(loc, arrTy);
-    std::string name = "_eval_in_mem_" + std::to_string(counter++);
+    std::string const name = "_eval_in_mem_" + std::to_string(counter++);
     auto refTy = fir::ReferenceType::get(arrTy);
     auto declare = builder.create<hlfir::DeclareOp>(loc,
                                                     /*resultType0=*/refTy,
@@ -284,7 +285,7 @@ struct UnwrapEvalInMemPass : public mlir::PassWrapper<UnwrapEvalInMemPass, mlir:
   /// copy from a stack-local), which ``hlfir-flatten-structs``
   /// rewrites into per-member companions just like any user-declared
   /// struct assignment.
-  void rewriteResultBuffers(mlir::ModuleOp module) {
+  static void rewriteResultBuffers(mlir::ModuleOp module) {
     // Collect all ``.result``-named allocas in one walk so we can
     // mutate without invalidating the walker.
     llvm::SmallVector<fir::AllocaOp, 8> bufs;

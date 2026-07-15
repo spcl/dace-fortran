@@ -184,7 +184,7 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
       // (see tests/lu_two_call_convergence_repro_test.py).
       std::vector<AccessInfo> condAccesses;
       collectReadAccesses(condVal, condAccesses, 0);
-      int brkId = kBrkCounter++;
+      int const brkId = kBrkCounter++;
       if (condAccesses.empty()) {
         // Pure scalar / counter condition -- a symbol snapshot is exact
         // (no array reads to keep off the interstate edge).
@@ -305,8 +305,8 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
       // reduction / elemental shapes stay recognised inside the loop.
       auto src = assign.getOperand(0);
       auto dst = assign.getOperand(1);
-      bool dst_is_array = isArrayRef(dst.getType());
-      bool src_is_array = isArrayRef(src.getType());
+      bool const dst_is_array = isArrayRef(dst.getType());
+      bool const src_is_array = isArrayRef(src.getType());
       // Whole-array ELEMENTWISE assign inside the loop body
       // (``a = a*2``, ``a = a - 1`` in a ``do while``).  The RHS is an
       // ``hlfir.elemental`` whose result type is an ``!hlfir.expr<?>``
@@ -432,7 +432,7 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
       auto& loopBlock = doLoop.getRegion().front();
       if (n.loop_iter.empty() && loopBlock.getNumArguments() > 0) {
         n.loop_iter = "_scfdoit_" + std::to_string(kSCFDoLoopIterCounter++);
-        indexStack().push_back({loopBlock.getArgument(0), n.loop_iter});
+        indexStack().emplace_back(loopBlock.getArgument(0), n.loop_iter);
         pushedBlockArg = true;
       }
       n.children = buildAST(loopBlock);
@@ -828,8 +828,8 @@ static ASTNode buildQePencilCallNode(fir::CallOp call, const std::string& axisTa
   ASTNode n;
   auto args = call.getArgOperands();
   if (args.size() < 6) return n;
-  std::string cin = traceToDecl(args[0]);
-  std::string cout = traceToDecl(args[5]);
+  std::string const cin = traceToDecl(args[0]);
+  std::string const cout = traceToDecl(args[5]);
   if (cin.empty() || cout.empty()) return n;
   // isign: positive = backward, negative = forward.  When the literal
   // is unavailable we conservatively pick forward.
@@ -869,8 +869,8 @@ static ASTNode buildQeScatterCallNode(fir::CallOp call, const std::string& plane
   ASTNode n;
   auto args = call.getArgOperands();
   if (args.size() < 5) return n;
-  std::string sendbuf = traceToDecl(args[1]);
-  std::string recvbuf = traceToDecl(args[2]);
+  std::string const sendbuf = traceToDecl(args[1]);
+  std::string const recvbuf = traceToDecl(args[2]);
   if (sendbuf.empty() || recvbuf.empty()) return n;
   n.kind = "mpicall";
   n.callee = "mpi_alltoall";
@@ -890,7 +890,7 @@ static ASTNode buildQeFftCallNode(fir::CallOp call, const std::string& direction
   ASTNode n;
   auto args = call.getArgOperands();
   if (args.size() < 2) return n;
-  std::string buf = traceToDecl(args[1]);
+  std::string const buf = traceToDecl(args[1]);
   if (buf.empty()) return n;
   n.kind = "fftcall";
   n.callee = "fft_execute";
@@ -904,7 +904,7 @@ static ASTNode buildQeFftCallNode(fir::CallOp call, const std::string& direction
 /// those library's call conventions; else empty.  Used by the dispatch
 /// loop's near-miss detector.
 static std::string libraryFamilyTag(const std::string& callee) {
-  std::string low = normaliseBlasName(callee);
+  std::string const low = normaliseBlasName(callee);
   if (low.rfind("mpi_", 0) == 0) return "mpi";
   if (low.rfind("fftw_", 0) == 0 || low.rfind("fftwf_", 0) == 0) return "fftw3";
   if (knownBlasNames().count(low)) return "blas";
@@ -1318,7 +1318,7 @@ static std::string traceMpiCountExpr(mlir::Value ref) {
   // Post-pipeline: the by-value temp is a materialised ``__assoc_scalar_N``
   // written once with the value -- render the stored value's expression (a
   // constant, or a clean symbolic form like ``n - 1``).
-  if (mlir::Value stored = ioStoredValue(ref)) {
+  if (mlir::Value const stored = ioStoredValue(ref)) {
     if (auto c = traceConstInt(stored)) return std::to_string(*c);
     auto e = buildIndexExpr(stored, 0);
     if (!e.empty() && e != "?" && e.find("assoc_scalar") == std::string::npos) return e;
@@ -1358,7 +1358,7 @@ static std::string collectiveBufferSubset(mlir::Value bufOp, mlir::Value countOp
   // ``0:count``.  Empty when the count is not cleanly recoverable -> the
   // emitter marshals the full declared extent (the Fortran count is lost).
   if (countOp) {
-    std::string count = traceMpiCountExpr(countOp);
+    std::string const count = traceMpiCountExpr(countOp);
     if (!count.empty()) return "0:" + count;
   }
   return std::string{};
@@ -1379,11 +1379,11 @@ static std::string mpiScalarElementSubset(mlir::Value v) {
     if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(d)) {
       auto idxs = dg.getIndices();
       if (idxs.empty()) return std::string{};  // component / whole-array designate
-      for (bool t : dg.getIsTriplet())
+      for (bool const t : dg.getIsTriplet())
         if (t) return std::string{};  // an array section, not a single element
       std::string joined;
       for (auto idx : idxs) {
-        std::string e = buildIndexExpr(idx, 0);
+        std::string const e = buildIndexExpr(idx, 0);
         if (e.empty() || e == "?") return std::string{};
         if (!joined.empty()) joined += ", ";
         joined += "(" + e + ") - 1";
@@ -1436,7 +1436,7 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
     // request set names its count variable (``nreq``); a by-reference integer
     // literal has no name -> ``buildExpr`` renders "?" and the emitter falls back
     // to the emitted post count (correct for a straight-line waitall).
-    std::string reqCount = traceToDecl(args[0]);
+    std::string const reqCount = traceToDecl(args[0]);
     n.options["mpi_req_count"] = reqCount.empty() ? buildExpr(args[0], 0) : reqCount;
     n.options["mpi_req_extent"] = mpiRequestSlotExtent(args[1]).second;
     return n;
@@ -1447,8 +1447,8 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
     //              recvtype, comm, ierr)
     if (args.size() < 7)
       throw std::runtime_error("MPI mpi_alltoall: unexpected argument count " + std::to_string(args.size()));
-    std::string sendbuf = resolve(args[0], "sendbuf");
-    std::string recvbuf = resolve(args[3], "recvbuf");
+    std::string const sendbuf = resolve(args[0], "sendbuf");
+    std::string const recvbuf = resolve(args[3], "recvbuf");
     n.call_args = {sendbuf, recvbuf};
     // Section offset (``sbuf(k:)``) only -> 0-based buffer subsets.  The
     // alltoall count is PER-RANK (the buffer holds ``count * comm_size``
@@ -1458,9 +1458,10 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
     n.call_arg_subsets = {collectiveBufferSubset(args[0], mlir::Value{}),
                           collectiveBufferSubset(args[3], mlir::Value{})};
     // comm decoding -- same rule as send/recv.  Append on a runtime/user comm.
-    std::string commName = traceToDecl(args[6]);
-    std::string low = llvm::StringRef(commName).lower();
-    bool isDefault = commName.empty() || low.rfind("__", 0) == 0 || low.find("mpi_comm_world") != std::string::npos;
+    std::string const commName = traceToDecl(args[6]);
+    std::string const low = llvm::StringRef(commName).lower();
+    bool const isDefault =
+        commName.empty() || low.rfind("__", 0) == 0 || low.find("mpi_comm_world") != std::string::npos;
     if (!isDefault) n.call_args.push_back(commName);
     return n;
   }
@@ -1468,9 +1469,9 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
   // Decode a (possibly default-WORLD) communicator operand: returns the name to
   // append to ``call_args`` (empty -> default ``MPI_COMM_WORLD``, append nothing).
   auto commArg = [&](mlir::Value v) -> std::string {
-    std::string name = traceToDecl(v);
-    std::string low = llvm::StringRef(name).lower();
-    bool isDefault = name.empty() || low.rfind("__", 0) == 0 || low.find("mpi_comm_world") != std::string::npos;
+    std::string const name = traceToDecl(v);
+    std::string const low = llvm::StringRef(name).lower();
+    bool const isDefault = name.empty() || low.rfind("__", 0) == 0 || low.find("mpi_comm_world") != std::string::npos;
     return isDefault ? std::string{} : name;
   };
 
@@ -1478,7 +1479,7 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
     // MPI_Barrier(comm, ierr) -- pure synchronisation, no data.
     if (args.empty()) throw std::runtime_error("MPI mpi_barrier: no communicator argument");
     n.call_args = {};
-    std::string c = commArg(args[0]);
+    std::string const c = commArg(args[0]);
     if (!c.empty()) n.call_args.push_back(c);
     return n;
   }
@@ -1487,14 +1488,14 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
     // MPI_Allreduce(sendbuf, recvbuf, count, datatype, op, comm, ierr)
     if (args.size() < 7)
       throw std::runtime_error("MPI mpi_allreduce: unexpected argument count " + std::to_string(args.size()));
-    std::string sendbuf = resolve(args[0], "sendbuf");
-    std::string recvbuf = resolve(args[1], "recvbuf");
-    std::string op = traceToDecl(args[4]);  // MPI_MAX / MPI_MIN / MPI_SUM / ...
+    std::string const sendbuf = resolve(args[0], "sendbuf");
+    std::string const recvbuf = resolve(args[1], "recvbuf");
+    std::string const op = traceToDecl(args[4]);  // MPI_MAX / MPI_MIN / MPI_SUM / ...
     n.call_args = {sendbuf, recvbuf, op};
     // Section offset (``sbuf(k:)``) + Fortran count -> 0-based buffer subsets
     // (op arg carries no subset); empty => whole-array fallback.
     n.call_arg_subsets = {collectiveBufferSubset(args[0], args[2]), collectiveBufferSubset(args[1], args[2]), ""};
-    std::string c = commArg(args[5]);
+    std::string const c = commArg(args[5]);
     if (!c.empty()) n.call_args.push_back(c);
     return n;
   }
@@ -1503,13 +1504,13 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
     // MPI_Bcast(buffer, count, datatype, root, comm, ierr)
     if (args.size() < 6)
       throw std::runtime_error("MPI mpi_bcast: unexpected argument count " + std::to_string(args.size()));
-    std::string buffer = resolve(args[0], "buffer");
-    std::string root = resolve(args[3], "root");
+    std::string const buffer = resolve(args[0], "buffer");
+    std::string const root = resolve(args[3], "root");
     n.call_args = {buffer, root};
     // Section offset (``buf(k:)``) + Fortran count -> 0-based buffer subset
     // (root arg carries no subset); empty => whole-array fallback.
     n.call_arg_subsets = {collectiveBufferSubset(args[0], args[1]), ""};
-    std::string c = commArg(args[4]);
+    std::string const c = commArg(args[4]);
     if (!c.empty()) n.call_args.push_back(c);
     return n;
   }
@@ -1518,7 +1519,7 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
     // MPI_Comm_rank(comm, rank, ierr) -- query this process's rank into ``rank``.
     if (args.size() < 2) throw std::runtime_error("MPI mpi_comm_rank: expected (comm, rank, ...)");
     n.call_args = {resolve(args[1], "rank")};
-    std::string c = commArg(args[0]);
+    std::string const c = commArg(args[0]);
     if (!c.empty()) n.call_args.push_back(c);
     return n;
   }
@@ -1527,7 +1528,7 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
     // MPI_Comm_size(comm, size, ierr) -- query the communicator's rank count.
     if (args.size() < 2) throw std::runtime_error("MPI mpi_comm_size: expected (comm, size, ...)");
     n.call_args = {resolve(args[1], "size")};
-    std::string c = commArg(args[0]);
+    std::string const c = commArg(args[0]);
     if (!c.empty()) n.call_args.push_back(c);
     return n;
   }
@@ -1536,7 +1537,7 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
     // MPI_Comm_split(comm, color, key, newcomm, ierr) -- split into sub-comms.
     if (args.size() < 4) throw std::runtime_error("MPI mpi_comm_split: expected (comm, color, key, newcomm, ...)");
     n.call_args = {resolve(args[1], "color"), resolve(args[2], "key"), resolve(args[3], "newcomm")};
-    std::string c = commArg(args[0]);
+    std::string const c = commArg(args[0]);
     if (!c.empty()) n.call_args.push_back(c);
     return n;
   }
@@ -1547,13 +1548,13 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
     // its value so the emitter can materialise a scalar for the ``_errorcode``
     // connector; a variable errorcode rides ``call_args``.
     if (args.size() < 2) throw std::runtime_error("MPI mpi_abort: expected (comm, errorcode, ...)");
-    std::string errorcode = traceToDecl(args[1]);
+    std::string const errorcode = traceToDecl(args[1]);
     n.call_args = {errorcode};  // "" when the errorcode is a literal
     if (errorcode.empty()) {
-      std::string lit = traceMpiCountExpr(args[1]);
+      std::string const lit = traceMpiCountExpr(args[1]);
       n.options["mpi_errorcode"] = lit.empty() ? "1" : lit;
     }
-    std::string c = commArg(args[0]);
+    std::string const c = commArg(args[0]);
     if (!c.empty()) n.call_args.push_back(c);
     return n;
   }
@@ -1569,7 +1570,7 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
     // element (rare) -> element subset; else empty (whole scalar).
     n.call_arg_subsets = {collectiveBufferSubset(args[0], mlir::Value{}),
                           collectiveBufferSubset(args[3], mlir::Value{}), "", "", mpiScalarElementSubset(args[7])};
-    std::string c = commArg(args[8]);
+    std::string const c = commArg(args[8]);
     if (!c.empty()) n.call_args.push_back(c);
     return n;
   }
@@ -1581,7 +1582,7 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
     n.call_args = {resolve(args[0], "sendbuf"), resolve(args[3], "recvbuf"), resolve(args[6], "root")};
     n.call_arg_subsets = {collectiveBufferSubset(args[0], args[1]), collectiveBufferSubset(args[3], mlir::Value{}),
                           mpiScalarElementSubset(args[6])};
-    std::string c = commArg(args[7]);
+    std::string const c = commArg(args[7]);
     if (!c.empty()) n.call_args.push_back(c);
     return n;
   }
@@ -1590,21 +1591,21 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
     // MPI_Reduce(sendbuf, recvbuf, count, datatype, op, root, comm, ierr).
     if (args.size() < 7)
       throw std::runtime_error("MPI mpi_reduce: unexpected argument count " + std::to_string(args.size()));
-    std::string op = traceToDecl(args[4]);  // MPI_SUM / MPI_MAX / ... handle name
+    std::string const op = traceToDecl(args[4]);  // MPI_SUM / MPI_MAX / ... handle name
     n.call_args = {resolve(args[0], "sendbuf"), resolve(args[1], "recvbuf"), op, resolve(args[5], "root")};
     n.call_arg_subsets = {collectiveBufferSubset(args[0], args[2]), collectiveBufferSubset(args[1], args[2]), "",
                           mpiScalarElementSubset(args[5])};
-    std::string c = commArg(args[6]);
+    std::string const c = commArg(args[6]);
     if (!c.empty()) n.call_args.push_back(c);
     return n;
   }
 
   if (args.size() < 6)
     throw std::runtime_error("MPI " + mpiOp + ": unexpected argument count " + std::to_string(args.size()));
-  bool isSendLike = (mpiOp == "mpi_send" || mpiOp == "mpi_isend");
-  std::string buf = resolve(args[0], "buffer");
-  std::string partner = resolve(args[3], isSendLike ? "dest" : "src");
-  std::string tag = resolve(args[4], "tag");
+  bool const isSendLike = (mpiOp == "mpi_send" || mpiOp == "mpi_isend");
+  std::string const buf = resolve(args[0], "buffer");
+  std::string const partner = resolve(args[3], isSendLike ? "dest" : "src");
+  std::string const tag = resolve(args[4], "tag");
 
   // comm (arg 5).  Flang materialises a ``parameter`` / literal
   // ``MPI_COMM_WORLD`` as a compiler-synthetic entity (``__assoc_scalar_*``
@@ -1615,9 +1616,9 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
   // A real named variable (a dummy ``comm`` / ``MPI_Comm_split`` result)
   // is a runtime/user communicator: append it so the builder threads an
   // ``opaque(MPI_Comm)`` ``_comm`` connector into the libnode.
-  std::string commName = traceToDecl(args[5]);
-  std::string low = llvm::StringRef(commName).lower();
-  bool isDefault = commName.empty() || low.rfind("__", 0) == 0 || low.find("mpi_comm_world") != std::string::npos;
+  std::string const commName = traceToDecl(args[5]);
+  std::string const low = llvm::StringRef(commName).lower();
+  bool const isDefault = commName.empty() || low.rfind("__", 0) == 0 || low.find("mpi_comm_world") != std::string::npos;
 
   n.call_args = {buf, partner, tag};
   // Render an indexed scalar dest/src/tag (``neighbors(i)``) as an element
@@ -1664,9 +1665,10 @@ static std::string decodeCharLiteralSymbol(llvm::StringRef sym) {
   };
   std::string out;
   for (size_t i = 0; i + 1 < sym.size() + 1 && i + 1 <= sym.size(); i += 2) {
-    int hi = hexVal(sym[i]), lo = hexVal(sym[i + 1]);
+    int const hi = hexVal(sym[i]);
+    int const lo = hexVal(sym[i + 1]);
     if (hi < 0 || lo < 0) return {};
-    out.push_back(static_cast<char>(hi * 16 + lo));
+    out.push_back(static_cast<char>((hi * 16) + lo));
   }
   // Namelist group / member name literals carry a trailing NUL the filename
   // / status literals do not; drop it so the decoded name is a clean token.
@@ -1744,7 +1746,7 @@ static void extractNamelist(mlir::Value descRef, std::string& group, std::vector
     }
     break;
   }
-  mlir::Value top = ioStoredValue(descRef);
+  mlir::Value const top = ioStoredValue(descRef);
   if (!top) return;
   group = ioLiteralString(ioInsertedAt(top, 0));
   mlir::Value memberArr = ioStoredValue(ioInsertedAt(top, 2));
@@ -1760,7 +1762,7 @@ static void extractNamelist(mlir::Value descRef, std::string& group, std::vector
       if (auto slot = mlir::dyn_cast<mlir::IntegerAttr>(coor[1]))
         if (slot.getInt() == 0)
           if (auto mi = mlir::dyn_cast<mlir::IntegerAttr>(coor[0])) {
-            std::string nm = ioLiteralString(iv.getVal());
+            std::string const nm = ioLiteralString(iv.getVal());
             if (!nm.empty()) byIndex.emplace_back(mi.getInt(), nm);
           }
     memberArr = iv.getAdt();
@@ -1814,7 +1816,7 @@ static std::string fftw3CalleeTag(const std::string& callee) {
   if (s.rfind("_QP", 0) == 0) s.erase(0, 3);  // external/global mangling
   // Strip optional trailing underscore (older Fortran external mangling).
   while (!s.empty() && s.back() == '_') s.pop_back();
-  std::string low = llvm::StringRef(s).lower();
+  std::string const low = llvm::StringRef(s).lower();
   if (low == "fftw_plan_dft_2d" || low == "fftwf_plan_dft_2d") return "fft_plan_2d";
   if (low == "fftw_plan_dft_3d" || low == "fftwf_plan_dft_3d") return "fft_plan_3d";
   if (low == "fftw_execute_dft" || low == "fftwf_execute_dft") return "fft_execute";
@@ -1836,7 +1838,7 @@ static ASTNode buildFftw3CallNode(fir::CallOp call, const std::string& fftOp,
 
   if (fftOp == "fft_plan_2d" || fftOp == "fft_plan_3d") {
     // Signature: fftw_plan_dft_{2,3}d(n0, n1[, n2], in, out, sign, flags)
-    int rank = (fftOp == "fft_plan_2d") ? 2 : 3;
+    int const rank = (fftOp == "fft_plan_2d") ? 2 : 3;
     if ((int)args.size() < rank + 4) return n;  // safety -- malformed call
     FftPlanInfo info;
     info.rank = rank;
@@ -1868,9 +1870,9 @@ static ASTNode buildFftw3CallNode(fir::CallOp call, const std::string& fftOp,
   if (fftOp == "fft_execute") {
     // Signature: fftw_execute_dft(plan, in, out)
     if (args.size() < 3) return n;
-    std::string planVar = traceToDecl(args[0]);
-    std::string inArr = traceToDecl(args[1]);
-    std::string outArr = traceToDecl(args[2]);
+    std::string const planVar = traceToDecl(args[0]);
+    std::string const inArr = traceToDecl(args[1]);
+    std::string const outArr = traceToDecl(args[2]);
     if (planVar.empty() || inArr.empty()) return n;
     auto it = plans.find(planVar);
     if (it == plans.end()) return n;  // unknown plan -- give up cleanly
@@ -1918,7 +1920,7 @@ static void recognizeIoCall(fir::CallOp call, llvm::StringRef c, IoState& s, std
     // A transfer item: Input/OutputDescriptor(box) or the scalar
     // Input/OutputReal*/Integer*(ref); operand 1 is the data.
     if (!s.op.empty() && args.size() >= 2) {
-      std::string nm = traceToDecl(args[1]);
+      std::string const nm = traceToDecl(args[1]);
       if (!nm.empty()) s.items.push_back(nm);
     }
   } else if (c.contains("BeginClose")) {
@@ -1989,10 +1991,10 @@ static std::string tryMaterialiseAllAnyCond(mlir::Value condVal, std::vector<AST
   }
   auto* def = v.getDefiningOp();
   if (!def) return "";
-  bool isAll = mlir::isa<hlfir::AllOp>(def);
-  bool isAny = mlir::isa<hlfir::AnyOp>(def);
+  bool const isAll = mlir::isa<hlfir::AllOp>(def);
+  bool const isAny = mlir::isa<hlfir::AnyOp>(def);
   if ((!isAll && !isAny) || def->getNumOperands() == 0) return "";
-  std::string maskName = traceToDecl(def->getOperand(0));
+  std::string const maskName = traceToDecl(def->getOperand(0));
   if (maskName.empty()) return "";
 
   std::string tr = "__allany_cond_" + std::to_string(kSynthTransientCounter++);
@@ -2003,7 +2005,7 @@ static std::string tryMaterialiseAllAnyCond(mlir::Value condVal, std::vector<AST
   decl.expr = "bool";
   AccessInfo shp;
   shp.array_name = tr;
-  shp.index_exprs.push_back("1");
+  shp.index_exprs.emplace_back("1");
   decl.accesses.push_back(std::move(shp));
   nodes.push_back(std::move(decl));
 
@@ -2026,16 +2028,16 @@ static std::string tryMaterialiseAllAnyCond(mlir::Value condVal, std::vector<AST
 /// two's-complement INT_MAX / INT_MIN literal -- ``inf`` cast to int is UB and
 /// breaks at -O0 (integer_reduction_identity_test).  Shared by the array-assign
 /// reduce path (``identityForType``) and the condition-reduction materialiser.
-std::string reductionIdentityForType(llvm::StringRef baseIdent, mlir::Type elemTy) {
+static std::string reductionIdentityForType(llvm::StringRef baseIdent, mlir::Type elemTy) {
   if (baseIdent == "0" || baseIdent == "1" || baseIdent == "True" || baseIdent == "False") return baseIdent.str();
-  bool isInf = (baseIdent == "inf");
-  bool isNegInf = (baseIdent == "-inf");
+  bool const isInf = (baseIdent == "inf");
+  bool const isNegInf = (baseIdent == "-inf");
   if (!isInf && !isNegInf) return baseIdent.str();
   if (auto intTy = mlir::dyn_cast<mlir::IntegerType>(elemTy)) {
-    unsigned w = intTy.getWidth();
+    unsigned const w = intTy.getWidth();
     if (w > 64) return baseIdent.str();
-    int64_t maxVal = (w == 64) ? std::numeric_limits<int64_t>::max() : ((int64_t(1) << (w - 1)) - 1);
-    int64_t minVal = (w == 64) ? std::numeric_limits<int64_t>::min() : (-(int64_t(1) << (w - 1)));
+    int64_t const maxVal = (w == 64) ? std::numeric_limits<int64_t>::max() : ((int64_t(1) << (w - 1)) - 1);
+    int64_t const minVal = (w == 64) ? std::numeric_limits<int64_t>::min() : (-(int64_t(1) << (w - 1)));
     return std::to_string(isInf ? maxVal : minVal);
   }
   return baseIdent.str();
@@ -2094,7 +2096,7 @@ static void materialiseCondReductions(mlir::Value condVal, std::vector<ASTNode>&
       // ``hlfir.designate`` source is left to the const-extent inline-unroll
       // fallback in ``buildExprWithSubscripts`` (a proper section materialiser
       // is a follow-up).
-      mlir::Value src = op->getOperand(0);
+      mlir::Value const src = op->getOperand(0);
       auto* srcDef = src.getDefiningOp();
       std::string srcName;
       std::string srcSubset;  // non-empty -> reduce a VIEW of this parent section
@@ -2116,7 +2118,7 @@ static void materialiseCondReductions(mlir::Value condVal, std::vector<ASTNode>&
       if (srcName.empty())
         if (auto dg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(srcDef)) {
           auto parts = renderDesignateSubsetStrings(dg);
-          std::string parent = traceToDecl(dg.getMemref());
+          std::string const parent = traceToDecl(dg.getMemref());
           if (!parts.empty() && !parent.empty()) {
             srcName = parent;
             for (size_t i = 0; i < parts.size(); ++i) srcSubset += (i ? ", " : "") + parts[i];
@@ -2125,17 +2127,17 @@ static void materialiseCondReductions(mlir::Value condVal, std::vector<ASTNode>&
       // Whole named array (declare / load, not a designate).
       if (srcName.empty() && !(srcDef && mlir::isa<hlfir::DesignateOp>(srcDef))) srcName = traceToDecl(src);
       if (!srcName.empty()) {
-        mlir::Type elemTy = op->getResult(0).getType();
-        std::string dtype = exprDtypeString(elemTy);
-        std::string ident = reductionIdentityForType(spec->identity, elemTy);
-        std::string sc = "__reduce_cond_" + std::to_string(kSynthTransientCounter++);
+        mlir::Type const elemTy = op->getResult(0).getType();
+        std::string const dtype = exprDtypeString(elemTy);
+        std::string const ident = reductionIdentityForType(spec->identity, elemTy);
+        std::string const sc = "__reduce_cond_" + std::to_string(kSynthTransientCounter++);
         ASTNode decl;
         decl.kind = "declare_transient";
         decl.target = sc;
         decl.expr = dtype;
         AccessInfo shp;
         shp.array_name = sc;
-        shp.index_exprs.push_back("1");
+        shp.index_exprs.emplace_back("1");
         decl.accesses.push_back(std::move(shp));
         nodes.push_back(std::move(decl));
 
@@ -2256,7 +2258,7 @@ std::vector<ASTNode> buildReductionAssignNodes(hlfir::AssignOp assign, mlir::Ope
         if (auto* srcOp = srcVal.getDefiningOp()) {
           if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(srcOp)) {
             bool hasTrip = false;
-            for (bool t : dg.getIsTriplet())
+            for (bool const t : dg.getIsTriplet())
               if (t) {
                 hasTrip = true;
                 break;
@@ -2323,7 +2325,7 @@ static void dispatchCallOp(fir::CallOp call, std::vector<ASTNode>& nodes, IoStat
     ref->print(os);
     n.callee = s;
   }
-  std::string mpiOp = mpiCalleeTag(n.callee);
+  std::string const mpiOp = mpiCalleeTag(n.callee);
   if (!mpiOp.empty()) {
     nodes.push_back(buildMpiCallNode(call, mpiOp));
     return;
@@ -2332,7 +2334,7 @@ static void dispatchCallOp(fir::CallOp call, std::vector<ASTNode>& nodes, IoStat
   // only the execute emits an ``fftcall`` ASTNode (the plan-create
   // and destroy are absorbed -- the FFT lib node's expansion owns
   // the plan lifecycle).
-  std::string fftOp = fftw3CalleeTag(n.callee);
+  std::string const fftOp = fftw3CalleeTag(n.callee);
   if (!fftOp.empty()) {
     auto fn = buildFftw3CallNode(call, fftOp, fft_plans);
     if (!fn.kind.empty()) nodes.push_back(std::move(fn));
@@ -2342,7 +2344,7 @@ static void dispatchCallOp(fir::CallOp call, std::vector<ASTNode>& nodes, IoStat
   // (fwfft_y / invfft_y / fwfft_b / invfft_b).  Map to the same
   // ``fftcall`` ASTNode the FFTW3 execute emits so ``emit_fft``
   // handles both uniformly.
-  std::string qeDir = qeFftCalleeTag(n.callee);
+  std::string const qeDir = qeFftCalleeTag(n.callee);
   if (!qeDir.empty()) {
     auto qn = buildQeFftCallNode(call, qeDir);
     if (!qn.kind.empty()) nodes.push_back(std::move(qn));
@@ -2351,12 +2353,12 @@ static void dispatchCallOp(fir::CallOp call, std::vector<ASTNode>& nodes, IoStat
   // QE Fourier interpolation (fft_interpolate_real / _complex).
   // ABI: fft_interpolate(dfft_in, v_in, dfft_out, v_out) -- we use
   // operand 1 as the input array and operand 3 as the output array.
-  std::string qeIntr = qeFftInterpolateCalleeTag(n.callee);
+  std::string const qeIntr = qeFftInterpolateCalleeTag(n.callee);
   if (!qeIntr.empty()) {
     auto args = call.getArgOperands();
     if (args.size() >= 4) {
-      std::string vin = traceToDecl(args[1]);
-      std::string vout = traceToDecl(args[3]);
+      std::string const vin = traceToDecl(args[1]);
+      std::string const vout = traceToDecl(args[3]);
       if (!vin.empty() && !vout.empty()) {
         ASTNode in;
         in.kind = "fft_interpolate";
@@ -2369,14 +2371,14 @@ static void dispatchCallOp(fir::CallOp call, std::vector<ASTNode>& nodes, IoStat
     }
   }
   // QE per-axis pencil FFT (cft_1z / cft_1y / cft_1x).
-  std::string qePencil = qePencilCalleeTag(n.callee);
+  std::string const qePencil = qePencilCalleeTag(n.callee);
   if (!qePencil.empty()) {
     auto pn = buildQePencilCallNode(call, qePencil);
     if (!pn.kind.empty()) nodes.push_back(std::move(pn));
     return;
   }
   // QE pencil-pipeline scatter routines (fft_scatter_xy / fft_scatter_yz).
-  std::string qeScatter = qeScatterCalleeTag(n.callee);
+  std::string const qeScatter = qeScatterCalleeTag(n.callee);
   if (!qeScatter.empty()) {
     auto sn = buildQeScatterCallNode(call, qeScatter);
     if (!sn.kind.empty()) nodes.push_back(std::move(sn));
@@ -2387,14 +2389,14 @@ static void dispatchCallOp(fir::CallOp call, std::vector<ASTNode>& nodes, IoStat
   // ``dace.libraries.blas`` library node.  ``ddot`` is special-cased
   // -- the result-carrying assign handler picks it up at the
   // matching ``hlfir.assign`` site instead.
-  std::string blasOp = blasCalleeTag(n.callee);
+  std::string const blasOp = blasCalleeTag(n.callee);
   if (!blasOp.empty()) {
     auto bn = buildBlasCallNode(call, blasOp);
     if (!bn.kind.empty()) nodes.push_back(std::move(bn));
     return;
   }
   // LAPACK routine call site (DGETRF / DPOTRF / ...).
-  std::string lapOp = lapackCalleeTag(n.callee);
+  std::string const lapOp = lapackCalleeTag(n.callee);
   if (!lapOp.empty()) {
     auto ln = buildLapackCallNode(call, lapOp);
     if (!ln.kind.empty()) nodes.push_back(std::move(ln));
@@ -2406,13 +2408,13 @@ static void dispatchCallOp(fir::CallOp call, std::vector<ASTNode>& nodes, IoStat
   // ``unsupported_libcall`` ASTNode so the Python builder can raise a
   // clear ``NotImplementedError`` (better than silently degrading to a
   // generic ``call`` node that mints ``_out = ?`` placeholders).
-  std::string libFam = libraryFamilyTag(n.callee);
+  std::string const libFam = libraryFamilyTag(n.callee);
   if (!libFam.empty()) {
     // Recognised + supported routines are caught above; reaching here
     // means the callee is in the library-prefix universe but not in
     // the supported set.
-    bool isSupported = !mpiCalleeTag(n.callee).empty() || !fftw3CalleeTag(n.callee).empty() ||
-                       !blasCalleeTag(n.callee).empty() || !lapackCalleeTag(n.callee).empty();
+    bool const isSupported = !mpiCalleeTag(n.callee).empty() || !fftw3CalleeTag(n.callee).empty() ||
+                             !blasCalleeTag(n.callee).empty() || !lapackCalleeTag(n.callee).empty();
     if (!isSupported) {
       ASTNode un;
       un.kind = "unsupported_libcall";
@@ -2504,7 +2506,7 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
     for (unsigned ci = 0; ci < classes.size(); ++ci)
       for (auto site : classes[ci])
         if (site.getOperation() == allocmem.getOperation()) cls = ci;
-    std::string bufName = allocAliasName(raw, cls);
+    std::string const bufName = allocAliasName(raw, cls);
     setAllocAlias(raw, bufName);
     // Bind the buffer's per-dim extent symbol ``<buf>_d<i>`` here, at the
     // site, from the ALLOCATE's own shape operand.  Every ALLOCATE passes
@@ -2517,7 +2519,7 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
     {
       unsigned d = 0;
       for (auto sz : allocmem.getShape()) {
-        std::string ext = traceExtentExpr(sz);
+        std::string const ext = traceExtentExpr(sz);
         if (!ext.empty()) {
           ASTNode an;
           an.kind = "assign";
@@ -2707,7 +2709,7 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       auto& loopBlock = doLoop.getRegion().front();
       if (n.loop_iter.empty() && loopBlock.getNumArguments() > 0) {
         n.loop_iter = "_doit_" + std::to_string(kDoLoopIterCounter++);
-        indexStack().push_back({loopBlock.getArgument(0), n.loop_iter});
+        indexStack().emplace_back(loopBlock.getArgument(0), n.loop_iter);
         pushedBlockArg = true;
       }
       n.children = buildAST(loopBlock);
@@ -2747,7 +2749,7 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
 
       if (auto* sop = src.getDefiningOp()) {
         if (auto call = mlir::dyn_cast<fir::CallOp>(sop)) {
-          std::string callee = canonicalCallee(call);
+          std::string const callee = canonicalCallee(call);
           // ``_FortranANorm2_<bits>`` -> ``Norm2`` lib node.
           if (callee.rfind("_FortranANorm2_", 0) == 0) {
             ASTNode n;
@@ -2759,11 +2761,11 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
             if (n.target.empty()) n.target = traceToDecl(dst);
             n.target_is_array = false;
             auto args = call.getArgOperands();
-            if (args.size() >= 1) {
+            if (!args.empty()) {
               auto srcName = traceToDecl(args[0]);
               if (srcName.empty()) throw std::runtime_error("_FortranANorm2: cannot resolve source array name");
               n.call_args.push_back(srcName);
-              n.call_arg_subsets.push_back("");
+              n.call_arg_subsets.emplace_back("");
             }
             if (args.size() >= 4) {
               if (auto c = traceConstInt(args[3])) {
@@ -2817,7 +2819,7 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
               }
               auto rtcall = mlir::dyn_cast<fir::CallOp>(user);
               if (!rtcall) continue;
-              std::string callee = canonicalCallee(rtcall);
+              std::string const callee = canonicalCallee(rtcall);
               auto rtargs = rtcall.getArgOperands();
               // SPREAD / EOSHIFT: lower directly to the lib node
               // writing INTO the user's destination -- src -> lib node
@@ -2840,7 +2842,7 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
                 n.target = dstName;
                 n.target_is_array = true;
                 n.call_args.push_back(srcName);
-                n.call_arg_subsets.push_back("");
+                n.call_arg_subsets.emplace_back("");
                 if (auto c = traceConstInt(rtargs[2])) n.reduce_axes.push_back(*c - 1);
                 nodes.push_back(std::move(n));
                 goto runtime_call_handled;
@@ -2855,7 +2857,7 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
                 n.target = dstName;
                 n.target_is_array = true;
                 n.call_args.push_back(srcName);
-                n.call_arg_subsets.push_back("");
+                n.call_arg_subsets.emplace_back("");
                 if (auto c = traceConstInt(rtargs[2])) {
                   n.options["shift"] = std::to_string(*c);
                 } else {
@@ -2908,12 +2910,12 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
                   std::string cs;
                   llvm::raw_string_ostream os(cs);
                   ref->print(os);
-                  std::string tag = fftw3CalleeTag(cs);
+                  std::string const tag = fftw3CalleeTag(cs);
                   if (tag != "fft_plan_2d" && tag != "fft_plan_3d") continue;
                   // Confirmed: this assign is the user's ``plan =
                   // fftw_plan_dft_*``.
                   is_fft_plan_assign = true;
-                  std::string planVar = traceToDecl(dst);
+                  std::string const planVar = traceToDecl(dst);
                   if (!planVar.empty()) {
                     FftPlanInfo info;
                     info.rank = (tag == "fft_plan_2d") ? 2 : 3;
@@ -2958,8 +2960,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
           }
         }
       }
-      bool dst_is_array = isArrayRef(dst.getType());
-      bool src_is_array = isArrayRef(src.getType());
+      bool const dst_is_array = isArrayRef(dst.getType());
+      bool const src_is_array = isArrayRef(src.getType());
 
       // ``hlfir.expr``-valued sources (any HLFIR op whose result
       // type peels to ``!hlfir.expr<...>``: ``hlfir.elemental``,
@@ -2984,8 +2986,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       // ignore scalar dims and slice offsets (e.g.
       // ``res(nval, pos(1):pos(2)) = a(nval, pos(3):pos(4))``).
       if (dst_is_array && src_is_array && !src_is_hlfir_expr) {
-        bool dstIsSection = (bool)asSectionDesignate(dst);
-        bool srcIsSection = (bool)asSectionDesignate(src);
+        bool const dstIsSection = (bool)asSectionDesignate(dst);
+        bool const srcIsSection = (bool)asSectionDesignate(src);
         // Either side carrying section info is enough  --  the
         // helper handles bare-decl on whichever side is plain
         // whole-array.  Without this the dst-bare-decl form
@@ -3127,7 +3129,7 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
                 continue;
               }
               // Build the per-element assign: dst(<cidx>) = buildExpr(<val>).
-              std::string val_expr = buildExpr(inner.getOperand(0), 0);
+              std::string const val_expr = buildExpr(inner.getOperand(0), 0);
               if (val_expr.empty() || val_expr == "?") {
                 every_idx_const = false;
                 continue;
@@ -3141,7 +3143,7 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
               wa.array_name = dst_name;
               wa.is_write = true;
               wa.index_exprs.push_back(std::to_string(*cidx));
-              wa.index_vars.push_back("?");
+              wa.index_vars.emplace_back("?");
               a.accesses.push_back(std::move(wa));
               elem_assigns.push_back(std::move(a));
             }
@@ -3301,8 +3303,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
               // qualify.  For ``matmul_transpose``: only arg 1
               // qualifies (LHS transpose is already in the op
               // itself).
-              bool isMatmulFamily = (e.callee == "matmul" || e.callee == "matmul_transpose");
-              bool foldsViaBlas = (e.callee == "matmul" && i < 2) || (e.callee == "matmul_transpose" && i == 1);
+              bool const isMatmulFamily = (e.callee == "matmul" || e.callee == "matmul_transpose");
+              bool const foldsViaBlas = (e.callee == "matmul" && i < 2) || (e.callee == "matmul_transpose" && i == 1);
               if (auto tp = mlir::dyn_cast<hlfir::TransposeOp>(od); tp && isMatmulFamily && foldsViaBlas) {
                 // Defer to buildLibCallNode -- it will see the
                 // hlfir.transpose operand, set the BLAS flag, and
@@ -3336,7 +3338,7 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
                 tcall.target = trName;
                 tcall.target_is_array = true;
                 tcall.call_args.push_back(srcName);
-                tcall.call_arg_subsets.push_back("");
+                tcall.call_arg_subsets.emplace_back("");
                 nodes.push_back(std::move(tcall));
                 elemSubst[i] = std::move(trName);
                 needSubst = true;
@@ -3407,7 +3409,7 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       // (elemental operands -> for-loops); the rendered condition reads the
       // scalars (``s > eps``) instead of inline-unrolling the reduction.
       materialiseCondReductions(ifOp.getCondition(), nodes);
-      std::string allanyScalar = tryMaterialiseAllAnyCond(ifOp.getCondition(), nodes);
+      std::string const allanyScalar = tryMaterialiseAllAnyCond(ifOp.getCondition(), nodes);
       if (!allanyScalar.empty()) {
         // ``__allany_cond_N`` is a boolean SCALAR (the materialised
         // reduction result).  A scalar referenced in a CODE BLOCK (an
@@ -3439,7 +3441,7 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       // (elemental operands -> for-loops); the rendered condition reads the
       // scalars (``s > eps``) instead of inline-unrolling the reduction.
       materialiseCondReductions(ifOp.getCondition(), nodes);
-      std::string allanyScalar = tryMaterialiseAllAnyCond(ifOp.getCondition(), nodes);
+      std::string const allanyScalar = tryMaterialiseAllAnyCond(ifOp.getCondition(), nodes);
       if (!allanyScalar.empty()) {
         // Bare boolean scalar -- see the ``fir.if`` branch above.
         n.condition = allanyScalar;
@@ -3640,7 +3642,7 @@ std::vector<ASTNode> extractAST(mlir::ModuleOp module, const std::string& entry_
         bool moduleScope = u.consume_front("_QM");
         if (moduleScope) {
           moduleScope = false;
-          for (char ch : u)
+          for (char const ch : u)
             if (std::isupper(static_cast<unsigned char>(ch))) {
               moduleScope = (ch == 'E');
               break;
@@ -3671,6 +3673,7 @@ std::vector<ASTNode> extractAST(mlir::ModuleOp module, const std::string& entry_
   if (!kPosSymbolRegistry.empty()) {
     // (symbol name, source array, per-dim 1-based indices).
     std::vector<std::tuple<std::string, std::string, std::vector<int64_t>>> entries;
+    entries.reserve(kPosSymbolRegistry.size());
     for (auto& kv : kPosSymbolRegistry) entries.emplace_back(kv.second, kv.first.first, kv.first.second);
     std::sort(entries.begin(), entries.end());
     std::vector<ASTNode> initNodes;
@@ -3722,14 +3725,14 @@ static std::string scfSwitchValueName(mlir::Value v) {
   // namelist global) is NOT captured: render its real host-bound expression so
   // the case conditions read the bound symbol instead of an unbacked ``__sc_N``
   // that nothing ever assigns (an unresolved free symbol).
-  if (kScfValueMap.count(v)) return scfSynthName(v);
+  if (kScfValueMap.contains(v)) return scfSynthName(v);
   std::string e = buildExpr(v, 0);
   if (!e.empty() && e != "?") return e;
   return scfSynthName(v);  // last-resort: preserves the prior unbacked-synth behaviour
 }
 
 static std::vector<ASTNode> buildIndexSwitchNodes(mlir::scf::IndexSwitchOp sw) {
-  std::string val = scfSwitchValueName(sw.getArg());
+  std::string const val = scfSwitchValueName(sw.getArg());
   auto cases = sw.getCases();  // ArrayRef<int64_t>: one selector value per case
   // Innermost else == the default region's body.
   std::vector<ASTNode> chain;

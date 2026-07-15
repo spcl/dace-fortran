@@ -111,7 +111,7 @@ namespace {
 // Add a project-specific helper at runtime via the ``HLFIR_ERROR_HELPERS``
 // environment variable: a comma-separated list of additional lowercase
 // names appended to this default set.
-static const char* const kDefaultErrorHelpers[] = {
+const char* const kDefaultErrorHelpers[] = {
     "errore",           // Quantum ESPRESSO
     "error",            // generic; many codes
     "finish",           // ICON
@@ -149,33 +149,33 @@ static const char* const kDefaultErrorHelpers[] = {
 ///
 /// Lowercased so the comparison against the default name table is
 /// case-insensitive.
-static std::string demangleTail(llvm::StringRef sym) {
+std::string demangleTail(llvm::StringRef sym) {
   auto last_p = sym.rfind('P');
-  llvm::StringRef tail = last_p == llvm::StringRef::npos ? sym : sym.substr(last_p + 1);
+  llvm::StringRef const tail = last_p == llvm::StringRef::npos ? sym : sym.substr(last_p + 1);
   // ``_QQ`` / numeric mangled suffixes never carry a tail ``P`` in the
   // function-name segment, so the rfind('P') is safe for the cases we
   // care about.  Lowercase manually (StringRef has no .lower()).
   std::string out;
   out.reserve(tail.size());
-  for (char c : tail) out.push_back(static_cast<char>(std::tolower(c)));
+  for (char const c : tail) out.push_back(static_cast<char>(std::tolower(c)));
   return out;
 }
 
 /// Build the active match set: defaults plus anything appended via the
 /// ``HLFIR_ERROR_HELPERS`` env var (comma-separated, whitespace-trimmed,
 /// lowercased).
-static llvm::StringSet<> buildMatchSet() {
+llvm::StringSet<> buildMatchSet() {
   llvm::StringSet<> names;
   for (const char* d : kDefaultErrorHelpers) names.insert(d);
   if (const char* extra = std::getenv("HLFIR_ERROR_HELPERS")) {
     llvm::StringRef src(extra);
     while (!src.empty()) {
       auto split = src.split(',');
-      llvm::StringRef tok = split.first.trim();
+      llvm::StringRef const tok = split.first.trim();
       if (!tok.empty()) {
         std::string lower;
         lower.reserve(tok.size());
-        for (char c : tok) lower.push_back(static_cast<char>(std::tolower(c)));
+        for (char const c : tok) lower.push_back(static_cast<char>(std::tolower(c)));
         names.insert(lower);
       }
       src = split.second;
@@ -189,6 +189,7 @@ static llvm::StringSet<> buildMatchSet() {
 // ---------------------------------------------------------------------------
 
 struct StripErrorHelpersPass : public mlir::PassWrapper<StripErrorHelpersPass, mlir::OperationPass<mlir::ModuleOp>> {
+  // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(StripErrorHelpersPass)
 
   llvm::StringRef getArgument() const final { return "hlfir-strip-error-helpers"; }
@@ -207,7 +208,7 @@ struct StripErrorHelpersPass : public mlir::PassWrapper<StripErrorHelpersPass, m
     module.walk([&](fir::CallOp call) {
       auto sym = call.getCallee();
       if (!sym) return;  // indirect call
-      std::string tail = demangleTail(sym->getLeafReference());
+      std::string const tail = demangleTail(sym->getLeafReference());
       if (!names.contains(tail)) return;
 
       // Defensive: only strip CALL-style (no SSA result) sites.

@@ -42,17 +42,8 @@ ASTNode buildSelectCaseChain(fir::SelectCaseOp sel);
 
 std::vector<ASTNode> buildWholeArrayScalarBroadcast(hlfir::AssignOp assign);
 
-void collectReadAccesses(mlir::Value v, std::vector<AccessInfo>& accesses, int depth);
-
-std::string exprDtypeString(mlir::Type ty);
-
-std::vector<std::string> exprResultShape(mlir::Type ty);
-
-std::string lowerIsPresent(mlir::Value operand);
-
-std::string resolveExtent(mlir::Value shape, unsigned d);
-
-std::string resolveIndex(mlir::Value idx);
+// collectReadAccesses / exprDtypeString / exprResultShape / lowerIsPresent /
+// resolveExtent / resolveIndex are declared in ast_helpers.h (included above).
 
 std::string scfSynthName(mlir::Value v);
 

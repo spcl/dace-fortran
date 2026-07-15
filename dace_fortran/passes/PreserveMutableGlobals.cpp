@@ -91,7 +91,7 @@ namespace {
 /// Maximum depth for the address-tracing chain walk.  Plenty of
 /// headroom for ``fir.address_of -> hlfir.declare -> fir.convert ->
 /// hlfir.designate`` cascades the inliner can splice together.
-static constexpr unsigned kTraceDepth = 16;
+constexpr unsigned kTraceDepth = 16;
 
 /// Walk ``v``'s defining chain looking for the ``fir.address_of @sym``
 /// it originated from.  Returns the symbol name on success, empty
@@ -108,7 +108,7 @@ static constexpr unsigned kTraceDepth = 16;
 ///
 /// Anything else (a fresh ``fir.alloca``, a function argument, ...)
 /// breaks the chain -- the write doesn't reach a global.
-static llvm::StringRef traceToGlobalSym(mlir::Value v) {
+llvm::StringRef traceToGlobalSym(mlir::Value v) {
   for (unsigned d = 0; d < kTraceDepth && v; ++d) {
     mlir::Operation* def = v.getDefiningOp();
     if (!def) return {};
@@ -138,6 +138,7 @@ static llvm::StringRef traceToGlobalSym(mlir::Value v) {
 
 struct PreserveMutableGlobalsPass
     : public mlir::PassWrapper<PreserveMutableGlobalsPass, mlir::OperationPass<mlir::ModuleOp>> {
+  // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(PreserveMutableGlobalsPass)
 
   llvm::StringRef getArgument() const final { return "hlfir-preserve-mutable-globals"; }
@@ -164,7 +165,7 @@ struct PreserveMutableGlobalsPass
       } else {
         return;
       }
-      llvm::StringRef sym = traceToGlobalSym(target);
+      llvm::StringRef const sym = traceToGlobalSym(target);
       if (!sym.empty()) writtenSyms.insert(sym);
     });
 
@@ -178,7 +179,7 @@ struct PreserveMutableGlobalsPass
         ++constantKept;
         return;
       }
-      llvm::StringRef sym = g.getSymName();
+      llvm::StringRef const sym = g.getSymName();
       // Function-scope globals are a flang lowering of routine-local
       // ``SAVE``-semantic variables with source-level initialisers
       // (``real :: bob = 1`` inside a subroutine).  They are NOT

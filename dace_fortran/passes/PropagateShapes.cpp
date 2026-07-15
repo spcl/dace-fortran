@@ -51,7 +51,7 @@ namespace {
 
 /// Find the first hlfir.declare that uses `formal` as its memref operand.
 /// This is the dummy argument's declaration inside the callee body.
-static hlfir::DeclareOp findEntryDeclare(mlir::Value formal) {
+hlfir::DeclareOp findEntryDeclare(mlir::Value formal) {
   for (auto* user : formal.getUsers())
     if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(user)) return decl;
   return {};
@@ -59,13 +59,13 @@ static hlfir::DeclareOp findEntryDeclare(mlir::Value formal) {
 
 /// True if a declare already has a local shape operand resolved to Fortran
 /// names  --  no need to propagate, we already know the shape.
-static bool hasLocalShape(hlfir::DeclareOp decl) { return static_cast<bool>(decl.getShape()); }
+bool hasLocalShape(hlfir::DeclareOp decl) { return static_cast<bool>(decl.getShape()); }
 
 /// Walk backward from an actual argument through fir.rebox / fir.embox /
 /// fir.convert to find the shape that described the array at the call
 /// site.  Returns the extent SSA values, or empty if the chain breaks
 /// without finding a shape.
-static llvm::SmallVector<mlir::Value, 4> traceShapeAtCallSite(mlir::Value actual) {
+llvm::SmallVector<mlir::Value, 4> traceShapeAtCallSite(mlir::Value actual) {
   mlir::Value v = actual;
   for (int i = 0; i < limits::kShapeWalkDepth && v; ++i) {
     auto* def = v.getDefiningOp();
@@ -104,7 +104,7 @@ static llvm::SmallVector<mlir::Value, 4> traceShapeAtCallSite(mlir::Value actual
 ///   existing empty or absent -> take new
 ///   existing == new          -> keep
 ///   existing != new          -> ""  (disagreement, fall back to synthetic)
-static mlir::ArrayAttr mergeHint(mlir::MLIRContext* ctx, mlir::ArrayAttr existing, llvm::ArrayRef<std::string> fresh) {
+mlir::ArrayAttr mergeHint(mlir::MLIRContext* ctx, mlir::ArrayAttr existing, llvm::ArrayRef<std::string> fresh) {
   llvm::SmallVector<mlir::Attribute, 4> out;
   out.reserve(fresh.size());
 
@@ -112,13 +112,11 @@ static mlir::ArrayAttr mergeHint(mlir::MLIRContext* ctx, mlir::ArrayAttr existin
     llvm::StringRef old;
     if (existing && i < existing.size()) old = mlir::cast<mlir::StringAttr>(existing[i]).getValue();
 
-    llvm::StringRef neu(fresh[i]);
+    llvm::StringRef const neu(fresh[i]);
     llvm::StringRef chosen;
     if (old.empty())
       chosen = neu;
-    else if (neu.empty())
-      chosen = old;
-    else if (old == neu)
+    else if (neu.empty() || old == neu)
       chosen = old;
     else
       chosen = "";  // disagreement
@@ -133,6 +131,7 @@ static mlir::ArrayAttr mergeHint(mlir::MLIRContext* ctx, mlir::ArrayAttr existin
 // ---------------------------------------------------------------------------
 
 struct PropagateShapesPass : public mlir::PassWrapper<PropagateShapesPass, mlir::OperationPass<mlir::ModuleOp>> {
+  // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(PropagateShapesPass)
 
   llvm::StringRef getArgument() const final { return "hlfir-propagate-shapes"; }
@@ -142,7 +141,7 @@ struct PropagateShapesPass : public mlir::PassWrapper<PropagateShapesPass, mlir:
   }
 
   /// One sweep.  Returns true if it changed any attributes.
-  bool sweep(mlir::ModuleOp module, mlir::SymbolTable& symTab) {
+  static bool sweep(mlir::ModuleOp module, mlir::SymbolTable& symTab) {
     bool changed = false;
     auto* ctx = module.getContext();
 

@@ -84,7 +84,7 @@ std::string buildIndexExpr(mlir::Value v, int d) {
           unsigned pushed = 0;
           for (unsigned i = 0; i < iblock.getNumArguments() && i < apply_idxs.size(); ++i) {
             auto name = resolveIndex(apply_idxs[i]);
-            indexStack().push_back({iblock.getArgument(i), name});
+            indexStack().emplace_back(iblock.getArgument(i), name);
             ++pushed;
           }
           std::string result = "?";
@@ -382,7 +382,7 @@ std::string buildIndexExpr(mlir::Value v, int d) {
         if (resIdx == 0) return "1";
         if (resIdx == 1) {
           auto shp = allocOp.getShape();
-          unsigned udim = static_cast<unsigned>(*dimC);
+          auto const udim = static_cast<unsigned>(*dimC);
           if (udim < shp.size()) {
             auto te = traceExtentExpr(shp[udim]);
             if (!te.empty() && te != "?") return te;
@@ -411,7 +411,7 @@ std::string buildIndexExpr(mlir::Value v, int d) {
             }
           }
           if (shapeVal) {
-            unsigned udim = static_cast<unsigned>(*dimC);
+            auto const udim = static_cast<unsigned>(*dimC);
             if (auto sh = mlir::dyn_cast<fir::ShapeOp>(shapeVal.getDefiningOp())) {
               if (udim < sh.getExtents().size()) {
                 auto te = traceExtentExpr(sh.getExtents()[udim]);
@@ -422,7 +422,7 @@ std::string buildIndexExpr(mlir::Value v, int d) {
             }
             if (auto ss = mlir::dyn_cast<fir::ShapeShiftOp>(shapeVal.getDefiningOp())) {
               auto ops = ss->getOperands();
-              unsigned extIdx = 2 * udim + 1;
+              unsigned const extIdx = (2 * udim) + 1;
               if (extIdx < ops.size()) {
                 auto te = traceExtentExpr(ops[extIdx]);
                 if (!te.empty() && te != "?") return te;
@@ -432,7 +432,7 @@ std::string buildIndexExpr(mlir::Value v, int d) {
             }
           }
         }
-        std::string suffix = "_d" + std::to_string(*dimC);
+        std::string const suffix = "_d" + std::to_string(*dimC);
         if (resIdx == 0) return "offset_" + arrName + suffix;
         if (resIdx == 1) return arrName + suffix;
       }
@@ -509,20 +509,18 @@ std::string buildIndexExpr(mlir::Value v, int d) {
       // Strict and inclusive variants collapse to the same
       // min/max semantics (the equal case selects either side
       // -- both equal, so the choice is irrelevant).
-      bool is_lt = (pred == P::slt || pred == P::ult || pred == P::sle || pred == P::ule);
-      bool is_gt = (pred == P::sgt || pred == P::ugt || pred == P::sge || pred == P::uge);
+      bool const is_lt = (pred == P::slt || pred == P::ult || pred == P::sle || pred == P::ule);
+      bool const is_gt = (pred == P::sgt || pred == P::ugt || pred == P::sge || pred == P::uge);
       if (is_lt || is_gt) {
-        bool true_is_lhs = (cmp.getLhs() == sel.getTrueValue());
-        bool true_is_rhs = (cmp.getRhs() == sel.getTrueValue());
+        bool const true_is_lhs = (cmp.getLhs() == sel.getTrueValue());
+        bool const true_is_rhs = (cmp.getRhs() == sel.getTrueValue());
         const char* fn = nullptr;
-        if (is_lt && true_is_lhs)
+        // (lt, true=lhs) and (gt, true=rhs) both pick the smaller -> min;
+        // (lt, true=rhs) and (gt, true=lhs) both pick the larger  -> max.
+        if ((is_lt && true_is_lhs) || (is_gt && true_is_rhs))
           fn = "min";
-        else if (is_lt && true_is_rhs)
+        else if ((is_lt && true_is_rhs) || (is_gt && true_is_lhs))
           fn = "max";
-        else if (is_gt && true_is_lhs)
-          fn = "max";
-        else if (is_gt && true_is_rhs)
-          fn = "min";
         if (fn) {
           return std::string(fn) + "(" + buildIndexExpr(sel.getTrueValue(), d + 1) + ", " +
                  buildIndexExpr(sel.getFalseValue(), d + 1) + ")";
@@ -544,8 +542,9 @@ std::string buildIndexExpr(mlir::Value v, int d) {
           auto c = traceConstInt(x);
           return c && *c == want;
         };
-        bool condIsZeroExtent = isConst(cmp.getRhs(), 0) || isConst(cmp.getLhs(), 0);
-        mlir::Value t = sel.getTrueValue(), f = sel.getFalseValue();
+        bool const condIsZeroExtent = isConst(cmp.getRhs(), 0) || isConst(cmp.getLhs(), 0);
+        mlir::Value const t = sel.getTrueValue();
+        mlir::Value const f = sel.getFalseValue();
         if (condIsZeroExtent && pred == P::eq && isConst(t, 1))
           return buildIndexExpr(f, d + 1);  // non-empty: real bound
         if (condIsZeroExtent && pred == P::ne && isConst(f, 1)) return buildIndexExpr(t, d + 1);
@@ -689,7 +688,7 @@ ASTNode buildAssignNode(hlfir::AssignOp assign) {
             unsigned pushed = 0;
             for (unsigned i = 0; i < iblock.getNumArguments() && i < apply_idxs.size(); ++i) {
               auto name = resolveIndex(apply_idxs[i]);
-              indexStack().push_back({iblock.getArgument(i), name});
+              indexStack().emplace_back(iblock.getArgument(i), name);
               ++pushed;
             }
             for (auto& iop : iblock)
@@ -716,14 +715,14 @@ ASTNode buildAssignNode(hlfir::AssignOp assign) {
       if (auto cmp = mlir::dyn_cast_or_null<mlir::arith::CmpFOp>(cdef)) {
         using P = mlir::arith::CmpFPredicate;
         auto pred = cmp.getPredicate();
-        bool ok_pred = (pred == P::OLT || pred == P::ULT || pred == P::OGT || pred == P::UGT);
+        bool const ok_pred = (pred == P::OLT || pred == P::ULT || pred == P::OGT || pred == P::UGT);
         if (ok_pred && cmp.getLhs() == sel.getTrueValue() && cmp.getRhs() == sel.getFalseValue()) isMinMax = true;
       }
       if (!isMinMax) {
         if (auto cmp = mlir::dyn_cast_or_null<mlir::arith::CmpIOp>(cdef)) {
           using P = mlir::arith::CmpIPredicate;
           auto pred = cmp.getPredicate();
-          bool ok_pred = (pred == P::slt || pred == P::ult || pred == P::sgt || pred == P::ugt);
+          bool const ok_pred = (pred == P::slt || pred == P::ult || pred == P::sgt || pred == P::ugt);
           if (ok_pred && cmp.getLhs() == sel.getTrueValue() && cmp.getRhs() == sel.getFalseValue()) isMinMax = true;
         }
       }
@@ -825,7 +824,7 @@ hlfir::DesignateOp asSectionDesignate(mlir::Value v) {
   if (!def) return {};
   auto dg = mlir::dyn_cast<hlfir::DesignateOp>(def);
   if (!dg) return {};
-  for (bool t : dg.getIsTriplet())
+  for (bool const t : dg.getIsTriplet())
     if (t) return dg;
   return {};
 }
@@ -850,7 +849,7 @@ static bool parseDesignateDims(hlfir::DesignateOp dg, std::vector<DesignateDim>&
   auto triplets = dg.getIsTriplet();
   auto idxs = dg.getIndices();
   unsigned cursor = 0;
-  for (bool isT : triplets) {
+  for (bool const isT : triplets) {
     DesignateDim d;
     d.isTriplet = isT;
     if (isT) {
@@ -932,7 +931,7 @@ std::vector<ASTNode> buildSectionScalarAssign(hlfir::AssignOp assign, hlfir::Des
   {
     mlir::Value pv = dst.getMemref();
     for (int hop = 0; hop < limits::kSsaBackWalkDepth && pv; ++hop) {
-      if (mlir::Value peeled = peelBoxReinterpret(pv); peeled != pv) {
+      if (mlir::Value const peeled = peelBoxReinterpret(pv); peeled != pv) {
         pv = peeled;
         continue;
       }
@@ -1081,7 +1080,7 @@ std::vector<ASTNode> buildSectionToSectionAssign(hlfir::AssignOp assign, mlir::V
   if (dstDg) {
     auto dstTriplets = dstDg.getIsTriplet();
     if (dstTriplets.empty()) return {};
-    for (bool t : dstTriplets)
+    for (bool const t : dstTriplets)
       if (t) dstTC++;
     if (dstTC == 0) return {};
     dstName = traceToDecl(dstDg.getMemref());
@@ -1187,13 +1186,31 @@ std::vector<ASTNode> buildSectionToSectionAssign(hlfir::AssignOp assign, mlir::V
     return std::to_string(d.strideConst);
   };
   for (size_t i = 0; i < dstDims.size(); ++i)
-    if (dstDims[i].isTriplet && (!dstDims[i].strideExpr.empty() || dstDims[i].strideConst != 1))
-      throw std::runtime_error("section-to-section assign \"" + dstName + " = " + srcName + "\": LHS stride " +
-                               dimStrideStr(dstDims[i]) + " on dim " + std::to_string(i) + " not yet supported");
+    if (dstDims[i].isTriplet && (!dstDims[i].strideExpr.empty() || dstDims[i].strideConst != 1)) {
+      std::string msg = "section-to-section assign \"";
+      msg += dstName;
+      msg += " = ";
+      msg += srcName;
+      msg += "\": LHS stride ";
+      msg += dimStrideStr(dstDims[i]);
+      msg += " on dim ";
+      msg += std::to_string(i);
+      msg += " not yet supported";
+      throw std::runtime_error(msg);
+    }
   for (size_t i = 0; i < srcDims.size(); ++i)
-    if (srcDims[i].isTriplet && (!srcDims[i].strideExpr.empty() || srcDims[i].strideConst != 1))
-      throw std::runtime_error("section-to-section assign \"" + dstName + " = " + srcName + "\": RHS stride " +
-                               dimStrideStr(srcDims[i]) + " on dim " + std::to_string(i) + " not yet supported");
+    if (srcDims[i].isTriplet && (!srcDims[i].strideExpr.empty() || srcDims[i].strideConst != 1)) {
+      std::string msg = "section-to-section assign \"";
+      msg += dstName;
+      msg += " = ";
+      msg += srcName;
+      msg += "\": RHS stride ";
+      msg += dimStrideStr(srcDims[i]);
+      msg += " on dim ";
+      msg += std::to_string(i);
+      msg += " not yet supported";
+      throw std::runtime_error(msg);
+    }
 
   std::vector<std::string> iter_names;
   iter_names.reserve(dstTC);
@@ -1271,7 +1288,7 @@ std::vector<ASTNode> buildSectionToSectionAssign(hlfir::AssignOp assign, mlir::V
     const auto& boundsSide = dstDg ? dstDims : srcDims;
     std::vector<std::pair<std::string, std::string>> bounds;
     for (auto& d : boundsSide)
-      if (d.isTriplet) bounds.push_back({d.lo, d.hi});
+      if (d.isTriplet) bounds.emplace_back(d.lo, d.hi);
     for (int i = (int)bounds.size() - 1; i >= 0; --i) {
       ASTNode wrap;
       wrap.kind = "loop";
@@ -1317,7 +1334,7 @@ std::vector<ASTNode> buildWholeArrayScalarBroadcast(hlfir::AssignOp assign) {
   } else {
     return {};
   }
-  unsigned rank = extents.size();
+  unsigned const rank = extents.size();
   if (rank == 0) return {};
 
   auto extentString = [](mlir::Value ext) -> std::string {
@@ -1490,7 +1507,7 @@ ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation* srcOp, std::st
     auto triplets = dg.getIsTriplet();
     if (triplets.empty()) return {traceToDecl(operand), std::string{}};
     bool anyTriplet = false;
-    for (bool t : triplets)
+    for (bool const t : triplets)
       if (t) {
         anyTriplet = true;
         break;
@@ -1514,9 +1531,8 @@ ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation* srcOp, std::st
     std::string sub;
     auto idxs = dg.getIndices();
     unsigned flatCursor = 0;
-    for (size_t d = 0; d < dims.size(); ++d) {
+    for (const auto& dim : dims) {
       if (!sub.empty()) sub += ", ";
-      const auto& dim = dims[d];
       if (dim.isTriplet) {
         // DaCe 0-based half-open: lo - 1 : hi : stride.  Drop
         // the explicit ``:1`` stride to keep the common case
@@ -1528,7 +1544,7 @@ ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation* srcOp, std::st
           lo0 = "(" + dim.lo + " - 1)";
         }
         sub += lo0 + ":" + dim.hi;
-        bool strideIsOne = dim.strideExpr.empty() && dim.strideConst == 1;
+        bool const strideIsOne = dim.strideExpr.empty() && dim.strideConst == 1;
         if (!strideIsOne) {
           sub += ":";
           sub += dim.strideExpr.empty() ? std::to_string(dim.strideConst) : dim.strideExpr;
@@ -1552,10 +1568,10 @@ ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation* srcOp, std::st
   };
 
   auto opName = srcOp->getName().getStringRef();
-  bool is_count = (opName == "hlfir.count");
-  bool is_minloc = (opName == "hlfir.minloc");
-  bool is_maxloc = (opName == "hlfir.maxloc");
-  bool is_cshift = (opName == "hlfir.cshift");
+  bool const is_count = (opName == "hlfir.count");
+  bool const is_minloc = (opName == "hlfir.minloc");
+  bool const is_maxloc = (opName == "hlfir.maxloc");
+  bool const is_cshift = (opName == "hlfir.cshift");
   if (is_count) {
     if (srcOp->getNumOperands() > 0) {
       auto [nm, sub] = resolveSliceSubset(srcOp->getOperand(0), callee, 0);
@@ -1651,7 +1667,7 @@ ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation* srcOp, std::st
       // routes the matmul through the un-transposed source -- BLAS
       // handles the transpose in-place via ``CblasTrans`` /
       // ``CUBLAS_OP_T``.
-      bool eligibleForFold = (callee == "matmul" && argIdx < 2) || (callee == "matmul_transpose" && argIdx == 1);
+      bool const eligibleForFold = (callee == "matmul" && argIdx < 2) || (callee == "matmul_transpose" && argIdx == 1);
       if (eligibleForFold) {
         if (auto* def = operand.getDefiningOp()) {
           if (auto trans = mlir::dyn_cast<hlfir::TransposeOp>(def)) {
@@ -1702,7 +1718,7 @@ std::vector<ASTNode> buildSectionReduceAssign(hlfir::AssignOp assign, hlfir::Des
   };
   std::vector<DimSpec> dims;
   unsigned cursor = 0;
-  for (bool t : triplets) {
+  for (bool const t : triplets) {
     DimSpec d;
     d.isTriplet = t;
     if (t) {
@@ -1747,7 +1763,7 @@ std::vector<ASTNode> buildSectionReduceAssign(hlfir::AssignOp assign, hlfir::Des
       tgtWrite.index_exprs.push_back(buildIndexExpr(idx, 0));
     }
   }
-  bool tgtIsArray = !tgtWrite.index_vars.empty();
+  bool const tgtIsArray = !tgtWrite.index_vars.empty();
 
   AccessInfo tgtRead = tgtWrite;
   tgtRead.is_write = false;
@@ -1755,7 +1771,7 @@ std::vector<ASTNode> buildSectionReduceAssign(hlfir::AssignOp assign, hlfir::Des
 
   // Source read  --  full base array name, indexed with section iters
   // for triplet dims and the original indices for non-section dims.
-  std::string srcName = traceToDecl(src.getMemref());
+  std::string const srcName = traceToDecl(src.getMemref());
   AccessInfo srcRead;
   srcRead.array_name = srcName;
   srcRead.is_read = true;
@@ -1790,7 +1806,7 @@ std::vector<ASTNode> buildSectionReduceAssign(hlfir::AssignOp assign, hlfir::Des
   acc.kind = "assign";
   acc.target = tgtName;
   acc.target_is_array = tgtIsArray;
-  bool isFnForm = (pyOp == "min" || pyOp == "max");
+  bool const isFnForm = (pyOp == "min" || pyOp == "max");
   if (isFnForm) {
     acc.expr = std::string(pyOp) + "(" + tgtName + ", " + srcName + ")";
   } else {

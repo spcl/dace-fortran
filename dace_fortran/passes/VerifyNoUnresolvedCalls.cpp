@@ -38,7 +38,7 @@ namespace {
 /// True if ``name`` names a runtime / intrinsic entry we don't expect to
 /// ship as HLFIR.  Intentionally conservative  --  we want real unresolved
 /// calls to ICON-level kernels to show up, not be swallowed here.
-static bool isAllowedCallee(llvm::StringRef name) {
+bool isAllowedCallee(llvm::StringRef name) {
   // Flang runtime: ``_FortranA...`` / ``_Fortran...``.
   if (name.starts_with("_Fortran")) return true;
   // Common libm entries Flang lowers math intrinsics to.
@@ -49,12 +49,12 @@ static bool isAllowedCallee(llvm::StringRef name) {
   if (kLibm.contains(name)) return true;
   // C stdlib we might legitimately leave in the IR.
   static const llvm::StringSet<> kStd = {"malloc", "free", "abort"};
-  if (kStd.contains(name)) return true;
-  return false;
+  return kStd.contains(name);
 }
 
 struct VerifyNoUnresolvedCallsPass
     : public mlir::PassWrapper<VerifyNoUnresolvedCallsPass, mlir::OperationPass<mlir::ModuleOp>> {
+  // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(VerifyNoUnresolvedCallsPass)
 
   llvm::StringRef getArgument() const final { return "hlfir-verify-no-unresolved-calls"; }

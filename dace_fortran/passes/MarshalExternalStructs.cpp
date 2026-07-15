@@ -24,6 +24,7 @@
 // follow-up (their designates need shape operands and an outer copy loop).
 // ============================================================================
 
+#include <algorithm>
 #include <functional>
 #include <string>
 
@@ -46,7 +47,7 @@ namespace {
 
 /// A simple scalar type the marshalling handles (matches the dtypes the
 /// flatten pass and ``extract_vars`` agree on).
-static bool isScalarMember(mlir::Type t) {
+bool isScalarMember(mlir::Type t) {
   if (t.isF32() || t.isF64()) return true;
   if (t.isInteger(8) || t.isInteger(16) || t.isInteger(32) || t.isInteger(64)) return true;
   if (mlir::isa<fir::LogicalType>(t)) return true;
@@ -59,13 +60,12 @@ static bool isScalarMember(mlir::Type t) {
 /// struct buffer.  Distinct from :func:`isRecursiveInlineFlatMember`,
 /// which extends the predicate to nested derived types whose own
 /// members are inline-flat.
-static bool isInlineFlatMember(mlir::Type t) {
+bool isInlineFlatMember(mlir::Type t) {
   if (isScalarMember(t)) return true;
   if (auto seq = mlir::dyn_cast<fir::SequenceType>(t)) {
     if (!isScalarMember(seq.getEleTy())) return false;
-    for (auto d : seq.getShape())
-      if (d == fir::SequenceType::getUnknownExtent()) return false;
-    return true;
+    return std::all_of(seq.getShape().begin(), seq.getShape().end(),
+                       [](auto d) { return d != fir::SequenceType::getUnknownExtent(); });
   }
   return false;
 }
@@ -77,7 +77,7 @@ static bool isInlineFlatMember(mlir::Type t) {
 /// rank (including dynamic extents) is accepted -- the call-site
 /// expansion emits ``fir.load`` + ``fir.box_addr`` to extract the
 /// data pointer at runtime, so a static shape is not required.
-static bool isBoxOfScalarArray(mlir::Type t) {
+bool isBoxOfScalarArray(mlir::Type t) {
   auto box = mlir::dyn_cast<fir::BoxType>(t);
   if (!box) return false;
   mlir::Type inner = box.getEleTy();
@@ -95,11 +95,10 @@ static bool isBoxOfScalarArray(mlir::Type t) {
 /// nested record: this is the leaf record the value-record-array path
 /// scatters field-by-field, so every member must be a plain scalar
 /// (no nested records, no arrays, no boxes).
-static bool isScalarRecord(fir::RecordType rec) {
+bool isScalarRecord(fir::RecordType rec) {
   if (rec.getTypeList().empty()) return false;
-  for (auto& p : rec.getTypeList())
-    if (!isScalarMember(p.second)) return false;
-  return true;
+  return std::all_of(rec.getTypeList().begin(), rec.getTypeList().end(),
+                     [](const auto& p) { return isScalarMember(p.second); });
 }
 
 /// A box-typed member whose box pointee is an array of a *value record
@@ -111,7 +110,7 @@ static bool isScalarRecord(fir::RecordType rec) {
 /// element rank), and ``bind_c_shim._emit_value_record_array`` emits
 /// one C-ABI slot per field; ``enumerateLeaves`` mirrors that by
 /// emitting one leaf per record field so the two ABIs coincide.
-static bool isBoxOfScalarRecordArray(mlir::Type t) {
+bool isBoxOfScalarRecordArray(mlir::Type t) {
   auto box = mlir::dyn_cast<fir::BoxType>(t);
   if (!box) return false;
   mlir::Type inner = box.getEleTy();
@@ -140,15 +139,14 @@ static bool isBoxOfScalarRecordArray(mlir::Type t) {
 /// C ABI of each leaf collapses to a single ``<scalar>*`` pointer
 /// matching the per-member SoA slots the sibling-SDFG ``bind_c_shim``
 /// produces.
-static bool isRecursiveInlineFlatMember(mlir::Type t) {
+bool isRecursiveInlineFlatMember(mlir::Type t) {
   if (isInlineFlatMember(t)) return true;
   if (isBoxOfScalarArray(t)) return true;
   if (isBoxOfScalarRecordArray(t)) return true;
   if (auto rec = mlir::dyn_cast<fir::RecordType>(t)) {
     if (rec.getTypeList().empty()) return false;
-    for (auto& p : rec.getTypeList())
-      if (!isRecursiveInlineFlatMember(p.second)) return false;
-    return true;
+    return std::all_of(rec.getTypeList().begin(), rec.getTypeList().end(),
+                       [](const auto& p) { return isRecursiveInlineFlatMember(p.second); });
   }
   return false;
 }
@@ -166,7 +164,7 @@ static bool isRecursiveInlineFlatMember(mlir::Type t) {
 /// (``handleMemberDataUsed`` below); a handle whose data the callee
 /// actually needs is a genuine gap and fails loudly rather than
 /// silently dropping a live member.
-static bool isPointerToRecordHandle(mlir::Type t) {
+bool isPointerToRecordHandle(mlir::Type t) {
   auto box = mlir::dyn_cast<fir::BoxType>(t);
   if (!box) return false;
   mlir::Type inner = box.getEleTy();
@@ -184,7 +182,7 @@ static bool isPointerToRecordHandle(mlir::Type t) {
 /// pointer-to-record handle (see :func:`isPointerToRecordHandle`).  At
 /// least one member must be genuinely marshalable (an all-handles
 /// record has nothing to expand and is not a marshal target).
-static bool allRecursiveInlineFlatMembers(fir::RecordType rec) {
+bool allRecursiveInlineFlatMembers(fir::RecordType rec) {
   if (rec.getTypeList().empty()) return false;
   bool anyMarshalable = false;
   for (auto& p : rec.getTypeList()) {
@@ -204,7 +202,7 @@ static bool allRecursiveInlineFlatMembers(fir::RecordType rec) {
 /// additionally carry skippable pointer-to-record *handle* members
 /// (:func:`isPointerToRecordHandle`) as long as at least one member is
 /// genuinely marshalable.
-static fir::RecordType scalarStructPointee(mlir::Type argTy) {
+fir::RecordType scalarStructPointee(mlir::Type argTy) {
   auto ref = mlir::dyn_cast<fir::ReferenceType>(argTy);
   if (!ref) return {};
   auto rec = mlir::dyn_cast<fir::RecordType>(ref.getEleTy());
@@ -214,6 +212,7 @@ static fir::RecordType scalarStructPointee(mlir::Type argTy) {
 
 struct MarshalExternalStructsPass
     : public mlir::PassWrapper<MarshalExternalStructsPass, mlir::OperationPass<mlir::ModuleOp>> {
+  // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(MarshalExternalStructsPass)
 
   llvm::StringRef getArgument() const final { return "hlfir-marshal-external-structs"; }
@@ -243,20 +242,16 @@ struct MarshalExternalStructsPass
     // ``emit_call`` then fired even though the struct shape was
     // perfectly marshalable.
     auto matchesRegistered = [&](llvm::StringRef sym) {
-      for (auto& kv : externals) {
-        llvm::StringRef n = kv.getKey();
-        if (sym == n) return true;
-        std::string p1 = ("P" + n).str();
-        std::string p2 = ("_QP" + n).str();
-        if (sym.ends_with(p1) || sym.ends_with(p2)) return true;
-      }
-      return false;
+      return std::any_of(externals.begin(), externals.end(), [&](const auto& kv) {
+        llvm::StringRef const n = kv.getKey();
+        return sym == n || sym.ends_with(("P" + n).str()) || sym.ends_with(("_QP" + n).str());
+      });
     };
 
     llvm::SmallVector<mlir::func::FuncOp, 4> targets;
     module.walk([&](mlir::func::FuncOp f) {
       if (!f.isDeclaration() || !matchesRegistered(f.getSymName())) return;
-      for (mlir::Type t : f.getArgumentTypes())
+      for (mlir::Type const t : f.getArgumentTypes())
         if (scalarStructPointee(t)) {
           targets.push_back(f);
           break;
@@ -423,7 +418,7 @@ struct MarshalExternalStructsPass
     module.walk([&](hlfir::DesignateOp dg) {
       if (!used.empty()) return;
       if (!dg.getComponentAttr()) return;  // only a component access reads record data
-      mlir::Value base = peel(dg.getMemref());
+      mlir::Value const base = peel(dg.getMemref());
       auto* bd = base ? base.getDefiningOp() : nullptr;
       auto parent = mlir::dyn_cast_or_null<hlfir::DesignateOp>(bd);
       if (!parent) return;
@@ -447,14 +442,14 @@ struct MarshalExternalStructsPass
     llvm::SmallVector<int64_t, 8> groups;  // flat [start, count, ...]
     llvm::SmallVector<bool, 8> isStruct;
     llvm::SmallVector<llvm::SmallVector<ExpandedLeaf, 4>, 8> members;
-    for (mlir::Type t : fn.getArgumentTypes()) {
+    for (mlir::Type const t : fn.getArgumentTypes()) {
       auto rec = scalarStructPointee(t);
       if (rec) {
         // Loud-fail gate: a pointer-to-record handle member the
         // marshaller SKIPS (``comm_pat_c`` &c.) must be a pure
         // pass-through -- if the callee actually reads its pointed-to
         // data, dropping it would silently corrupt the C ABI.
-        if (std::string used = handleMemberDataUsed(rec, module); !used.empty()) {
+        if (std::string const used = handleMemberDataUsed(rec, module); !used.empty()) {
           fn.emitError() << "hlfir-marshal-external-structs: external '" << fn.getSymName()
                          << "' takes a struct whose pointer-to-record member '" << used
                          << "' has its data read/written -- marshalling a linked-structure "
@@ -464,7 +459,7 @@ struct MarshalExternalStructsPass
           signalPassFailure();
           return;
         }
-        int64_t start = static_cast<int64_t>(newArgTys.size());
+        auto const start = static_cast<int64_t>(newArgTys.size());
         llvm::SmallVector<ExpandedLeaf, 4> leaves;
         enumerateLeaves(rec, ctx, /*prefix=*/{}, leaves);
         for (auto& leaf : leaves) {
@@ -485,7 +480,7 @@ struct MarshalExternalStructsPass
             newArgTys.push_back(fir::ReferenceType::get(leaf.recordFieldScalar));
             continue;
           }
-          mlir::Type callTy = boxLeafCalleeType(leaf.type);
+          mlir::Type const callTy = boxLeafCalleeType(leaf.type);
           if (mlir::isa<fir::BoxType>(leaf.type))
             newArgTys.push_back(callTy);
           else
@@ -519,15 +514,15 @@ struct MarshalExternalStructsPass
   /// level leaf produces one ``hlfir.designate``; a nested-record leaf
   /// produces one designate per path element, chained through the
   /// intermediate record references.
-  void rewriteCall(fir::CallOp call, llvm::ArrayRef<bool> isStruct,
-                   llvm::ArrayRef<llvm::SmallVector<ExpandedLeaf, 4>> members) {
+  static void rewriteCall(fir::CallOp call, llvm::ArrayRef<bool> isStruct,
+                          llvm::ArrayRef<llvm::SmallVector<ExpandedLeaf, 4>> members) {
     mlir::OpBuilder b(call);
     auto loc = call.getLoc();
     auto args = call.getArgs();
     llvm::SmallVector<mlir::Value, 8> newOperands;
     for (unsigned i = 0; i < args.size(); ++i) {
       if (i < isStruct.size() && isStruct[i]) {
-        mlir::Value base = args[i];
+        mlir::Value const base = args[i];
         // Resolve the base's pointee record so we can type each
         // intermediate designate -- the path's first element selects a
         // member of *this* record, the next selects from that member's
@@ -553,14 +548,14 @@ struct MarshalExternalStructsPass
             // Walk every path element up to (but not including) the
             // field -- the last-but-one is the box member.
             for (size_t pi = 0; pi + 1 < leaf.path.size(); ++pi) {
-              mlir::StringAttr comp = leaf.path[pi];
+              mlir::StringAttr const comp = leaf.path[pi];
               mlir::Type nextTy;
               for (auto& p : cursorRec.getTypeList())
                 if (p.first == comp.getValue()) {
                   nextTy = p.second;
                   break;
                 }
-              bool isBoxMember = (pi + 2 == leaf.path.size());
+              bool const isBoxMember = (pi + 2 == leaf.path.size());
               auto refTy = fir::ReferenceType::get(nextTy);
               auto dg = b.create<hlfir::DesignateOp>(
                   loc, refTy, cursor, /*component=*/comp, /*component_shape=*/mlir::Value{},
@@ -588,7 +583,7 @@ struct MarshalExternalStructsPass
                                                        /*indices=*/idxs,
                                                        /*typeparams=*/mlir::ValueRange{},
                                                        /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
-            mlir::StringAttr fieldComp = leaf.path.back();
+            mlir::StringAttr const fieldComp = leaf.path.back();
             auto fieldDg = b.create<hlfir::DesignateOp>(
                 loc, fir::ReferenceType::get(leaf.recordFieldScalar), elemDg.getResult(),
                 /*component=*/fieldComp, /*component_shape=*/mlir::Value{},
@@ -601,7 +596,7 @@ struct MarshalExternalStructsPass
           mlir::Value cursor = base;
           fir::RecordType cursorRec = baseRec;
           for (size_t pi = 0; pi < leaf.path.size(); ++pi) {
-            mlir::StringAttr comp = leaf.path[pi];
+            mlir::StringAttr const comp = leaf.path[pi];
             // Lookup the next type in the cursorRec's member list.
             mlir::Type nextTy;
             for (auto& p : cursorRec.getTypeList())
@@ -611,7 +606,7 @@ struct MarshalExternalStructsPass
               }
             // The last path element is the leaf; everything before is
             // a record member we walk through.
-            bool isLast = (pi == leaf.path.size() - 1);
+            bool const isLast = (pi == leaf.path.size() - 1);
             // Result type of *this* designate.  For an inline-flat
             // leaf the existing ``ref<...>`` wrapping is used; for a
             // box-typed leaf we keep the ``ref<box<...>>`` wrapping

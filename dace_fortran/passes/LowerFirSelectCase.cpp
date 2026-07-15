@@ -69,8 +69,8 @@ mlir::Value buildCaseCondition(mlir::OpBuilder& b, mlir::Location loc, mlir::Val
   if (mlir::isa<fir::PointIntervalAttr>(tag) && cmpOps.size() == 1) return cmpEq(cmpOps[0]);
   if (mlir::isa<fir::ClosedIntervalAttr>(tag) && cmpOps.size() == 2) {
     // ``case(b:c)`` lowers as ``(selector >= b) AND (selector <= c)``.
-    mlir::Value ge = cmpGe(cmpOps[0]);
-    mlir::Value le = cmpLe(cmpOps[1]);
+    mlir::Value const ge = cmpGe(cmpOps[0]);
+    mlir::Value const le = cmpLe(cmpOps[1]);
     return b.create<mlir::arith::AndIOp>(loc, ge, le);
   }
   if (mlir::isa<fir::LowerBoundAttr>(tag) && cmpOps.size() == 1) return cmpGe(cmpOps[0]);
@@ -84,9 +84,9 @@ mlir::Value buildCaseCondition(mlir::OpBuilder& b, mlir::Location loc, mlir::Val
 /// fallback can still handle it (or the next pipeline stage can fail
 /// loudly with a useful error rather than silent miscompilation).
 mlir::LogicalResult rewriteSelectCase(fir::SelectCaseOp sel) {
-  mlir::Location loc = sel.getLoc();
+  mlir::Location const loc = sel.getLoc();
   auto operands = sel.getOperands();
-  mlir::Value selector = sel.getSelector(operands);
+  mlir::Value const selector = sel.getSelector(operands);
   auto cases = sel.getCases();
 
   // Find the default destination (``unit`` case) and pre-compute the
@@ -116,18 +116,18 @@ mlir::LogicalResult rewriteSelectCase(fir::SelectCaseOp sel) {
   mlir::Block* currentCheck = parentBlock;
 
   for (unsigned k = 0; k < nonDefault.size(); ++k) {
-    unsigned i = nonDefault[k];
+    unsigned const i = nonDefault[k];
     auto tag = cases[i];
-    mlir::Block* succ = sel.getSuccessor(i);
+    mlir::Block* succ = sel.getSuccessor(i);  // NOLINT(misc-const-correctness): fed to CondBranchOp (mutable Block*)
     auto cmpOps = sel.getCompareOperands(operands, i);
     if (!cmpOps) return mlir::failure();
 
     b.setInsertionPoint(currentCheck, currentCheck == parentBlock ? sel->getIterator() : currentCheck->end());
 
-    mlir::Value cond = buildCaseCondition(b, loc, selector, tag, *cmpOps);
+    mlir::Value const cond = buildCaseCondition(b, loc, selector, tag, *cmpOps);
     if (!cond) return mlir::failure();
 
-    bool isLast = (k == nonDefault.size() - 1);
+    bool const isLast = (k == nonDefault.size() - 1);
     mlir::Block* failDest;
     if (isLast) {
       failDest = defaultDest;
@@ -155,6 +155,7 @@ mlir::LogicalResult rewriteSelectCase(fir::SelectCaseOp sel) {
 }
 
 struct LowerFirSelectCasePass : public mlir::PassWrapper<LowerFirSelectCasePass, mlir::OperationPass<mlir::ModuleOp>> {
+  // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LowerFirSelectCasePass)
 
   llvm::StringRef getArgument() const final { return "lower-fir-select-case"; }

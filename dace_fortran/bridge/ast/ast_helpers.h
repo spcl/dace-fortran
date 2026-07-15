@@ -46,7 +46,7 @@ namespace hlfir_bridge {
 /// where.  Pass ``__func__`` as ``fn`` for ``buildExpr: unhandled HLFIR
 /// op 'hlfir.assoc' at <source.f90:42:5>``.
 [[noreturn]] inline void throwUnhandled(mlir::Operation* op, const char* fn) {
-  std::string opName = op ? op->getName().getStringRef().str() : "<null>";
+  std::string const opName = op ? op->getName().getStringRef().str() : "<null>";
   std::string loc;
   if (op) {
     llvm::raw_string_ostream os(loc);

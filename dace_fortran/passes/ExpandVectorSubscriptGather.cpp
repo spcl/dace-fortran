@@ -90,6 +90,7 @@ namespace {
 
 struct ExpandVectorSubscriptGatherPass
     : public mlir::PassWrapper<ExpandVectorSubscriptGatherPass, mlir::OperationPass<mlir::ModuleOp>> {
+  // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ExpandVectorSubscriptGatherPass)
 
   llvm::StringRef getArgument() const final { return "hlfir-expand-vector-subscript-gather"; }
@@ -121,9 +122,15 @@ struct ExpandVectorSubscriptGatherPass
     });
 
     for (auto assoc : elemTargets)
-      if (mlir::failed(rewrite(assoc, counter++))) return signalPassFailure();
+      if (mlir::failed(rewrite(assoc, counter++))) {
+        signalPassFailure();
+        return;
+      }
     for (auto assoc : scalarTargets)
-      if (mlir::failed(rewriteScalar(assoc, counter++))) return signalPassFailure();
+      if (mlir::failed(rewriteScalar(assoc, counter++))) {
+        signalPassFailure();
+        return;
+      }
   }
 
   /// Materialise a scalar value-by-reference associate into a local
@@ -132,7 +139,7 @@ struct ExpandVectorSubscriptGatherPass
   /// associate result.  After this pass, the inlined-callee dummy
   /// declare aliasing ``%a#0`` resolves through the standard
   /// ``asAssumedShapeAlias`` chain to the synthesised local.
-  mlir::LogicalResult rewriteScalar(hlfir::AssociateOp assoc, unsigned id) {
+  static mlir::LogicalResult rewriteScalar(hlfir::AssociateOp assoc, unsigned id) {
     auto loc = assoc.getLoc();
     auto src = assoc.getSource();
     auto refTy = mlir::cast<fir::ReferenceType>(assoc.getResult(0).getType());
@@ -152,7 +159,7 @@ struct ExpandVectorSubscriptGatherPass
       } else
         enclName = sym;
     }
-    std::string uniqName = "_QF" + enclName + "E__assoc_scalar_" + std::to_string(id);
+    std::string const uniqName = "_QF" + enclName + "E__assoc_scalar_" + std::to_string(id);
 
     mlir::OpBuilder b(assoc);
     auto alloca = b.create<fir::AllocaOp>(loc, eleTy);
@@ -196,7 +203,7 @@ struct ExpandVectorSubscriptGatherPass
     // the same shape as the rank-1 case but build a nested
     // ``fir.do_loop`` tree below.
     llvm::SmallVector<mlir::Value, 4> extents(shapeOp.getExtents().begin(), shapeOp.getExtents().end());
-    unsigned rank = (unsigned)extents.size();
+    auto const rank = (unsigned)extents.size();
     llvm::SmallVector<int64_t, 4> staticExts(rank, fir::SequenceType::getUnknownExtent());
     bool allStatic = true;
     for (unsigned i = 0; i < rank; ++i) {
@@ -282,7 +289,7 @@ struct ExpandVectorSubscriptGatherPass
         break;
       }
     }
-    std::string uniqName = "_QF" + enclName + "E" + srcName + "_gather_" + std::to_string(id);
+    std::string const uniqName = "_QF" + enclName + "E" + srcName + "_gather_" + std::to_string(id);
     // Result-type convention (matches what flang itself emits for
     // assumed-shape declares):
     //   * all-static: result#0 = result#1 = ``fir.ref<array<...>>``

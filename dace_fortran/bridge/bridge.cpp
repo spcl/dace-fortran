@@ -67,7 +67,7 @@ using namespace hlfir_bridge;
 /// 2 GB of *reserved* (lazily-committed) stack covers nesting depths the real
 /// kernels reach with large headroom; flang and ``mlir-opt`` use the same
 /// run-on-a-big-stack-thread strategy for deeply nested programs.
-static constexpr unsigned kPassPipelineStackBytes = 2u * 1024u * 1024u * 1024u;
+static constexpr unsigned kPassPipelineStackBytes = 2U * 1024U * 1024U * 1024U;
 
 // ============================================================================
 // HLFIRModule  --  Python-facing container for one parsed HLFIR module.
@@ -188,7 +188,7 @@ class HLFIRModule {
     // dedicated worker below already gives the run a 2 GB stack;
     // serialising the nested passes onto it means every
     // recursive-walk frame lands on it too.
-    bool prev_mt = ctx_.isMultithreadingEnabled();
+    bool const prev_mt = ctx_.isMultithreadingEnabled();
     ctx_.disableMultithreading();
     // Run on a worker thread with a large stack: deeply nested IR (a
     // fully-inlined whole-program kernel) overflows the default stack inside
@@ -337,7 +337,7 @@ class HLFIRModule {
         recipeDict["scratch_dtype"] = asStr(recipe.get("scratch_dtype"));
         recipeDict["aos_alloc"] = asBool(recipe.get("aos_alloc"));
         recipeDict["cap_symbol"] = asStr(recipe.get("cap_symbol"));
-        recipeDict["source_logical_kind"] = (int64_t)asInt(recipe.get("source_logical_kind"));
+        recipeDict["source_logical_kind"] = asInt(recipe.get("source_logical_kind"));
       }
       entryDict["recipe"] = recipeDict;
       entries.append(entryDict);
@@ -433,10 +433,10 @@ class HLFIRModule {
       std::transform(want.begin(), want.end(), want.begin(), [](unsigned char c) { return std::tolower(c); });
       std::vector<std::string> matches;
       module_->walk([&](mlir::func::FuncOp f) {
-        std::string sym = f.getSymName().str();
+        std::string const sym = f.getSymName().str();
         if (sym.rfind("_Q", 0) != 0) return;
         auto p = sym.rfind('P');
-        std::string proc = (p != std::string::npos && p > 1) ? sym.substr(p + 1) : sym;
+        std::string const proc = (p != std::string::npos && p > 1) ? sym.substr(p + 1) : sym;
         if (proc == want) matches.push_back(sym);
       });
       if (matches.size() == 1) {
@@ -502,7 +502,7 @@ class HLFIRModule {
     std::vector<std::string> stripped;
     module_->walk([&](mlir::func::FuncOp f) {
       if (f.isDeclaration()) return;
-      llvm::StringRef sym = f.getSymName();
+      llvm::StringRef const sym = f.getSymName();
       for (const std::string& n : names) {
         if (sym == n || sym.ends_with("P" + n) || sym.ends_with("_QP" + n)) {
           // Drop every reference the body holds (operands AND terminator block
@@ -542,6 +542,7 @@ class HLFIRModule {
 // nanobind bindings
 // ============================================================================
 
+// NOLINTNEXTLINE(performance-unnecessary-value-param): 'm' signature fixed by the NB_MODULE macro.
 NB_MODULE(hlfir_bridge, m) {
   m.doc() =
       "HLFIR -> Python bridge: parses Flang HLFIR, runs passes, "

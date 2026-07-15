@@ -230,6 +230,8 @@
 // same merge to every downstream user.
 // ============================================================================
 
+#include <algorithm>
+#include <cstdint>
 #include <optional>
 
 #include "flang/Optimizer/Dialect/FIROps.h"
@@ -252,7 +254,7 @@ namespace {
 /// Once a call is inlined, an omitted optional flows in as ``fir.absent`` and a
 /// passed one as a concrete box/embox of the actual; only the ENTRY function's
 /// own optionals stay genuinely runtime.
-enum class OptPresence { Absent, Present, Unknown };
+enum class OptPresence : std::uint8_t { Absent, Present, Unknown };
 
 /// Trace a ``fir.is_present`` operand back through the declare / convert /
 /// rebox / load / box_addr chain the inliner leaves, classifying it as
@@ -260,7 +262,7 @@ enum class OptPresence { Absent, Present, Unknown };
 /// a concrete address), or Unknown (a genuine runtime optional -- an entry-arg
 /// with ``fir.optional``, or a value we can't prove).  Sound by construction:
 /// only the two definite cases are ever returned non-Unknown.
-static OptPresence traceOptionalPresence(mlir::Value v) {
+OptPresence traceOptionalPresence(mlir::Value v) {
   for (unsigned i = 0; i < 16 && v; ++i) {
     if (auto ba = mlir::dyn_cast<mlir::BlockArgument>(v)) {
       auto* owner = ba.getOwner();
@@ -324,7 +326,7 @@ static OptPresence traceOptionalPresence(mlir::Value v) {
 /// and prematurely fold mutable-global loads.  This touches only
 /// ``is_present``-conditioned ``fir.if`` ops.  Fixpoint loop with a fresh walk
 /// per fold so erasing a dead branch never leaves a stale ``IfOp`` handle.
-static void foldPresenceGuardedIfs(mlir::func::FuncOp func) {
+void foldPresenceGuardedIfs(mlir::func::FuncOp func) {
   while (true) {
     fir::IfOp target;
     OptPresence presence = OptPresence::Unknown;
@@ -397,7 +399,7 @@ struct RebindChain {
 /// are index access and compose through ``mergeIndices``).  The component
 /// case can't collapse to a flat index list -- it re-roots the user's
 /// designate on the target ref directly.
-static fir::RecordType recordRefOf(mlir::Type t) {
+fir::RecordType recordRefOf(mlir::Type t) {
   mlir::Type inner = t;
   for (;;) {
     if (auto r = mlir::dyn_cast<fir::ReferenceType>(inner)) {
@@ -426,7 +428,7 @@ static fir::RecordType recordRefOf(mlir::Type t) {
 /// the ``this%member => target`` derived-type rebind shape whose reads are
 /// component selects.  Array-data pointer members (``box<ptr<array<T>>>``) do
 /// NOT match -- those are owned by the array / view path, never re-rooted here.
-static bool isRecordPointerMemberSlot(mlir::Type slotRefTy) {
+bool isRecordPointerMemberSlot(mlir::Type slotRefTy) {
   auto ref = mlir::dyn_cast<fir::ReferenceType>(slotRefTy);
   if (!ref) return false;
   auto box = mlir::dyn_cast<fir::BaseBoxType>(ref.getEleTy());
@@ -447,7 +449,7 @@ static bool isRecordPointerMemberSlot(mlir::Type slotRefTy) {
 /// out at a block-argument and is rejected.  Mirrors the intent of
 /// ``FlattenStructs``'s ``isIndirectStructLocal`` (owned, not a rebindable
 /// descriptor) but discriminates on the STORAGE ROOT rather than the outer type.
-static bool rootsAtOwnedStorage(mlir::Value v) {
+bool rootsAtOwnedStorage(mlir::Value v) {
   for (int i = 0; i < 128 && v; ++i) {
     if (mlir::isa<mlir::BlockArgument>(v)) return false;
     auto* def = v.getDefiningOp();
@@ -487,7 +489,7 @@ static bool rootsAtOwnedStorage(mlir::Value v) {
 /// chain hits something the rewriter doesn't model (e.g. an
 /// ``hlfir.declare`` with no parent storage, or an unsupported
 /// op shape).
-static RebindChain traceRebindChain(mlir::Value v) {
+RebindChain traceRebindChain(mlir::Value v) {
   RebindChain out;
   for (int i = 0; i < 128 && v; ++i) {
     auto* def = v.getDefiningOp();
@@ -527,7 +529,7 @@ static RebindChain traceRebindChain(mlir::Value v) {
       ChainStep step;
       step.dg = dg;
       step.indices.assign(dg.getIndices().begin(), dg.getIndices().end());
-      for (bool t : dg.getIsTriplet()) step.triplets.push_back(t);
+      for (bool const t : dg.getIsTriplet()) step.triplets.push_back(t);
       out.chain.push_back(std::move(step));
       v = dg.getMemref();
       continue;
@@ -580,8 +582,8 @@ static RebindChain traceRebindChain(mlir::Value v) {
 /// ``index``.  The ``step`` and ``hi`` are not used in element
 /// rebasing (they only shape extents, which DaCe gets from the
 /// parent declare's own shape).
-static bool mergeIndices(const RebindChain& c, mlir::ValueRange access_indices, mlir::OpBuilder& b, mlir::Location loc,
-                         llvm::SmallVectorImpl<mlir::Value>& out) {
+bool mergeIndices(const RebindChain& c, mlir::ValueRange access_indices, mlir::OpBuilder& b, mlir::Location loc,
+                  llvm::SmallVectorImpl<mlir::Value>& out) {
   if (c.chain.empty()) {
     for (auto v : access_indices) out.push_back(v);
     return true;
@@ -598,8 +600,8 @@ static bool mergeIndices(const RebindChain& c, mlir::ValueRange access_indices, 
         if (a.getInt() == 1) return toIndex(access_idx);
       }
     }
-    mlir::Value aIdx = toIndex(access_idx);
-    mlir::Value loIdx = toIndex(lo);
+    mlir::Value const aIdx = toIndex(access_idx);
+    mlir::Value const loIdx = toIndex(lo);
     auto c1 = b.create<mlir::arith::ConstantOp>(loc, idxTy, b.getIndexAttr(1));
     auto adj = b.create<mlir::arith::SubIOp>(loc, loIdx, c1.getResult());
     return b.create<mlir::arith::AddIOp>(loc, aIdx, adj.getResult()).getResult();
@@ -638,6 +640,7 @@ static bool mergeIndices(const RebindChain& c, mlir::ValueRange access_indices, 
 
 struct RewritePointerAssignsPass
     : public mlir::PassWrapper<RewritePointerAssignsPass, mlir::OperationPass<mlir::ModuleOp>> {
+  // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(RewritePointerAssignsPass)
 
   llvm::StringRef getArgument() const final { return "hlfir-rewrite-pointer-assigns"; }
@@ -787,7 +790,7 @@ struct RewritePointerAssignsPass
     // this does not fire.
     if (nonNullifyStores.size() > 1) {
       mlir::Operation* effective = nonNullifyStores.back().getOperation();
-      mlir::DominanceInfo dom;
+      mlir::DominanceInfo const dom;
       for (auto ld : loads) {
         if (!dom.dominates(effective, ld.getOperation())) {
           ld.emitError("hlfir-rewrite-pointer-assigns: pointer ``" + ptrDecl.getUniqName().str() +
@@ -855,9 +858,8 @@ struct RewritePointerAssignsPass
     auto isIdentityShift = [&](mlir::Operation* shapeDef, mlir::Value srcBox) {
       auto checkLb = [&](mlir::Value lb) { return isConstantOne(lb) || isBoxDimsLowerBoundOfSource(lb, srcBox); };
       if (auto s = mlir::dyn_cast_or_null<fir::ShiftOp>(shapeDef)) {
-        for (mlir::Value lb : s.getOrigins())
-          if (!checkLb(lb)) return false;
-        return true;
+        auto origins = s.getOrigins();
+        return std::all_of(origins.begin(), origins.end(), checkLb);
       }
       if (auto s = mlir::dyn_cast_or_null<fir::ShapeShiftOp>(shapeDef)) {
         auto pairs = s.getPairs();
@@ -883,7 +885,7 @@ struct RewritePointerAssignsPass
     auto tryExtractConstLbs = [&](mlir::Operation* shapeDef, llvm::SmallVectorImpl<int64_t>& out) -> bool {
       out.clear();
       if (auto s = mlir::dyn_cast_or_null<fir::ShiftOp>(shapeDef)) {
-        for (mlir::Value lb : s.getOrigins()) {
+        for (mlir::Value const lb : s.getOrigins()) {
           auto cv = constLbValue(lb);
           if (!cv) return false;
           out.push_back(*cv);
@@ -912,9 +914,9 @@ struct RewritePointerAssignsPass
       auto* def = v.getDefiningOp();
       if (!def) break;
       if (auto rb = mlir::dyn_cast<fir::ReboxOp>(def)) {
-        if (mlir::Value shape = rb.getShape()) {
+        if (mlir::Value const shape = rb.getShape()) {
           auto* shapeDef = shape.getDefiningOp();
-          bool isShift =
+          bool const isShift =
               mlir::isa_and_nonnull<fir::ShiftOp>(shapeDef) || mlir::isa_and_nonnull<fir::ShapeShiftOp>(shapeDef);
           if (isShift && !isIdentityShift(shapeDef, rb.getBox())) {
             // Bounds remap (``w(0:n-1) => src(1:n)``): the rebox shift
@@ -956,9 +958,9 @@ struct RewritePointerAssignsPass
       // become the view's access offset.  Embox is the leaf of the rebind
       // value, so stop after inspecting it.
       if (auto eb = mlir::dyn_cast<fir::EmboxOp>(def)) {
-        if (mlir::Value shape = eb.getShape()) {
+        if (mlir::Value const shape = eb.getShape()) {
           auto* shapeDef = shape.getDefiningOp();
-          bool isShift =
+          bool const isShift =
               mlir::isa_and_nonnull<fir::ShiftOp>(shapeDef) || mlir::isa_and_nonnull<fir::ShapeShiftOp>(shapeDef);
           // A plain whole-array rebind onto an allocatable/pointer member
           // (``my_arr2 => my_arr%w``) is NOT a bounds remap: flang emboxes
@@ -1065,7 +1067,7 @@ struct RewritePointerAssignsPass
       if (chain.chain.size() == 1) {
         // Section rebind (``p => a(:, j)``): a single designate with at
         // least one triplet dim.
-        for (bool t : chain.chain[0].triplets)
+        for (bool const t : chain.chain[0].triplets)
           if (t) {
             tagAsView = true;
             break;
@@ -1234,7 +1236,7 @@ struct RewritePointerAssignsPass
       if (!recordTarget && !chain.chain.empty()) {
         ChainStep& front = chain.chain.front();
         bool frontHasTriplet = false;
-        for (bool t : front.triplets)
+        for (bool const t : front.triplets)
           if (t) {
             frontHasTriplet = true;
             break;
@@ -1409,8 +1411,8 @@ struct RewritePointerAssignsPass
           // place (the external then connects to the target array, not an
           // unnameable copy buffer).  A chained / sectioned rebind keeps its
           // copy  --  that may be a genuine non-contiguous materialisation.
-          llvm::SmallVector<mlir::Operation*, 2> boxUsers(cin.getResult(0).getUsers().begin(),
-                                                          cin.getResult(0).getUsers().end());
+          llvm::SmallVector<mlir::Operation*, 2> const boxUsers(cin.getResult(0).getUsers().begin(),
+                                                                cin.getResult(0).getUsers().end());
           // Only fold when the rebind is a whole contiguous target AND every
           // use of the copied box is a box_addr (so eliding the copy is
           // complete -- a non-box_addr use would dangle once copy_in/out go).
@@ -1434,8 +1436,8 @@ struct RewritePointerAssignsPass
               deadReaders.push_back(ba);
             }
             // Drop the matching copy_out (it consumes the copy_in flag).
-            llvm::SmallVector<mlir::Operation*, 2> flagUsers(cin.getResult(1).getUsers().begin(),
-                                                             cin.getResult(1).getUsers().end());
+            llvm::SmallVector<mlir::Operation*, 2> const flagUsers(cin.getResult(1).getUsers().begin(),
+                                                                   cin.getResult(1).getUsers().end());
             for (auto* fu : flagUsers)
               if (mlir::isa<hlfir::CopyOutOp>(fu)) deadReaders.push_back(fu);
             deadReaders.push_back(cin);
@@ -1491,7 +1493,7 @@ struct RewritePointerAssignsPass
     // nullify chain.
     rebindStore.erase();
 
-    mlir::Value ptrAlloca = ptrDecl.getMemref();
+    mlir::Value const ptrAlloca = ptrDecl.getMemref();
     // Sweep dead init ops in reverse so each erase's only users are
     // already gone.  Pattern:
     //   %a = fir.alloca
@@ -1533,15 +1535,17 @@ struct RewritePointerAssignsPass
   /// whole-pointer-dummy / interleaved / non-dominated / unmodelled reader) is
   /// left EXACTLY as-is.  This path never emits a new loud failure, so a
   /// currently-building program cannot regress into a build error.
-  void rewriteMemberSlotRebind(fir::StoreOp store) {
+  static void rewriteMemberSlotRebind(fir::StoreOp store) {
     auto slot0 = mlir::dyn_cast_or_null<hlfir::DesignateOp>(store.getMemref().getDefiningOp());
-    if (!slot0 || !slot0.getComponent().has_value()) return;
-    llvm::StringRef comp = slot0.getComponent()->getValue();
+    if (!slot0) return;
+    auto const comp0 = slot0.getComponent();
+    if (!comp0) return;
+    llvm::StringRef const comp = comp0->getValue();
 
     // Gather every designate of the same (base, component).  flang usually CSEs
     // the store target and the read into one designate, but tolerate duplicates
     // so no read is left dangling on an unbound slot after the store is erased.
-    mlir::Value base = slot0.getMemref();
+    mlir::Value const base = slot0.getMemref();
     llvm::SmallVector<hlfir::DesignateOp, 2> slotDesignates;
     for (auto* u : base.getUsers())
       if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u)) {
@@ -1576,7 +1580,7 @@ struct RewritePointerAssignsPass
     // Every read must be dominated by the rebind store, so re-rooting each is
     // sound and the store is safe to erase.  A read not dominated (an earlier
     // block, or a read of the still-unbound slot) -> decline, no mutation.
-    mlir::DominanceInfo dom;
+    mlir::DominanceInfo const dom;
     for (auto ld : loads)
       if (!dom.dominates(rebindStore.getOperation(), ld.getOperation())) return;
 
@@ -1587,7 +1591,7 @@ struct RewritePointerAssignsPass
     // are not plain component selects and need the array / view path.
     RebindChain chain = traceRebindChain(rebindStore.getValue());
     if (!chain.parent || chain.chain.empty()) return;
-    mlir::Value recordTarget = chain.chain.front().dg.getResult();
+    mlir::Value const recordTarget = chain.chain.front().dg.getResult();
     if (!recordRefOf(recordTarget.getType())) return;
 
     // Validate BEFORE mutating: every read reaches the record either through a
@@ -1607,8 +1611,8 @@ struct RewritePointerAssignsPass
     // onto the target).
     llvm::SmallVector<mlir::Operation*, 8> deadReaders;
     for (auto ld : loads) {
-      llvm::SmallVector<mlir::Operation*, 4> userOps(ld.getResult().getUsers().begin(),
-                                                     ld.getResult().getUsers().end());
+      llvm::SmallVector<mlir::Operation*, 4> const userOps(ld.getResult().getUsers().begin(),
+                                                           ld.getResult().getUsers().end());
       for (auto* uu : userOps) {
         if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(uu)) {
           mlir::OpBuilder b(ba);
@@ -1634,7 +1638,7 @@ struct RewritePointerAssignsPass
     // the dead slot designates.  The target designate (``recordTarget``) stays
     // live -- the re-rooted reads reference it.
     for (auto st : slotStores) {
-      mlir::Value storedVal = st.getValue();
+      mlir::Value const storedVal = st.getValue();
       st.erase();
       if (auto* def = storedVal.getDefiningOp())
         if (def->use_empty()) def->erase();

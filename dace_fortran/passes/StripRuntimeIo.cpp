@@ -113,12 +113,12 @@ namespace {
 /// ``_FortranAio`` is the prefix flang uses for every Fortran I/O
 /// runtime entry point.  No non-IO symbol shares this prefix, so a
 /// pure-prefix match is unambiguous.
-static constexpr llvm::StringLiteral kFortranIoPrefix = "_FortranAio";
+constexpr llvm::StringLiteral kFortranIoPrefix = "_FortranAio";
 
 /// Build a benign constant of ``ty`` immediately before ``call`` to
 /// replace one of its results.  Returns ``nullptr`` if the result type
 /// isn't one of the three the Fortran I/O runtime is known to produce.
-static mlir::Value makeReplacement(mlir::OpBuilder& builder, mlir::Location loc, mlir::Type ty) {
+mlir::Value makeReplacement(mlir::OpBuilder& builder, mlir::Location loc, mlir::Type ty) {
   // ``i1`` (per-item ``Output*`` / ``Input*`` status) and ``i32``
   // (final ``EndIoStatement`` iostat code) -> a plain ``arith.constant``
   // of zero.  Zero is also the canonical "no error" iostat value, so
@@ -143,6 +143,7 @@ static mlir::Value makeReplacement(mlir::OpBuilder& builder, mlir::Location loc,
 // ---------------------------------------------------------------------------
 
 struct StripRuntimeIoPass : public mlir::PassWrapper<StripRuntimeIoPass, mlir::OperationPass<mlir::ModuleOp>> {
+  // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(StripRuntimeIoPass)
 
   llvm::StringRef getArgument() const final { return "hlfir-strip-runtime-io"; }
@@ -194,12 +195,12 @@ struct StripRuntimeIoPass : public mlir::PassWrapper<StripRuntimeIoPass, mlir::O
       func.walk([&](fir::CallOp call) {
         auto sym = call.getCallee();
         if (!sym) return;
-        llvm::StringRef name = sym->getLeafReference().getValue();
+        llvm::StringRef const name = sym->getLeafReference().getValue();
         if (!name.starts_with(kFortranIoPrefix)) return;
         mlir::OpBuilder builder(call);
         bool allReplaced = true;
         for (auto res : call.getResults()) {
-          mlir::Value repl = makeReplacement(builder, call.getLoc(), res.getType());
+          mlir::Value const repl = makeReplacement(builder, call.getLoc(), res.getType());
           if (!repl) {
             LLVM_DEBUG(llvm::dbgs() << "StripRuntimeIo: refusing to strip " << name << " -- result type unsupported\n");
             allReplaced = false;

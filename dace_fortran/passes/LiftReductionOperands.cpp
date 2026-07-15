@@ -76,7 +76,7 @@ namespace {
 /// ``buildExpr`` cannot render inline.  ``hlfir.count`` is excluded  --
 /// the dispatcher routes it through ``CountLibraryNode`` which handles
 /// inline use via the libcall emit path.
-static bool isReductionOp(mlir::Operation* op) {
+bool isReductionOp(mlir::Operation* op) {
   if (!op) return false;
   return mlir::isa<hlfir::SumOp, hlfir::ProductOp, hlfir::MinvalOp, hlfir::MaxvalOp, hlfir::AnyOp, hlfir::AllOp>(op);
 }
@@ -103,14 +103,14 @@ static bool isReductionOp(mlir::Operation* op) {
 /// separate ``Transpose`` libcall on the input matrix) into an
 /// explicit transient that the elemental can then load
 /// element-by-element.
-static bool isLiftableLinalgOp(mlir::Operation* op) {
+bool isLiftableLinalgOp(mlir::Operation* op) {
   if (!op) return false;
   return mlir::isa<hlfir::MatmulOp, hlfir::MatmulTransposeOp, hlfir::TransposeOp, hlfir::DotProductOp>(op);
 }
 
 /// True iff ``op`` is an op the pass should lift -- reduction or
 /// liftable linalg.
-static bool isLiftableOp(mlir::Operation* op) { return isReductionOp(op) || isLiftableLinalgOp(op); }
+bool isLiftableOp(mlir::Operation* op) { return isReductionOp(op) || isLiftableLinalgOp(op); }
 
 /// Find every liftable op transitively used by ``rootOp`` (the RHS of
 /// an assign) -- except the rootOp itself.  "Liftable" covers both
@@ -120,7 +120,7 @@ static bool isLiftableOp(mlir::Operation* op) { return isReductionOp(op) || isLi
 /// inner ops before outer (lifting an inner ``matmul`` to a temp
 /// before its consumer is rewritten avoids dangling references in
 /// the outer rewrite).
-static void collectNestedLiftable(mlir::Operation* rootOp, llvm::SmallVectorImpl<mlir::Operation*>& out) {
+void collectNestedLiftable(mlir::Operation* rootOp, llvm::SmallVectorImpl<mlir::Operation*>& out) {
   if (!rootOp) return;
   llvm::SmallVector<mlir::Operation*, 8> stack;
   llvm::SmallPtrSet<mlir::Operation*, 16> seen;
@@ -165,6 +165,7 @@ static void collectNestedLiftable(mlir::Operation* rootOp, llvm::SmallVectorImpl
 
 struct LiftReductionOperandsPass
     : public mlir::PassWrapper<LiftReductionOperandsPass, mlir::OperationPass<mlir::ModuleOp>> {
+  // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LiftReductionOperandsPass)
 
   llvm::StringRef getArgument() const final { return "hlfir-lift-reduction-operands"; }
@@ -286,14 +287,13 @@ struct LiftReductionOperandsPass
         if (isReductionOp(user)) {
           needsMaterialise = true;
         } else if (isLiftableLinalgOp(user)) {
-          bool fusedTranspose =
+          bool const fusedTranspose =
               mlir::isa<hlfir::TransposeOp>(redOp) && mlir::isa<hlfir::MatmulOp, hlfir::MatmulTransposeOp>(user);
           if (!fusedTranspose) needsMaterialise = true;
         } else if (mlir::isa<hlfir::ApplyOp>(user) || mlir::isa<hlfir::ShapeOfOp>(user) ||
-                   mlir::isa<hlfir::AssignOp>(user)) {
-          // handled by the elemental ``_libtmp_`` path / whole-assign.
-        } else if (user->getName().getStringRef() == "hlfir.destroy") {
-          // bufferization cleanup -- ignore.
+                   mlir::isa<hlfir::AssignOp>(user) || user->getName().getStringRef() == "hlfir.destroy") {
+          // Apply / ShapeOf / Assign handled by the elemental ``_libtmp_`` path
+          // or whole-assign; ``hlfir.destroy`` is bufferization cleanup -- ignore.
         } else {
           anyArithInline = true;
         }
@@ -318,7 +318,7 @@ struct LiftReductionOperandsPass
       return;
     }
 
-    unsigned gid = liftCounter[func]++;
+    unsigned const gid = liftCounter[func]++;
     auto loc = redOp->getLoc();
     auto* ctx = func.getContext();
 
@@ -329,7 +329,7 @@ struct LiftReductionOperandsPass
     mlir::OpBuilder b(&func.front(), func.front().begin());
     auto allocaTy = fir::ReferenceType::get(resTy);
     auto alloca = b.create<fir::AllocaOp>(loc, resTy);
-    std::string uniqName = "_QQred_lift_" + std::to_string(gid);
+    std::string const uniqName = "_QQred_lift_" + std::to_string(gid);
     mlir::NamedAttrList attrs;
     attrs.append("uniq_name", mlir::StringAttr::get(ctx, uniqName));
     // operandSegmentSizes for hlfir.declare: memref + (no shape) +
@@ -358,7 +358,7 @@ struct LiftReductionOperandsPass
     // Replace every existing use of ``redOp`` with the load,
     // EXCEPT the just-emitted ``hlfir.assign`` (which intentionally
     // takes the reduction's original result as its source).
-    llvm::SmallPtrSet<mlir::Operation*, 4> exceptions{liftedAssign};
+    llvm::SmallPtrSet<mlir::Operation*, 4> const exceptions{liftedAssign};
     redOp->getResult(0).replaceAllUsesExcept(load.getResult(), exceptions);
   }
 
@@ -373,12 +373,13 @@ struct LiftReductionOperandsPass
   /// when the operand came from a normal Fortran-source array
   /// declaration -- so no per-consumer rewrite is needed beyond
   /// ``replaceAllUsesExcept``.
-  void liftArrayResult(hlfir::AssignOp consumer, mlir::Operation* redOp,
-                       llvm::DenseMap<mlir::func::FuncOp, unsigned>& liftCounter, int64_t rank, mlir::Type eltTy) {
+  static void liftArrayResult(hlfir::AssignOp consumer, mlir::Operation* redOp,
+                              llvm::DenseMap<mlir::func::FuncOp, unsigned>& liftCounter, int64_t rank,
+                              mlir::Type eltTy) {
     auto func = consumer->getParentOfType<mlir::func::FuncOp>();
     if (!func || rank <= 0 || !eltTy) return;
 
-    unsigned gid = liftCounter[func]++;
+    unsigned const gid = liftCounter[func]++;
     auto loc = redOp->getLoc();
     auto* ctx = func.getContext();
 
@@ -400,8 +401,9 @@ struct LiftReductionOperandsPass
       return;
     }
     for (auto d : shape)
-      if (d == mlir::ShapedType::kDynamic || d == fir::SequenceType::getUnknownExtent())
-        return;  // dynamic shape -- can't pre-allocate statically.
+      // ``fir::SequenceType::getUnknownExtent()`` IS ``mlir::ShapedType::kDynamic``
+      // (same sentinel value), so one check covers both extent conventions.
+      if (d == fir::SequenceType::getUnknownExtent()) return;  // dynamic shape -- can't pre-allocate statically.
 
     // ``fir.alloca !fir.array<N x T>`` + ``hlfir.declare`` at the
     // function entry block -- mirrors Flang's lowering for a
@@ -428,7 +430,7 @@ struct LiftReductionOperandsPass
       auto e = un.rfind('E');
       if (e != std::string::npos) scopePrefix = un.substr(0, e + 1);
     });
-    std::string uniqName = scopePrefix + "QQlift_linalg_" + std::to_string(gid);
+    std::string const uniqName = scopePrefix + "QQlift_linalg_" + std::to_string(gid);
     mlir::NamedAttrList attrs;
     attrs.append("uniq_name", mlir::StringAttr::get(ctx, uniqName));
     // Build a shape value for hlfir.declare -- one fir.shape with
@@ -462,7 +464,7 @@ struct LiftReductionOperandsPass
 
     // Replace every existing use of the op's result with the
     // as_expr result, EXCEPT the just-emitted hlfir.assign.
-    llvm::SmallPtrSet<mlir::Operation*, 4> exceptions{liftedAssign};
+    llvm::SmallPtrSet<mlir::Operation*, 4> const exceptions{liftedAssign};
     redOp->getResult(0).replaceAllUsesExcept(asExpr.getResult(), exceptions);
   }
 };

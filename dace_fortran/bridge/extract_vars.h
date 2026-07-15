@@ -311,11 +311,10 @@ using AllocSitesIndex = std::map<std::string, std::vector<fir::AllocMemOp>>;
 /// already-allocated and never queried by ``ALLOCATED(...)`` skip the
 /// tracker entirely.
 ///
-/// :param allocIdx: optional prebuilt alloc-site index (see above).
+/// :param idx: optional prebuilt alloc-site index (see above).
 /// :param readerNames: optional prebuilt set of short names with an
 ///     ``ALLOCATED`` / ``ASSOCIATED`` reader.
-bool needsAllocatedTracker(const std::string& declName, mlir::ModuleOp module,
-                           const AllocSitesIndex* allocIdx = nullptr,
+bool needsAllocatedTracker(const std::string& declUniqName, mlir::ModuleOp module, const AllocSitesIndex* idx = nullptr,
                            const std::set<std::string>* readerNames = nullptr);
 
 /// Per-site name for an allocatable ``ALLOCATE``.  Site 0 keeps the

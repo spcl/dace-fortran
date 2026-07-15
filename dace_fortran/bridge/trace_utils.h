@@ -12,6 +12,7 @@
 
 #include <llvm/ADT/SmallVector.h>
 
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <set>
@@ -247,7 +248,7 @@ void forEachConstIndexedElement(mlir::Value v,
 ///   * ``fir.shape_shift<N>``  -- interleaved ``(lb,ext)`` pairs
 ///   * ``fir.shift<N>``        -- lbs only; extents live on the box
 struct ShapeOperandInfo {
-  enum Kind { None, Shape, ShapeShift, Shift } kind = None;
+  enum Kind : std::uint8_t { None, Shape, ShapeShift, Shift } kind = None;
   std::vector<mlir::Value> lbs;      // empty for Shape (implicit 1)
   std::vector<mlir::Value> extents;  // empty for Shift (box-carried)
   unsigned rank = 0;

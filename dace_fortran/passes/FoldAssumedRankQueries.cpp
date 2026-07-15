@@ -82,11 +82,11 @@ namespace hlfir_bridge {
 namespace {
 
 /// Maximum convert-chain depth to walk while tracing.
-static constexpr unsigned kMaxTraceDepth = 16;
+constexpr unsigned kMaxTraceDepth = 16;
 
 /// Strip ``fir.box`` / ``fir.ref`` / ``fir.heap`` / ``fir.ptr`` layers
 /// off a type until we hit a ``fir.array`` (``fir.SequenceType``).
-static mlir::Type peelToArray(mlir::Type t) {
+mlir::Type peelToArray(mlir::Type t) {
   for (int i = 0; i < 8; ++i) {
     if (auto bx = mlir::dyn_cast<fir::BoxType>(t)) {
       t = bx.getEleTy();
@@ -120,7 +120,7 @@ static mlir::Type peelToArray(mlir::Type t) {
 /// AND having shape size exactly one with no concrete entries; we
 /// match more directly via ``hasAssumedRank()`` since flang
 /// represents the rank-``*`` case with that bit.
-static int traceStaticRank(mlir::Value v) {
+int traceStaticRank(mlir::Value v) {
   for (unsigned i = 0; i < kMaxTraceDepth && v; ++i) {
     auto t = peelToArray(v.getType());
     if (auto seq = mlir::dyn_cast<fir::SequenceType>(t)) {
@@ -150,6 +150,7 @@ static int traceStaticRank(mlir::Value v) {
 
 struct FoldAssumedRankQueriesPass
     : public mlir::PassWrapper<FoldAssumedRankQueriesPass, mlir::OperationPass<mlir::ModuleOp>> {
+  // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(FoldAssumedRankQueriesPass)
 
   llvm::StringRef getArgument() const final { return "hlfir-fold-assumed-rank-queries"; }
@@ -167,7 +168,7 @@ struct FoldAssumedRankQueriesPass
     llvm::SmallVector<fir::BoxRankOp, 8> rankQueries;
     module.walk([&](fir::BoxRankOp op) { rankQueries.push_back(op); });
     for (auto op : rankQueries) {
-      int rank = traceStaticRank(op.getBox());
+      int const rank = traceStaticRank(op.getBox());
       if (rank < 0) continue;
       b.setInsertionPoint(op);
       auto resTy = op.getResult().getType();
@@ -282,7 +283,7 @@ struct FoldAssumedRankQueriesPass
     llvm::SmallVector<fir::IsAssumedSizeOp, 8> sizeQueries;
     module.walk([&](fir::IsAssumedSizeOp op) { sizeQueries.push_back(op); });
     for (auto op : sizeQueries) {
-      int rank = traceStaticRank(op.getVal());
+      int const rank = traceStaticRank(op.getVal());
       if (rank < 0) continue;
       b.setInsertionPoint(op);
       auto resTy = op.getResult().getType();

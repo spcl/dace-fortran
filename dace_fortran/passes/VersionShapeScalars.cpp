@@ -84,12 +84,12 @@ namespace {
 /// explicit-shape array freezes its bound at entry, so it is never a
 /// reassignment hazard), so it is both the precise and the sufficient anchor.
 /// Bounded forward walk -- an extent expression is shallow.
-static bool feedsAllocateExtent(mlir::Value v) {
+bool feedsAllocateExtent(mlir::Value v) {
   llvm::SmallVector<mlir::Value, 8> work{v};
   llvm::SmallPtrSet<mlir::Operation*, 16> seen;
   int budget = 256;
   while (!work.empty() && budget-- > 0) {
-    mlir::Value cur = work.pop_back_val();
+    mlir::Value const cur = work.pop_back_val();
     for (auto* u : cur.getUsers()) {
       if (mlir::isa<fir::AllocMemOp>(u)) return true;
       // Arithmetic / convert / clamp that an extent expression threads through
@@ -108,14 +108,14 @@ static bool feedsAllocateExtent(mlir::Value v) {
 /// The memref/target value a write op stores to: ``fir.store``'s memref or a
 /// scalar ``hlfir.assign``'s LHS (Fortran ``m = ...`` lowers to assign, not
 /// store).  Null if ``op`` is not a write.
-static mlir::Value writeTargetOf(mlir::Operation* op) {
+mlir::Value writeTargetOf(mlir::Operation* op) {
   if (auto st = mlir::dyn_cast<fir::StoreOp>(op)) return st.getMemref();
   if (auto as = mlir::dyn_cast<hlfir::AssignOp>(op)) return as.getLhs();
   return {};
 }
 
 /// The mutable target operand of a write op (for redirection).
-static mlir::OpOperand* writeTargetOperand(mlir::Operation* op) {
+mlir::OpOperand* writeTargetOperand(mlir::Operation* op) {
   if (auto st = mlir::dyn_cast<fir::StoreOp>(op)) return &st.getMemrefMutable();
   if (auto as = mlir::dyn_cast<hlfir::AssignOp>(op)) return &as.getLhsMutable();
   return nullptr;
@@ -123,7 +123,7 @@ static mlir::OpOperand* writeTargetOperand(mlir::Operation* op) {
 
 /// The innermost loop op (``fir.do_loop`` / ``scf.for`` / ``scf.while``)
 /// enclosing ``op``, or null if ``op`` is not inside a loop.
-static mlir::Operation* enclosingLoop(mlir::Operation* op) {
+mlir::Operation* enclosingLoop(mlir::Operation* op) {
   for (mlir::Operation* p = op->getParentOp(); p; p = p->getParentOp())
     if (mlir::isa<fir::DoLoopOp, mlir::scf::ForOp, mlir::scf::WhileOp>(p)) return p;
   return nullptr;
@@ -131,6 +131,7 @@ static mlir::Operation* enclosingLoop(mlir::Operation* op) {
 
 struct VersionShapeScalarsPass
     : public mlir::PassWrapper<VersionShapeScalarsPass, mlir::OperationPass<mlir::ModuleOp>> {
+  // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(VersionShapeScalarsPass)
 
   llvm::StringRef getArgument() const final { return "hlfir-version-shape-scalars"; }
@@ -168,7 +169,8 @@ struct VersionShapeScalarsPass
   /// allocated from it in a straight line; refuse (``failure``) if that
   /// post-allocation reassignment is in a loop / branch; otherwise leave it
   /// untouched (``success``).
-  mlir::LogicalResult versionOne(hlfir::DeclareOp decl, const llvm::DenseMap<mlir::Operation*, unsigned>& order) {
+  static mlir::LogicalResult versionOne(hlfir::DeclareOp decl,
+                                        const llvm::DenseMap<mlir::Operation*, unsigned>& order) {
     // Scalar integer local only.  ``hlfir.declare`` result #0 is the entity;
     // a scalar integer is ``!fir.ref<iN>`` (no box / sequence).
     auto refTy = mlir::dyn_cast<fir::ReferenceType>(decl.getResult(0).getType());
@@ -270,7 +272,7 @@ struct VersionShapeScalarsPass
   /// Short Fortran name of ``decl`` (the entity after the final scope letter
   /// in its ``uniq_name``), for diagnostics.
   static std::string extractShortName(hlfir::DeclareOp decl) {
-    llvm::StringRef u = decl.getUniqName();
+    llvm::StringRef const u = decl.getUniqName();
     auto e = u.rfind('E');
     return (e == llvm::StringRef::npos) ? u.str() : u.substr(e + 1).str();
   }
@@ -279,7 +281,7 @@ struct VersionShapeScalarsPass
   /// result at the matching result of ``to`` (entity #0 / raw #1 preserved).
   static void redirectMemref(mlir::OpOperand& operand, hlfir::DeclareOp from, hlfir::DeclareOp to) {
     if (from == to) return;
-    mlir::Value v = operand.get();
+    mlir::Value const v = operand.get();
     if (v == from.getResult(0))
       operand.set(to.getResult(0));
     else if (v == from.getResult(1))
@@ -291,8 +293,8 @@ struct VersionShapeScalarsPass
   /// inserted right after the original declare so it dominates every later use.
   static hlfir::DeclareOp makeVersion(mlir::OpBuilder& builder, hlfir::DeclareOp orig, unsigned version) {
     builder.setInsertionPointAfter(orig);
-    mlir::Location loc = orig.getLoc();
-    std::string newUniq = orig.getUniqName().str() + "_" + std::to_string(version);
+    mlir::Location const loc = orig.getLoc();
+    std::string const newUniq = orig.getUniqName().str() + "_" + std::to_string(version);
 
     // Fresh storage of the same scalar type, declared under the versioned name
     // (``traceToDecl`` reads the entity after the final ``E`` -> ``m_<n>``).

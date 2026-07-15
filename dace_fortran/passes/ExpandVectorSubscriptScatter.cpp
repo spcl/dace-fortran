@@ -70,6 +70,7 @@ namespace {
 
 struct ExpandVectorSubscriptScatterPass
     : public mlir::PassWrapper<ExpandVectorSubscriptScatterPass, mlir::OperationPass<mlir::ModuleOp>> {
+  // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ExpandVectorSubscriptScatterPass)
 
   llvm::StringRef getArgument() const final { return "hlfir-expand-vector-subscript-scatter"; }
@@ -98,7 +99,10 @@ struct ExpandVectorSubscriptScatterPass
     });
 
     for (auto op : targets)
-      if (mlir::failed(rewrite(op))) return signalPassFailure();
+      if (mlir::failed(rewrite(op))) {
+        signalPassFailure();
+        return;
+      }
   }
 
  private:
@@ -122,7 +126,7 @@ struct ExpandVectorSubscriptScatterPass
       return op.emitError("hlfir-expand-vector-subscript-scatter: rank-")
              << (shapeOp ? shapeOp.getExtents().size() : 0) << " scatter not yet supported (rank-1 only)";
     }
-    mlir::Value extent = shapeOp.getExtents()[0];
+    mlir::Value const extent = shapeOp.getExtents()[0];
     // ``cstExt`` is non-null only when the extent folds to a
     // compile-time constant.  Required ONLY when materialising a
     // scatter-source temp (the ``hlfir.expr`` path); dynamic-extent
@@ -188,7 +192,7 @@ struct ExpandVectorSubscriptScatterPass
       b.clone(inner, map);
     }
 
-    mlir::Value mappedExtent = map.lookupOrDefault(extent);
+    mlir::Value const mappedExtent = map.lookupOrDefault(extent);
     auto c1 = b.create<mlir::arith::ConstantOp>(loc, b.getIndexAttr(1));
 
     // --- Step 2: when the source is an ``hlfir.expr`` (i.e. a
@@ -269,7 +273,7 @@ struct ExpandVectorSubscriptScatterPass
         rhsRoot = traceRoot(srcVal);
       }
     }
-    bool aliases = lhsRoot && rhsRoot && lhsRoot == rhsRoot;
+    bool const aliases = lhsRoot && rhsRoot && lhsRoot == rhsRoot;
     // Materialise a scatter-source temp only when the source is a
     // gather expression AND the roots alias.  Constant extent uses
     // a static-shape temp; symbolic extent uses a dynamic-shape
@@ -342,7 +346,7 @@ struct ExpandVectorSubscriptScatterPass
       std::optional<int64_t> staticExt;
       if (cstExt)
         if (auto a = mlir::dyn_cast<mlir::IntegerAttr>(cstExt.getValue())) staticExt = a.getInt();
-      int64_t typeExt = staticExt.value_or(fir::SequenceType::getUnknownExtent());
+      int64_t const typeExt = staticExt.value_or(fir::SequenceType::getUnknownExtent());
       auto seqTy = fir::SequenceType::get({typeExt}, eleTy);
       fir::AllocaOp alloca;
       if (staticExt.has_value()) {
@@ -353,7 +357,7 @@ struct ExpandVectorSubscriptScatterPass
                                          /*typeparams=*/mlir::ValueRange{},
                                          /*shape=*/mlir::ValueRange{mappedExtent});
       }
-      std::string uniqName = "_QF" + enclName + "E" + dstName + "_scatter_" + std::to_string(kScatterCounter++);
+      std::string const uniqName = "_QF" + enclName + "E" + dstName + "_scatter_" + std::to_string(kScatterCounter++);
       auto newShape = b.create<fir::ShapeOp>(loc, mlir::ValueRange{mappedExtent});
       hlfir::DeclareOp declOp;
       if (staticExt.has_value()) {
@@ -380,10 +384,10 @@ struct ExpandVectorSubscriptScatterPass
                                            /*unordered=*/false,
                                            /*finalCountValue=*/false);
       {
-        mlir::OpBuilder::InsertionGuard gg(b);
+        mlir::OpBuilder::InsertionGuard const gg(b);
         b.setInsertionPointToStart(gloop.getBody());
-        mlir::Value giv = gloop.getInductionVar();
-        mlir::Value mappedSrc = map.lookupOrDefault(srcVal);
+        mlir::Value const giv = gloop.getInductionVar();
+        mlir::Value const mappedSrc = map.lookupOrDefault(srcVal);
         auto applied = b.create<hlfir::ApplyOp>(loc, eleTy, mappedSrc, mlir::ValueRange{giv},
                                                 /*typeparams=*/mlir::ValueRange{});
         auto dst = b.create<hlfir::DesignateOp>(loc, fir::ReferenceType::get(eleTy), srcRefBase, mlir::ValueRange{giv});
@@ -406,7 +410,7 @@ struct ExpandVectorSubscriptScatterPass
                                          /*unordered=*/false,
                                          /*finalCountValue=*/false);
     b.setInsertionPointToStart(sloop.getBody());
-    mlir::Value iv = sloop.getInductionVar();
+    mlir::Value const iv = sloop.getInductionVar();
 
     // Source read.  Three shapes converge here:
     //   * scatter-source temp materialised above (aliased gather
@@ -416,10 +420,10 @@ struct ExpandVectorSubscriptScatterPass
     //     original ``hlfir.expr`` value; read by ``hlfir.apply``.
     //   * contiguous source ref  --  ``srcRefBase`` is the original
     //     ``fir.ref<array<...>>``; read by designate + load.
-    bool readByApply = srcIsExpr && !aliases;
+    bool const readByApply = srcIsExpr && !aliases;
     mlir::Value srcLoadVal;
     if (readByApply) {
-      mlir::Value mappedSrc = map.lookupOrDefault(srcVal);
+      mlir::Value const mappedSrc = map.lookupOrDefault(srcVal);
       auto applied = b.create<hlfir::ApplyOp>(loc, eleTy, mappedSrc, mlir::ValueRange{iv},
                                               /*typeparams=*/mlir::ValueRange{});
       srcLoadVal = applied.getResult();
