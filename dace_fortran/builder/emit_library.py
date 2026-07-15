@@ -12,6 +12,7 @@ and none is big enough to earn its own file.
 
 import importlib
 import math
+import re
 
 import dace.symbolic
 from dace import InterstateEdge, Memlet
@@ -2069,10 +2070,21 @@ def emit_call(builder, ctx, n, region):
         decl_types.append(f"{ct}*" if rank > 0 else ct)
     c_decl = f'extern "C" void {sig.c_name}({", ".join(decl_types) or "void"});'
 
+    body_text = "\n".join(body_lines)
+    # Symbols the call string forwards (dynamic-member extents + lower bounds).
+    # A PASS-THROUGH array member (never indexed in this SDFG, only handed to the
+    # callee) contributes an ``offset_<arr>_d<i>`` that appears ONLY here, so
+    # record it as a node dependency; otherwise the unused-symbol prune drops it
+    # and the emitted call references an undeclared symbol.  Intersect with the
+    # SDFG's known symbols / registered offsets so C keywords, connectors and the
+    # callee name never leak in.
+    ext_syms = sorted(s for s in set(re.findall(r"[A-Za-z_]\w*", body_text))
+                      if s in ctx.sdfg.symbols or s in builder.offset_values)
     node = ExternalCall(name=f"_ext_{callee}_{builder.nid()}",
                         c_name=sig.c_name,
                         c_decl=c_decl,
-                        body="\n".join(body_lines),
+                        body=body_text,
+                        symbol_deps=ext_syms,
                         inputs=in_conns,
                         outputs=out_conns)
     state.add_node(node)

@@ -583,12 +583,26 @@ class ExternalCall(dace.sdfg.nodes.LibraryNode):
     c_decl = dace.properties.Property(dtype=str, default="")
     #: The CPP statement(s) the expanded tasklet runs (the call line).
     body = dace.properties.Property(dtype=str, default="")
+    #: SDFG symbol names the ``body`` forwards to the callee (dynamic-member
+    #: extents + lower bounds).  Reported through :attr:`free_symbols` so a
+    #: PASS-THROUGH array's ``offset_<arr>_d<i>`` / ``<arr>_d<i>`` -- referenced
+    #: ONLY in the call string, never in an outer index -- is not dropped by the
+    #: unused-symbol prune, which would leave the emitted call referencing an
+    #: undeclared symbol.
+    symbol_deps = dace.properties.ListProperty(element_type=str, default=[])
 
-    def __init__(self, name, *, c_name="", c_decl="", body="", inputs=None, outputs=None, **kwargs):
+    def __init__(self, name, *, c_name="", c_decl="", body="", symbol_deps=None, inputs=None, outputs=None, **kwargs):
         super().__init__(name=name, inputs=inputs or set(), outputs=outputs or set(), **kwargs)
         self.c_name = c_name
         self.c_decl = c_decl
         self.body = body
+        self.symbol_deps = list(symbol_deps or [])
+
+    @property
+    def free_symbols(self) -> set:
+        fsyms = super().free_symbols
+        fsyms.update(self.symbol_deps)
+        return fsyms
 
     def validate(self, sdfg, state):
         """Reject the node if the C body does not actually call ``c_name``
