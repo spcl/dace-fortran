@@ -94,10 +94,13 @@ def test_whole_object_rebind_live_update_hits_source(tmp_path: Path):
     b = build_sdfg(_LIVE_SRC, tmp_path / "sdfg", name="objalias", entry="mo_objalias::run")
     sdfg = b.build()
     sdfg.validate()
-    # The rebind is registered as an object alias (collected during ``build``),
-    # and its data-less store target is dropped at emit.
-    assert b.object_aliases.get("p") == "g"
-    assert "p" in b.object_alias_defs
+    # The ``p => g`` rebind must be resolved away before emit so no descriptor-less
+    # ``p`` companion dangles into the SDFG.  Two resolutions are equally valid:
+    # the builder collects it as an object alias (``scan_object_aliases``), or the
+    # bridge collapses ``p % arr`` straight onto the source companion ``g_arr``.
+    resolved_via_alias = b.object_aliases.get("p") == "g" and "p" in b.object_alias_defs
+    resolved_via_collapse = "p" not in sdfg.arrays and "p_arr" not in sdfg.arrays
+    assert resolved_via_alias or resolved_via_collapse, "p => g rebind left a dangling companion"
 
     n = 5
     arr = np.asfortranarray(np.arange(1, n + 1, dtype=np.float64))

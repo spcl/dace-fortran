@@ -182,7 +182,8 @@ def _retarget_shim(shim: str,
                    module_dims=None,
                    n_val=None,
                    solver_allocs=None,
-                   pointer_members=None) -> str:
+                   pointer_members=None,
+                   extra_refmod_imports=None) -> str:
     """Rewrite the auto ``<dace_name>_c`` shim into a ``<dace_name>_ref_c`` that
     calls the ORIGINAL kernel ``entry`` (``module::proc``) instead of the
     ``<dace_name>_dace`` binding.  The flat->struct reconstruction (header,
@@ -228,6 +229,11 @@ def _retarget_shim(shim: str,
             # same-named shim local; seeded just before the call below.
             for sym, module in module_dims:
                 out.append(f"  use {module}, only: {sym}__refmod => {sym}")
+            # Seeded grid-dim globals a solver-alloc extent references
+            # (``nproma__refmod``): imported (renamed) so the extent resolves;
+            # their value is supplied by the ctypes module-seed, not a shim assign.
+            for sym, module in (extra_refmod_imports or []):
+                out.append(f"  use {module}, only: {sym}__refmod => {sym}")
             continue
         if f"call {dace_name}_dace_finalize()" in ln:
             continue
@@ -262,7 +268,8 @@ def _inject_dut_solver_allocs(shim: str,
                               module_dims=None,
                               n_val=None,
                               solver_allocs=None,
-                              pointer_members=None) -> str:
+                              pointer_members=None,
+                              extra_refmod_imports=None) -> str:
     """Pre-allocate the stubbed module-global solver-scratch host members in the
     DUT ``<dace_name>_c`` shim -- symmetric to :func:`_retarget_shim`'s REF-side
     injection, but KEEPING the ``<dace_name>_dace`` (SDFG) call.
@@ -292,6 +299,11 @@ def _inject_dut_solver_allocs(shim: str,
             out.append(ln)
             out.append(f"  use {mod}, only: {', '.join(solver_objs)}")
             for sym, module in module_dims:
+                out.append(f"  use {module}, only: {sym}__refmod => {sym}")
+            # Seeded grid-dim globals a solver-alloc extent references
+            # (``nproma__refmod``): imported (renamed) so the extent resolves;
+            # their value comes from the ctypes module-seed, not a shim assign.
+            for sym, module in (extra_refmod_imports or []):
                 out.append(f"  use {module}, only: {sym}__refmod => {sym}")
             continue
         m = re.match(rf"(\s*)call {dace_name}_dace\((.*)\)\s*$", ln)
@@ -499,6 +511,25 @@ def _build_and_compare(tu_path: Path,
     pointer_members = {(o.lower(), c.lower())
                        for o, c in re.findall(r"associated\(\s*(\w+)\s*%\s*(\w+)\s*\)", binding_text)}
 
+    # A solver-alloc extent may reference a seeded grid-dim global by its
+    # ``<sym>__refmod`` rename (``x_loc_wp(nproma__refmod, ...)``).  Those NOT in
+    # the size-derived ``module_dims`` come from ``module_seeds``; import them
+    # (renamed) into both shims so the extent resolves.  Their value is the ctypes
+    # module-seed set before the call -- not a shim assign -- so they carry no seed.
+    extra_refmod_imports = []
+    if ref_solver_allocs:
+        sym_module = _module_symbol_map(binding_text)
+        size_derived = {s for s, _m in module_dims}
+        referenced = set()
+        for _obj, _comp, dims in ref_solver_allocs:
+            referenced |= set(re.findall(r"(\w+)__refmod", dims))
+        for sym in sorted(referenced - size_derived):
+            module = sym_module.get(sym)
+            if module is None:
+                raise KeyError(f"solver-alloc extent references '{sym}__refmod' but '{sym}' is not a "
+                               f"module import in the binding")
+            extra_refmod_imports.append((sym, module))
+
     # DUT: pre-allocate the stubbed solver-scratch host members in the shim (the
     # same list the REF shim builds) and re-link the DUT .so.  The binding's
     # live-member marshalling then sizes each SoA companion from the real (mesh)
@@ -515,7 +546,8 @@ def _build_and_compare(tu_path: Path,
                                       module_dims,
                                       n,
                                       solver_allocs=ref_solver_allocs,
-                                      pointer_members=pointer_members))
+                                      pointer_members=pointer_members,
+                                      extra_refmod_imports=extra_refmod_imports))
         dut_so_path = out / f"lib{dace_name}_dut.so"
         sdfg_so = Path(lib.sdfg_so)
         rl = subprocess.run([
@@ -540,7 +572,8 @@ def _build_and_compare(tu_path: Path,
                        module_dims,
                        n,
                        solver_allocs=ref_solver_allocs,
-                       pointer_members=pointer_members))
+                       pointer_members=pointer_members,
+                       extra_refmod_imports=extra_refmod_imports))
     ref_so = out / f"lib{dace_name}_ref.so"
     # No ``-fallow-argument-mismatch``: it silences REAL argument-type errors, so a
     # genuine ABI mismatch between the shim and the kernel would compile to a wrong

@@ -216,19 +216,6 @@ MODULE mo_ocean_solve_aux
     this % use_atol = use_atol
   END SUBROUTINE ocean_solve_parm_init
 END MODULE mo_ocean_solve_aux
-MODULE mo_ocean_solve_lhs_type
-  IMPLICIT NONE
-  TYPE, ABSTRACT :: t_lhs_agen
-    LOGICAL :: is_const, use_shortcut
-    LOGICAL :: is_init = .FALSE.
-  END TYPE t_lhs_agen
-END MODULE mo_ocean_solve_lhs_type
-MODULE mo_ocean_solve_transfer
-  IMPLICIT NONE
-  TYPE, ABSTRACT :: t_transfer
-  END TYPE t_transfer
-  CONTAINS
-END MODULE mo_ocean_solve_transfer
 MODULE mo_ocean_surface_types
   USE mo_math_types, ONLY: t_cartesian_coordinates
   IMPLICIT NONE
@@ -2017,6 +2004,82 @@ MODULE mo_ocean_solve_lhs
     CLOSE(UNIT = fileno)
   END SUBROUTINE lhs_dump_matrix
 END MODULE mo_ocean_solve_lhs
+MODULE mo_ocean_solve_lhs_type
+  USE mo_model_domain, ONLY: t_patch, t_patch_3d
+  USE mo_ocean_types, ONLY: t_operator_coeff, t_solvercoeff_singleprecision
+  IMPLICIT NONE
+  TYPE, ABSTRACT :: t_lhs_agen
+    LOGICAL :: is_const, use_shortcut
+    LOGICAL :: is_init = .FALSE.
+  END TYPE t_lhs_agen
+  TYPE, EXTENDS(t_lhs_agen) :: t_primal_flip_flop_lhs
+  END TYPE t_primal_flip_flop_lhs
+  TYPE, EXTENDS(t_lhs_agen) :: t_surface_height_lhs
+    TYPE(t_patch_3d), POINTER :: patch_3d => NULL()
+    TYPE(t_patch), POINTER :: patch_2d => NULL()
+    REAL(KIND = 8), POINTER :: thickness_e_wp(:, :) => NULL()
+    TYPE(t_operator_coeff), POINTER :: op_coeffs_wp => NULL()
+    TYPE(t_solvercoeff_singleprecision), POINTER :: op_coeffs_sp => NULL()
+  END TYPE t_surface_height_lhs
+  CONTAINS
+  SUBROUTINE lhs_primal_flip_flop_construct(this, patch_3d, op_coeffs, jk, lacc)
+    USE mo_model_domain, ONLY: t_patch_3d
+    USE mo_ocean_types, ONLY: t_operator_coeff
+    CLASS(t_primal_flip_flop_lhs), INTENT(INOUT) :: this
+    TYPE(t_patch_3d), TARGET, INTENT(IN) :: patch_3d
+    TYPE(t_operator_coeff), TARGET, INTENT(IN) :: op_coeffs
+    INTEGER, INTENT(IN) :: jk
+    LOGICAL, INTENT(IN), OPTIONAL :: lacc
+  END SUBROUTINE lhs_primal_flip_flop_construct
+  SUBROUTINE lhs_surface_height_construct(this, patch_3d, thick_e, op_coeffs_wp, op_coeffs_sp, lacc)
+    USE mo_model_domain, ONLY: t_patch_3d
+    USE mo_ocean_types, ONLY: t_operator_coeff, t_solvercoeff_singleprecision
+    USE mo_fortran_tools, ONLY: set_acc_host_or_device
+    USE mo_ocean_nml, ONLY: l_lhs_direct, select_lhs
+    USE mo_exception, ONLY: finish
+    CLASS(t_surface_height_lhs), INTENT(INOUT) :: this
+    TYPE(t_patch_3d), POINTER, INTENT(IN) :: patch_3d
+    REAL(KIND = 8), POINTER, INTENT(IN) :: thick_e(:, :)
+    TYPE(t_operator_coeff), TARGET, INTENT(IN) :: op_coeffs_wp
+    TYPE(t_solvercoeff_singleprecision), TARGET, INTENT(IN) :: op_coeffs_sp
+    LOGICAL, INTENT(IN), OPTIONAL :: lacc
+    LOGICAL :: lzacc
+    CALL set_acc_host_or_device(lzacc, lacc)
+    this % patch_3d => patch_3d
+    this % patch_2d => patch_3d % p_patch_2d(1)
+    this % thickness_e_wp => thick_e
+    this % op_coeffs_wp => op_coeffs_wp
+    this % op_coeffs_sp => op_coeffs_sp
+    this % is_const = .FALSE.
+    this % use_shortcut = (select_lhs .GT. 2 .AND. select_lhs .LE. 3)
+    IF (this % patch_2d % cells % max_connectivity .NE. 3 .AND. .NOT. l_lhs_direct) CALL finish("t_surface_height_lhs::lhs_surface_height_construct", "internal matrix implementation only works with triangular grids!")
+    this % is_init = .TRUE.
+  END SUBROUTINE lhs_surface_height_construct
+END MODULE mo_ocean_solve_lhs_type
+MODULE mo_ocean_solve_transfer
+  IMPLICIT NONE
+  TYPE, ABSTRACT :: t_transfer
+  END TYPE t_transfer
+  TYPE, EXTENDS(t_transfer) :: t_subset_transfer
+  END TYPE t_subset_transfer
+  TYPE, EXTENDS(t_transfer) :: t_trivial_transfer
+  END TYPE t_trivial_transfer
+  CONTAINS
+  SUBROUTINE subset_transfer_construct(this, sync_type, patch_2d, redfac, mode, lacc)
+    USE mo_model_domain, ONLY: t_patch
+    CLASS(t_subset_transfer), INTENT(INOUT) :: this
+    INTEGER, INTENT(IN) :: sync_type, redfac, mode
+    TYPE(t_patch), POINTER :: patch_2d
+    LOGICAL, INTENT(IN), OPTIONAL :: lacc
+  END SUBROUTINE subset_transfer_construct
+  SUBROUTINE trivial_transfer_construct(this, sync_type, patch_2d, lacc)
+    USE mo_model_domain, ONLY: t_patch
+    CLASS(t_trivial_transfer), INTENT(INOUT) :: this
+    INTEGER, INTENT(IN) :: sync_type
+    TYPE(t_patch), POINTER :: patch_2d
+    LOGICAL, INTENT(IN), OPTIONAL :: lacc
+  END SUBROUTINE trivial_transfer_construct
+END MODULE mo_ocean_solve_transfer
 MODULE mo_ocean_solve_backend
   USE mo_ocean_solve_lhs, ONLY: t_lhs
   USE mo_ocean_solve_transfer, ONLY: t_transfer
@@ -2030,7 +2093,7 @@ MODULE mo_ocean_solve_backend
   SUBROUTINE ocean_solve_backend_dump_matrix(this, id, lprecon, lacc)
     USE mo_fortran_tools, ONLY: set_acc_host_or_device
     USE mo_exception, ONLY: finish
-    USE mo_ocean_solve_lhs, ONLY: lhs_dump_matrix_deconproc_56 => lhs_dump_matrix, lhs_dump_matrix_deconproc_57 => lhs_dump_matrix
+    USE mo_ocean_solve_lhs, ONLY: lhs_dump_matrix_deconproc_74 => lhs_dump_matrix, lhs_dump_matrix_deconproc_75 => lhs_dump_matrix
     CLASS(t_ocean_solve_backend), INTENT(INOUT) :: this
     INTEGER, INTENT(IN) :: id
     LOGICAL, INTENT(IN) :: lprecon
@@ -2040,9 +2103,9 @@ MODULE mo_ocean_solve_backend
     CALL set_acc_host_or_device(lzacc, lacc)
     IF (.NOT. ASSOCIATED(this % trans)) CALL finish(routine, "ocean_solve_t was not initialized")
     IF (lprecon) THEN
-      CALL lhs_dump_matrix_deconproc_56(this % lhs, id, "ocean_matrix_precon_", .TRUE., lacc = lzacc)
+      CALL lhs_dump_matrix_deconproc_74(this % lhs, id, "ocean_matrix_precon_", .TRUE., lacc = lzacc)
     ELSE
-      CALL lhs_dump_matrix_deconproc_57(this % lhs, id, "ocean_matrix_lhs_", .FALSE., lacc = lzacc)
+      CALL lhs_dump_matrix_deconproc_75(this % lhs, id, "ocean_matrix_lhs_", .FALSE., lacc = lzacc)
     END IF
   END SUBROUTINE ocean_solve_backend_dump_matrix
 END MODULE mo_ocean_solve_backend
@@ -2060,7 +2123,7 @@ MODULE mo_ocean_solve
   CONTAINS
   SUBROUTINE ocean_solve_dump_matrix(this, id, lprecon_in, lacc)
     USE mo_fortran_tools, ONLY: set_acc_host_or_device
-    USE mo_ocean_solve_backend, ONLY: ocean_solve_backend_dump_matrix_deconproc_60 => ocean_solve_backend_dump_matrix
+    USE mo_ocean_solve_backend, ONLY: ocean_solve_backend_dump_matrix_deconproc_90 => ocean_solve_backend_dump_matrix
     CLASS(t_ocean_solve), INTENT(INOUT) :: this
     INTEGER, INTENT(IN) :: id
     LOGICAL, INTENT(IN), OPTIONAL :: lprecon_in
@@ -2069,53 +2132,47 @@ MODULE mo_ocean_solve
     LOGICAL :: lzacc
     CALL set_acc_host_or_device(lzacc, lacc)
     lprecon = .FALSE.
-    CALL ocean_solve_backend_dump_matrix_deconproc_60(this % act, id, lprecon, lacc = lzacc)
+    CALL ocean_solve_backend_dump_matrix_deconproc_90(this % act, id, lprecon, lacc = lzacc)
   END SUBROUTINE ocean_solve_dump_matrix
-  SUBROUTINE ocean_solve_construct(this, st, par, par_sp, lhs_agen, trans, lacc)
-    USE mo_ocean_solve_aux, ONLY: t_ocean_solve_parm
-    USE mo_ocean_solve_lhs_type, ONLY: t_lhs_agen
-    USE mo_ocean_solve_transfer, ONLY: t_transfer
-    CLASS(t_ocean_solve), TARGET, INTENT(INOUT) :: this
-    INTEGER, INTENT(IN) :: st
-    TYPE(t_ocean_solve_parm), INTENT(IN) :: par, par_sp
-    CLASS(t_lhs_agen), TARGET, INTENT(IN) :: lhs_agen
-    CLASS(t_transfer), TARGET, INTENT(IN) :: trans
-    LOGICAL, INTENT(IN), OPTIONAL :: lacc
-  END SUBROUTINE ocean_solve_construct
   SUBROUTINE ocean_solve_solve(this, niter, niter_sp, lacc)
     CLASS(t_ocean_solve), INTENT(INOUT) :: this
     INTEGER, INTENT(OUT) :: niter, niter_sp
     LOGICAL, INTENT(IN), OPTIONAL :: lacc
   END SUBROUTINE ocean_solve_solve
+  SUBROUTINE ocean_solve_construct__t_surface_height_lhs__t_trivial_transfer(this, st, par, par_sp, lhs_agen, trans, lacc)
+    USE mo_ocean_solve_aux, ONLY: t_ocean_solve_parm
+    USE mo_ocean_solve_lhs_type, ONLY: t_surface_height_lhs
+    USE mo_ocean_solve_transfer, ONLY: t_trivial_transfer
+    CLASS(t_ocean_solve), TARGET, INTENT(INOUT) :: this
+    INTEGER, INTENT(IN) :: st
+    TYPE(t_ocean_solve_parm), INTENT(IN) :: par, par_sp
+    TYPE(t_surface_height_lhs), TARGET, INTENT(IN) :: lhs_agen
+    TYPE(t_trivial_transfer), TARGET, INTENT(IN) :: trans
+    LOGICAL, INTENT(IN), OPTIONAL :: lacc
+  END SUBROUTINE ocean_solve_construct__t_surface_height_lhs__t_trivial_transfer
+  SUBROUTINE ocean_solve_construct__t_surface_height_lhs__t_subset_transfer(this, st, par, par_sp, lhs_agen, trans, lacc)
+    USE mo_ocean_solve_aux, ONLY: t_ocean_solve_parm
+    USE mo_ocean_solve_lhs_type, ONLY: t_surface_height_lhs
+    USE mo_ocean_solve_transfer, ONLY: t_subset_transfer
+    CLASS(t_ocean_solve), TARGET, INTENT(INOUT) :: this
+    INTEGER, INTENT(IN) :: st
+    TYPE(t_ocean_solve_parm), INTENT(IN) :: par, par_sp
+    TYPE(t_surface_height_lhs), TARGET, INTENT(IN) :: lhs_agen
+    TYPE(t_subset_transfer), TARGET, INTENT(IN) :: trans
+    LOGICAL, INTENT(IN), OPTIONAL :: lacc
+  END SUBROUTINE ocean_solve_construct__t_surface_height_lhs__t_subset_transfer
+  SUBROUTINE ocean_solve_construct__t_primal_flip_flop_lhs__t_triv__1f49ae23(this, st, par, par_sp, lhs_agen, trans, lacc)
+    USE mo_ocean_solve_aux, ONLY: t_ocean_solve_parm
+    USE mo_ocean_solve_lhs_type, ONLY: t_primal_flip_flop_lhs
+    USE mo_ocean_solve_transfer, ONLY: t_trivial_transfer
+    CLASS(t_ocean_solve), TARGET, INTENT(INOUT) :: this
+    INTEGER, INTENT(IN) :: st
+    TYPE(t_ocean_solve_parm), INTENT(IN) :: par, par_sp
+    TYPE(t_primal_flip_flop_lhs), TARGET, INTENT(IN) :: lhs_agen
+    TYPE(t_trivial_transfer), TARGET, INTENT(IN) :: trans
+    LOGICAL, INTENT(IN), OPTIONAL :: lacc
+  END SUBROUTINE ocean_solve_construct__t_primal_flip_flop_lhs__t_triv__1f49ae23
 END MODULE mo_ocean_solve
-MODULE mo_ocean_solve_subset_transfer
-  USE mo_ocean_solve_transfer, ONLY: t_transfer
-  IMPLICIT NONE
-  TYPE, EXTENDS(t_transfer) :: t_subset_transfer
-  END TYPE t_subset_transfer
-  CONTAINS
-  SUBROUTINE subset_transfer_construct(this, sync_type, patch_2d, redfac, mode, lacc)
-    USE mo_model_domain, ONLY: t_patch
-    CLASS(t_subset_transfer), INTENT(INOUT) :: this
-    INTEGER, INTENT(IN) :: sync_type, redfac, mode
-    TYPE(t_patch), POINTER :: patch_2d
-    LOGICAL, INTENT(IN), OPTIONAL :: lacc
-  END SUBROUTINE subset_transfer_construct
-END MODULE mo_ocean_solve_subset_transfer
-MODULE mo_ocean_solve_trivial_transfer
-  USE mo_ocean_solve_transfer, ONLY: t_transfer
-  IMPLICIT NONE
-  TYPE, EXTENDS(t_transfer) :: t_trivial_transfer
-  END TYPE t_trivial_transfer
-  CONTAINS
-  SUBROUTINE trivial_transfer_construct(this, sync_type, patch_2d, lacc)
-    USE mo_model_domain, ONLY: t_patch
-    CLASS(t_trivial_transfer), INTENT(INOUT) :: this
-    INTEGER, INTENT(IN) :: sync_type
-    TYPE(t_patch), POINTER :: patch_2d
-    LOGICAL, INTENT(IN), OPTIONAL :: lacc
-  END SUBROUTINE trivial_transfer_construct
-END MODULE mo_ocean_solve_trivial_transfer
 MODULE mo_ocean_thermodyn
   IMPLICIT NONE
   CONTAINS
@@ -2183,22 +2240,6 @@ MODULE mo_ocean_thermodyn
     END DO
   END SUBROUTINE calc_internal_press_grad
 END MODULE mo_ocean_thermodyn
-MODULE mo_primal_flip_flop_lhs
-  USE mo_ocean_solve_lhs_type, ONLY: t_lhs_agen
-  IMPLICIT NONE
-  TYPE, EXTENDS(t_lhs_agen) :: t_primal_flip_flop_lhs
-  END TYPE t_primal_flip_flop_lhs
-  CONTAINS
-  SUBROUTINE lhs_primal_flip_flop_construct(this, patch_3d, op_coeffs, jk, lacc)
-    USE mo_model_domain, ONLY: t_patch_3d
-    USE mo_ocean_types, ONLY: t_operator_coeff
-    CLASS(t_primal_flip_flop_lhs), INTENT(INOUT) :: this
-    TYPE(t_patch_3d), TARGET, INTENT(IN) :: patch_3d
-    TYPE(t_operator_coeff), TARGET, INTENT(IN) :: op_coeffs
-    INTEGER, INTENT(IN) :: jk
-    LOGICAL, INTENT(IN), OPTIONAL :: lacc
-  END SUBROUTINE lhs_primal_flip_flop_construct
-END MODULE mo_primal_flip_flop_lhs
 MODULE mo_statistics
   IMPLICIT NONE
   CHARACTER(LEN = *), PARAMETER :: module_name = "mo_statistics"
@@ -2300,44 +2341,6 @@ MODULE mo_statistics
     END IF
   END SUBROUTINE gather_minmaxmean
 END MODULE mo_statistics
-MODULE mo_surface_height_lhs
-  USE mo_ocean_solve_lhs_type, ONLY: t_lhs_agen
-  USE mo_model_domain, ONLY: t_patch, t_patch_3d
-  USE mo_ocean_types, ONLY: t_operator_coeff, t_solvercoeff_singleprecision
-  IMPLICIT NONE
-  TYPE, EXTENDS(t_lhs_agen) :: t_surface_height_lhs
-    TYPE(t_patch_3d), POINTER :: patch_3d => NULL()
-    TYPE(t_patch), POINTER :: patch_2d => NULL()
-    REAL(KIND = 8), POINTER :: thickness_e_wp(:, :) => NULL()
-    TYPE(t_operator_coeff), POINTER :: op_coeffs_wp => NULL()
-    TYPE(t_solvercoeff_singleprecision), POINTER :: op_coeffs_sp => NULL()
-  END TYPE t_surface_height_lhs
-  CONTAINS
-  SUBROUTINE lhs_surface_height_construct(this, patch_3d, thick_e, op_coeffs_wp, op_coeffs_sp, lacc)
-    USE mo_model_domain, ONLY: t_patch_3d
-    USE mo_ocean_types, ONLY: t_operator_coeff, t_solvercoeff_singleprecision
-    USE mo_fortran_tools, ONLY: set_acc_host_or_device
-    USE mo_ocean_nml, ONLY: l_lhs_direct, select_lhs
-    USE mo_exception, ONLY: finish
-    CLASS(t_surface_height_lhs), INTENT(INOUT) :: this
-    TYPE(t_patch_3d), POINTER, INTENT(IN) :: patch_3d
-    REAL(KIND = 8), POINTER, INTENT(IN) :: thick_e(:, :)
-    TYPE(t_operator_coeff), TARGET, INTENT(IN) :: op_coeffs_wp
-    TYPE(t_solvercoeff_singleprecision), TARGET, INTENT(IN) :: op_coeffs_sp
-    LOGICAL, INTENT(IN), OPTIONAL :: lacc
-    LOGICAL :: lzacc
-    CALL set_acc_host_or_device(lzacc, lacc)
-    this % patch_3d => patch_3d
-    this % patch_2d => patch_3d % p_patch_2d(1)
-    this % thickness_e_wp => thick_e
-    this % op_coeffs_wp => op_coeffs_wp
-    this % op_coeffs_sp => op_coeffs_sp
-    this % is_const = .FALSE.
-    this % use_shortcut = (select_lhs .GT. 2 .AND. select_lhs .LE. 3)
-    IF (this % patch_2d % cells % max_connectivity .NE. 3 .AND. .NOT. l_lhs_direct) CALL finish("t_surface_height_lhs::lhs_surface_height_construct", "internal matrix implementation only works with triangular grids!")
-    this % is_init = .TRUE.
-  END SUBROUTINE lhs_surface_height_construct
-END MODULE mo_surface_height_lhs
 MODULE mo_sync
   IMPLICIT NONE
   INTEGER, SAVE :: log_unit = - 1
@@ -5018,10 +5021,8 @@ MODULE mo_ocean_velocity_diffusion
 END MODULE mo_ocean_velocity_diffusion
 MODULE mo_ocean_ab_timestepping_mimetic
   USE mo_ocean_solve, ONLY: t_ocean_solve
-  USE mo_surface_height_lhs, ONLY: t_surface_height_lhs
-  USE mo_ocean_solve_subset_transfer, ONLY: t_subset_transfer
-  USE mo_ocean_solve_trivial_transfer, ONLY: t_trivial_transfer
-  USE mo_primal_flip_flop_lhs, ONLY: t_primal_flip_flop_lhs
+  USE mo_ocean_solve_lhs_type, ONLY: t_primal_flip_flop_lhs, t_surface_height_lhs
+  USE mo_ocean_solve_transfer, ONLY: t_subset_transfer, t_trivial_transfer
   IMPLICIT NONE
   TYPE(t_ocean_solve) :: free_sfc_solver
   TYPE(t_ocean_solve) :: free_sfc_solver_comp
@@ -5038,15 +5039,14 @@ MODULE mo_ocean_ab_timestepping_mimetic
   SUBROUTINE init_free_sfc_ab_mimetic(patch_3d, ocean_state, op_coeffs, solvercoeff_sp, lacc)
     USE mo_model_domain, ONLY: t_patch, t_patch_3d
     USE mo_ocean_types, ONLY: t_hydro_ocean_state, t_operator_coeff, t_solvercoeff_singleprecision
-    USE mo_ocean_solve_aux, ONLY: ocean_solve_parm_init_deconproc_67 => ocean_solve_parm_init, t_ocean_solve_parm
+    USE mo_ocean_solve_aux, ONLY: ocean_solve_parm_init_deconproc_97 => ocean_solve_parm_init, t_ocean_solve_parm
     USE mo_fortran_tools, ONLY: set_acc_host_or_device
     USE mo_parallel_config, ONLY: nproma
     USE mo_ocean_nml, ONLY: l_solver_compare, select_solver, select_transfer, solver_max_iter_per_restart, solver_max_iter_per_restart_sp, solver_max_restart_iterations, solver_tolerance, solver_tolerance_comp, solver_tolerance_sp, use_absolute_solver_tolerance
     USE mo_exception, ONLY: finish
-    USE mo_surface_height_lhs, ONLY: lhs_surface_height_construct_deconproc_68 => lhs_surface_height_construct
-    USE mo_ocean_solve_trivial_transfer, ONLY: trivial_transfer_construct_deconproc_69 => trivial_transfer_construct, trivial_transfer_construct_deconproc_73 => trivial_transfer_construct
-    USE mo_ocean_solve, ONLY: ocean_solve_construct_deconproc_70 => ocean_solve_construct, ocean_solve_construct_deconproc_72 => ocean_solve_construct, ocean_solve_construct_deconproc_74 => ocean_solve_construct
-    USE mo_ocean_solve_subset_transfer, ONLY: subset_transfer_construct_deconproc_71 => subset_transfer_construct
+    USE mo_ocean_solve_lhs_type, ONLY: lhs_surface_height_construct_deconproc_98 => lhs_surface_height_construct
+    USE mo_ocean_solve_transfer, ONLY: subset_transfer_construct_deconproc_100 => subset_transfer_construct, trivial_transfer_construct_deconproc_101 => trivial_transfer_construct, trivial_transfer_construct_deconproc_99 => trivial_transfer_construct
+    USE mo_ocean_solve, ONLY: ocean_solve_construct__t_surface_height_lhs__t_subset_transfer, ocean_solve_construct__t_surface_height_lhs__t_trivial_transfer
     TYPE(t_patch_3d), POINTER, INTENT(IN) :: patch_3d
     TYPE(t_hydro_ocean_state), TARGET, INTENT(INOUT) :: ocean_state
     TYPE(t_operator_coeff), INTENT(IN), TARGET :: op_coeffs
@@ -5060,7 +5060,7 @@ MODULE mo_ocean_ab_timestepping_mimetic
     CALL set_acc_host_or_device(lzacc, lacc)
     IF (free_sfc_solver % is_init) RETURN
     patch_2d => patch_3d % p_patch_2d(1)
-    CALL ocean_solve_parm_init_deconproc_67(par, 60, 1, 800, patch_2d % cells % in_domain % end_block, patch_2d % alloc_cell_blocks, nproma, patch_2d % cells % in_domain % end_index, solver_tolerance, use_absolute_solver_tolerance)
+    CALL ocean_solve_parm_init_deconproc_97(par, 60, 1, 800, patch_2d % cells % in_domain % end_block, patch_2d % alloc_cell_blocks, nproma, patch_2d % cells % in_domain % end_index, solver_tolerance, use_absolute_solver_tolerance)
     par_sp % nidx = (- 1)
     sol_type = 21
     SELECT CASE (select_solver)
@@ -5099,21 +5099,21 @@ MODULE mo_ocean_ab_timestepping_mimetic
     CASE DEFAULT
       CALL finish(method_name, "Unknown solver")
     END SELECT
-    CALL lhs_surface_height_construct_deconproc_68(free_sfc_solver_lhs, patch_3d, ocean_state % p_diag % thick_e, op_coeffs, solvercoeff_sp, lacc = lzacc)
+    CALL lhs_surface_height_construct_deconproc_98(free_sfc_solver_lhs, patch_3d, ocean_state % p_diag % thick_e, op_coeffs, solvercoeff_sp, lacc = lzacc)
     SELECT CASE (select_transfer)
     CASE (0)
-      CALL trivial_transfer_construct_deconproc_69(free_sfc_solver_trans_triv, 11, patch_2d, lacc = lzacc)
-      CALL ocean_solve_construct_deconproc_70(free_sfc_solver, sol_type, par, par_sp, free_sfc_solver_lhs, free_sfc_solver_trans_triv, lacc = lzacc)
+      CALL trivial_transfer_construct_deconproc_99(free_sfc_solver_trans_triv, 11, patch_2d, lacc = lzacc)
+      CALL ocean_solve_construct__t_surface_height_lhs__t_trivial_transfer(free_sfc_solver, sol_type, par, par_sp, free_sfc_solver_lhs, free_sfc_solver_trans_triv, lacc = lzacc)
     CASE DEFAULT
       trans_mode = MERGE(71, 70, select_transfer .GT. 0)
-      CALL subset_transfer_construct_deconproc_71(free_sfc_solver_trans_sub, 11, patch_2d, ABS(select_transfer), trans_mode, lacc = lzacc)
-      CALL ocean_solve_construct_deconproc_72(free_sfc_solver, sol_type, par, par_sp, free_sfc_solver_lhs, free_sfc_solver_trans_sub, lacc = lzacc)
+      CALL subset_transfer_construct_deconproc_100(free_sfc_solver_trans_sub, 11, patch_2d, ABS(select_transfer), trans_mode, lacc = lzacc)
+      CALL ocean_solve_construct__t_surface_height_lhs__t_subset_transfer(free_sfc_solver, sol_type, par, par_sp, free_sfc_solver_lhs, free_sfc_solver_trans_sub, lacc = lzacc)
     END SELECT
     IF (l_solver_compare) THEN
-      CALL trivial_transfer_construct_deconproc_73(free_sfc_solver_trans_triv, 11, patch_2d, lacc = lzacc)
+      CALL trivial_transfer_construct_deconproc_101(free_sfc_solver_trans_triv, 11, patch_2d, lacc = lzacc)
       par % tol = solver_tolerance_comp
       par_sp % nidx = (- 1)
-      CALL ocean_solve_construct_deconproc_74(free_sfc_solver_comp, 24, par, par_sp, free_sfc_solver_lhs, free_sfc_solver_trans_triv, lacc = lzacc)
+      CALL ocean_solve_construct__t_surface_height_lhs__t_trivial_transfer(free_sfc_solver_comp, 24, par, par_sp, free_sfc_solver_lhs, free_sfc_solver_trans_triv, lacc = lzacc)
     END IF
   END SUBROUTINE init_free_sfc_ab_mimetic
   SUBROUTINE solve_free_sfc_ab_mimetic(patch_3d, ocean_state, p_ext_data, p_as, p_oce_sfc, p_phys_param, timestep, op_coeffs, solvercoeff_sp, ret_status, lacc)
@@ -5134,7 +5134,7 @@ MODULE mo_ocean_ab_timestepping_mimetic
     USE mo_ocean_nml, ONLY: createsolvermatrix, l_rigid_lid, l_solver_compare, solver_comp_nsteps, solver_firstguess, solver_tolerance
     USE mo_ocean_math_operators, ONLY: smooth_oncells
     USE mo_grid_subset, ONLY: get_index_range
-    USE mo_ocean_solve, ONLY: ocean_solve_dump_matrix_deconproc_77 => ocean_solve_dump_matrix, ocean_solve_solve_deconproc_75 => ocean_solve_solve, ocean_solve_solve_deconproc_76 => ocean_solve_solve
+    USE mo_ocean_solve, ONLY: ocean_solve_dump_matrix_deconproc_104 => ocean_solve_dump_matrix, ocean_solve_solve_deconproc_102 => ocean_solve_solve, ocean_solve_solve_deconproc_103 => ocean_solve_solve
     USE mo_dbg_nml, ONLY: idbg_mxmn
     USE mo_exception, ONLY: message, warning
     USE mo_statistics, ONLY: minmaxmean_2d_inrange_deconiface_190 => minmaxmean_2d_inrange, minmaxmean_2d_inrange_deconiface_191 => minmaxmean_2d_inrange, minmaxmean_2d_inrange_deconiface_194 => minmaxmean_2d_inrange, print_2dvalue_location_deconiface_195 => print_2dvalue_location, print_2dvalue_location_deconiface_196 => print_2dvalue_location
@@ -5210,7 +5210,7 @@ MODULE mo_ocean_ab_timestepping_mimetic
         free_sfc_solver_comp % b_loc_wp => free_sfc_solver % b_loc_wp
       END IF
       CALL dbg_print_2d_deconiface_189('bef ocean_solve(' // TRIM(free_sfc_solver % sol_type_name) // '): h-old', ocean_state % p_prog(nold(1)) % h(:, :), str_module, idt_src, in_subset = owned_cells)
-      CALL ocean_solve_solve_deconproc_75(free_sfc_solver, n_it, n_it_sp, lacc = lzacc)
+      CALL ocean_solve_solve_deconproc_102(free_sfc_solver, n_it, n_it_sp, lacc = lzacc)
       rn = MERGE(free_sfc_solver % res_loc_wp(1), 0.0D0, n_it .NE. 0)
       IF (idbg_mxmn >= 0) THEN
         IF (n_it_sp .NE. - 2) THEN
@@ -5228,7 +5228,7 @@ MODULE mo_ocean_ab_timestepping_mimetic
           END DO
         END DO
         IF (l_is_compare_step) THEN
-          CALL ocean_solve_solve_deconproc_76(free_sfc_solver_comp, n_it, n_it_sp, lacc = lzacc)
+          CALL ocean_solve_solve_deconproc_103(free_sfc_solver_comp, n_it, n_it_sp, lacc = lzacc)
           rn = MERGE(free_sfc_solver_comp % res_loc_wp(1), 0.0D0, n_it .NE. 0)
           WRITE(string, '(a,i4,a,e28.20)') 'SUM of ocean_solve iteration =', n_it - 1, ', residual =', rn
           CALL message('ocean_solve(' // TRIM(free_sfc_solver_comp % sol_type_name) // '): surface height', TRIM(string))
@@ -5241,7 +5241,7 @@ MODULE mo_ocean_ab_timestepping_mimetic
           WRITE(string, "(a,3(e12.3,'  '))") "comparison of solutions (squared): (min/max/mean)", SQRT(minmaxmean(:))
           CALL message('ocean_solve(' // TRIM(free_sfc_solver_comp % sol_type_name) // '): surface height', TRIM(string))
         END IF
-        IF (createsolvermatrix) CALL ocean_solve_dump_matrix_deconproc_77(free_sfc_solver, timestep, lacc = lzacc)
+        IF (createsolvermatrix) CALL ocean_solve_dump_matrix_deconproc_104(free_sfc_solver, timestep, lacc = lzacc)
         CALL sync_patch_array_2d_dp_deconiface_192(1, patch_2d, ocean_state % p_prog(nnew(1)) % h, lacc = lzacc)
         CALL dbg_print_3d_deconiface_193('vn-new', ocean_state % p_prog(nnew(1)) % vn, str_module, 2, in_subset = owned_edges)
         minmaxmean(:) = minmaxmean_2d_inrange_deconiface_194(values = ocean_state % p_prog(nnew(1)) % h(:, :), in_subset = owned_cells)
@@ -5677,11 +5677,11 @@ MODULE mo_ocean_ab_timestepping_mimetic
     USE mo_model_domain, ONLY: t_patch, t_patch_3d
     USE mo_ocean_types, ONLY: t_hydro_ocean_state, t_operator_coeff
     USE mo_impl_constants, ONLY: max_char_length
-    USE mo_ocean_solve_aux, ONLY: ocean_solve_parm_init_deconproc_80 => ocean_solve_parm_init, t_ocean_solve_parm
-    USE mo_primal_flip_flop_lhs, ONLY: lhs_primal_flip_flop_construct_deconproc_78 => lhs_primal_flip_flop_construct, lhs_primal_flip_flop_construct_deconproc_82 => lhs_primal_flip_flop_construct
-    USE mo_ocean_solve_trivial_transfer, ONLY: trivial_transfer_construct_deconproc_79 => trivial_transfer_construct
+    USE mo_ocean_solve_aux, ONLY: ocean_solve_parm_init_deconproc_107 => ocean_solve_parm_init, t_ocean_solve_parm
+    USE mo_ocean_solve_lhs_type, ONLY: lhs_primal_flip_flop_construct_deconproc_105 => lhs_primal_flip_flop_construct, lhs_primal_flip_flop_construct_deconproc_108 => lhs_primal_flip_flop_construct
+    USE mo_ocean_solve_transfer, ONLY: trivial_transfer_construct_deconproc_106 => trivial_transfer_construct
     USE mo_ocean_nml, ONLY: massmatrix_solver_tolerance, n_zlev, solver_max_iter_per_restart, solver_max_restart_iterations
-    USE mo_ocean_solve, ONLY: ocean_solve_construct_deconproc_81 => ocean_solve_construct, ocean_solve_solve_deconproc_83 => ocean_solve_solve
+    USE mo_ocean_solve, ONLY: ocean_solve_construct__t_primal_flip_flop_lhs__t_triv__1f49ae23, ocean_solve_solve_deconproc_109 => ocean_solve_solve
     USE mo_dbg_nml, ONLY: idbg_mxmn
     USE mo_exception, ONLY: message
     TYPE(t_patch_3d), TARGET, INTENT(IN) :: patch_3d
@@ -5695,18 +5695,18 @@ MODULE mo_ocean_ab_timestepping_mimetic
     TYPE(t_patch), POINTER :: patch_2d
     TYPE(t_ocean_solve_parm) :: par, par_sp
     IF (.NOT. inv_mm_solver % is_init) THEN
-      CALL lhs_primal_flip_flop_construct_deconproc_78(inv_mm_solver_lhs, patch_3d, op_coeffs, (- 999))
+      CALL lhs_primal_flip_flop_construct_deconproc_105(inv_mm_solver_lhs, patch_3d, op_coeffs, (- 999))
       patch_2d => patch_3d % p_patch_2d(1)
-      CALL trivial_transfer_construct_deconproc_79(inv_mm_solver_trans, 12, patch_2d)
-      CALL ocean_solve_parm_init_deconproc_80(par, 60, solver_max_restart_iterations, solver_max_iter_per_restart, patch_2d % cells % in_domain % end_block, SIZE(rhs_e, 3), SIZE(rhs_e, 1), patch_2d % edges % in_domain % end_index, massmatrix_solver_tolerance, .TRUE.)
+      CALL trivial_transfer_construct_deconproc_106(inv_mm_solver_trans, 12, patch_2d)
+      CALL ocean_solve_parm_init_deconproc_107(par, 60, solver_max_restart_iterations, solver_max_iter_per_restart, patch_2d % cells % in_domain % end_block, SIZE(rhs_e, 3), SIZE(rhs_e, 1), patch_2d % edges % in_domain % end_index, massmatrix_solver_tolerance, .TRUE.)
       par_sp % nidx = (- 1)
-      CALL ocean_solve_construct_deconproc_81(inv_mm_solver, 21, par, par_sp, inv_mm_solver_lhs, inv_mm_solver_trans)
+      CALL ocean_solve_construct__t_primal_flip_flop_lhs__t_triv__1f49ae23(inv_mm_solver, 21, par, par_sp, inv_mm_solver_lhs, inv_mm_solver_trans)
     END IF
     DO jk = 1, n_zlev
-      CALL lhs_primal_flip_flop_construct_deconproc_82(inv_mm_solver_lhs, patch_3d, op_coeffs, jk)
+      CALL lhs_primal_flip_flop_construct_deconproc_108(inv_mm_solver_lhs, patch_3d, op_coeffs, jk)
       inv_mm_solver % x_loc_wp(:, :) = 0.0D0
       inv_mm_solver % b_loc_wp => rhs_e(:, jk, :)
-      CALL ocean_solve_solve_deconproc_83(inv_mm_solver, n_it, n_it_sp)
+      CALL ocean_solve_solve_deconproc_109(inv_mm_solver, n_it, n_it_sp)
       rn = MERGE((inv_mm_solver % res_loc_wp(1)), 0.0D0, n_it .GT. 0)
       inv_flip_flop_e(:, jk, :) = inv_mm_solver % x_loc_wp(:, :)
       IF (idbg_mxmn >= 1) THEN

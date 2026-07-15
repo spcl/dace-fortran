@@ -1636,7 +1636,14 @@ def _render_aos_copy_in(a) -> List[str]:
         member = f"{a.aos_origin_struct}%{a.aos_member_path}"
         zero = _zero_literal(a.dtype)
         out = [f"    ! ----- scalar-struct member: {a.sdfg_name} <- {member} -----"]
-        if a.rank:
+        if a.rank and _aos_member_is_static(a):
+            # Fixed-shape VALUE member (``vcut%a`` = ``a(3, 3)``): unconditionally
+            # present with literal extents, so it takes no presence guard --
+            # ``allocated`` is illegal on a non-ALLOCATABLE and ``associated`` on a
+            # non-POINTER.  Allocate the literal shape and copy straight in.
+            static_dims = ", ".join(str(d) for d in a.shape[a.aos_outer_rank:])
+            out.append(f"    allocate({a.sdfg_name}({static_dims})); {a.sdfg_name} = {member}")
+        elif a.rank:
             mp = _present(member, a.aos_member_pointer)
             live_dims = ", ".join(f"size({member}, {k + 1})" for k in range(a.rank))
             degen_dims = ", ".join("1" for _ in range(a.rank))
@@ -1745,8 +1752,13 @@ def _render_aos_copy_out(a) -> List[str]:
         # is undefined the companion is the shape-degenerate no-op buffer with
         # nothing to write back.
         out = []
-        if a.rank:
-            member = f"{a.aos_origin_struct}%{a.aos_member_path}"
+        member = f"{a.aos_origin_struct}%{a.aos_member_path}"
+        if a.rank and _aos_member_is_static(a):
+            # Fixed-shape VALUE member (``vcut%a`` = ``a(3, 3)``): unconditionally
+            # present, so it takes no presence guard (``allocated``/``associated``
+            # are illegal on a non-ALLOCATABLE/non-POINTER); pack back directly.
+            out.append(f"    {member} = {a.sdfg_name}")
+        elif a.rank:
             mp = _present(member, a.aos_member_pointer)
             out.append(f"    if ({mp}) {member} = {a.sdfg_name}")
         out.append(f"    deallocate({a.sdfg_name})")
