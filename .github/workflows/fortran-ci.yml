@@ -45,7 +45,10 @@ jobs:
     # fparser ocean extractions; the integration suite likewise builds ICON
     # (same bear-wrapped configure + make) before its SHORT test run -- give
     # both generous headroom.
-    timeout-minutes: ${{ (matrix.suite == 'heavy' || matrix.suite == 'integration') && 180 || 60 }}
+    # ``fast`` is the whole non-long unit sweep; it has grown to ~65-70 min of
+    # all-passing tests and was tripping the old 60 min wall at ~89% (a timeout,
+    # never a test failure), so give it 90 min of headroom.
+    timeout-minutes: ${{ (matrix.suite == 'heavy' || matrix.suite == 'integration') && 180 || 90 }}
     env:
       # Disable hwloc's GL/X11 backend so ``from mpi4py import MPI``
       # (MPI_Init -> hwloc topology) doesn't probe a (possibly absent /
