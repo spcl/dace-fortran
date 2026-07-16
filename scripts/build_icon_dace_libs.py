@@ -173,6 +173,15 @@ def _icon_search_dirs(icon_src: Path) -> list:
     ]
 
 
+def _icon_mod_dirs(icon_build: Path) -> list:
+    """Every directory under the ICON build holding a compiled ``.mod``.  ICON
+    scatters them across its own ``mod/`` plus each bundled external's build tree
+    (fortran-support, mtime, iconmath, cdi, memman), so a single ``-I .../mod``
+    misses e.g. ``mo_fortran_tools.mod``.  Absolute -- the gfortran link runs with
+    ``cwd`` set to the output dir, so a relative ``-I`` would not resolve."""
+    return sorted({p.parent.resolve() for p in icon_build.rglob("*.mod")})
+
+
 def build_velocity_sdfg_from_icon_source(icon_src: Path, icon_build: Path, sdfg_dir: Path):
     """Lower ICON's REAL ``mo_velocity_advection.f90`` to an SDFG.
 
@@ -284,8 +293,17 @@ def build_velocity_inner_wrap(velocity_source: Path,
         callee_ptr_members = scalar_pointer_members(iface)
         plan = FlattenPlan.from_dict(sdfg._flatten_plan_raw or {})
         # Real-source route: ICON's own compiled modules ARE the prelude, so the
-        # shim's ``USE mo_model_domain`` / ``mo_nonhydro_types`` resolve via -I
-        # against the target build's ``mod/`` rather than a self-contained .f90.
+        # Fortran-ABI bindings' ``USE mo_model_domain`` / ``mo_nonhydro_types``
+        # resolve via -I against ICON's real .mod (scattered across its own
+        # ``mod/`` plus each bundled external's build tree), not a stub prelude.
+        # NO C-ABI shim on this route: ICON calls the Fortran-ABI
+        # ``velocity_tendencies_dace`` (whole structs, via icon_wrapper), never
+        # the flat ``velocity_tendencies_c``.  The bindings truncate-and-hash deep
+        # member names to Fortran's 63-char limit; the C shim does not, so the
+        # real t_patch's ``..._decomp_info_glb2loc_index_..._lb0`` (66 chars) would
+        # only break a shim ICON does not link.  Dropping it also moots the
+        # module-symbol-forward table (a C-shim-only detail).
+        icon_incs = tuple(f"-I{d}" for d in _icon_mod_dirs(icon_build)) if real_source else ()
         lib = build_fortran_library(
             sdfg,
             iface=iface,
@@ -294,18 +312,9 @@ def build_velocity_inner_wrap(velocity_source: Path,
             name="velocity_inner_wrap",
             prelude_sources=[] if real_source else [velocity_source],
             extra_sources=[icon_wrapper_f90],
-            bind_c_shim=True,
-            # The module-symbol-forward table scaffolds ONLY the C-ABI shim
-            # ``velocity_tendencies_c`` (the outer-dycore C caller), which ICON
-            # does NOT use -- ICON calls the Fortran-ABI ``velocity_tendencies_dace``
-            # whose wrapper reads these globals via a real ``USE``.  On the
-            # real-source route the shim compiles with ``-I <build>/mod`` against
-            # ICON's REAL modules, and the table names ``mo_mpi::i_am_accel_node``,
-            # which does not exist in this ICON tree -- forwarding it would
-            # hard-error the shim compile.  Empty it: the forwarded globals are
-            # dead scaffolding on the path ICON actually links.
-            bind_c_shim_module_symbol_forward=() if real_source else _VELOCITY_MODULE_FORWARD,
-            flags=((*fflags, f"-I{(icon_build / 'mod').resolve()}") if real_source else fflags),
+            bind_c_shim=not real_source,
+            bind_c_shim_module_symbol_forward=_VELOCITY_MODULE_FORWARD,
+            flags=(*fflags, *icon_incs),
         )
     finally:
         dace.Config.set("compiler", "cpu", "args", value=orig_cxx_args)

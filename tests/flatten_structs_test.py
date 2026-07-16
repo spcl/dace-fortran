@@ -14,6 +14,40 @@ _HERE = Path(__file__).resolve().parent
 _SRC = (_HERE / "complex_struct.f90").read_text()
 _VELOCITY_SRC = (_HERE / "velocity_struct.f90").read_text()
 _JAGGED_SRC = (_HERE / "jagged_struct.f90").read_text()
+#: Type-level PRIVATE components.  flang spells each component of a type
+#: declared with a bare ``PRIVATE`` as ``_QM<module>T<type>.<base>`` -- the
+#: mangled defining-type name, a '.', then the component.  A '.' cannot occur
+#: in a real Fortran component name, which is what the flatten gate keys on.
+#: The two ``t_hidden`` members exercise the two halves of that gate:
+#:   never_used -- private AND never designated -> pruned (ICON's t_patch %
+#:                 comm_pat_gather_c shape: a PRIVATE type whose ALLOCATABLE
+#:                 members the kernel never touches).
+#:   seen       -- private BUT designated by the in-module kernel -> kept (an
+#:                 in-module procedure may read its own type's privates, so the
+#:                 private test ALONE would drop a member the kernel reads).
+_PRIVATE_COMPONENT_SRC = """
+module m_private_components
+  implicit none
+  type :: t_hidden
+    private
+    integer, allocatable :: never_used(:)
+    integer :: seen(4)
+  end type t_hidden
+  type :: t_outer
+    type(t_hidden) :: book
+    real(8) :: data(8)
+  end type t_outer
+contains
+  subroutine private_component_kernel(o, res)
+    type(t_outer), intent(in) :: o
+    real(8), intent(out) :: res(8)
+    integer :: i
+    do i = 1, 8
+      res(i) = o%data(i) + real(o%book%seen(1), 8)
+    end do
+  end subroutine private_component_kernel
+end module m_private_components
+"""
 _FLATTEN_ONLY = "hlfir-flatten-structs"
 
 
@@ -361,3 +395,55 @@ def test_nested_aor_array_member_registers_with_record_dim(tmp_path):
     shape = sdfg.arrays["patch_p1d_dolic"].shape
     assert len(shape) == 3, (f"companion must carry the prepended record dim (rank 1+2=3), got rank "
                              f"{len(shape)}: {shape}")
+
+
+# ----------------------------------------------------------------------------
+# Type-level PRIVATE components: the flatten gate is a CONJUNCTION of
+# "flang spelled it <mangled-type>.<base>" (so no generated binding can name
+# it) AND "this function never designates it" (so it is genuinely unused
+# here).  Both halves are load-bearing; a test per half.
+# ----------------------------------------------------------------------------
+
+
+def _private_component_names(tmp_path):
+    b = build_sdfg(_PRIVATE_COMPONENT_SRC,
+                   tmp_path,
+                   name="private_component_struct",
+                   entry="m_private_components::private_component_kernel")
+    return _names(b)
+
+
+def test_private_component_never_designated_is_pruned(tmp_path):
+    """Gate half 1: a PRIVATE component the kernel never designates must NOT
+    get a flat companion.
+
+    flang spells it ``_QMm_private_componentsTt_hidden.never_used``.  Flattening
+    it mints a companion whose declaration and ``c_loc`` path carry that '.',
+    which is not a legal Fortran identifier -- and the component is private to
+    another module, so no generated binding could name it even spelled
+    correctly.  This is exactly ICON's real ``t_patch % comm_pat_gather_c``
+    (27 gfortran syntax errors before the gate)."""
+    names = _private_component_names(tmp_path)
+    assert not any("never_used" in n for n in names), (
+        f"private, never-designated component must be pruned, not flattened; got {sorted(names)}")
+
+
+def test_private_component_designated_in_module_survives(tmp_path):
+    """Gate half 2: a PRIVATE component the in-module kernel DOES designate
+    must still flatten.
+
+    An in-module procedure may legitimately read its own type's private
+    components, and flang gives those designates the SAME mangled
+    ``<type>.<base>`` token -- so keying on "is private" ALONE would drop a
+    live member (the ocean solver's ``act__tag`` dispatch tag).  The kernel
+    reads ``o%book%seen(1)``, so losing this companion breaks it."""
+    names = _private_component_names(tmp_path)
+    assert any("seen" in n for n in names), (
+        f"private component designated by the in-module kernel must survive the gate; got {sorted(names)}")
+
+
+def test_public_sibling_of_private_component_still_flattens(tmp_path):
+    """The gate must not disturb ordinary public members of the same struct:
+    ``data`` is unmangled, so it is never even a gate candidate."""
+    names = _private_component_names(tmp_path)
+    assert any("data" in n for n in names), (f"public member must be unaffected by the gate; got {sorted(names)}")
