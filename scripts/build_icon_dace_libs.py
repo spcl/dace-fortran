@@ -53,6 +53,8 @@ from icon.full.test_dycore_velocity_external_e2e import (
     _build_sync_helpers,
 )
 
+import dace_fortran
+
 from _util import build_sdfg
 from dace_fortran.bindings import build_fortran_library, FlattenPlan
 from dace_fortran.bindings.bind_c_shim import scalar_pointer_members
@@ -130,13 +132,107 @@ SUBROUTINE velocity_tendencies_dace_icon(p_prog, p_patch, p_int, p_metrics, p_di
 END SUBROUTINE velocity_tendencies_dace_icon
 """
 
+#: The ICON object whose ``make -n`` line supplies the real ``-D`` / ``-I`` set.
+_VELOCITY_TARGET = "src/atm_dyn_iconam/mo_velocity_advection.o"
+#: ``module::procedure`` entry form ``build_sdfg_from_hlfir`` takes (the legacy
+#: pre-merged route uses the flang-mangled ``_QM...P...`` name instead).
+_VELOCITY_ENTRY_QUALIFIED = "mo_velocity_advection::velocity_tendencies"
 
-def build_velocity_inner_wrap(velocity_source: Path, out_dir: Path, release: bool):
+#: ICON utility procedures ``velocity_tendencies`` calls structurally (error
+#: reporting, timer hooks) but whose bodies the bridge does not need to lower.
+#: Dropped BEFORE ``hlfir-inline-all`` so their unlowerable internals
+#: (``fir.iterate_while`` LEN_TRIM scans, ``CLASS(*)`` polymorphism) never reach
+#: the bridge.  Mirrors ``tests/icon/full/test_velocity_from_icon_source.py``.
+_ICON_EXTERNAL_STUBS = (
+    "finish",
+    "message",
+    "message_text",
+    "warning",
+    "print_status",
+    "print_value",
+    "init_logger",
+    "timer_start",
+    "timer_stop",
+    "new_timer",
+    "delete_timer",
+)
+
+
+def _icon_search_dirs(icon_src: Path) -> list:
+    """The USE-graph closure of ``mo_velocity_advection``: ICON's ``src`` plus
+    the external library trees ICON bundles.  Same set the real-source build
+    test bisected down to."""
+    return [
+        icon_src / "src",
+        icon_src / "externals/fortran-support/src",
+        icon_src / "externals/mtime/src",
+        icon_src / "externals/iconmath/src",
+        icon_src / "externals/cdi/src",
+        icon_src / "externals/memman/src/bindings/fortran",
+        icon_src / "support",
+    ]
+
+
+def build_velocity_sdfg_from_icon_source(icon_src: Path, icon_build: Path, sdfg_dir: Path):
+    """Lower ICON's REAL ``mo_velocity_advection.f90`` to an SDFG.
+
+    The pre-merged ``velocity_full.f90`` route below builds a STUB-TYPED kernel:
+    its ``t_patch`` / ``t_nh_prog`` are self-contained stand-ins, NOT ICON's real
+    layout, so a lib built from it SEGVs inside the first ``velocity_tendencies``
+    call in a real ICON run.  This route instead resolves the real source's USE
+    closure across the ICON tree and lowers THAT, so the marshalling matches the
+    struct layout ICON actually passes.
+
+    ``icon_build`` must be the build of the SAME ICON CONFIGURATION the lib will
+    be linked into: its ``-D`` set decides conditional type layouts
+    (``__NO_ICON_OCEAN__``, ``__NO_JSBACH__``, ...), so defines from a
+    differently-configured build would reintroduce the very layout mismatch this
+    route exists to remove."""
+    args = dace_fortran.extract_make_compile_args(makefile_dir=icon_build, target=_VELOCITY_TARGET)
+    print(
+        f"[build_icon_dace_libs] ICON defines from {icon_build}: {len(args['defines'])} -D, "
+        f"{len(args['include_dirs'])} -I",
+        flush=True)
+    velocity_real = icon_src / "src" / "atm_dyn_iconam" / "mo_velocity_advection.f90"
+    # Prefer a pristine ``.bak`` when an ICON workflow has patched the live file
+    # (run_icon_e2e.sh's DaCe dispatch patch keeps the original there).
+    velocity_bak = velocity_real.with_suffix(".f90.bak")
+    entry_src = velocity_bak if velocity_bak.is_file() else velocity_real
+    print(f"[build_icon_dace_libs] real ICON velocity source: {entry_src}", flush=True)
+
+    hlfir = dace_fortran.emit_hlfir_from_codebase(
+        entry_source=entry_src.read_text(),
+        out_path=sdfg_dir / "velocity.hlfir",
+        search_dirs=_icon_search_dirs(icon_src),
+        library_stubs=["mpi", "netcdf"],
+        defines=args["defines"] + ["NO_MPI_CHOICE_ARG"],
+        include_dirs=args["include_dirs"],
+        cache_dir=Path(os.environ.get("DACE_FORTRAN_CACHE", str(Path.home() / ".cache" / "dace-fortran"))),
+    )
+    dace_fortran.clear_external_registry()
+    dace_fortran.apply_external_functions(do_not_emit=list(_ICON_EXTERNAL_STUBS))
+    try:
+        return dace_fortran.build_sdfg_from_hlfir(hlfir, entry=_VELOCITY_ENTRY_QUALIFIED)
+    finally:
+        dace_fortran.clear_external_registry()
+
+
+def build_velocity_inner_wrap(velocity_source: Path,
+                              out_dir: Path,
+                              release: bool,
+                              icon_src: Path = None,
+                              icon_build: Path = None):
     """Build ``libvelocity_inner_wrap.so`` from
     ``mo_velocity_advection.f90``.  The output dir gets the .so + the
     .mod (``velocity_tendencies_dace_bindings.mod``) ICON needs at
     Fortran-compile time + the .f90 sources kept around for
-    inspection."""
+    inspection.
+
+    With ``icon_src`` + ``icon_build`` the SDFG is lowered from ICON's REAL
+    velocity source (see :func:`build_velocity_sdfg_from_icon_source`) and the
+    bind_c shim's ``USE``s resolve against that build's real ``.mod`` via ``-I``
+    instead of against a self-contained prelude -- ICON's modules ARE the
+    prelude.  Without them, the legacy pre-merged (stub-typed) route is used."""
     velocity_source = velocity_source.resolve()
     out_dir = out_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -166,13 +262,17 @@ def build_velocity_inner_wrap(velocity_source: Path, out_dir: Path, release: boo
     orig_cxx_args = dace.Config.get("compiler", "cpu", "args")
     dace.Config.set("compiler", "cpu", "args", value=" ".join(cxx_flags))
 
+    real_source = icon_src is not None and icon_build is not None
     try:
-        sdfg = build_sdfg(
-            velocity_src,
-            sdfg_dir,
-            name="velocity_tendencies",
-            entry="_QMmo_velocity_advectionPvelocity_tendencies",
-        ).build()
+        if real_source:
+            sdfg = build_velocity_sdfg_from_icon_source(icon_src.resolve(), icon_build.resolve(), sdfg_dir)
+        else:
+            sdfg = build_sdfg(
+                velocity_src,
+                sdfg_dir,
+                name="velocity_tendencies",
+                entry="_QMmo_velocity_advectionPvelocity_tendencies",
+            ).build()
         sdfg.name = "velocity_tendencies"
         sdfg.build_folder = str(sdfg_dir / "dacecache")
         iface = build_auto_interface(sdfg._fortran_interface_raw, "velocity_tendencies")
@@ -183,17 +283,29 @@ def build_velocity_inner_wrap(velocity_source: Path, out_dir: Path, release: boo
         # hand-authored ``_velocity_iface`` carries no ``struct_types``).
         callee_ptr_members = scalar_pointer_members(iface)
         plan = FlattenPlan.from_dict(sdfg._flatten_plan_raw or {})
+        # Real-source route: ICON's own compiled modules ARE the prelude, so the
+        # shim's ``USE mo_model_domain`` / ``mo_nonhydro_types`` resolve via -I
+        # against the target build's ``mod/`` rather than a self-contained .f90.
         lib = build_fortran_library(
             sdfg,
             iface=iface,
             plan=plan,
             out_dir=str(out_dir),
             name="velocity_inner_wrap",
-            prelude_sources=[velocity_source],
+            prelude_sources=[] if real_source else [velocity_source],
             extra_sources=[icon_wrapper_f90],
             bind_c_shim=True,
-            bind_c_shim_module_symbol_forward=_VELOCITY_MODULE_FORWARD,
-            flags=fflags,
+            # The module-symbol-forward table scaffolds ONLY the C-ABI shim
+            # ``velocity_tendencies_c`` (the outer-dycore C caller), which ICON
+            # does NOT use -- ICON calls the Fortran-ABI ``velocity_tendencies_dace``
+            # whose wrapper reads these globals via a real ``USE``.  On the
+            # real-source route the shim compiles with ``-I <build>/mod`` against
+            # ICON's REAL modules, and the table names ``mo_mpi::i_am_accel_node``,
+            # which does not exist in this ICON tree -- forwarding it would
+            # hard-error the shim compile.  Empty it: the forwarded globals are
+            # dead scaffolding on the path ICON actually links.
+            bind_c_shim_module_symbol_forward=() if real_source else _VELOCITY_MODULE_FORWARD,
+            flags=((*fflags, f"-I{(icon_build / 'mod').resolve()}") if real_source else fflags),
         )
     finally:
         dace.Config.set("compiler", "cpu", "args", value=orig_cxx_args)
@@ -336,6 +448,21 @@ def main():
                     default=(Path(__file__).resolve().parents[1] / "tests" / "icon" / "full" / "velocity_full.f90"),
                     help="Pre-merged self-contained ICON ``mo_velocity_advection`` "
                     "source.  Defaults to the e2e test's ``velocity_full.f90``.")
+    ap.add_argument("--icon-src",
+                    type=Path,
+                    default=None,
+                    help="ICON source tree (e.g. tests/icon/full/icon-model).  With --icon-build, "
+                    "builds the SDFG from ICON's REAL mo_velocity_advection.f90 instead of the "
+                    "pre-merged stub-typed --velocity-source.  Required for an in-ICON run: a lib "
+                    "built from the stub types SEGVs in the first velocity_tendencies call.")
+    ap.add_argument("--icon-build",
+                    type=Path,
+                    default=None,
+                    help="Build dir of the ICON CONFIGURATION this lib will be linked into.  Supplies "
+                    "the real -D defines (which decide conditional type layouts) and the real .mod "
+                    "the bind_c shim compiles against.  MUST match the target ICON's configure "
+                    "options -- defines from a differently-configured build reintroduce the layout "
+                    "mismatch this route removes.")
     ap.add_argument("--out-dir", type=Path, required=True, help="Where libvelocity_inner_wrap.so + .mod files go.")
     ap.add_argument("--release",
                     action="store_true",
@@ -360,7 +487,18 @@ def main():
         print("error: need gfortran + flang-new-21 on PATH", file=sys.stderr)
         return 1
 
-    inner_lib, callee_ptr_members = build_velocity_inner_wrap(args.velocity_source, args.out_dir, release=args.release)
+    if (args.icon_src is None) != (args.icon_build is None):
+        print("error: --icon-src and --icon-build must be given together", file=sys.stderr)
+        return 1
+    if args.icon_src is not None and not (args.icon_build / "Makefile").is_file():
+        print(f"error: no ICON build at {args.icon_build} (expected a configured Makefile)", file=sys.stderr)
+        return 1
+
+    inner_lib, callee_ptr_members = build_velocity_inner_wrap(args.velocity_source,
+                                                              args.out_dir,
+                                                              release=args.release,
+                                                              icon_src=args.icon_src,
+                                                              icon_build=args.icon_build)
     if args.with_dycore:
         build_dycore_wrapper(args.velocity_source,
                              inner_lib.so_path,

@@ -2,34 +2,43 @@
 # End-to-end ICON-with-DaCe integration test, with a side-by-side
 # diff against an unpatched (stock-Fortran) ICON.
 #
-#   1. Builds the velocity + dycore-wrapper DaCe libraries.
-#   2. Builds STOCK ICON  (pristine mo_velocity_advection.f90, no DaCe link)
-#      into ``${STOCK_BUILD}``.
+#   1. Builds STOCK ICON  (pristine mo_velocity_advection.f90, no DaCe link)
+#      into ``${STOCK_BUILD}`` -- FIRST, so its config-matched .mod + -D
+#      defines are available for the lib build.
+#   2. Builds the DaCe velocity library from ICON's REAL
+#      ``mo_velocity_advection`` source, lowered against STOCK's config.
 #   3. Patches mo_velocity_advection.f90 to dispatch into the DaCe wrapper
 #      and builds DACE ICON into ``${DACE_BUILD}``.
 #   4. Caches the R02B05 grid.
 #   5. Generates the short Held-Suarez R02B05 experiment.
 #   6. Generates the runscript for each build dir.
-#   7. Runs both ICON binaries on the SAME exp.
+#   7. Runs both ICON binaries on the SAME exp (NRANKS ranks each).
 #   8. Calls ``compare_icon_runs.py`` to diff every overlapping
 #      ``*_{ml,hl,pl}_*.nc`` variable-by-variable.
 #
-# CURRENT KNOWN LIMITATION: the SDFG was built against
-# ``velocity_full.f90``'s stub-typed test kernel, not ICON's real
-# ``t_patch`` / ``t_nh_prog`` layout, so the DaCe-patched ICON
-# SIGSEGVs inside the first velocity_tendencies call.  The DaCe run
-# therefore writes only the t=0 initial dump (BEFORE
-# velocity_tendencies is called) and we compare THAT against the
-# stock run's t=0 dump.  A bit-exact run for t > 0 requires rebuilding
-# the SDFG against ICON's real ``mo_velocity_advection`` source --
-# a separate effort.
+# The DaCe velocity SDFG is now lowered from ICON's REAL
+# ``mo_velocity_advection.f90`` (real ``t_patch`` / ``t_nh_prog`` layout), not
+# the stub-typed ``velocity_full.f90`` that SIGSEGV'd inside the first
+# ``velocity_tendencies`` call -- so the DaCe run should progress past t=0 and
+# the comparison is meaningful beyond the initial dump.
+#
+# RUN THIS FIRST:  STOCK_ONLY=1 bash run_icon_e2e.sh
+# It builds + runs ONLY stock ICON at NRANKS ranks and asserts the run is real
+# (right rank count) and non-vacuous (a dump after t=0).  That proves the 2-node
+# run works INDEPENDENTLY of any DaCe integration -- so if the integrated run
+# later fails, it cannot be confused with a broken grid / experiment / rank
+# setup.  Then re-run without STOCK_ONLY for the full stock-vs-DaCe differential.
 #
 # Tunables:
 #   ICON_SRC, DACE_FORTRAN, DACE_LIBS, GRID_DIR, STOCK_BUILD,
-#   DACE_BUILD, EXP, NRANKS, PY, RTOL
+#   DACE_BUILD, EXP, NRANKS, PY, RTOL, STOCK_ONLY, CAP
 set -euo pipefail
 
-ICON_SRC=${ICON_SRC:-/home/primrose/Work/icon-model-public}
+# Default ICON_SRC to the in-tree submodule (icon-2026.04-public); override to
+# point at a separate checkout.  The old default
+# ``/home/primrose/Work/icon-model-public`` does not exist on this box.
+_SELF_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")"; pwd)
+ICON_SRC=${ICON_SRC:-${_SELF_DIR}/icon-model}
 DACE_FORTRAN=${DACE_FORTRAN:-/home/primrose/Work/dace-fortran}
 DACE_LIBS=${DACE_LIBS:-/home/primrose/Work/dace-icon-libs}
 GRID_DIR=${GRID_DIR:-/home/primrose/Work/icon-grids}
@@ -37,6 +46,12 @@ STOCK_BUILD=${STOCK_BUILD:-${ICON_SRC}/build/stock_cpu}
 DACE_BUILD=${DACE_BUILD:-${ICON_SRC}/build/dace_cpu}
 EXP=${EXP:-atm_heldsuarez_dace_r02b05}
 NRANKS=${NRANKS:-2}
+# STOCK_ONLY=1: build + run ONLY stock ICON at NRANKS ranks and verify the run is
+# real (right rank count) and non-vacuous (a dump after t=0).  No DaCe lib, no
+# DaCe ICON, no comparison.  Run this FIRST: it proves the 2-node run itself
+# works independently, so an integration failure later can't be confused with a
+# broken experiment / grid / rank setup.
+STOCK_ONLY=${STOCK_ONLY:-0}
 PY=${PY:-/home/primrose/.pyenv/versions/py13/bin/python3}
 RTOL=${RTOL:-1e-12}
 
@@ -124,7 +139,18 @@ PYEOF
 }
 
 
+# Serial, memory-capped runner.  This box has 12GB RAM; a parallel ``make`` or an
+# uncapped model run thrashes swap.  Run every heavy step in a transient systemd
+# scope so it is OOM-killed at ${CAP} instead of swap-crawling.  No fallback: a
+# silent uncapped run is exactly what the cap exists to prevent, so if
+# systemd-run is unavailable this fails loudly.
+CAP=${CAP:-8G}
+capped() {
+  systemd-run --user --scope -p MemoryMax="${CAP}" -p MemorySwapMax=0 --quiet "$@"
+}
+
 # Configure + clean rebuild ICON.  Pass DACE_LIBS_DIR="" for stock.
+# make -j1 + 8GB cap (single build at a time -- see the box's RAM budget).
 build_icon() {
   local build_dir=$1
   local dace_libs_dir=$2
@@ -133,7 +159,7 @@ build_icon() {
   mkdir -p "${build_dir}"
   ( cd "${build_dir}" && DACE_LIBS_DIR="${dace_libs_dir}" \
       bash "${DACE_FORTRAN}/scripts/configure_icon_dace_cpu.sh" )
-  make -C "${build_dir}" -j "$(nproc)" >/dev/null
+  capped make -C "${build_dir}" -j1 >/dev/null
 }
 
 
@@ -156,7 +182,13 @@ run_icon() {
   rm -rf "${exp_dir}"
   ln -sfn "${RUN}/exp.${EXP}.run" "${build_dir}/run/exp.${EXP}.run"
   set +e
-  mpi_total_procs="${NRANKS}" bash -c \
+  # The generated ``exp.<EXP>.run`` RECOMPUTES the rank count as
+  # ``: ${no_of_nodes:=1} ${mpi_procs_pernode:=4}; ((mpi_total_procs = no_of_nodes
+  # * mpi_procs_pernode))`` -- so exporting ``mpi_total_procs`` is ignored (default
+  # 4 ranks).  The ``:=`` honours these two if already set, so export them (via
+  # ``env`` so they survive the ``capped`` systemd scope): 1 node x NRANKS =
+  # NRANKS ranks.  Both compute (num_io_procs=0), a genuine NRANKS-rank run.
+  capped env no_of_nodes=1 mpi_procs_pernode="${NRANKS}" bash -c \
     "cd '${build_dir}/run' && bash 'exp.${EXP}.run'" >/dev/null 2>&1
   local rc=$?
   set -e
@@ -164,21 +196,39 @@ run_icon() {
 }
 
 
-step "1) Build DaCe libs (velocity_inner_wrap + dycore_wrapper)"
-"${PY}" "${DACE_FORTRAN}/scripts/build_icon_dace_libs.py" \
-  --with-dycore --out-dir "${DACE_LIBS}"
-
-
-step "2) Build STOCK ICON (no patch, no DaCe link)"
-# Preserve the pristine source the first time through.
+step "1) Build STOCK ICON (no patch, no DaCe link)"
+# STOCK is built FIRST: the DaCe velocity lib is now lowered from ICON's REAL
+# mo_velocity_advection source (real t_patch / t_nh_prog layout -- the stub-typed
+# velocity_full.f90 SIGSEGVs in a real run), and that lowering needs the TARGET
+# ICON config's -D defines + compiled .mod, which only exist after a build.
+# STOCK and DACE differ ONLY by the icon.mk link patch + the velocity source
+# patch, so STOCK_BUILD's mod/ + defines are valid for the lib the DACE build
+# links.
+# Preserve the pristine source the first time through, and build from it.
 [[ -f "${VELOCITY_F90}.bak" ]] || cp "${VELOCITY_F90}" "${VELOCITY_F90}.bak"
 cp "${VELOCITY_F90}.bak" "${VELOCITY_F90}"
 build_icon "${STOCK_BUILD}" ""
 
 
+if [[ "${STOCK_ONLY}" == 1 ]]; then
+  step "2-3) SKIPPED (STOCK_ONLY): no DaCe lib, no DaCe ICON"
+else
+
+step "2) Build DaCe velocity lib from ICON's REAL source (vs STOCK config)"
+# --icon-src/--icon-build select the real-source route: the SDFG is lowered from
+# the pristine mo_velocity_advection.f90.bak (STOCK's source is pristine right
+# now) and the bind_c shim resolves its USEs against STOCK_BUILD/mod via -I.
+capped "${PY}" "${DACE_FORTRAN}/scripts/build_icon_dace_libs.py" \
+  --icon-src "${ICON_SRC}" \
+  --icon-build "${STOCK_BUILD}" \
+  --out-dir "${DACE_LIBS}"
+
+
 step "3) Patch mo_velocity_advection.f90 + build DACE ICON"
 apply_dace_patch
 build_icon "${DACE_BUILD}" "${DACE_LIBS}"
+
+fi
 
 
 step "4) Fetch R02B05 grid"
@@ -210,6 +260,21 @@ sed -i \
   -e 's|pinit_seed *= *-*[0-9]*|pinit_seed = 0|g' \
   -e 's|seed *= *-*[0-9]*|seed = 0|g' \
   "${EXP_FILE}"
+# Make the run NON-VACUOUS + genuinely 2-rank:
+#  - output_interval=PT10S + include_last: without this the P1D interval emits
+#    ONLY the t=0 dump (written BEFORE the first velocity_tendencies call), so
+#    stock and DaCe would be compared only at t=0 -- a vacuous test.  PT10S lands
+#    a record after step 1 (t>=10s), which is the first output that reflects a
+#    velocity_tendencies result.
+#  - num_io_procs=0: with a dedicated async I/O PE (=1) and NRANKS=2 only ONE PE
+#    computes, so the horizontal halo exchange is never exercised.  Zero I/O PEs
+#    puts BOTH ranks on the compute decomposition (output still gathered to one
+#    global file) -- a real 2-rank dycore run.
+sed -i \
+  -e 's|output_interval="P1D"|output_interval="PT10S"|g' \
+  -e 's|include_last *= *\.FALSE\.|include_last = .TRUE.|g' \
+  -e 's|num_io_procs *= *1|num_io_procs = 0|g' \
+  "${EXP_FILE}"
 
 
 step "6) Stage runscripts in both build dirs"
@@ -222,9 +287,55 @@ stage_runscript_helpers "${STOCK_BUILD}"
 ls -lh "${RUN}/exp.${EXP}.run"
 
 
-step "7) Run BOTH ICON binaries on the SAME exp"
+step "7) Run ICON on the exp (${NRANKS} ranks)"
 echo "Stock:"
 run_icon "${STOCK_BUILD}"
+
+STOCK_EXP="${STOCK_BUILD}/experiments/${EXP}"
+DACE_EXP="${DACE_BUILD}/experiments/${EXP}"
+
+if [[ "${STOCK_ONLY}" == 1 ]]; then
+  # INDEPENDENT 2-node check: prove the plain (un-integrated) ICON run works at
+  # NRANKS ranks and is worth comparing, BEFORE any DaCe integration is layered
+  # on.  Everything asserted here is DaCe-independent -- grid, experiment
+  # validity, num_io_procs=0, the rank count, and non-vacuous t>0 output.
+  step "8) Verify the STOCK ${NRANKS}-rank run (independent of DaCe)"
+  ls -lh "${STOCK_EXP}/" 2>/dev/null | head -8
+  echo
+  "${PY}" - "${STOCK_EXP}" "${NRANKS}" <<'PYEOF'
+import glob
+import sys
+from pathlib import Path
+
+from netCDF4 import Dataset
+
+exp_dir, nranks = Path(sys.argv[1]), int(sys.argv[2])
+ncs = sorted(glob.glob(str(exp_dir / "*_ml_*.nc")) + glob.glob(str(exp_dir / "*_hl_*.nc")) +
+             glob.glob(str(exp_dir / "*_pl_*.nc")))
+if not ncs:
+    sys.exit(f"FAIL: no *_{{ml,hl,pl}}_*.nc output in {exp_dir} -- the run produced nothing")
+worst = 0
+for nc in ncs:
+    with Dataset(nc) as ds:
+        n = len(ds.dimensions["time"]) if "time" in ds.dimensions else 0
+    print(f"  {Path(nc).name}: {n} time record(s)")
+    worst = max(worst, n)
+# >1 record means at least one dump AFTER the first velocity_tendencies call:
+# a t=0-only run is vacuous -- nothing to compare that exercises the kernel.
+if worst < 2:
+    sys.exit(f"FAIL: only {worst} time record(s) -- vacuous (t=0 dump precedes the first "
+             f"velocity_tendencies call); fix output_interval/include_last")
+print(f"OK: stock run emitted {worst} time records (>1 => a post-step-1 dump exists)")
+PYEOF
+  echo
+  # Confirm the run really used NRANKS ranks -- the runscript recomputes
+  # mpi_total_procs, so a silent default would make "2-node" a lie.
+  grep -REiho "mpi_total_procs *= *[0-9]+|Number of procs *: *[0-9]+|num_work_procs *= *[0-9]+" \
+    "${STOCK_BUILD}/run" "${STOCK_EXP}" 2>/dev/null | sort -u | head -5 || true
+  echo
+  echo "=== STOCK ${NRANKS}-rank e2e OK (independent of DaCe) ==="
+  exit 0
+fi
 
 echo "DaCe:"
 # Re-point set-up.info at the dace build, regen the runscript so it
@@ -233,18 +344,12 @@ stage_runscript_helpers "${DACE_BUILD}"
 ( cd "${ICON_SRC}" && ./make_runscripts "${EXP}" )
 run_icon "${DACE_BUILD}"
 
-STOCK_EXP="${STOCK_BUILD}/experiments/${EXP}"
-DACE_EXP="${DACE_BUILD}/experiments/${EXP}"
 
-
-step "8) Compare initial-state output, variable-by-variable"
-# ICON's nc dump at t=0 is written BEFORE the first velocity_tendencies
-# call.  Stock-Fortran and DaCe-patched ICONs MUST produce identical
-# t=0 output -- if they don't, the linker pulled in something
-# numerically different at module-init time.  Subsequent dumps (which
-# only the stock run completes) are not comparable today because the
-# DaCe ICON crashes mid-step 1; the comparer just skips files that
-# only exist on one side.
+step "8) Compare output, variable-by-variable, across ALL dumps"
+# With output_interval=PT10S the run emits records at t=10/20/30s -- each AFTER a
+# velocity_tendencies call -- so the comparison exercises the DaCe kernel, not
+# just the t=0 module-init dump.  Stock-Fortran and DaCe-patched ICON must agree
+# bit-closely at every dump.
 ls -lh "${STOCK_EXP}/" 2>/dev/null | head -8
 echo
 ls -lh "${DACE_EXP}/" 2>/dev/null | head -8
@@ -257,3 +362,7 @@ set -e
 
 echo
 echo "=== e2e run complete (compare rc=${cmp_rc}) ==="
+# Propagate the verdict: 0 = bit-close within rtol, 1 = divergence, 2 = no
+# overlapping output (a vacuous run -- treat as failure).  CI / callers gate on
+# this exit code instead of parsing stdout.
+exit "${cmp_rc}"

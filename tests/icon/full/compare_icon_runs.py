@@ -10,12 +10,9 @@ in BOTH directories, then for each variable reports::
 
 A pair of files is bit-identical when every variable's ``abs_diff`` is
 zero; "close" when the maximum relative diff is below ``--rtol``
-(default 1e-12).  The DaCe-patched ICON currently SIGSEGVs inside
-``velocity_tendencies`` on its first time step (the SDFG was built
-against ``velocity_full.f90``'s stub-typed test kernel, not ICON's
-real ``t_patch`` / ``t_nh_prog`` layout), so only the t=0 initial
-dump is comparable until the SDFG is rebuilt against ICON's real
-``mo_velocity_advection`` source.
+(default 1e-12).  A NaN/Inf present on ONE side only (or +Inf vs -Inf)
+is a real divergence and fails -- never silently skipped -- while an
+identical fill NaN on both sides at the same cell is treated as equal.
 """
 import argparse
 import sys
@@ -83,28 +80,34 @@ def compare_files(stock_nc: Path, dace_nc: Path, rtol: float):
                 mask_diff = int(np.count_nonzero(mask_a ^ mask_b))
                 if mask_diff:
                     issues.append(f"{name}: {mask_diff} cell(s) masked on one side only")
-            # Subtract on the plain (mask-filled) ndarrays so the result
-            # is independent of any uninitialised bits the netCDF4
-            # buffer pool leaves behind.
-            d = np.abs(va - vb)
-            if not np.isfinite(d).all():
-                # Common when ICON crashed mid-write -- nc declared
-                # the variable but never wrote real data, leaving NaN
-                # bits in the on-disk image.
-                print(f"    skip {name:24s}  (NaN/Inf in diff -- truncated nc?)")
+            # Compare with EQUAL-NAN semantics: a fill NaN present on BOTH
+            # sides at the same cell is not a divergence.  But a NaN/Inf on
+            # ONE side only (or +Inf vs -Inf) IS a real difference and is
+            # NEVER silently skipped -- a DaCe kernel that emits NaN has to
+            # FAIL, not read as a pass.
+            equal = (va == vb) | (np.isnan(va) & np.isnan(vb))
+            finite_a, finite_b = np.isfinite(va), np.isfinite(vb)
+            max_a = float(np.abs(va[finite_a]).max()) if finite_a.any() else 0.0
+            max_b = float(np.abs(vb[finite_b]).max()) if finite_b.any() else 0.0
+            if equal.all():
+                print(f"    ok   {name:24s}  (bit-identical, incl. equal NaN)")
                 continue
-            # Denormal-range maxes (< 1e-200) signal uninitialised
-            # netCDF buffers from a truncated write rather than real
-            # output.  Stock-vs-DaCe diffs in that range are spurious;
-            # skip the variable and surface it as a non-issue.
+            # Denormal-range maxes (< 1e-200) with NO non-finite mismatch
+            # signal uninitialised netCDF buffers from a truncated write
+            # rather than real output; those diffs are spurious.  A
+            # non-finite mismatch is never denormal-skipped.
             denormal_threshold = 1e-200
-            max_a = float(np.abs(va).max())
-            max_b = float(np.abs(vb).max())
-            if max(max_a, max_b) < denormal_threshold:
+            nonfinite_mismatch = bool((finite_a ^ finite_b).any())
+            if not nonfinite_mismatch and max(max_a, max_b) < denormal_threshold:
                 print(f"    skip {name:24s}  (denormal-only values -- "
                       f"uninit nc field, max|x|={max(max_a, max_b):.1e})")
                 continue
-            abs_diff = float(d.max())
+            # Diff over the mismatching cells only; a lone NaN/Inf there
+            # becomes +Inf so it always breaks rtol (never masked).
+            with np.errstate(invalid="ignore"):
+                block = np.abs(va[~equal] - vb[~equal])
+            block[~np.isfinite(block)] = np.inf
+            abs_diff = float(block.max())
             scale = max(max_a, max_b)
             rel_diff = abs_diff / scale if scale > 0 else abs_diff
             tag = "ok " if rel_diff <= rtol else "DIFF"
