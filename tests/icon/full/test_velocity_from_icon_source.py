@@ -235,6 +235,12 @@ def test_build_velocity_sdfg(tmp_path: Path, source: str):
     # orphan connectors, missing access nodes, schedule mismatches
     # the bridge could in principle emit but mustn't.
     sdfg.validate()
+    # Codegen is the load-bearing step for the real-source route: an orphaned
+    # view_alias (a View read only via interstate-edge indirection, no source
+    # link) passes validate() but raises KeyError in framecode's get_view_edge
+    # at compile.  Compiling here is what catches that class -- validate() alone
+    # let it through until the in-ICON build surfaced it.
+    sdfg.compile()
 
 
 # ---------------------------------------------------------------------------

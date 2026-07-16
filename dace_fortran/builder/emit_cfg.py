@@ -19,6 +19,7 @@ from dace_fortran.builder.access import (
     find_array_subscripts,
     indirect_to_dace,
     iter_view_dim_map,
+    materialize_indirect_view_sources,
 )
 from dace_fortran.builder.context import _Ctx
 from dace_fortran.builder.descriptors import auto_declare_synth
@@ -275,6 +276,9 @@ def emit_assign(builder, ctx: '_Ctx', n, region):
         # available to outer ones.
         indirect_syms = collect_indirect(builder, [n])
         if indirect_syms:
+            # See ``materialize_indirect_view_sources``: ``ctx.cur`` precedes the
+            # ``sym_*`` states minted below, so the view_alias link lands first.
+            materialize_indirect_view_sources(builder, ctx.cur, indirect_syms)
             for expr, sym in indirect_syms.items():
                 rhs = _strip_dace_casts(indirect_to_dace(builder, expr, ctx.iter_map, indirect_syms))
                 if sym not in ctx.sdfg.symbols:
@@ -716,6 +720,11 @@ def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
 
         if per_sym_assigns or symbol_assign_pairs:
             pre = loop.add_state(f"pre_{builder.nid()}")
+            # A view_alias read ONLY as an inline indirect index is never touched
+            # from a state, so its source->view link would never be installed.
+            # Install it here, in ``pre`` -- ahead of the ``sym_*`` states whose
+            # interstate edges read it.
+            materialize_indirect_view_sources(builder, pre, indirect_syms)
             cur = pre
             # Indirect symbols first (innermost -> outermost).  Each
             # gets a fresh state so its assignment can reference the

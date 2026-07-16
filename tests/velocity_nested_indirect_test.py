@@ -25,6 +25,7 @@ Test sizes / data shape (per user spec):
 
 from pathlib import Path
 
+import dace
 import numpy as np
 import pytest
 
@@ -99,3 +100,99 @@ def test_velocity_nested_struct_indirection(tmp_path: Path):
     sdfg(p_patch_edges_cell_idx=cell_idx, p_patch_edges_cell_blk=cell_blk, w=w, out=out_sdfg, nlev=nlev)
 
     np.testing.assert_allclose(out_sdfg, out_ref, rtol=0, atol=0)
+
+
+# A POINTER local rebound onto a TARGET struct-member dummy, then read ONLY as an
+# inline indirect index -- the exact shape of ICON's inlined
+# ``cells2verts_scalar_ri_lib`` / ``rot_vertex_ri_lib`` (``iidx => vert_cell_idx``
+# then ``p_cell_in(iidx(jv, jb, 1), jk, iblk(jv, jb, 1))``).  The whole-array
+# rebind of a rank-3 POINTER onto the inlined TARGET dummy is tagged
+# ``pointer_view`` by ``RewritePointerAssigns`` and ``iidx`` / ``iblk`` survive to
+# ``extract_vars`` as ``role='view_alias'`` Views.  Read only through inline
+# indirection (both are read, like the real kernel, so neither is a dead
+# orphan), their
+# source->view link (installed lazily by ``acc`` only when the view is touched
+# FROM a state) was never installed -- the indirection reads become interstate
+# ``sym_*`` edge assignments -- so the View reached codegen ORPHANED (zero
+# AccessNodes, no ``views`` edge) and framecode's ``get_view_edge`` raised
+# ``KeyError`` AT COMPILE.  Guards ``materialize_indirect_view_sources``.
+_REBIND_SRC = """
+module mo_rebind_indirect
+  implicit none
+  integer, parameter :: nverts = 16, nblks = 8, ncells = 64, ncblks = 4
+  type :: t_edges
+    integer :: cell_idx(nverts, nblks, 6)
+    integer :: cell_blk(nverts, nblks, 6)
+  end type
+  type :: t_patch
+    type(t_edges) :: edges
+  end type
+contains
+  subroutine cells2verts_lib(p_cell_in, vert_cell_idx, vert_cell_blk, p_vert_out, nlev)
+    integer, intent(in) :: nlev
+    real(kind=8), intent(in) :: p_cell_in(ncells, nlev, ncblks)
+    integer, target, intent(in) :: vert_cell_idx(:, :, :)
+    integer, target, intent(in) :: vert_cell_blk(:, :, :)
+    real(kind=8), intent(inout) :: p_vert_out(nverts, nlev, nblks)
+    integer, dimension(:, :, :), pointer :: iidx, iblk
+    integer :: jv, jk, jb
+    iidx => vert_cell_idx
+    iblk => vert_cell_blk
+    do jb = 1, nblks
+      do jk = 1, nlev
+        do jv = 1, nverts
+          p_vert_out(jv, jk, jb) = p_cell_in(iidx(jv, jb, 1), jk, iblk(jv, jb, 1))
+        end do
+      end do
+    end do
+  end subroutine cells2verts_lib
+
+  subroutine cells2verts_entry(p_patch, p_cell_in, p_vert_out, nlev)
+    integer, intent(in) :: nlev
+    type(t_patch), intent(in) :: p_patch
+    real(kind=8), intent(in) :: p_cell_in(ncells, nlev, ncblks)
+    real(kind=8), intent(inout) :: p_vert_out(nverts, nlev, nblks)
+    call cells2verts_lib(p_cell_in, p_patch % edges % cell_idx, p_patch % edges % cell_blk, p_vert_out, nlev)
+  end subroutine cells2verts_entry
+end module mo_rebind_indirect
+"""
+
+
+def views_with_source_link(sdfg):
+    """Every ``dace.data.View`` descriptor -> whether some AccessNode of it has an
+    incoming ``'views'`` (source->view) linking edge.  An orphaned view_alias --
+    the pre-fix bug -- has a View descriptor but no such AccessNode/edge."""
+    views = {n: False for n, d in sdfg.arrays.items() if isinstance(d, dace.data.View)}
+    for state in sdfg.all_states():
+        for node in state.data_nodes():
+            if node.data in views and any(e.dst_conn == 'views' for e in state.in_edges(node)):
+                views[node.data] = True
+    return views
+
+
+def test_rebound_pointer_indirect_index_view_compiles(tmp_path: Path):
+    """A rebound POINTER read only as an inline indirect index must reach codegen
+    as a properly-LINKED view_alias, not an orphaned View.  Pre-fix this raised
+    ``KeyError`` in DaCe's ``get_view_edge`` at compile time; the fix
+    (``materialize_indirect_view_sources``) installs the source->view link in the
+    state preceding the ``sym_*`` indirection edges."""
+    sdfg_dir = tmp_path / "sdfg"
+    sdfg_dir.mkdir(parents=True, exist_ok=True)
+    sdfg = build_sdfg(_REBIND_SRC, sdfg_dir, name="cells2verts_entry",
+                      entry="mo_rebind_indirect::cells2verts_entry").build()
+    sdfg.validate()
+
+    # Precondition: the rebind must actually lower as a view_alias (View).  If the
+    # reduction collapsed it instead, the test would pass vacuously -- fail loudly
+    # here so a wrong assumption surfaces rather than a false green.
+    views = views_with_source_link(sdfg)
+    assert views, "expected the rebound pointer to lower as a view_alias (dace.data.View)"
+
+    # The fix must give every such View an AccessNode carrying a source->view
+    # 'views' edge; pre-fix the indirect-only read left it orphaned.
+    for name, has_link in views.items():
+        assert has_link, f"view_alias {name!r} has no source->view 'views' edge -- orphaned view (the pre-fix bug)"
+
+    # Load-bearing: the crash was at codegen, not build/validate.  Compiling is
+    # what actually exercises get_view_edge.
+    sdfg.compile()

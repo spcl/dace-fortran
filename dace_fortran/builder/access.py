@@ -570,6 +570,40 @@ def collect_indirect(builder, assigns: list) -> dict:
     return out
 
 
+def materialize_indirect_view_sources(builder, state, indirect_syms: dict) -> None:
+    """Install the ``source -> view`` linking memlet for every ``view_alias``
+    array that an INTERSTATE-edge indirection assignment reads.
+
+    :func:`collect_indirect` mints ``<arr>_at<gid>`` symbols whose assignments
+    ride interstate edges (``emit_cfg``'s ``sym_<sym>`` states).  An interstate
+    edge is not a state, so :func:`acc` -- which auto-installs a ``view_alias``'s
+    source->view link the first time the view is touched IN a state -- never runs
+    for those reads.  The view descriptor then reaches codegen with NO ``views``
+    edge, so what it aliases is undefined; DaCe's allocation-lifetime pass
+    (which synthesises a placeholder ``AccessNode`` for arrays referenced only by
+    interstate-edge free symbols) calls ``get_view_edge`` on that placeholder and
+    raises ``KeyError``, since the placeholder is in no state.
+
+    ICON's real ``mo_velocity_advection`` hits this: the inlined
+    ``cells2verts_scalar_ri_lib`` / ``rot_vertex_ri_lib`` rebind
+    ``iidx => vert_cell_idx`` / ``iblk => vert_cell_blk`` (POINTER locals onto
+    TARGET dummies) and then read ``iidx(jv, jb, 1..6)`` purely as inline indirect
+    indices -- so the views were never touched from a state.
+
+    Touching each ``view_alias`` source through :func:`acc` HERE -- in ``state``,
+    which PRECEDES the ``sym_*`` states -- installs the link and gives the view a
+    real AccessNode ahead of every interstate reference.  Order matters: DaCe
+    records a state's ``data_nodes()`` before that state's edge-referenced
+    placeholders and walks states topologically, so the real node is the FIRST
+    recorded instance and ``get_view_edge`` resolves against it.
+    """
+    for expr in indirect_syms:
+        for _start, _end, arr, _parts in find_array_subscripts(expr, builder.arrays):
+            v = builder.arrays.get(arr)
+            if v is not None and getattr(v, 'role', '') == 'view_alias':
+                acc(builder, state, arr)
+
+
 def _offset_token(arr: str, dim: int) -> str:
     """The per-axis offset-symbol name every memlet subtracts."""
     return f"offset_{arr}_d{dim}"
