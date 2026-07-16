@@ -352,6 +352,76 @@ def _parse_abi(shim: str):
     return header, value_ftype, ptr_ftype, ptr_shape, dim_symbols, ptr_local
 
 
+def synth_call_inputs(shim,
+                      *,
+                      n,
+                      seed,
+                      float_range=(-1.0, 1.0),
+                      int_fill=None,
+                      scalar_overrides=None,
+                      array_overrides=None,
+                      mesh_buffers=None):
+    """Parse the shim's flat C ABI and synthesize a matched ``(call_plan, inputs,
+    ptr_args, ptr_local)`` -- the ctypes call plan plus the random/pinned input
+    buffers behind every pointer arg.
+
+    Shared by the fork-based single-rank differential (:func:`_build_and_compare`)
+    and the in-process 2-rank real-MPI driver (``test_ocean_veloc_mpi_sync_e2e``),
+    so both size the mesh, pin the refin-ctrl arrays, and lay out the value args
+    identically -- the only divergence is the driver overriding the ``comm`` value
+    arg with a live ``mpi4py`` handle (via ``scalar_overrides``)."""
+    scalar_overrides = scalar_overrides or {}
+    array_overrides = array_overrides or {}
+    mesh_buffers = mesh_buffers or {}
+    header, value_ftype, ptr_ftype, ptr_shape, dim_symbols, ptr_local = _parse_abi(shim)
+    # Refin-ctrl arrays span the full refin-ctrl level range, not the mesh size ``n`` --
+    # size their per-dim extent symbols (``<arr>_d<i>``) to ``_REFIN_CTRL_EXTENT`` so the
+    # negative lower bound (supplied below) leaves every read in bounds.
+    dimvals = {
+        s: (_REFIN_CTRL_EXTENT if _REFIN_CTRL_RE.search(_refin_ctrl_flat(s, r"_d\d+$")) else n)
+        for s in dim_symbols
+    }
+    rng = np.random.default_rng(seed)
+    inputs, call_plan = {}, []
+    for arg in header:
+        if arg in ptr_shape:
+            shape = tuple(int(eval(tok, {}, dimvals)) for tok in ptr_shape[arg].split(","))
+            npdt = _NP[ptr_ftype[arg]]
+            override = array_overrides.get(ptr_local[arg])
+            mesh_buf = mesh_buffers.get(ptr_local[arg])
+            if mesh_buf is not None:  # explicit per-element buffer (real mesh connectivity)
+                if tuple(mesh_buf.shape) != shape:
+                    raise ValueError(f"mesh buffer for {ptr_local[arg]!r} has shape "
+                                     f"{tuple(mesh_buf.shape)}, harness expects {shape}")
+                base = np.asfortranarray(mesh_buf.astype(npdt))
+            elif override is not None:  # pinned to a constant (e.g. a valid loop bound)
+                base = np.asfortranarray(np.full(shape, override, dtype=npdt))
+            elif npdt == np.float64:
+                base = np.asfortranarray(rng.uniform(float_range[0], float_range[1], shape).astype(npdt))
+            elif int_fill is not None:  # degenerate valid mesh: every count/index/bound == int_fill
+                # A single in-domain block, one edge/vertex per connectivity slot, and every
+                # connectivity index pointing at element ``int_fill`` -> exactly one in-bounds
+                # iteration everywhere (no vacuous empty range, no out-of-bounds composite index).
+                base = np.asfortranarray(np.full(shape, int_fill, dtype=npdt))
+            else:  # integer count / index array -> in-bounds [1, n]
+                base = np.asfortranarray(rng.integers(1, n + 1, shape).astype(npdt))
+            inputs[arg] = base
+            call_plan.append(("ptr", arg, ctypes.c_void_p))
+        else:
+            ft = value_ftype[arg]
+            lb_flat = _refin_ctrl_flat(arg, r"_lb\d+$")
+            if lb_flat != arg:  # an array lower-bound arg ``<flat>_lb<i>``
+                v = scalar_overrides.get(arg, _REFIN_CTRL_LBOUND if _REFIN_CTRL_RE.search(lb_flat) else 1)
+            else:
+                # Extent args ride ``dimvals`` (refin-ctrl-aware) so the passed extent
+                # matches the buffer the ``c_f_pointer`` shape reconstructs.
+                int_default = int_fill if int_fill is not None else 0
+                v = scalar_overrides.get(
+                    arg, dimvals[arg] if arg in dim_symbols else (60.0 if ft == "real(c_double)" else int_default))
+            call_plan.append(("val", arg, _CT[ft], v))
+    return call_plan, inputs, list(ptr_shape), ptr_local
+
+
 def _invoke(so_path, call_plan, bufs, sym, sdfg_so=None, module_seeds=None, array_seeds=None):
     # The SDFG .so is dlopen'd RTLD_GLOBAL first so the DaCe runtime (OpenMP
     # offload init, etc.) is live and its symbols resolve for the binding .so.
@@ -605,15 +675,6 @@ def _build_and_compare(tu_path: Path,
     if r.returncode != 0:
         raise RuntimeError(f"reference .so compile failed:\n{r.stderr[-3000:]}")
 
-    header, value_ftype, ptr_ftype, ptr_shape, dim_symbols, ptr_local = _parse_abi(shim)
-    # Refin-ctrl arrays span the full refin-ctrl level range, not the mesh size ``n`` --
-    # size their per-dim extent symbols (``<arr>_d<i>``) to ``_REFIN_CTRL_EXTENT`` so the
-    # negative lower bound (supplied below) leaves every read in bounds.
-    dimvals = {
-        s: (_REFIN_CTRL_EXTENT if _REFIN_CTRL_RE.search(_refin_ctrl_flat(s, r"_d\d+$")) else n)
-        for s in dim_symbols
-    }
-
     # Structured per-array input buffers (a physically-consistent mesh's
     # connectivity / subset-range arrays) can't ride argv as JSON, so
     # ``run_kernel_e2e`` drops them into ``out`` as a sidecar .npz; load once and
@@ -625,46 +686,14 @@ def _build_and_compare(tu_path: Path,
         with np.load(mesh_npz) as zf:
             mesh_buffers = {k: zf[k] for k in zf.files}
 
-    rng = np.random.default_rng(seed)
-    inputs, call_plan = {}, []
-    for arg in header:
-        if arg in ptr_shape:
-            shape = tuple(int(eval(tok, {}, dimvals)) for tok in ptr_shape[arg].split(","))
-            npdt = _NP[ptr_ftype[arg]]
-            override = array_overrides.get(ptr_local[arg])
-            mesh_buf = mesh_buffers.get(ptr_local[arg])
-            if mesh_buf is not None:  # explicit per-element buffer (real mesh connectivity)
-                if tuple(mesh_buf.shape) != shape:
-                    raise ValueError(f"mesh buffer for {ptr_local[arg]!r} has shape "
-                                     f"{tuple(mesh_buf.shape)}, harness expects {shape}")
-                base = np.asfortranarray(mesh_buf.astype(npdt))
-            elif override is not None:  # pinned to a constant (e.g. a valid loop bound)
-                base = np.asfortranarray(np.full(shape, override, dtype=npdt))
-            elif npdt == np.float64:
-                base = np.asfortranarray(rng.uniform(float_range[0], float_range[1], shape).astype(npdt))
-            elif int_fill is not None:  # degenerate valid mesh: every count/index/bound == int_fill
-                # A single in-domain block, one edge/vertex per connectivity slot, and every
-                # connectivity index pointing at element ``int_fill`` -> exactly one in-bounds
-                # iteration everywhere (no vacuous empty range, no out-of-bounds composite index).
-                base = np.asfortranarray(np.full(shape, int_fill, dtype=npdt))
-            else:  # integer count / index array -> in-bounds [1, n]
-                base = np.asfortranarray(rng.integers(1, n + 1, shape).astype(npdt))
-            inputs[arg] = base
-            call_plan.append(("ptr", arg, ctypes.c_void_p))
-        else:
-            ft = value_ftype[arg]
-            lb_flat = _refin_ctrl_flat(arg, r"_lb\d+$")
-            if lb_flat != arg:  # an array lower-bound arg ``<flat>_lb<i>``
-                v = scalar_overrides.get(arg, _REFIN_CTRL_LBOUND if _REFIN_CTRL_RE.search(lb_flat) else 1)
-            else:
-                # Extent args ride ``dimvals`` (refin-ctrl-aware) so the passed extent
-                # matches the buffer the ``c_f_pointer`` shape reconstructs.
-                int_default = int_fill if int_fill is not None else 0
-                v = scalar_overrides.get(
-                    arg, dimvals[arg] if arg in dim_symbols else (60.0 if ft == "real(c_double)" else int_default))
-            call_plan.append(("val", arg, _CT[ft], v))
-
-    ptr_args = list(ptr_shape)
+    call_plan, inputs, ptr_args, _ptr_local = synth_call_inputs(shim,
+                                                                n=n,
+                                                                seed=seed,
+                                                                float_range=float_range,
+                                                                int_fill=int_fill,
+                                                                scalar_overrides=scalar_overrides,
+                                                                array_overrides=array_overrides,
+                                                                mesh_buffers=mesh_buffers)
     sd = _run_in_fork(dut_so_path,
                       call_plan,
                       inputs,
