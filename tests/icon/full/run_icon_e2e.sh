@@ -189,7 +189,7 @@ run_icon() {
   # ``env`` so they survive the ``capped`` systemd scope): 1 node x NRANKS =
   # NRANKS ranks.  Both compute (num_io_procs=0), a genuine NRANKS-rank run.
   capped env no_of_nodes=1 mpi_procs_pernode="${NRANKS}" bash -c \
-    "cd '${build_dir}/run' && bash 'exp.${EXP}.run'" >/dev/null 2>&1
+    "cd '${build_dir}/run' && bash 'exp.${EXP}.run'" > "${build_dir}/icon_run.log" 2>&1
   local rc=$?
   set -e
   echo "  ${build_dir##*/} run rc=${rc}, exp_dir=${exp_dir}"
@@ -328,12 +328,16 @@ if worst < 2:
 print(f"OK: stock run emitted {worst} time records (>1 => a post-step-1 dump exists)")
 PYEOF
   echo
-  # Confirm the run really used NRANKS ranks -- the runscript recomputes
-  # mpi_total_procs, so a silent default would make "2-node" a lie.
-  grep -REiho "mpi_total_procs *= *[0-9]+|Number of procs *: *[0-9]+|num_work_procs *= *[0-9]+" \
-    "${STOCK_BUILD}/run" "${STOCK_EXP}" 2>/dev/null | sort -u | head -5 || true
-  echo
-  echo "=== STOCK ${NRANKS}-rank e2e OK (independent of DaCe) ==="
+  # ASSERT the run really used NRANKS COMPUTE ranks -- the runscript recomputes
+  # mpi_total_procs, so a silent default (or a mis-set num_io_procs) would make
+  # "2-node" a lie.  Parse ICON's own report; ``work: N`` is the compute-PE count.
+  work=$(grep -oE "work: *[0-9]+" "${STOCK_BUILD}/icon_run.log" 2>/dev/null | grep -oE "[0-9]+" | head -1)
+  echo "  ICON reports: $(grep -m1 'mpi processes' "${STOCK_BUILD}/icon_run.log" 2>/dev/null | sed 's/^ *//')"
+  if [[ "${work}" != "${NRANKS}" ]]; then
+    echo "FAIL: ICON used ${work:-?} compute ranks, expected ${NRANKS} (see ${STOCK_BUILD}/icon_run.log)" >&2
+    exit 1
+  fi
+  echo "=== STOCK e2e OK: ${NRANKS} compute ranks + a post-t=0 dump, DaCe-independent ==="
   exit 0
 fi
 

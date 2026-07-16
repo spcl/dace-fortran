@@ -61,7 +61,11 @@ HDF5_INC='-I/usr/include/hdf5/serial'
 HDF5_LIB='-L/usr/lib/x86_64-linux-gnu/hdf5/serial -lhdf5_hl -lhdf5'
 XML2_INC='-I/usr/include/libxml2'
 XML2_LIB='-lxml2'
-ECCODES_LIB='-leccodes -leccodes_f90'
+# Ubuntu's libeccodes-dev ships only ``libeccodes.so`` -- there is no separate
+# ``libeccodes_f90`` (the Fortran bindings live in the same library).  Naming it
+# fails the very first configure link test ("Fortran compiler cannot create
+# executables"), since LIBS is applied to every conftest.
+ECCODES_LIB='-leccodes'
 FYAML_LIB='-lfyaml'
 LAPACK_LIB='-llapack -lblas'
 
