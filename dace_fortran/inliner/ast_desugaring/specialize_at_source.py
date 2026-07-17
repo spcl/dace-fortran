@@ -189,6 +189,39 @@ def _bind_actuals_to_dummies(call: f03.Call_Stmt, dummies: List[str],
     return present, absent
 
 
+def _statically_present(bound: Dict[str, str], caller_sub: Optional[f03.Base],
+                        caller_spec: Optional[f03.Base]) -> Set[str]:
+    """Of the supplied dummies in ``bound``, those whose ``PRESENT`` is statically
+    ``.TRUE.`` at this call -- i.e. all of them EXCEPT any bound to a bare reference
+    to one of the CALLER's own OPTIONAL dummies.
+
+    Fortran propagates absence through such an actual (F2018 15.5.2.12): when the
+    caller's optional is itself omitted, the callee's dummy is absent too.  So its
+    presence is a RUNTIME property and the callee's
+    ``IF (PRESENT(x)) ... ELSE <default> END IF`` must survive specialization.
+    Leaving ``PRESENT(x)`` unfolded is self-consistent -- after substitution the
+    name resolves to the caller's optional dummy, where ``PRESENT`` is legal and
+    evaluates at runtime.
+
+    ICON: ``div_oce_3D_mlevels`` forwards its own optional ``opt_start_level``
+    positionally into ``div_oce_3D_mlevels_onTriangles``.  Folding it ``.TRUE.``
+    deleted the ``ELSE start_level = 1`` default; the absent scalar then read 0 and
+    the vertical loop started at level 0 -- an out-of-bounds read with silently
+    wrong ocean numerics.
+
+    Only a BARE name is treated as unknown: an actual like ``opt_start_level + 1``
+    or ``SIZE(x)`` can only be evaluated when the operand is present, so the dummy
+    really is present.
+    """
+    if caller_sub is None:
+        return set(bound)
+    stmt = next(iter(children_of_type(caller_sub, (f03.Subroutine_Stmt, f03.Function_Stmt))), None)
+    if stmt is None:
+        return set(bound)
+    caller_optionals = _optional_dummy_names(caller_spec, {d.lower() for d in _dummy_arg_names(stmt)})
+    return {d for d, actual in bound.items() if actual.strip().lower() not in caller_optionals}
+
+
 def _fold_optionals(text: str, present: Set[str], absent: Set[str]) -> str:
     """Resolve ``PRESENT`` / ``SIZE`` queries on dummies whose presence is now
     statically known, BEFORE the dummy names are substituted away.
@@ -435,8 +468,9 @@ def _inline_one_call(call: f03.Call_Stmt, callee_sub: f03.Base, counter: int) ->
                 rename[str(nm)] = f"{str(nm)}_inl{counter}"
 
     # Resolve PRESENT / SIZE queries on now-known optional dummies BEFORE the
-    # names are substituted away.
-    exec_text = _fold_optionals(str(callee_exec), set(bound), absent)
+    # names are substituted away.  A dummy forwarded the caller's own optional
+    # keeps its guard -- its presence is only known at runtime.
+    exec_text = _fold_optionals(str(callee_exec), _statically_present(bound, caller_sub, caller_spec), absent)
 
     # One combined substitution: present dummies -> actual text, omitted optionals
     # -> the absent marker, locals -> unique names.
@@ -539,7 +573,7 @@ def _inline_one_funcref(ref: f03.Base, callee_sub: f03.Base, counter: int) -> bo
         # we cannot soundly hoist it -- skip.
         return False
 
-    exec_text = _fold_optionals(str(callee_exec), set(bound), absent)
+    exec_text = _fold_optionals(str(callee_exec), _statically_present(bound, caller_sub, caller_spec), absent)
     mapping: Dict[str, str] = dict(bound)
     mapping.update({d: _ABSENT for d in absent})
     mapping.update(rename)

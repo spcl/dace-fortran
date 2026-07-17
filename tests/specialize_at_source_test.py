@@ -370,3 +370,87 @@ def test_inlined_ladder_lowers_to_sdfg(tmp_path):
     prog, _ = _inline_and_fold(_LADDER_SRC, ["sync_patch_array"])
     sdfg = build_sdfg(str(prog), tmp_path / "sdfg", name="ladder_inl", entry="dycore_step").build()
     assert sdfg.number_of_nodes() >= 1
+
+
+# --------------------------------------------------------------------------
+# Forwarded caller-optional: PRESENT() must NOT fold when the actual is the
+# caller's own OPTIONAL dummy (its presence is a runtime property).
+# --------------------------------------------------------------------------
+
+# ``outer`` forwards its OWN optional ``opt_start_level`` positionally into
+# ``inner``'s optional dummy, exactly like ICON's
+# ``div_oce_3D_mlevels`` -> ``div_oce_3D_mlevels_onTriangles``.  ``inner``
+# defaults ``start_level`` to 1 when the optional is absent.  Specializing
+# ``inner`` into ``outer`` must KEEP the ``IF (PRESENT(...)) ... ELSE
+# start_level = 1`` guard: folding it ``.TRUE.`` deletes the default, and the
+# absent scalar then reads 0 -> vertical loop starts at level 0 -> out-of-bounds
+# read with silently wrong results.
+_FORWARDED_OPTIONAL_SRC = """
+module mo_fwd
+  implicit none
+contains
+  subroutine inner(field, nlev, opt_start_level)
+    real(8), intent(inout) :: field(:)
+    integer, intent(in) :: nlev
+    integer, intent(in), optional :: opt_start_level
+    integer :: start_level, k
+    if (present(opt_start_level)) then
+      start_level = opt_start_level
+    else
+      start_level = 1
+    end if
+    do k = start_level, nlev
+      field(k) = field(k) + 1.0d0
+    end do
+  end subroutine
+  subroutine outer(field, nlev, opt_start_level)
+    real(8), intent(inout) :: field(:)
+    integer, intent(in) :: nlev
+    integer, intent(in), optional :: opt_start_level
+    call inner(field, nlev, opt_start_level)
+  end subroutine
+end module
+
+subroutine root(field, nlev)
+  use mo_fwd
+  implicit none
+  real(8), intent(inout) :: field(:)
+  integer, intent(in) :: nlev
+  ! Omits opt_start_level entirely -> absent all the way down.
+  call outer(field, nlev)
+end subroutine
+"""
+
+
+def test_forwarded_caller_optional_keeps_present_guard():
+    """A dummy bound to the caller's own optional keeps its ``PRESENT`` guard
+    when inlined -- its presence is only known at the caller's runtime."""
+    prog = parse_program(_FORWARDED_OPTIONAL_SRC)
+    inline_named_subprograms(prog, ["inner"])
+    outer = str(prog).split("SUBROUTINE outer")[1].split("END SUBROUTINE outer")[0].upper()
+    # The guard survives: both the runtime PRESENT test and the ELSE default.
+    assert "PRESENT(OPT_START_LEVEL)" in outer
+    assert "= 1" in outer
+    # It must NOT have folded to a constant-true branch that drops the default.
+    assert "IF (.TRUE.)" not in outer.replace(" ", "")
+
+
+@pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+def test_forwarded_optional_absent_defaults_to_one_e2e(tmp_path):
+    """End-to-end: with the optional omitted at the ROOT, both inlining levels
+    fold to ``start_level = 1``, so every element is written.  A ``.TRUE.`` misfold
+    at the ``outer -> inner`` boundary would instead read the absent scalar as 0 and
+    start the loop at level 0 -- out of bounds (the ICON ocean level-0 bug)."""
+    import numpy as np
+    prog = parse_program(_FORWARDED_OPTIONAL_SRC)
+    # Inline inner into outer (guard preserved by the fix), then outer into root
+    # (where the optional is statically absent -> guard folds to the ELSE default).
+    inline_named_subprograms(prog, ["inner", "outer"])
+    prog = optimizations.const_eval_nodes(prog)
+    prog = pruning.prune_branches(prog)
+    sdfg = build_sdfg(str(prog), tmp_path / "sdfg", name="fwd_opt", entry="root").build()
+    n = 8
+    field = np.zeros(n, dtype=np.float64, order="F")
+    sdfg(field=field, nlev=n)
+    # start_level defaulted to 1 -> all n elements incremented, none left at 0.
+    np.testing.assert_allclose(field, np.ones(n), rtol=1e-12, atol=1e-12)
