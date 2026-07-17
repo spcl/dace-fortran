@@ -1194,6 +1194,7 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
                   entry: Optional[str] = None,
                   *,
                   expand_cpp: bool = False,
+                  force_double_precision: bool = False,
                   defines: Iterable[str] = (),
                   include_dirs: Iterable[Union[str, Path]] = (),
                   flang: str = "flang-new-21",
@@ -1247,6 +1248,19 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
     src_map = _normalize_sources(sources)
     if expand_cpp:
         src_map = cpp_expand_sources(src_map, defines=defines, include_dirs=include_dirs, flang=flang)
+    if force_double_precision:
+        # Force every parametrized real kind to fp64: the model's precision
+        # kinds are all defined via ``SELECTED_REAL_KIND(...)`` (the parkind1
+        # JPRB/JPRL/JPRM/... family), so rewriting each to the fp64 kind (8)
+        # collapses the whole kind graph to double.  This is the caller's
+        # explicit "parametrized precision -> fp64" contract: a kernel written
+        # for mixed / reduced precision (SC2026 CLOUDSC's FP16/FP32 variants)
+        # is lowered and compared at uniform fp64 on both legs.  Integer kinds
+        # (``SELECTED_INT_KIND``) are untouched.
+        src_map = {
+            name: re.sub(r'SELECTED_REAL_KIND\s*\([^)]*\)', '8', src, flags=re.IGNORECASE)
+            for name, src in src_map.items()
+        }
     spec = _entry_to_spec(_concat_sources(src_map), entry)
     cfg = ParseConfig(
         sources=dict(src_map),
@@ -1306,6 +1320,7 @@ def inline_to_single_tu(
     out_dir: Union[None, str, Path] = None,
     name: str = "inlined",
     expand_cpp: bool = False,
+    force_double_precision: bool = False,
     defines: Iterable[str] = (),
     include_dirs: Iterable[Union[str, Path]] = (),
     flang: str = "flang-new-21",
@@ -1367,6 +1382,7 @@ def inline_to_single_tu(
     ast = inline_to_ast(sources,
                         entry,
                         expand_cpp=expand_cpp,
+                        force_double_precision=force_double_precision,
                         defines=defines,
                         include_dirs=include_dirs,
                         flang=flang,

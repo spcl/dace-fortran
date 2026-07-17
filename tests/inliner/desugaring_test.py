@@ -67,6 +67,40 @@ def test_interleaved_statement_functions_extract_end_to_end():
     assert "res = foeew(ptare_in)" in low
 
 
+def test_force_double_precision_collapses_real_kinds():
+    """``force_double_precision`` rewrites every ``SELECTED_REAL_KIND(...)`` to
+    the fp64 kind, so a kernel written for a reduced-precision kind parameter
+    (the SC2026 CLOUDSC ``JPRM``/``JPRL`` family) lowers at uniform fp64 -- no
+    ``REAL(KIND=4)`` survives while integer kinds are untouched."""
+    from pathlib import Path
+    src = """
+module m
+  implicit none
+  integer, parameter :: jpim = selected_int_kind(9)
+  integer, parameter :: jprm = selected_real_kind(6, 37)
+  integer, parameter :: jprb = selected_real_kind(13, 300)
+contains
+  subroutine k(x, n)
+    integer(kind=jpim), intent(in) :: n
+    real(kind=jprb), intent(inout) :: x(n)
+    real(kind=jprm) :: acc
+    integer(kind=jpim) :: i
+    acc = 0.0_jprm
+    do i = 1, n
+      acc = acc + x(i) * 2.0_jprb
+    end do
+    x(1) = acc
+  end subroutine k
+end module m
+"""
+    tu = inline_to_single_tu(sources={"m.f90": src}, entry="m::k", force_double_precision=True)
+    text = (Path(tu).read_text() if not isinstance(tu, str) else tu).lower()
+    assert "real(kind = 4)" not in text and "real(kind = 8)" in text
+    assert "selected_real_kind" not in text
+    # Integer kinds are left alone.
+    assert "integer(kind = 4)" in text
+
+
 def test_procedure_replacer():
     """
     Tests that type-bound procedures are correctly replaced with standard subroutine calls.
