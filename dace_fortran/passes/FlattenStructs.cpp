@@ -2478,7 +2478,11 @@ struct FlattenStructsPass : public mlir::PassWrapper<FlattenStructsPass, mlir::O
                                                   /*component=*/componentAttr,
                                                   /*component_shape=*/fieldShape,
                                                   /*indices=*/mlir::ValueRange{},
-                                                  /*is_triplet=*/mlir::DenseBoolArrayAttr{},
+                                                  // ``is_triplet`` is a REQUIRED DenseBoolArrayAttr on
+                                                  // hlfir.designate: a null attr {} builds an op the
+                                                  // verifier rejects ("requires attribute 'is_triplet'").
+                                                  // No indices -> the EMPTY bool array is the correct value.
+                                                  /*is_triplet=*/b.getDenseBoolArrayAttr(llvm::ArrayRef<bool>{}),
                                                   /*substring=*/mlir::ValueRange{},
                                                   /*complex_part=*/mlir::BoolAttr{},
                                                   /*shape=*/fieldShape,
