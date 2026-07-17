@@ -64,6 +64,23 @@ end module run_mod
 """
 
 
+def test_external_registry_isolation_fixture_is_autouse(request):
+    """Every test must get the external registry cleared at teardown.
+
+    ``tests/conftest.py``'s ``isolate_external_registry`` is what stops a
+    registration made here from leaking into a later test in the same process.
+    Without it, this file's ``bar(a, n)`` stayed registered and rebound
+    ``tests/multi_callsite_inlining_test.py``'s module-local ``CALL bar(a)`` to
+    the 2-arg external: the callee read a garbage ``n`` and looped
+    ``a = a + 1`` that many times -- an out-of-bounds write that segfaulted the
+    interpreter (SIGSEGV), or silently returned wrong values when the garbage
+    happened to be small.  Assert the fixture is wired so deleting
+    ``autouse=True`` fails here, next to the cause, instead of resurfacing as
+    an unrelated file's crash.
+    """
+    assert "isolate_external_registry" in request.fixturenames
+
+
 def test_keep_external_lowers_to_externalcall(tmp_path: Path):
     """An :func:`apply_external_functions` declaration produces an
     :class:`ExternalCall` library node bound to the supplied ``.so`` --

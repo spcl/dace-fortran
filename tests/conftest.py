@@ -127,6 +127,37 @@ else:
 
 import pytest
 
+from dace_fortran.external import clear_external_registry
+
+
+# --- external-registry isolation -----------------------------------------
+@pytest.fixture(autouse=True)
+def isolate_external_registry():
+    """Drop external-function registrations after every test.
+
+    ``apply_external_functions`` / ``keep_external`` write a process-global
+    registry (and ``compiler.linker.args``).  A test that registers a callee
+    and does not clean up leaks it into every later test in the same process:
+    a module-local subroutine whose name collides with a registered one stays
+    an external declaration instead of being inlined, so the call binds to the
+    wrong ``.so``.  When the arities differ the callee then reads a garbage
+    argument -- ``tests/external_call/test_keep_external.py``'s ``bar(a, n)``
+    against ``tests/multi_callsite_inlining_test.py``'s ``CALL bar(a)`` loops
+    ``a = a + 1`` a garbage ``n`` times: an out-of-bounds write that segfaults
+    the interpreter (or, when the garbage is small, silently returns wrong
+    values).  Under ``-n auto`` it depends on which tests share a worker, so it
+    surfaces only sometimes.
+
+    Registration is per-test everywhere (no module/session-scoped fixture
+    registers), so clearing at function teardown is safe and closes the class
+    for all of ``tests/`` rather than the two files that happen to leak today.
+    ``clear_external_registry`` is the existing helper for exactly this -- its
+    docstring reads "test isolation / no global leak" -- and it also restores
+    the linker args.
+    """
+    yield
+    clear_external_registry()
+
 
 # --- ICON build fixture --------------------------------------------------
 # The ICON-integration tests need a configured + ``make``-d ICON tree
