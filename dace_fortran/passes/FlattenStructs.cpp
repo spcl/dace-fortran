@@ -640,6 +640,21 @@ void logFlatBail(const llvm::SmallVectorImpl<std::string>& prefix, const char* r
   llvm::errs() << "\n";
 }
 
+/// True for a component token flang qualified with its defining type's mangled
+/// name (``_QM<mod>T<type>.<base>``)  --  the spelling flang emits for a
+/// component declared under a type-level ``PRIVATE`` (ICON's
+/// ``t_comm_gather_pattern`` is ``PRIVATE`` with ``INTEGER, ALLOCATABLE ::
+/// collector_pes(:)`` members).  A '.' cannot occur in a Fortran component
+/// name, so the test is exact.
+///
+/// Such a component can never be named by GENERATED binding Fortran: the
+/// binding module is never the component's defining module, so
+/// ``p_patch%comm_pat_gather_c%collector_pes`` is a private-component access
+/// from outside  --  a hard error at any allocation state.  Marshalling it is
+/// therefore not merely undefined (referencing an unallocated allocatable), it
+/// is unexpressible; the only correct answer is not to flatten it.
+bool privateQualifiedComponent(llvm::StringRef comp) { return comp.contains('.'); }
+
 /// When ``partial`` is set, an unsupported member is SKIPPED (no leaf, keep
 /// walking the siblings) instead of failing the whole record.  Used only on the
 /// struct-dummy-argument path: a skipped member that is genuinely accessed is
@@ -650,7 +665,8 @@ void logFlatBail(const llvm::SmallVectorImpl<std::string>& prefix, const char* r
 /// all-or-nothing.
 bool collectFlatLeaves(fir::RecordType rec, llvm::SmallVectorImpl<std::string>& prefix,
                        llvm::SmallVectorImpl<int64_t>& outerDims, llvm::SmallVectorImpl<FlatLeaf>& out,
-                       llvm::SmallPtrSetImpl<mlir::Type>& visited, int depth = 0, bool partial = false) {
+                       llvm::SmallPtrSetImpl<mlir::Type>& visited, int depth = 0, bool partial = false,
+                       const llvm::StringSet<>* liveComps = nullptr) {
   if (depth > kFlattenMaxDepth) return false;
   // Mark this record as in-progress so a downstream pointer member
   // whose pointee re-enters the same type (mutual recursion: ``type a_t
@@ -677,6 +693,27 @@ bool collectFlatLeaves(fir::RecordType rec, llvm::SmallVectorImpl<std::string>& 
     // pointer contract).  Either way, the flat leaf set is what
     // matters here, and the pointer doesn't contribute one.
     if (pointerToRecordMember(pair.second)) {
+      prefix.pop_back();
+      continue;
+    }
+    // A type-level-PRIVATE component this function never designates is
+    // unmarshallable AND unused here: no generated binding may name it (see
+    // ``privateQualifiedComponent``), so flattening it can only mint a
+    // companion whose decl / ``c_loc`` path is not legal Fortran.  Skipping it
+    // (also suppressing the record-member recursion below, pruning the whole
+    // private subtree at its parent) is what keeps ICON's real ``t_patch``
+    // marshallable.
+    //
+    // The use-test is deliberately scoped to THIS function, not the module:
+    // ICON's own ``setup_comm_gather_pattern`` designates ``collector_pes`` 25
+    // times, so a module-wide key would call it live and never fire.  It is
+    // also a CONJUNCTION on purpose  --  the private test alone would drop a
+    // private component that an IN-MODULE kernel legitimately designates
+    // (e.g. the ocean solver's ``act__tag`` dispatch tag).  Only opt-in
+    // callers pass ``liveComps``; ``nullptr`` keeps the historical behaviour
+    // byte-for-byte.
+    if (liveComps && privateQualifiedComponent(pair.first) && !liveComps->contains(pair.first)) {
+      logFlatBail(prefix, "private component never designated in this function", pair.second);
       prefix.pop_back();
       continue;
     }
@@ -716,7 +753,7 @@ bool collectFlatLeaves(fir::RecordType rec, llvm::SmallVectorImpl<std::string>& 
       }
       out.push_back(std::move(leaf));
     } else if (auto innerRec = mlir::dyn_cast<fir::RecordType>(pair.second)) {
-      if (!collectFlatLeaves(innerRec, prefix, outerDims, out, visited, depth + 1, partial)) {
+      if (!collectFlatLeaves(innerRec, prefix, outerDims, out, visited, depth + 1, partial, liveComps)) {
         prefix.pop_back();
         return false;
       }
@@ -742,7 +779,7 @@ bool collectFlatLeaves(fir::RecordType rec, llvm::SmallVectorImpl<std::string>& 
         theseDims.push_back(d);
       }
       for (auto d : theseDims) outerDims.push_back(d);
-      bool const ok = collectFlatLeaves(innerRec, prefix, outerDims, out, visited, depth + 1, partial);
+      bool const ok = collectFlatLeaves(innerRec, prefix, outerDims, out, visited, depth + 1, partial, liveComps);
       for (size_t i = 0; i < theseDims.size(); ++i) outerDims.pop_back();
       if (!ok) {
         prefix.pop_back();
@@ -767,19 +804,21 @@ bool collectFlatLeaves(fir::RecordType rec, llvm::SmallVectorImpl<std::string>& 
 /// callers always start with empty ``outerDims``.  Forwards to
 /// the recursive form above.
 bool collectFlatLeaves(fir::RecordType rec, llvm::SmallVectorImpl<std::string>& prefix,
-                       llvm::SmallVectorImpl<FlatLeaf>& out, int depth = 0, bool partial = false) {
+                       llvm::SmallVectorImpl<FlatLeaf>& out, int depth = 0, bool partial = false,
+                       const llvm::StringSet<>* liveComps = nullptr) {
   llvm::SmallVector<int64_t, 4> outerDims;
   llvm::SmallPtrSet<mlir::Type, 4> visited;
-  return collectFlatLeaves(rec, prefix, outerDims, out, visited, depth, partial);
+  return collectFlatLeaves(rec, prefix, outerDims, out, visited, depth, partial, liveComps);
 }
 
 /// Entry point that threads a caller-provided ``outerDims`` (used by
 /// ``splitLocal`` / the AoS-allocatable pre-flatten check to seed the
 /// outer record's array extents).
 bool collectFlatLeaves(fir::RecordType rec, llvm::SmallVectorImpl<std::string>& prefix,
-                       llvm::SmallVectorImpl<int64_t>& outerDims, llvm::SmallVectorImpl<FlatLeaf>& out, int depth = 0) {
+                       llvm::SmallVectorImpl<int64_t>& outerDims, llvm::SmallVectorImpl<FlatLeaf>& out, int depth = 0,
+                       const llvm::StringSet<>* liveComps = nullptr) {
   llvm::SmallPtrSet<mlir::Type, 4> visited;
-  return collectFlatLeaves(rec, prefix, outerDims, out, visited, depth);
+  return collectFlatLeaves(rec, prefix, outerDims, out, visited, depth, /*partial=*/false, liveComps);
 }
 
 /// Detect a "jagged" scalar-struct: every member is a 1-D array of the same
@@ -3917,6 +3956,54 @@ struct FlattenStructsPass : public mlir::PassWrapper<FlattenStructsPass, mlir::O
   bool planAndReplaceStructArgs(mlir::func::FuncOp func) {
     auto& block = func.front();
 
+    // Component tokens THIS function actually names.  Feeds the
+    // private-component gate in ``collectFlatLeaves`` (see
+    // ``privateQualifiedComponent``): a private component that is designated
+    // here is in-module and legitimately marshallable, so it must survive.
+    //
+    // Raw tokens, no chain resolution: flang's mangled spelling
+    // ``_QM<mod>T<type>.<base>`` already identifies (type, component)
+    // uniquely, so there is no key ambiguity.  A SUPERSET of the truth is safe
+    // -- it keeps more -- and the gate only ever consults it for tokens that
+    // are private-qualified anyway.
+    llvm::StringSet<> liveComps;
+    func.walk([&](hlfir::DesignateOp dg) {
+      // Same key tolerance as ``rewriteDesignate``: HLFIR spells the component
+      // attribute ``component_name`` or ``component`` depending on the
+      // tablegen version.  Missing it here would UNDER-collect, i.e. drop a
+      // live component -- fail closed by checking both.
+      for (auto nm : {"component_name", "component"})
+        if (auto a = dg->getAttrOfType<mlir::StringAttr>(nm)) {
+          liveComps.insert(a.getValue());
+          break;
+        }
+    });
+    func.walk([&](fir::FieldIndexOp fi) { liveComps.insert(fi.getFieldName()); });
+    // Hedge, NOT load-bearing: sweep every string attribute in the function
+    // for a private-qualified token, so an op that names a component through
+    // some other string attr still counts as a use.  VERIFIED INERT on real
+    // ICON input -- every private token in the velocity TU appears only as an
+    // hlfir.designate component attr, which the walk above already catches --
+    // so this collects nothing today.  It exists so a future flang spelling
+    // drift fails in the KEEP direction rather than silently pruning a live
+    // member.  ``fir.coordinate_of`` deliberately NOT handled: it names fields
+    // by integer DenseI32ArrayAttr (no string to match), it is a
+    // convert-hlfir-to-fir product that runs after this pass, and a struct
+    // reached that way still has uses -- so replaceStructArgNested keeps its
+    // dummy and the original AoS data intact.
+    //
+    // This cannot resurrect the entire struct: a component only reaches
+    // ``liveComps`` if some op spells its token in a StringAttr.  A type
+    // SPELLING (``!fir.type<_QM..T..{_QM..T...comp:...}>``), which does name
+    // every component, is an mlir::Type and never a StringAttr, so the
+    // never-designated members stay prunable.  (Confirmed empirically: the
+    // gate still fires exactly 27x on ICON's t_patch with this walk present.)
+    func.walk([&](mlir::Operation* op) {
+      for (auto named : op->getAttrs())
+        if (auto s = mlir::dyn_cast<mlir::StringAttr>(named.getValue()))
+          if (privateQualifiedComponent(s.getValue())) liveComps.insert(s.getValue());
+    });
+
     struct Plan {
       hlfir::DeclareOp argDecl;
       fir::RecordType rec;
@@ -4051,12 +4138,18 @@ struct FlattenStructsPass : public mlir::PassWrapper<FlattenStructsPass, mlir::O
         // applies to the simpler overload (the outerDims one doesn't support
         // partial-skip yet -- nested AoR with an unsupported
         // member would simply not flatten in this path).
+        // ``liveComps`` opts BOTH struct-dummy paths into the private-component
+        // gate (see ``privateQualifiedComponent``).  ICON's real ``t_patch``
+        // arrives through the scalar branch, but an array-of-records dummy
+        // whose element type has private components would mint exactly the same
+        // unnameable companions, so gate it identically rather than leave a
+        // known hole for the next caller to fall into.
         bool collected;
         if (outerIsArray) {
-          collected = collectFlatLeaves(rec, prefix, outerDimsForCollect, leaves, /*depth=*/0);
+          collected = collectFlatLeaves(rec, prefix, outerDimsForCollect, leaves, /*depth=*/0, &liveComps);
         } else {
           collected = collectFlatLeaves(rec, prefix, leaves, /*depth=*/0,
-                                        /*partial=*/true);
+                                        /*partial=*/true, &liveComps);
         }
         if (!collected) continue;
         p.nested = true;
