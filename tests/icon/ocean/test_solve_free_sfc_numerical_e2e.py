@@ -81,12 +81,17 @@ _DO_NOT_EMIT = [
 
 
 @pytest.mark.xfail(strict=True,
-                   reason="solve_free_sfc SDFG builds, runs and mutates output, but is not yet bit-exact vs stock "
-                   "gfortran: 7 of 171 output arrays diverge -- vort / press_hyd / veloc_adv_vert (56/512 elems) "
-                   "and g_n / g_nimd / press_grad / veloc_adv_horz (1/512, |d|~1-2). The DUT computes halo/boundary "
-                   "cells (index [0,0,*]) the reference leaves 0.0 on the degenerate single-rank mesh -- a "
-                   "subset-range/halo loop-bound difference plus mesh-seed tuning. Bit-exact bring-up is its own "
-                   "focused session; strict=True flags the day it starts passing so this marker is removed.")
+                   reason="solve_free_sfc SDFG builds and starts, but the DUT run ABORTS (SIGABRT, glibc "
+                   "`free(): invalid size`; ref runs clean). Before the forwarded-optional PRESENT fix the "
+                   "extracted TU mis-ran the div_oce vertical loop as level 0..0 (both opt levels read the "
+                   "degenerate 0 seed), so the DUT barely wrote and survived to diverge on 7 of 171 arrays; "
+                   "the corrected TU runs the true 1..n_zlev range and the extra writes now corrupt the heap. "
+                   "Prime suspect: the bindings layer declares SDFG transient-dim symbols as uninitialized "
+                   "locals and passes them to __dace_init (block_builders.py declares every frozen free "
+                   "symbol; nothing sources transients), so a transient allocated with a garbage/zero extent "
+                   "is overflowed by the full-depth loop and glibc aborts at teardown. Fixing that "
+                   "transient-extent sourcing is its own focused session; strict=True flags the day this "
+                   "starts passing so the marker is removed.")
 @pytest.mark.xdist_group("ocean_fparser")
 def test_solve_free_sfc_numerical_e2e(tmp_path: Path):
     """solve_free_sfc -> SDFG, driven on a degenerate valid mesh, BIT-EXACT

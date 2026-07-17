@@ -323,6 +323,19 @@ def acc(builder, state, name: str):
                 view_subset = ", ".join(f"0:{d}" for d in view_dims)
                 state.add_edge(src_node, None, node, 'views',
                                Memlet(data=src, subset=src_subset, other_subset=view_subset))
+        elif v is not None and getattr(v, 'role', '') == 'view_alias':
+            # A view with no resolvable source would be emitted as a bare
+            # AccessNode and only fail much later, at SDFG validation, as an
+            # opaque "Ambiguous or invalid edge to/from a View access node"
+            # (exchange_data_r3d's ``send_ptr`` did exactly this when the
+            # rebind trace stopped at the inlined ``recv`` dummy's declare).
+            # Fail here, at the emission point, with the actual names.
+            raise ValueError(f"view_alias '{name}' has no usable view source: "
+                             f"view_source={v.view_source!r} is "
+                             f"{'unset' if not v.view_source else 'not a registered array'} "
+                             f"(state '{state.label}'). The bridge's rebind trace must resolve "
+                             f"the view to a registered descriptor -- see extract_vars.cpp's "
+                             f"pointer-view source walk.")
     return node
 
 

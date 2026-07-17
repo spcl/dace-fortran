@@ -530,7 +530,9 @@ MODULE mo_fortran_tools
     INTEGER, INTENT(OUT) :: acc_async_queue
     INTEGER, INTENT(IN), OPTIONAL :: opt_acc_async_queue
     acc_async_queue = 1
-    acc_async_queue = opt_acc_async_queue
+    IF (PRESENT(opt_acc_async_queue)) THEN
+      acc_async_queue = opt_acc_async_queue
+    END IF
   END SUBROUTINE set_acc_async_queue
 END MODULE mo_fortran_tools
 MODULE mo_grid_config
@@ -1558,6 +1560,7 @@ MODULE mo_ocean_math_operators
   END SUBROUTINE div_vector_ontriangle
   SUBROUTINE div_oce_3d_mlevels_ontriangles(vec_e, patch_3d, div_coeff, div_vec_c, opt_start_level, opt_end_level, subset_range, lacc)
     USE mo_model_domain, ONLY: t_patch_3d, t_subset_range
+    USE mo_ocean_nml, ONLY: n_zlev
     USE mo_fortran_tools, ONLY: set_acc_host_or_device
     USE mo_grid_subset, ONLY: get_index_range
     TYPE(t_patch_3d), TARGET, INTENT(IN) :: patch_3d
@@ -1573,11 +1576,23 @@ MODULE mo_ocean_math_operators
     INTEGER :: start_index, end_index
     TYPE(t_subset_range), POINTER :: cells_subset
     LOGICAL :: lzacc
-    cells_subset => subset_range
+    IF (PRESENT(subset_range)) THEN
+      cells_subset => subset_range
+    ELSE
+      cells_subset => patch_3d % p_patch_2d(1) % cells % in_domain
+    END IF
     start_block = cells_subset % start_block
     end_block = cells_subset % end_block
-    start_level = opt_start_level
-    end_level = opt_end_level
+    IF (PRESENT(opt_start_level)) THEN
+      start_level = opt_start_level
+    ELSE
+      start_level = 1
+    END IF
+    IF (PRESENT(opt_end_level)) THEN
+      end_level = opt_end_level
+    ELSE
+      end_level = n_zlev
+    END IF
     CALL set_acc_host_or_device(lzacc, lacc)
     DO blockno = start_block, end_block
       CALL get_index_range(cells_subset, blockno, start_index, end_index)

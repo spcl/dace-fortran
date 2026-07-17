@@ -1489,6 +1489,32 @@ void prepareExtractionState(mlir::ModuleOp module, const std::string& entry_symb
   // populated before any subsequent ``extractName`` consults it.
   rejectOrRenameReservedShortNames(module);
 
+  // Post-``hlfir-inline-all`` copies of a POINTER-rebind local share one
+  // uniq_name, but each copy's rebind target can differ --
+  // ``exchange_data_r3d``'s ``send_ptr => recv`` inlined once per call site
+  // binds a DIFFERENT ``recv``.  Downstream keying is name-based end to end
+  // (VarInfos land in a ``{fortran_name: v}`` dict; memlets carry the
+  // extracted short name), so same-named copies collapse last-wins and every
+  // read would link to ONE copy's view source -- a silent wrong-source link.
+  // Give the 2nd+ tagged declare of each uniq_name its own ``_pv<N>`` suffix
+  // ON THE OP, so every consumer that resolves an access chain to its declare
+  // sees a distinct per-copy name.  The override map cannot express this (it
+  // is keyed by mangled name, which the copies share).  Idempotent: renamed
+  // declares form singleton groups on a re-run, and the deterministic module
+  // walk order gives each op the same suffix in every extraction pass.
+  {
+    llvm::StringMap<int> pvSeen;
+    module.walk([&](hlfir::DeclareOp dc) {
+      if (!dc->hasAttr("hlfir_bridge.pointer_view") && !dc->hasAttr("hlfir_bridge.pointer_view_scalar") &&
+          !dc->hasAttr("hlfir_bridge.bounds_remap_view"))
+        return;
+      auto const un = dc.getUniqName().str();
+      int const n = pvSeen[un]++;
+      if (n == 0) return;
+      dc.setUniqNameAttr(mlir::StringAttr::get(dc->getContext(), un + "_pv" + std::to_string(n)));
+    });
+  }
+
   // Entry-scope detection.  Prefer the USER-PROVIDED entry name
   // (cached via ``set_entry_symbol``) because passes may rename the
   // public ``func.func`` AFTER it was captured -- declares keep the
@@ -3447,9 +3473,30 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
             auto* pd = parent.getDefiningOp();
             if (!pd) break;
             if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(pd)) {
+              // Same inlined-dummy peel as the rebox walk below: an alias
+              // declare's memref chains on to the caller's actual; stop
+              // only at root storage.
+              if (mlir::Value const mem = dc.getMemref()) {
+                bool root = mlir::isa<mlir::BlockArgument>(mem);
+                if (!root) {
+                  auto* md = mem.getDefiningOp();
+                  root = !md || mlir::isa<fir::AllocaOp, fir::AllocMemOp, fir::AddrOfOp, fir::ZeroOp>(md);
+                }
+                if (!root) {
+                  parent = mem;
+                  continue;
+                }
+              }
               v.bounds_remap_source = extractName(dc.getUniqName().str());
               v.bounds_remap_view = !v.bounds_remap_source.empty();
               break;
+            }
+            if (auto ld = mlir::dyn_cast<fir::LoadOp>(pd)) {
+              // A chain through an inlined dummy bound to an ALLOCATABLE /
+              // POINTER actual reads the box via ``fir.load``; walk through
+              // to the box's declare (mirrors the rebox walk's load arm).
+              parent = ld.getMemref();
+              continue;
             }
             if (auto cv = mlir::dyn_cast<fir::ConvertOp>(pd)) {
               parent = cv.getValue();
@@ -3529,6 +3576,24 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
             auto* pd = parent.getDefiningOp();
             if (!pd) break;
             if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(pd)) {
+              // An inlined callee DUMMY's declare is an alias: its memref
+              // chains on to the caller's actual (post-flatten, the flat
+              // component declare).  Recording the dummy's name would leave
+              // ``view_source`` pointing at a name with no SDFG descriptor
+              // (``exchange_data_r3d``'s ``recv``), so keep walking; stop
+              // only at root storage -- a block argument (entry dummy),
+              // alloca/heap allocation, or module global.
+              if (mlir::Value const mem = dc.getMemref()) {
+                bool root = mlir::isa<mlir::BlockArgument>(mem);
+                if (!root) {
+                  auto* md = mem.getDefiningOp();
+                  root = !md || mlir::isa<fir::AllocaOp, fir::AllocMemOp, fir::AddrOfOp, fir::ZeroOp>(md);
+                }
+                if (!root) {
+                  parent = mem;
+                  continue;
+                }
+              }
               v.bounds_remap_source = extractName(dc.getUniqName().str());
               v.bounds_remap_view = !v.bounds_remap_source.empty();
               break;

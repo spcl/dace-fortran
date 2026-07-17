@@ -248,7 +248,10 @@ MODULE mo_lib_interpolation_scalar
         END DO
       END DO
     END DO
-    IF (.NOT. acc_async) THEN
+    IF (PRESENT(acc_async)) THEN
+      IF (.NOT. acc_async) THEN
+      END IF
+    ELSE
     END IF
   END SUBROUTINE cells2verts_scalar_dp_lib
 END MODULE mo_lib_interpolation_scalar
@@ -595,6 +598,7 @@ MODULE mo_communication_types
     REAL(KIND = 8), INTENT(IN), OPTIONAL, TARGET :: add(:, :, :)
     CHARACTER(LEN = *), PARAMETER :: routine = modname // "::exchange_data_r3d"
     REAL(KIND = 8) :: send_buf(SIZE(recv, 2), p_pat % n_send), recv_buf(SIZE(recv, 2), p_pat % n_recv)
+    REAL(KIND = 8), POINTER :: send_ptr(:, :, :)
     INTEGER :: i, k, np, irs, iss, pid, icount, ndim2
     IF (my_process_is_mpi_seq()) THEN
       CALL exchange_data_r3d_seq(p_pat, .TRUE., recv, send, add)
@@ -618,13 +622,18 @@ MODULE mo_communication_types
         CALL p_irecv_dp_deconiface_10(recv_buf(1, irs), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
       END DO
     END IF
+    IF (PRESENT(send)) THEN
+      send_ptr => send
+    ELSE
+      send_ptr => recv
+    END IF
     IF (ndim2 == 1) THEN
       DO i = 1, p_pat % n_send
-        send_buf(1, i) = send(p_pat % send_src_idx(i), 1, p_pat % send_src_blk(i))
+        send_buf(1, i) = send_ptr(p_pat % send_src_idx(i), 1, p_pat % send_src_blk(i))
       END DO
     ELSE
       DO i = 1, p_pat % n_send
-        send_buf(1 : ndim2, i) = send(p_pat % send_src_idx(i), 1 : ndim2, p_pat % send_src_blk(i))
+        send_buf(1 : ndim2, i) = send_ptr(p_pat % send_src_idx(i), 1 : ndim2, p_pat % send_src_blk(i))
       END DO
     END IF
     IF (iorder_sendrecv == 1) THEN
@@ -663,15 +672,28 @@ MODULE mo_communication_types
       CALL p_barrier(p_pat % comm)
       IF (activate_sync_timers) CALL timer_stop(timer_barrier)
     END IF
-    IF (ndim2 == 1) THEN
-      k = 1
-      DO i = 1, p_pat % n_pnts
-        recv(p_pat % recv_dst_idx(i), 1, p_pat % recv_dst_blk(i)) = recv_buf(1, p_pat % recv_src(i)) + add(p_pat % recv_dst_idx(i), 1, p_pat % recv_dst_blk(i))
-      END DO
+    IF (PRESENT(add)) THEN
+      IF (ndim2 == 1) THEN
+        k = 1
+        DO i = 1, p_pat % n_pnts
+          recv(p_pat % recv_dst_idx(i), 1, p_pat % recv_dst_blk(i)) = recv_buf(1, p_pat % recv_src(i)) + add(p_pat % recv_dst_idx(i), 1, p_pat % recv_dst_blk(i))
+        END DO
+      ELSE
+        DO i = 1, p_pat % n_pnts
+          recv(p_pat % recv_dst_idx(i), :, p_pat % recv_dst_blk(i)) = recv_buf(:, p_pat % recv_src(i)) + add(p_pat % recv_dst_idx(i), 1 : ndim2, p_pat % recv_dst_blk(i))
+        END DO
+      END IF
     ELSE
-      DO i = 1, p_pat % n_pnts
-        recv(p_pat % recv_dst_idx(i), :, p_pat % recv_dst_blk(i)) = recv_buf(:, p_pat % recv_src(i)) + add(p_pat % recv_dst_idx(i), 1 : ndim2, p_pat % recv_dst_blk(i))
-      END DO
+      IF (ndim2 == 1) THEN
+        k = 1
+        DO i = 1, p_pat % n_pnts
+          recv(p_pat % recv_dst_idx(i), 1, p_pat % recv_dst_blk(i)) = recv_buf(1, p_pat % recv_src(i))
+        END DO
+      ELSE
+        DO i = 1, p_pat % n_pnts
+          recv(p_pat % recv_dst_idx(i), :, p_pat % recv_dst_blk(i)) = recv_buf(:, p_pat % recv_src(i))
+        END DO
+      END IF
     END IF
     CALL acc_wait_comms(get_comm_acc_queue())
     IF (activate_sync_timers) CALL timer_stop(timer_exch_data)
@@ -808,8 +830,13 @@ MODULE mo_communication_types
     END IF
     IF (activate_sync_timers) CALL timer_start(timer_exch_data)
     lsend = .FALSE.
-    kshift_dp = nshift
-    kshift_sp = nshift
+    IF (PRESENT(nshift)) THEN
+      kshift_dp = nshift
+      kshift_sp = nshift
+    ELSE
+      kshift_dp = 0
+      kshift_sp = 0
+    END IF
     IF (my_process_is_mpi_seq()) THEN
       DO n = 1, nfields_dp
         CALL exchange_data_r3d_seq(p_pat, .TRUE., recv_dp(n) % p)
@@ -1773,9 +1800,6 @@ MODULE mo_solve_nonhydro
           ndim2tot_dp_inl0_inl1 = 0
           ndim2tot_dp_inl0_inl1 = ndim2tot_dp_inl0_inl1 + SIZE(p_nh % prog(nnew) % vn, 2)
           ndim2tot_dp_inl0_inl1 = ndim2tot_dp_inl0_inl1 + SIZE(z_rho_e, 2)
-          ndim2tot_dp_inl0_inl1 = ndim2tot_dp_inl0_inl1 + 0
-          ndim2tot_dp_inl0_inl1 = ndim2tot_dp_inl0_inl1 + 0
-          ndim2tot_dp_inl0_inl1 = ndim2tot_dp_inl0_inl1 + 0
           ndim2tot_sp_inl0_inl1 = 0
           CALL exchange_data_mult_mixprec(p_pat = p_pat_inl0_inl1, lacc = .TRUE., nfields_dp = 2, ndim2tot_dp = ndim2tot_dp_inl0_inl1, nfields_sp = 0, ndim2tot_sp = ndim2tot_sp_inl0_inl1, recv1_dp = p_nh % prog(nnew) % vn, recv2_dp = z_rho_e)
         END IF
@@ -2177,9 +2201,6 @@ MODULE mo_solve_nonhydro
             ndim2tot_dp_inl0_inl3 = 0
             ndim2tot_dp_inl0_inl3 = ndim2tot_dp_inl0_inl3 + SIZE(p_nh % prog(nnew) % w, 2)
             ndim2tot_dp_inl0_inl3 = ndim2tot_dp_inl0_inl3 + SIZE(z_dwdz_dd, 2)
-            ndim2tot_dp_inl0_inl3 = ndim2tot_dp_inl0_inl3 + 0
-            ndim2tot_dp_inl0_inl3 = ndim2tot_dp_inl0_inl3 + 0
-            ndim2tot_dp_inl0_inl3 = ndim2tot_dp_inl0_inl3 + 0
             ndim2tot_sp_inl0_inl3 = 0
             CALL exchange_data_mult_mixprec(p_pat = p_pat_inl0_inl3, lacc = .TRUE., nfields_dp = 2, ndim2tot_dp = ndim2tot_dp_inl0_inl3, nfields_sp = 0, ndim2tot_sp = ndim2tot_sp_inl0_inl3, recv1_dp = p_nh % prog(nnew) % w, recv2_dp = z_dwdz_dd)
           END IF
@@ -2202,8 +2223,6 @@ MODULE mo_solve_nonhydro
           ndim2tot_dp_inl0_inl5 = ndim2tot_dp_inl0_inl5 + SIZE(p_nh % prog(nnew) % rho, 2)
           ndim2tot_dp_inl0_inl5 = ndim2tot_dp_inl0_inl5 + SIZE(p_nh % prog(nnew) % exner, 2)
           ndim2tot_dp_inl0_inl5 = ndim2tot_dp_inl0_inl5 + SIZE(p_nh % prog(nnew) % w, 2)
-          ndim2tot_dp_inl0_inl5 = ndim2tot_dp_inl0_inl5 + 0
-          ndim2tot_dp_inl0_inl5 = ndim2tot_dp_inl0_inl5 + 0
           ndim2tot_sp_inl0_inl5 = 0
           CALL exchange_data_mult_mixprec(p_pat = p_pat_inl0_inl5, lacc = .TRUE., nfields_dp = 3, ndim2tot_dp = ndim2tot_dp_inl0_inl5, nfields_sp = 0, ndim2tot_sp = ndim2tot_sp_inl0_inl5, recv1_dp = p_nh % prog(nnew) % rho, recv2_dp = p_nh % prog(nnew) % exner, recv3_dp = p_nh % prog(nnew) % w)
         END IF

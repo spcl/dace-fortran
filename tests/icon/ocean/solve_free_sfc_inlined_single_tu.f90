@@ -903,7 +903,9 @@ MODULE mo_fortran_tools
     INTEGER, INTENT(OUT) :: acc_async_queue
     INTEGER, INTENT(IN), OPTIONAL :: opt_acc_async_queue
     acc_async_queue = 1
-    acc_async_queue = opt_acc_async_queue
+    IF (PRESENT(opt_acc_async_queue)) THEN
+      acc_async_queue = opt_acc_async_queue
+    END IF
   END SUBROUTINE set_acc_async_queue
 END MODULE mo_fortran_tools
 MODULE mo_util_system
@@ -1207,10 +1209,19 @@ MODULE mo_mpi
     INTEGER, OPTIONAL, INTENT(IN) :: root
     INTEGER, OPTIONAL, INTENT(IN) :: comm
     INTEGER :: p_comm, comm_size
-    p_comm = comm
-    comm_size = p_comm_size(comm)
+    IF (PRESENT(comm)) THEN
+      p_comm = comm
+      comm_size = p_comm_size(comm)
+    ELSE
+      p_comm = process_mpi_all_comm
+      comm_size = process_mpi_all_size
+    END IF
     IF (comm_size > 1) THEN
-      CALL mpi_reduce(in_field, out_field, 1, p_real_dp, op, root, p_comm, p_error)
+      IF (PRESENT(root)) THEN
+        CALL mpi_reduce(in_field, out_field, 1, p_real_dp, op, root, p_comm, p_error)
+      ELSE
+        CALL mpi_allreduce(in_field, out_field, 1, p_real_dp, op, p_comm, p_error)
+      END IF
     ELSE
       out_field = in_field
     END IF
@@ -1284,6 +1295,7 @@ MODULE mo_communication_types
     REAL(KIND = 8), INTENT(IN), OPTIONAL, TARGET :: add(:, :, :)
     CHARACTER(LEN = *), PARAMETER :: routine = modname // "::exchange_data_r3d"
     REAL(KIND = 8) :: send_buf(SIZE(recv, 2), p_pat % n_send), recv_buf(SIZE(recv, 2), p_pat % n_recv)
+    REAL(KIND = 8), POINTER :: send_ptr(:, :, :)
     INTEGER :: i, k, np, irs, iss, pid, icount, ndim2
     IF (my_process_is_mpi_seq()) THEN
       CALL exchange_data_r3d_seq(p_pat, lacc, recv, send, add)
@@ -1307,13 +1319,18 @@ MODULE mo_communication_types
         CALL p_irecv_dp_deconiface_9(recv_buf(1, irs), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
       END DO
     END IF
+    IF (PRESENT(send)) THEN
+      send_ptr => send
+    ELSE
+      send_ptr => recv
+    END IF
     IF (ndim2 == 1) THEN
       DO i = 1, p_pat % n_send
-        send_buf(1, i) = send(p_pat % send_src_idx(i), 1, p_pat % send_src_blk(i))
+        send_buf(1, i) = send_ptr(p_pat % send_src_idx(i), 1, p_pat % send_src_blk(i))
       END DO
     ELSE
       DO i = 1, p_pat % n_send
-        send_buf(1 : ndim2, i) = send(p_pat % send_src_idx(i), 1 : ndim2, p_pat % send_src_blk(i))
+        send_buf(1 : ndim2, i) = send_ptr(p_pat % send_src_idx(i), 1 : ndim2, p_pat % send_src_blk(i))
       END DO
     END IF
     IF (iorder_sendrecv == 1) THEN
@@ -1352,15 +1369,28 @@ MODULE mo_communication_types
       CALL p_barrier(p_pat % comm)
       IF (activate_sync_timers) CALL timer_stop(timer_barrier)
     END IF
-    IF (ndim2 == 1) THEN
-      k = 1
-      DO i = 1, p_pat % n_pnts
-        recv(p_pat % recv_dst_idx(i), 1, p_pat % recv_dst_blk(i)) = recv_buf(1, p_pat % recv_src(i)) + add(p_pat % recv_dst_idx(i), 1, p_pat % recv_dst_blk(i))
-      END DO
+    IF (PRESENT(add)) THEN
+      IF (ndim2 == 1) THEN
+        k = 1
+        DO i = 1, p_pat % n_pnts
+          recv(p_pat % recv_dst_idx(i), 1, p_pat % recv_dst_blk(i)) = recv_buf(1, p_pat % recv_src(i)) + add(p_pat % recv_dst_idx(i), 1, p_pat % recv_dst_blk(i))
+        END DO
+      ELSE
+        DO i = 1, p_pat % n_pnts
+          recv(p_pat % recv_dst_idx(i), :, p_pat % recv_dst_blk(i)) = recv_buf(:, p_pat % recv_src(i)) + add(p_pat % recv_dst_idx(i), 1 : ndim2, p_pat % recv_dst_blk(i))
+        END DO
+      END IF
     ELSE
-      DO i = 1, p_pat % n_pnts
-        recv(p_pat % recv_dst_idx(i), :, p_pat % recv_dst_blk(i)) = recv_buf(:, p_pat % recv_src(i)) + add(p_pat % recv_dst_idx(i), 1 : ndim2, p_pat % recv_dst_blk(i))
-      END DO
+      IF (ndim2 == 1) THEN
+        k = 1
+        DO i = 1, p_pat % n_pnts
+          recv(p_pat % recv_dst_idx(i), 1, p_pat % recv_dst_blk(i)) = recv_buf(1, p_pat % recv_src(i))
+        END DO
+      ELSE
+        DO i = 1, p_pat % n_pnts
+          recv(p_pat % recv_dst_idx(i), :, p_pat % recv_dst_blk(i)) = recv_buf(:, p_pat % recv_src(i))
+        END DO
+      END IF
     END IF
     CALL acc_wait_comms(get_comm_acc_queue())
     IF (activate_sync_timers) CALL timer_stop(timer_exch_data)
@@ -1379,6 +1409,7 @@ MODULE mo_communication_types
     REAL(KIND = 4), INTENT(IN), OPTIONAL, TARGET :: add(:, :, :)
     CHARACTER(LEN = *), PARAMETER :: routine = modname // "::exchange_data_s3d"
     REAL(KIND = 4) :: send_buf(SIZE(recv, 2), p_pat % n_send), recv_buf(SIZE(recv, 2), p_pat % n_recv)
+    REAL(KIND = 4), POINTER :: send_ptr(:, :, :)
     INTEGER :: i, k, np, irs, iss, pid, icount, ndim2
     IF (my_process_is_mpi_seq()) THEN
       CALL exchange_data_s3d_seq(p_pat, .FALSE., recv, send, add)
@@ -1402,13 +1433,18 @@ MODULE mo_communication_types
         CALL p_irecv_sp_deconiface_15(recv_buf(1, irs), pid, 1, p_count = icount, comm = p_pat % comm, use_g2g = .FALSE.)
       END DO
     END IF
+    IF (PRESENT(send)) THEN
+      send_ptr => send
+    ELSE
+      send_ptr => recv
+    END IF
     IF (ndim2 == 1) THEN
       DO i = 1, p_pat % n_send
-        send_buf(1, i) = send(p_pat % send_src_idx(i), 1, p_pat % send_src_blk(i))
+        send_buf(1, i) = send_ptr(p_pat % send_src_idx(i), 1, p_pat % send_src_blk(i))
       END DO
     ELSE
       DO i = 1, p_pat % n_send
-        send_buf(1 : ndim2, i) = send(p_pat % send_src_idx(i), 1 : ndim2, p_pat % send_src_blk(i))
+        send_buf(1 : ndim2, i) = send_ptr(p_pat % send_src_idx(i), 1 : ndim2, p_pat % send_src_blk(i))
       END DO
     END IF
     IF (iorder_sendrecv == 1) THEN
@@ -1447,15 +1483,28 @@ MODULE mo_communication_types
       CALL p_barrier(p_pat % comm)
       IF (activate_sync_timers) CALL timer_stop(timer_barrier)
     END IF
-    IF (ndim2 == 1) THEN
-      k = 1
-      DO i = 1, p_pat % n_pnts
-        recv(p_pat % recv_dst_idx(i), 1, p_pat % recv_dst_blk(i)) = recv_buf(1, p_pat % recv_src(i)) + add(p_pat % recv_dst_idx(i), 1, p_pat % recv_dst_blk(i))
-      END DO
+    IF (PRESENT(add)) THEN
+      IF (ndim2 == 1) THEN
+        k = 1
+        DO i = 1, p_pat % n_pnts
+          recv(p_pat % recv_dst_idx(i), 1, p_pat % recv_dst_blk(i)) = recv_buf(1, p_pat % recv_src(i)) + add(p_pat % recv_dst_idx(i), 1, p_pat % recv_dst_blk(i))
+        END DO
+      ELSE
+        DO i = 1, p_pat % n_pnts
+          recv(p_pat % recv_dst_idx(i), :, p_pat % recv_dst_blk(i)) = recv_buf(:, p_pat % recv_src(i)) + add(p_pat % recv_dst_idx(i), 1 : ndim2, p_pat % recv_dst_blk(i))
+        END DO
+      END IF
     ELSE
-      DO i = 1, p_pat % n_pnts
-        recv(p_pat % recv_dst_idx(i), :, p_pat % recv_dst_blk(i)) = recv_buf(:, p_pat % recv_src(i)) + add(p_pat % recv_dst_idx(i), 1 : ndim2, p_pat % recv_dst_blk(i))
-      END DO
+      IF (ndim2 == 1) THEN
+        k = 1
+        DO i = 1, p_pat % n_pnts
+          recv(p_pat % recv_dst_idx(i), 1, p_pat % recv_dst_blk(i)) = recv_buf(1, p_pat % recv_src(i))
+        END DO
+      ELSE
+        DO i = 1, p_pat % n_pnts
+          recv(p_pat % recv_dst_idx(i), :, p_pat % recv_dst_blk(i)) = recv_buf(:, p_pat % recv_src(i))
+        END DO
+      END IF
     END IF
     CALL acc_wait_comms(get_comm_acc_queue())
     IF (activate_sync_timers) CALL timer_stop(timer_exch_data)
@@ -1600,8 +1649,13 @@ MODULE mo_communication_types
     END IF
     IF (activate_sync_timers) CALL timer_start(timer_exch_data)
     lsend = .FALSE.
-    kshift_dp = nshift
-    kshift_sp = nshift
+    IF (PRESENT(nshift)) THEN
+      kshift_dp = nshift
+      kshift_sp = nshift
+    ELSE
+      kshift_dp = 0
+      kshift_sp = 0
+    END IF
     IF (my_process_is_mpi_seq()) THEN
       DO n = 1, nfields_dp
         CALL exchange_data_r3d_seq(p_pat, lacc, recv_dp(n) % p)
@@ -1761,42 +1815,70 @@ MODULE mo_communication
     lsend = .FALSE.
     i_dp = 0
     i_sp = 0
-    DO i = 1, SIZE(recv4d_dp, 4)
+    IF (PRESENT(recv4d_dp)) THEN
+      DO i = 1, SIZE(recv4d_dp, 4)
+        i_dp = i_dp + 1
+        recv_dp(i_dp) % p => recv4d_dp(:, :, :, i)
+      END DO
+    END IF
+    IF (PRESENT(recv1_dp)) THEN
       i_dp = i_dp + 1
-      recv_dp(i_dp) % p => recv4d_dp(:, :, :, i)
-    END DO
-    i_dp = i_dp + 1
-    recv_dp(i_dp) % p => recv1_dp
-    i_dp = i_dp + 1
-    recv_dp(i_dp) % p => recv2_dp
-    i_dp = i_dp + 1
-    recv_dp(i_dp) % p => recv3_dp
-    i_dp = i_dp + 1
-    recv_dp(i_dp) % p => recv4_dp
-    i_dp = i_dp + 1
-    recv_dp(i_dp) % p => recv5_dp
-    DO i = 1, SIZE(recv3d_arr_dp)
-      i_dp = i_dp + 1
-      recv_dp(i_dp) % p => recv3d_arr_dp(i) % p
-    END DO
-    DO i = 1, SIZE(recv4d_sp, 4)
+      recv_dp(i_dp) % p => recv1_dp
+      IF (PRESENT(recv2_dp)) THEN
+        i_dp = i_dp + 1
+        recv_dp(i_dp) % p => recv2_dp
+        IF (PRESENT(recv3_dp)) THEN
+          i_dp = i_dp + 1
+          recv_dp(i_dp) % p => recv3_dp
+          IF (PRESENT(recv4_dp)) THEN
+            i_dp = i_dp + 1
+            recv_dp(i_dp) % p => recv4_dp
+            IF (PRESENT(recv5_dp)) THEN
+              i_dp = i_dp + 1
+              recv_dp(i_dp) % p => recv5_dp
+            END IF
+          END IF
+        END IF
+      END IF
+    END IF
+    IF (PRESENT(recv3d_arr_dp)) THEN
+      DO i = 1, SIZE(recv3d_arr_dp)
+        i_dp = i_dp + 1
+        recv_dp(i_dp) % p => recv3d_arr_dp(i) % p
+      END DO
+    END IF
+    IF (PRESENT(recv4d_sp)) THEN
+      DO i = 1, SIZE(recv4d_sp, 4)
+        i_sp = i_sp + 1
+        recv_sp(i_sp) % p => recv4d_sp(:, :, :, i)
+      END DO
+    END IF
+    IF (PRESENT(recv1_sp)) THEN
       i_sp = i_sp + 1
-      recv_sp(i_sp) % p => recv4d_sp(:, :, :, i)
-    END DO
-    i_sp = i_sp + 1
-    recv_sp(i_sp) % p => recv1_sp
-    i_sp = i_sp + 1
-    recv_sp(i_sp) % p => recv2_sp
-    i_sp = i_sp + 1
-    recv_sp(i_sp) % p => recv3_sp
-    i_sp = i_sp + 1
-    recv_sp(i_sp) % p => recv4_sp
-    i_sp = i_sp + 1
-    recv_sp(i_sp) % p => recv5_sp
-    DO i = 1, SIZE(recv3d_arr_sp)
-      i_sp = i_sp + 1
-      recv_sp(i_sp) % p => recv3d_arr_sp(i) % p
-    END DO
+      recv_sp(i_sp) % p => recv1_sp
+      IF (PRESENT(recv2_sp)) THEN
+        i_sp = i_sp + 1
+        recv_sp(i_sp) % p => recv2_sp
+        IF (PRESENT(recv3_sp)) THEN
+          i_sp = i_sp + 1
+          recv_sp(i_sp) % p => recv3_sp
+          IF (PRESENT(recv4_sp)) THEN
+            i_sp = i_sp + 1
+            recv_sp(i_sp) % p => recv4_sp
+            IF (PRESENT(recv5_sp)) THEN
+              i_sp = i_sp + 1
+              recv_sp(i_sp) % p => recv5_sp
+            END IF
+          END IF
+        END IF
+      END IF
+    END IF
+    IF (PRESENT(recv3d_arr_sp)) THEN
+      DO i = 1, SIZE(recv3d_arr_sp)
+        i_sp = i_sp + 1
+        recv_sp(i_sp) % p => recv3d_arr_sp(i) % p
+      END DO
+    END IF
     IF (i_dp /= nfields_dp) CALL finish(routine, "internal error nfields_dp")
     IF (i_sp /= nfields_sp) CALL finish(routine, "internal error nfields_sp")
     CALL exchange_data_mult_mixprec_deconproc_16(p_pat, lacc, nfields_dp, ndim2tot_dp, nfields_sp, ndim2tot_sp, recv_dp = recv_dp, recv_sp = recv_sp, nshift = nshift)
@@ -2593,8 +2675,13 @@ MODULE mo_sync
     sync_error = .FALSE.
     NULLIFY(p_glb_index, p_decomp_domain)
     IF (.NOT. p_test_run) RETURN
-    varname = opt_varname
-    varname_tlen = LEN(opt_varname)
+    IF (PRESENT(opt_varname)) THEN
+      varname = opt_varname
+      varname_tlen = LEN(opt_varname)
+    ELSE
+      varname = ' no VARNAME supplied'
+      varname_tlen = 20
+    END IF
     IF (UBOUND(arr, 1) /= nproma) THEN
       CALL finish('sync_patch_array', 'first dimension /= nproma')
     END IF
@@ -2770,8 +2857,13 @@ MODULE mo_sync
     sync_error = .FALSE.
     NULLIFY(p_glb_index, p_decomp_domain)
     IF (.NOT. p_test_run) RETURN
-    varname = opt_varname
-    varname_tlen = LEN(opt_varname)
+    IF (PRESENT(opt_varname)) THEN
+      varname = opt_varname
+      varname_tlen = LEN(opt_varname)
+    ELSE
+      varname = ' no VARNAME supplied'
+      varname_tlen = 20
+    END IF
     IF (UBOUND(arr, 1) /= nproma) THEN
       CALL finish('sync_patch_array', 'first dimension /= nproma')
     END IF
@@ -3065,6 +3157,7 @@ MODULE mo_ocean_math_operators
   END SUBROUTINE div_vector_ontriangle
   SUBROUTINE div_oce_3d_mlevels_ontriangles(vec_e, patch_3d, div_coeff, div_vec_c, opt_start_level, opt_end_level, subset_range, lacc)
     USE mo_model_domain, ONLY: t_patch_3d, t_subset_range
+    USE mo_ocean_nml, ONLY: n_zlev
     USE mo_fortran_tools, ONLY: set_acc_host_or_device
     USE mo_grid_subset, ONLY: get_index_range
     TYPE(t_patch_3d), TARGET, INTENT(IN) :: patch_3d
@@ -3080,11 +3173,23 @@ MODULE mo_ocean_math_operators
     INTEGER :: start_index, end_index
     TYPE(t_subset_range), POINTER :: cells_subset
     LOGICAL :: lzacc
-    cells_subset => subset_range
+    IF (PRESENT(subset_range)) THEN
+      cells_subset => subset_range
+    ELSE
+      cells_subset => patch_3d % p_patch_2d(1) % cells % in_domain
+    END IF
     start_block = cells_subset % start_block
     end_block = cells_subset % end_block
-    start_level = opt_start_level
-    end_level = opt_end_level
+    IF (PRESENT(opt_start_level)) THEN
+      start_level = opt_start_level
+    ELSE
+      start_level = 1
+    END IF
+    IF (PRESENT(opt_end_level)) THEN
+      end_level = opt_end_level
+    ELSE
+      end_level = n_zlev
+    END IF
     CALL set_acc_host_or_device(lzacc, lacc)
     DO blockno = start_block, end_block
       CALL get_index_range(cells_subset, blockno, start_index, end_index)

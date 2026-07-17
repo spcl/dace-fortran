@@ -213,7 +213,10 @@ MODULE mo_lib_interpolation_scalar
         END DO
       END DO
     END DO
-    IF (.NOT. acc_async) THEN
+    IF (PRESENT(acc_async)) THEN
+      IF (.NOT. acc_async) THEN
+      END IF
+    ELSE
     END IF
   END SUBROUTINE cells2verts_scalar_dp_lib
 END MODULE mo_lib_interpolation_scalar

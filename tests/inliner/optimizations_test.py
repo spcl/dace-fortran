@@ -1128,3 +1128,62 @@ end module m
     got = ast.tofortran()
     # the value reference folded to the parameter's constant (not left symbolic)
     assert "use_g2g = .FALSE." in got, got
+
+
+def test_forwarded_caller_optional_presence_not_folded():
+    """A dummy whose actual is a bare reference to the CALLER's own OPTIONAL
+    dummy keeps its ``PRESENT`` guard: absence propagates through such an
+    actual (F2018 15.5.2.12), so presence is a runtime property of the caller.
+
+    ICON's ``div_oce_3D_mlevels`` forwards its optional ``opt_start_level``
+    positionally into ``div_oce_3D_mlevels_onTriangles``.  Folding
+    ``PRESENT(opt_start_level)`` to ``.TRUE.`` deleted the callee's
+    ``ELSE start_level = 1`` default, so the (actually absent) scalar read 0
+    and the vertical loop ran from level 0 -- an out-of-bounds read with
+    silently wrong ocean numerics in the extracted single TU.
+    """
+    sources, _ = (SourceCodeBuilder().add_file("""
+module lib
+  implicit none
+contains
+  subroutine inner(field, nlev, opt_start_level)
+    implicit none
+    real, intent(inout) :: field(:)
+    integer, intent(in) :: nlev
+    integer, optional, intent(in) :: opt_start_level
+    integer :: start_level, k
+    if (present(opt_start_level)) then
+      start_level = opt_start_level
+    else
+      start_level = 1
+    end if
+    do k = start_level, nlev
+      field(k) = field(k) + 1.0
+    end do
+  end subroutine inner
+
+  subroutine outer(field, nlev, opt_start_level)
+    implicit none
+    real, intent(inout) :: field(:)
+    integer, intent(in) :: nlev
+    integer, optional, intent(in) :: opt_start_level
+    call inner(field, nlev, opt_start_level)
+  end subroutine outer
+end module lib
+
+subroutine main(field, nlev)
+  use lib
+  implicit none
+  real, intent(inout) :: field(:)
+  integer, intent(in) :: nlev
+  call outer(field, nlev)
+end subroutine main
+""").check_with_gfortran().get())
+    ast = parse_and_improve(sources)
+    ast = optimizations.make_practically_constant_arguments_constants(ast, [("main", )])
+
+    got = ast.tofortran()
+    # inner's guard survives verbatim: runtime PRESENT test + the ELSE default.
+    assert "PRESENT(opt_start_level)" in got, got
+    assert "start_level = 1" in got, got
+    assert ".TRUE." not in got, got

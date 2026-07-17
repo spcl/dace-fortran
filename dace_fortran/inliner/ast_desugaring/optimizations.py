@@ -211,10 +211,31 @@ def make_practically_constant_arguments_constants(ast: f03.Program, keepers: Lis
                 # Otherwise, pop the next positional argument.
                 v, args = args[0], args[1:]
             if atype.optional:
-                # Record presence for optional arguments.
+                # Record presence for optional arguments.  A bare reference to
+                # one of the CALLER's own OPTIONAL dummies propagates its
+                # runtime presence into this dummy (F2018 15.5.2.12), so
+                # PRESENT() here is NOT a compile-time constant: record both
+                # outcomes and pass 2's "presence varies" check keeps the
+                # guard.  (ICON: ``div_oce_3D_mlevels`` forwards its optional
+                # ``opt_start_level`` positionally into
+                # ``div_oce_3D_mlevels_onTriangles``; folding PRESENT .TRUE.
+                # deleted the ``ELSE start_level = 1`` default, so the absent
+                # scalar read 0 and the vertical loop ran from level 0 -- an
+                # out-of-bounds read with silently wrong ocean numerics.)
+                # Only a BARE name qualifies: any larger expression must
+                # evaluate its operand, which requires presence.
                 if aspec not in fnargs_optional_presence:
                     fnargs_optional_presence[aspec] = set()
-                fnargs_optional_presence[aspec].add(v is not None)
+                forwarded_optional = False
+                if isinstance(v, f03.Name):
+                    vspec = analysis.search_real_local_alias_spec(v, alias_map)
+                    if vspec is not None:
+                        vtype = analysis.find_type_of_entity(alias_map[vspec], alias_map)
+                        forwarded_optional = bool(vtype and vtype.optional)
+                if forwarded_optional:
+                    fnargs_optional_presence[aspec].update((True, False))
+                else:
+                    fnargs_optional_presence[aspec].add(v is not None)
             if atype.out:
                 # Writable (OUT) arguments cannot be treated as practically constant.
                 continue
