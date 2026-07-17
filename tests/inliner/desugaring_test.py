@@ -1,6 +1,70 @@
 # Copyright 2019-2025 ETH Zurich and the DaCe authors. All rights reserved.
+import fparser.two.Fortran2003 as f03
+from fparser.common.readfortran import FortranStringReader
+from fparser.two.parser import ParserFactory
+from fparser.two.utils import walk
+
+from dace_fortran import inline_to_single_tu
+from dace_fortran.inliner import ast_utils
 from dace_fortran.inliner.ast_desugaring import desugaring, cleanup
 from inliner.fortran_test_helper import SourceCodeBuilder, parse_and_improve
+
+# ECMWF ``fcttre``/``fccld`` idiom: a type declaration that FOLLOWS a statement
+# function.  fparser opens a second ``Specification_Part`` at that boundary, and
+# every downstream ``atmost_one``/``singular`` over the spec/exec parts then
+# raises "must have at most 1 item".  ``fccld.func.h`` / ``fcttre.func.h`` in the
+# CLOUDSC kernels interleave several of these.
+_INTERLEAVED_STMT_FN_SRC = """
+module m
+  implicit none
+contains
+  subroutine stf(ptare_in, res)
+    implicit none
+    real(kind=8), intent(in) :: ptare_in
+    real(kind=8), intent(out) :: res
+    real(kind=8) :: foedelta
+    real(kind=8) :: ptare
+    foedelta(ptare) = max(0.0d0, ptare)
+    real(kind=8) :: foeew
+    foeew(ptare) = foedelta(ptare) * 2.0d0
+    res = foeew(ptare_in)
+  end subroutine stf
+end module m
+"""
+
+
+def test_coalesce_split_specification_parts():
+    """``coalesce_split_specification_parts`` folds a scope whose spec part
+    fparser split back to a single spec + single exec part, without changing
+    semantics."""
+    parser = ParserFactory().create(std="f2008")
+    ast = parser(FortranStringReader(_INTERLEAVED_STMT_FN_SRC))
+
+    sub = next(iter(walk(ast, f03.Subroutine_Subprogram)))
+    # Pre-condition (the bug): fparser split the spec part in two.
+    assert len(list(ast_utils.children_of_type(sub, f03.Specification_Part))) == 2
+
+    ast = desugaring.coalesce_split_specification_parts(ast)
+
+    sub = next(iter(walk(ast, f03.Subroutine_Subprogram)))
+    assert len(list(ast_utils.children_of_type(sub, f03.Specification_Part))) == 1
+    assert len(list(ast_utils.children_of_type(sub, f03.Execution_Part))) == 1
+    # Every declaration survives, hoisted ahead of the executable statements.
+    names = {n.string.lower() for d in walk(sub, f03.Type_Declaration_Stmt) for n in walk(d, f03.Name)}
+    assert {"foedelta", "foeew", "ptare", "ptare_in"} <= names
+    SourceCodeBuilder().add_file(ast.tofortran()).check_with_gfortran()
+
+
+def test_interleaved_statement_functions_extract_end_to_end():
+    """Full inliner over the interleaved-stmt-fn source: without the coalescer
+    the pipeline raises "at most 1 item"; with it the statement functions
+    deconstruct into internal FUNCTIONs and the TU is emitted."""
+    tu = inline_to_single_tu(sources={"m.f90": _INTERLEAVED_STMT_FN_SRC}, entry="m::stf")
+    from pathlib import Path
+    text = Path(tu).read_text() if not isinstance(tu, str) else tu
+    low = text.lower()
+    assert "function foedelta" in low and "function foeew" in low
+    assert "res = foeew(ptare_in)" in low
 
 
 def test_procedure_replacer():

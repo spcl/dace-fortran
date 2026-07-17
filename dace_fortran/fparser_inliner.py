@@ -935,6 +935,10 @@ def run_fparser_transformations(ast: f03.Program, cfg: ParseConfig, *, optimize:
             _checkpoint_ast(cfg, 'ast_v0b.f90', ast)
 
     logger.debug("FParser Op: Removing local indirections from AST...")
+    # fparser splits a scope's spec/exec parts at a decl-after-statement-function
+    # boundary (ECMWF fcttre/fccld includes); fold them back before any pass
+    # that assumes a single Specification_Part / Execution_Part.
+    ast = desugaring.coalesce_split_specification_parts(ast)
     ast = desugaring.deconstruct_enums(ast)
     ast = desugaring.deconstruct_associations(ast)
     ast = cleanup.remove_access_and_bind_statements(ast)

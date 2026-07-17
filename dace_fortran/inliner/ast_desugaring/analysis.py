@@ -531,8 +531,15 @@ def _eval_int_literal(x: Union[f03.Signed_Int_Literal_Constant, f03.Int_Literal_
 
 
 def _eval_real_literal(x: Union[f03.Signed_Real_Literal_Constant, f03.Real_Literal_Constant],
-                       alias_map: types.SPEC_TABLE) -> types.NUMPY_REALS_TYPES:
-    """Evaluates a real literal constant, resolving its kind if specified."""
+                       alias_map: types.SPEC_TABLE) -> Optional[types.NUMPY_REALS_TYPES]:
+    """Evaluate a real literal constant, resolving its kind if specified.
+
+    Returns ``None`` when the kind cannot be reduced to a supported single/double
+    width (an unresolvable kind name, a kind chain the evaluator can't fold, or a
+    non-{4,8} kind such as FP16).  Const-evaluation is best-effort: a literal that
+    can't be folded is left for flang to resolve, so callers treat ``None`` as
+    "not a compile-time constant" rather than an error.
+    """
     num, kind = x.children
     if isinstance(kind, f03.Name):
         kind = kind.string
@@ -542,14 +549,24 @@ def _eval_real_literal(x: Union[f03.Signed_Real_Literal_Constant, f03.Real_Liter
             kind = 8
         else:
             kind = 4
-    else:
+    elif isinstance(kind, str):
+        # Named kind parameter (``1.0_JPRB``): resolve it through the alias map.
         kind_spec = search_real_local_alias_spec_from_spec(find_scope_spec(x) + (kind, ), alias_map)
-        if kind_spec:
-            kind_decl = alias_map[kind_spec]
-            kind_node, _, _, _ = kind_decl.children
-            kind = _const_eval_basic_type(kind_node, alias_map)
-            assert isinstance(kind, np.int32)
-    assert kind in {4, 8}
+        if not kind_spec:
+            return None
+        kind_decl = alias_map[kind_spec]
+        kind_node, _, _, _ = kind_decl.children
+        kind = _const_eval_basic_type(kind_node, alias_map)
+        if not isinstance(kind, np.int32):
+            return None
+    else:
+        # Numeric kind literal (``1.0_8``): evaluate the kind expression directly.
+        kind_val = _const_eval_basic_type(kind, alias_map)
+        if not isinstance(kind_val, (np.int32, np.int64)):
+            return None
+        kind = int(kind_val)
+    if kind not in {4, 8}:
+        return None
     if kind == 4: return np.float32(num)
     if kind == 8: return np.float64(num)
 

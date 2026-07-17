@@ -683,9 +683,18 @@ structure.
             decl = alias_map[spec]
             if not isinstance(decl, f03.Entity_Decl):
                 continue
+            entity_type = analysis.find_type_of_entity(decl, alias_map)
+            # A PARAMETER constant referenced in the statement-function body (a
+            # kind parameter used as ``REAL(KIND=JPRL)`` / in a ``_JPRL`` literal
+            # suffix, or a physical constant) is host-associated into the new
+            # internal function -- never a runtime dummy.  A kind specifier MUST
+            # be a constant, so carrying it as an ``INTEGER, INTENT(IN)`` dummy
+            # produces an invalid ``REAL(KIND=<dummy>)`` the compiler rejects.
+            if entity_type.const:
+                continue
             tdecl = decl.parent.parent
             typ, _, _ = tdecl.children
-            shape = analysis.find_type_of_entity(decl, alias_map).shape
+            shape = entity_type.shape
             shape = f"({','.join(shape)})" if shape else ''
             if spec not in all_stmt_fns and nm.string not in carryovers:
                 carryovers.append(nm.string)
@@ -1057,6 +1066,39 @@ def add_condition_to_node_execution(cond: Union[str, UnaryOpBase, BinaryOpBase],
             new_if = f03.If_Stmt(f"if ({cond}) call x")
             utils.replace_node(node, new_if)
             utils.replace_node(ast_utils.singular(nm for nm in walk(new_if, f03.Call_Stmt)), node)
+
+
+def coalesce_split_specification_parts(ast: f03.Program) -> f03.Program:
+    """Merge a scope's specification / execution parts when fparser split them.
+
+    fparser starts a fresh ``Specification_Part`` whenever a declaration
+    follows an executable statement -- the ECMWF ``fcttre.func.h`` /
+    ``fccld.func.h`` idiom that interleaves statement functions with type
+    declarations (``REAL :: FOEEW`` then ``FOEEW(PTARE) = ...`` then another
+    ``REAL :: ...``).  The result is a ``Spec, Exec, Spec, Exec`` sequence, but
+    the rest of the desugaring pipeline assumes at most one of each
+    (``atmost_one`` / ``singular`` over ``Specification_Part`` /
+    ``Execution_Part``; the first such site,
+    ``deconstruct_external_statements``, otherwise raises an
+    "at most 1 item" assertion).
+
+    Fold every scope back to a single specification part (declarations carry no
+    runtime order, so concatenating them is safe) and a single execution part
+    (statement order preserved by concatenating in document order).  A
+    declaration hoisted ahead of executable statements it textually followed
+    still precedes every use of the declared name, so semantics are unchanged.
+    Runs before any pass that queries these parts.
+    """
+    for scope in walk(ast, (f03.Subroutine_Subprogram, f03.Function_Subprogram, f03.Main_Program)):
+        for part_type in (f03.Specification_Part, f03.Execution_Part):
+            parts = list(ast_utils.children_of_type(scope, part_type))
+            if len(parts) <= 1:
+                continue
+            head = parts[0]
+            for extra in parts[1:]:
+                utils.append_children(head, list(extra.children))
+                utils.remove_self(extra)
+    return ast
 
 
 def deconstruct_external_statements(ast: f03.Program) -> f03.Program:
