@@ -272,6 +272,12 @@ class ParseConfig:
         self.do_not_prune: List[types.SPEC] = do_not_prune
         self.do_not_rename: List[types.SPEC] = do_not_rename
         self.make_noop: List[types.SPEC] = make_noop
+        #: Lower-cased names of the EXPLICIT make_noop procedures (snapshotted
+        #: before :func:`inline_to_ast` merges the do_not_emit/keep_external
+        #: stubs in).  A call to one of these is a semantic no-op and is
+        #: dropped outright; keep_external stubs keep their call sites (the
+        #: bridge or an external implementation handles them).
+        self.drop_noop_calls: Set[str] = {s[-1].lower() for s in make_noop}
         self.ast_checkpoint_dir = ast_checkpoint_dir
         self.consolidate_global_data = consolidate_global_data
         self.rename_uniquely = rename_uniquely
@@ -904,6 +910,18 @@ def run_fparser_transformations(ast: f03.Program, cfg: ParseConfig, *, optimize:
             expart = atmost_one(children_of_type(fn.parent, f03.Execution_Part))
             if expart:
                 utils.remove_self(expart)
+            # A stubbed body never dispatches, so demote polymorphic CLASS(t)
+            # dummies to TYPE(t): callers pass non-polymorphic actuals either
+            # way, and a module procedure with a CLASS dummy makes the whole
+            # f2py-compiled TU segfault at import (numpy f2py inserts a NULL
+            # into the module dict for it) -- the reference leg of every
+            # numerical test imports exactly such a TU.
+            spec_part = atmost_one(children_of_type(fn.parent, f03.Specification_Part))
+            if spec_part is not None:
+                for dts in walk(spec_part, f03.Declaration_Type_Spec):
+                    kw, tname = dts.children
+                    if str(kw).upper() == 'CLASS' and isinstance(tname, f03.Type_Name):
+                        utils.replace_node(dts, f03.Declaration_Type_Spec(f"TYPE({tname})"))
             # A return-false stub keeps a valid body so the (kept) call sites
             # still bind: replace the emptied body with `<result> = .FALSE.`
             # instead of leaving the LOGICAL result undefined.
@@ -957,11 +975,47 @@ def run_fparser_transformations(ast: f03.Program, cfg: ParseConfig, *, optimize:
     ast = cleanup.correct_for_function_calls(ast)
     ast = desugaring.deconstruct_statement_functions(ast)
     ast = desugaring.deconstruct_procedure_calls(ast)
+
+    # An EXPLICIT make_noop SUBROUTINE has an empty body, so a CALL to it is a
+    # pure no-op -- drop the call statements outright (post
+    # deconstruct_procedure_calls, so former type-bound calls are plain CALLs
+    # under the procedure's real name).  The stubs then lose their last
+    # references and prune away with their scaffolding: CLOUDSC's
+    # PERFORMANCE_TIMER stubs otherwise survive as module procedures with
+    # derived-type dummies, which numpy f2py cannot wrap -- it emits a NULL
+    # module entry and the import of the reference leg segfaults.  Scoped to
+    # ``cfg.drop_noop_calls`` (the caller's explicit make_noop): the
+    # keep_external stubs merged into ``cfg.make_noop`` later MUST keep their
+    # call sites -- those calls are real (the bridge / an external
+    # implementation serves them).
+    def drop_explicit_noop_calls(a: f03.Program) -> None:
+        # ``deconstruct_procedure_calls`` clones a type-bound target per call
+        # site under ``<name>_deconproc_<n>`` -- a clone of a no-op is a no-op,
+        # so match the clone naming alongside the base name.
+        def is_noop_name(nm: str) -> bool:
+            nm = nm.lower()
+            if nm in cfg.drop_noop_calls:
+                return True
+            base = nm.rsplit("_deconproc_", 1)[0]
+            return base != nm and base in cfg.drop_noop_calls
+
+        for call in walk(a, f03.Call_Stmt):
+            callee, _ = call.children
+            if isinstance(callee, f03.Name) and is_noop_name(callee.string):
+                utils.remove_self(call)
+
+    if cfg.drop_noop_calls:
+        drop_explicit_noop_calls(ast)
     ast = pruning.prune_coarsely(ast, cfg.do_not_prune)
     ast_f90_old, ast_f90_new = None, ast.tofortran()
     while not ast_f90_old or ast_f90_old != ast_f90_new:
         ast = cleanup.correct_for_function_calls(ast)
         ast = desugaring.deconstruct_interface_calls(ast)
+        # Late-resolved calls (a type-bound ``timer%thread_start`` only
+        # becomes a plain CALL once its interface/procedure indirection is
+        # deconstructed inside this loop) get the same no-op treatment.
+        if cfg.drop_noop_calls:
+            drop_explicit_noop_calls(ast)
         ast = pruning.prune_coarsely(ast, cfg.do_not_prune)
         ast_f90_old, ast_f90_new = ast_f90_new, ast.tofortran()
     if walk(ast, f03.Interface_Stmt):

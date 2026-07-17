@@ -101,6 +101,107 @@ end module m
     assert "integer(kind = 4)" in text
 
 
+_TIMER_LIKE_SRC = """
+module tmod
+  implicit none
+  type :: perf
+     integer :: c
+  end type perf
+contains
+  subroutine p_start(self, n)
+    class(perf) :: self
+    integer, intent(in) :: n
+    self%c = n
+  end subroutine p_start
+end module tmod
+module dmod
+contains
+subroutine drv(x)
+  use tmod, only: perf, p_start
+  implicit none
+  real(kind=8), intent(inout) :: x
+  type(perf) :: t
+  call p_start(t, 3)
+  x = x * 2.0d0
+end subroutine drv
+end module dmod
+"""
+
+
+def test_make_noop_drops_calls_and_prunes_stub():
+    """An EXPLICIT make_noop subroutine is a semantic no-op: its CALL
+    statements are dropped outright and the stub -- with its derived-type
+    scaffolding -- prunes away.  (A surviving module procedure with a
+    derived-type dummy makes numpy f2py emit a NULL module entry, so the
+    import of the f2py reference leg segfaults; CLOUDSC's PERFORMANCE_TIMER
+    stubs hit exactly this.)"""
+    from pathlib import Path
+    tu = inline_to_single_tu(sources={"m.f90": _TIMER_LIKE_SRC}, entry="dmod::drv", make_noop=[("tmod", "p_start")])
+    text = (Path(tu).read_text() if not isinstance(tu, str) else tu).lower()
+    assert "p_start" not in text
+    assert "type(perf)" not in text and "class(perf)" not in text
+    assert "x = x * 2.0d0" in text
+
+
+def test_keep_external_stub_keeps_calls():
+    """The do_not_emit/keep_external path must NOT drop call statements --
+    those calls are real (an external implementation or the bridge serves
+    them).  Only the explicit make_noop path is a droppable no-op."""
+    from pathlib import Path
+    src = """
+module emod
+contains
+subroutine ext_impl(x)
+  implicit none
+  real(kind=8), intent(inout) :: x
+  x = x + 1.0d0
+end subroutine ext_impl
+end module emod
+module dmod2
+contains
+subroutine drv2(x)
+  use emod, only: ext_impl
+  implicit none
+  real(kind=8), intent(inout) :: x
+  call ext_impl(x)
+  x = x * 2.0d0
+end subroutine drv2
+end module dmod2
+"""
+    tu = inline_to_single_tu(sources={"m.f90": src}, entry="dmod2::drv2", do_not_emit=("ext_impl", ))
+    text = (Path(tu).read_text() if not isinstance(tu, str) else tu).lower()
+    assert "call ext_impl" in text
+
+
+def test_pruned_memberless_type_gets_placeholder():
+    """When pruning strips every component of a derived type that variables
+    still reference, a placeholder component is kept: a zero-component type is
+    questionable Fortran and makes numpy f2py's module wrapper NULL (import
+    segfault)."""
+    from pathlib import Path
+    src = """
+module pmod
+  implicit none
+  type :: holder
+     real(kind=8), allocatable :: unused_payload(:)
+  end type holder
+contains
+subroutine use_holder(x)
+  implicit none
+  real(kind=8), intent(inout) :: x
+  type(holder) :: h
+  x = x * 2.0d0
+end subroutine use_holder
+end module pmod
+"""
+    tu = inline_to_single_tu(sources={"m.f90": src}, entry="pmod::use_holder", do_not_prune_type_components=False)
+    text = (Path(tu).read_text() if not isinstance(tu, str) else tu).lower()
+    # Either the type pruned away entirely (no variable left referencing it)
+    # or, if it survived, it must not be memberless.
+    if "type :: holder" in text:
+        assert "pruned_type_placeholder" in text or "unused_payload" in text
+
+
 def test_procedure_replacer():
     """
     Tests that type-bound procedures are correctly replaced with standard subroutine calls.

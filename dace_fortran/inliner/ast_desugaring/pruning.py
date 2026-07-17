@@ -533,6 +533,17 @@ def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC]) -> f03.Pro
             utils.remove_self(ns_node.parent)
         killed.add(ns)
 
+    # A derived type whose every component was pruned (a scaffolding type whose
+    # procedures were all stubbed -- CLOUDSC's PERFORMANCE_TIMER) must not stay
+    # memberless: variables of it still exist, a zero-component type is
+    # questionable Fortran, and numpy f2py builds a NULL module wrapper for a
+    # module containing one (the import then segfaults inside PyInit_*).  Keep
+    # a single placeholder component instead.
+    for tdef in walk(ast, f03.Derived_Type_Def):
+        if not walk(tdef, f03.Component_Decl):
+            tstmt = ast_utils.singular(ast_utils.children_of_type(tdef, f03.Derived_Type_Stmt))
+            utils.replace_node(tstmt, (tstmt, f03.Data_Component_Def_Stmt("INTEGER :: pruned_type_placeholder")))
+
     for m in walk(ast, f03.Module):
         _, sp, ex, subp = utils._get_module_or_program_parts(m)
         empty_spec = not sp or all(isinstance(c, (f03.Save_Stmt, f03.Implicit_Part)) for c in sp.children)
