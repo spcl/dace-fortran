@@ -61,6 +61,14 @@ class Member:
     # ``OriginalInterface.struct_types`` and recurse.  Empty for scalar
     # / box-of-array / inline-flat members.
     struct_name: Optional[str] = None
+    # Deferred-storage class of the member: 'allocatable' | 'pointer' | ''.
+    # An unallocated / disassociated member's descriptor bounds are
+    # undefined, so every binding-side marshal of such a member
+    # (``c_loc`` / ``size`` / copy loops) must be presence-guarded --
+    # gfortran's ``internal_pack`` at an unguarded alias site reads the
+    # garbage descriptor and smashes the stack (ICON Held-Suarez leaves
+    # the ``t_nh_diag%ddt_ua_*`` tendency pointers disassociated).
+    alloc: str = ''
 
 
 @dataclass(frozen=True)
@@ -183,6 +191,9 @@ def build_auto_interface(raw: dict, entry: str) -> OriginalInterface:
                     rank=int(m["rank"]),
                     shape=tuple(m["shape"]),
                     struct_name=nested_name or None,
+                    # ``.get``: snapshots stamped by pre-``alloc`` bridges
+                    # deserialise as plain members (no guard emitted).
+                    alloc=m.get("alloc", ""),
                 ))
         struct_types[sname] = DerivedType(name=st["name"], module=st["module"] or None, members=tuple(members))
     return OriginalInterface(entry=entry, args=tuple(args), struct_types=struct_types, used_modules=used_modules)

@@ -517,8 +517,12 @@ def build_wrapper_head(frozen: FrozenSignature,
 
     flat_ptr_lines: List[str] = []
     scratch_lines: List[str] = []
+    # Element dtypes needing a ``presence_scratch_<dtype>(1)`` target: the
+    # degenerate binding an ABSENT deferred-storage member's flat POINTER is
+    # bounds-remapped onto (copy-in guard's ELSE branch).
+    guard_scratch_dtypes: set = set()
     max_loop_rank = 0
-    for entry in plan.entries:
+    for entry in live_entries(frozen, plan):
         r = entry.recipe
         ftype = _fortran_type(r.scratch_dtype)
         # Rank-0 (a scalar struct member, e.g. ``s%scal``) takes no
@@ -541,11 +545,16 @@ def build_wrapper_head(frozen: FrozenSignature,
         if r.aliasable and r.source_logical_kind in (0, 1):
             for flat in r.flat_names:
                 flat_ptr_lines.append(f"    {ftype}, pointer :: {flat}{shape_dims}")
+            if _recipe_presence_guard(iface, r):
+                guard_scratch_dtypes.add(r.scratch_dtype)
         else:
             if r.rank > 0:
                 max_loop_rank = max(max_loop_rank, r.rank)
             for flat in r.flat_names:
                 scratch_lines.append(f"    {ftype}, allocatable, target :: {flat}{shape_dims}")
+
+    for dt in sorted(guard_scratch_dtypes):
+        flat_ptr_lines.append(f"    {_fortran_type(dt)}, target :: {_presence_scratch_name(dt)}(1)")
 
     # A free symbol that is also a frozen arg (an ``<arr>_d<i>``
     # extent / ``offset_...`` lower bound the bridge passes by value)
@@ -560,7 +569,10 @@ def build_wrapper_head(frozen: FrozenSignature,
     # flat-companion decl  --  re-declaring it here is a duplicate
     # ``already has basic type`` error.  Skip any free symbol that is
     # also a flat companion.
-    flat_names = {f for entry in plan.entries for f in entry.recipe.flat_names}
+    # LIVE entries only: a dead entry declares no companion (see
+    # ``live_entries``), so a free symbol that shares its name must get its own
+    # scalar declaration here rather than be skipped as "already declared".
+    flat_names = {f for entry in live_entries(frozen, plan) for f in entry.recipe.flat_names}
     # A symbol that is ALSO an orphan / AoS module-global arg is already given a
     # ``target`` local by those paths (``uspp_param::lmaxq`` -- a module global the
     # bridge ALSO lifted into a dimension free-symbol).  Re-declaring it here is a
@@ -716,21 +728,57 @@ def build_wrapper_body(frozen: FrozenSignature,
     # trails; the buffer-derived symbol block still follows it.
     copyin: List[str] = []
     copyin.append("    ! ----- Copy-in / alias per flatten entry -----")
-    for entry in plan.entries:
+    for entry in live_entries(frozen, plan):
         r = entry.recipe
         # Four mutually exclusive emitter shapes  --  see FlattenRecipe
         # for the flag matrix.  ``source_logical_kind > 1`` overrides
         # the aliasable path with a width-bridging scratch + Fortran
         # intrinsic LOGICAL-kind conversion (see ``build_wrapper_head``
         # for the rationale).
+        #
+        # A deferred-storage member (POINTER / ALLOCATABLE) may be absent
+        # at run time -- its descriptor bounds are then undefined, and the
+        # unguarded ``c_loc``/``size`` marshal reads garbage (gfortran's
+        # ``internal_pack`` at the alias site smashes the stack).  Guard
+        # the marshal; the ABSENT branch gives the flat a defined
+        # degenerate binding so the SDFG call's ``c_loc(<flat>)`` stays
+        # valid (the kernel takes the member's absent branch and never
+        # dereferences it).
+        guard = _recipe_presence_guard(iface, r)
         if r.aos_alloc:
             copyin.extend(render_aos_alloc_pack_in(r, entry.outer_expr))
         elif r.aliasable and r.source_logical_kind in (0, 1):
-            copyin.extend(render_alias_calls(r))
-        elif r.aliasable and r.source_logical_kind > 1:
-            copyin.extend(_render_logical_bridge_copy_in(r, entry.outer_expr))
+            lines = render_alias_calls(r)
+            if guard:
+                copyin.append(f"    if ({guard}) then")
+                copyin.extend("  " + ln for ln in lines)
+                copyin.append("    else")
+                scratch = _presence_scratch_name(r.scratch_dtype)
+                for flat in r.flat_names:
+                    if r.rank > 0:
+                        bounds = ", ".join("1:1" for _ in range(r.rank))
+                        copyin.append(f"      {flat}({bounds}) => {scratch}")
+                    else:
+                        copyin.append(f"      {flat} => {scratch}(1)")
+                copyin.append("    end if")
+            else:
+                copyin.extend(lines)
         else:
-            copyin.extend(render_copy_in_loop(r))
+            if r.aliasable and r.source_logical_kind > 1:
+                lines = _render_logical_bridge_copy_in(r, entry.outer_expr)
+            else:
+                lines = render_copy_in_loop(r)
+            if guard:
+                copyin.append(f"    if ({guard}) then")
+                copyin.extend("  " + ln for ln in lines)
+                copyin.append("    else")
+                for flat in r.flat_names:
+                    degen = "(" + ", ".join("1" for _ in range(r.rank)) + ")" if r.rank > 0 else ""
+                    copyin.append(f"      allocate({flat}{degen})")
+                    copyin.append(f"      {flat} = {_zero_literal(r.scratch_dtype)}")
+                copyin.append("    end if")
+            else:
+                copyin.extend(lines)
 
     _, copy_in_lines, _, _ = _build_logical_bridges(frozen, iface)
     if copy_in_lines:
@@ -984,7 +1032,7 @@ def build_wrapper_tail(frozen: FrozenSignature,
                             init_call_args=", ".join(_init_sym_names(frozen)))
 
     copy_out_lines: List[str] = []
-    for entry in plan.entries:
+    for entry in live_entries(frozen, plan):
         r = entry.recipe
         if r.aos_alloc:
             if entry.writeback_intent in ('out', 'inout'):
@@ -1000,11 +1048,17 @@ def build_wrapper_tail(frozen: FrozenSignature,
         # the scratch was allocated unconditionally in copy-in and
         # needs releasing.  For ``out`` / ``inout`` add the
         # ``<outer> = <flat>`` assignment ahead of the deallocate.
+        # Presence guard mirrors the copy-in: an ABSENT deferred-storage
+        # member was never marshalled (its flat holds a degenerate scratch),
+        # so the writeback must not touch the member -- but scratch the
+        # copy-in DID allocate in its ELSE branch still needs releasing.
+        guard = _recipe_presence_guard(iface, r)
         if r.aliasable and r.source_logical_kind > 1:
             if entry.writeback_intent in ('out', 'inout'):
-                copy_out_lines.extend(_render_logical_bridge_copy_out(r, entry.outer_expr))
+                lines = _render_logical_bridge_copy_out(r, entry.outer_expr)
             else:
-                copy_out_lines.append(f"    deallocate({r.flat_names[0]})")
+                lines = [f"    deallocate({r.flat_names[0]})"]
+            copy_out_lines.extend(_guarded_copy_out(lines, guard, r))
             continue
         if r.aliasable:
             continue
@@ -1018,7 +1072,7 @@ def build_wrapper_tail(frozen: FrozenSignature,
         # ``read_exprs[0]`` by ``render_copy_out_loop``.
         if not r.write_expr and not (len(r.flat_names) == 1 and r.read_exprs):
             continue
-        copy_out_lines.extend(render_copy_out_loop(r, entry.outer_expr))
+        copy_out_lines.extend(_guarded_copy_out(render_copy_out_loop(r, entry.outer_expr), guard, r))
 
     # Module globals the kernel WRITES (``FrozenArg.is_written``) are
     # host-shared inout state: after the call, copy the SDFG arg's final
@@ -1581,6 +1635,100 @@ def _present(expr: str, is_pointer: bool) -> str:
     return f"associated({expr})" if is_pointer else f"allocated({expr})"
 
 
+def live_entries(frozen: FrozenSignature, plan: FlattenPlan) -> List:
+    """The flatten entries the kernel actually consumes.
+
+    ``hlfir-flatten-structs`` records one entry per struct member it can
+    describe -- including members no SDFG argument or symbol ever reads (the
+    real ICON ``t_nh_diag`` contributes 668 entries against 508 kernel args).
+    Marshalling a member the kernel never takes is not merely dead work: an
+    ICON POINTER member that the running configuration never nullifies NOR
+    allocates (Held-Suarez leaves ``t_nh_diag%t2m_bias`` -- an NWP-physics
+    diagnostic -- with UNDEFINED association status) makes ``ASSOCIATED`` and
+    ``c_loc`` undefined behaviour: the "descriptor" read lands in adjacent
+    blank CHARACTER data, and gfortran's ``internal_pack`` then walks a rank
+    of 0x20 (32) off the end of its own 15-element ``stride`` locals and
+    trips the stack canary.
+
+    A member is live iff one of its flat companions is a kernel argument or
+    symbol.  Symbol population is unaffected either way: it sources from the
+    member's ``%`` path (``size(p_diag%vt, dim=1)``), never from the flat.
+    """
+    live_names = {a.sdfg_name for a in frozen.args}
+    return [e for e in plan.entries if any(f in live_names for f in e.recipe.flat_names)]
+
+
+def _guarded_copy_out(lines: List[str], guard: str, recipe) -> List[str]:
+    """Wrap a non-aliased entry's copy-out in its presence guard.  The
+    ABSENT branch releases the degenerate scratch the guarded copy-in
+    allocated (the member itself is untouched -- it has no storage)."""
+    if not guard:
+        return lines
+    out = [f"    if ({guard}) then"]
+    out.extend("  " + ln for ln in lines)
+    out.append("    else")
+    out.extend(f"      deallocate({flat})" for flat in recipe.flat_names)
+    out.append("    end if")
+    return out
+
+
+def _presence_scratch_name(dtype: str) -> str:
+    """Wrapper-local length-1 ``target`` array an ABSENT aliasable member's
+    flat POINTER is bounds-remapped onto, so the SDFG call's ``c_loc(<flat>)``
+    stays a defined reference (mirrors the orphan-module-global degenerate
+    buffer)."""
+    return f"presence_scratch_{dtype}"
+
+
+def _entry_presence_guard(iface: OriginalInterface, base: str) -> str:
+    """``associated(<base>)`` / ``allocated(<base>)`` when the dotted member
+    path ``base`` (``p_diag%ddt_ua_adv``, subscripted intermediates allowed:
+    ``ocean_state%p_prog(nold(1))%vn``) ends in a deferred-storage struct
+    member; ``''`` for a plain member / non-member path.
+
+    An unallocated / disassociated member's descriptor bounds are undefined:
+    ``c_loc`` / ``size`` on it read garbage, and gfortran's ``internal_pack``
+    at the alias site then smashes the stack (ICON Held-Suarez leaves every
+    ``t_nh_diag%ddt_ua_* / ddt_va_*`` tendency pointer disassociated).  Every
+    marshal of such a member is therefore wrapped in this guard.
+
+    Only the LEAF member's storage class is tested: pointer-to-record handle
+    members never reach the plan (all walkers skip them), so intermediates
+    are value records; a deferred ARRAY-of-records intermediate keeps its
+    current unguarded behaviour (a compound guard needs nested IFs --
+    Fortran ``.and.`` does not guarantee short-circuit evaluation).
+    """
+    parts = [p.strip() for p in base.split('%')]
+    if len(parts) < 2:
+        return ''
+    root = parts[0].split('(')[0].strip().lower()
+    arg = next((a for a in iface.args if a.name.lower() == root and a.struct_type), None)
+    if arg is None:
+        return ''
+    st = iface.struct_types.get(arg.struct_type)
+    for i, seg in enumerate(parts[1:]):
+        if st is None:
+            return ''
+        mname = seg.split('(')[0].strip().lower()
+        m = next((mm for mm in st.members if mm.name.lower() == mname), None)
+        if m is None:
+            return ''
+        if i == len(parts) - 2:
+            return _present(base, m.alloc == 'pointer') if m.alloc else ''
+        st = iface.struct_types.get(m.struct_name) if m.struct_name else None
+    return ''
+
+
+def _recipe_presence_guard(iface: OriginalInterface, recipe) -> str:
+    """The presence guard for a flatten recipe's source member, from its
+    first read expression (index placeholders stripped).  ``aos_alloc``
+    recipes guard per-row inside their own pack/unpack code -- no outer
+    guard."""
+    if recipe.aos_alloc or not recipe.read_exprs:
+        return ''
+    return _entry_presence_guard(iface, strip_index_args(recipe.read_exprs[0]))
+
+
 def _aos_loop_pieces(a):
     """Per-outer-dim loop vars / per-member-dim cap-var names + the host element
     accessor for an AoS-component arg.  ``aos_outer_rank == N`` (an N-D record
@@ -1946,14 +2094,42 @@ def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dumm
     # hard gfortran type errors).  Args with no recipe (double-buffer lanes,
     # which are ``c_f_pointer``'d pointers) default to POINTER.
     arg_is_pointer_local: dict = {}
+    # Presence guard of each flat's SOURCE member (``associated(p_diag%
+    # ddt_ua_adv)`` / ``allocated(...)``; '' for plain members).  Extents /
+    # scalar values read the member's descriptor, which is undefined while
+    # the member is absent -- guard the assignment and fall back to 0.
+    flat_guard: dict = {}
     for entry in plan.entries:
         r = entry.recipe
         is_ptr_local = bool(r.aliasable and r.source_logical_kind in (0, 1))
+        guard = _recipe_presence_guard(iface, r)
         for flat in r.flat_names:
             flat_shapes[flat] = r.shape_exprs
             arg_is_pointer_local[flat] = is_ptr_local
+            flat_guard[flat] = guard
         if r.rank == 0 and len(r.flat_names) == 1 and r.read_exprs:
             scalar_member[r.flat_names[0]] = strip_index_args(r.read_exprs[0])
+
+    def _guarded_assign(sym: str, rhs: str, guard: str, absent: str = "0") -> List[str]:
+        if not guard:
+            return [f"    {sym} = int({rhs}, c_int)"]
+        return [
+            f"    if ({guard}) then",
+            f"      {sym} = int({rhs}, c_int)",
+            f"    else",
+            f"      {sym} = {absent}",
+            f"    end if",
+        ]
+
+    def _member_sym_guard(sym: str) -> str:
+        # ``offset_<flat>_d<i>`` / ``<flat>_d<i>`` / ``<flat>`` -> the leaf
+        # member path recorded by ``_struct_member_symbol_sources``.
+        base = sym[len("offset_"):] if sym.startswith("offset_") else sym
+        m = _EXTENT_SYM_RE.match(base)
+        if m and not _OFFSET_SYM_RE.match(base):
+            base = m.group(1)
+        path = _struct_member_paths.get(base)
+        return _entry_presence_guard(iface, path) if path else ''
 
     out: List[str] = []
     for sym in frozen.free_symbols:
@@ -1966,10 +2142,10 @@ def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dumm
             flat, dim = m.group(1), int(m.group(2))
             shapes = flat_shapes.get(flat)
             if shapes is not None and dim < len(shapes):
-                out.append(f"    {sym} = int({shapes[dim]}, c_int)")
+                out.extend(_guarded_assign(sym, shapes[dim], flat_guard.get(flat, '')))
                 continue
         if sym in scalar_member:
-            out.append(f"    {sym} = int({scalar_member[sym]}, c_int)")
+            out.extend(_guarded_assign(sym, scalar_member[sym], flat_guard.get(sym, '')))
             continue
         # A struct-member array's lower-bound offset must be taken from the MEMBER
         # itself (``lbound(p_patch%verts%end_block)``), NOT from the binding's
@@ -1984,7 +2160,9 @@ def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dumm
         # and the SDFG's ``arr[(idx) - offset]`` reads out of bounds at negative
         # ``rl``.  Extent symbols already read the member (via the flatten shape).
         if _OFFSET_SYM_RE.match(sym) and sym in _struct_member_sources:
-            out.append(f"    {sym} = int({_struct_member_sources[sym]}, c_int)")
+            # Absent member -> neutral lower bound 1 (the kernel's absent
+            # branch never evaluates the ``arr[(idx) - offset]`` math).
+            out.extend(_guarded_assign(sym, _struct_member_sources[sym], _member_sym_guard(sym), absent="1"))
             continue
         # No flatten-plan size expr: derive the value directly from the
         # caller's array via lbound/size (closes the gap for plain
@@ -2053,7 +2231,12 @@ def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dumm
             # (uninitialised local read).  Only ``_allocated`` folds resolve this
             # way; ``_present`` (OPTIONAL dummy) keeps its own branch below.
             if fa is not None and fa.kind == 'array' and sym.endswith("_allocated"):
-                present = _present(pres_base, arg_is_pointer_local.get(pres_base, True))
+                # A presence-GUARDED entry's flat is bound either way (alias
+                # or degenerate scratch), so ``associated(<flat>)`` is
+                # always true -- test the HOST member instead: the guard
+                # expression IS the member's true definedness.
+                host_guard = flat_guard.get(pres_base, '')
+                present = host_guard or _present(pres_base, arg_is_pointer_local.get(pres_base, True))
                 out.append(f"    {sym} = int(merge(1, 0, {present}), c_int)")
                 continue
             # A NESTED struct-member POINTER/ALLOCATABLE the kernel branches on
@@ -2090,7 +2273,7 @@ def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dumm
         # but the static struct layout names it (``dfftt%ngm`` ->
         # ``dfftt_ngm``).  Read it straight from the caller's struct.
         if sym in _struct_member_sources:
-            out.append(f"    {sym} = int({_struct_member_sources[sym]}, c_int)")
+            out.extend(_guarded_assign(sym, _struct_member_sources[sym], _member_sym_guard(sym)))
             continue
         out.append(f"    ! TODO: no plan entry gives size for free symbol {sym!r}")
     return out

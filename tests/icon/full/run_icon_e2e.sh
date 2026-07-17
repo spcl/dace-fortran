@@ -207,7 +207,16 @@ step "1) Build STOCK ICON (no patch, no DaCe link)"
 # Preserve the pristine source the first time through, and build from it.
 [[ -f "${VELOCITY_F90}.bak" ]] || cp "${VELOCITY_F90}" "${VELOCITY_F90}.bak"
 cp "${VELOCITY_F90}.bak" "${VELOCITY_F90}"
-build_icon "${STOCK_BUILD}" ""
+# STOCK_REUSE=1: skip the stock rebuild when a binary already exists.  Safe
+# because stock is always built from the pristine ``.bak`` (restored just
+# above), so an existing ``bin/icon`` was built from the same source; the
+# ~1h clean rebuild buys nothing.  Leave unset for the authoritative
+# from-scratch run.
+if [[ "${STOCK_REUSE:-0}" == 1 && -x "${STOCK_BUILD}/bin/icon" ]]; then
+  echo "(reusing existing ${STOCK_BUILD} -- STOCK_REUSE=1)"
+else
+  build_icon "${STOCK_BUILD}" ""
+fi
 
 
 if [[ "${STOCK_ONLY}" == 1 ]]; then
@@ -225,8 +234,16 @@ capped "${PY}" "${DACE_FORTRAN}/scripts/build_icon_dace_libs.py" \
 
 
 step "3) Patch mo_velocity_advection.f90 + build DACE ICON"
-apply_dace_patch
-build_icon "${DACE_BUILD}" "${DACE_LIBS}"
+# DACE_REUSE=1: skip the DaCe ICON rebuild when a binary already exists (symmetric
+# to STOCK_REUSE).  The DaCe lib is always regenerated in step 2, and ICON links
+# it by rpath/soname, so a reused binary picks up the fresh lib at load time --
+# valid whenever only the emitter / lib changed and the patch + ICON tree did not.
+if [[ "${DACE_REUSE:-0}" == 1 && -x "${DACE_BUILD}/bin/icon" ]]; then
+  echo "(reusing existing ${DACE_BUILD} -- DACE_REUSE=1; lib relinked via rpath)"
+else
+  apply_dace_patch
+  build_icon "${DACE_BUILD}" "${DACE_LIBS}"
+fi
 
 fi
 

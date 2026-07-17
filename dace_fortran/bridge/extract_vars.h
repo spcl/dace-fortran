@@ -266,6 +266,11 @@ struct FortranMemberInfo {
                                            // populated only when the member is itself a
                                            // ``fir.RecordType``.  Empty otherwise.
   std::string struct_module;               // defining module of the nested type
+  std::string alloc;                       // deferred-storage class of the member:
+                                           // "allocatable" (``box<heap<..>>``),
+                                           // "pointer" (``box<ptr<..>>``), else "".
+                                           // Drives the binding emitter's presence
+                                           // guards (``allocated``/``associated``).
                                            // (``mo_model_domain``), or ``""``.
 };
 

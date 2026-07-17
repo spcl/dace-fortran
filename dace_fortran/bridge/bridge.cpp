@@ -406,6 +406,7 @@ class HLFIRModule {
         md["shape"] = sh;
         md["struct_name"] = m.struct_name;
         md["struct_module"] = m.struct_module;
+        md["alloc"] = m.alloc;
         members.append(md);
       }
       sd["members"] = members;

@@ -4381,10 +4381,19 @@ FortranInterfaceInfo extractFortranInterface(mlir::ModuleOp module, const std::s
           // dtype from its element type.
           if (auto box = mlir::dyn_cast<fir::BoxType>(mt)) {
             mlir::Type inner = box.getEleTy();
-            if (auto heap = mlir::dyn_cast<fir::HeapType>(inner))
+            // Record the deferred-storage class before unwrapping: the
+            // binding emitter must guard every marshal of such a member
+            // with ``allocated()`` / ``associated()`` (an unallocated /
+            // disassociated member's descriptor bounds are undefined --
+            // ``c_loc``/``size`` on it read garbage, and gfortran's
+            // ``internal_pack`` at the alias site then smashes the stack).
+            if (auto heap = mlir::dyn_cast<fir::HeapType>(inner)) {
+              m.alloc = "allocatable";
               inner = heap.getEleTy();
-            else if (auto ptr = mlir::dyn_cast<fir::PointerType>(inner))
+            } else if (auto ptr = mlir::dyn_cast<fir::PointerType>(inner)) {
+              m.alloc = "pointer";
               inner = ptr.getEleTy();
+            }
             mt = inner;
           }
           if (auto seq = mlir::dyn_cast<fir::SequenceType>(mt)) {
