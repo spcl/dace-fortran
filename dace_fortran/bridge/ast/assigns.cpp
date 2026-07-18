@@ -67,6 +67,14 @@ std::string buildIndexExpr(mlir::Value v, int d) {
       return buildIndexExpr(def->getOperand(0), d + 1);
   }
 
+  // ``hlfir.no_reassoc`` is Flang's reassociation-barrier wrapper around a
+  // parenthesised operand; it wraps the summands of an arithmetic subscript
+  // (``a(i + 1)`` lowers to ``addi(no_reassoc(load i), 1)``).  Transparent in
+  // an index -- recurse into its single operand, else the whole subscript
+  // strands at ``?`` (matches the ``buildExpr`` handler in expressions.cpp).
+  if (def->getName().getStringRef() == "hlfir.no_reassoc" && def->getNumOperands() == 1)
+    return buildIndexExpr(def->getOperand(0), d + 1);
+
   // ``hlfir.apply %elem, %i`` used as a designate index (e.g. the
   // gather elemental ``cols(arg2)`` produced for noncontiguous slice
   // arguments).  Inline the referenced elemental's body and recurse

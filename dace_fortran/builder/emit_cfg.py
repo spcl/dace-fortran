@@ -280,7 +280,11 @@ def emit_assign(builder, ctx: '_Ctx', n, region):
             # ``sym_*`` states minted below, so the view_alias link lands first.
             materialize_indirect_view_sources(builder, ctx.cur, indirect_syms)
             for expr, sym in indirect_syms.items():
-                rhs = _strip_dace_casts(indirect_to_dace(builder, expr, ctx.iter_map, indirect_syms))
+                # Scalar-index promotion: ``expr`` is the bare scalar name (no
+                # ``[``), read straight into the symbol; the array-indirect case
+                # goes through indirect_to_dace.
+                rhs = expr if '[' not in expr else _strip_dace_casts(
+                    indirect_to_dace(builder, expr, ctx.iter_map, indirect_syms))
                 if sym not in ctx.sdfg.symbols:
                     ctx.sdfg.add_symbol(sym, dace.int64)
                 nxt = region.add_state(f"sym_{sym}_{builder.nid()}")
@@ -710,7 +714,9 @@ def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
         # collapses the chain at codegen time.
         per_sym_assigns: list[tuple[str, str]] = []
         for expr, sym in indirect_syms.items():
-            rhs = indirect_to_dace(builder, expr, iter_map, indirect_syms)
+            # Scalar-index promotion (bare scalar name) reads straight into the
+            # symbol; array-indirect (``arr[...]``) goes through indirect_to_dace.
+            rhs = expr if '[' not in expr else indirect_to_dace(builder, expr, iter_map, indirect_syms)
             per_sym_assigns.append((sym, rhs))
             if sym not in ctx.sdfg.symbols:
                 ctx.sdfg.add_symbol(sym, dace.int64)
