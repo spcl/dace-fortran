@@ -1,22 +1,9 @@
-"""Extract one ICON atmosphere kernel into a single, self-contained,
-COMPILING ``.f90`` -- the ``input -> single TU`` stage for the dynamical core.
+"""Extract one ICON atmosphere kernel into a single, self-contained, COMPILING .f90 -- the input->single-TU stage for the dynamical core.  Mirrors :mod:`icon.ocean._extract_single_tu` but inlines the halo exchange (sync_patch_array/exchange_data) instead of externalising it; the inliner's monomorphisation pass devirtualises the t_comm_pattern dispatch.
 
-Mirrors :mod:`icon.ocean._extract_single_tu` but for the atmosphere solver and
-WITHOUT externalising the halo exchange: ``sync_patch_array`` / ``exchange_data``
-are inlined, and the inliner's default monomorphisation pass devirtualises the
-(single-arm, post-cpp) ``t_comm_pattern`` dispatch into static calls.
+Pipeline: merge_used_modules -> inline_to_single_tu(expand_cpp, tolerate_external_uses, monomorphize) -> gfortran -fsyntax-only.
+Runs as a memory-capped subprocess (fparser on the ~140k-line merged closure can OOM the host).  Prints RESULT/TU_PATH/TU_LINES on success.
 
-  merge_used_modules (regex closure)
-  -> inline_to_single_tu(expand_cpp=True, tolerate_external_uses=True,
-                         monomorphize=True [default])
-  -> gfortran -fsyntax-only
-
-Run as a memory-capped subprocess so the fparser parse of the ~140k-line merged
-closure cannot OOM the host.  Prints ``RESULT: PASS``, ``TU_PATH:`` and
-``TU_LINES:`` on success.
-
-Usage:
-    _extract_single_tu.py <source_relpath> <module::entry> <out_dir> [mem_gb]
+Usage: _extract_single_tu.py <source_relpath> <module::entry> <out_dir> [mem_gb]
 """
 import os
 import re
@@ -58,15 +45,7 @@ def main(argv):
         mp.write_text(merged)
         log(f"  {len(merged.splitlines())} lines merged")
 
-        # Force-include the concrete comm-pattern arm module(s): they are reached
-        # only via the externalised factory, so the USE-graph merge never pulls
-        # them in -- but the monomorphisation pass needs the arm to retype to.
-        # Adding the source is not enough: the inliner's first step prunes every
-        # module not USE-reachable from the entry (``keep_sorted_used_modules``),
-        # which would drop the arm BEFORE monomorphisation runs.  So we also
-        # inject a ``USE <arm-module>`` into the entry module, keeping it alive
-        # until the retype makes the arm genuinely reachable (its exchange bodies
-        # inlined), after which normal pruning keeps exactly what is needed.
+        # force-include comm-pattern arm module(s): USE-graph merge never reaches them (only via the externalised factory), and the inliner prunes non-USE-reachable modules before monomorphisation can retype to the arm -- so also inject `USE <arm-module>` into the entry module to keep it alive until the retype makes it reachable.
         sources = {str(mp): merged}
         for name, content in cfg["extra_sources"].items():
             sources[str(out_dir / name)] = content
@@ -114,10 +93,7 @@ def main(argv):
         cdir.mkdir(exist_ok=True)
         cf = cdir / Path(tu).name
         shutil.copy(tu, cf)
-        # ``-fallow-argument-mismatch``: the inlined halo leaves raw, interface-less
-        # ``mpi_*`` calls whose buffer argument is REAL(8) / REAL(4) / INTEGER / a
-        # scalar or array across the type-specific wrappers -- exactly the
-        # type-generic external every real MPI build compiles with this flag.
+        # -fallow-argument-mismatch: inlined halo leaves raw, interface-less mpi_* calls with varying buffer types across wrappers -- same as any real MPI build needs.
         r = subprocess.run(
             ["gfortran", "-fsyntax-only", "-ffree-line-length-none", "-fallow-argument-mismatch", cf.name],
             cwd=str(cdir),

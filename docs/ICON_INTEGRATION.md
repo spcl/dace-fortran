@@ -1,30 +1,13 @@
 # Full ICON CPU integration with DaCe-generated velocity + dycore
 
-> **Status**: this doc + the scripts it references are tested
-> against the local Ubuntu 25.10 install (GCC 15.2 / OpenMPI 5 /
-> system NetCDF + HDF5 + libxml2 + eccodes + fyaml + lapack), against
-> ICON release `2026.04` at `gitlab.dkrz.de/icon/icon-model` and the
-> e2e tests at `tests/icon/full/`.  All paths in
-> `scripts/configure_icon_dace_cpu.sh` are pinned to apt defaults --
-> adapt the four "Ubuntu apt-installed deps" path blocks at the top
-> of the script for your site.
+> **Status**: tested against local Ubuntu 25.10 (GCC 15.2 / OpenMPI 5 / system NetCDF+HDF5+libxml2+eccodes+fyaml+lapack), ICON release `2026.04` at `gitlab.dkrz.de/icon/icon-model`, e2e tests at `tests/icon/full/`. All paths in `scripts/configure_icon_dace_cpu.sh` are pinned to apt defaults -- adapt the four "Ubuntu apt-installed deps" path blocks at the top for your site.
 
+End-to-end recipe. ICON is built **with its normal configure script**; only changes:
 
+  1. One-line LDFLAGS / FCFLAGS additions to the configure invocation so the linker / Fortran module resolver pick up the pre-built libraries.
+  2. **A single function body** in `mo_velocity_advection.f90` is replaced with a forwarding call to `velocity_tendencies_dace` (symbol exported by our DaCe-generated `libvelocity_inner_wrap.so`).
 
-End-to-end recipe.  ICON is built **with its normal configure script**;
-the only changes to ICON are:
-
-  1. One-line LDFLAGS / FCFLAGS additions to the configure invocation
-     so the linker / Fortran module resolver pick up our pre-built
-     libraries.
-  2. **A single function body** in `mo_velocity_advection.f90` is
-     replaced with a forwarding call to `velocity_tendencies_dace`
-     (the symbol our DaCe-generated `libvelocity_inner_wrap.so`
-     exports).
-
-No other Fortran sources change.  No ICON build-system files change.
-`mo_sync`, `mo_communication`, `t_patch`, all the derived types,
-the run scripts, the experiment files — untouched.
+No other Fortran sources or ICON build-system files change. `mo_sync`, `mo_communication`, `t_patch`, all derived types, run scripts, experiment files — untouched.
 
 ## Architectural shape (after integration)
 
@@ -52,20 +35,13 @@ SDFG kernel  (DaCe codegen, calls ICON's sync_patch_array externally)
 ICON's mo_sync::sync_patch_array   (untouched -- production MPI Fortran)
 ```
 
-The bridge resolves `sync_patch_array` via a `keep_external`
-registration at SDFG-build time; at *link* time the symbol resolves
-into ICON's own object files alongside everything else.  So the real
-`MPI_Sendrecv` halo exchange runs.
+Bridge resolves `sync_patch_array` via a `keep_external` registration at SDFG-build time; at *link* time the symbol resolves into ICON's own object files — so the real `MPI_Sendrecv` halo exchange runs.
 
 ## Tested against the in-tree e2e suite
 
-  * `tests/icon/full/test_dycore_velocity_external_e2e.py` —
-    `velocity_tendencies` via per_member_soa C ABI + Fortran-no-bind-c
-    sync + C++ sync, bit-exact under `-O0`.
-  * `tests/icon/full/test_standalone_dycore_sync_e2e.py` —
-    minimal standalone dycore + no-op sync, bit-exact.
-  * `tests/icon/full/test_dycore_mpi_sync_e2e.py` — 2-rank dycore +
-    real `MPI_Sendrecv` halo exchange, bit-exact per rank.
+  * `tests/icon/full/test_dycore_velocity_external_e2e.py` — `velocity_tendencies` via per_member_soa C ABI + Fortran-no-bind-c sync + C++ sync, bit-exact under `-O0`.
+  * `tests/icon/full/test_standalone_dycore_sync_e2e.py` — minimal standalone dycore + no-op sync, bit-exact.
+  * `tests/icon/full/test_dycore_mpi_sync_e2e.py` — 2-rank dycore + real `MPI_Sendrecv` halo exchange, bit-exact per rank.
 
 ## Step 1 — clone the repos
 
@@ -85,9 +61,7 @@ git clone git@github.com:spcl/dace.git "$WORK/dace"
 
 ## Step 2 — pre-build `libvelocity_inner_wrap.so`
 
-Use the standalone driver shipped with this doc
-(`scripts/build_icon_dace_libs.py`) -- it lifts the build steps out
-of the e2e test fixture so you can run them outside of `pytest`:
+Standalone driver (`scripts/build_icon_dace_libs.py`) lifts the build steps out of the e2e test fixture — runs outside `pytest`:
 
 ```bash
 cd "$WORK/dace-fortran"
@@ -96,25 +70,12 @@ python -m scripts.build_icon_dace_libs \
     --out-dir "$WORK/dace-icon-libs"
 ```
 
-**Important:** the `--velocity-source` argument is NOT the raw
-`mo_velocity_advection.f90` from your ICON checkout -- ICON's
-`USE mo_nonhydro_types, mo_model_domain, ...` chain pulls in
-~13 other modules whose `.mod` files only exist after a full ICON
-build, and flang's HLFIR pipeline cannot read gfortran-compiled
-`.mod` files anyway.  The argument is a **self-contained Fortran
-bundle** that defines:
+**Important:** `--velocity-source` is NOT the raw `mo_velocity_advection.f90` from your ICON checkout — ICON's `USE mo_nonhydro_types, mo_model_domain, ...` chain pulls in ~13 other modules whose `.mod` files only exist after a full ICON build, and flang's HLFIR pipeline cannot read gfortran-compiled `.mod` files anyway. The argument is a **self-contained Fortran bundle** that defines:
 
-  * `velocity_tendencies` itself (verbatim copy of the body from
-    ICON's `mo_velocity_advection.f90`),
-  * stub-but-faithful declarations of every type the body
-    transitively touches (`t_patch`, `t_int_state`, `t_nh_prog`,
-    `t_nh_metrics`, `t_nh_diag`, ...) -- only the shape /
-    members matter, not the bodies of any methods.
+  * `velocity_tendencies` itself (verbatim copy of the body from ICON's `mo_velocity_advection.f90`),
+  * stub-but-faithful declarations of every type the body transitively touches (`t_patch`, `t_int_state`, `t_nh_prog`, `t_nh_metrics`, `t_nh_diag`, ...) — only the shape/members matter, not method bodies.
 
-The in-tree test file `tests/icon/full/velocity_full.f90` is exactly
-this bundle and is the right starting point.  Maintain it alongside
-ICON releases (a `git log` diff against ICON's `mo_velocity_advection.f90`
-catches drifts).
+`tests/icon/full/velocity_full.f90` is exactly this bundle — the right starting point. Maintain it alongside ICON releases (a `git log` diff against ICON's `mo_velocity_advection.f90` catches drifts).
 
 Output:
 
@@ -126,21 +87,11 @@ $WORK/dace-icon-libs/
 └── velocity_tendencies_c.f90          # the bind_c shim (for diff/debug)
 ```
 
-The driver pins the three FP-conservative flags on every layer
-(`-O0 -fno-fast-math -ffp-contract=off`) so the SDFG vs ICON
-arithmetic is bit-exact.  Drop to `-O3 -fno-fast-math
--ffp-contract=off` for production timings — comparison stays within
-1 ULP on the velocity workload measured in the standalone test.
+Driver pins three FP-conservative flags on every layer (`-O0 -fno-fast-math -ffp-contract=off`) for bit-exact SDFG vs ICON arithmetic. Drop to `-O3 -fno-fast-math -ffp-contract=off` for production timings — comparison stays within 1 ULP on the velocity workload (measured in the standalone test).
 
 ## Step 3 — patch ICON: one function body
 
-Edit
-**`$WORK/icon-model/src/atm_dyn_iconam/mo_velocity_advection.f90`**.
-Leave EVERY declaration and EVERY USE statement at the top of the
-file untouched.  Replace the **body** of the `velocity_tendencies`
-subroutine -- the part after the local-variable declarations and
-before `END SUBROUTINE velocity_tendencies` -- with this forwarding
-call:
+Edit **`$WORK/icon-model/src/atm_dyn_iconam/mo_velocity_advection.f90`**. Leave every declaration and USE statement untouched. Replace the **body** of `velocity_tendencies` (after local-var declarations, before `END SUBROUTINE`) with this forwarding call:
 
 ```fortran
   SUBROUTINE velocity_tendencies(p_prog, p_patch, p_int, p_metrics, p_diag, &
@@ -166,11 +117,7 @@ That's the only ICON source change.
 
 ## Step 4 — configure ICON via this repo's hardcoded driver
 
-This repo ships a hardcoded configure script for Ubuntu apt's GCC /
-OpenMPI / NetCDF / HDF5 layout -- no spack, no module loads, no
-site-specific edits needed.  It's tested against the local install on
-the development machine; adapt the four "Ubuntu apt-installed deps"
-path blocks at the top if your site puts headers / libs elsewhere.
+Hardcoded configure script for Ubuntu apt's GCC/OpenMPI/NetCDF/HDF5 layout — no spack, no module loads, no site edits needed. Tested against the local dev-machine install; adapt the four "Ubuntu apt-installed deps" path blocks at the top if your site puts headers/libs elsewhere.
 
 ```bash
 cd "$WORK/icon-model"
@@ -183,36 +130,22 @@ DACE_LIBS_DIR="$WORK/dace-icon-libs" \
 make -j 8
 ```
 
-The script does two things at the same time:
+Script does two things:
 
-  1. **Invokes ICON's own `configure`** unchanged -- same Autoconf
-     surface ICON ships with -- so the `Makefile` it produces is
-     bit-for-bit equivalent to what `config/generic/gcc` (or any
-     site script) would produce for the same compiler / lib paths.
-  2. **Adds the DaCe link surface** when `$DACE_LIBS_DIR` is set:
-     `-I$DACE_LIBS_DIR` into `FCFLAGS` for the `.mod` search path,
-     `-L$DACE_LIBS_DIR -Wl,-rpath,$DACE_LIBS_DIR -l:libvelocity_inner_wrap.so`
-     into `LDFLAGS` for the link line.
+  1. **Invokes ICON's own `configure`** unchanged — same Autoconf surface, so the `Makefile` produced is bit-for-bit equivalent to what `config/generic/gcc` (or any site script) would produce for the same compiler/lib paths.
+  2. **Adds the DaCe link surface** when `$DACE_LIBS_DIR` is set: `-I$DACE_LIBS_DIR` into `FCFLAGS` (`.mod` search path), `-L$DACE_LIBS_DIR -Wl,-rpath,$DACE_LIBS_DIR -l:libvelocity_inner_wrap.so` into `LDFLAGS` (link line).
 
-Drop `$DACE_LIBS_DIR` (leave it unset) to produce a stock ICON build
-for the bit-exact comparison in step 6.
+Leave `$DACE_LIBS_DIR` unset to produce a stock ICON build for the bit-exact comparison in step 6.
 
 Key flag choices (hardcoded in the script):
 
-  * `-O0 -g -fno-fast-math -ffp-contract=off -fPIC` -- matches the
-    e2e tests so the produced ICON binary is bit-exact against a
-    stock build under the same flags.  Switch the `COMMON_FLAGS`
-    line to `-O3 ...` for production timings (1-ULP envelope).
-  * `--enable-grib2 --enable-loop-exchange --enable-openmp
-    --enable-bundled-python=mtime` -- ICON's standard CPU set.
-  * **No `-D__MIXED_PRECISION`** -- this integration is strictly
-    fp64; `vp = wp = c_double` end to end.
+  * `-O0 -g -fno-fast-math -ffp-contract=off -fPIC` — matches the e2e tests, so the ICON binary is bit-exact against a stock build under the same flags. Switch `COMMON_FLAGS` to `-O3 ...` for production timings (1-ULP envelope).
+  * `--enable-grib2 --enable-loop-exchange --enable-openmp --enable-bundled-python=mtime` — ICON's standard CPU set.
+  * **No `-D__MIXED_PRECISION`** — strictly fp64; `vp = wp = c_double` end to end.
 
 ## Step 5 — run
 
-Whatever experiment script you'd normally run -- nothing about
-ICON's run / launch / I/O changes.  Example MPI launch from the
-ICON tree:
+Whatever experiment script you'd normally run — nothing about ICON's run/launch/I/O changes. Example MPI launch from the ICON tree:
 
 ```bash
 cd "$WORK/icon-model"
@@ -223,13 +156,7 @@ cd run
 mpirun --oversubscribe -n 4 ./exp.<your-experiment>.run
 ```
 
-At runtime, ICON's `solve_nh` calls into `velocity_tendencies` (our
-patched body), which forwards to `velocity_tendencies_dace`
-(symbol lives in `libvelocity_inner_wrap.so`, resolved at
-`mpirun`-time via the `-rpath` we baked in).  Inside the SDFG, the
-kernel calls back into ICON's `sync_patch_array` (symbol resolved
-against ICON's own `libicon.a`) -- so the real MPI halo exchange
-runs.
+At runtime: ICON's `solve_nh` calls `velocity_tendencies` (patched body) → forwards to `velocity_tendencies_dace` (in `libvelocity_inner_wrap.so`, resolved at `mpirun`-time via the baked-in `-rpath`). Inside the SDFG, the kernel calls back into ICON's `sync_patch_array` (resolved against ICON's own `libicon.a`) — so the real MPI halo exchange runs.
 
 ## Step 6 — bit-exact comparison vs unmodified ICON
 
@@ -268,33 +195,17 @@ cdo diff /tmp/ref_out/atm.nc /tmp/dace_out/atm.nc
 
 ## Going further: also replace `solve_nh`
 
-The same recipe works for `mo_solve_nonhydro::solve_nh`:
+Same recipe works for `mo_solve_nonhydro::solve_nh`:
 
-1. Generate `libdycore_wrapper.so` with the **same** standalone
-   driver (the script accepts a `--dycore-target` flag).
-2. Patch `mo_solve_nonhydro.f90` 's `solve_nh` body to call
-   `dycore_wrapper_dace`.
+1. Generate `libdycore_wrapper.so` with the **same** standalone driver (accepts a `--dycore-target` flag).
+2. Patch `mo_solve_nonhydro.f90`'s `solve_nh` body to call `dycore_wrapper_dace`.
 3. Append `-l:libdycore_wrapper.so` to `$LDFLAGS`.
 
-The bridge's `keep_external` for `velocity_tendencies` in step 3 makes
-the dycore SDFG call into our `libvelocity_inner_wrap.so` from step 2
--- so the two libraries chain naturally and ICON's
-`mo_velocity_advection.f90` becomes a true passthrough.
+The bridge's `keep_external` for `velocity_tendencies` (step 3) makes the dycore SDFG call into `libvelocity_inner_wrap.so` — the two libraries chain naturally, and `mo_velocity_advection.f90` becomes a true passthrough.
 
 ## What's deferred
 
-  * **GPU codegen**: this doc covers strict CPU.  GPU swap would
-    replace `libvelocity_inner_wrap.so` with a CUDA-codegen
-    DaCe build, same Fortran-side ABI; not yet wired in this
-    session's tests.
-  * **Multiple patch domains**: this doc assumes a single `p_patch`
-    per call (the common solve_nh case).  Nested LAM / DOM domains
-    work but need the iface to enumerate every domain's `t_patch`
-    arg.
+  * **GPU codegen** — this doc covers strict CPU. GPU swap would replace `libvelocity_inner_wrap.so` with a CUDA-codegen DaCe build, same Fortran-side ABI; not yet wired in this session's tests.
+  * **Multiple patch domains** — assumes a single `p_patch` per call (the common solve_nh case). Nested LAM/DOM domains work but need the iface to enumerate every domain's `t_patch` arg.
 
-This whole integration is **fp64 only** -- `vp = wp = c_double` end
-to end.  No `-D__MIXED_PRECISION`.  The bit-exact gate (the
-`assert_array_equal` in the standalone single-rank test) holds
-under the FP-conservative flag triple pinned in
-`scripts/configure_icon_dace_cpu.sh` (`-O0 -fno-fast-math
--ffp-contract=off`).
+Whole integration is **fp64 only** — `vp = wp = c_double` end to end, no `-D__MIXED_PRECISION`. The bit-exact gate (`assert_array_equal` in the standalone single-rank test) holds under the FP-conservative flag triple pinned in `scripts/configure_icon_dace_cpu.sh` (`-O0 -fno-fast-math -ffp-contract=off`).

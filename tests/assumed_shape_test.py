@@ -1,30 +1,9 @@
-"""Fortran assumed-shape re-basing through inlining.
-
-Edge case from https://fortran-lang.discourse.group/t/6923 (Federico's
-explanation): an assumed-shape dummy argument always has ``lbound=1``
-inside the callee regardless of the caller's custom lower bound.
-When we inline such a callee into a caller whose actual argument has
-``(-2:2)``-style bounds, the callee's body must still treat index 1
-as "first storage element"  --  not as "first caller-bound element".
-
-Our HLFIR bridge relies on Flang's own lowering for this: the caller
-builds a ``fir.shape_shift %lb, %ext`` for the custom-bounded array,
-and Flang's call site wraps the box such that the callee's
-``hlfir.declare %arg0 dummy_scope %0`` (no shape operand) re-associates
-to ``lbound=1``.  When ``hlfir-inline-all`` splices the callee body
-into the caller, each IR construct retains its own declare  --  the
-inlined declare still carries the 1-based view of the box, distinct
-from the caller's ``custom_array`` declare with its ``-2:2`` bounds.
-
-These tests guard that behaviour end to end:
-
-- ``test_inline_rebase_storage``  --  build the SDFG through
-  ``SDFGBuilder.from_files`` (multi-file -> inline-all path), run it,
-  and assert that ``arr(1) = 999`` inside the callee lands in the
-  caller's first storage slot (the ``custom_array(-2)`` element).
-
-- ``test_sdfg_matches_gfortran_reference``  --  same source compiled with
-  ``gfortran`` via ``f2py``; two outputs must match bit-exactly.
+"""Assumed-shape dummies have ``lbound=1`` inside the callee regardless of the
+caller's custom bounds. After ``hlfir-inline-all`` splices the callee body in,
+the inlined declare keeps its 1-based view distinct from the caller's custom-
+bounded declare, so ``arr(1)`` in the callee must land on the caller's first
+storage element (e.g. ``custom_array(-2)``), not caller-bound index 1.
+Ref: https://fortran-lang.discourse.group/t/6923
 """
 
 import shutil
@@ -43,10 +22,8 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 _FLANG = "flang-new-21"
 
-# Two files: ``callee`` takes an assumed-shape dummy; ``driver`` owns a
-# custom-bounded local and calls the callee on it.  Splitting across
-# files exercises the multi-file driver (parse_files -> inline-all) the
-# way ICON's cross-module kernels will.
+# Two files (assumed-shape callee + custom-bounded driver) exercise the
+# multi-file driver (parse_files -> inline-all), the way ICON's cross-module kernels will.
 
 _CALLEE_SRC = """
 subroutine callee(arr)
@@ -104,13 +81,9 @@ def _f2py_build(srcs: list[str], out_dir: Path, mod_name: str):
 
 
 def test_inlined_hlfir_has_assumed_shape_alias_declare(tmp_path: Path):
-    """Structural guard: after ``hlfir-inline-all + symbol-dce`` the
-    IR contains exactly the alias declare pattern that drives the
-    assumed-shape re-basing problem  --  a second ``hlfir.declare`` with
-    no shape operand whose memref is a ``fir.convert`` of the caller's
-    ``fir.shape_shift``-bounded declare.  This test asserts the shape
-    of the IR that subsequent frontend work needs to handle; it does
-    NOT yet require the SDFG to be correct."""
+    """After hlfir-inline-all+symbol-dce, IR must retain the alias-declare pattern
+    behind assumed-shape re-basing (shape-less declare whose memref fir.converts the
+    caller's shape_shift declare) -- pins IR shape, not yet SDFG correctness."""
     from dace_fortran.build_bridge import hb  # noqa: E402
 
     callee_hlfir = _hlfir(_CALLEE_SRC, tmp_path / "callee.hlfir")
@@ -124,12 +97,10 @@ def test_inlined_hlfir_has_assumed_shape_alias_declare(tmp_path: Path):
 
     # Outer declare: shape_shift with lbound=-2 on the caller's x.
     assert "shape_shift" in dump and "-2" in dump
-    # Inlined alias declare: its uniq_name is _QFcalleeEarr and its
-    # memref is a fir.convert (extent erasure).
+    # Inlined alias declare: uniq_name _QFcalleeEarr, memref is a fir.convert (extent erasure).
     assert '_QFcalleeEarr' in dump, \
         "expected the inlined callee's alias declare to survive inline+dce"
-    # The fir.convert box<array<5xi32>> -> box<array<?xi32>> is the
-    # assumed-shape-alias signature we'll need to fold.
+    # fir.convert box<array<5xi32>> -> box<array<?xi32>> is the assumed-shape-alias signature to fold.
     assert "fir.convert" in dump
 
 

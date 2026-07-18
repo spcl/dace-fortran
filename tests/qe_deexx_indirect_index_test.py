@@ -1,21 +1,12 @@
-"""Regression coverage for the QE ``deexx`` indirect-index family.
+"""Regression coverage for the QE deexx indirect-index family.
 
-These pin the ``ijkb0 = ofsbeta(na)`` indexing shape from QE's exchange
-kernels (``paw_newdxx`` / ``add_nlxx_pot`` / ``addusxx_g`` in
-``vexx_bp_k_gpu``): a beta-offset table is read indirectly, a per-atom
-base ``ijkb0`` is derived from it, and the loop body gathers / scatters
-through ``ikb = ijkb0 + ih``.
+Pins the ijkb0 = ofsbeta(na) indexing shape from QE's exchange kernels (paw_newdxx /
+add_nlxx_pot / addusxx_g in vexx_bp_k_gpu): a beta-offset table read indirectly, a per-atom
+base ijkb0 derived from it, loop body gathers/scatters through ikb = ijkb0 + ih.
 
-History -- this was once hypothesised as bug **M3** ("``buildIndexExpr``
-re-materialise pre-pass for an indirect index operand"), but a prior
-bring-up session established that hypothesis was WRONG: the real QE
-``?``-leak cascade had three unrelated root causes (local-allocatable
-``box_dims`` section bounds, ``PRESENT()`` on an inlined optional, and a
-flattened struct scalar member used as an array size), plus the gate-4a
-pointer-member indexed read -- all since fixed.  The indirect-index shape
-itself compiles AND is numerically correct.  These tests lock that in
-end-to-end against an f2py reference so the landed fixes can't silently
-regress to the "drops a dim, masked" failure mode that family once had.
+Once mis-hypothesised as bug M3 (this indexing shape); the real "?"-leak cascade had three
+unrelated causes, since fixed -- the shape itself compiles and is numerically correct. Locked
+in end-to-end against an f2py reference so fixes can't silently regress to a dropped-dim mask.
 """
 from pathlib import Path
 
@@ -30,8 +21,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 def _module_wrap(src: str, free_sub_decl: str, mod_name: str) -> str:
     """Wrap a free subroutine in a module so the SDFG can build the
     ``<mod>::<sub>`` entry, while the free form stays the f2py reference."""
-    # count=1: ``free_sub_decl`` ("subroutine foo") is a substring of the
-    # matching ``end subroutine foo`` too -- wrap only the opening line.
+    # count=1: free_sub_decl ("subroutine foo") is also a substring of "end subroutine foo" -- wrap only the opening line.
     return src.replace(free_sub_decl, f"module {mod_name}\ncontains\n{free_sub_decl}", 1).rstrip() \
         + f"\nend module {mod_name}\n"
 
@@ -63,9 +53,8 @@ end subroutine paw_accum
 
 
 def test_indirect_scatter_accumulate_matches_reference(tmp_path: Path):
-    """``deexx(ikb) += ...`` scatter-accumulate through ``ikb = ofsbeta(na)+ih``
-    must match the gfortran/f2py reference -- a dropped record / wrong
-    indirect base would diverge, not round off."""
+    """deexx(ikb) += ... through ikb = ofsbeta(na)+ih must match gfortran/f2py -- a dropped
+    record or wrong indirect base would diverge, not just round off."""
     sdfg = build_sdfg(_module_wrap(_SCATTER, "subroutine paw_accum", "paw_mod"),
                       tmp_path / "sdfg",
                       name="paw_accum",
@@ -229,9 +218,8 @@ end module uspp_dx
 
 
 def test_module_global_ofsbeta_indirect_matches_reference(tmp_path: Path):
-    """QE-faithful: ``ofsbeta`` is an allocatable MODULE global (``USE uspp``).
-    It surfaces as a host-sourced kwarg on the SDFG; the f2py reference sets
-    the module data directly.  Both must compute the same accumulation."""
+    """QE-faithful: ofsbeta is an allocatable MODULE global (USE uspp); surfaces as a
+    host-sourced kwarg on the SDFG, while f2py sets the module data directly. Both must match."""
     sdfg = build_sdfg(_MODGLOBAL, tmp_path / "sdfg", name="paw_accum_g", entry="uspp_dx::paw_accum_g").build()
     sdfg.validate()
     assert "ofsbeta" in sdfg.arglist(), "module-global ofsbeta must surface as a kwarg"

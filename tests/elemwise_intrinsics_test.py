@@ -1,13 +1,10 @@
 """End-to-end test for elementwise Fortran intrinsics.
 
-Builds ``elemwise_sin(a, b, n)`` as an SDFG through the HLFIR frontend  --
-Flang lowers ``b = sin(a) + 2.0d0 * a`` into composed ``hlfir.elemental``
-ops, our bridge walks them into a nested ``kind="loop"`` + ``kind="assign"``
-AST, and the SDFG emitter produces a DaCe ``LoopRegion`` whose tasklet
-body is ``_out_b = sin(_in_a_0) + (2.0 * _in_a_1)``.
-
-The reference is compiled with gfortran through ``numpy.f2py``; both run
-on seeded random input and outputs must match to ``1e-12``.
+Builds ``elemwise_sin(a, b, n)`` through the HLFIR frontend: flang lowers
+``b = sin(a) + 2.0d0 * a`` into ``hlfir.elemental`` ops, the bridge walks them
+into a nested loop/assign AST, and the emitter produces a ``LoopRegion`` tasklet
+``_out_b = sin(_in_a_0) + (2.0 * _in_a_1)``.  Reference compiled via gfortran +
+``numpy.f2py``; both run on seeded random input, matched to ``1e-12``.
 """
 
 import shutil
@@ -50,8 +47,7 @@ def test_elemwise_sin_numerical(tmp_path):
     n = 16
     a = rng.standard_normal(n)
 
-    # f2py reads Fortran-order; DaCe default is C  --  same logical data, one
-    # layout-matching copy each.
+    # f2py reads Fortran-order; DaCe default is C -- one layout-matching copy each.
     b_ref = np.zeros(n, order="F")
     mod.elemwise_sin(np.asfortranarray(a), b_ref)
 
@@ -62,8 +58,7 @@ def test_elemwise_sin_numerical(tmp_path):
 
 
 def test_elemwise_sin_structure(tmp_path):
-    """Sanity check the SDFG shape: one LoopRegion over the shape dim, one
-    Python-language tasklet whose body calls ``sin`` with the bare name."""
+    """SDFG shape: one LoopRegion over the shape dim, one tasklet body calling ``sin``."""
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(_SRC_PATH.read_text(), sdfg_dir, name="elemwise_sin", pipeline="hlfir-propagate-shapes").build()

@@ -1,29 +1,17 @@
 """LU forward+back substitution loopnest from CLOUDSC.
 
-Lifts the LU-solve block (cloudscexp2_simplified.F90 lines 3308-3336)
-that solves the per-cell ``NCLV x NCLV`` cloud-microphysics linear
-system.  The result ``ZQXN`` feeds ``ZQXN2D``, which feeds every
-cumulative flux output (``PFSQLF``, ``PFSQIF``, ``PFSQRF``, ``PFSQSF``).
-A wrong ZQXN here propagates as a per-step delta to all of those.
+Lifts the LU-solve block (cloudscexp2_simplified.F90:3308-3336) that solves
+the per-cell NCLV x NCLV cloud-microphysics system. ZQXN feeds ZQXN2D, which
+feeds every cumulative flux output (PFSQLF/PFSQIF/PFSQRF/PFSQSF) -- a wrong
+ZQXN here propagates as a per-step delta to all of them.
 
-Structure:
+Structure: non-pivoting recursive factorisation (forward sweep, modifies
+ZQLHS in place) -> forward-substitute -> diagonal divide on last row ->
+back-substitute. All four nests use Fortran slice notation on KIDIA:KFDIA,
+which the bridge must lower as elemental JL loops without breaking the
+JN/JM sequential-dependency contract.
 
-* Non-pivoting recursive factorisation (forward sweep over JN, inner
-  JM/IK loops; modifies ZQLHS in place).
-* Forward-substitute (step 1): ``DO JN=2,NCLV / DO JM=1,JN-1``  --
-  ``ZQXN(:, JN) -= ZQLHS(:, JN, JM) * ZQXN(:, JM)``.
-* Diagonal divide on the last row: ``ZQXN(:, NCLV) /= ZQLHS(:, NCLV, NCLV)``.
-* Back-substitute: ``DO JN=NCLV-1,1,-1 / DO JM=JN+1,NCLV`` with both
-  the row-update and the row-divide.
-
-All four loop nests use Fortran array slice notation on the column
-dimension (``KIDIA:KFDIA``), which the bridge has to lower as elemental
-JL loops without breaking the JN/JM sequential-dependency contract.
-A bug in iteration order, slice-write tasklet wiring, or section
-aliasing would produce small per-cell errors that look exactly like
-the cloudsc cumulative-flux mismatches.
-
-E2e against an f2py-compiled reference of the same Fortran source.
+E2e against an f2py-compiled reference of the same source.
 """
 import dace
 import numpy as np
@@ -124,13 +112,10 @@ _PY_NCLV = dace.symbol('_PY_NCLV')
 @dace.program
 def _py_lu_solver(zqlhs: dace.float64[_PY_KLON + 1, _PY_NCLV + 1, _PY_NCLV + 1], zqxn: dace.float64[_PY_KLON + 1,
                                                                                                     _PY_NCLV + 1]):
-    """Same LU solve as the Fortran kernel, written in the DaCe Python
-    frontend with 1-indexed sequential loops + 1-indexed ``dace.map``
-    on the parallel JL dimension.
+    """Same LU solve as the Fortran kernel, in the DaCe Python frontend with
+    1-indexed sequential loops + 1-indexed dace.map on the parallel JL dim.
 
-    Defined at module scope so that ``@dace.program``'s annotation
-    resolution can see ``_PY_KLON`` and ``_PY_NCLV`` as module-level
-    symbols."""
+    Module scope so @dace.program's annotation resolution sees _PY_KLON/_PY_NCLV as module-level symbols."""
     for jn in range(1, _PY_NCLV):
         for jm in range(jn + 1, _PY_NCLV + 1):
             for jl in dace.map[1:_PY_KLON + 1]:
@@ -168,16 +153,12 @@ def _py_lu_solver(zqlhs: dace.float64[_PY_KLON + 1, _PY_NCLV + 1, _PY_NCLV + 1],
 
 
 def test_python_frontend_cloudsc_lu_solver_one_indexed():
-    """Same LU solve via the DaCe Python frontend with 1-indexed
-    ``dace.map[1:N+1]`` ranges.
+    """DaCe Python frontend, 1-indexed dace.map[1:N+1] ranges -- verifies DaCe
+    core handles offset map ranges + sequential outer loops + parallel inner
+    JL maps without the HLFIR bridge.
 
-    Verifies that DaCe core handles offset (non-zero-based) map ranges
-    + sequential outer (range) loops + parallel inner JL maps without
-    the HLFIR bridge in the loop.  Indexing in the generated C++ uses
-    ``array[jl * stride_d0 + ...]`` (no ``-1``) on row-major C-order
-    buffers, so the input numpy arrays MUST be allocated ``order="C"``
-    and padded to ``(N+1, ...)`` so the wasted [0] slot leaves the
-    1-indexed reads aligned with the padded layout.
+    Generated C++ indexes array[jl * stride_d0 + ...] (no -1) on row-major
+    C-order buffers, so inputs MUST be order="C" and padded to (N+1, ...).
     """
     klon, nclv = 3, 5
     rng = np.random.default_rng(11)
@@ -185,10 +166,8 @@ def test_python_frontend_cloudsc_lu_solver_one_indexed():
     for jl in range(klon):
         for jn in range(nclv):
             base[jl, jn, jn] += nclv  # diag dominance
-    # DaCe Python frontend's ``dace.float64[N, M]`` is row-major (C-order),
-    # so allocate the numpy buffers C-order  --  otherwise ``array[jl]`` in the
-    # generated C++ (which uses ``jl * stride_d0 + ...`` without ``-1``)
-    # lands on the wrong element and produces NaNs via div-by-padding-zero.
+    # dace.float64[N,M] is C-order; array[jl] uses jl*stride_d0 (no -1), so
+    # non-C-order buffers land on the wrong element -> NaN via div-by-padding-zero.
     zqlhs_in = np.zeros((klon + 1, nclv + 1, nclv + 1), dtype=np.float64, order="C")
     zqlhs_in[1:, 1:, 1:] = base
     zqxn_in = np.zeros((klon + 1, nclv + 1), dtype=np.float64, order="C")

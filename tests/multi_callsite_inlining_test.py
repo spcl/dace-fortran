@@ -1,17 +1,8 @@
-"""Two inlined call sites of the same callee against different arrays.
-
-Reduces the cloudsc shape that broke view_test_2 (multi-callsite
-section-slice dummies) to a minimal form.  Both variants compile the
-SAME Fortran source via f2py for the reference and via the bridge
-for the SDFG  --  e2e per ``feedback_e2e_numerical``.
-
-1. ``..._whole_array``: bar receives a whole array.  Routes through
-   the bridge's per-SSA alias trace; no view-alias machinery
-   involved.
-2. ``..._section_slice``: bar receives a section slice.  Activates
-   the section_alias path (Pass 0b multi-callsite rename) so each
-   call site gets its own VarInfo.
-"""
+"""Two inlined call sites of the same callee against different arrays -- reduces the
+cloudsc shape that broke view_test_2 (multi-callsite section-slice dummies) to a
+minimal form.  ``..._whole_array``: no view-alias machinery involved.
+``..._section_slice``: activates the section_alias path (Pass 0b multi-callsite
+rename) so each call site gets its own VarInfo."""
 
 import numpy as np
 import pytest

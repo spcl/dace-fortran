@@ -1,29 +1,9 @@
-"""Bottom-half-CLOUDSC reproducer for the cloudsc_full xfail.
-
-Companion to ``test_cloudsc_top_half.py``.
-
-The top-half reproducer (lines 1766-2617 of CLOUDSC's body, source/
-sink accumulation into ZSOLQA/ZSOLQB) passes at rtol=atol=1e-14 -- the
-bridge lowers it bit-correctly.  Therefore the cloudsc_full divergence
-has to come from the bottom half (sedimentation + LU solver + flux/
-tendency updates, lines 2620-3700).
-
-This reproducer is ``cloudsc.F90`` with the source/sink accumulation
-block deleted (lines 1879-2617 of the original).  ZSOLQA / ZSOLQB stay
-at the zero values they were reset to just above the deletion point;
-the LU solver then factors a near-identity matrix.  The
-sedimentation/LU/flux chain still runs over all 122 JK iterations and
-produces meaningful PCOVPTOT + flux outputs.
-
-The basic init (ZQXFG, ZTP1, ZRHO, ZA, saturation values) is preserved
-above line 1879, so the bottom half has all the local state it needs.
-
-Compares SDFG vs f2py on the same source with identical seeded inputs.
-If they disagree at strict tolerance, the bug is in the bottom-half
-lowering itself.  If they agree, the cloudsc_full bug only manifests
-when source/sink and sedimentation/LU/flux are stitched together --
-i.e. it's a cross-talk-only bug.
-"""
+"""Bottom-half CLOUDSC reproducer for the cloudsc_full xfail bisection. Companion to
+``test_cloudsc_top_half.py`` (passes at 1e-14, isolating the divergence to the bottom half:
+sedimentation + LU solver + flux/tendency updates). Source/sink accumulation block (orig
+lines 1879-2617) is deleted so ZSOLQA/ZSOLQB stay zero and the LU solver factors a
+near-identity matrix; init state above that point is preserved. SDFG vs f2py at strict
+tolerance: agreement here means the cloudsc_full bug is cross-talk-only between halves."""
 
 from pathlib import Path
 
@@ -49,10 +29,8 @@ def _f2py_bottom_half(tmp_path_factory):
         src,
         ref_dir,
         "cloudsc_bottom_half_ref",
-        # ``-ffree-line-length-none`` is the sole intentionally
-        # gfortran-only flag: it is a non-semantic parser necessity for
-        # the long-line cloudsc source; LLVM-flang has no line limit and
-        # needs no equivalent.  The FP set is the flang-portable core.
+        # -ffree-line-length-none is the only gfortran-only flag (LLVM-flang has no line
+        # limit); rest of the FP set is flang-portable.
         extra_f90flags=CLOUDSC_F90FLAGS,
         only=("cloudscouter", ),
     )

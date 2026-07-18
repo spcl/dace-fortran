@@ -1,27 +1,9 @@
-"""End-to-end tests for ``splitDoubleBufferMembers`` in
-``hlfir-flatten-structs``.
-
-The split fires on a struct DUMMY argument with an alloc-or-pointer-array-
-of-records member accessed by stable scalar-symbol indices (the ICON
-``s%prog(nnow)`` / ``s%prog(nnew)`` two-time-level pattern).  Each
-``(member, idx_sym)`` pair becomes a fresh per-symbol dummy of the
-record-element type; the existing scalar-struct flatten then expands the
-inner members into plain companion arrays.
-
-For each test, the kernel under test takes the struct as a dummy
-argument.  A neighbouring ``wrapper`` subroutine (compiled into the same
-module, but exposed to f2py via ``only=``) builds the AoR in Fortran,
-calls the kernel, and writes the result back to flat arrays the Python
-side can consume.  The SDFG is built for the kernel; its arglist is the
-per-time-level companion arrays.  Outputs are compared to the f2py
-reference produced by ``wrapper``.
-
-The inner record members use STATIC shape (``real :: w(2, 3)`` instead
-of ``real, allocatable :: w(:, :)``) so the companion's shape and offset
-are baked into the SDFG.  Dynamic-shape inner members require the
-bindings layer to marshal the descriptor's shape/offset symbols at call
-time, which is exercised separately by ``external_aos_test.py``.
-"""
+"""E2e tests for splitDoubleBufferMembers in hlfir-flatten-structs: fires on a struct dummy with an
+alloc/pointer array-of-records member indexed by stable scalar symbols (ICON's s%prog(nnow)/s%prog(nnew)
+pattern); each (member, idx_sym) pair becomes a per-symbol dummy, then scalar-struct flatten expands its
+members into companion arrays. Each test's kernel takes the struct; a neighbouring `wrapper` (f2py
+only=) builds the AoR, calls the kernel, and is the reference. Inner members use STATIC shape here; the
+dynamic-shape/descriptor-marshal case is covered separately by external_aos_test.py."""
 
 import numpy as np
 import pytest
@@ -32,9 +14,8 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_dbuf_split_simple(tmp_path):
-    """Minimal end-to-end: single struct dummy, single inner array
-    member, two time levels.  The split must produce ``s_prog_nnow_w``
-    and ``s_prog_nnew_w`` as plain rank-2 array dummies on the SDFG."""
+    """Single struct dummy, single inner array member, two time levels -> s_prog_nnow_w / s_prog_nnew_w
+    as plain rank-2 array dummies."""
     src = """
 module dbuf_simple_mod
   implicit none
@@ -77,8 +58,7 @@ end subroutine
 """
     sdfg = build_sdfg(src, tmp_path / 'sdfg', name='kernel', entry='kernel').build()
 
-    # Split-produced companions must appear; the original struct dummy
-    # is gone.
+    # split-produced companions must appear; the original struct dummy is gone.
     assert 's_prog_nnow_w' in sdfg.arrays
     assert 's_prog_nnew_w' in sdfg.arrays
     assert 's' not in sdfg.arrays
@@ -106,13 +86,9 @@ end subroutine
 
 
 def test_dbuf_in_kernel_swap_rejected(tmp_path):
-    """A double-buffer kernel that ROTATES the time-level indices itself (an
-    in-kernel ``swap(nnow, nnew)``) cannot be lane-split: the static per-symbol
-    companions (``s_prog_nnow_w`` / ``s_prog_nnew_w``) are bound to one physical
-    buffer each at call time and cannot be re-pointed mid-kernel.  The bridge must
-    reject it loudly rather than silently miscompile -- the time-level rotation
-    belongs in the driver (ICON's ``CALL swap(nnow, nnew)`` lives in
-    mo_nh_stepping, outside solve_nonhydro)."""
+    """In-kernel swap(nnow, nnew) cannot be lane-split: static per-symbol companions are bound to one
+    physical buffer each and can't be re-pointed mid-kernel. Bridge must reject loudly rather than
+    silently miscompile (ICON's swap lives in mo_nh_stepping, outside solve_nonhydro)."""
     src = """
 module dbuf_swap_mod
   implicit none
@@ -150,9 +126,8 @@ end module
 
 
 def test_dbuf_split_multi_member(tmp_path):
-    """Struct with two inner array members.  Each (member, idx_sym)
-    pair gets its own companion -- four total: ``s_prog_nnow_{w,vn}``
-    and ``s_prog_nnew_{w,vn}``."""
+    """Struct with two inner array members: each (member, idx_sym) pair gets its own companion --
+    four total (s_prog_{nnow,nnew}_{w,vn})."""
     src = """
 module dbuf_multi_mod
   implicit none
@@ -228,9 +203,8 @@ end subroutine
 
 
 def test_dbuf_split_three_levels(tmp_path):
-    """Three time-level symbols (nnow, nnew, ntemp).  Each becomes its
-    own companion -- exercises the ``bySym`` map branching beyond two
-    entries."""
+    """Three time-level symbols (nnow, nnew, ntemp), each its own companion -- exercises the bySym
+    map branching beyond two entries."""
     src = """
 module dbuf_three_mod
   implicit none
@@ -299,9 +273,8 @@ end subroutine
 
 
 def test_dbuf_split_pointer_aor(tmp_path):
-    """The split also handles the ``type(t), pointer :: prog(:)``
-    flavour of the array-of-records spine (vs ``allocatable``).
-    Ensures ``allocOrPtrArrayOfRecordsMember`` recognises both."""
+    """Split also handles the `pointer :: prog(:)` AoR spine flavour (vs allocatable) --
+    allocOrPtrArrayOfRecordsMember recognises both."""
     src = """
 module dbuf_ptr_mod
   implicit none
@@ -369,10 +342,8 @@ end subroutine
 
 
 def test_dbuf_split_nested_struct(tmp_path):
-    """Nested-struct access chain: the AoR member lives below one or more
-    plain struct members, e.g. ``s%inner%prog(idx)%w``.  The split must
-    walk the full chain to the dummy root and bake the joined member path
-    into the companion name: ``s_inner_prog_<sym>_<inner_member>``."""
+    """Nested-struct access chain (s%inner%prog(idx)%w): split walks the full chain to the dummy
+    root, bakes the joined path into the companion name (s_inner_prog_<sym>_<member>)."""
     src = """
 module dbuf_nested_mod
   implicit none
@@ -445,10 +416,8 @@ end subroutine
 
 
 def test_dbuf_split_direct_aor_dummy(tmp_path):
-    """The dummy ITSELF is the alloc-array-of-records (no outer struct).
-    Access is ``s(idx)%w`` rather than ``s%X(idx)%w``.  The split must
-    treat the dummy as the AoR root with an empty member path; the
-    companion name is just ``s_<sym>_<inner_member>``."""
+    """Dummy itself is the alloc-array-of-records (no outer struct); s(idx)%w rather than s%X(idx)%w --
+    split treats it as the AoR root, companion name is s_<sym>_<member>."""
     src = """
 module dbuf_direct_mod
   implicit none
@@ -514,14 +483,10 @@ end subroutine
 
 
 def test_dbuf_in_kernel_toggle_alias_unrolled(tmp_path):
-    """ICON ``solve_nh`` time-level toggle: a THIRD index symbol ``nvar`` is
-    reassigned in-kernel (``nvar = nnow`` predictor / ``nvar = nnew`` corrector)
-    inside the ``DO istep = 1, 2`` loop.  ``nvar`` is a pure alias of the stable
-    time levels, so ``hlfir-eliminate-double-buffer-toggle`` fully unrolls that
-    constant-trip loop, substitutes ``nvar`` away (``prog(nvar)`` -> ``prog(nnow)``
-    in the predictor copy, ``prog(nnew)`` in the corrector copy), and the static
-    lane split then handles only the stable ``nnow`` / ``nnew`` -- no runtime-
-    indexed companion, no reject."""
+    """ICON solve_nh time-level toggle: a third index nvar is reassigned in-kernel (nvar=nnow
+    predictor / nvar=nnew corrector) inside DO istep=1,2. hlfir-eliminate-double-buffer-toggle fully
+    unrolls that constant-trip loop and substitutes nvar away, so the static lane split sees only
+    stable nnow/nnew -- no runtime-indexed companion, no reject."""
     src = """
 module dbuf_nvar_mod
   implicit none
@@ -592,14 +557,11 @@ end subroutine
 
 
 def test_dbuf_bind_c_shim_reconstructs_lanes(tmp_path):
-    """The bind(c) shim + binding marshal a double-buffer AoR with ALLOCATABLE
-    inner members (the real ICON ``p_nh%prog(nnow)%rho`` shape) through the C
-    ABI.  The bridge split + in-kernel-toggle elimination produce static lanes
-    ``s_prog_nnow_rho`` / ``s_prog_nnew_rho``; the binding must alias
-    ``c_loc(s%prog(nnow)%rho)`` (NOT the synthetic dummy name) and the shim must
-    allocate ``s%prog(max(nnow,nnew))`` and populate each time-level element
-    from its own C-ABI lane buffer.  Asserts the whole library (binding + shim)
-    links."""
+    """bind(c) shim + binding marshal a double-buffer AoR with ALLOCATABLE inner members (ICON's
+    p_nh%prog(nnow)%rho shape) through the C ABI: static lanes s_prog_{nnow,nnew}_rho, binding
+    aliases c_loc(s%prog(nnow)%rho) (not the synthetic dummy name), shim allocates
+    s%prog(max(nnow,nnew)) and populates each lane from its own C-ABI buffer. Asserts the whole
+    library (binding+shim) links."""
     from dace_fortran.bindings import build_fortran_library
     from dace_fortran.build import make_builder
 
@@ -637,15 +599,15 @@ end module
 """
     src_f90 = tmp_path / 'dbuf_shim_mod.f90'
     src_f90.write_text(src)
-    # Short SDFG name (the bind(c) shim derives ``<name>_dace_finalize`` -- the
-    # test-util xdist suffix would blow Fortran's 63-char identifier limit).
+    # short SDFG name: bind(c) shim derives <name>_dace_finalize, and the xdist test-suffix would
+    # blow Fortran's 63-char identifier limit.
     sdfg = make_builder(src, entry='kernel', name='dbufshim', out_dir=str(tmp_path / 'sdfg')).build()
     assert 's_prog_nnow_rho' in sdfg.arrays and 's_prog_nnew_rho' in sdfg.arrays
 
     lib = build_fortran_library(sdfg, out_dir=str(tmp_path / 'lib'), prelude_sources=[src_f90], bind_c_shim=True)
     shim = __import__('pathlib').Path(lib.bind_c_shim_f90).read_text()
-    # The shim reconstructs the AoR sized for both time levels and populates
-    # each lane from its own buffer -- not the old generic size-1 path.
+    # shim reconstructs the AoR sized for both time levels, populates each lane from its own buffer
+    # (not the old generic size-1 path).
     assert 'allocate(s%prog(max(' in shim
     assert 's%prog(nnow)%rho = s_prog_nnow_rho' in shim
     assert 's%prog(nnew)%rho = s_prog_nnew_rho' in shim
@@ -654,24 +616,14 @@ end module
 
 @pytest.mark.parametrize("jg, kmatch, fires", [(2, 7, True), (2, 8, False), (1, 5, True)])
 def test_dbuf_unroll_spills_tracked_istep_into_nonconstant_if(tmp_path, jg, kmatch, fires):
-    """ICON ``solve_nh`` ``exner_dyn_incr`` shape: inside the unrolled
-    ``DO istep = 1, 2`` double-buffer loop a NON-CONSTANT ``fir.if`` reads the
-    tracked induction slot ``istep`` in its condition
-    (``istep == 2 .AND. ndyn(jg) == kmatch`` -- data-dependent via the array
-    read).  ``EliminateDoubleBufferToggle`` unrolls + substitutes ``istep`` per
-    copy for directly-walked ops, but a data-dependent ``fir.if`` falls back to
-    a bulk ``b.clone()`` that copies nested ``fir.load %istep`` verbatim.
+    """ICON solve_nh exner_dyn_incr shape: a data-dependent fir.if inside the unrolled istep=1,2 loop
+    reads the tracked induction slot istep; EliminateDoubleBufferToggle bulk-clones it via b.clone(),
+    copying nested fir.load %istep verbatim. Before commit 32ca718 istep read a slot the pass never
+    wrote (unpopulated free symbol), silently dropping the istep==2 +100 update; spillTrackedSlots now
+    materialises the tracked value into its memref before the clone.
 
-    Before commit 32ca718 that read a slot the pass never writes: ``istep``
-    surfaced as an UNPOPULATED free symbol passed uninitialised, so the
-    ``istep == 2`` guard never fired and the DUT dropped the istep-2 update
-    (``+100``).  ``spillTrackedSlots`` now materialises each tracked slot's
-    substituted value back into its memref before the structural clone, so the
-    bulk-cloned nested loads read the right value.
-
-    Asserts (a) ``istep`` is fully eliminated from the SDFG free symbols (no
-    stray unpopulated symbol), and (b) the run is BIT-EXACT vs gfortran with the
-    ``istep == 2`` branch firing exactly when ``ndyn(jg) == kmatch``."""
+    Asserts istep is fully eliminated from SDFG free symbols and the run is bit-exact vs gfortran
+    with the istep==2 branch firing exactly when ndyn(jg) == kmatch."""
     src = """
 module dbuf_istep_mod
   implicit none
@@ -729,8 +681,7 @@ end subroutine
 """
     sdfg = build_sdfg(src, tmp_path / 'sdfg', name='kernel', entry='kernel').build()
 
-    # The toggle is eliminated AND the tracked induction slot is fully spilled:
-    # no ``istep`` remains as a free (would-be-uninitialised) symbol.
+    # toggle eliminated AND istep fully spilled: no free (would-be-uninitialised) symbol remains.
     assert not any('istep' in str(s) for s in sdfg.free_symbols), \
         f"istep survived as an unpopulated free symbol: {sorted(str(s) for s in sdfg.free_symbols)}"
 
@@ -757,7 +708,6 @@ end subroutine
                 np.int32(jg), np.int32(kmatch))
 
     np.testing.assert_array_equal(out_sdfg, out_ref)
-    # The istep-2 branch fires exactly when ndyn(jg) == kmatch: closed form
-    # (out overwritten each iter to prog(nnow)+prog(nvar), then +100 if fired).
+    # istep-2 branch fires when ndyn(jg)==kmatch: closed form is prog(nnow)+prog(nvar), +100 if fired.
     expected = w_now + w_new + (100.0 if fires else 0.0)
     np.testing.assert_array_equal(out_sdfg, expected)

@@ -1,30 +1,17 @@
-"""Dycore + sibling-SDFG E2E for a *struct-shaped* external call.
+"""Dycore + sibling-SDFG E2E for a struct-shaped external call.
 
-The architecture proof in [test_dycore_ext_velocity_e2e.py] uses a
-flat-arg inner (`inner_axpy(n, a, x, y)`).  This test scales the same
-pattern to a struct-shaped inner -- the actual velocity_tendencies
-shape at small scale.  The inner kernel takes a single derived-type
-dummy (`type(state_t)`); the outer dycore stand-in takes the same
-type and calls the inner via the C++/C-ABI external boundary.
+Scales the flat-arg architecture proof in test_dycore_ext_velocity_e2e.py (inner_axpy(n,a,x,y))
+to a struct-shaped inner (type(state_t)) -- the velocity_tendencies shape at small scale.
 
-What the new ``Arg(kind='aos', c_abi='per_member_soa')`` enables (and
-what this test pins):
+What Arg(kind='aos', c_abi='per_member_soa') enables and this test pins:
+  * inner's emit_bind_c_shim expands type(state_t) to one c_ptr per member.
+  * outer's emit_call forwards the marshal-expanded per-member SoA flats verbatim to the C
+    call site -- no stack AoS buffer, no pack/unpack copy.
+  * both signatures are derived from the same Fortran state_t through the same pipeline, so
+    they coincide by construction -- no hand-authored shim file.
 
-  * The inner SDFG's :func:`emit_bind_c_shim` entry expands the
-    ``type(state_t)`` dummy to one ``c_ptr`` per member -- two
-    pointers for ``state_t{u(8), v(8)}``.
-  * The outer SDFG's :func:`emit_call`, with the inner registered as
-    ``Arg(kind='aos', c_abi='per_member_soa')``, forwards the
-    marshal-expanded per-member SoA flats *verbatim* to the C call
-    site.  No stack AoS buffer, no pack/unpack copy.
-  * The two signatures coincide by construction: both sides are
-    derived from the same Fortran ``state_t`` through the same
-    pipeline.  No hand-authored shim file.
-
-The dycore (outer) is driven from Fortran via the standard
-``build_fortran_library`` bindings; the reference is a gfortran
-linkage of inner + outer + a ``bind(c)`` driver sharing the same C
-ABI as the SDFG path.
+Outer driven from Fortran via build_fortran_library bindings; reference is a gfortran linkage
+of inner+outer+a bind(c) driver sharing the same C ABI.
 """
 import ctypes
 import shutil
@@ -48,10 +35,8 @@ pytestmark = [
     pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
 ]
 
-# Shared derived-type module.  ``state_t`` has two static-shape array
-# members of the same scalar dtype -- the smallest struct the bind_c
-# shim emits as 2 per-member C-ABI slots, and that the marshal
-# expansion lowers to 2 SoA flats at the call site.
+# state_t: two static-shape array members -- smallest struct exercising the bind_c shim's
+# 2 per-member C-ABI slots and the marshal expansion's 2 SoA flats.
 _TYPES_SRC = """
 module m_state
   use iso_c_binding
@@ -64,9 +49,7 @@ module m_state
 end module
 """
 
-# Inner kernel: increments each ``u(i)`` by ``v(i)`` -- the smallest
-# write-pattern that proves the per-member SoA forwarding lands on
-# the right storage.
+# Inner: u(i) += v(i) -- smallest write-pattern proving per-member SoA forwarding lands right.
 _INNER_KERNEL_SRC = """
 subroutine inner_state(s)
   use m_state
@@ -79,11 +62,8 @@ subroutine inner_state(s)
 end subroutine inner_state
 """
 
-# Outer (dycore) kernel: doubles ``s%u`` before the inner call,
-# halves it after, and calls the inner on the struct.  The pre/post
-# work makes the SDFG-vs-reference comparison sensitive to the
-# external-call wiring (a passthrough wouldn't catch a miswired
-# external).
+# Outer: doubles s%u, calls inner, halves s%u -- pre/post work makes the comparison sensitive
+# to external-call wiring (a passthrough wouldn't catch a miswired external).
 _OUTER_KERNEL_SRC = """
 subroutine outer_state(s)
   use m_state
@@ -106,10 +86,8 @@ subroutine outer_state(s)
 end subroutine outer_state
 """
 
-# Reference C-ABI driver around ``outer_state``.  Same flat layout as
-# the SDFG's emitted ``outer_state_dace`` bindings entry (two
-# pointers, one per member, in declaration order), so ``ctypes`` can
-# drive both libraries identically.
+# Reference driver: same flat layout as the emitted outer_state_dace bindings entry (one
+# pointer per member, declaration order), so ctypes drives both libraries identically.
 _REF_DRIVER_SRC = """
 subroutine outer_state_c(u_p, v_p) bind(c, name="outer_state_c")
   use iso_c_binding
@@ -131,12 +109,9 @@ end subroutine outer_state_c
 
 
 def test_dycore_struct_outer_calls_inner_via_sibling_sdfg(tmp_path: Path):
-    """Outer SDFG with a ``type(state_t)`` arg calls inner SDFG with
-    the same arg shape, via per-member SoA pointers.  No
-    hand-authored shim -- both sides of the C ABI are derived from
-    the same Fortran source, so the marshal-expanded per-leaf args
-    on the outer side coincide bit-for-bit with the bind_c shim's
-    per-member entry on the inner side."""
+    """Outer SDFG with a type(state_t) arg calls inner SDFG with the same arg shape via
+    per-member SoA pointers -- no hand-authored shim; both C-ABI sides derive from the same
+    Fortran source so they coincide bit-for-bit."""
     # ---- 1. Inner SDFG (the velocity_tendencies stand-in) ----
     inner_dir = tmp_path / "inner"
     inner_dir.mkdir(parents=True, exist_ok=True)
@@ -174,10 +149,8 @@ def test_dycore_struct_outer_calls_inner_via_sibling_sdfg(tmp_path: Path):
     assert inner_lib.bind_c_shim_f90 is not None
 
     # ---- 2. Register the inner as a per-member-SoA external ----
-    # ``c_name="inner_state_c"`` is the bind_c_shim entry on the
-    # inner's wrapper ``.so``; ``Arg(kind='aos', c_abi='per_member_soa')``
-    # tells the outer's emit_call to forward the marshal-expanded
-    # leaves verbatim, matching what the shim entry receives.
+    # c_name is the inner's bind_c_shim entry; Arg(kind='aos', c_abi='per_member_soa') tells
+    # emit_call to forward the marshal-expanded leaves verbatim, matching the shim's inputs.
     keep_external(
         "inner_state",
         c_name="inner_state_c",
@@ -238,10 +211,9 @@ def test_dycore_struct_outer_calls_inner_via_sibling_sdfg(tmp_path: Path):
     gfortran_compile_so(ref_so, types_ref, inner_ref, outer_ref, ref_drv, mod_dir=ref_dir)
     ref_lib = ctypes.CDLL(str(ref_so))
 
-    # ---- 5. Drive both libraries through the same ``ctypes`` wiring ----
-    # The auto-generated ``outer_state_c`` (from outer's bind_c_shim)
-    # takes one ``c_ptr`` per member (``s_u_p``, ``s_v_p``); the
-    # hand-written reference driver mirrors that.
+    # ---- 5. Drive both libraries through the same ctypes wiring ----
+    # Auto-generated outer_state_c takes one c_ptr per member; the hand-written reference
+    # driver mirrors that.
     n = 8
     rng = np.random.default_rng(17)
     u_init = np.asfortranarray(rng.standard_normal(n))
@@ -258,9 +230,7 @@ def test_dycore_struct_outer_calls_inner_via_sibling_sdfg(tmp_path: Path):
     sdfg_so.outer_state_c(u_sdfg.ctypes.data, v_sdfg.ctypes.data)
     ref_lib.outer_state_c(u_ref.ctypes.data, v_ref.ctypes.data)
 
-    # Expected per-element walk: outer pre (u <- 2u) -> inner (u <- u+v) ->
-    # outer post (u <- 0.5*u) ==> u_final = 0.5*(2*u + v) = u + 0.5*v.
-    # v is read-only on the path.
+    # outer pre (u<-2u) -> inner (u<-u+v) -> outer post (u<-0.5u) => u_final = u + 0.5*v; v read-only.
     expected_u = u_init + 0.5 * v_init
     expected_v = v_init
     np.testing.assert_allclose(u_ref, expected_u, rtol=1e-12, atol=1e-12)
@@ -270,10 +240,8 @@ def test_dycore_struct_outer_calls_inner_via_sibling_sdfg(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-#  Dynamic-shape (ALLOCATABLE) variant: same outer-calls-inner pattern but
-#  the derived-type members are runtime-sized, so the bind_c_shim path
-#  exercises the per-dim ``int`` extents at the C ABI + ``allocate`` +
-#  element copy-in / copy-out (the new code surface this session added).
+# Dynamic-shape (ALLOCATABLE) variant: same pattern but runtime-sized members exercise the
+# bind_c_shim's per-dim int extents + allocate + element copy-in/copy-out.
 # ---------------------------------------------------------------------------
 
 _DYN_TYPES_SRC = """
@@ -345,14 +313,10 @@ end subroutine outer_state_dyn_c
 
 
 def test_dycore_struct_ext_dynamic_shape_e2e(tmp_path: Path):
-    """Outer SDFG with ``type(state_dyn_t)`` (ALLOCATABLE members)
-    calls inner SDFG with the same arg shape, via per-member SoA
-    pointers + per-dim ``int`` extents at the C ABI.  Mirrors the
-    static-shape test above but exercises the new ``allocate`` +
-    element copy-in / copy-out path the bind_c_shim emits for
-    dynamic-shape members.  The ``dynamic_extents_abi=True`` knob on
-    the inner registration tells the outer's emit_call to prepend
-    the per-dim extents the shim's ``c_f_pointer`` needs."""
+    """Outer SDFG with type(state_dyn_t) (ALLOCATABLE members) calls inner via per-member SoA
+    pointers + per-dim int extents. Mirrors the static-shape test but exercises the allocate +
+    element copy-in/copy-out path; dynamic_extents_abi=True tells emit_call to prepend the
+    per-dim extents the shim's c_f_pointer needs."""
     inner_dir = tmp_path / "inner"
     inner_dir.mkdir(parents=True, exist_ok=True)
     inner_sdfg_dir = inner_dir / "sdfg"
@@ -461,14 +425,10 @@ def test_dycore_struct_ext_dynamic_shape_e2e(tmp_path: Path):
     u_ref = u_init.copy(order="F")
     v_ref = v_init.copy(order="F")
 
-    # SDFG side: the auto-generated outer ``bind_c_shim`` takes, per
-    # dynamic member, a lower-bound then an extent ``int`` ahead of the
-    # pointer -- ``(s_u_lb0, s_u_d0, s_u_p, s_v_lb0, s_v_d0, s_v_p)`` for
-    # the two 1-D ALLOCATABLE members (the shim now reconstructs every
-    # dynamic member at its TRUE bounds, so a non-default lower bound
-    # survives; here both are the default 1).  Reference driver is an
-    # independent hand shim that factored its single shared extent into
-    # one leading ``n``; call each lib with the signature it exports.
+    # SDFG side: outer's bind_c_shim takes per dynamic member (lb, extent, ptr) --
+    # (s_u_lb0, s_u_d0, s_u_p, s_v_lb0, s_v_d0, s_v_p) -- since the shim reconstructs each
+    # member at its TRUE bounds (here both default to 1). Reference driver instead factors
+    # the single shared extent into one leading n; call each lib with its own signature.
     sdfg_fn = sdfg_so.outer_state_dyn_c
     sdfg_fn.restype = None
     sdfg_fn.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
@@ -487,40 +447,21 @@ def test_dycore_struct_ext_dynamic_shape_e2e(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-#  LOGICAL kind variants -- exercise the source_logical_kind bridge for
-#  struct members so the wrapper declares the correct width.
+# LOGICAL kind variants -- exercise source_logical_kind bridging for struct members.
 #
-#  The two variants differ only in the LOGICAL kind of the struct's
-#  ``flag`` member:
+#   * LOGICAL :: flag (default kind=4): wrapper bridges through a logical(c_bool),
+#     allocatable, target scratch -- SDFG bool slot must NOT alias the wider 4-byte LOGICAL
+#     field directly (aliasing caused the "free(): invalid next size" glibc crash in ICON e2e).
+#   * LOGICAL(c_bool) :: flag (kind=1): existing aliasable c_f_pointer path, zero-copy.
 #
-#    * ``LOGICAL :: flag``         -- default Fortran kind (KIND=4 on
-#      gfortran), source_logical_kind=4 -> wrapper bridges through a
-#      ``logical(c_bool), allocatable, target`` scratch with Fortran-
-#      intrinsic kind conversion.  Pins the velocity-style boundary
-#      where the SDFG-side ``bool`` slot must NOT alias the wider
-#      4-byte LOGICAL field directly (the ``free(): invalid next
-#      size`` glibc diagnostic the ICON e2e surfaced when it did).
-#
-#    * ``LOGICAL(c_bool) :: flag`` -- 1-byte kind, source_logical_kind=1
-#      -> wrapper takes the existing aliasable c_f_pointer path; no
-#      bridge needed.  Confirms the kind=1 fast path stays zero-copy.
-#
-#  Kernel behaviour: if ``flag`` is true, the inner doubles ``u``; the
-#  outer pre-multiplies by 3, calls inner, post-multiplies by 0.5.
-#  Reference path runs the un-transformed Fortran via gfortran with
-#  the same data + flag inputs.  Bit-exact numerical comparison on
-#  both ``flag=.TRUE.`` and ``flag=.FALSE.`` keeps the SDFG-side
-#  truthiness honest.
+# Kernel: if flag, inner doubles u; outer pre-multiplies by 3, calls inner, post-multiplies
+# by 0.5. Checked bit-exact against gfortran for both flag=.TRUE. and flag=.FALSE.
 # ---------------------------------------------------------------------------
 
 
 def _logical_test_sources(logical_decl: str, suffix: str) -> dict:
-    """Render the type / kernels / reference-driver sources for one
-    LOGICAL kind variant.  ``logical_decl`` is the Fortran type-decl
-    line for the ``flag`` member (``logical`` for default kind,
-    ``logical(c_bool)`` for the C-interop kind); ``suffix`` brands
-    type / subroutine / bind(c) names so the two variants link side
-    by side without symbol clashes."""
+    """Render type/kernel/reference-driver sources for one LOGICAL kind variant. suffix brands
+    type/subroutine/bind(c) names so the two variants link side by side without symbol clashes."""
     s = suffix
     return dict(
         types=f"""
@@ -717,20 +658,15 @@ def _run_logical_kind_variant(tmp_path: Path, suffix: str, logical_decl: str, me
 
 
 def test_dycore_struct_ext_logical_default_kind_e2e(tmp_path: Path):
-    """Variant a) -- struct member ``LOGICAL :: flag`` (default Fortran
-    kind, 4 bytes on gfortran).  The wrapper goes through the
-    ``source_logical_kind > 1`` width-bridging scratch path
-    (declared ``logical(c_bool), allocatable, target ::``, allocated
-    + element copy with Fortran-intrinsic kind conversion before /
-    after the SDFG call)."""
+    """Variant a) LOGICAL :: flag (default kind, 4 bytes). Wrapper goes through the
+    source_logical_kind > 1 width-bridging scratch (allocatable c_bool target, element copy
+    with kind conversion before/after the SDFG call)."""
     _run_logical_kind_variant(tmp_path, suffix="def", logical_decl="logical", member_fortran_type="logical")
 
 
 def test_dycore_struct_ext_logical_cbool_e2e(tmp_path: Path):
-    """Variant b) -- struct member ``LOGICAL(c_bool) :: flag`` (1-byte
-    C-interoperable kind).  The wrapper stays on the zero-copy
-    aliasable path (``source_logical_kind == 1`` short-circuits the
-    bridge); SDFG-side ``bool *`` aliases the source slot directly."""
+    """Variant b) LOGICAL(c_bool) :: flag (1-byte kind). Wrapper stays on the zero-copy aliasable
+    path (source_logical_kind == 1 short-circuits the bridge); SDFG bool* aliases the source directly."""
     _run_logical_kind_variant(tmp_path,
                               suffix="cbool",
                               logical_decl="logical(c_bool)",

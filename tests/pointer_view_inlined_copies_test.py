@@ -1,27 +1,11 @@
-"""Regression: two hlfir-inlined copies of a POINTER-rebind local must keep
-their own rebind targets.
-
-``exchange_data_r3d``'s ``send_ptr => recv`` inlined once per call site binds a
-DIFFERENT ``recv`` per copy, but downstream keying is name-based end to end
-(VarInfos land in a ``{fortran_name: v}`` dict; memlets carry the extracted
-short name), so same-named copies collapsed last-wins.  Worse, the pointer-view
-source trace stopped at the inlined DUMMY's declare, recording a
-``view_source`` (``recv``) that has no SDFG descriptor -- the reads then
-surfaced as bare View AccessNodes and the whole solve_nh SDFG failed
-validation with "Ambiguous or invalid edge to/from a View access node".
-
-Two-part fix under test:
-
-* ``prepareExtractionState`` suffixes the 2nd+ ``pointer_view``-tagged declare
-  of each uniq_name with ``_pv<N>`` ON THE OP, so every consumer that resolves
-  an access chain to its declare sees a distinct per-copy name, and
-* the pointer-view source walk peels through inlined-dummy declares (a
-  declare whose memref chains onward) to ROOT storage, so ``view_source``
-  lands on a registered descriptor.
-
-The kernel below inlines ``bump`` twice; each copy rebinds ``p`` to a
-different actual.  Correct lowering increments BOTH arrays; the pre-fix
-collapse either fails validation or links both copies' reads to one source.
+"""Regression: two hlfir-inlined copies of a POINTER-rebind local must keep their own
+rebind targets. Same-named copies from different call sites collapsed last-wins
+(name-based keying end to end) and the pointer-view source trace stopped at the
+inlined dummy's declare, so ``view_source`` had no SDFG descriptor -> bare View
+AccessNodes -> validation failure. Fix: (1) suffix the 2nd+ pointer_view declare
+with ``_pv<N>`` per copy, (2) peel through inlined-dummy declares to root storage.
+Kernel inlines ``bump`` twice with different rebind targets; correct lowering
+increments BOTH arrays.
 """
 from pathlib import Path
 

@@ -1,15 +1,9 @@
 """Closed-form integer arithmetic inside array subscripts.
 
-Flang lowers ``arr(..., nlev-1, ...)`` as ``arith.subi %nlev, %c1``
-+ ``fir.convert`` before handing the value to ``hlfir.designate``.
-``buildIndexExpr`` has to recognise those integer arith ops  --  without
-it the subscript surfaces as ``?`` in the memlet and DaCe picks up
-``?`` as a free symbol at call time (``KeyError: '?'`` from the
-argslist resolver).
-
-These tests are intentionally minimal  --  one pattern per test  --  so a
-regression immediately points at the arith op that broke.
-"""
+Flang lowers ``arr(..., nlev-1, ...)`` as ``arith.subi``+``fir.convert`` before
+``hlfir.designate``; ``buildIndexExpr`` must recognise these ops or the
+subscript surfaces as ``?`` (``KeyError: '?'`` from the argslist resolver at
+call time). One pattern per test so a regression points at the exact arith op."""
 
 import shutil
 import subprocess
@@ -42,9 +36,8 @@ def _f2py_ref(src: str, out_dir: Path, name: str):
 
 
 def test_literal_integer_subscript(tmp_path: Path):
-    """``arr(i, 1, jb)``  --  a literal integer in the mid dim.  Flang
-    emits this as a plain ``arith.constant 1 : index``, which
-    ``buildIndexExpr`` must render as ``1``."""
+    """``arr(i, 1, jb)`` -- literal integer in the mid dim. Flang emits a plain
+    ``arith.constant 1 : index``, which ``buildIndexExpr`` must render as ``1``."""
     src = """
 subroutine lit_mid(a, b, n, m, p)
   implicit none
@@ -74,8 +67,7 @@ end subroutine lit_mid
 
 
 def test_subi_in_subscript(tmp_path: Path):
-    """``arr(i, k-1, jb)``  --  subtract-from-loop-iter.  Exercises the
-    ``arith.subi`` branch of ``buildIndexExpr``."""
+    """``arr(i, k-1, jb)`` -- subtract-from-loop-iter, exercises the ``arith.subi`` branch."""
     src = """
 subroutine sub_idx(a, b, n, m)
   implicit none
@@ -105,9 +97,8 @@ end subroutine sub_idx
 
 
 def test_subi_from_symbol_in_subscript(tmp_path: Path):
-    """``arr(i, nlev-1)``  --  subtract-constant-from-symbol.  The
-    ``nlev`` dummy's presence in the subscript (not just as a loop
-    bound) is the pattern velocity loopnest 5 hits."""
+    """``arr(i, nlev-1)`` -- subtract-constant-from-symbol; nlev appears in the
+    subscript itself (not just a loop bound), the pattern velocity loopnest 5 hits."""
     src = """
 subroutine sym_sub(a, b, nlev, n)
   implicit none
@@ -135,8 +126,7 @@ end subroutine sym_sub
 
 
 def test_addi_in_subscript(tmp_path: Path):
-    """``arr(i+1, k)``  --  add-constant-to-loop-iter.  Sibling of the
-    subi case; guards the ``arith.addi`` branch."""
+    """``arr(i+1, k)`` -- add-constant-to-loop-iter, guards the ``arith.addi`` branch."""
     src = """
 subroutine add_idx(a, b, n, m)
   implicit none

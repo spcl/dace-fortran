@@ -1,19 +1,14 @@
 """Scatter self-alias eval-order (audit crit#8).
 
-``a(idx_w) = a(idx_r)`` is a vector-subscript scatter whose RHS is a gather
-off the SAME array.  Fortran requires the whole RHS to be evaluated into a
-temporary BEFORE any LHS element is written; otherwise an already-written
-element feeds a later read and the result is wrong.
+``a(idx_w) = a(idx_r)`` is a vector-subscript scatter whose RHS gathers off the
+SAME array; Fortran requires the whole RHS evaluated into a temp before any LHS
+write, else an already-written element feeds a later read.  The scatter pass
+(``ExpandVectorSubscriptScatter``) materialises a ``<dst>_scatter_<id>`` temp when
+the LHS root aliases the RHS gather root -- the root must be the DATA array
+(``a``), not the index array, or no temp is emitted and the scatter miscompiles.
 
-The scatter pass (``ExpandVectorSubscriptScatter``) materialises a
-``<dst>_scatter_<id>`` eval-order temp exactly when the LHS root and the RHS
-gather root alias.  The RHS root must be the DATA array (``a``), not the index
-array (``idx_r``) -- if the walk picks the index array the roots never match,
-no temp is emitted, and the sequential scatter miscompiles.
-
-Deterministic repro: a rotate.  idx_w=[2,3,4,1], idx_r=[1,2,3,4] means
-``a(2)=a1, a(3)=a2, a(4)=a3, a(1)=a4`` (old values) -> a rotate.  Without the
-temp the sequential writes cascade the first value into every slot.
+Repro: a rotate (idx_w=[2,3,4,1], idx_r=[1,2,3,4]).  Without the temp the
+sequential writes cascade the first value into every slot.
 """
 from pathlib import Path
 

@@ -1,13 +1,8 @@
-"""Source-level body inlining of a named subprogram resolves the ICON halo
-``sync_patch_array`` ``typ``-ladder pointer rebind.
-
-``sync_patch_array(typ, p_patch, arr)`` rebinds ``p_pat`` to one of
-``p_patch%comm_pat_c`` / ``comm_pat_e`` selected by a runtime ``typ``; the bridge's
-View model cannot lower a runtime-selected rebind (``hlfir-rewrite-pointer-assigns``
-rejects it as an interleaved rebind).  But every call site passes a COMPILE-TIME
-constant ``typ`` -- so inlining the wrapper into its caller at the SOURCE level lets
-the existing ``const_eval`` + ``prune_branches`` fold the ladder to a single
-``p_pat => p_patch%comm_pat_c`` rebind, which lowers as an ordinary single source.
+"""Source-level inlining resolves the ICON halo ``sync_patch_array`` ``typ``-ladder pointer
+rebind: the bridge's View model can't lower a runtime-selected rebind (rejected as an
+interleaved rebind), but every call site passes a compile-time ``typ`` -- so inlining the
+wrapper at the source level lets ``const_eval`` + ``prune_branches`` fold the ladder to a
+single ordinary rebind.
 """
 import pytest
 
@@ -74,16 +69,14 @@ def _inline_and_fold(src, targets):
 
 
 def test_inline_folds_typ_ladder_to_single_rebind():
-    """After inlining + the existing const-fold/prune, the runtime ``typ`` ladder
-    is gone and exactly the ``typ==1`` arm's rebind survives in the caller."""
+    """After inlining + const-fold/prune, the runtime ``typ`` ladder is gone and only the ``typ==1`` arm's rebind survives."""
     prog, n = _inline_and_fold(_LADDER_SRC, ["sync_patch_array"])
     assert n == 1
     body = str(prog)
     caller = body.split("SUBROUTINE dycore_step")[1].split("END SUBROUTINE dycore_step")[0]
     # the wrapper's body is now in the caller, its local renamed and declared
     assert "=> p_patch % comm_pat_c" in caller
-    # the ladder collapsed: no surviving IF on the (constant-folded) typ, and the
-    # typ==2 arm is gone
+    # ladder collapsed: no surviving IF on the constant-folded typ, and the typ==2 arm is gone
     assert "comm_pat_e" not in caller
     assert "1 == 1" not in caller and "1 == 2" not in caller
     # the wrapper call is gone; the inner exchange call survives (inlined body)
@@ -118,10 +111,9 @@ end subroutine
     assert "CALL inner" not in caller
 
 
-#: The real ICON ``sync_patch_array_mult`` shape: a 2-level wrapper chain
-#: (``f3din`` -> ``mixprec``) that forwards OPTIONAL fields ``f2``/``f3``, with the
-#: ``typ`` ladder and an unconditional ``SIZE(fN)`` accumulation inside a runtime
-#: MPI guard.  The caller omits ``f3`` (an optional) and passes a constant ``typ``.
+#: Real ICON ``sync_patch_array_mult`` shape: 2-level wrapper chain (``f3din`` -> ``mixprec``)
+#: forwarding OPTIONAL fields ``f2``/``f3`` with a ``typ`` ladder + ``SIZE(fN)`` accumulation
+#: inside a runtime MPI guard. Caller omits ``f3`` and passes a constant ``typ``.
 _MULT_SRC = """
 module mo_comm
   implicit none
@@ -185,9 +177,8 @@ end subroutine
 
 
 def test_two_level_chain_with_optionals_folds():
-    """The 2-level wrapper chain flattens fully: the ``typ`` ladder folds to the
-    single live arm, the OMITTED optional ``f3`` becomes ``SIZE(f3)->0`` and its
-    forwarded ``recv3=f3`` actual is dropped -- no absent dummy survives."""
+    """2-level wrapper chain flattens fully: ``typ`` ladder folds to the single live arm, the
+    OMITTED optional ``f3`` becomes ``SIZE(f3)->0``, and its forwarded ``recv3=f3`` actual is dropped."""
     prog, n = _inline_and_fold(_MULT_SRC, ["sync_mult_f3din", "sync_mult_mixprec"])
     assert n == 2, "both wrapper levels must inline"
     caller = str(prog).split("SUBROUTINE dycore_step")[1].split("END SUBROUTINE dycore_step")[0]
@@ -199,11 +190,9 @@ def test_two_level_chain_with_optionals_folds():
 
 
 def test_call_passing_positional_absent_optional_is_dropped():
-    """A wrapper whose body calls a debug routine passing an OMITTED optional
-    POSITIONALLY (``check(typ, f3)`` with ``f3`` absent) -- which cannot be dropped
-    as a keyword actual -- is dropped as a whole statement (dead in this
-    specialization), so the wrapper still inlines cleanly.  This is the ICON
-    ``check_patch_array_3d_dp(typ, p_patch, f3dinN_dp, ...)`` shape."""
+    """A call passing an OMITTED optional POSITIONALLY (``check(typ, f3)``) can't be dropped as
+    a keyword actual, so the whole statement is dropped instead (dead in this specialization).
+    ICON ``check_patch_array_3d_dp(typ, p_patch, f3dinN_dp, ...)`` shape."""
     src = """
 module m
   implicit none
@@ -238,9 +227,8 @@ end subroutine
     assert "a(1) = a(1) + 1.0" in caller.replace("  ", " ")
 
 
-#: The single-field ICON path: ``sync_patch_array_3d`` passes the comm pattern as
-#: ``comm_pat_of_type(p_patch, typ)`` -- a FUNCTION (pointer result) with the same
-#: ``typ`` ladder, called inside another call's argument list (a ``Part_Ref``).
+#: Single-field ICON path: ``sync_patch_array_3d`` passes the comm pattern as a FUNCTION
+#: (pointer result) call ``comm_pat_of_type(p_patch, typ)`` with the same ``typ`` ladder, inside another call's arg list (a ``Part_Ref``).
 _FUNC_SRC = """
 module mo_comm
   implicit none
@@ -289,12 +277,10 @@ end subroutine
 
 
 def test_keyword_name_not_substituted_when_forwarding_same_named_dummy():
-    """A wrapper forwarding a dummy to a NON-target call by keyword
-    (``leaf(typ=typ, lacc=.TRUE.)``) where the keyword name equals the dummy name:
-    inlining the wrapper must substitute only the VALUE (right of ``=``), never the
-    keyword (left) -- else the call becomes ``leaf(2 = 2, ...)`` and fails to parse.
-    This is the exact shape of ICON's ``sync_patch_array_mult_f3din_dp`` forwarding
-    ``typ``/``lacc``/``opt_varname`` to ``..._mixprec``.
+    """Forwarding a dummy to a NON-target call by keyword where the keyword name equals the dummy
+    name (``leaf(typ=typ, ...)``): inlining must substitute only the VALUE (right of ``=``),
+    never the keyword (left), else the call becomes ``leaf(2 = 2, ...)`` and fails to parse.
+    ICON's ``sync_patch_array_mult_f3din_dp`` -> ``..._mixprec`` shape.
     """
     src = """
 module m
@@ -327,9 +313,8 @@ end subroutine
 
 
 def test_function_result_inline_folds_ladder():
-    """``comm_pat_of_type`` (a pointer-result FUNCTION used as an actual argument)
-    hoists into the caller: the body assigns a result temp, the ladder folds to the
-    constant-``typ`` arm, and the call argument becomes that single-source temp."""
+    """``comm_pat_of_type`` (pointer-result FUNCTION used as an actual arg) hoists into the
+    caller: body assigns a result temp, ladder folds to the constant-``typ`` arm."""
     prog = parse_program(_FUNC_SRC)
     inline_named_subprograms(prog, ["sync_patch_array_3d"])
     nf = inline_named_functions(prog, ["comm_pat_of_type"])
@@ -365,26 +350,22 @@ def test_two_level_chain_with_optionals_lowers(tmp_path):
 
 @pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 def test_inlined_ladder_lowers_to_sdfg(tmp_path):
-    """End-to-end: the inlined+folded source lowers to an SDFG (the raw ladder does
-    not -- it is rejected as an interleaved rebind)."""
+    """End-to-end: the inlined+folded source lowers to an SDFG (the raw ladder does not -- rejected as an interleaved rebind)."""
     prog, _ = _inline_and_fold(_LADDER_SRC, ["sync_patch_array"])
     sdfg = build_sdfg(str(prog), tmp_path / "sdfg", name="ladder_inl", entry="dycore_step").build()
     assert sdfg.number_of_nodes() >= 1
 
 
 # --------------------------------------------------------------------------
-# Forwarded caller-optional: PRESENT() must NOT fold when the actual is the
-# caller's own OPTIONAL dummy (its presence is a runtime property).
+# Forwarded caller-optional: PRESENT() must NOT fold when the actual is the caller's own
+# OPTIONAL dummy (presence is a runtime property).
 # --------------------------------------------------------------------------
 
-# ``outer`` forwards its OWN optional ``opt_start_level`` positionally into
-# ``inner``'s optional dummy, exactly like ICON's
-# ``div_oce_3D_mlevels`` -> ``div_oce_3D_mlevels_onTriangles``.  ``inner``
-# defaults ``start_level`` to 1 when the optional is absent.  Specializing
-# ``inner`` into ``outer`` must KEEP the ``IF (PRESENT(...)) ... ELSE
-# start_level = 1`` guard: folding it ``.TRUE.`` deletes the default, and the
-# absent scalar then reads 0 -> vertical loop starts at level 0 -> out-of-bounds
-# read with silently wrong results.
+# ``outer`` forwards its own optional ``opt_start_level`` positionally into ``inner``'s
+# optional dummy (ICON's ``div_oce_3D_mlevels`` -> ``..._onTriangles`` shape). Specializing
+# ``inner`` into ``outer`` must KEEP the ``IF (PRESENT(...)) ... ELSE start_level = 1`` guard:
+# folding it to ``.TRUE.`` deletes the default, so the absent scalar reads 0 -> loop starts at
+# level 0 -> silently wrong out-of-bounds results.
 _FORWARDED_OPTIONAL_SRC = """
 module mo_fwd
   implicit none
@@ -423,8 +404,7 @@ end subroutine
 
 
 def test_forwarded_caller_optional_keeps_present_guard():
-    """A dummy bound to the caller's own optional keeps its ``PRESENT`` guard
-    when inlined -- its presence is only known at the caller's runtime."""
+    """Dummy bound to the caller's own optional keeps its ``PRESENT`` guard when inlined -- presence is only known at the caller's runtime."""
     prog = parse_program(_FORWARDED_OPTIONAL_SRC)
     inline_named_subprograms(prog, ["inner"])
     outer = str(prog).split("SUBROUTINE outer")[1].split("END SUBROUTINE outer")[0].upper()
@@ -437,14 +417,12 @@ def test_forwarded_caller_optional_keeps_present_guard():
 
 @pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 def test_forwarded_optional_absent_defaults_to_one_e2e(tmp_path):
-    """End-to-end: with the optional omitted at the ROOT, both inlining levels
-    fold to ``start_level = 1``, so every element is written.  A ``.TRUE.`` misfold
-    at the ``outer -> inner`` boundary would instead read the absent scalar as 0 and
-    start the loop at level 0 -- out of bounds (the ICON ocean level-0 bug)."""
+    """End-to-end: optional omitted at the ROOT, both inlining levels fold to ``start_level = 1``
+    so every element is written. A ``.TRUE.`` misfold at the ``outer->inner`` boundary would
+    instead read the absent scalar as 0 -> loop starts at level 0 (the ICON ocean level-0 bug)."""
     import numpy as np
     prog = parse_program(_FORWARDED_OPTIONAL_SRC)
-    # Inline inner into outer (guard preserved by the fix), then outer into root
-    # (where the optional is statically absent -> guard folds to the ELSE default).
+    # inline inner into outer (guard preserved), then outer into root (optional statically absent -> folds to ELSE default)
     inline_named_subprograms(prog, ["inner", "outer"])
     prog = optimizations.const_eval_nodes(prog)
     prog = pruning.prune_branches(prog)

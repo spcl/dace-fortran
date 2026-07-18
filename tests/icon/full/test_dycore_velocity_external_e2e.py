@@ -1,55 +1,20 @@
 """Dycore + external velocity_tendencies E2E (xfail anchor pre-v2).
 
-This is the velocity-scale, struct-shaped E2E of the dycore +
-external-SDFG pattern.  The architecture proof at small scale
-(``test_dycore_struct_ext_e2e.py`` -- ``state_t{u, v}`` + per-member
-SoA) is generalised here to the actual ICON ``velocity_tendencies``
-signature (five derived types -- ``t_nh_prog`` / ``t_patch`` /
-``t_int_state`` / ``t_nh_metrics`` / ``t_nh_diag`` -- plus three
-naked rank-3 arrays plus scalars).
+Velocity-scale, struct-shaped generalisation of the small-scale architecture proof
+(``test_dycore_struct_ext_e2e.py``) to ICON's real ``velocity_tendencies`` signature
+(5 derived types + 3 rank-3 arrays + scalars).
 
-Architecture under test:
+Architecture: (1) inner SDFG built from ``velocity_full.f90`` with
+``bind_c_shim=True`` exposing ``velocity_tendencies_c`` (one ``c_ptr`` per marshal
+leaf); (2) outer ``dycore_wrapper`` SDFG registers ``velocity_tendencies`` as
+``keep_external`` with ``Arg(kind='aos', c_abi='per_member_soa')`` per derived-type
+arg, forwarding the marshal-expanded SoA pointers directly; (3) caller drives the
+outer via standard bindings, a flat-C-ABI shim retargeting ``run_velocity_flat_c`` to
+``dycore_wrapper_dace``; (4) reference is the gfortran-compiled untransformed source.
 
-  1. **Inner SDFG** (the velocity stand-in): built from
-     ``velocity_full.f90`` with
-     ``build_fortran_library(..., bind_c_shim=True)`` --
-     ``libvelocity_inner_wrap.so`` exposes ``velocity_tendencies_c``
-     with one ``c_ptr`` per leaf of the marshal expansion (the
-     ``bind_c_shim`` emits the per-member C ABI for each derived
-     type, matching what the outer's ``emit_call`` will forward).
-
-  2. **Outer SDFG** (the dycore stand-in): a thin
-     ``dycore_wrapper`` subroutine that takes the same arg list as
-     ``velocity_tendencies`` and just calls it via an ``interface``
-     block.  ``velocity_tendencies`` registers as
-     ``keep_external(c_name='velocity_tendencies_c',
-     libraries=[inner.so_path])`` with each derived-type arg
-     declared ``Arg(kind='aos', c_abi='per_member_soa')`` -- the
-     per-member SoA pointers the marshal expansion produces forward
-     directly into ``velocity_tendencies_c``, no AoS struct buffer.
-
-  3. **Caller**: drives the outer via standard
-     ``build_fortran_library`` bindings (``dycore_wrapper_dace``
-     entry); a flat-C-ABI shim derived from the proven
-     ``run_velocity_flat_c`` swaps the target call from
-     ``velocity_tendencies`` to ``dycore_wrapper_dace`` so the same
-     ``ctypes`` driver runs both paths.
-
-  4. **Reference**: the existing gfortran reference of the
-     un-transformed ``velocity_tendencies`` + ``run_velocity_flat_c``.
-
-**Why xfail today**: ``hlfir-marshal-external-structs`` v2.1
-(``4de6c7a``) covers nested-record members but explicitly does not
-cover *box / pointer / allocatable / dynamic-shape* members --
-exactly what ``t_nh_prog`` / ``t_patch`` / etc. carry.  The bridge
-build of the outer SDFG therefore raises in ``emit_call`` with the
-diagnostic "``'aos' arg #0 has no marshalling group``" -- the
-same boundary anchored by
-``test_v2_aos_external_with_nested_struct``'s xfail-flipped peer
-``test_v2_aos_external_diagnostic_mentions_inline_external``.  When
-v2 box / allocatable expansion lands this test flips green; the
-``xfail(strict=True)`` makes the flip visible.
-"""
+xfail: ``hlfir-marshal-external-structs`` v2.1 doesn't cover box/pointer/allocatable
+members (what ``t_nh_prog``/``t_patch`` carry), so ``emit_call`` raises "'aos' arg #0
+has no marshalling group".  Flips green when v2 box/allocatable expansion lands."""
 import ctypes
 import re
 import shutil
@@ -70,17 +35,10 @@ from dace_fortran.bindings import (
     build_fortran_library,
 )
 
-# ``-O0 -fno-fast-math -ffp-contract=off`` matched across every build
-# layer so the SDFG path's arithmetic order matches the gfortran
-# reference exactly.  ``_O0_FFLAGS`` overrides
-# ``build_fortran_library`` 's ``-O3 -frounding-math`` default for
-# both the inner velocity wrapper and the outer dycore wrapper;
-# ``_O0_CXX_FLAGS`` overrides DaCe's ``compiler.cpu.args`` default
-# of ``-O3 -march=native -ffast-math`` which would otherwise
-# contract ``a*b + c`` into FMA and add ~1 ULP per element to the
-# diff.  Pinned to expose any genuine numerical error in the
-# external-call routing -- the e2e is a regression gate, not a
-# tolerance-shopping target.
+# ``-O0 -fno-fast-math -ffp-contract=off`` matched across every build layer so the
+# SDFG path's arithmetic order matches gfortran exactly.  Without this DaCe's default
+# ``-O3 -ffast-math`` would contract ``a*b+c`` into FMA and add ~1 ULP/element -- the
+# e2e is a regression gate, not a tolerance-shopping target.
 _O0_FFLAGS = ("-O0", "-fno-fast-math", "-ffp-contract=off", "-ffree-line-length-none")
 _O0_CXX_FLAGS = ("-O0", "-fno-fast-math", "-ffp-contract=off", "-fPIC", "-Wno-unused-parameter", "-Wno-unused-label")
 from dace_fortran.bindings.fortran_interface import build_auto_interface
@@ -95,20 +53,10 @@ _HERE = Path(__file__).resolve().parent
 _VELOCITY_PATH = _HERE / "velocity_full.f90"
 _CALLER_PATH = _HERE / "velocity_full_caller.f90"
 
-# Module globals the inner ``velocity_tendencies_dace`` kernel
-# reads.  Each tuple is ``(module, member, dtype, rank)``: the
-# inner ``bind_c_shim`` exposes them as additional C ABI args, and
-# the outer ``emit_call`` reads ``__<mod>_MOD_<member>`` from the
-# OUTER library's BSS (which its wrapper has already populated
-# from ``run_velocity_flat_sdfg`` 's caller args via the existing
-# ``use ...`` import path).  Without this, gfortran's per-library
-# module BSS leaves the inner copy at zero -- the diagnostic ASan
-# report for the velocity dycore + external e2e xfail traced the
-# kernel's ``new double[expr=nproma*..]`` to a 1-byte sentinel for
-# exactly this reason.  Order = the
-# ``_velocity_iface.module_symbol_sources`` keys; the dtype +
-# rank columns match each module member's declaration in
-# ``velocity_full.f90``.
+# Module globals the inner kernel reads: (module, member, dtype, rank).  Each library
+# has its own BSS under gfortran, so without forwarding these the inner copy stays
+# zero -- traced via ASan to a 1-byte sentinel in a ``new double[]``.  Order =
+# ``_velocity_iface.module_symbol_sources`` keys.
 _VELOCITY_MODULE_FORWARD = (
     ("mo_parallel_config", "nproma", "int32", 0),
     ("mo_run_config", "timers_level", "int32", 0),
@@ -121,22 +69,11 @@ _VELOCITY_MODULE_FORWARD = (
     ("mo_timer", "timer_solve_nh_veltend", "int32", 0),
 )
 
-# Two side-effecting "sync" externals exercise the rest of the
-# external-call surface: (a) a plain Fortran subroutine that the
-# dycore wrapper CALLs directly (no ``bind(c)``), bridged into the
-# SDFG via a small Fortran ``bind(c)`` shim that the registration
-# points at; (b) a C++ implementation registered the same way.
-#
-# The bodies print to stderr with a unique marker so the test can
-# assert -- by tailing the subprocess child log -- that BOTH the
-# Fortran-path and the C++-path externals actually fired (the bridge
-# is not allowed to optimise ``keep_external`` calls away; the prints
-# make a missed routing visible immediately).  Both syncs leave the
-# array unchanged so the numerical comparison against the gfortran
-# reference is unaffected (the reference path doesn't go through the
-# dycore wrapper and thus doesn't run the syncs -- the SDFG path's
-# extra "no-op" external calls are observed via the stderr markers,
-# not the numerical output).
+# Two side-effecting "sync" externals exercise the rest of the external-call surface:
+# (a) plain Fortran (no bind(c)) the wrapper CALLs directly, bridged via a bind(c) shim;
+# (b) a C++ impl registered the same way.  Both print a unique stderr marker so the test
+# can confirm routing fired (bridge must not optimise ``keep_external`` away); both leave
+# the array unchanged so the numerical comparison is unaffected.
 _SYNC_FORTRAN_SRC = """
 module mo_sync_helper
   use iso_c_binding
@@ -218,10 +155,8 @@ contains
 end module mo_sync_helper
 """
 
-# C++ side of the sync external.  Reads + writes nothing through the
-# pointer (so it can't perturb the numerical comparison) but does
-# print a unique stderr marker the test can grep for.  Kept tiny so
-# the build cost is negligible.
+# C++ side of the sync external: reads/writes nothing (can't perturb the numerical
+# comparison), just prints a unique stderr marker the test can grep for.
 _SYNC_CPP_SRC = """
 #include <cstdio>
 
@@ -235,17 +170,11 @@ extern "C" void sync_patch_cpp(int tag, int d0, int d1, int d2,
 }
 """
 
-# Dycore stand-in: a passthrough wrapper with the exact
-# velocity_tendencies signature.  The bridge sees ``call
-# velocity_tendencies(...)``; with the callee registered as
-# ``keep_external``, ``hlfir-marshal-external-structs`` is asked to
-# expand each derived-type arg into its per-member leaves, then
-# ``emit_call`` emits the C call directly into
-# ``velocity_tendencies_c`` exported by the inner SDFG.  The wrapper
-# also CALLs ``sync_patch_array`` (Fortran-no-bind-c) and
-# ``sync_patch_cpp_via`` (Fortran wrapper forwarding to a C++ impl)
-# so the SDFG exercises three distinct external-call shapes in one
-# kernel.
+# Dycore stand-in: passthrough wrapper with the exact velocity_tendencies signature.
+# Registered as ``keep_external`` so ``hlfir-marshal-external-structs`` expands each
+# derived-type arg and ``emit_call`` routes directly into ``velocity_tendencies_c``.
+# Also CALLs the Fortran-no-bind-c sync and the C++-via-Fortran sync, exercising three
+# distinct external-call shapes in one kernel.
 _DYCORE_WRAPPER_SRC = """
 module mo_dycore_wrapper
   use iso_c_binding
@@ -299,10 +228,9 @@ def _arr3(name, intent):
                        struct_type=None)
 
 
-# Same ``OriginalInterface`` shape ``test_velocity_full_bindings_e2e``
-# uses for the inner velocity binding; reused here for both the inner
-# (entry = ``velocity_tendencies``) and the outer (entry =
-# ``dycore_wrapper`` -- same arg list, the passthrough wraps it).
+# Same ``OriginalInterface`` shape as ``test_velocity_full_bindings_e2e``'s inner
+# binding; reused for both inner (entry=velocity_tendencies) and outer
+# (entry=dycore_wrapper, same arg list).
 def _velocity_iface(entry: str) -> OriginalInterface:
     return OriginalInterface(
         entry=entry,
@@ -343,12 +271,10 @@ def _velocity_iface(entry: str) -> OriginalInterface:
 
 
 def _make_sdfg_shim_for_outer(caller_src: str) -> str:
-    """Derive the SDFG-side shim from the proven flat caller: rename
-    ``run_velocity_flat_c`` -> ``run_velocity_flat_sdfg``, retarget the
-    kernel call from ``velocity_tendencies`` to ``dycore_wrapper_dace``
-    (the outer SDFG's binding entry), and add the finalize call.
-    Mirrors ``_make_sdfg_driver`` in ``test_velocity_full_bindings_e2e``
-    but targeting the dycore wrapper instead of the velocity binding."""
+    """Derive the SDFG-side shim from the flat caller: rename
+    ``run_velocity_flat_c``->``run_velocity_flat_sdfg``, retarget the call to
+    ``dycore_wrapper_dace``, add the finalize call.  Mirrors ``_make_sdfg_driver`` in
+    ``test_velocity_full_bindings_e2e``."""
     m = re.search(r"(?is)(SUBROUTINE\s+run_velocity_flat_c\b.*?END\s+SUBROUTINE\s+run_velocity_flat_c)", caller_src)
     if not m:
         raise RuntimeError("run_velocity_flat_c not found in caller source")
@@ -387,16 +313,9 @@ def _gfortran(out_so: Path, *sources, mod_dir: Path, link_so: Path | None = None
 
 
 def _run(lib, fn, dims, bufs, z_arrays):
-    """Invoke ``fn`` in ``lib`` with the standard velocity-flat C ABI
-    (``dims``, scalars, then every input/output buffer pointer).
-
-    Raises :class:`RuntimeError` if the call C-aborts -- runs in a
-    subprocess and re-raises on non-zero exit so xfail can catch it
-    instead of having SIGABRT terminate pytest.
-    """
-    # The call may SIGABRT inside the SDFG's external chain; isolate
-    # it in a subprocess so xfail can observe a Python-side failure
-    # rather than a process-level abort.
+    """Invoke ``fn`` in ``lib`` with the standard velocity-flat C ABI.  Runs in a
+    subprocess and re-raises ``RuntimeError`` on non-zero exit so xfail can catch a
+    SIGABRT instead of it terminating pytest."""
     import multiprocessing as mp
 
     nproma, nlev, nlevp1, nblks_c, nblks_e, nblks_v = dims
@@ -404,9 +323,7 @@ def _run(lib, fn, dims, bufs, z_arrays):
     z_views = [(z.tobytes(), z.shape, z.dtype.str) for z in z_arrays]
     ctx = mp.get_context("fork")
     q = ctx.Queue()
-    # Redirect child stdout/stderr to a file so the debug prints
-    # written by the bind_c_shim survive the SIGABRT path (the parent
-    # tails the file on failure to surface where the child died).
+    # redirect child stdout/stderr to a file so bind_c_shim debug prints survive SIGABRT
     import tempfile
     log_path = tempfile.mktemp(prefix=f"{fn}_", suffix=".log")
     p = ctx.Process(target=_run_child, args=(str(lib._name), fn, dims, buf_views, z_views, q, log_path))
@@ -425,10 +342,7 @@ def _run(lib, fn, dims, bufs, z_arrays):
         bufs[k][:] = np.frombuffer(raw, dtype=dtype).reshape(shape, order='F')
     for i, (raw, shape, dtype) in enumerate(out_z):
         z_arrays[i][:] = np.frombuffer(raw, dtype=dtype).reshape(shape, order='F')
-    # Return the child's captured stderr so the caller can assert
-    # the sync-external prints actually fired (the bridge is not
-    # allowed to optimise ``keep_external`` calls away; the markers
-    # in the log make a missed routing visible).
+    # return the child's captured stderr so the caller can assert the sync markers fired
     try:
         with open(log_path) as f:
             return f.read()
@@ -437,11 +351,9 @@ def _run(lib, fn, dims, bufs, z_arrays):
 
 
 def _run_child(lib_path, fn, dims, buf_views, z_views, q, log_path):
-    """Subprocess body for :func:`_run`: load the library, reconstruct
-    the buffers, invoke ``fn``, and ship the post-call buffers back
-    over ``q``.  Redirects stdout/stderr to ``log_path`` so any
-    ``write(0, *) ...`` debug output from the bind_c_shim survives
-    the SIGABRT path."""
+    """Subprocess body for :func:`_run`: load the library, reconstruct buffers, invoke
+    ``fn``, ship post-call buffers back over ``q``.  Redirects stdout/stderr to
+    ``log_path`` so bind_c_shim debug output survives the SIGABRT path."""
     import os
     log_fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
     os.dup2(log_fd, 1)
@@ -470,12 +382,9 @@ def _run_child(lib_path, fn, dims, buf_views, z_views, q, log_path):
 
 
 def _build_sync_helpers(tmp_path: Path) -> Path:
-    """Pre-compile the sync side-effect library.  Produces
-    ``libsync_helpers.so`` containing the ``mo_sync_helper`` Fortran
-    module + the ``sync_patch_cpp`` C++ impl.  The SDFG kernel's
-    link command picks the .so up via the ``keep_external`` library
-    list so calls to ``sync_patch_array_c`` / ``sync_patch_cpp_via_c``
-    / ``sync_patch_cpp`` resolve at SDFG load time."""
+    """Pre-compile the sync side-effect library -- ``libsync_helpers.so`` containing
+    the ``mo_sync_helper`` Fortran module + ``sync_patch_cpp`` C++ impl.  The SDFG
+    kernel picks it up via the ``keep_external`` library list."""
     build_dir = tmp_path / "sync_build"
     build_dir.mkdir(parents=True, exist_ok=True)
     fortran_src = build_dir / "mo_sync_helper.f90"
@@ -501,26 +410,15 @@ def _build_sync_helpers(tmp_path: Path) -> Path:
 
 
 def test_dycore_outer_calls_velocity_sdfg_via_c_abi(tmp_path: Path):
-    """The dycore SDFG calls the standalone velocity_tendencies SDFG
-    over the C ABI, with each derived-type arg crossing via
-    per-member SoA pointers (``Arg(kind='aos',
-    c_abi='per_member_soa')``).  The dycore wrapper ALSO calls a
-    Fortran-side ``sync_patch_array`` and a C++-side
-    ``sync_patch_cpp`` via Fortran wrappers, exercising the
-    no-bind-c-Fortran + bind-c-wrapper pattern and the C++ external
-    pattern side-by-side with the AoS-marshalled velocity call.
-    Random inputs from the existing velocity harness; reference is
-    the gfortran-compiled velocity_tendencies + run_velocity_flat_c
-    driver.  Numerical comparison element-by-element on every
-    output array; the sync prints are asserted via the subprocess
-    child log."""
+    """Dycore SDFG calls the standalone velocity_tendencies SDFG over the C ABI, each
+    derived-type arg crossing via per-member SoA pointers.  Wrapper also calls a
+    Fortran-side ``sync_patch_array`` and a C++-side ``sync_patch_cpp`` via Fortran
+    wrappers, exercising three external-call shapes side-by-side.  Random inputs vs
+    the gfortran-compiled reference; element-by-element comparison + sync-print
+    assertions via the subprocess child log."""
     # ---- 0. Pre-build the sync-helpers side library ----
     sync_lib_so = _build_sync_helpers(tmp_path)
-    # ---- 0b. Pin DaCe's C++ codegen to ``-O0 -fno-fast-math
-    #          -ffp-contract=off`` so the inner + outer SDFG
-    #          kernels' arithmetic order matches the gfortran
-    #          reference exactly.  Save + restore around the build
-    #          so unrelated tests aren't perturbed. ----
+    # ---- 0b. Pin DaCe's C++ codegen to -O0 (matches gfortran); save/restore around build ----
     _orig_cxx_args = dace.Config.get("compiler", "cpu", "args")
     dace.Config.set("compiler", "cpu", "args", value=" ".join(_O0_CXX_FLAGS))
     # ---- 1. Inner velocity SDFG with bind_c_shim ----
@@ -534,11 +432,9 @@ def test_dycore_outer_calls_velocity_sdfg_via_c_abi(tmp_path: Path):
                             entry="velocity_tendencies").build()
     inner_sdfg.name = "velocity_tendencies"
     inner_sdfg.build_folder = str(inner_dir / "dacecache")
-    # Bridge-derived ``OriginalInterface`` -- carries the
-    # ``struct_types`` member layouts the bind_c_shim emitter needs
-    # (populated since c7b1f41).  The hand-authored ``_velocity_iface``
-    # below is for the outer-side ``build_fortran_library`` call where
-    # ``module_symbol_sources`` matters.
+    # Bridge-derived ``OriginalInterface`` carries struct_types member layouts the
+    # bind_c_shim emitter needs; the hand-authored ``_velocity_iface`` below is for the
+    # outer-side call where ``module_symbol_sources`` matters.
     inner_iface = build_auto_interface(inner_sdfg._fortran_interface_raw, "velocity_tendencies")
     inner_plan = FlattenPlan.from_dict(inner_sdfg._flatten_plan_raw or {})
     inner_lib = build_fortran_library(
@@ -547,25 +443,19 @@ def test_dycore_outer_calls_velocity_sdfg_via_c_abi(tmp_path: Path):
         plan=inner_plan,
         out_dir=str(inner_dir / "lib"),
         name="velocity_inner_wrap",
-        # The bind_c_shim ``use``s the ICON type modules
-        # (``mo_nonhydro_types`` etc.).  Build velocity_full.f90 as a
-        # prelude so its ``.mod`` files land in the bind dir before
-        # the shim source needs them.
+        # bind_c_shim ``use``s ICON type modules; build velocity_full.f90 as a prelude
+        # so its .mod files land in the bind dir first.
         prelude_sources=[_VELOCITY_PATH],
         bind_c_shim=True,
         bind_c_shim_module_symbol_forward=_VELOCITY_MODULE_FORWARD,
-        # Match the reference's ``-O0 -fno-fast-math
-        # -ffp-contract=off`` so the inner SDFG's arithmetic order
-        # is identical at the binding-wrapper layer.
+        # match the reference's -O0 flags so arithmetic order is identical
         flags=_O0_FFLAGS,
     )
     assert inner_lib.bind_c_shim_f90 is not None
 
     # ---- 2. Register velocity_tendencies as a per_member_soa external ----
-    # ``c_name='velocity_tendencies_c'`` is the bind_c_shim entry on
-    # the inner; each derived-type arg crosses as per-member SoA so
-    # the outer's emit_call forwards the marshal-expanded leaves
-    # verbatim into ``velocity_tendencies_c(...)``.
+    # each derived-type arg crosses as per-member SoA; emit_call forwards the
+    # marshal-expanded leaves verbatim into velocity_tendencies_c(...).
     keep_external(
         "velocity_tendencies",
         c_name="velocity_tendencies_c",
@@ -586,27 +476,16 @@ def test_dycore_outer_calls_velocity_sdfg_via_c_abi(tmp_path: Path):
             Arg(kind="scalar", dtype="bool", intent="in"),  # ldeepatmo
         ),
         libraries=(str(inner_lib.so_path), ),
-        # The inner library was built with ``bind_c_shim=True``; its
-        # C ABI takes one ``int`` extent per dim ahead of every
-        # dynamic-shape leaf pointer.  Tell emit_call to emit those.
+        # bind_c_shim ABI: one int extent per dim ahead of each dynamic-shape leaf pointer
         dynamic_extents_abi=True,
-        # Forward every Fortran module global the inner kernel
-        # reads.  Required: under default ELF+gfortran linking each
-        # library has its own BSS copy, so the outer's
-        # ``mo_parallel_config::nproma = N`` never reaches the
-        # inner's copy without this explicit C-ABI bridge.  See
-        # ``ExternalSignature.module_symbol_forward``.
+        # each library has its own BSS under gfortran linking; forward every module
+        # global the inner kernel reads so e.g. nproma actually reaches it
         module_symbol_forward=_VELOCITY_MODULE_FORWARD,
     )
     # ---- 2b. Register the Fortran + C++ sync externals ----
-    # Both have an identical Fortran-side signature
-    # ``(tag: int, field: real(8)(:,:,:))`` and an identical
-    # ``bind(c)`` wrapper signature
-    # ``(tag, d0, d1, d2, field_p)``.  Set ``dynamic_extents_abi``
-    # so emit_call prepends the per-dim ``int`` extents the wrapper
-    # needs for its ``c_f_pointer`` reconstruction.  ``libraries``
-    # points at the pre-built sync .so so the SDFG link resolves
-    # both ``sync_patch_array_c`` and ``sync_patch_cpp_via_c``.
+    # Both share signature (tag: int, field: real(8)(:,:,:)) and bind(c) wrapper
+    # (tag, d0, d1, d2, field_p); dynamic_extents_abi prepends the extents for
+    # c_f_pointer reconstruction; libraries resolves both _c symbols.
     _sync_args = (
         Arg(kind="scalar", dtype="int32", intent="in"),  # tag
         Arg(kind="array", dtype="float64", intent="inout"),  # field
@@ -631,21 +510,16 @@ def test_dycore_outer_calls_velocity_sdfg_via_c_abi(tmp_path: Path):
         outer_dir.mkdir(parents=True, exist_ok=True)
         outer_sdfg_dir = outer_dir / "sdfg"
         outer_sdfg_dir.mkdir(parents=True, exist_ok=True)
-        # Concat the sync helpers' Fortran source so flang sees
-        # ``mo_sync_helper`` when it processes the dycore wrapper's
-        # ``USE`` statement.  The ``sync_patch_*`` bodies are
-        # externalised by the ``keep_external`` registrations above
-        # so the bridge does NOT lower them into the dycore SDFG
-        # kernel -- they survive as library nodes.
+        # concat sync helpers' Fortran source so flang sees mo_sync_helper for the
+        # wrapper's USE; keep_external above externalises sync_patch_* as library nodes
         outer_src = velocity_src + _SYNC_FORTRAN_SRC + _DYCORE_WRAPPER_SRC
         outer_sdfg = build_sdfg(outer_src, outer_sdfg_dir, name="dycore_wrapper", entry="dycore_wrapper").build()
         outer_sdfg.name = "dycore_wrapper"
         outer_sdfg.build_folder = str(outer_dir / "dacecache")
         outer_iface = _velocity_iface("dycore_wrapper")
         outer_plan = FlattenPlan.from_dict(outer_sdfg._flatten_plan_raw or {})
-        # ---- 4. Write the SDFG shim retargeting run_velocity_flat_c
-        #         -> run_velocity_flat_sdfg + dycore_wrapper_dace
-        #         BEFORE the build consumes it as an extra_source. ----
+        # ---- 4. Write the shim (run_velocity_flat_c -> _sdfg + dycore_wrapper_dace)
+        #         BEFORE the build consumes it as an extra_source ----
         sdfg_shim = outer_dir / "sdfg_shim.f90"
         sdfg_shim.write_text(_make_sdfg_shim_for_outer(_CALLER_PATH.read_text()))
         outer_lib = build_fortran_library(
@@ -691,34 +565,19 @@ def test_dycore_outer_calls_velocity_sdfg_via_c_abi(tmp_path: Path):
     _run(ref_lib, "run_velocity_flat_c", dims, bufs_ref, z_ref)
     sdfg_stderr = _run(sdfg_so, "run_velocity_flat_sdfg", dims, bufs_sdfg, z_sdfg)
 
-    # The dycore wrapper CALLs two side-effect externals that the
-    # bridge routed through ``keep_external``: a Fortran-no-bind-c
-    # ``sync_patch_array`` (via its ``sync_patch_array_c`` ``bind(c)``
-    # wrapper) and a C++ ``sync_patch_cpp`` (via its
-    # ``sync_patch_cpp_via`` Fortran wrapper -> ``sync_patch_cpp_via_c``
-    # ``bind(c)`` wrapper).  Both bodies print a unique stderr marker
-    # so a missed routing surfaces here.  The reference path (which
-    # doesn't go through dycore_wrapper) doesn't print these, so the
-    # assertions cover only the SDFG run.
+    # The dycore wrapper routes two side-effect externals through keep_external
+    # (Fortran-no-bind-c sync_patch_array, C++ sync_patch_cpp via a Fortran wrapper);
+    # both print a unique stderr marker so a missed routing surfaces here.  The
+    # reference path doesn't go through dycore_wrapper, so only the SDFG run prints.
     assert "[sync_patch_array Fortran] tag=1" in sdfg_stderr, \
         f"Fortran sync external did not fire.  SDFG stderr:\n{sdfg_stderr}"
     assert "[sync_patch_cpp C++] tag=2" in sdfg_stderr, \
         f"C++ sync external did not fire.  SDFG stderr:\n{sdfg_stderr}"
 
-    # Numerical correctness with ``-O0 -fno-fast-math
-    # -ffp-contract=off`` pinned across all three build layers
-    # (DaCe C++ codegen, SDFG-binding gfortran link, reference
-    # gfortran link).  Measured: every output is BIT-EXACT against
-    # the gfortran reference today (worst rel = 0 ULP).  The
-    # assertion below uses a 1-ULP envelope (``rtol = 2**-52``,
-    # ``atol = 0``) as a safety buffer -- a real codegen regression
-    # (FMA leak through ``-ffp-contract``, swapped operand order,
-    # dropped parenthesisation) exceeds 1 ULP immediately on a
-    # kernel as large as velocity_tendencies and trips here.  A
-    # parallel ``assert_array_equal`` pin guarantees byte-for-byte
-    # agreement on this exact source today; relax to
-    # ``assert_allclose`` (above) if a future flang version
-    # reorders a reduction.
+    # -O0 pinned across all three build layers -> every output is BIT-EXACT today
+    # (worst rel = 0 ULP).  The 1-ULP assert_allclose below is a safety buffer (a real
+    # codegen regression trips it immediately); assert_array_equal pins byte-exactness
+    # on this exact source -- relax it first if a future flang reorders a reduction.
     one_ulp_rtol = 2**-52  # ~2.22e-16
     extras = dict(zip(('z_w_concorr_me', 'z_kin_hor_e', 'z_vt_ie'), zip(z_sdfg, z_ref)))
     per_output_max_rel = {}

@@ -1,19 +1,5 @@
-"""Simple FaCe-native tests for ``LBOUND`` / ``UBOUND`` / ``SIZE``.
-
-Flang lowers these intrinsics inline at the call site:
-
-- ``size(a, dim)`` becomes ``max(0, extent_dim)`` via an ``arith.select``
-  on a comparison of the dummy's shape symbol against zero.  ``size(a)``
-  (no ``dim``) is the product of all per-dim ``max(0, extent)``s.
-- ``lbound(a, dim)`` is the dim's lower bound from the ``fir.shape`` /
-  ``fir.shape_shift`` operand  --  usually a literal ``1`` for explicit-shape
-  dummies, or the offset for ``a(50:54)`` style declares.
-- ``ubound(a, dim)`` is the dim's upper bound, computed similarly.
-
-The bridge handles all three through the generic ``arith.select`` ternary
-fallback in ``buildExpr``  --  no dedicated intrinsic op exists in the
-HLFIR dialect for them.
-"""
+"""``LBOUND``/``UBOUND``/``SIZE`` tests.  Flang lowers all three inline via the generic
+``arith.select`` ternary fallback in ``buildExpr`` -- no dedicated HLFIR intrinsic op."""
 
 from pathlib import Path
 

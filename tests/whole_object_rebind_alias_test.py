@@ -1,25 +1,17 @@
-"""Regression: a WHOLE derived-type-OBJECT pointer rebind (``obj_ptr => src_obj``)
-the bridge lowered as a plain scalar ``assign``.
+"""Regression: a WHOLE derived-type-OBJECT pointer rebind (obj_ptr => src_obj) that the
+bridge lowered as a plain scalar assign.
 
-The target of such a rebind is a ``TYPE(...), POINTER`` object -- not numeric
-data -- so it misses every array / view / section tag: it is absent from the
-builder's ``arrays`` / ``scalars`` / ``symbols`` and its RHS is a bare reference.
-Emitting the store fabricates a descriptor-less AccessNode that later crashes
-``read_and_write_sets`` / ``prune_unused_arrays`` with a ``KeyError`` on the
-target name.  This is the concrete blocker that stopped the ICON ocean dynamical
-core (``solve_free_sfc_ab_mimetic``) from lowering -- e.g. ``params_oce =>
-v_params`` (whose ``params_oce % a_veloc_v`` read-modify-write must land on the
-real source descriptor, NOT be silently dropped) and the dead solver-struct
-stores ``free_sfc_solver_lhs % patch_3d => patch_3d``.
+The target is a TYPE(...), POINTER object, not numeric data, so it misses every array/view/
+section tag -- absent from arrays/scalars/symbols, RHS a bare reference. Emitting the store
+fabricated a descriptor-less AccessNode that crashed read_and_write_sets/prune_unused_arrays
+with a KeyError. This blocked the ICON ocean dycore (solve_free_sfc_ab_mimetic) from lowering:
+params_oce => v_params (whose params_oce % a_veloc_v read-modify-write must land on the real
+source, not be dropped) and the dead store free_sfc_solver_lhs % patch_3d => patch_3d.
 
-The builder now collects the object-alias edges (``descriptors.scan_object_aliases``)
-and:
-
-* a member access on an aliased object (``params_oce % a_veloc_v``) resolves to
-  the real flattened storage of the source object (``resolve_object_member``), so
-  a live read-modify-write updates the SOURCE member (no lost update), and
-* the data-less rebind store itself is dropped at emit (``emit_scalar_assign``
-  early return), so no dangling AccessNode reaches ``prune_unused_arrays``.
+Fix: the builder now collects object-alias edges (descriptors.scan_object_aliases). A member
+access on an aliased object resolves to the source object's real flattened storage
+(resolve_object_member), so a live RMW updates the SOURCE (no lost update); the data-less
+rebind store itself is dropped at emit (emit_scalar_assign early return).
 """
 from pathlib import Path
 
@@ -30,12 +22,9 @@ from _util import build_sdfg, have_flang
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
-# A module-global ``TARGET`` derived-type object (mirrors ICON's
-# ``mo_ocean_physics_types :: v_params``) with a POINTER array member, rebound to
-# by a local pointer.  ``out0 = g%arr(1)`` reads the member DIRECTLY so the
-# flatten pass materialises the real companion ``g_arr``; the loop then updates
-# the member THROUGH the alias ``p`` -- exactly ICON's
-# ``params_oce % a_veloc_v(...) = ... params_oce % a_veloc_v(...) ...``.
+# Module-global TARGET derived-type object (mirrors ICON's mo_ocean_physics_types::v_params)
+# with a POINTER array member, rebound by a local pointer. out0 = g%arr(1) reads directly (so
+# flatten materialises g_arr); the loop updates the member THROUGH alias p -- ICON's shape.
 _LIVE_SRC = """
 module mo_objalias
   implicit none
@@ -58,10 +47,8 @@ contains
 end module mo_objalias
 """
 
-# A local OPAQUE struct whose OBJECT-pointer member is rebound to a module global
-# -- a dead store (``this`` is never read as data), mirroring ICON's
-# ``free_sfc_solver_lhs % patch_3d => patch_3d``.  The routine does real work on
-# ``y``; the dead rebind must lower + prune cleanly (no dangling AccessNode).
+# Local OPAQUE struct whose OBJECT-pointer member is rebound to a module global -- a dead
+# store (this is never read as data), mirroring ICON's free_sfc_solver_lhs % patch_3d => patch_3d.
 _DEAD_SRC = """
 module mo_op
   implicit none
@@ -94,10 +81,8 @@ def test_whole_object_rebind_live_update_hits_source(tmp_path: Path):
     b = build_sdfg(_LIVE_SRC, tmp_path / "sdfg", name="objalias", entry="mo_objalias::run")
     sdfg = b.build()
     sdfg.validate()
-    # The ``p => g`` rebind must be resolved away before emit so no descriptor-less
-    # ``p`` companion dangles into the SDFG.  Two resolutions are equally valid:
-    # the builder collects it as an object alias (``scan_object_aliases``), or the
-    # bridge collapses ``p % arr`` straight onto the source companion ``g_arr``.
+    # p => g must resolve away before emit so no descriptor-less p companion dangles. Two
+    # resolutions are valid: object-alias tracking, or collapsing p%arr onto g_arr directly.
     resolved_via_alias = b.object_aliases.get("p") == "g" and "p" in b.object_alias_defs
     resolved_via_collapse = "p" not in sdfg.arrays and "p_arr" not in sdfg.arrays
     assert resolved_via_alias or resolved_via_collapse, "p => g rebind left a dangling companion"

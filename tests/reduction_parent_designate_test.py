@@ -1,20 +1,12 @@
-"""Mode-C reductions (COUNT / ANY / ALL over a comparison-derived
-mask) when the source array is itself a *section* of a higher-rank
-array  --  e.g. ``m(:, pos1)`` where ``pos1`` is a scalar dim of a
-rank-2 array.
+"""Mode-C reductions (COUNT/ANY/ALL over a comparison mask) when the source is a
+*section* of a higher-rank array, e.g. ``m(:, pos1)``.
 
-The bridge's elemental walker materialises the comparison into a
-transient mask, then reduces that mask.  The walker that collects
-read accesses inside the mask body must walk the parent designate
-chain (``expandDesignateChain``) so the access list matches the
-underlying array's full rank, not just the inner element designate's
-rank.  Without that walk the access for ``m(:, pos1)`` would record
-``index_exprs=['ei0']`` (rank 1) against rank-2 ``m`` and produce a
-malformed memlet.
-
-These tests pin the regression: a future divergence between the
-elementals.inc and control_flow.inc walkers would re-introduce the
-rank mismatch.
+The elemental walker materialises the comparison into a transient mask; the
+read-access collector must walk the parent designate chain
+(``expandDesignateChain``) so accesses match the underlying array's full rank
+-- without it, ``m(:, pos1)`` records rank-1 ``index_exprs=['ei0']`` against
+rank-2 ``m``, a malformed memlet. Pins against elementals.inc/control_flow.inc
+walker divergence reintroducing the mismatch.
 """
 
 from pathlib import Path
@@ -28,10 +20,8 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_count_parent_designate_scalar_dim(tmp_path: Path):
-    """``COUNT(m(:, pos1) .eq. 5)``  --  the comparison's elemental walks
-    a section whose parent designate has a scalar dim (``pos1``).
-    The collectReadAccesses helper must thread that scalar through to
-    the underlying access."""
+    """``COUNT(m(:, pos1) .eq. 5)`` -- elemental walks a section whose parent
+    designate has a scalar dim; collectReadAccesses must thread it through."""
     src = """
 SUBROUTINE count_parent_dg(m, pos1, res)
   integer, dimension(7,4) :: m
@@ -59,9 +49,8 @@ END SUBROUTINE count_parent_dg
 
 
 def test_any_parent_designate_scalar_dim(tmp_path: Path):
-    """``ANY(m(:, pos1) .gt. 0)``  --  Mode-C ANY over a parent-section
-    designate.  Same shape as the COUNT case above; pins
-    ``buildElementalAnyAllReduce``'s walker."""
+    """``ANY(m(:, pos1) .gt. 0)`` -- same parent-section shape as the COUNT case;
+    pins buildElementalAnyAllReduce's walker."""
     src = """
 SUBROUTINE any_parent_dg(m, pos1, res)
   integer, dimension(5,3) :: m
@@ -74,8 +63,7 @@ END SUBROUTINE any_parent_dg
 
     m = np.zeros((5, 3), order='F', dtype=np.int32)
     m[2, 1] = 7
-    # ``res`` is Fortran ``LOGICAL`` -- pass ``np.bool_`` so the C ABI
-    # dtype matches the SDFG's ``bool *`` declaration.
+    # res is Fortran LOGICAL -- pass np.bool_ so the C ABI dtype matches the SDFG's bool* declaration
     res = np.zeros(2, order='F', dtype=np.bool_)
 
     sdfg(m=m, pos1=2, res=res)
@@ -86,9 +74,8 @@ END SUBROUTINE any_parent_dg
 
 
 def test_all_parent_designate_scalar_dim(tmp_path: Path):
-    """``ALL(m(:, pos1) .gt. 0)``  --  Mode-C ALL counterpart.  All
-    elements of the parent-designate slice must satisfy the
-    predicate; if any don't, ALL is false."""
+    """``ALL(m(:, pos1) .gt. 0)`` -- Mode-C ALL counterpart; false if any element
+    of the parent-designate slice fails the predicate."""
     src = """
 SUBROUTINE all_parent_dg(m, pos1, res)
   integer, dimension(4,3) :: m
@@ -100,7 +87,7 @@ END SUBROUTINE all_parent_dg
     sdfg = build_sdfg(src, tmp_path, name='all_parent_dg').build()
 
     m = np.ones((4, 3), order='F', dtype=np.int32)
-    # ``res`` is Fortran ``LOGICAL`` -- pass ``np.bool_``.
+    # res is Fortran LOGICAL -- pass np.bool_
     res = np.zeros(2, order='F', dtype=np.bool_)
 
     sdfg(m=m, pos1=2, res=res)

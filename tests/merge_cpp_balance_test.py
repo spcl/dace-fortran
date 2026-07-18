@@ -1,16 +1,12 @@
 """Single-TU module merge must keep cpp directives balanced.
 
-``merge_used_modules`` extracts each ``module .. end module`` block (plus its
-leading cpp preamble) and concatenates the USE-closure into one translation
-unit.  A whole-module ``#ifdef GUARD .. module .. end module .. #endif`` wrapper
-splits across the block boundary: the opener lands in one block's preamble and
-the ``#endif`` is swept into the next module's preamble, leaving an orphan ``#if``
-or ``#endif`` that breaks the cpp pass on the merged source.  ``_balance_cpp``
-drops the orphan side (keeping guarded content -- a merged USE-closure module was
-already selected by the real build).
+``merge_used_modules`` extracts each ``module .. end module`` block (with its cpp
+preamble) into one TU.  A whole-module ``#ifdef .. module .. #endif`` wrapper
+split across a block boundary leaves an orphan ``#if``/``#endif`` that breaks the
+cpp pass; ``_balance_cpp`` drops the orphan side (guarded content already selected
+by the real build).
 
-This is the shape ICON's dynamical core hits when its ~150-module USE-closure is
-merged into one TU; reproduced minimally here.
+This is the shape ICON's ~150-module USE-closure hits; reproduced minimally here.
 """
 import re
 from pathlib import Path
@@ -23,9 +19,8 @@ from dace_fortran.preprocess import merge_used_modules
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
-# A USE'd module (``mo_dbl``) sharing a file with a preceding module wrapped in a
-# whole-module ``#ifdef``: ``mo_dbl``'s extracted block picks up the orphan
-# ``#endif``, and the wrapped block an orphan ``#if``.
+# mo_dbl shares a file with a preceding module wrapped in a whole-module #ifdef:
+# mo_dbl's extracted block picks up the orphan #endif, the wrapped block an orphan #if.
 _HELPERS = """
 #ifdef UNUSED_GUARD
 module mo_unused
@@ -66,8 +61,7 @@ end module apply_dbl_mod
 
 
 def test_merge_used_modules_balances_cpp(tmp_path: Path):
-    """The merged source must have matched ``#if*`` / ``#endif`` counts even
-    when a USE'd module shares a file with a cpp-wrapped sibling."""
+    """Merged source has matched ``#if*``/``#endif`` counts even when a USE'd module shares a file with a cpp-wrapped sibling."""
     (tmp_path / "helpers.f90").write_text(_HELPERS)
     merged = merge_used_modules(_CALLER, search_dirs=[str(tmp_path)])
     opens = len(re.findall(r"(?im)^\s*#\s*(?:if|ifdef|ifndef)\b", merged))
@@ -77,8 +71,7 @@ def test_merge_used_modules_balances_cpp(tmp_path: Path):
 
 
 def test_cpp_wrapped_module_merges_and_builds(tmp_path: Path):
-    """End to end: the cpp-wrapped-sibling file merges, ``dbl`` inlines, and the
-    SDFG computes ``out(i) = 2*k + i``."""
+    """End to end: the cpp-wrapped-sibling file merges, ``dbl`` inlines, and the SDFG computes ``out(i) = 2*k + i``."""
     import numpy as np
 
     caller = tmp_path / "apply_dbl.f90"

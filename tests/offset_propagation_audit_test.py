@@ -1,17 +1,13 @@
 """Audit probes for offset-propagation corners not yet covered.
 
-Each test targets a Fortran shape the bridge's lower-bound
-inference *could* mis-handle.  A test that PASSES pins coverage;
-an XFAIL documents a real gap with a minimal reproducer.
+Each test targets a Fortran shape the bridge's lower-bound inference *could*
+mis-handle: a PASS pins coverage, an XFAIL documents a real gap.
 
-Covered surface (``extract_vars.cpp``):
-  * ``traceConstInt`` -- peels arith.constant / fir.convert /
-    arith.select(false=0) ONLY (no arith.subi/addi/muli folding).
-  * ``traceConstIntThroughLoad`` -- peels hlfir.associate /
-    hlfir.declare / fir.convert / fir.load<-fir.store /
-    fir.load<-hlfir.assign, recursively.
-  * ``lowerBoundsFromAllocSite`` -- local ALLOCATE shape_shift.
-  * dummy-arg deferred-shape free-symbol fallback.
+Covered surface (extract_vars.cpp): traceConstInt (arith.constant/fir.convert/
+arith.select(false=0) only, no subi/addi/muli folding); traceConstIntThroughLoad
+(hlfir.associate/declare, fir.convert, fir.load<-fir.store/hlfir.assign,
+recursively); lowerBoundsFromAllocSite (local ALLOCATE shape_shift);
+dummy-arg deferred-shape free-symbol fallback.
 """
 
 from pathlib import Path
@@ -25,13 +21,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def _build(src: str, tmp_path: Path, entry: str):
-    """Compile ``src`` to a built SDFG.
-
-    :param src: inline Fortran.
-    :param tmp_path: pytest scratch dir.
-    :param entry: mangled subroutine symbol.
-    :returns: built SDFG.
-    """
+    """Compile ``src`` to a built SDFG."""
     d = tmp_path / "sdfg"
     d.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(src, d, name=entry.split('P')[-1], entry=entry).build()
@@ -40,9 +30,8 @@ def _build(src: str, tmp_path: Path, entry: str):
 
 
 def test_two_level_inlined_callee_literal(tmp_path: Path):
-    """Literal flows through TWO nested inlined subroutines before
-    reaching the indexed access.  Exercises ``traceConstIntThroughLoad``
-    recursion across more than one associate/declare/assign hop."""
+    """Literal flows through two nested inlined subroutines before the indexed
+    access -- exercises traceConstIntThroughLoad recursion across multiple hops."""
     src = """
 module mo_two
   implicit none
@@ -82,9 +71,8 @@ end subroutine two_outer
 
 
 def test_assumed_shape_explicit_negative_lower_bound(tmp_path: Path):
-    """``REAL :: arr(-5:)`` -- explicit negative lower bound, assumed
-    extent.  ``resolveLowerBounds`` should read -5 from the declare's
-    ``fir.shape_shift`` operand."""
+    """``REAL :: arr(-5:)`` -- explicit negative lower bound, assumed extent.
+    resolveLowerBounds reads -5 from the declare's fir.shape_shift operand."""
     src = """
 subroutine assumed_lb(arr, n, out)
   implicit none
@@ -98,8 +86,7 @@ end subroutine assumed_lb
     assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0') == -5, (
         f"explicit arr(-5:) lower bound should specialise to -5; got "
         f"{dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0')}")
-    # Buffer arr(-5..5): 11 elements; arr(-5)=buf[0], arr(-3)=buf[2],
-    # arr(0)=buf[5].
+    # arr(-5..5): 11 elements; arr(-5)=buf[0], arr(-3)=buf[2], arr(0)=buf[5]
     arr = np.asfortranarray(np.array([(i - 5) * 10 for i in range(11)], dtype=np.int32))
     out = np.zeros(1, dtype=np.int32, order='F')
     sdfg(arr=arr, n=np.int32(5), out=out)
@@ -108,9 +95,8 @@ end subroutine assumed_lb
 
 
 def test_section_assignment_negative_bounds(tmp_path: Path):
-    """Whole-section assignment ``dst(-3:3) = src(-3:3)`` on local
-    allocatables.  The designate carries triplet operands; the bound
-    should come from the local ALLOCATE shape_shift."""
+    """Whole-section assign ``dst(-3:3) = src(-3:3)`` on local allocatables -- bound
+    comes from the local ALLOCATE shape_shift."""
     src = """
 subroutine sec_assign(out)
   implicit none
@@ -138,10 +124,8 @@ end subroutine sec_assign
 
 
 def test_struct_allocatable_member_literal_negative_index(tmp_path: Path):
-    """Dummy struct with an ALLOCATABLE member read at a literal
-    negative index -- the velocity_tendencies shape, isolated.
-    The flattened companion ``p_tbl`` should get offset -7 from the
-    literal-index inference."""
+    """Dummy struct with an ALLOCATABLE member read at a literal negative index
+    (velocity_tendencies shape, isolated) -- companion p_tbl gets offset -7."""
     src = """
 module mo_s
   implicit none
@@ -162,7 +146,7 @@ end subroutine read_member
     assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_p_tbl_d0') == -7, (
         f"struct allocatable member literal -7 should specialise; got "
         f"{dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_p_tbl_d0')}")
-    # p_tbl(-7..5): 13 elements.
+    # p_tbl(-7..5): 13 elements
     tbl = np.asfortranarray(np.array([(i - 7) for i in range(13)], dtype=np.int32))
     out = np.zeros(1, dtype=np.int32, order='F')
     sdfg(p_tbl=tbl, out=out, p_tbl_d0=np.int64(13))
@@ -171,12 +155,9 @@ end subroutine read_member
 
 
 def test_computed_index_dummy_arith_parameter_fold(tmp_path: Path):
-    """``arr(lb - 1)`` on a DUMMY allocatable where ``lb`` is a
-    negative PARAMETER.  Flang constant-folds ``lb - 1`` (-4-1) to a
-    plain ``arith.constant -5`` *before* the bridge sees it, so the
-    literal-index inference picks -5 up directly -- no ``arith.subi``
-    folding needed in ``traceConstInt``.  Pins this as a covered
-    (not gap) case."""
+    """``arr(lb-1)`` where lb=-4 PARAMETER: flang constant-folds to arith.constant -5
+    before the bridge sees it, so traceConstInt needs no arith.subi folding -- a
+    covered (not gap) case."""
     src = """
 subroutine computed_dummy(arr, out)
   implicit none
@@ -190,8 +171,7 @@ end subroutine computed_dummy
     assert dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0') == -5, (
         f"PARAMETER arithmetic should fold to literal -5; got "
         f"{dict(getattr(sdfg, '_fortran_offset_values', sdfg.constants)).get('offset_arr_d0')}")
-    # arr(lb-1) = arr(-5).  Buffer arr(-5..5): 11 elements,
-    # offset -5 -> arr(-5) reads buf[0].
+    # arr(lb-1) = arr(-5); buffer arr(-5..5), 11 elements, offset -5 -> arr(-5) reads buf[0]
     arr = np.asfortranarray(np.array([777] + [0] * 10, dtype=np.int32))
     out = np.zeros(1, dtype=np.int32, order='F')
     sdfg(arr=arr, out=out, arr_d0=np.int64(11))

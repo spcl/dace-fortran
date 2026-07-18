@@ -1,27 +1,21 @@
-"""f90-binding e2e for the full ICON ``velocity_tendencies`` kernel.
+"""f90-binding e2e for the full ICON velocity_tendencies kernel.
 
-This is the derived-type counterpart of ``icon_loopnest_bindings_e2e_test``
-/ ``cloudsc_flux_bindings_e2e_test``: instead of a flat explicit-shape
-kernel it drives the real ``velocity_tendencies`` whose interface is
-five ICON derived types (``t_nh_prog`` / ``t_patch`` / ``t_int_state``
-/ ``t_nh_metrics`` / ``t_nh_diag``) plus three naked rank-3 arrays and
-scalars.  The ``OriginalInterface`` is hand-authored (the bridge has
-no ``get_fortran_interface``); the bindings emitter consumes it plus
-the bridge-produced ``FlattenPlan`` to generate a struct-typed
-``velocity_tendencies_dace`` wrapper that ``c_f_pointer``-aliases
-every flattened struct member to a flat SDFG companion.
+Derived-type counterpart of icon_loopnest_bindings_e2e_test /
+cloudsc_flux_bindings_e2e_test: drives the real velocity_tendencies, whose
+interface is five ICON derived types (t_nh_prog/t_patch/t_int_state/
+t_nh_metrics/t_nh_diag) plus three rank-3 arrays and scalars.
+OriginalInterface is hand-authored (bridge has no get_fortran_interface);
+the emitter consumes it + the bridge's FlattenPlan to generate a struct-typed
+velocity_tendencies_dace wrapper that c_f_pointer-aliases every flattened
+struct member to a flat SDFG companion.
 
-Reference: the proven flat caller ``run_velocity_flat_c`` in
-``velocity_full_caller.f90`` (calls the un-transformed
-``velocity_tendencies`` directly).  SDFG side: a sibling shim
-generated from that same caller -- identical struct construction, but
-the final call targets the generated ``velocity_tendencies_dace``
-binding.  Both are driven from one flat ``ctypes`` buffer set so the
-numerical comparison is apples-to-apples.
+Reference: proven flat caller run_velocity_flat_c in velocity_full_caller.f90
+(calls the un-transformed kernel directly). SDFG side: a sibling shim from
+the same caller, targeting velocity_tendencies_dace instead. Both driven from
+one flat ctypes buffer set for an apples-to-apples comparison.
 
-Per ``feedback_e2e_numerical`` / ``feedback_e2e_valid_fortran``: the
-binding is gfortran-compiled, linked against the compiled SDFG ``.so``
-and executed; outputs are compared against the gfortran reference.
+Binding is gfortran-compiled, linked against the compiled SDFG .so, and
+executed; outputs compared against the gfortran reference.
 """
 
 import ctypes
@@ -55,8 +49,7 @@ _CALLER_PATH = _HERE / "velocity_full_caller.f90"
 _ENTRY = "mo_velocity_advection::velocity_tendencies"
 
 
-# Caller subroutine flat-array dummy order -- matches velocity_full_caller.f90
-# (identical list to velocity_full_test.py::_INIT_ARRAY_ORDER).
+# caller flat-array dummy order matches velocity_full_caller.f90 (see _harness.py::_INIT_ARRAY_ORDER)
 def _scalar(name, ftype, intent, stype=None):
     return OriginalArg(name=name, fortran_type=ftype, rank=0, shape=(), intent=intent, struct_type=stype)
 
@@ -94,9 +87,8 @@ _IFACE = OriginalInterface(
         "mo_intp_data_strc": ("t_int_state", ),
         "mo_nonhydro_types": ("t_nh_prog", "t_nh_metrics", "t_nh_diag"),
     },
-    # SDFG free symbols / lifted args the kernel reads from Fortran
-    # module data (no dummy to query); the emitter ``use``-imports
-    # each under a ``__mod`` alias and assigns / copies it.
+    # free symbols the kernel reads from Fortran module data (no dummy to
+    # query); emitter use-imports each under a __mod alias and assigns it.
     module_symbol_sources={
         "nproma": ("mo_parallel_config", "nproma"),
         "timers_level": ("mo_run_config", "timers_level"),
@@ -112,11 +104,9 @@ _IFACE = OriginalInterface(
 
 
 def _make_sdfg_driver(caller_src: str) -> str:
-    """Derive the SDFG-side shim from the proven flat caller: rename
-    ``run_velocity_flat_c`` -> ``run_velocity_flat_sdfg``, pull in the
-    generated binding module, and retarget the final call from
-    ``velocity_tendencies`` to ``velocity_tendencies_dace`` (plus a
-    finalize).  One source of truth for struct construction."""
+    """Derive the SDFG-side shim from the flat caller: rename
+    run_velocity_flat_c -> run_velocity_flat_sdfg, pull in the generated
+    binding module, retarget the call to velocity_tendencies_dace (+finalize)."""
     m = re.search(r"(?is)(SUBROUTINE\s+run_velocity_flat_c\b.*?END\s+SUBROUTINE\s+run_velocity_flat_c)", caller_src)
     if not m:
         raise RuntimeError("run_velocity_flat_c not found in caller source")
@@ -127,10 +117,9 @@ def _make_sdfg_driver(caller_src: str) -> str:
         "USE velocity_tendencies_dace_bindings, ONLY: velocity_tendencies_dace, "
         "velocity_tendencies_dace_finalize",
     )
-    # Retarget the kernel call.  The reference call spans several
-    # continuation lines; swap just the callee name.
+    # retarget the kernel call (reference call spans continuation lines; swap just the callee name)
     shim = shim.replace("CALL velocity_tendencies(p_prog, p_patch", "CALL velocity_tendencies_dace(p_prog, p_patch")
-    # Finalize the ref-counted SDFG handle before returning.
+    # finalize the ref-counted SDFG handle before returning
     shim = re.sub(r"(?i)\bEND\s+SUBROUTINE\s+run_velocity_flat_sdfg", "  CALL velocity_tendencies_dace_finalize()\n"
                   "END SUBROUTINE run_velocity_flat_sdfg", shim)
     return shim
@@ -168,16 +157,12 @@ def _run(lib, fn, dims, bufs, z_arrays):
 
 @pytest.mark.parametrize("build_path", ["inline", "build_fortran_library"])
 def test_velocity_full_f90_bindings_e2e(tmp_path: Path, build_path: str):
-    """The hand-authored derived-type ``OriginalInterface`` +
-    bridge ``FlattenPlan`` must yield a ``velocity_tendencies_dace``
-    binding that, linked against the compiled SDFG, reproduces the
-    gfortran reference of the un-transformed ``velocity_tendencies``.
+    """Hand-authored OriginalInterface + bridge FlattenPlan must yield a
+    velocity_tendencies_dace binding that, linked against the compiled SDFG,
+    reproduces the gfortran reference of the un-transformed kernel.
 
-    Verified two ways: the explicit inline sequence (compile ->
-    emit_bindings -> gfortran-link), and the first-class
-    ``build_fortran_library`` entrypoint that consolidates exactly
-    that plus the frozen-signature drift gate.  Both must produce a
-    numerically identical Fortran-callable library."""
+    Verified two ways: explicit inline (compile -> emit_bindings -> gfortran-
+    link) and build_fortran_library (same, + frozen-signature drift gate)."""
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     builder = build_sdfg(_DRIVER_PATH.read_text(), sdfg_dir, name="velocity_tendencies", entry=_ENTRY)
@@ -185,11 +170,8 @@ def test_velocity_full_f90_bindings_e2e(tmp_path: Path, build_path: str):
     sdfg = builder.build()
     sdfg.validate()
     sdfg.name = "velocity_tendencies"
-    # Per-parametrisation build dir: both variants compile an SDFG of
-    # the same name; without this they collide in the shared
-    # .dacecache when xdist runs them on one worker (the second
-    # compile clobbers the first variant's linked .so -> dlopen
-    # OSError).  tmp_path is unique per parametrised case.
+    # per-parametrisation build dir: both variants compile an SDFG of the same
+    # name; without this they'd collide in shared .dacecache under xdist.
     sdfg.build_folder = str(tmp_path / "dacecache")
 
     sdfg_build = tmp_path / "sdfg_build"
@@ -211,8 +193,7 @@ def test_velocity_full_f90_bindings_e2e(tmp_path: Path, build_path: str):
         so_path = Path(compiled._lib._library_filename)
         bindings_path = tmp_path / "velocity_tendencies_bindings.f90"
         emit_bindings(sdfg._frozen_signature, _IFACE, plan, str(bindings_path))
-        # SDFG .so: driver modules + caller (init only) + generated
-        # binding + the SDFG shim, linked against the compiled SDFG.
+        # SDFG .so: driver + caller (init only) + generated binding + SDFG shim, linked against the compiled SDFG.
         sdfg_so = sdfg_build / "libvelocity_sdfg.so"
         _gfortran(sdfg_so, _DRIVER_PATH, _CALLER_PATH, bindings_path, shim_path, mod_dir=sdfg_build, link_so=so_path)
         sdfg_lib = ctypes.CDLL(str(sdfg_so))
@@ -239,8 +220,7 @@ def test_velocity_full_f90_bindings_e2e(tmp_path: Path, build_path: str):
     z_ref = [np.zeros(s, dtype=np.float64, order='F') for s in zshape]
     z_sdfg = [np.zeros(s, dtype=np.float64, order='F') for s in zshape]
 
-    # Pristine snapshots so we can prove the kernel mutated outputs
-    # (guards against a vacuous "both untouched -> equal" pass).
+    # pristine snapshots to prove the kernel mutated outputs (guards against a vacuous "both untouched" pass)
     pre = {nm: bufs_ref[nm].copy() for nm in _OUTPUT_NAMES if nm in bufs_ref}
 
     _run(ref_lib, "run_velocity_flat_c", dims, bufs_ref, z_ref)
@@ -257,7 +237,6 @@ def test_velocity_full_f90_bindings_e2e(tmp_path: Path, build_path: str):
             d = np.abs(sd - rf)
             mismatches.append(f"{nm}: max_abs_diff={d.max():.3e} "
                               f"(n_diff={np.count_nonzero(d > 1e-10)})")
-    # The reference must have done real work, and the SDFG side must
-    # agree with it to 1e-10 on all 12 outputs.
+    # reference must have done real work, and SDFG side must agree to 1e-10 on all 12 outputs
     assert mutated, "reference left every output untouched -- kernel did not run"
     assert not mismatches, "\n".join(mismatches)

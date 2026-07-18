@@ -1,35 +1,10 @@
-"""Coverage for ``DO i = lo, hi, step`` loops whose step is a
-RUNTIME value -- a scalar argument or an array element -- rather
-than a compile-time integer literal.
-
-The bridge's loop emitter previously refused all non-constant
-steps with the defensive throw
-
-    "fir.do_loop with non-constant step  --  bridge currently
-    lowers only constant-step loops..."
-
-Encountered upstream in QE's ``vexx_bp_k_gpu`` at
-
-    DO jbnd = jstart, jend, many_fft    ! many_fft = batch FFT count
-
-where ``many_fft`` is a runtime config integer.  The fix captures
-the symbolic step expression on ``ASTNode.loop_step_expr`` and the
-emit_cfg loop-region generator threads it through as the update
-expression.  Forward iteration is assumed (the common case);
-runtime-negative symbols yield zero-or-one iterations under
-``uid <= bound``, matching Fortran's trip-count formula for
-mismatched-direction loops.
-
-Two tests:
-
-  * ``test_step_from_scalar_argument``  --  step is a plain dummy
-    scalar (the QE shape).  Numerically matches f2py over the
-    same input.
-
-  * ``test_step_from_array_element``  --  step is read from an
-    array (``DO i = 1, n, stride_arr(idx)``).  Exercises the
-    ``traceToDecl`` -> ``buildIndexExpr`` fallback path for steps
-    that aren't a bare scalar load.
+"""Coverage for ``DO i = lo, hi, step`` loops whose step is a RUNTIME value (scalar arg or
+array element), not a compile-time literal. The bridge previously refused all non-constant
+steps with a defensive throw; encountered upstream in QE's ``vexx_bp_k_gpu``
+(``DO jbnd = jstart, jend, many_fft``). Fix: capture the symbolic step on
+``ASTNode.loop_step_expr``, threaded through by emit_cfg as the loop-region update
+expression. Forward iteration is assumed; runtime-negative step symbols yield zero-or-one
+iterations under ``uid <= bound``, matching Fortran's trip-count formula.
 """
 from pathlib import Path
 
@@ -42,33 +17,22 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def _build_and_run(src: str, tmp: Path, *, ref_kwargs: dict, sdfg_kwargs: dict, mod_name: str = "kern"):
-    """Build f2py reference + SDFG and run each with the right shape
-    of kwargs.
-
-    f2py treats INTENT(OUT) arrays as the function return value, so
-    the reference call ``mod.kernel(...)`` returns ``out`` rather
-    than taking it as an argument.  The SDFG-side signature is the
-    raw Fortran arglist; it takes every dummy including ``out``.
-
-    Returns ``(ref_out_array, sdfg_kwargs_after_call)`` so the
-    caller compares ``sdfg_kwargs_after_call['out']`` against
-    ``ref_out_array``."""
+    """Build f2py reference + SDFG, run each with the right kwarg shape. f2py returns
+    INTENT(OUT) arrays as the return value; the SDFG takes every dummy including ``out``.
+    Returns ``(ref_out_array, sdfg_kwargs_after_call)``.
+    """
     mod = f2py_compile(src, tmp / "ref", mod_name)
     sdfg = build_sdfg(src, tmp / "sdfg", name=mod_name, entry="kernel_mod::kernel").build()
     sdfg_copy = {k: (v.copy() if isinstance(v, np.ndarray) else v) for k, v in sdfg_kwargs.items()}
-    # ``kernel`` now lives in ``kernel_mod`` so f2py exposes it under the
-    # module's submodule namespace.
+    # kernel lives in kernel_mod, so f2py exposes it under the module's submodule namespace
     ref_out = mod.kernel_mod.kernel(**ref_kwargs)
     sdfg(**sdfg_copy)
     return ref_out, sdfg_copy
 
 
 def test_step_from_scalar_argument(tmp_path: Path):
-    """``DO jbnd = jstart, jend, batch`` where ``batch`` is a
-    runtime scalar.  The QE ``many_fft`` shape.
-
-    Result: ``out`` accumulates one entry per stride step.
-    Verifies bit-exact match against an f2py reference."""
+    """``DO jbnd = jstart, jend, batch`` where ``batch`` is a runtime scalar (QE ``many_fft``
+    shape); ``out`` accumulates one entry per stride step, checked bit-exact against f2py."""
     src = """
 module kernel_mod
   implicit none
@@ -104,10 +68,8 @@ end module kernel_mod
 
 
 def test_step_from_scalar_argument_with_batch_one(tmp_path: Path):
-    """``batch = 1`` -- the step expression evaluates to 1 at
-    runtime, so the loop runs every iteration in ``[jstart, jend]``.
-    Verifies the symbolic-step path handles the common no-op-stride
-    case identically to the constant-step path."""
+    """``batch = 1``: step evaluates to 1 at runtime, loop runs every iteration in
+    ``[jstart, jend]`` -- symbolic-step path must match the constant-step path."""
     src = """
 module kernel_mod
   implicit none
@@ -142,14 +104,10 @@ end module kernel_mod
 
 
 def test_step_from_array_element(tmp_path: Path):
-    """``DO j = 1, n, stride_arr(idx)`` -- the step reads from an
-    array.  The bridge hoists the non-trivial step expression to a
-    fresh ``loopstep_<nid>`` symbol via a pre-LoopRegion interstate
-    edge, mirroring the existing bound-hoist machinery -- the
-    LoopRegion's update_expr stays a bare-symbol reference.  The
-    ``arr(idx)`` -> ``arr[idx-1]`` Fortran-to-DaCe conversion
-    happens once on the hoisted assignment via
-    ``_fortran_subs_to_dace``."""
+    """``DO j = 1, n, stride_arr(idx)``: step reads from an array. The bridge hoists the
+    non-trivial step to a fresh ``loopstep_<nid>`` symbol via a pre-LoopRegion interstate
+    edge (mirrors bound-hoist); ``arr(idx)``->``arr[idx-1]`` conversion happens once there via ``_fortran_subs_to_dace``.
+    """
     src = """
 module kernel_mod
   implicit none
@@ -187,9 +145,8 @@ end module kernel_mod
 
 
 def test_step_expr_field_is_populated_on_symbolic_step(tmp_path: Path):
-    """The bridge's ``ASTNode.loop_step_expr`` field carries the
-    symbolic-step string.  Drives the AST extraction directly so the
-    test pins the contract independent of any downstream emit path."""
+    """``ASTNode.loop_step_expr`` carries the symbolic-step string; drives AST extraction
+    directly so the contract is pinned independent of any downstream emit path."""
     from dace_fortran.build_bridge import hb
     from dace_fortran import DEFAULT_PIPELINE
     src = """
@@ -222,8 +179,7 @@ end subroutine kernel
         mod.run_passes(DEFAULT_PIPELINE)
         ast = mod.get_ast()
 
-    # ``get_ast()`` returns a list of top-level nodes; flatten and
-    # walk every subtree.
+    # get_ast() returns a list of top-level nodes; flatten and walk every subtree
     def walk(node):
         yield node
         for c in node.children:

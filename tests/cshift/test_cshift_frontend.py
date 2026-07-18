@@ -1,14 +1,7 @@
-"""Frontend-recognition + memlet-subset tests for Fortran ``CSHIFT``.
-
-Each test drives one isolated Fortran pattern through the bridge,
-asserts the resulting SDFG carries the right :class:`CShift` lib
-node, and verifies the connector memlets cover the **full** shift
-dimension (the rotation operates over the whole axis, so the
-lib node's source / destination memlets must read / write the entire
-extent in that axis).  The lib node's pure expansion is a stub --
-these tests stop at SDFG-build time without expanding, so the
-``NotImplementedError`` body never runs.
-"""
+"""Frontend-recognition + memlet-subset tests for Fortran ``CSHIFT``: each test asserts
+the SDFG carries the right :class:`CShift` lib node with memlets covering the full shift
+dimension.  Tests stop at SDFG-build time -- the lib node's pure expansion stub
+(``NotImplementedError``) never runs."""
 from pathlib import Path
 import sys
 
@@ -92,14 +85,9 @@ def test_cshift_3d_dim2_recognised(tmp_path):
 
 
 def test_cshift_memlets_cover_full_arrays(tmp_path):
-    """CShift connectors receive whole-array memlets, not single-element subsets.
-
-    The lib node operates on the entire input/output along every dim, so
-    its memlets must address the full extent in every axis.  A
-    bridge-emitted single-element subset would defeat the lib node's
-    eventual expansion (which needs to see the full axis to compute
-    the wrapped reads).
-    """
+    """CShift connectors receive whole-array memlets, not single-element subsets --
+    a single-element subset would defeat the lib node's eventual expansion (needs the
+    full axis to compute the wrapped reads)."""
     sdfg = _build("cshift_2d_dim2_probe.f90", "cshift_2d_dim2", tmp_path)
     nodes = _find_lib_nodes(sdfg, "CShift")
     assert len(nodes) == 1
@@ -107,11 +95,8 @@ def test_cshift_memlets_cover_full_arrays(tmp_path):
     import sympy
     memlets = _connector_memlets(sdfg, state, node)
     assert "_x" in memlets and "_out" in memlets
-    # Each subset's volume should equal the full descriptor volume.
-    # Use ``sympy.simplify`` because both sides are symbolic
-    # expressions in the array's shape variables -- direct ``==`` is
-    # structural equality and would reject e.g.  ``n*(m - 1) + n`` vs
-    # ``m*n``.
+    # subset volume == full descriptor volume; sympy.simplify needed since direct ``==``
+    # is structural and would reject e.g. ``n*(m-1)+n`` vs ``m*n``.
     x_desc = sdfg.arrays[memlets["_x"].data]
     o_desc = sdfg.arrays[memlets["_out"].data]
     assert sympy.simplify(memlets["_x"].subset.num_elements() - x_desc.total_size) == 0

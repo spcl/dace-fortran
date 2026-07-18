@@ -1,5 +1,4 @@
-// Translation-unit headers.  ``ast_helpers.h`` carries the cross-TU
-// API + thread-local state shared with the other ``ast/*.cpp`` files.
+// ast_helpers.h carries cross-TU API + thread-local state shared by ast/*.cpp.
 #include <functional>
 #include <iomanip>
 #include <map>
@@ -24,43 +23,16 @@
 
 namespace hlfir_bridge {
 
-//
-// Per-op dispatcher.  Owns:
-//   * buildScfIfAsConditional  --  scf.if -> ASTNode kind=conditional.
-//   * walkSCFBeforeRegion  --  the faithful scf.while walker.
-//   * buildWhileNode  --  scf.while -> ASTNode kind=while.
-//   * traceLoopIter  --  find a fir.do_loop's induction var.
-//   * buildAST(Block&)  --  the per-op switch that walks an MLIR block,
-//     picks the right shape builder for each hlfir.assign /
-//     fir.do_loop / fir.if / etc., and wires alloc-alias
-//     binds for fir.allocmem-bound stores.
-//   * extractAST(ModuleOp)  --  public entry point; calls buildAST
-//     on the first func.func body and returns the AST.
-//
-// This file is included verbatim from extract_ast.cpp via
-// #include "bridge/ast/dispatch.cpp" and shares that translation
-// unit's namespace, includes, and file-static state.  It MUST NOT be
-// added to the build's compile list  --  CMakeLists.txt deliberately omits
-// it.  The split is purely for readability: the AST builder used to
-// be a single 2800-line file.
+// Per-op dispatcher: buildScfIfAsConditional / walkSCFBeforeRegion / buildWhileNode / traceLoopIter / buildAST(Block&)
+// / extractAST(ModuleOp). Included verbatim from extract_ast.cpp via #include; NOT in the build's compile list
+// (CMakeLists.txt omits it).
 
-// Lower an ``scf.index_switch`` (the per-exit side-effect dispatch
-// lift-cf-to-scf emits for a loop with a conditional EXIT/RETURN/GOTO that
-// carries a side effect) into a chain of conditional ASTNodes keyed on the
-// loop's exit-reason synth scalar.  Defined after ``buildAST`` (it walks the
-// case regions with it); forward-declared here for ``walkSCFBeforeRegion``.
+// Lowers an scf.index_switch (per-exit side-effect dispatch from a loop EXIT/RETURN/GOTO) into chained conditional
+// ASTNodes; forward-declared here, defined after buildAST.
 static std::vector<ASTNode> buildIndexSwitchNodes(mlir::scf::IndexSwitchOp sw);
 
-// True for flang's OPTIONAL-arg present-select: ``%r = if %assoc -> T { yield
-// <present box/ref> } else { yield fir.absent }`` -- passing an associated
-// POINTER / ALLOCATABLE actual to an OPTIONAL dummy lowers to this value-select
-// (``present(dummy) == %assoc``).  Both arms are pure address marshalling with
-// no observable side effect, so the standalone conditional node the walker would
-// emit is dead weight (the arg value, if ever needed, is re-derived by
-// ``buildExpr`` / ``lowerIsPresent`` at the use site).  Keys purely on IR shape
-// (value-producing if + a ``fir.absent`` in the else terminator), so it never
-// touches a real Fortran ``IF``.  Templated to serve both ``fir::IfOp`` (the
-// pre-lift form) and ``mlir::scf::IfOp`` (should ``lift-cf-to-scf`` rewrite it).
+// True for flang's OPTIONAL-arg present-select (``if %assoc -> T {present} else {fir.absent}``) -- pure address
+// marshalling, no side effect, safe to skip; keyed on IR shape only. Templated for fir::IfOp and scf::IfOp.
 template <typename IfOpT>
 static bool isOptionalPresentSelect(IfOpT op) {
   if (op.getNumResults() == 0) return false;
@@ -79,8 +51,7 @@ static ASTNode buildScfIfAsConditional(mlir::scf::IfOp ifOp) {
   auto walkArm = [&](mlir::Region& region) -> std::vector<ASTNode> {
     if (region.empty()) return {};
     auto arm = walkSCFBeforeRegion(region.front());
-    // If the scf.if yields values, append one scalar_assign per result
-    // reading the matching operand of the arm's scf.yield.
+    // scf.if yields values -> append one scalar_assign per result from the arm's scf.yield.
     if (ifOp.getNumResults() > 0) {
       mlir::scf::YieldOp yieldOp;
       for (auto& op : region.front())
@@ -109,52 +80,23 @@ static ASTNode buildScfIfAsConditional(mlir::scf::IfOp ifOp) {
   return c;
 }
 
-// Forward declaration used by ``walkSCFBeforeRegion``'s ``fir.do_loop``
-// dispatch (definition lives further down the file).  ``traceLB`` and
-// ``traceConstInt`` / ``buildIndexExpr`` come in via ``ast_helpers.h``.
+// Forward decl for walkSCFBeforeRegion's fir.do_loop dispatch (defined further down).
+// traceLB/traceConstInt/buildIndexExpr come from ast_helpers.h.
 static std::string traceLoopIter(fir::DoLoopOp loop);
-// Materialise SUM/MINVAL/MAXVAL/PRODUCT reduction sub-terms of a condition into
-// Reduce lib-nodes before the branch (definition further down);
-// forward-declared for the scf.while break-condition walker above its
-// definition.
+// Materialises SUM/MINVAL/MAXVAL/PRODUCT reduction sub-terms of a condition into Reduce lib-nodes before the branch;
+// forward-declared for use above its definition.
 static void materialiseCondReductions(mlir::Value condVal, std::vector<ASTNode>& nodes);
-// 0-based per-dim DaCe subset strings for a section designate (defined in
-// extract_vars.cpp); used to feed a section-reduction's VIEW source.
+// 0-based per-dim DaCe subset strings for a section designate (defined in extract_vars.cpp); feeds a
+// section-reduction's VIEW source.
 std::vector<std::string> renderDesignateSubsetStrings(hlfir::DesignateOp sec);
-// Lower a ``fir.call`` parked in an ``scf.while`` BEFORE region (a Fortran
-// DO-WHILE body call, or a call hoisted into the loop condition).  A bare
-// ``fir.call`` carries no MemoryEffectOpInterface, so without this the
-// walkSCFBeforeRegion pure-value guard would SILENTLY DROP it and the call
-// would never run in the SDFG.  Definition lives after the call builders +
-// IoState / FftPlanInfo structs (which the shared dispatch needs).
+// Lowers a fir.call parked in an scf.while BEFORE region; without this the pure-value guard would silently drop it
+// (fir.call carries no MemoryEffectOpInterface). Defined after the call builders + IoState/FftPlanInfo.
 static void dispatchScfWhileCall(fir::CallOp call, std::vector<ASTNode>& out);
 
 std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
   std::vector<ASTNode> out;
-  // Snapshot the scf.condition's break value at the START of the body
-  // -- BEFORE any nested scf.if mutates the SSA operands of the
-  // condition.  Fortran's ``do; body; if (cond) exit; counter+=1;
-  // end do`` shape (lift-cf-to-scf form) puts the increment INSIDE
-  // the BEFORE region (in the else arm of a scf.if guarded by the
-  // exit condition), then the scf.condition reads a SEPARATE cmpi
-  // that the bridge's expression renderer re-evaluates at the
-  // break-check state -- by then counter has been incremented and
-  // the break fires one iteration too early.
-  //
-  // Detect the pattern up front: any ``scf.condition`` whose value
-  // depends on a scalar that an in-body ``scf.if`` mutates needs a
-  // pre-body snapshot.  Mint ``__brk_<N>`` (an interstate-edge
-  // symbol via ``auto_declare_synth`` prefix), emit the snapshot
-  // as the first assign in ``out``, and rewrite the
-  // ``scf.condition`` handler to read the snapshot instead of
-  // re-rendering the condition.
-  //
-  // NPB LU's ssor istep loop (``do istep = 1, niter; sweep;
-  // if (rsdnm < tolrsd) return; end do``) has the same shape: each
-  // istep iteration runs RHS + the sweep, then checks convergence
-  // for the early return, then increments istep.  Without this
-  // snapshot the SSOR sweep is effectively a no-op and residuals
-  // stay at ~1e5 instead of converging to ~1e-2.
+  // Snapshot scf.condition's break value at body START, before an in-body scf.if mutates it, into __brk_<N>; without it
+  // the break re-evaluates post-mutation values and fires one iteration early (NPB LU ssor convergence check).
   static thread_local int kBrkCounter = 0;
   std::string brkSynthName;
   mlir::scf::ConditionOp pendingCondOp;
@@ -166,28 +108,18 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
   }
   if (pendingCondOp) {
     auto condVal = pendingCondOp.getCondition();
-    // Materialise any SUM/MINVAL/MAXVAL/PRODUCT reduction in the loop condition
-    // into a Reduce lib-node + scalar BEFORE the break-check (pushed into the
-    // BEFORE-region node list so it re-evaluates each iteration); the rendered
-    // condition then reads the bare scalar.  Without this a runtime-extent
-    // ``DO WHILE (MAXVAL(a) > 0)`` falls to the inline-unroll which bails to
-    // ``?`` (constant-extent only).
+    // Materialises SUM/MINVAL/MAXVAL/PRODUCT in the loop condition into a Reduce lib-node scalar before the
+    // break-check; without it a runtime-extent DO WHILE (MAXVAL(a) > 0) falls to inline-unroll which bails to "?".
     materialiseCondReductions(condVal, out);
     auto b = buildBoolExpr(condVal, 0);
     if (!b.empty() && b != "?") {
-      // Does the break condition read array ELEMENTS (e.g. NPB LU ssor
-      // convergence ``rsdnm(i) < tolrsd(i)``)?  A symbolic interstate-edge
-      // assignment can NOT carry a multi-element array-element read -- DaCe
-      // strips the subscript and the C++ unparser emits a bare POINTER
-      // comparison of the two ``double*`` arglist params (heap-address
-      // compare), a non-deterministic break that silently no-ops the loop
-      // (see tests/lu_two_call_convergence_repro_test.py).
+      // An array-element break condition (e.g. rsdnm(i) < tolrsd(i)) can't ride an interstate-edge assignment -- DaCe
+      // strips the subscript to a bare pointer compare (see tests/lu_two_call_convergence_repro_test.py).
       std::vector<AccessInfo> condAccesses;
       collectReadAccesses(condVal, condAccesses, 0);
       int const brkId = kBrkCounter++;
       if (condAccesses.empty()) {
-        // Pure scalar / counter condition -- a symbol snapshot is exact
-        // (no array reads to keep off the interstate edge).
+        // Pure scalar/counter condition -- symbol snapshot is exact (no array reads to keep off the interstate edge).
         brkSynthName = "__brk_" + std::to_string(brkId);
         ASTNode snap;
         snap.kind = "assign";
@@ -196,15 +128,8 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
         snap.target_is_array = false;
         out.push_back(std::move(snap));
       } else {
-        // Array-dependent break (e.g. NPB LU's convergence
-        // ``rsdnm(i) < tolrsd(i)``): compute the continuation into a
-        // SCALAR transient ``__brkc_<N>`` via a tasklet -- the array reads
-        // wire through per-occurrence connectors + memlets (keeping their
-        // ``arr[idx]`` form), and ``__al_<N>`` stays a free symbol.  The
-        // break guard then reads the scalar by its BARE name (verified to
-        // work on a ConditionalBlock branch / interstate edge), so a
-        // multi-element array read never lands on a codeblock.  No length-1
-        // array, no ``__brk`` symbol promotion (scalars-over-len1 rule).
+        // Array-dependent break: compute into scalar transient __brkc_<N> via tasklet (array reads keep per-occurrence
+        // connectors/memlets); guard reads the bare scalar name. Scalars-over-len1 rule -- no length-1 array promotion.
         brkSynthName = "__brkc_" + std::to_string(brkId);
         ASTNode comp;
         comp.kind = "assign";
@@ -222,37 +147,16 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
       out.push_back(buildScfIfAsConditional(ifOp));
       continue;
     }
-    // ``fir.if`` parked inside an ``scf.while`` BEFORE region.  Flang
-    // emits ``fir.if`` for explicit Fortran ``IF (cond) THEN ... END
-    // IF`` blocks; ``lift-cf-to-scf`` lowers cf.cond_br into ``scf.if``
-    // but leaves the original ``fir.if`` ops as-is.  Without this
-    // dispatch the op falls through as a "pure-value op" and the IF
-    // body (any assigns / nested loops) is SILENTLY DROPPED from the
-    // AST -- producing an SDFG with no writes from the gated block.
-    // NPB LU's ``ssor`` istep loop hit this via
-    // ``if (mod(istep, inorm) == 0 .or. istep == itmax) call l2norm(
-    // ..., rsdnm)`` inside the istep do-loop with a following
-    // ``if (rsdnm < tolrsd) return``: rsdnm's per-iter recompute was
-    // dropped, rsdnm froze at the pre-loop value, residuals reported
-    // pre-sweep state regardless of itmax.  See
-    // ``tests/if_then_return_in_loop_elision_test.py`` for the
-    // distilled repro.  The dispatch mirrors the toplevel ``fir.if``
-    // handler at the bottom of ``buildAST`` (line 2246) -- same
-    // shape, just reached via the scf.while walker.
+    // fir.if parked inside an scf.while BEFORE region (lift-cf-to-scf leaves fir.if as-is). Without this dispatch the
+    // op falls through as pure-value and the IF body is silently dropped (see
+    // tests/if_then_return_in_loop_elision_test.py). Mirrors the toplevel fir.if handler.
     if (auto firIfOp = mlir::dyn_cast<fir::IfOp>(op)) {
       if (isOptionalPresentSelect(firIfOp)) continue;  // dead optional-present marshalling select
       ASTNode n;
       n.kind = "conditional";
       n.condition = buildBoolExpr(firIfOp.getCondition(), 0);
-      // Walk the condition's IR for array-element reads so the
-      // Python emitter can lift the condition into a tasklet when
-      // it references arrays.  Without this, ``emit_cond`` hoists
-      // the rendered string to an interstate-edge assignment, but
-      // DaCe treats array names there as bare Symbols (no
-      // connector + no memlet) and the C++ codegen emits the data
-      // pointer where it expected a scalar (graupel's
-      // ``max(q_x_1, q_x_1, q_x_1)`` if_cond was the surfacer:
-      // ``double* > 1e-15`` type-error).
+      // Collects array-element reads in the condition so emit_cond can lift it into a tasklet; otherwise DaCe treats
+      // array names as bare interstate symbols and codegen emits a pointer where a scalar is expected.
       collectReadAccesses(firIfOp.getCondition(), n.accesses, 0);
       if (!firIfOp.getThenRegion().empty()) n.children = buildAST(firIfOp.getThenRegion().front());
       if (!firIfOp.getElseRegion().empty()) n.else_children = buildAST(firIfOp.getElseRegion().front());
@@ -260,11 +164,8 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
       continue;
     }
     if (auto condOp = mlir::dyn_cast<mlir::scf::ConditionOp>(op)) {
-      // Capture the enclosing scf.while's carried results into their synth
-      // scalars (each iteration, so they hold the value at exit).  A post-loop
-      // ``scf.index_switch`` reads these to run the side-effect of whichever
-      // EXIT fired -- without this the exit reason is lost and the dispatched
-      // side-effect (e.g. ``no_fall = .false.``) never happens.
+      // Captures the scf.while's carried results into synth scalars each iteration; a post-loop scf.index_switch reads
+      // these to run the fired EXIT's side effect -- without this the exit reason is lost.
       if (auto whileOp = condOp->getParentOfType<mlir::scf::WhileOp>()) {
         auto args = condOp.getArgs();
         for (unsigned i = 0; i < args.size() && i < whileOp.getNumResults(); ++i) {
@@ -276,11 +177,8 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
           out.push_back(std::move(a));
         }
       }
-      // ``scf.condition(%c)``: break when %c is false.  Use the
-      // pre-body snapshot ``__brk_<N>`` if we created one (see the
-      // top-of-function block) so the break check sees the SSA-
-      // operand values from the start of the iteration, not the
-      // post-mutation values produced by an in-body scf.if.
+      // scf.condition(%c): break when %c is false. Uses the pre-body snapshot __brk_<N> (if created) so the check sees
+      // start-of-iteration values, not post-mutation ones.
       ASTNode guard;
       guard.kind = "conditional";
       if (!brkSynthName.empty()) {
@@ -301,25 +199,15 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
       continue;
     }
     if (auto assign = mlir::dyn_cast<hlfir::AssignOp>(op)) {
-      // Route through the normal assign dispatcher so copy/memset /
-      // reduction / elemental shapes stay recognised inside the loop.
+      // Routes through the normal assign dispatcher so copy/memset/reduction/elemental shapes stay recognised inside
+      // the loop.
       auto src = assign.getOperand(0);
       auto dst = assign.getOperand(1);
       bool const dst_is_array = isArrayRef(dst.getType());
       bool const src_is_array = isArrayRef(src.getType());
-      // Whole-array ELEMENTWISE assign inside the loop body
-      // (``a = a*2``, ``a = a - 1`` in a ``do while``).  The RHS is an
-      // ``hlfir.elemental`` whose result type is an ``!hlfir.expr<?>``
-      // (so ``src_is_array`` is true), but it is NOT a plain
-      // array-to-array copy: ``buildCopyNode`` would ``traceToDecl``
-      // the elemental result, get an empty name, and emit a
-      // ``kind="copy"`` node with ``reduce_src=""`` -- which blows up
-      // at ``emit_library.emit_copy`` (``sdfg.arrays[""]`` KeyError).
-      // Mirror the structured ``buildAST`` dispatch (the
-      // ``hlfir.elemental`` case): expand to the element-wise
-      // map+assign (``buildElementalAssign``), with the MERGE-libcall
-      // shape checked first.  Without this, every whole-array
-      // element-wise op in a ``do while`` body miscompiled.
+      // Whole-array elementwise assign (``a = a*2``) in a do-while: RHS is an hlfir.elemental (array-typed, not a copy)
+      // -- buildCopyNode would traceToDecl it to an empty name and crash. Mirror the structured dispatch: MERGE-libcall
+      // check first, else buildElementalAssign.
       if (auto* sop = src.getDefiningOp()) {
         if (auto elem = mlir::dyn_cast<hlfir::ElementalOp>(sop)) {
           auto merge_built = buildMergeLibcall(assign, elem);
@@ -330,15 +218,9 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
           }
           continue;
         }
-        // Scalar-reducing intrinsic as the RHS (``tmp = MAXVAL(a)``).
-        // Inside a ``do while`` body this is how an inline reduction
-        // (``out = out + MAXVAL(a)``) reaches us: LiftReductionOperands
-        // hoists the reduction into a ``_QQred_lift_N = MAXVAL(a)`` temp
-        // assign placed in the loop body, then the consuming elemental
-        // reads the lifted scalar.  Route the lifted assign through the
-        // SAME reduce lowering the structured dispatch uses -- without
-        // this it falls to ``buildAssignNode`` and the reduction RHS
-        // renders as ``?`` (``emit_scalar_assign`` aborts).
+        // Scalar-reducing intrinsic RHS (``tmp = MAXVAL(a)``): LiftReductionOperands hoists an inline reduction to this
+        // shape inside a do-while body. Route through the same reduce lowering the structured dispatch uses, else it
+        // renders as "?" and emit_scalar_assign aborts.
         {
           bool redMatched = false;
           auto redNodes = buildReductionAssignNodes(assign, sop, redMatched);
@@ -351,12 +233,9 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
       if (dst_is_array && src_is_array) {
         out.push_back(buildCopyNode(assign));
       } else if (dst_is_array && !src_is_array && isConstantZero(src)) {
-        // A section zero-fill (``a(:, :, blockno) = 0``) must write ONLY the
-        // section via the loop-based scalar broadcast -- a whole-array memset
-        // clobbers the out-of-section elements (ICON ``rot_vec_v(:, :, blockno)
-        // = 0`` inside a block loop was zeroing EVERY block, dropping the
-        // caller's out-of-domain intent(inout) data).  Only a WHOLE-array dest
-        // (no triplet designate) becomes a memset.
+        // A section zero-fill (``a(:, :, blockno) = 0``) must write only the section via loop-based broadcast -- a
+        // whole-array memset would clobber out-of-section elements (ICON rot_vec_v case). Only a whole-array dest
+        // becomes a memset.
         std::vector<ASTNode> secNodes;
         if (auto sec = asSectionDesignate(dst)) secNodes = buildSectionScalarAssign(assign, sec);
         if (!secNodes.empty())
@@ -369,10 +248,8 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
       continue;
     }
     if (auto st = mlir::dyn_cast<fir::StoreOp>(op)) {
-      // IV / counter bump stores Flang emits inside the lifted
-      // scf.while body (``i = i + 1``, ``counter = counter - 1``).
-      // Handled uniformly for declared vars and bare-alloca scratch
-      // counters.
+      // IV/counter bump stores Flang emits inside the lifted scf.while body; handled uniformly for declared vars and
+      // bare-alloca scratch counters.
       auto memref = st.getMemref();
       auto target = traceToDecl(memref);
       if (target.empty())
@@ -380,12 +257,8 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
           if (mlir::isa<fir::AllocaOp>(md)) target = allocaSynthName(memref);
       if (target.empty()) continue;
       auto expr = buildExpr(st.getValue(), 0);
-      // Drop stores whose RHS we couldn't resolve.  These are almost
-      // always Flang's implicit IV writeback at the end of a
-      // ``fir.do_loop`` body: the stored value is a block arg of the
-      // surrounding do-loop that buildExpr can't express on its own
-      //  --  and the regular do-loop emitter already handles the IV
-      // through ``initialize_expr`` / ``update_expr``.
+      // Drops stores with unresolvable RHS -- almost always Flang's implicit IV writeback at a fir.do_loop end, already
+      // handled by the do-loop emitter's initialize_expr/update_expr.
       if (expr == "?") continue;
       ASTNode a;
       a.kind = "assign";
@@ -395,16 +268,9 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
       out.push_back(std::move(a));
       continue;
     }
-    // ``fir.do_loop`` parked inside an ``scf.while`` BEFORE region.
-    // This is the shape ``lift-cf-to-scf`` produces from a Fortran
-    // ``do`` whose containing istep loop has an early ``return``
-    // (NPB LU's ``ssor``: the istep loop with ``if (rsdnm < tolrsd)
-    // return``).  Without this dispatch the op falls through as a
-    // "pure-value op" and EVERY assign in the loop body is silently
-    // dropped from the AST.  Emit a minimal "loop" node and recurse
-    // into the body block; the existing emit_loop fallbacks recover
-    // bounds and iter from the SSA chain when loop_iter / loop_bound
-    // are absent.
+    // fir.do_loop parked inside an scf.while BEFORE region (lift-cf-to-scf shape from a Fortran do whose containing
+    // loop has an early return). Without this every assign in the loop body is silently dropped; emit_loop fallbacks
+    // recover bounds/iter from the SSA chain when absent.
     if (auto doLoop = mlir::dyn_cast<fir::DoLoopOp>(op)) {
       ASTNode n;
       n.kind = "loop";
@@ -440,44 +306,18 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
       out.push_back(std::move(n));
       continue;
     }
-    // ``fir.call`` parked in the scf.while BEFORE region (a DO-WHILE body call,
-    // or a call hoisted into the loop condition).  ``fir.call`` carries no
-    // MemoryEffectOpInterface, so the pure-value guard below would treat it as
-    // effect-free and SILENTLY DROP it -- the call would never run in the SDFG.
-    // Route it through the SAME dispatch the structured ``buildAST`` uses
-    // (MPI / BLAS / LAPACK / FFT / I/O / generic external), so every call shape
-    // is recognised inside the loop too.
+    // fir.call parked in the scf.while BEFORE region; carries no MemoryEffectOpInterface so the pure-value guard below
+    // would silently drop it. Routed through the same dispatch structured buildAST uses.
     if (auto call = mlir::dyn_cast<fir::CallOp>(op)) {
       dispatchScfWhileCall(call, out);
       continue;
     }
-    // Pure-value ops -- no AST node, their values flow inline through
-    // SSA into the consuming side-effect op (which IS handled above).
-    //
-    // Defensive guard: if we reach here with an op that DOES carry
-    // observable side effects (writes / nested side-effecting
-    // regions), the per-op-type switch above is missing a handler
-    // and the op's effects would be silently dropped from the SDFG.
-    // The fir.if elision bug (NPB LU residuals stuck at pre-loop
-    // state) was exactly this -- ``fir.if`` was missing from the
-    // dispatch above and its IF body fell through here.
-    //
-    // MLIR's ``MemoryEffectOpInterface`` distinguishes pure-value
-    // ops (arith.*, fir.load, hlfir.designate, ...) from
-    // side-effecting ones; only the latter need a handler.  Throw
-    // immediately rather than warn-and-continue: a warning could be
-    // missed in CI noise and the SDFG would then silently compute
-    // the wrong result.  An unhandled side-effecting op is a real
-    // bridge gap that must be fixed by adding the corresponding
-    // handler -- the error names the op so the gap surfaces at
-    // parse time, not later in residual diffs.
-    // Known-benign ops that carry no observable SDFG effect even
-    // though they have nested regions or lack a MemoryEffect
-    // interface.  Anything else is treated as a side-effect gap.
+    // Pure-value ops need no AST node (values flow inline via SSA). Guard: any op reaching here with an observable
+    // write effect throws immediately (missing dispatch handler) rather than silently dropping the effect; kKnownBenign
+    // below allowlists ops with regions but no real effect.
     auto opName = op.getName().getStringRef();
     static const llvm::StringSet<> kKnownBenign = {
-        // Scope marker for dummy arguments -- pure metadata, no
-        // runtime effect.
+        // Scope marker for dummy arguments -- pure metadata, no runtime effect.
         "fir.dummy_scope",
     };
     if (kKnownBenign.contains(opName)) continue;
@@ -493,10 +333,8 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
           break;
         }
     } else if (op.getNumRegions() > 0) {
-      // No MemoryEffectOpInterface but has nested regions -- the
-      // regions themselves may carry effects (custom dialect ops
-      // wrapping a body).  Treat as side-effecting for the guard;
-      // allowlist via ``kKnownBenign`` above for legitimate markers.
+      // No MemoryEffectOpInterface but has nested regions -- treat as side-effecting (regions may carry effects);
+      // allowlist via kKnownBenign for legitimate markers.
       hasWriteEffect = true;
     }
     if (hasWriteEffect) {
@@ -530,21 +368,12 @@ static std::string traceLoopIter(fir::DoLoopOp loop) {
   return "";
 }
 
-// ---------------------------------------------------------------------------
-// MPI point-to-point recognition
-//
-// Flang lowers ``call MPI_Send(...)`` to ``fir.call @_QPmpi_send(...)``
-// (Fortran is case-insensitive -> flang lowercases the external name).
-// There is no MLIR ``mpi`` dialect from flang, so we pattern-match the
-// callee symbol and map it to a DaCe ``dace.libraries.mpi`` node.  The
-// positional ABI (probed from real HLFIR) is:
-//   mpi_send(buf, count, datatype, dest, tag, comm, ierr)
-//   mpi_recv(buf, count, datatype, src,  tag, comm, status, ierr)
-// ---------------------------------------------------------------------------
+// MPI point-to-point recognition: flang lowers "call MPI_Send(...)" to fir.call @_QPmpi_send(...) (case-insensitive,
+// lowercased); pattern-matched by callee name -> dace.libraries.mpi. ABI:
+// mpi_send(buf,count,datatype,dest,tag,comm,ierr), mpi_recv(buf,count,datatype,src,tag,comm,status,ierr).
 
-/// :returns: the normalised MPI op tag (``"mpi_send"`` / ``"mpi_recv"``
-/// / ``"mpi_isend"`` / ``"mpi_irecv"`` / ``"mpi_wait"``) for a
-/// recognised callee, else empty.
+/// Returns the normalised MPI op tag (mpi_send/mpi_recv/mpi_isend/mpi_irecv/mpi_wait) for a recognised callee, else
+/// empty.
 static std::string mpiCalleeTag(const std::string& callee) {
   std::string s = callee;
   if (!s.empty() && s[0] == '@') s.erase(0, 1);
@@ -558,26 +387,9 @@ static std::string mpiCalleeTag(const std::string& callee) {
   return std::string{};
 }
 
-// ---------------------------------------------------------------------------
-// BLAS / LAPACK recognition
-//
-// Pattern: Fortran source calls a vendor BLAS / LAPACK routine directly
-// (e.g. ``call dgemm('N','N', m, n, k, alpha, a, lda, b, ldb, beta, c, ldc)``).
-// Flang lowers each as ``fir.call @dgemm_(...)`` (or ``@_QPdgemm`` depending
-// on the binding flavour).  We pattern-match the callee by canonical name
-// and the Python ``emit_blas`` / ``emit_lapack`` handlers stamp a
-// :class:`dace.libraries.blas.*` / :class:`dace.libraries.lapack.*`
-// library node with operand memlets.
-//
-// The recognised subset (first wave -- the highest-frequency routines in
-// the cloudsc / ICON / QE working set):
-//   BLAS L1: DAXPY / DSCAL / DDOT
-//   BLAS L2: DGEMV
-//   BLAS L3: DGEMM
-//   LAPACK : DGETRF / DPOTRF
-// Single-precision twins (S-prefix) are accepted alongside the D-prefix
-// names so the same recognition path covers real32 callers; complex
-// (C / Z) twins are out of scope for the first wave.
+// BLAS/LAPACK recognition: matches fir.call @dgemm_/@_QPdgemm-style callees by canonical name ->
+// dace.libraries.blas/lapack nodes. First wave: BLAS L1 DAXPY/DSCAL/DDOT, L2 DGEMV, L3 DGEMM, LAPACK DGETRF/DPOTRF;
+// S-prefix (real32) accepted, complex (C/Z) out of scope.
 
 /// Strip Fortran mangling decorations and lowercase.
 static std::string normaliseBlasName(const std::string& callee) {
@@ -588,9 +400,8 @@ static std::string normaliseBlasName(const std::string& callee) {
   return llvm::StringRef(s).lower();
 }
 
-/// Return the canonical BLAS routine name (e.g. ``"dgemm"``) for a recognised
-/// callee, else empty.  Accepts the D-prefix (real64) and S-prefix (real32)
-/// names that map onto the same DaCe lib node (dtype-dispatched at expansion).
+/// Returns the canonical BLAS routine name (e.g. "dgemm") for a recognised callee, else empty. D-prefix (real64) and
+/// S-prefix (real32) map onto the same dtype-dispatched lib node.
 static std::string blasCalleeTag(const std::string& callee) {
   std::string low = normaliseBlasName(callee);
   static const std::set<std::string> recognised = {
@@ -638,8 +449,7 @@ static std::string blasCalleeTag(const std::string& callee) {
   return std::string{};
 }
 
-/// Return the canonical LAPACK routine name (e.g. ``"dgetrf"``) for a
-/// recognised callee, else empty.
+/// Returns the canonical LAPACK routine name (e.g. "dgetrf") for a recognised callee, else empty.
 static std::string lapackCalleeTag(const std::string& callee) {
   std::string low = normaliseBlasName(callee);
   static const std::set<std::string> recognised = {
@@ -649,15 +459,9 @@ static std::string lapackCalleeTag(const std::string& callee) {
   return std::string{};
 }
 
-// ---------------------------------------------------------------------------
-// Library-prefix "near-miss" detection
-//
-// When a Fortran call site matches the prefix of a recognised library
-// (MPI / FFTW3 / BLAS / LAPACK) but the exact routine isn't in the
-// supported subset, fall back to a clear ``unsupported_libcall`` ASTNode
-// so the Python builder raises a precise ``NotImplementedError`` instead
-// of silently emitting a broken generic call (``_out = ?`` -- the failure
-// mode this layer prevents).
+// Library-prefix "near-miss" detection: a call matching a recognised library's prefix (MPI/FFTW3/BLAS/LAPACK) but
+// outside the supported subset emits "unsupported_libcall" (-> NotImplementedError) instead of a broken generic call
+// ("_out = ?").
 
 static const std::set<std::string>& knownBlasNames() {
   static const std::set<std::string> names = {
@@ -687,8 +491,7 @@ static const std::set<std::string>& knownBlasNames() {
       "dcopy",
       "scopy",
       "dsdot",
-      // Already recognised in ``blasCalleeTag`` -- listed so the detector
-      // recognises THEM as BLAS and routes through the normal path.
+      // Already recognised in blasCalleeTag -- listed so the detector routes them as BLAS too.
       "daxpy",
       "saxpy",
       "dscal",
@@ -735,38 +538,17 @@ static const std::set<std::string>& knownLapackNames() {
   return names;
 }
 
-// ---------------------------------------------------------------------------
-// QE FFT-interfaces recognition
-//
-// Quantum ESPRESSO exposes a high-level generic FFT interface in
-// ``FFTXlib/src/fft_interfaces.f90``::
-//
-//     CALL fwfft(fft_kind, f, dfft [, howmany])   ! G -> R
-//     CALL invfft(fft_kind, f, dfft [, howmany])  ! R -> G
-//
-// The generic resolves to specific subroutines (``fwfft_y`` / ``invfft_y``
-// for the standard grid, ``invfft_b`` for the box grid).  ``fft_kind`` is
-// a literal character ('Rho' / 'Wave' / 'tgWave'), ``f`` is the (typically
-// 1-D) complex buffer that gets transformed in place, and ``dfft`` is the
-// :type:`fft_type_descriptor` that carries the 3-D grid sizes.
-//
-// For the bridge first cut we ignore ``dfft`` (the 3-D dims) and the
-// optional ``howmany`` argument, and emit a single ``fftcall`` ASTNode
-// referencing the buffer with the direction derived from the routine
-// name.  The Python ``emit_fft`` handler stamps an :class:`FFT` /
-// :class:`IFFT` library node with the buffer as the ``_inp`` / ``_out``
-// operand.  This matches the recognition layer; correct multi-D FFT
-// semantics (descriptor-driven dim extraction) is a follow-up gap.
+// QE FFT-interfaces recognition: QE's generic ``CALL fwfft(fft_kind, f, dfft [, howmany])`` / ``invfft``
+// (FFTXlib/src/fft_interfaces.f90) resolves to fwfft_y/invfft_y (standard grid) or invfft_b (box grid). First cut
+// ignores dfft (3-D dims) and howmany; emits a single fftcall ASTNode on the buffer with direction from the routine
+// name -- multi-D FFT semantics is a follow-up gap.
 
-/// Return ``"forward"`` for ``fwfft``-family callees, ``"backward"`` for
-/// ``invfft``-family, else empty.  Accepts both the generic names
-/// (``fwfft`` / ``invfft``) and the specific subroutines (``fwfft_y``,
-/// ``invfft_y``, ``fwfft_b``, ``invfft_b``).
+/// Returns "forward" for fwfft-family callees, "backward" for invfft-family, else empty. Accepts both generic and
+/// specific (fwfft_y/invfft_y/fwfft_b/invfft_b) names.
 static std::string qeFftCalleeTag(const std::string& callee) {
   std::string low = normaliseBlasName(callee);
-  // Strip QE module prefix (e.g. ``_QMfft_interfacesPinvfft_y`` after
-  // ``normaliseBlasName`` drops the leading ``_QP``).  Be permissive about
-  // the in-between ``_QM<mod>P``-style decorations.
+  // Strips the QE module prefix (e.g. ``_QMfft_interfacesPinvfft_y`` after normaliseBlasName drops the leading _QP);
+  // permissive about _QM<mod>P-style decorations.
   auto p = low.find('p');
   if (p != std::string::npos && low.rfind("_qm", 0) == 0) low = low.substr(p + 1);
   if (low == "fwfft" || low == "fwfft_y" || low == "fwfft_b") return "forward";
@@ -774,9 +556,7 @@ static std::string qeFftCalleeTag(const std::string& callee) {
   return std::string{};
 }
 
-/// Returns ``"real"`` / ``"complex"`` for QE's ``fft_interpolate_real`` /
-/// ``fft_interpolate_complex`` specific subroutines (the generic
-/// ``fft_interpolate`` resolves to one of these), else empty.
+/// Returns "real"/"complex" for QE's fft_interpolate_real/fft_interpolate_complex specific subroutines, else empty.
 static std::string qeFftInterpolateCalleeTag(const std::string& callee) {
   std::string low = normaliseBlasName(callee);
   auto p = low.find('p');
@@ -786,29 +566,12 @@ static std::string qeFftInterpolateCalleeTag(const std::string& callee) {
   return std::string{};
 }
 
-// ---------------------------------------------------------------------------
-// QE parallel pencil-pipeline recognition
-//
-// QE's parallel 3-D FFT (``FFTXlib/src/fft_parallel.f90``) is a five-step
-// pipeline of batched 1-D FFTs and MPI alltoalls:
-//
-//     cft_1z(f)              ! 1-D FFT along the z axis
-//     fft_scatter_yz(f)      ! MPI alltoall across desc%comm3
-//     cft_1y(f)              ! 1-D FFT along the y axis
-//     fft_scatter_xy(f)      ! MPI alltoall across desc%comm2
-//     cft_1x(f)              ! 1-D FFT along the x axis
-//
-// The bridge recognises the per-axis FFTs (``cft_1x`` / ``cft_1y`` /
-// ``cft_1z``) and emits an :class:`FFT` lib node tagged with the axis,
-// and recognises the scatter routines (``fft_scatter_xy`` / ``yz``) and
-// emits an :class:`Alltoall` lib node.  Both are first-cut recognisers;
-// the buffer-to-3-D-grid reinterpretation that fully captures QE's
-// runtime semantics is a follow-up gap.
+// QE parallel pencil-pipeline recognition: QE's 3-D FFT (FFTXlib/src/fft_parallel.f90) pipelines cft_1z ->
+// fft_scatter_yz -> cft_1y -> fft_scatter_xy -> cft_1x. Bridge recognises the per-axis FFTs (-> tagged FFT lib node)
+// and scatter routines (-> Alltoall lib node); buffer-to-3-D-grid reinterpretation is a follow-up gap.
 
-/// Returns ``"axis=X,dir=Y"`` (where X is 0/1/2 and Y is forward/backward)
-/// for a recognised ``cft_1z`` / ``cft_1y`` / ``cft_1x`` callee, else
-/// empty.  Axis assignment: ``cft_1x`` -> 0, ``cft_1y`` -> 1, ``cft_1z`` -> 2
-/// (matches the C / row-major dimension order downstream code expects).
+/// Returns "axis=X,dir=Y" (X=0/1/2, Y=forward/backward) for a recognised cft_1z/cft_1y/cft_1x callee, else empty.
+/// cft_1x->0, cft_1y->1, cft_1z->2 (row-major order).
 static std::string qePencilCalleeTag(const std::string& callee) {
   std::string low = normaliseBlasName(callee);
   auto p = low.find('p');
@@ -819,11 +582,8 @@ static std::string qePencilCalleeTag(const std::string& callee) {
   return std::string{};
 }
 
-/// Build the ``fftcall`` ASTNode for a recognised QE pencil routine.
-/// Signature: ``cft_1z(c, nsl, nz, ldz, isign, cout)``.  We treat
-/// ``c`` (arg 0) as the input buffer and ``cout`` (arg 5) as the
-/// output; the ``isign`` runtime sign is read literally when
-/// available (and otherwise defaults to ``forward``).
+/// Builds the fftcall ASTNode for a recognised QE pencil routine. Signature: cft_1z(c, nsl, nz, ldz, isign, cout) -- c
+/// (arg 0) is input, cout (arg 5) is output; isign read literally when available, else defaults forward.
 static ASTNode buildQePencilCallNode(fir::CallOp call, const std::string& axisTag) {
   ASTNode n;
   auto args = call.getArgOperands();
@@ -831,8 +591,7 @@ static ASTNode buildQePencilCallNode(fir::CallOp call, const std::string& axisTa
   std::string const cin = traceToDecl(args[0]);
   std::string const cout = traceToDecl(args[5]);
   if (cin.empty() || cout.empty()) return n;
-  // isign: positive = backward, negative = forward.  When the literal
-  // is unavailable we conservatively pick forward.
+  // isign: positive = backward, negative = forward; unavailable literal conservatively picks forward.
   std::string direction = "forward";
   if (auto c = traceConstInt(args[4])) {
     direction = (*c > 0) ? "backward" : "forward";
@@ -841,15 +600,13 @@ static ASTNode buildQePencilCallNode(fir::CallOp call, const std::string& axisTa
   n.callee = "fft_execute";
   n.expr = direction;
   n.target = cout;
-  // ``call_args[0]`` / ``[1]`` are the in / out buffer names; subsequent
-  // entries carry the axis tag so ``emit_fft`` can set ``node.axis``
-  // when we later wire up axis-aware FFTW3 / cuFFT expansions.
+  // call_args[0]/[1] are the in/out buffer names; subsequent entries carry the axis tag for a future axis-aware
+  // FFTW3/cuFFT expansion.
   n.call_args = {cin, cout, axisTag};
   return n;
 }
 
-/// Returns ``"xy"`` or ``"yz"`` for QE's ``fft_scatter_xy`` /
-/// ``fft_scatter_yz`` alltoall transposes, else empty.
+/// Returns "xy" or "yz" for QE's fft_scatter_xy/fft_scatter_yz alltoall transposes, else empty.
 static std::string qeScatterCalleeTag(const std::string& callee) {
   std::string low = normaliseBlasName(callee);
   auto p = low.find('p');
@@ -859,12 +616,8 @@ static std::string qeScatterCalleeTag(const std::string& callee) {
   return std::string{};
 }
 
-/// Build the ``mpicall`` ASTNode for a recognised QE scatter routine.
-/// Signature: ``fft_scatter_xy(desc, f_in, f_aux, nxx_, isgn[, comm])``.
-/// We map this onto the existing ``mpi_alltoall`` ASTNode the Python
-/// builder already lowers to :class:`Alltoall`; ``desc`` is the
-/// descriptor (ignored at recognition), ``f_in`` (arg 1) is the send
-/// buffer, ``f_aux`` (arg 2) is the receive buffer.
+/// Builds the mpicall ASTNode for a recognised QE scatter routine. Signature: fft_scatter_xy(desc, f_in, f_aux, nxx_,
+/// isgn[, comm]); maps onto the existing mpi_alltoall ASTNode (desc ignored, f_in=send, f_aux=recv).
 static ASTNode buildQeScatterCallNode(fir::CallOp call, const std::string& plane) {
   ASTNode n;
   auto args = call.getArgOperands();
@@ -875,17 +628,14 @@ static ASTNode buildQeScatterCallNode(fir::CallOp call, const std::string& plane
   n.kind = "mpicall";
   n.callee = "mpi_alltoall";
   n.call_args = {sendbuf, recvbuf};
-  // Carry the plane tag through ``expr`` so a downstream emitter could
-  // wire the matching descriptor sub-communicator (desc%comm2 vs comm3);
-  // the current ``emit_mpi`` Alltoall path ignores it and defaults to
-  // ``MPI_COMM_WORLD``.
+  // Plane tag rides ``expr`` for a future descriptor sub-communicator wiring (desc%comm2 vs comm3); current emit_mpi
+  // Alltoall path ignores it and defaults to MPI_COMM_WORLD.
   n.expr = plane;
   return n;
 }
 
-/// Build an ``fftcall`` ASTNode for a recognised QE FFT call.  The buffer
-/// is the 2nd argument (after the ``fft_kind`` literal).  We do not look
-/// at the descriptor or ``howmany`` for the recognition first cut.
+/// Builds an fftcall ASTNode for a recognised QE FFT call. Buffer is the 2nd argument (after the fft_kind literal);
+/// descriptor/howmany not inspected in this first cut.
 static ASTNode buildQeFftCallNode(fir::CallOp call, const std::string& direction) {
   ASTNode n;
   auto args = call.getArgOperands();
@@ -900,9 +650,8 @@ static ASTNode buildQeFftCallNode(fir::CallOp call, const std::string& direction
   return n;
 }
 
-/// Returns "mpi" / "blas" / "lapack" / "fftw3" if the callee matches one of
-/// those library's call conventions; else empty.  Used by the dispatch
-/// loop's near-miss detector.
+/// Returns "mpi"/"blas"/"lapack"/"fftw3" if the callee matches that library's call convention, else empty. Used by the
+/// dispatch loop's near-miss detector.
 static std::string libraryFamilyTag(const std::string& callee) {
   std::string const low = normaliseBlasName(callee);
   if (low.rfind("mpi_", 0) == 0) return "mpi";
@@ -912,11 +661,8 @@ static std::string libraryFamilyTag(const std::string& callee) {
   return std::string{};
 }
 
-/// Resolve a fir.call operand to either a decl name or a literal
-/// (constant int) for the BLAS / LAPACK / MPI recognisers.  An empty
-/// return means the operand is neither traceable to a declared name
-/// nor a known constant -- the dispatch loop drops the recognition
-/// gracefully.
+/// Resolves a fir.call operand to a decl name or literal int for the BLAS/LAPACK/MPI recognisers; empty means neither
+/// -- the dispatch loop drops the recognition gracefully.
 static std::string resolveCallArg(mlir::Value v) {
   std::string n = traceToDecl(v);
   if (!n.empty()) return n;
@@ -924,12 +670,9 @@ static std::string resolveCallArg(mlir::Value v) {
   return std::string{};
 }
 
-/// Build the ``ASTNode`` for a recognised BLAS call.  ``call_args`` carry
-/// the resolved decl / constant names in the routine's positional order
-/// (drops the ``N`` / leading-dim args -- the lib node derives them from
-/// memlets at expansion time).  Char-arg routines (DGEMM, DGEMV) capture
-/// the ``TRANS`` literal in ``ASTNode.expr`` so the Python builder can
-/// set the matching node property.
+/// Builds the ASTNode for a recognised BLAS call. call_args carry resolved decl/constant names in positional order
+/// (N/leading-dim args dropped, derived from memlets later). Char-arg routines (DGEMM, DGEMV) capture TRANS in
+/// ASTNode.expr.
 static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
   ASTNode n;
   n.kind = "blascall";
@@ -1172,13 +915,9 @@ static ASTNode buildLapackCallNode(fir::CallOp call, const std::string& routine)
   return n;
 }
 
-/// Slot index (1-based Fortran) + declared extent of an MPI request argument,
-/// so the Python emitter can size the shared ``_mpireq_<base>`` request transient
-/// to the WHOLE request array and address the right slot.  ``reqs(k)`` ->
-/// ``(buildExpr(k), extent-of-reqs)``; a scalar request ``sreq`` -> ``("1", "1")``.
-/// Without this, every ``reqs(k)`` collapses onto ``_mpireq_reqs[0]`` and
-/// ``MPI_Waitall`` waits on only the last-written request (silently dropping the
-/// receives -- see the request-array collapse fix).
+/// Slot index (1-based) + declared extent of an MPI request argument so the emitter can size the shared _mpireq_<base>
+/// transient and address the right slot; without it every reqs(k) collapses onto _mpireq_reqs[0] and MPI_Waitall
+/// silently drops receives.
 static std::pair<std::string, std::string> mpiRequestSlotExtent(mlir::Value reqVal) {
   std::string slot = "1";
   mlir::Value base = reqVal;
@@ -1211,37 +950,18 @@ static std::pair<std::string, std::string> mpiRequestSlotExtent(mlir::Value reqV
   return {slot, extent};
 }
 
-/// Build an ``mpicall`` ASTNode for a recognised MPI point-to-point
-/// call.  ``call_args`` layout (the names the Python builder wires to
-/// the DaCe library node's connectors):
-///   * send / recv:    ``[buffer, partner(dest|src), tag]``
-///   * isend / irecv:  ``[buffer, partner(dest|src), tag, request]``
-///   * wait:           ``[request]``
-/// A non-default (runtime / user) communicator is appended as one extra
-/// trailing entry (``[..., comm]``); the default ``MPI_COMM_WORLD`` adds
-/// nothing, so the optional comm is unambiguous per callee from the
-/// ``call_args`` length (send/recv 3 vs 4, isend/irecv 4 vs 5).  The
-/// Python builder lowers the trailing comm to an ``opaque(MPI_Comm)``
-/// ``_comm`` connector; the c-binding wrapper does ``MPI_Comm_f2c`` on
-/// the Fortran integer handle.
-/// count is taken from the buffer memlet downstream; datatype / status
-/// / ierr are not modelled (DaCe derives the MPI datatype from the
-/// buffer and uses ``MPI_STATUS_IGNORE``).  Positional ABI:
-///   send (buf,count,dt,dest,tag,comm,ierr)
-///   recv (buf,count,dt,src,tag,comm,status,ierr)
-///   isend(buf,count,dt,dest,tag,comm,request,ierr)
-///   irecv(buf,count,dt,src,tag,comm,request,ierr)
-///   wait (request,status,ierr)
+/// Builds an mpicall ASTNode for MPI point-to-point. call_args: send/recv=[buffer,partner,tag],
+/// isend/irecv=[buffer,partner,tag,request], wait=[request], +trailing comm if non-default (opaque(MPI_Comm) _comm
+/// connector). ABI: send(buf,count,dt,dest,tag,comm,ierr), recv(buf,count,dt,src,tag,comm,status,ierr), isend/irecv add
+/// request before ierr, wait(request,status,ierr). count/datatype/status/ierr not modelled (derived from buffer memlet
+/// / MPI_STATUS_IGNORE).
 
-// The value stored into an alloca ``ref`` (definition further down the file);
-// used here to recover the value written into a materialised by-value scalar.
+// The value stored into alloca ``ref`` (definition further down); recovers the value written into a materialised
+// by-value scalar.
 static mlir::Value ioStoredValue(mlir::Value ref);
 
-/// Trace a collective-buffer operand back to its Fortran array SECTION
-/// designate (``buf(k:)``) through the ``fir.box_addr`` / ``fir.convert`` /
-/// ``fir.rebox`` shims flang wraps a section box in when passing it by
-/// reference.  Returns the section designate (>= 1 triplet dim) or null for a
-/// whole-array buffer.
+/// Traces a collective-buffer operand back to its Fortran array SECTION designate (``buf(k:)``) through
+/// fir.box_addr/fir.convert/fir.rebox shims; returns null for a whole-array buffer.
 static hlfir::DesignateOp traceSectionDesignate(mlir::Value v) {
   for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
     if (auto dg = asSectionDesignate(v)) return dg;
@@ -1264,13 +984,9 @@ static hlfir::DesignateOp traceSectionDesignate(mlir::Value v) {
   return {};
 }
 
-/// Read the ``i32`` initializer literal of a ``fir.global constant`` a by-ref
-/// operand address_of's (a folded Fortran ``parameter`` -- e.g. a broadcast
-/// ``count`` declared ``integer, parameter :: count = 4``).  Peels the
-/// ``hlfir.declare`` / ``fir.convert`` / ``fir.load`` shims to the
-/// ``fir.address_of``, then extracts the ``arith.constant`` feeding the
-/// global's ``fir.has_value`` terminator.  ``nullopt`` when not a global
-/// constant.
+/// Reads the i32 initializer literal of a fir.global constant a by-ref operand address_of's (a folded Fortran
+/// parameter); peels declare/convert/load shims to fir.address_of, then reads the arith.constant feeding fir.has_value.
+/// nullopt when not a global constant.
 static std::optional<int64_t> traceGlobalConstInt(mlir::Value v) {
   for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
     auto* d = v.getDefiningOp();
@@ -1301,23 +1017,17 @@ static std::optional<int64_t> traceGlobalConstInt(mlir::Value v) {
   return std::nullopt;
 }
 
-/// Resolve a by-reference scalar MPI count operand to its integer value
-/// expression.  Flang passes the by-value count BY REFERENCE: a folded
-/// constant / computed value (``n-1``) is materialised as a single-store
-/// ``__assoc_scalar_N`` scalar (recover the stored value), and a folded
-/// ``parameter`` is a ``fir.global constant`` (read its initializer).  Returns
-/// only a CLEAN literal / symbolic expression; empty when the count survives
-/// solely as an opaque materialised scalar name (documented loss -> the emitter
-/// falls back to the whole array, transferring the declared extent).
+/// Resolves a by-reference scalar MPI count operand to its integer expression: a folded/computed value is a
+/// single-store __assoc_scalar_N (recover the stored value), a folded parameter is a fir.global constant. Empty when
+/// unrecoverable -> emitter falls back to the whole array.
 static std::string traceMpiCountExpr(mlir::Value ref) {
   mlir::Value val = ref;
   // Pre-pipeline: an ``hlfir.associate %v`` by-value temp -> its source value.
   if (auto* d = ref.getDefiningOp())
     if (auto assoc = mlir::dyn_cast<hlfir::AssociateOp>(d)) val = assoc.getSource();
   if (auto c = traceConstInt(val)) return std::to_string(*c);
-  // Post-pipeline: the by-value temp is a materialised ``__assoc_scalar_N``
-  // written once with the value -- render the stored value's expression (a
-  // constant, or a clean symbolic form like ``n - 1``).
+  // Post-pipeline: the by-value temp is a materialised __assoc_scalar_N written once -- render the stored value's
+  // expression.
   if (mlir::Value const stored = ioStoredValue(ref)) {
     if (auto c = traceConstInt(stored)) return std::to_string(*c);
     auto e = buildIndexExpr(stored, 0);
@@ -1328,23 +1038,12 @@ static std::string traceMpiCountExpr(mlir::Value ref) {
   return std::string{};
 }
 
-/// DaCe-0-based subset string for a collective-buffer operand, encoding the
-/// Fortran section offset (``buf(k:)``) and/or the explicit MPI element count.
-/// Empty result => whole array (the emitter's ``_buf_memlet`` fallback).  The
-/// emit side (builder/emit_library.py ``_buf_memlet``) reads it via the
-/// per-arg ``call_arg_subsets`` entry and derives the true count from
-/// ``subset.size_exact()``.
-///
-/// ``countOp`` may be null: pass it only when the count IS the buffer's element
-/// extent (``bcast`` / ``allreduce`` -- the whole buffer holds ``count``
-/// elements).  For ``alltoall`` the count is PER-RANK (the buffer holds
-/// ``count * comm_size`` elements), so a null ``countOp`` restricts the subset
-/// to the section offset and the whole-array count is left to the emitter.
+/// DaCe-0-based subset string for a collective-buffer operand (Fortran section offset + optional MPI count); empty =>
+/// whole array (emitter's _buf_memlet fallback). Pass countOp only when count IS the buffer's element extent
+/// (bcast/allreduce); alltoall's count is PER-RANK so pass null there.
 static std::string collectiveBufferSubset(mlir::Value bufOp, mlir::Value countOp) {
-  // A Fortran array SECTION (``buf(k:)``) already carries offset + extent as
-  // clean symbolic bounds -- prefer it (the MPI count of a sectioned buffer
-  // equals its section length), so the subset stays independent of the count
-  // arg's materialised scalar.
+  // A Fortran array SECTION already carries offset+extent as clean symbolic bounds -- prefer it over the count arg's
+  // materialised scalar.
   if (hlfir::DesignateOp sec = traceSectionDesignate(bufOp)) {
     auto parts = renderDesignateSubsetStrings(sec);
     std::string joined;
@@ -1354,9 +1053,8 @@ static std::string collectiveBufferSubset(mlir::Value bufOp, mlir::Value countOp
     }
     if (!joined.empty()) return joined;
   }
-  // Whole-array buffer with an explicit element count (``buf(1:count)``):
-  // ``0:count``.  Empty when the count is not cleanly recoverable -> the
-  // emitter marshals the full declared extent (the Fortran count is lost).
+  // Whole-array buffer with an explicit count -> "0:count"; empty when not cleanly recoverable, emitter marshals the
+  // full declared extent.
   if (countOp) {
     std::string const count = traceMpiCountExpr(countOp);
     if (!count.empty()) return "0:" + count;
@@ -1364,14 +1062,9 @@ static std::string collectiveBufferSubset(mlir::Value bufOp, mlir::Value countOp
   return std::string{};
 }
 
-/// DaCe-0-based subset of a SCALAR-ELEMENT point-to-point operand
-/// (``neighbors(i)`` -> ``(i) - 1``) so the ``_dest`` / ``_src`` / ``_tag`` /
-/// ``_root`` memlet reads that one element instead of collapsing onto the whole
-/// array.  Peels the ``fir.convert`` / ``fir.box_addr`` shims flang may wrap the
-/// element ref in, then requires a pure element ``hlfir.designate`` (every dim a
-/// scalar index, no triplet).  Empty for a whole-scalar operand (``dest``), an
-/// array section, or an un-renderable index -> the emitter marshals the whole
-/// array (previous behaviour).  The emit side reads it via ``call_arg_subsets``.
+/// DaCe-0-based subset of a SCALAR-ELEMENT point-to-point operand (``neighbors(i)`` -> ``(i) - 1``) so the
+/// dest/src/tag/root memlet reads one element, not the whole array. Empty for a whole-scalar operand, a section, or an
+/// un-renderable index -> emitter marshals the whole array.
 static std::string mpiScalarElementSubset(mlir::Value v) {
   for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
     auto* d = v.getDefiningOp();
@@ -1422,20 +1115,14 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
   }
 
   if (mpiOp == "mpi_waitall") {
-    // MPI_Waitall(count, array_of_requests, array_of_statuses, ierr).  The bridge
-    // threads completion through the per-request-NAME opaque transient (same as
-    // mpi_wait); ``array_of_requests`` resolves to its base array name, so a waitall
-    // on ``p_request(:)`` consumes the ``_mpireq_p_request`` token the matching
-    // isend/irecv producers wrote.  count / statuses are not modelled here (the
-    // dataflow token + the __mpi_order chain order the waitall after its producers).
+    // MPI_Waitall(count, array_of_requests, array_of_statuses, ierr): threads completion through the per-request-name
+    // opaque transient (same as mpi_wait); count/statuses not modelled (dataflow token + __mpi_order chain order the
+    // waitall after its producers).
     if (args.size() < 2) throw std::runtime_error("MPI mpi_waitall: expected (count, requests, ...)");
     n.call_args = {resolve(args[1], "requests")};
-    // The waitall waits on ``count`` (args[0]) requests of the ``requests`` array;
-    // the emitter reads ``_mpireq_<base>[0:count]`` so the node emits
-    // ``MPI_Waitall(count, ...)`` -- not the collapsed ``count=1``.  A loop-built
-    // request set names its count variable (``nreq``); a by-reference integer
-    // literal has no name -> ``buildExpr`` renders "?" and the emitter falls back
-    // to the emitted post count (correct for a straight-line waitall).
+    // Waits on ``count`` (args[0]) requests; emitter reads _mpireq_<base>[0:count] so MPI_Waitall gets the real count,
+    // not a collapsed 1. Unnamed by-ref literal count -> buildExpr renders "?" and the emitter falls back to the
+    // emitted post count.
     std::string const reqCount = traceToDecl(args[0]);
     n.options["mpi_req_count"] = reqCount.empty() ? buildExpr(args[0], 0) : reqCount;
     n.options["mpi_req_extent"] = mpiRequestSlotExtent(args[1]).second;
@@ -1443,18 +1130,14 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
   }
 
   if (mpiOp == "mpi_alltoall") {
-    // MPI_Alltoall(sendbuf, sendcount, sendtype, recvbuf, recvcount,
-    //              recvtype, comm, ierr)
+    // MPI_Alltoall(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype, comm, ierr)
     if (args.size() < 7)
       throw std::runtime_error("MPI mpi_alltoall: unexpected argument count " + std::to_string(args.size()));
     std::string const sendbuf = resolve(args[0], "sendbuf");
     std::string const recvbuf = resolve(args[3], "recvbuf");
     n.call_args = {sendbuf, recvbuf};
-    // Section offset (``sbuf(k:)``) only -> 0-based buffer subsets.  The
-    // alltoall count is PER-RANK (the buffer holds ``count * comm_size``
-    // elements), so DON'T fold it into the subset (null count) -- the emitter
-    // keeps the whole declared buffer and the Alltoall node derives the
-    // per-rank count from ``buffer_size / comm_size`` itself.
+    // Section offset only -> 0-based subset; alltoall count is PER-RANK (buffer holds count*comm_size elements) so it's
+    // NOT folded in -- Alltoall derives per-rank count from buffer_size/comm_size itself.
     n.call_arg_subsets = {collectiveBufferSubset(args[0], mlir::Value{}),
                           collectiveBufferSubset(args[3], mlir::Value{})};
     // comm decoding -- same rule as send/recv.  Append on a runtime/user comm.
@@ -1466,8 +1149,8 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
     return n;
   }
 
-  // Decode a (possibly default-WORLD) communicator operand: returns the name to
-  // append to ``call_args`` (empty -> default ``MPI_COMM_WORLD``, append nothing).
+  // Decodes a (possibly default-WORLD) communicator operand: returns the name to append to call_args (empty -> default
+  // MPI_COMM_WORLD, append nothing).
   auto commArg = [&](mlir::Value v) -> std::string {
     std::string const name = traceToDecl(v);
     std::string const low = llvm::StringRef(name).lower();
@@ -1492,8 +1175,8 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
     std::string const recvbuf = resolve(args[1], "recvbuf");
     std::string const op = traceToDecl(args[4]);  // MPI_MAX / MPI_MIN / MPI_SUM / ...
     n.call_args = {sendbuf, recvbuf, op};
-    // Section offset (``sbuf(k:)``) + Fortran count -> 0-based buffer subsets
-    // (op arg carries no subset); empty => whole-array fallback.
+    // Section offset + Fortran count -> 0-based buffer subsets (op arg carries no subset); empty => whole-array
+    // fallback.
     n.call_arg_subsets = {collectiveBufferSubset(args[0], args[2]), collectiveBufferSubset(args[1], args[2]), ""};
     std::string const c = commArg(args[5]);
     if (!c.empty()) n.call_args.push_back(c);
@@ -1507,8 +1190,8 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
     std::string const buffer = resolve(args[0], "buffer");
     std::string const root = resolve(args[3], "root");
     n.call_args = {buffer, root};
-    // Section offset (``buf(k:)``) + Fortran count -> 0-based buffer subset
-    // (root arg carries no subset); empty => whole-array fallback.
+    // Section offset + Fortran count -> 0-based buffer subset (root arg carries no subset); empty => whole-array
+    // fallback.
     n.call_arg_subsets = {collectiveBufferSubset(args[0], args[1]), ""};
     std::string const c = commArg(args[4]);
     if (!c.empty()) n.call_args.push_back(c);
@@ -1543,10 +1226,8 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
   }
 
   if (mpiOp == "mpi_abort") {
-    // MPI_Abort(comm, errorcode, ierr).  The errorcode is often a by-value
-    // literal (``mpi_abort(0, 1, ierr)``) that has no traceable name -- recover
-    // its value so the emitter can materialise a scalar for the ``_errorcode``
-    // connector; a variable errorcode rides ``call_args``.
+    // MPI_Abort(comm, errorcode, ierr): errorcode is often a by-value literal with no traceable name -- recover its
+    // value for the _errorcode connector; a variable errorcode rides call_args.
     if (args.size() < 2) throw std::runtime_error("MPI mpi_abort: expected (comm, errorcode, ...)");
     std::string const errorcode = traceToDecl(args[1]);
     n.call_args = {errorcode};  // "" when the errorcode is a literal
@@ -1565,9 +1246,8 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
       throw std::runtime_error("MPI mpi_gatherv: unexpected argument count " + std::to_string(args.size()));
     n.call_args = {resolve(args[0], "sendbuf"), resolve(args[3], "recvbuf"), resolve(args[4], "recvcounts"),
                    resolve(args[5], "displs"), resolve(args[7], "root")};
-    // Send/recv buffers keep any section offset; the per-rank counts live in
-    // recvcounts/displs, so no whole-buffer count folding.  Root may be an array
-    // element (rare) -> element subset; else empty (whole scalar).
+    // Send/recv buffers keep any section offset; per-rank counts live in recvcounts/displs so no whole-buffer count
+    // folding. Root may be an array element (rare) -> element subset.
     n.call_arg_subsets = {collectiveBufferSubset(args[0], mlir::Value{}),
                           collectiveBufferSubset(args[3], mlir::Value{}), "", "", mpiScalarElementSubset(args[7])};
     std::string const c = commArg(args[8]);
@@ -1607,31 +1287,21 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
   std::string const partner = resolve(args[3], isSendLike ? "dest" : "src");
   std::string const tag = resolve(args[4], "tag");
 
-  // comm (arg 5).  Flang materialises a ``parameter`` / literal
-  // ``MPI_COMM_WORLD`` as a compiler-synthetic entity (``__assoc_scalar_*``
-  // -- a Fortran user identifier can never start with ``_``); ``use mpi``
-  // exposes it as an entity literally named ``mpi_comm_world``; an
-  // un-nameable operand is a bare folded constant.  Those three are the
-  // default WORLD (nothing appended -- DaCe emits ``MPI_COMM_WORLD``).
-  // A real named variable (a dummy ``comm`` / ``MPI_Comm_split`` result)
-  // is a runtime/user communicator: append it so the builder threads an
-  // ``opaque(MPI_Comm)`` ``_comm`` connector into the libnode.
+  // comm (arg 5): a folded/literal MPI_COMM_WORLD shows up as __assoc_scalar_*, "mpi_comm_world", or an un-nameable
+  // constant -- all three are default WORLD (append nothing). A real named variable is a runtime/user comm: append it
+  // as an opaque(MPI_Comm) _comm connector.
   std::string const commName = traceToDecl(args[5]);
   std::string const low = llvm::StringRef(commName).lower();
   bool const isDefault = commName.empty() || low.rfind("__", 0) == 0 || low.find("mpi_comm_world") != std::string::npos;
 
   n.call_args = {buf, partner, tag};
-  // Render an indexed scalar dest/src/tag (``neighbors(i)``) as an element
-  // subset so the ``_dest`` / ``_src`` / ``_tag`` memlet reads element ``[i-1]``
-  // rather than collapsing onto the whole ``neighbors`` array (wrong rank).
-  // Parallel to the first three ``call_args``; empty entries keep the whole
-  // buffer / plain-scalar fallback.  The request / comm tail carries no subset.
+  // Renders an indexed scalar dest/src/tag (``neighbors(i)``) as an element subset so the memlet reads element [i-1],
+  // not the whole array. Parallel to the first three call_args; the request/comm tail carries no subset.
   n.call_arg_subsets = {"", mpiScalarElementSubset(args[3]), mpiScalarElementSubset(args[4])};
   if (mpiOp == "mpi_isend" || mpiOp == "mpi_irecv") {
     if (args.size() < 7) throw std::runtime_error("MPI " + mpiOp + ": expected a request argument");
     n.call_args.push_back(resolve(args[6], "request"));
-    // Preserve the request slot ``reqs(k)`` so this isend/irecv writes its
-    // MPI_Request to ``_mpireq_<base>[k-1]`` instead of collapsing onto slot 0.
+    // Preserves the request slot reqs(k) so this isend/irecv writes to _mpireq_<base>[k-1], not slot 0.
     auto se = mpiRequestSlotExtent(args[6]);
     n.options["mpi_req_slot"] = se.first;
     n.options["mpi_req_extent"] = se.second;
@@ -1640,21 +1310,13 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
   return n;
 }
 
-// ---------------------------------------------------------------------------
-// Fortran I/O recognition
-// ---------------------------------------------------------------------------
-//
-// Flang lowers Fortran I/O to a sequence of ``fir.call @_FortranAio*`` runtime
-// calls.  We fold an ``open`` / ``read`` / ``write`` / ``close`` region into a
-// single ``kind="iocall"`` ASTNode the Python builder lowers to a
-// ``dace.libraries.fortran_io`` node.  The filename must be a compile-time
-// literal (a ``@_QQclX<hex>`` constant) -- it is baked into the node as
-// ``target`` because DaCe cannot pass a string at runtime; a non-literal
-// filename is unsupported (the statement is dropped, as is any I/O with no
-// associated file such as a ``write`` to stdout).
+// Fortran I/O recognition: flang lowers I/O to fir.call @_FortranAio* runtime calls; an open/read/write/close region
+// folds into one "iocall" ASTNode -> dace.libraries.fortran_io. Filename must be a compile-time literal (@_QQclX<hex>)
+// baked into ``target`` (DaCe can't pass a runtime string); a non-literal filename or no associated file (stdout) is
+// dropped.
 
-/// Decode a flang character-literal global symbol ``_QQclX<hex>`` to its text
-/// (the hex digits are the literal's bytes).  Empty if not that form.
+/// Decodes a flang character-literal global symbol ``_QQclX<hex>`` to its text (hex digits are the literal's bytes);
+/// empty if not that form.
 static std::string decodeCharLiteralSymbol(llvm::StringRef sym) {
   if (!sym.consume_front("_QQclX")) return {};
   auto hexVal = [](char c) -> int {
@@ -1670,16 +1332,15 @@ static std::string decodeCharLiteralSymbol(llvm::StringRef sym) {
     if (hi < 0 || lo < 0) return {};
     out.push_back(static_cast<char>((hi * 16) + lo));
   }
-  // Namelist group / member name literals carry a trailing NUL the filename
-  // / status literals do not; drop it so the decoded name is a clean token.
+  // Namelist group/member name literals carry a trailing NUL that filename/status literals don't; drop it for a clean
+  // token.
   while (!out.empty() && out.back() == '\0') out.pop_back();
   return out;
 }
 
-/// Resolve a ``SetFile`` operand to the string literal it addresses, tracing
-/// through the ``fir.convert`` / ``fir.coordinate_of`` shims and the
-/// ``hlfir.declare`` flang wraps the ``fir.address_of`` in.  Empty if the
-/// operand is not a literal (a runtime filename, which we cannot bake in).
+/// Resolves a SetFile operand to the string literal it addresses, tracing through
+/// fir.convert/fir.coordinate_of/hlfir.declare shims to fir.address_of. Empty if not a literal (a runtime filename
+/// can't be baked in).
 static std::string ioLiteralString(mlir::Value v) {
   for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
     auto* d = v.getDefiningOp();
@@ -1707,9 +1368,8 @@ static std::string ioLiteralString(mlir::Value v) {
   return {};
 }
 
-/// The value stored into the alloca ``ref`` (the ``fir.store`` whose memref is
-/// ``ref``), or null.  Flang materialises the namelist descriptor / its member
-/// array on the stack and stores the built-up aggregate; this recovers it.
+/// The value stored into alloca ``ref`` (the fir.store whose memref is ref), or null; recovers the namelist
+/// descriptor/member array Flang builds on the stack.
 static mlir::Value ioStoredValue(mlir::Value ref) {
   for (auto* user : ref.getUsers())
     if (auto st = mlir::dyn_cast<fir::StoreOp>(user))
@@ -1717,8 +1377,7 @@ static mlir::Value ioStoredValue(mlir::Value ref) {
   return {};
 }
 
-/// Walk the ``fir.insert_value`` chain defining ``agg`` and return the value
-/// inserted at the single-element index ``idx`` (null if absent).
+/// Walks the fir.insert_value chain defining ``agg``, returns the value inserted at index ``idx`` (null if absent).
 static mlir::Value ioInsertedAt(mlir::Value agg, int64_t idx) {
   for (int i = 0; i < limits::kSsaBackWalkDepth && agg; ++i) {
     auto iv = mlir::dyn_cast_or_null<fir::InsertValueOp>(agg.getDefiningOp());
@@ -1732,11 +1391,9 @@ static mlir::Value ioInsertedAt(mlir::Value agg, int64_t idx) {
   return {};
 }
 
-/// Extract a namelist group's name and member names from the descriptor the
-/// ``InputNamelist`` call receives.  The descriptor is a stack tuple
-/// ``{groupName, count, members, defIoTable}``; ``members`` is an array of
-/// ``{name, box}`` pairs built by a second insert-value chain.  A member's
-/// name is its Fortran variable name, which is also its SDFG array name.
+/// Extracts a namelist group's name and member names from the InputNamelist descriptor (stack tuple
+/// {groupName,count,members,defIoTable}; members is a {name,box} array via a second insert-value chain). A member's
+/// name doubles as its SDFG array name.
 static void extractNamelist(mlir::Value descRef, std::string& group, std::vector<std::string>& members) {
   for (int i = 0; i < limits::kSsaBackWalkDepth && descRef; ++i) {
     auto* d = descRef.getDefiningOp();
@@ -1751,8 +1408,8 @@ static void extractNamelist(mlir::Value descRef, std::string& group, std::vector
   group = ioLiteralString(ioInsertedAt(top, 0));
   mlir::Value memberArr = ioStoredValue(ioInsertedAt(top, 2));
   if (!memberArr) return;
-  // Member-array insert chain: ``[i, 0]`` is member i's name literal.  The
-  // chain is built bottom-up, so collect (index, name) and sort ascending.
+  // Member-array insert chain: [i, 0] is member i's name literal, built bottom-up -- collect (index, name) and sort
+  // ascending.
   std::vector<std::pair<int64_t, std::string>> byIndex;
   for (int i = 0; i < limits::kSsaBackWalkDepth && memberArr; ++i) {
     auto iv = mlir::dyn_cast_or_null<fir::InsertValueOp>(memberArr.getDefiningOp());
@@ -1771,11 +1428,9 @@ static void extractNamelist(mlir::Value descRef, std::string& group, std::vector
   for (auto& [idx, nm] : byIndex) members.push_back(nm);
 }
 
-/// State threaded across the consecutive ``_FortranAio*`` calls of one
-/// open/read/write/close region (all in one block, in program order).
-/// ``open_file`` holds the filename from the most recent ``open`` until its
-/// ``close``; ``op`` / ``stmt_file`` / ``items`` accumulate the in-flight
-/// transfer statement between its ``Begin*`` and ``EndIoStatement``.
+/// State threaded across consecutive _FortranAio* calls of one open/read/write/close region. open_file holds the
+/// filename from the most recent open until its close; op/stmt_file/items accumulate the in-flight transfer between
+/// Begin*/EndIoStatement.
 struct IoState {
   std::string open_file;
   std::string op;
@@ -1784,32 +1439,19 @@ struct IoState {
   std::vector<std::string> items;
 };
 
-// ---------------------------------------------------------------------------
-// FFTW3 plan recognition
-//
-// Pattern this consumes -- the standard FFTW3 C ABI driven from Fortran via
-// ``iso_c_binding`` (and the FFTW-compat ABI of cuFFT / MKL):
-//
-//     plan = fftw_plan_dft_2d(N, M, in, out, FFTW_FORWARD, FFTW_ESTIMATE)
-//     call fftw_execute_dft(plan, in, out)
-//     call fftw_destroy_plan(plan)
-//
-// The opaque ``TYPE(C_PTR) :: plan`` SSA value cannot be modeled in DaCe.
-// We therefore (1) recognise the three calls by callee name, (2) capture
-// the (rank, dims, direction) at the plan-create site and stash it under
-// the destination variable name, and (3) on the ``execute_dft`` call
-// emit a single ``fftcall`` ``ASTNode`` carrying the input/output array
-// names + the looked-up direction.  The plan-create and destroy calls
-// are dropped (no ASTNode emitted) -- the FFT lib node's expansion
-// owns the plan lifecycle.
+// FFTW3 plan recognition: standard FFTW3 C ABI via iso_c_binding (also FFTW-compat cuFFT/MKL) --
+// plan=fftw_plan_dft_2d(...); fftw_execute_dft(plan,in,out); fftw_destroy_plan(plan). The opaque TYPE(C_PTR) plan can't
+// be modelled in DaCe: recognise the three calls by name, stash (rank,dims,direction) at plan-create under the dest var
+// name, and on execute_dft emit one fftcall ASTNode; plan-create/destroy are dropped (FFT lib node owns the plan
+// lifecycle).
 struct FftPlanInfo {
   int rank;                       // 2 or 3
   std::vector<std::string> dims;  // dimension expressions / literals
   std::string direction;          // "forward" or "backward"
 };
 
-/// Return the normalised tag for a recognised FFTW3 callee, else empty.
-/// Accepts both ``fftw_*`` (double precision) and ``fftwf_*`` (single).
+/// Returns the normalised tag for a recognised FFTW3 callee, else empty. Accepts both fftw_* (double) and fftwf_*
+/// (single).
 static std::string fftw3CalleeTag(const std::string& callee) {
   std::string s = callee;
   if (!s.empty() && s[0] == '@') s.erase(0, 1);
@@ -1824,13 +1466,8 @@ static std::string fftw3CalleeTag(const std::string& callee) {
   return std::string{};
 }
 
-/// Build the ``ASTNode`` for a recognised FFTW3 call.  Returns an empty
-/// ``ASTNode`` (kind="") to mean "consumed, emit nothing"; the dispatch
-/// loop then ``continue``-s without pushing.
-///
-/// ``plans`` is threaded across the block so the execute call can look
-/// up the (rank, dims, direction) recorded at the plan-create site by
-/// destination variable name.
+/// Builds the ASTNode for a recognised FFTW3 call; empty kind="" means "consumed, emit nothing". ``plans`` threads
+/// across the block so execute can look up (rank,dims,direction) recorded at plan-create by dest variable name.
 static ASTNode buildFftw3CallNode(fir::CallOp call, const std::string& fftOp,
                                   std::map<std::string, FftPlanInfo>& plans) {
   ASTNode n;
@@ -1854,8 +1491,8 @@ static ASTNode buildFftw3CallNode(fir::CallOp call, const std::string& fftOp,
     int sign = 0;
     if (auto c = traceConstInt(args[rank + 2])) sign = (int)*c;
     info.direction = (sign == -1) ? "forward" : "backward";
-    // The plan-create call returns the plan; track which user variable
-    // it is stored into so the matching execute can look it up.
+    // The plan-create call returns the plan; track which user variable it's stored into so the matching execute can
+    // look it up.
     std::string planVar;
     for (auto u : call.getResult(0).getUsers()) {
       if (auto store = mlir::dyn_cast<fir::StoreOp>(u)) {
@@ -1890,13 +1527,9 @@ static ASTNode buildFftw3CallNode(fir::CallOp call, const std::string& fftOp,
   return n;
 }
 
-/// Advance the I/O state machine by one ``_FortranAio*`` ``call`` (callee
-/// ``c``), and on a completed read/write statement push an ``iocall`` ASTNode.
-/// Every such call is consumed by the caller, so none leaks out as a generic
-/// ``call`` node (its char-literal operands would otherwise mint invalid
-/// arrays).  Only statements with a literal file and >=1 data item are
-/// emitted -- a stdout write or a runtime-named file has no bindable filename
-/// and is dropped.
+/// Advances the I/O state machine by one _FortranAio* call, pushing an iocall ASTNode on a completed read/write. Every
+/// such call is consumed by the caller (none leak out as a generic call node). Only statements with a literal file and
+/// >=1 data item are emitted.
 static void recognizeIoCall(fir::CallOp call, llvm::StringRef c, IoState& s, std::vector<ASTNode>& nodes) {
   auto args = call.getArgOperands();
   if (c.contains("SetFile")) {
@@ -1910,15 +1543,14 @@ static void recognizeIoCall(fir::CallOp call, llvm::StringRef c, IoState& s, std
     s.stmt_file = s.open_file;
     s.items.clear();
   } else if (c.contains("InputNamelist") || c.contains("OutputNamelist")) {
-    // ``read(u, nml=grp)`` / ``write(u, nml=grp)``: the descriptor (operand 1)
-    // yields the group name + member (= variable = array) names.
+    // read(u, nml=grp) / write(u, nml=grp): the descriptor (operand 1) yields the group name + member (=variable=array)
+    // names.
     s.op = c.contains("Input") ? "namelist_read" : "namelist_write";
     s.group.clear();
     s.items.clear();
     if (args.size() >= 2) extractNamelist(args[1], s.group, s.items);
   } else if ((c.contains("Input") || c.contains("Output")) && !c.contains("Begin") && !c.contains("Ascii")) {
-    // A transfer item: Input/OutputDescriptor(box) or the scalar
-    // Input/OutputReal*/Integer*(ref); operand 1 is the data.
+    // A transfer item: Input/OutputDescriptor(box) or scalar Input/OutputReal*/Integer*(ref); operand 1 is the data.
     if (!s.op.empty() && args.size() >= 2) {
       std::string const nm = traceToDecl(args[1]);
       if (!nm.empty()) s.items.push_back(nm);
@@ -1927,15 +1559,9 @@ static void recognizeIoCall(fir::CallOp call, llvm::StringRef c, IoState& s, std
     s.open_file.clear();
   } else if (c.contains("EndIoStatement") && !s.op.empty()) {
     if (!s.stmt_file.empty() && !s.items.empty()) {
-      // Fuse with an immediately-preceding transfer of the SAME op to the
-      // SAME file: consecutive ``read`` / ``write`` statements between one
-      // ``open`` and ``close`` then share a single open, so sequential
-      // reads advance the file position instead of each re-opening from the
-      // start.  Each item still lowers to its own ``read``/``write`` call (a
-      // fresh record), matching list-directed statement semantics.  Only
-      // fused when adjacent (``nodes.back()`` is that transfer) so any
-      // intervening computation forces a separate open -- preserving order.
-      // Namelist transfers carry a group name in ``expr`` and never fuse.
+      // Fuses with an immediately-preceding transfer of the same op+file so sequential reads advance the file position
+      // instead of re-opening; only when adjacent (intervening computation forces a separate open). Namelist transfers
+      // never fuse.
       bool fused = false;
       if ((s.op == "read" || s.op == "write") && s.group.empty() && !nodes.empty() && nodes.back().kind == "iocall" &&
           nodes.back().callee == s.op && nodes.back().target == s.stmt_file && nodes.back().expr.empty()) {
@@ -1959,21 +1585,12 @@ static void recognizeIoCall(fir::CallOp call, llvm::StringRef c, IoState& s, std
   }
 }
 
-// ---------------------------------------------------------------------------
-// Block walker
-// ---------------------------------------------------------------------------
+// Block walker.
 
-/// An ``ALL`` / ``ANY`` reduction used DIRECTLY as an IF condition is
-/// materialised into a boolean-scalar transient via the ``AllNode`` /
-/// ``AnyNode`` library node (the ``reduce`` ASTNode routes to it in
-/// ``emit_reduce``), so the branch reads a scalar instead of inlining the
-/// section into the condition tasklet -- which produced a malformed
-/// multi-dim memlet for ``IF (ALL(odg(:)))``.  Pushes a
-/// ``declare_transient`` (bool ``[1]``) + a ``reduce`` node into
-/// ``nodes`` and returns the scalar's name (the caller reads it as
-/// ``<name>[0]``); empty string when the condition is not a bare
-/// ALL/ANY (nested forms like ``.NOT. ALL(...)`` fall through to the
-/// normal boolean-expression path).
+/// An ALL/ANY reduction used directly as an IF condition is materialised into a boolean-scalar transient via
+/// AllNode/AnyNode (a reduce ASTNode) so the branch reads a scalar instead of a malformed multi-dim memlet from
+/// inlining the section. Pushes declare_transient+reduce, returns the scalar's name; empty for non-bare ALL/ANY (e.g.
+/// .NOT. ALL(...)).
 static std::string tryMaterialiseAllAnyCond(mlir::Value condVal, std::vector<ASTNode>& nodes) {
   mlir::Value v = condVal;
   for (int i = 0; i < 8 && v; ++i) {
@@ -2020,14 +1637,9 @@ static std::string tryMaterialiseAllAnyCond(mlir::Value condVal, std::vector<AST
   return tr;
 }
 
-/// Type-correct reduction identity for a base identity token and element type.
-/// SUM / PRODUCT (``0`` / ``1``) and ALL / ANY (``True`` / ``False``) pass
-/// through.  MINVAL / MAXVAL on a FLOAT element keep ``inf`` / ``-inf`` (DaCe's
-/// cppunparse renders them as ``INFINITY`` / ``-INFINITY`` and sympy parses
-/// ``inf`` as ``oo``); on an INTEGER element they become the width-correct
-/// two's-complement INT_MAX / INT_MIN literal -- ``inf`` cast to int is UB and
-/// breaks at -O0 (integer_reduction_identity_test).  Shared by the array-assign
-/// reduce path (``identityForType``) and the condition-reduction materialiser.
+/// Type-correct reduction identity for a base identity token + element type. SUM/PRODUCT/ALL/ANY pass through;
+/// MINVAL/MAXVAL on FLOAT keep inf/-inf, on INTEGER become width-correct INT_MAX/INT_MIN (inf cast to int is UB, breaks
+/// at -O0). Shared by identityForType and the condition-reduction materialiser.
 static std::string reductionIdentityForType(llvm::StringRef baseIdent, mlir::Type elemTy) {
   if (baseIdent == "0" || baseIdent == "1" || baseIdent == "True" || baseIdent == "False") return baseIdent.str();
   bool const isInf = (baseIdent == "inf");
@@ -2043,25 +1655,11 @@ static std::string reductionIdentityForType(llvm::StringRef baseIdent, mlir::Typ
   return baseIdent.str();
 }
 
-/// Materialise reduction SUB-TERMS (``hlfir.sum`` / ``minval`` / ``maxval`` /
-/// ``product``) of an IF / loop condition into scalar transients via Reduce
-/// LIBRARY NODES emitted before the branch -- "use lib-nodes whenever we can".
-///
-/// For ``IF (SUM((i - i_real) ** 2) > eps6)`` the lowering is:
-///   * the reduction's elemental operand ``(i - i_real) ** 2`` is materialised
-///     to a transient array via element-wise FOR-LOOPS
-///     (``materialiseElementalForLibcall``), and
-///   * the ``SUM`` runs as a ``reduce`` ASTNode (``standard.Reduce`` lib-node)
-///     writing a scalar, so the condition reads ``s > eps6``.
-/// This replaces the old inline-unroll (which dropped per-element subscripts --
-/// Gate G -- and only handled constant extents).  Each materialised reduction
-/// op is registered in ``kCondReductionScalars`` so the condition renderer
-/// (``buildExpr`` / ``buildExprWithSubscripts`` / ``collectReadAccesses``)
-/// substitutes the bare scalar instead of recursing into the reduction.
-/// Walks the whole condition tree so a reduction nested anywhere in the
-/// comparison (``... > MAXVAL(...)``) is caught.  Sources the
-/// ``materialiseElementalForLibcall`` helper can't handle (e.g. a bare
-/// section designate) are left for the inline-unroll fallback.
+/// Materialises reduction sub-terms (hlfir.sum/minval/maxval/product) of an IF/loop condition into scalar transients
+/// via Reduce lib-nodes emitted before the branch, replacing the old inline-unroll (dropped per-element subscripts,
+/// constant-extent only). Registers each in kCondReductionScalars so
+/// buildExpr/buildExprWithSubscripts/collectReadAccesses substitute the bare scalar. Walks the whole condition tree;
+/// sources materialiseElementalForLibcall can't handle fall back to inline-unroll.
 static void materialiseCondReductions(mlir::Value condVal, std::vector<ASTNode>& nodes) {
   struct RedSpec {
     llvm::StringRef op, wcr, identity;
@@ -2088,14 +1686,10 @@ static void materialiseCondReductions(mlir::Value condVal, std::vector<ASTNode>&
         break;
       }
     if (spec && op->getNumOperands() >= 1 && kCondReductionScalars.find(op) == kCondReductionScalars.end()) {
-      // Resolve the reduction source: an elemental -> materialise it to a
-      // transient via element-wise for-loops; a WHOLE named array -> use it
-      // directly.  A SECTION / sliced source (``MINVAL(kmin(iv, :))``,
-      // ``SUM(w(1:3))``) must reduce the SECTION, not the whole array, but
-      // ``traceToDecl`` would name the whole array (wrong) -- so a
-      // ``hlfir.designate`` source is left to the const-extent inline-unroll
-      // fallback in ``buildExprWithSubscripts`` (a proper section materialiser
-      // is a follow-up).
+      // Resolves the reduction source: elemental -> materialise via for-loops; whole array -> use directly. A section
+      // source (MINVAL(kmin(iv,:))) must reduce the section, not the whole array -- traceToDecl would get that wrong,
+      // so hlfir.designate sources fall to the const-extent inline-unroll (a proper section materialiser is a
+      // follow-up).
       mlir::Value const src = op->getOperand(0);
       auto* srcDef = src.getDefiningOp();
       std::string srcName;
@@ -2108,13 +1702,9 @@ static void materialiseCondReductions(mlir::Value condVal, std::vector<ASTNode>&
             srcName = tr;
           }
         }
-      // A SECTION / sliced source (``MINVAL(kmin(iv, :))`` -- a row; ``m(:,
-      // j)``
-      // -- a column) reduces the SECTION, not the whole array.  Render the
-      // section's 0-based per-dim subset and reduce a VIEW of it (correct row /
-      // column stride + shape) -- emit_reduce synthesises the View from the
-      // parent + this subset.  ``traceToDecl`` on the designate names the
-      // parent.
+      // A section source (row or column) reduces the section, not the whole array: render its 0-based per-dim subset
+      // and reduce a VIEW of it -- emit_reduce synthesises the View from the parent + subset (traceToDecl on the
+      // designate names the parent).
       if (srcName.empty())
         if (auto dg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(srcDef)) {
           auto parts = renderDesignateSubsetStrings(dg);
@@ -2148,14 +1738,12 @@ static void materialiseCondReductions(mlir::Value condVal, std::vector<ASTNode>&
         red.reduce_src = srcName;
         red.reduce_wcr = spec->wcr.str();
         red.reduce_identity = ident;
-        // A section source -> emit_reduce builds a VIEW of ``reduce_src`` over
-        // this 0-based subset (row / column stride + shape) and reduces it.
+        // A section source -> emit_reduce builds a VIEW of reduce_src over this 0-based subset and reduces it.
         if (!srcSubset.empty()) red.options["src_subset"] = srcSubset;
         nodes.push_back(std::move(red));
 
         kCondReductionScalars[op] = sc;
-        // The reduction is fully owned by the reduce node now -- do NOT recurse
-        // into its operands (the elemental is already materialised).
+        // The reduce node now owns the reduction -- do NOT recurse into its operands (elemental already materialised).
         continue;
       }
     }
@@ -2170,88 +1758,52 @@ std::vector<ASTNode> buildReductionAssignNodes(hlfir::AssignOp assign, mlir::Ope
   matched = false;
   if (!sd) return nodes;
 
-  // Scalar reductions land as their own dedicated op; pattern-
-  // match each one and hand the shared reduce-lowering helper
-  // the right wcr + identity.
+  // Scalar reductions land as their own dedicated op; pattern-match each and hand the shared reduce-lowering helper the
+  // right wcr+identity.
   auto opName = sd->getName().getStringRef();
   struct RedEntry {
     llvm::StringRef op;
     llvm::StringRef wcr;       // DaCe wcr lambda string
     llvm::StringRef identity;  // initial accumulator value (float-typed)
     llvm::StringRef py_op;     // Python binary op for
-                               // section-reduce loop body;
-                               // empty -> fall back to
-                               // buildReduceNode (whole-array)
+                               // section-reduce loop body; empty -> fall back to buildReduceNode (whole-array).
   };
-  // Identity strings here are the FLOAT-TYPED defaults.  The
-  // ``identityForType`` helper below specialises them per
-  // element type because ``inf`` / ``-inf`` cast to an integer
-  // is undefined behaviour: at -O3 the compiler folds it to
-  // INT_MAX/INT_MIN; at -O0 the un-folded ``INFINITY`` to
-  // ``int`` conversion gives INT_MIN regardless of intent,
-  // breaking integer MINVAL (e.g. NPB LU's class-S tests
-  // surface this as ``MINVAL(arr) == -2147483648`` at -O0).
-  // Identity strings use the bare ``inf`` token (not
-  // ``math.inf``) so DaCe's cppunparse -- which maps
-  // ``inf`` -> ``INFINITY`` via _py2c_reserved -- emits
-  // a valid C++ literal in the section-reduce init
-  // tasklet.  The whole-array Reduce path's eval()
-  // namespace is patched with ``inf=math.inf`` for
-  // the same string.
+  // Identity strings here are FLOAT-TYPED defaults; identityForType specialises per element type since inf/-inf cast to
+  // integer is UB (breaks integer MINVAL at -O0, e.g. NPB LU class-S). Uses the bare ``inf`` token (not math.inf) so
+  // DaCe's cppunparse (_py2c_reserved) emits a valid C++ literal; the whole-array Reduce path's eval() namespace is
+  // patched with inf=math.inf for the same string.
   static const RedEntry kRedTable[] = {
       {"hlfir.sum", "lambda a, b: a + b", "0", "+"},
       {"hlfir.product", "lambda a, b: a * b", "1", "*"},
       {"hlfir.minval", "lambda a, b: min(a, b)", "inf", "min"},
       {"hlfir.maxval", "lambda a, b: max(a, b)", "-inf", "max"},
-      // Logical reductions  --  ANY / ALL on ``fir.logical``
-      // arrays (ICON's levelmask / maskflag patterns).
+      // Logical reductions -- ANY/ALL on fir.logical arrays (ICON's levelmask/maskflag patterns).
       {"hlfir.any", "lambda a, b: a or b", "False", "or"},
       {"hlfir.all", "lambda a, b: a and b", "True", "and"},
-      // ``hlfir.count`` is intentionally absent  --  handled
-      // in ``kLibTable`` above as a ``CountLibraryNode``
-      // libcall (covers Fortran COUNT's int-cast semantics
-      // and the optional ``dim`` argument).
+      // hlfir.count is intentionally absent -- handled in kLibTable above as a CountLibraryNode libcall (covers COUNT's
+      // int-cast semantics and the optional dim argument).
   };
-  // Pick the type-correct identity literal for the reduction
-  // op's element type.  MINVAL / MAXVAL on integer arrays must
-  // initialise with INT_MAX / INT_MIN; ``inf`` / ``-inf`` to
-  // int is undefined behaviour and breaks at -O0 (see
-  // ``tests/integer_reduction_identity_test.py``).
+  // Picks the type-correct identity literal: MINVAL/MAXVAL on integer arrays must initialise with INT_MAX/INT_MIN
+  // (inf/-inf to int is UB, breaks at -O0; see tests/integer_reduction_identity_test.py).
   auto identityForType = [&](const RedEntry& entry, mlir::Type elemTy) -> std::string {
-    // Shared with the condition-reduction materialiser: SUM / PRODUCT /
-    // ALL / ANY identities pass through; MINVAL / MAXVAL pick the
-    // type-correct sentinel (float ``inf`` -> cppunparse INFINITY;
-    // integer -> width-correct INT_MAX / INT_MIN literal, since ``inf``
-    // cast to int is UB at -O0).
+    // Shared with the condition-reduction materialiser: SUM/PRODUCT/ALL/ANY pass through; MINVAL/MAXVAL pick the
+    // type-correct sentinel (float inf -> INFINITY, integer -> INT_MAX/INT_MIN since inf cast to int is UB at -O0).
     return reductionIdentityForType(entry.identity, elemTy);
   };
-  // Compute the reduction's element type once; ``sd`` is the
-  // hlfir.minval / maxval / sum / ... op.  Its result type is
-  // the per-element scalar type for these "reduce to scalar"
-  // ops.
+  // Computes the reduction's element type once; sd's result type is the per-element scalar type for these "reduce to
+  // scalar" ops.
   mlir::Type redElemTy;
   if (sd->getNumResults() > 0) redElemTy = sd->getResult(0).getType();
   for (auto& e : kRedTable) {
     if (opName == e.op) {
-      // If the reduction source is a section designate
-      // (``mask(lo:hi, jk)``) we can't use DaCe's Reduce
-      // node directly  --  it reduces whole arrays.  Fall
-      // back to a loop-accumulator lowering when a
-      // Python op is available.
+      // A section-designate reduction source (mask(lo:hi, jk)) can't use DaCe's Reduce node directly (whole-arrays
+      // only) -- fall back to a loop-accumulator lowering when a Python op is available.
       bool emitted = false;
       if (!e.py_op.empty() && sd->getNumOperands() > 0) {
         auto srcVal = sd->getOperand(0);
-        // Peel ``fir.convert`` chains so a section
-        // designate hidden behind a box rebox (the
-        // shape canonicalisation that shows up after
-        // ``hlfir-rewrite-sequence-association``  --
-        // ``box<array<NxT>>`` -> ``box<array<?xT>>``)
-        // still matches the section-reduce path.
-        // Safe because at this point ``srcVal`` is
-        // a box/ref of an array element type  --  the
-        // converts here are shape-bookkeeping only,
-        // never value-altering casts (which only
-        // appear at scalar value sites).
+        // Peels fir.convert chains so a section designate hidden behind a box rebox (post
+        // hlfir-rewrite-sequence-association shape canonicalisation) still matches; safe since these converts are
+        // shape-bookkeeping only, never value-altering (which only appear at scalar sites).
         while (auto cv = mlir::dyn_cast_or_null<fir::ConvertOp>(srcVal.getDefiningOp())) {
           srcVal = cv.getValue();
         }
@@ -2273,20 +1825,10 @@ std::vector<ASTNode> buildReductionAssignNodes(hlfir::AssignOp assign, mlir::Ope
           }
         }
       }
-      // Mode-C for ANY reduction op whose source is an
-      // ``hlfir.elemental`` (compound boolean expression for
-      // ANY/ALL, element-wise arithmetic like ``SUM(q ** 2)``
-      // for SUM/PRODUCT/MINVAL/MAXVAL).  ``traceToDecl``
-      // returns "" for an elemental result -- the plain
-      // Reduce path then explodes with ``reduction source ''
-      // not registered``.  Materialise the elemental into a
-      // transient via a per-element loop and route the
-      // Reduce over the transient.  ``buildElementalAnyAllReduce``
-      // is op-agnostic (its name is historical -- the wcr +
-      // identity arguments make it work for any reduction)
-      // so we route SUM/PRODUCT/MINVAL/MAXVAL the same way.
-      // QE's ``vcut_get`` (3 occurrences of ``SUM(... ** 2)``)
-      // was the surfacing case.
+      // Any reduction op whose source is an hlfir.elemental (e.g. SUM(q**2)): traceToDecl returns "" for an elemental
+      // result, so the plain Reduce path would explode. Materialise the elemental into a transient via a per-element
+      // loop and route Reduce over it; buildElementalAnyAllReduce is op-agnostic (name is historical) so this covers
+      // SUM/PRODUCT/MINVAL/MAXVAL too.
       if (!emitted && sd->getNumOperands() > 0) {
         auto srcVal = sd->getOperand(0);
         if (auto* srcOp = srcVal.getDefiningOp())
@@ -2308,12 +1850,9 @@ std::vector<ASTNode> buildReductionAssignNodes(hlfir::AssignOp assign, mlir::Ope
   return nodes;
 }
 
-// Lower a ``fir.call`` into its ASTNode(s), pushing onto ``nodes``.  Shared by
-// the structured ``buildAST`` walk and the ``scf.while`` BEFORE-region walker
-// (via ``dispatchScfWhileCall``) so every call shape -- MPI / FFTW3 / QE FFT /
-// BLAS / LAPACK / unsupported-libcall / Fortran I/O / generic external -- is
-// recognised identically in both.  ``io_state`` / ``fft_plans`` thread the
-// Fortran-I/O and FFTW3 plan state machines across consecutive calls in one
+// Lowers a fir.call into its ASTNode(s). Shared by structured buildAST and the scf.while BEFORE-region walker (via
+// dispatchScfWhileCall) so every call shape (MPI/FFTW3/QE FFT/BLAS/LAPACK/unsupported-libcall/Fortran I/O/generic) is
+// recognised identically in both. io_state/fft_plans thread the I/O and FFTW3 plan state machines across calls in one
 // block.
 static void dispatchCallOp(fir::CallOp call, std::vector<ASTNode>& nodes, IoState& io_state,
                            std::map<std::string, FftPlanInfo>& fft_plans) {
@@ -2330,29 +1869,24 @@ static void dispatchCallOp(fir::CallOp call, std::vector<ASTNode>& nodes, IoStat
     nodes.push_back(buildMpiCallNode(call, mpiOp));
     return;
   }
-  // FFTW3 plan-create / execute / destroy triple: consume all three;
-  // only the execute emits an ``fftcall`` ASTNode (the plan-create
-  // and destroy are absorbed -- the FFT lib node's expansion owns
-  // the plan lifecycle).
+  // FFTW3 plan-create/execute/destroy triple: only execute emits an fftcall ASTNode (create/destroy absorbed -- the FFT
+  // lib node's expansion owns the plan lifecycle).
   std::string const fftOp = fftw3CalleeTag(n.callee);
   if (!fftOp.empty()) {
     auto fn = buildFftw3CallNode(call, fftOp, fft_plans);
     if (!fn.kind.empty()) nodes.push_back(std::move(fn));
     return;
   }
-  // QE generic FFT (fwfft / invfft) and its specific subroutines
-  // (fwfft_y / invfft_y / fwfft_b / invfft_b).  Map to the same
-  // ``fftcall`` ASTNode the FFTW3 execute emits so ``emit_fft``
-  // handles both uniformly.
+  // QE generic FFT (fwfft/invfft) and its specific subroutines map to the same fftcall ASTNode the FFTW3 execute emits
+  // so emit_fft handles both uniformly.
   std::string const qeDir = qeFftCalleeTag(n.callee);
   if (!qeDir.empty()) {
     auto qn = buildQeFftCallNode(call, qeDir);
     if (!qn.kind.empty()) nodes.push_back(std::move(qn));
     return;
   }
-  // QE Fourier interpolation (fft_interpolate_real / _complex).
-  // ABI: fft_interpolate(dfft_in, v_in, dfft_out, v_out) -- we use
-  // operand 1 as the input array and operand 3 as the output array.
+  // QE Fourier interpolation (fft_interpolate_real/_complex). ABI: fft_interpolate(dfft_in, v_in, dfft_out, v_out) --
+  // operand 1 is input, operand 3 is output.
   std::string const qeIntr = qeFftInterpolateCalleeTag(n.callee);
   if (!qeIntr.empty()) {
     auto args = call.getArgOperands();
@@ -2384,11 +1918,8 @@ static void dispatchCallOp(fir::CallOp call, std::vector<ASTNode>& nodes, IoStat
     if (!sn.kind.empty()) nodes.push_back(std::move(sn));
     return;
   }
-  // BLAS routine call site (DAXPY / DSCAL / DGEMM / ...): emit a
-  // ``blascall`` ASTNode the Python builder lowers to the matching
-  // ``dace.libraries.blas`` library node.  ``ddot`` is special-cased
-  // -- the result-carrying assign handler picks it up at the
-  // matching ``hlfir.assign`` site instead.
+  // BLAS routine call site: emits a blascall ASTNode -> dace.libraries.blas. ddot is special-cased -- the
+  // result-carrying assign handler picks it up at the matching hlfir.assign site instead.
   std::string const blasOp = blasCalleeTag(n.callee);
   if (!blasOp.empty()) {
     auto bn = buildBlasCallNode(call, blasOp);
@@ -2402,17 +1933,13 @@ static void dispatchCallOp(fir::CallOp call, std::vector<ASTNode>& nodes, IoStat
     if (!ln.kind.empty()) nodes.push_back(std::move(ln));
     return;
   }
-  // Library-prefix near-miss: the callee matches a recognised library's
-  // call convention (MPI / FFTW3 / BLAS / LAPACK) but the specific
-  // routine isn't in our supported subset.  Emit an explicit
-  // ``unsupported_libcall`` ASTNode so the Python builder can raise a
-  // clear ``NotImplementedError`` (better than silently degrading to a
-  // generic ``call`` node that mints ``_out = ?`` placeholders).
+  // Library-prefix near-miss: callee matches a recognised library's convention but isn't in the supported subset --
+  // emit unsupported_libcall (-> clear NotImplementedError) instead of silently degrading to a generic call node with
+  // "_out = ?" placeholders.
   std::string const libFam = libraryFamilyTag(n.callee);
   if (!libFam.empty()) {
-    // Recognised + supported routines are caught above; reaching here
-    // means the callee is in the library-prefix universe but not in
-    // the supported set.
+    // Recognised + supported routines are caught above; reaching here means the callee is in the library-prefix
+    // universe but not the supported set.
     bool const isSupported = !mpiCalleeTag(n.callee).empty() || !fftw3CalleeTag(n.callee).empty() ||
                              !blasCalleeTag(n.callee).empty() || !lapackCalleeTag(n.callee).empty();
     if (!isSupported) {
@@ -2424,27 +1951,23 @@ static void dispatchCallOp(fir::CallOp call, std::vector<ASTNode>& nodes, IoStat
       return;
     }
   }
-  // Fortran I/O runtime call: advance the open/read/write/close state
-  // machine (see ``recognizeIoCall``).  Consumed here either way.
+  // Fortran I/O runtime call: advances the open/read/write/close state machine (see recognizeIoCall); consumed here
+  // either way.
   if (n.callee.find("_FortranAio") != std::string::npos) {
     recognizeIoCall(call, n.callee, io_state, nodes);
     return;
   }
-  // Resolve each operand to a decl name so the Python builder can
-  // lower a registered external (bind(c)) call to a tasklet.
-  // Harmless for unregistered callees (the builder ignores them).
-  // A by-value integer-constant operand (e.g. ``CALL ext(a, 16)``) has no
-  // decl  --  emit its literal value so it reaches the C call by name
-  // rather than as an empty term.
+  // Resolves each operand to a decl name so the builder can lower a registered external (bind(c)) call to a tasklet
+  // (harmless for unregistered callees). A by-value integer-constant operand has no decl -- emit its literal value
+  // instead of an empty term.
   for (auto v : call.getArgOperands()) {
     std::string nm = traceToDecl(v);
     if (nm.empty())
       if (auto c = traceConstInt(v)) nm = std::to_string(*c);
     n.call_args.push_back(nm);
   }
-  // Carry the AoS-marshalling grouping the marshal pass tagged on the
-  // callee so emit_call can re-pack the (now-SoA-flat) member args into a
-  // local AoS buffer for the external.
+  // Carries the AoS-marshalling grouping the marshal pass tagged on the callee so emit_call can re-pack the SoA-flat
+  // member args into a local AoS buffer.
   if (auto ref = call.getCallee())
     if (auto mod = call->getParentOfType<mlir::ModuleOp>())
       if (auto fn = mod.lookupSymbol<mlir::func::FuncOp>(ref->getLeafReference()))
@@ -2453,10 +1976,8 @@ static void dispatchCallOp(fir::CallOp call, std::vector<ASTNode>& nodes, IoStat
   nodes.push_back(std::move(n));
 }
 
-// scf.while BEFORE-region ``fir.call`` handler: a Fortran DO-WHILE body call
-// (or a call hoisted into the loop condition) must still be lowered.  A loop
-// condition / body does not fold a multi-call Fortran-I/O region, so fresh
-// per-call I/O / FFT state is exact here.
+// scf.while BEFORE-region fir.call handler (DO-WHILE body call or a call hoisted into the loop condition); fresh
+// per-call I/O/FFT state is exact since a loop body never folds a multi-call Fortran-I/O region.
 static void dispatchScfWhileCall(fir::CallOp call, std::vector<ASTNode>& out) {
   IoState io_state;
   std::map<std::string, FftPlanInfo> fft_plans;
@@ -2466,14 +1987,9 @@ static void dispatchScfWhileCall(fir::CallOp call, std::vector<ASTNode>& out) {
 std::vector<ASTNode> buildAST(mlir::Block& block) {
   std::vector<ASTNode> nodes;
 
-  // Bind / advance the alloc-alias for an ``ALLOCATE``-bound store into an
-  // allocatable's box descriptor (``fir.store (fir.embox-of-fir.allocmem) to
-  // <decl_box_ref>``).  The target buffer is the site's CLASS buffer (see
-  // ``groupAllocSites``), not a per-store counter, so conditional branches
-  // and sequential re-allocation route correctly.
-  // Returns the allocatable's raw Fortran name on a successful match
-  // (so the caller can emit a state-change ``<name>_allocated = 1``
-  // ASTNode), empty string otherwise.
+  // Binds/advances the alloc-alias for an ALLOCATE-bound store into an allocatable's box descriptor; targets the site's
+  // CLASS buffer (see groupAllocSites), not a per-store counter, so branches and re-allocation route correctly. Returns
+  // the allocatable's raw name on match (caller emits <name>_allocated = 1), else empty.
   auto bindAllocSite = [&](mlir::Operation* op) -> std::string {
     auto store = mlir::dyn_cast<fir::StoreOp>(op);
     if (!store) return {};
@@ -2483,8 +1999,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
     if (!embox) return {};
     auto allocmem = mlir::dyn_cast_or_null<fir::AllocMemOp>(embox.getMemref().getDefiningOp());
     if (!allocmem) return {};
-    // Only the user-visible allocs we model  --  skip embox-of-zero_bits
-    // (the empty-init store the bridge already filters out elsewhere).
+    // Only user-visible allocs are modelled -- skip embox-of-zero_bits (the empty-init store already filtered out
+    // elsewhere).
     auto un = allocmem.getUniqName();
     if (!un || !un->ends_with(".alloc")) return {};
     auto memDef = store.getMemref().getDefiningOp();
@@ -2493,13 +2009,9 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
     if (!decl) return {};
     std::string raw = extractName(decl.getUniqName().str());
     if (raw.empty()) return {};
-    // Route this ALLOCATE to its buffer CLASS (one DaCe transient per
-    // class).  Sequential re-allocation -> a singleton class per epoch
-    // (``a``, ``a_alloc1``, ...).  A conditional ALLOCATE -> a multi-site
-    // class: every branch site shares ONE buffer and assigns its
-    // branch-dependent extent symbol (``<buf>_d<i> = <this branch's
-    // extent>``) here, in the branch; the writes merge at the IF join and
-    // bind the shape.  See ALLOC_BUFFER_SSA_DESIGN.md.
+    // Routes this ALLOCATE to its buffer CLASS (one DaCe transient per class): sequential re-allocation -> singleton
+    // class per epoch (a, a_alloc1, ...); conditional ALLOCATE -> multi-site class sharing one buffer, each branch
+    // assigning its extent symbol, merging at the IF join. See ALLOC_BUFFER_SSA_DESIGN.md.
     auto mod = decl->getParentOfType<mlir::ModuleOp>();
     auto classes = mod ? groupAllocSites(decl.getUniqName().str(), mod) : std::vector<std::vector<fir::AllocMemOp>>{};
     unsigned cls = 0;
@@ -2508,14 +2020,9 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
         if (site.getOperation() == allocmem.getOperation()) cls = ci;
     std::string const bufName = allocAliasName(raw, cls);
     setAllocAlias(raw, bufName);
-    // Bind the buffer's per-dim extent symbol ``<buf>_d<i>`` here, at the
-    // site, from the ALLOCATE's own shape operand.  Every ALLOCATE passes
-    // its dimensions (``allocate(a(n))`` -> extent ``n``), so we always know
-    // them: assigning the symbol here keeps it from leaking onto the program
-    // signature as a free symbol and lets ``size(a)`` / ``LBOUND`` / ``UBOUND``
-    // (which lower to ``fir.box_dims`` rendered as ``<buf>_d<i>``) resolve --
-    // for the base buffer, conditional branches, and versioned re-allocations
-    // alike.
+    // Binds the buffer's per-dim extent symbol <buf>_d<i> here from the ALLOCATE's own shape operand (always known),
+    // keeping it off the program signature as a free symbol and letting size(a)/LBOUND/UBOUND (-> fir.box_dims ->
+    // <buf>_d<i>) resolve for base buffers, branches, and re-allocations alike.
     {
       unsigned d = 0;
       for (auto sz : allocmem.getShape()) {
@@ -2531,11 +2038,9 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
         ++d;
       }
     }
-    // Mint a position symbol for every constant-indexed element in the
-    // allocation's shape (``allocate(buf(max(dims(1), dims(2))))``) so each
-    // one gets a ``symbol_init`` -- even an element that appears only in
-    // the extent and nowhere else (no loop bound / index would otherwise
-    // mint it, leaving the shape symbol an unbound program argument).
+    // Mints a position symbol for every constant-indexed element in the allocation's shape so each gets a symbol_init
+    // -- otherwise an element used only in the extent (no loop bound/index) leaves the shape symbol an unbound program
+    // argument.
     for (auto sz : allocmem.getShape())
       forEachConstIndexedElement(
           sz, [](const std::string& arr, const std::vector<int64_t>& idxs) { internPosSymbol(arr, idxs); });
@@ -2553,26 +2058,17 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
   // FFT plan info keyed by plan variable name (see ``fftw3CalleeTag``).
   std::map<std::string, FftPlanInfo> fft_plans;
   for (auto& op : block) {
-    // Bind / advance the alloc-alias for this allocatable, then
-    // emit a state-change ``<name>_allocated = 1`` so downstream
-    // ``ALLOCATED(arr)`` reads see the right value.  The ALLOCATE
-    // store itself produces no other observable side effect in the
-    // SDFG model  --  we treat allocatables as live for the whole
-    // scope.
+    // Binds/advances the alloc-alias for this allocatable, then emits <name>_allocated = 1 so downstream ALLOCATED(arr)
+    // reads see the right value; allocatables are otherwise treated as live for the whole scope.
     if (auto allocName = bindAllocSite(&op); !allocName.empty()) {
       emitAllocStateChange(allocName, 1);
       continue;
     }
 
-    // Standalone ``fir.freemem``  --  Flang's DEALLOCATE expansion at
-    // top level (the trailing ``fir.if (alloc_status != 0) { ... }``
-    // is the implicit end-of-scope cleanup, handled separately as
-    // ``isAllocCleanup``).  Trace through ``fir.box_addr`` and
-    // ``fir.load`` to find the underlying ``hlfir.declare`` and
-    // emit ``<rawname>_allocated = 0`` against the declare's RAW
-    // Fortran name (NOT the current alloc-alias) so multi-site
-    // allocatables ``x -> x_alloc1 -> x_alloc2`` still funnel state
-    // updates through the original ``x_allocated`` symbol.
+    // Standalone fir.freemem -- Flang's top-level DEALLOCATE expansion (the trailing fir.if(alloc_status != 0){...} is
+    // the implicit end-of-scope cleanup, handled separately as isAllocCleanup). Traces to the underlying hlfir.declare
+    // and emits <rawname>_allocated = 0 against the declare's RAW name (not the current alloc-alias) so multi-site
+    // allocatables funnel through the original symbol.
     if (auto fm = mlir::dyn_cast<fir::FreeMemOp>(&op)) {
       mlir::Value cur = fm.getHeapref();
       for (int i = 0; i < limits::kConvertChainDepth && cur; ++i) {
@@ -2604,14 +2100,9 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       ASTNode n;
       n.kind = "loop";
       n.loop_iter = traceLoopIter(doLoop);
-      // Bound resolution.  ``traceToDecl`` is a useful shortcut for
-      // the scalar-variable case (``DO i = 1, n`` where ``n`` is a
-      // dummy scalar) but it is wrong for array-element loads:
-      // ``DO j = row_ptr(i), row_ptr(i+1)-1`` would otherwise resolve
-      // to the bare name ``row_ptr`` because the load chain bottoms
-      // out at the array's declare.  Detect that case and route
-      // through ``buildIndexExpr`` so the bound is rendered as the
-      // proper subscripted expression ``row_ptr[(i) - offset_row_ptr_d0]``.
+      // Bound resolution: traceToDecl is a shortcut for the scalar case (DO i = 1, n) but wrong for array-element loads
+      // (DO j = row_ptr(i), ...) since the load chain bottoms out at the array's declare -- detect that and route
+      // through buildIndexExpr for the proper subscripted form.
       auto isArrayElementLoad = [](mlir::Value v) -> bool {
         for (int i = 0; i < 32 && v; ++i) {
           auto* d = v.getDefiningOp();
@@ -2635,18 +2126,13 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
         n.loop_bound = traceToDecl(doLoop.getUpperBound());
       }
       if (n.loop_bound.empty()) n.loop_bound = buildIndexExpr(doLoop.getUpperBound(), 0);
-      // ``buildIndexExpr`` suppresses ``fir.box_dims`` on a local allocatable
-      // (it keeps the whole-array-section copy fallback for ``arr(:)`` reads).
-      // A loop bound is a scalar expression, not a subset, so ``do i = 1,
-      // size(a)`` should resolve like the scalar assignment ``sz = size(a)``
-      // does -- fall back to ``buildExpr``, which renders the extent as the
-      // bound ``<buf>_d<i>`` symbol.
+      // buildIndexExpr suppresses fir.box_dims on a local allocatable (keeps the whole-array-section copy fallback for
+      // arr(:) reads); a loop bound is a scalar, not a subset, so fall back to buildExpr like a scalar sz = size(a)
+      // assignment would.
       if (n.loop_bound == "?") n.loop_bound = buildExpr(doLoop.getUpperBound(), 0);
       n.loop_lower = traceLB(doLoop.getLowerBound());
       if (n.loop_lower < 0) {
-        // Non-constant lower bound (``DO jk = nflatlev, nlev`` /
-        // ``DO j = row_ptr(i), ...``).  Capture the symbolic form
-        // so emit_loop can thread it through instead of silently
+        // Non-constant lower bound: capture the symbolic form so emit_loop can thread it through instead of silently
         // defaulting to 1.
         if (!isArrayElementLoad(doLoop.getLowerBound())) {
           auto sym = traceToDecl(doLoop.getLowerBound());
@@ -2654,40 +2140,23 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
         }
         if (n.loop_lower_expr.empty()) n.loop_lower_expr = buildIndexExpr(doLoop.getLowerBound(), 0);
       }
-      // Step.  Reverse-direction ``DO i = N, 1, -1`` (LU
-      // back-substitution) carries step -1; the bridge needs
-      // this to flip init/cond/update in emit_loop.  Constant
-      // steps only  --  symbolic-step loops would silently default
-      // to step=1 and produce a wrong-direction iteration if
-      // the symbol is actually negative, so throw loudly when
-      // the step is non-constant AND non-trivial (i.e. not the
-      // default ``%c1``).
+      // Step: reverse-direction DO i = N, 1, -1 carries step -1 (needed to flip init/cond/update in emit_loop).
+      // Constant steps only -- a symbolic step would silently default to 1 and iterate the wrong direction if actually
+      // negative, so throw when non-constant and non-trivial (not the default %c1).
       if (auto stepC = traceConstInt(doLoop.getStep())) {
         n.loop_step = *stepC;
       } else {
-        // Symbolic step (``DO jbnd = jstart, jend, many_fft`` where
-        // ``many_fft`` is a runtime config integer).  Capture the
-        // symbolic form so emit_loop threads it through as the
-        // iteration update.  Defaults to forward iteration; a
-        // runtime-negative symbol falls out as zero-or-one
-        // iterations under the ``uid <= bound`` condition, matching
-        // Fortran's trip-count semantics for mismatched-direction
-        // loops.
-        //
-        // ``traceToDecl`` lifts the underlying scalar's name; if
-        // that's empty (the step comes from an inline arithmetic
-        // expression like ``2*chunk``) fall back to ``buildIndexExpr``
-        // which renders the SSA tree as a Fortran-style expression
-        // string.  Either way ``loop_step`` stays at the default 1
-        // and the emitter consults ``loop_step_expr`` first.
+        // Symbolic step (e.g. a runtime config integer): capture the symbolic form so emit_loop threads it through;
+        // defaults forward, a runtime-negative symbol falls out as zero-or-one iterations under "uid <= bound" (matches
+        // Fortran trip-count semantics). traceToDecl lifts the scalar name; empty (inline arithmetic like 2*chunk)
+        // falls back to buildIndexExpr. loop_step stays 1; the emitter consults loop_step_expr first.
         if (!isArrayElementLoad(doLoop.getStep())) {
           auto sym = traceToDecl(doLoop.getStep());
           if (!sym.empty()) n.loop_step_expr = sym;
         }
         if (n.loop_step_expr.empty()) n.loop_step_expr = buildIndexExpr(doLoop.getStep(), 0);
         if (n.loop_step_expr.empty() || n.loop_step_expr == "?") {
-          // Fallback failed -- emit a location-rich diagnostic so
-          // the user can find the offending DO in their source.
+          // Fallback failed -- emit a location-rich diagnostic so the user can find the offending DO.
           std::string locStr;
           llvm::raw_string_ostream locOS(locStr);
           doLoop.getLoc().print(locOS);
@@ -2698,12 +2167,9 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
                                    "or struct member).");
         }
       }
-      // Elemental-inlined bodies use the fir.do_loop block arg
-      // directly as the hlfir.designate index  --  no fir.store ->
-      // alloca -> fir.load indirection.  traceLoopIter returns ""
-      // for that shape; push the block arg onto indexStack() with
-      // a synthetic name so resolveIndex() can recover it when the
-      // inner designate's index is the raw block arg.
+      // Elemental-inlined bodies use the fir.do_loop block arg directly as the hlfir.designate index (no
+      // store->alloca->load). traceLoopIter returns "" for that shape; push the block arg onto indexStack() with a
+      // synthetic name so resolveIndex() can recover it.
       static thread_local int kDoLoopIterCounter = 0;
       bool pushedBlockArg = false;
       auto& loopBlock = doLoop.getRegion().front();
@@ -2721,19 +2187,9 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       auto src = assign.getOperand(0);
       auto dst = assign.getOperand(1);
 
-      // Fortran-runtime transformational intrinsics return their
-      // result either as a scalar (``_FortranANorm2_*``) or as a
-      // newly-heap-allocated array whose descriptor lives in an
-      // alloca passed as the first operand
-      // (``_FortranASpread`` / ``_FortranAEoshiftVector`` / etc.).
-      //
-      // Scalar form ``hlfir.assign %fXX_call_result to %dst``:
-      // detect the call directly.
-      // Array form ``hlfir.assign %as_expr to %dst`` where
-      // ``%as_expr = hlfir.as_expr %decl move %true`` and ``%decl``
-      // declares the runtime ``.tmp.intrinsic_result``: walk back
-      // through ``declare -> box_addr -> load %alloca`` and look at
-      // users of ``%alloca`` for the matching runtime call.
+      // Fortran-runtime transformational intrinsics return a scalar (_FortranANorm2_*, detected directly) or a heap
+      // array whose descriptor lives in an alloca passed as arg0 (_FortranASpread/_FortranAEoshiftVector/etc, reached
+      // via as_expr -> declare -> box_addr -> load %alloca, then scanning %alloca's users for the runtime call).
       auto canonicalCallee = [](fir::CallOp call) -> std::string {
         auto cref = call.getCallee();
         if (!cref) return "";
@@ -2776,8 +2232,7 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
             continue;
           }
         }
-        // Heap-result form: trace through as_expr / declare to the
-        // alloca whose store-from-runtime-call seeded it.
+        // Heap-result form: traces through as_expr/declare to the alloca whose store-from-runtime-call seeded it.
         if (auto as_expr = mlir::dyn_cast<hlfir::AsExprOp>(sop)) {
           mlir::Value v = as_expr.getVar();
           // declare -> box_addr -> load -> alloca chain.
@@ -2804,11 +2259,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
             break;
           }
           if (allocaOp) {
-            // Look for ``_FortranASpread`` / ``_FortranAEoshiftVector``
-            // among users of the alloca, peeling through
-            // ``fir.convert`` (the runtime call takes a
-            // ``!fir.ref<!fir.box<none>>`` so the alloca's typed
-            // result is first reboxed via convert).
+            // Looks for _FortranASpread/_FortranAEoshiftVector among the alloca's users, peeling through fir.convert
+            // (the runtime call takes !fir.ref<!fir.box<none>>, so the typed alloca result is first reboxed).
             std::vector<mlir::Operation*> queue;
             for (auto* u : allocaOp->getResult(0).getUsers()) queue.push_back(u);
             for (size_t qi = 0; qi < queue.size(); ++qi) {
@@ -2821,13 +2273,10 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
               if (!rtcall) continue;
               std::string const callee = canonicalCallee(rtcall);
               auto rtargs = rtcall.getArgOperands();
-              // SPREAD / EOSHIFT: lower directly to the lib node
-              // writing INTO the user's destination -- src -> lib node
-              // -> dst, no intermediate transient.  Fortran's
-              // assignment semantics guarantees the heap-result shape
-              // matches dst's shape, so the runtime allocation is just
-              // ceremony around what is semantically a copy from a
-              // shape-transformed source.
+              // SPREAD/EOSHIFT lower directly to the lib node writing into the user's destination (src -> lib node ->
+              // dst, no intermediate transient) -- Fortran's assignment semantics guarantees the heap-result shape
+              // matches dst's, so the runtime allocation is just ceremony around a copy from a shape-transformed
+              // source.
               std::string dstName;
               if (auto* dd = dst.getDefiningOp())
                 if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(dd))
@@ -2879,19 +2328,10 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       continue;
     runtime_call_not_handled:;
 
-      // Recognise + suppress the ``plan = fftw_plan_dft_*(...)`` user
-      // statement.  Flang lowers it through a ``.result`` temp:
-      //   ``%158 = fir.call @fftw_plan_dft_2d(...)``
-      //   ``fir.save_result %158 to %0  (the .result alloca)``
-      //   ``%159 = hlfir.declare %0``
-      //   ``%160 = hlfir.as_expr %159``
-      //   ``hlfir.assign %160 to %141#0``  (the user's ``plan`` variable)
-      // We walk back through the as_expr -> declare -> alloca chain and
-      // ask whether the alloca is the destination of a fir.save_result
-      // of a recognised FFTW3 plan-create call. If so, record the plan
-      // variable's (rank, dims, direction) under ``fft_plans`` for the
-      // matching ``fftw_execute_dft`` to look up, and skip the assign --
-      // the opaque ``TYPE(C_PTR)`` SSA value has no SDFG representation.
+      // Recognises + suppresses the "plan = fftw_plan_dft_*(...)" statement, lowered by Flang via a .result temp (call
+      // -> save_result -> declare -> as_expr -> assign). Walks back through that chain to confirm a recognised FFTW3
+      // plan-create call, records (rank,dims,direction) under fft_plans for the matching execute_dft, and skips the
+      // assign (the opaque TYPE(C_PTR) has no SDFG representation).
       {
         bool is_fft_plan_assign = false;
         if (auto* sop = src.getDefiningOp()) {
@@ -2912,8 +2352,7 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
                   ref->print(os);
                   std::string const tag = fftw3CalleeTag(cs);
                   if (tag != "fft_plan_2d" && tag != "fft_plan_3d") continue;
-                  // Confirmed: this assign is the user's ``plan =
-                  // fftw_plan_dft_*``.
+                  // Confirmed: this assign is the user's "plan = fftw_plan_dft_*".
                   is_fft_plan_assign = true;
                   std::string const planVar = traceToDecl(dst);
                   if (!planVar.empty()) {
@@ -2942,13 +2381,9 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
         if (is_fft_plan_assign) continue;
       }
 
-      // Suppress per-element stores into a Flang-synthesised
-      // ``.tmp.arrayctor`` heap buffer.  The final
-      // ``hlfir.assign %as_expr_of_arrayctor to %dst`` site below
-      // walks the parent block and emits per-element assigns
-      // retargeted to ``%dst``; if we let the per-element stores
-      // through here they'd surface as orphan assigns into
-      // ``.tmp.arrayctor`` and break downstream memlet parsing.
+      // Suppresses per-element stores into a Flang-synthesised .tmp.arrayctor heap buffer; the final assign site below
+      // walks the parent block and emits per-element assigns retargeted to %dst -- letting these through would surface
+      // orphan assigns into .tmp.arrayctor and break memlet parsing.
       if (auto* dd = dst.getDefiningOp()) {
         if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(dd)) {
           if (auto* md = dg.getMemref().getDefiningOp()) {
@@ -2963,38 +2398,24 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       bool const dst_is_array = isArrayRef(dst.getType());
       bool const src_is_array = isArrayRef(src.getType());
 
-      // ``hlfir.expr``-valued sources (any HLFIR op whose result
-      // type peels to ``!hlfir.expr<...>``: ``hlfir.elemental``,
-      // ``hlfir.matmul``, ``hlfir.transpose``, ``hlfir.dot_product``,
-      // ``hlfir.count``, ``hlfir.sum``, ...) are array-typed but
-      // NOT array refs  --  they have no memory backing.
-      // ``buildCopyNode`` would call ``traceToDecl`` on them and
-      // get an empty name; route them to the elemental / libcall
-      // handlers below instead.  This is what makes
-      // ``res(:) = a(:) - b(:)`` (Flang-generated elemental) and
-      // ``res = COUNT(mask, dim=1)`` (libcall returning expr)
-      // work without falling through to a degenerate copy.
+      // hlfir.expr-valued sources (elemental/matmul/transpose/dot_product/count/sum/...) are array-typed but NOT array
+      // refs -- no memory backing. buildCopyNode would traceToDecl them to an empty name; route to the
+      // elemental/libcall handlers instead (makes res(:)=a(:)-b(:) and res=COUNT(mask,dim=1) work without a degenerate
+      // copy).
       bool src_is_hlfir_expr = false;
       if (auto srcOp = src.getDefiningOp()) {
         if (mlir::isa<hlfir::ExprType>(peelWrappers(srcOp->getResult(0).getType()))) src_is_hlfir_expr = true;
       }
 
-      // Section-to-section assign  --  both sides are non-trivial
-      // ``hlfir.designate``s with at least one triplet dim.  Walk
-      // the structure explicitly because ``buildCopyNode`` would
-      // otherwise treat it as a whole-array copy and silently
-      // ignore scalar dims and slice offsets (e.g.
-      // ``res(nval, pos(1):pos(2)) = a(nval, pos(3):pos(4))``).
+      // Section-to-section assign (both sides non-trivial hlfir.designates with >=1 triplet dim): walk the structure
+      // explicitly, since buildCopyNode would treat it as a whole-array copy and silently ignore scalar dims/slice
+      // offsets.
       if (dst_is_array && src_is_array && !src_is_hlfir_expr) {
         bool const dstIsSection = (bool)asSectionDesignate(dst);
         bool const srcIsSection = (bool)asSectionDesignate(src);
-        // Either side carrying section info is enough  --  the
-        // helper handles bare-decl on whichever side is plain
-        // whole-array.  Without this the dst-bare-decl form
-        // (``t0_w = p_prog_pprog_w(1, 1:5:1, 1:5:1)`` produced
-        // by Phase 2 nested-DT flattening of an AoS-element
-        // whole-struct copy) would fall through to
-        // ``buildCopyNode`` and copy the entire 3D companion.
+        // Either side carrying section info is enough -- the helper handles bare-decl on whichever side is plain
+        // whole-array. Without this a dst-bare-decl form (Phase 2 nested-DT flattening of an AoS-element whole-struct
+        // copy) would fall through to buildCopyNode and copy the entire 3D companion.
         if (dstIsSection || srcIsSection) {
           auto built = buildSectionToSectionAssign(assign, dst);
           if (!built.empty()) {
@@ -3003,27 +2424,21 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
           }
         }
       }
-      // Whole-array copy: both sides are array boxes / refs (and
-      // not an ``hlfir.expr``-producer that we want to walk into).
+      // Whole-array copy: both sides are array boxes/refs (and not an hlfir.expr-producer to walk into).
       if (dst_is_array && src_is_array && !src_is_hlfir_expr) {
         nodes.push_back(buildCopyNode(assign));
         continue;
       }
-      // Scalar-zero -> array fill: MemsetLibraryNode -- but ONLY for a WHOLE
-      // array.  A section zero-fill (``a(:, :, blockno) = 0``) falls through to
-      // the section-scalar loop below; a whole-array memset would clobber the
-      // out-of-section elements (ICON ``rot_vec_v(:, :, blockno) = 0`` in a
-      // block loop dropped every other block's intent(inout) data).
+      // Scalar-zero -> array fill: MemsetLibraryNode, but only for a whole array; a section zero-fill falls through to
+      // the section-scalar loop below (a whole-array memset would clobber out-of-section elements, ICON rot_vec_v
+      // case).
       if (dst_is_array && !src_is_array && isConstantZero(src) && !asSectionDesignate(dst)) {
         nodes.push_back(buildMemsetNode(assign));
         continue;
       }
 
-      // Array-section ``res(a:b) = <scalar>``  --  detect the LHS
-      // hlfir.designate with triplet operands and synthesise a
-      // nested loop over the section bounds.  Handled before the
-      // elemental dispatch below because Flang emits a plain
-      // scalar RHS here (no hlfir.elemental wrapping).
+      // Array-section res(a:b) = <scalar>: detect the LHS triplet designate and synthesise a nested loop over the
+      // section bounds; handled before the elemental dispatch since Flang emits a plain scalar RHS here.
       if (!src_is_array) {
         if (auto sec = asSectionDesignate(dst)) {
           auto built = buildSectionScalarAssign(assign, sec);
@@ -3032,9 +2447,7 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
             continue;
           }
         }
-        // ``res = <non-zero scalar>``  --  broadcast across the whole
-        // array.  Memset already handled zero above; synthesise a
-        // nested loop here for any other constant / scalar RHS.
+        // res = <non-zero scalar> broadcasts across the whole array (zero already handled by memset above).
         if (dst_is_array) {
           auto built = buildWholeArrayScalarBroadcast(assign);
           if (!built.empty()) {
@@ -3044,26 +2457,11 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
         }
       }
 
-      // b = <elementwise-expression>   --  Flang wraps the RHS in one or
-      // more composed hlfir.elemental ops, the outermost of which is
-      // the assign's source.  Synthesise a nested loop over the shape
-      // instead of treating it as a scalar assign.
-      //
-      // Special-case: ``b = MERGE(t, f, mask)`` on arrays lowers to
-      // ``hlfir.elemental { hlfir.designate; arith.select;
-      // yield_element }``.  Detect that exact shape and route to
-      // ``MergeLibraryNode`` directly so the per-element select
-      // stays inside the library node's expansion (modular  --
-      // bridge doesn't inline).  Anything more elaborate falls
-      // through to ``buildElementalAssign``'s per-element tasklet
-      // path (which uses the generic select/cmp fallback).
-      //
-      // Implicit Fortran kind/type conversion: ``logical :: res``
-      // assigned from an integer-valued ``COUNT`` (or any libcall
-      // returning a different kind from the destination) puts a
-      // ``fir.convert`` between the libcall and the assign.  Peel
-      // it here so the dispatch below pattern-matches the real
-      // producer, not the convert.
+      // b = <elementwise-expression>: Flang wraps the RHS in composed hlfir.elemental ops; synthesise a nested loop
+      // over the shape rather than a scalar assign. Special-case b = MERGE(t,f,mask) -> MergeLibraryNode directly
+      // (keeps the select inside the lib node's expansion); anything else falls to buildElementalAssign's per-element
+      // tasklet path. Peels an implicit-conversion fir.convert (e.g. logical res from integer COUNT) so the dispatch
+      // below matches the real producer.
       mlir::Value srcPeeled = src;
       while (auto* pdef = srcPeeled.getDefiningOp()) {
         if (auto cv = mlir::dyn_cast<fir::ConvertOp>(pdef)) {
@@ -3072,24 +2470,11 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
         }
         break;
       }
-      // Fortran ``out = SHAPE(arr)`` (and similar array-constructor
-      // shapes Flang lowers via a heap-allocated ``.tmp.arrayctor``):
-      //
-      //     %tmp   = fir.allocmem !fir.array<NxiK> {bindc_name =
-      //     ".tmp.arrayctor"} %tmpD  = hlfir.declare %tmp(...) hlfir.assign
-      //     <extent_0> to %tmpD[c1] hlfir.assign <extent_1> to %tmpD[c2]
-      //     ...
-      //     %expr = hlfir.as_expr %tmpD move %true
-      //     hlfir.assign %expr to %dst
-      //
-      // The bridge can't model the ``.tmp.arrayctor`` buffer
-      // (heap alloc + per-element store + as_expr), but it
-      // doesn't need to: each per-element value is whatever the
-      // intrinsic resolved to (e.g. SHAPE returns the source
-      // array's per-dim extents, which the bridge already tracks
-      // as VarInfo shape symbols).  Walk the parent block, find
-      // each ``hlfir.assign <val> to %tmpD[<const>]``, and emit
-      // one scalar assign per element directly into ``%dst``.
+      // Fortran out = SHAPE(arr) (and similar array-constructor shapes) lowers via a heap-allocated .tmp.arrayctor:
+      // allocmem+declare, per-element assigns into %tmpD[c_i], then as_expr+assign to %dst. The bridge can't model
+      // .tmp.arrayctor, but doesn't need to -- each per-element value is already known (SHAPE's extents are tracked
+      // VarInfo shape symbols); walk the parent block for each per-element assign into %tmpD and emit it directly into
+      // %dst.
       if (auto asExpr = mlir::dyn_cast_or_null<hlfir::AsExprOp>(srcPeeled.getDefiningOp())) {
         hlfir::DeclareOp tmpDecl;
         if (auto* vd = asExpr.getVar().getDefiningOp()) tmpDecl = mlir::dyn_cast<hlfir::DeclareOp>(vd);
@@ -3156,17 +2541,9 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       }
 
       if (auto* sd = srcPeeled.getDefiningOp()) {
-        // ``hlfir.reshape %src %shape`` -> flat copy from the
-        // reshape's source array into the assignment's destination.
-        // Fortran ``RESHAPE`` requires both sides to carry the same
-        // total element count, so a ``CopyLibraryNode`` whose
-        // expansion collapses each side to a 1-D walker handles the
-        // rank/extent mismatch.  ``hlfir.reshape``'s optional
-        // ``pad`` / ``order`` operands are NOT supported in this
-        // first cut  --  fall through to the existing
-        // libcall/elemental path with a clear NotImplemented at the
-        // bridge layer when present, so the surfaced gap is the
-        // unsupported variant rather than a silent miscopy.
+        // hlfir.reshape %src %shape -> flat copy via CopyLibraryNode (1-D walker handles the rank/extent mismatch;
+        // Fortran RESHAPE guarantees equal total element count). Optional pad/order operands are not supported in this
+        // first cut -- throw a clear NotImplemented instead of a silent miscopy.
         if (auto reshape = mlir::dyn_cast<hlfir::ReshapeOp>(sd)) {
           if (sd->getNumOperands() > 2) {
             throw std::runtime_error("hlfir.reshape: pad= / order= variants are not yet supported");
@@ -3192,10 +2569,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
           for (auto& n : buildElementalAssign(assign, elem)) nodes.push_back(std::move(n));
           continue;
         }
-        // Linear-algebra ops are first-class in HLFIR; each lowers
-        // to a dedicated DaCe library node.  MatMul's SpecializeMatMul
-        // handles matrix-matrix / matrix-vector / vector-matrix via
-        // operand rank, so we don't disambiguate here.
+        // Linear-algebra ops are first-class in HLFIR; each lowers to a dedicated DaCe library node. MatMul's
+        // SpecializeMatMul handles matrix-matrix/vector via operand rank, so no disambiguation needed here.
         auto srcOpName = sd->getName().getStringRef();
         struct LibEntry {
           llvm::StringRef op;
@@ -3203,46 +2578,29 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
         };
         static const LibEntry kLibTable[] = {
             {"hlfir.matmul", "matmul"},
-            // ``MATMUL(TRANSPOSE(A), B)`` lowers under the optimised
-            // ``hlfir-optimized-bufferization`` pass as a single
-            // ``hlfir.matmul_transpose``.  The Python emitter expands
-            // it to a ``Transpose`` + ``MatMul`` libcall pair so the
-            // operand-order semantics are correct without a
-            // dedicated lib node; future cuBLAS/MKL acceleration
-            // can swap in a fused expansion.
+            // MATMUL(TRANSPOSE(A), B) lowers (under hlfir-optimized-bufferization) as a single hlfir.matmul_transpose;
+            // the Python emitter expands it to a Transpose+MatMul libcall pair rather than a dedicated lib node --
+            // future cuBLAS/MKL acceleration can swap in a fused expansion.
             {"hlfir.matmul_transpose", "matmul_transpose"},
             {"hlfir.transpose", "transpose"},
             {"hlfir.dot_product", "dot_product"},
-            // Fortran ``COUNT(mask [, dim])``  --  routed through
-            // ``CountLibraryNode`` so its ``cast -> Reduce``
-            // expansion handles the integer-cast and the
-            // per-target reduction lowering.  ``buildLibCallNode``
-            // picks up the optional ``dim`` operand and threads
-            // it through the ASTNode for ``emit_libcall``.
+            // Fortran COUNT(mask [, dim]) routes through CountLibraryNode (cast -> Reduce expansion handles the
+            // int-cast + per-target reduction); buildLibCallNode threads the optional dim operand through for
+            // emit_libcall.
             {"hlfir.count", "count"},
-            // Fortran ``MINLOC(array [, dim [, mask [, back]]])``
-            // and the symmetric ``MAXLOC``  --  routed through the
-            // ``ArgMin`` / ``ArgMax`` library nodes (pure WCR
-            // expansion mirroring the ``numpy.argmin`` / ``numpy.argmax``
-            // replacement pattern).  ``buildLibCallNode`` threads any
-            // ``dim`` (Fortran 1-based) and ``back`` flag through the
-            // ASTNode for ``emit_libcall``.
+            // Fortran MINLOC/MAXLOC route through ArgMin/ArgMax (pure WCR expansion mirroring numpy.argmin/argmax);
+            // buildLibCallNode threads the optional dim (1-based) and back flag through for emit_libcall.
             {"hlfir.minloc", "argmin"},
             {"hlfir.maxloc", "argmax"},
-            // Fortran ``CSHIFT(array, shift [, dim])`` -- circular
-            // shift along ``dim`` (default 1).  Routed through
-            // ``CShift`` (pure expansion = Map of mod-indexed reads
-            // along the chosen axis).
+            // Fortran CSHIFT(array, shift [, dim]) routes through CShift (pure expansion = Map of mod-indexed reads
+            // along the chosen axis, default dim 1).
             {"hlfir.cshift", "cshift"},
         };
         bool libMatched = false;
         for (auto& e : kLibTable) {
           if (srcOpName == e.op) {
-            // Mode C: ``hlfir.count`` whose first operand is
-            // an ``hlfir.elemental`` (comparison-as-mask /
-            // compound boolean expression).  Synthesise a
-            // transient int32 mask via a per-element loop,
-            // then route through ``CountLibraryNode``.
+            // hlfir.count whose first operand is an hlfir.elemental (comparison-as-mask): synthesise a transient int32
+            // mask via a per-element loop, then route through CountLibraryNode.
             if (e.op == "hlfir.count" && sd->getNumOperands() > 0) {
               auto mask_src = sd->getOperand(0);
               if (auto* ms = mask_src.getDefiningOp()) {
@@ -3256,21 +2614,10 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
                 }
               }
             }
-            // Libcall-over-elemental fix-up.  When a
-            // libcall operand is an inline ``hlfir.elemental``
-            // (e.g. ``transpose(1.0 - d)``, or
-            // ``transpose(d(firstcols(secondcols), :))``
-            // where the gather chain produces an
-            // ``hlfir.expr`` rather than a named array),
-            // the bridge's source-name resolver returns
-            // empty and the Python emitter fails at
-            // ``ctx.sdfg.arrays['']``.  Pre-materialise
-            // each elemental operand into a synthetic
-            // ``_libsrc_<n>`` transient via a fill loop,
-            // then patch the libcall's ``call_args`` to
-            // point at the transient.  Excluded: the
-            // ``hlfir.count`` path, handled above with
-            // its own COUNT-specific transient.
+            // Libcall-over-elemental fix-up: when a libcall operand is an inline hlfir.elemental (e.g. transpose(1.0 -
+            // d)), the source-name resolver returns empty and the Python emitter fails at ctx.sdfg.arrays[''].
+            // Pre-materialise each elemental operand into a synthetic _libsrc_<n> transient via a fill loop, then patch
+            // call_args to point at it. Excluded: hlfir.count, handled above with its own transient.
             std::vector<std::string> elemSubst(sd->getNumOperands());
             bool needSubst = false;
             for (unsigned i = 0; i < sd->getNumOperands(); ++i) {
@@ -3285,30 +2632,16 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
                 needSubst = true;
                 continue;
               }
-              // Inline ``hlfir.transpose %A`` operand -- materialise a
-              // ``transpose`` libcall into a fresh ``_libsrc_<n>``
-              // transient, then point the outer libcall at the
-              // transient.  Covers ``MATMUL(A, TRANSPOSE(B))`` and
-              // ``MATMUL(TRANSPOSE(A), TRANSPOSE(B))`` in the default
-              // (unfused) HLFIR pipeline.
-              //
-              // SKIP this materialisation when the outer libcall is
-              // ``matmul`` / ``matmul_transpose`` -- the BLAS call's
-              // ``transA`` / ``transB`` flag handles the transpose
-              // in-place (``CblasTrans`` / ``CUBLAS_OP_T``), no
-              // transient + no extra copy.  ``buildLibCallNode``
-              // (assigns.cpp) detects the same shape and sets
-              // ``options[transA/transB]=true`` so the two paths
-              // line up.  For ``matmul``: both arg 0 and arg 1
-              // qualify.  For ``matmul_transpose``: only arg 1
-              // qualifies (LHS transpose is already in the op
-              // itself).
+              // Inline hlfir.transpose %A operand: materialise a transpose libcall into a fresh _libsrc_<n> transient,
+              // covering MATMUL(A,TRANSPOSE(B)) etc. in the default (unfused) HLFIR pipeline. SKIP when the outer
+              // libcall is matmul/matmul_transpose -- the BLAS transA/transB flag handles the transpose in-place
+              // (CblasTrans/CUBLAS_OP_T); buildLibCallNode (assigns.cpp) sets options[transA/transB] for the same
+              // shape. matmul: args 0 and 1 qualify; matmul_transpose: only arg 1 (LHS transpose is already in the op).
               bool const isMatmulFamily = (e.callee == "matmul" || e.callee == "matmul_transpose");
               bool const foldsViaBlas = (e.callee == "matmul" && i < 2) || (e.callee == "matmul_transpose" && i == 1);
               if (auto tp = mlir::dyn_cast<hlfir::TransposeOp>(od); tp && isMatmulFamily && foldsViaBlas) {
-                // Defer to buildLibCallNode -- it will see the
-                // hlfir.transpose operand, set the BLAS flag, and
-                // re-bind to the un-transposed source.
+                // Defers to buildLibCallNode -- it will see the hlfir.transpose operand, set the BLAS flag, and re-bind
+                // to the un-transposed source.
                 continue;
               }
               if (auto tp = mlir::dyn_cast<hlfir::TransposeOp>(od)) {
@@ -3322,12 +2655,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
                 decl.expr = exprDtypeString(tp.getType());
                 AccessInfo shape_info;
                 shape_info.array_name = trName;
-                // ``hlfir.transpose`` result is rank-2 with the
-                // source's dims reversed.  Derive each result-dim
-                // extent from the source array's ``box_dims`` so the
-                // transient gets a symbolic shape rather than the
-                // ``?`` placeholder Flang puts in the expression-type
-                // shape vector for assumed-shape sources.
+                // hlfir.transpose result is rank-2 with dims reversed; derive each extent from the source's box_dims so
+                // the transient gets a symbolic shape instead of Flang's "?" placeholder for assumed-shape sources.
                 shape_info.index_exprs.push_back(srcName + "_d1");
                 shape_info.index_exprs.push_back(srcName + "_d0");
                 decl.accesses.push_back(std::move(shape_info));
@@ -3357,12 +2686,9 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
         }
         if (libMatched) continue;
 
-        // Scalar reductions (sum / product / minval / maxval / any /
-        // all) land as their own dedicated op.  The routing (section /
-        // elemental / whole-array source) lives in the shared
-        // ``buildReductionAssignNodes`` helper so the ``scf.while`` body
-        // walker reaches it identically for a reduction inside a
-        // ``do while`` body.
+        // Scalar reductions land as their own dedicated op; routing (section/elemental/whole-array source) lives in the
+        // shared buildReductionAssignNodes helper so the scf.while body walker reaches it identically inside a do-while
+        // body.
         {
           bool redMatched = false;
           auto redNodes = buildReductionAssignNodes(assign, sd, redMatched);
@@ -3375,10 +2701,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
     }
     if (auto ifOp = mlir::dyn_cast<fir::IfOp>(op)) {
       if (isOptionalPresentSelect(ifOp)) continue;  // dead optional-present marshalling select
-      // Allocatable deallocate-guard: ``fir.if (alloc_status != 0) {
-      // fir.freemem, reset box to zero }``.  Carries no observable
-      // side effect in the SDFG model (we treat allocatables as
-      // single-allocation transients)  --  skip the whole construct.
+      // Allocatable deallocate-guard (fir.if(alloc_status != 0){freemem; reset box}): no observable side effect in the
+      // SDFG model (allocatables are single-allocation transients) -- skip the whole construct.
       auto isAllocCleanup = [](mlir::Region& region) {
         if (region.empty()) return false;
         bool hasFreemem = false;
@@ -3401,30 +2725,21 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       }
       ASTNode n;
       n.kind = "conditional";
-      // ``IF (ALL(mask))`` / ``IF (ANY(mask))`` -- materialise the
-      // reduction into a boolean scalar (via AllNode/AnyNode) and read
-      // it, instead of inlining the section into the condition tasklet.
-      // Materialise SUM / MINVAL / MAXVAL / PRODUCT reduction sub-terms of the
-      // condition into scalar transients via Reduce lib-nodes BEFORE the branch
-      // (elemental operands -> for-loops); the rendered condition reads the
-      // scalars (``s > eps``) instead of inline-unrolling the reduction.
+      // IF (ALL(mask))/IF (ANY(mask)) materialise into a boolean scalar (AllNode/AnyNode) instead of inlining the
+      // section into the condition tasklet. SUM/MINVAL/MAXVAL/PRODUCT sub-terms materialise into scalar transients via
+      // Reduce lib-nodes before the branch; the condition then reads the scalars instead of inline-unrolling.
       materialiseCondReductions(ifOp.getCondition(), nodes);
       std::string const allanyScalar = tryMaterialiseAllAnyCond(ifOp.getCondition(), nodes);
       if (!allanyScalar.empty()) {
-        // ``__allany_cond_N`` is a boolean SCALAR (the materialised
-        // reduction result).  A scalar referenced in a CODE BLOCK (an
-        // if / loop / interstate condition) is the bare name -- only a
-        // MEMLET SUBSET needs the ``[0]`` / ``(0,0,1)`` element index
-        // (the reduce node's output memlet handles that via
-        // ``Memlet.from_array``).
+        // __allany_cond_N is a boolean scalar; referenced in a code block (if/loop/interstate condition) it's the bare
+        // name -- only a memlet subset needs the [0]/(0,0,1) index (handled by the reduce node's output memlet via
+        // Memlet.from_array).
         n.condition = allanyScalar;
       } else {
         n.condition = buildBoolExpr(ifOp.getCondition(), 0);
-        // Walk the condition's IR for array-element reads -- same as
-        // the ``fir.if`` handler at the top of ``walkBlock`` and the
-        // ``scf.if`` handler below.  Without this the Python emitter
-        // has no per-occurrence access info to lift array-read
-        // conditions through the tasklet path.
+        // Walks the condition's IR for array-element reads -- same as the fir.if handler above and the scf.if handler
+        // below; without this the emitter has no per-occurrence access info to lift array-read conditions through the
+        // tasklet path.
         collectReadAccesses(ifOp.getCondition(), n.accesses, 0);
       }
       if (!ifOp.getThenRegion().empty()) n.children = buildAST(ifOp.getThenRegion().front());
@@ -3436,10 +2751,8 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       if (isOptionalPresentSelect(ifOp)) continue;  // dead optional-present marshalling select
       ASTNode n;
       n.kind = "conditional";
-      // Materialise SUM / MINVAL / MAXVAL / PRODUCT reduction sub-terms of the
-      // condition into scalar transients via Reduce lib-nodes BEFORE the branch
-      // (elemental operands -> for-loops); the rendered condition reads the
-      // scalars (``s > eps``) instead of inline-unrolling the reduction.
+      // Materialises SUM/MINVAL/MAXVAL/PRODUCT sub-terms of the condition into scalar transients via Reduce lib-nodes
+      // before the branch; the condition then reads the scalars instead of inline-unrolling.
       materialiseCondReductions(ifOp.getCondition(), nodes);
       std::string const allanyScalar = tryMaterialiseAllAnyCond(ifOp.getCondition(), nodes);
       if (!allanyScalar.empty()) {
@@ -3473,24 +2786,17 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       continue;
     }
     if (auto st = mlir::dyn_cast<fir::StoreOp>(op)) {
-      // Top-level ``fir.store`` is Flang's lowering for lifted
-      // DO / DO-WHILE init (``fir.store %c1 to %i``) and internal
-      // scratch counters.  Emit as a plain scalar assign.  Regular
-      // ``fir.do_loop``s' internal IV stores never reach here  --
-      // they live inside the loop's body region, which we walk
-      // with the existing do-loop handler that takes care of the
-      // IV through ``init_expr`` / ``update_expr``.
+      // Top-level fir.store is Flang's lowering for lifted DO/DO-WHILE init and internal scratch counters; emitted as a
+      // plain scalar assign. Regular fir.do_loop IV stores never reach here (handled by the do-loop handler via
+      // init_expr/update_expr).
       auto memref = st.getMemref();
       auto target = traceToDecl(memref);
       if (target.empty())
         if (auto* md = memref.getDefiningOp())
           if (mlir::isa<fir::AllocaOp>(md)) target = allocaSynthName(memref);
       if (target.empty()) continue;
-      // Drop stores whose RHS is the return value of a recognised FFTW3
-      // ``fftw_plan_dft_*`` call -- the plan SSA value is opaque
-      // (``TYPE(C_PTR)``) and is consumed by the matching ``execute_dft``
-      // recognition, so the user's ``plan = fftw_plan_dft_2d(...)``
-      // statement has no observable side effect in the SDFG.
+      // Drops stores whose RHS is a recognised FFTW3 fftw_plan_dft_* call -- the opaque TYPE(C_PTR) plan is consumed by
+      // the matching execute_dft recognition, so the statement has no observable side effect in the SDFG.
       if (auto* def = st.getValue().getDefiningOp())
         if (auto src_call = mlir::dyn_cast<fir::CallOp>(def))
           if (auto ref = src_call.getCallee()) {
@@ -3500,49 +2806,28 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
             if (!fftw3CalleeTag(s).empty()) continue;
           }
       auto expr = buildExpr(st.getValue(), 0);
-      // Drop stores with unresolvable RHS  --  see note in
-      // ``walkSCFBeforeRegion``'s fir.store handler.
+      // Drops stores with unresolvable RHS -- see note in walkSCFBeforeRegion's fir.store handler.
       if (expr == "?") continue;
       ASTNode a;
       a.kind = "assign";
       a.target = target;
       a.expr = expr;
       a.target_is_array = false;
-      // Collect the stored value's array-element reads for a value-by-reference
-      // associate store (``call f(x(k,1) / nq, ...)`` -> ``RewriteSequence
-      // Association`` / ``ExpandVectorSubscriptGather`` synthesise a
-      // ``__assoc_scalar`` alloca + ``fir.store %val`` reaching here).  When
-      // ``%val`` reads an array ELEMENT (esp. an allocatable, ``x(k,1)``),
-      // ``buildExpr`` renders the BARE parent name by design -- the subscript
-      // is supplied by the AccessInfo + ``emit_tasklet``'s per-occurrence
-      // connector wiring.  Without these reads the assign looks scalar and the
-      // element leaks as a bare ``x`` pointer (QE ``paw_newdxx`` Gate H) / an
-      // unwired
-      // ``_in_x_0`` free symbol.  SCOPED to the ``__assoc_scalar`` synthesised
-      // target so it doesn't perturb other top-level stores (e.g. the
-      // ``prhoc_d`` reshaping pointer-rebind, whose value-collect would mint a
-      // malformed multi-dim ``rhoc_d`` subset).
+      // Collects the stored value's array-element reads for a value-by-reference associate store
+      // (RewriteSequenceAssociation/ExpandVectorSubscriptGather synthesise a __assoc_scalar alloca + fir.store reaching
+      // here). buildExpr renders an array-ELEMENT read as the bare parent name by design; without these reads the
+      // element leaks as a bare pointer (QE paw_newdxx Gate H). Scoped to __assoc_scalar targets so it doesn't perturb
+      // other stores (e.g. prhoc_d's pointer-rebind).
       if (target.find("assoc_scalar") != std::string::npos) collectReadAccesses(st.getValue(), a.accesses, 0);
       nodes.push_back(std::move(a));
       continue;
     }
-    // Result-producing HLFIR compute statements the bridge does not yet
-    // lower.  ``hlfir.where`` (masked WHERE assignment) and ``hlfir.forall``
-    // (FORALL) carry their assignments in nested regions this walker never
-    // recurses into; a bare ``hlfir.region_assign`` is the masked / forall
-    // element assign itself.  The vector-subscript SCATTER form of
-    // region_assign (LHS ``hlfir.elemental_addr``, Fortran ``d(cols) = src``)
-    // is rewritten into an explicit DO loop by the pipeline pass
-    // ``hlfir-expand-vector-subscript-scatter`` BEFORE AST extraction, so any
-    // op of these kinds that reaches here is a genuinely unhandled compute
-    // statement.  Falling through would SILENTLY DROP the assignment and
-    // miscompile the kernel to a wrong numerical result with no error
-    // (verified: ``WHERE (mask) a = b`` otherwise builds an SDFG with zero
-    // tasklets).  Throw a located diagnostic instead.  This is deliberately
-    // narrow: every OTHER unhandled op (pure-value producers, declares,
-    // ``hlfir.destroy`` temp cleanups, terminators, ops already consumed by an
-    // earlier handler) keeps falling through silently, so the passing corpus
-    // is unaffected.
+    // hlfir.where/hlfir.forall carry assignments in nested regions this walker never recurses into; a bare
+    // hlfir.region_assign is the masked/forall element assign itself (the vector-subscript SCATTER form is rewritten to
+    // an explicit DO loop before AST extraction, so reaching here is genuinely unhandled). Falling through would
+    // silently drop the assignment and miscompile with no error (verified: WHERE builds a zero-tasklet SDFG) -- throw
+    // instead. Deliberately narrow: other unhandled ops (pure-value, declares, destroy, terminators, already-consumed)
+    // keep falling through silently.
     if (mlir::isa<hlfir::WhereOp, hlfir::ForallOp, hlfir::RegionAssignOp>(&op)) {
       std::string locStr;
       llvm::raw_string_ostream locOS(locStr);
@@ -3556,14 +2841,11 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
   return nodes;
 }
 
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
+// Entry point.
 
 std::vector<ASTNode> extractAST(mlir::ModuleOp module, const std::string& entry_symbol) {
-  // Fresh synthetic-name counters / maps per module so two consecutive
-  // extractAST calls don't interleave __sc_5 / __al_2 across unrelated
-  // SDFGs.
+  // Fresh synthetic-name counters/maps per module so two consecutive extractAST calls don't interleave __sc_5/__al_2
+  // across unrelated SDFGs.
   kScfValueCounter = 0;
   kScfValueMap.clear();
   kAllocaCounter = 0;
@@ -3573,47 +2855,29 @@ std::vector<ASTNode> extractAST(mlir::ModuleOp module, const std::string& entry_
   kLibTmpCounter = 0;
   kPosSymbolRegistry.clear();
   kSynthTransientCounter = 0;
-  // Defensive: ``kBoolExprNoSubscripts`` is a context flag that should
-  // be ``false`` at module-walk start.  Mode-C helpers toggle it via
-  // an RAII guard, but if a previous extractAST was aborted mid-walk
-  // (an exception reaches here), the flag could still be set.
+  // Defensive: kBoolExprNoSubscripts should be false at module-walk start; a previous extractAST aborted mid-walk
+  // (exception) could leave it set despite the RAII guard.
   kBoolExprNoSubscripts = false;
   clearAllocAliases();
 
-  // D1: reseed per-thread extraction state.  Without this, calling
-  // ``extractAST`` standalone (without a preceding ``extractVariables``)
-  // or on a DIFFERENT module than the prior ``extractVariables`` would
-  // leak stale ``kEntryScope`` / ``kShortNameCollisions`` and produce
-  // names that diverge from any subsequent extract on this thread.
-  // Same helper ``extractVariables`` uses -- shared so the two paths
-  // can't drift.
+  // Reseeds per-thread extraction state; without this, calling extractAST standalone or on a different module than the
+  // prior extractVariables would leak stale kEntryScope/kShortNameCollisions. Shares the same helper extractVariables
+  // uses so the two paths can't drift.
   prepareExtractionState(module, entry_symbol);
 
   std::vector<ASTNode> result;
   module.walk([&](mlir::func::FuncOp func) {
     if (!result.empty()) return;  // first PUBLIC func only
-    // Skip private siblings.  Set-entry mangles every other
-    // function private; after ``fir-polymorphic-op`` resolves a
-    // dispatch, the dispatched callee survives as private (kept
-    // alive by the type_info dispatch_table).  Walking its body
-    // would shadow the real entry's AST whenever its definition
-    // appears before the entry's in module order.
+    // Skips private siblings: set-entry mangles every other function private, and after fir-polymorphic-op resolves a
+    // dispatch the callee survives as private -- walking its body would shadow the real entry's AST if it appears
+    // earlier in module order.
     if (func.isPrivate()) return;
     if (!func.getBody().empty()) result = buildAST(func.getBody().front());
   });
 
-  // Prepend one ``kind="symbol_init"`` node per registered position
-  // symbol.  Each such node tells the Python emitter to add the
-  // symbol to the SDFG and stage an interstate-edge load
-  // ``<symbol> = <array>[<one_based_idx> - 1]`` ahead of the body.
-  // Stable order (sorted by symbol name) keeps the emitted SDFG
-  // deterministic across runs.
-  // Prepend one ``<arr>_allocated = 0`` init per allocatable so that
-  // a ``res = ALLOCATED(arr)`` read BEFORE the first ALLOCATE returns
-  // the correct ``0`` instead of whatever DaCe leaves in the
-  // uninitialised transient scalar.  Walks the module's declares and
-  // collects every one with the ``allocatable`` Fortran attribute;
-  // sorted so the order is deterministic across runs.
+  // Prepends one symbol_init node per registered position symbol (interstate-edge load <symbol>=<array>[idx-1] ahead of
+  // the body; sorted by name for determinism), and one <arr>_allocated=0 init per allocatable so ALLOCATED(arr) reads
+  // before the first ALLOCATE return 0 instead of DaCe's uninitialised value.
   {
     std::vector<std::string> allocNames;
     module.walk([&](hlfir::DeclareOp op) {
@@ -3622,21 +2886,13 @@ std::vector<ASTNode> extractAST(mlir::ModuleOp module, const std::string& entry_
       if (!bitEnumContainsAny(*attrs, fir::FortranVariableFlagsEnum::allocatable)) return;
       std::string raw = extractName(op.getUniqName().str());
       if (raw.empty()) return;
-      // Skip allocatables with neither ALLOCATE writes nor
-      // ALLOCATED(...) reads  --  the tracker would be dead weight
-      // (Phase H).  ``needsAllocatedTracker`` keys on the
-      // declare's full uniq_name.
+      // Skips allocatables with neither ALLOCATE writes nor ALLOCATED(...) reads -- the tracker would be dead weight
+      // (Phase H); needsAllocatedTracker keys on the declare's full uniq_name.
       if (!needsAllocatedTracker(op.getUniqName().str(), module)) return;
-      // A MODULE-GLOBAL allocatable that is READ via ``ALLOCATED(...)`` but
-      // never allocated in-kernel gets its allocation state from the CALLER
-      // (the caller allocates the host before the call).  Forcing the tracker
-      // to ``0`` here would make every ``ALLOCATED(g)`` read false regardless
-      // of the host, folding the kernel's branch.  Instead leave it a FREE
-      // input symbol: the binding sources it from the host's real
-      // ``allocated`` / ``associated`` (see ``_build_symbol_assigns``).  A
-      // module global the kernel DOES allocate itself (``global_alloc_inside``,
-      // e.g. QE ``coulomb_fac``) has an ALLOCATE site, so it keeps the ``0``
-      // init below.
+      // A module-global allocatable read via ALLOCATED(...) but never allocated in-kernel gets its state from the
+      // caller -- forcing 0 here would fold the kernel's branch regardless of host state, so leave it a free input
+      // symbol (see _build_symbol_assigns). A global the kernel DOES allocate itself has an ALLOCATE site and keeps the
+      // 0 init below.
       {
         llvm::StringRef u = op.getUniqName();
         bool moduleScope = u.consume_front("_QM");
@@ -3694,10 +2950,9 @@ std::vector<ASTNode> extractAST(mlir::ModuleOp module, const std::string& entry_
   return result;
 }
 
-// Name of the synth scalar carrying an scf.index_switch's selector value.
-// The selector traces (through index_cast / convert) back to the scf.while
-// result that ``scf.condition`` carried out -- the loop's exit reason -- whose
-// synth scalar the scf.condition handler assigns each iteration.
+// Name of the synth scalar carrying an scf.index_switch's selector value; traces (through index_cast/convert) back to
+// the scf.while result scf.condition carried out (the loop's exit reason), whose synth scalar the scf.condition handler
+// assigns each iteration.
 static std::string scfSwitchValueName(mlir::Value v) {
   for (int i = 0; i < limits::kTraceToDeclMax && v; ++i) {
     auto* d = v.getDefiningOp();
@@ -3716,15 +2971,9 @@ static std::string scfSwitchValueName(mlir::Value v) {
     }
     break;
   }
-  // A while-carried exit reason was already stored into its synth by the
-  // ``scf.condition`` capture (see the ConditionOp handler in
-  // ``walkSCFBeforeRegion``) -- it lives in ``kScfValueMap``, so keep rendering
-  // it as that synth scalar.  A plain ``SELECT CASE`` selector (a module global
-  // / local var, possibly through a value-remap ``scf.if`` -- e.g. ocean's
-  // ``SELECT CASE (i_bc_veloc_top)`` whose selector is a two-arm remap of the
-  // namelist global) is NOT captured: render its real host-bound expression so
-  // the case conditions read the bound symbol instead of an unbacked ``__sc_N``
-  // that nothing ever assigns (an unresolved free symbol).
+  // A while-carried exit reason is already stored into its synth by the scf.condition capture (lives in kScfValueMap)
+  // -- keep rendering it as that synth scalar. A plain SELECT CASE selector (not captured) renders its real host-bound
+  // expression instead, so case conditions don't read an unbacked __sc_N that nothing ever assigns.
   if (kScfValueMap.contains(v)) return scfSynthName(v);
   std::string e = buildExpr(v, 0);
   if (!e.empty() && e != "?") return e;
@@ -3737,8 +2986,8 @@ static std::vector<ASTNode> buildIndexSwitchNodes(mlir::scf::IndexSwitchOp sw) {
   // Innermost else == the default region's body.
   std::vector<ASTNode> chain;
   if (!sw.getDefaultRegion().empty()) chain = buildAST(sw.getDefaultRegion().front());
-  // Wrap each case (last first) as ``if (selector == case_i) {body} else
-  // {chain-so-far}`` so the per-exit side-effects run.
+  // Wraps each case (last first) as if (selector == case_i) {body} else {chain-so-far} so the per-exit side-effects
+  // run.
   auto caseRegions = sw.getCaseRegions();
   for (int i = static_cast<int>(cases.size()) - 1; i >= 0; --i) {
     ASTNode c;

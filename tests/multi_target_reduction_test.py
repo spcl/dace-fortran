@@ -1,12 +1,9 @@
 """Multiple reductions writing to *different* elements of the same array.
 
-Regression coverage for the bridge bug where ``buildReduceNode`` only
-captured the destination's array name and dropped the
-``hlfir.designate`` index, so two ``MINVAL``s in a row both emitted a
-Reduce that wrote through the whole destination  --  last one won.
-
-Each test wires ``res(i) = REDUCE(...)`` for two distinct ``i`` values
-and checks both elements end up correctly populated.
+Regression: ``buildReduceNode`` only captured the destination array name and
+dropped the ``hlfir.designate`` index, so two MINVALs in a row both wrote
+through the whole destination -- last one won. Each test wires ``res(i) =
+REDUCE(...)`` for two distinct ``i`` and checks both elements are populated.
 """
 
 from pathlib import Path
@@ -20,10 +17,8 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_minval_two_targets(tmp_path: Path):
-    """``res(1) = MINVAL(d); res(2) = MINVAL(d(:))``  --  both emit a
-    whole-array Reduce; without the destination-index fix both Reduces
-    write to ``res[0:2]`` and ``res[1]`` ends up at the identity (inf).
-    """
+    """``res(1)=MINVAL(d); res(2)=MINVAL(d(:))``: without the destination-index
+    fix both Reduces write to res[0:2] and res[1] ends up at the identity (inf)."""
     src = """
 subroutine main(d, res)
   double precision, dimension(7), intent(in)  :: d

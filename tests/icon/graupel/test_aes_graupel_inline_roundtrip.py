@@ -1,23 +1,6 @@
-"""fparser single-TU round-trip for the AES graupel scheme.
+"""fparser single-TU round-trip for the AES graupel scheme: inline the 4-module ``aes_graupel`` project into one ``.f90`` via fparser, build it through the bridge, compare numerics against a gfortran reference from the original multi-file sources.
 
-Headline acceptance for :func:`dace_fortran.inline_to_single_tu`: take
-the same 4-module ``aes_graupel`` project the multi-file build test
-drives, inline it into ONE self-contained ``.f90`` via the fparser
-engine, then build *that* single TU through the bridge and compare the
-numerics against a gfortran reference compiled from the original
-multi-file sources.
-
-If the single-TU producer is faithful, the SDFG built from the inlined
-file must validate and match the multi-file path's numerics.
-
-The multi-file inline used to surface a downstream codegen gap -- the
-AoS-of-pointer-records gather temp (``t_qx_ptr%x``) was sized from
-unbound extent symbols that defaulted to 1 at call time and overflowed
-the heap.  The ``fir.box_dims -> <name>_d<dim>`` extent resolution closed
-it, so this round-trip now builds and matches the multi-file path's
-numerics.  The *inlining* step itself (parse -> merge -> prune ->
-serialise -> re-parse to a valid TU) is asserted unconditionally up
-front, so an inliner regression still surfaces as a hard failure.
+Previously surfaced a codegen gap: the AoS-of-pointer-records gather temp (``t_qx_ptr%x``) was sized from unbound extent symbols defaulting to 1, overflowing the heap.  Fixed by ``fir.box_dims -> <name>_d<dim>`` extent resolution.  Inlining itself is asserted unconditionally up front so an inliner regression surfaces as a hard failure independent of the numerical compare.
 """
 import ctypes
 import subprocess
@@ -46,8 +29,7 @@ _ENTRY = "mo_aes_graupel::graupel_run"
 
 
 def _compile_reference(out_dir: Path) -> ctypes.CDLL:
-    """Build the multi-file gfortran reference (mirrors
-    ``test_aes_graupel_numerical_correctness._compile_reference``)."""
+    """Build the multi-file gfortran reference (mirrors test_aes_graupel_numerical_correctness._compile_reference)."""
     out_dir.mkdir(parents=True, exist_ok=True)
     so_path = out_dir / "libgraupel_ref.so"
     flags = ["-O0", "-fno-fast-math", "-ffp-contract=off", "-fPIC", "-ffree-line-length-none"]
@@ -68,25 +50,17 @@ def _compile_reference(out_dir: Path) -> ctypes.CDLL:
 
 
 def test_aes_graupel_inline_single_tu(tmp_path):
-    """The 4-module project inlines into one valid Fortran TU.
-
-    Asserted unconditionally: the inliner must produce a self-contained
-    ``.f90`` that still defines ``graupel_run``.  (The SDFG build /
-    numerical compare lives in the xfail round-trip test below.)
-    """
+    """The 4-module project inlines into one valid, self-contained Fortran TU that still defines graupel_run."""
     out = inline_to_single_tu(_GRAUPEL_SOURCES, entry=_ENTRY, out_dir=tmp_path, name="graupel_inlined")
     assert out.is_file()
     text = out.read_text()
     assert "graupel_run" in text.lower()
-    # A self-contained TU: every module it needs is inlined, so no
-    # stray external module is referenced beyond the intrinsic stubs.
+    # self-contained TU: every needed module is inlined, no stray external module beyond intrinsic stubs.
     assert "FUNCTION" in text.upper() or "SUBROUTINE" in text.upper()
 
 
 def test_aes_graupel_inline_roundtrip_numerical(tmp_path):
-    """``graupel_run`` reference vs SDFG built from the fparser-inlined
-    single TU: element-wise compare of every INOUT prognostic + OUT
-    diagnostic for seeded random inputs."""
+    """graupel_run reference vs SDFG built from the fparser-inlined single TU: element-wise compare of every INOUT prognostic + OUT diagnostic on seeded random inputs."""
     ivec, k_v = 4, 8
     ivs, ive, ks = 1, ivec, 1
     dt = 30.0
@@ -122,7 +96,6 @@ def test_aes_graupel_inline_roundtrip_numerical(tmp_path):
         prr_ref.ctypes.data, pri_ref.ctypes.data, prs_ref.ctypes.data, prg_ref.ctypes.data, pflx_ref.ctypes.data,
         pre_ref.ctypes.data)
 
-    # Inline the 4-module project into ONE TU, then build that.
     single_tu = inline_to_single_tu(_GRAUPEL_SOURCES, entry=_ENTRY, out_dir=tmp_path / "inlined", name="graupel_run")
     sdfg = build_sdfg_from_files([single_tu], entry=_ENTRY, name="graupel_run", out_dir=tmp_path / "build")
 

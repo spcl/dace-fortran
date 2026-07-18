@@ -1,10 +1,7 @@
-"""Logical reductions  --  ``ANY`` / ``ALL`` / ``COUNT`` on whole arrays.
-
-These are now in ``kRedTable`` and work for the whole-array shape
-Flang emits for ``ANY(mask)`` / ``ALL(mask)`` / ``COUNT(mask)``
-without any section slicing.  Reductions over dynamic sections
-(``ANY(mask(lo:hi, jk))``) hit a separate gap in ``emit_reduce``
-and stay xfailed via ``test_loopnest_6_sdfg_matches_f2py``.
+"""Logical reductions -- ``ANY``/``ALL``/``COUNT`` on whole arrays.  In ``kRedTable``,
+works for the whole-array shape Flang emits without section slicing.  Dynamic sections
+(``ANY(mask(lo:hi, jk))``) hit a separate gap in ``emit_reduce``, xfailed via
+``test_loopnest_6_sdfg_matches_f2py``.
 """
 
 from pathlib import Path

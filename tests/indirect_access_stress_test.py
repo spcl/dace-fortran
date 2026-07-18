@@ -1,30 +1,13 @@
 """Stress tests for indirect-array access patterns.
 
 Targets the bridge's indirect-symbol synthesis path
-(``access.py::collect_indirect`` + ``__sym_<arr>_<n>`` minting).  Each
-test:
+(``access.py::collect_indirect`` + ``__sym_<arr>_<n>`` minting).  Each test
+builds a gfortran/f2py reference (verifying the reference itself first) and
+checks the bridge SDFG matches it bitwise.
 
-* writes a small Fortran kernel with a known-correct semantics,
-* compiles a gfortran/f2py reference and verifies it produces the
-  expected numeric output (so the test's *intent* is validated
-  independently of the bridge),
-* builds the SDFG and asserts the bridge output matches the f2py
-  reference bitwise.
-
-Patterns covered (gather + scatter):
-
-* 1-level indirect read:   ``B(i) = A(idx(i))``
-* 1-level indirect write:  ``C(idx(i)) = A(i)``
-* 2-level nested gather:   ``B(i) = A(idx1(idx2(i)))``
-* 3-level nested gather:   ``B(i) = A(idx1(idx2(idx3(i))))``
-* 3-level nested scatter:  ``C(idx1(idx2(idx3(i)))) = A(i)``
-* High-dim indirect read (up to 6-D): different combinations of
-  direct + indirect indices on each axis.
-* High-dim indirect scatter (up to 6-D): scatter into a 6-D buffer
-  with one indirect axis.
-
-A pure ``builds_and_runs`` test runs first per pattern -- if the
-SDFG can't even be compiled, the deeper numeric assertion is moot.
+Patterns: 1-level gather/scatter, 2/3-level nested gather, 3-level nested
+scatter, high-dim (up to 6-D) indirect gather/scatter with mixed direct +
+indirect axes.
 """
 
 from pathlib import Path
@@ -212,9 +195,8 @@ def test_indirect_3l_nested_scatter(tmp_path: Path):
     n = 8
     rng = np.random.default_rng(15)
     a = np.asfortranarray(rng.standard_normal(n, dtype=np.float64))
-    # Build chained permutations so the composite map is bijective and
-    # every element of A lands in a distinct C slot.  This avoids the
-    # "last writer wins" non-determinism of overlapping scatter.
+    # Chained permutations keep the composite map bijective, avoiding "last writer
+    # wins" non-determinism from overlapping scatter.
     p1 = (rng.permutation(n) + 1).astype(np.int32)
     p2 = (rng.permutation(n) + 1).astype(np.int32)
     p3 = (rng.permutation(n) + 1).astype(np.int32)
@@ -340,8 +322,7 @@ def test_indirect_6d_scatter(tmp_path: Path):
     n = 3
     rng = np.random.default_rng(18)
     a = np.asfortranarray(rng.standard_normal(n, dtype=np.float64))
-    # Use permutations on each axis so the (i1,i2,i3,i4,i5,i) tuple is
-    # unique across i and there are no overlapping writes.
+    # Permutations on each axis keep the (i1..i5,i) tuple unique across i -- no overlapping writes.
     i1 = np.asfortranarray((rng.permutation(n) + 1).astype(np.int32))
     i2 = np.asfortranarray((rng.permutation(n) + 1).astype(np.int32))
     i3 = np.asfortranarray((rng.permutation(n) + 1).astype(np.int32))
@@ -362,13 +343,10 @@ def test_indirect_6d_scatter(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# ICON loopnest_4 minimal reproducer: mixed direct/indirect axes inside a
-# nested IF inside a DO loop -- the bridge previously left the indirect
-# array names bare in the memlet subset because ``collect_indirect`` was
-# only called from ``emit_loop``'s batch path, not from individual
-# ``emit_assign`` calls inside an IF body.  This reproducer keeps the
-# same shape but trims the kernel to the bare minimum so any future
-# regression points at the right code path immediately.
+# ICON loopnest_4 minimal repro: mixed direct/indirect axes inside a nested IF
+# inside a DO.  Previously ``collect_indirect`` was only called from
+# ``emit_loop``'s batch path, not individual ``emit_assign`` inside an IF body,
+# so indirect array names leaked bare into the memlet subset.
 # ---------------------------------------------------------------------------
 
 _ICON4_REPRO_SRC = """

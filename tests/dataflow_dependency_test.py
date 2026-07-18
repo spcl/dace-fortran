@@ -1,25 +1,10 @@
-"""Unit tests for RAR / WAR / RAW / WAW data dependencies between
-multiple tasklets in the same Fortran basic block.
+"""RAW/WAR/WAW/RAR dataflow-dependency pins between tasklets in one Fortran basic block.
 
-Catches the bridge bug that surfaced in cloudsc Section 4.5
-EVAPORATION (commit e85ec1f8f / project_hlfir_cloudsc_section_4_5_bisection):
-the codegen scheduler reordered a ``ZQXFG -= ZEVAP`` tasklet to run
-BEFORE the ``ZCOVPTOT = MAX(.., ZCOVPTOT-ZA)*ZEVAP/ZQXFG)`` tasklet
-that read ZQXFG, because no SDFG edge connected them.  Fortran's
-sequential WAR (write-after-read) ordering was violated.
-
-Each test below pins one of the four standard dataflow-dependency
-patterns:
-
-  RAW (Read After Write)  -- writer must complete before reader sees value
-  WAR (Write After Read)  -- reader must complete before writer overwrites
-  WAW (Write After Write) -- later write wins; order matters
-  RAR (Read After Read)   -- no dependency; either order safe
-
-For each pattern: build the SDFG via the HLFIR bridge AND an f2py
-reference from the same Fortran source on identical seeded inputs,
-then assert numerical equivalence at strict ulp-level tolerance.
-"""
+Catches the cloudsc Section 4.5 bug (commit e85ec1f8f): codegen reordered a
+write past a read it should follow, because no SDFG edge connected them. RAW=
+writer-before-reader, WAR=reader-before-overwrite, WAW=later-write-wins, RAR=
+no ordering needed. Each test compares the built SDFG against an f2py
+reference at strict tolerance."""
 
 import shutil
 import subprocess
@@ -71,15 +56,8 @@ def _sdfg_args(sdfg, int_vals):
 
 
 def test_raw_dependency(tmp_path):
-    """RAW: writer must complete before reader sees the value.
-
-    Fortran:
-        x(i) = x(i) * 2.0       ! tasklet 1: writes x[i] (in-place)
-        y(i) = x(i) + 1.0       ! tasklet 2: reads x[i] -- MUST see new value
-
-    Expected: y[i] = (x_init[i] * 2.0) + 1.0
-    Wrong (if bridge reorders): y[i] = x_init[i] + 1.0
-    """
+    """RAW: writer must complete before reader sees the value. y = (x_init*2)+1;
+    a reorder bug would give y = x_init+1."""
     src = """
 SUBROUTINE raw_kernel(n, x, y)
   IMPLICIT NONE
@@ -120,15 +98,8 @@ END SUBROUTINE raw_kernel
 
 
 def test_war_dependency(tmp_path):
-    """WAR: reader must complete before writer overwrites.
-
-    Fortran:
-        y(i) = x(i) * 2.0       ! tasklet 1: reads x[i]
-        x(i) = 99.0_8           ! tasklet 2: writes x[i] -- MUST not invalidate t1
-
-    Expected: y[i] = x_init[i] * 2.0,  x[i] = 99.0
-    Wrong (if bridge reorders): y[i] = 99.0 * 2.0 = 198.0
-    """
+    """WAR: reader must complete before writer overwrites. y = x_init*2, x=99;
+    a reorder bug would give y = 99*2 = 198."""
     src = """
 SUBROUTINE war_kernel(n, x, y)
   IMPLICIT NONE
@@ -168,15 +139,7 @@ END SUBROUTINE war_kernel
 
 
 def test_waw_dependency(tmp_path):
-    """WAW: two writes to same location; later write wins.
-
-    Fortran:
-        x(i) = 1.0_8            ! tasklet 1: writes x[i]
-        x(i) = 2.0_8            ! tasklet 2: writes x[i]
-
-    Expected: x[i] = 2.0  (tasklet 2's value)
-    Wrong (if bridge reorders): x[i] = 1.0
-    """
+    """WAW: two writes to the same location; later write (2.0) must win, not 1.0."""
     src = """
 SUBROUTINE waw_kernel(n, x)
   IMPLICIT NONE
@@ -208,14 +171,7 @@ END SUBROUTINE waw_kernel
 
 
 def test_rar_dependency(tmp_path):
-    """RAR: two reads of same value; no ordering constraint.
-
-    Fortran:
-        y(i) = x(i) * 2.0       ! tasklet 1: reads x[i]
-        z(i) = x(i) + 1.0       ! tasklet 2: reads x[i] (same value)
-
-    Expected: y[i] = x[i]*2, z[i] = x[i]+1.  Any tasklet order is OK.
-    """
+    """RAR: two reads of the same value, no ordering constraint -- any tasklet order is OK."""
     src = """
 SUBROUTINE rar_kernel(n, x, y, z)
   IMPLICIT NONE
@@ -253,27 +209,13 @@ END SUBROUTINE rar_kernel
 
 
 # --------------------------------------------------------------------
-# The cloudsc-shape regression test: combines RAW + WAR in a single
-# basic block, exactly mirroring 4.5a Abel-Boutle ZCOVPTOT update.
+# cloudsc-shape regression: combines RAW + WAR, mirrors 4.5a Abel-Boutle ZCOVPTOT update.
 # --------------------------------------------------------------------
 def test_cloudsc_shape_war_via_division(tmp_path):
-    """Reproducer matching cloudsc.F90:3174-3188 structure:
-
-        e = MIN(d, f)             ! e = evap (clamped to f when d>f)
-        s_qv_qr += e              ! source/sink accumulators (RAR on e)
-        s_qr_qv -= e
-        cv = MAX(g, cv - MAX(0, (cv - z) * e / f))    ! reads f
-        f = f - e                                     ! writes f -- WAR vs above
-
-    With ``d > f`` initially, ``e = f``.  Then in the cv update, ``e/f
-    = 1.0`` exactly -> inner term = (cv - z), so cv = MAX(g, z).
-
-    But if the bridge reorders ``f -= e`` before the cv update, ``f``
-    is decreased -- often to a tiny positive number close to 0 (since
-    e ≈ f).  Then ``e / f_new`` explodes -> cv clamps to g (the floor).
-    This is exactly the cloudsc behavior: SDFG clamps to RCOVPMIN
-    while gfortran computes the correct MAX(g, z).
-    """
+    """Reproduces cloudsc.F90:3174-3188: the ``cv`` update reads ``f`` before
+    ``f -= e``. With d>f, e=f so e/f=1 exactly -> cv=MAX(g,z). If the bridge
+    reorders `f -= e` first, f shrinks toward 0 and e/f_new explodes, clamping
+    cv to the floor g -- the actual cloudsc bug."""
     src = """
 SUBROUTINE cloudsc_war_shape(n, d, f, z, g, cv, e_out)
   IMPLICIT NONE
@@ -300,8 +242,7 @@ END SUBROUTINE cloudsc_war_shape
 
     rng = np.random.default_rng(304)
     n = 32
-    # Force the clamp branch: d > f so e = f.  Then post-update f ≈ 0,
-    # so any reorder explodes the e/f ratio.
+    # force clamp branch: d>f so e=f; post-update f~=0, reorder explodes e/f
     f_init = np.asfortranarray(0.1 + 0.3 * rng.random(n, dtype=np.float64))
     d = np.asfortranarray(f_init + 0.5)  # always > f
     z = np.asfortranarray(rng.random(n, dtype=np.float64) * 0.5)
@@ -329,15 +270,12 @@ END SUBROUTINE cloudsc_war_shape
 
 
 # --------------------------------------------------------------------
-# DEFAULT_PIPELINE variants: same patterns through the FULL pipeline
-# (inline-all + flatten-structs + lift-cf-to-scf + sccp + canonicalize
-# + cse + ...).  The cloudsc divergence only manifests under
-# DEFAULT_PIPELINE, so these are the suite that should expose the bug.
+# DEFAULT_PIPELINE variants: same patterns through the full pipeline --
+# the cloudsc divergence only manifests here, not under the minimal pipeline.
 # --------------------------------------------------------------------
 def test_war_dependency_default_pipeline(tmp_path):
-    """Same WAR pattern but built with DEFAULT_PIPELINE.  If this fails
-    while the minimal-pipeline WAR test passes, one of the extra passes
-    is reordering the tasklets."""
+    """Same WAR pattern under DEFAULT_PIPELINE -- a failure here (but not in the
+    minimal-pipeline WAR test) means an extra pass reordered the tasklets."""
     src = """
 SUBROUTINE war_default(n, x, y)
   IMPLICIT NONE
@@ -377,10 +315,9 @@ END SUBROUTINE war_default
 
 
 def test_cloudsc_shape_war_default_pipeline(tmp_path):
-    """The cloudsc-shape WAR pattern under DEFAULT_PIPELINE.  Should
-    fail and reproduce the bottom_upper / cloudsc_full bug at strict
-    tolerance.  Inputs chosen so MIN(d, f) returns f -> e/f_new explodes
-    in the bug case."""
+    """cloudsc-shape WAR pattern under DEFAULT_PIPELINE -- reproduces the
+    bottom_upper/cloudsc_full bug; inputs chosen so MIN(d,f)=f and e/f_new
+    explodes if reordered."""
     src = """
 SUBROUTINE cw_default(n, d, f, z, g, cv, e_out)
   IMPLICIT NONE
@@ -435,21 +372,8 @@ END SUBROUTINE cw_default
 
 
 def test_cloudsc_full_shape_nested_if(tmp_path):
-    """Mirrors cloudsc.F90 4.5 structure more closely:
-      outer IF (mode == 2) THEN  ! IEVAPRAIN-like
-        DO JK = 1, KLEV
-          ...compute condition...
-          DO i = 1, n
-            inner LLO1-like predicate
-            IF (llo1) THEN
-              e = MIN(d(i,jk), f(i))           ! reads f
-              cv(i) = MAX(g, cv(i) - MAX(0.0_8, (cv(i)-z(i))*e/f(i)))  ! reads f
-              f(i) = f(i) - e                  ! writes f (must be LAST)
-            END IF
-          END DO
-        END DO
-      END IF
-    """
+    """Mirrors cloudsc.F90 4.5 structure: nested IF/DO/IF around the WAR pattern
+    above (IEVAPRAIN-like outer gate, LLO1-like inner predicate)."""
     src = """
 SUBROUTINE cw_nested(n, klev, mode, d, f, z, g, cv)
   IMPLICIT NONE

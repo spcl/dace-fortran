@@ -1,17 +1,10 @@
-"""Exponentiation lowering  --  Flang's ``**`` becomes a Python ``**``
-in the tasklet body.
+"""Exponentiation lowering -- Flang's ``**`` becomes a Python ``**`` in the tasklet body.
+All four Flang variants (``math.fpowi``/``math.powf``/``math.powi``/``math.ipowi``)
+collapse to the same ``a ** b`` form; a downstream SDFG-level simplify pass rewrites
+``**`` from the tasklet's types, no variant markers propagated here.
 
-All four Flang variants (``math.fpowi`` / ``math.powf`` / ``math.powi``
-/ ``math.ipowi``) collapse to the same ``a ** b`` form.  A downstream
-SDFG-level simplify pass rewrites ``**`` based on the tasklet's
-input / output types  --  no extra variant markers are propagated at
-this layer.  These tests assert that the bridge surfaces ``**`` and
-that ``hlfir.no_reassoc`` passes through transparently (otherwise
-the inner ``math.fpowi`` would be stranded as ``?``).  Each test is
-also paired with an e2e numerical check against a numpy reference  --
-the structural ``**``-in-tasklet check guards the lowering shape;
-the numerical check guards that ``**`` evaluates to the right value
-at run time.
+Each test pairs a structural check (``**`` surfaces, ``hlfir.no_reassoc`` passes through
+transparently) with an e2e numerical check against numpy.
 """
 
 from pathlib import Path
@@ -43,9 +36,8 @@ def _tasklet_codes(sdfg) -> list[str]:
 
 
 def test_fpowi_surfaces_as_python_pow(tmp_path: Path):
-    """``r = x**2`` (float ** integer literal, Flang emits
-    ``math.fpowi``) lands in the tasklet as ``r = (x ** 2)`` and
-    evaluates to ``x*x`` at run time."""
+    """``r = x**2`` (float**int literal, Flang emits ``math.fpowi``) lands in the tasklet
+    as ``r = (x ** 2)`` and evaluates to ``x*x`` at run time."""
     src = """
 subroutine pow_fpowi(x, r)
   implicit none
@@ -86,11 +78,8 @@ end subroutine
 
 
 def test_no_reassoc_wrapper_does_not_strand_inner_pow(tmp_path: Path):
-    """Flang wraps parenthesised sums (``(x**2 + y**2)``) in
-    ``hlfir.no_reassoc`` to block FP reassociation.  The bridge must
-    recurse through the wrapper or the inner ``**`` surfaces as ``?``;
-    the numerical check makes sure the surviving ``**`` actually
-    delivers the right sum-of-squares."""
+    """Flang wraps parenthesised sums (``(x**2 + y**2)``) in ``hlfir.no_reassoc``; the
+    bridge must recurse through it or the inner ``**`` surfaces as ``?``."""
     src = """
 subroutine pow_sum(x, y, r)
   implicit none

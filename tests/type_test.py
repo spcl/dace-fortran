@@ -114,29 +114,16 @@ end subroutine internal_function
 
 
 def test_fortran_frontend_type_pardecl(tmp_path):
-    """Parametric struct-dim local (``real bob2(st%a)``) plus a
-    PARAMETER-sized companion (``real bob(n)``).
+    """Parametric struct-dim local (``real bob2(st%a)``) + PARAMETER-sized companion
+    (``real bob(n)``).
 
-    Originally xfailed claiming "parametric array dimension not lowered",
-    but the actual blocker was test-side bugs: the test passed
-    ``np.full([4, 5])`` for a ``d(5, 5)`` dummy (shape mismatch) AND
-    wrote ``d(:, 1) = bob(1) + bob2``  --  illegal Fortran since LHS is
-    rank-1 length 5 and RHS broadcasts to length 10 (the size of
-    ``bob2``).  Flang lowered the illegal assign by writing 10
-    elements column-major, spilling into column 2 of ``d``  --  undefined
-    behaviour that made the assertion ``a[1, 1] == 42`` fail (the
-    value got overwritten to 5.5).
-
-    Fixes (preserve original intent):
-      * Truncate ``bob2`` to length 5 via the slice ``bob2(1:5)`` so the
-        assignment is valid Fortran.  ``bob2(st%a=10)`` retains its
-        full declared extent so the parametric-dim feature is still
-        exercised.
-      * ``np.full([5, 5])`` matches the dummy shape.
-
-    Parametric struct dim works today (Phase 5a + 6); this test is the
-    cross-subroutine variant of ``derived_type_test.py::
-    test_parametric_dim_via_inlined_subprogram``.
+    Originally xfailed as "parametric array dimension not lowered", but the actual bug
+    was test-side: shape-mismatched ``np.full([4, 5])`` for a ``d(5, 5)`` dummy, and an
+    illegal ``d(:, 1) = bob(1) + bob2`` (rank-1 length-5 LHS, length-10 RHS) that Flang
+    lowered as UB spilling into column 2 of ``d``.  Fixed by truncating to
+    ``bob2(1:5)`` and matching ``np.full([5, 5])`` -- parametric struct dim itself works
+    (Phase 5a+6); cross-subroutine variant of
+    ``derived_type_test.py::test_parametric_dim_via_inlined_subprogram``.
     """
     src = """
 module lib
@@ -269,19 +256,13 @@ end subroutine main
 
 
 def test_fortran_frontend_circular_type_parent_pointer_chase_is_rejected(tmp_path):
-    """Circular derived types with a parent-pointer round-trip
-    (``s%b%a%w === s%w`` where ``a_t.b: pointer<b_t>`` and
-    ``b_t.a: pointer<a_t>`` form a cycle) are a DELIBERATELY
-    UNSUPPORTED feature: collapsing the ``s%b%a -> s`` chase would
-    need a ``CollapseParentPointer`` pre-pass ahead of FlattenStructs
-    (structural-candidacy detection over the embedded-field closure;
-    see project_circular_type_plan.md).  We don't carry that.
+    """Circular derived types with a parent-pointer round-trip (``s%b%a%w === s%w``) are
+    DELIBERATELY UNSUPPORTED -- collapsing the chase needs a ``CollapseParentPointer``
+    pre-pass ahead of FlattenStructs that we don't carry (see project_circular_type_plan.md).
 
-    Contract pinned here: the bridge must FAIL CLEANLY -- the
-    flattened parent-pointer member surfaces as an unresolved free
-    symbol the builder rejects at validation -- rather than silently
-    emitting wrong numerics.  If a future ``CollapseParentPointer``
-    pass lands, flip this back to a numerical-correctness test.
+    Contract pinned here: the bridge must FAIL CLEANLY (unresolved free symbol rejected
+    at validation), not silently emit wrong numerics.  Flip to a numerical-correctness
+    test if ``CollapseParentPointer`` lands.
     """
     src = """
 subroutine kernel(d, x, y, z)
@@ -494,12 +475,9 @@ end subroutine main
 """
     sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.full([5, 5], 42, order="F", dtype=np.float32)
-    # ``my_arr_d0``/``my_arr_d1`` are inherited from an inlined-callee alias
-    # declare on the pointer member ``p_prog%pprog(1)%w``  --  its assumed-shape
-    # dims surface as SDFG free symbols.  Test source neither allocates nor
-    # rebinds the pointer, so any non-zero value works; the bridge has done
-    # the structural lowering and the runtime contract is "caller supplies
-    # the assumed-shape extents".
+    # my_arr_d0/my_arr_d1 come from an inlined-callee alias's assumed-shape dims
+    # surfacing as SDFG free symbols; any non-zero value works since the test neither
+    # allocates nor rebinds the pointer -- runtime contract is caller-supplies-extents.
     sdfg(d=a, my_arr_d0=1, my_arr_d1=1)
 
 
@@ -566,11 +544,9 @@ end subroutine main
 """
     sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.full([4, 5], 42, order="F", dtype=np.float32)
-    # Should NOT need to bind ``sta_d0`` / ``sta_d1``  --  ``st_z`` is
-    # concretely (3, 3) and ``sta`` is just an inlined alias.  The
-    # SDFG signature surfaces these synth symbols today only because
-    # ``asAssumedShapeAlias`` doesn't trace through a flattened-field
-    # designate; once that's fixed they should disappear.
+    # sta_d0/sta_d1 shouldn't be needed -- st_z is concretely (3,3) and sta is just an
+    # inlined alias; they surface only because asAssumedShapeAlias doesn't trace through
+    # a flattened-field designate yet.
     sdfg(d=a)
     assert (a[0, 0] == 42)
     assert (a[1, 0] == 11)
@@ -640,20 +616,13 @@ end subroutine main
     assert (a[0, 0] == 625)
 
 
-# ---------------------------------------------------------------------------
-# Alloc-array-of-records member  --  the `LiftAllocArrayOfRecords` pre-pass
-# target.  Both tests below xfail today; flip to passing when the pass lands.
-# ---------------------------------------------------------------------------
+# Alloc-array-of-records member -- the `LiftAllocArrayOfRecords` pre-pass target.
 
 
 def test_lift_alloc_array_of_records_simple(tmp_path):
-    """Minimal unit test for the LiftAllocArrayOfRecords pre-pass.
-
-    Structure: outer struct holds an alloc-array of records, each
-    record holds one pointer-array member.  Write a value through a
-    const-index access, read it back via the same path, assert
-    against a gfortran/f2py reference compiled from the same source.
-    """
+    """Minimal unit test for the LiftAllocArrayOfRecords pre-pass: outer struct holds an
+    alloc-array of records, each with one pointer-array member.  Write via a const-index
+    access, read back, assert against a gfortran/f2py reference."""
     src = """
 module lift_simple_mod
   implicit none
@@ -705,15 +674,10 @@ end subroutine kernel
 
 
 def test_lift_alloc_array_of_records_icon_pattern(tmp_path):
-    """ICON-derived test for the LiftAllocArrayOfRecords pre-pass.
-
-    Mirrors the canonical solve_nh pattern: outer state struct holds
-    an alloc-array of prognostic records, each carrying several
-    rank-3 pointer-array members (rho, theta_v, w).  Access uses a
-    runtime element index (`nvar`), exactly as ICON's two-time-level
-    scheme does.  Compares the SDFG output against a gfortran/f2py
-    reference compiled from the same source.
-    """
+    """ICON-derived test for LiftAllocArrayOfRecords: mirrors solve_nh's pattern (outer
+    state struct holds an alloc-array of prognostic records, each with rank-3
+    pointer-array members rho/theta_v/w), accessed via runtime index ``nvar`` as ICON's
+    two-time-level scheme does.  Compares against a gfortran/f2py reference."""
     src = """
 module lift_icon_mod
   implicit none
@@ -809,16 +773,12 @@ end subroutine kernel
 
 
 def test_alloc_array_of_records_inner_scalar_members(tmp_path):
-    """Regression test for ``s%X(i,j,k)%v1`` with X = alloc-array-of-records
-    whose element record holds plain SCALAR (non-pointer) members.
-
-    This is distinct from the LiftAllocArrayOfRecords case (where inner
-    pointer members are REBOUND to storage slices and the lift rewrites
-    accesses to the storage parent).  Here the inner members are values
-    held inline in the array element; the only natural lowering is one
-    companion array per inner member, indexed by the outer array dims,
-    populated from the embedded box descriptor at call time (strided
-    views over the same data buffer, with a per-member byte offset).
+    """Regression test for ``s%X(i,j,k)%v1`` with X = alloc-array-of-records whose
+    element record holds plain SCALAR (non-pointer) members -- distinct from
+    LiftAllocArrayOfRecords (inner pointer members rebound to storage slices).  Here the
+    only natural lowering is one companion array per inner member, indexed by the outer
+    array dims, populated from the embedded box descriptor (strided views, per-member
+    byte offset).
     """
     src = """
 module aos_inner_scalar_mod

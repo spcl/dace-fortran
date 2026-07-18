@@ -1,19 +1,13 @@
 """End-to-end coverage for the unified lower-bound/offset resolver.
 
-Each case drives a Fortran array shape that exercises one of the three
-``hlfir.declare`` shape-operand forms the unified decoder
-(``classifyShapeOperand``) must handle, then runs the SDFG and an
-f2py-compiled reference of the *same* source and asserts bitwise
-equality (a wrong per-dim offset shifts or wild-writes the result, so
-exact equality is the right assertion).
+Each case drives one of the three ``hlfir.declare`` shape-operand forms the
+unified decoder (``classifyShapeOperand``) must handle, then compares the SDFG
+against an f2py-compiled reference of the same source bitwise (a wrong per-dim
+offset shifts or wild-writes the result, so exact equality is the bar).
 
-Forms covered:
-  * ``fir.shape``        -- explicit/automatic, lb 1   (baseline)
-  * ``fir.shape_shift``  -- explicit negative bounds ``a(-5:5,0:3)``
-  * ``fir.shift``        -- assumed-shape dummy with explicit local
-                            lower bounds ``a(10:,20:)`` -- the form
-                            the bridge previously did NOT handle
-                            (offsets silently lost -> OOB).
+Forms: ``fir.shape`` (baseline, lb 1); ``fir.shape_shift`` (explicit negative
+bounds ``a(-5:5,0:3)``); ``fir.shift`` (assumed-shape with explicit local lower
+bounds ``a(10:,20:)`` -- previously unhandled, offsets silently lost -> OOB).
 """
 
 from pathlib import Path
@@ -27,14 +21,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def _e2e(src: str, entry: str, tmp_path: Path, sdfg_kw: dict, ref_args: tuple):
-    """Build via bridge + via f2py, run both, return (sdfg_out, ref_out).
-
-    :param src: inline Fortran (one subroutine, ``intent(inout)`` out).
-    :param entry: mangled flang symbol.
-    :param sdfg_kw: kwargs for the SDFG call (incl. shape symbols).
-    :param ref_args: positional args for the f2py reference call.
-    :returns: nothing -- callers assert on the mutated arrays they own.
-    """
+    """Build via bridge + via f2py, run both; callers assert on the mutated arrays they own."""
     name = entry.split("P")[-1]
     sd = tmp_path / "sdfg"
     sd.mkdir(parents=True, exist_ok=True)
@@ -73,14 +60,10 @@ end subroutine es_def
     np.testing.assert_array_equal(o_s, a * 2.0 + 1.0)
 
 
-# f2py's crackfortran cannot wrap a dummy with explicit non-unit /
-# assumed-shape bounds (``w(-5:5,0:3)`` / ``a(10:,20:)``) -- it needs an
-# explicit interface it doesn't synthesise.  These cases verify the
-# unified resolver two ways instead, both non-transformed references:
-#   (1) the per-dim ``offset_<arr>_d<i>`` constants are exactly the
-#       Fortran lower bounds (the direct resolver-correctness signal);
-#   (2) the compiled SDFG binding, run end-to-end, matches the
-#       closed-form mathematical result.
+# f2py's crackfortran can't wrap a dummy with explicit non-unit/assumed-shape bounds
+# (needs an explicit interface it doesn't synthesise), so these cases verify two ways
+# instead: (1) offset_<arr>_d<i> constants match the Fortran lower bounds directly,
+# (2) the compiled SDFG run end-to-end matches the closed-form result.
 
 
 def _offsets(sdfg, arr: str) -> dict:
@@ -89,9 +72,8 @@ def _offsets(sdfg, arr: str) -> dict:
 
 
 def test_explicit_negative_bounds_shape_shift(tmp_path: Path):
-    """``fir.shape_shift`` -- explicit-shape array with negative /
-    non-unit lower bounds ``w(-5:5, 0:3)``.  Offsets must be -5 and 0;
-    a wrong offset shifts (or wild-writes) every element."""
+    """``fir.shape_shift`` -- explicit-shape array with negative lower bounds
+    ``w(-5:5, 0:3)``; offsets must be -5 and 0 or every element shifts (or wild-writes)."""
     src = """
 module ss_neg_mod
   implicit none
@@ -121,23 +103,16 @@ end module ss_neg_mod
     o = np.zeros((11, 4), order="F")
     sdfg(w=w.copy(order="F"), out=o)
     expect = w + (np.arange(-5, 6)[:, None] - np.arange(0, 4)[None, :])
-    # real(8) ``w + i - j``: the SDFG and the numpy reference may differ
-    # by a last bit from fma / operand-order reassociation, so compare
-    # at 1e-12 rather than bit-exact.
+    # fma/operand-order reassociation can differ by a last bit, so 1e-12 not bit-exact.
     np.testing.assert_allclose(o, expect, rtol=1e-12, atol=1e-12)
 
 
 def test_assumed_shape_explicit_lb_fir_shift(tmp_path: Path):
-    """``fir.shift`` -- assumed-shape dummy with an explicit local
-    lower bound ``a(10:)``.  flang emits ``fir.shift %c10`` as the
-    declare's shape operand; the bridge previously handled only
-    ShapeOp/ShapeShiftOp, so the 10 was lost and the access went out
-    of bounds.  The unified decoder (``classifyShapeOperand``) +
-    fir.shift lb consumption must recover offset 10.
-
-    1-D form: a 2-D assumed-shape's second extent symbol is not
-    surfaced as a program arg (a separate gap, unrelated to the lower
-    bound this test pins); 1-D keeps the numeric e2e clean."""
+    """``fir.shift`` -- assumed-shape dummy with explicit local lower bound ``a(10:)``.
+    flang emits ``fir.shift %c10``; the bridge previously handled only
+    ShapeOp/ShapeShiftOp so the 10 was lost (OOB access).  The unified decoder must
+    recover offset 10.  Kept 1-D: a 2-D assumed-shape's second extent isn't yet
+    surfaced as a program arg (separate, unrelated gap)."""
     src = """
 module as_shift_mod
   implicit none
@@ -169,17 +144,14 @@ end module as_shift_mod
     al = sdfg.arglist()
     ext = {k: np.int64(n) for k in al if k.endswith("_d0") and not k.startswith("offset_")}
     sdfg(n=np.int32(n), a=a.copy(order="F"), out=o, **ext)
-    # Float computation (a*3-2): allclose, not array_equal (1-ULP
-    # eval-order difference); the offset asserts above stay exact.
+    # allclose not array_equal: 1-ULP eval-order difference; offset asserts above stay exact.
     np.testing.assert_allclose(o, a * 3.0 - 2.0, rtol=1e-12, atol=1e-12)
 
 
 def test_assumed_shape_explicit_lb_fir_shift_2d(tmp_path: Path):
-    """2-D ``fir.shift`` -- ``a(10:, 20:)``.  E1-proper must recover
-    BOTH lower bounds (10, 20) exactly.  The numeric e2e additionally
-    requires every per-dim extent of a 2-D assumed-shape to be a
-    bindable program argument; recover them generically from the
-    arglist (this also pins the 2-D-assumed-shape extent surfacing)."""
+    """2-D ``fir.shift`` -- ``a(10:, 20:)`` must recover BOTH lower bounds (10, 20)
+    exactly; also pins that every per-dim extent of a 2-D assumed-shape is a
+    bindable program argument (recovered generically from the arglist)."""
     src = """
 module as_shift2_mod
   implicit none
@@ -211,8 +183,7 @@ end module as_shift2_mod
     a = np.asfortranarray(rng.random((n, m)))
     o = np.zeros((n, m), order="F")
     al = sdfg.arglist()
-    # Per-dim extent binding: the SDFG descriptor shape for ``a`` is
-    # (a_d0, a_d1); both must be bindable program args.
+    # Per-dim extent binding: a's SDFG descriptor shape is (a_d0, a_d1); both must be bindable.
     sizes = {0: n, 1: m}
     ext = {}
     for k in al:

@@ -1,20 +1,6 @@
-"""Module-level derived types with array members  --  Phase 1.
-
-The HLFIR pass ``hlfir-flatten-structs`` decomposes a ``type(t) :: s``
-declaration where ``t`` has flat-only members (scalars or arrays of
-scalars) into per-member declares ``s_<field>``.  After Phase 1 of
-derived-type support, the pass also fires on **local** declares (not
-just dummy arguments), and ``extract_vars`` recovers concrete extents
-from ``fir.SequenceType`` when the synthesised per-field declare
-carries no ``fir.shape`` operand.
-
-Each test compares an SDFG run against a gfortran/f2py reference for
-numerical validation, matching the saved e2e-numerical rule.
-
-A negative test ensures the bridge throws a ``RuntimeError`` (not
-silent wrong values) when ``hlfir-flatten-structs`` could not lower
-the struct  --  the loud-failure pattern from the previous round of
-correctness work.
+"""``hlfir-flatten-structs`` struct-flattening tests: module-level and local ``type(t) :: s``
+with array/scalar members, extent recovery via ``fir.SequenceType``. SDFG output checked
+against gfortran/f2py; includes a negative loud-failure test.
 """
 
 from pathlib import Path
@@ -34,9 +20,8 @@ def _build(src: str, tmp: Path, name: str = "main", entry: str | None = None):
 
 
 def test_local_struct_element_write_and_read(tmp_path: Path):
-    """Local ``type(t) :: s`` with explicit-shape array member, single
-    element write + read.  Exercises the local-instance flatten +
-    SequenceType-extent fallback in ``extract_vars``."""
+    """Local ``type(t) :: s`` with array member: single element write+read exercises the
+    local-instance flatten + SequenceType-extent fallback in ``extract_vars``."""
     src = """
 module lib
   implicit none
@@ -67,8 +52,7 @@ end subroutine main
 
 
 def test_local_struct_two_array_members(tmp_path: Path):
-    """Two array members of different shapes  --  exercises the per-
-    member path generating two separate flat arrays."""
+    """Two array members of different shapes generate two separate flat per-member arrays."""
     src = """
 module lib
   implicit none
@@ -100,9 +84,8 @@ end subroutine main
 
 
 def test_local_struct_member_in_loop(tmp_path: Path):
-    """Loop-driven element writes to a struct's array member.  The
-    flat ``s_w`` array carries the SequenceType's static (5,) extent  --
-    the SDFG signature has no synth shape symbol to bind."""
+    """Loop-driven writes to a struct's array member; flat ``s_w`` carries the SequenceType's
+    static (5,) extent so the SDFG signature needs no synth shape symbol."""
     src = """
 module lib
   implicit none
@@ -134,11 +117,8 @@ end subroutine main
 
 
 def test_icon_style_state_struct(tmp_path: Path):
-    """ICON dycore-flavoured state struct: many parallel 3-D arrays
-    (``(nproma, nlev, nblks)``) bundled into one derived type.  The
-    real code looks like ``p_diag%vn``, ``p_diag%w``, ``p_diag%theta_v``
-    indexed elementwise inside a kernel.  Verifies Phase 1's standard
-    path on a wider, more realistic schema."""
+    """ICON dycore-flavoured state struct: several parallel 3-D arrays in one derived type
+    (``p_diag%vn`` etc), indexed elementwise. Verifies Phase 1's standard path at realistic scale."""
     src = """
 module lib
   implicit none
@@ -178,11 +158,8 @@ end subroutine main
 
 
 def test_qe_style_pdf_sampler_struct(tmp_path: Path):
-    """QE-flavoured ``pdf_sampler_type`` (from npbench's ``usxx.py``):
-    scalar struct with several flat members of different types
-    (integers, real(8), and a fixed-shape real(8) lookup table).
-    Drops the original's ``ALLOCATABLE val(:,:)`` member  --  that's
-    Phase 3 territory  --  but keeps the rest of the schema."""
+    """QE-flavoured ``pdf_sampler_type`` (npbench ``usxx.py``): mixed scalar/fixed-shape members.
+    Drops the original's ``ALLOCATABLE val(:,:)`` (Phase 3 territory), keeps the rest."""
     src = """
 module lib
   implicit none
@@ -223,20 +200,9 @@ end subroutine main
 
 
 def test_batched_csr_fixed_capacity(tmp_path: Path):
-    """Batched CSR  --  array of CSR-shaped structs, each member sized to a
-    common compile-time capacity.  This is the AoS-with-array-members
-    pattern Phase 1.5 lifted: ``A(N)`` of struct with array members
-    flattens to a per-member SoA where the outer dim is ``N`` and the
-    inner is the member's declared extent.
-
-    Layout:
-      ``A_rowptr(N, ROW_CAP)``
-      ``A_colidx(N, NNZ_CAP)``
-      ``A_val   (N, NNZ_CAP)``
-
-    Real Fortran code that needs runtime-jagged CSR (each instance
-    with its own ``allocatable`` of a different real size) is Phase 3
-    territory  --  see ``test_batched_csr_allocatable_jagged`` below.
+    """Batched CSR (Phase 1.5): ``A(N)`` of struct with array members flattens to per-member SoA
+    ``A_rowptr(N, ROW_CAP)`` / ``A_colidx(N, NNZ_CAP)`` / ``A_val(N, NNZ_CAP)``. Runtime-jagged
+    sizes are Phase 3 -- see ``test_batched_csr_allocatable_jagged``.
     """
     src = """
 module lib
@@ -317,16 +283,9 @@ end subroutine main
 
 
 def test_batched_csr_fixed_capacity_cross_boundary(tmp_path: Path):
-    """Same fixed-capacity CSR as the local test, but the SpMV runs in
-    a CALLEE.  Caller hands the batched CSR struct array across the
-    subroutine boundary.
-
-    The bindings layer's pack/unpack is what's needed here: caller-side
-    allocates ``A_rowptr(BATCH, ROW_CAP)`` etc., copies each
-    ``A(i)%<m>(:)`` into the flat slot, calls the SDFG, and unpacks
-    on return.  The flat representation matches what the AoS-with-
-    array-members local rewrite already produces; only the bindings
-    emitter side is missing.
+    """Same fixed-capacity CSR as the local test, but the SpMV runs in a CALLEE -- caller hands
+    the batched CSR struct array across the subroutine boundary, exercising the bindings
+    layer's pack/unpack (``A_rowptr(BATCH, ROW_CAP)`` etc, copied per-instance both ways).
     """
     src = """
 module lib
@@ -406,14 +365,9 @@ end subroutine spmv_batched
 
 
 def test_local_struct_allocatable_member_element_writes(tmp_path: Path):
-    """Phase 5a: ``type t :: real, allocatable :: w(:)``  --  local
-    struct instance with one allocatable array member, allocate then
-    per-element writes, then read back two elements and sum.
-
-    The flatten pass replaces ``s%w`` with a flat top-level allocatable
-    ``s_w`` (declare carrying ``fortran_attrs = #fir.var_attrs<allocatable>``)
-    and renames the per-allocate ``fir.allocmem`` op so the bridge's
-    ``collectAllocSites`` finds it under ``s_w.alloc``.
+    """Phase 5a: local struct with one allocatable array member; allocate, per-element write,
+    read back two + sum. Flatten pass replaces ``s%w`` with flat allocatable ``s_w`` and renames
+    the ``fir.allocmem`` op so ``collectAllocSites`` finds it under ``s_w.alloc``.
     """
     src = """
 module lib
@@ -445,10 +399,8 @@ end subroutine main
 
 
 def test_local_struct_allocatable_with_scalar_sibling_member(tmp_path: Path):
-    """Phase 5a: struct with one scalar field and one allocatable
-    array field.  The scalar member also flattens (existing path)  --
-    test pins both flat declares co-existing and the scalar field
-    being usable as the allocate's extent."""
+    """Phase 5a: struct with a scalar field and an allocatable array field. Pins both flat
+    declares co-existing, and the scalar field usable as the allocate's extent."""
     src = """
 module lib
   implicit none
@@ -479,9 +431,7 @@ end subroutine main
 
 
 def test_local_struct_allocatable_whole_array_assign(tmp_path: Path):
-    """Phase 5a: per-element copy into the allocatable member then
-    read back.  Pins the allocate-then-loop pattern against the
-    rewritten ``s_w`` flat declare."""
+    """Phase 5a: allocate-then-loop element writes/reads against the rewritten ``s_w`` flat declare."""
     src = """
 module lib
   implicit none
@@ -517,19 +467,11 @@ end subroutine main
 
 
 def test_dummy_struct_with_allocatable_member_top_level_call(tmp_path: Path):
-    """Phase 5b: ``type(t), intent(in) :: s`` where ``t`` has an
-    allocatable member, passed across a top-level subroutine call
-    (NOT module-contained).  After ``hlfir-inline-all`` the callee
-    body is spliced into main and ``s%w`` reads designate the inlined
-    alias which traces back to the caller's struct decl.
-
-    Removes the dummy-arg-with-allocatable gate from
-    ``planAndReplaceStructArgs``: per the saved bindings policy, the
-    flatten pass treats the member like any other allocatable and the
-    bindings-side wrapper handles the descriptor marshalling
-    (nullptr if not allocated, packed copy if allocated; no runtime
-    ``ALLOCATED()`` checks  --  the program is responsible for tracking
-    allocation state)."""
+    """Phase 5b: struct with an allocatable member passed across a top-level (non
+    module-contained) call; inlined alias traces back to caller's decl. Bindings wrapper
+    marshals the descriptor (nullptr if unallocated, packed copy if allocated) -- no runtime
+    ``ALLOCATED()`` check, program tracks allocation state itself.
+    """
     src = """
 module lib
   implicit none
@@ -573,20 +515,11 @@ end subroutine accumulate
 
 
 def test_struct_pointer_member_slice_rebind(tmp_path: Path):
-    """Phase 5b: ``type t :: real, pointer :: w(:)``  --  local struct
-    instance with a pointer array member, rebound to a section of a
-    TARGET'd array (``s%w => src(1:n)``).  The flatten pass treats
-    pointer members the same as allocatable members (Phase 5a):
-    synthesises a flat top-level companion ``s_w`` carrying the
-    ``pointer`` fortran_attr.  ``hlfir-rewrite-pointer-assigns``'s
-    slice-target arm then forwards the rebound section box to every
-    load of the flat companion's box-ref slot, so each ``s%w(i)``
-    read lands on ``src(i)`` directly.
-
-    Strict-no-aliasing assumption: the rewrite is unsafe if the
-    program relies on aliasing.  The test exercises the read-only
-    direction (``res = s%w(2) + s%w(4)``); writes through the
-    pointer follow the same lowering path."""
+    """Phase 5b: pointer array member rebound to a TARGET'd section (``s%w => src(1:n)``).
+    Flatten treats pointer members like allocatable (Phase 5a); ``hlfir-rewrite-pointer-assigns``
+    forwards the rebound section to every load, so ``s%w(i)`` reads ``src(i)`` directly.
+    Strict-no-aliasing assumption -- unsafe if the program relies on aliasing; read-only direction only.
+    """
     src = """
 module lib
   implicit none
@@ -615,23 +548,13 @@ end subroutine main
 
 
 def test_local_struct_allocatable_via_inlined_subprogram(tmp_path: Path):
-    """Phase 5b: allocate happens INSIDE a module-contained subroutine
-    that takes the struct as an ``intent(inout)`` dummy.  After
-    ``hlfir-inline-all`` runs, the callee's ``s%w`` designate is
-    rooted at an inlined alias declare, not the caller's struct
-    declare.  ``renameMemberAllocmems`` must follow alias chains
-    (``hlfir.declare`` -> ``fir.embox``/``fir.convert`` -> caller's
-    declare) to find the allocate site and rename it.  Without the
-    alias walk the SDFG ends up with an unbound ``s_w_d0`` symbol
-    even though the user-visible Fortran name ``n`` is in scope.
-
-    NOTE: ``entry='main'`` is REQUIRED.  The Fortran source
-    declares two public functions (``_QMlibPfill_and_set`` and
-    ``_QPmain``).  Without explicit entry the bridge would walk the
-    first public function in module order  --  ``fill_and_set``  --
-    whose un-inlined body is unsupported (struct dummy with
-    allocatable member).  Passing ``entry`` marks every other
-    func.func private so symbol-dce drops them after inlining."""
+    """Phase 5b: allocate happens inside a module-contained subroutine taking the struct as
+    ``intent(inout)``. ``renameMemberAllocmems`` must follow the inlined alias chain
+    (``hlfir.declare`` -> ``fir.embox``/``fir.convert`` -> caller's declare) to find and rename
+    the allocate site, else the SDFG gets an unbound ``s_w_d0`` symbol.
+    NOTE: ``entry='main'`` is REQUIRED -- without it the bridge walks the first public function
+    in module order (``fill_and_set``), whose un-inlined body is unsupported.
+    """
     src = """
 module lib
   implicit none
@@ -670,12 +593,8 @@ end subroutine main
 
 
 def test_parametric_dim_from_struct_field(tmp_path: Path):
-    """Phase 6: ``real :: bob(st%a)``  --  local array whose extent is a
-    struct field's runtime value.  After flatten, ``st%a`` becomes
-    ``st_a`` and is bound as an SDFG symbol; ``bob``'s shape is
-    ``(st_a,)`` and the bridge emits a transient with that runtime
-    extent.  Element writes, whole-array assigns, and elementwise
-    arithmetic all flow through the existing array-of-symbol path."""
+    """Phase 6: local array whose extent is a struct field's runtime value (``bob(st%a)``).
+    ``st%a`` flattens to SDFG symbol ``st_a``; ``bob`` gets shape ``(st_a,)`` as a runtime-extent transient."""
     src = """
 module lib
   implicit none
@@ -706,10 +625,7 @@ end subroutine main
 
 
 def test_parametric_dim_two_locals_one_struct(tmp_path: Path):
-    """Phase 6: two parametric locals from sibling fields of the same
-    struct.  Each gets its own SDFG symbol (``st_a`` / ``st_b``) and
-    the bridge keeps them independent  --  the transient declarations
-    don't shadow each other."""
+    """Phase 6: two parametric locals from sibling struct fields get independent SDFG symbols (``st_a``/``st_b``) that don't shadow each other."""
     src = """
 module lib
   implicit none
@@ -749,10 +665,8 @@ end subroutine main
 
 
 def test_parametric_dim_via_inlined_subprogram(tmp_path: Path):
-    """Phase 6 + cross-subprogram: parametric local ``bob(st%a)`` lives
-    inside a module-contained subroutine that gets inlined into main.
-    Pins that the runtime-extent symbol is bound at the right scope
-    after inlining."""
+    """Phase 6 + cross-subprogram: parametric local inside an inlined subroutine; pins that the
+    runtime-extent symbol binds at the right scope after inlining."""
     src = """
 module lib
   implicit none
@@ -791,12 +705,9 @@ end subroutine main
 
 
 def test_local_struct_allocatable_member_reallocate(tmp_path: Path):
-    """Phase 5a: allocate / deallocate / re-allocate cycle on the same
-    member.  Pins the multiple-allocate-site path: each
-    ``fir.allocmem`` gets renamed by the flatten pass; the second
-    site comes back from ``collectAllocSites`` as a separate
-    ``fir.allocmem`` and ``allocAliasName`` mints a second-site
-    transient name (``s_w_alloc1``)."""
+    """Phase 5a: allocate/deallocate/re-allocate cycle on the same member. Pins the
+    multiple-allocate-site path: the second ``fir.allocmem`` gets its own renamed transient
+    (``s_w_alloc1``) via ``allocAliasName``."""
     src = """
 module lib
   implicit none
@@ -827,29 +738,8 @@ end subroutine main
 
 
 def test_aos_allocatable_uniform_const_size(tmp_path: Path):
-    """Phase 5c-A: AoS + allocatable member with uniform compile-time
-    constant allocate sizes.  Each ``A(i)`` allocates ``A(i)%w`` to
-    the SAME constant ``M`` elements, so the flat companion is
-    fully static ``A_w(N, M)`` and the kernel-internal allocate /
-    deallocate sites become semantic no-ops over the pre-existing
-    2D buffer.
-
-    Bridge changes coordinated for this case:
-      * ``FlattenStructs.cpp::aosAllocUniformConstSize`` predicate
-        gates the AoS+allocatable path on uniform-const sizes.
-      * Phase 5c-A synth emits ``A_<member>(N, M)`` (concat extent).
-      * ``collapseAosAllocReads`` rewrites the
-        ``fir.load + hlfir.designate (loaded, j)`` chain into a
-        direct 2-index ``hlfir.designate flatBase (i, j)``.
-      * ``stripReallocOnAosMember`` drops the ``realloc`` flag from
-        whole-array assigns so the verifier accepts the now-static
-        LHS.
-      * ``eraseAosAllocDeallocChain`` sweeps the per-instance
-        allocate / freemem ops; the wrapping ``deallocate`` loop's
-        body becomes empty.
-      * Post-gen sweep in ``SDFGBuilder.build()`` adds an empty
-        state to any zero-block CFG region, keeping the empty
-        deallocate loop's ``LoopRegion`` valid.
+    """Phase 5c-A: AoS + allocatable member with uniform compile-time-constant sizes flattens
+    to a fully static ``A_w(N, M)`` companion; per-instance allocate/deallocate become no-ops.
     """
     src = """
 module lib
@@ -885,18 +775,10 @@ end subroutine main
 
 
 def test_aos_allocatable_via_inlined_kernel(tmp_path: Path):
-    """Phase 5c-B: AoS+allocatable struct passed as ``intent(inout)``
-    dummy to a module-contained kernel.  After ``hlfir-inline-all``
-    splices the kernel body into the caller, the kernel's reads/
-    writes through ``A(i)%w(j)`` are rooted at an alias declare
-    (dummy_scope), not the caller's original struct decl.
-
-    ``collapseAosAllocReads`` must follow alias chains
-    (``hlfir.declare`` -> ``fir.embox`` / ``fir.convert`` -> caller's
-    decl) to find every load-of-member-designate inside the inlined
-    body.  Without the alias walk, the kernel's reads stay as 1-D
-    designates against the loaded 2D companion, silently producing
-    wrong indices.
+    """Phase 5c-B: AoS+allocatable struct passed ``intent(inout)`` to an inlined kernel.
+    ``collapseAosAllocReads`` must follow the inlined alias chain to find every
+    member-designate read; without it, reads stay 1-D against the loaded 2D companion and
+    silently produce wrong indices.
     """
     src = """
 module lib
@@ -940,19 +822,13 @@ end subroutine main
     sdfg = _build(src, tmp_path, entry='main')
     out = np.zeros(1, dtype=np.float32)
     sdfg(out=out)
-    # Original A(1)%w(1) = 1+1 = 2; after kernel doubles every cell,
-    # A(1)%w = [4, 6, 8] and A(2)%w = [6, 8, 10].
-    # out = A(1)%w(1) + A(2)%w(2) = 4 + 8 = 12.
+    # A(1)%w -> [4,6,8], A(2)%w -> [6,8,10] after doubling; out = A(1)%w(1)+A(2)%w(2) = 4+8 = 12.
     assert out[0] == 12.0
 
 
 def test_aos_allocatable_whole_array_assign(tmp_path: Path):
-    """Phase 5c-A: whole-array assign on AoS-allocatable member.
-    ``A(i)%w = scalar`` must lower to ``A_w(i, 1:M:1) = scalar``  --
-    a row-section assign  --  NOT a whole-2D-array broadcast.  Without
-    the section rewrite, every iteration's scalar would be
-    splatted across all rows, silently corrupting earlier rows.
-
+    """Phase 5c-A: ``A(i)%w = scalar`` must lower to a row-section assign ``A_w(i, 1:M:1) =
+    scalar``, NOT a whole-2D broadcast that would splat and corrupt earlier rows.
     Pinned by ``rewriteAosWholeMemberAssign`` in FlattenStructs.cpp.
     """
     src = """
@@ -987,24 +863,10 @@ end subroutine main
 
 
 def test_batched_csr_allocatable_jagged(tmp_path: Path):
-    """Genuinely jagged batched CSR  --  each instance's CSR arrays are
-    runtime-allocated to different (compile-time-constant) sizes.
-
-    SDFG output is compared against the gfortran/f2py reference
-    (``rtol=1e-12``) compiled from the same source (the e2e-numerical rule),
-    exercising the allocatable-array-of-records lowering end to end.
-
-    Lowering chain:
-      * ``aosAllocMaxConstSize`` records ``max_i(N_i)`` per allocatable
-        member as the companion column count.
-      * ``rewriteAosWholeMemberAssign`` resolves a per-instance
-        section bound when the parent's outer index is a constant  --
-        each ``A(i)%w = (/...lit.../)`` lowers to a row section sized
-        to that instance's specific allocate size, not the global cap.
-      * The constant-pool feature (``parameter``-attributed declares
-        backed by ``fir.global ... constant``) ships the literal data
-        through ``sdfg.add_constant`` so the kernel's reads see the
-        right values.
+    """Genuinely jagged batched CSR: each instance's arrays are allocated to different constant
+    sizes. ``aosAllocMaxConstSize`` sizes the companion to ``max_i(N_i)``;
+    ``rewriteAosWholeMemberAssign`` resolves each instance's section to its own (smaller) size,
+    not the global cap. SDFG output checked against gfortran/f2py at rtol=1e-12.
     """
     src = """
 module lib
@@ -1057,25 +919,10 @@ end subroutine main
 
 
 def test_static_polymorphism_devirtualised(tmp_path: Path):
-    """Polymorphic CLASS dispatch that flang's ``fir-polymorphic-op``
-    pass devirtualises statically.  Two flavours:
-
-      1. Type-bound procedure call ``c%area()`` where ``c`` is a
-         concrete ``type(circle_t)``  --  flang resolves the dispatch
-         to ``circle_area(c)`` directly because the receiver type
-         is statically known.
-      2. Same shape with a different extension type ``rect_t``  --
-         the type-bound procedure resolves to ``rect_area``.
-
-    Member functions ``circle_area`` / ``rect_area`` themselves take
-    concrete-class dummies (``class(circle_t)``, ``class(rect_t)``)
-    not the abstract base; their bodies are non-polymorphic.  After
-    inlining and devirtualisation the SDFG sees plain flat scalars.
-
-    Verifies the bridge handles these cleanly: SDFG builds, output
-    matches gfortran/f2py to ``rtol=1e-12``.  Pairs with the bail-out test
-    in ``noncontig_unsupported_test.py`` which proves the reject
-    pass fires when polymorphic-op can't resolve everything.
+    """CLASS dispatch (``c%area()``) statically devirtualised by flang's ``fir-polymorphic-op``
+    to ``circle_area``/``rect_area`` -- receiver type is always statically known, so the SDFG
+    sees plain flat scalars. Pairs with the bail-out test in ``noncontig_unsupported_test.py``
+    for when polymorphic-op can't resolve everything.
     """
     src = """
 module shapes
@@ -1134,25 +981,10 @@ end subroutine main
 @pytest.mark.parametrize("call_arg,kwarg_for_sdfg", [("x", True), ("0.5d0", False)],
                          ids=["runtime_arg", "literal_constant"])
 def test_class_as_monomorphic_box(tmp_path: Path, call_arg, kwarg_for_sdfg):
-    """``CLASS(t) :: this`` used as a non-polymorphic box.  Common in
-    ECRAD / ICON code where a derived type is declared with
-    ``class(...)`` for future polymorphism but every call site uses
-    a concrete subtype.  No virtual dispatch, no allocatable
-    members.
-
-    Verifies the FlattenStructs box-peeling walk treats
-    ``fir.class<T>`` like ``fir.box<T>`` (both inherit
-    ``fir::BaseBoxType``).  The bridge never sees the struct  --
-    flat per-field arrays only.
-
-    Parametrised over the scalar argument shape:
-      * ``runtime_arg``  --  caller supplies ``x`` as an SDFG argument.
-      * ``literal_constant``  --  flang creates an
-        ``hlfir.associate %cst {adapt.valuebyref}`` so the inlined
-        callee's by-ref dummy can take a value-converted constant.
-        ``hlfir-expand-vector-subscript-gather`` rewrites that scalar
-        associate to a local alloca + store so the bridge sees a
-        proper transient instead of a nameless associate result.
+    """``CLASS(t) :: this`` as a non-polymorphic box (ECRAD/ICON: declared ``class(...)`` but
+    every call site uses a concrete subtype). FlattenStructs treats ``fir.class<T>`` like
+    ``fir.box<T>`` (both ``fir::BaseBoxType``). Parametrised runtime-arg vs literal-constant:
+    the latter exercises ``hlfir-expand-vector-subscript-gather``'s associate-to-alloca rewrite.
     """
     src = f"""
 module lib
@@ -1192,19 +1024,14 @@ end subroutine main
     if kwarg_for_sdfg:
         sdfg(x=0.5, out=out)
     else:
-        # Literal constant case: ``x`` is unused (flang folds the
-        # constant inline) but the SDFG signature still binds it as
-        # an unused scalar input  --  pass any placeholder.
+        # literal-constant case: x is unused (flang folds the constant inline) but the SDFG signature still binds it -- pass a placeholder.
         sdfg(x=0.0, out=out)
     np.testing.assert_allclose(float(out[0]), out_ref, rtol=1e-12)
 
 
 def test_three_level_nested_struct(tmp_path: Path):
-    """LLVM-IR-flavoured deep nesting (Function -> BasicBlock ->
-    Instruction shape).  Three levels of pure-record nesting with a
-    single flat leaf at the bottom.  Exercises the Phase 2 path
-    walker at depth 3 and verifies the path-flattened name
-    ``f_bb_inst_pc`` resolves correctly."""
+    """Three levels of pure-record nesting (Function->BasicBlock->Instruction shape); exercises
+    the Phase 2 path walker at depth 3 and the flattened name ``f_bb_inst_pc``."""
     src = """
 module lib
   implicit none
@@ -1241,9 +1068,7 @@ end subroutine main
 
 
 def test_local_struct_used_as_2d_assignment_target(tmp_path: Path):
-    """``s%w(:, k) = arr(:)``  --  slice assignment into a struct's 2-D
-    array member.  Exercises the section-to-section path landing on
-    a flat per-field array."""
+    """Slice assignment ``s%w(:, k) = arr(:)`` into a struct's 2-D array member exercises the section-to-section path onto a flat per-field array."""
     src = """
 module lib
   implicit none
@@ -1277,11 +1102,8 @@ end subroutine main
 
 
 def test_nested_struct_lowered_via_phase2(tmp_path: Path):
-    """Phase 2: nested struct ``type(outer_t)`` whose member is itself
-    a ``type(inner_t)``.  ``hlfir-flatten-structs`` walks the path-leaf
-    tree and synthesises one ``hlfir.declare`` per leaf with name
-    ``<base>_<m1>_<m2>_..._<leaf>`` (here: ``o_inner_x``).  Designate
-    chains ``o%inner%x(i)`` rewrite to ``o_inner_x(i)``."""
+    """Phase 2: nested struct (member is itself a struct). ``hlfir-flatten-structs`` synthesises
+    one declare per leaf named ``<base>_<m1>_..._<leaf>`` (here ``o_inner_x``); designates rewrite accordingly."""
     src = """
 module lib
   implicit none
@@ -1312,13 +1134,9 @@ end subroutine main
 
 
 def test_array_of_nested_struct_member(tmp_path: Path):
-    """Phase 2 extension: a struct member is an ARRAY of another
-    struct (``type(simple_type) :: pprog(10)``).  The flat
-    companion folds the array dim into the leaf's shape so
-    ``p_prog%pprog(i)%w(j, k)`` rewrites to a 3D companion
-    ``p_prog_pprog_w(i, j, k)``.  Exercises ``collectFlatLeaves``'s
-    ``array<N x RecordType>`` branch and ``walkDesignateChain``'s
-    intermediate-indices path together.
+    """Phase 2 extension: struct member is an ARRAY of another struct. Flat companion folds the
+    array dim into the leaf's shape (``p_prog%pprog(i)%w(j,k)`` -> ``p_prog_pprog_w(i,j,k)``);
+    exercises ``collectFlatLeaves``'s ``array<N x RecordType>`` branch.
     """
     src = """
 module lib
@@ -1351,13 +1169,9 @@ end subroutine main
 
 
 def test_outer_array_of_nested_struct(tmp_path: Path):
-    """Phase 2 extension: outer-array of a NESTED struct
-    (``type(t) :: s(3)`` where ``t`` itself contains a struct
-    member).  The outer extent threads into the leaf's flat
-    companion shape: ``s(3)`` over ``simple_type{inner{w(5,5)}}``
-    collapses to ``s_inner_w`` of shape ``(3, 5, 5)``.
-    Exercises the nested-fallback path in ``isLocallyFlattenable``
-    + ``splitLocal`` with ``outerIsArray = true``.
+    """Phase 2 extension: outer-array of a nested struct (``s(3)`` over ``simple_type{inner{w(5,5)}}``)
+    collapses to ``s_inner_w`` shape ``(3,5,5)``; exercises ``isLocallyFlattenable`` +
+    ``splitLocal`` with ``outerIsArray = true``.
     """
     src = """
 module lib
@@ -1392,23 +1206,9 @@ end subroutine main
 
 
 def test_aos_member_to_member_array_copy(tmp_path: Path):
-    """AoS pattern ``a(i)%b = a(j)%c`` where ``b`` and ``c`` are array
-    members  --  the assignment is a whole-array copy of one inner row.
-
-    After flatten-structs, the array-of-struct ``a`` becomes a pair of
-    flat per-member arrays ``a_b`` and ``a_c``, each shaped (outer-N,
-    inner-extents...).  The Fortran row-copy:
-
-        a(i)%b = a(j)%c
-
-    flattens to:
-
-        a_b(i, :) = a_c(j, :)
-
-    i.e. a whole-array section copy from row ``j`` of ``a_c`` into row
-    ``i`` of ``a_b``.  Exercises both AoS index-merging
-    (``rewriteDesignate`` concat case) AND the whole-member triplet
-    section path (no inner indices on the designate).
+    """AoS pattern ``a(i)%b = a(j)%c`` (array members) flattens to a whole-row section copy
+    ``a_b(i, :) = a_c(j, :)``. Exercises AoS index-merging (``rewriteDesignate`` concat case)
+    together with the whole-member triplet section path (no inner indices on the designate).
     """
     src = """
 module lib
@@ -1452,18 +1252,16 @@ end subroutine main
     out = np.zeros((4, 2), order="F", dtype=np.int32)
     sdfg(out=out)
     np.testing.assert_array_equal(out, out_ref)
-    # Both columns should hold the row [31, 32, 33, 34] (a(3)%c, copied
-    # into a(1)%b).
+    # both columns hold row [31, 32, 33, 34] (a(3)%c, copied into a(1)%b)
     np.testing.assert_array_equal(out[:, 0], [31, 32, 33, 34])
     np.testing.assert_array_equal(out[:, 1], [31, 32, 33, 34])
 
 
 def test_intent_out_aos_alloc_member_raises_loudly(tmp_path, capfd):
-    """An ``intent(out)`` AoS dummy with an ``allocatable`` member forces a
-    kernel-internal FIRST allocate -- F2003 auto-deallocates intent(out)
-    allocatable components on entry, so there is no caller data to size the
-    padded companion.  ``hlfir-flatten-structs`` must fail loudly rather than
-    emit a degenerate (cap-1) buffer that silently truncates the writes."""
+    """``intent(out)`` AoS dummy with an allocatable member: F2003 auto-deallocates on entry,
+    so there's no caller data to size the padded companion. ``hlfir-flatten-structs`` must fail
+    loudly, not emit a degenerate cap-1 buffer that silently truncates writes.
+    """
     src = """
 module mo_ki
   use iso_c_binding

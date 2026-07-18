@@ -1,21 +1,5 @@
-"""Numeric end-to-end check for Fortran ``MPI_Send`` / ``MPI_Recv``
-lowered to DaCe ``dace.libraries.mpi`` nodes.
-
-Run under mpirun with >=2 ranks, e.g.::
-
-    mpirun --oversubscribe -n 2 python -m pytest -p no:cacheprovider \\
-        tests/mpi_sendrecv_e2e_test.py
-
-mpi4py supplies rank/size and ``dace.sdfg.utils.distributed_compile``
-compiles once on rank 0 and shares the artifact (avoids a build race).
-DaCe's MPI environment ``MPI_Init``s idempotently (``MPI_Initialized``
-guard) and deliberately never ``MPI_Finalize``s, so it composes with
-mpi4py's own init and with repeated pytest runs.
-
-The kernel is a deadlock-free ring: even ranks send-then-recv, odd
-ranks recv-then-send.  Rank ``r`` ships a buffer full of ``r`` to
-``(r+1) % size`` and receives from ``(r-1) % size``; the received
-buffer must therefore equal ``(r-1) % size``.
+"""E2E: Fortran MPI_Send/Recv and Isend/Irecv/Wait lower to dace.libraries.mpi.
+Ring exchange must round-trip: rank r sends r, must receive (r-1) % size. mpirun -n >=2.
 """
 
 from pathlib import Path
@@ -68,10 +52,7 @@ def test_ring_send_recv_numeric(tmp_path: Path):
     if size < 2:
         pytest.skip("MPI Send/Recv e2e needs >= 2 ranks (mpirun --oversubscribe -n 2 ...)")
 
-    # Build + name the SDFG only on rank 0; distributed_compile shares
-    # the compiled artifact with the other ranks.  ``build_on_root`` guards
-    # the rank-0 bridge build so a build failure fails every rank instead of
-    # leaving them blocked in distributed_compile's broadcast.
+    # Build on rank 0 only; distributed_compile shares the artifact (avoids per-rank build races/hangs).
     def _build_ring():
         s = build_sdfg(_RING, tmp_path / "sdfg", name="ring", entry="ring_mod::ring").build()
         s.name = "mpi_ring"
@@ -116,9 +97,7 @@ end module nbring_mod
 
 @pytest.mark.mpi
 def test_nonblocking_ring_numeric(tmp_path: Path):
-    """Deadlock-free nonblocking ring: Irecv + Isend + Wait + Wait.
-    Rank ``r`` ships ``r`` to ``(r+1)%size`` and receives from
-    ``(r-1)%size``; received buffer must equal ``(r-1)%size``."""
+    """Nonblocking ring (Irecv+Isend+Wait+Wait): rank r must receive (r-1)%size from its predecessor."""
     from mpi4py import MPI
     from dace.sdfg import utils
 

@@ -1,7 +1,5 @@
-"""Pass->bridge->FlattenPlan round-trip.  Verifies that
-``hlfir-flatten-structs`` stamps a structurally correct
-``hlfir.flatten_plan`` attribute that the bridge decodes back into a
-usable ``FlattenPlan`` dataclass.
+"""Pass->bridge->FlattenPlan round-trip: hlfir-flatten-structs stamps a
+structurally correct hlfir.flatten_plan attribute that the bridge decodes into FlattenPlan.
 """
 
 import subprocess
@@ -45,15 +43,9 @@ end subroutine
 
 
 def test_two_real_array_struct_emits_aliased_recipe(tmp_path: Path):
-    """Static-shape struct with two real members -> one FlattenEntry
-    per member (aliasable, rank-2 shape exprs).
-
-    The bridge emits one entry per member rather than bundling every
-    member into a single multi-flat recipe so mixed-dtype structs
-    (e.g. ``complex(c_double)`` next to ``real(c_double)``) carry the
-    correct per-flat ``scratch_dtype``; the emitter walks
-    ``plan.entries`` and renders each with its own dtype.
-    """
+    """Static-shape struct, two real members -> one FlattenEntry per member
+    (aliasable, rank-2). Per-member entries (not one bundled recipe) let
+    mixed-dtype structs carry correct per-flat scratch_dtype."""
     plan = _plan_from_fortran(
         """
 module state_mod
@@ -100,8 +92,7 @@ end subroutine
 
 
 def test_intent_in_carries_through(tmp_path: Path):
-    """A read-only struct dummy should produce writeback_intent='in'
-    on every per-member entry."""
+    """Read-only struct dummy produces writeback_intent='in' on every per-member entry."""
     plan = _plan_from_fortran(
         """
 module state_mod
@@ -131,11 +122,8 @@ end subroutine
 
 
 def test_aos_allocatable_dummy_emits_aos_alloc_recipe(tmp_path: Path):
-    """Phase 5c-B (true SDFG boundary): an AoS+allocatable struct
-    dummy yields one ``aos_alloc=True`` recipe per allocatable
-    member, with a ``cap_<base>_<member>`` symbol on the inner dim
-    and rank == outer_rank + 1.
-    """
+    """Phase 5c-B: AoS+allocatable struct dummy yields one aos_alloc=True recipe
+    per allocatable member, with cap_<base>_<member> on the inner dim, rank = outer_rank+1."""
     plan = _plan_from_fortran(
         """
 module aos_mod
@@ -160,10 +148,8 @@ subroutine kernel(A, n, m, out)
   out = A(1)%w(1)
 end subroutine
 """, tmp_path)
-    # Exactly one entry  --  the allocatable member.  No regular entry
-    # (every member excluded from the regular path).  Flang lowercases
-    # all identifiers, so the outer name comes out as ``a`` and the
-    # flat companion as ``a_w``.
+    # one entry (allocatable member only); flang lowercases identifiers,
+    # so outer name is `a`, flat companion `a_w`.
     assert len(plan.entries) == 1
     e = plan.entries[0]
     assert e.outer_expr == "a"
@@ -180,11 +166,9 @@ end subroutine
 
 
 def test_mixed_aos_alloc_and_plain_member_split_into_two_entries(tmp_path: Path):
-    """A struct with both an allocatable and a plain (static-shape)
-    member  --  Phase 5c-B emits a separate ``aos_alloc=True`` recipe
-    per allocatable member, AND a regular aliasable recipe covering
-    the non-allocatable members.
-    """
+    """Struct with both allocatable and plain members -- Phase 5c-B emits a
+    separate aos_alloc=True recipe per allocatable member plus a regular
+    aliasable recipe for the rest."""
     plan = _plan_from_fortran(
         """
 module aos_mod
@@ -211,8 +195,7 @@ subroutine kernel(A, n, m, out)
   out = A(1)%w(1)
 end subroutine
 """, tmp_path)
-    # Two entries: one aos_alloc for w, one regular for tag.  Flang
-    # lowercases identifiers  --  the flat companions are ``a_w`` / ``a_tag``.
+    # two entries: aos_alloc for w, regular for tag; flang lowercases -> a_w / a_tag
     aos_entries = [e for e in plan.entries if e.recipe.aos_alloc]
     plain_entries = [e for e in plan.entries if not e.recipe.aos_alloc]
     assert len(aos_entries) == 1

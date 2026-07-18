@@ -41,9 +41,8 @@ end subroutine main
 """
     sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.full([4, 4, 2], 42, order="F", dtype=np.float64)
-    # ``outside_init`` is a non-PARAMETER scalar global -- surfaces as a
-    # caller kwarg after the write-based classifier.  Pass a length-1
-    # numpy array (the bridge surfaces module scalars as (1,)-Arrays).
+    # outside_init is a non-PARAMETER scalar global -- surfaces as a caller
+    # kwarg (write-based classifier); pass length-1 array (module scalars surface as (1,)-Arrays).
     sdfg(d=a, outside_init=np.array([0.0], dtype=np.float32, order='F'))
     assert (a[0, 0, 0] == 42)
     assert (a[1, 0, 0] == 5.5)

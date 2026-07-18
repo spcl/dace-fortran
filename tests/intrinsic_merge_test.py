@@ -9,10 +9,8 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_fortran_frontend_merge_1d(tmp_path):
-    # Original f2dace test had ``mask`` declared INTEGER -- invalid
-    # Fortran (MERGE's mask must be LOGICAL).  Declare it LOGICAL; the
-    # caller still binds an int32 numpy buffer (LOGICAL(4) shares ABI
-    # with INTEGER(4)).
+    # Original f2dace test had mask declared INTEGER (invalid -- MERGE's mask must be
+    # LOGICAL). Declared LOGICAL here; caller still binds int32 (LOGICAL(4) shares ABI with INTEGER(4)).
     src = """
 SUBROUTINE merge_test_function(input1, input2, mask, res)
 double precision, dimension(7) :: input1
@@ -228,8 +226,7 @@ END SUBROUTINE merge_test_function
 
 
 def test_fortran_frontend_merge_recursive(tmp_path):
-    # Original f2dace test had ``mask1`` / ``mask2`` declared INTEGER --
-    # invalid (MERGE's mask must be LOGICAL).  Declare LOGICAL.
+    # Original f2dace test had mask1/mask2 declared INTEGER (invalid); declared LOGICAL here.
     src = """
 SUBROUTINE merge_test_function(input1, input2, input3, mask1, mask2, res)
 double precision, dimension(7) :: input1
@@ -281,12 +278,9 @@ END SUBROUTINE merge_test_function
 
     first = np.full([size], 13, order="F", dtype=np.float64)
     second = np.full([size], 42, order="F", dtype=np.float64)
-    # ``mask`` is Fortran ``LOGICAL`` -- pass it as ``np.bool_`` (1
-    # byte / elem) so the C ABI dtype matches the SDFG's ``bool *``
-    # declaration.  Previously this was ``np.int32`` and the runtime
-    # reinterpret-cast the LSB of each int32 as a bool, which worked
-    # for ``{0, 1}`` values by coincidence but corrupted any int
-    # whose bit-0 was zero (256, -2, ...).
+    # mask is Fortran LOGICAL -- pass np.bool_ (1 byte/elem) to match the SDFG's bool*
+    # declaration. Previously np.int32 worked by LSB coincidence but corrupted values with
+    # bit-0=0 (256, -2, ...).
     mask = np.full([size], False, order="F", dtype=np.bool_)
     res = np.full([size], 40, order="F", dtype=np.float64)
 
@@ -304,10 +298,8 @@ END SUBROUTINE merge_test_function
 
 
 def test_fortran_frontend_merge_scalar2(tmp_path):
-    # Original f2dace had ``mask`` INTEGER (must be LOGICAL) and the
-    # false-source literal ``0.0`` defaulted to REAL(4) while the
-    # true-source ``input1`` is REAL(8) -- MERGE requires both sources
-    # to share kind.  Use ``0.0D0`` for the false source.
+    # Original f2dace had mask INTEGER (must be LOGICAL) and false-source 0.0 as REAL(4)
+    # vs input1's REAL(8) -- MERGE requires matching kind; using 0.0D0 here.
     src = """
 SUBROUTINE merge_test_function(input1, input2, mask, res)
 double precision, dimension(7) :: input1
@@ -337,11 +329,9 @@ END SUBROUTINE merge_test_function
 
 
 def test_fortran_frontend_merge_scalar3(tmp_path):
-    # The original f2dace test had ``mask`` / ``mask2`` INTEGER and the
-    # false-source literal ``0.0`` was REAL(4) while the true source is
-    # REAL(8) -- both invalid Fortran.  ``mask`` / ``mask2`` are kept
-    # INTEGER because the comparison ``mask(1) > mask2(1)`` is the
-    # actual mask (LOGICAL); the literal is now ``0.0D0``.
+    # Original f2dace had mask/mask2 INTEGER and false-source 0.0 as REAL(4) vs REAL(8) true
+    # source -- both invalid. Kept mask/mask2 INTEGER (the LOGICAL is the comparison
+    # mask(1)>mask2(1)); literal is now 0.0D0.
     src = """
 SUBROUTINE merge_test_function(input1, input2, mask, mask2, res)
 double precision, dimension(7) :: input1

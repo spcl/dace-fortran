@@ -1,16 +1,11 @@
-"""Complex counterpart of ``fortran_int_init_test.py``.
+"""Complex counterpart of ``fortran_int_init_test.py``: single-precision COMPLEX and
+DOUBLE COMPLEX arrays (kinds via ``KIND(1.0)``/``KIND(1.0D0)``) ingest as
+``dace.complex64``/``dace.complex128``.
 
-Initializes a single-precision COMPLEX array and a DOUBLE COMPLEX array in a
-Fortran source string (kinds spelled via ``KIND(1.0)`` / ``KIND(1.0D0)``) and
-checks that ``build_sdfg`` ingests them with the right element type
-(``dace.complex64`` / ``dace.complex128``).
-
-These tests only exercise the Fortran-frontend -> SDFG path (type ingestion);
-the SDFG -> C++ codegen is DaCe's and is left untouched.  One consequence is
-isolated below as an ``xfail``: DaCe's tasklet codegen renders a complex
-literal via its ``1j`` (always complex128) imaginary unit, so a *single*
-precision complex literal produces an uncompilable ``complex128 * float32``
-expression.  See ``test_single_complex_literal_codegen_xfail``.
+Frontend-only (type ingestion); SDFG->C++ codegen is DaCe's.  One consequence: DaCe's
+tasklet codegen renders a complex literal via its always-complex128 ``1j`` imaginary
+unit, so a single-precision complex literal produces an uncompilable
+``complex128 * float32`` expression -- see ``test_single_complex_literal_codegen_raises``.
 """
 
 import numpy as np
@@ -25,11 +20,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_fortran_frontend_complex_init(tmp_path):
-    """COMPLEX(kind=KIND(1.0)) -> complex64, COMPLEX(kind=KIND(1.0d0)) -> complex128.
-
-    ``.build()`` returns the (uncompiled) SDFG; inspecting the descriptors is
-    what proves the frontend ingested the types correctly.
-    """
+    """COMPLEX(kind=KIND(1.0)) -> complex64, COMPLEX(kind=KIND(1.0d0)) -> complex128."""
     src = """
 subroutine main(c, z)
   integer, parameter :: sp = kind(1.0)
@@ -43,18 +34,14 @@ subroutine main(c, z)
 end subroutine main
 """
     sdfg = build_sdfg(src, tmp_path, name='complex_init').build()
-    # COMPLEX(sp) -> 2xFP32 -> complex64; COMPLEX(dp) -> 2xFP64 -> complex128.
     assert sdfg.arrays['c'].dtype == dace.complex64
     assert sdfg.arrays['z'].dtype == dace.complex128
 
 
 def test_fortran_frontend_complex_arith(tmp_path):
-    """The ingested complex64/complex128 arrays compute correctly end to end.
-
-    Values arrive via input arrays (no complex-literal construction), so this
-    exercises both precisions at runtime without tripping the codegen
-    limitation isolated in ``test_single_complex_literal_codegen_xfail``.
-    """
+    """Ingested complex64/complex128 arrays compute correctly end to end.  Values arrive
+    via input arrays (no complex-literal construction), avoiding the codegen limitation
+    isolated in ``test_single_complex_literal_codegen_raises``."""
     src = """
 subroutine main(cin, cout, zin, zout)
   integer, parameter :: sp = kind(1.0)
@@ -84,11 +71,8 @@ end subroutine main
 
 
 def test_double_complex_literal_run(tmp_path):
-    """A DOUBLE COMPLEX literal initializes and runs end to end.
-
-    The double-precision path works because DaCe's ``1j`` imaginary unit is
-    itself complex128, so ``re + 1j*im`` is a well-typed complex128 expression.
-    """
+    """A DOUBLE COMPLEX literal initializes and runs end to end -- works because DaCe's
+    ``1j`` imaginary unit is itself complex128, so ``re + 1j*im`` is well-typed."""
     src = """
 subroutine main(z)
   integer, parameter :: dp = kind(1.0d0)
@@ -106,12 +90,10 @@ end subroutine main
 
 
 def test_single_complex_literal_codegen_raises(tmp_path):
-    """Frontend ingestion is correct (see ``test_fortran_frontend_complex_init``),
-    but *running* hits a DaCe SDFG->C++ codegen limitation: the tasklet codegen
-    renders a complex literal with a complex128 ``1j`` imaginary unit, so a
-    single-precision COMPLEX literal emits an uncompilable
-    ``float32 + complex128 * float32``.  Pinned as a loud ``CompilationError`` (not
-    silent wrong values) -- a DaCe-fork codegen limit, not a frontend one."""
+    """Frontend ingestion is correct, but running hits a DaCe SDFG->C++ codegen
+    limitation: complex128 ``1j`` on a single-precision COMPLEX literal emits
+    uncompilable ``float32 + complex128 * float32``.  Pinned as a loud
+    ``CompilationError`` (not silent wrong values) -- a DaCe-fork codegen limit."""
     src = """
 subroutine main(c)
   integer, parameter :: sp = kind(1.0)
@@ -121,8 +103,7 @@ subroutine main(c)
 end subroutine main
 """
     sdfg = build_sdfg(src, tmp_path, name='scomplex_lit').build()
-    # Frontend ingestion is still correct even though codegen will fail.
     assert sdfg.arrays['c'].dtype == dace.complex64
     c = np.zeros(2, order="F", dtype=np.complex64)
     with pytest.raises(CompilationError):
-        sdfg(c=c)  # triggers DaCe codegen + C++ compile -> CompilationError
+        sdfg(c=c)

@@ -1,30 +1,11 @@
-"""Per-member-SoA callback ABI-alignment invariant for the ICON
-``solve_nh`` -> ``velocity_tendencies`` composition.
-
-The outer ``solve_nh`` SDFG dispatches ``velocity_tendencies`` as a
-``keep_external(c_abi='per_member_soa')`` callback: it marshals each shared
-derived-type argument (``t_patch`` / ``t_nh_prog`` / ``t_int_state`` /
-``t_nh_metrics`` / ``t_nh_diag``) into one SoA leaf per scalar/array member, and
-the inner velocity ``bind_c_shim`` reconstructs the SAME leaves.  Both walk the
-type in Fortran declaration order, so the leaf sequences coincide -- and the C
-ABI lines up -- IFF every shared derived type has the IDENTICAL member set in the
-IDENTICAL order in BOTH extracted single-TUs.
-
-The two TUs are pruned from the SAME ``mo_model_domain`` / ``mo_nonhydro_types``
-closure but by DIFFERENT entries, so each keeps its own reads plus the union
-members named in :data:`ATMO_VELOCITY_UNION_COMPONENTS` /
-:data:`ATMO_SOLVE_NH_UNION_COMPONENTS`.  This test pins that the union is
-complete: it parses both committed artifacts and asserts member-for-member
-identity for every shared type.  A missing union member (a field ``solve_nh``
-reads but ``velocity`` does not, pruned on the velocity side) shows up here as a
-desync BEFORE it becomes a silent per-member-SoA mismatch at run time.
-
-Pointer-to-record HANDLE members (``comm_pat_c`` / ``comm_pat_e``) are SKIPPED by
-the marshaller AND the shim (no SoA image), so a handle present on only one side
-contributes no leaf either way; they are excluded from the comparison.
-
-Pure text parse of two checked-in ``.f90`` artifacts -- no flang / SDFG build --
-so it runs everywhere and fails fast on drift.
+"""Per-member-SoA callback ABI-alignment invariant for ICON's solve_nh ->
+velocity_tendencies composition: the outer SDFG marshals shared derived-type args
+into one SoA leaf per member (Fortran declaration order); the inner bind_c_shim
+must reconstruct the identical sequence, so the C ABI lines up IFF every shared
+type has the same member set/order in BOTH extracted single-TUs. Pins that the
+union (ATMO_*_UNION_COMPONENTS) is complete by comparing both committed artifacts
+member-for-member. Pointer-to-record HANDLE members are skipped by both sides and
+excluded here. Pure text parse -- no flang/SDFG build -- runs everywhere.
 """
 import re
 from pathlib import Path
@@ -38,9 +19,8 @@ _SKIP_MEMBERS = {"comm_pat_c", "comm_pat_e"}
 
 
 def _decl_names(rhs: str) -> list:
-    """Component names on one declaration line, after ``::`` -- split the entity
-    list on top-level commas (commas inside array-bound / kind parens do not
-    separate entities) and take each entity's leading identifier."""
+    """Component names on one declaration line after ``::``: split entities on
+    top-level commas (parens don't separate) and take each leading identifier."""
     names, depth, start = [], 0, 0
     for i, c in enumerate(rhs):
         if c in "([":
@@ -73,9 +53,8 @@ def _type_members(tu: Path) -> dict:
 
 
 def test_shared_struct_layouts_match_member_for_member():
-    """Every derived type present in BOTH extracted TUs carries the identical
-    member set in the identical declaration order (excluding skipped pointer
-    handles) -- the precondition for the per-member-SoA velocity callback ABI."""
+    """Every derived type in BOTH extracted TUs carries the identical member set/order
+    (excluding skipped pointer handles) -- precondition for the per-member-SoA ABI."""
     outer = _type_members(_OUTER_TU)
     velocity = _type_members(_VELOCITY_TU)
     shared = sorted(set(outer) & set(velocity))

@@ -1,36 +1,24 @@
-"""Dycore + external-via-sibling-SDFG E2E.
-
-The outer SDFG (the dycore stand-in) calls the inner SDFG (the
-velocity_tendencies stand-in) directly via the inner's
-``emit_bind_c_shim`` entry -- no hand-written C++ glue.  This is the
-direct-call corollary of the design observation that *with the C ABI
-fixed on both sides*, a forwarder shim between two sibling SDFGs is
-mechanical: the outer's ``ExternalCall`` C decl and the inner's
-``bind_c_shim`` C signature are derived from the same Fortran source
-through the same pipeline, so they coincide.
+"""Dycore + external-via-sibling-SDFG E2E: the outer SDFG (dycore stand-in) calls the
+inner SDFG (velocity_tendencies stand-in) directly via the inner's ``emit_bind_c_shim``
+entry -- no hand-written C++ glue.  With the C ABI fixed on both sides, a forwarder
+shim between sibling SDFGs is mechanical: the outer's ``ExternalCall`` C decl and the
+inner's ``bind_c_shim`` C signature derive from the same Fortran source through the
+same pipeline, so they coincide.
 
 Architecture:
-  * Inner SDFG built from ``_INNER_SRC``; ``build_fortran_library
-    (..., bind_c_shim=True)`` produces a standalone ``.so`` exporting
-    ``inner_axpy_c`` with the canonical per-arg C ABI (scalars by
-    value, arrays by pointer).
-  * Outer SDFG built from ``_OUTER_SRC``; ``inner_axpy`` is
-    registered as :func:`keep_external` with
-    ``c_name="inner_axpy_c"`` and the inner wrapper as
-    ``libraries=``.  The SDFG link line picks up the inner's ``.so``
-    directly; the dynamic loader follows DT_NEEDED into it on dlopen.
-  * Caller (Fortran) drives the outer via the standard
-    ``build_fortran_library`` bindings.
-  * Reference: gfortran links inner + outer + a ``bind(c)`` driver
-    sharing the same C ABI as the SDFG path; ``ctypes`` invokes both
-    libraries identically and asserts bit-for-bit equality.
+  * Inner SDFG from ``_INNER_SRC``; ``build_fortran_library(..., bind_c_shim=True)``
+    produces a standalone ``.so`` exporting ``inner_axpy_c`` (canonical per-arg C ABI).
+  * Outer SDFG from ``_OUTER_SRC``; ``inner_axpy`` registered via :func:`keep_external`
+    with ``c_name="inner_axpy_c"`` and the inner wrapper as ``libraries=`` -- the link
+    line picks up the inner's ``.so`` directly, dynamic loader follows DT_NEEDED.
+  * Caller (Fortran) drives the outer via standard ``build_fortran_library`` bindings.
+  * Reference: gfortran links inner + outer + a ``bind(c)`` driver sharing the same C
+    ABI; ``ctypes`` invokes both identically and asserts bit-for-bit equality.
 
-Scaling this to ``velocity_tendencies``: register each derived-type
-arg with ``Arg(kind="aos", c_abi="per_member_soa")`` so
-:func:`emit_call` forwards per-member pointers verbatim (no AoS
-buffer); the inner's ``bind_c_shim`` already receives per-member
-slots, so the two sides agree by construction without an intermediate
-shim.
+Scaling to ``velocity_tendencies``: register each derived-type arg with
+``Arg(kind="aos", c_abi="per_member_soa")`` so :func:`emit_call` forwards per-member
+pointers verbatim -- the inner's ``bind_c_shim`` already receives per-member slots, so
+the two sides agree by construction without an intermediate shim.
 """
 import ctypes
 import shutil
@@ -66,9 +54,8 @@ subroutine inner_axpy(n, a, x, y)
 end subroutine inner_axpy
 """
 
-# Outer (dycore) kernel.  Two pre/post adjustments around the
-# external call so the test exercises a real delta between the outer's
-# own work and the external's, not a trivial passthrough.
+# pre/post adjustments around the external call so this exercises a real delta
+# between the outer's own work and the external's, not a trivial passthrough.
 _OUTER_SRC = """
 subroutine outer_wrapper(n, a, x, y)
   implicit none
@@ -95,9 +82,7 @@ subroutine outer_wrapper(n, a, x, y)
 end subroutine outer_wrapper
 """
 
-# Reference ``bind(c)`` driver around the un-transformed Fortran
-# sources -- same C ABI as the SDFG's ``outer_wrapper_c`` so ``ctypes``
-# drives both identically.
+# same C ABI as the SDFG's outer_wrapper_c so ctypes drives both identically.
 _REF_DRIVER_SRC = """
 subroutine outer_wrapper_c(n, a, x_p, y_p) bind(c, name="outer_wrapper_c")
   use iso_c_binding
@@ -115,11 +100,9 @@ end subroutine outer_wrapper_c
 
 
 def test_dycore_outer_calls_inner_via_sibling_sdfg(tmp_path: Path):
-    """Outer SDFG calls inner SDFG directly via the inner's
-    ``bind_c_shim`` entry.  No hand-written C++ shim -- the outer's
-    generated ``ExternalCall`` body emits ``inner_axpy_c(...)``
-    verbatim, and the link line resolves it from the inner's
-    ``.so``."""
+    """Outer SDFG calls inner SDFG directly via the inner's ``bind_c_shim`` entry -- no
+    hand-written C++ shim; the outer's ``ExternalCall`` body emits ``inner_axpy_c(...)``
+    verbatim and the link line resolves it from the inner's ``.so``."""
     # 1. Build the inner kernel as its own SDFG + bind(c) shim.
     inner_dir = tmp_path / "inner"
     inner_dir.mkdir(parents=True, exist_ok=True)
@@ -129,12 +112,9 @@ def test_dycore_outer_calls_inner_via_sibling_sdfg(tmp_path: Path):
     inner_sdfg = build_sdfg(_INNER_SRC, inner_sdfg_dir, name="inner_axpy", entry="inner_axpy").build()
     inner_sdfg.name = "inner_axpy"
     inner_sdfg.build_folder = str(inner_dir / "dacecache")
-    # Wrapper lib uses a *distinct* basename (``libinner_axpy_wrap.so``)
-    # from the SDFG kernel's ``libinner_axpy.so`` so the dynamic loader
-    # doesn't trip the link-against-self circular DT_NEEDED that an
-    # identical basename produces.  Hand-author the iface so its
-    # ``entry`` stays matched to ``sdfg.name`` regardless of the
-    # wrapper basename (the bindings emit ``__program_<entry>``).
+    # wrapper lib uses a distinct basename from the SDFG kernel's libinner_axpy.so so the
+    # dynamic loader doesn't trip circular DT_NEEDED on an identical basename; iface's
+    # ``entry`` stays matched to ``sdfg.name`` regardless (bindings emit __program_<entry>).
     inner_iface = OriginalInterface(
         entry="inner_axpy",
         args=(
@@ -153,10 +133,8 @@ def test_dycore_outer_calls_inner_via_sibling_sdfg(tmp_path: Path):
     )
     assert inner_lib.bind_c_shim_f90 is not None
 
-    # 2. Register the inner as an external whose ``c_name`` IS the
-    # bind_c_shim symbol -- the outer SDFG's tasklet emits
-    # ``inner_axpy_c(...)`` and the link line resolves it from the
-    # inner's wrapper ``.so`` directly.  No intermediate forwarder.
+    # 2. Register the inner as an external whose c_name IS the bind_c_shim symbol --
+    # the outer's tasklet emits inner_axpy_c(...) resolved from the inner's .so directly.
     keep_external(
         "inner_axpy",
         c_name="inner_axpy_c",
@@ -216,8 +194,7 @@ def test_dycore_outer_calls_inner_via_sibling_sdfg(tmp_path: Path):
     sdfg_so.outer_wrapper_c(n, a, x.ctypes.data, y_sdfg.ctypes.data)
     ref_lib.outer_wrapper_c(n, a, x.ctypes.data, y_ref.ctypes.data)
 
-    # Expected: outer pre (2*y) -> inner (a*x + y) -> outer post (0.5*y)
-    # so final y = 0.5 * (a*x + 2*y_init) = 0.5*a*x + y_init.
+    # outer pre (2*y) -> inner (a*x + y) -> outer post (0.5*y) => 0.5*a*x + y_init.
     expected = 0.5 * a * x + y_init
     np.testing.assert_allclose(y_ref, expected, rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(y_sdfg, y_ref, rtol=1e-12, atol=1e-12)

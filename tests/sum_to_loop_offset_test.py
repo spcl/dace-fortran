@@ -1,9 +1,7 @@
 """Ported from f2dace/dev:tests/fortran/sum_to_loop_offset_test.py.
 
-Exercises the old frontend's offset-normalisation path for SUM
-reductions over array slices.  Under the HLFIR bridge, the same
-expressions are lowered as SUM intrinsic calls with the access
-chain's offsets handled by the standard memlet machinery.
+Exercises SUM reductions over array slices; under the HLFIR bridge these
+lower as SUM intrinsic calls with offsets handled by the memlet machinery.
 """
 
 import numpy as np

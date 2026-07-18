@@ -9,9 +9,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_fortran_frontend_cond_type(tmp_path):
-    """
-    Tests that the Fortran frontend can parse the simplest type declaration and make use of it in a computation.
-    """
+    """Fortran frontend parses a simple type declaration and uses it in a computation."""
     src = """
 module lib
   implicit none

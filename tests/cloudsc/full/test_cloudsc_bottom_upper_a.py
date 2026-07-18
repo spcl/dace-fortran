@@ -1,13 +1,5 @@
-"""Sub-bisection: bottom-UPPER-A (drops 4.5 EVAPORATION section).
-
-After test_cloudsc_bottom_upper.py FAILS with 51/548 PCOVPTOT mismatch,
-this drops the 4.5 EVAPORATION OF RAIN/SNOW section (~330 lines of
-the bottom-upper) and keeps only the Sedimentation (4.2) +
-Autoconversion (4.3a/b) + Melting (4.4a) + Freezing (4.4b/c) sections.
-
-If this passes, the bug is in 4.5 EVAPORATION.
-If it fails, the bug is in 4.2-4.4 (Sedimentation/Autoconv/Melt/Freeze).
-"""
+"""Sub-bisection of test_cloudsc_bottom_upper.py's 51/548 PCOVPTOT mismatch: drops 4.5 EVAPORATION,
+keeps Sedimentation/Autoconv/Melt/Freeze (4.2-4.4). Pass -> bug in 4.5; fail -> bug in 4.2-4.4."""
 from pathlib import Path
 import numpy as np
 import pytest
@@ -27,10 +19,8 @@ def _f2py_a(tmp_path_factory):
         src,
         ref_dir,
         "cloudsc_bottom_upper_a_ref",
-        # ``-ffree-line-length-none`` is the sole intentionally
-        # gfortran-only flag: it is a non-semantic parser necessity for
-        # the long-line cloudsc source; LLVM-flang has no line limit and
-        # needs no equivalent.  The FP set is the flang-portable core.
+        # -ffree-line-length-none is the sole gfortran-only flag (long-line source; flang has no
+        # line limit); the rest of CLOUDSC_F90FLAGS is flang-portable.
         extra_f90flags=CLOUDSC_F90FLAGS,
         only=("cloudscouter", ))
 

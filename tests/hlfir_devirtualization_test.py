@@ -1,33 +1,13 @@
-"""Characterisation tests pinning *why* the ICON-O solver construct/solve
-chain must stay an external call rather than be inlined into the kernel TU.
+"""Characterisation tests pinning *why* the ICON-O solver construct/solve chain must stay
+an external call, not inline into the kernel TU: an SDFG has no node for a runtime dispatch
+through a vtable, so a polymorphic (``CLASS(..)``) TBP call needs flang to resolve it to a
+*direct* call first -- which, against the installed flang, it never does: dispatch on a
+``CLASS`` dummy or on a freshly-``ALLOCATE``d ``CLASS`` local both stay ``fir.dispatch``;
+only a concrete ``TYPE(..)`` call binds directly (monomorphisation is our inliner's job, not
+flang's); ``--fir-polymorphic-op`` lowers ``fir.dispatch`` but never devirtualises it.
 
-The dace-fortran pipeline lowers an inlined Fortran TU through flang to
-HLFIR/FIR and then to a DaCe SDFG.  An SDFG is static dataflow: it has no
-node for a runtime indirect call through a type descriptor's binding table.
-So any Fortran type-bound-procedure (TBP) call dispatched on a *polymorphic*
-(``CLASS(..)``) entity -- ``this%act%solve``, ``this%lhs%apply``,
-``this%trans%into``, or the ``ALLOCATE(concrete :: this%act); this%act%..``
-factory in ``ocean_solve_construct`` -- can only be lowered if flang resolves
-it to a *direct* call first.
-
-These tests demonstrate, against the installed flang, that it does **not**:
-
-  * a dispatch on a ``CLASS`` dummy lowers to ``fir.dispatch`` (runtime vtable);
-  * even a dispatch on a ``CLASS`` local whose concrete type was ``ALLOCATE``d
-    one line above (the construct's factory pattern) stays ``fir.dispatch`` --
-    flang does not propagate the allocated type to the call;
-  * a call on a *concrete* ``TYPE(..)`` entity is the only shape that lowers to
-    a direct ``fir.call`` (this is the escape hatch: source-level
-    monomorphisation, which would have to happen in our inliner, never in flang);
-  * the dedicated FIR pass ``--fir-polymorphic-op`` (even after ``--inline-all``)
-    only *lowers* ``fir.dispatch`` into the explicit runtime vtable-load
-    sequence; it never yields a direct ``fir.call`` to the override.
-
-If a future flang gains real devirtualisation, the ``fir.dispatch`` assertions
-here will start failing -- which is the signal to revisit the externalisation
-policy in ``tests/icon/ocean/_ocean_harness.py`` and let the construct/solve be
-inlined instead.
-"""
+If a future flang changes this, these ``fir.dispatch`` assertions fail -- revisit the
+externalisation policy in ``tests/icon/ocean/_ocean_harness.py``."""
 
 import os
 import shutil
@@ -40,12 +20,10 @@ from _util import _FLANG, have_flang
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
-# A minimal abstract base + one concrete override.  The two *polymorphic* call
-# shapes that matter for the ocean solver are kept in their own TU so that the
-# only way a direct ``fir.call`` to the override could appear is genuine
-# devirtualisation -- there is no concrete-``TYPE`` call to muddy a whole-module
-# grep.  ``run_poly`` is the solve's ``this%lhs%apply`` pattern; ``run_factory``
-# is ``ocean_solve_construct``'s ``ALLOCATE(concrete :: this%act); this%act%..``.
+# Minimal abstract base + one concrete override, kept in its own TU so a direct fir.call to
+# the override could only mean genuine devirtualisation (no concrete-TYPE call to muddy the
+# grep). run_poly = solve's this%lhs%apply pattern; run_factory = construct's
+# ALLOCATE(concrete::this%act); this%act%.. pattern.
 _POLY_PREAMBLE = """
 module m
   type, abstract :: base
@@ -97,10 +75,8 @@ _CONCRETE_SOURCE = _POLY_PREAMBLE + """
 end module
 """
 
-#: the mangled name flang gives the concrete override; a *direct* ``fir.call`` to
-#: it is the unambiguous signature of devirtualisation.  (A ``fir.address_of`` of
-#: this symbol -- loading it into a vtable indirect -- or its ``func.func``
-#: definition / ``fir.dt_entry`` table slot are NOT calls and don't count.)
+#: mangled name of the concrete override; a *direct* fir.call to it is the unambiguous
+#: signature of devirtualisation (fir.address_of / func.func def / fir.dt_entry do NOT count).
 _OVERRIDE_SYMBOL = "_QMmPimpl_apply"
 _DIRECT_CALL = f"fir.call @{_OVERRIDE_SYMBOL}"
 
@@ -121,9 +97,8 @@ def _sibling_tool(*names: str) -> str | None:
 
 
 def _emit_fir(tmp_path: Path, source: str, stem: str, *, optimize: bool) -> str:
-    """Emit FIR (the post-HLFIR level that carries ``fir.dispatch``) for
-    ``source``.  ``optimize`` runs flang's default ``-O2`` pipeline so we cover
-    the optimised path, not just the raw lowering."""
+    """Emit FIR (the post-HLFIR level carrying ``fir.dispatch``) for ``source``.
+    ``optimize`` runs flang's default ``-O2`` pipeline to cover the optimised path too."""
     src = tmp_path / f"{stem}.f90"
     src.write_text(source)
     out = tmp_path / f"{stem}{'_O2' if optimize else ''}.fir"
@@ -136,11 +111,9 @@ def _emit_fir(tmp_path: Path, source: str, stem: str, *, optimize: bool) -> str:
 
 
 def test_polymorphic_dispatch_lowers_to_fir_dispatch(tmp_path: Path):
-    """The two polymorphic shapes -- a TBP call on an abstract ``CLASS`` dummy
-    (``run_poly``, the solve's ``this%lhs%apply``) and on a ``CLASS`` local whose
-    concrete type was ``ALLOCATE``d one line above (``run_factory``, the
-    construct's factory) -- both lower to ``fir.dispatch`` (a runtime vtable
-    lookup), and neither yields a direct call to the override."""
+    """Both polymorphic shapes -- TBP call on an abstract ``CLASS`` dummy (``run_poly``)
+    and on a freshly-``ALLOCATE``d ``CLASS`` local (``run_factory``) -- lower to
+    ``fir.dispatch``; neither yields a direct call to the override."""
     fir = _emit_fir(tmp_path, _POLY_SOURCE, "poly", optimize=False)
     # one fir.dispatch per polymorphic call site, none devirtualised.
     assert fir.count("fir.dispatch") == 2, "expected both polymorphic calls to lower to fir.dispatch"
@@ -149,30 +122,26 @@ def test_polymorphic_dispatch_lowers_to_fir_dispatch(tmp_path: Path):
 
 
 def test_concrete_type_call_is_a_direct_bind(tmp_path: Path):
-    """Contrast / escape hatch: a TBP call on a *concrete* ``TYPE`` entity is a
-    static bind -- a direct ``fir.call`` to the override, with no dispatch.  This
-    is the only shape that avoids dispatch, and reaching it requires source-level
-    monomorphisation (our inliner's job), not anything flang does."""
+    """Escape hatch: a TBP call on a *concrete* ``TYPE`` entity is a static bind -- a direct
+    ``fir.call``, no dispatch. Reaching it requires source-level monomorphisation (our
+    inliner's job), not anything flang does."""
     fir = _emit_fir(tmp_path, _CONCRETE_SOURCE, "concrete", optimize=False)
     assert _DIRECT_CALL in fir, "expected concrete TYPE call to bind directly to the override"
     assert "fir.dispatch" not in fir
 
 
 def test_optimised_pipeline_keeps_dispatch(tmp_path: Path):
-    """flang's default ``-O2`` pipeline (which includes ``--fir-polymorphic-op``
-    and inlining) does not turn either polymorphic shape into a direct call to
-    the override -- the dispatch survives as a runtime vtable indirect."""
+    """flang's default ``-O2`` pipeline (incl. ``--fir-polymorphic-op`` + inlining) does not
+    turn either polymorphic shape into a direct call -- dispatch survives as a vtable indirect."""
     fir = _emit_fir(tmp_path, _POLY_SOURCE, "poly", optimize=True)
     assert _DIRECT_CALL not in fir, ("an -O2 pass devirtualised the polymorphic call -- flang behaviour "
                                      "changed; revisit the ocean solver externalisation policy")
 
 
 def test_fir_polymorphic_op_lowers_dispatch_without_devirtualising(tmp_path: Path):
-    """``--fir-polymorphic-op`` (even preceded by ``--inline-all``) eliminates
-    the ``fir.dispatch`` op, but only by expanding it into the explicit runtime
-    vtable-load sequence (``fir.address_of`` the override -> indirect call); it
-    never produces a direct ``fir.call`` to the override.  This is *lowering*,
-    not devirtualisation."""
+    """``--fir-polymorphic-op`` eliminates ``fir.dispatch`` but only by expanding it into
+    the explicit vtable-load sequence (``fir.address_of`` -> indirect call) -- never a
+    direct ``fir.call``. This is *lowering*, not devirtualisation."""
     fir_opt = _sibling_tool("fir-opt-21", "fir-opt")
     if fir_opt is None:
         pytest.skip("fir-opt not available alongside flang")

@@ -1,19 +1,13 @@
 # Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
-"""Tests for two robustness features of the fparser single-TU inliner that
-let it ingest *real* ICON sources (rather than only cpp-clean fixtures):
+"""Tests two robustness features of the fparser single-TU inliner needed to ingest
+*real* ICON sources (not just cpp-clean fixtures):
 
-1. ``expand_cpp=True`` -- run the C preprocessor (via ``flang -cpp -E -P``)
-   over each source before fparser parses it, so cpp ``#include`` directives
-   and ``#define`` macros (ICON declares its derived-type members through the
-   DSL macro headers) are expanded into pure Fortran.  Without it fparser
-   raises on the first ``#include``.
-
-2. ``tolerate_external_uses=True`` -- do not hard-fail when a module ``USE``s
-   an external library that has no Fortran source on the search path (ICON:
-   ``netcdf`` / ``mpi`` / ``cdi``).  The import is left unresolved and the
-   reachability pruning drops the (unused) procedures that referenced it.
-   This is the mechanism that lets a kernel whose enclosing module ``USE
-   netcdf`` inline cleanly as long as the kernel itself does not call netcdf.
+1. ``expand_cpp=True`` -- runs the C preprocessor first so ``#include``/``#define``
+   (ICON's DSL macro headers) expand to pure Fortran; without it fparser raises on
+   the first ``#include``.
+2. ``tolerate_external_uses=True`` -- doesn't hard-fail on a ``USE`` of an external
+   library with no source on the search path (netcdf/mpi/cdi); the import is left
+   unresolved and reachability pruning drops procedures that referenced it.
 """
 import shutil
 import subprocess
@@ -73,9 +67,8 @@ end module mo_thing
 
 
 def test_external_use_unreached_is_pruned():
-    """A module ``USE``s netcdf but the requested entry never calls it: with
-    tolerance on, the netcdf-touching procedure (and the dangling import) are
-    pruned, leaving a self-contained TU."""
+    """Module USEs netcdf but the entry never calls it: with tolerance on, the
+    netcdf-touching procedure (and dangling import) are pruned, leaving a self-contained TU."""
     out = inline_to_ast({
         "mo_thing.f90": _NETCDF_USER
     }, entry="mo_thing::kernel_add", tolerate_external_uses=True).tofortran().lower()
@@ -86,15 +79,14 @@ def test_external_use_unreached_is_pruned():
 
 
 def test_external_use_default_strict_still_asserts():
-    """Default (tolerance off) keeps the strict resolution the upstream
-    desugaring relies on: an unresolved external ``USE`` is a hard error."""
+    """Default (tolerance off): an unresolved external USE is a hard error."""
     with pytest.raises(AssertionError):
         inline_to_ast({"mo_thing.f90": _NETCDF_USER}, entry="mo_thing::kernel_add")
 
 
 def test_external_use_reached_does_not_crash():
-    """When the entry *does* reach the external call, tolerance keeps it
-    rather than crashing (the call survives as an unresolved external)."""
+    """Entry reaches the external call: tolerance keeps it rather than crashing
+    (survives as unresolved external)."""
     out = inline_to_ast({
         "mo_thing.f90": _NETCDF_USER
     }, entry="mo_thing::writes_netcdf", tolerate_external_uses=True).tofortran().lower()
@@ -111,8 +103,8 @@ pytestmark_flang = pytest.mark.skipif(not _have_flang(), reason="flang-new-21 no
 
 @pytestmark_flang
 def test_cpp_expand_sources_resolves_include_and_macro(tmp_path):
-    """``cpp_expand_sources`` expands a cpp ``#include`` + ``#define`` macro
-    into pure Fortran (no ``#`` directives left)."""
+    """``cpp_expand_sources`` expands a cpp #include + #define macro into pure
+    Fortran (no # directives left)."""
     (tmp_path / "defs.inc").write_text("#define WP 8\n")
     src = '#include "defs.inc"\n' \
           "module mo_kindy\n  real(WP) :: x\nend module mo_kindy\n"
@@ -125,8 +117,8 @@ def test_cpp_expand_sources_resolves_include_and_macro(tmp_path):
 
 @pytestmark_flang
 def test_inline_with_cpp_include(tmp_path):
-    """End-to-end: a source carrying a cpp ``#include`` inlines once
-    ``expand_cpp=True`` resolves it (it would raise otherwise)."""
+    """End-to-end: a source with a cpp #include inlines once expand_cpp=True
+    resolves it (would raise otherwise)."""
     (tmp_path / "kinds.inc").write_text("#define WP 8\n")
     src = '#include "kinds.inc"\n' + """
 module mo_calc
@@ -148,18 +140,15 @@ end module mo_calc
     text = out.read_text().lower().replace(" ", "")
     assert "scaled" in text
     assert "#include" not in text
-    # WP -> 8 from the cpp macro; the inliner canonicalises real(8) to
-    # real(kind=8).
+    # WP->8 from the cpp macro; inliner canonicalises real(8) to real(kind=8)
     assert "real(kind=8)" in text or "real(8)" in text
 
 
 # ---------------------------------------------------------------------------
-# NAMELIST -- a supported construct (its read is an I/O node, a namelist
-# variable is an ordinary variable).  Both merge engines must handle a
-# namelist-bearing module; the fparser engine additionally prunes a
-# namelist's dropped variables consistently (ICON's mo_ocean_nml declares
-# hundreds of config variables across ~15 namelist groups, of which a kernel
-# uses only a few).
+# NAMELIST: a namelist read is an I/O node, its variables ordinary variables.
+# Both merge engines must handle it; fparser additionally prunes dropped
+# variables consistently (ICON's mo_ocean_nml: ~15 groups, hundreds of vars,
+# a kernel uses only a few).
 # ---------------------------------------------------------------------------
 
 _NAMELIST_MODULE = """
@@ -179,10 +168,8 @@ end module mo_cfg
 
 
 def test_namelist_fparser_prunes_consistently():
-    """The fparser engine keeps the namelist for the variable the kernel uses
-    (``n_zlev``), prunes the unused namelist variables from both their
-    declaration and the namelist object list, and drops an all-pruned group --
-    so the TU never names an undeclared variable."""
+    """fparser keeps the namelist for the used variable (n_zlev), prunes unused
+    variables from both declaration and namelist list, and drops an all-pruned group."""
     txt = inline_to_ast({
         "mo_cfg.f90": _NAMELIST_MODULE
     }, entry="mo_cfg::uses_one").tofortran().lower().replace("  ", " ")
@@ -195,15 +182,13 @@ def test_namelist_fparser_prunes_consistently():
 
 @pytest.mark.skipif(not _have_gfortran(), reason="gfortran not on PATH")
 def test_namelist_both_engines_compile(tmp_path):
-    """Both merge engines turn a namelist-bearing module into compilable
-    Fortran: the regex engine keeps the whole module (every variable still
-    declared); the fparser engine keeps a consistent, pruned namelist."""
+    """Both engines produce compilable Fortran: regex keeps the whole module
+    (every var declared); fparser keeps a consistent, pruned namelist."""
     # regex engine: whole-module passthrough keeps namelist + every variable.
     merged = merge_used_modules(_NAMELIST_MODULE)
     assert "namelist" in merged.lower()
     assert _gfortran_compiles(merged), "regex-merged namelist module must compile"
 
-    # fparser engine: pruned, but the surviving namelist references only
-    # declared variables, so it still compiles.
+    # fparser engine: pruned, but the surviving namelist references only declared vars, so it still compiles
     tu = inline_to_single_tu({"mo_cfg.f90": _NAMELIST_MODULE}, entry="mo_cfg::uses_one", out_dir=tmp_path, name="cfg")
     assert _gfortran_compiles(tu.read_text()), "fparser-pruned namelist TU must compile"

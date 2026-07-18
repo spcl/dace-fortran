@@ -1,20 +1,9 @@
 # Copyright 2019-2025 ETH Zurich and the DaCe authors. All rights reserved.
-"""
-This module implements the "desugaring" passes for the Fortran AST. Desugaring is
-the process of translating higher-level, more complex, or "syntactic sugar"
-constructs into simpler, more fundamental language constructs.
-
-The passes in this module handle various Fortran features, such as:
-- `ENUM`: Converted to constant integer variables.
-- `INTERFACE`: Generic function calls are resolved to their specific implementations.
-- Type-bound procedures: Calls are deconstructed into regular subroutine/function calls.
-- `ASSOCIATE`: Replaced with direct variable references.
-- `DATA` statements: Converted into standard assignment statements.
-- Statement functions: Transformed into full internal function definitions.
-- `GOTO`: Converted into structured control flow where possible.
-
-The goal is to produce a simplified AST that is easier to analyze and from which
-DaCe SDFGs can be generated.
+"""Desugaring passes for the Fortran AST: rewrite high-level/syntactic-sugar
+constructs into simpler, equivalent ones an SDFG can be built from --
+`ENUM`->constants, `INTERFACE`/type-bound calls->direct calls, `ASSOCIATE`
+substitution, `DATA`->assignments, statement functions->internal functions,
+`GOTO`->structured control flow.
 """
 import sys
 from typing import Tuple, Dict, List, Set, Union
@@ -35,21 +24,11 @@ INTERFACE_NAMESPACE = '__interface__'
 
 
 def deconstruct_enums(ast: f03.Program) -> f03.Program:
-    """
-    Replaces `ENUM` definitions with `INTEGER, PARAMETER` declarations.
-
-    This pass finds all `Enum_Def` nodes in the AST. For each enum, it iterates
-    through its enumerators, assigning them consecutive integer values (starting
-    from 0, unless explicitly specified). It then replaces the `Enum_Def` node
-    with a list of `Type_Declaration_Stmt` nodes that declare each enumerator
-    as a named constant (`INTEGER, PARAMETER`).
-
-    :param ast: The Fortran AST to modify.
-    :return: The modified Fortran AST.
-    """
+    """Replaces `ENUM` definitions with `INTEGER, PARAMETER` declarations, assigning
+    consecutive values (from 0, unless explicit) to each enumerator."""
     for en in walk(ast, f03.Enum_Def):
         en_dict: Dict[str, f03.Expr] = {}
-        # We need to for automatic counting.
+        # Tracks the running value for automatic counting.
         next_val = '0'
         next_offset = 0
         for el in walk(en, f03.Enumerator_List):
@@ -70,32 +49,12 @@ def deconstruct_enums(ast: f03.Program) -> f03.Program:
 
 
 def deconstruct_interface_calls(ast: f03.Program) -> f03.Program:
-    """
-    Resolves calls to generic interfaces into direct calls to concrete subprograms.
-
-    Fortran interfaces allow defining a generic procedure name that can map to
-    different specific procedures based on the arguments provided. This pass
-    replaces these generic calls with direct calls to the appropriate concrete
-    subprogram.
-
-    The process is as follows:
-    1.  It identifies all call sites (`Function_Reference`, `Call_Stmt`) that
-        refer to an interface.
-    2.  For each call, it computes the type signature of the arguments.
-    3.  It compares this signature against the signatures of all concrete
-        subprograms associated with the interface.
-    4.  Once a match is found, the generic procedure name at the call site is
-        replaced with the name of the matched concrete subprogram.
-    5.  `USE` statements are added as needed to import the concrete subprogram
-        into the calling scope.
-    6.  Unused interfaces are pruned from the AST.
-
-    :param ast: The Fortran AST to modify.
-    :return: The modified Fortran AST.
-    """
+    """Resolves calls to generic interfaces into direct calls to the matching
+    concrete subprogram, by comparing argument type signatures; adds `USE`
+    statements as needed and prunes now-unused interfaces."""
     SUFFIX, COUNTER = 'deconiface', 0
 
-    # We need to temporarily rename the interface imports to avoid shadowing the implementation.
+    # Temporarily rename interface imports to avoid shadowing the implementation.
     alias_map = analysis.alias_specs(ast)
     for olist in walk(ast, f03.Only_List):
         use = olist.parent
@@ -143,14 +102,13 @@ def deconstruct_interface_calls(ast: f03.Program) -> f03.Program:
             continue
         assert fref_spec in alias_map, f"cannot find: {fref_spec}"
         if fref_spec not in iface_map:
-            # We are only interested in calls to interfaces here.
+            # Only interested in calls to interfaces.
             continue
         if not iface_map[fref_spec]:
-            # We cannot resolve this one, because there is no candidate.
             print(f"{fref_spec} does not have any candidate to resolve to; moving on", file=sys.stderr)
             continue
 
-        # Find the nearest execution and its correpsonding specification parts.
+        # Find the enclosing execution + specification parts.
         execution_part = fref.parent
         while not isinstance(execution_part, f03.Execution_Part):
             execution_part = execution_part.parent
@@ -167,7 +125,7 @@ def deconstruct_interface_calls(ast: f03.Program) -> f03.Program:
             cand_stmt = alias_map[cand]
             assert isinstance(cand_stmt, (f03.Function_Stmt, f03.Subroutine_Stmt))
 
-            # However, this candidate could be inside an interface block, and this be just another level of indirection.
+            # Candidate may itself be inside an interface block -- one more level of indirection to resolve.
             cand_spec = cand
             if isinstance(cand_stmt.parent.parent, f03.Interface_Block):
                 cand_spec = analysis.find_real_ident_spec(cand_spec[-1], cand_spec[:-2], alias_map)
@@ -192,7 +150,7 @@ def deconstruct_interface_calls(ast: f03.Program) -> f03.Program:
                 print(f"...> {c}", file=sys.stderr)
             continue
 
-        # We are assumping that it's either a toplevel subprogram or a subprogram defined directly inside a module.
+        # Assumes a toplevel subprogram or one defined directly inside a module.
         assert 1 <= len(conc_spec) <= 2
         if len(conc_spec) == 1:
             mod, pname = None, conc_spec[0]
@@ -200,11 +158,10 @@ def deconstruct_interface_calls(ast: f03.Program) -> f03.Program:
             mod, pname = conc_spec
 
         if mod is None or mod == scope_spec[0]:
-            # Since `pname` must have been already defined at either the top level or the module level, there is no need
-            # for aliasing.
+            # Already visible at top level or in the current module -- no alias needed.
             pname_alias = pname
         else:
-            # If we are importing it from a different module, we should create an alias to avoid name collision.
+            # Importing from a different module -- alias to avoid a name collision.
             pname_alias, COUNTER = f"{pname}_{SUFFIX}_{COUNTER}", COUNTER + 1
             if not specification_part:
                 utils.append_children(subprog,
@@ -212,7 +169,7 @@ def deconstruct_interface_calls(ast: f03.Program) -> f03.Program:
             else:
                 utils.prepend_children(specification_part, f03.Use_Stmt(f"use {mod}, only: {pname_alias} => {pname}"))
 
-        # For both function and subroutine calls, replace `bname` with `pname_alias`, and add `dref` as the first arg.
+        # Replace the generic name at the call site with the resolved concrete name.
         utils.replace_node(name, f03.Name(pname_alias))
 
     for ui in unused_ifaces:
@@ -221,14 +178,9 @@ def deconstruct_interface_calls(ast: f03.Program) -> f03.Program:
                                                                            f03.Interface_Block)
         utils.remove_self(alias_map[ui].parent)
 
-    # Revert any temporary ``<name>_deconiface_tmp`` rename whose generic interface
-    # could NOT be resolved to a specific -- an unresolvable external generic (the
-    # ``iso_c_binding`` stub's empty ``c_loc``), or one whose signature matcher
-    # failed (a keyword-argument call to ICON's ``smooth_oncells``).  A resolved
-    # call already had its name replaced by the specific above, so only the
-    # unresolved temporaries remain; restoring the original generic name keeps
-    # valid Fortran (the generic + call compile / stay external) instead of an
-    # undefined ``_tmp`` symbol.
+    # Revert any temporary `<name>_deconiface_tmp` rename whose generic could NOT be resolved
+    # (unresolvable external generic, e.g. iso_c_binding's empty c_loc; or a failed signature
+    # match, e.g. a keyword-arg call to ICON's smooth_oncells) -- else an undefined _tmp symbol remains.
     tmp_suffix = f"_{SUFFIX}_tmp"
     for nm in list(walk(ast, f03.Name)):
         if not nm.string.endswith(tmp_suffix):
@@ -245,28 +197,9 @@ def deconstruct_interface_calls(ast: f03.Program) -> f03.Program:
 
 
 def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
-    """
-    Resolves calls to type-bound procedures into standard subprogram calls.
-
-    This pass handles calls to procedures that are bound to a derived type, similar
-    to method calls in object-oriented programming (e.g., `my_obj%method(args)`).
-    It transforms these into regular, direct function or subroutine calls.
-
-    The transformation involves:
-    1.  Identifying all `Procedure_Designator` nodes, which represent type-bound
-        procedure calls.
-    2.  Resolving the procedure name based on the type of the object it's called on.
-        This may involve matching against generic procedure bindings.
-    3.  Replacing the `Procedure_Designator` call with a standard `Function_Reference`
-        or `Call_Stmt`.
-    4.  The object itself (e.g., `my_obj`) is passed as the new first argument to the
-        concrete subprogram.
-    5.  `USE` statements are added as needed to import the concrete subprogram.
-    6.  The now-unused `Type_Bound_Procedure_Part` definitions are removed from the AST.
-
-    :param ast: The Fortran AST to modify.
-    :return: The modified Fortran AST.
-    """
+    """Resolves type-bound procedure calls (`my_obj%method(args)`) into direct
+    subprogram calls, passing the object as the new first argument; adds `USE`
+    statements as needed and drops the now-unused `Type_Bound_Procedure_Part`."""
     SUFFIX, COUNTER = 'deconproc', 0
 
     alias_map = analysis.alias_specs(ast)
@@ -295,7 +228,7 @@ def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
             stmt = ast_utils.singular(ast_utils.children_of_type(subp[0], f03.Subroutine_Stmt))
             cmod = ast_utils.singular(ast_utils.children_of_type(stmt, f03.Name)).string.lower()
 
-        # Find the nearest execution and its correpsonding specification parts.
+        # Find the enclosing execution + specification parts.
         execution_part = callsite.parent
         while not isinstance(execution_part, f03.Execution_Part):
             execution_part = execution_part.parent
@@ -311,26 +244,19 @@ def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
         all_cand_sigs: List[Tuple[types.SPEC, Tuple[types.TYPE_SPEC, ...]]] = []
 
         bspec = dref_type.spec + (bname.string, )
-        # A type-bound procedure inherited via ``EXTENDS`` is registered (by the
-        # alias map) under the child type, but proc_map/genc_map key bindings by
-        # the type that physically declares them.  Remap an inherited binding
-        # spec back to the base binding's own spec so the concrete-procedure
-        # lookup resolves it (a child that overrides the binding keeps its own,
-        # because then ``bspec`` is already in proc_map/genc_map).
+        # A binding inherited via EXTENDS is keyed under the child type in alias_map, but
+        # proc_map/genc_map key by the type that declares it -- remap to the base binding's
+        # spec so lookup resolves (an override keeps its own key, already in proc_map/genc_map).
         if bspec not in proc_map and bspec not in genc_map and bspec in alias_map:
             inherited = alias_map[bspec]
             if isinstance(inherited, (f03.Specific_Binding, f03.Generic_Binding)):
                 bspec = analysis.ident_spec(inherited)
         if bspec in genc_map and genc_map[bspec]:
             for cand in genc_map[bspec]:
-                # A generic's specific candidate is registered on the type that
-                # DECLARES the generic -- an abstract base, where the specific may
-                # be DEFERRED (no concrete procedure, absent from ``proc_map``).
-                # Resolve it on the CONCRETE receiver, which overrides it: after a
-                # monomorphize ladder the receiver is a per-arm concrete type
-                # (``this%trans__t_trivial_transfer%into``), so remap
-                # ``(base, spec)`` -> ``(receiver, spec)`` and walk inheritance
-                # (as ``bspec`` above) to the binding that names a real procedure.
+                # A generic's candidate is registered on the DECLARING type (an abstract base,
+                # where it may be DEFERRED/absent from proc_map) -- resolve on the CONCRETE
+                # receiver instead (e.g. after a monomorphize ladder,
+                # `this%trans__t_trivial_transfer%into`), remapping (base,spec)->(receiver,spec).
                 rcand = dref_type.spec + (cand[-1], )
                 if rcand not in proc_map and rcand in alias_map:
                     inherited_spec = alias_map[rcand]
@@ -338,11 +264,8 @@ def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
                         rcand = analysis.ident_spec(inherited_spec)
                 if rcand in proc_map:
                     cand = rcand
-                # An external type-bound procedure candidate -- its concrete
-                # target has no Fortran source (e.g. ICON's MPI halo
-                # ``%exchange_data`` -> ``exchange_data_4de1_dp``).  Skip it
-                # when tolerating externals; if none of the candidates resolve
-                # the call is left for pruning to drop.
+                # External TBP candidate with no Fortran source (e.g. ICON's MPI halo
+                # `%exchange_data` -> `exchange_data_4de1_dp`) -- skip under tolerance; leave for pruning.
                 if analysis.TOLERATE_EXTERNAL_USES and proc_map.get(cand) not in alias_map:
                     continue
                 cand_stmt = alias_map[proc_map[cand]]
@@ -360,31 +283,27 @@ def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
                     bspec = cand
                     break
         if bspec not in proc_map:
-            # The type-bound call did not resolve to any concrete procedure with
-            # source.  When tolerating externals, leave the call untouched for
-            # reachability pruning to drop (it lives in a stubbed/unreachable
-            # wrapper, e.g. the halo-exchange path).
+            # No concrete procedure with source -- under tolerance leave for pruning
+            # (a stubbed/unreachable wrapper, e.g. the halo-exchange path).
             if analysis.TOLERATE_EXTERNAL_USES:
                 continue
             cand_dump = "".join(f"\n...> {c}" for c in all_cand_sigs)
             raise AssertionError(f"[in mod: {cmod}/{callsite}] {bspec} not found for {args_sig}{cand_dump}")
         pname = proc_map[bspec]
-        # A specific binding may name a concrete procedure that itself has no
-        # source (an external such as the MPI halo primitive).  Mirror the
-        # generic-candidate guard above and drop it for pruning rather than
-        # emitting a ``use`` of a missing symbol that would fail to compile.
+        # Mirrors the generic-candidate guard above: a specific binding may name a sourceless
+        # external (e.g. the MPI halo primitive) -- drop it rather than emit a use of a missing symbol.
         if analysis.TOLERATE_EXTERNAL_USES and pname not in alias_map:
             continue
 
-        # We are assumping that it's a subprogram defined directly inside a module.
+        # Assumes a subprogram defined directly inside a module.
         assert len(pname) == 2
         mod, pname = pname
 
         if mod == cmod:
-            # Since `pname` must have been already defined at the module level, there is no need for aliasing.
+            # Already visible at the module level -- no alias needed.
             pname_alias = pname
         else:
-            # If we are importing it from a different module, we should create an alias to avoid name collision.
+            # Importing from a different module -- alias to avoid a name collision.
             pname_alias, COUNTER = f"{pname}_{SUFFIX}_{COUNTER}", COUNTER + 1
             if not specification_part:
                 utils.append_children(subprog,
@@ -392,7 +311,7 @@ def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
             else:
                 utils.prepend_children(specification_part, f03.Use_Stmt(f"use {mod}, only: {pname_alias} => {pname}"))
 
-        # For both function and subroutine calls, replace `bname` with `pname_alias`, and add `dref` as the first arg.
+        # Replace bname with pname_alias and pass dref as the first argument.
         _, args = callsite.children
         if args is None:
             args = f03.Actual_Arg_Spec_List(f"{dref}")
@@ -406,22 +325,8 @@ def deconstruct_procedure_calls(ast: f03.Program) -> f03.Program:
 
 
 def deconstruct_associations(ast: f03.Program) -> f03.Program:
-    """
-    Eliminates `ASSOCIATE` constructs by substituting the associated names.
-
-    The `ASSOCIATE` construct in Fortran provides a way to create a short-hand
-    alias for a complex variable expression (e.g., `ASSOCIATE (x => a%b(i)%c)`).
-    This pass removes these constructs by directly substituting the original
-    complex expression wherever the alias is used within the associate block.
-
-    For each `Associate_Construct`, it traverses the code inside the block and
-    replaces all occurrences of the associated name (e.g., `x`) with a copy of
-    the full target expression (e.g., `a%b(i)%c`). The `Associate_Construct`
-    node is then replaced by the modified block of code.
-
-    :param ast: The Fortran AST to modify.
-    :return: The modified Fortran AST.
-    """
+    """Eliminates `ASSOCIATE` constructs (`ASSOCIATE (x => a%b(i)%c)`) by substituting
+    the alias with a copy of its target expression everywhere in the block."""
     for assoc in walk(ast, f03.Associate_Construct):
         # TODO: Add ref.
         stmt, rest, _ = assoc.children[0], assoc.children[1:-1], assoc.children[-1]
@@ -447,7 +352,7 @@ def deconstruct_associations(ast: f03.Program) -> f03.Program:
                     repl = local_map[root.string]
                     repl = type(repl)(repl.tofortran())
                     utils.set_children(dr, (repl, *dr_rest))
-            # # Replace the part-ref roots as appropriate.
+            # Replace the part-ref roots as appropriate.
             for pr in walk(node, f03.Part_Ref):
                 if isinstance(pr.parent, (f03.Data_Ref, f03.Part_Ref)):
                     continue
@@ -461,11 +366,9 @@ def deconstruct_associations(ast: f03.Program) -> f03.Program:
                         while isinstance(access, (f03.Data_Ref, f03.Part_Ref)):
                             access = access.children[-1]
                         if isinstance(access, f03.Section_Subscript_List):
-                            # The use indexes only the *sectioned* (``:`` triplet)
-                            # dimensions of the selector; any fixed-index
-                            # dimensions (e.g. the ``1`` in ``s%sides(:, 1)``) are
-                            # kept as-is.  Map each use subscript onto the next
-                            # triplet position of the selector, in order.
+                            # Use indexes only the *sectioned* (`:`) dims of the selector; fixed-index
+                            # dims (e.g. the `1` in `s%sides(:, 1)`) stay as-is. Map each use subscript
+                            # onto the next triplet position of the selector, in order.
                             triplet_positions = [
                                 i for i, a in enumerate(access.children) if isinstance(a, f03.Subscript_Triplet)
                             ]
@@ -477,11 +380,8 @@ def deconstruct_associations(ast: f03.Program) -> f03.Program:
                                 i = triplet_positions[use_idx]
                                 access_child_triplet = access.children[i]
                                 if not isinstance(c, f03.Subscript_Triplet):
-                                    # A scalar index into the section -- a Name, an
-                                    # integer literal, or any expression.  Replace
-                                    # the section's triplet (low:high:stride) with a
-                                    # single index (offset by the section's low bound
-                                    # when it has one).
+                                    # Scalar index into the section -- replace the triplet
+                                    # (low:high:stride) with a single index, offset by the low bound if any.
                                     low_expr = access_child_triplet.children[0]
                                     if low_expr:
                                         new_access_index = f03.Expr(f"{low_expr.tostr()}+({c.tostr()})")
@@ -489,8 +389,7 @@ def deconstruct_associations(ast: f03.Program) -> f03.Program:
                                         new_access_index = f03.Expr(c.tostr())
                                     utils.replace_node(access.children[i], new_access_index)
                                 elif isinstance(c, f03.Subscript_Triplet):
-                                    # Combine the two subscript triplets (low:high:stride)
-                                    # We only perform combinations if the subscript in `rest` is not None.
+                                    # Combine the two subscript triplets (low:high:stride), where present.
 
                                     # Combine low
                                     low_expr = access_child_triplet.children[0]
@@ -552,23 +451,8 @@ def deconstruct_associations(ast: f03.Program) -> f03.Program:
 
 
 def convert_data_statements_into_assignments(ast: f03.Program) -> f03.Program:
-    """
-    Converts `DATA` statements into standard `Assignment_Stmt` nodes.
-
-    The `DATA` statement in Fortran is a way to initialize variables at compile
-    time. This pass transforms these static initializations into explicit
-    assignment statements that are executed at the beginning of the subprogram.
-
-    For each `Data_Stmt`, it iterates through the variable-value pairs. It then
-    creates a corresponding `Assignment_Stmt` for each pair (e.g., `DATA x / 1 /`
-    becomes `x = 1`) and prepends these new assignment statements to the
-    execution part of the enclosing scope. The original `Data_Stmt` is then removed.
-
-    This pass helps to make all initializations explicit and executable.
-
-    :param ast: The Fortran AST to modify.
-    :return: The modified Fortran AST.
-    """
+    """Converts `DATA` statements (compile-time var init) into `Assignment_Stmt`s
+    prepended to the enclosing scope's execution part (e.g. `DATA x / 1 /` -> `x = 1`)."""
     # TODO: Data statements have unusual syntax even within Fortran and not everything is covered here yet.
     alias_map = analysis.alias_specs(ast)
 
@@ -614,7 +498,7 @@ def convert_data_statements_into_assignments(ast: f03.Program) -> f03.Program:
                         repls.append(f03.Assignment_Stmt(f"{k.string} = {elem.tofortran()}"))
             utils.remove_self(dst)
             if not xpart:
-                # NOTE: Since the function does nothing at all (hence, no execution part), don't bother with the inits.
+                # NOTE: no execution part (empty function) -- nothing to init.
                 continue
             utils.prepend_children(xpart, repls)
 
@@ -622,32 +506,9 @@ def convert_data_statements_into_assignments(ast: f03.Program) -> f03.Program:
 
 
 def deconstruct_statement_functions(ast: f03.Program) -> f03.Program:
-    """
-    Transforms single-line statement functions into full internal subprograms.
-
-    Statement functions are single-line functions defined within the
-specification
-    part of a subprogram (e.g., f(x) = x * x). This pass converts them into
-    regular, multi-line INTERNAL or MODULE functions.
-
-    The process involves:
-     1. Identifying all Stmt_Function_Stmt nodes.
-     2. Creating a new Function_Subprogram node for each one.
-     3. The body of the new function becomes an assignment to the function's name
-        (e.g., f = x * x).
-     4. Arguments are explicitly declared. Variables from the outer scope that are
-        used in the statement function are "carried over" and passed as additional
-        arguments to the new function and at all its call sites.
-     5. The new function is placed in the Internal_Subprogram_Part or
-        Module_Subprogram_Part of the enclosing scope.
-     6. The original Stmt_Function_Stmt is removed.
-
-    This regularizes the AST by making all functions conform to the same
-structure.
-
-    :param ast: The Fortran AST to modify.
-    :return: The modified Fortran AST.
-    """
+    """Transforms single-line statement functions (`f(x) = x * x`) into full
+    internal/module functions. Outer-scope variables used in the body are
+    "carried over" as extra arguments, threaded through at all call sites."""
     alias_map = analysis.alias_specs(ast)
     all_stmt_fns: Set[types.SPEC] = {
         analysis.find_scope_spec(sf) + (sf.children[0].string, )
@@ -684,12 +545,9 @@ structure.
             if not isinstance(decl, f03.Entity_Decl):
                 continue
             entity_type = analysis.find_type_of_entity(decl, alias_map)
-            # A PARAMETER constant referenced in the statement-function body (a
-            # kind parameter used as ``REAL(KIND=JPRL)`` / in a ``_JPRL`` literal
-            # suffix, or a physical constant) is host-associated into the new
-            # internal function -- never a runtime dummy.  A kind specifier MUST
-            # be a constant, so carrying it as an ``INTEGER, INTENT(IN)`` dummy
-            # produces an invalid ``REAL(KIND=<dummy>)`` the compiler rejects.
+            # A PARAMETER (kind param like JPRL, or a physical const) is host-associated into
+            # the new function, never a runtime dummy -- a kind specifier MUST be a constant,
+            # so carrying it as an INTEGER dummy would produce an invalid REAL(KIND=<dummy>).
             if entity_type.const:
                 continue
             tdecl = decl.parent.parent
@@ -751,26 +609,15 @@ end function {fn}
 
 
 def deconstruct_goto_statements(ast: f03.Program) -> f03.Program:
-    """
-    Attempts to convert `GOTO` statements into structured `IF` or `DO WHILE` construct(s).
+    """Converts `GOTO`s into structured `IF`/`DO WHILE` constructs, classifying each
+    as forward/backward and deconstructing with the matching helper.
 
-    All `GOTO`-target pairs are first collated and classified as forward or backward jumps. Each
-    jump is then deconstructed individually by the corresponding forward/backward helper function.
-
-    NOTE: The order in which `GOTO`s are deconstructed affects correctness. All backward `GOTO`s
-    should be deconstructed before forward `GOTO`s. Backward `GOTO`s should also be processed in
-    descending order of the line number of the `GOTO` statement.
-    (This ordering ensures correct control flow due to the addition of `DO WHILE` loop constructs
-    in backward `GOTO` deconstruction.)
-
-    NOTE: Only GOTOs in the subtree from parent of target are currently implemented.
-    TODO: Support complex nesting.
-
-    :param ast: The Fortran AST to modify.
-    :return: The modified Fortran AST.
-    """
+    Ordering matters: all backward `GOTO`s must be deconstructed before forward ones,
+    and in descending line-number order (each adds a `DO WHILE` that must nest correctly).
+    Only `GOTO`s in the subtree from the target's parent are supported.
+    TODO: complex nesting."""
     for node in walk(ast, Base):
-        # Move any label on a non-continue statement onto one (except for format statement which require one).
+        # Move a label off a non-continue statement onto one (formats keep their own label).
         if not isinstance(node, (f03.Continue_Stmt, f03.Format_Stmt)) and node.item and node.item.label is not None:
             cont = f03.Continue_Stmt("CONTINUE")
             cont.item = node.item
@@ -783,20 +630,18 @@ def deconstruct_goto_statements(ast: f03.Program) -> f03.Program:
             else:
                 utils.replace_node(node, (cont, node))
 
-    # Process each module/function/subroutine, one at a time.
-    # Upon moving to next node of type in SCOPE_OBJECT_TYPES, all `GOTO`s in current scope_ast should be deconstructed.
+    # Process one subprogram at a time; all its GOTOs are deconstructed before moving to the next.
     for scope_ast in walk(ast, Union[f03.Function_Subprogram, f03.Subroutine_Subprogram]):
-        # Maintain list of forward- and backward-facing gotos. Each entry is a tuple of (goto_node, target_node)
+        # Each entry: (ancestor_subroutine, goto_node, target_node).
         forward_gotos = []
         backward_gotos = []
 
-        # Resolve `GOTO` statements, classify into forward- and backward-facing.
+        # Resolve each GOTO's target, then classify forward vs backward.
         for goto in walk(scope_ast, f03.Goto_Stmt):
             label, = goto.children
             label = label.string
 
-            # Inefficient search of target by walking through scope of parent function/subroutine.
-            # Required, as subroutines can contain other subroutines.
+            # Walk up to the enclosing subprogram (subroutines can nest) then search its scope for the target.
             ancestor = goto.parent
             while ancestor and not isinstance(ancestor, (f03.Function_Subprogram, f03.Subroutine_Subprogram)):
                 ancestor = ancestor.parent
@@ -817,14 +662,13 @@ def deconstruct_goto_statements(ast: f03.Program) -> f03.Program:
             if not goto_in_parent_ast:
                 raise NotImplementedError("Only GOTOs in the subtree from parent of target are supported.")
 
-            # Note: If `CONTINUE` was created from non-continue label, the `CONTINUE` is prepended into original node.
-            # In this case, ensure `GOTO` is in subtree from -grandparent- of `CONTINUE`.
+            # NOTE: if CONTINUE came from a non-continue label, it's prepended into the original
+            # node -- GOTO would then need to be in the subtree from CONTINUE's *grandparent*.
             # goto_in_grandparent_ast = (target == target.parent.children[0]) and (utils.lineage(target.parent.parent, goto) is not None)
             # if not (goto_in_parent_ast or goto_in_grandparent_ast):
             #     raise NotImplementedError("Only GOTOs in the subtree from parent/grandparent of target are supported.")
 
-            # Determine whether `GOTO` is forward- or backward-facing.
-            # We use the `walk` method of fparser (DFS) - checking whether goto or target encountered first.
+            # Forward vs backward: whichever of goto/target is hit first in a DFS walk.
             for node in walk(ancestor_subroutine, Base):
                 if (node is target):
                     backward_gotos.append((ancestor_subroutine, goto, target))
@@ -833,9 +677,8 @@ def deconstruct_goto_statements(ast: f03.Program) -> f03.Program:
                     forward_gotos.append((ancestor_subroutine, goto, target))
                     break
 
-        # Sort backward_gotos list in descending order of line number of `GOTO`
-        # (`list.reverse()` also works due to order of adding nodes by DFS).
-        # Attempted to sort by line number using `goto.item.span[0]`, but oddly not all `f03.Goto_Stmt` nodes have the line number in item.
+        # Reverse (not sort by line number: `goto.item.span[0]` is missing on some Goto_Stmt
+        # nodes) -- DFS append order already matches descending GOTO line number.
         backward_gotos.reverse()
 
         for (ancestor_subroutine, goto, target) in backward_gotos:

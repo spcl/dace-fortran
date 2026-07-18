@@ -1,43 +1,27 @@
 """REAL ocean coriolis kernel + real-MPI vertex halo exchange, 2 ranks/pair.
 
-The step up from ``tests/icon/full/test_ocean_mpi_sync_e2e.py`` (which drove a
-tiny hand-written dummy dycore): here the DUT is the *actual* extracted ICON-O
-kernel ``mo_scalar_product::nonlinear_coriolis_3d_fast_scalar`` -- the same
-single-TU the single-rank numerical e2e (``test_ocean_numerical_e2e.py``,
-``coriolis_pv``) drives bit-exact -- lowered to an SDFG and reached through its
-AUTO-GENERATED struct-flattened ``bind(c)`` shim (dozens of SoA args for the
-``t_patch_3d`` / ``t_operator_coeff`` structs).  It proves the full multi-rank
-seam: a struct-heavy SDFG kernel whose in-body halo sync is a ``keep_external``
-library node issuing a real ``MPI_Sendrecv`` against the partner rank, driven
-straight from Python with a live ``mpi4py`` communicator handle -- no fork.
+Step up from ``tests/icon/full/test_ocean_mpi_sync_e2e.py`` (a hand-written dummy dycore):
+here the DUT is the real extracted ICON-O kernel
+``mo_scalar_product::nonlinear_coriolis_3d_fast_scalar`` (same single-TU the single-rank
+``test_ocean_numerical_e2e.py`` drives bit-exact), reached through its auto-generated
+struct-flattened ``bind(c)`` shim. Proves the multi-rank seam: a struct-heavy SDFG kernel
+whose in-body halo sync is a ``keep_external`` library node issuing a real ``MPI_Sendrecv``
+against the partner rank.
 
-The kernel's real sync ``mo_sync::sync_patch_array_3d_dp(typ, p_patch, arr,
-lacc)`` takes a ``t_patch`` STRUCT that is not marshalable across the flat C ABI
-(nested records + pointer members) and, being geometry-only, does not carry the
-communicator the halo actually needs.  So -- exactly as the dummy test does, and
-mirroring how ICON's real sync is a thin wrapper over the comm -- the kernel's
-sync CALL is rewritten to the patch-free, comm-carrying ``vort_v_halo_sync``
-(``vort_sync_mpi.f90``), registered as a ``keep_external`` routed to a real-MPI
-``.so``.  ``comm`` is threaded through the kernel signature as a plain
-``INTEGER`` (a Fortran ``MPI_Fint`` handle from ``mpi4py.MPI.Comm.py2f()``,
-carried byte-for-byte through the C ABI).
+The kernel's real sync (``mo_sync::sync_patch_array_3d_dp``) takes a non-marshalable
+``t_patch`` struct and carries no communicator, so the sync CALL is rewritten to the
+patch-free, comm-carrying ``vort_v_halo_sync`` (``vort_sync_mpi.f90``), registered as a
+``keep_external`` routed to a real-MPI ``.so``. ``comm`` threads through as a plain
+``INTEGER`` (Fortran ``MPI_Fint``, from ``mpi4py.MPI.Comm.py2f()``).
 
-DUT and REF share the SAME rewritten TU and the SAME ``libvort_sync.so``: the
-DUT routes the sync through the SDFG library node, the REF calls
-``vort_v_halo_sync`` directly (the original kernel reached through the shim
-retargeted by :func:`icon.ocean._ocean_e2e._retarget_shim`).  Both run the real
-exchange on identical per-rank inputs, so the per-rank differential stays
-bit-exact -- the core proof that the multi-rank SDFG is correct against the
-original.  A second check re-runs the DUT on ``COMM_SELF`` (where the sync takes
-its ``size <= 1`` no-op path) and asserts ``vort_v`` changed -- the only variable
-between the two runs is whether the sync had a neighbour, so a difference proves
-the real ``MPI_Sendrecv`` fired against a live partner and its data reached the
-SDFG.
+DUT and REF share the same rewritten TU and ``.so``: DUT routes the sync through the SDFG
+library node, REF calls ``vort_v_halo_sync`` directly. Both run the real exchange on
+identical per-rank inputs, compared bit-exact per rank. A second check re-runs the DUT on
+``COMM_SELF`` (the sync's ``size <= 1`` no-op path) and asserts ``vort_v`` changed -- proving
+the real ``MPI_Sendrecv`` moved neighbour data in.
 
-Runs under ``mpirun --oversubscribe`` at any even rank count (CI uses ``-n 4``):
-COMM_WORLD splits into adjacent 2-rank pairs, each pair exchanging independently.
-Skipped at an odd / <2 rank count so the default single-rank ``pytest tests/``
-does not trip on it.
+Runs under ``mpirun --oversubscribe`` at any even rank count (CI: ``-n 4``); COMM_WORLD splits
+into adjacent 2-rank pairs. Skipped at odd/<2 rank count.
 """
 import ctypes
 import shutil
@@ -70,10 +54,9 @@ _N = 8  # mesh size: every array extent is n (nblks_v = 8, so block 1 = owned, b
 
 
 def _rewrite_coriolis_tu(src: str) -> str:
-    """Thread ``comm`` through ``nonlinear_coriolis_3d_fast_scalar`` and rewrite
-    its ``t_patch``-taking sync CALL to the patch-free, comm-carrying
-    ``vort_v_halo_sync`` (registered as a ``keep_external``).  Same three edits
-    the single-rank harness would need to make the kernel halo-aware."""
+    """Thread ``comm`` through the kernel and rewrite its ``t_patch``-taking sync CALL to the
+    patch-free, comm-carrying ``vort_v_halo_sync``. Same three edits the single-rank harness
+    would need to make the kernel halo-aware."""
     sig = ("SUBROUTINE nonlinear_coriolis_3d_fast_scalar(patch_3d, vn, p_vn_dual, "
            "vort_v, operators_coefficients, vort_flux, lacc)")
     if src.count(sig) != 1:
@@ -89,21 +72,18 @@ def _rewrite_coriolis_tu(src: str) -> str:
     synccall = "    CALL sync_patch_array_3d_dp_deconiface_38(3, patch_2d, vort_v, lacc = lzacc)"
     if src.count(synccall) != 1:
         raise RuntimeError("coriolis sync CALL anchor not unique")
-    # Explicit extents (nproma / n_zlev / nblks_v) so the sync takes the field
-    # explicit-shape -- passing the kernel's explicit-shape vort_v to an
-    # assumed-shape dummy makes gfortran drop the halo writeback (see
-    # vort_sync_mpi.f90).
+    # explicit extents so the sync takes vort_v explicit-shape: an assumed-shape dummy would
+    # make gfortran drop the halo writeback (see vort_sync_mpi.f90)
     return src.replace(
         synccall, "    CALL vort_v_halo_sync(3, nproma, n_zlev, "
         "patch_3d % p_patch_2d(1) % nblks_v, vort_v, comm)")
 
 
 def _build_artifacts(tmp_path: Path) -> dict:
-    """Build (rank 0 only) the real-MPI sync ``.so``, the coriolis DUT (SDFG +
-    struct-flat ``bind(c)`` shim, sync routed as a ``keep_external`` lib node),
-    and the gfortran REF (original kernel reached through the retargeted shim).
-    Returns a picklable dict of paths + the shim / binding text every rank needs
-    to re-derive the ABI (:func:`build_on_root` broadcasts it)."""
+    """Build (rank 0 only) the real-MPI sync ``.so``, the coriolis DUT (SDFG + struct-flat
+    shim, sync as a ``keep_external`` lib node), and the gfortran REF (retargeted shim).
+    Returns a picklable dict every rank needs to re-derive the ABI (:func:`build_on_root`
+    broadcasts it)."""
     tmp_path.mkdir(parents=True, exist_ok=True)
     # 1. real-MPI sync library (shared by DUT lib node + REF direct call).
     sync_src = (_HERE / "vort_sync_mpi.f90").read_text()
@@ -153,8 +133,7 @@ def _build_artifacts(tmp_path: Path) -> dict:
     binding_files = list((tmp_path / "lib").glob("*bindings.f90"))
     binding_text = binding_files[0].read_text() if binding_files else ""
 
-    # 4. REF: retarget the shim to the original kernel (still calls the same
-    # vort_v_halo_sync directly), seeding n_zlev / nproma from the array extents.
+    # 4. REF: retarget the shim to the original kernel, seeding n_zlev/nproma from array extents
     module_dims = _size_derived_module_dims(binding_text) if binding_text else []
     ref_shim = tmp_path / f"{dace_name}_ref_c.f90"
     ref_shim.write_text(_retarget_shim(shim, dace_name, _ENTRY, module_dims, _N))
@@ -185,9 +164,7 @@ def _build_artifacts(tmp_path: Path) -> dict:
 
 @pytest.mark.mpi
 def test_coriolis_with_real_mpi_halo_2rank(tmp_path: Path):
-    """2-rank real coriolis kernel + real-MPI ``vort_v`` halo: SDFG path vs
-    gfortran reference, per-rank bit-exact, plus a pair-vs-COMM_SELF check that
-    the real ``MPI_Sendrecv`` moved neighbour data into the halo block."""
+    """2-rank real coriolis kernel + real-MPI ``vort_v`` halo: SDFG vs gfortran per-rank bit-exact, plus a pair-vs-COMM_SELF check that ``MPI_Sendrecv`` moved neighbour data in."""
     from mpi4py import MPI
     world = MPI.COMM_WORLD
     rank, size = world.Get_rank(), world.Get_size()
@@ -205,19 +182,16 @@ def test_coriolis_with_real_mpi_halo_2rank(tmp_path: Path):
     dace_name = art["dace_name"]
     seed_specs = _resolve_module_seeds(binding_text, {}) if binding_text else []
 
-    # Pre-load the real-MPI sync RTLD_GLOBAL so the DUT lib node and the REF
-    # direct call resolve to the SAME libvort_sync.so instance.
+    # RTLD_GLOBAL preload so the DUT lib node and REF direct call resolve to the SAME .so instance
     ctypes.CDLL(art["sync_so"], mode=ctypes.RTLD_GLOBAL)
 
-    # Per-rank inputs from distinct seeds so the two ranks own genuinely different
-    # vort_v data + the exchange surfaces a swap; comm is the live pair handle.
+    # distinct per-rank seeds so the exchange surfaces a real swap; comm is the live pair handle
     handle = pair.py2f()
     call_plan, inputs, ptr_args, ptr_local = synth_call_inputs(shim,
                                                                n=_N,
                                                                seed=42 + rank,
                                                                scalar_overrides={"comm": handle})
-    # vort_v is the (nproma, n_zlev, nblks_v) vertex field the sync exchanges;
-    # numpy block 0 = Fortran block 1 (owned), block 1 = Fortran block 2 (halo).
+    # vort_v: (nproma, n_zlev, nblks_v); numpy block 0 = Fortran block 1 (owned), block 1 = block 2 (halo)
     vort_v_key = next(h for h, local in ptr_local.items() if local == "vort_v")
 
     dut_bufs = {k: v.copy() for k, v in inputs.items()}
@@ -225,11 +199,9 @@ def test_coriolis_with_real_mpi_halo_2rank(tmp_path: Path):
     ref_bufs = {k: v.copy() for k, v in inputs.items()}
     _invoke(art["ref_so"], call_plan, ref_bufs, f"{dace_name}_ref_c", module_seeds=seed_specs)
 
-    # (1) CORRECTNESS -- per-rank bit-exact DUT vs REF on every output buffer
-    # (NaN == NaN).  The SDFG (with the MPI halo as a keep_external library node)
-    # reproduces the original kernel EXACTLY across the whole 2-rank run, INCLUDING
-    # the halo block the real MPI_Sendrecv fills.  This is the deliverable: the
-    # multi-rank SDFG is correct against the original.
+    # (1) CORRECTNESS -- per-rank bit-exact DUT vs REF on every output buffer (NaN==NaN),
+    # including the halo block the real MPI_Sendrecv fills. The deliverable: multi-rank SDFG
+    # correct against the original.
     n_changed = 0
     for k in ptr_args:
         d = dut_bufs[k].astype(np.float64)
@@ -240,23 +212,15 @@ def test_coriolis_with_real_mpi_halo_2rank(tmp_path: Path):
             n_changed += 1
     assert n_changed > 0, "no output buffer changed -- the kernel did no work (test is vacuous)"
 
-    # (2) REAL 2-RANK EXCHANGE -- re-run the DUT with the SAME inputs but on
-    # ``COMM_SELF`` (a single-rank communicator, where ``vort_v_halo_sync`` takes
-    # its ``size <= 1`` no-op early return, matching real ICON single-rank).  The
-    # ONLY thing that differs between the two runs is whether the sync has a
-    # neighbour, so any difference in the returned ``vort_v`` is caused solely by
-    # the real ``MPI_Sendrecv`` moving the partner's data in.  Assert ``vort_v``
-    # DID change -- proving the exchange fired against a live partner and reached
-    # the SDFG's data (a sync that silently no-op'd, or a dropped ``comm``, would
-    # leave the two runs identical).
+    # (2) REAL 2-RANK EXCHANGE -- re-run the DUT on COMM_SELF (sync's size<=1 no-op path,
+    # matching real ICON single-rank). The only difference between the two runs is whether the
+    # sync had a neighbour, so a changed vort_v proves the real MPI_Sendrecv moved partner data
+    # in (a silently no-op'd sync or dropped comm would leave the runs identical).
     #
-    # (Note: the flat-ABI shim marshals the extracted kernel's explicit-shape
-    # ``vort_v`` dummy through a gfortran copy-in/copy-out whose whole-block halo
-    # writeback only partially survives back into the caller buffer -- reproduced
-    # IDENTICALLY in the gfortran REF, so NOT an SDFG defect and absent from a real
-    # in-ICON build where ``vort_v`` is a module array.  It does not affect the
-    # DUT-vs-REF differential above; the exchange stays clearly observable here.  A
-    # fully-faithful per-element halo check is deferred to the in-ICON 2-node run.)
+    # Note: the flat-ABI shim's gfortran copy-in/copy-out only partially survives the whole-
+    # block halo writeback -- reproduced identically in the REF, so not an SDFG defect and
+    # absent from a real in-ICON build. Doesn't affect the differential above; a fully-faithful
+    # per-element check is deferred to the in-ICON 2-node run.
     self_plan = synth_call_inputs(shim, n=_N, seed=42 + rank, scalar_overrides={"comm": MPI.COMM_SELF.py2f()})[0]
     self_bufs = {k: v.copy() for k, v in inputs.items()}
     _invoke(art["dut_so"], self_plan, self_bufs, f"{dace_name}_c", sdfg_so=art["sdfg_so"], module_seeds=seed_specs)

@@ -1,13 +1,6 @@
-"""f90-binding e2e for (a) the simplest possible flat SDFG and
-(b) a struct-flatten-requiring SDFG, with an explicit assertion that
-``hlfir-flatten-structs`` recorded a non-empty ``FlattenPlan`` so the
-binding actually reconstructs the derived type (not a silent no-op).
+"""f90-binding e2e: (a) minimal flat SDFG, (b) struct-flatten SDFG asserting a non-empty ``FlattenPlan`` (binding reconstructs the derived type, not a silent no-op).
 
-Complements ``cloudsc_flux_bindings_e2e_test`` (CLOUDSC-shaped flat)
-and ``struct_bindings_e2e_test`` (the original three struct shapes):
-the simple case pins the minimal binding surface; the flatten case
-pins that a derived-type dummy round-trips correctly through the
-generated ``c_f_pointer`` alias path AND that the recipe was emitted.
+Complements ``cloudsc_flux_bindings_e2e_test`` / ``struct_bindings_e2e_test``.
 """
 
 import ctypes
@@ -43,11 +36,9 @@ def _compile_so(out_so: Path, *sources: Path, mod_dir: Path, link_so: Path | Non
 
 
 def _build_sdfg_binding_lib(tmp_path, *, kernel_src, entry, sdfg_name, iface, sdfg_driver_src, drv_name, types_src=""):
-    """Build the SDFG, emit its binding, link types+binding+driver
-    against the SDFG ``.so``.  Returns ``(ctypes lib, FlattenPlan)``.
+    """Build the SDFG, emit its binding, link types+binding+driver against the SDFG ``.so``; returns ``(ctypes lib, FlattenPlan)``.
 
-    ``types_src`` (the derived-type module) is compiled first so its
-    ``.mod`` is on the include path for the binding + driver.
+    ``types_src`` compiles first so its ``.mod`` is on the include path.
     """
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
@@ -149,8 +140,7 @@ _SIMPLE_IFACE = OriginalInterface(
 
 
 def test_simple_flat_f90_binding(tmp_path: Path):
-    """Minimal binding surface: one scalar + two rank-1 arrays, no
-    flattening (plan must be empty)."""
+    """Minimal binding surface: one scalar + two rank-1 arrays, no flattening (plan must be empty)."""
     lib, plan = _build_sdfg_binding_lib(tmp_path,
                                         kernel_src=_SIMPLE_SRC,
                                         entry="saxpy2",
@@ -177,9 +167,8 @@ def test_simple_flat_f90_binding(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# (b) Flatten-requiring SDFG: a derived-type dummy with two 2-D real
-#     array members + a scalar member -> hlfir-flatten-structs must
-#     unpack it and the binding must reconstruct it via c_f_pointer.
+# (b) Flatten-requiring SDFG: derived-type dummy (two 2-D array members + a
+#     scalar) -> hlfir-flatten-structs unpacks it, binding reconstructs via c_f_pointer.
 # ---------------------------------------------------------------------------
 
 _FLAT_TYPES = """
@@ -258,9 +247,7 @@ _FLAT_IFACE = OriginalInterface(
 
 
 def test_struct_flatten_f90_binding(tmp_path: Path):
-    """A ``type(t_state)`` dummy with two 2-D members + a scalar must
-    be flattened by the bridge (non-empty FlattenPlan) and round-trip
-    correctly through the generated binding's struct reconstruction."""
+    """``type(t_state)`` dummy (two 2-D members + scalar) flattens (non-empty FlattenPlan) and round-trips through the binding's struct reconstruction."""
     lib, plan = _build_sdfg_binding_lib(tmp_path,
                                         kernel_src=_FLAT_SRC,
                                         entry="update_state",
@@ -270,8 +257,7 @@ def test_struct_flatten_f90_binding(tmp_path: Path):
                                         drv_name="state_drv",
                                         types_src=_FLAT_TYPES)
 
-    # The flatten recipe must actually have been generated: one entry
-    # per flattened struct member reaching the SDFG surface.
+    # one FlattenPlan entry per flattened struct member reaching the SDFG surface
     flat_targets = {fn for e in plan.entries for fn in e.recipe.flat_names}
     assert plan.entries, "struct dummy must produce a non-empty FlattenPlan"
     assert any("u" in t for t in flat_targets), flat_targets

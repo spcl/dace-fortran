@@ -1,25 +1,11 @@
-"""Regression: literal-lower-bound heuristic must not poison an
-explicit-shape (plain ``fir.ShapeOp``) array's offset.
+"""Regression: literal-lower-bound heuristic must not poison an explicit-shape
+(fir.ShapeOp) array's offset.
 
-cloudsc shape (lines 1574-1591 of cloudsc_bottom_lower.F90): a local
-automatic array ``ZQX(KLON,KLEV,NCLV)`` (NCLV a PARAMETER) is written
-with a *mix* of 3rd-dimension subscripts -- a PARAMETER constant index
-``ZQX(JL,JK,NCLDQV)`` and a loop index ``ZQX(JL,JK,JM)`` in a
-``DO JM=1,NCLV-1`` loop.
-
-``inferLowerBoundsFromLiteralAccesses`` (meant only to recover ICON's
-*explicit negative* lower bounds on deferred-shape ALLOCATABLEs) used
-to run on this plain-``fir.ShapeOp`` array too.  ``traceConstIntThrough
-Load`` resolved one of the non-literal subscripts to a sentinel, so
-the per-dim ``min`` produced ``offset_<arr>_d2 = -999`` -- turning the
-write subset into a wild out-of-bounds store (segfault / 1e228
-garbage).  The fix gates the heuristic off plain-``fir.ShapeOp``
-declares (lower bound is provably 1 there).
-
-This test pins it: every ``offset_a_d*`` must be ``1`` (never a
-sentinel / negative) and the kernel must match a gfortran/f2py
-reference of the same source.
-"""
+cloudsc shape (cloudsc_bottom_lower.F90:1574-91): mixed constant/loop 3rd-dim
+subscripts made ``inferLowerBoundsFromLiteralAccesses`` mis-resolve via
+``traceConstIntThroughLoad`` to a ``-999`` sentinel offset -> OOB store
+(segfault/garbage). Fix gates the heuristic off plain-shape declares (lower
+bound is provably 1). Pins: every offset_a_d* == 1, kernel matches f2py ref."""
 
 from pathlib import Path
 
@@ -62,9 +48,8 @@ end subroutine mixed_idx
 
 
 def test_explicit_shape_offsets_not_poisoned(tmp_path: Path):
-    """Build the SDFG: every ``offset_a_d*`` (and q/cl) must be exactly
-    1 -- never a ``-999``-style sentinel from the literal heuristic --
-    and the result must match the f2py reference."""
+    """Every offset_a_d* (and q/cl) must be exactly 1, never a -999 sentinel;
+    result matches the f2py reference."""
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     ref_dir = tmp_path / "ref"

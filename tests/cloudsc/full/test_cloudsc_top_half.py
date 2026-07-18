@@ -1,25 +1,10 @@
-"""Top-half-CLOUDSC reproducer for the cloudsc_full xfail.
+"""Top-half-CLOUDSC reproducer for the cloudsc_full PCOVPTOT divergence (26/548 cells, 1-ulp
+drift in ZQXN[JM=3] @ JK=15) -- isolates source/sink accumulation into ZSOLQA/ZSOLQB (top half
+of the JK loop, before SEDIMENTATION) from the LU solver / sedimentation / flux-tendency stages.
 
-The full-CLOUDSC test (test_cloudsc_full.py) diverges at PCOVPTOT
-26/548 cells with a root-cause cascade traced to a 1-ulp drift in
-ZQXN[JM=3] @ JK=15 (NCLDTOP).  Probe + per-loopnest tests have
-ruled out the LU solver in isolation, the LU+assembly subsystem in
-isolation, and the multi-JK precip chain in isolation -- each passes
-at strict rtol=atol=1e-14.  So the bug only manifests when those
-subsystems are stitched together.
-
-This reproducer is ``cloudsc.F90`` with the body truncated just
-before the SEDIMENTATION block (line 4.2, ~line 2620) and ZSOLQA /
-ZSOLQB captured per JK into INTENT(OUT) dummies.  Tests roughly the
-top half of the JK loop body (~1100 LoC of physics: source/sink
-accumulation into ZSOLQA/ZSOLQB across many sub-loops, plus all of
-section 3 + section 4.1 of the kernel) without involving the LU
-solver, sedimentation, flux/tendency updates.
-
-If the bridge reproduces a divergence in ZSOLQA / ZSOLQB at strict
-tolerance, the bug is in the source/sink accumulation cross-talk.
-If it doesn't, the divergence comes from the bottom half (lines
-2620..3700) or the assembly/solver/clip combination only.
+``cloudsc.F90`` truncated before SEDIMENTATION, ZSOLQA/ZSOLQB captured per JK into INTENT(OUT)
+dummies. A divergence here localizes the bug to source/sink cross-talk; a pass points to the
+bottom half or the assembly/solver/clip combination instead.
 """
 
 from pathlib import Path
@@ -40,14 +25,11 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def _module_wrap_drivers(src: str) -> str:
-    """Wrap the free CLOUDSCOUTER + CLOUDSC driver subroutines of the
-    cloudsc_top_half source in ``module cloudsc_top_half_mod`` so the SDFG
-    build can address the entry as ``cloudsc_top_half_mod::cloudscouter``.
+    """Wrap the free CLOUDSCOUTER + CLOUDSC driver subroutines in ``module cloudsc_top_half_mod`` so the SDFG entry can be ``cloudsc_top_half_mod::cloudscouter``.
 
-    The leading derived-type modules (PARKIND1/YOMCST/...) stay outside; only
-    the two top-level driver subroutines are pulled into the wrapper module
-    (host association keeps CLOUDSCOUTER -> CLOUDSC resolving).  The on-disk
-    file is left untouched for the f2py reference path.
+    Leading derived-type modules stay outside; only the two driver subroutines move in (host
+    association keeps CLOUDSCOUTER -> CLOUDSC resolving). On-disk file stays untouched for the
+    f2py reference path.
     """
     marker = "SUBROUTINE CLOUDSCOUTER"
     head, _, tail = src.partition(marker)
@@ -64,10 +46,8 @@ def _f2py_top_half(tmp_path_factory):
         src,
         ref_dir,
         "cloudsc_top_half_ref",
-        # ``-ffree-line-length-none`` is the sole intentionally
-        # gfortran-only flag: it is a non-semantic parser necessity for
-        # the long-line cloudsc source; LLVM-flang has no line limit and
-        # needs no equivalent.  The FP set is the flang-portable core.
+        # -ffree-line-length-none: gfortran-only, non-semantic parser necessity for the
+        # long-line source (flang has no line limit); rest is the flang-portable FP core
         extra_f90flags=CLOUDSC_F90FLAGS,
         only=("cloudscouter", ),
     )
@@ -75,17 +55,13 @@ def _f2py_top_half(tmp_path_factory):
 
 # Physical (NaN-free) inputs: the bridge matches gfortran to tight tolerance here.
 def test_cloudsc_top_half_zsolqa_zsolqb(tmp_path, _f2py_top_half, _strict_fp_cpu_args):
-    """SDFG-vs-f2py equivalence on ZSOLQA / ZSOLQB after the source/sink
-    accumulation block (top half of CLOUDSC's JK loop body)."""
+    """SDFG-vs-f2py equivalence on ZSOLQA/ZSOLQB after the source/sink accumulation block (top half of CLOUDSC's JK loop)."""
     src = (_HERE / "cloudsc_top_half.F90").read_text()
 
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    # Build from a variant that wraps the two free driver subroutines
-    # (CLOUDSCOUTER + the CLOUDSC carve-out it calls) in a module, so the
-    # SDFG entry can use the ``cloudsc_top_half_mod::cloudscouter`` spelling.
-    # The on-disk file stays free-subroutine for the f2py reference
-    # (``_f2py_top_half.cloudscouter`` resolves top-level).
+    # module-wrap CLOUDSCOUTER+CLOUDSC so the SDFG entry can use cloudsc_top_half_mod::cloudscouter;
+    # on-disk file stays free-subroutine for the f2py reference (resolves top-level)
     build_src = _module_wrap_drivers(src)
     sdfg = build_sdfg(build_src, sdfg_dir, name="cloudsc_top_half", entry="cloudsc_top_half_mod::cloudscouter").build()
 
@@ -94,8 +70,8 @@ def test_cloudsc_top_half_zsolqa_zsolqb(tmp_path, _f2py_top_half, _strict_fp_cpu
     outputs_ref = {k.lower(): v for k, v in get_outputs(rng).items()}
     outputs_sdfg = {k: v.copy(order="F") for k, v in outputs_ref.items()}
 
-    # Two new INTENT(OUT) dummies on CLOUDSCOUTER from cloudsc_top_half.F90.
-    # Shape (KLON, KLEV, NCLV, NCLV, NBLOCKS) matches ZSOLQA per JK per block.
+    # zsolqa_out/zsolqb_out: new INTENT(OUT) dummies, shape (KLON,KLEV,NCLV,NCLV,NBLOCKS)
+    # matches ZSOLQA per JK per block
     klon = inputs["KLON"]
     klev = inputs["KLEV"]
     nclv = inputs["NCLV"]
@@ -124,8 +100,7 @@ def test_cloudsc_top_half_zsolqa_zsolqb(tmp_path, _f2py_top_half, _strict_fp_cpu
     sdfg_kwargs.update(sdfg_call_args(sdfg, scalar_kwargs))
     sdfg(**sdfg_kwargs)
 
-    # Compare ZSOLQA / ZSOLQB across all JK iterations.  Strict tolerance
-    # to catch ulp-level drift the cloudsc_full cascade is rooted in.
+    # strict tolerance to catch the ulp-level drift the cloudsc_full cascade is rooted in
     np.testing.assert_allclose(
         zsolqa_out_sdfg,
         zsolqa_out_ref,

@@ -1,12 +1,6 @@
 """Ported from f2dace/dev:tests/fortran/array_to_loop_offset.py.
 
-The old Fortran frontend had a `normalize_offsets` toggle on
-``create_sdfg_from_string``; under HLFIR the bridge handles
-offset normalisation uniformly through the
-``offset_<arr>_d<i>`` symbol convention (declared in
-``builder/descriptors.py`` and folded by ``sdfg.specialize``).
-The two paths from the old test (with vs without normalisation)
-collapse to one path here.
+HLFIR handles offset normalisation uniformly via ``offset_<arr>_d<i>`` symbols (folded by ``sdfg.specialize``), so the old with/without-normalisation split collapses to one path here.
 """
 
 import numpy as np

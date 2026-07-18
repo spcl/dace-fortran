@@ -1,12 +1,10 @@
 # Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
-"""End-to-end tests for the public ``inline_to_single_tu`` API plus the
-user-requested extra patterns (only_clause, rename, collision,
-nested_types, helper_proc, do_not_emit, cycle, generic_interface,
-private_public).
+"""End-to-end tests for the public ``inline_to_single_tu`` API and extra patterns
+(only_clause, rename, collision, nested_types, helper_proc, do_not_emit, cycle,
+generic_interface, private_public).
 
-Each test inlines a small multi-module project into one self-contained
-``.f90`` and asserts the right code survives / is dropped, then (when
-``gfortran`` is present) compiles the result to prove it is a valid TU.
+Each test inlines a small multi-module project into one ``.f90``, asserts the
+right code survives/drops, then (if ``gfortran`` present) compiles it.
 """
 import re
 import shutil
@@ -83,8 +81,7 @@ end subroutine run
 
 
 def test_only_clause_imports_just_what_is_named():
-    """``USE ..., ONLY:`` brings in only the named symbol; the unnamed
-    sibling in the same module is pruned away."""
+    """``USE ..., ONLY:`` brings in only the named symbol; the unnamed sibling is pruned away."""
     sources = {
         "lib.f90":
         """
@@ -118,8 +115,7 @@ end subroutine run
 
 
 def test_rename_in_only_clause():
-    """A renamed import (``ONLY: ll => longname``) survives inlining and
-    the renamed-from procedure is callable in the single TU."""
+    """Renamed import (``ONLY: ll => longname``) survives inlining and is callable in the single TU."""
     sources = {
         "lib.f90":
         """
@@ -148,8 +144,7 @@ end subroutine run
 
 
 def test_name_collision_across_modules():
-    """Two modules each defining a ``mod`` parameter inline together; the
-    consolidated USE-ONLY clauses keep the references unambiguous."""
+    """Two modules each defining a same-named parameter inline together; consolidated USE-ONLY clauses keep references unambiguous."""
     sources = {
         "a.f90":
         """
@@ -179,16 +174,14 @@ subroutine run(o)
 end subroutine run
 """,
     }
-    # The inliner prunes-to-used + consolidates USE-ONLY clauses (modules may
-    # survive, e.g. ``b`` here); the two same-named ``token`` parameters stay
-    # unambiguous, so the single TU compiles.
+    # Inliner prunes-to-used + consolidates USE-ONLY clauses (b survives here);
+    # the two same-named token parameters stay unambiguous.
     out = _inline_text(sources, "run", include_builtins=False)
     assert _compiles(out)
 
 
 def test_nested_derived_types():
-    """A derived type nesting another derived type survives inlining with
-    both type definitions present."""
+    """A derived type nesting another survives inlining with both type definitions present."""
     sources = {
         "types_mod.f90":
         """
@@ -221,11 +214,10 @@ end subroutine run
 
 
 def test_keep_type_components_preserves_unreferenced_members():
-    """``keep_type_components`` keeps EXACTLY the named derived-type members
-    through pruning even when the entry never references them, at their source
-    declaration order -- the hook that lets one kernel's single-TU carry the
-    union of struct members a sibling kernel also consumes.  Members neither
-    referenced nor named are still pruned."""
+    """``keep_type_components`` keeps exactly the named derived-type members
+    through pruning (in source declaration order) even when the entry never
+    references them -- lets one kernel's single-TU carry the struct-member union
+    a sibling kernel also consumes.  Unreferenced, unnamed members still pruned."""
     sources = {
         "types_mod.f90":
         """
@@ -260,12 +252,10 @@ end subroutine run
 
 
 def test_entry_also_external_keeps_its_body():
-    """Invariant (A1): a procedure that is BOTH the extraction entry and named
-    in the external policy keeps its real ``Execution_Part`` -- entry specs are
-    subtracted from the resolved make-noop set.  Without this, the entry's body
-    would be stubbed empty, unreferencing everything it reads.  (ICON extracts
-    ``velocity_tendencies`` as its own single-TU while ``solve_nh`` registers it
-    as an external; both facts are true at once for the same procedure.)"""
+    """Invariant (A1): a procedure that is BOTH the entry and named in the
+    external policy keeps its real body -- entry specs are subtracted from the
+    make-noop set.  (ICON extracts ``velocity_tendencies`` as its own single-TU
+    while ``solve_nh`` registers it as an external -- both true at once.)"""
     sources = {
         "lib.f90":
         """
@@ -297,8 +287,7 @@ end subroutine work_entry
 
 
 def test_helper_proc_transitively_pulled_in():
-    """A helper procedure called only indirectly (through the entry's
-    callee) is kept by the reachability-driven pruning."""
+    """A helper called only indirectly (through the entry's callee) is kept by reachability-driven pruning."""
     sources = {
         "lib.f90":
         """
@@ -332,9 +321,7 @@ end subroutine run
 
 
 def test_unresolved_use_module_is_an_error():
-    """Contract: every ``USE``-d module must be supplied.  An unresolved
-    external module (its source not provided) is an inlining ERROR -- the
-    upstream inliner requires the full module closure (no keep-external mode)."""
+    """Contract: every ``USE``-d module must be supplied; an unresolved module is an inlining ERROR (no keep-external mode)."""
     sources = {
         "driver.f90":
         """
@@ -351,8 +338,7 @@ end subroutine run
 
 
 def test_use_cycle_between_modules():
-    """Mutually-``USE``-ing modules (a USE-graph cycle) inline without
-    looping forever; both modules appear once."""
+    """Mutually-``USE``-ing modules (a cycle) inline without looping forever; both modules appear once."""
     sources = {
         "a.f90":
         """
@@ -380,16 +366,13 @@ subroutine run(o)
 end subroutine run
 """,
     }
-    # A USE-graph cycle must inline without looping forever and yield a single
-    # compilable TU (the inliner prunes-to-used + consolidates, so the surviving
-    # module set is not asserted -- only that it terminated and compiles).
+    # Must terminate and yield one compilable TU; surviving module set isn't asserted (inliner prunes-to-used + consolidates).
     out = _inline_text(sources, "run", include_builtins=False)
     assert _compiles(out)
 
 
 def test_generic_interface_resolves_to_specific():
-    """A generic-interface call is deconstructed to the specific
-    procedure during inlining."""
+    """A generic-interface call is deconstructed to the specific procedure during inlining."""
     sources = {
         "lib.f90":
         """
@@ -423,8 +406,7 @@ end subroutine run
 
 
 def test_private_public_visibility():
-    """A module with PRIVATE default + a PUBLIC procedure inlines and the
-    public procedure remains callable in the single TU."""
+    """PRIVATE-default module + PUBLIC procedure inlines; the public procedure remains callable."""
     sources = {
         "lib.f90":
         """
@@ -455,15 +437,13 @@ end subroutine run
     }
     out = _inline_text(sources, "run", include_builtins=False)
     assert "FUNCTION pub" in out
-    # PRIVATE / PUBLIC access statements are removed by
-    # remove_access_and_bind_statements.
+    # PRIVATE/PUBLIC access statements removed by remove_access_and_bind_statements.
     assert "PRIVATE" not in out.upper()
     assert _compiles(out)
 
 
 def test_make_noop_empties_body():
-    """``make_noop`` replaces a procedure body with nothing while keeping
-    the procedure shell."""
+    """``make_noop`` replaces a procedure body with nothing while keeping the shell."""
     sources = {
         "lib.f90":
         """
@@ -498,10 +478,8 @@ end subroutine run
 
 
 def test_do_not_emit_leaves_procedure_external():
-    """The unified external-function policy's ``do_not_emit=[names]``
-    param leaves a procedure external on the public inliner API -- its
-    body is emptied (same effect as the low-level ``make_noop`` above)
-    but addressed by plain call-site name, not ``(module, name)``."""
+    """``do_not_emit=[names]`` leaves a procedure external on the public API --
+    body emptied (like ``make_noop``) but addressed by call-site name, not ``(module, name)``."""
     sources = {
         "lib.f90":
         """
@@ -536,10 +514,9 @@ end subroutine run
 
 
 def test_make_return_false_stubs_logical_function():
-    """``make_return_false=[name]`` keeps the function shell (so the call sites
-    still bind) but replaces its body with ``<result> = .FALSE.`` -- the
-    original body (and its dependence on module state) is gone, and the query
-    deterministically returns false."""
+    """``make_return_false=[name]`` keeps the function shell (call sites still
+    bind) but replaces the body with ``<result> = .FALSE.`` -- original body and
+    its module-state dependence are gone."""
     sources = {
         "lib.f90":
         """
@@ -665,18 +642,16 @@ end module lib
 
 
 def test_pointer_component_of_extension_type_survives_pruning():
-    """Root-cause regression: a POINTER component of an ``EXTENDS`` type that is
-    written only via ``=>`` in a constructor must not be pruned.
+    """Root-cause regression: a POINTER component written only via ``=>`` in a
+    constructor must not be pruned from an ``EXTENDS`` type.
 
-    ICON-O's solver constructors (``lhs_primal_flip_flop_construct`` setting
-    ``this % patch_2d => ...`` on ``t_primal_flip_flop_lhs``, which extends the
-    abstract ``t_lhs_agen``) hit this: the pointer-assignment LHS is a fparser
-    ``Data_Pointer_Object`` (not a ``Data_Ref``), so the entity-level prune did
-    not see the component as used and dropped it from the type -- leaving the
-    body referencing a member the type no longer declared.  This is the smaller
-    analogue: ``t_lhs`` extends ``t_lhs_base`` and carries a ``t_grid`` pointer
-    set in ``lhs_construct`` and read in ``lhs_area``; the single TU must keep
-    ``grid`` and compile."""
+    ICON-O hit this: the pointer-assignment LHS is a fparser
+    ``Data_Pointer_Object`` (not a ``Data_Ref``), so the entity-level prune
+    didn't see the component as used and dropped it, leaving the body
+    referencing an undeclared member.  Smaller analogue here: ``t_lhs`` extends
+    ``t_lhs_base``, carries a ``t_grid`` pointer set in ``lhs_construct`` and
+    read in ``lhs_area``; the single TU must keep ``grid`` and compile.
+    """
     sources = {
         "geom.f90":
         """
@@ -729,8 +704,7 @@ end subroutine run
 """,
     }
     out = _inline_text(sources, "run", include_builtins=False)
-    # The pointer component (and the type it points at) must survive in the type
-    # definition, not merely appear in the constructor body.
+    # Pointer component (and the type it points at) must survive in the type definition, not just the constructor body.
     tdef = re.search(r"EXTENDS\(t_lhs_base\) :: t_lhs\b.*?END TYPE t_lhs\b", out, re.S)
     assert tdef and "GRID" in tdef.group(0).upper(), f"pointer component pruned from t_lhs:\n{out}"
     assert _compiles(out)

@@ -1,26 +1,6 @@
-"""Bridge support for libcall results consumed by an enclosing
-``hlfir.elemental`` body  --  the ``2.0 - matmul(a, b)`` /
-``1.0 - transpose(a)`` pattern.
+"""Bridge support for libcall results consumed by an enclosing ``hlfir.elemental`` body -- the ``2.0 - matmul(a, b)`` / ``1.0 - transpose(a)`` pattern.
 
-Flang's HLFIR lowers ``res = expr_with_libcall(args)`` to:
-
-  * an ``hlfir.matmul`` / ``hlfir.transpose`` / ``hlfir.dot_product``
-    op producing an ``hlfir.expr`` *value* (no memory backing),
-  * an ``hlfir.elemental`` whose body reads that value via
-    ``hlfir.apply`` and weaves the surrounding arithmetic
-    (``2.0 - apply(matmul, i, j)``),
-  * an ``hlfir.assign`` of the elemental result to the destination.
-
-Without bridge support, ``buildExpr`` returns ``?`` for the apply, the
-tasklet body becomes ``2 - ?`` which can't be parsed.  The bridge now
-materialises each libcall expr-producer into a synthetic
-``_libtmp_<gid>`` transient (declared with Fortran column-major
-strides), emits the libcall to write that transient, and rewrites the
-apply as a regular array read of it.
-
-These tests are deliberately the smallest possible programs that
-exercise that path so a regression here points at the bridge logic
-rather than at any other surrounding feature.
+Flang lowers this to an hlfir.matmul/transpose/dot_product producing an hlfir.expr value, read by the elemental body via hlfir.apply.  Without bridge support, buildExpr returns ``?`` for the apply and the tasklet fails to parse; the bridge materialises the libcall result into a ``_libtmp_<gid>`` transient and rewrites the apply as a regular array read.  Smallest possible programs so a regression here isolates to the bridge logic.
 """
 
 from pathlib import Path
@@ -34,8 +14,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_one_minus_transpose(tmp_path: Path):
-    """``res = 1.0 - transpose(a)``  --  exercise the libcall-in-elemental
-    materialisation for ``hlfir.transpose``."""
+    """``res = 1.0 - transpose(a)`` -- libcall-in-elemental materialisation for hlfir.transpose."""
     src = """
 subroutine main(a, res)
   double precision, dimension(5,4) :: a

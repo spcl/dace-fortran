@@ -1,11 +1,4 @@
-"""Helpers for the HLFIR frontend test suite.
-
-The HLFIR frontend takes a pre-lowered ``.hlfir`` file, not raw Fortran
-source.  Tests stay readable by writing the Fortran inline and letting
-this helper run ``flang-new-21 -fc1 -emit-hlfir`` behind the scenes.  If
-no flang binary is found the helpers report it; the calling test module
-should skip collection accordingly.
-"""
+"""HLFIR frontend test helpers: compile inline Fortran to ``.hlfir`` via ``flang-new-21``, build SDFGs.  ``have_flang()`` reports availability so callers can skip collection."""
 
 import os
 import re
@@ -19,10 +12,7 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _HLFIR_DIR = _REPO_ROOT / "dace" / "frontend" / "hlfir"
 
-# When this env var is set, every ``build_sdfg(...).build()`` call dumps
-# its SDFG to the named directory for offline inspection.  Treating "1"
-# / "true" / "yes" as the shorthand for a default path under /tmp keeps
-# the common case ergonomic without hardcoding one.
+# when set, build_sdfg(...).build() dumps its SDFG here; "1"/"true"/"yes" means _DEFAULT_DUMP_DIR.
 _DUMP_ENV = "__DACE_HLFIR_GEN_TEST_SDFGS"
 _DEFAULT_DUMP_DIR = Path("/tmp/hlfir_test_sdfgs")
 
@@ -36,30 +26,12 @@ def _dump_dir() -> Path | None:
     return Path(val)
 
 
-# LLVM/flang 21 only (matches build_bridge.py + the C++ bridge).
-# Ubuntu's ``flang-21`` package ships both ``flang-new-21`` and
-# ``flang-21`` as identical symlinks into ``/usr/lib/llvm-21/bin``;
-# upstream LLVM 21 stabilised the rewritten frontend and dropped the
-# ``-new`` suffix, so distributions vary on which name is the canonical
-# one.  Probe both, and let ``$FC`` override outright when the user
-# points at a specific LLVM-flang binary.
+# LLVM/flang 21 only (matches build_bridge.py).  Ubuntu ships flang-new-21/flang-21 as identical symlinks; probe both, $FC overrides.
 _FLANG_NAMES = ("flang-new-21", "flang-21", "flang-new", "flang")
 
 
 def _resolve_flang() -> str | None:
-    """Return the absolute path to an LLVM-flang binary or ``None``.
-
-    Resolution order:
-
-      1. ``$FC`` if set and the binary's ``--version`` self-identifies
-         as LLVM-flang (matches ``flang version``).  Lets the user
-         pin a specific build (LLVM trunk install, Spack module, ...)
-         without a name change here.
-      2. The first name in ``_FLANG_NAMES`` found on ``PATH``.
-
-    The probe is best-effort: a missing or non-executable ``$FC`` is
-    silently ignored and we fall back to the name list.
-    """
+    """Absolute path to an LLVM-flang binary: ``$FC`` if it self-identifies as flang, else the first ``_FLANG_NAMES`` hit on PATH."""
     fc = os.environ.get("FC")
     if fc:
         fc_path = shutil.which(fc) or (fc if os.path.isfile(fc) else None)
@@ -85,27 +57,12 @@ def have_flang() -> bool:
     return _FLANG is not None
 
 
-# LLVM-flang-portable strict-FP flag set: keeps an SDFG-linked binding
-# and its gfortran reference on byte-identical arithmetic semantics.
-# ``-ffree-line-length-none`` lifts the free-form column cap (132 on
-# gfortran <=12; large by default on 14/15) so the long generated
-# ``<entry>_dace`` signatures compile on any gfortran version.
+# strict-FP flags keep an SDFG binding and its gfortran reference byte-identical; -ffree-line-length-none for long generated signatures.
 FLANG_PORTABLE_FFLAGS = ["-O0", "-fno-fast-math", "-ffp-contract=off", "-ffree-line-length-none"]
 
 
 def gfortran_compile_so(out_so: Path, *sources: Path, mod_dir: Path, link_so: Path | None = None):
-    """gfortran-compile ``sources`` into the shared object ``out_so``.
-
-    Shared by the e2e binding tests, whose generated ``.f90`` binding +
-    driver are linked against the compiled SDFG ``.so`` and called via
-    ctypes (rather than f2py) so LOGICAL / struct ABIs are exercised
-    exactly as a real Fortran caller would.
-
-    :param out_so: output ``.so`` path.
-    :param sources: Fortran sources, compiled in order.
-    :param mod_dir: directory for ``.mod`` files and the build cwd.
-    :param link_so: optional SDFG library to link against.
-    """
+    """gfortran-compile ``sources`` into shared object ``out_so``.  Used by e2e binding tests linking via ctypes (not f2py) so LOGICAL/struct ABIs match a real Fortran caller."""
     cmd = ["gfortran", "-shared", "-fPIC", *FLANG_PORTABLE_FFLAGS, f"-J{mod_dir}"]
     cmd.extend(str(s) for s in sources)
     cmd.extend(["-o", str(out_so)])
@@ -121,32 +78,10 @@ def f2py_compile(
     extra_f90flags: str | None = None,
     only: tuple[str, ...] | None = None,
 ):
-    """Build the given Fortran source via gfortran/f2py and return the
-    compiled module.  ``src`` may be a file path or an inline string  --
-    inline sources are written to ``<out_dir>/<mod_name>.f90`` first.
+    """Build Fortran source via gfortran/f2py, return the compiled module.  Skips (pytest.skip) when gfortran/meson missing, so callers can call unconditionally.
 
-    Skips the calling test (via pytest.skip) when gfortran or meson is
-    missing, so test files can call this unconditionally.
-
-    ``extra_f90flags``: optional space-separated string of gfortran flags
-    appended via ``--f90flags=``.  The FP comparison flags should stay on
-    the LLVM-flang-portable core ``-O0 -fno-fast-math -ffp-contract=off``;
-    ``-ffree-line-length-none`` is acceptable as a non-semantic parser
-    flag for long-line sources (gfortran-only -- flang has no line limit).
-
-    ``only``: optional tuple of subroutine names that f2py should
-    expose; everything else in the source is compiled but not
-    wrapped.  Needed when the source contains an inner subroutine
-    whose dummies use a derived type that crackfortran cannot map
-    (TYPE(t) -> ``'void'`` -> ``KeyError`` in ``getpydocsign``).
-    Hiding the inner subroutine behind ``only:`` lets f2py wrap
-    just the public wrapper.
-
-    Used by the e2e numerical tests to compare an SDFG's output against
-    the same code compiled with gfortran (the reference implementation).
-    Saved policy: HLFIR-frontend tests must compare against this kind of
-    non-transformed reference  --  hand-tuned literal expectations are not
-    a substitute.
+    ``only``: subroutine names to expose -- dodges crackfortran's ``KeyError`` on derived-type dummies in unexposed inner subroutines.
+    Policy: e2e tests compare against this non-transformed reference, never hand-tuned literal expectations.
     """
     if shutil.which("gfortran") is None:
         pytest.skip("gfortran not available")
@@ -160,18 +95,9 @@ def f2py_compile(
     else:
         src_file = src
     extra_args = [f"--f90flags={extra_f90flags}"] if extra_f90flags else []
-    # numpy's f2py meson backend (Python>=3.12) ignores ``--f90flags``;
-    # meson reads ``FFLAGS`` for the Fortran compiler's default args.
-    # f2py emits a single-line ``SUBROUTINE foo(<many args>)`` that
-    # exceeds the 132-col free-form limit on gfortran <=13, so lift the
-    # cap there (append, don't clobber a caller's FFLAGS).
+    # meson backend (py>=3.12) ignores --f90flags, reads FFLAGS instead; lift line-length cap for f2py's long generated signature.
     env = {**os.environ, "FFLAGS": (os.environ.get("FFLAGS", "") + " -ffree-line-length-none").strip()}
-    # Build + import via the shared single-source policy in _helpers: retries
-    # the reference build on transient ENOMEM (swap-thrash fork failures under
-    # heavy parallel load) AND rebuilds under a fresh extension name when an
-    # rc=0 build emits a module missing the requested ``only`` routine (the
-    # crackfortran-dropped-routine flake that surfaced ``flux_ref`` missing
-    # ``outer_flux`` under ``-n auto``).
+    # retries on transient ENOMEM; rebuilds under a fresh name if `only` routine is missing (crackfortran flake under -n auto)
     from _helpers import f2py_build_and_import
     return f2py_build_and_import(src_file,
                                  out_dir=out_dir,
@@ -187,39 +113,11 @@ def compile_to_hlfir(source: str,
                      *,
                      preprocess: bool = False,
                      merge: bool = True) -> Path:
-    """Write `source` as <out_dir>/<name>.f90, compile it to HLFIR, return the path.
+    """Write ``source`` to ``<out_dir>/<name>.f90``, compile to HLFIR, return the path.
 
-    ``merge_used_modules`` runs first (``merge`` defaults on): it
-    inlines every externally-``USE``-d module's real source so flang
-    sees one self-contained translation unit, the same single-TU model
-    f2dace-windmill used.  It is pass-through for self-contained input
-    (the entire inline-source test suite), so default-on is a no-op
-    there; only a genuine multi-file project under ``out_dir`` activates
-    it.  ``search_dirs=[out_dir]`` keeps the search scoped to the
-    caller's scratch tree.
-
-    ``rewrite_integer_powers`` runs unconditionally on every input:
-    expanding integer-valued REAL powers (``x**2.0``) to explicit
-    multiplies is algebraically exact and makes the bridge and the
-    gfortran reference emit byte-identical arithmetic.  Literal
-    double-precision promotion is deliberately NOT applied here -- it
-    is baked directly into the kernel source files, not run as a
-    build-time pass.
-
-    When ``preprocess`` is true, also run the optional ``IF (intvar)``
-    rewriter (``preprocess_fortran``) before flang sees the source --
-    needed for legacy code that uses INTEGER flags as IF conditions
-    (``IF (laericeauto)``), which flang-new-21 rejects.  Off by
-    default so we don't paper over real issues in clean source; opt
-    in per call site.
-
-    :param source: inline Fortran source text.
-    :param out_dir: scratch directory for the ``.f90`` / ``.hlfir`` pair.
-    :param name: base filename for that pair.
-    :param preprocess: also run the opt-in ``IF (intvar)`` rewrite.
-    :param merge: inline externally-``USE``-d modules into one TU
-                  (default on; no-op for self-contained source).
-    :returns: path to the emitted ``.hlfir`` file.
+    ``merge`` (default on): inline USE-d modules into one TU; no-op for self-contained input.
+    Integer-valued REAL powers (``x**2.0``) are always expanded to multiplies so bridge/gfortran stay bit-identical.
+    ``preprocess``: opt-in ``IF (intvar)`` rewrite for legacy INTEGER-as-IF-condition code flang-new-21 rejects; off by default.
     """
     assert _FLANG is not None, "flang-new-21 not available"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -233,21 +131,9 @@ def compile_to_hlfir(source: str,
 
 
 def _per_test_suffix() -> str:
-    """Return a readable, test-relevant suffix derived from
-    ``PYTEST_CURRENT_TEST`` (e.g. ``_multi_target_reduction_mixed_reductions``).
-    Empty when not running under pytest, so notebook / ad-hoc callers
-    see unmodified SDFG names.
+    """Test-derived SDFG-name suffix from ``PYTEST_CURRENT_TEST``; empty outside pytest.
 
-    Used by ``build_sdfg`` to ensure each test produces a uniquely-named
-    SDFG.  Without this, multiple tests in the same file all produce an
-    SDFG named e.g. ``main``  --  under pytest-xdist they share the same
-    ``.so`` filename within a worker, the OS dynamic loader returns a
-    cached handle bound to the previous test's compiled symbols, and
-    the second test silently runs stale code.
-
-    Form: ``_<file-stem-minus-_test>_<test-name-minus-test_>``.  Both
-    halves are sanitised so the resulting name is a valid C++ symbol
-    (e.g. parametrised ``test_foo[3]`` becomes ``foo_3_``).
+    Without it, same-named SDFGs across tests share a .so filename under xdist -- the dynamic loader returns a cached handle and the second test silently runs stale code.
     """
     raw = os.environ.get("PYTEST_CURRENT_TEST", "")
     if not raw or "::" not in raw:
@@ -264,18 +150,7 @@ def _per_test_suffix() -> str:
 
 
 class _TestBuilder:
-    """Thin proxy around ``SDFGBuilder`` for tests:
-
-      * Renames the produced SDFG with a per-test hash suffix so two
-        tests using ``name='main'`` end up with distinct ``.so`` files  --
-        a hard requirement for ``pytest-xdist`` parallel runs.
-      * Optionally dumps the built SDFG to disk when
-        ``__DACE_HLFIR_GEN_TEST_SDFGS`` is set.
-
-    Everything else flows through to the wrapped builder unchanged
-    (``.arrays`` / ``.scalars`` / ... still work the same way for tests
-    that inspect them).
-    """
+    """Proxy around ``SDFGBuilder``: renames the built SDFG with a per-test suffix (distinct .so per xdist worker) and optionally dumps it; everything else passes through unchanged."""
 
     def __init__(self, inner, name: str, suffix: str, dump_dir: Path | None):
         self._inner = inner
@@ -304,23 +179,7 @@ def build_sdfg(source: str,
                entry: str | None = None,
                defines=(),
                merge_engine: str = "regex"):
-    """Test funnel over the canonical :func:`dace_fortran.build.make_builder`.
-
-    Every test goes through the one real builder (entry
-    auto-resolution and all) -- this only adds the per-test
-    xdist-safe SDFG naming / dump-dir wrapper that the production API
-    has no business knowing about.
-
-    :param source: Fortran source as a string.
-    :param out_dir: scratch directory (typically ``tmp_path`` from pytest).
-    :param name: base filename for the .f90/.hlfir pair.
-    :param pipeline: override the default MLIR pass pipeline.
-    :param entry: mangled Flang symbol of the target procedure.
-                  ``None`` -> auto-resolved from the single procedure
-                  in ``source`` (error if none / ambiguous).
-    :return: ``SDFGBuilder`` (or ``_TestBuilder`` wrapper) -- callers
-             still do ``.build()``.
-    """
+    """Test funnel over :func:`dace_fortran.build.make_builder`: adds the per-test xdist-safe SDFG naming / dump-dir wrapper on top of the real builder.  ``entry=None`` auto-resolves from the single procedure in ``source``."""
     from dace_fortran.build import make_builder
     builder = make_builder(source,
                            entry=entry,
@@ -337,32 +196,9 @@ def build_sdfg(source: str,
 
 
 def build_on_root(comm, build_fn, *, root: int = 0, broadcast: bool = True):
-    """Run ``build_fn`` on a single MPI rank and turn a build *failure* into a
-    clean all-rank error instead of a collective deadlock.
+    """Run ``build_fn`` on rank ``root`` only, broadcasting failure as a ``RuntimeError`` on every rank -- otherwise a build exception on root leaves non-root ranks hanging at the next collective until CI times out.
 
-    The MPI e2e tests build artefacts (SDFG / ``.so``) on ``root`` only and
-    then share them via a collective (``comm.bcast`` / ``distributed_compile``
-    / ``comm.Barrier``); the non-root ranks block at that collective.  If the
-    build raises, pytest catches the exception on ``root`` -- the process
-    stays alive -- so ``mpirun`` never sees a dead rank and the waiting ranks
-    hang at the collective forever (the run only ends when CI times out).
-
-    Here ``root`` runs the build inside a guard and broadcasts a
-    ``(error, result)`` envelope BEFORE any other collective: on failure every
-    rank raises the same :class:`RuntimeError` (carrying ``root``'s traceback),
-    so the whole job fails fast and ``mpirun`` exits non-zero -- no hang.
-
-    :param comm: the MPI communicator every rank participates in.
-    :param build_fn: zero-arg callable, run only on ``root``.
-    :param root: the rank that performs the build (default 0).
-    :param broadcast: when True (default) ``build_fn``'s return value (which
-        must be picklable -- typically ``.so`` path strings) is returned on
-        every rank; when False it is returned only on ``root`` (``None``
-        elsewhere) -- for a non-picklable result (e.g. an ``SDFG``) consumed by
-        a following collective such as :func:`dace.sdfg.utils.distributed_compile`.
-        Either way a build failure is broadcast and re-raised on all ranks.
-    :returns: ``build_fn()``'s result (on every rank when ``broadcast``, else
-        on ``root`` only).
+    ``broadcast=False``: return value (e.g. a non-picklable SDFG) stays root-only, for callers that follow with their own collective (:func:`dace.sdfg.utils.distributed_compile`).
     """
     import traceback
     rank = comm.Get_rank()
@@ -384,12 +220,7 @@ def build_on_root(comm, build_fn, *, root: int = 0, broadcast: bool = True):
 
 
 def run_passes_dump(source: str, out_dir: Path, name: str = "src", pipeline: str = "builtin.module()") -> str:
-    """Compile Fortran to HLFIR, run the given pipeline, return the IR dump.
-
-    Use this when the test inspects post-pass MLIR directly rather than going
-    through SDFG extraction  --  handy for passes whose downstream tracing is
-    still being wired in.
-    """
+    """Compile Fortran to HLFIR, run ``pipeline``, return the IR dump -- for tests inspecting post-pass MLIR directly rather than through SDFG extraction."""
     from dace_fortran.build_bridge import hb
     hlfir = compile_to_hlfir(source, out_dir, name)
     mod = hb.HLFIRModule()

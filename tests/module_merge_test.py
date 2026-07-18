@@ -1,17 +1,7 @@
-"""Tests for ``merge_used_modules`` (the fparser-free single-TU pass).
-
-Modelled on f2dace-windmill's ``recursive_ast_improver_test`` multi-
-module fixtures (``lib`` <- ``lib_indirect`` <- entry).  The contract:
-
-* compiling the project as **separate files together** and compiling
-  the **single merged file** must be numerically equivalent (the merge
-  preserves semantics), and
-* the HLFIR bridge must build a correct SDFG from the merged TU
-  (e2e vs the gfortran reference, per ``feedback_e2e_numerical``),
-
-plus the structural guards: pass-through on a self-contained input,
-idempotence, intrinsic ``USE`` left untouched, dependency order.
-"""
+"""Tests for ``merge_used_modules`` (the fparser-free single-TU pass).  Contract:
+separate-files-together and single-merged-file compiles must be numerically
+equivalent, and the HLFIR bridge must build a correct SDFG from the merged TU.  Plus
+structural guards: pass-through, idempotence, intrinsic ``USE`` untouched, dep order."""
 
 import shutil
 import subprocess
@@ -101,9 +91,8 @@ def _proj(d: Path, **files: str) -> Path:
 
 
 def test_merge_then_single_file_matches_all_files_together(tmp_path: Path):
-    """Reference built from the three separate files compiled *together*
-    must equal the reference built from the *single merged* file, and
-    the SDFG the bridge builds from the merged TU must match both."""
+    """Reference from the three separate files compiled together must equal the
+    reference from the single merged file; the bridge's SDFG must match both."""
     proj = _proj(tmp_path / "proj", physmod_f90=_PHYSMOD, drivermod_f90=_DRIVERMOD, drv_f90=_DRV)
 
     # Variant A: compile all files together (dependency order for f2py).

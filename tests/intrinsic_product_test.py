@@ -34,15 +34,11 @@ END SUBROUTINE intrinsic_product_array_function
 
 
 def test_fortran_frontend_product_array_dim(tmp_path):
-    """``PRODUCT(d, dim)`` with the explicit DIM= argument.
+    """PRODUCT(d, dim) with the explicit DIM= argument.
 
-    The original f2dace port used ``logical, dimension(5)`` for ``d``,
-    but Fortran 2018 restricts ``PRODUCT`` to numeric types
-    (``INTEGER`` / ``REAL`` / ``COMPLEX``); ``flang-new-21`` correctly
-    rejects ``PRODUCT(LOGICAL_array, 1)`` with "bad type LOGICAL(4)".
-    Switching ``d`` to ``integer`` keeps the spirit of the test (the
-    ``dim`` argument is what we want to exercise) while satisfying
-    the standard."""
+    Original f2dace port used logical d, but Fortran 2018 restricts PRODUCT to
+    numeric types; flang-new-21 rejects PRODUCT(LOGICAL_array, 1). Switched d
+    to integer to keep exercising `dim` while satisfying the standard."""
     src = """
 SUBROUTINE intrinsic_product_array_dim_function(d, res)
 integer, dimension(5) :: d

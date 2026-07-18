@@ -1,8 +1,7 @@
 """Data-class shapes shared by every intrinsic sub-registry.
 
-Each registry file (``elementwise.py``, ``reductions/...``, ``linalg/...``,
-``direct/...``) just populates a dict whose values are one of these
-dataclasses, so the public helpers in ``__init__.py`` can be family-agnostic.
+Each registry file populates a dict of these dataclasses so the public
+helpers in ``__init__.py`` stay family-agnostic.
 """
 
 from dataclasses import dataclass
@@ -10,11 +9,9 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class ElementwiseIntrinsic:
-    """A Fortran intrinsic whose lowered form is a per-element scalar call
-    inside an ``hlfir.elemental`` body.  The name is used verbatim in the
-    DaCe tasklet code string; DaCe's codegen resolves it through
-    ``_ALLOWED_MODULES`` in ``dace/dtypes.py`` to the runtime wrappers in
-    ``dace/runtime/include/dace/math.h``."""
+    """Fortran intrinsic lowered to a per-element scalar call inside an
+    ``hlfir.elemental`` body; name is used verbatim in tasklet code, resolved
+    via ``_ALLOWED_MODULES`` (dace/dtypes.py) to ``dace/runtime/include/dace/math.h``."""
 
     name: str
     arity: int
@@ -34,9 +31,8 @@ class ReductionIntrinsic:
 @dataclass(frozen=True)
 class LibNodeIntrinsic:
     """Intrinsic that becomes a direct DaCe library-node emission
-    (``blas.Matmul``, ``linalg.Transpose``, ``blas.Dot``, ``fft.FFT``)
-     --  populated by ``linalg.py``, consumed by
-    ``builder/emit_library.py``."""
+    (``blas.Matmul``, ``linalg.Transpose``, ``blas.Dot``, ``fft.FFT``) --
+    populated by ``linalg.py``, consumed by ``builder/emit_library.py``."""
 
     name: str
     module: str  # e.g. "blas", "standard", "fft"

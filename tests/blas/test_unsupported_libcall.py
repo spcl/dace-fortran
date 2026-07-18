@@ -1,14 +1,7 @@
-"""Verify the bridge raises a CLEAR error for an unrecognised library call.
-
-When a Fortran call site matches a recognised library's call convention
-(MPI / FFTW3 / BLAS / LAPACK) but the specific routine isn't in the
-bridge's supported subset yet, the bridge MUST surface a precise
-``NotImplementedError`` -- not silently degrade to a generic ``call``
-lowering that mints an invalid ``_out = ?`` tasklet body.
-
-This test pins that contract.  When the bridge gains support for the
-probed routine the assertion flips to "no error" and the test must be
-updated (or the probe routine swapped to a still-unsupported one).
+"""An unrecognised routine within a known library convention (MPI/FFTW3/BLAS/LAPACK)
+must raise ``NotImplementedError``, not silently degrade to an invalid ``_out = ?``
+tasklet. When the bridge gains support for the probed routine, swap it for a still-
+unsupported one.
 """
 from pathlib import Path
 

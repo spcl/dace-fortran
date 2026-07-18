@@ -1,22 +1,14 @@
 """Shared harness for the ICON-O ocean kernel end-to-end numerical tests.
 
-For one ocean single-TU kernel it builds two shared libraries that share the
-SAME flat C ABI and drives both from one set of random ctypes buffers:
+Builds two shared libs with the SAME flat C ABI and drives both from one set of
+random ctypes buffers: DUT is the kernel lowered to a DaCe SDFG through the
+auto-generated ``bind(c)`` shim; REF is the original Fortran kernel through the
+SAME shim retargeted to call it directly (:func:`_retarget_shim`) -- identical
+ABI, no hand-authored per-kernel caller.
 
-  DUT  -- the kernel lowered to a DaCe SDFG, compiled, and reached through the
-          AUTO-GENERATED ``bind(c)`` shim (``build_fortran_library(
-          bind_c_shim=True)``).
-  REF  -- the ORIGINAL Fortran kernel, reached through the SAME shim
-          *retargeted* to ``call <kernel>`` instead of ``call <entry>_dace``
-          (:func:`_retarget_shim`).  Identical flat->struct reconstruction, so
-          identical C ABI -- an apples-to-apples comparison with no
-          hand-authored per-kernel caller.
-
-Each kernel runs in its OWN subprocess (:func:`run_kernel_e2e`), mirroring the
-``extract_single_tu`` pattern: the SDFG ``.so`` is dlopen'd ``RTLD_GLOBAL`` so
-the DaCe runtime initialises, which would otherwise leak symbols into a later
-in-process flang/MLIR build of the next kernel and corrupt it.  Process
-isolation makes both the load mode and the MLIR build per-kernel-clean.
+Each kernel runs in its own subprocess (:func:`run_kernel_e2e`): the SDFG
+``.so`` is dlopen'd RTLD_GLOBAL, which would otherwise leak DaCe runtime
+symbols into the next kernel's in-process flang/MLIR build.
 """
 import ctypes
 import json
@@ -36,32 +28,24 @@ _HERE = Path(__file__).resolve().parent
 _NP = {"real(c_double)": np.float64, "integer(c_int)": np.int32, "logical(c_bool)": np.int8}
 _CT = {"real(c_double)": ctypes.c_double, "integer(c_int)": ctypes.c_int, "logical(c_bool)": ctypes.c_bool}
 
-# ICON refinement-control index arrays -- ``verts/cells/edges%{start,end}_{block,index}``
-# -- are ``ALLOCATABLE(:)`` but allocated ``(min_rl : max_rl)`` (a NEGATIVE lower bound)
-# and read at refinement-control levels that run negative (``end_block(-10)``).  The
-# bind_c shim now carries each array's per-dim lower bound (``<arr>_lb<i>``), so the
-# harness gives these arrays that negative lower bound and sizes them to span the whole
-# refin-ctrl level range instead of the mesh size ``n``.  ``[-16, 16]`` comfortably
-# covers ICON's levels (velocity's widest is the edges' ``[-10, 10]``); under
-# ``int_fill`` every slot is the single valid block / index, so the read is in-bounds
-# at any level and the binding's ``offset = lbound`` matches the SDFG's indexing.
+# ICON refin-ctrl index arrays (verts/cells/edges%{start,end}_{block,index}) are
+# ALLOCATABLE with a NEGATIVE lower bound (min_rl:max_rl) and read at negative
+# levels (end_block(-10)).  The bind_c shim carries each array's per-dim lower
+# bound (<arr>_lb<i>), so these are sized to [-16, 16] (covers ICON's widest,
+# edges' [-10,10]) instead of mesh size n; under int_fill every slot is the one
+# valid block/index so any level read is in-bounds.
 _REFIN_CTRL_RE = re.compile(r"_(?:start|end)_(?:block|index)$")
 _REFIN_CTRL_LBOUND = -16
 _REFIN_CTRL_EXTENT = 33
 
 
 def _refin_ctrl_flat(sym: str, suffix_re: str) -> str:
-    """The array flat name behind a per-dim extent (``_d<i>``) or lower-bound
-    (``_lb<i>``) C-ABI arg, for the refin-ctrl test.  ``re.sub`` of the given
-    suffix; returns the arg unchanged when it carries no such suffix."""
+    """Flat array name behind a per-dim extent (``_d<i>``) / lower-bound (``_lb<i>``) C-ABI arg; unchanged if no such suffix."""
     return re.sub(suffix_re, "", sym)
 
 
 def _module_symbol_map(binding: str) -> dict:
-    """``sym -> module`` for every ICON namelist/config global the DUT binding
-    imports as ``use <module>, only: <sym>__mod => <sym>``.  Shared by the
-    size-derived grid-dim seeding (:func:`_size_derived_module_dims`) and the
-    config-global seeding (:func:`_resolve_module_seeds`)."""
+    """``sym -> module`` map from the DUT binding's ``use <module>, only: <sym>__mod => <sym>`` imports."""
     sym_module = {}
     for module, renames in re.findall(r"use\s+(\w+),\s*only:\s*([^\n]+)", binding):
         for _alias, sym in re.findall(r"(\w+)__mod\s*=>\s*(\w+)", renames):
@@ -70,23 +54,15 @@ def _module_symbol_map(binding: str) -> dict:
 
 
 def _size_derived_module_dims(binding: str):
-    """The ICON grid-DIMENSION module globals the DUT binding derives from an
-    array extent -- ``n_zlev = int(size(psi_c, dim=2), c_int)`` for the
-    ``mo_ocean_nml::n_zlev`` global, ``nproma`` from ``mo_parallel_config``, etc.
+    """ICON grid-DIMENSION module globals the DUT binding derives from an array
+    extent (``n_zlev = int(size(psi_c, dim=2), c_int)``, ``nproma``, etc).
 
-    ICON sets these from its namelist at model init; an extracted kernel called
-    in isolation reads them UNINITIALISED (BSS = 0), which sizes the kernel's
-    automatic local arrays (``this_vort_flux(n_zlev, 2)``) to zero -> OOB.  The
-    SDFG path is immune (the bridge derives them as free symbols from the array
-    extents -- the ``size(...)`` lines this parses), so a faithful reference
-    caller must seed them the same way.  Every array extent in this harness is
-    the mesh size ``n``, so the reference sets each to ``n``.
-
-    Returns ``[(sym, module), ...]``.  Only module-origin syms (those the binding
-    imports as ``<sym>__mod => <sym>``) that ALSO carry a ``size()`` derivation
-    qualify -- a module-SOURCED global the DUT reads *directly* (``nproma =
-    int(nproma__mod, c_int)``) is instead seeded on BOTH sides via
-    :func:`_resolve_module_seeds`."""
+    An isolated kernel reads these as BSS=0, sizing automatic locals to zero ->
+    OOB; the SDFG path derives them as free symbols instead, so the reference
+    must seed them too (every extent here is mesh size ``n``).  Returns
+    ``[(sym, module), ...]`` for syms with a ``size()`` derivation; a directly-read
+    global goes through :func:`_resolve_module_seeds` instead.
+    """
     sym_module = _module_symbol_map(binding)
     seen, out = set(), []
     for sym in re.findall(r"^\s*(\w+)\s*=\s*int\(size\(\w+,\s*dim=\d+\),\s*c_int\)", binding, re.M):
@@ -101,16 +77,12 @@ def _resolve_module_seeds(binding: str, seeds: dict):
     ``[(mangled_symbol, length, value), ...]`` for ctypes ``in_dll`` seeding on
     BOTH the DUT and reference ``.so``.
 
-    Unlike the size-derived grid dims, some ICON config globals are read by the
-    DUT binding straight from the module (``nproma = int(nproma__mod, c_int)``;
-    ``nflatlev = nflatlev__mod``), so an isolated run reads them as BSS 0 on BOTH
-    sides -- ``nproma = 0`` sizes automatic locals to zero, ``nflatlev(jg) = 0``
-    makes ``DO jk = nflatlev, nlev`` start at 0, both out of bounds.  There is no
-    array extent to derive them from, so the test supplies the namelist values
-    (the policy) and the harness seeds both ``.so``s identically (the mechanism),
-    keeping the differential bit-exact.  ``length`` is the array extent from the
-    binding's ``allocate(<sym>(N))`` (a per-domain global like ``nflatlev(10)``),
-    else 1 for a scalar; every element is set to ``value``."""
+    Some ICON config globals (``nproma``, ``nflatlev``) are read straight from
+    the module on both sides, so an isolated run sees BSS=0 -> OOB with no array
+    extent to derive them from; the test supplies namelist values and the
+    harness seeds both ``.so``s identically.  ``length`` comes from the
+    binding's ``allocate(<sym>(N))`` (else 1 for a scalar).
+    """
     sym_module = _module_symbol_map(binding)
     out = []
     for sym, value in seeds.items():
@@ -123,9 +95,7 @@ def _resolve_module_seeds(binding: str, seeds: dict):
     return out
 
 
-# Seeded allocatable-array buffers are kept alive for the child's lifetime -- the
-# descriptor's ``base_addr`` points into them, and the child ``os._exit``s before
-# any Fortran teardown, so they are never freed.
+# Kept alive for the child's lifetime -- descriptor's base_addr points into these, and the child os._exit()s before any Fortran teardown.
 _ALLOC_SEED_KEEPALIVE: list = []
 
 
@@ -133,14 +103,12 @@ def _resolve_module_array_seeds(binding: str, seeds: dict):
     """Resolve ``{fortran_sym: length}`` allocatable-module-ARRAY seeds to
     ``[(mangled_symbol, length), ...]``.
 
-    Some ICON module globals are ``REAL(8), ALLOCATABLE`` (``mo_vertical_coord_
-    table::vct_a`` -- the vertical coordinate table) that the kernel indexes
-    directly (``vct_a(jk)``).  An isolated run leaves them UNALLOCATED (a null
-    descriptor), so the real reference OOB-reads / SEGVs and the SDFG reads the
-    binding's size-1 defensive fallback (garbage).  Neither crosses the bind(c)
-    ABI (module-direct reads), so -- like the scalar :func:`_resolve_module_seeds`
-    -- the test supplies the length and the harness allocates + fills the SAME
-    values on BOTH ``.so``s, keeping the differential bit-exact."""
+    Some ICON module globals are ``REAL(8), ALLOCATABLE`` (e.g. ``vct_a``) that
+    the kernel indexes directly; an isolated run leaves them UNALLOCATED (REF
+    SEGVs, SDFG reads a garbage size-1 fallback).  Like
+    :func:`_resolve_module_seeds`, the test supplies the length and the harness
+    allocates + fills identical values on BOTH ``.so``s.
+    """
     sym_module = _module_symbol_map(binding)
     out = []
     for sym, length in seeds.items():
@@ -184,32 +152,24 @@ def _retarget_shim(shim: str,
                    solver_allocs=None,
                    pointer_members=None,
                    extra_refmod_imports=None) -> str:
-    """Rewrite the auto ``<dace_name>_c`` shim into a ``<dace_name>_ref_c`` that
-    calls the ORIGINAL kernel ``entry`` (``module::proc``) instead of the
-    ``<dace_name>_dace`` binding.  The flat->struct reconstruction (header,
-    ``c_f_pointer`` aliases, struct alloc + copy-in) is reused verbatim; only
-    the ``use`` line, the final ``call`` and the subroutine name change.
+    """Rewrite the auto ``<dace_name>_c`` shim into ``<dace_name>_ref_c``: same
+    flat->struct reconstruction, but ``use``/``call``/name retarget to the
+    ORIGINAL kernel ``entry`` instead of ``<dace_name>_dace``.
 
-    ``logical(c_bool)`` value args are coerced to the kernel's default
-    ``LOGICAL`` (kind 4) at the call site -- the C ABI keeps logicals as
-    ``c_bool``, and the conversion to the callee's logical kind happens here, the
-    same way the binding wrapper handles it for the SDFG path.
+    ``logical(c_bool)`` args are coerced to the kernel's LOGICAL kind at the
+    call site (C ABI keeps them ``c_bool``), same as the SDFG path.
 
-    Grid DIMENSION module globals (``module_dims`` = ``[(sym, module), ...]`` from
-    :func:`_size_derived_module_dims`) the kernel reads are seeded to ``n_val``
-    (the mesh size -- every extent in this harness) before the call, mirroring
-    ICON's namelist init -- otherwise the isolated reference reads them as 0.
+    ``module_dims`` (grid-DIMENSION globals from :func:`_size_derived_module_dims`)
+    are seeded to ``n_val`` before the call, mirroring ICON's namelist init --
+    else the isolated reference reads them as 0.
 
-    ``solver_allocs`` (``[(object, component, dims), ...]``) builds the allocatable
-    work components of module-level DERIVED-TYPE solver objects the stock routine
-    reads.  A single-TU extraction stubs the solver's allocator
-    (``ocean_solve_construct``) to an empty body, so the real Fortran variable
-    (``free_sfc_solver%x_loc_wp``) stays unallocated and the stock write SEGVs; the
-    DUT SDFG supplies this scratch from its marshalling layer, so only the REF
-    needs it.  ``object`` lives in the entry's own module ``mod``; ``dims`` is a
-    Fortran extent expression that may reference the reconstructed dummy structs
-    (``patch_3d % p_patch_2d(1) % alloc_cell_blocks``) and the seeded grid-dim
-    globals (``nproma__refmod``), both in scope + populated before the call."""
+    ``solver_allocs`` (``[(object, component, dims), ...]``) builds the
+    allocatable work members of module-level solver objects that a single-TU
+    extraction's stubbed ``ocean_solve_construct`` leaves unallocated (the stock
+    write would SEGV; the DUT gets this scratch from its own marshalling layer,
+    so only REF needs it).  ``dims`` may reference reconstructed dummy structs
+    and the seeded grid-dim globals (``nproma__refmod``), both in scope before
+    the call."""
     mod, proc = entry.split("::")
     proc = proc.lower()
     module_dims = module_dims or []
@@ -229,9 +189,8 @@ def _retarget_shim(shim: str,
             # same-named shim local; seeded just before the call below.
             for sym, module in module_dims:
                 out.append(f"  use {module}, only: {sym}__refmod => {sym}")
-            # Seeded grid-dim globals a solver-alloc extent references
-            # (``nproma__refmod``): imported (renamed) so the extent resolves;
-            # their value is supplied by the ctypes module-seed, not a shim assign.
+            # Seeded grid-dim globals a solver-alloc extent references (nproma__refmod):
+            # imported (renamed) so the extent resolves; value comes from the ctypes module-seed.
             for sym, module in (extra_refmod_imports or []):
                 out.append(f"  use {module}, only: {sym}__refmod => {sym}")
             continue
@@ -242,11 +201,9 @@ def _retarget_shim(shim: str,
             indent, arglist = m.group(1), m.group(2)
             for sym, _module in module_dims:
                 out.append(f"{indent}{sym}__refmod = {n_val}")
-            # Build the stubbed solver objects' allocatable work arrays (the
-            # module-global reconstruction the empty ``ocean_solve_construct``
-            # skips); zero-init so a read-before-write of an unwritten slot
-            # (``res_loc_wp(1)`` when the solve stub leaves it untouched) is
-            # deterministic across the DUT and the reference.
+            # Stubbed solver objects' allocatable work arrays (skipped by the empty
+            # ocean_solve_construct); zero-init so a read-before-write of an unwritten
+            # slot is deterministic across DUT and reference.
             for obj, comp, dims in solver_allocs:
                 guard = "associated" if (obj.lower(), comp.lower()) in (pointer_members or set()) else "allocated"
                 out.append(f"{indent}if (.not. {guard}({obj} % {comp})) allocate({obj} % {comp}({dims}))")
@@ -271,19 +228,15 @@ def _inject_dut_solver_allocs(shim: str,
                               pointer_members=None,
                               extra_refmod_imports=None) -> str:
     """Pre-allocate the stubbed module-global solver-scratch host members in the
-    DUT ``<dace_name>_c`` shim -- symmetric to :func:`_retarget_shim`'s REF-side
-    injection, but KEEPING the ``<dace_name>_dace`` (SDFG) call.
+    DUT shim -- symmetric to :func:`_retarget_shim`'s REF-side injection, but
+    KEEPING the ``<dace_name>_dace`` (SDFG) call.
 
-    The single-TU extraction stubs ``ocean_solve_construct`` to an empty body, so
-    ``free_sfc_solver%x_loc_wp`` (+ twins) stay unallocated on entry.  The binding's
-    live-member marshalling sizes each SoA companion from ``size(host_member)``, so
-    the host member must be allocated at its real (mesh) shape here first; otherwise
-    the marshalling takes the degenerate ``(1,1)`` fallback and the kernel's
-    mesh-bounded writes overrun it and smash the heap.  Same ``(object, component,
-    dims)`` list the REF shim uses -- ``dims`` may reference the reconstructed dummy
-    structs (``patch_3d % p_patch_2d(1) % alloc_cell_blocks``) and the seeded
-    grid-dim globals (``nproma__refmod``), both in scope + populated before the
-    call."""
+    ``ocean_solve_construct`` is stubbed empty by single-TU extraction, so these
+    members stay unallocated; the binding's live-member marshalling sizes each
+    SoA companion from ``size(host_member)``, so without this the marshalling
+    takes the degenerate ``(1,1)`` fallback and the kernel's mesh-bounded writes
+    smash the heap.  Same ``(object, component, dims)`` list the REF shim uses.
+    """
     mod, _proc = entry.split("::")
     module_dims = module_dims or []
     solver_allocs = solver_allocs or []
@@ -300,9 +253,8 @@ def _inject_dut_solver_allocs(shim: str,
             out.append(f"  use {mod}, only: {', '.join(solver_objs)}")
             for sym, module in module_dims:
                 out.append(f"  use {module}, only: {sym}__refmod => {sym}")
-            # Seeded grid-dim globals a solver-alloc extent references
-            # (``nproma__refmod``): imported (renamed) so the extent resolves;
-            # their value comes from the ctypes module-seed, not a shim assign.
+            # Seeded grid-dim globals a solver-alloc extent references (nproma__refmod):
+            # imported (renamed) so the extent resolves; value comes from the ctypes module-seed.
             for sym, module in (extra_refmod_imports or []):
                 out.append(f"  use {module}, only: {sym}__refmod => {sym}")
             continue
@@ -312,10 +264,8 @@ def _inject_dut_solver_allocs(shim: str,
             for sym, _module in module_dims:
                 out.append(f"{indent}{sym}__refmod = {n_val}")
             for obj, comp, dims in solver_allocs:
-                # ``x_loc_wp`` / ``res_loc_wp`` are ALLOCATABLE, ``b_loc_wp`` is a
-                # POINTER (mixed kinds in ``t_ocean_solve``) -- pick the guard the
-                # member's kind accepts (``allocated`` rejects a pointer and vice
-                # versa), taken from the binding's own associated()/allocated() use.
+                # t_ocean_solve mixes ALLOCATABLE (x_loc_wp/res_loc_wp) and POINTER
+                # (b_loc_wp) members -- guard picked per the binding's own associated()/allocated() use.
                 guard = "associated" if (obj.lower(), comp.lower()) in (pointer_members or set()) else "allocated"
                 out.append(f"{indent}if (.not. {guard}({obj} % {comp})) allocate({obj} % {comp}({dims}))")
                 out.append(f"{indent}{obj} % {comp} = 0.0d0")
@@ -327,12 +277,10 @@ def _inject_dut_solver_allocs(shim: str,
 
 def _parse_abi(shim: str):
     """Recover the shim's flat C ABI: ``(header_args, value_ftype, ptr_ftype,
-    ptr_shape_expr, dim_symbols, ptr_local)``.  ``dim_symbols`` are the
-    identifiers any ``c_f_pointer`` shape references -- the array extents the
-    caller supplies.  ``ptr_local`` maps each pointer header arg (``<x>_p``)
-    to its readable ``c_f_pointer`` local name (``<x>``), the key
-    :func:`run_kernel_e2e`'s ``array_overrides`` uses to pin a buffer's
-    contents."""
+    ptr_shape_expr, dim_symbols, ptr_local)``.  ``ptr_local`` maps each pointer
+    header arg (``<x>_p``) to its ``c_f_pointer`` local name -- the key
+    :func:`run_kernel_e2e`'s ``array_overrides`` uses to pin a buffer.
+    """
     m = re.search(r"subroutine\s+\w+\(([^)]*)\)\s*bind", shim, re.S)
     header = [a.strip() for a in m.group(1).replace("&", " ").split(",") if a.strip()]
     value_ftype = {
@@ -361,22 +309,19 @@ def synth_call_inputs(shim,
                       scalar_overrides=None,
                       array_overrides=None,
                       mesh_buffers=None):
-    """Parse the shim's flat C ABI and synthesize a matched ``(call_plan, inputs,
-    ptr_args, ptr_local)`` -- the ctypes call plan plus the random/pinned input
-    buffers behind every pointer arg.
+    """Parse the shim's flat C ABI and synthesize ``(call_plan, inputs, ptr_args,
+    ptr_local)`` -- ctypes call plan plus random/pinned input buffers.
 
     Shared by the fork-based single-rank differential (:func:`_build_and_compare`)
-    and the in-process 2-rank real-MPI driver (``test_ocean_veloc_mpi_sync_e2e``),
-    so both size the mesh, pin the refin-ctrl arrays, and lay out the value args
-    identically -- the only divergence is the driver overriding the ``comm`` value
-    arg with a live ``mpi4py`` handle (via ``scalar_overrides``)."""
+    and the in-process 2-rank MPI driver; only divergence is the driver
+    overriding ``comm`` with a live ``mpi4py`` handle via ``scalar_overrides``.
+    """
     scalar_overrides = scalar_overrides or {}
     array_overrides = array_overrides or {}
     mesh_buffers = mesh_buffers or {}
     header, value_ftype, ptr_ftype, ptr_shape, dim_symbols, ptr_local = _parse_abi(shim)
-    # Refin-ctrl arrays span the full refin-ctrl level range, not the mesh size ``n`` --
-    # size their per-dim extent symbols (``<arr>_d<i>``) to ``_REFIN_CTRL_EXTENT`` so the
-    # negative lower bound (supplied below) leaves every read in bounds.
+    # Refin-ctrl arrays span the full level range, not mesh size n -- size their
+    # extent symbols to _REFIN_CTRL_EXTENT so the negative lower bound stays in bounds.
     dimvals = {
         s: (_REFIN_CTRL_EXTENT if _REFIN_CTRL_RE.search(_refin_ctrl_flat(s, r"_d\d+$")) else n)
         for s in dim_symbols
@@ -399,9 +344,8 @@ def synth_call_inputs(shim,
             elif npdt == np.float64:
                 base = np.asfortranarray(rng.uniform(float_range[0], float_range[1], shape).astype(npdt))
             elif int_fill is not None:  # degenerate valid mesh: every count/index/bound == int_fill
-                # A single in-domain block, one edge/vertex per connectivity slot, and every
-                # connectivity index pointing at element ``int_fill`` -> exactly one in-bounds
-                # iteration everywhere (no vacuous empty range, no out-of-bounds composite index).
+                # One in-domain block/edge/vertex per slot, every connectivity index -> int_fill:
+                # exactly one in-bounds iteration everywhere, no vacuous range, no OOB composite index.
                 base = np.asfortranarray(np.full(shape, int_fill, dtype=npdt))
             else:  # integer count / index array -> in-bounds [1, n]
                 base = np.asfortranarray(rng.integers(1, n + 1, shape).astype(npdt))
@@ -413,8 +357,7 @@ def synth_call_inputs(shim,
             if lb_flat != arg:  # an array lower-bound arg ``<flat>_lb<i>``
                 v = scalar_overrides.get(arg, _REFIN_CTRL_LBOUND if _REFIN_CTRL_RE.search(lb_flat) else 1)
             else:
-                # Extent args ride ``dimvals`` (refin-ctrl-aware) so the passed extent
-                # matches the buffer the ``c_f_pointer`` shape reconstructs.
+                # Extent args ride dimvals (refin-ctrl-aware) to match the c_f_pointer shape.
                 int_default = int_fill if int_fill is not None else 0
                 v = scalar_overrides.get(
                     arg, dimvals[arg] if arg in dim_symbols else (60.0 if ft == "real(c_double)" else int_default))
@@ -423,21 +366,17 @@ def synth_call_inputs(shim,
 
 
 def _invoke(so_path, call_plan, bufs, sym, sdfg_so=None, module_seeds=None, array_seeds=None):
-    # The SDFG .so is dlopen'd RTLD_GLOBAL first so the DaCe runtime (OpenMP
-    # offload init, etc.) is live and its symbols resolve for the binding .so.
+    # SDFG .so dlopen'd RTLD_GLOBAL first so the DaCe runtime is live and its symbols resolve for the binding .so.
     if sdfg_so is not None:
         ctypes.CDLL(str(sdfg_so), mode=ctypes.RTLD_GLOBAL)
     cdll = ctypes.CDLL(str(so_path))
-    # ICON namelist/config globals the isolated kernel would otherwise read as
-    # BSS 0 (nproma block size, per-domain nflatlev/nrdmax) -- seeded here, after
-    # the .so loads and before the call, identically on the DUT and reference .so
-    # (see _resolve_module_seeds) so the differential stays bit-exact.
+    # ICON namelist/config globals otherwise read as BSS 0 -- seeded identically
+    # on DUT and reference (see _resolve_module_seeds) to stay bit-exact.
     for mangled, length, value in (module_seeds or []):
         cell = (ctypes.c_int * length).in_dll(cdll, mangled)
         for i in range(length):
             cell[i] = value
-    # Allocatable module ARRAYS the kernel reads module-direct (``vct_a``) --
-    # unallocated in isolation; allocate + fill identically on both .so's.
+    # Allocatable module ARRAYS read module-direct (e.g. vct_a) -- unallocated in isolation; allocate + fill identically on both .so's.
     for mangled, length in (array_seeds or []):
         _seed_alloc_array(cdll, mangled, length)
     fn = getattr(cdll, sym)
@@ -459,13 +398,12 @@ def _run_in_fork(so_path,
                  sdfg_so=None,
                  module_seeds=None,
                  array_seeds=None):
-    """Load ``so_path`` and run ``sym`` in a forked child on a fresh copy of
-    ``inputs``, saving each output buffer to ``<save_prefix>_<arg>.npy``, then
-    ``os._exit`` so the child's (occasionally heap-corrupting) ctypes/DaCe-
-    runtime teardown never runs.  Loading the DUT (DaCe runtime) and the REF
-    (plain gfortran) ``.so``s in SEPARATE processes also avoids the
-    nondeterministic cross-allocator double-free seen when both share one
-    process.  Returns the child's wait status (0 == clean)."""
+    """Run ``sym`` from ``so_path`` in a forked child on a copy of ``inputs``,
+    saving each output to ``<save_prefix>_<arg>.npy``, then ``os._exit`` so the
+    child's (occasionally heap-corrupting) teardown never runs.  Separate
+    processes for DUT/REF also avoid a cross-allocator double-free seen when
+    both share one process.  Returns the child's wait status (0 == clean).
+    """
     pid = os.fork()
     if pid == 0:
         code = 0
@@ -497,45 +435,40 @@ def _build_and_compare(tu_path: Path,
                        prelude_paths=None,
                        inject_use_mpi=False,
                        ref_solver_allocs=None):
-    """The worker body (runs in a subprocess): build DUT + REF, drive both,
-    return ``(max_diff, n_changed)``.  Imports are deferred so the module loads
-    cheaply in the parent (which only orchestrates the subprocess).
+    """Worker body (runs in a subprocess): build DUT + REF, drive both, return
+    ``(max_diff, n_changed)``.  Imports deferred so the module loads cheaply in
+    the orchestrating parent.
 
-    ``do_not_emit`` (list of routine names) drops halo / MPI / sync / timer /
-    logging externals from the DUT SDFG (``apply_external_functions``) so a
-    single-rank dycore like ``solve_nh`` carries no MPI.  ``prelude_paths``
-    (extra ``.f90`` files) are compiled ahead of the TU on BOTH the DUT binding
-    and the REF -- the ``mpi`` module stub + its no-op point-to-point impls that
-    let the reference link and run single-rank without real MPI.
-    ``inject_use_mpi`` gives the inlined ``mo_mpi`` a ``use mpi`` so its
-    dual-typed real*8/real*4 calls resolve through the stub's one assumed-type
-    interface (no ``-fallow-argument-mismatch``)."""
+    ``do_not_emit`` drops halo/MPI/sync/timer/logging externals from the DUT
+    SDFG so a single-rank dycore carries no MPI.  ``prelude_paths`` (extra .f90
+    files, e.g. the mpi stub + no-op point-to-point impls) compile ahead of the
+    TU on both sides.  ``inject_use_mpi`` gives inlined ``mo_mpi`` a ``use mpi``
+    so its dual-typed real*8/real*4 calls resolve through the stub's assumed-type
+    interface (no ``-fallow-argument-mismatch``).
+    """
     import dace
 
     from dace_fortran.build import build_sdfg
     from dace_fortran.bindings import build_fortran_library
     from dace_fortran.external import apply_external_functions, clear_external_registry
 
-    # Drop the halo / MPI / sync / timer externals from the DUT SDFG so no MPI
-    # survives in a single-rank run.  The REF keeps the (real, single-TU) bodies
-    # but their ``mpi_*`` leaves resolve to the no-op prelude impls below.
+    # Drop halo/MPI/sync/timer externals from the DUT SDFG; REF keeps the real
+    # bodies but its mpi_* leaves resolve to the no-op prelude impls below.
     clear_external_registry()
     if do_not_emit:
         apply_external_functions(do_not_emit=list(do_not_emit))
 
-    # The reference build (and, for ``use mpi``, the DUT binding) compile these
-    # ahead of the TU: the ``mpi`` stub module + no-op point-to-point impls.
+    # Compiled ahead of the TU on the reference build (and DUT binding, for use
+    # mpi): the mpi stub module + no-op point-to-point impls.
     extra_prelude = [Path(p) for p in (prelude_paths or [])]
 
-    # Reference-TU fixup so the extracted single-TU is gfortran-EXECUTABLE (the
-    # SDFG build always reads the RAW ``tu_path`` -- the bridge resolves things its
-    # own way).  ``mo_mpi``'s inlined wrappers call one ``mpi_recv`` / ``mpi_isend``
-    # with both real*8 and real*4 buffers; a ``use mpi`` binds them to the stub's
-    # single ``type(*)`` assumed-type interface (no -fallow-argument-mismatch).
-    # The bridge's devirtualised call names (``<base>_deconiface_<N>`` /
-    # ``<base>_deconproc_<N>``) are NOT undefined -- each rides a ``USE <mod>,
-    # ONLY: <name> => <base>`` rename of an in-TU body -- so the TU compiles as-is;
-    # only the raw ``mpi_*`` leaves are genuinely undefined (no-op prelude impls).
+    # Reference-TU fixup so the extracted single-TU is gfortran-EXECUTABLE (SDFG
+    # build reads the RAW tu_path -- bridge resolves separately).  mo_mpi's
+    # inlined wrappers call one mpi_recv/mpi_isend with both real*8 and real*4
+    # buffers; use mpi binds them to the stub's type(*) interface (no
+    # -fallow-argument-mismatch).  Devirtualised call names (<base>_deconiface_N
+    # / _deconproc_N) are NOT undefined -- each renames an in-TU body via USE --
+    # only the raw mpi_* leaves need the no-op prelude impls.
     ref_tu = tu_path
     if inject_use_mpi:
         src = tu_path.read_text()
@@ -544,12 +477,9 @@ def _build_and_compare(tu_path: Path,
         ref_tu = out / f"{tu_path.stem}_ref.f90"
         ref_tu.write_text(src.replace("MODULE mo_mpi\n", "MODULE mo_mpi\n  use mpi\n", 1))
 
-    # A bit-exact differential needs IEEE-strict FP on the DUT.  DaCe's default CPU
-    # args carry ``-ffast-math``, which contracts ``a*b+c`` into an FMA (and lets
-    # the compiler reassociate) -- so a dot-product-heavy kernel (ICON's rbf /
-    # cells2verts interpolation) rounds ~1 ulp away from the plain-gfortran
-    # reference.  Drop ``-ffast-math`` and pin ``-ffp-contract=off`` so the SDFG
-    # rounds bit-for-bit like the reference; this is a per-subprocess config change.
+    # Bit-exact differential needs IEEE-strict FP on the DUT: DaCe's default
+    # -ffast-math contracts a*b+c into an FMA (dot-product kernels round ~1 ulp
+    # off gfortran) -- drop it and pin -ffp-contract=off; per-subprocess config change.
     cpu_args = dace.Config.get("compiler", "cpu", "args").replace("-ffast-math", "")
     if "-ffp-contract" not in cpu_args:
         cpu_args += " -ffp-contract=off"
@@ -563,29 +493,25 @@ def _build_and_compare(tu_path: Path,
                                 prelude_sources=[*extra_prelude, ref_tu],
                                 bind_c_shim=True)
     shim = Path(lib.bind_c_shim_f90).read_text()
-    # Seed the reference's grid-dimension module globals (nproma / n_zlev) the DUT
-    # binding derives from array extents -- else the isolated reference reads them
-    # as 0 and OOBs.  Recovered from the binding's ``<sym> = int(size(...))`` lines.
+    # Seed the reference's grid-dim module globals (nproma/n_zlev) the DUT derives
+    # from array extents -- else isolated reference reads 0 and OOBs.  Recovered
+    # from the binding's ``<sym> = int(size(...))`` lines.
     binding_files = list((out / "lib").glob("*bindings.f90"))
     binding_text = binding_files[0].read_text() if binding_files else ""
     module_dims = _size_derived_module_dims(binding_text) if binding_text else []
-    # Config globals the DUT binding reads straight from the module (nproma /
-    # nflatlev / ...) -- BSS 0 in isolation, so seeded on BOTH sides to the
-    # test-supplied namelist values.
+    # Config globals read straight from the module (nproma/nflatlev/...) -- BSS 0
+    # in isolation, so seeded on both sides to test-supplied namelist values.
     seed_specs = _resolve_module_seeds(binding_text, module_seeds or {}) if binding_text else []
     array_specs = _resolve_module_array_seeds(binding_text, module_array_seeds or {}) if binding_text else []
-    # ``t_ocean_solve`` mixes ALLOCATABLE (``x_loc_wp`` / ``res_loc_wp``) and
-    # POINTER (``b_loc_wp``) scratch members; the shim's pre-alloc guard must match
-    # each member's kind (``allocated`` rejects a pointer and vice versa).  Recover
-    # the pointer members from the binding's own ``associated(obj % comp)`` guards.
+    # t_ocean_solve mixes ALLOCATABLE and POINTER scratch members; the pre-alloc
+    # guard must match each kind (allocated rejects a pointer) -- recovered from
+    # the binding's own associated(obj % comp) guards.
     pointer_members = {(o.lower(), c.lower())
                        for o, c in re.findall(r"associated\(\s*(\w+)\s*%\s*(\w+)\s*\)", binding_text)}
 
-    # A solver-alloc extent may reference a seeded grid-dim global by its
-    # ``<sym>__refmod`` rename (``x_loc_wp(nproma__refmod, ...)``).  Those NOT in
-    # the size-derived ``module_dims`` come from ``module_seeds``; import them
-    # (renamed) into both shims so the extent resolves.  Their value is the ctypes
-    # module-seed set before the call -- not a shim assign -- so they carry no seed.
+    # A solver-alloc extent may reference a seeded grid-dim global via its
+    # <sym>__refmod rename; those not in module_dims come from module_seeds and
+    # are imported (renamed) into both shims -- value comes from the ctypes module-seed, not a shim assign.
     extra_refmod_imports = []
     if ref_solver_allocs:
         sym_module = _module_symbol_map(binding_text)
@@ -600,12 +526,10 @@ def _build_and_compare(tu_path: Path,
                                f"module import in the binding")
             extra_refmod_imports.append((sym, module))
 
-    # DUT: pre-allocate the stubbed solver-scratch host members in the shim (the
-    # same list the REF shim builds) and re-link the DUT .so.  The binding's
-    # live-member marshalling then sizes each SoA companion from the real (mesh)
-    # member shape instead of the degenerate (1,1) fallback that the kernel's
-    # mesh-bounded writes would overrun (heap smash).  Mirrors the REF compile
-    # below; keeps the SDFG-linked ``<dace_name>_dace`` binding untouched.
+    # DUT: pre-allocate the stubbed solver-scratch host members (same list the
+    # REF shim builds) and re-link -- live-member marshalling then sizes each SoA
+    # companion from the real mesh shape instead of the degenerate (1,1) fallback
+    # (heap smash).  Mirrors the REF compile below; SDFG-linked binding untouched.
     dut_so_path = lib.so_path
     if ref_solver_allocs:
         dut_shim = out / f"{dace_name}_c_dut.f90"
@@ -645,26 +569,22 @@ def _build_and_compare(tu_path: Path,
                        pointer_members=pointer_members,
                        extra_refmod_imports=extra_refmod_imports))
     ref_so = out / f"lib{dace_name}_ref.so"
-    # No ``-fallow-argument-mismatch``: it silences REAL argument-type errors, so a
-    # genuine ABI mismatch between the shim and the kernel would compile to a wrong
-    # call instead of failing loudly.  The pure-compute ocean kernels have no such
-    # mismatch; a kernel with dual-typed MPI buffers (``solve_nh``'s real*8/real*4
-    # ``mpi_recv``) is made sound with ``TYPE(*)`` assumed-type interfaces in the MPI
-    # stub, not by suppressing the diagnostic.
+    # No -fallow-argument-mismatch: it would silence a genuine shim/kernel ABI
+    # mismatch instead of failing loudly.  Dual-typed MPI kernels are made sound
+    # via TYPE(*) interfaces in the MPI stub, not by suppressing the diagnostic.
     r = subprocess.run(
         [
             "gfortran",
             "-shared",
             "-fPIC",
             "-ffree-line-length-none",
-            # IEEE-strict FP to match the DUT (``-ffp-contract=off`` above): no FMA
-            # contraction, no fast-math reassociation, so both sides round identically.
+            # IEEE-strict FP to match the DUT: no FMA contraction, no fast-math reassociation.
             "-ffp-contract=off",
             "-fno-fast-math",
             "-o",
             str(ref_so),
-            # Prelude (mpi stub module + no-op point-to-point impls) compiles ahead of
-            # the TU so its ``use mpi`` resolves and single-rank halo calls are no-ops.
+            # Prelude (mpi stub + no-op impls) compiles ahead of the TU so use mpi
+            # resolves and single-rank halo calls are no-ops.
             *[str(p) for p in extra_prelude],
             str(ref_tu),
             str(ref_shim)
@@ -675,11 +595,8 @@ def _build_and_compare(tu_path: Path,
     if r.returncode != 0:
         raise RuntimeError(f"reference .so compile failed:\n{r.stderr[-3000:]}")
 
-    # Structured per-array input buffers (a physically-consistent mesh's
-    # connectivity / subset-range arrays) can't ride argv as JSON, so
-    # ``run_kernel_e2e`` drops them into ``out`` as a sidecar .npz; load once and
-    # feed the same bytes to both the DUT and REF forks so the differential stays
-    # bit-exact.
+    # Structured per-array input buffers can't ride argv as JSON, so
+    # run_kernel_e2e drops them as a sidecar .npz; feed the same bytes to both forks.
     mesh_buffers = {}
     mesh_npz = out / "mesh_buffers.npz"
     if mesh_npz.exists():
@@ -723,12 +640,9 @@ def _build_and_compare(tu_path: Path,
     for arg in ptr_args:
         d = dut[arg].astype(np.float64)
         rf = ref[arg].astype(np.float64)
-        # Bit-exact comparison treats IDENTICAL non-finite results as equal: two NaNs
-        # (or the same signed Inf) at a position are the same bits, so a degenerate
-        # input that deterministically drives BOTH sides to the same Inf/NaN is not a
-        # divergence.  Only a genuine mismatch -- finite vs non-finite, +Inf vs -Inf,
-        # or a lone NaN -- diverges: those positions carry +Inf so max_diff fails the
-        # ``== 0.0`` gate instead of a real DUT overflow masquerading as a match.
+        # Bit-exact comparison treats IDENTICAL non-finite results as equal (same
+        # NaN/Inf bits on both sides is not a divergence); a genuine mismatch
+        # (finite vs non-finite, opposite-signed Inf/NaN) sets +Inf so max_diff fails the == 0.0 gate.
         equal = (d == rf) | (np.isnan(d) & np.isnan(rf))
         if not equal.all():
             with np.errstate(invalid="ignore"):
@@ -759,23 +673,19 @@ def run_kernel_e2e(tu_path: Path,
                    ref_solver_allocs=None,
                    mesh_buffers=None) -> dict:
     """Run one kernel's e2e build+compare in an isolated subprocess.  Returns
-    ``{passed, max_diff, n_changed, output}``.  ``passed`` is False (with the
-    captured output) on any build / lowering / compile / run failure -- a
-    kernel that does not yet lower surfaces here rather than crashing pytest.
+    ``{passed, max_diff, n_changed, output}``; ``passed`` is False (with captured
+    output) on any build/lowering/compile/run failure rather than crashing pytest.
 
-    ``module_seeds`` (``{fortran_sym: int_value}``) seeds ICON config globals the
-    DUT binding reads straight from the module (``nproma``, per-domain
-    ``nflatlev`` / ``nrdmax``) on BOTH the DUT and reference ``.so`` -- an
-    isolated kernel reads them as BSS 0 (OOB), and there is no array extent to
-    derive them from, so the test supplies the namelist values."""
-    # ``_session_scratch`` is gitignored, so it is absent on a fresh checkout
-    # (CI) -- create it before carving a per-run tempdir out of it.
+    ``module_seeds`` seeds ICON config globals the DUT binding reads straight
+    from the module (``nproma``, ``nflatlev``/``nrdmax``) on both ``.so``s --
+    isolated reads are BSS 0 (OOB) with no extent to derive them from.
+    """
+    # _session_scratch is gitignored (absent on a fresh CI checkout) -- create it before carving a per-run tempdir.
     scratch_root = _HERE.parent.parent.parent / "_session_scratch"
     scratch_root.mkdir(parents=True, exist_ok=True)
     out = Path(tempfile.mkdtemp(prefix="ocean_e2e_", dir=str(scratch_root)))
-    # numpy arrays can't be JSON-encoded onto the child's argv, so hand any structured
-    # input buffers to the worker as a sidecar .npz in the per-run ``out`` dir (already
-    # threaded to the child); ``_build_and_compare`` loads it and applies it to both forks.
+    # numpy arrays can't ride the child's argv as JSON -- sidecar .npz in the
+    # per-run out dir instead; _build_and_compare loads it and applies to both forks.
     if mesh_buffers:
         np.savez(out / "mesh_buffers.npz", **mesh_buffers)
     env = dict(os.environ)

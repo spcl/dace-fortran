@@ -1,13 +1,8 @@
 """Pinned coverage for the bridge's LOGICAL type mapping.
 
-Contract: Fortran ``LOGICAL(KIND=N)`` (any kind) surfaces on the SDFG
-signature as ``np.bool_`` (= C++ ``bool``, 1 byte).  Callers hand a
-NumPy bool array; element-wise boolean ops in tasklets render as
-``bool`` operations directly  --  no ``(x != 0)`` truthiness coercion
-needed.  The caller-side bindings wrapper translates between the
-original Fortran ``LOGICAL(KIND=N)`` image (e.g. 4-byte ``int32``
-with ``-1``/``0`` encoding) and the SDFG's bool layout at the
-Fortran boundary.
+Contract: Fortran LOGICAL(KIND=N) (any kind) surfaces on the SDFG signature as np.bool_
+(bool ops render directly, no (x != 0) coercion). The bindings wrapper translates to/from
+the original Fortran LOGICAL(KIND=N) image (e.g. 4-byte int32, -1/0 encoding) at the boundary.
 """
 
 from pathlib import Path
@@ -21,8 +16,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_logical_array_copy_in_copy_out_roundtrip(tmp_path: Path):
-    """``b = a`` over LOGICAL arrays.  Input handed as ``np.bool_``;
-    output read back as ``np.bool_``; bit-exact equality required."""
+    """b = a over LOGICAL arrays; bit-exact np.bool_ round-trip."""
     src = """
 subroutine roundtrip(a, b, n)
   implicit none
@@ -45,9 +39,7 @@ end subroutine roundtrip
 
 
 def test_logical_invert_per_element(tmp_path: Path):
-    """``b(i) = .not. a(i)``  --  per-element logical NOT over a LOGICAL
-    array.  Verifies the bridge lowers boolean unary ops through the
-    bool-typed SDFG path."""
+    """b(i) = .not. a(i): per-element logical NOT lowers through the bool-typed SDFG path."""
     src = """
 subroutine not_kernel(a, b, n)
   implicit none
@@ -70,12 +62,7 @@ end subroutine not_kernel
 
 
 def test_logical_array_inplace_invert_roundtrip(tmp_path: Path):
-    """In-place ``mask = .not. mask`` over a LOGICAL array.  The dummy
-    is ``intent(inout)`` so the caller's buffer is read AND written;
-    the SDFG signature exposes it as a non-transient ``np.bool_`` Array.
-    Round-trip pins both directions of the data flow: caller's input
-    pattern is read by the kernel, inverted in place, and the inverted
-    pattern observed in the caller's buffer."""
+    """In-place mask = .not. mask; intent(inout) dummy means caller's buffer is both read and written."""
     src = """
 subroutine invert_in_place(mask, n)
   implicit none

@@ -1,30 +1,11 @@
-"""Implicit microphysics solver pipeline from CLOUDSC.
+"""Implicit microphysics solver pipeline from CLOUDSC (cloudscexp2_simplified.F90 lines
+3257-3380): ZQLHS construction, ZQXN RHS init, LU forward+back substitution (also
+covered alone in cloudsc_lu_solver_test.py), sub-epsilon clamp, ZQXN2D/ZQXNM1 carry,
+precip-flux + ZCOVPTOT reset -- six loopnests run back to back.
 
-Lifts the full implicit-solver block (cloudscexp2_simplified.F90
-lines 3257-3380) that combines five back-to-back loopnests:
-
-1. ZQLHS construction (lines 3257-3278)  --  diagonals as
-   ``1 + ZFALLSINK(JM) + sum_O ZSOLQB(JO,JN)`` and off-diagonals as
-   ``-ZSOLQB(JN,JM)``.  Two IF branches in the JN/JM nest.
-2. ZQXN RHS initialization (lines 3283-3294)  --  ``ZQXN(JM) = ZQX(JK,JM)
-   + sum_N ZSOLQA(JM,N)``.
-3. LU forward+back substitution (lines 3308-3336)  --  already covered
-   in ``cloudsc_lu_solver_test.py`` but exercised here in the
-   full-pipeline context.
-4. Sub-epsilon clamp (lines 3341-3348)  --  ``IF ZQXN(JN) < ZEPSEC THEN
-   ZQXN(NCLDQV) += ZQXN(JN); ZQXN(JN) = 0``.  IF-mutation of a shared
-   reduction target.
-5. ZQXN -> ZQXN2D + ZQXNM1 carry (lines 3353-3358)  --  column-wise
-   write-back and cross-JK carry.
-6. Precip-flux derivation + ZCOVPTOT reset (lines 3366-3380)  --  feeds
-   PCOVPTOT's pattern A.
-
-This is the chunk where the cloudsc_full integration test's per-step
-flux errors (Fortran JK=22, 34, 39, 48) originate.  Running all six
-loopnests in sequence over a JK loop catches cross-loopnest state
-interactions that the per-piece tests can't see.
-
-E2e against an f2py-compiled reference of the same Fortran source.
+Origin of cloudsc_full's per-step flux errors at JK=22,34,39,48; running the full chain
+over a JK loop catches cross-loopnest state interactions the per-piece tests miss.
+E2e against an f2py-compiled reference.
 """
 import numpy as np
 import pytest
@@ -187,9 +168,7 @@ END MODULE kernel_mod
     ncldqv, ncldqr, ncldqs, ncldtop = 5, 3, 4, 15
     rng = np.random.default_rng(42)
 
-    # Diagonally-dominant ZSOLQB and small ZFALLSINK so ZQLHS stays
-    # well-conditioned for the LU solve (real cloudsc has this by
-    # construction; the random inputs need explicit shaping).
+    # diagonally-dominant ZSOLQB + small ZFALLSINK keep ZQLHS well-conditioned for LU solve.
     zsolqb_in = rng.random((klon, klev, nclv, nclv, nblocks)) * 0.1
     zfallsink = rng.random((klon, klev, nclv, nblocks)) * 0.1
     zsolqa_in = rng.random((klon, klev, nclv, nclv, nblocks)) * 0.1

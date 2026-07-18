@@ -1,13 +1,11 @@
-"""Fortran ``ALL`` / ``ANY`` lowering through the ``AllNode`` / ``AnyNode``
-library nodes -- both as an assignment RHS and as an IF condition.
+"""Fortran ``ALL``/``ANY`` lowering through the ``AllNode``/``AnyNode`` library
+nodes -- both as an assignment RHS and as an IF condition.
 
-* Assignment ``res = ALL(mask)`` -> an ``AllNode`` writing a boolean
-  scalar (``ALL`` / ``ANY`` return LOGICAL, mapped to ``bool``).
-* ``IF (ALL(mask)) ...`` -> the reduction is materialised into a boolean
-  scalar BEFORE the branch (``tryMaterialiseAllAnyCond`` in the bridge),
-  and the IF reads that bare boolean scalar -- NOT the section inlined
-  into the condition tasklet (which produced a malformed multi-dim
-  memlet for QE's ``IF (ALL(odg(:)))``).
+``res = ALL(mask)`` -> ``AllNode`` writing a boolean scalar.  ``IF (ALL(mask))``
+materialises the reduction into a boolean scalar BEFORE the branch
+(``tryMaterialiseAllAnyCond``); the IF reads that scalar, not the section
+inlined into the condition tasklet (which produced a malformed multi-dim
+memlet for QE's ``IF (ALL(odg(:)))``).
 """
 import numpy as np
 import pytest
@@ -28,8 +26,7 @@ def _libnode_names(sdfg):
     ("ANY", [-1.0, 2.0, -3.0], True),
 ])
 def test_allany_assignment_emits_libnode(tmp_path, op, x, expected):
-    """``res = ALL/ANY(mask)`` lowers to the AllNode/AnyNode and returns a
-    boolean."""
+    """``res = ALL/ANY(mask)`` lowers to the AllNode/AnyNode and returns a boolean."""
     src = f"""
 MODULE s_mod
   IMPLICIT NONE
@@ -63,8 +60,7 @@ END MODULE s_mod
     ("ANY", [-1.0, 2.0, -3.0], 1),
 ])
 def test_allany_in_if_condition(tmp_path, op, x, expected):
-    """``IF (ALL/ANY(mask))`` materialises a boolean scalar via the libnode
-    and branches on it."""
+    """``IF (ALL/ANY(mask))`` materialises a boolean scalar via the libnode and branches on it."""
     src = f"""
 MODULE s_mod
   IMPLICIT NONE

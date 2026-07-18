@@ -1,30 +1,20 @@
-"""Regression: a 2-D SECTION of a 3-D POINTER struct member, passed to an
-inlined worker that indexes it element-wise, lost its fixed block index.
+"""Regression: a 2-D SECTION of a 3-D POINTER struct member, passed to an inlined worker that
+indexes it element-wise, lost its fixed block index.
 
-This is the ubiquitous ICON ``_onBlock`` idiom and the concrete blocker that
-stopped the ocean dynamical core (``solve_free_sfc_ab_mimetic``) from lowering:
+The ICON ``_onBlock`` idiom: ``op_coeffs%grad_coeff`` (a ``REAL(8), POINTER :: (:,:,:)``
+member) sliced per-block as ``grad_coeff(:, :, blockno)`` and indexed ``grad_coeff(i, k)`` in
+the worker. After ``hlfir-flatten-structs`` + ``hlfir-inline-all``, the chain/alias-prefix
+walkers used to bail on the section's ``(:, :)`` triplets and drop ``blockno`` entirely,
+crashing the ``hlfir.designate`` verifier with a rank mismatch (2 indices over a rank-3 array).
 
-  ``op_coeffs%grad_coeff`` is a ``REAL(8), POINTER :: (:,:,:)`` member; an outer
-  routine loops over blocks and calls a worker with the per-block 2-D slice
-  ``grad_coeff(:, :, blockno)``; the worker indexes it ``grad_coeff(i, k)``.
+``rewriteSectionedAliasLeaf`` now composes the section positionally: each full-range triplet
+dim takes the next worker index, each scalar dim (``blockno``) is kept -> ``companion(i, k,
+blockno)``.
 
-``hlfir-flatten-structs`` splits the struct dummy into a flat rank-3 companion
-``op_coeffs_grad_coeff``.  After ``hlfir-inline-all`` the worker's ``(i, k)``
-designate reads through the section alias, but both the chain walker and the
-alias-prefix walk bail on the section's ``(:, :)`` triplets -- which used to
-drop the fixed ``blockno`` entirely and leave a rank-mismatched
-``companion(i, k)`` designate (2 indices over a rank-3 array), crashing the
-``hlfir.designate`` verifier with ``indices number must match memref rank``.
-
-``rewriteSectionedAliasLeaf`` now composes the section positionally: each
-full-range unit-stride triplet dim is filled by the next worker index, each
-scalar dim (``blockno``) is kept -- yielding ``companion(i, k, blockno)``.
-
-f2py's crackfortran can't wrap the derived-type dummy, so the reference is the
-exact closed form.  The flattened struct dummy lowers to a plain rank-3 array
-arg (the companion), so the built SDFG is called directly with that array; a
-dropped/wrong block index either crashes the build (rank mismatch) or reads the
-wrong block (caught by per-block-distinct data).
+f2py can't wrap the derived-type dummy, so the reference is the exact closed form; the
+flattened dummy lowers to a plain rank-3 array, called directly -- a wrong/dropped block index
+either crashes the build (rank mismatch) or reads the wrong block (caught by per-block-distinct
+data).
 """
 from pathlib import Path
 
@@ -35,14 +25,10 @@ from _util import build_sdfg, have_flang
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
-# Two inlining levels are essential to reproduce the ocean blocker: ``mid``
-# takes the WHOLE 3-D member and passes a per-block 2-D SECTION to ``worker``.
-# After inlining, the section's base is ``mid``'s dummy -- an inlined ALIAS of
-# the flat companion, not the companion directly -- which is the chain shape
-# (``leaf -> section -> alias-declare -> companion``) that defeats the chain
-# walker.  A single level (struct -> worker) is handled by the generic path and
-# does NOT reproduce the bug.  This mirrors ICON's
-# ``solve_free_sfc -> ... -> grad_fd_norm_oce_3d -> grad_fd_norm_oce_3d_onBlock``.
+# Two inlining levels are essential: mid takes the whole 3-D member and passes a per-block 2-D
+# SECTION to worker, so the section's base is an inlined ALIAS of the flat companion (chain
+# shape leaf -> section -> alias-declare -> companion) -- a single level doesn't reproduce the
+# bug. Mirrors ICON's solve_free_sfc -> ... -> grad_fd_norm_oce_3d_onBlock.
 _SRC = """
 module mo_sec
   implicit none
@@ -79,9 +65,9 @@ end module mo_sec
 
 
 def test_section_of_3d_pointer_member_inlined(tmp_path: Path):
-    """Build the ``op_coeffs%grad_coeff(:,:,blk)`` shape and run it: a broken
-    section composition crashes the build (rank mismatch) or reads the wrong
-    block; the correct ``companion(i, k, blk)`` matches the closed form."""
+    """Build the ``op_coeffs%grad_coeff(:,:,blk)`` shape and run it: a broken section
+    composition crashes the build (rank mismatch) or reads the wrong block; correct
+    composition matches the closed form."""
     sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="driver", entry="mo_sec::driver").build()
     sdfg.validate()
 

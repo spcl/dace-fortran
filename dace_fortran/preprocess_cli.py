@@ -1,33 +1,10 @@
-"""Standalone CLI for the Fortran source-text preprocess passes.
+"""CLI wrapper over the Fortran preprocess passes, for build-system steps.
 
-Wraps every pass that operates on a source string so build systems
-(cmake / automake / make) can invoke them as a command step:
+Passes run in the same order as ``preprocess_fortran_source`` (merge ->
+strip-openmp -> normalize-kind -> rewrite-integer-powers -> extras);
+keep defaults in sync with it.
 
-    python -m dace_fortran.preprocess_cli \\
-        --rewrite-external \\
-        --normalize-kind \\
-        --search-dir src/utils \\
-        --in src/kernel.f90 \\
-        --out build/preprocessed/kernel.f90
-
-Multiple ``--rewrite-*`` flags compose; the passes run in the same
-order ``preprocess_fortran_source`` uses internally (merge -> strip-
-OpenMP -> normalize-kind -> rewrite-integer-powers -> opt-in
-extras).  Default behaviour matches ``preprocess_fortran_source``
-defaults so the CLI is a thin wrapper, not a parallel
-implementation.
-
-Pattern 2 (string-enum) has a sidecar concern: the rewrite returns
-``(rewritten_source, enum_maps)``.  When ``--rewrite-string-enum``
-is on the CLI writes the enum maps to ``<out>.enum_maps.json``
-alongside the rewritten source so the binding-generation step
-downstream can consume them.
-
-Exit codes:
-    0 -- success (source written; maps written if any).
-    2 -- argument / invocation error.
-    3 -- a pass refused to rewrite (e.g. unresolved EXTERNAL the
-         user expected resolved).  Stderr carries the diagnostic.
+Exit codes: 0 success, 2 argument error, 3 pass refusal.
 """
 import argparse
 import json
@@ -46,7 +23,6 @@ from dace_fortran.preprocess import (
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    """Construct the CLI argument parser."""
     p = argparse.ArgumentParser(
         prog="python -m dace_fortran.preprocess_cli",
         description="Apply DaCe-Fortran source-text preprocess passes.",
@@ -85,7 +61,7 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Directory (recursive) of sibling sources scanned by "
                    "module-resolving passes (merge / external).  Repeat.")
 
-    # Pass switches.  All default off (caller picks what to apply).
+    # Pass switches (all default off).
     p.add_argument("--merge-modules", action="store_true", help="Inline every ``USE``-d module's source.")
     p.add_argument("--merge-engine",
                    choices=("regex", "fparser"),
@@ -180,9 +156,7 @@ def _rewrite_inplace(in_path: Path, args) -> dict:
     src_text = in_path.read_text()
     rewritten, emaps = _apply_passes(src_text, args)
     if rewritten == src_text:
-        # No-op: don't even touch the file (preserve mtime, surface
-        # the "this file already meets the contract" signal to the
-        # build system's incremental rebuilds).
+        # No-op: skip the write to preserve mtime for incremental rebuilds.
         return emaps
     if args.backup_suffix:
         backup = in_path.with_name(in_path.name + args.backup_suffix)
@@ -205,45 +179,29 @@ def _rewrite_inplace(in_path: Path, args) -> dict:
 
 
 def main(argv=None) -> int:
-    """Run the CLI; returns the process exit code.
-
-    :param argv: optional list of command-line tokens (excluding the
-        program name); defaults to ``sys.argv[1:]``.
-    :returns: 0 on success, 2 on argument errors, 3 on pass refusal.
-    """
+    """Runs the CLI; returns 0 on success, 2 on argument error, 3 on pass refusal."""
     args = _build_parser().parse_args(argv)
 
-    # Validate mutually exclusive paths.  argparse can't express
-    # "exactly one of --inplace, --out, or default-stdout" because
-    # --out defaulting to stdout makes the matrix three-way; check
-    # by hand.
+    # argparse can't express this 3-way exclusivity (--inplace/--out/stdout); check by hand.
     if args.inplace and args.out_path:
         raise SystemExit("--inplace and --out are mutually exclusive")
     if args.rewrite_external and not args.search_dirs:
         print("warning: --rewrite-external is a no-op without --search-dir", file=sys.stderr)
 
-    # In-place rewrite over one or more input files -- the
-    # build-system-free path: run this once over your source tree,
-    # let your existing compiler build the result.
+    # --inplace: build-system-free path, run once over the source tree.
     if args.inplace:
-        # All but the first ``--in`` would have been silently ignored
-        # by the previous CLI shape (--out single).  --inplace allows
-        # the natural batch form: rewrite every file in a list.
+        # --inplace supports multiple --in (unlike --out, which uses only the last).
         for raw_in in args.in_path:
             if raw_in == "-":
                 raise SystemExit("--inplace cannot be used with --in -")
             _rewrite_inplace(Path(raw_in), args)
         return 0
 
-    # Single-file rewrite via --in/--out (or stdout).  Repeat ``--in``
-    # is not meaningful here; if the user passed more than one, use
-    # the last (argparse-store-the-last semantics).  Warn if the user
-    # supplied multiple inputs without --inplace.
+    # Non-inplace: multiple --in uses the last (argparse store-the-last); warn.
     if len(args.in_path) > 1:
         print("warning: multiple --in without --inplace -- using last", file=sys.stderr)
     in_path_str = args.in_path[-1]
 
-    # Resolve input.
     if in_path_str == "-":
         source = sys.stdin.read()
     else:
@@ -251,7 +209,6 @@ def main(argv=None) -> int:
 
     source, enum_maps = _apply_passes(source, args)
 
-    # Write rewritten source.
     if args.out_path:
         out = Path(args.out_path)
         out.parent.mkdir(parents=True, exist_ok=True)

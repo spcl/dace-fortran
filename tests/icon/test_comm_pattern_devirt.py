@@ -1,18 +1,8 @@
-"""The monomorphisation engine recognises ICON's REAL ``t_comm_pattern``
-hierarchy -- the prerequisite for devirtualizing ``sync_patch_array`` in the
-atmosphere dynamical core (see ``tests/sync_devirt_mpi_libnode_test.py`` for the
-end-to-end lowering on the same pattern in miniature).
-
-ICON's halo exchange dispatches through the abstract ``t_comm_pattern``
-(``mo_communication_types``) over two concrete arms -- ``t_comm_pattern_orig``
-(``mo_communication_orig``) and ``t_comm_pattern_yaxt`` (``mo_communication_yaxt``).
-That is a single-level hierarchy with a closed arm set, which the engine can
-``retype`` (pin to the default ``orig``) or ``ladder``, turning ``p_pat%exchange_data_*``
-from a ``fir.dispatch`` an SDFG cannot lower into a static call that inlines.
-
-This test confirms the engine plans the REAL hierarchy (not just the synthetic
-fixture); the unrelated ``CLASS(*)`` generic containers the comm closure also
-pulls in are out of scope of the scoped rejection, so they do not block it.
+"""Monomorphisation engine recognises ICON's REAL ``t_comm_pattern`` hierarchy
+(single-level, two concrete arms: orig/yaxt) -- prerequisite for devirtualizing
+``sync_patch_array`` (miniature e2e in sync_devirt_mpi_libnode_test.py). Confirms
+the engine plans the REAL hierarchy, not just the synthetic fixture; unrelated
+CLASS(*) containers the closure also pulls in are out of scope and don't block it.
 """
 import re
 from pathlib import Path
@@ -51,9 +41,8 @@ def _type_blocks(fname: str) -> str:
 
 
 def test_real_icon_comm_pattern_is_monomorphisable():
-    """ICON's real ``t_comm_pattern`` is a single-level ladder base with exactly
-    the two concrete arms (``orig`` / ``yaxt``), every deferred binding overridden
-    -- so the engine can devirtualize the halo-exchange dispatch."""
+    """ICON's real ``t_comm_pattern``: single-level ladder base, two concrete arms
+    (orig/yaxt), every deferred binding overridden -- so the engine can devirtualize it."""
     typedefs = "\n".join(
         _type_blocks(f)
         for f in ("mo_communication_types.f90", "mo_communication_orig.f90", "mo_communication_yaxt.f90"))

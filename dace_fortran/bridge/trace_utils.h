@@ -1,12 +1,6 @@
-// ============================================================================
-// trace_utils.h  --  Shared SSA tracing utilities
-// ============================================================================
-// Walks backward through the def-use chains that Flang emits
-// (fir.convert, fir.load, arith.select, hlfir.declare) to recover
-// Fortran names and constant values from opaque SSA values.
-//
-// Used by both the bridge extraction code and by MLIR passes.
-// ============================================================================
+// trace_utils.h -- shared SSA tracing utilities. Walks Flang's def-use chains
+// (fir.convert/fir.load/arith.select/hlfir.declare) to recover Fortran names and constants from SSA values; used by
+// bridge extraction and MLIR passes.
 
 #pragma once
 
@@ -27,226 +21,125 @@
 
 namespace hlfir_bridge {
 
-/// Recursion and walk-length budgets for the bridge's SSA tracing and
-/// expression reconstruction.  All are defensive guards against
-/// pathological IR shapes (malformed input, cyclic defs, runaway
-/// inlining)  --  bumping them never changes semantics on well-formed
-/// HLFIR, only reduces false-``?`` fallbacks on deep chains.
+/// Recursion/walk-length budgets for SSA tracing; defensive guards against pathological IR -- bumping them never
+/// changes semantics, only reduces false-``?`` fallbacks.
 namespace limits {
 
-/// Maximum recursion depth for ``buildExpr`` / ``buildExprWithSubscripts``
-/// / ``buildBoolExpr``.  Arithmetic trees from composed ``hlfir.elemental``
-/// + ``hlfir.apply`` chains fused by ``hlfir-flatten-structs`` can run
-/// 40+ deep on real ICON kernels, and a long left-associative sum/product
-/// chain (``a + b + ... + z``) in the dynamical core recurses one level per
-/// term -- so keep this generous.  The recursion only descends as far as the
-/// actual expression tree, so a larger cap costs nothing until an expression
-/// truly needs it.
+/// Max recursion depth for buildExpr/buildExprWithSubscripts/buildBoolExpr; real ICON kernels nest 40+ deep, so keep
+/// generous -- unused depth costs nothing.
 inline constexpr int kBuildExprDepth = 1024;
 
-/// Maximum recursion depth for ``buildIndexExpr``.  Index expressions
-/// stay shallower than general expressions (one index operand per
-/// designate dim, narrower op set), but inherit the same budget.
+/// Max recursion depth for buildIndexExpr; shallower than general expressions but inherits the same budget.
 inline constexpr int kBuildIndexExprDepth = 1024;
 
-/// Maximum ``fir.convert`` chain length while walking a single SSA
-/// value inside ``resolveIndex``.  Flang occasionally stacks several
-/// converts for index/integer kind coercions.
+/// Max fir.convert chain length walked in resolveIndex (Flang stacks several for kind coercions).
 inline constexpr int kConvertChainDepth = 32;
 
-/// Maximum wrapper-peel depth for type unwrapping (``fir.box``,
-/// ``fir.ref``, ``fir.heap``, ``fir.pointer``).  Nested-pointer
-/// chains are rare but legal: ``box<ref<heap<array<...>>>>``.
+/// Max wrapper-peel depth for type unwrapping (fir.box/ref/heap/pointer); nested chains like box<ref<heap<array<...>>>>
+/// are rare but legal.
 inline constexpr int kTypeWrapperPeelDepth = 32;
 
-/// Default walk budget for ``traceToDecl`` / ``traceConstInt``.  These
-/// are long-running walks through fir.convert / fir.load / designate
-/// chains back to the originating declare or constant.
+/// Default walk budget for traceToDecl/traceConstInt (long-running walks back to the originating declare/constant).
 inline constexpr int kTraceToDeclMax = 1024;
 inline constexpr int kTraceConstIntMax = 128;
 
-/// Maximum memref-walk depth inside ``asAssumedShapeAlias`` (peels
-/// fir.convert ops between the alias declare and the outer declare).
+/// Max memref-walk depth in asAssumedShapeAlias (peels fir.convert between the alias declare and the outer declare).
 inline constexpr int kAliasMemrefWalkDepth = 32;
 
-/// Default budget for an SSA def-use *back-walk* that peels
-/// fir.convert / fir.load / box / declare / designate hops to reach
-/// an originating declare or memref.  Several passes and
-/// ``extract_vars`` hand-roll this same walk as a bare ``< 128``;
-/// named here so the one conceptual budget has a single value.
+/// Default budget for an SSA back-walk peeling fir.convert/load/box/declare/designate to an originating declare or
+/// memref; several passes hand-roll this as a bare ``< 128``, named here for one shared value.
 inline constexpr int kSsaBackWalkDepth = 128;
 
-/// Budget for the shallow shape-recovery walk in ``PropagateShapes``
-/// (declare -> shape/hint within a few hops).
+/// Budget for the shallow shape-recovery walk in PropagateShapes (declare -> shape/hint within a few hops).
 inline constexpr int kShapeWalkDepth = 20;
 
 }  // namespace limits
 
-/// Name of the shape-hint attribute that PropagateShapes attaches to
-/// assumed-shape dummy declares.  Value is an ArrayAttr of StringAttrs,
-/// one per dimension (empty string if that dim disagreed across callers).
+/// Shape-hint attribute PropagateShapes attaches to assumed-shape dummy declares; ArrayAttr of StringAttrs, one per dim
+/// (empty if that dim disagreed across callers).
 inline constexpr const char* kShapeHintAttr = "hlfir_bridge.shape_hint";
 
-/// Per-dim lower-bound hint stamped by ``hlfir-flatten-structs`` on a
-/// synthesised flat-companion declare.  A nested array member's
-/// non-default lower bound (``inner%v(0:3)``) lives only on the
-/// per-access ``hlfir.designate``'s ``fir.shape_shift`` and is lost
-/// when that designate is rewritten away; the flatten pass records it
-/// here so ``resolveLowerBounds`` recovers it instead of defaulting
-/// the companion's dims to 1.  ArrayAttr of StringAttrs, one per
-/// flattened dim (decimal lb, or "1" for the default).
+/// Per-dim lower-bound hint stamped by hlfir-flatten-structs on a flat-companion declare, so resolveLowerBounds
+/// recovers a nested member's non-default lb after its designate is rewritten away; ArrayAttr of StringAttrs, one per
+/// flattened dim.
 inline constexpr const char* kLbHintAttr = "hlfir_bridge.lb_hint";
 
-/// Extract the short Fortran name from Flang's mangled unique name.
-///   "_QFcompute_z_v_grad_wEnproma" -> "nproma"
-///
-/// May consult a thread-local override map populated by ``extract_vars``
-/// for inlined-callee dummy-arg declares whose default short name would
-/// collide with a caller-scope declare (``_QFmainEinp`` vs
-/// ``_QFinner_loopsEinp`` both -> ``inp``).  Without the override the
-/// view-alias edge that links the inlined dummy back to the caller's
-/// storage self-loops.
+/// Extract the short Fortran name from Flang's mangled name (e.g. "_QFcompute_z_v_grad_wEnproma" -> "nproma"); consults
+/// a thread-local override map (set by extract_vars) to avoid inlined-dummy vs caller-scope short-name collisions.
 std::string extractName(const std::string& mangled);
 
-/// Register ``mangled -> shortName`` so subsequent ``extractName`` calls
-/// for that exact mangled name return ``shortName`` instead of the
-/// default ``E``-stripped tail.  Used by ``extract_vars`` to break
-/// short-name collisions between a caller declare and an inlined-
-/// callee dummy declare that aliases the caller's storage.  Per
-/// thread.
+/// Register mangled -> shortName override for extractName, used by extract_vars to break short-name collisions between
+/// caller and inlined-callee dummy declares. Per thread.
 void setManglingOverride(const std::string& mangled, const std::string& shortName);
 
-/// Drop every mangling-override binding.  Called at the start of each
-/// ``extractVariables`` / ``extractAST`` invocation so a previous
-/// module's overrides don't leak into the next one.
+/// Drop every mangling-override binding; called at the start of each extractVariables/extractAST so prior-module
+/// overrides don't leak.
 void clearManglingOverrides();
 
-/// Set the entry procedure's F-scope name (e.g. ``"graupel_run"`` for
-/// ``_QMmo_aes_graupelPgraupel_run``).  ``extractName`` consults this
-/// to scope-qualify every NON-entry-scope declare's short name on
-/// demand, replacing the upfront inlined-callee disambiguator pass.
-/// Set once per build, immediately after ``set_entry_symbol``;
-/// cleared together with the override map on each fresh extract.
-/// Per thread.
+/// Set the entry procedure's F-scope name; extractName consults it to scope-qualify non-entry-scope declares on demand.
+/// Set once per build after set_entry_symbol; cleared with the override map each fresh extract. Per thread.
 void setEntryScope(const std::string& scope);
 
-/// Register the set of short names that COLLIDE across multiple F-scopes
-/// in the current module.  ``extractName`` consults this set to decide
-/// whether to scope-qualify a non-entry-scope declare's short name:
-///   * Short name appears in the collision set -> qualify as
-///     ``<scope>_<short>`` (avoid signature ambiguity).
-///   * Short name appears in only ONE non-entry scope -> keep bare
-///     (caller-and-callee agreed, no ambiguity, no extra signature
-///     variable).
-/// Called by ``extractVariables`` after the upfront short-name walk;
-/// cleared together with the override map on each fresh extract.
-/// Per thread.
+/// Set of short names colliding across F-scopes; extractName qualifies as <scope>_<short> only for names in this set,
+/// keeping unambiguous ones bare. Per thread, cleared each fresh extract.
 void setShortNameCollisions(const std::set<std::string>& collisions);
 
-/// Extract the F-segment of a Fortran mangled name -- the procedure
-/// scope between the last ``F`` and the last ``E``.  Returns "" for
-/// names without an F segment (module globals, type-info metadata).
+/// Extract the F-segment (procedure scope between last F and last E) of a mangled name; "" if absent (module globals,
+/// type-info metadata).
 std::string getFScope(const std::string& uniq);
 
-/// Trace an SSA value backwards to the hlfir.declare / fir.declare that
-/// introduced it.  Peels fir.convert -> fir.load -> arith.select transparently.
-/// Returns the Fortran name, or "" if the chain breaks before a declare.
-///
-/// For Fortran ``ALLOCATABLE`` variables that get re-allocated, every
-/// ALLOCATE site materialises a fresh SDFG transient.  The bridge keeps
-/// a thread-local "current alias" map (see ``allocAliasFor`` /
-/// ``setAllocAlias``) that maps the raw Fortran name (``x``) to the
-/// active alias (``x``, ``x_alloc1``, ``x_alloc2``, ...) at the current
-/// IR position.  ``traceToDecl`` consults this map and returns the
-/// alias when set  --  every read / write site downstream then routes to
-/// the correct per-allocation transient without further wiring.
+/// Trace an SSA value back to its hlfir.declare/fir.declare, peeling fir.convert/fir.load/arith.select; returns the
+/// Fortran name or "" if the chain breaks. Consults the thread-local alloc-alias map (allocAliasFor/setAllocAlias) so
+/// re-ALLOCATEd variables resolve to their current per-allocation transient (x, x_alloc1, ...).
 std::string traceToDecl(mlir::Value val, int max = limits::kTraceToDeclMax);
 
-/// Look up the active alias for a raw allocatable name (the unaliased
-/// Fortran name returned by walking the declare chain).  Returns the
-/// raw name unchanged if no alias is set, the alias otherwise.
+/// Look up the active alias for a raw allocatable name; returns the raw name unchanged if none set.
 std::string allocAliasFor(const std::string& raw);
 
-/// Bind ``raw`` (the Fortran allocatable's base name) to ``alias`` for
-/// subsequent ``traceToDecl`` calls.  ``alias == raw`` resets the alias.
-/// Per thread.
+/// Bind raw (allocatable base name) to alias for subsequent traceToDecl calls; alias == raw resets. Per thread.
 void setAllocAlias(const std::string& raw, const std::string& alias);
 
-/// Drop every alloc-alias binding (used at module-walk start so each
-/// extractAST call sees a clean state).
+/// Drop every alloc-alias binding (module-walk start, so each extractAST call sees a clean state).
 void clearAllocAliases();
 
-/// Trace an SSA value to a compile-time integer constant through
-/// any number of fir.convert wrappings.  nullopt if not constant-foldable.
+/// Trace an SSA value to a compile-time integer constant through any number of fir.convert wrappings; nullopt if not
+/// constant-foldable.
 std::optional<int64_t> traceConstInt(mlir::Value v);
 
-/// Recognise Flang's ``ASSOCIATED(ptr)`` / ``ALLOCATED(arr)`` lowering
-///   ``arith.cmpi ne, fir.convert*(fir.box_addr(fir.load? %boxref)), 0``
-/// and return ``%boxref`` -- the box reference ``traceToDecl`` names, to which
-/// the AST builder appends ``_allocated`` (the presence-tracker symbol).
-/// Returns a null ``mlir::Value`` when ``cmp`` is not that shape.  One matcher
-/// shared by the two AST-side recognisers (``buildExpr`` / ``buildBoolExpr``,
-/// which render the ``<name>_allocated`` read) and ``extract_vars`` (which
-/// mints the tracker's VarInfo for a nested struct-member pointer/allocatable).
+/// Recognise Flang's ASSOCIATED(ptr)/ALLOCATED(arr) lowering (arith.cmpi ne, fir.convert*(fir.box_addr(fir.load?
+/// %boxref)), 0) and return %boxref, to which callers append "_allocated"; null if cmp isn't that shape. Shared by
+/// buildExpr/buildBoolExpr and extract_vars.
 mlir::Value matchAssociatedStatusBoxRef(mlir::arith::CmpIOp cmp);
 
-/// Render an integer-typed SSA value as a Python expression string of
-/// Fortran scalar names + literals + arithmetic operators.  Used by
-/// ``resolveShapeSyms`` to surface a dynamic gather-temp extent
-/// (``arith.select(cmpi sgt, addi(subi(load_ub, load_lb), 1), 0)``
-///  --  Flang's clamped "ub - lb + 1") as e.g. ``"max((endcol - startcol)
-/// + 1, 0)"`` for use as a symbolic SDFG-array shape dim.  The leaf
-/// scalar names must be promoted to SDFG symbols separately (via
-/// ``symbolNames`` in extract_vars) for the resulting expression to
-/// resolve.
-///
-/// Returns the empty string on any pattern the helper doesn't
-/// recognise, so callers fall back to their existing ``"?"`` ->
+/// Render an integer SSA value as a Python expression of Fortran scalar names/literals/operators (e.g. Flang's clamped
+/// ub-lb+1 -> "max((endcol - startcol) + 1, 0)") for a symbolic shape dim; leaf scalars must be separately promoted to
+/// SDFG symbols (extract_vars::symbolNames). Empty string if unrecognised -- callers fall back to the "?"
 /// synthetic-symbol path.
 std::string traceExtentExpr(mlir::Value v);
 
-/// Walk the same SSA chain ``traceExtentExpr`` recognises and append
-/// every leaf scalar-declare name encountered to ``out``.  Used by
-/// extract_vars Pass 2 to promote the scalars (``startcol``,
-/// ``endcol``, ...) that appear in a gather-temp's shape extent
-/// expression -- without this, the leaves stay as length-1 Array
-/// scalars and the expression string from ``traceExtentExpr``
-/// references undeclared SDFG names.
+/// Walk the same SSA chain traceExtentExpr recognises, appending every leaf scalar-declare name to out; used by
+/// extract_vars Pass 2 to promote those scalars so traceExtentExpr's expression string doesn't reference undeclared
+/// SDFG names.
 void collectExtentExprScalars(mlir::Value v, std::set<std::string>& out);
 
-/// Canonical name of the SDFG symbol standing in for a constant-indexed
-/// element read ``<array>(<i1>, <i2>, ...)``.  This is the single source
-/// of truth for the name format: it MUST match ``internPosSymbol`` (AST
-/// builder) so the descriptor-shape side (``shapeFromAllocSite`` /
-/// ``traceExtentExpr``) and the ``symbol_init`` side agree.  One index per
-/// dimension: ``dims(1)`` -> ``__sym_dims_1``, ``shp(1,2,1)`` ->
-/// ``__sym_shp_1_2_1``.
+/// Canonical SDFG symbol name for a constant-indexed element read <array>(<i1>,...); MUST match internPosSymbol (AST
+/// builder) so descriptor-shape and symbol_init sides agree. E.g. dims(1) -> __sym_dims_1, shp(1,2,1) ->
+/// __sym_shp_1_2_1.
 std::string posSymbolName(const std::string& array, const std::vector<int64_t>& one_based_idxs);
 
-/// If ``v`` is a ``fir.load`` of a ``hlfir.designate`` selecting a single
-/// element at compile-time-constant indices (``arr(7)`` or ``shp(1,2,1)``),
-/// return ``{arr, [i1, i2, ...]}``; ``nullopt`` otherwise (any non-constant
-/// index, a section/triplet, or not an element load).  Used to recognise
-/// an array element feeding a shape extent so it is lifted to a position
-/// symbol instead of resolving to the whole array's name.
+/// If v is a fir.load of a hlfir.designate selecting a single compile-time-constant-indexed element, return {arr,
+/// [i1,...]}; nullopt otherwise. Used to lift an array element feeding a shape extent to a position symbol instead of
+/// the whole array's name.
 std::optional<std::pair<std::string, std::vector<int64_t>>> constIndexedElementLoad(mlir::Value v);
 
-/// Walk an extent SSA value (the same op set ``traceExtentExpr`` handles:
-/// convert / select / cmp / addi-subi-muli-divsi-divui / maxsi-minsi-etc /
-/// element load) and invoke ``fn(arr, [i1, ...])`` for every
-/// constant-indexed array element read it contains.  The AST builder uses
-/// this at an ALLOCATE site to mint a position symbol for EVERY element
-/// in the shape -- not just the ones that also appear in a loop bound --
-/// so each shape symbol gets its ``symbol_init``.  ``fn`` should be
-/// idempotent (the position-symbol registry already dedups).
+/// Walk an extent SSA value (same op set as traceExtentExpr) and invoke fn(arr, [i1,...]) for every constant-indexed
+/// element read; used at ALLOCATE sites to mint a position symbol for every shape element, not just loop-bound ones. fn
+/// should be idempotent.
 void forEachConstIndexedElement(mlir::Value v,
                                 const std::function<void(const std::string&, const std::vector<int64_t>&)>& fn);
 
-/// Decoded ``hlfir.declare`` / ``fir.declare`` shape operand.  Per the
-/// FIR/HLFIR op defs it is exactly one of:
-///   * ``fir.shape<N>``        -- extents only; lbs all implicit 1
-///   * ``fir.shape_shift<N>``  -- interleaved ``(lb,ext)`` pairs
-///   * ``fir.shift<N>``        -- lbs only; extents live on the box
+/// Decoded declare shape operand: fir.shape<N> (extents only, lb=1), fir.shape_shift<N> (interleaved lb,ext pairs), or
+/// fir.shift<N> (lbs only, extents on the box).
 struct ShapeOperandInfo {
   enum Kind : std::uint8_t { None, Shape, ShapeShift, Shift } kind = None;
   std::vector<mlir::Value> lbs;      // empty for Shape (implicit 1)
@@ -254,130 +147,63 @@ struct ShapeOperandInfo {
   unsigned rank = 0;
 };
 
-/// Single decoder for the one ``AnyShapeOrShiftType`` shape operand of
-/// ``hlfir.declare`` / ``fir.declare`` -- the one source of truth the
-/// extent / lower-bound helpers (and extract_vars) share instead of
-/// re-matching ShapeOp / ShapeShiftOp by hand.
+/// Single decoder for the AnyShapeOrShiftType shape operand of hlfir.declare/fir.declare; the one source of truth
+/// extent/lower-bound helpers share instead of re-matching ShapeOp/ShapeShiftOp by hand.
 ShapeOperandInfo classifyShapeOperand(mlir::Value shape);
 
-/// Extract extent SSA values from a fir.shape or fir.shape_shift.
-/// Returns empty if the operand is neither (or is null).
+/// Extract extent SSA values from a fir.shape or fir.shape_shift; empty if neither (or null).
 llvm::SmallVector<mlir::Value, 4> extractExtents(mlir::Value shape);
 
-/// When ``hlfir-inline-all`` splices an assumed-shape callee into its
-/// caller, the callee's ``hlfir.declare %arg0`` becomes a second
-/// declare that aliases the caller's actual argument with its own
-/// (default-1-based) lower bound.  The signature to look for:
-///   * no shape operand on ``decl`` (assumed-shape);
-///   * ``decl.getMemref()`` comes from a ``fir.convert`` (extent-erasing
-///     rebox) whose operand traces back to another ``hlfir.declare``.
-/// Returns the outer declare if this pattern fires, else a null
-/// handle.  Callers use the return to (a) skip registering the alias
-/// as its own SDFG data container, (b) walk index expressions through
-/// the inner (callee) frame to the outer (caller) frame.
+/// Detects hlfir-inline-all's assumed-shape callee alias pattern (decl has no shape operand; its memref traces via
+/// fir.convert to another hlfir.declare) and returns the outer declare, else null; callers skip registering the alias
+/// and walk index exprs through to the outer frame.
 hlfir::DeclareOp asAssumedShapeAlias(hlfir::DeclareOp decl);
 
-/// Peel the storage-transparent reinterpret ops off ``v`` and return the
-/// underlying memref value, stopping at the first op that is NOT a transparent
-/// box/reference wrapper (``hlfir.designate``, ``hlfir.declare``, ``fir.alloca``,
-/// a block argument, arithmetic, ...).  The peeled ops -- ``fir.convert``,
-/// ``fir.load``, ``fir.embox``, ``fir.rebox``, ``fir.box_addr``,
-/// ``hlfir.copy_in``, ``fir.coordinate_of``, ``hlfir.as_expr`` -- all preserve
-/// the underlying storage identity, so EVERY storage/access-path walker peels
-/// the SAME set.  This is the single source of truth for that peel: hand-rolling
-/// per-loop subsets is what caused the ``fir.embox`` resolution gap (a
-/// polymorphic ``CLASS(t)`` dummy bound to a pointer member emboxes the actual,
-/// and a walker missing the embox peel stopped early and kept the dummy's local
-/// name) and the latent ``as_expr``/``coord``/``copy_in`` gaps.  Callers handle
-/// the terminal designate/declare and any semantic alias (``asAssumedShapeAlias``,
-/// the inlined-dummy component gate) themselves.  ``maxDepth`` bounds the walk.
+/// Peel storage-transparent reinterpret ops (fir.convert/load/embox/rebox/box_addr,
+/// hlfir.copy_in/coordinate_of/as_expr) off v to the underlying memref, stopping at the first non-transparent op
+/// (designate/declare/alloca/block-arg/arith). Single source of truth for this peel set -- every access-path walker
+/// must use it, not a hand-rolled subset. maxDepth bounds the walk.
 mlir::Value peelBoxReinterpret(mlir::Value v, int maxDepth = limits::kAliasMemrefWalkDepth);
 
-/// True iff ``mr`` (a declare's memref) leads -- through the usual
-/// reinterpret peels (convert / load / rebox / box_addr) -- to an
-/// ``hlfir.designate`` selecting a struct COMPONENT.  Identifies an
-/// INLINED-call dummy bound to a caller struct member
-/// (``get_index_range(patch % edges % in_domain, ...)`` /
-/// ``inner(diag % pvd, ...)`` after ``hlfir-inline-all``): such a dummy's
-/// declare has a dummy scope but its memref is a component designate of
-/// the caller's struct, NOT a block arg (entry dummy) or alloca (local).
-/// Callers walk THROUGH such an alias to the caller-side member so the
-/// access resolves to the outer struct path rather than the inlined
-/// dummy's own name (gate #11 in ``traceToDecl``; reused by
-/// ``rootedAtStructDummy`` / ``walkMemberChain`` for gate #12).
+/// True iff mr (a declare's memref) peels to an hlfir.designate selecting a struct COMPONENT -- identifies an
+/// inlined-call dummy bound to a caller struct member (dummy scope but memref is a component designate, not a
+/// block-arg/alloca). Callers walk through to the caller-side member (gate #11 in traceToDecl; reused as gate #12 by
+/// rootedAtStructDummy/walkMemberChain).
 bool leadsToComponentDesignate(mlir::Value mr);
 
-/// If ``v`` (or the value it peels to through the shared box reinterprets) is a
-/// PURE ARRAY-OF-RECORDS SECTION designate -- triplet/scalar subscripts, NO
-/// component selector, a derived-type (``RecordType``) element -- whose own
-/// base leads (through box peels AND inlined whole-array-dummy aliases) to a
-/// struct COMPONENT, return that section; else null.  This is the narrow gate
-/// for the per-block AoR-section-with-``%member``-leaf shape: an inlined worker
-/// dummy bound to ``p_diag % p_vn(:, :, blockno)`` (a 3-D pointer array of
-/// ``t_cartesian_coordinates``) read as ``vec_in(jc, jk) % x(k)``.  The
-/// ``RecordType`` element requirement keeps a PLAIN-real member section
-/// (``rho(:, :, blockno)``) on its flattened-companion /
-/// ``rewriteSectionedAliasLeaf`` path, untouched.
+/// If v peels to a PURE array-of-records SECTION designate (triplet/scalar subscripts, no component selector,
+/// RecordType element) whose base leads to a struct COMPONENT, return that section, else null. Narrow gate for the
+/// per-block AoR-section-with-%member-leaf shape (e.g. vec_in bound to p_diag % p_vn(:,:,blockno)); the RecordType
+/// requirement excludes plain-real member sections, which stay on the flattened-companion path.
 hlfir::DesignateOp asSectionOverComponent(mlir::Value v);
 
-/// ``asSectionOverComponent`` applied to ``decl``'s memref: the inlined
-/// AoR-section dummy (``vec_in``) whose box_addr/copy_in peels to the section.
+/// asSectionOverComponent applied to decl's memref: the inlined AoR-section dummy (vec_in) whose box_addr/copy_in peels
+/// to the section.
 hlfir::DesignateOp asInlinedSectionOverComponent(hlfir::DeclareOp decl);
 
-/// Number of SCALAR (non-triplet) subscript dims of a section designate -- the
-/// fixed record indices (``blockno``) the AoR section pins.  ``vec_in`` over
-/// ``p_vn(:, :, blockno)`` -> 1.
+/// Number of SCALAR (non-triplet) subscript dims of a section designate -- the fixed record indices the AoR section
+/// pins. vec_in over p_vn(:,:,blockno) -> 1.
 unsigned countScalarSectionDims(hlfir::DesignateOp sec);
 
-/// If ``decl`` is a LOCAL Fortran POINTER to a whole DERIVED-TYPE OBJECT
-/// (``type(t_subset_range), pointer :: cells_subset``) that is rebound once via
-/// ``ptr => <source>`` (``cells_subset => patch_3d % p_patch_2d(1) % cells %
-/// all``, or ``cells_subset => subset_range`` onto an inlined dummy that itself
-/// aliases such a component), return the SOURCE value the pointer was bound to
-/// -- the ``fir.store``'d box peeled to its source declare / component
-/// designate.  Null when ``decl`` is not a local record-object pointer, has no
-/// single unambiguous rebind, or the pointee is a scalar / array (a pointer
-/// VIEW, lowered by the ``view_alias`` mechanism -- left untouched here).
-///
-/// The three access-path walkers (``traceToDecl``, ``rootedAtStructDummy``,
-/// ``walkMemberChain``) FOLLOW this hop when their memref back-walk reaches such
-/// a local pointer declare, so ``cells_subset % start_block`` resolves to the
-/// caller-side flat name ``patch_3d_p_patch_2d_cells_all_start_block`` (rooted
-/// at the struct dummy ``patch_3d``) instead of the local pointer's own name.
-/// The continuation reuses the existing gate #11/#12 inlined-dummy hop, so a
-/// rebind onto LOCAL storage still roots at a non-dummy and stays unresolved
-/// for the diagnostic to catch.  Mirrors ``RewritePointerAssigns``'
-/// ``traceRebindChain`` peel set.
+/// If decl is a LOCAL pointer to a whole derived-type object rebound once via ptr => <source>, return the source value
+/// (peeled to its declare/component designate); null if not a local record-object pointer, rebind is ambiguous, or
+/// pointee is scalar/array (a view, handled by view_alias). traceToDecl/rootedAtStructDummy/walkMemberChain follow this
+/// hop so the pointer resolves to the caller-side flat name instead of its own. Mirrors
+/// RewritePointerAssigns::traceRebindChain's peel set.
 mlir::Value traceLocalPointerRebindSource(hlfir::DeclareOp decl);
 
-/// Per-dimension lower-bound constants for an ``hlfir.declare``.
-/// Returns the constants stored in a ``fir.shape_shift`` operand, or
-/// a vector of ``1``s (Fortran default) of length ``rank`` when the
-/// declare has no shape / uses a plain ``fir.shape``.  Any dim whose
-/// lower bound isn't a compile-time constant comes back as
-/// ``std::nullopt``.
+/// Per-dim lower-bound constants for an hlfir.declare: from fir.shape_shift if present, else rank 1s (Fortran default);
+/// a non-constant lb comes back as nullopt.
 std::vector<std::optional<int64_t>> declareLowerBounds(hlfir::DeclareOp decl);
 
-/// Recognise a scalar ``type(T), pointer`` / ``type(T), allocatable``
-/// member  --  a record behind a ``box<heap|ptr<record>>``.  The
-/// bridge cannot navigate through such a pointer to its pointee
-/// (would need concrete pointer-aliasing analysis) but can safely
-/// IGNORE the field when the user code never reads through it.
-/// Returns the pointed-to ``RecordType`` when matched, null otherwise.
-/// Shared by ``hlfir-flatten-structs`` and
-/// ``hlfir-lift-alloc-array-of-records`` (must agree, hence one
-/// definition).
+/// Recognise a scalar type(T), pointer/allocatable member (box<heap|ptr<record>>); the bridge can't navigate through it
+/// but can safely ignore it if never read. Returns the pointed-to RecordType or null. Shared by hlfir-flatten-structs
+/// and hlfir-lift-alloc-array-of-records (must agree, hence one definition).
 fir::RecordType pointerToRecordMember(mlir::Type t);
 
-/// Companion of ``pointerToRecordMember`` for the array-shaped case:
-/// ``type(T), allocatable :: f(:)`` / ``type(T), pointer :: f(:)``
-/// (``box<heap|ptr<seq<? x record>>>``).  Returns the inner element
-/// ``RecordType`` when matched, null otherwise.  Treated as opaque by
-/// ``collectFlatLeaves``: the bridge can't pre-allocate a flat
-/// companion for "all records reachable through this descriptor"
-/// without runtime alloc-count info; access through such a member is
-/// handled by flattening the inlined-callee element-alias declare
-/// Flang emits after ``hlfir-inline-all`` instead.
+/// Companion of pointerToRecordMember for the array-shaped case (box<heap|ptr<seq<? x record>>>); returns the inner
+/// element RecordType or null. Treated as opaque by collectFlatLeaves (no runtime alloc-count info to pre-allocate a
+/// flat companion); handled instead via the inlined-callee element-alias declare after hlfir-inline-all.
 fir::RecordType allocOrPtrArrayOfRecordsMember(mlir::Type t);
 
 }  // namespace hlfir_bridge

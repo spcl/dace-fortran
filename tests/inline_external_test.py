@@ -1,14 +1,9 @@
 """End-to-end test for ``dace_fortran.external.inline_external``.
 
-Builds a tiny callee (``add_one``) as its own SDFG, builds a caller
-that ``CALL``s it as a registered external, then inlines the callee's
-SDFG into the caller via ``inline_external``.  Verifies that:
-
-  * The ExternalCall library node is removed.
-  * A :class:`dace.sdfg.nodes.NestedSDFG` wrapping the callee SDFG
-    takes its place.
-  * The inlined caller runs and produces the same numerical result as
-    a plain gfortran/f2py reference.
+Builds a callee SDFG, a caller that CALLs it as a registered external, then
+inlines the callee into the caller.  Verifies the ExternalCall node is
+replaced by a :class:`dace.sdfg.nodes.NestedSDFG` and the inlined caller
+matches a gfortran/f2py reference numerically.
 """
 
 import numpy as np
@@ -23,8 +18,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_inline_external_swaps_libnode_for_nested_sdfg(tmp_path):
-    """Inline a separately-built callee SDFG at the caller's external
-    call site."""
+    """Inline a separately-built callee SDFG at the caller's external call site."""
     callee_src = """
 module add_one_mod
 contains
@@ -59,29 +53,23 @@ subroutine caller(arr, n)
 end subroutine caller
 end module caller_mod
 """
-    # Build the callee with an EMPTY registry -- we're defining its
-    # body, so it must not be marked external for its own build.
+    # Build the callee with an EMPTY registry -- its own build must not mark it external.
     clear_external_registry()
     callee_sdfg = build_sdfg(callee_src, tmp_path / "callee", name="add_one", entry="add_one_mod::add_one").build()
-    # Now register so the caller build emits an ExternalCall for it
-    # (otherwise hlfir-inline-all would lower the bind(c) interface
-    # away and the call would disappear).
+    # Register so the caller build emits an ExternalCall (else hlfir-inline-all lowers the bind(c) interface away).
     clear_external_registry()
     try:
-        # Declare add_one external via the unified policy; the arg plan
-        # (array inout, scalar in) is derived from the HLFIR call site.
+        # Declare add_one external via the unified policy; arg plan derived from the HLFIR call site.
         apply_external_functions([ExternalFunction("add_one")])
         caller_sdfg = build_sdfg(caller_src, tmp_path / "caller", name="caller", entry="caller_mod::caller").build()
     finally:
         clear_external_registry()
 
-    # The library output is named after the entry procedure now.
-    # ``_util.build_sdfg`` appends a per-test suffix, so check the prefix.
+    # Library output is named after the entry procedure; _util.build_sdfg appends a per-test suffix, so check the prefix.
     assert callee_sdfg.name.startswith("add_one")
     assert caller_sdfg.name.startswith("caller")
 
-    # Pre-condition: the caller SDFG carries an ExternalCall library
-    # node for add_one.
+    # Pre-condition: the caller SDFG carries an ExternalCall library node for add_one.
     from dace_fortran.external import ExternalCall
     ext_sites = [
         n for state in caller_sdfg.all_states() for n in state.nodes()
@@ -90,9 +78,8 @@ end module caller_mod
     assert len(ext_sites) == 1, (f"expected exactly one ExternalCall for add_one before inline, "
                                  f"got {len(ext_sites)}")
 
-    # Re-declare so the lookup inside inline_external resolves (only the
-    # registered ``c_name`` matters here -- inline_external takes the
-    # connector order from the callee SDFG's arglist, not the args).
+    # Re-declare so the lookup inside inline_external resolves (only c_name
+    # matters -- connector order comes from the callee SDFG's arglist, not args).
     apply_external_functions([ExternalFunction("add_one")])
     try:
         replaced = inline_external(caller_sdfg, "add_one", callee_sdfg=callee_sdfg)
@@ -100,8 +87,7 @@ end module caller_mod
         clear_external_registry()
     assert replaced == 1
 
-    # Post-condition: the ExternalCall is gone and a NestedSDFG wraps
-    # the callee SDFG.
+    # Post-condition: the ExternalCall is gone and a NestedSDFG wraps the callee SDFG.
     ext_sites_after = [
         n for state in caller_sdfg.all_states() for n in state.nodes()
         if isinstance(n, ExternalCall) and n.c_name == "add_one"
@@ -114,8 +100,7 @@ end module caller_mod
     ]
     assert len(nested_sites) == 1
 
-    # Functional: the inlined caller should produce the same result as
-    # gfortran would on the same source.
+    # Functional: the inlined caller should match gfortran on the same source.
     arr = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64, order='F')
     arr_sdfg = arr.copy(order='F')
     caller_sdfg.validate()
@@ -124,19 +109,14 @@ end module caller_mod
 
 
 def test_inline_external_aos_struct_callee(tmp_path):
-    """The callee takes a derived-type ``t_vec`` argument.  In the
-    caller, the bridge expands the struct arg into per-member SoA call
-    args via ``hlfir-marshal-external-structs`` (``Arg(kind="aos")``),
-    so the ExternalCall library node carries per-member connectors
-    (``_a0`` = ``s%u``, ``_a1`` = ``s%v``).  The standalone callee
-    SDFG flattens the same struct dummy into the same per-member
-    leaves via ``hlfir-flatten-structs``, so the two signatures agree
-    by position.  ``inline_external`` must swap the ExternalCall for a
-    NestedSDFG wrapping the callee SDFG; the inlined caller then runs
-    a pure SoA dataflow with no AoS packing at the call boundary."""
-    # The callee is a plain (non-bind(c)) module subroutine taking a
-    # derived-type argument.  ``hlfir-flatten-structs`` flattens the
-    # struct dummy into per-member leaves (``s_u``, ``s_v``).
+    """Callee takes a derived-type ``t_vec``.  The caller's bridge expands the
+    struct arg into per-member SoA connectors (``_a0``=s%u, ``_a1``=s%v) via
+    ``hlfir-marshal-external-structs``; the standalone callee SDFG flattens the
+    same dummy via ``hlfir-flatten-structs``, so the two signatures agree by
+    position.  ``inline_external`` swaps the ExternalCall for a NestedSDFG; the
+    inlined caller then runs pure SoA dataflow with no AoS packing at the boundary.
+    """
+    # Plain (non-bind(c)) module subroutine; hlfir-flatten-structs flattens the struct dummy into per-member leaves (s_u, s_v).
     callee_src = """
 module aos_mod
   implicit none
@@ -154,11 +134,8 @@ contains
   end subroutine
 end module
 """
-    # The caller USEs the same module + CALLs ``add_vec``.  Registering
-    # the call as ``Arg(kind="aos")`` makes ``hlfir-marshal-external-structs``
-    # expand the single struct arg into per-member call args at the call
-    # site; the bridge then emits an ExternalCall library node with per-
-    # member SoA connectors (``_a0`` = u, ``_a1`` = v).
+    # Caller USEs the same module + CALLs add_vec; Arg(kind="aos") makes
+    # hlfir-marshal-external-structs expand the struct arg into per-member SoA connectors (_a0=u, _a1=v).
     caller_src = """
 module caller_mod
   use aos_mod
@@ -175,12 +152,9 @@ end module caller_mod
     clear_external_registry()
     callee_sdfg = build_sdfg(callee_src, tmp_path / "callee", name="add_vec", entry=callee_ext_name).build()
     clear_external_registry()
-    # Stage ``aos_mod`` source in the caller's scratch dir so
-    # ``merge_used_modules`` resolves ``USE aos_mod`` -- the bridge's
-    # one-TU flang invocation needs the module body present even
-    # though ``keep_external`` keeps ``add_vec`` as an ExternalCall
-    # (the call site still has to resolve ``type(t_vec)`` to declare
-    # the dummy).
+    # Stage aos_mod source in the caller's scratch dir so merge_used_modules
+    # resolves USE aos_mod -- needed even though keep_external keeps add_vec
+    # external, since the call site must still resolve type(t_vec) to declare the dummy.
     caller_dir = tmp_path / "caller"
     caller_dir.mkdir(parents=True, exist_ok=True)
     (caller_dir / "aos_mod.f90").write_text(callee_src)
@@ -197,13 +171,11 @@ end module caller_mod
     ]
     assert len(ext_sites) == 1
     ext_node = ext_sites[0]
-    # The marshal pass expanded the single struct arg into per-member
-    # connectors -- ``_a0`` and ``_a1`` here.
+    # Marshal pass expanded the single struct arg into per-member connectors -- _a0 and _a1 here.
     assert set(ext_node.in_connectors) == {"_a0", "_a1"}
     assert set(ext_node.out_connectors) == {"_a0_o", "_a1_o"}
 
-    # Confirm callee SDFG was flattened to the same two leaves so the
-    # arglist matches by position.
+    # Confirm callee SDFG flattened to the same two leaves so the arglist matches by position.
     callee_args = list(callee_sdfg.arglist().keys())
     assert len(callee_args) == 2, (f"callee expected to flatten its struct dummy to 2 leaves, got "
                                    f"{callee_args}")

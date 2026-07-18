@@ -84,11 +84,8 @@ END SUBROUTINE intrinsic_all_test_function
 
 
 def test_fortran_frontend_all_array_scalar_comparison(tmp_path):
-    # Original f2dace test had ``res(4) = ALL(first(3) .eq. 42)``
-    # alongside the rank-1 cases.  ``first(3)`` is rank-0, the resulting
-    # comparison is rank-0, and ``ALL`` requires a rank>=1 mask -- flang
-    # rejects it as a Fortran semantic error (not a flang bug).  Drop
-    # that line; the 6 surviving forms exercise the rank-1 path.
+    # first(3).eq.42 is rank-0; ALL requires rank>=1 -- flang correctly rejects it
+    # (not a flang bug). Dropped from the original f2dace test; 6 forms remain.
     src = """
 SUBROUTINE intrinsic_all_test_function(first, res)
 integer, dimension(5) :: first

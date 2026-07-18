@@ -1,9 +1,5 @@
-"""Frontend-recognition tests for LAPACK routine calls.
-
-Each test drives one ``run_<routine>`` entry of
-:file:`lapack_probes.f90` through the bridge and asserts the resulting
-SDFG contains the matching :mod:`dace.libraries.lapack` library node.
-"""
+"""Frontend-recognition tests for LAPACK calls: each test drives one run_<routine> entry of
+lapack_probes.f90 and asserts the SDFG contains the matching dace.libraries.lapack node."""
 from pathlib import Path
 
 import pytest

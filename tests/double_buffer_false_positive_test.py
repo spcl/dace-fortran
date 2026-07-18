@@ -1,37 +1,12 @@
 """False-positive avoidance for the double-buffer split pass.
 
-Per user request: 'I think double buffer detection is not applying
-correctly here -- we should add many false-positive double pattern
-cases (We need to ensure we can apply in dycore still)'.
-
-The bridge's ``splitDoubleBufferMembers`` (FlattenStructs.cpp:2634)
-recognises ICON's double-buffer pattern -- a struct dummy
-``type(t), allocatable :: prog(:)`` accessed only via stable index
-symbols (``prog(nnow)`` + ``prog(nnew)``) -- and splits it into
-per-symbol scalar-struct dummies so the regular flatten path handles
-each.  This is essential for ICON's dynamical core (nnow/nnew toggle
-between two physical buffers per timestep).
-
-But the detection should fire ONLY when the index is genuinely a
-stable double-buffer symbol -- not when it's:
-
-  * A loop-iteration variable that varies per iteration.
-  * A single-use runtime integer arg with no buffer-toggle semantics.
-  * A computed expression like ``mod(i, 2) + 1``.
-  * Constants (``arr(1) % w(j)`` is a single-index access, not
-    double-buffering).
-
-This file probes those false-positive shapes.  Each test verifies the
-split DID NOT fire (no per-index companion in the SDFG arrays).  The
-positive ``test_dbuf_split_direct_aor_dummy`` etc. in
-``tests/double_buffer_test.py`` cover the cases where the split
-SHOULD fire.
-
-ICON regression note: when ``splitDoubleBufferMembers`` is tightened
-to avoid the false positives below, the ICON dycore probe in
-``tests/icon/dycore/test_solve_nonhydro_parse.py`` should still pass
--- the gating must accept the dycore's ``p_nh%prog(nnow_rcf)`` etc.
-pattern.
+The bridge's ``splitDoubleBufferMembers`` (FlattenStructs.cpp:2634) splits an
+allocatable struct-array dummy accessed via >=2 stable index symbols (ICON's
+nnow/nnew toggle) into per-symbol scalar-struct dummies. Must fire ONLY for
+genuinely stable double-buffer symbols -- not loop iterators, single-use
+runtime args, computed expressions, or constants. Positive cases live in
+``tests/double_buffer_test.py``; the dycore probe in
+``tests/icon/dycore/test_solve_nonhydro_parse.py`` must keep passing.
 """
 import numpy as np
 import pytest
@@ -42,14 +17,9 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_no_split_for_runtime_arg_index(tmp_path):
-    """Single runtime arg ``ia`` indexing AoR -- NOT a double-buffer
-    pattern.  ``splitDoubleBufferMembers`` should NOT fire; the
-    regular AoR flatten should produce ``arr_box`` (no ``ia`` in the
-    name).
-
-    QE's ``tabxx(ia) % box(ir)`` shape surfaced this -- ``ia`` was
-    treated as a stable double-buffer index and the SDFG ended up with
-    ``arr_ia_box`` instead of ``arr_box``."""
+    """Single runtime arg ``ia`` indexing AoR is NOT a double-buffer pattern;
+    regular AoR flatten should produce ``arr_box`` (no ``ia`` in the name).
+    QE's ``tabxx(ia) % box(ir)`` shape surfaced this as ``arr_ia_box``."""
     src = """
 module m
   type :: t
@@ -98,9 +68,8 @@ end module
 
 
 def test_no_split_for_constant_index(tmp_path):
-    """``arr(1) % w(2)`` -- compile-time constant index.  Constant
-    indices should fold to direct array access, NOT to per-constant
-    companion names."""
+    """``arr(1) % w(2)`` -- constant indices fold to direct array access,
+    NOT per-constant companion names."""
     src = """
 module m
   type :: t
@@ -120,9 +89,8 @@ end module
 
 
 def test_no_split_for_single_index_runtime(tmp_path):
-    """``arr(idx) % w`` with ONE runtime index -- single access via
-    one runtime symbol.  No double-buffer pattern (which would need
-    TWO different symbols toggling).  Split should not fire."""
+    """``arr(idx) % w`` with ONE runtime index: double-buffer needs TWO
+    distinct toggling symbols, so split should not fire."""
     src = """
 module m
   type :: t
@@ -143,11 +111,8 @@ end module
 
 
 def test_triple_buffer_split_fires_for_three_distinct_symbols(tmp_path):
-    """Three distinct stable index symbols ``nn1``, ``nn2``, ``nn3``
-    accessing the same ``(root, member)`` -- triple-buffer pattern.
-    The ``>=2`` gate should fire (>= 2 distinct symbols) and the
-    bridge should mint three per-symbol companions
-    ``arr_nn1_w`` / ``arr_nn2_w`` / ``arr_nn3_w``."""
+    """Three distinct stable index symbols on the same (root, member): the
+    >=2 gate fires, minting per-symbol companions arr_nn1_w/arr_nn2_w/arr_nn3_w."""
     src = """
 module m
   type :: t
@@ -171,23 +136,10 @@ end module
 
 
 def test_quad_buffer_split_fires_for_four_distinct_symbols(tmp_path):
-    """Four distinct stable index symbols ``a``/``b``/``c``/``d`` on the
-    same ``(root, member)`` -- quad-buffer pattern.  The ``>=2`` gate
-    fires and the bridge mints four per-symbol companions
-    ``arr_a_w`` ... ``arr_d_w`` (the triple-buffer case above, extended
-    to four).
-
-    The member is an ARRAY (``w(4)``): the per-symbol split gives each
-    toggle its own flat companion so a downstream double-buffer detector
-    can't false-positive on a shared one.  An all-scalar record
-    (``type :: t; real(8) :: x; end type``) instead collapses the whole
-    AoR to a single ``arr_x`` through the regular flatten -- correct,
-    since a scalar AoR is already one contiguous array -- so the
-    per-symbol split is reserved for records with an array member.  (This
-    test previously used a scalar ``x`` and asserted ``arr_a_x``; that
-    expectation was wrong -- the all-scalar record collapses and the
-    split correctly does not fire.  The original skip masked a since-fixed
-    pipeline crash, not this behaviour.)"""
+    """Four distinct stable index symbols (quad-buffer) mint per-symbol
+    companions arr_a_w..arr_d_w. Split is reserved for records with an ARRAY
+    member; an all-scalar record instead collapses to a single arr_x via the
+    regular flatten (scalar AoR is already one contiguous array)."""
     src = """
 module m
   type :: t
@@ -210,10 +162,8 @@ end module
 
 
 def test_single_distinct_symbol_does_not_split(tmp_path):
-    """Same symbol used multiple times on the same (root, member) --
-    still ONE distinct symbol, NOT a buffer-toggle.  Split must not
-    fire even though there are multiple ACCESS sites; the count is
-    on DISTINCT symbols, not sites."""
+    """Same symbol used multiple times on (root, member) is still ONE distinct
+    symbol, not a buffer-toggle; count is on DISTINCT symbols, not access sites."""
     src = """
 module m
   type :: t
@@ -235,9 +185,8 @@ end module
 
 
 def test_no_split_for_computed_index_expression(tmp_path):
-    """``arr(mod(i, 2) + 1) % w`` -- computed expression, not a stable
-    symbol.  Split should not fire, AND the ``MOD`` index must render
-    (``arith.remsi`` -> Python ``%``) instead of bottoming out at ``?``."""
+    """``arr(mod(i, 2) + 1) % w`` -- computed expression, not a stable symbol;
+    split must not fire and MOD must render instead of bottoming out at ``?``."""
     src = """
 module m
   type :: t

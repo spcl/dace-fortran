@@ -1,30 +1,10 @@
-"""External (``keep_external``) calls and the AoS/SoA argument-layout decision.
-
-When the bridge SoA-flattens struct data but a registered external expects a
-particular memory layout, each call-site argument falls into one of:
-
-  * a plain array / flattened struct array-member  --  the SoA pointer is
-    handed over directly (zero copy).  This is the common ICON
-    double-buffering shape (``p_nh%prog(nnow)%w`` flattens to the standalone
-    array ``..._w``), and it is what every halo-exchange data argument in
-    ``solve_nh`` looks like.
-  * an array-of-scalar-structs the bridge keeps AoS  --  the struct pointer is
-    handed over directly (zero copy).
-  * a scalar-member struct an AoS external wants contiguous  --  a shallow
-    inner-dim alias when the struct is innermost and all members share one
-    scalar type, else a deep gather / scatter.  See
-    ``_icon_build/_diag_20260526/AOS_EXTERNAL_DESIGN.md``.
-
-The first case is what unblocks the ``solve_nh`` halo externalisation, so it is
-pinned here; the deep-copy case is marked ``xfail`` until the binding wrap is
-wired.
-
-API note: the plain-array cases declare the external through the unified policy
-(:func:`dace_fortran.apply_external_functions` + one
-:class:`~dace_fortran.external_functions.ExternalFunction`) -- HLFIR derives the
-shallow pointer plan.  The AoS / ``per_member_soa`` cases keep
-:func:`keep_external` with an authored :class:`~dace_fortran.external.Arg`
-list, because the AoS memory layout is an ABI fact HLFIR cannot infer.
+"""External (``keep_external``) calls and the AoS/SoA argument-layout decision:
+plain array / flattened struct member -> SoA pointer handed over directly (zero
+copy, e.g. ICON's double-buffered ``p_nh%prog(nnow)%w``); array-of-scalar-structs
+kept AoS -> struct pointer directly; scalar-member struct an AoS external wants
+contiguous -> shallow alias or deep gather/scatter. Plain-array cases use the
+unified policy (``apply_external_functions``); AoS/``per_member_soa`` cases use
+``keep_external`` with an authored ``Arg`` list (ABI fact HLFIR can't infer).
 """
 import os
 import subprocess
@@ -49,13 +29,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def _build_c_so(out_dir: Path, name: str, csrc: str) -> Path:
-    """Compile a small C source to a shared library and return its path.
-
-    :param out_dir: scratch directory for the ``.c`` / ``.so`` pair.
-    :param name: base name; the library is ``lib<name>.so``.
-    :param csrc: C source text defining the ``extern "C"`` symbol.
-    :returns: path to the built shared library.
-    """
+    """Compile a small C source to a shared library ``lib<name>.so`` and return its path."""
     (out_dir / f"{name}.c").write_text(csrc)
     so = out_dir / f"lib{name}.so"
     subprocess.check_call(["gcc", "-shared", "-fPIC", "-o", str(so), str(out_dir / f"{name}.c")])
@@ -92,8 +66,7 @@ end module
 """
     clear_external_registry()
     try:
-        # Plain array + scalar -> the unified policy's derived plan (array
-        # inout pointer, scalar by-value) is exactly the zero-copy shape.
+        # Plain array + scalar -> unified policy derives the zero-copy shape (array inout pointer, scalar by-value).
         apply_external_functions([ExternalFunction("ext_scale", library=str(so))])
         sdfg = build_sdfg(src, tmp_path, name="kern", entry="m_alias::kern").build()
         u = np.arange(8, dtype=np.float64)
@@ -106,12 +79,8 @@ end module
 
 
 def test_scalar_member_struct_aos_external(tmp_path):
-    """An external wanting the contiguous AoS struct, fed from a struct the
-    bridge split into separate scalar flats.  ``hlfir-marshal-external-structs``
-    expands the call to per-member args (the SoA flats) and ``emit_call``
-    generates a C tasklet that packs them into a local AoS buffer, calls the
-    external, and unpacks the result back into the SoA flats  --  so the SDFG
-    only ever sees the SoA arrays."""
+    """External wants a contiguous AoS struct; the bridge splits it into SoA flats, and
+    ``emit_call``'s C tasklet packs/unpacks a local AoS buffer around the external call."""
     so = _build_c_so(
         tmp_path, "ext_swap", "struct pt{double f1;double f2;};"
         "void ext_swap(struct pt* p){double t=p->f1;p->f1=p->f2;p->f2=t;}")
@@ -151,11 +120,8 @@ end module
 
 
 def test_array_member_struct_aos_external(tmp_path):
-    """A velocity-style struct with uniform array members passed whole to an
-    AoS external.  The marshalling pass expands the call to the per-member SoA
-    arrays; emit_call packs them into a local AoS buffer with array fields
-    (element-loop copies), calls the external, and unpacks  --  exercising the
-    array-member path (the ICON velocity ``state_t`` shape)."""
+    """Velocity-style struct with array members passed whole to an AoS external:
+    marshalling expands to per-member SoA; emit_call packs/unpacks via element-loop copies."""
     so = _build_c_so(
         tmp_path, "ext_state", "struct state_t { double u[4]; double v[4]; };"
         "void ext_state(struct state_t* p)"
@@ -207,13 +173,9 @@ def _external_call_body(sdfg):
 
 
 def test_velocity_field_array_external_is_shallow(tmp_path):
-    """A velocity-style field reaches an external as a plain array.  ICON
-    velocity binds its prognostic fields through pointer assignment, not struct
-    flattening, so a field resolves to a plain array -- passing the pointer
-    itself to an external is a shallow pointer pass (no AoS buffer / deep
-    copy): hlfir-rewrite-pointer-assigns folds the rebind's copy_in/copy_out
-    straight to the contiguous target, so the external reads / writes it in
-    place."""
+    """ICON velocity binds prognostic fields via pointer assignment (not struct
+    flattening): hlfir-rewrite-pointer-assigns folds the rebind straight to the
+    contiguous target, so the external gets a shallow pointer pass, no AoS buffer."""
     so = _build_c_so(tmp_path, "ext_scale", "void ext_scale(double* a, int n)"
                      "{ for (int i = 0; i < n; ++i) a[i] *= 2.0; }")
     src = """
@@ -239,12 +201,10 @@ end module
 """
     clear_external_registry()
     try:
-        # Plain array + scalar -> the unified policy derives the same
-        # shallow (no AoS buffer) pointer pass.
+        # Plain array + scalar -> unified policy derives the same shallow (no AoS buffer) pass.
         apply_external_functions([ExternalFunction("ext_scale", library=str(so))])
         sdfg = build_sdfg(src, tmp_path, name="kern", entry="m_velptr::kern").build()
-        # Shallow pass: the tasklet calls the external on the array pointer
-        # directly -- no AoS struct buffer / element copies.
+        # Shallow pass: tasklet calls the external directly on the array pointer, no AoS buffer/copies.
         body = _external_call_body(sdfg)
         assert "struct" not in body, f"expected a shallow pointer pass, got:\n{body}"
         tgt = np.arange(6, dtype=np.float64)
@@ -255,19 +215,15 @@ end module
 
 
 def test_velocity_state_t_whole_struct_external(tmp_path):
-    """The real ICON velocity ``state_t`` shape (four uniform 2-D ``real(8)``
-    field members) passed whole to an AoS external.  Confirms the deep-copy
-    marshalling handles the actual velocity-tendencies state struct: four
-    members, multi-dim arrays, packed into one AoS buffer and unpacked."""
+    """Real ICON velocity ``state_t`` shape (four 2-D real(8) members) passed whole to
+    an AoS external: deep-copy marshalling packs/unpacks the full multi-member struct."""
     so = _build_c_so(
-        tmp_path,
-        "ext_velstate",
-        "struct state_t { double u[16]; double v[16];"
+        tmp_path, "ext_velstate", "struct state_t { double u[16]; double v[16];"
         "                 double w[16]; double p[16]; };"
         "void ext_velstate(struct state_t* s) {"
         "  for (int i = 0; i < 16; ++i) {"
-        "    s->u[i] += s->v[i];"  # u += v (elementwise)
-        "    s->p[i]  = s->w[i] * 2.0;"  # p = 2w
+        "    s->u[i] += s->v[i];"
+        "    s->p[i]  = s->w[i] * 2.0;"
         "  } }")
     src = """
 module m_velstate
@@ -359,12 +315,8 @@ def test_full_velocity_advection_external_call(tmp_path):
 
 
 def test_dycore_mixed_shallow_and_deepcopy(tmp_path):
-    """Dycore-style external: one call mixing a plain field (shallow pointer
-    pass) and a whole sub-struct that needs the AoS<->SoA deep copy.  ``s%w`` is
-    a contiguous field -> passed by pointer in place; the nested ``s%blk`` (a
-    struct member) is packed into a local AoS buffer, passed, and unpacked.  So
-    only the one ``blk`` array takes a real deep copy; everything else is
-    shallow."""
+    """Dycore-style external mixing a plain shallow field (``s%w``, pointer pass) and
+    a nested sub-struct (``s%blk``) needing the AoS<->SoA deep copy via a local buffer."""
     so = _build_c_so(
         tmp_path, "ext_mixed", "struct t_blk { double arr[8]; };"
         "void ext_mixed(double* w, int n, struct t_blk* blk) {"
@@ -424,19 +376,13 @@ end module
 
 
 # ---------------------------------------------------------------------------
-#  v2.1 marshal expansion (Phase 2.3.E) -- ``MarshalExternalStructs.cpp``
-#  now recursively walks nested derived-type members down to inline-flat
-#  leaves (scalar or static-shape array of scalar) and expands each leaf
-#  into its own call-arg + struct field.  Still on the unsupported side
-#  of the v2 boundary: box / pointer / allocatable / dynamic-shape
-#  members -- :func:`emit_call`'s structured diagnostic continues to
-#  point at :func:`dace_fortran.external.inline_external` for those.
+# v2.1 marshal expansion (Phase 2.3.E): MarshalExternalStructs.cpp recursively
+# walks nested derived-type members to inline-flat leaves, each its own call-arg.
+# Still unsupported: box/pointer/allocatable/dynamic-shape members (emit_call
+# points at inline_external for those).
 # ---------------------------------------------------------------------------
 
-# Shared kernel source for the v2.1 test pair.  The outer struct
-# ``outer_t`` has a *nested* derived-type member ``inner_t``; the
-# recursive flatten in ``MarshalExternalStructs.cpp`` walks it down to
-# three contiguous f64 leaves (``ip%u``, ``ip%v``, ``scale``).
+# Shared v2.1 kernel: outer_t nests inner_t; recursive flatten walks to three f64 leaves (ip%u, ip%v, scale).
 _V2_NESTED_SRC = """
 module m_v2
   use iso_c_binding
@@ -465,25 +411,15 @@ end module
 
 
 def test_v2_aos_external_with_nested_struct(tmp_path):
-    """``keep_external(kind='aos')`` on a callee whose struct has a
-    nested derived-type member.  The recursive expansion produces one
-    SoA flat per leaf member; ``emit_call`` lays out the AoS struct
-    field-by-field in declaration order (``ip%u``, ``ip%v``,
-    ``scale``).
-
-    Asserts on both ends of the contract: the build succeeds (the
-    pre-v2 diagnostic does *not* fire here) AND the resulting
-    ``ExternalCall`` carries three leaf-aligned SoA edges, one per
-    leaf in declaration order."""
+    """``keep_external(kind='aos')`` on a struct with a nested derived-type member:
+    recursive expansion produces one SoA flat per leaf (``ip%u``, ``ip%v``, ``scale``),
+    laid out field-by-field; build succeeds and the ExternalCall carries all three."""
     from dace_fortran.external import ExternalCall
     clear_external_registry()
     try:
         keep_external("ext_v2", args=(Arg(kind="aos", intent="inout"), ))
         sdfg = build_sdfg(_V2_NESTED_SRC, tmp_path, name="kern", entry="m_v2::kern").build()
-        # Locate the external-call node and check the three leaves
-        # (``ip%u``, ``ip%v``, ``scale``) are wired in declaration order.
-        # The SoA flats inherit the outer struct's name prefix and the
-        # full member path: ``s_ip_u``, ``s_ip_v``, ``s_scale``.
+        # Three leaves (ip%u, ip%v, scale) wired in declaration order as s_ip_u/s_ip_v/s_scale.
         node = next((n for st in sdfg.all_states() for n in st.nodes() if isinstance(n, ExternalCall)), None)
         assert node is not None, "external call not lowered for nested struct"
         st = next(s for s in sdfg.all_states() if node in s.nodes())
@@ -495,14 +431,9 @@ def test_v2_aos_external_with_nested_struct(tmp_path):
         clear_external_registry()
 
 
-# Smallest shape that exercises the v2 box/allocatable expansion:
-# a derived type with an allocatable array member.  Before v2 the
-# marshal pass refused this shape and ``emit_call`` raised the
-# inline_external diagnostic; v2 (this branch's
-# ``isBoxOfScalarArray`` + ``rewriteCall`` ``fir.load`` /
-# ``fir.box_addr`` chain) handles it directly -- the test now
-# anchors successful build + correct marshalling-group count
-# instead of the diagnostic-message contract.
+# Smallest v2 box/allocatable shape: a derived type with an allocatable array member.
+# Pre-v2 this raised inline_external; v2's isBoxOfScalarArray + rewriteCall handles it
+# directly, so the test anchors successful build + marshalling-group count.
 _V2_ALLOCATABLE_SRC = """
 module m_v2_alloc
   use iso_c_binding
@@ -527,39 +458,25 @@ end module
 
 
 def test_v2_aos_external_with_allocatable_member(tmp_path):
-    """``Arg(kind='aos')`` on a callee whose struct has an
-    ``allocatable`` array member.  v2 (box / pointer / allocatable
-    expansion) ``isBoxOfScalarArray`` accepts the box-typed member
-    and ``rewriteCall`` emits the ``fir.load`` + ``fir.box_addr``
-    chain at the call site to extract the data pointer; the marshal
-    expansion tags two leaves (the allocatable ``w`` data pointer +
-    the scalar ``n``).
-
-    Previously a diagnostic anchor that asserted the
-    ``inline_external`` workaround appeared in ``emit_call``'s error
-    message -- with v2 there is no error; the build succeeds and
-    the callee carries a marshalling group."""
+    """``Arg(kind='aos')`` with an allocatable array member: v2's ``isBoxOfScalarArray``
+    + ``rewriteCall`` extracts the data pointer, tagging two leaves (``w`` + scalar ``n``);
+    build succeeds with no error (was a diagnostic-anchor before v2)."""
     from dace_fortran.external import ExternalCall
     clear_external_registry()
     try:
         keep_external("ext_v2_alloc", args=(Arg(kind="aos", intent="inout"), ))
         sdfg = build_sdfg(_V2_ALLOCATABLE_SRC, tmp_path, name="kern", entry="m_v2_alloc::kern").build()
-        # The external-call lowering produced one ExternalCall node
-        # with the per-leaf marshal-expansion shape.
+        # One ExternalCall node with the per-leaf marshal-expansion shape.
         ext = next((n for st in sdfg.all_states() for n in st.nodes() if isinstance(n, ExternalCall)), None)
         assert ext is not None, "marshal expansion did not produce an ExternalCall"
     finally:
         clear_external_registry()
 
 
-# v2.2 marshal expansion: a struct with a box-of-VALUE-RECORD-ARRAY member
-# (ICON's ``t_patch%edges%primal_normal_cell(:,:,:)`` of ``t_tangent_vectors
-# {v1,v2}`` -- an allocatable ARRAY of a value record of scalars).  The member
-# is ALSO read element-wise in the body (``e(i,j,k)%v1``) so the flatten pass
-# mints the per-field SoA companions ``s_e_v1`` / ``s_e_v2``; the marshal
-# expansion emits ONE leaf per record FIELD (not one per member), each
-# resolving to its companion, matching ``bind_c_shim._emit_value_record_array``'s
-# per-field C slots so the outer emit_call and the inner shim agree.
+# v2.2: a box-of-value-record-array member (ICON's t_patch%edges%primal_normal_cell,
+# an allocatable array of {v1,v2} records), also read element-wise, so flatten mints
+# per-field SoA companions s_e_v1/s_e_v2 -- one marshal leaf per FIELD, matching
+# bind_c_shim._emit_value_record_array's per-field C slots.
 _V2_VALUE_RECORD_ARRAY_SRC = """
 module m_v2_vra
   use iso_c_binding
@@ -591,18 +508,9 @@ end module
 
 
 def test_v2_aos_external_with_value_record_array_member(tmp_path):
-    """``Arg(kind='aos', c_abi='per_member_soa')`` on a callee whose struct
-    has a box-of-value-record-array member.  The marshal pass (``v2.2``:
-    ``isBoxOfScalarRecordArray`` + the per-field element+field designate in
-    ``rewriteCall``) expands the member into ONE leaf per record FIELD
-    (``v1`` / ``v2``), each resolving to the flatten pass's per-field SoA
-    companion (``s_e_v1`` / ``s_e_v2``) -- so the external call carries a
-    marshalling group and touches the per-field arrays, NOT the AoS box.
-
-    This is the milestone-1 anchor for the ICON ``solve_nh`` velocity
-    callback (``t_patch``'s ``primal_normal_cell`` is exactly this shape):
-    the outer SDFG BUILDS instead of raising ``'aos' arg has no marshalling
-    group`` in ``emit_call``."""
+    """``Arg(kind='aos', c_abi='per_member_soa')`` with a box-of-value-record-array member:
+    v2.2 expands to one leaf per record field (``s_e_v1``/``s_e_v2``), not the AoS box.
+    Milestone-1 anchor for the ICON solve_nh velocity callback (``t_patch.primal_normal_cell``)."""
     from dace_fortran.external import ExternalCall
     clear_external_registry()
     try:
@@ -613,8 +521,7 @@ def test_v2_aos_external_with_value_record_array_member(tmp_path):
         st = next(s for s in sdfg.all_states() if node in s.nodes())
         touched = {e.data.data for e in st.in_edges(node)} | \
                   {e.data.data for e in st.out_edges(node)}
-        # The two record fields cross as the per-field SoA companions, one
-        # leaf each -- NOT the AoS box, and NOT a single ``s_e`` member.
+        # Two record fields cross as per-field SoA companions -- not the AoS box, not a single s_e member.
         assert "s_e_v1" in touched and "s_e_v2" in touched, \
             f"expected per-field SoA leaves s_e_v1 / s_e_v2, got {sorted(touched)}"
         # The scalar member ``n`` also crosses (a plain inline-flat leaf).
@@ -624,34 +531,21 @@ def test_v2_aos_external_with_value_record_array_member(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-#  Arg.c_abi axis (Fortran shape x C ABI shape, decoupled): the same
-#  ``state_t`` shape that test_array_member_struct_aos_external above
-#  passes as an AoS struct pointer (default ``c_abi='aos_struct_ptr'``)
-#  is here passed as per-member SoA pointers (``c_abi='per_member_soa'``).
-#  The marshal expansion is identical -- only the call-site body
-#  differs: no ``_aosbuf`` struct, no pack/unpack copy, leaves forwarded
-#  verbatim.
+# Arg.c_abi axis (Fortran shape x C ABI shape, decoupled): the same state_t shape
+# as test_array_member_struct_aos_external, here passed as per-member SoA pointers
+# (c_abi='per_member_soa') instead of an AoS struct pointer -- same marshal
+# expansion, but no _aosbuf / pack-unpack, leaves forwarded verbatim.
 # ---------------------------------------------------------------------------
 
 
 def test_aos_external_per_member_soa_skips_aos_buffer(tmp_path):
-    """``Arg(kind='aos', c_abi='per_member_soa')`` -- the same
-    ``state_t`` shape passed as a *whole* struct from Fortran (so the
-    marshal pass expands it), but the C external takes per-member SoA
-    pointers in marshal-expansion order; no stack AoS struct is
-    materialised.
-
-    The C signature mirrors what a sibling SDFG's ``bind_c_shim``
-    would emit (one pointer per leaf), so the same registration
-    pattern reaches both an opaque C library that speaks SoA *and* a
-    sibling SDFG -- the decoupling of Fortran-side ``kind`` from the
-    C-side ABI is what closes the gap."""
+    """``Arg(kind='aos', c_abi='per_member_soa')``: whole struct from Fortran, but the C
+    external takes per-member SoA pointers -- no stack AoS struct materialised. Same
+    registration pattern reaches both an opaque SoA-speaking C library and a sibling SDFG."""
     so = _build_c_so(tmp_path, "ext_per_member", "void ext_per_member(double* u, double* v)"
                      "{ for (int i = 0; i < 4; ++i) u[i] += v[i]; }")
-    # Note: the *Fortran* call passes the whole struct ``s`` so the
-    # marshal pass tags it as an aos group of 2 members; the
-    # ``c_abi='per_member_soa'`` registration tells emit_call to
-    # forward the SoA flats directly.
+    # Fortran passes the whole struct s (tagged aos group of 2); c_abi='per_member_soa'
+    # tells emit_call to forward the SoA flats directly.
     src = """
 module m_perm
   use iso_c_binding
@@ -692,9 +586,8 @@ end module
         node = next((n for st in sdfg.all_states() for n in st.nodes() if isinstance(n, ExternalCall)), None)
         assert node is not None
         assert "_aosbuf" not in node.body, (f"per_member_soa path emitted an AoS buffer; body=\n{node.body}")
-        # The leaves are forwarded verbatim in marshal-expansion order;
-        # the per-member ``ctype*`` decl shape (not ``void*``) is the
-        # other half of the contract.
+        # Leaves forwarded verbatim in marshal-expansion order; per-member ctype* decl
+        # (not void*) is the other half of the contract.
         assert "double*" in node.c_decl, (f"per_member_soa decl should expand to per-leaf pointers; "
                                           f"got {node.c_decl!r}")
         assert "void *" not in node.c_decl, (f"per_member_soa decl should not surface ``void *``; "
@@ -704,19 +597,14 @@ end module
 
 
 # ---------------------------------------------------------------------------
-#  Pointer-to-record HANDLE members (ICON ``t_patch%comm_pat_c`` -- a
-#  ``TYPE(t_comm_pattern_orig), POINTER`` halo descriptor).  A scalar
-#  pointer/allocatable to a record has no SoA image, so the flatten pass
-#  never mints a companion for it.  The marshaller SKIPS such a member
-#  (no leaf) when the callee only passes the whole pointer through, and
-#  FAILS LOUDLY when the callee actually reads its pointed-to data (which
-#  per-member-SoA marshalling can't supply).
+# Pointer-to-record HANDLE members (ICON t_patch%comm_pat_c): a scalar
+# pointer/allocatable to a record has no SoA image, so flatten mints no companion.
+# The marshaller SKIPS such a member if only passed through, and FAILS LOUDLY if
+# the callee reads its pointed-to data (which per-member-SoA marshalling can't supply).
 # ---------------------------------------------------------------------------
 
-# A ``t_patch``-shaped struct: a value-record-array data member
-# (``primal_normal_cell``, marshalled per field) PLUS a pointer-to-record
-# handle member (``comm_pat_c``).  The handle's DATA is never read here --
-# only ``primal_normal_cell`` is -- so the handle is a pure pass-through.
+# t_patch-shaped struct: value-record-array member (marshalled per field) plus a
+# pointer-to-record handle (comm_pat_c) whose data is never read -- pure pass-through.
 _HANDLE_UNUSED_SRC = """
 module m_handle_ok
   use iso_c_binding
@@ -755,12 +643,8 @@ end module
 
 
 def test_marshal_skips_unused_pointer_to_record_handle(tmp_path):
-    """A pointer-to-record handle member (``comm_pat_c``) the callee only
-    passes through (never reads its data) is SKIPPED by the marshaller: no
-    leaf, no group entry -- the struct still marshals its real data members
-    (the value-record-array ``primal_normal_cell`` per field).  This is the
-    ICON ``t_patch`` shape: the halo comm-pattern pointer has no SoA image,
-    so dropping it is correct and lets the velocity-callback struct marshal."""
+    """Pointer-to-record handle (``comm_pat_c``) that's only passed through is SKIPPED
+    by the marshaller (no leaf); the struct still marshals its real data members."""
     from dace_fortran.external import ExternalCall
     clear_external_registry()
     try:
@@ -780,10 +664,8 @@ def test_marshal_skips_unused_pointer_to_record_handle(tmp_path):
         clear_external_registry()
 
 
-# Same struct, but now the callee READS the handle's pointed-to data
-# (``p%comm_pat_c%n_recv``).  Marshalling a linked-structure handle through
-# a runtime pointer is unsupported, and silently dropping a member whose
-# data is needed would corrupt the C ABI -- so the pass must fail loudly.
+# Same struct, but the callee READS the handle's data (p%comm_pat_c%n_recv): silently
+# dropping it would corrupt the C ABI, so the pass must fail loudly.
 _HANDLE_USED_SRC = """
 module m_handle_bad
   use iso_c_binding
@@ -823,11 +705,8 @@ end module
 
 
 def test_marshal_loud_fails_on_used_pointer_to_record_handle(tmp_path):
-    """When the callee READS a pointer-to-record handle's pointed-to data
-    (``p%comm_pat_c%n_recv``), the marshaller must NOT silently drop the
-    member (the compiles-clean-then-corrupts hazard).  The pass emits an
-    error + ``signalPassFailure``; the build surfaces it as an exception
-    naming the offending member and the unsupported shape."""
+    """Callee reading a pointer-to-record handle's data (``p%comm_pat_c%n_recv``) must
+    NOT be silently dropped; the pass emits an error naming the offending member."""
     clear_external_registry()
     try:
         keep_external("ext_handle",
@@ -843,13 +722,11 @@ def test_marshal_loud_fails_on_used_pointer_to_record_handle(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-#  A marshalled struct SCALAR member the caller reads ONLY as an array extent /
-#  loop bound is promoted by the bridge to an ``sdfg.symbols`` entry (not an
-#  ``sdfg.arrays`` entry).  emit_call must forward it across the per_member_soa
-#  C ABI BY VALUE -- matching the inner ``bind_c_shim``'s ``<type>, value``
-#  slot for a scalar struct member -- instead of raising "not an SDFG array".
-#  This is ICON's ``t_patch%nlev`` / ``%nblks_e`` / ``%id`` shape: velocity
-#  consumes them, solve_nh uses them only as extents.
+# A struct SCALAR member read only as an array extent/loop bound is promoted to
+# an sdfg.symbols entry (not sdfg.arrays); emit_call must forward it across the
+# per_member_soa C ABI BY VALUE, matching bind_c_shim's <type>, value slot.
+# ICON's t_patch%nlev/%nblks_e/%id shape: velocity consumes them, solve_nh uses
+# them only as extents.
 # ---------------------------------------------------------------------------
 _SYMBOL_MEMBER_SRC = """
 module m_symmem
@@ -877,11 +754,8 @@ end module
 
 
 def test_marshal_scalar_symbol_member_forwarded_by_value(tmp_path):
-    """A struct scalar member used only as an array extent lands in
-    ``sdfg.symbols`` (not ``sdfg.arrays``); the per_member_soa marshalling
-    forwards it BY VALUE -- a plain scalar C arg (no pointer), rendered from
-    the in-scope symbol -- so the outer call and the inner shim's ``value``
-    slot coincide."""
+    """Struct scalar member used only as an extent lands in ``sdfg.symbols`` (not
+    ``sdfg.arrays``); per_member_soa marshalling forwards it BY VALUE, no pointer."""
     from dace_fortran.external import ExternalCall
     clear_external_registry()
     try:
@@ -895,8 +769,7 @@ def test_marshal_scalar_symbol_member_forwarded_by_value(tmp_path):
             f"expected s_n as a symbol; symbols={('s_n' in sdfg.symbols)} arrays={('s_n' in sdfg.arrays)}"
         node = next((n for st in sdfg.all_states() for n in st.nodes() if isinstance(n, ExternalCall)), None)
         assert node is not None
-        # ``n`` crosses by value: the body renders (int)(s_n), and the decl
-        # carries a scalar ``int`` for it (not ``int*``).
+        # n crosses by value: body renders (int)(s_n), decl carries scalar int (not int*).
         assert "(s_n)" in node.body, f"symbol member not forwarded by value; body=\n{node.body}"
         decl_args = [a.strip() for a in node.c_decl[node.c_decl.index('(') + 1:node.c_decl.rindex(')')].split(',')]
         assert decl_args[0] == "int", f"first arg (symbol member n) should be scalar int, got {decl_args}"

@@ -1,18 +1,7 @@
-"""ALLOCATED intrinsic  --  Flang lowers ``ALLOCATED(arr)`` to
-``box_addr(load arr_box) != 0`` (a null-pointer check on the
-allocatable's heap descriptor).  The bridge:
-
-* registers a companion ``<arr>_allocated`` int32 SDFG symbol per
-  allocatable (writes go on interstate edges so DaCe enforces ordering
-  across reads);
-* emits ``<arr>_allocated = 1`` at every detected ALLOCATE site
-  (``fir.store(fir.embox(fir.allocmem))``);
-* emits ``<arr>_allocated = 0`` at every standalone ``fir.freemem``
-  (DEALLOCATE) and at module-walk start (initial-zero).
-
-Each test compares against an f2py / gfortran reference so the
-state-tracking matches Fortran semantics exactly.
-"""
+"""ALLOCATED intrinsic -- Flang lowers ``ALLOCATED(arr)`` to a null-pointer check on the
+heap descriptor.  The bridge tracks it via a companion ``<arr>_allocated`` int32 SDFG
+symbol: 1 at ALLOCATE, 0 at DEALLOCATE and at module-walk start.  Each test compares
+against an f2py/gfortran reference."""
 
 from pathlib import Path
 
@@ -88,10 +77,8 @@ end subroutine main
 
 
 def test_allocated_state_sequence(tmp_path: Path):
-    """Read ALLOCATED before, between, and after ALLOCATE/DEALLOCATE
-    in the same subroutine  --  exercises the per-state ordering
-    guarantees that motivate using a SYMBOL (not a transient scalar)
-    for ``<arr>_allocated``."""
+    """Read ALLOCATED before/between/after ALLOCATE/DEALLOCATE -- exercises the
+    per-state ordering that motivates a SYMBOL (not a transient scalar)."""
     src = """
 subroutine main(out)
   integer, allocatable :: data(:)

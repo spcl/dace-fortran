@@ -1,19 +1,16 @@
-"""Standalone tests for the ``hlfir-rewrite-sequence-association`` pass.
+"""Standalone tests for the hlfir-rewrite-sequence-association pass.
 
-Fortran 2003 section12.4.1.5 lets a caller pass a single element of an array
-where the formal expects an explicit-shape array  --  the formal then sees
-``N`` consecutive elements starting at the given element.  Flang lowers
-this with a deterministic IR shape:
+Fortran 2003 12.4.1.5: a caller may pass a single array element where the formal expects an
+explicit-shape array; the formal then sees N consecutive elements from that point. Flang
+lowers this to a deterministic IR shape:
 
     %elt   = hlfir.designate %parent (%idx)            : !fir.ref<T>
     %arr   = fir.convert     %elt                      : ref<T> -> ref<array<?xT>>
     fir.call @callee(%arr, ...)
 
-The pass collapses this adapter into an explicit section designate
-``%parent (lo:lo+N-1:1)`` so the bridge's normal section-aware lowering
-takes over.  These tests exercise the pass at the IR level (without
-going through SDFG codegen) so the contract is pinned independently of
-downstream consumers.
+The pass collapses this into an explicit section designate %parent(lo:lo+N-1:1) so normal
+section-aware lowering takes over. Tests exercise the pass at the IR level, independent of
+SDFG codegen.
 """
 from pathlib import Path
 
@@ -58,13 +55,9 @@ def _count_seq_adapter(ir: str) -> int:
 
 
 def test_literal_size_collapses_to_section(tmp_path):
-    """``f(d(11), 5)`` -> callee sees ``d(11:15)``.
-
-    The literal ``5`` for the formal's extent reaches the inlined
-    callee through flang's ``__assoc_scalar`` adapter (alloca + single
-    store + load).  The pass walks load -> alloca -> store to recover the
-    constant and emits a section designate of shape ``5``.
-    """
+    """f(d(11), 5) -> callee sees d(11:15). The literal 5 reaches the inlined callee via flang's
+    __assoc_scalar adapter (alloca+store+load); the pass walks load->alloca->store to recover the
+    constant and emit a section designate of shape 5."""
     src = """
 module lib
 contains
@@ -166,12 +159,8 @@ end subroutine main
 
 
 def test_module_parameter_constant_extent(tmp_path):
-    """Variant 3: ``integer, parameter :: NMAX = 50`` then
-    ``f(d(11), NMAX)``  --  extent folds via the global's ``fir.has_value``
-    initialiser.  Note: NMAX larger than ``d``'s extent here is
-    contrived (would be illegal at runtime); we only care that the IR
-    rewrite picks up the constant ``50`` from the module-level
-    parameter."""
+    """Variant 3: f(d(11), NMAX) with integer, parameter :: NMAX = 8 -- extent folds via the
+    global's fir.has_value initialiser (picks up the constant from the module-level parameter)."""
     src = """
 module lib
   implicit none
@@ -198,10 +187,8 @@ end subroutine main
 
 
 def test_runtime_symbolic_extent_emits_dynamic_section(tmp_path):
-    """Variant 4: ``f(d(11), sz)`` with ``sz`` computed at runtime.
-    Cannot fold to a constant  --  pass falls back to a runtime-extent
-    section ``box<array<?xf32>>`` whose triplet upper bound is
-    ``lo + sz - 1``."""
+    """Variant 4: f(d(11), sz) with sz computed at runtime -- can't fold to a constant, so the
+    pass falls back to a runtime-extent section box<array<?xf32>> with upper bound lo + sz - 1."""
     src = """
 module lib
 contains
@@ -229,11 +216,9 @@ end subroutine main
 
 
 def test_qe_blas_pattern_2d_element_to_1d_column(tmp_path):
-    """Variant 5: the QE / BLAS pattern.  Caller passes ``f(d(1, j),
-    M)`` where ``d`` is rank-2 ``d(M, N)``  --  column-major contiguity
-    means the formal sees one full column starting at ``d(1, j)``.  The
-    pass must keep ``j`` as a passthrough scalar index and place the
-    triplet on dim 1: ``d(1:M, j)``."""
+    """Variant 5: the QE/BLAS pattern. f(d(1, j), M) with rank-2 d(M, N) -- column-major
+    contiguity means the formal sees one full column starting at d(1, j); the pass must keep j
+    as a passthrough scalar index and place the triplet on dim 1: d(1:M, j)."""
     src = """
 module lib
 contains
@@ -257,11 +242,8 @@ end subroutine main
     assert _count_seq_adapter(after) == 0
     # Triplet-on-dim-1 + scalar-on-dim-2: ``(%c1:%c8:%c1, j)``.
     assert 'fir.array<8xf32>' in after
-    # Both forms  --  element-form ``d(1, j)`` and the rewritten section
-    # ``d(1:8:1, j)``  --  should appear once: the latter as the section,
-    # the former either erased (no other uses) or kept (other uses).
-    # We only require that a triplet section over the rank-2 parent
-    # carrying a fixed scalar second index is present.
+    # Both element-form d(1,j) and rewritten section d(1:8:1,j) may appear; we only require
+    # a triplet section over the rank-2 parent with a fixed scalar second index.
     section_lines = [ln for ln in after.splitlines() if 'hlfir.designate' in ln and 'fir.array<8xf32>' in ln]
     assert section_lines, f"no section designate of array<8xf32>:\n{after}"
 
@@ -295,17 +277,11 @@ end subroutine main
 
 
 def test_multidim_column_element_access_e2e(tmp_path):
-    """A 2-D-column element passed to an explicit-shape array dummy that the
-    inlined callee reads BY ELEMENT (the FV3 ``acr3d (..., acco (1, k), ...)``
-    shape, where ``acr3d`` does ``cac (1) * .. + cac (2) * .. + cac (3) * ..``).
-
-    Sequence association maps ``a(1:3, j)`` to the formal ``c(3)``; the
-    callee's per-element reads must compose back to ``a(i, j)``.  Regression
-    for the kept-declare / ``box_addr`` path: a plain ``box -> ref`` convert
-    is illegal FIR, and erasing the formal declare dropped the section-alias
-    dim-map, collapsing the memlet to 1-D on the 2-D parent.  Runs e2e so the
-    composed subset is checked numerically, not just structurally.
-    """
+    """2-D-column element passed to an explicit-shape dummy the inlined callee reads BY ELEMENT
+    (the FV3 acr3d(..., acco(1,k), ...) shape). Sequence association maps a(1:3,j) to formal
+    c(3); per-element reads must compose back to a(i,j). Regression for the kept-declare/box_addr
+    path: erasing the formal declare dropped the section-alias dim-map, collapsing the memlet to
+    1-D on the 2-D parent. Runs e2e so the composed subset is checked numerically."""
     src = """
 module seqassoc2d_mod
   implicit none

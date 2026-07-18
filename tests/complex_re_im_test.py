@@ -1,23 +1,9 @@
 """Pin the COMPLEX(KIND=*) ``%re`` / ``%im`` field accessor lowering.
 
-Fortran 2008's ``z%re`` and ``z%im`` are INTRINSIC accessors on the
-``COMPLEX`` type -- equivalent to ``REAL(z, kind)`` and ``AIMAG(z)``
-respectively, but with full LHS support (``z%re = 1.0`` is legal).
-The bridge must:
-
-  * Route the LOWER side (read) through ``fir.extract_value`` ->
-    ``<z>.real()`` / ``<z>.imag()`` (``expressions.cpp:934``).
-  * NOT confuse ``%re`` / ``%im`` for user-defined struct field
-    accesses -- they're built-in on COMPLEX, with no underlying
-    ``hlfir.declare`` to scope-qualify.
-  * Preserve the COMPLEX dtype on the SDFG signature
-    (``dace.complex128`` for ``KIND=8``, ``dace.complex64`` for
-    ``KIND=4``) without splitting into a separate ``_re`` / ``_im``
-    pair.
-
-User concern (verbatim): "Since re and im are special accesses of a
-special type 'complex' we should not detect them in the struct chain".
-These tests pin that contract.
+Fortran 2008's ``z%re``/``z%im`` are INTRINSIC COMPLEX accessors (equivalent
+to ``REAL(z,kind)``/``AIMAG(z)``, with LHS support), not struct field
+accesses -- the bridge must not scope-qualify them and must preserve the
+COMPLEX dtype on the SDFG signature rather than splitting into ``_re``/``_im``.
 """
 import numpy as np
 import pytest
@@ -30,14 +16,9 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 # ===========================================================================
 # Basic %re / %im read paths
 # ===========================================================================
-# A SCALAR ``COMPLEX(8) :: z`` dummy is registered by the bridge as a
-# length-1 ``Array`` (pass-by-reference) rather than a by-value
-# ``Scalar``, because DaCe's ctypes interop mis-handles by-value
-# complex scalars (``complex128.as_ctypes()`` returns ``c_longdouble``,
-# dropping the imaginary part).  Fortran passes scalar dummies by
-# reference anyway, so callers bind a 1-element numpy complex array.
-# These tests cover BOTH the scalar declaration (``z``) AND the array
-# declaration (``z(n)``) forms of the ``%re`` / ``%im`` accessor.
+# Scalar COMPLEX(8) dummies register as length-1 Array (not Scalar): DaCe's
+# ctypes interop mis-handles by-value complex (complex128.as_ctypes() drops
+# the imaginary part). Callers bind a 1-element numpy complex array.
 def test_complex_re_read_scalar(tmp_path):
     """``out = z%re`` on a SCALAR COMPLEX dummy returns the real part."""
     src = """
@@ -198,10 +179,8 @@ END MODULE
 # SDFG signature shape -- COMPLEX must NOT split into separate re/im arrays
 # ===========================================================================
 def test_complex_array_stays_single_complex_descriptor(tmp_path):
-    """A COMPLEX array dummy lands on the signature as ONE complex
-    descriptor (``dace.complex128``), not split into ``z_re`` / ``z_im``
-    real descriptors.  Pinning this so a future struct-flattening pass
-    can't accidentally split complex into a struct."""
+    """A COMPLEX array dummy lands as ONE complex descriptor, not split into
+    ``z_re``/``z_im`` -- guards against a future struct-flattening regression."""
     src = """
 MODULE cplx_signature_mod
 CONTAINS
@@ -254,16 +233,12 @@ END MODULE
 
 
 # ===========================================================================
-# User variable named ``im`` (INTEGER) -- NOT a complex access; the
-# Python ``_RESERVED_DACE_NAMES`` shield handles the SymPy collision.
-# Verifies the two paths (complex-accessor vs user-var) stay independent.
+# User ``im`` INTEGER var vs COMPLEX ``%im`` accessor: _RESERVED_DACE_NAMES
+# shield handles the SymPy collision; the two paths must stay independent.
 # ===========================================================================
 def test_user_integer_im_does_not_conflict_with_complex_im_accessor(tmp_path):
-    """A kernel that uses BOTH a user-named ``im`` integer counter AND
-    a COMPLEX ``%im`` accessor -- the two must not interfere.  The
-    user ``im`` is renamed by the Python shield; the complex ``%im``
-    routes through ``fir.extract_value`` and isn't seen as a user
-    field at all."""
+    """User ``im`` integer counter AND a COMPLEX ``%im`` accessor coexist: the
+    Python shield renames the user var; ``%im`` routes through ``fir.extract_value``."""
     src = """
 MODULE im_dual_use_mod
 CONTAINS

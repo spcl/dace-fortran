@@ -1,9 +1,5 @@
-"""IF / ELSE branching inside a DO loop.
-
-Exercises ``_emit_cond`` end-to-end: a THEN/ELSE pair (writing ``b``) and
-a THEN-only IF (writing ``c``), both guarded on an element-wise numeric
-condition.  The SDFG result must match the gfortran-compiled reference
-on seeded random input.
+"""IF/ELSE branching inside a DO loop: exercises ``_emit_cond`` on a THEN/ELSE pair
+(writing ``b``) and a THEN-only IF (writing ``c``); SDFG must match the gfortran reference.
 """
 
 import shutil

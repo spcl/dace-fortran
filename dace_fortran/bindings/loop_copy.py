@@ -1,19 +1,10 @@
-"""Recipe renderers  --  the ONLY code that knows how to turn a
+"""Recipe renderers -- the ONLY code that knows how to turn a
 ``FlattenRecipe`` into Fortran.
 
-Three functions, one per code shape the emitter needs:
-
-- ``render_alias_calls``  --  zero-copy path: one ``c_f_pointer`` per
-  flat name, aliasing the outer storage path.
-- ``render_copy_in_loop``  --  forward path: allocate flats, rank-N
-  nested ``do`` loop computing each flat's element from the outer.
-- ``render_copy_out_loop``  --  reverse path: rank-N nested ``do`` loop
-  reconstructing the outer's element from the flats, followed by
-  matching deallocates.
-
-All three return ``List[str]``  --  individual source lines already
-indented to wrapper-body level (four spaces).  Callers concatenate
-and hand to ``assemble_module``.
+Three renderers: ``render_alias_calls`` (zero-copy ``c_f_pointer``
+alias), ``render_copy_in_loop`` (allocate + forward do-loop copy),
+``render_copy_out_loop`` (reverse do-loop copy + deallocate).  All
+return ``List[str]`` of lines pre-indented to wrapper-body level.
 """
 
 from typing import List, Tuple
@@ -43,8 +34,7 @@ def _fortran_type(dtype: str) -> str:
 
 
 def _loop_index_names(rank: int) -> Tuple[str, ...]:
-    """Return the loop-index names the emitter declares at the
-    wrapper head: ``('i1', 'i2', ..., 'iN')``."""
+    """Loop-index names the wrapper head declares: ``('i1', 'i2', ..., 'iN')``."""
     return tuple(f"i{d + 1}" for d in range(rank))
 
 
@@ -54,19 +44,10 @@ def _loop_index_names(rank: int) -> Tuple[str, ...]:
 
 
 def render_alias_calls(recipe: FlattenRecipe) -> List[str]:
-    """Zero-copy alias emission for an ``aliasable=True`` recipe.
+    """Zero-copy alias emission for an ``aliasable=True`` recipe -- one
+    ``call c_f_pointer(c_loc(<outer>), <flat>, [<shape>])`` per flat.
 
-    Example  --  recipe for ``fld%a`` with flat name ``fld_a``::
-
-        call c_f_pointer(c_loc(fld%a), fld_a,  &
-                         [size(fld%a, dim=1), size(fld%a, dim=2)])
-
-    :param recipe: the recipe; ``aliasable`` must be True, behaviour
-                   is undefined otherwise.
-    :returns: one-line-per-flat ``call c_f_pointer(c_loc(<outer>),
-              <flat>, [<shape>])`` statements, indented four spaces.
-              Empty list if the recipe has no flats (defensive).
-    :raises ValueError: if the recipe is not ``aliasable``.
+    :raises ValueError: recipe is not ``aliasable``.
     """
     if not recipe.aliasable:
         raise ValueError("render_alias_calls called on non-aliasable recipe")
@@ -74,9 +55,8 @@ def render_alias_calls(recipe: FlattenRecipe) -> List[str]:
     out: List[str] = []
     for flat, read_expr in zip(recipe.flat_names, recipe.read_exprs):
         base = strip_index_args(read_expr)
-        # A scalar struct member (rank 0, no shape exprs) aliases as a
-        # scalar pointer  --  ``c_f_pointer`` must NOT get a shape
-        # argument (``[]`` is an invalid empty array constructor).
+        # Scalar member: c_f_pointer must NOT get a shape arg -- `[]` is
+        # an invalid empty array constructor in Fortran.
         if recipe.rank == 0 or not recipe.shape_exprs:
             out.append(f"    call c_f_pointer(c_loc({base}), {flat})")
         else:
@@ -90,47 +70,27 @@ def render_alias_calls(recipe: FlattenRecipe) -> List[str]:
 
 
 def render_copy_in_loop(recipe: FlattenRecipe) -> List[str]:
-    """Generic forward copy: allocate flats, nested do-loops assign
-    each flat from the corresponding ``read_expr`` with loop-index
-    placeholders substituted.
+    """Generic forward copy: allocate flats, nested do-loops assign each
+    flat from its ``read_expr`` with loop-index placeholders substituted.
+    Requires ``aliasable=False``, ``rank >= 1``.
 
-    Example  --  recipe for complex ``st%z``, flat names ``st_z_re``
-    / ``st_z_im``, rank 2::
-
-        allocate(st_z_re(size(st%z, dim=1), size(st%z, dim=2)))
-        allocate(st_z_im(size(st%z, dim=1), size(st%z, dim=2)))
-        ! Copy-in for st%z -> st_z_re, st_z_im
-        do i2 = 1, size(st%z, dim=2)
-          do i1 = 1, size(st%z, dim=1)
-            st_z_re(i1, i2) = real(st%z(i1, i2), kind=c_double)
-            st_z_im(i1, i2) = aimag(st%z(i1, i2))
-          end do
-        end do
-
-    :param recipe: the recipe; ``aliasable`` must be False,
-                   ``rank`` >= 1.
-    :returns: indented Fortran lines  --  allocates, the nested
-              do-nest, then the closing ``end do`` markers.
-    :raises ValueError: if the recipe is ``aliasable``.
+    :raises ValueError: recipe is ``aliasable``.
     """
     if recipe.aliasable:
         raise ValueError("render_copy_in_loop called on aliasable recipe  --  use render_alias_calls")
     out: List[str] = []
-    # Allocate every flat using the per-rank shape expressions.
     for flat in recipe.flat_names:
         out.append(f"    allocate({flat}({', '.join(recipe.shape_exprs)}))")
 
-    # Loop nest  --  outermost rank first (column-major).
+    # Loop nest: outermost rank first (column-major).
     idx_names = _loop_index_names(recipe.rank)
-    # Comment mentions the outer source with substituted indices so
-    # placeholders never leak out.
+    # Substituted indices so placeholders don't leak into the generated comment.
     summary = substitute_indices(recipe.read_exprs[0], idx_names)
     out.append(f"    ! Copy-in: {', '.join(recipe.flat_names)} <- {summary}")
     for d in reversed(range(recipe.rank)):
         indent = ' ' * ((recipe.rank - 1 - d) * 2)
         out.append(f"    {indent}do {idx_names[d]} = 1, {recipe.shape_exprs[d]}")
 
-    # Body  --  one assignment per flat with placeholders substituted.
     body_indent = ' ' * (recipe.rank * 2)
     idx_tuple = ", ".join(idx_names)
     for flat, read_expr in zip(recipe.flat_names, recipe.read_exprs):
@@ -150,30 +110,12 @@ def render_copy_in_loop(recipe: FlattenRecipe) -> List[str]:
 
 
 def render_copy_out_loop(recipe: FlattenRecipe, outer_expr: str) -> List[str]:
-    """Inverse of ``render_copy_in_loop``: pack the flat buffers
-    back into the outer storage at each position, then deallocate.
+    """Inverse of ``render_copy_in_loop``: pack flat buffers back into
+    the outer storage at each position, then deallocate.
 
-    Example  --  complex-split recipe for ``st%z``::
-
-        ! Copy-out: st%z <- st_z_re, st_z_im
-        do i2 = 1, size(st%z, dim=2)
-          do i1 = 1, size(st%z, dim=1)
-            st%z(i1, i2) = cmplx(st_z_re(i1,i2), st_z_im(i1,i2), kind=c_double)
-          end do
-        end do
-        deallocate(st_z_re)
-        deallocate(st_z_im)
-
-    :param recipe: the recipe; requires ``write_expr`` non-empty (an
-                   empty ``write_expr`` means the caller shouldn't
-                   invoke copy-out).
-    :param outer_expr: the Fortran expression for the outer
-                       destination (``st%z``)  --  same as the
-                       ``FlattenEntry.outer_expr`` the recipe was
-                       created under, passed separately so the
-                       renderer doesn't reach back up to the entry.
-    :returns: indented Fortran lines  --  the reverse do-nest then
-              the matching ``deallocate`` statements.
+    ``outer_expr`` is passed separately (same as
+    ``FlattenEntry.outer_expr``) so the renderer doesn't reach back up
+    to the entry.
     """
     out: List[str] = [f"    ! Copy-out: {outer_expr} <- {', '.join(recipe.flat_names)}"]
 
@@ -184,12 +126,10 @@ def render_copy_out_loop(recipe: FlattenRecipe, outer_expr: str) -> List[str]:
         out.append(f"    {indent}do {idx_names[d]} = 1, {recipe.shape_exprs[d]}")
 
     body_indent = ' ' * (recipe.rank * 2)
-    # A reconstruction recipe (e.g. complex re/im -> ``cmplx``) carries a
-    # ``write_expr`` and writes ``outer_expr(idx) = write_expr``.  A plain
-    # single-flat member (e.g. an AoS scalar member) has no ``write_expr``
-    # and is the exact inverse of its copy-in: scatter the flat back into
-    # the member access ``read_exprs[0]`` (which encodes the index
-    # placement, ``pts(i)%x``), giving ``pts(i)%x = pts_x(i)``.
+    # write_expr set: reconstruction recipe, outer_expr(idx) = write_expr.
+    # write_expr empty: plain single-flat member, exact inverse of its
+    # copy-in -- scatter into read_exprs[0] (encodes index placement,
+    # e.g. pts(i)%x), giving pts(i)%x = pts_x(i).
     if recipe.write_expr:
         lhs = f"{outer_expr}({idx_tuple})"
         rhs = substitute_indices(recipe.write_expr, idx_names)
@@ -214,28 +154,20 @@ def render_copy_out_loop(recipe: FlattenRecipe, outer_expr: str) -> List[str]:
 # ----------------------------------------------------------------------------
 #
 # Padding-to-max contract for an AoS dummy whose elements own
-# allocatable / pointer array members.  The full design (mutually
-# exclusive flag matrix, mixed-struct splitting, empty-batch sentinel,
-# no-runtime-allocated-checks-in-the-SDFG policy) lives on
-# ``FlattenRecipe.aos_alloc`` in ``flatten_plan.py``.  This module
+# allocatable/pointer array members.  Full design lives on
+# ``FlattenRecipe.aos_alloc`` in ``flatten_plan.py``; this module
 # implements the two emitters that read those fields.
 #
-# The pair of helpers below extracts the per-instance member-access
-# expression (``A($i1)%w``) from ``recipe.read_exprs[0]``  --  we strip
-# the inner index group ``($i2)`` so the remainder names the row.
-# The bridge always emits ``read_exprs[0]`` as
-# ``<outer>($i1)%<member>($i2)`` for an aos_alloc recipe, so the
-# split on ``"($i2)"`` is safe.  ``i1`` is the loop iterator that
-# ``build_wrapper_head`` already declares for any non-aliasable
-# recipe of rank >= 1.
+# Helpers below extract `A($i1)%w` from recipe.read_exprs[0] by splitting
+# on "($i2)" -- safe because the bridge always emits aos_alloc recipes as
+# `<outer>($i1)%<member>($i2)`.  i1 is the iterator build_wrapper_head
+# declares for any non-aliasable rank>=1 recipe.
 
 
 def _aos_alloc_member_at_i(recipe: FlattenRecipe) -> str:
-    """Extract ``<outer>(i1)%<member>`` (without the inner index)
-    from an aos_alloc recipe's ``read_exprs[0]``.  Used by both the
-    pack-in and pack-out emitters for ``allocated()`` / ``size()``
-    queries on the per-instance member.
-    """
+    """Extract ``<outer>(i1)%<member>`` (no inner index) from an
+    aos_alloc recipe's ``read_exprs[0]``, for allocated()/size() queries
+    in the pack-in/pack-out emitters."""
     template = recipe.read_exprs[0]  # "A($i1)%w($i2)"
     base = template.split('($i2)')[0] if '($i2)' in template \
         else template.rsplit('(', 1)[0]
@@ -243,10 +175,8 @@ def _aos_alloc_member_at_i(recipe: FlattenRecipe) -> str:
 
 
 def render_aos_alloc_pack_in(recipe: FlattenRecipe, outer_expr: str) -> List[str]:
-    """Compute ``cap``, allocate the 2D buffer, pack each allocated
-    row's live region.  Returns the Fortran lines for the wrapper
-    body.  ``recipe.aos_alloc`` must be True.
-    """
+    """Compute ``cap``, allocate the 2D buffer, pack each allocated row's
+    live region.  ``recipe.aos_alloc`` must be True."""
     if not recipe.aos_alloc:
         raise ValueError("render_aos_alloc_pack_in called on non-aos_alloc recipe")
     flat = recipe.flat_names[0]
@@ -261,7 +191,7 @@ def render_aos_alloc_pack_in(recipe: FlattenRecipe, outer_expr: str) -> List[str
         f"        if (size({member_at_i}) > {cap}) {cap} = size({member_at_i})",
         f"      end if",
         f"    end do",
-        # Empty-batch sentinel  --  keep cap >= 1 so the buffer is non-degenerate.
+        # Empty-batch sentinel: keep cap >= 1 so the buffer is non-degenerate.
         f"    if ({cap} == 0) {cap} = 1",
         f"    allocate({flat}({n_extent}, {cap}))",
         f"    {flat} = 0",
@@ -274,10 +204,9 @@ def render_aos_alloc_pack_in(recipe: FlattenRecipe, outer_expr: str) -> List[str
 
 
 def render_aos_alloc_pack_out(recipe: FlattenRecipe, outer_expr: str) -> List[str]:
-    """Copy each allocated row's live region back from the buffer
-    and free the scratch.  No reallocation  --  the kernel doesn't
-    change per-instance sizes in 5c-B; that's reserved for 5c-C.
-    """
+    """Copy each allocated row's live region back from the buffer, free
+    the scratch.  No reallocation -- 5c-B kernels don't change
+    per-instance sizes (reserved for 5c-C)."""
     if not recipe.aos_alloc:
         raise ValueError("render_aos_alloc_pack_out called on non-aos_alloc recipe")
     flat = recipe.flat_names[0]

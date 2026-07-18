@@ -9,9 +9,8 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_fortran_frontend_bit_size(tmp_path):
-    # BIT_SIZE accepts INTEGER only -- the original test had calls on
-    # LOGICAL and REAL too, which are invalid Fortran.  Drop those; the
-    # surviving INTEGER call exercises the lowering path.
+    # BIT_SIZE accepts INTEGER only -- the original test's LOGICAL/REAL calls were
+    # invalid Fortran and were dropped; the INTEGER call exercises the lowering path.
     src = """
 SUBROUTINE intrinsic_math_test_bit_size_function(res)
 integer, dimension(2) :: res
@@ -94,13 +93,10 @@ end subroutine main
 
 
 def test_fortran_frontend_present(tmp_path):
-    """``present(a)`` on an OPTIONAL dummy of an internal subprogram.
-    After ``hlfir-inline-all`` flattens ``tf2``'s body into ``main``,
-    each call site leaves a ``fir.is_present`` whose operand traces
-    through the inlined alias to either ``main``'s mandatory dummy
-    ``a`` (host bound storage -> constant ``1``) or to ``fir.absent``
-    (caller passed nothing -> constant ``0``).  The bridge folds these
-    statically at AST-extract time."""
+    """``present(a)`` on an OPTIONAL dummy of an internal subprogram. After
+    hlfir-inline-all flattens tf2 into main, fir.is_present traces through the
+    inlined alias to a constant 1 (bound) or 0 (fir.absent) -- folded statically
+    at AST-extract time."""
     src = """
 subroutine main(res, res2, a)
   integer, dimension(4) :: res
@@ -123,10 +119,8 @@ end subroutine
     size = 4
     res = np.full([size], 42, order="F", dtype=np.int32)
     res2 = np.full([size], 42, order="F", dtype=np.int32)
-    # ``a`` is intent(in) on the SDFG signature (the OPTIONAL dummy in
-    # the inlined ``tf2`` body); ``is_present`` is folded statically so
-    # the value never reaches a tasklet, but the SDFG signature still
-    # demands a scalar binding.
+    # a is intent(in) on the SDFG signature (OPTIONAL dummy in inlined tf2);
+    # is_present folds statically so the value never reaches a tasklet, but the signature still needs a binding
     sdfg(res=res, res2=res2, a=5)
 
     assert res[0] == 1

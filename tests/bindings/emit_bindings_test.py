@@ -1,13 +1,6 @@
-"""End-to-end emitter tests  --  the scaffold consumes
-``(FrozenSignature, OriginalInterface, FlattenPlan)`` triples and
-writes a ``<entry>_bindings.f90`` file that mirrors what
-``hlfir-flatten-structs`` recorded.
-
-Each test spells out a realistic fixture plan and asserts on the
-key Fortran shapes the wrapper should contain (or NOT contain, for
-the zero-copy guarantees).  No numerical compile-and-run here  --
-those live in a separate integration test once the bridge side is
-wired.
+"""End-to-end emitter tests -- consumes (FrozenSignature, OriginalInterface,
+FlattenPlan) and writes <entry>_bindings.f90 mirroring hlfir-flatten-structs.
+Asserts on Fortran shapes present/absent (zero-copy); no compile-and-run here.
 """
 
 from pathlib import Path
@@ -29,8 +22,7 @@ from dace_fortran.bindings import (
 
 
 def _two_real_array_struct(tmp_path: Path) -> str:
-    """``type(t_fields)`` with two plain ``real(c_double)`` members  --
-    everything aliases."""
+    """type(t_fields) with two plain real(c_double) members -- everything aliases."""
     frozen = FrozenSignature(
         entry="kernel",
         mangled="_QPkernel",
@@ -148,8 +140,7 @@ def _complex_split_struct(tmp_path: Path) -> str:
 
 
 def _nested_struct(tmp_path: Path) -> str:
-    """Two-level nested struct: ``st%a%v`` + ``st%b%v``, both aliased
-    with full ``%``-paths in ``c_loc(...)``."""
+    """Two-level nested struct: st%a%v + st%b%v, both aliased with full %-paths in c_loc(...)."""
     frozen = FrozenSignature(
         entry="kernel",
         mangled="_QPkernel",
@@ -207,19 +198,14 @@ def _nested_struct(tmp_path: Path) -> str:
 
 
 def test_two_real_array_struct_all_aliased(tmp_path: Path):
-    """User's invariant: when every struct member has a matching
-    layout, the generated wrapper must NOT allocate scratch or
-    emit copy loops  --  pointer aliasing only.
-    """
+    """Matching layout on every member -- wrapper must not allocate scratch or emit copy loops, pointer aliasing only."""
     src = _two_real_array_struct(tmp_path)
-    # No deep-copy artefacts.
+    # no deep-copy artefacts
     assert "allocate(" not in src
     assert "deallocate(" not in src
     assert "do i1 =" not in src and "do i2 =" not in src
-    # Two c_f_pointer calls, one per member.
     assert src.count("call c_f_pointer(c_loc(fld%a)") == 1
     assert src.count("call c_f_pointer(c_loc(fld%b)") == 1
-    # Flat pointer declarations.
     assert "real(c_double), pointer :: fld_a(:, :)" in src
     assert "real(c_double), pointer :: fld_b(:, :)" in src
 
@@ -254,10 +240,10 @@ def test_complex_split_emits_copy_out_loop(tmp_path: Path):
 
 
 def test_complex_split_still_aliases_plain_member(tmp_path: Path):
-    """The ``st%u`` member (plain real) must alias, not copy."""
+    """The st%u member (plain real) must alias, not copy."""
     src = _complex_split_struct(tmp_path)
     assert "call c_f_pointer(c_loc(st%u)" in src
-    # No second allocate for st_u  --  it's a pointer, not scratch.
+    # st_u is a pointer, not scratch -- no second allocate.
     assert "allocate(st_u" not in src
 
 
@@ -267,8 +253,7 @@ def test_complex_split_still_aliases_plain_member(tmp_path: Path):
 
 
 def test_nested_struct_uses_full_path_in_c_loc(tmp_path: Path):
-    """``st%a%v`` is more than one-level nesting; the Fortran
-    compiler handles the ``%`` chain directly."""
+    """st%a%v is more than one-level nesting; Fortran compiler handles the % chain directly."""
     src = _nested_struct(tmp_path)
     assert "call c_f_pointer(c_loc(st%a%v)" in src
     assert "call c_f_pointer(c_loc(st%b%v)" in src
@@ -287,12 +272,9 @@ def test_nested_struct_no_copy_overhead(tmp_path: Path):
 
 
 def _logical_array_kernel(tmp_path: Path) -> str:
-    """A kernel taking a top-level ``LOGICAL`` array dummy.  After the
-    LOGICAL-to-bool migration the SDFG sees this as ``np.bool_`` (1 byte)
-    while the caller-visible Fortran type stays default ``LOGICAL`` (4
-    bytes).  The wrapper has to bridge the two with a
-    ``logical(c_bool)`` scratch buffer + an intrinsic-cast copy on
-    entry / exit."""
+    """Kernel with a top-level LOGICAL array dummy. Post LOGICAL-to-bool migration
+    the SDFG sees np.bool_ (1 byte) while the Fortran type stays LOGICAL (4 bytes);
+    wrapper bridges via a logical(c_bool) scratch buffer + intrinsic-cast copy."""
     frozen = FrozenSignature(
         entry="kernel",
         mangled="_QPkernel",
@@ -328,34 +310,28 @@ def _logical_array_kernel(tmp_path: Path) -> str:
 
 
 def test_logical_array_emits_cbool_scratch(tmp_path: Path):
-    """The wrapper declares a ``logical(c_bool), allocatable, target``
-    scratch buffer for any LOGICAL outer-dummy whose SDFG dtype is
-    ``bool`` and whose outer Fortran type isn't already
-    ``logical(c_bool)``."""
+    """Wrapper declares a logical(c_bool), allocatable, target scratch buffer whenever the outer LOGICAL dummy isn't already c_bool."""
     src = _logical_array_kernel(tmp_path)
     assert "logical(c_bool), allocatable, target :: mask_cbool(:)" in src
 
 
 def test_logical_array_emits_intrinsic_cast_on_entry(tmp_path: Path):
-    """Wrapper body copies the outer dummy into the scratch via the
-    Fortran intrinsic LOGICAL-kind-conversion (a whole-array assign)."""
+    """Wrapper copies outer dummy into scratch via Fortran intrinsic LOGICAL-kind-conversion (whole-array assign)."""
     src = _logical_array_kernel(tmp_path)
     assert "allocate(mask_cbool(size(mask, dim=1)))" in src
     assert "mask_cbool = mask" in src
 
 
 def test_logical_array_passes_scratch_to_sdfg(tmp_path: Path):
-    """The SDFG-call argument list uses the scratch name, not the outer
-    dummy  --  passing the outer would corrupt every other element."""
+    """SDFG-call args use the scratch name, not the outer dummy -- passing outer would corrupt every element."""
     src = _logical_array_kernel(tmp_path)
-    # The call line should reference ``mask_cbool``, not bare ``mask``.
+    # call line must reference mask_cbool, not bare mask
     call_block = src[src.index("call dace_program_kernel"):]
     assert "mask_cbool" in call_block.splitlines()[1] or any("mask_cbool" in l for l in call_block.splitlines()[:6])
 
 
 def test_logical_array_emits_intrinsic_cast_on_exit(tmp_path: Path):
-    """For ``intent(inout)`` the wrapper copies the scratch back into
-    the outer dummy after the SDFG call, then deallocates."""
+    """intent(inout): wrapper copies scratch back into outer dummy after the SDFG call, then deallocates."""
     src = _logical_array_kernel(tmp_path)
     assert "mask = mask_cbool" in src
     assert "deallocate(mask_cbool)" in src
@@ -364,23 +340,12 @@ def test_logical_array_emits_intrinsic_cast_on_exit(tmp_path: Path):
 # --------------------------------------------------------------------------
 # Per-kind LOGICAL(N) bridge coverage
 # --------------------------------------------------------------------------
-#
-# Default ``logical`` is ``LOGICAL(KIND=4)`` (4 bytes), but Fortran
-# permits explicit kinds 1, 2, 4, 8.  The SDFG-internal storage is
-# always 1-byte ``bool`` (the C ABI of ``logical(c_bool)``); the
-# wrapper bridges by allocating a ``logical(c_bool)`` scratch and
-# letting Fortran's intrinsic LOGICAL-kind-conversion handle the
-# bit fiddling.  Only the explicit ``logical(c_bool)`` outer type
-# needs no bridge  --  it already matches.
-#
-# These tests parametrise the outer Fortran type per kind to confirm
-# the bridge fires for every non-c_bool flavour and is suppressed for
-# c_bool.
+# SDFG storage is always 1-byte bool (c_bool ABI); Fortran LOGICAL kinds
+# 1/2/4/8 all need the scratch-buffer bridge except logical(c_bool) itself.
 
 
 def _logical_kernel_with_outer_type(tmp_path: Path, fortran_outer_type: str, arr_name: str = "flag") -> str:
-    """Same shape as ``_logical_array_kernel`` but with the outer
-    Fortran type configurable so the test can probe each LOGICAL kind."""
+    """Same as _logical_array_kernel but with outer Fortran type configurable per LOGICAL kind."""
     frozen = FrozenSignature(
         entry="kernel",
         mangled="_QPkernel",
@@ -416,9 +381,7 @@ def _logical_kernel_with_outer_type(tmp_path: Path, fortran_outer_type: str, arr
 
 
 def test_logical_kind_1_emits_bridge(tmp_path: Path):
-    """``LOGICAL(KIND=1)``  --  even though the byte width matches
-    ``c_bool``, Fortran treats them as distinct kinds; the wrapper
-    plays it safe with an explicit intrinsic-cast bridge."""
+    """LOGICAL(KIND=1): byte width matches c_bool, but Fortran treats it as a distinct kind -- wrapper still bridges."""
     src = _logical_kernel_with_outer_type(tmp_path, "logical(1)")
     assert "logical(c_bool), allocatable, target :: flag_cbool(:)" in src
     assert "flag_cbool = flag" in src
@@ -435,8 +398,7 @@ def test_logical_kind_2_emits_bridge(tmp_path: Path):
 
 
 def test_logical_kind_4_emits_bridge(tmp_path: Path):
-    """``LOGICAL(KIND=4)``  --  the default kind, 4 bytes.  Most ICON
-    code lands here; the bridge is the hot path."""
+    """LOGICAL(KIND=4): default kind, 4 bytes -- most ICON code lands here; the bridge is the hot path."""
     src = _logical_kernel_with_outer_type(tmp_path, "logical(4)")
     assert "logical(c_bool), allocatable, target :: flag_cbool(:)" in src
     assert "flag_cbool = flag" in src
@@ -452,11 +414,7 @@ def test_logical_kind_8_emits_bridge(tmp_path: Path):
 
 
 def test_logical_cbool_passes_through_no_bridge(tmp_path: Path):
-    """``logical(c_bool)`` already matches the SDFG's bool layout  --  no
-    scratch buffer, no Fortran-intrinsic cast.  The outer dummy goes
-    straight through to the SDFG."""
+    """logical(c_bool) already matches SDFG bool layout -- no scratch, no cast, outer dummy passes straight through."""
     src = _logical_kernel_with_outer_type(tmp_path, "logical(c_bool)")
-    # No scratch declaration.
     assert "_cbool" not in src.replace("logical(c_bool)", "")
-    # No copy-in / copy-out / deallocate.
     assert "flag_cbool" not in src

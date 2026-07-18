@@ -1,9 +1,4 @@
-"""Frontend-recognition test for Fortran ``NORM2``.
-
-Drives :file:`norm2_whole_probe.f90`'s ``norm2_whole`` entry through
-the bridge and asserts the resulting SDFG carries a single
-:class:`dace.libraries.standard.nodes.norm2.Norm2` lib node.
-"""
+"""Fortran NORM2 lowers to a single dace.libraries.standard.nodes.norm2.Norm2 lib node."""
 from pathlib import Path
 import sys
 

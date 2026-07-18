@@ -1,22 +1,7 @@
-"""M1 -- forward a PROVIDED optional dummy's presence through the binding.
-
-The bridge registers a ``<dummy>_present`` symbol for every ``present(x)``
-fold on an OPTIONAL dummy.  For an optional that is the kernel's OWN dummy
-(not an inlined-callee optional), the generated wrapper used to hardwire
-``<dummy>_present = 0`` -- so a caller that ACTUALLY passed the optional still
-made the kernel take the absent branch (wrong result).
-
-The fix declares the wrapper's outer dummy ``optional`` and sources the symbol
-from the caller's actual ``present(<dummy>)`` (``int(merge(1, 0, present(x)),
-c_int)``).  The scalar value routes through a guarded local so an omitted
-optional is never referenced.
-
-This module pins the contract at two levels:
-  1. the emitted ``.f90`` carries the ``optional`` decl, the ``merge`` symbol
-     assignment, and the guarded-local plumbing; and
-  2. a gfortran-compiled binding numerically matches a non-transformed
-     gfortran reference for BOTH the present and the absent call.
-"""
+"""M1: an OPTIONAL dummy's presence must forward through the binding.
+Fix: wrapper sources <dummy>_present from present(x) (was hardwired to 0, so callers passing the
+optional still got the absent branch). Pins both the emitted .f90 plumbing and numeric match vs an
+untransformed gfortran reference."""
 import ctypes
 import shutil
 from pathlib import Path
@@ -51,8 +36,7 @@ end subroutine opt_scale
 end module opt_scale_mod
 """
 
-# A bind(c) driver that exercises BOTH the present (``has /= 0``) and the
-# absent call of the SAME generated wrapper, selected at run time.
+# bind(c) driver exercising BOTH present (has /= 0) and absent calls of the same generated wrapper.
 _SDFG_DRIVER = """
 subroutine run_opt(a, out, scale, has) bind(c, name='run_opt')
   use iso_c_binding
@@ -99,8 +83,7 @@ def _build_sdfg_and_iface(tmp_path: Path):
 
 
 def test_optional_flag_in_auto_interface(tmp_path: Path):
-    """The bridge exposes the dummy's OPTIONAL attribute, and
-    ``build_auto_interface`` carries it onto the matching ``OriginalArg``."""
+    """Bridge exposes OPTIONAL attribute; build_auto_interface carries it onto the matching OriginalArg."""
     _sdfg, iface = _build_sdfg_and_iface(tmp_path)
     by_name = {a.name: a for a in iface.args}
     assert by_name["scale"].optional, "scale dummy must be flagged optional"
@@ -109,9 +92,8 @@ def test_optional_flag_in_auto_interface(tmp_path: Path):
 
 
 def test_present_forwarded_in_emitted_binding(tmp_path: Path):
-    """The emitted wrapper declares the outer dummy ``optional``, forwards the
-    caller's actual ``present(scale)`` into ``scale_present``, and routes the
-    value through a guarded local (never the omitted optional itself)."""
+    """Emitted wrapper declares the dummy optional, forwards present(scale) into scale_present, and
+    routes the value through a guarded local."""
     sdfg, iface = _build_sdfg_and_iface(tmp_path)
     bindings_path = tmp_path / "opt_scale_bindings.f90"
     emit_bindings(sdfg._frozen_signature, iface, FlattenPlan(entries=()), str(bindings_path))
@@ -162,9 +144,8 @@ def _call(fn, a, scale, has):
 
 
 def test_optional_present_and_absent_match_reference(tmp_path: Path):
-    """Binding == gfortran reference for BOTH the present and the absent
-    call, AND the present branch actually multiplies by ``scale`` (proving
-    ``scale_present`` is no longer hardwired absent)."""
+    """Binding == gfortran reference for both present and absent calls; present branch actually
+    multiplies by scale (scale_present no longer hardwired absent)."""
     lib, ref, sdfg = _compile(tmp_path)
     a = np.asfortranarray(np.array([1.0, 2.0, 4.0], dtype=np.float64))
     scale = 3.0

@@ -1,13 +1,9 @@
-"""Sympy-collision rename pass  --  direct coverage.
+"""Sympy-collision rename pass -- direct coverage.
 
-The bridge renames Fortran identifiers that match a sympy module-level
-``LazyFunction`` attribute (``test``, ``doctest``) to ``program_<name>``
-at the SDFG layer.  Without the rename, parsing any interstate-edge
-expression that mentions the array (``test[i, j, k]``, etc.) crashes
-sympy with ``SympifyError: cannot sympify object of type LazyFunction``.
-
-These tests exercise the rename pass directly so a regression on the
-collision set surfaces here, not via the wider integration tests.
+The bridge renames Fortran identifiers matching a sympy module-level
+``LazyFunction`` attribute (``test``, ``doctest``) to ``program_<name>``; without
+it, any interstate-edge expression mentioning the array crashes sympy with
+``SympifyError: cannot sympify object of type LazyFunction``.
 """
 
 from pathlib import Path
@@ -48,10 +44,8 @@ end subroutine main
 
 
 def test_reserved_name_doctest_as_local_array(tmp_path: Path):
-    """Same as above but for ``doctest`` (the other sympy
-    ``LazyFunction`` collision).  Same shape of failure when the
-    rename pass misses an entry; the rename map must cover the full
-    reserved set."""
+    """Same as above but for ``doctest`` (the other sympy ``LazyFunction`` collision)
+    -- the rename map must cover the full reserved set."""
     src = """
 subroutine main(d)
   double precision d(4)
@@ -69,8 +63,7 @@ end subroutine main
 
 
 def test_reserved_name_is_renamed_in_sdfg(tmp_path: Path):
-    """Sanity-check the rename: the SDFG should advertise the
-    ``program_test`` array and the builder should record the
+    """The SDFG advertises ``program_test`` and the builder records the
     ``test -> program_test`` mapping for the binding emitter."""
     src = """
 subroutine main(d)
@@ -94,12 +87,9 @@ end subroutine main
 
 
 def test_reserved_name_test_as_dummy_argument(tmp_path: Path):
-    """``test`` as a subroutine dummy argument  --  exercises the SDFG
-    signature side and the FrozenSignature build that the binding
-    emitter consumes.  The SDFG-level kwarg uses the renamed form
-    (``program_test``) since that's what DaCe registers; the
-    FrozenSignature maps it back to the original ``test`` for the
-    binding wrapper."""
+    """``test`` as a dummy argument -- exercises the SDFG signature + FrozenSignature.
+    The SDFG kwarg uses the renamed ``program_test``; FrozenSignature maps it back
+    to the original ``test`` for the binding wrapper."""
     src = """
 subroutine main(d, test)
   double precision, intent(inout) :: d(2)
@@ -114,16 +104,14 @@ end subroutine main
     builder = _bs(src, sdfg_dir, name="main")
     sdfg = builder.build()
 
-    # SDFG-internal name is renamed; user-facing Fortran name preserved
-    # on the FrozenSignature for the binding emitter.
+    # SDFG-internal name renamed; user-facing Fortran name preserved on the FrozenSignature.
     assert "program_test" in sdfg.arrays
     fs = sdfg._frozen_signature
     test_arg = next((a for a in fs.args if a.fortran_name == "test"), None)
     assert test_arg is not None, f"no 'test' arg in FrozenSignature: {[a.fortran_name for a in fs.args]}"
     assert test_arg.sdfg_name == "program_test"
 
-    # Numerical: pass the array via the SDFG-internal kwarg and verify
-    # the data flows through the renamed identifier end-to-end.
+    # Numerical: pass via the SDFG-internal kwarg, verify data flows through the renamed identifier.
     d = np.zeros(2, dtype=np.float64)
     test_arr = np.array([7, 9], dtype=np.int32)
     sdfg(d=d, program_test=test_arr)
@@ -131,10 +119,9 @@ end subroutine main
 
 
 def test_reserved_name_binding_wrapper_emits(tmp_path: Path):
-    """The binding emitter should consume the renamed FrozenSignature
-    without crashing and produce a wrapper file.  This is the surface
-    that downstream Fortran callers see  --  without it the rename pass
-    has fixed the SDFG side but left the binding side broken."""
+    """The binding emitter consumes the renamed FrozenSignature and produces a
+    wrapper file -- the surface downstream Fortran callers see; without it the
+    SDFG side is fixed but the binding side stays broken."""
     from dace_fortran.bindings import emit_bindings
     from dace_fortran.bindings.frozen_signature import FrozenArg, FrozenSignature
     from dace_fortran.bindings.fortran_interface import OriginalArg, OriginalInterface
@@ -172,8 +159,6 @@ def test_reserved_name_binding_wrapper_emits(tmp_path: Path):
     out = tmp_path / "main_bindings.f90"
     emit_bindings(fs, iface, plan, str(out))
     text = out.read_text()
-    # Wrapper exposes the original Fortran identifier ``test`` to the
-    # caller; the renamed ``program_test`` is the bind(C) parameter
-    # passed across to the SDFG.
+    # Wrapper exposes the original ``test`` to the caller; renamed ``program_test`` is the bind(C) param to the SDFG.
     assert "test" in text
     assert "program_test" in text

@@ -1,8 +1,6 @@
 """Ported from f2dace/dev:tests/fortran/view_test.py.
 
-Exercises Fortran array-slice arguments to subroutines  --  the
-caller passes ``aa(:, :, k)`` (a 2-D view into a 3-D parent), the
-callee operates on it as if it were a contiguous 2-D array.
+Fortran array-slice arguments: caller passes aa(:, :, k) (2-D view into a 3-D parent), callee operates on it as a contiguous 2-D array.
 """
 
 import numpy as np
@@ -16,13 +14,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 def test_fortran_frontend_view_test(tmp_path):
     """Single-view: caller passes one 2-D slice into a 3-D parent.
 
-    The original test declared the callee's dummy ``aa`` rank-3
-    (``aa(10,11,23)``) but indexed it rank-2 (``aa(JK,JL)``)  --
-    invalid Fortran that the old Python parser silently accepted.
-    Fixed by declaring the dummy rank-2 to match the access shape;
-    the caller still passes a rank-2 slice ``a(:, :, 1)`` of its
-    rank-3 storage so the "subroutine receives a 2-D view into a
-    3-D parent" coverage is preserved.
+    Originally declared the callee dummy rank-3 but indexed it rank-2 -- invalid Fortran the old Python parser silently accepted.  Fixed to a rank-2 dummy; caller still passes a(:, :, 1) so the 2-D-view-into-3-D-parent coverage is preserved.
     """
     test_name = "view_test"
     test_string = f"""
@@ -75,9 +67,7 @@ END SUBROUTINE viewlens
 
 
 def test_fortran_frontend_view_test_2(tmp_path):
-    """Multiple views per array in the same context: caller passes
-    ``aa(:, :, j)`` and ``aa(:, :, k)`` for distinct ``j``, ``k``.
-    """
+    """Multiple views per array in the same context: caller passes aa(:, :, j) and aa(:, :, k) for distinct j, k."""
     test_name = "view2_test"
     test_string = f"""
                     PROGRAM {test_name}_program
@@ -130,9 +120,7 @@ END SUBROUTINE viewlens
 
 
 def test_fortran_frontend_view_test_3(tmp_path):
-    """Multiple views from the SAME array in the same context (``aa(:,
-    :, j)`` and ``aa(:, :, j+1)`` both bound on the call).
-    """
+    """Multiple views from the SAME array in the same context (aa(:, :, j) and aa(:, :, j+1) both bound on the call)."""
     test_name = "view3_test"
     test_string = f"""
                     PROGRAM {test_name}_program

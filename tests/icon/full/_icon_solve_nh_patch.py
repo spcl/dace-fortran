@@ -1,50 +1,12 @@
-"""Differential binding-swap patch for ICON's ``mo_solve_nonhydro::solve_nh``.
-
-ICON's own call site (``mo_nh_stepping``) is left UNTOUCHED -- it still calls
-``solve_nh`` with the identical surface (header, 15 dummies, USE statements).
-We rewrite the module so that ``solve_nh`` becomes a DIFFERENTIAL DRIVER:
-
-  * the original body is preserved verbatim under the name ``solve_nh_ref``
-    (the REFERENCE dycore);
-  * the new ``solve_nh`` deep-copies the mutable state (``mo_solve_nh_diff``),
-    runs the SDFG dycore ``solve_nh_dace_icon`` (DUT) in place and the stock
-    ``solve_nh_ref`` (REF) on the independent copy, and compares the prognostic
-    output BIT-FOR-BIT -- reporting any divergence per step.  ICON then carries
-    on with the DUT (``p_nh``) result.
-
-The prognostic fields (``vn``/``w``/... and the transport-prep fluxes) are
-``POINTER`` components, so the reference state is a genuine DEEP copy with
-independent storage -- a shallow ``dst = src`` would alias the same arrays and
-the two runs would clobber each other (see :file:`mo_solve_nh_diff.f90`).
-
-``solve_nh`` never assigns ``prog(nnow)`` (verified) so cloning ``prog`` +
-``prep_adv`` (an accumulator) + the FULL ``diag`` state gives a fully
-independent reference input.  ``diag`` is deep-copied (``clone_state_indep_prog``
-re-points every ``diag`` pointer to a fresh target) so the velocity callback's
-``ddt_vn_apc_pc`` / ``ddt_vn_cor_pc`` / ``ddt_w_adv_pc`` writes are compared too;
-the read-only geometry (``metrics``/``ref``/``patch``/``int``) stays shared
-(solve_nh writes none of it).
-
-The per-call compare covers prog(nnew) + prog(nnow) + prep_adv + the full diag
-(incl. the ``max_vcfl_dyn`` scalar the velocity callback MAX-accumulates across
-substeps).  prog(nnow) is compared even though the reference never assigns it:
-a DUT lowering that stomps the nnow time level would corrupt the NEXT substep
-while leaving the nnew compare green, so it must be pinned separately.  A
-single greppable TOTAL line closes each call; 0 == bit-exact, no tolerances.
-"""
+"""Rewrites ICON's mo_solve_nonhydro::solve_nh into a differential driver: DUT (SDFG) runs in place,
+REF (original body, renamed solve_nh_ref) runs on a deep copy, results compared bit-for-bit per call."""
 import re
 from pathlib import Path
 
 #: Free-standing wrapper symbol the SDFG-generated library exports.
-#: Naming convention matches velocity's ``velocity_tendencies_dace_icon``.
 SOLVE_NH_WRAPPER_NAME = "solve_nh_dace_icon"
 
-#: USE statements the differential driver needs, inserted right after the
-#: SUBROUTINE header (before IMPLICIT NONE): the 1-byte ``c_bool`` for the
-#: ``LOGICAL(x, kind=1)`` casts at the DUT call, ``error_unit`` for the per-call
-#: TOTAL line, plus the deep-copy / compare helpers.  ``t_nh_state`` /
-#: ``t_prepare_adv`` are already in scope via the original's own
-#: ``USE mo_nonhydro_types`` / ``mo_prepadv_types``.
+#: USE statements inserted after the SUBROUTINE header, before IMPLICIT NONE.
 _DIFF_USE = [
     "    USE iso_c_binding, ONLY: c_bool",
     "    USE iso_fortran_env, ONLY: error_unit",
@@ -53,12 +15,7 @@ _DIFF_USE = [
     "                                compare_prog_nnew, compare_prepadv, compare_diag",
 ]
 
-#: The driver's declaration section (local reference state + the free-standing
-#: wrapper INTERFACE) followed by its executable body (clone -> DUT -> REF ->
-#: compare -> free).  Inserted after the last dummy declaration.  The INTERFACE
-#: declares the wrapper with ICON's REAL types (so we do NOT ``USE`` the bindings
-#: module's stub-type ``.mod``); the ``LOGICAL(x, kind=1)`` casts hand the C-bool
-#: ABI a 1-byte value (ICON's default LOGICAL is 4 bytes).
+#: Driver decls + body (clone -> DUT -> REF -> compare -> free), inserted after the last dummy declaration.
 _DIFF_BLOCK = """\
     ! DACE DIFFERENTIAL: reference state (independent deep copy) + the SDFG
     ! wrapper interface.  ``solve_nh_ref`` is the original body, renamed.
@@ -143,20 +100,8 @@ _INTENT_RE = re.compile(r"\bINTENT\b", re.IGNORECASE)
 
 
 def apply_solve_nh_patch(pristine_source: str) -> str:
-    """Rewrite ``mo_solve_nonhydro.f90`` into the differential form.
-
-    Walks for ``SUBROUTINE solve_nh(...)`` and its matching ``END SUBROUTINE``,
-    then emits, in order:
-
-      1. the differential DRIVER -- the original header + dummies (so the call
-         site sees the identical surface), plus ``USE mo_solve_nh_diff`` and the
-         clone / run-both / compare / free body; and
-      2. the original subroutine verbatim, renamed ``solve_nh_ref``.
-
-    :param pristine_source: the unmodified file contents.
-    :returns: the patched source as a single string.
-    :raises ValueError: ``solve_nh`` could not be located.
-    """
+    """Rewrites mo_solve_nonhydro.f90's solve_nh into the differential driver + solve_nh_ref (original
+    body, verbatim). Raises ValueError if solve_nh isn't found."""
     lines = pristine_source.splitlines()
     subr_start = None
     for i, ln in enumerate(lines):
@@ -177,15 +122,13 @@ def apply_solve_nh_patch(pristine_source: str) -> str:
             break
     if end_subr is None:
         raise ValueError("apply_solve_nh_patch: matching END SUBROUTINE solve_nh not found")
-    # Find the last INTENT declaration inside the body -- the end of the dummy
-    # declaration block, after which the driver's own decls + body go.
+    # last INTENT line marks the end of the dummy declaration block; driver decls/body go after it.
     last_intent = header_end
     for i in range(header_end + 1, end_subr):
         if _INTENT_RE.search(lines[i]):
             last_intent = i
 
-    # (1) the differential driver: original header + USE helpers + dummies +
-    #     clone/run-both/compare/free body.
+    # (1) differential driver: original header + USE helpers + dummies + clone/run-both/compare/free body.
     driver = (lines[subr_start:header_end + 1] + _DIFF_USE + lines[header_end + 1:last_intent + 1] +
               _DIFF_BLOCK.splitlines())
 
@@ -199,8 +142,7 @@ def apply_solve_nh_patch(pristine_source: str) -> str:
 
 
 def write_patched_solve_nh(pristine_path: Path, patched_path: Path):
-    """Convenience: read ``pristine_path``, patch, write to ``patched_path``.
-    Returns the patched-line count for diagnostic use."""
+    """Read pristine_path, patch, write to patched_path; returns the patched-line count."""
     patched = apply_solve_nh_patch(pristine_path.read_text())
     patched_path.write_text(patched)
     return patched.count("\n")

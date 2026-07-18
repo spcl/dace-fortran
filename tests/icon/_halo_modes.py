@@ -1,27 +1,14 @@
 """Shared halo-exchange extraction modes for the ICON dynamical-core solvers.
-
-Two correct ways to treat the MPI halo when extracting a solver
-(``solve_free_sfc`` ocean, ``solve_nh`` atmosphere):
-
-  * ``"external"`` -- the halo generics (``sync_patch_array`` / ``exchange_data``)
-    and the collectives (``p_barrier`` / ``p_max`` / ``p_min`` / ``p_sum``) are a
-    black box; the bridge emits an ``ExternalCall``.  The callback boundary the
-    bindings dispatch back to a real Fortran halo.
-  * ``"inlined"`` -- NO MPI op stays external: every ``mo_mpi`` wrapper is inlined
-    down to the raw ``mpi_*`` call (``p_isend`` -> ``mpi_isend``, ``p_barrier`` ->
-    ``mpi_barrier``, ``p_max`` -> ``mpi_allreduce``), which the bridge lowers to
-    ``dace.libraries.mpi`` libnodes.  The ``mo_mpi`` datatype / comm / error
-    module variables come with ``mo_mpi``; a small ``mpi`` constants module
-    resolves the ``use mpi`` parameters the wrappers reference.
-
-Both modes must extract to a compiling single TU for both solvers.  This module
-is the single source of truth so the ocean + atmosphere harnesses stay in step.
+``"external"``: halo generics + collectives stay a black-box ExternalCall (callback
+to a real Fortran halo). ``"inlined"``: every mo_mpi wrapper is inlined to the raw
+mpi_* call, which the bridge lowers to dace.libraries.mpi libnodes. Both modes must
+extract to a compiling single TU for both solvers; this module is the single source
+of truth so the ocean + atmosphere harnesses stay in step.
 """
 from dace_fortran.external_functions import ExternalFunction
 
-#: ``"external"`` mode -- the MPI ops the black box covers.  The point-to-point
-#: ``p_isend`` &c. live inside ``exchange_data``, so the halo generics plus the
-#: collectives the solver calls directly are the full external boundary.
+#: "external" mode: MPI ops the black box covers -- halo generics + the collectives
+#: the solver calls directly (point-to-point calls live inside exchange_data).
 HALO_EXTERNAL_FUNCTIONS = [
     ExternalFunction("sync_patch_array"),
     ExternalFunction("sync_patch_array_mult"),
@@ -38,22 +25,18 @@ HALO_EXTERNAL_FUNCTIONS = [
 #: ``"inlined"`` mode -- nothing MPI stays external.
 HALO_INLINED_EXTERNAL_FUNCTIONS: list = []
 #: Force-include the concrete comm-pattern arm (reached only via the externalised
-#: factory, so the merge never pulls it in but monomorphisation needs it).
+#: factory; merge won't pull it in, but monomorphisation needs it).
 HALO_INLINED_FORCE_INCLUDE = ["parallel_infrastructure/mo_communication_orig.f90"]
-#: ``mo_mpi``'s ``INTERFACE p_wait`` shares its name with a specific ``p_wait``;
-#: rename the specific so resolution is unambiguous.
+#: mo_mpi's INTERFACE p_wait shares its name with a specific p_wait; rename the
+#: specific so resolution is unambiguous.
 HALO_INLINED_RENAME_SPECIFICS = {"p_wait": "p_wait_noarg"}
-#: The halo branches ``IF (my_process_is_mpi_seq()) <local copy> ELSE <MPI>``;
-#: pin it ``.FALSE.`` to take the real MPI path.
+#: Halo branches IF(my_process_is_mpi_seq()) <local copy> ELSE <MPI>; pin .FALSE.
+#: to take the real MPI path.
 HALO_INLINED_RETURN_FALSE = ["my_process_is_mpi_seq"]
 
-#: The ``mpi`` module's PARAMETER constants -- the single source of truth for the
-#: handle / status / op values the inlined ``mo_mpi`` wrappers reference
-#: (``mpi_comm_world``, ``mpi_status_size``, ...).  Shared by both the
-#: constants-only extraction stub (:data:`_MPI_CONSTS_STUB`) and the full
-#: gfortran-reference stub (:data:`_MPI_STUB`) so the values never diverge.  The
-#: module is NOT closed here (no ``end module``) -- each consumer appends its own
-#: tail.
+#: mpi module PARAMETER constants (mpi_comm_world, mpi_status_size, ...), shared by
+#: both _MPI_CONSTS_STUB and _MPI_STUB so the values never diverge. NOT closed here
+#: (no ``end module``) -- each consumer appends its own tail.
 _MPI_CONSTS = """\
 module mpi
   implicit none
@@ -87,20 +70,12 @@ module mpi
   integer, parameter :: mpi_lor = 7
 """
 
-#: ASSUMED-TYPE (F2008 TS 29113 ``type(*), dimension(..)``) interfaces for the
-#: point-to-point calls the inlined ``mo_mpi`` wrappers issue.  A real MPI ``mpi``
-#: module provides these; a stub fed to GFORTRAN must too, so ``mpi_irecv`` called
-#: with a REAL(8) buffer (``p_irecv_dp``) AND a REAL(4) buffer (``p_irecv_sp``)
-#: type-checks WITHOUT the unsound ``-fallow-argument-mismatch``.  These are
-#: INTERFACEs only -- the ``mpi_*`` calls stay undefined externals the bridge maps
-#: to ``dace.libraries.mpi`` libnodes, so the SDFG side is untouched.
-#:
-#: fparser (unlike gfortran) cannot parse ``type(*), dimension(..)`` today, so
-#: this block is EXCLUDED from the extraction stub (:data:`_MPI_CONSTS_STUB`) --
-#: which is fed to the fparser inliner, where flang keeps the ``mpi_*`` calls
-#: external and the interface is never needed.  It is included ONLY in
-#: :data:`_MPI_STUB`, fed to gfortran (the reference-build prelude in
-#: ``tests/icon/atmosphere/test_solve_nh_binding.py``).
+#: F2008 TS 29113 type(*),dimension(..) interfaces for the inlined mo_mpi wrappers'
+#: point-to-point calls: needed so a GFORTRAN stub type-checks mpi_irecv called with
+#: both REAL(8) and REAL(4) buffers without -fallow-argument-mismatch. INTERFACEs
+#: only -- the mpi_* calls stay undefined externals the bridge maps to libnodes.
+#: fparser can't parse type(*),dimension(..), so this is EXCLUDED from the
+#: fparser-fed _MPI_CONSTS_STUB and included ONLY in the gfortran-fed _MPI_STUB.
 _MPI_ASSUMED_TYPE_INTERFACES = """\
   interface
     subroutine mpi_recv(buf, count, datatype, source, tag, comm, status, ierror)
@@ -126,37 +101,25 @@ _MPI_ASSUMED_TYPE_INTERFACES = """\
   end interface
 """
 
-#: Full ``mpi`` stub (constants + assumed-type interfaces) for a GFORTRAN
-#: reference build that must compile the dual-typed ``mpi_*`` calls WITHOUT
-#: ``-fallow-argument-mismatch``.  gfortran parses ``type(*)`` fine.  Used by
-#: ``tests/icon/atmosphere/test_solve_nh_binding.py``'s prelude -- NOT by the
-#: fparser extraction (which can't parse the interface; see
-#: :data:`_MPI_CONSTS_STUB`).
+#: Full mpi stub (constants + assumed-type interfaces) for a GFORTRAN reference build
+#: that must compile dual-typed mpi_* calls WITHOUT -fallow-argument-mismatch. Used by
+#: test_solve_nh_binding.py's prelude, NOT the fparser extraction (see _MPI_CONSTS_STUB).
 _MPI_STUB = _MPI_CONSTS + _MPI_ASSUMED_TYPE_INTERFACES + "end module mpi\n"
 
-#: Constants-only ``mpi`` stub for the FPARSER extraction: same PARAMETER values
-#: as :data:`_MPI_STUB` but WITHOUT the assumed-type interface block fparser
-#: cannot parse.  This lets the inliner resolve + constant-fold the wrappers'
-#: ``use mpi`` parameters (``mpi_comm_world`` -> ``0``, ``mpi_status_size`` ->
-#: ``6``, ...) standalone; flang keeps the raw ``mpi_*`` calls as externals the
-#: bridge maps, so the interface is unnecessary on this path.
+#: Constants-only mpi stub for the FPARSER extraction: same values as _MPI_STUB but
+#: without the interface block fparser can't parse (flang keeps mpi_* as externals anyway).
 _MPI_CONSTS_STUB = _MPI_CONSTS + "end module mpi\n"
 
-#: Fed to the inlined-halo EXTRACTION (fparser).  Constants-only so it parses;
-#: the interfaces live in :data:`_MPI_STUB` for the gfortran reference build.
+#: Fed to the inlined-halo EXTRACTION (fparser); constants-only so it parses.
+#: Interfaces live in _MPI_STUB for the gfortran reference build.
 HALO_INLINED_EXTRA_SOURCES = {"_mpi_consts_stub.f90": _MPI_CONSTS_STUB}
 
-#: NO-OP point-to-point + collective ``mpi_*`` implementations for a SINGLE-RANK
-#: GFORTRAN REFERENCE build (e.g. ``solve_nh`` standalone).  :data:`_MPI_STUB`
-#: only DECLARES the ``mpi_*`` calls (interfaces); a reference that RUNS the
-#: single-TU dycore also needs them DEFINED, or the halo path hits an undefined
-#: symbol.  Single-rank has no neighbours, so the point-to-point calls are
-#: no-ops: buffers are never sent/received and every owned cell keeps its value
-#: -- exactly what the DUT SDFG reproduces by dropping the halo (``do_not_emit``).
-#: External (module-less) so the linker resolves both ``mo_mpi``'s ``use mpi``
-#: assumed-type interface calls and the implicit-external collectives to these.
-#: Paired with the ``strip_deconiface`` reference transform (which resolves the
-#: ``p_*_deconiface_<N>`` wrappers to their real bodies, whose leaves are these).
+#: NO-OP mpi_* implementations for a SINGLE-RANK GFORTRAN REFERENCE build: _MPI_STUB
+#: only declares them, but a running single-TU dycore needs them DEFINED. Single-rank
+#: has no neighbours, so point-to-point calls are no-ops (every owned cell keeps its
+#: value) -- matching what the DUT SDFG does by dropping the halo. External/module-less
+#: so the linker resolves both mo_mpi's assumed-type calls and implicit-external
+#: collectives here. Paired with the strip_deconiface reference transform.
 _MPI_NOOP_IMPL = """\
 subroutine mpi_recv(buf, count, datatype, source, tag, comm, status, ierror)
   type(*), dimension(..) :: buf
@@ -212,14 +175,11 @@ subroutine util_abort() bind(c, name="util_abort")
 end subroutine
 """
 
-#: ``"inlined"`` mode -- source-level procedure-body inlining of the halo
-#: ``sync_patch_array`` family into their callers.  These wrappers select the comm
-#: pattern via ``IF (typ==N) p_pat => p_patch%comm_pat_<X>`` (or the pointer-result
-#: ``comm_pat_of_type`` FUNCTION); ``typ`` is a compile-time constant at every call
-#: site, so inlining the wrapper lets the constant-fold / branch-prune collapse the
-#: ladder to a SINGLE-source rebind the bridge can lower (a runtime-selected rebind
-#: is rejected by ``hlfir-rewrite-pointer-assigns``).  Names not present in a given
-#: kernel's closure are simply never matched.
+#: "inlined" mode -- source-level inlining of the sync_patch_array family: these
+#: wrappers select the comm pattern via a compile-time-constant `typ`, so inlining
+#: lets constant-fold/branch-prune collapse the ladder to a single-source rebind the
+#: bridge can lower (a runtime-selected rebind is rejected by hlfir-rewrite-pointer-assigns).
+#: Names absent from a given kernel's closure are simply never matched.
 #:
 HALO_INLINED_SPECIALIZE_AT_SOURCE = [
     "comm_pat_of_type",
@@ -234,24 +194,18 @@ HALO_INLINED_SPECIALIZE_AT_SOURCE = [
     "sync_patch_array_mult_f4din_dp",
     "sync_patch_array_mult_f4din_sp",
     "sync_patch_array_mult_mixprec",
-    # NOTE: the ``exchange_data_*`` family is NOT inlined here.  Inlining them (to
-    # connect the gather to ``p_patch%comm_pat_e``) is the right direction -- it is
-    # per-call-site monomorphization of the polymorphic comm-pattern dispatch -- but
-    # their bodies use the OPTIONAL ``send`` UNCONDITIONALLY (both arms of
-    # ``IF(PRESENT(add))``), so a recv-only call (``exchange_data_r3d_seq(p_pat, lacc,
-    # recv)``) leaves an absent ``send`` in LIVE code and the inline is (correctly)
-    # abandoned.  Folding the exchange in needs the recv-only semantics handled first;
-    # tracked as a focused follow-up.
+    # NOTE: exchange_data_* is NOT inlined here -- their bodies use the OPTIONAL
+    # `send` unconditionally, so a recv-only call leaves it absent in live code and
+    # the inline is (correctly) abandoned. Needs recv-only semantics handled first.
 ]
 
 HALO_MODES = ("external", "inlined")
 
 
 def halo_config(mode: str) -> dict:
-    """Extraction pieces for halo ``mode``: ``external_functions`` (the
-    halo-specific subset), ``force_include`` (module relpaths), ``rename_specifics``,
-    ``return_false`` and ``extra_sources`` ({name: content} spliced into the
-    closure).  Callers merge these into the solver's own non-halo externals."""
+    """Extraction pieces for halo ``mode``: external_functions, force_include,
+    rename_specifics, return_false, extra_sources. Callers merge these into the
+    solver's own non-halo externals."""
     if mode == "external":
         return dict(external_functions=list(HALO_EXTERNAL_FUNCTIONS),
                     force_include=[],

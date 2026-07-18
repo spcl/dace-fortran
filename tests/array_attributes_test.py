@@ -212,10 +212,7 @@ end module lib
     arrsize4 = 7
     a = np.full([arrsize, arrsize2], 42, order="F", dtype=np.float64)
     b = np.full([arrsize3, arrsize4], 42, order="F", dtype=np.float64)
-    # Assumed-shape ``(:,:)`` dummies leave the per-axis extent
-    # symbols on the SDFG signature; the caller has to supply them
-    # explicitly (DaCe doesn't infer them from the numpy buffer
-    # shape when using the kwarg-style call).
+    # assumed-shape (:,:) dummies leave per-axis extent symbols on the SDFG signature; caller supplies them explicitly (not inferred from buffer shape).
     sdfg(d=a, d2=b, d_d0=arrsize, d_d1=arrsize2, d2_d0=arrsize3, d2_d1=arrsize4)
     assert a[0, 0] == arrsize
     assert a[0, 1] == arrsize2

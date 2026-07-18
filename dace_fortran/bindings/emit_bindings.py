@@ -1,15 +1,9 @@
-"""Thin coordinator  --  turns ``(FrozenSignature, OriginalInterface,
+"""Thin coordinator -- turns ``(FrozenSignature, OriginalInterface,
 FlattenPlan)`` into a ``<entry>_bindings.f90`` file.
 
-The real work is in sibling modules:
-    * ``flatten_plan.py``     --  data model for the pass's output.
-    * ``loop_copy.py``        --  per-recipe renderers.
-    * ``block_builders.py``   --  one builder per Fortran section +
-                               ``assemble_module`` stitcher.
-
-``emit_bindings`` is ~10 lines of orchestration.  No Fortran-
-construction logic lives here; it all routes through the named
-builders so each concern is test-isolated.
+Real work lives in sibling modules (``flatten_plan.py`` data model,
+``loop_copy.py`` renderers, ``block_builders.py`` builders +
+``assemble_module``); this file is pure orchestration.
 """
 
 from pathlib import Path
@@ -38,38 +32,13 @@ def emit_bindings(
 ) -> Path:
     """Emit a Fortran binding module for the built SDFG.
 
-    Side effect: creates ``out_path``'s parent directory if missing and
-    overwrites any existing file there.
-
-    :param frozen: ``FrozenSignature`` snapshot  --  the SDFG-facing arg
-                   list + free symbols, from ``SDFGBuilder.build()``
-                   (drift-checked by ``build_fortran_library``).
-    :param iface: ``OriginalInterface``  --  the caller-facing Fortran
-                  surface of the entry subroutine (dummies + struct
-                  layouts, snapshotted from the HLFIR pre-pass).
-    :param plan: ``FlattenPlan``  --  the record of every unpack
-                 ``hlfir-flatten-structs`` performed; one source of
-                 truth for copy-in / copy-out code.
-    :param out_path: where to write ``<entry>_bindings.f90``.
-    :param dace_arglist: the live ``__program_<entry>`` argument-name
-                  order DaCe codegen emitted (``CompiledSDFG._sig``),
-                  supplied by ``build_fortran_library`` from the
-                  just-compiled SDFG.  This is codegen output -- not a
-                  stable contract -- so it is passed in rather than
-                  snapshotted in ``FrozenSignature``.  Empty -> the
-                  emitter falls back to ``frozen.args`` order.
-    :param enum_maps: ``{arg_name: {literal_lower: int}}`` from
-                  :func:`rewrite_string_enum_to_integer`.  When an
-                  arg name matches one of ``iface.args``, the emitter
-                  generates the binding with a ``CHARACTER(LEN=N)``
-                  outer dummy (length sized by the longest literal)
-                  plus an internal ``SELECT CASE`` that translates
-                  the string to the integer the SDFG expects.  The
-                  SDFG itself only ever receives the integer; the
-                  binding is the only place the string is accepted.
-                  Empty / ``None`` -> emitter behaves identically to
-                  the pre-enum-maps path.
-    :returns: ``out_path`` as a ``Path`` (just materialised).
+    Creates ``out_path``'s parent dir if missing; overwrites any existing
+    file.  ``dace_arglist`` is live codegen output (``CompiledSDFG._sig``),
+    not snapshotted in ``FrozenSignature`` -- empty falls back to
+    ``frozen.args`` order.  ``enum_maps`` (from
+    :func:`rewrite_string_enum_to_integer`) makes the binding accept a
+    ``CHARACTER`` dummy and ``SELECT CASE``-translate it to the integer
+    the SDFG expects; the SDFG itself only ever sees the integer.
     """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)

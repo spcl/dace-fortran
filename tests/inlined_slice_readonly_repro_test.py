@@ -1,21 +1,6 @@
-"""Minimal reproducer for the cloudsc_full / bottom_lower structural
-failure.
-
-cloudsc shape:  ``CLOUDSCOUTER`` owns ``PLUDE(KLON,KLEV,NBLOCKS)`` and,
-in a block loop ``DO IBL=1,NBLOCKS``, calls ``CLOUDSC(..., PLUDE(:,:,IBL),
-...)``.  ``CLOUDSC`` declares ``PLUDE(KLON,KLEV)`` ``INTENT(INOUT)`` but
-in the bottom-lower carve-out only *reads* it (``... - ZALFAW*PLUDE(JL,JK)
-...``).  After ``hlfir-inline-all`` the read of the 2-D slice dummy
-must alias the caller's 3-D ``PLUDE`` storage at block ``IBL``;
-otherwise the SDFG reads uninitialised memory (~1e228) and every
-downstream flux output is garbage.
-
-This kernel isolates exactly that: a 3-D ``intent(inout)`` array
-passed as a 2-D section ``a(:,:,ib)`` to an inlined subroutine that
-only reads it, inside an outer block loop.  SDFG vs gfortran/f2py on
-the same source -- a broken slice-read alias shows up as a gross
-mismatch (uninitialised values), not a tolerance issue.
-"""
+"""Reproducer for the cloudsc_full / bottom_lower structural failure: a 3-D ``intent(inout)`` array
+passed as a 2-D slice ``a(:,:,ib)`` to an inlined read-only callee must alias the caller's storage --
+a broken alias reads uninitialised memory (~1e228), a gross mismatch rather than a tolerance issue."""
 
 from pathlib import Path
 
@@ -56,10 +41,7 @@ subroutine outer(n, lev, nb, plude, out)
 end subroutine outer
 """
 
-# Build variant: the free ``outer`` driver wrapped in a module so the SDFG
-# build can use the ``outer_mod::outer`` entry spelling.  ``_SRC`` (free
-# ``outer``) stays the f2py reference source so ``ref.outer`` resolves
-# top-level.
+# Module-wrapped variant of _SRC for the outer_mod::outer build entry; _SRC itself stays free for f2py.
 _SRC_BUILD = _SRC.replace(
     "subroutine outer(n, lev, nb, plude, out)",
     "module outer_mod\ncontains\nsubroutine outer(n, lev, nb, plude, out)",
@@ -67,10 +49,8 @@ _SRC_BUILD = _SRC.replace(
 
 
 def test_inlined_2d_slice_readonly_of_3d_array(tmp_path: Path):
-    """``out(:,:,ib) += plude(:,:,ib)*2`` via an inlined callee.  The
-    inlined read of the 2-D slice dummy must alias the caller's 3-D
-    ``plude`` at block ``ib``; a broken alias reads uninitialised
-    memory and the result diverges grossly from the f2py reference."""
+    """``out(:,:,ib) += plude(:,:,ib)*2`` via an inlined callee; the 2-D slice read must alias the
+    caller's 3-D ``plude`` or the result reads uninitialised memory and diverges grossly."""
     n, lev, nb = 3, 4, 2
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)

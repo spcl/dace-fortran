@@ -1,19 +1,12 @@
 """Bisection step: bottom-UPPER reproducer.
 
-After test_cloudsc_bottom_half.py FAILS with the same 26/548 PCOVPTOT
-divergence as test_cloudsc_full, we split the bottom half at the
-boundary between physics (sections 4.2-4.5) and solvers/flux/tendency
-(sections 5.x, 6.x).
+Splits the bottom half (fails with 26/548 PCOVPTOT divergence, same as
+test_cloudsc_full) at the physics/solver boundary: keeps bottom-half physics
+(sedimentation/autoconversion/melting/freezing/evaporation, lines 2620-3355)
+and drops solvers/flux/tendency (lines 3356-3710), replacing them with a
+direct PCOVPTOT(JL,JK) = ZCOVPTOT(JL) writeback.
 
-This reproducer keeps the bottom-half physics (sedimentation +
-autoconversion + melting + freezing + evaporation, lines 2620-3355
-of original cloudsc.F90) and drops the solvers/flux/tendency
-(lines 3356-3710), replacing them with a direct
-``PCOVPTOT(JL,JK) = ZCOVPTOT(JL)`` writeback.
-
-If this PASSES, the cloudsc bug is in the bottom-lower (solvers +
-flux + tendency, lines 3356-3710).  If it FAILS with the same
-26/548 PCOVPTOT mismatch, the bug is in the bottom-upper physics.
+PASS -> bug is in bottom-lower (3356-3710). Same-mismatch FAIL -> bug is here.
 """
 
 from pathlib import Path
@@ -38,10 +31,7 @@ def _f2py_bottom_upper(tmp_path_factory):
         src,
         ref_dir,
         "cloudsc_bottom_upper_ref",
-        # ``-ffree-line-length-none`` is the sole intentionally
-        # gfortran-only flag: it is a non-semantic parser necessity for
-        # the long-line cloudsc source; LLVM-flang has no line limit and
-        # needs no equivalent.  The FP set is the flang-portable core.
+        # -ffree-line-length-none is gfortran-only (long-line source); flang has no line limit, needs no equivalent.
         extra_f90flags=CLOUDSC_F90FLAGS,
         only=("cloudscouter", ),
     )
@@ -52,8 +42,7 @@ def test_cloudsc_bottom_upper_numerical(tmp_path, _f2py_bottom_upper, _strict_fp
     src = (_HERE / "cloudsc_bottom_upper.F90").read_text()
     outputs_sdfg, outputs_ref = run_cloudsc(src, "cloudsc_bottom_upper", _f2py_bottom_upper, tmp_path / "sdfg")
 
-    # Only PCOVPTOT is meaningful here (other outputs zero -- their writes
-    # got dropped along with the solver/flux section).
+    # only PCOVPTOT is meaningful -- other outputs zero, their writes dropped with the solver/flux section.
     np.testing.assert_allclose(
         outputs_sdfg["pcovptot"],
         outputs_ref["pcovptot"],

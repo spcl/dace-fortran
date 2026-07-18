@@ -1,33 +1,17 @@
 """End-to-end probes for ``MATMUL(TRANSPOSE(...))`` patterns and the
 materialised-transient workaround the bridge currently expects.
 
-Surfacing context: QE's ``vcut_get`` (and ``vexx_bp_k_gpu`` callees)
-contain::
+QE's ``vcut_get`` has ``i_real = (MATMUL(TRANSPOSE(vcut%a), q)) / tpi`` --
+when the matmul is inline inside a larger expression, ``buildExpr`` returns
+``?`` (the libcall dispatcher only fires when matmul is the WHOLE assignment
+RHS). ``hlfir-lift-reduction-operands`` detects this and errors, pointing at
+the workaround: materialise to a temp (``tmp = MATMUL(TRANSPOSE(A), q)``,
+whole-assign -> GEMM lib node) then divide the temp.
 
-    i_real = (MATMUL(TRANSPOSE(vcut % a), q)) / tpi
-
-When the matmul appears INLINE inside the larger expression, the
-bridge's ``buildExpr`` returns ``?`` for the matmul value (the
-libcall dispatcher only fires when the matmul is the WHOLE
-assignment RHS).  ``hlfir-lift-reduction-operands`` now detects this
-shape and emits a loud error pointing at the materialise-to-temp
-workaround::
-
-    ! WAS (silently broken): tasklet body contains ``?``
-    ! res = MATMUL(TRANSPOSE(A), q) / scalar
-
-    ! WORKAROUND (the temp gives the libcall dispatcher a target):
-    DOUBLE PRECISION :: tmp(N)
-    tmp = MATMUL(TRANSPOSE(A), q)   ! whole-assign -> GEMM lib node
-    res = tmp / scalar              ! element-wise division on the temp
-
-These probes pin the working transient pattern.  The bridge routes
-the whole-assign case through ``hlfir.matmul_transpose`` (the
-``hlfir-optimized-bufferization`` pass fuses the
-``TRANSPOSE`` + ``MATMUL`` into a single op), then the libcall
-dispatcher emits the corresponding GEMM lib node WITHOUT
-materialising the transposed input matrix -- the transpose flag is
-threaded through to the GEMM kernel.
+These probes pin that pattern: the bridge routes the whole-assign case through
+``hlfir.matmul_transpose`` (TRANSPOSE+MATMUL fused by
+``hlfir-optimized-bufferization``), and the libcall dispatcher emits GEMM with
+the transpose flag threaded through -- no transposed-matrix materialisation.
 """
 import numpy as np
 import pytest
@@ -38,9 +22,8 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_matmul_transpose_whole_assign_into_array_temp(tmp_path):
-    """``tmp = MATMUL(TRANSPOSE(A), q)`` -- the libcall dispatcher
-    sees the whole-assign, routes through the GEMM lib node with
-    the transpose flag.  Result must match ``A.T @ q``."""
+    """``tmp = MATMUL(TRANSPOSE(A), q)`` -- whole-assign routes through the GEMM lib
+    node with the transpose flag. Result must match A.T @ q."""
     src = """
 module m
 contains
@@ -61,13 +44,9 @@ end module
 
 
 def test_matmul_transpose_via_temp_then_scalar_div(tmp_path):
-    """The QE ``vcut_get`` pattern materialised to a temp::
-
-        tmp = MATMUL(TRANSPOSE(A), q)   ! whole-assign -> GEMM
-        res = tmp / scalar              ! element-wise
-
-    Workaround for the inline ``MATMUL(TRANSPOSE(...)) / scalar``
-    shape until the lift pass grows the array-result materialisation."""
+    """QE's vcut_get pattern materialised to a temp: tmp=MATMUL(TRANSPOSE(A),q)
+    (whole-assign->GEMM), then res=tmp/scalar (element-wise). Workaround until the
+    lift pass grows array-result materialisation for the inline form."""
     src = """
 module m
 contains
@@ -90,8 +69,7 @@ end module
 
 
 def test_matmul_no_transpose_whole_assign(tmp_path):
-    """Regression: ``MATMUL(A, B)`` without TRANSPOSE still routes
-    through the plain matmul lib node."""
+    """Regression: ``MATMUL(A, B)`` without TRANSPOSE still routes through the plain matmul lib node."""
     src = """
 module m
 contains
@@ -112,14 +90,11 @@ end module
 
 
 def test_inline_matmul_transpose_division_works_via_elemental_lift(tmp_path):
-    """``res = MATMUL(TRANSPOSE(A), q) / scalar`` -- the bridge's
-    elemental + ``hlfir.apply`` libcall materialisation
-    (``control_flow.cpp::walkElementalBody``, with
-    ``libcallNameForExprOp`` recognising ``hlfir.matmul_transpose``)
-    pre-emits a ``_libtmp_<gid>`` transient holding the matmul
-    result, and the consuming elemental reads it element-by-element
-    for the division.  No Fortran-source rewrite needed.  QE's
-    ``vcut_get`` was the surfacing case."""
+    """``res = MATMUL(TRANSPOSE(A), q) / scalar`` -- the bridge's elemental +
+    hlfir.apply libcall materialisation (control_flow.cpp::walkElementalBody,
+    libcallNameForExprOp recognising hlfir.matmul_transpose) pre-emits a
+    _libtmp_<gid> transient, read element-by-element for the division. No
+    Fortran-source rewrite needed; QE's vcut_get was the surfacing case."""
     src = """
 module m
 contains
@@ -140,12 +115,10 @@ end module
 
 
 def test_matmul_transpose_libnode_is_dace_compatible(tmp_path):
-    """The emitted ``MATMUL(TRANSPOSE(A), q)`` library node must be DaCe-ABI
-    compatible: built via a plain ``MatMul(name)`` construction with ``transA``
-    set as the node's declared *Property* -- NOT passed as an ``__init__``
-    keyword argument, which raised ``MatMul.__init__() got an unexpected keyword
-    argument 'transA'`` on a DaCe build whose ``MatMul`` constructor does not
-    take it.  Also pins the canonical ``_a`` / ``_b`` / ``_c`` connectors."""
+    """Emitted MATMUL(TRANSPOSE(A), q) node must be DaCe-ABI compatible: transA set
+    as a declared Property, NOT an __init__ kwarg (raised "MatMul.__init__() got
+    an unexpected keyword argument 'transA'" on DaCe builds lacking it). Also pins
+    the canonical _a/_b/_c connectors."""
     src = """
 module m
 contains
@@ -169,10 +142,9 @@ end module
 
 
 def test_matmul_transpose_b_side_whole_assign(tmp_path):
-    """B-side fold ``C = MATMUL(A, TRANSPOSE(B))``.  Flang lowers this to the
-    same ``hlfir.matmul_transpose`` op (operands swapped) the A-side uses, so
-    the bridge threads ``transB=True`` onto the GEMM node -- no transient
-    ``B^T`` is materialised.  Result must match ``A @ B.T``."""
+    """B-side fold ``C = MATMUL(A, TRANSPOSE(B))``: same hlfir.matmul_transpose op
+    (operands swapped), bridge threads transB=True onto the GEMM node -- no
+    transient B^T materialised. Result must match A @ B.T."""
     src = """
 module m
 contains
@@ -193,10 +165,8 @@ end module
 
 
 def test_matmul_transpose_b_side_libnode_transB(tmp_path):
-    """The B-side ``MATMUL(A, TRANSPOSE(B))`` folds onto a SINGLE GEMM node
-    with ``transB`` set as its declared Property (``transA`` clear), no
-    transient ``Transpose`` node -- the symmetric counterpart to the A-side
-    ``transA`` fold."""
+    """B-side MATMUL(A, TRANSPOSE(B)) folds onto a single GEMM node with transB set
+    (transA clear), no transient Transpose node -- symmetric to the A-side fold."""
     src = """
 module m
 contains

@@ -1,6 +1,5 @@
-"""``FrozenSignature`` self-contained tests  --  JSON round-trip, drift
-detection.  These don't need the full HLFIR pipeline or flang-new on
-PATH; they exercise the binding-side plumbing in isolation.
+"""``FrozenSignature`` self-contained tests -- JSON round-trip, drift detection.
+No HLFIR pipeline or flang-new needed; exercises binding-side plumbing in isolation.
 """
 
 from pathlib import Path
@@ -68,9 +67,7 @@ def test_drift_detection_arg_reordering():
     sdfg.add_array("a", shape=(dace.symbol("n"), dace.symbol("m")), dtype=dace.float64, transient=False)
 
     fs = _demo_signature()
-    # arglist sorts alphabetically, so (a, b) in live  --  the snapshot
-    # order is also (a, b), so this case is actually fine.  Mutate the
-    # snapshot to flip the order and assert drift.
+    # arglist sorts alphabetically -- (a, b) either way -- so mutate the snapshot itself to flip order.
     swapped = FrozenSignature(
         entry=fs.entry,
         mangled=fs.mangled,

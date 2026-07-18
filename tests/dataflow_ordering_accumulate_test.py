@@ -1,24 +1,8 @@
-"""Data-dependency-ordering tests for self-accumulate / prefix-scan
-patterns, modelled on the CLOUDSC Section-8 flux loop.
-
-The flux family in ``cloudsc_full`` diverges because the per-level
-increment ``(ZQXN2D - ZQX0 + ...)`` is wrong at ~20 cells even though
-every operand read in isolation is bit-identical to gfortran; the
-loop-carried prefix sum ``PFSQLF(JK+1)=PFSQLF(JK)+incr`` then cascades
-it.  Bisection ruled out aliasing, connector collision, FP flags,
-indexing, buffer reuse, and the carry+accumulate two-write split
-(fusing them changed nothing).  What is left is a producer->consumer
-state-ordering hazard: the consumer reads an array that is saved in an
-EARLY loop (``ZQX0``) together with one produced in the LATE main loop
-(``ZQXN2D``), across a large intervening ``LoopRegion``.
-
-These tests pin that family of shapes (each compared element-wise to
-an f2py/gfortran reference of the same source).  They escalate from
-the bare pattern to long multi-operand tasklets and large
-producer/consumer state distance, so a future regression in the
-bridge's data-dependency ordering fails loudly here rather than only
-in the full kernel.
-"""
+"""Data-dependency-ordering tests for self-accumulate/prefix-scan patterns (CLOUDSC
+Section-8 flux loop shape): a producer->consumer state-ordering hazard where the
+consumer reads an array saved in an EARLY loop together with one produced in a LATE
+loop, across an intervening ``LoopRegion``.  Compared element-wise to f2py/gfortran;
+escalates to long multi-operand tasklets and large producer/consumer state distance."""
 
 import shutil
 import subprocess
@@ -64,10 +48,8 @@ def _sdfg_kw(sdfg, ints: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 1. Loop-carried prefix scan: f(jk+1)=f(jk)+(qn(jk)-q0(jk))*g, where
-#    q0 is saved in an EARLY loop and qn produced in a LATE loop, with a
-#    big intervening loop -- the exact CLOUDSC flux producer/consumer
-#    state-distance shape, run per block (inlined-callee slice).
+# 1. Loop-carried prefix scan: q0 saved EARLY, qn produced LATE, big intervening loop --
+#    the CLOUDSC flux producer/consumer state-distance shape, run per block.
 # ---------------------------------------------------------------------------
 
 _PREFIX_SCAN = """
@@ -156,9 +138,8 @@ def test_prefix_scan_early_save_vs_late_produced(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# 2. Very long multi-operand self-accumulate tasklet (the 4+-term
-#    CLOUDSC increment shape, extended): many early/late producers in a
-#    single accumulate expression, prefix-scanned.
+# 2. Long multi-operand self-accumulate tasklet (4+-term CLOUDSC increment shape,
+#    extended): many early/late producers in one accumulate expression, prefix-scanned.
 # ---------------------------------------------------------------------------
 
 _LONG_TASKLET = """
@@ -199,9 +180,9 @@ end module long_tasklet_mod
 
 
 def test_very_long_accumulate_tasklet(tmp_path: Path):
-    """A long (8-input + self) accumulate expression mixing an
-    early-saved (``s0``) and late-produced (``sn``) operand, prefix-
-    scanned.  Pins the CLOUDSC ``ZQXN2D-ZQX0+...`` increment shape."""
+    """Long (8-input + self) accumulate expression mixing early-saved (``s0``) and
+    late-produced (``sn``) operands, prefix-scanned.  Pins the CLOUDSC
+    ``ZQXN2D-ZQX0+...`` increment shape."""
     ref = _f2py(_LONG_TASKLET, tmp_path / "ref", "long_ref")
     sdfg = build_sdfg(_LONG_TASKLET, _mkd(tmp_path / "sdfg"), name="kern", entry="long_tasklet_mod::kern").build()
 

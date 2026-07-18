@@ -1,18 +1,13 @@
-"""Frozen SDFG signature  --  snapshotted at build time, verified at codegen.
+"""Frozen SDFG signature -- snapshotted at build time, verified at codegen.
 
-At the moment the kernel SDFG leaves ``SDFGBuilder.build()``, we
-capture its argument list + free symbols into a ``FrozenSignature``
-and pin it on the SDFG (``sdfg._frozen_signature = fs``).  The
-binding emitter downstream uses this snapshot, not the live SDFG, so
-transformations that mutate the SDFG can't silently invalidate a
-generated ``.f90`` wrapper.
+Captured when the kernel SDFG leaves ``SDFGBuilder.build()`` and pinned
+on the SDFG (``sdfg._frozen_signature``).  The binding emitter uses this
+snapshot, not the live SDFG, so later transformations can't silently
+invalidate a generated wrapper.
 
-The drift gate lives in the dace-fortran ``build_fortran_library``
-entrypoint: before the binding is emitted/linked it calls
-``fs.verify_against(sdfg)``.  Any drift from the snapshot raises
-``SignatureDriftError``.  dace-core ``compile`` / ``generate_code``
-stay vanilla -- the contract is dace-fortran-only, not baked into
-DaCe codegen.
+Drift gate lives in ``build_fortran_library``: before emit/link it calls
+``fs.verify_against(sdfg)``, raising ``SignatureDriftError`` on
+divergence.  dace-core stays vanilla -- the contract is dace-fortran-only.
 """
 
 import json
@@ -29,31 +24,16 @@ class SignatureDriftError(RuntimeError):
 class FrozenArg:
     """One argument in the frozen signature.
 
-    Fields:
-        fortran_name: name as declared in the user's Fortran source.
-        sdfg_name:    name DaCe sees (may differ after struct
-                      flattening  --  e.g. ``st%u`` becomes ``st_u``).
-        kind:         ``'array'`` | ``'scalar'`` | ``'symbol'`` |
-                      ``'mpi_comm'`` (a Fortran integer communicator
-                      the wrapper converts via ``MPI_Comm_f2c``).
-        dtype:        ``'float64'`` | ``'int32'`` | ``'complex128'`` | ...
-        rank:         tensor rank (0 for scalars).
-        shape:        symbolic extents in Fortran symbols.  Empty tuple
-                      for scalars / symbols.
-        intent:       ``'in'`` | ``'out'`` | ``'inout'`` | ``''``.
-        from_struct_member: when this arg was extracted from a struct
-                      dummy by ``hlfir-flatten-structs``, the original
-                      Fortran expression (``st%u``).  ``None`` otherwise.
-        layout:       ``'same'`` (caller + callee share layout  --  alias
-                      via ``c_loc``) | ``'complex_split'`` (Fortran
-                      complex split into two reals) | ``'transpose'`` /
-                      similar.  The binding emitter picks its copy
-                      strategy off this tag.
-        is_written:   true when this arg is a module-scope global the
-                      kernel WRITES (host-shared inout state).  The
-                      binding writes its final value back to the host
-                      module variable on exit (copy-out), so the update
-                      is visible to the caller -- not just copied in.
+    sdfg_name: name DaCe sees, may differ from fortran_name after struct
+        flattening (``st%u`` -> ``st_u``).
+    kind: 'array'|'scalar'|'symbol'|'mpi_comm' (integer communicator,
+        wrapper converts via MPI_Comm_f2c).
+    from_struct_member: original Fortran expr (``st%u``) if extracted by
+        hlfir-flatten-structs, else None.
+    layout: 'same' (alias via c_loc) | 'complex_split' | 'transpose' --
+        binding emitter picks its copy strategy off this tag.
+    is_written: True if this is a module-scope global the kernel WRITES;
+        binding copies the final value back to the host module var.
     """
 
     fortran_name: str
@@ -66,20 +46,15 @@ class FrozenArg:
     from_struct_member: Optional[str] = None
     layout: str = 'same'
     is_written: bool = False
-    # Marshalling provenance for a flattened component of a MODULE-LEVEL
-    # array-of-structs global (QE ``us_exx`` ``TYPE(bec_type),ALLOCATABLE::
-    # becxx(:)``, accessed ``becxx(ikq)%k``).  This arg is the SoA image
-    # (``becxx_k``, shape [element-dims..., member-dims...]); the binding
-    # sources it from the host struct with an AoS<->SoA copy loop
-    # (``do i; becxx_k(i,:,:) = becxx(i)%k; end do``) instead of a direct
-    # ``x = x__mod`` assign.  Empty for ordinary args.
-    #   aos_origin_mod    -- module owning the global (``us_exx``)
-    #   aos_origin_struct -- the AoS global's name (``becxx``)
-    #   aos_member_path   -- ``%``-joined component path (``k`` / ``a%b``)
-    #   aos_outer_rank    -- number of leading record-array (element) dims
-    #   global_alloc_inside -- kernel ALLOCATEs the component: binding
-    #                          allocates the host global before copy-out and
-    #                          skips copy-in (host has no data yet).
+    # Provenance for a flattened component of a MODULE-LEVEL array-of-structs
+    # global (QE ``becxx(ikq)%k``, TYPE(bec_type) ALLOCATABLE).  This arg is
+    # the SoA image (``becxx_k``); binding sources it via an AoS<->SoA copy
+    # loop instead of a direct assign.  Empty for ordinary args.
+    #   aos_origin_mod/struct -- owning module / AoS global name.
+    #   aos_member_path       -- '%'-joined component path.
+    #   aos_outer_rank        -- leading record-array (element) dim count.
+    #   global_alloc_inside   -- kernel ALLOCATEs the component: binding
+    #                            allocates the host global, skips copy-in.
     aos_origin_mod: str = ''
     aos_origin_struct: str = ''
     aos_member_path: str = ''
@@ -87,16 +62,14 @@ class FrozenArg:
     global_alloc_inside: bool = False
     aos_struct_pointer: bool = False
     aos_member_pointer: bool = False
-    # Storage class of a module-origin global: a copy-in is guarded with
-    # ``allocated`` (allocatable) / ``associated`` (pointer) so an unallocated
-    # host is not read; both false = static global, copied unconditionally.
+    # Module-origin global storage class: copy-in guarded with allocated()/
+    # associated() so an unallocated host isn't read; both false = static.
     module_origin_allocatable: bool = False
     module_origin_pointer: bool = False
 
     def to_dict(self) -> dict:
         """Serialise to a JSON-safe dict (``shape`` tuple becomes a list)."""
         d = asdict(self)
-        # shape round-trips as a list in JSON; rebuild as tuple on load.
         d['shape'] = list(self.shape)
         return d
 
@@ -112,10 +85,8 @@ class FrozenArg:
 class FrozenSignature:
     """Full snapshot of one entry subroutine's SDFG signature.
 
-    ``args`` is ordered to match the generated C function
-    ``__program_<entry>``'s parameter order (data args sorted, then
-    scalars, then free symbols  --  the order DaCe's
-    ``generate_headers`` emits).
+    ``args`` order matches ``__program_<entry>``'s C params: data args
+    sorted, then scalars, then free symbols (DaCe's generate_headers order).
     """
 
     entry: str  # 'compute_tendencies'
@@ -123,23 +94,15 @@ class FrozenSignature:
     args: Tuple[FrozenArg, ...]
     free_symbols: Tuple[str, ...] = field(default_factory=tuple)
     schema_version: int = 1
-    # Auto-detected Fortran module-global provenance for SDFG names
-    # that are NOT outer dummies  --  free symbols (a scalar module
-    # global lifted into a shape / bound) and module-global args
-    # (the bridge ``intent=inout`` lift).  Maps ``sdfg_name ->
-    # (module, entity)``.  The binding emitter merges this with any
-    # hand-authored ``OriginalInterface.module_symbol_sources`` (the
-    # explicit map wins on conflict) so no hand-authored list is
-    # required for kernels the bridge can resolve on its own.
+    # Auto-detected module-global provenance for SDFG names that aren't
+    # outer dummies.  Maps sdfg_name -> (module, entity).  Binding emitter
+    # merges with hand-authored OriginalInterface.module_symbol_sources
+    # (explicit map wins on conflict).
     module_symbol_origins: Dict[str, Tuple[str, str]] = field(default_factory=dict)
-    # Fortran ``integer`` communicator dummy whose value the bindings
-    # wrapper feeds (via ``MPI_Comm_f2c`` + ``MPI_Comm_size``) into the
-    # SDFG-side ``__user_comm`` / ``__user_comm_size`` symbols at
-    # ``dace_init_<entry>`` time.  ``None`` when the kernel has no MPI
-    # calls on a runtime user communicator.  Set by
-    # :meth:`SDFGBuilder._attach_frozen_signature` from the
-    # ``_fortran_user_comm_source`` sidecar that ``emit_mpi``
-    # stashes on the SDFG.
+    # Integer communicator dummy the wrapper feeds (via MPI_Comm_f2c +
+    # MPI_Comm_size) into __user_comm/__user_comm_size at dace_init_<entry>
+    # time.  None if no runtime MPI comm.  Set from emit_mpi's
+    # _fortran_user_comm_source sidecar.
     user_comm_source: Optional[str] = None
 
     # ----- I/O ---------------------------------------------------------
@@ -184,38 +147,27 @@ class FrozenSignature:
     # ----- Drift check -------------------------------------------------
 
     def verify_against(self, sdfg):
-        """Compare the live ``sdfg.arglist()`` + free-symbol set against
-        this snapshot.  Raise ``SignatureDriftError`` on any divergence.
+        """Compare live ``sdfg.arglist()`` + free symbols against this
+        snapshot; raise ``SignatureDriftError`` on divergence (arg name
+        set/order, dtype per arg, free-symbol set).
 
-        Checks:
-        - Same set of argument names.
-        - Same order of argument names.
-        - Same dtype per argument.
-        - Same set of free symbols.
-
-        We DON'T check dimensionality invariants past order/dtype since
-        symbolic shapes may canonicalise; downstream codegen will catch
-        concrete mismatches when it assembles memlets.
+        Doesn't check dimensionality past order/dtype -- symbolic shapes
+        may canonicalise; codegen catches concrete mismatches later.
         """
         live_arglist = sdfg.arglist()
         live_fs = set(str(s) for s in sdfg.free_symbols)
         snap_fs = set(self.free_symbols)
 
-        # The current ``SDFG.arglist()`` folds free symbols into the
-        # argument list.  The frozen signature models the data/scalar
-        # argument contract and the free-symbol set separately, so
-        # validate them as two partitions: compare argument *names*
-        # excluding free symbols here, and the free-symbol set on its
-        # own below.
+        # arglist() folds free symbols into the arg list; the snapshot
+        # models them separately, so validate as two partitions here.
         live_names = [k for k in live_arglist if k not in live_fs]
         snap_names = [a.sdfg_name for a in self.args if a.sdfg_name not in snap_fs]
         if live_names != snap_names:
             raise SignatureDriftError(f"signature drift on {self.entry!r}: "
                                       f"expected args {snap_names}, got {live_names}")
 
-        # dtype per data/scalar arg  --  guard against silent type
-        # change.  Skip free-symbol args (validated by the set check)
-        # and any snapshot arg the live arglist no longer carries.
+        # dtype per data/scalar arg -- skip free-symbol args (checked
+        # below) and any snapshot arg the live arglist no longer carries.
         for a in self.args:
             if a.sdfg_name in snap_fs or a.sdfg_name not in live_arglist:
                 continue
@@ -237,8 +189,7 @@ def _dtype_string(desc) -> str:
     if t is None:
         return '?'
     if isinstance(t, dace.dtypes.opaque):
-        # ``opaque.to_string()`` is unimplemented in this dace (no
-        # ``typename``); the ctype (``MPI_Comm`` / ...) is its identity.
+        # opaque.to_string() is unimplemented here; ctype is its identity.
         return t.ctype
-    # dace.typeclass instances have a ``to_string``  --  fall back to repr.
+    # typeclass instances have to_string; fall back to repr otherwise.
     return getattr(t, 'to_string', lambda: str(t))()

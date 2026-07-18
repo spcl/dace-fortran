@@ -1,18 +1,6 @@
-"""End-to-end binding tests for module-global classification.
+"""End-to-end binding tests for module-global classification.  Companion to ``module_global_vs_constant_test.py`` (which exercises the SDFG directly) -- here every case goes through the generated Fortran binding + a C-bound shim, exercising module-global copy-in/copy-out that direct-SDFG tests can't reach.
 
-Companion to ``module_global_vs_constant_test.py``, which exercises the
-SDFG directly.  Here every case goes through the *generated Fortran
-binding*: the SDFG is compiled, ``build_fortran_library`` emits + links
-the ``<entry>_dace`` wrapper, and a C-bound shim calls that wrapper
-exactly as a host would.  This is the only path that exercises the
-binding's module-global copy-in (host module variable -> SDFG arg) and,
-for a kernel-written global, copy-out / write-back (SDFG arg -> host
-module variable on exit).
-
-Each case is compared against a gfortran reference: the SAME shim, but
-calling the original (un-transformed) subroutine.  The reference's host
-module variable is read the same way, so a correct binding reproduces
-both the computed output and the post-call module-global value.
+Each case is compared against a gfortran reference: the same shim calling the original (un-transformed) subroutine.
 """
 import ctypes
 import subprocess
@@ -32,9 +20,7 @@ _N = 4
 
 
 def _iface(sub: str) -> OriginalInterface:
-    """Caller-facing surface of ``<sub>(x(4), y(4))`` -- the two real
-    dummies; module globals are reached via ``USE`` inside the wrapper,
-    not as dummies."""
+    """Caller-facing surface of ``<sub>(x(4), y(4))``; module globals are reached via USE inside the wrapper, not as dummies."""
     return OriginalInterface(
         entry=sub,
         args=(
@@ -45,19 +31,7 @@ def _iface(sub: str) -> OriginalInterface:
 
 
 def _shim(call_target: str, target_use, uses, sets, reads) -> str:
-    """Render a ``bind(c)`` shim ``run_kern(xin, yout, <set...>, <read...>)``
-    that assigns each input module global before the call and reads each
-    written module global after it.
-
-    :param call_target: ``<sub>_dace`` (generated wrapper) or ``<sub>``
-        (original subroutine).
-    :param target_use: ``(module, name)`` to ``USE`` for ``call_target``
-        (the binding module for the wrapper, or the kernel module for the
-        original subroutine).
-    :param uses: ``[(module, name), ...]`` of module globals to ``USE``.
-    :param sets: ``[(name, dummy), ...]`` -- ``name = dummy`` before call.
-    :param reads: ``[(name, dummy), ...]`` -- ``dummy = name`` after call.
-    """
+    """Render a bind(c) shim ``run_kern(xin, yout, <set...>, <read...>)`` that assigns each input module global before the call and reads each written one back after."""
     use_lines = "\n".join(f"  use {mod}, only: {nm}" for mod, nm in (target_use, *uses))
     set_decls = "\n".join(f"  real(c_double), intent(in) :: {d}" for _, d in sets)
     read_decls = "\n".join(f"  real(c_double), intent(out) :: {d}" for _, d in reads)
@@ -101,14 +75,7 @@ def _invoke(lib, x, set_vals, n_read):
 
 
 def _e2e(tmp_path, name, src, *, kern_mod, sub, uses=(), sets=(), reads=()):
-    """Build ``<kern_mod>::<sub>`` through the generated binding and a
-    gfortran reference, run both, and assert the computed output and every
-    read-back module-global value agree.
-
-    :param uses: ``[(module, name), ...]`` the shim ``USE``s.
-    :param sets: ``[(name, value), ...]`` input globals set before the call.
-    :param reads: ``[name, ...]`` written globals read back after the call.
-    """
+    """Build ``<kern_mod>::<sub>`` through the generated binding and a gfortran reference, run both, assert the computed output and every read-back module-global value agree."""
     src_path = tmp_path / f"{name}.f90"
     src_path.write_text(src)
     set_pairs = [(nm, f"gset{i}") for i, (nm, _) in enumerate(sets)]
@@ -121,9 +88,7 @@ def _e2e(tmp_path, name, src, *, kern_mod, sub, uses=(), sets=(), reads=()):
     plan = FlattenPlan.from_dict(builder.module.get_flatten_plan())
     sdfg = builder.build()
     sdfg.validate()
-    # Reset the per-test name suffix the test helper added: the binding's C
-    # entry symbols (``__dace_init_<name>`` etc.) must match ``iface.entry``.
-    # A per-tmp_path build_folder keeps the (now-shared-name) builds isolated.
+    # reset the per-test name suffix: binding's C entry symbols (__dace_init_<name> etc.) must match iface.entry; per-tmp_path build_folder keeps the now-shared-name builds isolated.
     sdfg.name = sub
     sdfg.build_folder = str(tmp_path / "dacecache")
 
@@ -159,8 +124,7 @@ def _e2e(tmp_path, name, src, *, kern_mod, sub, uses=(), sets=(), reads=()):
 
 
 def test_e2e_parameter_baked(tmp_path: Path):
-    """A ``parameter`` baked into the SDFG reproduces the reference output
-    through the binding (no kwarg, no copy-in/out)."""
+    """A parameter baked into the SDFG reproduces the reference output through the binding (no kwarg, no copy-in/out)."""
     src = """
 module mod_param
   implicit none
@@ -180,8 +144,7 @@ end module mod_param
 
 
 def test_e2e_uninitialised_global_copy_in(tmp_path: Path):
-    """An uninitialised module global is copied IN from the host module
-    variable through the binding (the shim sets it before the call)."""
+    """An uninitialised module global is copied IN from the host module variable through the binding (shim sets it before the call)."""
     src = """
 module mod_cfg
   implicit none
@@ -207,8 +170,7 @@ end module mod_cfg
 
 
 def test_e2e_initialised_readonly_global_baked(tmp_path: Path):
-    """An initialised read-only global bakes its default; the binding
-    reproduces the reference output."""
+    """An initialised read-only global bakes its default; the binding reproduces the reference output."""
     src = """
 module mod_init
   implicit none
@@ -228,9 +190,7 @@ end module mod_init
 
 
 def test_e2e_written_global_writeback(tmp_path: Path):
-    """A kernel-written module global is written BACK to the host module
-    variable on exit: after the binding call, the host's ``counter`` holds
-    the kernel's updated value, matching the reference."""
+    """A kernel-written module global is written back to the host module variable on exit: after the call, host's counter holds the kernel's updated value."""
     src = """
 module mod_acc
   implicit none
@@ -258,8 +218,7 @@ end module mod_acc
 
 
 def test_e2e_written_global_no_init_writeback(tmp_path: Path):
-    """A kernel-written global with NO initialiser is still written back to
-    the host module variable through the binding."""
+    """A kernel-written global with no initialiser is still written back to the host module variable through the binding."""
     src = """
 module mod_scr
   implicit none
@@ -287,9 +246,7 @@ end module mod_scr
 
 
 def test_e2e_cross_module_written_writeback(tmp_path: Path):
-    """A global declared in one module, ``USE``-imported and written by a
-    kernel in another, is written back to its declaring module variable
-    through the binding."""
+    """A global declared in one module, USE-imported and written by a kernel in another, is written back to its declaring module variable."""
     src = """
 module mod_state_x
   implicit none

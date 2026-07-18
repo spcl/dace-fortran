@@ -1,22 +1,11 @@
 """Build a Fortran-callable shared library from a built SDFG.
 
-This is the dace-fortran-only entrypoint that ties the whole binding
-contract together.  ``dace.SDFG.compile`` stays vanilla DaCe -- it
-just runs ``generate_code`` and builds the kernel ``.so``.  Everything
-Fortran-specific lives here and *only* here:
-
-1. compile the SDFG (vanilla DaCe codegen + library build);
-2. verify the live SDFG still matches the ``FrozenSignature``
-   snapshotted at ``build()`` time -- drift raises
-   :class:`SignatureDriftError` *before* any binding is emitted, so a
-   wrapper that disagrees with the kernel is never produced;
-3. emit the ``<entry>_bindings.f90`` Fortran wrapper;
-4. gfortran-compile that wrapper together with the kernel ``.so`` (and
-   any caller-supplied Fortran sources) into one linked, Fortran-
-   callable shared library.
-
-The drift check used to be a hook inside ``dace/codegen/codegen.py``;
-it now lives at this layer so dace-core carries no Fortran coupling.
+The dace-fortran-only entrypoint tying the binding contract together;
+``dace.SDFG.compile`` stays vanilla DaCe.  Order: compile the SDFG,
+verify it still matches the ``FrozenSignature`` snapshot (raises
+:class:`SignatureDriftError` before any binding is emitted), emit the
+``<entry>_bindings.f90`` wrapper, then gfortran-link it with the
+kernel ``.so`` and any extra sources into one shared library.
 """
 import ctypes
 import subprocess
@@ -32,14 +21,11 @@ from dace_fortran.bindings.fortran_interface import OriginalInterface, build_aut
 #: Mandatory flags -- a shared, position-independent, long-line module.
 _SHARED_FLAGS = ("-shared", "-fPIC", "-ffree-line-length-none")
 
-#: Debug flags -- optimised (``-O3``) with debug info and strict IEEE
-#: (no fast-math, no fp-contraction, rounding-aware) so an
-#: SDFG-vs-reference comparison stays bit-reproducible (matches the
-#: e2e numerical policy / velocity debug default).
+#: Optimised + debug info + strict IEEE (no fast-math/fp-contract,
+#: rounding-aware) so SDFG-vs-reference comparisons stay bit-reproducible.
 _DEBUG_FLAGS = ("-O3", "-g", "-fno-fast-math", "-ffp-contract=off", "-frounding-math")
 
-#: Release flags -- ``-O3 -ffast-math``; trades IEEE reproducibility
-#: for speed (the binding-builder analogue of the velocity ``--release``).
+#: -O3 -ffast-math -- trades IEEE reproducibility for speed.
 _RELEASE_FLAGS = ("-O3", "-ffast-math")
 
 _MODE_FLAGS = {"debug": _DEBUG_FLAGS, "release": _RELEASE_FLAGS}
@@ -47,15 +33,9 @@ _MODE_FLAGS = {"debug": _DEBUG_FLAGS, "release": _RELEASE_FLAGS}
 
 @dataclass
 class FortranLibrary:
-    """A built Fortran-callable shared library.
-
-    :ivar so_path: the linked ``.so`` (binding + kernel + extra sources).
-    :ivar sdfg_so: the vanilla-compiled SDFG kernel ``.so`` it links against.
-    :ivar bindings_f90: the emitted ``<entry>_bindings.f90`` wrapper.
-    :ivar bind_c_shim_f90: the auto-generated ``<entry>_c.f90`` ``bind(c)``
-                           shim, when ``bind_c_shim=True`` was requested;
-                           ``None`` otherwise.
-    """
+    """A built Fortran-callable shared library: linked ``.so``, its SDFG
+    kernel ``.so``, the emitted bindings wrapper, and (if requested) the
+    bind(c) shim source."""
 
     so_path: Path
     sdfg_so: Path
@@ -65,13 +45,8 @@ class FortranLibrary:
     def load(self) -> ctypes.CDLL:
         """Open the library with :class:`ctypes.CDLL`.
 
-        If the DaCe kernel needs an OpenMP runtime, supply it via
-        ``LD_PRELOAD`` in the environment -- the runtime / its path is
-        deliberately not hard-coded here so any implementation
-        (``libgomp``, LLVM ``libomp``, ...) works.
-
-        :returns: the opened library.
-        """
+        If the kernel needs OpenMP, supply it via ``LD_PRELOAD`` --
+        deliberately not hard-coded here so any runtime works."""
         return ctypes.CDLL(str(self.so_path))
 
 
@@ -94,56 +69,18 @@ def build_fortran_library(
 ) -> FortranLibrary:
     """Emit + verify + link a Fortran-callable library for ``sdfg``.
 
-    :param sdfg: the SDFG returned by ``SDFGBuilder.build()`` (carries
-                 ``_frozen_signature``).
-    :param iface: caller-facing Fortran surface of the entry subroutine.
-                  ``None`` (default) auto-derives it from the SDFG's
-                  pre-flatten interface snapshot (works for flat and
-                  explicit-shape derived-type kernels; pass an explicit
-                  ``iface`` for shapes the snapshot can't name).
-    :param plan: the ``hlfir-flatten-structs`` AoS->SoA plan.  ``None``
-                 (default) reads it from the SDFG's stamped plan.
-    :param out_dir: scratch directory for the binding + linked ``.so``.
-    :param name: library/base name; defaults to ``sdfg.name``.
-    :param prelude_sources: ``.f90`` sources the emitted binding
-                            depends on (e.g. driver modules whose
-                            derived types the binding ``use``s).
-                            Compiled *before* the binding.
-    :param extra_sources: ``.f90`` sources that depend on the binding
-                          (e.g. a caller / shim that ``use``s the
-                          binding module).  Compiled *after* it.
-    :param mode: ``'debug'`` (default, bit-reproducible: ``-O3 -g`` +
-                 no fast-math / no fp-contraction / rounding-aware) or
-                 ``'release'`` (``-O3 -ffast-math``).  Ignored when
-                 ``flags`` is given.
-    :param flags: explicit optimisation/fp flag list, overriding
-                  ``mode`` entirely (``-shared``/``-fPIC``/``-fopenmp``
-                  are always added).
-    :param extra_flags: additional gfortran flags appended to the
-                  mode/``flags`` set (kept, not replaced).  Use for
-                  legacy-source allowances such as
-                  ``-fallow-argument-mismatch`` when a ``prelude_source``
-                  carries an implicit-interface type mismatch.
-    :param verify: run the frozen-signature drift check (default on).
-    :param bind_c_shim: when ``True``, auto-generate ``<entry>_c.f90``
-                       -- a ``bind(c, name='<entry>_c')`` wrapper
-                       around the binding module's ``<entry>_dace``
-                       procedure -- and link it into the library so
-                       the ``.so`` exposes a stable C-ABI entry
-                       point.  Supports flat-arg kernels and
-                       derived-type dummies whose every member is
-                       inline-flat (scalar or static-shape array of
-                       scalar).  Raises
-                       :class:`UnsupportedShimInterfaceError` on a
-                       non-inline-flat struct member (allocatable /
-                       pointer / dynamic shape / nested derived
-                       type).
-    :returns: a :class:`FortranLibrary` handle.
-    :raises SignatureDriftError: if the live SDFG drifted from the
-            snapshot -- raised before the binding is emitted.
-    :raises ValueError: on an unknown ``mode``.
-    :raises UnsupportedShimInterfaceError: ``bind_c_shim=True`` on an
-            interface containing a derived-type dummy.
+    ``iface``/``plan`` default to the SDFG's stamped snapshots when
+    omitted.  ``prelude_sources`` compile BEFORE the binding (deps the
+    binding ``use``s); ``extra_sources`` compile AFTER (callers/shims
+    that ``use`` the binding) -- order matters for gfortran's
+    left-to-right module resolution.  ``mode`` picks debug (bit-
+    reproducible) or release flags unless ``flags`` overrides it
+    entirely; ``extra_flags`` appends rather than replaces.
+    ``bind_c_shim=True`` auto-generates and links a ``bind(c)`` C-ABI
+    entry point (flat + inline-flat-struct dummies only; raises
+    :class:`UnsupportedShimInterfaceError` otherwise).
+
+    :raises SignatureDriftError: live SDFG drifted from the snapshot.
     """
     if out_dir is None:
         raise ValueError("build_fortran_library: out_dir is required")
@@ -165,16 +102,13 @@ def build_fortran_library(
                          "SDFGBuilder.build() (no _frozen_signature attached). "
                          "Plain SDFGs are unaffected -- dace-core codegen is "
                          "vanilla; the drift contract is dace-fortran-only.")
-    # Drift / binding-correctness gate: refuse to emit a wrapper that
-    # disagrees with the kernel.  Checked before compile so it fails
-    # fast and never produces a stale binding.
+    # Refuse to emit a wrapper that disagrees with the kernel -- checked
+    # before compile so it never produces a stale binding.
     if verify:
         frozen.verify_against(sdfg)
 
-    # Auto-derive the binding inputs from the SDFG when not given (after the
-    # drift gate, so a pinned/drift error surfaces first): the plan is the
-    # stamped flatten recipe, the iface the pre-flatten caller surface (built
-    # against the final ``name`` so the bind(c) symbols match the exports).
+    # Auto-derive when not given, after the drift gate so a drift error
+    # surfaces first; iface is built against final ``name`` for symbol match.
     if plan is None:
         raw = getattr(sdfg, "_flatten_plan_raw", None)
         if raw is None:
@@ -191,22 +125,16 @@ def build_fortran_library(
     compiled = sdfg.compile()
     sdfg_so = Path(compiled._lib._library_filename)
 
-    # Authoritative ``__program_<entry>`` argument order: take it from
-    # the ``CompiledSDFG`` itself (``_sig`` -- the exact name order DaCe
-    # uses to call the kernel).  This is codegen *output* (its symbol
-    # set is transformation- / timing-dependent), so it is NOT
-    # snapshotted in the drift-checked ``FrozenSignature``; the emitter
-    # receives it live and generates the wrapper accordingly.  Empty ->
-    # the emitter falls back to ``frozen.args`` order.
+    # Authoritative __program_<entry> arg order comes live from
+    # CompiledSDFG._sig (codegen output, transform-dependent -- NOT
+    # snapshotted in FrozenSignature).  Empty -> falls back to frozen.args.
     dace_arglist = tuple(getattr(compiled, "_sig", None) or ())
 
     bindings_f90 = out_dir / f"{name}_bindings.f90"
     emit_bindings(frozen, iface, plan, str(bindings_f90), dace_arglist)
 
-    # Auto-gen ``<entry>_c`` shim around the binding module's
-    # ``<entry>_dace`` procedure.  Threaded between the binding (which
-    # the shim ``USE``\\s) and ``extra_sources`` so gfortran's strict
-    # left-to-right module-dependency ordering is preserved.
+    # Threaded between the binding (which the shim USEs) and extra_sources
+    # -- gfortran compiles strictly left-to-right by module dependency.
     shim_f90 = None
     if bind_c_shim:
         shim_f90 = out_dir / f"{iface.entry}_c.f90"
@@ -217,9 +145,7 @@ def build_fortran_library(
                          plan=plan)
 
     so_path = out_dir / f"lib{name}.so"
-    # gfortran compiles sources left-to-right with no dependency
-    # reordering: modules the binding ``use``s must precede it, and
-    # sources that ``use`` the binding must follow it.
+    # gfortran compiles left-to-right, no reordering: deps before, users after.
     cmd = [
         "gfortran", *_SHARED_FLAGS, *opt_flags, *extra_flags, "-fopenmp", f"-J{out_dir}",
         *[str(s) for s in prelude_sources],

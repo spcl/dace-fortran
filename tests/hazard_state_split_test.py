@@ -1,25 +1,12 @@
 """Bridge hazard-guard coverage: RAW / WAR / WAW sibling assigns.
 
-Several Fortran statements in one loop body that touch the same array
-land as separate tasklets in one SDFG state with no dataflow edge
-between them (they back the same non-transient storage).  The codegen
-scheduler only honours RAW edges on shared AccessNodes, so without the
-hazard guard it is free to reorder write-before-read siblings and
-clobber the value -- the bug diagnosed in cloudsc Section 4.5.
-
-The guard (``emit_assign`` for IF/structured bodies, ``_raw_hazard``
-for the loop-body batch) must force a new state whenever a new assign
-read/write collides with a prior read/write in the current state:
-
-* RAW -- a later sibling reads what an earlier one wrote;
-* WAR -- a later sibling writes what an earlier one read;
-* WAW -- two siblings write the same array (final value must be the
-  textually-last write).
-
-Each kernel is built through the bridge and compared against an
-f2py-compiled reference of the same source (non-transformed
-reference, per ``feedback_e2e_numerical``); a reorder produces a
-grossly wrong result, so exact equality is the right assertion.
+Several statements in one loop body touching the same array land as separate
+tasklets in one SDFG state with no dataflow edge between them; without a
+hazard guard the codegen scheduler is free to reorder write-before-read
+siblings (cloudsc Section 4.5 bug). The guard (``emit_assign`` for IF bodies,
+``_raw_hazard`` for the loop batch) forces a new state on RAW/WAR/WAW
+collisions. Each kernel is compared against an f2py reference; a reorder
+produces a grossly wrong result, so exact equality is the right assertion.
 """
 
 from pathlib import Path
@@ -34,14 +21,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 def _run(src: str, entry: str, tmp_path: Path, **arrays):
     """Build ``src`` through the bridge and via f2py; run both.
-
-    :param src: inline Fortran with an ``intent(inout)`` output array.
-    :param entry: mangled flang symbol (``_QP<name>``).
-    :param tmp_path: pytest scratch dir.
-    :param arrays: input/output arrays by Fortran dummy name; the
-        ``out`` entry is duplicated for the two runs and compared.
-    :returns: ``(out_sdfg, out_ref)`` after both executions.
-    """
+    Returns ``(out_sdfg, out_ref)`` dicts of arrays after execution."""
     name = entry.split("P")[-1]
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
@@ -85,9 +65,8 @@ end subroutine raw_kern
 
 
 def test_war_sibling_write_after_read(tmp_path: Path):
-    """``out = f+1 ; f = a*2`` -- the second statement writes what the
-    first read.  Reordering makes ``out`` read the new ``f`` (this is
-    the cloudsc 4.5 ``cv=...e/f ; f=f-e`` shape)."""
+    """``out = f+1 ; f = a*2`` -- second statement writes what the first read;
+    reordering makes ``out`` read the new ``f`` (cloudsc 4.5 shape)."""
     src = """
 subroutine war_kern(n, a, f, out)
   implicit none
@@ -111,10 +90,8 @@ end subroutine war_kern
 
 
 def test_waw_then_read_final_write_wins(tmp_path: Path):
-    """``x=a ; y=x*3 ; x=b`` -- ``x`` is written twice with a read in
-    between.  Correct: ``y`` uses the first write (``a``), final ``x``
-    is the last write (``b``).  A WAW/WAR reorder makes ``y`` read
-    ``b``."""
+    """``x=a ; y=x*3 ; x=b``: ``y`` must use the first write (``a``), final
+    ``x`` is the last write (``b``); a WAW/WAR reorder makes ``y`` read ``b``."""
     src = """
 subroutine waw_kern(n, a, b, x, y)
   implicit none
@@ -141,10 +118,8 @@ end subroutine waw_kern
 
 
 def test_hazard_chain_in_nested_if(tmp_path: Path):
-    """The cloudsc-4.5 shape: WAR chain inside a nested IF in a
-    multi-pass loop, exercising the ``emit_assign`` guard (not the
-    loop-batch ``_raw_hazard``).  ``cv`` reads ``f`` then ``f`` is
-    overwritten -- a reorder makes ``cv`` use the new ``f``."""
+    """cloudsc-4.5 shape: WAR chain inside a nested IF, exercising the
+    ``emit_assign`` guard; ``cv`` reads ``f`` before it's overwritten."""
     src = """
 subroutine haz_if(n, a, b, f, cv)
   implicit none

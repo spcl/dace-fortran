@@ -1,19 +1,5 @@
-"""Build helper for ``icon_sync_iso_c.f90``.
-
-Compiles the iso_c wrapper into ``libicon_sync_iso_c.so`` against ICON's
-own ``.mod`` files (``mo_kind`` / ``mo_model_domain`` / ``mo_sync``).
-Returns the ``.so`` path on success.  Used by
-``test_dycore_from_icon_source.py`` to wire the wrapper into the
-``keep_external`` registrations for the dycore SDFG.
-
-A successful build needs ICON to have been configured + ``make``-d so
-that its ``mod/`` directories under ``$ICON_BUILD`` exist.  When ICON's
-build dir is missing, this returns ``None`` (and the test falls back
-to the ``stub=True`` path that still proves the wrapper SOURCE compiles
-through gfortran's parser standalone -- the per-procedure bind(c)
-interfaces are pinned regardless of whether ICON has produced ``.mod``
-files for them yet).
-"""
+"""Compiles ``icon_sync_iso_c.f90`` into ``libicon_sync_iso_c.so`` against ICON's ``.mod`` files.
+Returns ``None`` if the ICON build is missing; callers fall back to a ``stub=True`` path."""
 import os
 import shutil
 import subprocess
@@ -30,24 +16,11 @@ def build_icon_sync_iso_c_so(
     *,
     fc: Optional[str] = None,
 ) -> Optional[Path]:
-    """Compile and link the wrapper into ``out_dir / libicon_sync_iso_c.so``.
-
-    :param icon_build: ICON's CPU build directory (with ``mod/``
-        and ``externals/*/build/.../mod/`` populated by a prior
-        ``make``).  Pass ``None`` to skip the link step.
-    :param out_dir: directory to write the ``.o`` and ``.so`` into.
-    :param fc: Fortran compiler binary.  Defaults to ``$FC`` from
-        the environment, then to ``gfortran`` -- pass an explicit
-        ``nvfortran`` / ``flang-new-21`` / ``mpifort`` etc. when the
-        target binding wants the wrapper bound to ICON's GPU build
-        or a non-default toolchain.
-    :returns: the ``.so`` path on success, ``None`` if the ICON build
-        isn't there to satisfy the ``USE mo_sync`` /
-        ``USE mo_model_domain`` ``.mod`` lookups, or the requested
-        compiler isn't on ``PATH``.
-    :raises subprocess.CalledProcessError: the compiler failed despite
-        the ``.mod`` files being where they should be.
-    """
+    """Compile and link the wrapper into ``out_dir/libicon_sync_iso_c.so`` against
+    ``icon_build``'s ``.mod`` files. ``fc`` defaults to ``$FC``/gfortran; pass an explicit
+    compiler to target ICON's GPU build or a non-default toolchain. Returns ``None`` if the
+    ICON build or compiler isn't available; raises if the compiler fails despite the
+    ``.mod`` files being present."""
     if fc is None:
         fc = os.environ.get("FC", "gfortran")
     if shutil.which(fc) is None or not icon_build.is_dir():
@@ -61,17 +34,13 @@ def build_icon_sync_iso_c_so(
         icon_build / "externals/memman/build/_icon/src/bindings/fortran/mod",
         icon_build / "externals/mtime/build/src/mod",
     ]
-    # Some of those dirs only exist after a full make; filter to ones
-    # that DO so the compiler's -I list isn't littered with
-    # non-existent paths (gfortran / nvfortran both warn on those).
+    # Some dirs only exist after a full make; filter to existing ones so -I isn't
+    # littered with non-existent paths (gfortran/nvfortran both warn).
     mod_dirs = [d for d in mod_dirs if d.is_dir()]
     if not (icon_build / "mod").is_dir():
-        # No ICON-side ``mo_sync.mod`` to USE -- can't resolve the
-        # wrapper's USE imports.  Caller decides what to do.
+        # No ICON-side mo_sync.mod -- can't resolve the wrapper's USE imports.
         return None
-    # Resolve ``fc`` and bail if it isn't on PATH (e.g. user requested
-    # nvfortran on a host without NVHPC).  Same shape as the
-    # ``no .mod files`` skip.
+    # Bail if fc isn't on PATH (e.g. nvfortran requested on a host without NVHPC).
     if shutil.which(fc) is None:
         return None
     out_dir = Path(out_dir)
@@ -79,9 +48,8 @@ def build_icon_sync_iso_c_so(
     obj_path = out_dir / "icon_sync_iso_c.o"
     so_path = out_dir / "libicon_sync_iso_c.so"
 
-    # Per-compiler flag set.  ``-fno-fast-math`` / ``-ffp-contract=off``
-    # are GCC-family; nvfortran and flang ignore them or reject them,
-    # so route the FP-conservative bit through compiler-specific flags.
+    # Per-compiler flag set: -fno-fast-math/-ffp-contract=off are GCC-family; nvfortran and
+    # flang ignore or reject them, so route FP-conservative flags per compiler.
     fc_basename = Path(fc).name.lower()
     if "nvfortran" in fc_basename:
         base_flags = ["-O0", "-fpic", "-Kieee", "-Mnofma"]
@@ -90,7 +58,6 @@ def build_icon_sync_iso_c_so(
     else:  # gfortran (+ mpifort wrapping it)
         base_flags = ["-O0", "-fPIC", "-fno-fast-math", "-ffp-contract=off", "-ffree-line-length-none"]
     include_flags = [f"-I{d}" for d in mod_dirs]
-    # Compile
     subprocess.check_call(
         [fc, *base_flags, *include_flags, "-c",
          str(_WRAPPER_SRC), "-o", str(obj_path)], cwd=str(out_dir))

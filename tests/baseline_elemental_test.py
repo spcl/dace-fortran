@@ -1,12 +1,7 @@
-"""Baseline HLFIR coverage  --  ``ELEMENTAL`` subroutine called on arrays.
-Pulled out of the original ``ported_from_f2dace_windmill_test.py``
-per-feature split.
+"""``ELEMENTAL`` subroutine called on arrays (split from ``ported_from_f2dace_windmill_test.py``).
 
-The SDFG is built from the ``ELEMENTAL`` form (the feature under test).
-f2py can't compile a module-contained elemental (upstream bug in its
-Fortran parser), so the reference uses an explicit per-element DO loop
-that implements the same scalar body.  A numpy-only check would work
-too, but going through gfortran gives us a real Fortran reference.
+f2py can't compile a module-contained elemental (parser bug), so the reference
+uses an explicit per-element DO loop instead of the ELEMENTAL form.
 """
 
 import numpy as np
@@ -58,10 +53,7 @@ subroutine apply_delta(od, scat_od, g)
 end subroutine apply_delta
 """
     mod = f2py_compile(ref_src, tmp_path / "ref", "apply_delta")
-    # ELEMENTAL lowering needs inline-all + fold-element-aliases +
-    # symbol-dce, all in the default pipeline.  ``entry`` marks the
-    # public module-scope ``delta`` private so its dummies don't leak
-    # into extract_vars alongside ``apply_delta``'s own dummies.
+    # needs inline-all+fold-element-aliases+symbol-dce (default pipeline); ``entry`` keeps ``delta``'s dummies out of extract_vars.
     (tmp_path / "sdfg").mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(sdfg_src, tmp_path / "sdfg", name="apply_delta", entry="apply_delta_mod::apply_delta").build()
 

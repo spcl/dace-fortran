@@ -1,6 +1,4 @@
-"""Baseline HLFIR coverage  --  DO WHILE and SELECT CASE.  Pulled out of
-the original ``ported_from_f2dace_windmill_test.py`` per-feature split.
-"""
+"""Baseline HLFIR coverage: DO WHILE and SELECT CASE (split from ported_from_f2dace_windmill_test.py)."""
 
 from pathlib import Path
 
@@ -18,10 +16,7 @@ def _build(src: str, tmp: Path, name: str):
 
 
 def test_do_while(tmp_path):
-    """Flang lowers ``DO WHILE`` to raw cf.br + cf.cond_br; the
-    ``lift-cf-to-scf`` pass turns it into the scf.while our bridge
-    walks, so this test needs the full default pipeline (not the
-    minimal ``_build`` helper)."""
+    """DO WHILE needs the full pipeline (lift-cf-to-scf), not the minimal `_build` helper."""
     src = """
 subroutine while_count(res)
   implicit none
@@ -69,10 +64,7 @@ end subroutine case_pick
 
     o_ref = np.zeros(1, order="F", dtype=np.int32)
     mod.case_pick(2, o_ref)
-    # Scalar I/O convention: ``intent(in) :: v`` is read-only on the
-    # caller side so the SDFG signature exposes it as a plain Scalar
-    # (Python int).  ``intent(inout) :: out`` writes back through the
-    # caller's binding so it remains a length-1 Array.
+    # intent(in) -> plain Scalar; intent(inout) -> stays a length-1 Array (write-back)
     o_sdfg = np.zeros(1, dtype=np.int32)
     sdfg(v=2, out=o_sdfg)
     assert int(o_sdfg[0]) == int(o_ref[0])

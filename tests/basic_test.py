@@ -1,14 +1,6 @@
-"""Smoke tests for the HLFIR -> SDFG frontend.
-
-Mirrors a narrow slice of ``tests/fortran/``'s style (inline Fortran source,
-build an SDFG, validate) but exercises the new flang-based pipeline.
-
-Per the project's E2E-numerical rule, every test that builds an SDFG also
-compares its output against a non-transformed reference  --  here a numpy
-equivalent, which is sufficient for these arithmetic-only kernels (no
-structs, no intrinsics).  The structural assertions are kept as a
-guard against silent-regressions in the SDFG shape on top of the
-numerical check."""
+"""Smoke tests for the HLFIR -> SDFG frontend: inline Fortran source, build an SDFG,
+validate against a numpy reference (E2E-numerical rule) plus structural assertions
+against silent SDFG-shape regressions."""
 import numpy as np
 import pytest
 
@@ -48,12 +40,8 @@ end subroutine elementwise_add
 
 
 def test_read_after_write_shares_access_node(tmp_path):
-    """Two tasklets in the same loop body: the second consumes what the first
-    writes.  With the single-access-node rule, exactly one AccessNode for
-    ``tmp`` must appear in the innermost state  --  anything else would mean the
-    RAW dataflow edge was dropped.  Numerical check confirms the dataflow is
-    actually wired (a dropped edge would leave ``out`` reading uninitialised
-    transient and the result would diverge from the closed-form expectation)."""
+    """RAW within a loop body: exactly one AccessNode for ``tmp`` in the innermost
+    state (single-access-node rule); numerical check catches a dropped RAW edge."""
     from dace.sdfg.state import LoopRegion
     from dace.sdfg import nodes as nd
 

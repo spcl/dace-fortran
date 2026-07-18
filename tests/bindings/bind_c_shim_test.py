@@ -1,21 +1,8 @@
 """Auto-generated ``bind(c)`` shim correctness.
 
-:func:`dace_fortran.bindings.emit_bind_c_shim` and the
-``build_fortran_library(..., bind_c_shim=True)`` option produce a
-``<entry>_c.f90`` shim that wraps the binding module's
-``<entry>_dace`` procedure under a stable C-ABI symbol so a ``ctypes``
-or C caller can drive the SDFG ``.so`` without any hand-authored
-Fortran glue.  These tests cover three things:
-
-1. The emitter's text output for the representative flat shapes
-   (scalar-in, scalar-out, rank-1 array, rank-2 array) -- structural
-   check, no compile.
-2. ``UnsupportedShimInterfaceError`` on a derived-type
-   :class:`OriginalInterface` -- the MVP shim refuses anything its
-   struct-construction extension doesn't yet handle.
-3. End-to-end: build the SDFG, link with ``bind_c_shim=True``,
-   ctypes-call the auto-generated symbol, assert numeric equivalence
-   to a gfortran reference compiled from the same source.
+Covers: (1) emitter text-output structural checks (no compile), (2)
+``UnsupportedShimInterfaceError`` on unsupported derived-type interfaces, (3)
+e2e -- build+link+ctypes-call the shim, compare against a gfortran reference.
 """
 import ctypes
 import re
@@ -47,9 +34,8 @@ pytestmark = [
 
 
 def test_emit_shim_scalar_in_array_in_out(tmp_path: Path):
-    """A rank-1 input + rank-1 output + scalar-input dim ``n``: the
-    scalar rides by value, the arrays ride as ``c_ptr`` with
-    ``c_f_pointer`` aliases sized by ``n``."""
+    """Rank-1 in + rank-1 out + scalar dim ``n``: scalar rides by value,
+    arrays ride as ``c_ptr`` with ``c_f_pointer`` aliases sized by ``n``."""
     iface = OriginalInterface(
         entry="kern",
         args=(
@@ -60,29 +46,22 @@ def test_emit_shim_scalar_in_array_in_out(tmp_path: Path):
     )
     out = emit_bind_c_shim(iface, str(tmp_path / "kern_c.f90"))
     text = out.read_text()
-    # bind(c) header + correct extern symbol name.
     assert "subroutine kern_c(n, x_p, y_p) bind(c, name='kern_c')" in text
-    # Scalar input by value.
     assert "integer(c_int), value :: n" in text
-    # Arrays come through as c_ptr.
     assert "type(c_ptr), value :: x_p" in text
     assert "type(c_ptr), value :: y_p" in text
-    # c_f_pointer aliases use the scalar dim ``n`` directly.
     assert "real(c_double), pointer :: x(:)" in text
     assert "call c_f_pointer(x_p, x, [n])" in text
     assert "real(c_double), pointer :: y(:)" in text
     assert "call c_f_pointer(y_p, y, [n])" in text
-    # The call uses the Fortran-side local aliases (not the ``_p`` names).
     assert "call kern_dace(n, x, y)" in text
     assert "call kern_dace_finalize()" in text
-    # USE statement targets the right binding module.
     assert ("use kern_dace_bindings, only: kern_dace, kern_dace_finalize" in text)
 
 
 def test_emit_shim_scalar_output_is_length1_array(tmp_path: Path):
-    """A rank-0 ``intent(out)`` rides as ``c_ptr`` + ``c_f_pointer(..., [1])``
-    -- matches ``feedback_scalar_io_convention`` (outputs = length-1
-    array on the descriptor side)."""
+    """Rank-0 ``intent(out)`` rides as ``c_ptr`` + ``c_f_pointer(..., [1])`` --
+    matches ``feedback_scalar_io_convention`` (outputs = length-1 array)."""
     iface = OriginalInterface(
         entry="reduce",
         args=(
@@ -114,18 +93,10 @@ def test_emit_shim_rank2_array_extents(tmp_path: Path):
 
 
 def test_emit_shim_forwards_module_var_array_extents(tmp_path: Path):
-    """A flat array dummy whose static shape references *module*
-    variables (ICON ocean ``tracer(nproma, n_zlev)``, ``w(nproma,
-    n_zlev + 1)``) -- not scalar dummy args -- must forward those
-    extents as ``integer(c_int), value`` C args so the ``c_f_pointer``
-    shape constructor resolves.  Before the fix the bare ``nproma`` /
-    ``n_zlev`` reached gfortran undeclared (``Symbol 'n_zlev' has no
-    IMPLICIT type``).
-
-    Distinct extents are forwarded once (shared across arrays) and
-    prepended to the C-ABI arg list (extents first).  An expression
-    extent (``n_zlev + 1``) contributes only its identifier; a scalar
-    dummy already in scope (``vt``) is NOT re-forwarded."""
+    """Array dummy whose static shape references *module* vars (ICON ocean
+    ``tracer(nproma, n_zlev)``) forwards them as ``integer(c_int), value`` args
+    (pre-fix: bare names reached gfortran undeclared). Extents forward once,
+    prepended to the arg list; an in-scope scalar dummy is NOT re-forwarded."""
     iface = OriginalInterface(
         entry="ppm",
         args=(
@@ -144,17 +115,15 @@ def test_emit_shim_forwards_module_var_array_extents(tmp_path: Path):
     # Prepended (extents first), ahead of the scalar dummy + array ptrs.
     assert ("subroutine ppm_c(nproma, n_zlev, vt, tracer_p, w_p, flux_p) "
             "bind(c, name='ppm_c')" in text)
-    # The c_f_pointer shapes resolve against the forwarded names;
-    # the ``n_zlev + 1`` expression rides verbatim.
+    # c_f_pointer shapes resolve against the forwarded names; n_zlev + 1 rides verbatim.
     assert "call c_f_pointer(tracer_p, tracer, [nproma, n_zlev])" in text
     assert "call c_f_pointer(w_p, w, [nproma, n_zlev + 1])" in text
     assert "call c_f_pointer(flux_p, flux, [nproma, n_zlev])" in text
 
 
 def test_emit_shim_scalar_dummy_extent_not_forwarded(tmp_path: Path):
-    """An array sized by a scalar *dummy* (``a(n)`` with ``n`` an
-    ``intent(in)`` arg) stays on the existing path -- ``n`` is already in
-    scope, so it is NOT additionally forwarded as a module-var extent."""
+    """Array sized by a scalar *dummy* (``a(n)``) stays on the existing path --
+    ``n`` is already in scope, so it's NOT also forwarded as a module-var extent."""
     iface = OriginalInterface(
         entry="kern",
         args=(
@@ -169,16 +138,10 @@ def test_emit_shim_scalar_dummy_extent_not_forwarded(tmp_path: Path):
 
 
 def test_emit_shim_dynamic_shape_struct_member(tmp_path: Path):
-    """A struct member with a dynamic extent (``'?'`` in
-    :attr:`Member.shape`) is now handled by the v2 shim emitter:
-    each dim rides as a separate ``integer(c_int), value`` LOWER-BOUND
-    then EXTENT pair named ``<flat>_lb<i>`` / ``<flat>_d<i>``, and the
-    ``c_f_pointer`` shape constructor references the extents at runtime.
-    For ALLOCATABLE / POINTER members the shim cannot ``=>``-alias
-    uniformly (``=>`` is only valid for POINTER), so it ``allocate``s
-    the struct field at its TRUE bounds ``(lb : lb + d - 1)`` -- carrying
-    the lower bound so a member ICON allocates with a non-default bound
-    survives -- and element-copies in / out per ``intent``."""
+    """Struct member with dynamic extent (``'?'``): each dim rides as a
+    LOWER-BOUND/EXTENT value pair (``<flat>_lb<i>``/``<flat>_d<i>``). ALLOCATABLE/
+    POINTER members can't ``=>``-alias uniformly, so the shim ``allocate``s at
+    TRUE bounds ``(lb : lb + d - 1)`` and element-copies in/out per ``intent``."""
     iface = OriginalInterface(
         entry="kern",
         args=(OriginalArg(name="st", fortran_type="type(t_state)", rank=0, intent="inout", struct_type="t_state"), ),
@@ -199,18 +162,15 @@ def test_emit_shim_dynamic_shape_struct_member(tmp_path: Path):
     assert "type(c_ptr), value :: st_u_p" in text
     # The c_f_pointer shape constructor references the extent arg.
     assert "call c_f_pointer(st_u_p, st_u, [st_u_d0])" in text
-    # Allocate at the member's TRUE bounds ``(lb : lb + d - 1)``, element
-    # copy-in (inout), element copy-out -- valid for POINTER + ALLOCATABLE.
+    # Allocate at TRUE bounds (lb : lb + d - 1), element copy-in/out -- valid for POINTER + ALLOCATABLE.
     assert "allocate(st%u(st_u_lb0 : st_u_lb0 + st_u_d0 - 1))" in text
     assert "st%u = st_u" in text
     assert "st_u = st%u" in text
 
 
 def test_emit_shim_struct_with_static_array_members(tmp_path: Path):
-    """A struct dummy whose every member is a static-shape array of
-    scalar expands to one C-ABI slot per member, plus a local
-    instance of the derived type assembled by copy-in and (for
-    ``inout``) written back by copy-out."""
+    """Struct dummy with all-static-shape-array members expands to one C-ABI
+    slot per member, plus a local instance assembled by copy-in/copy-out."""
     iface = OriginalInterface(
         entry="kern",
         args=(OriginalArg(name="fld", fortran_type="type(t_fields)", rank=0, intent="inout", struct_type="t_fields"), ),
@@ -228,34 +188,28 @@ def test_emit_shim_struct_with_static_array_members(tmp_path: Path):
         used_modules={"mo_fields": ("t_fields", "NX", "NY")},
     )
     text = emit_bind_c_shim(iface, str(tmp_path / "kern_c.f90")).read_text()
-    # One C-ABI slot per member.
     assert "subroutine kern_c(fld_a_p, fld_b_p) bind(c, name='kern_c')" in text
     assert "type(c_ptr), value :: fld_a_p" in text
     assert "type(c_ptr), value :: fld_b_p" in text
     # Aliases sized to the struct module's shape constants.
     assert "real(c_double), pointer :: fld_a(:, :)" in text
     assert "call c_f_pointer(fld_a_p, fld_a, [NX, NY])" in text
-    # Local struct + copy-in.
     assert "type(t_fields), target :: fld" in text
     assert "fld%a = fld_a" in text
     assert "fld%b = fld_b" in text
     # Copy-out (intent=inout).
     assert "fld_a = fld%a" in text
     assert "fld_b = fld%b" in text
-    # The shim calls _dace with the struct, not the flat slots.
+    # calls _dace with the struct, not the flat slots.
     assert "call kern_dace(fld)" in text
-    # use-line for the struct's module survived.
     assert "use mo_fields, only: t_fields, NX, NY" in text
 
 
 def test_emit_shim_value_record_array_scatters_elementwise(tmp_path: Path):
-    """A dummy that is an ARRAY of a flat *value* record (single
-    static-shape member, like ``t_cartesian_coordinates%x(3)``) is
-    reconstructed element-wise: a local allocatable instance, a flat
-    companion of rank ``outer + member`` sized outer-dims-first /
-    member-last, and nested scatter (copy-in) + gather (copy-out) loops --
-    NOT an illegal whole-array ``arr%x`` descent (two nonzero-rank part
-    references)."""
+    """ARRAY of a flat *value* record (e.g. ``t_cartesian_coordinates%x(3)``)
+    reconstructs element-wise: local allocatable + flat companion (rank outer+
+    member, outer-dims-first) + nested scatter/gather loops -- NOT an illegal
+    whole-array ``arr%x`` descent."""
     iface = OriginalInterface(
         entry="kern",
         args=(OriginalArg(name="p",
@@ -273,9 +227,8 @@ def test_emit_shim_value_record_array_scatters_elementwise(tmp_path: Path):
         used_modules={"mo_cc": ("t_cc", )},
     )
     text = emit_bind_c_shim(iface, str(tmp_path / "kern_c.f90")).read_text()
-    # Local allocatable array instance + PER-FIELD outer-extent value args
-    # (``<flat>_<field>_d<i>``): each field carries its own extents, matching
-    # the SDFG's one-independent-SoA-companion-per-field flatten.
+    # Local allocatable + PER-FIELD outer-extent value args (<flat>_<field>_d<i>),
+    # matching the SDFG's one-companion-per-field flatten.
     assert "type(t_cc), allocatable, target :: p(:, :)" in text
     assert "integer(c_int), value :: p_x_d0" in text
     assert "integer(c_int), value :: p_x_d1" in text
@@ -287,19 +240,15 @@ def test_emit_shim_value_record_array_scatters_elementwise(tmp_path: Path):
     # Element-wise scatter (copy-in) then gather (copy-out, inout).
     assert "p(p_x_i0, p_x_i1)%x(p_x_i2) = p_x(p_x_i0, p_x_i1, p_x_i2)" in text
     assert "p_x(p_x_i0, p_x_i1, p_x_i2) = p(p_x_i0, p_x_i1)%x(p_x_i2)" in text
-    # The struct array (not the flat slots) is passed to _dace.
+    # struct array, not flat slots, passed to _dace.
     assert "call kern_dace(p)" in text
 
 
 def test_emit_shim_value_record_array_multifield_per_field_extents(tmp_path: Path):
-    """A MULTI-field value record (``t_tangent_vectors {v1, v2}``, ICON's
-    ``primal_normal_cell``) array member emits PER-FIELD extents: each field
-    carries its own ``<flat>_<field>_d<i>`` block immediately ahead of its
-    pointer (``[v1_d.., v1_p, v2_d.., v2_p]``), mirroring the SDFG's one-
-    independent-SoA-companion-per-field flatten and ``emit_library``'s
-    per-leaf ``dynamic_extents_abi`` order -- so the outer emit_call and the
-    inner shim agree slot-for-slot.  A single shared allocate (the fields are
-    one array-of-records) uses the first field's extents."""
+    """MULTI-field value record (``t_tangent_vectors {v1, v2}``) array member
+    emits PER-FIELD extents: each field's ``<flat>_<field>_d<i>`` block precedes
+    its pointer, matching ``emit_library``'s per-leaf ABI order slot-for-slot.
+    One shared allocate (array-of-records) uses the first field's extents."""
     iface = OriginalInterface(
         entry="kern",
         args=(OriginalArg(name="s", fortran_type="type(t_edges)", rank=0, intent="in", struct_type="t_edges"), ),
@@ -327,9 +276,8 @@ def test_emit_shim_value_record_array_multifield_per_field_extents(tmp_path: Pat
             assert f"integer(c_int), value :: s_pnc_{f}_d{d}" in text, f"missing per-field extent s_pnc_{f}_d{d}"
         assert f"type(c_ptr), value :: s_pnc_{f}_p" in text
         assert f"call c_f_pointer(s_pnc_{f}_p, s_pnc_{f}, [s_pnc_{f}_d0, s_pnc_{f}_d1, s_pnc_{f}_d2])" in text
-    # C-ABI arg order: each field's extents ride immediately before its
-    # pointer (v1_d0..d2, v1_p, then v2_d0..d2, v2_p) -- the exact per-leaf
-    # interleave emit_library's per_member_soa path emits.
+    # extents ride immediately before their pointer (v1_d0..d2, v1_p, v2_d0..d2,
+    # v2_p) -- emit_library's per_member_soa interleave.
     sig = re.search(r"subroutine\s+kern_c\(([^)]*)\)", text, re.S).group(1).replace("&", " ")
     order = [a.strip() for a in sig.split(",") if a.strip()]
     assert order.index("s_pnc_v1_d0") < order.index("s_pnc_v1_p") < order.index("s_pnc_v2_d0") \
@@ -339,13 +287,10 @@ def test_emit_shim_value_record_array_multifield_per_field_extents(tmp_path: Pat
 
 
 def test_emit_shim_pointer_array_record_indexed_and_scalar_extent_by_value(tmp_path: Path):
-    """A struct dummy with a rank-1 pointer-array-of-record member
-    (``p1d(:)`` of a multi-member *container*) is allocated to size 1 and
-    descended at element ``(1)`` (the ICON single-patch idiom).  A scalar
-    member that is ALSO a flat array dummy's extent rides ONCE by value --
-    shared by the struct copy and the array's ``c_f_pointer`` shape -- not
-    as a duplicate length-1 pointer alias that would double-declare the
-    name and leave the array shape referencing a rank-1 pointer."""
+    """Struct dummy with a rank-1 pointer-array-of-record member (``p1d(:)``)
+    allocates to size 1, descended at ``(1)`` (ICON single-patch idiom). A
+    scalar member that's ALSO a flat array's extent rides ONCE by value --
+    not duplicated as a length-1 pointer alias."""
     iface = OriginalInterface(
         entry="kern",
         args=(
@@ -370,13 +315,11 @@ def test_emit_shim_pointer_array_record_indexed_and_scalar_extent_by_value(tmp_p
         used_modules={"mo_dom": ("t_patch3d", "t_pv")},
     )
     text = emit_bind_c_shim(iface, str(tmp_path / "kern_c.f90")).read_text()
-    # Pointer-array-of-record member allocated to size 1, descended at (1).
     assert "allocate(patch%p1d(1))" in text
     assert "patch%p1d(1)%nblk = patch_p1d_nblk" in text
     assert ("allocate(patch%p1d(1)%dolic(patch_p1d_dolic_lb0 : patch_p1d_dolic_lb0 + patch_p1d_dolic_d0 - 1, "
             "patch_p1d_dolic_lb1 : patch_p1d_dolic_lb1 + patch_p1d_dolic_d1 - 1))") in text
     assert "patch%p1d(1)%dolic = patch_p1d_dolic" in text
-    # The scalar member is also fld's extent -> by value, once; no pointer alias.
     assert "integer(c_int), value :: patch_p1d_nblk" in text
     assert text.count("patch_p1d_nblk") == 4  # header arg + decl + struct copy + array shape
     assert "integer(c_int), pointer :: patch_p1d_nblk(:)" not in text
@@ -384,8 +327,7 @@ def test_emit_shim_pointer_array_record_indexed_and_scalar_extent_by_value(tmp_p
 
 
 # ---------------------------------------------------------------------------
-#  End-to-end: the auto-shim produces a Fortran-callable ``.so`` whose
-#  ``<entry>_c`` symbol numerically matches a gfortran reference.
+#  End-to-end: auto-shim's ``.so`` numerically matches a gfortran reference.
 # ---------------------------------------------------------------------------
 
 _KERNEL_SRC = """
@@ -402,9 +344,8 @@ subroutine axpy(n, a, x, y)
 end subroutine axpy
 """
 
-# Plain Fortran ``bind(c)`` reference driver: same flat C ABI as the
-# auto-generated shim so the two ``.so``\\s are compared apples-to-apples
-# through the same ctypes invocation.
+# Plain Fortran bind(c) reference driver: same flat C ABI as the auto-shim,
+# so both .so's are compared apples-to-apples through the same ctypes call.
 _REF_DRIVER = """
 subroutine axpy_c(n, a, x_p, y_p) bind(c, name="axpy_c")
   use iso_c_binding
@@ -421,14 +362,10 @@ end subroutine axpy_c
 
 
 def test_bind_c_shim_e2e_axpy(tmp_path: Path):
-    """``build_fortran_library(..., bind_c_shim=True)`` produces a
-    ``.so`` with an ``axpy_c`` symbol the test invokes via
-    ``ctypes``.  Compared bit-for-bit (``a*x + y_pre``) against a
-    gfortran reference built from the same source through the same C
-    ABI."""
+    """``bind_c_shim=True`` produces an ``axpy_c`` symbol invoked via ``ctypes``;
+    compared bit-for-bit against a gfortran reference through the same C ABI."""
     name = "axpy"
 
-    # SDFG path: bridge build -> bind_fortran_library with shim.
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     builder = build_sdfg(_KERNEL_SRC, sdfg_dir, name=name, entry=f"_QP{name}")
@@ -444,8 +381,7 @@ def test_bind_c_shim_e2e_axpy(tmp_path: Path):
     assert lib.bind_c_shim_f90 is not None and lib.bind_c_shim_f90.exists()
     sdfg_so = ctypes.CDLL(str(lib.so_path))
 
-    # Reference path: gfortran-compile the kernel + a hand-written
-    # ``axpy_c`` driver sharing the same C ABI as the auto-shim.
+    # Reference: gfortran-compile the kernel + a hand-written axpy_c driver on the same C ABI.
     ref_dir = tmp_path / "ref"
     ref_dir.mkdir(parents=True, exist_ok=True)
     kern_src = ref_dir / "axpy.f90"
@@ -503,10 +439,9 @@ subroutine shim_kern(fld)
 end subroutine shim_kern
 """
 
-# Plain Fortran ``bind(c)`` reference with the same flat C ABI the
-# auto-shim produces: one ``c_ptr`` per member.  The reference loads
-# the flat pointers into a local ``type(t_shim_fields)``, calls the
-# un-transformed kernel, copies the post-call values back out.
+# Plain Fortran bind(c) reference, same flat C ABI as the auto-shim (one
+# c_ptr per member): loads pointers into a local struct, calls the
+# un-transformed kernel, copies values back out.
 _STRUCT_REF_DRIVER = """
 subroutine shim_kern_c(fld_a_p, fld_b_p) bind(c, name='shim_kern_c')
   use iso_c_binding
@@ -527,10 +462,8 @@ end subroutine shim_kern_c
 """
 
 # Hand-authored interface kept as a regression anchor: the bridge
-# member-layout snapshot (see ``test_auto_iface_struct_members``) is the
-# preferred path; the explicit interface is the fallback when the
-# bridge's snapshot doesn't carry enough info (a future v2 shape -- a
-# nested struct, an allocatable member, ...).
+# member-layout snapshot is the preferred path; this is the fallback for
+# shapes it can't carry yet (nested struct, allocatable member, ...).
 _STRUCT_IFACE = OriginalInterface(
     entry="shim_kern",
     args=(OriginalArg(name="fld",
@@ -552,16 +485,11 @@ _STRUCT_IFACE = OriginalInterface(
 
 
 def test_bind_c_shim_e2e_struct_two_real_array(tmp_path: Path):
-    """``build_fortran_library(..., bind_c_shim=True)`` on a kernel
-    whose only dummy is a ``type(t_shim_fields)`` with two static
-    ``real(c_double)`` array members produces a ``shim_kern_c`` symbol
-    that ``ctypes``-invokes through the same C ABI as a gfortran
-    reference compiled from the same source."""
+    """``bind_c_shim=True`` on a struct dummy with two static array members
+    produces a ``shim_kern_c`` symbol matching a gfortran reference via ``ctypes``."""
     name = "shim_kern"
 
-    # Types module must precede the binding on the gfortran command
-    # line; the shim ``USE``\\s ``mo_shim_fields`` so the types source
-    # rides as a ``prelude_sources`` entry.
+    # Types module must precede the binding on gfortran's cmdline; rides as a prelude_sources entry.
     types_path = tmp_path / "kernel_types.f90"
     types_path.write_text(_STRUCT_KERNEL_SRC)
 
@@ -620,15 +548,12 @@ def test_bind_c_shim_e2e_struct_two_real_array(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-#  Pointer-to-record HANDLE members in the bridge type snapshot.  A
-#  ``box<ptr|heap<record>>`` member (ICON's ``t_comm_pattern_orig, POINTER ::
-#  comm_pat_c``) has no SoA image; the marshal pass and FlattenStructs both
-#  SKIP it (one shared ``pointerToRecordMember`` predicate).  The bridge's
-#  struct-layout snapshot (``recordStructLayoutRecursive``) -- which feeds
-#  ``emit_bind_c_shim`` -- must skip it too, so the shim emits NO slots for the
-#  handle's pointee record; otherwise its per-member-SoA C ABI desyncs from the
-#  outer marshaller (which forwards none).  A value-record ARRAY member
-#  (``box<...<seq<record>>>``) is NOT a handle and stays.
+#  Pointer-to-record HANDLE members (ICON's ``POINTER :: comm_pat_c``) have no
+#  SoA image; marshal + FlattenStructs both skip them via one shared
+#  ``pointerToRecordMember`` predicate. The bridge's struct-layout snapshot
+#  feeding ``emit_bind_c_shim`` must skip it too, or the shim's per-member-SoA
+#  ABI desyncs from the marshaller. A value-record ARRAY member is not a
+#  handle and stays.
 # ---------------------------------------------------------------------------
 _HANDLE_SNAPSHOT_SRC = """
 module m_handle_snap
@@ -655,10 +580,8 @@ end module
 
 
 def test_snapshot_skips_pointer_to_record_handle_member(tmp_path):
-    """The bridge struct-layout snapshot omits a pointer-to-record handle
-    member, so the emitted shim reconstructs the real data members (``area``,
-    ``nblks_e``) but NONE of the handle's pointee record -- matching the
-    marshaller's skip so the per-member-SoA ABIs coincide."""
+    """Struct-layout snapshot omits a pointer-to-record handle member; shim
+    reconstructs real data members (``area``, ``nblks_e``) but none of the handle's pointee record."""
     from dace_fortran.bindings.fortran_interface import build_auto_interface
     sdfg_dir = tmp_path / "sdfg"
     sdfg = build_sdfg(_HANDLE_SNAPSHOT_SRC, sdfg_dir, name="kern", entry="m_handle_snap::kern").build()

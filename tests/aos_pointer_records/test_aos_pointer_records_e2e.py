@@ -1,17 +1,9 @@
-"""End-to-end numerical correctness tests for the AoS-of-pointer-records lift.
+"""E2e numerical correctness for the AoS-of-pointer-records lift.
 
-Builds an SDFG via the bridge for each probe, builds an f2py reference
-from the same source, fills every INTENT(IN[OUT]) array with a
-deterministic seeded RNG, runs both, and asserts the OUTPUT arrays
-match elementwise.  This is the regression gate for the
-``hlfir-lift-aos-pointer-records`` transformation: as long as the pass
-preserves the program's observable behaviour, these tests pass.
-
-Each test takes a probe from ``tests/aos_pointer_records/`` (a single
-Fortran source with one ``SUBROUTINE`` entry).  The shared helper
-compiles the source twice (once via ``numpy.f2py`` for the reference,
-once via ``dace_fortran.build_sdfg`` for the SDFG-under-test) and
-exercises both with identical inputs.
+Each probe under ``tests/aos_pointer_records/`` builds an SDFG via the bridge
+and an f2py reference from the same source, runs both with seeded random
+inputs, and asserts OUTPUT arrays match elementwise. Regression gate for
+``hlfir-lift-aos-pointer-records``.
 """
 import shutil
 import subprocess
@@ -33,11 +25,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 def _f2py(src: Path, out_dir: Path, mod_name: str, *, kind_map: dict = None):
     """Compile ``src`` via ``numpy.f2py`` and import the resulting module.
 
-    :param kind_map: ``{alias: ctype}`` written to ``.f2py_f2cmap``;
-        needed when the source uses a symbolic kind alias (``wp``,
-        ``JPRB``) that f2py can't resolve from a constants module the
-        bridge isn't compiling.  Maps directly to f2py's
-        ``--f2cmap`` mechanism.
+    ``kind_map`` writes a ``.f2py_f2cmap`` for symbolic kind aliases (``wp``, ``JPRB``) f2py can't resolve itself.
     """
     if shutil.which("gfortran") is None:
         pytest.skip("gfortran not on PATH (f2py reference build)")
@@ -45,9 +33,7 @@ def _f2py(src: Path, out_dir: Path, mod_name: str, *, kind_map: dict = None):
         pytest.skip("meson not on PATH (f2py backend on Python>=3.12)")
     out_dir.mkdir(parents=True, exist_ok=True)
     if kind_map:
-        # f2py's ``.f2py_f2cmap`` dict-of-dicts is read from cwd at
-        # invocation; "real" / "integer" maps the Fortran TypeName to
-        # a ``{kind_alias: ctype}`` table.
+        # f2py reads .f2py_f2cmap from cwd; maps Fortran TypeName -> {kind_alias: ctype}.
         as_dict = {"real": {a: c for a, c in kind_map.items()}}
         (out_dir / ".f2py_f2cmap").write_text(repr(as_dict))
     subprocess.check_call([sys.executable, "-m", "numpy.f2py", "-c", str(src), "-m", mod_name, "--quiet"], cwd=out_dir)
@@ -68,10 +54,7 @@ def test_single_pointer_member_numerical(tmp_path):
     src_path = _HERE / "aos_single_pointer_member_probe.f90"
     src_text = src_path.read_text()
 
-    # Reference (gfortran via f2py).
     mod = _f2py(src_path, tmp_path / "ref", "single_ref")
-
-    # SDFG-under-test.
     sdfg = _sdfg(src_text, tmp_path / "sdfg", "m::run", "run")
 
     rng = np.random.default_rng(0)
@@ -106,25 +89,15 @@ def test_write_through_pointer_numerical(tmp_path):
 
 
 def test_assumed_shape_target_numerical(tmp_path):
-    """Assumed-shape pointer targets (``q(iqx)%x => t(:,:)``) -- the
-    gather temp's inner extents come from ``fir.box_dims``, not a static
-    ``(n, k)`` type.  Regression for the ``box_dims -> <name>_d<dim>``
-    extent resolution: before the fix the temp minted unbindable extent
-    symbols that defaulted to ``1`` at call time, under-allocating the
-    gather buffer and overflowing the heap (graupel's crash in
-    miniature).  Mirrors ``aos_runtime_index_probe`` but with
-    assumed-shape dummies."""
+    """Assumed-shape pointer targets (``q(iqx)%x => t(:,:)``): gather temp's
+    extents come from ``fir.box_dims``.  Regression: unbound extents used to
+    default to 1 at call time, under-allocating and overflowing the heap."""
     src_path = _HERE / "aos_assumed_shape_target_probe.f90"
     src_text = src_path.read_text()
     sdfg = _sdfg(src_text, tmp_path / "sdfg", "m::run", "run")
 
-    # The kernel is a pure runtime-indexed select (``out = q(ix)%x``), so
-    # the reference is just the ``ix``-th input -- no gfortran/f2py build
-    # needed (and f2py can't wrap the assumed-shape ``(:,:)`` dummies this
-    # probe deliberately uses to drive the ``fir.box_dims`` path).  The
-    # gather buffer is allocated from the targets' runtime extents; before
-    # the box_dims fix that buffer was sized 1 and this call crashed the
-    # process with a heap overflow rather than returning.
+    # Pure runtime-indexed select; reference is just the ix-th input (f2py
+    # can't wrap the assumed-shape dummies this probe needs for fir.box_dims).
     rng = np.random.default_rng(3)
     n, k = 7, 5
     targets = [np.asfortranarray(rng.standard_normal((n, k))) for _ in range(4)]
@@ -140,15 +113,11 @@ def test_assumed_shape_target_numerical(tmp_path):
 
 
 def test_wp_kind_alias_numerical(tmp_path):
-    """``REAL(KIND=wp)`` source compiles + runs without the user having
-    to pre-resolve ``wp``.  Exercises ``normalize_kind_parameters``
-    end-to-end via the default ``build_sdfg`` pipeline."""
+    """``REAL(KIND=wp)`` compiles + runs without pre-resolving ``wp`` -- exercises ``normalize_kind_parameters``."""
     src_path = _HERE / "aos_wp_kind_probe.f90"
     src_text = src_path.read_text()
-    # f2py can't evaluate ``SELECTED_REAL_KIND`` either; tell it that
-    # ``wp`` is double precision so the reference build matches the
-    # bridge's default (``normalize_kind_parameters`` already mapped
-    # ``wp -> 8`` on the SDFG side).
+    # f2py can't evaluate SELECTED_REAL_KIND; tell it wp=double to match the
+    # bridge's normalize_kind_parameters default (wp -> 8).
     mod = _f2py(src_path, tmp_path / "ref", "wp_ref", kind_map={"wp": "double"})
     sdfg = _sdfg(src_text, tmp_path / "sdfg", "m::run", "run")
 

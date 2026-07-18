@@ -15,10 +15,9 @@ Each kernel is reduced from QE ``vcut_get`` (coulomb_vcut_module):
     END FUNCTION
     ! called as: fac(ig) = vcut_get(vcut, q(:, ig))
 
-These currently FAIL (free-symbol / unresolved-read) and pin the fixes:
-walking ``expandDesignateChain`` / ``buildExpr`` through the pointer-box
-``fir.load`` between ``designate{component}`` and ``designate(indices)``,
-and section-aliasing an inlined FUNCTION-RESULT section dummy.
+Pins the fix: walking expandDesignateChain/buildExpr through the pointer-box fir.load
+between designate{component} and designate(indices), and section-aliasing an inlined
+FUNCTION-RESULT section dummy.
 """
 import numpy as np
 import pytest
@@ -29,15 +28,11 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_pointer_member_array_indexed_by_local(tmp_path):
-    """MODULE-scope derived-type var with a POINTER 3-D array member,
-    read indexed by a LOCAL index array (faithful to QE ``vcut`` which
-    is a module variable).  Isolates the
-    ``designate{component} -> load(box) -> designate(i(1),i(2),i(3))``
-    chain: the read currently fails to wire (``_in_vcut_corrected_0``
-    free symbol) because ``expandDesignateChain`` / ``buildExpr`` drop
-    the element indices when the component sits on the PARENT designate
-    and the pointer-box ``fir.load`` separates it from the element
-    designate."""
+    """MODULE-scope derived-type var with a POINTER 3-D array member, indexed by a LOCAL index
+    array (faithful to QE vcut). Isolates the designate{component} -> load(box) ->
+    designate(i(1),i(2),i(3)) chain, where expandDesignateChain/buildExpr must not drop the
+    element indices when the component sits on the PARENT designate and a pointer-box fir.load
+    separates it from the element designate."""
     src = """
 MODULE m
   TYPE :: tbl
@@ -105,18 +100,16 @@ END MODULE
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="run", entry="m::run").build()
     nx, ny, nz = 3, 3, 3
-    # ``asfortranarray`` of the reshape, not ``reshape(order="F")`` -- the
-    # latter returns a non-owning view, which DaCe rejects as a program
-    # argument (analyzability).  Mirrors the sibling test above.
+    # asfortranarray of the reshape, not reshape(order="F") -- the latter is a non-owning
+    # view, which DaCe rejects as a program argument (analyzability).
     corrected = np.asfortranarray(np.arange(nx * ny * nz, dtype=np.float64).reshape((nx, ny, nz)))
     ng = 2
     # q chosen so SUM(q**2) <= cutoff**2 (take the ELSE branch) and
     # NINT(q) lands inside [1, n].
     q = np.asarray([[1.0, 2.0], [1.0, 2.0], [1.0, 2.0]], dtype=np.float64, order="F")
     fac = np.zeros(ng, dtype=np.float64, order="F")
-    # ``t_cutoff`` (the flattened scalar member ``t%cutoff``) is exposed as
-    # a (1,)-Array on the SDFG surface, so pass a 1-element array, not a
-    # bare Python float.
+    # t_cutoff (flattened t%cutoff) is exposed as a (1,)-Array on the SDFG surface -- pass a
+    # 1-element array, not a bare float.
     t_cutoff = np.array([100.0], dtype=np.float64)
     sdfg(t_corrected=corrected, t_cutoff=t_cutoff, q=q, fac=fac, ng=np.int32(ng))
     expected = np.array([corrected[0, 0, 0], corrected[1, 1, 1]])
@@ -124,11 +117,9 @@ END MODULE
 
 
 def test_aor_module_member_array_rank(tmp_path):
-    """MODULE-scope ALLOCATABLE array-of-records with an array member,
-    indexed ``tabxx(ia) % box(ir)`` (faithful to QE ``tabxx`` / ``ke``).
-    The flattened member ``tabxx_box`` must be rank 2 -- record dim
-    PREPENDED to the member's own dim -- else the memlet carries more
-    dims than the descriptor and ``offset_tabxx_box_d1`` leaks."""
+    """MODULE-scope ALLOCATABLE array-of-records, tabxx(ia) % box(ir) (faithful to QE tabxx/ke).
+    Flattened tabxx_box must be rank 2 -- record dim prepended to the member's own dim -- else
+    the memlet carries more dims than the descriptor and offset_tabxx_box_d1 leaks."""
     src = """
 MODULE m
   TYPE :: rec

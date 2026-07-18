@@ -1,12 +1,6 @@
-"""SC26 ``Xor64Rng`` reproduced in numpy for the Quantum-ESPRESSO tests.
-
-The SC26 layout artifacts seed every kernel from one xorshift64 stream
-so the AoS and SoA variants see identical numbers.  This is a verbatim
-port of that scheme (``Experiments/common/prng.h``): ``splitmix64`` to
-seed the state, then xorshift64 per draw with a 53-bit mantissa.  The
-exact seed is unimportant for a correctness test -- only that both the
-SDFG and the numpy reference draw from the same stream.
-"""
+"""SC26 ``Xor64Rng`` reproduced in numpy for the QE tests -- verbatim port of
+``Experiments/common/prng.h`` (splitmix64 seed + xorshift64 draw) so the SDFG
+and numpy reference draw from the same stream."""
 import numpy as np
 
 _MASK64 = (1 << 64) - 1

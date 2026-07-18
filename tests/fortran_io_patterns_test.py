@@ -1,16 +1,12 @@
 """End-to-end bridge tests for the Fortran I/O patterns in FV3 / ICON.
 
-Each test writes a *known* input (a data file or a namelist), runs the kernel
-through the HLFIR bridge, and asserts the VALUES that were read match what was
-written -- a build that drops the statement or mis-reads it must fail here, not
-pass.  Filenames are hardcoded relative paths and the test ``chdir``s into its
-``tmp_path``, so no character argument has to cross the SDFG ABI.
+Each test writes a known input (file or namelist), runs the kernel through the bridge, and
+asserts the read-back VALUES match what was written -- a build that drops or mis-reads a
+statement must fail here. Filenames are hardcoded relative paths; the test ``chdir``s into
+``tmp_path`` so no character argument crosses the SDFG ABI.
 
-These pin the acceptance criteria for the ``_FortranAio*`` recognizer (which
-maps Fortran I/O to ``dace.libraries.fortran_io`` nodes).  Until it lands the
-bridge either crashes (string constants leak into array-name extraction) or
-silently drops the statement, so every case is marked ``xfail``; they flip to
-passing one I/O family at a time as the recognizer is built.
+Pins the acceptance criteria for the ``_FortranAio*`` recognizer (maps Fortran I/O to
+``dace.libraries.fortran_io`` nodes).
 """
 import os
 from pathlib import Path
@@ -47,8 +43,7 @@ end module m
 
 
 def test_namelist_read_external(tmp_path, monkeypatch):
-    """``open`` + ``read(u, nml=cfg)`` + ``close`` (the FV3 init pattern, with a
-    local namelist group) must read each member's value from the file."""
+    """``open`` + ``read(u, nml=cfg)`` + ``close`` (the FV3 init pattern) must read each member's value from the file."""
     src = """
 module m
   implicit none
@@ -77,8 +72,7 @@ end module m
 
 
 def test_list_directed_write(tmp_path, monkeypatch):
-    """``write(u,*) x`` must actually emit the values (today it is dropped):
-    read the written file back and check it round-trips."""
+    """``write(u,*) x`` must emit real values (not silently dropped); read the file back and check it round-trips."""
     src = """
 module m
   implicit none
@@ -101,9 +95,7 @@ end module m
 
 
 def test_io_statement_ordering(tmp_path, monkeypatch):
-    """Write a file then read it back in the same kernel: the read must observe
-    the write, so the two I/O statements must keep their program order (each
-    lands in its own SDFG state -- nodes in one state could be reordered)."""
+    """Write then read back in the same kernel: I/O statements must keep program order (each lands in its own SDFG state, else nodes in one state could reorder)."""
     src = """
 module m
   implicit none
@@ -130,8 +122,7 @@ end module m
 
 
 def test_two_writes_distinct_files(tmp_path, monkeypatch):
-    """Two writes to different files in one kernel must both land -- exercises
-    multiple ordered I/O statements (each its own state)."""
+    """Two writes to different files in one kernel must both land (each its own SDFG state)."""
     src = """
 module m
   implicit none
@@ -155,9 +146,7 @@ end module m
 
 
 def test_two_sequential_reads_same_file(tmp_path, monkeypatch):
-    """``read a`` then ``read b`` from one open read consecutive records:
-    the recognizer fuses adjacent same-file transfers into one Read node so
-    they share a single open and the file position advances across them."""
+    """``read a`` then ``read b`` from one open read consecutive records: the recognizer fuses adjacent same-file transfers into one Read node sharing a single open."""
     src = """
 module m
   implicit none

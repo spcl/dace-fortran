@@ -1,47 +1,18 @@
-"""Dycore + sibling-SDFG E2E for a VALUE-RECORD-ARRAY struct member.
+"""Dycore + sibling-SDFG e2e for a VALUE-RECORD-ARRAY struct member: numerical counterpart to the
+build-only ABI pin in marshal_shim_abi_alignment_test.py. A derived-type member that is an allocatable
+array of a value record (box<heap<array<record>>>) -- the shape of ICON's t_patch%edges%primal_normal_cell
+-- which hlfir-marshal-external-structs v2 expands into one per-record-field SoA leaf each (pnc_v1/pnc_v2).
+This test RUNS both paths (not just checks ABI order) and verifies the fields route BIT-EXACT: a
+mis-scattered SoA leaf or off-by-one stride changes the numerical output and trips here.
 
-This is the numerical counterpart to the build-only ABI pin in
-``tests/marshal_shim_abi_alignment_test.py`` and the missing member class in the
-static / dynamic / logical variants of ``test_dycore_struct_ext_e2e.py``: a
-derived-type member that is an *allocatable array of a value record*,
+Inner SDFG (inner_vrec) reads the value-record fields, built bind_c_shim=True (per-field SoA C ABI).
+Outer SDFG (outer_vrec) scales around a call to inner_vrec as a keep_external(c_abi='per_member_soa')
+so a dropped/miswired external changes the result. Reference is gfortran-compiled untransformed kernels
++ a hand bind(c) driver sharing the exact same C ABI, scattering/gathering SoA v1/v2 into AoS pnc(i)%v1/%v2.
 
-    type :: tv                         !  record with two scalar fields
-      real(c_double) :: v1
-      real(c_double) :: v2
-    end type
-    type :: patch_t
-      real(c_double), allocatable :: out(:)
-      type(tv),       allocatable :: pnc(:)   !  box<heap<array<record>>>
-    end type
-
-which is exactly the shape ICON's ``t_patch % edges % primal_normal_cell``
-carries and which ``hlfir-marshal-external-structs`` v2 expands into ONE
-per-record-FIELD SoA leaf each -- ``pnc_v1`` / ``pnc_v2`` (confirmed by the
-generated bind_c_shim entry ``inner_vrec_c(p_out_lb0, p_out_d0, p_out_p,
-p_pnc_v1_d0, p_pnc_v1_p, p_pnc_v2_d0, p_pnc_v2_p)`` -- the plain allocatable
-``out`` carries a lower-bound slot, the value-record leaves do not).
-
-The build-only ABI test pins that the outer marshal leaf order equals the inner
-shim slot order.  This test additionally RUNS both paths and checks the value
-record's fields route BIT-EXACT: the inner kernel reads ``pnc(i)%v1`` and
-``pnc(i)%v2``, so a mis-scattered SoA leaf (v1 landing where v2 is read, or an
-off-by-one in the per-field stride) changes the numerical output and trips here.
-
-  * **Inner SDFG**: ``inner_vrec`` reads the value-record fields into ``out``,
-    built with ``bind_c_shim=True`` -> ``libinner_vrec_wrap.so`` /
-    ``inner_vrec_c`` (per-field SoA C ABI).
-  * **Outer SDFG**: ``outer_vrec`` scales ``out``, calls ``inner_vrec`` (a
-    ``keep_external(c_abi='per_member_soa', dynamic_extents_abi=True)``), scales
-    again -- so a dropped/miswired external changes the result.
-  * **Reference**: gfortran linkage of the un-transformed kernels + a hand
-    ``bind(c)`` driver that scatters the SoA v1/v2 inputs into the AoS
-    ``pnc(i)%v1`` / ``%v2`` and gathers them back, sharing the SDFG shim's exact
-    C ABI so one ``ctypes`` signature drives both.
-
-``-O0 -fno-fast-math -ffp-contract=off`` is pinned across the DaCe C++ codegen,
-the SDFG binding link, and the gfortran reference so the arithmetic order is
-identical and the comparison is a genuine bit-exact gate (``assert_array_equal``,
-not a tolerance).
+-O0 -fno-fast-math -ffp-contract=off is pinned across DaCe codegen, the binding link, and the gfortran
+reference so arithmetic order matches and the comparison (assert_array_equal) is genuinely bit-exact,
+not tolerance-based.
 """
 import ctypes
 import shutil
@@ -61,10 +32,8 @@ pytestmark = [
     pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
 ]
 
-# Match the reference's arithmetic order across all three build layers so the
-# comparison is bit-exact (DaCe's -O3 -march=native -ffast-math default would
-# contract ``a*b + c`` into an FMA and add ~1 ULP; gfortran's default
-# ``-ffp-contract`` is likewise off only under -O0/-fno-fast-math).
+# matches the reference's arithmetic order across all three build layers: DaCe's default -O3
+# -ffast-math would contract a*b+c into an FMA (~1 ULP drift), breaking the bit-exact comparison.
 _O0_FFLAGS = ("-O0", "-fno-fast-math", "-ffp-contract=off", "-ffree-line-length-none")
 _O0_CXX_FLAGS = ("-O0", "-fno-fast-math", "-ffp-contract=off", "-fPIC", "-Wno-unused-parameter")
 
@@ -83,8 +52,7 @@ module m_vrec
 end module
 """
 
-# Inner: read BOTH value-record fields into ``out`` with distinct coefficients,
-# so v1 and v2 landing on the wrong SoA leaf changes the result.
+# inner: reads BOTH value-record fields with distinct coefficients, so a v1/v2 SoA mis-scatter changes the result.
 _INNER_SRC = """
 subroutine inner_vrec(p)
   use m_vrec
@@ -97,9 +65,8 @@ subroutine inner_vrec(p)
 end subroutine inner_vrec
 """
 
-# Outer (dycore stand-in): scale ``out`` by 10 before the inner call and by 0.1
-# after, so the external call sits between two transforms the reference must
-# reproduce exactly.  The value record is forwarded untouched.
+# outer (dycore stand-in): scales out by 10 before / 0.1 after the inner call, so the external sits
+# between two transforms the reference must reproduce exactly. Value record forwarded untouched.
 _OUTER_SRC = """
 subroutine outer_vrec(p)
   use m_vrec
@@ -122,16 +89,11 @@ subroutine outer_vrec(p)
 end subroutine outer_vrec
 """
 
-# Reference C-ABI driver, matching the outer bind_c_shim's exact entry
-# ``outer_vrec_c(p_out_lb0, p_out_d0, p_out_p, p_pnc_v1_d0, p_pnc_v1_p,
-# p_pnc_v2_d0, p_pnc_v2_p)``.  ``out`` is a plain allocatable array member, so
-# the shim ABI carries its lower bound (``out_lb0``) ahead of the extent (the
-# bind_c_shim now reconstructs every dynamic member at its TRUE bounds so a
-# non-default lower bound survives); the value-record ``pnc`` crosses as
-# per-field SoA leaves (``v1`` / ``v2``) which carry no lower-bound slot.
-# Scatters the two SoA field arrays into the AoS ``pnc(i)%v1`` / ``%v2`` before
-# the call and gathers them back after -- the copy the SDFG's
-# _emit_value_record_array does automatically on the marshalled path.
+# Reference C-ABI driver matching outer_vrec_c's exact shim entry. `out` is a plain allocatable
+# member so the shim carries its lower bound (out_lb0) ahead of the extent (bind_c_shim reconstructs
+# every dynamic member at its TRUE bounds); the value-record `pnc` crosses as per-field SoA leaves
+# (v1/v2) with no lower-bound slot. Scatters the SoA fields into AoS pnc(i)%v1/%v2 before the call,
+# gathers them back after -- the copy _emit_value_record_array does automatically on the marshalled path.
 _REF_DRIVER_SRC = """
 subroutine outer_vrec_c(out_lb0, out_d0, out_p, v1_d0, v1_p, v2_d0, v2_p) bind(c, name="outer_vrec_c")
   use iso_c_binding
@@ -166,7 +128,7 @@ end subroutine outer_vrec_c
 
 
 def _build_wrap(tmp_path: Path, tag: str, src: str, entry: str):
-    """Build ``entry`` from ``src`` into a bind_c_shim ``.so``; return the lib."""
+    """Build entry from src into a bind_c_shim .so; return the lib."""
     d = tmp_path / tag
     (d / "sdfg").mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(src, d / "sdfg", name=entry, entry=entry).build()
@@ -187,10 +149,9 @@ def _build_wrap(tmp_path: Path, tag: str, src: str, entry: str):
 
 
 def test_dycore_struct_ext_value_record_array_e2e(tmp_path: Path):
-    """Outer SDFG calls inner SDFG passing a ``patch_t`` whose ``pnc`` member is
-    an allocatable array of the value record ``tv{v1, v2}``; the marshal
-    expansion crosses it as per-field SoA leaves (``pnc_v1`` / ``pnc_v2``) and
-    the numerical output is bit-exact against the gfortran reference."""
+    """Outer SDFG calls inner SDFG passing patch_t whose pnc member is an allocatable array of the
+    value record tv{v1,v2}; marshal expansion crosses it as per-field SoA leaves (pnc_v1/pnc_v2),
+    numerical output is bit-exact against the gfortran reference."""
     _orig_cxx = dace.Config.get("compiler", "cpu", "args")
     dace.Config.set("compiler", "cpu", "args", value=" ".join(_O0_CXX_FLAGS))
     clear_external_registry()
@@ -240,9 +201,8 @@ def test_dycore_struct_ext_value_record_array_e2e(tmp_path: Path):
     out_sdfg, v1_sdfg, v2_sdfg = (a.copy(order="F") for a in (out_init, v1_init, v2_init))
     out_ref, v1_ref, v2_ref = (a.copy(order="F") for a in (out_init, v1_init, v2_init))
 
-    # ABI: out_lb0, out_d0, out_p, v1_d0, v1_p, v2_d0, v2_p.  ``out`` is a plain
-    # allocatable member, so its lower bound (1 here) rides ahead of the extent;
-    # the per-field value-record leaves carry only an extent, no lower bound.
+    # ABI: out_lb0, out_d0, out_p, v1_d0, v1_p, v2_d0, v2_p -- out (plain allocatable) carries a
+    # lower bound ahead of its extent; the per-field value-record leaves carry only an extent.
     argtypes = [
         ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p
     ]
@@ -255,8 +215,7 @@ def test_dycore_struct_ext_value_record_array_e2e(tmp_path: Path):
     # out_final = 0.1*(10*out + 2*v1 - 3*v2) = out + 0.2*v1 - 0.3*v2 (v1/v2 read-only).
     expected = out_init + 0.2 * v1_init - 0.3 * v2_init
     np.testing.assert_allclose(out_ref, expected, rtol=1e-12, atol=1e-12)
-    # The real gate: SDFG (value record marshalled as per-field SoA) is bit-exact
-    # against the gfortran AoS reference, and the read-only fields are untouched.
+    # real gate: SDFG (per-field SoA marshal) is bit-exact vs the gfortran AoS reference; read-only fields untouched.
     np.testing.assert_array_equal(out_sdfg, out_ref)
     np.testing.assert_array_equal(v1_sdfg, v1_ref)
     np.testing.assert_array_equal(v2_sdfg, v2_ref)

@@ -1,31 +1,22 @@
 """Regression cover for the intrinsic-name-shadow family (backlog M4 / Ext 5).
 
-A user variable named after a Fortran intrinsic the bridge renders as a
-bare token in tasklet bodies / symbol expressions (``max``, ``sum``,
-``minval``, ``sqrt``, ...) is handled at extraction time by
-``rejectOrRenameReservedShortNames`` (``bridge/extract_vars.cpp``):
+A user variable named after a Fortran intrinsic (``max``, ``sum``, ``sqrt``, ...)
+is handled at extraction time by ``rejectOrRenameReservedShortNames``
+(``bridge/extract_vars.cpp``): a LOCAL variable is RENAMED to ``var_<name>``
+(mangling override, landed in de9348e) since the genuine intrinsic renders
+through a separate ``hlfir`` op; a DUMMY argument is HARD-REJECTED instead,
+since its short name is the user-facing SDFG signature arg and silently
+renaming it would break the caller ABI.
 
-  * a LOCAL such variable is RENAMED to ``var_<name>`` (mangling override,
-    landed in de9348e) so its reads/writes stay distinct from the genuine
-    intrinsic, which renders through a SEPARATE ``hlfir`` op and is never
-    routed through this declare's name; and
-  * a DUMMY argument keeps the HARD-REJECT: its short name is the
-    user-facing SDFG signature arg, so silently renaming it to ``var_max``
-    would break the caller ABI -- and a data container literally named
-    ``max`` would clash with genuine ``max(...)`` calls in the generated
-    C++.  A clear diagnostic is the right outcome there.
-
-M4 was the backlog hypothesis that QE's ``DOUBLE PRECISION :: max`` leaks
-because it has "no hlfir.declare so the hard-reject misses".  That premise
-is stale: every form of a LOCAL intrinsic-shadow variable -- in a tasklet
-body, as a loop bound / array size / interstate condition (the symbol /
-sympy path), through EQUIVALENCE / BLOCK / COMMON, and in an inlined
-callee while a sibling scope uses the GENUINE intrinsic -- surfaces as an
-``hlfir.declare`` and is renamed correctly.  These tests pin the parts of
-that family NOT already covered by the max/sqrt/min locals in
-``design_failures_test.py`` (Latent #8): the reduction-name set, the
-symbol-context path, the scope-locality of the rename, the dead-shadow +
-genuine-intrinsic coexistence, and the deliberate dummy diagnostic.
+M4's hypothesis -- that QE's ``DOUBLE PRECISION :: max`` leaks because it has
+"no hlfir.declare so the hard-reject misses" -- is stale: every LOCAL
+intrinsic-shadow form (tasklet body, loop bound/array size/interstate
+condition via symbol/sympy, EQUIVALENCE/BLOCK/COMMON, inlined callee beside a
+sibling using the GENUINE intrinsic) surfaces as an ``hlfir.declare`` and is
+renamed correctly.  These tests pin the parts of that family not already
+covered in ``design_failures_test.py`` (Latent #8): reduction names, the
+symbol-context path, rename scope-locality, dead-shadow/genuine coexistence,
+and the dummy diagnostic.
 """
 import numpy as np
 import pytest
@@ -36,9 +27,9 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_reduction_name_variables_build_and_compute(tmp_path):
-    """``sum`` / ``product`` / ``minval`` / ``maxval`` as LOCAL variables
-    (the reduction half of ``kRejectedIntrinsicNames``) all rename to
-    ``var_<name>`` and compute correctly side by side."""
+    """``sum``/``product``/``minval``/``maxval`` as LOCAL variables (the reduction
+    half of ``kRejectedIntrinsicNames``) all rename to ``var_<name>`` and compute
+    correctly."""
     src = """
 MODULE red_mod
   IMPLICIT NONE
@@ -76,9 +67,8 @@ END MODULE red_mod
 
 
 def test_multiple_intrinsic_shadows_in_one_scope(tmp_path):
-    """``max``, ``sum`` and ``abs`` declared as variables in the SAME
-    scope each get an independent ``var_<name>`` rename (the override is
-    keyed per-declare, so they don't alias each other)."""
+    """``max``, ``sum``, ``abs`` declared in the SAME scope each get an independent
+    ``var_<name>`` rename (keyed per-declare, so they don't alias)."""
     src = """
 MODULE multi_mod
   IMPLICIT NONE
@@ -111,11 +101,10 @@ END MODULE multi_mod
 
 
 def test_intrinsic_shadow_in_symbol_contexts(tmp_path):
-    """``INTEGER :: max`` used as a loop bound, an interstate-edge ``IF``
-    condition AND a local-array size -- the symbol / sympy rendering
-    path, distinct from the tasklet-body rewriter.  The mangling override
-    feeds ``extractName`` which both paths consult, so all three render
-    ``var_max`` and the build is correct."""
+    """``INTEGER :: max`` as a loop bound, an interstate IF condition, and a
+    local-array size -- the symbol/sympy path, distinct from the tasklet-body
+    rewriter; the mangling override feeds ``extractName`` so all three render
+    ``var_max``."""
     src = """
 MODULE sym_mod
   IMPLICIT NONE
@@ -148,12 +137,10 @@ END MODULE sym_mod
 
 
 def test_sibling_scope_keeps_genuine_intrinsic(tmp_path):
-    """The rename is SCOPE-LOCAL: an inlined callee declares ``sum`` as a
-    variable while the entry scope calls the GENUINE ``SUM(a)`` intrinsic.
-    Only references flowing through the callee's declare are renamed, so
-    ``SUM(a)`` still reduces the array (the key correctness property -- a
-    too-broad rename would silently turn the intrinsic into a scalar
-    read)."""
+    """The rename is SCOPE-LOCAL: an inlined callee shadows ``sum`` as a variable
+    while the entry scope calls the GENUINE ``SUM(a)``.  Only the callee's declare
+    is renamed, so ``SUM(a)`` still reduces -- a too-broad rename would silently
+    turn it into a scalar read."""
     src = """
 MODULE sib_mod
   IMPLICIT NONE
@@ -192,11 +179,9 @@ END MODULE sib_mod
 
 
 def test_dead_shadow_var_does_not_corrupt_genuine_intrinsic(tmp_path):
-    """A DEAD ``REAL(8) :: max`` (declared, never read) sitting in the
-    same scope as a genuine ``MAX(a, b)`` call.  Flang keeps the unused
-    alloca, so the rename still fires on the declare -- but because the
-    intrinsic is a separate ``hlfir`` op the ``MAX(a, b)`` reduction is
-    untouched and renders correctly."""
+    """A DEAD ``REAL(8) :: max`` (declared, never read) beside a genuine ``MAX(a, b)``
+    call: flang keeps the unused alloca so the rename still fires, but the
+    intrinsic is a separate ``hlfir`` op and renders untouched."""
     src = """
 MODULE dead_mod
   IMPLICIT NONE
@@ -224,12 +209,9 @@ END MODULE dead_mod
 
 
 def test_dummy_named_after_intrinsic_is_clear_error(tmp_path):
-    """A DUMMY argument named after an intrinsic is deliberately
-    hard-rejected with an actionable diagnostic rather than silently
-    renamed: the short name is the user-facing SDFG signature arg, and a
-    container literally named ``max`` would clash with genuine ``max(...)``
-    rendering in the generated C++.  Pins the diagnostic so a future
-    relaxation that silently miscompiles the ABI is caught."""
+    """A DUMMY argument named after an intrinsic is hard-rejected with an actionable
+    diagnostic rather than silently renamed (the short name is the user-facing SDFG
+    signature arg).  Pins the diagnostic so a future ABI-miscompiling relaxation is caught."""
     src = """
 MODULE dummy_mod
   IMPLICIT NONE

@@ -1,12 +1,8 @@
-"""Unit coverage for the auto-detected-vs-explicit module-global
-provenance merge (``effective_module_sources``) and the
-``FrozenSignature`` JSON round-trip of the ``module_symbol_origins``
-field.
+"""Unit coverage for module-global provenance merge (``effective_module_sources``)
+and ``FrozenSignature.module_symbol_origins`` JSON round-trip.
 
-The end-to-end recovery of ``_QM<mod>E<entity>`` provenance from real
-HLFIR is exercised by ``test_velocity_full_auto_module_e2e``; this
-file pins the cheaper invariants: explicit override precedence, the
-auto-only path, and serialisation stability.
+E2e ``_QM<mod>E<entity>`` recovery is exercised by ``test_velocity_full_auto_module_e2e``;
+this pins explicit-override precedence, the auto-only path, and serialisation stability.
 """
 
 from dace_fortran.bindings.block_builders import effective_module_sources
@@ -56,9 +52,7 @@ def test_missing_origins_attr_degrades_to_explicit():
 
 
 def test_frozen_signature_json_roundtrip(tmp_path):
-    """``module_symbol_origins`` survives a JSON to-disk / from-disk
-    round-trip as tuples (the binding emitter consumes this map; the
-    per-arg origin is intentionally not a separate representation)."""
+    """``module_symbol_origins`` round-trips through JSON as tuples, not a separate per-arg representation."""
     fs = FrozenSignature(entry="k",
                          mangled="_QPk",
                          args=(FrozenArg(fortran_name="nrdmax",

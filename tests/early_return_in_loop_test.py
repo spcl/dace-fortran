@@ -1,36 +1,12 @@
 """End-to-end test for the early-return-inside-loop pattern.
 
-NPB LU's ``ssor`` runs a fixed-point iteration with an early ``return``
-on residual convergence:
-
-    do istep = 1, niter
-        ! ... many writes to ``d``, ``a``, ``b``, ``c`` arrays ...
-        if (rsdnm(1) < tolrsd(1) .and. ...) then
-            return
-        end if
-    end do
-
-When ``lift-cf-to-scf`` structurises the early return, the
-``do istep`` loop becomes an ``scf.while``.  All four levels of
-nested ``fir.do_loop`` writes -- including the ``d(M1,M2,i,j) = ...``
-assignments that drive the SSOR solver -- end up inside the
-``scf.while``'s BEFORE region.
-
-The bridge's ``walkSCFBeforeRegion`` (``bridge/ast/dispatch.cpp``)
-recognises ``scf.if`` / ``scf.condition`` / ``scf.index_switch`` /
-``hlfir.assign`` / ``fir.store`` ops in the before region, but
-nothing else falls through as "pure-value ops, no AST node, their
-values flow inline."  A ``fir.do_loop`` parked inside the before
-region is therefore dropped on the floor, taking every assign in
-its body with it.
-
-LU surfaces the bug as: ``dt`` (and the entire jacld d-build) is
-absent from the SDFG, the SSOR sweep is a no-op, and the
-numerical-correctness comparison against the gfortran reference
-diverges by ~6 orders of magnitude on every residual component.
-The minimal reproducer below distils the same shape down to four
-``d(M1,M2,i,j) = expr`` assigns guarded by a single early
-``return`` inside one outer ``do it`` loop.
+NPB LU's ``ssor`` has an early ``return`` inside a counted loop. After
+``lift-cf-to-scf`` structurises it into an ``scf.while``, every nested
+``fir.do_loop`` write in the BEFORE region must survive -- the bridge's
+``walkSCFBeforeRegion`` (``bridge/ast/dispatch.cpp``) used to drop such loops,
+silently discarding their assigns (LU symptom: SSOR sweep a no-op, ~6 orders
+of magnitude divergence). Reproducer: four ``d(M1,M2,i,j)`` assigns guarded
+by an early return in one outer loop.
 """
 from pathlib import Path
 
@@ -89,17 +65,9 @@ def _count_assigns_to(builder, target_name: str) -> int:
 
 
 def test_early_return_preserves_loop_body_assigns(tmp_path):
-    """The bridge's AST extractor must walk into ``fir.do_loop`` ops
-    inside an ``scf.while`` BEFORE region -- otherwise every assign
-    in a Fortran ``do`` whose containing loop has an early ``return``
-    silently disappears from the SDFG.
-
-    The reproducer's ``do it`` body writes ``d(M1,M2,i,j)`` four
-    times per (i,j) pair.  After ``lift-cf-to-scf`` lowers the
-    ``if (...) return`` into a structured break, the inner i / j
-    loops live inside the scf.while BEFORE region.  We assert all
-    four ``d`` writes survive into the AST.
-    """
+    """AST extractor must walk into ``fir.do_loop`` ops inside an ``scf.while``
+    BEFORE region -- otherwise assigns in a loop with an early ``return``
+    silently vanish. Asserts all four ``d(M1,M2,i,j)`` writes survive."""
     builder = build_sdfg(_SRC, tmp_path / "sdfg", name="bar", entry="m::bar")
     n_d = _count_assigns_to(builder, 'd')
     assert n_d >= 4, (f"expected at least 4 ``d`` assigns to reach the AST; got {n_d}. "

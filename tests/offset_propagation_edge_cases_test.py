@@ -1,10 +1,9 @@
 """Edge-case probes for the bridge's offset-propagation logic.
 
-Each test exercises a single Fortran pattern that *could* mis-infer
-a lower bound and trigger an out-of-bounds load on the SDFG side.
-Cases passing here pin the bridge's coverage; cases marked ``xfail``
-document known gaps to be closed by Phase 1 of the offset-propagation
-fix (see ``project_hlfir_offset_propagation_plan``).
+Each test exercises a Fortran pattern that could mis-infer a lower bound and
+trigger an OOB load.  Passing cases pin bridge coverage; ``xfail`` cases
+document gaps for Phase 1 of the offset-propagation fix (see
+``project_hlfir_offset_propagation_plan``).
 """
 
 from pathlib import Path
@@ -18,13 +17,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def _build(src: str, tmp_path: Path, entry: str):
-    """Compile ``src`` to an SDFG.
-
-    :param src: inline Fortran source.
-    :param tmp_path: pytest scratch dir.
-    :param entry: mangled subroutine name.
-    :returns: built SDFG.
-    """
+    """Compile ``src`` to an SDFG."""
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(src, sdfg_dir, name=entry.split('P')[-1], entry=entry).build()
@@ -33,11 +26,9 @@ def _build(src: str, tmp_path: Path, entry: str):
 
 
 def test_arith_computed_negative_index(tmp_path: Path):
-    """Edge case 3: index expression is ``lb - 1`` where ``lb`` is a
-    negative PARAMETER.  Empirically works today -- the bridge
-    recovers the bound from the local ALLOCATE's embox shape_shift
-    (``lowerBoundsFromAllocSite`` path), so it doesn't need to fold
-    the ``arith.subi`` index expression itself.  Regression gate."""
+    """Edge case 3: index expr ``lb - 1`` (``lb`` a negative PARAMETER). Works
+    today via ALLOCATE's embox shape_shift (``lowerBoundsFromAllocSite``), not
+    by folding ``arith.subi``.  Regression gate."""
     src = """
 subroutine arith_idx(out)
   implicit none
@@ -60,12 +51,10 @@ end subroutine arith_idx
 
 
 def test_multi_allocate_different_bounds(tmp_path: Path):
-    """Edge case 4: deallocate + re-allocate with different bounds.
-    The bridge creates a separate alias (``arr_alloc1``) per
-    ALLOCATE site; Phase A wired ``lowerBoundsFromAllocSite`` into
-    the alias entry so each alias gets its own correct offset.
-    Regression gate -- asserts both ``offset_arr_d0 == -5`` and
-    ``offset_arr_alloc1_d0 == 0``."""
+    """Edge case 4: deallocate + re-allocate with different bounds. Bridge
+    creates a separate alias (``arr_alloc1``) per ALLOCATE site; Phase A wired
+    ``lowerBoundsFromAllocSite`` into the alias entry so each gets its own
+    offset.  Regression gate: ``offset_arr_d0 == -5`` and ``offset_arr_alloc1_d0 == 0``."""
     src = """
 subroutine multi_alloc(out)
   implicit none
@@ -83,13 +72,11 @@ subroutine multi_alloc(out)
 end subroutine multi_alloc
 """
     sdfg = _build(src, tmp_path, "multi_alloc")
-    # Each ALLOCATE produces a separate SDFG alias.  Verify offsets
-    # directly:
+    # Each ALLOCATE produces a separate SDFG alias -- verify offsets directly.
     consts = dict(getattr(sdfg, "_fortran_offset_values", sdfg.constants))
     assert consts.get('offset_arr_d0') == -5, (f"first alias offset should be -5; got {consts.get('offset_arr_d0')}")
-    # REAL gap: second-allocate alias defaults to offset=1 instead
-    # of the actual ALLOCATE bound 0.  Bridge's
-    # ``lowerBoundsFromAllocSite`` isn't called for the alias entry.
+    # REAL gap: second-allocate alias defaults to offset=1 instead of the actual
+    # bound 0 -- lowerBoundsFromAllocSite isn't called for the alias entry.
     assert consts.get('offset_arr_alloc1_d0') == 0, (
         f"second alias offset should be 0 (matching ``allocate(arr(0:10))``); "
         f"got {consts.get('offset_arr_alloc1_d0')}.  Bridge gap.")
@@ -100,10 +87,8 @@ end subroutine multi_alloc
 
 
 def test_loop_iv_into_negative_bound_local_works(tmp_path: Path):
-    """Edge case 6 (local-allocatable variant): loop iv as index,
-    local ALLOCATABLE.  ``lowerBoundsFromAllocSite`` recovers the
-    bound from the embox's shape_shift, so this WORKS today.
-    Regression gate."""
+    """Edge case 6 (local-allocatable): loop iv as index, local ALLOCATABLE --
+    ``lowerBoundsFromAllocSite`` recovers the bound from the embox's shape_shift, so this WORKS today.  Regression gate."""
     src = """
 subroutine loop_iv_local(out)
   implicit none
@@ -133,12 +118,9 @@ end subroutine loop_iv_local
 
 
 def test_loop_iv_into_negative_bound_dummy(tmp_path: Path):
-    """Edge case 6 (dummy-arg variant): loop iv as index, dummy
-    ALLOCATABLE.  No literal hint, no local ALLOCATE.  The bridge
-    correctly leaves ``offset_arr_d0`` as a free symbol on the SDFG
-    signature -- the caller supplies the actual lower bound at call
-    time (same pattern as the indirect-table case).  Loop-iv
-    auto-inference is NOT needed; the free-symbol path covers it."""
+    """Edge case 6 (dummy-arg): loop iv as index, dummy ALLOCATABLE, no literal
+    hint.  Bridge correctly leaves ``offset_arr_d0`` as a free symbol -- caller
+    supplies the bound at call time; loop-iv auto-inference is NOT needed."""
     src = """
 subroutine loop_iv_dummy(arr, out)
   implicit none
@@ -165,9 +147,8 @@ end subroutine loop_iv_dummy
 
 
 def test_indirect_table_negative_offset_caller_supplied(tmp_path: Path):
-    """Edge case 7: ``arr(idx_table(j))`` where idx_table can return
-    negative values.  Statically unknowable -- the caller MUST supply
-    ``offset_arr_d0``.  Verifies the free-symbol fallback works."""
+    """Edge case 7: ``arr(idx_table(j))`` with statically-unknowable negative
+    values -- caller MUST supply ``offset_arr_d0``.  Verifies the free-symbol fallback."""
     src = """
 subroutine indirect_neg(arr, idx_table, n_idx, out)
   implicit none
@@ -186,8 +167,7 @@ end subroutine indirect_neg
     assert 'offset_arr_d0' in sdfg.arglist(), (f"expected free symbol for unresolvable indirect access; "
                                                f"arglist: {list(sdfg.arglist().keys())}")
 
-    # Caller fills the buffer such that arr_buf[0] corresponds to
-    # Fortran arr(-3) (offset_arr_d0 = -3).
+    # Caller fills the buffer so arr_buf[0] corresponds to Fortran arr(-3) (offset_arr_d0 = -3).
     arr_buf = np.asfortranarray(np.array([-30, -20, -10, 0, 10, 20, 30], dtype=np.int32))  # arr(-3..3) values
     idx_table = np.asfortranarray(np.array([-3, 0, 3], dtype=np.int32))
     out = np.zeros(3, dtype=np.int32, order='F')

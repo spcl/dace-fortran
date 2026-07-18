@@ -1,74 +1,56 @@
 """Fortran-source-level pre-processor.
 
-Some transforms have to happen on the Fortran *text*, before
-``flang-new -fc1 -emit-hlfir`` runs, because they either change what
-flang accepts or what arithmetic each backend is free to pick.  This
-module holds the independent text rewrites:
+Text-only rewrites that must run before ``flang-new -fc1 -emit-hlfir`` sees
+the source, since they change what flang accepts or which arithmetic a
+backend picks:
 
-* ``rewrite_integer_powers`` -- expands an integer-valued REAL-literal
-  power (``x**2.0`` -> ``(x*x)``).  Runs **unconditionally** in
-  ``compile_to_hlfir``: the rewrite is algebraically exact and removes
-  a backend-dependent ``pow(x, 2.0)`` vs ``x*x`` rounding difference
-  against the gfortran reference.
+* ``rewrite_integer_powers`` -- ``x**2.0`` -> ``(x*x)``.  Unconditional in
+  ``compile_to_hlfir``: algebraically exact, avoids a backend-dependent
+  ``pow()`` vs ``x*x`` rounding diff against the gfortran reference.
 
-* ``promote_real_literals_to_double`` -- rewrites single/default REAL
-  literals to an explicit double form (``2.0`` -> ``2.0D0``).  A
-  standalone utility, applied directly to kernel source on disk when a
-  codebase must be globally double; **not** wired into the build path.
+* ``promote_real_literals_to_double`` -- ``2.0`` -> ``2.0D0``.  Standalone
+  utility, not wired into the build path.
 
-* ``strip_openmp_directives`` -- drops ``!$OMP`` / ``!$ACC`` / ``!$``
-  sentinel lines and the ICON ``#include "*omp_definitions*.inc"``
-  bring-ins of OpenMP macros.  Runs **unconditionally** in
-  ``preprocess_fortran_source``: without ``-fopenmp`` flang already
-  treats sentinels as comments, so the rewrite is a semantic no-op,
-  but it keeps the merged source free of accelerator noise (and
-  removes the cpp ``#include`` that flang would otherwise refuse
-  because the bridge does not run cpp).
+* ``strip_openmp_directives`` -- drops OpenMP/OpenACC sentinels and the ICON
+  ``omp_definitions.inc`` include.  Unconditional in
+  ``preprocess_fortran_source``: semantic no-op without ``-fopenmp``, but the
+  cpp ``#include`` would otherwise crash flang (bridge doesn't run cpp).
 
-* ``preprocess_fortran`` -- rewrites ``IF (intvar)`` to
-  ``IF (intvar /= 0)`` for INTEGER scalars.  flang-new-21 rejects bare
-  INTEGER as an IF condition (only LOGICAL is legal); legacy ECRAD /
-  CloudSC / ICON code ships this shape.  **Opt-in** per call site
-  (``compile_to_hlfir(..., preprocess=True)``) -- off by default so we
-  don't paper over real issues in clean source.
+* ``preprocess_fortran`` -- ``IF (intvar)`` -> ``IF (intvar /= 0)``.
+  flang-new-21 rejects bare INTEGER as an IF condition; legacy ECRAD /
+  CloudSC / ICON code ships this shape.  Opt-in
+  (``compile_to_hlfir(..., preprocess=True)``).
 
-These are pragmatic SED-style transforms, NOT a Fortran parser; they
-are deliberately narrow (single-identifier IF guards only; powers with
-a primary base only) and brittle by construction.  Comment- and
-string-awareness is shared via ``_scan_line`` so a ``!`` or ``**``
-inside a character literal is never touched.
+SED-style text rewrites, not a Fortran parser -- deliberately narrow
+(single-identifier IF guards; powers with a primary base only) and brittle
+by construction.  Comment/string safety shared via ``_scan_line``.
 """
 
 import re
 from pathlib import Path
 from typing import Iterable, Optional
 
-# A REAL-literal exponent whose value is a whole number (``**2.0``,
-# ``**3.0``, ``**2.0_JPRB``, ``**2.0D0``, ``**2.``).  Only this form is
-# expanded to repeated multiplication: it is the case where each backend
-# is free to pick ``pow(x, 2.0)`` and round differently from gfortran's
-# ``x*x``.  A bare-integer exponent (``x**2``) is deliberately left
-# alone -- flang already lowers it to the integer-power (multiply) path
-# bit-identically to gfortran -- and genuine fractional powers
-# (``**0.5``, ``**0.333``) must stay as ``pow()``.  ``_REAL_EXP``
-# requires a digit before the dot so a bare integer never matches.
+# Whole-number REAL exponent only (``**2.0``, ``**2.0_JPRB``) -- backends are
+# free to round ``pow(x, 2.0)`` differently from gfortran's ``x*x``.
+# Bare-integer ``x**2`` (flang lowers it bit-identically to gfortran already)
+# and fractional powers (``**0.5``) are left alone.  Requires a digit before
+# the dot so a bare integer never matches.
 _REAL_EXP = r"\d+\.\d*(?:[eEdD][+-]?\d+)?(?:_[A-Za-z]\w*|_\d+)?"
 _INT_POW_RE = re.compile(r"\*\*\s*(?:\(\s*(" + _REAL_EXP + r")\s*\)|(" + _REAL_EXP + r")(?![\w.]))")
 
-# An identifier immediately followed by ``(`` -- a function call or an
-# array reference.  A power base containing one must not be duplicated.
+# Identifier + ``(`` -- a call/array ref; a power base containing one must
+# not be duplicated.
 _CALL_IN_BASE = re.compile(r"[A-Za-z_]\w*\s*\(")
 
-# A Fortran REAL literal: needs a fractional point or an exponent (so a
-# bare integer never matches).  ``mantissa`` is groups 1-3, ``kind`` the
-# optional ``_KIND`` / ``_8`` suffix.  Lookbehind/ahead keep us off
+# REAL literal: needs a frac point or exponent so a bare integer never
+# matches; captures are mantissa/exponent/kind.  Lookbehind/ahead keep off
 # identifiers (``R2ES``) and kind selectors.
 _REAL_LIT_RE = re.compile(r"(?<![\w.])"
                           r"(\d+\.\d*|\.\d+|\d+)"  # mantissa
                           r"([eEdD][+-]?\d+)?"  # optional exponent
                           r"(_[A-Za-z]\w*|_\d+)?"  # optional kind suffix
                           r"(?![\w.])")
-# Kind suffixes that are already double precision -- leave those alone.
+# Kind suffixes already double precision -- left alone.
 _DOUBLE_KINDS = {"jprb", "jprd", "dp", "8", "16", "r8", "qp"}
 
 _INTEGER_DECL_RE = re.compile(
@@ -79,15 +61,10 @@ _BARE_IF_RE = re.compile(r"\b(IF\s*\(\s*)([A-Za-z_]\w*)(\s*\))", re.IGNORECASE)
 
 
 def _scan_line(body: str):
-    """Locate the comment start and the character-string spans of one
-    physical Fortran line.  Shared by every text rewrite so a ``!`` or
-    ``**`` inside a character literal is never treated as code.
-
-    :param body: the line without its newline.
-    :returns: ``(comment_index, [(start, end), ...])`` -- ``comment_index``
-        is ``len(body)`` when the line has no comment; the span list
-        covers ``'...'`` / ``"..."`` literals (Fortran ``''`` / ``""``
-        doubling stays inside one span).
+    """Comment start + character-string spans of one line; shared so a ``!``
+    or ``**`` inside a literal is never treated as code.  Returns
+    ``(comment_index, [(start, end), ...])``; doubled quotes (``''``) stay
+    inside one span.
     """
     spans, i, n = [], 0, len(body)
     while i < n:
@@ -111,21 +88,15 @@ def _scan_line(body: str):
 
 
 def _collect_integer_scalar_names(source: str) -> set[str]:
-    """Return the set of INTEGER scalar identifiers declared in
-    ``source``.  Skip array declarations -- those can't be the bare
-    operand of an ``IF`` anyway.  All names are lowercased for
-    case-insensitive matching.
-
-    :param source: full Fortran source text.
-    :returns: lowercased INTEGER scalar names.
+    """INTEGER scalar identifiers declared in ``source``, lowercased.  Array
+    declarations are skipped -- can't be the bare operand of an ``IF``.
     """
     names: set[str] = set()
     for m in _INTEGER_DECL_RE.finditer(source):
         decl = m.group(1).split('!', 1)[0]
         for tok in decl.split(','):
             head = tok.strip().split('=', 1)[0].strip()
-            # Skip array forms ("name(...)") and assumed-shape (":") --
-            # an array can't be the bare argument of IF.
+            # Skip array forms (``name(...)``) -- can't be the bare argument of IF.
             if '(' in head:
                 continue
             name = head.split()[0] if head else ''
@@ -135,16 +106,11 @@ def _collect_integer_scalar_names(source: str) -> set[str]:
 
 
 def _extract_power_base(code: str, star: int):
-    """Find the base (left primary) of a ``**`` operator.
-
-    Scans leftward from the ``**`` over a Fortran *primary*: a
-    parenthesised group, an identifier, an array/function reference
-    (``name(...)``) and ``%`` component chains (``a%b(i)%c``).
-
-    :param code: the comment-stripped source line.
-    :param star: index of the first ``*`` of the ``**`` token.
-    :returns: ``(begin, end)`` slice of the base in ``code``, or
-        ``None`` when no base is found or parens are unbalanced.
+    """Base (left primary) of a ``**`` operator: scans leftward over a
+    parenthesised group, identifier, array/function reference
+    (``name(...)``), or ``%`` component chain (``a%b(i)%c``).  Returns
+    ``(begin, end)`` slice, or ``None`` when no base is found or parens are
+    unbalanced.
     """
     i = star
     while i > 0 and code[i - 1] in " \t":
@@ -179,11 +145,8 @@ def _extract_power_base(code: str, star: int):
 
 
 def _real_exp_int_value(tok: str):
-    """Integer value of a REAL-literal exponent token, or ``None``.
-
-    :param tok: e.g. ``2.0``, ``3.0_JPRB``, ``2.0D0``, ``2.5``.
-    :returns: the int ``n`` when ``tok`` is a whole number >= 1
-        (``2.0`` -> 2), else ``None`` (``2.5`` / ``0.0``).
+    """Integer value of a REAL-literal exponent token (``2.0`` -> 2), or
+    ``None`` when it isn't a whole number >= 1 (``2.5``, ``0.0``).
     """
     mant = re.sub(r"(_[A-Za-z]\w*|_\d+)$", "", tok)
     try:
@@ -195,31 +158,15 @@ def _real_exp_int_value(tok: str):
 
 def rewrite_integer_powers(source: str) -> str:
     """Expand integer-valued REAL-literal powers to repeated multiply:
-    ``base**2.0`` -> ``(base*base)``, ``base**3.0_JPRB`` ->
-    ``(base*base*base)``.
+    ``base**2.0`` -> ``(base*base)``.
 
-    Only one outer pair of parentheses is added -- the minimal change
-    that keeps the diff close to the source.  ``_extract_power_base``
-    always returns a Fortran *primary* (identifier, ``a%b(i)`` chain,
-    array/function reference, or an already-parenthesised group), so
-    each copied factor is safe to juxtapose with ``*`` without its own
-    wrapping.  The single outer pair preserves precedence in every
-    surrounding context (``2.0*x**2.0`` -> ``2.0*(x*x)``, ``a/b**2.0``
-    -> ``a/(b*b)``, ``-x**2.0`` -> ``-(x*x)``, ``(p-q)**3.0`` ->
-    ``((p-q)*(p-q)*(p-q))``).  Only a whole-number REAL exponent is
-    matched: bare-integer ``x**2`` is left for flang's (correct)
-    integer-power lowering, and genuine fractional powers (``**0.5``,
-    ``**0.333``) are never altered.  A base containing a function /
-    array reference (``f(x)``, ``arr(i,j)``, ``a%b(i)%c``) is also
-    left alone -- duplicating it would call twice (impure functions /
-    shared inlined accumulators).  Comments and overlapping (stacked
-    ``a**2.0**2.0``) matches are skipped.
-
-    Idempotent: the output contains no ``**<real>`` left to match, so
-    a second pass returns its input unchanged.
-
-    :param source: full Fortran source text.
-    :returns: source with integer-valued REAL powers expanded.
+    Adds a single outer paren pair -- ``_extract_power_base`` always returns
+    a Fortran primary, so this preserves precedence in any context
+    (``2.0*x**2.0`` -> ``2.0*(x*x)``, ``-x**2.0`` -> ``-(x*x)``).
+    Bare-integer ``x**2`` (flang already lowers it bit-identically to
+    gfortran) and fractional powers (``**0.5``) are never touched, nor is a
+    base containing a function/array ref (duplicating it could call twice).
+    Overlapping (stacked ``a**2.0**2.0``) matches are skipped.  Idempotent.
     """
     out = []
     for line in source.splitlines(keepends=True):
@@ -242,13 +189,9 @@ def rewrite_integer_powers(source: str) -> str:
                 continue  # overlaps a stacked power -- leave both
             base = code[begin:base_end]
             if _CALL_IN_BASE.search(base):
-                # Base contains a function / array reference
-                # (``f(x)``, ``arr(i,j)``, ``a%b(i)%c``).  Duplicating
-                # it would invoke the call twice -- unsafe for impure
-                # functions, and the bridge's call-inlining shares the
-                # callee's accumulator across the copies (observed:
-                # ``custom_sum(d)**2.0`` -> 2500 instead of 625).  Leave
-                # such powers for flang's own lowering.
+                # Base has a call/array ref (``f(x)``) -- duplicating could call
+                # twice; the inliner also shares the callee's accumulator across
+                # copies (observed: ``custom_sum(d)**2.0`` -> 2500 not 625).
                 continue
             repl = "(" + "*".join(base for _ in range(n)) + ")"
             edits.append((begin, m.end(), repl))
@@ -259,11 +202,8 @@ def rewrite_integer_powers(source: str) -> str:
 
 
 def _promote_one(m: re.Match):
-    """Rewrite a single real-literal match to a double-precision form.
-
-    :param m: a ``_REAL_LIT_RE`` match.
-    :returns: the double literal text, or the original match when it is
-        an integer or already double precision.
+    """Rewrite one ``_REAL_LIT_RE`` match to double precision; returns the
+    match unchanged when it's an integer or already double.
     """
     mant, expo, kind = m.group(1), m.group(2) or "", m.group(3) or ""
     if "." not in mant and not expo:
@@ -278,19 +218,10 @@ def _promote_one(m: re.Match):
 
 
 def promote_real_literals_to_double(source: str) -> str:
-    """Rewrite every single-precision / default REAL literal to an
-    explicit double-precision form (``2.0`` -> ``2.0D0``, ``0.85E5`` ->
-    ``0.85D5``, ``1.0_JPRM`` -> ``1.0D0``).
-
-    Literals already double -- a ``D`` exponent or a double kind suffix
-    (``_JPRB``, ``_8``, ...) -- and integer literals are left untouched.
-    Comments and character strings are never modified.
-
-    Idempotent: a promoted literal carries a ``D`` exponent, which the
-    classifier treats as already-double on a second pass.
-
-    :param source: full Fortran source text.
-    :returns: source with single/default REAL literals doubled.
+    """Rewrite single/default REAL literals to double precision (``2.0`` ->
+    ``2.0D0``, ``1.0_JPRM`` -> ``1.0D0``).  Already-double literals (``D``
+    exponent / double kind suffix) and integers are left untouched.
+    Comments and strings are never modified.  Idempotent.
     """
     out = []
     for line in source.splitlines(keepends=True):
@@ -308,39 +239,29 @@ def promote_real_literals_to_double(source: str) -> str:
     return "".join(out)
 
 
-#: Free-form OpenMP / OpenACC / CUDA-Fortran sentinel: ``!$<tag>`` at the
-#: start of a (possibly-indented) line, where ``<tag>`` is ``omp`` /
-#: ``acc`` / ``cuf``.  Matches both the directive opener (``!$OMP DO``)
-#: and a continuation (``!$OMP&``) because both share the prefix.
+#: OpenMP/OpenACC/CUDA-Fortran sentinel (``!$omp``/``!$acc``/``!$cuf``) at
+#: line start; also matches ``!$OMP&`` continuations (same prefix).
 _OMP_SENTINEL_RE = re.compile(r"^\s*!\s*\$\s*(?:omp|acc|cuf)\b", re.IGNORECASE)
 
-#: Fortran-OpenMP conditional-compilation line: ``!$ <stmt>`` -- compiled
-#: only when ``_OPENMP`` is defined.  Without ``-fopenmp`` flang treats
-#: it as a comment, so dropping the line is a semantic no-op.  The
-#: pattern requires a space (or tab) after ``!$`` so a directive (``!$OMP``,
-#: ``!$ACC``) is left for the sentinel rule to handle.
+#: ``!$ <stmt>`` OpenMP-conditional line -- no-op without ``-fopenmp``.
+#: Requires a space after ``!$`` so ``!$OMP``/``!$ACC`` fall through to the
+#: sentinel rule above.
 _OMP_COND_LINE_RE = re.compile(r"^\s*!\s*\$[ \t]+\S")
 
-#: Vendor loop/vectorization directives in a comment: Intel/Cray ``!DIR$ IVDEP``,
-#: ``!DIR$ ATTRIBUTES ...``, etc.  flang-new does not recognise them and warns on
-#: every one (ICON's dycore carries hundreds: ``[-Wignored-directive]`` spam).  We
-#: never honour them, so drop them like the accelerator sentinels above.
+#: Vendor directives (``!DIR$ IVDEP`` etc.) -- flang-new warns on every one
+#: (ICON's dycore: hundreds of ``[-Wignored-directive]``); never honoured, so
+#: dropped like the accelerator sentinels above.
 _VENDOR_DIRECTIVE_RE = re.compile(r"^\s*!\s*DIR\$", re.IGNORECASE)
 
-#: ICON cpp include that pulls in the ``ICON_OMP_*`` / ``ICON_HAMOCC_OMP_*``
-#: macros (``#include "omp_definitions.inc"``, ``"hamocc_omp_definitions.inc"``).
-#: With the bridge not running cpp, the include line itself would crash
-#: flang -- dropping it is the safe choice because every macro it
-#: defines expands to an OpenMP sentinel comment (and those are stripped
-#: above too).
+#: ICON's ``omp_definitions.inc`` / ``hamocc_omp_definitions.inc`` cpp
+#: include -- bridge doesn't run cpp so the raw ``#include`` would crash
+#: flang; safe to drop since its macros only expand to OpenMP sentinels
+#: (stripped above too).
 _OMP_INCLUDE_RE = re.compile(r'^\s*#\s*include\s*[<"][^>"]*omp_definitions[^>"]*\.inc[>"]\s*$', re.IGNORECASE)
 
-#: Macros treated as undefined by ``strip_openmp_directives`` -- ``#ifdef``
-#: blocks gated on these are dropped, ``#ifndef`` blocks pass through.
-#: Limiting elision to this set keeps the pass narrow: unrelated cpp
-#: conditionals (``#ifdef __SWAPDIM``, ``#ifdef _CRAYFTN``) flow through
-#: untouched (and will surface as flang errors if no real cpp runs --
-#: that is the next preprocessing step to address, not this one's job).
+#: Macros ``strip_openmp_directives`` treats as undefined (``#ifdef`` arm
+#: dropped, ``#ifndef`` passes).  Other ``#ifdef`` macros (``__SWAPDIM``,
+#: ``_CRAYFTN``) flow through untouched -- a separate preprocessing step.
 _OMP_ACC_MACROS = frozenset({"_OPENMP", "_OPENACC"})
 
 #: ``#if[n]def MACRO`` and the ``#if [!]defined(MACRO)`` aliases -- the
@@ -354,54 +275,27 @@ _CPP_ENDIF_RE = re.compile(r'^\s*#\s*endif\b', re.IGNORECASE)
 
 
 def strip_openmp_directives(source: str) -> str:
-    """Drop OpenMP / OpenACC / CUDA-Fortran sentinel lines, the ICON
-    ``omp_definitions.inc`` cpp include, and ``#ifdef _OPENMP`` /
-    ``#ifdef _OPENACC`` conditional blocks (taking their ``#else`` body
-    when present).
-
-    The bridge does not run cpp and does not pass ``-fopenmp`` to flang,
-    so accelerator sentinels (``!$OMP``, ``!$ACC``, ``!$CUF``, ``!$ ...``)
-    are already inert comments, while the cpp ``#include`` and
-    ``#ifdef _OPENMP`` lines themselves crash flang outright.  This pass
-    removes all of them so the merged source the bridge writes to disk
-    is free of accelerator noise and free of OpenMP / OpenACC cpp
-    constructs that flang cannot consume.
-
-    Block elision is scoped to ``_OPENMP`` / ``_OPENACC`` (see
-    :data:`_OMP_ACC_MACROS`).  Other ``#ifdef`` macros (``__SWAPDIM``,
-    ``_CRAYFTN``, ...) pass through unchanged -- evaluating those is a
-    separate preprocessing step.  ``#if defined(_OPENMP)`` and
-    ``#if !defined(_OPENMP)`` are recognised as aliases of
-    ``#ifdef`` / ``#ifndef``; any other ``#if`` form passes through.
-
-    Idempotent: a second invocation finds no sentinel / include / OMP
-    conditional lines left to drop and returns the input unchanged.
-
-    :param source: full Fortran source text.
-    :returns: source with OpenMP / OpenACC sentinels, includes, and
-        ``#ifdef _OPENMP`` / ``#ifdef _OPENACC`` blocks removed.
+    """Drop OpenMP/OpenACC/CUDA-Fortran sentinels, the ICON
+    ``omp_definitions.inc`` include, and ``#ifdef _OPENMP``/``#ifdef
+    _OPENACC`` blocks (keeping the ``#else`` arm when present) -- all
+    already inert without ``-fopenmp``, but the raw cpp forms would crash
+    flang outright.  Elision is scoped to ``_OPENMP``/``_OPENACC``; other
+    ``#ifdef`` macros pass through untouched.  ``#if [!]defined(...)`` is
+    recognised as a ``#ifdef``/``#ifndef`` alias.  Idempotent.
     """
     out = []
-    # Stack of (is_omp_acc_block, dropping_now).  A non-OMP/ACC ``#if``
-    # pushes ``(False, False)`` so we keep nesting straight and don't
-    # touch unrelated cpp blocks.
+    # Stack of (is_omp_acc_block, dropping_now) per open cpp conditional --
+    # non-OMP/ACC ``#if`` pushes (False, False) so unrelated blocks pass through.
     stack: list = []
     for line in source.splitlines(keepends=True):
-        # ``stack`` holds one ``(is_omp_acc, dropping)`` per open cpp
-        # conditional.  ``is_omp_acc`` marks blocks gated on a macro in
-        # ``_OMP_ACC_MACROS``; ``dropping`` is whether the *current* arm
-        # is the one to elide.  A non-OMP ``#if`` pushes ``(False, False)``
-        # so its lines and its ``#else`` / ``#elif`` pass through verbatim
-        # -- those branches below intentionally do nothing for a
-        # ``(False, ...)`` top-of-stack (the only ``else`` is "emit the
-        # line").
+        # (False, ...) top-of-stack: the branches below do nothing, so the
+        # line just falls through to the emit at the end.
         m_ifdef = _CPP_IFDEF_RE.match(line)
         m_ifdef_paren = _CPP_IFDEFINED_RE.match(line) if not m_ifdef else None
         if m_ifdef:
             kind, macro = m_ifdef.group(1).lower(), m_ifdef.group(2)
             if macro in _OMP_ACC_MACROS:
-                # _OPENMP/_OPENACC are undefined: ``#ifdef`` arm drops,
-                # ``#ifndef`` arm keeps.
+                # undefined macro: ``#ifdef`` arm drops, ``#ifndef`` arm keeps.
                 stack.append((True, kind == "ifdef"))
                 continue
             stack.append((False, False))
@@ -419,16 +313,13 @@ def strip_openmp_directives(source: str) -> str:
                 continue
         elif _CPP_ELIF_RE.match(line):
             if stack and stack[-1][0]:
-                # KNOWN LIMITATION: in ``#ifdef _OPENMP / #elif FOO``, the
-                # ``#elif FOO`` arm is dropped too -- the macro is treated
-                # purely as undefined, so a sibling arm gated on an
-                # unrelated ``FOO`` is discarded.  Acceptable because
-                # OMP/ACC blocks rarely carry a meaningful ``#elif``.
+                # KNOWN LIMITATION: ``#elif FOO`` after ``#ifdef _OPENMP`` is
+                # dropped too (macro treated as purely undefined); rare in
+                # practice since OMP/ACC blocks seldom carry a meaningful ``#elif``.
                 stack[-1] = (True, True)
                 continue
         elif _CPP_ENDIF_RE.match(line):
-            # Pop on close.  An unbalanced ``#endif`` (empty stack -- e.g.
-            # its ``#if`` predates ``source``) is tolerated as a no-op.
+            # Unbalanced ``#endif`` (its ``#if`` predates ``source``) tolerated as a no-op.
             if stack and stack[-1][0]:
                 stack.pop()
                 continue
@@ -448,14 +339,11 @@ def strip_openmp_directives(source: str) -> str:
     return "".join(out)
 
 
-# Default precision-kind aliases.  Each maps an unresolved kind symbol
-# (one not locally bound to a literal integer) to the IEEE byte width
-# the bridge should substitute.  Covers the four conventions seen in
-# climate / NWP code: ``wp`` (working precision, ECMWF / ICON / CLOUDSC),
-# ``sp``/``dp`` (single / double, generic), ``qp`` (quad), ``rp`` (real
-# precision, less common).  ``kind_map=`` to ``normalize_kind_parameters``
-# both extends and overrides this table; pass ``None`` for an alias to
-# leave it untouched.
+# Default precision-kind aliases -- unresolved kind symbol -> IEEE byte
+# width.  ``wp``/``rp``/``sp``/``dp``/``qp`` cover conventions seen in
+# climate/NWP code (ECMWF/ICON/CLOUDSC).  ``kind_map=`` to
+# ``normalize_kind_parameters`` extends/overrides this table; ``None`` for
+# an alias leaves it untouched.
 _DEFAULT_KIND_ALIASES = {
     "wp": 8,
     "rp": 8,
@@ -464,42 +352,31 @@ _DEFAULT_KIND_ALIASES = {
     "qp": 16,
 }
 
-# ``KIND = sym`` -- with arbitrary spacing.  Group 1 is the
-# ``KIND<sp>=<sp>`` prefix (preserved verbatim), group 2 the symbol.
+# ``KIND = sym`` -- group 1 = prefix (kept verbatim), group 2 = symbol.
 _KIND_EQ_RE = re.compile(r"\b(KIND\s*=\s*)([A-Za-z_]\w*)\b", re.IGNORECASE)
 
-# ``REAL(sym)`` / ``INTEGER(sym)`` / ``COMPLEX(sym)`` / ``LOGICAL(sym)``
-# -- the sole-argument numeric-type-spec form.  Group 1 = type keyword,
-# group 2 = ``(<sp>``, group 3 = symbol, group 4 = ``<sp>)``.
+# ``REAL(sym)``/``INTEGER(sym)``/``COMPLEX(sym)``/``LOGICAL(sym)`` sole-arg
+# type-spec form.  Groups: 1=keyword, 2=``(``, 3=symbol, 4=``)``.
 _TYPE_PAREN_RE = re.compile(
     r"\b(REAL|INTEGER|COMPLEX|LOGICAL)(\s*\(\s*)([A-Za-z_]\w*)(\s*\))",
     re.IGNORECASE,
 )
 
-# Literal-kind suffix: ``1.0_wp``, ``1.0E0_wp``, ``1_wp``.  Group 1 is
-# the numeric portion, group 2 the kind symbol.  A leading word
-# boundary keeps the match off the middle of identifiers.
+# Literal-kind suffix (``1.0_wp``): group 1 = numeric, group 2 = kind symbol.
+# Leading word boundary keeps the match off the middle of identifiers.
 _LITERAL_KIND_RE = re.compile(r"\b(\d+(?:\.\d*)?(?:[eEdD][+-]?\d+)?)_([A-Za-z_]\w*)\b")
 
-# ``INTEGER, PARAMETER ... :: sym = <int_literal>`` -- the locally-bound
-# form the bridge can already evaluate.  Aliases caught here are dropped
-# from the substitution set (the local binding wins).  Any non-integer
-# RHS (``SELECTED_REAL_KIND(...)``, ``KIND(0.0D0)``) doesn't match and
-# falls through to the rewrite, which is exactly the target case.
+# ``INTEGER, PARAMETER :: sym = <int>`` locally-bound form -- caught aliases
+# are dropped from substitution (local binding wins).  Non-integer RHS
+# (``SELECTED_REAL_KIND(...)``) doesn't match, so it falls through to the
+# rewrite -- the intended case.
 _PARAM_BIND_RE = re.compile(r"\bINTEGER\b[^:\n]*::\s*([A-Za-z_]\w*)\s*=\s*(\d+)\b", re.IGNORECASE)
 
 
 def _local_kind_bindings(source: str) -> dict:
-    """Collect locally-defined ``INTEGER, PARAMETER :: sym = <int>``
-    bindings.
-
-    Only the literal-integer form is captured -- those are the bindings
-    flang already lowers without help.  Any other RHS (intrinsics,
-    arithmetic) is opaque to this scan and falls through to the
-    alias-substitution path.
-
-    :param source: full Fortran source text.
-    :returns: ``{lowercase-symbol: literal int}``.
+    """Locally-defined ``INTEGER, PARAMETER :: sym = <int>`` bindings, as
+    ``{lowercase-symbol: int}``.  Only literal-integer RHS is captured;
+    other forms (intrinsics) fall through to the alias-substitution path.
     """
     out: dict = {}
     for raw in source.splitlines():
@@ -510,54 +387,19 @@ def _local_kind_bindings(source: str) -> dict:
 
 
 def normalize_kind_parameters(source: str, *, kind_map: dict = None, passthrough: bool = False) -> str:
-    """Substitute symbolic precision kind aliases with literal kind ints.
+    """Substitute symbolic precision kind aliases (``wp``, ``JPRB``, ...) with
+    literal kind ints (default fp64 ``8``) at every use site
+    (``REAL(KIND=wp)``, ``1.0_wp``).
 
-    Climate / NWP Fortran tends to thread one symbolic kind alias
-    (``wp`` in CLOUDSC / ICON, ``JPRB`` via ECMWF's ``PARKIND1``,
-    ``REAL_KIND`` in legacy ECRAD) through every type spec
-    (``REAL(KIND=wp)``, ``REAL(wp)``) and every numeric literal
-    (``1.0_wp``).  The kind alias is itself defined in a tiny
-    constants module via ``SELECTED_REAL_KIND`` / ``KIND(0.0D0)`` and
-    pulled in via ``USE``.  flang resolves these aliases at parse time
-    *only if* the defining module is in the translation unit -- when
-    the bridge runs against a single-file slice (a probe, a kernel
-    extracted for a microbenchmark) the constants module is absent and
-    flang errors out.
+    flang only resolves a kind alias when its defining constants module is in
+    the TU; a single-file slice (probe / extracted kernel) lacks it and flang
+    errors out.  Locally-bound ``INTEGER, PARAMETER`` aliases are skipped
+    (flang already handles those).  Idempotent and no-op-safe -- safe to
+    leave default-on even when an upstream pipeline resolves kinds itself.
 
-    This rewrite makes single-file slices self-contained: every
-    unresolved kind alias is replaced by the literal IEEE byte width
-    (default fp64 ``8``) at every use site.  Locally-bound integer
-    parameter aliases (``INTEGER, PARAMETER :: wp = 8``) are skipped --
-    flang already handles those.
-
-    Integrating into an existing build pipeline that already supplies
-    the constants module (and so resolves ``wp`` itself):
-
-    1. ``normalize_kind_parameters`` is **idempotent and no-op-safe**.
-       A second pass over already-substituted source finds no
-       symbolic aliases left and returns the input unchanged; running
-       it on source where ``wp`` is locally bound to an integer
-       literal also returns the input unchanged.  It is therefore
-       safe to leave default-on in the bridge even when the upstream
-       pipeline resolves kinds.
-    2. To bind a single alias to a non-default precision (e.g. an
-       fp32 build that defines ``wp = 4``), pass
-       ``kind_map={"wp": 4}``.
-    3. To leave one specific alias alone (the upstream pipeline
-       resolves it correctly and the default would be wrong), pass
-       ``kind_map={"wp": None}``.
-    4. To disable the rewrite entirely (upstream guarantees every
-       kind is already a literal), pass ``passthrough=True``.
-
-    The pass is comment- and string-aware via ``_scan_line``: a kind
-    alias that appears inside a character literal or a ``!`` comment
-    is never touched.
-
-    :param source: Fortran source text.
-    :param kind_map: optional override / extension of
-        ``_DEFAULT_KIND_ALIASES``; per-alias ``None`` disables it.
-    :param passthrough: ``True`` returns ``source`` unchanged.
-    :returns: source with kind aliases replaced by literal integers.
+    ``kind_map`` overrides/extends the default alias table (per-alias
+    ``None`` leaves it untouched); ``passthrough=True`` disables the rewrite
+    entirely.
     """
     if passthrough:
         return source
@@ -618,14 +460,8 @@ def normalize_kind_parameters(source: str, *, kind_map: dict = None, passthrough
 
 
 def preprocess_fortran(source: str) -> str:
-    """Rewrite ``IF (intvar)`` to ``IF (intvar /= 0)`` for any INTEGER
-    scalar declared in ``source``.
-
-    Idempotent: a second invocation finds no bare-identifier IF guards
-    left to rewrite and returns the input unchanged.
-
-    :param source: full Fortran source text.
-    :returns: source with bare-INTEGER IF guards made LOGICAL.
+    """Rewrite ``IF (intvar)`` to ``IF (intvar /= 0)`` for any INTEGER scalar
+    declared in ``source``.  Idempotent.
     """
     int_names = _collect_integer_scalar_names(source)
     if not int_names:
@@ -640,8 +476,8 @@ def preprocess_fortran(source: str) -> str:
     return _BARE_IF_RE.sub(_rewrite, source)
 
 
-# Intrinsic / compiler-provided modules: never resolved or merged --
-# flang supplies them itself, so a ``USE`` of one is left untouched.
+# Intrinsic/compiler-provided modules -- flang supplies them, so a ``USE``
+# of one is left untouched.
 _INTRINSIC_MODULES = frozenset({
     "iso_c_binding",
     "iso_fortran_env",
@@ -655,24 +491,18 @@ _INTRINSIC_MODULES = frozenset({
     "mpi_f08",
 })
 
-# ``use [, intrinsic] [::] <name>`` -- captured from the code part of a
-# line only (``_scan_line`` strips comments / character literals first).
+# ``use [, intrinsic] [::] <name>`` -- code part only (comments/strings
+# stripped by ``_scan_line``).
 _USE_RE = re.compile(r"^\s*use\b\s*(?:,\s*intrinsic\s*)?(?:::)?\s*([A-Za-z]\w*)", re.IGNORECASE)
-# ``module <name>`` opening a module definition -- excludes
-# ``module procedure`` / ``module subroutine`` / ``module function``
-# and the ``submodule (...)`` form.
+# ``module <name>`` opener -- excludes ``module procedure``/``subroutine``/
+# ``function`` and ``submodule (...)``.
 _MODULE_OPEN_RE = re.compile(r"^\s*module\s+(?!procedure\b|subroutine\b|function\b)([A-Za-z]\w*)\s*$", re.IGNORECASE)
 _MODULE_END_RE = re.compile(r"^\s*end\s*module\b", re.IGNORECASE)
 
 
 def _code_of(line: str) -> str:
-    """Return the code portion of one physical line with character
-    literals blanked, so keyword scans never trip on a ``!`` / module
-    name inside a string or comment.
-
-    :param line: one physical Fortran line (no newline).
-    :returns: the pre-comment text with ``'...'`` / ``"..."`` spans
-        replaced by spaces.
+    """Code portion of one line with character literals blanked (spaces), so
+    keyword scans never trip on a ``!``/module name inside a string.
     """
     cut, strings = _scan_line(line)
     code = list(line[:cut])
@@ -682,15 +512,11 @@ def _code_of(line: str) -> str:
     return "".join(code)
 
 
-#: A non-Fortran-statement line that should be carried with the next
-#: ``MODULE`` opener -- a cpp directive (``#include`` /
-#: ``#define`` / ``#ifdef`` / ...), a Fortran ``!`` comment, or a
-#: blank line.  Used by :func:`_module_blocks` so that leading cpp
-#: includes (ICON: ``#include "icon_definitions.inc"`` above the
-#: ``MODULE mo_sync`` opener) survive module extraction; without
-#: that, the macros those headers define (``start_sync_timer``,
-#: ``HANDLE_MPI_ERROR``, ...) stay unexpanded in the merged source
-#: and flang errors on the bare macro invocations.
+#: Non-Fortran preamble line carried with the next ``MODULE`` opener (cpp
+#: directive / ``!`` comment / blank) -- e.g. ICON's ``#include
+#: "icon_definitions.inc"`` must survive extraction or its macros
+#: (``start_sync_timer``, ...) stay unexpanded and flang errors on the bare
+#: invocation.  Used by :func:`_module_blocks`.
 _PREAMBLE_LINE_RE = re.compile(r"^\s*(?:#|!|$)")
 
 #: cpp conditional directives, classified for balancing an extracted block.
@@ -700,16 +526,12 @@ _CPP_MID_RE = re.compile(r"^\s*#\s*(?:else|elif)\b", re.IGNORECASE)
 
 
 def _balance_cpp(block: str) -> str:
-    """Drop cpp conditional directives left unbalanced by module-block
-    extraction.  A whole-module ``#ifdef GUARD ... MODULE ... END MODULE ...
-    #endif`` wrapper splits across the block boundary -- the opener lands in one
-    block's preamble and the ``#endif`` in the next block's -- leaving each
-    block with an orphan ``#if`` or ``#endif`` that breaks cpp once the blocks
-    are concatenated into one TU.  Remove the unmatched directives (and orphan
-    ``#else`` / ``#elif``), keeping their guarded content: every module pulled
-    into a merged USE-closure was already selected by the real build, so it is
-    wanted unconditionally.  Conditionals fully contained in the block (a normal
-    in-body ``#if/#else/#endif``) stay balanced and untouched."""
+    """Drop cpp conditionals left unbalanced by module-block extraction -- a
+    whole-module ``#ifdef...#endif`` wrapper splits across the block
+    boundary, orphaning one side.  Unmatched directives are removed but their
+    guarded content is kept unconditionally (the module was already
+    build-selected).  Conditionals fully contained in a block stay untouched.
+    """
     lines = block.splitlines(keepends=True)
     open_idx: list = []
     drop: set = set()
@@ -731,22 +553,14 @@ def _balance_cpp(block: str) -> str:
 
 
 def _module_blocks(text: str):
-    """Yield ``(name_lower, block_text)`` for every top-level ``module``
-    definition in ``text`` (modules do not nest; ``submodule`` and
-    ``module procedure`` are not matched).
+    """Yield ``(name_lower, block_text)`` per top-level ``module`` in
+    ``text`` (``submodule``/``module procedure`` excluded; modules don't
+    nest).
 
-    The yielded block also captures any contiguous cpp / comment /
-    blank lines immediately preceding the ``MODULE`` opener, so a
-    top-of-file ``#include "<defs>.inc"`` (and the macro definitions
-    behind it) is preserved when the bridge inlines the module into a
-    merged translation unit.  The capture walks back only over the
-    preamble shape (lines matching :data:`_PREAMBLE_LINE_RE`); it
-    stops at the previous module's ``END MODULE`` or any real
-    Fortran statement, so it never bleeds an earlier module's body
-    into the next one.
-
-    :param text: Fortran source.
-    :returns: generator of ``(lowercase module name, verbatim block)``.
+    Each block also captures its contiguous preamble (cpp/comment/blank
+    lines, see :data:`_PREAMBLE_LINE_RE`) so a leading ``#include`` survives
+    extraction; the walk-back stops at the prior module's ``END MODULE`` or
+    any real statement, so bodies never bleed together.
     """
     lines = text.splitlines(keepends=True)
     n = len(lines)
@@ -758,8 +572,7 @@ def _module_blocks(text: str):
             i += 1
             continue
         name = m.group(1).lower()
-        # Walk back over the contiguous preamble (cpp / comment / blank
-        # lines) so a leading ``#include`` is carried with the module.
+        # Walk back over the contiguous preamble so a leading ``#include`` is carried.
         start = i
         while start > last_end and _PREAMBLE_LINE_RE.match(lines[start - 1]):
             start -= 1
@@ -767,9 +580,7 @@ def _module_blocks(text: str):
         while i < n and not _MODULE_END_RE.match(_code_of(lines[i].rstrip("\r\n"))):
             i += 1
         end = min(i, n - 1)
-        # Balance cpp conditionals: a whole-module ``#ifdef..#endif`` wrapper
-        # splits across the block boundary (opener in this block's preamble,
-        # ``#endif`` swept into the next block's), so drop the orphan side.
+        # Balance cpp conditionals split across the block boundary (see _balance_cpp).
         yield name, _balance_cpp("".join(lines[start:end + 1]))
         last_end = end + 1
         i = end + 1
@@ -778,9 +589,6 @@ def _module_blocks(text: str):
 def _used_modules(text: str) -> list:
     """Ordered, de-duplicated lowercase names of modules ``USE``-d in
     ``text`` (intrinsic modules excluded).
-
-    :param text: Fortran source.
-    :returns: list of module names in first-appearance order.
     """
     seen, out = set(), []
     for raw in text.splitlines():
@@ -795,9 +603,8 @@ def _used_modules(text: str) -> list:
     return out
 
 
-#: A ``SUBROUTINE`` / ``FUNCTION`` opener (any leading prefix keywords +
-#: typed-function forms), capturing the procedure name.  Shared by the
-#: procedure indexer and the external-procedure body stubber.
+#: ``SUBROUTINE``/``FUNCTION`` opener (prefix keywords + typed-function
+#: forms), capturing the name.  Shared by the procedure indexer and the body stubber.
 _PROC_OPEN_RE = re.compile(
     r"^\s*(?:RECURSIVE\s+|PURE\s+|ELEMENTAL\s+|IMPURE\s+)*"
     r"(?:SUBROUTINE|FUNCTION|REAL\s*FUNCTION|"
@@ -814,20 +621,17 @@ _PROC_END_RE = re.compile(r"^\s*END\s*(?:SUBROUTINE|FUNCTION)\b", re.IGNORECASE)
 #: A ``CONTAINS`` line opening a scope's internal-subprogram part.
 _CONTAINS_RE = re.compile(r"^\s*CONTAINS\b", re.IGNORECASE)
 
-#: An ``INTERFACE`` block opener (named / operator / ``ABSTRACT`` forms).  Its
-#: nested ``SUBROUTINE`` / ``FUNCTION`` declarations are specification part, not
-#: the enclosing procedure's executable body -- the stubber consumes the whole
-#: ``INTERFACE`` ... ``END INTERFACE`` block as a unit so those nested openers
-#: are not mistaken for the start of the body (the ICON ``bind(c)`` halo
-#: wrappers that forward to a C++ impl carry exactly this shape).
+#: ``INTERFACE`` block opener (named/operator/``ABSTRACT``).  Its nested
+#: ``SUBROUTINE``/``FUNCTION`` decls are spec, not body -- the stubber
+#: consumes the whole block as a unit so they aren't mistaken for body start
+#: (ICON's ``bind(c)`` halo wrappers carry this shape).
 _INTERFACE_OPEN_RE = re.compile(r"^\s*(?:ABSTRACT\s+)?INTERFACE\b", re.IGNORECASE)
 _INTERFACE_END_RE = re.compile(r"^\s*END\s*INTERFACE\b", re.IGNORECASE)
 
-#: A specification-part statement (declarations / attributes / interfaces) --
-#: everything legal *before* the first executable statement of a procedure.
-#: The external-body stubber keeps these (so the empty stub still declares its
-#: dummy arguments) and drops everything after the first non-matching line.  A
-#: leading ``&`` keeps continuation lines of a multi-line declaration / opener.
+#: Specification-part statement (decl/attribute/interface) -- legal before a
+#: procedure's first executable statement.  The stubber keeps these (dummy
+#: args stay declared) and drops everything after the first non-matching
+#: line.  Leading ``&`` keeps continuation lines.
 _SPEC_LINE_RE = re.compile(
     r"^\s*(?:&|USE\b|IMPLICIT\b|INTEGER\b|REAL\b|DOUBLE\s+PRECISION\b|COMPLEX\b|LOGICAL\b|"
     r"CHARACTER\b|TYPE\b|CLASS\b|PROCEDURE\b|INTERFACE\b|END\s+INTERFACE\b|END\s+TYPE\b|"
@@ -840,22 +644,18 @@ _SPEC_LINE_RE = re.compile(
 
 
 def _stub_procedure_bodies(text: str, names) -> str:
-    """Empty the executable body of every procedure whose name matches
-    ``names`` -- exactly, or as the generic an ICON interface dispatches over
-    (``sync_patch_array`` -> ``sync_patch_array_3d_dp``) -- keeping its opener,
-    specification part, and matching ``END``.
+    """Empty the executable body of every procedure matching ``names`` --
+    exactly, or as the generic an ICON interface dispatches over
+    (``sync_patch_array`` -> ``sync_patch_array_3d_dp``) -- keeping its
+    opener, spec part, and matching ``END``.
 
-    The regex-merge analogue of the fparser inliner's ``make_noop``
-    (:func:`dace_fortran.fparser_inliner._keep_external_noop_specs`): a kept-
-    external procedure stays *declared* (its dummy arguments are still typed,
-    so the in-TU call site is legal Fortran), but its internals -- halo
-    exchange, MPI, I/O -- never enter the translation unit.  The bridge then
-    lowers the call through its external registry.  A stubbed procedure's whole
-    body is dropped -- including any internal ``CONTAINS`` subprograms (the
-    nesting-aware ``END`` scan keeps only the procedure's own closing ``END``);
-    external halo/sync procedures are leaves, so this rarely matters.  Matching
-    is case-insensitive and nothing ICON-specific is hardcoded -- the names
-    come from the caller's policy."""
+    Regex-merge analogue of the fparser inliner's ``make_noop``
+    (:func:`dace_fortran.fparser_inliner._keep_external_noop_specs`): dummy
+    args stay declared (in-TU call site stays legal) but internals
+    (halo/MPI/I/O) never enter the TU.  Nesting-aware ``END`` scan handles
+    internal ``CONTAINS`` subprograms.  Case-insensitive; names come from the
+    caller's policy.
+    """
     targets = {n.lower() for n in names}
     if not targets:
         return text
@@ -874,17 +674,15 @@ def _stub_procedure_bodies(text: str, names) -> str:
             out.append(lines[i])
             i += 1
             continue
-        # Keep the opener, then the contiguous specification part (so the dummy
-        # arguments stay declared); stop at the first executable statement, a
-        # nested subprogram, ``CONTAINS``, or the matching ``END``.
+        # Keep the opener + contiguous spec part (dummy args stay declared);
+        # stop at the first executable stmt, nested subprogram, CONTAINS, or matching END.
         out.append(lines[i])
         i += 1
         while i < n:
             c = _code_of(lines[i].rstrip("\r\n"))
             if _INTERFACE_OPEN_RE.match(c):
-                # Keep the whole INTERFACE block verbatim (nesting-aware): its
-                # nested procedure declarations are spec, not the body, so the
-                # ``_PROC_OPEN_RE`` lines inside must NOT end spec collection.
+                # Keep the INTERFACE block verbatim (nesting-aware) -- its nested
+                # proc decls are spec, not body, so they must not end spec collection.
                 depth_if = 0
                 while i < n:
                     ci = _code_of(lines[i].rstrip("\r\n"))
@@ -903,9 +701,8 @@ def _stub_procedure_bodies(text: str, names) -> str:
                 break  # first executable statement -- body ends here
             out.append(lines[i])
             i += 1
-        # Drop everything up to (and keep) the matching ``END`` of this
-        # procedure, tracking nesting so an internal subprogram's own ``END``
-        # is not mistaken for it.
+        # Drop up to (and keep) the matching END, tracking nesting so an
+        # internal subprogram's own END isn't mistaken for it.
         depth = 1
         while i < n:
             c = _code_of(lines[i].rstrip("\r\n"))
@@ -922,36 +719,18 @@ def _stub_procedure_bodies(text: str, names) -> str:
 
 
 def merge_used_modules(source: str, *, search_dirs=(), external_functions=(), do_not_emit=()) -> str:
-    """Inline every ``USE``-d module's real source into ``source``,
-    producing one self-contained translation unit.
+    """Inline every ``USE``-d module's real source into ``source`` -- one
+    self-contained TU, fparser-free (transitive ``USE``-graph resolve +
+    dependency-ordered splice, de-duplicated).
 
-    A minimal, fparser-free port of the f2dace single-TU concept: scan
-    ``search_dirs`` for module definitions, resolve the ``USE`` graph
-    transitively from ``source``, and prepend each needed module's
-    verbatim block in dependency order (deps first), de-duplicated.
+    Pass-through when nothing external is resolvable (self-contained input);
+    idempotent -- re-running adds nothing.
 
-    Pass-through (returns ``source`` unchanged) when nothing external is
-    resolvable -- a self-contained single-file input, every ``USE``
-    being intrinsic or defined in ``source`` itself.  This makes the
-    pass safe to run by default: only genuine multi-file projects are
-    transformed.  Idempotent: re-running finds the modules already
-    inlined and adds nothing.
-
-    ``external_functions`` / ``do_not_emit`` are the external-function policy
-    (see :mod:`dace_fortran.external_functions`): names of procedures that must
-    NOT be inlined.  When their defining module is spliced in, their bodies are
-    stubbed to empty (:func:`_stub_procedure_bodies`) so the halo-exchange /
-    MPI / I/O internals never enter the TU -- the regex-merge parallel of the
-    fparser inliner's ``make_noop``.  The bridge lowers the surviving call
-    through its external registry.
-
-    :param source: the entry Fortran source text.
-    :param search_dirs: directories scanned (recursively, ``*.f90`` /
-        ``*.F90`` / ``*.incf``) for module definitions.
-    :param external_functions: :class:`ExternalFunction` specs (don't-inline +
-        the bridge EMITs an external call); only their ``name`` is read here.
-    :param do_not_emit: plain names (don't-inline + the bridge DROPs the call).
-    :returns: a single-TU source, or ``source`` unchanged.
+    ``external_functions``/``do_not_emit`` names are never inlined: their
+    bodies are stubbed empty (:func:`_stub_procedure_bodies`, the regex
+    analogue of the fparser inliner's ``make_noop``) so halo/MPI/I/O
+    internals never enter the TU.  ``external_functions`` gets an EMITted
+    external call, ``do_not_emit`` gets the call DROPped.
     """
     from pathlib import Path
 
@@ -975,12 +754,9 @@ def merge_used_modules(source: str, *, search_dirs=(), external_functions=(), do
                 if nm not in in_source:
                     index.setdefault(nm, blk)
 
-    # Post-order DFS toposort (deps emitted before their dependents):
-    # each name is pushed once unexpanded, then re-pushed ``expanded``
-    # so it is appended to ``order`` only after its deps were visited
-    # (the classic gray/black marking).  A ``USE`` cycle drops its
-    # back-edge silently -- the already-``placed`` node is skipped --
-    # which is fine for well-formed Fortran (acyclic module graph).
+    # Post-order DFS toposort (deps before dependents): each name is pushed
+    # unexpanded, then re-pushed ``expanded`` so it's appended only after its
+    # deps are visited.  A ``USE`` cycle's back-edge is silently dropped.
     order: list = []
     placed = set(in_source)
     stack = [(nm, False) for nm in reversed(_used_modules(source))]
@@ -999,10 +775,8 @@ def merge_used_modules(source: str, *, search_dirs=(), external_functions=(), do
 
     if not order:
         return _stub_procedure_bodies(source, dont_inline) if dont_inline else source
-    # Ensure a newline between every block so a module whose final
-    # ``END MODULE`` line lacks a trailing ``\n`` (a common shape for
-    # human-edited files) does not glue into the next block's
-    # ``MODULE <next>`` opener.
+    # Guard against a module's final line lacking ``\n`` (common in
+    # hand-edited files) gluing into the next block's ``MODULE`` opener.
     parts = []
     for blk in order:
         parts.append(blk)
@@ -1014,20 +788,15 @@ def merge_used_modules(source: str, *, search_dirs=(), external_functions=(), do
     return _stub_procedure_bodies(merged, dont_inline) if dont_inline else merged
 
 
-# ``EXTERNAL`` declaration: ``EXTERNAL`` keyword followed by zero or
-# more attribute commas, optional ``::``, then a comma-separated name
-# list.  Anchored at the leading-whitespace start of a line so it
-# never matches mid-statement.  Captures: group(1) = the name list as
-# a raw string (commas + names + optional whitespace).
+# ``EXTERNAL`` declaration, anchored at line start so it never matches
+# mid-statement.  Group ``names`` = the comma-separated name list (raw).
 _EXTERNAL_DECL_RE = re.compile(
     r"^(?P<indent>\s*)EXTERNAL\s*(?:::\s*)?(?P<names>[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*$",
     re.IGNORECASE,
 )
 
-# A ``SUBROUTINE`` / ``FUNCTION`` opener at the start of a scope.  The
-# pass inserts the synthesised ``USE`` lines right after this opener
-# (and after any ``USE`` lines already present, so the insertion
-# stacks with the existing imports rather than displacing them).
+# ``SUBROUTINE``/``FUNCTION`` scope opener -- synthesised ``USE`` lines are
+# inserted right after it, stacking with any imports already present.
 _SCOPE_OPEN_RE = re.compile(
     r"^\s*(?:RECURSIVE\s+|PURE\s+|ELEMENTAL\s+|IMPURE\s+)*"
     r"(?:SUBROUTINE|FUNCTION|REAL\s*FUNCTION|"
@@ -1040,19 +809,10 @@ _SCOPE_OPEN_RE = re.compile(
 
 
 def _index_procedures_in_modules(search_dirs) -> dict:
-    """Scan ``search_dirs`` recursively for ``.f90`` / ``.F90`` /
-    ``.incf`` files; index every ``SUBROUTINE`` / ``FUNCTION`` declared
-    inside a ``MODULE`` block by lowercase procedure name.
-
-    Sibling of :func:`merge_used_modules`'s module-block scan: walks
-    the same files but indexes the procedures within each module
-    instead of inlining the module bodies.  Used by
-    :func:`replace_external_with_modules` to resolve every ``EXTERNAL
-    <name>`` declaration to its defining module.
-
-    :param search_dirs: iterable of directories (each scanned
-        recursively) and / or individual file paths.
-    :returns: dict ``{procedure_name_lower: module_name_lower}``.
+    """Index every ``SUBROUTINE``/``FUNCTION`` declared inside a ``MODULE``
+    block across ``search_dirs``, as ``{procedure_name_lower:
+    module_name_lower}``.  Sibling of :func:`merge_used_modules`'s scan;
+    feeds :func:`replace_external_with_modules`.
     """
     from pathlib import Path
     index: dict = {}
@@ -1076,12 +836,10 @@ def _index_procedures_in_modules(search_dirs) -> dict:
     return index
 
 
-# A type declaration that names ONE function result without any
-# variable-defining attributes (no ``INTENT``, no ``::`` followed by
-# more than the function name, no array spec).  Used to detect the
-# ``REAL(8) :: dscale`` companion that often sits next to ``EXTERNAL
-# :: dscale``; once ``dscale`` is imported via ``USE``, this line
-# becomes a "use-associated, cannot be re-declared" error in flang.
+# Type decl naming one function result with no variable-defining attributes --
+# detects the ``REAL(8) :: dscale`` companion of ``EXTERNAL :: dscale``, which
+# becomes a "use-associated, cannot be re-declared" flang error once
+# ``dscale`` is imported via ``USE``.
 _FUNC_RESULT_TYPE_DECL_RE = re.compile(
     r"^\s*(?P<type>(?:REAL|INTEGER|LOGICAL|COMPLEX|DOUBLE\s+PRECISION)"
     r"(?:\s*\(\s*[^)]*\s*\))?)\s*"
@@ -1092,11 +850,9 @@ _FUNC_RESULT_TYPE_DECL_RE = re.compile(
 
 
 def _scope_already_uses(scope_lines, mod_name: str) -> bool:
-    """``True`` when one of ``scope_lines`` is ``USE <mod_name>`` (any
-    casing, with or without ``ONLY``).  Used to suppress duplicate
-    imports: if the kernel already imports the module under a plain
-    ``USE``, the synthesised ``USE module, ONLY: name`` would be
-    redundant (and some compilers warn on it)."""
+    """``True`` when ``scope_lines`` already has a ``USE <mod_name>`` (any
+    casing) -- avoids a redundant synthesised ``USE ..., ONLY:`` import.
+    """
     target = mod_name.lower()
     for raw in scope_lines:
         m = _USE_RE.match(_code_of(raw))
@@ -1106,61 +862,20 @@ def _scope_already_uses(scope_lines, mod_name: str) -> bool:
 
 
 def replace_external_with_modules(source: str, *, search_dirs=()) -> str:
-    """Replace ``EXTERNAL <name1>, <name2>`` declarations with the
-    equivalent ``USE <module>, ONLY: <name1>, <name2>`` imports
-    whenever the referenced procedures are defined in modules visible
-    via ``search_dirs``.
+    """Replace ``EXTERNAL <name>, ...`` declarations with the equivalent
+    ``USE <module>, ONLY: <name>, ...`` when the procedure is defined in a
+    module visible via ``search_dirs``.
 
-    Background:
-        Legacy Fortran code -- and machine-translated code like
-        QE's ``f2dace-qe-source`` pruned single-TU sources --
-        often declares one procedure ``EXTERNAL`` and another via
-        ``USE``, even when both procedures live in the same
-        module that's reachable from the build's source tree.
-        ``EXTERNAL`` carries only the linker-symbol promise;
-        flang then routes the call through its implicit-interface
-        path, which the bridge can't lower as faithfully as a
-        proper module import (type / shape promises lost,
-        polymorphism inferred per call site, etc.).  Converting
-        every resolvable ``EXTERNAL`` to a ``USE`` restores the
-        explicit interface and unblocks downstream lowering.
+    ``EXTERNAL`` only promises a linker symbol; flang then routes the call
+    through its implicit-interface path, which the bridge lowers less
+    faithfully than an explicit module import (type/shape info lost).
+    Resolution is per-scope, grouped by defining module, and inserted right
+    after the scope opener (collapsed with any ``USE`` already present).
 
-    Algorithm:
-        1. Index every procedure declared inside any ``MODULE``
-           block in ``search_dirs`` (recursive).
-        2. Find each ``EXTERNAL`` line in ``source``; resolve each
-           name through the index to a defining module.
-        3. Within the enclosing scope (the ``SUBROUTINE`` /
-           ``FUNCTION`` containing the ``EXTERNAL`` line, or the
-           top-level module-procedure scope), group resolved
-           names by their defining module and synthesise one
-           ``USE <mod>, ONLY: <names...>`` line per module.
-        4. Insert the synthesised ``USE`` lines right after the
-           scope opener (collapsing with any existing ``USE``
-           imports of the same module so the resulting source
-           has no duplicate imports).
-        5. Delete every ``EXTERNAL`` declaration whose names
-           were fully resolved.  An ``EXTERNAL`` line carrying
-           any unresolved name is left in place verbatim (with
-           the resolved names also left in the declaration) --
-           the pass is conservative: an unresolved ``EXTERNAL``
-           means the build is missing a source file the user
-           knows about.
-
-    Pass-through:
-        Returns ``source`` unchanged when ``search_dirs`` is empty
-        or no ``EXTERNAL`` declaration in ``source`` resolves to a
-        module in the index.  Idempotent: a second invocation has
-        nothing left to rewrite.  Comment- and string-aware via
-        ``_scan_line``: an ``EXTERNAL`` token inside a character
-        literal or after ``!`` is never touched.
-
-    :param source: Fortran source text.
-    :param search_dirs: directories (recursive) and / or file paths
-        scanned for procedure definitions, same convention as
-        ``merge_used_modules``'s ``search_dirs``.
-    :returns: rewritten source with every resolvable ``EXTERNAL``
-        replaced by the equivalent module import.
+    Conservative: an ``EXTERNAL`` line with any unresolved name is left in
+    place verbatim (even its resolved names) -- an unresolved name means the
+    build is missing a source file.  Pass-through when ``search_dirs`` is
+    empty or nothing resolves.  Idempotent.
     """
     if not search_dirs:
         return source
@@ -1170,11 +885,8 @@ def replace_external_with_modules(source: str, *, search_dirs=()) -> str:
 
     lines = source.splitlines(keepends=True)
 
-    # Pass 1: identify scope-opener line indices and the ``EXTERNAL``
-    # lines that belong to each scope.  A scope opens at a
-    # ``SUBROUTINE`` / ``FUNCTION`` line and closes at the next one;
-    # ``END SUBROUTINE`` / ``END FUNCTION`` closes the current scope
-    # without opening a new one.
+    # Pass 1: find scope-opener indices + each scope's ``EXTERNAL`` lines. A
+    # scope opens at SUBROUTINE/FUNCTION, closes at the next one or its END.
     scopes = []  # list of (opener_idx, end_idx_exclusive)
     cur_open = None
     for i, raw in enumerate(lines):
@@ -1190,14 +902,12 @@ def replace_external_with_modules(source: str, *, search_dirs=()) -> str:
     if cur_open is not None:
         scopes.append((cur_open, len(lines)))
 
-    # Pass 2: per scope, resolve the EXTERNAL names + build the
-    # USE-line additions and EXTERNAL-line deletions.
+    # Pass 2: resolve EXTERNAL names per scope; build USE-insertions + EXTERNAL-deletions.
     delete_idx = set()
     insert_at_idx: dict = {}  # opener_idx -> list of synthesized USE lines
     for opener_idx, end_idx in scopes:
         scope_lines = lines[opener_idx:end_idx]
-        # First pass: collect EXTERNAL declarations + their resolution.
-        # Group resolved names by defining module.
+        # Collect EXTERNAL declarations + resolve, grouped by defining module.
         per_mod_names: dict = {}
         ext_line_idxs: list = []  # absolute indices to delete
         all_resolved_names: set = set()
@@ -1218,19 +928,13 @@ def replace_external_with_modules(source: str, *, search_dirs=()) -> str:
             ext_line_idxs.append(li)
         if not per_mod_names:
             continue
-        # Function-result type declarations whose name is now
-        # use-associated must also be deleted: flang rejects
-        # ``REAL(8) :: dscale`` once ``dscale`` is imported via
-        # ``USE``.  Only a single-name declaration is safe to drop
-        # whole; a mixed ``REAL(8) :: dscale, scratch_local`` is
-        # left alone (would need a more surgical rewrite to split
-        # the line, which is rare enough to defer).
+        # Function-result decls now use-associated must go too (flang rejects
+        # ``REAL(8) :: dscale`` once ``dscale`` is USE-imported). Only a
+        # single-name decl is dropped whole; a mixed line is left alone.
         for li, raw in enumerate(scope_lines, start=opener_idx):
             code = _code_of(raw)
-            # Skip lines that are EXTERNAL / INTENT-bearing decls /
-            # any ``::``-attribute-bearing declarations -- the
-            # function-result-decl regex matches only the bare
-            # ``<type> :: <name>`` shape with no attributes.
+            # Skip EXTERNAL / attribute-bearing decls -- the function-result
+            # regex only matches the bare ``<type> :: <name>`` shape.
             if _EXTERNAL_DECL_RE.match(code):
                 continue
             if re.search(
@@ -1241,8 +945,7 @@ def replace_external_with_modules(source: str, *, search_dirs=()) -> str:
             if not m:
                 continue
             decl_names = [n.strip().lower() for n in m.group("names").split(",")]
-            # Only drop when EVERY name on this line is a resolved
-            # external -- a mixed line keeps the bridge safe.
+            # Drop only if EVERY name on the line is a resolved external.
             if all(n in all_resolved_names for n in decl_names):
                 delete_idx.add(li)
         # Suppress imports for modules the scope already USEs.
@@ -1250,8 +953,7 @@ def replace_external_with_modules(source: str, *, search_dirs=()) -> str:
         for mod, names in per_mod_names.items():
             if _scope_already_uses(scope_lines, mod):
                 continue  # EXTERNAL becomes a no-op delete
-            # Pick the indent matching the opener's leading whitespace
-            # plus two spaces -- the conventional Fortran continuation.
+            # Indent = opener's leading whitespace + 2 spaces (conventional continuation).
             opener_indent = re.match(r"^(\s*)", lines[opener_idx]).group(1)
             body_indent = opener_indent + "  "
             synth_use_lines.append(f"{body_indent}USE {mod}, ONLY: {', '.join(names)}\n")
@@ -1263,9 +965,7 @@ def replace_external_with_modules(source: str, *, search_dirs=()) -> str:
     if not delete_idx and not insert_at_idx:
         return source
 
-    # Pass 3: produce the rewritten source.  Walk every line; when an
-    # index has an insertion, emit the inserts BEFORE the line; when
-    # an index is in delete_idx, drop it.
+    # Pass 3: walk every line, emitting inserts before it, dropping deletes.
     out = []
     for i, raw in enumerate(lines):
         if i in insert_at_idx:
@@ -1276,12 +976,9 @@ def replace_external_with_modules(source: str, *, search_dirs=()) -> str:
     return "".join(out)
 
 
-# A CHARACTER dummy declaration -- the LHS shape of a procedure
-# parameter that's a string used as an enum.  Captures the dummy
-# names (group ``names``) and the full type spec (group ``type``).
-# Recognises ``CHARACTER(LEN=*)``, ``CHARACTER(LEN=N)``,
-# ``CHARACTER(*)``, ``CHARACTER(N)``, and the bare ``CHARACTER``
-# form -- all of which are valid Fortran string-arg shapes.
+# CHARACTER dummy decl (string used as an enum).  Recognises
+# ``CHARACTER(LEN=*/LEN=N/*/N)`` and bare ``CHARACTER`` -- all valid Fortran
+# string-arg shapes.
 _CHARACTER_INTENT_IN_RE = re.compile(
     r"^(?P<lead>\s*)CHARACTER(?:\s*\(\s*[^)]+\s*\))?\s*"
     r",\s*INTENT\s*\(\s*IN\s*\)\s*"
@@ -1291,29 +988,20 @@ _CHARACTER_INTENT_IN_RE = re.compile(
 
 
 def _line_clip_comment(raw: str) -> str:
-    """Return ``raw`` truncated at the first ``!`` that is outside a
-    character literal.  Unlike :func:`_code_of` this preserves the
-    contents of character literals (which the string-enum detector
-    NEEDS to capture)."""
+    """``raw`` truncated at the first ``!`` outside a string literal.
+    Unlike :func:`_code_of`, string contents are preserved (needed by the
+    enum detector).
+    """
     cut, _ = _scan_line(raw)
     return raw[:cut]
 
 
 def _scan_string_enum_uses(scope_body: str, var: str) -> dict:
-    """Return the enum mapping ``{lowercase_literal: int}`` for every
-    distinct literal ``var`` is compared against.
-
-    Recognises three shapes within ``scope_body``:
-      * ``<var> == '<literal>'``  /  ``<var> .EQ. '<literal>'``
-      * ``'<literal>' == <var>``  /  ``'<literal>' .EQ. <var>``
-      * ``CASE ('<literal>')`` inside a ``SELECT CASE (<var>)`` block
-        (the block scope is tracked by ``_select_case_blocks``).
-
-    Case-insensitive grouping is applied so a Fortran source that
-    accepts both ``'c'`` and ``'C'`` collapses to one integer entry
-    (the same downstream branch fires for either).  Literals are
-    enumerated in first-appearance order so the resulting map is
-    deterministic between runs.
+    """Enum mapping ``{lowercase_literal: int}`` for every distinct literal
+    ``var`` is compared against in ``scope_body``: ``var == 'lit'``,
+    ``'lit' == var``, or ``CASE ('lit')`` inside ``SELECT CASE (var)``.
+    Case-insensitive grouping (``'c'``/``'C'`` collapse to one entry);
+    literals are enumerated in first-appearance order for a deterministic map.
     """
     seen_order: list = []
     mapping: dict = {}
@@ -1342,10 +1030,8 @@ def _scan_string_enum_uses(scope_body: str, var: str) -> dict:
         for m in eq_var_re.finditer(code):
             _record(m.group(1))
 
-    # ``SELECT CASE (<var>)`` block scan: collect CASE-branch literals
-    # within the block.  Single-pass; nested SELECT CASE on different
-    # variables don't get conflated because we re-anchor on each
-    # block opener.
+    # SELECT CASE (var) block scan: collect CASE literals within the block;
+    # single-pass, re-anchored per opener so nested blocks aren't conflated.
     in_block = False
     block_re = re.compile(rf"^\s*SELECT\s+CASE\s*\(\s*{re.escape(var)}\s*\)", re.IGNORECASE)
     end_block_re = re.compile(r"^\s*END\s+SELECT\b", re.IGNORECASE)
@@ -1367,63 +1053,20 @@ def _scan_string_enum_uses(scope_body: str, var: str) -> dict:
 
 
 def rewrite_string_enum_to_integer(source: str) -> tuple:
-    """Convert ``CHARACTER(LEN=...), INTENT(IN) :: <var>`` dummy args
-    that act as enum-style switches to ``INTEGER, INTENT(IN)`` plus
-    integer-valued comparisons.
+    """Convert ``CHARACTER(LEN=...), INTENT(IN)`` dummy args used as enum
+    switches to ``INTEGER, INTENT(IN)`` plus integer-valued comparisons (QE's
+    ``addusxx_g`` ``flag`` shape).  Returns ``(rewritten_source, enum_maps)``
+    where ``enum_maps`` is ``{proc: {arg: {literal_lower: int}}}`` --
+    consumed by the bindings layer to expose a string-typed wrapper and
+    normalise to the integer value at the SDFG boundary.
 
-    Pattern (QE's ``addusxx_g`` ``flag`` shape):
+    Scope-narrow by design: only single-name CHARACTER decls, only
+    INTENT(IN), only bare ``SELECT CASE (var)`` (not ``TRIM(var)``).  Call
+    sites are NOT rewritten -- the bindings layer converts at the SDFG
+    boundary, so a caller invoking the Fortran directly must pass an integer.
 
-      SUBROUTINE k(out, flag)
-        CHARACTER(LEN=1), INTENT(IN) :: flag
-        IF (flag == 'c' .OR. flag == 'C') THEN ...
-        IF (flag == 'r' .OR. flag == 'R') THEN ...
-      END SUBROUTINE
-
-    becomes
-
-      SUBROUTINE k(out, flag)
-        INTEGER, INTENT(IN) :: flag
-        IF (flag == 0 .OR. flag == 0) THEN ...
-        IF (flag == 1 .OR. flag == 1) THEN ...
-      END SUBROUTINE
-
-    where ``0 -> {'c', 'C'}``, ``1 -> {'r', 'R'}``, etc. (the case-
-    insensitive grouping collapses upper/lower variants to the
-    same integer).
-
-    Sidecar mapping:
-        Returns ``(rewritten_source, enum_maps)`` where ``enum_maps``
-        is ``{procedure_name: {arg_name: {literal_lower: int}}}``.
-        The bindings layer consumes ``enum_maps`` to expose a string-
-        typed wrapper (``run(flag='c', ...)``) at the Python boundary
-        and normalises the string to the integer value before calling
-        the SDFG.
-
-    Limitations (deliberately scope-narrow for the first cut):
-      * Only single-name CHARACTER declarations  --  a mixed
-        ``CHARACTER :: a, b`` is left alone (would need a per-name
-        split).
-      * Only INTENT(IN) dummies  --  locals, INTENT(OUT) / (INOUT)
-        and module variables are skipped (could be enum-promoted
-        too but the call-site rewrite story is harder).
-      * Call sites are NOT rewritten  --  the bindings layer
-        converts the string argument to the integer at the SDFG
-        boundary.  A caller invoking the rewritten Fortran
-        directly would have to pass an integer literal.
-      * SELECT CASE on TRIM(<var>) etc. is not detected  --  only
-        the bare ``SELECT CASE (<var>)`` shape.
-
-    Pass-through:
-        Returns ``(source, {})`` when no procedure has an INTENT(IN)
-        CHARACTER dummy that's used purely as an enum switch.
-        Idempotent: a second invocation finds no CHARACTER-INTENT(IN)
-        dummies left to rewrite and returns its input + ``{}``.
-        Comment- and string-aware via ``_scan_line``: an ``==``
-        comparison inside a string literal or after ``!`` is never
-        treated as code.
-
-    :param source: Fortran source text.
-    :returns: ``(rewritten_source, enum_maps)``.
+    Pass-through (``source``, ``{}``) when no enum-switch dummy is found.
+    Idempotent.
     """
     lines = source.splitlines(keepends=True)
 
@@ -1469,17 +1112,14 @@ def rewrite_string_enum_to_integer(source: str) -> tuple:
         if not decl_targets:
             continue
 
-        # For each candidate dummy, derive its enum mapping; skip if
-        # the scope never compares it against any string literal.
+        # Skip a dummy the scope never compares against a string literal.
         for li, var, lead in decl_targets:
             mapping = _scan_string_enum_uses(scope_body, var)
             if not mapping:
                 continue
 
-            # Record the mapping for the bindings layer.
             enum_maps.setdefault(proc_name, {})[var] = dict(mapping)
 
-            # Rewrite the declaration line: CHARACTER... -> INTEGER.
             delete_idx[li] = f"{lead}INTEGER, INTENT(IN) :: {var}\n"
 
             # Rewrite every comparison + CASE literal in scope.
@@ -1517,8 +1157,7 @@ def rewrite_string_enum_to_integer(source: str) -> tuple:
                     if cm:
                         lit_key = cm.group(2).lower()
                         if lit_key in mapping:
-                            # Rebuild line preserving any trailing
-                            # comment past the match end.
+                            # Rebuild, preserving any trailing comment past the match end.
                             new_line = (cm.group(1) + str(mapping[lit_key]) + cm.group(3) + raw[len(cm.group(0)):])
 
                 # ``<var> == 'lit'`` / ``<var> .EQ. 'lit'``
@@ -1554,24 +1193,15 @@ def _fparser_merge(source: str,
                    search_dirs=(),
                    entry: Optional[str] = None,
                    external_names: Iterable[str] = ()) -> str:
-    """Single-TU merge via the fparser inliner engine (opt-in).
+    """Single-TU merge via the fparser inliner engine (opt-in via
+    ``merge_engine="fparser"``; the regex splicer stays default).
 
-    Sibling of :func:`merge_used_modules`: instead of the regex
-    text-splicer, this parses ``source`` plus every Fortran file under
-    ``search_dirs`` into one fparser AST, resolves the ``USE`` graph,
-    inlines the needed modules, runs the desugaring pipeline, and
-    serialises back to a single ``.f90`` text.  Selected by
-    ``merge_engine="fparser"``; the regex engine stays the default.
-
-    ``entry`` (when given) restricts pruning to the entry's USE-closure;
-    ``None`` keeps every top-level subprogram (a faithful whole-project
-    single-TU merge).
-
-    ``external_names`` are procedures to keep external (NOT inlined): each is
-    stubbed to an empty body so its internals never enter the TU (the inliner's
-    ``make_noop`` path).  The build path sources these from the bridge's
-    external registry, so a ``keep_external`` / ``apply_external_functions``
-    declaration drives both the merge and the SDFG-construction step.
+    Sibling of :func:`merge_used_modules`: parses ``source`` + every file
+    under ``search_dirs`` into one fparser AST, resolves ``USE``, inlines,
+    desugars, and serialises back to ``.f90`` text.  ``entry`` restricts
+    pruning to its USE-closure (``None`` keeps every top-level subprogram).
+    ``external_names`` are stubbed empty (inliner's ``make_noop``) so their
+    internals never enter the TU.
     """
     from dace_fortran.fparser_inliner import inline_to_ast, strip_builtin_stub_modules
 
@@ -1585,29 +1215,21 @@ def _fparser_merge(source: str,
                 src_map.setdefault(str(f), f.read_text())
             except (OSError, UnicodeDecodeError):
                 continue
-    # The multi-file build stages the root file (the one defining the entry)
-    # into ``search_dirs`` as well, so it is already in ``src_map``; only
-    # inject ``source`` under a synthetic key when it is NOT already present
-    # (the single-source build passes no staged files).  Injecting it
-    # unconditionally would duplicate every procedure in the root file.
+    # Inject ``source`` under a synthetic key only if not already staged (a
+    # multi-file build already stages the root file; injecting unconditionally
+    # would duplicate every procedure in it).
     if not any(txt == source for txt in src_map.values()):
         src_map["__entry__.f90"] = source
-    # Inject the intrinsic-module stubs so the inliner's fparser parse
-    # resolves ``USE iso_c_binding`` / ``iso_fortran_env`` (it hard-requires
-    # every ``USE``-d module in the closure).  The stubs do NOT leak into the
-    # output fed to flang: the inliner prunes the unreachable stub modules and
-    # resolves intrinsic kinds inline (``REAL(c_double)`` -> ``REAL(KIND=8)``),
-    # so flang still supplies its own intrinsic modules without a collision.
-    # ``optimize=False``: the merge only needs a valid inlined single TU --
-    # flang and the bridge do their own constant-folding / dead-branch
-    # elimination, so skip the inliner's const-propagation optimizers (which
-    # also matches the legacy regex merge's "splice and let flang inline"
-    # semantics and avoids optimizer fragilities on inlined-call patterns).
+    # Inject intrinsic-module stubs so fparser resolves ``USE iso_c_binding``
+    # etc. (it hard-requires every USE-d module).  They don't leak into flang's
+    # output: the inliner prunes unreachable stubs and resolves intrinsic
+    # kinds inline (``REAL(c_double)`` -> ``REAL(KIND=8)``).
+    # ``optimize=False``: skip the inliner's const-propagation -- flang/the
+    # bridge already do constant-folding, and this avoids optimizer
+    # fragilities on inlined-call patterns.
     ast = inline_to_ast(src_map, entry, include_builtins=True, optimize=False, do_not_emit=external_names)
-    # A whole-project merge (``entry is None``) keeps every top-level unit,
-    # including the injected intrinsic-module stubs; strip them so flang's own
-    # ``iso_c_binding`` / ``iso_fortran_env`` are used without a collision.
-    # (No-op when an entry point already pruned them.)
+    # Strip injected intrinsic-module stubs (no-op if ``entry`` already pruned
+    # them) so flang's own ``iso_c_binding``/``iso_fortran_env`` are used.
     ast = strip_builtin_stub_modules(ast)
     return ast.tofortran()
 
@@ -1622,55 +1244,24 @@ def preprocess_fortran_source(source: str,
                               if_intvar: bool = False,
                               kind_map: dict = None,
                               kind_passthrough: bool = False) -> str:
-    """Single entrypoint for all Fortran-source preprocessing the HLFIR
-    frontend applies before handing source to flang.
+    """Single entrypoint for all Fortran-source preprocessing before flang.
 
-    Composes, in order:
+    Order matters -- composes:
 
-    1. ``merge_used_modules`` (when ``merge``) -- inline every
-       externally-``USE``-d module into one translation unit.
-    2. ``strip_openmp_directives`` -- drop OpenMP / OpenACC sentinels
-       and the ICON ``omp_definitions.inc`` cpp include (the bridge
-       does not run cpp and does not pass ``-fopenmp``).
-    3. ``normalize_kind_parameters`` -- substitute unresolved precision
-       aliases (``wp``, ``sp``, ``dp``, ``qp``) with literal kind ints
-       (default fp64).  No-op when every alias is locally bound or the
-       caller passes ``kind_passthrough=True``.
-    4. ``rewrite_integer_powers`` -- expand integer-valued real powers
-       (``x**2.0`` -> ``x*x``) for byte-identical arithmetic.
-    5. ``preprocess_fortran`` (when ``if_intvar``) -- the opt-in
-       ``IF (intvar)`` -> ``IF (intvar /= 0)`` rewrite.
+    1. ``merge_used_modules`` (if ``merge``) -- inline ``USE``-d modules into
+       one TU.  ``merge_engine="fparser"`` routes through
+       :func:`_fparser_merge` instead (also desugars/prunes; ``merge_entry``
+       scopes its pruning, ignored by the regex engine).
+    2. ``strip_openmp_directives`` -- drop OpenMP/OpenACC sentinels + the
+       ICON include (bridge runs no cpp, no ``-fopenmp``).
+    3. ``normalize_kind_parameters`` -- unresolved kind aliases -> literal
+       ints (``kind_map`` overrides; ``kind_passthrough=True`` skips it).
+    4. ``rewrite_integer_powers`` -- ``x**2.0`` -> ``x*x``.
+    5. ``preprocess_fortran`` (if ``if_intvar``) -- opt-in ``IF (intvar)``
+       rewrite.
 
-    The individual stages remain importable for their unit tests; this
-    is the production composition.
-
-    :param source: Fortran source text.
-    :param search_dirs: directories searched by ``merge_used_modules``.
-    :param merge: run the ``USE``-merge stage (default on).
-    :param merge_engine: which merge implementation to use --
-        ``"regex"`` (default) is the fparser-free
-        :func:`merge_used_modules` text-splicer; ``"fparser"`` routes
-        through :func:`_fparser_merge`, the fparser AST inliner
-        (:mod:`dace_fortran.fparser_inliner`), which additionally desugars
-        and prunes.
-    :param merge_entry: entry procedure for the ``"fparser"`` engine's
-        pruning (plain name / ``module::proc`` / mangled symbol); ``None``
-        keeps every top-level subprogram.  Ignored by the regex engine.
-    :param external_names: procedures to keep external (NOT inlined) at the
-        merge stage -- their bodies are stubbed to empty in BOTH engines (the
-        regex :func:`_stub_procedure_bodies` / the fparser ``make_noop``), so
-        halo-exchange / MPI / I/O internals never enter the TU.  The build path
-        sources these from the bridge's external registry so a single
-        ``keep_external`` / ``apply_external_functions`` declaration governs
-        both the merge and the SDFG-construction step (no hand-syncing).
-    :param if_intvar: also run the opt-in integer-IF rewrite.
-    :param kind_map: per-alias override forwarded to
-        ``normalize_kind_parameters`` -- ``{"wp": 4}`` for an fp32
-        build, ``{"wp": None}`` to leave one alias alone, etc.
-    :param kind_passthrough: ``True`` skips ``normalize_kind_parameters``
-        entirely -- for build pipelines that already resolve every kind
-        alias upstream and want the bridge to assume nothing.
-    :returns: the fully preprocessed Fortran source.
+    ``external_names``: kept external (not inlined) at the merge stage in
+    BOTH engines -- stubbed empty so halo/MPI/I/O internals never enter the TU.
     """
     if merge:
         if merge_engine == "fparser":

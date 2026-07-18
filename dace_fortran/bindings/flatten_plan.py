@@ -1,22 +1,14 @@
-"""Flatten plan  --  the single source of truth for AoS->SoA unpacking.
+"""Flatten plan -- single source of truth for AoS->SoA unpacking.
 
-Produced by ``hlfir-flatten-structs`` (as an MLIR module attribute)
-and consumed by the binding emitter.  One ``FlattenRecipe`` per
-outer storage path that was unpacked; the recipe carries both the
-forward element expressions (outer -> flat) and the inverse
-expression (flats -> outer) so the binding emitter can emit copy-in
-and copy-out without knowing which specific flattening scheme fired.
+Produced by ``hlfir-flatten-structs`` (an MLIR module attribute),
+consumed by the binding emitter.  One ``FlattenRecipe`` per unpacked
+outer storage path, carrying both the forward (outer->flat) and
+inverse (flat->outer) element expressions so the emitter needs no
+knowledge of which flattening scheme fired.
 
-Arbitrary struct hierarchies fall out naturally  --  the outer
-expression in a recipe is a free-form Fortran expression (e.g.
-``st%a%b%c``), threaded verbatim into the generated wrapper's
-``c_loc(...)`` or ``do``-loop body.
-
-Index convention inside recipe expressions:
-    ``$i1``, ``$i2``, ..., ``$iN`` are placeholders for the N loop
-    indices the copy-in / copy-out nest will declare.  The helper
-    ``substitute_indices`` replaces them with concrete names at
-    template time.
+Index convention: ``$i1``, ``$i2``, ... placeholders in recipe
+expressions stand for the N loop indices the copy nest declares;
+:func:`substitute_indices` fills in concrete names.
 """
 
 import json
@@ -27,54 +19,33 @@ from typing import Tuple
 
 @dataclass(frozen=True)
 class FlattenRecipe:
-    """One recorded unpacking.
+    """One recorded unpacking.  Three emitter shapes, by flag combo:
+    ``aliasable=True`` zero-copy ``c_f_pointer`` alias;
+    ``aos_alloc=False, aliasable=False`` explicit allocate + deep
+    ``do``-loop copy; ``aos_alloc=True`` padding-to-max pack/unpack for
+    an AoS dummy with allocatable/pointer array members (Phase 5c-B,
+    see ``aos_alloc`` below).
 
-    Three emitter shapes are encoded by combinations of the boolean
-    flags:
-
-      * ``aliasable=True``: zero-copy ``c_f_pointer`` alias.
-      * ``aos_alloc=False, aliasable=False``: explicit allocate +
-        deep ``do``-loop copy.
-      * ``aos_alloc=True``:  padding-to-max pack/unpack for an
-        AoS dummy with allocatable / pointer array members
-        (Phase 5c-B).  See ``aos_alloc`` field below.
-
-    :ivar flat_names: SDFG-visible flat names in argument order.
-        Examples: plain real member ``("fld_a",)``; complex-split
-        member ``("st_z_re", "st_z_im")``; aos_alloc ``("a_w",)``
-        (single flat).
-    :ivar read_exprs: Parallel to ``flat_names``.  For each flat, the
-        Fortran expression computing that flat's element at position
-        ``($i1, $i2, ...)`` from the outer source.  Examples: plain
-        real ``"st%u($i1, $i2)"``; complex split re
-        ``"real(st%z($i1, $i2), kind=c_double)"``; complex split im
-        ``"aimag(st%z($i1, $i2))"``; aos_alloc ``"a($i1)%w($i2)"``.
-    :ivar write_expr: Fortran expression reconstructing the outer's
-        element at ``($i1, ...)`` from the flats.  Empty when the
-        outer is read-only, the recipe is aliased (no copy-out
-        needed), or the recipe is ``aos_alloc`` (the bindings layer
-        uses bespoke pack-out code instead of an element-wise
-        template).  Example, complex split:
-        ``"cmplx(st_z_re($i1,$i2), st_z_im($i1,$i2), kind=c_double)"``.
-    :ivar rank: Number of loop indices used by the expressions.  0
-        for scalar unpacks (unusual but supported).  For ``aos_alloc``
-        this is ``outer_rank + 1``.
-    :ivar shape_exprs: Per-rank Fortran extent expression; length ==
-        rank.  Typically ``("size(<outer>, dim=1)", ...)``.  For an
-        ``aos_alloc`` recipe the inner dim is the cap symbol verbatim
-        (not a ``size()`` call), so ``shape_exprs[-1] == cap_symbol``.
-    :ivar aliasable: ``True`` iff the recipe is pure element identity
-        with matching storage layout  --  the emitter can skip
-        allocate/copy and emit one ``c_f_pointer`` per
-        ``flat_names[i]`` aliasing ``read_exprs[i]`` (with index
-        placeholders stripped).  The pass sets this based on rank +
-        element-type match.  Mutually exclusive with ``aos_alloc``.
-    :ivar scratch_dtype: SDFG element dtype the emitter declares for
-        flat scratch buffers (``float64`` / ``int32`` / ...).  Today
-        all flats of one recipe share a dtype.
-    :ivar aos_alloc: Phase 5c-B (AoS + allocatable / pointer array
-        member at the SDFG-boundary dummy).  When ``True`` the emitter
-        switches to the padding-to-max pack/unpack path::
+    flat_names: SDFG-visible flat names, argument order (plain member
+        one name; complex-split two: re/im; aos_alloc one).
+    read_exprs: parallel to flat_names -- Fortran expr for that flat's
+        element at ($i1, $i2, ...) from the outer source.
+    write_expr: Fortran expr reconstructing the outer element from the
+        flats.  Empty when outer is read-only, the recipe is aliased,
+        or aos_alloc (bespoke pack-out code instead).
+    rank: number of loop indices used; 0 for scalar unpacks.  For
+        aos_alloc this is outer_rank + 1.
+    shape_exprs: per-rank extent expr, length == rank (typically
+        ``size(<outer>, dim=1)``, ...).  For aos_alloc the inner dim
+        is the cap symbol verbatim, not a size() call.
+    aliasable: True iff pure element identity + matching storage
+        layout -- emitter skips allocate/copy, aliases via
+        c_f_pointer.  Mutually exclusive with aos_alloc.
+    scratch_dtype: SDFG element dtype for flat scratch buffers; all
+        flats of one recipe share a dtype.
+    aos_alloc: Phase 5c-B (AoS + allocatable/pointer array member at
+        the SDFG boundary).  True switches to the padding-to-max
+        pack/unpack path::
 
             cap = max_i(merge(size(A(i)%w), 0, allocated(A(i)%w)))
             allocate(A_w(N, cap)); A_w = 0
@@ -83,28 +54,22 @@ class FlattenRecipe:
             do i = 1, N; if (allocated(A(i)%w)) A(i)%w = A_w(i, 1:size(A(i)%w))   ! intent(out)/(inout)
             deallocate(A_w)
 
-        The companion buffer is always ``A_<member>(N, cap)`` (single
-        flat per recipe  --  multi-flat layouts like complex-split
-        don't combine with ``aos_alloc``).  Mixed structs (one
-        allocatable + one plain member) split across two recipes: one
-        ``aos_alloc=True`` per allocatable member, one regular
-        ``aliasable=True`` covering the rest.
-    :ivar cap_symbol: Name of the SDFG runtime symbol carrying the
-        cap.  Empty unless ``aos_alloc=True``; otherwise
-        ``cap_<base>_<member>``.  ``_build_symbol_assigns`` skips this
-        symbol because the pack-in code computes it directly.
-    :ivar source_logical_kind: ``N`` when the source struct member's
-        element type is Fortran ``LOGICAL(KIND=N)`` (``1`` / ``2`` /
-        ``4`` / ``8``).  ``0`` otherwise.  The SDFG-side storage
-        stays ``bool`` (1 byte) regardless of the kind; this drives
-        a boundary bridge in the binding wrapper that declares the
-        wrapper-local aliased pointer as ``logical(KIND=N), pointer
-        ::`` (matching the source struct slot byte-for-byte) plus a
-        ``logical(c_bool)`` scratch + per-element conversion, so a
-        default ``LOGICAL :: x`` field on the source struct does not
-        have its 4-byte slot clobbered by a 1-byte SDFG write
-        (the ``free(): invalid next size`` glibc diagnostic the
-        ICON velocity_tendencies e2e surfaced).
+        Companion buffer is always ``A_<member>(N, cap)``, one flat
+        per recipe (complex-split doesn't combine with aos_alloc).
+        Mixed structs (one allocatable + one plain member) split
+        across two recipes: aos_alloc=True for the allocatable one,
+        aliasable=True for the rest.
+    cap_symbol: SDFG runtime symbol carrying the cap.  Empty unless
+        aos_alloc=True, else ``cap_<base>_<member>``.
+        ``_build_symbol_assigns`` skips it (pack-in computes it directly).
+    source_logical_kind: N when the source member is Fortran
+        LOGICAL(KIND=N) (1/2/4/8), else 0.  SDFG storage stays bool (1
+        byte) regardless; drives a boundary bridge (wrapper-local
+        pointer declared at the source kind + a bool scratch +
+        per-element conversion) so a default LOGICAL slot isn't
+        clobbered by a 1-byte SDFG write (root cause of the "free():
+        invalid next size" glibc diagnostic in the ICON
+        velocity_tendencies e2e).
     """
     flat_names: Tuple[str, ...]
     read_exprs: Tuple[str, ...]
@@ -141,16 +106,12 @@ class FlattenRecipe:
 class FlattenEntry:
     """One outer dummy / storage path that was unpacked.
 
-    :ivar outer_expr: Fortran expression the user passes  --  ``st``
-        or ``st%a%b%c`` for arbitrary hierarchy depth.  Threaded
-        verbatim into generated ``c_loc`` / loop bodies.
-    :ivar outer_type: Fortran type of ``outer_expr``  --
-        ``type(t_state)`` or ``real(c_double), dimension(:,:)``.
-        Used in auto-generated comments.
-    :ivar writeback_intent: ``'out'`` / ``'inout'`` / ``''`` (= ``in``
-        or no copy back).  When non-empty and ``recipe.write_expr``
-        is set, the emitter generates a copy-out loop.
-    :ivar recipe: the ``FlattenRecipe`` describing the unpack.
+    outer_expr: Fortran expr the user passes (``st`` or ``st%a%b%c``),
+        threaded verbatim into generated code.
+    outer_type: Fortran type of outer_expr, used in auto-gen comments.
+    writeback_intent: 'out'/'inout'/'' -- non-empty + recipe.write_expr
+        set triggers a copy-out loop.
+    recipe: the FlattenRecipe describing the unpack.
     """
     outer_expr: str
     outer_type: str
@@ -179,13 +140,11 @@ class FlattenEntry:
 
 @dataclass(frozen=True)
 class FlattenPlan:
-    """All unpacks performed by ``hlfir-flatten-structs`` for one
-    entry subroutine.  One entry per outer dummy that got
-    flattened; untouched scalars / plain-array dummies don't
-    appear.
+    """All unpacks ``hlfir-flatten-structs`` performed for one entry
+    subroutine.  One entry per flattened outer dummy; untouched
+    scalars/plain-arrays don't appear.
 
-    :ivar entries: tuple of ``FlattenEntry`` in argument order; the
-        emitter walks them sequentially.
+    entries: tuple of FlattenEntry in argument order.
     """
     entries: Tuple[FlattenEntry, ...] = field(default_factory=tuple)
 
@@ -195,9 +154,8 @@ class FlattenPlan:
 
     @classmethod
     def from_dict(cls, d: dict) -> 'FlattenPlan':
-        """Rehydrate a plan from a plain dict  --  used by the bridge,
-        which returns the MLIR-side ``hlfir.flatten_plan`` attribute as
-        a nested dict of the same shape."""
+        """Rehydrate from a plain dict -- the bridge returns the MLIR-side
+        ``hlfir.flatten_plan`` attribute in this same nested shape."""
         return cls(entries=tuple(FlattenEntry.from_dict(e) for e in d.get('entries', [])))
 
     def to_json(self, path: str):
@@ -221,19 +179,9 @@ _INDEX_RE = re.compile(r'\$i(\d+)')
 
 def substitute_indices(expr: str, names: Tuple[str, ...]) -> str:
     """Replace ``$i1``, ``$i2``, ... placeholders with concrete loop
-    variable names.
+    variable names (``$i1`` -> ``names[0]``, etc).
 
-    Example::
-
-        >>> substitute_indices("st%a%v($i1, $i2)", ("i1", "i2"))
-        'st%a%v(i1, i2)'
-
-    :param expr: source expression with ``$iN`` placeholders.
-    :param names: concrete loop-index names; ``$i1`` -> ``names[0]``,
-                  ``$i2`` -> ``names[1]``, etc.
-    :returns: the expression with every placeholder substituted.
-    :raises IndexError: if a placeholder references a name past the
-            end of ``names``.
+    :raises IndexError: placeholder references past the end of ``names``.
     """
 
     def repl(m: re.Match) -> str:
@@ -246,14 +194,9 @@ def substitute_indices(expr: str, names: Tuple[str, ...]) -> str:
 
 
 def strip_index_args(expr: str) -> str:
-    """Strip the ``($i1, ...)`` suffix from an expression so it
-    names the base storage path alone.
-
-    Used by the alias emitter: ``c_loc`` takes the array, not an
-    element.  Given ``"st%a%v($i1, $i2)"``, returns ``"st%a%v"``.
-
-    Falls back to returning the input unchanged if the expression
-    doesn't end in a parenthesised placeholder list.
+    """Strip the ``($i1, ...)`` suffix so the expr names the base storage
+    path alone -- ``c_loc`` needs the array, not an element.  Returns the
+    input unchanged if it has no parenthesised placeholder suffix.
     """
     m = re.match(r'^(.+?)\(\s*\$i\d+(?:\s*,\s*\$i\d+)*\s*\)\s*$', expr)
     return m.group(1) if m else expr

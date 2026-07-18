@@ -1,67 +1,19 @@
-"""Bit-exact differential e2e for the ICON ``solve_nh`` dycore with
-``velocity_tendencies`` kept as a CALLBACK to our velocity SDFG (SDFG-to-SDFG
-composition over the C ABI).
+"""Bit-exact differential e2e for ICON ``solve_nh`` with ``velocity_tendencies`` kept as a
+CALLBACK to our velocity SDFG (SDFG-to-SDFG composition over the C ABI).
 
-Intended architecture (the same ``keep_external`` per-member-SoA composition the
-velocity e2e ``test_dycore_outer_calls_velocity_sdfg_via_c_abi`` and
-``scripts/build_icon_dace_libs.py`` build, scaled to the REAL ``solve_nh``):
+Architecture: inner velocity SDFG -> ``libvelocity_inner_wrap.so`` (``velocity_tendencies_c``
+per-member-SoA shim); outer ``solve_nh`` SDFG registers it ``keep_external`` and drops
+halo/sync/timers. DUT = outer SDFG (dispatches velocity to the inner ``.so``); REF = stock
+Fortran solve_nh calling stock velocity_tendencies. Both run on the same degenerate mesh with
+every mutable struct deep-copied, compared prognostic + full-diag + prep_adv BIT-EXACT.
 
-  * **Inner** velocity SDFG -> ``libvelocity_inner_wrap.so`` exporting
-    ``velocity_tendencies_c`` (its per-member-SoA ``bind_c_shim`` entry).
-  * **Outer** ``solve_nh`` SDFG built from the extracted single-TU with
-    ``velocity_tendencies`` registered ``keep_external(c_name=
-    'velocity_tendencies_c', args=(<5 per-member-SoA structs> + arrays +
-    scalars), dynamic_extents_abi=True)`` and the halo / sync / timers dropped
-    (``apply_external_functions(do_not_emit=...)``) -- so the outer SDFG
-    dispatches the velocity sub-call to the inner ``.so`` at run time and no MPI
-    survives.
-  * **DUT** = the outer ``solve_nh`` SDFG (dispatching velocity into the inner
-    SDFG).  **REF** = stock Fortran ``solve_nh`` calling stock
-    ``velocity_tendencies`` (full body).  Both run on the SAME degenerate valid
-    mesh, with EVERY mutable struct deep-copied (:file:`mo_solve_nh_diff.f90`:
-    ``clone_state_indep_prog`` re-points every ``prog`` AND every ``diag``
-    pointer to a fresh target -- the velocity callback writes
-    ``ddt_vn_apc_pc`` / ``ddt_vn_cor_pc`` / ``ddt_w_adv_pc``, which
-    ``compare_diag`` checks) so the two runs are fully independent, and the
-    prognostic + full-diag + prep_adv output is compared BIT-EXACT (max diff
-    exactly 0.0, no tolerance).
+``@pytest.mark.long``, single-node (2-rank halo variant is a separate ``@pytest.mark.mpi``
+follow-up, not built here).
 
-``@pytest.mark.long`` (builds two SDFGs + gfortran-links) and SINGLE-NODE (REF
-vs DUT in one process; the 2-rank halo-exchange variant is a separate
-``@pytest.mark.mpi`` follow-up, NOT built here).
-
-------------------------------------------------------------------------------
-STATUS: the outer-SDFG-builds gate below PASSES (marshal v2 landed); the full
-deep-copy-all differential run is the remaining piece.
-
-The velocity callback marshals FIVE derived types.  Four (``t_nh_prog`` /
-``t_int_state`` / ``t_nh_metrics`` / ``t_nh_diag``) are scalars + box-of-scalar
-arrays (incl. the rank-4 ``ddt_vn_apc_pc``).  ``t_patch`` additionally carries,
-via its ``edges`` sub-record,
-
-    TYPE(t_tangent_vectors), ALLOCATABLE :: primal_normal_cell(:, :, :)
-    TYPE(t_tangent_vectors), ALLOCATABLE :: dual_normal_cell(:, :, :)
-
-i.e. ``box<heap<array<record<v1:f64, v2:f64>>>>`` -- an allocatable ARRAY OF A
-VALUE RECORD.  Two pieces make the callback build + ABI-align, both now in place:
-
-  1. ``MarshalExternalStructs.cpp`` (marshal v2, committed) accepts
-     ``box<ptr|heap<array<value-record>>>`` and expands it into ONE per-record-FIELD
-     SoA leaf each (``primal_normal_cell_v1`` / ``_v2``), lining up with the
-     ``bind_c_shim``'s ``_emit_value_record_array`` per-field scatter (one C slot
-     per record field, not one per member).
-
-  2. The inner velocity SDFG declares the SAME ``t_patch`` (identical leaf set) as
-     the outer: :mod:`icon.atmosphere._atmo_harness` extracts
-     ``velocity_advection_inlined_single_tu.f90`` with the mirror
-     ``keep_type_components`` union, and
-     :mod:`icon.atmosphere.test_velocity_callback_abi_alignment` pins that every
-     shared struct matches the ``solve_nh`` TU member-for-member.
-
-The remaining work for the bit-exact differential is wiring the inner velocity
-``.so`` + the DUT-vs-REF deep-copy-all run (``mo_solve_nh_diff`` compare over
-prog(nnew) + full diag + prep_adv, max diff exactly 0.0).  The bit-exact
-assertion is NOT weakened when that lands.
+STATUS: the outer-SDFG-builds gate below PASSES (marshal v2 landed: ``t_patch``'s
+``primal_normal_cell``/``dual_normal_cell``, an allocatable array of the value record
+``t_tangent_vectors``, now expands to one SoA leaf per record field). Remaining: wire the
+inner velocity ``.so`` + the full deep-copy-all differential run.
 """
 import re
 import shutil
@@ -89,9 +41,8 @@ _ENTRY = "mo_solve_nonhydro::solve_nh"
 _VELOCITY_TU = _HERE / "velocity_advection_inlined_single_tu.f90"
 _VELOCITY_ENTRY = "mo_velocity_advection::velocity_tendencies"
 
-# The velocity callback registration: five derived types cross per-member SoA
-# (matching the inner SDFG's bind_c_shim), then three rank-3 arrays and the
-# scalars.  Same shape as scripts/build_icon_dace_libs.py's dycore wrapper.
+# five derived types cross per-member SoA (matches the inner bind_c_shim), then three rank-3
+# arrays + scalars; same shape as scripts/build_icon_dace_libs.py's dycore wrapper.
 _VELOCITY_CALLBACK_ARGS = tuple(
     [Arg(kind="aos", intent="inout", c_abi="per_member_soa")]  # p_prog
     + [Arg(kind="aos", intent="in", c_abi="per_member_soa")]  # p_patch
@@ -104,9 +55,8 @@ _VELOCITY_CALLBACK_ARGS = tuple(
     + [Arg(kind="scalar", dtype="float64", intent="in")] * 2  # dtime / dt_linintp_ubc
     + [Arg(kind="scalar", dtype="bool", intent="in")])  # ldeepatmo
 
-# Halo / sync / diagnostics dropped so no MPI survives in the outer SDFG and the
-# velocity callback is the only external.  Same do_not_emit set as the atmo
-# "external" harness config plus the inlined-mode side effects.
+# halo/sync/diagnostics dropped so no MPI survives and velocity is the only external;
+# same set as the atmo "external" harness config plus inlined-mode side effects.
 _DO_NOT_EMIT = [
     "sync_patch_array", "sync_patch_array_mult", "exchange_data", "p_barrier", "p_max", "p_min", "p_sum", "global_max",
     "global_min", "global_sum", "setup_comm_pattern", "finish", "message", "message_text", "warning", "print_status",
@@ -119,15 +69,9 @@ _DO_NOT_EMIT = [
 def test_solve_nh_velocity_callback_outer_sdfg_builds(tmp_path: Path):
     """The OUTER solve_nh SDFG with velocity as a per-member-SoA callback builds.
 
-    This is the enabling gate for the velocity-callback differential e2e.  It
-    passed once ``hlfir-marshal-external-structs`` v2 (value-record-array members)
-    landed: the marshal pass now expands ``t_patch``'s ``primal_normal_cell`` /
-    ``dual_normal_cell`` (allocatable array of the value record ``t_tangent_vectors``)
-    into one SoA leaf per record field, so the velocity callback's 5th aos arg
-    marshals and ``emit_call`` no longer raises.  The remaining piece for the full
-    differential (DUT outer SDFG vs REF stock solve_nh, ``mo_solve_nh_diff``
-    bit-exact compare over prog(nnew) + full diag + prep_adv) is wiring up the
-    inner velocity ``.so`` and the deep-copy-all run -- not built here.
+    Enabling gate for the velocity-callback differential e2e; passed once marshal v2 (value-
+    record-array members) let ``t_patch``'s ``primal_normal_cell``/``dual_normal_cell`` expand
+    to one SoA leaf per record field. Full differential (DUT vs REF, bit-exact) not built here.
     """
     clear_external_registry()
     keep_external(
@@ -140,8 +84,7 @@ def test_solve_nh_velocity_callback_outer_sdfg_builds(tmp_path: Path):
     try:
         sdfg = make_builder(_TU.read_text(), entry=_ENTRY, name="solve_nh_callback", out_dir=tmp_path / "sdfg").build()
         sdfg.validate()
-        # The velocity callback must be emitted as an external library node, not
-        # inlined / dropped (the isinstance guard makes ``label`` safe).
+        # velocity callback must emit as an external library node, not inlined/dropped
         from dace.sdfg import nodes as dnodes
         ext = [
             n for n, _ in sdfg.all_nodes_recursive()
@@ -154,27 +97,16 @@ def test_solve_nh_velocity_callback_outer_sdfg_builds(tmp_path: Path):
 
 @pytest.mark.xdist_group("atmo_solve_nh_callback")
 def test_callback_abi_aligns_slot_for_slot_with_inner_shim(tmp_path: Path):
-    """The OUTER solve_nh marshalled ``velocity_tendencies_c(...)`` call lines up
-    with the INNER velocity ``bind_c_shim`` slot-for-slot in COUNT and TYPE.
+    """The OUTER solve_nh marshalled ``velocity_tendencies_c(...)`` call lines up with the
+    INNER velocity ``bind_c_shim`` slot-for-slot in COUNT and TYPE (real-scale version of the
+    toy ``marshal_shim_abi_alignment_test``).
 
-    This is the real-scale SDFG-to-SDFG callback ABI gate (the synthetic
-    ``marshal_shim_abi_alignment_test`` at toy scale, here at full ``t_patch`` /
-    value-record scale).  Two facets, each guarding a distinct fix:
-
-    * COUNT -- the shim emits one ``<flat>_lb<i>`` slot per dim of EVERY dynamic
-      member (shape-driven), so the marshal must supply a free ``offset_<...>``
-      lb for every such dim.  Guards the ``extract_vars.cpp`` fix that gives a
-      deferred-shape ALLOCATABLE/POINTER dummy uniformly-free bounds (a literal
-      ``rho(jc,1,jb)`` access no longer folds dim-1 to ``1`` and drops its lb),
-      while value-record AoR companions (``primal_normal_cell_v1``) stay 1-based
-      and extent-only (no spurious lb).
-
-    * TYPE -- a grid-dim scalar member the shim declares ``type(c_ptr), value``
-      (it reads the member as struct data via ``c_f_pointer``) must be passed as
-      a materialised ``&_pv_<sym>`` pointer, NOT the raw by-value ``(int)(<sym>)``
-      the caller would emit for a promoted symbol.  Guards the marshal-conforms-
-      to-callee ``callee_ptr_scalar_members`` path.  A by-value slot there would
-      make the inner ``c_f_pointer`` dereference the integer value as an address.
+    * COUNT -- the shim emits one ``<flat>_lb<i>`` slot per dim of every dynamic member; guards
+      ``extract_vars.cpp`` giving deferred-shape ALLOCATABLE/POINTER dummies uniformly-free
+      bounds, while value-record AoR companions stay 1-based extent-only (no spurious lb).
+    * TYPE -- a grid-dim scalar the shim takes ``type(c_ptr), value`` must marshal as a
+      materialised ``&_pv_<sym>`` pointer, not a raw by-value int -- else the inner
+      ``c_f_pointer`` dereferences the integer as an address.
     """
     clear_external_registry()
     inner_builder = build_sdfg(_VELOCITY_TU.read_text(),

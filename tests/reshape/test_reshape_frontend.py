@@ -1,10 +1,6 @@
-"""Frontend-recognition tests for Fortran ``RESHAPE``.
-
-Each test drives one isolated Fortran pattern through the bridge and
-asserts the resulting SDFG carries a :class:`CopyLibraryNode` (the
-flat copy that ``buildCopyNode``-style emission produces for an
-``hlfir.reshape`` whose total element count is preserved).
-"""
+"""Frontend-recognition tests for Fortran ``RESHAPE``: each test asserts the SDFG
+carries a :class:`CopyLibraryNode` (the flat copy an ``hlfir.reshape`` with preserved
+element count produces)."""
 from pathlib import Path
 import sys
 

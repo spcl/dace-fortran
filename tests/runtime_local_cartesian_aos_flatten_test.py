@@ -1,27 +1,20 @@
 """Regression: a LOCAL, RUNTIME-SIZED array-of-struct with a static-array leaf
-member (the ICON-O ``t_cartesian_coordinates :: x(3)`` shape) must flatten to a
-multi-dim SoA companion ``p_x(n, nb, 3)`` -- even though the outer extents are
-only known at runtime.
+member (ICON-O's t_cartesian_coordinates :: x(3)) must flatten to a multi-dim
+SoA companion p_x(n, nb, 3), even though the outer extents are runtime-only.
 
-This is the third blocker that stopped the ocean dynamical core
-(``solve_free_sfc_ab_mimetic``) from lowering.  ``veloc_diff_biharmonic_curl_curl``
-declares a LOCAL ``TYPE(t_cartesian_coordinates) :: p_nabla2_dual(nblks, ...)``
-and does the manual AoS<->SoA copy ``ox(:,jb) = cc(:,jb)%x(1)``.  The struct is
-sized from runtime block counts, so ``FlattenStructs::isLocallyFlattenable``
-bailed at its "static shape only" gate (a companion ``fir.alloca`` over a
-dynamic pointee, or a static-literal ``fir.shape`` baking ``-1`` for the unknown
-dims, is verifier-invalid).  With the local AoS never flattened, ``cc(:,jb)%x(1)``
-had no flat companion to read and the copy surfaced downstream as a phantom
-section-to-section assign (``p_nabla2_dual_x = p_nabla2_dual``).
+Third blocker that stopped solve_free_sfc_ab_mimetic from lowering:
+veloc_diff_biharmonic_curl_curl declares a LOCAL TYPE(t_cartesian_coordinates)
+:: p_nabla2_dual(nblks, ...) and does a manual AoS<->SoA copy. Runtime-sized
+struct made FlattenStructs::isLocallyFlattenable bail at its "static shape
+only" gate, so the AoS never flattened and the copy surfaced downstream as a
+phantom section-to-section assign.
 
-The fix threads the declare's live outer extents through both the companion
-alloca and a fresh ``fir.shape`` (``outerExtentValues`` + ``makeCompanionAlloca``
-in ``FlattenStructs.cpp``); the fully-static path is unchanged.  Once flattened,
-``p(i,jb)%x(k)`` resolves to ``p_x(i,jb,k)`` and the copy lowers as ordinary
-array indexing.
+Fix: thread the declare's live outer extents through both the companion
+alloca and a fresh fir.shape (outerExtentValues + makeCompanionAlloca in
+FlattenStructs.cpp); fully-static path unchanged.
 
-Closed form: each element writes ``x = [s, 2s, 3s]`` for ``s = src(i,jb)`` and
-reads back ``sum(x) = 6*s``, so ``out = 6*src``.
+Closed form: each element writes x = [s, 2s, 3s] for s = src(i,jb), reads
+back sum(x) = 6*s, so out = 6*src.
 """
 from pathlib import Path
 
@@ -66,8 +59,7 @@ def test_runtime_local_cartesian_aos_flattens_to_soa(tmp_path: Path):
     sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="kern", entry="lib::kern").build()
     sdfg.validate()
 
-    # The local AoS flattened to a SoA companion; trailing dim is the member
-    # extent (3), the leading dims are the runtime outer extents.
+    # local AoS flattened to SoA: trailing dim is the member extent (3), leading dims are the runtime outer extents.
     assert "p_x" in sdfg.arrays, f"missing SoA companion; arrays={sorted(sdfg.arrays)}"
     shp = sdfg.arrays["p_x"].shape
     assert len(shp) == 3, shp

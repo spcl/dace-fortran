@@ -1,23 +1,6 @@
-"""Whole-array assignment from a function returning a fixed-shape array.
+"""Whole-array assignment from a function returning a fixed-shape array: ``tmp = make3(x)`` where ``make3`` returns ``real(8) :: r(3)``.
 
-The bridge now lowers
-
-::
-
-    real(8) :: tmp(3)
-    tmp = make3(x)              ! LHS = function call returning real(8) :: r(3)
-
-(This once emitted the bridge's ``?`` unresolved-expression placeholder, which
-failed Python ``ast.parse`` inside the scalar-assign tasklet.  That gap is
-CLOSED -- the docstring previously claimed a ``strict=True`` xfail was pinned
-here, but no marker was present and the pattern lowers correctly, so this test
-now RUNS the SDFG and compares BIT-EXACT against gfortran/f2py instead of only
-building + validating.)
-
-This pattern shows up in production benchmarks  --  NPB-style PURE FUNCTIONs
-that return small fixed arrays as "multi-value" outputs (e.g. graupel's
-``update = precip1(zeta, vc, ...)`` where ``precip1`` returns ``real(8) :: r(3)``
-holding (new_qx, new_p, new_vt) in one call).
+Once emitted the bridge's unresolved-expression ``?`` placeholder and failed to parse; now lowers correctly and runs BIT-EXACT against gfortran/f2py.  Mirrors production patterns like graupel's ``precip1`` multi-value PURE FUNCTION returns.
 """
 from pathlib import Path
 
@@ -71,9 +54,7 @@ def test_whole_array_assignment_from_function_return(tmp_path):
     out = np.zeros((3, n), order='F', dtype=np.float64)
     sdfg(out_arr=out, src=src_arr, n=np.int32(n))
 
-    # gfortran reference of the same source (``out_arr`` intent(out) -> returned;
-    # ``n`` inferred from ``src``).  Each column is a single-multiply per row, so
-    # the SDFG and the reference are bit-identical.
+    # gfortran reference: out_arr is intent(out)->returned, n inferred from src; single-multiply per row so SDFG and reference are bit-identical.
     ref = f2py_compile(_SRC, tmp_path / "ref", "array_return_ref", only=("kern", ))
     out_ref = np.asfortranarray(ref.m_array_return.kern(src_arr.copy(order='F')))
     np.testing.assert_array_equal(out, out_ref)

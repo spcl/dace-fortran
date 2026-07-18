@@ -1,7 +1,4 @@
-"""Baseline HLFIR coverage  --  IF / ELSE, ``IF (cond) CYCLE`` inside a DO.
-Pulled out of the original ``ported_from_f2dace_windmill_test.py``
-per-feature split.
-"""
+"""Baseline HLFIR coverage: IF/ELSE, ``IF (cond) CYCLE`` inside a DO."""
 
 from pathlib import Path
 
@@ -37,15 +34,13 @@ end subroutine pick
     d_ref = np.zeros(2, order="F")
     mod.pick(d_ref, True)
     d_sdfg = np.zeros(2, dtype=np.float64)
-    # ``flag`` reads into a branch condition, so the classifier promotes
-    # it to an SDFG symbol  --  pass a Python bool (DaCe casts it to int).
+    # ``flag`` feeds a branch condition, so the classifier promotes it to an SDFG symbol.
     sdfg(d=d_sdfg, flag=True)
     np.testing.assert_allclose(d_sdfg, d_ref)
 
 
 def test_cond_array(tmp_path):
-    """IF guard on a derived value (``s + 5.5 > 5.0``) drives an array
-    write  --  exercises the boolean-expression path through tasklets."""
+    """IF guard on a derived boolean expression (``s + 5.5 > 5.0``) drives an array write."""
     src = """
 subroutine cond_arr(d)
   implicit none

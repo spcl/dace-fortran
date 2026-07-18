@@ -1,16 +1,7 @@
-"""Unit + e2e coverage for ``rewrite_string_enum_to_integer``.
-
-Pattern 2 of the dual-pattern QE rewrite: a ``CHARACTER`` dummy
-argument used as an enum-style switch (``flag == 'c'``) is converted
-to ``INTEGER`` with each literal mapped to a deterministic integer
-value, plus a sidecar ``enum_maps`` dict the bindings layer consumes
-to expose the original string-typed surface at the Python boundary.
-
-Tests both:
-  * Textual rewrite correctness on the three pinned examples.
-  * The sidecar ``enum_maps`` dict's shape.
-  * flang-level smoke parse so the rewrite is syntactically valid.
-"""
+"""Unit + e2e coverage for ``rewrite_string_enum_to_integer`` (pattern 2 of the
+dual-pattern QE rewrite): a ``CHARACTER`` enum-style switch (``flag == 'c'``) becomes
+``INTEGER`` with a sidecar ``enum_maps`` dict for the Python-boundary string surface.
+Covers textual rewrite correctness, the sidecar dict's shape, and a flang smoke parse."""
 import re
 import shutil
 import subprocess
@@ -57,9 +48,8 @@ def test_basic_signature_becomes_integer():
 
 
 def test_basic_comparisons_become_integer_literals():
-    """The three ``action == '<lit>'`` comparisons in the basic
-    example map to ``action == 0`` / ``== 1`` / ``== 2`` (first-
-    appearance order)."""
+    """The three ``action == '<lit>'`` comparisons map to ``== 0``/``== 1``/``== 2``
+    (first-appearance order)."""
     src = _read("string_enum_basic_example.f90")
     out, enum_maps = rewrite_string_enum_to_integer(src)
     code = _strip_comments(out)
@@ -94,10 +84,8 @@ def test_basic_enum_map_shape():
 
 
 def test_case_insensitive_pairs_collapse_to_one_int():
-    """``flag == 'c' .OR. flag == 'C'`` -- both literals map to
-    the SAME integer so the rewritten condition is
-    ``flag == 0 .OR. flag == 0`` (which the optimiser later collapses
-    to ``flag == 0``)."""
+    """``flag == 'c' .OR. flag == 'C'`` -- both literals map to the SAME integer, giving
+    ``flag == 0 .OR. flag == 0`` (later collapsed by the optimiser)."""
     src = _read("string_enum_case_insensitive_example.f90")
     out, enum_maps = rewrite_string_enum_to_integer(src)
     m = enum_maps["run"]["flag"]
@@ -112,8 +100,7 @@ def test_case_insensitive_comparison_rewrites_both_variants():
     src = _read("string_enum_case_insensitive_example.f90")
     out, _ = rewrite_string_enum_to_integer(src)
     code = _strip_comments(out)
-    # The original ``flag == 'c' .OR. flag == 'C'`` should become
-    # ``flag == 0 .OR. flag == 0``.  Both halves rewritten.
+    # ``flag == 'c' .OR. flag == 'C'`` should become ``flag == 0 .OR. flag == 0``
     assert re.search(r"flag\s*==\s*0\s*\.OR\.\s*flag\s*==\s*0", code,
                      re.IGNORECASE), \
         f"case-insensitive pair should collapse to same int.  got:\n{code}"
@@ -125,9 +112,8 @@ def test_case_insensitive_comparison_rewrites_both_variants():
 
 
 def test_select_case_rewrites_case_branches():
-    """``SELECT CASE (mode)`` with literal-string ``CASE ('forward')``
-    branches has each case literal rewritten to the assigned
-    integer."""
+    """``SELECT CASE (mode)`` with literal-string ``CASE (...)`` branches has each
+    case literal rewritten to its assigned integer."""
     src = _read("string_enum_select_case_example.f90")
     out, enum_maps = rewrite_string_enum_to_integer(src)
     code = _strip_comments(out)
@@ -147,9 +133,8 @@ def test_select_case_rewrites_case_branches():
 
 
 def test_passthrough_on_kernel_with_no_string_enum():
-    """A procedure whose only CHARACTER dummy is never compared
-    against a literal is left alone (might be a real string the
-    bridge passes through)."""
+    """A procedure whose only CHARACTER dummy is never compared against a literal is
+    left alone -- might be a real string the bridge passes through."""
     src = """
 SUBROUTINE run(out_val, msg)
   IMPLICIT NONE

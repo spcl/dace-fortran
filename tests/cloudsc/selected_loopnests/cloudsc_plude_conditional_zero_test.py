@@ -1,25 +1,7 @@
-"""Conditional zero-or-keep pattern from cloudsc's PLUDE block.
-
-Mirrors ``cloudscexp2_simplified.F90`` lines 1768-1788:
-
-    IF (JK < KLEV .AND. JK >= NCLDTOP) THEN
-      DO JL = ...
-        PLUDE(JL, JK) = PLUDE(JL, JK) * ZDTGDP(JL)
-        IF (LDCUM(JL) .AND. PLUDE(JL, JK) > RLMIN
-                       .AND. PLU(JL, JK+1) > ZEPSEC) THEN
-          ! ... uses PLUDE(JL, JK), doesn't write it
-        ELSE
-          PLUDE(JL, JK) = 0.0
-        ENDIF
-      ENDDO
-    ENDIF
-
-Section-slice INOUT dummy, self-update, 3-conjunct IF reading the
-just-written value, ELSE branch unconditionally zeroes.  Structural
-regression guard for the section_alias + view-writeback contracts.
-
-E2e against an f2py-compiled reference of the same Fortran source.
-"""
+"""Conditional zero-or-keep pattern from cloudsc's PLUDE block (mirrors
+``cloudscexp2_simplified.F90`` lines 1768-1788): section-slice INOUT dummy,
+self-update, 3-conjunct IF reading the just-written value, ELSE branch
+unconditionally zeroes.  E2e against an f2py-compiled reference."""
 
 import numpy as np
 import pytest

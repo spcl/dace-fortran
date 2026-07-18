@@ -1,16 +1,8 @@
-"""Struct-vs-flat numerical equivalence for the six E6 velocity-advection
-representative loopnests.
-
-Each ``loopnest_N.f90`` file is self-contained: a module with both a
-struct-typed kernel and a flattened kernel, plus a driver that allocates
-deterministic random inputs (fixed seed per file), calls both kernels,
-and exits 0 iff their outputs match within 1e-12 (or bit-exactly for
-the logical mask of loopnest 6).
-
-The pytest here compiles each driver with ``gfortran`` (the only
-Fortran compiler with a runtime on this box  --  ``flang-new-21`` lacks
-``libflang_rt.runtime``), runs the binary, and asserts exit 0.
-"""
+"""Struct-vs-flat numerical equivalence for the six E6 velocity-advection representative
+loopnests. Each ``loopnest_N.f90`` is self-contained: struct-typed + flattened kernel,
+driver with deterministic random inputs, exits 0 iff outputs match within 1e-12 (bit-exact
+for loopnest 6's logical mask). Compiled with gfortran (flang-new-21 lacks
+libflang_rt.runtime on this box)."""
 
 import shutil
 import subprocess

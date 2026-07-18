@@ -1,18 +1,7 @@
-"""Minimal Fortran stand-ins for the ICON types ``mo_solve_nh_diff.f90`` touches.
+"""Minimal Fortran stand-ins for the ICON types ``mo_solve_nh_diff.f90`` touches, so the
+gfortran-only lanes need no ICON build."""
 
-SAME module + field names (and ranks/kinds) as the real ICON
-``mo_nonhydro_types`` / ``mo_prepadv_types``, restricted to the members the
-differential helpers clone / compare, so ``mo_solve_nh_diff.f90`` compiles
-unchanged against them and the gfortran-only lanes (:file:`test_solve_nh_diff.py`,
-:file:`test_solve_nh_patch.py`) need no ICON build.  Shared between both tests
-so a member added for a new solve_nh mutation lands in every stand-in at once
--- two drifting copies is exactly how a cloned-but-untested field slips through.
-"""
-
-#: ``mo_nonhydro_types`` + ``mo_prepadv_types`` stand-ins.  ``max_vcfl_dyn``
-#: mirrors the real non-pointer scalar (a MAX-accumulator the velocity callback
-#: mutates) so the clone's INTENT(INOUT) no-reset semantics and the scalar
-#: compare are exercised.
+#: ``mo_nonhydro_types`` + ``mo_prepadv_types`` stand-ins.
 MIN_STATE_TYPES_F90 = """\
 module mo_nonhydro_types
   implicit none
@@ -56,8 +45,7 @@ module mo_prepadv_types
 end module mo_prepadv_types
 """
 
-#: The geometry stubs only the patched-module compile check needs (the diff
-#: helpers themselves never reference them).
+#: Geometry stubs only the patched-module compile check needs (diff helpers never reference them).
 MIN_GEOMETRY_TYPES_F90 = """\
 module mo_model_domain
   implicit none

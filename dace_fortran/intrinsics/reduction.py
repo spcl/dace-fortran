@@ -1,15 +1,9 @@
 """Whole-array scalar reductions -> DaCe ``standard.Reduce``.
 
-``sum(a)`` / ``product(a)`` / ``minval(a)`` / ``maxval(a)`` each lower
-through Flang into a dedicated HLFIR op (``hlfir.sum``, ``hlfir.product``,
-``hlfir.minval``, ``hlfir.maxval``) whose operand is the input array box
-and whose result is either a scalar or a reduced-rank array (when a
-``dim=`` argument was supplied).
-
-The bridge's extract_ast spots one of these ops as the source of an
-``hlfir.assign`` and emits ``kind="reduce"`` ASTNode carrying the
-parameters below; hlfir_to_sdfg then calls
-``state.add_reduce(wcr, axes, identity)``.
+``sum``/``product``/``minval``/``maxval`` each lower through Flang into a
+dedicated HLFIR op whose result is a scalar or (with ``dim=``) a reduced-rank
+array.  The bridge's extract_ast emits ``kind="reduce"`` carrying the
+parameters below; hlfir_to_sdfg calls ``state.add_reduce(wcr, axes, identity)``.
 """
 
 from dace_fortran.intrinsics.base import ReductionIntrinsic
@@ -23,8 +17,7 @@ REDUCTIONS: dict[str, ReductionIntrinsic] = {
     ReductionIntrinsic(
         name='minval',
         wcr='lambda a, b: min(a, b)',
-        # Start at +inf so the first real element always wins.  DaCe's
-        # codegen resolves ``math.inf`` through ``_ALLOWED_MODULES``.
+        # +inf identity so the first real element always wins (resolved via _ALLOWED_MODULES).
         identity='math.inf'),
     'maxval':
     ReductionIntrinsic(name='maxval', wcr='lambda a, b: max(a, b)', identity='-math.inf'),

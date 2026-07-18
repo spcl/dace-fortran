@@ -1,20 +1,11 @@
-"""Build + e2e binding + numerical-correctness test for a single
-velocity-tendencies loop nest.
+"""Build + e2e binding + numerical-correctness test for a single velocity-tendencies
+loop nest.  Source: ``velocity_one_loop.f90`` -- one DO jb/jk/je nest extracted from
+ICON ``velocity_tendencies`` (upstream line 444-449), same struct-dummy shapes
+(TARGET/POINTER members, USE-imported types) so the bridge exercises pointer-array
+struct member flattening + dummy-arg flattening, with no indirect gather/nested calls.
 
-Source: ``velocity_one_loop.f90`` -- one DO jb/jk/je nest extracted
-from ICON ``velocity_tendencies`` (upstream line 444-449).  The
-kernel takes the same struct-dummy shapes (TARGET / POINTER
-members, USE-imported types) so the bridge exercises
-pointer-array struct member flattening and the dummy-arg
-flattening pass, with NO indirect gather and NO nested calls --
-i.e. the simplest velocity-shaped kernel that actually pushes the
-fixes from this session.
-
-Reference: pure-numpy reimplementation of the same loop nest
-(flat arrays everywhere).  Drops the f2py struct-dummy plumbing
-entirely; the full-velocity numerical case will be handled
-separately when the bigger plumbing pattern is settled.
-"""
+Reference: pure-numpy reimplementation on flat arrays (drops the f2py struct-dummy
+plumbing; the full-velocity numerical case is handled separately)."""
 
 from pathlib import Path
 
@@ -30,9 +21,8 @@ _SRC_PATH = _HERE / "velocity_one_loop.f90"
 
 
 def _numpy_reference(vn, wgtfac_e, vt, vn_ie, z_kin_hor_e, nproma, nlev, nblks_e):
-    """Same loop nest as ``one_loop_nest``, vectorised over jb/jk/je.
-    Operates in-place on ``vn_ie`` and ``z_kin_hor_e``.  Pure
-    subtractions only -- no FMA reorder risk."""
+    """Same loop nest as ``one_loop_nest``, vectorised over jb/jk/je, in-place on
+    ``vn_ie``/``z_kin_hor_e``.  Pure subtractions only -- no FMA reorder risk."""
     jk = slice(1, nlev)
     jk_minus_1 = slice(0, nlev - 1)
     vn_ie[:, jk, :] = vn[:, jk, :] - vn[:, jk_minus_1, :]
@@ -64,14 +54,9 @@ def _make_inputs(nproma: int, nlev: int, nblks_e: int, rng: np.random.Generator)
         z_kin_hor_e=rr(nproma, nlev, nblks_e),
         nproma=np.int32(nproma),
     )
-    # Deferred-shape pointer companions need:
-    #   * ``<name>_d<i>`` extent bound symbols (caller supplies actual
-    #     dim sizes)
-    #   * ``offset_<name>_d<i>`` offset symbols when the bridge can't
-    #     statically infer the lower bound (free-offset fallback for
-    #     dummy-arg deferred-shape ALLOCATABLE/POINTER with no
-    #     literal-index hint in the body).  All three Fortran dims of
-    #     each pointer member are 1-based here.
+    # deferred-shape pointer companions need ``<name>_d<i>`` extent symbols and
+    # ``offset_<name>_d<i>`` lower-bound symbols (free-offset fallback when the bridge
+    # can't statically infer it); all three Fortran dims are 1-based here.
     for nm in pointer_arrays:
         kw[f'{nm}_d0'] = np.int64(nproma)
         kw[f'{nm}_d1'] = np.int64(nlev)
@@ -104,10 +89,8 @@ def test_velocity_one_loop_builds_and_calls(tmp_path: Path):
 
 
 def test_velocity_one_loop_numerical(tmp_path: Path):
-    """Numerical comparison against a pure-numpy reference doing the
-    same loop nest on flat arrays.  Both sides see the same operand
-    order so we can hold a tight tolerance.
-    """
+    """Numerical comparison against a pure-numpy reference on flat arrays; both sides
+    see the same operand order so we hold a tight tolerance."""
     src = _SRC_PATH.read_text()
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
@@ -122,8 +105,8 @@ def test_velocity_one_loop_numerical(tmp_path: Path):
     rng = np.random.default_rng(0)
     kw = _make_inputs(nproma, nlev, nblks_e, rng)
 
-    # Pre-call snapshot of every INOUT buffer so the numpy reference
-    # can re-derive the post-call state from the same starting point.
+    # pre-call snapshot of every INOUT buffer so the numpy reference starts from the
+    # same state
     vn_ref = kw['p_prog_vn'].copy(order='F')
     wgtfac_e_ref = kw['p_metrics_wgtfac_e'].copy(order='F')
     vt_ref = kw['p_diag_vt'].copy(order='F')
@@ -137,7 +120,6 @@ def test_velocity_one_loop_numerical(tmp_path: Path):
     # Pure subtractions on both sides -- bit-exact.
     np.testing.assert_array_equal(kw['p_diag_vn_ie'], vn_ie_ref)
     np.testing.assert_array_equal(kw['z_kin_hor_e'], z_kin_hor_e_ref)
-    # vt and vn are not written by the kernel -- they should still
-    # equal the pre-call values.
+    # vt and vn are not written by the kernel -- should still equal the pre-call values
     np.testing.assert_array_equal(kw['p_diag_vt'], vt_ref)
     np.testing.assert_array_equal(kw['p_prog_vn'], vn_ref)

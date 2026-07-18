@@ -1,14 +1,8 @@
 # Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
-"""``rename_specifics``: disambiguate a specific module procedure that shares its
-name with the generic interface it belongs to.
-
-ICON's ``mo_mpi`` declares ``INTERFACE p_wait`` whose ``MODULE PROCEDURE`` list
-includes a specific *also* named ``p_wait`` (the no-argument wait).  That name
-sharing is legal Fortran, but externalising the generic leaves the inliner
-emitting a dangling ``USE mo_mpi, ONLY: ... => p_wait`` (the bare ``p_wait`` is
-now ambiguous and its specific was stubbed/dropped).  Renaming the specific to a
-fresh name breaks the collision -- the generic name and the (generic-dispatched)
-call sites stay, resolving to the renamed specific.
+"""``rename_specifics``: disambiguate a specific module procedure sharing its name
+with the generic interface it belongs to (ICON's ``mo_mpi`` ``p_wait`` pattern) --
+renaming the specific avoids the dangling ambiguous ``USE ... => p_wait`` the
+inliner would otherwise emit.
 """
 import shutil
 import subprocess
@@ -50,9 +44,8 @@ end module
 
 
 def test_rename_clashing_specific_disambiguates_generic(tmp_path: Path):
-    """With the rename, externalising the generic ``p_wait`` no longer dangles: the
-    specific is renamed (so it's distinct from the generic) and the calls resolve
-    to it -- the whole TU compiles."""
+    """With the rename, externalising the generic ``p_wait`` no longer dangles -- the
+    specific is renamed distinct from the generic, calls resolve to it, and the TU compiles."""
     ast = inline_to_ast({"s.f90": _SRC},
                         entry="m::kern",
                         external_functions=[ExternalFunction("p_wait")],
@@ -70,8 +63,7 @@ def test_rename_clashing_specific_disambiguates_generic(tmp_path: Path):
 
 
 def test_rename_skips_non_collision_and_external_names():
-    """A name that is not a source-defined generic/specific collision is left
-    untouched -- so an external (``mpi_*``) name is never renamed."""
+    """A non-collision name is left untouched -- an external (``mpi_*``) name is never renamed."""
     ast = inline_to_ast({"s.f90": _SRC},
                         entry="m::kern",
                         external_functions=[ExternalFunction("p_wait")],
@@ -81,7 +73,6 @@ def test_rename_skips_non_collision_and_external_names():
                         },
                         tolerate_external_uses=True)
     low = ast.tofortran().lower()
-    # neither the external name nor the non-colliding specific (p_wait_1 has no
-    # same-named generic) is renamed
+    # neither the external name nor the non-colliding specific (p_wait_1) is renamed
     assert "mpi_wait_x" not in low
     assert "p_wait_1_x" not in low

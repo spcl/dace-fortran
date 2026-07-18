@@ -1,23 +1,9 @@
 # Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
-"""End-to-end numerical-correctness tests for static-vtable monomorphisation.
-
-The rewrite tests in ``monomorphize_rewrite_test.py`` prove the monomorphised
-source no longer dispatches and is behaviour-preserving *under gfortran*.  These
-tests close the real loop the feature exists for: each monomorphised kernel must
-lower to a DaCe **SDFG** and compute the same numbers as the original polymorphic
-program (run through gfortran's real virtual dispatch), for all four rewrite
-primitives -- local, component, shared-interposer clone, and sibling retype.
-
-The ladder rewrites are driven with ``stack_slots=True``: once dispatch is gone
-the per-arm allocatable is unnecessary, and the dace-fortran bridge cannot lower
-an allocatable derived-type scalar (the HLFIR pass pipeline rejects it), so the
-SDFG-lowerable form uses plain stack slots.  For each fixture we
-
-  1. build the SDFG from the monomorphised (stack-slot) source,
-  2. compile the *original* polymorphic program with gfortran as the reference,
-  3. feed both the same random input and assert the SDFG matches.
-
-Needs flang-new-21 (HLFIR), the dace-fortran bridge, and gfortran.
+"""End-to-end numerical-correctness tests for static-vtable monomorphisation: each
+monomorphised kernel must lower to an SDFG and match the original polymorphic program run
+through gfortran's real dispatch, across all four rewrite primitives (local, component,
+clone, retype). Driven with ``stack_slots=True`` -- once dispatch is gone, the bridge can't
+lower an allocatable derived-type scalar, so the SDFG form uses plain stack slots.
 """
 import ctypes
 import shutil
@@ -86,8 +72,7 @@ contains
 end module
 """
 
-# --- COMPONENT dispatch: a container holds the polymorphic backend; a small -----
-#     self-contained driver does the factory + dispatch in one SDFG-able entry.
+# --- COMPONENT dispatch: a container holds the polymorphic backend; factory + dispatch in one SDFG-able entry. ---
 _COMPONENT_SRC = """
 module m
   type, abstract :: base
@@ -150,8 +135,7 @@ contains
 end module
 """
 
-# --- CLONE: the slot's dispatched binding is a NON-deferred shared interposer ----
-#     (base_run) that itself dispatches this%doit; the clone specialises it per arm.
+# --- CLONE: slot's dispatched binding is a NON-deferred shared interposer (base_run) that dispatches this%doit; clone specialises it per arm. ---
 _CLONE_SRC = """
 module m
   type, abstract :: base
@@ -220,8 +204,7 @@ contains
 end module
 """
 
-# --- RETYPE: an axis pinned to one concrete type at the call site (a pointer -----
-#     component) is specialised by retyping CLASS(base) -> TYPE(concrete).
+# --- RETYPE: axis pinned to one concrete type at the call site (pointer component), specialised by retyping CLASS(base) -> TYPE(concrete). ---
 _RETYPE_SRC = """
 module m
   type, abstract :: t_transfer
@@ -274,8 +257,7 @@ contains
 end module
 """
 
-#: bind(c) shims over the module's run -- the reference entry points.  Two shapes:
-#: the ladder fixtures take (sel, x); the retype fixture is fixed and takes (x).
+#: bind(c) shims over the module's run -- two shapes: ladder fixtures take (sel, x); retype fixture takes (x).
 _REF_CALLER_SELX = """
 subroutine run_c(sel, x) bind(c, name='run_c')
   use iso_c_binding
@@ -296,8 +278,7 @@ end subroutine
 
 
 def _gfortran_ref(work: Path, module_src: str, caller_src: str) -> ctypes.CDLL:
-    """Compile the *original* polymorphic program + a bind(c) caller into a .so and
-    return its ctypes handle -- the real-virtual-dispatch reference."""
+    """Compile the original polymorphic program + bind(c) caller into a .so; returns the ctypes handle (the real-virtual-dispatch reference)."""
     work.mkdir(parents=True, exist_ok=True)
     (work / "mod.f90").write_text(module_src)
     (work / "caller.f90").write_text(caller_src)

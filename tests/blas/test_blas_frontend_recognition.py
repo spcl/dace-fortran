@@ -1,11 +1,6 @@
-"""Frontend-recognition tests for BLAS routine calls.
-
-Each test drives one ``run_<routine>`` entry of :file:`blas_probes.f90`
-through the bridge and asserts the resulting SDFG contains the matching
-:mod:`dace.libraries.blas` library node. Numerical correctness of the
-lib node itself is covered by the per-node unit tests in d-face
-(``tests/library/blas/blas_extensions_openblas_test.py``).
-"""
+"""BLAS routine-call frontend recognition: each test drives one ``run_<routine>`` entry of
+``blas_probes.f90`` and asserts the SDFG contains the matching ``dace.libraries.blas`` node.
+Numerical correctness is covered separately (d-face's blas_extensions_openblas_test.py)."""
 from pathlib import Path
 
 import pytest

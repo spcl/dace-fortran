@@ -15,37 +15,29 @@ class _Ctx:
         self.builder = builder
         self.cur = None
         self.pending = []
-        # Active DO-loop iterator renames (Fortran name -> unique DaCe name).
-        # Populated by ``emit_loop`` for the duration of each loop body so
-        # downstream emitters (``emit_cond`` / ``emit_tasklet``) can
-        # substitute iterators referenced in conditions or RHS expressions.
+        # DO-loop iterator renames (Fortran name -> unique DaCe name); populated
+        # by ``emit_loop`` so downstream emitters can substitute iterators in
+        # conditions/RHS expressions.
         self.iter_map = {}
-        # Per-request-array count of isend/irecv posted (base name -> N).  Used
-        # by ``emit_mpi`` as the MPI_Waitall count when the bridge could not
-        # render the Fortran count arg (a by-reference integer literal traces to
-        # "?"); a straight-line waitall then waits on exactly the posts emitted.
+        # isend/irecv posts per request array (base name -> N); ``emit_mpi`` uses
+        # this as the MPI_Waitall count when the Fortran count arg renders "?".
         self.mpi_req_posts = {}
 
     def ensure(self, region=None):
         """Make ``self.cur`` a writable ``SDFGState``: create the start
         state when empty, or wire a fresh successor past a non-state
         control-flow block.  ``region`` defaults to the SDFG."""
-        # ``not self.cur`` misfires the same way ``region or self.sdfg`` did:
-        # SDFGState / LoopRegion define __len__ that returns 0 when empty,
-        # so a freshly-created state is treated as falsy even though we
-        # want to keep emitting into it.  Use explicit None checks.
+        # Explicit None check: SDFGState/LoopRegion define __len__ returning 0
+        # when empty, so ``not self.cur`` would misfire on a fresh state.
         from dace.sdfg.state import SDFGState
         if self.cur is None:
             r = self.sdfg if region is None else region
-            # First state added to an otherwise-empty control-flow region
-            # must be marked as the starting block, otherwise DaCe's
-            # validator raises "Ambiguous or undefined starting block".
+            # First state in an empty region must set start_block, or DaCe's validator errors.
             is_start = (len(r.nodes()) == 0)
             self.cur = r.add_state(f"s_{self.builder.nid()}", is_start_block=is_start)
             return
-        # After a ConditionalBlock (or any non-SDFGState control-flow block
-        # like a LoopRegion), the next emitter needs a fresh successor state
-        # wired from that block so tasklets / memlets have somewhere to land.
+        # Non-SDFGState control-flow block (ConditionalBlock, LoopRegion, ...) needs
+        # a fresh successor state wired after it for further tasklets/memlets.
         if not isinstance(self.cur, SDFGState):
             r = self.sdfg if region is None else region
             succ = r.add_state(f"s_{self.builder.nid()}")
@@ -63,12 +55,8 @@ class _Ctx:
         self.pending.clear()
 
     def flush_and_ensure(self, builder, region=None):
-        """Flush pending scalar assignments, then guarantee a writable
-        current state and return it.  Callers never ``ensure`` without
-        first ``flush``-ing; this enforces that order in one place.
-
-        :returns: ``self.cur`` (the now-writable current state).
-        """
+        """Flush pending assignments, then guarantee and return a writable
+        current state.  Enforces flush-before-ensure ordering in one place."""
         self.flush(builder, region)
         self.ensure(region)
         return self.cur

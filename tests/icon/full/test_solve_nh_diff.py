@@ -1,36 +1,18 @@
 """Unit test for the ``mo_solve_nh_diff`` differential helpers.
 
-The ICON binding-swap integration runs the stock Fortran ``solve_nh`` and the
-SDFG ``solve_nh_dace_icon`` on the SAME input and compares the mutable state
-BIT-FOR-BIT (:file:`mo_solve_nh_diff.f90`).  Three properties must hold for that
-to be sound, and this test pins them against gfortran with a small driver:
+The ICON binding-swap integration runs stock ``solve_nh`` and SDFG
+``solve_nh_dace_icon`` on the same input and diffs mutable state bit-for-bit
+(:file:`mo_solve_nh_diff.f90`).  Pins three properties against gfortran:
 
-  * **deep copy is independent BOTH ways** -- ``clone_state_indep_prog`` /
-    ``clone_prepadv_indep`` must allocate FRESH targets (the fields are
-    ``POINTER``, so a shallow ``dst = src`` would alias the same storage and
-    the reference run would clobber the SDFG run).  Mutating the original must
-    NOT change the clone, and mutating the clone must NOT change the original.
+  * clone independence both ways -- POINTER fields need a deep copy; a
+    shallow ``dst = src`` would let the two runs clobber each other.
+  * non-pointer scalars (e.g. ``diag%max_vcfl_dyn``) survive the shallow value
+    copy -- ``clone_diag_indep`` takes diag INTENT(INOUT) so an INTENT(OUT)
+    doesn't default-reset it (the regression this pins).
+  * ``compare_*`` is bit-exact and counts perturbations exactly.
 
-  * **non-pointer scalars survive the clone** -- ``diag%max_vcfl_dyn`` is a
-    MAX-accumulator the velocity callback carries across substeps; it reaches
-    the clone via the shallow ``dst = src`` value copy, and ``clone_diag_indep``
-    takes the diag INTENT(INOUT) precisely so that copy is not default-reset
-    (an INTENT(OUT) diag zeroed it and flipped the ``*_is_associated`` guards
-    -- the regression this pins).
-
-  * **compare is bit-exact and counts exactly** -- each ``compare_*`` reports 0
-    differing elements for identical state and the exact perturbation count
-    after single-element mutations (no tolerance).
-
-``free_state_clone`` / ``free_prepadv_clone`` releasing everything the clones
-allocated is pinned by running the same driver under valgrind when available
-(pointer allocations are not auto-finalized, so a missed member leaks and a
-double-free aborts).
-
-The real ``t_nh_state`` / ``t_prepare_adv`` are replaced with minimal modules of
-the same names carrying only the fields the helpers touch
-(:file:`_solve_nh_min_types.py`), so the test needs just gfortran (no flang /
-SDFG / ICON build).
+``free_*_clone`` full release is checked under valgrind when available. Uses
+minimal stand-in types (:file:`_solve_nh_min_types.py`), so needs only gfortran.
 """
 import shutil
 import subprocess
@@ -245,10 +227,7 @@ def test_solve_nh_diff_deepcopy_and_compare(diff_exe: Path):
 
 @pytest.mark.skipif(shutil.which("valgrind") is None, reason="valgrind not on PATH")
 def test_solve_nh_diff_frees_cleanly(diff_exe: Path):
-    """free_state_clone / free_prepadv_clone release every fresh target the
-    clones allocated: no definite leak, no double-free / invalid access.
-    (gfortran's runtime keeps still-reachable I/O buffers, so only definite
-    leaks are errors.)"""
+    """free_state_clone/free_prepadv_clone leak-free under valgrind (definite leaks only -- gfortran's I/O buffers stay reachable)."""
     run = subprocess.run(
         ["valgrind", "--error-exitcode=42", "--leak-check=full", "--errors-for-leak-kinds=definite",
          str(diff_exe)],

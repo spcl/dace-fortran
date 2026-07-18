@@ -61,12 +61,8 @@ end subroutine main
     size = 4
     res = np.full([size], 42, order="F", dtype=np.int32)
     res2 = np.full([size], 42, order="F", dtype=np.int32)
-    # Per the Scalar I/O convention an ``intent(in)`` scalar dummy lands
-    # as a plain Scalar on the SDFG signature; pass a plain int.
+    # Scalar I/O convention: intent(in) scalar dummy -> plain Scalar on the SDFG signature.
     sdfg(res=res, res2=res2, a=5, a_present=1)
 
-    # Safe path only  --  second internal ``call fun(res2)`` reads
-    # OPTIONAL ``a`` without checking PRESENT and is UB per Fortran;
-    # res2 is left unchecked.  The ``get_indices_c`` call exercises
-    # the present-guarded path and stays implicit.
+    # Safe path only: call fun(res2) reads OPTIONAL a without a PRESENT check (UB); res2 left unchecked.
     assert res[0] == 5

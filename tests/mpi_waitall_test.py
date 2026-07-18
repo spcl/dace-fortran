@@ -1,12 +1,8 @@
-"""``MPI_Waitall`` over a request array lowers to a ``dace.libraries.mpi``
-``Waitall`` library node.
+"""``MPI_Waitall`` over a request array lowers to a ``dace.libraries.mpi`` ``Waitall`` node.
 
-The bridge recognises ``MPI_Waitall(count, array_of_requests, statuses, ierr)``
-and emits a ``Waitall`` node (waiting on the whole request array; the count is
-derived from the request memlet), threaded after the matching Isend/Irecv
-producers through the shared per-request opaque transient -- the array analogue
-of ``mpi_wait`` -> ``Wait``.  Mirrors ``tests/sync_devirt_mpi_libnode_test.py``'s
-libnode-presence assertion (a lowering test; no ranks required).
+Recognises ``MPI_Waitall(count, array_of_requests, statuses, ierr)``, threaded after the
+matching Isend/Irecv producers through the shared per-request opaque transient -- the array
+analogue of ``mpi_wait`` -> ``Wait``. Lowering test only; no ranks required.
 """
 from pathlib import Path
 
@@ -16,9 +12,8 @@ from _util import build_sdfg, have_flang
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
-#: Nonblocking exchange whose two requests live in an array, completed by a
-#: single ``MPI_Waitall`` -- the ICON halo ``mpi_waitall(p_irequest, p_request,
-#: ...)`` shape in miniature.
+#: nonblocking exchange, two requests in an array, completed by one MPI_Waitall -- the ICON
+#: halo mpi_waitall(p_irequest, p_request, ...) shape in miniature
 _WAITALL = """
 module waitall_mod
 contains
@@ -41,8 +36,7 @@ end module waitall_mod
 
 
 def test_mpi_waitall_lowers_to_waitall_libnode(tmp_path: Path):
-    """``MPI_Waitall`` lowers to a ``dace.libraries.mpi`` ``Waitall`` node, beside
-    the Isend/Irecv producers -- the only MPI nodes, none left external."""
+    """``MPI_Waitall`` lowers to a ``dace.libraries.mpi`` ``Waitall`` node beside the Isend/Irecv producers -- the only MPI nodes, none left external."""
     from dace.libraries.mpi.nodes.node import MPINode
 
     sdfg = build_sdfg(_WAITALL, tmp_path / "sdfg", name="waitall", entry="waitall_mod::waitall_ring").build()

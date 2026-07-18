@@ -1,22 +1,10 @@
 """Fortran-side distributed-data descriptors.
 
-The Fortran caller boundary differs from DaCe's default MPI assumption
-in one place that matters for codegen: DaCe's stock
-:class:`dace.data.distributed.ProcessGrid` hardcodes ``MPI_COMM_WORLD``
-as the parent communicator of every Cartesian-topology process grid it
-builds at ``__dace_init`` time.  The Fortran caller, however, typically
-hands the SDFG a sub-communicator created by ``MPI_Comm_split`` /
-``MPI_Cart_sub`` / similar -- the integer handle for that
-sub-communicator is what the user's program actually wants to use as
-the parent.
-
-This module exports :class:`FortranProcessGrid`, a subclass of
-:class:`dace.data.distributed.ProcessGrid` whose ``init_code()`` reads
-the parent communicator from an SDFG symbol (typically populated by the
-bindings layer from an :func:`MPI_Comm_f2c` conversion of the Fortran
-integer handle).  The ``exit_code()`` is inherited unchanged -- the
-Cartesian sub-grid created here is destroyed the same way DaCe's
-stock pgrid is.
+DaCe's stock ``ProcessGrid`` hardcodes ``MPI_COMM_WORLD`` as the parent
+communicator; the Fortran caller typically hands the SDFG a sub-communicator
+(``MPI_Comm_split``/``MPI_Cart_sub``) instead.  ``FortranProcessGrid`` reads
+the parent communicator from an SDFG symbol (populated by the bindings layer
+via ``MPI_Comm_f2c``).  ``exit_code()`` is inherited unchanged.
 """
 import dace.dtypes as dtypes
 from dace.data.distributed import ProcessGrid
@@ -25,25 +13,11 @@ from dace.properties import Property, make_properties
 
 @make_properties
 class FortranProcessGrid(ProcessGrid):
-    """Process grid whose parent communicator is supplied by the
-    Fortran caller via an SDFG symbol of type ``opaque(MPI_Comm)``.
-
-    Differs from the stock :class:`ProcessGrid` in exactly one place:
-    the ``MPI_Cart_create`` call's first argument is the symbol named
-    by :attr:`parent_comm_symbol` (read at ``__dace_init`` time from
-    the C MPI_Comm produced by ``MPI_Comm_f2c`` in the bindings
-    wrapper) instead of ``MPI_COMM_WORLD``.
-
-    All other process-grid semantics are inherited.  Sub-grids
-    (``is_subgrid=True``) ignore :attr:`parent_comm_symbol` -- the
-    parent comm comes from the named ``parent_grid``, same as the
-    stock class.
-
-    :ivar parent_comm_symbol: Name of the SDFG symbol carrying the
-        C ``MPI_Comm`` (an :class:`opaque <dace.dtypes.opaque>` of
-        ``MPI_Comm``) that should parent this top-level grid.  Used
-        only when ``is_subgrid`` is false.
-    """
+    """Process grid whose parent communicator is supplied by the Fortran
+    caller via an SDFG symbol of type ``opaque(MPI_Comm)``, instead of the
+    stock class's hardcoded ``MPI_COMM_WORLD``.  Sub-grids
+    (``is_subgrid=True``) ignore :attr:`parent_comm_symbol` -- their parent
+    comm comes from ``parent_grid``, same as the stock class."""
 
     parent_comm_symbol = Property(
         dtype=str,
@@ -66,11 +40,9 @@ class FortranProcessGrid(ProcessGrid):
         self.parent_comm_symbol = parent_comm_symbol
 
     def init_code(self) -> str:
-        """Emit the MPI initialisation lines that build the process
-        grid + group + rank/size/coords cache in ``__state``.  The C
-        identifier for the parent communicator is
-        :attr:`parent_comm_symbol` when set, else ``MPI_COMM_WORLD``
-        (the stock behaviour)."""
+        """Emit the MPI init lines building the process grid + group +
+        rank/size/coords cache in ``__state``; parent communicator is
+        ``parent_comm_symbol`` when set, else ``MPI_COMM_WORLD``."""
         parent = self.parent_comm_symbol or "MPI_COMM_WORLD"
         ndim = len(self.shape)
         dims_assigns = "\n".join(f"__state->{self.name}_dims[{i}] = {s};" for i, s in enumerate(self.shape))

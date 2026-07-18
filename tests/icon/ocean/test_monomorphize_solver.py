@@ -1,21 +1,14 @@
 """Drift guard for the committed DE-POLYMORPHISED ICON-O surface solver.
 
-The single-TU extraction (``test_extract_single_tu.py``) keeps the
-``t_ocean_solve`` subsystem EXTERNAL because flang lowers its virtual dispatch
-to ``fir.dispatch`` (no SDFG node for a runtime vtable lookup).  This test takes
-the opposite route on the same real sources: it runs the static-vtable
-monomorphisation engine over them and pins the de-polymorphised output that the
-SDFG-lowering stage can consume.
+flang lowers ``t_ocean_solve``'s virtual dispatch to ``fir.dispatch`` (no SDFG
+node for a runtime vtable), so this runs the static-vtable monomorphisation
+engine over the real sources and pins the de-polymorphised output the SDFG stage
+consumes.  Pure fparser parse + AST rewrite -- no flang/OpenMPI/compile.
 
-Pure fparser parse + AST rewrite -- NO flang, NO OpenMPI, no compile -- so it is
-fast and gated only on the icon-model submodule.  It
-
-  * regenerates the de-polymorphised source and asserts it is byte-identical to
-    the committed ``dycore_solver_monomorphized.f90`` (so the saved artifact
-    never silently drifts from the engine + the upstream sources), and
-  * asserts the de-polymorphisation is real: the locked rewrite statistics, the
-    synthesised ``act__tag`` + the per-arm interposer clones, and ZERO surviving
-    ``CLASS(t_transfer)`` / ``CLASS(t_lhs_agen)`` declarations.
+Asserts: regenerated source is byte-identical to the committed
+``dycore_solver_monomorphized.f90``, and the de-polymorphisation is real (locked
+rewrite stats, synthesised ``act__tag`` + per-arm clones, zero surviving
+``CLASS(t_transfer)``/``CLASS(t_lhs_agen)``).
 """
 import re
 
@@ -46,8 +39,8 @@ _SHARED_INTERPOSERS = {"solve", "construct", "dump_matrix"}
 
 
 def _bare_act_dispatches(prog: f03.Program) -> int:
-    """Type-bound dispatches still routed through the bare ``%act`` backend slot
-    (the polymorphic calls the monomorphisation must eliminate)."""
+    """Type-bound dispatches still routed through the bare ``%act`` slot (the
+    polymorphic calls monomorphisation must eliminate)."""
     n = 0
     for call in walk(prog, f03.Call_Stmt):
         designator = call.children[0]
@@ -73,8 +66,8 @@ def test_artifact_is_fully_depolymorphised():
     """The locked rewrite stats + the structural evidence that no virtual
     dispatch survives in the saved artifact."""
     source, stats = depolymorphize_solver()
-    # Backend `act` factory expanded once; the 3 shared interposers cloned once
-    # per arm (3 x 7); the 2 retype axes' CLASS declarations all rewritten.
+    # act factory expanded once; 3 shared interposers cloned per arm (3x7);
+    # both retype axes' CLASS declarations rewritten.
     assert stats.components_rewritten == 1
     assert stats.interposers_cloned == len(_SHARED_INTERPOSERS) * len(_BACKEND_ARMS)
     assert stats.declarations_retyped > 0

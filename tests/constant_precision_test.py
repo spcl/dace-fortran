@@ -1,13 +1,6 @@
-"""Tests that the bridge stringifies float constants at IEEE-754 round-trip
-precision (17 digits for binary64).
+"""Bridge stringifies float constants at IEEE-754 round-trip precision (17 digits for binary64).
 
-Fortran ``parameter`` constants and ``arith.constant`` literals are
-folded by Flang into ``arith.constant`` ops; the bridge formats them as
-strings for the tasklet code.  At default ``ostream`` precision (6
-digits) the bottom of the mantissa is lost  --  multiplying a folded
-``3.14159265358979d0`` by 2 produces ``6.28319`` instead of
-``6.283185307179586`` and the result has effective f32 precision in a
-nominally-f64 SDFG.
+At default ostream precision (6 digits) the mantissa tail is lost -- 3.14159265358979d0*2 would come out 6.28319 instead of 6.283185307179586, silently downgrading an f64 SDFG to f32 precision.
 """
 
 from pathlib import Path
@@ -21,10 +14,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_module_parameter_keeps_f64_precision(tmp_path: Path):
-    """Module ``parameter`` real(8) constant flows through Flang's
-    constant folding into the tasklet expression.  The bridge must emit
-    enough digits to round-trip  --  17 for double  --  so the tasklet's
-    folded multiplication matches the f64 reference exactly."""
+    """Module parameter real(8) constant folded by Flang must round-trip at 17 digits so the tasklet multiplication matches the f64 reference exactly."""
     src = """
 module pi_consts
   implicit none
@@ -45,16 +35,12 @@ end module main_mod
     out = np.zeros(1, dtype=np.float64)
     sdfg(out=out)
     expected = 3.14159265358979323846 * 2.0
-    # 1e-15 rtol: with 17-digit serialisation we round-trip binary64
-    # exactly; with the old default 6-digit serialisation this would
-    # only match at ~1e-6.
+    # 1e-15 rtol: 17-digit serialisation round-trips binary64 exactly; the old 6-digit default only matched at ~1e-6.
     np.testing.assert_allclose(out[0], expected, rtol=1e-15, atol=0)
 
 
 def test_inline_double_literal_keeps_precision(tmp_path: Path):
-    """Inline double-precision literal (``1.0d0 / 3.0d0`` style) folded
-    by Flang at compile time into a single constant  --  same precision
-    requirement, no module ``parameter`` involved."""
+    """Inline double-precision literal (``1.0d0/3.0d0``) folded by Flang at compile time -- same precision requirement, no module parameter involved."""
     src = """
 subroutine main(out)
   real(8), intent(out) :: out
@@ -65,16 +51,12 @@ end subroutine main
     out = np.zeros(1, dtype=np.float64)
     sdfg(out=out)
     expected = 1.0 / 3.0
-    # Folded constant should be exactly representable as the IEEE-754
-    # binary64 of 1/3.  6-digit serialisation would give 0.333333,
-    # different from the actual binary64 by ~1e-7.
+    # folded constant must be the exact binary64 of 1/3; 6-digit serialisation would give 0.333333, off by ~1e-7.
     np.testing.assert_allclose(out[0], expected, rtol=1e-15, atol=0)
 
 
 def test_compound_constant_expression_keeps_precision(tmp_path: Path):
-    """Multiple folded constants in a single expression  --  each
-    ``arith.constant`` carries its own FloatAttr through buildExpr; the
-    serialisation must be precise for every one of them."""
+    """Multiple folded constants in one expression -- each arith.constant's FloatAttr must serialise precisely through buildExpr."""
     src = """
 subroutine main(out)
   real(8), intent(out) :: out
@@ -90,11 +72,7 @@ end subroutine main
 
 
 def _tasklet_code(sdfg) -> str:
-    """Concatenate every tasklet's code string in ``sdfg``.
-
-    :param sdfg: a built SDFG.
-    :returns: all tasklet code joined by newlines.
-    """
+    """Concatenate every tasklet's code string in ``sdfg``."""
     import dace
 
     return "\n".join(
@@ -123,8 +101,7 @@ end subroutine cst64
 
 
 def test_double_constant_stays_double(tmp_path: Path):
-    """``real(8)`` literals: no ``float32`` cast, double value kept,
-    output matches an f2py reference of the same source exactly."""
+    """real(8) literals: no float32 cast, double value kept, output matches an f2py reference exactly."""
     d = tmp_path / "f64"
     d.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(_SRC_F64, d, name="cst64", entry="cst64").build()
@@ -143,20 +120,14 @@ def test_double_constant_stays_double(tmp_path: Path):
 
 
 def test_single_constant_emits_float32_cast(tmp_path: Path):
-    """``real(4)`` literals: emitted wrapped in ``dace.float32(...)`` so
-    they round to single precision exactly as gfortran does; SDFG
-    result matches the f2py reference and differs from the naive
-    double evaluation."""
+    """real(4) literals wrap in dace.float32(...) so they round to single precision like gfortran; result matches f2py and differs from the naive double evaluation."""
     d = tmp_path / "f32"
     d.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(_SRC_F32, d, name="cst32", entry="cst32").build()
     sdfg.validate()
 
     code = _tasklet_code(sdfg)
-    # The bridge emits the canonical bare ``float32(...)`` kind-coercion;
-    # d-face's cppunparse (``_typecast_funcs``) lowers it to
-    # ``dace::float32(...)`` at codegen so the literal rounds to single
-    # precision (verified numerically below).
+    # bridge emits bare float32(...); d-face's cppunparse lowers it to dace::float32(...) at codegen for correct single-precision rounding (verified below).
     assert "float32(" in code, (f"fp32 constant must be wrapped in a float32(...) cast for correct "
                                 f"rounding; tasklet code was: {code}")
     assert sdfg.arrays["y"].dtype.type == np.float32
@@ -173,10 +144,7 @@ def test_single_constant_emits_float32_cast(tmp_path: Path):
 
 
 def test_single_constant_uses_shortest_roundtrip_form(tmp_path: Path):
-    """The f32 literal is stringified in its SHORTEST round-tripping
-    form (``float32(0.1)``), not the f64-widened expansion
-    (``float32(0.10000000149011612)``).  Both are bit-identical
-    once cast, but the short form stays close to the Fortran source."""
+    """f32 literal stringifies to its shortest round-tripping form (float32(0.1)), not the f64-widened expansion -- bit-identical once cast, but stays close to the Fortran source."""
     d = tmp_path / "f32short"
     d.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(_SRC_F32, d, name="cst32s", entry="cst32").build()
@@ -186,6 +154,5 @@ def test_single_constant_uses_shortest_roundtrip_form(tmp_path: Path):
     assert "float32(0.1)" in code, (f"expected shortest-roundtrip f32 literal float32(0.1); "
                                     f"got: {code}")
     assert "float32(0.2)" in code, code
-    # The long f64-widened form must NOT appear.
     assert "0.10000000149011612" not in code, (f"f32 constant widened to f64 17-digit form: {code}")
     assert "0.20000000298023224" not in code, code

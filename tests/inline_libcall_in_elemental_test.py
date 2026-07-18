@@ -1,36 +1,15 @@
-"""End-to-end probes for inline use of every HLFIR libcall the
-elemental + ``hlfir.apply`` materialisation handles.
+"""E2e probes for inline use of every HLFIR libcall the elemental + ``hlfir.apply``
+materialisation handles.
 
-The bridge's elemental walker at
-``bridge/ast/control_flow.cpp::walkElementalBody`` pre-emits a
-``_libtmp_<gid>`` transient when the elemental body's ``hlfir.apply``
-reads a libcall expr-producer.  ``libcallNameForExprOp``
-(``bridge/ast/elementals.cpp``) is the gate -- every HLFIR op-name
-listed there gets the materialisation, anything else falls out as
-``?`` in the tasklet body.
+``bridge/ast/control_flow.cpp::walkElementalBody`` pre-emits a ``_libtmp_<gid>``
+transient when an elemental body's ``hlfir.apply`` reads a libcall expr-producer;
+``libcallNameForExprOp`` (``bridge/ast/elementals.cpp``) is the gate -- anything not
+listed there falls out as ``?`` in the tasklet body.
 
-These probes pin the inline-libcall coverage so a future regression
-in the gate surfaces here at parse time, not in QE's microkernel
-diff at integration time.
-
-Coverage as of the matmul_transpose fix (commit referenced in this
-file's git log):
-
-  * matmul                   -- ``2.0 - matmul(a, b)`` (existing)
-  * transpose                -- ``1.0 - transpose(a)`` (existing)
-  * dot_product              -- inline ``dot_product(...)``
-  * matmul_transpose         -- ``MATMUL(TRANSPOSE(...)) / scalar``
-                                 (QE vcut_get -- THIS commit)
-  * count                    -- inline ``COUNT(...)`` (THIS commit)
-  * minloc / maxloc          -- inline ``MINLOC(...) + 1`` (THIS)
-  * cshift                   -- ``2.0 - cshift(arr, 1)`` (THIS)
-
-Gaps still surfacing ``?`` (separate work items):
-
-  * hlfir.reshape -- not in the dispatcher's libcall table at all
-  * hlfir.sum / product / minval / maxval / any / all with DIM
-    (array-result dim-reductions go through buildSectionReduceAssign,
-    not the libcall path)
+Covered: matmul, transpose, dot_product, matmul_transpose (QE vcut_get shape), count,
+minloc/maxloc, cshift.
+Still gaps (``?``): hlfir.reshape (not in the dispatch table); hlfir.sum/product/minval/
+maxval/any/all with DIM (goes through buildSectionReduceAssign, not the libcall path).
 """
 import numpy as np
 import pytest
@@ -41,13 +20,9 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_inline_matmul_transpose_in_elemental_division(tmp_path):
-    """``MATMUL(TRANSPOSE(A), q) / scalar`` (QE vcut_get shape).
-
-    The optimised-bufferization pass fuses TRANSPOSE+MATMUL to
-    ``hlfir.matmul_transpose``; the elemental body's apply walks
-    back to this fused op.  ``libcallNameForExprOp`` recognises it
-    and the materialisation emits a ``Transpose + MatMul`` libcall
-    pair into the SDFG without any source-Fortran rewrite."""
+    """``MATMUL(TRANSPOSE(A), q) / scalar`` (QE vcut_get shape) -- optimised-bufferization
+    fuses TRANSPOSE+MATMUL to ``hlfir.matmul_transpose``; ``libcallNameForExprOp``
+    recognises it and materialises a ``Transpose + MatMul`` libcall pair, no source rewrite."""
     src = """
 module m
 contains
@@ -67,13 +42,9 @@ end module
 
 
 def test_inline_cshift_in_elemental(tmp_path):
-    """``2.0 - CSHIFT(arr, 1)`` -- the cshift expr-producer feeds an
-    elemental's apply.  The bridge stashes the shift into
-    ``options['shift']`` (so the ``CShift`` node gets the concrete
-    shift, not the ``__shift`` fallback symbol that would leak as a
-    free symbol) and d-face's ``ExpandCShiftPure`` lowers it to a
-    single Map whose source memlet subset is the ``Mod``-rotated
-    index."""
+    """``2.0 - CSHIFT(arr, 1)`` -- bridge stashes the shift into ``options['shift']`` (so
+    ``CShift`` gets the concrete shift, not a leaking ``__shift`` free-symbol fallback);
+    d-face's ``ExpandCShiftPure`` lowers it to a single Map with a ``Mod``-rotated index."""
     src = """
 module m
 contains

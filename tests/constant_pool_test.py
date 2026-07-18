@@ -1,19 +1,10 @@
-"""Constant-pool tests  --  array / scalar literals on the RHS.
+"""Constant-pool tests -- array/scalar literals on the RHS.
 
-Flang lowers Fortran array literals (``(/ 2.0d0, 3.0d0, 4.0d0 /)``) to
-read-only globals named ``_QQro.<count>x<dtype>.<counter>``.  These
-globals carry their initial data inline as a ``dense<[...]>`` attribute
-on a ``fir.global`` op.  The bridge needs to:
-
-  1. Detect ``hlfir.declare`` ops with the ``parameter`` Fortran
-     attribute whose memref traces to ``fir.address_of(@<global>)``
-     of a ``constant`` global;
-  2. Extract the dense initial values;
-  3. Synthesise an SDFG init state writing those values into the
-     transient so the kernel's reads see the right data.
-
-Without that the kernel's reads silently return zero  --  the transient
-is registered but its content is uninitialised.
+Flang lowers array literals to read-only globals (``_QQro.<count>x<dtype>.<n>``)
+carrying dense init data on a ``fir.global`` op.  The bridge must detect the
+``hlfir.declare``/``parameter`` -> ``fir.address_of`` chain, extract the dense
+values, and synthesise an SDFG init state -- otherwise the kernel's reads
+silently return zero (transient registered but uninitialised).
 """
 
 from pathlib import Path
@@ -33,10 +24,8 @@ def _build(src: str, tmp: Path, name: str = "main", entry: str | None = None):
 
 
 def test_scalar_literal_assigned_then_used(tmp_path: Path):
-    """Plain scalar literal as RHS  --  the simplest case.  No constant
-    pool involved (scalar literals lower to ``arith.constant``), but
-    pin it as a baseline so the array-literal tests below contrast
-    cleanly."""
+    """Scalar literal RHS baseline -- no constant pool involved (lowers to
+    ``arith.constant``)."""
     src = """
 subroutine main(out)
   implicit none
@@ -57,16 +46,9 @@ end subroutine
 
 
 def test_array_literal_assigned_then_used(tmp_path: Path):
-    """Array literal as RHS  --  exercises the ``_QQro.NxrK.M`` constant
-    pool.  ``x = (/ 2.0d0, 3.0d0, 4.0d0 /)`` lowers to:
-
-        %g = fir.address_of(@_QQro.3xr8.0) : !fir.ref<!fir.array<3xf64>>
-        %d = hlfir.declare %g(...) {fortran_attrs = parameter,
-                                    uniq_name = "_QQro.3xr8.0"}
-        hlfir.assign %d#0 to %x
-
-    The bridge must surface the global's dense init data and synthesise
-    a write into the SDFG transient before the assign fires."""
+    """Array literal RHS exercises the ``_QQro.NxrK.M`` constant pool
+    (``fir.address_of`` + ``hlfir.declare parameter`` + ``hlfir.assign``); bridge must
+    surface the global's dense init data before the assign fires."""
     src = """
 subroutine main(out)
   implicit none
@@ -89,9 +71,8 @@ end subroutine
 
 
 def test_integer_array_literal_used_as_index_source(tmp_path: Path):
-    """Integer array literal feeding a downstream gather  --  pins the
-    constant pool's int32 path (``_QQro.3xi4.N``) and verifies the
-    init data survives an indirect read."""
+    """Integer array literal feeding a downstream gather pins the int32
+    constant-pool path (``_QQro.3xi4.N``)."""
     src = """
 subroutine main(out)
   implicit none
@@ -114,13 +95,9 @@ end subroutine
 
 
 def test_indirect_index_with_symbol_index(tmp_path: Path):
-    """``a(idx(j))`` where ``j`` is a runtime symbol  --  the inner
-    load ``idx(j)`` is indirect, not a constant-indexed read.  The
-    bridge's per-occurrence indirect machinery (``collect_indirect``
-    -> ``<arr>_at<gid>``) handles this without touching the
-    ``__sym_<arr>_<n>`` constant-pool path used for ``idx(1)``.
-    Pinned here so the constant / symbol split stays unambiguous.
-    """
+    """``a(idx(j))`` with runtime symbol ``j``: indirect load, handled by
+    ``collect_indirect`` (``<arr>_at<gid>``), not the ``__sym_<arr>_<n>`` constant-pool
+    path used for ``idx(1)``."""
     src = """
 subroutine main(out, j)
   implicit none
@@ -150,15 +127,9 @@ end subroutine
 
 
 def test_indirect_index_with_local_scalar_symbol(tmp_path: Path):
-    """``sval = 3; a(idx(sval))``  --  same shape as the symbol-index
-    test above, but the symbol is a LOCAL scalar set inline rather
-    than a dummy.  Pinned because Fortran integer classification
-    in ``extract_vars`` keys on usage: a scalar that feeds an
-    ``hlfir.designate`` index is promoted to a SYMBOL (writes
-    become interstate-edge assignments), so the chain
-    ``sval = 3 -> idx(sval) -> idx_at<gid>`` flows through the
-    symbol-side machinery end-to-end.
-    """
+    """Same as above but the symbol is a LOCAL scalar, not a dummy: a scalar feeding an
+    ``hlfir.designate`` index is promoted to a SYMBOL, so ``sval = 3 -> idx(sval) ->
+    idx_at<gid>`` flows through the symbol-side machinery."""
     src = """
 subroutine main(out)
   implicit none
@@ -188,11 +159,8 @@ end subroutine
 
 
 def test_indirect_index_with_struct_member_symbol(tmp_path: Path):
-    """``a(s%idx(j))``  --  same as above but the index source is a
-    flat companion of a struct member after flatten.  Exercises the
-    same per-occurrence indirect path through the post-flatten
-    ``s_idx`` companion.
-    """
+    """Same as above but the index source is a flat companion of a struct member
+    (post-flatten ``s_idx``)."""
     src = """
 module lib
   implicit none
@@ -229,9 +197,8 @@ end subroutine
 
 
 def test_two_distinct_array_literals(tmp_path: Path):
-    """Two separate array literals  --  flang assigns them sequential
-    counters (``_QQro.3xr8.0`` and ``_QQro.3xr8.1``).  Verifies the
-    bridge handles multiple constant-pool entries side-by-side."""
+    """Two array literals get sequential flang counters (``_QQro.3xr8.0``/``.1``); bridge
+    must handle both side-by-side."""
     src = """
 subroutine main(out)
   implicit none

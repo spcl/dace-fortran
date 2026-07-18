@@ -1,16 +1,10 @@
-"""Stability probes for the rank-reinterpretation view-alias path.
+"""Stability probes for the rank-reinterpretation view-alias path: each test exercises a Fortran
+pattern that could plausibly crash the bridge or misclassify the view. Build success (no runtime
+error) is the contract; numerical correctness is covered by rank_promotion_view_e2e_test.py.
 
-Each test exercises a Fortran source pattern that could plausibly
-crash the bridge or misclassify the view.  Build success without
-runtime error is the contract; numerical correctness is covered by
-``rank_promotion_view_e2e_test.py``.
-
-The intent is to lock down the corner cases so ingesting new Fortran
-code doesn't surprise us: ``asAssumedShapeAlias`` returns null on rank
-mismatch, ``extract_vars`` mints a view_alias VarInfo, ``descriptors.py``
-synthesises column-major strides, ``access.py`` wires the source ->
-view edge.  Each step must not crash on the patterns below.
-"""
+Locks down the pipeline: asAssumedShapeAlias returns null on rank mismatch, extract_vars mints a
+view_alias VarInfo, descriptors.py synthesises column-major strides, access.py wires the source ->
+view edge -- none of these steps may crash on the patterns below."""
 from pathlib import Path
 
 import pytest
@@ -28,8 +22,7 @@ def _builds(tmp_path, src, name, entry):
 
 
 # ---------------------------------------------------------------------------
-# Same callee invoked from two call sites with same-shape actuals.
-# Each call should reuse the same view-alias classification.
+# Same callee, two call sites, same-shape actuals: must reuse the same view-alias classification.
 # ---------------------------------------------------------------------------
 def test_multiple_call_sites_same_actual_shape(tmp_path):
     src = """
@@ -53,8 +46,7 @@ end module m
 
 
 # ---------------------------------------------------------------------------
-# Nested rank change: 4D source -> 2D first dummy -> 1D second dummy.
-# Each level of inlining must not collide aliases.
+# Nested rank change (4D -> 2D -> 1D dummy): each inlining level must not collide aliases.
 # ---------------------------------------------------------------------------
 def test_chained_rank_changes(tmp_path):
     src = """
@@ -82,9 +74,8 @@ end module m
 
 
 # ---------------------------------------------------------------------------
-# Same-rank pass-through must NOT be misclassified as a view alias.
-# The bridge should resolve accesses through ``traceToDecl`` to the
-# source's name (no separate VarInfo for the dummy).
+# Same-rank pass-through must NOT be misclassified as a view alias (resolves via traceToDecl, no
+# separate VarInfo for the dummy).
 # ---------------------------------------------------------------------------
 def test_same_rank_pass_through_not_a_view(tmp_path):
     src = """
@@ -104,11 +95,9 @@ contains
 end module m
 """
     sdfg = _builds(tmp_path, src, name="outer", entry="m::outer")
-    # Same-rank pass-through: only ``arr_2d`` should appear; no
-    # separately-classified ``buf`` view alias.
+    # same-rank pass-through: only arr_2d should appear, no separately-classified buf view alias.
     assert 'arr_2d' in sdfg.arrays
-    # ``buf`` may or may not appear depending on the bridge's
-    # collapse logic, but if it does it must NOT be a View.
+    # buf may or may not appear depending on the bridge's collapse logic, but if present must NOT be a View.
     if 'buf' in sdfg.arrays:
         import dace.data as dt
         assert not isinstance(sdfg.arrays['buf'],
@@ -117,8 +106,7 @@ end module m
 
 
 # ---------------------------------------------------------------------------
-# Caller passes an array section that the callee sees as a different
-# rank.  Combines the section-reshape path with rank change.
+# Array-section actual seen at a different rank by the callee: combines section-reshape + rank change.
 # ---------------------------------------------------------------------------
 def test_section_actual_with_rank_change(tmp_path):
     src = """
@@ -144,9 +132,8 @@ end module m
 
 
 # ---------------------------------------------------------------------------
-# Optional dummy with rank reinterpretation: the OPTIONAL attribute
-# adds a presence-flag companion -- the view-alias path must not
-# crash on it.
+# Optional dummy + rank reinterpretation: OPTIONAL's presence-flag companion must not crash the
+# view-alias path.
 # ---------------------------------------------------------------------------
 def test_optional_dummy_rank_change(tmp_path):
     src = """
@@ -195,8 +182,7 @@ end module m
 
 
 # ---------------------------------------------------------------------------
-# Pass-by-VALUE scalar args at the call site must not confuse the
-# view detector (they aren't arrays).
+# Pass-by-VALUE scalar args at the call site must not confuse the view detector (they aren't arrays).
 # ---------------------------------------------------------------------------
 def test_callee_with_mixed_scalar_and_array_dummies(tmp_path):
     src = """

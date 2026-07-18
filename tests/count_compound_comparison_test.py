@@ -1,21 +1,12 @@
-"""``COUNT`` over compound boolean comparisons (the
-``COUNT(arr1 .eq. arr2)`` family).
+"""COUNT over compound boolean comparisons (COUNT(arr1 .eq. arr2) family).
 
-Pins the bridge contract for two cases:
+Pins two cases: plain element-wise comparison (Mode-C path, per-element mask
+via CountLibraryNode) and sectioned comparison (section-parent offsets on
+both sides interacting through the offset-symbol layer).
 
-  * Plain element-wise comparison ``COUNT(arr1 .eq. arr2)``  --  the
-    elemental-count Mode-C path generates a per-element mask and
-    routes through ``CountLibraryNode``.
-  * Sectioned comparison ``COUNT(arr1(1:3) .eq. arr2(3:5))``  --
-    section-parent contributions on both sides interact through the
-    offset-symbol layer.
-
-Both are written so the destination is INTEGER (matching ``COUNT``'s
-return type).  When the destination is LOGICAL, Fortran inserts an
-implicit ``fir.convert i32 -> !fir.logical<4>`` between the libcall and
-the assign; the bridge peels that convert at the assign-dispatch site
-so the libcall path still fires.  The convert-peeling is exercised by
-``test_count_into_logical_destination`` below.
+Destination is INTEGER (COUNT's return type); for LOGICAL, Fortran inserts an
+implicit fir.convert i32 -> !fir.logical<4> that the bridge peels at the
+assign-dispatch site -- exercised by test_count_into_logical_destination_builds.
 """
 
 from pathlib import Path
@@ -47,10 +38,7 @@ END SUBROUTINE main
 
 
 def test_count_section_comparison(tmp_path: Path):
-    """Sectioned operands with non-aligned lower bounds  --
-    ``COUNT(first(1:3) .eq. second(3:5))``.  Each section parent
-    contributes a ``(lo - 1)`` offset that flows through the
-    elemental's per-element designate."""
+    """Sectioned operands with non-aligned lower bounds -- COUNT(first(1:3) .eq. second(3:5)); each section parent contributes a (lo-1) offset through the elemental's per-element designate."""
     src = """
 SUBROUTINE main(first, second, res)
 integer, dimension(5) :: first
@@ -69,16 +57,13 @@ END SUBROUTINE main
 
 
 def test_count_into_logical_destination_builds(tmp_path: Path):
-    """``logical, dimension(2) :: res; res(1) = COUNT(...)``: Fortran's
-    implicit int-to-logical conversion inserts a ``fir.convert``
-    between the libcall and the assign.  The bridge's convert-peel at
-    the assign-dispatch site keeps the libcall path matching, so the
-    SDFG builds rather than emitting ``_out_res = ?``.
+    """logical, dimension(2) :: res; res(1) = COUNT(...) -- Fortran's implicit
+    int-to-logical conversion inserts a fir.convert between the libcall and the
+    assign; the bridge's convert-peel at the assign-dispatch site keeps the
+    libcall path matching so the SDFG builds (else `_out_res = ?`).
 
-    We assert only that the SDFG builds  --  the int->logical truncation
-    semantics are checked end-to-end by the integer-destination tests
-    above.  This pins the build-time fix so the test fails loudly if
-    the convert-peel regresses.
+    Only asserts the SDFG builds; truncation semantics are checked by the
+    integer-destination tests above.
     """
     src = """
 SUBROUTINE main(a, res)

@@ -6,15 +6,12 @@ from typing import Union, Tuple, Dict, Optional, List, Any, Type
 import numpy as np
 import fparser.two.Fortran2003 as f03
 
-# Type Aliases for fparser node types are defined in other modules where they are used.
-# This file is for our own custom types.
+# fparser node type aliases live in the modules that use them; this file is for our own custom types.
 
-# A SPEC is a tuple of strings that uniquely identifies an object in the AST.
-# For example, ('my_program', 'my_module', 'my_subroutine', 'my_variable')
+# SPEC: tuple of strings uniquely identifying an AST object, e.g. ('my_program', 'my_module', 'my_subroutine', 'my_variable').
 SPEC = Tuple[str, ...]
 
-# A SPEC_TABLE maps a SPEC to the fparser node that defines it.
-# Forward-referencing 'NAMED_STMTS_OF_INTEREST_TYPES' from utils as a string.
+# Maps a SPEC to its defining node; string is a forward ref to NAMED_STMTS_OF_INTEREST_TYPES in utils.
 SPEC_TABLE = Dict[SPEC, 'NAMED_STMTS_OF_INTEREST_TYPES']
 
 # Type Aliases for numpy types used in constant evaluation
@@ -32,22 +29,10 @@ LITERAL_CLASSES = (f03.Real_Literal_Constant, f03.Signed_Real_Literal_Constant, 
 
 
 class TYPE_SPEC:
-    """
-    A simplified representation of a Fortran variable's type and attributes.
-
-    This class parses the attribute string of a variable declaration and provides
-    a structured way to access its properties like shape, intent, etc.
-    """
+    """Parses a Fortran variable's attribute string (e.g. 'DIMENSION(..)', 'INTENT(IN)') into shape/intent/etc properties."""
     NO_ATTRS = ''
 
     def __init__(self, spec: Union[str, SPEC], attrs: str = NO_ATTRS, is_arg: bool = False):
-        """
-        Initializes a TYPE_SPEC object.
-
-        :param spec: The base type specifier, can be a string or a SPEC tuple.
-        :param attrs: A string containing the variable's attributes (e.g., 'DIMENSION(..)', 'INTENT(IN)').
-        :param is_arg: A boolean indicating if the variable is a subroutine/function argument.
-        """
         if isinstance(spec, str):
             spec = (spec, )
         self.spec: SPEC = spec
@@ -60,13 +45,12 @@ class TYPE_SPEC:
         self.const: bool = 'PARAMETER' in attrs
         self.keyword: Optional[str] = None
         if is_arg and not self.inp and not self.out:
-            # If it's an argument and intent is not specified, it can be both input and output.
+            # Argument with no explicit intent is both in and out.
             self.inp, self.out = True, True
 
     def copy(self) -> "TYPE_SPEC":
-        """Return an independent copy.  Use this wherever a derived signature
-        element is mutated in place (``shape`` / ``keyword``) so a shared
-        sentinel such as the match-anything ``MATCH_ALL`` is never corrupted."""
+        """Independent copy; use before mutating shape/keyword in place so a shared
+        sentinel like the match-anything MATCH_ALL is never corrupted."""
         other = TYPE_SPEC(self.spec)
         other.shape = self.shape
         other.optional = self.optional
@@ -80,12 +64,7 @@ class TYPE_SPEC:
 
     @staticmethod
     def _parse_shape(attrs: str) -> Tuple[str, ...]:
-        """
-        Parses the DIMENSION attribute to extract the shape of the variable.
-
-        :param attrs: The attribute string.
-        :return: A tuple of strings representing the dimensions.
-        """
+        """Parses the DIMENSION attribute into per-dimension strings."""
         if 'DIMENSION' not in attrs:
             return tuple()
         parts = []
@@ -119,12 +98,7 @@ class TYPE_SPEC:
         return f"{self.spec}[{' | '.join(attrs)}]"
 
     def to_decl(self, var: str) -> str:
-        """
-        Generates a Fortran declaration string for a variable with this type spec.
-
-        :param var: The name of the variable.
-        :return: A Fortran declaration string.
-        """
+        """Generates a Fortran declaration string for `var` with this type spec."""
         TYPE_MAP = {
             'INTEGER1': 'INTEGER(kind=1)',
             'INTEGER2': 'INTEGER(kind=2)',
@@ -163,11 +137,7 @@ class TYPE_SPEC:
 
 @dataclass
 class ConstTypeInjection:
-    """
-    Represents the injection of a constant value for a component within a derived type.
-    This is used to replace a component's value everywhere a certain derived type is used,
-    optionally within a specific scope.
-    """
+    """Constant-value injection for a derived-type component, applied everywhere that type is used (optionally scoped)."""
     scope_spec: Optional[SPEC]  # Only replace within this scope object.
     type_spec: SPEC  # The root config derived type's spec (w.r.t. where it is defined)
     component_spec: SPEC  # A tuple of strings that identifies the targeted component
@@ -176,10 +146,7 @@ class ConstTypeInjection:
 
 @dataclass
 class ConstInstanceInjection:
-    """
-    Represents the injection of a constant value for a component of a specific variable instance.
-    This is used to replace a component's value for a particular variable, not all instances of its type.
-    """
+    """Constant-value injection for one variable instance's component (not all instances of its type)."""
     scope_spec: Optional[SPEC]  # Only replace within this scope object.
     root_spec: SPEC  # The root config object's spec (w.r.t. where it is defined)
     component_spec: SPEC  # A tuple of strings that identifies the targeted component
@@ -190,13 +157,7 @@ ConstInjection = Union[ConstTypeInjection, ConstInstanceInjection]
 
 
 def numpy_type_to_literal(val: NUMPY_TYPES) -> LITERAL_TYPES:
-    """
-    Converts a numpy scalar value (int, float, or bool) into its corresponding
-    fparser literal node representation.
-
-    :param val: The numpy scalar value.
-    :return: An fparser node representing the literal.
-    """
+    """Converts a numpy scalar (int/float/bool) to its fparser literal node."""
     if isinstance(val, np.bool_):
         val = f03.Logical_Literal_Constant('.true.' if val else '.false.')
     elif isinstance(val, NUMPY_INTS):
@@ -221,12 +182,7 @@ def numpy_type_to_literal(val: NUMPY_TYPES) -> LITERAL_TYPES:
 
 
 def _count_bytes(t: Type[NUMPY_TYPES]) -> int:
-    """
-    Returns the number of bytes for a given numpy numeric type.
-
-    :param t: The numpy type.
-    :return: The size of the type in bytes.
-    """
+    """Byte size of a numpy numeric type."""
     if t is np.int8: return 1
     if t is np.int16: return 2
     if t is np.int32: return 4

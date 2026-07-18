@@ -1,14 +1,8 @@
-"""Same array+subset read multiple times in one RHS -> one input connector.
+"""Same array+subset read multiple times in one RHS: one input connector PER occurrence, not deduped.
 
-The bridge used to mint one connector per *occurrence*  --  so
-``B(i) = A(i) * A(i) * A(i)`` produced three identical ``_in_A_0/1/2``
-connectors plus three identical memlets, all loading the same scalar.
-After the dedup pass in ``emit_tasklet.py``, occurrences that share an
-``(array_name, index_exprs)`` key share one connector + one memlet.
-
-The check below confirms by inspecting the tasklet directly: count
-of input connectors == count of DISTINCT (array, index) reads in
-the RHS, not the total occurrence count.
+Deduping by ``(array_name, index_exprs)`` used to misalign the bridge's access list against the
+textual expression when they disagreed on count (e.g. the MIN/MAX cmp+select pattern), so
+``B(i) = A(i) * A(i) * A(i)`` must emit three ``_in_a*`` connectors, one per textual occurrence.
 """
 
 import numpy as np
@@ -44,11 +38,9 @@ def test_dedup_same_index_three_times(tmp_path):
     t = _tasklet_for(sdfg, '_in_a')
     assert t is not None, "couldn't find the cube tasklet"
     in_conns = [c for c in t.in_connectors if c.startswith('_in_a')]
-    # Contract: one connector per textual occurrence (no dedup).  Sharing
-    # connectors used to misalign textual-occurrence-to-access mapping
-    # when the bridge's access list and the textual expression
-    # disagreed on count (e.g., the MIN/MAX cmp+select pattern), so the
-    # bridge emits N connectors for ``A(i) * A(i) * A(i)``.
+    # Contract: one connector per textual occurrence (no dedup) -- deduping by (array, index)
+    # used to misalign the bridge's access list against the textual expression when they
+    # disagreed on count (e.g. the MIN/MAX cmp+select pattern).
     assert len(in_conns) == 3, f"expected three _in_a* connectors, got {in_conns}"
 
     a = np.arange(1, 6, dtype=np.float64)
@@ -58,9 +50,7 @@ def test_dedup_same_index_three_times(tmp_path):
 
 
 def test_no_dedup_when_index_differs(tmp_path):
-    """Distinct subsets stay separate: ``A(i) + A(j)`` needs two
-    connectors + two memlets even though the array name is the same.
-    """
+    """Distinct subsets stay separate: ``A(i) + A(j)`` needs two connectors even though the array name is the same."""
     test_string = """
                     SUBROUTINE pair_sum(a, b)
                     double precision a(5), b(5)

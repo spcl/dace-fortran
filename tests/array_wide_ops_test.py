@@ -1,28 +1,7 @@
-"""End-to-end coverage for whole-array ("array-wide") operations and
-inline library operands.
-
-The bridge lowers whole-array Fortran expressions to element-wise DaCe
-maps, and library intrinsics (reductions, matmul, transpose,
-dot_product) to library nodes.  This module pins that BOTH compose
-freely inside larger expressions:
-
-  * chains of whole-array arithmetic  (``d = a + b - c``)
-  * a reduction whose scalar result is re-broadcast over another
-    whole-array op  (``out = c + MAXVAL(a + b - 1)``  --  the surfacing
-    pattern: a library operand captured into the body of the consuming
-    ``hlfir.elemental``, which the LiftReductionOperands pass must reach
-    by descending into the elemental's region, not just its operands)
-  * a library op nested inside whole-array arithmetic in either
-    direction  (``c + MATMUL(a,b)`` and ``MATMUL(a+b, q)``)
-  * whole-array ops on a STRUCT-COMPONENT subset  (``a(i)%w = a(i)%w -
-    1`` must touch only row ``i`` of the flattened ``a_w`` companion,
-    i.e. ``a_w[i, :] -= 1``)
-  * an inline reduction inside a ``do while`` body (reached through the
-    scf.while body walker, which now shares the structured reduction
-    dispatch)
-
-See ``while_loop_counter_e2e_test.py`` for the plain do-while
-whole-array element-wise regression (the sourceless-copy miscompile).
+"""Whole-array ops (element-wise DaCe maps) and library intrinsics (reductions,
+matmul, transpose, dot_product) compose freely: chains, reduction+rebroadcast,
+nested either direction, struct-component subsets, and inside do-while bodies.
+See while_loop_counter_e2e_test.py for the plain do-while element-wise case.
 """
 import numpy as np
 import pytest
@@ -56,8 +35,7 @@ end subroutine
 
 
 def test_whole_array_chain_mul_div(tmp_path):
-    """``e = (a + b) * c - a / 2`` -- mixed precedence + scalar division
-    over a whole-array chain."""
+    """``e = (a + b) * c - a / 2`` -- mixed precedence + scalar division over a whole-array chain."""
     src = """
 subroutine chain_mul(n, a, b, c, e)
   integer, intent(in) :: n
@@ -80,14 +58,8 @@ end subroutine
 # Reduction -> scalar -> re-broadcast over a whole-array op
 # --------------------------------------------------------------------------
 def test_inline_maxval_rebroadcast(tmp_path):
-    """``out = c + MAXVAL(a + b - 1)`` -- the user's surfacing example.
-
-    The ``MAXVAL`` reduces a whole-array chain to a scalar, then the
-    scalar is re-broadcast across ``c``.  In HLFIR the loop-invariant
-    reduction is computed once OUTSIDE the consuming ``c + <scalar>``
-    elemental and referenced as a region CAPTURE -- so the lift pass had
-    to learn to descend into the elemental's body to find it (an
-    operands-only walk missed it and the inline MAXVAL rendered ``?``)."""
+    """``out = c + MAXVAL(a + b - 1)``: reduction computed OUTSIDE the elemental as a
+    region capture -- lift pass must descend into the elemental body to find it."""
     src = """
 subroutine max_rb(n, a, b, c, out)
   integer, intent(in) :: n
@@ -107,8 +79,7 @@ end subroutine
 
 
 def test_inline_sum_rebroadcast(tmp_path):
-    """``out = c * SUM(a * b)`` -- inline SUM over a whole-array product,
-    re-broadcast multiplicatively."""
+    """``out = c * SUM(a * b)`` -- inline SUM over a whole-array product, re-broadcast multiplicatively."""
     src = """
 subroutine sum_rb(n, a, b, c, out)
   integer, intent(in) :: n
@@ -128,8 +99,7 @@ end subroutine
 
 
 def test_inline_two_reductions(tmp_path):
-    """``out = c + MAXVAL(a) - MINVAL(b)`` -- two distinct reductions, each
-    lifted to its own scalar temp and re-broadcast."""
+    """``out = c + MAXVAL(a) - MINVAL(b)`` -- two distinct reductions, each lifted to its own scalar temp."""
     src = """
 subroutine two_rb(n, a, b, c, out)
   integer, intent(in) :: n
@@ -152,8 +122,7 @@ end subroutine
 # Library op nested in whole-array arithmetic (both directions)
 # --------------------------------------------------------------------------
 def test_inline_matmul_in_arithmetic(tmp_path):
-    """``res = c + MATMUL(a, b)`` -- a matmul array result added to a
-    whole-array operand."""
+    """``res = c + MATMUL(a, b)`` -- a matmul array result added to a whole-array operand."""
     src = """
 module m
 contains
@@ -174,8 +143,7 @@ end module
 
 
 def test_inline_matmul_of_chain(tmp_path):
-    """``res = MATMUL(a + b, q)`` -- the matmul's LEFT operand is itself a
-    whole-array chain (materialised before the GEMM)."""
+    """``res = MATMUL(a + b, q)`` -- LEFT operand is a whole-array chain, materialised before the GEMM."""
     src = """
 module m
 contains
@@ -196,8 +164,7 @@ end module
 
 
 def test_inline_dot_product(tmp_path):
-    """``out = c + DOT_PRODUCT(a, b)`` -- a scalar-result library op
-    (dot_product) lifted to a scalar temp and re-broadcast."""
+    """``out = c + DOT_PRODUCT(a, b)`` -- scalar-result library op lifted to a scalar temp and re-broadcast."""
     src = """
 subroutine dot_inline(n, a, b, c, out)
   integer, intent(in) :: n
@@ -217,8 +184,7 @@ end subroutine
 
 
 def test_inline_transpose_in_arithmetic(tmp_path):
-    """``res = b + TRANSPOSE(a)`` -- a transpose array result added to a
-    whole-array operand."""
+    """``res = b + TRANSPOSE(a)`` -- a transpose array result added to a whole-array operand."""
     src = """
 module m
 contains
@@ -241,12 +207,8 @@ end module
 # Whole-array op on a struct-component subset  ->  a_w[i, :] op
 # --------------------------------------------------------------------------
 def test_struct_component_subset_decrement(tmp_path):
-    """``a(i)%w = a(i)%w - 1`` where ``w`` is an array component.
-
-    The flattened companion ``a_w`` has shape ``(K, len(w))``; the
-    selector ``a(i)%w`` must lower to the ROW subset ``a_w[i-1, :]`` (0-
-    based) so only row ``i`` is decremented and every other row is left
-    untouched."""
+    """``a(i)%w = a(i)%w - 1``: flattened companion ``a_w`` (K, len(w)) lowers the
+    selector to row subset ``a_w[i-1, :]`` (0-based); only that row changes."""
     src = """
 module m
   implicit none
@@ -277,9 +239,8 @@ end module
 
 
 def test_struct_component_subset_chain(tmp_path):
-    """``a(i)%w = a(i)%w * 2 + b(i)%w`` -- a whole-array CHAIN on a
-    struct-component subset, mixing two different AoS companions on the
-    same row ``i``."""
+    """``a(i)%w = a(i)%w * 2 + b(i)%w`` -- whole-array chain on a struct-component
+    subset, mixing two different AoS companions on the same row ``i``."""
     src = """
 module m
   implicit none
@@ -314,12 +275,8 @@ end module
 # Inline reduction inside a do-while body (scf.while body walker)
 # --------------------------------------------------------------------------
 def test_inline_reduction_in_do_while(tmp_path):
-    """``out = out + MAXVAL(a)`` inside a ``do while`` body.
-
-    Reaches the scf.while body walker, which now routes the lifted
-    ``_QQred_lift_N = MAXVAL(a)`` temp through the SAME reduction
-    dispatch the structured path uses.  Three iterations accumulate
-    ``3 * max(a)`` into every slot of ``out``."""
+    """``out = out + MAXVAL(a)`` inside a ``do while``: scf.while body walker routes
+    the lifted reduction through the same dispatch as the structured path."""
     src = """
 subroutine redux_in_while(n, a, out)
   integer, intent(in) :: n
@@ -342,23 +299,13 @@ end subroutine
 
 
 # --------------------------------------------------------------------------
-# A library op feeding ANOTHER library op (general composition matrix).
-#
-# An array-result library op's result has no Fortran-source name, so a
-# consuming library op (reduction or non-fusing linalg) would resolve to an
-# empty source.  ``LiftReductionOperands`` materialises the inner op into a
-# named transient (``<scope>QQlift_linalg_N`` + ``hlfir.as_expr``) and
-# ``traceToDecl`` peels the as_expr, so EVERY library-feeding-library shape
-# works uniformly.  These pin the general design across the intrinsic family.
+# Library op feeding another library op: an array-result op has no Fortran
+# name, so LiftReductionOperands materialises it into a named transient and
+# traceToDecl peels the as_expr -- uniformly across the intrinsic family.
 # --------------------------------------------------------------------------
 def test_inline_reduction_of_matmul(tmp_path):
-    """``out = c + SUM(MATMUL(a, b))`` -- a reduction whose source is an
-    array-result library op.  The matmul result has no Fortran-source name,
-    so the LiftReductionOperands pass materialises it into a named transient
-    (``<scope>QQlift_linalg_N``) via ``hlfir.assign <matmul> to <decl>`` +
-    ``hlfir.as_expr``; the reduce then reads that array (``traceToDecl``
-    peels the ``as_expr``), and the reduction itself lifts to a scalar temp
-    that the ``c + s`` broadcast consumes."""
+    """``out = c + SUM(MATMUL(a, b))``: reduction source is an array-result library op
+    with no Fortran name; LiftReductionOperands materialises it into a named transient."""
     src = """
 module m
 contains
@@ -379,8 +326,7 @@ end module
 
 
 def test_inline_maxval_of_matmul(tmp_path):
-    """``out = MAXVAL(MATMUL(a, b))`` -- a different reduction (max) over an
-    array-result linalg op.  Same materialise-then-reduce path as ``SUM``."""
+    """``out = MAXVAL(MATMUL(a, b))`` -- max reduction over an array-result linalg op, same path as SUM."""
     src = """
 module m
 contains
@@ -420,9 +366,8 @@ end module
 
 
 def test_inline_matmul_of_matmul(tmp_path):
-    """``out = MATMUL(MATMUL(a, b), c)`` -- LINALG over LINALG (non-fusing).
-    The inner matmul materialises into a named transient that the OUTER
-    matmul (the whole-RHS libcall) reads as its first operand."""
+    """``out = MATMUL(MATMUL(a, b), c)``: inner matmul materialises into a named
+    transient that the outer matmul reads as its first operand (non-fusing)."""
     src = """
 module m
 contains
@@ -443,8 +388,7 @@ end module
 
 
 def test_inline_dot_product_of_matmul(tmp_path):
-    """``out = DOT_PRODUCT(MATMUL(a, v), w)`` -- a scalar-result library op
-    (dot_product) whose first operand is an array-result matmul."""
+    """``out = DOT_PRODUCT(MATMUL(a, v), w)`` -- scalar-result library op whose first operand is a matmul."""
     src = """
 module m
 contains
@@ -465,11 +409,8 @@ end module
 
 
 def test_inline_sum_of_matmul_transpose(tmp_path):
-    """``out = SUM(MATMUL(TRANSPOSE(a), b))`` -- the inner TRANSPOSE feeding
-    the MATMUL stays FUSED (single GEMM with the transpose flag, NOT
-    materialised), while the matmul result feeds the outer SUM, which DOES
-    materialise it.  Pins that the fusion exception coexists with the
-    general lift."""
+    """``out = SUM(MATMUL(TRANSPOSE(a), b))``: inner TRANSPOSE stays fused into the
+    GEMM (not materialised); only the matmul result feeding SUM materialises."""
     src = """
 module m
 contains
@@ -489,9 +430,8 @@ end module
 
 
 def test_inline_sum_of_dim_reduction(tmp_path):
-    """``out = SUM(MAXVAL(a, dim=1))`` -- a reduction over a DIM-reduction
-    (an array-result reduction).  The inner ``MAXVAL(a, dim=1)`` materialises
-    into a named transient that the outer ``SUM`` reduces."""
+    """``out = SUM(MAXVAL(a, dim=1))``: inner dim-reduction materialises into a
+    named transient that the outer SUM reduces."""
     src = """
 module m
 contains

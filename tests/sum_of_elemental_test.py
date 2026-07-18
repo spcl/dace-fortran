@@ -1,24 +1,11 @@
-"""Verify ``SUM(<inline-elemental>)`` (and PRODUCT/MINVAL/MAXVAL of
-inline elementals) materialise correctly via the bridge's
-``buildElementalAnyAllReduce`` path.
+"""SUM/PRODUCT/MINVAL/MAXVAL of inline elementals must materialise via buildElementalAnyAllReduce.
+Before the fix, the dispatcher only routed hlfir.any/hlfir.all through elemental-materialisation; SUM
+et al. fell to buildReduceNode -> traceToDecl on the elemental's result (no backing declare) ->
+"reduction source '' not registered as SDFG data". QE's vcut_get (vexx_bp_k_gpu) hits this via three
+SUMs of inline elementals.
 
-Before this fix, the dispatcher only routed ``hlfir.any`` /
-``hlfir.all`` through the elemental-materialisation path; SUM and
-friends fell to ``buildReduceNode`` which called ``traceToDecl`` on
-the elemental's result -- it returns "" (the elemental has no
-backing declare) and the SDFG build raised
-``reduction source '' not registered as SDFG data``.
-
-QE's ``vcut_get`` (in ``vexx_bp_k_gpu``) contains three SUMs of
-inline elementals: ``SUM(q ** 2)``, ``SUM((i - i_real) ** 2)``,
-``SUM((xk(:) - xkq(:)) * tau(:, na))``.  All three landed on
-this path.
-
-Fix (``dispatch.cpp`` Mode-C reduction routing): drop the
-``hlfir.any / hlfir.all``-only gate.  Any reduction op whose
-first operand is an ``hlfir.elemental`` routes through
-``buildElementalAnyAllReduce`` (op-agnostic given wcr + identity).
-"""
+Fix (dispatch.cpp Mode-C routing): any reduction op whose first operand is an hlfir.elemental routes
+through buildElementalAnyAllReduce, not just hlfir.any/hlfir.all."""
 import numpy as np
 import pytest
 
@@ -47,8 +34,7 @@ end module
 
 
 def test_sum_of_difference_squared(tmp_path):
-    """``SUM((a - b) ** 2)`` -- inline elemental over (a - b)
-    composed with pow.  QE's L2-norm-squared shape."""
+    """SUM((a - b) ** 2) -- inline elemental over (a-b) composed with pow; QE's L2-norm-squared shape."""
     src = """
 module m
 contains
@@ -68,8 +54,7 @@ end module
 
 
 def test_sum_of_element_product(tmp_path):
-    """``SUM(a * b)`` -- inline elemental computing element-wise
-    product.  QE's dot-product shape."""
+    """SUM(a * b) -- inline elemental element-wise product; QE's dot-product shape."""
     src = """
 module m
 contains
@@ -89,8 +74,7 @@ end module
 
 
 def test_product_of_elemental(tmp_path):
-    """``PRODUCT(arr + 1)`` -- non-SUM reduction over elemental;
-    verifies the op-agnostic routing covers all reductions."""
+    """PRODUCT(arr + 1) -- non-SUM reduction verifies the op-agnostic routing covers all reductions."""
     src = """
 module m
 contains

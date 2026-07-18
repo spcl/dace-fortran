@@ -1,8 +1,5 @@
 // Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
-//
-// Internal cross-TU declarations for the HLFIR AST extraction layer.
-// Bodies live in the ast/*.cpp owning each helper.  Public API in
-// ast_helpers.h.
+// Internal cross-TU decls for HLFIR AST extraction; bodies in ast/*.cpp, public API in ast_helpers.h.
 #pragma once
 
 #include "bridge/ast/ast_helpers.h"
@@ -20,15 +17,9 @@ ASTNode buildMemsetNode(hlfir::AssignOp assign);
 ASTNode buildReduceNode(hlfir::AssignOp assign, mlir::Operation* redOp, std::string_view wcr,
                         std::string_view identity);
 
-/// Build the AST nodes for an ``hlfir.assign`` whose RHS op ``sd`` is a
-/// scalar-reducing intrinsic (sum / product / minval / maxval / any /
-/// all), routing section / elemental / whole-array sources to the right
-/// lowering.  Shared by the structured ``buildAST`` dispatch and the
-/// ``scf.while`` body walker (``walkSCFBeforeRegion``) so a reduction
-/// lands identically at top level or inside a ``do while`` body (the
-/// latter reached via a ``_QQred_lift_N`` temp the
-/// LiftReductionOperands pass hoists into the loop).  ``matched`` is set
-/// true iff ``sd`` was a recognised reduction op; returns the nodes.
+/// hlfir.assign scalar-reduce (sum/product/minval/maxval/any/all, any source shape) -> AST; shared by buildAST and
+/// walkSCFBeforeRegion so a do-while body (LiftReductionOperands-hoisted ``_QQred_lift_N`` temp) matches top-level
+/// lowering; matched=true iff sd is a recognised reduction op.
 std::vector<ASTNode> buildReductionAssignNodes(hlfir::AssignOp assign, mlir::Operation* sd, bool& matched);
 
 std::vector<ASTNode> buildSectionReduceAssign(hlfir::AssignOp assign, hlfir::DesignateOp src, std::string_view pyOp,
@@ -42,8 +33,8 @@ ASTNode buildSelectCaseChain(fir::SelectCaseOp sel);
 
 std::vector<ASTNode> buildWholeArrayScalarBroadcast(hlfir::AssignOp assign);
 
-// collectReadAccesses / exprDtypeString / exprResultShape / lowerIsPresent /
-// resolveExtent / resolveIndex are declared in ast_helpers.h (included above).
+// collectReadAccesses/exprDtypeString/exprResultShape/lowerIsPresent/resolveExtent/resolveIndex declared in
+// ast_helpers.h (included above).
 
 std::string scfSynthName(mlir::Value v);
 
@@ -60,10 +51,8 @@ std::vector<ASTNode> buildElementalCountLibcall(hlfir::AssignOp assign, hlfir::E
 std::vector<ASTNode> buildElementalAnyAllReduce(hlfir::AssignOp assign, hlfir::ElementalOp elem, std::string_view wcr,
                                                 std::string_view identity);
 
-/// Materialise an ``hlfir.elemental`` into a synthetic transient with
-/// the elemental's element dtype (general libcall-over-elemental
-/// path).  Returns ``{transient_name, AST_nodes}`` on success; empty
-/// on failure.
+/// Materialises hlfir.elemental into a synthetic transient of the elemental's dtype (libcall-over-elemental path);
+/// returns {transient_name, AST_nodes}, empty on failure.
 std::pair<std::string, std::vector<ASTNode>> materialiseElementalForLibcall(hlfir::ElementalOp elem);
 
 }  // namespace hlfir_bridge

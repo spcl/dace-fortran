@@ -1,10 +1,5 @@
-// extract_ast.cpp  --  public entry point ``extractAST(ModuleOp)``.
-//
-// AST extraction is split across five sibling translation units under
-// ``ast/``  --  expressions, assigns, elementals, control_flow, dispatch.
-// They share state through ``ast/ast_helpers.h`` (cross-file function
-// declarations + thread-locals).  This file holds only the includes
-// that pull the dialect headers in once for the whole bundle.
+// extractAST() entry point; impl split across ast/*.cpp, sharing state via ast_helpers.h. This file only holds shared
+// includes.
 
 #include "bridge/extract_ast.h"
 
@@ -23,11 +18,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 
-// The AST extraction is split across five sibling translation units
-// (``ast/expressions.cpp``, ``ast/assigns.cpp``, ``ast/elementals.cpp``,
-// ``ast/control_flow.cpp``, ``ast/dispatch.cpp``).  ``ast_helpers.h``
-// declares every cross-file function and shares the thread-local state
-// they all read from.
+// ast_helpers.h: cross-file decls + thread-locals shared by all ast/*.cpp.
 #include "bridge/ast/ast_helpers.h"
 
 namespace hlfir_bridge {}  // namespace hlfir_bridge

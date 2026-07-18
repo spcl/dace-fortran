@@ -1,36 +1,14 @@
-"""Classification contract for module-scope globals: caller-supplied
-kwarg vs baked constant vs writable transient.
+"""Classification contract for module-scope globals: caller kwarg vs baked constant vs
+writable transient. Four shapes (decided by ``extract_vars.cpp`` + the SDFG builder):
 
-A Fortran module-scope variable reaches the SDFG through one of three
-shapes, decided by ``extract_vars.cpp`` + the SDFG builder:
+  * PARAMETER: baked constant, never a kwarg, no provenance (cannot be rebound).
+  * Uninitialised global: external input, kwarg with module-origin provenance.
+  * Initialised global, read-only: baked as default but still records provenance so the
+    binding can ``USE``-import a host override (ICON's ``i_am_accel_node`` shape).
+  * Global the kernel WRITES: inout kwarg with provenance; copy-in host value, copy-out the
+    kernel's final value (a SAVE-local the kernel writes is instead a private transient).
 
-  * **PARAMETER / literal pool** (``real, parameter :: g = 9.81``):
-    a true compile-time constant.  Baked into the constant pool, never
-    a kwarg, and carries NO module-origin provenance (the caller can't
-    rebind a ``parameter``).
-
-  * **Uninitialised module global** (``integer :: ncfg``): an external
-    input the caller fills via ``USE``.  Surfaces as a non-transient
-    kwarg with module-origin provenance.
-
-  * **Initialised module global, read-only** (``real :: s = 2.5``):
-    takes the constant-pool path so its declared default is baked in,
-    BUT still records module-origin provenance so the binding layer can
-    ``USE``-import a host override (the baked value is the default).
-    This is the ICON ``i_am_accel_node = .FALSE.`` shape.
-
-  * **Module global the kernel WRITES** (``logical :: ready = .false.``
-    set inside the routine): host-shared inout state.  It surfaces as an
-    inout arg with module-origin provenance, so the binding ``USE``-imports
-    the host value (copy-in) and writes the kernel's final value back to
-    the host module on exit (copy-out) -- the update is visible to the
-    caller.  Its declared initialiser is the host's default, not a baked
-    constant.  (A function-scope ``SAVE``-local the kernel writes is
-    instead a private internal transient -- no host linkage.)
-
-Each case is pinned structurally (arglist membership + frozen-signature
-``module_symbol_origins``) and, where a value is observable, end-to-end
-against an f2py reference compiled from the same source.
+Each case pinned structurally (arglist + ``module_symbol_origins``) and, where observable, against an f2py reference.
 """
 from pathlib import Path
 
@@ -52,14 +30,12 @@ def _build(src: str, tmp: Path, entry: str):
 
 
 def _origin(sdfg, name: str):
-    """Module-origin ``(module, entity)`` the bridge auto-detected for
-    ``name``, or ``None`` when it recorded no provenance."""
+    """Module-origin ``(module, entity)`` the bridge auto-detected for ``name``, or None."""
     return sdfg._frozen_signature.module_symbol_origins.get(name)
 
 
 def test_parameter_is_baked_constant(tmp_path: Path):
-    """A ``parameter`` is a compile-time constant: baked, never a kwarg,
-    and with no module-origin provenance (it cannot be rebound)."""
+    """``parameter`` is a compile-time constant: baked, never a kwarg, no module-origin provenance."""
     src = """
 module mod_param
   implicit none
@@ -88,8 +64,7 @@ end module mod_param
 
 
 def test_uninitialised_global_is_caller_kwarg(tmp_path: Path):
-    """An uninitialised module global is an external input: a
-    non-transient kwarg with module-origin provenance."""
+    """Uninitialised module global is an external input: non-transient kwarg with module-origin provenance."""
     src = """
 module mod_cfg
   implicit none
@@ -114,26 +89,16 @@ end module mod_cfg
     y_sdfg = np.zeros(4, dtype=np.float64, order='F')
     ref.mod_cfg.cfg_scale = 3.0
     y_ref = ref.mod_cfg.apply_cfg(x)
-    # A module-global scalar surfaces as a length-1 array kwarg (same as a
-    # passed-in module array), so bind it as a 1-element array.
+    # module-global scalar surfaces as a length-1 array kwarg, same as a passed-in module array
     sdfg(x=x, y=y_sdfg, cfg_scale=np.array([3.0], dtype=np.float64, order='F'))
     np.testing.assert_allclose(y_sdfg, y_ref, rtol=1e-12)
 
 
 def test_initialised_numeric_global_is_caller_kwarg(tmp_path: Path):
-    """A read-only numeric module global -- even one WITH a source-level
-    initialiser -- surfaces as a non-transient caller kwarg.  The
-    source default is the value the caller would supply if it wants the
-    Fortran-source default behaviour; the binding layer can stage that
-    on the caller's behalf.  The SDFG still records module-origin
-    provenance so the host knows what symbol it's overriding.
-
-    Prior to ``hlfir-preserve-mutable-globals`` this initialiser was
-    baked into the constant pool and the global never reached the
-    arglist (a Fortran-source contract that prevented LU's ``dt`` and
-    every similar caller-pre-set module scalar from working).  The
-    write-based classifier now treats every non-PARAMETER, non-written
-    global as caller-supplied input; PARAMETER constants stay baked.
+    """Read-only numeric global WITH a source initialiser still surfaces as a caller kwarg (the
+    source default becomes the value the caller supplies); provenance is still recorded.
+    Pre-``hlfir-preserve-mutable-globals`` this was baked and never reached the arglist --
+    the bug that broke LU's ``dt`` and every similar caller-pre-set module scalar.
     """
     src = """
 module mod_init
@@ -160,20 +125,15 @@ end module mod_init
     x = np.asfortranarray(np.arange(1, 5, dtype=np.float64))
     y_sdfg = np.zeros(4, dtype=np.float64, order='F')
     y_ref = ref.mod_init.apply_init(x)  # f2py uses the module's source default 2.5
-    # SDFG: caller supplies the same value the source declares as the default.
+    # SDFG: caller supplies same value as source default
     sdfg(x=x, y=y_sdfg, init_scale=np.array([2.5], dtype=np.float64, order='F'))
     np.testing.assert_allclose(y_sdfg, y_ref, rtol=1e-12)
 
 
 def test_initialised_logical_global_is_caller_kwarg(tmp_path: Path):
-    """The ICON ``i_am_accel_node = .FALSE.`` shape: a read-only LOGICAL
-    module global with an initialiser surfaces as a caller kwarg, same
-    as the numeric case above.
-
-    Prior to ``hlfir-preserve-mutable-globals`` a logical-init global
-    baked its default into the SDFG and was hidden from the caller.
-    The write-based classifier now treats it as input; the bindings
-    layer marshals the bool value into the length-1 buffer slot.
+    """ICON ``i_am_accel_node = .FALSE.`` shape: read-only LOGICAL global with an initialiser
+    surfaces as a caller kwarg, same as the numeric case. Pre-``hlfir-preserve-mutable-globals``
+    this was baked and hidden from the caller.
     """
     src = """
 module mod_flag
@@ -208,17 +168,15 @@ end module mod_flag
 
 
 def _written_arg(sdfg, name: str):
-    """The frozen-signature arg for ``name`` (asserts it is present)."""
+    """Frozen-signature arg for ``name`` (asserts it is present)."""
     fa = next((a for a in sdfg._frozen_signature.args if a.sdfg_name == name), None)
     assert fa is not None, f"{name} is not an SDFG arg"
     return fa
 
 
 def test_written_global_is_inout_with_writeback(tmp_path: Path):
-    """A module global the kernel WRITES is host-shared inout state: an
-    inout arg with module-origin provenance, not a baked constant.  The
-    kernel updates it in place, visible to the caller (the binding writes
-    the final value back to the host module on exit)."""
+    """Module global the kernel WRITES is host-shared inout state: inout arg with provenance;
+    the kernel's update is written back to the host module on exit, visible to the caller."""
     src = """
 module mod_state
   implicit none
@@ -251,8 +209,7 @@ end module mod_state
     x = np.asfortranarray(np.arange(1, 5, dtype=np.float64))
     y_sdfg = np.zeros(4, dtype=np.float64, order='F')
     y_ref = ref.mod_state.compute(x)  # initialized .false. -> cached 10, y = x + 10
-    # Pass the inout globals' host defaults (.false. / 0.0); the kernel
-    # writes the final values back in place, visible to the caller.
+    # pass the inout globals' host defaults; the kernel writes final values back in place
     initialized = np.array([False])
     cached = np.array([0.0], dtype=np.float64, order='F')
     sdfg(x=x, y=y_sdfg, initialized=initialized, cached=cached)
@@ -262,9 +219,8 @@ end module mod_state
 
 
 def test_written_global_no_initialiser_same_module(tmp_path: Path):
-    """A module global with NO declared initialiser that the kernel
-    assigns before reading is still host-shared inout state: an inout arg
-    with provenance, updated in place."""
+    """Module global with no declared initialiser, assigned before read, is still host-shared
+    inout state: an inout arg with provenance, updated in place."""
     src = """
 module mod_scratch
   implicit none
@@ -297,17 +253,14 @@ end module mod_scratch
 
 
 # ---------------------------------------------------------------------------
-# Cross-module variants: the global is declared in one module and reached
-# through ``USE <other_module>, ONLY: <name>`` from the kernel's module.
-# ``merge_used_modules`` inlines the declaring module's source, and the
-# global's mangled symbol stays ``_QM<decl_module>E<name>`` -- so it must
-# classify exactly like a same-module global.
+# Cross-module variants: global declared in one module, reached via ``USE <mod>, ONLY: <name>``.
+# ``merge_used_modules`` inlines the source; the mangled symbol stays ``_QM<decl_module>E<name>``,
+# so it must classify exactly like a same-module global.
 # ---------------------------------------------------------------------------
 
 
 def test_parameter_from_other_module_is_baked(tmp_path: Path):
-    """A ``parameter`` declared in another module and ``USE``-imported is
-    still a baked constant: not a kwarg, no provenance."""
+    """``parameter`` declared in another module and ``USE``-imported is still baked: not a kwarg, no provenance."""
     src = """
 module mod_phys_const
   implicit none
@@ -341,10 +294,8 @@ end module mod_kern_a
 
 
 def test_initialised_updated_global_from_other_module(tmp_path: Path):
-    """A global declared WITH an initialiser in another module and UPDATED
-    inside the kernel: seeded with its init at entry, the update is applied
-    within the call, and provenance is recorded (for the host write-back
-    handled separately).  The computed output reflects the updated value."""
+    """Global declared WITH an initialiser in another module and UPDATED inside the kernel:
+    seeded at entry, updated in-call, provenance recorded for host write-back."""
     src = """
 module mod_state_x
   implicit none
@@ -383,9 +334,8 @@ end module mod_kern_b
 
 
 def test_written_global_no_initialiser_from_other_module(tmp_path: Path):
-    """A global declared with NO initialiser in another module, assigned
-    before being read inside the kernel: an internal writable transient.
-    The computed output reflects the in-kernel assignment."""
+    """Global declared with NO initialiser in another module, assigned before being read inside
+    the kernel: an internal writable transient reflecting the in-kernel assignment."""
     src = """
 module mod_scratch_x
   implicit none

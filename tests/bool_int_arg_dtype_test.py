@@ -1,13 +1,7 @@
-"""Boolean and integer argument dtype correctness in the bridge bindings.
-
-Regression guard for the cloudsc_full PLUDE diagnosis: the registry
-used to allocate a Fortran LOGICAL input as a numpy ``int32`` array
-even though the bridge SDFG declared the argument as ``bool *``.
-The byte-layout mismatch silently corrupted LDCUM across element
-boundaries.
-
-E2e against an f2py-compiled reference of the same Fortran source.
-"""
+"""Boolean/integer argument dtype correctness in the bridge bindings. Regression guard for
+the cloudsc_full PLUDE diagnosis: the registry allocated LOGICAL input as numpy ``int32``
+while the SDFG declared ``bool *``, silently corrupting LDCUM across element boundaries.
+E2e against an f2py-compiled reference."""
 
 import numpy as np
 import pytest
@@ -19,10 +13,8 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_bool_logical_array_pass_through(tmp_path):
-    """``LOGICAL`` 1-D input read element-by-element + written to a
-    numeric output.  Alternating True/False  --  any byte-stride bug
-    surfaces here.
-    """
+    """LOGICAL 1-D input read element-by-element, alternating True/False -- surfaces any
+    byte-stride bug."""
     src = """
 SUBROUTINE bool_pass(flags, out, n)
 integer, intent(in) :: n
@@ -114,17 +106,9 @@ END SUBROUTINE int_double
 
 
 def test_bool_scalar_logical_pass_through(tmp_path):
-    """Scalar LOGICAL passed as a length-1 array argument.
-
-    Closes the audit gap that let the cloudsc registry pass
-    ``np.int32(np.bool_(True))`` to a ``bool *`` parameter for six
-    of its scalar LOGICAL inputs (``LAERLIQCOLL``, ``LDMAINCALL``,
-    ``LDSLPHY``, etc.).  Functionally it worked because the int32
-    LSB for value ``1`` happens to read as ``true`` in C bool, but
-    any value with bit-0 = 0 (e.g. 256) would silently corrupt to
-    ``false``.  Pin the contract here: scalar LOGICAL must be
-    routed as a length-1 ``np.bool_`` array.
-    """
+    """Scalar LOGICAL passed as a length-1 array argument. Closes the audit gap where the
+    cloudsc registry passed ``np.int32(np.bool_(True))`` to a ``bool *`` param -- worked by
+    LSB coincidence but silently corrupted for values with bit-0=0 (e.g. 256)."""
     src = """
 SUBROUTINE bool_scalar(flag, out, n)
 integer, intent(in) :: n
@@ -149,12 +133,9 @@ END SUBROUTINE bool_scalar
     desc = sdfg.arglist().get('flag')
 
     def _route_bool(v):
-        """Route scalar LOGICAL to whatever the bridge declared:
-        ``Scalar(bool)`` (intent(in) scalar) takes a plain Python
-        bool; ``Array(1,) bool`` takes a length-1 ``np.bool_``
-        array.  Routing as ``np.int32`` would mis-type the C ABI
-        and the dtype-mismatch warning would fire (silent corruption
-        on values with bit-0 = 0)."""
+        """Route scalar LOGICAL to whatever the bridge declared: ``Scalar(bool)`` takes a
+        plain Python bool, ``Array(1,) bool`` takes a length-1 ``np.bool_`` array. Routing
+        as ``np.int32`` would mis-type the C ABI (silent corruption on bit-0=0 values)."""
         if isinstance(desc, Scalar):
             return bool(v)
         return np.array([bool(v)], dtype=np.bool_)

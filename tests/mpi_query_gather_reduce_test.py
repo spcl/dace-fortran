@@ -1,15 +1,13 @@
-"""P2b MPI reachability: the point-to-point/collective recognizer now also
-lowers the *query* and *rooted-collective* family -- ``MPI_Comm_rank`` /
-``MPI_Comm_size`` / ``MPI_Comm_split`` / ``MPI_Abort`` / ``MPI_Gather`` /
-``MPI_Gatherv`` / ``MPI_Reduce`` -- to their DaCe ``dace.libraries.mpi`` nodes,
-plus renders an array-ELEMENT ``dest`` / ``src`` (``neighbors(k)``) as a single
--element subset instead of collapsing onto the whole array.
+"""P2b MPI reachability: the point-to-point/collective recognizer lowers the
+query and rooted-collective family (MPI_Comm_rank/_size/_split, MPI_Abort,
+MPI_Gather/_v, MPI_Reduce) to dace.libraries.mpi nodes, and renders an
+array-ELEMENT dest/src (neighbors(k)) as a single-element subset instead of
+the whole array.
 
-Structural tests: build + validate, assert the node is wired and no opaque
-``call`` survives.  No ``mpirun`` needed.  The communicator is a local
-``MPI_COMM_WORLD`` ``parameter`` (a synthetic runtime scalar the bridge threads
-as ``_comm``); reduction ops ride ``use mpi``-style module handles so the op
-name survives to the builder.
+Structural tests: build + validate, node wired, no opaque call survives. No
+mpirun needed. Communicator is a local MPI_COMM_WORLD parameter (synthetic
+runtime scalar threaded as _comm); reduction ops ride use-mpi module handles
+so the op name survives to the builder.
 """
 from pathlib import Path
 
@@ -43,10 +41,8 @@ def _build(src, tmp_path, name, entry):
 
 
 def test_comm_rank_size_query(tmp_path: Path):
-    """``MPI_Comm_rank`` / ``MPI_Comm_size`` write their result into a Fortran
-    integer scalar via the ``_rank`` / ``_size`` output connectors -- this is the
-    exact pattern the inlined ocean ``solve_free_sfc`` needs (``mpi_comm_size``
-    into ``p_pe`` / ``num_work_procs``)."""
+    """MPI_Comm_rank/_size write into a Fortran integer scalar via the _rank/_size
+    output connectors -- the pattern the inlined ocean solve_free_sfc needs."""
     from dace.libraries.mpi.nodes.comm_rank import CommRank
     from dace.libraries.mpi.nodes.comm_size import CommSize
 
@@ -123,9 +119,8 @@ end subroutine gath
 
 
 def test_send_to_array_element_dest(tmp_path: Path):
-    """``MPI_Send(buf, n, dt, neighbors(k), tag, comm)`` reads the destination
-    rank from element ``neighbors(k-1)`` (DaCe 0-based), NOT the whole
-    ``neighbors`` array -- pins the subscript-drop miscompile (audit crit#4)."""
+    """MPI_Send(buf, n, dt, neighbors(k), tag, comm) reads the destination rank
+    from element neighbors(k-1) (0-based), not the whole array -- pins the subscript-drop miscompile (audit crit#4)."""
     from dace.libraries.mpi.nodes.isend import Isend
     from dace.libraries.mpi.nodes.send import Send
 
@@ -146,8 +141,7 @@ end subroutine ring
     sends = [(n, p) for n, p in sdfg.all_nodes_recursive() if isinstance(n, (Send, Isend))]
     assert len(sends) == 1, f"expected one Send, got {len(sends)}"
     send, parent = sends[0]
-    # Find the memlet feeding the destination connector; its subset must be a
-    # single element (k-1), not the full 0:4 neighbors array.
+    # memlet feeding the destination connector must subset a single element (k-1), not the full 0:4 array.
     dest_subsets = [
         e.data.subset for e in parent.in_edges(send)
         if e.dst_conn in ("_dest", "_src") and e.data is not None and "neighbors" in str(e.data.data)

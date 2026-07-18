@@ -9,10 +9,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_fortran_frontend_simplify(tmp_path):
-    """The Fortran frontend's SDFG output composes with DaCe's standard
-    simplify pipeline.  Originally a probe for the old Python frontend;
-    re-purposed here to confirm the HLFIR bridge's output is also
-    composable with downstream DaCe transforms."""
+    """SDFG output from the Fortran frontend composes with DaCe's standard simplify pipeline."""
     test_string = """
                     PROGRAM symbol_test
                     implicit none

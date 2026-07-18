@@ -1,24 +1,14 @@
 """ICON integration: per-call ORIGINAL-vs-BINDING bit-exact for a dycore call site.
 
-The ``integration`` lane's charter is the ICON orig-vs-binding contract stated
-per dycore *call site*: for each call, duplicate the input state, run the
-ORIGINAL ICON Fortran once and OUR SDFG binding once on that identical data, and
-require bit-exact agreement (``max_diff == 0``, no tolerance) before ICON would
-continue.  This is the SHORT, single-rank half of that contract (the multi-rank
-halo-exchange half carries the ``mpi`` marker and runs under ``mpirun``).
+The ``integration`` lane's contract: duplicate the input state, run ORIGINAL ICON Fortran
+and OUR SDFG binding on identical data, require bit-exact agreement (``max_diff==0``) --
+the single-rank half (the multi-rank halo-exchange half carries the ``mpi`` marker).
 
-The atmosphere ``velocity_tendencies`` kernel is the fastest real dycore call
-site, so it anchors the lane.  ``run_kernel_e2e`` already IS the per-call
-duplicate-run engine: it drives the DUT (the auto-generated ``bind(c)`` binding
-of the ``velocity_advection_inlined_single_tu.f90`` SDFG) and the REF (the stock
-Fortran kernel reached through the same shim retargeted at it) on one identical
-seeded input and compares every output buffer element-for-element.  The build
-detail (negative refinement-control lower bounds, ``module_seeds`` config
-globals, a real vertical column, ``-ffp-contract=off`` on both sides) is shared
-verbatim with :mod:`test_velocity_numerical_e2e`; the difference here is only
-the ``integration`` marker -- this test exists to give that lane real coverage
-and to pin the orig-vs-binding invariant as a first-class ICON-integration gate.
-"""
+Anchored on the atmosphere ``velocity_tendencies`` kernel, the fastest real dycore call
+site. ``run_kernel_e2e`` drives the DUT (auto-generated ``bind(c)`` binding) and the REF
+(stock Fortran kernel via the same shim) on one seeded input and compares every output
+buffer element-for-element. Build detail shared verbatim with
+:mod:`test_velocity_numerical_e2e`; only the ``integration`` marker differs."""
 import shutil
 from pathlib import Path
 
@@ -40,9 +30,8 @@ pytestmark = [
 
 @pytest.mark.xdist_group("atmo_velocity_integration")
 def test_velocity_percall_orig_vs_binding_bitexact():
-    """Duplicate the velocity call's input, run ORIGINAL ICON Fortran + OUR SDFG
-    binding on it, and require bit-exact agreement -- the per-call ICON
-    orig-vs-binding integration contract, single-rank."""
+    """Duplicate the velocity call's input, run ORIGINAL ICON Fortran + OUR SDFG binding on
+    it, require bit-exact agreement -- the per-call orig-vs-binding contract, single-rank."""
     res = run_kernel_e2e(
         _TU,
         _ENTRY,

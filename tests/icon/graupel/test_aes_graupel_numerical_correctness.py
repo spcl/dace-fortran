@@ -1,32 +1,17 @@
 """End-to-end numerical correctness for ICON's AES graupel scheme.
 
-Compiles ``mo_aes_graupel + mo_aes_thermo + mo_kind +
-mo_physical_constants`` as a gfortran reference (via the
-``graupel_caller.f90`` wrapper that exposes C-bound init / run
-entry points), then builds the SAME source through the bridge as
-an SDFG, runs both with identical seeded random inputs, and
-compares the prognostic + diagnostic outputs element-wise.
+Compiles ``mo_aes_graupel + mo_aes_thermo + mo_kind + mo_physical_constants``
+as a gfortran reference (via the C-bound ``graupel_caller.f90`` wrapper), and
+the SAME source through the bridge as an SDFG; runs both with identical
+seeded random inputs and compares prognostic + diagnostic outputs element-wise.
 
-Pattern mirrors ``tests/icon/full/test_velocity_full.py``:
+Regression gate: the AoS-of-pointer-records gather temp (``t_qx_ptr%x``) used
+to size from unbound extents that call-time auto-fill defaulted to 1,
+under-allocating and overflowing the heap, until the ``fir.box_dims ->
+<name>_d<dim>`` extent resolution closed it.
 
-  * single source on both sides -> no spec divergence,
-  * single init routine -> byte-identical input buffers,
-  * raw-pointer reference call vs DaCe numpy-arg dispatch ->
-    identical Fortran-side ABI from both runs.
-
-Status: green.  The SDFG build used to fail downstream of the graupel
-multi-file inline -- the AoS-of-pointer-records gather temp
-(``t_qx_ptr%x``), whose inner extents are recovered via ``fir.box_dims``,
-was sized from unbound extent symbols that the call-time auto-fill
-defaulted to 1, under-allocating the buffer and overflowing the heap.
-The ``fir.box_dims -> <name>_d<dim>`` extent resolution closed it; the
-SDFG now builds, runs, and matches the gfortran reference element-wise.
-
-Random-input determinism:  ``init_graupel_inputs_c`` is a small
-Fortran routine in ``graupel_caller.f90`` that runs a Mulberry32-
-style scramble keyed off the integer seed.  Same routine seeds
-both the reference and SDFG sides, so byte-identical buffers feed
-both kernels.
+``init_graupel_inputs_c`` (Mulberry32-style scramble keyed off the seed) seeds
+both sides identically, so byte-identical buffers feed both kernels.
 """
 import ctypes
 import subprocess
@@ -56,13 +41,8 @@ _ENTRY = "mo_aes_graupel::graupel_run"
 
 
 def _compile_reference(out_dir: Path) -> ctypes.CDLL:
-    """Build the multi-file gfortran reference (graupel + 3 helpers +
-    the ``BIND(C)`` caller wrapper) into a single ``.so`` and return
-    the ctypes handle.  Sources are compiled to objects in dependency
-    order (``mo_kind`` -> ``mo_physical_constants`` -> ``mo_aes_thermo``
-    -> ``mo_aes_graupel`` -> ``graupel_caller``) so each USE statement
-    finds the ``.mod`` file produced by an earlier step.
-    """
+    """Build the multi-file gfortran reference into a single ``.so``; sources
+    compile in dependency order so each USE finds the prior step's ``.mod``."""
     out_dir.mkdir(parents=True, exist_ok=True)
     so_path = out_dir / "libgraupel_ref.so"
     flags = ["-O0", "-fno-fast-math", "-ffp-contract=off", "-fPIC", "-ffree-line-length-none"]
@@ -89,9 +69,8 @@ def _compile_reference(out_dir: Path) -> ctypes.CDLL:
 
 
 def test_aes_graupel_e2e_numerical(tmp_path):
-    """``graupel_run`` reference vs SDFG: element-wise compare of
-    every INOUT prognostic + every OUT diagnostic for seeded random
-    inputs."""
+    """``graupel_run`` reference vs SDFG: element-wise compare of every INOUT
+    prognostic + every OUT diagnostic for seeded random inputs."""
     ivec, k_v = 4, 8
     ivs, ive, ks = 1, ivec, 1
     dt = 30.0
@@ -103,14 +82,10 @@ def test_aes_graupel_e2e_numerical(tmp_path):
     init.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int, *([ctypes.c_void_p] * 10), ctypes.c_void_p]
     run = lib.run_graupel_c
     run.restype = None
-    # 11 inputs (dz, t, p, rho, qv, qc, qi, qr, qs, qg, qnc) + 6 outputs
-    # (prr_gsp, pri_gsp, prs_gsp, prg_gsp, pflx, pre_gsp) = 17 array args.
-    # The previous ``* 16`` was off-by-one and the missing trailing arg
-    # corrupted the stack, surfacing as a SIGSEGV inside the gfortran
-    # reference before the kernel body even ran.
+    # 11 inputs + 6 outputs = 17 array args. Prior `* 16` was off-by-one; the
+    # missing trailing arg corrupted the stack -> SIGSEGV before the kernel ran.
     run.argtypes = [ctypes.c_int] * 5 + [ctypes.c_double] + [ctypes.c_void_p] * 17
 
-    # Reference buffers.
     f64_2d = lambda: np.zeros((ivec, k_v), dtype=np.float64, order='F')
     f64_1d = lambda: np.zeros((ivec, ), dtype=np.float64, order='F')
 
@@ -132,7 +107,6 @@ def test_aes_graupel_e2e_numerical(tmp_path):
     init(ctypes.c_int(seed), ctypes.c_int(ivec), ctypes.c_int(k_v),
          *[bufs_ref[k].ctypes.data for k in ('dz', 't', 'p', 'rho', 'qv', 'qc', 'qi', 'qr', 'qs', 'qg', 'qnc')])
 
-    # Outputs.
     pflx_ref = f64_2d()
     prr_ref = f64_1d()
     pri_ref = f64_1d()
@@ -147,13 +121,11 @@ def test_aes_graupel_e2e_numerical(tmp_path):
         prr_ref.ctypes.data, pri_ref.ctypes.data, prs_ref.ctypes.data, prg_ref.ctypes.data, pflx_ref.ctypes.data,
         pre_ref.ctypes.data)
 
-    # SDFG side.
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg_from_files(_GRAUPEL_SOURCES, entry=_ENTRY, name="graupel_run", out_dir=sdfg_dir / "build")
 
-    # Re-seed identical inputs for the SDFG side (Fortran INOUT
-    # arrays were mutated by the reference call).
+    # Re-seed for the SDFG side -- reference call mutated the INOUT buffers.
     bufs_sdfg = {k: np.zeros_like(v) for k, v in bufs_ref.items()}
     init(ctypes.c_int(seed), ctypes.c_int(ivec), ctypes.c_int(k_v),
          *[bufs_sdfg[k].ctypes.data for k in ('dz', 't', 'p', 'rho', 'qv', 'qc', 'qi', 'qr', 'qs', 'qg', 'qnc')])

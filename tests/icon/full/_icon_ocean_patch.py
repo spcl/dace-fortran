@@ -1,44 +1,24 @@
 """Differential binding-swap patch for ICON's ocean
-``mo_ocean_ab_timestepping_mimetic::solve_free_sfc_ab_mimetic``.
+``mo_ocean_ab_timestepping_mimetic::solve_free_sfc_ab_mimetic`` -- the ocean twin of
+:file:`_icon_solve_nh_patch.py`.  Rewrites the subroutine into a DIFFERENTIAL DRIVER:
+original body preserved as ``solve_free_sfc_ref`` (REF), new body deep-copies state,
+runs the SDFG ``solve_free_sfc_dace_icon`` (DUT) in place + REF on the copy, compares
+BIT-FOR-BIT, and ICON carries on with the DUT result.  ICON's call site is UNTOUCHED.
 
-The ocean twin of :file:`_icon_solve_nh_patch.py`.  ICON's own call site
-(``mo_ocean_ab_timestepping``) is left UNTOUCHED -- it still calls
-``solve_free_sfc_ab_mimetic`` with the identical surface (header, 11 dummies,
-USE statements).  We rewrite the module so the subroutine becomes a
-DIFFERENTIAL DRIVER:
-
-  * the original body is preserved verbatim under the name
-    ``solve_free_sfc_ref`` (the REFERENCE solve);
-  * the new ``solve_free_sfc_ab_mimetic`` deep-copies the mutable state
-    (``mo_ocean_diff``), runs the SDFG solve ``solve_free_sfc_dace_icon``
-    (DUT) in place and the stock ``solve_free_sfc_ref`` (REF) on the
-    independent copy, and compares the mutated state BIT-FOR-BIT --
-    reporting any divergence per call.  ICON then carries on with the DUT
-    (``ocean_state``) result.
-
-The mutable fields are ``POINTER`` components (iconfor DSL), and -- unlike the
-atmosphere's ALLOCATABLE ``prog(:)`` -- ``p_prog(:)`` is itself a POINTER
-array, so the reference state needs a fresh prog array on top of the per-field
-deep copies (see :file:`mo_ocean_diff.f90`).
-
-``p_phys_param%a_veloc_v`` is mutated through a module-level pointer inside
-``mo_ocean_pp_scheme`` (PP vnPredict time-smoothing, in place) that the driver
-cannot re-point; it is snapshot/restored around the two runs instead so both
-see the same pre-call viscosity, then compared, then the DUT's version is
-reinstated (ICON keeps the DUT state).
-"""
+Gotchas: ``p_prog(:)`` is itself a POINTER array (not ALLOCATABLE like the atmosphere),
+so the reference state needs a fresh prog array on top of per-field deep copies.
+``p_phys_param%a_veloc_v`` is mutated in place through a module-level pointer inside
+``mo_ocean_pp_scheme`` that the driver can't re-point -- snapshot/restore around both
+runs so they see the same pre-call viscosity, then reinstate the DUT's version."""
 import re
 from pathlib import Path
 
-#: Free-standing wrapper symbol the SDFG-generated library exports.
-#: Naming convention matches the atmosphere's ``solve_nh_dace_icon``.
+#: SDFG-generated library's wrapper symbol; naming matches the atmosphere's ``solve_nh_dace_icon``.
 OCEAN_WRAPPER_NAME = "solve_free_sfc_dace_icon"
 
-#: USE statements the differential driver needs, inserted right after the
-#: SUBROUTINE header (before the dummy declarations): the deep-copy / compare
-#: helpers.  ``t_hydro_ocean_state`` / ``wp`` / ``nnew`` /
-#: ``set_acc_host_or_device`` are already in scope via the original module's
-#: own USE block.
+#: USE statements the driver needs (deep-copy/compare helpers), inserted right after the
+#: SUBROUTINE header.  ``t_hydro_ocean_state``/``wp``/``nnew``/``set_acc_host_or_device``
+#: are already in scope via the original module's own USE block.
 _DIFF_USE = [
     "    USE mo_ocean_diff, ONLY: clone_ocean_state_indep, free_ocean_state_clone, &",
     "                             compare_ocean_prog, compare_ocean_diag, compare_ocean_aux, &",
@@ -46,13 +26,11 @@ _DIFF_USE = [
     "                             ocean_diff_enforce",
 ]
 
-#: The driver's declaration section (local reference state + the free-standing
-#: wrapper INTERFACE) followed by its executable body (clone -> DUT -> REF ->
-#: compare -> free).  Inserted after the last dummy declaration.  The INTERFACE
-#: declares the wrapper with ICON's REAL types (so we do NOT ``USE`` the
-#: bindings module's stub-type ``.mod``); the ``LOGICAL(x, kind=1)`` cast hands
-#: the C-bool ABI a 1-byte value (ICON's default LOGICAL is 4 bytes), resolved
-#: through ``set_acc_host_or_device`` first because ``lacc`` is OPTIONAL here.
+#: Driver's decl section (local ref state + wrapper INTERFACE) + body (clone -> DUT ->
+#: REF -> compare -> free), inserted after the last dummy declaration.  INTERFACE uses
+#: ICON's REAL types (no ``USE`` of the bindings stub ``.mod``); ``LOGICAL(x, kind=1)``
+#: casts to the C-bool 1-byte ABI (ICON's default LOGICAL is 4 bytes), resolved via
+#: ``set_acc_host_or_device`` first since ``lacc`` is OPTIONAL.
 _DIFF_BLOCK = """\
     ! DACE DIFFERENTIAL: reference state (independent deep copy) + the SDFG
     ! wrapper interface.  ``solve_free_sfc_ref`` is the original body, renamed.
@@ -137,22 +115,11 @@ _INTENT_RE = re.compile(r"\bINTENT\b", re.IGNORECASE)
 
 
 def apply_ocean_solve_patch(pristine_source: str) -> str:
-    """Rewrite ``mo_ocean_ab_timestepping_mimetic.f90`` into the differential
-    form.
-
-    Walks for ``SUBROUTINE solve_free_sfc_ab_mimetic(...)`` and its matching
-    ``END SUBROUTINE``, then emits, in order:
-
-      1. the differential DRIVER -- the original header + declarations up to
-         the last ``INTENT`` line (so the call site sees the identical
-         surface), plus ``USE mo_ocean_diff`` and the clone / run-both /
-         compare / free body; and
-      2. the original subroutine verbatim, renamed ``solve_free_sfc_ref``.
-
-    :param pristine_source: the unmodified file contents.
-    :returns: the patched source as a single string.
-    :raises ValueError: ``solve_free_sfc_ab_mimetic`` could not be located.
-    """
+    """Rewrite ``mo_ocean_ab_timestepping_mimetic.f90`` into the differential form:
+    emits (1) the DRIVER -- original header/decls up to the last ``INTENT`` line plus
+    ``USE mo_ocean_diff`` and the clone/run-both/compare/free body, then (2) the
+    original subroutine verbatim, renamed ``solve_free_sfc_ref``.  Raises
+    ``ValueError`` if the subroutine can't be located."""
     lines = pristine_source.splitlines()
     subr_start = None
     for i, ln in enumerate(lines):
@@ -173,16 +140,13 @@ def apply_ocean_solve_patch(pristine_source: str) -> str:
             break
     if end_subr is None:
         raise ValueError("apply_ocean_solve_patch: matching END SUBROUTINE solve_free_sfc_ab_mimetic not found")
-    # Find the last INTENT declaration inside the body -- the end of the
-    # declaration block (ICON declares the OPTIONAL ``lacc`` dummy LAST, after
-    # the locals), after which the driver's own decls + body go.
+    # last INTENT line = end of decl block (ICON declares OPTIONAL ``lacc`` dummy LAST).
     last_intent = header_end
     for i in range(header_end + 1, end_subr):
         if _INTENT_RE.search(lines[i]):
             last_intent = i
 
-    # (1) the differential driver: original header + USE helpers + the
-    #     declaration block (dummies + locals) + clone/run-both/compare/free.
+    # (1) driver: header + USE helpers + decl block + clone/run-both/compare/free.
     driver = (lines[subr_start:header_end + 1] + _DIFF_USE + lines[header_end + 1:last_intent + 1] +
               _DIFF_BLOCK.splitlines())
 

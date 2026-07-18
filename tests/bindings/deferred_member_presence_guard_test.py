@@ -1,29 +1,17 @@
-"""Presence guards for deferred-storage (POINTER / ALLOCATABLE) struct
-members in the emitted bindings.
+"""Presence guards for deferred-storage (POINTER/ALLOCATABLE) struct members.
 
-An absent member's descriptor bounds are undefined -- ``c_loc`` / ``size``
-on it read garbage, and gfortran's ``internal_pack`` at the unguarded
-``c_f_pointer`` alias site then smashes the stack.  This is exactly how the
-ICON Held-Suarez run died on the first ``velocity_tendencies_dace`` call:
-``t_nh_diag``'s ``ddt_ua_* / ddt_va_*`` tendency POINTERs are disassociated
-in that configuration, and the wrapper marshalled all of them anyway
-(217 ``internal_pack`` sites over the alias block; the stomped frames held
-0x20-filled "extents" read from adjacent CHARACTER heap data).
+An absent member's descriptor bounds are undefined -- unguarded marshalling
+(``c_loc``/``size`` on it) reads garbage and gfortran's ``internal_pack``
+smashes the stack.  Root cause of the ICON Held-Suarez crash: disassociated
+``ddt_ua_*``/``ddt_va_*`` tendency POINTERs got marshalled anyway.
 
-Fix under test, end to end:
+Fix: the bridge records each member's deferred-storage class; the emitter
+wraps every marshal in ``associated(...)``/``allocated(...)``; the ABSENT
+branch remaps the flat POINTER onto a length-1 ``presence_scratch_<dtype>``
+target instead of leaving it undefined.
 
-* the bridge records each member's deferred-storage class
-  (``FortranMemberInfo.alloc`` from ``box<heap|ptr<...>>``),
-* the emitter wraps every marshal of such a member -- alias
-  ``c_f_pointer``, extent / offset symbol population, copy loops -- in
-  ``associated(...)`` / ``allocated(...)``,
-* the ABSENT branch bounds-remaps the flat POINTER onto a length-1
-  ``presence_scratch_<dtype>`` target (so the SDFG call's
-  ``c_loc(<flat>)`` stays defined) and zeroes the extent symbols.
-
-``test_emitted_guard_text`` pins the emission (deterministic RED without
-the fix); the e2e tests run both member states against a gfortran
-reference of the same kernel.
+``test_emitted_guard_text`` pins the emission; the e2e tests run both member
+states against a gfortran reference.
 """
 
 import ctypes
@@ -76,8 +64,7 @@ end module kern_opt_mod
 
 _SRC = _TYPES_SRC + _KERNEL_SRC
 
-# Drivers: ``mode`` selects the member state.  mode=0 leaves ``st%opt``
-# DISASSOCIATED (the ICON Held-Suarez shape); mode=1 associates it.
+# mode=0 leaves st%opt DISASSOCIATED (ICON Held-Suarez shape); mode=1 associates it.
 _DRIVER_BODY = """
   use iso_c_binding
   use mo_opt_state, only: t_s, N
@@ -110,9 +97,8 @@ _REF_DRIVER = ("subroutine run_opt_ref(base_ptr, opt_ptr, mode) bind(c, name='ru
 
 
 def test_emitted_guard_text(tmp_path: Path):
-    """The wrapper must presence-guard every marshal of the deferred
-    members: ``associated(st%opt)`` around the alias + extents with a
-    scratch-remap ELSE, ``allocated(st%base)`` for the allocatable one."""
+    """Wrapper presence-guards every marshal: ``associated(st%opt)`` with a scratch-remap
+    ELSE, ``allocated(st%base)`` for the allocatable member."""
     sdfg_dir = tmp_path / "sdfg"
     builder = build_sdfg(_SRC, sdfg_dir, name="kern_opt", entry="kern_opt_mod::kern_opt")
     plan = FlattenPlan.from_dict(builder.module.get_flatten_plan())
@@ -137,10 +123,8 @@ def test_emitted_guard_text(tmp_path: Path):
 
 
 def test_e2e_disassociated_pointer_member(tmp_path: Path):
-    """mode=0: ``st%opt`` stays disassociated.  Pre-fix the wrapper
-    marshals its garbage descriptor (UB / stack smash); post-fix the
-    guarded wrapper runs the kernel's absent branch and matches the
-    reference exactly."""
+    """mode=0: ``st%opt`` stays disassociated; guarded wrapper takes the kernel's
+    absent branch and matches the reference."""
     sdfg_lib = _build_sdfg_lib(tmp_path,
                                kernel_src=_SRC,
                                types_src=_TYPES_SRC,
@@ -171,8 +155,8 @@ def test_e2e_disassociated_pointer_member(tmp_path: Path):
 
 
 def test_e2e_associated_pointer_member(tmp_path: Path):
-    """mode=1: ``st%opt`` associated -- the guard's PRESENT branch must
-    behave exactly like the unguarded alias did."""
+    """mode=1: ``st%opt`` associated -- the guard's PRESENT branch must behave like the
+    unguarded alias did."""
     sdfg_lib = _build_sdfg_lib(tmp_path,
                                kernel_src=_SRC,
                                types_src=_TYPES_SRC,

@@ -1,21 +1,15 @@
-"""Phase I  --  read-then-writeback to the same scalar/length-1 array
-should produce two distinct access nodes in one state, never a cycle.
+"""Phase I -- read-then-writeback to the same scalar/length-1 array must
+produce two distinct access nodes in one state, never a cycle.
 
-The velocity_tendencies pattern that surfaced this bug:
+velocity_tendencies pattern that surfaced this: after
+``hlfir-lift-reduction-operands`` (e3cfbcc68) lifts a reduction temp, both
+``max_vcfl_dyn = MAX(...)`` and the writeback land in the same state; the
+bridge's ``emit_scalar_assign`` was reusing the cached read node for the
+write, giving ONE access node both incoming and outgoing edges -- invalid
+SDFG topology.
 
-    max_vcfl_dyn = MAX(p_diag % max_vcfl_dyn, MAXVAL(vcflmax(s:e)))
-    p_diag % max_vcfl_dyn = max_vcfl_dyn
-
-After ``hlfir-lift-reduction-operands`` (committed in e3cfbcc68) emits
-the lifted reduction temp, both assigns land in the same state.  The
-second assign's writeback target was the first assign's RHS read; the
-bridge's ``emit_scalar_assign`` was previously reusing the cached read
-node for the write, producing a state where ONE access node had both
-incoming and outgoing edges  --  invalid SDFG topology.
-
-This test fixes the pattern at minimal scale (no MAXVAL, no struct,
-no inlined callee) so a regression here surfaces independently of
-Phases F / A / B / G work.
+Reproduces at minimal scale (no MAXVAL, no struct, no inlined callee) so a
+regression surfaces independently of Phases F/A/B/G.
 """
 
 from pathlib import Path
@@ -29,9 +23,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_read_then_writeback_no_cycle(tmp_path: Path):
-    """``out = max(out, x); ... ; out = out + 1``  --  every state that
-    contains both a read of ``out`` and a write to ``out`` must have
-    TWO distinct access nodes for ``out`` (one input, one output)."""
+    """Every state with both a read and write of ``out`` must have TWO distinct access nodes for ``out``."""
     src = """
 subroutine kernel(out, x, n)
   implicit none
@@ -48,9 +40,7 @@ end subroutine kernel
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(src, sdfg_dir, name='kernel').build()
 
-    # Walk every state; for any state that touches ``out``, count the
-    # number of ``out`` access nodes.  Whenever the state has BOTH an
-    # in-edge AND an out-edge on data ``out``, the count must be >= 2.
+    # For every state touching 'out': if it has both an in-edge and an out-edge on 'out', it must have >= 2 access nodes.
     from dace.sdfg import nodes as nd
     bad = []
     for state in sdfg.all_states():
@@ -73,8 +63,7 @@ end subroutine kernel
 
 
 def test_read_then_writeback_two_assigns_same_state(tmp_path: Path):
-    """The exact velocity_tendencies shape: two textual statements,
-    second writes target that was the first's RHS read."""
+    """Exact velocity_tendencies shape: two statements, second writes the target that was the first's RHS read."""
     src = """
 subroutine kernel(state, x, n)
   implicit none

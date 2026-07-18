@@ -1,29 +1,6 @@
-"""Simple FaCe-native tests for Fortran bitwise intrinsics.
-
-Flang lowers each of these to a small ``arith.*`` op tree on the integer
-operand types:
-
-- ``IBSET(x, p)``  -> ``x | (1 << p)``         (set bit p).
-- ``IBCLR(x, p)``  -> ``x & ~(1 << p)``         (clear bit p; the ``~``
-  comes out as ``arith.xori a, -1``).
-- ``IEOR(a, b)``   -> ``a ^ b``                 (bitwise XOR).
-- ``ISHFT(x, n)``  -> ``logical_left_shift(x, n)`` for ``n>0``,
-                     ``logical_right_shift(x, -n)`` for ``n<0``  (Flang
-                     inlines via ``arith.shli`` / ``arith.shrui`` + a
-                     sign select; the right shift is *logical* / zero-fill,
-                     not the sign-extending ``arith.shrsi``).
-- ``IAND(a, b)``   -> ``a & b``.
-- ``IOR(a, b)``    -> ``a | b``.
-- ``BTEST(x, p)``  -> ``(x >> p) & 1`` (returned as i1 / .true.).
-- ``IBITS(x, p, n)`` -> ``(x >> p) & ((1 << n) - 1)``.
-
-The bridge's ``buildExpr`` recognises the underlying ``arith.shli`` /
-``arith.shrui`` (-> ``logical_left_shift`` / ``logical_right_shift``
-runtime helpers, which shift via the unsigned type so a negative
-operand zero-fills) / ``arith.shrsi`` (-> arithmetic ``>>``) /
-``arith.andi`` / ``arith.ori`` / ``arith.xori`` ops on non-i1
-operands; the tests below verify the full chain end-to-end.
-"""
+"""Fortran bitwise intrinsics (IBSET/IBCLR/IEOR/ISHFT/IAND/IOR/BTEST/IBITS) lower to
+``arith.*`` op trees. ISHFT's right shift is *logical* (zero-fill via unsigned shift),
+not the sign-extending ``arith.shrsi`` -- the key gotcha the tests below pin."""
 
 from pathlib import Path
 
@@ -61,12 +38,9 @@ end subroutine
 
 
 def test_ishft_negative_shift_is_logical(tmp_path: Path):
-    """``ISHFT`` with a negative shift is a *logical* (zero-fill) right
-    shift, and applies to negative operands too.  A signed C++ ``>>``
-    would sign-extend (``ishft(-182, -2) == -46`` instead of the
-    correct ``1073741778``); the ``logical_right_shift`` helper makes
-    the SDFG match Fortran.  Expected values are computed via numpy's
-    unsigned 32-bit shift, which is the same zero-fill semantics."""
+    """``ISHFT`` with a negative shift is a *logical* (zero-fill) right shift, even for
+    negative operands: a signed C++ ``>>`` would sign-extend (``ishft(-182,-2)==-46``
+    instead of the correct ``1073741778``). Expected values via numpy's unsigned shift."""
     src = """
 subroutine probe(x, s, o_var, o_negconst, o_negx)
   integer, intent(in)  :: x, s

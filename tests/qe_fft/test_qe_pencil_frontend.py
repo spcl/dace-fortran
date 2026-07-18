@@ -1,15 +1,11 @@
 """E2E frontend-recognition tests for QE's parallel pencil-pipeline routines.
 
-Drives one entry of :file:`qe_pencil_probe.f90` per routine and asserts
-the resulting SDFG carries the matching lib node:
+Drives one entry of :file:`qe_pencil_probe.f90` per routine and asserts the SDFG carries the
+matching lib node: ``cft_1x``/``cft_1y``/``cft_1z`` -> :class:`FFT`; ``fft_scatter_xy``/
+``fft_scatter_yz`` -> :class:`Alltoall`.
 
-* ``cft_1x`` / ``cft_1y`` / ``cft_1z`` -> :class:`FFT` (forward)
-* ``fft_scatter_xy`` / ``fft_scatter_yz`` -> :class:`Alltoall`
-
-The recognition layer is in place; the buffer-to-3-D-grid reinterpretation
-that would let the bridge build a fully-functioning parallel 3-D FFT
-SDFG is a separate gap (the ``axis`` tag is carried on the ASTNode for
-``emit_fft`` to consume once that gap closes).
+Recognition only -- the buffer-to-3-D-grid reinterpretation for a full parallel 3-D FFT SDFG
+is a separate gap (``axis`` tag carried on the ASTNode for ``emit_fft`` to consume later).
 """
 from pathlib import Path
 

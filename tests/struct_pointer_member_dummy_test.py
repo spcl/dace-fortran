@@ -1,17 +1,8 @@
-"""Targeted test for pointer-array member on a DUMMY-ARG struct.
-
-Distinct from ``derived_type_test::test_struct_pointer_member_slice_rebind``
-which covers Phase 5b for a LOCAL struct instance (rebound to a section
-via ``s%w => src(1:n)``).  This test exercises the dummy-arg path:
-``type(holder), intent(in) :: h`` with ``real, pointer :: data(:, :, :)``
-inside the type, accessed from the kernel as ``h%data(i, j, k)``.
-
-The bridge route is ``FlattenStructs::replaceStructArg`` (non-nested,
-non-AoS).  Before the fix at FlattenStructs.cpp:2199 the flat
-companion ``h_data`` was synthesised without ``fortran_attrs<pointer>``,
-so ``extract_vars`` couldn't peel the ``fir.box<fir.ptr<>>`` wrappers
-to find the inner ``SequenceType`` and classified ``h_data`` as a
-Scalar of dtype ``!fir.box<!fir.ptr<...>>`` -- arglist later raised
+"""Pointer-array member on a DUMMY-ARG struct (distinct from
+``derived_type_test::test_struct_pointer_member_slice_rebind``, which covers a LOCAL
+instance). Route: ``FlattenStructs::replaceStructArg``. Before the fix at
+FlattenStructs.cpp:2199, the flat companion ``h_data`` was synthesised without
+``fortran_attrs<pointer>``, got misclassified as Scalar, and arglist raised
 ``KeyError: 'h_data_d0'`` looking up the deferred-shape extent symbol.
 """
 
@@ -61,8 +52,7 @@ def test_pointer_array_member_dummy_arg_flattens(tmp_path: Path):
     sdfg = build_sdfg(_SRC, sdfg_dir, name="read_holder", entry="read_holder_mod::read_holder").build()
     sdfg.validate()
 
-    # The flat companion must be a rank-3 Array, not a Scalar (which is
-    # what the pre-fix classification produced).
+    # flat companion must be rank-3 Array, not Scalar (the pre-fix classification)
     desc = sdfg.arrays.get('h_data')
     assert desc is not None, (f"expected flat companion `h_data` in SDFG; arrays: {sorted(sdfg.arrays.keys())}")
     assert type(desc).__name__ == 'Array', (f"`h_data` must classify as rank-3 Array (not Scalar) after pointer-attr "
@@ -74,9 +64,8 @@ def test_pointer_array_member_dummy_arg_flattens(tmp_path: Path):
     data = np.asfortranarray(rng.standard_normal((n, n, n)))
     out = np.zeros((n, n, n), dtype=np.float64, order='F')
 
-    # Dummy-arg deferred-shape POINTER -- bridge leaves the per-dim
-    # offset as a free symbol when the body has no literal-index hint.
-    # Pass the actual 1-based lower bound here.
+    # dummy-arg deferred-shape POINTER: bridge leaves the per-dim offset as a free symbol
+    # with no literal-index hint in the body -- pass the actual 1-based lower bound here.
     sdfg(h_data=data,
          out=out,
          n=np.int32(n),

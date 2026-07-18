@@ -1,13 +1,8 @@
 """Unit tests for the pure helpers in ``dace_fortran.build_bridge``.
 
-Only the logic that is *not* a one-shot cmake/LLVM shell-out is worth
-testing here: ``_python_cmake_hints`` (derives the Python cmake hints
-from the running interpreter's ``sysconfig`` -- the venv/pyenv build
-fix) and ``needs_build`` (the source-vs-``.so`` mtime gate).  The
-``build`` / ``_find_llvm_*`` / CLI paths shell out to cmake + a full
-LLVM toolchain and are exercised by CI's dedicated build step, not
-mocked here (mocking the toolchain would assert the mock, not
-behaviour).
+Covers only ``_python_cmake_hints`` (sysconfig-derived cmake hints, the
+venv/pyenv fix) and ``needs_build`` (source-vs-``.so`` mtime gate); the
+cmake/LLVM shell-out paths are exercised by CI's build step, not mocked here.
 """
 import os
 import sysconfig
@@ -16,9 +11,7 @@ from dace_fortran import build_bridge
 
 
 def test_python_cmake_hints_point_at_real_files():
-    """Every emitted hint is a ``-DPython_*=<path>`` whose path exists,
-    so cmake's ``find_package(Python ... Development.Module)`` resolves
-    even from a venv/pyenv prefix without its own headers."""
+    """Every ``-DPython_*=<path>`` hint resolves, so cmake's find_package works from a venv/pyenv prefix."""
     hints = build_bridge._python_cmake_hints()
 
     inc = next((h for h in hints if h.startswith("-DPython_INCLUDE_DIR=")), None)
@@ -35,8 +28,7 @@ def test_python_cmake_hints_point_at_real_files():
 
 
 def test_python_cmake_hints_match_running_interpreter():
-    """The include hint is exactly the active interpreter's
-    ``sysconfig`` include path (no hard-coded prefix)."""
+    """Include hint matches the active interpreter's sysconfig path exactly (no hard-coded prefix)."""
     hints = build_bridge._python_cmake_hints()
     expected_inc = sysconfig.get_path("include")
     assert f"-DPython_INCLUDE_DIR={expected_inc}" in hints

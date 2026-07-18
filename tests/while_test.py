@@ -1,9 +1,8 @@
 """Verbatim port of f2dace/dev:tests/fortran/while_test.py.
 
-Note: f2dace's while_test wraps the test in a PROGRAM + CALL idiom; the
-HLFIR frontend runs on the subroutine directly (cross-subroutine PROGRAM
-lowering is not yet implemented), so the verbatim port targets the
-``while_test_function`` subroutine."""
+f2dace wraps the test in a PROGRAM + CALL idiom; the HLFIR frontend runs on the
+subroutine directly (cross-subroutine PROGRAM lowering isn't implemented yet), so the
+port targets ``while_test_function`` directly."""
 
 import numpy as np
 import pytest

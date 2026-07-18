@@ -1,20 +1,10 @@
 """Index-expression operator coverage for ``buildIndexExpr``.
 
-The array-subscript path (``bridge/ast/assigns.cpp::buildIndexExpr``)
-renders integer arithmetic inside ``arr(<expr>)`` subscripts.  It must
-keep parity with the value path (``buildExpr``) for the integer ops
-that legitimately appear in indices; a missing op bottoms the subscript
-out at the ``?`` placeholder and the SDFG build fails with an
-unresolved free symbol.
-
-Covered here:
-  * ``MOD(i, k)`` -> ``arith.remsi`` -> Python ``%``.
-  * width-cast index (``INTEGER(4)`` counter extended to i64 for the
-    subscript) -> transparent ``arith.extsi`` / ``trunci`` pass-through.
-
-NOT yet supported (documented gaps -- rare in indices, hard for the
-polyhedral subset model): bitwise ``IAND``/``IOR``/``IEOR`` and
-``ISHFT`` directly in a subscript.
+``bridge/ast/assigns.cpp::buildIndexExpr`` renders integer arithmetic inside
+``arr(<expr>)`` subscripts and must keep parity with the value path
+(``buildExpr``); a missing op bottoms out at ``?`` and the SDFG build fails
+on an unresolved free symbol. Covers ``MOD`` -> Python ``%`` and width-cast
+index pass-through. NOT yet supported: bitwise IAND/IOR/IEOR/ISHFT in a subscript.
 """
 import numpy as np
 import pytest
@@ -54,9 +44,8 @@ END MODULE mod_idx_mod
 
 
 def test_kind4_index_extended_to_i64(tmp_path):
-    """An ``INTEGER(4)`` loop counter used as a subscript is extended
-    to i64 by Flang (``arith.extsi``); the index path must treat the
-    cast as transparent rather than emitting ``?``."""
+    """``INTEGER(4)`` loop counter used as a subscript is extended to i64 by
+    Flang (``arith.extsi``); the index path must treat the cast as transparent."""
     src = """
 MODULE k4_idx_mod
   IMPLICIT NONE

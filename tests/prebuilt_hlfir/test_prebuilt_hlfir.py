@@ -1,37 +1,9 @@
-"""Tier-3 prebuilt-HLFIR end-to-end across two mock projects built
-with two different build systems, to confirm the helper is generic.
+"""Tier-3 prebuilt-HLFIR end-to-end across two mock projects built with two different build systems, confirming :func:`build_sdfg_from_hlfir` is generic -- the canonical path for codebases too large/dep-tangled to compile directly (ICON/ECRAD/...).
 
-This shape -- the bridge as a clean consumer of whatever the
-project's build system produces -- is the canonical path for
-codebases too large or dep-tangled for the bridge to compile itself
-(ICON / ECRAD / ...).  The tier-3 API is :func:`build_sdfg_from_hlfir`
-(WIP, see README).
+Usage: ``python -m dace_fortran.emit_hlfir <build>/compile_commands.json --out <build>/hlfir [--stub <stub.f90>]...`` reads the DB for build order + -I/-D flags.
 
-The user adds one DB-capture step to their normal build, then runs
-the helper once:
-
-    python -m dace_fortran.emit_hlfir <build>/compile_commands.json \\
-        --out <build>/hlfir [--stub <stub.f90>]...
-
-The helper reads the artefact for build order + ``-I`` / ``-D``
-flags.  Two ways to get the ``compile_commands.json`` artefact are
-exercised here:
-
-* ``jacobi/`` -- **autotools** project (autoconf + automake), built
-  the way ICON is (ICON itself is autoconf + a hand-written
-  ``Makefile.in``; ``bear`` is build-system-agnostic so it captures
-  either identically).  ``bear -- make`` writes the DB by
-  intercepting compiler ``exec()`` calls.  4 ``.f90`` files, hard
-  deps on real MPI + netCDF; the entry ``jacobi2d_update`` has an
-  inlinable ``stencil_5pt`` helper and a sibling ``halo_exchange``
-  that uses MPI -- the bridge lowers only the entry, MPI stays out
-  of the SDFG.  Two flang stubs (``stubs/mpi_stub.f90``,
-  ``stubs/netcdf_stub.f90``) stand in for the modules flang has no
-  shipped ``.mod`` for.
-* ``csr_spmv/`` -- **cmake** project, DB via
-  ``-DCMAKE_EXPORT_COMPILE_COMMANDS=ON``.  2 ``.f90`` files, no
-  external deps, no stubs.  Entry ``csr_spmv`` has an inlinable
-  ``dot_row`` helper.
+* jacobi/ -- autotools (like ICON), DB via ``bear -- make``.  4 files, real MPI+netCDF deps; entry jacobi2d_update inlines stencil_5pt, sibling halo_exchange uses MPI (stays out of the SDFG).  Two flang stubs stand in for modules flang ships no .mod for.
+* csr_spmv/ -- cmake, DB via -DCMAKE_EXPORT_COMPILE_COMMANDS=ON.  2 files, no deps, no stubs; entry csr_spmv inlines dot_row.
 """
 import shutil
 import subprocess
@@ -69,17 +41,13 @@ def _assert_inlined(sdfg, helper: str):
     reason="flang-new-21 / bear / autotools / MPI / netcdf-fortran missing",
 )
 def test_jacobi_autotools_bear(tmp_path: Path):
-    """Autotools + ``bear -- make`` -> compile_commands.json (the ICON
-    build shape).  4 files, MPI + netCDF, two flang stubs.  Drives the
-    one-call ``build_sdfg_from_project`` tier-3 entry point."""
+    """Autotools + bear -- make -> compile_commands.json (ICON build shape); drives the one-call build_sdfg_from_project tier-3 entry point."""
     build = tmp_path / "build"
     shutil.copytree(_JACOBI_DIR, build)
 
     subprocess.check_call(["autoreconf", "--install"], cwd=build)
     subprocess.check_call(["./configure"], cwd=build)
-    # Serial make so the Fortran module .mod files land in USE-dep
-    # order; bear records each compiler exec, writing the DB even on
-    # a partial build.
+    # serial make so .mod files land in USE-dep order; bear records each compiler exec, writing the DB even on a partial build.
     subprocess.check_call(["bear", "--", "make"], cwd=build)
 
     sdfg = build_sdfg_from_project(build / "compile_commands.json",
@@ -98,9 +66,7 @@ def test_jacobi_autotools_bear(tmp_path: Path):
     reason="cmake / flang-new-21 missing",
 )
 def test_csr_spmv_cmake(tmp_path: Path):
-    """cmake ``-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`` -> compile_commands.json.
-    2 files, no external deps, no stubs -- a structurally-different
-    project with no per-project plumbing."""
+    """cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -> compile_commands.json; structurally different project, no per-project plumbing needed."""
     build = tmp_path / "build"
     build.mkdir(parents=True, exist_ok=True)
     subprocess.check_call(["cmake", "-S", str(_CSR_DIR), "-B", str(build), "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"])

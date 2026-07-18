@@ -1,14 +1,11 @@
 """Whole-array copies between ALLOCATABLEs and normal arrays.
 
-An ``ALLOCATABLE``'s SDFG transient carries its own ``ALLOCATE`` extent
-symbol (``x_alloc1_d0`` ...), distinct from a normal dummy's extent
-(``n``).  A Fortran whole-array assignment between the two conforms
-(equal extents) but the names differ, so ``CopyLibraryNode``'s same-rank
-expansion can't prove the per-dim shapes equal.  ``emit_copy`` drives the
-destination memlet off the SOURCE descriptor's shape so both subsets
-align; these tests pin that the copied values are correct (no truncation
-/ overflow) in both directions, for 1-D and 2-D, and allocatable-to-
-allocatable.
+An ALLOCATABLE's SDFG transient carries its own ALLOCATE extent symbol, distinct
+from a normal dummy's extent -- a Fortran whole-array assignment between the two
+conforms but the names differ, so ``CopyLibraryNode``'s same-rank expansion can't
+prove the per-dim shapes equal.  ``emit_copy`` drives the destination memlet off
+the SOURCE descriptor's shape so subsets align; these tests pin correct values
+(no truncation/overflow) both directions, 1-D/2-D, and allocatable-to-allocatable.
 """
 from pathlib import Path
 
@@ -58,8 +55,7 @@ subroutine main(n, src, out)
   deallocate(x)
 end subroutine main
 """
-    # Same source as above but assert through a non-contiguous-valued
-    # input so a wrong subset would show up as garbage.
+    # Non-contiguous-valued input so a wrong subset would show up as garbage.
     sdfg = build_sdfg(src, tmp_path, name='main').build()
     n = 5
     src_a = (10.0 * np.sin(np.arange(n))).copy(order='F')

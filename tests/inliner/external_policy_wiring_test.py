@@ -1,15 +1,12 @@
 # Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
-"""The external-function policy (:mod:`dace_fortran.external_functions`) wired
-into BOTH inliner engines:
+"""The external-function policy (:mod:`dace_fortran.external_functions`) wired into both
+inliner engines: the fparser pipeline (:func:`inline_to_ast`) and the regex text-splicer
+(:func:`merge_used_modules`).
 
-* the fparser pipeline (:func:`inline_to_ast` / :func:`inline_to_single_tu`),
-* the regex text-splicer (:func:`dace_fortran.preprocess.merge_used_modules`).
-
-In both, ``external_functions`` and ``do_not_emit`` name procedures that must
-NOT be inlined: the procedure stays *declared* but its executable body is
-emptied, so its internals (halo exchange / MPI / I/O) never enter the TU.  The
-deprecated ``keep_external=`` list (fparser only) is a thin shim meaning the
-same thing -- these tests assert it produces byte-identical output and warns.
+``external_functions``/``do_not_emit`` name procedures that stay declared but get their
+executable body emptied (halo/MPI/I/O internals never enter the TU). The deprecated
+``keep_external=`` (fparser only) is a thin shim -- these tests assert byte-identical output
+plus a warning.
 """
 import shutil
 import subprocess
@@ -40,10 +37,8 @@ def _gfortran_compiles(src_text: str) -> bool:
         return r.returncode == 0
 
 
-# A kernel whose enclosing module also defines a "halo exchange" procedure it
-# calls.  Keeping ``halo_exchange`` external must empty its body (the ``+ 1.0``
-# update) while leaving the kernel's own body (the ``* 2.0`` update) and the
-# call site intact.
+# Kernel's enclosing module also defines "halo_exchange"; keeping it external must empty its
+# body (+1.0 update) while leaving the kernel's own body (*2.0) and the call site intact.
 _HALO_MODULE = """
 module mo_halo
   implicit none
@@ -78,8 +73,7 @@ def _fparser_out(**kw) -> str:
 
 
 def test_fparser_baseline_keeps_external_body():
-    """Without a policy, the called procedure survives WITH its body -- the
-    contrast the policy removes."""
+    """Without a policy, the called procedure survives WITH its body -- the contrast the policy removes."""
     base = _fparser_out().replace(" ", "")
     assert "callhalo_exchange" in base
     assert "a(i)=a(i)+1.0" in base, "halo_exchange body present without a policy"
@@ -94,8 +88,7 @@ def test_fparser_external_functions_stub_body():
 
 
 def test_fparser_external_functions_do_not_emit_keep_external_are_identical():
-    """All three spellings drive the same ``make_noop`` -- byte-identical TUs.
-    (The inliner only needs the *name*; emit-vs-drop is the bridge's concern.)"""
+    """All three spellings drive the same ``make_noop`` -- byte-identical TUs (the inliner only needs the name; emit-vs-drop is the bridge's concern)."""
     via_ext = _fparser_out(external_functions=[ExternalFunction("halo_exchange")])
     via_dne = _fparser_out(do_not_emit=["halo_exchange"])
     with pytest.warns(DeprecationWarning):
@@ -111,8 +104,7 @@ def test_fparser_keep_external_warns_but_works():
 
 
 def test_fparser_validate_rejects_name_in_both():
-    """An emitted name that is also in ``do_not_emit`` is an inconsistent
-    policy -- rejected before any parsing."""
+    """A name in both emitted and ``do_not_emit`` is an inconsistent policy -- rejected before any parsing."""
     with pytest.raises(ValueError, match="both"):
         _fparser_out(external_functions=[ExternalFunction("halo_exchange")], do_not_emit=["halo_exchange"])
 
@@ -141,9 +133,8 @@ def _write_halo(d: Path) -> Path:
 
 
 def test_regex_merge_stubs_external_body(tmp_path):
-    """``merge_used_modules`` splices ``mo_halo`` in, but with the policy the
-    spliced ``halo_exchange`` is emptied -- opener + spec + END kept, the
-    ``+ 1.0`` body gone -- while the call site survives."""
+    """``merge_used_modules`` splices ``mo_halo`` in; with the policy, spliced ``halo_exchange``
+    is emptied (opener+spec+END kept, ``+1.0`` body gone) while the call site survives."""
     _write_halo(tmp_path)
     merged = merge_used_modules(_CALLER, search_dirs=[tmp_path], external_functions=[ExternalFunction("halo_exchange")])
     flat = merged.replace(" ", "").lower()
@@ -169,8 +160,7 @@ def test_regex_merge_no_policy_keeps_body(tmp_path):
 
 
 def test_regex_merge_generic_prefix_match(tmp_path):
-    """A generic policy name (``sync_patch_array``) stubs every concrete
-    specific (``sync_patch_array_3d_dp``) -- the ICON interface pattern."""
+    """A generic policy name (``sync_patch_array``) stubs every concrete specific (``sync_patch_array_3d_dp``) -- the ICON interface pattern."""
     mod = """
 module mo_sync
   implicit none
@@ -194,12 +184,11 @@ end module mo_sync
 
 
 def test_regex_merge_stubs_body_with_interface_in_spec(tmp_path):
-    """A stubbed procedure whose spec part contains an ``INTERFACE`` block
-    (the ICON ``bind(c)`` halo wrapper that forwards to a C++ impl) keeps the
-    WHOLE block -- ``interface`` ... ``end interface``, nested decls and all --
-    and drops only the executable ``call``.  Regression: the nested
-    ``subroutine`` inside the interface must not be mistaken for the body's
-    start (which would orphan the ``interface`` opener -> uncompilable)."""
+    """A stubbed procedure whose spec contains an ``INTERFACE`` block (ICON's ``bind(c)`` halo
+    wrapper forwarding to C++) keeps the whole block and drops only the executable ``call``.
+    Regression: the nested ``subroutine`` inside must not be mistaken for the body's start
+    (would orphan the ``interface`` opener -> uncompilable).
+    """
     mod = """
 module mo_wrap
   use iso_c_binding
@@ -235,22 +224,20 @@ end module mo_wrap
 
 @pytest.mark.skipif(not _have_gfortran(), reason="gfortran not on PATH")
 def test_regex_merge_stubbed_tu_compiles(tmp_path):
-    """The stubbed single-TU is still valid Fortran: an empty-bodied
-    ``halo_exchange`` with its dummy argument declared compiles standalone."""
+    """The stubbed single-TU is still valid Fortran: an empty-bodied ``halo_exchange`` with its dummy argument declared compiles standalone."""
     _write_halo(tmp_path)
     merged = merge_used_modules(_CALLER, search_dirs=[tmp_path], external_functions=[ExternalFunction("halo_exchange")])
     assert _gfortran_compiles(merged), "stubbed merged TU must compile"
 
 
 # ---------------------------------------------------------------------------
-# build-path threading -- preprocess_fortran_source forwards external_names to
-# BOTH merge engines, and the build path sources them from the bridge registry
+# build-path threading -- preprocess_fortran_source forwards external_names to both merge
+# engines; the build path sources them from the bridge registry
 # ---------------------------------------------------------------------------
 
 
 def test_preprocess_source_threads_external_names_regex(tmp_path):
-    """``preprocess_fortran_source`` forwards ``external_names`` to the regex
-    merge -- the spliced external body is stubbed."""
+    """``preprocess_fortran_source`` forwards ``external_names`` to the regex merge -- the spliced external body is stubbed."""
     _write_halo(tmp_path)
     out = preprocess_fortran_source(_CALLER,
                                     search_dirs=[tmp_path],
@@ -280,9 +267,9 @@ def test_preprocess_source_no_external_names_keeps_body(tmp_path):
 
 
 def test_build_path_sources_external_names_from_registry():
-    """The build path's merge sources its keep-external names from the bridge's
-    external registry: a ``keep_external`` registration is in the merge set
-    automatically, unioned (de-duplicated) with any explicit names."""
+    """The build path's merge sources keep-external names from the bridge's external registry:
+    a ``keep_external`` registration is in the merge set automatically, unioned (de-duplicated)
+    with any explicit names."""
     from dace_fortran.build import _merge_external_names
     from dace_fortran.external import clear_external_registry, keep_external
 

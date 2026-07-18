@@ -1,21 +1,9 @@
-"""Simple FaCe-native tests for elementwise math intrinsics that the
-existing ``elemwise_intrinsics_test.py`` doesn't cover.  Each test
-exercises one intrinsic family on a small kernel and compares the SDFG
-output to a numpy reference.
+"""Elementwise math intrinsics not covered by ``elemwise_intrinsics_test.py``: each test exercises one intrinsic family, compares SDFG output to a numpy reference.
 
-Coverage:
-- Hyperbolic: ``sinh``, ``cosh``, ``tanh`` (Flang lowers ``sinh`` as a
-  ``fir.call @sinh`` runtime call; bridge recognises it alongside the
-  ``math.cosh`` / ``math.tanh`` dialect ops).
-- Inverse trig: ``asin``, ``acos``, ``atan``, ``atan2`` (``math.*`` ops).
-- Conversion: ``int(x)``, ``nint(x)``, ``aint(x)``, ``anint(x)``,
-  ``floor(x)``  --  Flang routes ``nint`` through ``llvm.lround``, ``aint``
-  through ``llvm.trunc``; bridge maps them to ``dace::int{32,64}`` casts
-  and ``trunc`` / ``round`` Python calls.
-- Modulo: ``mod(a,b)`` (truncated) and ``modulo(a,b)`` (floored)  --  both
-  lower to ``fir.call @_FortranAMod*Real8``; bridge maps both to the
-  Python ``%`` operator and the C++ codegen picks the right semantics
-  for the operand type.
+- Hyperbolic: sinh/cosh/tanh (sinh lowers to a fir.call runtime call, not math.*).
+- Inverse trig: asin/acos/atan/atan2 (math.* ops).
+- Conversion: int/nint/aint/anint/floor -- nint via llvm.lround, aint via llvm.trunc; bridge maps to dace::int{32,64} casts and trunc/round.
+- Modulo: mod (truncated) / modulo (floored) -- both lower to fir.call @_FortranAMod*Real8, both map to Python %, C++ codegen picks semantics per operand type.
 """
 
 from pathlib import Path
@@ -64,8 +52,7 @@ end subroutine
 
 
 def test_floor_aint(tmp_path: Path):
-    """floor / aint  --  both round toward -inf / 0 respectively, return
-    real of the same kind."""
+    """floor / aint -- round toward -inf / 0 respectively, return real of the same kind."""
     src = """
 subroutine probe(x, out)
   real(8), intent(in)  :: x
@@ -102,9 +89,7 @@ end subroutine
 
 
 def test_mod_modulo(tmp_path: Path):
-    """Fortran MOD (truncated) and MODULO (floored)  --  both are the
-    Python ``%`` at the bridge level; the C++ codegen does the right
-    thing per type."""
+    """Fortran MOD (truncated) and MODULO (floored) -- both are Python % at the bridge level; C++ codegen picks the right semantics per type."""
     src = """
 subroutine probe(a, b, out)
   real(8), intent(in)  :: a, b
@@ -114,16 +99,9 @@ subroutine probe(a, b, out)
 end subroutine
 """
     sdfg = build_sdfg(src, tmp_path, name='probe').build()
-    # MOD has truncated-quotient semantics; MODULO floored.
-    # For (a, b) = (-7.0, 3.0): mod = -7 - 3*int(-7/3) = -7 - 3*(-2) = -1
-    #                            modulo = -7 - 3*floor(-7/3) = -7 - 3*(-3) = 2
+    # MOD truncated, MODULO floored: (-7,3) -> mod=-7-3*int(-7/3)=-1, modulo=-7-3*floor(-7/3)=2
     out = np.zeros(2, dtype=np.float64)
     sdfg(a=-7.0, b=3.0, out=out)
-    # Both bridge to ``%``; Python's `-7.0 % 3.0` is 2.0 (floored), so the
-    # bridge expression matches MODULO.  The C++ codegen lowers ``%`` on
-    # double to ``fmod`` (truncated) for Fortran-MOD positions and to a
-    # floor-rounded helper for MODULO positions, but at this layer both
-    # come through as the same operator  --  verify against the floored
-    # numpy result, which is what Python and DaCe's float-`%` produce.
+    # both bridge to %; codegen lowers it to fmod (truncated) for MOD positions and a floor-helper for MODULO positions -- verify against the floored numpy result.
     np.testing.assert_allclose(out[0], np.fmod(-7.0, 3.0), rtol=1e-12)
     np.testing.assert_allclose(out[1], -7.0 - 3.0 * np.floor(-7.0 / 3.0), rtol=1e-12)

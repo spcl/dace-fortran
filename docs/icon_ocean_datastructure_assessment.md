@@ -1,7 +1,6 @@
 # ICON-O kernel data-structure assessment: numerics vs. I/O / bookkeeping
 
-Scope: four ICON ocean compute kernels we plan to extract into self-contained Fortran
-and lower to a DaCe SDFG. For each derived type / member a kernel touches, we classify:
+Scope: four ICON ocean compute kernels planned for extraction into self-contained Fortran + DaCe SDFG lowering. Classification per derived type/member touched:
 
 | Code | Meaning | Disposition for DaCe extraction |
 |------|---------|---------------------------------|
@@ -10,9 +9,7 @@ and lower to a DaCe SDFG. For each derived type / member a kernel touches, we cl
 | **P** | Parallel / halo bookkeeping (subset ranges, `sync_patch_array`, owned/in_domain) | Reduce to plain loop-bound scalars / drop / external-stub |
 | **I** | I/O / metadata / var_list / diagnostics / timers / `dbg_print` | Drop or make external call |
 
-Global scalars used by all kernels (module-level, not struct members — pass as scalar args):
-`nproma` (`mo_parallel_config`), `n_zlev` (`mo_ocean_nml`), `dtime` (`mo_run_config`),
-`no_dual_edges` (= `verts%max_connectivity`, `mo_operator_ocean_coeff_3d`).
+Global scalars used by all kernels (module-level, not struct members — pass as scalar args): `nproma` (`mo_parallel_config`), `n_zlev` (`mo_ocean_nml`), `dtime` (`mo_run_config`), `no_dual_edges` (= `verts%max_connectivity`, `mo_operator_ocean_coeff_3d`).
 
 DSL macro expansion (`src/include/iconfor_dsl_definitions.inc`), needed to read the type defs:
 - `onCellsBlock` → `REAL(wp), POINTER, DIMENSION(:,:)` (a per-block **2-D** array)
@@ -20,19 +17,14 @@ DSL macro expansion (`src/include/iconfor_dsl_definitions.inc`), needed to read 
 - `mapEdgesToEdges` → `REAL(wp), POINTER, DIMENSION(:,:,:,:)`
 - `onEdges_3D_Int` → `INTEGER, POINTER, DIMENSION(:,:,:)`
 
-**Headline result — no kernel needs any list/registry structure for its numerics.**
-`grep` for `add_var | add_ref | t_var_list | new_var_list` returns **0** in all four kernel
-modules. `t_var_list`, `t_hydro_ocean_state/prog/diag/aux`, the `*_Pointer_3d_wp` linked
-pointer lists, and `t_ocean_monitor` are **never referenced** inside these kernel bodies.
+**Headline result — no kernel needs any list/registry structure for its numerics.** `grep` for `add_var | add_ref | t_var_list | new_var_list` returns **0** in all four kernel modules. `t_var_list`, `t_hydro_ocean_state/prog/diag/aux`, the `*_Pointer_3d_wp` linked pointer lists, and `t_ocean_monitor` are **never referenced** inside these kernel bodies.
 
 ---
 
 ## Kernel 1 — `upwind_vflux_ppm_onBlock`
 `tracer_transport/mo_ocean_tracer_transport_vert.f90:213-551`
 
-Signature args (lines 213-231). Body member-accesses confirmed by grep: only
-`ppmCoeffs%<9 members>` (lines 264-272); **no `patch%` access inside the onBlock body**.
-This kernel already receives everything as flat arrays *except* the PPM coefficients.
+Signature args lines 213-231. Body member-accesses confirmed by grep: only `ppmCoeffs%<9 members>` (264-272); **no `patch%` access inside the onBlock body**. Already receives everything as flat arrays *except* the PPM coefficients.
 
 | Structure | Member (file:line) | Class | Concrete flat shape | Disposition |
 |-----------|--------------------|-------|---------------------|-------------|
@@ -49,13 +41,9 @@ This kernel already receives everything as flat arrays *except* the PPM coeffici
 | ″ | `cellHeightRatio_ThisBelow_to2xThisplusAbove` 271 | N | `(nproma,n_zlev)` | flatten → array arg |
 | ″ | `cellHeight_inv_ThisAboveBelow2Below` 272 | N | `(nproma,n_zlev)` | flatten → array arg |
 
-`t_verticalAdvection_ppm_coefficients` = exactly nine `onCellsBlock` = nine `(nproma,n_zlev)`
-real arrays (the def comment line 60 says "all dimensions are (nproma, levels)"). Pure
-container; trivially flattened.
+`t_verticalAdvection_ppm_coefficients` = nine `onCellsBlock` = nine `(nproma,n_zlev)` real arrays (def comment line 60: "all dimensions are (nproma, levels)"). Pure container; trivially flattened.
 
-Calls to stub/external: **none** — kernel calls only `set_acc_host_or_device` (ACC host
-flag — drop) and `v_ppm_slimiter_mo_onBlock` (line 444, an in-module pure-array helper that
-should be inlined/extracted alongside, not stubbed; it takes the same flat arrays).
+Calls to stub/external: **none** — kernel calls only `set_acc_host_or_device` (ACC host flag — drop) and `v_ppm_slimiter_mo_onBlock` (line 444, in-module pure-array helper — inline/extract alongside, don't stub; takes the same flat arrays).
 
 Proposed flat interface:
 ```
@@ -75,8 +63,7 @@ upwind_vflux_ppm_onBlock_flat(
 ## Kernel 2 — `limiter_ocean_zalesak_horizontal_onTriangles`
 `tracer_transport/mo_ocean_limiter.f90:587-1059`
 
-Pointers bound at lines 656-679 then used in the body. Connectivity is a triangle stencil
-(each cell has exactly 3 edges / 3 neighbour cells; edge has 2 cells).
+Pointers bound at lines 656-679, used in the body. Connectivity is a triangle stencil (each cell has exactly 3 edges / 3 neighbour cells; edge has 2 cells).
 
 | Structure → member (file:line) | Class | Concrete flat shape | Disposition |
 |--------------------------------|-------|---------------------|-------------|
@@ -106,12 +93,7 @@ Pointers bound at lines 656-679 then used in the body. Connectivity is a triangl
 | `p_test_run` 696 (logical global) | I/P | scalar | drop test-only zeroing branch |
 | `dbl_eps` 979, 984 (global tiny) | N | scalar constant | keep as parameter |
 
-Notes:
-- `vert_velocity` and `p_mass_flx_e` are in the signature but the `onTriangles` body never
-  reads them (grep). They are interface-compat carryovers — can be **dropped** from the flat
-  interface.
-- All connectivity is fixed-arity triangle topology (3 edges/3 neighbours per cell, 2 cells
-  per edge), so the `(...,3)` / `(...,2)` index dims are compile-time constants — clean gather.
+Notes: `vert_velocity`/`p_mass_flx_e` are in the signature but `onTriangles` body never reads them (grep) — interface-compat carryovers, **droppable**. All connectivity is fixed-arity triangle topology (3 edges/3 neighbours per cell, 2 cells per edge) — `(...,3)`/`(...,2)` index dims are compile-time constants, clean gather.
 
 Proposed flat interface (after stripping):
 ```
@@ -136,18 +118,14 @@ limiter_zalesak_onTriangles_flat(
 ```
 - Numeric arrays needed: **~11 real** (`tracer, flx_tracer_low/high/final, div_adv_flux_vert, h_old, h_new, div_coeff, prism_thick_flat_sfc_c, del_zlev_m, inv_prism_thick_c`) + **9 integer** connectivity/topology arrays (`cellOfEdge_idx/blk, edge_of_cell_idx/blk, neighbor_cell_idx/blk, dolic_e, dolic_c, edges_SeaBoundaryLevel`).
 - Needs any list/var_list? **NO.**
-- External/stub calls: **`sync_patch_array_mult` ×2 (drop / external-stub)**; drop the
-  `p_test_run` zeroing branch and `set_acc_host_or_device`; replace `get_index_range` with
-  precomputed start/end index arrays (or plain `1..nproma` bounds in single-block extract).
+- External/stub calls: **`sync_patch_array_mult` ×2 (drop / external-stub)**; drop the `p_test_run` zeroing branch and `set_acc_host_or_device`; replace `get_index_range` with precomputed start/end index arrays (or plain `1..nproma` bounds in single-block extract).
 
 ---
 
 ## Kernel 3 — `velocity_diffusion_vertical_implicit_onBlock`
 `dynamics/mo_ocean_velocity_diffusion.f90:1078-1272`
 
-Column tridiagonal solve, one edge-block. `velocity`/`a_v` already arrive as plain
-`(:,:)` arrays; the only struct touched is `patch_3d%p_patch_1d(1)`. `operators_coefficients`
-is in the signature but the body **never accesses any of its members** (grep).
+Column tridiagonal solve, one edge-block. `velocity`/`a_v` already arrive as plain `(:,:)` arrays; only struct touched is `patch_3d%p_patch_1d(1)`. `operators_coefficients` is in the signature but the body **never accesses any of its members** (grep).
 
 | Structure → member (file:line) | Class | Concrete flat shape | Disposition |
 |--------------------------------|-------|---------------------|-------------|
@@ -161,8 +139,7 @@ is in the signature but the body **never accesses any of its members** (grep).
 | `dtime` (global `mo_run_config`) 1151,1165,1166,1179 | N | scalar | pass as scalar |
 | `eliminate_upper_diag` (global logical) 1186 | P/config | scalar | pass as scalar (selects which elimination branch) |
 
-Proposed flat interface (single edge-block; can pass full 3-D arrays + `edge_block`, or
-pre-sliced 2-D):
+Proposed flat interface (single edge-block; can pass full 3-D arrays + `edge_block`, or pre-sliced 2-D):
 ```
 velocity_diffusion_vert_implicit_onBlock_flat(
   velocity(nproma,n_zlev),                     ! INOUT
@@ -172,21 +149,17 @@ velocity_diffusion_vert_implicit_onBlock_flat(
   dtime, eliminate_upper_diag,
   start_index, end_index, edge_block, nblks_e)
 ```
-(Or, since only the `edge_block` slice is ever touched: pass `dolic_e_blk(nproma)`,
-`inv_prism_thick_e_blk(nproma,n_zlev)`, `inv_prism_center_dist_e_blk(nproma,n_zlev)`.)
+(Or, since only the `edge_block` slice is ever touched: pass `dolic_e_blk(nproma)`, `inv_prism_thick_e_blk(nproma,n_zlev)`, `inv_prism_center_dist_e_blk(nproma,n_zlev)`.)
 - Numeric arrays needed: **3 real** (`velocity, a_v` + the two `inv_prism_*` geometry arrays = effectively `velocity, a_v, inv_prism_thick_e, inv_prism_center_dist_e` → 4) + **1 integer** (`dolic_e`).
 - Needs any list/var_list? **NO.** (And `operators_coefficients` is dead-passed — drop it.)
-- External/stub calls: **none** (drop `set_acc_host_or_device`; the `routine` string + any
-  `finish` error path is non-numeric → drop).
+- External/stub calls: **none** (drop `set_acc_host_or_device`; the `routine` string + any `finish` error path is non-numeric → drop).
 
 ---
 
 ## Kernel 4 — `nonlinear_coriolis_3d_fast_scalar`
 `math/mo_scalar_product.f90:350-622`
 
-Indirect edge-of-vertex gather (variable arity `verts%num_edges`). Two halves: the
-`.NOT.l_ANTICIPATED_VORTICITY` branch (350-493, the default/primary) and the
-`l_ANTICIPATED_VORTICITY` branch (495-619). Members below cover both.
+Indirect edge-of-vertex gather (variable arity `verts%num_edges`). Two halves: `.NOT.l_ANTICIPATED_VORTICITY` branch (350-493, default/primary), `l_ANTICIPATED_VORTICITY` branch (495-619). Members below cover both.
 
 | Structure → member (file:line) | Class | Concrete flat shape | Disposition |
 |--------------------------------|-------|---------------------|-------------|
@@ -211,8 +184,7 @@ Indirect edge-of-vertex gather (variable arity `verts%num_edges`). Two halves: t
 | `l_ANTICIPATED_VORTICITY` 390,495 (global logical) | config | scalar | compile-time / pass scalar; default `.FALSE.` selects the simple branch |
 | `vort_flux_old` 376,498,594 | N (scratch) | `(nproma,n_zlev,nblks_e)` | debug-only local in ANTICIPATED branch — drop |
 
-Proposed flat interface (default `.NOT.l_ANTICIPATED_VORTICITY` branch, with `vort_v`
-precomputed upstream so `rot_vertex_ocean_3d` and `p_vn_dual` are out):
+Proposed flat interface (default `.NOT.l_ANTICIPATED_VORTICITY` branch, with `vort_v` precomputed upstream so `rot_vertex_ocean_3d` and `p_vn_dual` are out):
 ```
 nonlinear_coriolis_3d_fast_scalar_flat(
   vn(nproma,n_zlev,nblks_e),
@@ -229,11 +201,8 @@ nonlinear_coriolis_3d_fast_scalar_flat(
   edges_start_index(nblks_e), edges_end_index(nblks_e))
 ```
 - Numeric arrays needed: **4 real** in the default branch (`vn, vort_v, edge2edge_viavert_coeff, f_v` + `vort_flux` OUT = 5) — the ANTICIPATED branch adds `prism_thick_e` and `primal_edge_length` (2 more). **5 (default) / 7 (with ANTICIPATED)** real arrays + **6 integer** connectivity arrays (`edge_vertex_idx/blk, verts_num_edges, verts_edge_idx/blk, dolic_e`).
-- Needs any list/var_list? **NO.** `p_vn_dual` is `t_cartesian_coordinates` but is pure
-  pass-through (never `%x`-accessed here) — not needed if `vort_v` is precomputed.
-- External/stub calls: **`rot_vertex_ocean_3d`** (precompute `vort_v` upstream and pass it,
-  OR extract as a companion kernel) and **`sync_patch_array(SYNC_V,...)`** (drop / external-stub);
-  drop `set_acc_host_or_device` and the ANTICIPATED-branch debug `vort_flux_old`.
+- Needs any list/var_list? **NO.** `p_vn_dual` is `t_cartesian_coordinates` but is pure pass-through (never `%x`-accessed here) — not needed if `vort_v` is precomputed.
+- External/stub calls: **`rot_vertex_ocean_3d`** (precompute `vort_v` upstream and pass it, OR extract as a companion kernel) and **`sync_patch_array(SYNC_V,...)`** (drop / external-stub); drop `set_acc_host_or_device` and the ANTICIPATED-branch debug `vort_flux_old`.
 
 ---
 
@@ -247,39 +216,11 @@ nonlinear_coriolis_3d_fast_scalar_flat(
 | 4 | `nonlinear_coriolis_3d_fast_scalar` | **5** default (vn, vort_v, edge2edge_viavert_coeff, f_v, vort_flux) / **7** with ANTICIPATED (+prism_thick_e, +primal_edge_length) | **6** (edge_vertex_idx/blk, verts_num_edges, verts_edge_idx/blk, dolic_e) | **NO** | `rot_vertex_ocean_3d` (precompute `vort_v` upstream or extract as companion); `sync_patch_array(SYNC_V)` (drop); `p_vn_dual` droppable |
 
 ### Confirmations requested by the brief
-- **`add_var` / `add_ref` / `t_var_list` are NOT used in any of the four kernel modules** —
-  `grep -c` returns 0 in all four files. The var-list / state container types
-  (`t_hydro_ocean_state/prog/diag/aux`, the `t_on*_Pointer_3d_wp` pointer lists,
-  `t_ocean_monitor`) are field-allocation + I/O-metadata registries and never appear in compute
-  bodies. Safe to treat as non-numeric registry and exclude from extraction. **Confirmed.**
-- **`t_cartesian_coordinates`** (`externals/iconmath/src/support/mo_math_types.f90:31-33`) is a
-  `BIND(C)` type with a single member `REAL(wp) :: x(3)` — trivially flattenable to a leading
-  `(3,...)` real dimension. Only kernel 4 has it in its signature (`p_vn_dual`), and even there
-  the body never dereferences `%x` (pure pass-through to `rot_vertex_ocean_3d`).
-- **`t_subset_range`** (`grid/mo_model_domain.f90:92-113`) — the only members the kernels read
-  are the scalar `start_block`/`end_block` (and via `get_index_range`, `start_index`/`end_index`).
-  All P-class → plain loop-bound scalars. The embedded `TYPE(t_patch), POINTER :: patch` and
-  `name`/`decomp_info` are never touched.
-- **Connectivity members** in `t_grid_cells/edges/vertices` (`neighbor_idx/blk`, `edge_idx/blk`,
-  `vertex_idx/blk`, `cell_idx/blk`, `num_edges`) are all `INTEGER, ALLOCATABLE (:,:[,:])`
-  mesh-topology arrays with compile-time-constant last dims (2/3/4/6) — clean integer gather
-  arguments, fully supportable, **not** lists.
-- **`t_patch_vert` (`p_patch_1d`)** members used (`dolic_c/e`, `del_zlev_m`,
-  `prism_thick_e`, `prism_thick_flat_sfc_c`, `inv_prism_thick_c/e`, `inv_prism_center_dist_e`)
-  are all plain `REAL(wp)`/`INTEGER` POINTER arrays of `(nproma,[n_zlev,]nblks_*)` shape — N/C,
-  flatten to plain args.
-- **`t_operator_coeff`** (`dynamics/mo_ocean_types.f90:488-566`): only three members are touched
-  across all four kernels — `div_coeff` (`mapEdgesToCells` = `(nproma,n_zlev,nblks_c,3)`, kernel 2),
-  `edges_SeaBoundaryLevel` (`onEdges_3D_Int` = `(nproma,n_zlev,nblks_e)`, kernel 2), and
-  `edge2edge_viavert_coeff` (`mapEdgesToEdges` = `(nproma,n_zlev,nblks_e,2*no_dual_edges)`,
-  kernel 4). The `verticalAdvectionPPMcoeffs` member (line 556, a `blockList` of kernel-1's
-  coeff type) is the *only* list-shaped member of `t_operator_coeff`, and **none of the four
-  kernels access it** (kernel 1 receives `ppmCoeffs` directly as an argument, not via the
-  operator-coeff list). The rest of `t_operator_coeff` is untouched.
+- **`add_var`/`add_ref`/`t_var_list` NOT used in any of the four kernel modules** — `grep -c` returns 0 in all four files. Var-list/state container types (`t_hydro_ocean_state/prog/diag/aux`, the `*_Pointer_3d_wp` linked pointer lists, `t_ocean_monitor`) are field-allocation + I/O-metadata registries, never appear in compute bodies. Safe to exclude from extraction. **Confirmed.**
+- **`t_cartesian_coordinates`** (`externals/iconmath/src/support/mo_math_types.f90:31-33`) — `BIND(C)` type, single member `REAL(wp) :: x(3)`, trivially flattenable to a leading `(3,...)` dim. Only kernel 4 has it (`p_vn_dual`); body never dereferences `%x` (pure pass-through to `rot_vertex_ocean_3d`).
+- **`t_subset_range`** (`grid/mo_model_domain.f90:92-113`) — only members read are scalar `start_block`/`end_block` (+ via `get_index_range`, `start_index`/`end_index`). All P-class → plain loop-bound scalars. `TYPE(t_patch), POINTER :: patch` + `name`/`decomp_info` never touched.
+- **Connectivity members** in `t_grid_cells/edges/vertices` (`neighbor_idx/blk`, `edge_idx/blk`, `vertex_idx/blk`, `cell_idx/blk`, `num_edges`) — all `INTEGER, ALLOCATABLE (:,:[,:])` mesh-topology arrays, compile-time-constant last dims (2/3/4/6) — clean integer gather args, **not** lists.
+- **`t_patch_vert` (`p_patch_1d`)** members used (`dolic_c/e`, `del_zlev_m`, `prism_thick_e`, `prism_thick_flat_sfc_c`, `inv_prism_thick_c/e`, `inv_prism_center_dist_e`) — all plain `REAL(wp)`/`INTEGER` POINTER arrays `(nproma,[n_zlev,]nblks_*)` — N/C, flatten to plain args.
+- **`t_operator_coeff`** (`dynamics/mo_ocean_types.f90:488-566`) — only 3 members touched across all four kernels: `div_coeff` (`mapEdgesToCells`=`(nproma,n_zlev,nblks_c,3)`, kernel 2), `edges_SeaBoundaryLevel` (`onEdges_3D_Int`=`(nproma,n_zlev,nblks_e)`, kernel 2), `edge2edge_viavert_coeff` (`mapEdgesToEdges`=`(nproma,n_zlev,nblks_e,2*no_dual_edges)`, kernel 4). `verticalAdvectionPPMcoeffs` (line 556, a `blockList` of kernel-1's coeff type) is the *only* list-shaped member of `t_operator_coeff`, and **none of the four kernels access it** (kernel 1 gets `ppmCoeffs` directly, not via the operator-coeff list). Rest of `t_operator_coeff` untouched.
 
-**Overall: zero of the four kernels require any list / registry / var_list structure for their
-numerics.** Every structure they touch is either flat floating-point data (N), an integer
-mesh-topology gather array (C), a scalar loop bound / halo-exchange (P → drop or stub), or
-I/O / diagnostics / timers (I → drop). The two genuinely external calls are
-`sync_patch_array*` (always a no-op in a single-rank extraction) and `rot_vertex_ocean_3d`
-(kernel 4 only — precompute `vort_v` upstream or extract it as a companion kernel).
+**Overall: zero of the four kernels require any list/registry/var_list structure for their numerics.** Every structure touched is flat floating-point data (N), an integer mesh-topology gather array (C), a scalar loop bound/halo-exchange (P → drop/stub), or I/O/diagnostics/timers (I → drop). Two genuinely external calls: `sync_patch_array*` (no-op in single-rank extraction), `rot_vertex_ocean_3d` (kernel 4 only — precompute `vort_v` upstream or extract as a companion kernel).

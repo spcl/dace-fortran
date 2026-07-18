@@ -1,22 +1,11 @@
-"""Build the velocity_tendencies SDFG end-to-end from TWO source paths:
+"""Build the velocity_tendencies SDFG from TWO source paths, parametrized so a
+regression on either route surfaces immediately: (1) the self-contained
+``velocity_full.f90`` stub (backwards-compat pin), and (2) ICON's REAL
+``mo_velocity_advection.f90`` via the ``icon-model`` submodule, composed through
+:mod:`dace_fortran.flang_codebase` (merge + library stubs + ICON's ``-D`` defines),
+emitted to HLFIR and lowered to an SDFG.
 
-1. The existing self-contained ``velocity_full.f90`` stub kernel
-   (already known to bridge cleanly -- this run pins backwards
-   compatibility for the recipe).
-2. ICON's REAL ``mo_velocity_advection.f90``, pulled via the
-   ``tests/icon/full/icon-model`` git submodule (pinned to release tag
-   ``icon-2026.04-public``), with its USE closure resolved by
-   :func:`dace_fortran.prepare_flang_translation_unit`.
-
-For the real-source path the test composes a translation unit via
-the helpers in :mod:`dace_fortran.flang_codebase` (merge + library
-stubs + ICON's own ``-D`` defines extracted from its build), runs
-flang to emit HLFIR, and lowers that to a DaCe SDFG.  Both paths are
-parametrized so a regression on either route surfaces immediately.
-
-Skipped if the icon-model submodule isn't checked out (run
-``git submodule update --init --recursive tests/icon/full/icon-model``
-to pull it) or if flang-new-21 / OpenMPI is absent.
+Skipped without the icon-model submodule or flang-new-21/OpenMPI.
 """
 import shutil
 from pathlib import Path
@@ -29,23 +18,16 @@ from dace_fortran.flang_codebase import find_openmpi_include
 _HERE = Path(__file__).resolve().parent
 _STUB_SOURCE = _HERE / "velocity_full.f90"
 
-#: The ICON checkout pinned by the ``icon-model`` git submodule.
-#: ``ICON_SRC`` env var lets a developer point at a separate
-#: checkout (e.g. the existing ``/home/primrose/Work/icon-model-public``
-#: tree) without re-cloning into the submodule.
+#: ICON checkout pinned by the ``icon-model`` submodule; override via ``ICON_SRC``.
 import os
 
 _ICON_SRC = Path(os.environ.get("ICON_SRC", str(_HERE / "icon-model")))
 
-#: ICON's own build dir (Makefile + .o per source); supplies the
-#: ``-D`` defines and ``-I`` paths the velocity object compiles with.
-#: Override with ``ICON_BUILD`` to point at a non-default build tree.
+#: ICON's build dir; supplies -D/-I for the velocity object. Override via ``ICON_BUILD``.
 _ICON_BUILD = Path(os.environ.get("ICON_BUILD", str(_ICON_SRC / "build" / "stock_cpu")))
 
 _VELOCITY_REAL = _ICON_SRC / "src" / "atm_dyn_iconam" / "mo_velocity_advection.f90"
-# Some ICON workflows keep a pristine backup at ``.bak`` while
-# patching the live file; prefer it when present so the test is
-# stable against the patch state.
+# Prefer the .bak pristine backup when present so the test is stable against live-file patching.
 _VELOCITY_REAL_BAK = _VELOCITY_REAL.with_suffix(".f90.bak")
 
 _CACHE_DIR = Path(os.environ.get("DACE_FORTRAN_CACHE", str(Path.home() / ".cache" / "dace-fortran")))
@@ -58,23 +40,18 @@ _HAVE_OPENMPI = find_openmpi_include() is not None
 
 
 def _real_velocity_source() -> Path:
-    """The pristine ICON velocity source.  Prefers ``mo_velocity_advection.f90.bak``
-    when present so a developer-patched live file doesn't perturb the test."""
+    """Pristine ICON velocity source -- prefers the ``.bak`` so a patched live file doesn't perturb the test."""
     return _VELOCITY_REAL_BAK if _VELOCITY_REAL_BAK.is_file() else _VELOCITY_REAL
 
 
 def _have_icon() -> bool:
-    """Submodule checked out (build dir is optional -- when present
-    its ``-D`` / ``-I`` set is used verbatim, otherwise the
-    release-frozen fallback in :data:`_ICON_DEFINES_FALLBACK`)."""
+    """Submodule checked out (build dir optional -- falls back to :data:`_ICON_DEFINES_FALLBACK`)."""
     return _real_velocity_source().is_file()
 
 
 def _icon_search_dirs() -> list:
-    """The USE-graph closure of ``mo_velocity_advection`` lives under
-    ICON's ``src/`` plus a handful of external library trees that
-    ICON itself bundles (fortran-support, mtime, iconmath, cdi,
-    memman, support).  Bisected down to exactly this set."""
+    """USE-graph closure of ``mo_velocity_advection``: ICON's ``src/`` plus the
+    external trees it bundles. Bisected to exactly this set."""
     return [
         _ICON_SRC / "src",
         _ICON_SRC / "externals/fortran-support/src",
@@ -86,12 +63,9 @@ def _icon_search_dirs() -> list:
     ]
 
 
-#: ICON utility procedures that velocity_tendencies calls structurally
-#: (error reporting, timer hooks, version stamps) but whose bodies the
-#: bridge doesn't need to lower.  Stripping them BEFORE
-#: ``hlfir-inline-all`` keeps their unlowerable internals
-#: (``fir.iterate_while`` LEN_TRIM scans, ``CLASS(*)`` polymorphism)
-#: from being inlined into the entry.
+#: Utility procedures (error reporting, timer hooks) velocity_tendencies calls
+#: structurally but whose bodies the bridge can't lower (fir.iterate_while LEN_TRIM
+#: scans, CLASS(*) polymorphism) -- stripped before hlfir-inline-all.
 _ICON_EXTERNAL_STUBS = (
     "finish",
     "message",
@@ -106,10 +80,8 @@ _ICON_EXTERNAL_STUBS = (
     "delete_timer",
 )
 
-#: ICON's standard CPU build defines for release icon-2026.04-public,
-#: lifted verbatim from a ``make -n src/atm_dyn_iconam/mo_velocity_advection.o``
-#: capture.  Used as a fallback when the submodule has no build dir
-#: (a fresh clone needs no ICON configure pass to drive this test).
+#: ICON's CPU build defines for icon-2026.04-public (from a ``make -n`` capture);
+#: fallback so a fresh submodule clone needs no ICON configure pass.
 _ICON_DEFINES_FALLBACK = (
     "HAVE_CDI_GRIB2",
     "HAVE_FC_ATTRIBUTE_CONTIGUOUS",
@@ -130,37 +102,28 @@ _ICON_DEFINES_FALLBACK = (
 
 
 def _icon_compile_args() -> dict:
-    """Return ``{defines, include_dirs}`` for ICON's velocity build.
-    Prefers extracting from a real build (``$ICON_BUILD/Makefile`` ->
-    ``make -n``) so per-config tweaks land; falls back to the
-    release-frozen :data:`_ICON_DEFINES_FALLBACK` set when no build
-    dir is present (the common case for a fresh submodule clone)."""
+    """``{defines, include_dirs}`` for ICON's velocity build -- extracted from a real
+    build via ``make -n`` when present, else :data:`_ICON_DEFINES_FALLBACK`."""
     if (_ICON_BUILD / "Makefile").is_file():
         return dace_fortran.extract_make_compile_args(makefile_dir=_ICON_BUILD, target=_VELOCITY_TARGET)
     return {"defines": list(_ICON_DEFINES_FALLBACK), "include_dirs": [_ICON_SRC / "src/include"]}
 
 
-# Reads ICON's real velocity source through the icon-model submodule (HLFIR
-# emit + SDFG build), which only the heavy CI lane checks out -> ``long``.
-# The self-contained single-TU velocity e2e correctness tests
-# (``test_velocity_full*.py``, in-tree ``velocity_full.f90``) stay in the fast
-# lane.
+# Reads ICON's real source via the icon-model submodule (heavy CI lane only) -> long.
+# The self-contained velocity_full.f90 e2e tests stay in the fast lane.
 pytestmark = [
     pytest.mark.long,
     pytest.mark.skipif(not (_HAVE_FLANG and _HAVE_OPENMPI), reason="needs flang-new-21 + OpenMPI"),
 ]
 
 # ---------------------------------------------------------------------------
-# Headline test: build the velocity SDFG from BOTH a stub source and
-# ICON's REAL source, in one parametrization so a bridge-side
-# regression on either route is caught.
+# Headline test: build from BOTH the stub and ICON's real source in one
+# parametrization so a regression on either route is caught.
 # ---------------------------------------------------------------------------
 
 
 def _build_sdfg_from_real_icon(tmp_path: Path):
-    """Compose a translation unit for ICON's real
-    ``mo_velocity_advection.f90`` via the codebase helpers and lower
-    it to a DaCe SDFG."""
+    """Compose a TU for ICON's real ``mo_velocity_advection.f90`` and lower it to an SDFG."""
     args = _icon_compile_args()
     hlfir = dace_fortran.emit_hlfir_from_codebase(
         entry_source=_real_velocity_source().read_text(),
@@ -172,9 +135,7 @@ def _build_sdfg_from_real_icon(tmp_path: Path):
         cache_dir=_CACHE_DIR,
     )
     dace_fortran.clear_external_registry()
-    # Don't-inline + DON'T-emit the infrastructure procedures (error
-    # reporting, timer hooks): the unified policy's ignore list drops
-    # their calls so their unlowerable bodies never reach the bridge.
+    # Ignore-list drops calls to the infrastructure stubs so their unlowerable bodies never reach the bridge.
     dace_fortran.apply_external_functions(do_not_emit=_ICON_EXTERNAL_STUBS)
     try:
         return dace_fortran.build_sdfg_from_hlfir(hlfir, entry=_VELOCITY_ENTRY)
@@ -183,13 +144,9 @@ def _build_sdfg_from_real_icon(tmp_path: Path):
 
 
 def _build_sdfg_from_stub(tmp_path: Path):
-    """Build the SDFG directly from ``velocity_full.f90`` -- the
-    self-contained stub kernel the bridge has been driving for a
-    while.  No flang flag plumbing needed; the existing
-    ``build_sdfg`` entry handles the closure-merge internally."""
-    # Inline path so this file doesn't take a dependency on the
-    # private test harness in ``tests/_util.py``.
-    # ``build_sdfg`` returns the built SDFG directly.
+    """Build the SDFG directly from ``velocity_full.f90`` -- no flang flag plumbing
+    needed; ``build_sdfg`` handles the closure-merge internally."""
+    # avoids a dependency on the private harness in tests/_util.py
     return dace_fortran.build_sdfg(
         _STUB_SOURCE.read_text(),
         out_dir=str(tmp_path / "sdfg"),
@@ -216,9 +173,8 @@ _PATHS = [
 
 @pytest.mark.parametrize("source", _PATHS)
 def test_build_velocity_sdfg(tmp_path: Path, source: str):
-    """Build the velocity_tendencies SDFG and check the SDFG names
-    the procedure.  Parametrized over the two source paths so a
-    regression on either route fails its own variant clearly."""
+    """Build velocity_tendencies and check the SDFG names the procedure;
+    parametrized over both source paths so either route's regression is isolated."""
     if source == "stub":
         sdfg = _build_sdfg_from_stub(tmp_path)
     elif source == "real_icon":
@@ -231,30 +187,22 @@ def test_build_velocity_sdfg(tmp_path: Path, source: str):
     name_lc = sdfg.name.lower()
     assert "velocity" in name_lc, \
         f"SDFG name doesn't carry the expected entry: {sdfg.name!r}"
-    # API-level structural validation: catches dangling memlets,
-    # orphan connectors, missing access nodes, schedule mismatches
-    # the bridge could in principle emit but mustn't.
+    # Structural validation: dangling memlets, orphan connectors, missing access nodes, schedule mismatches.
     sdfg.validate()
-    # Codegen is the load-bearing step for the real-source route: an orphaned
-    # view_alias (a View read only via interstate-edge indirection, no source
-    # link) passes validate() but raises KeyError in framecode's get_view_edge
-    # at compile.  Compiling here is what catches that class -- validate() alone
-    # let it through until the in-ICON build surfaced it.
+    # Load-bearing: an orphaned view_alias passes validate() but raises KeyError in
+    # framecode's get_view_edge at compile -- only compile() catches that class.
     sdfg.compile()
 
 
 # ---------------------------------------------------------------------------
-# Helper-level test: assert ``emit_hlfir_from_codebase`` produces a
-# non-trivial ``.hlfir`` for ICON's real velocity TU.  Kept as a
-# separate test so its failure mode is distinguishable from the SDFG
-# build's (the latter exercises the bridge end-to-end).
+# Helper-level test: emit_hlfir_from_codebase produces a non-trivial .hlfir for
+# ICON's real TU -- separate from the SDFG build so failure modes are distinguishable.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(not _have_icon(), reason="icon-model submodule not checked out")
 def test_emit_hlfir_for_icon_velocity(tmp_path: Path):
-    """``emit_hlfir_from_codebase`` produces an ``.hlfir`` flang
-    actually wrote (sanity check before we lower it to SDFG)."""
+    """``emit_hlfir_from_codebase`` produces an ``.hlfir`` flang actually wrote (sanity check before SDFG lowering)."""
     args = _icon_compile_args()
     out = dace_fortran.emit_hlfir_from_codebase(
         entry_source=_real_velocity_source().read_text(),
@@ -266,6 +214,5 @@ def test_emit_hlfir_for_icon_velocity(tmp_path: Path):
         cache_dir=_CACHE_DIR,
     )
     assert out.is_file()
-    # The full closure lowering hits hundreds of MB -- a small file
-    # would mean flang silently truncated.
+    # Full closure lowering hits hundreds of MB; a small file means flang silently truncated.
     assert out.stat().st_size > 100 * 1024 * 1024

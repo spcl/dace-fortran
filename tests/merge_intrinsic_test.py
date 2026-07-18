@@ -1,11 +1,8 @@
-"""Simple FaCe-native test for the Fortran ``MERGE`` intrinsic.
+"""FaCe-native test for the Fortran MERGE intrinsic.
 
-``merge(t, f, mask)`` returns ``t`` where ``mask`` is true and ``f``
-otherwise.  Flang lowers it to a bare ``arith.select`` for scalars and
-to an ``hlfir.elemental`` wrapping ``arith.select`` for arrays.  The
-bridge's generic ``arith.select`` ternary fallback in ``buildExpr``
-emits a Python ``(t if cond else f)`` form that the C++ codegen lowers
-to a conditional expression.
+merge(t, f, mask) returns t where mask is true, else f. Flang lowers it to
+arith.select (scalars) or hlfir.elemental wrapping arith.select (arrays); the
+bridge's generic arith.select fallback in buildExpr emits Python `(t if cond else f)`.
 """
 
 from pathlib import Path
@@ -53,11 +50,9 @@ end subroutine
 
 
 def test_merge_array_via_library_node(tmp_path: Path):
-    """Array ``merge(t, f, mask)``  --  Flang lowers to ``hlfir.elemental {
-    hlfir.designate; arith.select; yield_element }``; the bridge
-    detects the simple shape (three loaded designates of declared
-    arrays) and routes through ``MergeLibraryNode`` directly.  Verify
-    end-to-end against numpy ``np.where``."""
+    """Array merge(t, f, mask) -- Flang lowers to hlfir.elemental{hlfir.designate;
+    arith.select; yield_element}; bridge detects the simple shape (three loaded
+    designates of declared arrays) and routes through MergeLibraryNode. Verified against np.where."""
     src = """
 subroutine main(t, f, mask, out, n)
   integer, intent(in)  :: n
@@ -79,10 +74,8 @@ end subroutine main
 
 
 def test_merge_array_verifies_libnode_present(tmp_path: Path):
-    """Same as above, but also asserts a ``MergeLibraryNode`` is present
-    in the built SDFG  --  pins the bridge -> library-node routing
-    structurally so a future regression (e.g. a refactor that quietly
-    falls back to the per-element-tasklet path) trips this test."""
+    """Same as above, but also asserts a MergeLibraryNode is present in the
+    built SDFG -- pins bridge->library-node routing so a silent fallback to per-element tasklets trips this test."""
     from dace.libraries.standard.nodes import MergeLibraryNode
     src = """
 subroutine main(t, f, mask, out, n)

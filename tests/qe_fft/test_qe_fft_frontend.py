@@ -1,13 +1,6 @@
-"""Frontend-recognition tests for QE ``fwfft`` / ``invfft`` call sites.
+"""Frontend-recognition tests for QE fwfft/invfft call sites: each ``run_<dir>`` entry of qe_fft_probe.f90 must lower to a single FFT (forward) or IFFT (backward) library node.
 
-Each test drives one ``run_<dir>`` entry of :file:`qe_fft_probe.f90`
-through the bridge and asserts the resulting SDFG carries a single
-:class:`dace.libraries.fft.nodes.FFT` (forward) or
-:class:`dace.libraries.fft.nodes.IFFT` (backward) library node.
-
-Correct 3-D-grid extraction from QE's ``fft_type_descriptor`` is
-deliberately out of scope for the first cut -- recognition + lowering
-to the FFT lib node is what this test pins.
+3-D-grid extraction from QE's fft_type_descriptor is out of scope -- only recognition + lowering is pinned here.
 """
 from pathlib import Path
 

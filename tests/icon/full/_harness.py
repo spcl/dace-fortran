@@ -1,16 +1,13 @@
-"""Shared scaffolding for the full-ICON ``velocity_tendencies`` tests.
+"""Shared scaffolding for the full-ICON velocity_tendencies tests.
 
-The flat-arg ABI order (``_INIT_ARRAY_ORDER``), the output-array set
-(``_OUTPUT_NAMES``) and the input-array allocator (``_allocate``) are
-correctness-critical and identical for the numerical test, the
-generated-binding e2e test and the auto-module-source variant.  They
-live here once so the ABI order has a single source of truth.
+_INIT_ARRAY_ORDER (flat-arg ABI order), _OUTPUT_NAMES, and _allocate are
+correctness-critical and identical across the numerical, bindings-e2e, and
+auto-module-source test variants -- single source of truth.
 """
 
 import numpy as np
 
-# Caller flat-array dummy order -- MUST match velocity_full_caller.f90's
-# ``run_velocity_flat_c`` argument list exactly.
+# Caller flat-array dummy order -- MUST match velocity_full_caller.f90's run_velocity_flat_c argument list exactly.
 _INIT_ARRAY_ORDER = (
     'p_patch_cells_area',
     'p_patch_cells_neighbor_idx',

@@ -47,12 +47,8 @@ END SUBROUTINE intrinsic_count_test_function
 
 
 def test_fortran_frontend_count_array_comparison(tmp_path):
-    # ``res`` is declared ``integer, dimension(7)`` so the COUNT result
-    # (an INTEGER) round-trips cleanly.  The original f2dace port used
-    # ``integer, dimension(7) :: res`` for the same shape, but that
-    # made the assertion ambiguous (assigning an INTEGER count to a
-    # LOGICAL scalar via Fortran's truthy-cast).  Switching to an
-    # integer ``res`` matches the rest of the COUNT tests in this file.
+    # res is integer (not logical) so the INTEGER count round-trips cleanly without an
+    # ambiguous truthy-cast assertion; matches the rest of this file's COUNT tests.
     src = """
 SUBROUTINE intrinsic_count_test_function(first, second, res)
 integer, dimension(5) :: first
@@ -95,8 +91,7 @@ END SUBROUTINE intrinsic_count_test_function
 
 
 def test_fortran_frontend_count_array_scalar_comparison(tmp_path):
-    # Original f2dace test had ``COUNT(first(3) .eq. 42)`` -- rank-0
-    # mask is invalid Fortran (COUNT needs rank>=1).  Dropped.
+    # original f2dace test had COUNT(first(3) .eq. 42) -- rank-0 mask is invalid Fortran; dropped
     src = """
 SUBROUTINE intrinsic_count_test_function(first, res)
 integer, dimension(5) :: first

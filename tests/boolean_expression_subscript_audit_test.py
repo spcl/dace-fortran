@@ -1,32 +1,10 @@
-"""Audit probes for Boolean expression rendering across bridge code paths.
+"""Boolean-expression-rendering audit across bridge code paths.
 
-The yieldedExpr fix (commit 7c0835d) addressed ONE specific bug pattern:
-a multi-element AND convergence check yielded into an scf.if ``__sc_<N>``
-synthesis was rendered with BARE array names (``rsdnm < tolrsd``) instead
-of subscripted (``rsdnm[0] < tolrsd[0]``).  Root cause: ``buildExpr``
-at expressions.cpp:1280-1288 sets ``NoSubscriptGuard`` on ``arith.andi``
-of i1 operands assuming the result lands in a tasklet body.
-
-Other paths in the bridge call ``buildExpr`` with potentially-Boolean
-operands -- if any of those paths route the result to an interstate
-edge / non-tasklet context, they hit the same bug.
-
-These probes exercise the audited shapes to confirm they emit correct
-subscripted Boolean expressions.
-
-Audited sites (dispatch.cpp):
-
-  * line 218:  walkSCFBeforeRegion's fir.store handler -- if Fortran
-    stores a Boolean expression to a scalar via ``logical :: c; c =
-    (a > b) .and. (c > d)``, the bridge calls buildExpr on the andi.
-  * line 1919: buildAST's const-index assign for hlfir.assign --
-    similar shape but with array-element target.
-  * line 1415: loop bound buildExpr fallback -- a do-loop with a
-    Boolean-valued upper bound is unusual but probe anyway.
-
-Each probe asserts the runtime result matches the Fortran semantics
-under any caller context (interstate edge / tasklet body / loop bound).
-"""
+commit 7c0835d fixed ``buildExpr``'s NoSubscriptGuard (expressions.cpp:1280-1288,
+assumed tasklet-body context) rendering an AND-convergence check with bare array
+names instead of subscripted. Probes cover the other call sites that could hit
+the same bug: dispatch.cpp:218 (fir.store handler), :1919 (const-index assign),
+:1415 (loop-bound fallback)."""
 import numpy as np
 import pytest
 
@@ -36,11 +14,8 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_boolean_store_to_logical_scalar(tmp_path):
-    """``LOGICAL :: c; c = (a(1) > b(1)) .and. (a(2) > b(2))`` -- the
-    Fortran-level assign stores the AND of two array-element
-    comparisons to a logical scalar.  If the bridge renders the RHS
-    with bare names (``a > b``), the C++ does pointer comparison.
-    """
+    """``c = (a(1)>b(1)) .and. (a(2)>b(2))`` stored to LOGICAL scalar -- bare-name
+    RHS would do pointer comparison instead."""
     src = """
 module m
   implicit none
@@ -67,8 +42,7 @@ end module m
 
 
 def test_boolean_or_store_to_logical_scalar(tmp_path):
-    """``LOGICAL :: c; c = (a(1) > b(1)) .or. (a(2) > b(2))`` --
-    OR variant of the same pattern."""
+    """OR variant of the AND pattern above."""
     src = """
 module m
   implicit none
@@ -95,9 +69,8 @@ end module m
 
 
 def test_nested_boolean_and_or_subscripts_preserved(tmp_path):
-    """``((a > b) .and. (c > d)) .or. (e > f)`` -- nested mix to make
-    sure the subscript preservation traverses all levels.  Each leaf is
-    an array-element comparison."""
+    """Nested AND/OR mix of array-element comparisons -- subscript preservation
+    must traverse all levels."""
     src = """
 module m
   implicit none

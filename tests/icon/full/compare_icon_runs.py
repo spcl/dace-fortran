@@ -1,18 +1,11 @@
-"""Compare two ICON experiment output directories variable-by-variable.
+"""Compare two ICON experiment output directories variable-by-variable.  Used by
+``run_icon_e2e.sh`` to diff stock-Fortran ICON's output against DaCe-patched ICON's
+and report a verdict.
 
-Used by ``run_icon_e2e.sh`` to diff the stock-Fortran ICON's output
-against the DaCe-patched ICON's output and report a verdict.
-
-Picks every ``*_ml_*.nc`` / ``*_hl_*.nc`` / ``*_pl_*.nc`` file present
-in BOTH directories, then for each variable reports::
-
-    {variable}: max|stock - dace| = {abs_diff}   (rel {rel_diff})
-
-A pair of files is bit-identical when every variable's ``abs_diff`` is
-zero; "close" when the maximum relative diff is below ``--rtol``
-(default 1e-12).  A NaN/Inf present on ONE side only (or +Inf vs -Inf)
-is a real divergence and fails -- never silently skipped -- while an
-identical fill NaN on both sides at the same cell is treated as equal.
+Picks every ``*_ml_*.nc``/``*_hl_*.nc``/``*_pl_*.nc`` file present in both dirs;
+bit-identical when every variable's abs diff is zero, "close" when max relative diff
+is below ``--rtol`` (default 1e-12).  A NaN/Inf on ONE side only (or +Inf vs -Inf) is a
+real divergence and always fails; an identical fill NaN on both sides is treated equal.
 """
 import argparse
 import sys
@@ -28,12 +21,10 @@ def _list_outputs(d: Path):
 
 
 def _read_var(ds, name):
-    """Read a variable into a freshly-allocated ``ndarray`` with masked
-    positions filled by 0.  ``netCDF4`` shares internal buffers across
-    reads, so callers MUST hold a deep copy if they expect the data
-    to survive subsequent reads -- we force one via ``np.array(...,
-    copy=True)`` here.  The mask is returned separately so callers
-    can surface mask divergence as a real diff."""
+    """Read a variable into a fresh ``ndarray`` with masked positions filled by 0.
+    ``netCDF4`` shares internal buffers across reads -- force a deep copy via
+    ``np.array(..., copy=True)``.  Mask returned separately so callers can surface
+    mask divergence as a real diff."""
     arr = ds.variables[name][...]
     if np.ma.isMaskedArray(arr):
         mask = np.array(np.ma.getmaskarray(arr), copy=True)
@@ -73,18 +64,13 @@ def compare_files(stock_nc: Path, dace_nc: Path, rtol: float):
             if va.size == 0:
                 print(f"    ok   {name:24s}  (empty array, skipped)")
                 continue
-            # Surface mask divergence as a real difference: if stock
-            # masks a cell but dace doesn't (or vice versa) the runs
-            # genuinely diverge.
+            # mask divergence (stock masks a cell but dace doesn't, or vice versa) is a real diff.
             if mask_a is not None and mask_b is not None:
                 mask_diff = int(np.count_nonzero(mask_a ^ mask_b))
                 if mask_diff:
                     issues.append(f"{name}: {mask_diff} cell(s) masked on one side only")
-            # Compare with EQUAL-NAN semantics: a fill NaN present on BOTH
-            # sides at the same cell is not a divergence.  But a NaN/Inf on
-            # ONE side only (or +Inf vs -Inf) IS a real difference and is
-            # NEVER silently skipped -- a DaCe kernel that emits NaN has to
-            # FAIL, not read as a pass.
+            # equal-NaN semantics: same-cell NaN on both sides is not a divergence, but a
+            # NaN/Inf on one side only is a real difference and is never silently skipped.
             equal = (va == vb) | (np.isnan(va) & np.isnan(vb))
             finite_a, finite_b = np.isfinite(va), np.isfinite(vb)
             max_a = float(np.abs(va[finite_a]).max()) if finite_a.any() else 0.0
@@ -92,18 +78,16 @@ def compare_files(stock_nc: Path, dace_nc: Path, rtol: float):
             if equal.all():
                 print(f"    ok   {name:24s}  (bit-identical, incl. equal NaN)")
                 continue
-            # Denormal-range maxes (< 1e-200) with NO non-finite mismatch
-            # signal uninitialised netCDF buffers from a truncated write
-            # rather than real output; those diffs are spurious.  A
-            # non-finite mismatch is never denormal-skipped.
+            # denormal-range maxes (< 1e-200) with no non-finite mismatch signal
+            # uninitialised netCDF buffers from a truncated write, not real output;
+            # a non-finite mismatch is never denormal-skipped.
             denormal_threshold = 1e-200
             nonfinite_mismatch = bool((finite_a ^ finite_b).any())
             if not nonfinite_mismatch and max(max_a, max_b) < denormal_threshold:
                 print(f"    skip {name:24s}  (denormal-only values -- "
                       f"uninit nc field, max|x|={max(max_a, max_b):.1e})")
                 continue
-            # Diff over the mismatching cells only; a lone NaN/Inf there
-            # becomes +Inf so it always breaks rtol (never masked).
+            # diff over mismatching cells only; a lone NaN/Inf becomes +Inf so it always breaks rtol.
             with np.errstate(invalid="ignore"):
                 block = np.abs(va[~equal] - vb[~equal])
             block[~np.isfinite(block)] = np.inf

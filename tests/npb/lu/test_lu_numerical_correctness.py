@@ -1,46 +1,21 @@
 """NAS Parallel Benchmark LU -- end-to-end numerical correctness.
 
-Companion to :mod:`test_lu_multi_file_build` (build-only) and
-:mod:`test_lu_single_file_build` (build-only).  Where those validate
-that the bridge produces an SDFG with at least one LU kernel
-referenced, this one drives the SDFG to completion and compares the
-SSOR solver's residual norms (``rsdnm(5)``) against a gfortran
-reference compiled from the same source.
+Companion to :mod:`test_lu_multi_file_build` / :mod:`test_lu_single_file_build`
+(build-only); this one drives the SDFG to completion and compares the SSOR
+solver's residual norms (``rsdnm(5)``) against a gfortran reference.
 
-NPB LU configuration ('Class S' parameters)
--------------------------------------------
+Class S params: ``nx0=ny0=nz0=12``, ``itmax=50``, ``dt=0.5``, ``omega=1.2``,
+``tolrsd=1e-8`` -- small enough to run in under a second, large enough that all
+five residual components move under the SSOR sweep.
 
-``nx0=ny0=nz0=12``, ``itmax=50``, ``dt=0.5``, ``omega=1.2``,
-``tolrsd=1e-8``.  Small enough that the full solver runs in under a
-second on each side, large enough that all five residual components
-are non-trivially affected by the SSOR sweep.
-
-Test layout
------------
-
-``test_lu_reference_runs`` -- gfortran reference smoke check.  The
-upstream ``dolu()`` entry is parameterless and writes its result to
-LU's module-level state; ``lu_caller.f90`` adds three BIND(C) entry
-points (``init_lu_c`` / ``run_dolu_c`` / ``get_rsdnm_c``) so a
-ctypes-loaded ``.so`` can configure the solver, run it, and read
-``rsdnm`` back.  After 50 SSOR steps on the 12^3 grid the expected
-norms are about ``[1.6e-2, 2.2e-3, 1.5e-3, 1.5e-3, 3.4e-2]`` -- the
-test asserts all five are finite and strictly positive (the gfortran
-build / link / config-init path is the gate; the exact values just
-pin that the solver did something).
-
-``test_lu_numerical_correctness`` -- full reference-vs-SDFG element-
-wise comparison.  Was xfail (~34% per-component residual error)
-until a reused-scalar WAR/WAW hazard in the ``rhs`` viscous flux was
-closed.  The flux reassigns one temp ``tmp = rho_i(i); ...; tmp =
-rho_i(i-1)`` with live reads of the first value in between; the
-bridge collapsed both writes onto one DaCe scalar with no intra-state
-ordering, so the ``*i`` velocities read ``rho_i(i-1)`` rather than
-``rho_i(i)`` -- a ~0.2%/step boundary divergence compounding to ~34%
-over the 50 SSOR steps.  Fixed by ``emit_cfg._scalar_reassign_in_state``
-(split a new state at a scalar re-write while the prior value is
-live); now bit-exact at every itmax.  See
-``tests/scalar_reuse_war_test.py`` for the minimal reproducer.
+``test_lu_reference_runs`` is a gfortran smoke check (``lu_caller.f90`` adds
+BIND(C) entry points around the parameterless ``dolu()``).
+``test_lu_numerical_correctness`` is the full element-wise DUT-vs-reference
+compare; was xfail (~34% error) from a reused-scalar WAR/WAW hazard in the
+``rhs`` viscous flux (``tmp = rho_i(i); ...; tmp = rho_i(i-1)`` collapsed onto
+one DaCe scalar with no intra-state ordering).  Fixed by
+``emit_cfg._scalar_reassign_in_state``; see ``tests/scalar_reuse_war_test.py``
+for the minimal reproducer.
 """
 import ctypes
 import shutil
@@ -59,10 +34,7 @@ _USE = _HERE / "useapplu.F90"
 _CALLER = _HERE / "lu_caller.f90"
 _ENTRY = "useapplu::call_dolu"
 
-# NPB Class S (the smallest class) -- 12^3 grid, 50 SSOR steps.  Picked
-# so the full solver runs in under a second on each side; large enough
-# that all five residual components see non-trivial changes through the
-# SSOR sweep.
+# NPB Class S: 12^3 grid, 50 SSOR steps -- under a second, still exercises all five residual components.
 _NX0 = _NY0 = _NZ0 = 12
 _ITMAX = 50
 _DT = 0.5
@@ -73,12 +45,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def _compile_reference(tmp_path):
-    """gfortran-compile ``lu.F90`` + ``useapplu.F90`` + ``lu_caller.f90``
-    into a ``.so`` and return ready-to-call ctypes bindings.
-
-    :returns: ``(init, run, get_rsdnm)`` -- three callables bound with
-        ``argtypes`` / ``restype`` for the BIND(C) wrappers.
-    """
+    """gfortran-compile the LU sources into a ``.so``; returns ``(init, run, get_rsdnm)`` ctypes-bound callables."""
     if shutil.which("gfortran") is None:
         pytest.skip("gfortran required for the reference build")
 
@@ -128,14 +95,9 @@ def _run_reference(tmp_path):
 def _build_sdfg(tmp_path):
     """Build the LU SDFG via the multi-file bridge entry point.
 
-    Belt-and-braces: explicitly pin the CPU compile flags here even
-    though ``tests/conftest.py`` sets the same defaults at session
-    start.  E2E numerical correctness tests that compare against a
-    strict gfortran reference (``-O0 -fno-fast-math
-    -ffp-contract=off``) must use the same flags on the SDFG side to
-    avoid spurious FMA / reassociation drift; making the dependence
-    explicit in the test guards against silent behaviour changes if
-    a future commit weakens or removes the conftest defaults.
+    Belt-and-braces: pins the same CPU flags conftest.py sets at session start
+    (-O0 -fno-fast-math -ffp-contract=off) explicitly, so a strict gfortran
+    comparison can't silently drift if a future commit weakens the defaults.
     """
     import dace
     dace.Config.set("compiler",
@@ -152,19 +114,15 @@ def _build_sdfg(tmp_path):
 
 
 def _run_sdfg(sdfg):
-    """Allocate zero-initialised kwargs from ``sdfg.arglist()``, seed
-    the NPB Class S configuration scalars, call the SDFG, return the
-    realised ``rsdnm`` buffer.
-    """
+    """Allocate zero-init kwargs from ``sdfg.arglist()``, seed the NPB Class S
+    config scalars, call the SDFG, return the realised ``rsdnm`` buffer."""
     kw = {}
     for name, desc in sdfg.arglist().items():
         shape = tuple(int(s) for s in desc.shape)
         is_float = desc.dtype.as_numpy_dtype() == np.float64
         kw[name] = np.zeros(shape, dtype=np.float64 if is_float else np.int32, order='F')
-    # Seed the NPB Class S configuration scalars (each is a (1,)-Array
-    # on the SDFG side -- the bridge surfaces module-level scalars as
-    # one-element arrays).  ``inorm`` is a free symbol so the bridge
-    # resolves it via the kwarg name.
+    # NPB Class S config scalars are each a (1,)-Array (bridge surfaces
+    # module-level scalars as one-element arrays); inorm is a free symbol resolved via the kwarg name.
     for name, value in (('nx0', _NX0), ('ny0', _NY0), ('nz0', _NZ0), ('itmax', _ITMAX), ('omega', _OMEGA), ('dt', _DT)):
         if name in kw:
             kw[name][...] = value
@@ -177,46 +135,23 @@ def _run_sdfg(sdfg):
 
 
 def test_lu_reference_runs(tmp_path):
-    """gfortran reference compiles, initialises, and runs to completion.
-
-    After 50 SSOR steps on a 12^3 grid the five residual norms should
-    all be finite and strictly positive (a no-op solver would leave
-    them at the BSS-zero default).  Exact values:
-    ``rsdnm ~= [1.6e-2, 2.2e-3, 1.5e-3, 1.5e-3, 3.4e-2]``.
-    """
+    """gfortran reference compiles, initialises, and runs to completion; all
+    five residual norms finite and strictly positive (a no-op solver would leave BSS-zero)."""
     rsdnm = _run_reference(tmp_path)
     assert np.all(np.isfinite(rsdnm)), f"rsdnm has non-finite entries: {rsdnm}"
     assert np.all(rsdnm > 0.0), f"rsdnm has non-positive entries: {rsdnm}"
-    # Sanity-pin the magnitude (within a wide band) so an upstream
-    # silent change of the SSOR solver is caught.  Reference run is
-    # bit-exact on every machine we test -- ``-fno-fast-math`` and
-    # ``-ffp-contract=off`` are passed at compile time -- so the band
-    # only has to be wide enough to absorb the integer-vs-float kind
-    # promotion noise in the NPB ``parameter`` initialisers.
+    # Sanity-pin the magnitude (wide band) to catch a silent SSOR solver change.
+    # Reference is bit-exact across machines (-fno-fast-math/-ffp-contract=off at
+    # compile time); band only needs to absorb NPB parameter-initialiser kind-promotion noise.
     expected = np.array([1.62e-2, 2.20e-3, 1.52e-3, 1.50e-3, 3.43e-2])
     np.testing.assert_allclose(rsdnm, expected, rtol=1e-2, err_msg=f"rsdnm drifted: got {rsdnm}")
 
 
 def test_lu_numerical_correctness(tmp_path):
-    """End-to-end gfortran-reference vs SDFG element-wise rsdnm match.
+    """End-to-end gfortran-reference vs SDFG element-wise ``rsdnm`` match, tight tolerance.
 
-    Both sides run the NPB Class S configuration through ``dolu`` and
-    compare the five SSOR residual norms with tight tolerance.  The
-    test reads ``rsdnm`` from the SDFG kwargs dict (the bridge
-    surfaces module-level state as Array kwargs) and from the
-    gfortran reference's accessor wrapper (``get_rsdnm_c``).
-
-    Was xfail (~34% per-component residual error, compounding over the
-    50 SSOR steps from a ~0.2%/step divergence at the boundary cells).
-    Root cause: a reused-scalar WAR/WAW hazard -- the ``rhs`` viscous
-    flux reassigns ``tmp = rho_i(i); ...; tmp = rho_i(i-1)`` with live
-    reads of the first value in between; the bridge collapsed both
-    writes onto one DaCe scalar with no intra-state ordering, so the
-    ``*i`` velocities read ``rho_i(i-1)`` instead of ``rho_i(i)``.
-    Fixed by ``emit_cfg._scalar_reassign_in_state`` (split a new state
-    at a scalar re-write while the prior value is live).  Now bit-exact
-    at every itmax; see ``tests/scalar_reuse_war_test.py`` for the
-    minimal reproducer.
+    Was xfail (~34% error) from the WAR/WAW scalar-reuse hazard described in the
+    module docstring; now bit-exact at every itmax.
     """
     rsdnm_ref = _run_reference(tmp_path)
     sdfg = _build_sdfg(tmp_path)

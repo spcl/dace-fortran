@@ -1,26 +1,16 @@
-"""The full ICON ``solve_nh`` dycore lowers to an SDFG and its Fortran binding
-COMPILES -- the prerequisite for the standalone e2e and the ICON binding-swap
-integration.
+"""The full ICON ``solve_nh`` dycore lowers to an SDFG whose Fortran binding
+COMPILES -- prerequisite for the standalone e2e and the ICON binding-swap integration.
 
-Two blockers had to clear for the ~700-argument ``bind(c)`` binding to be valid
-Fortran:
+Two blockers for the ~700-arg ``bind(c)`` binding to be valid Fortran:
+(1) ``ExpandVectorSubscriptGather`` gather temps named ``__assoc_scalar_N`` reach
+the signature as free symbols; a leading ``_`` dummy is a syntax error, so
+``extractName`` now prefixes a letter onto ``__``-names.
+(2) inlined ``mo_mpi`` calls one ``mpi_recv``/``mpi_isend`` with both real*8 and
+real*4 buffers, which gfortran rejects without ``-fallow``; fixed by prepending
+the ``_MPI_STUB`` ``module mpi`` and giving ``mo_mpi`` a ``use mpi`` so one
+``TYPE(*)`` interface covers both.
 
-  * **Synthetic ``__``-names.** ``ExpandVectorSubscriptGather`` materialises
-    gather temps named ``__assoc_scalar_N``; a couple reach the SDFG signature as
-    free symbols.  ``integer(c_int), value :: __assoc_scalar_198`` is a syntax
-    error (a Fortran dummy can't start with ``_``).  ``extractName`` now prefixes
-    a letter onto ``__``-names so every emitted identifier is valid in both the
-    C++ codegen and the Fortran binding.
-
-  * **Dual-typed MPI.** The inlined ``mo_mpi`` wrappers call one ``mpi_recv`` /
-    ``mpi_isend`` / ... with both real*8 (``p_*_dp``) and real*4 (``p_*_sp``)
-    buffers.  gfortran rejects that without an interface (``-fallow`` -- which we
-    do NOT use).  The sound fix is a ``TYPE(*)`` assumed-type interface: prepend
-    the ``_MPI_STUB`` ``module mpi`` and give ``mo_mpi`` a ``use mpi`` so one
-    interface accepts any buffer type.  (The committed single-TU predates the
-    ``use mpi`` re-emission, so we inject it here at build time.)
-
-Marked ``long``: it builds the 3166-LoC dycore to an SDFG (minutes).
+Marked ``long``: builds the 3166-LoC dycore to an SDFG (minutes).
 """
 import shutil
 from pathlib import Path
@@ -52,12 +42,9 @@ def test_solve_nh_binding_compiles(tmp_path: Path):
     invalid = [a for a in sdfg.arglist() if a.startswith("_")]
     assert not invalid, f"SDFG signature carries Fortran-invalid names: {invalid[:5]}"
 
-    # Prepend the FULL TYPE(*) MPI stub (constants + assumed-type interfaces) +
-    # give the inlined ``mo_mpi`` a ``use mpi`` so its dual-typed real*8/real*4
-    # point-to-point calls resolve through one assumed-type interface (no
-    # -fallow).  NB: the EXTRACTION uses a constants-only stub (fparser can't
-    # parse ``type(*)``); gfortran can, so the reference build here needs the
-    # full stub -- ``_MPI_STUB``, not ``HALO_INLINED_EXTRA_SOURCES``.
+    # Full TYPE(*) MPI stub (not the constants-only HALO_INLINED_EXTRA_SOURCES --
+    # fparser can't parse type(*), but gfortran here can) + ``use mpi`` in mo_mpi
+    # resolves the dual-typed real*8/real*4 point-to-point calls without -fallow.
     tu_src = _TU.read_text()
     assert "MODULE mo_mpi\n" in tu_src, "inlined mo_mpi module anchor missing"
     use_mpi_tu = tmp_path / "solve_nh_usempi.f90"
@@ -65,8 +52,7 @@ def test_solve_nh_binding_compiles(tmp_path: Path):
     stub = tmp_path / "_mpi_stub.f90"
     stub.write_text(_MPI_STUB)
 
-    # ``prelude_sources`` compile left-to-right before the binding, so the stub
-    # (module mpi) comes before the TU that ``use``s it.
+    # prelude_sources compile left-to-right before the binding -- stub (module mpi) must precede the TU that uses it.
     lib = build_fortran_library(sdfg,
                                 out_dir=str(tmp_path / "lib"),
                                 prelude_sources=[stub, use_mpi_tu],

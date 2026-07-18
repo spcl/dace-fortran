@@ -1,18 +1,10 @@
-"""Tests covering multiple Fortran modules, ``use`` chains, and
-module-level constants.
+"""Tests covering multiple Fortran modules, ``use`` chains, and module-level constants.
 
-The HLFIR frontend doesn't re-parse Fortran in Python  --  Flang already
-folds module imports during ``-emit-hlfir``, so by the time the bridge
-sees the IR every cross-module reference has been resolved to a global
-symbol or an inlined constant.  These tests pin that contract:
-
-- Single-module ``use`` works (one module + ``use`` from main).
-- Chained ``use`` (``module a -> module b uses a -> main uses b``) works.
-- Module ``parameter`` constants land as inlined literals in the SDFG,
-  not as runtime arguments.
-- Multiple modules each contributing a procedure to ``main``  --  each
-  procedure can be inlined or left as a fir.call (the inline-all pass
-  collapses both into a single function-scope HLFIR for the bridge).
+Flang folds module imports during -emit-hlfir, so by the time the bridge sees
+the IR every cross-module reference is a global symbol or inlined constant.
+Pins: single-module use; chained use (a -> b uses a -> main uses b); parameter
+constants land as inlined literals, not runtime args; multiple modules each
+contributing a procedure to main (inline-all collapses all into one HLFIR).
 """
 
 import numpy as np
@@ -51,10 +43,8 @@ end subroutine main
 
 
 def test_chained_module_use(tmp_path):
-    """Three modules: ``a`` exports a constant; ``b`` uses ``a`` and
-    exports a procedure that applies it; main uses ``b``.  The HLFIR
-    bridge must see only the inlined body in main; ``a``'s constant
-    folds into the literal at compile-time."""
+    """Three modules chained a->b->main; a's constant folds into a literal at
+    compile-time, bridge sees only the inlined body in main."""
     src = """
 module consts
   implicit none
@@ -86,9 +76,8 @@ end subroutine main
 
 
 def test_two_modules_combined_in_main(tmp_path):
-    """Two independent modules, each with a procedure; main uses both
-    and threads them in sequence.  Tests that inline-all walks both
-    callees from a single main and merges them."""
+    """Two independent modules threaded in sequence from main -- inline-all walks
+    both callees and merges them."""
     src = """
 module add_mod
   implicit none
@@ -123,13 +112,10 @@ end subroutine main
 
 
 def test_module_parameter_in_loop_bound(tmp_path):
-    """Module ``parameter`` used as a DO loop upper bound + a runtime
-    array argument  --  Flang folds the parameter into a literal during
-    ``-emit-hlfir`` so the LoopRegion's condition becomes a constant
-    expression.  RHS uses indexed array reads (which thread through
-    ``iter_map``) rather than the loop iter as a scalar (a known
-    bridge gap where scalar uses of the loop iter on the RHS don't
-    remap to the LoopRegion's uniquified ``i_0``)."""
+    """Module parameter as a DO loop upper bound: flang folds it to a literal so the
+    LoopRegion condition is a constant expression. RHS uses indexed array reads
+    (via iter_map) rather than the loop iter as a scalar -- a known bridge gap
+    where scalar RHS uses of the loop iter don't remap to LoopRegion's uniquified i_0."""
     src = """
 module sizes
   implicit none
@@ -154,9 +140,8 @@ end subroutine main
 
 
 def test_use_only_renamed_symbol(tmp_path):
-    """``use mod, only : local_name => mod_name`` renames the imported
-    symbol  --  the rename happens entirely in Flang's symbol resolution
-    and the bridge sees the canonical name."""
+    """``use mod, only: local => mod_name`` renames the import -- resolved entirely
+    in Flang's symbol resolution, the bridge sees the canonical name."""
     src = """
 module trig_consts
   implicit none

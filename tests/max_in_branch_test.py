@@ -1,7 +1,5 @@
-"""Regression coverage for ``MAX(complex_expr, 0)`` whose result feeds a
-local scalar that is later read inside an ``IF`` condition.
-
-Pattern (extracted from ``ice_supersaturation_adjustment``):
+"""Regression coverage for MAX(complex_expr, 0) feeding a local scalar later read inside an
+IF condition (extracted from ice_supersaturation_adjustment):
 
     REAL(8) :: zsupsat
     DO jl = 1, n
@@ -15,18 +13,12 @@ Pattern (extracted from ``ice_supersaturation_adjustment``):
       END IF
     END DO
 
-The bug: a float scalar that is read in any ``IF`` condition was
-misclassified as an SDFG ``symbol`` (Pass 2d in ``extract_vars.cpp``),
-which routes its assignments through the interstate-edge path.  That
-path uses ``array_read_to_dace_expr`` -- which only recognises a
-single-array-read RHS and silently drops everything else from the
-expression -- so ``zsupsat = MAX((expr1 - expr2) / expr3, 0)`` collapsed
-to ``zsupsat = expr1`` and the test produced wrong numerics.
+Bug: a float scalar read in an IF condition was misclassified as an SDFG symbol
+(extract_vars.cpp Pass 2d), routing its assignment through array_read_to_dace_expr -- which
+only recognises a single-array-read RHS, so the MAX expression collapsed to its first operand.
 
-The fix is to keep float scalars as plain scalars even when they appear
-in branch conditions; only integer scalars (loop counters, do-while
-guards, array indices) need the symbol promotion that lets DaCe
-evaluate them on interstate edges.
+Fix: keep float scalars as plain scalars even in branch conditions; only integer scalars
+(loop counters, do-while guards, indices) need symbol promotion for interstate edges.
 """
 
 from pathlib import Path
@@ -40,10 +32,8 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_max_complex_expr_in_branch_to_scalar(tmp_path: Path):
-    """Float scalar gets ``MAX((a-b*c)/d, 0)`` inside a per-iter IF, then
-    is read in a downstream IF condition.  Verifies the full MAX
-    expression survives the bridge instead of collapsing to its first
-    array operand."""
+    """Float scalar gets MAX((a-b*c)/d, 0) in a per-iter IF, then is read in a downstream IF --
+    verifies the full MAX expression survives instead of collapsing to its first operand."""
     src = """
 SUBROUTINE max_in_branch(a, b, c, d, e, out, n, eps)
   IMPLICIT NONE
@@ -90,9 +80,8 @@ END SUBROUTINE
 
 
 def test_max_in_outer_branch_only(tmp_path: Path):
-    """Trimmed reproducer that drops the downstream condition: just
-    ``MAX((a-b*c)/d, 0)`` inside an IF.  Catches the regression even
-    when the float scalar is never re-read inside another condition."""
+    """Trimmed reproducer without the downstream condition -- catches the regression even when
+    the float scalar is never re-read inside another condition."""
     src = """
 SUBROUTINE max_in_outer_branch(a, b, c, d, mask, out, n)
   IMPLICIT NONE

@@ -1,15 +1,9 @@
 """Audit tests for SSA-tree-compressing bridge patterns.
 
-Each test isolates one Fortran pattern that lowers to an MLIR shape
-where ``buildExpr`` collapses several SSA ops into a single textual
-call (or where a subscripted array read sits inside a non-arith op).
-The bridge's ``collectReads`` and ``buildExprWithSubscripts`` must
-keep textual occurrences and AccessInfo counts in lockstep, OR keep
-subscripts on inner loads when an IF-condition lifts the expression
-to an interstate edge.
-
-Both the SDFG and the reference are compiled from the SAME Fortran
-source  --  f2py-built reference per ``feedback_e2e_numerical``.
+Each test isolates one Fortran pattern where ``buildExpr`` collapses several
+SSA ops into one textual call; ``collectReads``/``buildExprWithSubscripts``
+must keep textual occurrences and AccessInfo counts in lockstep. SDFG and
+f2py reference compiled from the same source (``feedback_e2e_numerical``).
 """
 
 import numpy as np
@@ -31,10 +25,8 @@ def _build_and_run(tmp_path, *, src: str, name: str, entry: str, fortran_call, i
 
 
 def test_max_min_shared_load(tmp_path):
-    """Shared array load reused in MAX and MIN of one expression.
-    cloudsc line 2436 shape.  Was the original ``collectReads``
-    cmp-skip bug.
-    """
+    """Shared array load reused in MAX and MIN of one expression (cloudsc
+    line 2436 shape); was the original ``collectReads`` cmp-skip bug."""
     src = """
 SUBROUTINE cov_update(zcov, za, klon, klev)
 integer :: klon, klev
@@ -65,11 +57,8 @@ END SUBROUTINE cov_update
 
 
 def test_modulo_intrinsic(tmp_path):
-    """Fortran ``MODULO(i, n)`` lowers to a 9-op SSA tree
-    (rem/xori/cmpi/cmpi/andi/addi/select) the bridge collapses to
-    ``floor_mod(i, n)``.  Sibling-pattern to MIN/MAX: collectReads
-    would over-count SSA references to ``i`` and ``n``.
-    """
+    """``MODULO(i, n)`` lowers to a 9-op SSA tree collapsed to ``floor_mod(i, n)``;
+    sibling-pattern to MIN/MAX where collectReads would over-count SSA refs."""
     src = """
 SUBROUTINE wrap_mod(arr, mods, n_arr, n)
 integer :: n_arr, n
@@ -97,10 +86,8 @@ END SUBROUTINE wrap_mod
 
 
 def test_power_squared(tmp_path):
-    """``a(i) ** 2`` -> ``a*a``: two textual mul operands share one
-    load SSA value.  Sanity check that 1:1 occurrence-to-connector
-    contract still holds for the simple shared-load case.
-    """
+    """``a(i) ** 2`` -> ``a*a``: two textual mul operands share one load SSA
+    value; sanity check for the 1:1 occurrence-to-connector contract."""
     src = """
 SUBROUTINE sqrarr(a, out, n)
 integer :: n
@@ -123,11 +110,8 @@ END SUBROUTINE sqrarr
 
 
 def test_abs_in_if_condition(tmp_path):
-    """``ABS(a(i)) > ABS(b(i))`` in an IF condition.  The IF lifts
-    the condition to an interstate-edge expression; the abs's
-    operand load must KEEP its subscript or C++ emits
-    ``abs(array_ptr)``.
-    """
+    """``ABS(a(i)) > ABS(b(i))`` in an IF: lifted to an interstate-edge expr,
+    the abs's operand load must KEEP its subscript or C++ emits ``abs(array_ptr)``."""
     src = """
 SUBROUTINE which_bigger(a, b, out, n)
 integer :: n
@@ -156,9 +140,7 @@ END SUBROUTINE which_bigger
 
 
 def test_sqrt_in_if_condition(tmp_path):
-    """``SQRT(a(i)) > thr``  --  sibling of ABS, exercises math.sqrt
-    in the unary-intrinsic IF-condition peel.
-    """
+    """``SQRT(a(i)) > thr`` -- sibling of ABS, exercises math.sqrt in the unary-intrinsic IF-condition peel."""
     src = """
 SUBROUTINE flag_sqrt(a, thr, out, n)
 integer :: n
@@ -250,10 +232,8 @@ END SUBROUTINE flag_log
 
 
 def test_sin_cos_arith_in_if(tmp_path):
-    """``SIN(a(i)) + COS(b(i)) > 0``  --  two unary intrinsics on
-    different array reads combined by addf, all inside an IF
-    condition.  Both subscripts must survive the peel.
-    """
+    """``SIN(a(i)) + COS(b(i)) > 0``: two unary intrinsics combined by addf
+    inside an IF condition; both subscripts must survive the peel."""
     src = """
 SUBROUTINE flag_trig(a, b, out, n)
 integer :: n
@@ -282,9 +262,7 @@ END SUBROUTINE flag_trig
 
 
 def test_same_element_two_arith_uses(tmp_path):
-    """``a(i) + 2.0 * a(i)``  --  CSE-shared load, 2 textual occurrences.
-    Sanity that 1:1 mapping works without dedup.
-    """
+    """``a(i) + 2.0 * a(i)`` -- CSE-shared load, 2 textual occurrences; 1:1 mapping works without dedup."""
     src = """
 SUBROUTINE triple(a, out, n)
 integer :: n
@@ -307,12 +285,9 @@ END SUBROUTINE triple
 
 
 def test_nested_max_with_shared_load(tmp_path):
-    """``MAX(RCOVPMIN, ZCOVPTOT(jl) - MAX(0.0, ZCOVPTOT(jl) - ZA(jl, jk)))``
-    Cloudsc line 2844 shape  --  nested MAX where the SAME load
-    ``ZCOVPTOT(jl)`` appears in the OUTER MAX's subtraction operand AND
-    in the INNER MAX's first sub-arg.  Probes whether collectReads's
-    cmp-skip handles nested cmp+select chains.
-    """
+    """Nested MAX (cloudsc line 2844) where the SAME load ``ZCOVPTOT(jl)``
+    appears in both the outer subtraction and inner sub-arg; probes whether
+    collectReads's cmp-skip handles nested cmp+select chains."""
     src = """
 SUBROUTINE nested_max(zcov, za, klon, klev, rcovpmin)
 integer, intent(in) :: klon, klev
@@ -346,13 +321,9 @@ END SUBROUTINE nested_max
 
 
 def test_complex_division(tmp_path):
-    """Complex division: ``z = a / b`` on COMPLEX(KIND=8) operands.
-    Flang lowers to ``__divdc3(re_a, im_a, re_b, im_b)`` via fir.call.
-    The bridge pattern-matches that shape (expressions.cpp:870-885)
-    and emits ``(a / b)``  --  2 textual operands.  But the SSA tree
-    has 4 ``fir.extract_value`` ops walking the same 2 complex
-    loads, so collectReads could over-count.
-    """
+    """``z = a / b`` on COMPLEX(KIND=8): Flang lowers to ``__divdc3(...)``; the
+    bridge pattern-matches to ``(a / b)`` (2 textual operands) though the SSA
+    tree has 4 ``fir.extract_value`` ops walking the same 2 loads."""
     src = """
 SUBROUTINE complex_div(a, b, c, n)
 integer, intent(in) :: n
@@ -376,13 +347,9 @@ END SUBROUTINE complex_div
 
 
 def test_subexpr_cse_repeated_product(tmp_path):
-    """``(a(i) + b(i)) * (a(i) + b(i))``  --  same sub-expression
-    textually twice.  Flang's CSE may share the inner ``addf`` SSA
-    value across both ``mulf`` operands, while the textual emission
-    still has 2 occurrences of ``a(i)`` and ``b(i)`` (one per
-    sub-expression).  The 1:1 contract must hold: 2 textual + 2
-    AccessInfos per name.
-    """
+    """``(a(i)+b(i)) * (a(i)+b(i))``: Flang's CSE may share the inner addf SSA
+    value across both mulf operands, but textual emission still has 2
+    occurrences each of a(i)/b(i) -- 1:1 contract: 2 textual + 2 AccessInfos."""
     src = """
 SUBROUTINE sq_sum(a, b, out, n)
 integer, intent(in) :: n
@@ -406,13 +373,9 @@ END SUBROUTINE sq_sum
 
 
 def test_merge_intrinsic(tmp_path):
-    """Fortran ``MERGE(t, f, mask)`` lowers to ``arith.select`` with
-    a non-cmp condition (bare i1 mask, not the cmpf/cmpi predicate
-    shape the bridge's MIN/MAX pattern-matches).  buildExpr falls
-    through to the generic ternary ``(t if cond else f)`` rendering.
-    cond's text comes from buildBoolExpr  --  its array refs should
-    match collectReads visits exactly.
-    """
+    """``MERGE(t, f, mask)`` lowers to ``arith.select`` with a bare i1 mask (not
+    the cmpf/cmpi shape MIN/MAX pattern-matches); buildExpr falls through to
+    generic ternary rendering -- cond's array refs must match collectReads exactly."""
     src = """
 SUBROUTINE merge_arrays(a, b, mask, out, n)
 integer, intent(in) :: n
@@ -438,9 +401,7 @@ END SUBROUTINE merge_arrays
 
 
 def test_max_neighbor_pairs(tmp_path):
-    """``MAX(a(i-1), a(i))``  --  shared loads with potentially-swapped
-    cmp operand order for stride-2 indexing.
-    """
+    """``MAX(a(i-1), a(i))`` -- shared loads with potentially-swapped cmp operand order for stride-2 indexing."""
     src = """
 SUBROUTINE max_neighbor(a, out, n)
 integer :: n

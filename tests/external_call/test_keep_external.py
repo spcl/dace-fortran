@@ -1,17 +1,8 @@
-"""End-to-end coverage for the unified external-function policy and its
-rich-ABI escape hatch :func:`dace_fortran.keep_external`.
+"""End-to-end coverage for the unified external-function policy and its rich-ABI escape hatch :func:`dace_fortran.keep_external`.
 
-The simple cases -- a plain ``bind(c)`` callee whose argument plan the
-bridge can derive from the HLFIR call site -- are declared with
-:func:`dace_fortran.apply_external_functions` and one
-:class:`~dace_fortran.external_functions.ExternalFunction` (call-site
-name + the ``.so`` that exports the symbol).  The ``kind='comm'`` cases
-at the bottom keep :func:`keep_external`'s authored
-:class:`~dace_fortran.external.Arg` list: an ``MPI_Comm`` handle is an
-ABI fact HLFIR cannot infer, so it stays on the rich path.  Each test
-compiles a separately-built ``bind(c)`` Fortran subroutine into a
-``.so``, declares it external, builds the SDFG, runs it, and asserts the
-array was mutated as the external function expects.
+Simple ``bind(c)`` cases derive their arg plan from the HLFIR call site via
+:func:`apply_external_functions`. The ``kind='comm'`` cases keep the authored :class:`Arg`
+list -- an ``MPI_Comm`` handle is an ABI fact HLFIR can't infer.
 """
 import shutil
 import subprocess
@@ -30,8 +21,7 @@ pytestmark = [
     pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
 ]
 
-# Increments every element of an array by 1.  ``bind(c, name="bar")``
-# -> stable unmangled C symbol callable from the generated C++.
+# increments every element by 1; bind(c, name="bar") -> stable unmangled C symbol
 _BAR_F90 = """
 subroutine bar(a, n) bind(c, name="bar")
   use iso_c_binding
@@ -65,36 +55,23 @@ end module run_mod
 
 
 def test_external_registry_isolation_fixture_is_autouse(request):
-    """Every test must get the external registry cleared at teardown.
-
-    ``tests/conftest.py``'s ``isolate_external_registry`` is what stops a
-    registration made here from leaking into a later test in the same process.
-    Without it, this file's ``bar(a, n)`` stayed registered and rebound
-    ``tests/multi_callsite_inlining_test.py``'s module-local ``CALL bar(a)`` to
-    the 2-arg external: the callee read a garbage ``n`` and looped
-    ``a = a + 1`` that many times -- an out-of-bounds write that segfaulted the
-    interpreter (SIGSEGV), or silently returned wrong values when the garbage
-    happened to be small.  Assert the fixture is wired so deleting
-    ``autouse=True`` fails here, next to the cause, instead of resurfacing as
-    an unrelated file's crash.
+    """The autouse ``isolate_external_registry`` fixture must be wired, or a registration here
+    leaks into later tests (e.g. rebinding another file's callee to the wrong arity -> OOB
+    write, SIGSEGV or silently wrong values). Assert it here, next to the cause.
     """
     assert "isolate_external_registry" in request.fixturenames
 
 
 def test_keep_external_lowers_to_externalcall(tmp_path: Path):
-    """An :func:`apply_external_functions` declaration produces an
-    :class:`ExternalCall` library node bound to the supplied ``.so`` --
-    the same registry the rich :func:`keep_external` path populates."""
+    """:func:`apply_external_functions` produces an :class:`ExternalCall` node bound to the supplied ``.so`` -- same registry the rich :func:`keep_external` path populates."""
     clear_external_registry()
     bar_f90 = tmp_path / "bar.f90"
     bar_f90.write_text(_BAR_F90)
     libbar = tmp_path / "libbar.so"
-    # cwd=tmp_path keeps gfortran from picking up any stale .mod that
-    # a prior flang invocation left in the repo root.
+    # cwd=tmp_path avoids picking up a stale .mod a prior flang invocation left in the repo root
     subprocess.check_call(["gfortran", "-shared", "-fPIC", "-o", str(libbar), str(bar_f90)], cwd=str(tmp_path))
 
-    # Don't-inline + emit ``bar``; the arg plan (array inout, scalar in)
-    # is derived from the HLFIR call site.
+    # don't-inline + emit bar; arg plan (array inout, scalar in) derived from the HLFIR call site
     apply_external_functions([ExternalFunction("bar", library=str(libbar))])
 
     sig = lookup_external("bar")
@@ -116,16 +93,13 @@ def test_keep_external_lowers_to_externalcall(tmp_path: Path):
 
 
 def test_keep_external_defaults_c_name_to_fortran_name(tmp_path: Path):
-    """When ``c_function`` is omitted :attr:`ExternalFunction.symbol`
-    falls back to the Fortran call-site name -- the common case where
-    both names are identical."""
+    """Omitted ``c_function`` falls back to the Fortran call-site name (the common identical-names case)."""
     clear_external_registry()
     bar_f90 = tmp_path / "bar.f90"
     bar_f90.write_text(_BAR_F90)
     libbar = tmp_path / "libbar.so"
     subprocess.check_call(["gfortran", "-shared", "-fPIC", "-o", str(libbar), str(bar_f90)], cwd=str(tmp_path))
 
-    # No c_function= -> the emitted symbol defaults to "bar".
     apply_external_functions([ExternalFunction("bar", library=str(libbar))])
     assert lookup_external("bar").c_name == "bar"
 
@@ -141,17 +115,15 @@ def test_keep_external_defaults_c_name_to_fortran_name(tmp_path: Path):
 
 
 def test_apply_external_functions_empty_args_passthrough():
-    """A minimal :class:`ExternalFunction` (name only) registers a
-    no-args, no-libraries signature -- the bridge derives the arg plan
-    from HLFIR, so nothing is authored here.  ``c_function`` overrides
-    the emitted symbol; re-declaring the same name replaces the entry."""
+    """A name-only :class:`ExternalFunction` registers a no-args, no-libraries signature (arg
+    plan derived from HLFIR). ``c_function`` overrides the emitted symbol; re-declaring the
+    same name replaces the entry."""
     clear_external_registry()
     apply_external_functions([ExternalFunction("noop")])
     sig = lookup_external("noop")
     assert sig is not None and sig.c_name == "noop"
     assert sig.args == () and sig.libraries == ()
-    # Idempotent on the registry: re-declaring the same name with an
-    # explicit ``c_function`` replaces the entry but does not corrupt it.
+    # idempotent: re-declaring the same name with an explicit c_function replaces the entry
     apply_external_functions([ExternalFunction("noop", c_function="other_sym")])
     assert lookup_external("noop").c_name == "other_sym"
     clear_external_registry()
@@ -159,16 +131,12 @@ def test_apply_external_functions_empty_args_passthrough():
 
 
 # --------------------------------------------------------------------------
-# kind="comm" -- MPI_Comm by-value arg.  Drives the c_decl_type +
-# signature surface; full e2e (mpirun + DaCe MPI binding to materialise
-# a comm at the SDFG boundary) lives in tests/mpi_comm_e2e_test.py
-# (the existing Send/Recv-on-split-comm test).
+# kind="comm" -- MPI_Comm by-value arg; full e2e lives in tests/mpi_comm_e2e_test.py.
 # --------------------------------------------------------------------------
 
 
 def test_comm_kind_c_decl_type_is_mpi_comm():
-    """``Arg(kind='comm')`` declares ``MPI_Comm`` regardless of
-    ``dtype`` -- the field is documented as ignored for this kind."""
+    """``Arg(kind='comm')`` declares ``MPI_Comm`` regardless of ``dtype`` (documented as ignored for this kind)."""
     from dace_fortran.external import Arg, ExternalSignature
     a = Arg(kind="comm")
     assert a.c_decl_type() == "MPI_Comm"
@@ -186,8 +154,7 @@ def test_comm_kind_c_decl_type_is_mpi_comm():
 
 
 def test_comm_kind_rejects_unknown_dtype_only_for_data_args():
-    """Unknown ``dtype`` is fatal for array/scalar (resolved via
-    ``_C_TYPES``) but **not** for comm (its type is fixed)."""
+    """Unknown ``dtype`` is fatal for array/scalar (resolved via ``_C_TYPES``) but not for comm (its type is fixed)."""
     from dace_fortran.external import Arg
     with pytest.raises(ValueError, match="unsupported dtype"):
         Arg(kind="array", dtype="float16").c_decl_type()
@@ -198,9 +165,7 @@ def test_comm_kind_rejects_unknown_dtype_only_for_data_args():
 
 
 def test_keep_external_with_comm_signature_round_trip():
-    """``keep_external`` accepts the new ``kind='comm'`` arg and stores
-    the signature unchanged (the registry is type-blind; the consumer
-    in ``emit_call`` is what wires the opaque(MPI_Comm) connector)."""
+    """``keep_external`` accepts ``kind='comm'`` and stores the signature unchanged (the registry is type-blind; ``emit_call`` wires the opaque(MPI_Comm) connector)."""
     from dace_fortran.external import Arg
     clear_external_registry()
     keep_external("exch_with_comm",

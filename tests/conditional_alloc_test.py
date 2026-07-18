@@ -1,21 +1,14 @@
-"""Conditional and sequential ALLOCATE of the same allocatable.
+"""Conditional and sequential ALLOCATE of the same allocatable -- two
+patterns the bridge must tell apart:
 
-Two distinct patterns the bridge must tell apart:
+* Conditional ALLOCATE (IF/ELSE or IF/ELSEIF/.../ELSE, mutually exclusive
+  branches, same descriptor): `a` stays ONE transient with a branch-dependent
+  extent symbol (`a_d0`), merging at the IF join. Versioning into `a_alloc1`
+  would wrongly split it and bind post-IF reads to one buffer.
+* Sequential re-allocation (ALLOCATE; ...; DEALLOCATE; ALLOCATE): DOES get a
+  fresh buffer (`a_alloc1`) per site; reads after the K-th site route there.
 
-* **Conditional ALLOCATE** -- ``IF (c) ALLOCATE(a(n)) ELSE ALLOCATE(a(m))``
-  (and the nested ``IF/ELSEIF/.../ELSE`` form).  The allocate sites are in
-  mutually-exclusive branches and store to the *same* descriptor, so ``a``
-  must stay ONE transient whose extent is a branch-dependent symbol
-  (``a_d0`` is assigned the branch's extent; the assignments merge at the
-  IF join).  Versioning it into ``a_alloc1`` would split it into two
-  buffers and bind post-IF reads statically to one -- wrong.
-
-* **Sequential re-allocation** -- ``ALLOCATE(a(n)); ...; DEALLOCATE(a);
-  ALLOCATE(a(m))``.  Here the bridge DOES want a fresh buffer with a fresh
-  name (``a_alloc1``) per ALLOCATE site; reads after the K-th site route to
-  the K-th buffer.
-
-Each kernel is checked against an f2py reference on several inputs.
+Each kernel checked against an f2py reference on several inputs.
 """
 from pathlib import Path
 
@@ -28,9 +21,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def _run(tmp_path, src, cases, argnames):
-    """Build ``src`` through the bridge and f2py; run both on each
-    ``cases`` tuple (mapped to ``argnames``); assert the ``out(10)``
-    arrays match."""
+    """Build src through bridge and f2py; run both on each cases tuple (mapped to argnames); assert out(10) arrays match."""
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="probe", entry="probe_mod::probe").build()
     mod = f2py_compile(src, tmp_path / "ref", f"ca_ref_{tmp_path.name}")
     for args in cases:
@@ -38,19 +29,16 @@ def _run(tmp_path, src, cases, argnames):
         r = np.zeros(10, dtype=np.float64)
         kw = {k: np.int32(v) for k, v in zip(argnames, args)}
         sdfg(out=s, **kw)
-        # ``probe`` now lives in ``probe_mod`` so f2py exposes it under
-        # the module's submodule namespace.
+        # probe lives in probe_mod, so f2py exposes it under the module's submodule namespace.
         mod.probe_mod.probe(*args, r)
         np.testing.assert_array_equal(s, r)
     return sdfg
 
 
 def _size_loop_parts(hop):
-    """Fortran fragments for a ``DO i = 1, SIZE(a)`` loop bound in the two
-    equivalent spellings the bridge must both handle: the direct form, and
-    the ``sz = SIZE(a)`` scalar hop.  Returns ``(declaration, loop_header)``;
-    the caller appends the loop body and ``end do``.  Both are exercised
-    (``@pytest.mark.parametrize``) so a regression in either is caught."""
+    """Fortran fragments for a DO i = 1, SIZE(a) loop bound, in the two
+    spellings the bridge must handle: direct, or via a `sz = SIZE(a)` scalar
+    hop. Returns (declaration, loop_header); caller appends body + end do."""
     if hop:
         return "integer :: i, sz", "  sz = size(a)\n  do i = 1, sz"
     return "integer :: i", "  do i = 1, size(a)"
@@ -159,9 +147,7 @@ end module probe_mod
 
 
 def test_realloc_sequential_new_buffer(tmp_path):
-    """``ALLOCATE(a(n)); ...; DEALLOCATE(a); ALLOCATE(a(m)); ...`` -- the
-    sequential re-allocation gets a fresh buffer (``a_alloc1``); this is NOT
-    the conditional case and must stay versioned."""
+    """ALLOCATE(a(n)); ...; DEALLOCATE(a); ALLOCATE(a(m)) -- sequential re-allocation gets a fresh buffer (a_alloc1); NOT the conditional case, must stay versioned."""
     src = """
 module probe_mod
   implicit none
@@ -218,11 +204,9 @@ end module probe_mod
 
 @_SIZE_LOOP_FORMS
 def test_cond_alloc_then_realloc(tmp_path, hop):
-    """Conditional ALLOCATE, used (via ``size``), deallocated, then
-    re-ALLOCATEd to a new size -- conditional + sequential realloc on one
-    array.  Buffer-class grouping: then/else -> the conditional buffer
-    ``a`` (branch extent ``a_d0``); the realloc -> ``a_alloc1`` (extent
-    ``a_alloc1_d0`` so ``size`` resolves on the versioned buffer too)."""
+    """Conditional ALLOCATE (used via size, deallocated), then re-ALLOCATEd to
+    a new size -- conditional + sequential realloc on one array. then/else ->
+    conditional buffer `a` (extent `a_d0`); realloc -> `a_alloc1` (extent `a_alloc1_d0`)."""
     decl, loop = _size_loop_parts(hop)
     src = f"""
 module probe_mod
@@ -262,11 +246,10 @@ end module probe_mod
 
 @_SIZE_LOOP_FORMS
 def test_realloc_chain_inside_if(tmp_path, hop):
-    """A realloc chain inside one ``IF`` branch (``alloc; use; dealloc;
-    alloc``) with a single alloc in the other branch.  The post-``IF`` use
-    is reached by the then-branch's LAST buffer and the else buffer -- they
-    merge into one conditional buffer; the then-branch's first (freed)
-    buffer is a separate transient."""
+    """Realloc chain inside one IF branch (alloc; use; dealloc; alloc) vs a
+    single alloc in the other. Post-IF use is reached by the then-branch's
+    LAST buffer + the else buffer, merging into one conditional buffer; the
+    then-branch's first (freed) buffer is a separate transient."""
     decl, loop = _size_loop_parts(hop)
     src = f"""
 module probe_mod
@@ -296,18 +279,15 @@ end subroutine probe
 end module probe_mod
 """
     sdfg = _run(tmp_path, src, [(1, 5, 8, 3), (0, 5, 8, 3), (1, 2, 6, 9)], ["cond", "n", "n2", "m"])
-    # post-IF buffer is the merged then-last/else class (conditional);
-    # the then's first (freed) buffer is a separate transient.
+    # post-IF buffer merges then-last/else (conditional); then's first (freed) buffer is separate.
     assert "a_alloc1" in sdfg.arrays
 
 
 @_SIZE_LOOP_FORMS
 def test_size_of_concrete_base_buffer(tmp_path, hop):
-    """``SIZE(a)`` on a plain ``allocate(a(n))`` base buffer.  ``SIZE``
-    lowers to ``fir.box_dims`` which the bridge renders as the extent symbol
-    ``a_d0``; binding ``a_d0 = n`` at the ALLOCATE site keeps it from leaking
-    onto the program signature as a free symbol (it was an unbound ``a_d0``
-    -> ``KeyError`` before)."""
+    """SIZE(a) on a plain allocate(a(n)) base buffer. SIZE lowers to
+    fir.box_dims, rendered as extent symbol a_d0; binding a_d0 = n at the
+    ALLOCATE site keeps it from leaking as a free symbol (was unbound -> KeyError)."""
     decl, loop = _size_loop_parts(hop)
     src = f"""
 module probe_mod

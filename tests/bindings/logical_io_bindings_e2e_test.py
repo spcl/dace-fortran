@@ -1,33 +1,13 @@
-"""End-to-end LOGICAL ``intent(out)`` / ``intent(inout)`` binding tests.
+"""E2E LOGICAL intent(out)/intent(inout) binding tests -- the copy-out leg (narrowing the
+SDFG's 1-byte bool back into the caller's LOGICAL(KIND=N) image) that logical_bindings_e2e_test.py's
+copy-in-only kernels never exercised.
 
-``logical_bindings_e2e_test.py`` exercises only the *copy-in* direction
-of the ``LOGICAL -> logical(c_bool)`` bridge: every kernel there takes a
-``logical, intent(in) :: mask`` and writes an ``integer`` result, so the
-generated wrapper only ever has to widen the caller's bool image into
-the SDFG's 1-byte ``bool`` ABI on the way *in*.
+Covers: rank-1 intent(out) (default kind + KIND 1/2/4/8), rank-1 intent(inout) (both legs),
+scalar intent(inout). Each case checks both the SDFG-direct flat ABI call and the generated
+F90 binding against a gfortran reference.
 
-The bridge also emits a *copy-out* leg
-(``<arg> = <arg>_cbool`` followed by ``deallocate``) for every
-``intent(out)`` / ``intent(inout)`` LOGICAL dummy, narrowing the SDFG's
-1-byte ``bool`` result back into the caller's wider ``LOGICAL(KIND=N)``
-image.  That leg was never run end-to-end.  These tests close the gap:
-
-    * rank-1 LOGICAL ``intent(out)``  -- default kind + KIND 1/2/4/8
-    * rank-1 LOGICAL ``intent(inout)`` -- both copy-in and copy-out legs
-    * scalar LOGICAL ``intent(inout)`` -- the length-1 c_bool buffer
-      round-trip
-
-For every case BOTH paths are checked against a gfortran reference of
-the same source:
-
-    1. the SDFG invoked directly via the DaCe flat ABI
-       (``np.bool_`` in / out), and
-    2. the dace-generated F90 binding compiled + linked against the
-       SDFG ``.so`` and called via ctypes.
-
-The gfortran + ctypes harness (rather than f2py) is used throughout so
-``LOGICAL(KIND=2)`` and ``logical(c_bool)`` -- which f2py's crackfortran
-mis-maps -- are exercised on the same footing as the default kind.
+gfortran + ctypes (not f2py) throughout, since f2py's crackfortran mis-maps LOGICAL(KIND=2)
+and logical(c_bool).
 """
 
 import ctypes
@@ -53,12 +33,8 @@ pytestmark = [
 
 def _build_binding_lib(tmp_path: Path, *, kernel_src: str, name: str, entry: str, iface: OriginalInterface,
                        driver_src: str):
-    """Build the SDFG, emit its F90 binding, gfortran-link the binding +
-    driver against the SDFG ``.so``.
-
-    :returns: ``(ctypes lib, compiled SDFG)`` -- the SDFG is returned so
-        the same build can also be exercised directly via the flat ABI.
-    """
+    """Build the SDFG, emit its F90 binding, gfortran-link binding+driver against the SDFG .so.
+    Returns (ctypes lib, compiled SDFG) -- SDFG returned so the same build can also run via flat ABI."""
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(kernel_src, sdfg_dir, name=name, entry=entry).build()
@@ -153,10 +129,8 @@ _KIND_MATRIX = [
 
 @pytest.mark.parametrize("kind_spec, width, cty", _KIND_MATRIX)
 def test_e2e_logical_intent_out(tmp_path: Path, kind_spec: str, width: int, cty):
-    """``logical(kind=N), intent(out) :: b`` -- the copy-OUT leg of the
-    c_bool bridge, narrowing the SDFG's 1-byte bool result back into the
-    caller's KIND=N image.  Asserts BOTH the SDFG-direct call and the
-    F90 binding match the gfortran reference exactly (LOGICAL: exact)."""
+    """logical(kind=N), intent(out) :: b -- copy-out leg narrowing the SDFG's 1-byte bool back
+    into the caller's KIND=N image. Checks both the SDFG-direct call and the F90 binding."""
     suffix = "" if kind_spec == "" else f"_{width}"
     name = f"inv_out{suffix}"
     kernel = _out_kernel(kind_spec, suffix)
@@ -180,9 +154,7 @@ def test_e2e_logical_intent_out(tmp_path: Path, kind_spec: str, width: int, cty)
     rng = np.random.default_rng(101 + width)
     a_bits = rng.integers(0, 2, n).astype(np.bool_)
 
-    # gfortran reference (KIND=N image: -1 / 0 for .true./.false., but
-    # the kernel only ever assigns logical results so the *truthiness*
-    # round-trip is what we compare, normalised to {0, 1}).
+    # gfortran reference: KIND=N image uses -1/0 for true/false; compare truthiness normalised to {0,1}.
     a_w = a_bits.astype(f"int{width * 8}")
     b_ref = np.zeros(n, dtype=f"int{width * 8}")
     fref = getattr(ref, f"run_{name}_ref")
@@ -251,10 +223,8 @@ end subroutine run_toggle_io_ref
 
 
 def test_e2e_logical_intent_inout(tmp_path: Path):
-    """``logical, intent(inout) :: mask`` -- the caller's buffer is read
-    (copy-in leg) AND written back (copy-out leg) through the same
-    c_bool scratch.  Both the SDFG-direct and the F90-binding result
-    must match the gfortran reference's in-place toggle exactly."""
+    """logical, intent(inout) :: mask -- caller's buffer is read (copy-in) and written back
+    (copy-out) through the same c_bool scratch; both SDFG-direct and F90-binding paths checked."""
     iface = OriginalInterface(
         entry="toggle_io",
         args=(
@@ -348,11 +318,8 @@ end subroutine run_flip_flag_ref
 
 
 def test_e2e_scalar_logical_intent_inout(tmp_path: Path):
-    """Scalar ``logical, intent(inout) :: flag`` -- the kernel branches
-    on ``flag`` then flips it.  Exercises the scalar-LOGICAL length-1
-    c_bool buffer in BOTH directions (read for the branch, written for
-    the flip).  Both paths vs the gfortran reference, for an initially
-    true and an initially false flag."""
+    """Scalar logical, intent(inout) :: flag -- kernel branches on flag then flips it, exercising
+    the length-1 c_bool buffer in both directions; checked for both initial flag values."""
     iface = OriginalInterface(
         entry="flip_flag",
         args=(

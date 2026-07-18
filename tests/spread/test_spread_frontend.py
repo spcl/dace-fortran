@@ -1,7 +1,6 @@
 """Frontend-recognition test for Fortran ``SPREAD``.
 
-The bridge recognises the heap-result runtime call
-``fir.call @_FortranASpread(...)`` and routes it through a
+``fir.call @_FortranASpread(...)`` routes to a
 :class:`dace.libraries.standard.nodes.broadcast.Broadcast` lib node.
 """
 from pathlib import Path

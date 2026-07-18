@@ -1,23 +1,9 @@
-"""Cumulative flux accumulation loop from CLOUDSC.
+"""Cumulative flux accumulation loop from CLOUDSC (cloudscexp2_simplified.F90 lines
+3467-3526): ``PFSQLF/PFSQIF/PFSQRF/PFSQSF`` running sums over JK.
 
-Lifts the flux-output block (cloudscexp2_simplified.F90 lines 3467-3526)
-that accumulates ``PFSQLF/PFSQIF/PFSQRF/PFSQSF`` etc. as running sums
-over the JK axis.
-
-The pattern:
-
-    PFSQLF(JL, 1) = 0.0
-    DO JK = 1, KLEV
-      PFSQLF(JL, JK+1) = PFSQLF(JL, JK)
-      PFSQLF(JL, JK+1) = PFSQLF(JL, JK+1) + per_step_jk
-
-where ``per_step_jk`` is a fused expression over the JK-level inputs
-(``ZQXN2D``, ``ZQX0``, ``PVFL``, ``PLUDE``, ``ZFOEALFA``).  The
-``PFSQLF(JK+1) = PFSQLF(JK)`` assignment is a RAW carry across JK
-iterations; the bridge has to sequence this in the right state order
-or else the same iteration's update overwrites a stale carry.
-
-E2e against an f2py-compiled reference of the same Fortran source.
+``PFSQLF(JK+1) = PFSQLF(JK)`` is a RAW carry across JK iterations -- the bridge must
+sequence state order correctly or an iteration's update overwrites a stale carry.
+E2e against an f2py-compiled reference.
 """
 import numpy as np
 import pytest

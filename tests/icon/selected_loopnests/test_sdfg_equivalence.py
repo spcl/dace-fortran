@@ -1,20 +1,11 @@
-"""End-to-end SDFG verification for the six E6 velocity-advection
-representative loopnests.
+"""End-to-end SDFG verification for the six E6 velocity-advection representative loopnests.
 
-Complementary to ``test_equivalence.py`` (which only checks struct-vs-flat
-equivalence at the Fortran level): this file runs the flat kernel through
-our HLFIR -> SDFG pipeline, calls the compiled SDFG from Python, and
-compares the output against an f2py reference built from the same
-Fortran source on identical seeded inputs.
-
-Per the project's E2E-verification rule every frontend test that emits
-an SDFG must compare against a non-transformed reference  --  structural
-assertions on their own don't catch numerical bugs.
-
-The flat kernel sources are extracted from ``icon_loopnest_N.f90`` so the
-bundle (struct + flat + gfortran driver) stays the single source of
-truth; the Python test just slices out the flat subroutine for f2py
-and HLFIR.
+Complementary to ``test_equivalence.py`` (struct-vs-flat equivalence at the
+Fortran level only): runs the flat kernel through HLFIR->SDFG, calls the
+compiled SDFG, and compares against an f2py reference on identical seeded
+inputs -- per the project's E2E rule, structural assertions alone don't catch
+numerical bugs. Flat kernels are sliced out of ``icon_loopnest_N.f90`` so the
+bundle (struct+flat+gfortran driver) stays the single source of truth.
 """
 
 import re
@@ -38,14 +29,9 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def _extract_flat_kernel(bundle_path: Path) -> str:
-    """Slice the ``subroutine kernel_flat(...) ... end subroutine`` block
-    out of a loopnest bundle so f2py and our HLFIR bridge both see a
-    self-contained, standalone Fortran source.
-
-    The bundle wraps the kernel inside a ``contains`` of a module; f2py
-    is happy to compile a bare subroutine with explicit-shape dummies so
-    stripping the module wrapper is fine.
-    """
+    """Slice ``subroutine kernel_flat(...)...end subroutine`` out of a loopnest
+    bundle -- f2py compiles a bare subroutine fine, so stripping the module
+    wrapper is safe."""
     text = bundle_path.read_text()
     pattern = re.compile(r"(?is)(subroutine\s+kernel_flat\s*\([^)]*\).*?\bend\s+subroutine)", )
     m = pattern.search(text)
@@ -55,8 +41,8 @@ def _extract_flat_kernel(bundle_path: Path) -> str:
 
 
 def _f2py_build(src_text: str, out_dir: Path, mod_name: str):
-    """f2py-compile ``src_text`` as ``mod_name`` into ``out_dir`` and
-    return the imported Python module.  Skips if the toolchain's missing."""
+    """f2py-compile ``src_text`` as ``mod_name`` into ``out_dir``, return the
+    imported module. Skips if the toolchain's missing."""
     if shutil.which("gfortran") is None:
         pytest.skip("gfortran not available")
     if shutil.which("meson") is None:
@@ -76,9 +62,8 @@ def _f2py_build(src_text: str, out_dir: Path, mod_name: str):
 
 
 def _sdfg_from_flat(flat_src: str, tmp: Path, name: str):
-    """Build the SDFG from the flat kernel source using the minimal
-    ``hlfir-propagate-shapes`` pipeline (matches the existing
-    ported_from_f2dace_windmill convention)."""
+    """Build the SDFG via the minimal ``hlfir-propagate-shapes`` pipeline (matches
+    the ported_from_f2dace_windmill convention)."""
     tmp.mkdir(parents=True, exist_ok=True)
     return build_sdfg(flat_src, tmp, name=name, pipeline="hlfir-propagate-shapes").build()
 
@@ -93,16 +78,14 @@ def test_icon_loopnest_2_sdfg_matches_f2py(tmp_path: Path):
     bundle = _HERE / "icon_loopnest_2.f90"
     flat_src = _extract_flat_kernel(bundle)
 
-    # f2py reference  --  built once, called repeatedly would be cheaper but
-    # the pytest setup already imports the module on first call.
+    # f2py reference -- rebuilt per test; pytest setup already imports the module on first call
     ref = _f2py_build(flat_src, tmp_path / "ref", "kernel_flat_2")
     sdfg = _sdfg_from_flat(flat_src, tmp_path / "sdfg", name="kernel_flat")
 
     rng = np.random.default_rng(2)
     nproma, nlev, nblks_e, nflatlev = 32, 16, 8, 4
 
-    # Fortran-order arrays so numpy's memory layout matches what both
-    # f2py and DaCe's descriptor expect (nproma is fastest-varying).
+    # Fortran-order: nproma fastest-varying, matches f2py + DaCe descriptor layout
     vn = np.asfortranarray(rng.random((nproma, nlev, nblks_e), dtype=np.float64))
     vt = np.asfortranarray(rng.random((nproma, nlev, nblks_e), dtype=np.float64))
     ddxn = np.asfortranarray(rng.random((nproma, nlev, nblks_e), dtype=np.float64))
@@ -111,16 +94,12 @@ def test_icon_loopnest_2_sdfg_matches_f2py(tmp_path: Path):
     z_ref = np.zeros_like(vn, order="F")
     z_sdfg = np.zeros_like(vn, order="F")
 
-    # f2py auto-derives nproma/nlev/nblks_e from array shapes and drops
-    # them from the positional-arg list  --  see kernel_flat.__doc__.
+    # f2py auto-derives nproma/nlev/nblks_e from array shapes, drops them from the positional list
     ref.kernel_flat(vn, vt, ddxn, ddxt, z_ref, nflatlev, 1, nblks_e, 1, nproma)
     assert z_ref.any(), "f2py reference didn't write to z_ref"
 
-    # Our frontend classifies integer dummies that appear in array
-    # bounds / loop conditions as DaCe symbols (passed as plain ints),
-    # and the remaining integer dummies as length-1 ``Array``s (passed
-    # as numpy arrays).  Introspect sdfg.arglist() to route each arg
-    # to the right form without hard-coding the split.
+    # bound/loop-condition integer dummies become DaCe symbols (plain ints); others
+    # become length-1 Arrays (numpy arrays) -- route via sdfg.arglist(), don't hardcode
     from dace.data import Scalar
     int_args = dict(nproma=nproma,
                     nlev=nlev,
@@ -149,9 +128,8 @@ def test_icon_loopnest_2_sdfg_matches_f2py(tmp_path: Path):
 
 
 def _sdfg_call_args(sdfg, int_values: dict) -> dict:
-    """Route each integer arg in ``int_values`` to either a plain int or
-    a length-1 numpy array, depending on whether the SDFG descriptor
-    classifies it as a symbol/scalar or a length-1 Array."""
+    """Route each int arg to a plain int or length-1 numpy array, based on the SDFG
+    descriptor's symbol/scalar vs Array classification."""
     from dace.data import Scalar
     arglist = sdfg.arglist()
     out = {}
@@ -216,10 +194,8 @@ def test_icon_loopnest_3_sdfg_matches_f2py(tmp_path: Path):
 
 
 def test_icon_loopnest_5_sdfg_matches_f2py(tmp_path: Path):
-    """vn_ie(je,1,jb) = vn(je,1,jb); vn_ie(je,nlevp1,jb) = weighted sum
-     --  literal integer indices (``vn(je, 1, jb)``) and nlev-1/nlev-2
-    arithmetic on a loop bound both resolve cleanly through
-    buildIndexExpr."""
+    """vn_ie(je,1,jb)=vn(je,1,jb); vn_ie(je,nlevp1,jb)=weighted sum -- literal indices
+    and nlev-1/nlev-2 loop-bound arithmetic both resolve through buildIndexExpr."""
     bundle = _HERE / "icon_loopnest_5.f90"
     flat_src = _extract_flat_kernel(bundle)
     ref = _f2py_build(flat_src, tmp_path / "ref", "kernel_flat_5")
@@ -238,8 +214,7 @@ def test_icon_loopnest_5_sdfg_matches_f2py(tmp_path: Path):
     vn_ie_ref = np.zeros((nproma, nlevp1, nblks_e), order="F")
     z_vt_ref = np.zeros((nproma, nlevp1, nblks_e), order="F")
     z_k_ref = np.zeros((nproma, nlevp1, nblks_e), order="F")
-    # f2py derives nproma/nlev/nlevp1/nblks_e from array shapes; only
-    # the loop-range scalars stay in the positional list.
+    # f2py derives nproma/nlev/nlevp1/nblks_e from shapes; only loop-range scalars stay positional
     ref.kernel_flat(vn, vt, wgtfacqe, vn_ie_ref, z_vt_ref, z_k_ref, i_startblk, i_endblk, i_startidx, i_endidx)
 
     vn_ie_sdfg = np.zeros((nproma, nlevp1, nblks_e), order="F")
@@ -281,10 +256,8 @@ def test_icon_loopnest_6_sdfg_matches_f2py(tmp_path: Path):
     i_startblk, i_endblk = 2, 10
     jk_start, jk_end = 3, nlev - 3
 
-    # f2py expects Fortran default LOGICAL(4) as ``np.int32`` at its ABI;
-    # the SDFG signature uses ``np.bool_`` (1 byte) end-to-end.  Build
-    # both shapes from the same random source so the two backends see
-    # identical truth values.
+    # f2py's LOGICAL(4) ABI is np.int32; the SDFG uses np.bool_ (1 byte) end-to-end.
+    # Build both shapes from the same random source so both backends see identical truth values.
     levmask_bool = np.asfortranarray(rng.random((nblks_c, nlev)) > 0.7)
     levmask_int = levmask_bool.astype(np.int32)
     levelmask_ref = np.zeros(nlev, dtype=np.int32)
@@ -305,11 +278,9 @@ def test_icon_loopnest_6_sdfg_matches_f2py(tmp_path: Path):
 
 
 def test_icon_loopnest_1_sdfg_matches_f2py(tmp_path: Path):
-    """z_v_grad_w indirect stencil (two-way cell + vertex indirection).
-    Each indirection (``ci0 = icidx(je,jb,1)`` etc.) is scalar-staged in
-    Fortran; the bridge classifies the per-load scalar as a symbol and
-    ``emit_loop`` hoists each load onto the pre->body interstate edge so
-    the consuming ``w(ci0,jk,cb0)`` tasklet reads the live symbol value."""
+    """z_v_grad_w indirect stencil (cell+vertex indirection). Each scalar-staged index
+    load (``ci0 = icidx(je,jb,1)``) is classified as a symbol; ``emit_loop`` hoists it
+    onto the pre->body interstate edge so the consuming tasklet reads the live value."""
     bundle = _HERE / "icon_loopnest_1.f90"
     flat_src = _extract_flat_kernel(bundle)
     ref = _f2py_build(flat_src, tmp_path / "ref", "kernel_flat_1")
@@ -367,9 +338,8 @@ def test_icon_loopnest_1_sdfg_matches_f2py(tmp_path: Path):
 
 
 def test_icon_loopnest_4_sdfg_matches_f2py(tmp_path: Path):
-    """ddt_vn_apc_pc indirect stencil + (vn_ie(jk)-vn_ie(jk+1)) term.
-    Same scalar-staged 3D indirection as loopnest 1, plus a 4-D output
-    array indexed on its last dim by the ``ntnd`` time-level scalar."""
+    """ddt_vn_apc_pc indirect stencil + (vn_ie(jk)-vn_ie(jk+1)) term -- same scalar-staged
+    indirection as loopnest 1, plus a 4-D output indexed on its last dim by ``ntnd``."""
     bundle = _HERE / "icon_loopnest_4.f90"
     flat_src = _extract_flat_kernel(bundle)
     ref = _f2py_build(flat_src, tmp_path / "ref", "kernel_flat_4")
@@ -428,10 +398,8 @@ def test_icon_loopnest_4_sdfg_matches_f2py(tmp_path: Path):
         nblks_c=nblks_c,
         nblks_v=nblks_v,
         nproma_tnd=nproma_tnd,
-        # ``vn_ie(nproma, nlev+1, nblks_e)``  --  the bridge can't yet
-        # resolve ``nlev+1`` to a closed-form symbolic extent, so
-        # ``add_descriptors`` synthesises ``vn_ie_d1`` for the dim
-        # and the caller passes the actual extent at run time.
+        # vn_ie(nproma, nlev+1, nblks_e): bridge can't resolve nlev+1 to a closed-form
+        # extent, so add_descriptors synthesises vn_ie_d1; caller passes the actual value
         vn_ie_d1=nlev + 1)
     kw.update(_sdfg_call_args(sdfg, dict(ntnd=ntnd, i_startblk=1, i_endblk=nblks_e, i_startidx=1, i_endidx=nproma)))
     sdfg(**kw)

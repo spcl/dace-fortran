@@ -1,13 +1,6 @@
-"""Drop-in HLFIR ports of the simplest tests that ship on ``origin/main``
-under ``tests/fortran/``.
-
-Each test keeps the original numerical assertions and uses the HLFIR
-``create_sdfg_from_string`` so that swapping the import line is the only
-change required to run the existing test against the new frontend.
-
-We port the tests one at a time  --  this file picks up the very short
-ones; more intricate cases (``allocate``-based entry points, PROGRAM
-wrappers, etc.) wait until the matching HLFIR lowerings land.
+"""Drop-in HLFIR ports of the simplest tests from ``origin/main``'s ``tests/fortran/``:
+same numerical assertions, swapping the import to HLFIR's ``create_sdfg_from_string``.
+Only the short ones so far; allocate-based/PROGRAM-wrapper cases wait on matching HLFIR lowerings.
 """
 
 import numpy as np
@@ -25,9 +18,8 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not avail
 def test_fortran_frontend_loop_region_basic_loop():
     from dace_fortran import build_sdfg
 
-    # The legacy version wraps the subroutine in a PROGRAM + CALL; the HLFIR
-    # frontend runs on the subroutine directly (cross-subroutine lowering is
-    # not yet implemented).  The compute body is identical.
+    # Legacy wraps the subroutine in a PROGRAM+CALL; HLFIR runs on the subroutine directly
+    # (cross-subroutine lowering not yet implemented). Compute body is identical.
     test_string = """
 module loop_test_function_mod
 contains

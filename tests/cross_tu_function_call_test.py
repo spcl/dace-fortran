@@ -1,15 +1,12 @@
-"""A scalar/expression assigned from a function defined in another module
-(translation unit) must lower correctly -- the function has to be inlined so
-its body (here ``min``) is visible to the expression builder.
+"""Scalar assigned from a function in another TU must lower correctly -- the
+callee has to be inlined so its body (here `min`) is visible to the
+expression builder.
 
-This is the pattern ICON's dynamical core hits via
-``nproma_gradp = cpu_min_nproma(nproma, 256)`` (``mo_solve_nonhydro``), where
-``cpu_min_nproma`` is defined in ``mo_parallel_config`` and on CPU is just
-``MIN(nproma, min_nproma)``.  When the callee's TU is not merged in, the bridge
-sees an opaque ``fir.call`` and the expression builder emits ``?`` (an invalid
-tasklet ``_out = ?``).  Merging the modules (``build_sdfg_from_files`` /
-``merge_used_modules`` + ``hlfir-inline-all``) splices the body in, so the call
-becomes ``min`` and lowers.
+ICON hits this via `nproma_gradp = cpu_min_nproma(nproma, 256)`
+(mo_solve_nonhydro), where cpu_min_nproma (mo_parallel_config) is just
+MIN(nproma, min_nproma). Unmerged TU -> opaque fir.call -> `_out = ?`.
+Merging (build_sdfg_from_files / merge_used_modules + hlfir-inline-all)
+splices the body in so the call becomes `min` and lowers.
 """
 import shutil
 from pathlib import Path
@@ -59,11 +56,9 @@ end module mo_apply_clamp
 
 @pytest.mark.parametrize("merge_engine", ["fparser", "regex"])
 def test_cross_tu_function_result_inlines(tmp_path: Path, merge_engine):
-    """``nb = clamp_to(nproma, 4)`` with ``clamp_to`` in another module: the
-    callee inlines (to ``min``) when both TUs are merged, the SDFG builds, and
-    the result matches the reference for nproma above and below the clamp.
-
-    Run with both ``USE``-merge engines (fparser default + legacy regex)."""
+    """nb = clamp_to(nproma, 4) with clamp_to in another module: callee inlines
+    (to min) when TUs are merged, SDFG builds, result matches reference for
+    nproma above and below the clamp. Runs with both USE-merge engines (fparser, regex)."""
     caller = tmp_path / "apply_clamp.f90"
     caller.write_text(_CALLER)
     helper = tmp_path / "mo_clamp.f90"

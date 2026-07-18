@@ -9,7 +9,7 @@ HERE = Path(__file__).resolve().parent
 OUT = HERE / "lu_out"  # absolute: _emit_hlfir runs flang with cwd=out_dir
 LU = HERE / "lu.F90"
 
-# 1. Load lu.F90 and generate the SDFG.  Entry = module::procedure.
+# Entry = module::procedure.
 sdfg = dace_fortran.build_sdfg_from_files(
     [LU],
     entry="lu::dolu",
@@ -17,10 +17,9 @@ sdfg = dace_fortran.build_sdfg_from_files(
     out_dir=OUT / "hlfir",
 )
 
-# 2. Save the SDFG.
 sdfg.save(str(OUT / "lu.sdfg"))
 
-# 3. Generate + save the Fortran binding (emit only -- no link).
+# emit only -- no link.
 compiled = sdfg.compile()
 dace_arglist = tuple(getattr(compiled, "_sig", None) or ())
 plan = FlattenPlan.from_dict(sdfg._flatten_plan_raw)

@@ -1,32 +1,9 @@
-"""End-to-end struct-dummy emit-bindings tests.
-
-``tests/hlfir/bindings/emit_bindings_test.py`` covers three struct-flatten
-fixtures via string-match assertions only:
-    * ``_two_real_array_struct``  --  ``type(t_fields)`` with two plain
-      ``real(c_double)`` members; everything aliases.
-    * ``_complex_split_struct``   --  ``complex(c_double)`` member split
-      into re/im scratch + copy loops, plus a plain real member that
-      still aliases.
-    * ``_nested_struct``          --  two-level nested struct (``st%a%v``
-      / ``st%b%v``) where the ``%``-path is preserved through ``c_loc``.
-
-Per ``feedback_e2e_valid_fortran``, every bindings test whose input is
-a valid Fortran program must compile-and-run, not only string-match.
-This module is the e2e companion: each test builds the SDFG, lets the
-bridge stamp the real ``hlfir.flatten_plan`` attribute, lifts that
-into a Python ``FlattenPlan``, runs the emitter, gfortran-compiles
-the wrapper + a Fortran driver, links to the SDFG ``.so``, and
-asserts numerical equality against a gfortran-compiled reference of
-the same source.
-
-Both the SDFG-via-bindings library and the gfortran reference library
-are compiled by gfortran into ``.so`` files and loaded via ctypes.
-f2py's crackfortran can't parse the bindings wrapper -- its dummy is
-``type(t_fields)``, which maps to ``'void'`` in f2py's C-type table
-and crashes lookup -- and the same struct-typed kernel dummy would
-crash the reference build too.  Skipping f2py for both paths keeps
-the test surface uniform and dodges that parser limitation entirely.
-"""
+"""E2e companion to ``tests/hlfir/bindings/emit_bindings_test.py`` (string-match only):
+per ``feedback_e2e_valid_fortran``, every valid-Fortran bindings test must compile-and-run.
+Each test builds the SDFG, lifts the bridge's ``hlfir.flatten_plan`` into a ``FlattenPlan``,
+emits + gfortran-compiles the bindings wrapper, and checks numerical equality against a
+gfortran-compiled reference. Both paths use gfortran+ctypes, not f2py: f2py's crackfortran
+can't parse a ``type(t_fields)`` dummy (maps to 'void', crashes lookup)."""
 
 import ctypes
 import shutil
@@ -51,17 +28,11 @@ pytestmark = [
 
 
 def _compile_so(out_so: Path, *sources: Path, mod_dir: Path, link_so: Path | None = None):
-    """gfortran-compile ``sources`` into ``out_so``, writing ``.mod``
-    files to ``mod_dir`` and (optionally) linking against ``link_so``.
-
-    We always set ``cwd=mod_dir`` and ``-J<mod_dir>`` so gfortran
-    doesn't search the repository root for ``.mod`` files -- earlier
-    f2py probes leak stale modules there and the format isn't
-    cross-compiler compatible.
-    """
-    # No strict-FP flags here by design (structural ABI test, not a
-    # numeric compare); just lift the free-form column cap so the long
-    # generated signatures compile on gfortran <=12.
+    """gfortran-compile ``sources`` into ``out_so``, writing ``.mod`` to ``mod_dir``
+    (optionally linking against ``link_so``). ``cwd=mod_dir`` + ``-J<mod_dir>`` keeps
+    gfortran from picking up stale, cross-compiler-incompatible ``.mod`` files in repo root."""
+    # No strict-FP flags (structural ABI test, not numeric compare); lift the free-form
+    # column cap so long generated signatures compile on gfortran <=12.
     cmd = ["gfortran", "-shared", "-fPIC", "-ffree-line-length-none", f"-J{mod_dir}"]
     cmd.extend(str(s) for s in sources)
     cmd.extend(["-o", str(out_so)])
@@ -84,17 +55,10 @@ def _build_sdfg_lib(
     iface: OriginalInterface = None,
     driver_src: str,
 ):
-    """SDFG-via-bindings path: build SDFG, emit bindings, gfortran-link
-    the types + bindings + driver into one ``.so`` against the SDFG
-    library, return the loaded ctypes lib.
-
-    ``FlattenPlan`` is read off the bridge module after the pass
-    pipeline runs, so the emitter sees the same recipe
-    ``hlfir-flatten-structs`` actually recorded.  ``iface`` defaults to
-    the SDFG's auto-derived caller interface (these AoS kernels all flatten
-    explicit-shape struct dummies, which the snapshot names correctly);
-    pass an explicit one only for a shape the snapshot can't recover.
-    """
+    """SDFG-via-bindings path: build SDFG, emit bindings, gfortran-link types+bindings+driver
+    into one ``.so`` against the SDFG library, return the loaded ctypes lib. ``FlattenPlan``
+    is read off the bridge module post-pipeline so the emitter matches the recorded recipe;
+    ``iface`` defaults to the SDFG's auto-derived interface unless the snapshot can't recover it."""
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     builder = build_sdfg(kernel_src, sdfg_dir, name=name, entry=entry)
@@ -129,10 +93,8 @@ def _build_reference_lib(
     ref_driver_src: str,
     name: str,
 ):
-    """gfortran reference path: compile types + plain Fortran kernel +
-    reference driver into one ``.so``.  The reference driver uses the
-    same ``bind(c)`` raw-pointer entry-point convention as the SDFG
-    driver so we can swap them with ctypes."""
+    """gfortran reference path: compile types + plain kernel + driver into one ``.so``.
+    Same ``bind(c)`` raw-pointer entry convention as the SDFG driver, so ctypes can swap them."""
     types_path = tmp_path / f"{name}_ref_types.f90"
     types_path.write_text(types_src)
     kernel_path = tmp_path / f"{name}_ref_kernel.f90"
@@ -227,10 +189,9 @@ end subroutine run_two_real
 
 
 def test_e2e_two_real_array_struct(tmp_path: Path):
-    """``type(t_fields)`` with two static ``real(c_double)`` members.
-    Both members alias zero-copy through ``c_loc``.  ``kernel`` does
-    ``fld%a = fld%a + fld%b``; reference and SDFG paths must produce
-    identical ``fld%a`` post-call."""
+    """``type(t_fields)`` with two static ``real(c_double)`` members, both aliased zero-copy
+    through ``c_loc``. ``kernel`` does ``fld%a = fld%a + fld%b``; reference and SDFG paths
+    must produce identical ``fld%a`` post-call."""
     sdfg_lib = _build_sdfg_lib(
         tmp_path,
         kernel_src=_TWO_REAL_SRC,
@@ -282,26 +243,8 @@ def test_e2e_two_real_array_struct(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# Nested struct ``st%a%v`` / ``st%b%v``  --  bridge gap (xfail)
+# Nested struct ``st%a%v`` / ``st%b%v``
 # ---------------------------------------------------------------------------
-#
-# ``passes/FlattenStructs.cpp`` calls ``replaceStructArgNested`` for the
-# nested case and intentionally does NOT call ``recordStructArgEntry`` --
-# the comment in that block reads:
-#
-#     "Bindings-side FlattenEntry emission for outer_kind='dummy_nested'
-#      is a separate follow-up -- Python-side callers can pass the flat
-#      companions directly via kwargs today; the Fortran caller wrapper
-#      needs the recipe to pack the nested struct's path-form members
-#      on its end."
-#
-# Consequence: the bridge produces ``st_a_v``/``st_b_v`` flat dummies on
-# the SDFG but ``get_flatten_plan()`` returns ``{'entries': []}``.  The
-# emitter therefore emits no ``c_f_pointer`` aliases and the wrapper
-# call site passes uninitialised ``st_a_v``/``st_b_v`` pointers.
-#
-# Pinning the e2e shape here so the test flips green when nested-plan
-# emission lands in FlattenStructs.cpp.
 
 _NESTED_TYPES_SRC = """
 module mo_nested
@@ -373,12 +316,9 @@ end subroutine run_nested
 
 
 def test_e2e_nested_struct(tmp_path: Path):
-    """``type(t_outer)`` containing two ``type(t_inner)`` members, each
-    with a static ``real(c_double)`` array.  The kernel does
-    ``st%a%v = st%a%v + st%b%v``.  ``recordNestedStructArgEntry`` in
-    ``FlattenStructs.cpp`` emits one FlattenEntry whose recipe carries
-    a flat name + a dotted read_expr per leaf, so the bindings emitter
-    aliases each leaf via ``c_f_pointer(c_loc(st%a%v), st_a_v, [...])``."""
+    """``type(t_outer)`` with two ``type(t_inner)`` members; kernel does
+    ``st%a%v = st%a%v + st%b%v``. ``recordNestedStructArgEntry`` emits one FlattenEntry per
+    leaf so the bindings emitter aliases via ``c_f_pointer(c_loc(st%a%v), st_a_v, ...)``."""
     sdfg_lib = _build_sdfg_lib(
         tmp_path,
         kernel_src=_NESTED_SRC,
@@ -430,25 +370,10 @@ def test_e2e_nested_struct(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# Complex member struct  --  complex stays as a native complex128 SDFG dtype
+# Complex member struct -- complex128 stays a native SDFG dtype, not re/im split
 # ---------------------------------------------------------------------------
-#
-# ``complex(c_double)`` struct members flatten to a single
-# ``complex128`` companion array, NOT into a re/im pair.  Per the
-# user's policy "complex types are supported in DaCe; complex arrays
-# should be flattened using the complex dtype": DaCe handles complex
-# arithmetic on a single ``std::complex<T>`` array natively.
-#
-# Bridge plumbing:
-#   * ``FlattenStructs.cpp::isSimpleScalar`` accepts ``ComplexType``.
-#   * ``dtypeName`` maps to ``complex64`` / ``complex128``.
-#   * ``recordStructArgEntry`` emits one FlattenEntry per member so
-#     mixed-dtype structs (complex + real) carry the right
-#     ``scratch_dtype`` per entry.
-#   * AST extractor ``ast/expressions.cpp`` recognises standalone
-#     ``fir.extract_value`` from a complex value and emits
-#     ``<z>.real()`` / ``<z>.imag()``; cppunparse renders these as
-#     ``std::complex<T>::real()`` / ``::imag()`` method calls in C++.
+# ``complex(c_double)`` members flatten to a single ``complex128`` companion, per policy
+# "complex types are supported in DaCe; complex arrays should use the complex dtype".
 
 _COMPLEX_TYPES_SRC = """
 module mo_state
@@ -519,13 +444,9 @@ end subroutine run_complex
 
 
 def test_e2e_complex_member_struct(tmp_path: Path):
-    """``type(t_state)`` with ``complex(c_double)`` and ``real(c_double)``
-    array members.  Kernel does ``st%u = real(st%z) + aimag(st%z)``.
-    The complex member flattens to a single ``complex128`` companion
-    (NOT split into re/im); the bindings emitter aliases it via
-    ``c_f_pointer(c_loc(st%z), st_z, [...])`` and DaCe's tasklet
-    codegen handles the ``.real()`` / ``.imag()`` method calls on
-    ``std::complex<double>``."""
+    """``type(t_state)`` with ``complex(c_double)`` + ``real(c_double)`` members; kernel
+    does ``st%u = real(st%z) + aimag(st%z)``. Complex flattens to a single ``complex128``
+    companion (NOT split into re/im); tasklet codegen handles ``.real()``/``.imag()``."""
     sdfg_lib = _build_sdfg_lib(
         tmp_path,
         kernel_src=_COMPLEX_SRC,
@@ -579,15 +500,10 @@ def test_e2e_complex_member_struct(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# Array-of-structs with scalar members  --  DEEPCOPY path (strided gather)
+# Array-of-structs with scalar members -- DEEPCOPY path (strided gather)
 # ---------------------------------------------------------------------------
-#
-# ``type(point) :: pts(N)`` with four scalar members.  Each SoA companion
-# ``pts_x``..``pts_w`` is a *strided* view of the interleaved AoS (stride =
-# struct size), so it CANNOT be a zero-copy ``c_f_pointer`` alias -- the
-# binding must allocate contiguous companions and scatter/gather them
-# (``aliasable=False`` -> render_copy_in_loop / render_copy_out_loop).  This
-# exercises the deepcopy path end-to-end and value-checks the gather/scatter.
+# SoA companions are strided views of the interleaved AoS -- can't zero-copy alias
+# (``aliasable=False`` -> render_copy_in_loop / render_copy_out_loop).
 
 _AOS_TYPES_SRC = """
 module mo_pt
@@ -663,10 +579,8 @@ end subroutine run_aos
 
 
 def test_e2e_array_of_scalar_structs_deepcopy(tmp_path: Path):
-    """``type(point) :: pts(N)`` (4 scalar members) -> 4 SoA arrays via the
-    strided-gather DEEPCOPY path.  The binding allocates ``pts_x``..``pts_w``,
-    scatters the interleaved AoS in, runs the kernel, gathers back out; the
-    result must match a gfortran reference of the same kernel on the AoS."""
+    """``type(point) :: pts(N)`` (4 scalar members) -> 4 SoA arrays via strided-gather
+    DEEPCOPY (scatter in, run, gather out); matches a gfortran reference on the AoS."""
     sdfg_lib = _build_sdfg_lib(
         tmp_path,
         kernel_src=_AOS_SRC,
@@ -701,13 +615,9 @@ def test_e2e_array_of_scalar_structs_deepcopy(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# AoS with MIXED-TYPE scalar members  --  deepcopy across dtypes
+# AoS with MIXED-TYPE scalar members -- deepcopy across dtypes
 # ---------------------------------------------------------------------------
-#
-# ``type(item) :: items(N)`` with a real(c_double) and an integer(c_int)
-# member.  Each flattens to its own typed SoA companion (items_a : f64,
-# items_n : i32), both deep-copied (strided gather/scatter).  Exercises the
-# copy-in/out path with two distinct element types in one struct.
+# real(c_double) + integer(c_int) members -> two typed SoA companions, both deep-copied.
 
 _MIX_TYPES_SRC = """
 module mo_mix
@@ -783,9 +693,8 @@ end subroutine run_mix
 
 
 def test_e2e_array_of_mixed_type_structs_deepcopy(tmp_path: Path):
-    """``type(item){a:real, n:int} :: items(N)`` -> two typed SoA companions,
-    both deep-copied.  Kernel updates both members; result must match the
-    gfortran reference for both the real and integer arrays."""
+    """``type(item){a:real, n:int} :: items(N)`` -> two typed SoA companions, both
+    deep-copied; result matches the gfortran reference for both arrays."""
     sdfg_lib = _build_sdfg_lib(tmp_path,
                                kernel_src=_MIX_SRC,
                                types_src=_MIX_TYPES_SRC,
@@ -817,12 +726,9 @@ def test_e2e_array_of_mixed_type_structs_deepcopy(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# AoS as an intent(in) argument  --  copy-IN only, no copy-out
+# AoS as an intent(in) argument -- copy-IN only, no copy-out
 # ---------------------------------------------------------------------------
-#
-# When the struct array is read-only the deepcopy must scatter the members
-# IN but emit no copy-back (and the input must be left unchanged).  The
-# kernel writes a separate plain output array.
+# Read-only struct array: deepcopy scatters IN but emits no copy-back; input stays unchanged.
 
 _RO_KERNEL_SRC = """
 module kern_ro_mod
@@ -918,17 +824,10 @@ def test_e2e_array_of_structs_read_only_copy_in(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# Jagged AoS + allocatable member  --  the runtime-cap pack/unpack path
+# Jagged AoS + allocatable member -- runtime-cap pack/unpack (ELLPACK)
 # ---------------------------------------------------------------------------
-# ``type(bag) :: a(NB)`` where ``bag`` has an ``allocatable :: w(:)`` member
-# and each instance is allocated a DIFFERENT length.  The flatten pass packs
-# the jagged member into an ELLPACK companion ``a_w(NB, cap)`` whose inner
-# extent is a runtime ``cap_a_w`` symbol the binding fills via ``max`` over
-# the per-instance sizes.  This exercises the extent-detection fix:
-# ``size(a(i)%w)`` (the inner loop bound) must resolve to that companion cap
-# symbol, not leak the original struct's ``a_d0`` extent.  The kernel scales
-# in place (padding rows stay zero -> harmless), and the binding's pack-out
-# copies back only each instance's live ``1:size`` region.
+# Per-instance DIFFERENT lengths -> ELLPACK companion a_w(NB, cap_a_w). Exercises the
+# extent-detection fix: size(a(i)%w) must resolve to the companion cap, not leak a_d0.
 
 _JAG_TYPES_SRC = """
 module mo_bag
@@ -959,8 +858,7 @@ end subroutine kern_jag
 end module kern_jag_mod
 """
 
-# Both drivers allocate the same jagged shape (sizes 2, 4, 3 -> cap 4) and
-# move the flat 9-element buffer in/out of the per-instance members.
+# Both drivers use the same jagged shape (sizes 2, 4, 3 -> cap 4); flat 9-elem buffer in/out.
 _JAG_DRIVER = """
 subroutine run_jag(p_ptr) bind(c, name='run_jag')
   use iso_c_binding
@@ -1016,11 +914,9 @@ end subroutine run_jag_ref
 
 
 def test_e2e_array_of_jagged_alloc_structs_deepcopy(tmp_path: Path):
-    """``type(bag){allocatable w(:)} :: a(NB)`` with per-instance sizes
-    (2, 4, 3) -> ELLPACK companion ``a_w(NB, cap_a_w)`` (cap = 4 via the
-    binding's ``max``).  Verifies the runtime-cap pack/unpack round-trips
-    the live data and that ``size(a(i)%w)`` resolved to the companion cap
-    (no ``a_d0`` symbol leak), against a gfortran reference."""
+    """``type(bag){allocatable w(:)} :: a(NB)`` with per-instance sizes (2,4,3) -> ELLPACK
+    companion ``a_w(NB, cap_a_w)`` (cap=4). Verifies pack/unpack round-trips live data and
+    ``size(a(i)%w)`` resolves to the companion cap (no ``a_d0`` leak), vs gfortran."""
     sdfg_lib = _build_sdfg_lib(tmp_path,
                                kernel_src=_JAG_TYPES_SRC + _JAG_KERNEL_SRC,
                                types_src=_JAG_TYPES_SRC,

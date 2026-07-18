@@ -1,15 +1,7 @@
-"""End-to-end SDFG verification for the five CLOUDSC representative
-loopnests (microphysics kernels extracted from ECMWF's cloud-scheme
-benchmark).
-
-For each kernel: build the SDFG via the HLFIR bridge AND an f2py
-reference from the same Fortran source on identical seeded inputs,
-then assert numerical equivalence.
-
-Unlike the ``icon/selected_loopnests`` bundle (which carries both struct-typed and
-flat versions for cross-checking at the gfortran level), the cloudsc
-loopnests are bare flat subroutines  --  the SDFG-vs-f2py comparison is
-the only meaningful correctness check.
+"""E2e SDFG-vs-f2py verification for CLOUDSC microphysics loopnests (ECMWF
+cloud-scheme benchmark).  Unlike ``icon/selected_loopnests`` these kernels are
+bare flat subroutines -- SDFG-vs-f2py numerical equivalence is the only
+correctness check (no struct-typed cross-check).
 """
 
 import os
@@ -38,10 +30,8 @@ def _f2py_build(src_text: str, out_dir: Path, mod_name: str):
     out_dir.mkdir(parents=True, exist_ok=True)
     src = out_dir / f"{mod_name}.f90"
     src.write_text(src_text)
-    # numpy's f2py meson backend (Python>=3.12) ignores ``--f90flags``;
-    # meson reads ``FFLAGS``.  f2py emits a single-line
-    # ``SUBROUTINE foo(<many args>)`` exceeding the 132-col free-form
-    # limit on gfortran <=13 -> lift the cap (append, don't clobber).
+    # meson reads FFLAGS not --f90flags; f2py's single-line SUBROUTINE decl exceeds
+    # gfortran's 132-col limit -- lift the cap (append, don't clobber).
     env = {**os.environ, "FFLAGS": (os.environ.get("FFLAGS", "") + " -ffree-line-length-none").strip()}
     subprocess.check_call(
         [sys.executable, "-m", "numpy.f2py", "-c",
@@ -56,24 +46,17 @@ def _f2py_build(src_text: str, out_dir: Path, mod_name: str):
 
 
 def _sdfg_from_src(src: str, tmp: Path, name: str):
-    """Build an SDFG from raw Fortran source via the HLFIR bridge using
-    the minimal ``hlfir-propagate-shapes`` pipeline (matches icon's
-    convention).
-
-    The entry stays BARE (auto-resolved): each cloudsc kernel is a free
-    subroutine in a shared ``cloudsc_*.f90`` fixture that this test AND its
-    siblings (``cloudsc_loopnests_test.py``) f2py-compile and call as
-    ``ref.<proc>(...)``.  Wrapping the kernel in a module would re-expose it
-    under f2py as ``ref.<module>.<proc>`` and break those references."""
+    """Build an SDFG via HLFIR bridge with ``hlfir-propagate-shapes`` (matches icon's
+    convention).  Entry stays bare/auto-resolved -- wrapping the kernel in a module would
+    re-expose it under f2py as ``ref.<module>.<proc>`` and break sibling tests that call
+    ``ref.<proc>(...)`` directly."""
     tmp.mkdir(parents=True, exist_ok=True)
     return build_sdfg(src, tmp, name=name, pipeline="hlfir-propagate-shapes").build()
 
 
 def _sdfg_call_args(sdfg, int_values: dict) -> dict:
-    """Route each integer arg in ``int_values`` to either a plain int
-    (if the SDFG classified it as a symbol / Scalar) or a length-1
-    numpy array (if classified as a length-1 Array).  Mirrors the
-    ``icon/selected_loopnests`` helper."""
+    """Route each int arg to a plain int (Scalar) or length-1 numpy array (Array),
+    matching the SDFG's classification.  Mirrors the icon/selected_loopnests helper."""
     from dace.data import Scalar
     arglist = sdfg.arglist()
     out = {}
@@ -87,9 +70,8 @@ def _sdfg_call_args(sdfg, int_values: dict) -> dict:
 
 
 def test_cloudsc_lu_solver_sdfg_matches_f2py(tmp_path: Path):
-    """LU forward-substitute + back-substitute for the microphysics
-    species block.  Pure linear-algebra inner triple-nested loop with
-    nclv-bounded iteration ranges."""
+    """LU forward+back substitute for the microphysics species block -- linear-algebra
+    triple-nested loop, nclv-bounded."""
     src = (_HERE / "cloudsc_lu_solver.f90").read_text()
     ref = _f2py_build(src, tmp_path / "ref", "lu_solver_ref")
     sdfg = _sdfg_from_src(src, tmp_path / "sdfg", name="lu_solver_microphysics")
@@ -122,9 +104,8 @@ def test_cloudsc_lu_solver_sdfg_matches_f2py(tmp_path: Path):
 
 
 def test_cloudsc_saturation_sdfg_matches_f2py(tmp_path: Path):
-    """Saturation-pressure computation across (klon, klev).  Reads
-    temperature + pressure, writes seven saturation-related outputs.
-    Pure elementwise math (no loop-carried dependence)."""
+    """Saturation-pressure computation across (klon, klev): reads T+P, writes seven
+    outputs, pure elementwise (no loop-carried dependence)."""
     src = (_HERE / "cloudsc_saturation_calculation.f90").read_text()
     ref = _f2py_build(src, tmp_path / "ref", "saturation_ref")
     sdfg = _sdfg_from_src(src, tmp_path / "sdfg", name="compute_saturation_values")
@@ -137,8 +118,7 @@ def test_cloudsc_saturation_sdfg_matches_f2py(tmp_path: Path):
     ztp1 = np.asfortranarray(200.0 + 100.0 * rng.random((klon, klev), dtype=np.float64))
     pap = np.asfortranarray(1e3 + 1e5 * rng.random((klon, klev), dtype=np.float64))
 
-    # Physical constants from CLOUDSC defaults (won't change the
-    # equivalence  --  both backends see the same numbers).
+    # CLOUDSC default physical constants -- same numbers on both backends.
     consts = dict(rtt=273.16,
                   retv=0.608,
                   r2es=611.21,
@@ -155,8 +135,7 @@ def test_cloudsc_saturation_sdfg_matches_f2py(tmp_path: Path):
         for k in ("zfoealfa", "zfoeewmt", "zqsmix", "zfoeew", "zqsice", "zfoeeliqt", "zqsliq")
     }
 
-    # f2py converts INTENT(OUT) arrays to a return tuple; only INTENT(IN)
-    # / scalars are positional.  klon / klev are auto-derived.
+    # f2py returns INTENT(OUT) arrays as a tuple; only IN/scalars positional; klon/klev auto-derived.
     out_tuple = ref.compute_saturation_values(kidia, kfdia, ztp1, pap, **consts)
     outs_ref = dict(zip(("zfoealfa", "zfoeewmt", "zqsmix", "zfoeew", "zqsice", "zfoeeliqt", "zqsliq"), out_tuple))
 
@@ -169,20 +148,16 @@ def test_cloudsc_saturation_sdfg_matches_f2py(tmp_path: Path):
 
 
 def test_cloudsc_autoconversion_snow_sdfg_matches_f2py(tmp_path: Path):
-    """Snow autoconversion: writes ``zsnowaut(jl)`` and an INOUT
-    contribution to ``zsolqb(jl, ncldqs, ncldqi)``.  ``laericeauto``
-    is a 0/1 flag controlling whether the aerosol-coupled formulation
-    runs."""
+    """Snow autoconversion: writes ``zsnowaut(jl)`` + INOUT contribution to
+    ``zsolqb(jl, ncldqs, ncldqi)``; ``laericeauto`` (0/1) toggles the aerosol-coupled
+    formulation."""
     src = (_HERE / "cloudsc_autoconversion_snow.f90").read_text()
     ref = _f2py_build(src, tmp_path / "ref", "autoconv_snow_ref")
     sdfg = _sdfg_from_src(src, tmp_path / "sdfg", name="autoconversion_snow")
 
     rng = np.random.default_rng(103)
-    # NCLV is the array bound (5 species), ncldqs/ncldqi are runtime
-    # INDICES into that dimension (snow=4, ice=2 per CLOUDSC).  Mixing
-    # them up (declaring zsolqb shape as (klon, ncldqs, ncldqi)) makes
-    # the test write to the LAST cell of each dim instead of the interior
-    # cell that real CLOUDSC touches.
+    # NCLV = array bound (5 species); ncldqs/ncldqi = runtime indices into it (snow=4,
+    # ice=2) -- don't confuse the two or zsolqb's shape ends up wrong.
     klon, nclv = 8, 5
     ncldqs, ncldqi = 4, 2
     kidia, kfdia = 1, klon
@@ -230,8 +205,8 @@ def test_cloudsc_autoconversion_snow_sdfg_matches_f2py(tmp_path: Path):
 
 
 def test_cloudsc_ice_supersat_sdfg_matches_f2py(tmp_path: Path):
-    """Ice supersaturation adjustment: branchy elementwise body with
-    in/out updates to ``zsolqa``, ``zsolac``, ``zqxfg``."""
+    """Ice supersaturation adjustment: branchy elementwise body with in/out updates to
+    ``zsolqa``, ``zsolac``, ``zqxfg``."""
     src = (_HERE / "cloudsc_ice_supersaturation_adjustment.f90").read_text()
     ref = _f2py_build(src, tmp_path / "ref", "ice_supersat_ref")
     sdfg = _sdfg_from_src(src, tmp_path / "sdfg", name="ice_supersaturation_adjustment")
@@ -293,9 +268,8 @@ def test_cloudsc_ice_supersat_sdfg_matches_f2py(tmp_path: Path):
 
 
 def test_cloudsc_rain_evap_sdfg_matches_f2py(tmp_path: Path):
-    """Rain-evaporation (Abel-Boutle 2012 scheme): branchy elementwise
-    update to ``zsolqa(jl, ncldqv, ncldqr)`` and several scalars.
-    LOGICAL local + many physical constants."""
+    """Rain-evaporation (Abel-Boutle 2012): branchy elementwise update to
+    ``zsolqa(jl, ncldqv, ncldqr)`` + scalars; LOGICAL local + many physical constants."""
     src = (_HERE / "cloudsc_rain_evaporation_abel_boutle.f90").read_text()
     ref = _f2py_build(src, tmp_path / "ref", "rain_evap_ref")
     sdfg = _sdfg_from_src(src, tmp_path / "sdfg", name="rain_evaporation_abel_boutle")
@@ -374,10 +348,8 @@ def test_cloudsc_rain_evap_sdfg_matches_f2py(tmp_path: Path):
     kw.update(_sdfg_call_args(sdfg, dict(kidia=kidia, kfdia=kfdia, klon=klon, nclv=nclv, ncldqv=ncldqv, ncldqr=ncldqr)))
     sdfg(**kw)
 
-    # Rain-evap uses ``rho**0.78`` (Abel-Boutle 2012 exponent) which
-    # amplifies rounding differences between gfortran's libm and DaCe's
-    # C++ codegen.  ~1e-7 relative drift is expected; tighter tolerance
-    # would surface false positives on benign ulp-level differences.
+    # rho**0.78 amplifies libm-vs-C++-codegen rounding diffs; ~1e-7 relative drift is
+    # expected, tighter tolerance would false-positive on benign ulp differences.
     rt, at = 1e-6, 1e-8
     np.testing.assert_allclose(zsolqa_sdfg, zsolqa_ref, atol=at, rtol=rt)
     np.testing.assert_allclose(zevap_sdfg, zevap_ref, atol=at, rtol=rt)
@@ -387,20 +359,13 @@ def test_cloudsc_rain_evap_sdfg_matches_f2py(tmp_path: Path):
 
 
 def test_cloudsc_full_microphysics_solve_sdfg_matches_f2py(tmp_path: Path):
-    """Full Section-5.2.2 microphysics solver: ZQLHS construction
-    (diagonal/off-diagonal from ZFALLSINK + sum(ZSOLQB) over JO) +
-    ZQXN RHS assembly (ZQX + sum(ZSOLQA) over JN) + LU factorization
-    + 2-step back-substitution + ZEPSEC clipping into vapor.
-
-    Bigger than ``cloudsc_lu_solver`` (which only tests the factor +
-    back-sub on pre-built matrices).  This reproducer extends scope
-    to the LHS/RHS assembly  --  the suspected source of the 1-9 ulp
-    ``ZQXN`` drift observed at JK=NCLDTOP=15 in the full-CLOUDSC run
-    (cloudsc_full xfail).  If this loopnest passes (to ``rtol=atol=1e-14``) while
-    full-CLOUDSC still diverges, the bug is in JK-loop-carried state
-    further upstream (ZFALLSINK / ZSOLQA / ZSOLQB assembly across
-    iterations).  If this loopnest also diverges, the assembly +
-    solve combination itself triggers the bridge bug.
+    """Full Section-5.2.2 solver: ZQLHS construction + ZQXN RHS assembly + LU
+    factorization + back-substitution + ZEPSEC clip into vapor.  Bigger scope than
+    ``cloudsc_lu_solver`` (adds the LHS/RHS assembly) -- suspected source of the 1-9 ulp
+    ``ZQXN`` drift at JK=NCLDTOP=15 in cloudsc_full (xfail).  If this passes at
+    ``rtol=atol=1e-14`` while cloudsc_full still diverges, the bug is further upstream in
+    JK-loop-carried state; if this also diverges, the bug is in this assembly+solve
+    combination.
     """
     src = (_HERE / "cloudsc_full_microphysics_solve.f90").read_text()
     ref = _f2py_build(src, tmp_path / "ref", "full_solve_ref")
@@ -413,9 +378,8 @@ def test_cloudsc_full_microphysics_solve_sdfg_matches_f2py(tmp_path: Path):
     jk_idx = 15  # NCLDTOP -- pick the same JK at which cloudsc_full first diverges
     zepsec = 1e-14
 
-    # Inputs: keep ZFALLSINK in [0,1) so diagonals stay well-conditioned;
-    # ZSOLQB/ZSOLQA small so the matrix stays close to identity (LU stable);
-    # ZQX in [1e-5, 1e-2] for plausible mass-mixing ratios.
+    # ZFALLSINK in [0,1) + small ZSOLQB/ZSOLQA keep the matrix near-identity (LU
+    # stable); ZQX in [1e-5,1e-2] = plausible mass-mixing ratios.
     zfallsink = np.asfortranarray(rng.random((klon, nclv), dtype=np.float64))
     zsolqb = np.asfortranarray(rng.random((klon, nclv, nclv), dtype=np.float64) * 1e-2)
     zsolqa = np.asfortranarray(rng.random((klon, nclv, nclv), dtype=np.float64) * 1e-2)
@@ -426,10 +390,9 @@ def test_cloudsc_full_microphysics_solve_sdfg_matches_f2py(tmp_path: Path):
     zqlhs_sdfg = np.array(zqlhs_ref, order="F")
     zqxn_sdfg = np.array(zqxn_ref, order="F")
 
-    # f2py auto-derives klon/klev/nclv from array shapes; jk_idx stays
-    # a runtime arg (it's an INDEX into the JK dimension, not the bound).
-    # ZQXN is INTENT(OUT) so it's returned.  Positional order:
-    #   kidia, kfdia, ncldqv, jk_idx, zfallsink, zsolqa, zsolqb, zqx, zqlhs, zepsec
+    # jk_idx is a runtime INDEX (not the bound); klon/klev/nclv auto-derived.  ZQXN is
+    # INTENT(OUT) -> returned.  Positional: kidia, kfdia, ncldqv, jk_idx, zfallsink,
+    # zsolqa, zsolqb, zqx, zqlhs, zepsec
     zqxn_ref = ref.full_microphysics_solve(kidia, kfdia, ncldqv, jk_idx, zfallsink, zsolqa, zsolqb, zqx, zqlhs_ref,
                                            zepsec)
 
@@ -445,35 +408,26 @@ def test_cloudsc_full_microphysics_solve_sdfg_matches_f2py(tmp_path: Path):
                         dict(kidia=kidia, kfdia=kfdia, klon=klon, klev=klev, nclv=nclv, ncldqv=ncldqv, jk_idx=jk_idx)))
     sdfg(**kw)
 
-    # Strict ulp-level tolerance.  Values are <1, so 1 ulp is ~2e-16;
-    # at rtol=atol=1e-14 we catch ~50 ulps and above.  cloudsc_lu_solver
-    # uses 1e-10 because that test does many more sequential ops; for
-    # this bigger loopnest at smaller klon/nclv the bridge should match
-    # gfortran to within a few tens of ulps.
+    # ulp-level tolerance: values <1 so 1ulp~2e-16; 1e-14 catches ~50ulp+.
+    # cloudsc_lu_solver uses 1e-10 (many more sequential ops).
     np.testing.assert_allclose(zqlhs_sdfg, zqlhs_ref, atol=1e-14, rtol=1e-14)
     np.testing.assert_allclose(zqxn_sdfg, zqxn_ref, atol=1e-14, rtol=1e-14)
 
 
 def test_cloudsc_jk_precip_chain_sdfg_matches_f2py(tmp_path: Path):
-    """Multi-JK precip chain reproducer: vertical loop over JK=NCLDTOP..KLEV
-    that runs the suspect dataflow ZRHO -> ZFALLSINK -> ZPFPLSX -> ZQPRETOT
-    -> ZCOVPTOT with the line-3608 3-way multiply, the line-3614 NCLDQR+
-    NCLDQS sum, and the max-overlap ZCOVPTOT update.  Skips the LU solver
-    entirely (takes ZQXN and ZFALLSINK as inputs) so we can bisect the
-    JK-loop-carried portion of the cloudsc_full divergence chain from the
-    LU solver portion.
-
-    This is the first loopnest that exercises a multi-iteration JK loop
-    with loop-carried state.  Other loopnests in this file are single
-    iteration (KLON-only or KLON,NCLV-shaped).
+    """Multi-JK precip chain: JK=NCLDTOP..KLEV loop over ZRHO -> ZFALLSINK -> ZPFPLSX ->
+    ZQPRETOT -> ZCOVPTOT (line-3608 3-way multiply, line-3614 NCLDQR+NCLDQS sum,
+    max-overlap update).  Skips the LU solver (takes ZQXN + ZFALLSINK as inputs) to
+    bisect JK-loop-carried state from the LU-solver portion of cloudsc_full's
+    divergence.  First loopnest here with a multi-iteration loop-carried JK loop --
+    others are single-iteration.
     """
     src = (_HERE / "cloudsc_jk_precip_chain.f90").read_text()
     ref = _f2py_build(src, tmp_path / "ref", "jk_precip_ref")
     sdfg = _sdfg_from_src(src, tmp_path / "sdfg", name="jk_precip_chain")
 
     rng = np.random.default_rng(107)
-    # Match cloudsc_full's geometry so the bug-reproducing JK iteration
-    # count is the same.
+    # matches cloudsc_full's geometry so the bug-reproducing JK iteration count is the same.
     klon, klev, nclv = 1, 137, 5
     ncldqr, ncldqs = 3, 4
     ncldtop = 15
@@ -489,12 +443,10 @@ def test_cloudsc_jk_precip_chain_sdfg_matches_f2py(tmp_path: Path):
     ztp1 = np.asfortranarray(220.0 + 60.0 * rng.random((klon, klev), dtype=np.float64))
     za = np.asfortranarray(rng.random((klon, klev), dtype=np.float64))
 
-    # ZQXN / ZFALLSINK: mostly small, sometimes near zero -- to exercise
-    # the IF (ZQPRETOT < ZEPSEC) branch on both sides of the threshold.
+    # ZQXN/ZFALLSINK small, sometimes near zero -- exercises IF (ZQPRETOT < ZEPSEC) both sides.
     zqxn = np.asfortranarray(1e-7 * rng.random((klon, klev, nclv), dtype=np.float64))
     zfallsink_in = np.asfortranarray(0.5 + 0.4 * rng.random((klon, klev, nclv), dtype=np.float64))
 
-    # Outputs.
     zpfplsx_ref = np.zeros((klon, klev + 1, nclv), order="F")
     zqpretot_ref = np.zeros((klon, klev), order="F")
     zcovptot_ref = np.zeros((klon, klev), order="F")
@@ -502,8 +454,7 @@ def test_cloudsc_jk_precip_chain_sdfg_matches_f2py(tmp_path: Path):
     zqpretot_sdfg = np.zeros_like(zqpretot_ref, order="F")
     zcovptot_sdfg = np.zeros_like(zcovptot_ref, order="F")
 
-    # f2py positional (returns the 3 OUTs as a tuple).  klon/klev/nclv
-    # auto-derived from array shapes.
+    # f2py positional, returns the 3 OUTs as a tuple; klon/klev/nclv auto-derived.
     zpfplsx_ref, zqpretot_ref, zcovptot_ref = ref.jk_precip_chain(kidia, kfdia, ncldqr, ncldqs, ncldtop, pap, paph,
                                                                   ztp1, za, zqxn, zfallsink_in, rd, rg, ptsphy, zepsec)
 
@@ -533,27 +484,18 @@ def test_cloudsc_jk_precip_chain_sdfg_matches_f2py(tmp_path: Path):
                  ncldtop=ncldtop)))
     sdfg(**kw)
 
-    # Strict ulp-level tolerance.  If this passes, the multi-JK precip
-    # carry is bit-correct under the bridge; cloudsc_full's drift then
-    # has to be upstream (in the ZFALLSINK / ZQXN computation that feeds
-    # this chain).  If it fails, we've isolated the bug to the precip
-    # chain itself across JK iterations.
+    # ulp tolerance: if this passes, the JK precip carry is bit-correct and cloudsc_full's
+    # drift is upstream (ZFALLSINK/ZQXN); if it fails, the bug is in this chain.
     np.testing.assert_allclose(zpfplsx_sdfg, zpfplsx_ref, atol=1e-14, rtol=1e-14, err_msg="ZPFPLSX diverges")
     np.testing.assert_allclose(zqpretot_sdfg, zqpretot_ref, atol=1e-14, rtol=1e-14, err_msg="ZQPRETOT diverges")
     np.testing.assert_allclose(zcovptot_sdfg, zcovptot_ref, atol=1e-14, rtol=1e-14, err_msg="ZCOVPTOT diverges")
 
 
 def test_cloudsc_pow_kernel_sdfg_matches_f2py(tmp_path: Path):
-    """Minimal `x ** non_integer_exponent` reproducer for cloudsc 4.5a
-    rain evap.  CLOUDSC uses ``(RDENSREF / ZRHO) ** 0.4`` and similar
-    constructs that invoke libm pow().  If the bridge lowers this on a
-    different code path than gfortran (or C++ runtime pow has different
-    rounding than gfortran's libm pow), drift propagates through the
-    rain-evap chain.
-
-    Hypothesis: pow() with non-integer exponent does NOT produce bit-
-    exact results between gfortran (Fortran intrinsic) and DaCe-emitted
-    C++ (libm).  This test pins the magnitude of that drift on its own.
+    """Minimal ``x ** non_integer_exponent`` reproducer for cloudsc 4.5a rain evap
+    (``(RDENSREF/ZRHO) ** 0.4``-shaped).  Hypothesis: libm pow() with a non-integer
+    exponent isn't bit-exact between gfortran and DaCe-emitted C++; pins the magnitude
+    of that drift in isolation.
     """
     src = (_HERE / "cloudsc_pow_kernel.f90").read_text()
     ref = _f2py_build(src, tmp_path / "ref", "pow_kernel_ref")
@@ -578,20 +520,12 @@ def test_cloudsc_pow_kernel_sdfg_matches_f2py(tmp_path: Path):
 
 
 def test_cloudsc_zsolqa_accumulator_sdfg_matches_f2py(tmp_path: Path):
-    """Minimal `ZSOLQA = ZSOLQA + EVAP` accumulator reproducer.
-
-    In CLOUDSC 4.5a/4.5b dozens of statements have the form
-    ``ZSOLQA(JL, A, B) = ZSOLQA(JL, A, B) + expr``.  Hypothesis: the
-    bridge lowers this LHS=LHS+expr pattern as a Python ``+=`` tasklet
-    that DaCe turns into a WCR (write-conflict-resolution / atomic-add)
-    edge instead of an explicit read+add+write.  WCR may accumulate in
-    non-deterministic order vs gfortran's strict left-to-right,
-    producing ulp-level drift.
-
-    If this fails at rtol=atol=1e-14, the WCR-vs-RMW hypothesis is
-    confirmed.  Fix: emit explicit read+tasklet+write for any
-    ``A(i,j) = A(i,j) + expr`` pattern with a single producer (no
-    contention to resolve).
+    """Minimal ``ZSOLQA = ZSOLQA + EVAP`` accumulator reproducer (CLOUDSC 4.5a/4.5b's
+    ``A(i,j) = A(i,j) + expr`` pattern, dozens of occurrences).  Hypothesis: the bridge
+    lowers this as a WCR (atomic-add) edge instead of explicit read+add+write, so
+    accumulation order can drift from gfortran's strict left-to-right.  Failure at
+    rtol=atol=1e-14 confirms WCR-vs-RMW; fix is explicit read+tasklet+write for
+    single-producer accumulation.
     """
     src = (_HERE / "cloudsc_zsolqa_accumulator.f90").read_text()
     ref = _f2py_build(src, tmp_path / "ref", "zsolqa_accum_ref")
@@ -629,14 +563,10 @@ def test_cloudsc_zsolqa_accumulator_sdfg_matches_f2py(tmp_path: Path):
 
 
 def test_cloudsc_int_pow_kernel_sdfg_matches_f2py(tmp_path: Path):
-    """Tests integer-exponent power: y2(i) = x(i)**2, y3(i) = x(i)**3.
-
-    The cloudsc 4.5b SNOW evap section has ``ZTP1**2`` and ``ZTP1**3``
-    appearances.  Bridge may lower as repeated multiply, libm pow(d, d),
-    libm pow(d, i), or ipow().  gfortran's intrinsic almost certainly
-    uses repeated multiply for small integer exponents.  If the bridge
-    picks a different lowering, even ``-O0 -fno-fast-math`` cannot save
-    us -- different code paths give different rounding.
+    """Integer-exponent power: y2=x**2, y3=x**3 (cloudsc 4.5b SNOW evap's
+    ``ZTP1**2``/``ZTP1**3``).  Bridge may lower as repeated-multiply, libm pow(d,d/i), or
+    ipow() -- a lowering mismatch vs gfortran's intrinsic gives different rounding even
+    under ``-O0 -fno-fast-math``.
     """
     src = (_HERE / "cloudsc_int_pow.f90").read_text()
     ref = _f2py_build(src, tmp_path / "ref", "int_pow_ref")
@@ -658,11 +588,8 @@ def test_cloudsc_int_pow_kernel_sdfg_matches_f2py(tmp_path: Path):
 
 
 def test_cloudsc_zterm2_kernel_sdfg_matches_f2py(tmp_path: Path):
-    """Verbatim extract of cloudsc.F90 line 3304 ZTERM2 expression
-    (4.5b SNOW evap, IEVAPSNOW=1).  Bare-default-real literals
-    ``0.65``, ``0.5`` interact with runtime-variable powers
-    ``ZPR02**RCL_CONST4S``.  If this fails, the bridge's lowering of
-    this exact compound pattern diverges from gfortran's.
+    """Verbatim cloudsc.F90 line 3304 ZTERM2 (4.5b SNOW evap, IEVAPSNOW=1): bare-default-real
+    literals ``0.65``/``0.5`` combined with runtime power ``ZPR02**RCL_CONST4S``.
     """
     src = (_HERE / "cloudsc_zterm2_kernel.f90").read_text()
     ref = _f2py_build(src, tmp_path / "ref", "zterm2_ref")
@@ -757,9 +684,8 @@ def test_cloudsc_zbeta_kernel_sdfg_matches_f2py(tmp_path: Path):
 
 
 def test_cloudsc_zaplusb_kernel_sdfg_matches_f2py(tmp_path: Path):
-    """Verbatim extract of cloudsc.F90 line 3295 ZAPLUSB expression
-    (4.5b SNOW evap).  ``ZTP1**3`` integer-exponent + 3-term FMA-chain
-    arithmetic.  ``RCL_APB1*ZVPICE - RCL_APB2*ZVPICE*ZTP1 +
+    """Verbatim cloudsc.F90 line 3295 ZAPLUSB (4.5b SNOW evap): ``ZTP1**3`` integer
+    exponent + 3-term FMA-chain ``RCL_APB1*ZVPICE - RCL_APB2*ZVPICE*ZTP1 +
     PAP*RCL_APB3*ZTP1**3``.
     """
     src = (_HERE / "cloudsc_zterm2_kernel.f90").read_text()

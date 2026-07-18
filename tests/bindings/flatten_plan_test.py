@@ -78,8 +78,7 @@ def test_substitute_indices_replaces_placeholders():
 
 
 def test_substitute_indices_with_rename():
-    """Index names are a tuple  --  the emitter could use ``k1``, ``k2``
-    for some reason."""
+    """Index names are an arbitrary tuple, e.g. ``k1``, ``k2`` instead of ``i1``, ``i2``."""
     out = substitute_indices("real(st%z($i1,$i2), kind=c_double)", ("k1", "k2"))
     assert out == "real(st%z(k1,k2), kind=c_double)"
 

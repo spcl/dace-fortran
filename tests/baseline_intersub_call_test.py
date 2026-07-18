@@ -1,8 +1,4 @@
-"""Baseline HLFIR coverage  --  inter-subroutine calls (caller->callee
-inlining) and ``OPTIONAL`` scalar dummies with ``PRESENT()`` companion.
-Pulled out of the original ``ported_from_f2dace_windmill_test.py``
-per-feature split.
-"""
+"""Baseline HLFIR coverage: inter-subroutine calls (caller->callee inlining) and OPTIONAL scalar dummies with PRESENT().  Split out of ``ported_from_f2dace_windmill_test.py``."""
 
 from pathlib import Path
 
@@ -20,9 +16,7 @@ def _build(src: str, tmp: Path, name: str, entry: str | None = None, pipeline: s
 
 
 def test_intersub_call(tmp_path):
-    """Two subroutines in one file, outer calls inner  --  exercises
-    ``hlfir-inline-all`` writeback.  f2py wraps every subroutine in
-    the file; we pick ``outer``."""
+    """Two subroutines, outer calls inner -- exercises hlfir-inline-all writeback; f2py wraps every subroutine, we pick outer."""
     src = """
 subroutine inner(d)
   implicit none
@@ -38,9 +32,7 @@ subroutine outer(d)
 end subroutine outer
 """
     mod = f2py_compile(src, tmp_path / "ref", "outer_mod")
-    # DEFAULT pipeline (pipeline=None) so hlfir-inline-all runs --
-    # required under the explicit-entry contract: privatised callees
-    # must be inlined before symbol-dce drops them.
+    # default pipeline (hlfir-inline-all runs) -- required so privatised callees inline before symbol-dce drops them.
     sdfg = _build(src, tmp_path / "sdfg", name="outer", entry="outer", pipeline=None)
 
     d_ref = np.zeros(4, order="F")
@@ -51,10 +43,7 @@ end subroutine outer
 
 
 def test_optional_arg(tmp_path):
-    """``PRESENT()`` on a scalar OPTIONAL resolves to a companion
-    ``<name>_present`` symbol on the SDFG ABI.  Caller passes the
-    flag alongside the dummy: non-zero = present, zero = absent.
-    Covers both branches of the Fortran ``if present()``."""
+    """PRESENT() on a scalar OPTIONAL resolves to a companion ``<name>_present`` ABI symbol (non-zero=present); covers both if-present() branches."""
     src = """
 subroutine opt_sum(res, a)
   implicit none
@@ -70,19 +59,14 @@ end subroutine opt_sum
     mod = f2py_compile(src, tmp_path / "ref", "opt_sum")
     sdfg = _build(src, tmp_path / "sdfg", name="opt_sum")
 
-    # Present branch: caller supplies a and sets a_present=1.  Per
-    # the Scalar I/O convention an OPTIONAL scalar dummy lands as a
-    # plain Scalar on the SDFG signature.
+    # present branch: caller supplies a and sets a_present=1 (OPTIONAL scalar dummy lands as a plain Scalar on the SDFG signature).
     r_ref = np.zeros(2, order="F", dtype=np.int32)
     mod.opt_sum(r_ref, 5)
     r_sdfg = np.zeros(2, dtype=np.int32)
     sdfg(res=r_sdfg, a=5, a_present=1)
     np.testing.assert_array_equal(r_sdfg, r_ref)
 
-    # Absent branch: reference call omits the argument entirely; SDFG
-    # caller passes any placeholder value for ``a`` and sets the flag
-    # to zero.  Fortran guarantees the callee doesn't read ``a`` in
-    # that branch, so the placeholder's value is immaterial.
+    # absent branch: reference omits the argument; SDFG passes a placeholder for a and a_present=0 (callee never reads a here).
     r_ref_absent = np.zeros(2, order="F", dtype=np.int32)
     mod.opt_sum(r_ref_absent)
     r_sdfg_absent = np.zeros(2, dtype=np.int32)

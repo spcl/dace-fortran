@@ -1,32 +1,5 @@
-"""End-to-end LOGICAL -> logical(c_bool) bridge tests.
-
-The bindings emitter in ``dace_fortran/bindings/block_builders.py``
-generates a ``logical(c_bool), allocatable, target`` scratch buffer and
-an intrinsic-cast copy-in / copy-out bridge whenever an outer Fortran
-LOGICAL argument doesn't already match the SDFG's ``bool *`` ABI.
-``tests/hlfir/bindings/emit_bindings_test.py`` covers the string-match
-"the generated text looks right" surface for every ``LOGICAL(KIND=N)``
-flavor (1, 2, 4, 8, default, c_bool).
-
-Per ``feedback_e2e_valid_fortran``, **any test whose input is a valid
-Fortran program must compile-and-run**, not just string-match.  These
-tests close that gap: they build the SDFG, emit the wrapper, compile
-the wrapper + a Fortran driver via gfortran, link to the SDFG ``.so``,
-load the resulting Python extension via ``f2py``, and assert numerical
-round-trip correctness against an f2py reference of the same source.
-
-Test matrix:
-    * rank-1 LOGICAL (default kind)            -- ``test_e2e_rank1_default``
-    * rank-2 LOGICAL (default kind)            -- ``test_e2e_rank2_default``
-    * rank-3 LOGICAL (default kind)            -- ``test_e2e_rank3_default``
-    * LOGICAL(KIND=1) rank-1                   -- ``test_e2e_rank1_kind1``
-    * LOGICAL(KIND=4) rank-1                   -- ``test_e2e_rank1_kind4``
-    * LOGICAL(KIND=8) rank-1                   -- ``test_e2e_rank1_kind8``
-    * logical(c_bool) rank-1 (pass-through)    -- ``test_e2e_rank1_cbool``
-    * scalar LOGICAL (LDMAINCALL pattern)      -- ``test_e2e_scalar``
-
-E2e against an f2py-compiled reference of the same Fortran source.
-"""
+"""E2e LOGICAL -> logical(c_bool) bridge tests (build+compile+run, vs emit_bindings_test.py's string-match coverage).
+Covers rank-1/2/3 default LOGICAL, LOGICAL(KIND=1/4/8), c_bool pass-through, and scalar LOGICAL."""
 
 import ctypes
 import shutil
@@ -53,10 +26,7 @@ pytestmark = [
 
 
 def _module_wrap(free_subroutine_src: str, module_name: str) -> str:
-    """Wrap a free ``SUBROUTINE`` source in ``module <module_name>`` so the
-    SDFG build can address it via the ``module::proc`` entry spelling.  The
-    f2py reference path keeps using the *unwrapped* free-subroutine string,
-    so the top-level ``ref.<proc>`` accessor stays intact."""
+    """Wraps a free SUBROUTINE in a module so the SDFG build can use `module::proc` entry spelling; f2py ref path keeps the unwrapped source."""
     return f"module {module_name}\ncontains\n{free_subroutine_src}\nend module {module_name}\n"
 
 
@@ -70,28 +40,12 @@ def _build_e2e_module(
     driver_src: str,
     module_name: str,
 ):
-    """Drive the full pipeline for one LOGICAL-binding e2e test:
-
-    1. Build the SDFG via the HLFIR bridge.
-    2. Recover the ``FrozenSignature`` attached by the builder.
-    3. Synthesise the ``OriginalInterface`` (caller-visible Fortran
-       declarations) and an empty ``FlattenPlan`` (no struct flattening).
-    4. ``emit_bindings`` -> ``<name>_bindings.f90``.
-    5. f2py-compile the bindings + the Fortran driver into a Python
-       extension, linking to the SDFG ``.so``.
-    6. Return the loaded extension module and the f2py reference module.
-    """
+    """Build SDFG -> emit bindings -> f2py-compile bindings+driver linked to the SDFG .so; returns the loaded extension module."""
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(kernel_src, sdfg_dir, name=name, entry=entry).build()
-    # DaCe's cache key mangles the SDFG name with the test invocation
-    # path (e.g. ``flip_mask`` -> ``flip_mask_logical_bindings_e2e_e2e_rank1_default``).
-    # That suffixed name is what ends up in the ``.so``'s exported symbol
-    # table -- the FrozenSignature still carries the original name, so
-    # the bindings would emit ``bind(c, name='__program_flip_mask')``
-    # which doesn't exist in the cached library.  Force the SDFG's name
-    # back to a stable value before compile so the symbols match the
-    # bind(c) names the bindings emit.
+    # DaCe mangles the cache-key SDFG name with the test path; force it back so bind(c) symbol
+    # names in the .so match what the bindings emit.
     sdfg.name = name
     compiled = sdfg.compile()
     so_path = Path(compiled._lib._library_filename)
@@ -100,23 +54,15 @@ def _build_e2e_module(
     bindings_path = tmp_path / f"{name}_bindings.f90"
     emit_bindings(fs, iface, FlattenPlan(entries=()), str(bindings_path))
 
-    # Driver + bindings -> Python extension via f2py.  Link the SDFG
-    # shared library so the bindings' ``bind(c)`` interface resolves
-    # at load time.
+    # Driver + bindings -> Python extension via f2py; link the SDFG .so so bind(c) resolves at load time.
     driver_path = tmp_path / f"{name}_driver.f90"
     driver_path.write_text(driver_src)
 
     build_dir = tmp_path / "build"
     build_dir.mkdir(parents=True, exist_ok=True)
-    # f2py's meson backend rejects ``-Wl,...`` flags and treats every
-    # positional arg as a source.  Two-step build:
-    #   1) ``ctypes.CDLL(so_path, RTLD_GLOBAL)`` pre-loads the SDFG
-    #      so its ``__program_*`` / ``__dace_init/exit_*`` symbols are
-    #      visible to subsequent loads.
-    #   2) Compile the bindings + driver with ``--f90flags='-shared'``
-    #      and ``-Wl,--unresolved-symbols=ignore-all`` so the linker
-    #      lets the SDFG entry points stay undefined until runtime,
-    #      where RTLD_GLOBAL satisfies them.
+    # f2py's meson backend rejects -Wl flags; workaround: CDLL(RTLD_GLOBAL)-preload the SDFG so its
+    # symbols are visible, then compile with --unresolved-symbols=ignore-all so the linker allows
+    # them to stay undefined until runtime.
     ctypes.CDLL(str(so_path), mode=ctypes.RTLD_GLOBAL)
     cmd = [
         sys.executable,
@@ -139,8 +85,7 @@ def _build_e2e_module(
 
 
 def _f2py_ref(tmp_path: Path, src: str, name: str):
-    """Build a plain f2py reference module from the same Fortran source.
-    No bridge involvement -- this is the gfortran-built ground truth."""
+    """Plain f2py reference module (no bridge) -- gfortran-built ground truth."""
     from _helpers import f2py
     return f2py(src, tmp_path / "ref", name)
 
@@ -181,13 +126,7 @@ end module flip_mask_driver
 
 
 def test_e2e_rank1_default(tmp_path: Path):
-    """``LOGICAL, intent(in) :: mask(n)`` -- default kind, rank 1.
-
-    Exercises the c_bool bridge end-to-end with alternating True/False
-    values.  Caller-side default LOGICAL is 4 bytes per gfortran
-    convention; the wrapper's intrinsic-cast bridge has to widen the
-    np.bool_ input out into the 4-byte default LOGICAL the kernel sees.
-    Output uses ``integer`` so f2py can return it cleanly."""
+    """LOGICAL, intent(in) :: mask(n) -- default kind rank 1; c_bool bridge widens np.bool_ to 4-byte default LOGICAL."""
     outer = (
         OriginalArg(name="mask", fortran_type="logical", rank=1, shape=("n", ), intent="in"),
         OriginalArg(name="out", fortran_type="integer(c_int)", rank=1, shape=("n", ), intent="out"),
@@ -206,8 +145,7 @@ def test_e2e_rank1_default(tmp_path: Path):
 
     mask_in = np.array([True, False, True, False, True, False, True, False], dtype=np.bool_)
     out_ref = ref.flip_mask(mask_in)
-    # f2py converts ``intent(out)`` whose shape is derivable into a
-    # return value -- ``run`` returns ``out`` directly.
+    # f2py auto-derives intent(out) shape into a return value -- run() returns out directly.
     out = mod.flip_mask_driver.run(mask_in)
     mod.flip_mask_dace_bindings.flip_mask_dace_finalize()
     np.testing.assert_array_equal(out, out_ref)
@@ -387,9 +325,7 @@ end module flip_kind{kind}_driver
 
 @pytest.mark.parametrize("kind", [1, 4, 8])
 def test_e2e_rank1_logical_kind(tmp_path: Path, kind: int):
-    """LOGICAL(KIND=N) rank-1 round-trip for each ABI-relevant kind.
-    Kind 1 = 1 byte (matches c_bool size), kind 4 = default (4 bytes),
-    kind 8 = 8 bytes.  All three must bridge through the c_bool scratch."""
+    """LOGICAL(KIND=1/4/8) rank-1 round-trip -- kind 1 matches c_bool size; all three bridge through the c_bool scratch."""
     src = _kind_kernel(kind)
     outer = (
         OriginalArg(name="mask", fortran_type=f"logical(kind={kind})", rank=1, shape=("n", ), intent="in"),
@@ -457,15 +393,9 @@ end subroutine run_cbool_passthrough
 
 
 def test_e2e_rank1_cbool_passthrough(tmp_path: Path):
-    """``logical(c_bool)`` matches the SDFG ABI -- the wrapper must
-    pass the outer array straight through, no scratch allocation, no
-    intrinsic-cast bridge.
-
-    f2py's C wrapper generator can't parse ``logical(c_bool)`` (emits
-    ``unsigned_char`` with an underscore that gcc rejects).  We dodge
-    f2py entirely: gfortran-compile the bindings + a C-bound driver
-    into a single shared library, load it with ctypes, call directly.
-    """
+    """logical(c_bool) matches the SDFG ABI -- pass-through, no scratch/cast bridge. f2py can't parse
+    logical(c_bool) (emits an invalid `unsigned_char` cast), so this gfortran-compiles bindings+driver
+    into one .so and calls via ctypes."""
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(_module_wrap(_CBOOL_KERNEL, "flip_cbool_mod"),
@@ -489,11 +419,7 @@ def test_e2e_rank1_cbool_passthrough(tmp_path: Path):
     driver_path = tmp_path / "flip_cbool_driver.f90"
     driver_path.write_text(_CBOOL_DRIVER)
 
-    # gfortran-compile bindings + driver into a single .so linked to
-    # the SDFG library.  This bypasses f2py's logical(c_bool) parser
-    # limitation entirely.  ``cwd=tmp_path`` keeps gfortran from
-    # picking up any stale ``iso_c_binding.mod`` a prior flang
-    # invocation left in the repo root.
+    # cwd=tmp_path avoids picking up a stale iso_c_binding.mod left by a prior flang run in the repo root.
     driver_so = tmp_path / "flip_cbool_driver.so"
     subprocess.check_call([
         "gfortran",
@@ -562,10 +488,7 @@ end module scalar_flag_driver
 
 
 def test_e2e_scalar_logical(tmp_path: Path):
-    """Scalar LOGICAL ``intent(in)`` -- the cloudsc LDMAINCALL / LDSLPHY
-    pattern.  The bindings emitter currently passes a length-1 c_bool
-    pointer to the SDFG; this test runs the full Fortran-driver path
-    end-to-end."""
+    """Scalar LOGICAL intent(in) -- cloudsc LDMAINCALL/LDSLPHY pattern; bindings emitter passes a length-1 c_bool pointer to the SDFG."""
     outer = (
         OriginalArg(name="flag", fortran_type="logical", rank=0, intent="in"),
         OriginalArg(name="out", fortran_type="integer(c_int)", rank=1, shape=("n", ), intent="out"),

@@ -1,27 +1,13 @@
 """Compound jagged + AoR + double-buffer probes.
 
-Per user request: 'We should add more jagged array of records, also let's
-have a jagged array of records inside a struct array that is used as
-double buffering'.
+Builds up from a plain Array-of-Records-of-jagged-members to the full ICON-dycore-style
+shape: a struct array state(:) whose elements are structs with heterogeneous-extent (jagged)
+array members, accessed through stable double-buffer symbols (nnow/nnew toggle).
 
-This file builds up from a plain Array-of-Records-of-jagged-members to
-the full ICON-dycore-style shape: a struct array
-``state(:)`` where each element is a struct whose MEMBERS are
-heterogeneous-extent arrays (jagged), and ``state`` itself is accessed
-through stable double-buffer index symbols (``nnow`` / ``nnew``
-toggle).
-
-Coverage:
-
-  L_A  Jagged-AoR (records whose members have different extents,
-       packed into one 2-D companion per record)
-  L_B  Same shape with multi-record indexing (runtime + const)
-  L_C  Jagged-AoR inside double-buffer accessed AoR struct
-  L_D  Compound: jagged + AoR + double-buffer (ICON dycore prog
-       struct shape)
-
-Each probe verifies the SDFG builds and (where deterministic) compares
-output element-wise.
+Coverage: L_A jagged-AoR (heterogeneous-extent members packed into a 2-D per-record
+companion). L_B same shape, runtime + const multi-record indexing. L_C jagged-AoR inside a
+double-buffer-accessed AoR struct. L_D compound: jagged + AoR + double-buffer (ICON dycore
+prog struct shape).
 """
 import numpy as np
 import pytest
@@ -36,13 +22,8 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_jagged_aor_basic(tmp_path):
-    """``type :: t; a(3); b(5); c(7); end type; type(t) :: arr(2)``.
-    Each record is a jagged scalar-struct.  The bridge has two valid
-    flatten outcomes:
-      (1) Per-record + per-member: ``arr_a`` of shape (N, 3),
-          ``arr_b`` of (N, 5), ``arr_c`` of (N, 7).
-      (2) AoR-then-jagged packing (less common).
-    Either way, accessing ``arr(i) % a(j)`` must work."""
+    """type :: t; a(3); b(5); c(7); end type; type(t) :: arr(2) -- each record jagged. Bridge may
+    flatten per-record+per-member (arr_a/arr_b/arr_c) or AoR-then-jagged; either way arr(i)%a(j) must work."""
     src = """
 module m
   type :: t
@@ -61,8 +42,7 @@ end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     arrs = sdfg.arrays
-    # At minimum the bridge should not emit the unflattened struct
-    # base ``arr``; it should produce per-field companions.
+    # Bridge must not emit the unflattened struct base arr -- only per-field companions.
     assert "arr" not in arrs, f"struct base leaked: {sorted(arrs.keys())}"
     has_per_member = ("arr_a" in arrs and "arr_b" in arrs and "arr_c" in arrs)
     assert has_per_member, f"expected per-member flatten: {sorted(arrs.keys())}"
@@ -100,9 +80,8 @@ end module
 
 
 def test_jagged_aor_in_double_buffered_struct(tmp_path):
-    """ICON dycore shape: a top-level struct array indexed by stable
-    double-buffer symbols, with EACH element being a struct whose
-    members are themselves arrays of records (jagged inner)."""
+    """ICON dycore shape: top-level struct array indexed by double-buffer symbols, where each
+    element is itself a struct with jagged array-of-records members."""
     src = """
 module m
   type :: inner_t
@@ -122,8 +101,7 @@ contains
 end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
-    # Double-buffer split should mint per-symbol companions, each
-    # with the inner jagged + AoR flatten.
+    # Double-buffer split should mint per-symbol companions with the inner jagged+AoR flatten.
     arrs = sdfg.arrays
     has_buffer_split = any("nnow" in k for k in arrs) and any("nnew" in k for k in arrs)
     assert has_buffer_split, f"expected nnow/nnew companions: {sorted(arrs.keys())}"
@@ -135,10 +113,7 @@ end module
 
 
 def test_double_buffer_member_inside_outer_struct(tmp_path):
-    """Pattern ``p % prog(nnow) % w(1)`` -- double-buffered ``prog``
-    is a POINTER AoR member inside an outer struct ``p``.  Per user
-    request: 'Add support for pattern where the double-buffer member
-    is inside a struct like p%'."""
+    """p % prog(nnow) % w(1) -- double-buffered prog is a POINTER AoR member inside outer struct p."""
     src = """
 module m
   type :: prog_t
@@ -158,15 +133,12 @@ end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
     arrs = sdfg.arrays
-    # Both buffer companions should be present.
     has_buf_split = any("nnow" in k for k in arrs) and any("nnew" in k for k in arrs)
     assert has_buf_split, f"expected nnow/nnew companions: {sorted(arrs.keys())}"
 
 
 def test_double_buffer_member_nested_two_levels(tmp_path):
-    """Pattern ``p % w % s(nnow)`` -- double-buffered ``s`` is two
-    levels deep (``p`` -> ``w`` -> ``s``).  Per user request: 'also
-    like p%w%s(nnow)'."""
+    """p % w % s(nnow) -- double-buffered s is two levels deep (p -> w -> s)."""
     src = """
 module m
   type :: s_t
@@ -216,8 +188,7 @@ contains
 end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="driver", entry="m::driver").build()
-    # Should mint per-symbol companions for the double-buffer split,
-    # each with the inner jagged AoR fully flattened.
+    # Mints per-symbol companions for the double-buffer split, each fully jagged-AoR flattened.
     arrs = sdfg.arrays
     has_buffer_split = any("nnow" in k for k in arrs) and any("nnew" in k for k in arrs)
     assert has_buffer_split, f"expected nnow/nnew companions: {sorted(arrs.keys())}"

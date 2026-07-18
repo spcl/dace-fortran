@@ -1,23 +1,14 @@
-"""Bit-exact standalone single-rank differential for the ICON-O free-surface
-solver ``solve_free_sfc_ab_mimetic`` (Mode-1 external halo).
+"""Bit-exact single-rank differential for ICON-O ``solve_free_sfc_ab_mimetic``
+(Mode-1 external halo), the numerical counterpart to ``test_extract_single_tu``.
 
-The numerical counterpart to the ``test_extract_single_tu`` extraction gate: the
-free-surface surface-pressure solver driver lowers to an SDFG, is driven on a
-degenerate valid single-rank mesh, and its every mutable output is compared
-BIT-EXACT (max diff exactly 0.0, no tolerance) against the stock gfortran
-``solve_free_sfc_ab_mimetic`` on the same inputs -- the same ``run_kernel_e2e``
-engine that pins the ocean block kernels (``test_ocean_kernel_numerical_e2e``),
-scaled to the full dynamical-core driver.
-
-The external halo policy (``sync_patch_array`` / ``exchange_data`` / the
-``p_*`` collectives / MPI comm-pattern init / terminal IO+timers / the debug
-``dbg_print`` / ``minmaxmean`` reporters) is dropped from the DUT SDFG
-(``do_not_emit``) and made a no-op in the reference (the halo's ``mpi_*`` leaves
-resolve to :data:`icon._halo_modes._MPI_NOOP_IMPL`); single-rank halo exchange
-is a no-op (no neighbours), so both runs read identical state.  ``inject_use_mpi``
-gives the inlined ``mo_mpi`` a ``use mpi`` so its dual-typed real*8/real*4
-point-to-point calls resolve through the stub's one ``type(*)`` assumed-type
-interface (no ``-fallow-argument-mismatch``).
+Driver lowers to an SDFG, runs on a degenerate single-rank mesh, and every
+mutable output must match stock gfortran EXACTLY (max diff 0.0) via the same
+``run_kernel_e2e`` engine as the ocean block-kernel tests. Halo/collectives/
+IO/timers/debug reporters are dropped from the DUT (``do_not_emit``) and
+no-op'd in the reference (single-rank halo exchange has no neighbours anyway,
+so both sides read identical state). ``inject_use_mpi`` lets the inlined
+``mo_mpi``'s dual-typed real*8/real*4 calls resolve through the stub's
+``type(*)`` assumed-type interface.
 
 ``@pytest.mark.long``: builds the full driver to an SDFG (minutes).
 """
@@ -42,10 +33,8 @@ _HERE = Path(__file__).resolve().parent
 _TU = _HERE / "solve_free_sfc_single_tu.f90"
 _ENTRY = "mo_ocean_ab_timestepping_mimetic::solve_free_sfc_ab_mimetic"
 
-# Halo / sync / collectives / comm-pattern init / IO+timers / debug reporters
-# dropped from the DUT SDFG so no MPI survives single-rank and both sides read
-# identical state.  Mirrors the atmosphere ``solve_nh`` set plus the ocean
-# ``dbg_print_2d`` / ``dbg_print_3d`` / ``minmaxmean`` debug reporters.
+# Halo/sync/collectives/comm-pattern-init/IO+timers/debug reporters dropped so
+# no MPI survives single-rank. Mirrors atmosphere solve_nh's set + ocean's dbg_print_2d/3d/minmaxmean.
 _DO_NOT_EMIT = [
     "sync_patch_array",
     "sync_patch_array_mult",
@@ -94,14 +83,9 @@ _DO_NOT_EMIT = [
                    "starts passing so the marker is removed.")
 @pytest.mark.xdist_group("ocean_fparser")
 def test_solve_free_sfc_numerical_e2e(tmp_path: Path):
-    """solve_free_sfc -> SDFG, driven on a degenerate valid mesh, BIT-EXACT
-    against stock gfortran (halo neutralised on both sides).
-
-    NOTE: seeds below are a first attempt -- the free-surface driver reads patch
-    geometry (nproma / n_zlev / subset-range block bounds) as module globals /
-    struct members; tune ``module_seeds`` + ``array_overrides`` during bit-exact
-    bring-up from the harness's reported binding signature.
-    """
+    """solve_free_sfc -> SDFG, driven on a degenerate valid mesh, BIT-EXACT against
+    stock gfortran (halo neutralised both sides). NOTE: seeds are a first attempt --
+    tune module_seeds/array_overrides during bit-exact bring-up."""
     stub = tmp_path / "_mpi_stub.f90"
     stub.write_text(_MPI_STUB)
     noop = tmp_path / "_mpi_noop_impl.f90"
@@ -114,10 +98,9 @@ def test_solve_free_sfc_numerical_e2e(tmp_path: Path):
         module_seeds={
             "nproma": 8,
             "n_zlev": 7,
-            # Time-level indices (mo_dynamics_config, static INTEGER(10), BSS 0 in
-            # isolation) + single-domain index (mo_grid_config::n_dom): drive
-            # p_prog(nold(1))/p_prog(nnew(1)) and p_patch_2d(n_dom) to valid
-            # elements. Without these p_prog(0)/p_patch_2d(0) OOB-crash the run.
+            # nold/nnew (time-level indices) + n_dom (domain index) drive
+            # p_prog(nold(1))/p_patch_2d(n_dom) to valid elements -- without them
+            # p_prog(0)/p_patch_2d(0) OOB-crash the run.
             "nold": 1,
             "nnew": 1,
             "n_dom": 1,
@@ -125,13 +108,10 @@ def test_solve_free_sfc_numerical_e2e(tmp_path: Path):
         do_not_emit=_DO_NOT_EMIT,
         prelude_paths=[stub, noop],
         inject_use_mpi=True,
-        # The single-TU extraction stubs the ocean-solver allocator
-        # (``ocean_solve_construct`` -> empty body), so the stock reference leaves
-        # ``free_sfc_solver % x_loc_wp`` (+ its ``_comp`` twin, ``res_loc_wp``)
-        # unallocated and SEGVs on the firstguess write.  The DUT gets this scratch
-        # from the SDFG marshalling layer; the reference shim must build it.  Shape
-        # mirrors ICON's ``x_loc_wp(nidx=nproma, nblk_a=alloc_cell_blocks)`` /
-        # ``res_loc_wp(2)``; it is fully overwritten (or zero-init here) before read.
+        # single-TU extraction stubs ocean_solve_construct -> empty body, so the
+        # stock reference leaves free_sfc_solver%x_loc_wp/res_loc_wp unallocated and
+        # SEGVs; the DUT gets this scratch from SDFG marshalling, so the reference
+        # shim must build it here (shape mirrors ICON's x_loc_wp(nproma,alloc_cell_blocks)/res_loc_wp(2)).
         ref_solver_allocs=[
             ["free_sfc_solver", "x_loc_wp", "nproma__refmod, patch_3d % p_patch_2d(1) % alloc_cell_blocks"],
             ["free_sfc_solver", "res_loc_wp", "2"],

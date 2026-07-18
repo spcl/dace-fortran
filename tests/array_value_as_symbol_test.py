@@ -1,18 +1,7 @@
-"""An array *element value* used as a data-access dimension becomes an SDFG
-symbol -- but must not collide with the array it is read from, and the array
-must stay constant in the symbol's scope.
-
-Minimal reproducer for the pattern ICON's dynamical core hits via
-``z_raylfac(nrdmax(jg))`` (``mo_solve_nonhydro``): a local array whose extent is
-a runtime-indexed element of another array.  Here ``work(sizes(sel))`` sizes the
-automatic array ``work`` by the value ``sizes(sel)``.
-
-The bridge mints a distinct symbol ``__sym_<array>_<index>`` (seeded from the
-element read), so ``sizes`` stays a data descriptor and ``__sym_sizes_sel`` is
-the dimension symbol.  Because the symbol freezes a single element value, the
-builder also asserts the backing array is not written in the symbol's scope (a
-write would leave the symbol holding a stale value).
-"""
+"""An array *element value* used as a data-access dimension becomes an SDFG symbol
+(``__sym_<array>_<index>``) distinct from the array itself; the backing array must
+stay constant in the symbol's scope or the build is refused.  Reproduces ICON's
+``z_raylfac(nrdmax(jg))`` pattern (``mo_solve_nonhydro``)."""
 import shutil
 from pathlib import Path
 
@@ -50,10 +39,8 @@ end module array_value_as_dim_mod
 
 
 def test_array_value_as_dimension_symbol(tmp_path: Path):
-    """``work(sizes(sel))`` -- a runtime-indexed array element as an automatic
-    array's extent.  The extent becomes a mangled symbol ``__sym_sizes_sel``
-    (distinct from the ``sizes`` data descriptor), seeded from ``sizes(sel)``;
-    the result matches the reference computation."""
+    """``work(sizes(sel))`` extent becomes symbol ``__sym_sizes_sel`` (distinct from
+    the ``sizes`` array); result matches the reference computation."""
     sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="avd", entry="array_value_as_dim_mod::array_value_as_dim").build()
     assert "sizes" in sdfg.arrays  # the array stays a data descriptor
     assert "sizes" not in sdfg.symbols, "array name leaked in as a symbol"
@@ -99,9 +86,8 @@ end module array_value_written_mod
 
 
 def test_value_symbol_backing_array_write_refused(tmp_path: Path):
-    """When the array a value-symbol froze (``sizes``) is written in the kernel,
-    the symbol could hold a stale value, so the constancy hook refuses the
-    build with a clear error."""
+    """Writing the array a value-symbol froze (``sizes``) would make the symbol
+    stale; the constancy hook refuses the build."""
     with pytest.raises(ValueError, match=r"constant within the scope|stale value"):
         build_sdfg(_SRC_WRITTEN, tmp_path / "sdfg", name="avw",
                    entry="array_value_written_mod::array_value_written").build()

@@ -1,22 +1,13 @@
-"""Unit coverage for the ``hlfir-strip-error-helpers`` pass.
+"""Unit coverage for the ``hlfir-strip-error-helpers`` pass: deletes every ``CALL`` to
+a known abort-style error helper (``errore``, ``finish``, ``abor1``, ``upf_error``,
+``radiation_abort``, ``dwarning``).  Those helpers share ``IF (ierr<=0) RETURN`` +
+``WRITE`` + ``STOP 1``, which ``lift-cf-to-scf`` can't structurize (``STOP`` is
+noreturn) -- inlining the multi-block callee crashes flang's ``mlir::inlineCall``.
+Deleting the call sites sidesteps the crash; matches the bridge's numerical-equivalence
+contract (no-error path modeled, error path dead code at test time).
 
-The pass deletes every ``CALL`` to a known abort-style error helper
-(``errore``, ``finish``, ``abor1``, ``upf_error``, ``radiation_abort``,
-``dwarning``).  Those helpers all share the same shape:
-``IF (ierr <= 0) RETURN`` + diagnostic ``WRITE`` + ``STOP 1``, which
-``lift-cf-to-scf`` cannot structurize because ``STOP`` is a noreturn
-terminator the ``scf`` dialect doesn't model.  Inlining the resulting
-multi-block callee into a structured ``scf`` region crashes flang's
-``mlir::inlineCall``.  Deleting the call sites before the inliner
-sidesteps the crash and matches the bridge's numerical-equivalence
-contract: the SDFG models the no-error path, the error path is dead
-code at test time.
-
-These tests exercise the pass in isolation against tiny single-file
-sources.  The QE end-to-end anchor lives at
-``tests/qe/exx_bp/test_vexx_bp_k_gpu_parse.py`` and confirms the pass
-unblocks the full SDFG-build pipeline through ``hlfir-inline-all``.
-"""
+Isolated single-file tests here; the QE e2e anchor is
+``tests/qe/exx_bp/test_vexx_bp_k_gpu_parse.py``."""
 import os
 import subprocess
 import sys
@@ -31,14 +22,9 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def _emit_hlfir_and_strip(src: str, *, env_extra: dict = None) -> str:
-    """Compile ``src`` to HLFIR with flang, parse it into the bridge,
-    and run ``hlfir-strip-error-helpers``.  Returns the dumped IR.
-
-    Splits the work so the test can inspect IR before/after rather
-    than going through the full ``build_sdfg`` path -- this pass is
-    pre-pipeline and the rest of the pipeline isn't what we're
-    testing here.
-    """
+    """Compile ``src`` to HLFIR with flang, parse into the bridge, run
+    ``hlfir-strip-error-helpers``, return the dumped IR.  Split out from
+    ``build_sdfg`` so the test can inspect pre/post IR for this pre-pipeline pass."""
     from dace_fortran.build_bridge import hb
 
     with tempfile.TemporaryDirectory(prefix="strip_err_") as td:
@@ -225,10 +211,9 @@ END SUBROUTINE
 
 
 def test_strip_refuses_function_style_helper():
-    """A helper that returns a result is left alone -- the call has an
-    SSA result that downstream code depends on.  The default list would
-    flag ``error`` if used as a CALL, but a function-style use needs an
-    explicit rewrite."""
+    """A helper that returns a result is left alone -- its SSA result has downstream
+    dependents.  The default list matches ``error`` used as a CALL; a function-style
+    use needs an explicit rewrite."""
     src = """
 MODULE m
 CONTAINS

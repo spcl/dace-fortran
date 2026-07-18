@@ -1,27 +1,9 @@
-"""Verify the bridge emits TYPE-CORRECT reduction identities for MINVAL /
-MAXVAL on integer arrays.
+"""Bridge must emit TYPE-CORRECT reduction identities for MINVAL/MAXVAL on integer arrays.
 
-The bug surfaced via NPB LU's compile-flag pin (commit ``1fc8262`` set
-the DaCe CPU args to ``-O0 -fno-fast-math -ffp-contract=off`` for fair
-reference parity).  At -O0 the test
-``tests/intrinsic_minmaxval_test.py::test_fortran_frontend_minval_int``
-failed with ``res[1] == -2147483648`` instead of the expected min.
-
-Root cause: the bridge emitted ``inf`` / ``-inf`` as the reduction
-identity for MINVAL / MAXVAL on integer arrays.  ``inf`` flows through
-DaCe's cppunparse to ``INFINITY`` (a ``double``), then the codegen
-emits ``int_accumulator = INFINITY;`` -- C++ conversion of a non-finite
-double to an integer is undefined behaviour.  At -O3 the optimizer
-folded the conversion to INT_MAX/INT_MIN; at -O0 it produced INT_MIN
-regardless of intent, silently breaking the reduction.
-
-Fix: ``bridge/ast/dispatch.cpp::identityForType`` picks the literal
-``2^(w-1) - 1`` (MAXVAL identity for MINVAL on int) or ``-2^(w-1)``
-(MINVAL identity for MAXVAL on int) per the integer's bit-width.  For
-float types it passes ``inf`` / ``-inf`` through unchanged.
-
-These probes pin the contract per Fortran INTEGER kind and reduction
-shape (whole-array, slice, empty array).
+Root cause (surfaced via NPB LU's -O0 compile-flag pin): the bridge emitted ``inf``/``-inf``
+as the identity even for ints; casting a non-finite double to int is UB in C++, giving
+INT_MIN at -O0 regardless of intent. Fix: ``dispatch.cpp::identityForType`` now picks
+``2^(w-1)-1`` / ``-2^(w-1)`` by integer bit-width; float types still get inf/-inf.
 """
 import numpy as np
 import pytest
@@ -32,9 +14,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_minval_int32_whole_array(tmp_path):
-    """``MINVAL(arr)`` on a default-INTEGER (i32) array.  Identity
-    must be INT_MAX (= 2^31 - 1), not ``INFINITY`` -- else the first
-    ``min(INFINITY_as_int, x)`` returns the cast garbage."""
+    """``MINVAL(arr)`` on i32: identity must be INT_MAX, not ``INFINITY`` (whose int-cast is garbage)."""
     src = """
 SUBROUTINE f(arr, res)
 integer, dimension(5) :: arr
@@ -66,9 +46,8 @@ END SUBROUTINE f
 
 
 def test_minval_int32_slice(tmp_path):
-    """``MINVAL(arr(2:4))`` -- the slice path goes through
-    ``buildSectionReduceAssign`` (loop-accumulator) rather than the
-    whole-array Reduce libnode.  Same identity-type contract."""
+    """``MINVAL(arr(2:4))``: slice path goes through ``buildSectionReduceAssign`` (loop-accumulator)
+    rather than the whole-array Reduce libnode; same identity-type contract."""
     src = """
 SUBROUTINE f(arr, res)
 integer, dimension(5) :: arr
@@ -100,8 +79,7 @@ END SUBROUTINE f
 
 
 def test_minval_empty_int32_returns_max(tmp_path):
-    """``MINVAL`` of a zero-length array returns the identity itself
-    (Fortran semantic: HUGE(int)).  Must be INT_MAX, not INT_MIN."""
+    """``MINVAL`` of a zero-length array returns the identity itself (Fortran: HUGE(int)) -- must be INT_MAX, not INT_MIN."""
     src = """
 SUBROUTINE f(empty, res)
 integer, dimension(0) :: empty
@@ -118,8 +96,7 @@ END SUBROUTINE f
 
 
 def test_maxval_empty_int32_returns_min(tmp_path):
-    """``MAXVAL`` of a zero-length array returns the identity itself
-    (Fortran semantic: -HUGE(int) - 1).  Must be INT_MIN, not INT_MAX."""
+    """``MAXVAL`` of a zero-length array returns the identity itself (Fortran: -HUGE(int)-1) -- must be INT_MIN, not INT_MAX."""
     src = """
 SUBROUTINE f(empty, res)
 integer, dimension(0) :: empty
@@ -136,8 +113,7 @@ END SUBROUTINE f
 
 
 def test_minval_float64_still_uses_inf(tmp_path):
-    """Regression: float MINVAL identity stays ``inf`` -- the
-    type-aware path must not break the pre-existing float case."""
+    """Regression: float MINVAL identity stays ``inf`` -- type-aware path must not break the pre-existing float case."""
     src = """
 SUBROUTINE f(arr, res)
 double precision, dimension(5) :: arr
@@ -153,8 +129,7 @@ END SUBROUTINE f
 
 
 def test_sum_int32_still_uses_zero(tmp_path):
-    """Regression: SUM identity stays ``0`` -- type-aware logic must
-    not touch the integer-compatible literal ``0``."""
+    """Regression: SUM identity stays ``0`` -- type-aware logic must not touch it."""
     src = """
 SUBROUTINE f(arr, res)
 integer, dimension(5) :: arr

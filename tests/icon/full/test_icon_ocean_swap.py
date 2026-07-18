@@ -1,33 +1,16 @@
-"""Same-signature differential swap of ICON's ocean
-``solve_free_sfc_ab_mimetic`` body for our binding.
+"""Same-signature differential swap of ICON's ocean ``solve_free_sfc_ab_mimetic``
+body -- the ocean twin of :file:`test_icon_solve_nh_swap.py`.  The subroutine
+becomes a DIFFERENTIAL DRIVER (signature byte-identical to pristine) that deep-copies
+state, forwards to ``solve_free_sfc_dace_icon`` (DUT), runs the preserved original
+body as ``solve_free_sfc_ref`` (REF), and compares bit-for-bit.
 
-The ocean twin of :file:`test_icon_solve_nh_swap.py`.  ICON's call site
-(``mo_ocean_ab_timestepping``) stays untouched.  ``solve_free_sfc_ab_mimetic``
-in ``mo_ocean_ab_timestepping_mimetic.f90`` becomes a DIFFERENTIAL DRIVER --
-the SUBROUTINE signature and the dummy declarations stay byte-for-byte
-identical -- that deep-copies the mutable state (``mo_ocean_diff``), forwards
-to ``solve_free_sfc_dace_icon`` (the free-standing SDFG wrapper) as the DUT,
-runs the original body -- preserved verbatim as ``solve_free_sfc_ref`` -- as
-the REF, and compares the two bit-for-bit.
+Pins: signature byte-identity, driver call order (clone -> DUT -> REF -> compare),
+and that the patched file parses via ``gfortran -fsyntax-only`` against minimal
+stand-in type modules (no ICON build tree on this host; stand-ins cross-checked
+against the real submodule source, ``mo_ocean_diff.f90`` compiled first for its .mod).
 
-This test pins:
-
-  * The patched signature surface (header + INTENT declarations) is
-    byte-identical to the pristine, so ICON's caller is unaffected.
-  * The differential driver structure: clone before DUT, DUT before REF,
-    REF on the clone, compares + a_veloc_v snapshot dance, ref renamed.
-  * The patched file parses through ``gfortran -fsyntax-only`` against
-    minimal STAND-IN type modules (the host has no ICON build tree, so
-    ICON's own ``.mod`` files are unavailable; the stand-ins carry the real
-    member names/ranks/dummy-argument names, cross-checked against the
-    submodule source).  ``mo_ocean_diff.f90`` is compiled FIRST in the same
-    invocation so its ``.mod`` is on hand -- this also pins the driver's
-    calls against the diff module's real interfaces.
-
-The patched body is wrapper-aware but doesn't yet require the SDFG ``.so``
-to exist; runtime resolution is a separate concern (mirrors the atmosphere
-swap test).
-"""
+Wrapper-aware but doesn't require the SDFG ``.so`` to exist; runtime resolution is
+separate (mirrors the atmosphere swap test)."""
 import os
 import subprocess
 from pathlib import Path
@@ -46,15 +29,13 @@ from icon.full._icon_ocean_patch import (
     write_patched_ocean_solve,
 )
 
-# The syntax check compiles gfortran-flavoured stand-ins (CLASS(*) dummies for
-# the solver-construct calls, gfortran ``.mod`` semantics); parametrize
-# gfortran-only so the flang/nvfortran slots are never emitted as runtime
-# skips -- mirrors ``test_icon_solve_nh_swap.py``.
+# gfortran-flavoured stand-ins (CLASS(*) dummies, gfortran .mod semantics); restrict to
+# gfortran so flang/nvfortran slots aren't emitted as runtime skips.
 GFORTRAN_COMPILERS = [p for p in FORTRAN_COMPILERS if "gfortran" in (p.id or "")]
 
 _HERE = Path(__file__).resolve().parent
-#: The differential helper module the patched driver ``USE``s.  Compiled ahead
-#: of the patched source in the syntax check so its ``.mod`` is on hand.
+#: The differential helper module the patched driver ``USE``s; compiled ahead of the
+#: patched source so its ``.mod`` is on hand.
 _DIFF_F90 = _HERE / "mo_ocean_diff.f90"
 _ICON_SRC = Path(os.environ.get("ICON_SRC", str(_HERE / "icon-model")))
 
@@ -68,13 +49,11 @@ def _real_source() -> Path:
 
 _HAVE_ICON = _real_source().is_file()
 
-# Every test here reads ICON's real ocean source through the icon-model
-# submodule, which only the heavy CI lane checks out -> ``long``.
+# reads ICON's real source via the icon-model submodule; only the heavy CI lane checks it out
 pytestmark = pytest.mark.long
 
-#: The 11 dummies of ``solve_free_sfc_ab_mimetic``, in call order.  The driver
-#: must forward every one of them to the DUT wrapper (a regression that drops
-#: one would silently leave it default-initialised on the wrapper side).
+#: The 11 dummies of ``solve_free_sfc_ab_mimetic``, in call order.  The driver must
+#: forward every one to the DUT wrapper -- a dropped one would silently default-init.
 _DUMMIES = ("patch_3d", "ocean_state", "p_ext_data", "p_as", "p_oce_sfc", "p_phys_param", "timestep", "op_coeffs",
             "solverCoeff_sp", "ret_status", "lacc")
 
@@ -85,28 +64,22 @@ _DUMMIES = ("patch_3d", "ocean_state", "p_ext_data", "p_as", "p_oce_sfc", "p_phy
 
 @pytest.mark.skipif(not _HAVE_ICON, reason="icon-model submodule not checked out")
 def test_patch_preserves_signature():
-    """The patched file's ``SUBROUTINE solve_free_sfc_ab_mimetic(...)`` header
-    + the INTENT dummy declarations are byte-for-byte identical to the
-    pristine.  A change anywhere in the signature surface would break ICON's
-    ``mo_ocean_ab_timestepping`` call site, so we pin it explicitly."""
+    """Patched file's header + INTENT dummy declarations are byte-for-byte identical
+    to pristine -- a change would break ICON's ``mo_ocean_ab_timestepping`` call site."""
     pristine = _real_source().read_text()
     patched = apply_ocean_solve_patch(pristine)
 
     def _signature_surface(src: str) -> list:
-        """The header line(s) + every ``INTENT(...)`` dummy declaration in the
-        routine.  This is the ABI surface ICON's callers see; the USE the
-        patch adds inside the body is internal and intentionally excluded."""
+        """Header line(s) + every ``INTENT(...)`` dummy declaration -- the ABI surface
+        ICON's callers see; the patch's internal USE additions are excluded."""
         lines = src.splitlines()
         start = next(i for i, ln in enumerate(lines) if "SUBROUTINE solve_free_sfc_ab_mimetic(" in ln)
         end = start
         while lines[end].rstrip().endswith("&"):
             end += 1
         surface = list(lines[start:end + 1])
-        # Pick up every INTENT(...) line inside the routine UP TO the first
-        # ``INTERFACE`` block.  After the patch, the wrapper is declared via
-        # an inner INTERFACE with its own dummy declarations (the wrapper's
-        # c_bool / c_int types, not solve_free_sfc's); those are internal to
-        # the routine and not the ABI surface ICON callers see.
+        # collect INTENT(...) lines up to the first INTERFACE block -- the patch's inner
+        # INTERFACE declares the wrapper's own c_bool/c_int dummies, not part of the ABI
         for i in range(end + 1, len(lines)):
             stripped = lines[i].lstrip().upper()
             if stripped.startswith("END SUBROUTINE SOLVE_FREE_SFC_AB_MIMETIC"):
@@ -127,39 +100,34 @@ def test_patch_preserves_signature():
 
 @pytest.mark.skipif(not _HAVE_ICON, reason="icon-model submodule not checked out")
 def test_patched_body_calls_wrapper():
-    """The driver forwards to ``solve_free_sfc_dace_icon`` with EVERY one of
-    the 11 dummies (``lacc`` via the resolved ``lzacc__dace`` cast because the
-    original dummy is OPTIONAL and the wrapper's c_bool is not)."""
+    """Driver forwards to ``solve_free_sfc_dace_icon`` with all 11 dummies (``lacc`` via
+    the resolved ``lzacc__dace`` cast since the original dummy is OPTIONAL)."""
     patched = apply_ocean_solve_patch(_real_source().read_text())
     assert f"CALL {OCEAN_WRAPPER_NAME}(" in patched
     dut_call = patched[patched.index(f"CALL {OCEAN_WRAPPER_NAME}("):]
     dut_call = dut_call[:dut_call.index("\n\n")]
     for arg in _DUMMIES[:-2]:
         assert arg in dut_call, f"forwarded arg {arg!r} missing from the DUT call"
-    # ret_status is forwarded raw (ICON keeps the DUT's status); lacc goes
-    # through set_acc_host_or_device + a 1-byte cast.
+    # ret_status forwarded raw; lacc goes through set_acc_host_or_device + a 1-byte cast
     assert "ret_status" in dut_call
     assert "LOGICAL(lzacc__dace, kind=1)" in dut_call
 
 
 @pytest.mark.skipif(not _HAVE_ICON, reason="icon-model submodule not checked out")
 def test_differential_driver_injected():
-    """The differential patch KEEPS the original body as the bit-exact
-    REFERENCE (renamed ``solve_free_sfc_ref``) and injects the driver --
-    clone -> a_veloc_v snapshot -> DUT -> park/restore -> REF -> compare ->
-    free -- as the new ``solve_free_sfc_ab_mimetic``.  So the patched file
-    GROWS by roughly the driver block; it does NOT shrink."""
+    """Patch keeps the original body as REF (renamed ``solve_free_sfc_ref``) and injects
+    the driver (clone -> snapshot -> DUT -> park/restore -> REF -> compare -> free) as the
+    new ``solve_free_sfc_ab_mimetic``.  File GROWS by the driver block; does not shrink."""
     pristine = _real_source().read_text()
     patched = apply_ocean_solve_patch(pristine)
 
-    # The original body survives verbatim, renamed, AFTER the driver (ICON's
-    # call site resolves ``solve_free_sfc_ab_mimetic``).
+    # original body survives verbatim, renamed, AFTER the driver (ICON's call site
+    # resolves solve_free_sfc_ab_mimetic)
     assert "SUBROUTINE solve_free_sfc_ref(" in patched
     assert "END SUBROUTINE solve_free_sfc_ref" in patched
 
-    # The differential harness is injected into the new driver, emitted
-    # BEFORE the renamed reference body, with the run order pinned:
-    # clone -> snapshot -> DUT -> park+restore -> REF -> compares -> enforce.
+    # differential harness emitted BEFORE the renamed reference body, run order pinned:
+    # clone -> snapshot -> DUT -> park+restore -> REF -> compares -> enforce
     assert "USE mo_ocean_diff" in patched
     order = [
         "CALL clone_ocean_state_indep(ocean_state, oce_ref__dace)",
@@ -180,8 +148,8 @@ def test_differential_driver_injected():
     positions = [patched.index(s) for s in order]
     assert positions == sorted(positions), "differential driver statements out of order"
 
-    # The file GROWS by ~the injected driver, NOT shrinks -- and the growth is
-    # a small fraction of the file, so the body was not duplicated twice.
+    # file grows by ~the injected driver only; growth as a small fraction of the file
+    # rules out the body having been duplicated twice
     pristine_n = len(pristine.splitlines())
     patched_n = len(patched.splitlines())
     assert patched_n > pristine_n, ("the differential patch keeps the body as the REF, so the file must "
@@ -204,11 +172,9 @@ def test_write_patched_ocean_solve(tmp_path: Path):
 # Compile-side test (gfortran + stand-in type modules; no ICON build).
 # ---------------------------------------------------------------------------
 
-#: Minimal stand-in modules for the ``-fsyntax-only`` check: EXACTLY the
-#: symbols the patched module ``USE``s, with dummy-argument NAMES matching the
-#: real ICON interfaces (the module body calls several of them with keyword
-#: arguments) and type members cross-checked against the real
-#: ``mo_ocean_types.f90`` / ``mo_model_domain.f90``.
+#: Minimal stand-in modules for the ``-fsyntax-only`` check: exactly the symbols the
+#: patched module ``USE``s, dummy-argument names matching the real ICON interfaces,
+#: type members cross-checked against ``mo_ocean_types.f90``/``mo_model_domain.f90``.
 _STANDINS = """\
 ! Minimal stand-in modules for the gfortran -fsyntax-only check of the patched
 ! mo_ocean_ab_timestepping_mimetic.f90 (no ICON build on the host).  Each
@@ -951,15 +917,10 @@ end module mo_fortran_tools
 @pytest.mark.skipif(not _HAVE_ICON, reason="icon-model submodule not checked out")
 @pytest.mark.parametrize("fc", GFORTRAN_COMPILERS)
 def test_patched_source_parses_through_fortran_compiler(fc, tmp_path: Path):
-    """The Fortran compiler accepts the patched file (syntax-only) against the
-    stand-in ``.mod`` set + the real ``mo_ocean_diff.f90``.  The patched
-    file's INTERFACE block, the forwarding CALL arg order, and the driver's
-    use of the diff module's interfaces are what's pinned here; any drift
-    breaks ICON's caller or the deep-copy harness.
-
-    The real source is preprocessed (``#include`` of the iconfor DSL +
-    timer macros), so the check runs with ``-cpp`` against the submodule's
-    ``src/include``."""
+    """Fortran compiler accepts the patched file (syntax-only) against the stand-in
+    ``.mod`` set + real ``mo_ocean_diff.f90``.  Pins the INTERFACE block, CALL arg
+    order, and diff-module interface usage; any drift breaks ICON's caller.  Runs with
+    ``-cpp`` (real source uses ``#include`` for the iconfor DSL + timer macros)."""
     fc_name, fc_path = fc
 
     out = tmp_path / "mo_ocean_ab_timestepping_mimetic_patched.f90"
@@ -968,9 +929,8 @@ def test_patched_source_parses_through_fortran_compiler(fc, tmp_path: Path):
 
     include_flags = [f"-I{_ICON_SRC}/src/include"]
 
-    # Stand-ins FIRST (they provide every ICON ``.mod`` the patched module
-    # reads), then the diff module (compiled against the stand-in types, its
-    # ``.mod`` feeds the driver's USE), then the patched source.
+    # order matters: stand-ins first (provide every .mod read), then the diff module
+    # (compiled against stand-in types), then the patched source
     subprocess.check_call([
         fc_path, *syntax_check_argv(fc_name, tmp_path),
         cpp_flag(fc_name), *fortran_compiler_flags(fc_name), *include_flags,

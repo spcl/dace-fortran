@@ -1,26 +1,12 @@
 """Verify ``size``/``lbound``/``ubound`` always resolve to SDFG symbols.
 
-The contract: when constructing the SDFG, the result of a Fortran shape
-intrinsic must materialise as a symbolic expression (a literal int when
-the extent is statically known, or a synthetic ``<arr>_d<dim>`` /
-``offset_<arr>_d<dim>`` symbol when it's dynamic) -- never as a
-runtime scalar computation against the descriptor.  Without this rule,
-loop bounds reading ``size(buf, k)`` would compile to a load against
-the dummy's box and the bridge would lose the ability to fold the
-extent into memlet subsets and loop schedules.
-
-Two paths cover the rule:
-
-* Static: ``passes/FoldAssumedRankQueries.cpp`` rewrites
-  ``fir.box_dims %X, %k`` to the literal extent when the trace lands
-  on a concrete-shape ``fir.array``.
-* Dynamic: ``bridge/ast/expressions.cpp`` (around line 525) emits the
-  result of an unfolded ``fir.box_dims`` as the bridge-minted shape
-  symbol ``<arr>_d<dim>``.
-
-Both paths share the property that the lifted ``do`` bound never
-contains a runtime descriptor read -- the SDFG's loop emitter and
-memlet sizer see a closed-form symbolic value.
+Contract: a shape intrinsic must materialise as a literal int (static extent)
+or a synthetic ``<arr>_d<dim>``/``offset_<arr>_d<dim>`` symbol (dynamic) --
+never a runtime descriptor read, or the bridge loses the ability to fold the
+extent into memlet subsets and loop schedules. Two paths: static
+(``passes/FoldAssumedRankQueries.cpp`` rewrites ``fir.box_dims`` to the literal
+extent) and dynamic (``bridge/ast/expressions.cpp``~525 emits the bridge-minted
+shape symbol).
 """
 import numpy as np
 import pytest
@@ -31,9 +17,8 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_size_on_explicit_shape_array_folds_to_constant(tmp_path):
-    """A static-extent array's ``size`` query folds to the literal
-    extent.  The SDFG arglist must not carry an extra shape symbol
-    for an array whose shape is a compile-time constant."""
+    """Static-extent array's ``size`` query folds to the literal extent -- SDFG
+    arglist carries no extra shape symbol for a compile-time-constant shape."""
     src = """
 module m
   implicit none
@@ -56,9 +41,8 @@ end module m
 
 
 def test_size_on_assumed_shape_dummy_resolves_to_symbol(tmp_path):
-    """When the dummy has dynamic shape, ``size(buf, 1)`` must
-    surface as the bridge's ``<arr>_d<dim>`` symbol -- not a
-    runtime box_dims read."""
+    """Dynamic-shape dummy: ``size(buf, 1)`` surfaces as the bridge's ``<arr>_d<dim>``
+    symbol, not a runtime box_dims read."""
     src = """
 module m
   implicit none
@@ -79,10 +63,8 @@ contains
 end module m
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="outer", entry="m::outer").build()
-    # The bridge mints ``arr_d0`` (or similar) as a shape symbol
-    # that the caller binds via the runtime ``n``.  The SDFG must
-    # accept ``n`` as a scalar arg; the extent symbol is then
-    # specialised.
+    # bridge mints arr_d0 (or similar) as a shape symbol the caller binds via runtime n;
+    # SDFG accepts n as a scalar arg and the extent symbol is specialised from it
     arr = np.full((6, ), -1.0, dtype=np.float64, order='F')
     sdfg(arr=arr, n=np.int32(6))
     np.testing.assert_array_equal(arr, np.arange(1, 7, dtype=np.float64))

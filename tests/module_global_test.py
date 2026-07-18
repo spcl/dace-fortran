@@ -1,23 +1,12 @@
-"""Module-level (host-associated) global array passed through to a
-kernel via ``USE mo_mod, ONLY: gtable``.
+"""Module-level (host-associated) global array (USE mo_mod, ONLY: gtable) passed through to a kernel
+-- same shape as ICON's mo_vertical_grid::nrdmax / mo_init_vgrid::nflatlev (caller fills once at
+init, kernel reads).
 
-The Fortran source declares ``INTEGER :: gtable(8)`` at module scope
-with no initialiser.  A subroutine in a separate module imports
-``gtable`` via USE and reads from it inside a loop.  This is the
-same shape as ICON's ``mo_vertical_grid::nrdmax``, ``mo_init_vgrid::
-nflatlev``, etc.: module-scope arrays the caller is expected to fill
-once at init time and the kernel reads.
-
-Bridge contract: an uninitialised module-scope global is an
-**external input** to the kernel.  ``extract_vars`` traces the
-declare's memref back through ``fir.address_of`` to the
-``fir.global`` it references; if the global carries no
-``fir.has_value`` body, the variable lands in the SDFG signature
-as a non-transient array (``intent='inout'``) the caller must
-supply.  Parameter-attributed globals and initialised module data
-(``fir.global`` with a dense init) stay transient and get baked
-into the constant pool.
-"""
+Bridge contract: an uninitialised module-scope global is an external input. extract_vars traces the
+declare's memref through fir.address_of to the fir.global; if it carries no fir.has_value body, the
+variable lands in the SDFG signature as a non-transient array (intent='inout') the caller must
+supply. Parameter-attributed / initialised globals (fir.global with a dense init) stay transient,
+baked into the constant pool."""
 
 from pathlib import Path
 
@@ -58,8 +47,7 @@ def test_module_global_array_passthrough(tmp_path: Path):
     sdfg = build_sdfg(_SRC, sdfg_dir, name="read_table", entry="mo_kernel::read_table").build()
     sdfg.validate()
 
-    # Without the fix, ``gtable`` is a transient -- arglist won't carry it.
-    # With the fix, it lands as a non-transient input kwarg.
+    # without the fix gtable is a transient (no arglist entry); with the fix it's a non-transient input kwarg.
     assert 'gtable' in sdfg.arglist(), (f"expected `gtable` in SDFG arglist (module-level global must surface "
                                         f"as a non-transient kwarg); arglist keys: {sorted(sdfg.arglist().keys())}")
 
@@ -72,8 +60,7 @@ def test_module_global_array_passthrough(tmp_path: Path):
 
     out_sdfg = np.zeros(n, dtype=np.int32, order='F')
 
-    # f2py exposes module data on the module object; assign in place.
-    # ``out`` is INTENT(OUT) so f2py treats it as a return value.
+    # f2py exposes module data on the module object (assign in place); out is INTENT(OUT) so f2py returns it.
     ref.mo_module_data.gtable[:] = gtable_vals
     out_ref = ref.mo_kernel.read_table(idx)
 

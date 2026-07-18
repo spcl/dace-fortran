@@ -5,11 +5,8 @@ from inliner.fortran_test_helper import SourceCodeBuilder, parse_and_improve
 
 
 def test_spec_mapping_of_abstract_interface():
-    """
-    Tests that the spec mapping correctly identifies and maps symbols within an
-    abstract interface. It ensures that the interface and the subroutine inside
-    are correctly added to the identifier and alias maps.
-    """
+    """Abstract-interface subroutine ``fun`` is captured in the identifier/alias maps
+    under a synthetic ``__interface__`` path segment; the interface block itself is not."""
     sources, _ = (SourceCodeBuilder().add_file("""
 module lib  ! should be present
   abstract interface  ! should NOT be present
@@ -28,11 +25,8 @@ end module lib
 
 
 def test_spec_mapping_of_type_extension():
-    """
-    Tests that the spec mapping correctly handles type extensions. It checks that
-    the components of the base type are correctly included in the extended type's
-    alias map.
-    """
+    """Type extension: base type's components appear in the extended type's alias
+    map both via direct inherited access and parent-component access."""
     sources, _ = (SourceCodeBuilder().add_file("""
 module lib
   type base
@@ -61,8 +55,7 @@ end module lib
         ("lib", "base", "a"),
         ("lib", "ext"),
         ("lib", "ext", "b"),
-        # Direct inherited access -- Fortran flattens the base type's components
-        # into the derived type, so ``ext`` instances reach ``a`` as ``x % a``.
+        # Direct inherited access -- Fortran flattens base components into ext, so instances reach a as x % a.
         ("lib", "ext", "a"),
         # Parent-component access -- ``x % base % a`` keeps the base type name.
         ("lib", "ext", "base"),
@@ -71,10 +64,7 @@ end module lib
 
 
 def test_spec_mapping_of_procedure_pointers():
-    """
-    Tests that the spec mapping correctly handles procedure pointers, both as
-    components of a derived type and as standalone variables.
-    """
+    """Spec mapping handles procedure pointers both as derived-type components and as standalone variables."""
     sources, _ = (SourceCodeBuilder().add_file("""
 module lib
   type T

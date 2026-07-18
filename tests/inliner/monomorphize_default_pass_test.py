@@ -1,20 +1,9 @@
 # Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
-"""The monomorphisation pass runs in the fparser inliner BY DEFAULT and ALWAYS
-(:class:`dace_fortran.fparser_inliner.ParseConfig.monomorphize`), so a single-level
-abstract type-bound dispatch the bridge cannot lower is devirtualised into static
-calls without anyone asking for a per-kernel spec.
-
-This is the engine prerequisite for extracting ICON's ``solve_nonhydro`` with the
-halo exchange inlined: ICON's standard build cpp-strips ``t_comm_pattern_yaxt``,
-leaving ``t_comm_pattern`` with a single concrete arm, which the default pass
-retypes so ``p_pat%exchange_data_*`` becomes a static call the inliner inlines.
-
-These tests use a faithful miniature of the real dispatch chain
-(``solve_nh`` -> generic wrapper -> ``CLASS(t_comm_pattern)`` dispatch -> the
-``orig`` override) and drive it through the ACTUAL :func:`inline_to_ast` pipeline
-(not the engine in isolation), so they pin the pass's wiring + ordering relative
-to the call-resolution passes.  The SDFG-level proof (MPI libnodes, no
-``ExternalCall``) lives in ``tests/sync_devirt_mpi_libnode_test.py``.
+"""monomorphize runs by default in the fparser inliner (ParseConfig.monomorphize),
+devirtualising single-level abstract dispatch the bridge can't lower into static calls.
+Tests drive the real inline_to_ast pipeline (not the engine in isolation) to pin wiring
++ ordering vs the call-resolution passes. SDFG-level proof (no ExternalCall) is in
+tests/sync_devirt_mpi_libnode_test.py.
 """
 import re
 import shutil
@@ -28,10 +17,8 @@ from fparser.two.utils import walk
 
 from dace_fortran.fparser_inliner import inline_to_ast
 
-#: A faithful miniature of ICON's halo dispatch chain, single-arm (``yaxt``
-#: cpp-stripped): the entry calls a generic wrapper that takes the abstract
-#: ``CLASS(t_comm_pattern)`` and dispatches ``p_pat%exchange_data_r3d``, bound in
-#: the lone concrete arm ``t_comm_pattern_orig`` to ``orig_exchange``.
+#: ICON's halo dispatch chain, single-arm (yaxt cpp-stripped): entry -> generic
+#: wrapper -> CLASS(t_comm_pattern) dispatch -> orig_exchange override.
 _CHAIN_SRC = """
 module mo_comm
   implicit none
@@ -81,10 +68,9 @@ end module
 
 
 def test_default_pass_devirtualizes_single_arm_chain():
-    """Through the real pipeline (default ``monomorphize=True``), the halo dispatch
-    is gone: no ``Procedure_Designator`` (``%binding`` call) survives anywhere, and
-    every ``CLASS(t_comm_pattern)`` outside the deferred interface signature is
-    retyped to ``TYPE(t_comm_pattern_orig)``."""
+    """Default monomorphize=True: no Procedure_Designator survives, and every
+    CLASS(t_comm_pattern) outside the deferred interface retypes to
+    TYPE(t_comm_pattern_orig)."""
     ast = inline_to_ast({"src.f90": _CHAIN_SRC}, entry="mo_solve::solve_nh")
     assert not walk(ast, f03.Procedure_Designator), "a type-bound dispatch survived devirtualisation"
     text = ast.tofortran()
@@ -97,27 +83,17 @@ def test_default_pass_devirtualizes_single_arm_chain():
 
 
 def test_default_pass_can_be_disabled():
-    """``monomorphize=False`` is the kill-switch: the dispatch is left intact (the
-    pass did not run), so the abstract ``CLASS`` dispatch still stands.  Run in
-    merge mode (``optimize=False``) so the unresolved polymorphic dispatch -- which
-    only the pass would have collapsed -- doesn't trip the constant-prop optimizer
-    (the loud rejection of un-monomorphised dispatch on a non-fparser-optimised
-    path)."""
+    """monomorphize=False leaves the abstract CLASS dispatch intact. optimize=False
+    too, else the constant-prop optimizer rejects the unresolved polymorphic dispatch."""
     ast = inline_to_ast({"src.f90": _CHAIN_SRC}, entry="mo_solve::solve_nh", monomorphize=False, optimize=False)
-    # with the pass off, NO retype happened: the abstract CLASS dummy is left
-    # polymorphic (the concrete arm type never replaces it).
     low = ast.tofortran().lower()
     assert "type(t_comm_pattern_orig)" not in low, "monomorphize=False must not retype the abstract dummy"
     assert "class(t_comm_pattern)" in low, "the abstract CLASS dispatch dummy should survive when the pass is off"
 
 
-#: ICON's hardest cross-module shape: the abstract base AND a container holding a
-#: ``POINTER`` to it live in one module (``m_types``); the concrete arm is in a
-#: separate downstream module (``m_orig``).  Retyping the container pointer to the
-#: arm would make ``m_types`` depend on ``m_orig``, which already ``USE``s
-#: ``m_types`` to EXTEND the base -- a circular module dependency.  The pass
-#: resolves it by consolidating the arm (type + procedures) into the base module
-#: in topological order (``t_base`` -> ``t_orig`` -> ``t_holder``).
+#: Base + pointer-holder in one module, concrete arm in another: retyping the
+#: pointer would create a circular USE (arm module already USEs base to EXTEND).
+#: Fix: consolidate the arm into the base module (topological order).
 _CYCLE_SRC = """
 module m_types
   implicit none
@@ -172,10 +148,8 @@ end module
 
 @pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 def test_retype_consolidates_arm_module_no_cycle(tmp_path: Path):
-    """The cross-module retype that would create a circular module dependency is
-    resolved by consolidating the arm into the base module -- and the result is
-    valid, compilable Fortran (the container pointer + the dispatch are both
-    statically typed to the concrete arm)."""
+    """Cross-module retype that would create a circular dependency instead
+    consolidates the arm into the base module, producing compilable Fortran."""
     ast = inline_to_ast({"s.f90": _CYCLE_SRC}, entry="m_use::kern")
     out = ast.tofortran()
     low = out.lower()
@@ -192,11 +166,9 @@ def test_retype_consolidates_arm_module_no_cycle(tmp_path: Path):
                           cwd=str(tmp_path))
 
 
-#: The same cycle, but the base module is TYPES-ONLY (no CONTAINS) and the halo
-#: wrapper lives in a THIRD module -- so consolidation must (a) create a fresh
-#: CONTAINS in the base module placed BEFORE its END MODULE (not orphaned after
-#: it), and (b) import the arm into the third module's wrapper.  This is the exact
-#: shape of ICON's mo_communication_types / mo_communication / mo_communication_orig.
+#: Same cycle, but base is TYPES-ONLY (no CONTAINS) and the wrapper is in a THIRD
+#: module: consolidation must add a fresh CONTAINS before END MODULE and import
+#: the arm into the wrapper module. ICON's mo_communication_types/_orig shape.
 _CYCLE_3MOD_SRC = """
 module m_types
   implicit none
@@ -256,10 +228,8 @@ end module
 
 @pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 def test_retype_consolidates_into_types_only_base_with_third_module_wrapper(tmp_path: Path):
-    """ICON's exact module shape: a TYPES-ONLY base module (no CONTAINS), the arm
-    in a second module, the halo wrapper in a third.  Consolidation must add a
-    CONTAINS to the base before its END MODULE and import the arm into the wrapper
-    module -- producing compilable Fortran."""
+    """TYPES-ONLY base + arm + wrapper in three modules: consolidation adds CONTAINS
+    to the base before END MODULE and imports the arm into the wrapper."""
     ast = inline_to_ast({"s.f90": _CYCLE_3MOD_SRC}, entry="m_use::kern")
     out = ast.tofortran()
     assert "module m_orig" not in out.lower()
@@ -270,12 +240,9 @@ def test_retype_consolidates_into_types_only_base_with_third_module_wrapper(tmp_
                           cwd=str(tmp_path))
 
 
-#: The arm type is referenced by a COMPONENT of a type in YET ANOTHER module
-#: (``m_domain``'s ``t_patch`` holds a ``CLASS(t_base), POINTER :: comm`` -- ICON's
-#: ``mo_model_domain``'s ``t_patch%comm_pat_*``).  After the retype the component
-#: names the arm, and consolidation must import the arm into ``m_domain`` at the
-#: MODULE level so the type definition sees it (host association then covers any
-#: subprograms in that module too).
+#: Arm type is referenced by a type COMPONENT in yet another module (ICON's
+#: t_patch%comm_pat_*). Consolidation must import the arm into that module at
+#: MODULE level so the type def resolves it.
 _CYCLE_COMPONENT_SRC = """
 module m_types
   implicit none
@@ -340,10 +307,8 @@ end module
 
 @pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 def test_retype_imports_arm_into_module_with_component(tmp_path: Path):
-    """When the arm type is used as a type COMPONENT in a separate module
-    (``mo_model_domain``'s ``t_patch%comm_pat_*`` shape), consolidation imports the
-    arm into that module so the type def resolves it -- producing compilable
-    Fortran."""
+    """Arm type used as a component in a separate module: consolidation imports
+    the arm into that module so the type def resolves."""
     ast = inline_to_ast({"s.f90": _CYCLE_COMPONENT_SRC}, entry="m_use::kern")
     out = ast.tofortran()
     assert "module m_orig" not in out.lower()
@@ -353,21 +318,11 @@ def test_retype_imports_arm_into_module_with_component(tmp_path: Path):
     subprocess.check_call(["gfortran", "-fsyntax-only", "-ffree-line-length-none", "comp.f90"], cwd=str(tmp_path))
 
 
-#: The MULTI-ARM (ladder) analogue of the single-arm retype cycle: ICON's ocean
-#: free-surface solver shape.  An abstract backend ``t_backend`` with a deferred
-#: ``run`` and a shared non-deferred interposer ``solve`` (dispatches internally
-#: on its own passed-object), a container ``t_solver`` holding a
-#: ``CLASS(t_backend), ALLOCATABLE :: act``, and TWO concrete arms (``t_cg`` /
-#: ``t_bicg``) in separate downstream modules.  The runtime arm is chosen at the
-#: ``ALLOCATE(concrete :: s%act)`` construction site, so the pass CANNOT pin one
-#: type -- it emits the tag ladder + a per-arm interposer clone.  Those clones and
-#: the per-arm direct binding calls land in the base module and name concrete arm
-#: types/procedures defined in the (formerly downstream) arm modules; without
-#: consolidation the base module is "used before defined" + a circular USE.
-#: Each module also carries a PRIVATE ``this_mod_name`` PARAMETER used in its own
-#: bodies -- ICON's per-module idiom.  Consolidating the arm modules into the base
-#: must rename these on collision, else the base ends up with three definitions of
-#: one identifier.
+#: Multi-arm ladder (ICON ocean free-surface solver): runtime ALLOCATE(concrete ::
+#: s%act) picks the arm, so the pass can't pin one type -- it emits a tag ladder +
+#: per-arm interposer clones into the base module, naming arm types/procedures ->
+#: needs consolidation to avoid a circular USE. Each module also has a PRIVATE
+#: this_mod_name PARAMETER (ICON idiom); consolidation must rename it on collision.
 _LADDER_CYCLE_SRC = """
 module m_base
   implicit none
@@ -450,11 +405,9 @@ end module
 
 @pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 def test_ladder_consolidates_every_arm_module_no_cycle(tmp_path: Path):
-    """A MULTI-ARM axis (runtime-selected, no single type to pin) is laddered, and
-    consolidation merges EVERY arm module into the base module -- so the per-arm
-    interposer clones and direct binding calls the ladder emits into the base
-    module resolve their concrete arm types/procedures locally.  The result is
-    fully devirtualised (no residual dispatch) and compilable Fortran."""
+    """Multi-arm ladder merges every arm module into the base so the ladder's
+    per-arm clones resolve their arm types/procedures locally: no residual
+    dispatch, compilable."""
     ast = inline_to_ast({"s.f90": _LADDER_CYCLE_SRC}, entry="m_use::kern")
     out = ast.tofortran()
     low = out.lower()
@@ -471,13 +424,10 @@ def test_ladder_consolidates_every_arm_module_no_cycle(tmp_path: Path):
     subprocess.check_call(["gfortran", "-fsyntax-only", "-ffree-line-length-none", "ladder.f90"], cwd=str(tmp_path))
 
 
-#: A ladder whose shared interposer + arm type names are long enough that the
-#: per-arm clone name ``<interposer>__<arm>`` overruns Fortran's 63-char identifier
-#: limit -- the shape of ICON's solver, where the shared ``construct`` interposer is
-#: cloned once per composed axis (backend x agen x transfer) and the chained
-#: ``__<arm>`` suffixes reach ~95 chars.  The clone name must be shortened
-#: (readable prefix + stable hash) so gfortran does not reject the SUBROUTINE header
-#: ("Name too long", which then cascades into "Unexpected USE in CONTAINS").
+#: Clone name <interposer>__<arm> overruns Fortran's 63-char identifier limit
+#: (ICON's composed backend x agen x transfer axis reaches ~95 chars). Must
+#: shorten to a readable prefix + stable hash, else gfortran rejects the
+#: SUBROUTINE header.
 _LADDER_LONGNAME_SRC = """
 module m_base
   implicit none
@@ -554,15 +504,13 @@ end module
 
 @pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 def test_ladder_clone_name_shortened_within_fortran_limit(tmp_path: Path):
-    """A per-arm interposer clone whose composed name ``<interposer>__<arm>`` exceeds
-    Fortran's 63-char identifier limit is shortened (readable prefix + stable hash),
-    so the devirtualised TU compiles instead of emitting a rejected SUBROUTINE header.
-    Mirrors ICON's multi-axis solver construct (backend x agen x transfer, ~95 chars)."""
+    """Clone name exceeding Fortran's 63-char identifier limit is shortened (prefix +
+    stable hash) so the TU compiles instead of a rejected SUBROUTINE header. Mirrors
+    ICON's multi-axis solver construct (backend x agen x transfer, ~95 chars)."""
     ast = inline_to_ast({"s.f90": _LADDER_LONGNAME_SRC}, entry="m_use::kern")
     assert not walk(ast, f03.Procedure_Designator), "a dispatch survived"
     out = ast.tofortran()
-    # every emitted subprogram name is within the Fortran identifier limit (the
-    # subprogram name is the first Name in its SUBROUTINE/FUNCTION statement)
+    # subprogram name is the first Name in its SUBROUTINE/FUNCTION statement
     for stmt in walk(ast, (f03.Subroutine_Stmt, f03.Function_Stmt)):
         name = str(walk(stmt, f03.Name)[0])
         assert len(name) <= 63, f"identifier over Fortran 63-char limit: {name} ({len(name)})"
@@ -574,17 +522,14 @@ def test_ladder_clone_name_shortened_within_fortran_limit(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# Pointer-association tag source: ICON's ``t_lhs%trans`` / ``%agen`` are
-# ``CLASS(base), POINTER`` slots a constructor binds by ``this%slot => dummy``,
-# with the concrete arm arriving as the actual argument one or more call hops
-# away (:func:`devirtualize_pointer_flow`).  Unlike the ``ALLOCATE(arm :: slot)``
-# ladder these tests exercise the interprocedural clone that carries the concrete
-# type to the association and sets the slot's tag there.
+# Pointer-association devirt (devirtualize_pointer_flow): ICON's t_lhs%trans/%agen
+# are CLASS(base) POINTER slots bound via `this%slot => dummy`, with the concrete
+# arm arriving hops away as an actual argument -- unlike the ALLOCATE(arm :: slot)
+# ladder above.
 # ---------------------------------------------------------------------------
 
-#: Single hop: a ``t_solver`` whose ``CLASS(t_op), POINTER :: op`` is bound in
-#: ``setup`` (``this%op => o``), called from ``kern`` with a concrete typed local
-#: chosen by SELECT CASE.  The dispatch ``this%op%apply`` reads the stored slot.
+#: Single hop: t_solver%op (CLASS(t_op), POINTER) bound in setup via `this%op => o`,
+#: the concrete local chosen by SELECT CASE. Dispatch `this%op%apply` reads the slot.
 _PTR_ASSOC_SINGLE_SRC = """
 module m_base
   implicit none
@@ -671,11 +616,9 @@ end module
 
 @pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 def test_pointer_assoc_single_hop_devirtualizes(tmp_path: Path):
-    """A two-arm ``CLASS(base), POINTER`` slot whose arm is set by a
-    pointer-association (``this%op => o``, no ``ALLOCATE``) is discovered as a
-    ladder and fully devirtualised: the slot expands to a tag + per-arm pointer
-    slots, ``setup`` is cloned per concrete arm (each sets the tag), the call sites
-    are redirected, and no type-bound dispatch survives."""
+    """Two-arm CLASS POINTER slot set by pointer-association (no ALLOCATE) is
+    discovered as a ladder: slot expands to tag + per-arm pointers, setup clones
+    per arm, no dispatch survives."""
     ast = inline_to_ast({"s.f90": _PTR_ASSOC_SINGLE_SRC}, entry="m_use::kern")
     assert not walk(ast, f03.Procedure_Designator), "a type-bound dispatch survived pointer-assoc devirtualisation"
     low = ast.tofortran().lower()
@@ -685,10 +628,8 @@ def test_pointer_assoc_single_hop_devirtualizes(tmp_path: Path):
     subprocess.check_call(["gfortran", "-fsyntax-only", "-ffree-line-length-none", "ptr1.f90"], cwd=str(tmp_path))
 
 
-#: Two hops: the concrete arm flows ``kern -> t_top%setup -> t_holder%construct``,
-#: where ``top_setup`` is a PASS-THROUGH (it forwards its ``CLASS(base)`` dummy to
-#: the inner constructor without any association of its own).  ``holder_construct``
-#: both associates the slot AND dispatches on the dummy (``call o%apply``), so the
+#: Two hops: kern -> t_top%setup (pass-through, forwards CLASS(base) dummy) ->
+#: t_holder%construct (associates the slot AND dispatches on the dummy) -- the
 #: fixed point must retype the dummy along the whole chain.
 _PTR_ASSOC_PASSTHROUGH_SRC = """
 module m_base
@@ -788,11 +729,9 @@ end module
 
 @pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 def test_pointer_assoc_passthrough_devirtualizes(tmp_path: Path):
-    """The concrete arm reaches the association two hops away, through a
-    pass-through constructor that only forwards its ``CLASS(base)`` dummy.  The
-    forward fixed point clones the pass-through, which then forwards a *concrete*
-    actual to the inner constructor -- so the whole chain devirtualises and the
-    dummy-dispatch ``call o%apply`` becomes a static bind."""
+    """Concrete arm reaches the association two hops away through a pass-through
+    constructor. Forward fixed point clones it end to end: the dummy-dispatch
+    becomes a static bind."""
     ast = inline_to_ast({"s.f90": _PTR_ASSOC_PASSTHROUGH_SRC}, entry="m_use::kern")
     assert not walk(ast, f03.Procedure_Designator), "a type-bound dispatch survived the multi-hop pointer-assoc flow"
     src = tmp_path / "ptr2.f90"
@@ -800,11 +739,9 @@ def test_pointer_assoc_passthrough_devirtualizes(tmp_path: Path):
     subprocess.check_call(["gfortran", "-fsyntax-only", "-ffree-line-length-none", "ptr2.f90"], cwd=str(tmp_path))
 
 
-#: The full ocean-solver shape: TWO pointer axes (transfer + agen) on a shared
-#: ``lhs_construct``, plus an ``ALLOCATE``-ladder backend (``t_cg`` / ``t_gmres``)
-#: whose SHARED interposer ``backend_construct`` forwards both dummies down.  The
-#: entry picks a concrete (agen, trans) pair by SELECT CASE; the backend arm by an
-#: independent integer -- so the two pointer flows compose over the act ladder.
+#: Full ocean-solver shape: two pointer axes (transfer + agen) share lhs_construct;
+#: an ALLOCATE-ladder backend (t_cg/t_gmres) forwards both dummies through a shared
+#: interposer -- the two pointer flows compose over the backend ladder.
 _PTR_ASSOC_TWO_AXIS_SRC = """
 module m_base
   implicit none
@@ -1023,13 +960,9 @@ end module
 
 @pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 def test_pointer_assoc_two_axes_through_allocate_ladder(tmp_path: Path):
-    """The ICON ocean-solver shape: TWO independent pointer axes (``trans`` and
-    ``agen``) bound in one shared constructor (``lhs_construct``), reached through
-    an ``ALLOCATE``-laddered backend dispatch and a shared interposer.  The two
-    flows compose (a clone per ``(trans, agen)`` pair, each setting both tags
-    independently), the stored-slot dispatch is laddered over both tags, and the
-    dead intermediate clones + their dangling imports are cleaned -- yielding a
-    fully devirtualised, compilable TU with no residual dispatch."""
+    """Two independent pointer axes (trans, agen) share one constructor, reached
+    through an ALLOCATE-laddered backend. Flows compose into a clone per (trans,
+    agen) pair; dead intermediate clones + dangling imports are cleaned."""
     ast = inline_to_ast({"s.f90": _PTR_ASSOC_TWO_AXIS_SRC}, entry="m_use::kern")
     assert not walk(ast, f03.Procedure_Designator), "a type-bound dispatch survived two-axis pointer-assoc devirt"
     low = ast.tofortran().lower()
@@ -1041,13 +974,10 @@ def test_pointer_assoc_two_axes_through_allocate_ladder(tmp_path: Path):
     subprocess.check_call(["gfortran", "-fsyntax-only", "-ffree-line-length-none", "ptr3.f90"], cwd=str(tmp_path))
 
 
-#: A DATA-CARRYING ``CLASS(t_transfer), POINTER :: trans`` slot: the abstract base
-#: declares a data member (``nidx``) that the kernel reads in a DECLARATION
-#: DIMENSION (``REAL :: tmp(this%trans%nidx)``) and a DO bound -- spec-part reads a
-#: statement ladder cannot reach.  This is ICON ``t_lhs%trans`` (``x_t(this%trans%nidx)``):
-#: expanding the slot away would leave those reads dangling on a deleted component.
-#: The hybrid keeps the CLASS slot for the data reads (they lower natively, without
-#: routing through a per-arm POINTER) and ladders ONLY the deferred dispatch.
+#: Data-carrying CLASS(t_transfer) POINTER slot: base has a data member (nidx) read
+#: in a DECLARATION DIMENSION and a DO bound -- spec-part reads a statement ladder
+#: can't reach. Hybrid keeps the CLASS slot for data reads, ladders only the
+#: deferred dispatch (else reads dangle on a deleted component, ICON t_lhs%trans).
 _PTR_ASSOC_DATACARRY_SRC = """
 module m_base
   implicit none
@@ -1141,22 +1071,16 @@ end module
 
 @pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 def test_pointer_assoc_data_carrying_slot_kept_class(tmp_path: Path):
-    """A data-carrying ``CLASS(base), POINTER`` slot read in a DECLARATION dimension
-    is kept CLASS -- its data reads stay on it (they lower natively, unlike a read
-    routed through a per-arm POINTER) -- while only its dispatch is laddered onto a
-    concrete per-arm pointer.  This is the ICON ``t_lhs%trans`` shape: the old
-    expand-the-slot-away form left ``this%trans%nidx`` dangling on a deleted
-    component (a pruning ``AssertionError``); the hybrid resolves it."""
+    """Data-carrying CLASS POINTER slot read in a DECLARATION dimension stays CLASS
+    (data reads lower natively); only its dispatch is laddered onto a per-arm
+    pointer. Old expand-away form left the read dangling (pruning AssertionError)."""
     ast = inline_to_ast({"s.f90": _PTR_ASSOC_DATACARRY_SRC}, entry="m_use::kern")
     assert not walk(ast, f03.Procedure_Designator), "a type-bound dispatch survived data-carrying devirt"
     text = ast.tofortran()
     low = text.lower()
-    # the CLASS slot is KEPT (not expanded away) so its data reads resolve...
     assert "class(t_transfer), pointer :: trans" in low, "the data-carrying CLASS slot was not kept"
-    # ...including the declaration-dimension read (still on the CLASS slot, not a per-arm pointer)
     assert "tmp(this % trans % nidx)" in low, "the declaration-dimension read was rewritten off the CLASS slot"
     assert "do i = 1, this % trans % nidx" in low, "the DO-bound read was rewritten off the CLASS slot"
-    # ...while the dispatch was laddered onto concrete per-arm pointers (tag + slots).
     assert "trans__tag" in low, "the dispatch tag was not emitted"
     assert "trans__t_triv" in low and "trans__t_sub" in low, "per-arm dispatch pointers missing"
     src = tmp_path / "ptr_dc.f90"
@@ -1164,13 +1088,11 @@ def test_pointer_assoc_data_carrying_slot_kept_class(tmp_path: Path):
     subprocess.check_call(["gfortran", "-fsyntax-only", "-ffree-line-length-none", "ptr_dc.f90"], cwd=str(tmp_path))
 
 
-#: A GENERIC type-bound dispatch (ICON's ``t_transfer%into => into_2d_wp, into_idx``,
-#: the deferred specifics overridden per arm) laddered onto a concrete per-arm slot.
-#: The generic's specific candidates are registered on the abstract base (where they
-#: are DEFERRED); resolving ``this%trans__t_triv%into(a)`` requires remapping each
-#: candidate onto the concrete receiver, which overrides it.  A non-generic deferred
-#: ``destruct`` seeds discovery (the live-dispatch gate keys on the specific binding
-#: name, which a purely-generic axis would never expose).
+#: GENERIC dispatch (t_transfer%into => into_2d, into_idx) laddered onto a per-arm
+#: slot: specifics are registered on the abstract base, so resolving them requires
+#: remapping each candidate onto the concrete receiver's override. A non-generic
+#: deferred `destruct` seeds discovery (liveness gate keys on the specific binding
+#: name; a purely-generic axis would never expose one).
 _PTR_ASSOC_GENERIC_SRC = """
 module m_base
   implicit none
@@ -1304,21 +1226,17 @@ end module
 
 @pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 def test_pointer_assoc_generic_binding_resolves_per_arm(tmp_path: Path):
-    """A GENERIC type-bound call laddered onto a concrete per-arm slot resolves to
-    the arm's override of the matching specific.  ``deconstruct_procedure_calls``
-    registers a generic's candidates on the type that DECLARES it (an abstract base,
-    where the specifics are DEFERRED); it must remap each candidate onto the concrete
-    receiver, which overrides it -- else ``%arm%into`` dangles (the base generic is
-    pruned) and gfortran rejects the call.  This is ICON ``t_transfer%into``."""
+    """GENERIC call laddered onto a per-arm slot resolves to the arm's override.
+    deconstruct_procedure_calls registers candidates on the declaring (abstract)
+    type, so it must remap each onto the concrete receiver's override, else
+    %arm%into dangles once the base generic is pruned. ICON t_transfer%into."""
     ast = inline_to_ast({"s.f90": _PTR_ASSOC_GENERIC_SRC}, entry="m_use::kern")
     assert not walk(ast, f03.Procedure_Designator), "a generic type-bound dispatch survived resolution"
     low = ast.tofortran().lower()
-    # generic `into(a)` resolved to the 2d specific, `into(k)` to the idx specific --
-    # each on the concrete arm's override, not the base's deferred binding.
+    # into(a) resolves to the 2d specific, into(k) to the idx specific -- on the arm's override
     assert "call triv_into_2d(this % trans__t_triv" in low and "call sub_into_2d(this % trans__t_sub" in low
     assert "call triv_into_idx(this % trans__t_triv" in low and "call sub_into_idx(this % trans__t_sub" in low
-    # the constructor's SELECT TYPE on the retyped dummy resolved statically per arm
-    # (t_triv clone -> CLASS IS branch `mode=1`; t_sub clone -> CLASS DEFAULT `mode=2`).
+    # SELECT TYPE on the retyped dummy resolved statically (t_triv -> mode=1, t_sub -> mode=2)
     assert "select type" not in low, "a SELECT TYPE on a retyped concrete dummy survived"
     assert "this % mode = 1" in low and "this % mode = 2" in low
     src = tmp_path / "ptr_gen.f90"
@@ -1326,11 +1244,9 @@ def test_pointer_assoc_generic_binding_resolves_per_arm(tmp_path: Path):
     subprocess.check_call(["gfortran", "-fsyntax-only", "-ffree-line-length-none", "ptr_gen.f90"], cwd=str(tmp_path))
 
 
-#: An abstract base dispatched ONLY through generics: ``t_agen``'s deferred
-#: ``lhs_wp`` is invoked solely as ``apply`` (``GENERIC :: apply => lhs_wp``), never
-#: by its own name.  This is ICON's ``t_lhs_agen`` (the mimetic matrix operator):
-#: discovery must treat the live generic ``apply`` as making its specific ``lhs_wp``
-#: live, else the whole axis is missed and ``this%agen%apply`` stays polymorphic.
+#: Abstract base dispatched ONLY through a generic (apply => lhs_wp, never %lhs_wp
+#: directly, ICON's t_lhs_agen): discovery must treat the live generic as making
+#: its specific live, else the axis is missed and %apply stays polymorphic.
 _GENERIC_ONLY_SRC = """
 module m_base
   implicit none
@@ -1420,12 +1336,9 @@ end module
 
 @pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 def test_generic_only_dispatch_axis_discovered(tmp_path: Path):
-    """An abstract base whose deferred binding is reached ONLY via a generic
-    (``apply => lhs_wp``, never ``%lhs_wp`` directly) is still discovered and
-    laddered.  ``discover_axes`` keys liveness on the dispatched binding name; a
-    generic dispatch names the generic, so it must propagate liveness to the
-    generic's specifics -- else ICON's ``t_lhs_agen`` (``apply``/``matrix_shortcut``
-    generics over deferred ``lhs_wp``/``lhs_matrix_shortcut``) is never devirtualised."""
+    """Deferred binding reached only via a generic (apply => lhs_wp) is still
+    discovered and laddered. discover_axes keys liveness on the dispatched name, so
+    a generic dispatch must propagate liveness to its specifics (ICON t_lhs_agen)."""
     ast = inline_to_ast({"s.f90": _GENERIC_ONLY_SRC}, entry="m_use::kern")
     assert not walk(ast, f03.Procedure_Designator), "a generic-only dispatch survived (axis not discovered)"
     low = ast.tofortran().lower()
@@ -1437,11 +1350,10 @@ def test_generic_only_dispatch_axis_discovered(tmp_path: Path):
     subprocess.check_call(["gfortran", "-fsyntax-only", "-ffree-line-length-none", "gen_only.f90"], cwd=str(tmp_path))
 
 
-#: A slot name shared across UNRELATED types: an abstract ``CLASS(t_base),POINTER :: p``
-#: laddered slot (on ``t_p_wrap``) and a CONCRETE ``TYPE(t_orig),POINTER :: p`` on an
-#: unrelated wrapper (``t_p_wrap_orig``).  This is ICON's ``t_p_comm_pattern`` vs
-#: ``t_p_comm_pattern_orig`` (both hold a ``p``), which the 18-arm ``t_stack_op`` slot
-#: ``p`` collides with: a textual ``%p`` retarget would corrupt the concrete wrapper.
+#: Slot name `p` shared across UNRELATED types: an abstract laddered CLASS(t_base)
+#: POINTER (t_p_wrap%p) vs a concrete TYPE(t_orig) POINTER on an unrelated wrapper
+#: (t_p_wrap_orig%p, ICON's t_p_comm_pattern_orig). A textual %p retarget would
+#: corrupt the concrete wrapper.
 _SLOT_NAME_COLLISION_SRC = """
 module m_base
   implicit none
@@ -1514,13 +1426,10 @@ end module
 
 @pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 def test_slot_ladder_ignores_same_name_on_unrelated_type(tmp_path: Path):
-    """The slot ladder retargets ``%slot`` textually, so it must be TYPE-AWARE: a
-    component of the same name on an UNRELATED type (a concrete ``t_p_wrap_orig%p``
-    vs the abstract, laddered ``t_p_wrap%p``) must be left alone -- else the retarget
-    rewrites it to ``%p__tag`` / ``%p__arm`` on a type that has no such member.  This
-    is ICON's ``t_p_comm_pattern_orig%p`` colliding with the 18-arm ``t_stack_op``
-    slot ``p``.  The owner ``wrap%p`` still ladders; the concrete ``worig%p`` resolves
-    as an ordinary (non-laddered) dispatch."""
+    """Slot ladder retargets %slot textually, so it must be TYPE-AWARE: an unrelated
+    type's same-named component (t_p_wrap_orig%p) must be left alone, else it's
+    rewritten to a member that doesn't exist. ICON t_p_comm_pattern_orig%p vs
+    t_stack_op%p."""
     ast = inline_to_ast({"s.f90": _SLOT_NAME_COLLISION_SRC}, entry="m_use::kern")
     assert not walk(ast, f03.Procedure_Designator), "a dispatch survived"
     low = ast.tofortran().lower()
@@ -1533,19 +1442,12 @@ def test_slot_ladder_ignores_same_name_on_unrelated_type(tmp_path: Path):
     subprocess.check_call(["gfortran", "-fsyntax-only", "-ffree-line-length-none", "collide.f90"], cwd=str(tmp_path))
 
 
-#: An arm module imports a derived TYPE that is DEFINED in one module (``m_origin``)
-#: and RE-EXPORTED by another (``m_grid``), and one of its contained procedures uses
-#: that type ONLY by host association -- a ``TYPE(t_subset_range)`` local declaration,
-#: never a call.  Consolidating the arm into the base module gives the base a new
-#: dependency on ``m_grid``/``m_origin``.  Two things must then hold or the emitted
-#: TU references a type it never imports ("used before defined"): the moved ``USE``
-#: must land AHEAD of the base's type defs (a ``USE`` after a declaration is illegal
-#: Fortran AND invisible to ``alias_specs``), and the base module must be re-sorted
-#: AFTER its new dependencies (``alias_specs`` resolves ``USE``s in document order and
-#: would otherwise drop the re-exported host type).  This is ICON's ``t_subset_range``
-#: (defined in ``mo_model_domain``, re-exported via ``mo_grid_subset``) host-associated
-#: into ``mo_surface_height_lhs``'s ``lhs_..._matrix_wp`` helper, an arm of the
-#: ``t_lhs_agen`` ladder.
+#: Arm module imports a TYPE defined in one module (m_origin) and re-exported by
+#: another (m_grid), used only by host association (local decl, no call). Merging
+#: the arm into the base adds a dependency: the moved USE must land ahead of the
+#: base's type defs (else illegal Fortran + invisible to alias_specs), and the base
+#: module must be re-sorted after its new deps (alias_specs resolves USEs in
+#: document order). ICON's t_subset_range (mo_model_domain / mo_grid_subset).
 _REEXPORT_HOST_TYPE_SRC = """
 module m_origin
   implicit none
@@ -1650,11 +1552,9 @@ end module
 
 @pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 def test_arm_merge_keeps_reexported_host_type_resolvable(tmp_path: Path):
-    """A host-associated type that is re-exported through the arm's imported module
-    survives the arm->base module merge: the moved subprogram still imports it (from
-    its true origin), so the emitted TU compiles instead of naming an unimported type.
-    Guards both halves of the fix -- the moved ``USE`` is prepended ahead of the base's
-    type defs, and the base module is re-sorted after its newly-inherited dependencies."""
+    """Host-associated type re-exported through the arm's module survives the
+    arm->base merge: the moved USE is prepended ahead of the base's type defs, and
+    the base module is re-sorted after its new dependencies."""
     ast = inline_to_ast({"s.f90": _REEXPORT_HOST_TYPE_SRC}, entry="m_use::driver")
     assert not walk(ast, f03.Procedure_Designator), "a type-bound dispatch survived devirtualisation"
     out = ast.tofortran()
@@ -1669,13 +1569,11 @@ def test_arm_merge_keeps_reexported_host_type_resolvable(tmp_path: Path):
     subprocess.check_call(["gfortran", "-fsyntax-only", "-ffree-line-length-none", "reexport.f90"], cwd=str(tmp_path))
 
 
-#: A hybrid slot (a CLASS(base) data-carrying POINTER, kept CLASS by the component
-#: ladder) is PASSED to a helper as a bare CLASS(base) dummy, and the helper dispatches
-#: on it (`trans%sync`).  The slot ladder devirtualises `this%trans%binding` (a slot
-#: DISPATCH) but leaves `CALL helper(this%trans)` (a slot PASS) as CLASS, so the helper's
-#: `dummy%binding` stays polymorphic -> gfortran "sync is not a member of t_xfer" (the
-#: base's bindings were stripped by the hybrid expansion).  This is ICON's
-#: ocean_restart_gmres(trans)%sync in the solve_free_sfc solver.
+#: Hybrid slot (CLASS(base) data-carrying POINTER, kept CLASS) passed to a helper as
+#: a bare CLASS(base) dummy that dispatches on it. The slot ladder devirtualises the
+#: slot DISPATCH but leaves the slot PASS as CLASS, so the helper's dummy dispatch
+#: stays polymorphic -> gfortran "sync is not a member" (bindings stripped by hybrid
+#: expansion). ICON's ocean_restart_gmres(trans)%sync in solve_free_sfc.
 _DUMMY_DISPATCH_HELPER_SRC = """
 module m_base
   implicit none
@@ -1776,10 +1674,9 @@ end module
 
 @pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH")
 def test_dummy_dispatch_helper_devirtualized(tmp_path: Path):
-    """A dispatch on a CLASS(base) DUMMY of a helper (`trans%sync`), where the helper is
-    called with the hybrid slot `this%trans`, is devirtualised: the helper is cloned per
-    arm (dummy retyped to the concrete arm) and the call becomes a tag ladder routing each
-    arm to its clone with the matching per-arm slot.  Mirrors ICON's ocean_restart_gmres."""
+    """Dispatch on a helper's CLASS(base) dummy, called with the hybrid slot, is
+    devirtualised: helper clones per arm (dummy retyped), call becomes a tag ladder.
+    Mirrors ICON's ocean_restart_gmres."""
     ast = inline_to_ast({"s.f90": _DUMMY_DISPATCH_HELPER_SRC}, entry="m_use::driver", tolerate_external_uses=True)
     assert not walk(ast, f03.Procedure_Designator), "a dispatch on the CLASS dummy survived"
     low = ast.tofortran().lower()

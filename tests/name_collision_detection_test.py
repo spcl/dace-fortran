@@ -1,23 +1,12 @@
-"""Verify the bridge's name-collision detection between
-``builder.arrays`` / ``builder.scalars`` / ``builder.symbols``.
+"""Verify the bridge's name-collision detection between builder.arrays/scalars/symbols.
 
-A Fortran short name that appears as MULTIPLE VarInfos with
-different ``role`` -- typically an entry-kernel block-arg ARRAY
-whose name matches a SCALAR dummy of an inlined helper -- used
-to leak into ``builder.scalars`` AND ``builder.arrays``
-simultaneously, causing emit_tasklet to add a spurious 1D scalar
-memlet ``arr[0]`` on top of the correct ND array memlet.  Surfaced
-as graupel's ``InvalidSDFGEdgeError: Memlet subset does not match
-node dimension (expected 2, got 1)``.
-
-Two-layer defense:
-  * builder-init de-collision: ARRAY wins over SCALAR over
-    SYMBOL when the same name is present in multiple
-    role-keyed dicts.
-  * loud-fail post-condition: a RuntimeError at builder-init
-    time if the three role-keyed dicts aren't disjoint -- so
-    the gap is caught at extract time, not at SDFG validation
-    200 states later with an opaque InvalidSDFGEdgeError.
+A name appearing as multiple VarInfos with different roles (e.g. an ARRAY
+block-arg whose name matches a SCALAR dummy of an inlined helper) used to leak
+into both dicts, causing a spurious 1D memlet on top of the correct ND one --
+graupel's ``InvalidSDFGEdgeError: Memlet subset does not match node dimension
+(expected 2, got 1)``. Two-layer defense: (1) ARRAY wins over SCALAR over
+SYMBOL on collision; (2) RuntimeError at builder-init if the three role-keyed
+dicts aren't disjoint, caught at extract time instead of 200 states later.
 """
 import pytest
 
@@ -27,12 +16,9 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_inlined_callee_scalar_shadowing_outer_array(tmp_path):
-    """Reproduces the graupel pattern: an outer subroutine has a 2D
-    array ``arr``; an inlined helper takes a scalar ``arr`` dummy.
-    After the inliner runs, both the array and the scalar VarInfo
-    end up in the entry function -- the bridge must classify the
-    name as ARRAY (rank>0 wins) and not duplicate it across role
-    dicts.  Direct probe of the de-collision logic."""
+    """Reproduces the graupel pattern: outer 2D array ``arr`` + an inlined helper's
+    scalar ``arr`` dummy collide post-inline; bridge must classify as ARRAY
+    (rank>0 wins), not duplicate across role dicts."""
     src = """
 module m
 contains
@@ -51,23 +37,17 @@ contains
 end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="outer", entry="m::outer").build()
-    # ``arr`` must be in arrays (2D), NOT in scalars (the inlined
-    # callee's collision must lose to the outer array).
+    # arr must be in arrays (2D) not scalars -- inlined callee's collision loses to the outer array
     assert "arr" in sdfg.arrays
     assert tuple(int(s) for s in sdfg.arrays["arr"].shape) == (3, 3)
-    # And the spurious 1D ``arr[0]`` memlet must NOT appear -- if it
-    # did, validation would have raised
-    # ``InvalidSDFGEdgeError: Memlet subset does not match node
-    # dimension``.
+    # spurious 1D arr[0] memlet must not appear, else validate() raises InvalidSDFGEdgeError
     sdfg.validate()
 
 
 def test_collision_loud_fail_is_loud(tmp_path):
-    """The role-keyed dicts must remain disjoint after the
-    de-collision logic.  Builder init raises RuntimeError if not --
-    we can't easily force the failure without crafting a synthetic
-    VarInfo list, so this is a smoke test that builder init doesn't
-    erroneously raise on a normal kernel with NO collisions."""
+    """Role-keyed dicts must stay disjoint after de-collision (builder init raises
+    RuntimeError if not). Can't easily force the failure without a synthetic VarInfo
+    list, so this just smoke-tests no false-positive raise on a collision-free kernel."""
     src = """
 module m
 contains

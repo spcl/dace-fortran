@@ -1,14 +1,10 @@
 """Linear-algebra Fortran intrinsics -> DaCe library nodes.
 
-Exercises the four ``hlfir.*`` linalg ops that bypass the elemental
-path and go straight to dedicated library nodes:
-
+Exercises the ``hlfir.*`` linalg ops that bypass the elemental path:
     hlfir.matmul       -> blas.MatMul   (GEMM / GEMV shapes)
     hlfir.transpose    -> linalg.Transpose
     hlfir.dot_product  -> blas.Dot
-
-Each result is compared numerically against the gfortran/f2py-compiled
-Fortran reference on seeded random input.
+Compared numerically against a gfortran/f2py-compiled reference on seeded random input.
 """
 
 import shutil
@@ -54,7 +50,7 @@ def test_linalg_ops_numerical(tmp_path):
     v = rng.standard_normal(m)
     u = rng.standard_normal(n)
 
-    # Reference  --  gfortran-compiled.
+    # reference (gfortran-compiled)
     c_ref = np.zeros((n, k), order="F")
     at_ref = np.zeros((m, n), order="F")
     w_ref = np.zeros(n, order="F")
@@ -62,9 +58,7 @@ def test_linalg_ops_numerical(tmp_path):
     mod.linalg_ops(np.asfortranarray(a), np.asfortranarray(b), c_ref, at_ref, np.asfortranarray(v), w_ref,
                    np.asfortranarray(u), s_ref)
 
-    # SDFG  --  frontend now emits Fortran-order strides for rank>1
-    # descriptors, so pass F-order arrays to the matmul/transpose ops
-    # to match the caller-side convention.
+    # SDFG: frontend emits Fortran-order strides for rank>1 descriptors; pass F-order arrays to match.
     c_sdfg = np.zeros((n, k), dtype=np.float64, order="F")
     at_sdfg = np.zeros((m, n), dtype=np.float64, order="F")
     w_sdfg = np.zeros(n, dtype=np.float64)
@@ -101,18 +95,7 @@ end module probe_mod
 
 
 def test_transpose_of_elemental(tmp_path):
-    """Regression: ``transpose(<inline elementwise expr>)``  --  the
-    transpose's operand is an ``hlfir.expr`` produced by an inline
-    ``hlfir.elemental`` (here ``1.0d0 - d``), not a named array.  Without
-    the libcall-over-elemental materialise path, ``buildLibCallNode``'s
-    ``traceToDecl`` on the operand returns ``""``, ``emit_libcall``
-    looks up ``ctx.sdfg.arrays['']``, and the build raises
-    ``KeyError: ''``.
-
-    Triggers Phase 2's ``materialiseElementalForLibcall`` at the direct
-    libcall dispatch site (``dispatch.cpp``).  Pure isolation  --  no
-    gather, no triplet, so the test fails iff the elemental-source
-    materialise specifically regresses."""
+    """Regression: transpose(<inline elementwise expr>) -- operand is an hlfir.expr from an inline elemental, not a named array.  Without materialiseElementalForLibcall, traceToDecl returns "", emit_libcall does ctx.sdfg.arrays[''], and the build raises KeyError: ''.  Pure isolation so a failure here means the elemental-source materialise regressed."""
     if shutil.which("gfortran") is None:
         pytest.skip("gfortran not available")
     src_path = tmp_path / "transpose_of_elem.f90"
@@ -133,8 +116,7 @@ def test_transpose_of_elemental(tmp_path):
 
 
 def test_linalg_ops_structure(tmp_path):
-    """The SDFG should carry two MatMul, one Transpose, and one Dot
-    library node  --  one per intrinsic call."""
+    """SDFG carries two MatMul, one Transpose, one Dot library node -- one per intrinsic call."""
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(_SRC_PATH.read_text(), sdfg_dir, name="linalg_ops", pipeline="hlfir-propagate-shapes").build()

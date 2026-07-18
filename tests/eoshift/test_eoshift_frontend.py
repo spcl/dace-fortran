@@ -1,14 +1,9 @@
 """Frontend-recognition + memlet-subset tests for Fortran ``EOSHIFT``.
 
-The bridge recognises the heap-result runtime call
-``fir.call @_FortranAEoshiftVector(...)`` and routes it through an
-:class:`dace.libraries.standard.nodes.eoshift.EOShift` lib node.
-Each test drives one isolated Fortran pattern, asserts the lib node
-exists with the right configuration, and verifies the connector
-memlets cover the **full** shift dimension (EOSHIFT operates over
-the whole axis; the lib node's pure expansion needs the full extent
-to compute the boundary fill correctly).  The expansion itself is a
-stub -- these tests stop at SDFG-build time.
+``fir.call @_FortranAEoshiftVector`` routes to an
+:class:`dace.libraries.standard.nodes.eoshift.EOShift` lib node; connector
+memlets must cover the full shift axis (needed for the boundary-fill
+expansion, itself a stub -- tests stop at SDFG-build time).
 """
 from pathlib import Path
 import sys
@@ -59,14 +54,10 @@ def test_eoshift_2d_dim2_recognised(tmp_path):
 
 
 def test_eoshift_negative_shift_recognised(tmp_path):
-    """``EOSHIFT(v, SHIFT=-2, BOUNDARY=99.0)`` -- recognition wires an EOShift node.
+    """``EOSHIFT(v, SHIFT=-2, BOUNDARY=99.0)`` wires an EOShift node.
 
-    The constant-folding pass that should propagate the literal ``-2`` into
-    ``n.shift`` doesn't yet trace through Flang's ``alloca + store + load``
-    chain (the runtime call's shift arg is passed by reference), so the
-    shift property may stay ``None`` while the lib node count is correct.
-    This anchor pins the recognition itself; tightening the shift
-    extraction is tracked separately.
+    Constant-folding doesn't yet trace the literal shift through Flang's
+    alloca+store+load chain, so ``n.shift`` may stay ``None``; pins recognition only.
     """
     sdfg = _build("eoshift_negative_shift_probe.f90", "eoshift_negative", tmp_path)
     nodes = _find_lib_nodes(sdfg, "EOShift")
@@ -74,13 +65,7 @@ def test_eoshift_negative_shift_recognised(tmp_path):
 
 
 def test_eoshift_memlets_cover_full_arrays(tmp_path):
-    """EOShift connectors receive whole-array memlets.
-
-    Same rationale as the CShift counterpart: the shift operates over
-    the entire axis (and the boundary fill needs to know the extent
-    to decide where the fill region starts), so the bridge must wire
-    full-extent memlets on both connectors.
-    """
+    """EOShift connectors get whole-array memlets (boundary fill needs the full extent), same as CShift."""
     import sympy
     sdfg = _build("eoshift_2d_dim2_probe.f90", "eoshift_2d_dim2", tmp_path)
     nodes = _find_lib_nodes(sdfg, "EOShift")

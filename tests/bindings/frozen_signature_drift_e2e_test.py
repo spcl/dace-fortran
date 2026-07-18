@@ -1,21 +1,9 @@
 """Frozen-signature drift, exercised through the *real* generation path.
 
-``frozen_signature_test.py`` checks ``FrozenSignature.verify_against``
-against hand-built synthetic SDFGs.  This module closes the gap the
-contract actually guards: a signature snapshotted by
-``SDFGBuilder.build()`` (``sdfg._frozen_signature``), then drifted by a
-post-build SDFG mutation, must be rejected by the dace-fortran binding
-builder -- not silently linked into a Fortran library that disagrees
-with the wrapper.
-
-The drift gate used to be a ``dace/codegen/codegen.py`` hook; it now
-lives in ``build_fortran_library``, which runs ``verify_against``
-*before* compiling or emitting anything.  So the negative cases raise
-on the real bridge SDFG without a hand-built ``OriginalInterface`` /
-``FlattenPlan`` (the gate is reached first).  The positive control
-asserts the gate does not false-positive: a later emit/link step
-legitimately fails on the stub interface, but never with
-``SignatureDriftError``.
+Complements ``frozen_signature_test.py`` (hand-built SDFGs): here the
+signature comes from ``SDFGBuilder.build()``, drifted by a post-build
+mutation, and must be rejected by ``build_fortran_library`` before any
+compile/emit. Positive control checks the gate doesn't false-positive.
 """
 
 from pathlib import Path
@@ -48,11 +36,7 @@ end module axpy_mod
 
 
 def _build(tmp_path: Path):
-    """Build the ``axpy`` SDFG through the bridge.
-
-    :param tmp_path: pytest scratch dir.
-    :returns: built SDFG with ``_frozen_signature`` auto-attached.
-    """
+    """Build the ``axpy`` SDFG through the bridge; returns SDFG with ``_frozen_signature`` auto-attached."""
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(_SRC, sdfg_dir, name="axpy", entry="axpy_mod::axpy").build()
@@ -67,9 +51,8 @@ def _build_lib(sdfg, tmp_path: Path):
 
 
 def test_untouched_sdfg_passes_drift_gate(tmp_path: Path):
-    """Positive control: a build nobody mutated still matches its own
-    snapshot, so the drift gate in ``build_fortran_library`` passes
-    (a later emit step fails on the stub interface, never with drift)."""
+    """Positive control: an unmutated build passes the drift gate (a later
+    emit step may fail on the stub interface, but never with drift)."""
     sdfg = _build(tmp_path)
     try:
         _build_lib(sdfg, tmp_path)
@@ -80,9 +63,8 @@ def test_untouched_sdfg_passes_drift_gate(tmp_path: Path):
 
 
 def test_added_arg_after_freeze_raises(tmp_path: Path):
-    """A transformation that adds a non-transient array after the
-    signature was frozen drifts ``sdfg.arglist()``; the builder must
-    reject it instead of linking a library the binding can't call."""
+    """Adding a non-transient array after freeze drifts ``sdfg.arglist()``;
+    the builder must reject it instead of linking an uncallable library."""
     sdfg = _build(tmp_path)
     sdfg.add_array("z_drift", shape=(dace.symbol("n"), ), dtype=dace.float64, transient=False)
     with pytest.raises(SignatureDriftError, match="signature drift"):
@@ -90,9 +72,8 @@ def test_added_arg_after_freeze_raises(tmp_path: Path):
 
 
 def test_dtype_change_after_freeze_raises(tmp_path: Path):
-    """Silently retyping an existing arg (float64 -> float32) is the
-    most dangerous drift -- order/count look identical.  The per-arg
-    dtype guard in ``verify_against`` must catch it."""
+    """Retyping an existing arg (float64 -> float32) is the most dangerous
+    drift (order/count look identical); the per-arg dtype guard must catch it."""
     sdfg = _build(tmp_path)
     sdfg.arrays["y"].dtype = dace.float32
     with pytest.raises(SignatureDriftError, match="dtype"):

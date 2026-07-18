@@ -1,12 +1,7 @@
-"""Multi-file Fortran build: several ``.f90`` files (a driver plus the
-modules it ``USE``s, in any order) + a mangled entry -> one SDFG.
-
-``build_sdfg_from_files`` stages the files into the scratch dir and
-``merge_used_modules`` inlines every ``USE``-d module into the root's
-translation unit (the root is the file defining the entry's
-procedure), so flang sees one self-contained TU.  These tests pass
-multiple files and check the merged SDFG runs correctly.
-"""
+"""Multi-file Fortran build: several ``.f90`` files (driver + the modules it ``USE``s,
+any order) + entry -> one SDFG.  ``build_sdfg_from_files`` stages the files and
+``merge_used_modules`` inlines every ``USE``-d module into the root's TU (the file
+defining the entry's procedure) so flang sees one self-contained TU."""
 from pathlib import Path
 
 import numpy as np
@@ -119,10 +114,9 @@ def test_three_files_transitive_use(tmp_path: Path, merge_engine):
 
 
 def test_entry_proc_name_accepts_all_three_spellings():
-    """Root-file selection reduces every accepted entry spelling to the bare
-    procedure name: the friendly ``module::proc`` qualifier, a mangled Flang
-    symbol, and an already-plain name.  (Regression: ``module::proc`` used to
-    fall through unstripped and never match any ``subroutine``/``function``.)"""
+    """Root-file selection reduces every accepted entry spelling (``module::proc``,
+    mangled Flang symbol, plain name) to the bare procedure name.  Regression:
+    ``module::proc`` used to fall through unstripped and match nothing."""
     from dace_fortran.build import _entry_proc_name
     assert _entry_proc_name("mo_solve_nonhydro::solve_nh") == "solve_nh"
     assert _entry_proc_name("m_array_return::kern") == "kern"
@@ -134,9 +128,9 @@ def test_entry_proc_name_accepts_all_three_spellings():
 
 @pytest.mark.parametrize("merge_engine", ["fparser", "regex"])
 def test_module_qualified_entry_selects_root(tmp_path: Path, merge_engine):
-    """A ``module::proc`` entry resolves the root file and builds (both engines).
-    Mirrors the bare-name path of ``test_two_files_driver_plus_module`` with the
-    driver wrapped in a module and addressed as ``drv::run``."""
+    """``module::proc`` entry resolves the root file and builds (both engines).
+    Mirrors ``test_two_files_driver_plus_module`` with the driver wrapped in a module,
+    addressed as ``drv::run``."""
     driver = """
 module drv
   use mod_add
@@ -172,11 +166,9 @@ def test_entry_not_found_is_rejected(tmp_path: Path):
 
 
 def test_entry_resolution_contract(tmp_path: Path):
-    """Entry contract: ``build_sdfg`` auto-resolves a single
-    procedure but errors when the source is empty or *ambiguous*
-    (an SDFG targets one specific procedure -- no "first of many"
-    guessing); ``build_sdfg_from_files`` always requires ``entry=``
-    (it selects the root file)."""
+    """Entry contract: ``build_sdfg`` auto-resolves a single procedure but errors on
+    empty/ambiguous source (no "first of many" guessing); ``build_sdfg_from_files``
+    always requires ``entry=`` (it selects the root file)."""
     files = _write(tmp_path / "src", driver=_DRIVER, mod_add=_MOD_ADD)
     with pytest.raises(ValueError, match="(?i)requires entry"):
         build_sdfg_from_files(files, name="run", out_dir=tmp_path / "b")

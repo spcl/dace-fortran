@@ -1,21 +1,14 @@
-"""Extract one ICON-O kernel into a single, self-contained, COMPILING ``.f90``.
+"""Extract one ICON-O kernel into a single, self-contained, COMPILING .f90.
 
-This is the ``input -> single TU`` stage:
+input -> single TU stage: merge_used_modules (regex closure, no mpi/netcdf stubs) ->
+inline_to_single_tu(expand_cpp=True, tolerate_external_uses=True) (cpp pre-pass, CONTIGUOUS
+strip, external-USE tolerance, namelist pruning, prune to kernel) -> gfortran -fsyntax-only.
+Lowering the TU to an SDFG is a separate concern handled elsewhere.
 
-  merge_used_modules (regex closure, NO mpi/netcdf library stubs)
-  -> inline_to_single_tu(expand_cpp=True, tolerate_external_uses=True)
-     (cpp pre-pass, CONTIGUOUS strip, external-USE tolerance for
-      netcdf/mpi/cdi, consistent namelist pruning, prune to the kernel)
-  -> gfortran -fsyntax-only  (the TU must be valid, compiling Fortran)
+Runs as a subprocess with a virtual-memory cap so the ~137k-line merged closure's fparser
+parse can't OOM the host. Prints RESULT: PASS, TU_PATH: <path>, TU_LINES: <n> on success.
 
-Lowering the TU to an SDFG is a SEPARATE concern handled elsewhere.
-
-Run as a subprocess (with a virtual-memory cap) so the fparser parse of
-the ~137k-line merged closure cannot OOM the host.  Prints
-``RESULT: PASS``, ``TU_PATH: <path>`` and ``TU_LINES: <n>`` on success.
-
-Usage:
-    _extract_single_tu.py <source_relpath> <module::entry> <out_dir> [mem_gb]
+Usage: _extract_single_tu.py <source_relpath> <module::entry> <out_dir> [mem_gb]
 """
 import os
 import re
@@ -32,10 +25,8 @@ def main(argv):
     source_relpath, entry, out_dir = argv[1], argv[2], Path(argv[3])
     mem_gb = float(argv[4]) if len(argv) > 4 else 10.0
     halo_mode = argv[5] if len(argv) > 5 else "external"
-    # Cap the SOFT address-space limit only, leaving the inherited HARD limit
-    # untouched.  Raising the hard limit raises ValueError on a host that already
-    # constrains it (e.g. a CI cgroup) -- and that would crash before any RESULT
-    # marker is printed, which the harness would surface only as an opaque fail.
+    # Cap the SOFT limit only; raising the inherited HARD limit ValueErrors on a host that
+    # already constrains it (e.g. CI cgroup), crashing before any RESULT marker prints.
     hard = resource.getrlimit(resource.RLIMIT_AS)[1]
     cap = int(mem_gb * 1024**3)
     if hard != resource.RLIM_INFINITY:
@@ -61,10 +52,9 @@ def main(argv):
         mp.write_text(merged)
         log(f"  {len(merged.splitlines())} lines merged")
 
-        # In the "inlined" halo mode the concrete comm-pattern arm is force-included
-        # (it is reached only via the externalised factory) and kept alive past the
-        # early USE-reachability prune via a USE injection into the entry module --
-        # the monomorphisation pass then has it to retype to.  No-op for "external".
+        # "inlined" halo mode force-includes the concrete comm-pattern arm and keeps it alive
+        # past USE-reachability pruning via injected USE, for monomorphisation to retype to.
+        # No-op for "external".
         sources = {str(mp): merged}
         for name, content in cfg["extra_sources"].items():
             sources[str(out_dir / name)] = content
@@ -104,17 +94,14 @@ def main(argv):
         print(f"TU_PATH: {tu}", flush=True)
         print(f"TU_LINES: {n}", flush=True)
 
-        # Compile-check in a clean dir (the repo root carries stale flang
-        # ``.mod`` files that gfortran refuses to read).
+        # Compile-check in a clean dir -- repo root carries stale flang .mod files gfortran refuses to read.
         log("gfortran -fsyntax-only")
         cdir = out_dir / "cc"
         cdir.mkdir(exist_ok=True)
         cf = cdir / Path(tu).name
         shutil.copy(tu, cf)
-        # ``-fallow-argument-mismatch``: the inlined halo leaves raw, interface-less
-        # ``mpi_*`` calls whose buffer argument is REAL(8) / REAL(4) / INTEGER / a
-        # scalar or array across the type-specific wrappers -- exactly the
-        # type-generic external every real MPI build compiles with this flag.
+        # -fallow-argument-mismatch: inlined halo leaves raw, interface-less mpi_* calls whose
+        # buffer arg type varies across wrappers -- the same flag every real MPI build needs.
         r = subprocess.run(
             ["gfortran", "-fsyntax-only", "-ffree-line-length-none", "-fallow-argument-mismatch", cf.name],
             cwd=str(cdir),

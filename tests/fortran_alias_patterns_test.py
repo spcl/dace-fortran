@@ -1,82 +1,33 @@
-"""Exhaustive probe of every Fortran storage-association / aliasing pattern
-the bridge may encounter.
+"""Exhaustive probe of every Fortran storage-association / aliasing pattern the bridge may
+encounter -- one IR shape per Fortran reshape/aliasing construct Flang's HLFIR/FIR emits.
+Classification audited against HLFIROps.td + FIROps.td and Fortran 2018 15.5.2.4-15.5.2.10.
 
-Each test corresponds to one IR shape Flang's HLFIR / FIR emit when the
-source uses a particular Fortran reshape / aliasing construct.  The
-classification comes from auditing
-``/usr/lib/llvm-21/include/flang/Optimizer/HLFIR/HLFIROps.td``
-+ ``/usr/lib/llvm-21/include/flang/Optimizer/Dialect/FIROps.td`` against
-the Fortran 2018 standard's storage-association rules
-(sections 15.5.2.4 -- 15.5.2.10) and Flang's docs (HighLevelFIR.html /
-AssumedRank.html / AliasingAnalysisFIR.html).
-
-For each pattern we build a tiny SDFG and assert either a known
-property (the bridge correctly mints a view-alias / handles the
-reshape) or mark the test xfail with a precise description of what
-support is missing.  Tests that probe sequence association directly
-verify the f2py round-trip ALSO honours the same semantics so we know
-the gfortran reference matches.
+Each pattern builds a tiny SDFG and asserts a known property, or xfails with what's missing.
+Sequence-association probes also verify the f2py round-trip honours the same semantics.
 
 Pattern catalogue (status as of 2026-06-09):
 
-  A. Whole-array RANK reinterpretation -- 1D source -> multi-D dummy
-     (or vice versa).  ``fir.convert`` directly on the source's
-     declare; no slicing.  HANDLED in ``trace_utils.cpp::
-     asAssumedShapeAlias`` -- rank mismatch refuses the alias collapse,
-     extract_vars then mints a separate VarInfo for the dummy.
-
-  B. Array section (with triplets) reshape to lower rank.
-     ``hlfir.designate %src (triplets) shape <...>`` + ``fir.convert``.
-     HANDLED by existing view-alias detection in ``extract_vars.cpp:
-     1908+``.
-
-  C. Element passed to a fixed-extent dummy array (sequence
-     association of an element).  ``hlfir.designate %src (i)`` +
-     ``fir.convert`` to ref<array<NxT>>.  HANDLED by the
-     ``RewriteSequenceAssociation`` pass before the bridge sees it.
-
-  D. Assumed-rank dummy ``DIMENSION(..)`` -- the actual's rank
-     reaches the callee at runtime via the descriptor.  Uses
-     ``fir.rebox_assumed_rank``.  UNKNOWN -- probe below.
-
-  E. Assumed-shape dummy ``DIMENSION(:,:)``.  Caller's known-shape
-     array passed; dummy's extents come from the descriptor at
-     entry.  ``fir.embox`` or ``fir.rebox``.  HANDLED by the existing
-     ``asAssumedShapeAlias`` chain peel.
-
-  F. Assumed-size dummy ``DIMENSION(*)`` or ``DIMENSION(N, *)``.
-     The last extent is left implicit; the dummy sees memory from
-     element 1 to the end of the actual's storage.  Probe below.
-
-  G. POINTER with bounds-remap-AND-RESHAPE -- ``p(1:M, 1:K) =>
-     arr1d`` rebinds a 1D target as a 2D pointer.  Different from
-     plain ``p => arr2d`` (which keeps rank).  Probe below.
-
-  H. ``c_f_pointer(cptr, fptr, [M, N])`` -- C interop, binds an
-     opaque C pointer to a Fortran POINTER with explicit shape.
-     Probe below.
-
-  I. ``ASSOCIATE`` construct -- ``ASSOCIATE (name => expr)`` binds
-     a local name to an expression for the block's scope.  Uses
-     ``hlfir.associate``.  Probe below.
-
-  J. Component reference -- ``t%arr`` where ``t`` is derived-type
-     with an array component.  ``hlfir.designate`` with a component
-     spec.  Treated as a normal designate alias; should be handled.
-     Probe below to make sure.
-
-  K. ``RESHAPE`` intrinsic.  Produces a fresh ``hlfir.expr`` --
-     this is a VALUE (copy), not an alias.  No bridge work needed.
-
-  L. ``TRANSFER`` intrinsic.  Bit reinterpretation between types.
-     VALUE (copy).  No bridge work needed.
-
-  M. ``EQUIVALENCE`` statement (legacy F77).  Two named variables
-     share storage.  Probe below.
-
-  N. Vector subscripts ``arr([1, 3, 5])`` / ``arr(idx)``.  Fortran
-     spec forbids alias semantics for vector subscripts on the LHS;
-     the IR enforces this by routing through a temporary.  No alias.
+  A. Whole-array RANK reinterpretation (1D<->multi-D, same declare, no slice). HANDLED:
+     trace_utils.cpp::asAssumedShapeAlias refuses the alias collapse on rank mismatch.
+  B. Array section reshape to lower rank (designate+triplets -> fir.convert). HANDLED:
+     view-alias detection in extract_vars.cpp:1908+.
+  C. Element passed to a fixed-extent dummy (sequence association). HANDLED by the
+     RewriteSequenceAssociation pass before the bridge sees it.
+  D. Assumed-rank dummy DIMENSION(..) (fir.rebox_assumed_rank). UNKNOWN -- probe below.
+  E. Assumed-shape dummy DIMENSION(:,:) (fir.embox/fir.rebox). HANDLED by the existing
+     asAssumedShapeAlias chain peel.
+  F. Assumed-size dummy DIMENSION(*) / DIMENSION(N,*). Probe below.
+  G. POINTER bounds-remap-AND-RESHAPE (p(1:M,1:K) => arr1d, rank-changing). Probe below.
+  H. c_f_pointer(cptr, fptr, [M,N]) -- C interop with explicit shape. Probe below.
+  I. ASSOCIATE construct (hlfir.associate). Probe below.
+  J. Component reference t%arr -- normal designate alias, should already be handled.
+     Probe below to confirm.
+  K. RESHAPE intrinsic -- produces a fresh hlfir.expr, a VALUE copy, not an alias. No
+     bridge work needed.
+  L. TRANSFER intrinsic -- bit reinterpretation, VALUE copy. No bridge work needed.
+  M. EQUIVALENCE statement (legacy F77) -- two names share storage. Probe below.
+  N. Vector subscripts arr([1,3,5]) / arr(idx) -- spec forbids LHS alias semantics; IR
+     routes through a temporary. No alias.
 """
 from pathlib import Path
 
@@ -89,9 +40,8 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def _try_build(tmp_path, src, name, entry):
-    """Build an SDFG; return ``(sdfg, None)`` on success or
-    ``(None, err_str)`` on failure.  Used by the probe tests so a
-    failure on one pattern doesn't mask the rest."""
+    """Build an SDFG; return (sdfg, None) on success or (None, err_str) on failure -- so one
+    pattern's failure doesn't mask the rest."""
     try:
         return build_sdfg(src, tmp_path, name=name, entry=entry).build(), None
     except Exception as e:
@@ -102,9 +52,8 @@ def _try_build(tmp_path, src, name, entry):
 # Pattern A -- whole-array rank reinterpretation (the LU ``tv`` case).
 # ---------------------------------------------------------------------------
 def test_a_whole_array_rank_promotion_1d_to_3d(tmp_path):
-    """1D 5445-element scratch passed to a callee expecting a 3D
-    (5, 33, 33) dummy.  Same storage, different rank.  Closed in this
-    session via ``asAssumedShapeAlias`` rank-mismatch refusal."""
+    """1D 5445-element scratch passed to a callee expecting a 3D (5,33,33) dummy -- same
+    storage, different rank. Closed via asAssumedShapeAlias rank-mismatch refusal."""
     src = """
 module m
   implicit none
@@ -136,8 +85,7 @@ end module m
 # Pattern F -- assumed-size dummy ``DIMENSION(*)``.
 # ---------------------------------------------------------------------------
 def test_f_assumed_size_dummy_one_dim(tmp_path):
-    """``REAL :: a(*)`` -- callee sees the actual's storage from element 1
-    onwards.  No rank change; should be a same-rank alias."""
+    """REAL :: a(*) -- callee sees the actual's storage from element 1 onwards; same-rank alias."""
     src = """
 module m
   implicit none
@@ -163,8 +111,7 @@ end module m
 
 
 def test_f_assumed_size_dummy_multi_dim(tmp_path):
-    """``REAL :: a(5, *)`` -- callee sees the actual's storage with a
-    rank-fixed leading extent and unbounded last extent.  Same rank as
+    """REAL :: a(5, *) -- rank-fixed leading extent, unbounded last extent; same rank as
     actual when caller passes a 2D array."""
     src = """
 module m
@@ -224,19 +171,10 @@ end module m
 # Pattern H -- ``c_f_pointer`` with explicit shape.
 # ---------------------------------------------------------------------------
 def test_h_c_f_pointer_with_shape_is_rejected(tmp_path):
-    """``c_f_pointer(cptr, fptr, [M, N])`` -- binding an opaque
-    C-managed pointer to a Fortran pointer with an explicit shape is a
-    DELIBERATELY UNSUPPORTED feature: the buffer lives outside the
-    SDFG's data model (a raw ``c_ptr`` argument with no DaCe
-    descriptor), so the bridge can't give ``fptr`` a backing array.
-
-    Contract pinned here: the bridge FAILS CLEANLY -- the opaque
-    ``cptr`` surfaces as an unresolved free symbol the builder rejects
-    -- rather than silently emitting an SDFG that reads/writes through
-    a pointer it never allocated.  (The bounds-remap-view path handles
-    Fortran-side ``ptr(1:M,1:N) => arr`` rebinds; the c_f_pointer
-    C-buffer variant is out of scope.)
-    """
+    """c_f_pointer(cptr, fptr, [M,N]) -- DELIBERATELY UNSUPPORTED: the C-managed buffer has no
+    DaCe descriptor, so the bridge FAILS CLEANLY (unresolved free symbol) rather than silently
+    emitting reads/writes through a pointer it never allocated. Fortran-side ptr(1:M,1:N) => arr
+    rebinds are handled via bounds-remap-view; only the c_f_pointer C-buffer variant is out of scope."""
     src = """
 module m
   use, intrinsic :: iso_c_binding
@@ -267,9 +205,7 @@ end module m
 # Pattern I -- ``ASSOCIATE`` construct.
 # ---------------------------------------------------------------------------
 def test_i_associate_variable_binding(tmp_path):
-    """``ASSOCIATE (name => arr_var)`` binds ``name`` to ``arr_var``
-    for the scope.  No rank change; should be a same-rank alias the
-    existing path handles."""
+    """ASSOCIATE (name => arr_var) -- no rank change; same-rank alias the existing path handles."""
     src = """
 module m
   implicit none
@@ -291,9 +227,8 @@ end module m
 
 
 def test_i_associate_section_binding(tmp_path):
-    """``ASSOCIATE (name => arr(:,:,k))`` binds ``name`` to a 2D section
-    of a 3D array.  Section reshape inside an ASSOCIATE; tests whether
-    the bridge sees the section through the ``hlfir.associate``."""
+    """ASSOCIATE (name => arr(:,:,k)) -- section reshape inside an ASSOCIATE; tests whether the
+    bridge sees the section through hlfir.associate."""
     src = """
 module m
   implicit none
@@ -379,9 +314,8 @@ end module m
 # Pattern M -- ``EQUIVALENCE`` statement (legacy F77).
 # ---------------------------------------------------------------------------
 def test_m_equivalence_statement(tmp_path):
-    """``EQUIVALENCE (a, b)`` -- ``a(1)`` and ``b(1)`` are the same
-    memory cell.  Used in legacy code; flang may or may not lower it
-    in a form the bridge can recognise."""
+    """EQUIVALENCE (a, b) -- a(1) and b(1) share the same memory cell; flang may or may not
+    lower it in a form the bridge can recognise."""
     src = """
 module m
   implicit none

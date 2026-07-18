@@ -1,5 +1,5 @@
-"""Reused-scalar WAR/WAW hazard: a Fortran scalar reassigned with live reads
-of the prior value must not collapse onto one unordered DaCe scalar.
+"""Reused-scalar WAR/WAW hazard: a Fortran scalar reassigned with live reads of the prior
+value must not collapse onto one unordered DaCe scalar.
 
 Fortran reuses a scalar temp freely::
 
@@ -8,20 +8,15 @@ Fortran reuses a scalar temp freely::
     tmp = a(i-1)          ! re-write
     y   = tmp * b(i-1)    ! reads the SECOND value
 
-The bridge maps every use of ``tmp`` onto ONE DaCe scalar.  DaCe expresses
-scalar dataflow as values, not ordered memory, so two writes to one scalar in
-a single state carry no ordering -- the scheduler may hoist the second write
-ahead of the first write's reads, so ``x`` reads ``a(i-1)`` instead of
-``a(i)``.  This is the exact NPB-LU viscous-flux miscompile (``u21i`` used
-``rho_i(i-1)`` instead of ``rho_i(i)`` -> ~34% residual error at NPB Class S).
+DaCe scalars are values not ordered memory, so two writes to one scalar in a state carry no
+ordering -- the scheduler may hoist the second write ahead of the first write's reads. Exact
+NPB-LU viscous-flux miscompile (``u21i`` read ``rho_i(i-1)`` instead of ``rho_i(i)`` -> ~34%
+residual error at Class S).
 
-Fix (``emit_cfg._scalar_reassign_in_state`` + the non-serialise loop path):
-start a new state at the re-write so each scalar is written at most once per
-state and the interstate edge orders the second write after the first write's
-reads.  Granular -- only the re-write splits, benign scalar RAW does not.
+Fix (``emit_cfg._scalar_reassign_in_state``): start a new state at the re-write so each scalar
+writes at most once per state; benign scalar RAW does not split.
 
-Every case is checked e2e against an f2py-compiled gfortran reference of the
-same source: with the bug the SDFG diverges; with the fix it is bit-identical.
+Checked e2e against an f2py-compiled gfortran reference: bugged = diverges, fixed = bit-identical.
 """
 
 import numpy as np
@@ -62,10 +57,9 @@ def _run(tmp_path, body, name, n=8, seed=11, nvars=1):
 
 
 def test_scalar_reuse_minimal(tmp_path):
-    """The minimal LU pattern: tmp = a(i); x=tmp*b(i); tmp=a(i-1); y=tmp*b(i-1).
+    """Minimal LU pattern: tmp=a(i); x=tmp*b(i); tmp=a(i-1); y=tmp*b(i-1).
 
-    Correct: c(i) = a(i)*b(i) - a(i-1)*b(i-1).
-    Bugged:  c(i) = a(i-1)*b(i) - a(i-1)*b(i-1)  (x read the second tmp)."""
+    Correct: c(i) = a(i)*b(i) - a(i-1)*b(i-1). Bugged: c(i) = a(i-1)*b(i) - a(i-1)*b(i-1) (x read the second tmp)."""
     _run(
         tmp_path, """
 SUBROUTINE driver(a, b, c, n)
@@ -86,8 +80,7 @@ END SUBROUTINE driver
 
 
 def test_scalar_reuse_multicomponent(tmp_path):
-    """NPB-LU shape: one scalar ``tmp`` feeds five ``*i`` reads, is re-written,
-    then feeds five ``*im1`` reads -- five separate clobbered values."""
+    """NPB-LU shape: one scalar ``tmp`` feeds five ``*i`` reads, is re-written, then feeds five ``*im1`` reads -- five separate clobbered values."""
     _run(tmp_path,
          """
 SUBROUTINE driver(a, b, c, n)
@@ -146,8 +139,7 @@ END SUBROUTINE driver
 
 
 def test_scalar_reuse_in_if(tmp_path):
-    """Re-write inside an IF body -- exercises ``emit_assign``'s realised-graph
-    guard (the has_structured path), not the loop batch path."""
+    """Re-write inside an IF body -- exercises ``emit_assign``'s realised-graph guard (the has_structured path), not the loop batch path."""
     _run(
         tmp_path, """
 SUBROUTINE driver(a, b, c, n)
@@ -170,9 +162,8 @@ END SUBROUTINE driver
 
 
 def test_loop_carried_scalar_preserved(tmp_path):
-    """A loop-CARRIED scalar accumulator must NOT be broken by the split:
-    ``s`` reads its previous-iteration value, so it stays one scalar.  Guards
-    against over-eager splitting regressing the carry."""
+    """A loop-CARRIED scalar accumulator must NOT be broken by the split: ``s`` reads its
+    previous-iteration value, so it stays one scalar. Guards against over-eager splitting."""
     _run(
         tmp_path, """
 SUBROUTINE driver(a, b, c, n)

@@ -9,7 +9,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_fortran_frontend_empty(tmp_path):
-    """Test that empty subroutines and functions are correctly parsed."""
+    """Empty subroutines and functions parse correctly."""
     src = """
 module module_mpi
   integer, parameter :: process_mpi_all_size = 0

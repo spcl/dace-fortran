@@ -1,34 +1,16 @@
 """FFTW3 2-D / 3-D recognition: bridge lowers them to a single FFT lib node.
 
-The fixture :file:`fft_probe_2d3d.f90` contains two routines that drive
-the FFTW3 C ABI from Fortran via ``iso_c_binding``:
+:file:`fft_probe_2d3d.f90` drives the FFTW3 C ABI via ``iso_c_binding``:
+``run_fft_2d``/``run_fft_3d`` (in-place forward FFT) -- the serial-FFT shape
+plane-wave codes reduce to after sticks-and-planes redistribution (QE's
+``FFTXlib/src/fft_scalar.FFTW3.f90``).
 
-* ``run_fft_2d(M, N, x)`` -- in-place 2-D forward FFT;
-* ``run_fft_3d(L, M, N, x)`` -- in-place 3-D forward FFT.
-
-This is the serial-FFT shape every plane-wave code reduces to once the
-parallel sticks-and-planes scatter pipeline has redistributed the data
-locally (Quantum ESPRESSO's ``FFTXlib/src/fft_scalar.FFTW3.f90`` is the
-canonical example).
-
-End-to-end lowering through DaCe is now wired:
-
-1. ``dace_fortran/bridge/ast/dispatch.cpp::fftw3CalleeTag`` matches
-   ``fftw_plan_dft_{2,3}d`` / ``fftw_execute_dft`` / ``fftw_destroy_plan``
-   (and their ``fftwf_*`` single-precision twins) by mangled callee.
-2. The ``plan = fftw_plan_dft_*(...)`` user statement (lowered by
-   flang through a ``.result`` temp + ``hlfir.as_expr`` + ``hlfir.assign``)
-   is recognised at the ``hlfir.assign`` site and absorbed -- the
-   ``TYPE(C_PTR)`` plan SSA value is opaque and has no SDFG representation.
-   At absorb time the (rank, dims, direction) get recorded under the
-   destination variable name.
-3. ``fftw_execute_dft(plan, in, out)`` lowers to a single
-   :class:`dace.libraries.fft.nodes.FFT` (or :class:`IFFT` if the plan
-   was created with ``FFTW_BACKWARD = +1``) library node carrying the
-   in/out array memlets; the FFT node's ``FFTW3`` / ``cuFFT`` / ``MKL``
-   expansions take over from there.
-4. ``fftw_destroy_plan(plan)`` is recognised and dropped -- the FFT
-   library node's expansion owns the plan lifecycle.
+Lowering: ``dispatch.cpp::fftw3CalleeTag`` matches the ``fftw_plan_dft_*``/
+``fftw_execute_dft``/``fftw_destroy_plan`` mangled callees; the plan-create
+statement is absorbed at its ``hlfir.assign`` site (the opaque ``C_PTR`` has no
+SDFG representation), recording (rank, dims, direction); ``fftw_execute_dft``
+becomes a single :class:`FFT`/:class:`IFFT` library node; ``fftw_destroy_plan``
+is dropped (the lib node's expansion owns the plan lifecycle).
 """
 from pathlib import Path
 

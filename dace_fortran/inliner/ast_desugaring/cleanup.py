@@ -1,10 +1,7 @@
-"""
-This module contains a collection of AST cleanup and canonicalization passes for the
-Fortran frontend. These passes are designed to run after the initial parsing and
-desugaring stages. They perform tasks such as disambiguating language constructs
-(e.g., array access vs. function calls), standardizing identifier names, removing
-constructs not relevant for dataflow analysis, and restructuring global data to
-simplify subsequent processing.
+"""AST cleanup and canonicalization passes for the Fortran frontend, run after
+parsing and desugaring: disambiguates language constructs, standardizes
+identifier names, drops constructs irrelevant to dataflow analysis, and
+restructures global data.
 """
 from typing import Union, Set, Dict, List, Optional, Tuple
 
@@ -18,49 +15,26 @@ from . import types
 from . import utils
 from .. import ast_utils
 
-#: GNU/g77-extension procedures that gfortran provides but that are neither
-#: standard Fortran intrinsics (``fparser`` ``Intrinsic_Name`` does not match
-#: them) nor defined in any ``USE``-able module -- they are bare external
-#: library calls.  ``rand``/``irand`` (Park-Miller ``minstd`` PRNG) and
-#: ``srand`` (its seeder) are the canonical examples.  Their semantics differ
-#: across compilers (flang does not implement them at all), so the pipeline
-#: treats them as external calls lowered to their C-library equivalents rather
-#: than trying to resolve a Fortran definition.  Extend as other g77 externals
-#: (``etime``, ``getenv``, ...) are encountered.
+#: GNU/g77-extension procedures gfortran provides but that are neither Fortran
+#: intrinsics nor defined in any module -- bare external library calls (flang
+#: doesn't implement them). Extend as other g77 externals are encountered.
 EXTERNAL_BUILTIN_PROCEDURES = frozenset({"rand", "irand", "srand"})
 
 
 def correct_for_function_calls(ast: f03.Program):
-    """
-    A cleanup pass to disambiguate array accesses from function calls.
-
-    In Fortran, array access `A(i)` and function calls `F(x)` have identical syntax.
-    Fparser often defaults to parsing them as `Part_Ref` (array access). This function
-    uses type analysis to correct these misidentifications.
-
-    The process involves several steps:
-    1.  Identify and convert statement functions (e.g., `f(x) = x*x`) which are initially
-        parsed as assignment statements.
-    2.  Iteratively walk the AST to find `Part_Ref` nodes. If the base of a `Part_Ref`
-        does not resolve to a variable with a known type (i.e., an array or scalar),
-        it is reclassified as a `Function_Reference`.
-    3.  Do the same for `Structure_Constructor` nodes, which can also be disguised
-        function calls.
-    4.  Finally, identify calls to standard Fortran intrinsics (e.g., `SIN`, `MAX`) and
-        replace the generic `Function_Reference` node with a specific
-        `Intrinsic_Function_Reference` node.
-
-    :param ast: The Fortran AST to modify.
-    """
+    """Disambiguates array accesses from function calls: `A(i)` and `F(x)` parse
+    identically, and fparser defaults to `Part_Ref` (array access), so this uses
+    type analysis to reclassify unresolved `Part_Ref`/`Structure_Constructor`
+    nodes as `Function_Reference` (and intrinsics as `Intrinsic_Function_Reference`)."""
     alias_map = analysis.alias_specs(ast)
 
-    # First, look for statement functions, which are parsed as assignments to array-like expressions.
+    # Statement functions parse as assignments to array-like expressions -- find them first.
     for asgn in walk(ast, f03.Assignment_Stmt):
         lv, _, _ = asgn.children
         if not isinstance(lv, (f03.Part_Ref, f03.Structure_Constructor, f03.Function_Reference)):
             continue
         if walk(lv, f03.Subscript_Triplet):
-            # If the LHS contains a subscript triplet, it's an array section, not a statement function.
+            # LHS with a subscript triplet is an array section, not a statement function.
             continue
         lv, _ = lv.children
         lvloc = analysis.search_real_local_alias_spec(lv, alias_map)
@@ -74,10 +48,9 @@ def correct_for_function_calls(ast: f03.Program):
             # If it has a shape, it's an array, not a statement function.
             continue
 
-        # Now we know that this identifier actually refers to a statement function.
         stmt_fn = f03.Stmt_Function_Stmt(asgn.tofortran())
         ex = asgn.parent
-        # Find the enclosing execution part to correctly place the statement function.
+        # Walk up to the enclosing execution part.
         while not isinstance(ex, f03.Execution_Part):
             ex = ex.parent
         sp = ast_utils.atmost_one(ast_utils.children_of_type(ex.parent, f03.Specification_Part))
@@ -87,10 +60,8 @@ def correct_for_function_calls(ast: f03.Program):
 
     alias_map = analysis.alias_specs(ast)
 
-    # Iteratively disambiguate Part_Ref nodes. This loop runs until no more changes are made,
-    # as fixing one Part_Ref might reveal another that needs fixing.
-    # TODO: Looping over and over is not ideal. But `Function_Reference(...)` sometimes generate inner `Part_Ref`s. We
-    #  should figure out a way to avoid this clutter.
+    # Iteratively disambiguate Part_Ref nodes until fixed-point (fixing one may reveal another).
+    # TODO: `Function_Reference(...)` sometimes generates inner `Part_Ref`s needing another pass -- avoid the reloop.
     changed = None
     while changed is None or changed:
         changed = False
@@ -100,10 +71,8 @@ def correct_for_function_calls(ast: f03.Program):
                 scope_spec = analysis.find_scope_spec(dref)
                 comp_spec = analysis.find_dataref_component_spec(dref, scope_spec, alias_map)
                 if comp_spec not in alias_map:
-                    # A component of an externalised/unresolvable type (MATCH_ALL,
-                    # under tolerate-externals): it is a genuine member access on
-                    # an opaque type, not a disguised function call -- leave the
-                    # data-ref as-is.
+                    # Component of an externalised/unresolvable (MATCH_ALL) type -- genuine
+                    # member access on an opaque type, not a disguised function call.
                     continue
                 comp_type_spec = analysis.find_type_of_entity(alias_map[comp_spec], alias_map)
                 if not comp_type_spec:
@@ -135,15 +104,12 @@ def correct_for_function_calls(ast: f03.Program):
         sc_type_spec = analysis.search_real_ident_spec(sc_type.string, scope_spec, alias_map)
         if not sc_type_spec:
             if sc_type.string.lower() in EXTERNAL_BUILTIN_PROCEDURES:
-                # A bare g77-extension call (e.g. ``rand()``) mis-parsed as a
-                # structure constructor: it has no Fortran definition to resolve,
-                # so reclassify it as an (external) function reference.
+                # Bare g77-extension call (e.g. `rand()`) mis-parsed as a structure
+                # constructor, with no Fortran definition -- reclassify as a function reference.
                 utils.replace_node(sc, f03.Function_Reference(sc.tofortran()))
                 continue
-            # An unresolved constructor / call name -- e.g. ICON's external
-            # ``p_mpi_wtime`` (from ``mo_mpi`` when its source is absent).
-            # Strict mode asserts as before; with external-USE tolerance on we
-            # leave the node untouched for reachability pruning to drop.
+            # Unresolved constructor/call name (e.g. ICON's external `p_mpi_wtime`) -- under
+            # tolerance leave it for pruning to drop; strict mode asserts as before.
             if not analysis.TOLERATE_EXTERNAL_USES:
                 raise AssertionError(f"cannot find {sc_type.string} / {scope_spec}")
             continue
@@ -152,48 +118,35 @@ def correct_for_function_calls(ast: f03.Program):
             # If the constructor's name resolves to a function, it's a function reference.
             utils.replace_node(sc, f03.Function_Reference(sc.tofortran()))
 
-    # Identify and convert generic Function_Reference/Call_Stmt nodes to Intrinsic_Function_Reference if applicable.
+    # Convert generic Function_Reference/Call_Stmt to Intrinsic_Function_Reference where applicable.
     for fref in walk(ast, (f03.Function_Reference, f03.Call_Stmt)):
         scope_spec = analysis.find_scope_spec(fref)
 
         name, args = fref.children
         name = name.string
         if not f03.Intrinsic_Name.match(name):
-            # If the name does not match an intrinsic, skip.
             continue
         fref_spec = scope_spec + (name, )
         if fref_spec in alias_map:
-            # If an intrinsic name is shadowed by a user-defined entity, it's not an intrinsic call.
+            # Shadowed by a user-defined entity -- not an intrinsic call.
             continue
         if isinstance(fref, f03.Function_Reference):
-            # Replace with specific intrinsic node, ensuring arguments are preserved.
+            # Preserve args when swapping in the specific intrinsic node.
             repl = f03.Intrinsic_Function_Reference(fref.tofortran())
             utils.set_children(repl, (f03.Intrinsic_Name(name), args))
             utils.replace_node(fref, repl)
         else:
-            # For Call_Stmt, just update the name to Intrinsic_Name.
             utils.set_children(fref, (f03.Intrinsic_Name(name), args))
 
     return ast
 
 
 def remove_access_and_bind_statements(ast: f03.Program):
-    """
-    Removes access-control and language-binding statements from the AST.
-
-    This pass simplifies the tree by removing:
-    - `PUBLIC` and `PRIVATE` statements (`Access_Stmt`).
-    - `PRIVATE` declarations within derived types (`Private_Components_Stmt`).
-    - `BIND(C, ...)` specifications from function/subroutine definitions and type declarations.
-
-    These are removed because they are not relevant for the dataflow analysis and code
-    generation that follows.
-
-    :param ast: The Fortran AST to modify.
-    """
+    """Removes access-control (`PUBLIC`/`PRIVATE`/`Private_Components_Stmt`) and
+    `BIND(C, ...)` statements -- irrelevant to dataflow analysis and codegen."""
     # TODO: This can get us into ambiguity and unintended shadowing.
 
-    # We also remove any access statement that makes these interfaces public/private.
+    # Also removes access statements on interfaces.
     for acc in walk(ast, f03.Access_Stmt):
         # TODO: Add ref.
         kind, alist = acc.children
@@ -201,7 +154,7 @@ def remove_access_and_bind_statements(ast: f03.Program):
         spec = acc.parent
         utils.remove_self(acc)
         if not spec.children:
-            # If the parent (e.g., Specification_Part) becomes empty, remove it too.
+            # Remove the parent too if it's now empty.
             utils.remove_self(spec)
 
     for acc in walk(ast, f03.Private_Components_Stmt):
@@ -209,13 +162,13 @@ def remove_access_and_bind_statements(ast: f03.Program):
 
     for bind in walk(ast, f03.Language_Binding_Spec):
         if isinstance(bind.parent, (f03.Suffix, f03.Subroutine_Stmt, f03.Function_Stmt)):
-            # Since this is part of a tuple, we need to replace it with a `None` to maintain tuple structure.
+            # Part of a tuple -- replace with None to keep tuple structure.
             utils.replace_node(bind, None)
         else:
             par = bind.parent
             utils.remove_self(bind)
             if not par.children:
-                # If the parent becomes empty, replace it with `None`.
+                # Replace empty parent with None.
                 utils.replace_node(par, None)
     for bind in walk(ast, f03.Type_Attr_Spec):
         b, c = bind.children
@@ -223,71 +176,43 @@ def remove_access_and_bind_statements(ast: f03.Program):
             par = bind.parent
             utils.remove_self(bind)
             if not par.children:
-                # If the parent becomes empty, replace it with `None`.
+                # Replace empty parent with None.
                 utils.replace_node(par, None)
 
     return ast
 
 
 def assign_globally_unique_subprogram_names(ast: f03.Program, keepers: Set[types.SPEC]) -> f03.Program:
-    """
-    Renames all subprograms to ensure they have globally unique names.
-
-    This pass prevents name collisions that can occur when different modules define
-    functions or subroutines with the same name. It makes all subprogram names unique
-    across the entire program, simplifying subsequent analysis and transformations.
-
-    The process is as follows:
-    1.  **Collision Detection**: Identifies all subprogram names that are duplicated
-        across different scopes or that conflict with reserved keywords.
-    2.  **Name Generation**: Creates a unique name (e.g., `original_name_fn_0`) for each
-        conflicting subprogram that is not marked as a `keeper` (entry point).
-    3.  **AST Update**: Traverses the AST to:
-        a. Remove old `USE ... ONLY` imports for subprograms that will be renamed.
-        b. Replace all call sites (`CALL` statements and function references) with the
-           new unique names.
-        c. Insert new `USE` statements where needed to import the renamed subprograms
-           from their parent modules into the scopes where they are called.
-        d. Rename the subprogram definitions themselves (`SUBROUTINE`/`FUNCTION` and
-           `END SUBROUTINE`/`END FUNCTION` statements).
-        e. Handle the special case of the implicit function return variable.
-
-    :param ast: The Fortran AST to modify.
-    :param keepers: A set of specifications for subprograms (entry points) that should
-                    not be renamed.
-    :return: The modified Fortran AST.
-    """
+    """Renames subprograms to be globally unique, avoiding cross-module name
+    collisions and keyword clashes. `keepers` (entry points) retain their names."""
     SUFFIX, COUNTER = 'fn', 0
 
     ident_map = analysis.identifier_specs(ast)
     alias_map = analysis.alias_specs(ast)
 
-    # Collect all known subprogram names and identify those with collisions or reserved keywords.
+    # Find names that collide or clash with reserved keywords.
     known_names: Set[str] = {k[-1] for k in ident_map.keys()}
     name_collisions: Dict[str, int] = {k: 0 for k in known_names}
     for k in ident_map.keys():
         name_collisions[k[-1]] += 1
     name_collisions: Set[str] = {k for k, v in name_collisions.items() if v > 1 or k.lower() in KEYWORDS_TO_AVOID}
 
-    # Generate new unique names for subprograms that have collisions or are reserved.
+    # Assign fresh names to colliding/reserved subprograms.
     uident_map: Dict[types.SPEC, str] = {}
     for k in ident_map.keys():
         if k in keepers:
-            # Keep entry-point subprograms with their original names.
             continue
         if k[-1] in name_collisions:
-            # Generate a unique name by appending a suffix and counter.
+            # Suffix + counter, bumping past any existing name.
             uname, COUNTER = f"{k[-1]}_{SUFFIX}_{COUNTER}", COUNTER + 1
             while uname in known_names:
                 uname, COUNTER = f"{k[-1]}_{SUFFIX}_{COUNTER}", COUNTER + 1
         else:
-            # No collision, keep the original name.
             uname = k[-1]
         uident_map[k] = uname
     uident_map.update({k: k[-1] for k in keepers})
 
-    # PHASE 1.a: Remove all the places where any to-be-renamed function is imported.
-    # This is necessary because the new name will be imported later.
+    # PHASE 1.a: remove imports of to-be-renamed functions (re-imported under the new name later).
     for use in walk(ast, f03.Use_Stmt):
         mod_name = ast_utils.singular(ast_utils.children_of_type(use, f03.Name)).string
         mod_spec = (mod_name, )
@@ -297,27 +222,27 @@ def assign_globally_unique_subprogram_names(ast: f03.Program, keepers: Set[types
         survivors = []
         for c in olist.children:
             if isinstance(c, f03.Rename):
-                # Renamed uses shouldn't survive, and should be replaced with direct uses.
+                # Renamed uses don't survive -- replaced by direct uses.
                 continue
             assert isinstance(c, f03.Name)
             tgt_spec = analysis.find_real_ident_spec(c.string, mod_spec, alias_map)
             assert tgt_spec in ident_map and tgt_spec in uident_map
             if not isinstance(ident_map[tgt_spec], (f03.Function_Stmt, f03.Subroutine_Stmt)):
-                # We leave non-function uses alone.
+                # Leave non-function uses alone.
                 survivors.append(c)
         if survivors:
             utils.set_children(olist, survivors)
         else:
             utils.remove_self(use)
 
-    # PHASE 1.b: Replace all the function callsites.
+    # PHASE 1.b: replace all the function callsites.
     for fref in walk(ast, (f03.Function_Reference, f03.Call_Stmt)):
         scope_spec = analysis.find_scope_spec(fref)
 
         # TODO: Add ref.
         name, _ = fref.children
         if not isinstance(name, f03.Name):
-            # Intrinsics are not to be renamed, so skip.
+            # Intrinsics aren't renamed.
             assert isinstance(name, f03.Intrinsic_Name), f"{fref}"
             continue
         fspec = analysis.find_real_ident_spec(name.string, scope_spec, alias_map)
@@ -325,16 +250,16 @@ def assign_globally_unique_subprogram_names(ast: f03.Program, keepers: Set[types
         assert isinstance(ident_map[fspec], (f03.Function_Stmt, f03.Subroutine_Stmt))
         uname = uident_map[fspec]
         ufspec = fspec[:-1] + (uname, )
-        name.string = uname  # Apply the new unique name to the call site.
+        name.string = uname
 
-        # Find the nearest execution and its corresponding specification parts.
+        # Find the enclosing execution + specification parts.
         execution_part = fref.parent
         while not isinstance(execution_part, f03.Execution_Part):
             execution_part = execution_part.parent
         subprog = execution_part.parent
         specification_part = ast_utils.atmost_one(ast_utils.children_of_type(subprog, f03.Specification_Part))
 
-        # Determine the current module/program name to check if a USE statement is needed.
+        # Find the current module/program name (to decide if a USE is needed).
         cmod = fref.parent
         while cmod and not isinstance(cmod, (f03.Module, f03.Main_Program)):
             cmod = cmod.parent
@@ -357,38 +282,34 @@ def assign_globally_unique_subprogram_names(ast: f03.Program, keepers: Set[types
             # If the function is defined in the current module, no USE statement needed.
             continue
 
-        # Add a "use" statement for the renamed function. It will be consolidated later.
+        # Add a USE for the renamed function (consolidated later).
         if not specification_part:
             utils.append_children(subprog, f03.Specification_Part(get_reader(f"use {mod}, only: {uname}")))
         else:
             utils.prepend_children(specification_part, f03.Use_Stmt(f"use {mod}, only: {uname}"))
 
-    # PHASE 1.d: Replaces actual function names in their definitions.
+    # PHASE 1.d: replaces actual function names in their definitions.
     for k, v in ident_map.items():
         if not isinstance(v, (f03.Function_Stmt, f03.Subroutine_Stmt)):
             continue
         assert k in uident_map
         if uident_map[k] == k[-1]:
-            # If the subprogram was not renamed, skip.
             continue
         oname, uname = k[-1], uident_map[k]
-        # Update the name in the FUNCTION/SUBROUTINE statement.
         ast_utils.singular(ast_utils.children_of_type(v, f03.Name)).string = uname
-        # Fix the name in the corresponding END FUNCTION/SUBROUTINE statement.
         fdef = v.parent
         end_stmt = ast_utils.singular(ast_utils.children_of_type(fdef,
                                                                  (f03.End_Function_Stmt, f03.End_Subroutine_Stmt)))
         kw, end_name = end_stmt.children
         utils.set_children(end_stmt, (kw, f03.Name(uname)))
-        # For functions, the function name is also available as a variable inside (return value).
+        # Function names also work as an in-scope variable (the return value).
         if isinstance(v, f03.Function_Stmt):
             for nm in walk(tuple(ast_utils.children_of_type(fdef, (f03.Specification_Part, f03.Execution_Part))),
                            f03.Name):
                 if nm.string != oname:
                     continue
                 local_spec = analysis.search_local_alias_spec(nm)
-                # Adjust the local spec to match the function's original spec for validation.
-                # This handles cases where the function name itself is used as a variable.
+                # Adjust local spec to the function's original spec (handles the name-as-return-var case).
                 local_spec = local_spec[:-2] + local_spec[-1:]
                 assert local_spec in ident_map, f"`{local_spec}` is not a valid identifier"
                 assert ident_map[local_spec] is v, f"`{local_spec}` does not refer to `{v}`"
@@ -398,16 +319,7 @@ def assign_globally_unique_subprogram_names(ast: f03.Program, keepers: Set[types
 
 
 def add_use_to_specification(scdef: utils.SCOPE_OBJECT_TYPES, clause: str):
-    """
-    Adds a `USE` statement to the specification part of a scope.
-
-    This is a utility function that finds the `Specification_Part` of a given scope
-    (module, function, etc.) and prepends a `USE` statement to it. If the scope does
-    not have a `Specification_Part`, one is created.
-
-    :param scdef: The AST node of the scope to add the `USE` statement to.
-    :param clause: The full `USE` statement to add, as a string (e.g., "use my_mod, only: var").
-    """
+    """Prepends a `USE` statement (`clause`) to `scdef`'s specification part, creating one if absent."""
     specification_part = ast_utils.atmost_one(ast_utils.children_of_type(scdef, f03.Specification_Part))
     if not specification_part:
         utils.append_children(scdef, f03.Specification_Part(get_reader(clause)))
@@ -419,47 +331,22 @@ KEYWORDS_TO_AVOID = {k.lower() for k in ('for', 'in', 'beta', 'input', 'this')}
 
 
 def assign_globally_unique_variable_names(ast: f03.Program, keepers: Set[Union[str, types.SPEC]]) -> f03.Program:
-    """
-    Renames all variables to ensure they have globally unique names.
-
-    This pass prevents name collisions that can occur when different modules define
-    variables with the same name, or when variable names conflict with Fortran keywords.
-    It makes all variable names unique across the entire program, simplifying subsequent
-    analysis and transformations.
-
-    The process is as follows:
-    1.  **Collision Detection**: Identifies all variable names that are duplicated
-        across different scopes, conflict with reserved keywords, or are entry-point
-        arguments (unless explicitly kept).
-    2.  **Name Generation**: Creates a unique name (e.g., `original_name_var_0`) for each
-        conflicting variable that is not marked as a `keeper`.
-    3.  **AST Update**: Traverses the AST to:
-        a. Remove old `USE ... ONLY` imports for variables that will be renamed.
-        b. Replace variable names used as keyword arguments in function calls.
-        c. Replace all direct references to variables (`Name` nodes) with the new unique names.
-        d. Replace variable names used as `KIND` specifiers in literal constants.
-        e. Insert new `USE` statements where needed to import global variables from
-           their parent modules into the scopes where they are used.
-        f. Rename the variable declarations themselves (`Entity_Decl`).
-
-    :param ast: The Fortran AST to modify.
-    :param keepers: A set of specifications for variables (or variable names) that should
-                    not be renamed. This can include entry-point arguments.
-    :return: The modified Fortran AST.
-    """
+    """Renames variables to be globally unique, avoiding cross-module collisions
+    and keyword clashes. `keepers` (specs or bare names) retain their names,
+    including entry-point arguments unless a kept name is itself a keyword."""
     SUFFIX, COUNTER = 'var', 0
 
     ident_map = analysis.identifier_specs(ast)
     alias_map = analysis.alias_specs(ast)
 
-    # Collect all known variable names and identify those with collisions or reserved keywords.
+    # Find names that collide or clash with reserved keywords.
     known_names: Set[str] = {k[-1].lower() for k in ident_map.keys()}
     name_collisions: Dict[str, int] = {k: 0 for k in known_names}
     for k in ident_map.keys():
         name_collisions[k[-1].lower()] += 1
     name_collisions: Set[str] = {k for k, v in name_collisions.items() if v > 1 or k in KEYWORDS_TO_AVOID}
 
-    # Identify arguments of entry-point functions, which might be kept with their original names.
+    # Entry-point args may keep their original names.
     entry_point_args: Set[types.SPEC] = set()
     for k in keepers:
         if k not in ident_map:
@@ -472,31 +359,28 @@ def assign_globally_unique_variable_names(ast: f03.Program, keepers: Set[Union[s
         for a in args:
             entry_point_args.add(k + (a.string, ))
 
-    # Generate new unique names for variables that have collisions, are reserved, or are not kept.
+    # Assign fresh names to colliding/reserved/not-kept variables.
     uident_map: Dict[types.SPEC, str] = {}
     for k in ident_map.keys():
         if k[-1].lower() not in KEYWORDS_TO_AVOID and k in entry_point_args:
-            # Keep the entry point arguments if possible, unless they conflict with keywords.
+            # Keep entry-point args unless they clash with a keyword.
             continue
         if k in keepers:
-            # Specific variable instances requested to keep.
             continue
         if k[-1] in keepers:
-            # Specific variable _name_ (anywhere) requested to keep.
+            # Bare variable name (anywhere) requested to keep.
             continue
         if k[-1].lower() in name_collisions:
-            # Generate a unique name by appending a suffix and counter.
+            # Suffix + counter, bumping past any existing name.
             uname, COUNTER = f"{k[-1]}_{SUFFIX}_{COUNTER}", COUNTER + 1
             while uname in known_names:
                 uname, COUNTER = f"{k[-1]}_{SUFFIX}_{COUNTER}", COUNTER + 1
         else:
-            # No collision, keep the original name.
             uname = k[-1]
         uident_map[k] = uname
     uident_map.update({k: k[-1] for k in keepers})
 
-    # PHASE 1.a: Remove all the places where any to-be-renamed variable is imported.
-    # This is necessary because the new name will be imported later.
+    # PHASE 1.a: remove imports of to-be-renamed variables (re-imported under the new name later).
     for use in walk(ast, f03.Use_Stmt):
         mod_name = ast_utils.singular(ast_utils.children_of_type(use, f03.Name)).string
         mod_spec = (mod_name, )
@@ -506,25 +390,23 @@ def assign_globally_unique_variable_names(ast: f03.Program, keepers: Set[Union[s
         survivors = []
         for c in olist.children:
             if isinstance(c, f03.Rename):
-                # Renamed uses shouldn't survive, and should be replaced with direct uses.
+                # Renamed uses don't survive -- replaced by direct uses.
                 continue
             assert isinstance(c, f03.Name)
             tgt_spec = analysis.find_real_ident_spec(c.string, mod_spec, alias_map)
             assert tgt_spec in ident_map and tgt_spec in uident_map
             if not isinstance(ident_map[tgt_spec], f03.Entity_Decl):
-                # We leave non-variable uses alone.
+                # Leave non-variable uses alone.
                 survivors.append(c)
         if survivors:
             utils.set_children(olist, survivors)
         else:
             utils.remove_self(use)
 
-    # PHASE 1.b: Replace all variable names used as keywords in function calls.
-    # This must be done early to avoid ambiguity (e.g., `fn(kw=kw)`).
+    # PHASE 1.b: replace variable names used as call keywords -- must run early to avoid ambiguity (e.g. `fn(kw=kw)`).
     for kv in walk(ast, f03.Actual_Arg_Spec):
         fref = kv.parent.parent
         if not isinstance(fref, (f03.Function_Reference, f03.Call_Stmt)):
-            # Only interested in user-defined function calls.
             continue
         callee, _ = fref.children
         if isinstance(callee, f03.Intrinsic_Name):
@@ -538,12 +420,12 @@ def assign_globally_unique_variable_names(ast: f03.Program, keepers: Set[Union[s
         kspec = analysis.find_real_ident_spec(k.string, cspec, alias_map)
         assert kspec in ident_map and kspec in uident_map
         assert isinstance(ident_map[kspec], f03.Entity_Decl)
-        k.string = uident_map[kspec]  # Apply the new unique name.
+        k.string = uident_map[kspec]
 
-    # PHASE 1.c: Replace all direct references to variables.
+    # PHASE 1.c: replace all direct references to variables.
     for vref in walk(ast, f03.Name):
         if isinstance(vref.parent, f03.Entity_Decl):
-            # Do not change the variable declarations themselves just yet; only usages.
+            # Don't rename the declarations yet, only usages.
             continue
         vspec = analysis.search_real_local_alias_spec(vref, alias_map)
         if not vspec:
@@ -562,15 +444,14 @@ def assign_globally_unique_variable_names(ast: f03.Program, keepers: Set[Union[s
         vspec = analysis.find_real_ident_spec(vspec[-1], scope_spec, alias_map)
         assert vspec in ident_map
         if vspec not in uident_map:
-            # If the variable was not chosen for renaming, skip.
             # TODO: `vspec` **should** be in `uident_map` if it is a variable (whether we rename it or not).
             continue
         uname = uident_map[vspec]
-        vref.string = uname  # Apply the new unique name.
+        vref.string = uname
 
-        # If the variable is global (defined in a module), add a USE statement if necessary.
+        # Global (module-level) var -- add a USE statement if needed.
         if len(vspec) > 2:
-            # If the variable is not defined in a toplevel object, so we're done.
+            # Not directly in a toplevel module -- nothing to import.
             continue
         assert len(vspec) == 2
         mod, _ = vspec
@@ -589,7 +470,7 @@ def assign_globally_unique_variable_names(ast: f03.Program, keepers: Set[Union[s
             continue
         add_use_to_specification(scdef, f"use {mod}, only: {uname}")
 
-    # PHASE 1.d: Replace variable names used as "kind" specifiers in literal constants.
+    # PHASE 1.d: replace variable names used as "kind" specifiers in literal constants.
     for lit in walk(ast, f03.Real_Literal_Constant):
         val, kind = lit.children
         if not kind:
@@ -601,11 +482,11 @@ def assign_globally_unique_variable_names(ast: f03.Program, keepers: Set[Union[s
         if not kind_spec or kind_spec not in uident_map:
             continue
         uname = uident_map[kind_spec]
-        utils.set_children(lit, (val, uname))  # Apply the new unique name.
+        utils.set_children(lit, (val, uname))
 
-        # If the kind variable is global, add a USE statement if necessary.
+        # Global kind var -- add a USE statement if needed.
         if len(kind_spec) > 2:
-            # If the variable is not defined in a toplevel object, so we're done.
+            # Not directly in a toplevel module -- nothing to import.
             continue
         assert len(kind_spec) == 2
         mod, _ = kind_spec
@@ -624,12 +505,11 @@ def assign_globally_unique_variable_names(ast: f03.Program, keepers: Set[Union[s
             continue
         add_use_to_specification(scdef, f"use {mod}, only: {uname}")
 
-    # PHASE 1.e: Replace actual variable names in their declarations.
+    # PHASE 1.e: replace variable names in their declarations.
     for k, v in ident_map.items():
         if not isinstance(v, f03.Entity_Decl):
             continue
         if k not in uident_map or uident_map[k] == k[-1]:
-            # If the variable was not chosen for renaming, skip.
             # TODO: `k` **should** be in `uident_map` if it is a variable (whether we rename it or not).
             continue
         oname, uname = k[-1], uident_map[k]
@@ -637,25 +517,16 @@ def assign_globally_unique_variable_names(ast: f03.Program, keepers: Set[Union[s
         if isinstance(fdef, f03.Function_Subprogram) and utils.find_name_of_node(fdef) == oname:
             # Function return variables must retain their names.
             continue
-        ast_utils.singular(ast_utils.children_of_type(v, f03.Name)).string = uname  # Apply the new unique name.
+        ast_utils.singular(ast_utils.children_of_type(v, f03.Name)).string = uname
 
     return ast
 
 
 def lower_identifier_names(ast: f03.Program) -> f03.Program:
-    """
-    Converts all Fortran identifiers and `KIND` specifiers to lowercase.
-
-    Fortran is largely case-insensitive for identifiers. This pass normalizes all
-    `Name` nodes and `KIND` specifiers in numeric literals to lowercase to ensure
-    consistent handling throughout the AST.
-
-    :param ast: The Fortran AST to modify.
-    :return: The modified Fortran AST with all relevant names in lowercase.
-    """
+    """Lower-cases all `Name` nodes and numeric-literal `KIND` specifiers (Fortran is case-insensitive)."""
     for nm in walk(ast, f03.Name):
         nm.string = nm.string.lower()
-    # Also lower-case kind specifiers in numeric literals (e.g., 1.0_REAL8).
+    # Kind specifiers in numeric literals too (e.g. 1.0_REAL8).
     for num in walk(ast, NumberBase):
         val, kind = num.children
         if isinstance(kind, str):
@@ -668,42 +539,24 @@ GLOBAL_DATA_TYPE_NAME = 'global_data_type'
 
 
 def consolidate_global_data_into_arg(ast: f03.Program, always_add_global_data_arg: bool = False) -> f03.Program:
-    """
-    Consolidates all global variables into a single derived type and passes it as an argument.
-
-    This pass simplifies the handling of global state by:
-    1.  Identifying all variables declared at the module level (global variables).
-    2.  Creating a new module named `global_mod`.
-    3.  Within `global_mod`, defining a new derived type `global_data_type` that contains
-        all the identified global variables as its components.
-    4.  Adding a new argument (`global_data`) of type `global_data_type` to the
-        signature of every function and subroutine.
-    5.  Replacing all direct usages of the original global variables with accesses to the
-        corresponding components of the `global_data` argument (e.g., `my_global_var`
-        becomes `global_data % my_global_var`).
-    6.  Adding the `global_data` argument to all call sites.
-
-    This makes global data dependencies explicit and simplifies dataflow analysis.
-
-    :param ast: The Fortran AST to modify.
-    :param always_add_global_data_arg: If True, adds the global data argument even if
-                                       no global variables are found.
-    :return: The modified Fortran AST.
-    """
+    """Consolidates module-level global variables into one `global_data_type` derived
+    type, passed as a `global_data` argument to every subprogram (and threaded through
+    call sites), replacing direct global accesses with `global_data % var`. Makes
+    global data dependencies explicit for dataflow analysis."""
     alias_map = analysis.alias_specs(ast)
     GLOBAL_DATA_MOD_NAME = 'global_mod'
     if (GLOBAL_DATA_MOD_NAME, ) in alias_map:
-        # We already have the global initialisers.
+        # global_mod already exists -- nothing to do.
         return ast
 
     all_derived_types, all_global_vars = [], []
-    # Collect all the derived types into a global module.
+    # Collect derived types for the global module.
     for dt in walk(ast, f03.Derived_Type_Def):
         dtspec = analysis.ident_spec(ast_utils.singular(ast_utils.children_of_type(dt, f03.Derived_Type_Stmt)))
         assert len(dtspec) == 2
         mod, dtname = dtspec
         all_derived_types.append(f"use {mod}, only : {dtname}")
-    # Collect all the global variables into a single global data structure.
+    # Collect global vars for the global data structure.
     for m in walk(ast, f03.Module):
         spart = ast_utils.atmost_one(ast_utils.children_of_type(m, f03.Specification_Part))
         if not spart:
@@ -711,13 +564,13 @@ def consolidate_global_data_into_arg(ast: f03.Program, always_add_global_data_ar
         for tdecl in ast_utils.children_of_type(spart, f03.Type_Declaration_Stmt):
             typ, attr, _ = tdecl.children
             if 'PARAMETER' in f"{attr}":
-                # This is a constant which should have been propagated away already.
+                # PARAMETER consts should already be propagated away.
                 continue
             all_global_vars.append(tdecl.tofortran())
     all_derived_types = '\n'.join(all_derived_types)
     all_global_vars = '\n'.join(all_global_vars)
 
-    # Then, replace all the instances of references to global variables with corresponding data-refs.
+    # Replace references to global variables with data-refs.
     for nm in walk(ast, f03.Name):
         par = nm.parent
         if isinstance(par, (f03.Entity_Decl, f03.Use_Stmt, f03.Rename, f03.Only_List)):
@@ -786,7 +639,7 @@ def consolidate_global_data_into_arg(ast: f03.Program, always_add_global_data_ar
                 utils.prepend_children(args, f03.Name(GLOBAL_DATA_OBJ_NAME))
             else:
                 utils.set_children(fcall, (fn, f03.Actual_Arg_Spec_List(GLOBAL_DATA_OBJ_NAME)))
-        # NOTE: We do not remove the variables themselves, and let them be pruned later on.
+        # NOTE: variables aren't removed here -- later pruning drops them.
 
     global_mod = f03.Module(
         get_reader(f"""
@@ -805,37 +658,15 @@ end module {GLOBAL_DATA_MOD_NAME}
 
 
 def create_global_initializers(ast: f03.Program, entry_points: List[types.SPEC]) -> f03.Program:
-    """
-    Creates initializer subroutines for global variables and derived types.
-
-    This pass identifies global variables and derived type components that have
-    initialization values. It then generates subroutines to perform these
-    initializations at runtime.
-
-    The process is as follows:
-    1.  For each derived type with initialized components, a `type_init_...` subroutine
-        is created to initialize the components of an object of that type.
-    2.  A single `global_init_fn` subroutine is created to handle the initialization
-        of all module-level global variables. This function will call the appropriate
-        `type_init_...` subroutines for derived type variables.
-    3.  A call to `global_init_fn` is inserted at the beginning of the execution part
-        of every subprogram marked as an entry point.
-    4.  Any generated initializer functions that are not used are pruned from the AST.
-
-    This ensures that all global state is explicitly initialized before it is used
-    in the program's entry points.
-
-    :param ast: The Fortran AST to modify.
-    :param entry_points: A list of specifications for subprograms that are entry points.
-    :return: The modified Fortran AST.
-    """
-    # TODO: Ordering of the initializations may matter, but for that we need to find how Fortran's global initialization
-    #  works and then reorder the initialization calls appropriately.
+    """Generates `type_init_...`/`global_init_fn` subroutines that initialize global
+    variables and derived-type components at runtime, and calls `global_init_fn`
+    at the start of every entry point. Unused generated initializers are pruned."""
+    # TODO: initialization ordering may matter -- needs Fortran's global-init order semantics to fix.
 
     ident_map = analysis.identifier_specs(ast)
     GLOBAL_INIT_FN_NAME = 'global_init_fn'
     if (GLOBAL_INIT_FN_NAME, ) in ident_map:
-        # We already have the global initialisers.
+        # Already generated -- nothing to do.
         return ast
     alias_map = analysis.alias_specs(ast)
 
@@ -854,8 +685,7 @@ def create_global_initializers(ast: f03.Program, entry_points: List[types.SPEC])
             if not sp_part:
                 rest, end_mod = box.children[:-1], box.children[-1]
                 assert isinstance(end_mod, f03.End_Module_Stmt)
-                # TODO: FParser bug; A simple `Module_Subprogram_Part('contains') should work, but doesn't;
-                #  hence the surgery.
+                # TODO: FParser bug -- plain Module_Subprogram_Part('contains') doesn't work, hence this surgery.
                 sp_part = f03.Module(get_reader('module m\ncontains\nend module m')).children[1]
                 utils.set_children(box, rest + [sp_part, end_mod])
             box = sp_part
@@ -940,11 +770,11 @@ end subroutine {fn_name}
             assert ep in ident_map
             fn = ident_map[ep]
             if not isinstance(fn, (f03.Function_Stmt, f03.Subroutine_Stmt)):
-                # Not a function (or subroutine), so there is nothing to exectue here.
+                # Not a function/subroutine -- nothing to execute.
                 continue
             ex = ast_utils.atmost_one(ast_utils.children_of_type(fn.parent, f03.Execution_Part))
             if not ex:
-                # The function does nothing. We could still initialize, but there is no point.
+                # Empty body -- could still initialize, but there's no point.
                 continue
             init_call = f03.Call_Stmt(f"call {GLOBAL_INIT_FN_NAME}")
             utils.prepend_children(ex, init_call)
@@ -959,24 +789,14 @@ end subroutine {fn_name}
 
 
 def rename_clashing_specifics(ast: f03.Program, renames: Dict[str, str]) -> int:
-    """Rename a specific module procedure that shares its name with the generic
-    interface it belongs to.
-
-    A generic interface may legally share its name with one of its own specific
-    procedures (ICON's ``mo_mpi`` declares ``INTERFACE p_wait`` whose
-    ``MODULE PROCEDURE`` list includes a specific *also* named ``p_wait``).  That
-    name sharing breaks once the inliner externalises / renames the generic's
-    specifics: the bare specific name becomes ambiguous (generic vs specific) and
-    the emitted ``USE ... => p_wait`` dangles.
-
-    ``renames`` maps ``old -> new``; for each, when ``old`` is the name of BOTH a
-    generic interface and a specific (sub)program, the *specific* procedure
-    definition and its ``MODULE PROCEDURE`` entry are renamed to ``new`` -- the
-    generic interface name and the (generic-dispatched) call sites are left
-    alone, so calls still resolve through the generic to the renamed specific.
-    A name that is not such a source-defined collision is skipped (so an external
-    name -- e.g. a raw ``mpi_*`` symbol with no definition in the unit -- is never
-    touched).  Returns the number of specifics renamed."""
+    """Renames a specific procedure that shares its name with its own generic
+    interface (ICON's ``mo_mpi``: ``INTERFACE p_wait`` has a specific also named
+    ``p_wait``) -- breaks once the inliner renames the generic's specifics, since
+    the bare name turns ambiguous and ``USE ... => p_wait`` dangles. ``renames``
+    maps ``old -> new``: only the specific's definition (+ ``MODULE PROCEDURE``
+    entry) is renamed when ``old`` names both; the generic and call sites stay
+    untouched. Non-colliding names (e.g. external ``mpi_*``) are skipped;
+    returns the rename count."""
     renamed = 0
     for old, new in renames.items():
         old = old.lower()

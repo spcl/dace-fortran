@@ -1,19 +1,6 @@
-"""MPI ``MPI_Send`` / ``MPI_Recv`` (default communicator) -> DaCe
-``dace.libraries.mpi`` ``Send`` / ``Recv`` library nodes.
+"""MPI_Send/MPI_Recv (default communicator) -> DaCe dace.libraries.mpi Send/Recv library nodes.
 
-Flang emits no MLIR ``mpi`` dialect; ``call MPI_Send(...)`` lowers to
-an opaque ``fir.call @_QPmpi_send(...)``.  The C++ bridge recognises
-the callee and the positional MPI ABI
-(``buf, count, datatype, dest|src, tag, comm, [status,] ierr``) and
-the Python builder lowers it to the DaCe Send/Recv node (``_buffer`` /
-``_dest``|``_src`` / ``_tag`` connectors; count from the buffer
-memlet; MPI datatype from the buffer descriptor; communicator
-``MPI_COMM_WORLD``).
-
-These are *structural* tests (build + validate the SDFG, assert the
-right library nodes are wired) so they run in the normal sweep with
-no MPI runtime.  A numeric multi-rank ``mpirun`` end-to-end check is a
-separate ``@pytest.mark.mpi`` concern.
+Flang lowers ``call MPI_Send(...)`` to an opaque fir.call; the bridge recognises the callee + positional MPI ABI (buf, count, datatype, dest|src, tag, comm, [status,] ierr) and lowers it to Send/Recv nodes.  Structural tests only (build + validate, assert wiring) -- no MPI runtime needed; numeric multi-rank mpirun checks are a separate @pytest.mark.mpi concern.
 """
 
 from pathlib import Path
@@ -24,9 +11,7 @@ from _util import build_sdfg, have_flang
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
-# ``external`` MPI decls + ``parameter`` constants so the program needs
-# no ``mpi.mod`` / MPI install to lower (the bridge sees the same
-# opaque ``fir.call @_QPmpi_*`` either way).
+# external MPI decls + parameter constants so the program needs no mpi.mod / MPI install to lower (bridge sees the same opaque fir.call either way).
 _SENDRECV = """
 subroutine sendrecv(buf, rbuf, n, dst, src, tag)
   implicit none
@@ -44,10 +29,7 @@ subroutine sendrecv(buf, rbuf, n, dst, src, tag)
 end subroutine sendrecv
 """
 
-# A runtime/user communicator (a dummy ``comm`` argument) is threaded
-# into the libnode as an ``opaque(MPI_Comm)`` ``_comm`` connector; the
-# Fortran integer handle is retyped on the SDFG signature so the
-# generated binding wrapper can ``MPI_Comm_f2c`` it.
+# runtime/user communicator threads into the libnode as an opaque(MPI_Comm) _comm connector; the Fortran integer handle is retyped on the SDFG signature so the binding wrapper can MPI_Comm_f2c it.
 _USER_COMM = """
 subroutine sr_usercomm(buf, n, dst, tag, comm)
   implicit none
@@ -68,15 +50,10 @@ def _build(src: str, tmp: Path, name: str, entry: str):
 
 
 def _expanded_mpi_call_codes(sdfg):
-    """Expand the SDFG's MPI library nodes and return the CPP tasklet code
-    strings that actually issue an ``MPI_Send`` / ``MPI_Recv`` (etc.).
+    """Expand the SDFG's MPI library nodes, return the CPP tasklet code strings issuing MPI_Send/MPI_Recv.
 
-    The communicator each point-to-point op runs on is baked into the
-    expansion's C code (``MPI_Send(..., <comm>)``), not into a node
-    property, so verifying the comm without ``mpirun`` means inspecting the
-    expanded tasklet source.  Guards the ``Send``/``Recv`` ``_grid``
-    contract: a wired user communicator must emit ``_grid`` (the cartesian
-    sub-comm), and the default path must fall back to ``MPI_COMM_WORLD``."""
+    The communicator is baked into the expansion's C code, not a node property, so verifying it without mpirun means inspecting the tasklet source.
+    """
     import dace
     sdfg.expand_library_nodes()
     codes = []
@@ -89,9 +66,7 @@ def _expanded_mpi_call_codes(sdfg):
 
 
 def test_send_recv_lower_to_mpi_libnodes(tmp_path: Path):
-    """``MPI_Send`` / ``MPI_Recv`` on MPI_COMM_WORLD become DaCe
-    ``Send`` / ``Recv`` nodes with the canonical connectors, and the
-    SDFG validates."""
+    """MPI_Send/MPI_Recv on MPI_COMM_WORLD become DaCe Send/Recv nodes with canonical connectors; SDFG validates."""
     from dace.libraries.mpi.nodes.recv import Recv
     from dace.libraries.mpi.nodes.send import Send
 
@@ -113,10 +88,7 @@ def test_send_recv_lower_to_mpi_libnodes(tmp_path: Path):
 
     sdfg.validate()
 
-    # Communicator dataflow: the Fortran comm (here the default MPI_COMM_WORLD)
-    # is threaded into the expanded Send/Recv through the ``_comm`` connector fed
-    # by a CommF2c node (feature 93cc5f2) -- it is NOT hardcoded into the tasklet,
-    # and no ``_grid`` (process-grid) is referenced without a user comm.
+    # communicator dataflow: default MPI_COMM_WORLD threads into Send/Recv via the _comm connector fed by a CommF2c node (93cc5f2), not hardcoded; no _grid without a user comm.
     codes = _expanded_mpi_call_codes(sdfg)
     assert len(codes) == 2, f"expected 1 Send + 1 Recv tasklet, got {len(codes)}"
     for code in codes:
@@ -144,11 +116,7 @@ end subroutine nbring
 
 
 def test_isend_irecv_wait_lower_to_mpi_libnodes(tmp_path: Path):
-    """``MPI_Isend`` / ``MPI_Irecv`` / ``MPI_Wait`` become DaCe
-    ``Isend`` / ``Irecv`` / ``Wait`` nodes; the non-blocking request is
-    threaded producer->Wait through a synthesised
-    ``opaque(MPI_Request)`` transient; each MPI call gets its own state
-    so program order is enforced by interstate edges."""
+    """MPI_Isend/MPI_Irecv/MPI_Wait become Isend/Irecv/Wait nodes; the request threads producer->Wait via an opaque(MPI_Request) transient, and each MPI call gets its own state so interstate edges enforce program order."""
     import dace
     from dace.libraries.mpi.nodes.irecv import Irecv
     from dace.libraries.mpi.nodes.isend import Isend
@@ -169,24 +137,13 @@ def test_isend_irecv_wait_lower_to_mpi_libnodes(tmp_path: Path):
         d = sdfg.arrays[r]
         assert d.transient and d.dtype == dace.dtypes.opaque("MPI_Request")
 
-    # One state per MPI call (4) + the entry state -> interstate-edge
-    # ordering of the side-effecting MPI nodes.
+    # one state per MPI call (4) + entry state -> interstate-edge ordering of the side-effecting MPI nodes.
     assert len(list(sdfg.all_states())) >= 5
     sdfg.validate()
 
 
 def test_runtime_communicator_lowers_to_comm_connector(tmp_path: Path):
-    """A non-default (runtime dummy) communicator flows as opaque dataflow.
-
-    The Fortran ``integer`` comm handle is converted by a ``CommF2c`` node
-    (``MPI_Comm_f2c``) into an ``opaque(MPI_Comm)`` value that feeds the
-    ``Send`` node's ``_comm`` in-connector.  The communicator is a first-class
-    value the SDFG reads (from the Fortran handle) and writes (to ``_comm``),
-    so multiple distinct communicators are supported and the host can pass /
-    receive one across the boundary.  The Fortran handle is KEPT in
-    ``sdfg.arrays`` (``CommF2c`` reads it) -- this supersedes the legacy
-    process-grid path, which dropped the handle and wired a ``_grid``
-    cartesian sub-comm connector instead."""
+    """A non-default (runtime dummy) communicator flows as opaque dataflow: a CommF2c node (MPI_Comm_f2c) converts the Fortran integer handle into an opaque(MPI_Comm) feeding Send's _comm connector.  The Fortran handle stays in sdfg.arrays (CommF2c reads it) -- supersedes the legacy process-grid path, which dropped the handle and wired a _grid cartesian sub-comm connector instead."""
     import dace
     from dace.libraries.mpi.nodes.send import Send
     from dace.libraries.mpi.nodes.comm_f2c import CommF2c
@@ -195,15 +152,13 @@ def test_runtime_communicator_lowers_to_comm_connector(tmp_path: Path):
 
     sends = [n for n, _ in sdfg.all_nodes_recursive() if isinstance(n, Send)]
     assert len(sends) == 1, f"expected 1 Send node, got {len(sends)}"
-    # Communicator threads in via an opaque(MPI_Comm) ``_comm`` connector, not
-    # the legacy ``_grid`` process-grid connector.
+    # communicator threads in via an opaque(MPI_Comm) _comm connector, not the legacy _grid process-grid connector.
     assert '_comm' in sends[0].in_connectors
     assert '_grid' not in sends[0].in_connectors
     assert isinstance(sends[0].in_connectors['_comm'], dace.dtypes.opaque)
     assert sends[0].in_connectors['_comm'].ctype == 'MPI_Comm'
 
-    # Exactly one CommF2c node, reading the Fortran integer ``comm`` handle on
-    # ``_fcomm`` and producing the opaque(MPI_Comm) the Send consumes.
+    # exactly one CommF2c node, reading the Fortran integer comm handle on _fcomm and producing the opaque(MPI_Comm) Send consumes.
     f2cs = [n for n, _ in sdfg.all_nodes_recursive() if isinstance(n, CommF2c)]
     assert len(f2cs) == 1, f"expected 1 CommF2c node, got {len(f2cs)}"
     fcomm_srcs = [
@@ -212,19 +167,12 @@ def test_runtime_communicator_lowers_to_comm_connector(tmp_path: Path):
     ]
     assert fcomm_srcs == ['comm'], f"CommF2c must read the Fortran comm handle, got {fcomm_srcs}"
 
-    # The Fortran integer ``comm`` handle is KEPT (read by CommF2c), and no
-    # process grid is created -- the opaque-dataflow path replaces it.
     assert 'comm' in sdfg.arrays, "the Fortran integer comm handle is read by CommF2c, so it is kept"
     assert 'dace_user_pgrid' not in sdfg.arrays, "the process-grid path is superseded by CommF2c/_comm"
 
     sdfg.validate()
 
-    # The wired ``_comm`` connector must actually drive the emitted MPI call:
-    # the expanded Send must issue ``MPI_Send(..., _comm)`` on the user
-    # communicator, NOT ``MPI_COMM_WORLD``.  (Regression guard: send.py/recv.py
-    # once materialised the connector but still hardcoded ``MPI_COMM_WORLD`` in
-    # the call, mis-routing every user-comm Send/Recv onto the world
-    # communicator -> deadlock under ``mpirun``.)
+    # regression guard: send.py/recv.py once materialised _comm but still hardcoded MPI_COMM_WORLD in the call, mis-routing user-comm Send/Recv onto the world communicator -> deadlock under mpirun.
     codes = _expanded_mpi_call_codes(sdfg)
     assert len(codes) == 1, f"expected 1 Send tasklet, got {len(codes)}"
     assert "_comm" in codes[0], f"user-comm Send must use ``_comm``: {codes[0]!r}"

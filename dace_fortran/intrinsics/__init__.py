@@ -1,22 +1,10 @@
 """Fortran intrinsic -> DaCe lowering registry for the HLFIR frontend.
 
-Public surface:
-    is_elementwise(name)
-    is_reduction(name)
-    is_libnode(name)
-    is_intrinsic(name)
-    render_call(name, args)
-    reduction_spec(name)   # -> ReductionIntrinsic | None
-    libnode_spec(name)     # -> LibNodeIntrinsic | None
-
 Emitter code should only talk to this module, never import the per-family
-registries directly.  Adding a new intrinsic means editing one file under
-this package and nothing else.  The families live in flat siblings:
-
-    elementwise.py     --  sin, cos, exp, sqrt, abs, min, max, ...
-    reduction.py       --  sum, product, minval, maxval
-    linalg.py          --  matmul, transpose, dot_product
-    direct.py          --  SIZE / LBOUND / UBOUND / ... (Phase 4 stub)
+registries directly -- adding an intrinsic means editing one file under this
+package.  Families: elementwise.py (sin/cos/exp/...), reduction.py
+(sum/product/minval/maxval), linalg.py (matmul/transpose/dot_product),
+direct.py (SIZE/LBOUND/... stub).
 """
 
 from dace_fortran.intrinsics.elementwise import ELEMENTWISE_INTRINSICS
@@ -46,11 +34,8 @@ def is_intrinsic(name: str) -> bool:
 
 
 def render_call(name: str, args: list[str]) -> str:
-    """Return ``name(arg0, arg1, ...)`` verbatim.
-
-    Only validates elementwise arity today; reduction / libnode callers
-    will gain their own render helpers as those phases come online.
-    """
+    """Return ``name(arg0, arg1, ...)`` verbatim.  Only validates elementwise
+    arity today; reduction/libnode callers get their own render helpers later."""
     spec = ELEMENTWISE_INTRINSICS.get(name)
     if spec is not None:
         assert len(args) == spec.arity, (f"{name} expects {spec.arity} arg(s), got {len(args)}")
@@ -63,9 +48,8 @@ def reduction_spec(name: str):
 
 
 def libnode_spec(name: str):
-    """Return the ``LibNodeIntrinsic`` for ``name`` or ``None``.  Looks up
-    across both the linalg registry (matmul / transpose / dot_product) and
-    the generic standard-library registry (count / merge / ...)."""
+    """Return the ``LibNodeIntrinsic`` for ``name`` or ``None``.  Looks up both
+    the linalg registry (matmul/transpose/dot_product) and the standard registry (count/merge/...)."""
     spec = LINALG.get(name)
     if spec is not None:
         return spec

@@ -1,29 +1,14 @@
 """Lower-bound inference through an inlined subroutine call.
 
-Pinpointed in ``velocity_full`` bisection: ICON's pattern is
+Pinpointed in ``velocity_full`` bisection: ICON passes a literal (e.g. ``-5``)
+to an inlined callee, which stashes it into a local and indexes through it.
+After ``hlfir-inline-all`` + ``hlfir-flatten-structs`` the designate index
+becomes ``fir.load %local_decl`` rather than ``arith.constant -5``, so
+``inferLowerBoundsFromLiteralAccesses`` misses it, the bridge defaults
+``offset_arr_d0 = 1``, and ``arr(-5)`` lowers to ``arr[-6]`` -> runtime segfault.
 
-    SUBROUTINE outer(arr, ...)
-      INTEGER, ALLOCATABLE :: arr(:)
-      CALL inner(arr, ..., -5)        ! literal at the call site
-    END SUBROUTINE
-    SUBROUTINE inner(arr, ..., irl_end)
-      INTEGER, INTENT(IN) :: irl_end
-      INTEGER :: local
-      local = irl_end                  ! stash into a local
-      x = arr(local)                   ! access via fir.load
-    END SUBROUTINE
-
-After ``hlfir-inline-all`` + ``hlfir-flatten-structs`` the
-``inner`` body is spliced into ``outer``.  The designate index
-becomes ``fir.load %local_decl`` rather than ``arith.constant -5``,
-so ``inferLowerBoundsFromLiteralAccesses`` misses the literal.
-The bridge then defaults ``offset_arr_d0 = 1`` and ``arr(-5)``
-lowers to ``arr[-6]`` -> segfault at runtime.
-
-This test pins the inference to follow the inline-callee load/store
-chain.  Currently the bridge only matches when the designate index
-is a direct ``arith.constant``; the file documents the gap so the
-next bridge fix has a regression gate.
+Pins the inference to follow the inline-callee load/store chain.  Currently
+only matches a direct ``arith.constant``; documents the gap as a regression gate.
 """
 
 from pathlib import Path
@@ -63,14 +48,8 @@ end module outer_mod
 
 
 def test_inlined_callee_propagates_negative_literal(tmp_path: Path):
-    """Caller passes literal ``-5`` to inlined callee; inner body reads
-    ``arr(local)`` where ``local = -5`` was stored.
-
-    After bridge inlining, the designate index is a ``fir.load``
-    of the local's storage, not a raw ``arith.constant``.  The
-    inference must trace through the load/store chain to recover
-    ``-5`` and specialise ``offset_arr_d0`` to ``-5``.
-    """
+    """Literal ``-5`` passed to an inlined callee, stashed into a local, then indexed:
+    inference must trace the ``fir.load``/store chain to recover ``-5`` for ``offset_arr_d0``."""
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(_SRC, sdfg_dir, name="outer", entry="outer_mod::outer").build()

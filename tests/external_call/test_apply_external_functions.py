@@ -1,19 +1,10 @@
-"""Phase 3 of the unified external-function policy: the bridge-side entry
-point :func:`dace_fortran.external.apply_external_functions` and the
-``emit_call`` *derive-from-HLFIR* path that lets a minimal
-:class:`dace_fortran.external_functions.ExternalFunction` (``args=()``) lower a
-call whose argument order comes entirely from the Fortran source.
+"""Phase 3 of the unified external-function policy: ``apply_external_functions`` plus the
+``emit_call`` *derive-from-HLFIR* path, where a minimal ``ExternalFunction(args=())`` lowers
+a call whose argument order comes entirely from the Fortran source.
 
-Two layers:
-
-* **contract** (no toolchain) -- ``apply_external_functions`` populates the
-  registry: each :class:`ExternalFunction` becomes an *emitted* external
-  (``c_name`` = its symbol, not stubbed); each ``do_not_emit`` name an *ignored*
-  one (``stub=True``).  Validation rejects an inconsistent policy first.
-* **e2e** (flang + gfortran) -- the linchpin: a bare ``ExternalFunction("bar",
-  library=libbar)`` with NO authored ``Arg`` list produces the same working
-  :class:`ExternalCall` as the authored two-``Arg`` ``keep_external`` does.
-"""
+Two layers: **contract** (no toolchain) -- registry population + policy validation.
+**e2e** (flang+gfortran) -- a bare ``ExternalFunction`` with no ``Arg`` list must produce
+the same ``ExternalCall`` as an explicit two-``Arg`` ``keep_external``."""
 import shutil
 import subprocess
 from pathlib import Path
@@ -162,11 +153,10 @@ def _build_libbar(tmp_path: Path) -> Path:
 
 @pytest.mark.parametrize("_m", [pytest.param(None, marks=_e2e)])
 def test_bare_external_function_lowers_and_runs(tmp_path: Path, _m):
-    """The linchpin: registering only ``ExternalFunction("bar", library=...)``
-    -- NO ``Arg`` list -- still lowers ``call bar(a, n)`` to a working
-    ``ExternalCall``.  ``emit_call`` derives the plan from the HLFIR call site:
-    ``a`` (an SDFG array) crosses as an inout pointer, ``n`` (a shape symbol) is
-    referenced inline.  The result matches the authored-two-``Arg`` version."""
+    """The linchpin: ``ExternalFunction("bar", library=...)`` with NO ``Arg`` list still
+    lowers ``call bar(a, n)`` to a working ``ExternalCall`` -- ``emit_call`` derives the plan
+    from the HLFIR call site (``a`` inout pointer, ``n`` referenced inline), matching the
+    authored-two-``Arg`` version."""
     clear_external_registry()
     try:
         libbar = _build_libbar(tmp_path)
@@ -203,11 +193,9 @@ def _external_call_node(tmp_path, libbar, register):
 
 @pytest.mark.parametrize("_m", [pytest.param(None, marks=_e2e)])
 def test_derived_node_matches_authored(tmp_path: Path, _m):
-    """The derive-from-HLFIR node is byte-identical to the hand-authored one:
-    a bare ``ExternalFunction("bar", library=...)`` and the explicit
-    ``keep_external("bar", args=[Arg(array,float64,inout), Arg(scalar,int32,in)])``
-    produce the SAME ``c_decl`` and ``body`` -- so the minimal registration is a
-    drop-in for the verbose one (``a`` -> ``double *`` inout, ``n`` -> ``int``)."""
+    """Derive-from-HLFIR is byte-identical to hand-authored: a bare ``ExternalFunction``
+    and the explicit ``keep_external(args=[...])`` produce the SAME ``c_decl``/``body`` --
+    minimal registration is a drop-in for the verbose one."""
     libbar = _build_libbar(tmp_path)
 
     def bare(lib):

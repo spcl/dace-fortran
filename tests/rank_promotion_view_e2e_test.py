@@ -1,23 +1,13 @@
 """End-to-end numerical correctness for the rank-promotion view alias.
 
-When a Fortran caller passes a 1D array unmodified to a callee expecting
-a multi-D dummy (storage-association reshape via ``fir.convert``), the
-bridge mints the dummy as a DaCe :class:`dace.data.View` over the
-caller's 1D storage.  The view carries its own column-major strides so
-a 3D ``buf(m, i, j)`` access flattens to ``m + 5*(i-1) + 5*M*(j-1)``
-against the parent's flat buffer.
+When a caller passes a 1D array to a callee expecting a multi-D dummy
+(storage-association reshape via ``fir.convert``), the bridge mints the dummy
+as a DaCe :class:`dace.data.View` over the caller's 1D storage, with its own
+column-major strides (3D ``buf(m,i,j)`` -> ``m + 5*(i-1) + 5*M*(j-1)``).
 
-This test verifies the runtime behaviour matches the f2py-compiled
-gfortran reference for the canonical NPB LU pattern:
-
-    double precision :: scratch(N1*N2*N3)
-    call inner(scratch)
-    ! inner's dummy: double precision :: buf(N1, N2, N3)
-
-The view must be wired so writes inside ``inner`` to ``buf(m, i, j)``
-land at the right linear offset inside ``scratch``.  The post-run
-contents of ``scratch`` are compared element-by-element against the
-gfortran build.
+Verifies writes inside ``inner`` to ``buf(m,i,j)`` land at the right linear
+offset inside ``scratch``, matching the f2py-compiled gfortran reference
+element-by-element (NPB LU's ``scratch``/``buf`` pattern).
 """
 import numpy as np
 import pytest
@@ -52,26 +42,19 @@ end module m
 
 
 def test_rank_promotion_view_writes_land_at_correct_linear_offset(tmp_path):
-    """The view's column-major strides must map ``buf(m, i, j)`` to
-    the correct linear offset inside the parent 1D storage.  Verify
-    that every write ``buf(i, j, k) = i + 10*j + 100*k`` lands at
-    Fortran column-major linear offset ``i + N1*(j-1) + N1*N2*(k-1)``
-    inside the parent ``scratch(N1*N2*N3)``.
-    """
+    """View's column-major strides map ``buf(i,j,k)`` to linear offset
+    ``i + N1*(j-1) + N1*N2*(k-1)`` inside the parent ``scratch(N1*N2*N3)``."""
     N1, N2, N3 = 5, 7, 4
     SCRATCH_N = N1 * N2 * N3
 
     sdfg = build_sdfg(_SRC, tmp_path / "sdfg", name="fill", entry="m::fill").build()
 
-    # Initialise to a sentinel so we can see which slots inner wrote
-    # and which stayed untouched (any -1.0 = view stride bug).
+    # Sentinel init so untouched slots are visible (any -1.0 = view stride bug).
     scratch_sdfg = np.full((SCRATCH_N, ), -1.0, dtype=np.float64, order='F')
     sdfg(scratch=scratch_sdfg)
 
-    # Build the reference flat buffer by replicating the Fortran
-    # column-major linear-offset formula in pure NumPy.  This is the
-    # contract the view's strides ``(1, N1, N1*N2)`` encode -- if
-    # the view is wired correctly every write reaches the right slot.
+    # Reference flat buffer replicates the Fortran column-major linear-offset
+    # formula in pure NumPy -- the contract the view's strides (1, N1, N1*N2) encode.
     expected = np.empty(SCRATCH_N, dtype=np.float64)
     for k in range(1, N3 + 1):
         for j in range(1, N2 + 1):
@@ -83,11 +66,9 @@ def test_rank_promotion_view_writes_land_at_correct_linear_offset(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 4D source -> 2D view.  Fortran sequence association lets any rank
-# reinterpretation happen as long as the actual's flat element count covers
-# the dummy's.  4D ``arr(A, B, C, D)`` -> 2D ``buf(A*B, C*D)`` collapses
-# the leading 2 actual dims into the dummy's first dim and the trailing
-# 2 into the dummy's second, all in Fortran column-major flat order.
+# 4D source -> 2D view.  Sequence association lets any rank reinterpretation
+# happen as long as the actual's flat element count covers the dummy's; here
+# arr(A,B,C,D) -> buf(A*B, C*D) collapses dims in Fortran column-major flat order.
 # ---------------------------------------------------------------------------
 _SRC_4D_TO_2D = """\
 module m
@@ -113,16 +94,12 @@ end module m
 
 
 def test_rank_reinterpret_4d_source_to_2d_view(tmp_path):
-    """``arr_4d(A,B,C,D)`` passed to dummy ``buf(A*B, C*D)``.  The view's
-    strides ``(1, A*B)`` over the source's column-major layout must
-    flatten ``buf(i, j)`` to the right slot inside the 4D actual.
+    """``arr_4d(A,B,C,D)`` -> dummy ``buf(A*B, C*D)``; view strides ``(1, A*B)``
+    must flatten ``buf(i,j)`` to the right slot inside the 4D actual.
 
-    The source's column-major linear offset for ``arr_4d(a, b, c, d)``
-    is ``(a-1) + A*(b-1) + A*B*(c-1) + A*B*C*(d-1)``.  The view sees
-    that same flat sequence reshaped to ``(A*B, C*D)``, so
-    ``buf(i, j)`` maps to source index ``(i-1) + A*B*(j-1)`` (still
-    column-major over the view's own shape).  Verify every write
-    lands at the expected source slot.
+    Source linear offset for ``arr_4d(a,b,c,d)`` is
+    ``(a-1) + A*(b-1) + A*B*(c-1) + A*B*C*(d-1)``; the view reshapes that same
+    flat sequence to ``(A*B, C*D)``, so ``buf(i,j)`` -> ``(i-1) + A*B*(j-1)``.
     """
     A, B, C, D = 4, 3, 5, 2
     sdfg = build_sdfg(_SRC_4D_TO_2D, tmp_path / "sdfg", name="fill", entry="m::fill").build()
@@ -130,9 +107,7 @@ def test_rank_reinterpret_4d_source_to_2d_view(tmp_path):
     arr_sdfg = np.full((A, B, C, D), -1.0, dtype=np.float64, order='F')
     sdfg(arr_4d=arr_sdfg)
 
-    # Expected: flatten the source in column-major, then index in
-    # the view's (A*B, C*D) shape.  Use NumPy's column-major
-    # view (.flatten('F')) for the side-by-side comparison.
+    # Expected: flatten the source column-major, then reindex to the view's (A*B, C*D) shape.
     expected_flat = np.empty(A * B * C * D, dtype=np.float64)
     for j in range(1, C * D + 1):
         for i in range(1, A * B + 1):
@@ -168,10 +143,8 @@ end module m
 
 
 def test_rank_reinterpret_3d_source_to_1d_view(tmp_path):
-    """``arr_3d(A, B, C)`` passed to dummy ``buf(A*B*C)``.  The view
-    is 1D with stride ``(1,)``; writes ``buf(i)`` go directly to flat
-    slot ``i - 1`` of the source.  Verifies rank REDUCTION (the
-    opposite direction from LU's tv pattern)."""
+    """``arr_3d(A,B,C)`` -> dummy ``buf(A*B*C)``; 1D view with stride ``(1,)``,
+    writes go directly to flat slot ``i-1``.  Rank REDUCTION (opposite of LU's tv)."""
     A, B, C = 4, 3, 5
     sdfg = build_sdfg(_SRC_3D_TO_1D, tmp_path / "sdfg", name="fill", entry="m::fill").build()
 
@@ -215,10 +188,8 @@ end module m
 
 
 def test_rank_reinterpret_2d_source_to_4d_view(tmp_path):
-    """``arr_2d(6, 8)`` passed to dummy ``buf(2, 3, 4, 2)``.  Source's
-    48 elements get reinterpreted as 4D ``(2, 3, 4, 2)`` with view
-    strides ``(1, 2, 6, 24)``.  Each ``buf(a, b, c, d)`` write lands
-    at the right flat offset inside the 2D actual."""
+    """``arr_2d(6,8)`` -> dummy ``buf(2,3,4,2)``; source's 48 elements
+    reinterpreted with view strides ``(1,2,6,24)``; each write lands at the right flat offset."""
     ROWS, COLS = 6, 8
     sdfg = build_sdfg(_SRC_2D_TO_4D, tmp_path / "sdfg", name="fill", entry="m::fill").build()
 
@@ -266,10 +237,8 @@ end module m
 
 
 def test_rank_reinterpret_2d_source_to_3d_view(tmp_path):
-    """``arr_2d(ROWS, COLS)`` -> dummy ``buf(2, 3, COLS)`` where
-    ``ROWS = 2*3``.  The view's strides ``(1, 2, 6)`` flatten 3D
-    accesses to 2D column-major offsets inside the actual.
-    """
+    """``arr_2d(ROWS, COLS)`` -> dummy ``buf(2, 3, COLS)`` (``ROWS = 2*3``); view
+    strides ``(1, 2, 6)`` flatten 3D accesses to 2D column-major offsets."""
     ROWS, COLS = 6, 8
     sdfg = build_sdfg(_SRC_2D_TO_3D, tmp_path / "sdfg", name="fill", entry="m::fill").build()
 

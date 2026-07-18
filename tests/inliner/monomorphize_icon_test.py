@@ -1,23 +1,19 @@
 # Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
 """Real-ICON validation for static-vtable monomorphisation.
 
-The synthetic fixtures in ``monomorphize_rewrite_test.py`` prove each rewrite
-primitive in isolation and the driver end-to-end (including a flang ``0
-fir.dispatch`` check) on small programs *shaped* like ICON's three dispatch axes.
-This module closes the loop on the *actual* upstream ICON ocean-solver sources:
+monomorphize_rewrite_test.py proves each rewrite primitive + the driver
+end-to-end (incl. a flang "0 fir.dispatch" check) on small programs shaped
+like ICON's three dispatch axes. This module closes the loop on the actual
+upstream ICON ocean-solver sources:
 
-  1. the analyzer accepts the real type hierarchy and produces the expected three
-     plans (backend / transfer / lhs_agen), and
+  1. the analyzer accepts the real type hierarchy and produces the expected
+     three plans (backend/transfer/lhs_agen);
   2. the driver, given the real-ICON spec, collapses the real solver's
-     polymorphic dispatch -- the real ``t_ocean_solve%act`` factory + the real
-     ``ocean_solve_backend_solve`` interposer body that buries ``this%doit_*`` and
-     ``this%trans%*`` dispatch -- to zero, on real bodies.
+     polymorphic dispatch (t_ocean_solve%act factory + ocean_solve_backend_solve
+     interposer) to zero, on real bodies.
 
-A compilable self-contained TU of the *whole* solver subsystem (needed for a
-flang check on the real sources) is the inliner's responsibility and is out of
-scope here; the flang ``0 fir.dispatch`` proof of the rewrite mechanics lives on
-the combined synthetic in ``monomorphize_rewrite_test.py``.  These tests read the
-icon-model submodule (no build) and so are marked ``long``.
+A compilable self-contained TU for a flang check on the real sources is the
+inliner's job and out of scope here. Reads the icon-model submodule (no build), marked `long`.
 """
 import os
 import re
@@ -33,8 +29,7 @@ from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import (AxisSpec, 
 
 pytestmark = pytest.mark.long
 
-# Resolve the ICON ocean-solver sources from ICON_SRC (default: the in-repo
-# submodule), mirroring tests/conftest.py's icon_build fixture.
+# ICON ocean-solver sources from ICON_SRC (default: in-repo submodule), mirrors tests/conftest.py's icon_build fixture.
 _ICON_SRC = Path(os.environ.get("ICON_SRC", str(Path(__file__).resolve().parents[1] / "icon" / "full" / "icon-model")))
 _SOLVER = _ICON_SRC / "src" / "ocean" / "math"
 
@@ -46,10 +41,9 @@ if not (_SOLVER / "mo_ocean_solve_backend.f90").is_file():
 
 _CPP = re.compile(r"^\s*#")
 
-# The real-ICON monomorphisation spec: the backend is a runtime-allocated ladder;
-# the transfer and lhs-agen axes are each pinned to one concrete type at the
-# kernel's construction site, so they retype.  (Hand-written, per the locked
-# design; a later pass auto-generates it from the construction site.)
+# real-ICON monomorphisation spec: backend is a runtime-allocated ladder;
+# transfer/lhs-agen are pinned to one concrete type at the construction site, so
+# they retype. Hand-written per the locked design; a later pass should auto-generate it.
 _BACKEND = "t_ocean_solve_backend"
 _REAL_ICON_SPEC = MonomorphizationSpec(axes=[
     AxisSpec(base="t_transfer", strategy="retype", concrete="t_trivial_transfer"),
@@ -97,8 +91,8 @@ def _extract_types(text: str) -> str:
     return "\n".join(out)
 
 
-#: modules whose *type definitions* feed the analyzer (axis bases + every arm + the
-#: t_lhs agen holder); their bodies are not needed to plan or to retype.
+#: modules whose type definitions feed the analyzer (axis bases + every arm +
+#: the t_lhs_agen holder); bodies not needed to plan or retype.
 _TYPEDEF_MODULES = [
     "mo_ocean_solve_gmres.f90",
     "mo_ocean_solve_cg.f90",
@@ -170,8 +164,7 @@ def test_driver_collapses_real_icon_dispatch():
 
     stats = monomorphize(prog, _REAL_ICON_SPEC)
 
-    # backend: the real `act` component expanded; the 3 shared interposers cloned
-    # once per arm (3 x 7); no `%act` slot dispatch survives.
+    # backend: real act component expanded; 3 shared interposers cloned once per arm (3x7); no %act slot dispatch survives.
     assert stats.components_rewritten == 1
     assert stats.interposers_cloned == len(_SHARED_INTERPOSERS) * len(_BACKEND_ARMS)
     assert _bare_act_dispatches(prog) == 0
@@ -183,8 +176,7 @@ def test_driver_collapses_real_icon_dispatch():
     assert {arm for _, arm in clones} == _BACKEND_ARMS
 
     # transfer + lhs_agen: every real CLASS(base) declaration retyped to concrete
-    # (the synthetic assembly carries no abstract-interface dummies to preserve, so
-    # none remain); a non-trivial number were rewritten.
+    # (no abstract-interface dummies to preserve here); non-trivial count rewritten.
     assert stats.declarations_retyped > 0
     upper = text.upper()
     assert "CLASS(T_TRANSFER)" not in upper

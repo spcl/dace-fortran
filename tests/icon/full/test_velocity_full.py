@@ -1,27 +1,15 @@
-"""End-to-end numerical test for the full ICON velocity_tendencies kernel.
+"""E2e numerical test for the full ICON velocity_tendencies kernel.
 
-Driver: ``velocity_full.f90`` -- 655-line standalone variant of
-``mo_velocity_advection.velocity_tendencies``.
+Driver: ``velocity_full.f90`` (655-line standalone variant of
+``mo_velocity_advection.velocity_tendencies``). Reference: ``velocity_full_caller.f90`` --
+two ``bind(c)`` wrapper subs compiled via plain gfortran and loaded through ctypes, bypassing
+f2py entirely (no crackfortran derived-type binding, no INTENT(OUT)-becomes-return, no
+LOGICAL ABI surprises). ``init_inputs_random_c`` fills flat buffers with deterministic
+random data; ``run_velocity_flat_c`` wraps them into derived-type dummies and forwards to
+``velocity_tendencies``.
 
-Reference path: ``velocity_full_caller.f90`` -- two ``bind(c)`` Fortran
-wrapper subs compiled into a shared library via plain ``gfortran
--shared -fPIC`` and loaded through ``ctypes``.  Bypasses f2py entirely
-(no crackfortran derived-type binding, no INTENT(OUT)-becomes-return
-quirks, no LOGICAL ABI surprises).
-
-  * ``init_inputs_random_c(seed, dims..., *arrays)`` fills every flat
-    buffer with deterministic random data (real arrays via
-    ``RANDOM_NUMBER`` seeded by ``seed``; index/block tables cyclic
-    in-bounds).
-  * ``run_velocity_flat_c(dims..., scalars..., *arrays)`` wraps the
-    flat buffers back into derived-type dummies (ALLOCATE+memcpy for
-    ALLOCATABLE inputs; ``=>``-pointer-assign for POINTER buffers)
-    and forwards to ``velocity_tendencies``.
-
-Test flow: build SDFG, compile reference .so, allocate flat buffers,
-``init_inputs_random_c`` once, snapshot for SDFG, ``run_velocity_flat_c``
-on the reference copy, run SDFG on the snapshot, compare outputs.
-"""
+Flow: build SDFG, compile reference .so, init buffers once, snapshot for SDFG, run reference
+on one copy + SDFG on the other, compare outputs."""
 
 import ctypes
 import shutil
@@ -47,8 +35,7 @@ def _compile_caller_so(out_dir: Path) -> ctypes.CDLL:
         pytest.skip("gfortran not available")
     out_dir.mkdir(parents=True, exist_ok=True)
     so_path = out_dir / "libvelocity_caller.so"
-    # cwd=out_dir keeps gfortran from picking up any stale .mod that
-    # a prior flang invocation left in the repo root.
+    # cwd=out_dir keeps gfortran from picking up a stale .mod a prior flang run left in repo root.
     subprocess.check_call([
         "gfortran",
         "-shared",
@@ -136,10 +123,9 @@ def test_velocity_full_numerical(tmp_path: Path):
     nrdmax_in = np.full(10, nlev, dtype=np.int32, order='F')
     nflatlev_in = np.ones(10, dtype=np.int32, order='F')
 
-    # run_velocity_flat_c signature: dims (6 ints), scalars (ntnd, istep,
-    # lvn_only, ldeepatmo, dtime, dt_linintp_ubc), module-data (nrdmax_in
-    # ptr, nflatlev_in ptr, lvert_nest_in, lextra_diffu_in, timers_level),
-    # arrays in declaration order, z_* arrays.
+    # run_velocity_flat_c signature: dims (6 ints), scalars (ntnd, istep, lvn_only,
+    # ldeepatmo, dtime, dt_linintp_ubc), module-data (nrdmax_in/nflatlev_in ptrs,
+    # lvert_nest_in, lextra_diffu_in, timers_level), arrays in declaration order, z_* arrays.
     run = lib.run_velocity_flat_c
     run.restype = None
     run.argtypes = ([ctypes.c_int] * 6  # dims
@@ -174,9 +160,8 @@ def test_velocity_full_numerical(tmp_path: Path):
         z_vt_ie_ref.ctypes.data,
     )
 
-    # SDFG side.  Bridge classification mixes Scalar / length-1 Array
-    # per-name depending on the kernel's read/write pattern -- use the
-    # arglist to pick the right shape per kwarg.
+    # SDFG side. Bridge classification mixes Scalar / length-1 Array per-name depending on
+    # the kernel's read/write pattern -- use the arglist to pick the right shape per kwarg.
     arglist = sdfg.arglist()
 
     def scalar_or_arr(name, value, dtype):
@@ -216,10 +201,8 @@ def test_velocity_full_numerical(tmp_path: Path):
         p_diag_max_vcfl_dyn=scalar_or_arr('p_diag_max_vcfl_dyn', 0.0, np.float64),
         nproma=scalar_or_arr('nproma', nproma, np.int32),
     )
-    # Deferred-shape pointer/allocatable companions need ``<arr>_d<i>``
-    # extent bound symbols + ``offset_<arr>_d<i>`` lower-bound symbols
-    # for every dim that the bridge couldn't resolve symbolically.
-    # All arrays here are 1-based (no negative bounds), so offset = 1.
+    # Deferred-shape pointer/allocatable companions need <arr>_d<i> extent + offset_<arr>_d<i>
+    # lower-bound symbols per unresolved dim. All arrays here are 1-based, so offset=1.
     for nm, arr in list(sdfg_kw.items()):
         if not hasattr(arr, 'shape'):
             continue

@@ -1,22 +1,9 @@
-"""Audit probes for struct-field name resolution across the bridge.
+"""Audit struct-field name resolution across the bridge.
 
-Session's traceToDecl fix (commit 25f8e83) built the flattened
-``<parent>_<member>`` name for ``hlfir.designate`` ops with a
-component attribute.  Several other call sites in the bridge call
-``traceToDecl(<dg|ld>.getMemref())`` directly -- bypassing the
-component branch.  These probes test each context to find which
-ones now correctly produce the flat name and which still leak the
-bare struct base.
-
-Audited contexts:
-
-  * struct field read in tasklet body (expressions.cpp:1437 -- fixed)
-  * struct field as libcall source (elementals.cpp:298)
-  * struct field as section/element subscript
-  * struct field in branch condition
-  * struct field assigned to from RHS
-  * NESTED struct field (``g % inner % a``)
-  * struct field with array element index (``g % a(i)``)
+traceToDecl fix (25f8e83) flattens ``<parent>_<member>`` for
+``hlfir.designate`` with a component attr, but other call sites call
+``traceToDecl`` directly, bypassing that branch. Each test probes one
+such site for a leaked bare struct base.
 """
 import numpy as np
 import pytest
@@ -27,8 +14,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_module_struct_field_read_in_tasklet(tmp_path):
-    """Scalar struct field read in a plain arithmetic tasklet (fixed
-    via expressions.cpp simplification in 4cc4442)."""
+    """Scalar struct field read in a tasklet; fixed via expressions.cpp simplification (4cc4442)."""
     src = """
 module m
   type :: t
@@ -49,8 +35,7 @@ end module
 
 
 def test_module_struct_field_in_condition(tmp_path):
-    """Scalar struct field as predicate -- the bridge's interstate-
-    edge / conditional emitter must also use the flat name."""
+    """Scalar struct field as predicate -- interstate-edge conditional emitter must use flat name."""
     src = """
 module m
   type :: t
@@ -74,9 +59,7 @@ end module
 
 
 def test_module_struct_field_in_subscript(tmp_path):
-    """Scalar struct field used as ARRAY INDEX in subscript.  The
-    bridge mints a one-shot position symbol via ``internPosSymbol``
-    so the memlet subset gets a closed-form expression."""
+    """Struct field as array-index subscript -- bridge mints a position symbol via internPosSymbol for a closed-form memlet subset."""
     src = """
 module m
   type :: t
@@ -96,9 +79,7 @@ end module
 
 
 def test_module_struct_array_field_subscript(tmp_path):
-    """``g % a(i)`` -- struct field that's ITSELF an array, accessed
-    with an element subscript.  This goes through a different
-    designate path than a whole-array field access."""
+    """g % a(i): array-typed struct field with element subscript -- different designate path than whole-array access."""
     src = """
 module m
   type :: t
@@ -114,15 +95,13 @@ contains
 end module
 """
     sdfg = build_sdfg(src, tmp_path / "sdfg", name="f", entry="m::f").build()
-    # The flat array ``g_a`` should be registered; element access
-    # ``g_a[i-1]`` lands as memlet subset.
+    # flat g_a registered; element access g_a[i-1] lands as memlet subset.
     assert "g_a" in sdfg.arrays, f"flat g_a missing: {sorted(sdfg.arrays.keys())}"
     assert "g" not in sdfg.symbols
 
 
 def test_module_struct_field_assigned_to(tmp_path):
-    """Writing to a struct field via the bridge's assign emitter --
-    target-name resolution must produce the flat name."""
+    """Writing to a struct field -- assign-emitter target-name resolution must produce the flat name."""
     src = """
 module m
   type :: t
@@ -142,9 +121,7 @@ end module
 
 
 def test_module_struct_field_as_libcall_source(tmp_path):
-    """Pass a struct field as a libcall (matmul) source.  Calls
-    ``traceToDecl`` on the libcall arg site -- must produce the
-    flat name."""
+    """Struct field passed as matmul libcall source -- traceToDecl on the arg site must produce the flat name."""
     src = """
 module m
   type :: t
@@ -169,10 +146,7 @@ end module
 
 
 def test_module_struct_nested_field(tmp_path):
-    """Nested struct member access (``g % inner % a``).  Fixed by
-    extending extract_vars's per-field synthesis to RECURSE through
-    record-typed members -- each leaf path emits its own flat
-    VarInfo (``g_inner_a``)."""
+    """Nested struct member access (g % inner % a) -- fixed by recursing extract_vars's per-field synthesis through record-typed members; each leaf emits its own flat VarInfo."""
     src = """
 module m
   type :: inner_t

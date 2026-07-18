@@ -1,15 +1,6 @@
-"""Complex-constant lowering + the ``1j`` / variable-``j`` disambiguation.
-
-The bridge renders a Fortran COMPLEX constant as ``(re) + 1j * (im)``
-(Python's imaginary unit).  Two things must hold:
-
-1. A whole-array assignment of a complex CONSTANT (``a = (0.0, 0.0)`` /
-   ``a = 0.0_dp``) lowers to a mapped whole-array FILL, not a 1-D scalar
-   write (the constant reads no data, so every element gets the value).
-2. The ``j`` in the rendered ``1j`` must NEVER be confused with a real
-   scalar / loop iterator named ``j`` -- otherwise a spurious ``_in_j``
-   read connector (or a missed fill) corrupts the kernel.
-"""
+"""Complex-constant lowering + 1j/variable-j disambiguation. Two invariants: (1) whole-array assignment
+of a complex constant lowers to a mapped fill, not a scalar write; (2) the rendered `1j` must never be
+confused with a real scalar/loop iterator literally named `j` (spurious _in_j connector)."""
 import numpy as np
 import pytest
 
@@ -19,8 +10,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_complex_2d_zero_fill(tmp_path):
-    """``COMPLEX(:,:); x = 0.0_dp`` -> whole 2-D array fill (not a 1-D
-    scalar write)."""
+    """COMPLEX(:,:); x = 0.0_dp -> whole 2-D array fill (not a 1-D scalar write)."""
     src = """
 MODULE s_mod
 CONTAINS
@@ -64,9 +54,7 @@ END MODULE
 
 
 def test_complex_with_loop_iterator_j(tmp_path):
-    """A loop iterator named ``j`` must coexist with the ``1j`` the bridge
-    renders for complex constants -- the imaginary unit is NOT the
-    variable."""
+    """Loop iterator named `j` must coexist with the rendered `1j` -- imaginary unit is not the variable."""
     src = """
 MODULE s_mod
 CONTAINS
@@ -91,8 +79,7 @@ END MODULE
 
 
 def test_complex_scalar_j_plus_imaginary(tmp_path):
-    """A REAL scalar named ``j`` used in arithmetic alongside a complex
-    constant -- ``j`` is read as data, ``1j`` is not."""
+    """REAL scalar named `j` used alongside a complex constant -- `j` is read as data, `1j` is not."""
     src = """
 MODULE s_mod
 CONTAINS

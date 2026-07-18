@@ -1,10 +1,7 @@
 """Regression tests for the post-dd80990 design-audit findings.
 
-Pins behaviour for design failures D1-D5 + latent bugs #1, #2, #8 so
-future refactors of the scope-qualification / collision-detection
-pipeline can't silently regress.
-
-Audit reference: ``/home/primrose/.claude/projects/-home-primrose-Work/memory/project_ci_failures_after_scope_qualification.md``
+Pins behaviour for design failures D1-D5 + latent bugs #1, #2, #8 in the
+scope-qualification / collision-detection pipeline.
 """
 import numpy as np
 import pytest
@@ -17,17 +14,12 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 # ===========================================================================
 # D1 + latent #1 -- cross-module state isolation
 # ---------------------------------------------------------------------------
-# Two distinct kernels built back-to-back in the SAME process: prior
-# module's ``kEntryScope`` / ``kShortNameCollisions`` must not leak.
-# ``buildAllocatedReaderNames`` runs after ``clearManglingOverrides``
-# so a stale allocated-tracker reader-set from module A can't poison
-# module B.
+# Prior module's kEntryScope/kShortNameCollisions must not leak into the next
+# build; buildAllocatedReaderNames runs after clearManglingOverrides.
 # ===========================================================================
 def test_two_modules_back_to_back_isolated(tmp_path):
-    """Two distinct kernels with DIFFERENT entry F-scopes built in the
-    same process: prior module's ``kEntryScope`` /
-    ``kShortNameCollisions`` must not leak.  Both must produce SDFG
-    signatures matching their OWN entry name."""
+    """Two kernels with different entry F-scopes, built back-to-back: prior
+    module's state must not leak; each SDFG signature matches its own entry."""
     src_a = """
 MODULE alpha_mod
   IMPLICIT NONE
@@ -52,14 +44,11 @@ SUBROUTINE beta(y, m)
 END SUBROUTINE
 END MODULE beta_mod
 """
-    # Build A first
     sdfg_a = build_sdfg(src_a, tmp_path / "a", name="alpha", entry="alpha_mod::alpha").build()
     xa = np.ones(3, dtype=np.float64, order='F')
     sdfg_a(x=xa, n=np.int32(3))
     np.testing.assert_array_equal(xa, 2.0)
-    # Build B second -- A's state (entryScope='alpha', collisions for
-    # ``x`` / ``n``) must not contaminate B's extraction.  B's signature
-    # must have bare ``y`` and ``m``, not ``alpha_y`` or ``beta_y``.
+    # B must not inherit A's entryScope/collisions -- signature should have bare y/m.
     sdfg_b = build_sdfg(src_b, tmp_path / "b", name="beta", entry="beta_mod::beta").build()
     assert 'y' in sdfg_b.arrays, (f"B leaked A's state: B's signature is {sorted(sdfg_b.arrays.keys())}")
     yb = np.ones(3, dtype=np.float64, order='F')
@@ -70,19 +59,13 @@ END MODULE beta_mod
 # ===========================================================================
 # D2 -- collision pre-walk runs AFTER Pass 0b ``_call<idx>`` mutation
 # ---------------------------------------------------------------------------
-# A subroutine called from two distinct sites with section-slice
-# arguments gets ``_call0`` / ``_call1`` suffixes by Pass 0b.  The
-# collision pre-walk must see the suffixed names so both VarInfo
-# entries are correctly distinct.
+# A subroutine called from two sites with section-slice args gets _call0/_call1
+# suffixes from Pass 0b; collision pre-walk must see the suffixed names.
 # ===========================================================================
 def test_multi_callsite_no_qualification_for_unique_short_name(tmp_path):
-    """Collision pre-walk runs AFTER Pass 0b's ``_call<idx>`` mutation,
-    so callsite-disambiguated declares (suffix ``_call0`` / ``_call1``)
-    are correctly considered SEPARATE short names rather than colliding
-    via their pre-mutation name.  Verifies the rename ORDER doesn't
-    silently re-collapse them into a single bucket."""
-    # Simple 1-callsite version: helper's ``arr`` is an inlined alias of
-    # caller's ``a``; my fix collapses to entry-scope ``a``.
+    """Collision pre-walk runs after Pass 0b's _call<idx> mutation, so
+    callsite-disambiguated declares stay separate rather than re-colliding."""
+    # Single-callsite: helper's arr is an inlined alias of caller's a; collapses to entry-scope a.
     src = """
 MODULE main_mod
   IMPLICIT NONE
@@ -109,15 +92,12 @@ END MODULE main_mod
 # ===========================================================================
 # D4 + latent #2 -- alias-aware + fir.declare-aware collision pre-walk
 # ---------------------------------------------------------------------------
-# An inlined-callee dummy that's an assumed-shape alias of the caller's
-# storage must NOT trigger qualification of the caller's same-named
-# dummy.  Mirrors what closed the auto_iface_flat_matches_handwritten
-# regression.
+# An inlined-callee dummy aliasing the caller's storage (assumed-shape) must
+# NOT trigger qualification of the caller's same-named dummy.
 # ===========================================================================
 def test_inlined_alias_does_not_qualify_caller_dummy(tmp_path):
-    """Kernel ``kern`` has dummy ``out``; internal subprogram ``set_one``
-    has dummy ``out`` that aliases the caller's after inlining.  Both
-    must collapse to a single signature variable ``out``."""
+    """Kernel ``kern`` and internal ``set_one`` both have dummy ``out``; after
+    inlining they must collapse to a single signature variable ``out``."""
     src = """
 MODULE kern_mod
   IMPLICIT NONE
@@ -147,10 +127,8 @@ END MODULE kern_mod
 # Inlined-OPTIONAL dummy -- previously a CI failure (tf2_a, fun_a, etc.)
 # ===========================================================================
 def test_inlined_optional_dummy_collapses_to_caller_arg(tmp_path):
-    """An OPTIONAL dummy in an internal subprogram, called with AND
-    without the optional, must not create a spurious ``<scope>_a``
-    SDFG signature variable.  The caller's ``a`` is bound at one
-    callsite and absent at the other; ``is_present`` folds statically."""
+    """OPTIONAL dummy called with AND without the optional must not create a
+    spurious ``<scope>_a`` signature var; ``is_present`` folds statically."""
     src = """
 MODULE main_mod
   IMPLICIT NONE
@@ -181,16 +159,10 @@ END MODULE main_mod
 
 
 # ===========================================================================
-# Latent #8 (intrinsic-shadow RENAME) -- user variable named after a
-# ---------------------------------------------------------------------------
-# Fortran intrinsic (``max``, ``min``, ``sqrt``, ...).  The bridge renders
-# intrinsics as bare tokens in tasklet bodies, so a user variable with the
-# same name would collide.  Rather than hard-reject -- QE's dead
-# ``DOUBLE PRECISION :: max`` must still build -- extract-time RENAMES the
-# user variable to ``var_<name>`` so its reads/writes stay distinct while a
-# genuine intrinsic ``<name>(...)`` call keeps rendering normally.  (Changed
-# from hard-reject to rename in de9348e; these tests pin that the rename
-# yields a correct build, not a diagnostic.)
+# Latent #8 (intrinsic-shadow RENAME) -- user var named after a Fortran
+# intrinsic (max/min/sqrt/...) collides with the bridge's bare-token
+# rendering. Extract-time renames the user var to var_<name> (de9348e);
+# these tests pin that the rename builds correctly, not just diagnoses.
 # ===========================================================================
 def test_user_variable_named_max_builds_via_rename(tmp_path):
     """``REAL(8) :: max`` shadowing the MAX intrinsic builds (renamed to
@@ -259,15 +231,12 @@ END MODULE bad_min_mod
 # ===========================================================================
 # Sympy-reserved name auto-rename
 # ---------------------------------------------------------------------------
-# ``i``, ``pi``, ``e`` etc. are sympy reserved.  Local variables get
-# auto-renamed to ``fortran_<short>`` so sympy doesn't collapse them
-# into the constant.  Dummies are EXEMPT to preserve the caller-side
-# ABI (passing ``i=4`` from Python must reach the SDFG's ``i`` arg).
+# i/pi/e etc. are sympy reserved; locals auto-rename to fortran_<short> so
+# sympy doesn't collapse them. Dummies are EXEMPT to preserve caller ABI.
 # ===========================================================================
 def test_local_pi_is_renamed_to_fortran_pi(tmp_path):
-    """``REAL(8), PARAMETER :: pi = ...`` as a LOCAL constant.  Bridge
-    renames to ``fortran_pi`` internally; user doesn't see it on the
-    signature."""
+    """LOCAL ``PARAMETER :: pi`` renames to ``fortran_pi`` internally; doesn't
+    appear on the signature."""
     src = """
 MODULE kern_mod
   IMPLICIT NONE
@@ -329,14 +298,9 @@ END MODULE kern_mod
 
 
 def test_local_i_loop_iterator_not_renamed(tmp_path):
-    """``i`` as a LOCAL loop iterator must NOT be renamed to
-    ``fortran_i`` -- the rename collides with DaCe's LoopRegion
-    iterator-symbol machinery (``_loop_it_<N>`` on the loop labelled
-    ``loop_fortran_i_0``) and surfaces as ``InvalidSDFGError: Loop
-    iterator must not appear on the LHS of an interstate-edge
-    assignment``.  ``i`` is excluded from ``kSympyReservedNames`` for
-    exactly this reason.  Regression for the CI failure
-    ``test_dummy_shaped_fn_return``."""
+    """LOCAL loop iterator ``i`` must NOT be renamed to ``fortran_i`` -- collides
+    with DaCe's LoopRegion iterator-symbol machinery (``InvalidSDFGError: Loop
+    iterator must not appear on the LHS...``). Regression for ``test_dummy_shaped_fn_return``."""
     src = """
 MODULE kern_mod
   IMPLICIT NONE
@@ -359,10 +323,8 @@ END MODULE kern_mod
 
 
 def test_nested_loops_with_i_iterator(tmp_path):
-    """Two loop iterators (``i`` outer, ``i`` reused in inlined helper)
-    after a PURE FUNCTION inline -- the shape that broke
-    ``test_dummy_shaped_fn_return``.  Both ``i`` copies stay bare; no
-    LoopRegion iterator collision."""
+    """Two ``i`` loop iterators (outer + reused in an inlined PURE FUNCTION):
+    both stay bare, no LoopRegion iterator collision (broke test_dummy_shaped_fn_return)."""
     src = """
 MODULE m_iter
   IMPLICIT NONE

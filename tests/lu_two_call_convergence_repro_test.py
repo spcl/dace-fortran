@@ -1,47 +1,16 @@
-"""Minimal repro of NPB LU's "SSOR sweep no-op" bug isolated.
+"""Minimal repro of NPB LU's "SSOR sweep no-op" bug: the full LU SDFG produces
+residuals ~6.79e4 regardless of itmax, instead of the reference's 15159->2087->0.016
+progression for itmax=1,5,50.
 
-The full LU SDFG produces residuals ~6.79e4 regardless of itmax (1, 5,
-or 50).  Reference progression is 15159 -> 2087 -> 0.016 for itmax=1,
-5, 50 -- so the body should accumulate across iterations but doesn't.
+Trigger (all three required, removing any fixes it): (1) two sequential calls
+(``ssor(1)`` then ``ssor(itmax)``); (2) a multi-element AND convergence check inside
+the loop that never fires; (3) the first call uses a LITERAL constant (``ssor(1)``).
+With this shape, EVEN itmax values produce results as if only ``ssor(1)``'s single
+iteration ran; ODD values give the correct total.
 
-This repro distils the trigger down to ~30 lines of Fortran:
-
-  * Two sequential subroutine calls (``ssor(1)`` then ``ssor(itmax)``);
-  * Inside each: ``do istep = 1, niter`` with body + early-return
-    on a MULTI-ELEMENT AND convergence check that never fires;
-  * Module-level arrays for the convergence operands.
-
-With this shape, ``itmax`` EVEN values produce results as if only ONE
-iteration ran (the literal ``ssor(1)``'s iteration), while ODD values
-produce the correct total iteration count.  Specifically:
-
-  * itmax=1: u[0]=2 (=ssor(1) + ssor(1) =2 iters)  -- CORRECT
-  * itmax=2: u[0]=2 (expected 3, only 1 iter of ssor(itmax) ran)
-  * itmax=3: u[0]=4 (=2+ssor(itmax=3) =4 iters)    -- CORRECT
-  * itmax=4: u[0]=2 (expected 5)                   -- WRONG
-  * itmax=5: u[0]=6                                 -- CORRECT
-
-The bug requires ALL three factors -- removing any reproduces correct
-behaviour:
-
-  1. Two sequential calls (single call works for all niter).
-  2. Multi-element AND convergence check (1-element / no convergence
-     check works for all itmax).
-  3. The first call uses a LITERAL constant (``ssor(1)``).  Module-level
-     scalars + early-return alone don't trigger it.
-
-The pattern matches LU's ``dolu``::
-
-    call ssor(1)        ! ALWAYS 1 iteration
-    call ssor(itmax)    ! ITMAX iterations
-
-with the multi-element convergence inside the ssor body matching LU's
-``if (rsdnm(1) < tolrsd(1) .and. ... .and. rsdnm(5) < tolrsd(5))
-return`` shape.
-
-The minimal repro lets us iterate on the bridge fix without the full
-LU SDFG's 1041-state complexity slowing down each diagnostic cycle.
-"""
+Matches LU's ``dolu``: ``call ssor(1)`` (always 1 iter) then ``call ssor(itmax)``, with
+the multi-element convergence matching LU's ``rsdnm(1)<tolrsd(1) .and. ...`` shape.
+Isolates the bug from LU's full 1041-state SDFG for fast iteration."""
 import numpy as np
 import pytest
 

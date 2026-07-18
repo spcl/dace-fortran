@@ -43,8 +43,7 @@ end subroutine fun
     size = 6
     res = np.full([size], 42, order="F", dtype=np.int32)
     res[:] = 0
-    # Per the Scalar I/O convention, ``intent(in)`` scalar dummies
-    # surface as plain Scalars on the SDFG signature.
+    # Scalar I/O convention: intent(in) scalar dummies surface as plain Scalars on the SDFG signature.
     sdfg(res=res, startidx=2, endidx=5)
     assert (res[1] == 42 and res[4] == 42)
     assert (res[0] == 0 and res[5] == 0)

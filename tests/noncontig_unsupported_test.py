@@ -1,19 +1,13 @@
-"""Negative tests  --  patterns the HLFIR bridge deliberately refuses to
-lower.  Each case below produces a clear error message naming the
-failing source location and the reason.  Documenting these as live
-tests (rather than just READMEs) keeps the contract enforced in CI;
-if the bridge ever silently drops the loud-error path, the test fails
-and the regression is caught.
+"""Negative tests -- patterns the HLFIR bridge deliberately refuses to lower,
+each producing a clear error naming the failing source location and reason.
+Live tests (not just READMEs) keep the contract enforced in CI.
 
-Currently covered:
-  * Symbolic-extent noncontiguous gather (no compile-time-constant size).
-    Lowered by ``hlfir-expand-vector-subscript-gather`` only when extent is a
-    constant integer; otherwise pass aborts with ``op.emitError``.
+Currently covered: symbolic-extent noncontiguous gather (no compile-time-
+constant size). hlfir-expand-vector-subscript-gather only lowers a constant-
+integer extent; otherwise the pass aborts with op.emitError.
 
-Higher-rank noncontiguous gathers and INTENT(out) scatter-back fail
-through the same path; once those are implemented the corresponding
-xfails in [noncontig_pardecls_test.py](ported/noncontig_pardecls_test.py)
-will move here as positive tests instead.
+Higher-rank noncontiguous gathers and INTENT(out) scatter-back fail the same
+way; once implemented, the xfails in noncontig_pardecls_test.py move here as positive tests.
 """
 
 from pathlib import Path
@@ -24,33 +18,25 @@ from _util import build_sdfg, have_flang
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
-# All scatter / gather variants  --  including symbolic extents and
-# symbolic-extent calls  --  are now supported in Phase 1.5.  Positive
-# tests in noncontig_gather_scatter_test.py.  The single remaining
-# unsupported case is ALIASED self-assignments where source and
-# destination are the same array (Fortran 2003 RHS-to-temp
-# evaluation order); see test_gather_scatter_aliasing_same_array
-# in that file (xfailed).
+# scatter/gather variants (incl. symbolic extents) are supported in Phase 1.5;
+# positive tests in noncontig_gather_scatter_test.py. Remaining unsupported case:
+# ALIASED self-assignment (same source/dest array, RHS-to-temp order) -- see
+# test_gather_scatter_aliasing_same_array there (xfailed).
 
 
 def test_placeholder_for_future_unsupported_cases(tmp_path: Path):
-    """Stub.  Add bail-out tests here when new patterns the bridge
-    deliberately refuses to lower are introduced.  Empty for now."""
+    """Stub -- add bail-out tests here when new deliberately-unsupported patterns are introduced."""
     pass
 
 
 def test_virtual_dispatch_bails_loudly(tmp_path: Path):
-    """Genuinely runtime-polymorphic ``fir.dispatch``  --  a polymorphic
-    dummy ``class(t)`` that the function itself dispatches on.  Flang's
-    static devirtualisation can't resolve this case because the
-    concrete type only becomes known at the call site (which is
-    outside the function being compiled).  Surviving ``fir.dispatch``
-    ops after ``fir-polymorphic-op`` trip our
-    ``hlfir-reject-polymorphism`` pass.
+    """Genuinely runtime-polymorphic fir.dispatch -- a polymorphic dummy
+    class(t) the function itself dispatches on. Flang's static devirtualisation
+    can't resolve it (concrete type only known at the call site, outside the
+    compiled function); surviving fir.dispatch after fir-polymorphic-op trips
+    hlfir-reject-polymorphism.
 
-    The test asserts that the pipeline raises ``RuntimeError`` with
-    a message naming polymorphism  --  the bridge's contract that
-    runtime polymorphic dispatch is unsupported.
+    Asserts the pipeline raises RuntimeError naming polymorphism.
     """
     src = """
 module shapes

@@ -1,17 +1,7 @@
 #!/usr/bin/env python3
-"""
-build_bridge.py  --  Auto-build and import hlfir_bridge.
+"""Auto-build and import hlfir_bridge; import this module to get `hb`.
 
-Usage from other modules:
-    from build_bridge import hb          # builds on first import if needed
-
-Usage standalone:
-    python build_bridge.py               # force rebuild
-    python build_bridge.py --clean       # wipe build dir and rebuild
-
-The build directory lives at <this_file's_dir>/build.  The compiled .so is
-symlinked next to this file so that ``import hlfir_bridge`` works without
-PYTHONPATH manipulation.
+The .so is symlinked next to this file (as dace_fortran.hlfir_bridge) so no PYTHONPATH manipulation is needed.
 """
 
 import importlib
@@ -22,30 +12,21 @@ import sys
 import sysconfig
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
-# Configuration  --  override via environment variables if needed.
-# ---------------------------------------------------------------------------
+# --- Configuration: override via env vars ---
 
 _HERE = Path(__file__).resolve().parent
 _BUILD_DIR = _HERE / "build"
 
-# Default LLVM version.  Override with LLVM_VERSION env var.
+# Override with LLVM_VERSION env var.
 _LLVM_VERSION = os.environ.get("LLVM_VERSION", "21")
 
-# LLVM cmake dir.  Override with env var; CMakeLists.txt also has its own
-# defaults, so this is only needed if cmake's auto-detection misses.
-# NOTE: we do NOT need MLIR_DIR  --  CMakeLists.txt locates MLIR through
-# LLVM's install prefix using find_library, bypassing MLIR's broken cmake.
+# Override with env var; only needed if cmake's LLVM auto-detect misses.
+# No MLIR_DIR needed: CMakeLists.txt finds MLIR via the LLVM prefix, bypassing MLIR's broken cmake config.
 _LLVM_DIR = os.environ.get("LLVM_DIR", "")
 
 
 def _find_llvm_prefix(version: str) -> str:
-    """Derive the LLVM installation prefix from flang-new-<version>.
-
-    /usr/bin/flang-new-21 is typically a symlink to
-    /usr/lib/llvm-21/bin/flang-new-21.  Resolving it gives us the prefix.
-    Falls back to /usr/lib/llvm-<version> if the binary isn't found.
-    """
+    """LLVM install prefix from flang-new-<version> (resolves its symlink); falls back to /usr/lib/llvm-<version>."""
     flang = shutil.which(f"flang-new-{version}")
     if flang:
         real = Path(flang).resolve()
@@ -101,9 +82,7 @@ def _detect_dirs():
                            "Set LLVM_DIR env var.")
 
 
-# ---------------------------------------------------------------------------
-# Build logic
-# ---------------------------------------------------------------------------
+# --- Build logic ---
 
 
 def _ext_suffix() -> str:
@@ -143,16 +122,9 @@ def needs_build() -> bool:
 def _python_cmake_hints() -> list:
     """Explicit ``Python_*`` hints for cmake's ``find_package(Python)``.
 
-    A pyenv / ``venv`` prefix frequently ships no headers or shared
-    ``libpython`` of its own -- they live in the base interpreter
-    install -- so cmake's venv-relative ``FindPython`` search misses
-    ``Development.Module`` even though the running interpreter is fully
-    usable.  Derive the real include dir and shared library from the
-    active interpreter's ``sysconfig`` and pass them straight through.
-
-    :return: ``-DPython_INCLUDE_DIR`` / ``-DPython_LIBRARY`` cmake args
-        (the library only when a shared ``libpython`` actually exists;
-        ``Development.Module`` does not require it).
+    A pyenv/venv prefix often ships no headers or libpython of its own, so cmake's venv-relative
+    FindPython misses Development.Module even though the interpreter works fine; derive real paths
+    from sysconfig instead.
     """
     hints = []
     include = sysconfig.get_path("include")
@@ -217,9 +189,7 @@ def build(clean: bool = False, verbose: bool = True):
         print(f"[build_bridge] linked {link} -> {target}", file=sys.stderr)
 
 
-# ---------------------------------------------------------------------------
-# Import-or-build
-# ---------------------------------------------------------------------------
+# --- Import-or-build ---
 
 _BRIDGE_MODULE = "dace_fortran.hlfir_bridge"
 
@@ -227,10 +197,7 @@ _BRIDGE_MODULE = "dace_fortran.hlfir_bridge"
 def ensure_bridge():
     """Import the compiled bridge, building first if necessary.
 
-    The extension is imported as the package submodule
-    ``dace_fortran.hlfir_bridge`` (``build`` symlinks the freshly
-    built ``.so`` next to this file, i.e. into the ``dace_fortran``
-    package), so no ``sys.path`` manipulation is required.
+    Imported as dace_fortran.hlfir_bridge (build() symlinks the .so into the package dir) -- no sys.path hacking.
     """
     try:
         return importlib.import_module(_BRIDGE_MODULE)
@@ -254,9 +221,7 @@ def ensure_fresh():
 # Module-level singleton: import this from other files.
 hb = ensure_fresh()
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
+# --- CLI ---
 
 if __name__ == "__main__":
     import argparse

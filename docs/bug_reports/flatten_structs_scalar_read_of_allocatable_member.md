@@ -18,8 +18,7 @@ Source loc 3446 is the `hlfir.declare` of the scalar `edgeOfVertex_index`.
 
 ## Minimal source pattern
 
-A plain integer scalar assigned ONE element of an **allocatable** array member of a
-derived type, then used as an index:
+A plain integer scalar assigned ONE element of an **allocatable** array member of a derived type, then used as an index:
 
 ```fortran
 INTEGER :: edgeofvertex_index
@@ -30,8 +29,7 @@ edgeofvertex_index = patch_2d % verts % edge_idx(vertex1_idx, vertex1_blk, verte
 this_vort_flux(level,1) = ... vn(edgeofvertex_index, level, edgeofvertex_block) ...
 ```
 
-(`tests/icon/ocean/coriolis_pv_single_tu.f90:248`; the same routine is embedded in
-`veloc_adv_horz_single_tu.f90`, so both kernels fail identically.)
+(`tests/icon/ocean/coriolis_pv_single_tu.f90:248`; the same routine is embedded in `veloc_adv_horz_single_tu.f90`, so both kernels fail identically.)
 
 ## Bisection — the failing pass
 
@@ -46,30 +44,18 @@ So `hlfir-flatten-structs` is the culprit; everything before it verifies.
 
 ## What the IR shows
 
-`hlfir-flatten-structs` correctly creates the flat companions for the allocatable
-members:
+`hlfir-flatten-structs` correctly creates the flat companions for the allocatable members:
 
 ```mlir
 %74 = hlfir.declare(%73) {uniq_name = "...Epatch_2d_verts_edge_idx"}
      : (!fir.ref<!fir.box<!fir.heap<!fir.array<?x?x?xi32>>>>) -> (... , ...)   // box descriptor, OK
 ```
 
-The post-failure `dump()` shows `edgeOfVertex_index`'s own declare as *consistent*
-(`!fir.ref<i32>` → `!fir.ref<i32>`), i.e. the invalid state is **transient inside the
-pass** and the verifier maps the diagnostic back to that scalar's source loc.
+The post-failure `dump()` shows `edgeOfVertex_index`'s own declare as *consistent* (`!fir.ref<i32>` → `!fir.ref<i32>`) — the invalid state is **transient inside the pass**; the verifier maps the diagnostic back to that scalar's source loc.
 
 ## Suspected location
 
-`rewriteDesignate` (FlattenStructs.cpp ~line 1444). The element-read
-`patch_2d%verts%edge_idx(i,j,k)` is a designate chain whose member companion is a
-`box<heap<array>>` (allocatable). The whole-member designate (`%verts{edge_idx}`,
-empty indices) is replaced by the companion via `replaceAllUsesWith(newBase)` (line
-1593); a subsequent `fir.load` of the box + element designate then reads the scalar.
-The mis-typing appears in how the **allocatable** companion (a `box<heap>` requiring a
-`load` before the element designate) is threaded vs the plain `ref<array>` member case
-the other branches handle. The non-allocatable struct-member element-read works (it is
-exercised by the passing struct tests), so the gap is specific to the
-`box<heap<array>>` / `box<ptr<array>>` element-read feeding a scalar.
+`rewriteDesignate` (FlattenStructs.cpp ~line 1444). The element-read `patch_2d%verts%edge_idx(i,j,k)` is a designate chain whose member companion is a `box<heap<array>>` (allocatable). The whole-member designate (`%verts{edge_idx}`, empty indices) is replaced by the companion via `replaceAllUsesWith(newBase)` (line 1593); a subsequent `fir.load` of the box + element designate then reads the scalar. Mis-typing is in how the **allocatable** companion (`box<heap>`, needs a `load` before the element designate) threads vs the plain `ref<array>` member case the other branches handle. Non-allocatable struct-member element-read works (exercised by the passing struct tests) — the gap is specific to `box<heap<array>>` / `box<ptr<array>>` element-read feeding a scalar.
 
 ## Reproducer (no rebuild needed to observe)
 
@@ -96,18 +82,11 @@ build_sdfg(open('tests/icon/ocean/coriolis_pv_single_tu.f90').read(),
 
 ## Acceptance / how to verify a fix
 
-1. `tests/icon/ocean/coriolis_pv_single_tu.f90` and `veloc_adv_horz_single_tu.f90`
-   lower to an SDFG without the verifier error.
-2. The two `xfail(strict=True)` params in
-   `tests/icon/ocean/test_ocean_numerical_e2e.py` flip to PASS (remove the marks) —
-   the SDFG binding output then matches the gfortran reference bit-closely.
-3. Re-run the full struct-flattening suite (`tests/bindings/`, `tests/icon/`) — no
-   regressions (this is a core pass; that is the real risk).
+1. `tests/icon/ocean/coriolis_pv_single_tu.f90` and `veloc_adv_horz_single_tu.f90` lower to an SDFG without the verifier error.
+2. The two `xfail(strict=True)` params in `tests/icon/ocean/test_ocean_numerical_e2e.py` flip to PASS (remove the marks) — the SDFG binding output then matches the gfortran reference bit-closely.
+3. Re-run the full struct-flattening suite (`tests/bindings/`, `tests/icon/`) — no regressions (this is a core pass; that is the real risk).
 
 ## Notes
 
-- This is a **bridge pass bug, NOT a binding gap**. The bind(c) binding + shim build
-  fine once the SDFG lowers (proven for ppm_vflux, which has the same struct-flatten
-  machinery but no allocatable-member *scalar element* read).
-- Bridge rebuild: `python dace_fortran/build_bridge.py` (CMake cache present under
-  `dace_fortran/build`).
+- This is a **bridge pass bug, NOT a binding gap**. The bind(c) binding + shim build fine once the SDFG lowers (proven for ppm_vflux, which has the same struct-flatten machinery but no allocatable-member *scalar element* read).
+- Bridge rebuild: `python dace_fortran/build_bridge.py` (CMake cache present under `dace_fortran/build`).

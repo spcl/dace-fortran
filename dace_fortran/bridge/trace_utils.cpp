@@ -1,6 +1,4 @@
-// ============================================================================
-// trace_utils.cpp  --  Shared SSA tracing utilities
-// ============================================================================
+// trace_utils.cpp -- shared SSA tracing utilities.
 
 #include "bridge/trace_utils.h"
 
@@ -17,35 +15,22 @@
 
 namespace hlfir_bridge {
 
-// Disambiguation overrides for Fortran short-name collisions across
-// inlined scopes.  When ``hlfir-inline-all`` splices a callee's body
-// into the caller, both the caller's argument declare
-// (``_QFmainEinp``) and the callee's dummy declare
-// (``_QFinner_loopsEinp``) end up in one function with the same
-// trailing short name (``inp``).  Without disambiguation,
-// ``builder.arrays`` keys collide and view-alias linking edges
-// self-loop.  ``extract_vars`` populates this map with
-// ``mangled -> unique_short_name`` for the colliding entries; every
-// subsequent ``extractName`` call resolves to the unique form.
+// Disambiguation overrides for Fortran short-name collisions across inlined scopes (hlfir-inline-all can leave a caller
+// declare and callee dummy declare with the same short name); extract_vars populates mangled -> unique_short_name for
+// colliding entries.
 static thread_local std::unordered_map<std::string, std::string> kManglingOverride;
 
 void setManglingOverride(const std::string& mangled, const std::string& shortName) {
   kManglingOverride[mangled] = shortName;
 }
 
-// Per-thread entry F-scope.  Set once per build by ``setEntryScope``,
-// consulted by ``extractName`` to scope-qualify every NON-entry-scope
-// declare's short name on demand.  Empty until set; in that case
-// ``extractName`` skips the scope-qualification (back-compat with
-// callers that haven't migrated to the new flow).
+// Per-thread entry F-scope, set once by setEntryScope; extractName consults it to scope-qualify non-entry-scope
+// declares. Empty means skip qualification (back-compat).
 static thread_local std::string kEntryScope;
 static thread_local std::set<std::string> kShortNameCollisions;
 
-// Cache of every ``hlfir.declare`` uniq_name in the module, built lazily on
-// first ``flatCompanionName`` query and invalidated per build (in
-// ``clearManglingOverrides``).  Lets a component-designate name resolve to the
-// flattened companion's OWN declare name only when that companion actually
-// exists, without an O(declares) walk per access.
+// Cache of every hlfir.declare uniq_name in the module, built lazily on first flatCompanionName query, invalidated in
+// clearManglingOverrides; avoids an O(declares) walk per access.
 static thread_local llvm::StringSet<> kModuleDeclUniqs;
 static thread_local bool kModuleDeclUniqsBuilt = false;
 
@@ -62,9 +47,8 @@ void setEntryScope(const std::string& scope) { kEntryScope = scope; }
 void setShortNameCollisions(const std::set<std::string>& collisions) { kShortNameCollisions = collisions; }
 
 std::string getFScope(const std::string& uniq) {
-  // Fortran mangled-name shape: ``_QM<mod>F<func>E<name>`` (with
-  // optional nested ``F`` segments for procedure-internal
-  // procedures).  Take the F immediately before the last E.
+  // Fortran mangled-name shape: _QM<mod>F<func>E<name> (nested F segments possible); take the F immediately before the
+  // last E.
   auto eP = uniq.rfind('E');
   if (eP == std::string::npos) return {};
   auto fP = uniq.rfind('F', eP);
@@ -78,38 +62,14 @@ std::string extractName(const std::string& m) {
   auto p = m.rfind('E');
   std::string name = p != std::string::npos ? m.substr(p + 1) : m;
 
-  // Scope-qualify NON-entry-scope declares' short names on demand.
-  // Replaces the upfront inlined-callee disambiguator pass at
-  // ``extract_vars.cpp:1187`` (which only renamed ``fir.alloca``-
-  // backed declares -- missing the inlined PURE FUNCTION scalar
-  // dummies that arrive backed by the caller's loaded value, which
-  // surfaced as graupel's ``_in_qc_0`` unresolved-free-symbol bug).
-  //
-  // Rule: every declare in a non-entry F-scope gets ``<scope>_<short>``;
-  // entry-scope declares (the kernel's own dummies + locals) keep
-  // their bare short name so the SDFG signature matches the
-  // user-facing Fortran procedure interface.  Module globals
-  // (no F segment) keep their bare name -- they live in the
-  // entry's symbol-table sense.  Empty ``kEntryScope`` (set yet?
-  // legacy caller?) also keeps the bare name.
-  //
-  // Already-prefixed names (the old disambiguator's ``setAttr`` rename
-  // left some IRs with ``scope_short`` as the trailing E segment;
-  // the new logic would otherwise produce ``scope_scope_short``)
-  // are detected by checking whether ``name`` already starts with
-  // ``<scope>_``.
+  // Scope-qualify non-entry-scope declares on demand: <scope>_<short> for those, bare short name for entry-scope
+  // declares and module globals (no F segment) so the SDFG signature matches the Fortran interface. Skips re-prefixing
+  // names that already start with <scope>_.
   if (!kEntryScope.empty()) {
     std::string const scope = getFScope(m);
     if (!scope.empty() && scope != kEntryScope) {
-      // Qualify ONLY when the short name actually collides across
-      // scopes.  ``kShortNameCollisions`` is populated by
-      // ``extractVariables`` from a pre-walk of every declare.
-      // Without this guard, qualifying every non-entry-scope
-      // declare creates EXTRA signature variables for unused
-      // inlined-callee dummies -- e.g. ``test_fortran_frontend_present``
-      // has ``tf2``'s OPTIONAL ``a`` folded by ``is_present`` so it
-      // never reaches a tasklet, but ``tf2_a`` still landed on the
-      // SDFG signature and broke the caller's ``a=5`` binding.
+      // Qualify ONLY when the short name actually collides across scopes (kShortNameCollisions, from extractVariables's
+      // pre-walk) -- else unused inlined-callee dummies gain extra SDFG signature variables.
       bool const collides = kShortNameCollisions.count(name) > 0;
       if (collides) {
         std::string const prefix = scope + "_";
@@ -118,40 +78,20 @@ std::string extractName(const std::string& m) {
     }
   }
 
-  // Sanitize dots  --  flang emits compiler-generated globals like
-  // ``_QQro.4xi4.0`` (read-only constant pool for array literals)
-  // whose names contain ``.``.  DaCe's ``NestedDict`` reserves
-  // ``.`` as a nested-key separator and rejects dotted keys
-  // outright.  Fortran identifiers can't contain ``.``, so
-  // replacing every ``.`` with ``_`` is collision-free w.r.t.
-  // user names.  Done at the boundary (extractName is the
-  // canonical "MLIR mangled -> Python-side name" helper) so the
-  // raw mangled names in the IR stay intact.
+  // Sanitize dots: flang emits compiler-generated globals like _QQro.4xi4.0 whose names contain '.', which DaCe's
+  // NestedDict rejects as a nested-key separator. Collision-free since Fortran identifiers can't contain '.'.
   std::replace(name.begin(), name.end(), '.', '_');
 
-  // A double-underscore identifier is invalid as a Fortran dummy (Fortran names
-  // can't start with ``_``) AND reserved in C++ -- flang/pass-synthesised temps
-  // like ``__assoc_scalar_N`` (the value-materialised gather temp minted by
-  // ``ExpandVectorSubscriptGather``) start with one and, when they reach the
-  // SDFG signature, make the generated Fortran binding uncompilable
-  // (``integer(c_int), value :: __assoc_scalar_198`` is a syntax error).  Prefix
-  // a letter so the emitted name is a valid identifier in BOTH the SDFG C++
-  // codegen and the Fortran binding.  Scoped to the ``__`` prefix (not a bare
-  // leading ``_``): single-underscore names are the bridge's own internal
-  // markers (``_in_*`` / flatten-companion intermediates) that never reach the
-  // Fortran signature, and renaming them here desyncs downstream shape-symbol
-  // construction (``a_w_0_d0`` resolution).  A real Fortran user name never
-  // starts with ``__``, so this is collision-free; done at this canonical
-  // boundary so every reference to the same declare renames consistently.
+  // Double-underscore names (e.g. __assoc_scalar_N from ExpandVectorSubscriptGather) are invalid Fortran dummies and
+  // make the generated binding uncompilable; prefix a letter. Scoped to "__" not bare "_" -- single-underscore names
+  // are internal markers that must stay unrenamed (renaming desyncs shape-symbol construction).
   if (name.rfind("__", 0) == 0) name = "f" + name;
   return name;
 }
 
-// Allocatable re-allocation alias map.  Keyed by the raw Fortran name
-// (what the declare chain alone would resolve to).  Updated as the
-// bridge's IR walker passes ``fir.allocmem``-bound ``fir.store`` ops
-// (see extract_ast.cpp); read by ``traceToDecl`` so every downstream
-// access lands on the currently-live SDFG transient.
+// Allocatable re-allocation alias map, keyed by the raw Fortran name; updated as the IR walker passes
+// fir.allocmem-bound fir.store ops (extract_ast.cpp), read by traceToDecl so downstream accesses land on the live SDFG
+// transient.
 static thread_local std::unordered_map<std::string, std::string> kAllocAlias;
 
 std::string allocAliasFor(const std::string& raw) {
@@ -168,28 +108,11 @@ void setAllocAlias(const std::string& raw, const std::string& alias) {
 
 void clearAllocAliases() { kAllocAlias.clear(); }
 
-// True iff ``mr`` (a declare's memref) leads -- through the usual
-// reinterpret peels -- to an ``hlfir.designate`` that selects a struct
-// COMPONENT.  This distinguishes an INLINED-call dummy bound to a caller
-// struct member (``call get_index_range(patch % edges % in_domain, ...)``
-// after ``hlfir-inline-all`` splices the callee body in) from an entry
-// dummy (memref is a block argument) or a local (memref is an alloca) --
-// neither of those leads to a designate.  ``traceToDecl`` uses it to
-// resolve such an alias to the caller-side member path rather than the
-// inlined dummy's own ``<dummy>_call<idx>`` name, which nothing sources.
-// Single source of truth for the storage-transparent reinterpret peel shared by
-// every access-path walker.  ``fir.convert`` (type erase), ``fir.load`` (deref a
-// ref/box), ``fir.embox`` (wrap a ref/ptr into a box -- e.g. a polymorphic
-// ``CLASS(t)`` dummy bound to a pointer member), ``fir.rebox`` (retype a box),
-// ``fir.box_addr`` (data ptr out of a box), ``hlfir.copy_in`` (contiguous temp of
-// a non-contiguous actual), ``fir.coordinate_of`` (sub-element address), and
-// ``hlfir.as_expr`` (materialised-variable-as-expr) ALL preserve the underlying
-// storage identity.  Callers peel to the first non-transparent op (designate /
-// declare / alloca / block-arg / arith) and handle it themselves.  Centralising
-// the set here is what stops the per-loop subsets from drifting (the ICON halo
-// gather's ``fir.embox`` gap -- a class dummy bound to ``p_patch % comm_pat_c``
-// whose member reads must resolve to ``p_patch_comm_pat_c_*`` rather than the
-// inlined dummy's local name -- was exactly such a drift).
+// True iff mr (a declare's memref) peels to an hlfir.designate selecting a struct COMPONENT -- identifies an
+// inlined-call dummy bound to a caller struct member (dummy scope but memref is a component designate, not a
+// block-arg/alloca). Single source of truth for the storage-transparent reinterpret peel
+// (fir.convert/load/embox/rebox/box_addr, hlfir.copy_in/coordinate_of/as_expr) shared by every access-path walker;
+// centralising it here is what keeps per-walker peel subsets from drifting apart.
 mlir::Value peelBoxReinterpret(mlir::Value v, int maxDepth) {
   for (int i = 0; i < maxDepth && v; ++i) {
     auto* d = v.getDefiningOp();
@@ -232,24 +155,17 @@ mlir::Value peelBoxReinterpret(mlir::Value v, int maxDepth) {
 }
 
 bool leadsToComponentDesignate(mlir::Value mr) {
-  // Peel the shared storage-transparent reinterprets, then the terminal must be
-  // an ``hlfir.designate`` selecting a struct COMPONENT.  Using the shared peel
-  // (vs an inline op cascade) keeps this gate in lock-step with the other
-  // access-path walkers -- the ``fir.embox`` polymorphic-class-dummy case
-  // resolves here because ``peelBoxReinterpret`` covers embox.
+  // Peel via the shared reinterpret set, then require the terminal to be a struct-COMPONENT designate; using the shared
+  // peel (not an inline cascade) keeps this gate in lock-step with the other access-path walkers.
   mr = peelBoxReinterpret(mr);
   auto* d = mr ? mr.getDefiningOp() : nullptr;
   auto dg = d ? mlir::dyn_cast<hlfir::DesignateOp>(d) : nullptr;
   return dg && static_cast<bool>(dg.getComponentAttr());
 }
 
-// Peel a section's base through box reinterprets, inlined whole-array-dummy
-// aliases (an inlined worker's whole-member dummy forwarding to a caller
-// member -- the ``mid``->``worker`` two-level inline ``p_vn`` -> ``pvn3d`` ->
-// section), and nested non-component designates; true iff it reaches an
-// ``hlfir.designate`` selecting a struct COMPONENT.  Stricter-peeling variant
-// of ``leadsToComponentDesignate``: the latter stops at the intermediate
-// inlined dummy declare an AoR section can sit behind.
+// Peel a section's base through box reinterprets, inlined whole-array-dummy aliases, and nested non-component
+// designates; true iff it reaches a struct-COMPONENT designate. Stricter-peeling variant of leadsToComponentDesignate,
+// which stops at the intermediate inlined dummy declare.
 static bool sectionBaseReachesComponent(mlir::Value mr) {
   for (int i = 0; i < limits::kAliasMemrefWalkDepth && mr; ++i) {
     if (mlir::Value const peeled = peelBoxReinterpret(mr); peeled != mr) {
@@ -283,10 +199,8 @@ hlfir::DesignateOp asSectionOverComponent(mlir::Value v) {
   if (!sec) return {};
   // A PURE section: triplet/scalar subscripts, no component selector.
   if (sec.getIsTriplet().empty() || sec.getComponentAttr()) return {};
-  // AoR only: the section's element is a derived (record) type -- the
-  // ``t_cartesian_coordinates``-with-``%x`` shape.  A plain-real member
-  // section (``rho(:, :, blockno)``) is a flattened-companion +
-  // ``rewriteSectionedAliasLeaf`` case and must stay on that path.
+  // AoR only: the section's element must be a derived (record) type; a plain-real member section is a
+  // flattened-companion + rewriteSectionedAliasLeaf case and must stay on that path.
   mlir::Type et = sec.getResult().getType();
   if (auto bt = mlir::dyn_cast<fir::BoxType>(et)) et = bt.getEleTy();
   if (auto rt = mlir::dyn_cast<fir::ReferenceType>(et)) et = rt.getEleTy();
@@ -308,25 +222,18 @@ unsigned countScalarSectionDims(hlfir::DesignateOp sec) {
 }
 
 mlir::Value traceLocalPointerRebindSource(hlfir::DeclareOp decl) {
-  // Gate 1: a LOCAL Fortran POINTER -- the pointer attribute set, and NO dummy
-  // scope (an entry / inlined-callee pointer dummy is bound by its caller, not
-  // rebound here).
+  // Gate 1: a LOCAL Fortran POINTER (pointer attribute set, no dummy scope -- an entry/inlined-callee pointer dummy is
+  // bound by its caller, not rebound here).
   auto attrs = decl.getFortranAttrs();
   if (!attrs || !bitEnumContainsAny(*attrs, fir::FortranVariableFlagsEnum::pointer)) return {};
   if (decl.getDummyScope()) return {};
-  // Gate 2: the pointee is a whole DERIVED-TYPE OBJECT (a record behind
-  // ``box<ptr|heap<record>>``), NOT a scalar or array.  A record-object
-  // pointer's reads are component designates (``ptr % member``) that need the
-  // SOURCE struct's flat name; a scalar / array pointer VIEW (non-record
-  // pointee) is lowered by the ``view_alias`` mechanism and must keep its own
-  // name, so exclude it here.
+  // Gate 2: the pointee is a whole DERIVED-TYPE OBJECT (box<ptr|heap<record>>), not scalar/array -- a scalar/array
+  // pointer VIEW is lowered by view_alias and must keep its own name.
   mlir::Type pointee = decl.getResult(0).getType();
   if (auto ref = mlir::dyn_cast<fir::ReferenceType>(pointee)) pointee = ref.getEleTy();
   if (!pointerToRecordMember(pointee)) return {};
-  // Gate 3: exactly ONE non-nullify rebind store ``fir.store <box> to decl#0``.
-  // The initial ``embox(zero_bits)`` nullify is skipped; more than one live
-  // rebind is ambiguous (the reads could observe either target), so refuse and
-  // let the read keep its own name.
+  // Gate 3: exactly ONE non-nullify rebind store fir.store <box> to decl#0; the initial embox(zero_bits) nullify is
+  // skipped, and more than one live rebind is ambiguous -> refuse.
   mlir::Value stored;
   for (auto* u : decl.getResult(0).getUsers()) {
     auto st = mlir::dyn_cast<fir::StoreOp>(u);
@@ -337,23 +244,13 @@ mlir::Value traceLocalPointerRebindSource(hlfir::DeclareOp decl) {
     stored = st.getValue();
   }
   if (!stored) return {};
-  // Peel the storage-transparent box reinterprets (embox / rebox / convert /
-  // box_addr / load) to the source declare or component designate -- the same
-  // op set ``RewritePointerAssigns::traceRebindChain`` peels.
+  // Peel the storage-transparent box reinterprets to the source declare or component designate -- the same op set
+  // RewritePointerAssigns::traceRebindChain peels.
   mlir::Value const src = peelBoxReinterpret(stored);
   if (!src) return {};
-  // Gate 4: the source must root at a struct DUMMY -- it is either a component
-  // designate (``owned_cells => patch_2d % cells % owned``) or a struct DUMMY
-  // (``cells_subset => subset_range``, incl. the multi-hop dummy->dummy chain
-  // ``ontriangles`` forms where ``subset_range`` itself aliases the outer
-  // ``subset_range`` via ``asAssumedShapeAlias``).  A rebind onto a whole NAMED
-  // object (a module global / local variable -- ``p => g``, ``this % p => gi``)
-  // is left to the ``object_aliases`` mechanism (``traceToDecl`` keeps ``p`` so
-  // the store target stays ``p`` and the resolver maps ``p_arr -> g_arr``);
-  // following it here would rename the rebind's own store target and drop the
-  // alias edge.  The record-typed pointee (Gate 2) guarantees any dummy source
-  // is itself a record dummy, whose members are caller-bindable; the
-  // continuation (the caller's back-walk + gate #11/#12 hops) resolves the rest.
+  // Gate 4: the source must root at a struct DUMMY (component designate or struct-dummy declare, incl. multi-hop dummy
+  // chains). A rebind onto a whole named object (p => g) is left to the object_aliases mechanism instead -- following
+  // it here would rename the rebind's own store target and drop the alias edge.
   auto* sd = src.getDefiningOp();
   if (auto dg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(sd)) return dg.getComponentAttr() ? src : mlir::Value{};
   if (auto dc = mlir::dyn_cast_or_null<hlfir::DeclareOp>(sd)) return dc.getDummyScope() ? src : mlir::Value{};
@@ -366,8 +263,7 @@ mlir::Value matchAssociatedStatusBoxRef(mlir::arith::CmpIOp cmp) {
   bool rhsZero = false;
   if (auto c = traceConstInt(cmp.getRhs())) rhsZero = (*c == 0);
   if (!rhsZero) return {};
-  // Peel the heap-addr -> i64 ``fir.convert`` chain on the LHS back to the
-  // ``fir.box_addr``.
+  // Peel the heap-addr -> i64 fir.convert chain on the LHS back to the fir.box_addr.
   mlir::Value cur = cmp.getLhs();
   for (int i = 0; i < limits::kConvertChainDepth && cur; ++i) {
     auto* cd = cur.getDefiningOp();
@@ -381,17 +277,15 @@ mlir::Value matchAssociatedStatusBoxRef(mlir::arith::CmpIOp cmp) {
   auto* cd = cur ? cur.getDefiningOp() : nullptr;
   auto ba = cd ? mlir::dyn_cast<fir::BoxAddrOp>(cd) : nullptr;
   if (!ba) return {};
-  // ``box_addr``'s operand is the box, usually loaded from a box reference;
-  // trace through that ``fir.load`` so the returned value is what
-  // ``traceToDecl`` names.
+  // box_addr's operand is the box, usually loaded from a box reference; trace through that fir.load so the returned
+  // value is what traceToDecl names.
   mlir::Value src = ba.getVal();
   if (auto* sd = src.getDefiningOp())
     if (auto ld = mlir::dyn_cast<fir::LoadOp>(sd)) src = ld.getMemref();
   return src;
 }
 
-// True iff some ``hlfir.declare`` in ``anyOp``'s module has uniq_name
-// ``uniq``.  Backed by a per-build cache (see ``kModuleDeclUniqs``).
+// True iff some hlfir.declare in anyOp's module has uniq_name uniq. Backed by a per-build cache (kModuleDeclUniqs).
 static bool moduleHasDeclare(mlir::Operation* anyOp, llvm::StringRef uniq) {
   if (!kModuleDeclUniqsBuilt) {
     if (auto mod = anyOp->getParentOfType<mlir::ModuleOp>()) {
@@ -402,20 +296,12 @@ static bool moduleHasDeclare(mlir::Operation* anyOp, llvm::StringRef uniq) {
   return kModuleDeclUniqs.contains(uniq);
 }
 
-// A component designate ``base % member`` over a FLATTENED struct must resolve
-// to the SAME name the companion was registered under -- ``extractName(<base
-// uniq>_<member>)`` -- not a re-composition ``extractName(base) + "_" +
-// member``.  The two diverge when the base and its companion have different
-// cross-scope collision status: e.g. a runtime-local AoS whose base declare was
-// erased in one inlined scope (so its short no longer collides -> bare) while
-// the companion survives in two scopes (collides -> scope-qualified).  Resolve
-// the companion declare's own name by construction whenever such a declare
-// exists; return "" otherwise (member of a non-flattened struct -> the caller
-// keeps the plain ``parent_member`` composition).
+// A component designate over a FLATTENED struct must resolve to the companion's OWN registered name, not a re-composed
+// extractName(base) + "_" + member -- base and companion can have different cross-scope collision status. Resolves by
+// construction when such a declare exists; "" otherwise (caller falls back to plain parent_member composition).
 static std::string flatCompanionName(hlfir::DesignateOp dg, llvm::StringRef member) {
-  // Peel the memref to the base declare's uniq_name, mirroring the transparent
-  // walk ``traceToDecl`` does so we land on the same storage declare its
-  // ``parent`` would (incl. assumed-shape aliases -> outer storage).
+  // Peel the memref to the base declare's uniq_name, mirroring traceToDecl's walk so we land on the same storage
+  // declare (incl. assumed-shape aliases -> outer storage).
   mlir::Value v = dg.getMemref();
   std::string baseUniq;
   for (int i = 0; i < 64 && v; ++i) {
@@ -433,17 +319,15 @@ static std::string flatCompanionName(hlfir::DesignateOp dg, llvm::StringRef memb
       baseUniq = dc.getUniqName().str();
       break;
     }
-    // Shared storage-transparent peel -- runs before the designate case below
-    // (a designate value returns unchanged, so a nested-component parent still
-    // falls through to the multi-level guard).
+    // Shared storage-transparent peel, runs before the designate case below (a designate value returns unchanged, so a
+    // nested-component parent still falls through to the multi-level guard).
     if (mlir::Value const peeled = peelBoxReinterpret(v); peeled != v) {
       v = peeled;
       continue;
     }
     if (auto pd = mlir::dyn_cast<hlfir::DesignateOp>(d)) {
-      // A nested component parent (``a % b % member``) is a multi-level path
-      // the single-underscore companion convention doesn't cover -- leave it
-      // to the caller's recursive composition.
+      // A nested component parent (a % b % member) is a multi-level path the single-underscore companion convention
+      // doesn't cover -- leave it to the caller's recursive composition.
       if (pd.getComponentAttr()) return {};
       v = pd.getMemref();
       continue;
@@ -461,30 +345,16 @@ std::string traceToDecl(mlir::Value val, int max) {
     auto* d = val.getDefiningOp();
     if (!d) break;
     if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(d)) {
-      // Walk through inlined assumed-shape aliases to the outer
-      // caller declare so downstream SDFG emission references
+      // Walk through inlined assumed-shape aliases to the outer caller declare so downstream SDFG emission references
       // the real storage by its caller-side name.
       if (auto outer = asAssumedShapeAlias(dc)) {
         val = outer.getResult(0);
         continue;
       }
-      // Inlined-call dummy bound to a struct-MEMBER actual argument
-      // (``get_index_range(patch % edges % in_domain, ...)``): the dummy
-      // declare's memref leads to a component designate of the caller's
-      // struct.  ``asAssumedShapeAlias`` can't fold it (it looks for a
-      // whole outer declare, not a member designate), so walk through to
-      // that designate -- the symbol then resolves to the caller-side flat
-      // path (``patch_3d_p_patch_2d_edges_in_domain_start_index``), which
-      // the binding's ``_struct_member_symbol_sources`` sources, instead of
-      // the inlined dummy's unsourced ``subset_range_call<idx>`` name (gate
-      // #11).  Gated on a dummy scope so only inlined aliases match.
-      // Inlined AoR-section dummy (``vec_in`` bound to ``p_diag % p_vn(:, :,
-      // blockno)``): the dummy's box_addr/copy_in memref peels to a PURE
-      // section over the ``p_vn`` component.  ``leadsToComponentDesignate``
-      // is false here (the section has no component), so hop THROUGH the
-      // section to its base so the flat name resolves to the caller-side
-      // companion (``<root>_p_diag_p_vn_x``) the AoR mint registers, not the
-      // inlined dummy's bare ``vec_in_x`` (gate #11a, twin of #11).
+      // Gate #11: an inlined-call dummy bound to a struct-MEMBER actual (memref leads to a component designate,
+      // asAssumedShapeAlias can't fold it) resolves through to that designate's caller-side flat name instead of the
+      // dummy's unsourced name. Gate #11a (twin): an inlined AoR-section dummy's box_addr/copy_in memref peels to a
+      // component-less section, so hop through the section to its base for the same reason.
       if (dc.getDummyScope())
         if (auto sec = asInlinedSectionOverComponent(dc)) {
           val = sec.getMemref();
@@ -494,12 +364,8 @@ std::string traceToDecl(mlir::Value val, int max) {
         val = dc.getMemref();
         continue;
       }
-      // Local whole-object POINTER rebound to a struct-dummy component
-      // (``cells_subset => patch_3d % p_patch_2d(1) % cells % all``): follow the
-      // rebind to the source chain so ``cells_subset % start_block`` renders as
-      // the caller-side flat name ``patch_3d_p_patch_2d_cells_all_start_block``
-      // (which the member-symbol mint already registers) rather than the local
-      // pointer's own ``div_oce_3d_mlevels_cells_subset_start_block``.
+      // Local whole-object POINTER rebound to a struct-dummy component: follow the rebind to the source chain so the
+      // access renders as the caller-side flat name instead of the local pointer's own name.
       if (mlir::Value const src = traceLocalPointerRebindSource(dc)) {
         val = src;
         continue;
@@ -507,60 +373,27 @@ std::string traceToDecl(mlir::Value val, int max) {
       return allocAliasFor(extractName(dc.getUniqName().str()));
     }
     if (auto dc = mlir::dyn_cast<fir::DeclareOp>(d)) return allocAliasFor(extractName(dc.getUniqName().str()));
-    // Storage-transparent box reinterprets (convert / load / coord / rebox /
-    // embox / box_addr / copy_in / as_expr) go through the shared peel -- the
-    // single source of truth (see ``peelBoxReinterpret``).  Runs before the
-    // designate / select-clamp cases below; the peel returns those values
-    // unchanged so each still falls through to its dedicated handler.
+    // Storage-transparent box reinterprets go through the shared peel (peelBoxReinterpret), which runs before the
+    // designate/select-clamp cases below and returns other values unchanged.
     if (mlir::Value const peeled = peelBoxReinterpret(val); peeled != val) {
       val = peeled;
       continue;
     }
-    // Section / element designates (``a(lo:hi)``, ``a(i)``)  --  walk
-    // through to the underlying memref so a reduce over an
-    // ``hlfir.any %levmask(i_startblk:i_endblk, jk)`` resolves its
-    // source array to ``levmask``.
-    //
-    // Struct field designates (``vcut % a``) are different: they
-    // carry a ``componentAttr`` naming the member.  Walking through
-    // would land on the struct base (``vcut``) -- which is NOT the
-    // flattened name the SDFG arglist uses (the bridge's
-    // hlfir-flatten-structs pass produces ``vcut_a`` for DUMMY
-    // args, and the bindings layer maps a MODULE-LEVEL struct
-    // global the same way).  Build the flattened name
-    // ``<parent>_<component>`` from this designate's component
-    // attribute and the recursively-traced parent name.  Mirrors
-    // the ``_QMmFvcut_getEvcut_a`` form Flang produces for the
-    // dummy-arg case AND the flat-name convention the SDFG
-    // arglist uses for module-level struct globals.  QE's
-    // ``vcut_get`` (called from ``g2_convolution`` over a module-
-    // level ``vcut`` global) was the surfacing case -- the libcall
-    // dispatcher's ``traceToDecl`` on the matmul's first operand
-    // had been returning the bare struct name ``vcut`` instead of
-    // ``vcut_a``, causing ``KeyError: 'vcut'`` at SDFG arglist
-    // lookup.
+    // Section/element designates (a(lo:hi), a(i)) walk through to the underlying memref (e.g. hlfir.any over %levmask
+    // resolves to levmask). Struct field designates (vcut % a) carry a componentAttr instead -- walking through would
+    // land on the bare struct base, not the flattened name (vcut_a) the SDFG arglist uses, so build
+    // <parent>_<component> from the component attribute and the recursively-traced parent name.
     if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(d)) {
       if (auto comp = dg.getComponentAttr()) {
-        // Prefer the flattened companion declare's OWN registered name when it
-        // exists -- correct-by-construction vs. re-composing from the base
-        // (see ``flatCompanionName``).  Falls through to the composition below
-        // for non-flattened struct members (no companion declare).
+        // Prefer the flattened companion declare's own registered name when it exists (see flatCompanionName); falls
+        // through to composition below for non-flattened members.
         if (std::string cn = flatCompanionName(dg, comp.getValue()); !cn.empty()) return cn;
         auto parent = traceToDecl(dg.getMemref(), max - i);
         if (!parent.empty()) {
-          // Flat-name construction is just string join ``parent_member``.
-          // Flang's pointer-companion alloca uses a DOUBLE-underscore
-          // form (``dfftt__nl``) that doesn't collide with our
-          // single-underscore convention as long as Fortran member
-          // names don't start with ``_`` (which they can't -- Fortran
-          // identifiers must start with a letter).  In practice we
-          // walk the module's hlfir.declares for a companion whose
-          // uniq_name ends in ``E<parent>__<member>`` (the
-          // POINTER / ALLOCATABLE struct member snapshot path Flang
-          // synthesises) and prefer THAT name when found, so the
-          // SDFG arglist key matches what the rest of the pipeline
-          // registered.  Falls back to the single-underscore form
-          // when no companion exists (the common case).
+          // Flat-name is parent_member by default. Flang's POINTER/ALLOCATABLE companion alloca uses a
+          // double-underscore form (parent__member, e.g. dfftt__nl) that never collides since Fortran member names
+          // can't start with '_'; prefer that name when a matching declare exists, else fall back to the
+          // single-underscore form.
           std::string singleU = parent + "_" + comp.getValue().str();
           bool wantPtr = false;
           if (auto attrs = dg.getFortranAttrs()) {
@@ -569,9 +402,8 @@ std::string traceToDecl(mlir::Value val, int max) {
                       bitEnumContainsAny(fa, fir::FortranVariableFlagsEnum::allocatable);
           }
           if (wantPtr) {
-            // Search the enclosing func.func / module for a declare
-            // whose uniq_name's E-scope short tail equals
-            // ``<parent>__<member>``.  Found -> use its name.
+            // Search the enclosing func.func for a declare whose uniq_name's E-scope short tail equals parent__member;
+            // found -> use its name.
             std::string doubleU = parent + "__" + comp.getValue().str();
             auto* func = dg->getParentOfType<mlir::func::FuncOp>().getOperation();
             bool found = false;
@@ -594,16 +426,9 @@ std::string traceToDecl(mlir::Value val, int max) {
       continue;
     }
     if (auto s = mlir::dyn_cast<mlir::arith::SelectOp>(d)) {
-      // Follow the select ONLY for the extent CLAMP idiom -- ``max(x, 0)`` /
-      // ``select(cmp(x, 0), x, 0)`` -- where ONE branch is the constant ZERO
-      // and the OTHER is the real value (Flang clamps a computed extent to be
-      // non-negative this way).  A genuine ``MIN(a, b)`` / ``MAX(a, b)`` --
-      // even against a non-zero constant (``MIN(x, 100)``) -- is NOT an alias
-      // to one branch: following it would silently drop the other operand AND
-      // any subscript (a struct-member array element ``dolic_e(je, jb)`` ->
-      // bare
-      // ``..._dolic_e``).  Leave those for the min/max idiom in
-      // ``buildIndexExpr`` / ``buildExpr`` to render.
+      // Follow the select ONLY for the extent CLAMP idiom (select(cmp(x,0), x, 0), one branch a constant 0); a genuine
+      // MIN/MAX select is NOT an alias to one branch (following it would drop the other operand and any subscript) and
+      // is left for the min/max idiom in buildIndexExpr/buildExpr.
       auto trueC = traceConstInt(s.getTrueValue());
       auto falseC = traceConstInt(s.getFalseValue());
       bool const trueZero = trueC && *trueC == 0;
@@ -629,12 +454,8 @@ std::optional<int64_t> traceConstInt(mlir::Value v) {
       v = cv.getValue();
       continue;
     }
-    // Flang wraps each static extent in a `select extent>0, extent, 0`
-    // clamp; follow the true branch to reach the original value.
-    // Restrict to that exact shape -- the false value must be the
-    // constant 0 -- so we don't accidentally follow Fortran ``MAX``
-    // / ``MIN`` (also lowered as ``arith.select`` over a cmp) and
-    // collapse a non-constant bound to its first operand.
+    // Flang wraps each static extent in a select(extent>0, extent, 0) clamp; follow the true branch, but only when the
+    // false value is the constant 0 -- else it might be a genuine Fortran MAX/MIN, not a clamp.
     if (auto s = mlir::dyn_cast<mlir::arith::SelectOp>(d)) {
       auto* fdef = s.getFalseValue().getDefiningOp();
       bool false_is_zero = false;
@@ -653,11 +474,8 @@ std::optional<int64_t> traceConstInt(mlir::Value v) {
 }
 
 std::string posSymbolName(const std::string& array, const std::vector<int64_t>& one_based_idxs) {
-  // Keep in lockstep with ``internPosSymbol`` (ast/expressions.cpp): the
-  // descriptor-shape side mints the name here, the AST builder mints the
-  // matching ``symbol_init`` there, and they must agree.  Each 1-based
-  // index appends ``_<i>``, so ``shp(1,2,1)`` -> ``__sym_shp_1_2_1`` and
-  // the 1-D ``dims(1)`` -> ``__sym_dims_1`` (unchanged).
+  // Must stay in lockstep with internPosSymbol (ast/expressions.cpp) -- this mints the name, that mints the matching
+  // symbol_init. Each 1-based index appends _<i>: shp(1,2,1) -> __sym_shp_1_2_1.
   std::string s = "__sym_" + array;
   for (auto i : one_based_idxs) s += "_" + std::to_string(i);
   return s;
@@ -680,8 +498,8 @@ std::optional<std::pair<std::string, std::vector<int64_t>>> constIndexedElementL
   auto idxs = dg.getIndices();
   if (idxs.empty()) return std::nullopt;
   auto triplets = dg.getIsTriplet();
-  // Every dimension must be a single constant scalar index (no section /
-  // triplet) for the element to fold to one position symbol.
+  // Every dimension must be a single constant scalar index (no section/triplet) for the element to fold to one position
+  // symbol.
   std::vector<int64_t> consts;
   for (unsigned d = 0; d < idxs.size(); ++d) {
     if (d < triplets.size() && triplets[d]) return std::nullopt;
@@ -704,15 +522,13 @@ static void forEachConstIndexedElementImpl(
   }
   auto* def = v.getDefiningOp();
   if (!def) return;
-  // Branches into every operand: on a shared-subexpression DAG the depth cap
-  // alone is not enough (a diamond re-explores exponentially), so mark each op
-  // once.  The callback (``internPosSymbol``) is idempotent, so visiting a
-  // shared element leaf once instead of twice is behaviour-preserving.
+  // Branches into every operand: on a shared-subexpression DAG the depth cap alone isn't enough (a diamond re-explores
+  // exponentially), so mark each op visited once; the callback is idempotent so this is behaviour-preserving.
   llvm::SmallPtrSet<mlir::Operation*, 32> seen;
   if (!visited) visited = &seen;
   if (!visited->insert(def).second) return;
-  // Recurse through the same wrapper / arithmetic / max-min / select op
-  // set ``traceExtentExpr`` renders, so every element leaf is reached.
+  // Recurse through the same wrapper/arithmetic/max-min/select op set traceExtentExpr renders, so every element leaf is
+  // reached.
   if (mlir::isa<fir::ConvertOp, mlir::arith::SelectOp, mlir::arith::CmpIOp, mlir::arith::AddIOp, mlir::arith::SubIOp,
                 mlir::arith::MulIOp, mlir::arith::DivSIOp, mlir::arith::DivUIOp, mlir::arith::MaxSIOp,
                 mlir::arith::MaxUIOp, mlir::arith::MinSIOp, mlir::arith::MinUIOp>(def)) {
@@ -730,26 +546,17 @@ static std::string traceExtentExprMemo(mlir::Value v, llvm::DenseMap<mlir::Opera
   auto* def = v.getDefiningOp();
   if (!def) return "";
 
-  // Extent expressions are DAGs (a shared grid-parameter sub-expression feeds
-  // many array bounds, and recurs within one extent).  Without a cache this
-  // recursive render re-walks shared subtrees and re-builds their strings --
-  // exponential work on a real kernel.  Memoize the rendered string per
-  // defining op so each subexpression is built exactly once.
+  // Extent expressions are DAGs; without memoizing per defining op, the recursive render re-walks shared subtrees --
+  // exponential work on a real kernel.
   if (auto it = memo.find(def); it != memo.end()) return it->second;
   std::string result = [&]() -> std::string {
     // Transparent peels.
     if (auto cv = mlir::dyn_cast<fir::ConvertOp>(def)) return traceExtentExprMemo(cv.getValue(), memo);
 
-    // ``fir.box_dims`` extent result of an array descriptor: render as that
-    // array's synthetic extent symbol ``<name>_d<dim>``.  A transient sized
-    // from another array's *runtime* extent -- e.g. the AoS-of-pointer-records
-    // gather temp (``LiftAosPointerRecords``), whose inner shape is recovered
-    // via ``fir.box_dims`` on a rebind target's assumed-shape box -- must reuse
-    // the source array's extent symbol.  Otherwise the extent falls through to
-    // ``"?"`` and the caller mints a fresh ``<temp>_d<i>`` that no passed array
-    // backs, so the call-time auto-fill defaults it to ``1`` and the transient
-    // is under-allocated (heap overflow).  ``fir.box_dims`` yields
-    // ``(lowerBound, extent, byteStride)``; only result #1 is an extent.
+    // fir.box_dims extent result renders as <name>_d<dim>; a transient sized from another array's runtime extent (e.g.
+    // LiftAosPointerRecords' gather temp) must reuse the source's extent symbol, or it falls through to "?", defaults
+    // to 1, and under-allocates (heap overflow). fir.box_dims yields (lowerBound, extent, byteStride); only result #1
+    // is an extent.
     if (auto bd = mlir::dyn_cast<fir::BoxDimsOp>(def)) {
       if (v == bd.getResult(1)) {
         if (auto dim = traceConstInt(bd.getDim())) {
@@ -764,10 +571,8 @@ static std::string traceExtentExprMemo(mlir::Value v, llvm::DenseMap<mlir::Opera
     if (auto cst = mlir::dyn_cast<mlir::arith::ConstantOp>(def))
       if (auto ia = mlir::dyn_cast<mlir::IntegerAttr>(cst.getValue())) return std::to_string(ia.getInt());
 
-    // Load of a Fortran scalar -- render as its short name.  A load of a
-    // constant-indexed array element (``dims(1)``) becomes its position
-    // symbol so the shape stays symbolic; promoting the whole array would
-    // collide it with its own data descriptor.
+    // Load of a Fortran scalar renders as its short name; a load of a constant-indexed array element (dims(1)) becomes
+    // its position symbol instead, since promoting the whole array would collide it with its own data descriptor.
     if (auto ld = mlir::dyn_cast<fir::LoadOp>(def)) {
       if (auto e = constIndexedElementLoad(v)) return posSymbolName(e->first, e->second);
       auto mem = ld.getMemref();
@@ -779,24 +584,9 @@ static std::string traceExtentExprMemo(mlir::Value v, llvm::DenseMap<mlir::Opera
       return "";
     }
 
-    // ``arith.select`` over an ``arith.cmpi`` is BOTH Flang's
-    // non-negativity clamp on an extent AND a genuine Fortran
-    // ``MAX``/``MIN`` -- they must be told apart:
-    //
-    //   * Clamp ``max(ext, 0)``: ``select(ext sgt 0, ext, 0)`` -- the
-    //     false arm is the constant ``0``.  Array extents are
-    //     non-negative by construction, so this is dead defensive code;
-    //     drop the wrap and return the underlying extent (keeps shapes
-    //     readable -- ``klon`` not ``max(klon, 0)`` -- and lets sympy
-    //     fold).
-    //   * Genuine ``MAX(a, b)`` / ``MIN(a, b)``:
-    //     ``select(a sgt b, a, b)`` / ``select(a slt b, a, b)`` -- the
-    //     two arms are the operands.  Render ``max(a, b)`` / ``min(a, b)``
-    //     so a real two-operand bound (``allocate(x(max(n, 1)))``)
-    //     survives instead of being dropped.
-    //
-    // The cmp operands must match the select arms; otherwise it is some
-    // other conditional we don't model.
+    // arith.select over arith.cmpi is both Flang's non-negativity clamp (false arm = constant 0 -> drop wrap, return
+    // the extent) and genuine Fortran MAX/MIN (both arms are operands -> render max(a,b)/min(a,b)); cmp operands must
+    // match the select arms or it's an unmodeled conditional.
     if (auto sel = mlir::dyn_cast<mlir::arith::SelectOp>(def)) {
       auto* cdef = sel.getCondition().getDefiningOp();
       auto cmp = cdef ? mlir::dyn_cast<mlir::arith::CmpIOp>(cdef) : nullptr;
@@ -817,9 +607,8 @@ static std::string traceExtentExprMemo(mlir::Value v, llvm::DenseMap<mlir::Opera
       return "";
     }
 
-    // Binary integer arithmetic.  Render parenthesised so the result
-    // composes cleanly when nested.  ``arith.max*i`` / ``arith.min*i`` are
-    // the direct MAX/MIN lowering (vs the select-over-cmp form above).
+    // Binary integer arithmetic, rendered parenthesised so it composes when nested; arith.max*i/min*i are the direct
+    // MAX/MIN lowering (vs the select-over-cmp form above).
     auto nm = def->getName().getStringRef();
     static const std::map<llvm::StringRef, std::string> bin = {
         {"arith.addi", " + "},   {"arith.subi", " - "},   {"arith.muli", " * "},
@@ -851,12 +640,8 @@ std::string traceExtentExpr(mlir::Value v) {
   return traceExtentExprMemo(v, memo);
 }
 
-// Extent expressions form a DAG: a shared sub-expression (a grid-parameter
-// product reused across array bounds) feeds many operands and recurs within
-// one extent.  Without a visited set the operand recursion re-explores shared
-// subtrees, which is exponential on a real kernel.  ``visited`` marks each
-// defining op once so the walk is linear in the DAG size; the public entry
-// seeds a fresh set and threads it through.
+// Extent expressions form a DAG; without a visited set the operand recursion re-explores shared subtrees (exponential).
+// visited marks each defining op once so the walk is linear; the public entry seeds a fresh set.
 static void collectExtentExprScalarsRec(mlir::Value v, std::set<std::string>& out,
                                         llvm::SmallPtrSet<mlir::Operation*, 32>& visited) {
   if (!v) return;
@@ -877,8 +662,7 @@ static void collectExtentExprScalarsRec(mlir::Value v, std::set<std::string>& ou
     return;
   }
   if (auto sel = mlir::dyn_cast<mlir::arith::SelectOp>(def)) {
-    // Walk both branches; cmp condition leaves are already
-    // covered by the operands themselves.
+    // Walk both branches; cmp condition leaves are already covered by the operands themselves.
     collectExtentExprScalarsRec(sel.getTrueValue(), out, visited);
     collectExtentExprScalarsRec(sel.getFalseValue(), out, visited);
     return;
@@ -899,33 +683,12 @@ void collectExtentExprScalars(mlir::Value v, std::set<std::string>& out) {
 }
 
 hlfir::DeclareOp asAssumedShapeAlias(hlfir::DeclareOp decl) {
-  // Signature: memref produced by another ``hlfir.declare`` (possibly
-  // behind ``fir.convert`` rebox ops).  This is precisely what Flang
-  // emits for the callee's dummy_scope declare after
-  // ``hlfir-inline-all`` splices the callee's body into the caller  --
-  // the callee declare aliases the caller's outer declare for
-  // both assumed-shape (no shape operand on the inner declare) and
-  // fixed-shape (the inner declare carries its own copy of the
-  // callee-side shape) callees, the only difference being whether
-  // the inner declare reissues a shape.  Either way the storage is
-  // shared and downstream tracing should walk to the outer declare.
-  //
-  // Exception: rank-promotion / rank-reduction.  Fortran sequence
-  // association lets a caller pass a 1D array to a multi-D dummy
-  // (or vice versa) -- ssor's ``tv(N)`` flowing into buts's ``tv(5,
-  // M, K)`` is the canonical case.  The storage is shared but the
-  // dummy's accesses are at a DIFFERENT RANK than the source's
-  // descriptor; if we treat the dummy as a transparent alias then
-  // ``traceToDecl`` resolves a 3D ``hlfir.designate`` to the
-  // source's 1D name and the bridge emits a 3D memlet subset
-  // against a 1D array (unresolved per-dim offset symbols).  Refuse
-  // the alias collapse in that case so extract_vars mints a real
-  // VarInfo for the dummy and the view-alias path can wire it as
-  // a rank-promoted view over the source's flat storage.
-  // Strip ``fir.ref`` / ``fir.box`` / ``fir.heap`` / ``fir.ptr`` layers
-  // off a declare result type until we hit the underlying ``fir.array``
-  // (``fir.SequenceType``); read its rank.  Scalars and non-array
-  // types report rank 0.
+  // Detects Flang's post-hlfir-inline-all callee dummy_scope declare aliasing the caller's outer declare (memref traces
+  // to another hlfir.declare, possibly through fir.convert/rebox); either assumed- or fixed-shape, storage is shared.
+  // Exception: rank-promotion/reduction (Fortran sequence association can pass a 1D array to a multi-D dummy) -- refuse
+  // the alias collapse when ranks differ, or a 3D designate would resolve to a 1D source name and emit an unresolved
+  // memlet subset. rankOfDeclResult below strips fir.ref/box/heap/ptr layers to read the declare's array rank (0 for
+  // scalars/non-arrays).
   auto rankOfDeclResult = [](mlir::Value v) -> int {
     mlir::Type t = v.getType();
     for (int i = 0; i < 8; ++i) {
@@ -964,19 +727,15 @@ hlfir::DeclareOp asAssumedShapeAlias(hlfir::DeclareOp decl) {
       mr = conv.getValue();
       continue;
     }
-    // Internal-subprogram inlining wraps the outer fixed-shape array
-    // in a ``fir.embox`` so the inlined assumed-shape callee sees a
-    // ``fir.box``.  Peel through to the underlying declare.
+    // Internal-subprogram inlining wraps the outer fixed-shape array in a fir.embox so the inlined assumed-shape callee
+    // sees a fir.box; peel through to the underlying declare.
     if (auto eb = mlir::dyn_cast<fir::EmboxOp>(d)) {
       mr = eb.getMemref();
       continue;
     }
-    // Inlined-callee aliases on CLASS-allocatable / box-typed
-    // dummies: the alias's memref comes from a ``fir.load`` of the
-    // caller's box-slot declare, possibly preceded by ``fir.rebox``
-    // peels (CLASS<heap<T>> -> CLASS<T>).  Walking through both is
-    // what catches monomorphic CLASS subroutine dummies as
-    // aliases of their caller-side allocatable.
+    // Inlined-callee aliases on CLASS-allocatable/box-typed dummies: memref comes from a fir.load of the caller's
+    // box-slot declare, possibly preceded by fir.rebox (CLASS<heap<T>> -> CLASS<T>); walking through both catches
+    // monomorphic CLASS dummies as aliases of their caller-side allocatable.
     if (auto ld = mlir::dyn_cast<fir::LoadOp>(d)) {
       mr = ld.getMemref();
       continue;
@@ -985,14 +744,9 @@ hlfir::DeclareOp asAssumedShapeAlias(hlfir::DeclareOp decl) {
       mr = rb.getBox();
       continue;
     }
-    // Explicit-shape array dummy bound to a POINTER/VIEW actual
-    // (``call scale(p, n)``, ``p`` a flatten view, ``real :: v(n)``):
-    // ``FoldCopyInOut`` rewrites the inlined ``v`` to
-    // ``hlfir.declare(convert(box_addr(load(p_box))))`` (it drops the
-    // copy_in/copy_out, which are element-wise no-ops under no-aliasing).
-    // Peel ``box_addr`` so the walk reaches ``p``'s declare; ``v`` is then
-    // a same-rank alias of ``p`` and ``traceToDecl`` resolves ``v(i)`` to
-    // ``p(i)`` (folded to the parent by p's bounds-remap view).
+    // Explicit-shape array dummy bound to a POINTER/VIEW actual: FoldCopyInOut rewrites the inlined declare to
+    // hlfir.declare(convert(box_addr(load(p_box)))), dropping the no-op copy_in/copy_out; peel box_addr so the walk
+    // reaches the source declare as a same-rank alias.
     if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
       mr = ba.getVal();
       continue;
@@ -1033,13 +787,9 @@ std::vector<std::optional<int64_t>> declareLowerBounds(hlfir::DeclareOp decl) {
     // Plain fir.shape: every dim defaults to lbound=1.
     lbs.assign(si.rank, std::optional<int64_t>(1));
   } else if (si.kind == ShapeOperandInfo::ShapeShift || si.kind == ShapeOperandInfo::Shift) {
-    // fir.shape_shift (explicit-shape array, lb+extent) AND fir.shift
-    // (assumed-shape dummy with an explicit lower bound, ``a(0:)``) both
-    // carry per-dim lower bounds; classifyShapeOperand already extracts
-    // them into ``si.lbs``.  Trace each to its constant.  Dropping the
-    // fir.shift bound here defeated the assumed-shape alias offset rebase
-    // (expressions.cpp) -- the outer array's declared lb was lost and the
-    // aliased access defaulted to lbound=1, an off-by-(lb-1) read.
+    // fir.shape_shift (lb+extent) and fir.shift (assumed-shape dummy with explicit lb, a(0:)) both carry per-dim lower
+    // bounds in si.lbs; trace each to its constant -- dropping the fir.shift bound defeats the assumed-shape alias
+    // offset rebase and causes an off-by-(lb-1) read.
     for (auto lb : si.lbs) lbs.push_back(traceConstInt(lb));
   }
   // no shape operand (pure box, runtime bounds): leave empty (caller default).

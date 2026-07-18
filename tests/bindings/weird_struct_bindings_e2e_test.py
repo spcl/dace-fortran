@@ -1,26 +1,8 @@
-"""End-to-end F90-binding coverage for a "weird" derived-type dummy:
-a 3-D ``real(c_double)`` array member alongside a *scalar* member.
-
-``struct_bindings_e2e_test`` already covers the two-2D-real-array, the
-nested, and the complex-member shapes.  The shape NOT yet exercised
-e2e is a struct whose members have *different ranks* -- specifically a
-rank-3 array member plus a rank-0 scalar member.  The scalar member is
-lifted by the bridge to a length-1 ``Array`` on the SDFG surface (the
-scalar-output convention), so this pins the binding's struct
-reconstruction across a member-rank mismatch -- the same class of
-defect that ``0318f9efe`` fixed for the rank-0 scalar struct member.
-
-Both paths are checked against a gfortran reference of the same
-source:
-
-    1. the dace-generated F90 binding (struct reconstructed via
-       ``c_f_pointer`` aliases), and
-    2. the SDFG invoked directly through the DaCe flat ABI with the
-       struct members passed as separate flat companions.
-
-The FlattenPlan is asserted non-empty so the test fails loudly if the
-struct silently stops being unpacked.
-"""
+"""E2e F90-binding coverage for a struct with MIXED-RANK members: a rank-3 array member
+plus a rank-0 scalar member (the scalar lifts to a length-1 ``Array`` on the SDFG surface).
+Pins the same defect class ``0318f9efe`` fixed for rank-0 scalar struct members. Checks both
+the dace-generated F90 binding and the direct flat-ABI SDFG call against a gfortran
+reference; FlattenPlan asserted non-empty so a silent unpack regression fails loudly."""
 
 import ctypes
 import shutil
@@ -108,16 +90,13 @@ end subroutine run_scale3d_ref
 
 
 def test_e2e_mixed_rank_struct(tmp_path: Path):
-    """``type(t_w)`` with a rank-3 array member ``vol`` and a rank-0
-    scalar member ``coef``.  The kernel does
-    ``w%vol = w%vol * w%coef + (i+j+k)``.  Binding AND direct SDFG vs a
-    gfortran reference (``rtol=1e-12``); the FlattenPlan must be non-empty."""
+    """``type(t_w)`` with a rank-3 array member ``vol`` and a rank-0 scalar member ``coef``:
+    ``w%vol = w%vol * w%coef + (i+j+k)``. Binding AND direct SDFG vs gfortran (rtol=1e-12);
+    FlattenPlan must be non-empty."""
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    # Entry kept BARE: ``scale3d`` is a free subroutine that the gfortran
-    # reference driver (``_REF_DRIVER``) links via ``external :: scale3d`` and
-    # the binding emitter wraps via an implicit interface.  Wrapping it in a
-    # module would break both the reference link and the emitted binding.
+    # Entry kept BARE: scale3d is a free subroutine; a module wrapper would break both the
+    # gfortran reference link (`external :: scale3d`) and the emitted binding.
     builder = build_sdfg(_SRC, sdfg_dir, name="scale3d", entry="scale3d")
     plan = FlattenPlan.from_dict(builder.module.get_flatten_plan())
     sdfg = builder.build()
@@ -175,10 +154,8 @@ def test_e2e_mixed_rank_struct(tmp_path: Path):
     fbind(vol_bind.ctypes.data_as(dp), ctypes.c_double(coef))
     np.testing.assert_allclose(vol_bind, vol_ref, rtol=1e-12, atol=1e-12)
 
-    # Direct SDFG path: struct members as separate flat companions.
-    # HLFIR-bridged arrays keep Fortran (column-major) layout on the
-    # flat ABI, so the companion must be F-ordered (matching how the
-    # binding driver's ``w%vol = vol`` assignment lays it out).
+    # Direct SDFG path: struct members as separate flat companions. HLFIR-bridged arrays
+    # keep Fortran (column-major) layout, so the companion must be F-ordered.
     vol_d = vol0.copy(order="F")
     coef_d = np.array([coef], dtype=np.float64)
     sdfg(w_vol=vol_d, w_coef=coef_d)

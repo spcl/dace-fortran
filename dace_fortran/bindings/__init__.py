@@ -1,30 +1,11 @@
 """Fortran binding emission for HLFIR-built SDFGs.
 
-Peer of ``builder/`` / ``intrinsics/`` under ``dace_fortran/``.
-Runs AFTER the SDFG is built, consuming three inputs:
-
-- ``FrozenSignature``  --  the SDFG's argument list snapshotted at
-  build time (drift-checked at codegen).
-- ``OriginalInterface``  --  the caller-facing Fortran surface of the
-  entry subroutine.
-- ``FlattenPlan``  --  record of every AoS -> SoA unpack performed by
-  ``hlfir-flatten-structs``.
-
-And producing one ``<entry>_bindings.f90`` module that preserves the
-user's Fortran interface, aliases zero-copy where layouts agree, and
-generates do-loop copy-in / copy-out where recipes demand it.
-
-Public surface:
-    FrozenArg / FrozenSignature / SignatureDriftError
-         --  signature freezing + drift check
-    OriginalInterface / OriginalArg / DerivedType / Member
-         --  outer Fortran-facing surface
-    FlattenRecipe / FlattenEntry / FlattenPlan
-         --  the AoS->SoA plan from hlfir-flatten-structs
-    emit_bindings(frozen, iface, plan, out_path)
-         --  the top-level emitter
-    build_fortran_library(sdfg, iface, plan, out_dir, ...)
-         --  emit + drift-verify + link a Fortran-callable .so
+Peer of ``builder/`` / ``intrinsics/`` under ``dace_fortran/``.  Runs
+AFTER the SDFG is built: takes ``FrozenSignature`` (SDFG arg list,
+drift-checked), ``OriginalInterface`` (caller-facing surface), and
+``FlattenPlan`` (AoS->SoA unpack record from ``hlfir-flatten-structs``),
+and emits one ``<entry>_bindings.f90`` module -- aliasing zero-copy
+where layouts agree, do-loop copy-in/copy-out where recipes demand it.
 """
 
 from dace_fortran.bindings.bind_c_shim import (

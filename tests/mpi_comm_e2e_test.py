@@ -1,25 +1,13 @@
-"""Numeric end-to-end check for a Fortran ``MPI_Send`` / ``MPI_Recv``
-on a **runtime/user communicator**, lowered through the dace-fortran
-**binding** path (the wrapper does ``MPI_Comm_f2c`` on the Fortran
-integer handle).
+"""Numeric e2e check for Fortran ``MPI_Send``/``MPI_Recv`` on a runtime/user communicator via
+the dace-fortran binding path (wrapper does ``MPI_Comm_f2c`` on the Fortran integer handle).
 
 Run under mpirun with 4 ranks::
 
-    mpirun --oversubscribe -n 4 python -m pytest -p no:cacheprovider \\
-        tests/mpi_comm_e2e_test.py
+    mpirun --oversubscribe -n 4 python -m pytest -p no:cacheprovider tests/mpi_comm_e2e_test.py
 
-The caller (mpi4py) splits ``MPI_COMM_WORLD`` by ``color = rank % 2``
-so the even ranks ``{0, 2}`` form one sub-communicator and the odd
-ranks ``{1, 3}`` another (each of size 2).  The kernel takes the
-communicator as an ``integer`` dummy; the generated binding wrapper
-converts it with ``MPI_Comm_f2c`` and threads it into the DaCe
-``Send`` / ``Recv`` ``_comm`` connector.
-
-Inside each 2-rank split comm the two members exchange their buffers
-(deadlock-free: even split-rank sends-then-recvs, odd recvs-then-sends).
-World ranks pair up by parity ``{0<->2, 1<->3}``, so a rank that
-ships its world-rank value must receive its partner's: the expected
-result is ``world_rank XOR 2``.
+mpi4py splits ``MPI_COMM_WORLD`` by ``color = rank % 2`` (even {0,2}, odd {1,3}, size 2 each);
+each split-comm pair exchanges buffers (even sends-then-recvs, odd recvs-then-sends, deadlock-free).
+World ranks pair by parity {0<->2, 1<->3}, so expected result is ``world_rank XOR 2``.
 """
 
 import ctypes
@@ -70,9 +58,7 @@ end subroutine sr_usercomm
 end module sr_usercomm_mod
 """
 
-# Stable C entry: the bindings wrapper ``sr_usercomm_dace`` is a module
-# procedure (mangled symbol); this ``bind(c)`` shim gives ctypes a
-# fixed name and converts the raw pointers + by-value scalars.
+# stable C entry: sr_usercomm_dace is a mangled module procedure; this bind(c) shim gives ctypes a fixed name and converts raw pointers + by-value scalars
 _DRIVER = """
 subroutine run_sr(buf_p, rbuf_p, n, dst, src, tag, fcomm, crank) &
     bind(c, name='run_sr')
@@ -119,13 +105,9 @@ def test_user_comm_split_send_recv(tmp_path: Path):
     crank = split.Get_rank()
     partner = 1 - crank  # the other member of the 2-rank split comm
 
-    # The library (kernel + wrapper) is rank-independent -- only the
-    # runtime communicator differs.  Build it once on rank 0 and
-    # broadcast the ``.so`` path; all ranks load the same artifact.
-    # (``sdfg.compile`` uses a shared ``.dacecache`` build dir, so
-    # concurrent multi-rank builds would race the cmake cache.)
-    # ``build_on_root`` broadcasts a build *failure* too, so a broken
-    # build fails every rank instead of leaving them stuck at the barrier.
+    # library is rank-independent; build once on rank 0 and broadcast the .so path -- concurrent
+    # multi-rank builds would race the shared .dacecache/cmake cache. build_on_root also
+    # broadcasts a build failure, so a broken build fails every rank instead of hanging at the barrier.
     def _build_lib():
         sdfg_dir = tmp_path / "sdfg"
         sdfg_dir.mkdir(parents=True, exist_ok=True)

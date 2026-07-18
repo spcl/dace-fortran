@@ -1,15 +1,11 @@
-"""SIZE / LBOUND / UBOUND / SHAPE intrinsics  --  Flang lowers these to
-``fir.box_dims`` on the array's box, and the bridge maps each
-``fir.box_dims`` result number to the right shape symbol:
+"""SIZE / LBOUND / UBOUND / SHAPE intrinsics -- Flang lowers these to ``fir.box_dims`` on the
+array's box; the bridge maps each result number to the right shape symbol:
 
-* ``#0`` (lower bound) -> declared lb (``fir.shape_shift`` 1st operand)
-   or Fortran-default ``1`` for plain ``fir.shape``.
-* ``#1`` (extent)      -> declare's extent operand or the assumed-shape
-   synthesised symbol ``<arr>_d<dim>``.
-* ``#2`` (stride)      -> ``1`` (contiguous).
+* ``#0`` (lower bound) -> declared lb (``fir.shape_shift`` 1st operand) or default ``1``.
+* ``#1`` (extent) -> declare's extent operand or the assumed-shape symbol ``<arr>_d<dim>``.
+* ``#2`` (stride) -> ``1`` (contiguous).
 
-Each test compares an SDFG run against an f2py / gfortran reference so
-the lowering matches Fortran semantics bit-for-bit.
+Each test compares an SDFG run against an f2py/gfortran reference.
 """
 
 from pathlib import Path
@@ -74,9 +70,8 @@ end subroutine main
 
 
 def test_lbound_assumed_shape(tmp_path: Path):
-    """Assumed-shape arrays default to lower bound 1 on every dim  --  the
-    callee receives a plain box without lb metadata.  ``LBOUND`` returns
-    1 regardless of what the caller's array looked like."""
+    """Assumed-shape arrays default to lower bound 1 on every dim (callee gets a plain box
+    without lb metadata); ``LBOUND`` returns 1 regardless of the caller's array."""
     src = """
 subroutine main(arr, out)
   integer, intent(in)  :: arr(:, :)
@@ -98,8 +93,7 @@ end subroutine main
 
 
 def test_lbound_explicit_offset(tmp_path: Path):
-    """``dimension(L:U)`` syntax  --  Flang lowers via ``fir.shape_shift``
-    so ``LBOUND(arr, K)`` returns ``L`` (not the default 1)."""
+    """``dimension(L:U)`` lowers via ``fir.shape_shift`` so ``LBOUND(arr, K)`` returns ``L`` (not the default 1)."""
     src = """
 subroutine main(arr, out)
   integer, intent(in)  :: arr(20:24, 4)

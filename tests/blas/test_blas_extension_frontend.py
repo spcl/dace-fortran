@@ -1,11 +1,7 @@
 """E2E frontend-recognition tests for the BLAS extension lib nodes.
 
-One test per recognised Fortran routine added in this session
-(``dcopy``, ``dswap``, ``dger``, ``dtrsv``, ``dtrmv``, ``dsymv``,
-``dtrsm``, ``dtrmm``, ``dsymm``, ``dsyrk``).  Each test drives the
-``run_<routine>`` entry of :file:`blas_extension_probes.f90` through
-the bridge and asserts the matching :mod:`dace.libraries.blas` lib
-node lands in the SDFG.
+One test per recognised routine; drives ``run_<routine>`` through the bridge
+and asserts the matching :mod:`dace.libraries.blas` lib node lands in the SDFG.
 """
 from pathlib import Path
 

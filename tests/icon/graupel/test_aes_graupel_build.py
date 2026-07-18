@@ -1,24 +1,12 @@
 """Multi-file SDFG build for the AES graupel microphysics scheme.
 
-``mo_aes_graupel`` is the warm/cold-cloud microphysics parameterisation
-from ICON's AES (Atmospheric Earth System) physics package.  This test
-drives its 4-module project through the bridge as a multi-file build:
+``mo_aes_graupel`` (ICON AES warm/cold-cloud microphysics) drives a 4-module
+build: the scheme proper (7 PURE FUNCTIONs + ``graupel_run`` driver),
+``mo_aes_thermo`` (saturation/derivatives), ``mo_kind``, ``mo_physical_constants``.
 
-  * ``mo_aes_graupel.f90``       -- the scheme proper (1521 LoC,
-                                    7 PURE FUNCTIONs invoked from the
-                                    main ``graupel_run`` driver).
-  * ``mo_aes_thermo.f90``        -- thermodynamic helper functions
-                                    (saturation, derivatives).
-  * ``mo_kind.f90``              -- working-precision kinds.
-  * ``mo_physical_constants.f90``-- gas-law / latent-heat / etc.
-
-Status: green.  The pipeline used to surface an unresolved ``?``
-placeholder in the post-inline body of ``graupel_run`` -- the
-AoS-of-pointer-records gather temp (``t_qx_ptr%x``), whose inner extents
-are recovered via ``fir.box_dims``, was left with unbound extent symbols.
-The ``fir.box_dims -> <name>_d<dim>`` extent resolution closed it; this
-build test is the fast regression gate for anyone touching the graupel
-pipeline.
+Regression gate: the AoS-of-pointer-records gather temp (``t_qx_ptr%x``) used
+to leave unbound extent symbols (unresolved ``?`` in the post-inline body)
+until the ``fir.box_dims -> <name>_d<dim>`` extent resolution closed it.
 """
 from pathlib import Path
 

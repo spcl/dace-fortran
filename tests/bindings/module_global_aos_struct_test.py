@@ -1,19 +1,15 @@
 """Module-level array-of-structs (AoS) global with an allocatable component,
 marshalled through the generated Fortran binding.
 
-This is the QE ``us_exx`` ``TYPE(bec_type), ALLOCATABLE :: becxx(:)`` shape,
-reduced to a minimal kernel.  A section of the AoS component
-``becxx(i)%k(:, jb)`` is passed to an (inlined) callee -- exactly the
-``vexx_bp_k_gpu`` pattern that leaked ``addusxx_r_becphi`` as a program arg.
+QE ``us_exx`` ``TYPE(bec_type), ALLOCATABLE :: becxx(:)`` shape, reduced to a
+minimal kernel: a section ``becxx(i)%k(:, jb)`` passed to an inlined callee
+(the ``vexx_bp_k_gpu`` pattern that leaked ``addusxx_r_becphi`` as a program
+arg).
 
-The full matrix (one test per pattern):
-  * READ      -- kernel only reads the global component (copy-in, no copy-out).
-  * WRITE     -- kernel writes it (copy-in + copy-out).
-  * ALLOC-IN  -- kernel allocates the component inside (binding allocates the
-                 module global before copy-out; no copy-in).
-
-Each builds the SDFG, generates the binding, links it against the module +
-a driver, and compares to a plain-gfortran reference of the same source.
+One test per pattern: READ (copy-in only), WRITE (copy-in + copy-out),
+ALLOC-IN (kernel allocates the component; binding skips copy-in).  Each
+builds the SDFG, generates the binding, links against the module + a driver,
+and compares to a plain-gfortran reference.
 """
 from pathlib import Path
 
@@ -51,8 +47,8 @@ end module bec_read_mod
 """
 _ENTRY_READ = "bec_read_mod::read_aos"
 
-# C-callable drivers: set up the module-global AoS ``becxx``, call either the
-# generated binding wrapper (SDFG) or the plain reference, then return ``out``.
+# C-callable drivers: set up module-global AoS ``becxx``, call the SDFG binding or the
+# plain reference, return ``out``.
 _DRIVER_READ = """
 subroutine run_read_aos(n, jb, nelem, k0, k1, kvals, out) bind(c, name='run_read_aos')
   use iso_c_binding
@@ -102,9 +98,7 @@ def _compile_so(out_so, *sources, mod_dir, link_so=None):
 
 
 def _build_module(src, name, entry, tmp_path):
-    """Build the SDFG for ``src`` (entry ``entry``), emit the Fortran binding,
-    and return ``(builder, sdfg, so_path, binding_path)``.  Shared by every
-    pattern test below -- the only thing that varies is the source + driver."""
+    """Build the SDFG, emit the Fortran binding, return ``(builder, sdfg, so_path, binding_path)``."""
     from _util import build_sdfg
     from dace_fortran.bindings import emit_bindings, FlattenPlan
     from dace_fortran.bindings.fortran_interface import build_auto_interface
@@ -124,9 +118,8 @@ def _build_module(src, name, entry, tmp_path):
 
 
 def _link_pair(src, name, sdfg_driver, ref_driver, so_path, binding, tmp_path):
-    """Compile two shared libs: the SDFG-via-binding one (module + binding +
-    SDFG driver, linked against the SDFG ``.so``) and the plain-gfortran
-    reference (module + ref driver).  Returns ``(sdfg_lib, ref_lib)``."""
+    """Compile the SDFG-via-binding lib and the plain-gfortran reference lib.  Returns
+    ``(sdfg_lib, ref_lib)``."""
     import ctypes
 
     mod_src = tmp_path / f"{name}_mod.f90"
@@ -150,7 +143,7 @@ def _link_pair(src, name, sdfg_driver, ref_driver, so_path, binding, tmp_path):
 
 
 def _var_meta(builder, fortran_name):
-    """The bridge ``VarInfo`` for ``fortran_name`` (its marshalling provenance)."""
+    """The bridge ``VarInfo`` for ``fortran_name``."""
     for v in builder.module.get_variables():
         if getattr(v, "fortran_name", "") == fortran_name:
             return v
@@ -158,10 +151,8 @@ def _var_meta(builder, fortran_name):
 
 
 def test_read_aos_module_global_e2e(tmp_path):
-    """A module-global AoS component (``becxx(1)%k(:,jb)``) read through an
-    inlined callee: the generated binding ``use``-imports ``becxx``, packs it
-    AoS->SoA into ``becxx_k``, runs the SDFG, and must match a plain-gfortran
-    reference of the same source."""
+    """Module-global AoS component read through an inlined callee: binding packs
+    AoS->SoA into ``becxx_k`` and must match the gfortran reference."""
     import ctypes
     import shutil
 
@@ -201,8 +192,7 @@ def test_read_aos_module_global_e2e(tmp_path):
 
 
 # --- WRITE: becxx(1)%k(:, jb) = src(:), via an inlined callee ---------------
-# The kernel STORES into the module-global AoS component (intent(out) dummy of
-# the inlined ``store``).  The bridge must flag ``becxx_k`` written so the
+# Kernel STORES into the AoS component; bridge must flag ``becxx_k`` written so the
 # binding packs the SoA buffer back into the host AoS on exit (copy-OUT).
 _SRC_WRITE = """
 module bec_write_mod
@@ -269,9 +259,8 @@ end subroutine run_write_aos_ref
 
 
 def test_write_aos_module_global_e2e(tmp_path):
-    """A module-global AoS component WRITTEN by the kernel: the bridge flags
-    ``becxx_k`` written, the binding adds the SoA->AoS copy-OUT loop, and the
-    host ``becxx(1)%k`` must hold the kernel's result after the call."""
+    """Module-global AoS component WRITTEN by the kernel: binding adds the SoA->AoS
+    copy-OUT loop; host ``becxx(1)%k`` must hold the kernel's result."""
     import ctypes
     import shutil
 
@@ -312,11 +301,9 @@ def test_write_aos_module_global_e2e(tmp_path):
     np.testing.assert_allclose(k_sdfg, k_ref, rtol=1e-12, atol=1e-12)
 
 
-# --- ALLOC-INSIDE: kernel allocates a module-global array, binding writes it
-# back to the host global.  The host global is UNALLOCATED on entry; the
-# binding must skip copy-in (reading it would be UB), let the kernel's own
-# ``allocate`` provide the buffer, then assign it to the module global on exit
-# (intrinsic allocatable assignment auto-allocates the host).
+# --- ALLOC-INSIDE: kernel allocates a module-global array, binding writes it back.
+# Host global is UNALLOCATED on entry; binding must skip copy-in (UB to read it),
+# let the kernel's own allocate provide the buffer, then assign back on exit.
 _SRC_ALLOC = """
 module g_alloc_mod
   implicit none
@@ -367,10 +354,8 @@ end subroutine run_make_g_ref
 
 
 def test_alloc_inside_module_global_e2e(tmp_path):
-    """A module-global allocatable the kernel ALLOCATEs itself: the binding
-    must (a) flag ``global_alloc_inside`` so it skips the copy-in of the
-    unallocated host global, (b) let the kernel's allocate fill the buffer,
-    (c) write the result back to the module global on exit."""
+    """Module-global allocatable the kernel ALLOCATEs itself: binding flags
+    ``global_alloc_inside``, skips copy-in, writes the result back on exit."""
     import ctypes
     import shutil
 
@@ -385,8 +370,7 @@ def test_alloc_inside_module_global_e2e(tmp_path):
     assert meta.intent == "inout"
     assert meta.is_written is True
     assert meta.global_alloc_inside is True
-    # The binding must NOT copy the (unallocated) host global in, but MUST
-    # write back.
+    # Binding must NOT copy the (unallocated) host global in, but MUST write back.
     text = binding.read_text()
     assert "kernel-allocated, no copy-in" in text
     assert "gbuf__mod = gbuf" in text
@@ -407,15 +391,10 @@ def test_alloc_inside_module_global_e2e(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# PRESENCE: a kernel that branches on ALLOCATED / ASSOCIATED of a module global.
-# Flang lowers both to the same box_addr/cmpi-ne shape, which the bridge folds
-# to a ``<g>_allocated`` FREE symbol (no in-kernel allocate to maintain it).
-# The binding must source that symbol from the REAL host
-# (``allocated``/``associated``) so a caller-unallocated global drives the
-# kernel's ABSENT branch: the defensive copy-in passes a degenerate DATA buffer
-# (which would otherwise look "present"), but the presence symbol must carry the
-# host's TRUE state.  Each test runs PRESENT (kernel uses the data) and ABSENT
-# (kernel takes the fallback) through the generated binding vs a plain reference.
+# PRESENCE: kernel branches on ALLOCATED/ASSOCIATED of a module global. Flang folds
+# both to a ``<g>_allocated`` FREE symbol; the binding must source it from the REAL
+# host state (not the defensive copy-in buffer, which would always look "present").
+# Each test runs PRESENT and ABSENT through the binding vs a plain reference.
 # ---------------------------------------------------------------------------
 _SRC_ALLOC_PRESENT = """
 module pres_alloc_mod
@@ -477,11 +456,8 @@ end subroutine run_alloc_present_ref
 
 
 def test_allocated_module_global_presence_e2e(tmp_path):
-    """Kernel branches on ``ALLOCATED(gbuf)`` of an allocatable module global.
-    The binding must source ``gbuf_allocated`` from ``allocated(gbuf__mod)``;
-    an absent (caller-unallocated) host must drive the kernel's ``else`` branch
-    (``r = -1``) -- without host sourcing the symbol is uninitialised and the
-    branch is undefined."""
+    """Kernel branches on ``ALLOCATED(gbuf)``: binding sources ``gbuf_allocated`` from
+    ``allocated(gbuf__mod)``; an unallocated host drives the ``else`` branch (``r=-1``)."""
     import ctypes
     import shutil
 
@@ -583,10 +559,8 @@ end subroutine run_assoc_present_ref
 
 
 def test_associated_pointer_module_global_presence_e2e(tmp_path):
-    """Kernel branches on ``ASSOCIATED(gptr)`` of a POINTER module global.  The
-    binding must source ``gptr_allocated`` from ``associated(gptr__mod)`` (the
-    pointer companion of ``allocated``); an unassociated host drives the kernel's
-    ``else`` branch (``r = -2``)."""
+    """Kernel branches on ``ASSOCIATED(gptr)``: binding sources ``gptr_allocated`` from
+    ``associated(gptr__mod)``; an unassociated host drives the ``else`` branch (``r=-2``)."""
     import ctypes
     import shutil
 

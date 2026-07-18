@@ -1,22 +1,9 @@
-"""End-to-end: a separately-compiled external **iso_c Fortran**
-function lowered via the unified external-function policy (see
-``DESIGN.md`` here).
-
-The user declares ``foo`` once with
-:func:`dace_fortran.apply_external_functions` -- a single
-:class:`~dace_fortran.external_functions.ExternalFunction` naming the
-call-site name and the ``.so`` that exports its ``bind(c)`` symbol.  The
-bridge lowers ``call foo(a, n)`` to a CPP tasklet calling the
-``extern "C"`` symbol, deriving the argument plan (array -> inout
-pointer, scalar -> by-value) from the HLFIR call site -- the user does
-NOT re-author the signature.  The SDFG ``.so`` links ``libfoo.so``
-directly (rpath), so it resolves at load with no ``LD_PRELOAD``.
-
-Contract: the target must be ``bind(c)`` -- Fortran name mangling is
-compiler-specific and a ``.mod`` is not C-consumable, so a stable
-``bind(c)`` symbol (native or via a hand-written shim) is the only
-portable way to call a Fortran routine from the generated C++.
-"""
+"""E2e: a separately-compiled external **iso_c Fortran** function lowered via the unified
+external-function policy (see ``DESIGN.md``). ``apply_external_functions`` registers ``foo``
+once; the bridge derives the arg plan (array->inout pointer, scalar->by-value) from the
+HLFIR call site and lowers to a CPP tasklet calling ``extern "C" foo``, no re-authored
+signature. SDFG ``.so`` links ``libfoo.so`` via rpath (no LD_PRELOAD). Contract: target must
+be ``bind(c)`` -- the only portable way to call Fortran from generated C++."""
 import shutil
 import subprocess
 from pathlib import Path
@@ -46,9 +33,8 @@ subroutine foo(a, n) bind(c, name="foo")
 end subroutine foo
 """
 
-# The kernel the bridge sees: it only declares foo's interface and
-# calls it -- foo itself is compiled separately (only its symbol need
-# resolve at load).
+# The kernel the bridge sees: it only declares foo's interface and calls it -- foo itself
+# is compiled separately (only its symbol needs to resolve at load).
 _KERNEL = """
 module run_mod
   implicit none
@@ -77,19 +63,15 @@ def test_external_iso_c_function_increments_array(tmp_path: Path):
     foo_f90 = tmp_path / "foo.f90"
     foo_f90.write_text(_FOO_F90)
     libfoo = tmp_path / "libfoo.so"
-    # cwd=tmp_path keeps gfortran from picking up any stale .mod that
-    # a prior flang invocation left in the repo root (gfortran searches
-    # cwd for ``iso_c_binding.mod`` and refuses a flang-format module).
+    # cwd=tmp_path keeps gfortran from picking up a stale .mod that a prior flang run left
+    # in repo root (gfortran refuses a flang-format iso_c_binding.mod).
     subprocess.check_call(["gfortran", "-shared", "-fPIC", "-o", str(libfoo), str(foo_f90)], cwd=str(tmp_path))
 
-    # ONE declaration: don't-inline + emit ``foo`` as an external call,
-    # bound to the ``libfoo.so`` that exports its ``bind(c)`` symbol.
-    # The argument plan is derived from the HLFIR call ``foo(a, n)``
-    # (array ``a`` -> inout pointer, scalar ``n`` -> by-value).
+    # ONE declaration: don't-inline + emit foo as an external call bound to libfoo.so.
+    # Arg plan derives from the HLFIR call foo(a, n): array a -> inout ptr, scalar n -> by-value.
     apply_external_functions([ExternalFunction("foo", library=str(libfoo))])
 
-    # The SDFG .so is linked against libfoo with an rpath, so it is
-    # self-contained: no LD_PRELOAD / load ordering needed.
+    # SDFG .so links libfoo via rpath -- self-contained, no LD_PRELOAD needed.
     sdfg = build_sdfg(_KERNEL, tmp_path / "sdfg", name="run", entry="run_mod::run").build()
     sdfg.name = "ext_run"
 
@@ -108,18 +90,15 @@ def test_external_iso_c_function_increments_array(tmp_path: Path):
 
 
 def test_external_default_intent_is_inout(tmp_path: Path):
-    """The HLFIR-derived plan makes an array arg ``inout`` (the safe
-    default for an opaque external), so the array still gets the
-    write-back edge and the mutation is modelled (a missed write would
-    silently drop the increment)."""
+    """HLFIR-derived plan makes an array arg ``inout`` by default (safe for an opaque
+    external): the write-back edge is kept, so a missed write wouldn't silently drop it."""
     clear_external_registry()
     foo_f90 = tmp_path / "foo.f90"
     foo_f90.write_text(_FOO_F90)
     libfoo = tmp_path / "libfoo.so"
     subprocess.check_call(["gfortran", "-shared", "-fPIC", "-o", str(libfoo), str(foo_f90)], cwd=str(tmp_path))
 
-    # No authored args -> emit_call derives the plan from the call site;
-    # the array ``a`` is conservatively inout, so its write-back is kept.
+    # No authored args -> emit_call derives the plan; array a is conservatively inout.
     apply_external_functions([ExternalFunction("foo", library=str(libfoo))])
 
     sdfg = build_sdfg(_KERNEL, tmp_path / "sdfg", name="run", entry="run_mod::run").build()

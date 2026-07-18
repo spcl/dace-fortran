@@ -1,17 +1,14 @@
 """ICON atmosphere ``solve_nonhydro`` ``input -> single TU`` extraction config.
 
-The solver extracts in two halo modes (see :mod:`icon._halo_modes`):
-``external`` black-boxes ``sync_patch_array`` / ``exchange_data``; ``inlined``
-inlines the halo and devirtualises the ``t_comm_pattern`` dispatch, leaving only
-the MPI point-to-point.  The single concrete arm comes for free under the
-standard CPU defines: ``t_comm_pattern_yaxt`` lives behind ``#ifdef HAVE_YAXT``
-(undefined), so the cpp pre-pass leaves only ``t_comm_pattern_orig`` for the
-default monomorphisation pass to retype to.
+Two halo modes (:mod:`icon._halo_modes`): ``external`` black-boxes
+``sync_patch_array``/``exchange_data``; ``inlined`` inlines the halo and
+devirtualises ``t_comm_pattern``, leaving only MPI point-to-point.  Single
+concrete arm comes free under standard CPU defines (``HAVE_YAXT`` undefined ->
+cpp strips ``t_comm_pattern_yaxt``, leaving only ``t_comm_pattern_orig``).
 
-Non-halo externals (both modes): the inner ``velocity_tendencies`` kernel
-(separately bound), the MPI collectives, the comm-pattern construction, and
-terminal I/O / timers.  Slow (~140k-line closure) and memory-heavy, so the
-extraction runs in a memory-capped subprocess.
+Non-halo externals (both modes): the inner ``velocity_tendencies`` kernel, MPI
+collectives, comm-pattern construction, terminal I/O/timers.  Slow (~140k-line
+closure) and memory-heavy -- extraction runs in a memory-capped subprocess.
 """
 import os
 import shutil
@@ -33,14 +30,12 @@ HAVE_OPENMPI = find_openmpi_include() is not None
 
 
 def have_icon_atmo() -> bool:
-    """True when every atmosphere kernel source referenced by :data:`KERNELS`
-    is checked out."""
+    """True when every atmosphere kernel source in :data:`KERNELS` is checked out."""
     return all((SRC / source).is_file() for _, source, *_ in KERNELS)
 
 
 def atmo_search_dirs() -> list:
-    """USE-graph closure roots for the atmosphere solver -- the same set the
-    velocity / ocean tests bisected to (ICON's ``src`` plus the bundled
+    """USE-graph closure roots for the atmosphere solver (ICON's ``src`` + bundled
     external library trees)."""
     return [
         SRC,
@@ -53,11 +48,10 @@ def atmo_search_dirs() -> list:
     ]
 
 
-#: ICON's standard CPU build defines for the atmosphere solver object.  The
-#: ocean / waves / testbed components are compiled out (``__NO_ICON_OCEAN__`` &c.)
-#: and -- crucially for the single-arm halo -- ``HAVE_YAXT`` is NOT defined, so
-#: the cpp pre-pass strips ``t_comm_pattern_yaxt`` and leaves a single concrete
-#: comm-pattern arm.  Same set as ``tests/icon/full/test_dycore_from_icon_source``.
+#: ICON's standard CPU build defines for the atmosphere solver.  Ocean/waves/testbed
+#: compiled out; ``HAVE_YAXT`` NOT defined so cpp strips ``t_comm_pattern_yaxt``,
+#: leaving a single concrete comm-pattern arm.  Same set as
+#: ``tests/icon/full/test_dycore_from_icon_source``.
 ATMO_DEFINES = [
     "HAVE_CDI_GRIB2",
     "HAVE_FC_ATTRIBUTE_CONTIGUOUS",
@@ -77,18 +71,15 @@ ATMO_DEFINES = [
     "NO_MPI_CHOICE_ARG",
 ]
 
-#: NON-HALO external leaves of the standalone dycore kernel: the inner velocity
-#: kernel, the MPI collectives / reductions, and the comm-pattern construction.
-#: The HALO externals are added per mode (:func:`atmo_externals`) -- "external"
-#: black-boxes ``sync_patch_array`` / ``exchange_data``, "inlined" leaves only the
-#: MPI point-to-point.  Both modes must extract to a compiling TU.
+#: NON-HALO external leaves: the inner velocity kernel, MPI collectives/reductions,
+#: comm-pattern construction.  HALO externals added per mode (:func:`atmo_externals`);
+#: both modes must extract to a compiling TU.
 ATMO_BASE_EXTERNAL_FUNCTIONS = [
     ExternalFunction("velocity_tendencies"),  # the inner kernel; separately bound at link time
     ExternalFunction("setup_comm_pattern"),  # comm-pattern INIT (the construction boundary, a marshalled input)
 ]
 
-#: DON'T-EMIT (externalised + the bridge DROPs the call): pure side-effects with
-#: no numerics -- terminal I/O (debug / error / log) and profiling timers.
+#: DON'T-EMIT (externalised + dropped): pure side-effects, no numerics -- I/O + timers.
 ATMO_DO_NOT_EMIT = [
     "finish",
     "message",
@@ -103,43 +94,29 @@ ATMO_DO_NOT_EMIT = [
     "timer_stop",
     "new_timer",
     "delete_timer",
-    # The halo DEBUG sync check: a redundant reference exchange + comparison gated
-    # by ``IF (p_test_run .AND. do_sync_checks)``.  Pure debug (no numerics; its
-    # body is multi-block with ``finish`` + MPI test-mode collectives), and it is
-    # called with absent optional fields in the multi-field sync -- stub it so the
-    # ``sync_patch_array_mult`` specialization does not drag it in.
+    # Halo DEBUG sync check (gated by p_test_run .AND. do_sync_checks); pure debug, no
+    # numerics.  Stubbed so sync_patch_array_mult specialization doesn't drag it in.
     "check_patch_array_3d_dp",
 ]
 
-#: Non-halo LOGICAL config queries stubbed to ``.FALSE.`` (none for atmosphere;
-#: the halo's ``my_process_is_mpi_seq`` is added per mode by :func:`atmo_config`).
+#: Non-halo LOGICAL queries stubbed ``.FALSE.`` (none for atmosphere; halo adds its
+#: own per mode via :func:`atmo_config`).
 ATMO_BASE_RETURN_FALSE: list = []
 
-#: ``typename -> [component names]`` derived-type members that the INNER
-#: ``velocity_tendencies`` kernel reads but ``solve_nh`` does NOT, so the closure
-#: pruning would drop them from ``solve_nh``'s single-TU struct types.  Keeping
-#: them (``inline_to_single_tu(keep_type_components=...)``) makes the extracted
-#: ``t_patch`` / ``t_int_state`` / ``t_nh_diag`` / ``t_nh_metrics`` carry the
-#: UNION of members both kernels touch -- so when ``solve_nh`` calls
-#: ``velocity_tendencies`` as a per-member-SoA ``keep_external`` callback, the
-#: outer marshal-expansion leaf set equals the inner ``bind_c_shim`` slot set
-#: member-for-member (both in source declaration order).  The kept members are
-#: pass-through inputs on the ``solve_nh`` side (received from its caller and
-#: forwarded to velocity untouched).  Curated data (not code): the members
-#: ``velocity_tendencies`` reads minus the members ``solve_nh`` reads.
+#: ``typename -> [component names]`` derived-type members ``velocity_tendencies``
+#: reads but ``solve_nh`` does NOT -- kept (``keep_type_components``) so both
+#: kernels' extracted structs carry the UNION of members, keeping the outer
+#: marshal-expansion leaf set member-for-member aligned with the inner
+#: ``bind_c_shim`` slot set (both in source declaration order).  Curated data:
+#: members velocity_tendencies reads minus members solve_nh reads.
 ATMO_VELOCITY_UNION_COMPONENTS = {
-    # ``t_patch`` top level: velocity reads ``p_patch % nshift`` (the singular
-    # field), which ``solve_nh`` does NOT (it uses ``nshift_total`` /
-    # ``nshift_child``).  All three co-exist in the real ``mo_model_domain``
-    # ``t_patch``; keep ``nshift`` so the union ``t_patch`` carries all three and
-    # matches the velocity-side TU member-for-member.
+    # velocity reads p_patch%nshift; solve_nh uses nshift_total/nshift_child instead --
+    # keep nshift so the union t_patch matches velocity-side member-for-member.
     "t_patch": ["nshift"],
     "t_grid_edges": ["area_edge", "f_e", "fn_e", "ft_e"],
     "t_grid_cells": ["area", "decomp_info"],
-    # ``decomp_info`` is itself a ``t_grid_domain_decomp_info`` record; velocity
-    # reads its ``owner_mask``.  Keep that nested member too -- otherwise the
-    # type prunes to an EMPTY record, which the marshaller rejects (an empty
-    # nested record is not inline-flat), breaking the whole ``t_patch`` group.
+    # decomp_info's nested owner_mask must be kept too, else it prunes to an EMPTY
+    # record, which the marshaller rejects (breaking the whole t_patch group).
     "t_grid_domain_decomp_info": ["owner_mask"],
     "t_grid_vertices": ["edge_idx", "edge_blk"],
     "t_int_state": ["geofac_rot", "geofac_n2s"],
@@ -148,40 +125,24 @@ ATMO_VELOCITY_UNION_COMPONENTS = {
     ["coeff_gradekin", "coeff1_dwdz", "coeff2_dwdz", "deepatmo_gradh_ifc", "deepatmo_invr_mc", "deepatmo_invr_ifc"],
 }
 
-#: The MIRROR of :data:`ATMO_VELOCITY_UNION_COMPONENTS`: derived-type members
-#: ``solve_nh`` reads but ``velocity_tendencies`` does NOT.  Passed as
-#: ``keep_type_components`` when extracting the INNER ``velocity_tendencies``
-#: single-TU (same ``mo_model_domain`` source), so velocity's ``t_patch`` /
-#: ``t_int_state`` / ``t_nh_diag`` / ``t_nh_metrics`` / ``t_nh_prog`` /
-#: ``t_grid_edges`` carry the IDENTICAL union of members as the ``solve_nh`` TU
-#: -- byte-for-byte member set + declaration order.  That makes the outer
-#: (``solve_nh``) marshal-expansion leaf sequence equal the inner
-#: (``velocity_tendencies``) ``bind_c_shim`` slot sequence member-for-member, so
-#: the per-member-SoA callback C ABI lines up.  ``comm_pat_c`` / ``comm_pat_e``
-#: are OMITTED: they are pointer-to-record HANDLES the marshaller + shim both
-#: skip (no SoA leaf), so keeping them on only one side does not desync the ABI,
-#: and dropping them avoids dragging the polymorphic comm-pattern arm into
-#: velocity's closure.
+#: MIRROR of :data:`ATMO_VELOCITY_UNION_COMPONENTS`: members ``solve_nh`` reads but
+#: ``velocity_tendencies`` does NOT.  Kept when extracting the INNER TU so both
+#: sides carry the IDENTICAL member union, aligning the outer marshal-expansion
+#: leaf sequence with the inner ``bind_c_shim`` slot sequence member-for-member.
+#: ``comm_pat_c``/``comm_pat_e`` OMITTED: pointer-to-record HANDLES with no SoA
+#: leaf on either side, so keeping them would only drag in the polymorphic arm.
 ATMO_SOLVE_NH_UNION_COMPONENTS = {
     "t_patch": ["geometry_info", "n_childdom", "nshift_total", "nshift_child"],
     "t_grid_edges": ["primal_normal_cell", "dual_normal_cell", "refin_ctrl"],
-    # Nested record FIELDS that produce marshal leaves and so must exist on BOTH
-    # sides.  ``solve_nh`` reads ``edges % primal_normal_cell(..) % v1`` and
-    # ``patch % geometry_info % mean_cell_area``; velocity never touches those
-    # scalar fields, so pruning would empty ``t_tangent_vectors`` /
-    # ``t_grid_geometry_info`` on the velocity side -- leaving ``primal_normal_cell``
-    # an array of a ZERO-field record (0 leaves) against ``solve_nh``'s ``_v1`` /
-    # ``_v2`` (2 leaves), a per-member-SoA desync.  Keeping the fields makes both
-    # record types structurally identical, so both walks emit the same leaves.
+    # Nested record FIELDS must exist on BOTH sides: velocity never touches these
+    # scalar fields, so pruning would leave a ZERO-field record on the velocity side
+    # vs solve_nh's 2-leaf record -- a per-member-SoA desync.
     "t_tangent_vectors": ["v1", "v2"],
     "t_grid_geometry_info": ["mean_cell_area"],
     "t_int_state": ["e_flx_avg", "geofac_div", "geofac_grg", "pos_on_tplane_e", "nudgecoeff_e"],
     "t_nh_prog": ["rho", "exner", "theta_v"],
-    # The tail ``ddt_vn_{dmp,adv,cor,pgr,phd,iau,ray,grf}`` (+ ``_is_associated``
-    # flags) are the per-process vn tendency contributions solve_nh SUMS;
-    # velocity_tendencies writes only the ``_pc`` predictor/corrector arrays, so
-    # pruning drops them on the velocity side -- they are kept so the marshalled
-    # t_nh_diag leaf set matches solve_nh's member-for-member.
+    # ddt_vn_{dmp,adv,cor,pgr,phd,iau,ray,grf} are per-process contributions solve_nh
+    # SUMS; velocity writes only the _pc arrays -- kept for member-for-member match.
     "t_nh_diag": [
         "exner_pr", "mass_fl_e", "rho_ic", "theta_v_ic", "grf_tend_vn", "grf_tend_w", "grf_tend_rho", "grf_tend_mflx",
         "grf_bdy_mflx", "grf_tend_thv", "vn_ie_int", "w_int", "w_ubc", "theta_v_ic_int", "theta_v_ic_ubc", "rho_ic_int",
@@ -203,24 +164,13 @@ ATMO_SOLVE_NH_UNION_COMPONENTS = {
 
 
 def atmo_config(halo_mode: str, entry: str = "") -> dict:
-    """Full atmosphere extraction config for the given halo mode (see
-    :mod:`icon._halo_modes`): the non-halo base externals merged with the
-    mode-specific halo pieces.
+    """Full atmosphere extraction config for ``halo_mode`` (see :mod:`icon._halo_modes`):
+    non-halo base externals merged with the mode-specific halo pieces.
 
-    ``keep_type_components`` (the shared-union machinery) is applied only in
-    ``inlined`` mode -- the mode the ``solve_nh`` + ``velocity_tendencies``
-    per-member-SoA callback e2e drives; the ``external`` TU black-boxes the halo
-    and hosts no callback, so it needs no pass-through members.  Which union is
-    kept depends on the ENTRY being extracted:
-
-      * the OUTER ``solve_nh`` keeps :data:`ATMO_VELOCITY_UNION_COMPONENTS` (the
-        members velocity reads but solve_nh doesn't),
-      * the INNER ``velocity_tendencies`` keeps the MIRROR
-        :data:`ATMO_SOLVE_NH_UNION_COMPONENTS`,
-
-    so both single-TUs carry the IDENTICAL union of struct members from the same
-    ``mo_model_domain`` -- the precondition for the callback ABI to align
-    member-for-member."""
+    ``keep_type_components`` applies only in ``inlined`` mode (the callback e2e);
+    OUTER ``solve_nh`` keeps :data:`ATMO_VELOCITY_UNION_COMPONENTS`, INNER
+    ``velocity_tendencies`` keeps the MIRROR :data:`ATMO_SOLVE_NH_UNION_COMPONENTS`,
+    so both single-TUs carry the identical struct-member union the callback ABI needs."""
     h = halo_config(halo_mode)
     keep = None
     if halo_mode == "inlined":
@@ -238,20 +188,17 @@ def atmo_config(halo_mode: str, entry: str = "") -> dict:
     )
 
 
-#: The atmosphere kernels extracted.  Each entry is
-#: ``(key, source-relative-to-src, module::procedure, body-line-count)``.
-#: ``velocity_advection`` is the INNER ``velocity_tendencies`` kernel the
-#: ``solve_nh`` dycore calls as a per-member-SoA ``keep_external`` callback;
-#: extracted from the SAME ``mo_model_domain`` closure so its struct types match
-#: ``solve_nh``'s union (see :data:`ATMO_SOLVE_NH_UNION_COMPONENTS`).
+#: Atmosphere kernels extracted: ``(key, source-relative-to-src, module::procedure,
+#: body-line-count)``.  ``velocity_advection`` is the INNER kernel ``solve_nh`` calls
+#: as a per-member-SoA callback; matches its struct union
+#: (:data:`ATMO_SOLVE_NH_UNION_COMPONENTS`).
 KERNELS = [
     ("solve_nonhydro", "atm_dyn_iconam/mo_solve_nonhydro.f90", "mo_solve_nonhydro::solve_nh", 0),
     ("velocity_advection", "atm_dyn_iconam/mo_velocity_advection.f90", "mo_velocity_advection::velocity_tendencies", 0),
 ]
 
-#: Checked-in single-TU artifacts, one per (kernel, halo mode):
-#: ``(key, halo_mode, filename, module::procedure)``.  ``velocity_advection`` is
-#: extracted in ``inlined`` mode only (the callback-inner shape).
+#: Checked-in single-TU artifacts: ``(key, halo_mode, filename, module::procedure)``.
+#: ``velocity_advection`` extracted in ``inlined`` mode only (callback-inner shape).
 SINGLE_TU_ARTIFACTS = [
     ("solve_nonhydro", "inlined", "solve_nonhydro_inlined_single_tu.f90", "mo_solve_nonhydro::solve_nh"),
     ("solve_nonhydro", "external", "solve_nonhydro_external_single_tu.f90", "mo_solve_nonhydro::solve_nh"),
@@ -267,17 +214,13 @@ def extract_single_tu(source_relpath: str,
                       out_dir: Path,
                       halo_mode: str = "inlined",
                       mem_gb: float = 12.0) -> dict:
-    """Extract one atmosphere kernel into a single, gfortran-compiling ``.f90`` in
-    a memory-capped subprocess (the fparser parse of the merged closure peaks near
-    9 GB, so it must not OOM the host) and return a result dict with keys
-    ``passed`` (bool), ``tu_path`` (str|None), ``tu_lines`` (int|None) and
-    ``output`` (str).
+    """Extract one atmosphere kernel into a single, gfortran-compiling ``.f90`` in a
+    memory-capped subprocess (fparser parse peaks near 9 GB).  Returns a dict with
+    ``passed``/``tu_path``/``tu_lines``/``output``.
 
-    The subprocess writes all artifacts under ``out_dir`` and uses it as
-    ``TMPDIR`` too, keeping the large merged file off the RAM-backed ``/tmp``
-    tmpfs.  ``PYTHONHASHSEED`` is pinned so the inliner's regeneration is
-    byte-reproducible (the drift guard asserts the extracted TU is identical to
-    the committed one)."""
+    Subprocess uses ``out_dir`` as ``TMPDIR`` too (keeps the merged file off the
+    RAM-backed ``/tmp`` tmpfs); ``PYTHONHASHSEED`` pinned for byte-reproducible
+    regeneration (the drift guard compares against the committed TU)."""
     import subprocess
     import sys
 

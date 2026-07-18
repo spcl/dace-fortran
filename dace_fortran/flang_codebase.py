@@ -1,29 +1,8 @@
-"""Helpers for feeding flang-new an entry point from a real Fortran
-codebase (autotools / cmake / hand-rolled make) without rebuilding
-the project against flang's own ``.mod`` files.
-
-Why this module exists.  Each major Fortran HPC code (ICON, ECRAD,
-ECMWF IFS, RTE-RRTMGP, …) ships its sources, but the library modules
-they ``USE`` (``mpi``, ``netcdf``, ``hdf5``, …) only come as
-gfortran-format ``.mod`` files at install time.  flang-21 needs
-either Fortran source or a flang-format ``.mod`` for every ``USE``,
-so the natural way to drive flang against an arbitrary codebase is:
-
-  1. resolve the project's USE graph against its own sources via
-     :func:`dace_fortran.preprocess.merge_used_modules`,
-  2. prepend Fortran wrappers (this module's :data:`LIBRARY_STUBS`)
-     for the small set of upstream libraries that ship only binary
-     ``.mod`` files,
-  3. apply textual patches (this module's :data:`FLANG_BUG_PATCHES`)
-     for the handful of flang-21 ICEs and false-positive errors that
-     show up on real-world code, and
-  4. replay the same ``-D`` defines and ``-I`` include directories
-     the project's own build uses, extracted from the project's
-     ``Makefile`` via :func:`extract_make_compile_args`.
-
-:func:`prepare_flang_translation_unit` composes all four steps for
-the common case; everything underneath is exposed as plain helper
-functions so a caller can opt out of any one and DIY the rest.
+"""Feed flang-new an entry point from a real Fortran codebase (ICON, ECRAD,
+IFS, ...) without rebuilding it against flang's own ``.mod`` files: upstream
+libs ship gfortran-format ``.mod``s only, so :func:`prepare_flang_translation_unit`
+resolves the USE graph, stubs those libraries, patches flang-21 false positives,
+and replays the project's own ``-D``/``-I`` flags.
 """
 import re
 import shutil
@@ -40,14 +19,9 @@ from .preprocess import merge_used_modules
 # 1. Library stubs.
 # ---------------------------------------------------------------------------
 
-# Source for ``MODULE mpi`` that wraps OpenMPI's ``mpif-*.h`` parameter
-# headers.  Skips ``mpif-sizeof.h`` because flang-21 rejects its
-# auto-generated ``COMPLEX(KIND=-1)`` declarations (a kind that exists
-# only conditionally).  Adds an explicit interface for procedures the
-# headers omit but real-world codes still ``USE`` (e.g.
-# ``mpi_get_library_version`` only appears in OpenMPI's ``mpi.h`` C
-# header, not the F77 ``mpif.h``).  Pair with
-# ``-I<openmpi-include-dir>``.
+# MODULE mpi wrapping OpenMPI's mpif-*.h. Skips mpif-sizeof.h (flang-21
+# rejects its COMPLEX(KIND=-1)). Adds an interface for mpi_get_library_version
+# (only in mpi.h, not mpif.h). Pair with -I<openmpi-include-dir>.
 _MPI_STUB_SOURCE = """\
 ! Stub ``MODULE mpi`` for the flang frontend.  Wraps OpenMPI's
 ! ``mpif-*.h`` parameter / handle / sentinel headers (a flang-21
@@ -76,9 +50,8 @@ MODULE mpi
 END MODULE mpi
 """
 
-# Probe locations for an OpenMPI install on common Linux distros.  The
-# first one whose ``mpif-config.h`` exists wins.  Callers can also pass
-# their own path through :func:`prepare_flang_translation_unit`.
+# Probe locations for an OpenMPI install; first one with mpif-config.h wins.
+# Callers can override via prepare_flang_translation_unit.
 _OPENMPI_INCLUDE_CANDIDATES = (
     "/usr/lib/x86_64-linux-gnu/openmpi/include",
     "/usr/include/openmpi",
@@ -97,15 +70,13 @@ def find_openmpi_include() -> Optional[str]:
 
 
 def mpi_stub_source() -> str:
-    """Returns Fortran source defining ``MODULE mpi`` that wraps
-    OpenMPI's ``mpif-*.h`` headers.  Pair with the ``-I`` directory
-    returned by :func:`find_openmpi_include`."""
+    """Fortran source for ``MODULE mpi`` wrapping OpenMPI's headers.
+    Pair with the ``-I`` dir from :func:`find_openmpi_include`."""
     return _MPI_STUB_SOURCE
 
 
-# Netcdf-fortran isn't vendored: it's 4 MB and updates yearly, so we
-# fetch the upstream release tarball on first use and cache it.  Same
-# cache layout the bridge's own build uses (``~/.cache/dace-fortran``).
+# Not vendored (4 MB, updates yearly): fetched from upstream on first use
+# and cached, same layout as the bridge's own build (~/.cache/dace-fortran).
 _NETCDF_FORTRAN_URL = ("https://github.com/Unidata/netcdf-fortran/archive/refs/tags/v{version}.tar.gz")
 _NETCDF_FORTRAN_DEFAULT_VERSION = "4.6.2"
 

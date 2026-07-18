@@ -1,18 +1,12 @@
 #!/usr/bin/env python3
 """Field-by-field comparison of two ICON output directories.
 
-Differential verification for the ICON dycore integration test: run stock ICON
-(original ``solve_nh``) and patched ICON (our SDFG binding swapped in for the
-dycore) on the *same* experiment, then compare every output field. A bit-exact
-match means the binding reproduces the original dycore inside a real ICON run;
-any divergence is a real bug (never a tolerance to relax -- see the project's
-never-use-norm_error rule).
+Differential verification for the ICON dycore integration test: stock ICON vs patched (our
+SDFG binding swapped in) on the same experiment. Bit-exact match required -- any divergence is
+a real bug, never a tolerance to relax (never-use-norm_error rule).
 
-The comparison matches output files by basename (both runs share the same
-experiment name and output times), then compares each data variable. NaNs are
-treated as equal to NaNs in the same slot so a deterministic all-fill field does
-not read as a diff. Coordinate/dimension variables (time, height, lon/lat, ...)
-are skipped -- only model state is compared.
+Matches files by basename, compares each data variable (NaN==NaN); coordinate/dimension
+variables are skipped.
 
 CLI::
 
@@ -69,8 +63,13 @@ def compare_files(ref_path, test_path):
             a = _load(ref_vars[name])
             b = _load(test_vars[name])
             if a.shape != b.shape:
-                rows.append({"var": name, "status": "SHAPE", "max_abs": None, "max_rel": None,
-                             "detail": f"{a.shape} vs {b.shape}"})
+                rows.append({
+                    "var": name,
+                    "status": "SHAPE",
+                    "max_abs": None,
+                    "max_rel": None,
+                    "detail": f"{a.shape} vs {b.shape}"
+                })
                 continue
             if _bit_exact(a, b):
                 rows.append({"var": name, "status": "EXACT", "max_abs": 0.0, "max_rel": 0.0})
@@ -90,9 +89,8 @@ def compare_files(ref_path, test_path):
 def compare_dirs(ref_dir, test_dir, pattern="*_atm_*.nc"):
     """Compare all matching output files present in both dirs.
 
-    Returns (all_exact: bool, report: list[dict]) where each report entry is
-    {file, rows} and rows is the per-variable result list from compare_files.
-    Raises FileNotFoundError if the reference dir has no matching files.
+    Returns ``(all_exact, report)``; each report entry is ``{file, rows}``. Raises
+    ``FileNotFoundError`` if the reference dir has no matching files.
     """
     ref_dir, test_dir = Path(ref_dir), Path(test_dir)
     ref_files = sorted(ref_dir.glob(pattern))

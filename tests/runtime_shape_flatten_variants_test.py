@@ -1,19 +1,9 @@
-"""Runtime-shape variants of the static struct-flatten e2e tests.
-
-The existing flatten coverage (``flatten_structs_test.py``,
-``array_of_records_test.py``) pins the STATIC-shape cases.  These variants
-re-run the same scenarios with RUNTIME-sized outer arrays, so the flattener has
-to thread the declare's live extents through the companion ``fir.alloca`` /
-``fir.shape`` (the ``solve_free_sfc_ab_mimetic`` blocker #3 fix --
-``outerExtentValues`` + ``makeCompanionAlloca`` in ``FlattenStructs.cpp``)
-instead of baking static literals.
-
-Each builds the SDFG and checks a closed form, so a wrong companion shape or a
-dropped index shows up as a numeric mismatch, not just a structural assert.
-The dedicated cartesian blocker-#3 regression lives in
-``runtime_local_cartesian_aos_flatten_test.py``; these add the neighbouring
-member-type combinations (scalar member, mixed scalar+array member) plus the
-runtime-dim mirror of the canonical dummy cartesian test.
+"""Runtime-shape variants of the static struct-flatten e2e tests (``flatten_structs_test.py``,
+``array_of_records_test.py``): same scenarios with RUNTIME-sized outer arrays, so the
+flattener must thread live extents through the companion alloca/shape
+(``solve_free_sfc_ab_mimetic`` blocker #3 fix -- ``outerExtentValues`` +
+``makeCompanionAlloca`` in ``FlattenStructs.cpp``) instead of baking static literals.
+Each checks a closed form so a wrong companion shape shows up as a numeric mismatch.
 """
 from pathlib import Path
 
@@ -25,10 +15,9 @@ from _util import build_sdfg, have_flang
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
 # ---------------------------------------------------------------------------
-# Local runtime-sized AoS with SCALAR members -> per-member SoA companions
-# (the non-concat dynamic path: ``rewrapWith`` produces a box result#0 and the
-# companion alloca is ``array<?x?xf64>``).  Static counterparts:
-# ``array_of_records_test.py::test_aor_l1_static_scalar_member`` and friends.
+# Local runtime-sized AoS with SCALAR members -> per-member SoA companions (non-concat
+# dynamic path: ``rewrapWith`` produces box result#0, alloca ``array<?x?xf64>``).
+# Static counterpart: ``array_of_records_test.py::test_aor_l1_static_scalar_member``.
 # ---------------------------------------------------------------------------
 _SCALAR_MEMBER_SRC = """
 module lib
@@ -76,9 +65,8 @@ def test_runtime_local_aos_scalar_members(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# Local runtime-sized AoS with BOTH a scalar member and a static-array member
-# in one struct -- exercises the non-concat (scalar) and concat (array) branches
-# of the same ``splitLocal`` pass on a runtime-sized outer.
+# Local runtime-sized AoS with a scalar member AND a static-array member -- exercises the
+# non-concat (scalar) and concat (array) branches of the same ``splitLocal`` pass.
 # ---------------------------------------------------------------------------
 _MIXED_MEMBER_SRC = """
 module lib
@@ -129,10 +117,8 @@ def test_runtime_local_aos_mixed_scalar_and_array_members(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# Runtime-dim mirror of
-# ``flatten_structs_test.py::test_inlined_multidim_aos_array_member_flattens_to_soa``
-# -- the canonical cartesian ``x(3)`` dummy flattened through an inlined callee,
-# but with the outer extents passed at runtime.
+# Runtime-dim mirror of ``flatten_structs_test.py::test_inlined_multidim_aos_array_member_flattens_to_soa``
+# -- canonical cartesian ``x(3)`` dummy flattened through an inlined callee, outer extents at runtime.
 # ---------------------------------------------------------------------------
 _DUMMY_CARTESIAN_RUNTIME_SRC = """
 module lib
@@ -180,13 +166,10 @@ def test_runtime_dummy_cartesian_aos_flattens_to_soa(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# Local runtime-sized cartesian AoS initialised via a WHOLE-ARRAY SECTION of a
-# component element passed to a (inlined) callee -- the ICON-O
-# ``CALL init_zero_3d(z_adv_u_i(:,:,:)%x(1))`` shape -- then element-written and
-# read.  This is the exact ocean ``solve_free_sfc`` pattern that surfaces after
-# the local cartesian AoS flattens: the section-of-component arg composes onto
-# the rank-4 companion ``z_x(:,:,:,1)`` and the companion must register as an
-# SDFG transient.
+# Local runtime-sized cartesian AoS initialised via a WHOLE-ARRAY SECTION of a component
+# element passed to an inlined callee (ICON-O ``CALL init_zero_3d(z_adv_u_i(:,:,:)%x(1))``
+# shape) -- the ocean ``solve_free_sfc`` pattern: section-of-component composes onto the
+# rank-4 companion ``z_x(:,:,:,1)``, which must register as an SDFG transient.
 # ---------------------------------------------------------------------------
 _SECTION_ARG_SRC = """
 module lib
@@ -238,17 +221,13 @@ def test_runtime_local_cartesian_section_arg(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# Coverage: two routines with a SAME-NAMED local cartesian AoS of DIFFERENT
-# rank, both inlined into one driver -- the ICON-O ``veloc_adv_vert_mimetic_div``
-# / ``_rot`` shape (each has a local ``z_adv_u_i``), one accessed via a
-# whole-array section, the other element-wise.  Exercises the multi-scope
-# flattened-companion naming path (``flatCompanionName`` / ``traceToDecl``): the
-# companion ``z_x`` lands in two inlined scopes, so its name must resolve the
-# same way at registration and at every access.  NOTE: this minimal case does
-# not by itself trigger the asymmetric-collision KeyError that motivated the fix
-# (that needed the real ocean's copy_in-kept-alive base surviving in only one
-# scope); that end-to-end case is validated against the ocean dycore
-# (``solve_free_sfc``).  Kept as a regression guard for the naming path.
+# Two routines with a SAME-NAMED local cartesian AoS of DIFFERENT rank, both inlined into
+# one driver (ICON-O ``veloc_adv_vert_mimetic_div``/``_rot`` shape). Exercises the
+# multi-scope flattened-companion naming path (``flatCompanionName``/``traceToDecl``): ``z_x``
+# lands in two inlined scopes and must resolve the same way everywhere.
+# NOTE: does not itself trigger the asymmetric-collision KeyError that motivated the fix
+# (needs the real ocean's copy_in-kept-alive base) -- that e2e case is validated against
+# ``solve_free_sfc``. Kept as a regression guard for the naming path only.
 # ---------------------------------------------------------------------------
 _MULTISCOPE_COMPANION_SRC = """
 module lib

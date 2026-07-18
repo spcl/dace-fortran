@@ -1,28 +1,9 @@
-"""Minimal reproducers for three HLFIR->SDFG bridge gaps first surfaced
-by Quantum-Espresso's ``vexx_bp_k_gpu`` kernel and fixed in this branch.
+"""Minimal reproducers for three HLFIR->SDFG bridge gaps surfaced by QE's ``vexx_bp_k_gpu``
+kernel, each isolating one pattern as a fast regression guard independent of the full QE parse:
 
-Each test is a self-contained kernel that isolates ONE pattern so the
-fix has a fast regression guard independent of the full QE parse:
-
-1. ``test_local_allocatable_section_bound`` -- a SECTION of a LOCAL
-   allocatable (``arr(:, j)``).  Flang lowers the ``:`` bound to
-   ``fir.box_dims`` on the runtime descriptor; the bridge now resolves
-   lbound (=1, default ALLOCATE) + extent from the ALLOCATE itself
-   instead of leaking ``?`` into the memlet subset
-   (``bridge/ast/assigns.cpp`` box_dims handler).
-
-2. ``test_present_inlined_optional`` -- ``PRESENT(x)`` on an OPTIONAL
-   dummy of an INLINED internal subprogram bound to a PRESENT actual
-   argument.  After ``hlfir-inline-all`` the dummy's declare resolves
-   through ``fir.box_addr`` / ``hlfir.designate`` onto the caller's
-   storage; ``lowerIsPresent`` now walks those wrappers and folds the
-   query to ``1`` instead of ``?`` (``bridge/ast/expressions.cpp``).
-
-3. ``test_struct_int_member_as_size`` -- a derived-type INTEGER member
-   (``d%n``) used as an array SIZE / loop bound.  The flattened member
-   ``d_n`` must be classified ``symbol`` (not ``scalar``) so it doesn't
-   collide with the SDFG shape symbol of the same name
-   (``bridge/extract_vars.cpp`` shape-symbol snapshot).
+1. local allocatable SECTION bound (``bridge/ast/assigns.cpp`` box_dims handler)
+2. PRESENT() on an inlined OPTIONAL dummy (``bridge/ast/expressions.cpp`` lowerIsPresent)
+3. derived-type INTEGER member used as array size (``bridge/extract_vars.cpp`` shape-symbol snapshot)
 """
 import numpy as np
 import pytest
@@ -60,8 +41,7 @@ END MODULE
 
 
 def test_present_inlined_optional(tmp_path):
-    """Internal subprogram with an OPTIONAL array dummy, called WITH the
-    optional present.  ``PRESENT`` inside must fold to true."""
+    """OPTIONAL array dummy of an inlined internal subprogram, called WITH the optional present -- ``PRESENT`` must fold to true."""
     src = """
 MODULE m
 CONTAINS
@@ -132,10 +112,8 @@ END MODULE
 
 
 def test_float32_cast_with_symbol(tmp_path):
-    """``inv = 1.0 / n`` mixes a REAL(4) literal with an INTEGER symbol,
-    so the bridge emits ``dace.float32(...)`` casts in the tasklet.  The
-    bare ``dace`` module name must NOT leak as a required free symbol
-    (codegen resolves it)."""
+    """``inv = 1.0 / n`` mixes a REAL(4) literal with an INTEGER symbol, so the bridge emits
+    ``dace.float32(...)`` casts; the bare ``dace`` name must NOT leak as a required free symbol."""
     src = """
 MODULE s_mod
 CONTAINS
@@ -162,13 +140,9 @@ END MODULE
 
 
 def test_intrinsic_shadowing_local_variable_renamed(tmp_path):
-    """A LOCAL variable whose name shadows an intrinsic function
-    (``DOUBLE PRECISION :: max`` used as a real variable) is renamed to
-    ``var_max`` -- Flang resolved the name as a variable (an
-    ``hlfir.declare`` exists), so the bridge rewrites the variable's
-    references; any genuine ``max(...)`` intrinsic call (a separate
-    hlfir op) is unaffected.  A dead declaration that is only ever used
-    as the intrinsic (Flang drops it) never reaches this path."""
+    """LOCAL variable shadowing an intrinsic (``DOUBLE PRECISION :: max``) is renamed to
+    ``var_max`` since flang resolved it as a variable (an ``hlfir.declare`` exists); a
+    genuine ``max(...)`` intrinsic call is a separate op and unaffected."""
     src = """
 MODULE shadow_mod
 CONTAINS
@@ -191,9 +165,8 @@ END MODULE
 
 
 def test_intrinsic_shadowing_dummy_is_rejected(tmp_path):
-    """A DUMMY argument shadowing an intrinsic stays a hard error -- its
-    short name is the user-facing SDFG signature arg, so a silent rename
-    would change the call ABI with no shield to restore it."""
+    """DUMMY argument shadowing an intrinsic stays a hard error -- its name is the user-facing
+    SDFG signature arg, so a silent rename would change the call ABI."""
     src = """
 SUBROUTINE shadow_dummy(max, res)
   IMPLICIT NONE
@@ -207,14 +180,12 @@ END SUBROUTINE
 
 
 def test_rank_reducing_section_gather(tmp_path):
-    """2-D rank-reducing-section vector-subscript gather (QE
-    ``eigts1(mill(1, offset+1:blk), na)``).  The gather index
-    ``mill(1, offset+k)`` is a 1-D slice of 2-D ``mill(3,*)``; the bridge
-    must render it as a SINGLE element ``mill[1, offset+k]`` (both dims),
-    not the rank-deficient ``mill[k]`` -- one index on a 2-D array is a
-    RANGE, which is illegal on the interstate edge that hosts the minted
-    indirect gather symbol.  ``buildIndexExpr`` now composes the full root
-    subscript via ``expandDesignateChain`` (bridge/ast/assigns.cpp)."""
+    """2-D rank-reducing-section vector-subscript gather (QE ``eigts1(mill(1, offset+1:blk), na)``):
+    the gather index must render as the full 2-D element ``mill[1, offset+k]``, not the
+    rank-deficient ``mill[k]`` -- a single index on a 2-D array is a RANGE, illegal on the
+    interstate edge hosting the minted gather symbol. Fixed via ``buildIndexExpr`` +
+    ``expandDesignateChain`` (bridge/ast/assigns.cpp).
+    """
     src = """
 MODULE g2d_mod
 CONTAINS

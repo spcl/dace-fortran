@@ -1,20 +1,11 @@
-"""Tests for ``IntegerizePowerExponents``.
+"""Tests for ``IntegerizePowerExponents``: retypes integer-valued float ``**``
+exponents (``base**2.0``) to ``int`` so codegen takes the deterministic
+``dace::math::ipow`` path instead of libm ``pow`` -- bit-matching Fortran.
 
-The pass retypes integer-valued float ``**`` exponents (``base**2.0``)
-in tasklets to ``int`` so C++ codegen takes the deterministic
-repeated-multiply ``dace::math::ipow`` path instead of libm
-``dace::math::pow`` -- bit-matching a Fortran reference.
-
-Two levels of coverage:
-
-* a direct pass unit test on a hand-built SDFG tasklet (independent of
-  the HLFIR bridge), and
-* an end-to-end Fortran-vs-gfortran numerical test through the bridge,
-  using an *array-reference* base (``a(jl)**2.0``).  The source-level
-  ``rewrite_integer_powers`` preprocessor deliberately skips a base
-  containing an array/function reference, so the float-exponent ``**``
-  survives into a tasklet -- exactly the case this SDFG pass exists to
-  fix.
+Coverage: a direct pass unit test on a hand-built tasklet, and an e2e test using
+an array-reference base (``a(jl)**2.0``) -- the source preprocessor skips
+array/function bases, so the float exponent survives into a tasklet, exactly
+the case this pass exists to fix.
 """
 
 import shutil
@@ -95,16 +86,15 @@ def _f2py(src_text: str, out_dir: Path, mod: str):
 
 
 def test_array_base_float_power_matches_gfortran(tmp_path: Path):
-    """``a(jl)**2.0`` (array-ref base, skipped by the source
-    preprocessor) goes through the bridge; the SDFG pass retypes the
-    exponent so codegen emits ``ipow``, and the result matches gfortran to ``rtol=1e-12``."""
+    """``a(jl)**2.0`` (array-ref base skipped by the source preprocessor) goes
+    through the bridge; the SDFG pass retypes the exponent to ``ipow``, matching
+    gfortran to ``rtol=1e-12``."""
     ref = _f2py(_ARR_POW, tmp_path / "ref", "ipow_ref")
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(_ARR_POW, sdfg_dir, name="kern", entry="kern_mod::kern").build()
 
-    # The exponents must have been integerised: no libm float ``pow``
-    # of an integer-valued exponent should remain in any tasklet.
+    # No libm float pow of an integer-valued exponent should remain in any tasklet.
     for node, _ in sdfg.all_nodes_recursive():
         if isinstance(node, dace.nodes.Tasklet):
             assert "** 2.0" not in node.code.as_string

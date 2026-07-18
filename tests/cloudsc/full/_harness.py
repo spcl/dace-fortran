@@ -1,12 +1,4 @@
-"""Shared call scaffolding for the full-CLOUDSC test family.
-
-Every ``test_cloudsc_*`` module builds the SDFG, runs the same f2py
-reference on identical seeded *physical* inputs, and routes the 100+
-scalar args through the same Scalar-vs-length-1-Array ABI convention.
-Only the post-run mismatch policy differs per module (full-CLOUDSC
-has a PCOVPTOT threshold-flip budget; the carve-outs use a plain
-element-wise compare), so that part stays in each test.
-"""
+"""Shared CLOUDSC test scaffolding: build the SDFG, run f2py on identical seeded physical inputs, route scalars via the Scalar-vs-length-1-Array ABI convention (mismatch policy stays per-test)."""
 
 import re
 from pathlib import Path
@@ -21,15 +13,12 @@ _ENTRY = "cloudscouter"
 
 
 def lower_keys(d: dict) -> dict:
-    """Lowercase every key: flang HLFIR identifiers are case-sensitive
-    but the Python/f2py wrappers expect lowercase kwargs."""
+    """Lowercase every key (flang HLFIR identifiers are case-sensitive; f2py wrappers expect lowercase kwargs)."""
     return {k.lower(): v for k, v in d.items()}
 
 
 def f2py_argnames(fn) -> set:
-    """The argument names f2py actually exposes, parsed from its
-    generated docstring.  Bracketed entries are auto-derived shape
-    symbols (``klon``, ``klev``, ...) and are kept as accepted."""
+    """Argument names f2py exposes, parsed from its generated docstring; bracketed entries (auto-derived shape symbols) are kept as accepted."""
     doc = fn.__doc__ or ""
     m = re.match(r"\s*\w+\((.*?)\)", doc, re.DOTALL)
     if not m:
@@ -43,11 +32,7 @@ def f2py_argnames(fn) -> set:
 
 
 def sdfg_call_args(sdfg, scalar_values: dict) -> dict:
-    """Route each scalar arg to a plain Python scalar (the SDFG
-    classified it Scalar / symbol) or a length-1 numpy array
-    (``intent(out)/inout``), matching the dtype the bridge declared --
-    bool stays 1-byte, float 8-byte, everything else int32.  See
-    ``feedback_scalar_io_convention``."""
+    """Route each scalar to a plain Python scalar (SDFG Scalar/symbol) or length-1 numpy array (intent out/inout), matching the bridge's declared dtype (see ``feedback_scalar_io_convention``)."""
     from dace.data import Scalar
 
     arglist = sdfg.arglist()
@@ -68,16 +53,9 @@ def sdfg_call_args(sdfg, scalar_values: dict) -> dict:
 
 
 def run_cloudsc(src: str, name: str, f2py_ref, sdfg_dir: Path, *, seed: int = 42):
-    """Build the SDFG and run both the f2py reference and the SDFG on
-    identical seeded physical inputs.
+    """Build the SDFG and run both the f2py reference and the SDFG on identical seeded physical inputs.
 
-    :param src: Fortran source text (the per-test ``cloudsc*.F90``).
-    :param name: SDFG / dacecache name.
-    :param f2py_ref: compiled f2py module exposing ``.cloudscouter``.
-    :param sdfg_dir: scratch directory for the SDFG build.
-    :param seed: RNG seed for ``get_inputs_physical`` / ``get_outputs``.
-    :returns: ``(outputs_sdfg, outputs_ref)`` -- lowercase-keyed dicts
-        for the caller to compare under its own mismatch policy.
+    Returns ``(outputs_sdfg, outputs_ref)`` -- lowercase-keyed dicts for the caller to compare under its own mismatch policy.
     """
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(src, sdfg_dir, name=name, entry=_ENTRY).build()

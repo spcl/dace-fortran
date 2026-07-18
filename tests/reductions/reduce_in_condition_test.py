@@ -1,20 +1,13 @@
-"""Section reductions appearing in an ``IF`` condition.
+"""Section reductions in an ``IF`` condition.
 
-Design (2026-06-16, user-directed "reductions are lib-nodes"): a
-``SUM`` / ``MINVAL`` / ``MAXVAL`` / ``PRODUCT`` in a condition is
-materialised into a DaCe ``Reduce`` LIBRARY NODE writing a scalar
-transient BEFORE the branch, and the condition reads that scalar
-(``__reduce_cond_N > eps``) -- it is NOT inline-unrolled into the
-condition expression.  When the reduction operand is a SECTION
-(``kmin(iv, :)`` -- a row; ``m(:, j)`` -- a column) the section becomes a
-DaCe VIEW with the correct row / column stride + shape, and the Reduce
-runs over the view.  This replaces the earlier const-extent inline-unroll
-(``min(min(min(...)))``), which dropped per-element subscripts and could
-not handle runtime extents.
+Design (2026-06-16, "reductions are lib-nodes"): a SUM/MINVAL/MAXVAL/PRODUCT in
+a condition materialises into a ``Reduce`` LIBRARY NODE writing a scalar transient
+before the branch (condition reads ``__reduce_cond_N``), not inline-unrolled. A
+SECTION operand (``kmin(iv,:)``, ``m(:,j)``) becomes a DaCe VIEW with the correct
+stride/shape.  Replaces the earlier const-extent inline-unroll, which dropped
+per-element subscripts and couldn't handle runtime extents.
 
-These tests anchor the structure (a ``Reduce`` lib-node + a ``View`` for
-the section + a scalar condition, no inline reduction) and end-to-end
-correctness.
+Tests anchor both the structure (Reduce + View, no inline reduction) and e2e correctness.
 """
 import sys
 from pathlib import Path
@@ -54,9 +47,8 @@ def _all_conditions(sdfg):
 
 
 def _assert_materialised(sdfg, inline_fragment):
-    """The reduction lowered to a Reduce lib-node + a section View, and NO
-    condition inline-unrolls the reduction (no nested min/max, no bare array
-    occurrence like ``weights[``)."""
+    """Reduction lowered to a Reduce lib-node + section View; no condition
+    inline-unrolls it (no nested min/max, no bare array occurrence)."""
     assert _reduce_nodes(sdfg), "section reduction did not become a Reduce lib-node"
     assert _has_view(sdfg), "section operand did not become a View"
     conds = _all_conditions(sdfg)
@@ -89,8 +81,8 @@ END MODULE m
 
 
 def test_minval_const_extent_section_in_if_condition(tmp_path):
-    """``IF (k >= MINVAL(kmin(iv, :)))`` -- ICON ``mo_aes_graupel:341``.  The row
-    ``kmin(iv, :)`` becomes a View; MINVAL is a Reduce lib-node."""
+    """``IF (k >= MINVAL(kmin(iv, :)))`` -- ICON ``mo_aes_graupel:341``; row becomes
+    a View, MINVAL a Reduce lib-node."""
     sdfg = _build(_MINVAL_SOURCE, tmp_path, "minval_run")
     _assert_materialised(sdfg, "min(")
     # kmin is all ke+1 -> MINVAL = ke+1; k in 1..ke never reaches ke+1 -> no hits.
@@ -226,9 +218,8 @@ END MODULE m
 
 
 def test_runtime_extent_section_materialises(tmp_path):
-    """A RUNTIME-extent section ``arr(iv, 1:mm)`` -- which the old inline-unroll
-    could not handle (it bailed to ``?``) -- now lowers to a View + Reduce
-    lib-node and runs correctly."""
+    """A RUNTIME-extent section ``arr(iv, 1:mm)`` -- unhandled by the old
+    inline-unroll (bailed to ``?``) -- now lowers to a View + Reduce lib-node."""
     sdfg = _build(_RUNTIME_EXTENT_SOURCE, tmp_path, "runtime_run")
     _assert_materialised(sdfg, "min(")
     for value in _all_conditions(sdfg):

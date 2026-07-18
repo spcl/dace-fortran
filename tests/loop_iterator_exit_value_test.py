@@ -1,23 +1,11 @@
 """Iterator value after a Fortran DO loop must match gfortran's convention.
 
-After a counted `DO i = lo, hi[, step]` loop completes normally (no EXIT),
-gfortran leaves ``i`` at the value that failed the bound check  --
-**one stride past the last attained value**:
-
-* forward  ``DO i = 1, N``    ->  exit value ``N + 1``
-* reverse  ``DO i = N, 1, -1`` ->  exit value ``0``
-* strided  ``DO i = 1, N, 2`` ->  exit value ``(N | N+1) + 2`` depending
-  on parity, again last attained + step
-
-The Fortran 2018+ standard says the iterator is technically undefined
-after the loop, but every mainstream compiler (gfortran, ifort, flang)
-leaves it at ``last + step``.  The bridge's SSA loop-iterator
-reconstruction pass therefore has to match this convention  --  any kernel
-that reads the iterator past the loop end would otherwise diverge from
-its f2py reference (no current cloudsc loop nest does this, but it is a
-real class of subtle off-by-one bugs and worth pinning).
-
-E2e against an f2py-compiled reference of the same Fortran source.
+After a counted ``DO i = lo, hi[, step]`` completes normally (no EXIT),
+gfortran leaves ``i`` one stride past the last attained value: forward
+``DO i=1,N`` -> ``N+1``; reverse ``DO i=N,1,-1`` -> ``0``; strided similarly.
+Technically undefined per the standard, but every mainstream compiler agrees,
+so the bridge's SSA loop-iterator reconstruction must match it. E2e against
+an f2py-compiled reference.
 """
 import numpy as np
 import pytest
@@ -86,10 +74,8 @@ END MODULE kernel_mod
 
 
 def test_fortran_frontend_loop_iterator_exit_strided(tmp_path):
-    """Strided forward loop ``DO i = 1, N, 2``: post-loop ``i = last + 2``.
-
-    For N=10, iterations cover i = 1, 3, 5, 7, 9; post-loop ``i = 11``.
-    """
+    """Strided forward loop ``DO i = 1, N, 2``: post-loop ``i = last + 2``
+    (for N=10: i covers 1,3,5,7,9; post-loop i=11)."""
     src = """
 MODULE kernel_mod
 CONTAINS

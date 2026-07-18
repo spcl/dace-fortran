@@ -1,11 +1,6 @@
-"""Numerical correctness for ``MATMUL(TRANSPOSE(A), B)`` after
-fold-into-MatMul.
-
-The bridge now emits ``MatMul(transA=True)`` instead of synthesising
-a ``Transpose -> _temp -> MatMul`` chain.  Result must match
-``numpy.matmul(A.T, B)`` exactly (same fp ops in a different order
-can differ in the last ULP for non-deterministic BLAS; we use
-``rtol=1e-12`` for fp64 which is well above ULP-level noise).
+"""Numerical correctness for ``MATMUL(TRANSPOSE(A), B)`` after fold-into-MatMul: the
+bridge emits ``MatMul(transA=True)`` instead of a Transpose->temp->MatMul chain.
+rtol=1e-12 for fp64 (well above ULP-level BLAS noise) since op order can differ.
 """
 from pathlib import Path
 import sys
@@ -43,10 +38,8 @@ END MODULE matmul_t_kernel_mod
                                    entry="matmul_t_kernel_mod::matmul_t_kernel",
                                    name="matmul_t_kernel")
 
-    # The fused path should produce exactly one MatMul + zero Transpose
-    # libcalls.  Regression guard against silent re-introduction of the
-    # transient-+-transpose path (which would still be numerically
-    # correct but waste a copy).
+    # Fused path: exactly one MatMul + zero Transpose libcalls -- regression guard against
+    # re-introducing the transient-+-transpose path (correct but wastes a copy).
     mm_count = sum(1 for s in sdfg.states() for n in s.nodes() if type(n).__name__ == "MatMul")
     tr_count = sum(1 for s in sdfg.states() for n in s.nodes() if type(n).__name__ == "Transpose")
     assert mm_count == 1 and tr_count == 0, \
@@ -65,10 +58,8 @@ END MODULE matmul_t_kernel_mod
 
 
 def test_matmul_a_transposeB_numerical(tmp_path):
-    """``C = MATMUL(A, TRANSPOSE(B))`` -- symmetric to the LHS case.
-    Flang doesn't emit a fused op for the RHS shape; the bridge
-    detects ``hlfir.transpose`` as the matmul's RHS operand and
-    folds it into ``MatMul(transB=True)``."""
+    """``C = MATMUL(A, TRANSPOSE(B))``: Flang doesn't fuse the RHS shape, so the bridge
+    detects ``hlfir.transpose`` as the RHS operand and folds it into ``MatMul(transB=True)``."""
     src = """
 MODULE matmul_atb_kernel_mod
   IMPLICIT NONE
@@ -87,8 +78,7 @@ END MODULE matmul_atb_kernel_mod
                                    out_dir=str(tmp_path / "sdfg"),
                                    entry="matmul_atb_kernel_mod::matmul_atb_kernel",
                                    name="matmul_atb_kernel")
-    # ZERO Transpose libcalls -- materialiser skips, BLAS does
-    # the transpose in-place via transB=True.
+    # ZERO Transpose libcalls -- materialiser skips, BLAS does the transpose in-place via transB=True.
     mm_count = sum(1 for s in sdfg.states() for n in s.nodes() if type(n).__name__ == "MatMul")
     tr_count = sum(1 for s in sdfg.states() for n in s.nodes() if type(n).__name__ == "Transpose")
     assert mm_count == 1 and tr_count == 0, \
@@ -106,9 +96,8 @@ END MODULE matmul_atb_kernel_mod
 
 
 def test_matmul_both_transposed_numerical(tmp_path):
-    """``C = MATMUL(TRANSPOSE(A), TRANSPOSE(B))`` -- both flags fold
-    into one ``MatMul(transA=True, transB=True)`` -- no transient,
-    no separate Transpose libcall."""
+    """``C = MATMUL(TRANSPOSE(A), TRANSPOSE(B))``: both flags fold into one
+    ``MatMul(transA=True, transB=True)`` -- no transient, no separate Transpose libcall."""
     src = """
 MODULE matmul_atbt_kernel_mod
   IMPLICIT NONE
@@ -132,9 +121,6 @@ END MODULE matmul_atbt_kernel_mod
     tr_count = sum(1 for s in sdfg.states() for n in s.nodes() if type(n).__name__ == "Transpose")
     assert mm_count == 1 and tr_count == 0, \
         f"expected 1 MatMul + 0 Transpose (both fold via BLAS), got mm={mm_count} tr={tr_count}"
-    # Earlier dummy comment retained for grep history:
-    # (see B-only case for explanation); fixed by a separate
-    # transpose-materialiser-skip pass.
     mm = [n for s in sdfg.states() for n in s.nodes() if type(n).__name__ == "MatMul"][0]
     assert mm.transA is True and mm.transB is True, \
         f"expected transA=True transB=True, got transA={mm.transA} transB={mm.transB}"
@@ -149,10 +135,8 @@ END MODULE matmul_atbt_kernel_mod
 
 
 def test_matmul_transpose_vector(tmp_path):
-    """``y = MATMUL(TRANSPOSE(A), v)`` -- matrix x vector via Gemv
-    with ``transA=True``.  The Fortran shape forces the GEMV branch
-    of ``SpecializeMatMul`` -- a separate path from the 2-D Gemm test
-    above."""
+    """``y = MATMUL(TRANSPOSE(A), v)``: matrix x vector via Gemv(transA=True) -- the
+    GEMV branch of SpecializeMatMul, a separate path from the 2-D Gemm tests above."""
     src = """
 MODULE matmul_tv_kernel_mod
   IMPLICIT NONE

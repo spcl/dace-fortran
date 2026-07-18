@@ -1,14 +1,8 @@
 """Supportability tests for the static-vtable monomorphisation front-end
-(:mod:`dace_fortran.inliner.ast_desugaring.monomorphize`).
-
-Each fixture is a small Fortran program exercising one shape of polymorphic
-type-bound-procedure dispatch.  Supported shapes (abstract base + concrete
-subtypes, each providing ``%init`` and ``%solve``, single-level) must yield a
-:class:`MonomorphizationPlan` enumerating every concrete arm.  Out-of-scope
-shapes must be rejected -- and rather than ``xfail``, we assert the rejection
-directly with ``pytest.raises(UnsupportedProgram)`` and match the reason, so the
-detection is itself under test.
-"""
+(``dace_fortran.inliner.ast_desugaring.monomorphize``). Supported shapes (abstract base +
+concrete subtypes, each providing %init/%solve, single-level) must yield a
+``MonomorphizationPlan`` enumerating every arm. Out-of-scope shapes are rejected -- asserted
+directly via ``pytest.raises(UnsupportedProgram)`` matching the reason, not xfail'd."""
 import pytest
 
 from dace_fortran.inliner.ast_desugaring.monomorphize import (UnsupportedProgram, analyze_source)

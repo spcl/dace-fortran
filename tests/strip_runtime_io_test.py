@@ -1,13 +1,9 @@
 """Unit coverage for the ``hlfir-strip-runtime-io`` pass.
 
-Every Fortran ``WRITE`` / ``PRINT`` / ``FLUSH`` / ``OPEN`` / ``CLOSE``
-statement lowers to a sequence of opaque ``_FortranAio*`` runtime
-calls.  The bridge's SDFG is a numerical-equivalence model -- it
-compares output arrays for inputs that don't trigger error paths --
-so diagnostic output to ``stdout`` / ``stderr`` is dead code at test
-time.  The pass walks the module, replaces each I/O call's SSA
-result(s) with a benign constant (``i1`` -> false, ``i32`` -> 0 iostat,
-``!fir.ref<i8>`` cookie -> ``fir.zero_bits``), then erases the call.
+WRITE/PRINT/FLUSH/OPEN/CLOSE lower to opaque ``_FortranAio*`` runtime calls,
+dead code for a numerical-equivalence SDFG. The pass replaces each I/O call's
+SSA result(s) with a benign constant (i1->false, i32->0 iostat, cookie->
+fir.zero_bits) then erases the call.
 """
 import subprocess
 import tempfile
@@ -63,9 +59,8 @@ END SUBROUTINE
 
 
 def test_strip_write_with_format_and_args():
-    """A formatted ``WRITE`` with several args produces a longer
-    cookie-threaded chain; every link must be stripped together so
-    no dangling cookie remains."""
+    """Formatted ``WRITE`` with several args produces a longer cookie-threaded
+    chain; every link must be stripped together so no dangling cookie remains."""
     src = """
 SUBROUTINE run(a, n, ierr)
   INTEGER, INTENT(IN) :: n, ierr
@@ -94,10 +89,8 @@ END SUBROUTINE
 
 
 def test_strip_iostat_user_reads_zero():
-    """User code that reads ``IOSTAT`` sees a zero (success) value
-    after the pass -- the iostat result is replaced by ``arith.constant
-    0 : i32`` before the call is erased, so any branch reading the
-    status (``IF (ios /= 0) ...``) takes the no-error path."""
+    """``IOSTAT`` reads see a zero (success) value after the pass -- the
+    result is replaced by ``arith.constant 0 : i32`` before the call is erased."""
     src = """
 SUBROUTINE run(a, n)
   INTEGER, INTENT(IN) :: n
@@ -108,11 +101,8 @@ SUBROUTINE run(a, n)
 END SUBROUTINE
 """
     ir = _emit_hlfir_and_strip(src)
-    # All IO calls gone.
     assert _count_io_calls(ir) == 0
-    # The IF guarded by ios still exists; the ``a(1) = 1.0d0`` write
-    # is what the no-error path produces and is the conventional
-    # behaviour we want preserved.
+    # IF guarded by ios still exists; a(1)=1.0d0 is the no-error path's write, preserved.
     assert "1.000000e+00" in ir or "1.0" in ir
 
 
@@ -155,9 +145,8 @@ END SUBROUTINE
 
 
 def test_strip_handles_qe_stop_clock_diagnostic():
-    """The QE / NPB ``stop_clock`` body reduces to exactly the
-    diagnostic shape the user flagged: ``WRITE(stdout, '(...)')
-    label``.  Verify the pass eats it entirely."""
+    """QE/NPB ``stop_clock`` reduces to ``WRITE(stdout, '(...)') label`` --
+    verify the pass eats it entirely."""
     src = """
 MODULE mytime
   IMPLICIT NONE
@@ -176,9 +165,7 @@ SUBROUTINE run(a, n)
 END SUBROUTINE
 """
     ir = _emit_hlfir_and_strip(src)
-    # Every IO call -- inside stop_clock's body -- is stripped.
     assert _count_io_calls(ir) == 0
-    # The user-level ``CALL stop_clock(...)`` itself stays (only IO
-    # calls are stripped; the body's IO is gone so stop_clock is now
-    # an empty function, which symbol-dce later removes).
+    # CALL stop_clock(...) itself stays -- only IO calls are stripped, leaving
+    # stop_clock an empty function (symbol-dce removes it later).
     assert "fir.call @_QPstop_clock" in ir

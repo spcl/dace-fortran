@@ -1,15 +1,9 @@
-"""Preprocessor (cpp) handling: the pipeline must run flang's preprocessor
-before emitting HLFIR and feed it the build's ``-D`` / ``-I`` flags.
+"""Preprocessor (cpp) handling: the pipeline must run flang's preprocessor before emitting
+HLFIR and feed it the build's -D / -I flags.
 
-Three routes, all exercised here:
-
-* **cmake** -- ``compile_commands.json`` records the compile as a
-  ``"command"`` string; ``-D`` / ``-I`` are parsed out of it.
-* **automake / bear** -- the same artefact records an ``"arguments"``
-  list instead; the parser handles both forms.
-* **no build system** -- ``build_sdfg(..., defines=[...])`` passes the
-  cpp config explicitly (and the source's ``#ifdef`` branch is selected
-  accordingly, proving cpp ran before HLFIR emission).
+Three routes: cmake (compile_commands.json "command" string), automake/bear (same artefact,
+"arguments" list instead), and no build system (build_sdfg(..., defines=[...]) passes cpp
+config explicitly; the source's #ifdef branch selection proves cpp ran before HLFIR emission).
 """
 import json
 from pathlib import Path

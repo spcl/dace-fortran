@@ -1,29 +1,13 @@
-"""End-to-end tests for the CloudSC physics loopnests extracted in
-the Vectra paper artifacts.  Five kernels:
+"""End-to-end tests for CloudSC physics loopnests (Vectra paper artifacts):
+autoconversion_snow, ice_supersaturation_adjustment, lu_solver_microphysics,
+rain_evaporation_abel_boutle, compute_saturation_values.
 
-* ``autoconversion_snow``
-* ``ice_supersaturation_adjustment``
-* ``lu_solver_microphysics``
-* ``rain_evaporation_abel_boutle``
-* ``compute_saturation_values``
+Each kernel: ``..._builds`` (bridge parses -> valid SDFG) and ``..._numerical``
+(matches gfortran/f2py reference at KLON=KLEV=32, NCLV=5, seeded RNG inputs).
 
-Each kernel ships two checks:
-
-* ``..._builds``  --  the bridge parses the kernel and produces a valid
-  SDFG.  Always asserted; this is the user's primary contract.
-* ``..._numerical``  --  the SDFG output matches a gfortran/f2py reference
-  at small-sweep sizes (``KLON = nproma = 32``, ``KLEV = nlev = 32``,
-  ``NCLV = 5`` for microphysics species).  Inputs come from a seeded
-  RNG with values inside physically-sensible ranges; integer indices
-  used for indirect access (``NCLDQ*``) stay within their declared
-  bounds.
-
-Sources read from the ``cloudsc_*.f90`` siblings in the artifacts dir  --
-those are the canonical clean variants (no ``BIND(C)``, no
-``ISO_C_BINDING``, no leftover ``SYSTEM_CLOCK`` calls), which both
-the bridge and ``f2py`` can consume directly without preprocessing.
-
-Skips cleanly when the artifacts directory is missing.
+Sources are the clean cloudsc_*.f90 variants (no BIND(C)/ISO_C_BINDING/
+SYSTEM_CLOCK) that both the bridge and f2py consume directly. Skips if the
+artifacts dir is missing.
 """
 
 from pathlib import Path
@@ -39,16 +23,11 @@ _LOOPNESTS_DIR = Path(__file__).parent
 
 
 def _kernel_source(name: str) -> str:
-    """Read one of the CloudSC kernel sources committed in-tree
-    alongside this test.  ``name`` is the file's basename without
-    the ``cloudsc_`` prefix (e.g. ``autoconversion_snow``).
+    """Read a CloudSC kernel source (name = file basename minus 'cloudsc_' prefix).
 
-    The files were copied from the Vectra paper artifacts
-    (``data_must_flow_artifacts/cloudsc_loopnests/``) and patched
-    in place to:
-      * normalise ``IF (laericeauto)`` (the source declares
-        ``laericeauto`` as ``INTEGER(KIND=4)``, so flang rejects the
-        bare-LOGICAL guard) -> ``IF (laericeauto /= 0)``.
+    Copied from the Vectra paper artifacts and patched: normalised
+    ``IF (laericeauto)`` -> ``IF (laericeauto /= 0)`` since flang rejects a
+    bare-LOGICAL guard on an INTEGER(KIND=4) declared var.
     """
     src = _LOOPNESTS_DIR / f"cloudsc_{name}.f90"
     if not src.is_file():
@@ -62,14 +41,12 @@ def _build(src: str, tmp: Path, *, name: str, entry: str | None = None):
     return build_sdfg(src, sdfg_dir, name=name, entry=entry).build()
 
 
-# Sweep sizes  --  small enough to keep individual tests under a few
-# seconds, large enough that single-iter loop corner-cases don't mask
-# vectorisation / unrolling bugs.
+# sweep sizes: small enough for speed, large enough to avoid masking vectorisation/unrolling bugs
 KLON = 32
 KLEV = 32
 NBLKS = 5
 
-# CloudSC microphysics species count and named indices into [1..NCLV].
+# microphysics species count + named indices into [1..NCLV]
 NCLV = 5
 NCLDQV = 1
 NCLDQL = 2
@@ -96,9 +73,8 @@ def test_cloudsc_autoconversion_snow_numerical(tmp_path: Path):
     ZTP1 = np.asfortranarray(rng.uniform(220.0, 300.0, KLON))
     ZICECLD = np.asfortranarray(rng.uniform(0.0, 1e-3, KLON))
     PNICE = np.asfortranarray(rng.uniform(1e3, 1e5, KLON))
-    # Shape ZSOLQB as ``(KLON, NCLV, NCLV)`` so f2py auto-infers ``klon`` and
-    # ``nclv`` from ``shape(zsolqb)``.  ``ncldqs`` and ``ncldqi`` are runtime
-    # INDICES into that dim, not the bounds -- passed as keyword args.
+    # ZSOLQB shaped (KLON, NCLV, NCLV) so f2py infers klon/nclv from shape;
+    # ncldqs/ncldqi are runtime indices into that dim, not bounds.
     ZSOLQB = np.asfortranarray(np.zeros((KLON, NCLV, NCLV)))
 
     consts = dict(rtt=273.16,
@@ -112,9 +88,8 @@ def test_cloudsc_autoconversion_snow_numerical(tmp_path: Path):
 
     mod = f2py_compile(src, tmp_path / "ref", "autoconv_snow_ref")
     ZSOLQB_ref = ZSOLQB.copy(order="F")
-    # f2py signature: ``zsnowaut = autoconversion_snow(kidia, kfdia,
-    # ztp1, zicecld, pnice, zsolqb, rtt, ..., laericeauto, ncldqs, ncldqi)``;
-    # ``klon / nclv`` are inferred from array shapes.
+    # f2py positional sig: (kidia, kfdia, ztp1, zicecld, pnice, zsolqb, rtt,
+    # ..., laericeauto, ncldqs, ncldqi); klon/nclv inferred from array shapes.
     ZSNOWAUT_ref = mod.autoconversion_snow(1, KLON, ZTP1, ZICECLD, PNICE, ZSOLQB_ref, consts["rtt"],
                                            consts["rlcritsnow"], consts["rsnowlin1"], consts["rsnowlin2"],
                                            consts["rnice"], consts["ptsphy"], consts["zepsec"], consts["laericeauto"],
@@ -170,9 +145,9 @@ def test_cloudsc_ice_supersaturation_adjustment_numerical(tmp_path: Path):
     ZSOLQA_ref = ZSOLQA.copy(order="F")
     ZSOLAC_ref = ZSOLAC.copy(order="F")
     ZQXFG_ref = ZQXFG.copy(order="F")
-    # f2py: (kidia, kfdia, ztp1, za, zqx_ncldqv, zqsice, zcorqsice,
-    #        zfokoop, zsolqa, zsolac, zqxfg, rtt, ramin, rthomo, nssopt,
-    #        rkooptau, ptsphy, zepsec, ncldql, ncldqi, ncldqv, [klon, nclv])
+    # f2py: (kidia, kfdia, ztp1, za, zqx_ncldqv, zqsice, zcorqsice, zfokoop,
+    # zsolqa, zsolac, zqxfg, rtt, ramin, rthomo, nssopt, rkooptau, ptsphy,
+    # zepsec, ncldql, ncldqi, ncldqv, [klon, nclv])
     mod.ice_supersaturation_adjustment(1, KLON, ZTP1, ZA, ZQX_NCLDQV, ZQSICE, ZCORQSICE, ZFOKOOP, ZSOLQA_ref,
                                        ZSOLAC_ref, ZQXFG_ref, consts["rtt"], consts["ramin"], consts["rthomo"],
                                        consts["nssopt"], consts["rkooptau"], consts["ptsphy"], consts["zepsec"], NCLDQL,
@@ -220,8 +195,7 @@ def test_cloudsc_lu_solver_numerical(tmp_path: Path):
     src = _kernel_source("lu_solver")
     rng = np.random.default_rng(44)
 
-    # Diagonally-dominant random (NCLV x NCLV) per-column matrices  --
-    # guarantees no pivoting needed and no near-singular columns.
+    # diagonally-dominant per-column (NCLV x NCLV) matrices -- no pivoting needed, no near-singular columns.
     ZQLHS = np.zeros((KLON, NCLV, NCLV), order="F")
     for jl in range(KLON):
         m = rng.uniform(-0.1, 0.1, (NCLV, NCLV))
@@ -298,8 +272,7 @@ def test_cloudsc_rain_evaporation_numerical(tmp_path: Path):
     ZQXFG_ref = ZQXFG_NCLDQR.copy(order="F")
     ZCOVPTOT_ref = ZCOVPTOT.copy(order="F")
     ZCOVPCLR_ref = ZCOVPCLR.copy(order="F")
-    # f2py: zevap_out = rain_evap(...).  ``klon`` and ``nclv`` are
-    # inferred from arrays.  ``ZEVAP_OUT`` is intent(out) -> return.
+    # f2py: zevap_out = rain_evap(...); klon/nclv inferred from arrays; ZEVAP_OUT is intent(out) -> return.
     ZEVAP_OUT_ref = mod.rain_evaporation_abel_boutle(
         1, KLON, ZTP1, ZQX_NCLDQV, ZA, ZQSLIQ, ZQXFG_ref, ZCOVPTOT_ref, ZCOVPCLR_ref, ZCOVPMAX, ZRHO, PAP, ZSOLQA_ref,
         consts["rtt"], consts["rv"], consts["rd"], consts["rprecrhmax"], consts["rcovpmin"], consts["rdensref"],

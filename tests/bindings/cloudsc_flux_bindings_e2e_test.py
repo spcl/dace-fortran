@@ -1,19 +1,12 @@
-"""End-to-end test of the GENERATED ``<entry>_bindings.f90`` module on
-a CLOUDSC-representative flat kernel.
+"""E2E test of the generated <entry>_bindings.f90 on a CLOUDSC-representative flat kernel.
 
-The numerical e2e tests (``cloudsc_full`` / ``velocity_full``) call
-the SDFG through DaCe's flat Python ABI and never exercise the
-emitted Fortran binding module.  This test closes that gap for the
-flat-argument case: it runs ``emit_bindings`` for the
-loop-carried flux kernel, gfortran-compiles the generated
-``cloudscouter_dace`` wrapper, links it against the SDFG ``.so``,
-calls it through its Fortran interface, and asserts the result
-equals a plain-gfortran reference of the same kernel.
+Numeric e2e tests (cloudsc_full / velocity_full) call the SDFG through DaCe's flat Python
+ABI and never exercise the emitted Fortran binding module. This closes that gap: it emits,
+gfortran-compiles and links the cloudscouter_dace wrapper against the SDFG .so, calls it
+through its Fortran interface, and compares to a plain-gfortran reference.
 
-Flat scalars + explicit-shape arrays only (no derived types), so the
-``OriginalInterface`` is the kernel's literal dummy list -- the
-binding emitter's symbol-population path (``size`` / ``lbound`` into
-the SDFG free symbols) is what's under test here.
+Flat scalars + explicit-shape arrays only (no derived types), so this pins the binding
+emitter's symbol-population path (size/lbound into SDFG free symbols).
 """
 
 import ctypes
@@ -38,10 +31,8 @@ pytestmark = [
     pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
 ]
 
-# Same loop-carried flux recurrence as cloudsc_flux_recurrence_repro,
-# the cloudsc.F90 Section-8 shape: PFSQLF(JK+1)=PFSQLF(JK) then
-# accumulate, cross-array PFSQRF<-PFSQLF(JK), inlined-callee
-# INTENT(OUT) section slice through a block wrapper.
+# Loop-carried flux recurrence from cloudsc.F90 Section-8 (see cloudsc_flux_recurrence_repro):
+# PFSQLF(JK+1)=PFSQLF(JK) then accumulate; cross-array PFSQRF<-PFSQLF(JK).
 _KERNEL_SRC = """
 module cloudsc_mod
 contains
@@ -85,9 +76,8 @@ end subroutine cloudscouter
 end module cloudsc_mod
 """
 
-# C-callable driver that calls the GENERATED binding wrapper
-# ``cloudscouter_dace`` (defeats f2py via the SDFG handle state, so
-# bind(c) + ctypes).  klon/klev/nblocks are passed by value.
+# C-callable driver for the generated cloudscouter_dace wrapper (bind(c)+ctypes -- f2py can't
+# handle the SDFG handle state). klon/klev/nblocks passed by value.
 _SDFG_DRIVER = """
 subroutine run_flux(klon, klev, nblocks, paph, za, zb, lf, rf) &
     bind(c, name='run_flux')
@@ -174,18 +164,15 @@ _IFACE = OriginalInterface(
 
 
 def test_cloudsc_flux_f90_bindings_e2e(tmp_path: Path):
-    """The generated ``cloudscouter_dace`` Fortran binding, linked
-    against the SDFG ``.so``, must produce the same flux arrays as a
-    plain-gfortran reference of the same kernel."""
+    """Generated cloudscouter_dace binding, linked against the SDFG .so, matches a plain-gfortran reference."""
     # --- SDFG-via-binding library ---
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     builder = build_sdfg(_KERNEL_SRC, sdfg_dir, name="cloudsc", entry="cloudsc_mod::cloudscouter")
     plan = FlattenPlan.from_dict(builder.module.get_flatten_plan())
     sdfg = builder.build()
-    # The generated binding references ``__dace_{init,exit}_<iface.entry>``;
-    # rename the SDFG so its exported handle symbols match (the test
-    # builder otherwise hash-suffixes the name for xdist isolation).
+    # Binding references __dace_{init,exit}_<iface.entry>; rename so exported handle symbols
+    # match (test builder otherwise hash-suffixes the name for xdist isolation).
     sdfg.name = "cloudscouter"
     compiled = sdfg.compile()
     so_path = Path(compiled._lib._library_filename)

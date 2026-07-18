@@ -60,9 +60,8 @@ def test_select_case_all_shapes(tmp_path, x, expected):
     mod = _f2py(_SRC_PATH, tmp_path / "ref", "sel_all_ref")
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
-    # lift-cf-to-scf refuses to walk past fir.select_case ("terminator with
-    # side effects"), so stick to the minimal pipeline  --  buildSelectCaseChain
-    # consumes the op directly without needing CFG lifting.
+    # lift-cf-to-scf refuses to walk past fir.select_case ("terminator with side effects"), so
+    # use the minimal pipeline -- buildSelectCaseChain consumes the op directly, no CFG lifting needed.
     sdfg = build_sdfg(_SRC_PATH.read_text(), sdfg_dir, name="sel_all", pipeline="hlfir-propagate-shapes").build()
     sdfg.validate()
 

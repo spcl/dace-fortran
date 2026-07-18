@@ -1,17 +1,9 @@
 """N-dim AoS gather + static value-member marshalling (binding gate #12d).
 
-``_render_aos_copy_in`` / ``_render_aos_copy_out`` flatten a derived-type
-component reached over an N-D record array into a Struct-of-Arrays buffer.
-ICON-O ``veloc_adv_horz_mimetic_rot`` reads ``p_diag % p_vn_dual(:,:,:) % x``
-where ``p_vn_dual`` is a rank-3 POINTER array of ``t_cartesian_coordinates``
-and ``x(3)`` is a fixed-shape VALUE member -- so the wrapper must (a) index the
-record array with all THREE element indices (not one) and allocate the rank-4
-companion at full rank, and (b) treat ``x`` as always-present with literal
-extents (no ``allocated``/``associated`` guard, no per-element cap scan).
-
-These are text-only checks on the emitted Fortran (no flang/gfortran), so they
-run anywhere.  The 1-D allocatable case (QE ``becxx(:)%k``) is asserted
-unchanged as a regression guard for the generalisation.
+``_render_aos_copy_in``/``_render_aos_copy_out`` flatten a derived-type component
+over an N-D record array into SoA; for a fixed-shape VALUE member (e.g. ICON-O's
+``p_vn_dual(:,:,:)%x``) all record indices are used and no presence guard is
+emitted. Text-only checks on emitted Fortran -- no flang/gfortran needed.
 """
 from dace_fortran.bindings.block_builders import _render_aos_copy_in, _render_aos_copy_out
 from dace_fortran.bindings.frozen_signature import FrozenArg
@@ -71,9 +63,8 @@ def test_ndim_cartesian_copy_in_indexes_all_outer_dims():
 
 
 def test_static_value_member_emits_no_presence_guard():
-    """``x(3)`` is a fixed-shape value member: no ``allocated``/``associated``
-    guard on it and no per-element cap-max scan -- only the struct-present
-    (``associated``) guard remains."""
+    """``x(3)`` is fixed-shape: no allocated/associated guard or cap-max scan on
+    it, only the struct-present (``associated``) guard remains."""
     src = "\n".join(_render_aos_copy_in(_cartesian_member_arg()))
     assert "allocated(p_diag % p_vn_dual(" not in src  # member is not allocatable
     assert "aos_p_diag_p_vn_dual_x_c0" not in src  # no cap-max scan var
@@ -90,9 +81,8 @@ def test_static_value_member_copy_out_scatters_all_dims():
 
 
 def test_1d_allocatable_member_unchanged():
-    """Regression guard: the QE ``becxx(:)%k`` 1-D allocatable path keeps its
-    single element loop, per-element cap-max scan, and member ``allocated``
-    guard after the N-dim generalisation."""
+    """Regression: QE ``becxx(:)%k`` 1-D allocatable path keeps its single element
+    loop, cap-max scan, and member ``allocated`` guard after the N-dim generalisation."""
     src = "\n".join(_render_aos_copy_in(_becxx_member_arg()))
     assert "do aos_becxx_k_i0 = 1, size(becxx, 1)" in src
     assert "allocated(becxx(aos_becxx_k_i0)%k)" in src  # allocatable member guard

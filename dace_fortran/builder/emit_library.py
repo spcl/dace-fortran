@@ -1,13 +1,6 @@
-"""Library-node + terminator emissions.
-
-These are the shortest per-kind emitters: each one stamps a single DaCe
-library node (CopyLibraryNode / MemsetLibraryNode / MatMul / Transpose /
-Dot / Reduce) or control-flow terminator (BreakBlock / ReturnBlock) and
-wires its memlets.
-
-All share the same shape: flush pending scalars, ensure a state, add the
-node, attach edges.  Kept together because they're structurally cousins
-and none is big enough to earn its own file.
+"""Library-node + terminator emitters (CopyLibraryNode/MemsetLibraryNode/MatMul/Transpose/Dot/Reduce
+library nodes; BreakBlock/ReturnBlock terminators). Shared shape: flush pending scalars, ensure a
+state, add the node, attach edges -- too small individually to earn their own file.
 """
 
 import importlib
@@ -19,37 +12,24 @@ from dace import InterstateEdge, Memlet
 
 from dace_fortran.builder.access import acc, iter_view_dim_map
 
-# When a Fortran kernel passes a runtime user communicator to MPI calls,
-# :func:`emit_mpi` installs a :class:`FortranProcessGrid` on the SDFG --
-# its ``init_code`` builds an ``MPI_Cart_create``-cartesian sub-comm out
-# of the user's MPI_Comm at ``__dace_init`` time.  The pgrid + the
-# symbols that drive it live under fixed names so the bindings layer
-# and downstream tests can find them without grepping ``sdfg.symbols``.
+# emit_mpi installs a FortranProcessGrid (MPI_Cart_create sub-comm, built in init_code at
+# __dace_init time) under these fixed names so the bindings layer + tests can find them
+# without grepping sdfg.symbols.
 _USER_COMM_SYMBOL = "dace_user_comm"  # opaque(MPI_Comm) symbol -- f2c result from the wrapper
 _USER_COMM_SIZE_SYMBOL = "dace_user_comm_size"  # int -- MPI_Comm_size(dace_user_comm), 1-D pgrid extent
 _USER_PGRID_NAME = "dace_user_pgrid"  # FortranProcessGrid descriptor name
 
-# Per-library-node connector conventions.  Kept here rather than on
-# ``LibNodeIntrinsic`` because the names are a property of the DaCe
-# library node, not of the Fortran intrinsic.  Each entry maps a
-# bridge-side ``LibNodeIntrinsic`` callee tag to ``(input_conns, output_conn)``;
-# library nodes with their own dedicated emitters (CopyLibraryNode,
-# MemsetLibraryNode, MergeLibraryNode, CountLibraryNode) bypass this
-# generic dispatch table and live in the per-emitter functions below.
+# callee tag -> (input_conns, output_conn); Copy/Memset/Merge/Count libnodes have dedicated
+# emitters and bypass this table.
 _LIBCALL_CONNECTORS = {
     "MatMul": (("_a", "_b"), "_c"),
     "Dot": (("_x", "_y"), "_result"),
     "Transpose": (("_inp", ), "_out"),
-    # Must mirror the node classes' *_CONNECTOR_NAME constants
-    # (MergeLibraryNode.TRUE/FALSE/MASK/OUTPUT_CONNECTOR_NAME,
-    # CountLibraryNode.INPUT/OUTPUT_CONNECTOR_NAME) -- restyled to the
-    # ``copy_node`` / ``memset_node`` prefixed-constant convention.
+    # names must mirror MergeLibraryNode/CountLibraryNode's *_CONNECTOR_NAME constants.
     "MergeLibraryNode": (("_mrg_t", "_mrg_f", "_mrg_mask"), "_mrg_out"),
     "CountLibraryNode": (("_cnt_in", ), "_cnt_out"),
-    # Fortran MINLOC / MAXLOC -> ``ArgMin`` / ``ArgMax``.  Optional
-    # ``_mask`` connector is wired only when the source
-    # ``hlfir.minloc`` / ``hlfir.maxloc`` carries a mask operand;
-    # ``emit_libcall`` adds it after the mandatory ``_x``.
+    # MINLOC/MAXLOC -> ArgMin/ArgMax; optional _mask connector added by emit_libcall when the
+    # source hlfir op carries a mask operand.
     "ArgMin": (("_x", ), "_idx"),
     "ArgMax": (("_x", ), "_idx"),
     # Fortran CSHIFT / EOSHIFT -- single-array input + shift-via-symbol output.
@@ -61,11 +41,8 @@ _LIBCALL_CONNECTORS = {
     "Broadcast": (("_src", ), "_dst"),
 }
 
-# SDFG dtype -> C scalar type for ``extern "C"`` declarations on
-# Fortran module BSS symbols forwarded via
-# ``ExternalSignature.module_symbol_forward``.  Mirrors the
-# bind_c_shim's ``_MOD_FORWARD_SCALAR_FTYPE`` so the two ABIs match
-# byte-for-byte.
+# SDFG dtype -> C scalar type for extern "C" BSS decls (ExternalSignature.module_symbol_forward).
+# Must mirror bind_c_shim's _MOD_FORWARD_SCALAR_FTYPE byte-for-byte.
 _MOD_FORWARD_CTYPE = {
     "int32": "int",
     "int64": "long long",
@@ -76,12 +53,8 @@ _MOD_FORWARD_CTYPE = {
 
 
 def _sym2c(s) -> str:
-    """Render a symbolic shape entry as a C expression suitable for an
-    ``(int)(...)`` cast inside an external-call body.
-
-    The expression is evaluated in the surrounding kernel scope where
-    every SDFG symbol is in scope; ``sym2cpp`` honours the connector /
-    free-symbol naming the C++ tasklet expects."""
+    """Render a symbolic shape entry as a C expression for an ``(int)(...)`` cast in an
+    external-call body."""
     from dace.codegen.common import sym2cpp
     return sym2cpp(s)
 
@@ -101,24 +74,9 @@ def _shape_is_symbolic(shape) -> bool:
 
 
 def _parse_reduce_identity(s: str):
-    """Resolve a reduce-accumulator-identity string to its Python value.
-
-    Replaces a prior ``eval`` (flagged as a code smell; its globals were
-    hand-patched with ``inf=math.inf``).  Rather than a closed whitelist
-    -- brittle if a new reduction emits a different literal -- this
-    parses the literal forms the two producers can emit and any plain
-    numeric: the bridge ``kRedTable`` (``bridge/ast/dispatch.cpp``:
-    ``0``/``1``/``inf``/``-inf``/``False``/``True``; bare ``inf`` so the
-    section-reduce path's cppunparse maps it to ``INFINITY``) and the
-    Python ``REDUCTIONS`` registry (``math.inf`` / ``-math.inf``), plus
-    any future int/float identity (``0.0``, ``1.0``, ...).  Unknown
-    non-numeric tokens (e.g. a symbolic ``huge(x)``) raise loudly rather
-    than silently mis-reducing.
-
-    :param s: the identity string carried on the reduce ASTNode.
-    :returns: ``bool`` / ``int`` / ``float`` accumulator identity.
-    :raises NotImplementedError: on an unrecognised non-numeric token.
-    """
+    """Resolve a reduce-accumulator-identity string (from the bridge's kRedTable or the Python
+    REDUCTIONS registry) to its Python value. Raises on an unrecognised non-numeric token rather
+    than silently mis-reducing."""
     named = {
         'True': True,
         'False': False,
@@ -140,10 +98,8 @@ def _parse_reduce_identity(s: str):
 
 
 def emit_copy(builder, ctx, n, region):
-    """Whole-array ``b = a`` -> ``CopyLibraryNode``, with memlets covering
-    the full source / destination arrays.  Connector names come from the
-    node class (``_cpy_in`` / ``_cpy_out`` in the current libnode) so this
-    stays correct if the libnode renames them."""
+    """Whole-array ``b = a`` -> ``CopyLibraryNode``. Connector names come from the node class
+    so this stays correct across libnode renames."""
     from dace.libraries.standard.nodes import CopyLibraryNode
     state = ctx.flush_and_ensure(builder, region)
 
@@ -157,14 +113,9 @@ def emit_copy(builder, ctx, n, region):
 
     src_access = acc(builder, state, src_name)
     tgt_access = acc(builder, state, tgt_name)
-    # A Fortran whole-array assignment conforms, so source and destination
-    # hold the same number of elements per dim.  An allocatable's transient,
-    # however, carries its own ALLOCATE extent symbol (e.g. ``x_alloc1_d0``)
-    # distinct from the source's (``n``), and CopyLibraryNode's same-rank
-    # expansion can't prove the two symbolic shapes equal.  Drive the
-    # destination memlet off the SOURCE descriptor's shape when the two
-    # differ symbolically (same rank) so both subsets align; conformance
-    # guarantees the destination subset stays in bounds.
+    # An allocatable transient can carry its own symbolic ALLOCATE extent, distinct from the
+    # source's; drive the dest memlet off the source's shape when they differ (same rank) so
+    # both subsets align -- conformance keeps the dest subset in bounds.
     same_rank_diff_shape = (len(src_desc.shape) == len(tgt_desc.shape) and list(src_desc.shape) != list(tgt_desc.shape))
     tgt_memlet = (Memlet.from_array(tgt_name, src_desc) if same_rank_diff_shape else Memlet.from_array(
         tgt_name, tgt_desc))
@@ -173,18 +124,14 @@ def emit_copy(builder, ctx, n, region):
 
 
 def emit_memset(builder, ctx, n, region):
-    """Scalar-zero -> array fill -> ``MemsetLibraryNode`` with a single
-    output memlet covering the destination.  The memset transitions
-    to a fresh successor state so any later element write to the same
-    array lands in a new state (and on a new access node) instead of
-    racing with the array-wide write inside one state's DAG."""
+    """Scalar-zero fill -> ``MemsetLibraryNode``. Transitions to a fresh successor state so a
+    later element write to the same array doesn't race the array-wide write in one state's DAG."""
     from dace.libraries.standard.nodes import MemsetLibraryNode
     state = ctx.flush_and_ensure(builder, region)
 
     tgt_name = n.target
-    # Section-alias dummies route memset through the source array,
-    # writing to the slab carved out by view_dim_map (surviving dims =
-    # full range, scalar dims = point index).
+    # Section-alias dummies route memset through the source array, writing the slab
+    # view_dim_map carves out.
     v_tgt = builder.arrays.get(tgt_name)
     if v_tgt is not None and getattr(v_tgt, 'role', '') == 'section_alias':
         src_name = v_tgt.view_source
@@ -211,12 +158,8 @@ def emit_memset(builder, ctx, n, region):
 
     from dace.data import View
     if isinstance(tgt_desc, View):
-        # Whole-array zero of a View (e.g. the complex-component alias ``qg = 0``,
-        # which zeros both re/im symmetrically -- no mask needed).  A View write
-        # needs the view -> source direction, NOT ``acc``'s source -> view read
-        # link, so use a fresh write node + ``_ensure_view_writeback_link`` (the
-        # same RMW-write wiring tasklets use).  Memset zeroes the storage span,
-        # which the link maps to the aliased source slab.
+        # View write needs the view -> source direction, not acc's source -> view read link;
+        # use a fresh write node + _ensure_view_writeback_link (same as tasklet RMW writes).
         from dace_fortran.builder.emit_tasklet import _ensure_view_writeback_link
         view_node = state.add_access(tgt_name)
         state.add_edge(ms, MemsetLibraryNode.OUTPUT_CONNECTOR_NAME, view_node, None,
@@ -228,34 +171,21 @@ def emit_memset(builder, ctx, n, region):
     tgt_access = acc(builder, state, tgt_name)
     state.add_edge(ms, MemsetLibraryNode.OUTPUT_CONNECTOR_NAME, tgt_access, None, Memlet.from_array(tgt_name, tgt_desc))
 
-    # Force a state break so a subsequent element write doesn't share
-    # the memset's access node.  Two incoming memlets on one access
-    # node race in DaCe's dataflow DAG.
+    # Force a state break: two incoming memlets on one access node race in DaCe's dataflow DAG.
     ctx.new_state(builder, region)
 
 
 def emit_libcall(builder, ctx, n, region):
-    """``target = matmul(a, b)`` / ``transpose(a)`` / ``dot_product(x, y)``
-    lowered to the matching DaCe library node.  ``MatMul`` specializes
-    internally (GEMM / GEMV / Dot) based on operand ranks.
-    """
+    """``target = matmul(a, b)`` / ``transpose(a)`` / ``dot_product(x, y)`` -> matching DaCe
+    library node. ``MatMul`` specializes to GEMM/GEMV/Dot by operand rank."""
     from dace_fortran.intrinsics import libnode_spec
     import dace.dtypes as dtypes
 
     state = ctx.flush_and_ensure(builder, region)
 
-    # ``hlfir.matmul_transpose`` -- ``C = MATMUL(TRANSPOSE(A), B)``.
-    # Emit a single ``MatMul`` with ``transA=True``; the transpose
-    # folds into the BLAS call (``cblas_dgemm(CblasTrans, ...)`` for
-    # MKL / OpenBLAS, ``cublasDgemm`` with ``CUBLAS_OP_T`` for cuBLAS,
-    # and the pure expansion swaps the per-element index pair).  No
-    # transient copy of ``A^T`` is allocated -- the previous emitter
-    # path's transpose-into-transient-then-matmul cost is gone.
-    # ``transB`` is the symmetric case (``MATMUL(A, TRANSPOSE(B))``)
-    # and uses the same path; the bridge fronts only the ``A``-side
-    # case today because Flang's ``hlfir.matmul_transpose`` op covers
-    # the A-side shape, but the option lives on the node for future
-    # B-side detection.
+    # hlfir.matmul_transpose (C = MATMUL(TRANSPOSE(A), B)) -> MatMul(transA=True); transpose
+    # folds into the BLAS call, no A^T transient. transB is the symmetric case; the node
+    # supports it but the bridge only emits A-side today (Flang's op covers only that shape).
     if n.callee == "matmul_transpose":
         from types import SimpleNamespace
         if len(n.call_args) != 2:
@@ -283,29 +213,19 @@ def emit_libcall(builder, ctx, n, region):
     cls = getattr(mod, spec.node_cls)
     in_conns, out_conn = _LIBCALL_CONNECTORS[spec.node_cls]
 
-    # ``Transpose`` needs an explicit ``dtype`` so its expansion can
-    # produce the right element type; ``CountLibraryNode`` consumes its
-    # Fortran-1-based ``dim`` from ``reduce_axes`` (set by the bridge's
-    # ``buildLibCallNode`` when the source ``hlfir.count`` carries a dim
-    # operand); every other library node picks types up from the
-    # attached memlets.
+    # Transpose needs an explicit dtype for its expansion; CountLibraryNode wants Fortran
+    # 1-based dim from reduce_axes; other libnodes infer types from the attached memlets.
     tgt_desc = ctx.sdfg.arrays[n.target]
     has_mask = False
     if spec.node_cls == "Transpose":
         node = cls(f"{spec.name}_{n.target}_{builder.nid()}", dtype=tgt_desc.dtype)
     elif spec.node_cls == "CountLibraryNode":
-        # Bridge stores the (0-based) reduce axis the same way it does
-        # for whole-array vs per-dim Reduce nodes.  CountLibraryNode's
-        # constructor wants Fortran 1-based, so convert back.
+        # reduce_axes is 0-based; CountLibraryNode's constructor wants Fortran 1-based.
         dim = (n.reduce_axes[0] + 1) if n.reduce_axes else -1
         node = cls(f"{spec.name}_{n.target}_{builder.nid()}", dim=dim)
     elif spec.node_cls in ("ArgMin", "ArgMax"):
-        # ``MINLOC`` / ``MAXLOC`` -- pull dim / back from the bridge
-        # ASTNode.  The bridge stores ``dim`` 0-based in
-        # ``reduce_axes`` (mirroring the Reduce path); ``back`` lives
-        # in ``options`` (set by ``buildLibCallNode``'s minloc/maxloc
-        # operand walker).  A mask= argument is signalled by an extra
-        # ``call_args`` entry past the first ``_x`` source.
+        # dim 0-based in reduce_axes (mirrors the Reduce path); back in options; mask=
+        # signalled by an extra call_args entry past the first _x source.
         dim = (n.reduce_axes[0] + 1) if n.reduce_axes else None
         back = bool((getattr(n, 'options', None) or {}).get('back', False))
         has_mask = len(n.call_args) > 1
@@ -317,14 +237,9 @@ def emit_libcall(builder, ctx, n, region):
             mask=has_mask,
         )
     elif spec.node_cls in ("CShift", "EOShift"):
-        # Fortran CSHIFT / EOSHIFT -- bridge stores the shift (and
-        # optional boundary, for EOSHIFT) expressions in
-        # ``options['shift']`` / ``options['boundary']`` as Python-
-        # compatible strings; the optional axis lives in
-        # ``reduce_axes`` 0-based.  Symbol-promotion for the shift
-        # expression's free symbols runs after node creation so a
-        # Fortran scalar INTENT(IN) arg the libcall references gets
-        # an SDFG-level symbol.
+        # shift/boundary exprs in options['shift']/['boundary'] (Python-compatible strings);
+        # axis 0-based in reduce_axes. Free symbols in shift get promoted to SDFG symbols
+        # after node creation.
         opts = getattr(n, 'options', None) or {}
         shift_expr = opts.get('shift', None)
         boundary_expr = opts.get('boundary', None)
@@ -335,12 +250,9 @@ def emit_libcall(builder, ctx, n, region):
             node = cls(f"{spec.name}_{n.target}_{builder.nid()}", dim=dim, shift=shift)
         else:
             node = cls(f"{spec.name}_{n.target}_{builder.nid()}", dim=dim, shift=shift, boundary=boundary)
-        # Promote every free symbol the shift expression depends on
-        # to an SDFG-level symbol -- the scalar-INTENT(IN) Fortran
-        # arg might otherwise land as a Scalar array (e.g. when it
-        # has no other memlet / tasklet use) and the lib node's
-        # symbolic-property reference would not match up at arglist
-        # time.
+        # Promote shift's free symbols to SDFG symbols: otherwise a scalar INTENT(IN) arg may
+        # land as a Scalar array and the libnode's symbolic-property reference won't match at
+        # arglist time.
         import dace.dtypes as dtypes
         if shift is not None:
             for sym in shift.free_symbols:
@@ -359,30 +271,19 @@ def emit_libcall(builder, ctx, n, region):
                 else:
                     ctx.sdfg.add_symbol(name, dtypes.int64)
     elif spec.node_cls == "Norm2":
-        # Fortran NORM2 -- optional 1-based dim from reduce_axes (empty
-        # for whole-array scalar).
+        # optional 1-based dim from reduce_axes (empty = whole-array scalar).
         dim = (n.reduce_axes[0] + 1) if n.reduce_axes else None
         node = cls(f"{spec.name}_{n.target}_{builder.nid()}", dim=dim)
     elif spec.node_cls == "Broadcast":
-        # Fortran SPREAD -- bridge stores the inserted axis (Fortran
-        # 1-based) in ``reduce_axes[0]`` (0-based).
+        # SPREAD's inserted axis: bridge stores it 0-based in reduce_axes[0].
         dim = (n.reduce_axes[0] + 1) if n.reduce_axes else 1
         node = cls(f"{spec.name}_{n.target}_{builder.nid()}", dim=dim)
     elif spec.node_cls == "MatMul":
-        # Fortran ``MATMUL(TRANSPOSE(A), B)`` lowers via
-        # ``hlfir.matmul_transpose`` which the libcall pre-pass
-        # rewrites to ``callee="matmul"`` + ``options["transA"]=True``;
-        # plumb the flag onto the node so ``SpecializeMatMul`` passes
-        # it through to ``Gemm(transA=True)`` and the BLAS call does
-        # the transpose in-place.
-        #
-        # Configure ``transA`` / ``transB`` as the node's declared Properties
-        # AFTER a plain ``MatMul(name)`` construction -- NOT as ``__init__``
-        # keyword arguments.  The DaCe ``MatMul`` ABI varies (some builds expose
-        # only ``MatMul(name, location=...)``), so passing ``transA=`` raises
-        # ``MatMul.__init__() got an unexpected keyword argument 'transA'``.
-        # Assigning a declared Property is the ABI-stable, DaCe-compatible way;
-        # the connectors stay the canonical ``_a`` / ``_b`` / ``_c``.
+        # transA comes from the matmul_transpose pre-pass (hlfir.matmul_transpose ->
+        # callee="matmul", options["transA"]=True), plumbed so SpecializeMatMul emits
+        # Gemm(transA=True).
+        # Must set transA/transB as Properties AFTER construction, not __init__ kwargs --
+        # DaCe's MatMul ABI varies across builds and some reject transA= as a kwarg.
         opts = getattr(n, 'options', None) or {}
         tA = bool(opts.get('transA', False))
         tB = bool(opts.get('transB', False))
@@ -399,16 +300,12 @@ def emit_libcall(builder, ctx, n, region):
         node = cls(f"{spec.name}_{n.target}_{builder.nid()}")
     state.add_node(node)
 
-    # ``call_arg_subsets`` is parallel to ``call_args``; an empty entry =
-    # whole-array source, a non-empty entry = a DaCe-0-based subset like
-    # ``"0:3"`` for ``dot_product(arg1(1:3), arg2(1:3))``.  Older bridge
-    # builds may not populate the field; default to empty for each arg.
+    # call_arg_subsets parallels call_args: empty = whole array, else a DaCe-0-based subset
+    # (e.g. "0:3"). Older bridge builds may leave it unpopulated.
     arg_subsets = list(getattr(n, 'call_arg_subsets', None) or [])
     arg_subsets += [''] * (len(n.call_args) - len(arg_subsets))
-    # ArgMin / ArgMax with mask=True expose an extra ``_mask`` input
-    # connector that ``_LIBCALL_CONNECTORS`` does NOT list (because
-    # mask is optional).  Append it on the fly so the iteration below
-    # binds the bridge's second positional arg to ``_mask``.
+    # ArgMin/ArgMax mask=True adds a _mask input connector not listed in _LIBCALL_CONNECTORS
+    # (optional); append it here.
     effective_in_conns = list(in_conns)
     if has_mask and spec.node_cls in ("ArgMin", "ArgMax"):
         effective_in_conns.append("_mask")
@@ -420,11 +317,8 @@ def emit_libcall(builder, ctx, n, region):
             in_memlet = Memlet.from_array(src, src_desc)
         state.add_edge(acc(builder, state, src), None, node, conn, in_memlet)
 
-    # Element-designate destination (``res1(1) = dot_product(...)``):
-    # the bridge populates ``n.accesses[0]`` with the per-dim write
-    # index so the output memlet covers a single element instead of
-    # the whole array (which would fail validation for scalar-output
-    # libcalls like dot_product, count, ...).
+    # Element-designate dest (res1(1) = dot_product(...)): narrow the output memlet to one
+    # element -- a whole-array memlet would fail validation for scalar-output libcalls.
     write_acc = next((ac for ac in n.accesses if ac.is_write), None)
     if write_acc is not None:
         from dace_fortran.builder.access import build_memlet_index
@@ -436,28 +330,9 @@ def emit_libcall(builder, ctx, n, region):
 
 
 def _install_user_pgrid(ctx, comm_arg: str):
-    """Install the :class:`FortranProcessGrid` (+ its driving symbols)
-    on the SDFG if not already present, and remove the orphan Fortran
-    ``comm`` integer scalar from ``sdfg.arrays``.
-
-    After this call the SDFG has:
-      * symbol ``__user_comm`` of dtype ``opaque(MPI_Comm)`` -- the C
-        ``MPI_Comm`` passed by the bindings wrapper at ``__dace_init``.
-      * symbol ``__user_comm_size`` of dtype ``int64`` -- the
-        ``MPI_Comm_size`` of the user comm (used as the 1-D pgrid
-        extent).
-      * descriptor ``__user_pgrid`` (:class:`FortranProcessGrid`),
-        whose ``init_code`` runs ``MPI_Cart_create(__user_comm, 1,
-        [__user_comm_size], ...)``.
-
-    The bindings layer is responsible for populating both symbols from
-    ``MPI_Comm_f2c`` + ``MPI_Comm_size`` in the wrapper, and for
-    *omitting* the ``comm`` integer from the program call.
-
-    :param ctx: the build context (``ctx.sdfg`` is the target SDFG).
-    :param comm_arg: name of the Fortran ``integer`` ``comm`` dummy in
-        ``sdfg.arrays`` -- removed by this call.
-    """
+    """Install FortranProcessGrid (+ driving symbols __user_comm/__user_comm_size) on the SDFG
+    if absent, and drop the orphan Fortran comm scalar from sdfg.arrays. Bindings layer must
+    populate both symbols via MPI_Comm_f2c/MPI_Comm_size and omit comm from the program call."""
     import dace
     from dace_fortran.data import FortranProcessGrid
 

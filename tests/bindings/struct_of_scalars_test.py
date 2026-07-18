@@ -1,31 +1,7 @@
-"""End-to-end test for the DT-of-scalar-constants flattening pattern.
-
-The upstream cloudsc kernel bundles ~95 physical/control constants
-into three derived types (``TYPE(TOMCST) :: YDCST`` etc.) and unpacks
-them via ``ASSOCIATE`` at the top of the body.  Our local
-``cloudscexp2_simplified.F90`` does this unpacking manually -- the
-derived-type bundles are expanded into individual scalar arguments
-because the bridge couldn't handle ``YDCST%RG``-style scalar-member
-accesses on a derived-type dummy.
-
-This test pins the simplest version of that pattern: a kernel that
-takes one derived-type dummy whose members are plain scalars, and
-verifies the bridge correctly:
-
-  * Flattens the dummy into per-member scalar SDFG args via
-    ``hlfir-flatten-structs`` (verified by checking the FlattenPlan).
-  * Lowers the body's ``cst%rg`` reads to reads of the flat
-    ``cst_rg`` scalar.
-  * Produces a numerically-correct result vs an f2py reference of
-    the same source.
-
-If this test passes, the bridge is ready to consume the upstream
-cloudsc signature directly (``cloudsc.F90`` with its
-``YDCST/YDTHF/YDECLDP`` bundles) without manual flattening of the
-ASSOCIATE -- ``hlfir-flatten-structs`` handles it.
-
-E2e against an f2py-compiled reference of the same Fortran source.
-"""
+"""DT-of-scalar-constants flattening: a derived-type dummy with scalar members (cloudsc's
+YDCST/YDTHF/YDECLDP pattern) must flatten to per-member scalar SDFG args via hlfir-flatten-structs,
+with cst%rg reads lowered to the flat cst_rg scalar. Passing this means the bridge can consume
+upstream cloudsc's derived-type bundles directly, without manual ASSOCIATE flattening."""
 
 import numpy as np
 import pytest
@@ -65,11 +41,8 @@ end module kernel_dt_const_mod
 
 
 def test_dt_of_scalar_constants_flattens_per_member(tmp_path):
-    """``type(t_consts) :: cst`` with three scalar members must flatten
-    to three flat scalar SDFG args via ``hlfir-flatten-structs``.
-    Verifies the bridge's per-member ``FlattenEntry`` emission for
-    rank-0 (scalar) members produces the right shape and dtype, and
-    that the SDFG arglist has the expected flat names."""
+    """type(t_consts) with three scalar members flattens to three flat scalar SDFG args
+    (FlattenEntry shape/dtype + arglist names)."""
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     builder = build_sdfg(_SRC, sdfg_dir, name="kernel_dt_const", entry="kernel_dt_const_mod::kernel_dt_const")
@@ -95,18 +68,8 @@ def test_dt_of_scalar_constants_flattens_per_member(tmp_path):
 
 
 def test_dt_of_scalar_constants_numerical(tmp_path):
-    """End-to-end numerical check: bridge SDFG must produce
-    ``(rg/rcpd) * rd * i`` per element bit-for-bit.
-
-    Computes the reference directly in numpy with the same operation
-    order Fortran would: ``(cst%rg / cst%rcpd) * cst%rd * real(i)``
-    evaluates left-to-right per Fortran precedence.  f2py can't be
-    used here because the kernel dummy is ``type(t_consts)``, which
-    crackfortran maps to ``'void'`` and crashes on lookup -- a known
-    limitation we've worked around in other struct e2e tests by using
-    gfortran+ctypes, but for this trivial multiply-only kernel a
-    direct NumPy reference is the simpler comparison.
-    """
+    """Bridge SDFG must produce (rg/rcpd)*rd*i per element bit-for-bit. Reference is plain NumPy
+    (not f2py): f2py's crackfortran maps type(t_consts) dummies to 'void' and crashes on lookup."""
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(_SRC, sdfg_dir, name="kernel_dt_const", entry="kernel_dt_const_mod::kernel_dt_const").build()
@@ -121,8 +84,7 @@ def test_dt_of_scalar_constants_numerical(tmp_path):
     for i in range(1, n + 1):
         out_ref[i - 1] = (rg / rcpd) * rd * float(i)
 
-    # The bridge surfaces scalar struct members as length-1 Array(1,)
-    # rather than true Scalar; route accordingly.
+    # bridge surfaces scalar struct members as length-1 Array(1,) rather than Scalar; route accordingly.
     from dace.data import Scalar
     arglist = sdfg.arglist()
 

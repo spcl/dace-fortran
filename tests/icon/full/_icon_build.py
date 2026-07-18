@@ -1,32 +1,15 @@
 """Self-contained ICON build helper for the ICON-source/built tests.
 
-The ICON-integration tests (``test_velocity_from_icon_source``,
-``test_dycore_from_icon_source``, ``test_icon_solve_nh_swap``,
-``flang_codebase_test``) need a CONFIGURED + ``make``-d ICON tree so
-the compiler ``.mod`` files exist under ``build/stock_cpu/mod`` and
-``make -n`` can report the per-object ``-D`` / ``-I`` flags.
+The ICON-integration tests need a CONFIGURED + made ICON tree (.mod files
+under build/stock_cpu/mod). :func:`ensure_icon_built` builds it once,
+idempotently -- skips configure+make if <build>/mod already has .mod files
+(dev out-of-tree build or CI cache restore). Recipe: stock-CPU config
+(gfortran/OpenMPI, serial HDF5+netCDF-Fortran, eccodes/grib2, OpenMP, bundled
+mtime), ocean/jsbach/coupling/waves disabled.
 
-Rather than depend on an externally-provisioned build, these tests
-build ICON themselves (once) via :func:`ensure_icon_built`.  The build
-is idempotent and cached: if ``<build>/mod`` already holds ``.mod``
-files (a developer's out-of-tree build, or a CI cache restore), the
-configure + make is skipped.
-
-The configure recipe mirrors the stock CPU build (extracted from a
-known-good ``config.log``): gfortran/OpenMPI wrappers, serial HDF5 +
-netCDF-Fortran, eccodes/grib2, OpenMP, bundled mtime, and the
-ocean/jsbach/coupling/waves components disabled (the dycore tests
-don't touch them and disabling cuts the build roughly in half).
-
-System packages the build needs (Ubuntu names):
-    libopenmpi-dev openmpi-bin
-    libnetcdff-dev libnetcdf-dev
-    libhdf5-dev
-    libeccodes-dev
-    libfyaml-dev
-    libxml2-dev
-    liblapack-dev libblas-dev
-    python3 perl   (configure + bundled mtime codegen)
+Needs (Ubuntu): libopenmpi-dev openmpi-bin libnetcdff-dev libnetcdf-dev
+libhdf5-dev libeccodes-dev libfyaml-dev libxml2-dev liblapack-dev libblas-dev
+python3 perl.
 """
 import os
 import shutil
@@ -41,15 +24,9 @@ _BUILT: dict = {}
 
 
 def default_build_dir() -> Path:
-    """Where to build ICON when no explicit dir is given.
-
-    Defaults to TMP storage (``$TMPDIR/dace_fortran_icon_build/stock_cpu``)
-    so the build artifacts -- hundreds of MB of ``.o`` / ``.mod`` --
-    never land in the repo working tree (the submodule) and get reaped
-    with the rest of tmp.  Override with ``ICON_BUILD`` to point at a
-    persistent cache (e.g. a GitHub-Actions-cached path) when a warm
-    rebuild matters more than ephemerality.
-    """
+    """Default ICON build dir: ``$TMPDIR/dace_fortran_icon_build/stock_cpu`` (keeps
+    hundreds of MB of .o/.mod out of the repo tree); override via ``ICON_BUILD``
+    for a persistent cache."""
     env = os.environ.get("ICON_BUILD")
     if env:
         return Path(env)
@@ -69,21 +46,11 @@ def _missing_build_tools() -> list:
 
 
 def ensure_icon_built(icon_src: Path, build_dir: Optional[Path] = None, jobs: Optional[int] = None) -> Optional[Path]:
-    """Configure + ``make`` ICON under ``build_dir`` (default
-    ``<icon_src>/build/stock_cpu``).  Idempotent: returns immediately
-    when ``<build_dir>/mod`` already holds ``.mod`` files.
-
-    :param icon_src: the ICON checkout (the submodule root).
-    :param build_dir: out-of-tree build location; created if absent.
-    :param jobs: ``make -j`` parallelism (default: all CPUs).
-    :returns: ``build_dir`` on success, ``None`` if the ICON source
-        isn't checked out (submodule absent).
-    :raises RuntimeError: build tools missing, or configure/make fails
-        -- surfaced (not swallowed) so the test FAILS loudly rather
-        than silently skipping.
-    """
-    # Resolve to absolute paths: the configure + make subprocesses run
-    # with ``cwd=build_dir``, so a relative ``icon_src`` would break.
+    """Configure + ``make`` ICON under ``build_dir`` (default ``<icon_src>/build/stock_cpu``).
+    Idempotent: no-ops if ``<build_dir>/mod`` already has .mod files. Returns None if
+    the ICON submodule isn't checked out; raises RuntimeError (not swallowed --
+    tests must FAIL loudly, not silently skip) if tools are missing or the build fails."""
+    # absolute paths: configure/make run with cwd=build_dir, relative icon_src would break
     icon_src = Path(icon_src).resolve()
     if build_dir is None:
         # TMP storage by default -- never pollute the submodule tree.
@@ -111,18 +78,14 @@ def ensure_icon_built(icon_src: Path, build_dir: Optional[Path] = None, jobs: Op
     build_dir.mkdir(parents=True, exist_ok=True)
     jobs = jobs or (os.cpu_count() or 4)
 
-    # xdist-safe: under ``pytest -n auto`` several workers may reach an
-    # ICON test at once.  Serialise the configure + make behind a file
-    # lock so exactly ONE worker builds while the others block, then
-    # all reuse the result.  (``flock`` is advisory + released on fd
-    # close / process exit, so a crashed builder doesn't deadlock.)
+    # xdist-safe: serialise configure+make behind a flock so only one worker builds;
+    # flock is advisory, released on fd close/process exit, so a crashed builder doesn't deadlock
     import fcntl
     lock_path = build_dir.parent / ".icon_build.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with open(lock_path, "w") as lock_fd:
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        # Re-check under the lock: a peer worker may have built while
-        # we waited.
+        # re-check under the lock: a peer worker may have built while we waited
         if _have_mods(build_dir):
             _BUILT[key] = build_dir
             return build_dir
@@ -130,8 +93,7 @@ def ensure_icon_built(icon_src: Path, build_dir: Optional[Path] = None, jobs: Op
 
 
 def _configure_and_make(icon_src: Path, build_dir: Path, jobs: int, key: str) -> Path:
-    """Run the stock-CPU configure + ``make`` (called under the build
-    lock).  Factored out so the lock-held critical section is explicit."""
+    """Stock-CPU configure + make, called under the build lock (keeps the critical section explicit)."""
 
     # --- configure (stock CPU recipe) --------------------------------
     common_cflags = "-O0 -g -fno-fast-math -ffp-contract=off -fPIC"
@@ -139,11 +101,8 @@ def _configure_and_make(icon_src: Path, build_dir: Path, jobs: int, key: str) ->
                " -I/usr/include -I/usr/include/hdf5/serial")
     cppflags = "-I/usr/include -I/usr/include/hdf5/serial -I/usr/include/libxml2"
     ldflags = "-L/usr/lib/x86_64-linux-gnu -L/usr/lib/x86_64-linux-gnu/hdf5/serial"
-    # GRIB2 (eccodes) is DISABLED: the dycore tests need only compiled
-    # ``.mod`` files (no GRIB I/O), and the eccodes Fortran binding
-    # (``libeccodes_f90``) is not shipped by stock Ubuntu
-    # ``libeccodes-dev`` -- requiring it made the build non-portable.
-    # Dropping ``--enable-grib2`` removes the eccodes link entirely.
+    # GRIB2/eccodes disabled: dycore tests only need .mod files (no GRIB I/O), and
+    # libeccodes_f90 isn't shipped by stock Ubuntu libeccodes-dev -- non-portable otherwise.
     libs = ("-lxml2 -lfyaml -llapack -lblas"
             " -lnetcdff -lnetcdf -lhdf5_hl -lhdf5 -lstdc++")
     configure_cmd = [

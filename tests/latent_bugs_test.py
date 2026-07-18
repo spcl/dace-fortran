@@ -1,17 +1,11 @@
-"""Regression tests for latent bugs found in the post-dd80990 audit.
+"""Regression tests for latent bugs from the post-dd80990 audit:
+  * #3 emit_while/emit_cond DO WHILE-cond parity (array reads).
+  * #4 -0.0 sign preservation in the float printer.
+  * #5 NaN/+inf/-inf literal fidelity from Fortran source.
+  * #6 mixed-triplet hlfir.designate (scalar + slice) in section assign.
 
-Pins behaviour for design-audit findings #3-#6:
-  * #3 emit_while parity with emit_cond (array reads in DO WHILE cond).
-  * #4 ``-0.0`` sign preservation in the shortest-round-trip float printer.
-  * #5 NaN / +inf / -inf emitted faithfully from Fortran-source literals.
-  * #6 mixed-triplet ``hlfir.designate`` (one scalar + one slice) in a
-       supported context.
-
-Convention (per user direction): we treat ``NaN == NaN`` and
-``+/-inf == +/-inf`` for round-trip purposes -- the printer must emit
-them verbatim, but tests assert via ``np.isnan`` / ``np.isinf`` + sign
-rather than equality.
-"""
+Convention: NaN==NaN and +/-inf==+/-inf for round-trip purposes -- printer emits them verbatim, tests
+assert via np.isnan/np.isinf + sign rather than equality."""
 import math
 import numpy as np
 import pytest
@@ -22,11 +16,9 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 # ---------------------------------------------------------------------------
-# Bug #3 -- emit_while + array-read condition.  ``DO WHILE (i <= n .AND.
-# a(i) > thr)`` exercises the lift-via-tasklet path emit_while gained to
-# mirror emit_cond.  Today the bridge typically folds while-conds into
-# break nodes (cond_expr = ``True``), so this test pins the lift path
-# the day a non-trivial cond actually reaches emit_while.
+# Bug #3: emit_while/array-read condition parity with emit_cond. Bridge currently folds most
+# while-conds into break nodes (cond_expr=True); pins the lift-via-tasklet path for when a
+# non-trivial cond does reach emit_while.
 # ---------------------------------------------------------------------------
 def test_while_cond_with_array_read(tmp_path):
     src = """
@@ -53,22 +45,17 @@ END MODULE
     thr = 1.0
     count_arr = np.array([0], dtype=np.int32)
     sdfg(a=a, thr=thr, n=np.int32(5), count=count_arr)
-    # i=1 (a=2.0 > 1.0): count=1
-    # i=2 (a=3.0 > 1.0): count=2
-    # i=3 (a=1.5 > 1.0): count=3
-    # i=4 (a=0.5 not > 1.0): EXIT
+    # i=1..3 pass a(i)>thr (count=3); i=4 (a=0.5) fails -> EXIT.
     assert count_arr[0] == 3
 
 
 # ---------------------------------------------------------------------------
-# Bug #4 -- ``-0.0`` survives the shortest-round-trip float printer.
-# Without the ``std::signbit`` short-circuit in expressions.cpp:1632, the
-# printer's IEEE equality check accepted ``"0"`` for ``-0.0`` and the
-# generated C++ flipped the sign.  Observable in ``1.0 / x`` (-inf -> +inf),
-# ``ATAN2(x, -1.0)`` (-pi -> +pi), ``SIGN(y, x)`` and complex branch cuts.
+# Bug #4: -0.0 must survive the shortest-round-trip float printer. Without the std::signbit
+# short-circuit (expressions.cpp:1632), the IEEE equality check accepted "0" for -0.0 and flipped
+# the sign -- observable in 1.0/x, ATAN2(x,-1.0), SIGN(y,x), complex branch cuts.
 # ---------------------------------------------------------------------------
 def test_negative_zero_division_yields_negative_inf(tmp_path):
-    """``1.0 / -0.0 == -inf`` -- the sign of zero determines the sign of inf."""
+    """1.0 / -0.0 == -inf -- the sign of zero determines the sign of inf."""
     src = """
 MODULE neg_zero_div_mod
 CONTAINS
@@ -91,8 +78,7 @@ END MODULE
 
 
 def test_negative_zero_atan2_branch(tmp_path):
-    """``ATAN2(-0.0, -1.0)`` returns -pi, ``ATAN2(+0.0, -1.0)`` returns +pi.
-    Sign of zero selects the branch of atan2 on the negative real axis."""
+    """ATAN2(-0.0,-1.0) returns -pi, ATAN2(+0.0,-1.0) returns +pi -- sign of zero selects the branch."""
     src = """
 MODULE atan2_zero_sign_mod
 CONTAINS
@@ -116,8 +102,7 @@ END MODULE
 
 
 def test_negative_zero_signbit_preserved(tmp_path):
-    """``-0.0`` as a literal output preserves its sign bit through
-    the printer + DaCe codegen + ctypes round-trip."""
+    """-0.0 literal output preserves its sign bit through printer + DaCe codegen + ctypes round-trip."""
     src = """
 MODULE emit_neg_zero_mod
 CONTAINS
@@ -137,13 +122,11 @@ END MODULE
 
 
 # ---------------------------------------------------------------------------
-# Bug #5 -- NaN / +inf / -inf literal constants emit faithfully from
-# Fortran source through the shortest-round-trip printer.  Per user
-# convention, NaN payload doesn't matter -- ``np.isnan`` is the contract.
-# Both sign of inf and "is nan" must round-trip.
+# Bug #5: NaN/+inf/-inf literals emit faithfully through the printer. NaN payload doesn't matter
+# (np.isnan is the contract); sign of inf must round-trip.
 # ---------------------------------------------------------------------------
 def test_positive_infinity_arithmetic(tmp_path):
-    """``1.0/0.0`` -> +inf survives the printer + DaCe codegen."""
+    """1.0/0.0 -> +inf survives the printer + DaCe codegen."""
     src = """
 MODULE emit_pos_inf_mod
 CONTAINS
@@ -162,7 +145,7 @@ END MODULE
 
 
 def test_negative_infinity_arithmetic(tmp_path):
-    """``-1.0/0.0`` -> -inf survives the printer + DaCe codegen."""
+    """-1.0/0.0 -> -inf survives the printer + DaCe codegen."""
     src = """
 MODULE emit_neg_inf_mod
 CONTAINS
@@ -181,9 +164,7 @@ END MODULE
 
 
 def test_nan_arithmetic(tmp_path):
-    """``0.0/0.0`` -> NaN survives the printer + DaCe codegen.
-    Per convention NaN payload doesn't matter; ``np.isnan`` is the
-    contract."""
+    """0.0/0.0 -> NaN survives the printer + DaCe codegen (np.isnan is the contract, payload doesn't matter)."""
     src = """
 MODULE emit_nan_mod
 CONTAINS
@@ -202,12 +183,9 @@ END MODULE
 
 
 # ---------------------------------------------------------------------------
-# Bug #6 -- mixed-triplet ``hlfir.designate`` (one scalar + one slice
-# index) in a supported context (section assign).  ``buildExpr``'s
-# designate handler returns the bare array name when any index is a
-# triplet; the bridge's AccessInfo carries the slab descriptor and
-# emit_tasklet wires one connector + memlet for the slab.
-# Pins behaviour for the common ``arr_2d(i, lo:hi) = ...`` shape.
+# Bug #6: mixed-triplet hlfir.designate (scalar + slice index) in section assign. buildExpr's
+# designate handler returns the bare array name when any index is a triplet; AccessInfo carries the
+# slab descriptor and emit_tasklet wires one connector+memlet for it. Pins arr_2d(i, lo:hi) = ... .
 # ---------------------------------------------------------------------------
 def test_mixed_triplet_section_assign(tmp_path):
     src = """

@@ -1,21 +1,13 @@
 """Pin various IF-condition shapes against the bridge -> SDFG path.
 
-Covers:
-  * Trivial scalar conditions (single var, integer compare).
-  * Array-element conditions (lifted via the per-occurrence-connector
-    tasklet path so the boolean lands in a scalar transient before
-    the branch).
-  * MAX / MIN over multiple array reads (the graupel
-    ``if_cond_38 = max(...) > eps`` shape that surfaced with bare
-    array pointers in the C++ codegen).
-  * Logical chains (``.AND.`` / ``.OR.``) mixing scalars and array
-    reads.
+Covers scalar conditions, array-element conditions (lifted via the
+per-occurrence-connector tasklet path), MAX/MIN over multiple array reads (the
+graupel ``if_cond_38`` shape), and logical .AND./.OR. chains.
 
-Failure mode caught by these tests: if the bridge lifts an
-array-referencing condition onto a plain interstate-edge
-assignment, DaCe treats the array name as a Symbol -- the C++
-codegen then emits the data pointer where a scalar was expected
-and gfortran rejects with ``double* > scalar`` type errors.
+Failure mode: if the bridge lifts an array-referencing condition onto a plain
+interstate-edge assignment, DaCe treats the array name as a Symbol -- the C++
+codegen emits the data pointer where a scalar was expected and gfortran
+rejects with ``double* > scalar`` type errors.
 """
 import numpy as np
 import pytest
@@ -50,9 +42,7 @@ END SUBROUTINE
 
 
 def test_if_array_element_compare(tmp_path):
-    """``IF (a(i) > 0)`` -- single array element read in condition.
-    Must be lifted via per-occurrence connector so the codegen
-    binds a scalar value."""
+    """``IF (a(i) > 0)`` -- array element read must lift via per-occurrence connector so codegen binds a scalar."""
     src = """
 SUBROUTINE if_array_elem(n, a, out)
   IMPLICIT NONE
@@ -77,10 +67,7 @@ END SUBROUTINE
 
 
 def test_if_max_over_array_elements(tmp_path):
-    """``IF (MAX(a(i), b(i), c(i)) > eps)`` -- the graupel
-    ``if_cond_38`` shape: max over multiple array reads.  Bridge
-    must lift via per-occurrence connectors so each read binds
-    to a scalar."""
+    """``IF (MAX(a(i), b(i), c(i)) > eps)`` -- the graupel ``if_cond_38`` shape; each read must lift via its own per-occurrence connector."""
     src = """
 SUBROUTINE if_max3(n, a, b, c, out)
   IMPLICIT NONE
@@ -112,9 +99,7 @@ END SUBROUTINE
 
 
 def test_if_logical_chain_mixed(tmp_path):
-    """``IF (a(i) > 0 .AND. (b(i) < 1 .OR. c == 0))`` -- chains of
-    AND/OR mixing array reads and a scalar.  Each operand needs its
-    own connector."""
+    """``IF (a(i) > 0 .AND. (b(i) < 1 .OR. c == 0))`` -- AND/OR chain mixing array reads and a scalar; each operand needs its own connector."""
     src = """
 SUBROUTINE if_chain(n, a, b, c, out)
   IMPLICIT NONE

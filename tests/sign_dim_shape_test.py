@@ -1,15 +1,9 @@
-"""End-to-end tests for the Fortran ``SIGN``, ``DIM``, and ``SHAPE``
-intrinsics through the HLFIR frontend.
+"""End-to-end tests for Fortran ``SIGN``/``DIM``/``SHAPE`` through the HLFIR frontend.
 
-- ``SIGN(a, b)`` returns ``|a|`` with the sign of ``b``.  Float operands
-  lower to ``math.copysign`` (added to the bridge's ``binary_math``
-  table); integer operands lower to an ``arith.select`` predicate
-  pattern handled by the generic ternary fallback.
-- ``DIM(a, b)`` returns ``MAX(a - b, 0)``.  Lowered as ``arith.cmp* +
-  arith.select``  --  same idiom as the existing min/max fallback.
-- ``SHAPE(arr)`` returns a rank-1 integer array of the source's per-dim
-  extents (clamped to ``>= 0``).  Lowered as per-element scalar
-  assigns; existing assign machinery handles it.
+- ``SIGN(a, b)``: float -> ``math.copysign`` (bridge's ``binary_math`` table); integer ->
+  ``arith.select`` predicate via the generic ternary fallback.
+- ``DIM(a, b) = MAX(a - b, 0)``: lowered as ``arith.cmp* + arith.select``, same idiom as min/max.
+- ``SHAPE(arr)``: rank-1 integer array of per-dim extents (clamped >= 0), lowered as per-element scalar assigns.
 """
 
 from pathlib import Path

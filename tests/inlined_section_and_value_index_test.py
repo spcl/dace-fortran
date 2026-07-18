@@ -1,35 +1,24 @@
 """Two isolated facets surfaced by the QE ``vexx_bp_k_gpu`` /
-``test_pointer_member_indexed_inlined_function`` work, split so each
-mechanism has its own minimal reproducer:
+``test_pointer_member_indexed_inlined_function`` work:
 
-  (a) **section-alias of an inlined FUNCTION dummy** -- an inlined
-      function whose array dummy binds to a *column section* of the
-      caller's array (``out(j) = colsum(a(:, j))``).  Flang boxes the
-      section (``fir.embox``) on the FUNCTION-result inline path, so the
-      bridge must peel the box to reach the ``hlfir.designate`` and
-      register the dummy as a ``section_alias`` (otherwise it leaks as a
-      free program argument).  This is the path fixed by the
-      ``fir.embox``/``fir.load``/``fir.rebox`` peels added to the
-      view-alias loop in ``bridge/extract_vars.cpp``.  EXPECTED: PASS --
-      the section is read at the correct (1-based) column.
+(a) **section-alias of an inlined FUNCTION dummy**: an inlined function whose
+    array dummy binds to a caller column section (``out(j) = colsum(a(:, j))``).
+    Flang boxes the section (``fir.embox``) on the FUNCTION-result inline path,
+    so the bridge must peel the box to reach ``hlfir.designate`` and register
+    the dummy as a ``section_alias`` (else it leaks as a free program arg).
+    Fixed via the fir.embox/fir.load/fir.rebox peels in
+    ``bridge/extract_vars.cpp``'s view-alias loop.
 
-  (b) **indexed read whose index is a local-array element (value-symbol)
-      on a flattened POINTER struct member** -- ``i = NINT(sel(:, j))``
-      then ``out(j) = t%data(i(1), i(2), i(3))`` (graupel/getv's data
-      path).  Each ``i(k)`` is promoted to a value-symbol (``i_at0`` ...)
-      and the read renders as ``t_data[i_at0 - offset_t_data_d0, ...]``.
-      For a *plain* array dummy the same value-symbol index renders with a
-      literal ``-1`` (correct); only the flattened POINTER member routes
-      the 1-based shift through ``offset_t_data_d<k>``.  That offset symbol
-      has no passed array to infer it from and auto-fills to ``0`` -- so
-      the read is off by one (``data[i]`` instead of ``data[i-1]``).  Same
-      class as the graupel extent bug, but for an *offset* symbol.  FIXED:
-      ``auto_dim_symbols`` now defaults a free offset symbol to the Fortran
-      1-based lower bound (1) for direct ``sdfg()`` calls (the bridge keeps
-      ``offset_<arr>_d<i>`` free on purpose for dummy ALLOC/POINTER bounds
-      the bindings emitter fills via ``lbound`` -- e.g. ICON's
-      ``end_block(min_rl:)`` -- so we default rather than bake).  EXPECTED:
-      PASS.
+(b) **indexed read whose index is a local-array element (value-symbol) on a
+    flattened POINTER struct member**: ``i = NINT(sel(:, j))`` then
+    ``out(j) = t%data(i(1), i(2), i(3))``.  Each ``i(k)`` becomes a value-symbol
+    rendered as ``t_data[i_atK - offset_t_data_dK, ...]``; unlike a plain array
+    dummy (literal ``-1``), the flattened POINTER member routes the shift
+    through ``offset_t_data_d<k>``, which had no passed array to infer from and
+    auto-filled to 0 -- an off-by-one.  Fixed: ``auto_dim_symbols`` now defaults
+    a free offset symbol to the Fortran 1-based lower bound (the bridge keeps
+    ``offset_<arr>_d<i>`` free on purpose for dummy ALLOC/POINTER bounds the
+    bindings emitter fills via ``lbound``, e.g. ICON's ``end_block(min_rl:)``).
 """
 from pathlib import Path
 
@@ -66,14 +55,12 @@ END MODULE m_seca
 
 
 def test_inlined_function_section_alias_reads_correct_column(tmp_path):
-    """(a) The inlined FUNCTION dummy bound to ``a(:, j)`` reads the
-    correct column.  Regression guard for the box-peel section-alias
-    fix."""
+    """(a) The inlined FUNCTION dummy bound to ``a(:, j)`` reads the correct column
+    -- regression guard for the box-peel section-alias fix."""
     sdfg = build_sdfg(_SRC_SECTION, tmp_path / "sdfg", name="run", entry="m_seca::run").build()
     n = 4
-    # ``asfortranarray`` of a C-order reshape -> owned F-contiguous copy.
-    # (``reshape(order="F")`` would return a non-owning view, which DaCe
-    # rejects as a program argument.)
+    # asfortranarray of a C-order reshape -> owned F-contiguous copy (reshape(order="F")
+    # would be a non-owning view, which DaCe rejects as a program arg).
     a = np.asfortranarray(np.arange(1.0, 2 * n + 1).reshape((2, n)))
     out = np.zeros(n, dtype=np.float64, order="F")
     sdfg(a=a, out=out, n=np.int32(n))
@@ -106,13 +93,11 @@ END MODULE m_idxb
 
 
 def test_value_symbol_index_on_pointer_member_is_one_based(tmp_path):
-    """(b) ``i = NINT(sel(:,j))`` then ``out(j) = t%data(i(1),i(2),i(3))``.
-    The 1-based pointer-member read must map ``data(k)`` -> ``data[k-1]``."""
+    """(b) ``i = NINT(sel(:,j))`` then ``t%data(i(1),i(2),i(3))`` -- the pointer-member
+    read must map ``data(k)`` -> ``data[k-1]``."""
     sdfg = build_sdfg(_SRC_VALUE_INDEX, tmp_path / "sdfg", name="run", entry="m_idxb::run").build()
-    # ``sz`` strictly larger than the largest selector so a (suspected)
-    # off-by-one read ``data[i]`` stays in bounds -> clean value mismatch,
-    # not an out-of-bounds segfault.  Mirrors graupel/getv's data path
-    # (``i = NINT(section)`` then a 3-D pointer-member read).
+    # sz > largest selector so an off-by-one read stays in bounds -> clean value
+    # mismatch, not a segfault.  Mirrors graupel/getv's data path.
     n, sz = 2, 4
     data = np.asfortranarray(np.arange(float(sz**3)).reshape((sz, sz, sz)))
     # selector j -> index (j, j, j), 1-based; j in 1..n, all < sz.

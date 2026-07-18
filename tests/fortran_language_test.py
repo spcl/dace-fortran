@@ -77,24 +77,18 @@ subroutine main(d)
 end subroutine main
 """
     sdfg = build_sdfg(src, tmp_path, name='main').build()
-    # ``d`` is Fortran ``LOGICAL`` -- pass ``np.bool_`` (1 byte / elem)
-    # so the C ABI dtype matches the SDFG's ``bool *`` declaration.
-    # Initial fill of ``True`` so the assertions can distinguish
-    # SDFG writes (False / True) from the initial value.
+    # d is Fortran LOGICAL -- pass np.bool_ (1 byte/elem) to match the SDFG's bool*
+    # declaration. Filled True so assertions can distinguish SDFG writes from the initial value.
     d = np.full([3, 4, 5], True, order="F", dtype=np.bool_)
     sdfg(d=d, a=0, jk=0, jl=0, jm=0)
-    # LLFALL(1) == .false. (no positive ZVQX entry at JM=1) ->
-    # ``d(1,1,1) = .false.``; LLFALL(2) == .true. (ZVQX(2)=1.0).
+    # LLFALL(1)=.false. (no positive ZVQX at JM=1); LLFALL(2)=.true. (ZVQX(2)=1.0).
     assert d[0, 0, 0] == False
     assert bool(d[0, 0, 1])
 
 
 def test_fortran_frontend_function_statement(tmp_path):
-    # All literals carry the ``d0`` suffix so the source is fp64 end-to-end.
-    # A bare ``5.1`` is fp32 default-real; widening to fp64 yields
-    # ``5.099999904632568``, which would break the exact-equality
-    # assertion against Python's fp64 ``5.1`` below.  The bridge promotes
-    # constants to fp64 by design.
+    # Literals carry the d0 suffix for fp64 end-to-end -- a bare 5.1 is fp32 default-real;
+    # widening to fp64 yields 5.099999904632568, breaking the exact-equality assert below.
     src = """
 subroutine main(d)
   double precision d(3, 4, 5)

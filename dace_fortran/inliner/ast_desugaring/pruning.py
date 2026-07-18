@@ -28,19 +28,10 @@ def _nearest_scope_with_spec_part(node: Base) -> Optional[Base]:
 
 
 def consolidate_uses(ast: f03.Program, alias_map: Optional[types.SPEC_TABLE] = None) -> f03.Program:
-    """
-    Rewrites all `USE` statements in the program to be more explicit.
-    It analyzes the whole scope of the `USE` statement and replaces it with a `USE ..., ONLY: ...`
-    statement that lists only the symbols that are actually used in that scope.
-
-    :param ast: The root of the fparser AST.
-    :param alias_map: An optional pre-computed alias map.
-    :return: The modified AST.
-    """
+    """Rewrites every `USE` statement to `USE ..., ONLY: ...`, listing only symbols actually used in that scope."""
     alias_map = alias_map or analysis.alias_specs(ast)
     for sp in reversed(walk(ast, f03.Specification_Part)):
-        # First, we do a surgery to fix the kind parameter of the literals that refer to a variable, but FParser leaves
-        # them as plain strings instead of making them `Name`s.
+        # Fix the kind parameter of literals referring to a variable: fparser leaves them as plain strings, not Names.
         for lit in walk(sp.parent,
                         (f03.Real_Literal_Constant, f03.Signed_Real_Literal_Constant, f03.Int_Literal_Constant,
                          f03.Signed_Int_Literal_Constant, f03.Logical_Literal_Constant)):
@@ -56,12 +47,10 @@ def consolidate_uses(ast: f03.Program, alias_map: Optional[types.SPEC_TABLE] = N
                 utils.set_children(lit, (val, f03.Name(kind)))
 
         use_map: Dict[str, Set[str]] = {}
-        # Build the table to keep the use statements only if they are actually necessary.
         for nm in walk(sp.parent, f03.Name):
             if isinstance(nm.parent, (f03.Use_Stmt, f03.Only_List, f03.Rename)):
-                # The identifiers in the use statements themselves are not of concern.
                 continue
-            # Where did we _really_ import `nm` from? Find the definition module.
+            # Find the module `nm` was really imported from.
             sc_spec = analysis.search_scope_spec(nm)
             if not sc_spec:
                 continue
@@ -91,12 +80,10 @@ def consolidate_uses(ast: f03.Program, alias_map: Optional[types.SPEC_TABLE] = N
                 # Objects defined inside a free function cannot be imported; so we must already be in that function.
                 continue
             nm_mod = mod_spec[0]
-            # And which module are we in right now?
             sp_mod = sp
             while sp_mod and not isinstance(sp_mod, (f03.Module, f03.Main_Program)):
                 sp_mod = sp_mod.parent
             if sp_mod and nm_mod == utils.find_name_of_node(sp_mod):
-                # Nothing to do if the object is defined in the current scope and not imported.
                 continue
             if nm.string == spec[-1]:
                 u = nm.string
@@ -105,27 +92,16 @@ def consolidate_uses(ast: f03.Program, alias_map: Optional[types.SPEC_TABLE] = N
             if nm_mod not in use_map:
                 use_map[nm_mod] = set()
             use_map[nm_mod].add(u)
-        # Build new use statements.
         nuses: List[f03.Use_Stmt] = [
             f03.Use_Stmt(f"use {k}, only: {', '.join(sorted(use_map[k]))}") for k in use_map.keys()
         ]
-        # Remove the old ones, and prepend the new ones.
         utils.set_children(sp, nuses + [c for c in sp.children if not isinstance(c, f03.Use_Stmt)])
     return ast
 
 
 def keep_sorted_used_modules(ast: f03.Program, entry_points: Optional[Iterable[types.SPEC]] = None) -> f03.Program:
-    """
-    Prunes entire unused modules from the AST and sorts the remaining ones topologically.
-    It builds a dependency graph between modules based on `USE` statements. Starting from
-    the given entry points, it finds all transitively used modules, removes all others,
-    and sorts the remaining modules so that a module is always defined before it is used.
-
-    :param ast: The root of the fparser AST.
-    :param entry_points: A set of specs for entry-point subroutines. All modules used by these
-                         are preserved. If None, all modules are considered entry points.
-    :return: The modified AST with unused modules removed and remaining ones sorted.
-    """
+    """Drops modules not transitively reachable (via `USE`) from `entry_points` (all modules
+    if None), and topologically sorts the survivors so each is defined before it is used."""
     TOPLEVEL = '__toplevel__'
 
     def _get_module(n: Base) -> str:
@@ -138,7 +114,7 @@ def keep_sorted_used_modules(ast: f03.Program, entry_points: Optional[Iterable[t
             p_stmt = ast_utils.singular(ast_utils.children_of_type(p, (f03.Module_Stmt, f03.Program_Stmt)))
             return utils.find_name_of_stmt(p_stmt).lower()
 
-    g = nx.DiGraph()  # An edge u->v means u should come before v, i.e., v depends on u.
+    g = nx.DiGraph()  # edge u->v: u must come before v (v depends on u).
     for c in ast.children:
         g.add_node(_get_module(c))
     g.add_node(TOPLEVEL)
@@ -169,18 +145,8 @@ def keep_sorted_used_modules(ast: f03.Program, entry_points: Optional[Iterable[t
 
 
 def prune_coarsely(ast: f03.Program, keepers: Iterable[types.SPEC]) -> f03.Program:
-    """
-    Iteratively removes unused functions, types, interfaces, and variables from the AST.
-
-    This function performs a coarse-grained dead code elimination. It works by first identifying
-    all code objects that are directly or indirectly used by the specified `keepers`.
-    It then removes anything not in this set of used objects. This process is repeated
-    until no more code can be removed, ensuring that all dependencies are correctly handled.
-
-    :param ast: The root of the fparser AST.
-    :param keepers: An iterable of specs for objects to keep (e.g., entry-point subroutines).
-    :return: The pruned AST.
-    """
+    """Iteratively removes functions/types/interfaces/variables not reachable from `keepers`,
+    to a fixed point."""
     removed_something = None
     while removed_something is None or removed_something:
         removed_something = False
@@ -332,19 +298,17 @@ def prune_coarsely(ast: f03.Program, keepers: Iterable[types.SPEC]) -> f03.Progr
 
 
 def prune_dangling_interface_bodies(ast: f03.Program) -> f03.Program:
-    """Remove interface bodies left dangling by pruning.
+    """Removes interface bodies left dangling by pruning.
 
-    An interface body (e.g. an ``ABSTRACT INTERFACE`` procedure) carries an
-    ``IMPORT`` of the host entities it needs.  When pruning drops a type/kind as
-    unused external baggage -- the halo-exchange comm-pattern abstract
-    interfaces (``interface_exchange_data_*``) import ``t_comm_pattern_collection``,
-    ``xfer_list``, ... -- the body is left importing a name that no longer
-    exists and cannot compile.  Such a body is also unreferenced (its DEFERRED
-    binding was pruned with its type), so drop it; then remove any abstract
-    interface block emptied as a result.
+    An interface body's ``IMPORT`` can name a type/kind pruning drops as unused
+    external baggage (ICON's halo ``interface_exchange_data_*`` importing
+    ``t_comm_pattern_collection`` etc.) -- it then imports a name that no longer
+    exists and cannot compile. Such a body is also unreferenced (its DEFERRED
+    binding was pruned with its type), so drop it; then remove any interface
+    block emptied as a result.
 
     Gated by the caller on :data:`analysis.TOLERATE_EXTERNAL_USES`: with full
-    resolution every ``IMPORT`` name resolves, so this is a no-op."""
+    resolution every ``IMPORT`` resolves, so this is a no-op."""
     alias_map = analysis.alias_specs(ast)
     for imp in list(walk(ast, f03.Import_Stmt)):
         body = imp.parent.parent  # Specification_Part -> (Subroutine|Function)_Body
@@ -353,12 +317,9 @@ def prune_dangling_interface_bodies(ast: f03.Program) -> f03.Program:
         host_scope = analysis.find_scope_spec(body.parent)
         if any(analysis.search_real_ident_spec(nm.string, host_scope, alias_map) is None for nm in walk(imp, f03.Name)):
             utils.remove_self(body)
-    # Drop generic-interface ``MODULE PROCEDURE`` members whose target subprogram
-    # was pruned away.  Reachability resolves a call ``init(x)`` to its specific
-    # (``init_zero_3d_dp``) and prunes the unused specifics, but their names
-    # linger in the generic's member list -- gfortran: "Procedure 'init_5d_l' in
-    # generic interface 'init' is neither function nor subroutine".  A name with
-    # no defined subprogram (interface bodies are not subprograms) is dangling.
+    # Drop generic-interface MODULE PROCEDURE members whose target subprogram was pruned:
+    # reachability prunes unused specifics but their names linger in the generic's member
+    # list -- gfortran: "Procedure 'x' in generic interface 'y' is neither function nor subroutine".
     defined: Set[str] = set()
     for sp in walk(ast, (f03.Subroutine_Subprogram, f03.Function_Subprogram)):
         stmt = ast_utils.atmost_one(ast_utils.children_of_type(sp, (f03.Subroutine_Stmt, f03.Function_Stmt)))
@@ -388,17 +349,9 @@ def prune_dangling_interface_bodies(ast: f03.Program) -> f03.Program:
 
 
 def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC]) -> f03.Program:
-    """
-    Performs a fine-grained pruning of the AST by tracing all usages from a set of
-    "keeper" objects. Any object (subroutine, function, type, variable, etc.) that is
-    not reachable from the keepers is removed from the AST.
+    """Fine-grained pruning: removes any object not reachable (by usage) from `keepers`.
 
-    Precondition: All indirections (such as interface calls) should be resolved before calling this.
-
-    :param ast: The root of the fparser AST.
-    :param keepers: A list of specs for objects that must be kept.
-    :return: The pruned AST.
-    """
+    Precondition: indirections (e.g. interface calls) must already be resolved."""
     PRUNABLE_OBJECT_CLASSES = (f03.Program_Stmt, f03.Subroutine_Stmt, f03.Function_Stmt, f03.Derived_Type_Stmt,
                                f03.Entity_Decl, f03.Component_Decl)
 
@@ -426,11 +379,8 @@ def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC]) -> f03.Pro
             for j in reversed(range(len(scope_spec))):
                 anc_spec = scope_spec[:j + 1]
                 if anc_spec in survivors: continue
-                # A scope spec can carry the synthetic ``INTERFACE_NAMESPACE``
-                # pseudo-segment, which namespaces interface members but is not
-                # itself an object -- so it is absent from ``alias_map``.  Skip
-                # any ancestor that does not resolve (mirrors the ``nm_spec``
-                # guard below) rather than indexing it blindly.
+                # INTERFACE_NAMESPACE is a synthetic scope-spec segment, not an object, so it's
+                # absent from alias_map -- skip an ancestor that doesn't resolve rather than index it blindly.
                 anc_node = alias_map.get(anc_spec)
                 if anc_node is None: continue
                 survivors.add(anc_spec)
@@ -443,23 +393,14 @@ def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC]) -> f03.Pro
             if isinstance(keep_node, PRUNABLE_OBJECT_CLASSES):
                 _keep_from(keep_node.parent)
             elif isinstance(keep_node, f03.Interface_Stmt):
-                # A reference to a generic INTERFACE that survived UNRESOLVED
-                # (deconstruct_interface_calls could not pick a specific -- a
-                # keyword-argument call to ICON's ``smooth_oncells``) keeps the
-                # whole interface block: its ``MODULE PROCEDURE`` names recurse to
-                # the candidate specifics, so the interface stays bindable rather
-                # than being emptied to a dangling generic.  A resolved generic is
-                # unused (its calls now name the specific), so this never fires for
-                # it.
+                # An UNRESOLVED generic INTERFACE reference (deconstruct_interface_calls couldn't
+                # pick a specific, e.g. a keyword-arg call to ICON's smooth_oncells) keeps the whole
+                # block: its MODULE PROCEDURE names recurse to candidates, so it stays bindable
+                # rather than being emptied to a dangling generic. A resolved generic never hits this.
                 _keep_from(keep_node.parent)
-        # Component accesses keep the components they touch.  A pointer-component
-        # WRITE ``this % comp => x`` puts ``this % comp`` on the LHS of ``=>``,
-        # which fparser wraps in a Data_Pointer_Object -- NOT a Data_Ref -- so it
-        # is invisible to ``walk(node, Data_Ref)``.  Without this a pointer
-        # component that is only ever assigned (the norm in a constructor) is
-        # pruned from its type, leaving the body referencing a member the type no
-        # longer declares.  A ``%``-bearing Data_Pointer_Object is the same kind
-        # of component reference; ``_lookup_dataref`` already accepts it.
+        # Component accesses keep the components they touch. A pointer-component WRITE
+        # (``this % comp => x``) is a Data_Pointer_Object, not a Data_Ref, so it's invisible to
+        # walk(Data_Ref) -- without this, an only-ever-assigned pointer component is wrongly pruned.
         comp_refs: List[Base] = list(walk(node, f03.Data_Ref))
         comp_refs += [dpo for dpo in walk(node, f03.Data_Pointer_Object) if '%' in dpo.tofortran()]
         for dr in comp_refs:
@@ -533,12 +474,9 @@ def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC]) -> f03.Pro
             utils.remove_self(ns_node.parent)
         killed.add(ns)
 
-    # A derived type whose every component was pruned (a scaffolding type whose
-    # procedures were all stubbed -- CLOUDSC's PERFORMANCE_TIMER) must not stay
-    # memberless: variables of it still exist, a zero-component type is
-    # questionable Fortran, and numpy f2py builds a NULL module wrapper for a
-    # module containing one (the import then segfaults inside PyInit_*).  Keep
-    # a single placeholder component instead.
+    # A type whose every component was pruned (CLOUDSC's stubbed PERFORMANCE_TIMER) must not
+    # stay memberless: variables of it still exist, and numpy f2py builds a NULL module wrapper
+    # for one, segfaulting on import (PyInit_*). Keep a placeholder component instead.
     for tdef in walk(ast, f03.Derived_Type_Def):
         if not walk(tdef, f03.Component_Decl):
             tstmt = ast_utils.singular(ast_utils.children_of_type(tdef, f03.Derived_Type_Stmt))
@@ -557,19 +495,13 @@ def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC]) -> f03.Pro
 
 
 def prune_branches(ast: f03.Program, alias_map: Optional[types.SPEC_TABLE] = None) -> f03.Program:
-    """
-    Prunes dead branches from `If_Construct` and `If_Stmt` nodes by evaluating
-    their conditional expressions at compile time.
+    """Prunes dead branches from `If_Construct`/`If_Stmt` by evaluating their conditions
+    at compile time.
 
-    :param ast: The root of the fparser AST.
-    :param alias_map: Symbol table for resolving named constants in conditions; when
-        ``None`` it is built from ``ast`` (the whole-program case).  A caller holding
-        a freshly substituted FRAGMENT -- whose ``USE``d modules are not in the
-        fragment, so :func:`analysis.alias_specs` cannot run -- passes an empty map:
-        only literal (already-folded) ``.TRUE.``/``.FALSE.`` conditions then fold,
-        which is exactly what is wanted for pruning ``PRESENT(absent)``-dead branches.
-    :return: The modified AST with dead branches removed.
-    """
+    `alias_map`: None builds it from `ast` (whole-program case). A caller holding a
+    substituted FRAGMENT (whose USEd modules aren't present, so alias_specs can't run)
+    passes an empty map: only already-folded .TRUE./.FALSE. conditions then fold --
+    exactly what's needed to prune PRESENT(absent)-dead branches."""
     if alias_map is None:
         alias_map = analysis.alias_specs(ast)
     for ib in walk(ast, f03.If_Construct):

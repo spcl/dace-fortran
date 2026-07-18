@@ -1,26 +1,16 @@
 """Unit + e2e coverage for ``rewrite_integer_powers``.
 
-The pass expands an *integer-valued REAL-literal* power (``x**2.0``,
-``x**3.0_JPRB``) to an explicit multiply so the bridge's g++ codegen
-and the gfortran reference emit byte-identical arithmetic.  Scope is
-deliberately narrow:
+Expands an integer-valued REAL-literal power (``x**2.0``, ``x**3.0_JPRB``) to an explicit
+multiply so the bridge's g++ codegen and gfortran emit byte-identical arithmetic. Scope:
 
-* a *bare-integer* exponent (``x**2``) is left for flang's own
-  integer-power lowering -- it is already bit-identical to gfortran;
-* genuine fractional / symbolic powers (``**0.5``, ``**n``) must stay
-  as ``pow()``;
-* a base containing a function / array reference (``f(x)``,
-  ``arr(i,j)``, ``a%b(i)%c``) is left untouched -- duplicating it
-  would call twice (impure functions; the bridge's call-inlining
-  shares the callee accumulator across copies);
-* the rewrite adds exactly one outer pair of parentheses (the base is
-  a primary), keeping the diff close to the source while preserving
-  precedence.
+* bare-integer exponent (``x**2``) is left for flang's own lowering (already bit-identical);
+* fractional/symbolic powers (``**0.5``, ``**n``) stay ``pow()``;
+* a base with a function/array reference is untouched (duplicating it would call an impure
+  function twice);
+* the rewrite adds exactly one outer paren pair, preserving precedence.
 
-The ``_eval_equivalent`` tests prove the precedence property
-numerically: the rewritten arithmetic is also valid Python, so we
-evaluate the original (``**``) and rewritten (``*``) strings under
-random bindings and assert exact equality.
+``_eval_equivalent`` tests prove precedence numerically: both forms are valid Python, evaluated
+under random bindings and asserted equal.
 """
 
 from pathlib import Path
@@ -111,15 +101,12 @@ def test_idempotent():
     "-(a - b)**3.0",
 ])
 def test_eval_equivalent(expr: str):
-    """Original ``**`` form and rewritten ``*`` form must be
-    numerically close under arbitrary bindings -- this catches any
-    missing parenthesis that would flip operator precedence (such a
-    bug shifts the value by orders of magnitude).
+    """Original ``**`` and rewritten ``*`` forms must be numerically close under arbitrary
+    bindings -- catches a missing parenthesis flipping operator precedence.
 
-    ``math.isclose`` rather than ``==``: ``x**2.0`` is libm ``pow``
-    while the rewrite emits ``x*x``; they differ at the last ULP --
-    which is exactly the rounding difference this pass exists to
-    remove, not a precedence error."""
+    ``math.isclose`` not ``==``: ``x**2.0`` is libm ``pow`` vs the rewrite's ``x*x``, differing
+    at the last ULP -- exactly the rounding difference this pass exists to remove.
+    """
     import math
 
     rng = np.random.default_rng(0)
@@ -133,10 +120,8 @@ def test_eval_equivalent(expr: str):
 
 
 def test_e2e_parenthesised_base_matches_gfortran(tmp_path: Path):
-    """``(t(i) - k)**2.0`` -- a parenthesised base inside a quotient,
-    plus a scalar ``s**3.0`` -- must stay numerically identical after
-    the rewrite.  Build through the bridge (which applies the rewrite)
-    and compare against a gfortran reference of the same source."""
+    """``(t(i) - k)**2.0`` (parenthesised base in a quotient) plus ``s**3.0`` must stay
+    numerically identical after the rewrite: bridge build vs gfortran reference."""
     from _util import build_sdfg, f2py_compile, have_flang
 
     if not have_flang():

@@ -1,43 +1,17 @@
-"""PURE FUNCTION / ELEMENTAL array-return call-site shapes -- now lowered.
+"""PURE FUNCTION / ELEMENTAL array-return call-site shapes, now lowered. Each test pins a
+distinct call-site shape from production NPB/climate benchmarks (graupel's
+``precip1(...)``, NPB-LU's ``snow_*`` chains); together with
+:mod:`array_return_assignment_test` these form the bridge's PURE-function array-return
+coverage.
 
-Each test below pins a distinct call-site shape that surfaces in production
-NPB / climate benchmarks (graupel's ``update = precip1(...)``, NPB-LU's
-``snow_*`` PURE-function chains, etc.).  Together with
-:mod:`array_return_assignment_test` they form the bridge's PURE-function
-array-return coverage set.
+These once emitted the bridge's ``?`` placeholder and were claimed (incorrectly -- no
+xfail marker ever existed) as pinned xfails; every pattern here actually lowers correctly.
+Each test RUNS the compiled SDFG and compares BIT-EXACT against gfortran/f2py, so a future
+regression fails loudly rather than passing a build-only check.
 
-Status: these once emitted the bridge's ``?`` unresolved-expression
-placeholder in a scalar-assign tasklet (``ast.parse`` then rejected the code),
-and this file's docstring claimed each was pinned as a ``strict=True`` xfail.
-Reality diverged: no xfail marker was ever present, and every pattern here
-lowers correctly.  So each test now RUNS the compiled SDFG on numpy inputs and
-compares BIT-EXACT against the same source compiled by gfortran/f2py -- a
-build-and-validate-only check would have let a miscompile pass silently.  If a
-future regression breaks the lowering the run/compare fails loudly.
-
-Related patterns that also lower cleanly (covered elsewhere, listed for
-context):
-
-* PURE FUNCTION call as an actual ``CALL`` argument
-  (``call use_vec(make3(x), out)``) -- the function-temp lowers cleanly.
-* User-defined ELEMENTAL over a whole-array argument (``b = sqr(a)``).
-* User-defined ELEMENTAL over array slices on either side
-  (``b(1:n) = sqr(a(1:n))``, ``b(2:n-1) = sqr(a(2:n-1))``).
-* User-defined ELEMENTAL in a composite slice expression
-  (``c(1:n) = sqr(a(1:n)) + b(1:n)``).
-* PURE FUNCTION taking a fixed-shape array slice as an argument
-  (``s = pair_sum(a(i:i+1))``).
-* ``WHERE`` construct guarding a user-defined ELEMENTAL
-  (``where (a > 0) b = sqr(a)``).
-
-Patterns deliberately out of scope (not anchored):
-
-* RECURSIVE PURE FUNCTION (``r = n + sumto(n - 1)``).  ``hlfir-inline-all``
-  cannot inline a self-recursive callee, and the bridge has no fallback
-  for treating the self-call as an actual call.  A future pre-pass
-  rejecting recursion with a clear diagnostic is a cleaner answer than
-  silently emitting ``?``; tracked separately.
-"""
+Deliberately out of scope: RECURSIVE PURE FUNCTION -- ``hlfir-inline-all`` can't inline a
+self-recursive callee and the bridge has no call fallback; a future pre-pass rejecting
+recursion cleanly is better than silently emitting ``?``."""
 from pathlib import Path
 
 import numpy as np

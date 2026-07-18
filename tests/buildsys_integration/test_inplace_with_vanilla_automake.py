@@ -1,23 +1,4 @@
-"""End-to-end proof of the user's "skip the build-system glue
-entirely" path:
-
-  1. Stage a vanilla automake Fortran-library project (Fortran
-     sources + Makefile.am + configure.ac).  The project knows
-     NOTHING about dace-fortran: no m4 macro, no .mk include,
-     no DACE_FORTRAN_* anywhere.
-  2. Run ``python -m dace_fortran.preprocess_cli --inplace`` over
-     every source to apply the bridge's rewrites in place.
-  3. Run the user's existing autotools chain --
-     ``aclocal -> autoreconf -> ./configure -> make`` -- against
-     the now-rewritten sources.
-  4. Assert a real ``libfoo.so`` is produced AND that it loads /
-     exports the rewritten kernel's symbol.
-
-If this passes, the answer to the user's question -- "can we just
-use a Python script that replaces the file with our generated
-header, and we still compile internally?" -- is yes,
-unambiguously, with no autotools glue at all.
-"""
+"""End-to-end proof that ``preprocess_cli --inplace`` needs no build-system glue: stage a vanilla automake Fortran project (no dace-fortran awareness), rewrite sources in place, run the user's normal autotools chain, and confirm a real ``libfoo.so`` loads and exports the rewritten kernel."""
 import ctypes
 import shutil
 import subprocess
@@ -43,8 +24,7 @@ AC_CONFIG_FILES([Makefile])
 AC_OUTPUT
 """
 
-# A no-Libtool ``.la`` library; build a plain ``libfoo.so`` so the
-# test loads with ctypes without libtool wrappers in the way.
+# build a plain libfoo.so (no libtool .la wrapper) so the test can ctypes.CDLL it directly.
 _MAKEFILE_AM = """\
 AM_FCFLAGS = -fPIC -J$(builddir)
 
@@ -99,16 +79,12 @@ def _stage_project(tmp_path: Path) -> Path:
 
 
 def _autoreconf(proj: Path):
-    """Standard autotools bootstrap.  ``autoreconf -fvi`` does
-    libtoolize + aclocal + autoconf + automake in one shot."""
+    """Standard autotools bootstrap: ``autoreconf -fvi`` does libtoolize + aclocal + autoconf + automake in one shot."""
     subprocess.check_call(["autoreconf", "-fvi"], cwd=str(proj), stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
 
 
 def _preprocess_inplace(proj: Path):
-    """Run the dace-fortran CLI with ``--inplace`` over the kernel
-    source.  This is the ENTIRE bridge-side integration: one
-    command, no automake glue, no m4 macro.
-    """
+    """Run the dace-fortran CLI with ``--inplace`` over the kernel source -- the entire bridge-side integration: one command, no automake glue, no m4 macro."""
     inputs = list(proj.glob("*.f90"))  # kernel.f90 (utils/ stays unprocessed)
     cmd = [
         sys.executable, "-m", "dace_fortran.preprocess_cli", "--all-defaults", "--rewrite-external", "--search-dir",
@@ -122,42 +98,32 @@ def _preprocess_inplace(proj: Path):
 
 
 def test_inplace_then_vanilla_automake_chain_produces_so(tmp_path):
-    """The bottom-line proof: preprocess in place, then run
-    ``aclocal -> autoreconf -> configure -> make`` exactly as the
-    user would for a project that's never heard of dace-fortran.
-    A real ``libfoo.so`` lands in the build tree."""
+    """Preprocess in place, then run the vanilla autotools chain exactly as a project that's never heard of dace-fortran would; a real libfoo.so lands in the build tree."""
     proj = _stage_project(tmp_path)
 
-    # Step 1: preprocess in place.  No autotools touched yet.
+    # step 1: preprocess in place; no autotools touched yet.
     _preprocess_inplace(proj)
 
-    # Confirm the rewrites landed BEFORE configure runs.  This is
-    # the "your build system never saw the original" condition.
+    # confirm rewrites landed before configure runs ("build system never saw the original").
     rewritten = (proj / "kernel.f90").read_text()
     assert "USE utils_mod, ONLY: dscale" in rewritten
     assert "EXTERNAL :: dscale" not in rewritten
-    # ``REAL(KIND=wp) :: dscale`` was deleted alongside the EXTERNAL
-    # (the function-result type declaration is redundant once dscale
-    # is use-associated).  The kind alias ``wp`` therefore disappears
-    # via line deletion, not via normalize-kind's substitution -- the
-    # bottom-line contract is that no unresolved ``wp`` survives.
+    # REAL(KIND=wp) :: dscale is deleted alongside EXTERNAL (redundant once use-associated); wp vanishes via line deletion, not substitution.
     code_lines = "\n".join(line for line in rewritten.splitlines() if not line.lstrip().startswith("!"))
     assert "wp" not in code_lines.lower(), \
         f"kind alias wp should be resolved; got code:\n{code_lines}"
 
-    # Step 2-4: vanilla autotools chain.  No dace-fortran flags.
+    # steps 2-4: vanilla autotools chain, no dace-fortran flags.
     _autoreconf(proj)
     res = subprocess.run(["./configure"], cwd=str(proj), capture_output=True, text=True)
     assert res.returncode == 0, \
         f"configure failed:\nstdout={res.stdout}\nstderr={res.stderr}"
-    # Plain ``make`` -- the Makefile.am lists both
-    # ``utils/utils_mod.f90`` and ``kernel.f90`` in
-    # ``libfoo_la_SOURCES``, in module-first order.
+    # plain make -- Makefile.am lists both sources in libfoo_la_SOURCES, module-first order.
     res = subprocess.run(["make"], cwd=str(proj), capture_output=True, text=True)
     assert res.returncode == 0, \
         f"make failed:\nstdout={res.stdout[-2000:]}\nstderr={res.stderr[-2000:]}"
 
-    # Step 5: assert the .so is on disk and the kernel symbol is in it.
+    # step 5: assert the .so is on disk and exports the kernel symbol.
     candidates = list(proj.glob(".libs/libfoo.so*")) + \
                   list(proj.glob("libfoo.so*"))
     so_paths = [p for p in candidates if p.is_file()]
@@ -165,9 +131,7 @@ def test_inplace_then_vanilla_automake_chain_produces_so(tmp_path):
         f"no libfoo.so produced; tree:\n" + \
         "\n".join(str(p.relative_to(proj)) for p in proj.rglob("*"))
 
-    # Bonus: load the .so and call into the rewritten kernel.
-    # ctypes resolves utils_mod's dscale symbol from the same .so
-    # (libtool linked it in).
+    # load the .so and call into the rewritten kernel; ctypes resolves dscale from the same .so (libtool linked it in).
     lib = ctypes.CDLL(str(so_paths[0]))
     foo_run = lib.foo_run
     foo_run.argtypes = [
@@ -186,13 +150,10 @@ def test_inplace_then_vanilla_automake_chain_produces_so(tmp_path):
 
 
 def test_inplace_only_no_op_when_kernel_already_canonical(tmp_path):
-    """A kernel that's already canonical is left untouched by
-    ``--inplace``.  Use a kernel that doesn't need any rewrites at
-    all -- the two-pass composition of merge-modules with
-    rewrite-external isn't naturally idempotent (rewrite-external
-    adds a ``USE`` statement merge-modules would inline on a second
-    pass), but a kernel with no rewrites to do should be a no-op
-    on every invocation."""
+    """A kernel needing no rewrites is a no-op under ``--inplace`` on every invocation.
+
+    Doesn't test general idempotency: merge-modules + rewrite-external isn't naturally idempotent (rewrite-external's added USE would get inlined on a second pass).
+    """
     proj = tmp_path
     canon = proj / "k.f90"
     canon.write_text("""\

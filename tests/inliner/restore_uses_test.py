@@ -1,20 +1,16 @@
 # Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
-"""Unit tests for the dace-fortran additions to the fparser inliner:
+"""Unit tests for dace-fortran's fparser-inliner additions:
 
-  * ``restore_cross_module_uses`` -- re-adds the inter-module ``USE``
-    statements the pipeline strips, so the merged AST serialises to valid,
-    single-file-compilable Fortran (the NPB-LU multi-file fix);
-  * ``strip_builtin_stub_modules`` -- drops the injected intrinsic-module
-    stubs from a whole-project merge so they do not collide with the
-    compiler's own;
-  * the ``Proc_Component_Def_Stmt`` component-name fix and the
-    ``ASSOCIATE`` fixed-dimension relative-indexing fix (exercised directly
-    here, in addition to the desugaring/analysis pass tests).
+  * restore_cross_module_uses -- re-adds inter-module USE statements the
+    pipeline strips (the NPB-LU multi-file fix);
+  * strip_builtin_stub_modules -- drops injected intrinsic-module stubs from
+    a whole-project merge;
+  * Proc_Component_Def_Stmt component-name fix + ASSOCIATE fixed-dimension
+    relative-indexing fix.
 
-Each test inlines a small multi-module project with ``inline_to_ast`` (the
-merge configuration: no entry point, ``optimize=False``) and checks the
-restored ``USE`` plus -- when ``gfortran`` is available -- that the single
-TU actually compiles.
+Each test inlines a small multi-module project via inline_to_ast (no entry
+point, optimize=False) and checks the restored USE, plus (if gfortran is
+available) that the single TU compiles.
 """
 import re
 import shutil
@@ -48,9 +44,8 @@ def _compiles(src_text: str) -> bool:
 
 
 def _merge(sources: dict, **kw) -> str:
-    """Inline like the build-path merge does: whole project (no entry),
-    structural passes only (``optimize=False``), intrinsic stubs available
-    but stripped from the output."""
+    """Inline like the build-path merge: whole project (no entry), structural
+    passes only (optimize=False), intrinsic stubs available but stripped from output."""
     ast = inline_to_ast(sources, None, include_builtins=True, optimize=False, **kw)
     ast = strip_builtin_stub_modules(ast)
     return ast.tofortran()
@@ -67,9 +62,8 @@ def _has_use_only(text: str, mod: str, name: str) -> bool:
 
 
 def test_restore_use_for_cross_module_subroutine_call():
-    """A subroutine that calls another module's subroutine gets
-    ``USE <mod>, ONLY: <proc>`` restored, and the single TU compiles. This is
-    the NPB-LU pattern (driver module -> compute module)."""
+    """A subroutine calling another module's subroutine gets USE <mod>, ONLY:
+    <proc> restored, and the single TU compiles -- the NPB-LU pattern (driver -> compute module)."""
     sources = {
         "lu.f90":
         """
@@ -192,13 +186,11 @@ end module lib
 
 
 def test_restore_no_double_import_when_whole_module_used():
-    """When a scope already imports a module *whole* (``USE x`` with no
-    ``ONLY:``), the pass must not add a redundant ``USE x, ONLY: proc``.
+    """When a scope already imports a module *whole* (USE x, no ONLY:), the
+    pass must not add a redundant USE x, ONLY: proc.
 
-    Exercised by calling ``restore_cross_module_uses`` directly on a parsed
-    AST that still carries the whole ``USE`` (the full pipeline strips every
-    inter-module ``USE``, so this guard is what protects an AST that does
-    retain one)."""
+    Calls restore_cross_module_uses directly on an AST that still carries the
+    whole USE (the full pipeline strips every inter-module USE)."""
     from fparser.two.parser import ParserFactory
     from fparser.common.readfortran import FortranStringReader
     from dace_fortran.inliner.ast_desugaring import cleanup
@@ -261,8 +253,7 @@ end module drv
 """,
     }
     out = _merge(sources)
-    # ``foo`` is defined in both m1 and m2: the restore pass must not invent an
-    # ``ONLY: foo`` for either (drv's own kept import is what disambiguates).
+    # foo defined in both m1 and m2: restore pass must not invent ONLY: foo for either (drv's own kept import disambiguates).
     assert not _has_use_only(out, "m2", "foo"), out
     assert _compiles(out)
 
@@ -303,11 +294,9 @@ end module useapplu
 
 
 def test_numeric_kind_literal_survives_merge():
-    """A real/int literal with a *numeric* kind suffix (``0.0_8``, ``1_4`` --
-    ubiquitous in real Fortran) must not crash the merge.  ``consolidate_uses``
-    rewrites a *named* kind (``0.0_wp``) into a ``Name`` so it resolves, but a
-    numeric kind is not a valid identifier and must be left as the plain
-    literal."""
+    """A real/int literal with a numeric kind suffix (0.0_8, 1_4) must not
+    crash the merge. consolidate_uses rewrites a *named* kind (0.0_wp) into a
+    Name to resolve it, but a numeric kind isn't a valid identifier and must stay a plain literal."""
     sources = {
         "k.f90":
         """
@@ -359,10 +348,9 @@ end subroutine k
 
 
 def test_intrinsic_iso_c_binding_use_preserved():
-    """A ``USE, INTRINSIC :: iso_c_binding`` for C-interop kinds/types
-    (``c_double_complex``, ``c_ptr``) must survive the merge so the single TU
-    still compiles -- the pipeline otherwise strips it (the stub it parses
-    against lacks ``c_double_complex``), leaving those names undeclared."""
+    """USE, INTRINSIC :: iso_c_binding for C-interop kinds/types
+    (c_double_complex, c_ptr) must survive the merge -- the pipeline otherwise
+    strips it (the stub it parses against lacks c_double_complex), leaving those names undeclared."""
     sources = {
         "kmod.f90":
         """
@@ -426,10 +414,9 @@ end module drv
 
 
 def test_external_interface_block_preserved():
-    """An ``INTERFACE`` block declaring an *external* (C-library) procedure must
-    survive the merge -- the pipeline drops it ("no candidate to resolve to"),
-    leaving the call undeclared.  The single TU must compile to an object (the
-    external symbol is a link-time concern the compile step never reaches)."""
+    """An INTERFACE block declaring an external (C-library) procedure must
+    survive the merge -- the pipeline otherwise drops it ("no candidate to
+    resolve to"), leaving the call undeclared. Compiles to an object only (external symbol is link-time)."""
     sources = {
         "kmod.f90":
         """
@@ -492,14 +479,12 @@ end module drv
 
 
 def test_external_interface_not_duplicated_after_pipeline_mangles_inplace():
-    """The full single-TU path (``optimize=True``) processes a call to an
-    external interface (``deconstruct_interface_calls`` renames it, const-eval
-    folds the interface body's kinds, ``remove_access_and_bind_statements``
-    strips its ``BIND(C)``) so the in-place copy no longer matches the verbatim
-    captured original.  ``restore_external_interfaces`` must drop that mangled
-    copy and re-add exactly one declaration -- and a no-argument ``BIND(C)``
-    subroutine must keep its (fparser-dropped) ``()``.  This is the ICON
-    ``mo_mpi`` -> ``mo_util_system`` (``util_exit`` / ``util_abort``) pattern."""
+    """Full single-TU path (optimize=True) mangles the external-interface copy
+    in place (deconstruct_interface_calls renames it, const-eval folds kinds,
+    remove_access_and_bind_statements strips BIND(C)) so it no longer matches
+    the captured original. restore_external_interfaces must drop the mangled
+    copy and re-add exactly one declaration, and a no-arg BIND(C) subroutine
+    must keep its (fparser-dropped) (). ICON's mo_mpi -> mo_util_system (util_exit/util_abort) pattern."""
     from dace_fortran.fparser_inliner import inline_to_single_tu
     sources = {
         "s.f90":

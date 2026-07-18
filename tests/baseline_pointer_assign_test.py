@@ -1,19 +1,7 @@
-"""Baseline HLFIR coverage  --  Fortran ``POINTER`` rebinding under the
-strict-no-aliasing assumption.
-
-The bridge collapses ``ptr => target`` rebinds in
-``hlfir-rewrite-pointer-assigns``: every read or write of the pointer
-becomes an access to the rebind target's storage.  The pass emits a
-warning per firing so callers see the no-alias assumption  --  Fortran
-allows aliased pointer access, this collapse is unsafe if the program
-relies on it.
-
-Pinned coverage:
-  * Pointer to a scalar struct field (``tmp => s%a``).
-  * Pointer to a scalar local (``tmp => x``).
-  * Both reads and writes through the pointer (``tmp = 13``,
-    ``r = func(tmp)``).
-"""
+"""Fortran ``POINTER`` rebinding under the strict-no-aliasing assumption: the bridge
+collapses ``ptr => target`` in ``hlfir-rewrite-pointer-assigns`` so every read/write of the
+pointer becomes an access to the rebind target's storage -- unsafe if the program relies on
+aliasing (the pass warns per firing)."""
 
 from pathlib import Path
 
@@ -48,10 +36,8 @@ end subroutine main
 
 
 def test_scalar_rebind_lowers_as_length_one_view(tmp_path: Path):
-    """``tmp => x`` lowers as a length-1-array View of ``x``: writing through
-    ``tmp`` aliases ``x`` (read ``x`` directly afterwards, not ``tmp``), and
-    ``x`` is materialised as a length-1 ``Array`` (not a ``Scalar``) so the
-    view can write back.  Pins the all-rebinds-are-Views design for scalars."""
+    """``tmp => x`` lowers as a length-1-array View of ``x``: writes through ``tmp`` alias
+    ``x``, and ``x`` is a length-1 ``Array`` (not ``Scalar``) so the view can write back."""
     import dace.data as dd
     src = """
 subroutine main(out)
@@ -80,12 +66,9 @@ end subroutine main
 
 
 def test_dead_store_rebind_is_collapsed(tmp_path: Path):
-    """Sequential dead-store rebinds (``ptr => A; ptr => B; use ptr``)
-    are not ambiguous  --  only the LAST rebind is observable.  The
-    pass takes the last and erases the earlier dead store.
-
-    Pattern shows up in ICON-style code where flang lowers an
-    aggregate rebind as multiple stores to the same pointer slot."""
+    """Sequential dead-store rebinds (``ptr=>A; ptr=>B; use ptr``): only the LAST is
+    observable, pass erases the earlier dead store -- mirrors ICON's aggregate-rebind
+    lowering (multiple stores to one pointer slot)."""
     src = """
 subroutine main(out)
   implicit none
@@ -106,16 +89,8 @@ end subroutine main
 
 
 def test_unsupported_interleaved_rebinds_raises(tmp_path: Path):
-    """Loud-failure contract: a READ between two rebinds observes the
-    earlier target  --  collapsing to one would lose that semantics.
-    The pass must surface a clear unsupported error.
-
-    NOTE: triggering this from Fortran source needs a non-trivial
-    use of the first target between rebinds.  We assemble the IR
-    pattern by force-feeding the bridge two rebind sites with a
-    read in the middle; since Fortran source doesn't usually emit
-    this shape, the test guards against future bridge changes that
-    might silently coalesce reads with rebinds."""
+    """Loud-failure contract: a READ between two rebinds observes the earlier target, so
+    collapsing to one rebind would lose that semantics -- must raise, not silently coalesce."""
     src = """
 subroutine main(out)
   implicit none
@@ -135,12 +110,9 @@ end subroutine main
 
 
 def test_unsupported_interleaved_rebind_across_blocks_raises(tmp_path: Path):
-    """The interleaved read sits inside an ``IF`` body (a nested ``scf``
-    region), so a purely intra-block (``isBeforeInBlock``) check misses it
-    and the scalar View path would silently bind BOTH reads to the last
-    target (``out(1)`` reads ``y`` instead of ``x``).  The DOMINANCE-based
-    detection catches it: ``out(1)``'s read is not dominated by the final
-    ``tmp => y`` rebind, so the pass rejects loudly."""
+    """Interleaved read sits inside an ``IF`` body (nested ``scf`` region), so an
+    intra-block check would miss it. Dominance-based detection catches it: ``out(1)``'s
+    read is not dominated by the final rebind, so the pass rejects loudly."""
     src = """
 subroutine main(out, cond)
   implicit none
@@ -163,14 +135,9 @@ end subroutine main
 
 
 def test_bounds_remap_lb_rebase_lowers_as_view(tmp_path: Path):
-    """``w(0:n-1) => src(1:n)`` rebases the pointer's lower bound to 0.
-    Under the all-rebinds-are-views design this lowers as a View whose
-    access offset is the explicit lb: ``w(0)`` aliases ``src(1)``,
-    ``w(n-1)`` aliases ``src(n)``.  The rewrite pass captures the constant
-    lb off the rebox's ``fir.shape_shift`` and forwards it as the view's
-    ``lower_bounds`` so descriptors.py stamps ``offset_w_d0 = 0``.  (Was a
-    loud-failure rejection while the index-rewrite couldn't model the lb
-    shift.)"""
+    """``w(0:n-1) => src(1:n)`` rebases the lower bound to 0: lowers as a View whose access
+    offset is the captured lb (``w(0)`` aliases ``src(1)``). Was a loud-failure rejection
+    before the index-rewrite could model the lb shift."""
     src = """
 subroutine main(out)
   implicit none
@@ -196,10 +163,8 @@ end subroutine main
 
 
 def test_bounds_remap_nonzero_lb_rebase_view(tmp_path: Path):
-    """``w(5:14) => src(1:10)`` -- lb rebased to 5 (neither 0 nor the
-    Fortran default 1).  ``w(5)`` aliases ``src(1)``, ``w(14)`` aliases
-    ``src(10)``; verifies the view's access offset is the *captured* lb,
-    not a hardcoded default."""
+    """``w(5:14) => src(1:10)``: lb rebased to 5 (neither 0 nor Fortran default 1) --
+    verifies the view's access offset is the *captured* lb, not a hardcoded default."""
     src = """
 subroutine main(out)
   implicit none
@@ -224,10 +189,8 @@ end subroutine main
 
 
 def test_bounds_remap_nonconstant_lb_still_rejected(tmp_path: Path):
-    """Loud-failure contract preserved for the genuinely-unmodellable
-    case: a bounds remap with a NON-constant lower bound (``w(k:k+n-1) =>
-    src(1:n)``, ``k`` a runtime value) has no fixed View access offset, so
-    the pass still rejects."""
+    """Bounds remap with a NON-constant lower bound (runtime ``k``) has no fixed View
+    access offset -- the pass still rejects."""
     src = """
 subroutine main(n, k, src, res)
   implicit none
@@ -244,20 +207,10 @@ end subroutine main
 
 
 def test_pointer_rebind_to_array_slice(tmp_path: Path):
-    """``w => store(1:n); res = w(2) + w(4)``  --  pointer rebound to a
-    triplet section of a TARGET array.  Distinct from
-    ``ptr => target_decl`` (the existing test): the rebind value is
-    ``fir.rebox(hlfir.designate(parent, slice))`` rather than
-    ``fir.embox(declare)``.  ``hlfir-rewrite-pointer-assigns``'s
-    slice-target arm forwards the rebound section box to every load
-    of the pointer slot, skipping the alloca round-trip; the bridge's
-    ``traceToDecl`` then walks through ``fir.rebox`` and the
-    ``hlfir.designate`` chain back to the parent declare so each
-    ``w(i)`` reads ``parent(i)`` directly.
-
-    Strict-no-aliasing assumption: the rewrite is unsafe if the
-    program relies on aliasing.  No runtime ALLOCATED checks.
-    """
+    """``w => store(1:n); res = w(2) + w(4)``: pointer rebound to a triplet section
+    (``fir.rebox(hlfir.designate(...))``, not ``fir.embox(declare)``) -- ``traceToDecl``
+    walks the chain back to the parent so ``w(i)`` reads ``parent(i)`` directly. No
+    runtime ALLOCATED checks."""
     src = """
 subroutine main(n, store, res)
   implicit none
@@ -278,13 +231,9 @@ end subroutine main
 
 
 def test_pointer_to_struct_scalar_field(tmp_path: Path):
-    """``tmp => s%a; tmp = 13``  --  pointer rebound onto a scalar struct field.
-
-    flatten-structs runs first and replaces ``s%a`` with a flat ``s_a``
-    declare; the rewrite-pointer-assigns pass then traces the rebind's
-    target through the box+embox chain to ``s_a`` and replaces every
-    pointer use with the flat declare.
-    """
+    """``tmp => s%a; tmp = 13``: pointer rebound onto a scalar struct field.
+    flatten-structs runs first (``s%a`` -> flat ``s_a`` declare); rewrite-pointer-assigns
+    traces the rebind through the box+embox chain to ``s_a``."""
     src = """
 module lib
   implicit none

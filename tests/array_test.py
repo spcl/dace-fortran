@@ -1,10 +1,4 @@
-"""Verbatim port of f2dace/dev:tests/fortran/array_test.py.
-
-Each test keeps the original Fortran source unchanged.  The harness is
-swapped from f2dace's ``SourceCodeBuilder().check_with_gfortran() +
-create_singular_sdfg_from_string`` to FaCe's ``build_sdfg`` + an f2py
-reference where applicable.
-"""
+"""Verbatim port of f2dace/dev:tests/fortran/array_test.py; harness swapped to FaCe's build_sdfg."""
 
 import numpy as np
 import pytest
@@ -15,7 +9,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_fortran_frontend_array_access(tmp_path):
-    """Tests that the Fortran frontend can parse array accesses and that the accessed indices are correct."""
+    """Array-access indices parse correctly."""
     src = """
 subroutine main(d)
   double precision d(4)
@@ -29,7 +23,7 @@ end subroutine main
 
 
 def test_fortran_frontend_array_ranges(tmp_path):
-    """Tests that the Fortran frontend can parse multidimenstional arrays with vectorized ranges."""
+    """Multidimensional arrays with vectorized ranges parse correctly."""
     src = """
 subroutine main(d)
   double precision d(3, 4, 5), e(3, 4, 5), f(3, 4, 5)
@@ -53,7 +47,7 @@ end subroutine main
 
 
 def test_fortran_frontend_array_multiple_ranges_with_symbols(tmp_path):
-    """Tests that the Fortran frontend can parse multidimenstional arrays with vectorized ranges over symbols."""
+    """Vectorized ranges over symbolic bounds parse correctly."""
     src = """
 subroutine main(a, lu, iend, m)
   integer, intent(in) :: iend, m
@@ -70,7 +64,7 @@ end subroutine main
 
 
 def test_fortran_frontend_array_3dmap(tmp_path):
-    """Tests that the normalization of multidimensional array indices works correctly."""
+    """Multidimensional array index normalization."""
     src = """
 subroutine main(d)
   double precision d(4, 4, 4)
@@ -85,7 +79,7 @@ end subroutine main
 
 
 def test_fortran_frontend_twoconnector(tmp_path):
-    """Tests that the multiple connectors to one array are handled correctly."""
+    """Multiple connectors to one array are handled correctly."""
     src = """
 subroutine main(d)
   double precision d(4)
@@ -101,7 +95,7 @@ end subroutine main
 
 
 def test_fortran_frontend_input_output_connector(tmp_path):
-    """Tests that the presence of input and output connectors for the same array is handled correctly."""
+    """Input and output connectors on the same array are handled correctly."""
     src = """
 subroutine main(d)
   double precision d(2, 3)
@@ -114,8 +108,7 @@ end subroutine main
 """
     sdfg = build_sdfg(src, tmp_path, name='main').build()
     a = np.full([2, 3], 42, order="F", dtype=np.float64)
-    # `a`, `b` are local scalars promoted to symbols (they index `d`).  Pass
-    # placeholder values; the SDFG initialises them via interstate edges.
+    # a, b are local scalars promoted to symbols (index d); placeholders inited via interstate edges.
     sdfg(d=a, a=0, b=0)
     assert (a[0, 0] == 0)
     assert (a[0, 1] == 5)
@@ -123,7 +116,7 @@ end subroutine main
 
 
 def test_fortran_frontend_memlet_in_map_test(tmp_path):
-    """Tests that no assumption is made where the iteration variable is inside a memlet subset."""
+    """No assumption on iteration-variable position inside a memlet subset."""
     src = """
 subroutine main(INP, OUT)
   real INP(100, 10)

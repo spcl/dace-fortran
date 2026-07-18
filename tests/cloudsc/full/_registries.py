@@ -1,19 +1,9 @@
 """Registries + helpers for the full-CLOUDSC integration test.
 
-Lifted near-verbatim from the data-must-flow artifacts'
-``cloudsc/validate_cloudsc.py``
-(the dict registries + the input/output helpers that
-drove the old ``dace.frontend.fortran`` Python frontend's
-end-to-end test).  Reused here for the HLFIR bridge port  --  the
-shapes and intent classifications are independent of which
-frontend builds the SDFG.
-
-Unified under one program key, ``cloudscexp2``, to match the
-Fortran source's subroutine name ``CLOUDSCOUTER`` (entry =
-``_QPcloudscouter``).  The original file had a typo where
-``program_outputs`` keyed off ``'cloudscexp2_inner'`` while
-``program_inputs`` / ``program_parameters`` keyed off
-``'cloudscexp2_full_20230324'``; both consolidate to one key.
+Lifted near-verbatim from ``cloudsc/validate_cloudsc.py`` (the old Python-frontend
+e2e test); shapes/intents are frontend-independent so reused for the HLFIR bridge
+port.  Unified under one key ``cloudscexp2`` (= ``CLOUDSCOUTER``/``_QPcloudscouter``)
+-- the original source had inputs/outputs keyed off two different typo'd strings.
 """
 
 from numbers import Integral, Number
@@ -21,15 +11,11 @@ from typing import Dict, Union
 
 import numpy as np
 
-# Small problem size so the test stays fast: NPROMA=1, KLEV=137,
-# NBLOCKS=4 (~MB total memory, not a benchmark).
+# Small size so the test stays fast: NPROMA=1, KLEV=137, NBLOCKS=4 (~MB, not a benchmark).
 nbvalue = 4
 
-# gfortran flags for the f2py reference.  Portable LLVM-flang core
-# ``-O0 -fno-fast-math -ffp-contract=off`` plus the sole
-# intentionally gfortran-only flag ``-ffree-line-length-none`` -- a
-# non-semantic parser necessity for the long-line cloudsc source;
-# LLVM-flang has no line limit so needs no equivalent.
+# gfortran flags for the f2py reference: portable core flags plus the gfortran-only
+# ``-ffree-line-length-none`` (long-line source; flang has no line limit).
 CLOUDSC_F90FLAGS = "-O0 -fno-fast-math -ffp-contract=off -ffree-line-length-none"
 
 PROGRAM = "cloudscexp2"
@@ -56,11 +42,10 @@ parameters = {
     'NCLDDIAG': 1,
     'NAERCLD': 1,
     'NBLOCKS': nbvalue,
-    # Scalar LOGICAL parameters: keep as np.bool_ so the call-site
-    # routing in test_cloudsc_full.py::_sdfg_call_args picks the
-    # bridge's ``bool *`` ABI cleanly.  Casting to np.int32 here would
-    # work for value=1 by accident (LSB matches) but silently corrupt
-    # any value with bit-0 = 0 -- see ``test_bool_scalar_logical_pass_through``.
+    # Keep as np.bool_ (not np.int32) so call-site routing in
+    # test_cloudsc_full.py::_sdfg_call_args picks the bridge's ``bool *`` ABI;
+    # int32 would silently corrupt values with bit-0=0 -- see
+    # test_bool_scalar_logical_pass_through.
     'LDMAINCALL': np.bool_(True),
     'LDSLPHY': np.bool_(True),
     'LAERLIQAUTOCP': np.bool_(True),
@@ -79,9 +64,8 @@ parameters = {
     'NBETA': nbvalue,
 }
 
-# Per-array shape + dtype registry.  ``(0,)`` marks a Fortran SCALAR
-# (real(8) by default; dtype overridden via the
-# ``[shape, dtype]`` list form).
+# Per-array shape + dtype registry.  ``(0,)`` = Fortran SCALAR (real(8) default;
+# override dtype via the ``[shape, dtype]`` list form).
 data = {
     'NSHAPEP': (0, ),
     'NSHAPEQ': (0, ),
@@ -327,8 +311,7 @@ program_parameters = (
     'NBETA',
 )
 
-# Input arrays / scalars (every Fortran INTENT(IN) on the
-# CLOUDSCOUTER signature).
+# Input arrays/scalars: every Fortran INTENT(IN) on the CLOUDSCOUTER signature.
 program_inputs = (
     'PTSPHY',
     'PT',
@@ -382,9 +365,7 @@ program_inputs = (
     'PRE_ICE',
     'PCCN',
     'PNICE',
-    # physical constants (passed as scalars in the simplified flattened
-    # variant; the verification_pipeline version bundles these as
-    # `ydcst` / `ydthf` derived types).
+    # physical constants (scalars here; verification_pipeline bundles as ydcst/ydthf derived types)
     'RG',
     'RD',
     'RCPD',
@@ -544,21 +525,11 @@ program_outputs = (
 )
 
 # --------------------------------------------------------------------------
-# Physically-plausible CLOUDSC input generator.
-#
-# ``get_inputs_physical`` maps every CLOUDSC input array onto a
-# physically-plausible distribution so the microphysics stays in its
-# valid operating regime -- no NaN/inf intermediates.  This matters
-# because Fortran MIN/MAX with a NaN operand is processor-dependent
-# by the standard, so a NaN reaching one would make the SDFG vs
-# gfortran comparison test unspecified behaviour.
-#
-# Constant values are the canonical ECMWF IFS / dwarf-p-cloudsc
-# settings (``yomcst.F90`` physical constants, ``yoethf_mod.F90``
-# saturation-vapour coefficients, ``yoecldp.F90`` cloud-scheme
-# tunables, ``RCL_*`` warm-rain / Abel-Boutle constants).  Profile
-# shapes follow a standard mid-latitude troposphere/stratosphere
-# column on the L137 vertical grid.
+# Physically-plausible CLOUDSC input generator: every array sampled in its valid
+# operating regime (no NaN/inf) -- Fortran MIN/MAX with NaN is processor-dependent,
+# so a NaN would make the SDFG-vs-gfortran comparison unspecified.  Constants are
+# canonical ECMWF IFS / dwarf-p-cloudsc values (yomcst/yoethf_mod/yoecldp/RCL_*);
+# profiles follow a standard L137 mid-latitude column.
 # --------------------------------------------------------------------------
 
 # Canonical ECMWF physical constants (SI units), from IFS ``yomcst.F90``.
@@ -704,8 +675,7 @@ _RCL_CONST6R = 1.0
 _RCL_FZRAB = 0.66  # Bigg freezing constant
 _RCL_FZRBB = 100.0
 
-# Map a constant name to its canonical value (everything not in here is
-# either a runtime profile array, a parameter, or generated below).
+# Maps constant name -> canonical value (everything else is a runtime array/parameter).
 _PHYSICAL_CONSTANTS = {
     'RG': _RG,
     'RD': _RD,
@@ -841,18 +811,11 @@ _PHYSICAL_CONSTANTS = {
 
 
 def _pressure_half_levels(klev: int) -> np.ndarray:
-    """Build a monotone-increasing half-level pressure profile [Pa].
+    """Monotone-increasing half-level pressure profile [Pa].
 
-    CLOUDSC reads ``ZDP = PAPH(JK+1) - PAPH(JK)`` and
-    ``ZRHO = PAP/(RD*T)``, so the half-level pressure must increase with
-    level index (top of atmosphere -> surface) and stay strictly
-    positive.  A simple hybrid-sigma-like geometric-to-linear blend from
-    ~2 hPa at the model top to ~1010 hPa at the surface reproduces the
-    L137 IFS grid closely enough for the microphysics to stay in range.
-
-    :param klev: number of full levels (half levels = ``klev + 1``).
-    :returns: 1-D array of shape ``(klev + 1,)`` in Pa, strictly
-        increasing.
+    CLOUDSC needs ``PAPH`` strictly increasing (``ZDP=PAPH(JK+1)-PAPH(JK)``) and
+    positive (``ZRHO=PAP/(RD*T)``); blends ~2 hPa top to ~1010 hPa surface across
+    the L137 grid.
     """
     p_top = 2.0e2  # ~2 hPa model top
     p_sfc = 1.01e5  # ~1010 hPa surface
@@ -864,16 +827,9 @@ def _pressure_half_levels(klev: int) -> np.ndarray:
 
 
 def _temperature_profile(klev: int, rng: np.random.Generator) -> np.ndarray:
-    """Build a mid-latitude temperature profile [K] over full levels.
-
-    Tropopause near level fraction ~0.25 (from the top), ~210 K minimum,
-    warming to ~295 K at the surface, plus small (~1 K) noise.  Kept
-    inside [180, 320] K so every ``FOEEW``/``EXP`` saturation evaluation
-    and the ``RTHOMO``/``RTICE`` phase branches stay numerically sane.
-
-    :param klev: number of full levels.
-    :param rng: random generator for the small perturbation.
-    :returns: 1-D array of shape ``(klev,)`` in K.
+    """Mid-latitude temperature profile [K]: tropopause ~210 K near the top, ~295 K
+    surface, clipped to [180, 320] K so FOEEW/EXP saturation and the RTHOMO/RTICE
+    phase branches stay numerically sane.
     """
     eta = np.linspace(0.0, 1.0, klev)  # 0 = top, 1 = surface
     t_strat = 215.0  # lower stratosphere
@@ -889,32 +845,11 @@ def _temperature_profile(klev: int, rng: np.random.Generator) -> np.ndarray:
 
 
 def get_inputs_physical(rng: np.random.Generator) -> Dict[str, Union[Number, np.ndarray]]:
-    """Build a physically-plausible input dict for one CLOUDSCOUTER call.
-
-    The CLOUDSC input generator: every value sampled from a
-    physically-plausible distribution (physical constants, profile
-    shapes) so the kernel runs in its valid regime:
-
-    * physical constants (``RG``/``RD``/``RTT``/``RCL_*`` etc.) set to
-      their canonical ECMWF IFS / dwarf-p-cloudsc values rather than
-      random;
-    * temperature ``PT`` ~ 180-320 K mid-latitude column profile;
-    * pressures ``PAP``/``PAPH`` ~ 2 hPa..1010 hPa, strictly monotone in
-      level (so ``PAPH(JK+1)-PAPH(JK) > 0``);
-    * specific humidity ``PQ`` and condensate mixing ratios ``PCLV`` /
-      VDF/Dynamics sources non-negative and small (~1e-8..1e-2);
-    * cloud fraction ``PA`` in ``[0, 1]``;
-    * tendencies small and signed; mass fluxes small and signed;
-    * boolean/integer inputs (``LDCUM``/``KTYPE``) unchanged in spirit.
-
-    Keeps every microphysics intermediate (notably ``ZINEW`` in the
-    ice-deposition body) finite so no NaN reaches a Fortran MIN/MAX
-    (whose NaN result is processor-dependent by the standard).
-
-    :param rng: NumPy random generator (caller controls the seed).
-    :returns: dict keyed by original Fortran identifier casing, values
-        are Python scalars (parameters/constants) or Fortran-order
-        ``np.ndarray`` (profiles).
+    """Physically-plausible input dict for one CLOUDSCOUTER call: constants at their
+    canonical ECMWF/dwarf-p-cloudsc values, profiles (PT/PAP/PAPH) from the helpers
+    above, everything else sampled in-regime (PQ/PCLV non-negative, PA in [0,1],
+    tendencies/fluxes small and signed) so no NaN reaches a Fortran MIN/MAX
+    (processor-dependent on NaN per the standard).
     """
     klon = parameters['KLON']
     klev = parameters['KLEV']
@@ -926,10 +861,8 @@ def get_inputs_physical(rng: np.random.Generator) -> Dict[str, Union[Number, np.
         inp[p] = parameters[p]
 
     def _broadcast_level(profile_1d: np.ndarray, nlev: int) -> np.ndarray:
-        """Tile a per-level 1-D profile to ``(KLON, nlev, NBLOCKS)`` and
-        add small per-column/per-block noise so blocks are not identical
-        (CLOUDSC is column-independent; distinct columns exercise the
-        data-dependent branches)."""
+        """Tile a per-level 1-D profile to ``(KLON, nlev, NBLOCKS)`` (CLOUDSC is
+        column-independent, so columns/blocks share the profile)."""
         arr = np.empty((klon, nlev, nblk), dtype=np.float64)
         for ib in range(nblk):
             for il in range(klon):
@@ -940,9 +873,7 @@ def get_inputs_physical(rng: np.random.Generator) -> Dict[str, Union[Number, np.
     pap_prof = 0.5 * (paph_prof[:-1] + paph_prof[1:])  # full-level mid (klev,)
     t_prof = _temperature_profile(klev, rng)  # (klev,)
 
-    # Saturation specific humidity ~ Magnus over the profile, used as the
-    # ceiling for the generated humidity / condensate so nothing exceeds
-    # what the air can physically hold.
+    # Saturation specific humidity (Magnus) -- ceiling so generated humidity/condensate never exceeds what air can hold.
     esat = 611.21 * np.exp(17.502 * (t_prof - _RTT) / (t_prof - 32.19))
     qsat = 0.622 * esat / np.maximum(pap_prof - esat, 1.0)  # kg/kg
 
@@ -979,8 +910,7 @@ def get_inputs_physical(rng: np.random.Generator) -> Dict[str, Union[Number, np.
             # Cloud fraction in [0, 1], biased low (mostly clear sky).
             inp[name] = np.asfortranarray(np.clip(rng.beta(1.5, 4.0, (klon, klev, nblk)), 0.0, 1.0))
         elif name == 'PCLV':
-            # Per-species condensate mixing ratios [kg/kg]: liquid/ice/
-            # rain/snow small and non-negative, vapour ~ PQ-scale.
+            # Condensate mixing ratios [kg/kg]: liquid/ice/rain/snow small & non-negative, vapour ~ PQ-scale.
             pclv = np.zeros((klon, klev, nclv, nblk), dtype=np.float64)
             for sp, scale in (
                 (parameters['NCLDQL'] - 1, 3.0e-4),
@@ -1032,8 +962,7 @@ def get_inputs_physical(rng: np.random.Generator) -> Dict[str, Union[Number, np.
             # Ice effective radius [m] ~ 10-100 micron.
             inp[name] = np.asfortranarray(rng.uniform(1.0e-5, 1.0e-4, (klon, klev, nblk)))
         elif name.startswith('tendency_'):
-            # Cumulative / local / tmp tendencies: small signed.
-            # CLD species tendency is rank-4.
+            # Cumulative/local/tmp tendencies: small signed; CLD species is rank-4.
             tshape = (klon, klev, nclv, nblk) if name.endswith('_cld') \
                 else (klon, klev, nblk)
             inp[name] = np.asfortranarray(rng.uniform(-1.0e-7, 1.0e-7, tshape))
@@ -1044,12 +973,9 @@ def get_inputs_physical(rng: np.random.Generator) -> Dict[str, Union[Number, np.
             else:
                 inp[name] = np.asfortranarray(rng.uniform(0.0, 1.0e-4, shape))
 
-    # Safety net: never hand an *exact* 0.0 to a continuous float field
-    # -- nudge to a tiny same-signed epsilon (well below every field's
-    # physical scale) so no degenerate zero-only branch / 0-division
-    # edge case is exercised by the generated data.  Categorical fields
-    # keep their exact values: integer/boolean arrays are skipped by
-    # dtype, and the {0,1} land-sea mask ``PLSM`` is excluded by name.
+    # Never hand an exact 0.0 to a continuous float field -- nudge to a tiny
+    # same-signed epsilon so no degenerate zero/0-division branch is exercised.
+    # Categorical fields (int/bool dtype, PLSM by name) are excluded.
     _ZERO_EPS = 1.0e-12
     for _k, _v in inp.items():
         if (isinstance(_v, np.ndarray) and _v.dtype.kind == 'f' and _k != 'PLSM'):
@@ -1062,12 +988,8 @@ def get_inputs_physical(rng: np.random.Generator) -> Dict[str, Union[Number, np.
 
 
 def get_outputs(rng: np.random.Generator) -> Dict[str, np.ndarray]:
-    """Build the output dict for one call to CLOUDSCOUTER.
-
-    Pre-allocated Fortran-order arrays per the ``program_outputs``
-    list, filled with random data so the assertion catches anything
-    the kernel forgets to overwrite.
-    """
+    """Output dict for one CLOUDSCOUTER call: pre-allocated with random data so the
+    assertion catches anything the kernel forgets to overwrite."""
     out_data = dict()
     for out in program_outputs:
         if out not in data:

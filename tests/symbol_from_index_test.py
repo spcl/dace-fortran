@@ -1,10 +1,6 @@
-"""A local scalar variable used only as an array index should become an
-SDFG symbol, so writes to it emit an interstate-edge assignment that
-bumps the state machine forward.
-
-This is a stricter classification than the current bridge uses  --  shape
-and loop-bound scalars already land as symbols, but an "index-only
-scalar" like ``ix`` in a ``b(i) = a(ix); ix = ix + 1`` pattern does not.
+"""Local scalar used only as an array index should become an SDFG symbol, so writes emit an
+interstate-edge assignment. Stricter than the current bridge: shape/loop-bound scalars land
+as symbols already, but an "index-only scalar" (``ix`` in ``b(i) = a(ix); ix = ix + 1``) does not.
 """
 
 import shutil

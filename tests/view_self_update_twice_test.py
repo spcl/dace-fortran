@@ -1,19 +1,11 @@
 """Two self-updates on the same view dummy in the same block.
 
-Minimal repro of cloudsc's lines 1369-1378 PLUDE pattern: section-
-slice INOUT dummy gets two back-to-back self-updates in the same
-inlined-callee block.  Without the Phase I split + view-writeback
-cache reset the second update reads through the write-side view,
-giving the view ``in=1 (tasklet) + out=2 (writeback + downstream
-read)``  --  which DaCe's ``get_view_edge`` can't disambiguate.
-
-Two variants:
-* plain back-to-back self-updates
-* same wrapped in an IF (lifts the cond expression to an interstate
-  edge; section_alias + anchor-state safety net must keep this
-  working)
-
-E2e against an f2py-compiled reference of the same Fortran source.
+Minimal repro of cloudsc's lines 1369-1378 PLUDE pattern: a section-slice
+INOUT dummy gets two back-to-back self-updates in one inlined-callee block.
+Without the Phase I split + view-writeback cache reset, the second update
+reads through the write-side view (``in=1, out=2`` -- DaCe's ``get_view_edge``
+can't disambiguate). Variants: plain, and wrapped in an IF (lifts the cond to
+an interstate edge). E2e against an f2py-compiled reference.
 """
 
 import numpy as np

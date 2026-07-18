@@ -1,20 +1,11 @@
-"""End-to-end tests for the Fortran ``COUNT`` intrinsic flowing through
-the HLFIR frontend -> ``CountLibraryNode``.
+"""End-to-end tests for Fortran ``COUNT`` through the HLFIR frontend ->
+``CountLibraryNode``.
 
-Three lowering modes:
-
-- **Mode A**  --  ``COUNT(mask)`` over a plain logical / integer mask
-  (whole-array reduce; output is a scalar).
-- **Mode B**  --  ``COUNT(mask, dim=k)`` per-dim reduction (output is a
-  rank-(N-1) array).
-- **Mode C**  --  ``COUNT(<expression>)`` where the source is an inline
-  ``hlfir.elemental`` (typically a comparison ``arr1 .eq. arr2`` or a
-  compound boolean).  The bridge synthesises a transient int32 mask via
-  a per-element loop, then routes it through ``CountLibraryNode``.
-
-Each test compares against a numpy reference; numerical correctness is
-the bar.  The library node's own pure expansion is covered separately
-in ``count_library_node_test.py``."""
+Modes: A = ``COUNT(mask)`` whole-array (scalar out); B = ``COUNT(mask, dim=k)``
+per-dim (rank-(N-1) out); C = ``COUNT(<expr>)`` over an inline ``hlfir.elemental``
+(mask synthesised via a per-element loop).  Checked against numpy; the lib node's
+own expansion is covered in ``count_library_node_test.py``.
+"""
 
 from pathlib import Path
 
@@ -31,9 +22,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_count_mode_a_logical_mask_1d(tmp_path: Path):
-    """``COUNT(mask)`` on a 1-D logical mask.  Source is a plain
-    ``hlfir.declare`` array; bridge picks the kLibTable ``count`` entry,
-    emits a CountLibraryNode (no ``dim``), output is a scalar."""
+    """``COUNT(mask)`` on a 1-D logical mask -- plain ``hlfir.declare``, no ``dim``, scalar out."""
     src = """
 subroutine main(mask, n, res)
   integer, intent(in)  :: n
@@ -52,8 +41,7 @@ end subroutine main
 
 
 def test_count_mode_a_integer_mask_2d_whole(tmp_path: Path):
-    """``COUNT(mask)`` on a 2-D integer mask  --  same path as 1-D, just
-    a different rank.  Whole-array reduce; output is a scalar."""
+    """``COUNT(mask)`` on a 2-D integer mask -- same path as 1-D, different rank."""
     src = """
 subroutine main(mask, n, m, res)
   integer, intent(in)  :: n, m
@@ -77,10 +65,8 @@ end subroutine main
 
 
 def test_count_mode_b_with_dim_2(tmp_path: Path):
-    """``COUNT(mask, dim=2)`` on a 2-D mask  --  output is rank-1 (collapses
-    the second dim).  Bridge traces the dim operand via traceConstInt
-    and stamps it on the ASTNode's reduce_axes; emit_libcall converts
-    back to Fortran 1-based for CountLibraryNode's constructor."""
+    """``COUNT(mask, dim=2)`` -- traceConstInt resolves the dim, emit_libcall converts
+    to Fortran 1-based for the CountLibraryNode ctor; output is rank-1."""
     src = """
 subroutine main(mask, n, m, res)
   integer, intent(in)  :: n, m
@@ -99,8 +85,7 @@ end subroutine main
 
 
 def test_count_mode_b_with_dim_1(tmp_path: Path):
-    """``COUNT(mask, dim=1)`` on a 2-D mask  --  output is rank-1 along
-    the second axis."""
+    """``COUNT(mask, dim=1)`` on a 2-D mask -- output is rank-1 along the second axis."""
     src = """
 subroutine main(mask, n, m, res)
   integer, intent(in)  :: n, m
@@ -124,10 +109,8 @@ end subroutine main
 
 
 def test_count_mode_c_array_comparison(tmp_path: Path):
-    """``COUNT(a .eq. b)``  --  comparison inline.  Flang lowers the mask
-    as ``hlfir.elemental { arith.cmpi eq; yield_element }``; the bridge
-    walks the body, materialises a transient int32 mask, and routes
-    through CountLibraryNode."""
+    """``COUNT(a .eq. b)`` -- flang lowers the mask as ``hlfir.elemental``; the bridge
+    walks the body, materialises a transient int32 mask, routes through CountLibraryNode."""
     src = """
 subroutine main(a, b, n, res)
   integer, intent(in)  :: n
@@ -147,8 +130,8 @@ end subroutine main
 
 
 def test_count_mode_c_compound_boolean(tmp_path: Path):
-    """``COUNT((a .gt. lo) .and. (a .lt. hi))``  --  nested elemental
-    wrapping two comparisons combined by ``and``.  Same Mode C path."""
+    """``COUNT((a .gt. lo) .and. (a .lt. hi))`` -- nested elemental combining two
+    comparisons; same Mode C path."""
     src = """
 subroutine main(a, n, lo, hi, res)
   integer, intent(in)  :: n, lo, hi

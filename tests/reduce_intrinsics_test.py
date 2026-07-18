@@ -1,8 +1,5 @@
-"""Whole-array scalar reductions -> DaCe ``standard.Reduce`` library node.
-
-Checks that ``sum``, ``product``, ``minval``, ``maxval`` each lower
-through Flang's dedicated HLFIR op into an SDFG Reduce node, and that
-the numerical result matches the gfortran/f2py-compiled reference.
+"""Whole-array scalar reductions -> DaCe ``standard.Reduce`` library node: sum/product/
+minval/maxval each lower through Flang's HLFIR reduce op, matching the gfortran/f2py reference.
 """
 
 import shutil
@@ -51,9 +48,8 @@ def test_scalar_reductions_numerical(tmp_path):
                                     np.zeros(1, order="F"))
     mod.reduce_scalar(np.asfortranarray(a), t_ref, p_ref, lo_ref, hi_ref)
 
-    # SDFG  --  ``intent(inout)`` scalar parameters land as size-1 Array
-    # descriptors (DaCe can't put Scalars on the external signature), so
-    # the caller binds size-1 numpy arrays.
+    # SDFG: intent(inout) scalars land as size-1 Array descriptors (DaCe can't put
+    # Scalars on the external signature), so the caller binds size-1 numpy arrays.
     t_sdfg = np.zeros(1, dtype=np.float64)
     p_sdfg = np.zeros(1, dtype=np.float64)
     lo_sdfg = np.zeros(1, dtype=np.float64)
@@ -67,9 +63,8 @@ def test_scalar_reductions_numerical(tmp_path):
 
 
 def test_scalar_reductions_structure(tmp_path):
-    """The SDFG should contain four ``Reduce`` library nodes, one per
-    ``sum / product / minval / maxval`` call, plus the scalar outputs as
-    non-transient SDFG data."""
+    """SDFG contains four Reduce library nodes (one per sum/product/minval/maxval
+    call) plus the scalar outputs as non-transient SDFG data."""
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(_SRC_PATH.read_text(), sdfg_dir, name="reduce_scalar", pipeline="hlfir-propagate-shapes").build()

@@ -58,8 +58,7 @@ SUBROUTINE compound(a, b)
 END SUBROUTINE
 """
     out = preprocess_fortran(src)
-    # The ``IF (a /= 0 .AND. ...)`` shape was already legal Fortran;
-    # the rewriter only handles single-identifier conditions.
+    # already legal Fortran; the rewriter only handles single-identifier conditions
     assert "IF (a /= 0 .AND. b > 0)" in out
 
 
@@ -85,9 +84,7 @@ SUBROUTINE arr(a, n)
 END SUBROUTINE
 """
     out = preprocess_fortran(src)
-    # ``n`` is a true scalar INTEGER and should be rewritten; the
-    # presence of the integer array ``a(n)`` declaration must not
-    # confuse the scalar-name collector.
+    # n is a true scalar INTEGER; presence of array a(n) must not confuse the scalar-name collector
     assert "IF (n /= 0)" in out
 
 
@@ -114,30 +111,27 @@ END SUBROUTINE
 
 
 # --------------------------------------------------------------------------
-# rewrite_integer_powers -- only integer-valued REAL exponents become
-# repeated multiplies; bare integers / fractional powers are untouched.
+# rewrite_integer_powers: integer-valued REAL exponents -> repeated multiplies;
+# bare integers/fractional powers untouched.
 # --------------------------------------------------------------------------
 
 
 def test_pow_real_two_and_three():
-    # Minimal change: one outer pair only -- the base is a primary so
-    # each factor needs no wrapping of its own.
+    # minimal change: one outer pair only -- base is a primary, no per-factor wrapping needed
     assert rewrite_integer_powers("y = x**2.0") == "y = (x*x)"
     assert rewrite_integer_powers("y = x**3.0_JPRB") == "y = (x*x*x)"
 
 
 def test_pow_base_parenthesised_for_precedence():
-    # Already-parenthesised base keeps its own parens; the single outer
-    # pair preserves precedence (2.0*(t*t), a/(b*b), -(x*x)).
+    # parenthesised base keeps its own parens; outer pair preserves precedence
     assert rewrite_integer_powers("z = (a-b)**2.0") == "z = ((a-b)*(a-b))"
     assert rewrite_integer_powers("f = 2.0*t**2.0 + a/b**2.0") == "f = 2.0*(t*t) + a/(b*b)"
     assert rewrite_integer_powers("g = -x**2.0") == "g = -(x*x)"
 
 
 def test_pow_call_and_array_bases_left_untouched():
-    # Duplicating a function/array reference would call twice -- unsafe
-    # for impure functions and shared inlined accumulators.  Such
-    # powers are left for flang's own lowering.
+    # duplicating a function/array ref would call it twice -- unsafe for impure
+    # functions and shared inlined accumulators; left for flang's own lowering
     assert rewrite_integer_powers("h = arr(i,j)**2.0D0") == "h = arr(i,j)**2.0D0"
     assert rewrite_integer_powers("k = s%m(2)%v**3.0") == "k = s%m(2)%v**3.0"
     assert rewrite_integer_powers("q = custom_sum(d)**2.0") == "q = custom_sum(d)**2.0"
@@ -161,8 +155,8 @@ def test_pow_comment_untouched_and_idempotent():
 
 
 # --------------------------------------------------------------------------
-# promote_real_literals_to_double -- single/default REAL literals become
-# explicit double; already-double and integers are left as-is.
+# promote_real_literals_to_double: single/default REAL literals -> explicit
+# double; already-double and integers left as-is.
 # --------------------------------------------------------------------------
 
 
@@ -193,9 +187,8 @@ def test_double_idempotent():
 
 
 # --------------------------------------------------------------------------
-# strip_openmp_directives -- OpenMP / OpenACC sentinel lines, the
-# ICON ``omp_definitions.inc`` cpp include, and ``#ifdef _OPENMP`` /
-# ``#ifdef _OPENACC`` blocks are removed; unrelated cpp passes through.
+# strip_openmp_directives: OMP/ACC sentinels, ICON's omp_definitions.inc
+# include, and #ifdef _OPENMP/_OPENACC blocks removed; unrelated cpp passes through.
 # --------------------------------------------------------------------------
 
 
@@ -218,9 +211,8 @@ def test_strip_openmp_acc_sentinels():
 
 
 def test_strip_vendor_dir_directives():
-    """``!DIR$`` vendor directives (Intel/Cray IVDEP / ATTRIBUTES) flang-new does
-    not recognise and warns on -- they are dropped like the accelerator sentinels,
-    while the real code is preserved."""
+    """``!DIR$`` vendor directives (Intel/Cray IVDEP/ATTRIBUTES) flang-new warns on --
+    dropped like the accelerator sentinels; real code preserved."""
     src = ("subroutine k(a, n)\n"
            "  real(8) :: a(n)\n"
            "  integer :: i, n\n"
@@ -287,8 +279,7 @@ def test_strip_omp_acc_passes_through_unrelated_cpp():
            "#endif\n"
            "end subroutine\n")
     out = strip_openmp_directives(src)
-    # Unrelated `#ifdef __SWAPDIM` block is untouched (both directives
-    # AND both branches survive -- evaluating it is not this pass's job).
+    # unrelated #ifdef __SWAPDIM block untouched (both directives+branches survive -- not this pass's job)
     assert "#ifdef __SWAPDIM" in out and "#else" in out and "#endif" in out
     assert "a + 1.0D0" in out and "a - 1.0D0" in out
 
@@ -339,21 +330,15 @@ def test_strip_openmp_idempotent_and_clean_passthrough():
 
 
 # --------------------------------------------------------------------------
-# merge_used_modules -- inlining USE'd modules.  Cover the two
-# correctness traps the bridge hits on real ICON sources:
-#   (1) blocks must be separated by a newline (a module file whose
-#       final END MODULE lacks a trailing \n would otherwise glue
-#       into the next module's MODULE opener);
-#   (2) cpp/comment preamble above a MODULE opener must travel with
-#       the module so a leading #include "<defs>.inc" survives the
-#       extraction (without that, macros it defines never expand and
-#       flang errors on bare macro invocations downstream).
+# merge_used_modules: inlining USE'd modules. Two correctness traps on real ICON
+# sources: (1) blocks need a newline separator (a module missing a trailing \n
+# would glue into the next MODULE opener); (2) cpp/comment preamble above a
+# MODULE opener must travel with it (else a leading #include's macros never expand).
 # --------------------------------------------------------------------------
 
 
 def test_merge_inserts_newline_between_module_blocks(tmp_path):
-    """Two module files whose ``END MODULE`` lines lack trailing
-    newlines must not glue together in the merged output."""
+    """Two module files whose END MODULE lines lack trailing newlines must not glue together."""
     (tmp_path / "mod_a.f90").write_text("MODULE mod_a\nEND MODULE mod_a")  # no trailing \n
     (tmp_path / "mod_b.f90").write_text("MODULE mod_b\nEND MODULE mod_b")  # no trailing \n
     src = "subroutine k\n  use mod_a\n  use mod_b\nend subroutine\n"
@@ -365,10 +350,9 @@ def test_merge_inserts_newline_between_module_blocks(tmp_path):
 
 
 def test_merge_carries_leading_cpp_include_with_its_module(tmp_path):
-    """A ``#include "defs.inc"`` above a ``MODULE`` opener must be
-    captured into the module's block; otherwise the macros that
-    header defines vanish from the merged source and downstream
-    references to them break (the ICON failure mode)."""
+    """A #include above a MODULE opener must be captured into the module's block --
+    otherwise its macros vanish from the merged source and downstream refs break
+    (the ICON failure mode)."""
     (tmp_path / "mod_a.f90").write_text("! header comment\n"
                                         "#include \"defs.inc\"\n"
                                         "#define LOCAL_MACRO 1\n"
@@ -377,8 +361,7 @@ def test_merge_carries_leading_cpp_include_with_its_module(tmp_path):
                                         "END MODULE mod_a\n")
     src = "subroutine k\n  use mod_a\nend subroutine\n"
     out = merge_used_modules(src, search_dirs=[tmp_path])
-    # Module is inlined, AND its preceding cpp preamble + comment are
-    # carried with it -- so cpp will resolve the include/macros.
+    # module inlined AND its preceding cpp preamble/comment carried with it, so cpp resolves the include/macros
     assert "MODULE mod_a" in out
     assert "#include \"defs.inc\"" in out
     assert "#define LOCAL_MACRO 1" in out
@@ -386,10 +369,8 @@ def test_merge_carries_leading_cpp_include_with_its_module(tmp_path):
 
 
 def test_merge_preamble_does_not_bleed_previous_module_body(tmp_path):
-    """When one source file holds two modules back-to-back, the
-    second module's preamble walk must stop at the first module's
-    ``END MODULE`` -- it cannot retroactively pull part of mod_a
-    into mod_b's block."""
+    """Two modules back-to-back in one file: mod_b's preamble walk must stop at
+    mod_a's END MODULE, not retroactively pull part of mod_a into mod_b's block."""
     (tmp_path / "two_mods.f90").write_text("MODULE mod_a\n"
                                            "  integer :: a_value = 1\n"
                                            "END MODULE mod_a\n"
@@ -400,18 +381,16 @@ def test_merge_preamble_does_not_bleed_previous_module_body(tmp_path):
                                            "END MODULE mod_b\n")
     src = "subroutine k\n  use mod_a\n  use mod_b\nend subroutine\n"
     out = merge_used_modules(src, search_dirs=[tmp_path])
-    # Both modules present.
+    # both modules present
     assert "MODULE mod_a" in out and "MODULE mod_b" in out
-    # The between-modules comment / #define attach to mod_b (its
-    # preamble), not mod_a's body.  ``a_value = 1`` must NOT be
-    # repeated and the ``#define`` lands between the two modules.
+    # between-modules comment/#define attach to mod_b's preamble, not mod_a's body --
+    # a_value=1 must not repeat, #define lands between the two modules
     assert out.count("a_value = 1") == 1
     assert "#define SHARED_MACRO 7" in out
 
 
 def test_merge_passthrough_for_self_contained_source(tmp_path):
-    """A source that USEs only intrinsic modules (or no external
-    modules at all) is returned unchanged -- merge is a no-op."""
+    """A source USEing only intrinsic modules (or none) is returned unchanged -- merge is a no-op."""
     src = ("subroutine k(a, n)\n"
            "  use iso_c_binding\n"
            "  integer :: n\n"
@@ -488,9 +467,8 @@ def test_merge_engine_regex_and_fparser_both_compile(tmp_path):
 
 
 def test_merge_engine_fparser_resolves_intrinsic_and_strips_stub(tmp_path):
-    """The fparser engine resolves ``USE iso_c_binding`` from a built-in stub
-    while parsing, but the stub module is not emitted (the compiler ships its
-    own), so ``REAL(c_double)`` lowers to ``REAL(KIND=8)``."""
+    """fparser resolves ``USE iso_c_binding`` from a built-in stub while parsing, but
+    doesn't emit the stub (compiler ships its own); REAL(c_double) lowers to REAL(KIND=8)."""
     src = ("subroutine k(a)\n"
            "  use iso_c_binding, only: c_double\n"
            "  implicit none\n"
@@ -498,9 +476,8 @@ def test_merge_engine_fparser_resolves_intrinsic_and_strips_stub(tmp_path):
            "  a = a * 2.0_c_double\n"
            "end subroutine\n")
     out = preprocess_fortran_source(src, search_dirs=[tmp_path], merge_engine="fparser")
-    # The stub module is not emitted; the ``USE iso_c_binding`` is kept so the
-    # compiler's own intrinsic module resolves ``c_double``.  The single TU
-    # compiles without a colliding stub definition.
+    # stub module not emitted; USE iso_c_binding kept so the compiler's own intrinsic
+    # module resolves c_double -- single TU compiles without a colliding stub definition
     assert "MODULE ISO_C_BINDING" not in out.upper()
     assert _gfortran_compiles(out)
 
@@ -550,9 +527,8 @@ def test_literal_kind_suffix_rewrites():
 
 
 def test_local_integer_param_binding_is_left_alone():
-    """``INTEGER, PARAMETER :: wp = 8`` already resolves; don't touch
-    any of the alias sites either -- the rewrite would no-op anyway,
-    so leaving the source byte-identical surfaces upstream issues."""
+    """``INTEGER, PARAMETER :: wp = 8`` already resolves; alias sites are left alone
+    too -- the rewrite would no-op anyway, so byte-identical output surfaces upstream issues."""
     src = ("module m\n"
            "  integer, parameter :: wp = 8\n"
            "contains\n"
@@ -563,8 +539,7 @@ def test_local_integer_param_binding_is_left_alone():
            "  end subroutine\n"
            "end module\n")
     out = normalize_kind_parameters(src)
-    # The locally-bound alias is dropped from the substitution set, so
-    # the original ``wp`` references survive verbatim.
+    # locally-bound alias is dropped from the substitution set, original wp references survive verbatim
     assert "kind=wp" in out
     assert "1.0_wp" in out
 
@@ -636,9 +611,8 @@ def test_does_not_touch_strings_or_comments():
 
 
 def test_does_not_touch_user_variable_with_alias_name_prefix():
-    """A user identifier that *contains* ``wp`` as a substring (e.g.
-    ``twp``, ``wpos``) must not be rewritten -- the pattern is bounded
-    by word boundaries."""
+    """A user identifier containing "wp" as a substring (twp, wpos) must not be
+    rewritten -- the pattern is bounded by word boundaries."""
     src = ("subroutine k(twp, wpos)\n"
            "  real(8) :: twp\n"
            "  integer :: wpos\n"
@@ -656,9 +630,8 @@ def test_handles_double_precision_alias_dp():
 
 
 def test_handles_selected_real_kind_rhs():
-    """``wp = SELECTED_REAL_KIND(...)`` doesn't match the integer-literal
-    PARAMETER regex, so the alias falls through to the substitution
-    path -- exactly the externally-defined case in disguise."""
+    """``wp = SELECTED_REAL_KIND(...)`` doesn't match the integer-literal PARAMETER
+    regex, so the alias falls through to substitution -- the externally-defined case in disguise."""
     src = ("module m\n"
            "  integer, parameter :: wp = SELECTED_REAL_KIND(15,300)\n"
            "contains\n"
@@ -673,21 +646,18 @@ def test_handles_selected_real_kind_rhs():
 
 
 def test_preprocess_fortran_source_threads_kind_options(tmp_path):
-    """The end-to-end composition forwards ``kind_map`` and
-    ``kind_passthrough`` to the kind-normalisation stage."""
+    """End-to-end composition forwards kind_map/kind_passthrough to the kind-normalisation stage."""
     src = "subroutine k(x)\n  real(KIND=wp) :: x\n  x = 1.0_wp\nend subroutine\n"
 
-    # The fparser merge re-emits the source, normalising ``KIND=wp`` to
-    # ``KIND = wp`` (spaces around ``=``); match whitespace-insensitively so
-    # the assertion checks the kind value, not the emitter's spacing.
+    # fparser merge re-emits KIND=wp as KIND = wp (spaces around =); match
+    # whitespace-insensitively so the assertion checks the kind value, not the emitter's spacing
     def _kind(out):
         return re.sub(r"\s+", "", out)
 
-    # Default: substitutes.
+    # default: substitutes
     assert "KIND=8" in _kind(preprocess_fortran_source(src, search_dirs=[tmp_path]))
-    # Override: fp32.
+    # override: fp32
     out_fp32 = preprocess_fortran_source(src, search_dirs=[tmp_path], kind_map={"wp": 4})
     assert "KIND=4" in _kind(out_fp32)
-    # Passthrough: source untouched (except OpenMP strip, which is a
-    # no-op here, and the integer-power rewrite, also a no-op here).
+    # passthrough: untouched (OpenMP strip + integer-power rewrite are both no-ops here)
     assert "KIND=wp" in _kind(preprocess_fortran_source(src, search_dirs=[tmp_path], kind_passthrough=True))

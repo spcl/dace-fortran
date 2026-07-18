@@ -1,22 +1,11 @@
-"""Devirtualize a comm-pattern dispatch, inline it down to raw MPI -> the sync's
-pack/gather compute lands in the SDFG and ONLY the MPI primitives remain, as
-``dace.libraries.mpi`` library nodes.
-
-This is the ICON atmosphere ``sync_patch_array`` lowering pattern in miniature.
-``sync_patch_array`` dispatches through the abstract ``t_comm_pattern`` vtable
-(``p_pat%exchange_data_r3d``); its concrete arm does a local pack/gather (pure
-compute) then raw ``mpi_isend``/``mpi_irecv``/``mpi_wait``. Rather than
-externalising the whole sync, we:
-
-  * ``monomorphize`` the abstract ``comm_pattern`` to its concrete arm
-    (``retype`` axis) -> the dispatch becomes a static call, and
-  * let ``build_sdfg``'s inline-all splice the concrete exchange body in.
-
-The bridge then auto-recognises ``mpi_isend`` / ``mpi_irecv`` / ``mpi_wait`` and
-lowers them to ``dace.libraries.mpi`` nodes -- so the pack loop is real SDFG
-compute and the *only* external calls are the MPI primitives, correctly typed as
-MPI library nodes.
-"""
+"""Devirtualize a comm-pattern dispatch, inline it down to raw MPI: the sync's pack/gather
+compute lands in the SDFG and ONLY the MPI primitives remain, as ``dace.libraries.mpi``
+nodes. Miniature of ICON atmosphere's ``sync_patch_array`` (dispatches through the abstract
+``t_comm_pattern`` vtable; concrete arm packs then raw mpi_isend/irecv/wait). Rather than
+externalising the whole sync: ``monomorphize`` the abstract pattern to its concrete arm
+(dispatch becomes a static call), then let ``build_sdfg``'s inline-all splice the exchange
+body in -- the bridge auto-recognises the MPI calls and lowers them to
+``dace.libraries.mpi`` nodes."""
 import pytest
 
 from _util import build_sdfg, have_flang
@@ -25,9 +14,9 @@ from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import (AxisSpec, 
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
-#: Abstract comm_pattern (deferred ``exchange``) + a concrete ``comm_orig`` whose
-#: exchange packs (pure compute) then issues raw MPI. ``external`` MPI decls so it
-#: lowers with no ``mpi.mod`` (the bridge recognises the opaque ``fir.call``).
+#: Abstract comm_pattern (deferred exchange) + concrete comm_orig whose exchange packs then
+#: issues raw MPI. `external` MPI decls so it lowers with no mpi.mod (bridge recognises the
+#: opaque fir.call).
 _SRC = """
 module comm_mod
   implicit none
@@ -101,12 +90,10 @@ def test_devirtualized_sync_inlines_pack_keeps_only_mpi_libnodes(tmp_path):
         "expected the pack-loop compute inlined as tasklets"
 
 
-#: Closer to the real ICON atmosphere layering: a ``sync_patch_array`` entry ->
-#: the generic ``exchange_data`` interface -> a wrapper (``exchange_data_r3d``)
-#: that does the VTABLE DISPATCH on an abstract ``CLASS(t_comm_pattern)`` dummy ->
-#: the concrete arm's pack + raw MPI. The dispatch lives one level down from the
-#: retyped pointer, so the bridge's inline-all + fir-polymorphic-op must resolve
-#: it once the wrapper is inlined into the concrete-typed caller.
+#: Closer to the real ICON atmosphere layering: sync_patch_array -> generic exchange_data
+#: interface -> wrapper (exchange_data_r3d) doing VTABLE DISPATCH on CLASS(t_comm_pattern)
+#: -> concrete arm's pack + raw MPI. Dispatch is one level below the retyped pointer, so
+#: inline-all + fir-polymorphic-op must resolve it once the wrapper inlines into the caller.
 _ATMO_SRC = """
 module mo_comm
   implicit none
@@ -267,11 +254,10 @@ end subroutine
 
 
 def test_dycore_step_inlines_sync_and_devirtualizes(tmp_path):
-    """End-to-end on a dycore-substep shape (stencil update -> halo sync ->
-    copy-back): with the comm pattern devirtualized, ``sync_patch_array`` inlines
-    so the stencil AND the sync's pack are real SDFG compute, and the only
-    external calls are the MPI primitives, as ``dace.libraries.mpi`` library
-    nodes -- no ExternalCall for the sync."""
+    """E2e on a dycore-substep shape (stencil -> halo sync -> copy-back): with the comm
+    pattern devirtualized, ``sync_patch_array`` inlines so the stencil AND the sync's pack
+    are real SDFG compute; only the MPI primitives remain external, as
+    ``dace.libraries.mpi`` nodes -- no ExternalCall for the sync."""
     import dace
     from dace.libraries.mpi.nodes.node import MPINode
     from dace_fortran.external import ExternalCall
@@ -292,12 +278,10 @@ def test_dycore_step_inlines_sync_and_devirtualizes(tmp_path):
     assert any(isinstance(n, dace.nodes.Tasklet) for n, _ in sdfg.all_nodes_recursive())
 
 
-#: A full dycore TIMESTEP: a predictor stage (stencil on h) + halo sync, then a
-#: corrector stage (stencil on vn using h) + halo sync -- multiple fields, multiple
-#: exchange rounds, the shape of ICON's mo_solve_nonhydro substep sequence. Each
-#: sync is the devirtualized comm pattern; the real ICON solve_nonhydro is the
-#: production target (needs the atmosphere extraction harness + monomorphize
-#: pre-pass), of which this is the controlled stand-in.
+#: A full dycore TIMESTEP: predictor (stencil on h) + halo sync, then corrector (stencil on
+#: vn using h) + halo sync -- multiple fields/exchange rounds, the shape of ICON's
+#: mo_solve_nonhydro substep sequence. Real solve_nonhydro is the production target (needs
+#: the atmosphere extraction harness + monomorphize pre-pass); this is the controlled stand-in.
 _DYCORE_TIMESTEP_SRC = _DYCORE_STEP_SRC.split("end module", 1)[0] + """end module
 
 subroutine dycore_timestep(p_pat, h, vn, tmp, n, partner, tag)
@@ -325,16 +309,11 @@ end subroutine dycore_timestep
 
 
 def test_full_dycore_timestep_sync_not_external(tmp_path):
-    """A full dycore-timestep shape (predictor stencil -> halo sync -> corrector
-    stencil -> halo sync, two fields, two exchange rounds). With the comm pattern
-    devirtualized, EVERY ``sync_patch_array`` inlines: the stencils and the syncs'
-    packs are real SDFG compute, the SDFG carries NO ExternalCall for any sync, and
-    the only external boundary is the MPI primitives -- as ``dace.libraries.mpi``
-    library nodes, two exchange rounds' worth (>= 2 Isend / Irecv / Wait each).
-
-    This is the controlled stand-in for ICON's ``mo_solve_nonhydro``; the real
-    end-to-end build is the production target (atmosphere extraction harness +
-    monomorphize pre-pass)."""
+    """Full dycore-timestep shape (predictor stencil -> halo sync -> corrector stencil ->
+    halo sync, two fields, two exchange rounds). With the comm pattern devirtualized, EVERY
+    sync_patch_array inlines: stencils + syncs' packs are real SDFG compute, no ExternalCall
+    for any sync, only MPI primitives external (>=2 Isend/Irecv/Wait each). Controlled
+    stand-in for ICON's ``mo_solve_nonhydro``."""
     import dace
     from dace.libraries.mpi.nodes.node import MPINode
     from dace.libraries.mpi.nodes.isend import Isend
@@ -361,10 +340,9 @@ def test_full_dycore_timestep_sync_not_external(tmp_path):
 
 
 def test_sync_patch_array_is_not_external_anymore(tmp_path):
-    """``sync_patch_array`` / ``exchange_data`` are NO LONGER externalised -- they
-    are devirtualized + inlined, so the SDFG carries no ``ExternalCall`` library
-    node for them. The only external boundary is the MPI primitives, as MPI
-    library nodes (not opaque external calls)."""
+    """``sync_patch_array``/``exchange_data`` are NO LONGER externalised -- devirtualized +
+    inlined, no ``ExternalCall`` node for them. Only external boundary is the MPI
+    primitives, as MPI library nodes (not opaque external calls)."""
     from dace.libraries.mpi.nodes.node import MPINode
     from dace_fortran.external import ExternalCall
 

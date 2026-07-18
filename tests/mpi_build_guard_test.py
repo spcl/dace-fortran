@@ -1,22 +1,19 @@
-"""``build_on_root`` must turn a rank-0 build *failure* into a clean all-rank
-error, not a collective deadlock.
+"""``build_on_root`` must turn a rank-0 build failure into a clean all-rank error, not a
+collective deadlock.
 
-The MPI e2e tests build artefacts on one rank and share them with the others
-through a collective (``comm.bcast`` / ``distributed_compile`` /
-``comm.Barrier``).  If the build raises, pytest catches it on the building
-rank -- the process stays alive -- so ``mpirun`` never sees a dead rank and
-every other rank blocks at the collective forever (the run only ends when CI
-times out).  :func:`_util.build_on_root` guards the build and broadcasts the
-failure so all ranks raise together and ``mpirun`` exits non-zero fast.
+MPI e2e tests build artefacts on one rank and share via a collective (``comm.bcast`` /
+``distributed_compile`` / ``comm.Barrier``).  If the build raises, pytest catches it on
+the building rank -- the process stays alive, so ``mpirun`` never sees a dead rank and
+every other rank blocks at the collective forever (until CI times out).
+:func:`_util.build_on_root` broadcasts the failure so all ranks raise together.
 
 Run under mpirun with >= 2 ranks::
 
     mpirun --oversubscribe -n 2 python -m pytest -p no:cacheprovider \\
         tests/mpi_build_guard_test.py
 
-If the guard regressed, the non-root ranks would hang here instead of raising,
-and the ``-m mpi`` CI step would time out -- which is exactly the failure mode
-the guard exists to prevent.
+If this guard regresses, non-root ranks hang here instead of raising and the ``-m mpi``
+CI step times out.
 """
 
 import pytest
@@ -28,9 +25,8 @@ pytestmark = pytest.mark.mpi
 
 @pytest.mark.mpi
 def test_build_failure_on_root_raises_on_every_rank():
-    """A build that raises only on the root rank must surface as a
-    ``RuntimeError`` on EVERY rank (the non-root ranks never ran the build),
-    proving no rank is left blocked at the broadcast."""
+    """A build that raises only on the root rank must surface as ``RuntimeError`` on
+    EVERY rank, proving no rank is left blocked at the broadcast."""
     from mpi4py import MPI
 
     comm = MPI.COMM_WORLD
@@ -52,9 +48,9 @@ def test_build_failure_on_root_raises_on_every_rank():
 
 @pytest.mark.mpi
 def test_build_on_root_no_broadcast_returns_root_only():
-    """``broadcast=False`` returns the result on root and ``None`` elsewhere
-    (for non-picklable payloads consumed by a following collective), and still
-    re-raises a build failure on every rank."""
+    """``broadcast=False`` returns the result on root and ``None`` elsewhere (for
+    non-picklable payloads consumed by a following collective); still re-raises a
+    build failure on every rank."""
     from mpi4py import MPI
 
     comm = MPI.COMM_WORLD

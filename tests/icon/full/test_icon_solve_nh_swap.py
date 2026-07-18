@@ -1,31 +1,14 @@
-"""Step 4: same-signature swap of ICON's ``solve_nh`` body for our
-binding.
+"""Step 4: same-signature swap of ICON's ``solve_nh`` for our binding.
 
-ICON's call site (``mo_nh_stepping.f90:3094``) stays untouched.
-``solve_nh`` in ``mo_solve_nonhydro.f90`` becomes a DIFFERENTIAL DRIVER
--- the SUBROUTINE signature, the 14 dummy declarations, the USE
-statements all stay byte-for-byte identical -- that deep-copies the
-mutable state (``mo_solve_nh_diff``), forwards to ``solve_nh_dace_icon``
-(a free-standing wrapper that re-extracts pointers via ICON's real types
-and dispatches into our dycore SDFG's bind-C entry) as the DUT, runs the
-original body -- preserved verbatim as ``solve_nh_ref`` -- as the REF,
-and compares the two bit-for-bit.
+``solve_nh`` in ``mo_solve_nonhydro.f90`` becomes a DIFFERENTIAL DRIVER: signature/
+dummies/USE stay byte-identical, but the body deep-copies state, runs the DUT
+(``solve_nh_dace_icon``, our bind-C dycore) against the REF (original body, renamed
+``solve_nh_ref``), and compares bit-for-bit.  ICON's call site is untouched.
 
-This test pins:
-
-  * The patched ``mo_solve_nonhydro.f90`` parses through
-    ``gfortran -fsyntax-only`` against the same ``-I`` set ICON's
-    own build uses for the unpatched source.
-  * The patched file resolves to the same ``solve_nh`` external
-    symbol ICON's call site references (same module mangling,
-    same arg count + types).
-  * The forwarding ``CALL`` resolves to ``solve_nh_dace_icon`` as a
-    free-standing symbol the linker can satisfy from our
-    bind-C-generated ``.so``.
-
-The patched body is wrapper-aware but doesn't yet require the SDFG
-``.so`` to exist; runtime resolution is a separate concern (step 5
-when one materialises).
+Pins: the patched file parses via ``gfortran -fsyntax-only`` against ICON's own
+``-I`` set; resolves to the same external ``solve_nh`` symbol; the forwarding CALL
+resolves to a linker-satisfiable ``solve_nh_dace_icon``.  Doesn't yet require the
+SDFG ``.so`` to exist (runtime resolution is step 5).
 """
 import os
 import shutil
@@ -46,17 +29,13 @@ from icon.full._icon_solve_nh_patch import (
     write_patched_solve_nh,
 )
 
-# This test compiles the patched solve_nh against ICON's compiled ``.mod``
-# files, which are built by gfortran -- only gfortran can read them (flang's
-# HLFIR ``.mod`` format is binary-incompatible, see ``_fc.discover_fortran_
-# compilers``).  Parametrize gfortran-only so the flang slot is never emitted
-# as a runtime skip; the gfortran-format guard inside the test stays as a
-# defensive assertion.
+# ICON's .mod files are gfortran-built and binary-incompatible with flang's HLFIR
+# .mod format (see _fc.discover_fortran_compilers).  Parametrize gfortran-only so
+# the flang slot never shows up as a runtime skip; the format guard below stays defensive.
 GFORTRAN_COMPILERS = [p for p in FORTRAN_COMPILERS if "gfortran" in (p.id or "")]
 
 _HERE = Path(__file__).resolve().parent
-#: The differential helper module the patched ``solve_nh`` ``USE``s.  Compiled
-#: ahead of the patched source in the syntax check so its ``.mod`` is on hand.
+#: Differential helper module the patched ``solve_nh`` ``USE``s; compiled first so its .mod is available.
 _DIFF_F90 = _HERE / "mo_solve_nh_diff.f90"
 _ICON_SRC = Path(os.environ.get("ICON_SRC", str(_HERE / "icon-model")))
 _ICON_BUILD = Path(os.environ.get("ICON_BUILD", str(_ICON_SRC / "build" / "stock_cpu")))
@@ -72,10 +51,7 @@ def _real_source() -> Path:
 _HAVE_ICON = _real_source().is_file()
 _HAVE_ICON_MODS = (_ICON_BUILD / "mod").is_dir()
 
-# Every test here reads ICON's real ``mo_solve_nonhydro`` source through the
-# icon-model submodule (the patch-side tests via ``_real_source()``, the
-# compile tests additionally via the ``icon_build`` fixture), which only the
-# heavy CI lane checks out -> ``long``.
+# Reads ICON's real mo_solve_nonhydro via the icon-model submodule (heavy CI lane only) -> long.
 pytestmark = pytest.mark.long
 
 # ---------------------------------------------------------------------------
@@ -85,31 +61,23 @@ pytestmark = pytest.mark.long
 
 @pytest.mark.skipif(not _HAVE_ICON, reason="icon-model submodule not checked out")
 def test_patch_preserves_signature():
-    """The patched file's ``SUBROUTINE solve_nh(...)`` line + the
-    14 dummy declarations are byte-for-byte identical to the pristine.
-    A change anywhere in the signature surface would break ICON's
-    ``mo_nh_stepping`` call site, so we pin it explicitly."""
+    """The patched file's signature line + 14 dummy declarations are byte-identical
+    to the pristine -- any drift would break ICON's mo_nh_stepping call site."""
     pristine = _real_source().read_text()
     patched = apply_solve_nh_patch(pristine)
 
     def _signature_surface(src: str) -> list:
-        """The header line(s) + every ``INTENT(...)`` dummy
-        declaration in ``solve_nh``'s body.  This is the ABI surface
-        ICON's callers see; USE statements inside the routine body
-        are internal and intentionally excluded -- the patch adds one
-        for ``iso_c_binding`` that doesn't affect external callers."""
+        """Header line(s) + every INTENT(...) dummy decl -- the ABI surface ICON's
+        callers see.  USE statements are excluded (internal; the patch adds one
+        for iso_c_binding that doesn't affect callers)."""
         lines = src.splitlines()
         start = next(i for i, ln in enumerate(lines) if "SUBROUTINE solve_nh " in ln and "(" in ln)
         end = start
         while lines[end].rstrip().endswith("&"):
             end += 1
         surface = list(lines[start:end + 1])
-        # Pick up every INTENT(...) line inside the routine UP TO the
-        # first ``INTERFACE`` block.  After the patch, the wrapper
-        # is declared via an inner INTERFACE that has its own dummy
-        # declarations (matching the wrapper's c_bool / c_int
-        # types, not solve_nh's); those are internal to the
-        # routine and not the ABI surface ICON callers see.
+        # Stop at the first INTERFACE block: the patch's wrapper interface has its
+        # own dummy decls (c_bool/c_int types, not solve_nh's) -- internal, not ABI.
         for i in range(end + 1, len(lines)):
             stripped = lines[i].lstrip().upper()
             if stripped.startswith("END SUBROUTINE SOLVE_NH"):
@@ -134,48 +102,36 @@ def test_patched_body_calls_wrapper():
     forwarding ``CALL solve_nh_dace_icon(...)``."""
     patched = apply_solve_nh_patch(_real_source().read_text())
     assert f"CALL {SOLVE_NH_WRAPPER_NAME}(" in patched
-    # Forward EVERY one of solve_nh's 14 dummy args.  A regression
-    # that drops one would silently leave it default-initialised on
-    # the wrapper side.
+    # Forward every one of the 14 dummy args -- a dropped one silently defaults on the wrapper side.
     for arg in ("p_nh", "p_patch", "p_int", "prep_adv", "nnow", "nnew", "l_init", "l_recompute", "lsave_mflx",
                 "lprep_adv", "lclean_mflx", "idyn_timestep", "jstep", "dtime", "lacc"):
-        # ``arg`` appears multiple times (dummy decl + CALL site);
-        # the forwarding CALL is what we check.  Trivial substring
-        # match -- the order in the CALL is pinned by the template.
+        # substring match only; arg order in the CALL is pinned by the template
         assert arg in patched, f"forwarded arg {arg!r} missing"
 
 
 @pytest.mark.skipif(not _HAVE_ICON, reason="icon-model submodule not checked out")
 def test_differential_driver_injected():
-    """The differential patch KEEPS the ~3000-line original body as the
-    bit-exact REFERENCE (renamed ``solve_nh_ref``) and injects the driver
-    -- clone -> DUT (``solve_nh_dace_icon``) -> REF -> compare -> free --
-    as the new ``solve_nh``.  So the patched file GROWS by roughly the
-    driver block; it does NOT shrink.  (The OLD pure-forwarding design
-    dropped the body; the differential design runs it as the reference,
-    so the old ``< 0.5 * pristine`` shrink assertion is inverted here.)
-    Mirrors the structural pins in ``test_solve_nh_patch.py``."""
+    """The patch keeps the original body as REF (renamed ``solve_nh_ref``) and
+    injects the driver (clone -> DUT -> REF -> compare -> free) as the new
+    ``solve_nh`` -- the file GROWS, it does not shrink (inverts the old pure-
+    forwarding design's shrink assertion).  Mirrors test_solve_nh_patch.py."""
     pristine = _real_source().read_text()
     patched = apply_solve_nh_patch(pristine)
 
-    # The original body survives verbatim, renamed to solve_nh_ref, and is
-    # emitted AFTER the driver (ICON's call site resolves ``solve_nh``).  Match
-    # ``solve_nh_ref`` without a trailing ``(`` -- ICON's real header spells the
-    # signature ``solve_nh (...)`` with a space, so the rename keeps that space.
+    # Original body survives verbatim as solve_nh_ref, emitted after the driver.
+    # No trailing "(" match -- ICON's header spells "solve_nh (...)" with a space.
     assert "SUBROUTINE solve_nh_ref" in patched
     assert "END SUBROUTINE solve_nh_ref" in patched
 
-    # The differential harness is injected into the new solve_nh driver, which
-    # is emitted BEFORE the renamed reference body.
+    # Differential harness is injected into the new driver, emitted before the REF body.
     assert "USE mo_solve_nh_diff" in patched
     assert "CALL clone_state_indep_prog(p_nh, nh_ref__dace)" in patched
     assert "CALL clone_prepadv_indep(prep_adv, prep_ref__dace)" in patched
     assert f"CALL {SOLVE_NH_WRAPPER_NAME}(" in patched
     assert "CALL solve_nh_ref(nh_ref__dace," in patched
-    # The per-call compare covers prog(nnew) AND prog(nnow) (the reference
-    # never assigns nnow -- a nnow diff means the DUT stomped the time level
-    # the next substep reads) + prep_adv + the full diag, and closes with the
-    # greppable TOTAL line (0 == bit-exact).
+    # Compare covers prog(nnew) AND prog(nnow) -- REF never assigns nnow, so a nnow
+    # diff means the DUT stomped the level the next substep reads -- plus prep_adv/
+    # diag, closing with the greppable TOTAL line (0 == bit-exact).
     assert "CALL compare_prog_nnew(p_nh, nh_ref__dace, nnew," in patched
     assert "CALL compare_prog_nnew(p_nh, nh_ref__dace, nnow," in patched
     assert "CALL compare_prepadv(prep_adv, prep_ref__dace," in patched
@@ -183,9 +139,8 @@ def test_differential_driver_injected():
     assert "[diff] solve_nh TOTAL: " in patched
     assert patched.index("CALL clone_state_indep_prog(p_nh, nh_ref__dace)") < patched.index("SUBROUTINE solve_nh_ref")
 
-    # The file GROWS by ~the injected driver (USE helpers + local decls +
-    # clone/run-both/compare/free body), NOT shrinks -- and the growth is a
-    # small fraction of the file, so the ~3000-line body was not duplicated.
+    # File grows by ~the injected driver, not shrinks; growth stays a small
+    # fraction of the file so the ~3000-line body was not duplicated.
     pristine_n = len(pristine.splitlines())
     patched_n = len(patched.splitlines())
     assert patched_n > pristine_n, ("the differential patch keeps the body as the REF, so the file must "
@@ -212,29 +167,13 @@ def test_write_patched_solve_nh(tmp_path: Path):
 @pytest.mark.skipif(not _HAVE_ICON, reason="icon-model submodule not checked out")
 @pytest.mark.parametrize("fc", GFORTRAN_COMPILERS)
 def test_patched_source_parses_through_fortran_compiler(fc, tmp_path: Path, icon_build):
-    """The Fortran compiler accepts the patched file (syntax-only)
-    against ICON's own ``.mod`` files.  Parametrized over every
-    compiler available on the host so a future binding-shim signature
-    change surfaces as a hard error from each one we support:
-
-      * ``gfortran``: the ICON CPU default.
-      * ``flang-new-21``: the bridge's own frontend; pinning the
-        wrapper's INTERFACE block here keeps the bridge's binding
-        emitter in sync with what it would later lower.
-      * ``nvfortran``: ICON GPU builds; their ``.mod`` format is
-        compiler-specific so the test only fires when the same
-        compiler that wrote ``$ICON_BUILD/mod`` also runs the
-        syntax check (the gate below).
-
-    The patched file's INTERFACE block + forwarding CALL arg order
-    is what's pinned here; any drift breaks ICON's caller."""
+    """The compiler accepts the patched file (syntax-only) against ICON's own .mod
+    files -- parametrized over gfortran (ICON's CPU default; other compilers' .mod
+    formats are incompatible, see GFORTRAN_COMPILERS above).  Pins the INTERFACE
+    block + forwarding CALL arg order; any drift breaks ICON's caller."""
     fc_name, fc_path = fc
-    # ICON's ``.mod`` files are compiler-specific.  gfortran's mods
-    # match gfortran; nvfortran's mods match nvfortran; flang has its
-    # own ``.mod`` format.  The host's stock CPU build probes for
-    # ``mod/mo_kind.mod``; if it carries a gfortran-shape mod, only
-    # gfortran can read it.  Detect the mod-format mismatch up front
-    # so the test skips cleanly rather than reporting a bogus error.
+    # .mod files are compiler-specific; probe mo_kind.mod's format up front so a
+    # mismatch skips cleanly instead of reporting a bogus error.
     mod_probe = icon_build / "mod" / "mo_kind.mod"
     if mod_probe.is_file():
         header = mod_probe.read_bytes()[:64]
@@ -258,8 +197,7 @@ def test_patched_source_parses_through_fortran_compiler(fc, tmp_path: Path, icon
     include_flags = [f"-I{d}" for d in mod_dirs if d.is_dir()]
     include_flags.append(f"-I{_ICON_SRC}/src/include")
 
-    # Same -D set ICON's own configure uses; pulled into a list so we
-    # can compose with the wrapper-INTERFACE-block requirements.
+    # Same -D set ICON's own configure uses.
     defines = [
         "-DHAVE_CDI_GRIB2",
         "-DHAVE_FC_ATTRIBUTE_CONTIGUOUS",
@@ -277,12 +215,9 @@ def test_patched_source_parses_through_fortran_compiler(fc, tmp_path: Path, icon
         "-D__NO_QUINCY__",
         "-D__NO_RAGNAROK__",
     ]
-    # The patched module ``USE``s ``mo_solve_nh_diff`` (the deep-copy / compare
-    # helpers), so its ``.mod`` must exist before the patched source is checked.
-    # ``mo_solve_nh_diff.f90`` ``use``s only ICON's own type modules, so it
-    # compiles against the same ICON ``.mod`` tree; passing it FIRST in the same
-    # invocation makes its module available to the patched source that follows
-    # (mirrors ``test_solve_nh_patch.py``'s ordered multi-source syntax check).
+    # Patched module USEs mo_solve_nh_diff, so its .mod must exist first; passing it
+    # before the patched source in one invocation makes that happen (mirrors
+    # test_solve_nh_patch.py's ordered multi-source syntax check).
     subprocess.check_call([
         fc_path, *syntax_check_argv(fc_name, tmp_path),
         cpp_flag(fc_name), *fortran_compiler_flags(fc_name), *include_flags, *defines,

@@ -1,32 +1,18 @@
-"""Unit test for the ``mo_ocean_diff`` differential helpers.
+"""Unit test for the mo_ocean_diff differential helpers used by the ocean binding-swap integration
+(runs stock solve_free_sfc_ab_mimetic + SDFG solve_free_sfc_dace_icon on the same input, compares
+state BIT-FOR-BIT). Pins three properties against gfortran with a small driver:
 
-The ocean binding-swap integration runs the stock Fortran
-``solve_free_sfc_ab_mimetic`` and the SDFG ``solve_free_sfc_dace_icon`` on the
-SAME input and compares the mutated state BIT-FOR-BIT
-(:file:`mo_ocean_diff.f90`).  Three properties must hold for that to be sound,
-and this test pins them against gfortran with a small driver:
+  * deep copy is independent BOTH ways -- clone_ocean_state_indep must allocate FRESH targets (every
+    field is POINTER, and p_prog(:) is itself a POINTER array, so a shallow dst=src would alias prog
+    slots too); mutating either side after cloning must not move the other.
+  * compare is bit-exact and exhaustive -- compare_ocean_{prog,diag,aux} report 0 for identical state
+    and exactly the perturbation count after single-element perturbations.
+  * a_veloc_v snapshot/restore round-trips -- clone_field3/restore_field3/compare_field3 implement the
+    save/park/restore dance needed because the PP scheme time-smooths a_veloc_v in place through a
+    module pointer (_icon_ocean_patch.py).
 
-  * **deep copy is independent BOTH ways** -- ``clone_ocean_state_indep`` must
-    allocate FRESH targets (every field is ``POINTER``, and -- unlike the
-    atmosphere -- ``p_prog(:)`` is itself a POINTER array, so a shallow
-    ``dst = src`` would alias the prog slots too and re-pointing a clone field
-    would clobber the original's slot).  Mutating the original after cloning
-    must NOT change the clone, and vice versa.
-
-  * **compare is bit-exact and exhaustive over the clone set** --
-    ``compare_ocean_prog`` / ``_diag`` / ``_aux`` report 0 differing elements
-    for identical state and EXACTLY the perturbation count after single-element
-    perturbations (no tolerance).
-
-  * **a_veloc_v snapshot/restore round-trips** -- ``clone_field3`` /
-    ``restore_field3`` / ``compare_field3`` implement the save/park/restore
-    dance the driver needs because the PP scheme time-smooths ``a_veloc_v`` in
-    place through a module pointer (see :file:`_icon_ocean_patch.py`).
-
-The real ``t_hydro_ocean_state`` types are replaced with minimal modules of the
-same names carrying only the fields the helpers touch, so the test needs just
-gfortran (no flang / SDFG / ICON build).
-"""
+Real t_hydro_ocean_state types are replaced with minimal same-name modules carrying only the touched
+fields, so the test needs just gfortran (no flang/SDFG/ICON build)."""
 import shutil
 import subprocess
 from pathlib import Path
@@ -38,11 +24,9 @@ pytestmark = pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortr
 _HERE = Path(__file__).resolve().parent
 _DIFF_F90 = _HERE / "mo_ocean_diff.f90"
 
-# Minimal stand-ins for ICON's types -- SAME module + field names + ranks the
-# helpers use (cross-checked against the real mo_ocean_types.f90 /
-# mo_math_types.f90), so mo_ocean_diff.f90 compiles unchanged against them.
-# All pointers default to => null() so partially-allocated test states have a
-# defined association status (ICON's construct routines guarantee the same).
+# minimal stand-ins for ICON's types -- same module/field names/ranks (cross-checked against the real
+# mo_ocean_types.f90/mo_math_types.f90) so mo_ocean_diff.f90 compiles unchanged. Pointers default to
+# => null() so partially-allocated test states have a defined association status.
 _MIN_TYPES = """\
 module mo_math_types
   implicit none
@@ -274,9 +258,8 @@ end program test_ocean_diff
 
 
 def test_ocean_diff_deepcopy_and_compare(tmp_path: Path):
-    """clone_ocean_state_indep deep-copies (independent both ways), the
-    compares are bit-exact + exhaustive, and the a_veloc_v snapshot dance
-    round-trips."""
+    """clone_ocean_state_indep deep-copies independent both ways; compares are bit-exact + exhaustive;
+    a_veloc_v snapshot dance round-trips."""
     (tmp_path / "min_types.f90").write_text(_MIN_TYPES)
     (tmp_path / "driver.f90").write_text(_DRIVER)
     shutil.copy(_DIFF_F90, tmp_path / "mo_ocean_diff.f90")

@@ -1,20 +1,15 @@
-"""``input -> single TU`` extraction gate for the ICON-O ocean kernels.
+"""input -> single TU extraction gate for the ICON-O ocean kernels.
 
-This chat owns the *first* pipeline stage: each numerically critical ocean
-kernel must extract from the real ICON source into a self-contained,
-gfortran-compiling ``.f90`` (checked into this folder).  Lowering that
-single TU to a DaCe SDFG is a separate concern handled elsewhere.
+Each numerically critical ocean kernel must extract from the real ICON source into a
+self-contained, gfortran-compiling .f90 (checked into this folder); lowering to a DaCe SDFG
+is a separate concern handled elsewhere.
 
-For each kernel this test regenerates the single TU via the fparser
-inliner (merge closure -> cpp pre-pass -> prune -> ``gfortran
--fsyntax-only``) and asserts it (a) compiles and (b) is byte-identical to
-the committed ``*_single_tu.f90`` artifact -- so the committed input the
-SDFG stage builds never silently drifts from the source.
+Regenerates the single TU via the fparser inliner (merge closure -> cpp pre-pass -> prune ->
+gfortran -fsyntax-only) and asserts it compiles AND is byte-identical to the committed
+*_single_tu.f90 artifact, so the SDFG stage's input never silently drifts from the source.
 
-Slow (the merged closure is ~137k lines) and memory-heavy (the fparser
-parse peaks near 9 GB), so it is marked ``long`` and serialised onto one
-xdist worker; each extraction runs in its own memory-capped subprocess.
-Gated on flang-new-21 + OpenMPI + the icon-model submodule.
+Slow (~137k-line merged closure) and memory-heavy (fparser peaks near 9GB): marked long,
+serialised onto one xdist worker, each extraction in its own memory-capped subprocess.
 """
 from pathlib import Path
 
@@ -42,14 +37,12 @@ pytestmark = [
 @pytest.mark.xdist_group("ocean_fparser")
 @pytest.mark.parametrize("key,halo_mode,filename,entry", _CASES, ids=[f"{c[0]}-{c[1]}" for c in _CASES])
 def test_extract_compiles_and_matches_committed(tmp_path, key, halo_mode, filename, entry):
-    """Extract one (kernel, halo mode) into a compiling single TU and check it
-    against the committed artifact -- both the external (callback boundary) and
-    inlined (MPI-only) halo modes must always be correct."""
+    """Extract one (kernel, halo mode) into a compiling single TU and check it against the
+    committed artifact -- both external (callback boundary) and inlined (MPI-only) modes."""
     res = extract_single_tu(_SOURCE[key], entry, tmp_path / f"{key}_{halo_mode}", halo_mode=halo_mode)
     assert res["passed"], \
         f"{key}[{halo_mode}]: extraction did not produce a compiling single TU.\n{res['output'][-4000:]}"
-    # The closure merges to ~137k lines; pruning to the kernel must shrink it
-    # by orders of magnitude.
+    # Closure merges to ~137k lines; pruning to the kernel must shrink it by orders of magnitude.
     assert res["tu_lines"] is not None and res["tu_lines"] < 50_000, \
         f"{key}[{halo_mode}]: pruned TU is {res['tu_lines']} lines -- pruning did not converge"
     # Drift guard: the freshly extracted TU must equal the committed artifact.

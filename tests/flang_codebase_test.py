@@ -1,13 +1,7 @@
-"""Unit tests for :mod:`dace_fortran.flang_codebase`.
-
-The headline test exercises ``extract_make_compile_args`` +
-``prepare_flang_translation_unit`` end-to-end against ICON's real
-``mo_velocity_advection.f90``: configure-time ``-D`` defines come
-from ``make -n``, source merging from ICON's own ``src/`` +
-``externals/*/src``, mpi/netcdf stubs from
-:data:`dace_fortran.LIBRARY_STUBS`.  Asserts the resulting TU lowers
-to HLFIR cleanly under flang-21.  Skipped if no ICON checkout, no
-flang, or no OpenMPI.
+"""Unit tests for :mod:`dace_fortran.flang_codebase`. Headline test exercises
+``extract_make_compile_args`` + ``prepare_flang_translation_unit`` end-to-end against
+ICON's real ``mo_velocity_advection.f90``, asserting the merged TU lowers to HLFIR
+cleanly under flang-21. Skipped if no ICON checkout, flang, or OpenMPI.
 """
 import os
 import shutil
@@ -28,26 +22,21 @@ from dace_fortran.flang_codebase import (
     prepare_flang_translation_unit,
 )
 
-# ICON source.  Defaults to the in-repo submodule
-# (``tests/icon/full/icon-model``); override with ``ICON_SRC`` for a
-# local out-of-tree checkout.  The BUILD dir is owned by the
-# ``icon_build`` fixture (root conftest.py), which builds into TMP
-# storage on demand -- no repo-tree pollution.
+# ICON source: in-repo submodule by default, override with ICON_SRC. Build dir is owned
+# by the icon_build fixture (root conftest.py), built into TMP storage on demand.
 _ICON_SRC = Path(os.environ.get("ICON_SRC", str(Path(__file__).resolve().parent / "icon" / "full" / "icon-model")))
 _VELOCITY_SRC = _ICON_SRC / "src" / "atm_dyn_iconam" / "mo_velocity_advection.f90"
 _VELOCITY_BAK = _VELOCITY_SRC.with_suffix(".f90.bak")
 
 _CACHE_DIR = Path(os.environ.get("DACE_FORTRAN_CACHE", str(Path(tempfile.gettempdir()) / "dace-fortran-cache")))
 
-# Prefer the pristine ``.bak`` if a developer left one; otherwise the
-# submodule's own (pristine) source is fine.
+# Prefer a pristine .bak if a developer left one; else the submodule's own source.
 _VELOCITY_REF = _VELOCITY_BAK if _VELOCITY_BAK.is_file() else _VELOCITY_SRC
 
 _HAVE_FLANG = shutil.which("flang-new-21") is not None
 _HAVE_OPENMPI = find_openmpi_include() is not None
-# The ``icon_build`` session fixture (root conftest.py) configures +
-# builds ICON on demand and yields the build dir; the ICON ``.mod``
-# tree is therefore NOT required upfront here.
+# icon_build session fixture (root conftest.py) configures+builds ICON on demand;
+# no .mod tree required upfront here.
 
 # ---------------------------------------------------------------------------
 # Stand-alone tests for the individual helpers.
@@ -116,16 +105,13 @@ def test_prepare_translation_unit_rejects_unknown_patch():
 
 
 def test_extract_make_compile_args_for_icon_velocity(icon_build):
-    """``make -n`` against an ICON build dir yields the same ``-D`` /
-    ``-I`` set that ICON's own gfortran invocation uses for the
-    velocity object file.  The ``icon_build`` fixture configures +
-    builds ICON on demand."""
+    """``make -n`` against an ICON build dir yields the same ``-D``/``-I`` set ICON's own
+    gfortran uses for the velocity object; ``icon_build`` fixture builds ICON on demand."""
     args = extract_make_compile_args(makefile_dir=icon_build, target="src/atm_dyn_iconam/mo_velocity_advection.o")
     # ICON's recognisable feature-disable defines.
     assert "__ICON__" in args["defines"]
     assert "__NO_JSBACH__" in args["defines"]
     assert "__NO_RAGNAROK__" in args["defines"]
-    # The expected source file.
     assert args["source"].name == "mo_velocity_advection.f90"
     # The build's own include layout includes ``src/include``.
     src_include = _ICON_SRC / "src/include"
@@ -134,11 +120,8 @@ def test_extract_make_compile_args_for_icon_velocity(icon_build):
 
 @pytest.mark.skipif(not (_HAVE_FLANG and _HAVE_OPENMPI), reason="needs flang-new-21 + OpenMPI")
 def test_prepare_translation_unit_flang_clean_on_icon_velocity(tmp_path: Path, icon_build):
-    """Compose a TU for ICON's real ``mo_velocity_advection.f90`` via
-    the helpers and verify flang-21 lowers it to HLFIR with zero
-    errors.  This is the load-bearing assertion: it pins the entire
-    recipe (merge + stubs + patches + extracted defines) as a
-    regression gate.  The ``icon_build`` fixture builds ICON on demand."""
+    """Compose a TU for ICON's real mo_velocity_advection.f90 and verify flang-21 lowers it
+    to HLFIR with zero errors -- pins the entire merge+stubs+patches+defines recipe as a gate."""
     args = extract_make_compile_args(makefile_dir=icon_build, target="src/atm_dyn_iconam/mo_velocity_advection.o")
     entry = _VELOCITY_REF.read_text()
     tu, flang_flags = prepare_flang_translation_unit(
@@ -162,9 +145,8 @@ def test_prepare_translation_unit_flang_clean_on_icon_velocity(tmp_path: Path, i
     tu_path.write_text(tu)
     hlfir_path = tmp_path / "velocity.hlfir"
 
-    # cwd=tmp_path keeps flang from picking up any stale ``.mod``
-    # in the repo root (a prior flang run can leak a flang-format
-    # ``iso_c_binding.mod`` there which flang then rejects as stale).
+    # cwd=tmp_path avoids a stale .mod in the repo root (a prior flang run can leak
+    # iso_c_binding.mod there, which flang then rejects).
     result = subprocess.run(
         [
             "flang-new-21",
@@ -186,8 +168,7 @@ def test_prepare_translation_unit_flang_clean_on_icon_velocity(tmp_path: Path, i
     assert not err_lines, (f"flang reported {len(err_lines)} error(s); "
                            f"first 5:\n" + "\n".join(err_lines[:5]))
     assert hlfir_path.is_file()
-    # 753 MB is the empirical size we got; >100 MB just confirms the
-    # full closure was lowered (no premature truncation).
+    # 753 MB empirically; >100 MB just confirms the full closure lowered (no premature truncation).
     assert hlfir_path.stat().st_size > 100 * 1024 * 1024
 
 

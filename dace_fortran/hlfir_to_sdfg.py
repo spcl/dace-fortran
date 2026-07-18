@@ -1,13 +1,7 @@
-"""Back-compat shim  --  the real builder lives in ``.builder``.
+"""Back-compat shim -- real builder lives in ``.builder``; re-exports keep
+the old ``dace_fortran.hlfir_to_sdfg`` import path working.
 
-Existing callers do ``from dace_fortran.hlfir_to_sdfg import
-SDFGBuilder, DEFAULT_PIPELINE, generate_sdfg``; this one-line re-export
-keeps that import path working after the split into per-concern
-modules under ``builder/``.
-
-``__all__`` pins the public surface so re-exports aren't flagged as
-"imported but unused" by linters (F401)  --  no per-line suppressions
-needed.
+``__all__`` pins the surface so re-exports don't trip F401.
 """
 from dace_fortran.builder import (
     DEFAULT_PIPELINE,
@@ -26,8 +20,7 @@ __all__ = [
 ]
 
 if __name__ == "__main__":
-    # Minimal CLI preserved for quick manual inspection:
-    #   python3 -m dace_fortran.hlfir_to_sdfg <input.hlfir> [output.sdfg]
+    # Manual inspection CLI: python3 -m dace_fortran.hlfir_to_sdfg <input.hlfir> [output.sdfg]
     import sys
 
     import dace

@@ -1,16 +1,10 @@
 """Elementwise Fortran intrinsics.
 
-Every entry lowers to a bare-name scalar call inside a Python tasklet
-body (e.g. ``_out = sin(_in_a)``).  DaCe's codegen maps the bare name
-through ``_ALLOWED_MODULES`` (``dace/dtypes.py``) to ``dace::math::...``
-from ``dace/runtime/include/dace/math.h``, so we do not prefix with
-``math.`` or switch the tasklet language.
-
-When Flang lowers ``sin(a)`` on an array, the result is an
-``hlfir.elemental`` whose body ends in ``math.sin``.  The bridge's
-``buildExpr`` emits the bare ``sin(...)`` form; the SDFG emitter keeps
-it bare by consulting ``is_elementwise`` so the name isn't rewritten to
-an ``_in_sin`` tasklet connector.
+Each entry lowers to a bare-name scalar call in the tasklet body (``_out =
+sin(_in_a)``); DaCe's codegen maps it through ``_ALLOWED_MODULES``
+(dace/dtypes.py) to ``dace::math::...``, so no ``math.`` prefix or language
+switch is needed.  The SDFG emitter consults ``is_elementwise`` to keep the
+name bare instead of rewriting it to an ``_in_sin`` connector.
 """
 
 from dace_fortran.intrinsics.base import ElementwiseIntrinsic

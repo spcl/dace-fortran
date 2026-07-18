@@ -1,24 +1,14 @@
 # Copyright 2019-2025 ETH Zurich and the DaCe authors. All rights reserved.
-"""Supportability analysis for static-vtable monomorphisation of polymorphic
-type-bound-procedure (TBP) dispatch -- the ICON-O ocean-solver pattern.
+"""Supportability analysis for static-vtable monomorphisation of polymorphic TBP
+dispatch (ICON-O ocean-solver pattern): recognises programs where a runtime
+``this%act%solve`` dispatch (flang lowers to ``fir.dispatch``, rejected by the
+bridge) can be soundly replaced by a static ``if`` ladder over the closed set of
+concrete subtypes, and produces :class:`MonomorphizationPlan`; else rejects via
+:class:`UnsupportedProgram` (fail loudly instead of mis-compiling).
 
-The monomorphisation pass replaces a runtime virtual dispatch (``this%act%solve``
-on a ``CLASS(abstract)`` entity, which flang lowers to ``fir.dispatch`` and the
-dace-fortran bridge rejects) with a static ``if`` ladder over the *closed set* of
-concrete subtypes registered to the abstract base -- one arm per subtype, each a
-direct call.  That rewrite is only sound for a restricted class of hierarchies.
-
-This module is the front-end that *recognises* that class and produces the
-:class:`MonomorphizationPlan` (the closed arm set the rewrite will emit), or
-rejects the program with :class:`UnsupportedProgram` carrying a precise reason --
-so an out-of-scope program fails loudly and detectably instead of being
-mis-compiled.  The accepted class (locked design):
-
-  * single-level inheritance only -- every concrete subtype ``EXTENDS`` the
-    abstract base *directly* (no chains, no intermediate abstract layers).
-    Fortran has no multiple inheritance, so diamonds are impossible by language.
-  * no unlimited polymorphism (``CLASS(*)``) -- there is no closed subtype set.
-  * every ``DEFERRED`` binding of the base is overridden by every concrete arm.
+Locked accepted class: single-level inheritance only (no chains/diamonds --
+Fortran has no multiple inheritance); no ``CLASS(*)`` (no closed subtype set);
+every ``DEFERRED`` binding overridden by every concrete arm.
 """
 import re
 from dataclasses import dataclass
@@ -35,13 +25,9 @@ EXTENDS_RE = re.compile(r"EXTENDS\s*\(\s*(\w+)\s*\)", re.IGNORECASE)
 
 
 class UnsupportedProgram(Exception):
-    """A program (or type hierarchy) outside the class the monomorphisation pass
-    can soundly rewrite.
+    """Program/hierarchy outside the class monomorphisation can soundly rewrite.
 
-    ``reason`` is a human-readable explanation of which restriction was violated,
-    so callers can detect the rejection and surface *why* rather than failing with
-    an opaque crash deeper in the pipeline.
-    """
+    ``reason`` is a human-readable explanation of which restriction was violated."""
 
     def __init__(self, reason: str):
         super().__init__(reason)
@@ -113,13 +99,9 @@ def read_type_info(dtd: f03.Derived_Type_Def) -> TypeInfo:
 def reject_unlimited_polymorphic(ast: f03.Program, scopes: Optional[List[f03.Base]] = None) -> None:
     """Reject ``CLASS(*)`` -- it has no closed subtype set to ladder over.
 
-    With ``scopes`` given, only ``CLASS(*)`` *within those nodes* is rejected
-    (the monomorphised axis's base + arm type definitions). A large extraction
-    closure routinely pulls in unrelated generic containers -- a hash table /
-    key-value store keyed on ``CLASS(*)``, the comm-pattern infra -- that are
-    nowhere near the laddered axes and are externalised downstream; rejecting on
-    those is a false positive. Without ``scopes``, the whole program is scanned
-    (the strict, axis-agnostic check the standalone analysis tests rely on)."""
+    ``scopes`` restricts the check to those nodes (avoids false positives from
+    unrelated ``CLASS(*)`` containers pulled in by a large extraction closure);
+    without it the whole program is scanned."""
     roots = scopes if scopes is not None else [ast]
     for root in roots:
         for spec in walk(root, f03.Declaration_Type_Spec):
@@ -129,21 +111,14 @@ def reject_unlimited_polymorphic(ast: f03.Program, scopes: Optional[List[f03.Bas
 
 
 def analyze(ast: f03.Program, only_bases: Optional[Iterable[str]] = None) -> List[MonomorphizationPlan]:
-    """Return one :class:`MonomorphizationPlan` per monomorphisable abstract base,
-    or raise :class:`UnsupportedProgram` if the program uses polymorphism in a
-    shape the pass cannot soundly rewrite.
+    """Return one :class:`MonomorphizationPlan` per monomorphisable abstract base
+    (``[]`` if none), or raise :class:`UnsupportedProgram` if a hierarchy cannot
+    be soundly rewritten.
 
-    A program with no abstract dispatch yields ``[]`` (nothing to do -- not an
-    error).
-
-    ``only_bases`` restricts the analysis to the named abstract bases (the spec's
-    ladder axes) -- their plans are built and their hierarchies validated, and
-    the ``CLASS(*)`` rejection is scoped to *their* type definitions. This is what
-    :func:`monomorphize` passes: a large extraction closure pulls in unrelated
-    dispatch roots and generic ``CLASS(*)`` containers that the spec never
-    rewrites, and validating those would reject the whole program for a hierarchy
-    the pass never touches. With ``only_bases`` ``None`` the whole program is
-    validated (the axis-agnostic mode the standalone analysis tests use)."""
+    ``only_bases`` restricts analysis + validation (incl. ``CLASS(*)`` rejection)
+    to those bases -- what :func:`monomorphize` passes, so an unrelated dispatch
+    root or ``CLASS(*)`` container pulled in by a large extraction closure isn't
+    wrongly rejected. ``None`` validates the whole program."""
     only = {b.lower() for b in only_bases} if only_bases is not None else None
     if only is None:
         reject_unlimited_polymorphic(ast)
@@ -190,10 +165,7 @@ def analyze(ast: f03.Program, only_bases: Optional[Iterable[str]] = None) -> Lis
             arms.append(ConcreteArm(kid.name, {d: kid.overrides[d] for d in base.deferred}))
 
         if only is not None:
-            # Scoped CLASS(*) check: the ladder structurally depends only on this
-            # base and its concrete arm type definitions, so an unsound CLASS(*)
-            # would have to live in one of those. CLASS(*) elsewhere in the
-            # closure is untouched by the rewrite (and externalised downstream).
+            # Unsound CLASS(*) can only live in this base's/arms' defs -- elsewhere is untouched by the rewrite.
             reject_unlimited_polymorphic(ast, scopes=[dtds[name]] + [dtds[kid.name] for kid in kids])
 
         plans.append(MonomorphizationPlan(name, sorted(base.deferred), arms))

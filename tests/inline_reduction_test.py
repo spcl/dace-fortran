@@ -1,18 +1,11 @@
 """Reduction intrinsics as inline expression operands.
 
-When a Fortran reduction (``MAXVAL``, ``MINVAL``, ``SUM``, ``PRODUCT``,
-``ANY``, ``ALL``) appears as the immediate RHS of an assignment
-(``out = MAXVAL(arr)``), the bridge's existing
-``buildReduceNode`` / ``buildSectionReduceAssign`` paths handle it.
+A reduction as the immediate RHS (``out = MAXVAL(arr)``) is handled by ``buildReduceNode`` /
+``buildSectionReduceAssign``. As an OPERAND of a larger expression (``out = max(scalar,
+MAXVAL(arr(s:e)))``), ``buildExpr`` used to return ``"?"`` and the tasklet failed to parse.
 
-When the reduction appears as an OPERAND of a larger expression
-(``out = max(scalar, MAXVAL(arr(s:e)))``), ``buildExpr`` previously
-returned ``"?"`` for the reduction subexpression, the resulting
-tasklet code failed Python ``ast.parse``, and the SDFG could not
-build.
-
-The new ``hlfir-lift-reduction-operands`` pass rewrites every nested
-reduction into a preceding scalar-temp assign:
+``hlfir-lift-reduction-operands`` now rewrites every nested reduction into a preceding
+scalar-temp assign:
 
     %tmp = fir.alloca f64
     %tmp_decl = hlfir.declare %tmp ...
@@ -20,12 +13,10 @@ reduction into a preceding scalar-temp assign:
     %loaded = fir.load %tmp_decl#0
     ...uses of %maxval_result rewritten to %loaded...
 
-After the pass, the lifted ``temp = MAXVAL(...)`` is a top-level
-reduction the dispatcher already handles, and the consuming
-expression sees a clean scalar load.
+so the lifted ``temp = MAXVAL(...)`` becomes a top-level reduction the dispatcher already
+handles.
 
-Each test below pairs an SDFG run against an f2py / numpy reference
-on identical random inputs.
+Each test pairs an SDFG run against an f2py/numpy reference on identical random inputs.
 """
 
 from pathlib import Path
@@ -39,8 +30,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def _build_and_run(src: str, tmp_path: Path, **kwargs) -> dict:
-    """Build an SDFG via the bridge, call it with kwargs, return the
-    final state of every numpy buffer the caller passed in."""
+    """Build an SDFG via the bridge, call it with kwargs, return the final buffer state."""
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(src, sdfg_dir, name='kernel').build()
@@ -49,8 +39,7 @@ def _build_and_run(src: str, tmp_path: Path, **kwargs) -> dict:
 
 
 def test_inline_maxval_in_max_expression(tmp_path: Path):
-    """``out = max(scalar, MAXVAL(arr(1:n)))``  --  the failure repro from
-    the velocity_tendencies probe."""
+    """``out = max(scalar, MAXVAL(arr(1:n)))`` -- the failure repro from the velocity_tendencies probe."""
     src = """
 subroutine kernel(arr, scalar, out, n)
   implicit none
@@ -71,8 +60,7 @@ end subroutine kernel
 
 
 def test_inline_minval_in_min_expression(tmp_path: Path):
-    """``out = min(scalar, MINVAL(arr))``  --  symmetric of the maxval
-    case."""
+    """``out = min(scalar, MINVAL(arr))`` -- symmetric of the maxval case."""
     src = """
 subroutine kernel(arr, scalar, out, n)
   implicit none
@@ -93,8 +81,7 @@ end subroutine kernel
 
 
 def test_inline_sum_in_arithmetic(tmp_path: Path):
-    """``out = scalar + SUM(arr(1:n))``  --  sum used additively in a
-    larger expression."""
+    """``out = scalar + SUM(arr(1:n))`` -- sum used additively in a larger expression."""
     src = """
 subroutine kernel(arr, scalar, out, n)
   implicit none
@@ -115,8 +102,7 @@ end subroutine kernel
 
 
 def test_inline_product_in_arithmetic(tmp_path: Path):
-    """``out = scalar * PRODUCT(arr(1:n))``  --  product used
-    multiplicatively in a larger expression."""
+    """``out = scalar * PRODUCT(arr(1:n))`` -- product used multiplicatively in a larger expression."""
     src = """
 subroutine kernel(arr, scalar, out, n)
   implicit none
@@ -137,8 +123,7 @@ end subroutine kernel
 
 
 def test_two_inline_reductions_in_same_expression(tmp_path: Path):
-    """``out = MAXVAL(a(1:n)) + MINVAL(b(1:n))``  --  two distinct
-    reductions in one expression, each must lift independently."""
+    """``out = MAXVAL(a(1:n)) + MINVAL(b(1:n))`` -- two distinct reductions in one expression, each must lift independently."""
     src = """
 subroutine kernel(a, b, out, n)
   implicit none
@@ -158,10 +143,8 @@ end subroutine kernel
 
 
 def test_inline_maxval_no_section(tmp_path: Path):
-    """``out = max(scalar, MAXVAL(arr))``  --  whole-array reduction
-    (no slice) used inline.  Exercises the same lift but routes the
-    lifted assign through the whole-array Reduce path instead of the
-    section-reduce loop."""
+    """``out = max(scalar, MAXVAL(arr))`` -- whole-array reduction (no slice) used inline;
+    routes through the whole-array Reduce path instead of the section-reduce loop."""
     src = """
 subroutine kernel(arr, scalar, out)
   implicit none
@@ -180,25 +163,16 @@ end subroutine kernel
 
 
 def test_dimensional_sum_does_not_corrupt_verifier(tmp_path: Path):
-    """``SUM(arr, DIM=1)`` produces an ARRAY result, not a scalar
-    -- ``!hlfir.expr<NxT>`` rather than a plain ``f64``.  The lift
-    pass must skip these: synthesising a ``fir.alloca !hlfir.expr<NxT>``
-    + ``fir.load`` round-trip produces invalid IR (``fir.load`` only
-    returns FIR-dialect scalar types; the verifier rejects an
-    ``!hlfir.expr`` load).  Encountered upstream in QE's
-    ``vexx_bp_k_gpu`` where an inlined helper has
+    """``SUM(arr, DIM=1)`` produces an ARRAY (``!hlfir.expr<NxT>``), not a scalar -- the lift
+    pass must skip these (a ``fir.alloca``+``fir.load`` round-trip on an ``!hlfir.expr`` is
+    invalid IR; ``fir.load`` only returns FIR-dialect scalar types). Encountered upstream in
+    QE's ``vexx_bp_k_gpu``: ``SQRT(SUM(matrix**2, DIM=1))``.
 
-        SQRT(SUM(matrix**2, DIM=1))    ! -> !hlfir.expr<3xf64>
-
-    Before the ``isScalar`` guard in ``LiftReductionOperands.cpp``,
-    the bridge's pipeline died at ``hlfir-lift-reduction-operands``
-    with ``run_passes: pipeline failed`` plus a verifier complaint
-    about ``fir.load`` returning ``!hlfir.expr<Nxf64>``.  After the
-    fix the pipeline runs through cleanly; AST extraction / SDFG
-    construction may still hit a separate downstream gap for
-    dimensional reductions (the dispatcher's ``emit_reduce`` doesn't
-    yet handle non-named-array sources), but the verifier contract
-    is the bridge-pipeline-level invariant this test pins."""
+    Before the ``isScalar`` guard in ``LiftReductionOperands.cpp``, the pipeline died at
+    ``hlfir-lift-reduction-operands`` with a verifier complaint. This test pins the verifier
+    contract only; SDFG construction may still hit a separate downstream gap for dimensional
+    reductions (``emit_reduce`` doesn't yet handle non-named-array sources).
+    """
     import tempfile
     src = """
 subroutine kernel(matrix, out)
@@ -208,9 +182,8 @@ subroutine kernel(matrix, out)
   out = minval(sqrt(sum(matrix**2, dim=1)))
 end subroutine kernel
 """
-    # Drive the bridge pipeline directly (no AST/SDFG construction):
-    # parse HLFIR, run every pass through the DEFAULT_PIPELINE.  If
-    # the verifier complaint resurfaces, ``run_passes`` raises.
+    # drive the bridge pipeline directly: parse HLFIR, run DEFAULT_PIPELINE; a resurfaced
+    # verifier complaint makes run_passes raise
     import subprocess
     from dace_fortran import DEFAULT_PIPELINE
     from dace_fortran.build_bridge import hb
@@ -228,7 +201,5 @@ end subroutine kernel
         mod = hb.HLFIRModule()
         mod.parse_file(str(h))
         mod.set_entry_symbol("kernel")
-        # Pipeline runs through every pass without the verifier
-        # rejecting the IR.  Before the fix this raised at
-        # ``hlfir-lift-reduction-operands``.
+        # before the fix this raised at hlfir-lift-reduction-operands
         mod.run_passes(DEFAULT_PIPELINE)

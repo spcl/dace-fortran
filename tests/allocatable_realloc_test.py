@@ -1,13 +1,6 @@
-"""End-to-end tests for ``ALLOCATABLE`` re-allocation.
+"""ALLOCATABLE re-allocation: each ALLOCATE lands as a fresh SDFG transient (first keeps the Fortran name, later ones get ``x_allocN``); DEALLOCATE is a no-op at the SDFG level.
 
-Each ``ALLOCATE`` lands as a fresh SDFG transient  --  the first one
-keeps the variable's original Fortran name (``x``), every subsequent
-one gets a synthetic alias (``x_alloc1``, ``x_alloc2``, ...).  The
-intervening ``DEALLOCATE`` is a no-op at the SDFG level.
-
-We don't model pointer aliasing, so this only covers straight-line
-``deallocate(x); allocate(x(...))`` re-allocation; branched ALLOCATE
-sites (one ``allocate`` per arm of an ``if``) are out of scope.
+Straight-line re-allocation only -- no pointer-aliasing model, so branched ALLOCATE sites are out of scope.
 """
 
 from pathlib import Path
@@ -21,10 +14,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_realloc_size_change(tmp_path: Path):
-    """Allocate ``x(n1)``, deallocate, re-allocate ``x(n2)``, copy
-    ``out = x``.  Verifies the second allocation lives under its own
-    transient (``x_alloc1``) so ``out`` reflects the second
-    allocation's contents."""
+    """Realloc x(n1)->x(n2): second allocation lives under its own transient (x_alloc1), out reflects its contents."""
     src = """
 subroutine main(n1, n2, src1, src2, out)
   integer, intent(in) :: n1, n2
@@ -42,7 +32,6 @@ subroutine main(n1, n2, src1, src2, out)
 end subroutine main
 """
     sdfg = build_sdfg(src, tmp_path, name='main').build()
-    # ``x_alloc1`` should appear as a transient  --  the second allocation.
     assert 'x_alloc1' in sdfg.arrays, f"expected x_alloc1 transient, got {list(sdfg.arrays)}"
     assert sdfg.arrays['x_alloc1'].transient
     n1, n2 = 4, 6
@@ -56,9 +45,7 @@ end subroutine main
 
 
 def test_realloc_same_size(tmp_path: Path):
-    """Two ALLOCATEs with the same shape  --  the second still gets its
-    own transient.  Without the per-site rebind, leftover writes from
-    the first allocation would leak through."""
+    """Same-shape realloc still gets its own transient -- without per-site rebind, leftover writes from the first allocation would leak through."""
     src = """
 subroutine main(n, src1, src2, out)
   integer, intent(in) :: n

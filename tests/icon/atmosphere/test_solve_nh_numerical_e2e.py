@@ -1,38 +1,18 @@
-"""Bit-exact standalone single-rank differential for the ICON ``solve_nh`` dycore.
+"""Bit-exact single-rank differential for ICON's solve_nh dycore vs stock gfortran (numerical
+counterpart to build-only test_solve_nh_binding.py), using the same run_kernel_e2e engine as
+test_velocity_numerical_e2e, scaled to the ~900-arg dycore.
 
-The numerical counterpart to the build-only ``test_solve_nh_binding.py``: the
-full nonhydrostatic solver lowers to an SDFG, is driven on a degenerate valid
-single-rank mesh, and its every mutable output is compared BIT-EXACT (max diff
-exactly 0.0, no tolerance) against the stock gfortran ``solve_nh`` on the same
-inputs -- the same ``run_kernel_e2e`` engine that pins ``velocity_tendencies``
-(``test_velocity_numerical_e2e``), scaled to the ~900-argument dycore.
+Milestone 2a-i: velocity_tendencies and halo/sync/timers are neutralised on BOTH sides (dropped from
+the DUT, no-op'd in the reference) rather than compared -- sound since velocity's outputs are flat ABI
+slots initialised identically both sides, and single-rank halo exchange is a no-op. Real velocity
+wiring (per-member-SoA callback) is 2a-ii (see test_solve_nh_velocity_callback_e2e).
 
-**Milestone 2a-i -- velocity + halo neutralised on BOTH sides.**  ``solve_nh``
-calls ``velocity_tendencies`` (a stub in this TU) and the halo exchange /
-sync / timers; all are dropped from the DUT SDFG (``do_not_emit``) and made
-no-ops in the reference (the halo's ``mpi_*`` leaves resolve to
-:data:`icon._halo_modes._MPI_NOOP_IMPL`).  This is sound because everything
-velocity would write -- ``ddt_vn_apc_pc`` / ``ddt_vn_cor_pc`` / ``ddt_w_adv_pc``
--- is a ``t_nh_diag`` struct member, i.e. a flat ABI slot initialised
-identically on both sides, so dropping velocity leaves both runs reading the
-same state; and single-rank halo exchange is a no-op (no neighbours).  It gates
-the BULK of the dycore (the pressure + vertical-implicit solve) plus the
-~900-arg binding and the differential harness.  The real velocity contribution
-is a follow-up (2a-ii) that wires velocity back as a per-member-SoA callback to
-the inner velocity SDFG (the callback ABI is aligned -- see
-``test_solve_nh_velocity_callback_e2e``).
+inject_use_mpi gives the inlined mo_mpi a `use mpi` so its dual-typed point-to-point calls resolve
+through the stub's `type(*)` interface (avoids -fallow-argument-mismatch); only the 7 raw mpi_* leaves
+are genuinely undefined and need the no-op prelude -- the bridge's devirtualised call names are
+USE-renames of in-TU bodies, not undefined.
 
-One reference fix-up makes the extracted single-TU gfortran-EXECUTABLE (the SDFG
-build reads the raw TU; the bridge resolves things its own way): ``inject_use_mpi``
-gives the inlined ``mo_mpi`` a ``use mpi`` so its dual-typed real*8 / real*4
-point-to-point calls resolve through the stub's one ``type(*)`` assumed-type
-interface (no ``-fallow-argument-mismatch``).  The bridge's devirtualised call
-names (``cells2verts_scalar_dp_deconiface_127`` / ``p_irecv_dp_deconiface_10``)
-are NOT undefined -- each is a ``USE <mod>, ONLY: <name> => <base>`` rename of an
-in-TU body -- so the TU compiles as-is; only the 7 raw ``mpi_*`` leaves are
-genuinely undefined and resolve to the no-op prelude.
-
-``@pytest.mark.long``: builds the 3166-LoC dycore to an SDFG (minutes).
+@pytest.mark.long: builds the 3166-LoC dycore to an SDFG (minutes).
 """
 import shutil
 from pathlib import Path
@@ -53,16 +33,12 @@ _HERE = Path(__file__).resolve().parent
 _TU = _HERE / "solve_nonhydro_inlined_single_tu.f90"
 _ENTRY = "mo_solve_nonhydro::solve_nh"
 
-# Halo / sync / diagnostics / timers dropped from the DUT SDFG so no MPI survives
-# single-rank and both sides read identical state.  ``velocity_tendencies`` is
-# NOT dropped: it is a no-op STUB in this TU, so the bridge inlines it to nothing
-# on the DUT and the reference calls the same empty stub -- both neutralise
-# velocity identically.  Dropping it instead would leave a per-member-SoA marshal
-# BOUNDARY (``MarshalExternalStructs`` gathers ``p_patch``'s value-record members
-# ``primal_normal_cell`` / ``dual_normal_cell`` for the callback) whose leaves
-# then COLLIDE with the ordinary FlattenStructs split -> the binding double-
-# declares ``p_patch_edges_primal_normal_cell_v1`` etc.  Milestone 2a-i keeps
-# velocity a no-op; wiring the real velocity callback is 2a-ii.
+# halo/sync/diag/timers dropped from the DUT SDFG so no MPI survives single-rank and both sides
+# read identical state. velocity_tendencies is NOT dropped -- it's a no-op stub in this TU, so both
+# DUT and reference call the same empty stub. Dropping it instead would leave a per-member-SoA
+# marshal boundary (MarshalExternalStructs on p_patch's value-record members) whose leaves collide
+# with the ordinary FlattenStructs split, double-declaring p_patch_edges_primal_normal_cell_v1 etc.
+# Milestone 2a-i keeps velocity a no-op; 2a-ii wires it.
 _DO_NOT_EMIT = [
     "sync_patch_array", "sync_patch_array_mult", "exchange_data", "p_barrier", "p_max", "p_min", "p_sum", "global_max",
     "global_min", "global_sum", "setup_comm_pattern", "finish", "message", "message_text", "warning", "print_status",
@@ -73,8 +49,8 @@ _DO_NOT_EMIT = [
 
 @pytest.mark.xdist_group("atmo_solve_nh_numerical")
 def test_solve_nh_numerical_e2e(tmp_path: Path):
-    """solve_nh -> SDFG, driven on a degenerate valid mesh, is BIT-EXACT against
-    the stock gfortran solve_nh (velocity + halo neutralised on both sides)."""
+    """solve_nh -> SDFG on a degenerate valid mesh is BIT-EXACT vs stock gfortran solve_nh (velocity
+    + halo neutralised on both sides)."""
     stub = tmp_path / "_mpi_stub.f90"
     stub.write_text(_MPI_STUB)
     noop = tmp_path / "_mpi_noop_impl.f90"
@@ -84,12 +60,9 @@ def test_solve_nh_numerical_e2e(tmp_path: Path):
         _TU,
         _ENTRY,
         int_fill=1,
-        # ICON config globals: an isolated kernel reads them BSS-0.  For
-        # bit-exactness only IDENTICAL values matter (seeded on both sides), so
-        # unseeded globals stay 0 on both -- valid unless 0 OOBs.  Seed the block
-        # size + the vertical level-start / substep bounds that index or divide
-        # (0 -> jk=0 OOB, or dtime/0 -> NaN): everything else takes its 0-branch
-        # equally on both sides.
+        # isolated kernel reads config globals BSS-0; bit-exactness only needs IDENTICAL values
+        # (seeded both sides), so unseeded globals stay 0 -- valid unless 0 OOBs. Seed block size +
+        # level-start/substep bounds that index or divide (0 -> jk=0 OOB or dtime/0 -> NaN).
         module_seeds={
             "nproma": 8,
             "nflatlev": 1,
@@ -102,14 +75,10 @@ def test_solve_nh_numerical_e2e(tmp_path: Path):
             "p_patch_nlev": 7,
             "p_patch_nlevp1": 8
         },
-        # ``mo_vertical_coord_table::vct_a`` (the vertical coordinate table) is a
-        # ``REAL(8), ALLOCATABLE`` module global the kernel indexes directly
-        # (``vct_a(jk)``, up to nlevp1); it is UNALLOCATED in an isolated run, so
-        # the stock reference OOB-reads (SEGV) and the SDFG reads a size-1
-        # defensive fallback.  It crosses no ABI slot, so -- like ``module_seeds``
-        # -- the harness allocates + fills it identically (a ramp; the value is
-        # inert here, only cross-side identity matters) on BOTH sides.  Sized
-        # generously past nlevp1 (8) so every ``vct_a(jk+1)`` stays in bounds.
+        # vct_a (vertical coord table) is an ALLOCATABLE module global the kernel indexes directly
+        # (vct_a(jk)); unallocated in an isolated run, so the stock reference would SEGV. Harness
+        # allocates + fills it identically on both sides (value is inert, only cross-side identity
+        # matters); sized past nlevp1 (8) so every vct_a(jk+1) stays in bounds.
         module_array_seeds={"vct_a": 16},
         do_not_emit=_DO_NOT_EMIT,
         prelude_paths=[stub, noop],

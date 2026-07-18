@@ -1,13 +1,6 @@
-"""End-to-end smoke for ``autotools/dace_fortran.m4``.
-
-Stages a tiny self-contained autotools project, runs the standard
-``aclocal -> autoconf -> automake -> configure -> make`` chain, and
-asserts the preprocess rule fires and produces the rewritten
-sources.
-
-Skipped when ``autoconf`` / ``automake`` / ``aclocal`` aren't on
-the PATH (typical on minimal CI images).
-"""
+"""E2e smoke for autotools/dace_fortran.m4: stages a project, runs
+aclocal -> autoconf -> automake -> configure -> make, asserts the preprocess rule fires.
+Skipped when autoconf/automake/aclocal aren't on PATH."""
 import os
 import shutil
 import subprocess
@@ -29,9 +22,7 @@ pytestmark = pytest.mark.skipif(not (_HAVE_AUTOCONF and _HAVE_AUTOMAKE and _HAVE
 
 def _write_project(tmp_path: Path) -> Path:
     """Stage a minimal automake project that exercises the macro."""
-    # ``configure.ac`` -- pulls in the m4 macro and invokes it.
-    # ``AM_INIT_AUTOMAKE([foreign])`` keeps automake from demanding
-    # GNU-project boilerplate (NEWS / AUTHORS / ChangeLog / README).
+    # configure.ac pulls in the macro; AM_INIT_AUTOMAKE([foreign]) skips GNU boilerplate (NEWS/AUTHORS/ChangeLog/README).
     (tmp_path / "configure.ac").write_text(f"""\
 AC_INIT([dace_fortran_automake_smoke], [0.1])
 AC_CONFIG_AUX_DIR([build-aux])
@@ -50,16 +41,13 @@ DACE_FORTRAN_PREPROCESS
 AC_CONFIG_FILES([Makefile])
 AC_OUTPUT
 """)
-    # Vendored macro -- a project would normally pull the file from
-    # the installed dace-fortran share tree, but for the test we
-    # symlink the in-repo copy directly into ``m4/``.
+    # vendored macro: symlinks the in-repo copy into m4/ instead of pulling from an installed share tree.
     (tmp_path / "m4").mkdir()
     (tmp_path / "m4" / "dace_fortran.m4").symlink_to(_M4_DIR / "dace_fortran.m4")
     # The aux dir automake's missing-tool / install-sh helpers go in.
     (tmp_path / "build-aux").mkdir()
 
-    # Source tree.  The kernel + sidecar module match the cmake test
-    # so the assertions can stay shape-equivalent.
+    # source tree matches the cmake test's kernel + sidecar module so assertions stay shape-equivalent.
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "kernel.f90").write_text("""\
 SUBROUTINE run(out_val, x, f)
@@ -83,11 +71,8 @@ CONTAINS
 END MODULE utils_mod
 """)
 
-    # ``Makefile.am`` -- include the rules file then use the helper
-    # macro to remap each kernel.f90 to its preprocessed sibling.
-    # No compile step (we just want the preprocess rule to fire), so
-    # the project's default target is a marker file that depends on
-    # the rewritten output.
+    # Makefile.am includes the rules file and remaps kernel.f90 via the helper macro; no compile
+    # step, so the default target is a marker file depending on the rewritten output.
     rules_mk = (_REPO_ROOT / "autotools" / "dace_fortran.mk")
     (tmp_path / "Makefile.am").write_text(f"""\
 include {rules_mk}
@@ -108,17 +93,14 @@ CLEANFILES = preprocessed.stamp
 
 
 def _autoreconf(proj: Path):
-    """Run aclocal + autoconf + automake to materialise configure +
-    Makefile.in.  ``--include`` adds the project's m4/ directory so
-    ``aclocal`` picks up dace_fortran.m4."""
+    """aclocal+autoconf+automake -> configure + Makefile.in; -I m4 lets aclocal find dace_fortran.m4."""
     subprocess.check_call(["aclocal", "--install", "-I", "m4"], cwd=str(proj))
     subprocess.check_call(["autoconf"], cwd=str(proj))
     subprocess.check_call(["automake", "--add-missing", "--copy", "--foreign"], cwd=str(proj))
 
 
 def test_configure_succeeds(tmp_path):
-    """``./configure`` succeeds -- the DACE_FORTRAN_PREPROCESS macro
-    expanded cleanly into the generated ``configure`` script."""
+    """./configure succeeds -- DACE_FORTRAN_PREPROCESS macro expanded cleanly into the generated script."""
     proj = _write_project(tmp_path)
     _autoreconf(proj)
     res = subprocess.run(["./configure"], cwd=str(proj), capture_output=True, text=True)
@@ -130,19 +112,15 @@ def test_configure_succeeds(tmp_path):
 
 
 def test_make_runs_preprocess_and_emits_sources(tmp_path):
-    """``make`` invokes the pattern rule and produces the rewritten
-    ``.preprocessed.f90`` under the build dir.  Same content
-    assertions as the cmake counterpart -- composed passes produce
-    the kind-alias rewrite + the EXTERNAL resolution."""
+    """make produces the rewritten .preprocessed.f90; same content assertions as the cmake counterpart
+    (kind-alias rewrite + EXTERNAL resolution)."""
     proj = _write_project(tmp_path)
     _autoreconf(proj)
     subprocess.check_call(["./configure"], cwd=str(proj), stdout=subprocess.DEVNULL)
     res = subprocess.run(["make"], cwd=str(proj), capture_output=True, text=True)
     assert res.returncode == 0, \
         f"make failed:\nstdout={res.stdout}\nstderr={res.stderr}"
-    # Default DACE_FORTRAN_BUILD_DIR per the m4 macro:
-    # $(top_builddir)/dace_fortran_preprocessed.  In-tree configure
-    # makes top_builddir = ``.``.
+    # default DACE_FORTRAN_BUILD_DIR = $(top_builddir)/dace_fortran_preprocessed; in-tree top_builddir = '.'.
     out = proj / "dace_fortran_preprocessed" / "src" / "kernel.preprocessed.f90"
     assert out.is_file(), \
         f"no preprocessed kernel at {out}; tree:\n" + \
@@ -157,16 +135,14 @@ def test_make_runs_preprocess_and_emits_sources(tmp_path):
 
 
 def test_make_is_incremental_on_unchanged_source(tmp_path):
-    """A second ``make`` invocation with no changes does NOT
-    re-preprocess (the file's mtime stays put)."""
+    """Second make with no changes does not re-preprocess (mtime stays put)."""
     proj = _write_project(tmp_path)
     _autoreconf(proj)
     subprocess.check_call(["./configure"], cwd=str(proj), stdout=subprocess.DEVNULL)
     subprocess.check_call(["make"], cwd=str(proj), stdout=subprocess.DEVNULL)
     out = proj / "dace_fortran_preprocessed" / "src" / "kernel.preprocessed.f90"
     mtime1 = out.stat().st_mtime
-    # Sleep past 1s so any mtime change is observable on filesystems
-    # that round to whole seconds.
+    # sleep past 1s: some filesystems round mtime to whole seconds.
     import time
     time.sleep(1.05)
     subprocess.check_call(["make"], cwd=str(proj), stdout=subprocess.DEVNULL)

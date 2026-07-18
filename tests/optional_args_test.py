@@ -48,9 +48,8 @@ def test_fortran_frontend_optional(tmp_path):
     res2 = np.full([size], 42, order="F", dtype=np.int32)
     sdfg(res=res, res2=res2, a=5, a_present=1)
 
-    # Safe path only  --  second internal call reads OPTIONAL ``a`` without
-    # checking PRESENT and is UB per Fortran (we accept the read may
-    # produce garbage; res2 is left unchecked).
+    # safe path only -- second call reads OPTIONAL ``a`` without checking PRESENT (UB
+    # per Fortran); res2 left unchecked
     assert res[0] == 5
 
 
@@ -100,16 +99,11 @@ def test_fortran_frontend_optional_complex(tmp_path):
     size = 5
     res = np.full([size], 42, order="F", dtype=np.int32)
     res2 = np.full([size], 42, order="F", dtype=np.int32)
-    # ``c`` is Fortran ``LOGICAL`` -- pass ``True`` (not ``1``).
-    # ``c_present=0`` says the inner call won't read ``c``, so the
-    # actual value doesn't matter, but routing the bool through as
-    # a Python int triggers the runtime int32->bool* reinterpret
-    # warning.  Stick to the dtype convention.
+    # c is Fortran LOGICAL -- pass True not 1; routing as a Python int triggers a
+    # runtime int32->bool* reinterpret warning even though c_present=0 means it's unread
     sdfg(res=res, res2=res2, a=5, a_present=1, b=7.0, b_present=1, c=True, c_present=0)
 
-    # Safe path only  --  caller passed ``a`` and ``b`` to the first
-    # internal call; ``c`` was not passed and is UB if read.  The
-    # second internal call passes none of them and is UB throughout
-    # (res2 left unchecked, per the saved "let it crash" policy).
+    # safe path only -- first call got a,b (c unpassed, UB if read); second call got
+    # none (UB throughout, res2 left unchecked per "let it crash" policy)
     assert res[0] == 5
     assert res[1] == 7

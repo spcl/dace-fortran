@@ -1,19 +1,13 @@
-"""Array-of-constants support (coefficient / extrapolation tables common in
-scientific Fortran).
+"""Array-of-constants support (coefficient / extrapolation tables).
 
-Two shapes, decided by whether the kernel WRITES the array:
+Two shapes, decided by whether the kernel WRITES the array: **immutable** (a
+``parameter`` or read-only DATA-statement array) bakes into a DaCe ``constexpr``
+(never a kwarg); **mutable** (a DATA-statement array the kernel also assigns to)
+becomes a writable transient seeded by per-element init tasklets (constexpr would
+be read-only).
 
-  * **immutable** -- a ``parameter`` array or a read-only DATA-statement
-    array (``real :: c(3); data c /.../``) bakes into a DaCe ``constexpr``
-    array (``sdfg.add_constant``); it never surfaces as a kwarg.
-  * **mutable** -- a DATA-statement (or initialised) array the kernel also
-    assigns to becomes a writable transient whose initial values are
-    unfolded into per-element init tasklets at SDFG entry (a ``constexpr``
-    would be read-only and the store could not compile).
-
-flang lowers a DATA-statement array to a ``fir.global`` carrying a dense
-initialiser but NOT marked ``constant`` (DATA variables are mutable); the
-bridge extracts that dense data the same as a ``parameter`` array's.
+flang lowers a DATA-statement array to a ``fir.global`` with a dense initialiser
+but NOT marked ``constant``; the bridge extracts that data like a parameter array's.
 """
 from pathlib import Path
 
@@ -26,8 +20,7 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_readonly_data_array_is_constexpr(tmp_path):
-    """A read-only DATA-statement array bakes into a constexpr array -- not
-    a kwarg the caller must supply."""
+    """Read-only DATA-statement array bakes into a constexpr array, not a kwarg."""
     src = """
 module m
 contains
@@ -54,9 +47,8 @@ end module m
 
 
 def test_mutable_data_array_is_seeded_transient(tmp_path):
-    """A DATA-statement array the kernel also writes becomes a writable
-    transient seeded by per-element init tasklets (not a constexpr, not a
-    kwarg)."""
+    """A DATA-statement array the kernel also writes becomes a writable transient
+    seeded by per-element init tasklets, not a constexpr."""
     src = """
 module m
 contains
@@ -84,8 +76,8 @@ end module m
 
 
 def test_module_parameter_array_is_constexpr(tmp_path):
-    """A module-scope ``parameter`` coefficient array (the extrapolation /
-    weight-table shape) bakes into a constexpr array, indexed in a loop."""
+    """A module-scope ``parameter`` coefficient array bakes into a constexpr array,
+    indexed in a loop."""
     src = """
 module extrap_mod
   implicit none
@@ -111,10 +103,8 @@ end module extrap_mod
 
 
 def test_mutable_multidim_const_array_is_fortran_major(tmp_path):
-    """A mutable 2-D DATA array: the per-element init tasklets must place
-    each value at the Fortran (column-major) position the kernel later
-    reads, so reads of ``a(i, j)`` see the original column-major layout
-    (not a row-major transpose).  Also pins that the transient is laid out
+    """Mutable 2-D DATA array: per-element init tasklets must place each value at the
+    Fortran (column-major) position, not a row-major transpose; transient is laid out
     Fortran-major (unit leading stride)."""
     src = """
 module m
@@ -131,8 +121,7 @@ end module m
 """
     sdfg = build_sdfg(src, tmp_path, name='k', entry='k').build()
     assert 'a' not in sdfg.arglist() and 'a' not in getattr(sdfg, 'constants', {})
-    # Fortran column-major: a(1,1)=1 a(2,1)=2 a(1,2)=3 a(2,2)=4 a(1,3)=5 a(2,3)=6.
-    # Column-major storage -> the leading (row) stride is 1.
+    # Fortran column-major: a(1,1)=1 a(2,1)=2 a(1,2)=3 a(2,2)=4 a(1,3)=5 a(2,3)=6 -> leading stride 1.
     assert int(sdfg.arrays['a'].strides[0]) == 1, "const array transient must be Fortran (column-major) laid out"
     for ii, jj, exp in [(1, 2, 103.0), (2, 1, 2.0), (1, 1, 1.0), (2, 3, 6.0), (1, 3, 5.0)]:
         y = np.zeros(1, dtype=np.float32)

@@ -1,15 +1,10 @@
-"""Array reductions (``SUM`` / ``MINVAL`` / ``MAXVAL`` / ``PRODUCT``) appearing
-in a CONDITION are materialised into a scalar transient via a ``Reduce`` library
-node BEFORE the branch (the reduction's elemental operands lower to element-wise
-for-loops first), so the condition reads a scalar (``s > eps``) instead of
-inline-unrolling the reduction into the condition expression.
+"""Array reductions (SUM/MINVAL/MAXVAL/PRODUCT) in a CONDITION materialise into a scalar
+transient via a Reduce lib-node BEFORE the branch, so the condition reads a scalar instead
+of inline-unrolling the reduction.
 
-These tests pin both the STRUCTURE (a ``Reduce`` lib-node + a scalar condition,
-no bare whole-array operands) and END-TO-END correctness.  The reductions are
-exercised inside ``DO`` loops and in loop conditions -- the safety cases the
-materialisation must not break -- with the loop bodies incrementing an
-in-bounds counter / accumulator array so a miscompile shows up as a wrong
-result rather than out-of-bounds memory.
+Pins both STRUCTURE (Reduce lib-node + scalar condition) and end-to-end correctness, in DO
+loops and loop conditions, with loop bodies touching only in-bounds memory so a miscompile
+shows as a wrong result, not an OOB crash.
 """
 import sys
 from pathlib import Path
@@ -30,10 +25,8 @@ def _reduce_nodes(sdfg):
 
 @_needs_flang
 def test_if_sum_reduction_in_loop(tmp_path):
-    """``IF (SUM((iv - rv)**2) > eps)`` inside a ``DO`` loop -- the Gate-G
-    pattern.  Materialises a ``Reduce`` (sum) lib-node; the per-element squared
-    difference must keep its subscript (no bare ``(iv - rv)`` whole-array term).
-    Each hit increments an in-bounds counter."""
+    """IF (SUM((iv-rv)**2) > eps) in a DO loop -- Gate-G pattern. Materialises a Reduce (sum)
+    lib-node; the per-element squared diff must keep its subscript (no bare whole-array term)."""
     src = """
 module driver_mod
   implicit none
@@ -66,8 +59,7 @@ end module driver_mod
 
 @_needs_flang
 def test_if_maxval_of_array_diff(tmp_path):
-    """``IF (MAXVAL(a - b) > thr)`` -- an array-op (elementwise subtract) feeding
-    a MAXVAL reduction in the condition.  Materialises a ``Reduce`` (max)."""
+    """IF (MAXVAL(a - b) > thr) -- elementwise subtract feeding a MAXVAL reduction; materialises a Reduce (max)."""
     src = """
 module driver_mod
   implicit none
@@ -102,9 +94,8 @@ end module driver_mod
 
 @_needs_flang
 def test_reduction_in_loop_body(tmp_path):
-    """A section reduction ``SUM(m(:, k))`` in the loop BODY (an assign, not a
-    condition) -- the ordinary reduce path; guards that the condition-reduction
-    change didn't perturb it."""
+    """SUM(m(:, k)) in the loop BODY (not a condition) -- guards the ordinary reduce path
+    against regression from the condition-reduction change."""
     src = """
 module driver_mod
   implicit none
@@ -131,10 +122,8 @@ end module driver_mod
 
 @_needs_flang
 def test_minval_row_view_in_condition(tmp_path):
-    """``IF (MINVAL(m(i, :)) > thr)`` -- a ROW section of a 2-D array feeds the
-    MINVAL reduction.  The row becomes a DaCe VIEW (correct shape + column-major
-    row stride) and the ``Reduce`` lib-node reduces the view (NOT the whole
-    array).  Counts rows whose minimum exceeds the threshold."""
+    """IF (MINVAL(m(i, :)) > thr) -- a row section becomes a DaCe VIEW (correct shape + column-major
+    stride) and Reduce reduces the view, not the whole array."""
     src = """
 module driver_mod
   implicit none
@@ -208,11 +197,8 @@ end module driver_mod
 
 @_needs_flang
 def test_do_while_maxval_condition(tmp_path):
-    """``DO WHILE (MAXVAL(a) > thr)`` -- a reduction in a LOOP condition,
-    re-evaluated each iteration over a RUNTIME-extent array (which the old
-    inline-unroll could not handle -> ``?`` for non-constant extent).  The body
-    only advances scalars (``thr`` / ``iters``) so the array stays read-only and
-    in-bounds; the loop runs ``ceil(maxval(a))`` times."""
+    """DO WHILE (MAXVAL(a) > thr) -- reduction re-evaluated each iteration over a runtime-extent
+    array (old inline-unroll couldn't handle non-constant extent). Loop runs ceil(maxval(a)) times."""
     src = """
 module driver_mod
   implicit none

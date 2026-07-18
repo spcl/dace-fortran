@@ -34,22 +34,11 @@ end subroutine main
 """
     sdfg = build_sdfg(src, tmp_path, name='main', entry='main').build()
     a = np.full([4], 42, order="F", dtype=np.float64)
-    # ``outside_init`` is a non-PARAMETER module-level scalar with a
-    # source-level initialiser.  After ``hlfir-preserve-mutable-
-    # globals``, every non-written, non-PARAMETER global surfaces as a
-    # caller kwarg with the source-declared value as the value the
-    # caller would supply for the Fortran-source default behaviour.
+    # outside_init is a non-PARAMETER module scalar with a source initialiser; hlfir-preserve-mutable-globals surfaces it as a caller kwarg defaulting to the source value.
     eps = np.finfo(np.float32).eps
     sdfg(d=a, outside_init=np.array([eps], dtype=np.float32, order='F'))
     assert (a[0] == 42)
-    # Source: ``5.5 + bob + outside_init`` where both ``bob`` and
-    # ``outside_init`` are ``epsilon(1.0)`` (~1.19e-7).  Fortran
-    # evaluates the chain in real(4) (single precision), where the
-    # additions round to 5.5 because ``epsilon(1.0)`` is below the
-    # float32 spacing at the value 5.5.  The bridge currently promotes
-    # to double precision earlier in the chain, so the result lands at
-    # ~5.5 + 2*epsilon ~= 5.5000002  --  numerically accurate, but not
-    # exactly 5.5.  Both are correct; tolerate up to ~3*epsilon(1.0).
+    # 5.5 + bob + outside_init, both epsilon(1.0) (~1.19e-7). Fortran real(4) rounds this to exactly 5.5; the bridge promotes to double earlier so it lands at ~5.5000002 instead -- both correct, tolerate ~3*epsilon(1.0).
     assert abs(a[1] - 5.5) < 1e-6
     assert (a[2] == 42)
 

@@ -24,9 +24,8 @@ def _hlfir(src: str, out: Path) -> Path:
 
 
 def test_two_files_merge_drops_dead_helper(tmp_path: Path):
-    """Entry in file B, unused helper in file A.  After the multi-file
-    pipeline only the entry should remain  --  symbol-dce drops the
-    helper since nothing references it."""
+    """Entry in file B, unused helper in file A: symbol-dce drops the unreferenced helper,
+    only the entry remains."""
     _hlfir(
         """
 subroutine unused_helper(x, n)
@@ -52,8 +51,7 @@ end subroutine
 
     b = SDFGBuilder.from_files([str(tmp_path / "a.hlfir"), str(tmp_path / "b.hlfir")], entry="kernel")
     remaining = b.module.list_functions()
-    # ``list_functions`` reports the flang IR symbols, which stay mangled;
-    # only the user-facing ``entry=`` is plain.
+    # list_functions reports mangled flang IR symbols; only entry= is plain.
     assert remaining == ["_QPkernel"], \
         f"symbol-dce should have dropped unused_helper; got {remaining}"
     sdfg = b.build()
@@ -99,13 +97,8 @@ end subroutine
 
 
 def test_cross_file_callee_gets_inlined(tmp_path: Path):
-    """Entry in one file calls a helper defined in another file.  The
-    multi-file pipeline must inline the helper into the entry so the
-    SDFG sees the combined behaviour (the current _emit dispatch has no
-    "call" handler; without inlining the helper would be silently
-    dropped).  After pipeline the helper should be gone from the
-    module and its assignment should appear inside the entry.
-    """
+    """Entry in one file calls a helper in another: the pipeline must inline the helper
+    (``_emit`` dispatch has no "call" handler, so without inlining it's silently dropped)."""
     _hlfir(
         """
 subroutine helper(x, n)
@@ -139,16 +132,15 @@ end subroutine
     b = SDFGBuilder.from_files([str(tmp_path / "kernel.hlfir"), str(tmp_path / "helper.hlfir")], entry="kernel")
     remaining = b.module.list_functions()
     assert remaining == ["_QPkernel"], f"helper should have inlined + dce'd; got {remaining}"
-    # The helper's ``* 2.0`` multiply should live in the entry's body.
     dump = b.module.dump()
     assert "2.000000e+00" in dump, \
         "helper's x(i) * 2.0d0 should appear inlined inside kernel"
 
 
 def test_parse_files_declaration_loses_to_definition(tmp_path: Path):
-    """When two files both expose a symbol, the real definition must
-    win over an external declaration so the full body (x(1)=99) ends
-    up inlined into the entry  --  not a verify-no-unresolved-calls error."""
+    """When two files both expose a symbol, the real definition wins over an external
+    declaration: the full body inlines into the entry, not a verify-no-unresolved-calls
+    error."""
     _hlfir(
         """
 subroutine kernel(x, n)
@@ -172,9 +164,7 @@ subroutine shared(x, n)
 end subroutine
 """, tmp_path / "shared.hlfir")
     b = SDFGBuilder.from_files([str(tmp_path / "caller.hlfir"), str(tmp_path / "shared.hlfir")], entry="kernel")
-    # Once the definition wins, inline-all folds shared into kernel and
-    # symbol-dce drops the helper.  The 99.0 constant must land inside
-    # kernel's body as proof the real definition was used  --  if the
-    # declaration had won, verify-no-unresolved-calls would have errored.
+    # Definition wins: inline-all folds shared into kernel, symbol-dce drops helper.
+    # 99.0 proves the real definition was used (else verify-no-unresolved-calls would error).
     assert b.module.list_functions() == ["_QPkernel"]
     assert "9.900000e+01" in b.module.dump()

@@ -1,15 +1,5 @@
-"""Frontend-recognition tests for the AoS-of-pointer-records pass scaffold.
-
-``hlfir-lift-aos-pointer-records`` detects the
-``TYPE(...) :: q(N)`` + ``REAL, POINTER :: m(:[, :])`` pattern that
-Graupel's ``t_qx_ptr%x`` uses and records its findings as a
-``hlfir.aos_ptr_records.<aos_decl>`` attribute on the enclosing
-function.  These tests drive a handful of isolated shapes through
-the bridge and verify the attribute lands -- the materialisation
-step (copy-in / copy-out + access rewrite) is a follow-up commit;
-this matcher test family pins the recognition so the materialisation
-PR can iterate against real probes without ambiguity about which
-sites should be transformed.
+"""Recognition tests for ``hlfir-lift-aos-pointer-records``: pins that the
+AoS-of-pointer-records pattern emits ``hlfir.aos_ptr_records.<aos_decl>``, ahead of materialisation.
 """
 from pathlib import Path
 import sys

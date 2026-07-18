@@ -1,8 +1,6 @@
 """Per-renderer tests for the alias / copy-in / copy-out primitives.
 
-These are the only pieces of binding-code-generation logic, so we
-test each shape in isolation: single recipe in, list of Fortran
-lines out.
+Each renderer tested in isolation: single recipe in, list of Fortran lines out.
 """
 
 import pytest
@@ -130,10 +128,8 @@ def test_render_copy_out_loop_shape():
 
 
 def test_render_copy_out_loop_inverse_for_single_flat_empty_write_expr():
-    """A single-flat member with no ``write_expr`` (e.g. an AoS scalar member
-    ``pts(i)%x``) copies out as the exact inverse of copy-in:
-    ``<read_expr> = <flat>(idx)``  --  scattering the companion back into the
-    member access, then deallocating."""
+    """Single-flat member with no ``write_expr`` copies out as the exact
+    inverse of copy-in: ``<read_expr> = <flat>(idx)``, then deallocates."""
     r = FlattenRecipe(
         flat_names=("pts_x", ),
         read_exprs=("pts($i1)%x", ),
@@ -180,8 +176,7 @@ def _aos_alloc_recipe() -> FlattenRecipe:
 def test_render_aos_alloc_pack_in_emits_cap_max_loop():
     lines = render_aos_alloc_pack_in(_aos_alloc_recipe(), outer_expr="a")
     joined = "\n".join(lines)
-    # Cap is computed by max-ing per-instance ``size``  --  guarded by
-    # ``allocated()`` so unallocated rows don't poison the max.
+    # Cap = max per-instance size, guarded by allocated() so unalloc'd rows don't poison it.
     assert "cap_a_w = 0" in joined
     assert "if (allocated(a(i1)%w))" in joined
     assert "if (size(a(i1)%w) > cap_a_w) cap_a_w = size(a(i1)%w)" in joined
@@ -196,11 +191,9 @@ def test_render_aos_alloc_pack_in_emits_cap_max_loop():
 def test_render_aos_alloc_pack_out_copies_back_live_region():
     lines = render_aos_alloc_pack_out(_aos_alloc_recipe(), outer_expr="a")
     joined = "\n".join(lines)
-    # Per-row copy-back, guarded by ``allocated()`` (skips unalloc'd
-    # entries  --  bindings policy is to leave their buffer rows zeroed).
+    # Per-row copy-back, guarded by allocated() -- unalloc'd rows stay zeroed (bindings policy).
     assert "if (allocated(a(i1)%w))" in joined
     assert "a(i1)%w = a_w(i1, 1:size(a(i1)%w))" in joined
-    # Final deallocate releases the scratch.
     assert "deallocate(a_w)" in joined
 
 
@@ -219,9 +212,8 @@ def test_render_aos_alloc_pack_in_raises_on_non_aos_alloc():
 
 
 def test_kind_convert_recipe_rendering():
-    """Demonstrate the kind-convert shape the user wants:
-    ``real(kind=4)`` outer -> ``real(kind=8)`` SDFG flat.  Uses the
-    same machinery  --  no dedicated strategy needed."""
+    """Kind-convert shape: ``real(kind=4)`` outer -> ``real(kind=8)`` SDFG flat,
+    via the same machinery -- no dedicated strategy needed."""
     recipe = FlattenRecipe(
         flat_names=("st_x_d", ),
         read_exprs=("real(st%x($i1), kind=c_double)", ),

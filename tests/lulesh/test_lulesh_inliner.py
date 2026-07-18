@@ -1,23 +1,12 @@
 # Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
-"""Inliner + end-to-end numerical-correctness tests over the vendored Fortran
-LULESH (``tests/lulesh/``; GPL-v3 third-party fixture -- see ``NOTICE.md``).
+"""Inliner + e2e numerical-correctness tests over the vendored Fortran LULESH
+(``tests/lulesh/``; GPL-v3 third-party fixture -- see ``NOTICE.md``).
 
-Two things are exercised on real LULESH source:
-
-* **Whole-program faithfulness, both backends.** The fparser inliner
-  (:func:`inline_to_ast`, ``optimize=False``) and the regex merge engine
-  (:func:`merge_used_modules`) each fold the two-file project
-  (``lulesh.f90`` driver + ``lulesh_comp_kernels.f90`` module) into one
-  self-contained TU that keeps the ``PROGRAM`` and the kernels.  The driver
-  calls the g77 extension ``rand``/``srand``; the inliner recognises those as
-  external builtins (see ``cleanup.EXTERNAL_BUILTIN_PROCEDURES``) instead of
-  asserting, so the program survives the merge with the calls intact.
-
-* **e2e numerical correctness, both merge engines.** The pure
-  ``CalcElemVolumeDerivative`` kernel (which calls ``VoluDer`` eight times) is
-  pruned + inlined out of the 3.3k-line kernels module, built into an SDFG via
-  both merge engines, and checked element-wise against a gfortran reference on
-  Park-Miller-seeded inputs (the LULESH ``rand()`` ``minstd`` LCG).
+Both merge engines (fparser inliner, regex ``merge_used_modules``) fold the
+driver + kernels module into one TU, recognising g77 ``rand``/``srand`` as
+external builtins instead of asserting.  ``CalcElemVolumeDerivative`` is then
+built to an SDFG via both engines and checked against a gfortran reference on
+Park-Miller-seeded inputs.
 """
 import shutil
 import subprocess
@@ -42,14 +31,8 @@ def _have(tool: str) -> bool:
 
 
 def _park_miller(seed: int, n: int) -> np.ndarray:
-    """LULESH-faithful pseudo-random reals in ``[0, 1)``.
-
-    This is exactly the generator gfortran's ``rand()``/``irand()`` use -- the
-    Park-Miller "minimal standard" LCG ``seed = 16807*seed mod (2**31 - 1)``
-    (verified bit-exact against gfortran for the integer sequence).  Using it
-    here means the e2e inputs are reproducible and ``rand``-faithful without
-    depending on a compiler-specific intrinsic.
-    """
+    """LULESH-faithful pseudo-random reals in ``[0, 1)`` -- gfortran's rand()/irand()
+    Park-Miller LCG (``seed = 16807*seed mod (2**31-1)``), verified bit-exact."""
     s = seed & 0x7FFFFFFF
     out = np.empty(n)
     for i in range(n):
@@ -76,8 +59,7 @@ def test_regex_backend_merges_whole_lulesh():
 
 
 def test_fparser_backend_inlines_whole_lulesh():
-    """The fparser inliner merges the two-file project and -- thanks to the
-    ``rand`` builtin recognition -- keeps the ``PROGRAM`` that calls it."""
+    """fparser inliner merges the two-file project; ``rand`` builtin recognition keeps the ``PROGRAM`` call intact."""
     merged = inline_to_ast([_KERNELS, _DRIVER], None, optimize=False, expand_cpp=True).tofortran()
     lo = merged.lower()
     assert "program lulesh" in lo
@@ -88,9 +70,7 @@ def test_fparser_backend_inlines_whole_lulesh():
 
 
 def test_fparser_recognises_rand_family():
-    """Focused guard for ``cleanup.EXTERNAL_BUILTIN_PROCEDURES``: a kernel that
-    seeds and draws from the g77 PRNG inlines without raising 'cannot find
-    rand'."""
+    """Guards ``cleanup.EXTERNAL_BUILTIN_PROCEDURES``: a kernel using the g77 PRNG inlines without raising 'cannot find rand'."""
     src = """
 subroutine seedy(n, out)
   implicit none

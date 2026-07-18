@@ -1,10 +1,8 @@
 """Fortran EXIT inside a counted DO.
 
-Flang doesn't emit a structured ``fir.do_loop`` when a loop body contains
-``EXIT``: it drops to ``cf.br`` / ``cf.cond_br``.  The ``lift-cf-to-scf``
-pass folds the exit edge into an ``scf.while`` whose ``scf.condition``
-encodes the combined keep-going predicate.  This test pins that shape
-end-to-end against the gfortran reference.
+Flang lowers a loop body with EXIT to cf.br/cf.cond_br (no structured
+fir.do_loop); lift-cf-to-scf folds it into an scf.while whose scf.condition
+encodes the combined keep-going predicate. Pinned e2e against gfortran.
 """
 
 import shutil
@@ -45,17 +43,15 @@ def test_do_loop_exit_numerical(tmp_path):
 
     rng = np.random.default_rng(23)
     n = 12
-    # Mix values below and above the 100.0 exit threshold so at least one
-    # early exit actually fires.
+    # Mix values below/above the 100.0 exit threshold so an early exit actually fires.
     a = rng.uniform(-50.0, 150.0, size=n)
 
     b_ref = np.full(n, 9.0, order="F", dtype=np.float64)
     mod.do_exit(np.asfortranarray(a), b_ref)
 
     b_sdfg = np.full(n, 9.0, dtype=np.float64)
-    # ``i`` is a local counter-symbol.  The SDFG initialises it via an
-    # interstate-edge ``i = 1`` on the first state, but DaCe's free-symbol
-    # analysis still lists it so the caller has to pass a placeholder.
+    # i is a local counter the SDFG initialises via an interstate edge, but
+    # DaCe's free-symbol analysis still lists it, so callers pass a placeholder.
     sdfg(a=np.ascontiguousarray(a), b=b_sdfg, n=n, i=0)
 
     np.testing.assert_allclose(b_sdfg, b_ref, rtol=1e-12, atol=1e-12)

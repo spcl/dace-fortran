@@ -1,19 +1,12 @@
 """End-to-end coverage for the bridge's ``lower-fir-select-case`` pass.
 
-The pass lowers ``fir.select_case`` to chains of ``arith.cmp`` +
-``cf.cond_br`` *before* ``hlfir-inline-all`` runs.  Without it the
-upstream MLIR inliner segfaults whenever a callee contains
-``SELECT CASE``  --  see [LowerFirSelectCase.cpp](../../dace_fortran/passes/LowerFirSelectCase.cpp).
+Lowers ``fir.select_case`` to ``arith.cmp``+``cf.cond_br`` chains before ``hlfir-inline-all``
+runs -- without it, the upstream MLIR inliner segfaults on a callee containing SELECT CASE (see
+``LowerFirSelectCase.cpp``).
 
-These tests pin two small Fortran programs that drive the pass in its
-two interesting shapes:
-
-  * **point case** (``case(1)``)    --  ``selector == 1``
-  * **closed interval** (``case(2:4)``)  --  ``(selector >= 2) AND (selector <= 4)``
-
-Both place the ``SELECT CASE`` inside a module-contained subroutine
-called from ``main`` so the inliner has to actually clone the lowered
-CFG into the caller (which is the original segfault path).
+Two shapes: point case (``case(1)`` -> ``selector == 1``) and closed interval (``case(2:4)`` ->
+``(selector >= 2) AND (selector <= 4)``), both inside a module subroutine called from ``main``
+so the inliner actually clones the lowered CFG (the original segfault path).
 """
 
 from pathlib import Path
@@ -27,9 +20,8 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_select_case_point_in_inlined_callee(tmp_path: Path):
-    """``select case (v) case(1) v=5 end select`` inside a module
-    subroutine  --  exercises the point-case ``selector == 1`` lowering
-    + the inline-all path the pass was added to unblock."""
+    """``select case(v); case(1); v=5`` inside a module subroutine -- exercises the point-case
+    ``selector == 1`` lowering + the inline-all path the pass was added to unblock."""
     src = """
 module lib
   implicit none
@@ -60,8 +52,7 @@ end subroutine main
 
 
 def test_select_case_interval_in_inlined_callee(tmp_path: Path):
-    """``case(2:4)`` lowers to ``v >= 2 AND v <= 4``  --  covers the
-    closed-interval branch of LowerFirSelectCase."""
+    """``case(2:4)`` lowers to ``v >= 2 AND v <= 4`` -- covers the closed-interval branch of LowerFirSelectCase."""
     src = """
 module lib
   implicit none

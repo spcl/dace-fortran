@@ -1,23 +1,12 @@
-"""E8 regression: a flattened nested array member loses its
-non-default lower bound.
+"""E8 regression: a flattened nested array member loses its non-default lower bound.
 
-``outer_t`` holds ``arr(2)`` (array of ``inner_t``); ``inner_t`` holds
-``v(0:3)`` (lower bound 0).  ``hlfir-flatten-structs`` rewrites
-``o%arr(i)%v(j)`` into a flat companion ``o_arr_v`` whose synthesised
-``hlfir.declare`` carries only a ``fir.shape`` (extents, no bounds) --
-the ``v(0:3)`` lower bound lives solely on the per-access
-``hlfir.designate``'s ``fir.shape_shift`` and is discarded when the
-designate is rewritten away.  ``resolveLowerBounds`` then falls back
-to the SequenceType extents and assigns lb=1 to every flattened dim,
-so ``offset_o_arr_v_d1`` is 1 instead of 0 and ``o%arr(1)%v(0)``
-indexes element -1.
-
-This is the velocity_tendencies / ICON ``p_patch%pprog(jg)%vn(:,:,
-min_rlcell:)`` shape (nested member, negative block lower bound).
-
-f2py's crackfortran can't wrap the derived-type dummy, so the
-non-transformed reference is the exact closed-form result; the per-dim
-offset constants are the direct correctness signal.
+``outer_t.arr(2)`` of ``inner_t.v(0:3)``: ``hlfir-flatten-structs`` rewrites
+``o%arr(i)%v(j)`` into flat companion ``o_arr_v`` whose synthesised declare
+carries only extents (no bounds) -- the ``v(0:3)`` lower bound lived on the
+per-access ``fir.shape_shift`` and was discarded, so ``resolveLowerBounds``
+defaulted lb=1 and ``o%arr(1)%v(0)`` indexed element -1. ICON shape: nested
+member + negative block lower bound. f2py can't wrap the dummy, so the
+reference is the closed-form result; offset constants are the correctness signal.
 """
 from pathlib import Path
 

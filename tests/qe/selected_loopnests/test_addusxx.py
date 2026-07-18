@@ -1,47 +1,31 @@
 """Quantum-ESPRESSO ``addusxx_g`` augmentation kernel, layout matrix.
 
-This is the US/PAW exchange augmentation hot loop from QE's
-``addusxx_g`` (SC26 ``Experiments/E5_USXX/usxx_kernels.cu``), reduced
-to small symbolic sizes but kept structurally faithful: for each atom
-of the active type, a doubly-nested projector contraction builds a
-per-G accumulator, then a structure factor scales it and the result
-is written into the charge grid.
+US/PAW exchange augmentation hot loop from QE's ``addusxx_g`` (SC26
+``Experiments/E5_USXX/usxx_kernels.cu``), at small symbolic sizes but
+structurally faithful:
 
     aux1(g)   = sum_jh  qgm(g, ijtoh(ih,jh)) * becpsi(ijkb0+jh)
     aux2(g)   = sum_ih  aux1(g) * conjg(becphi(ijkb0+ih))
     sf(g)     = eigqts(na) * eigts1(m1) * eigts2(m2) * eigts3(m3)
     rhoc(.)  += aux2(g) * sf(g)
 
-It exercises, in one kernel, the pieces a layout transform has to get
-right: complex(8) multiply-accumulate, ``conjg``, a column gather on
-``qgm`` (via ``ijtoh``), a read gather on the ``eigts*`` phase tables
-(via the Miller indices ``mill*``), and an accumulating write to
-``rhoc``.
+Exercises complex(8) multiply-accumulate, ``conjg``, a column gather on
+``qgm`` (via ``ijtoh``), a read gather on the ``eigts*`` phase tables (via
+Miller indices ``mill*``), and an accumulating write to ``rhoc``.
 
-Layouts:
+Layout matrix: **AoS** (``complex(8)``, re/im interleaved) vs **SoA** (paired
+``*_re``/``*_im`` real(8), hand-expanded arithmetic -- the SC26 layout-transformed
+form) x **single** (``rhoc(g)``, dense write) vs **double**
+(``rhoc(nlmap(g))``, scatter write).
 
-* **AoS** -- ``complex(8)`` arrays (re / im interleaved, the natural
-  Fortran complex layout).
-* **SoA** -- every complex array split into paired ``real(8)``
-  ``*_re`` / ``*_im`` arrays with the complex arithmetic expanded by
-  hand; the layout-transformed form the SC26 paper sweeps.
+Reference is a complex-space numpy reimplementation, not an f2py build of
+either layout -- the layout-independent ground truth catches an SDFG bug and
+a hand-expansion bug alike (an f2py reference from each layout's own source
+could share the bug).  Inputs from the same xorshift64 stream the SC26
+artifacts use; see :mod:`_prng`.
 
-Indirection on the final write:
-
-* **single** -- ``rhoc(g)``        (read gathers only; dense write).
-* **double** -- ``rhoc(nlmap(g))`` (read gathers + scatter write).
-
-The reference is a complex-space numpy reimplementation, NOT an
-f2py build of each layout: it is the layout-*independent* ground
-truth both AoS and SoA must reproduce, so it catches an SDFG bug and
-a hand-expansion bug in the SoA arithmetic alike (an f2py reference
-built from each layout's own source could not -- it would share the
-bug).  Inputs come from the same xorshift64 stream the SC26 artifacts
-use; see :mod:`_prng`.
-
-The real kernel selects atoms by a string species flag; per the QE
-porting convention that string flag is rewritten as an integer enum
-(``ityp == nt``) at port time, not lowered as a string.
+Per the QE porting convention, the real kernel's string species flag is
+rewritten as an integer enum (``ityp == nt``) at port time.
 """
 import numpy as np
 import pytest
@@ -57,8 +41,7 @@ _NGMS, _NH, _NAT, _NT, _NM, _NRHO = 5, 3, 3, 2, 7, 9
 
 
 def _aos_src(write_idx: str) -> str:
-    """AoS ``complex(8)`` augmentation kernel; ``write_idx`` is the
-    ``rhoc`` subscript (``g`` dense / ``nlmap(g)`` scatter)."""
+    """AoS ``complex(8)`` augmentation kernel; ``write_idx`` is the ``rhoc`` subscript (``g`` dense / ``nlmap(g)`` scatter)."""
     return f"""
 module addusxx_aos_mod
 contains
@@ -109,9 +92,7 @@ end module addusxx_aos_mod
 
 
 def _soa_src(write_idx: str) -> str:
-    """SoA paired-real augmentation kernel: the same computation as
-    :func:`_aos_src` with every complex op expanded into real / imag
-    parts (multiply ``(ac-bd, ad+bc)``; ``conjg`` negates imag)."""
+    """SoA paired-real augmentation kernel: same computation as :func:`_aos_src` with complex ops expanded (multiply ``(ac-bd,ad+bc)``; ``conjg`` negates imag)."""
     return f"""
 module addusxx_soa_mod
 contains
@@ -185,13 +166,10 @@ end module addusxx_soa_mod
 def _inputs(seed_base: int = 0):
     """Generate one consistent input set shared by AoS and SoA.
 
-    Integer index tables are 1-based (Fortran convention).  ``ityp`` is
-    the integer-enum species flag; atoms with ``ityp == _NT`` are
-    active.  ``ofsbeta(na) = (na-1)*nh`` slots each atom's ``nh``
-    projector entries into ``becphi`` / ``becpsi``.  ``mill*`` gather
-    the phase tables; ``nlmap`` is a distinct-target permutation sample
-    so the scatter write has no intra-atom collisions and the
-    comparison stays exact.
+    Index tables are 1-based.  ``ityp`` is the integer-enum species flag
+    (``ityp == _NT`` active); ``ofsbeta(na) = (na-1)*nh`` slots each atom's
+    projectors into ``becphi``/``becpsi``; ``nlmap`` is a distinct-target
+    permutation so the scatter write has no intra-atom collisions.
     """
     rng = np.random.default_rng(seed_base)
     ncol, nbeta = _NH * _NH, _NAT * _NH

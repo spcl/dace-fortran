@@ -1,33 +1,15 @@
-"""Memlet subset construction + access-node caching + indirect-index lifting.
+"""Memlet subset construction, access-node caching, and indirect-index lifting.
 
-The key helper is ``acc``  --  a per-state cached access-node factory that keeps
-the "live sink" for a given data name, so reads and writes across multiple
-tasklets in the same state thread through one connected graph.
-
-``build_memlet_index`` turns an ``AccessInfo`` (from the bridge) into a
-DaCe-style subset, offsetting Fortran 1-based indices to 0-based and
-resolving indirect-index expressions (``edge_idx[jc,1]``) against the
-symbols minted by ``collect_indirect``.
-
-Three small primitives anchor the Fortran->DaCe subscript conversion and
-are reused everywhere that emits a subset string:
-
-  * ``rename_iters(expr, iter_map)``  --  whole-word substitution of Fortran
-    iter names with their uniquified DaCe counterparts.
-  * ``_remap_token(token, iter_map)``  --  single-subscript rewrite that
-    handles literal / arithmetic / bare-identifier tokens uniformly.
-  * ``_format_offset_subset(arr, parts)``  --  wrap a per-dim list in the
-    uniform ``arr[(p0) - offset_arr_d0, ...]`` form.
+``acc`` caches one access node per (state, name) so multi-tasklet reads/writes
+in a state connect through one graph. ``build_memlet_index`` converts a bridge
+``AccessInfo`` into a DaCe subset, offsetting Fortran 1-based indices to
+0-based and resolving indirect-index expressions via ``collect_indirect``.
 """
 
 import re
 from types import SimpleNamespace
 
-# Process-level monotonic counter used to mint stable, grep-able names for
-# inline indirection loads (``<arr>_at<gid>``).  Kept process-level rather
-# than per-SDFG so multi-file runs don't re-issue the same name in two
-# unrelated kernels  --  each lift gets a unique tag, easy to find in
-# transcripts and SDFG dumps.
+# Process-level (not per-SDFG) counter for unique '<arr>_at<gid>' names; avoids collisions across multi-file runs.
 _INDIRECTION_GID_COUNTER = 0
 
 
@@ -39,24 +21,12 @@ def _next_indirection_gid() -> int:
 
 
 def iter_view_dim_map(view_dim_map):
-    """Decode a ``section_alias`` ``view_dim_map`` once, for all callers.
-
-    The bridge records one entry per *source-array* dim: ``"_d<N>"`` for
-    a surviving (triplet) dim, where ``N`` is the 0-based *dummy*-dim
-    index to pull the running subscript from; any other string is a
-    dropped scalar dim whose value is that 1-based Fortran expression.
-
-    Yields ``(src_dim, slot, dummy_dim)`` per source dim, where
-    ``dummy_dim`` is the parsed (or positionally-recovered) dummy-dim
-    index for a surviving slot, or ``None`` for a dropped scalar slot.
-    Callers own the 0-vs-1-based output convention: ``resolve_section_
-    alias`` keeps dropped slots 1-based (``build_memlet_index`` offsets
-    uniformly later), while the subscript/memset emitters convert to
-    0-based (``(slot) - 1``) inline.  That divergence is intentional;
-    only this decode is shared.
-
-    :param view_dim_map: the alias's per-source-dim slot list.
-    :returns: iterator of ``(src_dim, slot, dummy_dim | None)``.
+    """Decode one ``section_alias`` ``view_dim_map`` entry: ``"_d<N>"`` =
+    surviving dim (dummy-dim index N), else a dropped scalar's 1-based
+    Fortran expr. Yields ``(src_dim, slot, dummy_dim | None)``; callers
+    intentionally differ on 0- vs 1-based handling (``resolve_section_alias``
+    keeps 1-based, the subscript/memset emitters convert inline) -- only
+    this decode is shared.
     """
     for src_dim, slot in enumerate(view_dim_map):
         if slot.startswith('_d'):
@@ -70,24 +40,15 @@ def iter_view_dim_map(view_dim_map):
 
 
 def resolve_object_member(builder, name: str):
-    """Real flat descriptor for a member access on a whole-OBJECT pointer-rebind
-    alias, or ``None`` when ``name`` is not such an access.
+    """Real flat descriptor for a member access on a whole-object pointer-rebind
+    alias (``params_oce => v_params`` makes ``params_oce % a_veloc_v`` the same
+    storage as ``v_params``'s ``a_veloc_v``), or ``None`` if not such an access.
 
-    A whole-derived-type rebind (``params_oce => v_params``) makes
-    ``params_oce`` the SAME storage as ``v_params``, so ``params_oce % a_veloc_v``
-    (flattened to ``params_oce_a_veloc_v``) is the aliased object's ``a_veloc_v``
-    member.  Resolve the base transitively through ``builder.object_aliases``
-    (``params_oce -> v_params``) and:
-
-    * return ``<src>_<member>`` when the source's own flat companion exists, else
-    * borrow the UNIQUELY flattened member of the same derived type from the
-      bridge flatten plan (``v_params % a_veloc_v`` was never materialised, but
-      ``t_ho_params`` flattened once under ``p_phys_param`` ->
-      ``p_phys_param_a_veloc_v``).
-
-    Returns ``None`` when the base is not an object alias or the member cannot be
-    resolved unambiguously  --  the caller then keeps the original name so a
-    genuinely-missing numeric descriptor still surfaces loudly.
+    Resolves the base transitively through ``builder.object_aliases``, then
+    either returns ``<src>_<member>`` or borrows the uniquely-flattened member
+    of the same derived type from the bridge flatten plan. Returns ``None`` on
+    ambiguity so the caller keeps the original name and a genuinely-missing
+    descriptor still surfaces loudly.
     """
     if name in builder.arrays or name in builder.scalars or name in builder.symbols:
         return None
@@ -114,23 +75,14 @@ def resolve_object_member(builder, name: str):
 
 
 def resolve_section_alias(builder, array_name: str, access):
-    """If ``array_name`` is a ``section_alias`` dummy (trivial section
-    slice  --  full-range triplets + scalar drops only), return
-    ``(source_name, spliced_access)`` where ``spliced_access`` carries
-    the source's full index list (the dummy's ``index_exprs`` spliced
-    into the dim-map placeholders).  Otherwise return
-    ``(array_name, access)`` unchanged.
-
-    The bridge records ``view_dim_map`` as one entry per source-array
-    dim: ``"_d<N>"`` for surviving (triplet) dims with N = 0-based
-    dummy-dim index, or a 1-based scalar expression for dropped dims.
-    Splicing yields a Fortran-1-based index list that
-    ``build_memlet_index`` then offsets uniformly.
+    """If ``array_name`` is a trivial ``section_alias`` slice (full-range
+    triplets + scalar drops only), return ``(source_name, spliced_access)``
+    with the source's index list spliced via ``view_dim_map``; otherwise
+    return ``(array_name, access)`` unchanged. Spliced indices stay Fortran
+    1-based -- ``build_memlet_index`` offsets them uniformly.
     """
-    # Whole-object rebind member (``params_oce_a_veloc_v`` ->
-    # ``p_phys_param_a_veloc_v``): a pure RENAME onto the real flattened storage
-    # of the same derived type -- the indices are unchanged (same rank / shape),
-    # only the descriptor name and its ``offset_<arr>_d<i>`` symbols differ.
+    # Whole-object rebind member: pure rename onto the real flattened storage;
+    # indices unchanged (same rank/shape), only descriptor name/offset symbols differ.
     obj_real = resolve_object_member(builder, array_name)
     if obj_real is not None:
         return obj_real, access
@@ -162,15 +114,12 @@ def resolve_section_alias(builder, array_name: str, access):
 
 def resolve_full_dim_markers(view_subset, src_shape):
     """Replace ``":"`` full-dimension markers in a section subset with an
-    explicit ``"0:<extent>"`` drawn from the parent array's SDFG shape
-    (per-dim, in order).
+    explicit ``"0:<extent>"`` drawn from the parent array's SDFG shape.
 
-    A bounds-remap / section view over an ALLOCATABLE / POINTER parent has a
-    full ``:`` dim whose Fortran box bounds are dynamic and don't render in
-    the bridge -- ``renderDesignateSubsetStrings`` emits ``":"`` for those.
-    The parent's real extent IS known here (the SDFG descriptor's shape), so
-    the linking memlet covers exactly the aliased slab (matching element
-    count) instead of bailing to the whole array.
+    Dynamic ALLOCATABLE/POINTER bounds don't render in the bridge
+    (``renderDesignateSubsetStrings`` emits bare ``":"``); using the real
+    SDFG extent keeps the linking memlet scoped to the aliased slab instead
+    of falling back to the whole array.
     """
     out = []
     for i, s in enumerate(view_subset):
@@ -182,28 +131,17 @@ def resolve_full_dim_markers(view_subset, src_shape):
 
 
 def cc_alias_view_spec(builder, name: str):
-    """Synthesized COMPLEX-view spec for a complex-as-2-reals component alias.
+    """Synthesize a COMPLEX view spec for a complex-as-2-reals component alias
+    (e.g. QE ``qvan2``'s ``REAL(8) :: qg(2, ngy)`` sequence-associated to a
+    ``COMPLEX`` element): the bridge surfaces this as an inexpressible
+    float-of-complex ``view_alias``, so recast it as a same-dtype COMPLEX view
+    with the size-2 component axis dropped (handled per-access by the re/im
+    mask). Returns a ``view_alias``-shaped namespace for the shared view-link
+    code in ``acc``.
 
-    The bridge surfaces such a dummy (QE ``qvan2``'s ``REAL(8) :: qg(2, ngy)``
-    bound by sequence association to a ``COMPLEX`` element ``qgm(1, ijh)``) as a
-    ``float`` ``view_alias`` of a ``complex`` source -- a dtype-reinterpret view
-    DaCe cannot express.  Re-cast it as a SAME-dtype COMPLEX view of the source
-    slab the alias actually spans: the leading size-2 component axis (re, im) is
-    DROPPED from the descriptor and handled per-access by the ``re`` / ``im``
-    mask, so the view is plain ``complex`` of ``complex`` -- fully expressible.
-
-    Returns a namespace shaped like a ``view_alias`` VarInfo so the shared
-    view-link code in ``acc`` / ``_ensure_view_writeback_link`` handles it
-    uniformly (mirrors the ``bounds_remap_view`` synthesis), plus the view
-    ``shape`` / complex ``dtype`` / element ``lower_bounds`` the descriptor
-    registration needs.
-
-    The slab subset folds the alias BASE (``view_subset``, the START element of
-    the spanned slice, 0-based) with the element EXTENT (``shape_symbols`` minus
-    the component dim): the leading source dims vary over the element extent (a
-    column-major contiguous slice), the trailing dims stay fixed at the base.
-    ``qgm(1:ngy, ijh)`` -> base ``['0', '(ijh)-1']`` + extent ``['dfftt_ngm']``
-    -> slab ``['0:dfftt_ngm', '(ijh)-1']``.
+    Slab subset = alias base (``view_subset``, 0-based start) extended over
+    the element extent (``shape_symbols`` minus the component dim), e.g.
+    ``qgm(1:ngy, ijh)`` -> ``['0:dfftt_ngm', '(ijh)-1']``.
     """
     v = builder.complex_component_aliases[name]
     src_v = builder.arrays.get(v.view_source)

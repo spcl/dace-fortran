@@ -1,36 +1,10 @@
-"""Precip-cover MAX-RAN overlap formula from CLOUDSC.
+"""Precip-cover MAX-RAN overlap formula from CLOUDSC (cloudscexp2_simplified.F90 lines
+2418-2451): cumulative ``ZCOVPTOT`` update across the JK column -- the block behind
+cloudsc_full's PCOVPTOT pattern A (~1e-3 decreasing offset at consecutive JKs).
 
-Lifts the cumulative cover update block (cloudscexp2_simplified.F90
-lines 2418-2451) that maintains ``ZCOVPTOT`` across the JK column.
-This is the block where the cloudsc_full integration test sees its
-PCOVPTOT pattern A (~1e-3 decreasing offset at consecutive JKs):
-
-    DO JL = KIDIA, KFDIA
-      IF (ZQPRETOT(JL) > ZEPSEC) THEN
-        ZCOVPTOT(JL) = 1.0 - ((1.0 - ZCOVPTOT(JL)) &
-         & * (1.0 - MAX(ZA(JL,JK), ZA(JL,JK-1))) &
-         & / (1.0 - MIN(ZA(JL,JK-1), 1.0 - 1.E-06)) )
-        ZCOVPTOT(JL) = MAX(ZCOVPTOT(JL), RCOVPMIN)
-        ZCOVPCLR(JL) = MAX(0.0, ZCOVPTOT(JL) - ZA(JL,JK))
-        ZRAINCLD(JL) = ZQXFG(JL,NCLDQR) / ZCOVPTOT(JL)
-        ZSNOWCLD(JL) = ZQXFG(JL,NCLDQS) / ZCOVPTOT(JL)
-        ZCOVPMAX(JL) = MAX(ZCOVPTOT(JL), ZCOVPMAX(JL))
-      ELSE
-        ZRAINCLD(JL) = 0.0
-        ZSNOWCLD(JL) = 0.0
-        ZCOVPTOT(JL) = 0.0
-        ZCOVPCLR(JL) = 0.0
-        ZCOVPMAX(JL) = 0.0
-      ENDIF
-    ENDDO
-
-Combines the cumulative IF/ELSE pattern, the kind-mixed
-``1.0 - 1.E-06`` constant (REAL(4) lowered to f32 arithmetic then
-promoted to f64), and 6 cell writes per branch  --  all in one
-self-contained loop.  The test sweeps multiple JK values inside
-a column-by-column driver so ZA(JL, JK-1) reads carry across JKs.
-
-E2e against an f2py-compiled reference of the same Fortran source.
+Kind-mixed ``1.0 - 1.E-06`` constant (REAL(4) lowered to f32 then promoted to f64) plus
+the IF/ELSE cumulative pattern.  Sweeps multiple JK values in a column-by-column driver
+so ``ZA(JL, JK-1)`` reads carry across JKs.  E2e against an f2py-compiled reference.
 """
 import numpy as np
 import pytest

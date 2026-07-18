@@ -1,22 +1,9 @@
-"""Unit + e2e coverage for ``replace_external_with_modules``.
+"""Unit + e2e coverage for ``replace_external_with_modules``: rewrites resolvable
+``EXTERNAL :: x`` to ``USE <module>, ONLY: x`` (QE rewrite pattern 1).
 
-The pass scans ``search_dirs`` for modules, indexes their procedures,
-then rewrites every resolvable ``EXTERNAL :: <name>`` in the source
-to the equivalent ``USE <module>, ONLY: <name>`` import.  Pattern 1
-of the dual-pattern QE rewrite request.
-
-These tests run against the three pinned example programs under
-``tests/external_to_modules/``:
-
-  * external_basic_example.f90 -- one EXTERNAL, one module
-  * external_multiple_example.f90 -- three EXTERNALs in one line
-  * external_already_used_example.f90 -- EXTERNAL + already-USE'd
-
-The companion ``utils_mod.f90`` defines the procedures the examples
-reference.  Tests both the textual rewrite and (where possible) a
-flang-level smoke-parse of the rewritten source so the synthesised
-``USE`` lines actually resolve.
-"""
+Runs against three fixtures: external_basic_example.f90 (one EXTERNAL),
+external_multiple_example.f90 (three in one line), external_already_used_example.f90
+(EXTERNAL + existing USE); utils_mod.f90 defines the referenced procedures."""
 import re
 import shutil
 import subprocess
@@ -36,10 +23,8 @@ def _read(name: str) -> str:
 
 
 def _strip_comments(src: str) -> str:
-    """Drop every full-line ``!`` comment so the example file's
-    explanatory header doesn't confuse pattern-presence assertions
-    (the headers literally print the EXTERNAL / USE shapes the test
-    is checking the *code* for)."""
+    """Drop full-line ``!`` comments -- the fixture's header explanatorily prints
+    the EXTERNAL/USE shapes the test's pattern-presence assertions check for."""
     out = []
     for line in src.splitlines(keepends=True):
         s = line.lstrip()
@@ -55,8 +40,7 @@ def _strip_comments(src: str) -> str:
 
 
 def test_basic_rewrite_adds_use_and_removes_external():
-    """The simplest case: one EXTERNAL becomes one USE; the EXTERNAL
-    line disappears from the rewritten source."""
+    """One EXTERNAL becomes one USE; the EXTERNAL line disappears from the rewritten source."""
     src = _read("external_basic_example.f90")
     out = replace_external_with_modules(src, search_dirs=[_HERE])
     assert "USE utils_mod, ONLY: dscale" in out, \
@@ -66,28 +50,23 @@ def test_basic_rewrite_adds_use_and_removes_external():
 
 
 def test_multiple_names_resolve_into_one_use():
-    """``EXTERNAL :: dscale, dadd, dsum`` all in ``utils_mod`` should
-    collapse to a single ``USE utils_mod, ONLY: dscale, dadd, dsum``
+    """Three EXTERNALs in one module collapse into a single USE ... ONLY: a,b,c
     line, not three separate USE statements."""
     src = _read("external_multiple_example.f90")
     out = replace_external_with_modules(src, search_dirs=[_HERE])
     code = _strip_comments(out)
-    # The synthesised line lists every name in one USE.
     m = re.search(r"USE\s+utils_mod,\s*ONLY:\s*([^\n]+)", code, re.IGNORECASE)
     assert m, "expected synthesised USE for utils_mod"
     name_list = [n.strip().lower() for n in m.group(1).split(",")]
     assert set(name_list) == {"dscale", "dadd", "dsum"}, \
         f"USE should import all three names, got {name_list}"
-    # And the original EXTERNAL is gone -- check code only, the
-    # example file's comment header mentions ``EXTERNAL :: ...``
-    # explanatorily.
+    # check code only -- the fixture's header comment mentions EXTERNAL explanatorily
     assert not re.search(r"(?im)^\s*EXTERNAL\b", code), \
         f"EXTERNAL line should have been deleted from code, got:\n{code}"
 
 
 def test_already_used_module_does_not_duplicate_use():
-    """The kernel already ``USE utils_mod``s; the EXTERNAL just gets
-    deleted, no extra USE is added (avoid duplicate-import warnings)."""
+    """Kernel already USEs utils_mod: EXTERNAL is deleted, no duplicate USE added."""
     src = _read("external_already_used_example.f90")
     out = replace_external_with_modules(src, search_dirs=[_HERE])
     code = _strip_comments(out)
@@ -101,10 +80,8 @@ def test_already_used_module_does_not_duplicate_use():
 
 
 def test_unresolvable_external_left_alone(tmp_path):
-    """A procedure name that the search-dirs don't define stays as
-    EXTERNAL.  The pass is conservative: an unresolved EXTERNAL
-    means the build is missing a source file, not a bug to silently
-    paper over."""
+    """Unresolvable procedure name stays EXTERNAL -- conservative: a missing
+    source file isn't papered over."""
     src = """
 SUBROUTINE run(out_val)
   IMPLICIT NONE
@@ -122,16 +99,14 @@ END SUBROUTINE
 
 
 def test_passthrough_when_no_search_dirs():
-    """Without search dirs there's nothing to resolve -- the input
-    flows through verbatim."""
+    """No search dirs -- input passes through verbatim."""
     src = _read("external_basic_example.f90")
     out = replace_external_with_modules(src)
     assert out == src
 
 
 def test_idempotent():
-    """A second pass over an already-rewritten source finds no
-    remaining ``EXTERNAL`` lines and is a no-op."""
+    """Second pass over already-rewritten source is a no-op."""
     src = _read("external_basic_example.f90")
     once = replace_external_with_modules(src, search_dirs=[_HERE])
     twice = replace_external_with_modules(once, search_dirs=[_HERE])
@@ -139,8 +114,7 @@ def test_idempotent():
 
 
 def test_string_with_external_word_in_it_is_not_rewritten():
-    """A character literal containing the word ``EXTERNAL`` is not a
-    declaration -- the rewriter must leave it alone."""
+    """A character literal containing "EXTERNAL" isn't a declaration -- must be left alone."""
     src = """
 SUBROUTINE run(msg)
   IMPLICIT NONE
@@ -153,9 +127,7 @@ END SUBROUTINE
 
 
 def test_external_with_no_double_colon_form_is_recognised():
-    """The legacy ``EXTERNAL name`` form (no ``::``) is also matched.
-    Pre-F90 code uses this; the bridge inherits it from translated
-    sources."""
+    """Legacy ``EXTERNAL name`` form (no ``::``) is also matched."""
     src = """
 SUBROUTINE run(out_val, x, f)
   IMPLICIT NONE
@@ -178,9 +150,7 @@ END SUBROUTINE
 
 @pytest.mark.skipif(not _HAVE_FLANG, reason="flang-new-21 not on PATH")
 def test_rewritten_basic_example_parses_under_flang(tmp_path):
-    """The rewrite output is valid Fortran that flang can lower.
-    Stages both the rewritten kernel and the sidecar module side by
-    side and runs ``flang -fc1 -emit-hlfir`` on the kernel."""
+    """Rewrite output is valid Fortran flang can lower (kernel + sidecar module staged side by side)."""
     src = _read("external_basic_example.f90")
     rewritten = replace_external_with_modules(src, search_dirs=[_HERE])
     # Stage rewritten kernel + sidecar module + compile module first.

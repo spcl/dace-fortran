@@ -1,24 +1,8 @@
-"""Verify the builder-side emit handlers for BreakBlock and ReturnBlock.
-
-Flang drops Fortran ``exit`` / ``return`` to raw ``cf.cond_br`` /
-``cf.br`` before any of our bridge passes run, and ``lift-cf-to-scf``
-either absorbs them into an ``scf.while`` condition or gives up  --  so
-bridge-side detection is a separate workstream.  This test covers the
-other side of that future pipe: given a ``SDFGBuilder`` seeded with an
-AST that contains ``kind="break"`` / ``kind="return"`` nodes, the
-emitted SDFG must be structurally correct, validate, compile, and run
-end-to-end.
-
-The AST is a stub class (not the nanobind-bound ASTNode) since we
-can't construct those from Python  --  it just needs the fields the
-emitters read.
-
-Each emitted SDFG also gets called with concrete inputs and the
-resulting array contents are checked numerically against a hand-rolled
-reference.  Bridge-side ``EXIT`` is covered end-to-end through real
-Fortran source by ``do_loop_exit_test.py`` (where Flang's lift-cf-to-scf
-turns the EXIT into an ``scf.while`` keep-going condition); these tests
-are the focused unit-test for the emit handlers themselves.
+"""Builder-side emit handlers for BreakBlock/ReturnBlock: given an ``SDFGBuilder``
+seeded with a stub AST (``kind="break"``/``"return"``), the emitted SDFG must
+validate, compile, and run correctly. Bridge-side EXIT detection (real Fortran
+source via lift-cf-to-scf) is covered separately by do_loop_exit_test.py; this
+is the focused unit test for the emit handlers themselves.
 """
 
 from dataclasses import dataclass, field
@@ -50,11 +34,8 @@ class _Node:
 
 
 def test_return_block_wired_at_top_level(tmp_path):
-    """An SDFG whose AST contains a top-level RETURN emits a
-    ``ReturnBlock`` that codegen turns into an early ``return`` from
-    the generated C++ entry point.  Calling the resulting SDFG must
-    leave its inputs untouched  --  the body has no compute before the
-    return."""
+    """Top-level RETURN emits a ReturnBlock -> early C++ ``return``; calling the
+    SDFG must leave inputs untouched (no compute before the return)."""
     import dace
     from dace import SDFG
     from dace_fortran.hlfir_to_sdfg import SDFGBuilder
@@ -77,8 +58,7 @@ def test_return_block_wired_at_top_level(tmp_path):
     ctx.flush(builder, sdfg)
     sdfg.validate()
 
-    # Numerical check: the SDFG is a bare top-level RETURN  --  calling it
-    # must compile, run, and leave ``a`` element-wise unchanged.
+    # Bare top-level RETURN: must compile, run, and leave a element-wise unchanged.
     a_init = np.array([1.5, -2.5, 3.5, 4.5], dtype=np.float64)
     a = a_init.copy()
     sdfg(a=a, n=a.size)
@@ -86,10 +66,8 @@ def test_return_block_wired_at_top_level(tmp_path):
 
 
 def test_break_block_inside_loop_region(tmp_path):
-    """A LoopRegion containing a ConditionalBlock whose true-arm is a
-    BreakBlock behaves like an early-exit ``while`` in C++.  The empty
-    body never writes ``a``, so a successful e2e run must return the
-    array unchanged regardless of where the break fires."""
+    """LoopRegion with a ConditionalBlock whose true-arm is a BreakBlock behaves like
+    an early-exit while; the empty body never writes ``a``, so it comes back unchanged either way."""
     import dace
     from dace import SDFG
     from dace.sdfg.state import LoopRegion, ConditionalBlock, ControlFlowRegion
@@ -107,12 +85,7 @@ def test_break_block_inside_loop_region(tmp_path):
     sdfg.add_symbol("n", dace.int64)
     sdfg.add_array("a", shape=(dace.symbol("n"), ), dtype=dace.float64, transient=False)
 
-    # Manually wire the shape upstream detection should produce:
-    #   LoopRegion(i = 1..n) {
-    #     ConditionalBlock:
-    #       branch when "a[i-1] > 100": ControlFlowRegion { BreakBlock }
-    #       else:                       ControlFlowRegion { /* body */ }
-    #   }
+    # Manually wires: LoopRegion(i=1..n) { ConditionalBlock: break-arm if a[i-1]>100, else no-op body }
     loop = LoopRegion(label="loop_0",
                       condition_expr="i < n + 1",
                       loop_var="i",
@@ -133,15 +106,13 @@ def test_break_block_inside_loop_region(tmp_path):
 
     sdfg.validate()
 
-    # Numerical check  --  the loop body has no writes.  Whether the break
-    # fires (a[3] > 100 below) or not, ``a`` must come back unchanged.
+    # Loop body has no writes; whether the break fires (a[3]>100 below) or not, a is unchanged.
     a_init = np.array([1.0, 2.0, 3.0, 200.0, 5.0], dtype=np.float64)
     a = a_init.copy()
     sdfg(a=a, n=a.size, i=0)
     np.testing.assert_array_equal(a, a_init)
 
-    # Also exercise the no-break path: every element below threshold so
-    # the loop exits naturally on the counter.
+    # No-break path: every element below threshold, loop exits naturally on the counter.
     a_no_break = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float64)
     a_nb = a_no_break.copy()
     sdfg(a=a_nb, n=a_nb.size, i=0)

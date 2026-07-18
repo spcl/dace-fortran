@@ -1,12 +1,5 @@
-"""End-to-end tests for Fortran ``COMPLEX(4)`` / ``COMPLEX(8)`` through
-the HLFIR bridge.
-
-All tests use 1-D arrays even for "scalar" cases  --  Python 3.12 ctypes has
-no ``c_double_complex``, so DaCe currently cannot pass a complex value
-by-value (would silently drop the imaginary part).  Length-1 arrays
-match the existing scalar-output convention and keep the test surface
-ABI-clean.
-"""
+"""E2e tests for Fortran COMPLEX(4)/COMPLEX(8) through the HLFIR bridge. All tests use 1-D arrays
+even for "scalar" cases: ctypes has no c_double_complex, so DaCe can't pass complex by-value."""
 
 from pathlib import Path
 
@@ -26,9 +19,8 @@ _COMPLEX_BIN_OPS = [
     ('+', np.add, 'add', ()),
     ('-', np.subtract, 'sub', ()),
     ('*', np.multiply, 'mul', ()),
-    # Complex / lowers to ``__divdc3`` / ``__divsc3`` (overflow-safe
-    # Smith's algorithm).  The bridge recognises the 4-real call shape
-    # and reconstructs the original complex operands.
+    # complex '/' lowers to __divdc3/__divsc3 (Smith's algorithm); bridge recognizes the 4-real call
+    # shape and reconstructs the complex operands.
     ('/', np.divide, 'div', ()),
 ]
 
@@ -87,8 +79,8 @@ _COMPLEX_UNARY_FUNCS = [
 @pytest.mark.parametrize("kind,np_dtype,decl,klabel", _COMPLEX_KINDS, ids=[k[3] for k in _COMPLEX_KINDS])
 @pytest.mark.parametrize("fname,np_func,label", _COMPLEX_UNARY_FUNCS, ids=[f[2] for f in _COMPLEX_UNARY_FUNCS])
 def test_complex_transcendentals(tmp_path: Path, kind, np_dtype, decl, klabel, fname, np_func, label):
-    """Each complex transcendental lowers to ``c<func>`` (kind=8) or
-    ``c<func>f`` (kind=4); the bridge maps both to the bare Python name."""
+    """Each complex transcendental lowers to c<func> (kind=8) / c<func>f (kind=4); bridge maps both
+    to the bare Python name."""
     src = f"""
 subroutine main(n, a, out)
   integer,    intent(in)  :: n
@@ -103,8 +95,7 @@ end subroutine main
     sdfg = build_sdfg(src, tmp_path, name='main').build()
     n = 6
     rng = np.random.default_rng(1)
-    # Restrict to a tame domain so principal-branch funcs match numpy
-    # bit-for-bit (avoid imag(a) ~= +/-pi/2 for tan, real(a) <= 0 for log, etc.)
+    # tame domain avoids branch-cut mismatches vs numpy (e.g. imag~=+/-pi/2 for tan, real<=0 for log).
     a = (0.1 + 0.5 * rng.random(n) + 1j * (0.1 + 0.4 * rng.random(n))).astype(np_dtype)
     out = np.zeros(n, dtype=np_dtype)
     sdfg(n=n, a=a, out=out)

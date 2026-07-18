@@ -3,13 +3,10 @@ from dace_fortran.fparser_inliner import inline_to_ast
 from dace_fortran.inliner.ast_desugaring import cleanup
 from inliner.fortran_test_helper import SourceCodeBuilder, parse_and_improve
 
-# A type-bound (elemental) function INHERITED via EXTENDS and called through a
-# component -- ``self % trans % gid(i)`` -- is syntactically indistinguishable
-# from array-component access, so it must be resolved by following the
-# inheritance chain.  This is the ICON-O free-surface solver pattern
-# (``this % trans % globalID_loc(i, j)`` where ``t_trivial_transfer`` EXTENDS
-# ``t_transfer``), which previously asserted ``cannot find globalid_loc`` while
-# extracting the ocean dynamical core.
+# A type-bound (elemental) function inherited via EXTENDS, called through a component
+# (``self % trans % gid(i)``), is syntactically indistinguishable from array-component access
+# and must be resolved via the inheritance chain. This is the ICON-O free-surface solver
+# pattern, which previously asserted "cannot find globalid_loc" during ocean extraction.
 _INHERITED_TYPE_BOUND_FN = """
 module m_base
   implicit none
@@ -50,28 +47,21 @@ end module
 
 
 def test_inherited_type_bound_function_through_component_resolves():
-    """A type-bound function inherited via EXTENDS and called through a
-    component must resolve without asserting.
+    """A type-bound function inherited via EXTENDS and called through a component must
+    resolve without asserting.
 
-    Exercises two fixes together: (1) the EXTENDS-inheritance alias mapping
-    registers the inherited binding under the derived type's own namespace
-    (``analysis.alias_specs``), so ``correct_for_function_calls`` can classify
-    ``self % trans % gid(i)`` as a call; (2) the constant-argument optimizer
-    skips the type-bound call it cannot statically resolve instead of asserting.
+    Exercises two fixes: (1) EXTENDS-inheritance alias mapping registers the inherited
+    binding so ``correct_for_function_calls`` classifies the call; (2) the constant-argument
+    optimizer skips (not asserts on) a type-bound call it can't statically resolve.
     """
     ast = inline_to_ast({"m.f90": _INHERITED_TYPE_BOUND_FN}, entry="m_lhs::kernel", tolerate_external_uses=True)
     out = ast.tofortran().lower().replace(" ", "")
-    # The inherited type-bound function call resolves to the BASE concrete
-    # procedure: ``self%trans%gid(i)`` deconstructs to ``base_gid(self%trans, i)``
-    # (the EXTENDS-remapped binding), not a leftover type-bound reference.
+    # resolves to the BASE concrete procedure: self%trans%gid(i) -> base_gid(self%trans, i)
     assert "base_gid_deconproc" in out
 
 
 def test_globally_unique_names():
-    """
-    Tests that all subprograms and variables are renamed to have globally unique
-    names. This is important to avoid name collisions when moving code around.
-    """
+    """All subprograms and variables are renamed to globally unique names (avoids collisions when moving code)."""
     sources, _ = (SourceCodeBuilder().add_file("""
 module lib
   implicit none
@@ -176,10 +166,7 @@ END SUBROUTINE main
 
 
 def test_remove_binds():
-    """
-    Tests that BIND(C) statements, which are used for C interoperability,
-    are removed from the AST, as they are not relevant for dataflow analysis.
-    """
+    """BIND(C) statements are removed from the AST (not relevant for dataflow analysis)."""
     sources, _ = (SourceCodeBuilder().add_file(
         """
 module lib
@@ -245,11 +232,8 @@ END SUBROUTINE main
 
 
 def test_remove_contiguous_statements():
-    """
-    Tests that the CONTIGUOUS attribute is preserved, as it can be important
-    for performance, but that the cleanup pass doesn't crash on it.
-    """
-    # TODO: We're testing here that FParser can even parse these (it couldn't in v0.1.3). Do we want to remove these?
+    """CONTIGUOUS attribute is preserved (perf-relevant); cleanup pass must not crash on it."""
+    # TODO: pins FParser can parse these (failed in v0.1.3); still needed?
     sources, _ = (SourceCodeBuilder().add_file(
         """
 subroutine main(a)
@@ -286,11 +270,7 @@ END SUBROUTINE main
 
 
 def test_consolidate_global_data():
-    """
-    Tests that global variables from modules are consolidated into a single
-    derived type, which is then passed as an argument to subroutines.
-    This makes global data dependencies explicit.
-    """
+    """Global variables from modules consolidate into a single derived type, passed as an argument (makes global data dependencies explicit)."""
     sources, _ = (SourceCodeBuilder().add_file("""
 module lib
   implicit none
@@ -367,11 +347,7 @@ END SUBROUTINE main
 
 
 def test_create_global_initializers():
-    """
-    Tests that initializer subroutines are created for global variables and
-    derived types with initial values. This ensures that global state is
-    explicitly initialized.
-    """
+    """Initializer subroutines are created for global variables/derived types with initial values (explicit global-state init)."""
     sources, _ = (SourceCodeBuilder().add_file("""
 module lib
   implicit none

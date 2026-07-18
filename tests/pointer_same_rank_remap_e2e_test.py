@@ -1,14 +1,8 @@
-"""E2E test for the same-rank POINTER bounds-remap pattern:
-``ptr(:) => parent(:, k)``.
-
-The pointer and target have the SAME rank but the rebind picks a
-specific column ``k`` of the parent.  Each rebind shifts ``ptr``'s
-view to a different column slice; the bridge represents this as a
-1D View with a DYNAMIC ``offset_<ptr>_d0`` symbol bound per
-surrounding-loop iteration via interstate edges.
-
-Pattern documented at ``MarkBoundsRemapViews.cpp`` for QE's
-``addusxx_g`` ``prhoc_d`` rebinds.
+"""E2E test for the same-rank POINTER bounds-remap pattern ``ptr(:) => parent(:, k)``:
+each rebind shifts ``ptr``'s view to a different column, represented as a 1D View
+with a DYNAMIC ``offset_<ptr>_d0`` bound per loop iteration via interstate edges.
+Pattern documented at ``MarkBoundsRemapViews.cpp`` for QE's ``addusxx_g``
+``prhoc_d`` rebinds.
 """
 import numpy as np
 import pytest
@@ -19,8 +13,8 @@ pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PA
 
 
 def test_pointer_same_rank_column_remap_writes_to_correct_column(tmp_path):
-    """``ptr(:) => arr2d(:, k)`` then ``ptr(i) = ...``.  Writes through
-    the column-rebind must land in the correct column of the parent."""
+    """``ptr(:) => arr2d(:, k)`` then ``ptr(i) = ...`` -- writes must land in the
+    correct column of the parent."""
     src = """
 module m
   implicit none

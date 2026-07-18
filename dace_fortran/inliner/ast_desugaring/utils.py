@@ -32,12 +32,7 @@ NAMED_STMTS_OF_INTEREST_CLASSES = (f03.Program_Stmt, f03.Module_Stmt, f03.Functi
 
 
 def find_name_of_stmt(node: NAMED_STMTS_OF_INTEREST_TYPES) -> Optional[str]:
-    """
-    Finds the name of a statement node if it has one.
-
-    :param node: The fparser statement node.
-    :return: The name of the statement as a string, or `None` for anonymous blocks.
-    """
+    """Name of a statement node, or None for anonymous blocks."""
     if isinstance(node, f03.Specific_Binding):
         # Ref: https://github.com/stfc/fparser/blob/8c870f84edbf1a24dfbc886e2f7226d1b158d50b/src/fparser/two/Fortran2003.py#L2504
         _, _, _, bname, _ = node.children
@@ -53,11 +48,8 @@ def find_name_of_stmt(node: NAMED_STMTS_OF_INTEREST_TYPES) -> Optional[str]:
         tgt, attrs, plist = node.children
         assert len(plist.children) == 1, \
             f"Only one procedure per statement is accepted due to Fparser bug. Break down the line: {node}"
-        # The component name is the entity declared in the proc-decl list -- NOT
-        # ``tgt``: for ``procedure(fun), pointer :: nofun`` the interface spec
-        # ``tgt`` is the Name ``fun``, so using it would mis-name the ``nofun``
-        # component (and collide with a same-named interface).  The proc-decl is
-        # either a bare ``Name`` or a ``Proc_Decl`` (``name => init``).
+        # Name comes from the proc-decl list, not ``tgt``: for ``procedure(fun), pointer :: nofun``,
+        # ``tgt`` is ``fun``, which would mis-name the ``nofun`` component.
         decl = plist.children[0]
         name = decl if isinstance(decl, f03.Name) else ast_utils.singular(ast_utils.children_of_type(decl, f03.Name))
     else:
@@ -69,12 +61,7 @@ def find_name_of_stmt(node: NAMED_STMTS_OF_INTEREST_TYPES) -> Optional[str]:
 
 
 def find_name_of_node(node: Base) -> Optional[str]:
-    """
-    Finds the name of a general fparser node if it contains a named statement.
-
-    :param node: The fparser node.
-    :return: The name as a string, or `None` if no named statement is found.
-    """
+    """Name of a node's contained named statement, or None."""
     if isinstance(node, NAMED_STMTS_OF_INTEREST_CLASSES):
         return find_name_of_stmt(node)
     stmt = ast_utils.atmost_one(ast_utils.children_of_type(node, NAMED_STMTS_OF_INTEREST_CLASSES))
@@ -84,12 +71,7 @@ def find_name_of_node(node: Base) -> Optional[str]:
 
 
 def find_scope_ancestor(node: Base) -> Optional[SCOPE_OBJECT_TYPES]:
-    """
-    Traverses up the AST from a given node to find the nearest ancestor that defines a scope.
-
-    :param node: The starting fparser node.
-    :return: The scope-defining ancestor node, or `None` if not found.
-    """
+    """Nearest ancestor node that defines a scope, or None."""
     anc = node.parent
     while anc and not isinstance(anc, SCOPE_OBJECT_CLASSES):
         anc = anc.parent
@@ -97,12 +79,7 @@ def find_scope_ancestor(node: Base) -> Optional[SCOPE_OBJECT_TYPES]:
 
 
 def find_named_ancestor(node: Base) -> Optional[NAMED_STMTS_OF_INTEREST_TYPES]:
-    """
-    Finds the nearest ancestor that is a named statement of interest.
-
-    :param node: The starting fparser node.
-    :return: The named ancestor statement node, or `None` if not found.
-    """
+    """Nearest named-statement-of-interest ancestor, or None."""
     anc = find_scope_ancestor(node)
     if not anc:
         return None
@@ -110,13 +87,7 @@ def find_named_ancestor(node: Base) -> Optional[NAMED_STMTS_OF_INTEREST_TYPES]:
 
 
 def lineage(anc: Base, des: Base) -> Optional[Tuple[Base, ...]]:
-    """
-    Constructs the path (lineage) from an ancestor node to a descendant node.
-
-    :param anc: The ancestor node.
-    :param des: The descendant node.
-    :return: A tuple of nodes representing the path from ancestor to descendant, or `None` if `des` is not a descendant of `anc`.
-    """
+    """Path from anc to des, or None if des is not a descendant of anc."""
     if anc is des:
         return (anc, )
     if not des.parent:
@@ -128,24 +99,14 @@ def lineage(anc: Base, des: Base) -> Optional[Tuple[Base, ...]]:
 
 
 def _reparent_children(node: Base):
-    """
-    Sets the `parent` attribute of all children of a node to be the node itself.
-    This is a utility to fix up the AST after manual modifications.
-
-    :param node: The parent node.
-    """
+    """Fixes up `parent` pointers on all children to point back to `node`."""
     for c in node.children:
         if isinstance(c, Base):
             c.parent = node
 
 
 def set_children(par: Base, children: Iterable[Union[Base, str]]):
-    """
-    Replaces the children of a node with a new set of children.
-
-    :param par: The parent node to modify.
-    :param children: An iterable of new children (nodes or strings).
-    """
+    """Replaces `par`'s children, handling both `.items`- and `.content`-based nodes."""
     assert hasattr(par, 'content') != hasattr(par, 'items')
     if hasattr(par, 'items'):
         par.items = tuple(children)
@@ -159,11 +120,7 @@ def set_children(par: Base, children: Iterable[Union[Base, str]]):
 
 
 def remove_self(nodes: Union[Base, List[Base]]):
-    """
-    Removes one or more nodes from their parent's children list.
-
-    :param nodes: A single node or a list of nodes to remove.
-    """
+    """Removes one or more nodes from their parent's children."""
     if isinstance(nodes, Base):
         nodes = [nodes]
     for n in nodes:
@@ -171,13 +128,8 @@ def remove_self(nodes: Union[Base, List[Base]]):
 
 
 def replace_node(node: Base, subst: Union[None, Base, Iterable[Base]]):
-    """
-    Replaces a node in the AST with one or more other nodes (or nothing).
-
-    :param node: The node to be replaced.
-    :param subst: The substitution, which can be `None` (for deletion), a single node, or an iterable of nodes.
-    """
-    # A lot of hacky stuff to make sure that the new nodes are not just the same objects over and over.
+    """Replaces `node` with `subst` (None deletes it; can be a single node or iterable)."""
+    # Ensure substituted nodes aren't the same object reused at multiple sites.
     par = node.parent
     repls = []
     for c in par.children:
@@ -199,36 +151,21 @@ def replace_node(node: Base, subst: Union[None, Base, Iterable[Base]]):
 
 
 def append_children(par: Base, children: Union[Base, List[Base]]):
-    """
-    Appends one or more children to a parent node.
-
-    :param par: The parent node.
-    :param children: A single child node or a list of child nodes to append.
-    """
+    """Appends one or more children (a single node or a list) to `par`."""
     if isinstance(children, Base):
         children = [children]
     set_children(par, list(par.children) + children)
 
 
 def prepend_children(par: Base, children: Union[Base, List[Base]]):
-    """
-    Prepends one or more children to a parent node.
-
-    :param par: The parent node.
-    :param children: A single child node or a list of child nodes to prepend.
-    """
+    """Prepends one or more children (a single node or a list) to `par`."""
     if isinstance(children, Base):
         children = [children]
     set_children(par, children + list(par.children))
 
 
 def remove_children(par: Base, children: Union[Base, List[Base]]):
-    """
-    Removes specific children from a parent node.
-
-    :param par: The parent node.
-    :param children: A single child node or a list of child nodes to remove.
-    """
+    """Removes specific children (a single node or a list) from `par`."""
     if isinstance(children, Base):
         children = [children]
     cids = {id(c) for c in children}
@@ -237,13 +174,7 @@ def remove_children(par: Base, children: Union[Base, List[Base]]):
 
 
 def copy_fparser_node(n: Base) -> Base:
-    """
-    Creates a copy of an fparser node. It tries to re-parse from the Fortran string representation
-    for a clean copy, otherwise falls back to a deep copy.
-
-    :param n: The fparser node to copy.
-    :return: A new fparser node instance.
-    """
+    """Copies a node by re-parsing its Fortran text; falls back to deepcopy on failure."""
     try:
         nstr = n.tofortran()
         if isinstance(n, BlockBase):
@@ -263,24 +194,16 @@ def _get_module_or_program_parts(mod: Union[f03.Module, f03.Main_Program]) \
             Optional[f03.Execution_Part],
             Optional[f03.Module_Subprogram_Part],
         ]:
-    """
-    Deconstructs a Module or Main_Program node into its constituent parts.
-
-    :param mod: The Module or Main_Program node.
-    :return: A tuple containing the statement, specification part, execution part, and subprogram part.
-    """
-    # There must exist a module statment.
+    """Splits a Module/Main_Program node into (stmt, spec_part, exec_part, subprogram_part)."""
+    # A module/program statement must exist.
     stmt = ast_utils.singular(
         ast_utils.children_of_type(mod, f03.Module_Stmt if isinstance(mod, f03.Module) else f03.Program_Stmt))
-    # There may or may not exist a specification part.
     spec = list(ast_utils.children_of_type(mod, f03.Specification_Part))
     assert len(spec) <= 1, f"A module/program cannot have more than one specification parts, found {spec} in {mod}"
     spec = spec[0] if spec else None
-    # There may or may not exist an execution part.
     expart = list(ast_utils.children_of_type(mod, f03.Execution_Part))
     assert len(expart) <= 1, f"A module/program cannot have more than one execution parts, found {spec} in {mod}"
     expart = expart[0] if expart else None
-    # There may or may not exist a subprogram part.
     subp = list(ast_utils.children_of_type(mod, f03.Module_Subprogram_Part))
     assert len(subp) <= 1, f"A module/program cannot have more than one subprogram parts, found {subp} in {mod}"
     subp = subp[0] if subp else None

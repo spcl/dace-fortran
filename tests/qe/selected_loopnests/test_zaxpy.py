@@ -1,31 +1,13 @@
-"""Quantum-ESPRESSO ``zaxpy`` indirect complex-AXPY layout matrix.
+"""QE/SC26 zaxpy indirect complex-AXPY layout matrix: y += x under gather/scatter index maps, swept
+over data layouts, checked against a numpy reference.
 
-The QE / SC26-layout ``zaxpy`` micro-kernel is a complex
-``y += x`` accumulation under gather / scatter index maps, swept over
-data layouts.  This test mirrors that matrix end-to-end through the
-bridge: every layout x indirection variant is built into an SDFG and
-checked against a numpy reference on the same data.
+Layouts: AoS (Fortran complex(8), interleaved) vs SoA (paired real(8) *_re/*_im, SC26's
+layout-transformed form).
+Indirection (matches kern_aos_*/kern_soa_* C kernels): direct y(i)+=x(i); gather y(i)+=x(xmap(i));
+scatter y(ymap(i))+=x(i); double y(ymap(i))+=x(xmap(i)).
 
-Layouts:
-
-* **AoS** -- a Fortran ``complex(8)`` array (real / imag interleaved
-  in memory, the natural Fortran complex layout).
-* **SoA** -- two ``real(8)`` arrays (``*_re`` / ``*_im``), the
-  layout-transformed form the SC26 paper sweeps.
-
-Indirection (matching the C kernels ``kern_aos_*`` / ``kern_soa_*``):
-
-* **direct**       -- ``y(i)        += x(i)``
-* **gather**       -- ``y(i)        += x(xmap(i))``     (single, on x)
-* **scatter**      -- ``y(ymap(i))  += x(i)``           (single, on y)
-* **double**       -- ``y(ymap(i))  += x(xmap(i))``     (gather + scatter)
-
-Index maps are distinct-target permutation samples (as QE's
-``uniformSample`` produces), so the scatter accumulation order is
-irrelevant and the comparison is exact.  Input values come from the
-same xorshift64 PRNG the SC26 artifacts use (``Xor64Rng`` /
-``splitmix64``); see :func:`_prng.xor64_uniform01`.
-"""
+Index maps are distinct-target permutations (QE's uniformSample shape) so scatter order can't affect
+the result; PRNG matches the SC26 artifacts (Xor64Rng/splitmix64, see _prng.xor64_uniform01)."""
 import numpy as np
 import pytest
 
@@ -34,9 +16,8 @@ from _util import build_sdfg, have_flang
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
-# (kind, indirection) -> Fortran kernel.  ``n`` = iteration count;
-# ``ymap`` / ``xmap`` are 1-based index maps; AoS uses complex(8),
-# SoA uses paired real(8) re/im arrays.
+# (kind, indirection) -> Fortran kernel body. n=iteration count; ymap/xmap are 1-based index maps;
+# AoS uses complex(8), SoA uses paired real(8) re/im arrays.
 _AOS = {
     "direct": "y(i) = y(i) + x(i)",
     "gather": "y(i) = y(i) + x(xmap(i))",
@@ -91,14 +72,12 @@ end module zaxpy_soa_mod
 """
 
 
-# Small symbolic problem sizes -- this is a correctness test, not a
-# benchmark, so a handful of elements exercises every memlet shape.
+# small sizes: correctness test not a benchmark, a handful of elements exercises every memlet shape.
 _N, _NX, _NY = 6, 12, 12
 
 
 def _index_maps():
-    """Distinct-target 1-based permutation samples (QE uniformSample
-    shape) so scatter accumulation order can't perturb the result."""
+    """Distinct-target 1-based permutation samples (QE uniformSample shape) so scatter order can't perturb the result."""
     rng = np.random.default_rng(0)
     ymap = (rng.permutation(_NY)[:_N] + 1).astype(np.int32)
     xmap = (rng.permutation(_NX)[:_N] + 1).astype(np.int32)
@@ -117,8 +96,7 @@ def _ref(body_key: str, ymap, xmap, x, y):
 
 @pytest.mark.parametrize("indir", ["direct", "gather", "scatter", "double"])
 def test_zaxpy_aos(tmp_path, indir):
-    """AoS complex(8) AXPY -- direct + single (gather/scatter) + double
-    indirection."""
+    """AoS complex(8) AXPY -- direct + single (gather/scatter) + double indirection."""
     ymap, xmap = _index_maps()
     x = np.asfortranarray(complex_stream(_NX, seed=1))
     y = np.asfortranarray(complex_stream(_NY, seed=2))
@@ -131,8 +109,7 @@ def test_zaxpy_aos(tmp_path, indir):
 
 @pytest.mark.parametrize("indir", ["direct", "gather", "scatter", "double"])
 def test_zaxpy_soa(tmp_path, indir):
-    """SoA paired real(8) re/im AXPY -- same indirection matrix as AoS;
-    the layout-transformed variant."""
+    """SoA paired real(8) re/im AXPY -- same indirection matrix as AoS, layout-transformed variant."""
     ymap, xmap = _index_maps()
     x = complex_stream(_NX, seed=1)
     y = complex_stream(_NY, seed=2)
