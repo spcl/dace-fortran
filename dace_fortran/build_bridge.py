@@ -4,6 +4,7 @@
 The .so is symlinked next to this file (as dace_fortran.hlfir_bridge) so no PYTHONPATH manipulation is needed.
 """
 
+import fcntl
 import importlib
 import os
 import shutil
@@ -211,10 +212,17 @@ def ensure_bridge():
 
 
 def ensure_fresh():
-    """Import hlfir_bridge, rebuilding if any source is newer than the .so."""
-    if needs_build():
-        print("[build_bridge] sources newer than .so, rebuilding...", file=sys.stderr)
-        build()
+    """Import hlfir_bridge, rebuilding if any source is newer than the .so.
+
+    flock-serialized: concurrent processes (e.g. parallel pytest runs) racing an unlocked
+    ``cmake --build`` into the same build dir corrupt the link -- the resulting .so then
+    segfaults on its first real call, with no Python traceback.
+    """
+    with open(_HERE / ".build_bridge.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if needs_build():
+            print("[build_bridge] sources newer than .so, rebuilding...", file=sys.stderr)
+            build()
     return ensure_bridge()
 
 
