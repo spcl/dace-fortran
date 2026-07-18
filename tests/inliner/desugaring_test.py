@@ -197,7 +197,7 @@ end module pmod
     tu = inline_to_single_tu(sources={"m.f90": src},
                              entry="pmod::use_holder",
                              do_not_prune_type_components=False,
-                             f2py_safe_empty_types=True)
+                             f2py_safe=True)
     text = (Path(tu).read_text() if not isinstance(tu, str) else tu).lower()
     # Either the type pruned away entirely (no variable left referencing it)
     # or, if it survived, it must not be memberless.

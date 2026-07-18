@@ -236,7 +236,7 @@ class ParseConfig:
                  monomorphize: bool = True,
                  rename_specifics: Optional[Dict[str, str]] = None,
                  specialize_at_source: Optional[Iterable[str]] = None,
-                 f2py_safe_empty_types: bool = False):
+                 f2py_safe: bool = False):
         # Make the configs canonical, by processing the various types upfront.
         if not sources:
             sources = {}
@@ -320,9 +320,11 @@ class ParseConfig:
         #: bridge's pointer-rewrite (HLFIR inlining is too late).  See
         #: :mod:`inliner.ast_desugaring.specialize_at_source`.
         self.specialize_at_source: List[str] = [n.lower() for n in (specialize_at_source or [])]
-        #: Give emptied derived types a placeholder member so numpy f2py can wrap the TU.
-        #: Only the f2py-wrapped path (CLOUDSC) sets this; see :func:`pruning.prune_unused_objects`.
-        self.f2py_safe_empty_types = f2py_safe_empty_types
+        #: Apply f2py-safety transforms so numpy f2py can wrap the TU: a placeholder
+        #: member for emptied derived types + CLASS(t)->TYPE(t) stub-dummy demotion.
+        #: Only the f2py-wrapped path (CLOUDSC) sets this; a gfortran-only extraction
+        #: leaves both alone to stay byte-identical to its committed TU.
+        self.f2py_safe = f2py_safe
 
     def set_all_possible_entry_points_from(self, ast: f03.Program):
         """Treat every top-level subprogram / main program as an entry point
@@ -906,6 +908,18 @@ def run_fparser_transformations(ast: f03.Program, cfg: ParseConfig, *, optimize:
     if cfg.make_noop:
         logger.debug("FParser Op: Making certain functions no-op in the AST...")
         noop_missed: Set[types.SPEC] = set(cfg.make_noop)
+        # CLASS(t)->TYPE(t) dummy demotion is an f2py-safety transform: a stubbed
+        # module proc with a CLASS dummy makes numpy f2py emit a NULL module entry
+        # (import segfault). Only the f2py path needs it; a gfortran-only extraction
+        # keeps CLASS (and MUST, to stay byte-identical to its committed TU). An
+        # ABSTRACT t is never demoted -- TYPE(abstract) is illegal (ICON-O's
+        # ocean_solve_construct t_lhs_agen/t_transfer dummies).
+        abstract_type_names = set()
+        if cfg.f2py_safe:
+            for dtd in walk(ast, f03.Derived_Type_Def):
+                head, _, tail = str(walk(dtd, f03.Derived_Type_Stmt)[0]).partition("::")
+                if "ABSTRACT" in head.upper():
+                    abstract_type_names.add((tail.strip() or head.strip()).split("(")[0].split()[-1].lower())
         for fn in walk(ast, (f03.Function_Stmt, f03.Subroutine_Stmt)):
             fnspec = analysis.ident_spec(fn)
             if fnspec not in cfg.make_noop:
@@ -914,18 +928,14 @@ def run_fparser_transformations(ast: f03.Program, cfg: ParseConfig, *, optimize:
             expart = atmost_one(children_of_type(fn.parent, f03.Execution_Part))
             if expart:
                 utils.remove_self(expart)
-            # A stubbed body never dispatches, so demote polymorphic CLASS(t)
-            # dummies to TYPE(t): callers pass non-polymorphic actuals either
-            # way, and a module procedure with a CLASS dummy makes the whole
-            # f2py-compiled TU segfault at import (numpy f2py inserts a NULL
-            # into the module dict for it) -- the reference leg of every
-            # numerical test imports exactly such a TU.
-            spec_part = atmost_one(children_of_type(fn.parent, f03.Specification_Part))
-            if spec_part is not None:
-                for dts in walk(spec_part, f03.Declaration_Type_Spec):
-                    kw, tname = dts.children
-                    if str(kw).upper() == 'CLASS' and isinstance(tname, f03.Type_Name):
-                        utils.replace_node(dts, f03.Declaration_Type_Spec(f"TYPE({tname})"))
+            if cfg.f2py_safe:
+                spec_part = atmost_one(children_of_type(fn.parent, f03.Specification_Part))
+                if spec_part is not None:
+                    for dts in walk(spec_part, f03.Declaration_Type_Spec):
+                        kw, tname = dts.children
+                        if str(kw).upper() == 'CLASS' and isinstance(tname, f03.Type_Name) \
+                                and str(tname).lower() not in abstract_type_names:
+                            utils.replace_node(dts, f03.Declaration_Type_Spec(f"TYPE({tname})"))
             # A return-false stub keeps a valid body so the (kept) call sites
             # still bind: replace the emptied body with `<result> = .FALSE.`
             # instead of leaving the LOGICAL result undefined.
@@ -1077,7 +1087,7 @@ def run_fparser_transformations(ast: f03.Program, cfg: ParseConfig, *, optimize:
             # statements) it removes the type declaration but leaves the
             # orphaned ``PARAMETER`` statement, which then fails to compile
             # (hit by NPB LU's unused ``tolrsd*_def``).
-            ast = pruning.prune_unused_objects(ast, cfg.do_not_prune, f2py_safe_empty_types=cfg.f2py_safe_empty_types)
+            ast = pruning.prune_unused_objects(ast, cfg.do_not_prune, f2py_safe=cfg.f2py_safe)
         ast = pruning.consolidate_uses(ast)
         ast_f90_old, ast_f90_new = ast_f90_new, ast.tofortran()
     logger.debug("FParser Op: AST-size settled at %d lines.", len(ast_f90_new.splitlines()))
@@ -1271,7 +1281,7 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
                   monomorphize: bool = True,
                   rename_specifics: Optional[Dict[str, str]] = None,
                   specialize_at_source: Iterable[str] = (),
-                  f2py_safe_empty_types: bool = False,
+                  f2py_safe: bool = False,
                   optimize: bool = True) -> f03.Program:
     """Run the full inliner pipeline and return the combined fparser AST.
 
@@ -1333,7 +1343,7 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
         monomorphize=monomorphize,
         rename_specifics=rename_specifics,
         specialize_at_source=specialize_at_source,
-        f2py_safe_empty_types=f2py_safe_empty_types,
+        f2py_safe=f2py_safe,
     )
     if include_builtins:
         cfg.sources.setdefault("_builtins.f90", BUILTINS)
@@ -1398,7 +1408,7 @@ def inline_to_single_tu(sources: Union[Dict[str, str], Iterable[Union[str, Path]
                         monomorphize: bool = True,
                         rename_specifics: Optional[Dict[str, str]] = None,
                         specialize_at_source: Iterable[str] = (),
-                        f2py_safe_empty_types: bool = False) -> Path:
+                        f2py_safe: bool = False) -> Path:
     """Inline a multi-file Fortran project into ONE self-contained ``.f90``
     and return the path to it.
 
@@ -1461,7 +1471,7 @@ def inline_to_single_tu(sources: Union[Dict[str, str], Iterable[Union[str, Path]
                         monomorphize=monomorphize,
                         rename_specifics=rename_specifics,
                         specialize_at_source=specialize_at_source,
-                        f2py_safe_empty_types=f2py_safe_empty_types)
+                        f2py_safe=f2py_safe)
     # Drop the injected intrinsic-module stubs (``iso_c_binding`` / ``iso_fortran_env``)
     # before serialising: they exist only so ``USE`` resolves during parsing, but a
     # PARTIAL stub (the ``iso_c_binding`` one defines just ``c_int``) shadows the real

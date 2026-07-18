@@ -73,7 +73,7 @@ def extract_variant_tu(wrapper: Path, out_dir: Path, name: str, extra_sources: t
         tolerate_external_uses=True,
         # This TU is f2py-wrapped as the value baseline; an emptied stub type (PERFORMANCE_TIMER)
         # would make f2py emit a NULL module wrapper that segfaults on import.
-        f2py_safe_empty_types=True,
+        f2py_safe=True,
     )
     text = Path(tu).read_text()
     # YRECLDP allocatable->static patch: bridge can't flatten an allocatable derived-type

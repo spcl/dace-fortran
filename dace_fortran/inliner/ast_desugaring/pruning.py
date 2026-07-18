@@ -348,14 +348,12 @@ def prune_dangling_interface_bodies(ast: f03.Program) -> f03.Program:
     return ast
 
 
-def prune_unused_objects(ast: f03.Program,
-                         keepers: List[types.SPEC],
-                         f2py_safe_empty_types: bool = False) -> f03.Program:
+def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC], f2py_safe: bool = False) -> f03.Program:
     """Fine-grained pruning: removes any object not reachable (by usage) from `keepers`.
 
     Precondition: indirections (e.g. interface calls) must already be resolved.
 
-    ``f2py_safe_empty_types`` gives every emptied derived type a placeholder member (see below).
+    ``f2py_safe`` gives every emptied derived type a placeholder member (see below).
     Only needed on the f2py-wrapped path (CLOUDSC); a plain gfortran TU compiles empty types fine."""
     PRUNABLE_OBJECT_CLASSES = (f03.Program_Stmt, f03.Subroutine_Stmt, f03.Function_Stmt, f03.Derived_Type_Stmt,
                                f03.Entity_Decl, f03.Component_Decl)
@@ -483,7 +481,7 @@ def prune_unused_objects(ast: f03.Program,
     # NULL module wrapper for a variable of that type, segfaulting on import (PyInit_*). Give it a
     # placeholder member. Gated: only the f2py path needs it; empty types are legal to gfortran, and
     # emitting the placeholder on the gfortran-only extraction path would drift the committed TUs.
-    if f2py_safe_empty_types:
+    if f2py_safe:
         for tdef in walk(ast, f03.Derived_Type_Def):
             if walk(tdef, f03.Component_Decl):
                 continue
