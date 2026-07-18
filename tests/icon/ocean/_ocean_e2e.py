@@ -483,6 +483,16 @@ def _build_and_compare(tu_path: Path,
     cpu_args = dace.Config.get("compiler", "cpu", "args").replace("-ffast-math", "")
     if "-ffp-contract" not in cpu_args:
         cpu_args += " -ffp-contract=off"
+    if os.environ.get("OCEAN_E2E_ASAN"):
+        # DaCe emits aligned heap transients (``new T DACE_ALIGN(64)[N]`` ->
+        # aligned ``operator new[]``) paired with a plain ``delete[]``; glibc's
+        # aligned_alloc pointers free() cleanly so it is benign at runtime, but
+        # ASAN's stricter new/delete tracking flags every such transient at
+        # teardown. Run the ASAN diagnostic with
+        # ``ASAN_OPTIONS=...:new_delete_type_mismatch=0`` (env, read by libasan
+        # at process start -- can't be set in-file once LD_PRELOAD has loaded it)
+        # so the run reaches the bit-exact assert instead of aborting on the nit.
+        cpu_args += " -fsanitize=address -fno-omit-frame-pointer -g"
     dace.Config.set("compiler", "cpu", "args", value=cpu_args)
 
     sdfg = build_sdfg(tu_path.read_text(), entry=entry, name=tu_path.stem, out_dir=str(out / "sdfg"))
@@ -544,8 +554,9 @@ def _build_and_compare(tu_path: Path,
                                       extra_refmod_imports=extra_refmod_imports))
         dut_so_path = out / f"lib{dace_name}_dut.so"
         sdfg_so = Path(lib.sdfg_so)
+        _asan = ["-fsanitize=address", "-fno-omit-frame-pointer"] if os.environ.get("OCEAN_E2E_ASAN") else []
         rl = subprocess.run([
-            "gfortran", "-shared", "-fPIC", "-ffree-line-length-none", "-O3", "-g", "-fno-fast-math",
+            "gfortran", *_asan, "-shared", "-fPIC", "-ffree-line-length-none", "-O3", "-g", "-fno-fast-math",
             "-ffp-contract=off", "-frounding-math", "-fopenmp", f"-J{out}", *[str(p) for p in extra_prelude],
             str(ref_tu),
             str(lib.bindings_f90),

@@ -70,17 +70,14 @@ _DO_NOT_EMIT = [
 
 
 @pytest.mark.xfail(strict=True,
-                   reason="solve_free_sfc SDFG builds and starts, but the DUT run ABORTS (SIGABRT, glibc "
-                   "`free(): invalid size`; ref runs clean). Before the forwarded-optional PRESENT fix the "
-                   "extracted TU mis-ran the div_oce vertical loop as level 0..0 (both opt levels read the "
-                   "degenerate 0 seed), so the DUT barely wrote and survived to diverge on 7 of 171 arrays; "
-                   "the corrected TU runs the true 1..n_zlev range and the extra writes now corrupt the heap. "
-                   "Prime suspect: the bindings layer declares SDFG transient-dim symbols as uninitialized "
-                   "locals and passes them to __dace_init (block_builders.py declares every frozen free "
-                   "symbol; nothing sources transients), so a transient allocated with a garbage/zero extent "
-                   "is overflowed by the full-depth loop and glibc aborts at teardown. Fixing that "
-                   "transient-extent sourcing is its own focused session; strict=True flags the day this "
-                   "starts passing so the marker is removed.")
+                   reason="solve_free_sfc now BUILDS + RUNS to completion with NO abort (the SIGABRT / glibc "
+                   "`free(): invalid size` is FIXED: the k_h runtime-present-optional-pointer-component alias "
+                   "and, primarily, the `free_sfc_solver%b_loc_wp => ocean_state%p_aux%p_rhs_sfc_eq` "
+                   "struct-member array-pointer rebind -- which leaked a degenerate copy-in buffer the kernel "
+                   "then overflowed -- are both lowered correctly now, so the DUT no longer smashes the heap). "
+                   "REMAINING failure is BIT-EXACT: max|dut-ref| ~= 1.93 (not roundoff). That is the separate "
+                   "numerical bring-up (seeds / mesh / a real lowering discrepancy) the docstring already flags; "
+                   "strict=True flags the day it goes bit-exact so the marker is removed.")
 @pytest.mark.xdist_group("ocean_fparser")
 def test_solve_free_sfc_numerical_e2e(tmp_path: Path):
     """solve_free_sfc -> SDFG, driven on a degenerate valid mesh, BIT-EXACT against
