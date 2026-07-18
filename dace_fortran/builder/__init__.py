@@ -697,7 +697,19 @@ class SDFGBuilder:
         # never sees the inconsistency.
         array_names = {v.fortran_name for v in self.variables if v.role in ("array", "view_alias", "section_alias")}
         symbol_names = {v.fortran_name for v in self.variables if v.role == "symbol"}
-        self.arrays = {v.fortran_name: v for v in self.variables if v.role in ("array", "view_alias", "section_alias")}
+        # Name collision between an inlined-optional's PRESENT copy (a view/section alias bound to the real
+        # storage) and its genuinely-ABSENT sibling (a plain leaked array): the alias wins -- it carries the
+        # real data wiring; the absent copy is dead (guarded reads fold away).  Plain last-wins would let the
+        # dead array shadow the alias and re-leak a degenerate program arg (solve_free_sfc's k_h).  Same-class
+        # collisions keep last-wins.
+        self.arrays = {}
+        for v in self.variables:
+            if v.role not in ("array", "view_alias", "section_alias"):
+                continue
+            existing = self.arrays.get(v.fortran_name)
+            if existing is not None and existing.role != "array" and v.role == "array":
+                continue
+            self.arrays[v.fortran_name] = v
         self.symbols = {
             v.fortran_name: v
             for v in self.variables if v.role == "symbol" and v.fortran_name not in array_names

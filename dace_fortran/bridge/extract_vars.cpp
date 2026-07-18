@@ -2705,6 +2705,9 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
     // states so writes round-trip through the alias.
     if (v.role == "array") {
       mlir::Value m = op.getMemref();
+      // Set when the peel walked a runtime-present OPTIONAL select (see
+      // presentBranchOfRuntimeOptional): gates the rank-preserving alias below.
+      bool viaOptionalSelect = false;
       // Peel through:
       //   * ``fir.convert``   --  same-type rebox or shape-changing
       //     reinterpret (Fortran storage-association reshape).
@@ -2757,6 +2760,17 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
         if (auto rb = mlir::dyn_cast<fir::ReboxOp>(def)) {
           m = rb.getBox();
           continue;
+        }
+        // Runtime-present OPTIONAL forwarded a POINTER/ALLOCATABLE actual: the dummy's box is a
+        // fir.if(pointer-associated){present}else{absent} select.  Peel to the present branch so the
+        // walk reaches the source declare; else the dummy leaks as a degenerate 0-extent program arg
+        // whose box_dims read the absent seed -- a read past it SIGABRTs (k_h in solve_free_sfc).
+        if (auto ifOp = mlir::dyn_cast<fir::IfOp>(def)) {
+          if (mlir::Value pres = presentBranchOfRuntimeOptional(ifOp, m)) {
+            m = pres;
+            viaOptionalSelect = true;
+            continue;
+          }
         }
         break;
       }
@@ -3148,6 +3162,20 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
               // routes through the rank-reinterpret stride path.
               v.view_subset.clear();
               v.view_subset.emplace_back("");
+            }
+          } else if (viaOptionalSelect && srcRank > 0 && srcRank == v.rank) {
+            // Runtime-present OPTIONAL forwarded a WHOLE same-rank POINTER/ALLOCATABLE actual
+            // (``k_h => physics_parameters%harmonicviscosity_coeff``): no reshape, the peel above
+            // stepped through the present-branch select onto the source declare.  Bind it as a
+            // rank-preserving section_alias (identity dim_map) so k_h's reads route to the real
+            // storage instead of a leaked degenerate buffer; the ``<name>_present`` companion still
+            // gates them (the dummy stays a separate VarInfo).
+            auto srcName = extractName(srcDecl.getUniqName().str());
+            if (!srcName.empty() && srcName != v.fortran_name) {
+              v.view_source = srcName;
+              v.role = "section_alias";
+              v.view_dim_map.clear();
+              for (int d = 0; d < v.rank; ++d) v.view_dim_map.push_back("_d" + std::to_string(d));
             }
           }
         }

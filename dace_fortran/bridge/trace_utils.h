@@ -206,4 +206,10 @@ fir::RecordType pointerToRecordMember(mlir::Type t);
 /// flat companion); handled instead via the inlined-callee element-alias declare after hlfir-inline-all.
 fir::RecordType allocOrPtrArrayOfRecordsMember(mlir::Type t);
 
+/// Flang lowers PRESENT of a POINTER/ALLOCATABLE actual forwarded to an OPTIONAL dummy as a runtime select on the
+/// pointer's association: %box = fir.if (box_addr(%p) != null) { result rebox(load %p) } else { result fir.absent }.
+/// Given that select's result value, return the NON-absent (present) branch's yielded value; {} when the op isn't this
+/// two-branch present/absent idiom. Lets memref walks (traceToDecl, the view-alias peel) reach the source declare.
+mlir::Value presentBranchOfRuntimeOptional(fir::IfOp ifOp, mlir::Value result);
+
 }  // namespace hlfir_bridge

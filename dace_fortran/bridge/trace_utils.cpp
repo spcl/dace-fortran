@@ -340,6 +340,30 @@ static std::string flatCompanionName(hlfir::DesignateOp dg, llvm::StringRef memb
   return extractName(compUniq);
 }
 
+mlir::Value presentBranchOfRuntimeOptional(fir::IfOp ifOp, mlir::Value result) {
+  if (ifOp.getElseRegion().empty()) return {};
+  unsigned idx = 0;
+  bool found = false;
+  for (auto r : ifOp.getResults()) {
+    if (r == result) {
+      found = true;
+      break;
+    }
+    ++idx;
+  }
+  if (!found) return {};
+  auto thenTerm = mlir::dyn_cast<fir::ResultOp>(ifOp.getThenRegion().front().getTerminator());
+  auto elseTerm = mlir::dyn_cast<fir::ResultOp>(ifOp.getElseRegion().front().getTerminator());
+  if (!thenTerm || !elseTerm) return {};
+  if (idx >= thenTerm.getNumOperands() || idx >= elseTerm.getNumOperands()) return {};
+  mlir::Value const thenV = thenTerm.getOperand(idx);
+  mlir::Value const elseV = elseTerm.getOperand(idx);
+  auto isAbsent = [](mlir::Value v) { return mlir::isa_and_nonnull<fir::AbsentOp>(v.getDefiningOp()); };
+  if (isAbsent(elseV) && !isAbsent(thenV)) return thenV;
+  if (isAbsent(thenV) && !isAbsent(elseV)) return elseV;
+  return {};
+}
+
 std::string traceToDecl(mlir::Value val, int max) {
   for (int i = 0; i < max && val; ++i) {
     auto* d = val.getDefiningOp();
@@ -364,6 +388,16 @@ std::string traceToDecl(mlir::Value val, int max) {
         val = dc.getMemref();
         continue;
       }
+      // Runtime-present OPTIONAL forwarded a POINTER/ALLOCATABLE actual: the dummy's memref is a
+      // fir.if(pointer-associated){present}else{absent} select.  Follow the present branch so accesses AND
+      // extent queries (box_dims -> <name>_d<i>) resolve to the source's flat name -- else a section_alias'd
+      // dummy's box_dims name onto its own (descriptor-less) name and the extent symbol is undefined.
+      if (dc.getDummyScope())
+        if (auto ifOp = mlir::dyn_cast_or_null<fir::IfOp>(dc.getMemref().getDefiningOp()))
+          if (mlir::Value const pres = presentBranchOfRuntimeOptional(ifOp, dc.getMemref())) {
+            val = pres;
+            continue;
+          }
       // Local whole-object POINTER rebound to a struct-dummy component: follow the rebind to the source chain so the
       // access renders as the caller-side flat name instead of the local pointer's own name.
       if (mlir::Value const src = traceLocalPointerRebindSource(dc)) {
