@@ -71,6 +71,9 @@ def extract_variant_tu(wrapper: Path, out_dir: Path, name: str, extra_sources: t
         make_noop=list(TIMER_NOOPS),
         do_not_emit=TIMER_STUBS,
         tolerate_external_uses=True,
+        # This TU is f2py-wrapped as the value baseline; an emptied stub type (PERFORMANCE_TIMER)
+        # would make f2py emit a NULL module wrapper that segfaults on import.
+        f2py_safe_empty_types=True,
     )
     text = Path(tu).read_text()
     # YRECLDP allocatable->static patch: bridge can't flatten an allocatable derived-type
@@ -95,7 +98,7 @@ def assert_species_parameters_baked(sdfg):
     """YOECLDP species PARAMETERs must be compile-time literals: no free symbols, no arguments."""
     leaked = ({str(s).lower() for s in sdfg.free_symbols} | {k.lower() for k in sdfg.arglist()}) & BAKED_PARAMETERS
     assert not leaked, (f"YOECLDP PARAMETER constants leaked into the SDFG interface instead of "
-                       f"config-propagating to literals: {sorted(leaked)}")
+                        f"config-propagating to literals: {sorted(leaked)}")
 
 
 def run_cloudsc_gpu(tu_text: str,

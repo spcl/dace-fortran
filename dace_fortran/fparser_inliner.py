@@ -235,7 +235,8 @@ class ParseConfig:
                  keep_type_components: Optional[Dict[str, Iterable[str]]] = None,
                  monomorphize: bool = True,
                  rename_specifics: Optional[Dict[str, str]] = None,
-                 specialize_at_source: Optional[Iterable[str]] = None):
+                 specialize_at_source: Optional[Iterable[str]] = None,
+                 f2py_safe_empty_types: bool = False):
         # Make the configs canonical, by processing the various types upfront.
         if not sources:
             sources = {}
@@ -319,6 +320,9 @@ class ParseConfig:
         #: bridge's pointer-rewrite (HLFIR inlining is too late).  See
         #: :mod:`inliner.ast_desugaring.specialize_at_source`.
         self.specialize_at_source: List[str] = [n.lower() for n in (specialize_at_source or [])]
+        #: Give emptied derived types a placeholder member so numpy f2py can wrap the TU.
+        #: Only the f2py-wrapped path (CLOUDSC) sets this; see :func:`pruning.prune_unused_objects`.
+        self.f2py_safe_empty_types = f2py_safe_empty_types
 
     def set_all_possible_entry_points_from(self, ast: f03.Program):
         """Treat every top-level subprogram / main program as an entry point
@@ -1073,7 +1077,7 @@ def run_fparser_transformations(ast: f03.Program, cfg: ParseConfig, *, optimize:
             # statements) it removes the type declaration but leaves the
             # orphaned ``PARAMETER`` statement, which then fails to compile
             # (hit by NPB LU's unused ``tolrsd*_def``).
-            ast = pruning.prune_unused_objects(ast, cfg.do_not_prune)
+            ast = pruning.prune_unused_objects(ast, cfg.do_not_prune, f2py_safe_empty_types=cfg.f2py_safe_empty_types)
         ast = pruning.consolidate_uses(ast)
         ast_f90_old, ast_f90_new = ast_f90_new, ast.tofortran()
     logger.debug("FParser Op: AST-size settled at %d lines.", len(ast_f90_new.splitlines()))
@@ -1267,6 +1271,7 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
                   monomorphize: bool = True,
                   rename_specifics: Optional[Dict[str, str]] = None,
                   specialize_at_source: Iterable[str] = (),
+                  f2py_safe_empty_types: bool = False,
                   optimize: bool = True) -> f03.Program:
     """Run the full inliner pipeline and return the combined fparser AST.
 
@@ -1328,6 +1333,7 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
         monomorphize=monomorphize,
         rename_specifics=rename_specifics,
         specialize_at_source=specialize_at_source,
+        f2py_safe_empty_types=f2py_safe_empty_types,
     )
     if include_builtins:
         cfg.sources.setdefault("_builtins.f90", BUILTINS)
@@ -1366,33 +1372,33 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
     return ast
 
 
-def inline_to_single_tu(
-    sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
-    entry: Optional[str] = None,
-    *,
-    output: Union[None, str, Path] = None,
-    out_dir: Union[None, str, Path] = None,
-    name: str = "inlined",
-    expand_cpp: bool = False,
-    force_double_precision: bool = False,
-    defines: Iterable[str] = (),
-    include_dirs: Iterable[Union[str, Path]] = (),
-    flang: str = "flang-new-21",
-    make_noop: Union[None, types.SPEC, List[types.SPEC]] = None,
-    make_return_false: Iterable[str] = (),
-    keep_external: Iterable[str] = (),
-    external_functions: Iterable[ExternalFunction] = (),
-    do_not_emit: Iterable[str] = (),
-    consolidate_global_data: bool = False,
-    rename_uniquely: bool = False,
-    do_not_prune_type_components: bool = False,
-    keep_type_components: Optional[Dict[str, Iterable[str]]] = None,
-    checkpoint_dir: Union[None, str, Path] = None,
-    include_builtins: bool = True,
-    tolerate_external_uses: bool = False,
-    monomorphize: bool = True,
-    rename_specifics: Optional[Dict[str, str]] = None,
-    specialize_at_source: Iterable[str] = ()) -> Path:
+def inline_to_single_tu(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
+                        entry: Optional[str] = None,
+                        *,
+                        output: Union[None, str, Path] = None,
+                        out_dir: Union[None, str, Path] = None,
+                        name: str = "inlined",
+                        expand_cpp: bool = False,
+                        force_double_precision: bool = False,
+                        defines: Iterable[str] = (),
+                        include_dirs: Iterable[Union[str, Path]] = (),
+                        flang: str = "flang-new-21",
+                        make_noop: Union[None, types.SPEC, List[types.SPEC]] = None,
+                        make_return_false: Iterable[str] = (),
+                        keep_external: Iterable[str] = (),
+                        external_functions: Iterable[ExternalFunction] = (),
+                        do_not_emit: Iterable[str] = (),
+                        consolidate_global_data: bool = False,
+                        rename_uniquely: bool = False,
+                        do_not_prune_type_components: bool = False,
+                        keep_type_components: Optional[Dict[str, Iterable[str]]] = None,
+                        checkpoint_dir: Union[None, str, Path] = None,
+                        include_builtins: bool = True,
+                        tolerate_external_uses: bool = False,
+                        monomorphize: bool = True,
+                        rename_specifics: Optional[Dict[str, str]] = None,
+                        specialize_at_source: Iterable[str] = (),
+                        f2py_safe_empty_types: bool = False) -> Path:
     """Inline a multi-file Fortran project into ONE self-contained ``.f90``
     and return the path to it.
 
@@ -1454,7 +1460,8 @@ def inline_to_single_tu(
                         tolerate_external_uses=tolerate_external_uses,
                         monomorphize=monomorphize,
                         rename_specifics=rename_specifics,
-                        specialize_at_source=specialize_at_source)
+                        specialize_at_source=specialize_at_source,
+                        f2py_safe_empty_types=f2py_safe_empty_types)
     # Drop the injected intrinsic-module stubs (``iso_c_binding`` / ``iso_fortran_env``)
     # before serialising: they exist only so ``USE`` resolves during parsing, but a
     # PARTIAL stub (the ``iso_c_binding`` one defines just ``c_int``) shadows the real

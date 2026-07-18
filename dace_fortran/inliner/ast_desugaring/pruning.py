@@ -348,10 +348,15 @@ def prune_dangling_interface_bodies(ast: f03.Program) -> f03.Program:
     return ast
 
 
-def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC]) -> f03.Program:
+def prune_unused_objects(ast: f03.Program,
+                         keepers: List[types.SPEC],
+                         f2py_safe_empty_types: bool = False) -> f03.Program:
     """Fine-grained pruning: removes any object not reachable (by usage) from `keepers`.
 
-    Precondition: indirections (e.g. interface calls) must already be resolved."""
+    Precondition: indirections (e.g. interface calls) must already be resolved.
+
+    ``f2py_safe_empty_types`` gives every emptied derived type a placeholder member (see below).
+    Only needed on the f2py-wrapped path (CLOUDSC); a plain gfortran TU compiles empty types fine."""
     PRUNABLE_OBJECT_CLASSES = (f03.Program_Stmt, f03.Subroutine_Stmt, f03.Function_Stmt, f03.Derived_Type_Stmt,
                                f03.Entity_Decl, f03.Component_Decl)
 
@@ -474,12 +479,21 @@ def prune_unused_objects(ast: f03.Program, keepers: List[types.SPEC]) -> f03.Pro
             utils.remove_self(ns_node.parent)
         killed.add(ns)
 
-    # A type whose every component was pruned (CLOUDSC's stubbed PERFORMANCE_TIMER) must not
-    # stay memberless: variables of it still exist, and numpy f2py builds a NULL module wrapper
-    # for one, segfaulting on import (PyInit_*). Keep a placeholder component instead.
-    for tdef in walk(ast, f03.Derived_Type_Def):
-        if not walk(tdef, f03.Component_Decl):
+    # An emptied derived type (CLOUDSC's stubbed PERFORMANCE_TIMER) breaks numpy f2py: it builds a
+    # NULL module wrapper for a variable of that type, segfaulting on import (PyInit_*). Give it a
+    # placeholder member. Gated: only the f2py path needs it; empty types are legal to gfortran, and
+    # emitting the placeholder on the gfortran-only extraction path would drift the committed TUs.
+    if f2py_safe_empty_types:
+        for tdef in walk(ast, f03.Derived_Type_Def):
+            if walk(tdef, f03.Component_Decl):
+                continue
             tstmt = ast_utils.singular(ast_utils.children_of_type(tdef, f03.Derived_Type_Stmt))
+            # An EXTENDS type inherits its parent's members (incl. the parent's own placeholder), so it
+            # is never truly empty; a placeholder here would duplicate the inherited component and
+            # gfortran rejects it ("already in the parent type").
+            attrs = tstmt.children[0]
+            if attrs and any(isinstance(a, f03.Type_Attr_Spec) and a.children[0] == 'EXTENDS' for a in attrs.children):
+                continue
             utils.replace_node(tstmt, (tstmt, f03.Data_Component_Def_Stmt("INTEGER :: pruned_type_placeholder")))
 
     for m in walk(ast, f03.Module):
