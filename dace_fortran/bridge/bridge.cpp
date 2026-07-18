@@ -343,7 +343,14 @@ class HLFIRModule {
     // module symbols to their procedure name (text after the last ``P`` -- flang lower-cases identifiers so M/P/F
     // markers are the only upper-case letters).
     std::string target = name;
-    if (name.rfind("_Q", 0) != 0) {
+    // Exact symbol match first: a ``bind(C)`` procedure carries the C name
+    // verbatim (no ``_Q`` mangling), so its func symbol equals ``name`` and the
+    // demangle walk below (which skips every non-``_Q`` symbol) would miss it.
+    bool exact = false;
+    module_->walk([&](mlir::func::FuncOp f) {
+      if (f.getSymName().str() == name) exact = true;
+    });
+    if (!exact && name.rfind("_Q", 0) != 0) {
       std::string want = name;
       std::transform(want.begin(), want.end(), want.begin(), [](unsigned char c) { return std::tolower(c); });
       std::vector<std::string> matches;
