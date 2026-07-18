@@ -1218,6 +1218,14 @@ std::vector<ASTNode> buildSectionToSectionAssign(hlfir::AssignOp assign, mlir::V
 
   // Build LHS write-index list (and remember per-tDim lo for the source
   // shift).  Triplet -> loop iter; scalar -> the scalar index expression.
+  // The loop iterates in the bounds-bearing side's coords (dst when a designate, else the
+  // src section); the OTHER side's index shifts by (own_lo - bounds_lo). Both sides shift,
+  // so a bare-decl dst reading a src section lands writes at the loop coord, not the dst lo.
+  const bool boundsFromDst = static_cast<bool>(dstDg);
+  std::vector<std::string> srcLoExprs;
+  for (auto& d : srcDims)
+    if (d.isTriplet) srcLoExprs.push_back(d.lo);
+
   AccessInfo wa;
   wa.array_name = dstName;
   wa.is_write = true;
@@ -1227,8 +1235,15 @@ std::vector<ASTNode> buildSectionToSectionAssign(hlfir::AssignOp assign, mlir::V
     for (auto& d : dstDims) {
       if (d.isTriplet) {
         dstLoExprs.push_back(d.lo);
+        const std::string& blo = boundsFromDst ? d.lo : srcLoExprs[tDim];
+        std::string ix;
+        if (d.lo == blo) {
+          ix = iter_names[tDim];
+        } else {
+          ix = "(" + iter_names[tDim] + " + " + d.lo + " - " + blo + ")";
+        }
         wa.index_vars.push_back(iter_names[tDim]);
-        wa.index_exprs.push_back(iter_names[tDim]);
+        wa.index_exprs.push_back(std::move(ix));
         tDim++;
       } else {
         wa.index_vars.push_back(d.scalarIdx);
@@ -1237,10 +1252,8 @@ std::vector<ASTNode> buildSectionToSectionAssign(hlfir::AssignOp assign, mlir::V
     }
   }
 
-  // Build RHS read-index list, aligning by tDim.  When src_lo == dst_lo
-  // (e.g. both ``pos(1):pos(2)``) skip the redundant shift so the
-  // memlet stays simple  --  DaCe's symbolic memlet simplifier doesn't
-  // always fold ``+ pos(1) - pos(1)``.
+  // Build RHS read-index list, aligning by tDim.  When src_lo == bounds_lo skip the
+  // redundant shift so the memlet stays simple (DaCe's simplifier doesn't always fold it).
   AccessInfo ra;
   ra.array_name = srcName;
   ra.is_read = true;
@@ -1248,11 +1261,12 @@ std::vector<ASTNode> buildSectionToSectionAssign(hlfir::AssignOp assign, mlir::V
     unsigned tDim = 0;
     for (auto& d : srcDims) {
       if (d.isTriplet) {
+        const std::string& blo = boundsFromDst ? dstLoExprs[tDim] : d.lo;
         std::string ix;
-        if (d.lo == dstLoExprs[tDim]) {
+        if (d.lo == blo) {
           ix = iter_names[tDim];
         } else {
-          ix = "(" + iter_names[tDim] + " + " + d.lo + " - " + dstLoExprs[tDim] + ")";
+          ix = "(" + iter_names[tDim] + " + " + d.lo + " - " + blo + ")";
         }
         ra.index_vars.push_back(iter_names[tDim]);
         ra.index_exprs.push_back(std::move(ix));

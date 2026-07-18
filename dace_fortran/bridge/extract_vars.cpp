@@ -1392,6 +1392,48 @@ void runMultiCallsiteDisambiguation(mlir::ModuleOp module) {
       op->setAttr("uniq_name", mlir::StringAttr::get(op.getContext(), newUniq));
     }
   }
+
+  // hlfir-inline-all also copies each call site's callee LOCALS (the result scalar,
+  // temporaries) with a shared uniq_name. Unlike dummies these have no dummy_scope and
+  // aren't section aliases, so the loop above skips them; downstream name-keying then
+  // collapses N inlined copies onto ONE SDFG scalar (last write wins). CLOUDSC zbeta: five
+  // ZPOW(...) in one expression all read the final pow (~170x wrong). Give each copy
+  // (fresh backing fir.alloca, shared uniq_name) a distinct _inl<n> suffix. First copy kept
+  // bare for idempotency (a re-run leaves it alone in its group).
+  auto tracesToLocalAlloca = [](mlir::Value v) -> mlir::Operation* {
+    for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
+      auto* d = v.getDefiningOp();
+      if (!d) return nullptr;
+      if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) { v = cv.getValue(); continue; }
+      if (mlir::isa<fir::AllocaOp>(d)) return d;
+      return nullptr;
+    }
+    return nullptr;
+  };
+  llvm::StringMap<llvm::SmallVector<hlfir::DeclareOp, 4>> localByUniq;
+  module.walk([&](hlfir::DeclareOp op) {
+    auto fn = op->getParentOfType<mlir::func::FuncOp>();
+    if (fn && fn.isPrivate()) return;
+    if (op.getDummyScope()) return;  // dummies handled above
+    if (!tracesToLocalAlloca(op.getMemref())) return;
+    localByUniq[op.getUniqName()].push_back(op);
+  });
+  for (auto& kv : localByUniq) {
+    auto& group = kv.second;
+    if (group.size() < 2) continue;
+    // Genuine inline duplication only: the copies must have DISTINCT backing allocas
+    // (one variable declared once shares a single alloca and must not be split).
+    llvm::SmallPtrSet<mlir::Operation*, 4> allocas;
+    for (auto op : group) allocas.insert(tracesToLocalAlloca(op.getMemref()));
+    if (allocas.size() < 2) continue;
+    unsigned idx = 0;
+    for (auto op : group) {
+      unsigned const n = idx++;
+      if (n == 0) continue;  // first keeps the bare name
+      auto un = op.getUniqName().str();
+      op->setAttr("uniq_name", mlir::StringAttr::get(op.getContext(), un + "_inl" + std::to_string(n)));
+    }
+  }
 }
 
 // Build the collision set fed to ``extractName``.  Walks BOTH
