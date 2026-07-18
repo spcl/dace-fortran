@@ -519,24 +519,6 @@ def collect_indirect(builder, assigns: list) -> dict:
             for expr in getattr(ac, 'index_exprs', None) or []:
                 _intern_recursive(expr)
 
-    # Scalar-data index promotion (histogram scatter ``x_cb1(x_bidx+1)`` where
-    # ``x_bidx`` is a computed scalar transient, not a symbol): a data scalar is
-    # illegal in a memlet subset, so mint a symbol per scalar used as an index.
-    # Keyed by the BARE scalar name (no ``[``) -- build_memlet_index substitutes
-    # the token and the staging code assigns ``<sym> = <scalar>`` on the
-    # preceding interstate edge (DaCe reads the scalar's runtime value).  Only a
-    # genuine data scalar qualifies: loop iters / bound symbols live in
-    # ``builder.symbols`` and render directly.
-    scalars = getattr(builder, 'scalars', {})
-    symbols = getattr(builder, 'symbols', {})
-    for a in assigns:
-        for ac in a.accesses:
-            for expr in getattr(ac, 'index_exprs', None) or []:
-                if not isinstance(expr, str):
-                    continue
-                for tok in set(re.findall(r'[A-Za-z_]\w*', expr)):
-                    if tok in scalars and tok not in symbols and tok not in out:
-                        out[tok] = f"{tok}_ix{_next_indirection_gid()}"
     return out
 
 
@@ -766,14 +748,6 @@ def build_memlet_index(builder, array_name: str, access, iter_map: dict, indirec
         v = ivars[dim] if dim < len(ivars) else ""
         expr = exprs[dim] if dim < len(exprs) else v
         offset_sym = f"offset_{array_name}_d{dim}" if has_offset_sym else "1"
-
-        # Scalar-data index promoted to a symbol (histogram scatter): substitute
-        # the bare scalar token with its minted symbol so the subset uses the
-        # symbol staged (``<sym> = <scalar>``) on the preceding interstate edge.
-        # Bracket-keyed entries are the array-indirect case, handled below.
-        for scal, sym in indirect_syms.items():
-            if '[' not in scal and isinstance(expr, str):
-                expr = re.sub(rf'\b{re.escape(scal)}\b', sym, expr)
 
         # Substitute every EMBEDDED indirect access in expr with its interned
         # symbol so a dim like ``(ikidx[je,2,jk,jb] - 1)`` -- arithmetic

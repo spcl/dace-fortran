@@ -883,6 +883,17 @@ static void collectIntegerScalarReads(mlir::Value v, std::set<std::string>& out,
     return;
   }
 
+  // ``hlfir.no_reassoc`` is Flang's reassociation-barrier wrapper around an
+  // index operand (``a(x_bidx + 1)`` -> ``addi(no_reassoc(load x_bidx), 1)``);
+  // transparent for symbol collection.  Recurse into the wrapped value so the
+  // scalar leaf behind it is promoted -- else an access-used computed scalar
+  // (histogram ``x_cb1(x_bidx + 1)``) stays a transient the memlet subset can't
+  // allocate.  Mirrors the buildIndexExpr / control_flow no_reassoc passthroughs.
+  if (def->getName().getStringRef() == "hlfir.no_reassoc" && def->getNumOperands() == 1) {
+    collectIntegerScalarReads(def->getOperand(0), out, visited);
+    return;
+  }
+
   // Scalar read: trace to its declare; every op on the trace chain
   // (fir.load + hlfir.declare) resolves to the Fortran name.  Only
   // collect INTEGER-typed scalars -- float and LOGICAL scalars used
