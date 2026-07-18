@@ -457,6 +457,38 @@ def build_wrapper_head(frozen: FrozenSignature,
 # ---------------------------------------------------------------------------
 
 
+def partition_symbol_blocks(sym_lines: List[str], buffer_names) -> tuple:
+    """Split symbol-population lines into ``(early, late)`` by buffer dependency.
+
+    A shape sym read from a module global/dummy/constant is assigned BEFORE the
+    buffer allocates (early); a sym reading the size/lbound of a buffer this wrapper
+    allocates can only be assigned AFTER (late). Some assigns are a 5-line
+    ``if (g) then / sym=<shape> / else / sym=0 / end if`` guard block whose true-branch
+    alone is buffer-derived -- partition by BLOCK, never by line: a per-line split
+    shears the block (true-branch late, bare else/end if early -> orphaned ELSE,
+    uncompilable Fortran). A block goes late iff any of its lines needs a buffer.
+    """
+
+    def _buffer_derived(s: str) -> bool:
+        return any(re.search(r'\b' + re.escape(b) + r'\b', s) for b in buffer_names)
+
+    blocks, i = [], 0
+    while i < len(sym_lines):
+        s = sym_lines[i].strip()
+        if s.startswith("if (") and s.endswith("then"):
+            j = i + 1
+            while j < len(sym_lines) and sym_lines[j].strip() != "end if":
+                j += 1
+            blocks.append(sym_lines[i:j + 1])
+            i = j + 1
+        else:
+            blocks.append([sym_lines[i]])
+            i += 1
+    early = [ln for blk in blocks if not any(_buffer_derived(ln) for ln in blk) for ln in blk]
+    late = [ln for blk in blocks if any(_buffer_derived(ln) for ln in blk) for ln in blk]
+    return early, late
+
+
 def build_wrapper_body(frozen: FrozenSignature,
                        iface: OriginalInterface,
                        plan: FlattenPlan,
@@ -562,8 +594,7 @@ def build_wrapper_body(frozen: FrozenSignature,
         # RHS reads size/lbound of a buffer this wrapper allocates below.
         return any(re.search(r'\b' + re.escape(b) + r'\b', rhs) for b in _buffer_names)
 
-    early_syms = [ln for ln in sym_lines if not _buffer_derived(ln)]
-    late_syms = [ln for ln in sym_lines if _buffer_derived(ln)]
+    early_syms, late_syms = partition_symbol_blocks(sym_lines, _buffer_names)
     early_extra = [(n, ft, r) for (n, ft, r) in extra_syms if not _buffer_derived(r)]
     late_extra = [(n, ft, r) for (n, ft, r) in extra_syms if _buffer_derived(r)]
     if early_syms or early_extra:
