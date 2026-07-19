@@ -907,6 +907,17 @@ class SDFGBuilder:
                 sdfg.symbols.pop(src)
             if dst_dtype is not None:
                 sdfg.symbols[dst] = dst_dtype
+        # The offset/extent-alias collapses above rename an assignment KEY onto
+        # its own value: a descriptor-dim stage ``buffer_cml_d0 = klon`` becomes
+        # ``klon = klon`` once ``buffer_cml_d0`` collapses to the grid dim it
+        # aliases. Such identity assignments define no symbol (``new_symbols``
+        # skips them) and move no value, yet they ride inertly to
+        # AssumeSymbolConstraints, whose ``replace_dict`` turns the str key into
+        # a Symbol -- validation then rejects the Symbol-keyed assignment. Drop
+        # them at the source.
+        for e in sdfg.all_interstate_edges():
+            for k in [k for k, v in e.data.assignments.items() if str(k) == str(v)]:
+                del e.data.assignments[k]
         # Post-gen cleanups (Stage 4b in dace_fortran/README.md).
         # Run BEFORE the FrozenSignature snapshot so the snapshot
         # captures the post-cleanup signature (matters for the
