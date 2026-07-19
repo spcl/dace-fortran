@@ -40,9 +40,11 @@
 //       multiply ``+ (j-1)*stride`` instead of the current ``+ (lo-1)``.
 //     * Multiple triplets (``arr(:, :)``).  Alias is then multi-D and
 //       the per-dim mapping needs more care.
-//     * Non-section sources (``copy_in`` of a whole array / scalar)  --
-//       those are pathological and the bridge should reject them
-//       loudly elsewhere if they ever surface.
+//     * Non-section sources are handled separately: a POINTER *variable*
+//       view alias-folds (``tryFoldViewSource``); a POINTER / ALLOCATABLE
+//       *component* reparents its alias accesses onto the member box
+//       (``reparentMemberCopy``) -- designate reads the box strides, so it is
+//       correct even when the component target is non-contiguous.
 // ============================================================================
 
 #include "flang/Optimizer/Dialect/FIROps.h"
@@ -142,14 +144,7 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
     // 1) Source must be a section ``hlfir.designate``.
     auto srcDg = cin.getVar().getDefiningOp<hlfir::DesignateOp>();
     if (!srcDg) {
-      // View/pointer source: ``copy_in(load(p_box))`` where ``p`` is a
-      // POINTER / bounds-remap VIEW passed to a contiguous explicit-shape
-      // dummy (``call scale(p, n)`` -> ``real :: v(n)``).  copy_in/copy_out
-      // around a view argument is element-wise-equivalent to the view under
-      // the strict-no-aliasing assumption (copy_in gathers, copy_out
-      // scatters; net = in-place per logical index), so fold it to a direct
-      // alias of the source view rather than materialising a temp.
-      tryFoldViewSource(cin);
+      dispatchNonSectionSource(cin);
       return;
     }
     SectionShape sec;
@@ -221,6 +216,126 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
       cin.erase();
       // The temp box is typically a ``fir.alloca`` whose only
       // users were the copy_in / copy_out pair.  Erase if dead.
+      if (auto* def = temp.getDefiningOp())
+        if (def->use_empty()) def->erase();
+    }
+  }
+
+  /// Route a non-section ``copy_in`` (source is a load of a POINTER /
+  /// ALLOCATABLE box) to the right handler:
+  ///   * ``load(declare)``   -- a POINTER *variable* (bounds-remap view or
+  ///     plain rebind).  Its target is contiguous, so the copy is element-
+  ///     wise-equivalent to the view: alias-fold it (``tryFoldViewSource``).
+  ///   * ``load(designate)`` -- a POINTER / ALLOCATABLE *component*
+  ///     (``st%p_diag%vort``).  The component target may be strided, so
+  ///     box_addr aliasing would let the contiguous explicit-shape callee
+  ///     stride-walk a frame it never got = heap OOB.  Reparent the alias
+  ///     accesses onto the member box (``reparentMemberCopy``) -- designate
+  ///     reads the box strides, so it is correct for a strided target.
+  void dispatchNonSectionSource(hlfir::CopyInOp cin) {
+    auto ld = cin.getVar().getDefiningOp<fir::LoadOp>();
+    if (!ld) return;
+    mlir::Value const memref = ld.getMemref();
+    if (memref.getDefiningOp<hlfir::DeclareOp>()) {
+      tryFoldViewSource(cin);
+      return;
+    }
+    if (auto memDg = memref.getDefiningOp<hlfir::DesignateOp>()) {
+      auto attrs = memDg.getFortranAttrs();
+      if (attrs && bitEnumContainsAny(*attrs, fir::FortranVariableFlagsEnum::pointer |
+                                                  fir::FortranVariableFlagsEnum::allocatable))
+        reparentMemberCopy(cin);
+    }
+  }
+
+  /// Fold ``copy_in`` / ``copy_out`` around an inlined-callee dummy bound to a
+  /// POINTER / ALLOCATABLE struct component (``st%p_diag%vort``).  The bridge
+  /// surfaces the copy_in temp as a phantom argument ``v`` and drops the copies,
+  /// so writes through the dummy never reach the component.  Rewrite every alias
+  /// access ``%v (idx...)`` to designate the MEMBER BOX directly:
+  ///
+  ///     %e = hlfir.designate %memberBox (idx...)
+  ///
+  /// The member box carries the component's strides, so designate hits the right
+  /// element even when the target is non-contiguous (box_addr aliasing would
+  /// lose the strides = heap OOB).  Erasing the alias declare also drops the
+  /// phantom ``v`` from the signature.  Bails on any non-designate use of the
+  /// alias (whole-array assign / nested call), leaving the drop in place rather
+  /// than risk a wrong rewrite -- matches the section path's conservative scope.
+  void reparentMemberCopy(hlfir::CopyInOp cin) {
+    mlir::Value const memberBox = cin.getVar();  // box<ptr<array>> -- carries strides
+
+    // copy_in#0 -> fir.box_addr -> (fir.convert)? -> hlfir.declare (alias ``v``).
+    fir::BoxAddrOp boxAddr;
+    for (auto* u : cin.getResult(0).getUsers())
+      if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(u)) {
+        boxAddr = ba;
+        break;
+      }
+    if (!boxAddr) return;
+
+    fir::ConvertOp convert;
+    hlfir::DeclareOp aliasDecl;
+    for (auto* u : boxAddr.getResult().getUsers()) {
+      if (auto d = mlir::dyn_cast<hlfir::DeclareOp>(u)) {
+        aliasDecl = d;
+        break;
+      }
+      if (auto cv = mlir::dyn_cast<fir::ConvertOp>(u)) {
+        for (auto* uu : cv.getResult().getUsers())
+          if (auto d = mlir::dyn_cast<hlfir::DeclareOp>(uu)) {
+            aliasDecl = d;
+            convert = cv;
+            break;
+          }
+        if (aliasDecl) break;
+      }
+    }
+    if (!aliasDecl) return;
+
+    // Collect alias-use designates; bail on any foreign (non-designate) use.
+    llvm::SmallVector<hlfir::DesignateOp, 8> uses;
+    for (mlir::Value const res : {aliasDecl.getResult(0), aliasDecl.getResult(1)})
+      for (auto* u : res.getUsers()) {
+        if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u))
+          uses.push_back(dg);
+        else
+          return;
+      }
+
+    // Reparent each ``%alias (idx...)`` onto the member box verbatim.
+    for (auto useDg : uses) {
+      mlir::OpBuilder b(useDg);
+      auto newOp = b.create<hlfir::DesignateOp>(
+          useDg.getLoc(),
+          /*result_type=*/useDg.getResult().getType(),
+          /*memref=*/memberBox,
+          /*component=*/mlir::StringAttr{},
+          /*component_shape=*/mlir::Value{},
+          /*indices=*/useDg.getIndices(),
+          /*is_triplet=*/useDg.getIsTripletAttr(),
+          /*substring=*/mlir::ValueRange{},
+          /*complex_part=*/mlir::BoolAttr{},
+          /*shape=*/useDg.getShape(),
+          /*typeparams=*/useDg.getTypeparams(),
+          /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
+      useDg.getResult().replaceAllUsesWith(newOp.getResult());
+      useDg.erase();
+    }
+
+    // Erase the now-dead chain: alias declare, convert, box_addr, copy_out(s),
+    // copy_in, temp box.  Users first, defs last.
+    llvm::SmallVector<hlfir::CopyOutOp, 2> copyOuts;
+    getOperation().walk([&](hlfir::CopyOutOp op) {
+      if (op.getOperand(1) == cin.getResult(1)) copyOuts.push_back(op);
+    });
+    if (aliasDecl.getResult(0).use_empty() && aliasDecl.getResult(1).use_empty()) aliasDecl.erase();
+    if (convert && convert.getResult().use_empty()) convert.erase();
+    if (boxAddr.getResult().use_empty()) boxAddr.erase();
+    for (auto co : copyOuts) co.erase();
+    if (cin.getResult(0).use_empty() && cin.getResult(1).use_empty()) {
+      mlir::Value const temp = cin.getTempBox();
+      cin.erase();
       if (auto* def = temp.getDefiningOp())
         if (def->use_empty()) def->erase();
     }
