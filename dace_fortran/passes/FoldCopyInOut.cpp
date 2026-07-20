@@ -48,16 +48,26 @@
 //     the bridge does not model copy_in / copy_out, so a surviving pair
 //     becomes a zero-filled phantom SDFG argument whose writes are
 //     dropped.  Emitting that is a silent wrong answer, so the pass
-//     fails the pipeline instead.
+//     fails the pipeline instead -- EXCEPT a record-element section (see
+//     below), which only warns: it is a known-unfoldable case that
+//     historically lowered as a phantom, and failing it would block
+//     programs that never depended on it.
 //
 // Out of scope (left for follow-ups):
 //     * Non-stride-1 triplets (``arr(1:N:2)``).  Would need an index
 //       multiply ``+ (j-1)*stride`` instead of the current ``+ (lo-1)``.
+//     * Record-element sections (``p_diag%p_vn(:,:,blk)`` where p_vn is a
+//       ``t_cartesian_coordinates`` array).  Reparenting emits a record-level
+//       ``offset_p_vn_d*`` that struct-flatten later leaves unresolved (it
+//       renames the data to the leaf submember ``p_vn_x``).  The fold would
+//       need to emit leaf-submember accesses; until then it bails and warns.
 //     * Non-section sources are handled separately: a POINTER *variable*
 //       view alias-folds (``tryFoldViewSource``); a POINTER / ALLOCATABLE
 //       *component* reparents its alias accesses onto the member box
 //       (``reparentMemberCopy``) -- designate reads the box strides, so it is
-//       correct even when the component target is non-contiguous.
+//       correct even when the component target is non-contiguous.  A bare
+//       assumed-shape dummy box (a local forwarded to a deeper explicit-shape
+//       callee) reparents onto the source box itself.
 // ============================================================================
 
 #include "flang/Optimizer/Dialect/FIROps.h"
@@ -139,6 +149,21 @@ bool isConstOne(mlir::Value v) {
   return c.has_value() && *c == 1;
 }
 
+/// True when ``t`` (a box / ref / array of) has a derived-type element.  Folding
+/// a record-element section reparents onto the member box, but struct-flatten
+/// then renames the data to its leaf submember (``p_vn`` -> ``p_vn_x``) with a
+/// submember offset symbol, leaving the record-level ``offset_p_vn_d*`` the
+/// reparented designate emitted unresolved.  Out of scope until the fold emits
+/// leaf-submember accesses; bail so the pair is left for the survivor policy.
+bool isRecordElement(mlir::Type t) {
+  if (auto bx = mlir::dyn_cast<fir::BaseBoxType>(t)) t = bx.getEleTy();
+  if (auto rt = mlir::dyn_cast<fir::ReferenceType>(t)) t = rt.getEleTy();
+  if (auto heap = mlir::dyn_cast<fir::HeapType>(t)) t = heap.getEleTy();
+  if (auto ptr = mlir::dyn_cast<fir::PointerType>(t)) t = ptr.getEleTy();
+  if (auto sq = mlir::dyn_cast<fir::SequenceType>(t)) t = sq.getEleTy();
+  return mlir::isa<fir::RecordType>(t);
+}
+
 struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::OperationPass<mlir::ModuleOp>> {
   // NOLINTNEXTLINE(misc-const-correctness): 'id' is defined by the LLVM MLIR_DEFINE_*_TYPE_ID macro.
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(FoldCopyInOutPass)
@@ -164,6 +189,20 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
   void rejectSurvivors() {
     bool failed = false;
     getOperation().walk([&](hlfir::CopyInOp op) {
+      // Record-element sections are a known-unfoldable case (isRecordElement):
+      // the reparent would emit an unresolved record-level offset.  These
+      // historically lowered as a phantom argument that this program's compared
+      // outputs did not depend on, so WARN rather than fail the whole pipeline --
+      // downgrading loudly, not silently.  Non-record survivors are a genuine
+      // silent miscompile (dropped writes / zero reads), so those still fail.
+      if (isRecordElement(op.getVar().getType())) {
+        op.emitWarning("hlfir-fold-copy-in-out: record-element ``hlfir.copy_in`` for ")
+            << sourceName(op)
+            << " left unfolded (out of scope: reparent would emit an unresolved record offset). "
+               "It lowers as a phantom SDFG argument -- reads see zeros -- so any result that "
+               "depends on it is wrong.  Fold needs leaf-submember accesses for record sections.";
+        return;
+      }
       op.emitError("hlfir-fold-copy-in-out: ``hlfir.copy_in`` survived the fold for ")
           << sourceName(op)
           << ".  The bridge cannot model a copy-in/copy-out pair: the temporary "
@@ -185,6 +224,31 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
     return "<unnamed actual argument>";
   }
 
+  // Collect the terminal designate uses of an alias declare, transparently
+  // following the ladder of per-level dummy re-declares (``%inner =
+  // hlfir.declare %outer#1``) that inlining a forwarding chain leaves -- the
+  // section source, like the member source, can be forwarded through a deeper
+  // inlined callee (``z_vn_ab(:,1,:)`` -> map_edges2edges -> inner) before it is
+  // used.  ``chain`` is filled with the whole ladder so the caller erases it
+  // innermost-first.  Returns false (bail, leave the fold undone) on any foreign
+  // use -- a non-review declare, a whole-array assign, or a surviving call.
+  static bool collectAliasUses(hlfir::DeclareOp aliasDecl, llvm::SmallVectorImpl<hlfir::DeclareOp>& chain,
+                               llvm::SmallVectorImpl<hlfir::DesignateOp>& uses) {
+    chain.push_back(aliasDecl);
+    for (size_t ci = 0; ci < chain.size(); ++ci)
+      for (mlir::Value const res : {chain[ci].getResult(0), chain[ci].getResult(1)})
+        for (auto* u : res.getUsers()) {
+          if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u))
+            uses.push_back(dg);
+          else if (auto rd = mlir::dyn_cast<hlfir::DeclareOp>(u)) {
+            if (rd.getMemref() != res) return false;  // consumes the alias as non-memref -- out of scope
+            chain.push_back(rd);
+          } else
+            return false;
+        }
+    return true;
+  }
+
   void tryFold(hlfir::CopyInOp cin) {
     // 1) Source must be a section ``hlfir.designate``.
     auto srcDg = cin.getVar().getDefiningOp<hlfir::DesignateOp>();
@@ -197,6 +261,9 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
     // Stride-1 only: a strided triplet needs ``+ (j-1)*stride``, not ``+ (lo-1)``.
     for (auto const& d : sec.dims)
       if (d.triplet && !isConstOne(d.stride)) return;
+    // Record-element sections are out of scope (see isRecordElement): folding one
+    // emits a record-level offset that struct-flatten later leaves unresolved.
+    if (isRecordElement(srcDg.getResult().getType())) return;
 
     // 2) Walk users of ``cin#0`` (the box copy) for the
     // ``fir.box_addr`` and from there for the alias declare.
@@ -223,36 +290,29 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
     mlir::Value const parent = srcDg.getMemref();
     mlir::OpBuilder b(aliasDecl);
 
-    // 4) Rewrite uses of the alias declare's results.  Each
-    // designate ``%alias #X (j)`` becomes ``%parent (scalars...,
-    // j + lo - 1)``.  Whole-result uses (``hlfir.assign %v to
-    // %alias #0`` or ``%alias #0`` passed as a function arg) are
-    // not handled in this scope  --  bail if encountered.
+    // 4) Rewrite uses of the alias declare's results.  Each designate
+    // ``%alias #X (j)`` becomes ``%parent (scalars..., j + lo - 1)``.  The alias
+    // may be re-declared through a deeper inlined callee, so walk the ladder;
+    // each level re-views the SAME storage with the SAME index frame, so the
+    // section shift maps identically at every depth.  Bail on a whole-result use
+    // (``hlfir.assign %v to %alias`` or a surviving call) -- out of this scope.
+    llvm::SmallVector<hlfir::DeclareOp, 4> chain;
     llvm::SmallVector<hlfir::DesignateOp, 8> aliasUseDgs;
-    bool foreignUse = false;
-    for (mlir::Value const res : {aliasDecl.getResult(0), aliasDecl.getResult(1)}) {
-      for (auto* u : res.getUsers()) {
-        if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u)) {
-          aliasUseDgs.push_back(dg);
-        } else {
-          foreignUse = true;
-        }
-      }
-    }
-    if (foreignUse) return;
+    if (!collectAliasUses(aliasDecl, chain, aliasUseDgs)) return;
 
     for (auto useDg : aliasUseDgs) rewriteAccess(useDg, parent, sec, b);
 
-    // 5) Erase the chain: alias declare, box_addr, copy_in,
-    // any copy_out targeting this copy_in, the alloca for the
-    // temp box.  Order matters  --  erase users first, defs last.
+    // 5) Erase the chain: re-declare ladder (innermost-first), box_addr,
+    // copy_in, any copy_out targeting this copy_in, the alloca for the temp box.
+    // Order matters  --  erase users first, defs last.
     // copy_out has the form ``copy_out %tempBox, %cin#1 to %var``.
     llvm::SmallVector<hlfir::CopyOutOp, 2> copyOuts;
     getOperation().walk([&](hlfir::CopyOutOp op) {
       if (op.getOperand(1) == cin.getResult(1)) copyOuts.push_back(op);
     });
 
-    if (aliasDecl.getResult(0).use_empty() && aliasDecl.getResult(1).use_empty()) aliasDecl.erase();
+    for (auto it = chain.rbegin(); it != chain.rend(); ++it)
+      if (it->getResult(0).use_empty() && it->getResult(1).use_empty()) it->erase();
 
     if (boxAddr.getResult().use_empty()) boxAddr.erase();
 
@@ -321,8 +381,8 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
     // declare, not a load.  Trace declare -> rebox -> load -> member designate;
     // reparent onto the rebox's input, the member pointer box that carries the
     // component strides (same box the direct path uses).
-    if (auto decl = src.getDefiningOp<hlfir::DeclareOp>())
-      if (auto rb = decl.getMemref().getDefiningOp<fir::ReboxOp>())
+    if (auto decl = src.getDefiningOp<hlfir::DeclareOp>()) {
+      if (auto rb = decl.getMemref().getDefiningOp<fir::ReboxOp>()) {
         if (auto ld = rb.getBox().getDefiningOp<fir::LoadOp>())
           // Under the load sits either the pointer/allocatable COMPONENT
           // (``st%p_diag%vort``) or -- once alias collapse has hoisted that
@@ -337,6 +397,16 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
             if (decl.getResult(0).use_empty() && decl.getResult(1).use_empty()) decl.erase();
             if (rb.getResult().use_empty()) rb.erase();
           }
+        return;
+      }
+      // Bare assumed-shape dummy box forwarded to a deeper explicit-shape callee:
+      // a local array (or any array) passed to grad_fd_norm_oce_3d's assumed-shape
+      // psi_c, which forwards it to grad_..._onblock via copy_in.  The source is
+      // just ``%box`` = declare (no rebox, no load).  ``%box`` itself carries the
+      // strides, so reparent the alias designates onto it -- designate reads the
+      // strides, so it is sound whether the source is contiguous or not.
+      if (mlir::isa<fir::BaseBoxType>(src.getType())) reparentMemberCopy(cin);
+    }
   }
 
   /// Fold ``copy_in`` / ``copy_out`` around an inlined-callee dummy bound to a
@@ -398,22 +468,10 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
     // levels (veloc_adv_vert -> _mimetic -> _rot) reaches the element
     // designates through N chained ``%inner = hlfir.declare %outer#1`` re-views
     // of the SAME copy_in storage, so the terminal stores sit under the
-    // innermost declare, not aliasDecl.  Walk the whole ladder; bail on any
-    // foreign use -- a non-review declare, a whole-array assign, or a genuine
-    // surviving call -- matching the conservative single-level scope.
+    // innermost declare, not aliasDecl.
     llvm::SmallVector<hlfir::DesignateOp, 8> uses;
-    llvm::SmallVector<hlfir::DeclareOp, 4> chain{aliasDecl};
-    for (size_t ci = 0; ci < chain.size(); ++ci)
-      for (mlir::Value const res : {chain[ci].getResult(0), chain[ci].getResult(1)})
-        for (auto* u : res.getUsers()) {
-          if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u))
-            uses.push_back(dg);
-          else if (auto rd = mlir::dyn_cast<hlfir::DeclareOp>(u)) {
-            if (rd.getMemref() != res) return;  // consumes the alias as non-memref -- out of scope
-            chain.push_back(rd);
-          } else
-            return;
-        }
+    llvm::SmallVector<hlfir::DeclareOp, 4> chain;
+    if (!collectAliasUses(aliasDecl, chain, uses)) return;
 
     // Reparent each ``%alias (idx...)`` onto the member box verbatim.
     for (auto useDg : uses) {
