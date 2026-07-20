@@ -232,20 +232,47 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
   ///     stride-walk a frame it never got = heap OOB.  Reparent the alias
   ///     accesses onto the member box (``reparentMemberCopy``) -- designate
   ///     reads the box strides, so it is correct for a strided target.
+  ///   * ``declare(rebox(load(designate)))`` -- the same component forwarded
+  ///     through an assumed-shape dummy (``e(:,:,:)``) before the explicit-shape
+  ///     callee.  Trace past the rebox to the member and reparent identically.
+  static bool isPtrOrAllocDesignate(hlfir::DesignateOp dg) {
+    auto attrs = dg.getFortranAttrs();
+    return attrs && bitEnumContainsAny(*attrs, fir::FortranVariableFlagsEnum::pointer |
+                                                   fir::FortranVariableFlagsEnum::allocatable);
+  }
+
   void dispatchNonSectionSource(hlfir::CopyInOp cin) {
-    auto ld = cin.getVar().getDefiningOp<fir::LoadOp>();
-    if (!ld) return;
-    mlir::Value const memref = ld.getMemref();
-    if (memref.getDefiningOp<hlfir::DeclareOp>()) {
-      tryFoldViewSource(cin);
+    mlir::Value const src = cin.getVar();
+    if (auto ld = src.getDefiningOp<fir::LoadOp>()) {
+      mlir::Value const memref = ld.getMemref();
+      if (memref.getDefiningOp<hlfir::DeclareOp>()) {
+        tryFoldViewSource(cin);
+        return;
+      }
+      if (auto memDg = memref.getDefiningOp<hlfir::DesignateOp>())
+        if (isPtrOrAllocDesignate(memDg))
+          reparentMemberCopy(cin);
       return;
     }
-    if (auto memDg = memref.getDefiningOp<hlfir::DesignateOp>()) {
-      auto attrs = memDg.getFortranAttrs();
-      if (attrs && bitEnumContainsAny(*attrs, fir::FortranVariableFlagsEnum::pointer |
-                                                  fir::FortranVariableFlagsEnum::allocatable))
-        reparentMemberCopy(cin);
-    }
+    // Assumed-shape forward: an explicit-shape callee reached through an
+    // assumed-shape dummy (veloc_adv_vert: p_diag%veloc_adv_vert -> dispatch
+    // e(:,:,:) -> writer e(n1,n2,nb)).  Flang reboxes the pointer member into an
+    // assumed-shape box, re-declares it, and copy_in's THAT -- so the source is a
+    // declare, not a load.  Trace declare -> rebox -> load -> member designate;
+    // reparent onto the rebox's input, the member pointer box that carries the
+    // component strides (same box the direct path uses).
+    if (auto decl = src.getDefiningOp<hlfir::DeclareOp>())
+      if (auto rb = decl.getMemref().getDefiningOp<fir::ReboxOp>())
+        if (auto ld = rb.getBox().getDefiningOp<fir::LoadOp>())
+          if (auto memDg = ld.getMemref().getDefiningOp<hlfir::DesignateOp>())
+            if (isPtrOrAllocDesignate(memDg)) {
+              reparentMemberCopy(cin, ld.getResult());
+              // The reboxed assumed-shape dummy declare + rebox are now dead
+              // (their only uses were the folded copy_in/out); drop them so they
+              // don't leak as a phantom array.  Users already gone via reparent.
+              if (decl.getResult(0).use_empty() && decl.getResult(1).use_empty()) decl.erase();
+              if (rb.getResult().use_empty()) rb.erase();
+            }
   }
 
   /// Fold ``copy_in`` / ``copy_out`` around an inlined-callee dummy bound to a
@@ -259,11 +286,20 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
   /// The member box carries the component's strides, so designate hits the right
   /// element even when the target is non-contiguous (box_addr aliasing would
   /// lose the strides = heap OOB).  Erasing the alias declare also drops the
-  /// phantom ``v`` from the signature.  Bails on any non-designate use of the
-  /// alias (whole-array assign / nested call), leaving the drop in place rather
-  /// than risk a wrong rewrite -- matches the section path's conservative scope.
-  void reparentMemberCopy(hlfir::CopyInOp cin) {
-    mlir::Value const memberBox = cin.getVar();  // box<ptr<array>> -- carries strides
+  /// phantom ``v`` from the signature.  Follows the ladder of per-level dummy
+  /// re-declares that inlining a forwarding chain leaves (the actual reaches the
+  /// stores through one ``hlfir.declare`` re-view per callee level), reparenting
+  /// the terminal designates and erasing the whole ladder.  Verbatim reparent
+  /// makes this sound at any depth (no section offset to compose).  Bails on a
+  /// non-review declare or any other non-designate use (whole-array assign /
+  /// surviving call), leaving the drop in place rather than risk a wrong rewrite.
+  void reparentMemberCopy(hlfir::CopyInOp cin) { reparentMemberCopy(cin, cin.getVar()); }
+
+  /// ``memberBox`` is the stride-carrying box the alias accesses reparent onto:
+  /// the loaded pointer/allocatable box.  Usually ``cin.getVar()`` (member passed
+  /// straight to the explicit-shape callee), but for an assumed-shape forward it
+  /// is the member box UNDER the rebox that produced the assumed-shape dummy.
+  void reparentMemberCopy(hlfir::CopyInOp cin, mlir::Value memberBox) {  // box<ptr<array>> -- carries strides
 
     // copy_in#0 -> fir.box_addr -> (fir.convert)? -> hlfir.declare (alias ``v``).
     fir::BoxAddrOp boxAddr;
@@ -293,15 +329,27 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
     }
     if (!aliasDecl) return;
 
-    // Collect alias-use designates; bail on any foreign (non-designate) use.
+    // Collect alias-use designates, following the ladder of per-level dummy
+    // re-declares that inlining leaves.  An actual forwarded through N callee
+    // levels (veloc_adv_vert -> _mimetic -> _rot) reaches the element
+    // designates through N chained ``%inner = hlfir.declare %outer#1`` re-views
+    // of the SAME copy_in storage, so the terminal stores sit under the
+    // innermost declare, not aliasDecl.  Walk the whole ladder; bail on any
+    // foreign use -- a non-review declare, a whole-array assign, or a genuine
+    // surviving call -- matching the conservative single-level scope.
     llvm::SmallVector<hlfir::DesignateOp, 8> uses;
-    for (mlir::Value const res : {aliasDecl.getResult(0), aliasDecl.getResult(1)})
-      for (auto* u : res.getUsers()) {
-        if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u))
-          uses.push_back(dg);
-        else
-          return;
-      }
+    llvm::SmallVector<hlfir::DeclareOp, 4> chain{aliasDecl};
+    for (size_t ci = 0; ci < chain.size(); ++ci)
+      for (mlir::Value const res : {chain[ci].getResult(0), chain[ci].getResult(1)})
+        for (auto* u : res.getUsers()) {
+          if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u))
+            uses.push_back(dg);
+          else if (auto rd = mlir::dyn_cast<hlfir::DeclareOp>(u)) {
+            if (rd.getMemref() != res) return;  // consumes the alias as non-memref -- out of scope
+            chain.push_back(rd);
+          } else
+            return;
+        }
 
     // Reparent each ``%alias (idx...)`` onto the member box verbatim.
     for (auto useDg : uses) {
@@ -323,13 +371,16 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
       useDg.erase();
     }
 
-    // Erase the now-dead chain: alias declare, convert, box_addr, copy_out(s),
-    // copy_in, temp box.  Users first, defs last.
+    // Erase the now-dead chain: re-declare ladder, convert, box_addr,
+    // copy_out(s), copy_in, temp box.  Users first, defs last.
     llvm::SmallVector<hlfir::CopyOutOp, 2> copyOuts;
     getOperation().walk([&](hlfir::CopyOutOp op) {
       if (op.getOperand(1) == cin.getResult(1)) copyOuts.push_back(op);
     });
-    if (aliasDecl.getResult(0).use_empty() && aliasDecl.getResult(1).use_empty()) aliasDecl.erase();
+    // Erase the re-declare ladder innermost-first: the terminal designates are
+    // gone, so the inner declare is dead, which frees the outer, up to aliasDecl.
+    for (auto it = chain.rbegin(); it != chain.rend(); ++it)
+      if (it->getResult(0).use_empty() && it->getResult(1).use_empty()) it->erase();
     if (convert && convert.getResult().use_empty()) convert.erase();
     if (boxAddr.getResult().use_empty()) boxAddr.erase();
     for (auto co : copyOuts) co.erase();

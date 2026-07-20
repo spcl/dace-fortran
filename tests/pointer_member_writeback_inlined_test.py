@@ -66,3 +66,126 @@ def test_writeback_through_whole_pointer_member_inlined(tmp_path: Path):
     j = np.arange(1, n2 + 1, dtype=np.float64)[None, :]
     expected = i + 100.0 * j
     np.testing.assert_array_equal(vort, expected)
+
+
+# The veloc_adv_vert -> _mimetic -> _rot idiom: the pointer member is FORWARDED through two
+# callee levels before it is written, plus a whole-plane section zero-init on the dummy.
+_SRC_CHAIN = """
+module mo_wb2
+  implicit none
+  type diag_t
+    real(8), pointer :: vort(:, :, :)
+  end type
+  type state_t
+    type(diag_t) :: p_diag
+  end type
+contains
+  subroutine inner(x, n1, n2, nb, sb, eb)
+    integer, intent(in) :: n1, n2, nb, sb, eb
+    real(8), intent(inout) :: x(n1, n2, nb)
+    integer :: b, i, j
+    do b = sb, eb
+      x(:, :, b) = 0.0d0
+      do j = 1, n2
+        do i = 1, n1
+          x(i, j, b) = real(i, 8) + 100.0d0 * real(j, 8)
+        end do
+      end do
+    end do
+  end subroutine inner
+  subroutine outer(y, n1, n2, nb, sb, eb)
+    integer, intent(in) :: n1, n2, nb, sb, eb
+    real(8), intent(inout) :: y(n1, n2, nb)
+    call inner(y, n1, n2, nb, sb, eb)
+  end subroutine outer
+  subroutine run(st, n1, n2, nb, sb, eb)
+    type(state_t), intent(inout) :: st
+    integer, intent(in) :: n1, n2, nb, sb, eb
+    call outer(st % p_diag % vort, n1, n2, nb, sb, eb)
+  end subroutine run
+end module mo_wb2
+"""
+
+
+def test_writeback_through_forwarding_chain_inlined(tmp_path: Path):
+    """Member forwarded through TWO inlined levels (outer -> inner). Each level re-declares the
+    dummy, so the copy_in temp reaches the stores through a ladder of ``hlfir.declare`` re-views.
+    reparentMemberCopy must follow the whole ladder; before the fix it saw the inner re-declare as
+    a foreign use, bailed, and the writes landed in a disconnected phantom ``y`` (member untouched)."""
+    sdfg = build_sdfg(_SRC_CHAIN, tmp_path / "sdfg", name="run", entry="mo_wb2::run").build()
+    sdfg.validate()
+
+    # No phantom re-declare temp (``y`` from outer, ``x`` from inner) leaks as a top-level array.
+    for phantom in ("x", "y"):
+        assert phantom not in sdfg.arrays, f"phantom re-declare temp leaked: {sorted(sdfg.arrays)}"
+
+    n1, n2, nb = 3, 4, 2
+    vort = np.zeros((n1, n2, nb), dtype=np.float64, order="F")
+    sdfg(st_p_diag_vort=vort, n1=np.int32(n1), n2=np.int32(n2), nb=np.int32(nb), sb=np.int32(1), eb=np.int32(nb))
+
+    i = np.arange(1, n1 + 1, dtype=np.float64)[:, None]
+    j = np.arange(1, n2 + 1, dtype=np.float64)[None, :]
+    expected = i + 100.0 * j
+    for b in range(nb):
+        np.testing.assert_array_equal(vort[:, :, b], expected)
+
+
+# The veloc_adv_vert_mimetic idiom: the pointer member reaches the explicit-shape writer through an
+# ASSUMED-shape dummy. Flang reboxes the pointer member into an assumed-shape box and copy_in's THAT
+# for contiguity, so the copy_in source is a declare(rebox(load(designate))), not a plain load.
+_SRC_ASSUMED = """
+module mo_wb3
+  implicit none
+  type diag_t
+    real(8), pointer :: e(:, :, :)
+  end type
+  type state_t
+    type(diag_t) :: p_diag
+  end type
+contains
+  subroutine writer(e, n1, n2, nb, sb, eb)
+    integer, intent(in) :: n1, n2, nb, sb, eb
+    real(8), intent(inout) :: e(n1, n2, nb)        ! explicit shape
+    integer :: b, i, j
+    do b = sb, eb
+      e(:, :, b) = 0.0d0
+      do j = 1, n2
+        do i = 1, n1
+          e(i, j, b) = real(i, 8) + 100.0d0 * real(j, 8)
+        end do
+      end do
+    end do
+  end subroutine writer
+  subroutine dispatch(e, n1, n2, nb, sb, eb)
+    integer, intent(in) :: n1, n2, nb, sb, eb
+    real(8), intent(inout) :: e(:, :, :)            ! assumed shape
+    call writer(e, n1, n2, nb, sb, eb)
+  end subroutine dispatch
+  subroutine run(st, n1, n2, nb, sb, eb)
+    type(state_t), intent(inout) :: st
+    integer, intent(in) :: n1, n2, nb, sb, eb
+    call dispatch(st % p_diag % e, n1, n2, nb, sb, eb)
+  end subroutine run
+end module mo_wb3
+"""
+
+
+def test_writeback_through_assumed_shape_forward_inlined(tmp_path: Path):
+    """Member forwarded through an ASSUMED-shape dummy then an explicit-shape writer. The copy_in
+    source is declare(rebox(load(designate))); dispatchNonSectionSource must trace past the rebox to
+    the pointer member. Before the fix that copy_in matched neither fold path -> phantom ``e``, member
+    left untouched (the residual solve_free_sfc veloc_adv_vert plane drop)."""
+    sdfg = build_sdfg(_SRC_ASSUMED, tmp_path / "sdfg", name="run", entry="mo_wb3::run").build()
+    sdfg.validate()
+
+    assert "e" not in sdfg.arrays, f"phantom assumed-shape copy-in temp leaked: {sorted(sdfg.arrays)}"
+
+    n1, n2, nb = 3, 4, 2
+    e = np.zeros((n1, n2, nb), dtype=np.float64, order="F")
+    sdfg(st_p_diag_e=e, n1=np.int32(n1), n2=np.int32(n2), nb=np.int32(nb), sb=np.int32(1), eb=np.int32(nb))
+
+    i = np.arange(1, n1 + 1, dtype=np.float64)[:, None]
+    j = np.arange(1, n2 + 1, dtype=np.float64)[None, :]
+    expected = i + 100.0 * j
+    for b in range(nb):
+        np.testing.assert_array_equal(e[:, :, b], expected)
