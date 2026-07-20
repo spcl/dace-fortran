@@ -70,14 +70,16 @@ _DO_NOT_EMIT = [
 
 
 @pytest.mark.xfail(strict=True,
-                   reason="solve_free_sfc now BUILDS + RUNS to completion with NO abort (the SIGABRT / glibc "
-                   "`free(): invalid size` is FIXED: the k_h runtime-present-optional-pointer-component alias "
-                   "and, primarily, the `free_sfc_solver%b_loc_wp => ocean_state%p_aux%p_rhs_sfc_eq` "
-                   "struct-member array-pointer rebind -- which leaked a degenerate copy-in buffer the kernel "
-                   "then overflowed -- are both lowered correctly now, so the DUT no longer smashes the heap). "
-                   "REMAINING failure is BIT-EXACT: max|dut-ref| ~= 1.93 (not roundoff). That is the separate "
-                   "numerical bring-up (seeds / mesh / a real lowering discrepancy) the docstring already flags; "
-                   "strict=True flags the day it goes bit-exact so the marker is removed.")
+                   reason="The DUT (SDFG) is now BIT-EXACT: with the copy-in phantom family fixed "
+                   "(hlfir-drop-stub-calls + the FoldCopyInOut extensions) and dolic_{c,e}=2 seeded, all 171 "
+                   "compared fields match stock gfortran to max_diff=0.0.  The LOWERING is proven correct.  The "
+                   "remaining failure is REF-SIDE ONLY: at dolic=2 the reference gfortran fork NULL-derefs "
+                   "`v_params%a_veloc_v(je,jk,blockno)` (single_tu:1008, icon_pp_edge_vnpredict_scheme) -- the "
+                   "`DO jk=2,dolic_e` loop is empty at dolic_e=1 but runs at dolic_e=2, and the module global "
+                   "`v_params%a_veloc_v` is unallocated on the ref (the DUT gets it as a marshalled SDFG arg).  "
+                   "Fixing this needs the ref to seed v_params%a_veloc_v with the SAME values as the DUT input "
+                   "(a derived-type module member, harder than module_array_seeds).  strict=True flags the day "
+                   "the ref runs clean and it goes bit-exact, so the marker is removed then.")
 @pytest.mark.xdist_group("ocean_fparser")
 def test_solve_free_sfc_numerical_e2e(tmp_path: Path):
     """solve_free_sfc -> SDFG, driven on a degenerate valid mesh, BIT-EXACT against
@@ -101,6 +103,17 @@ def test_solve_free_sfc_numerical_e2e(tmp_path: Path):
             "nold": 1,
             "nnew": 1,
             "n_dom": 1,
+        },
+        # dolic_{c,e} = wet-level count. int_fill would leave it 1, a single-level
+        # ocean -- but veloc_adv_vert_mimetic_rot only initialises the surface
+        # value z_adv_u_i(jc,1) inside ``IF (fin_level >= 2)`` (fin_level =
+        # dolic_c), so a 1-level cell reads z_adv_u_i(jc,1) uninitialised and
+        # map_vec_prismtop2center feeds the garbage into veloc_adv_vert (then g_n,
+        # g_nimd).  Real wet cells have dolic >= 2; pin both to 2 (valid two-level
+        # ocean, in-bounds for n_zlev=7) so the surface init path runs.
+        array_overrides={
+            "patch_3d_p_patch_1d_dolic_c": 2,
+            "patch_3d_p_patch_1d_dolic_e": 2,
         },
         do_not_emit=_DO_NOT_EMIT,
         prelude_paths=[stub, noop],

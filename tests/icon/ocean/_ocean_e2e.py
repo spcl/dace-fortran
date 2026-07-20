@@ -588,6 +588,10 @@ def _build_and_compare(tu_path: Path,
     # -- a reference that needs this to be reproducible is itself the bug.
     _finit = ["-finit-real=snan", "-finit-integer=-99999999", "-fbacktrace", "-g"
               ] if os.environ.get("OCEAN_E2E_FINIT") else []
+    # OCEAN_E2E_ASAN: instrument the REF too so a real heap-buffer-overflow (not a
+    # benign 8-vs-n_zlev array-conformance, which -fcheck=bounds would false-flag)
+    # reports a precise line.  Run pytest with LD_PRELOAD=$(gcc -print-file-name=libasan.so).
+    _asan_ref = ["-fsanitize=address", "-fno-omit-frame-pointer", "-g"] if os.environ.get("OCEAN_E2E_ASAN") else []
     r = subprocess.run(
         [
             "gfortran",
@@ -598,6 +602,7 @@ def _build_and_compare(tu_path: Path,
             "-ffp-contract=off",
             "-fno-fast-math",
             *_finit,
+            *_asan_ref,
             "-o",
             str(ref_so),
             # Prelude (mpi stub + no-op impls) compiles ahead of the TU so use mpi
