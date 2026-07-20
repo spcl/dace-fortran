@@ -77,6 +77,13 @@ from dace_fortran.builder.emit_tasklet import emit_scalar_assign, emit_tasklet
 
 # Default bridge pass pipeline.  Order matters  --  see ``README.md``.
 DEFAULT_PIPELINE = (
+    # Erases calls to do_not_emit (stub) procedures FIRST. Their calls are
+    # dropped at SDFG emission regardless, but until then each one is an opaque
+    # USE of whatever it was passed, which blocks sound rewrites downstream: a
+    # dropped dbg_print_3d holding a copy-in temp made hlfir-fold-copy-in-out
+    # bail, so the pair survived as a zero-filled phantom argument and every
+    # write through it was silently dropped. No-op when nothing is stubbed.
+    "hlfir-drop-stub-calls,"
     # Erase dispatch-table bindings (``fir.dt_entry``) the entry never
     # dynamically invokes, so the symbol-dce below can drop the unreachable
     # (often polymorphic, e.g. ``fir.select_type`` over a ``class(*)`` key)
@@ -611,6 +618,12 @@ class SDFGBuilder:
             # ``patch``) for a call that will not exist.
             emit_names = [n for n in ext_names if not lookup_external(n).stub]
             self.module.set_external_symbols(emit_names)
+            # And the stub half, so hlfir-drop-stub-calls can erase their calls
+            # before any other pass sees them.  The call is dropped at emission
+            # either way; left in the IR it is an opaque USE that blocks sound
+            # rewrites (a dropped dbg_print holding a copy-in temp defeated
+            # hlfir-fold-copy-in-out and silently dropped writes to the temp).
+            self.module.set_stub_symbols([n for n in ext_names if lookup_external(n).stub])
 
         # Run bridge passes BEFORE extracting variables so assumed-shape
         # dummies pick up real names and the rest of the rewrites have

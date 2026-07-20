@@ -218,6 +218,7 @@ add_library(hlfir_bridge_passes STATIC
     passes/DefaultIntent.cpp
     passes/VerifyNoUnresolvedCalls.cpp
     passes/FoldElementAliases.cpp
+    passes/DropStubCalls.cpp
     passes/FoldCopyInOut.cpp
     passes/ExpandVectorSubscriptGather.cpp
     passes/ExpandVectorSubscriptScatter.cpp

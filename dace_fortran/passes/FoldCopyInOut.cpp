@@ -24,22 +24,35 @@
 //     pattern (``memlet_in_map_test``, ``type_array_slice``, the
 //     ``noncontiguous_*`` cluster) silently produce wrong values.
 //
-// What the pass does (simple-section scope):
+// What the pass does (stride-1 section scope):
 //     For each ``hlfir.copy_in`` whose source is a ``hlfir.designate``
-//     with EXACTLY ONE TRAILING TRIPLET (stride 1) and arbitrary scalar
-//     prefix, fold the alias-side accesses back to the parent:
+//     section with ANY NUMBER of stride-1 triplets and any number of
+//     scalar dims, fold the alias-side accesses back to the parent.
+//     The alias carries one dimension per SOURCE TRIPLET (scalar source
+//     dims are collapsed away), so the rebuild walks source dims in
+//     order and consumes one alias dim per triplet:
 //
-//         %alias #0 (j)  ->  %parent (scalars..., j + lo - 1)
+//         arr(i, lo:hi)  ->  %alias(j)     -> %parent(i, j + lo - 1)
+//         arr(:, :, blk) ->  %alias(j, k)  -> %parent(j, k, blk)
+//         arr(:, 1, :)   ->  %alias(j, k)  -> %parent(j, 1, k)
+//
+//     The last one is why dims are walked in order rather than as a
+//     scalar prefix plus a trailing triplet: the scalar sits in the
+//     MIDDLE of the rebuilt index list.
 //
 //     ``copy_in`` / ``copy_out`` and the heap buffer alloca then erase
 //     because nothing references them.  The chain below the alias
 //     declare reads / writes ``%parent`` directly.
 //
+// Unfoldable pairs are REJECTED, not left alone (``rejectSurvivors``):
+//     the bridge does not model copy_in / copy_out, so a surviving pair
+//     becomes a zero-filled phantom SDFG argument whose writes are
+//     dropped.  Emitting that is a silent wrong answer, so the pass
+//     fails the pipeline instead.
+//
 // Out of scope (left for follow-ups):
 //     * Non-stride-1 triplets (``arr(1:N:2)``).  Would need an index
 //       multiply ``+ (j-1)*stride`` instead of the current ``+ (lo-1)``.
-//     * Multiple triplets (``arr(:, :)``).  Alias is then multi-D and
-//       the per-dim mapping needs more care.
 //     * Non-section sources are handled separately: a POINTER *variable*
 //       view alias-folds (``tryFoldViewSource``); a POINTER / ALLOCATABLE
 //       *component* reparents its alias accesses onto the member box
@@ -60,47 +73,49 @@ namespace hlfir_bridge {
 
 namespace {
 
-/// Walk a designate's per-dim ``isTriplet`` flags + flat index list,
-/// extracting the scalar-prefix indices and the single trailing
-/// triplet's ``(lo, hi, stride)``.  Returns false when the source
-/// shape is outside the simple-section scope (zero or multi triplets,
-/// or the cursor logic mismatches the operand layout).
-struct SectionShape {
-  llvm::SmallVector<mlir::Value, 4> scalars;
-  unsigned tripletDim;  // index in is_triplet flag list
-  mlir::Value tripLo;
-  mlir::Value tripHi;
-  mlir::Value tripStride;
+/// One dimension of a source designate: either a scalar index (``lo`` holds it)
+/// or a ``lo:hi:stride`` triplet.
+struct DimIdx {
+  bool triplet;
+  mlir::Value lo;
+  mlir::Value hi;
+  mlir::Value stride;
 };
 
-bool parseSimpleSection(hlfir::DesignateOp dg, SectionShape& out) {
+/// A section source, one entry per source dimension in declaration order.
+/// Dimension order is what makes ``arr(:, 1, :)`` work: the scalar has to stay
+/// in the middle of the rebuilt index list, so the dims cannot be split into a
+/// "scalar prefix" plus a trailing triplet.
+struct SectionShape {
+  llvm::SmallVector<DimIdx, 4> dims;
+  unsigned tripletCount = 0;
+};
+
+/// Walk a designate's per-dim ``isTriplet`` flags + flat index list (3 operands
+/// per triplet dim, 1 per scalar dim).  Returns false when the operand layout
+/// disagrees with the flags, or when the source is not a section at all.
+bool parseSection(hlfir::DesignateOp dg, SectionShape& out) {
   auto trip = dg.getIsTripletAttr();
   if (!trip) return false;
   auto tripFlags = trip.asArrayRef();
   if (tripFlags.empty()) return false;
 
-  unsigned tripletCount = 0;
-  for (bool const t : tripFlags)
-    if (t) tripletCount++;
-  if (tripletCount != 1) return false;
-
   auto idxRange = dg.getIndices();
   unsigned cursor = 0;
-  for (unsigned i = 0; i < tripFlags.size(); ++i) {
-    if (tripFlags[i]) {
+  for (bool const isT : tripFlags) {
+    if (isT) {
       if (cursor + 3 > idxRange.size()) return false;
-      out.tripletDim = i;
-      out.tripLo = idxRange[cursor];
-      out.tripHi = idxRange[cursor + 1];
-      out.tripStride = idxRange[cursor + 2];
+      out.dims.push_back({true, idxRange[cursor], idxRange[cursor + 1], idxRange[cursor + 2]});
       cursor += 3;
+      out.tripletCount++;
     } else {
       if (cursor + 1 > idxRange.size()) return false;
-      out.scalars.push_back(idxRange[cursor]);
+      out.dims.push_back({false, idxRange[cursor], {}, {}});
       cursor += 1;
     }
   }
-  return true;
+  if (cursor != idxRange.size()) return false;
+  return out.tripletCount > 0;
 }
 
 /// Trace ``v`` to a constant ``index``-typed integer if possible.
@@ -131,13 +146,43 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
   llvm::StringRef getArgument() const final { return "hlfir-fold-copy-in-out"; }
   llvm::StringRef getDescription() const final {
     return "Fold hlfir.copy_in / hlfir.copy_out pairs around inlined-callee "
-           "alias declares (single-trailing-triplet stride-1 sections only).";
+           "alias declares (stride-1 sections); reject pairs that cannot fold.";
   }
 
   void runOnOperation() override {
     llvm::SmallVector<hlfir::CopyInOp, 16> copies;
     getOperation().walk([&](hlfir::CopyInOp op) { copies.push_back(op); });
     for (auto cin : copies) tryFold(cin);
+    rejectSurvivors();
+  }
+
+  // A pair the fold could not match is NOT benign.  The bridge does not model
+  // copy_in / copy_out, so the temporary surfaces as an SDFG argument that the
+  // binding shim allocates and zero-fills: writes through it are dropped and
+  // reads see zeros.  That is a silent wrong answer, so refuse the program
+  // instead of emitting it -- same contract as ``hlfir-reject-polymorphism``.
+  void rejectSurvivors() {
+    bool failed = false;
+    getOperation().walk([&](hlfir::CopyInOp op) {
+      op.emitError("hlfir-fold-copy-in-out: ``hlfir.copy_in`` survived the fold for ")
+          << sourceName(op)
+          << ".  The bridge cannot model a copy-in/copy-out pair: the temporary "
+             "would become an uninitialised SDFG argument, so writes through it "
+             "are dropped and reads see zeros.  Pass a contiguous whole array (or "
+             "a stride-1 section the fold covers) instead of this actual argument.";
+      failed = true;
+    });
+    if (failed) signalPassFailure();
+  }
+
+  // Best-effort Fortran name behind a copy_in source, for the diagnostic.
+  static std::string sourceName(hlfir::CopyInOp cin) {
+    mlir::Value v = cin.getVar();
+    if (auto dg = v.getDefiningOp<hlfir::DesignateOp>()) v = dg.getMemref();
+    if (auto ld = v.getDefiningOp<fir::LoadOp>()) v = ld.getMemref();
+    if (auto decl = v.getDefiningOp<hlfir::DeclareOp>())
+      return (llvm::Twine("``") + decl.getUniqName().getValue() + "``").str();
+    return "<unnamed actual argument>";
   }
 
   void tryFold(hlfir::CopyInOp cin) {
@@ -148,8 +193,10 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
       return;
     }
     SectionShape sec;
-    if (!parseSimpleSection(srcDg, sec)) return;
-    if (!isConstOne(sec.tripStride)) return;
+    if (!parseSection(srcDg, sec)) return;
+    // Stride-1 only: a strided triplet needs ``+ (j-1)*stride``, not ``+ (lo-1)``.
+    for (auto const& d : sec.dims)
+      if (d.triplet && !isConstOne(d.stride)) return;
 
     // 2) Walk users of ``cin#0`` (the box copy) for the
     // ``fir.box_addr`` and from there for the alias declare.
@@ -241,6 +288,19 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
                                                    fir::FortranVariableFlagsEnum::allocatable);
   }
 
+  /// True when ``v`` is defined by a POINTER / ALLOCATABLE component designate or
+  /// by a POINTER / ALLOCATABLE variable declare -- the two shapes that put a
+  /// stride-carrying box behind a ``fir.load``.
+  static bool isPtrOrAllocSource(mlir::Value v) {
+    if (auto dg = v.getDefiningOp<hlfir::DesignateOp>()) return isPtrOrAllocDesignate(dg);
+    if (auto decl = v.getDefiningOp<hlfir::DeclareOp>()) {
+      auto attrs = decl.getFortranAttrs();
+      return attrs && bitEnumContainsAny(*attrs, fir::FortranVariableFlagsEnum::pointer |
+                                                     fir::FortranVariableFlagsEnum::allocatable);
+    }
+    return false;
+  }
+
   void dispatchNonSectionSource(hlfir::CopyInOp cin) {
     mlir::Value const src = cin.getVar();
     if (auto ld = src.getDefiningOp<fir::LoadOp>()) {
@@ -264,15 +324,19 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
     if (auto decl = src.getDefiningOp<hlfir::DeclareOp>())
       if (auto rb = decl.getMemref().getDefiningOp<fir::ReboxOp>())
         if (auto ld = rb.getBox().getDefiningOp<fir::LoadOp>())
-          if (auto memDg = ld.getMemref().getDefiningOp<hlfir::DesignateOp>())
-            if (isPtrOrAllocDesignate(memDg)) {
-              reparentMemberCopy(cin, ld.getResult());
-              // The reboxed assumed-shape dummy declare + rebox are now dead
-              // (their only uses were the folded copy_in/out); drop them so they
-              // don't leak as a phantom array.  Users already gone via reparent.
-              if (decl.getResult(0).use_empty() && decl.getResult(1).use_empty()) decl.erase();
-              if (rb.getResult().use_empty()) rb.erase();
-            }
+          // Under the load sits either the pointer/allocatable COMPONENT
+          // (``st%p_diag%vort``) or -- once alias collapse has hoisted that
+          // component to a top-level pointer dummy -- the pointer VARIABLE
+          // declare for it.  Either way ``ld`` is the stride-carrying box that
+          // names the real destination, so both reparent identically.
+          if (isPtrOrAllocSource(ld.getMemref())) {
+            reparentMemberCopy(cin, ld.getResult());
+            // The reboxed assumed-shape dummy declare + rebox are now dead
+            // (their only uses were the folded copy_in/out); drop them so they
+            // don't leak as a phantom array.  Users already gone via reparent.
+            if (decl.getResult(0).use_empty() && decl.getResult(1).use_empty()) decl.erase();
+            if (rb.getResult().use_empty()) rb.erase();
+          }
   }
 
   /// Fold ``copy_in`` / ``copy_out`` around an inlined-callee dummy bound to a
@@ -437,81 +501,70 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
     b.setInsertionPoint(useDg);
     auto loc = useDg.getLoc();
 
-    // Shift the leaf indices into the parent's frame.  For each
-    // alias dim (which is the alias's own 1..N-style index), the
-    // parent index is ``alias_idx + lo - 1``.  Stride-1 only  --
-    // the caller filters strides out before reaching here.
-    mlir::Value loMinusOne;
-    auto loConst = traceConstIndex(sec.tripLo);
-    if (loConst && *loConst == 1) {
-      // Common Fortran default ``arr(:)`` lo = 1, no shift
-      // needed.
-      loMinusOne = {};
-    } else {
-      mlir::Value lo = sec.tripLo;
-      // Promote to index if needed.
-      if (!lo.getType().isIndex()) {
-        lo = b.create<fir::ConvertOp>(loc, b.getIndexType(), lo);
-      }
-      mlir::Value const one = b.create<mlir::arith::ConstantOp>(loc, b.getIndexType(), b.getIndexAttr(1));
-      loMinusOne = b.create<mlir::arith::SubIOp>(loc, lo, one);
-    }
-
-    // Build the new index list: parent's scalar prefix + shifted
-    // alias indices + (no scalars after triplet in this scope).
-    llvm::SmallVector<mlir::Value, 6> newIndices(sec.scalars.begin(), sec.scalars.end());
-    // Walk the alias designate's own indices.  Each may be a
-    // scalar or a triplet (``%alias(1:N:1)`` whole-array shape).
-    // Triplet flags on the alias side carry over verbatim  --  we
-    // just need to shift the ``lo`` and ``hi`` values per-triplet.
+    // The alias has one dimension per SOURCE TRIPLET (scalar source dims are
+    // already collapsed away), so walk the source dims in order and consume one
+    // alias dim per triplet.  Scalar source dims pass through in place, which is
+    // what keeps ``arr(:, 1, :)`` correct.
     auto aliasTripAttr = useDg.getIsTripletAttr();
     auto aliasIdx = useDg.getIndices();
-    llvm::SmallVector<bool, 4> newTripFlags;
-    // Scalar prefix from the section is non-triplet.
-    for (size_t i = 0; i < sec.scalars.size(); ++i) newTripFlags.push_back(false);
 
+    // Split the alias's own flat index list into per-dim entries.
+    llvm::SmallVector<DimIdx, 4> aliasDims;
     if (!aliasTripAttr || aliasTripAttr.asArrayRef().empty()) {
-      // No triplets on alias use; all alias-supplied indices
-      // are scalars.  Each shifts by ``lo-1`` (only one alias
-      // dim corresponds to the source triplet).
-      for (auto idx : aliasIdx) {
-        mlir::Value shifted = idx;
-        if (loMinusOne) {
-          if (!idx.getType().isIndex()) shifted = b.create<fir::ConvertOp>(loc, b.getIndexType(), idx);
-          shifted = b.create<mlir::arith::AddIOp>(loc, shifted, loMinusOne);
-        }
-        newIndices.push_back(shifted);
-        newTripFlags.push_back(false);
-      }
+      for (auto idx : aliasIdx) aliasDims.push_back({false, idx, {}, {}});
     } else {
-      // Mixed: walk per-dim, push lo/hi/stride for triplets
-      // (lo/hi shifted by ``lo-1``), scalar otherwise.
       unsigned cursor = 0;
       for (bool const isT : aliasTripAttr.asArrayRef()) {
         if (isT) {
           if (cursor + 3 > aliasIdx.size()) return;
-          auto shift = [&](mlir::Value v) {
-            if (!loMinusOne) return v;
-            mlir::Value vc = v;
-            if (!v.getType().isIndex()) vc = b.create<fir::ConvertOp>(loc, b.getIndexType(), v);
-            return (mlir::Value)b.create<mlir::arith::AddIOp>(loc, vc, loMinusOne);
-          };
-          newIndices.push_back(shift(aliasIdx[cursor]));
-          newIndices.push_back(shift(aliasIdx[cursor + 1]));
-          newIndices.push_back(aliasIdx[cursor + 2]);
-          newTripFlags.push_back(true);
+          aliasDims.push_back({true, aliasIdx[cursor], aliasIdx[cursor + 1], aliasIdx[cursor + 2]});
           cursor += 3;
         } else {
           if (cursor + 1 > aliasIdx.size()) return;
-          mlir::Value shifted = aliasIdx[cursor];
-          if (loMinusOne) {
-            if (!shifted.getType().isIndex()) shifted = b.create<fir::ConvertOp>(loc, b.getIndexType(), shifted);
-            shifted = b.create<mlir::arith::AddIOp>(loc, shifted, loMinusOne);
-          }
-          newIndices.push_back(shifted);
-          newTripFlags.push_back(false);
+          aliasDims.push_back({false, aliasIdx[cursor], {}, {}});
           cursor += 1;
         }
+      }
+      if (cursor != aliasIdx.size()) return;
+    }
+    if (aliasDims.size() != sec.tripletCount) return;
+
+    // ``parent_idx = alias_idx + (lo - 1)`` for the dim's own lo.  Stride-1 only
+    // -- the caller filters strided triplets out before reaching here.
+    auto lowerShift = [&](mlir::Value lo) -> mlir::Value {
+      auto loConst = traceConstIndex(lo);
+      if (loConst && *loConst == 1) return {};  // ``arr(:)`` default lo = 1: no shift
+      mlir::Value l = lo;
+      if (!l.getType().isIndex()) l = b.create<fir::ConvertOp>(loc, b.getIndexType(), l);
+      mlir::Value const one = b.create<mlir::arith::ConstantOp>(loc, b.getIndexType(), b.getIndexAttr(1));
+      return b.create<mlir::arith::SubIOp>(loc, l, one);
+    };
+    auto shift = [&](mlir::Value v, mlir::Value by) -> mlir::Value {
+      if (!by) return v;
+      mlir::Value vc = v;
+      if (!v.getType().isIndex()) vc = b.create<fir::ConvertOp>(loc, b.getIndexType(), v);
+      return b.create<mlir::arith::AddIOp>(loc, vc, by);
+    };
+
+    llvm::SmallVector<mlir::Value, 6> newIndices;
+    llvm::SmallVector<bool, 4> newTripFlags;
+    unsigned aliasCursor = 0;
+    for (auto const& d : sec.dims) {
+      if (!d.triplet) {  // scalar source dim: pass through, holds its position
+        newIndices.push_back(d.lo);
+        newTripFlags.push_back(false);
+        continue;
+      }
+      auto const& a = aliasDims[aliasCursor++];
+      mlir::Value const by = lowerShift(d.lo);
+      if (a.triplet) {
+        newIndices.push_back(shift(a.lo, by));
+        newIndices.push_back(shift(a.hi, by));
+        newIndices.push_back(a.stride);
+        newTripFlags.push_back(true);
+      } else {
+        newIndices.push_back(shift(a.lo, by));
+        newTripFlags.push_back(false);
       }
     }
 

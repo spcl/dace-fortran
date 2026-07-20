@@ -428,6 +428,16 @@ class HLFIRModule {
     module_->getOperation()->setAttr("hlfir.external_symbols", mlir::ArrayAttr::get(&ctx_, attrs));
   }
 
+  /// Records do_not_emit (stub) symbol names as a module attribute so hlfir-drop-stub-calls can erase their calls up
+  /// front.  Their calls are dropped at SDFG emission regardless; erasing early stops a known-dead call acting as an
+  /// opaque use that blocks later rewrites (a dropped dbg_print holding a copy-in temp defeats hlfir-fold-copy-in-out).
+  void set_stub_symbols(const std::vector<std::string>& names) {
+    if (!module_) throw std::runtime_error("set_stub_symbols: no module parsed");
+    llvm::SmallVector<mlir::Attribute, 4> attrs;
+    for (const std::string& n : names) attrs.push_back(mlir::StringAttr::get(&ctx_, n));
+    module_->getOperation()->setAttr("hlfir.stub_symbols", mlir::ArrayAttr::get(&ctx_, attrs));
+  }
+
  private:
   mlir::DialectRegistry registry_;
   mlir::MLIRContext ctx_;
@@ -587,6 +597,10 @@ NB_MODULE(hlfir_bridge, m) {
            "Record registered external (keep_external) symbol names so "
            "hlfir-marshal-external-structs expands their struct args to "
            "per-member arguments for deep-copy marshalling")
+      .def("set_stub_symbols", &HLFIRModule::set_stub_symbols,
+           "Record do_not_emit (stub) symbol names so hlfir-drop-stub-calls "
+           "erases their calls up front -- a known-dead call is still an opaque "
+           "use that blocks later rewrites")
       .def("get_fortran_interface", &HLFIRModule::get_fortran_interface,
            "Describe the entry's dummies (pre-flatten) for auto-iface")
       .def("get_flatten_plan", &HLFIRModule::get_flatten_plan,

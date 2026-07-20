@@ -28,6 +28,7 @@ std::unique_ptr<mlir::Pass> createDefaultIntentPass();
 std::unique_ptr<mlir::Pass> createVerifyNoUnresolvedCallsPass();
 std::unique_ptr<mlir::Pass> createFoldElementAliasesPass();
 std::unique_ptr<mlir::Pass> createFoldCopyInOutPass();
+std::unique_ptr<mlir::Pass> createDropStubCallsPass();
 std::unique_ptr<mlir::Pass> createExpandVectorSubscriptGatherPass();
 std::unique_ptr<mlir::Pass> createExpandVectorSubscriptScatterPass();
 std::unique_ptr<mlir::Pass> createRejectPolymorphismPass();

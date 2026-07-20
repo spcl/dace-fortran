@@ -583,6 +583,11 @@ def _build_and_compare(tu_path: Path,
     # No -fallow-argument-mismatch: it would silence a genuine shim/kernel ABI
     # mismatch instead of failing loudly.  Dual-typed MPI kernels are made sound
     # via TYPE(*) interfaces in the MPI stub, not by suppressing the diagnostic.
+    # OCEAN_E2E_FINIT: poison uninitialised locals so a read shows up as a sNaN
+    # (and a traceable trap) instead of whatever the heap held.  Diagnostic only
+    # -- a reference that needs this to be reproducible is itself the bug.
+    _finit = ["-finit-real=snan", "-finit-integer=-99999999", "-fbacktrace", "-g"
+              ] if os.environ.get("OCEAN_E2E_FINIT") else []
     r = subprocess.run(
         [
             "gfortran",
@@ -592,6 +597,7 @@ def _build_and_compare(tu_path: Path,
             # IEEE-strict FP to match the DUT: no FMA contraction, no fast-math reassociation.
             "-ffp-contract=off",
             "-fno-fast-math",
+            *_finit,
             "-o",
             str(ref_so),
             # Prelude (mpi stub + no-op impls) compiles ahead of the TU so use mpi
