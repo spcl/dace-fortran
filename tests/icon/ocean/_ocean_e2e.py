@@ -479,25 +479,30 @@ def _run_in_fork(so_path,
     return status
 
 
-def _build_and_compare(tu_path: Path,
-                       entry: str,
-                       scalar_overrides: dict,
-                       array_overrides: dict,
-                       float_range: tuple,
-                       n: int,
-                       seed: int,
-                       out: Path,
-                       int_fill=None,
-                       module_seeds=None,
-                       module_array_seeds=None,
-                       do_not_emit=None,
-                       prelude_paths=None,
-                       inject_use_mpi=False,
-                       ref_solver_allocs=None,
-                       ref_global_binds=None):
-    """Worker body (runs in a subprocess): build DUT + REF, drive both, return
-    ``(max_diff, n_changed)``.  Imports deferred so the module loads cheaply in
-    the orchestrating parent.
+def build_dut_and_ref(tu_path: Path,
+                      entry: str,
+                      *,
+                      n: int,
+                      out: Path,
+                      module_seeds=None,
+                      module_array_seeds=None,
+                      do_not_emit=None,
+                      prelude_paths=None,
+                      inject_use_mpi=False,
+                      ref_solver_allocs=None,
+                      ref_global_binds=None,
+                      fc: str = "gfortran"):
+    """Build the DUT (SDFG behind a struct-flattened ``bind(c)`` shim) and the REF
+    (the same shim retargeted at the original Fortran kernel), and return the
+    artefacts needed to drive them.
+
+    Split out of :func:`_build_and_compare` so a multi-rank caller can build once
+    (on rank 0, broadcasting the paths) and then drive IN-PROCESS.  The single-rank
+    path drives in a ``fork()``ed child, which an MPI rank cannot do: the child
+    inherits a communicator it was never a member of.
+
+    ``fc`` is the Fortran driver for the REF and the DUT shim relink -- ``mpifort``
+    when the kernel's halo exchange resolves to real MPI, ``gfortran`` otherwise.
 
     ``do_not_emit`` drops halo/MPI/sync/timer/logging externals from the DUT
     SDFG so a single-rank dycore carries no MPI.  ``prelude_paths`` (extra .f90
@@ -623,7 +628,7 @@ def _build_and_compare(tu_path: Path,
         sdfg_so = Path(lib.sdfg_so)
         _asan = ["-fsanitize=address", "-fno-omit-frame-pointer"] if os.environ.get("OCEAN_E2E_ASAN") else []
         rl = subprocess.run([
-            "gfortran", *_asan, "-shared", "-fPIC", "-ffree-line-length-none", "-O3", "-g", "-fno-fast-math",
+            fc, *_asan, "-shared", "-fPIC", "-ffree-line-length-none", "-O3", "-g", "-fno-fast-math",
             "-ffp-contract=off", "-frounding-math", "-fopenmp", f"-J{out}", *[str(p) for p in extra_prelude],
             str(ref_tu),
             str(lib.bindings_f90),
@@ -663,7 +668,7 @@ def _build_and_compare(tu_path: Path,
     _asan_ref = ["-fsanitize=address", "-fno-omit-frame-pointer", "-g"] if os.environ.get("OCEAN_E2E_ASAN") else []
     r = subprocess.run(
         [
-            "gfortran",
+            fc,
             "-shared",
             "-fPIC",
             "-ffree-line-length-none",
@@ -685,6 +690,59 @@ def _build_and_compare(tu_path: Path,
         cwd=str(out))
     if r.returncode != 0:
         raise RuntimeError(f"reference .so compile failed:\n{r.stderr[-3000:]}")
+
+    return {
+        "dut_so": str(dut_so_path),
+        "sdfg_so": str(lib.sdfg_so),
+        "ref_so": str(ref_so),
+        "dace_name": dace_name,
+        "shim": shim,
+        "seed_specs": seed_specs,
+        "array_specs": array_specs,
+    }
+
+
+def _build_and_compare(tu_path: Path,
+                       entry: str,
+                       scalar_overrides: dict,
+                       array_overrides: dict,
+                       float_range: tuple,
+                       n: int,
+                       seed: int,
+                       out: Path,
+                       int_fill=None,
+                       module_seeds=None,
+                       module_array_seeds=None,
+                       do_not_emit=None,
+                       prelude_paths=None,
+                       inject_use_mpi=False,
+                       ref_solver_allocs=None,
+                       ref_global_binds=None):
+    """Worker body (runs in a subprocess): build DUT + REF, drive both, return
+    ``(max_diff, n_changed)``.  Imports deferred so the module loads cheaply in
+    the orchestrating parent.
+
+    ``do_not_emit`` drops halo/MPI/sync/timer/logging externals from the DUT
+    SDFG so a single-rank dycore carries no MPI.  ``prelude_paths`` (extra .f90
+    files, e.g. the mpi stub + no-op point-to-point impls) compile ahead of the
+    TU on both sides.  ``inject_use_mpi`` gives inlined ``mo_mpi`` a ``use mpi``
+    so its dual-typed real*8/real*4 calls resolve through the stub's assumed-type
+    interface (no ``-fallow-argument-mismatch``).
+    """
+    art = build_dut_and_ref(tu_path,
+                            entry,
+                            n=n,
+                            out=out,
+                            module_seeds=module_seeds,
+                            module_array_seeds=module_array_seeds,
+                            do_not_emit=do_not_emit,
+                            prelude_paths=prelude_paths,
+                            inject_use_mpi=inject_use_mpi,
+                            ref_solver_allocs=ref_solver_allocs,
+                            ref_global_binds=ref_global_binds)
+    dut_so_path, ref_so = art["dut_so"], art["ref_so"]
+    dace_name, shim = art["dace_name"], art["shim"]
+    seed_specs, array_specs = art["seed_specs"], art["array_specs"]
 
     # Structured per-array input buffers can't ride argv as JSON, so
     # run_kernel_e2e drops them as a sidecar .npz; feed the same bytes to both forks.
@@ -708,7 +766,7 @@ def _build_and_compare(tu_path: Path,
                       ptr_args,
                       f"{dace_name}_c",
                       out / "dut",
-                      sdfg_so=lib.sdfg_so,
+                      sdfg_so=art["sdfg_so"],
                       module_seeds=seed_specs,
                       array_seeds=array_specs)
     sr = _run_in_fork(ref_so,
