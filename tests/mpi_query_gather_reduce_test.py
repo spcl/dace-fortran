@@ -67,6 +67,37 @@ end subroutine query
     sdfg.validate()
 
 
+def test_comm_size_result_drives_a_branch(tmp_path: Path):
+    """A query result used as a branch condition still lowers.
+
+    ``IF (nranks <= 1) RETURN`` opens every ICON halo exchange, and reading the integer in a
+    condition makes the bridge promote it to an SDFG symbol -- which has no descriptor for the
+    library node to write.  The builder lands the result in a transient and assigns the symbol
+    across the next interstate edge; without that the query wired a dangling access node and the
+    build died in ``RemoveUnusedSymbols`` with ``KeyError: 'nranks'``."""
+    from dace.libraries.mpi.nodes.comm_size import CommSize
+
+    src = """
+subroutine guarded(out)
+  implicit none
+  real(8), intent(inout) :: out(4)
+  integer :: nranks, ierr
+  integer, parameter :: MPI_COMM_WORLD = 0
+  external :: MPI_Comm_size
+  call MPI_Comm_size(MPI_COMM_WORLD, nranks, ierr)
+  if (nranks <= 1) return
+  out(1) = 2.0d0
+end subroutine guarded
+"""
+    sdfg = _build(src, tmp_path, "guarded", "guarded")
+    assert _first(sdfg, CommSize) is not None
+    # The promoted symbol must be assigned from the transient the node wrote, or the
+    # branch reads an undefined symbol.
+    assert any("nranks" in e.data.assignments for e in sdfg.all_interstate_edges()), \
+        "the promoted query symbol is never assigned from the library node's result"
+    sdfg.validate()
+
+
 def test_reduce_to_root(tmp_path: Path):
     """``MPI_Reduce`` -> DaCe ``Reduce`` with the resolved op and a ``_root``
     connector (rooted, unlike ``Allreduce``)."""

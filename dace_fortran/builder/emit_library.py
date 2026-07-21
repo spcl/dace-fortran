@@ -498,6 +498,36 @@ def resolve_mpi_op(opname: str) -> str:
         "so the name survives to the builder.")
 
 
+def query_target(builder, ctx, name):
+    """Pick the data name an ``MPI_Comm_rank`` / ``_size`` result writes into.
+
+    Normally the Fortran integer itself.  But when that integer goes on to drive a branch
+    condition -- ``IF (nranks <= 1) RETURN``, the opening line of every ICON halo exchange --
+    the bridge promotes it to an SDFG symbol, and a symbol has no descriptor for a library
+    node to write.  Return a transient in that case; :func:`bind_query_symbol` assigns the
+    symbol from it once the node has run.
+
+    Returns ``(target_name, symbol_to_bind)``, where the symbol is ``None`` in the plain case.
+    """
+    if name in ctx.sdfg.arrays or name not in ctx.sdfg.symbols:
+        return name, None
+    backing = f"__{name}_query_{builder.nid()}"
+    ctx.sdfg.add_array(backing, [1], dace.int32, transient=True)
+    return backing, name
+
+
+def bind_query_symbol(builder, ctx, region, backing, sym):
+    """Assign a promoted query symbol from the transient the library node wrote.
+
+    A no-op unless :func:`query_target` had to redirect the write.
+    """
+    if sym is None:
+        return
+    nxt = region.add_state(f"post_mpi_query_{builder.nid()}")
+    region.add_edge(ctx.cur, nxt, InterstateEdge(assignments={sym: f"{backing}[0]"}))
+    ctx.cur = nxt
+
+
 def emit_mpi(builder, ctx, n, region):
     """Lower a recognised Fortran MPI point-to-point call
     (``kind == 'mpicall'``) to a ``dace.libraries.mpi`` library node.
@@ -752,7 +782,7 @@ def emit_mpi(builder, ctx, n, region):
         # process's rank to the Fortran integer scalar via ``_rank`` (no data
         # inputs -- the communicator threads in through ``_comm``).
         from dace.libraries.mpi.nodes.comm_rank import CommRank
-        rank = n.call_args[0]
+        rank, rank_sym = query_target(builder, ctx, n.call_args[0])
         node = CommRank(f'_mpi_comm_rank_{builder.nid()}')
         state.add_node(node)
         state.add_memlet_path(node,
@@ -760,13 +790,14 @@ def emit_mpi(builder, ctx, n, region):
                               src_conn='_rank',
                               memlet=Memlet.simple(rank, "0:1", num_accesses=1))
         _wire_user_comm(node, n.call_args[1] if len(n.call_args) > 1 else None)
+        bind_query_symbol(builder, ctx, region, rank, rank_sym)
         return
 
     if n.callee == 'mpi_comm_size':
         # ``call_args``: [size] + optional comm.  Query-only: writes the
         # communicator's rank count to the Fortran integer scalar via ``_size``.
         from dace.libraries.mpi.nodes.comm_size import CommSize
-        size = n.call_args[0]
+        size, size_sym = query_target(builder, ctx, n.call_args[0])
         node = CommSize(f'_mpi_comm_size_{builder.nid()}')
         state.add_node(node)
         state.add_memlet_path(node,
@@ -774,6 +805,7 @@ def emit_mpi(builder, ctx, n, region):
                               src_conn='_size',
                               memlet=Memlet.simple(size, "0:1", num_accesses=1))
         _wire_user_comm(node, n.call_args[1] if len(n.call_args) > 1 else None)
+        bind_query_symbol(builder, ctx, region, size, size_sym)
         return
 
     if n.callee == 'mpi_comm_split':
