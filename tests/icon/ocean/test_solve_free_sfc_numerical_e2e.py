@@ -69,19 +69,6 @@ _DO_NOT_EMIT = [
 ]
 
 
-@pytest.mark.xfail(strict=True,
-                   reason="The v_params blocker is FIXED (see ref_global_binds below): the reference no longer "
-                   "NULL-derefs at dolic_e=2 and 170 of the 171 compared fields are bit-exact.  What is left is a "
-                   "DUT-side OpenMP RACE, not a reference problem: exactly one element, "
-                   "veloc_adv_vert(je=1,jk=2,blk=1), comes out 1 ulp low (0.012178316020156083 vs ...085).  At "
-                   "OMP_NUM_THREADS=1 the DUT is deterministic and bit-exact on ALL 171 fields over 17 runs; the "
-                   "error rate then climbs with the thread count (0/8 at 1 thread, 1/8 at 2, 4/8 at 4, 7/8 at 8 on "
-                   "a 16-core box), which is a race, not FP reassociation -- the SDFG has no OpenMP reduction, only "
-                   "`#pragma omp parallel for` copy nodes.  An OCEAN_E2E_ASAN=1 run is CLEAN and passes, so it is "
-                   "not an out-of-bounds access.  Fixing it means fixing the parallelisation in dace_fortran, not "
-                   "the harness -- pinning OMP_NUM_THREADS=1 here would hide a real miscompile.  NOTE strict=True "
-                   "is itself flaky while the race stands (2 of 4 full runs landed on the matching value); remove "
-                   "the marker once the race is fixed.")
 @pytest.mark.xdist_group("ocean_fparser")
 def test_solve_free_sfc_numerical_e2e(tmp_path: Path):
     """solve_free_sfc -> SDFG, driven on a degenerate valid mesh, BIT-EXACT against

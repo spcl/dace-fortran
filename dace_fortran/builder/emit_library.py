@@ -8,7 +8,7 @@ import math
 import re
 
 import dace.symbolic
-from dace import InterstateEdge, Memlet
+from dace import dtypes, InterstateEdge, Memlet
 
 from dace_fortran.builder.access import acc, iter_view_dim_map
 
@@ -18,6 +18,20 @@ from dace_fortran.builder.access import acc, iter_view_dim_map
 _USER_COMM_SYMBOL = "dace_user_comm"  # opaque(MPI_Comm) symbol -- f2c result from the wrapper
 _USER_COMM_SIZE_SYMBOL = "dace_user_comm_size"  # int -- MPI_Comm_size(dace_user_comm), 1-D pgrid extent
 _USER_PGRID_NAME = "dace_user_pgrid"  # FortranProcessGrid descriptor name
+
+
+def pin_sequential(node):
+    """Pin a compute library node to a sequential schedule, and return it.
+
+    Bridge output is single-threaded by contract: OpenMP directives in the Fortran are ignored and
+    parallelism is applied later by an explicit optimisation pipeline. A library node left on
+    ``ScheduleType.Default`` infers to ``CPU_Multicore`` at top level, and its expansion inherits
+    that -- which is where every accidental ``#pragma omp parallel for`` in a freshly-lowered SDFG
+    comes from.
+    """
+    node.schedule = dtypes.ScheduleType.Sequential
+    return node
+
 
 #: Intrinsics the bridge recognises but deliberately does not lower. dispatch.cpp still folds the
 #: runtime call into a libcall node, so the reject has to happen here, with the reason attached.
@@ -305,7 +319,7 @@ def emit_libcall(builder, ctx, n, region):
             node.transB = tB
     else:
         node = cls(f"{spec.name}_{n.target}_{builder.nid()}")
-    state.add_node(node)
+    state.add_node(pin_sequential(node))
 
     # call_arg_subsets parallels call_args: empty = whole array, else a DaCe-0-based subset
     # (e.g. "0:3"). Older bridge builds may leave it unpopulated.
@@ -2085,7 +2099,7 @@ def emit_reduce(builder, ctx, n, region):
         # 1-based ``dim`` (-1 = whole-array collapse to a scalar).
         dim = (n.reduce_axes[0] + 1) if n.reduce_axes else -1
         node = cls(f"{_logical_op}_{n.target}_{builder.nid()}", dim=dim)
-        state.add_node(node)
+        state.add_node(pin_sequential(node))
         state.add_edge(src_access, None, node, cls.INPUT_CONNECTOR_NAME, Memlet.from_array(src_name, src_desc))
         state.add_edge(node, cls.OUTPUT_CONNECTOR_NAME, tgt_access, None, out_memlet)
         return
@@ -2115,12 +2129,12 @@ def emit_reduce(builder, ctx, n, region):
         view_full = ", ".join(f"0:{s}" for s in view_shape)
         state.add_edge(src_access, None, vnode, 'views',
                        Memlet(data=src_name, subset=", ".join(parts), other_subset=view_full))
-        red = state.add_reduce(n.reduce_wcr, None, identity_val)
+        red = pin_sequential(state.add_reduce(n.reduce_wcr, None, identity_val))
         state.add_edge(vnode, None, red, None, Memlet.from_array(view_name, view_desc))
         state.add_edge(red, None, tgt_access, None, out_memlet)
         return
 
-    red = state.add_reduce(n.reduce_wcr, axes, identity_val)
+    red = pin_sequential(state.add_reduce(n.reduce_wcr, axes, identity_val))
     state.add_edge(src_access, None, red, None, Memlet.from_array(src_name, src_desc))
     state.add_edge(red, None, tgt_access, None, out_memlet)
 
