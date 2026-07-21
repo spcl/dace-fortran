@@ -19,6 +19,12 @@ _USER_COMM_SYMBOL = "dace_user_comm"  # opaque(MPI_Comm) symbol -- f2c result fr
 _USER_COMM_SIZE_SYMBOL = "dace_user_comm_size"  # int -- MPI_Comm_size(dace_user_comm), 1-D pgrid extent
 _USER_PGRID_NAME = "dace_user_pgrid"  # FortranProcessGrid descriptor name
 
+#: Intrinsics the bridge recognises but deliberately does not lower. dispatch.cpp still folds the
+#: runtime call into a libcall node, so the reject has to happen here, with the reason attached.
+UNSUPPORTED_INTRINSICS = {
+    "eoshift": "the end-off shift lib node was removed; no target workload needs it",
+}
+
 # callee tag -> (input_conns, output_conn); Copy/Memset/Merge/Count libnodes have dedicated
 # emitters and bypass this table.
 _LIBCALL_CONNECTORS = {
@@ -207,6 +213,8 @@ def emit_libcall(builder, ctx, n, region):
 
     spec = libnode_spec(n.callee)
     if spec is None:
+        if n.callee in UNSUPPORTED_INTRINSICS:
+            raise NotImplementedError(f"{n.callee.upper()} is not supported: {UNSUPPORTED_INTRINSICS[n.callee]}")
         raise RuntimeError(f"unregistered libnode intrinsic {n.callee!r}")
     mod = importlib.import_module(f"dace.libraries.{spec.module}.nodes")
     cls = getattr(mod, spec.node_cls)
