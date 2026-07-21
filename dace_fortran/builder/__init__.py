@@ -931,6 +931,12 @@ class SDFGBuilder:
         for e in sdfg.all_interstate_edges():
             for k in [k for k, v in e.data.assignments.items() if str(k) == str(v)]:
                 del e.data.assignments[k]
+        # Pin Fortran statement order into the dataflow while node ids still ARE the emission
+        # order: consecutive statements share one state, so a same-container pair in disjoint
+        # components (``x = x - c`` / ``d = x - o`` / ``x = o``) is otherwise ordered only by a
+        # scheduler tie-break that any later transformation may flip.
+        from dace_fortran.builder.statement_order import enforce_statement_order
+        enforce_statement_order(sdfg)
         # Post-gen cleanups (Stage 4b in dace_fortran/README.md).
         # Run BEFORE the FrozenSignature snapshot so the snapshot
         # captures the post-cleanup signature (matters for the

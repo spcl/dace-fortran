@@ -15,6 +15,9 @@ Fortran-level NAMES, while ``access.acc`` resolves every alias onto the SOURCE c
 node -- so a write through a POINTER alias of an array read by a neighbouring statement is invisible
 to the guards and lands unordered in the same state.  Same storage, two access nodes, no path.
 
+``builder.statement_order.enforce_statement_order`` closes this on the realised graph: it works on
+access nodes rather than Fortran names, so aliases resolve for free.
+
 Reproduces WAR (read then aliased overwrite) and WAW (write then aliased overwrite).  RAW is NOT
 reproducible: ``acc``'s per-state cache always hands a read the most recent write node for that
 container, so a read-after-write is ordered by construction whichever name it goes through.
@@ -28,7 +31,7 @@ permutation that is legal on a correctly ordered graph and flips the result on a
 import numpy as np
 import pytest
 
-from _helpers import f2py, xfail
+from _helpers import f2py
 from _util import build_sdfg, have_flang
 from hazard_scan import scan
 
@@ -115,7 +118,6 @@ def run_reference(shape, tmp_path, arrays):
 
 
 @pytest.mark.parametrize("shape", sorted(BODIES))
-@xfail("bridge leaves the aliased overwrite unordered in one state; frontend fix pending")
 def test_lowers_without_intra_state_hazard(tmp_path, shape):
     """No two access nodes for one container may sit unordered in a single state."""
     sdfg = build_sdfg(kernel_source(shape), tmp_path / "sdfg", name=shape, entry="driver").build()
@@ -125,7 +127,6 @@ def test_lowers_without_intra_state_hazard(tmp_path, shape):
 
 
 @pytest.mark.parametrize("shape", sorted(BODIES))
-@xfail("statement order survives only by codegen tie-break; frontend fix pending")
 def test_matches_gfortran(tmp_path, shape):
     """Bit-exact against gfortran, as built and with each state's node order reversed."""
     arrays = inputs()
