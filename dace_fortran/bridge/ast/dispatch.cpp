@@ -1311,9 +1311,9 @@ static ASTNode buildMpiCallNode(fir::CallOp call, const std::string& mpiOp) {
 }
 
 // Fortran I/O recognition: flang lowers I/O to fir.call @_FortranAio* runtime calls; an open/read/write/close region
-// folds into one "iocall" ASTNode -> dace_fortran.libraries.fortran_io. Filename must be a compile-time literal (@_QQclX<hex>)
-// baked into ``target`` (DaCe can't pass a runtime string); a non-literal filename or no associated file (stdout) is
-// dropped.
+// folds into one "iocall" ASTNode -> dace_fortran.libraries.fortran_io. Filename must be a compile-time literal
+// (@_QQclX<hex>) baked into ``target`` (DaCe can't pass a runtime string); a non-literal filename or no associated file
+// (stdout) is dropped.
 
 /// Decodes a flang character-literal global symbol ``_QQclX<hex>`` to its text (hex digits are the literal's bytes);
 /// empty if not that form.
