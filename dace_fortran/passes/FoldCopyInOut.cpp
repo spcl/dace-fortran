@@ -67,7 +67,11 @@
 //       (``reparentMemberCopy``) -- designate reads the box strides, so it is
 //       correct even when the component target is non-contiguous.  A bare
 //       assumed-shape dummy box (a local forwarded to a deeper explicit-shape
-//       callee) reparents onto the source box itself.
+//       callee) reparents onto the source box itself.  A copy whose address is
+//       handed straight to a CALL argument has no alias declare for any of those
+//       to reparent onto, so it alias-folds to the source box
+//       (``tryFoldCallArgument``) -- scoped to whole boxes, since a bare address
+//       cannot carry strides to the callee anyway.
 // ============================================================================
 
 #include "flang/Optimizer/Dialect/FIROps.h"
@@ -203,8 +207,12 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
                "depends on it is wrong.  Fold needs leaf-submember accesses for record sections.";
         return;
       }
+      auto* srcDef = op.getVar().getDefiningOp();
       op.emitError("hlfir-fold-copy-in-out: ``hlfir.copy_in`` survived the fold for ")
-          << sourceName(op)
+          << sourceName(op) << " [source is "
+          << (srcDef ? srcDef->getName().getStringRef() : llvm::StringRef("a block argument"))
+          << "; call-argument fold declined: "
+          << (fcaBail.count(op.getOperation()) ? fcaBail[op.getOperation()] : std::string("not attempted")) << "]"
           << ".  The bridge cannot model a copy-in/copy-out pair: the temporary "
              "would become an uninitialised SDFG argument, so writes through it "
              "are dropped and reads see zeros.  Pass a contiguous whole array (or "
@@ -232,19 +240,32 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
   // used.  ``chain`` is filled with the whole ladder so the caller erases it
   // innermost-first.  Returns false (bail, leave the fold undone) on any foreign
   // use -- a non-review declare, a whole-array assign, or a surviving call.
+  /// ``dims`` collects ``fir.box_dims`` reads of the alias (``SIZE(arr, d)`` in the
+  /// callee -- every ICON halo body starts with them).  They are only reparentable
+  /// where the alias and the reparent target agree on the queried value, so the
+  /// caller decides: the member/whole-box path can take them, the section path
+  /// cannot (a section's extents are not the parent's).
   static bool collectAliasUses(hlfir::DeclareOp aliasDecl, llvm::SmallVectorImpl<hlfir::DeclareOp>& chain,
-                               llvm::SmallVectorImpl<hlfir::DesignateOp>& uses) {
+                               llvm::SmallVectorImpl<hlfir::DesignateOp>& uses,
+                               llvm::SmallVectorImpl<fir::BoxDimsOp>& dims, std::string& why) {
     chain.push_back(aliasDecl);
     for (size_t ci = 0; ci < chain.size(); ++ci)
       for (mlir::Value const res : {chain[ci].getResult(0), chain[ci].getResult(1)})
         for (auto* u : res.getUsers()) {
           if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(u))
             uses.push_back(dg);
+          else if (auto bd = mlir::dyn_cast<fir::BoxDimsOp>(u))
+            dims.push_back(bd);
           else if (auto rd = mlir::dyn_cast<hlfir::DeclareOp>(u)) {
-            if (rd.getMemref() != res) return false;  // consumes the alias as non-memref -- out of scope
+            if (rd.getMemref() != res) {
+              why = "alias re-declared as a non-memref operand";
+              return false;
+            }
             chain.push_back(rd);
-          } else
+          } else {
+            why = ("alias is used by " + u->getName().getStringRef()).str();
             return false;
+          }
         }
     return true;
   }
@@ -298,7 +319,18 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
     // (``hlfir.assign %v to %alias`` or a surviving call) -- out of this scope.
     llvm::SmallVector<hlfir::DeclareOp, 4> chain;
     llvm::SmallVector<hlfir::DesignateOp, 8> aliasUseDgs;
-    if (!collectAliasUses(aliasDecl, chain, aliasUseDgs)) return;
+    std::string why;
+    llvm::SmallVector<fir::BoxDimsOp, 4> aliasDims;
+    if (!collectAliasUses(aliasDecl, chain, aliasUseDgs, aliasDims, why)) {
+      noteBail(cin, "section reparent: " + why);
+      return;
+    }
+    // A section's extents are not the parent's, so a box_dims read cannot be
+    // reparented onto the parent box.
+    if (!aliasDims.empty()) {
+      noteBail(cin, "section reparent: alias extents are queried via fir.box_dims");
+      return;
+    }
 
     for (auto useDg : aliasUseDgs) rewriteAccess(useDg, parent, sec, b);
 
@@ -344,8 +376,8 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
   ///     callee.  Trace past the rebox to the member and reparent identically.
   static bool isPtrOrAllocDesignate(hlfir::DesignateOp dg) {
     auto attrs = dg.getFortranAttrs();
-    return attrs && bitEnumContainsAny(*attrs, fir::FortranVariableFlagsEnum::pointer |
-                                                   fir::FortranVariableFlagsEnum::allocatable);
+    return attrs && bitEnumContainsAny(
+                        *attrs, fir::FortranVariableFlagsEnum::pointer | fir::FortranVariableFlagsEnum::allocatable);
   }
 
   /// True when ``v`` is defined by a POINTER / ALLOCATABLE component designate or
@@ -355,13 +387,130 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
     if (auto dg = v.getDefiningOp<hlfir::DesignateOp>()) return isPtrOrAllocDesignate(dg);
     if (auto decl = v.getDefiningOp<hlfir::DeclareOp>()) {
       auto attrs = decl.getFortranAttrs();
-      return attrs && bitEnumContainsAny(*attrs, fir::FortranVariableFlagsEnum::pointer |
-                                                     fir::FortranVariableFlagsEnum::allocatable);
+      return attrs && bitEnumContainsAny(
+                          *attrs, fir::FortranVariableFlagsEnum::pointer | fir::FortranVariableFlagsEnum::allocatable);
     }
     return false;
   }
 
+  /// True when ``v`` is consumed only as a CALL argument (possibly through
+  /// ``fir.convert`` pointer/reference casts).  ``false`` for an empty use list:
+  /// a dead address is not a call-argument shape and must not fold on that basis.
+  static bool onlyFeedsCalls(mlir::Value v) {
+    if (v.getUsers().empty()) return false;
+    for (auto* u : v.getUsers()) {
+      if (mlir::isa<fir::CallOp>(u)) continue;
+      if (auto cv = mlir::dyn_cast<fir::ConvertOp>(u))
+        if (onlyFeedsCalls(cv.getResult())) continue;
+      return false;
+    }
+    return true;
+  }
+
+  /// Why ``tryFoldCallArgument`` declined a pair, surfaced in the reject
+  /// diagnostic: without it the error only says the fold failed, not what shape
+  /// it actually saw, which is the one thing needed to extend the fold.
+  llvm::DenseMap<mlir::Operation*, std::string> fcaBail;
+  void noteBail(hlfir::CopyInOp cin, std::string why) {
+    auto& slot = fcaBail[cin.getOperation()];
+    if (!slot.empty()) slot += "; ";
+    slot += why;
+  }
+
+  /// Fold a ``copy_in`` whose copy is handed STRAIGHT TO A CALL:
+  ///
+  ///     %c:2 = hlfir.copy_in %src to %tmp
+  ///     %a   = fir.box_addr %c#0
+  ///     fir.call @callee(..., %a, ...)          // optionally via fir.convert
+  ///     hlfir.copy_out %tmp, %c#1 to %src
+  ///
+  /// Flang emits this when an actual whose contiguity it cannot prove reaches an
+  /// explicit-shape dummy or an implicit-interface callee -- every raw
+  /// ``mpi_isend(buf, ...)``, and any callee inline-all left standing (an ICON
+  /// halo exchange leaves both).  There is no alias ``hlfir.declare`` here, so
+  /// the reparent paths have nothing to reparent onto and the section path does
+  /// not apply: every such pair used to reach ``rejectSurvivors`` and fail the
+  /// pipeline.
+  ///
+  /// Alias the argument to the SOURCE box and drop the pair.  Unlike a reparent
+  /// this cannot preserve strides -- the callee is receiving a bare address and
+  /// will walk it contiguously whatever we do -- so it is scoped to a WHOLE box:
+  /// a bare dummy box, or a loaded POINTER / ALLOCATABLE box or component.  Those
+  /// are contiguous by construction here (bridge arrays are SDFG buffers), the
+  /// same assumption ``tryFoldViewSource`` already makes for pointer views.  A
+  /// ``hlfir.designate`` SECTION can genuinely carry strides, so those are left
+  /// to the section path and, failing that, to the reject.
+  bool tryFoldCallArgument(hlfir::CopyInOp cin) {
+    mlir::Value const src = cin.getVar();
+    // A section source may be strided; only a whole box is contiguous by
+    // construction.  Same for a rebox that slices one.
+    if (src.getDefiningOp<hlfir::DesignateOp>()) {
+      noteBail(cin, "source is a designate section");
+      return false;
+    }
+    if (auto rb = src.getDefiningOp<fir::ReboxOp>())
+      if (rb.getSlice()) {
+        noteBail(cin, "source is a sliced rebox");
+        return false;
+      }
+    // Replacing cin#0 with the source is only type-safe when the copy kept the
+    // source's box type (it does -- copy_in returns the same box).
+    if (cin.getResult(0).getType() != src.getType()) {
+      noteBail(cin, "copy box type differs from source box type");
+      return false;
+    }
+
+    // cin#0 must be consumed by exactly one box_addr and nothing else, and that
+    // address must reach calls only -- if a declare also reads it, a reparent
+    // path can do better and this must not steal the case.
+    fir::BoxAddrOp boxAddr;
+    for (auto* u : cin.getResult(0).getUsers()) {
+      auto ba = mlir::dyn_cast<fir::BoxAddrOp>(u);
+      if (!ba || boxAddr) {
+        noteBail(cin, ba ? "a second fir.box_addr reads the copy"
+                         : ("copy is read by " + u->getName().getStringRef()).str());
+        return false;
+      }
+      boxAddr = ba;
+    }
+    if (!boxAddr) {
+      noteBail(cin, "no fir.box_addr reads the copy");
+      return false;
+    }
+    if (!onlyFeedsCalls(boxAddr.getResult())) {
+      std::string names;
+      for (auto* u : boxAddr.getResult().getUsers()) names += (u->getName().getStringRef() + " ").str();
+      noteBail(cin, "the address does not only feed calls; it reaches: " + names);
+      return false;
+    }
+
+    cin.getResult(0).replaceAllUsesWith(src);
+    eraseCopyPair(cin);
+    return true;
+  }
+
+  /// Erase a folded pair: its ``copy_out``(s), the ``copy_in``, and the temp box
+  /// alloca once nothing references them.
+  void eraseCopyPair(hlfir::CopyInOp cin) {
+    llvm::SmallVector<hlfir::CopyOutOp, 2> copyOuts;
+    getOperation().walk([&](hlfir::CopyOutOp op) {
+      if (op.getOperand(1) == cin.getResult(1)) copyOuts.push_back(op);
+    });
+    for (auto co : copyOuts) co.erase();
+    if (cin.getResult(0).use_empty() && cin.getResult(1).use_empty()) {
+      mlir::Value const temp = cin.getTempBox();
+      cin.erase();
+      if (auto* def = temp.getDefiningOp())
+        if (def->use_empty()) def->erase();
+    }
+  }
+
   void dispatchNonSectionSource(hlfir::CopyInOp cin) {
+    // Handled first: a copy whose address only feeds call arguments has no alias
+    // declare, which every reparent path below needs.  The guard inside is exact
+    // (a declare reading the same address makes it bail), so this cannot take a
+    // case one of those would have folded better.
+    if (tryFoldCallArgument(cin)) return;
     mlir::Value const src = cin.getVar();
     if (auto ld = src.getDefiningOp<fir::LoadOp>()) {
       mlir::Value const memref = ld.getMemref();
@@ -370,8 +519,7 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
         return;
       }
       if (auto memDg = memref.getDefiningOp<hlfir::DesignateOp>())
-        if (isPtrOrAllocDesignate(memDg))
-          reparentMemberCopy(cin);
+        if (isPtrOrAllocDesignate(memDg)) reparentMemberCopy(cin);
       return;
     }
     // Assumed-shape forward: an explicit-shape callee reached through an
@@ -471,27 +619,43 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
     // innermost declare, not aliasDecl.
     llvm::SmallVector<hlfir::DesignateOp, 8> uses;
     llvm::SmallVector<hlfir::DeclareOp, 4> chain;
-    if (!collectAliasUses(aliasDecl, chain, uses)) return;
+    std::string why;
+    llvm::SmallVector<fir::BoxDimsOp, 4> dims;
+    if (!collectAliasUses(aliasDecl, chain, uses, dims, why)) {
+      noteBail(cin, "member reparent: " + why);
+      return;
+    }
+    // A box_dims on the alias reads the COPY's shape.  Extent is identical to the
+    // source's, so that one reparents; the lower bound and the stride are not (a
+    // 1-based contiguous temp vs a member box that may be neither), so refuse if
+    // either is live rather than silently changing what SIZE/LBOUND return.
+    for (auto bd : dims)
+      if (!bd.getResult(0).use_empty() || !bd.getResult(2).use_empty()) {
+        noteBail(cin, "member reparent: fir.box_dims reads the alias lower bound or stride");
+        return;
+      }
 
     // Reparent each ``%alias (idx...)`` onto the member box verbatim.
     for (auto useDg : uses) {
       mlir::OpBuilder b(useDg);
-      auto newOp = b.create<hlfir::DesignateOp>(
-          useDg.getLoc(),
-          /*result_type=*/useDg.getResult().getType(),
-          /*memref=*/memberBox,
-          /*component=*/mlir::StringAttr{},
-          /*component_shape=*/mlir::Value{},
-          /*indices=*/useDg.getIndices(),
-          /*is_triplet=*/useDg.getIsTripletAttr(),
-          /*substring=*/mlir::ValueRange{},
-          /*complex_part=*/mlir::BoolAttr{},
-          /*shape=*/useDg.getShape(),
-          /*typeparams=*/useDg.getTypeparams(),
-          /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
+      auto newOp = b.create<hlfir::DesignateOp>(useDg.getLoc(),
+                                                /*result_type=*/useDg.getResult().getType(),
+                                                /*memref=*/memberBox,
+                                                /*component=*/mlir::StringAttr{},
+                                                /*component_shape=*/mlir::Value{},
+                                                /*indices=*/useDg.getIndices(),
+                                                /*is_triplet=*/useDg.getIsTripletAttr(),
+                                                /*substring=*/mlir::ValueRange{},
+                                                /*complex_part=*/mlir::BoolAttr{},
+                                                /*shape=*/useDg.getShape(),
+                                                /*typeparams=*/useDg.getTypeparams(),
+                                                /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
       useDg.getResult().replaceAllUsesWith(newOp.getResult());
       useDg.erase();
     }
+
+    // Extent queries move to the same box the designates now read.
+    for (auto bd : dims) bd.getValMutable().assign(memberBox);
 
     // Erase the now-dead chain: re-declare ladder, convert, box_addr,
     // copy_out(s), copy_in, temp box.  Users first, defs last.
@@ -535,19 +699,7 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
     // downstream ``fir.box_addr`` now extracts the source view's data.
     if (cin.getResult(0).getType() != cin.getVar().getType()) return;
     cin.getResult(0).replaceAllUsesWith(cin.getVar());
-
-    llvm::SmallVector<hlfir::CopyOutOp, 2> copyOuts;
-    getOperation().walk([&](hlfir::CopyOutOp op) {
-      if (op.getOperand(1) == cin.getResult(1)) copyOuts.push_back(op);
-    });
-    for (auto co : copyOuts) co.erase();
-
-    if (cin.getResult(0).use_empty() && cin.getResult(1).use_empty()) {
-      mlir::Value const temp = cin.getTempBox();
-      cin.erase();
-      if (auto* def = temp.getDefiningOp())
-        if (def->use_empty()) def->erase();
-    }
+    eraseCopyPair(cin);
   }
 
   /// Rewrite a single ``hlfir.designate %alias (j_1, ..., j_K)`` use
