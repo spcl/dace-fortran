@@ -32,9 +32,8 @@ _LIBCALL_CONNECTORS = {
     # source hlfir op carries a mask operand.
     "ArgMin": (("_x", ), "_idx"),
     "ArgMax": (("_x", ), "_idx"),
-    # Fortran CSHIFT / EOSHIFT -- single-array input + shift-via-symbol output.
+    # Fortran CSHIFT -- single-array input + shift-via-symbol output.
     "CShift": (("_x", ), "_out"),
-    "EOShift": (("_x", ), "_out"),
     # Fortran NORM2 -- single-array input, scalar output.
     "Norm2": (("_x", ), "_out"),
     # Fortran SPREAD -- single-array source, broadcasted destination.
@@ -236,7 +235,7 @@ def emit_libcall(builder, ctx, n, region):
             dim=dim,
             mask=has_mask,
         )
-    elif spec.node_cls in ("CShift", "EOShift"):
+    elif spec.node_cls == "CShift":
         # shift/boundary exprs in options['shift']/['boundary'] (Python-compatible strings);
         # axis 0-based in reduce_axes. Free symbols in shift get promoted to SDFG symbols
         # after node creation.
@@ -928,7 +927,7 @@ def emit_mpi(builder, ctx, n, region):
 
 def emit_io(builder, ctx, n, region):
     """Lower a recognised Fortran I/O statement (``kind == 'iocall'``) to a
-    ``dace.libraries.fortran_io`` node.
+    ``dace_fortran.libraries.fortran_io`` node.
 
     The C++ recognizer folds an ``open`` / ``read`` / ``write`` / ``close``
     region into one node: ``n.callee`` is ``'read'`` / ``'write'`` /
@@ -940,7 +939,7 @@ def emit_io(builder, ctx, n, region):
     item (input connectors ``_in_i``).  Whole-array memlets -- the Fortran
     statement transfers each item in full.
     """
-    nodes_mod = importlib.import_module("dace.libraries.fortran_io.nodes")
+    nodes_mod = importlib.import_module("dace_fortran.libraries.fortran_io.nodes")
     # Each I/O statement gets its own SDFG state so the side-effecting
     # statements run in program order.  Nodes within one state have no mutual
     # dependency, so DaCe is free to reorder them -- which would corrupt
@@ -972,7 +971,7 @@ def emit_io(builder, ctx, n, region):
 
 def emit_fft_interpolate(builder, ctx, n, region):
     """Lower a recognised QE ``fft_interpolate_*`` call to an
-    :class:`dace.libraries.fft.nodes.FFTInterpolate` lib node.
+    :class:`dace_fortran.libraries.fft.nodes.FFTInterpolate` lib node.
 
     ``n.callee`` is ``"real"`` or ``"complex"`` (the variant suffix).
     ``n.call_args`` is ``[v_in, v_out]`` -- the value arrays on the
@@ -982,7 +981,7 @@ def emit_fft_interpolate(builder, ctx, n, region):
     """
     import importlib
 
-    fft_nodes = importlib.import_module("dace.libraries.fft.nodes")
+    fft_nodes = importlib.import_module("dace_fortran.libraries.fft.nodes")
     ctx.flush_and_ensure(builder, region)
     state = ctx.new_state(builder, region)
 
@@ -1386,7 +1385,7 @@ def emit_fft(builder, ctx, n, region):
     """
     import importlib
 
-    fft_nodes = importlib.import_module("dace.libraries.fft.nodes")
+    fft_nodes = importlib.import_module("dace_fortran.libraries.fft.nodes")
     ctx.flush_and_ensure(builder, region)
     state = ctx.new_state(builder, region)
 

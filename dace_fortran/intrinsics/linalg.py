@@ -27,7 +27,6 @@ STANDARD: dict[str, LibNodeIntrinsic] = {
     'argmin': LibNodeIntrinsic('argmin', module='standard', node_cls='ArgMin'),
     'argmax': LibNodeIntrinsic('argmax', module='standard', node_cls='ArgMax'),
     'cshift': LibNodeIntrinsic('cshift', module='standard', node_cls='CShift'),
-    'eoshift': LibNodeIntrinsic('eoshift', module='standard', node_cls='EOShift'),
     'norm2': LibNodeIntrinsic('norm2', module='standard', node_cls='Norm2'),
     'broadcast': LibNodeIntrinsic('broadcast', module='standard', node_cls='Broadcast'),
 }

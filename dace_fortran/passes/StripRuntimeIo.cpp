@@ -29,7 +29,7 @@
 //     ... READ (u, *) y`` lowers to a SetFile + BeginExternalListInput +
 //     InputDescriptor + EndIoStatement chain that the AST-extraction-
 //     time recognizer (``bridge/ast/dispatch.cpp::recognizeIoCall``)
-//     maps to ``dace.libraries.fortran_io`` library nodes -- those
+//     maps to ``dace_fortran.libraries.fortran_io`` library nodes -- those
 //     transfers ARE part of the kernel's contract.  Stripping them
 //     would silently drop the data load, so a ``y = [1.5, 2.5]`` test
 //     reads ``[0.0, 0.0]`` instead.  The strip pass must therefore

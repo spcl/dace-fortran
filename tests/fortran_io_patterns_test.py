@@ -6,7 +6,7 @@ statement must fail here. Filenames are hardcoded relative paths; the test ``chd
 ``tmp_path`` so no character argument crosses the SDFG ABI.
 
 Pins the acceptance criteria for the ``_FortranAio*`` recognizer (maps Fortran I/O to
-``dace.libraries.fortran_io`` nodes).
+``dace_fortran.libraries.fortran_io`` nodes).
 """
 import os
 from pathlib import Path
