@@ -144,6 +144,45 @@ def _seed_alloc_array(cdll, mangled: str, length: int):
     ctypes.c_ssize_t.from_address(addr + 56).value = length  # dim0.ubound
 
 
+def _global_bind_lines(indent: str, global_binds, deferred_members=None, pointer_members=None):
+    """Fortran that copies a module-global derived type's components from the
+    shim's reconstructed dummy struct, emitted just before the call on BOTH shims.
+
+    A single-TU extraction drops the module global's initialiser (ICON's
+    ``init_ho_params``), so a kernel that reads ``v_params%<comp>`` instead of the
+    ``p_phys_param`` dummy it was handed sees an unassociated pointer / a zero
+    scalar.  The DUT gets the same global marshalled by the binding, so the copy
+    runs on both sides and both read byte-identical values.
+
+    Deferred-shape components (the binding guards them with
+    ``associated()``/``allocated()``) are allocated from the source's own bounds
+    and then value-copied -- NOT pointer-associated: the SDFG marshals the global
+    and the dummy into two independent arrays, so aliasing them on the reference
+    would propagate a write the DUT does not see.
+    """
+    deferred_members = deferred_members or set()
+    pointer_members = pointer_members or set()
+    out = []
+    for _module, obj, comp, src in global_binds:
+        key = (obj.lower(), comp.lower())
+        if key in deferred_members:
+            guard = "associated" if key in pointer_members else "allocated"
+            out.append(f"{indent}if (.not. {guard}({obj} % {comp})) allocate({obj} % {comp}, source = {src})")
+        out.append(f"{indent}{obj} % {comp} = {src}")
+    return out
+
+
+def _global_bind_imports(global_binds) -> list:
+    """``use <module>, only: <object>`` lines for the module globals bound by
+    :func:`_global_bind_lines` (dedup, order-preserving)."""
+    seen, out = set(), []
+    for module, obj, _comp, _src in global_binds:
+        if (module, obj) not in seen:
+            seen.add((module, obj))
+            out.append(f"  use {module}, only: {obj}")
+    return out
+
+
 def _retarget_shim(shim: str,
                    dace_name: str,
                    entry: str,
@@ -151,7 +190,9 @@ def _retarget_shim(shim: str,
                    n_val=None,
                    solver_allocs=None,
                    pointer_members=None,
-                   extra_refmod_imports=None) -> str:
+                   extra_refmod_imports=None,
+                   global_binds=None,
+                   deferred_members=None) -> str:
     """Rewrite the auto ``<dace_name>_c`` shim into ``<dace_name>_ref_c``: same
     flat->struct reconstruction, but ``use``/``call``/name retarget to the
     ORIGINAL kernel ``entry`` instead of ``<dace_name>_dace``.
@@ -169,11 +210,16 @@ def _retarget_shim(shim: str,
     write would SEGV; the DUT gets this scratch from its own marshalling layer,
     so only REF needs it).  ``dims`` may reference reconstructed dummy structs
     and the seeded grid-dim globals (``nproma__refmod``), both in scope before
-    the call."""
+    the call.
+
+    ``global_binds`` (``[(module, object, component, source), ...]``) copies a
+    module global's components from the shim's reconstructed dummy struct; see
+    :func:`_global_bind_lines`."""
     mod, proc = entry.split("::")
     proc = proc.lower()
     module_dims = module_dims or []
     solver_allocs = solver_allocs or []
+    global_binds = global_binds or []
     # Distinct solver objects to ``use`` from ``mod`` (dedup, order-preserving).
     solver_objs = []
     for obj, _comp, _dims in solver_allocs:
@@ -193,6 +239,7 @@ def _retarget_shim(shim: str,
             # imported (renamed) so the extent resolves; value comes from the ctypes module-seed.
             for sym, module in (extra_refmod_imports or []):
                 out.append(f"  use {module}, only: {sym}__refmod => {sym}")
+            out.extend(_global_bind_imports(global_binds))
             continue
         if f"call {dace_name}_dace_finalize()" in ln:
             continue
@@ -208,6 +255,7 @@ def _retarget_shim(shim: str,
                 guard = "associated" if (obj.lower(), comp.lower()) in (pointer_members or set()) else "allocated"
                 out.append(f"{indent}if (.not. {guard}({obj} % {comp})) allocate({obj} % {comp}({dims}))")
                 out.append(f"{indent}{obj} % {comp} = 0.0d0")
+            out.extend(_global_bind_lines(indent, global_binds, deferred_members, pointer_members))
             args = [a.strip() for a in arglist.split(",")]
             args = [f"logical({a})" if a in bool_args else a for a in args]
             out.append(f"{indent}call {proc}({', '.join(args)})")
@@ -219,28 +267,36 @@ def _retarget_shim(shim: str,
     return "\n".join(out) + "\n"
 
 
-def _inject_dut_solver_allocs(shim: str,
+def _inject_dut_shim_prologue(shim: str,
                               dace_name: str,
                               entry: str,
                               module_dims=None,
                               n_val=None,
                               solver_allocs=None,
                               pointer_members=None,
-                              extra_refmod_imports=None) -> str:
-    """Pre-allocate the stubbed module-global solver-scratch host members in the
-    DUT shim -- symmetric to :func:`_retarget_shim`'s REF-side injection, but
-    KEEPING the ``<dace_name>_dace`` (SDFG) call.
+                              extra_refmod_imports=None,
+                              global_binds=None,
+                              deferred_members=None) -> str:
+    """Set up the stubbed module globals in the DUT shim -- symmetric to
+    :func:`_retarget_shim`'s REF-side injection, but KEEPING the
+    ``<dace_name>_dace`` (SDFG) call.
 
-    ``ocean_solve_construct`` is stubbed empty by single-TU extraction, so these
-    members stay unallocated; the binding's live-member marshalling sizes each
-    SoA companion from ``size(host_member)``, so without this the marshalling
-    takes the degenerate ``(1,1)`` fallback and the kernel's mesh-bounded writes
-    smash the heap.  Same ``(object, component, dims)`` list the REF shim uses.
+    ``solver_allocs``: ``ocean_solve_construct`` is stubbed empty by single-TU
+    extraction, so these members stay unallocated; the binding's live-member
+    marshalling sizes each SoA companion from ``size(host_member)``, so without
+    this the marshalling takes the degenerate ``(1,1)`` fallback and the kernel's
+    mesh-bounded writes smash the heap.  Same ``(object, component, dims)`` list
+    the REF shim uses.
+
+    ``global_binds``: same list the REF shim uses -- the binding marshals the
+    module global into its own SDFG argument, so the DUT needs the identical
+    host-side values or the two sides start from different inputs.
     """
     mod, _proc = entry.split("::")
     module_dims = module_dims or []
     solver_allocs = solver_allocs or []
-    if not solver_allocs:
+    global_binds = global_binds or []
+    if not solver_allocs and not global_binds:
         return shim
     solver_objs = []
     for obj, _comp, _dims in solver_allocs:
@@ -250,13 +306,15 @@ def _inject_dut_solver_allocs(shim: str,
     for ln in shim.splitlines():
         if ln.strip().startswith(f"use {dace_name}_dace_bindings"):
             out.append(ln)
-            out.append(f"  use {mod}, only: {', '.join(solver_objs)}")
+            if solver_objs:
+                out.append(f"  use {mod}, only: {', '.join(solver_objs)}")
             for sym, module in module_dims:
                 out.append(f"  use {module}, only: {sym}__refmod => {sym}")
             # Seeded grid-dim globals a solver-alloc extent references (nproma__refmod):
             # imported (renamed) so the extent resolves; value comes from the ctypes module-seed.
             for sym, module in (extra_refmod_imports or []):
                 out.append(f"  use {module}, only: {sym}__refmod => {sym}")
+            out.extend(_global_bind_imports(global_binds))
             continue
         m = re.match(rf"(\s*)call {dace_name}_dace\((.*)\)\s*$", ln)
         if m:
@@ -269,6 +327,7 @@ def _inject_dut_solver_allocs(shim: str,
                 guard = "associated" if (obj.lower(), comp.lower()) in (pointer_members or set()) else "allocated"
                 out.append(f"{indent}if (.not. {guard}({obj} % {comp})) allocate({obj} % {comp}({dims}))")
                 out.append(f"{indent}{obj} % {comp} = 0.0d0")
+            out.extend(_global_bind_lines(indent, global_binds, deferred_members, pointer_members))
             out.append(ln)
             continue
         out.append(ln)
@@ -434,7 +493,8 @@ def _build_and_compare(tu_path: Path,
                        do_not_emit=None,
                        prelude_paths=None,
                        inject_use_mpi=False,
-                       ref_solver_allocs=None):
+                       ref_solver_allocs=None,
+                       ref_global_binds=None):
     """Worker body (runs in a subprocess): build DUT + REF, drive both, return
     ``(max_diff, n_changed)``.  Imports deferred so the module loads cheaply in
     the orchestrating parent.
@@ -518,6 +578,11 @@ def _build_and_compare(tu_path: Path,
     # the binding's own associated(obj % comp) guards.
     pointer_members = {(o.lower(), c.lower())
                        for o, c in re.findall(r"associated\(\s*(\w+)\s*%\s*(\w+)\s*\)", binding_text)}
+    # A global-bind target needs an allocate only when the member is deferred-shape;
+    # the binding guards exactly those with associated()/allocated(), so its own
+    # guards classify array-vs-scalar members without a second spec field.
+    deferred_members = pointer_members | {(o.lower(), c.lower())
+                                          for o, c in re.findall(r"allocated\(\s*(\w+)\s*%\s*(\w+)\s*\)", binding_text)}
 
     # A solver-alloc extent may reference a seeded grid-dim global via its
     # <sym>__refmod rename; those not in module_dims come from module_seeds and
@@ -541,17 +606,19 @@ def _build_and_compare(tu_path: Path,
     # companion from the real mesh shape instead of the degenerate (1,1) fallback
     # (heap smash).  Mirrors the REF compile below; SDFG-linked binding untouched.
     dut_so_path = lib.so_path
-    if ref_solver_allocs:
+    if ref_solver_allocs or ref_global_binds:
         dut_shim = out / f"{dace_name}_c_dut.f90"
         dut_shim.write_text(
-            _inject_dut_solver_allocs(shim,
+            _inject_dut_shim_prologue(shim,
                                       dace_name,
                                       entry,
                                       module_dims,
                                       n,
                                       solver_allocs=ref_solver_allocs,
                                       pointer_members=pointer_members,
-                                      extra_refmod_imports=extra_refmod_imports))
+                                      extra_refmod_imports=extra_refmod_imports,
+                                      global_binds=ref_global_binds,
+                                      deferred_members=deferred_members))
         dut_so_path = out / f"lib{dace_name}_dut.so"
         sdfg_so = Path(lib.sdfg_so)
         _asan = ["-fsanitize=address", "-fno-omit-frame-pointer"] if os.environ.get("OCEAN_E2E_ASAN") else []
@@ -567,7 +634,7 @@ def _build_and_compare(tu_path: Path,
                             text=True,
                             cwd=str(out))
         if rl.returncode != 0:
-            raise RuntimeError(f"DUT solver-alloc relink failed:\n{rl.stderr[-3000:]}")
+            raise RuntimeError(f"DUT shim-prologue relink failed:\n{rl.stderr[-3000:]}")
 
     ref_shim = out / f"{dace_name}_ref_c.f90"
     ref_shim.write_text(
@@ -578,7 +645,9 @@ def _build_and_compare(tu_path: Path,
                        n,
                        solver_allocs=ref_solver_allocs,
                        pointer_members=pointer_members,
-                       extra_refmod_imports=extra_refmod_imports))
+                       extra_refmod_imports=extra_refmod_imports,
+                       global_binds=ref_global_binds,
+                       deferred_members=deferred_members))
     ref_so = out / f"lib{dace_name}_ref.so"
     # No -fallow-argument-mismatch: it would silence a genuine shim/kernel ABI
     # mismatch instead of failing loudly.  Dual-typed MPI kernels are made sound
@@ -693,6 +762,7 @@ def run_kernel_e2e(tu_path: Path,
                    prelude_paths=None,
                    inject_use_mpi=False,
                    ref_solver_allocs=None,
+                   ref_global_binds=None,
                    mesh_buffers=None) -> dict:
     """Run one kernel's e2e build+compare in an isolated subprocess.  Returns
     ``{passed, max_diff, n_changed, output}``; ``passed`` is False (with captured
@@ -701,6 +771,11 @@ def run_kernel_e2e(tu_path: Path,
     ``module_seeds`` seeds ICON config globals the DUT binding reads straight
     from the module (``nproma``, ``nflatlev``/``nrdmax``) on both ``.so``s --
     isolated reads are BSS 0 (OOB) with no extent to derive them from.
+
+    ``ref_global_binds`` (``[[module, object, component, source], ...]``) copies a
+    module-global derived type's components from a reconstructed dummy struct in
+    both shims, for kernels that read the global instead of the dummy they were
+    handed (see :func:`_global_bind_lines`).
     """
     # _session_scratch is gitignored (absent on a fresh CI checkout) -- create it before carving a per-run tempdir.
     scratch_root = _HERE.parent.parent.parent / "_session_scratch"
@@ -731,7 +806,8 @@ def run_kernel_e2e(tu_path: Path,
         json.dumps([str(p) for p in (prelude_paths or [])]),
         json.dumps(bool(inject_use_mpi)),
         json.dumps(module_array_seeds or {}),
-        json.dumps(ref_solver_allocs or [])
+        json.dumps(ref_solver_allocs or []),
+        json.dumps(ref_global_binds or [])
     ],
                           capture_output=True,
                           text=True,
@@ -746,7 +822,7 @@ def run_kernel_e2e(tu_path: Path,
 def _main(argv):
     (tu_path, entry, overrides_json, array_overrides_json, float_range_json, n, seed, out, int_fill_json,
      module_seeds_json, do_not_emit_json, prelude_paths_json, inject_use_mpi_json, module_array_seeds_json,
-     ref_solver_allocs_json) = argv[1:16]
+     ref_solver_allocs_json, ref_global_binds_json) = argv[1:17]
     try:
         max_diff, n_changed = _build_and_compare(Path(tu_path),
                                                  entry,
@@ -762,7 +838,8 @@ def _main(argv):
                                                  do_not_emit=json.loads(do_not_emit_json),
                                                  prelude_paths=json.loads(prelude_paths_json),
                                                  inject_use_mpi=json.loads(inject_use_mpi_json),
-                                                 ref_solver_allocs=json.loads(ref_solver_allocs_json))
+                                                 ref_solver_allocs=json.loads(ref_solver_allocs_json),
+                                                 ref_global_binds=json.loads(ref_global_binds_json))
         print(f"MAXDIFF: {max_diff}", flush=True)
         print(f"CHANGED: {n_changed}", flush=True)
         print("RESULT: PASS", flush=True)

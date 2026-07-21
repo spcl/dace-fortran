@@ -70,16 +70,18 @@ _DO_NOT_EMIT = [
 
 
 @pytest.mark.xfail(strict=True,
-                   reason="The DUT (SDFG) is now BIT-EXACT: with the copy-in phantom family fixed "
-                   "(hlfir-drop-stub-calls + the FoldCopyInOut extensions) and dolic_{c,e}=2 seeded, all 171 "
-                   "compared fields match stock gfortran to max_diff=0.0.  The LOWERING is proven correct.  The "
-                   "remaining failure is REF-SIDE ONLY: at dolic=2 the reference gfortran fork NULL-derefs "
-                   "`v_params%a_veloc_v(je,jk,blockno)` (single_tu:1008, icon_pp_edge_vnpredict_scheme) -- the "
-                   "`DO jk=2,dolic_e` loop is empty at dolic_e=1 but runs at dolic_e=2, and the module global "
-                   "`v_params%a_veloc_v` is unallocated on the ref (the DUT gets it as a marshalled SDFG arg).  "
-                   "Fixing this needs the ref to seed v_params%a_veloc_v with the SAME values as the DUT input "
-                   "(a derived-type module member, harder than module_array_seeds).  strict=True flags the day "
-                   "the ref runs clean and it goes bit-exact, so the marker is removed then.")
+                   reason="The v_params blocker is FIXED (see ref_global_binds below): the reference no longer "
+                   "NULL-derefs at dolic_e=2 and 170 of the 171 compared fields are bit-exact.  What is left is a "
+                   "DUT-side OpenMP RACE, not a reference problem: exactly one element, "
+                   "veloc_adv_vert(je=1,jk=2,blk=1), comes out 1 ulp low (0.012178316020156083 vs ...085).  At "
+                   "OMP_NUM_THREADS=1 the DUT is deterministic and bit-exact on ALL 171 fields over 17 runs; the "
+                   "error rate then climbs with the thread count (0/8 at 1 thread, 1/8 at 2, 4/8 at 4, 7/8 at 8 on "
+                   "a 16-core box), which is a race, not FP reassociation -- the SDFG has no OpenMP reduction, only "
+                   "`#pragma omp parallel for` copy nodes.  An OCEAN_E2E_ASAN=1 run is CLEAN and passes, so it is "
+                   "not an out-of-bounds access.  Fixing it means fixing the parallelisation in dace_fortran, not "
+                   "the harness -- pinning OMP_NUM_THREADS=1 here would hide a real miscompile.  NOTE strict=True "
+                   "is itself flaky while the race stands (2 of 4 full runs landed on the matching value); remove "
+                   "the marker once the race is fixed.")
 @pytest.mark.xdist_group("ocean_fparser")
 def test_solve_free_sfc_numerical_e2e(tmp_path: Path):
     """solve_free_sfc -> SDFG, driven on a degenerate valid mesh, BIT-EXACT against
@@ -127,6 +129,21 @@ def test_solve_free_sfc_numerical_e2e(tmp_path: Path):
             ["free_sfc_solver", "res_loc_wp", "2"],
             ["free_sfc_solver_comp", "x_loc_wp", "nproma__refmod, patch_3d % p_patch_2d(1) % alloc_cell_blocks"],
             ["free_sfc_solver_comp", "res_loc_wp", "2"],
+        ],
+        # icon_pp_edge_vnpredict_scheme reads the MODULE GLOBAL
+        # mo_ocean_physics_types::v_params, not the p_phys_param dummy the entry point is
+        # handed.  ICON's init_ho_params is outside the single TU, so v_params's POINTER
+        # members are unassociated: the reference NULL-derefs a_veloc_v once dolic_e=2
+        # makes the ``DO jk=2,dolic_e`` body run, and the DUT's binding, sizing the SoA
+        # companion from size(v_params%a_veloc_v), takes the degenerate (1,1,1) fallback
+        # and the same loop smashes the heap.  Both shims build them from p_phys_param, so
+        # both sides start from byte-identical values.  Only the deferred-shape members
+        # need this: v_params's scalars (bottom_drag_coeff, a_veloc_v_back) lower to an
+        # SDFG transient zero-initialised by a ``zinit_v_params_*`` tasklet, which already
+        # agrees with the reference's uninitialised module BSS.
+        ref_global_binds=[
+            ["mo_ocean_physics_types", "v_params", "a_veloc_v", "p_phys_param % a_veloc_v"],
+            ["mo_ocean_physics_types", "v_params", "velocity_windmixing", "p_phys_param % velocity_windmixing"],
         ],
     )
     assert res["passed"], f"solve_free_sfc e2e did not run:\n{res['output'][-6000:]}"
