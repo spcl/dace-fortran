@@ -581,8 +581,17 @@ def emit_mpi(builder, ctx, n, region):
     _tok = "__mpi_order"
     if _tok not in ctx.sdfg.arrays:
         ctx.sdfg.add_array(_tok, [1], dace.int32, transient=True)
+        # The chain is read-before-write by construction, so the FIRST read has nothing behind it: the generated
+        # C++ reads an uninitialised int (``-Wuninitialized``, and DaCe's own validator reports an uninitialised
+        # transient).  The value stays irrelevant -- seeding it just makes the first link defined.  The seed write
+        # doubles as that call's read source, so the RAW edge orders them inside this state.
+        _seed = state.add_tasklet(f"_mpi_seq_init_{builder.nid()}", {}, {"_o_out"}, "_o_out = 0")
+        _tok_src = state.add_write(_tok)
+        state.add_edge(_seed, "_o_out", _tok_src, None, Memlet(f"{_tok}[0]"))
+    else:
+        _tok_src = state.add_read(_tok)
     _seq = state.add_tasklet(f"_mpi_seq_{builder.nid()}", {"_o_in"}, {"_o_out"}, "_o_out = _o_in + 1")
-    state.add_edge(state.add_read(_tok), None, _seq, "_o_in", Memlet(f"{_tok}[0]"))
+    state.add_edge(_tok_src, None, _seq, "_o_in", Memlet(f"{_tok}[0]"))
     state.add_edge(_seq, "_o_out", state.add_write(_tok), None, Memlet(f"{_tok}[0]"))
 
     # Request slot / extent / count preserved by the C++ bridge
