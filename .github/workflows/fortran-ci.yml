@@ -100,7 +100,11 @@ jobs:
           libnetcdff-dev libnetcdf-dev libhdf5-dev \
           libfyaml-dev libxml2-dev liblapack-dev libblas-dev \
           pkg-config perl python3 \
-          bear autoconf automake m4 rsync zlib1g-dev
+          bear autoconf automake m4 rsync zlib1g-dev \
+          cppcheck clang-tidy-21
+        # Static analysis of the C++ DaCe generates (tests/codegen_static_analysis_test.py).
+        # clang-tidy ships versioned from apt.llvm.org; the checker probes it by bare name.
+        command -v clang-tidy || sudo ln -sf /usr/lib/llvm-21/bin/clang-tidy /usr/local/bin/clang-tidy
         # The ICON-integration tests configure + ``make`` the
         # icon-model submodule on demand (the ``icon_build`` fixture).
         # GRIB2/eccodes is DISABLED in that build (the dycore tests
@@ -137,9 +141,13 @@ jobs:
         missing=0
         # flang HLFIR bridge + Fortran/MPI/C-C++ toolchain + ICON build tools
         # (mpicc/mpicxx/mpifort + make/perl/python3 drive the icon_build fixture).
+        # cppcheck/clang-tidy back the generated-C++ static analysis; the checker raises rather than
+        # degrading to "found nothing" when a tool is absent, so a provisioning regression reds the
+        # lane instead of silently disabling the analysis.
         for t in flang-new-21 clang-21 gfortran gcc g++ make cmake ninja \
                  mpicc mpicxx mpifort mpif90 perl python3 \
-                 bear autoconf automake aclocal m4 rsync pkg-config; do
+                 bear autoconf automake aclocal m4 rsync pkg-config \
+                 cppcheck clang-tidy; do
           if command -v "$t" >/dev/null 2>&1; then
             printf '  ok    %-12s %s\n' "$t" "$(command -v "$t")"
           else

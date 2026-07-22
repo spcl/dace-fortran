@@ -67,6 +67,29 @@ import pytest
 
 from dace_fortran.external import clear_external_registry
 
+# --- generated-C++ sanity check ------------------------------------------
+# Every SDFG a test compiles gets its generated C++ scanned for the UB-class warnings in
+# CRITICAL_WARNINGS.  Wrapping compile() (rather than checking in one dedicated test) is what makes it
+# a sanity check: any test that generates code exercises it, including the ones whose kernels nobody
+# thought to analyse.  The uninitialised-extent miscompile that motivated this shipped through a suite
+# that compiled the offending TU hundreds of times without ever reading a warning.
+from dace.sdfg import SDFG
+
+from dace_fortran.codegen_check import analyze
+
+compile_without_check = SDFG.compile
+
+
+def compile_and_check_generated_code(self, *args, **kwargs):
+    result = compile_without_check(self, *args, **kwargs)
+    found = analyze(self, "warnings")
+    if found:
+        raise AssertionError(f"generated C++ for SDFG '{self.name}' emits critical warnings:\n" + "\n".join(found))
+    return result
+
+
+SDFG.compile = compile_and_check_generated_code
+
 
 # --- external-registry isolation -----------------------------------------
 @pytest.fixture(autouse=True)
