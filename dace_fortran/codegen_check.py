@@ -137,4 +137,11 @@ def analyze(sdfg: SDFG, tool: str = "warnings") -> List[str]:
     diagnostics = [ln for ln in text.splitlines() if ": warning:" in ln or ": error:" in ln]
     # Belt-and-braces across all four tools: a diagnostic whose file is not the generated TU came from a header we
     # do not own, and nothing in this repo can act on it.
-    return [ln for ln in diagnostics if str(src) in ln]
+    diagnostics = [ln for ln in diagnostics if str(src) in ln]
+    if tool in ("warnings", "analyzer"):
+        # The build's own flags carry -Wall -Wextra, so the compiler also reports style warnings
+        # (-Wunused-but-set-variable fires in the hundreds on generated code).  Gate on the tag, not on the word
+        # "warning", or the critical signal drowns in noise nobody will read.
+        critical = {f"[-W{w}]" for w in (CLANG_CRITICAL_WARNINGS if clang else CRITICAL_WARNINGS)}
+        diagnostics = [ln for ln in diagnostics if any(tag in ln for tag in critical)]
+    return diagnostics
