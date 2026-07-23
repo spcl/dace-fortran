@@ -442,6 +442,37 @@ def _global_is_baked_constant(v) -> bool:
     return 'EC' in tail or 'F' in tail
 
 
+def reject_unlowered_expressions(sdfg: SDFG):
+    """Refuse an SDFG carrying the bridge's ``?`` placeholder in any expression.
+
+    ``?`` is what the C++ side returns for "I could not lower this operand".  Call sites that can legitimately
+    drop such a piece check for it explicitly and do so long before here, so a ``?`` still present once the graph
+    is fully built is always a leak -- a subset or assignment the bridge silently gave up on.
+
+    Letting one through is worse than failing: ``(((? + a_d0) - 1) - ?) + 1`` happens to be a syntax error and
+    surfaces as an opaque ``SyntaxError: invalid syntax (<unknown>, line 1)`` from deep inside DaCe's symbol
+    replacement, but a ``?`` in a position where it parses would instead ship a silently wrong subset.  Fail here,
+    naming the edge, while the location is still recoverable.
+    """
+    leaks = []
+    for sd in sdfg.all_sdfgs_recursive():
+        for state in sd.states():
+            for edge in state.edges():
+                subsets = (str(edge.data.subset), str(edge.data.other_subset))
+                if any("?" in s for s in subsets):
+                    leaks.append(f"{sd.name}/{state.label}: memlet {edge.data.data} [{', '.join(subsets)}]")
+        for edge in sd.all_interstate_edges():
+            for target, expr in edge.data.assignments.items():
+                if "?" in str(expr):
+                    leaks.append(f"{sd.name}: interstate assignment {target} = {expr}")
+            if "?" in str(edge.data.condition.as_string):
+                leaks.append(f"{sd.name}: interstate condition {edge.data.condition.as_string}")
+    if leaks:
+        raise RuntimeError("bridge emitted unlowered '?' placeholders into the SDFG (" + str(len(leaks)) +
+                           " site(s)); the Fortran construct behind each is not supported yet:\n  " +
+                           "\n  ".join(leaks[:20]))
+
+
 def _specialize_symbol(sdfg: SDFG, symbol_name: str, value):
     """Bake a free symbol to a constant value, recursively through nested SDFGs.
 
@@ -882,6 +913,10 @@ class SDFGBuilder:
         # because ``_specialize_symbol`` substitutes them as literal
         # integers in every subset.
         sdfg._fortran_offset_values = dict(const_offsets)
+        # Before any symbol substitution: ``_specialize_symbol`` parses every subset it rewrites, so a leaked ``?``
+        # surfaces there as a bare ``SyntaxError: invalid syntax (<unknown>, line 1)`` with no indication of which
+        # edge or which Fortran construct produced it.  Check first and name the site.
+        reject_unlowered_expressions(sdfg)
         # Constant offsets: ``_specialize_symbol`` walks every nested
         # SDFG and strips the symbol from each NestedSDFG node's
         # ``symbol_mapping``, so the symbol leaves the signature
@@ -988,6 +1023,7 @@ class SDFGBuilder:
         # default state, so a deterministic zero allocation is the correct
         # (and warning-silencing) semantics.  See ``_zero_init_unwritten_transients``.
         self._zero_init_unwritten_transients(sdfg)
+        reject_unlowered_expressions(sdfg)
         # Validate the SDFG exactly as returned -- after every mutation
         # (post-gen passes, frozen-signature snapshot, auto-dim retype) --
         # so a caller never receives an unvalidated graph.
