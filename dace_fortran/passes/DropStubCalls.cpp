@@ -27,14 +27,21 @@
 //     ``hlfir.stub_symbols`` attribute (set by ``set_stub_symbols``).  Runs
 //     first in the pipeline so nothing downstream sees the dead calls.
 //
-// A stub call whose RESULT is consumed is rejected, not erased:
-//     dropping it would leave the result undefined and silently feed garbage
-//     into live arithmetic.  ``do_not_emit`` on a value-returning procedure is
-//     a policy error -- use an ExternalFunction (emitted, callable) instead.
+// A stub call whose RESULT is consumed is skipped anyway, not rejected:
+//     the call is still dropped, but each live result is replaced with a typed
+//     zero so no consumer reads an undefined value.  This is the ``new_timer``
+//     shape -- ``h = new_timer(...)`` feeding a no-op ``timer_start(h)``, where
+//     the handle is inert and zero is as good as any id.  Because a zeroed
+//     result COULD instead have fed live arithmetic, every drop emits a warning
+//     (deduped per procedure), loudest where a result was zeroed, so a genuine
+//     policy mistake is visible rather than silent.  Prefer an ExternalFunction
+//     (emitted, callable) when the value is real.
 // ============================================================================
 
 #include "flang/Optimizer/Dialect/FIROps.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringMap.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/Pass.h"
 #include "passes/Passes.h"
@@ -50,7 +57,7 @@ struct DropStubCallsPass : public mlir::PassWrapper<DropStubCallsPass, mlir::Ope
   llvm::StringRef getArgument() const final { return "hlfir-drop-stub-calls"; }
   llvm::StringRef getDescription() const final {
     return "Erase calls to do_not_emit (stub) procedures, whose calls are dropped at "
-           "SDFG emission anyway; rejects a stub call whose result is consumed.";
+           "SDFG emission anyway; a consumed result is zeroed and warned, not rejected.";
   }
 
   /// Same matching as ``HLFIRModule::externalize_symbols``: bare symbol, or the
@@ -69,26 +76,44 @@ struct DropStubCallsPass : public mlir::PassWrapper<DropStubCallsPass, mlir::Ope
       if (auto s = mlir::dyn_cast<mlir::StringAttr>(a)) names.push_back(s.getValue().str());
     if (names.empty()) return;
 
-    bool failed = false;
     llvm::SmallVector<fir::CallOp, 16> dead;
+    llvm::StringMap<unsigned> siteCount;    // callee -> total dropped call sites
+    llvm::StringMap<unsigned> zeroedCount;  // callee -> live results replaced with zero
     getOperation().walk([&](fir::CallOp call) {
       auto callee = call.getCallee();
       if (!callee || !matches(callee->getRootReference().getValue(), names)) return;
-      for (mlir::Value const res : call.getResults())
-        if (!res.use_empty()) {
-          call.emitError("hlfir-drop-stub-calls: ``")
-              << callee->getRootReference().getValue()
-              << "`` is registered do_not_emit, but its RESULT is used.  Dropping the call "
-                 "would leave that result undefined and feed garbage into live code; a "
-                 "value-returning procedure must be registered as an ExternalFunction "
-                 "(emitted and callable), not do_not_emit.";
-          failed = true;
-          return;
-        }
+      llvm::StringRef const name = callee->getRootReference().getValue();
+      // The call is dropped whether or not it returns a value.  A live result
+      // (``h = new_timer(...)`` feeding a no-op ``timer_start(h)``) is replaced
+      // with a typed zero so no consumer reads an undefined value.
+      mlir::OpBuilder b(call);
+      for (mlir::Value res : call.getResults()) {
+        if (res.use_empty()) continue;
+        auto zero = b.create<fir::ZeroOp>(call.getLoc(), res.getType());
+        res.replaceAllUsesWith(zero.getResult());
+        zeroedCount[name]++;
+      }
+      siteCount[name]++;
       dead.push_back(call);
     });
     for (auto call : dead) call.erase();
-    if (failed) signalPassFailure();
+
+    // A dropped stub is a silent change to the program, so make every drop
+    // observable -- one deduped line per distinct procedure (not per call site:
+    // ICON inlines thousands), loudest where a live result was zeroed.  Printed
+    // via llvm::errs (as InlineAll / MarkBoundsRemapViews do) so it surfaces
+    // regardless of the MLIR diagnostic handler.
+    for (auto const& kv : siteCount) {
+      unsigned const zeroed = zeroedCount.lookup(kv.first());
+      llvm::errs() << "hlfir-drop-stub-calls: skipped do_not_emit procedure `" << kv.first() << "` (" << kv.second
+                   << " call site(s))";
+      if (zeroed)
+        llvm::errs() << "; its result was consumed at " << zeroed
+                     << " site(s) and replaced with zero -- verify this is an inert handle (e.g. a timer id), "
+                        "not a value feeding live arithmetic";
+      llvm::errs() << ".\n";
+    }
+    llvm::errs().flush();
   }
 };
 
