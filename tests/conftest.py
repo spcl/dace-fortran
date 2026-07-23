@@ -75,16 +75,26 @@ from dace_fortran.external import clear_external_registry
 # that compiled the offending TU hundreds of times without ever reading a warning.
 from dace.sdfg import SDFG
 
-from dace_fortran.codegen_check import analyze
+from dace_fortran.codegen_check import NONCRITICAL_NOISE, analyze, critical_tags
 
 compile_without_check = SDFG.compile
 
 
 def compile_and_check_generated_code(self, *args, **kwargs):
     result = compile_without_check(self, *args, **kwargs)
-    found = analyze(self, "warnings")
-    if found:
-        raise AssertionError(f"generated C++ for SDFG '{self.name}' emits critical warnings:\n" + "\n".join(found))
+    # One compile-flag pass gives every -W diagnostic; split it: critical (UB-class) fails the build, the rest is
+    # surfaced as information (minus the hundreds-strong style noise) so a non-fatal warning is at least visible.
+    diagnostics = analyze(self, "warnings", critical_only=False)
+    tags = critical_tags()
+    critical = [ln for ln in diagnostics if any(t in ln for t in tags)]
+    informational = [
+        ln for ln in diagnostics if ln not in critical and not any(f"[-W{n}]" in ln for n in NONCRITICAL_NOISE)
+    ]
+    if informational:
+        print(f"[codegen-check] '{self.name}' non-critical warnings ({len(informational)}):\n" +
+              "\n".join(informational))
+    if critical:
+        raise AssertionError(f"generated C++ for SDFG '{self.name}' emits critical warnings:\n" + "\n".join(critical))
     return result
 
 

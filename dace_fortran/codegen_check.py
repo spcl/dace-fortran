@@ -15,7 +15,7 @@ import shlex
 import shutil
 import subprocess
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from dace.config import Config
 from dace.sdfg import SDFG
@@ -96,12 +96,28 @@ def require(tool: str) -> str:
     return found
 
 
-def analyze(sdfg: SDFG, tool: str = "warnings") -> List[str]:
+#: Non-critical warning tags that fire in the hundreds on generated code and carry no action -- excluded from
+#: the informational print so a real non-critical warning is not buried.  (The generated code deliberately keeps
+#: dead temps and never-returning stub decls; that is not a defect to chase.)
+NONCRITICAL_NOISE = ("unused-but-set-variable", "unused-variable", "unused-parameter", "undefined-function-result")
+
+
+def critical_tags(clang: Optional[bool] = None) -> set:
+    """The ``[-Wname]`` tags that mark UB-class (critical) warnings for the active compiler."""
+    if clang is None:
+        clang = compiler_is_clang()
+    return {f"[-W{w}]" for w in (CLANG_CRITICAL_WARNINGS if clang else CRITICAL_WARNINGS)}
+
+
+def analyze(sdfg: SDFG, tool: str = "warnings", critical_only: bool = True) -> List[str]:
     """Run ``tool`` over the generated C++ and return the diagnostic lines it reported.
 
     ``warnings`` and ``analyzer`` follow the configured compiler (gcc ``-fanalyzer`` / clang ``--analyze``);
     the other two are their own binaries.  Only correctness checks are enabled, so a non-empty result is always
     actionable.
+
+    :param critical_only: for ``warnings``/``analyzer``, keep only the UB-class (:data:`CRITICAL_WARNINGS`) tags;
+        pass ``False`` to get every ``-W`` diagnostic the compiler reported (the caller then filters/prints them).
     """
     if tool not in TOOLS:
         raise ValueError(f"unknown tool {tool!r}; expected one of {TOOLS}")
@@ -138,10 +154,10 @@ def analyze(sdfg: SDFG, tool: str = "warnings") -> List[str]:
     # Belt-and-braces across all four tools: a diagnostic whose file is not the generated TU came from a header we
     # do not own, and nothing in this repo can act on it.
     diagnostics = [ln for ln in diagnostics if str(src) in ln]
-    if tool in ("warnings", "analyzer"):
+    if critical_only and tool in ("warnings", "analyzer"):
         # The build's own flags carry -Wall -Wextra, so the compiler also reports style warnings
         # (-Wunused-but-set-variable fires in the hundreds on generated code).  Gate on the tag, not on the word
         # "warning", or the critical signal drowns in noise nobody will read.
-        critical = {f"[-W{w}]" for w in (CLANG_CRITICAL_WARNINGS if clang else CRITICAL_WARNINGS)}
+        critical = critical_tags(clang)
         diagnostics = [ln for ln in diagnostics if any(tag in ln for tag in critical)]
     return diagnostics
