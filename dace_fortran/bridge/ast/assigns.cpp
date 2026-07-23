@@ -853,9 +853,52 @@ struct DesignateDim {
 /// index operands accordingly.  Returns ``false`` (and leaves ``out``
 /// undefined) when an operand can't be lowered to a string  --  caller
 /// must decide whether that's recoverable or a hard error.
+/// ``fir.box_dims`` rendered as the descriptor symbols the bridge already mints: result #0 is the lower bound
+/// (Fortran default 1 -- a non-default lb is modelled separately as ``offset_<arr>_d<i>``), result #1 the extent
+/// ``<arr>_d<dim>``.  Returns "" when it cannot be resolved.
+///
+/// Deliberately used ONLY for a rank-reducing designate's triplet bounds (see ``parseDesignateDims``). Flang
+/// writes ``arr(:, 1)`` as ``arr(1:box_dims(arr,0)#1:1, 1)``, and without resolving that bound the section assign
+/// bails to ``buildCopyNode``'s WHOLE-ARRAY copy, which ignores the scalar dim: d0*d1 elements written into a
+/// d0-sized halo buffer (the ICON ``sync_patch_array`` heap overflow). Widening this to every designate instead
+/// re-lowers assigns that have been falling back for other reasons, which mints extent symbols for arrays that
+/// have no descriptor (a flattened derived-type array is one array PER MEMBER) -- so keep the scope tight.
+static std::string resolveBoxDimsBound(mlir::Value v) {
+  auto* def = v.getDefiningOp();
+  while (def) {
+    auto conv = mlir::dyn_cast<fir::ConvertOp>(def);
+    if (!conv) break;
+    v = conv.getValue();
+    def = v.getDefiningOp();
+  }
+  auto bd = mlir::dyn_cast_or_null<fir::BoxDimsOp>(def);
+  if (!bd) return "";
+  if (v == bd.getResult(0)) return "1";
+  if (v != bd.getResult(1)) return "";
+  auto dim = traceConstInt(bd.getDim());
+  if (!dim) return "";
+  // A derived-type array is flattened into one array per member, so the struct base name carries no descriptor
+  // and ``<base>_d<i>`` would be a symbol nothing defines.
+  auto ty = bd.getVal().getType();
+  if (auto b = mlir::dyn_cast<fir::BoxType>(ty)) ty = b.getEleTy();
+  if (auto r = mlir::dyn_cast<fir::ReferenceType>(ty)) ty = r.getEleTy();
+  if (auto h = mlir::dyn_cast<fir::HeapType>(ty)) ty = h.getEleTy();
+  if (auto p = mlir::dyn_cast<fir::PointerType>(ty)) ty = p.getEleTy();
+  auto seq = mlir::dyn_cast<fir::SequenceType>(ty);
+  if (!seq || mlir::dyn_cast<fir::RecordType>(seq.getEleTy())) return "";
+  auto base = traceToDecl(bd.getVal());
+  if (base.empty()) return "";
+  return base + "_d" + std::to_string(*dim);
+}
+
 static bool parseDesignateDims(hlfir::DesignateOp dg, std::vector<DesignateDim>& out) {
   auto triplets = dg.getIsTriplet();
   auto idxs = dg.getIndices();
+  // Only a designate that DROPS a dim can be miscompiled by the whole-array fallback; everything else keeps its
+  // existing behaviour (see ``resolveBoxDimsBound``).
+  bool rankReducing = false;
+  for (bool const isT : triplets)
+    if (!isT) rankReducing = true;
   unsigned cursor = 0;
   for (bool const isT : triplets) {
     DesignateDim d;
@@ -864,6 +907,12 @@ static bool parseDesignateDims(hlfir::DesignateOp dg, std::vector<DesignateDim>&
       if (cursor + 3 > idxs.size()) return false;
       d.lo = buildIndexExpr(idxs[cursor], 0);
       d.hi = buildIndexExpr(idxs[cursor + 1], 0);
+      if (rankReducing) {
+        if (d.lo == "?" || d.lo.empty())
+          if (auto r = resolveBoxDimsBound(idxs[cursor]); !r.empty()) d.lo = r;
+        if (d.hi == "?" || d.hi.empty())
+          if (auto r = resolveBoxDimsBound(idxs[cursor + 1]); !r.empty()) d.hi = r;
+      }
       if (d.lo.empty() || d.lo == "?" || d.hi.empty() || d.hi == "?") return false;
       if (auto sc = traceConstInt(idxs[cursor + 2])) {
         d.strideConst = *sc;
@@ -1061,6 +1110,29 @@ std::vector<ASTNode> buildSectionScalarAssign(hlfir::AssignOp assign, hlfir::Des
 /// mismatch throws ``std::runtime_error`` rather than falling back to
 /// a wrong answer.  The dispatcher relies on this  --  it does NOT have
 /// a section-to-section recovery path.
+// Strip the ``ref`` / ``box`` / ``heap`` / ``pointer`` wrappers off a declared type until the underlying
+// ``fir.array`` (or a non-wrapper) is reached.  An ALLOCATABLE/POINTER declares as ``ref<box<heap<array>>>`` --
+// the box is nested INSIDE the ref, so a single ordered pass of ``if (box) ... if (ref) ...`` never unwraps it.
+static mlir::Type peelToSequence(mlir::Type ty) {
+  for (bool peeled = true; peeled;) {
+    peeled = false;
+    if (auto b = mlir::dyn_cast<fir::BoxType>(ty)) {
+      ty = b.getEleTy();
+      peeled = true;
+    } else if (auto r = mlir::dyn_cast<fir::ReferenceType>(ty)) {
+      ty = r.getEleTy();
+      peeled = true;
+    } else if (auto h = mlir::dyn_cast<fir::HeapType>(ty)) {
+      ty = h.getEleTy();
+      peeled = true;
+    } else if (auto p = mlir::dyn_cast<fir::PointerType>(ty)) {
+      ty = p.getEleTy();
+      peeled = true;
+    }
+  }
+  return ty;
+}
+
 std::vector<ASTNode> buildSectionToSectionAssign(hlfir::AssignOp assign, mlir::Value dst) {
   auto srcVal = assign.getOperand(0);
   auto* srcDef = srcVal.getDefiningOp();
@@ -1094,11 +1166,12 @@ std::vector<ASTNode> buildSectionToSectionAssign(hlfir::AssignOp assign, mlir::V
     dstName = traceToDecl(dstDg.getMemref());
   } else {
     dstName = allocAliasFor(extractName(dstDecl.getUniqName().str()));
-    auto ty = dstDecl.getResult(0).getType();
-    if (auto b = mlir::dyn_cast<fir::BoxType>(ty)) ty = b.getEleTy();
-    if (auto r = mlir::dyn_cast<fir::ReferenceType>(ty)) ty = r.getEleTy();
-    if (auto h = mlir::dyn_cast<fir::HeapType>(ty)) ty = h.getEleTy();
-    if (auto p = mlir::dyn_cast<fir::PointerType>(ty)) ty = p.getEleTy();
+    // An ALLOCATABLE/POINTER declares as ``ref<box<heap<array>>>`` -- the box sits INSIDE the ref. A single
+    // sequential peel (box-then-ref-then-heap) checks box before it has peeled the ref, so it never unwraps and
+    // dstTC stays 0. Loop until the wrappers are gone: this is the exact shape of a Fortran halo send buffer
+    // (``sync_sbuf = arr(:, 1)``), and leaving it unpeeled bailed the section path into a whole-array copy that
+    // overran the buffer.
+    auto ty = peelToSequence(dstDecl.getResult(0).getType());
     if (auto seq = mlir::dyn_cast<fir::SequenceType>(ty)) dstTC = seq.getShape().size();
     if (dstTC == 0) return {};
   }
@@ -1114,13 +1187,34 @@ std::vector<ASTNode> buildSectionToSectionAssign(hlfir::AssignOp assign, mlir::V
   auto srcDecl = mlir::dyn_cast<hlfir::DeclareOp>(srcDef);
   if (!srcDg && !srcDecl) return {};
 
+  // Falling back to ``buildCopyNode``'s whole-array copy is only sound when neither side drops a dimension: a
+  // designate with a SCALAR dim selects a slice of a larger array, so copying the whole thing runs past the
+  // destination (this is how ``sync_sbuf = arr(:, 1)`` overran a one-column halo buffer by a factor of d1).
+  // Where bounds don't parse and a dim is dropped, refuse -- a wrong answer that runs beats no build only until
+  // it corrupts the heap.
+  auto rankReducing = [](hlfir::DesignateOp dg) {
+    if (!dg) return false;
+    for (bool const isT : dg.getIsTriplet())
+      if (!isT) return true;
+    return false;
+  };
+  auto refuseUnparseable = [&](hlfir::DesignateOp dg, const char* side) {
+    if (!rankReducing(dg)) return;
+    throw std::runtime_error(std::string("section-to-section assign on \"") + dstName + "\": " + side +
+                             " designate has a scalar (rank-reducing) dim but its bounds did not parse; a "
+                             "whole-array copy would read or write outside the section");
+  };
+
   std::string srcName;
   std::vector<DesignateDim> srcDims;
   unsigned srcTC = 0;
   if (srcDg) {
     srcName = traceToDecl(srcDg.getMemref());
     if (srcName.empty()) return {};
-    if (!parseDesignateDims(srcDg, srcDims)) return {};
+    if (!parseDesignateDims(srcDg, srcDims)) {
+      refuseUnparseable(srcDg, "src");
+      return {};
+    }
     for (auto& d : srcDims)
       if (d.isTriplet) ++srcTC;
   } else {
@@ -1132,12 +1226,8 @@ std::vector<ASTNode> buildSectionToSectionAssign(hlfir::AssignOp assign, mlir::V
     // the loop bounds come from the LHS.
     srcName = allocAliasFor(extractName(srcDecl.getUniqName().str()));
     if (srcName.empty()) return {};
-    // Determine src rank from the underlying type.
-    auto ty = srcDecl.getResult(0).getType();
-    if (auto b = mlir::dyn_cast<fir::BoxType>(ty)) ty = b.getEleTy();
-    if (auto r = mlir::dyn_cast<fir::ReferenceType>(ty)) ty = r.getEleTy();
-    if (auto h = mlir::dyn_cast<fir::HeapType>(ty)) ty = h.getEleTy();
-    if (auto p = mlir::dyn_cast<fir::PointerType>(ty)) ty = p.getEleTy();
+    // Determine src rank from the underlying type; peel wrappers in any nesting order (see the dst path).
+    auto ty = peelToSequence(srcDecl.getResult(0).getType());
     unsigned rank = 0;
     if (auto seq = mlir::dyn_cast<fir::SequenceType>(ty)) rank = seq.getShape().size();
     if (rank == 0) return {};
@@ -1159,16 +1249,14 @@ std::vector<ASTNode> buildSectionToSectionAssign(hlfir::AssignOp assign, mlir::V
                              "\": triplet rank mismatch (dst=" + std::to_string(dstTC) +
                              ", src=" + std::to_string(srcTC) + ")");
 
-  // Bounds parsing can fail on dynamic-extent allocatables whose
-  // triplet operands are ``fir.box_dims`` results (``buildIndexExpr``
-  // doesn't lower those yet).  In that case both sides are typically
-  // full-extent ``(:)`` over the same backing storage and
-  // ``buildCopyNode``'s whole-array copy is correct  --  fall back
-  // silently.  Genuine section mismatches (different lo/hi/stride
-  // each side) require parseable bounds and are caught below.
+  // Same guard as on the source side above: an unparseable rank-reducing designate must not degrade to a
+  // whole-array copy.
   std::vector<DesignateDim> dstDims;
   if (dstDg) {
-    if (!parseDesignateDims(dstDg, dstDims)) return {};
+    if (!parseDesignateDims(dstDg, dstDims)) {
+      refuseUnparseable(dstDg, "dst");
+      return {};
+    }
   } else {
     // Bare decl: synthesise full-extent triplets per dim, mirroring
     // the bare-source path above.  Loop bounds come from the src
