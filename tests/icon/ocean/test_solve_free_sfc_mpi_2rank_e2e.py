@@ -110,10 +110,14 @@ def _sync_body(field: str, rank: int) -> str:
     n2 = "" if rank == 2 else "\n    sync_n2 = SIZE(%s, 2)" % field
     return f"""
     INTEGER :: sync_rank, sync_np, sync_neigh, sync_ierr, sync_cnt, sync_n1, sync_n2, sync_nb
+    ! Real status buffer: SYNC_COMM=0 / SYNC_DP=17 match OpenMPI's MPI_COMM_WORLD / MPI_DOUBLE_PRECISION
+    ! handle integers, but MPI_STATUS_IGNORE is a magic common-block address, NOT an integer literal.
+    ! MPI_Recv writes MPI_STATUS_SIZE (6) integers of status, so it needs a genuine 6-element buffer --
+    ! a scalar -1 sentinel made the completing recv write out of bounds and SEGV.
+    INTEGER :: sync_stat(6)
     REAL(KIND = 8), ALLOCATABLE :: sync_sbuf({buf_decl}), sync_rbuf({buf_decl})
     INTEGER, PARAMETER :: SYNC_COMM = 0
     INTEGER, PARAMETER :: SYNC_DP = 17
-    INTEGER, PARAMETER :: SYNC_STAT_IGNORE = -1
     EXTERNAL :: MPI_Comm_rank, MPI_Comm_size, MPI_Send, MPI_Recv
     CALL MPI_Comm_rank(SYNC_COMM, sync_rank, sync_ierr)
     CALL MPI_Comm_size(SYNC_COMM, sync_np, sync_ierr)
@@ -128,9 +132,9 @@ def _sync_body(field: str, rank: int) -> str:
     sync_sbuf = {field}{owned}
     IF (MOD(sync_rank, 2) == 0) THEN
       CALL MPI_Send(sync_sbuf, sync_cnt, SYNC_DP, sync_neigh, typ, SYNC_COMM, sync_ierr)
-      CALL MPI_Recv(sync_rbuf, sync_cnt, SYNC_DP, sync_neigh, typ, SYNC_COMM, SYNC_STAT_IGNORE, sync_ierr)
+      CALL MPI_Recv(sync_rbuf, sync_cnt, SYNC_DP, sync_neigh, typ, SYNC_COMM, sync_stat, sync_ierr)
     ELSE
-      CALL MPI_Recv(sync_rbuf, sync_cnt, SYNC_DP, sync_neigh, typ, SYNC_COMM, SYNC_STAT_IGNORE, sync_ierr)
+      CALL MPI_Recv(sync_rbuf, sync_cnt, SYNC_DP, sync_neigh, typ, SYNC_COMM, sync_stat, sync_ierr)
       CALL MPI_Send(sync_sbuf, sync_cnt, SYNC_DP, sync_neigh, typ, SYNC_COMM, sync_ierr)
     END IF
     {field}{halo} = sync_rbuf
