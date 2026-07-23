@@ -1415,11 +1415,31 @@ void runMultiCallsiteDisambiguation(mlir::ModuleOp module) {
     for (int i = 0; i < limits::kSsaBackWalkDepth && v; ++i) {
       auto* d = v.getDefiningOp();
       if (!d) return nullptr;
-      if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) { v = cv.getValue(); continue; }
+      if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
+        v = cv.getValue();
+        continue;
+      }
       if (mlir::isa<fir::AllocaOp>(d)) return d;
       return nullptr;
     }
     return nullptr;
+  };
+  // An ALLOCATE's fir.allocmem carries its own "<declUniqName>.alloc" uniq_name, and alloc-site grouping resolves
+  // sites by that string. Renaming only the declare leaves the allocmem halves of N inlined copies collided, so
+  // every copy but the first finds no site, emits no "<buf>_d<i> = <extent>" assign, and its extent stays a free
+  // symbol -- an uninitialised local sizes the buffer and the pack overruns it. Keep both halves in lockstep.
+  auto renameAllocSitesOf = [](hlfir::DeclareOp decl, const std::string& newUniq) {
+    for (auto* user : decl.getResult(0).getUsers()) {
+      auto store = mlir::dyn_cast<fir::StoreOp>(user);
+      if (!store || store.getMemref() != decl.getResult(0)) continue;
+      auto embox = mlir::dyn_cast_or_null<fir::EmboxOp>(store.getValue().getDefiningOp());
+      if (!embox) continue;
+      auto am = mlir::dyn_cast_or_null<fir::AllocMemOp>(embox.getMemref().getDefiningOp());
+      if (!am) continue;  // embox of zero_bits (empty-init store) has no allocmem
+      auto un = am.getUniqName();
+      if (!un || !un->ends_with(".alloc")) continue;
+      am->setAttr("uniq_name", mlir::StringAttr::get(am.getContext(), newUniq + ".alloc"));
+    }
   };
   llvm::StringMap<llvm::SmallVector<hlfir::DeclareOp, 4>> localByUniq;
   module.walk([&](hlfir::DeclareOp op) {
@@ -1442,7 +1462,9 @@ void runMultiCallsiteDisambiguation(mlir::ModuleOp module) {
       unsigned const n = idx++;
       if (n == 0) continue;  // first keeps the bare name
       auto un = op.getUniqName().str();
-      op->setAttr("uniq_name", mlir::StringAttr::get(op.getContext(), un + "_inl" + std::to_string(n)));
+      auto renamed = un + "_inl" + std::to_string(n);
+      op->setAttr("uniq_name", mlir::StringAttr::get(op.getContext(), renamed));
+      renameAllocSitesOf(op, renamed);
     }
   }
 }
