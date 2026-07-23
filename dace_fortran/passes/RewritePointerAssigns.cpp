@@ -844,7 +844,16 @@ struct RewritePointerAssignsPass
       if (bitEnumContainsAny(*attrs, fir::FortranVariableFlagsEnum::pointer)) ptrDecls.push_back(d);
     });
 
-    for (auto ptrDecl : ptrDecls) rewrite(ptrDecl);
+    // A rewrite erases the inlined-callee ALIASES of the pointer it collapses,
+    // and those aliases are pointer declares too -- so they are already in this
+    // snapshot.  Skip the ones a previous iteration freed rather than handing
+    // ``rewrite`` a dangling op.  Comparing addresses is safe where reading them
+    // is not: the snapshot predates every erase, so an op MLIR later allocates
+    // at a recycled address is never itself in ``ptrDecls``.
+    for (auto ptrDecl : ptrDecls) {
+      if (erasedDecls.contains(ptrDecl.getOperation())) continue;
+      rewrite(ptrDecl);
+    }
 
     // Second candidate class: struct-member RECORD pointer rebinds
     // (``this%member => target%...(...)``) whose base is an OWNED LOCAL struct.
@@ -904,6 +913,11 @@ struct RewritePointerAssignsPass
   }
 
  private:
+  /// Pointer declares already erased by a ``rewrite``.  The candidate list is a
+  /// snapshot, so an entry can be freed by an EARLIER iteration; this keeps a
+  /// later one from dereferencing it.
+  llvm::SmallPtrSet<mlir::Operation*, 16> erasedDecls;
+
   void rewrite(hlfir::DeclareOp ptrDecl) {
     // Skip pointers that ``hlfir-mark-bounds-remap-views`` already
     // identified as Fortran 2003 bounds-remapping views
@@ -1630,7 +1644,10 @@ struct RewritePointerAssignsPass
 
     // Erase use-empty alias declares.
     for (auto alias : aliasesToErase) {
-      if (alias.getResult(0).use_empty() && alias.getResult(1).use_empty()) alias.erase();
+      if (alias.getResult(0).use_empty() && alias.getResult(1).use_empty()) {
+        erasedDecls.insert(alias.getOperation());
+        alias.erase();
+      }
     }
 
     // Erase the rebind store + the entire alloca/init chain feeding
