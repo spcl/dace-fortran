@@ -11,6 +11,7 @@ the LLVM static analyzer, so the analysis always matches the toolchain that prod
 A missing tool raises: silently degrading to "nothing found" is how this class of bug survived in the first place.
 """
 
+import json
 import shlex
 import shutil
 import subprocess
@@ -67,20 +68,47 @@ def generated_source(sdfg: SDFG) -> Path:
 
 
 def build_flags(sdfg: SDFG) -> List[str]:
-    """The exact defines/includes/flags CMake used for the generated TU, read back from its ``flags.make``.
+    """The exact defines/includes/flags CMake used for the generated TU, read back from the build.
 
     Reusing the build's own flags keeps the analysis honest -- a hand-rebuilt include path analyses code the
-    compiler never saw.
+    compiler never saw.  The Makefiles generator records them in ``flags.make``; the Ninja generator (used when
+    ``ninja`` is on PATH) does not emit that file, so fall back to ``compile_commands.json``, which every
+    generator writes and which carries the full command line for the TU.
     """
-    path = Path(sdfg.build_folder) / "build" / "CMakeFiles" / f"{sdfg.name}.dir" / "flags.make"
-    if not path.is_file():
-        raise FileNotFoundError(f"no {path}; the SDFG must be built (not just codegen'd) before analysis")
-    flags: List[str] = []
-    for line in path.read_text().splitlines():
-        for key in ("CXX_DEFINES", "CXX_INCLUDES", "CXX_FLAGS"):
-            if line.startswith(key):
-                flags.extend(shlex.split(line.split("=", 1)[1]))
-    return flags
+    build = Path(sdfg.build_folder) / "build"
+    makeflags = build / "CMakeFiles" / f"{sdfg.name}.dir" / "flags.make"
+    if makeflags.is_file():
+        flags: List[str] = []
+        for line in makeflags.read_text().splitlines():
+            for key in ("CXX_DEFINES", "CXX_INCLUDES", "CXX_FLAGS"):
+                if line.startswith(key):
+                    flags.extend(shlex.split(line.split("=", 1)[1]))
+        return flags
+
+    compdb = build / "compile_commands.json"
+    if not compdb.is_file():
+        raise FileNotFoundError(
+            f"no {makeflags} and no {compdb}; the SDFG must be built (not just codegen'd) before analysis")
+    src = str(generated_source(sdfg))
+    for entry in json.loads(compdb.read_text()):
+        if entry.get("file") != src:
+            continue
+        argv = shlex.split(entry["command"]) if "command" in entry else list(entry["arguments"])
+        # Drop the compiler, the -c/-o output pair, and the source file; keep every -D/-I/-W/-f flag the TU saw.
+        flags = []
+        skip = True  # argv[0] is the compiler
+        for tok in argv:
+            if skip:
+                skip = False
+                continue
+            if tok == "-o":
+                skip = True  # also drop its argument
+                continue
+            if tok == "-c" or tok == entry["file"] or tok.endswith(f"/{sdfg.name}.cpp"):
+                continue
+            flags.append(tok)
+        return flags
+    raise FileNotFoundError(f"{compdb} has no entry for {src}")
 
 
 def compiler_is_clang() -> bool:
