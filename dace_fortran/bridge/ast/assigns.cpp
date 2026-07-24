@@ -1185,6 +1185,14 @@ std::vector<ASTNode> buildSectionToSectionAssign(hlfir::AssignOp assign, mlir::V
   // rank.
   auto srcDg = mlir::dyn_cast<hlfir::DesignateOp>(srcDef);
   auto srcDecl = mlir::dyn_cast<hlfir::DeclareOp>(srcDef);
+  // A whole-array ALLOCATABLE/POINTER RHS (``arr(:, 2) = sbuf`` with sbuf allocatable) reaches the assign as a
+  // ``fir.load`` of its descriptor box, NOT a bare declare -- an automatic ``sbuf(SIZE(arr,1))`` is a direct
+  // declare and already hits the branch below.  Peel the load to the underlying declare so the whole-array-source
+  // path still fires; without it the section assign bails to ``buildCopyNode``, which writes the WHOLE dst (the
+  // halo sync-buffer transpose: ``sbuf`` scattered across all of ``arr`` instead of column 2).
+  if (!srcDg && !srcDecl)
+    if (auto ld = mlir::dyn_cast<fir::LoadOp>(srcDef))
+      srcDecl = mlir::dyn_cast_or_null<hlfir::DeclareOp>(ld.getMemref().getDefiningOp());
   if (!srcDg && !srcDecl) return {};
 
   // Falling back to ``buildCopyNode``'s whole-array copy is only sound when neither side drops a dimension: a
