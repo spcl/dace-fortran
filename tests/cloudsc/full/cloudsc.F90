@@ -2333,6 +2333,7 @@ DO JK=NCLDTOP,KLEV
       !---------------------------
       ! Supersaturation options
       !---------------------------
+      ZQE=0.0_JPRB  ! NSSOPT branches below cover 0..3 only; default keeps ZQE defined for any NSSOPT
       IF (NSSOPT==0) THEN
         ! No scheme
         ZQE=(ZQX(JL,JK,NCLDQV)-ZA(JL,JK)*ZQSICE(JL,JK))/&
