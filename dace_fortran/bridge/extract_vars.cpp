@@ -848,6 +848,72 @@ static std::string traceLoopIter(fir::DoLoopOp loop) {
 /// lift-cf-to-scf chain wraps a condition in (``arith.xori/andi/ori/
 /// trunci/extui/extsi``) and ``fir.convert``.  Stops at a ``fir.load``
 /// (hands off to ``traceToDecl``) or an op it doesn't recognise.
+// Peel ``fir.convert`` / logical width casts / ``hlfir.no_reassoc`` off ``val`` in place.
+static mlir::Value peelIndexCoercions(mlir::Value val) {
+  for (int i = 0; i < limits::kConvertChainDepth && val; ++i) {
+    auto* d = val.getDefiningOp();
+    if (!d) break;
+    if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
+      val = cv.getValue();
+      continue;
+    }
+    if (mlir::isa<mlir::arith::TruncIOp, mlir::arith::ExtUIOp, mlir::arith::ExtSIOp>(d)) {
+      val = d->getOperand(0);
+      continue;
+    }
+    if (d->getName().getStringRef() == "hlfir.no_reassoc" && d->getNumOperands() == 1) {
+      val = d->getOperand(0);
+      continue;
+    }
+    break;
+  }
+  return val;
+}
+
+// True when the integer scalar stored at ``memref`` is defined by a ``select`` (Fortran ``MERGE`` /
+// a conditional index) WHOSE CONDITION is a materialized data scalar -- i.e. a ``fir.load`` of a
+// stored logical, not an inline comparison.  Only that shape is unsafe to symbol-promote: the
+// interstate symbol-write path models a trivial single-array-read RHS, so promoting it reads the
+// condition scalar as a bare symbol with no dataflow edge, and an index built from this scalar is
+// then emitted before the condition scalar's data producer (the ``lvn_pos`` read-before-write
+// miscompile: ``ilc = MERGE(cidx(j,1), cidx(j,2), lvn_pos)`` used as ``arr(ilc)`` ordered ``ilc``
+// ahead of ``lvn_pos = vn>=0``).  Leaving it un-promoted routes it through the tasklet/data path,
+// exactly as the logical/float exclusion below already does.
+//
+// A select whose condition is an inline ``arith.cmp*`` (Fortran ``MIN``/``MAX``, or ``MERGE`` with a
+// literal comparison predicate) has no such hazard -- the comparison reads its operands through the
+// tasklet's own connectors -- and MUST stay promotable: those results are used as array subscripts
+// (``ikp1 = MIN(nlev, ikidx(...)+2)`` indexing ``theta_v(...,ikp1,...)``), and demoting them drops
+// them onto the select tasklet path, which strips an array-element branch's subscript to a bare
+// pointer (``min(nlev, ikidx+2)`` -> ``min(int&,int*)``, a hard compile error).  Walks the scalar's
+// own users (cheap -- a scalar has few), not the whole function.
+static bool integerScalarIsSelectDefined(mlir::Value memref) {
+  if (!memref) return false;
+  for (auto* user : memref.getUsers()) {
+    // The scalar is written either by ``fir.store`` or ``hlfir.assign`` (both are what funcWritesFor
+    // indexes); check the stored/assigned value for a select in each.
+    mlir::Value val;
+    if (auto st = mlir::dyn_cast<fir::StoreOp>(user)) {
+      if (st.getMemref() != memref) continue;
+      val = st.getValue();
+    } else if (auto as = mlir::dyn_cast<hlfir::AssignOp>(user)) {
+      if (as.getLhs() != memref) continue;
+      val = as.getRhs();
+    } else {
+      continue;
+    }
+    val = peelIndexCoercions(val);
+    auto sel = mlir::dyn_cast_or_null<mlir::arith::SelectOp>(val ? val.getDefiningOp() : nullptr);
+    if (!sel) continue;
+    // Only the data-scalar-condition shape is unsafe: the select's condition must peel to a
+    // ``fir.load`` (a stored logical read back as a bare symbol).  An inline ``arith.cmp*`` condition
+    // is safe and must remain promotable.
+    mlir::Value cond = peelIndexCoercions(sel.getCondition());
+    if (cond && mlir::isa_and_nonnull<fir::LoadOp>(cond.getDefiningOp())) return true;
+  }
+  return false;
+}
+
 static void collectIntegerScalarReads(mlir::Value v, std::set<std::string>& out,
                                       llvm::SmallPtrSet<mlir::Operation*, 32>* visited = nullptr) {
   if (!v) return;
@@ -907,6 +973,10 @@ static void collectIntegerScalarReads(mlir::Value v, std::set<std::string>& out,
   // drops everything past the first array read in the expression.
   if (mlir::isa<fir::LoadOp>(def)) {
     if (v.getType().isIntOrIndex()) {
+      // A select/MERGE-defined index scalar is data-derived, not a symbol -- see
+      // integerScalarIsSelectDefined.  Leave it un-promoted so its assignment stays on the tasklet
+      // path and the condition scalar keeps its dataflow edge.
+      if (integerScalarIsSelectDefined(mlir::cast<fir::LoadOp>(def).getMemref())) return;
       auto n = traceToDecl(v);
       if (!n.empty()) out.insert(n);
     }
