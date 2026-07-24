@@ -98,6 +98,7 @@ jobs:
           build-essential cmake ninja-build gfortran libgomp1 \
           libopenmpi-dev openmpi-bin \
           libnetcdff-dev libnetcdf-dev libhdf5-dev \
+          libfftw3-dev \
           libfyaml-dev libxml2-dev liblapack-dev libblas-dev \
           pkg-config perl python3 \
           bear autoconf automake m4 rsync zlib1g-dev \

@@ -39,9 +39,14 @@ from cloudsc.variants._harness import (SCALAR_TYPES, assert_species_parameters_b
 # running against a worktree then paired one tree's library with another tree's phase plan, offload
 # gate and checkpoint signature, silently measuring a combination that exists in no checkout.
 _PIPELINES_PATH = Path(dace.__file__).resolve().parents[1] / 'tests' / 'corpus' / 'cloudsc' / 'pipelines.py'
-assert _PIPELINES_PATH.is_file(), (
-    f'{_PIPELINES_PATH} not found -- the dace on PYTHONPATH ({Path(dace.__file__).resolve().parents[1]}) is an '
-    'installed package without its tests/ tree; point PYTHONPATH at a dace checkout')
+if not _PIPELINES_PATH.is_file():
+    # The dace on PYTHONPATH is an installed package without its tests/ tree (CI), so the cloudsc
+    # pipeline corpus this replication matrix drives is genuinely absent -- skip like a missing
+    # toolchain, rather than erroring at collection.  Point PYTHONPATH at a dace checkout to run it.
+    pytest.skip(
+        f'{_PIPELINES_PATH} not found -- the dace on PYTHONPATH ({Path(dace.__file__).resolve().parents[1]}) is an '
+        'installed package without its tests/ tree; point PYTHONPATH at a dace checkout',
+        allow_module_level=True)
 _spec = importlib.util.spec_from_file_location('cloudsc_dace_pipelines', _PIPELINES_PATH)
 _pipelines = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_pipelines)
