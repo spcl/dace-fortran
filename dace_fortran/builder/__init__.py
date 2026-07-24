@@ -1431,14 +1431,14 @@ class SDFGBuilder:
         # per-block index that IS read in an inlined body), so only true
         # orphans are dropped.  ``recursive`` defaults to True on the pass.
         RemoveUnusedSymbols().apply_pass(sdfg, {})
-        # ``transient_only=True``: only fold LOCAL 1-element transients
-        # (e.g. accumulators left as length-1 arrays by the bridge).  The
-        # signature convention is preserved: ``intent(out)`` / ``inout``
-        # scalars stay as length-1 ``Array`` so callers can pass a numpy
-        # 1-element buffer to receive the value.  ``intent(in)`` /
-        # ``VALUE`` scalars are already emitted as ``Scalar`` directly by
-        # ``descriptors.py`` and don't need this pass.
-        ConvertLengthOneArraysToScalars(recursive=True, transient_only=True).apply_pass(sdfg, {})
+        # Default (``stage_nontransients_arrays_into_scalars=False``): only fold
+        # LOCAL 1-element transients (e.g. accumulators left as length-1 arrays
+        # by the bridge).  The signature convention is preserved:
+        # ``intent(out)`` / ``inout`` scalars stay as length-1 ``Array`` so
+        # callers can pass a numpy 1-element buffer to receive the value.
+        # ``intent(in)`` / ``VALUE`` scalars are already emitted as ``Scalar``
+        # directly by ``descriptors.py`` and don't need this pass.
+        ConvertLengthOneArraysToScalars(recursive=True).apply_pass(sdfg, {})
 
         # A ``Scalar`` has no shape / offset, so the bridge's synthesised
         # ``<s>_d<i>`` / ``offset_<s>_d<i>`` symbols for it are dead; under
