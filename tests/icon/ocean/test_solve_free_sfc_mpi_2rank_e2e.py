@@ -202,10 +202,10 @@ def _build_artifacts(tmp_path: Path) -> dict:
 
 @pytest.mark.xfail(
     strict=True,
-    reason="FoldCopyInOut now folds the four whole-array-section copy_in/copy_out pairs (build OK), but the "
-    "2-rank result diverges: rank 0 prog_h wrong at 15 halo positions. Suspect the folded copy_out writes "
-    "the whole array section where only the owned region should be written back, clobbering halo cells that "
-    "the neighbour rank owns. Needs owned-vs-halo aware folding before this can be bit-exact.")
+    reason="The halo sync-buffer transpose is FIXED (bridge lowers <section> = <whole allocatable> element-wise, "
+    "commit 24b39da) and FoldCopyInOut is exonerated -- the isolated pack/unpack repro is now bit-exact. But the "
+    "full 2-rank solve_free_sfc still diverges on prog_h: a residual defect elsewhere in the dycore path, not yet "
+    "isolated. Verify against the runtime divergence count (rerun without this marker) before removing it.")
 @pytest.mark.xdist_group("ocean_fparser")
 def test_solve_free_sfc_2rank_bit_exact(tmp_path: Path):
     """solve_free_sfc on 2 ranks with a real MPI halo: SDFG vs stock gfortran, bit-exact per rank."""
