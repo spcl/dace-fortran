@@ -200,17 +200,12 @@ def _build_artifacts(tmp_path: Path) -> dict:
     )
 
 
-@pytest.mark.xfail(strict=True,
-                   reason="Blocked in the bridge, not here: with the sync live, "
-                   "``hlfir-fold-copy-in-out`` cannot fold four ``hlfir.copy_in`` pairs at the dycore's own "
-                   "top-level calls into veloc_adv_horz_mimetic / veloc_adv_vert_mimetic / velocity_diffusion "
-                   "(assumed-shape actuals -- veloc_adv_vert_e(:,:,:), laplacian_vn_out(:,:,:) -- forwarded to "
-                   "explicit-shape dummies).  The single-rank e2e never hits this because ``do_not_emit`` drops "
-                   "the sync and ``hlfir-drop-stub-calls`` erases the copy-in temps hanging off it before the "
-                   "fold pass runs.  Same defect fails the five sync_devirt_mpi_libnode_test cases: a whole-array "
-                   "box copy_in whose fir.box_addr feeds a raw call argument instead of an inlined-callee "
-                   "hlfir.declare, so reparentMemberCopy finds no alias to reparent onto.  Remove this marker "
-                   "once FoldCopyInOut.cpp handles that shape.")
+@pytest.mark.xfail(
+    strict=True,
+    reason="FoldCopyInOut now folds the four whole-array-section copy_in/copy_out pairs (build OK), but the "
+    "2-rank result diverges: rank 0 prog_h wrong at 15 halo positions. Suspect the folded copy_out writes "
+    "the whole array section where only the owned region should be written back, clobbering halo cells that "
+    "the neighbour rank owns. Needs owned-vs-halo aware folding before this can be bit-exact.")
 @pytest.mark.xdist_group("ocean_fparser")
 def test_solve_free_sfc_2rank_bit_exact(tmp_path: Path):
     """solve_free_sfc on 2 ranks with a real MPI halo: SDFG vs stock gfortran, bit-exact per rank."""
