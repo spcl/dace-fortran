@@ -1,3 +1,5 @@
+# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """AST desugaring and analysis tools for the Fortran frontend.
 
 Desugaring rewrites high-level Fortran constructs the internal AST can't

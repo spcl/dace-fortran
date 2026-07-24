@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Auto-build and import hlfir_bridge; import this module to get `hb`.
 
 The .so is symlinked next to this file (as dace_fortran.hlfir_bridge) so no PYTHONPATH manipulation is needed.

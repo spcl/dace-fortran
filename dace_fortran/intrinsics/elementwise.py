@@ -1,3 +1,5 @@
+# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Elementwise Fortran intrinsics.
 
 Each entry lowers to a bare-name scalar call in the tasklet body (``_out =

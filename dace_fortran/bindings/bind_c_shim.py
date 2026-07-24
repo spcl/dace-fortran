@@ -1,3 +1,5 @@
+# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Auto-generate a ``bind(c, name='<entry>_c')`` wrapper around the
 emitted ``<entry>_dace`` Fortran module procedure.
 

@@ -1,4 +1,5 @@
 # Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Vendored fparser AST desugaring / inlining package.
 
 Faithful copy of upstream DaCe Fortran frontend's ``ast_desugaring`` package

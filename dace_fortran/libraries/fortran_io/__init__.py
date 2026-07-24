@@ -1,4 +1,5 @@
 # Copyright 2019-2024 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Fortran external-file I/O as DaCe library nodes.
 
 The HLFIR bridge lowers Fortran ``READ`` / ``WRITE`` and namelist I/O to the

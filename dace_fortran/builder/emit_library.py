@@ -1,3 +1,5 @@
+# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Library-node + terminator emitters (CopyLibraryNode/MemsetLibraryNode/MatMul/Transpose/Dot/Reduce
 library nodes; BreakBlock/ReturnBlock terminators). Shared shape: flush pending scalars, ensure a
 state, add the node, attach edges -- too small individually to earn their own file.

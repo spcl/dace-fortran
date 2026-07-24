@@ -1,3 +1,5 @@
+# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Fortran intrinsic -> DaCe lowering registry for the HLFIR frontend.
 
 Emitter code should only talk to this module, never import the per-family

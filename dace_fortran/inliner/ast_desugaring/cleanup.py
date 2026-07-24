@@ -1,3 +1,5 @@
+# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """AST cleanup and canonicalization passes for the Fortran frontend, run after
 parsing and desugaring: disambiguates language constructs, standardizes
 identifier names, drops constructs irrelevant to dataflow analysis, and

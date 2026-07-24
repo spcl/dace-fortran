@@ -1,4 +1,5 @@
 # Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Parse-time declaration of how a non-inlined Fortran procedure is handled: emitted as an external call, or dropped.
 
 Stdlib-only (no dace imports) -- fparser inliner needs this without pulling in dace_fortran.external.

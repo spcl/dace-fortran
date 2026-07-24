@@ -1,4 +1,5 @@
 # Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """fparser-tree helpers used by the vendored ``ast_desugaring`` package.
 
 Minimal slice of upstream ``dace.frontend.fortran.ast_utils`` -- only the

@@ -49,3 +49,18 @@ repos:
       # deliberately-shaped parser/bridge test vector -- not library source.  Narrow
       # this exclude to opt a hand-written Fortran directory into formatting.
       exclude: '^tests/'
+    # Copyright / SPDX header on the CORE package (scope lives in the script:
+    # dace_fortran/ only -- tests/ and top-level scripts/ are a deferred pass).
+    - id: dace-fortran-headers
+      name: copyright / SPDX header (core package)
+      # --fix ADDS the header (as the first content line, after any shebang) rather than only
+      # failing -- the same auto-fix contract as the other formatting hooks above.
+      entry: python scripts/check_headers.py --fix
+      language: system
+      require_serial: true
+      files: '\.py$'
+    # Reject any staged file over 500 KiB (keep datasets / binaries / dumps out of git).
+    - id: dace-fortran-large-files
+      name: block files > 500 KiB
+      entry: python scripts/check_large_files.py
+      language: system

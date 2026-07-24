@@ -1,4 +1,5 @@
 # Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """fparser-based single-TU module inliner (opt-in alternative to the
 regex ``merge_used_modules`` text-splicer).
 

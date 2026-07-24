@@ -1,3 +1,5 @@
+# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """The tier-3 HLFIR emitter: drive flang per translation unit from a
 build's ``compile_commands.json`` (or an explicit ``--source`` list)
 so the user need not wire flang into their build by hand.  CLI usage

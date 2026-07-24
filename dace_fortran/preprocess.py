@@ -1,3 +1,5 @@
+# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Fortran-source-level pre-processor.
 
 Text-only rewrites that must run before ``flang-new -fc1 -emit-hlfir`` sees

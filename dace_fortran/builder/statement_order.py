@@ -1,3 +1,5 @@
+# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Make intra-state Fortran statement order explicit.
 
 A run of consecutive Fortran statements is lowered into ONE ``SDFGState``.  Two statements that

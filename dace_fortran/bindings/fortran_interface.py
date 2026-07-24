@@ -1,3 +1,5 @@
+# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Outer Fortran interface -- caller-facing surface of the entry
 subroutine, snapshotted from HLFIR BEFORE any normalising pass
 (``hlfir-flatten-structs``) runs.

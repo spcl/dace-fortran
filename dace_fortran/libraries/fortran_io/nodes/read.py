@@ -1,4 +1,5 @@
 # Copyright 2019-2024 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """``READ`` library node: list-directed read from a file into its outputs.
 
 Lowers a Fortran ``read`` statement (fused with its ``open``/``close``) to a

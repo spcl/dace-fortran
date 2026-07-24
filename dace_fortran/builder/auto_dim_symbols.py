@@ -1,3 +1,5 @@
+# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Auto-resolve the bridge's synthetic Fortran extent symbols at call time.
 
 Bindings-emitted callers always pass correct values; direct ``sdfg(...)``

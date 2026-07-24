@@ -1,3 +1,5 @@
+# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """``_Ctx``  --  per-region emission context.
 
 Tracks the "current" SDFG state, pending scalar assignments that need

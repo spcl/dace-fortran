@@ -1,3 +1,5 @@
+# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Feed flang-new an entry point from a real Fortran codebase (ICON, ECRAD,
 IFS, ...) without rebuilding it against flang's own ``.mod`` files: upstream
 libs ship gfortran-format ``.mod``s only, so :func:`prepare_flang_translation_unit`

@@ -1,3 +1,5 @@
+# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Whole-array scalar reductions -> DaCe ``standard.Reduce``.
 
 ``sum``/``product``/``minval``/``maxval`` each lower through Flang into a

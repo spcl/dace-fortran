@@ -1,3 +1,5 @@
+# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """CLI wrapper over the Fortran preprocess passes, for build-system steps.
 
 Passes run in the same order as ``preprocess_fortran_source`` (merge ->

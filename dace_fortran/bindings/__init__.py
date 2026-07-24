@@ -1,3 +1,5 @@
+# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Fortran binding emission for HLFIR-built SDFGs.
 
 Peer of ``builder/`` / ``intrinsics/`` under ``dace_fortran/``.  Runs

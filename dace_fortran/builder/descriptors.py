@@ -1,3 +1,5 @@
+# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """SDFG descriptor registration + type mapping + synthetic-scalar lazy decl.
 
 ``add_descriptors`` is called once from ``SDFGBuilder.build()`` to register

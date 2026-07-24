@@ -1,3 +1,5 @@
+# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Tasklet emission.  ``emit_tasklet``: per-occurrence connector/memlet per
 array-read occurrence (else repeated reads of the same array collapse onto one
 connector and silently miscompute).  ``emit_scalar_assign``: flat fast path for

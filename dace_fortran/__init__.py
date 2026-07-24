@@ -1,4 +1,5 @@
 # Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Fortran (HLFIR) frontend for DaCe: lowers Fortran through flang-new's
 HLFIR and an MLIR/C++ bridge into a ``dace.SDFG``.
 

@@ -1,3 +1,5 @@
+# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Public entry points for building a :class:`dace.SDFG` from Fortran.
 
 Three entry points layered by how much the bridge does on the

@@ -1,4 +1,5 @@
 # Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Static-vtable rewrite (the M2 engine) for the monomorphisation feature.
 
 Consumes the :class:`MonomorphizationPlan` produced by

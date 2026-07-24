@@ -1,4 +1,5 @@
 # Copyright 2019-2025 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 
 from copy import deepcopy
 from typing import Union, Tuple, Optional, List, Iterable

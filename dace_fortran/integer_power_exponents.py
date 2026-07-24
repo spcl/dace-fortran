@@ -1,4 +1,5 @@
 # Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Retype integer-valued float ``**`` exponents to ``int`` so codegen emits
 ``ipow`` (repeated multiply) instead of libm ``pow``, which isn't bit-identical
 to Fortran/C's integer-power codegen and drifts across real(8) reduction chains.

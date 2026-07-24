@@ -1,3 +1,5 @@
+# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Flatten plan -- single source of truth for AoS->SoA unpacking.
 
 Produced by ``hlfir-flatten-structs`` (an MLIR module attribute),

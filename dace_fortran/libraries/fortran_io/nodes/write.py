@@ -1,4 +1,5 @@
 # Copyright 2019-2024 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """``WRITE`` library node: list-directed write of its inputs to a file.
 
 Lowers a Fortran ``write`` statement (fused with its ``open``/``close``) to a

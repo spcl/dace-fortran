@@ -1,3 +1,5 @@
+# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Static analysis of the C++ DaCe generates for a built SDFG.
 
 The generated code is already compiled with ``-Wall -Wextra`` (see the build's ``flags.make``), but nothing reads

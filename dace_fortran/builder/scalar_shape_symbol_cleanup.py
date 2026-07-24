@@ -1,3 +1,5 @@
+# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Drop the Fortran offset / dimension symbols of genuine scalars.
 
 The HLFIR bridge synthesises ``<name>_d<i>``/``offset_<name>_d<i>`` symbols
