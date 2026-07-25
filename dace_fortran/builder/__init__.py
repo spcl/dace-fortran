@@ -1390,7 +1390,6 @@ class SDFGBuilder:
         from dace_fortran.integer_power_exponents import IntegerizePowerExponents
         from dace.transformation.passes.unique_loop_iterators import UniqueLoopIterators
         from dace.transformation.passes.prune_symbols import RemoveUnusedSymbols
-        from dace.transformation.passes.canonicalize.empty_state_elimination import EmptyStateElimination
 
         # Empty-region cleanup: any ControlFlowRegion (LoopRegion,
         # ConditionalBlock branch, the top-level SDFG, etc.) that
@@ -1432,17 +1431,6 @@ class SDFGBuilder:
         # per-block index that IS read in an inlined body), so only true
         # orphans are dropped.  ``recursive`` defaults to True on the pass.
         RemoveUnusedSymbols().apply_pass(sdfg, {})
-        # ``UniqueLoopIterators`` emits a ``loop_iter_post_value_<N>`` boundary
-        # state after each loop to carry the iterator-after-loop assignment.
-        # Where ``RemoveUnusedSymbols`` (above) just proved that assignment dead
-        # and dropped it, an EMPTY state shell is left -- one per such loop, so a
-        # kernel like CLOUDSC accretes dozens that bloat every later pass and the
-        # codegen walk for no effect.  Splice out empty boundary states,
-        # value-preservingly merging any SURVIVING (still-needed) post-value
-        # assignment onto the bypass edge so it is kept.  A lone empty state that
-        # IS an otherwise-empty region's start block is left untouched, so the
-        # empty bodies added above stay put.
-        EmptyStateElimination().apply_pass(sdfg, {})
         # Default (``stage_nontransients_arrays_into_scalars=False``): only fold
         # LOCAL 1-element transients (e.g. accumulators left as length-1 arrays
         # by the bridge).  The signature convention is preserved:
