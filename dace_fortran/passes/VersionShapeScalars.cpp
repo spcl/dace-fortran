@@ -38,14 +38,15 @@
 //     version live at that point.  Downstream, ``x`` sizes from ``m`` and ``y``
 //     from ``m_2`` -- both immutable -- and the hazard is gone.
 //
-// What it REFUSES (with a clear message):
+// What it FREEZES (the loop / branch case):
 //     If the post-allocation reassignment is NOT in a straight line -- a store
 //     inside a loop or a conditional branch -- the value live at a downstream
-//     array is ambiguous (which iteration / which branch?), and SSA-versioning
-//     cannot statically name it.  Rather than silently emit a mutable shape
-//     symbol (the corruption above), the pass emits an error and fails: the
-//     user must hoist the size to a single assignment before the allocation or
-//     pass an explicit dimension.
+//     array cannot be statically named as one version.  Instead of refusing,
+//     SNAPSHOT the extent at each ALLOCATE: bind the array to a fresh immutable
+//     ``m_ext<k>`` capturing ``m``'s value AT that allocation.  Fortran freezes
+//     an allocatable's extent at ALLOCATE, so the snapshot is exact; ``m`` stays
+//     mutable for its data-access (subscript / counter) uses.  Each allocation
+//     captures its own live value -- no static across-iteration naming needed.
 // ============================================================================
 
 #include <algorithm>
@@ -139,10 +140,10 @@ struct VersionShapeScalarsPass
     return "SSA-version a scalar reassigned (in a straight line) AFTER an "
            "array "
            "was allocated from it, so each array binds the extent live at its "
-           "own allocation; refuse (clear error) when that post-allocation "
-           "reassignment is in a loop / branch.  Accumulate-then-allocate-once "
-           "scalars and data-access (loop bound / subscript) scalars are left "
-           "untouched.";
+           "own allocation; when that post-allocation reassignment is in a loop "
+           "/ branch, snapshot (freeze) the extent at each ALLOCATE instead.  "
+           "Accumulate-then-allocate-once scalars and data-access (loop bound / "
+           "subscript) scalars are left untouched.";
   }
 
   void runOnOperation() override {
@@ -216,22 +217,14 @@ struct VersionShapeScalarsPass
     if (hazardStores.empty()) return mlir::success();  // size frozen at alloc
 
     // A post-allocation reassignment exists.  If every store is straight-line
-    // (one block, no enclosing loop) we can SSA-version so each array binds the
-    // extent live at its own allocation.  If any store -- in particular the
-    // hazardous one -- sits in a loop or a conditional branch, the value live
-    // at a downstream array is ambiguous and cannot be statically named.
-    mlir::Block* blk = stores.front()->getBlock();
-    for (auto* st : stores) {
-      if (st->getBlock() != blk || enclosingLoop(st)) {
-        return decl.emitError() << "shape variable '" << extractShortName(decl)
-                                << "' is reassigned inside a loop or conditional branch AFTER "
-                                   "an "
-                                   "array was allocated from it, so the array's extent symbol "
-                                   "mutates while the array is live and cannot be SSA-versioned "
-                                   "in a straight line.  Hoist the size to a single assignment "
-                                   "before the allocation, or pass it as an explicit dimension.";
-      }
-    }
+    // (one block, no enclosing loop) we SSA-version so each array binds the
+    // extent live at its own allocation.  If any store sits in a loop / branch
+    // it cannot be named as one static version -- snapshot the extent at each
+    // ALLOCATE instead (freezeExtents): exact by Fortran's freeze-at-ALLOCATE
+    // rule, and the scalar stays mutable for its data-access uses.
+    mlir::Block* const blk = stores.front()->getBlock();
+    for (auto* st : stores)
+      if (st->getBlock() != blk || enclosingLoop(st)) return freezeExtents(decl, loads);
 
     // Order stores by position in the block (program order).
     llvm::sort(stores, [&](mlir::Operation* a, mlir::Operation* b) { return a->isBeforeInBlock(b); });
@@ -269,12 +262,25 @@ struct VersionShapeScalarsPass
     return mlir::success();
   }
 
-  /// Short Fortran name of ``decl`` (the entity after the final scope letter
-  /// in its ``uniq_name``), for diagnostics.
-  static std::string extractShortName(hlfir::DeclareOp decl) {
-    llvm::StringRef const u = decl.getUniqName();
-    auto e = u.rfind('E');
-    return (e == llvm::StringRef::npos) ? u.str() : u.substr(e + 1).str();
+  /// Loop / branch case: snapshot the extent at each ALLOCATE into a fresh
+  /// immutable ``<name>_ext<k>`` capturing the scalar's live value there, and
+  /// rebind that allocation's extent load to it.  Exact by Fortran's
+  /// freeze-extent-at-ALLOCATE rule; the scalar stays mutable for subscript /
+  /// counter uses.  Each allocation captures its own value, so no static
+  /// across-iteration naming is needed (which the straight-line versioner lacks).
+  static mlir::LogicalResult freezeExtents(hlfir::DeclareOp decl, llvm::ArrayRef<fir::LoadOp> loads) {
+    mlir::OpBuilder builder(decl.getContext());
+    unsigned k = 0;
+    for (auto ld : loads) {
+      if (!feedsAllocateExtent(ld.getResult())) continue;  // only extent uses; subscripts stay on the mutable scalar
+      hlfir::DeclareOp frozen = makeVersion(builder, decl, ++k, "_ext");
+      builder.setInsertionPoint(ld);
+      mlir::Location const loc = ld.getLoc();
+      auto cur = builder.create<fir::LoadOp>(loc, decl.getResult(1));              // scalar's value at this allocation
+      builder.create<hlfir::AssignOp>(loc, cur.getResult(), frozen.getResult(0));  // frozen = <live value>, once
+      redirectMemref(ld.getMemrefMutable(), decl, frozen);                         // allocation reads the frozen copy
+    }
+    return mlir::success();
   }
 
   /// Point a load/store memref operand that currently references ``from``'s
@@ -291,10 +297,11 @@ struct VersionShapeScalarsPass
   /// Clone ``orig``'s ``fir.alloca`` + ``hlfir.declare`` with a ``_<version>``
   /// suffix on the ``uniq_name`` (so ``traceToDecl`` names it ``m_<version>``),
   /// inserted right after the original declare so it dominates every later use.
-  static hlfir::DeclareOp makeVersion(mlir::OpBuilder& builder, hlfir::DeclareOp orig, unsigned version) {
+  static hlfir::DeclareOp makeVersion(mlir::OpBuilder& builder, hlfir::DeclareOp orig, unsigned version,
+                                      llvm::StringRef sep = "_") {
     builder.setInsertionPointAfter(orig);
     mlir::Location const loc = orig.getLoc();
-    std::string const newUniq = orig.getUniqName().str() + "_" + std::to_string(version);
+    std::string const newUniq = orig.getUniqName().str() + sep.str() + std::to_string(version);
 
     // Fresh storage of the same scalar type, declared under the versioned name
     // (``traceToDecl`` reads the entity after the final ``E`` -> ``m_<n>``).

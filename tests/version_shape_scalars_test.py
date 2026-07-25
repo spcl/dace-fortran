@@ -27,7 +27,8 @@ are therefore NOT hazards and must be LEFT UNTOUCHED:
     iterators in particular are never versioned.)
 
 ONLY a post-allocation reassignment is acted on: straight-line -> versioned;
-inside a loop / conditional branch -> REFUSED with a clear message.
+inside a loop / conditional branch -> the extent is FROZEN (snapshot) at each
+ALLOCATE, so the valid kernel still lifts without a corrupting mutable shape.
 """
 import pytest
 
@@ -178,23 +179,33 @@ end subroutine
 
 
 # ---------------------------------------------------------------------------
-# Refusal  --  the GENUINE hazard: a reassignment AFTER an allocation, in a
-# loop / branch, so the live array's extent symbol mutates and cannot be named
+# Freeze  --  the loop / branch case: a reassignment AFTER an allocation, in a
+# loop / branch.  The value cannot be named as one static version, so the extent
+# is SNAPSHOT at each ALLOCATE (Fortran freezes an allocatable's extent there).
+# The whole-array op over the earlier array must map over its OWN frozen extent,
+# never the later-mutated scalar -- so no corruption, and the valid kernel LIFTS
+# (pre-fix the frontend REFUSED both of these).
 # ---------------------------------------------------------------------------
-def test_refuse_post_alloc_reassign_in_loop(tmp_path, capfd):
-    """``x`` is allocated from ``m``; then INSIDE a loop ``m`` is reassigned and
-    another array is allocated from the new value.  ``x``'s extent symbol ``m``
-    mutates while ``x`` is live -- the live value is ambiguous (which
-    iteration?), so the pass refuses rather than emit a corrupting shape."""
+def test_freeze_post_alloc_reassign_in_loop(tmp_path):
+    """``x`` is allocated from ``m``; then INSIDE a loop ``m`` grows and a fresh
+    ``y`` is allocated+freed each iteration.  ``x``'s extent is frozen at its
+    ALLOCATE (``m_ext1`` = ``n``), so ``x = x*2`` maps over ``n`` elements -- not
+    the grown ``m`` (``n+k``).  Pre-fix this over-refused a valid kernel."""
+    import numpy as np
+
     src = """
-subroutine vss_loop(n, k, s)
+subroutine vss_loop(n, k, s, xsum)
   implicit none
   integer, intent(in) :: n, k
   integer, intent(out) :: s
+  real(8), intent(out) :: xsum
   integer :: m, i
   real(8), allocatable :: x(:), y(:)
   m = n
   allocate(x(m))
+  do i = 1, m
+    x(i) = real(i, 8)
+  end do
   do i = 1, k
     m = m + 1
     allocate(y(m))
@@ -203,46 +214,65 @@ subroutine vss_loop(n, k, s)
   end do
   x = x * 2.0d0
   s = size(x)
+  xsum = sum(x)
 end subroutine
 """
-    with pytest.raises(RuntimeError) as exc:
-        build_sdfg(src, tmp_path, name="vss_loop", entry="vss_loop").build()
-    assert "pipeline failed" in str(exc.value)
-    err = capfd.readouterr().err
-    assert "shape variable 'm'" in err
-    assert "AFTER an array was allocated from it" in err
-    assert "Hoist the size to a single assignment" in err
+    builder = build_sdfg(src, tmp_path, name="vss_loop", entry="vss_loop")
+    sdfg = builder.build()
+    assert "_ext" in str(sdfg.arrays["x"].shape[0])  # frozen extent, decoupled from mutable m
+
+    sdfg.name = "vss_loop"
+    compiled = sdfg.compile()
+    n, k = 5, 3
+    s = np.array([0], dtype=np.int32)
+    xsum = np.array([0.0])
+    compiled(n=np.int32(n), k=np.int32(k), s=s, xsum=xsum)
+    assert int(s[0]) == n  # x's frozen extent, NOT the grown n+k
+    np.testing.assert_allclose(xsum[0], 2.0 * sum(range(1, n + 1)))
 
 
-def test_refuse_post_alloc_reassign_in_branch(tmp_path, capfd):
-    """``x`` is allocated from ``m``; then inside an ``if`` branch ``m`` is
-    reassigned and another array is allocated.  The value of ``x``'s extent
-    symbol depends on the branch taken -- refused."""
+def test_freeze_post_alloc_reassign_in_branch(tmp_path):
+    """``x`` is allocated from ``m``; then inside an ``if`` branch ``m`` grows and
+    another array is allocated.  ``x``'s extent is frozen at its ALLOCATE
+    regardless of the branch, so ``size(x)`` and the whole-array op stay at
+    ``n``.  Pre-fix the branch-dependent extent symbol was refused."""
+    import numpy as np
+
     src = """
-subroutine vss_branch(n, c, s)
+subroutine vss_branch(n, k, s, xsum)
   implicit none
-  integer, intent(in) :: n
-  logical, intent(in) :: c
+  integer, intent(in) :: n, k
   integer, intent(out) :: s
-  integer :: m
+  real(8), intent(out) :: xsum
+  integer :: m, i
   real(8), allocatable :: x(:), y(:)
   m = n
   allocate(x(m))
-  if (c) then
+  do i = 1, m
+    x(i) = real(i, 8)
+  end do
+  if (k > 0) then
     m = m + 1
     allocate(y(m))
     y = 0.0d0
   end if
   x = x * 2.0d0
   s = size(x)
+  xsum = sum(x)
 end subroutine
 """
-    with pytest.raises(RuntimeError) as exc:
-        build_sdfg(src, tmp_path, name="vss_branch", entry="vss_branch").build()
-    assert "pipeline failed" in str(exc.value)
-    err = capfd.readouterr().err
-    assert "shape variable 'm'" in err
-    assert "AFTER an array was allocated from it" in err
+    builder = build_sdfg(src, tmp_path, name="vss_branch", entry="vss_branch")
+    sdfg = builder.build()
+    assert "_ext" in str(sdfg.arrays["x"].shape[0])  # frozen extent, branch-independent
+
+    sdfg.name = "vss_branch"
+    compiled = sdfg.compile()
+    n, k = 6, 1
+    s = np.array([0], dtype=np.int32)
+    xsum = np.array([0.0])
+    compiled(n=np.int32(n), k=np.int32(k), s=s, xsum=xsum)
+    assert int(s[0]) == n  # frozen at ALLOCATE, not m+1
+    np.testing.assert_allclose(xsum[0], 2.0 * sum(range(1, n + 1)))
 
 
 # ---------------------------------------------------------------------------
