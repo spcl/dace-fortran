@@ -737,6 +737,7 @@ static std::optional<int64_t> traceConstIntThroughLoad(mlir::Value v, mlir::func
   std::optional<int64_t> result;
   bool anyNonConst = false;
   size_t nWrites = 0;
+  bool stop = false;
   auto consider = [&](mlir::Value writeVal) {
     ++nWrites;
     if (auto c = traceConstIntThroughLoad(writeVal, func, writeCache, depth + 1, visited)) {
@@ -744,12 +745,26 @@ static std::optional<int64_t> traceConstIntThroughLoad(mlir::Value v, mlir::func
     } else {
       anyNonConst = true;
     }
+    // Once a NON-constant write is seen with >1 write total, the return
+    // condition below (``result && (!anyNonConst || nWrites <= 1)``) can never
+    // hold and the peel fallback can't fire either (a store WAS reached), so the
+    // answer is fixed at ``nullopt``.  Stop -- otherwise a loop counter indexed
+    // through ``byName`` re-walks the writes of EVERY same-short-name inlined
+    // copy (``i`` / ``jb`` across hundreds of inlined bodies), the dominant
+    // extract-vars cost on a fully-inlined entry.
+    if (anyNonConst && nWrites > 1) stop = true;
   };
   if (!targetName.empty()) {
     if (auto it = w.byName.find(targetName); it != w.byName.end())
-      for (auto wv : it->second) consider(wv);
+      for (auto wv : it->second) {
+        consider(wv);
+        if (stop) break;
+      }
   } else if (auto it = w.byValue.find(target); it != w.byValue.end()) {
-    for (auto wv : it->second) consider(wv);
+    for (auto wv : it->second) {
+      consider(wv);
+      if (stop) break;
+    }
   }
   // A target WRITTEN with a NON-constant value (a mutated accumulator like
   // ``ictr = ictr + 1``, or a runtime / module-global source) is NOT a fixed
@@ -774,10 +789,30 @@ static std::optional<int64_t> traceConstIntThroughLoad(mlir::Value v, mlir::func
   return std::nullopt;
 }
 
+/// Per-``hlfir.designate`` constant index literals (one slot per index dim,
+/// nullopt when non-constant), computed once and cached.  ``designatesByDecl``
+/// registers a designate under EVERY declare in its alias/peel chain, so on a
+/// fully-inlined entry a hot root array's designate is processed under many
+/// declares -- without this memo the (expensive) ``traceConstIntThroughLoad``
+/// walk re-ran per (designate, chain-declare) pair, the dominant extraction cost
+/// on h_psi.  Pure function of the designate + entry func, so caching is exact.
+using DesignateLiterals = llvm::SmallVector<std::optional<int64_t>, 4>;
+static const DesignateLiterals& designateIndexLiterals(hlfir::DesignateOp dg, mlir::func::FuncOp func,
+                                                       std::map<mlir::Operation*, FuncWrites>& writeCache,
+                                                       llvm::DenseMap<mlir::Operation*, DesignateLiterals>& cache) {
+  auto it = cache.find(dg.getOperation());
+  if (it != cache.end()) return it->second;
+  DesignateLiterals lits;
+  // Peel a single ``fir.load %x`` indirection (inlined-callee pattern: caller
+  // passes -5, callee stores it to a local, then loads it for the index).
+  for (auto idx : dg.getIndices()) lits.push_back(traceConstIntThroughLoad(idx, func, writeCache));
+  return cache.try_emplace(dg.getOperation(), std::move(lits)).first->second;
+}
+
 static void inferLowerBoundsFromLiteralAccesses(
     hlfir::DeclareOp decl, std::vector<std::string>& lbs, int rank, std::map<mlir::Operation*, FuncWrites>& writeCache,
     const llvm::DenseMap<mlir::Operation*, llvm::SmallVector<hlfir::DesignateOp, 4>>& designatesByDecl,
-    std::vector<bool>* seenLitOut = nullptr) {
+    llvm::DenseMap<mlir::Operation*, DesignateLiterals>& dgLitCache, std::vector<bool>* seenLitOut = nullptr) {
   if (rank <= 0) return;
   auto func = decl->getParentOfType<mlir::func::FuncOp>();
   if (!func) return;
@@ -787,21 +822,18 @@ static void inferLowerBoundsFromLiteralAccesses(
 
   // Designates rooted at ``decl`` are looked up from the once-built index
   // (see the builder in ``extractVariables``) instead of re-walking every
-  // designate in the function per declare.
+  // designate in the function per declare; each designate's constant index
+  // literals are themselves memoised (``designateIndexLiterals``).
   auto dit = designatesByDecl.find(decl.getOperation());
   if (dit != designatesByDecl.end())
     for (auto dg : dit->second) {
-      auto indices = dg.getIndices();
-      unsigned const nIdx = std::min<unsigned>(indices.size(), (unsigned)rank);
-      for (unsigned d = 0; d < nIdx; ++d) {
-        // Peel a single ``fir.load %decl`` indirection if needed
-        // (inlined-callee pattern: caller passes -5, callee stores
-        // it to a local, then loads it for the designate index).
-        if (auto c = traceConstIntThroughLoad(indices[d], func, writeCache)) {
-          minLit[d] = std::min(*c, minLit[d]);
+      const DesignateLiterals& lits = designateIndexLiterals(dg, func, writeCache, dgLitCache);
+      unsigned const nIdx = std::min<unsigned>(lits.size(), (unsigned)rank);
+      for (unsigned d = 0; d < nIdx; ++d)
+        if (lits[d]) {
+          minLit[d] = std::min(*lits[d], minLit[d]);
           seenLit[d] = true;
         }
-      }
     }
 
   if ((int)lbs.size() < rank) lbs.resize(rank, "1");
@@ -2040,6 +2072,16 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
   });
 
   // Pass 3: build one VarInfo per declare.
+  // ``groupAllocSites`` is a pure function of (mangled_name, module); inlining
+  // gives every inlined copy of an allocatable the SAME uniq_name, so a
+  // fully-inlined entry has many decls sharing one multi-ALLOCATE name, each
+  // otherwise re-running the whole-function reaching-set walk.  Memoise by name
+  // -- O(unique names) walks instead of O(decls).
+  std::map<std::string, std::vector<std::vector<fir::AllocMemOp>>> groupCache;
+  // Per-designate constant-index-literal memo, shared across all declares (see
+  // ``designateIndexLiterals``): kills the alias-chain re-registration blowup in
+  // ``inferLowerBoundsFromLiteralAccesses``.
+  llvm::DenseMap<mlir::Operation*, DesignateLiterals> dgLitCache;
   for (auto& op : decls) {
     VarInfo v;
     v.mangled_name = op.getUniqName().str();
@@ -2562,7 +2604,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
                       // kernel ALLOCATEs the AoS global itself (``allocate(
                       // becxx(...))``), the host has no data to copy IN and the
                       // binding must allocate the host global before copy-OUT.
-                      mv.global_alloc_inside = !collectAllocSites(globalSym, module).empty();
+                      mv.global_alloc_inside = !collectAllocSites(globalSym, module, &allocIdx).empty();
                       // Write provenance (binding copy-OUT): a kernel store to
                       // ANY element of the AoS global (``becxx(i)%k(:,jb) =
                       // ...``, possibly through an inlined dummy) roots a
@@ -2629,7 +2671,10 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
     // a singleton class is a plain / sequentially-versioned buffer.  The
     // base name ``a`` is class 0 (first definition); classes 1.. become
     // ``a_alloc1``, ``a_alloc2``, ...  See ALLOC_BUFFER_SSA_DESIGN.md.
-    auto allocClasses = groupAllocSites(v.mangled_name, module, &allocIdx);
+    auto gcIt = groupCache.find(v.mangled_name);
+    if (gcIt == groupCache.end())
+      gcIt = groupCache.emplace(v.mangled_name, groupAllocSites(v.mangled_name, module, &allocIdx)).first;
+    const std::vector<std::vector<fir::AllocMemOp>>& allocClasses = gcIt->second;
     // ``baseCondAlloc``: is the base buffer (class 0) a conditional?  If so
     // skip the front-site shape (it would pin ``a`` to one branch's extent)
     // -- the synthesize-``a_d<i>`` fallback gives the branch-symbol shape,
@@ -2692,7 +2737,8 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
     // bounds) stays authoritative via the ``lbs[d] != "1"`` guard
     // inside the heuristic.
     bool const plainShapeOp = op.getShape() && mlir::isa_and_nonnull<fir::ShapeOp>(op.getShape().getDefiningOp());
-    if (!plainShapeOp) inferLowerBoundsFromLiteralAccesses(op, v.lower_bounds, v.rank, writeCache, designatesByDecl);
+    if (!plainShapeOp)
+      inferLowerBoundsFromLiteralAccesses(op, v.lower_bounds, v.rank, writeCache, designatesByDecl, dgLitCache);
 
     // Dummy-arg deferred-shape ALLOCATABLE/POINTER fallback: the
     // declare is a function block-arg, its declared type has no
@@ -3474,7 +3520,7 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
           // ``gbuf = gbuf__mod`` (reading an unallocated host array is UB) and
           // rely on the kernel's own allocate.  The copy-OUT ``gbuf__mod =
           // gbuf`` still runs (allocatable assignment auto-allocates the host).
-          v.global_alloc_inside = !collectAllocSites(sym, module).empty();
+          v.global_alloc_inside = !collectAllocSites(sym, module, &allocIdx).empty();
         }
         // A WRITTEN function-scope SAVE-local (``_QF`` -- e.g. ``logical ::
         // bla = .false.`` that Fortran implicitly SAVEs) is private to its

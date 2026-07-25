@@ -232,25 +232,26 @@ def test_restore_and_nyfft_unblock_flang_parse(tmp_path):
         "flang did not produce a HLFIR output"
 
 
-@pytest.mark.xfail(reason="bridge gap: a dynamic array extent symbol ('count') is reassigned "
-                   "inside a loop AFTER an array was allocated from it, so it cannot be "
-                   "SSA-versioned (needs the size hoisted to a single assignment before "
-                   "the alloc, or passed as an explicit dimension).  The two "
-                   "scatter-lowering gaps that previously blocked h_psi "
-                   "(hlfir-expand-vector-subscript-scatter: scalar-broadcast source + a "
-                   "section source computed inside the rhs region) are now FIXED; this "
-                   "extent-mutation limit is the residual blocker.",
+@pytest.mark.xfail(reason="bridge gap: get_ast's buildExpr reaches HLFIR/FIR ops it does not yet "
+                   "lower on the deeply-inlined h_psi body -- a long tail (fir.iterate_while, "
+                   "scf.index_switch, fir.allocmem, hlfir.elemental).  The earlier blockers are "
+                   "now FIXED: the two scatter-lowering gaps (scalar-broadcast source + a section "
+                   "source computed inside the rhs region), the extent-after-ALLOCATE symbol "
+                   "(VersionShapeScalars now FREEZES the extent at each ALLOCATE instead of "
+                   "refusing loop/branch reassignment), the O(n^2) literal-access extract, and "
+                   "nested scf.while in the AST builder.  This unhandled-op tail is the residual.",
                    strict=False)
 def test_h_psi_parses(tmp_path):
     """End-to-end SDFG build for ``h_psi``: the QE checkpoint parses,
     inlines, and lowers to a validated SDFG.
 
-    Currently xfails inside the MLIR pass pipeline
-    (``hlfir-expand-vector-subscript-scatter: unsupported source type``)
-    on a deeply-inlined call site in the h_psi USE-closure; the parse
-    itself (``test_restore_and_nyfft_unblock_flang_parse``) already
-    passes.  When that downstream gap closes the build returns cleanly
-    and this test flips to a pass."""
+    Currently xfails in ``get_ast``: ``buildExpr`` reaches HLFIR/FIR ops
+    it does not yet lower on a deeply-inlined call site in the h_psi
+    USE-closure (fir.iterate_while / scf.index_switch / fir.allocmem /
+    hlfir.elemental).  The parse itself
+    (``test_restore_and_nyfft_unblock_flang_parse``) already passes, and
+    the extent/scatter/perf/nested-while blockers are fixed; when this
+    op tail is covered the build returns cleanly and this test flips."""
     src = _preprocess(_SRC.read_text())
     sdfg = dace_fortran.build_sdfg(src, out_dir=str(tmp_path / "sdfg"), entry=_ENTRY, name="h_psi")
     sdfg.validate()

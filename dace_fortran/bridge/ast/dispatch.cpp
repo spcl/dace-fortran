@@ -92,6 +92,8 @@ std::vector<std::string> renderDesignateSubsetStrings(hlfir::DesignateOp sec);
 // Lowers a fir.call parked in an scf.while BEFORE region; without this the pure-value guard would silently drop it
 // (fir.call carries no MemoryEffectOpInterface). Defined after the call builders + IoState/FftPlanInfo.
 static void dispatchScfWhileCall(fir::CallOp call, std::vector<ASTNode>& out);
+// Forward decl: walkSCFBeforeRegion dispatches a NESTED scf.while through the same builder as a top-level one.
+static ASTNode buildWhileNode(mlir::scf::WhileOp whileOp);
 
 std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
   std::vector<ASTNode> out;
@@ -266,6 +268,13 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
       a.expr = expr;
       a.target_is_array = false;
       out.push_back(std::move(a));
+      continue;
+    }
+    // Nested scf.while parked inside this scf.while's BEFORE region (a Fortran DO WHILE / labelled loop nested in
+    // another; lift-cf-to-scf leaves the inner while as-is). Without this the inner op carries regions but no
+    // MemoryEffectOpInterface, so the guard below would throw. Recurse through the same builder as a top-level while.
+    if (auto innerWhile = mlir::dyn_cast<mlir::scf::WhileOp>(op)) {
+      out.push_back(buildWhileNode(innerWhile));
       continue;
     }
     // fir.do_loop parked inside an scf.while BEFORE region (lift-cf-to-scf shape from a Fortran do whose containing

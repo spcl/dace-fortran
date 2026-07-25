@@ -38,6 +38,8 @@ NOTE on nanobind bindings:
     Hot paths cache such attributes into locals.
 """
 
+import gc
+
 from dace import InterstateEdge, SDFG
 
 from dace_fortran.build_bridge import hb
@@ -703,13 +705,24 @@ class SDFGBuilder:
 
     def _classify(self):
         """Shared post-parse extraction: variables + AST + role split."""
-        self.variables = self.module.get_variables()
-        # Array-element values promoted to symbols while resolving extents
-        # (e.g. ``z_raylfac(nrdmax(jg))`` -> ``__sym_nrdmax_jg``).  Must be read
-        # right after ``get_variables`` (which populates them).  ``build`` seeds
-        # each from its element read and asserts the element stays constant.
-        self.value_symbols = self.module.get_value_symbols()
-        self.ast = self.module.get_ast()
+        # Extraction mints tens of thousands of nanobind objects (a fully-inlined
+        # entry -- QE's h_psi -- yields ~40k VarInfo/AST nodes).  Python's cyclic
+        # GC then rescans the ever-growing set on each automatic trigger: O(n^2)
+        # that dominated get_variables (793s -> 318s with GC off).  Suspend it for
+        # the burst; the objects are acyclic, so nothing leaks.
+        gc_was_enabled = gc.isenabled()
+        gc.disable()
+        try:
+            self.variables = self.module.get_variables()
+            # Array-element values promoted to symbols while resolving extents
+            # (e.g. ``z_raylfac(nrdmax(jg))`` -> ``__sym_nrdmax_jg``).  Must be read
+            # right after ``get_variables`` (which populates them).  ``build`` seeds
+            # each from its element read and asserts the element stays constant.
+            self.value_symbols = self.module.get_value_symbols()
+            self.ast = self.module.get_ast()
+        finally:
+            if gc_was_enabled:
+                gc.enable()
         # ``view_alias`` participates in the array dictionary so the
         # emitter routes accesses to it normally; ``add_descriptors``
         # registers it via ``sdfg.add_view`` (pointer alias of its
