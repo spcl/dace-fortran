@@ -232,10 +232,14 @@ def test_restore_and_nyfft_unblock_flang_parse(tmp_path):
         "flang did not produce a HLFIR output"
 
 
-@pytest.mark.xfail(reason="bridge gap: hlfir-expand-vector-subscript-scatter rejects an "
-                          "inlined vector-subscript scatter source type on the h_psi "
-                          "USE-closure; flips to a clean build once that pass lands "
-                          "(cf. the vexx_bp_k_gpu vcut_a gap that already closed).",
+@pytest.mark.xfail(reason="bridge gap: a dynamic array extent symbol ('count') is reassigned "
+                   "inside a loop AFTER an array was allocated from it, so it cannot be "
+                   "SSA-versioned (needs the size hoisted to a single assignment before "
+                   "the alloc, or passed as an explicit dimension).  The two "
+                   "scatter-lowering gaps that previously blocked h_psi "
+                   "(hlfir-expand-vector-subscript-scatter: scalar-broadcast source + a "
+                   "section source computed inside the rhs region) are now FIXED; this "
+                   "extent-mutation limit is the residual blocker.",
                    strict=False)
 def test_h_psi_parses(tmp_path):
     """End-to-end SDFG build for ``h_psi``: the QE checkpoint parses,
@@ -379,8 +383,8 @@ def test_h_psi_reference_runs(tmp_path):
 
 
 @pytest.mark.xfail(reason="depends on test_h_psi_parses: the SDFG build currently xfails "
-                          "in the MLIR pass pipeline (hlfir-expand-vector-subscript-"
-                          "scatter), so the binding is never emitted; flips with it.",
+                   "in the MLIR pass pipeline (hlfir-expand-vector-subscript-"
+                   "scatter), so the binding is never emitted; flips with it.",
                    strict=False)
 def test_h_psi_numerical_correctness(tmp_path):
     """End-to-end numerical correctness for ``h_psi`` THROUGH the generated

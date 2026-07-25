@@ -155,10 +155,33 @@ struct ExpandVectorSubscriptScatterPass
     //     expression directly consumed by the scatter).  Read
     //     per-element via ``hlfir.apply``.
     bool srcIsExpr = false;
+    bool srcIsScalar = false;
     mlir::Type eleTy;
+    // Peel any nesting of ref/box/heap/ptr wrappers down to the underlying array.
+    // Post-inline, an allocatable/pointer scatter source arrives as fir.heap<array>,
+    // fir.ptr<array>, or fir.box<fir.heap<array>> -- not only the bare fir.ref/fir.box
+    // the original two cases covered (the h_psi USE-closure gap).
     auto peelToSeq = [](mlir::Type t) -> fir::SequenceType {
-      if (auto r = mlir::dyn_cast<fir::ReferenceType>(t)) return mlir::dyn_cast<fir::SequenceType>(r.getEleTy());
-      if (auto b = mlir::dyn_cast<fir::BoxType>(t)) return mlir::dyn_cast<fir::SequenceType>(b.getEleTy());
+      for (int i = 0; i < 8; ++i) {
+        if (auto s = mlir::dyn_cast<fir::SequenceType>(t)) return s;
+        if (auto r = mlir::dyn_cast<fir::ReferenceType>(t)) {
+          t = r.getEleTy();
+          continue;
+        }
+        if (auto bx = mlir::dyn_cast<fir::BoxType>(t)) {
+          t = bx.getEleTy();
+          continue;
+        }
+        if (auto hp = mlir::dyn_cast<fir::HeapType>(t)) {
+          t = hp.getEleTy();
+          continue;
+        }
+        if (auto pt = mlir::dyn_cast<fir::PointerType>(t)) {
+          t = pt.getEleTy();
+          continue;
+        }
+        break;
+      }
       return {};
     };
     if (auto seqTy = peelToSeq(srcVal.getType())) {
@@ -166,10 +189,15 @@ struct ExpandVectorSubscriptScatterPass
     } else if (auto exprTy = mlir::dyn_cast<hlfir::ExprType>(srcVal.getType())) {
       srcIsExpr = true;
       eleTy = exprTy.getElementType();
+    } else if (!mlir::isa<fir::ReferenceType, fir::BoxType, fir::HeapType, fir::PointerType>(srcVal.getType())) {
+      // Scalar-value RHS broadcast: ``a(vec_idx) = <scalar>`` (e.g. the h_psi USE-closure's
+      // i32 fill).  Fortran evaluates the scalar ONCE and stores it to every scattered
+      // element -- no per-element source read; the value is broadcast in the scatter loop.
+      srcIsScalar = true;
+      eleTy = srcVal.getType();
     } else {
-      return op.emitError(
-          "hlfir-expand-vector-subscript-scatter: unsupported source type "
-          "(expected fir.ref/fir.box of fir.array or hlfir.expr)");
+      return op.emitError("hlfir-expand-vector-subscript-scatter: unsupported source type ")
+             << srcVal.getType() << " (expected fir.ref/fir.box/fir.heap/fir.ptr of fir.array, hlfir.expr, or scalar)";
     }
 
     mlir::OpBuilder b(op);
@@ -179,7 +207,11 @@ struct ExpandVectorSubscriptScatterPass
     //     each region (rhs first if the source is an expr, then
     //     lhs).  Records original->clone in ``map`` so cloned uses
     //     inside loops resolve to the new ops.
-    if (srcIsExpr) {
+    {
+      // Clone the RHS region ops -- source expression, section-slice computation, or a
+      // scalar's one-time evaluation -- into the enclosing scope so ``map`` resolves
+      // ``srcVal`` (and any source designate defined INSIDE the rhs region, e.g. a section
+      // ``vin(lo:hi)``) when the scatter loop reads it.
       auto& rhsBlock = op.getRhsRegion().front();
       for (auto& inner : rhsBlock) {
         if (mlir::isa<hlfir::YieldOp>(inner)) break;
@@ -401,8 +433,9 @@ struct ExpandVectorSubscriptScatterPass
       // scatter is correct.  ``srcRefBase`` stays the original
       // source value; the scatter loop below reads it
       // per-iteration via ``hlfir.apply`` (expr) or
-      // ``designate + load`` (ref).
-      srcRefBase = srcVal;
+      // ``designate + load`` (ref).  Resolve through ``map`` so a source section
+      // computed inside the (now-cloned) rhs region reads from the cloned value.
+      srcRefBase = map.lookupOrDefault(srcVal);
     }
 
     // --- Step 3: scatter loop.
@@ -422,7 +455,10 @@ struct ExpandVectorSubscriptScatterPass
     //     ``fir.ref<array<...>>``; read by designate + load.
     bool const readByApply = srcIsExpr && !aliases;
     mlir::Value srcLoadVal;
-    if (readByApply) {
+    if (srcIsScalar) {
+      // Broadcast: every scattered element gets the same once-evaluated scalar.
+      srcLoadVal = map.lookupOrDefault(srcVal);
+    } else if (readByApply) {
       mlir::Value const mappedSrc = map.lookupOrDefault(srcVal);
       auto applied = b.create<hlfir::ApplyOp>(loc, eleTy, mappedSrc, mlir::ValueRange{iv},
                                               /*typeparams=*/mlir::ValueRange{});
