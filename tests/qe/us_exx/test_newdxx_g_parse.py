@@ -58,7 +58,6 @@ _NKB = 2
 
 pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
 
-
 # C-callable driver that initialises the QE module state (shared with the
 # gfortran reference via ``init_newdxx_g_state_c``), then dispatches into the
 # SDFG through its GENERATED Fortran binding ``newdxx_g_dace`` rather than the
@@ -277,13 +276,6 @@ def test_newdxx_g_reference_runs(tmp_path):
     np.testing.assert_allclose(deexx_out, _expected_deexx_c(vc, deexx_in, becphi_c), rtol=1e-12, atol=1e-12)
 
 
-@pytest.mark.xfail(reason="bridge gap: complex DOT_PRODUCT(aux2, aux1) is lowered without "
-                          "conjugating the first argument -- SUM(aux2*aux1) instead of "
-                          "SUM(CONJG(aux2)*aux1).  Every other part of the flag='c' path "
-                          "lowers correctly (branch select, okvan/gamma_only marshalling, "
-                          "eigts/qgm/mill indexing); flips to a pass once complex "
-                          "DOT_PRODUCT conjugates.",
-                   strict=False)
 def test_newdxx_g_numerical_correctness(tmp_path):
     """End-to-end numerical correctness for ``newdxx_g`` THROUGH the generated
     Fortran binding, on the active ``flag='c'`` path.
@@ -335,14 +327,13 @@ def test_newdxx_g_numerical_correctness(tmp_path):
     driver_path = tmp_path / "driver.f90"
     driver_path.write_text(_SDFG_DRIVER)
 
-    lib = build_fortran_library(
-        sdfg,
-        iface,
-        plan,
-        str(tmp_path / "lib"),
-        name="newdxx_lib",
-        prelude_sources=[src_path],
-        extra_sources=[_CALLER, driver_path])
+    lib = build_fortran_library(sdfg,
+                                iface,
+                                plan,
+                                str(tmp_path / "lib"),
+                                name="newdxx_lib",
+                                prelude_sources=[src_path],
+                                extra_sources=[_CALLER, driver_path])
     dace_lib = lib.load()
 
     fn = dace_lib.run_newdxx_g_dace_c

@@ -321,6 +321,10 @@ def emit_libcall(builder, ctx, n, region):
             node.transB = tB
     else:
         node = cls(f"{spec.name}_{n.target}_{builder.nid()}")
+    # Fortran DOT_PRODUCT(a, b) for complex a is SUM(CONJG(a)*b) (BLAS ?dotc); blas.Dot defaults
+    # to the unconjugated ?dotu. MATMUL stays unconjugated, so key this on Dot only.
+    if spec.node_cls == "Dot" and n.call_args and ctx.sdfg.arrays[n.call_args[0]].dtype.is_complex():
+        node.conjugate = True
     state.add_node(pin_sequential(node))
 
     # call_arg_subsets parallels call_args: empty = whole array, else a DaCe-0-based subset
