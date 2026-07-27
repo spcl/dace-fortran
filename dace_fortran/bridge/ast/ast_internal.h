@@ -12,6 +12,10 @@ ASTNode buildCopyNode(hlfir::AssignOp assign);
 
 ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation* srcOp, std::string_view callee);
 
+// Resolves a (possibly sliced) libcall operand to {DaCe array name, subset string}; empty subset = whole array.
+std::pair<std::string, std::string> resolveDesignateSliceSubset(mlir::Value operand, llvm::StringRef calleeName,
+                                                                unsigned argIdx);
+
 ASTNode buildMemsetNode(hlfir::AssignOp assign);
 
 ASTNode buildReduceNode(hlfir::AssignOp assign, mlir::Operation* redOp, std::string_view wcr,
@@ -37,6 +41,9 @@ std::vector<ASTNode> buildWholeArrayScalarBroadcast(hlfir::AssignOp assign);
 // ast_helpers.h (included above).
 
 std::string scfSynthName(mlir::Value v);
+
+// Renders an scf.index_switch selector value to its DaCe expression (while-carried synth, or the real host expression).
+std::string scfSwitchValueName(mlir::Value v);
 
 std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block);
 

@@ -1529,6 +1529,134 @@ ASTNode buildMemsetNode(hlfir::AssignOp assign) {
 /// trace it via ``traceConstInt`` and stash it in ``reduce_axes`` (0-based,
 /// same convention as ``buildReduceNode``).  ``emit_libcall`` reads it
 /// back and converts to Fortran 1-based for the library-node constructor.
+// Resolves a (possibly sliced) libcall operand to its DaCe array name + parallel subset string. Whole-array or
+// non-designate operands return an empty subset; a designate with >=1 triplet that can't be expressed throws (silently
+// flattening to the whole array would include trailing elements the slice meant to exclude). Subsets are DaCe-0-based
+// half-open ``lo:hi:stride`` (stride omitted when 1); symbolic bounds are parenthesised so ``__sym_pos_1 - 1`` doesn't
+// bind across an outer subtract. Free function (not a buildLibCallNode local) so the ddot-in-expression path can reuse
+// it -- see the hlfir.assign handler in dispatch.cpp.
+std::pair<std::string, std::string> resolveDesignateSliceSubset(mlir::Value operand, llvm::StringRef calleeName,
+                                                                unsigned argIdx) {
+  auto* def = operand.getDefiningOp();
+  if (!def) return {traceToDecl(operand), std::string{}};
+  auto dg = mlir::dyn_cast<hlfir::DesignateOp>(def);
+  if (!dg) return {traceToDecl(operand), std::string{}};
+  // Whole-member cartesian / AoS companion read (gate #12): ``dot_product(diag % pvd(i) % x, ...)`` -- the ``%x``
+  // designate selects the WHOLE array member (no triplet, no own indices) but ``traceToDecl`` resolved it to a
+  // FLATTENED companion (``diag_pvd_x``) carrying the outer element index(es) prepended. The element subscript lives on
+  // the MEMREF (``pvd(i)``), so the generic path below (which keys off the operand's own triplets) would read the whole
+  // multi-dim companion -- a 1-D-only libcall like dot_product then fails validation. Build the element subset
+  // ``[<outer idx>, 0:<member extent>]`` from the memref's element designate + the member's static extents.
+  if (dg.getComponentAttr() && dg.getIsTriplet().empty()) {
+    mlir::Type resTy = dg.getResult().getType();
+    if (auto rt = mlir::dyn_cast<fir::ReferenceType>(resTy)) resTy = rt.getEleTy();
+    if (auto seq = mlir::dyn_cast<fir::SequenceType>(resTy)) {
+      bool staticMember = true;
+      for (auto ext : seq.getShape())
+        if (ext == fir::SequenceType::getUnknownExtent()) staticMember = false;
+      mlir::Value mv = dg.getMemref();
+      for (int i = 0; staticMember && i < limits::kSsaBackWalkDepth && mv; ++i) {
+        auto* d = mv.getDefiningOp();
+        if (!d) break;
+        if (auto idg = mlir::dyn_cast<hlfir::DesignateOp>(d)) {
+          if (!idg.getComponentAttr() && !idg.getIndices().empty()) {
+            std::vector<DesignateDim> edims;
+            if (parseDesignateDims(idg, edims)) {
+              std::string sub;
+              for (auto& ed : edims)
+                if (!ed.isTriplet) {
+                  if (!sub.empty()) sub += ", ";
+                  sub += "(" + ed.scalarIdx + " - 1)";
+                }
+              for (auto ext : seq.getShape()) {
+                if (!sub.empty()) sub += ", ";
+                sub += "0:" + std::to_string(ext);
+              }
+              return {traceToDecl(operand), sub};
+            }
+          }
+          mv = idg.getMemref();
+          continue;
+        }
+        if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
+          mv = cv.getValue();
+          continue;
+        }
+        if (auto ld = mlir::dyn_cast<fir::LoadOp>(d)) {
+          mv = ld.getMemref();
+          continue;
+        }
+        if (auto rb = mlir::dyn_cast<fir::ReboxOp>(d)) {
+          mv = rb.getBox();
+          continue;
+        }
+        if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
+          mv = ba.getVal();
+          continue;
+        }
+        break;
+      }
+    }
+  }
+  auto triplets = dg.getIsTriplet();
+  if (triplets.empty()) return {traceToDecl(operand), std::string{}};
+  bool anyTriplet = false;
+  for (bool const t : triplets)
+    if (t) {
+      anyTriplet = true;
+      break;
+    }
+  if (!anyTriplet) return {traceToDecl(operand), std::string{}};
+
+  auto name = traceToDecl(dg.getMemref());
+  if (name.empty())
+    throw std::runtime_error("libcall \"" + std::string(calleeName) + "\" arg " + std::to_string(argIdx) +
+                             ": cannot resolve sliced operand's array name");
+
+  std::vector<DesignateDim> dims;
+  if (!parseDesignateDims(dg, dims))
+    throw std::runtime_error("libcall \"" + std::string(calleeName) + "\" arg " + std::to_string(argIdx) +
+                             ": cannot lower sliced designate of \"" + name + "\"");
+
+  // Walk dims and build the subset expression per dim. Track the flat-operand cursor manually so we can also peek at
+  // the raw mlir::Value for traceConstInt's tighter constant fold (avoids wrapping ``5`` as ``(5 - 1)`` when we can
+  // just emit ``4``).
+  std::string sub;
+  auto idxs = dg.getIndices();
+  unsigned flatCursor = 0;
+  for (const auto& dim : dims) {
+    if (!sub.empty()) sub += ", ";
+    if (dim.isTriplet) {
+      // DaCe 0-based half-open: lo - 1 : hi : stride. Drop the explicit ``:1`` stride to keep the common case readable.
+      std::string lo0;
+      if (auto c = traceConstInt(idxs[flatCursor])) {
+        lo0 = std::to_string(*c - 1);
+      } else {
+        lo0 = "(" + dim.lo + " - 1)";
+      }
+      sub += lo0 + ":" + dim.hi;
+      bool const strideIsOne = dim.strideExpr.empty() && dim.strideConst == 1;
+      if (!strideIsOne) {
+        sub += ":";
+        sub += dim.strideExpr.empty() ? std::to_string(dim.strideConst) : dim.strideExpr;
+      }
+      flatCursor += 3;
+    } else {
+      // Mixed scalar+slice: emit a single-element subset for the scalar dim so the memlet's rank matches the underlying
+      // array.
+      std::string idx0;
+      if (auto c = traceConstInt(idxs[flatCursor])) {
+        idx0 = std::to_string(*c - 1);
+      } else {
+        idx0 = "(" + dim.scalarIdx + " - 1)";
+      }
+      sub += idx0;
+      flatCursor += 1;
+    }
+  }
+  return {name, sub};
+}
+
 ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation* srcOp, std::string_view callee) {
   ASTNode n;
   n.kind = "libcall";
@@ -1541,149 +1669,6 @@ ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation* srcOp, std::st
   // Linalg ops use call_args for every operand; reduction-style ops
   // (count) treat the first operand as the array source and any
   // remaining numeric operand as a dim/axis arg.
-  //
-  // ``dot_product(arg1(1:3), arg2(1:3))`` and friends pass an
-  // ``hlfir.designate`` with one or more triplets as the operand.
-  // Capture the bounds as a parallel ``call_arg_subsets`` entry so
-  // emit_libcall can wire a sliced memlet.  Loud-failure contract:
-  // once we recognise the operand as a designate with at least one
-  // triplet (i.e. NOT a whole-array reference), failing to express
-  // the slice throws  --  silently flattening to the whole array would
-  // include trailing elements the slice was meant to exclude.
-  //
-  // Subsets are emitted in DaCe-0-based half-open form ``lo:hi:stride``
-  // (with stride omitted when 1).  Symbolic bounds are wrapped in
-  // parens when the input expression is non-trivial so e.g.
-  // ``__sym_pos_1 - 1`` doesn't bind across an outer subtract.
-  auto resolveSliceSubset = [&](mlir::Value operand, llvm::StringRef calleeName,
-                                unsigned argIdx) -> std::pair<std::string, std::string> {
-    auto* def = operand.getDefiningOp();
-    if (!def) return {traceToDecl(operand), std::string{}};
-    auto dg = mlir::dyn_cast<hlfir::DesignateOp>(def);
-    if (!dg) return {traceToDecl(operand), std::string{}};
-    // Whole-member cartesian / AoS companion read (gate #12):
-    // ``dot_product(diag % pvd(i) % x, ...)`` -- the ``%x`` designate selects
-    // the WHOLE array member (no triplet, no own indices) but ``traceToDecl``
-    // resolved it to a FLATTENED companion (``diag_pvd_x``) carrying the outer
-    // element index(es) prepended.  The element subscript lives on the MEMREF
-    // (``pvd(i)``), so the generic path below (which keys off the operand's own
-    // triplets) would read the whole multi-dim companion -- a 1-D-only libcall
-    // like dot_product then fails validation.  Build the element subset
-    // ``[<outer idx>, 0:<member extent>]`` from the memref's element designate
-    // + the member's static extents.
-    if (dg.getComponentAttr() && dg.getIsTriplet().empty()) {
-      mlir::Type resTy = dg.getResult().getType();
-      if (auto rt = mlir::dyn_cast<fir::ReferenceType>(resTy)) resTy = rt.getEleTy();
-      if (auto seq = mlir::dyn_cast<fir::SequenceType>(resTy)) {
-        bool staticMember = true;
-        for (auto ext : seq.getShape())
-          if (ext == fir::SequenceType::getUnknownExtent()) staticMember = false;
-        mlir::Value mv = dg.getMemref();
-        for (int i = 0; staticMember && i < limits::kSsaBackWalkDepth && mv; ++i) {
-          auto* d = mv.getDefiningOp();
-          if (!d) break;
-          if (auto idg = mlir::dyn_cast<hlfir::DesignateOp>(d)) {
-            if (!idg.getComponentAttr() && !idg.getIndices().empty()) {
-              std::vector<DesignateDim> edims;
-              if (parseDesignateDims(idg, edims)) {
-                std::string sub;
-                for (auto& ed : edims)
-                  if (!ed.isTriplet) {
-                    if (!sub.empty()) sub += ", ";
-                    sub += "(" + ed.scalarIdx + " - 1)";
-                  }
-                for (auto ext : seq.getShape()) {
-                  if (!sub.empty()) sub += ", ";
-                  sub += "0:" + std::to_string(ext);
-                }
-                return {traceToDecl(operand), sub};
-              }
-            }
-            mv = idg.getMemref();
-            continue;
-          }
-          if (auto cv = mlir::dyn_cast<fir::ConvertOp>(d)) {
-            mv = cv.getValue();
-            continue;
-          }
-          if (auto ld = mlir::dyn_cast<fir::LoadOp>(d)) {
-            mv = ld.getMemref();
-            continue;
-          }
-          if (auto rb = mlir::dyn_cast<fir::ReboxOp>(d)) {
-            mv = rb.getBox();
-            continue;
-          }
-          if (auto ba = mlir::dyn_cast<fir::BoxAddrOp>(d)) {
-            mv = ba.getVal();
-            continue;
-          }
-          break;
-        }
-      }
-    }
-    auto triplets = dg.getIsTriplet();
-    if (triplets.empty()) return {traceToDecl(operand), std::string{}};
-    bool anyTriplet = false;
-    for (bool const t : triplets)
-      if (t) {
-        anyTriplet = true;
-        break;
-      }
-    if (!anyTriplet) return {traceToDecl(operand), std::string{}};
-
-    auto name = traceToDecl(dg.getMemref());
-    if (name.empty())
-      throw std::runtime_error("libcall \"" + std::string(calleeName) + "\" arg " + std::to_string(argIdx) +
-                               ": cannot resolve sliced operand's array name");
-
-    std::vector<DesignateDim> dims;
-    if (!parseDesignateDims(dg, dims))
-      throw std::runtime_error("libcall \"" + std::string(calleeName) + "\" arg " + std::to_string(argIdx) +
-                               ": cannot lower sliced designate of \"" + name + "\"");
-
-    // Walk dims and build the subset expression per dim.  Track the
-    // flat-operand cursor manually so we can also peek at the raw
-    // mlir::Value for traceConstInt's tighter constant fold (avoids
-    // wrapping ``5`` as ``(5 - 1)`` when we can just emit ``4``).
-    std::string sub;
-    auto idxs = dg.getIndices();
-    unsigned flatCursor = 0;
-    for (const auto& dim : dims) {
-      if (!sub.empty()) sub += ", ";
-      if (dim.isTriplet) {
-        // DaCe 0-based half-open: lo - 1 : hi : stride.  Drop
-        // the explicit ``:1`` stride to keep the common case
-        // readable.
-        std::string lo0;
-        if (auto c = traceConstInt(idxs[flatCursor])) {
-          lo0 = std::to_string(*c - 1);
-        } else {
-          lo0 = "(" + dim.lo + " - 1)";
-        }
-        sub += lo0 + ":" + dim.hi;
-        bool const strideIsOne = dim.strideExpr.empty() && dim.strideConst == 1;
-        if (!strideIsOne) {
-          sub += ":";
-          sub += dim.strideExpr.empty() ? std::to_string(dim.strideConst) : dim.strideExpr;
-        }
-        flatCursor += 3;
-      } else {
-        // Mixed scalar+slice: emit a single-element subset for
-        // the scalar dim so the memlet's rank matches the
-        // underlying array.
-        std::string idx0;
-        if (auto c = traceConstInt(idxs[flatCursor])) {
-          idx0 = std::to_string(*c - 1);
-        } else {
-          idx0 = "(" + dim.scalarIdx + " - 1)";
-        }
-        sub += idx0;
-        flatCursor += 1;
-      }
-    }
-    return {name, sub};
-  };
 
   auto opName = srcOp->getName().getStringRef();
   bool const is_count = (opName == "hlfir.count");
@@ -1692,7 +1677,7 @@ ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation* srcOp, std::st
   bool const is_cshift = (opName == "hlfir.cshift");
   if (is_count) {
     if (srcOp->getNumOperands() > 0) {
-      auto [nm, sub] = resolveSliceSubset(srcOp->getOperand(0), callee, 0);
+      auto [nm, sub] = resolveDesignateSliceSubset(srcOp->getOperand(0), callee, 0);
       n.call_args.push_back(nm);
       n.call_arg_subsets.push_back(sub);
     }
@@ -1709,7 +1694,7 @@ ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation* srcOp, std::st
     // ``AttrSizedOperandSegments`` ABI (positional indices change
     // depending on which optionals are present).
     auto pushMask = [&](mlir::Value mask) {
-      auto [nm, sub] = resolveSliceSubset(mask, callee, 1);
+      auto [nm, sub] = resolveDesignateSliceSubset(mask, callee, 1);
       n.call_args.push_back(nm);
       n.call_arg_subsets.push_back(sub);
     };
@@ -1723,14 +1708,14 @@ ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation* srcOp, std::st
         n.options["back"] = "true";  // dynamic; safe default
     };
     if (auto minOp = mlir::dyn_cast<hlfir::MinlocOp>(srcOp)) {
-      auto [nm, sub] = resolveSliceSubset(minOp.getArray(), callee, 0);
+      auto [nm, sub] = resolveDesignateSliceSubset(minOp.getArray(), callee, 0);
       n.call_args.push_back(nm);
       n.call_arg_subsets.push_back(sub);
       if (auto dim = minOp.getDim()) pushDim(dim);
       if (auto mask = minOp.getMask()) pushMask(mask);
       if (auto back = minOp.getBack()) pushBack(back);
     } else if (auto maxOp = mlir::dyn_cast<hlfir::MaxlocOp>(srcOp)) {
-      auto [nm, sub] = resolveSliceSubset(maxOp.getArray(), callee, 0);
+      auto [nm, sub] = resolveDesignateSliceSubset(maxOp.getArray(), callee, 0);
       n.call_args.push_back(nm);
       n.call_arg_subsets.push_back(sub);
       if (auto dim = maxOp.getDim()) pushDim(dim);
@@ -1743,7 +1728,7 @@ ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation* srcOp, std::st
     // expression in ``options["shift"]``; the optional dim lands in
     // ``reduce_axes`` (0-based), matching MINLOC / MAXLOC.
     if (auto cshOp = mlir::dyn_cast<hlfir::CShiftOp>(srcOp)) {
-      auto [nm, sub] = resolveSliceSubset(cshOp.getArray(), callee, 0);
+      auto [nm, sub] = resolveDesignateSliceSubset(cshOp.getArray(), callee, 0);
       n.call_args.push_back(nm);
       n.call_arg_subsets.push_back(sub);
       auto shiftVal = cshOp.getShift();
@@ -1794,7 +1779,7 @@ ASTNode buildLibCallNode(hlfir::AssignOp assign, mlir::Operation* srcOp, std::st
           }
         }
       }
-      auto [nm, sub] = resolveSliceSubset(operand, callee, argIdx);
+      auto [nm, sub] = resolveDesignateSliceSubset(operand, callee, argIdx);
       n.call_args.push_back(nm);
       n.call_arg_subsets.push_back(sub);
       ++argIdx;

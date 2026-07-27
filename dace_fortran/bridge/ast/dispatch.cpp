@@ -1620,7 +1620,20 @@ static std::string tryMaterialiseAllAnyCond(mlir::Value condVal, std::vector<AST
   bool const isAll = mlir::isa<hlfir::AllOp>(def);
   bool const isAny = mlir::isa<hlfir::AnyOp>(def);
   if ((!isAll && !isAny) || def->getNumOperands() == 0) return "";
-  std::string const maskName = traceToDecl(def->getOperand(0));
+  mlir::Value const maskVal = def->getOperand(0);
+  std::string maskName = traceToDecl(maskVal);
+  // An INLINE elemental mask (e.g. ``IF (ANY(sectionA /= sectionB))``) has no declared name, so traceToDecl
+  // returns "". Materialise it into a transient array via the same path materialiseCondReductions already uses
+  // for SUM/MINVAL/MAXVAL/PRODUCT elemental sources, then reduce that transient.
+  if (maskName.empty())
+    if (auto* md = maskVal.getDefiningOp())
+      if (auto elem = mlir::dyn_cast<hlfir::ElementalOp>(md)) {
+        auto [tr, prelude] = materialiseElementalForLibcall(elem);
+        if (!tr.empty()) {
+          for (auto& pn : prelude) nodes.push_back(std::move(pn));
+          maskName = tr;
+        }
+      }
   if (maskName.empty()) return "";
 
   std::string tr = "__allany_cond_" + std::to_string(kSynthTransientCounter++);
@@ -2014,20 +2027,36 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
     if (!un || !un->ends_with(".alloc")) return {};
     auto memDef = store.getMemref().getDefiningOp();
     if (!memDef) return {};
-    auto decl = mlir::dyn_cast<hlfir::DeclareOp>(memDef);
-    if (!decl) return {};
-    std::string raw = extractName(decl.getUniqName().str());
-    if (raw.empty()) return {};
-    // Routes this ALLOCATE to its buffer CLASS (one DaCe transient per class): sequential re-allocation -> singleton
-    // class per epoch (a, a_alloc1, ...); conditional ALLOCATE -> multi-site class sharing one buffer, each branch
-    // assigning its extent symbol, merging at the IF join. See ALLOC_BUFFER_SSA_DESIGN.md.
-    auto mod = decl->getParentOfType<mlir::ModuleOp>();
-    auto classes = mod ? groupAllocSites(decl.getUniqName().str(), mod) : std::vector<std::vector<fir::AllocMemOp>>{};
-    unsigned cls = 0;
-    for (unsigned ci = 0; ci < classes.size(); ++ci)
-      for (auto site : classes[ci])
-        if (site.getOperation() == allocmem.getOperation()) cls = ci;
-    std::string const bufName = allocAliasName(raw, cls);
+    std::string raw;
+    std::string bufName;
+    if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(memDef)) {
+      raw = extractName(decl.getUniqName().str());
+      if (raw.empty()) return {};
+      // Routes this ALLOCATE to its buffer CLASS (one DaCe transient per class): sequential re-allocation -> singleton
+      // class per epoch (a, a_alloc1, ...); conditional ALLOCATE -> multi-site class sharing one buffer, each branch
+      // assigning its extent symbol, merging at the IF join. See ALLOC_BUFFER_SSA_DESIGN.md.
+      auto mod = decl->getParentOfType<mlir::ModuleOp>();
+      auto classes = mod ? groupAllocSites(decl.getUniqName().str(), mod) : std::vector<std::vector<fir::AllocMemOp>>{};
+      unsigned cls = 0;
+      for (unsigned ci = 0; ci < classes.size(); ++ci)
+        for (auto site : classes[ci])
+          if (site.getOperation() == allocmem.getOperation()) cls = ci;
+      bufName = allocAliasName(raw, cls);
+    } else if (auto dg = mlir::dyn_cast<hlfir::DesignateOp>(memDef); dg && dg.getComponentAttr()) {
+      // Derived-type-component ALLOCATE (``ALLOCATE(dfft%nl(...))``): the allocatable's box lives in a
+      // designate{"field"}, not a declare, so the declare path above misses it and the statement was being silently
+      // dropped. The component uniq_name (``_QMfft_typesEnl.alloc``) is SHARED across every instance of the type
+      // (dfftp/dffts/...), so grouping by it module-wide would merge distinct instances' arrays -- a silent miscompile.
+      // Resolve the INSTANCE-qualified name via traceToDecl (``dfftp_nl``, matching what reads resolve to) and use one
+      // buffer per instance (cls 0): a component array is allocated once per instance; a conditional/sequential
+      // re-alloc of the same instance-field rebinds the same symbolic-shape buffer, which is correct. Per-instance
+      // versioning (the declare path's groupAllocSites) is deferred -- no current frontend needs it.
+      raw = traceToDecl(store.getMemref());
+      if (raw.empty()) return {};
+      bufName = raw;
+    } else {
+      return {};
+    }
     setAllocAlias(raw, bufName);
     // Binds the buffer's per-dim extent symbol <buf>_d<i> here from the ALLOCATE's own shape operand (always known),
     // keeping it off the program signature as a free symbol and letting size(a)/LBOUND/UBOUND (-> fir.box_dims ->
@@ -2101,7 +2130,90 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
       if (cur)
         if (auto* cd = cur.getDefiningOp())
           if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(cd)) name = extractName(decl.getUniqName().str());
+      // Component DEALLOCATE (``DEALLOCATE(dfft%nl)``) bottoms at a designate, not a declare -- resolve the
+      // instance-qualified name so its ``<name>_allocated`` flag stays symmetric with the component-ALLOCATE above.
+      if (name.empty() && cur) name = traceToDecl(cur);
       if (!name.empty()) emitAllocStateChange(name, 0);
+      continue;
+    }
+
+    // fir.iterate_while = a DO index loop (induction = block arg 0) fused with a WHILE flag (block arg 1, i1) and
+    // loop-carried iter_args (block args 2..). Lowered as a "loop" over the index range with a carried-flag break-guard
+    // at body top (while semantics) and carried-value synth scalars updated from the fir.result terminator; the op's
+    // results (final flag, final iter_args) register into kScfValueMap so downstream buildExpr reads resolve. Sole
+    // frontend shape is LEN_TRIM's trailing-blank scan (DO i = len, 0, -1 while char(i)==' ').
+    if (auto iw = mlir::dyn_cast<fir::IterWhileOp>(op)) {
+      auto& body = *iw.getBody();
+      auto iterOps = iw.getIterOperands();  // [flag-init, iter-arg-inits...]
+      unsigned const nCarried = std::min<unsigned>(static_cast<unsigned>(iterOps.size()), iw.getNumResults());
+      // Carried synths (one per result: 0 = flag, 1.. = iter_args). Init them BEFORE the loop and map each block arg to
+      // its synth so body reads resolve.
+      std::vector<std::string> synth(nCarried);
+      for (unsigned i = 0; i < nCarried; ++i) {
+        synth[i] = scfSynthName(iw.getResult(i));
+        ASTNode a;
+        a.kind = "assign";
+        a.target = synth[i];
+        a.target_is_array = false;
+        a.expr = (i == 0) ? buildBoolExpr(iterOps[0], 0) : buildExpr(iterOps[i], 0);
+        nodes.push_back(std::move(a));
+        kScfValueMap[body.getArgument(i + 1)] = synth[i];
+      }
+      static thread_local int kIterWhileCounter = 0;
+      ASTNode n;
+      n.kind = "loop";
+      n.loop_iter = "_iwit_" + std::to_string(kIterWhileCounter++);
+      // Bounds: const shortcut, else scalar decl, else index expr (LEN_TRIM bounds are counters, not array-element
+      // loads).
+      if (auto c = traceConstInt(iw.getUpperBound())) {
+        n.loop_bound = std::to_string(*c);
+      } else {
+        n.loop_bound = traceToDecl(iw.getUpperBound());
+        if (n.loop_bound.empty()) n.loop_bound = buildIndexExpr(iw.getUpperBound(), 0);
+        if (n.loop_bound.empty() || n.loop_bound == "?") n.loop_bound = buildExpr(iw.getUpperBound(), 0);
+      }
+      n.loop_lower = traceLB(iw.getLowerBound());
+      if (n.loop_lower < 0) {
+        n.loop_lower_expr = traceToDecl(iw.getLowerBound());
+        if (n.loop_lower_expr.empty()) n.loop_lower_expr = buildIndexExpr(iw.getLowerBound(), 0);
+      }
+      if (auto s = traceConstInt(iw.getStep())) {
+        n.loop_step = *s;
+      } else {
+        n.loop_step_expr = traceToDecl(iw.getStep());
+        if (n.loop_step_expr.empty()) n.loop_step_expr = buildIndexExpr(iw.getStep(), 0);
+        if (n.loop_step_expr.empty() || n.loop_step_expr == "?") {
+          std::string locStr;
+          llvm::raw_string_ostream locOS(locStr);
+          iw.getLoc().print(locOS);
+          throw std::runtime_error("fir.iterate_while with unrenderable symbolic step at " + locStr);
+        }
+      }
+      indexStack().emplace_back(iw.getInductionVar(), n.loop_iter);
+      // Break-guard on the carried flag (result 0) FIRST -- while-condition checked at start of each iteration.
+      {
+        ASTNode g;
+        g.kind = "conditional";
+        g.condition = "not (" + synth[0] + ")";
+        ASTNode br;
+        br.kind = "break";
+        g.children.push_back(std::move(br));
+        n.children.push_back(std::move(g));
+      }
+      for (auto& c : buildAST(body)) n.children.push_back(std::move(c));
+      // Carried updates from the fir.result terminator (operand 0 = next flag, 1.. = next iter_args).
+      auto* term = body.getTerminator();
+      for (unsigned i = 0; i < nCarried && i < term->getNumOperands(); ++i) {
+        ASTNode a;
+        a.kind = "assign";
+        a.target = synth[i];
+        a.target_is_array = false;
+        a.expr = (i == 0) ? buildBoolExpr(term->getOperand(0), 0) : buildExpr(term->getOperand(i), 0);
+        n.children.push_back(std::move(a));
+      }
+      indexStack().pop_back();
+      for (unsigned i = 0; i < nCarried; ++i) kScfValueMap.erase(body.getArgument(i + 1));
+      nodes.push_back(std::move(n));
       continue;
     }
 
@@ -2239,6 +2351,35 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
             }
             nodes.push_back(std::move(n));
             continue;
+          }
+          // Scalar-returning BLAS function in expression position: ``r = ddot(n,x,incx,y,incy)``. Reuses the wired
+          // dot_product -> blas.Dot libcall pipeline (same scalar-target / two-1-D-vector shape) rather than a bespoke
+          // blascall path, and gets slice-subset handling for free. args (0-based): (n, x, incx, y, incy).
+          std::string const scalarBlasOp = blasCalleeTag(callee);
+          if ((scalarBlasOp == "ddot" || scalarBlasOp == "sdot") && call.getArgOperands().size() >= 5) {
+            auto args = call.getArgOperands();
+            auto peelBoxAddr = [](mlir::Value v) -> mlir::Value {
+              if (auto ba = mlir::dyn_cast_or_null<fir::BoxAddrOp>(v.getDefiningOp())) return ba.getVal();
+              return v;
+            };
+            auto [xName, xSub] = resolveDesignateSliceSubset(peelBoxAddr(args[1]), "ddot", 0);
+            auto [yName, ySub] = resolveDesignateSliceSubset(peelBoxAddr(args[3]), "ddot", 1);
+            std::string tgt;
+            if (auto* dd = dst.getDefiningOp())
+              if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(dd))
+                tgt = allocAliasFor(extractName(decl.getUniqName().str()));
+            if (tgt.empty()) tgt = traceToDecl(dst);
+            if (!tgt.empty() && !xName.empty() && !yName.empty()) {
+              ASTNode n;
+              n.kind = "libcall";
+              n.callee = "dot_product";
+              n.target = tgt;
+              n.target_is_array = false;
+              n.call_args = {xName, yName};
+              n.call_arg_subsets = {xSub, ySub};
+              nodes.push_back(std::move(n));
+              continue;
+            }
           }
         }
         // Heap-result form: traces through as_expr/declare to the alloca whose store-from-runtime-call seeded it.
@@ -2962,7 +3103,7 @@ std::vector<ASTNode> extractAST(mlir::ModuleOp module, const std::string& entry_
 // Name of the synth scalar carrying an scf.index_switch's selector value; traces (through index_cast/convert) back to
 // the scf.while result scf.condition carried out (the loop's exit reason), whose synth scalar the scf.condition handler
 // assigns each iteration.
-static std::string scfSwitchValueName(mlir::Value v) {
+std::string scfSwitchValueName(mlir::Value v) {
   for (int i = 0; i < limits::kTraceToDeclMax && v; ++i) {
     auto* d = v.getDefiningOp();
     if (!d) break;
@@ -2992,9 +3133,36 @@ static std::string scfSwitchValueName(mlir::Value v) {
 static std::vector<ASTNode> buildIndexSwitchNodes(mlir::scf::IndexSwitchOp sw) {
   std::string const val = scfSwitchValueName(sw.getArg());
   auto cases = sw.getCases();  // ArrayRef<int64_t>: one selector value per case
+
+  // A value-producing index_switch (the CFG structurizer's representation of a merge with >1 diverging live-out) yields
+  // per case/default. Mirror buildScfIfAsConditional: append one scalar_assign per result from the region's scf.yield
+  // into the __sc_<id> synth space, so downstream reads of a switch result resolve via buildExpr's kScfValueMap lookup
+  // instead of falling to the unhandled-op "?".
+  auto appendResultAssigns = [&](mlir::Region& region, std::vector<ASTNode>& body) {
+    if (region.empty() || sw.getNumResults() == 0) return;
+    mlir::scf::YieldOp yieldOp;
+    for (auto& op : region.front())
+      if (auto y = mlir::dyn_cast<mlir::scf::YieldOp>(op)) {
+        yieldOp = y;
+        break;
+      }
+    if (!yieldOp) return;
+    for (unsigned i = 0; i < sw.getNumResults(); ++i) {
+      ASTNode a;
+      a.kind = "assign";
+      a.target = scfSynthName(sw.getResult(i));
+      a.expr = yieldedExpr(yieldOp.getOperand(i));
+      a.target_is_array = false;
+      body.push_back(std::move(a));
+    }
+  };
+
   // Innermost else == the default region's body.
   std::vector<ASTNode> chain;
-  if (!sw.getDefaultRegion().empty()) chain = buildAST(sw.getDefaultRegion().front());
+  if (!sw.getDefaultRegion().empty()) {
+    chain = buildAST(sw.getDefaultRegion().front());
+    appendResultAssigns(sw.getDefaultRegion(), chain);
+  }
   // Wraps each case (last first) as if (selector == case_i) {body} else {chain-so-far} so the per-exit side-effects
   // run.
   auto caseRegions = sw.getCaseRegions();
@@ -3002,7 +3170,10 @@ static std::vector<ASTNode> buildIndexSwitchNodes(mlir::scf::IndexSwitchOp sw) {
     ASTNode c;
     c.kind = "conditional";
     c.condition = val + " == " + std::to_string(cases[i]);
-    if (!caseRegions[i].empty()) c.children = buildAST(caseRegions[i].front());
+    if (!caseRegions[i].empty()) {
+      c.children = buildAST(caseRegions[i].front());
+      appendResultAssigns(caseRegions[i], c.children);
+    }
     c.else_children = std::move(chain);
     chain.clear();
     chain.push_back(std::move(c));

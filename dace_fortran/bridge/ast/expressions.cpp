@@ -19,6 +19,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 
 namespace hlfir_bridge {
 
@@ -632,6 +633,16 @@ std::string buildExpr(mlir::Value val, int d) {
   // path -- a raw alloca address has no spellable expression form.
   if (mlir::isa<fir::AllocaOp>(def)) {
     auto name = traceToDecl(def->getResult(0));
+    // traceToDecl walks a value's DEFINING-op chain backward; an alloca IS its own def, so a wrapping
+    // hlfir.declare (the alloca-then-declare idiom, e.g. a TRIM/label CHARACTER scratch) is a USER, not
+    // reachable backward. Scan users for it before falling through to the ``?`` diagnostic.
+    if (name.empty())
+      for (auto* user : def->getResult(0).getUsers())
+        if (auto dc = mlir::dyn_cast<hlfir::DeclareOp>(user))
+          if (dc.getMemref() == def->getResult(0)) {
+            name = extractName(dc.getUniqName().str());
+            break;
+          }
     if (!name.empty()) return name;
   }
 
@@ -901,6 +912,10 @@ std::string buildExpr(mlir::Value val, int d) {
 
   if (nm == "arith.negf" && def->getNumOperands() == 1) return "(-" + buildExpr(def->getOperand(0), d + 1) + ")";
 
+  // Fortran ``-z`` on a COMPLEX operand lowers to ``fir.negc``; unary minus is
+  // defined on both ``std::complex`` (tasklet C++) and Python ``complex``.
+  if (nm == "fir.negc" && def->getNumOperands() == 1) return "(-" + buildExpr(def->getOperand(0), d + 1) + ")";
+
   // Fortran ``conjg(z)`` lowers to:
   //     %im  = fir.extract_value %z, [1] : complex<T> -> T
   //     %neg = arith.negf %im
@@ -1109,6 +1124,11 @@ std::string buildExpr(mlir::Value val, int d) {
     auto callee = call.getCallee();
     if (callee) {
       llvm::StringRef const cname = callee->getRootReference().getValue();
+      // QE profiling timers (UtilXlib ``f_tcpu`` / ``f_wall``): external no-body routines returning
+      // CPU / wall-clock seconds, called only by the ``start_clock`` / ``stop_clock`` family whose
+      // results land in timing-report bookkeeping arrays -- never read back into physics. The SDFG
+      // cannot call the external timer, so render 0.0: timing stays inert, numerics are unaffected.
+      if (cname == "_QPf_tcpu" || cname == "_QPf_wall") return "0.0";
       // Single-arg pass-through to a Python identifier (math /
       // bare runtime calls).
       static const std::map<llvm::StringRef, std::string> unary_calls = {
@@ -1886,6 +1906,48 @@ std::string buildExpr(mlir::Value val, int d) {
     std::string const elseVal = extractYield(ifOp.getElseRegion());
     std::string const condStr = buildExpr(ifOp.getCondition(), d + 1);
     return "(" + thenVal + " if " + condStr + " else " + elseVal + ")";
+  }
+
+  // scf.index_switch result read as an expression: the structurizer's phi for a >1-way diverging live-out that the
+  // statement pass (buildIndexSwitchNodes) didn't register (its regions weren't statement-walked). When every region is
+  // a pure value-merge (side-effect-free ops + a yield) render it inline as a nested conditional over the selector --
+  // mirrors the scf.if handler above. A side-effecting region is the statement pass's job; refuse to inline it (fall
+  // through to the loud unhandled-op path) rather than silently drop its stores.
+  if (auto sw = mlir::dyn_cast<mlir::scf::IndexSwitchOp>(def)) {
+    unsigned const ri = mlir::cast<mlir::OpResult>(val).getResultNumber();
+    auto pureYield = [&](mlir::Region& r) -> mlir::scf::YieldOp {
+      if (r.empty()) return {};
+      mlir::scf::YieldOp y;
+      for (auto& o : r.front()) {
+        if (auto yy = mlir::dyn_cast<mlir::scf::YieldOp>(o)) {
+          y = yy;
+          continue;
+        }
+        if (!mlir::isMemoryEffectFree(&o)) return {};
+      }
+      return y;
+    };
+    auto defY = pureYield(sw.getDefaultRegion());
+    bool ok = defY && ri < defY.getNumOperands();
+    std::vector<mlir::scf::YieldOp> caseYs;
+    if (ok)
+      for (auto& cr : sw.getCaseRegions()) {
+        auto y = pureYield(cr);
+        if (!y || ri >= y.getNumOperands()) {
+          ok = false;
+          break;
+        }
+        caseYs.push_back(y);
+      }
+    if (ok) {
+      auto cases = sw.getCases();
+      std::string const sel = scfSwitchValueName(sw.getArg());
+      std::string expr = buildExpr(defY.getOperand(ri), d + 1);
+      for (int i = static_cast<int>(cases.size()) - 1; i >= 0; --i)
+        expr = "(" + buildExpr(caseYs[i].getOperand(ri), d + 1) + " if " + sel + " == " + std::to_string(cases[i]) +
+               " else " + expr + ")";
+      return expr;
+    }
   }
 
   // ``hlfir.all`` / ``hlfir.any`` -- whole-array boolean reductions.
