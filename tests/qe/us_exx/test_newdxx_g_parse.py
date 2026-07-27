@@ -27,16 +27,13 @@ and disables the ``gstart==2`` gamma correction).
 
 The gfortran reference matches an independent numpy model of the
 augmentation to machine precision (``test_newdxx_g_reference_runs``).  The
-end-to-end SDFG path, however, currently mis-lowers the *complex*
-``DOT_PRODUCT(aux2, aux1)``: Fortran conjugates the first argument
-(``SUM(CONJG(aux2)*aux1)``), but the bridge emits the non-conjugated
-``SUM(aux2*aux1)``.  Every other part of the 'c' path lowers correctly
+end-to-end SDFG path lowers the *complex* ``DOT_PRODUCT(aux2, aux1)`` with
+Fortran's first-argument conjugation (``SUM(CONJG(aux2)*aux1)``) via the Dot
+node's conjugate flag; every other part of the 'c' path lowers correctly
 (the ``flag``-folded branch select picks ``add_complex``; ``okvan`` /
 ``gamma_only`` marshal from the host; ``eigts``/``qgm``/``mill`` index
-correctly), so the only residual is that conjugation.
-``test_newdxx_g_numerical_correctness`` is therefore xfail until the
-bridge conjugates complex ``DOT_PRODUCT`` -- at which point it flips to a
-pass.  See ``newdxx_g_caller.f90`` for the C-callable driver harness.
+correctly), so ``test_newdxx_g_numerical_correctness`` passes.
+See ``newdxx_g_caller.f90`` for the C-callable driver harness.
 """
 from pathlib import Path
 
@@ -289,11 +286,10 @@ def test_newdxx_g_numerical_correctness(tmp_path):
     Both sides see byte-identical seeded random ``vc`` / ``deexx`` /
     ``becphi_c`` and the SAME deterministic pseudopotential state from
     ``init_newdxx_g_state_c``.  The SDFG-via-binding ``deexx`` must match the
-    gfortran reference element-wise.  It currently does NOT: the bridge
-    lowers the complex ``DOT_PRODUCT`` without conjugating its first argument
-    (confirmed to be the sole discrepancy -- the DaCe output equals the
-    reference with the conjugation dropped), so this is xfail until that
-    lowering is fixed.
+    gfortran reference element-wise, and does: the bridge lowers the complex
+    ``DOT_PRODUCT`` with first-argument conjugation via the Dot node's
+    conjugate flag (the previously-observed discrepancy -- DaCe output equal
+    to the reference with conjugation dropped -- is now fixed).
     """
     import ctypes
 
