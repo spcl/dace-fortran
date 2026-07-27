@@ -16,6 +16,7 @@
 #include "bridge/trace_utils.h"
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 
@@ -44,6 +45,11 @@ namespace hlfir_bridge {
 /// Synthetic-scalar registry for scf.if results (name __sc_<N>); reset between SDFG builds by buildAST setup.
 inline thread_local int kScfValueCounter = 0;
 inline thread_local llvm::DenseMap<mlir::Value, std::string> kScfValueMap;
+
+/// Negative cache of ops buildExpr already found unrenderable (returned "?" via the unhandled-op path). An op with no
+/// handler is context-independent -- it always yields "?" -- so re-visits (frequent on a deeply-inlined body where the
+/// same merge feeds many consumers) short-circuit instead of re-walking regions and re-logging. Reset per SDFG build.
+inline thread_local llvm::DenseSet<mlir::Operation*> kUnrenderableOps;
 
 /// Synthetic-scalar registry for un-named fir.alloca scratch ops (e.g. DO WHILE counters lowered without a surrounding
 /// hlfir.declare); names are __al_<N>.

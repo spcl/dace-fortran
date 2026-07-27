@@ -2998,6 +2998,7 @@ std::vector<ASTNode> extractAST(mlir::ModuleOp module, const std::string& entry_
   // across unrelated SDFGs.
   kScfValueCounter = 0;
   kScfValueMap.clear();
+  kUnrenderableOps.clear();
   kAllocaCounter = 0;
   kAllocaMap.clear();
   kHlfirExprToTransient.clear();

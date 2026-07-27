@@ -488,6 +488,10 @@ std::string buildExpr(mlir::Value val, int d) {
   }
   auto* def = val.getDefiningOp();
   if (!def) return "?";
+  // Op already found unrenderable on an earlier visit -> "?" without re-walking its regions. On a deeply-inlined body a
+  // single value-merge feeds many consumers; without this each re-visit re-descends the whole subtree (the get_ast
+  // hot-spot on QE h_psi's EXX tail).
+  if (kUnrenderableOps.contains(def)) return "?";
   // A reduction op (``hlfir.sum`` / ``minval`` / ``maxval`` / ``product``) in a
   // CONDITION that ``materialiseCondReductions`` lowered to a Reduce lib-node
   // renders as the bare scalar transient (``s``); the inline-unroll is
@@ -1966,7 +1970,8 @@ std::string buildExpr(mlir::Value val, int d) {
   // ``?``-as-sentinel protocol many tests still rely on for legitimate
   // fallback paths.  Migration to explicit throws is captured in
   // ``tasks/audit_question_mark_emissions.md``.
-  {
+  // Cache + log ONCE per op (insert().second is true only on first insertion); re-visits short-circuit at the top.
+  if (kUnrenderableOps.insert(def).second) {
     std::string const op_name = def->getName().getStringRef().str();
     std::string loc;
     llvm::raw_string_ostream os(loc);
