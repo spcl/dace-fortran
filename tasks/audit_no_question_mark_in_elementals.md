@@ -12,6 +12,26 @@ Already-confirmed sources of ``?`` in elemental contexts (this session):
 - ``hlfir.apply`` of an ``hlfir.sum``/``hlfir.minval``/``hlfir.maxval``/``hlfir.product`` with ``dim`` operand -- **FIXED** (``materialiseElementalToTransient`` pre-walks for dim-reductions).
 - ``hlfir.apply`` of an ``hlfir.matmul``/``hlfir.transpose``/``hlfir.matmul_transpose``/``hlfir.dot_product``/``hlfir.cshift``/``hlfir.count``/``hlfir.minloc``/``hlfir.maxloc`` -- **FIXED** (``findApplies`` in ``control_flow.cpp:289+``).
 
+## Coverage re-verification (2026-07-27, [b742bd6b dface-fortran])
+
+Enumerated every dispatch site in ``buildExpr`` (``expressions.cpp``, 65 ``dyn_cast`` + name-map
+``bin_ops``@881 / ``minmax_ops``@1001). The "likely-not-handled" list below is PARTLY STALE:
+
+- HANDLED now (dyn_cast present): ``hlfir.elemental``, ``hlfir.as_expr``, ``hlfir.concat``,
+  ``hlfir.apply``, ``hlfir.all``/``any``, ``arith.select``, ``scf.if``, ``fir.do_loop``,
+  ``fir.embox``/``rebox``/``box_addr``/``unboxchar``/``emboxchar``, ``fir.extract_value``/``insert_value``,
+  ``fir.is_present``, ``fir.addrof``, ``fir.call``. arith/math fully mapped (add/sub/mul/div/rem/
+  shift/cmp/min/max/neg + sqrt/exp/trig/erf/floor/ceil/copysign/...).
+- GENUINELY ABSENT from the expression path (candidates for the h_psi residual):
+  ``fir.iterate_while``, ``scf.index_switch``, ``fir.allocmem``.
+- ⚠ These three are CONTROL-FLOW-ish and only surface in the deeply-inlined h_psi body:
+  isolated tiny probes (SELECT CASE→scalar, allocatable temp, do-while) all build CLEAN
+  (``scratchpad/probe_buildexpr.py``) — they do NOT reproduce a bare ``?``. So confirming which
+  op actually blocks h_psi REQUIRES the real ground-truth run (paused: box saturated by another
+  session's continuous ``tests/transformations`` sweeps). Queued command:
+  ``PY13 + PYTHONPATH=/home/primrose/Work/d-face  pytest tests/qe/h_psi/test_h_psi_parse.py::test_h_psi_parses --runxfail -x``
+  → capture stderr ``[buildExpr unhandled-op] op=…`` + the downstream ``?``-propagation traceback.
+
 Likely-NOT-yet-handled (audit these next session):
 - ``hlfir.apply`` of an ``hlfir.assoc``/``hlfir.as_expr`` (hlfir conversion ops between value/box/expr).
 - ``hlfir.apply`` of an ``hlfir.parent_comp`` (parent type-extension component access).
