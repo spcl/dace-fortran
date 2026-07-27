@@ -1,0 +1,17 @@
+diff --git a/src/drivers/mo_atmo_nonhydrostatic.f90 b/src/drivers/mo_atmo_nonhydrostatic.f90
+index 7ccb023..e7fba4e 100644
+--- a/src/drivers/mo_atmo_nonhydrostatic.f90
++++ b/src/drivers/mo_atmo_nonhydrostatic.f90
+@@ -719,7 +719,11 @@ CONTAINS
+                                     seed_in=pinit_seed+263)
+           ENDIF
+ 
+-          IF (iforcing == inwp ) THEN
++          ! pinit_seed==0 => no perturbation (a no-op with amplitude 0); guard the
++          ! soil-temp perturbation on it, else with inwp_surface=0 (no TERRA land,
++          ! e.g. the EXCLAIM aquaplanet) prog_lnd%t_so_t is unallocated and the
++          ! SIZE(...,4) loop bound + field access segfault during construct.
++          IF (iforcing == inwp .AND. pinit_seed /= 0) THEN
+             DO jt = 1, SIZE(p_lnd_state(jg)%prog_lnd(nnow_rcf(jg))%t_so_t,4)
+               CALL add_random_noise_3d(subset=p_patch(jg)%cells%all, &
+                                       coordinates=p_patch(jg)%cells%center, &

@@ -196,6 +196,22 @@ run_icon() {
 }
 
 
+step "0) Apply ICON source guards (idempotent)"
+# pinit_seed segfault guard: with inwp_surface=0 (no TERRA land, e.g. the EXCLAIM
+# aquaplanet) prog_lnd%t_so_t is unallocated, so the unconditional soil-temp
+# perturbation loop reads SIZE(...,4) and segfaults during construct. The guard
+# skips it when pinit_seed==0 (which step 5 forces in the namelist). Applied to
+# the shared ICON tree BEFORE both builds so STOCK and DACE carry it identically
+# -- the comparison stays valid. Idempotent: skip if already applied.
+PINIT_PATCH=${PINIT_PATCH:-${DACE_FORTRAN}/tests/icon/full/patches/mo_atmo_nonhydrostatic_pinit_seed_guard.patch}
+( cd "${ICON_SRC}"
+  if git apply --reverse --check "${PINIT_PATCH}" 2>/dev/null; then
+    echo "(pinit_seed guard already applied)"
+  else
+    git apply "${PINIT_PATCH}" && echo "applied pinit_seed guard"
+  fi )
+
+
 step "1) Build STOCK ICON (no patch, no DaCe link)"
 # STOCK is built FIRST: the DaCe velocity lib is now lowered from ICON's REAL
 # mo_velocity_advection source (real t_patch / t_nh_prog layout -- the stub-typed

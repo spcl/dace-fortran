@@ -13,9 +13,10 @@ repos:
   - id: end-of-file-fixer
     # The committed .f90 single-TU fixtures are byte-compared by drift-guard tests
     # against fresh inliner output, so a whitespace hook must never mutate them.
-    exclude: '\.(f90|F90)$'
+    # .patch context/blank lines carry significant leading whitespace -- never touch.
+    exclude: '\.(f90|F90|patch)$'
   - id: trailing-whitespace
-    exclude: '\.(f90|F90)$'
+    exclude: '\.(f90|F90|patch)$'
 
 # --- Python: yapf (column_limit=120 in .style.yapf) ---
 - repo: https://github.com/google/yapf
