@@ -42,16 +42,32 @@ inside the loop body with a per-iteration size — no over-allocation, no
 `tests/value_projection_ssa_test.py` is the regression (glibc aborts on the
 corrupt free; ASan pinpoints the write — see `scripts/lint_generated_kernel.py`).
 
-## Existing bridge mechanisms are degenerate cases
+## Existing bridge mechanisms are points on the design space
 
-| mechanism | restriction it adds to the general pass |
-|---|---|
-| `internPosSymbol __sym_arr_7` | constant index, single version |
-| `value_symbols __sym_x` | one **entry** snapshot + `_check_value_symbols_constant` |
-| `VersionShapeScalars <name>_ext<k>` | per-ALLOCATE extent version (already the idea) |
-| `2cbd1fe` element-extent | per-alloc element extent → synthetic, bound in scope |
+| mechanism | where it lives | version granularity |
+|---|---|---|
+| `internPosSymbol __sym_arr_7` | assigns.cpp / expressions.cpp | const index, **immutable** array, single entry snapshot |
+| `<arr>_at<gid>` per-read-site | assigns.cpp (b) + access.py | **mutable** array / runtime index — one version **per read site** |
+| `value_symbols __sym_x` (shape) | extract_vars.cpp + `_seed_value_symbols` | one **entry** snapshot; `_check_value_symbols_constant` refuses on write |
+| `VersionShapeScalars <name>_ext<k>` | MLIR pass | per-ALLOCATE extent version / freeze |
+| `2cbd1fe`+`0fbe410` element-extent | dispatch.cpp | per-alloc element extent → synthetic, bound in scope |
 
-The full pass — lattice + reaching-def versioning + dominating-edge snapshot with
-mutation-between-uses kill/split — subsumes all four. That generalization (all
-symbolic-use contexts, not just allocation extents) is the frontend contribution
-of the paper.
+**Coverage today.** Data-access *indices* are already per-site: `internPosSymbol`
+gates to immutable arrays (assigns.cpp:209); a **mutable** or runtime-indexed read
+falls through to `<arr>_at<gid>`, which re-reads the element at each use — reaching-def
+VPS in all but name. `z(tab(sel))` with `tab` written between two uses builds and is
+correct (`tests/array_value_as_symbol_test.py::test_value_symbol_reaching_def_resnapshot`).
+Allocate *extents* are per-site via `VersionShapeScalars` / `0fbe410`.
+
+**The remaining gap.** `__sym_<arr>_<idx>` used as an automatic-array **extent**
+(`work(sizes(sel))`) is a *single entry snapshot* guarded by the constancy check.
+That refusal is **spurious** for automatic arrays — Fortran freezes the bound at
+entry, so a later write to the source cannot change it (verified: `size(work)` stays
+the entry value). It is *correct* for an allocatable extent (value wanted at the
+ALLOCATE). Both look identical in the SDFG (`arr.shape`), so telling them apart needs
+a freeze-point on the C++ `ValueSymbol` (`ENTRY_AUTOMATIC | ALLOCATE`); the check
+would then skip `ENTRY_AUTOMATIC`. That is the one open increment.
+
+The unifying frame — symbol-need lattice + reaching-def versioning + dominating-edge
+snapshot — still describes all of the above as one pass; that write-up is the paper's
+frontend contribution.

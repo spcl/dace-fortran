@@ -1029,6 +1029,8 @@ class SDFGBuilder:
         # Soundness check for array-element value-symbols: the backing array of
         # every ``__sym_<arr>_<idx>`` must be constant in the symbol's scope
         # (no write would change the value it froze).  Run on the final graph.
+        # (Mutable data-access indices don't reach here -- they take the per-site
+        # ``<arr>_at<gid>`` path in assigns.cpp, which already re-snapshots.)
         self._check_value_symbols_constant(sdfg)
         # Zero-init producer-less read-only transients (e.g. the ``g_<name>``
         # companions FlattenStructs mints for module-level struct globals,
@@ -1357,6 +1359,12 @@ class SDFGBuilder:
         write to the backing array anywhere in the assembled SDFG means the
         symbol could hold a stale value, so refuse it.  Conservative: flags any
         write to the array, not just the exact element.
+
+        This fires only for SHAPE/extent value-symbols on a written array (the
+        automatic-array ``work(sizes(sel))`` case): a shape symbol is bound once
+        and must stay put, so it cannot be re-snapshotted.  Mutable data-access
+        INDICES never reach here -- they take the per-site ``<arr>_at<gid>`` path
+        (assigns.cpp), which re-reads the element at each use.
 
         :raises ValueError: the backing array of a value-symbol is written.
         """
