@@ -1353,20 +1353,27 @@ class SDFGBuilder:
         ctx.cur = dst
 
     def _check_value_symbols_constant(self, sdfg: SDFG):
-        """Additional correctness check (re-runnable after transformations):
-        every array whose element was frozen into a value-symbol
-        (``__sym_<arr>_<idx>``) must stay constant in that symbol's scope.  A
-        write to the backing array anywhere in the assembled SDFG means the
-        symbol could hold a stale value, so refuse it.  Conservative: flags any
-        write to the array, not just the exact element.
+        """Soundness guard for array-element value-symbols (``__sym_<arr>_<idx>``).
 
-        This fires only for SHAPE/extent value-symbols on a written array (the
-        automatic-array ``work(sizes(sel))`` case): a shape symbol is bound once
-        and must stay put, so it cannot be re-snapshotted.  Mutable data-access
-        INDICES never reach here -- they take the per-site ``<arr>_at<gid>`` path
-        (assigns.cpp), which re-reads the element at each use.
+        These are minted by ``resolveShapeSyms`` (extract_vars.cpp) ONLY from a
+        declare's shape operand -- i.e. an AUTOMATIC-array extent
+        (``real :: work(sizes(sel))``).  Fortran evaluates an automatic-array
+        bound once at procedure ENTRY and freezes it, so a later write to the
+        source array cannot change the extent; the entry snapshot the builder
+        seeds is therefore exact regardless of writes (verified: ``size(work)``
+        keeps its entry value even after the source is overwritten).  An earlier
+        version refused ANY write to the source -- that was over-conservative and
+        rejected well-defined programs.
 
-        :raises ValueError: the backing array of a value-symbol is written.
+        The one way such a symbol could go stale is if it leaked into a
+        DATA-ACCESS position (a memlet subset), where Fortran re-reads the
+        current element.  ``resolveShapeSyms`` only ever mints extents, and a
+        mutable data-access index takes the per-site ``<arr>_at<gid>`` path
+        instead, so this never happens today -- but guard it: if a value-symbol
+        both indexes data and has a written backing array, the frozen snapshot
+        would be stale, so refuse rather than miscompile.
+
+        :raises ValueError: a value-symbol indexes data AND its backing array is written.
         """
         prov = getattr(self, "_value_symbol_provenance", None)
         if not prov:
@@ -1376,13 +1383,21 @@ class SDFGBuilder:
             for node in state.data_nodes():
                 if state.in_degree(node) > 0:
                     written.add(node.data)
+        # Value-symbols that appear in a memlet subset -- a live data-access index,
+        # not a frozen extent.  (Extents ride descriptor shapes, checked nowhere here.)
+        subset_syms = set()
+        for state in sdfg.all_states():
+            for e in state.edges():
+                for sub in (e.data.subset, e.data.other_subset):
+                    if sub is not None:
+                        subset_syms |= {str(s) for s in sub.free_symbols}
         for sym, (arr, idx) in prov.items():
-            if arr in written:
-                raise ValueError(f"array-element value '{arr}({idx})' is used as a data-access "
-                                 f"dimension (promoted to symbol '{sym}'), but '{arr}' is "
-                                 f"written in the SDFG -- the symbol would capture a stale "
-                                 f"value.  This promotion requires '{arr}' to stay constant "
-                                 f"within the scope where '{sym}' is live.")
+            if arr in written and sym in subset_syms:
+                raise ValueError(f"array-element value '{arr}({idx})' (symbol '{sym}') is used as a "
+                                 f"data-access index, but '{arr}' is written in the SDFG -- the "
+                                 f"entry snapshot would capture a stale value.  A data-access index "
+                                 f"into a mutable array must use the per-site '<arr>_at<n>' promotion, "
+                                 f"not a shape value-symbol.")
 
     def _run_post_gen_passes(self, sdfg: SDFG):
         """Run the post-generation cleanup passes that take a freshly-

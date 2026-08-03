@@ -85,15 +85,29 @@ end module array_value_written_mod
 """
 
 
-def test_value_symbol_backing_array_write_refused(tmp_path: Path):
-    """Writing the array a value-symbol froze (``sizes``) would make the symbol
-    stale; the constancy hook refuses the build.  Here ``__sym_sizes_sel`` sizes
-    an automatic array (a SHAPE use), which re-snapshot cannot repair -- rebinding
-    a shape symbol would corrupt the array's allocation-frozen strides -- so the
-    constancy check still owns it and refuses."""
-    with pytest.raises(ValueError, match=r"constant within the scope|stale value"):
-        build_sdfg(_SRC_WRITTEN, tmp_path / "sdfg", name="avw",
-                   entry="array_value_written_mod::array_value_written").build()
+def test_value_symbol_automatic_extent_source_write_allowed(tmp_path: Path):
+    """``__sym_sizes_sel`` sizes an AUTOMATIC array (``work(sizes(sel))``).  Fortran
+    evaluates that bound once at procedure entry and freezes it, so the later write
+    ``sizes(1) = 99`` cannot change ``work``'s extent -- the entry snapshot is exact.
+    Formerly refused as over-conservative; now builds and matches the reference,
+    while the source write still takes effect on the ``sizes`` array itself."""
+    sdfg = build_sdfg(_SRC_WRITTEN, tmp_path / "sdfg", name="avw",
+                      entry="array_value_written_mod::array_value_written").build()
+    assert "__sym_sizes_sel" in sdfg.symbols
+
+    sizes = np.array([3, 5, 2, 7], dtype=np.int32)
+    sel = 2  # 1-based -> sizes(2) = 5; sizes(1)=99 write is irrelevant to work's extent
+    out0 = np.arange(1, 9, dtype=np.float64)
+
+    sizes_s, out = sizes.copy(), out0.copy()
+    sdfg(sizes=sizes_s, sel=np.int32(sel), out=out)
+
+    ref = out0.copy()
+    n = sizes[sel - 1]  # entry extent, unchanged by the write
+    ref[:n] = out0[:n] * 2.0
+    np.testing.assert_allclose(out, ref, rtol=1e-12, atol=1e-12)
+    # the write landed on the array, but did not perturb the frozen extent above.
+    np.testing.assert_array_equal(sizes_s, np.array([99, 5, 2, 7], dtype=np.int32))
 
 
 _SRC_RESNAP = """

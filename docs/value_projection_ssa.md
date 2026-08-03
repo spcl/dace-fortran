@@ -59,14 +59,19 @@ VPS in all but name. `z(tab(sel))` with `tab` written between two uses builds an
 correct (`tests/array_value_as_symbol_test.py::test_value_symbol_reaching_def_resnapshot`).
 Allocate *extents* are per-site via `VersionShapeScalars` / `0fbe410`.
 
-**The remaining gap.** `__sym_<arr>_<idx>` used as an automatic-array **extent**
-(`work(sizes(sel))`) is a *single entry snapshot* guarded by the constancy check.
-That refusal is **spurious** for automatic arrays — Fortran freezes the bound at
-entry, so a later write to the source cannot change it (verified: `size(work)` stays
-the entry value). It is *correct* for an allocatable extent (value wanted at the
-ALLOCATE). Both look identical in the SDFG (`arr.shape`), so telling them apart needs
-a freeze-point on the C++ `ValueSymbol` (`ENTRY_AUTOMATIC | ALLOCATE`); the check
-would then skip `ENTRY_AUTOMATIC`. That is the one open increment.
+**The automatic-extent refusal (closed).** `__sym_<arr>_<idx>` used as an
+automatic-array **extent** (`work(sizes(sel))`) is a single entry snapshot. It was
+guarded by a constancy check that refused *any* write to the source — **spurious**,
+because Fortran evaluates an automatic-array bound once at entry and freezes it, so a
+later write cannot change it (verified: `size(work)` stays the entry value). No
+freeze-point flag is needed to fix it: `value_symbols_` is minted at exactly one site
+(`resolveShapeSyms`, extract_vars.cpp:184) and only from a declare shape operand, so
+**every** entry in the list is an entry-frozen automatic extent. Allocatable ALLOCATE
+extents never enter it — they take `internPosSymbol` / `<arr>_at<gid>`. The check is
+now narrowed to a pure soundness guard: refuse only if such a symbol *leaked into a
+data-access subset* (where the entry snapshot could go stale) — unreachable via the
+current mint paths, kept as defense. `work(sizes(sel))` with the source written now
+builds and is correct (`tests/array_value_as_symbol_test.py::test_value_symbol_automatic_extent_source_write_allowed`).
 
 The unifying frame — symbol-need lattice + reaching-def versioning + dominating-edge
 snapshot — still describes all of the above as one pass; that write-up is the paper's
