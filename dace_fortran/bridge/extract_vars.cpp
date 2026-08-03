@@ -402,6 +402,16 @@ static std::vector<std::string> shapeFromAllocSite(fir::AllocMemOp alloc) {
       syms.push_back(e);
       continue;
     }
+    // A runtime array-ELEMENT extent (``ALLOCATE(deeaux(nh(nt),...))``) must NOT collapse to its bare
+    // array name via traceToDecl below -- ``nh`` would collide with nh's own data descriptor
+    // (add_symbol("nh") vs the nh Array).  Defer to the caller's per-dim synthetic ``<name>_d<i>``,
+    // which the ALLOCATE handler binds to the element read IN-SCOPE -- correct even when the index is
+    // loop-variant, unlike resolveShapeSyms's entry-seeded value-symbol (an allocatable binds its
+    // extent AT the ALLOCATE, not at program entry).
+    if (arrayElementExtent(sz)) {
+      syms.emplace_back("?");
+      continue;
+    }
     auto n = traceToDecl(sz);
     if (!n.empty()) {
       syms.push_back(n);
