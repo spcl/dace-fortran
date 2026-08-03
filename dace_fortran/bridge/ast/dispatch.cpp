@@ -2072,6 +2072,43 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
           an.target_is_array = false;
           an.expr = ext;
           nodes.push_back(std::move(an));
+        } else {
+          // Runtime array-element extent (ALLOCATE(tmp(sz(i)))): traceExtentExpr resolves only const-indexed / scalar /
+          // arith extents, so <buf>_d<i> would otherwise stay a FREE program argument and DaCe hoists the allocation
+          // above the loop with one fixed size (heap overflow when sz(i) varies). Peel Flang's max(ext,0) clamp + kind
+          // converts to the element load, then emit a BARE-name expr + read accesses so the assign path's
+          // array_read_to_dace_expr applies the Fortran->0-based offset (a pre-subscripted string would be left
+          // un-offset -> off-by-one). Binding <buf>_d<i> per-iteration keeps it non-free -> DaCe Scope-allocates in the
+          // loop, sized per iteration.
+          mlir::Value ev = sz;
+          for (int k = 0; k < limits::kConvertChainDepth && ev; ++k) {
+            auto* od = ev.getDefiningOp();
+            if (!od) break;
+            if (auto cv = mlir::dyn_cast<fir::ConvertOp>(od)) {
+              ev = cv.getValue();
+              continue;
+            }
+            if (auto se = mlir::dyn_cast<mlir::arith::SelectOp>(od)) {
+              if (auto c = traceConstInt(se.getFalseValue()); c && *c == 0) {
+                ev = se.getTrueValue();
+                continue;
+              }
+              if (auto c = traceConstInt(se.getTrueValue()); c && *c == 0) {
+                ev = se.getFalseValue();
+                continue;
+              }
+            }
+            break;
+          }
+          ASTNode an;
+          an.kind = "assign";
+          an.target = bufName + "_d" + std::to_string(d);
+          an.target_is_array = false;
+          an.expr = buildExpr(ev, 0);
+          collectReadAccesses(ev, an.accesses, 0);
+          // Only when it really is an element read (accesses populated) and rendered cleanly; else leave the shape
+          // symbol to the per-dim synthetic fallback rather than emit a bare array name.
+          if (!an.expr.empty() && an.expr != "?" && !an.accesses.empty()) nodes.push_back(std::move(an));
         }
         ++d;
       }
