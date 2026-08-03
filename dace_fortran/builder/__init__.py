@@ -1336,8 +1336,11 @@ class SDFGBuilder:
             if sym not in sdfg.symbols:
                 sdfg.add_symbol(sym, dace.int64)
             # 1-based Fortran element read; assumes lower bound 1, matching the
-            # constant-index ``emit_symbol_init`` seeding.
-            seeds[sym] = f"{arr}[({idx}) - 1]"
+            # constant-index ``emit_symbol_init`` seeding.  A multi-index element
+            # (``mat(i, j)`` -> ``idx = "i,j"``) is split per dimension so each
+            # gets its own ``- 1`` -> ``mat[(i) - 1, (j) - 1]``.
+            dims = ", ".join(f"({p.strip()}) - 1" for p in idx.split(","))
+            seeds[sym] = f"{arr}[{dims}]"
             self._value_symbol_provenance[sym] = (arr, idx)
         if not seeds:
             return

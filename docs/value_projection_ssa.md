@@ -73,6 +73,21 @@ data-access subset* (where the entry snapshot could go stale) — unreachable vi
 current mint paths, kept as defense. `work(sizes(sel))` with the source written now
 builds and is correct (`tests/array_value_as_symbol_test.py::test_value_symbol_automatic_extent_source_write_allowed`).
 
+## Coverage — all four symbolic-use contexts
+
+| context | example | mechanism | verified |
+|---|---|---|---|
+| **extent** | `work(sizes(sel))`, `work(mat(i,j))`, `allocate(buf(sz(i)))` | `__sym` entry seed (single/multi-index automatic), `VersionShapeScalars`/`0fbe410` (scalar/allocatable) | size_expr 15/15 |
+| **data-access index** | `z(tab(sel))`, `idx1(idx2(i))` | `<arr>_at<gid>` per read site | array_value_as_symbol 3/3 |
+| **loop range** | `do k = 1, tab(sel)` (trip count frozen at entry) | per-site read | probe P2 |
+| **interstate condition** | `if (tab(sel) > 0)` | per-site read | probe P3 |
+
+Multi-index element extents (`work(mat(i,j))`, both indices runtime) were the last hard
+failure — they collapsed `mat` to the bare array name and collided it with a symbol;
+`arrayElementExtent` now emits a comma-joined multi-index value-symbol (`__sym_mat_i_j`,
+seeded `mat[(i)-1, (j)-1]`). VPS is functionally complete across the four contexts.
+
 The unifying frame — symbol-need lattice + reaching-def versioning + dominating-edge
-snapshot — still describes all of the above as one pass; that write-up is the paper's
-frontend contribution.
+snapshot — describes all of the above as one pass; that write-up is the paper's frontend
+contribution (the implementations still live in three layers: C++ mint, MLIR
+`VersionShapeScalars`, Python seed / `access.py`).

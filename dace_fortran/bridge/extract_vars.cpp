@@ -76,11 +76,13 @@ static std::string valueSymbolName(const std::string& array, const std::string& 
 
 /// Recognise an extent that is a *runtime*-indexed array element
 /// ``arr(idx)`` (the ICON ``z_raylfac(nrdmax(jg))`` shape pattern): a load of a
-/// single-index ``hlfir.designate`` whose index is NOT a compile-time constant
-/// (the constant case is handled by ``traceExtentExpr`` -> ``__sym_arr_N``).
-/// Returns ``(array, index_expr)`` -- the array read from and the 1-based
-/// Fortran index expression -- or ``nullopt`` when the extent is not such an
-/// element (v1 handles a single index only).
+/// ``hlfir.designate`` whose index is NOT all-compile-time-constant (the all-const
+/// case is handled by ``traceExtentExpr`` -> ``__sym_arr_N``).  Returns
+/// ``(array, index_expr)`` -- the array read from and the 1-based Fortran index
+/// expression, with the per-dimension indices of a multi-index element
+/// (``mat(i, j)``) comma-joined (``"i,j"``) -- or ``nullopt`` when the extent is
+/// not such an element.  ``valueSymbolName`` maps the comma to ``_``
+/// (``__sym_mat_i_j``) and the builder's seed splits on it to read the element.
 static std::optional<std::pair<std::string, std::string>> arrayElementExtent(mlir::Value ext) {
   // Peel the kind-coercion converts and Flang's non-negativity clamp
   // (``max(ext, 0)`` = ``select(cmpi sgt/sge X, 0, X, 0)``) that wrap an
@@ -116,12 +118,21 @@ static std::optional<std::pair<std::string, std::string>> arrayElementExtent(mli
   auto dg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(ld.getMemref().getDefiningOp());
   if (!dg) return std::nullopt;
   auto indices = dg.getIndices();
-  if (indices.size() != 1) return std::nullopt;  // v1: single-index only
+  if (indices.empty()) return std::nullopt;
   std::string const array = traceToDecl(dg.getMemref());
   if (array.empty()) return std::nullopt;
-  std::string idx = traceExtentExpr(indices[0]);
-  if (idx.empty()) idx = traceToDecl(indices[0]);
-  if (idx.empty()) return std::nullopt;
+  // Join the per-dimension 1-based index expressions with ',' (``mat(i, j)`` ->
+  // ``"i,j"``).  Each index is a scalar / arithmetic expr with no comma of its
+  // own, so the comma cleanly separates dimensions for both ``valueSymbolName``
+  // (comma -> ``_``) and the builder's seed (splits, applies ``-1`` per dim).
+  std::string idx;
+  for (auto ix : indices) {
+    std::string one = traceExtentExpr(ix);
+    if (one.empty()) one = traceToDecl(ix);
+    if (one.empty()) return std::nullopt;
+    if (!idx.empty()) idx += ",";
+    idx += one;
+  }
   return std::make_pair(array, idx);
 }
 

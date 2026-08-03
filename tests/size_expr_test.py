@@ -378,3 +378,39 @@ end module probe_mod
     mod = f2py_compile(src, tmp_path / "ref", f"size_ref_{tmp_path.name}")
     mod.probe_mod.probe(shp, out_r)
     np.testing.assert_array_equal(out_s, out_r)
+
+
+def test_size_multidim_element_runtime_extent(tmp_path):
+    """``real :: work(mat(i, j))`` -- an AUTOMATIC array sized by a RUNTIME multi-index
+    element.  Both indices are runtime, so the extent lifts to a multi-index value-symbol
+    ``__sym_mat_i_j`` (seeded ``mat[(i) - 1, (j) - 1]``) rather than collapsing ``mat`` to
+    its bare array name -- which would collide the array with a symbol of the same name."""
+    src = """
+module probe_mod
+contains
+subroutine probe(mat, i, j, out)
+  implicit none
+  integer, intent(in) :: mat(3,3), i, j
+  real(8), intent(inout) :: out(2)
+  real(8) :: work(mat(i,j))
+  integer :: k
+  do k = 1, mat(i,j)
+    work(k) = real(2*k, 8)
+  end do
+  out(1) = work(mat(i,j))
+  out(2) = real(size(work), 8)
+end subroutine probe
+end module probe_mod
+"""
+    mat = np.asfortranarray(np.arange(1, 10, dtype=np.int32).reshape(3, 3))
+    i, j = 2, 3  # mat(2,3) = 6
+    out_s = np.zeros(2)
+    out_r = np.zeros(2)
+    sdfg = build_sdfg(src, tmp_path / "sdfg", name="probe", entry="probe_mod::probe").build()
+    assert "__sym_mat_i_j" in sdfg.symbols, f"expected the multi-index value-symbol; got {sorted(sdfg.symbols)}"
+    assert "mat" in sdfg.arrays and "mat" not in sdfg.symbols  # array stays data, not a symbol
+    sdfg(mat=mat, i=np.int32(i), j=np.int32(j), out=out_s)
+    assert out_s[1] == mat[i - 1, j - 1]  # size(work) == mat(2,3) == 6
+    mod = f2py_compile(src, tmp_path / "ref", f"size_ref_{tmp_path.name}")
+    mod.probe_mod.probe(mat, np.int32(i), np.int32(j), out_r)
+    np.testing.assert_array_equal(out_s, out_r)
