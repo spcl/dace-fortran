@@ -34,12 +34,32 @@ static thread_local std::set<std::string> kShortNameCollisions;
 static thread_local llvm::StringSet<> kModuleDeclUniqs;
 static thread_local bool kModuleDeclUniqsBuilt = false;
 
+// Per-func cache of hlfir.declare uniq_name E-scope tails (text after the last 'E' = the local var name). The
+// POINTER/ALLOCATABLE component name-search below re-walked the whole func per component designate -- O(designates x
+// ops), quadratic on deeply-inlined bodies (h_psi get_ast was ~74% here). One walk per func, then O(1) contains().
+static thread_local llvm::DenseMap<mlir::Operation*, llvm::StringSet<>> kFuncDeclTails;
+
+static bool funcHasDeclareTail(mlir::Operation* func, llvm::StringRef tail) {
+  auto it = kFuncDeclTails.find(func);
+  if (it == kFuncDeclTails.end()) {
+    llvm::StringSet<> tails;
+    mlir::cast<mlir::func::FuncOp>(func).walk([&](hlfir::DeclareOp c) {
+      llvm::StringRef un = c.getUniqName().getValue();
+      auto eP = un.rfind('E');
+      if (eP != llvm::StringRef::npos) tails.insert(un.substr(eP + 1));
+    });
+    it = kFuncDeclTails.try_emplace(func, std::move(tails)).first;
+  }
+  return it->second.contains(tail);
+}
+
 void clearManglingOverrides() {
   kManglingOverride.clear();
   kEntryScope.clear();
   kShortNameCollisions.clear();
   kModuleDeclUniqs.clear();
   kModuleDeclUniqsBuilt = false;
+  kFuncDeclTails.clear();
 }
 
 void setEntryScope(const std::string& scope) { kEntryScope = scope; }
@@ -436,22 +456,11 @@ std::string traceToDecl(mlir::Value val, int max) {
                       bitEnumContainsAny(fa, fir::FortranVariableFlagsEnum::allocatable);
           }
           if (wantPtr) {
-            // Search the enclosing func.func for a declare whose uniq_name's E-scope short tail equals parent__member;
-            // found -> use its name.
+            // Enclosing func.func has a declare whose uniq_name E-scope short tail equals parent__member -> use its
+            // name.
             std::string doubleU = parent + "__" + comp.getValue().str();
             auto* func = dg->getParentOfType<mlir::func::FuncOp>().getOperation();
-            bool found = false;
-            if (func) {
-              mlir::dyn_cast<mlir::func::FuncOp>(func).walk([&](hlfir::DeclareOp candidate) {
-                if (found) return;
-                auto un = candidate.getUniqName().str();
-                auto eP = un.rfind('E');
-                if (eP == std::string::npos) return;
-                std::string const tail = un.substr(eP + 1);
-                if (tail == doubleU) found = true;
-              });
-            }
-            if (found) return doubleU;
+            if (func && funcHasDeclareTail(func, doubleU)) return doubleU;
           }
           return singleU;
         }
