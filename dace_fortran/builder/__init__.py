@@ -41,6 +41,7 @@ NOTE on nanobind bindings:
 import gc
 
 from dace import InterstateEdge, SDFG
+from dace.sdfg.utils import specialize_symbols
 
 from dace_fortran.build_bridge import hb
 
@@ -477,38 +478,6 @@ def reject_unlowered_expressions(sdfg: SDFG):
                            "\n  ".join(leaks[:20]))
 
 
-def _specialize_symbol(sdfg: SDFG, symbol_name: str, value):
-    """Bake a free symbol to a constant value, recursively through nested SDFGs.
-
-    Substitutes ``symbol_name`` with ``value`` in every subset, memlet,
-    tasklet, interstate edge, and array descriptor, walks every nested
-    SDFG via :meth:`all_sdfgs_recursive`, and strips the symbol from
-    each :class:`NestedSDFG` node's ``symbol_mapping``.  The symbol is
-    removed from the top-level ``sdfg.symbols`` so the SDFG signature
-    sheds the now-redundant entry entirely -- and transformations that
-    pattern-match on integer constants in shapes / strides / subsets
-    see the literal value instead of a bound symbol.
-
-    A direct port of :func:`dace.sdfg.utils.specialize_symbol` from
-    yakup/dev (not yet on d2/FaCe).  Switch to the dace import once it
-    lands upstream.
-
-    :param sdfg: The SDFG to specialize.
-    :param symbol_name: The symbol name to replace.
-    :param value: The constant value to substitute in.
-    """
-    from dace.sdfg.nodes import NestedSDFG
-    val = str(value)
-    for sd in list(sdfg.all_sdfgs_recursive()):
-        if (symbol_name in sd.symbols or any(str(s) == symbol_name for s in sd.free_symbols)):
-            sd.replace_dict({symbol_name: val})
-        if symbol_name in sd.symbols:
-            sd.remove_symbol(symbol_name)
-    for node, _ in sdfg.all_nodes_recursive():
-        if isinstance(node, NestedSDFG):
-            node.symbol_mapping.pop(symbol_name, None)
-
-
 def _rename_reserved_collisions(sdfg) -> dict:
     """Walk ``sdfg.arrays`` / ``sdfg.symbols`` for entries whose name
     collides with a reserved sympy attribute and apply a deterministic
@@ -925,21 +894,21 @@ class SDFGBuilder:
         # specialise pass zeroes their symbols out, so tests / diagnostics
         # can still inspect the inferred values without grepping memlet
         # subsets.  ``sdfg.constants`` no longer carries these entries
-        # because ``_specialize_symbol`` substitutes them as literal
+        # because ``specialize_symbols`` substitutes them as literal
         # integers in every subset.
         sdfg._fortran_offset_values = dict(const_offsets)
-        # Before any symbol substitution: ``_specialize_symbol`` parses every subset it rewrites, so a leaked ``?``
+        # Before any symbol substitution: ``specialize_symbols`` parses every subset it rewrites, so a leaked ``?``
         # surfaces there as a bare ``SyntaxError: invalid syntax (<unknown>, line 1)`` with no indication of which
         # edge or which Fortran construct produced it.  Check first and name the site.
         reject_unlowered_expressions(sdfg)
-        # Constant offsets: ``_specialize_symbol`` walks every nested
+        # Constant offsets: ``specialize_symbols`` walks every nested
         # SDFG and strips the symbol from each NestedSDFG node's
         # ``symbol_mapping``, so the symbol leaves the signature
         # entirely.  This was the gap behind the older ``replace_dict``
         # attempt that broke ``type_array`` /
-        # ``type_array2`` tests for non-default lower bounds.
-        for k, v in const_offsets.items():
-            _specialize_symbol(sdfg, k, v)
+        # ``type_array2`` tests for non-default lower bounds.  Batched:
+        # one recursive walk for the whole set, not one per offset.
+        specialize_symbols(sdfg, const_offsets)
         # Symbol-to-symbol aliasing (``offset_d_d0 = arrsize``): rename
         # every reference and drop the now-redundant offset symbol from
         # the SDFG so its signature only carries ``arrsize`` as a free
