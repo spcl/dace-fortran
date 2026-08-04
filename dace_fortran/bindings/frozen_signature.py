@@ -13,7 +13,7 @@ divergence.  dace-core stays vanilla -- the contract is dace-fortran-only.
 """
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Dict, Optional, Tuple
 
 
@@ -181,6 +181,43 @@ class FrozenSignature:
         if live_fs != snap_fs:
             raise SignatureDriftError(f"signature drift on {self.entry!r}: "
                                       f"expected free symbols {sorted(snap_fs)}, got {sorted(live_fs)}")
+
+
+def refreeze(sdfg) -> "FrozenSignature":
+    """Re-snapshot after a DELIBERATE transformation of the built SDFG (e.g. an optimization
+    pipeline run between ``build()`` and ``build_fortran_library``), so the bindings regenerate
+    against the live signature instead of tripping the drift check.
+
+    Contract -- optimization must not change the Fortran-facing ABI:
+
+    * data/scalar args must match the original snapshot exactly (names, order, dtypes);
+    * the free-symbol set may only SHRINK (symbols whose last uses were optimized away; the
+      binding simply derives fewer);
+    * a NEW free symbol is refused -- the binding has no value derivation for it.
+
+    Returns the new snapshot and attaches it to ``sdfg._frozen_signature``.
+    """
+    frozen: FrozenSignature = getattr(sdfg, "_frozen_signature", None)
+    if frozen is None:
+        raise RuntimeError(f"refreeze: SDFG {sdfg.name!r} carries no _frozen_signature; "
+                           "it must come from SDFGBuilder.build()")
+    live_fs = set(str(s) for s in sdfg.free_symbols)
+    snap_fs = set(frozen.free_symbols)
+
+    added = sorted(live_fs - snap_fs)
+    if added:
+        raise SignatureDriftError(f"refreeze on {frozen.entry!r}: optimization introduced free "
+                                  f"symbols {added} the binding cannot derive values for")
+
+    new = replace(
+        frozen,
+        args=tuple(a for a in frozen.args if a.sdfg_name not in snap_fs or a.sdfg_name in live_fs),
+        free_symbols=tuple(s for s in frozen.free_symbols if s in live_fs),
+    )
+    # Full re-validation (arg partition, per-arg dtypes, symbol set) against the live SDFG.
+    new.verify_against(sdfg)
+    sdfg._frozen_signature = new
+    return new
 
 
 def _dtype_string(desc) -> str:
