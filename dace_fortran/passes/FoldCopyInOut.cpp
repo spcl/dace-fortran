@@ -306,9 +306,8 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
     }
     if (!aliasDecl) return;
 
-    // 3) Source's parent  --  the array we're slicing.  This is
-    // the memref of the source designate.
-    mlir::Value const parent = srcDg.getMemref();
+    // 3) rewriteAccess reparents each alias designate onto the source's parent
+    // (``srcDg.getMemref()``), re-attaching its component for a member section.
     mlir::OpBuilder b(aliasDecl);
 
     // 4) Rewrite uses of the alias declare's results.  Each designate
@@ -332,7 +331,7 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
       return;
     }
 
-    for (auto useDg : aliasUseDgs) rewriteAccess(useDg, parent, sec, b);
+    for (auto useDg : aliasUseDgs) rewriteAccess(useDg, srcDg, sec, b);
 
     // 5) Erase the chain: re-declare ladder (innermost-first), box_addr,
     // copy_in, any copy_out targeting this copy_in, the alloca for the temp box.
@@ -707,9 +706,20 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
   /// indices folded in.  Preserves triplets / shape on the alias-
   /// access side (so ``%alias(1:N:1)`` whole-array becomes
   /// ``%parent(scalars..., 1:N:1)``).
-  static void rewriteAccess(hlfir::DesignateOp useDg, mlir::Value parent, const SectionShape& sec, mlir::OpBuilder& b) {
+  static void rewriteAccess(hlfir::DesignateOp useDg, hlfir::DesignateOp srcDg, const SectionShape& sec,
+                            mlir::OpBuilder& b) {
     b.setInsertionPoint(useDg);
     auto loc = useDg.getLoc();
+    mlir::Value const parent = srcDg.getMemref();
+    // A member section (``conf%fraction(1,:)``) carries its component name + component
+    // shape in the source designate; ``parent`` is then the STRUCT, and the rebuilt
+    // designate must re-attach the component so its indices count against the
+    // component's rank, not the struct's.  Its result is the section box, not the
+    // contiguous alias ref.
+    auto comp = srcDg.getComponentAttr();
+    mlir::Value const compShape = srcDg.getComponentShape();
+    mlir::Type const resultType = comp ? srcDg.getResult().getType() : useDg.getResult().getType();
+    mlir::Value const resultShape = comp ? srcDg.getShape() : useDg.getShape();
 
     // The alias has one dimension per SOURCE TRIPLET (scalar source dims are
     // already collapsed away), so walk the source dims in order and consume one
@@ -780,16 +790,16 @@ struct FoldCopyInOutPass : public mlir::PassWrapper<FoldCopyInOutPass, mlir::Ope
 
     auto newOp = b.create<hlfir::DesignateOp>(
         loc,
-        /*result_type=*/useDg.getResult().getType(),
+        /*result_type=*/resultType,
         /*memref=*/parent,
-        /*component=*/mlir::StringAttr{},
-        /*component_shape=*/mlir::Value{},
+        /*component=*/comp,
+        /*component_shape=*/compShape,
         /*indices=*/mlir::ValueRange{newIndices},
         /*is_triplet=*/
         (newTripFlags.empty() ? mlir::DenseBoolArrayAttr{} : b.getDenseBoolArrayAttr(newTripFlags)),
         /*substring=*/mlir::ValueRange{},
         /*complex_part=*/mlir::BoolAttr{},
-        /*shape=*/useDg.getShape(),
+        /*shape=*/resultShape,
         /*typeparams=*/mlir::ValueRange{},
         /*fortran_attrs=*/fir::FortranVariableFlagsAttr{});
     useDg.getResult().replaceAllUsesWith(newOp.getResult());
