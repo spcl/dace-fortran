@@ -561,6 +561,14 @@ def build_dut_and_ref(tu_path: Path,
     dace.Config.set("compiler", "cpu", "args", value=cpu_args)
 
     sdfg = build_sdfg(tu_path.read_text(), entry=entry, name=tu_path.stem, out_dir=str(out / "sdfg"))
+    # Optional DUT-only transform hook (default off): OCEAN_E2E_SDFG_HOOK="module:func" imports and
+    # runs func(sdfg) on the built DUT before compile, so an external driver (the E2E paper pipeline)
+    # can optimize the SDFG while the REF stays the untouched gfortran kernel. Unset = no behaviour change.
+    hook = os.environ.get("OCEAN_E2E_SDFG_HOOK")
+    if hook:
+        import importlib
+        modname, fn = hook.split(":", 1)
+        vars(importlib.import_module(modname))[fn](sdfg)
     clear_external_registry()  # DUT SDFG built -- drop the drop-list so it can't leak
     dace_name = sdfg.name  # bind(c) symbols + SDFG exports key off this, NOT name=
     lib = build_fortran_library(sdfg,
