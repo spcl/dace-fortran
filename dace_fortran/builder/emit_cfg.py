@@ -365,11 +365,18 @@ def _fortran_subs_to_dace(expr, builder):
     return "".join(out)
 
 
-def _is_trivial_bound(expr: str) -> bool:
+def _is_trivial_bound(expr: str, builder=None) -> bool:
     """A bound / condition expression is trivial when it's a bare
     identifier or a single integer literal -- hoisting it to a symbol
     would be pure ceremony.  Anything with operators, brackets, or
-    whitespace is non-trivial and gets hoisted."""
+    whitespace is non-trivial and gets hoisted.
+
+    A bare identifier naming a DATA ARRAY is NOT trivial: it is a pointer in C, so leaving it in a
+    condition emits ``if (arr)`` -- always true for a non-null pointer -- instead of reading an
+    element (QE ``IF (upf(np) % tpawp)``, whose flattened access renders as the bare
+    ``upf_tpawp``).  Pass ``builder`` to enable that check; the staging path then lifts the read
+    through the per-occurrence connector machinery, which applies the access's own subscript.
+    """
     s = expr.strip()
     if not s:
         return True
@@ -378,7 +385,7 @@ def _is_trivial_bound(expr: str) -> bool:
         return True
     # Bare identifier (single name, no operators, no brackets).
     if all(ch.isalnum() or ch == '_' for ch in s) and not s[0].isdigit():
-        return True
+        return builder is None or s not in builder.arrays
     return False
 
 
@@ -453,7 +460,7 @@ def _hoist_bound_to_symbol(ctx, region, builder, expr_str: str, prefix: str):
     :returns: the new symbol name, or ``None`` when ``expr_str`` is a
               trivial bound (the caller keeps its original value).
     """
-    if _is_trivial_bound(expr_str):
+    if _is_trivial_bound(expr_str, builder):
         return None
     sym = f"{prefix}_{builder.nid()}"
     if sym not in ctx.sdfg.symbols:
@@ -510,6 +517,40 @@ def _sibling_rw_hazard(assigns) -> bool:
             if ac.is_write:
                 later_writes.add(ac.array_name)
     return False
+
+
+def _rhs_free_symbols(rhs) -> set:
+    """Names an interstate-assignment RHS reads.
+
+    Symbolic parse first -- robust to substrings and to the ``int32(...)`` typecast, which is a
+    function, not a symbol.  Identifier regex as the fallback for expressions sympy rejects
+    (conservative: also yields function names, which only ever over-approximates the read set).
+    """
+    try:
+        return {str(s) for s in dace.symbolic.pystr_to_symbolic(rhs).free_symbols}
+    except Exception:
+        return set(re.findall(r'[A-Za-z_]\w*', str(rhs)))
+
+
+def _hoist_hazard_targets(symbol_assign_pairs, compute_targets) -> set:
+    """Symbol targets that MUST NOT be hoisted ahead of the body's compute tasklets.
+
+    A symbol assignment lifted onto a pre-``body`` interstate edge runs BEFORE every compute
+    tasklet in the body, so one reading a value the body computes would read the PREVIOUS
+    iteration's (or, first iteration, an uninitialised) value.  QE's ``qvan2``: ``qm = qmod(ig)*dqi``
+    is a compute (real*8 tasklet) and ``i0 = INT(qm) + 1`` a symbol -- hoisting ``i0`` rotates it by
+    one iteration.  Closes transitively: a symbol reading a hazardous symbol is hazardous too
+    (``i1 = i0 + 1``).
+    """
+    hazardous: set = set()
+    while True:
+        grown = False
+        for tgt, rhs in symbol_assign_pairs:
+            if tgt not in hazardous and (_rhs_free_symbols(rhs) & (compute_targets | hazardous)):
+                hazardous.add(tgt)
+                grown = True
+        if not grown:
+            return hazardous
 
 
 def _scalar_reassign_in_state(state, a, builder) -> bool:
@@ -726,6 +767,54 @@ def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
         for a in symbol_assigns:
             symbol_assign_pairs.append((a.target, array_read_to_dace_expr(builder, a, iter_map, ctx.sdfg)))
 
+        def _emit_one(st, a, i):
+            # A complex-as-2-reals component-alias write (``qg(c,i)=...``) is a
+            # staged re/im RMW on the complex source, not a normal tasklet.
+            if a.target in getattr(builder, 'complex_component_aliases', {}):
+                emit_complex_component_assign(builder, st, a, i, iter_map, indirect_syms)
+            else:
+                emit_tasklet(builder, st, a, i, iter_map, indirect_syms)
+
+        if _hoist_hazard_targets(symbol_assign_pairs, {a.target for a in compute_assigns}):
+            # At least one symbol assignment reads a value the body computes, so the hoist above
+            # would rotate it by an iteration (see ``_hoist_hazard_targets``).  Emit the batch
+            # statement by statement in SOURCE order instead: computes land in the current state,
+            # each symbol assignment rides the interstate edge that opens the next one.  Costs
+            # extra states -- DaCe fuses them back -- and buys the def-before-use the hoist broke.
+            pre = loop.add_state(f"pre_{builder.nid()}")
+            materialize_indirect_view_sources(builder, pre, indirect_syms)
+            cur = pre
+            for sym, rhs in per_sym_assigns:
+                nxt = loop.add_state(f"sym_{sym}_{builder.nid()}")
+                loop.add_edge(cur, nxt, InterstateEdge(assignments={sym: rhs}))
+                cur = nxt
+            edge = InterstateEdge()
+            batch_lhs: set = set()
+            sym_i = compute_i = 0
+            for a in child_assigns:
+                if a.target in builder.symbols:
+                    # ``symbol_assigns`` filtered ``child_assigns`` in order, so the pairs line up.
+                    tgt, rhs = symbol_assign_pairs[sym_i]
+                    sym_i += 1
+                    if edge.assignments and (_rhs_free_symbols(rhs) & batch_lhs):
+                        nxt = loop.add_state(f"sym_chain_{builder.nid()}")
+                        loop.add_edge(cur, nxt, edge)
+                        cur, edge, batch_lhs = nxt, InterstateEdge(), set()
+                    edge.assignments[tgt] = rhs
+                    batch_lhs.add(tgt)
+                    continue
+                # A pending symbol edge -- or a sibling array/scalar hazard -- closes the state
+                # first; the first compute always opens one so nothing lands in ``pre``.
+                if (compute_i == 0 or edge.assignments or serialise or _scalar_reassign_in_state(cur, a, builder)):
+                    nxt = loop.add_state(f"body_{builder.nid()}")
+                    loop.add_edge(cur, nxt, edge)
+                    cur, edge, batch_lhs = nxt, InterstateEdge(), set()
+                _emit_one(cur, a, compute_i)
+                compute_i += 1
+            if edge.assignments:  # trailing symbol assignments still need a state to land on
+                loop.add_edge(cur, loop.add_state(f"body_{builder.nid()}"), edge)
+            return
+
         if per_sym_assigns or symbol_assign_pairs:
             pre = loop.add_state(f"pre_{builder.nid()}")
             # A view_alias read ONLY as an inline indirect index is never touched
@@ -754,11 +843,7 @@ def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
             edge = InterstateEdge()
             batch_lhs: set = set()
             for tgt, rhs in symbol_assign_pairs:
-                try:
-                    rhs_syms = {str(s) for s in dace.symbolic.pystr_to_symbolic(rhs).free_symbols}
-                except Exception:
-                    rhs_syms = set(re.findall(r'[A-Za-z_]\w*', str(rhs)))
-                if edge.assignments and (rhs_syms & batch_lhs):
+                if edge.assignments and (_rhs_free_symbols(rhs) & batch_lhs):
                     nxt = loop.add_state(f"sym_chain_{builder.nid()}")
                     loop.add_edge(cur, nxt, edge)
                     cur, edge, batch_lhs = nxt, InterstateEdge(), set()
@@ -768,14 +853,6 @@ def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
             loop.add_edge(cur, body, edge)
         else:
             body = loop.add_state('body')
-
-        def _emit_one(st, a, i):
-            # A complex-as-2-reals component-alias write (``qg(c,i)=...``) is a
-            # staged re/im RMW on the complex source, not a normal tasklet.
-            if a.target in getattr(builder, 'complex_component_aliases', {}):
-                emit_complex_component_assign(builder, st, a, i, iter_map, indirect_syms)
-            else:
-                emit_tasklet(builder, st, a, i, iter_map, indirect_syms)
 
         if serialise:
             # Array RW hazard among siblings (``_sibling_rw_hazard``):
@@ -896,7 +973,7 @@ def emit_while(builder, ctx: '_Ctx', n, region):
             if v.intent in ('out', 'inout'):
                 cond = re.sub(rf'\b{re.escape(nm)}\b', f"{nm}[0]", cond)
 
-    if will_lift and not _is_trivial_bound(cond):
+    if will_lift and not _is_trivial_bound(cond, builder):
         # Lift an array-dependent loop condition into a SCALAR transient;
         # the LoopRegion reads it by its bare name (no ``[0]``).
         sym = f"while_cond_{builder.nid()}"
@@ -953,7 +1030,7 @@ def emit_cond(builder, ctx: '_Ctx', n, region):
     # for every IF lowering, no per-branch expression-rewrite logic.
     # Trivial cases (a bare name or ``True`` / ``False``) skip the
     # staging.
-    if not _is_trivial_bound(cond):
+    if not _is_trivial_bound(cond, builder):
         # Conditions that reference ARRAYS (e.g. graupel's
         # ``MAX(q_x_1[1,iv,k], q_x_1[5,iv,k], q_x_1[6,iv,k]) > qmin``)
         # cannot be lifted onto a plain interstate-edge assignment --
