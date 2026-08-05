@@ -24,6 +24,12 @@ class _Ctx:
         # isend/irecv posts per request array (base name -> N); ``emit_mpi`` uses
         # this as the MPI_Waitall count when the Fortran count arg renders "?".
         self.mpi_req_posts = {}
+        # Branch conditions already hoisted in THIS region (condition text ->
+        # symbol), for reuse by a later identical one.  Per-region on purpose:
+        # a region's statements run in sequence, so an earlier hoist dominates
+        # every later one.  A nested region gets a fresh, empty cache -- its
+        # parent's symbol may have been assigned on a path that did not run.
+        self.cond_cache = {}
 
     def ensure(self, region=None):
         """Make ``self.cur`` a writable ``SDFGState``: create the start

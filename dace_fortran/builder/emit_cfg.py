@@ -390,6 +390,65 @@ def _is_trivial_bound(expr: str, builder=None) -> bool:
     return False
 
 
+def routine_write_set(builder) -> set:
+    """Every name the routine may STORE INTO, walked once and memoised.
+
+    Deliberately over-approximate: a name is counted as written when it is an
+    assign/reduce/copy target, a non-read access, a loop iterator, or an
+    argument of ANY call (a Fortran callee's ``intent`` is not visible at this
+    level, so an argument is assumed writable).  Over-approximating only costs
+    a missed reuse; under-approximating would license a WRONG reuse.
+
+    A name absent from the result is therefore read-only for the whole routine.
+    """
+    if builder.write_set is not None:
+        return builder.write_set
+
+    written: set = set()
+
+    def visit(nodes):
+        for c in nodes:
+            if c.target:
+                written.add(c.target)
+            if c.loop_iter:
+                written.add(c.loop_iter)
+            for a in (c.accesses or []):
+                if (not a.is_read) and a.array_name:
+                    written.add(a.array_name)
+            for arg in (c.call_args or []):
+                written.add(str(arg).split("[", 1)[0].strip())
+            visit(c.children)
+            visit(c.else_children)
+
+    visit(builder.ast)
+    builder.write_set = written
+    return written
+
+
+def cond_reuse_key(builder, cond: str):
+    """The cache key under which ``cond`` may be reused, or ``None``.
+
+    Reuse is sound only when re-evaluating the condition later is guaranteed to
+    give the same answer, so every name it reads must be a source-level datum
+    the routine never writes.  Bail on anything else -- an unknown identifier
+    could be a builder-minted symbol (``<arr>_at7``, ``if_cond_3``) that IS
+    reassigned per statement, and reusing across one of those rotates the read
+    exactly like the bug this file's hoisting rules already guard against.
+    """
+    names = {tok for tok in re.findall(r'\b([A-Za-z_]\w*)\b', cond)}
+    # Drop the literals ``buildBoolExpr`` emits; everything else must resolve.
+    names -= {'True', 'False', 'true', 'false', 'and', 'or', 'not'}
+    if not names:
+        return None
+    written = routine_write_set(builder)
+    for nm in names:
+        if nm in written:
+            return None
+        if nm not in builder.scalars and nm not in builder.arrays:
+            return None
+    return cond
+
+
 def _deref_scalar_arrays_for_interstate(expr_str: str, ctx) -> str:
     """Rewrite bare references to scalar ``(1,)``-shape SDFG data
     descriptors as ``name[0]``.
@@ -1117,18 +1176,31 @@ def emit_cond(builder, ctx: '_Ctx', n, region):
             sym = f"if_cond_{builder.nid()}"
             pre, cond = _stage_cond_scalar(builder, ctx, region, pre, sym, cond, cond_accesses)
         else:
-            sym = f"if_cond_{builder.nid()}"
-            if sym not in ctx.sdfg.symbols:
-                ctx.sdfg.add_symbol(sym, dace.int64)
-            # If the condition references any view_alias array, anchor it
-            # in a state upstream of the interstate-edge assignment so
-            # DaCe's framecode finds a real AccessNode first.
-            pre = _anchor_views_referenced_in_expr(builder, cond, region, pre, ctx.sdfg)
-            nxt = region.add_state(f"pre_{sym}")
-            region.add_edge(pre, nxt, InterstateEdge(assignments={sym: cond}))
-            pre = nxt
-            ctx.cur = nxt
-            cond = sym
+            # An identical condition over never-written data was already hoisted
+            # in this region: reuse its symbol instead of recomputing it.  QE's
+            # ``IF (okvan .AND. .NOT. tqr)`` guards both the definition and the
+            # use of ``qvan_init_nij``; emitted as two separate reads of the same
+            # flags, gcc cannot correlate the guards and reports the use as
+            # maybe-uninitialized.  One symbol makes the correlation syntactic.
+            reuse_key = cond_reuse_key(builder, cond)
+            cached = ctx.cond_cache.get(reuse_key) if reuse_key is not None else None
+            if cached is not None:
+                cond = cached
+            else:
+                sym = f"if_cond_{builder.nid()}"
+                if reuse_key is not None:
+                    ctx.cond_cache[reuse_key] = sym
+                if sym not in ctx.sdfg.symbols:
+                    ctx.sdfg.add_symbol(sym, dace.int64)
+                # If the condition references any view_alias array, anchor it
+                # in a state upstream of the interstate-edge assignment so
+                # DaCe's framecode finds a real AccessNode first.
+                pre = _anchor_views_referenced_in_expr(builder, cond, region, pre, ctx.sdfg)
+                nxt = region.add_state(f"pre_{sym}")
+                region.add_edge(pre, nxt, InterstateEdge(assignments={sym: cond}))
+                pre = nxt
+                ctx.cur = nxt
+                cond = sym
 
     uid = builder.nid()
     cond_block = ConditionalBlock(f"if_{uid}")

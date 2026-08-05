@@ -689,6 +689,9 @@ class SDFGBuilder:
             # each from its element read and asserts the element stays constant.
             self.value_symbols = self.module.get_value_symbols()
             self.ast = self.module.get_ast()
+            # Names the routine may store into; filled lazily by
+            # ``routine_write_set`` on the first branch-condition hoist.
+            self.write_set = None
         finally:
             if gc_was_enabled:
                 gc.enable()
