@@ -22,6 +22,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import dace.data as dace_data
 import numpy as np
 import pytest
 
@@ -118,18 +119,27 @@ def _run_sdfg(sdfg):
     config scalars, call the SDFG, return the realised ``rsdnm`` buffer."""
     kw = {}
     for name, desc in sdfg.arglist().items():
-        shape = tuple(int(s) for s in desc.shape)
-        is_float = desc.dtype.as_numpy_dtype() == np.float64
-        kw[name] = np.zeros(shape, dtype=np.float64 if is_float else np.int32, order='F')
-    # NPB Class S config scalars are each a (1,)-Array (bridge surfaces
-    # module-level scalars as one-element arrays); inorm is a free symbol resolved via the kwarg name.
-    for name, value in (('nx0', _NX0), ('ny0', _NY0), ('nz0', _NZ0), ('itmax', _ITMAX), ('omega', _OMEGA), ('dt', _DT)):
-        if name in kw:
+        np_dtype = np.float64 if desc.dtype.as_numpy_dtype() == np.float64 else np.int32
+        # Most module-level scalars surface as (1,)-Arrays, but the ones that are also free
+        # symbols (itmax, inorm) surface as true Scalars -- handing those an array raises
+        # "Passing an array to a scalar". Branch on the descriptor rather than on a name list,
+        # so a future symbol promotion does not silently reintroduce the mismatch.
+        if isinstance(desc, dace_data.Scalar):
+            kw[name] = np_dtype(0)
+        else:
+            kw[name] = np.zeros(tuple(int(s) for s in desc.shape), dtype=np_dtype, order='F')
+
+    def seed(name, value):
+        if name not in kw:
+            return
+        if isinstance(kw[name], np.ndarray):
             kw[name][...] = value
-    if 'tolrsd' in kw:
-        kw['tolrsd'][...] = _TOLRSD
-    if 'inorm' in sdfg.symbols:
-        kw['inorm'] = np.int32(_ITMAX)
+        else:
+            kw[name] = type(kw[name])(value)
+
+    for name, value in (('nx0', _NX0), ('ny0', _NY0), ('nz0', _NZ0), ('itmax', _ITMAX), ('omega', _OMEGA), ('dt', _DT),
+                        ('inorm', _ITMAX), ('tolrsd', _TOLRSD)):
+        seed(name, value)
     sdfg(**kw)
     return kw['rsdnm']
 
