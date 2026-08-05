@@ -27,7 +27,6 @@ from dace.sdfg import SDFG
 # bug: the reader of the generated code is a compiler, so there is no "intentional" uninitialised read to excuse.
 CRITICAL_WARNINGS = (
     "uninitialized",
-    "maybe-uninitialized",
     "array-bounds",
     "stringop-overflow",
     "free-nonheap-object",
@@ -35,6 +34,15 @@ CRITICAL_WARNINGS = (
     "return-type",
     "sizeof-pointer-memaccess",
 )
+
+# Enabled and reported, but NOT a build failure.  ``-Wmaybe-uninitialized`` is gcc's speculative
+# variant: it fires when the dataflow cannot PROVE a definition reaches a use, which a guarded
+# define/use pair defeats whenever an opaque call sits between the two and the guard operands are
+# reachable through a non-const pointer.  The input Fortran carries the same shapes, so gating on it
+# scores gcc's heuristic rather than the generated code.  ``-Wuninitialized`` (the provable variant)
+# stays critical.  Kept enabled so the diagnostic still prints as informational -- dropping it from
+# CRITICAL_WARNINGS alone would also drop the ``-W`` flag and silence it entirely.
+NONCRITICAL_WARNINGS = ("maybe-uninitialized", )
 
 # clang names a few of these differently or not at all; passing an unknown -W to clang is only a warning, but
 # keeping the list explicit documents what actually gets checked there.
@@ -156,7 +164,8 @@ def analyze(sdfg: SDFG, tool: str = "warnings", critical_only: bool = True) -> L
     clang = compiler_is_clang()
 
     if tool in ("warnings", "analyzer"):
-        warn = [f"-W{w}" for w in (CLANG_CRITICAL_WARNINGS if clang else CRITICAL_WARNINGS)]
+        enabled = CLANG_CRITICAL_WARNINGS if clang else CRITICAL_WARNINGS + NONCRITICAL_WARNINGS
+        warn = [f"-W{w}" for w in enabled]
         # -O2 last so it overrides the build's -O0: the dataflow that powers -Wmaybe-uninitialized and
         # -Warray-bounds only runs with optimisation, so analysing at the build's own -O0 would report almost
         # nothing and read as a clean pass.

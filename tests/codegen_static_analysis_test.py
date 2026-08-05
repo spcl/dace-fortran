@@ -69,6 +69,21 @@ def test_generated_cpp_has_no_critical_warnings(kernel, tmp_path):
                        "\n".join(found))
 
 
+@pytest.mark.parametrize("kernel", sorted(SOURCES))
+def test_generated_cpp_has_no_maybe_uninitialized(kernel, tmp_path):
+    """These kernels must stay clean of ``-Wmaybe-uninitialized`` too.
+
+    It is not in CRITICAL_WARNINGS -- gcc's speculative variant fires on shapes the input Fortran
+    already carries, so gating every production kernel on it scores the heuristic. But it is what
+    named the uninitialised-ALLOCATE-extent miscompile in this module's docstring, so the kernels
+    that reproduce that shape keep asserting on it, where they are small enough for the dataflow to
+    be conclusive rather than speculative.
+    """
+    sdfg = built_sdfg(SOURCES[kernel], tmp_path, name=kernel)
+    found = [ln for ln in analyze(sdfg, "warnings", critical_only=False) if "[-Wmaybe-uninitialized]" in ln]
+    assert not found, "generated C++ emits -Wmaybe-uninitialized:\n" + "\n".join(found)
+
+
 @pytest.mark.long
 @pytest.mark.parametrize("tool", ["analyzer", "clang-tidy", "cppcheck"])
 @pytest.mark.parametrize("kernel", sorted(SOURCES))
