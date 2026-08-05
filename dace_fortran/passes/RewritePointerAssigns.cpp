@@ -1273,6 +1273,20 @@ struct RewritePointerAssignsPass
         // ``recordTarget`` re-roots each ``p % m`` onto the target record
         // (the empty-chain case handled alongside ``p => x % a % member``).
       }
+      // Both View paths ``return`` below, so they never reach the store cleanup
+      // at the end of this function -- drop the DEAD-STORE rebinds here.
+      // ``extract_vars`` mints the view from the LAST store; a surviving earlier
+      // store lowers as a real assignment INTO that view, giving the View access
+      // node two in-edges, which DaCe rejects as an ambiguous view.  Interleaved
+      // reads were already rejected above, so every non-last store is dead.
+      if (tagAsView || tagScalarView) {
+        for (size_t i = 0; i + 1 < nonNullifyStores.size(); ++i) {
+          fir::StoreOp dead = nonNullifyStores[i];
+          auto* valDef = dead.getValue().getDefiningOp();
+          dead.erase();
+          if (valDef && valDef->use_empty()) valDef->erase();
+        }
+      }
       if (tagAsView) {
         ptrDecl->setAttr("hlfir_bridge.pointer_view", mlir::UnitAttr::get(&getContext()));
         // Bounds-remap lower bound(s) captured during the value-chain
