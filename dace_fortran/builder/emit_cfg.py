@@ -19,6 +19,7 @@ from dace_fortran.builder.access import (
     array_read_to_dace_expr,
     collect_indirect,
     find_array_subscripts,
+    indirect_exprs,
     indirect_to_dace,
     iter_view_dim_map,
     materialize_indirect_view_sources,
@@ -532,21 +533,20 @@ def _rhs_free_symbols(rhs) -> set:
         return set(re.findall(r'[A-Za-z_]\w*', str(rhs)))
 
 
-def _hoist_hazard_targets(symbol_assign_pairs, compute_targets) -> set:
-    """Symbol targets that MUST NOT be hoisted ahead of the body's compute tasklets.
+def _hoist_hazard_targets(hoisted_pairs, later_targets) -> set:
+    """Targets in ``hoisted_pairs`` that MUST NOT be hoisted ahead of ``later_targets``.
 
-    A symbol assignment lifted onto a pre-``body`` interstate edge runs BEFORE every compute
-    tasklet in the body, so one reading a value the body computes would read the PREVIOUS
-    iteration's (or, first iteration, an uninitialised) value.  QE's ``qvan2``: ``qm = qmod(ig)*dqi``
-    is a compute (real*8 tasklet) and ``i0 = INT(qm) + 1`` a symbol -- hoisting ``i0`` rotates it by
-    one iteration.  Closes transitively: a symbol reading a hazardous symbol is hazardous too
-    (``i1 = i0 + 1``).
+    An assignment lifted onto a pre-``body`` interstate edge runs BEFORE everything the hoist
+    skips past, so one reading a name defined there would read the PREVIOUS iteration's (or, first
+    iteration, an uninitialised) value.  QE's ``qvan2``: ``qm = qmod(ig)*dqi`` is a compute (real*8
+    tasklet) and ``i0 = INT(qm) + 1`` a symbol -- hoisting ``i0`` rotates it by one iteration.
+    Closes transitively: an assignment reading a hazardous target is hazardous too (``i1 = i0 + 1``).
     """
     hazardous: set = set()
     while True:
         grown = False
-        for tgt, rhs in symbol_assign_pairs:
-            if tgt not in hazardous and (_rhs_free_symbols(rhs) & (compute_targets | hazardous)):
+        for tgt, rhs in hoisted_pairs:
+            if tgt not in hazardous and (_rhs_free_symbols(rhs) & (later_targets | hazardous)):
                 hazardous.add(tgt)
                 grown = True
         if not grown:
@@ -775,23 +775,46 @@ def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
             else:
                 emit_tasklet(builder, st, a, i, iter_map, indirect_syms)
 
-        if _hoist_hazard_targets(symbol_assign_pairs, {a.target for a in compute_assigns}):
-            # At least one symbol assignment reads a value the body computes, so the hoist above
-            # would rotate it by an iteration (see ``_hoist_hazard_targets``).  Emit the batch
+        compute_targets = {a.target for a in compute_assigns}
+        # Two hoists to check, in the order the fast path below emits them.  Group 1 (the inline
+        # indirect symbols) clears BOTH the group-2 symbol assignments and the computes; group 2
+        # clears only the computes.
+        hazardous = _hoist_hazard_targets(symbol_assign_pairs, compute_targets)
+        hazardous |= _hoist_hazard_targets(per_sym_assigns, compute_targets | {t for t, _ in symbol_assign_pairs})
+
+        if hazardous:
+            # At least one hoisted assignment reads a value something it skips past defines, so the
+            # hoist would rotate it by an iteration (see ``_hoist_hazard_targets``).  Emit the batch
             # statement by statement in SOURCE order instead: computes land in the current state,
-            # each symbol assignment rides the interstate edge that opens the next one.  Costs
-            # extra states -- DaCe fuses them back -- and buys the def-before-use the hoist broke.
+            # each symbol assignment rides the interstate edge that opens the next one, and each
+            # statement's indirect symbols are defined immediately before it.  Costs extra states --
+            # DaCe fuses them back -- and buys the def-before-use the hoist broke.
+            sym_rhs = dict(per_sym_assigns)
             pre = loop.add_state(f"pre_{builder.nid()}")
             materialize_indirect_view_sources(builder, pre, indirect_syms)
             cur = pre
-            for sym, rhs in per_sym_assigns:
-                nxt = loop.add_state(f"sym_{sym}_{builder.nid()}")
-                loop.add_edge(cur, nxt, InterstateEdge(assignments={sym: rhs}))
-                cur = nxt
             edge = InterstateEdge()
             batch_lhs: set = set()
+            emitted_syms: set = set()
             sym_i = compute_i = 0
             for a in child_assigns:
+                # This statement's inline indirect symbols, innermost-first.  NEVER a blanket
+                # prefix as in the fast path: their RHS may read a symbol an earlier statement
+                # assigns (QE ``eigts1(mill(1, iv_d), na)`` right after ``iv_d = igk_exx(ig)``).
+                for expr, _arr in indirect_exprs(builder, a):
+                    sym = indirect_syms.get(expr)
+                    if sym is None or sym in emitted_syms:
+                        continue
+                    emitted_syms.add(sym)
+                    if edge.assignments:
+                        # DaCe gives no order to same-edge assignments, so a pending batch this
+                        # symbol may read has to close onto its own state first.
+                        nxt = loop.add_state(f"sym_chain_{builder.nid()}")
+                        loop.add_edge(cur, nxt, edge)
+                        cur, edge, batch_lhs = nxt, InterstateEdge(), set()
+                    nxt = loop.add_state(f"sym_{sym}_{builder.nid()}")
+                    loop.add_edge(cur, nxt, InterstateEdge(assignments={sym: sym_rhs[sym]}))
+                    cur = nxt
                 if a.target in builder.symbols:
                     # ``symbol_assigns`` filtered ``child_assigns`` in order, so the pairs line up.
                     tgt, rhs = symbol_assign_pairs[sym_i]

@@ -480,17 +480,49 @@ def indirect_host(expr):
     return m.group(1) if m and expr.endswith(']') else ""
 
 
-def collect_indirect(builder, assigns: list) -> dict:
-    """Walk every access in ``assigns`` and mint a fresh SDFG symbol for
-    each distinct *inline* indirect index expression -- recursively, so
-    nested forms like ``idx1[idx2[idx3[i]]]`` mint one symbol per
-    indirection level.  Returns a map from the Fortran-style expression
-    (``edge_idx[jc,1]``) to the symbol name.
+def indirect_exprs(builder, a) -> list:
+    """The *inline* indirect index expressions assign ``a`` reads, as
+    ``(expression, source array)`` pairs, innermost-first and deduplicated.
 
-    Iteration order in the returned dict matters: ``dict`` preserves
-    insertion order, and we insert innermost-first so the caller can
-    materialise interstate-edge assignments in the same order without
-    forward references.
+    Recursive, so a nested form like ``idx1[idx2[idx3[i]]]`` yields one pair per
+    indirection level.  Innermost-first is what lets a caller materialise the
+    levels in order without forward references.
+    """
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def _visit(expr: str):
+        """Visit ``expr`` and collect any ``<arr>[...]`` substring with ``<arr>``
+        in ``builder.arrays``.  ``idx1[idx2[i]]`` produces two entries: first
+        ``idx2[i]`` (the inner load), then ``idx1[idx2[i]]`` (the outer load).
+        """
+        if not isinstance(expr, str) or '[' not in expr:
+            return
+        for start, end, arr, parts in find_array_subscripts(expr, builder.arrays):
+            # Recurse into each part FIRST so inner indirections come ahead of
+            # the enclosing one.
+            for part in parts:
+                _visit(part)
+            sub = expr[start:end]
+            if sub not in seen:
+                seen.add(sub)
+                out.append((sub, arr))
+
+    for ac in a.accesses:
+        for expr in getattr(ac, 'index_exprs', None) or []:
+            _visit(expr)
+
+    return out
+
+
+def collect_indirect(builder, assigns: list) -> dict:
+    """Mint a fresh SDFG symbol for each distinct inline indirect index
+    expression across ``assigns`` (see :func:`indirect_exprs`).  Returns a map
+    from the Fortran-style expression (``edge_idx[jc,1]``) to the symbol name.
+
+    Iteration order in the returned dict matters: ``dict`` preserves insertion
+    order, and we insert innermost-first so the caller can materialise
+    interstate-edge assignments in the same order without forward references.
 
     Naming: ``<arr>_at<gid>`` -- the prefix carries the source array's
     Fortran name so the SDFG dump shows which load the symbol holds; the
@@ -498,29 +530,10 @@ def collect_indirect(builder, assigns: list) -> dict:
     call-site without us having to normalise the inner expression.
     """
     out: dict[str, str] = {}
-
-    def _intern_recursive(expr: str):
-        """Visit ``expr`` and intern any ``<arr>[...]`` substring with
-        ``<arr>`` in ``builder.arrays``, innermost-first.  An expression
-        like ``idx1[idx2[i]]`` produces two entries: first ``idx2[i]``
-        (the inner load), then ``idx1[idx2[i]]`` (the outer load).
-        """
-        if not isinstance(expr, str) or '[' not in expr:
-            return
-        for start, end, arr, parts in find_array_subscripts(expr, builder.arrays):
-            # Recurse into each part FIRST so inner indirections are
-            # interned ahead of the enclosing one.
-            for part in parts:
-                _intern_recursive(part)
-            sub = expr[start:end]
+    for a in assigns:
+        for sub, arr in indirect_exprs(builder, a):
             if sub not in out:
                 out[sub] = f"{arr}_at{_next_indirection_gid()}"
-
-    for a in assigns:
-        for ac in a.accesses:
-            for expr in getattr(ac, 'index_exprs', None) or []:
-                _intern_recursive(expr)
-
     return out
 
 
