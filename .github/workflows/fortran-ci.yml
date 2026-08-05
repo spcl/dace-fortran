@@ -35,10 +35,16 @@ jobs:
     #                  multi-rank ``mpi`` tests, run as SEPARATE steps.  Kept
     #                  off fast/heavy so neither the quick PR sweep nor the
     #                  ICON-from-source builds carry the mpirun-driven tests.
+    #   * ``e2e``   -- production kernels (CloudSC, QE vexx, ICON ocean
+    #                  velocity) through the FULL parallelization pipeline,
+    #                  each numerically compared against the untouched
+    #                  gfortran/f2py reference.  Slow: an SDFG optimize plus an
+    #                  -O3 -march=native build per kernel, so it is kept off the
+    #                  quick PR sweep.
     strategy:
       fail-fast: false
       matrix:
-        suite: [fast, heavy, integration]
+        suite: [fast, heavy, integration, e2e]
     name: test-fortran (${{ matrix.suite }})
     runs-on: ubuntu-24.04
     # The heavy suite builds ICON from source and runs the ~9 GB-peak
@@ -48,7 +54,9 @@ jobs:
     # ``fast`` is the whole non-long unit sweep; it has grown to ~65-70 min of
     # all-passing tests and was tripping the old 60 min wall at ~89% (a timeout,
     # never a test failure), so give it 90 min of headroom.
-    timeout-minutes: ${{ (matrix.suite == 'heavy' || matrix.suite == 'integration') && 180 || 90 }}
+    # ``e2e`` gets the long budget too: CloudSC alone is a ~20 min SDFG optimize
+    # followed by an -O3 -march=native build of a single 25k-line translation unit.
+    timeout-minutes: ${{ (matrix.suite == 'fast') && 90 || 180 }}
     env:
       # Disable hwloc's GL/X11 backend so ``from mpi4py import MPI``
       # (MPI_Init -> hwloc topology) doesn't probe a (possibly absent /
@@ -192,7 +200,7 @@ jobs:
         # orig-vs-binding bit-exact -- run on the ``integration`` runner so
         # they never leak into the quick PR sweep).  ``--dist loadgroup``
         # honours the ``xdist_group`` markers so grouped tests share one worker.
-        pytest -n auto --dist loadgroup -m "not mpi and not long and not integration" \
+        pytest -n auto --dist loadgroup -m "not mpi and not long and not integration and not e2e" \
           --cov-report=xml --cov=dace_fortran --tb=short tests/
         coverage report || true
         coverage xml || true
@@ -248,7 +256,7 @@ jobs:
         # ICON-O fparser extractions share the ``ocean_fparser`` group and run
         # one-at-a-time, each in its own memory-capped subprocess), so at most
         # one of each runs concurrently.
-        pytest -n auto --dist loadgroup -m "long and not mpi and not integration" \
+        pytest -n auto --dist loadgroup -m "long and not mpi and not integration and not e2e" \
           -p no:cacheprovider --tb=short tests/
 
     # ----- integration runner: multi-rank mpi tests + short ICON integration tests -----
@@ -286,3 +294,19 @@ jobs:
         # future removal of every integration test silently re-breaking CI.
         python -m pytest -m "integration and not mpi" \
           -p no:cacheprovider --tb=short tests/ || [ $? -eq 5 ]
+
+    # ----- e2e runner: production kernels through the full parallelization pipeline -----
+    - name: Run e2e pipeline tests (CloudSC + QE vexx + ICON ocean velocity)
+      if: ${{ matrix.suite == 'e2e' }}
+      run: |
+        # Each test builds a production kernel's SDFG, runs the whole pipeline
+        # (specialize -> short-unroll -> simplify -> state-fusion-extended ->
+        # [scalar-fission] -> loop2map -> state-fusion-extended -> mapfusion)
+        # and compares the result element-wise against the untouched
+        # gfortran/f2py reference -- so a transformation that changes a value
+        # reds this lane even when every unit test still passes.
+        # SEQUENTIAL, no xdist: CloudSC's -O3 -march=native build of a single
+        # 25k-line translation unit peaks around 12 GB of compiler memory, and
+        # concurrent workers would each carry their own peak and OOM the runner.
+        python -m pytest -m e2e \
+          -p no:cacheprovider --tb=short tests/

@@ -52,13 +52,28 @@ def sdfg_call_args(sdfg, scalar_values: dict) -> dict:
     return out
 
 
-def run_cloudsc(src: str, name: str, f2py_ref, sdfg_dir: Path, *, seed: int = 42):
+def accepted_names(sdfg) -> set:
+    """Names the SDFG can be called with: its arglist plus its free symbols."""
+    return set(sdfg.arglist()) | {str(s) for s in sdfg.free_symbols}
+
+
+def run_cloudsc(src: str, name: str, f2py_ref, sdfg_dir: Path, *, seed: int = 42, transform=None):
     """Build the SDFG and run both the f2py reference and the SDFG on identical seeded physical inputs.
+
+    ``transform`` (optional) is called on the built SDFG before it runs -- an optimization pipeline,
+    say. Specializing bakes constants out of the signature, so whatever names the transform removes
+    are dropped from the call; with no transform that set is empty and the call is unchanged.
 
     Returns ``(outputs_sdfg, outputs_ref)`` -- lowercase-keyed dicts for the caller to compare under its own mismatch policy.
     """
     sdfg_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(src, sdfg_dir, name=name, entry=_ENTRY).build()
+
+    baked = set()
+    if transform is not None:
+        before = accepted_names(sdfg)
+        transform(sdfg)
+        baked = before - accepted_names(sdfg)
 
     rng = np.random.default_rng(seed)
     inputs = get_inputs_physical(rng)
@@ -73,6 +88,6 @@ def run_cloudsc(src: str, name: str, f2py_ref, sdfg_dir: Path, *, seed: int = 42
     sdfg_kwargs = {k.lower(): v for k, v in inputs.items() if not isinstance(v, _SCALAR_TYPES)}
     sdfg_kwargs.update(lower_keys(outputs_sdfg))
     sdfg_kwargs.update(sdfg_call_args(sdfg, scalars))
-    sdfg(**sdfg_kwargs)
+    sdfg(**{k: v for k, v in sdfg_kwargs.items() if k not in baked})
 
     return outputs_sdfg, outputs_ref
