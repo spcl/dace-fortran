@@ -12,6 +12,18 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _HLFIR_DIR = _REPO_ROOT / "dace" / "frontend" / "hlfir"
 
+# CPU flags for every DUT built for a bit-exact differential against a gfortran reference.
+# -march=native so the vectorizer sees the real ISA; -fno-math-errno + -fno-trapping-math so libm
+# calls (sin/cos) vectorize through libmvec -- neither changes a value. Deliberately NOT
+# -ffast-math: it licenses FP reassociation. -ffp-contract=off pins FMA formation off for the same
+# reason.
+# ⛔ Pinned as a LITERAL, never derived by subtracting flags from DaCe's shipped default: that
+# default moves. It carried -ffast-math until dace #2453 replaced it with the individual
+# -fno-signed-zeros -freciprocal-math pair, at which point a `.replace("-ffast-math", "")` became a
+# no-op and let -freciprocal-math (a/b -> a*(1/b), 1 ulp) through into a bit-exact comparison.
+BITEXACT_CPU_ARGS = ('-fPIC -O3 -march=native -fno-fast-math -ffp-contract=off -fno-math-errno '
+                     '-fno-trapping-math -Wno-unused-parameter -Wno-unused-label')
+
 # when set, build_sdfg(...).build() dumps its SDFG here; "1"/"true"/"yes" means _DEFAULT_DUMP_DIR.
 _DUMP_ENV = "__DACE_HLFIR_GEN_TEST_SDFGS"
 _DEFAULT_DUMP_DIR = Path("/tmp/hlfir_test_sdfgs")

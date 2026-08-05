@@ -513,6 +513,7 @@ def build_dut_and_ref(tu_path: Path,
     """
     import dace
 
+    from _util import BITEXACT_CPU_ARGS
     from dace_fortran.build import build_sdfg
     from dace_fortran.bindings import build_fortran_library
     from dace_fortran.external import apply_external_functions, clear_external_registry
@@ -542,12 +543,10 @@ def build_dut_and_ref(tu_path: Path,
         ref_tu = out / f"{tu_path.stem}_ref.f90"
         ref_tu.write_text(src.replace("MODULE mo_mpi\n", "MODULE mo_mpi\n  use mpi\n", 1))
 
-    # Bit-exact differential needs IEEE-strict FP on the DUT: DaCe's default
-    # -ffast-math contracts a*b+c into an FMA (dot-product kernels round ~1 ulp
-    # off gfortran) -- drop it and pin -ffp-contract=off; per-subprocess config change.
-    cpu_args = dace.Config.get("compiler", "cpu", "args").replace("-ffast-math", "")
-    if "-ffp-contract" not in cpu_args:
-        cpu_args += " -ffp-contract=off"
+    # Bit-exact differential needs IEEE-strict FP on the DUT, so PIN the flags outright rather
+    # than subtracting from DaCe's default -- see BITEXACT_CPU_ARGS for why subtracting rots.
+    # Per-subprocess config change; this runs in the forked child.
+    cpu_args = BITEXACT_CPU_ARGS
     if os.environ.get("OCEAN_E2E_ASAN"):
         # DaCe emits aligned heap transients (``new T DACE_ALIGN(64)[N]`` ->
         # aligned ``operator new[]``) paired with a plain ``delete[]``; glibc's
