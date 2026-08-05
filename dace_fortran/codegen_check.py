@@ -99,26 +99,40 @@ def build_flags(sdfg: SDFG) -> List[str]:
     if not compdb.is_file():
         raise FileNotFoundError(
             f"no {makeflags} and no {compdb}; the SDFG must be built (not just codegen'd) before analysis")
-    src = str(generated_source(sdfg))
-    for entry in json.loads(compdb.read_text()):
-        if entry.get("file") != src:
+    src = generated_source(sdfg).resolve()
+    entries = json.loads(compdb.read_text())
+    # CMake records absolute paths, but ``build_folder`` is routinely relative (the default
+    # ``.dacecache``, xdist's per-worker ``.dacecache_gwN``), so compare resolved paths -- a raw
+    # string compare matches nothing and reads as "the TU was never built".
+    match = next((e for e in entries if Path(e["file"]).resolve() == src), None)
+    if match is None:
+        # The database describes only the LAST cmake configure of this build folder, so a second
+        # SDFG built into it (DaCe renames the collision to ``<name>_0``) evicts the first one's
+        # entry.  Every generated TU of one project is compiled with the same -D/-I/-W set, so a
+        # sibling in the same ``src/cpu`` carries the flags this TU saw; the per-target -o/-M*
+        # tokens are the only difference and are dropped below anyway.
+        match = next((e for e in entries if Path(e["file"]).resolve().parent == src.parent), None)
+    if match is None:
+        raise FileNotFoundError(f"{compdb} has no entry for {src}, and no sibling TU in {src.parent}")
+
+    argv = shlex.split(match["command"]) if "command" in match else list(match["arguments"])
+    # Drop the compiler, the -c/-o output pair, the source file, and the dependency-file flags;
+    # keep every -D/-I/-W/-f flag the TU saw.  -MT/-MF/-MQ carry paths RELATIVE to the build
+    # directory, which this analysis does not run in, so keeping them fails the compile on a file
+    # it cannot open -- and a failed analysis compile reports no warnings, i.e. reads as clean.
+    flags = []
+    skip = False
+    for tok in argv[1:]:  # argv[0] is the compiler
+        if skip:
+            skip = False
             continue
-        argv = shlex.split(entry["command"]) if "command" in entry else list(entry["arguments"])
-        # Drop the compiler, the -c/-o output pair, and the source file; keep every -D/-I/-W/-f flag the TU saw.
-        flags = []
-        skip = True  # argv[0] is the compiler
-        for tok in argv:
-            if skip:
-                skip = False
-                continue
-            if tok == "-o":
-                skip = True  # also drop its argument
-                continue
-            if tok == "-c" or tok == entry["file"] or tok.endswith(f"/{sdfg.name}.cpp"):
-                continue
-            flags.append(tok)
-        return flags
-    raise FileNotFoundError(f"{compdb} has no entry for {src}")
+        if tok in ("-o", "-MT", "-MF", "-MQ"):
+            skip = True  # also drop its argument
+            continue
+        if tok in ("-c", "-MD", "-MMD", "-MP") or tok == match["file"] or tok.endswith(".cpp"):
+            continue
+        flags.append(tok)
+    return flags
 
 
 def compiler_is_clang() -> bool:
@@ -189,6 +203,13 @@ def analyze(sdfg: SDFG, tool: str = "warnings", critical_only: bool = True) -> L
 
     done = subprocess.run(cmd, capture_output=True, text=True, check=False)
     text = done.stdout + done.stderr
+    if done.returncode != 0 and tool in ("warnings", "analyzer"):
+        # A compile that FAILED reports no warnings, which is indistinguishable from a clean TU
+        # once the lines are filtered below -- the exact silent degradation this module exists to
+        # prevent (see the docstring).  A driver/front-end fatal (`cc1plus: fatal error:`) matches
+        # neither ": warning:" nor ": error:", so it cannot be caught by the filter either.
+        raise RuntimeError(f"codegen analysis compile failed (exit {done.returncode}) for {src}:\n"
+                           f"{shlex.join(cmd)}\n{text[-3000:]}")
     diagnostics = [ln for ln in text.splitlines() if ": warning:" in ln or ": error:" in ln]
     # Belt-and-braces across all four tools: a diagnostic whose file is not the generated TU came from a header we
     # do not own, and nothing in this repo can act on it.
