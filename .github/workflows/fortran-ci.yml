@@ -35,8 +35,8 @@ jobs:
     #                  multi-rank ``mpi`` tests, run as SEPARATE steps.  Kept
     #                  off fast/heavy so neither the quick PR sweep nor the
     #                  ICON-from-source builds carry the mpirun-driven tests.
-    #   * ``e2e``   -- production kernels (CloudSC, QE vexx, ICON ocean
-    #                  velocity) through the FULL parallelization pipeline,
+    #   * ``e2e``   -- production kernels (CloudSC, QE vexx, ICON atmosphere
+    #                  velocity_tendencies) through the FULL parallelization pipeline,
     #                  each numerically compared against the untouched
     #                  gfortran/f2py reference.  Slow: an SDFG optimize plus an
     #                  -O3 -march=native build per kernel, so it is kept off the
@@ -296,7 +296,7 @@ jobs:
           -p no:cacheprovider --tb=short tests/ || [ $? -eq 5 ]
 
     # ----- e2e runner: production kernels through the full parallelization pipeline -----
-    - name: Run e2e pipeline tests (CloudSC + QE vexx + ICON ocean velocity)
+    - name: Run e2e pipeline tests (CloudSC + QE vexx + ICON atmosphere velocity_tendencies)
       if: ${{ matrix.suite == 'e2e' }}
       run: |
         # Each test builds a production kernel's SDFG, runs the whole pipeline
