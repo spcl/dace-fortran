@@ -3,7 +3,7 @@
 Pipeline: merge_used_modules -> inline_to_single_tu(expand_cpp, tolerate_external_uses, monomorphize) -> gfortran -fsyntax-only.
 Runs as a memory-capped subprocess (fparser on the ~140k-line merged closure can OOM the host).  Prints RESULT/TU_PATH/TU_LINES on success.
 
-Usage: _extract_single_tu.py <source_relpath> <module::entry> <out_dir> [mem_gb]
+Usage: _extract_single_tu.py <source_relpath> <module::entry> <out_dir> [mem_gb] [halo_mode] [loop_exchange]
 """
 import os
 import re
@@ -20,6 +20,9 @@ def main(argv):
     source_relpath, entry, out_dir = argv[1], argv[2], Path(argv[3])
     mem_gb = float(argv[4]) if len(argv) > 4 else 12.0
     halo_mode = argv[5] if len(argv) > 5 else "inlined"
+    # "0" drops __LOOP_EXCHANGE -- a DIFFERENT kernel, not a reordering: it swaps the automatic
+    # transients between (nlev, nproma, nblks) and (nproma, nlev, nblks).
+    loop_exchange = argv[6] != "0" if len(argv) > 6 else True
     hard = resource.getrlimit(resource.RLIMIT_AS)[1]
     cap = int(mem_gb * 1024**3)
     if hard != resource.RLIM_INFINITY:
@@ -32,7 +35,7 @@ def main(argv):
     from dace_fortran import inline_to_single_tu
     from dace_fortran.preprocess import merge_used_modules
 
-    cfg = atmo_config(halo_mode, entry)
+    cfg = atmo_config(halo_mode, entry, loop_exchange=loop_exchange)
 
     def log(m):
         print(f"[{time.strftime('%H:%M:%S')}] {m}", flush=True)

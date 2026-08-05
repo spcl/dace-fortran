@@ -52,6 +52,14 @@ def atmo_search_dirs() -> list:
 #: compiled out; ``HAVE_YAXT`` NOT defined so cpp strips ``t_comm_pattern_yaxt``,
 #: leaving a single concrete comm-pattern arm.  Same set as
 #: ``tests/icon/full/test_dycore_from_icon_source``.
+#:
+#: ⛔ ``__LOOP_EXCHANGE`` is a per-variant KNOB, not a fixed define -- drop it with
+#: ``atmo_config(..., loop_exchange=False)``.  It does NOT merely reorder loops: it swaps the
+#: DATA LAYOUT of the kernel's automatic transients.  ``mo_velocity_advection`` declares
+#: ``z_v_grad_w`` / ``z_w_v`` / ``zeta`` / ``z_ekinh`` as ``(nlev, nproma, nblks)`` with it and
+#: ``(nproma, nlev, nblks)`` without, so the two variants are different kernels that must each be
+#: validated against their OWN gfortran reference.  The dummy arguments are assumed-shape and
+#: layout-invariant, so the binding ABI and the fixture's generated data are the same either way.
 ATMO_DEFINES = [
     "HAVE_CDI_GRIB2",
     "HAVE_FC_ATTRIBUTE_CONTIGUOUS",
@@ -162,8 +170,10 @@ ATMO_SOLVE_NH_UNION_COMPONENTS = {
     ],
 }
 
+LOOP_EXCHANGE_DEFINE = "__LOOP_EXCHANGE"
 
-def atmo_config(halo_mode: str, entry: str = "") -> dict:
+
+def atmo_config(halo_mode: str, entry: str = "", loop_exchange: bool = True) -> dict:
     """Full atmosphere extraction config for ``halo_mode`` (see :mod:`icon._halo_modes`):
     non-halo base externals merged with the mode-specific halo pieces.
 
@@ -181,7 +191,9 @@ def atmo_config(halo_mode: str, entry: str = "") -> dict:
         rename_specifics=h["rename_specifics"],
         make_return_false=ATMO_BASE_RETURN_FALSE + h["return_false"],
         do_not_emit=ATMO_DO_NOT_EMIT,
-        defines=ATMO_DEFINES,
+        # Filter rather than append, so the loop_exchange=True list stays byte-identical to what
+        # the committed TUs were extracted with (the drift guard compares bytes).
+        defines=(ATMO_DEFINES if loop_exchange else [d for d in ATMO_DEFINES if d != LOOP_EXCHANGE_DEFINE]),
         extra_sources=h["extra_sources"],
         specialize_at_source=h["specialize_at_source"],
         keep_type_components=keep,
@@ -213,7 +225,8 @@ def extract_single_tu(source_relpath: str,
                       entry: str,
                       out_dir: Path,
                       halo_mode: str = "inlined",
-                      mem_gb: float = 12.0) -> dict:
+                      mem_gb: float = 12.0,
+                      loop_exchange: bool = True) -> dict:
     """Extract one atmosphere kernel into a single, gfortran-compiling ``.f90`` in a
     memory-capped subprocess (fparser parse peaks near 9 GB).  Returns a dict with
     ``passed``/``tu_path``/``tu_lines``/``output``.
@@ -232,15 +245,16 @@ def extract_single_tu(source_relpath: str,
     env["TMPDIR"] = str(out_dir)
     env.setdefault("UCX_VFS_ENABLE", "n")
     env["PYTHONHASHSEED"] = "0"
-    proc = subprocess.run(
-        [sys.executable,
-         str(_EXTRACT_SCRIPT), source_relpath, entry,
-         str(out_dir),
-         str(mem_gb), halo_mode],
-        capture_output=True,
-        text=True,
-        env=env,
-        cwd=str(out_dir))
+    proc = subprocess.run([
+        sys.executable,
+        str(_EXTRACT_SCRIPT), source_relpath, entry,
+        str(out_dir),
+        str(mem_gb), halo_mode, "1" if loop_exchange else "0"
+    ],
+                          capture_output=True,
+                          text=True,
+                          env=env,
+                          cwd=str(out_dir))
     tu_path, tu_lines = None, None
     for line in proc.stdout.splitlines():
         if line.startswith("TU_PATH:"):
