@@ -86,6 +86,11 @@ dace_fortran = [
     "bridge/**/*.h",
     "passes/**/*.cpp",
     "passes/**/*.h",
+    # Library runtime sources: CMake compiles these into every SDFG that uses the library, so an
+    # install that drops them fails the build rather than the import.
+    "libraries/**/*.f90",
+    "libraries/**/*.h",
+    "libraries/**/*.cmake",
 ]
 
 [tool.pytest.ini_options]
@@ -94,8 +99,9 @@ markers = [
     "sequential: Test must be run sequentially (select with '-m \"sequential\"')",
     "mpi: Multi-rank MPI test; excluded from the normal sweep, run under mpirun (select with '-m \"mpi\"')",
     "integration: ICON orig-vs-binding bit-exact integration test (per-call duplicate-data, VERY SHORT run); runs only on the CI 'integration' runner and is excluded from fast/heavy (select with '-m \"integration\"')",
-    "e2e: Production kernel through the full parallelization pipeline, numerically checked against the untouched gfortran/f2py reference (CloudSC, QE vexx, ICON ocean velocity). Slow (SDFG optimize + -O3 -march=native build); runs only on the CI 'e2e' runner (select with '-m \"e2e\"')",
+    "e2e: Production kernel through the full parallelization pipeline, numerically checked against the untouched gfortran/f2py reference (CloudSC, QE vexx, ICON atmosphere velocity_tendencies). Slow (SDFG optimize + -O3 -march=native build); runs only on the CI 'e2e' runner (select with '-m \"e2e\"')",
     "xdist_group: pytest-xdist load-group marker (ICON-build tests share one worker via --dist loadgroup)",
+    "fftw: Needs libfftw3 to link the FFT library node's expansion (CI installs libfftw3-dev; select with '-m \"fftw\"')",
 ]
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]

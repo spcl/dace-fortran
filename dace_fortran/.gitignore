@@ -1,5 +1,8 @@
 *.sdfg
 *.f90
+# ...but the library runtime sources are shipped package data, not build scratch: CMake compiles
+# them into every SDFG that uses the library, so an untracked one fails the build on a fresh clone.
+!libraries/**/*.f90
 *.fir
 *.hlfir
 *.so
