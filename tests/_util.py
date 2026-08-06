@@ -21,8 +21,13 @@ _HLFIR_DIR = _REPO_ROOT / "dace" / "frontend" / "hlfir"
 # default moves. It carried -ffast-math until dace #2453 replaced it with the individual
 # -fno-signed-zeros -freciprocal-math pair, at which point a `.replace("-ffast-math", "")` became a
 # no-op and let -freciprocal-math (a/b -> a*(1/b), 1 ulp) through into a bit-exact comparison.
+# ``--param ggc-*`` bound the COMPILER's peak memory, not the generated code: they make GCC's
+# garbage collector run far more often, trading compile time for resident set. Neither affects
+# codegen, so bit-exactness is untouched. Needed because the pipeline lanes hand gcc one ~25k-line
+# translation unit, whose peak at -O3 outgrows this box and takes the whole session down with it.
 BITEXACT_CPU_ARGS = ('-fPIC -O3 -march=native -fno-fast-math -ffp-contract=off -fno-math-errno '
-                     '-fno-trapping-math -Wno-unused-parameter -Wno-unused-label')
+                     '-fno-trapping-math -Wno-unused-parameter -Wno-unused-label '
+                     '--param ggc-min-expand=10 --param ggc-min-heapsize=32768')
 
 # when set, build_sdfg(...).build() dumps its SDFG here; "1"/"true"/"yes" means _DEFAULT_DUMP_DIR.
 _DUMP_ENV = "__DACE_HLFIR_GEN_TEST_SDFGS"
