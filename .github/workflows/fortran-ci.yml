@@ -139,10 +139,27 @@ jobs:
         # pass -ffree-line-length-none (FLANG_PORTABLE_FFLAGS) so the
         # long generated signatures compile on any gfortran.
 
+    - name: Install Python dependencies
+      run: |
+        rm -f ~/.dace.conf
+        rm -rf .dacecache tests/.dacecache
+        python -m pip install --upgrade pip
+        # nanobind is a CMake-configure-time requirement of the bridge;
+        # meson is the f2py backend on Python >=3.12 (numerical refs) AND
+        # the build backend for the icon-model meson configure path.
+        pip install nanobind numpy meson ninja
+        pip install -e ".[testing]" pytest-xdist coverage
+        # mpi4py (built against the openmpi installed above) drives the
+        # multi-rank MPI Send/Recv e2e via dace.sdfg.utils.distributed_compile.
+        MPICC=mpicc pip install mpi4py
+
     - name: Verify toolchain is complete (fail fast on a missing dependency)
       run: |
         # ``flang-new-21`` is on PATH only in steps AFTER the one that appended
         # /usr/lib/llvm-21/bin to $GITHUB_PATH, so this must be its own step.
+        # This step runs AFTER ``Install Python dependencies``: ``meson`` and
+        # ``numpy.f2py`` are pip-provided, so asserting them before the pip
+        # install fails on a healthy runner (observed: both MISS, lane red).
         # Asserting every required tool up front turns a silently-skipped test
         # (e.g. "needs flang-new-21 + OpenMPI") into a loud, fail-fast setup
         # error -- so a provisioning regression can never masquerade as a green
@@ -175,20 +192,6 @@ jobs:
           || { echo '  MISS  numpy.f2py (importable)'; missing=1; }
         [ "$missing" = 0 ] || { echo 'Toolchain incomplete -- see MISS lines above'; exit 1; }
 
-    - name: Install Python dependencies
-      run: |
-        rm -f ~/.dace.conf
-        rm -rf .dacecache tests/.dacecache
-        python -m pip install --upgrade pip
-        # nanobind is a CMake-configure-time requirement of the bridge;
-        # meson is the f2py backend on Python >=3.12 (numerical refs) AND
-        # the build backend for the icon-model meson configure path.
-        pip install nanobind numpy meson ninja
-        pip install -e ".[testing]" pytest-xdist coverage
-        # mpi4py (built against the openmpi installed above) drives the
-        # multi-rank MPI Send/Recv e2e via dace.sdfg.utils.distributed_compile.
-        MPICC=mpicc pip install mpi4py
-
     - name: Build HLFIR bridge
       run: |
         # First access of a builder-backed symbol triggers the CMake build.
@@ -207,7 +210,7 @@ jobs:
         # they never leak into the quick PR sweep).  ``--dist loadgroup``
         # honours the ``xdist_group`` markers so grouped tests share one worker.
         pytest -n auto --dist loadgroup -m "not mpi and not long and not integration and not e2e" \
-          --cov-report=xml --cov=dace_fortran --tb=short tests/
+          --maxfail=20 --cov-report=xml --cov=dace_fortran --tb=short tests/
         coverage report || true
         coverage xml || true
         reachable=0
@@ -263,7 +266,7 @@ jobs:
         # one-at-a-time, each in its own memory-capped subprocess), so at most
         # one of each runs concurrently.
         pytest -n auto --dist loadgroup -m "long and not mpi and not integration and not e2e" \
-          -p no:cacheprovider --tb=short tests/
+          --maxfail=20 -p no:cacheprovider --tb=short tests/
 
     # ----- integration runner: multi-rank mpi tests + short ICON integration tests -----
     - name: Run multi-rank MPI tests under mpirun (integration only)
@@ -280,7 +283,7 @@ jobs:
         # HERE under mpirun.  Anti-hang MPI transport env (OMPI_MCA_pml/btl,
         # UCX_VFS_ENABLE, HWLOC_COMPONENTS) is set at the job level above.
         mpirun --oversubscribe -n 4 python -m pytest -m mpi \
-          -p no:cacheprovider --tb=short tests/
+          --maxfail=20 -p no:cacheprovider --tb=short tests/
 
     - name: Run short ICON integration tests (integration only)
       if: ${{ matrix.suite == 'integration' }}
@@ -299,7 +302,7 @@ jobs:
         # an empty integration set never reds the lane -- a guard against a
         # future removal of every integration test silently re-breaking CI.
         python -m pytest -m "integration and not mpi" \
-          -p no:cacheprovider --tb=short tests/ || [ $? -eq 5 ]
+          --maxfail=20 -p no:cacheprovider --tb=short tests/ || [ $? -eq 5 ]
 
     # ----- e2e runner: production kernels through the full parallelization pipeline -----
     - name: Run e2e pipeline tests (CloudSC + QE vexx + ICON atmosphere velocity_tendencies)
@@ -315,4 +318,4 @@ jobs:
         # 25k-line translation unit peaks around 12 GB of compiler memory, and
         # concurrent workers would each carry their own peak and OOM the runner.
         python -m pytest -m e2e \
-          -p no:cacheprovider --tb=short tests/
+          --maxfail=20 -p no:cacheprovider --tb=short tests/
