@@ -56,6 +56,14 @@ Config.set("compiler",
 _worker = os.environ.get("PYTEST_XDIST_WORKER")
 if _worker:
     from dace.config import Config
+
+    # A DACE_* env var OUTRANKS Config.set, so a caller isolating the build tree with
+    # DACE_default_build_folder=<dir> silently collapses every worker onto one folder and the
+    # workers race each other's links (`collect2: ld returned 1`, "Could not load library"). Suffix
+    # the env var itself so both the caller's isolation and the per-worker split survive.
+    _base = os.environ.get("DACE_default_build_folder")
+    if _base:
+        os.environ["DACE_default_build_folder"] = f"{_base}_{_worker}"
     Config.set("default_build_folder", value=f".dacecache_{_worker}")
 else:
     # Master-only: force the hlfir_bridge .so build/staleness-check here, single-threaded,
