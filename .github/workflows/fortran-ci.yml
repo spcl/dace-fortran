@@ -153,7 +153,10 @@ jobs:
         # cppcheck/clang-tidy back the generated-C++ static analysis; the checker raises rather than
         # degrading to "found nothing" when a tool is absent, so a provisioning regression reds the
         # lane instead of silently disabling the analysis.
-        for t in flang-new-21 clang-21 gfortran gcc g++ make cmake ninja \
+        # ``meson`` backs numpy.f2py on Python>=3.12, and f2py builds the CloudSC REFERENCE. Absent,
+        # ``_util.f2py_compile`` skips, the whole CloudSC e2e data point disappears and the lane
+        # still reports GREEN -- precisely the failure this step exists to prevent.
+        for t in flang-new-21 clang-21 gfortran gcc g++ make cmake ninja meson \
                  mpicc mpicxx mpifort mpif90 perl python3 \
                  bear autoconf automake aclocal m4 rsync pkg-config \
                  cppcheck clang-tidy; do
@@ -167,6 +170,9 @@ jobs:
         # (find_openmpi_include probes for mpif-config.h).
         test -f /usr/lib/x86_64-linux-gnu/openmpi/include/mpif-config.h \
           || { echo '  MISS  openmpi mpif-config.h'; missing=1; }
+        # Same reason as meson: an unimportable numpy.f2py silently removes the CloudSC reference.
+        python3 -c 'import numpy.f2py' 2>/dev/null \
+          || { echo '  MISS  numpy.f2py (importable)'; missing=1; }
         [ "$missing" = 0 ] || { echo 'Toolchain incomplete -- see MISS lines above'; exit 1; }
 
     - name: Install Python dependencies
