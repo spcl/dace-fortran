@@ -5,3 +5,5 @@ include dace_fortran/CMakeLists.txt
 include dace_fortran/build_bridge.py
 recursive-include dace_fortran/bridge *.cpp *.h
 recursive-include dace_fortran/passes *.cpp *.h
+recursive-include dace_fortran/bindings/templates *.f90.in
+recursive-include dace_fortran/libraries *.f90 *.h *.cmake

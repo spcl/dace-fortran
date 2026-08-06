@@ -91,6 +91,9 @@ dace_fortran = [
     "libraries/**/*.f90",
     "libraries/**/*.h",
     "libraries/**/*.cmake",
+    # Binding templates: block_builders.py read_text()s these at runtime; CI never notices a gap
+    # here because it installs -e.
+    "bindings/templates/*.f90.in",
 ]
 
 [tool.pytest.ini_options]
