@@ -209,14 +209,23 @@ KERNELS = [
     ("velocity_advection", "atm_dyn_iconam/mo_velocity_advection.f90", "mo_velocity_advection::velocity_tendencies", 0),
 ]
 
-#: Checked-in single-TU artifacts: ``(key, halo_mode, filename, module::procedure)``.
-#: ``velocity_advection`` extracted in ``inlined`` mode only (callback-inner shape).
+#: Checked-in single-TU artifacts: ``(key, halo_mode, filename, module::procedure, loop_exchange)``.
+#: ``velocity_advection`` extracted in ``inlined`` mode only (callback-inner shape), but in BOTH
+#: ``__LOOP_EXCHANGE`` variants: the define swaps the automatic transients' DATA LAYOUT, so the two
+#: are different kernels and each needs its own committed TU (see :data:`ATMO_DEFINES`).
 SINGLE_TU_ARTIFACTS = [
-    ("solve_nonhydro", "inlined", "solve_nonhydro_inlined_single_tu.f90", "mo_solve_nonhydro::solve_nh"),
-    ("solve_nonhydro", "external", "solve_nonhydro_external_single_tu.f90", "mo_solve_nonhydro::solve_nh"),
+    ("solve_nonhydro", "inlined", "solve_nonhydro_inlined_single_tu.f90", "mo_solve_nonhydro::solve_nh", True),
+    ("solve_nonhydro", "external", "solve_nonhydro_external_single_tu.f90", "mo_solve_nonhydro::solve_nh", True),
     ("velocity_advection", "inlined", "velocity_advection_inlined_single_tu.f90",
-     "mo_velocity_advection::velocity_tendencies"),
+     "mo_velocity_advection::velocity_tendencies", True),
+    ("velocity_advection", "inlined", "velocity_advection_inlined_no_loop_exchange_single_tu.f90",
+     "mo_velocity_advection::velocity_tendencies", False),
 ]
+
+#: ``(filename, loop_exchange)`` for the velocity kernel only.  Derived from
+#: :data:`SINGLE_TU_ARTIFACTS` so a new variant lands in the numerical tests by editing one table.
+VELOCITY_TU_VARIANTS = [(filename, loop_exchange) for key, _, filename, _, loop_exchange in SINGLE_TU_ARTIFACTS
+                        if key == "velocity_advection"]
 
 _EXTRACT_SCRIPT = _HERE / "_extract_single_tu.py"
 

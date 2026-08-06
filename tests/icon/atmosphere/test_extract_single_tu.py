@@ -31,8 +31,9 @@ from icon.atmosphere._atmo_harness import (HAVE_FLANG, HAVE_OPENMPI, KERNELS, SI
 _HERE = Path(__file__).resolve().parent
 _SOURCE = {k[0]: k[1] for k in KERNELS}
 
-#: One case per ``(key, halo_mode, filename, entry)`` -- the solver in BOTH halo
-#: modes (inlined = MPI-only, external = halo black-boxed / callback boundary).
+#: One case per ``(key, halo_mode, filename, entry, loop_exchange)`` -- the solver in BOTH halo
+#: modes (inlined = MPI-only, external = halo black-boxed / callback boundary), and the velocity
+#: kernel in both ``__LOOP_EXCHANGE`` variants.
 _CASES = SINGLE_TU_ARTIFACTS
 
 pytestmark = [
@@ -45,12 +46,15 @@ pytestmark = [
 
 
 @pytest.mark.xdist_group("atmo_fparser")
-@pytest.mark.parametrize("key,halo_mode,filename,entry", _CASES, ids=[f"{c[0]}-{c[1]}" for c in _CASES])
-def test_extract_compiles_and_matches_committed(tmp_path, key, halo_mode, filename, entry):
-    """Extract ``solve_nonhydro`` in one halo mode into a compiling single TU and
-    check it against the committed artifact -- both the inlined (MPI-only) and
-    external (callback boundary) halo modes must always be correct."""
-    res = extract_single_tu(_SOURCE[key], entry, tmp_path / f"{key}_{halo_mode}", halo_mode=halo_mode)
+@pytest.mark.parametrize("key,halo_mode,filename,entry,loop_exchange",
+                         _CASES,
+                         ids=[f"{c[0]}-{c[1]}-{'loopexch' if c[4] else 'noloopexch'}" for c in _CASES])
+def test_extract_compiles_and_matches_committed(tmp_path, key, halo_mode, filename, entry, loop_exchange):
+    """Extract one kernel, in one halo mode and one ``__LOOP_EXCHANGE`` variant, into a compiling
+    single TU and check it against the committed artifact -- both halo modes (inlined = MPI-only,
+    external = callback boundary) and both layout variants must always be correct."""
+    variant = f"{key}_{halo_mode}_{'le' if loop_exchange else 'nole'}"
+    res = extract_single_tu(_SOURCE[key], entry, tmp_path / variant, halo_mode=halo_mode, loop_exchange=loop_exchange)
     assert res["passed"], \
         f"{key}[{halo_mode}]: extraction did not produce a compiling single TU.\n{res['output'][-4000:]}"
     # the ~140k-line closure must prune to the kernel by orders of magnitude.

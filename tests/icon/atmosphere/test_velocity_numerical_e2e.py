@@ -35,6 +35,7 @@ import shutil
 import pytest
 
 from _util import have_flang
+from icon.atmosphere._atmo_harness import VELOCITY_TU_VARIANTS
 from icon.ocean._ocean_e2e import run_kernel_e2e
 
 _HERE = __import__("pathlib").Path(__file__).resolve().parent
@@ -46,11 +47,19 @@ pytestmark = [
 
 
 @pytest.mark.xdist_group("atmo_velocity_fparser")
-def test_velocity_tendencies_numerical_e2e():
+@pytest.mark.parametrize("tu_name,loop_exchange",
+                         VELOCITY_TU_VARIANTS,
+                         ids=[("loopexch" if le else "noloopexch") for _, le in VELOCITY_TU_VARIANTS])
+def test_velocity_tendencies_numerical_e2e(tu_name, loop_exchange):
     """SDFG binding output == original-kernel reference, bit-exact, on a single
-    in-domain block with a real vertical column."""
+    in-domain block with a real vertical column.
+
+    Run for both ``__LOOP_EXCHANGE`` variants: the define swaps the automatic transients from
+    ``(nlev, nproma, nblks)`` to ``(nproma, nlev, nblks)``, so the two are different kernels and a
+    layout bug shows up in only one of them.  The fixture is deliberately non-square
+    (``nlev=7`` vs ``nproma=8``) so a transposed access runs out of bounds instead of aliasing."""
     res = run_kernel_e2e(
-        _HERE / "velocity_advection_inlined_single_tu.f90",
+        _HERE / tu_name,
         "mo_velocity_advection::velocity_tendencies",
         int_fill=1,  # one in-domain block; every connectivity index -> element 1
         # nflatlev is a DO lower bound; BSS 0 would start jk at 0 -> OOB.
