@@ -20,7 +20,7 @@ NGPTOT="${CLOUDSC_NGPTOT:-65536}"
 REPS="${REPS:-50}"
 WARMUP="${WARMUP:-2}"
 CSV="${CSV:-cloudsc_baselines_${SLURM_JOB_ID:-local}.csv}"
-BASELINE_LANES="${BASELINE_LANES:-gfortran-serial gfortran-autopar original-openmp flang-serial}"
+BASELINE_LANES="${BASELINE_LANES:-gfortran-serial gfortran-autopar original-openmp openacc-cpu flang-serial}"
 CSV_HEADER="kernel,mode,klon,nblocks,threads,rep,ms,inputs,lane"
 # mode:NPROMA pairs mirror run_cloudsc_perf.py MODE_DEFAULTS (same NGPTOT split, comparable rows).
 MODES="klon:65536 nblks:32"
@@ -47,10 +47,16 @@ ln -sf "$HERE/data/reference.h5" "$RUNDIR/reference.h5"
 # excluded; only HAVE_HDF5 is defined.
 COMMON_SRCS="parkind1 yomphyder abor1 hdf5_file_mod file_io_mod yomcst yoethf yoecldp yoephli
              cloudsc_mpi_mod timer_mod expand_mod validate_mod cloudsc_global_state_mod"
+FORTRAN_DIR="$DWARF/cloudsc_fortran"
 FORTRAN_SRCS="cloudsc cloudsc_driver_mod dwarf_cloudsc"
+# openacc-cpu builds the same scc target as the gpu openacc lane (gpu_baselines.sh):
+# dwarf-cloudsc-gpu-scc of cloudsc_gpu/CMakeLists.txt, -DCLOUDSC_GPU_SCC selects it.
+ACC_SCC_DIR="$DWARF/cloudsc_gpu"
+ACC_SCC_SRCS="cloudsc_gpu_scc_mod cloudsc_driver_gpu_scc_mod dwarf_cloudsc_gpu"
 
 # build_dwarf <dir> <fc> <link_libs> <flags...>: mycpu.c shim stands in for upstream
-# common/module/mycpu.c, which is not vendored (only the .cu twin is).
+# common/module/mycpu.c, which is not vendored (only the .cu twin is).  FORTRAN_DIR/FORTRAN_SRCS
+# select the driver set (cloudsc_fortran by default, cloudsc_gpu for the acc lane).
 build_dwarf() (
     local dir="$1" fc="$2" libs="$3" f objs="mycpu.o"
     shift 3
@@ -62,7 +68,7 @@ build_dwarf() (
         objs="$objs $f.o"
     done
     for f in $FORTRAN_SRCS; do
-        "$fc" "$@" -DHAVE_HDF5 -I"$DWARF/common/include" -c "$DWARF/cloudsc_fortran/$f.F90" -o "$f.o"
+        "$fc" "$@" -DHAVE_HDF5 -I"$DWARF/common/include" -c "$FORTRAN_DIR/$f.F90" -o "$f.o"
         objs="$objs $f.o"
     done
     # shellcheck disable=SC2086
@@ -127,6 +133,18 @@ flang_hdf5() {
     FLANG_HDF5_LIBS="${lib:+-L$lib }-lhdf5_fortran -lhdf5"
 }
 
+# Same gate as the gpu openacc lane (gpu_baselines.sh): nvfortran cannot read a gfortran-built
+# hdf5.mod, so this lane needs an nvfortran-built HDF5 prefix; the probe compile decides.
+nvfortran_hdf5() {
+    local inc
+    [ -n "${HDF5_NVFORTRAN_ROOT:-}" ] || return 1
+    inc="$HDF5_NVFORTRAN_ROOT/include"
+    printf 'program p\nuse hdf5\nend program p\n' > "$BUILD_ROOT/h5probe.f90"
+    "$NVFORTRAN" -c -I"$inc" "$BUILD_ROOT/h5probe.f90" -o "$BUILD_ROOT/h5probe.o" 2>/dev/null || return 1
+    NVF_HDF5_FLAGS="-I$inc"
+    NVF_HDF5_LIBS="-L$HDF5_NVFORTRAN_ROOT/lib -lhdf5_fortran -lhdf5"
+}
+
 emit_header
 for lane in $BASELINE_LANES; do
     case "$lane" in
@@ -163,6 +181,30 @@ for lane in $BASELINE_LANES; do
                 run_lane "$BUILD_ROOT/$lane/dwarf-cloudsc" "$lane" "$t" "$t"
             done
             unset OMP_SCHEDULE
+            ;;
+        openacc-cpu)
+            if [ "$HAVE_NVFORTRAN" != 1 ]; then
+                echo "SKIP $lane: no nvfortran on PATH" >&2
+                continue
+            fi
+            if ! nvfortran_hdf5; then
+                echo "SKIP $lane: no nvfortran-compatible HDF5 Fortran (set HDF5_NVFORTRAN_ROOT)" >&2
+                continue
+            fi
+            # one build: -acc=multicore takes its core count at runtime (ACC_NUM_CORES)
+            FORTRAN_DIR="$ACC_SCC_DIR" FORTRAN_SRCS="$ACC_SCC_SRCS" \
+                build_dwarf "$BUILD_ROOT/$lane" "$NVFORTRAN" "$NVF_HDF5_LIBS" \
+                -O3 -acc=multicore -DCLOUDSC_GPU_SCC "$NVF_HDF5_FLAGS"
+            for t in $THREADS; do
+                if [ "$t" -gt "$TOPO_NCORES" ]; then
+                    echo "skip threads=$t (> $TOPO_NCORES physical cores)"
+                    continue
+                fi
+                set_omp_env "$t"
+                export ACC_NUM_CORES="$t"
+                run_lane "$BUILD_ROOT/$lane/dwarf-cloudsc" "$lane" "$t" 1
+            done
+            unset ACC_NUM_CORES
             ;;
         flang-serial)
             # flang has no -ftree-parallelize-loops equivalent, so serial is the only flang lane

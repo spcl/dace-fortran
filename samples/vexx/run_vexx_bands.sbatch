@@ -17,7 +17,8 @@ MODE=bands
 REPO="${DACE_FORTRAN_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 source "$REPO/samples/common.sh"
 # LANES: space list from {dace-gcc,dace-llvm} (cloudsc sbatch convention; no Fortran baseline
-# lanes here -- no standalone driver exists for this kernel outside the harness).
+# lanes here -- no standalone driver exists for this kernel outside the harness).  Any other
+# token is skipped, so a global LANES carrying cloudsc-only lanes still runs this job.
 LANES="${LANES:-dace-gcc}"
 BUILD_ROOT_BASE="${BUILD_ROOT:-$HOME/.cache/dace-fortran-samples}"
 
@@ -36,8 +37,8 @@ for lane in $LANES; do
     case "$lane" in
         dace-gcc | dace-llvm) ;;
         *)
-            echo "unknown lane: $lane" >&2
-            exit 1
+            echo "SKIP unknown lane: $lane" >&2
+            continue
             ;;
     esac
     backend="${lane#dace-}"

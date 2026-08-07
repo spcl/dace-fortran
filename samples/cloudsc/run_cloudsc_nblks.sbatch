@@ -72,8 +72,8 @@ for lane in $LANES; do
                 bash "$REPO/samples/cloudsc/gpu_baselines.sh"
             ;;
         *)
-            echo "unknown lane: $lane" >&2
-            exit 1
+            echo "SKIP unknown lane: $lane" >&2
+            continue
             ;;
     esac
 done
