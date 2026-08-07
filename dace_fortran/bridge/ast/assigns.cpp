@@ -75,6 +75,12 @@ std::string buildIndexExpr(mlir::Value v, int d) {
   if (def->getName().getStringRef() == "hlfir.no_reassoc" && def->getNumOperands() == 1)
     return buildIndexExpr(def->getOperand(0), d + 1);
 
+  // ``fir.unboxchar`` length result (``len(what) - 1`` LEN_TRIM scan bound): character-domain bookkeeping the
+  // numerical-equivalence contract does not model (hlfir-strip-character-runtime) -- benign constant, mirrors the
+  // buildExpr handler.
+  if (auto uc = mlir::dyn_cast<fir::UnboxCharOp>(def))
+    if (mlir::cast<mlir::OpResult>(v).getResultNumber() == 1) return "1";
+
   // ``hlfir.apply %elem, %i`` used as a designate index (e.g. the
   // gather elemental ``cols(arg2)`` produced for noncontiguous slice
   // arguments).  Inline the referenced elemental's body and recurse

@@ -487,7 +487,13 @@ std::string buildExpr(mlir::Value val, int d) {
     if (it != kScfValueMap.end()) return it->second;
   }
   auto* def = val.getDefiningOp();
-  if (!def) return "?";
+  if (!def) {
+    // Block args (fir.iterate_while induction, elemental iters): resolve via
+    // the indexStack like buildIndexExpr does -- the iterate_while carried
+    // update reads the induction var directly (QE xclib_dft_is LEN_TRIM scan).
+    auto r = resolveIndex(val);
+    return r.empty() ? "?" : r;
+  }
   // Op already found unrenderable on an earlier visit -> "?" without re-walking its regions. On a deeply-inlined body a
   // single value-merge feeds many consumers; without this each re-visit re-descends the whole subtree (the get_ast
   // hot-spot on QE h_psi's EXX tail).
@@ -651,10 +657,18 @@ std::string buildExpr(mlir::Value val, int d) {
   }
 
   // ``fir.unboxchar`` extracts ``(char_ptr, length)`` from a
-  // CHARACTER descriptor.  The char-data half (operand 0) is what
-  // an expression context wants; the length is a separate use that
-  // the bridge tracks via the box itself.
-  if (auto uc = mlir::dyn_cast<fir::UnboxCharOp>(def)) return buildExpr(uc.getOperand(), d + 1);
+  // CHARACTER descriptor.  The char-data half (result #0) is what
+  // an expression context wants.  The length half (result #1) is
+  // character-domain bookkeeping the bridge's numerical-equivalence
+  // contract explicitly does not model (see
+  // hlfir-strip-character-runtime): after that pass folds the string
+  // compares, the length only feeds residual character scaffolding
+  // (LEN_TRIM's fir.iterate_while bounds in QE's xclib_dft_is).
+  // Render it as benign constant 1 so the scaffolding still builds.
+  if (auto uc = mlir::dyn_cast<fir::UnboxCharOp>(def)) {
+    if (mlir::cast<mlir::OpResult>(val).getResultNumber() == 1) return "1";
+    return buildExpr(uc.getOperand(), d + 1);
+  }
 
   // ``hlfir.concat`` is the Fortran ``//`` string concatenation
   // operator.  Map to Python ``+`` so the tasklet body uses the
@@ -1952,6 +1966,13 @@ std::string buildExpr(mlir::Value val, int d) {
                " else " + expr + ")";
       return expr;
     }
+    // Side-effecting regions: refuse to inline (the stores must run as statements), but register the result's
+    // __sc_<id> synth name LAZILY via the same scfSynthName memo buildIndexSwitchNodes' appendResultAssigns uses, so
+    // the read resolves and the later statement walk emits the matching assignment. extractAST asserts every
+    // lazily-registered switch is in fact statement-walked (kPendingSwitchResults drains) -- a switch that is never
+    // walked would otherwise leave the read synth unassigned (silent garbage).
+    kPendingSwitchResults.insert(sw.getOperation());
+    return scfSynthName(val);
   }
 
   // ``hlfir.all`` / ``hlfir.any`` -- whole-array boolean reductions.

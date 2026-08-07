@@ -162,8 +162,31 @@ std::string resolveExtent(mlir::Value shape, unsigned d) {
   } else {
     return "?";
   }
+  // Extent read from an array ELEMENT (``nh(nt)``): traceToDecl names the base array and would silently drop the
+  // subscript (a bare ``nh`` shape then collides with the array descriptor in declare_synth_array -- the QE h_psi
+  // fatal). Only accept the bare name for genuine scalars; element loads fall through to buildIndexExpr, which renders
+  // the full subscript (``nh[nt]``) for the caller's loop bound / accumulate fallback. Detection walks the whole def
+  // chain (Flang wraps the element load in arith add/sub/maxsi extent arithmetic), but does NOT recurse into a plain
+  // scalar load's stored-value history -- ``m = e(ia) - s(ia) + 1; SUM(a(1:m))`` must keep the bare ``m``.
   auto n = traceToDecl(ext);
-  if (!n.empty()) return n;
+  if (!n.empty()) {
+    std::function<bool(mlir::Value, int)> isElemLoad = [&](mlir::Value v, int depth) -> bool {
+      if (!v || depth > 8) return false;
+      auto* d = v.getDefiningOp();
+      if (!d) return false;
+      if (mlir::isa<hlfir::DesignateOp, fir::CoordinateOp>(d)) return true;
+      if (auto ld = mlir::dyn_cast<fir::LoadOp>(d)) {
+        // A scalar load (memref = the scalar's own declare) is a genuine scalar -- stop there.
+        auto* md = ld.getMemref().getDefiningOp();
+        if (md && mlir::isa<hlfir::DesignateOp, fir::CoordinateOp>(md)) return true;
+        return false;
+      }
+      for (auto opnd : d->getOperands())
+        if (isElemLoad(opnd, depth + 1)) return true;
+      return false;
+    };
+    if (!isElemLoad(ext, 0)) return n;
+  }
   if (auto c = traceConstInt(ext)) return std::to_string(*c);
   // Flang lowers a section's extent as ``select(sgt(hi-lo+1,0), hi-lo+1, 0)``; peel the clamp to recover the closed
   // form ``(hi - lo + 1)``.
@@ -790,10 +813,117 @@ std::vector<ASTNode> buildElementalCountLibcall(hlfir::AssignOp assign, hlfir::E
   return nodes;
 }
 
+/// Explicit scalar-accumulate lowering for a reduction whose elemental source has a DATA-DEPENDENT extent (e.g. QE
+/// h_psi's ``SUM(deeq(ih, 1:nh(nt), ia) * v(1:nh(nt)))``): a mask transient can't be declared (its shape would read
+/// an array element) and DaCe's Reduce is whole-array only. Emits ``tgt = identity; do ei<d> = 1, ext: tgt = tgt <op>
+/// body`` mirroring buildSectionReduceAssign's section-reduce shape; the data-dependent loop bound (``nh[nt]``) rides
+/// emit_loop's bound-hoist machinery. Scalar LHS only -- an element-designate target stays on the reduce path.
+static std::vector<ASTNode> buildElementalAccumulateReduce(hlfir::AssignOp assign, hlfir::ElementalOp elem,
+                                                           std::string_view pyOp, std::string_view identity) {
+  auto& region = elem.getRegion();
+  if (region.empty()) return {};
+  auto& block = region.front();
+  unsigned const rank = block.getNumArguments();
+  auto shape = elem.getShape();
+  if (!shape) return {};
+
+  auto dst = assign.getOperand(1);
+  if (auto* dd = dst.getDefiningOp())
+    if (mlir::isa<hlfir::DesignateOp>(dd)) return {};  // element-designate LHS: keep the reduce path
+  std::string const tgtName = traceToDecl(dst);
+  if (tgtName.empty()) return {};
+
+  AccessInfo tgtWrite;
+  tgtWrite.array_name = tgtName;
+  tgtWrite.is_write = true;
+  AccessInfo tgtRead = tgtWrite;
+  tgtRead.is_write = false;
+  tgtRead.is_read = true;
+
+  std::vector<std::string> iterNames;
+  iterNames.reserve(rank);
+  for (unsigned i = 0; i < rank; ++i) iterNames.push_back("ei" + std::to_string(i));
+  unsigned pushed = 0;
+  for (unsigned i = 0; i < rank; ++i) {
+    indexStack().emplace_back(block.getArgument(i), iterNames[i]);
+    ++pushed;
+  }
+
+  mlir::Value yielded;
+  for (auto& op : block)
+    if (auto y = mlir::dyn_cast<hlfir::YieldElementOp>(op)) {
+      yielded = y.getElementValue();
+      break;
+    }
+  if (!yielded) {
+    for (unsigned i = 0; i < pushed; ++i) indexStack().pop_back();
+    return {};
+  }
+
+  std::string body;
+  {
+    NoSubscriptGuard const g;
+    body = buildExpr(yielded, 0);
+  }
+  if (body == "?") {
+    for (unsigned i = 0; i < pushed; ++i) indexStack().pop_back();
+    return {};
+  }
+
+  std::vector<ASTNode> nodes;
+
+  ASTNode init;
+  init.kind = "assign";
+  init.target = tgtName;
+  init.expr = std::string(identity);
+  init.accesses.push_back(tgtWrite);
+  nodes.push_back(std::move(init));
+
+  ASTNode acc;
+  acc.kind = "assign";
+  acc.target = tgtName;
+  bool const isFnForm = (pyOp == "min" || pyOp == "max");
+  acc.expr = isFnForm ? (std::string(pyOp) + "(" + tgtName + ", " + body + ")")
+                      : ("(" + tgtName + " " + std::string(pyOp) + " " + body + ")");
+  acc.accesses.push_back(tgtWrite);
+  acc.accesses.push_back(tgtRead);
+  collectReadAccesses(yielded, acc.accesses, 0);
+
+  for (unsigned i = 0; i < pushed; ++i) indexStack().pop_back();
+
+  ASTNode current = acc;
+  for (int i = (int)rank - 1; i >= 0; --i) {
+    std::string const ext = resolveExtent(shape, i);
+    if (ext == "?") return {};  // unrenderable bound: leave to the materialise path (status quo)
+    ASTNode wrap;
+    wrap.kind = "loop";
+    wrap.loop_iter = iterNames[i];
+    wrap.loop_lower = 1;
+    wrap.loop_bound = ext;
+    wrap.children.push_back(current);
+    current = wrap;
+  }
+  nodes.push_back(std::move(current));
+  return nodes;
+}
+
 /// ANY(...)/ALL(...): same materialise-then-reduce shape as buildElementalCountLibcall, but the final node is a reduce
-/// over the transient instead of the CountLibraryNode libcall.
+/// over the transient instead of the CountLibraryNode libcall. Elemental sources whose extent is data-dependent
+/// (resolveExtent renders an ``arr[idx]`` subscript) take the explicit accumulate-loop lowering instead.
 std::vector<ASTNode> buildElementalAnyAllReduce(hlfir::AssignOp assign, hlfir::ElementalOp elem, std::string_view wcr,
-                                                std::string_view identity) {
+                                                std::string_view identity, std::string_view pyOp) {
+  if (!pyOp.empty()) {
+    auto& region = elem.getRegion();
+    if (!region.empty())
+      if (auto shape = elem.getShape()) {
+        unsigned const rank = region.front().getNumArguments();
+        for (unsigned i = 0; i < rank; ++i)
+          if (resolveExtent(shape, i).find('[') != std::string::npos) {
+            if (auto built = buildElementalAccumulateReduce(assign, elem, pyOp, identity); !built.empty()) return built;
+            break;
+          }
+      }
+  }
   auto [trName, nodes] = materialiseElementalToTransient(elem, "_mask_");
   if (nodes.empty()) return {};
 

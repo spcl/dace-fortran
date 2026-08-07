@@ -56,7 +56,7 @@ std::vector<ASTNode> buildElementalAssign(hlfir::AssignOp assign, hlfir::Element
 std::vector<ASTNode> buildElementalCountLibcall(hlfir::AssignOp assign, hlfir::ElementalOp elem);
 
 std::vector<ASTNode> buildElementalAnyAllReduce(hlfir::AssignOp assign, hlfir::ElementalOp elem, std::string_view wcr,
-                                                std::string_view identity);
+                                                std::string_view identity, std::string_view pyOp);
 
 /// Materialises hlfir.elemental into a synthetic transient of the elemental's dtype (libcall-over-elemental path);
 /// returns {transient_name, AST_nodes}, empty on failure.

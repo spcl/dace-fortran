@@ -101,6 +101,8 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
   // the break re-evaluates post-mutation values and fires one iteration early (NPB LU ssor convergence check).
   static thread_local int kBrkCounter = 0;
   std::string brkSynthName;
+  ASTNode deferredSnap;  // break-condition snapshot deferred past the block's switch chain (see below)
+  bool haveDeferredSnap = false;
   mlir::scf::ConditionOp pendingCondOp;
   for (auto& op : block) {
     if (auto condOp = mlir::dyn_cast<mlir::scf::ConditionOp>(op)) {
@@ -113,6 +115,7 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
     // Materialises SUM/MINVAL/MAXVAL/PRODUCT in the loop condition into a Reduce lib-node scalar before the
     // break-check; without it a runtime-extent DO WHILE (MAXVAL(a) > 0) falls to inline-unroll which bails to "?".
     materialiseCondReductions(condVal, out);
+    size_t const scMapBefore = kScfValueMap.size();
     auto b = buildBoolExpr(condVal, 0);
     if (!b.empty() && b != "?") {
       // An array-element break condition (e.g. rsdnm(i) < tolrsd(i)) can't ride an interstate-edge assignment -- DaCe
@@ -120,6 +123,10 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
       std::vector<AccessInfo> condAccesses;
       collectReadAccesses(condVal, condAccesses, 0);
       int const brkId = kBrkCounter++;
+      // Rendering the condition LAZILY registered a side-effecting index_switch result (kScfValueMap grew): the
+      // switch's materialising chain is emitted by the block walk BELOW, so the snapshot must be deferred to just
+      // before the guard -- pushed here it would read the synth BEFORE the switch assigned it (hpsort GOTO loops).
+      bool const deferSnap = kScfValueMap.size() != scMapBefore;
       if (condAccesses.empty()) {
         // Pure scalar/counter condition -- symbol snapshot is exact (no array reads to keep off the interstate edge).
         brkSynthName = "__brk_" + std::to_string(brkId);
@@ -128,7 +135,12 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
         snap.target = brkSynthName;
         snap.expr = b;
         snap.target_is_array = false;
-        out.push_back(std::move(snap));
+        if (deferSnap) {
+          deferredSnap = std::move(snap);
+          haveDeferredSnap = true;
+        } else {
+          out.push_back(std::move(snap));
+        }
       } else {
         // Array-dependent break: compute into scalar transient __brkc_<N> via tasklet (array reads keep per-occurrence
         // connectors/memlets); guard reads the bare scalar name. Scalars-over-len1 rule -- no length-1 array promotion.
@@ -139,7 +151,12 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
         comp.expr = b;  // bare names; emit_tasklet wires the subscripts
         comp.accesses = std::move(condAccesses);
         comp.target_is_array = false;
-        out.push_back(std::move(comp));
+        if (deferSnap) {
+          deferredSnap = std::move(comp);
+          haveDeferredSnap = true;
+        } else {
+          out.push_back(std::move(comp));
+        }
       }
     }
   }
@@ -166,6 +183,12 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
       continue;
     }
     if (auto condOp = mlir::dyn_cast<mlir::scf::ConditionOp>(op)) {
+      // A deferred break-condition snapshot lands HERE -- after the block's ops (incl. the materialising switch
+      // chain for any lazily-registered index_switch result the snapshot reads), before the guard that reads it.
+      if (haveDeferredSnap) {
+        out.push_back(std::move(deferredSnap));
+        haveDeferredSnap = false;
+      }
       // Captures the scf.while's carried results into synth scalars each iteration; a post-loop scf.index_switch reads
       // these to run the fired EXIT's side effect -- without this the exit reason is lost.
       if (auto whileOp = condOp->getParentOfType<mlir::scf::WhileOp>()) {
@@ -355,6 +378,7 @@ std::vector<ASTNode> walkSCFBeforeRegion(mlir::Block& block) {
                                "allowlist via ``kKnownBenign`` if the op is a pure marker.");
     }
   }
+  if (haveDeferredSnap) out.push_back(std::move(deferredSnap));  // safety net; normally pushed at the condition op
   return out;
 }
 
@@ -1855,7 +1879,8 @@ std::vector<ASTNode> buildReductionAssignNodes(hlfir::AssignOp assign, mlir::Ope
         auto srcVal = sd->getOperand(0);
         if (auto* srcOp = srcVal.getDefiningOp())
           if (auto elem_src = mlir::dyn_cast<hlfir::ElementalOp>(srcOp)) {
-            auto built = buildElementalAnyAllReduce(assign, elem_src, e.wcr.str(), identityForType(e, redElemTy));
+            auto built =
+                buildElementalAnyAllReduce(assign, elem_src, e.wcr.str(), identityForType(e, redElemTy), e.py_op.str());
             if (!built.empty()) {
               for (auto& bn : built) nodes.push_back(std::move(bn));
               emitted = true;
@@ -2004,6 +2029,95 @@ static void dispatchScfWhileCall(fir::CallOp call, std::vector<ASTNode>& out) {
   IoState io_state;
   std::map<std::string, FftPlanInfo> fft_plans;
   dispatchCallOp(call, out, io_state, fft_plans);
+}
+
+// ddot/sdot over a slice whose bounds are DATA-DEPENDENT (e.g. QE calbec_rs_gamma's
+// ``ddot(mbia, betasave(box_s(ia):box_e(ia), ih), 1, wr, 1)``).  A blas.Dot libcall needs static or symbolic memlet
+// subsets; a bound that reads an array element renders with a subscript (``box_s[ia]``), which DaCe's memlet parser
+// cannot express.  Lower the dot as the equivalent explicit reduction loop --
+//   tgt = 0.0 ; do K = 1, n ; tgt = tgt + x(lo+K-1, ...) * y(K) ; end do
+// -- riding the standard loop/assign emit machinery (bound hoisting, indirect-access wiring) instead of inventing a
+// dynamic-extent libcall ABI.  Returns {} when an operand's shape is outside the handled set (multi-triplet slice,
+// component designate, unrenderable n); the caller then emits the libcall node as before (loud emit failure).
+static std::vector<ASTNode> buildDdotDynamicSliceNodes(const std::string& tgt, mlir::Value nVal, mlir::Value xVal,
+                                                       const std::string& xName, mlir::Value yVal,
+                                                       const std::string& yName) {
+  auto peelBoxAddr = [](mlir::Value v) -> mlir::Value {
+    if (auto ba = mlir::dyn_cast_or_null<fir::BoxAddrOp>(v.getDefiningOp())) return ba.getVal();
+    return v;
+  };
+  std::string const nExpr = buildExpr(nVal, 0);
+  if (nExpr.empty() || nExpr == "?") return {};
+  const std::string K = "__ddot_k";  // UniqueLoopIterators renames it globally-unique downstream
+
+  // Element read of one vector operand at iteration K: a single-triplet designate indexes that dim as
+  // ``(lo) + K - 1`` (scalar dims stay fixed); anything else is treated as a whole 1-D vector indexed K.
+  auto elemAccess = [&](mlir::Value v, const std::string& name, AccessInfo& acc) -> bool {
+    acc.array_name = name;
+    acc.is_read = true;
+    if (auto dg = mlir::dyn_cast_or_null<hlfir::DesignateOp>(peelBoxAddr(v).getDefiningOp())) {
+      if (dg.getComponentAttr()) return false;  // AoS-companion shape: leave it to the libcall path
+      auto triplets = dg.getIsTriplet();
+      if (!triplets.empty()) {
+        unsigned nTrips = 0;
+        for (bool const t : triplets)
+          if (t) ++nTrips;
+        if (nTrips != 1) return false;  // not a vector slice
+        auto idxs = dg.getIndices();
+        unsigned flat = 0;
+        for (unsigned di = 0; di < triplets.size(); ++di) {
+          if (triplets[di]) {
+            std::string const lo = buildIndexExpr(idxs[flat], 0);
+            if (lo.empty() || lo == "?") return false;
+            acc.index_vars.push_back(K);
+            acc.index_exprs.push_back("(" + lo + ") + " + K + " - 1");
+            flat += 3;
+          } else {
+            auto nm = resolveIndex(idxs[flat]);
+            acc.index_vars.push_back(nm.empty() ? "?" : nm);
+            acc.index_exprs.push_back(buildDesignateIndexExpr(dg, di, idxs[flat], 0));
+            flat += 1;
+          }
+        }
+        return true;
+      }
+    }
+    acc.index_vars.push_back(K);
+    acc.index_exprs.push_back(K);
+    return true;
+  };
+
+  AccessInfo xAcc, yAcc;
+  if (!elemAccess(xVal, xName, xAcc) || !elemAccess(yVal, yName, yAcc)) return {};
+
+  ASTNode z;
+  z.kind = "assign";
+  z.target = tgt;
+  z.expr = "0.0";
+  z.target_is_array = false;
+
+  // Bare array names in the expr, per-occurrence index detail in accesses -- the shape emit_tasklet wires
+  // (mirrors the hand-written ``r = r + a(k,2) * b(k)`` loop body).
+  ASTNode body;
+  body.kind = "assign";
+  body.target = tgt;
+  body.target_is_array = false;
+  body.expr = "(" + tgt + " + (" + xName + " * " + yName + "))";
+  body.accesses = {std::move(xAcc), std::move(yAcc)};
+
+  ASTNode lp;
+  lp.kind = "loop";
+  lp.loop_iter = K;
+  lp.loop_bound = nExpr;
+  lp.children.push_back(std::move(body));
+
+  ASTNode wb;  // mirrors the fir.do_loop loop-variable final-value writeback shape
+  wb.kind = "assign";
+  wb.target = K;
+  wb.expr = K;
+  wb.target_is_array = false;
+
+  return {z, lp, wb};
 }
 
 std::vector<ASTNode> buildAST(mlir::Block& block) {
@@ -2407,6 +2521,14 @@ std::vector<ASTNode> buildAST(mlir::Block& block) {
                 tgt = allocAliasFor(extractName(decl.getUniqName().str()));
             if (tgt.empty()) tgt = traceToDecl(dst);
             if (!tgt.empty() && !xName.empty() && !yName.empty()) {
+              // A subset containing ``[`` reads an array element in a bound (``s(ia):e(ia)``) -- not expressible as a
+              // libcall memlet.  Lower the dot as an explicit reduction loop instead.
+              if (xSub.find('[') != std::string::npos || ySub.find('[') != std::string::npos) {
+                if (auto dyn = buildDdotDynamicSliceNodes(tgt, args[0], args[1], xName, args[3], yName); !dyn.empty()) {
+                  for (auto& nd : dyn) nodes.push_back(std::move(nd));
+                  continue;
+                }
+              }
               ASTNode n;
               n.kind = "libcall";
               n.callee = "dot_product";
@@ -3036,6 +3158,7 @@ std::vector<ASTNode> extractAST(mlir::ModuleOp module, const std::string& entry_
   kScfValueCounter = 0;
   kScfValueMap.clear();
   kUnrenderableOps.clear();
+  kPendingSwitchResults.clear();
   kAllocaCounter = 0;
   kAllocaMap.clear();
   kHlfirExprToTransient.clear();
@@ -3135,6 +3258,21 @@ std::vector<ASTNode> extractAST(mlir::ModuleOp module, const std::string& entry_
     initNodes.insert(initNodes.end(), result.begin(), result.end());
     result = std::move(initNodes);
   }
+  // Every lazily-registered side-effecting index_switch result read must have been materialised by the statement
+  // walk. A leftover means a read synth with NO defining assignment -- fail loudly instead of emitting a read of an
+  // uninitialised synthetic scalar.
+  if (!kPendingSwitchResults.empty()) {
+    std::string msg = "extractAST: " + std::to_string(kPendingSwitchResults.size()) +
+                      " side-effecting scf.index_switch op(s) had results read in expressions but were never "
+                      "statement-walked -- the __sc_<id> synth they read would be unassigned:";
+    for (auto* op : kPendingSwitchResults) {
+      std::string loc;
+      llvm::raw_string_ostream os(loc);
+      op->getLoc().print(os);
+      msg += "\n  " + loc;
+    }
+    throw std::runtime_error(msg);
+  }
   return result;
 }
 
@@ -3169,6 +3307,7 @@ std::string scfSwitchValueName(mlir::Value v) {
 }
 
 static std::vector<ASTNode> buildIndexSwitchNodes(mlir::scf::IndexSwitchOp sw) {
+  kPendingSwitchResults.erase(sw.getOperation());  // materialised: any lazily-registered result reads now have defs
   std::string const val = scfSwitchValueName(sw.getArg());
   auto cases = sw.getCases();  // ArrayRef<int64_t>: one selector value per case
 

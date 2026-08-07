@@ -51,6 +51,13 @@ inline thread_local llvm::DenseMap<mlir::Value, std::string> kScfValueMap;
 /// same merge feeds many consumers) short-circuit instead of re-walking regions and re-logging. Reset per SDFG build.
 inline thread_local llvm::DenseSet<mlir::Operation*> kUnrenderableOps;
 
+/// Side-effecting scf.index_switch ops whose RESULT was read in expression context before the statement walk reached
+/// them (GOTO-heavy do-whiles: the break-condition pre-scan renders before the block's switch chain is emitted).
+/// buildExpr registers the result's __sc_<id> synth name lazily (same scfSynthName memo the statement pass uses);
+/// buildIndexSwitchNodes erases the op when it materialises the assignments. extractAST asserts the set drains --
+/// a leftover means a read synth with no defining assignment (silent garbage), which must fail loudly.
+inline thread_local llvm::DenseSet<mlir::Operation*> kPendingSwitchResults;
+
 /// Synthetic-scalar registry for un-named fir.alloca scratch ops (e.g. DO WHILE counters lowered without a surrounding
 /// hlfir.declare); names are __al_<N>.
 inline thread_local int kAllocaCounter = 0;

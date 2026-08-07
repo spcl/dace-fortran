@@ -1133,7 +1133,11 @@ def emit_blas(builder, ctx, n, region):
             desc = ctx.sdfg.arrays[name]
             sym = f"__blas_{name}_{builder.nid()}"
             ctx.sdfg.add_symbol(sym, desc.dtype)
-            promotions[sym] = f"{name}[0]"
+            # A length-1 LOCAL array is scalar-ised by the descriptor path
+            # (plain ``double beta;`` in generated code) -- ``beta[0]`` is then
+            # invalid C++.  Read a Scalar descriptor bare; subscript only true
+            # arrays (dummies / module arrays).
+            promotions[sym] = name if isinstance(desc, dace.data.Scalar) else f"{name}[0]"
             return _ds.symbol(sym)
         ctx.sdfg.add_symbol(name, dace.float64)
         return _ds.symbol(name)
@@ -1142,7 +1146,10 @@ def emit_blas(builder, ctx, n, region):
         """Stage any pending scalar promotions on the BLAS state's inbound edge."""
         if not promotions:
             return
-        for in_edge in ctx.sdfg.in_edges(state):
+        # The BLAS state lives in ``region`` (possibly a nested if/loop branch), NOT
+        # necessarily in the top-level SDFG graph -- query the parent region or a
+        # nested BLAS call KeyErrors on the missing state (QE h_psi's dgemv).
+        for in_edge in region.in_edges(state):
             for sym, expr in promotions.items():
                 in_edge.data.assignments[sym] = expr
             break
