@@ -18,19 +18,22 @@ spack install -j$(nproc) nvhpc +mpi +blas +lapack &&
 spack install -j$(nproc) openblas +fortran threads=openmp %gcc@16.1.0
 ```
 
-The Fortran baseline lanes read the dwarf `input.h5` deck through the HDF5 Fortran API, and
-`hdf5.mod` is not portable across compilers -- one HDF5 build per Fortran compiler:
+Libraries. The Fortran baseline lanes read the dwarf `input.h5` deck through the HDF5 Fortran
+API and `hdf5.mod` is not portable across compilers, so they need one HDF5 build per Fortran
+compiler; the vexx FFT library nodes link `libfftw3` (single-threaded tasklets, so no `+openmp`):
 
 ```
 spack compiler find $(spack location -i llvm@22.1.7) &&
 spack compiler find $(spack location -i nvhpc) &&
 spack install -j$(nproc) hdf5 +fortran +hl %gcc@16.1.0 &&
 spack install -j$(nproc) hdf5 +fortran +hl %llvm@22.1.7 &&
-spack install -j$(nproc) hdf5 +fortran +hl %nvhpc
+spack install -j$(nproc) hdf5 +fortran +hl %nvhpc &&
+spack install -j$(nproc) fftw %gcc@16.1.0
 ```
 
 Python is not taken from spack by default: the drivers run on the pinned interpreter
 (`~/.pyenv/versions/py13/bin/python`). A spack `python@3.13` works if `PYTHON=` points at it.
+The velocity bindings configure needs cmake >= 3.18 (system package or `spack install cmake`).
 
 ## reproduce
 

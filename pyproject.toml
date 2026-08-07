@@ -68,6 +68,9 @@ samples = [
     # samples/cloudsc dwarf-p-cloudsc input-deck reader (dwarf_inputs.py falls back to
     # netCDF4 when h5py is absent).
     "h5py",
+    # samples/velocity_tendencies/CMakeLists.txt resolves nanobind through its cmake_dir
+    # and fails the configure without it; cmake >= 3.18 is a system prerequisite, not a pip dep.
+    "nanobind",
 ]
 dev = [
     "dace-fortran[testing,linting]",
