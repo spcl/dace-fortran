@@ -18,8 +18,8 @@ set -euo pipefail
 
 REPO="${DACE_FORTRAN_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 source "$REPO/samples/common.sh"
-# LANES: space list from {dace-gcc,dace-llvm} (cloudsc sbatch convention; no Fortran baseline
-# lanes here -- no standalone driver exists for this kernel outside the harness).  Any other
+# LANES: space list from {dace-gcc,dace-llvm,baselines} (cloudsc sbatch convention; baselines runs
+# the Fortran lanes of baselines.sh, which picks its own subset via BASELINE_LANES).  Any other
 # token is skipped, so a global LANES carrying cloudsc-only lanes still runs this job.
 LANES="${LANES:-dace-gcc}"
 BUILD_ROOT_BASE="${BUILD_ROOT:-$HOME/.cache/dace-fortran-samples}"
@@ -49,6 +49,11 @@ VARIANTS="${VARIANTS:-loopexch noloopexch}"
 for lane in $LANES; do
     case "$lane" in
         dace-gcc | dace-llvm) ;;
+        baselines)
+            srun --ntasks=1 --cpus-per-task="$NCPUS" --cpu-bind=verbose,cores \
+                bash "$HERE/baselines.sh"
+            continue
+            ;;
         *)
             echo "SKIP unknown lane: $lane" >&2
             continue

@@ -9,11 +9,12 @@ One toolchain per lane (table below); anything missing is skipped, so a partial 
 produces the lanes it can build. With spack:
 
 ```
-spack install nvptx-tools &&
 spack install newlib target=nvptx-none &&
-spack install -j$(nproc) gcc@16.1.0 +graphite +nvptx +binutils languages=c,c++,fortran ^cuda %gcc@14.2.0 &&
+spack install nvptx-tools &&
+spack install -j$(nproc) gcc@16.1.0 +graphite +nvptx +binutils languages=c,c++,fortran %gcc@14.2.0 ^cuda &&
 spack compiler find $(spack location -i gcc@16.1.0+nvptx) &&
-spack install -j$(nproc) llvm@22.1.7 +polly +cuda cuda_arch=80,90 targets=nvptx,x86 +flang +libomptarget +mlir +lld ^cuda %gcc@16.1.0 &&
+spack install -j$(nproc) llvm@22.1.7 +polly +cuda cuda_arch=80,90 targets=nvptx,x86 +flang +libomptarget +mlir +lld targets=nvptx,aarch64 %gcc@16.1.0 && # aarch
+spack install -j$(nproc) llvm@22.1.7 +flang +libomptarget +lld +mlir +polly targets=nvptx,x86 %gcc@16.1.0 && # x86
 spack install -j$(nproc) nvhpc +mpi +blas +lapack &&
 spack install -j$(nproc) openblas +fortran threads=openmp %gcc@16.1.0
 ```
@@ -65,13 +66,15 @@ The velocity bindings configure needs cmake >= 3.18 (system package or `spack in
 | openacc (GPU)    | dwarf scc variant, nvfortran `-acc=gpu`       | nvfortran + `HDF5_NVFORTRAN_ROOT` |
 
 A missing toolchain is a loud SKIP on stderr, never a failure. Every lane below `dace-llvm` is
-cloudsc-only, from `cloudsc/baselines.sh` (`BASELINE_LANES`) or `cloudsc/gpu_baselines.sh`
-(`GPU_LANES`). The serial and autopar lanes compile without `-fopenmp`/`-fopenacc`, so the
-`!$omp` and `!$acc` lines in those sources are inert comments -- no source is ever stripped.
+cloudsc-only (`cloudsc/baselines.sh` `BASELINE_LANES`, `cloudsc/gpu_baselines.sh` `GPU_LANES`)
+except `gfortran-autopar`, `openacc-cpu` and `openacc`: velocity_tendencies runs those three too,
+from `velocity_tendencies/baselines.sh` (`LANES=baselines`, subset via `BASELINE_LANES`), building
+`velocity_advection_acc.f90` -- the directive-annotated twin of the e2e TU, see
+`scripts/annotate_velocity_acc.py` -- against its own `driver_velocity.f90` on a raw dump from
+`dump_data.py`, no HDF5. The serial and autopar lanes compile without `-fopenmp`/`-fopenacc`, so
+the `!$omp` and `!$acc` lines in those sources are inert comments -- no source is ever stripped.
 
-vexx and velocity_tendencies have no Fortran baseline lanes yet; velocity autopar and OpenACC
-(CPU and GPU) wait on a port of the `!$ACC` directives from
-`tests/icon/full/icon-model/src/atm_dyn_iconam/mo_velocity_advection.f90` onto the inlined TU.
+vexx has no Fortran baseline lanes yet.
 
 Detail sits next to the code: `samples/cloudsc/dwarf_inputs.py` (deck expansion, constants
 cross-check), `samples/vexx/README.md`, `samples/velocity_tendencies/README.md`.

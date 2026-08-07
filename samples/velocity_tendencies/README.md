@@ -47,6 +47,37 @@ refin-ctrl arrays are embedded in the harness 33-slot / lbound -16 window.
 timed reps, CSV `kernel,mode,nproma,nblks_e,threads,rep,ms,inputs,lane` -- `inputs` is always
 `r02b05`) is cluster-only: do not run it on the dev box. Knobs: `--reps` (50), `--warmup` (2).
 
-Lanes: `LANES` env, space list from `dace-gcc` (default) and `dace-llvm` (`--backend llvm`,
-clang++ as the DaCe CPU compiler -- see `samples/README.md` lane matrix). No Fortran perf
-baseline lanes exist here: no standalone driver exists for this kernel outside the harness.
+Lanes: `LANES` env, space list from `dace-gcc` (default), `dace-llvm` (`--backend llvm`, clang++ as
+the DaCe CPU compiler) and `baselines` (see `samples/README.md` lane matrix).
+
+## Fortran baseline lanes
+
+`baselines.sh` (`LANES=baselines`, or run it directly) times the ORIGINAL kernel with its own
+compiler's parallelism: `gfortran-autopar` (`-O3 -march=native -ftree-parallelize-loops=$t`, one
+build per thread count), `openacc-cpu` (nvfortran `-acc=multicore`, one build, `ACC_NUM_CORES`
+sweep) and `openacc` (nvfortran `-acc=gpu -gpu=mem:managed`, single config, threads column 0,
+only when `nvidia-smi -L` lists a GPU). Subset via `BASELINE_LANES`.
+
+Sources: `velocity_advection_acc.f90` (the `!$ACC`/`!$OMP`-annotated twin of the e2e TU,
+regenerate with `scripts/annotate_velocity_acc.py`) and `driver_velocity.f90`, which reads
+`dump_data.py`'s raw dump (`manifest.txt` + `scalars.txt` + one Fortran-order `<name>.bin` per
+array), rebuilds the derived types with the recorded lower bounds and prints the CSV rows itself.
+
+```
+python dump_data.py --out <dir> [--reference]   # raw dump; --reference adds a DaCe-computed oracle
+bash baselines.sh                               # VELOCITY_DUMP_DIR / BASELINE_LANES / REPS / THREADS
+<build>/driver_velocity <dir> <lane> <threads> <reps> <warmup> [verify|dumpref [ref_dir]]
+```
+
+Numerics gate: build one serial reference (`gfortran -O1`), run it with `dumpref <ref_dir>`, then
+run each parallel lane with `verify <ref_dir>`. It fails above `1e-10` relative -- not zero,
+because the lanes build with `-march=native` and FMA contraction plus autopar reassociation move
+the last digits (measured worst gap: `9e-16`). `dump_data.py --reference` writes the same layout
+from the DaCe kernel, but that oracle is currently WRONG: `run_velocity_perf.bind_call` under-runs
+the domain on this deck (32 of 11M elements written), so use the serial Fortran reference.
+
+The OpenACC lanes need the derived types on the device before the kernel's `PRESENT(...)` data
+region; the driver does that with a shallow `!$ACC ENTER DATA COPYIN`, which is why the GPU lane
+builds `-gpu=mem:managed` (nvfortran cannot deep-copy the `POINTER` components).
+
+Only the `loopexch` TU is annotated; the `noloopexch` variant has no baseline lane.
