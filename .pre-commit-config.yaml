@@ -40,6 +40,10 @@ repos:
       language: system
       args: ['-i']
       files: '\.(cpp|h)$'
+      # Vendored dwarf-p-cloudsc (Apache-2.0, see NOTICE): upstream C++/CUDA sources, plus
+      # common/include/*.h COMDECKs that are actually Fortran text under a .h name -- clang-format
+      # mangles the latter outright (verified). Never reformat vendored upstream source.
+      exclude: '^tests/cloudsc/variants/dwarf-p-cloudsc/'
     - id: fprettify
       name: fprettify (.fprettify.rc, line-length 120)
       entry: fprettify

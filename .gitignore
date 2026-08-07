@@ -196,6 +196,7 @@ _all_tests/
 # (and any future per-test Fortran fixtures) lives in tracked folders
 # and must be opted back in here.
 !tests/npb/**/*.F90
+!tests/cloudsc/variants/dwarf-p-cloudsc/**/*.F90
 !tests/npb/**/*.f90
 # ICON aes_graupel multi-file build (mo_aes_graupel + mo_aes_thermo +
 # mo_kind + mo_physical_constants).  Kept under tests/icon/graupel/ as
@@ -281,3 +282,7 @@ scratchpad/
 _session_scratch/
 .claude/
 tests/icon/full/icon-grids/
+
+# dwarf-p-cloudsc input deck fetched by samples/cloudsc/download_data.sh (5.2 MB h5;
+# the pre-commit large-file hook blocks vendoring it -- see samples/README.md).
+samples/cloudsc/data/
