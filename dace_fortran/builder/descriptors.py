@@ -43,6 +43,35 @@ def _is_synth_scalar(name: str) -> bool:
     return name.startswith(_SYNTH_SCALAR_PREFIXES)
 
 
+def is_character_dtype(dtype) -> bool:
+    """True for any Fortran ``CHARACTER`` datum (``!fir.char<...>``): a local
+    string, a named constant, or a flang literal-pool entry.
+
+    DaCe has no string data type and character data is outside the bridge's
+    numerical contract (``hlfir-strip-character-runtime`` folds the compares),
+    so :func:`add_descriptors` registers no descriptor for it.  Registering one
+    would also mint invalid array names -- a literal-pool entry is keyed by its
+    hex-encoded contents (``747874`` for ``txt``), which starts with a digit.
+    """
+    return str(dtype).startswith("!fir.char")
+
+
+def is_character_data(builder, name: str) -> bool:
+    """True when ``name`` is a bridge variable of ``CHARACTER`` type, i.e. one
+    :func:`add_descriptors` deliberately left without an SDFG descriptor.
+
+    The emit path mirrors that refusal (``emit_assign`` drops the store): a
+    store into character data has no container to land in, and emitting it
+    fabricates an AccessNode whose ``data`` resolves to nothing -- an invalid
+    SDFG.  QE's ``xclib_dft_is`` (``cwhat(i:i) = capital(what(i:i))``) is the
+    pattern: it left ``Cupper`` / ``capital`` / ``cwhat`` nodes behind.  No
+    numeric value depends on the store -- ``hlfir-strip-character-runtime`` has
+    already folded every compare that reads the string.
+    """
+    v = builder.scalars.get(name) or builder.arrays.get(name)
+    return v is not None and is_character_dtype(v.dtype)
+
+
 def scan_object_aliases(builder) -> None:
     """Collect whole-derived-type-OBJECT pointer rebinds (``obj_ptr => src_obj``)
     the bridge lowered as plain scalar ``assign`` nodes.
@@ -451,16 +480,6 @@ def add_descriptors(builder, sdfg: SDFG):
     def _is_flang_internal(nm: str) -> bool:
         return nm.startswith(".")
 
-    def _is_char_literal(dtype) -> bool:
-        """A Fortran ``CHARACTER`` constant from flang's literal pool (an I/O
-        ``filename`` / ``status`` / format string).  DaCe has no string data
-        type and these are never compute data -- they feed I/O statements,
-        which the ``fortran_io`` recognizer handles separately -- so they must
-        not be registered as SDFG descriptors.  Doing so mints invalid array
-        names (the hex-encoded literal contents, e.g. ``747874`` for ``txt``,
-        which also start with a digit)."""
-        return str(dtype).startswith("!fir.char")
-
     # Per-axis offset symbols for every array.  ``offset_<arr>_d<i>`` is
     # the value subtracted from the Fortran 1-based index in every
     # memlet (see ``access.py::build_memlet_index``).  Default value for
@@ -492,7 +511,7 @@ def add_descriptors(builder, sdfg: SDFG):
         return s if s in sdfg.symbols else None
 
     for v in builder.arrays.values():
-        if _is_flang_internal(v.fortran_name) or _is_char_literal(v.dtype):
+        if _is_flang_internal(v.fortran_name) or is_character_dtype(v.dtype):
             continue
         if v.fortran_name in getattr(builder, 'complex_component_aliases', {}):
             # Complex-as-2-reals component alias (``REAL(2,N)`` dummy bound to a
@@ -722,7 +741,7 @@ def add_descriptors(builder, sdfg: SDFG):
         for a in builder.arrays.values() if getattr(a, 'role', '') == 'view_alias' and a.view_source in builder.scalars
     }
     for v in builder.scalars.values():
-        if _is_flang_internal(v.fortran_name) or _is_char_literal(v.dtype):
+        if _is_flang_internal(v.fortran_name) or is_character_dtype(v.dtype):
             continue
         if v.fortran_name in scalar_view_sources and v.fortran_name not in sdfg.arrays:
             # length-1 Array view source (see note above).  Local target ->

@@ -25,7 +25,7 @@ from dace_fortran.builder.access import (
     materialize_indirect_view_sources,
 )
 from dace_fortran.builder.context import _Ctx
-from dace_fortran.builder.descriptors import auto_declare_synth
+from dace_fortran.builder.descriptors import auto_declare_synth, is_character_data
 from dace_fortran.builder.emit_tasklet import assign_reads_array, emit_complex_component_assign, emit_tasklet
 
 _DACE_CAST_RE = re.compile(r"dace\.(?:int32|int64|float32|float64)\(")
@@ -195,6 +195,12 @@ def emit_assign(builder, ctx: '_Ctx', n, region):
         dst = region.add_state(f"post_{n.target}_{builder.nid()}")
         region.add_edge(ctx.cur, dst, InterstateEdge(assignments={n.target: rhs}))
         ctx.cur = dst
+        return
+    if is_character_data(builder, n.target):
+        # CHARACTER target: ``add_descriptors`` registers no container for it, so
+        # emitting the store mints a descriptor-less AccessNode that KeyErrors in
+        # the first ``used_symbols`` walk of any post-gen pass.  See
+        # :func:`is_character_data`.
         return
     if n.target in getattr(builder, 'complex_component_aliases', {}):
         # Complex-as-2-reals component alias write (``qg(c, i) = ...``): a
@@ -760,7 +766,10 @@ def emit_loop(builder, ctx: '_Ctx', n, region, iter_map=None):
     children = n.children
 
     child_loops = [c for c in children if c.kind == "loop"]
-    child_assigns = [c for c in children if c.kind == "assign"]
+    # CHARACTER-target stores are dropped here as they are in ``emit_assign``:
+    # this flat batch path calls ``emit_tasklet`` directly, so it needs its own
+    # copy of the guard.
+    child_assigns = [c for c in children if c.kind == "assign" and not is_character_data(builder, c.target)]
     # Anything beyond nested DO loops and plain assignments (IF/ELSE,
     # WHILE, reductions, library-node calls, ...) forces the generic
     # state-machine walk  --  the flat ``body`` tasklet path can't host

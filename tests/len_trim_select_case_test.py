@@ -15,6 +15,7 @@ Pinned: build + validate (the numerical outcome is the folded no-error path:
 ``xclib_dft_is('HYBRID')`` collapses to the first-case arm by design of the
 strip pass, so only the surrounding integer plumbing is checked).
 """
+import dace
 import numpy as np
 import pytest
 
@@ -77,8 +78,43 @@ def test_len_trim_select_case_runs(tmp_path):
     what = np.frombuffer(b"HYBRID         "[:15], dtype=np.uint8).copy()
     res = np.zeros(1, dtype=np.int32)
     kwargs = {"res": res}
-    # Character dummy: pass bytes if the SDFG exposes it, else just res.
-    if "what" in sdfg.arrays:
+    # Character dummy: pass bytes if the SDFG exposes it as a buffer. After
+    # hlfir-strip-character-runtime the only surviving read of ``what`` is the
+    # folded LEN_TRIM byte compare, so the bridge exposes it as a single Scalar
+    # -- bind the leading byte then, matching the declared descriptor.
+    desc = sdfg.arrays.get("what")
+    if isinstance(desc, dace.data.Scalar):
+        kwargs["what"] = desc.dtype.type(what[0])
+    elif desc is not None:
         kwargs["what"] = what
     sdfg(**kwargs)
     assert 0 <= int(res[0]) <= 3, f"res out of SELECT CASE range: {res[0]}"
+
+
+# A DO body of nothing but assignments takes ``emit_loop``'s flat batch path,
+# which calls ``emit_tasklet`` directly instead of routing through
+# ``emit_assign`` -- so the CHARACTER-store guard has to hold in both places.
+_CHAR_LOOP_SRC = """
+subroutine char_fill(n, res)
+  implicit none
+  integer, intent(in) :: n
+  integer, intent(out) :: res
+  character(len=8) :: buf
+  integer :: i
+  do i = 1, 8
+    buf(i:i) = 'x'
+  end do
+  res = n + 1
+end subroutine char_fill
+"""
+
+
+def test_character_store_in_flat_loop_body(tmp_path):
+    """A CHARACTER store in an assignment-only DO body registers no descriptor
+    and no access node, and the surrounding integer plumbing still runs."""
+    sdfg = build_sdfg(_CHAR_LOOP_SRC, tmp_path / "sdfg", name="char_fill", entry="char_fill").build()
+    sdfg.validate()
+    assert "buf" not in sdfg.arrays
+    res = np.zeros(1, dtype=np.int32)
+    sdfg(n=np.int32(41), res=res)
+    assert int(res[0]) == 42, f"integer plumbing broken: {res[0]}"
