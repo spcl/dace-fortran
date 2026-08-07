@@ -13,9 +13,9 @@ spack install newlib target=nvptx-none &&
 spack install nvptx-tools &&
 spack install -j$(nproc) gcc@16.1.0 +graphite +nvptx +binutils languages=c,c++,fortran %gcc@14.2.0 ^cuda &&
 spack compiler find $(spack location -i gcc@16.1.0+nvptx) &&
-spack install -j$(nproc) llvm@22.1.7 +polly +cuda cuda_arch=80,90 +flang +libomptarget +mlir +lld targets=nvptx,aarch64 %gcc@16.1.0 && # aarch, nvidia
+spack install -j$(nproc) llvm@22.1.5 +polly +cuda cuda_arch=80,90 +flang +libomptarget +mlir +lld targets=nvptx,aarch64 %gcc@16.1.0 && # aarch, nvidia
 spack install -j$(nproc) llvm@22.1.5 +polly +cuda cuda_arch=80,90 +flang +libomptarget +mlir +lld targets=nvptx,x86 %gcc@16.1.0 && # x86, nvidia
-spack install -j$(nproc) llvm@22.1.7 +polly +flang +libomptarget +mlir +lld targets=x86,amdgpu %gcc@16.1.0  && # x86, amd
+spack install -j$(nproc) llvm@22.1.5 +polly +flang +libomptarget +mlir +lld targets=x86,amdgpu %gcc@16.1.0 && # x86, amd
 spack install -j$(nproc) nvhpc +mpi +blas +lapack &&
 spack install -j$(nproc) openblas +fortran threads=openmp %gcc@16.1.0
 ```
@@ -25,10 +25,10 @@ API and `hdf5.mod` is not portable across compilers, so they need one HDF5 build
 compiler; the vexx FFT library nodes link `libfftw3` (single-threaded tasklets, so no `+openmp`):
 
 ```
-spack compiler find $(spack location -i llvm@22.1.7) &&
+spack compiler find $(spack location -i llvm@22.1.5) &&
 spack compiler find $(spack location -i nvhpc) &&
 spack install -j$(nproc) hdf5 +fortran +hl %gcc@16.1.0 &&
-spack install -j$(nproc) hdf5 +fortran +hl %llvm@22.1.7 &&
+spack install -j$(nproc) hdf5 +fortran +hl %llvm@22.1.5 &&
 spack install -j$(nproc) hdf5 +fortran +hl %nvhpc &&
 spack install -j$(nproc) fftw %gcc@16.1.0
 ```
