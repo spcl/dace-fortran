@@ -286,3 +286,7 @@ tests/icon/full/icon-grids/
 # dwarf-p-cloudsc input deck fetched by samples/cloudsc/download_data.sh (5.2 MB h5;
 # the pre-commit large-file hook blocks vendoring it -- see samples/README.md).
 samples/cloudsc/data/
+
+# Site env hook sourced by samples/common.sh: machine-specific, never repo content
+# (samples/env.spack.example is the template).
+samples/env.sh

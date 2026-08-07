@@ -3,6 +3,26 @@
 # NUMA-node-major placement that survives unknown socket/NPS configs.
 set -euo pipefail
 
+# Site env hook, sourced before any probe below so a module/spack PATH is visible to all of them:
+# SAMPLES_ENV=<file>, else samples/env.sh when it exists. An explicit SAMPLES_ENV must resolve.
+SAMPLES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -n "${SAMPLES_ENV:-}" ]; then
+    if [ ! -f "$SAMPLES_ENV" ]; then
+        echo "FATAL: SAMPLES_ENV=$SAMPLES_ENV does not exist" >&2
+        exit 1
+    fi
+elif [ -f "$SAMPLES_DIR/env.sh" ]; then
+    SAMPLES_ENV="$SAMPLES_DIR/env.sh"
+fi
+# Once per job: srun steps inherit the exports, re-sourcing would only re-run `spack load`.
+if [ -n "${SAMPLES_ENV:-}" ] && [ -z "${SAMPLES_ENV_LOADED:-}" ]; then
+    echo "samples: sourcing env hook $SAMPLES_ENV"
+    # shellcheck disable=SC1090
+    . "$SAMPLES_ENV"
+    SAMPLES_ENV_LOADED=1
+    export SAMPLES_ENV SAMPLES_ENV_LOADED
+fi
+
 # Batch jobs don't inherit the interactive PATH, so a bare `python` may lack ordered_set/dace.
 PY="${PYTHON:-$HOME/.pyenv/versions/py13/bin/python}"
 [ -x "$PY" ] || PY="$(command -v python3)"

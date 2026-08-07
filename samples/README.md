@@ -3,6 +3,35 @@
 CPU scaling experiments on cloudsc, vexx and velocity_tendencies, driven through the same
 build + `pipelines.optimize` path the e2e tests use. Perf only -- numerics stay in `tests/e2e/`.
 
+## prerequisites
+
+One toolchain per lane (table below); anything missing is skipped, so a partial install still
+produces the lanes it can build. With spack:
+
+```
+spack install nvptx-tools &&
+spack install newlib target=nvptx-none &&
+spack install -j$(nproc) gcc@16.1.0 +graphite +nvptx +binutils languages=c,c++,fortran ^cuda %gcc@14.2.0 &&
+spack compiler find $(spack location -i gcc@16.1.0+nvptx) &&
+spack install -j$(nproc) llvm@22.1.7 +polly +cuda cuda_arch=80,90 targets=nvptx,x86 +flang +libomptarget +mlir +lld ^cuda %gcc@16.1.0 &&
+spack install -j$(nproc) nvhpc +mpi +blas +lapack &&
+spack install -j$(nproc) openblas +fortran threads=openmp %gcc@16.1.0
+```
+
+The Fortran baseline lanes read the dwarf `input.h5` deck through the HDF5 Fortran API, and
+`hdf5.mod` is not portable across compilers -- one HDF5 build per Fortran compiler:
+
+```
+spack compiler find $(spack location -i llvm@22.1.7) &&
+spack compiler find $(spack location -i nvhpc) &&
+spack install -j$(nproc) hdf5 +fortran +hl %gcc@16.1.0 &&
+spack install -j$(nproc) hdf5 +fortran +hl %llvm@22.1.7 &&
+spack install -j$(nproc) hdf5 +fortran +hl %nvhpc
+```
+
+Python is not taken from spack by default: the drivers run on the pinned interpreter
+(`~/.pyenv/versions/py13/bin/python`). A spack `python@3.13` works if `PYTHON=` points at it.
+
 ## reproduce
 
 1. Install with the pinned interpreter (`~/.pyenv/versions/py13/bin/python`, override with
@@ -11,10 +40,12 @@ build + `pipelines.optimize` path the e2e tests use. Perf only -- numerics stay 
    `bash samples/cloudsc/download_data.sh`, `bash samples/velocity_tendencies/download_data.sh`.
 3. Build the velocity python bindings (`convert_data.py` also builds them on first import):
    `python samples/velocity_tendencies/velocity_data_build.py`.
-4. Submit the full CPU matrix: `./samples/submit_all.sh -p <partition> -A <account>`. Its per-job
+4. Put the toolchain on PATH: copy `samples/env.spack.example` to `samples/env.sh` (or export
+   `SAMPLES_ENV=<file>`); `common.sh` sources it in every job before probing compilers.
+5. Submit the full CPU matrix: `./samples/submit_all.sh -p <partition> -A <account>`. Its per-job
    lane lists are defaults; an exported `LANES` overrides every job. GPU lanes are opt-in: add
    `gpu` to `LANES` on the cloudsc jobs.
-5. Collect: one CSV per job, `kernel,mode,<p1>,<p2>,threads,rep,ms,inputs,lane`.
+6. Collect: one CSV per job, `kernel,mode,<p1>,<p2>,threads,rep,ms,inputs,lane`.
 
 ## lanes
 
