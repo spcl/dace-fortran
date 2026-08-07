@@ -45,7 +45,8 @@ npz keys are the harness `mesh_buffers` flat names (`tests/icon/ocean/_ocean_e2e
 refin-ctrl arrays are embedded in the harness 33-slot / lbound -16 window.
 `run_velocity_perf.py` (phase A sdfgz cache keyed by variant/backend/git-describe, phase B
 timed reps, CSV `kernel,mode,nproma,nblks_e,threads,rep,ms,inputs,lane` -- `inputs` is always
-`r02b05`) is cluster-only: do not run it on the dev box. Knobs: `--reps` (50), `--warmup` (2).
+`r02b05`) is cluster-only: do not run it on the dev box. Knobs: `--reps` (50), `--warmup` (2),
+`--verify <ref_dir>` (one untimed run checked against a reference dump, gate `1e-10` relative).
 
 Lanes: `LANES` env, space list from `dace-gcc` (default), `dace-llvm` (`--backend llvm`, clang++ as
 the DaCe CPU compiler) and `baselines` (see `samples/README.md` lane matrix).
@@ -73,8 +74,8 @@ Numerics gate: build one serial reference (`gfortran -O1`), run it with `dumpref
 run each parallel lane with `verify <ref_dir>`. It fails above `1e-10` relative -- not zero,
 because the lanes build with `-march=native` and FMA contraction plus autopar reassociation move
 the last digits (measured worst gap: `9e-16`). `dump_data.py --reference` writes the same layout
-from the DaCe kernel, but that oracle is currently WRONG: `run_velocity_perf.bind_call` under-runs
-the domain on this deck (32 of 11M elements written), so use the serial Fortran reference.
+from the DaCe kernel; `run_velocity_perf.py --verify <ref_dir>` is the mirror gate for the DaCe
+lane (measured against the serial Fortran reference on this deck: bit-exact, both TU variants).
 
 The OpenACC lanes need the derived types on the device before the kernel's `PRESENT(...)` data
 region; the driver does that with a shallow `!$ACC ENTER DATA COPYIN`, which is why the GPU lane

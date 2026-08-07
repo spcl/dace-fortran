@@ -89,47 +89,6 @@ def read_dump(out_dir: Path) -> tuple[dict, dict]:
     return arrays, meta
 
 
-def fill_unrecorded(sdfg, arrays: dict, meta: dict) -> None:
-    """Seed the arglist entries the artifact set does not record, so bind_call can bind.
-
-    The marshalled struct signature carries EVERY member of t_patch / t_int_state / t_nh_* plus one
-    ``offset_<arr>_d<i>`` per array dimension, while velocity_tendencies reads a subset and the
-    recorded deck only holds that subset.  Unread members get a zero of their own dtype (never an
-    int32 stand-in: the compiled signature is typed), offsets get their array's lower bound.
-    p_patch_id is the one that must not be zero -- it indexes nflatlev/nrdmax.
-    """
-    import dace.data as dt
-    lbounds = meta["lbounds"]
-    # bind_call renames nflatlev_jg/nrdmax_jg on the way in; a zero default for those would make
-    # the kernel's DO jk = nflatlev_jg, nlev start at 0 and write out of bounds.
-    known = set(arrays) | set(meta) | set(FIXED_SCALARS) | {"nflatlev", "nrdmax"}
-
-    def default_for(flat: str) -> int:
-        # p_patch_nlev / p_patch_nblks_c / ... are the struct members behind the recorded scalars;
-        # they size the kernel's transients, so a zero default corrupts the heap rather than
-        # failing loudly.  p_patch_id indexes nflatlev/nrdmax.  Everything else is genuinely unread.
-        if flat == "p_patch_id":
-            return 1
-        stem = flat[len("p_patch_"):] if flat.startswith("p_patch_") else flat
-        return int(meta[stem]) if stem in meta else 0
-
-    for name, desc in sdfg.arglist().items():
-        flat = flat_name(name)
-        if flat in known:
-            continue
-        if isinstance(desc, dt.Array):
-            shape = tuple(int(s) if str(s).isdigit() else 1 for s in desc.shape)
-            arrays[flat] = np.full(shape, default_for(flat), dtype=desc.dtype.as_numpy_dtype(), order="F")
-        elif flat.startswith("offset_") and "_d" in flat:
-            stem, _, dim = flat[len("offset_"):].rpartition("_d")
-            meta[flat] = int(lbounds.get(stem, [1] * (int(dim) + 1))[int(dim)])
-        else:
-            meta[flat] = default_for(flat)
-    for sym in sorted(str(s) for s in sdfg.free_symbols):
-        if sym not in meta and sym not in arrays:
-            meta[sym] = default_for(sym)
-
-
 def write_reference(out_dir: Path, arrays: dict, meta: dict, variant: str) -> None:
     """Run the DaCe kernel on these inputs and dump its write set as the driver's oracle."""
     from run_velocity_perf import bind_call, load_or_build
@@ -137,7 +96,6 @@ def write_reference(out_dir: Path, arrays: dict, meta: dict, variant: str) -> No
     tag = f"velocity_{variant}_gcc_{git_describe()}"
     sdfg = load_or_build(variant, root / f"{tag}.sdfgz", root / tag)
     compiled = sdfg.compile()
-    fill_unrecorded(sdfg, arrays, meta)
     call = bind_call(sdfg, arrays, meta)
     compiled(**call)
     ref_dir = out_dir / "ref"
