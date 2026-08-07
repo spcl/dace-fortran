@@ -24,7 +24,7 @@ concurrency:
 jobs:
   test-fortran:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    # Three runners from one definition (shared setup, no duplication):
+    # Four runners from one definition (shared setup, no duplication):
     #   * ``fast``  -- the routine sweep: every test EXCEPT ``mpi``,
     #                  ``long`` and ``integration`` (uploads coverage).
     #                  Keeps PR feedback quick.

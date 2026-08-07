@@ -248,20 +248,50 @@ Autotools is supported via `autotools/dace_fortran.m4` + an included `dace_fortr
 
 ## Testing
 
-```bash
-# Main sweep — excludes multi-rank MPI and slow ICON-build tests:
-python3 -m pytest -n 4 -m "not mpi and not long" tests/
+CI (`.github/workflows/fortran-ci.yml`) runs four lanes from one job definition — `fast`, `heavy`, `integration`, `e2e`. The commands below are the exact per-lane invocations, runnable locally as-is (all lanes use `--maxfail=20` so failures surface fast):
 
-# Multi-rank MPI tests (run under mpirun; --oversubscribe for <4 cores):
-mpirun --oversubscribe -n 4 python3 -m pytest -m mpi -p no:cacheprovider tests/
+```bash
+# fast — the routine sweep (also uploads coverage in CI):
+python3 -m pytest -n auto --dist loadgroup -m "not mpi and not long and not integration and not e2e" \
+    --maxfail=20 -p no:cacheprovider --tb=short tests/
+
+# heavy — long tests only (ICON built from source + ICON-O fparser single-TU extractions):
+python3 -m pytest -n auto --dist loadgroup -m "long and not mpi and not integration and not e2e" \
+    --maxfail=20 -p no:cacheprovider --tb=short tests/
+
+# integration — multi-rank MPI under mpirun, then the short ICON orig-vs-binding bit-exact tests:
+mpirun --oversubscribe -n 4 python3 -m pytest -m mpi \
+    --maxfail=20 -p no:cacheprovider --tb=short tests/
+python3 -m pytest -m "integration and not mpi" \
+    --maxfail=20 -p no:cacheprovider --tb=short tests/
+
+# e2e — production kernels through the full pipeline (runbook below):
+python3 -m pytest -m e2e --maxfail=20 -p no:cacheprovider --tb=short tests/
 
 # Dump built SDFGs for inspection:
 __DACE_HLFIR_GEN_TEST_SDFGS=1 python3 -m pytest tests/
 ```
 
-`tests/conftest.py` sets test-env defaults automatically (via `setdefault` — explicit override still wins): `HWLOC_COMPONENTS=-gl` (stop hwloc's GL/X11 probe hanging `MPI_Init` on a desktop X display), `UCX_VFS_ENABLE=n` + `OMPI_MCA_pml=ob1`/`OMPI_MCA_btl=self,vader` (in-node transports, so UCX/PMIx finalize can't abort xdist workers), raises the stack soft-limit to its hard limit for deeply-inlined kernels. Pytest markers: `mpi`, `long`, `sequential`, `xdist_group` (see `pyproject.toml`).
+`tests/conftest.py` sets test-env defaults automatically (via `setdefault` — explicit override still wins): `HWLOC_COMPONENTS=-gl` (stop hwloc's GL/X11 probe hanging `MPI_Init` on a desktop X display), `UCX_VFS_ENABLE=n` + `OMPI_MCA_pml=ob1`/`OMPI_MCA_btl=self,vader` (in-node transports, so UCX/PMIx finalize can't abort xdist workers), raises the stack soft-limit to its hard limit for deeply-inlined kernels. Pytest markers: `long`, `sequential`, `mpi`, `integration`, `e2e`, `xdist_group`, `fftw` (see `pyproject.toml`).
 
 `TMPDIR` controls where scratch `.f90`/`.hlfir`/`.dacecache` build artifacts land. Executable-Fortran tests compile+run with `gfortran`/`f2py` against a seeded numerical reference.
+
+### e2e lane runbook
+
+`tests/e2e/` drives three production kernels through the full parallelization pipeline (`dace_fortran/pipelines.optimize`: specialize → short-unroll → simplify → state fusion → [scalar fission] → loop-to-map → state fusion → map fusion) and compares the result against the untouched gfortran/f2py reference — a transformation that changes a value reds this lane even when every unit test passes:
+
+| Test | Kernel | Numerical check | Wall time | Peak RAM |
+|---|---|---|---|---|
+| `test_cloudsc.py` | ECMWF CLOUDSC | `rtol=atol=1e-11` on all program outputs, `num_maps > 0` | ~16 min | ~1.2 GB |
+| `test_velocity.py` | ICON atmosphere `velocity_tendencies`, both `__LOOP_EXCHANGE` variants | **bit-exact** (`max_diff == 0.0`), `n_changed > 0` | ~2.5 min | ~1 GB |
+| `test_vexx.py` | QE `exx_bp::vexx_bp_k_gpu` | `rtol=atol=1e-11`, `num_maps > 0` | ~4 min | ~0.6 GB |
+
+Running it locally:
+
+- **Sequential, one build at a time.** `tests/e2e/conftest.py` pins `DACE_compiler_build_jobs=1`: each kernel is a single very large TU (CloudSC ~25k lines) whose `-O3` compile peaks in the multi-GB range, and concurrent compiles OOM the box. Never run the e2e lane under xdist.
+- **Compile flags.** The lane builds with `BITEXACT_CPU_ARGS` (`tests/_util.py`): `-O3 -march=native -fno-fast-math -ffp-contract=off -fno-math-errno -fno-trapping-math` (no reassociation, no FMA contraction — that's what makes bit-exactness achievable) plus `--param ggc-min-expand=10 --param ggc-min-heapsize=32768`, which keeps gcc's garbage collector aggressive so the 25k-line TU peaks at ~1.2 GB instead of ~12 GB. That pair is the fix for the CloudSC compile OOM — don't drop it.
+- **Environment.** Set `PYTHONHASHSEED=0` (deterministic SDFG hashing) and, if anything in the run imports mpi4py, the anti-hang vars `HWLOC_COMPONENTS=-gl UCX_VFS_ENABLE=n OMPI_MCA_pml=ob1 OMPI_MCA_btl=self,vader,tcp PMIX_MCA_gds=hash MPI4PY_RC_INITIALIZE=0`.
+- **Memory-tight boxes.** Wrap the run in a cgroup so a runaway peak can't take the session down, e.g. `systemd-run --user --service-type=oneshot --wait -p MemoryMax=10G --working-directory=$PWD -- python3 -m pytest -m e2e ...`. Note: with `--wait`, pytest's stdout goes to the journal (`journalctl --user -u <unit>`), not to a shell redirect.
 
 Validated corpora: construct-level suite (types, control flow, allocatable/pointer, slicing/intrinsics, reductions, BLAS/LAPACK, derived types, MPI send/recv); ICON ocean + atmosphere dycore/graupel/velocity-advection + full ICON-from-source integration (`tests/icon/`); Quantum ESPRESSO `exx` (`tests/qe/`); CLOUDSC (`tests/cloudsc/`); NPB LU (`tests/npb/`); FV3; LULESH; build-system integration (`tests/buildsys_integration/`); binding-specific tests (`tests/bindings/`).
 
