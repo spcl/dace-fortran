@@ -13,7 +13,7 @@ spack install newlib target=nvptx-none &&
 spack install nvptx-tools &&
 spack install -j$(nproc) gcc@16.1.0 +graphite +nvptx +binutils languages=c,c++,fortran %gcc@14.2.0 ^cuda &&
 spack compiler find $(spack location -i gcc@16.1.0+nvptx) &&
-spack install -j$(nproc) llvm@22.1.7 +polly +cuda cuda_arch=80,90 targets=nvptx,x86 +flang +libomptarget +mlir +lld targets=nvptx,aarch64 %gcc@16.1.0 && # aarch
+spack install -j$(nproc) llvm@22.1.7 +polly +cuda cuda_arch=80,90 +flang +libomptarget +mlir +lld targets=nvptx,aarch64 %gcc@16.1.0 && # aarch
 spack install -j$(nproc) llvm@22.1.7 +flang +libomptarget +lld +mlir +polly targets=nvptx,x86 %gcc@16.1.0 && # x86
 spack install -j$(nproc) nvhpc +mpi +blas +lapack &&
 spack install -j$(nproc) openblas +fortran threads=openmp %gcc@16.1.0
