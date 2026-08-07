@@ -437,11 +437,38 @@ PROGRAM driver_velocity
   WRITE (error_unit, '(A,I0,A,I0,A,I0,A,I0)') 'loaded dump: nproma=', nproma, ' nblks_e=', nblks_e, &
     ' nlev=', nlev, ' nlevp1=', nlevp1
 
-  ! The kernel's !$ACC DATA says PRESENT(p_diag, ...) because in ICON solve_nh has already put those
-  ! derived types on the device; standalone, this is that step.  Shallow on purpose: nvfortran
-  ! cannot deep-copy the POINTER components, and -gpu=mem:managed (the openacc lane's flag) makes
-  ! the component data device-accessible without one.  Inert for the non-OpenACC lanes.
+  ! The kernel's !$ACC DATA says PRESENT(p_diag, ...) because in ICON solve_nh has already staged
+  ! every array on the device; standalone, this is that step.  Manual deep copy, no managed memory:
+  ! the shallow COPYIN below carries the scalar components and the (unattached) descriptors, then
+  ! each component array is staged in turn, which allocates it on the device and attaches the device
+  ! address into the shallow copy.  Read-only inputs are COPYIN; the write set is CREATE and filled
+  ! by the per-rep UPDATE DEVICE.  Inert for the non-OpenACC lanes.
   !$ACC ENTER DATA COPYIN(p_patch, p_int, p_prog, p_metrics, p_diag)
+  !$ACC ENTER DATA COPYIN(p_patch%cells%neighbor_idx, p_patch%cells%neighbor_blk, &
+  !$ACC   p_patch%cells%edge_idx, p_patch%cells%edge_blk, p_patch%cells%area, &
+  !$ACC   p_patch%cells%start_index, p_patch%cells%end_index, p_patch%cells%start_block, &
+  !$ACC   p_patch%cells%end_block, p_patch%cells%decomp_info%owner_mask)
+  !$ACC ENTER DATA COPYIN(p_patch%edges%cell_idx, p_patch%edges%cell_blk, &
+  !$ACC   p_patch%edges%vertex_idx, p_patch%edges%vertex_blk, p_patch%edges%quad_idx, &
+  !$ACC   p_patch%edges%quad_blk, p_patch%edges%tangent_orientation, &
+  !$ACC   p_patch%edges%inv_primal_edge_length, p_patch%edges%inv_dual_edge_length, &
+  !$ACC   p_patch%edges%area_edge, p_patch%edges%f_e, p_patch%edges%fn_e, p_patch%edges%ft_e, &
+  !$ACC   p_patch%edges%start_index, p_patch%edges%end_index, p_patch%edges%start_block, &
+  !$ACC   p_patch%edges%end_block)
+  !$ACC ENTER DATA COPYIN(p_patch%verts%cell_idx, p_patch%verts%cell_blk, &
+  !$ACC   p_patch%verts%edge_idx, p_patch%verts%edge_blk, p_patch%verts%start_index, &
+  !$ACC   p_patch%verts%end_index, p_patch%verts%start_block, p_patch%verts%end_block)
+  !$ACC ENTER DATA COPYIN(p_int%c_lin_e, p_int%cells_aw_verts, p_int%e_bln_c_s, &
+  !$ACC   p_int%geofac_grdiv, p_int%geofac_n2s, p_int%geofac_rot, p_int%rbf_vec_coeff_e)
+  !$ACC ENTER DATA COPYIN(p_prog%vn, p_prog%w)
+  !$ACC ENTER DATA COPYIN(p_metrics%coeff1_dwdz, p_metrics%coeff2_dwdz, p_metrics%coeff_gradekin, &
+  !$ACC   p_metrics%ddqz_z_full_e, p_metrics%ddqz_z_half, p_metrics%ddxn_z_full, &
+  !$ACC   p_metrics%ddxt_z_full, p_metrics%wgtfac_c, p_metrics%wgtfac_e, p_metrics%wgtfacq_e, &
+  !$ACC   p_metrics%deepatmo_gradh_ifc, p_metrics%deepatmo_gradh_mc, &
+  !$ACC   p_metrics%deepatmo_invr_ifc, p_metrics%deepatmo_invr_mc)
+  !$ACC ENTER DATA CREATE(p_diag%ddt_vn_apc_pc, p_diag%ddt_vn_cor_pc, p_diag%ddt_w_adv_pc, &
+  !$ACC   p_diag%vt, p_diag%vn_ie, p_diag%vn_ie_ubc, p_diag%w_concorr_c) &
+  !$ACC   CREATE(z_kin_hor_e, z_vt_ie, z_w_concorr_me)
 
   CALL SYSTEM_CLOCK(COUNT_RATE=rate)
   DO rep = -warmup, reps - 1
@@ -456,6 +483,11 @@ PROGRAM driver_velocity
     CALL restore(z_vt_ie, SIZE(z_vt_ie), sv_vtie)
     CALL restore(z_w_concorr_me, SIZE(z_w_concorr_me), sv_wcme)
     p_diag%max_vcfl_dyn = vcfl0(1)
+    ! The restores above touched host memory only; without this the device copies would go stale
+    ! after the first rep.  Untimed, exactly like the host restores.
+    !$ACC UPDATE DEVICE(p_diag%ddt_vn_apc_pc, p_diag%ddt_vn_cor_pc, p_diag%ddt_w_adv_pc, &
+    !$ACC   p_diag%vt, p_diag%vn_ie, p_diag%vn_ie_ubc, p_diag%w_concorr_c, &
+    !$ACC   z_kin_hor_e, z_vt_ie, z_w_concorr_me)
 
     CALL SYSTEM_CLOCK(t0)
     CALL velocity_tendencies(p_prog, p_patch, p_int, p_metrics, p_diag, z_w_concorr_me, z_kin_hor_e, z_vt_ie, &
@@ -470,6 +502,34 @@ PROGRAM driver_velocity
     END IF
   END DO
 
+  ! Write set back to the host, everything else dropped; the shallow copies go last so the members
+  ! detach while their parent is still on the device.  DELETE, never COPYOUT, for the parents: their
+  ! device image holds device addresses that would overwrite the host descriptors.
+  !$ACC EXIT DATA COPYOUT(p_diag%ddt_vn_apc_pc, p_diag%ddt_vn_cor_pc, p_diag%ddt_w_adv_pc, &
+  !$ACC   p_diag%vt, p_diag%vn_ie, p_diag%vn_ie_ubc, p_diag%w_concorr_c) &
+  !$ACC   COPYOUT(z_kin_hor_e, z_vt_ie, z_w_concorr_me)
+  !$ACC EXIT DATA DELETE(p_patch%cells%neighbor_idx, p_patch%cells%neighbor_blk, &
+  !$ACC   p_patch%cells%edge_idx, p_patch%cells%edge_blk, p_patch%cells%area, &
+  !$ACC   p_patch%cells%start_index, p_patch%cells%end_index, p_patch%cells%start_block, &
+  !$ACC   p_patch%cells%end_block, p_patch%cells%decomp_info%owner_mask)
+  !$ACC EXIT DATA DELETE(p_patch%edges%cell_idx, p_patch%edges%cell_blk, &
+  !$ACC   p_patch%edges%vertex_idx, p_patch%edges%vertex_blk, p_patch%edges%quad_idx, &
+  !$ACC   p_patch%edges%quad_blk, p_patch%edges%tangent_orientation, &
+  !$ACC   p_patch%edges%inv_primal_edge_length, p_patch%edges%inv_dual_edge_length, &
+  !$ACC   p_patch%edges%area_edge, p_patch%edges%f_e, p_patch%edges%fn_e, p_patch%edges%ft_e, &
+  !$ACC   p_patch%edges%start_index, p_patch%edges%end_index, p_patch%edges%start_block, &
+  !$ACC   p_patch%edges%end_block)
+  !$ACC EXIT DATA DELETE(p_patch%verts%cell_idx, p_patch%verts%cell_blk, &
+  !$ACC   p_patch%verts%edge_idx, p_patch%verts%edge_blk, p_patch%verts%start_index, &
+  !$ACC   p_patch%verts%end_index, p_patch%verts%start_block, p_patch%verts%end_block)
+  !$ACC EXIT DATA DELETE(p_int%c_lin_e, p_int%cells_aw_verts, p_int%e_bln_c_s, &
+  !$ACC   p_int%geofac_grdiv, p_int%geofac_n2s, p_int%geofac_rot, p_int%rbf_vec_coeff_e)
+  !$ACC EXIT DATA DELETE(p_prog%vn, p_prog%w)
+  !$ACC EXIT DATA DELETE(p_metrics%coeff1_dwdz, p_metrics%coeff2_dwdz, p_metrics%coeff_gradekin, &
+  !$ACC   p_metrics%ddqz_z_full_e, p_metrics%ddqz_z_half, p_metrics%ddxn_z_full, &
+  !$ACC   p_metrics%ddxt_z_full, p_metrics%wgtfac_c, p_metrics%wgtfac_e, p_metrics%wgtfacq_e, &
+  !$ACC   p_metrics%deepatmo_gradh_ifc, p_metrics%deepatmo_gradh_mc, &
+  !$ACC   p_metrics%deepatmo_invr_ifc, p_metrics%deepatmo_invr_mc)
   !$ACC EXIT DATA DELETE(p_patch, p_int, p_prog, p_metrics, p_diag)
 
   vcfl0(1) = p_diag%max_vcfl_dyn

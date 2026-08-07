@@ -8,9 +8,8 @@
 ! Directives ported from ICON's tests/icon/full/icon-model/src/atm_dyn_iconam/mo_velocity_advection.f90
 ! (main kernel) plus externals/iconmath mo_lib_divrot.F90 / mo_lib_interpolation_scalar.F90 (the two
 ! inlined lib routines), mapped by loop variable + array names.  Deliberate deviations:
-!   * DATA uses COPY, not ICON's COPYIN, for z_w_concorr_me/z_kin_hor_e/z_vt_ie.  In ICON those are
-!     already device-resident from solve_nh's data region so COPYIN is a present-hit; standalone
-!     there is no enclosing region, and all three are kernel OUTPUTS -- COPYIN would drop them.
+!   * DATA uses PRESENT, not ICON's COPYIN, for z_w_concorr_me/z_kin_hor_e/z_vt_ie.  Either way it
+!     is a present-hit: driver_velocity.f90 stages them, like solve_nh's data region does in ICON.
 !   * PRESENT(iqidx, ...) dropped: the extractor flattened those pointer aliases into
 !     p_patch % edges % quad_idx etc.
 !   * IF(lzacc) dropped from the two lib routines: the extractor degraded set_acc_host_or_device to
@@ -542,9 +541,9 @@ MODULE mo_velocity_advection
     nflatlev_jg = nflatlev(jg)
     nlev = p_patch % nlev
     nlevp1 = p_patch % nlevp1
-    !$ACC DATA COPY(z_w_concorr_me, z_kin_hor_e, z_vt_ie) &
-    !$ACC   CREATE(z_w_concorr_mc, z_w_con_c, cfl_clipping, z_w_con_c_full, z_v_grad_w) &
+    !$ACC DATA CREATE(z_w_concorr_mc, z_w_con_c, cfl_clipping, z_w_con_c_full, z_v_grad_w) &
     !$ACC   CREATE(z_w_v, zeta, z_ekinh, levmask, levelmask) &
+    !$ACC   PRESENT(z_w_concorr_me, z_kin_hor_e, z_vt_ie) &
     !$ACC   PRESENT(p_diag, p_prog, p_int, p_metrics, p_patch)
     IF (lextra_diffu) THEN
       cfl_w_limit = 0.65D0 / dtime

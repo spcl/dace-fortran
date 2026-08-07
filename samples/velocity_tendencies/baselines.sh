@@ -117,10 +117,10 @@ for lane in $BASELINE_LANES; do
                 echo "SKIP $lane: no GPU visible (nvidia-smi -L lists none)" >&2
                 continue
             fi
-            # mem:managed, not a deep-copy data region: ICON's !$ACC DATA says PRESENT(p_diag, ...)
-            # because solve_nh put those derived types on the device, and nvfortran cannot deep-copy
-            # the POINTER components t_nh_diag/t_nh_metrics/t_nh_prog are made of.
-            build_driver "$BUILD_ROOT/$lane" "$NVFORTRAN" -O3 -acc=gpu -gpu=mem:managed
+            # No mem:managed and no -gpu=deepcopy: driver_velocity.f90 stages every array with
+            # explicit ENTER DATA (OpenACC manual deep copy), so the kernel's PRESENT clauses are
+            # present-hits on real device memory, and a miss is a hard runtime error.
+            build_driver "$BUILD_ROOT/$lane" "$NVFORTRAN" -O3 -acc=gpu
             set_omp_env 1
             # threads column 0: no CPU thread sweep applies (same convention as cloudsc gpu_baselines.sh)
             run_lane "$BUILD_ROOT/$lane/driver_velocity" "$lane" 0
