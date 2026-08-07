@@ -4,16 +4,16 @@
 
 ``optimize`` is the end-to-end parallelization pipeline:
 
-    specialize -> short-loop-unroll -> simplify -> state-fusion-extended
-      -> [scalar-fission] -> loop2map -> state-fusion-extended -> mapfusion
+    specialize -> short-loop-unroll -> unique-loop-iterators -> scalar-fission -> simplify
+      -> state-fusion-extended -> loop2map -> state-fusion-extended -> mapfusion
 
-``scalar_fission`` runs BEFORE loop2map (it splits scalar-carried loop bodies so the loop can
-map): CloudSC needs it for parallelism, the ICON ocean kernels do not. ``specialize`` bakes the
-known compile-time constants (CloudSC: nclv, ncldqi, ...) so the shape and branch folding
-downstream have literals to work on.
+``scalar_fission`` runs unconditionally, BEFORE simplify (it splits scalar-carried loop bodies so
+the loop can map downstream): LoopToMap needs it in general, not just CloudSC. ``specialize``
+bakes the known compile-time constants (CloudSC: nclv, ncldqi, ...) so the shape and branch
+folding downstream have literals to work on.
 """
 import copy
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional, Set, Union
 
 import numpy as np
 
@@ -25,8 +25,14 @@ from dace.transformation.interstate.state_fusion_with_happens_before import Stat
 from dace.transformation.pass_pipeline import Pipeline
 from dace.transformation.passes.parallelization_prep import ShortLoopUnroll
 from dace.transformation.passes.scalar_fission import ScalarFission
+from dace.transformation.passes.unique_loop_iterators import UniqueLoopIterators
 
 Const = Union[float, int, str]
+
+
+def accepted_call_args(sdfg: SDFG) -> Set[str]:
+    """Names ``sdfg`` can be called with: its arglist plus its free symbols."""
+    return set(sdfg.arglist()) | {str(s) for s in sdfg.free_symbols}
 
 
 def verify_numerics(reference: SDFG, optimized: SDFG, inputs: Dict[str, Any]) -> None:
@@ -41,6 +47,8 @@ def verify_numerics(reference: SDFG, optimized: SDFG, inputs: Dict[str, Any]) ->
     :param reference: the pre-optimization SDFG.
     :param optimized: the post-optimization SDFG.
     :param inputs: concrete call arguments; each SDFG gets its own copy, since they mutate in place.
+                   Names either SDFG does not accept are dropped from its call: specializing bakes
+                   constants out of the signature, so the two signatures need not agree.
     :raises AssertionError: if any argument differs after the two runs.
     """
     # The two SDFGs share a name, and the build folder is keyed on it -- compiling both would put
@@ -54,12 +62,16 @@ def verify_numerics(reference: SDFG, optimized: SDFG, inputs: Dict[str, Any]) ->
             for k, v in inputs.items()
         }
 
+    ref_accepts, opt_accepts = accepted_call_args(reference), accepted_call_args(optimized)
     ref_args, opt_args = fresh(), fresh()
-    reference(**ref_args)
-    optimized(**opt_args)
+    reference(**{k: v for k, v in ref_args.items() if k in ref_accepts})
+    optimized(**{k: v for k, v in opt_args.items() if k in opt_accepts})
 
     mismatched = []
-    for name, ref_val in ref_args.items():
+    # Only names BOTH sides were handed are evidence: one the optimized SDFG never received is
+    # untouched by construction and would read as a spurious mismatch.
+    for name in sorted(ref_accepts & opt_accepts):
+        ref_val = ref_args.get(name)
         if not isinstance(ref_val, np.ndarray):
             continue
         opt_val = opt_args[name]
@@ -79,7 +91,6 @@ def optimize(sdfg: SDFG,
              symbols: Optional[Dict[str, Const]] = None,
              scalars: Optional[Dict[str, Const]] = None,
              unroll_limit: int = 8,
-             scalar_fission: bool = False,
              validate: bool = True,
              verify_inputs: Optional[Dict[str, Any]] = None) -> SDFG:
     """Run the parallelization pipeline in place and return ``sdfg``.
@@ -88,7 +99,6 @@ def optimize(sdfg: SDFG,
     :param symbols: free symbols to bake to constants (batched, one recursive walk).
     :param scalars: scalar data containers to bake to constants (batched).
     :param unroll_limit: fully unroll constant-trip loops at or below this many iterations.
-    :param scalar_fission: run ScalarFission before loop2map (CloudSC parallelism prep).
     :param validate: validate the SDFG after each structural stage. STRUCTURAL only -- it says
                      nothing about whether the transformations preserved values.
     :param verify_inputs: call arguments to check numerics with once the pipeline is done. The
@@ -106,14 +116,15 @@ def optimize(sdfg: SDFG,
         specialize_scalars(sdfg, scalars)
 
     ShortLoopUnroll(unroll_limit).apply_pass(sdfg, {})
+    # default assign_loop_iterator_post_value=True keeps Fortran counted-DO exit-value semantics;
+    # shared iterator names otherwise make LoopToMap refuse merged siblings.
+    UniqueLoopIterators().apply_pass(sdfg, {})
+    # ScalarFission depends on the ScalarWriteShadowScopes analysis; a bare apply_pass gets an
+    # empty pipeline_results and KeyErrors. A Pipeline resolves depends_on() first.
+    Pipeline([ScalarFission()]).apply_pass(sdfg, {})
 
     sdfg.simplify(validate=validate)
     sdfg.apply_transformations_repeated(StateFusionExtended, validate=validate)
-
-    if scalar_fission:
-        # ScalarFission depends on the ScalarWriteShadowScopes analysis; a bare apply_pass gets an
-        # empty pipeline_results and KeyErrors. A Pipeline resolves depends_on() first.
-        Pipeline([ScalarFission()]).apply_pass(sdfg, {})
 
     sdfg.apply_transformations_repeated(LoopToMap, validate=validate)
     sdfg.apply_transformations_repeated(StateFusionExtended, validate=validate)

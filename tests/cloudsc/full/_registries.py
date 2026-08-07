@@ -6,13 +6,18 @@ port.  Unified under one key ``cloudscexp2`` (= ``CLOUDSCOUTER``/``_QPcloudscout
 -- the original source had inputs/outputs keyed off two different typo'd strings.
 """
 
+import os
 from numbers import Integral, Number
 from typing import Dict, Union
 
 import numpy as np
 
 # Small size so the test stays fast: NPROMA=1, KLEV=137, NBLOCKS=4 (~MB, not a benchmark).
-nbvalue = 4
+# CLOUDSC_KLON/CLOUDSC_NBLOCKS (samples/cloudsc scaling runs) are read HERE, before ``parameters``:
+# the ``data`` shape dict below is an import-time literal over ``parameters[...]``, so a runtime
+# mutation would desync shapes. Defaults = the historical values, so tests are unchanged when unset.
+klonvalue = int(os.environ.get('CLOUDSC_KLON', '1'))
+nbvalue = int(os.environ.get('CLOUDSC_NBLOCKS', '4'))
 
 # gfortran flags for the f2py reference: portable core flags plus the gfortran-only
 # ``-ffree-line-length-none`` (long-line source; flang has no line limit).
@@ -21,7 +26,7 @@ CLOUDSC_F90FLAGS = "-O0 -fno-fast-math -ffp-contract=off -ffree-line-length-none
 PROGRAM = "cloudscexp2"
 
 parameters = {
-    'KLON': 1,  # equals NPROMA
+    'KLON': klonvalue,  # equals NPROMA
     'KLEV': 137,
     'KIDIA': 1,
     'KFDIA': 137,
@@ -573,107 +578,107 @@ _RKOOP2 = 0.48116e-2
 _RAMID = 0.8  # cloud-fraction threshold for autoconv
 _RAMIN = 1.0e-8  # minimum cloud fraction
 _RLMIN = 1.0e-8  # minimum mixing ratio [kg kg^-1]
-_RCLDIFF = 2.0e-6  # erosion rate (clear air)
+_RCLDIFF = 3.0e-6  # erosion rate (clear air)
 _RCLDIFF_CONVI = 7.0  # erosion enhancement in convection
 _RCLCRIT = 0.4e-3  # critical condensate for autoconv [kg kg^-1]
 _RCLCRIT_SEA = 0.25e-3
-_RCLCRIT_LAND = 0.5e-3
+_RCLCRIT_LAND = 0.55e-3
 _RKCONV = 1.0 / 6000.0  # autoconversion timescale [s^-1]
-_RPRC1 = 300.0
+_RPRC1 = 100.0
 _RPRC2 = 0.5
 _RCLDMAX = 5.0e-3  # max in-cloud condensate [kg kg^-1]
-_RPECONS = 5.547558e-5  # evaporation constant
-_RVRFACTOR = 0.05
+_RPECONS = 5.547256e-5  # evaporation constant
+_RVRFACTOR = 0.00509
 _RPRECRHMAX = 0.7  # max environmental RH for precip evaporation
-_RTAUMEL = 1.1880e4  # melting timescale [s]
-_RKOOPTAU = 1.0e4  # Koop nucleation timescale [s]
-_RCLDTOPP = 10.0  # cloud-top pressure index limit
-_RLCRITSNOW = 1.0e-4  # critical ice for snow autoconv [kg kg^-1]
+_RTAUMEL = 7200.0  # melting timescale [s]
+_RKOOPTAU = 1.08e4  # Koop nucleation timescale [s]
+_RCLDTOPP = 100.0  # cloud-top pressure index limit
+_RLCRITSNOW = 3.0e-5  # critical ice for snow autoconv [kg kg^-1]
 _RSNOWLIN1 = 0.001
 _RSNOWLIN2 = 0.03
-_RICEHI1 = 1.0 / (-30.0)  # ice effective-radius fit
-_RICEHI2 = 1.0 / (-1.0)
+_RICEHI1 = 3.333333e-5  # ice effective-radius fit
+_RICEHI2 = 4.291845e-3
 _RICEINIT = 1.0e-12  # initial ice content [kg kg^-1]
-_RVICE = 0.15  # ice fall speed [m s^-1]
+_RVICE = 0.13  # ice fall speed [m s^-1]
 _RVRAIN = 4.0  # rain fall speed [m s^-1]
 _RVSNOW = 1.0  # snow fall speed [m s^-1]
 _RCOVPMIN = 0.1  # minimum precip cover
 _RCCN = 125.0  # default CCN [cm^-3]
 _RNICE = 0.027  # ice-nuclei reference number
-_RCCNOM = 4.0
-_RCCNSS = 1.0
-_RCCNSU = 1.0
-_RCLDTOPCF = 0.1
+_RCCNOM = 0.13
+_RCCNSS = 0.05
+_RCCNSU = 0.5
+_RCLDTOPCF = 0.01
 _RDEPLIQREFRATE = 0.1
 _RDEPLIQREFDEPTH = 500.0
 
 # Abel-Boutle / Khairoutdinov-Kogan warm-rain & ice/snow microphysics
 # constants (``cloudsc.F90`` ``CLOUD_INIT``-equivalent values).
-_RCL_KKAac = 1350.0
-_RCL_KKBac = 2.47
+_RCL_KKAac = 67.0
+_RCL_KKBac = 1.15
 _RCL_KKAau = 1350.0
 _RCL_KKBauq = 2.47
 _RCL_KKBaun = -1.79
-_RCL_KK_CLOUD_NUM_SEA = 50.0e6
-_RCL_KK_CLOUD_NUM_LAND = 300.0e6
+_RCL_KK_CLOUD_NUM_SEA = 50.0
+_RCL_KK_CLOUD_NUM_LAND = 300.0
 _RCL_AI = 0.069
 _RCL_BI = 2.0
 _RCL_CI = 16.8
 _RCL_DI = 0.527
-_RCL_X1I = 1.0
+_RCL_X1I = 2.0e6
 _RCL_X2I = 0.0
-_RCL_X3I = 2.0
+_RCL_X3I = 1.0
 _RCL_X4I = 0.0
-_RCL_CONST1I = 1.0
-_RCL_CONST2I = 1.0
-_RCL_CONST3I = 0.5
-_RCL_CONST4I = 0.5
-_RCL_CONST5I = 1.0
+_RCL_CONST1I = 3.623188e-6
+_RCL_CONST2I = 6283185.0
+_RCL_CONST3I = 596.9998
+_RCL_CONST4I = 0.6666667
+_RCL_CONST5I = 0.9211667
 _RCL_CONST6I = 1.0
-_RCL_APB1 = 7.18e1
-_RCL_APB2 = 4.78e1
-_RCL_APB3 = 1.57e-3
+_RCL_APB1 = 7.14e11
+_RCL_APB2 = 1.16e8
+_RCL_APB3 = 241.6
 _RCL_AS = 0.069
 _RCL_BS = 2.0
 _RCL_CS = 16.8
 _RCL_DS = 0.527
-_RCL_X1S = 1.0
+_RCL_X1S = 2.0e6
 _RCL_X2S = 0.0
-_RCL_X3S = 2.0
+_RCL_X3S = 1.0
 _RCL_X4S = 0.0
-_RCL_CONST1S = 1.0
-_RCL_CONST2S = 1.0
-_RCL_CONST3S = 0.5
-_RCL_CONST4S = 0.5
-_RCL_CONST5S = 1.0
+_RCL_CONST1S = 3.623188e-6
+_RCL_CONST2S = 6283185.0
+_RCL_CONST3S = 596.9998
+_RCL_CONST4S = 0.6666667
+_RCL_CONST5S = 0.9211667
 _RCL_CONST6S = 1.0
-_RCL_CONST7S = 1.0
-_RCL_CONST8S = 1.0
+_RCL_CONST7S = 9.036352e7
+_RCL_CONST8S = 1.175667
 _RDENSWAT = 1000.0  # density of water [kg m^-3]
 _RDENSREF = 1.0  # reference air density [kg m^-3]
-_RCL_AR = 523.6
+_RCL_AR = 523.5988
 _RCL_BR = 3.0
-_RCL_CR = 130.0
-_RCL_DR = 0.5
-_RCL_X1R = 1.0
-_RCL_X2R = 0.0
+_RCL_CR = 386.8
+_RCL_DR = 0.67
+_RCL_X1R = 0.22
+_RCL_X2R = 2.2
 _RCL_X4R = 0.0
 _RCL_KA273 = 2.4e-2  # thermal conductivity of air at 273 K
-_RCL_CDENOM1 = 1.0
-_RCL_CDENOM2 = 1.0
-_RCL_CDENOM3 = 1.0
+_RCL_CDENOM1 = 5.57e11
+_RCL_CDENOM2 = 1.03e8
+_RCL_CDENOM3 = 204.0
 _RCL_SCHMIDT = 0.6  # Schmidt number
 _RCL_DYNVISC = 1.717e-5  # dynamic viscosity of air [kg m^-1 s^-1]
-_RCL_CONST1R = 1.0
-_RCL_CONST2R = 1.0
-_RCL_CONST3R = 0.5
-_RCL_CONST4R = 0.5
-_RCL_FAC1 = 1.0
-_RCL_FAC2 = 1.0
-_RCL_CONST5R = 1.0
-_RCL_CONST6R = 1.0
-_RCL_FZRAB = 0.66  # Bigg freezing constant
-_RCL_FZRBB = 100.0
+_RCL_CONST1R = 1.382301
+_RCL_CONST2R = 2143.23
+_RCL_CONST3R = 0.635
+_RCL_CONST4R = -0.2
+_RCL_FAC1 = 4146.903
+_RCL_FAC2 = 0.5555556
+_RCL_CONST5R = 8685253.0
+_RCL_CONST6R = -4.8
+_RCL_FZRAB = -0.66  # Bigg freezing constant
+_RCL_FZRBB = 200.0
 
 # Maps constant name -> canonical value (everything else is a runtime array/parameter).
 _PHYSICAL_CONSTANTS = {

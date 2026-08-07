@@ -64,6 +64,11 @@ linting = [
     # Formatters / pre-commit moved to core ``dependencies`` (always available).
     "flake8",
 ]
+samples = [
+    # samples/cloudsc dwarf-p-cloudsc input-deck reader (dwarf_inputs.py falls back to
+    # netCDF4 when h5py is absent).
+    "h5py",
+]
 dev = [
     "dace-fortran[testing,linting]",
 ]
@@ -102,7 +107,7 @@ markers = [
     "sequential: Test must be run sequentially (select with '-m \"sequential\"')",
     "mpi: Multi-rank MPI test; excluded from the normal sweep, run under mpirun (select with '-m \"mpi\"')",
     "integration: ICON orig-vs-binding bit-exact integration test (per-call duplicate-data, VERY SHORT run); runs only on the CI 'integration' runner and is excluded from fast/heavy (select with '-m \"integration\"')",
-    "e2e: Production kernel through the full parallelization pipeline, numerically checked against the untouched gfortran/f2py reference (CloudSC, QE vexx, ICON atmosphere velocity_tendencies). Slow (SDFG optimize + -O3 -march=native build); runs only on the CI 'e2e' runner (select with '-m \"e2e\"')",
+    "e2e: Production kernel through the full parallelization pipeline (CloudSC, QE vexx, ICON atmosphere velocity_tendencies x2 __LOOP_EXCHANGE variants), built twice on seeded random inputs so pre- vs post-optimize is checked BIT-EXACTLY as well as against the untouched gfortran/f2py reference. Slow (two SDFG builds + -O3 -march=native compiles per kernel); runs only on the CI 'e2e' / 'e2e-cloudsc' runners (select with '-m \"e2e\"')",
     "xdist_group: pytest-xdist load-group marker (ICON-build tests share one worker via --dist loadgroup)",
     "fftw: Needs libfftw3 to link the FFT library node's expansion (CI installs libfftw3-dev; select with '-m \"fftw\"')",
 ]

@@ -248,7 +248,7 @@ Autotools is supported via `autotools/dace_fortran.m4` + an included `dace_fortr
 
 ## Testing
 
-CI (`.github/workflows/fortran-ci.yml`) runs four lanes from one job definition — `fast`, `heavy`, `integration`, `e2e`. The commands below are the exact per-lane invocations, runnable locally as-is (all lanes use `--maxfail=20` so failures surface fast):
+CI (`.github/workflows/fortran-ci.yml`) runs five lanes from one job definition — `fast`, `heavy`, `integration`, `e2e`, `e2e-cloudsc`. The commands below are the exact per-lane invocations, runnable locally as-is (all lanes use `--maxfail=20` so failures surface fast):
 
 ```bash
 # fast — the routine sweep (also uploads coverage in CI):
@@ -265,8 +265,12 @@ mpirun --oversubscribe -n 4 python3 -m pytest -m mpi \
 python3 -m pytest -m "integration and not mpi" \
     --maxfail=20 -p no:cacheprovider --tb=short tests/
 
-# e2e — production kernels through the full pipeline (runbook below):
-python3 -m pytest -m e2e --maxfail=20 -p no:cacheprovider --tb=short tests/
+# e2e — QE vexx + ICON velocity_tendencies through the full pipeline (runbook below):
+python3 -m pytest -m e2e --ignore=tests/e2e/test_cloudsc.py \
+    --maxfail=20 -p no:cacheprovider --tb=short tests/
+
+# e2e-cloudsc — CloudSC alone; its own lane because it needs a runner to itself:
+python3 -m pytest -m e2e --maxfail=20 -p no:cacheprovider --tb=short tests/e2e/test_cloudsc.py
 
 # Dump built SDFGs for inspection:
 __DACE_HLFIR_GEN_TEST_SDFGS=1 python3 -m pytest tests/
@@ -278,18 +282,27 @@ __DACE_HLFIR_GEN_TEST_SDFGS=1 python3 -m pytest tests/
 
 ### e2e lane runbook
 
-`tests/e2e/` drives three production kernels through the full parallelization pipeline (`dace_fortran/pipelines.optimize`: specialize → short-unroll → simplify → state fusion → [scalar fission] → loop-to-map → state fusion → map fusion) and compares the result against the untouched gfortran/f2py reference — a transformation that changes a value reds this lane even when every unit test passes:
+`tests/e2e/` drives three production kernels (four configurations) through the full parallelization pipeline (`dace_fortran/pipelines.optimize`: specialize → short-unroll → unique-loop-iterators → scalar fission → simplify → state fusion → loop-to-map → state fusion → map fusion) — a transformation that changes a value reds these lanes even when every unit test passes.
 
-| Test | Kernel | Numerical check | Wall time | Peak RAM |
-|---|---|---|---|---|
-| `test_cloudsc.py` | ECMWF CLOUDSC | `rtol=atol=1e-11` on all program outputs, `num_maps > 0` | ~16 min | ~1.2 GB |
-| `test_velocity.py` | ICON atmosphere `velocity_tendencies`, both `__LOOP_EXCHANGE` variants | **bit-exact** (`max_diff == 0.0`), `n_changed > 0` | ~2.5 min | ~1 GB |
-| `test_vexx.py` | QE `exx_bp::vexx_bp_k_gpu` | `rtol=atol=1e-11`, `num_maps > 0` | ~4 min | ~0.6 GB |
+Every configuration is built **twice**, with the pipeline and without, and run on one seeded random input set, so each carries two independent bars:
+
+- **pre- vs post-optimize, BIT-EXACT** — the pipeline differential, and the bar that actually isolates a transformation bug.
+- **post-optimize vs the untouched gfortran/f2py reference** — the frontend check. Frontend and gfortran differ in evaluation order, so for CloudSC and vexx this can only ever be a `1e-11` comparison; on its own it lets a pipeline bug worth less than `1e-11` through. That gap is what the differential closes.
+
+| Test | Kernel | Differential (pre vs post) | Reference check | Wall time | Peak RAM |
+|---|---|---|---|---|---|
+| `test_cloudsc.py` | ECMWF CLOUDSC | **bit-exact** on every call argument | `rtol=atol=1e-11` on all program outputs, `num_maps > 0` | ~32 min | ~1.2 GB |
+| `test_velocity.py` | ICON atmosphere `velocity_tendencies`, both `__LOOP_EXCHANGE` variants | **bit-exact**, via both legs matching the reference at exactly 0.0 | **bit-exact** (`max_diff == 0.0`), `n_changed > 0` | ~5 min (measured 4:52, both variants) | ~1 GB |
+| `test_vexx.py` | QE `exx_bp::vexx_bp_k_gpu` | **bit-exact** on `hpsi`, through two independently built bindings | `rtol=atol=1e-11`, `num_maps > 0` | ~8 min (measured 7:26) | ~0.9 GB |
+
+The two `__LOOP_EXCHANGE` variants get **separate RNG streams** (seeds 1001 / 1002). The define swaps the automatic transients' data layout, so they are different kernels that merely share a dummy-argument ABI; one shared stream would let a layout-sensitive bug hide behind inputs that happen to suit the other variant.
+
+CloudSC has its own CI lane (`e2e-cloudsc`). It is the outlier — a ~20 min optimize plus an `-O3 -march=native` build of a single 25k-line TU, and the differential makes that two such builds — so on one runner with the others it does not fit the wall clock.
 
 Running it locally:
 
 - **Sequential, one build at a time.** `tests/e2e/conftest.py` pins `DACE_compiler_build_jobs=1`: each kernel is a single very large TU (CloudSC ~25k lines) whose `-O3` compile peaks in the multi-GB range, and concurrent compiles OOM the box. Never run the e2e lane under xdist.
-- **Compile flags.** The lane builds with `BITEXACT_CPU_ARGS` (`tests/_util.py`): `-O3 -march=native -fno-fast-math -ffp-contract=off -fno-math-errno -fno-trapping-math` (no reassociation, no FMA contraction — that's what makes bit-exactness achievable) plus `--param ggc-min-expand=10 --param ggc-min-heapsize=32768`, which keeps gcc's garbage collector aggressive so the 25k-line TU peaks at ~1.2 GB instead of ~12 GB. That pair is the fix for the CloudSC compile OOM — don't drop it.
+- **Compile flags.** The lanes build with `BITEXACT_CPU_ARGS` (`tests/_util.py`): `-O3 -march=native -fno-fast-math -ffp-contract=off -fno-math-errno -fno-trapping-math` (no reassociation, no FMA contraction — that's what makes bit-exactness achievable), plus a memory budget of roughly 6–9 GB built from four params. `--param ggc-min-expand=100 --param ggc-min-heapsize=6291456` sets the GC budget: gcc collects once the heap passes `max(heapsize, live * (1 + expand/100))`, so every kernel but CloudSC (live set well under a GB) never collects at all, while CloudSC stays bounded instead of reaching ~12 GB. `--param max-inline-recursive-depth=4 --param max-inline-recursive-depth-auto=4` (gcc default 8) halves recursive inlining, the main driver of function-size blowup on a 25k-line TU, and `--param max-gcse-memory=524288` (KB, so 512 MB; default 128 MB) is a hard budget past which global CSE bails instead of growing without bound. The ggc pair does not affect codegen at all; the inline and gcse caps do, but neither licenses FP reassociation, so both numerical bars still hold. ⛔ Don't drive `ggc-min-expand` toward 0 to "save memory" — measured, `expand=0` left vexx peaking at 871 MB against a 9 GB cap (it bought nothing, only CloudSC is near the limit) while one `cc1plus` burned 41 min of CPU on a single TU without finishing.
 - **Environment.** Set `PYTHONHASHSEED=0` (deterministic SDFG hashing) and, if anything in the run imports mpi4py, the anti-hang vars `HWLOC_COMPONENTS=-gl UCX_VFS_ENABLE=n OMPI_MCA_pml=ob1 OMPI_MCA_btl=self,vader,tcp PMIX_MCA_gds=hash MPI4PY_RC_INITIALIZE=0`.
 - **Memory-tight boxes.** Wrap the run in a cgroup so a runaway peak can't take the session down, e.g. `systemd-run --user --service-type=oneshot --wait -p MemoryMax=10G --working-directory=$PWD -- python3 -m pytest -m e2e ...`. Note: with `--wait`, pytest's stdout goes to the journal (`journalctl --user -u <unit>`), not to a shell redirect.
 

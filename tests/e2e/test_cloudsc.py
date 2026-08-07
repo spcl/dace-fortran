@@ -6,9 +6,10 @@ Same source, reference and seeded physical inputs as ``cloudsc/full/test_cloudsc
 why the inputs must be in-regime rather than uniform-random), with ``pipelines.optimize`` inserted
 between the SDFG build and the run.
 
-CLOUDSC needs both knobs the ocean and QE kernels do without: ``specialize`` bakes the species
-counts so downstream shape and branch folding have literals, and ``scalar_fission`` splits the
-scalar-carried loop bodies so the block loop can map at all.
+CLOUDSC needs the ``specialize`` knob the ocean and QE kernels do without: it bakes the species
+counts so downstream shape and branch folding have literals. ``scalar_fission`` runs
+unconditionally in the pipeline; it is what splits the scalar-carried loop bodies so CLOUDSC's
+block loop can map at all.
 """
 from pathlib import Path
 
@@ -61,19 +62,26 @@ def _f2py_ref(tmp_path_factory):
 
 
 def test_cloudsc_pipeline_numerical_e2e(tmp_path, _f2py_ref, e2e_cpu_args):
-    """Optimized SDFG output == untouched-reference output, to fp64 precision."""
+    """Optimized SDFG output == untouched-reference output, to fp64 precision.
+
+    ``verify_preopt`` adds the second, stricter question on the same seeded inputs: the pre- and
+    post-optimize SDFGs must agree BIT-EXACTLY. The reference comparison below can only be a 1e-11
+    one (frontend vs gfortran differ in evaluation order), so on its own a pipeline bug worth less
+    than 1e-11 passes; the differential has no such floor.
+    """
     maps = {}
 
     def transform(sdfg):
         syms, scalars = _split_specialize(sdfg)
-        optimize(sdfg, symbols=syms, scalars=scalars, scalar_fission=True)
+        optimize(sdfg, symbols=syms, scalars=scalars)
         maps["n"] = num_maps(sdfg)
 
     outputs_sdfg, outputs_ref = run_cloudsc(_SRC.read_text(),
                                             "cloudsc",
                                             _f2py_ref,
                                             tmp_path / "sdfg",
-                                            transform=transform)
+                                            transform=transform,
+                                            verify_preopt=True)
 
     assert maps["n"] > 0, "pipeline produced no maps -- nothing was parallelized"
 

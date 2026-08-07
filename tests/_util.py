@@ -25,9 +25,30 @@ _HLFIR_DIR = _REPO_ROOT / "dace" / "frontend" / "hlfir"
 # garbage collector run far more often, trading compile time for resident set. Neither affects
 # codegen, so bit-exactness is untouched. Needed because the pipeline lanes hand gcc one ~25k-line
 # translation unit, whose peak at -O3 outgrows this box and takes the whole session down with it.
+# gcc collects once the heap passes ``max(ggc-min-heapsize, live * (1 + ggc-min-expand/100))``, so:
+#   * ``ggc-min-heapsize`` (KB) is the MEMORY BUDGET. Below it gcc never collects at all. It is also
+#     why an untuned build reaches ~12 GB: gcc auto-scales this floor up on a big-RAM box.
+#   * ``ggc-min-expand`` (%) only bites once a kernel's live set is large enough for the second term
+#     to win -- i.e. CloudSC and nothing else. 100 = let the heap double between collections, so
+#     above the budget gcc still collects, but rarely enough not to thrash.
+# 6 GB budget: every kernel but CloudSC has a live set well under a GB, so they never collect at all
+# (no GC cost, no wasted compile time), while CloudSC still gets bounded far below the ~12 GB that
+# OOMs the box. ⛔ Do NOT drive expand toward 0 "to save memory": measured on the vexx lane,
+# ``expand=0`` peaked at 871 MB against a 9 GB cap -- it bought NOTHING, since only CloudSC is near
+# the limit -- while one cc1plus burned 41 min of CPU on a single TU without finishing.
+# Two further caps, on the passes that balloon on a 25k-line TU. ⚠ Unlike the ggc pair these DO
+# change codegen -- but neither licenses FP reassociation, so values are preserved and both bars
+# hold: the differential compiles pre and post with the SAME flags, and the gfortran reference was
+# never built with these flags anyway.
+#   * ``max-inline-recursive-depth{,-auto}=4`` (gcc default 8) halves recursive inlining, the main
+#     driver of function-size blowup here.
+#   * ``max-gcse-memory=524288`` (KB, so 512 MB; gcc default 131072 = 128 MB) is a hard budget for
+#     global CSE -- past it the pass bails out instead of growing without bound.
 BITEXACT_CPU_ARGS = ('-fPIC -O3 -march=native -fno-fast-math -ffp-contract=off -fno-math-errno '
                      '-fno-trapping-math -Wno-unused-parameter -Wno-unused-label '
-                     '--param ggc-min-expand=10 --param ggc-min-heapsize=32768')
+                     '--param ggc-min-expand=100 --param ggc-min-heapsize=6291456 '
+                     '--param max-inline-recursive-depth=4 --param max-inline-recursive-depth-auto=4 '
+                     '--param max-gcse-memory=524288')
 
 # when set, build_sdfg(...).build() dumps its SDFG here; "1"/"true"/"yes" means _DEFAULT_DUMP_DIR.
 _DUMP_ENV = "__DACE_HLFIR_GEN_TEST_SDFGS"

@@ -35,16 +35,34 @@ jobs:
     #                  multi-rank ``mpi`` tests, run as SEPARATE steps.  Kept
     #                  off fast/heavy so neither the quick PR sweep nor the
     #                  ICON-from-source builds carry the mpirun-driven tests.
-    #   * ``e2e``   -- production kernels (CloudSC, QE vexx, ICON atmosphere
-    #                  velocity_tendencies) through the FULL parallelization pipeline,
-    #                  each numerically compared against the untouched
+    #   * ``e2e``   -- QE vexx + ICON atmosphere velocity_tendencies (BOTH
+    #                  __LOOP_EXCHANGE variants) through the FULL parallelization
+    #                  pipeline.  Each kernel is built and run TWICE, with the
+    #                  pipeline and without, so the lane pins the pre- vs
+    #                  post-optimize differential BIT-EXACTLY on seeded random
+    #                  inputs -- not just a 1e-11 match against the untouched
     #                  gfortran/f2py reference.  Slow: an SDFG optimize plus an
-    #                  -O3 -march=native build per kernel, so it is kept off the
+    #                  -O3 -march=native build per build, so it is kept off the
     #                  quick PR sweep.
+    #                  Measured locally, both builds each: vexx 7:26, velocity
+    #                  4:52 for BOTH __LOOP_EXCHANGE variants -- ~13 min of work,
+    #                  which is why these three share one runner.
+    #   * ``e2e-cloudsc`` -- the same, for CloudSC alone.  Split off ``e2e``
+    #                  because CloudSC is the outlier: a ~20 min optimize plus an
+    #                  -O3 -march=native build of a single 25k-line translation
+    #                  unit, and the pre-optimize differential makes it TWO such
+    #                  builds (the unoptimized one is the EXPENSIVE half -- unfused,
+    #                  it hands gcc considerably more code).  An order of magnitude
+    #                  past the other three, so on one runner with them it does not
+    #                  fit the wall clock.
+    # Compiler memory on every e2e lane is bounded to roughly 6-9 GB by the
+    # ``--param ggc-*`` / ``max-inline-recursive-depth`` / ``max-gcse-memory`` set in
+    # ``tests/_util.py::BITEXACT_CPU_ARGS`` -- see the README's e2e runbook for why
+    # each one is there and why none of them perturbs the numerics.
     strategy:
       fail-fast: false
       matrix:
-        suite: [fast, heavy, integration, e2e]
+        suite: [fast, heavy, integration, e2e, e2e-cloudsc]
     name: test-fortran (${{ matrix.suite }})
     runs-on: ubuntu-24.04
     # The heavy suite builds ICON from source and runs the ~9 GB-peak
@@ -305,17 +323,35 @@ jobs:
           --maxfail=20 -p no:cacheprovider --tb=short tests/ || [ $? -eq 5 ]
 
     # ----- e2e runner: production kernels through the full parallelization pipeline -----
-    - name: Run e2e pipeline tests (CloudSC + QE vexx + ICON atmosphere velocity_tendencies)
+    - name: Run e2e pipeline tests (QE vexx + ICON atmosphere velocity_tendencies)
       if: ${{ matrix.suite == 'e2e' }}
       run: |
         # Each test builds a production kernel's SDFG, runs the whole pipeline
-        # (specialize -> short-unroll -> simplify -> state-fusion-extended ->
-        # [scalar-fission] -> loop2map -> state-fusion-extended -> mapfusion)
-        # and compares the result element-wise against the untouched
-        # gfortran/f2py reference -- so a transformation that changes a value
-        # reds this lane even when every unit test still passes.
-        # SEQUENTIAL, no xdist: CloudSC's -O3 -march=native build of a single
-        # 25k-line translation unit peaks around 12 GB of compiler memory, and
-        # concurrent workers would each carry their own peak and OOM the runner.
-        python -m pytest -m e2e \
+        # (specialize -> short-unroll -> unique-loop-iterators -> scalar-fission ->
+        # simplify -> state-fusion-extended -> loop2map -> state-fusion-extended ->
+        # mapfusion) and compares the result element-wise BOTH against the same kernel built
+        # WITHOUT the pipeline (bit-exact -- the differential that actually
+        # isolates a transformation bug) and against the untouched gfortran/f2py
+        # reference -- so a transformation that changes a value reds this lane
+        # even when every unit test still passes.
+        # CloudSC runs on its own runner (see the e2e-cloudsc step): --ignore
+        # rather than a -k filter so a renamed test can never silently rejoin
+        # this lane and blow its wall clock.
+        # SEQUENTIAL, no xdist: the -O3 -march=native builds are multi-GB peaks
+        # and concurrent workers would each carry their own and OOM the runner.
+        python -m pytest -m e2e --ignore=tests/e2e/test_cloudsc.py \
           --maxfail=20 -p no:cacheprovider --tb=short tests/
+
+    # ----- e2e-cloudsc runner: CloudSC alone (see the matrix comment for why) -----
+    - name: Run e2e pipeline test (CloudSC)
+      if: ${{ matrix.suite == 'e2e-cloudsc' }}
+      run: |
+        # Same two bars as the e2e lane above, on CloudSC's seeded in-regime
+        # physical inputs: pre- vs post-optimize bit-exact, and post-optimize vs
+        # the f2py gfortran reference to 1e-11.  Both bars need their own build of
+        # the 25k-line translation unit, which is why this kernel gets a runner to
+        # itself.  CloudSC additionally needs the one knob the other kernels do
+        # without: specialize (species counts).  scalar-fission (so the block
+        # loop maps at all) now runs unconditionally in the pipeline.
+        python -m pytest -m e2e \
+          --maxfail=20 -p no:cacheprovider --tb=short tests/e2e/test_cloudsc.py

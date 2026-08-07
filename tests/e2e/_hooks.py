@@ -12,7 +12,7 @@ from dace_fortran.pipelines import num_maps, optimize
 
 
 def velocity_optimize(sdfg):
-    """ICON velocity kernels: the full pipeline, no specialize, no scalar-fission.
+    """ICON velocity kernels: the full pipeline, no specialize (``scalar_fission`` always runs).
 
     Compiler flags are not this hook's business: the harness already pinned ``BITEXACT_CPU_ARGS``
     (which carries -O3 -march=native and the IEEE-strict set) before calling us.
