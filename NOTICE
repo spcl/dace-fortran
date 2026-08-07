@@ -1,0 +1,27 @@
+dace-fortran
+Copyright 2019-2026 ETH Zurich and the DaCe authors.
+
+This product is licensed under the GNU General Public License v3.0 or later
+(see the LICENSE file).
+
+================================================================================
+Vendored third-party source
+================================================================================
+
+* ECMWF dwarf-p-cloudsc
+  License: Apache-2.0
+  tests/cloudsc/variants/dwarf-p-cloudsc/src/ vendors a subset of dwarf-p-cloudsc,
+  the IFS cloud-microphysics parameterization mini-app maintained by ECMWF
+  (European Centre for Medium-Range Weather Forecasts),
+  https://github.com/ecmwf-ifs/dwarf-p-cloudsc, licensed under Apache License
+  2.0, pinned at commit f078f8fd317e9ec12f051c21995687dd00c158ef. Vendored
+  verbatim: the cloudsc_gpu (OpenACC / OpenMP-target-offload / CUDA-Fortran SCC
+  driver variants), cloudsc_cuda (CUDA C++), and cloudsc_fortran (original
+  OpenMP CPU) implementations, plus the common/ modules and includes they
+  depend on -- used as build-and-run performance-comparison baselines against
+  this frontend's own Fortran-to-SDFG lowering of the same kernel.
+  cloudsc_output_mod.F90 and dwarf_cloudsc_gpu_multistep.F90 under
+  cloudsc_gpu/ are local additions for the SC2026 precision study, not part of
+  the upstream commit despite carrying an ECMWF-style file header; see
+  dwarf_cloudsc_gpu_multistep.F90's own header. Apache-2.0 is compatible with
+  redistribution under GPL-3.0-or-later for the combined work.
