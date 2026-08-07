@@ -120,6 +120,23 @@ probe_compilers() {
     done
 }
 
+# HDF5 prefix -> the libdir that actually holds libhdf5 (spack uses lib, some distros lib64).
+hdf5_libdir() {
+    local root="$1" d
+    for d in lib64 lib; do
+        if compgen -G "$root/$d/libhdf5.*" > /dev/null; then
+            printf '%s' "$root/$d"
+            return 0
+        fi
+    done
+    printf '%s' "$root/lib"
+}
+
+# -L plus rpath for one HDF5 libdir. The lanes link three different HDF5 builds (one per Fortran
+# compiler); rpath makes each binary resolve ITS own libhdf5*.so instead of whichever prefix
+# happens to sit on LD_LIBRARY_PATH.
+hdf5_ldflags() { printf -- '-L%s -Wl,-rpath,%s' "$1" "$1"; }
+
 # Export the full OMP + BLAS thread environment for one sweep point.
 set_omp_env() {
     local n="$1"

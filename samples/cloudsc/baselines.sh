@@ -119,7 +119,7 @@ gfortran_ok() {
 flang_hdf5() {
     local inc lib
     if [ -n "${HDF5_FLANG_ROOT:-}" ]; then
-        inc="$HDF5_FLANG_ROOT/include" lib="$HDF5_FLANG_ROOT/lib"
+        inc="$HDF5_FLANG_ROOT/include" lib="$(hdf5_libdir "$HDF5_FLANG_ROOT")"
     elif [ "$HAVE_H5FC" = 1 ]; then
         inc="$("$H5FC" -show | tr ' ' '\n' | sed -n 's/^-I//p' | head -1)"
         lib="$("$H5FC" -show | tr ' ' '\n' | sed -n 's/^-L//p' | head -1)"
@@ -130,7 +130,7 @@ flang_hdf5() {
     printf 'program p\nuse hdf5\nend program p\n' > "$BUILD_ROOT/h5probe.f90"
     "$FLANG" -c -I"$inc" "$BUILD_ROOT/h5probe.f90" -o "$BUILD_ROOT/h5probe.o" 2>/dev/null || return 1
     FLANG_HDF5_FLAGS="-I$inc"
-    FLANG_HDF5_LIBS="${lib:+-L$lib }-lhdf5_fortran -lhdf5"
+    FLANG_HDF5_LIBS="${lib:+$(hdf5_ldflags "$lib") }-lhdf5_fortran -lhdf5"
 }
 
 # Same gate as the gpu openacc lane (gpu_baselines.sh): nvfortran cannot read a gfortran-built
@@ -142,7 +142,7 @@ nvfortran_hdf5() {
     printf 'program p\nuse hdf5\nend program p\n' > "$BUILD_ROOT/h5probe.f90"
     "$NVFORTRAN" -c -I"$inc" "$BUILD_ROOT/h5probe.f90" -o "$BUILD_ROOT/h5probe.o" 2>/dev/null || return 1
     NVF_HDF5_FLAGS="-I$inc"
-    NVF_HDF5_LIBS="-L$HDF5_NVFORTRAN_ROOT/lib -lhdf5_fortran -lhdf5"
+    NVF_HDF5_LIBS="$(hdf5_ldflags "$(hdf5_libdir "$HDF5_NVFORTRAN_ROOT")") -lhdf5_fortran -lhdf5"
 }
 
 emit_header

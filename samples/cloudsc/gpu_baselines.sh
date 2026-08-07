@@ -88,7 +88,7 @@ nvfortran_hdf5() {
     printf 'program p\nuse hdf5\nend program p\n' > "$BUILD_ROOT/h5probe.f90"
     "$NVFORTRAN" -c -I"$inc" "$BUILD_ROOT/h5probe.f90" -o "$BUILD_ROOT/h5probe.o" 2>/dev/null || return 1
     NVF_HDF5_FLAGS="-I$inc"
-    NVF_HDF5_LIBS="-L$HDF5_NVFORTRAN_ROOT/lib -lhdf5_fortran -lhdf5"
+    NVF_HDF5_LIBS="$(hdf5_ldflags "$(hdf5_libdir "$HDF5_NVFORTRAN_ROOT")") -lhdf5_fortran -lhdf5"
 }
 
 # Same module order as baselines.sh COMMON_SRCS; ACC sources = the dwarf-cloudsc-gpu-scc
