@@ -46,6 +46,8 @@ from typing import Dict, Iterable, List, Optional, Set, Tuple, Union
 
 import fparser.two.Fortran2003 as f03
 from fparser.api import get_reader
+
+from dace_fortran.llvm_toolchain import require_flang
 from fparser.two.C99Preprocessor import CPP_CLASS_NAMES
 from fparser.two.parser import ParserFactory
 from fparser.two.utils import Base, FortranSyntaxError, walk
@@ -1197,7 +1199,8 @@ def _strip_unparseable_attrs(text: str) -> str:
     return _STANDALONE_CONTIGUOUS_RE.sub(r"\1! CONTIGUOUS\2", text)
 
 
-def _cpp_expand_one(name: str, content: str, *, defines: List[str], include_dirs: List[Path], flang: str) -> str:
+def _cpp_expand_one(name: str, content: str, *, defines: List[str], include_dirs: List[Path],
+                    flang: Optional[str]) -> str:
     """Run the C preprocessor (via flang ``-cpp -E -P``) over one source's
     text and return the expanded Fortran.
 
@@ -1225,7 +1228,7 @@ def _cpp_expand_one(name: str, content: str, *, defines: List[str], include_dirs
         # carries co-located includes, so add it to the search path too.
         local = Path(name).parent
         inc = ([local] if local.is_dir() else []) + list(include_dirs)
-        cmd = [flang, "-cpp", "-E", "-P", "-U_OPENMP", "-U_OPENACC"]
+        cmd = [flang or require_flang(), "-cpp", "-E", "-P", "-U_OPENMP", "-U_OPENACC"]
         cmd += [f"-D{d}" for d in defines]
         cmd += [f"-I{Path(d)}" for d in inc]
         cmd += [str(srcf)]
@@ -1240,7 +1243,7 @@ def cpp_expand_sources(src_map: Dict[str, str],
                        *,
                        defines: Iterable[str] = (),
                        include_dirs: Iterable[Union[str, Path]] = (),
-                       flang: str = "flang-new-21") -> Dict[str, str]:
+                       flang: Optional[str] = None) -> Dict[str, str]:
     """Preprocess every source in a ``{name: content}`` map through the C
     preprocessor and return the expanded map.
 
@@ -1266,7 +1269,7 @@ def inline_to_ast(sources: Union[Dict[str, str], Iterable[Union[str, Path]]],
                   force_double_precision: bool = False,
                   defines: Iterable[str] = (),
                   include_dirs: Iterable[Union[str, Path]] = (),
-                  flang: str = "flang-new-21",
+                  flang: Optional[str] = None,
                   make_noop: Union[None, types.SPEC, List[types.SPEC]] = None,
                   make_return_false: Iterable[str] = (),
                   keep_external: Iterable[str] = (),
@@ -1393,7 +1396,7 @@ def inline_to_single_tu(sources: Union[Dict[str, str], Iterable[Union[str, Path]
                         force_double_precision: bool = False,
                         defines: Iterable[str] = (),
                         include_dirs: Iterable[Union[str, Path]] = (),
-                        flang: str = "flang-new-21",
+                        flang: Optional[str] = None,
                         make_noop: Union[None, types.SPEC, List[types.SPEC]] = None,
                         make_return_false: Iterable[str] = (),
                         keep_external: Iterable[str] = (),

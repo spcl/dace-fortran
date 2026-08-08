@@ -16,51 +16,94 @@
 
 cmake_minimum_required(VERSION 3.18)
 
-# --- Default LLVM version ----------------------------------------------------
-set(LLVM_VERSION "21" CACHE STRING "LLVM major version to use")
+# --- LLVM version ------------------------------------------------------------
+# -DLLVM_VERSION pins a major; empty means "probe LLVM_SUPPORTED_VERSIONS and take
+# the first one installed".  Keep this list in sync with llvm_toolchain.py's
+# SUPPORTED_LLVM_VERSIONS and with llvm_compat.h's LLVM_VERSION_MAJOR arms.
+set(LLVM_SUPPORTED_VERSIONS "21;22" CACHE STRING "LLVM major versions the bridge supports, in preference order")
+set(LLVM_VERSION "" CACHE STRING "LLVM major version to use (empty: auto-detect)")
 
-# --- Discover LLVM prefix from flang-new -------------------------------------
+# Debian/Ubuntu ship flang-new-<major>/flang-<major>; spack and upstream installs
+# ship only unversioned flang-new/flang, which have to self-identify.
+function(_flang_reported_major out_var binary)
+    execute_process(COMMAND "${binary}" --version OUTPUT_VARIABLE _out ERROR_QUIET)
+    string(REGEX MATCH "flang(-new)? version ([0-9]+)" _match "${_out}")
+    set(${out_var} "${CMAKE_MATCH_2}" PARENT_SCOPE)
+endfunction()
+
+function(_find_flang_for out_bin out_version)
+    set(_versions "${LLVM_SUPPORTED_VERSIONS}")
+    if(LLVM_VERSION)
+        set(_versions "${LLVM_VERSION}")
+    endif()
+    foreach(_v IN LISTS _versions)
+        unset(_probe CACHE)
+        find_program(_probe NAMES flang-new-${_v} flang-${_v})
+        if(NOT _probe)
+            unset(_probe CACHE)
+            find_program(_probe NAMES flang-new flang)
+            if(_probe)
+                _flang_reported_major(_major "${_probe}")
+                if(NOT _major STREQUAL _v)
+                    set(_probe "_probe-NOTFOUND")
+                endif()
+            endif()
+        endif()
+        if(_probe)
+            set(${out_bin} "${_probe}" PARENT_SCOPE)
+            set(${out_version} "${_v}" PARENT_SCOPE)
+            return()
+        endif()
+    endforeach()
+    set(${out_bin} "" PARENT_SCOPE)
+    set(${out_version} "" PARENT_SCOPE)
+endfunction()
+
+_find_flang_for(_FLANG_BIN _FLANG_VERSION)
+if(_FLANG_VERSION)
+    set(LLVM_VERSION "${_FLANG_VERSION}")
+elseif(NOT LLVM_VERSION)
+    # No flang on PATH: fall back to the newest supported major so LLVM_DIR /
+    # the distro paths below still get a version to substitute.
+    list(GET LLVM_SUPPORTED_VERSIONS -1 LLVM_VERSION)
+    message(STATUS "No flang found for LLVM ${LLVM_SUPPORTED_VERSIONS}; assuming ${LLVM_VERSION}")
+endif()
+
+# --- Discover LLVM prefix from flang -----------------------------------------
 set(_LLVM_PREFIX "" CACHE PATH "LLVM installation prefix (auto-detected)")
 
-if(NOT _LLVM_PREFIX)
-    find_program(_FLANG_BIN flang-new-${LLVM_VERSION})
-    if(_FLANG_BIN)
-        get_filename_component(_FLANG_REAL "${_FLANG_BIN}" REALPATH)
-        get_filename_component(_FLANG_BINDIR "${_FLANG_REAL}" DIRECTORY)
-        get_filename_component(_LLVM_PREFIX "${_FLANG_BINDIR}" DIRECTORY)
-        message(STATUS "Derived LLVM prefix from flang-new-${LLVM_VERSION}: ${_LLVM_PREFIX}")
-    endif()
+if(NOT _LLVM_PREFIX AND _FLANG_BIN)
+    get_filename_component(_FLANG_REAL "${_FLANG_BIN}" REALPATH)
+    get_filename_component(_FLANG_BINDIR "${_FLANG_REAL}" DIRECTORY)
+    get_filename_component(_LLVM_PREFIX "${_FLANG_BINDIR}" DIRECTORY)
+    message(STATUS "Derived LLVM ${LLVM_VERSION} prefix from ${_FLANG_BIN}: ${_LLVM_PREFIX}")
 endif()
 
 # --- Default compilers -------------------------------------------------------
-if(NOT DEFINED CMAKE_C_COMPILER AND NOT DEFINED ENV{CC})
-    if(_LLVM_PREFIX AND EXISTS "${_LLVM_PREFIX}/bin/clang-${LLVM_VERSION}")
-        set(CMAKE_C_COMPILER "${_LLVM_PREFIX}/bin/clang-${LLVM_VERSION}" CACHE FILEPATH "")
-    else()
-        find_program(_DEFAULT_CC clang-${LLVM_VERSION})
-        if(_DEFAULT_CC)
-            set(CMAKE_C_COMPILER "${_DEFAULT_CC}" CACHE FILEPATH "")
+# Prefer the clang shipped in the same prefix as the LLVM we link against, under
+# either the versioned (distro) or unversioned (spack/upstream) name.
+macro(_default_compiler lang envvar stem)
+    if(NOT DEFINED CMAKE_${lang}_COMPILER AND NOT DEFINED ENV{${envvar}})
+        unset(_found CACHE)
+        if(_LLVM_PREFIX)
+            find_program(_found NAMES ${stem}-${LLVM_VERSION} ${stem} PATHS "${_LLVM_PREFIX}/bin" NO_DEFAULT_PATH)
         endif()
-    endif()
-endif()
-if(NOT DEFINED CMAKE_CXX_COMPILER AND NOT DEFINED ENV{CXX})
-    if(_LLVM_PREFIX AND EXISTS "${_LLVM_PREFIX}/bin/clang++-${LLVM_VERSION}")
-        set(CMAKE_CXX_COMPILER "${_LLVM_PREFIX}/bin/clang++-${LLVM_VERSION}" CACHE FILEPATH "")
-    else()
-        find_program(_DEFAULT_CXX clang++-${LLVM_VERSION})
-        if(_DEFAULT_CXX)
-            set(CMAKE_CXX_COMPILER "${_DEFAULT_CXX}" CACHE FILEPATH "")
+        if(NOT _found)
+            unset(_found CACHE)
+            find_program(_found NAMES ${stem}-${LLVM_VERSION})
         endif()
+        if(_found)
+            set(CMAKE_${lang}_COMPILER "${_found}" CACHE FILEPATH "")
+        endif()
+        unset(_found CACHE)
     endif()
-endif()
+endmacro()
+_default_compiler(C CC clang)
+_default_compiler(CXX CXX clang++)
+
 if(NOT DEFINED CMAKE_Fortran_COMPILER AND NOT DEFINED ENV{FC})
     if(_FLANG_BIN)
         set(CMAKE_Fortran_COMPILER "${_FLANG_BIN}" CACHE FILEPATH "")
-    else()
-        find_program(_DEFAULT_FC flang-new-${LLVM_VERSION})
-        if(_DEFAULT_FC)
-            set(CMAKE_Fortran_COMPILER "${_DEFAULT_FC}" CACHE FILEPATH "")
-        endif()
     endif()
 endif()
 
@@ -81,6 +124,11 @@ if(NOT LLVM_DIR)
 endif()
 
 find_package(LLVM REQUIRED CONFIG)
+if(NOT LLVM_VERSION_MAJOR IN_LIST LLVM_SUPPORTED_VERSIONS)
+    message(FATAL_ERROR "LLVM ${LLVM_PACKAGE_VERSION} in ${LLVM_DIR} is unsupported; "
+        "the bridge builds against LLVM ${LLVM_SUPPORTED_VERSIONS}.")
+endif()
+set(LLVM_VERSION "${LLVM_VERSION_MAJOR}")
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION} in ${LLVM_DIR}")
 message(STATUS "LLVM include dirs: ${LLVM_INCLUDE_DIRS}")
 message(STATUS "LLVM library dir:  ${LLVM_LIBRARY_DIR}")
@@ -121,8 +169,14 @@ foreach(_lib ${_MLIR_LIBS})
 endforeach()
 
 # Monolithic shared libs (Debian ships these; handles transitive deps).
+# Debian names it libLLVM-<major>.so and drops it on the default link path; spack
+# and upstream keep it in the LLVM prefix, sometimes as a plain libLLVM.so -- so
+# resolve a full path rather than emitting a bare -lLLVM-<major>.
 find_library(MLIR_MONO_LIB MLIR HINTS ${LLVM_LIBRARY_DIR})
-set(LLVM_MONO_LIB "LLVM-${LLVM_VERSION_MAJOR}")
+find_library(LLVM_MONO_LIB NAMES LLVM-${LLVM_VERSION_MAJOR} LLVM HINTS ${LLVM_LIBRARY_DIR})
+if(NOT LLVM_MONO_LIB)
+    set(LLVM_MONO_LIB "LLVM-${LLVM_VERSION_MAJOR}")
+endif()
 message(STATUS "MLIR monolithic: ${MLIR_MONO_LIB}")
 message(STATUS "LLVM monolithic: ${LLVM_MONO_LIB}")
 
@@ -157,6 +211,14 @@ set(FLANG_DIALECT_LIBS
     FIRTransforms FIRCodeGenDialect FIRCodeGen FortranSupport
     FIROpenACCSupport FIROpenMPSupport
 )
+
+# LLVM 22 added the ``mif`` (multi-image FIR / coarray) dialect --
+# flang/lib/Optimizer/Dialect/MIF, absent in 21 -- and FIRTransforms.a now
+# references its op TypeIDs, so the module fails to dlopen without it.
+if(LLVM_VERSION_MAJOR GREATER_EQUAL 22)
+    list(APPEND FLANG_DIALECT_LIBS MIFDialect)
+endif()
+
 foreach(_lib ${FLANG_DIALECT_LIBS})
     find_mlir_lib(${_lib})
 endforeach()

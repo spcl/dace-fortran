@@ -50,6 +50,7 @@ from dace_fortran.external import (
     register_external,  # noqa: F401
     registered_names)
 from dace_fortran.hlfir_to_sdfg import DEFAULT_PIPELINE, SDFGBuilder
+from dace_fortran.llvm_toolchain import require_flang
 from dace_fortran.preprocess import preprocess_fortran_source
 
 __all__ = [
@@ -65,12 +66,8 @@ __all__ = [
 
 
 def _find_flang() -> str:
-    """Locate ``flang-new-21`` or raise a clear error."""
-    bin_ = shutil.which("flang-new-21")
-    if bin_ is None:
-        raise RuntimeError("flang-new-21 not on PATH; install LLVM/Flang 21 to use "
-                           "the HLFIR frontend.")
-    return bin_
+    """Locate a flang for any supported LLVM major, or raise a clear error."""
+    return require_flang()
 
 
 def _flang_intrinsic_modules_path(flang_bin: str) -> Optional[Path]:
@@ -79,8 +76,9 @@ def _flang_intrinsic_modules_path(flang_bin: str) -> Optional[Path]:
     Probed paths (first match wins):
 
     * ``<flang_install_root>/include/flang/iso_c_binding.mod``  --  the
-      Ubuntu / Debian / Fedora layout (``flang-new-21`` -> ``/usr/lib/llvm-21/bin``;
-      modules under ``/usr/lib/llvm-21/include/flang``).
+      Ubuntu / Debian / Fedora layout (``flang-new-<major>`` ->
+      ``/usr/lib/llvm-<major>/bin``; modules under
+      ``/usr/lib/llvm-<major>/include/flang``).
     * ``<flang_install_root>/../share/flang/include`` -- some custom builds.
 
     Returns the **directory** that contains ``iso_c_binding.mod`` (and the
@@ -97,7 +95,7 @@ def _flang_intrinsic_modules_path(flang_bin: str) -> Optional[Path]:
     intrinsic module.
     """
     flang_real = Path(flang_bin).resolve()
-    install_root = flang_real.parent.parent  # /usr/lib/llvm-21
+    install_root = flang_real.parent.parent  # /usr/lib/llvm-<major>
     candidates = (
         install_root / "include" / "flang",
         install_root / "share" / "flang" / "include",
@@ -542,7 +540,7 @@ def build_sdfg_from_project(compile_commands: Union[str, Path],
                             stubs: Sequence[Union[str, Path]] = (),
                             out_dir: Optional[Union[str, Path]] = None,
                             pipeline: Optional[str] = None,
-                            flang: str = "flang-new-21") -> SDFG:
+                            flang: Optional[str] = None) -> SDFG:
     """Build a :class:`dace.SDFG` from a built project's
     ``compile_commands.json`` in one call -- tier 3.
 
@@ -574,7 +572,8 @@ def build_sdfg_from_project(compile_commands: Union[str, Path],
     :param out_dir: directory for the emitted ``.hlfir`` / ``.mod``
         files; a temporary one is used and removed when omitted.
     :param pipeline: MLIR pass pipeline; defaults to ``DEFAULT_PIPELINE``.
-    :param flang: flang binary to drive (default ``flang-new-21``).
+    :param flang: flang binary to drive (default: the first supported
+        LLVM flang on ``PATH``).
     :returns: a built, validated SDFG.
     """
     from dace_fortran.emit_hlfir import emit, resolve_entry, _parse_compile_commands

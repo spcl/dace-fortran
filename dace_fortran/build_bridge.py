@@ -9,31 +9,36 @@ The .so is symlinked next to this file (as dace_fortran.hlfir_bridge) so no PYTH
 import fcntl
 import importlib
 import os
+import re
 import shutil
 import subprocess
 import sys
 import sysconfig
 from pathlib import Path
 
+from dace_fortran.llvm_toolchain import (SUPPORTED_LLVM_VERSIONS, candidate_versions, find_flang, llvm_prefix,
+                                         requested_version)
+
 # --- Configuration: override via env vars ---
 
 _HERE = Path(__file__).resolve().parent
 _BUILD_DIR = _HERE / "build"
 
-# Override with LLVM_VERSION env var.
-_LLVM_VERSION = os.environ.get("LLVM_VERSION", "21")
+# Pinned by the LLVM_VERSION env var; empty means "auto-detect over SUPPORTED_LLVM_VERSIONS".
+_LLVM_VERSION = requested_version()
 
 # Override with env var; only needed if cmake's LLVM auto-detect misses.
 # No MLIR_DIR needed: CMakeLists.txt finds MLIR via the LLVM prefix, bypassing MLIR's broken cmake config.
 _LLVM_DIR = os.environ.get("LLVM_DIR", "")
 
+_CMAKE_MAJOR_RE = re.compile(r"set\(LLVM_VERSION_MAJOR (\d+)\)")
+
 
 def _find_llvm_prefix(version: str) -> str:
-    """LLVM install prefix from flang-new-<version> (resolves its symlink); falls back to /usr/lib/llvm-<version>."""
-    flang = shutil.which(f"flang-new-{version}")
+    """LLVM install prefix from that version's flang (resolves its symlink); falls back to /usr/lib/llvm-<version>."""
+    flang = find_flang(version)
     if flang:
-        real = Path(flang).resolve()
-        prefix = real.parent.parent
+        prefix = llvm_prefix(flang)
         if (prefix / "lib" / "cmake").is_dir():
             return str(prefix)
 
@@ -44,18 +49,35 @@ def _find_llvm_prefix(version: str) -> str:
     return ""
 
 
-def _find_llvm_cmake_dir(prefix: str, version: str) -> str:
-    """Find LLVMConfig.cmake under a known prefix."""
-    candidates = [
-        f"{prefix}/lib/cmake/llvm",
+def _cmake_dir_candidates(prefix: str, version: str) -> list:
+    """Directories that may hold LLVMConfig.cmake for <version>, most specific first."""
+    return ([f"{prefix}/lib/cmake/llvm"] if prefix else []) + [
         f"/usr/lib/llvm-{version}/lib/cmake/llvm",
         f"/usr/lib/llvm-{version}/cmake",
-        f"/usr/local/lib/cmake/llvm",
-        f"/opt/homebrew/lib/cmake/llvm",
+        "/usr/local/lib/cmake/llvm",
+        "/opt/homebrew/lib/cmake/llvm",
     ]
-    for c in candidates:
+
+
+def _cmake_dir_major(cmake_dir: str) -> str:
+    """LLVM major declared by an LLVMConfig.cmake, or '' if it cannot be read."""
+    try:
+        text = Path(cmake_dir, "LLVMConfig.cmake").read_text()
+    except OSError:
+        return ""
+    match = _CMAKE_MAJOR_RE.search(text)
+    return match.group(1) if match else ""
+
+
+def _find_llvm_cmake_dir(prefix: str, version: str) -> str:
+    """Find an LLVMConfig.cmake for <version> under a known prefix.
+
+    Version-unspecific candidates (/usr/local, homebrew) are only accepted once the
+    config file itself declares the requested major.
+    """
+    for c in _cmake_dir_candidates(prefix, version):
         p = Path(c)
-        if p.is_dir() and (p / "LLVMConfig.cmake").exists():
+        if p.is_dir() and (p / "LLVMConfig.cmake").exists() and _cmake_dir_major(c) in ("", version):
             return str(p)
 
     for pkg in [f"llvm-{version}-dev", f"libllvm-{version}-dev"]:
@@ -75,14 +97,25 @@ def _find_llvm_cmake_dir(prefix: str, version: str) -> str:
 
 
 def _detect_dirs():
-    """Populate _LLVM_DIR if not set."""
-    global _LLVM_DIR
-    prefix = _find_llvm_prefix(_LLVM_VERSION)
-    if not _LLVM_DIR:
-        _LLVM_DIR = _find_llvm_cmake_dir(prefix, _LLVM_VERSION)
-    if not _LLVM_DIR:
-        raise RuntimeError(f"Cannot find LLVMConfig.cmake for LLVM {_LLVM_VERSION}.  "
-                           "Set LLVM_DIR env var.")
+    """Populate _LLVM_DIR / _LLVM_VERSION: explicit env vars win, else probe the supported majors."""
+    global _LLVM_DIR, _LLVM_VERSION
+    if _LLVM_DIR:
+        _LLVM_VERSION = _LLVM_VERSION or _cmake_dir_major(_LLVM_DIR) or SUPPORTED_LLVM_VERSIONS[0]
+        return
+
+    searched: list = []
+    for version in candidate_versions():
+        prefix = _find_llvm_prefix(version)
+        searched += _cmake_dir_candidates(prefix, version)
+        found = _find_llvm_cmake_dir(prefix, version)
+        if found:
+            _LLVM_VERSION, _LLVM_DIR = version, found
+            return
+
+    majors = "/".join(candidate_versions())
+    raise RuntimeError(f"Cannot find LLVMConfig.cmake for LLVM {majors}.  Looked in: "
+                       f"{', '.join(dict.fromkeys(searched))}.  Set LLVM_DIR (and "
+                       "optionally LLVM_VERSION) to override.")
 
 
 # --- Build logic ---

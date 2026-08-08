@@ -101,10 +101,10 @@ omp_places_close() {
 # Lane-matrix probe: exports <TOOL> + HAVE_<TOOL>=0/1; presets win, flang order mirrors tests/_util.py.
 probe_compilers() {
     local spec var name path
-    CLANGXX="${CLANGXX:-$(command -v clang++-21 || command -v clang++ || true)}"
-    FLANG="${FLANG:-$(command -v flang-new-21 || command -v flang-21 || command -v flang-new \
-        || command -v flang || true)}"
-    for spec in GFORTRAN:gfortran GCC:gcc CLANGXX:clang++ FLANG:flang-new-21 NVCC:nvcc \
+    CLANGXX="${CLANGXX:-$(command -v clang++-21 || command -v clang++-22 || command -v clang++ || true)}"
+    FLANG="${FLANG:-$(command -v flang-new-21 || command -v flang-21 || command -v flang-new-22 \
+        || command -v flang-22 || command -v flang-new || command -v flang || true)}"
+    for spec in GFORTRAN:gfortran GCC:gcc CLANGXX:clang++ FLANG:flang NVCC:nvcc \
         NVFORTRAN:nvfortran NVC:nvc H5FC:h5fc H5CC:h5cc; do
         var="${spec%%:*}" name="${spec##*:}"
         path="${!var:-$name}"

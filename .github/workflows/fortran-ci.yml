@@ -62,9 +62,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        llvm: ['21']
         suite: [fast, heavy, integration, e2e, e2e-cloudsc]
-    name: test-fortran (${{ matrix.suite }})
+        # LLVM 22 gets the ``fast`` sweep only (bridge build + HLFIR emission is the whole
+        # version-sensitive surface) and is non-blocking below: noble-22 is a ROLLING apt
+        # channel.  Both stay on noble; 26.04 packages flang 22 but is a PREVIEW image.
+        include:
+          - llvm: '22'
+            suite: fast
+    name: test-fortran (llvm${{ matrix.llvm }}, ${{ matrix.suite }})
     runs-on: ubuntu-24.04
+    continue-on-error: ${{ matrix.llvm == '22' }}
     # The heavy suite builds ICON from source and runs the ~9 GB-peak
     # fparser ocean extractions; the integration suite likewise builds ICON
     # (same bear-wrapped configure + make) before its SHORT test run -- give
@@ -76,6 +84,8 @@ jobs:
     # followed by an -O3 -march=native build of a single 25k-line translation unit.
     timeout-minutes: ${{ (matrix.suite == 'fast') && 90 || 180 }}
     env:
+      # Pins the bridge's flang discovery and names the apt packages / paths below.
+      LLVM_VERSION: ${{ matrix.llvm }}
       # Disable hwloc's GL/X11 backend so ``from mpi4py import MPI``
       # (MPI_Init -> hwloc topology) doesn't probe a (possibly absent /
       # hung) X display and block.  CPU/PCI topology -- all MPI needs --
@@ -106,21 +116,21 @@ jobs:
       with:
         python-version: '3.12'
 
-    - name: Install LLVM / MLIR / flang 21 + Fortran toolchain
+    - name: Install LLVM / MLIR / flang ${{ matrix.llvm }} + Fortran toolchain
       run: |
-        # The HLFIR bridge requires LLVM/flang 21 (flang-new-21 -fc1
-        # -emit-hlfir).  libflang-21-dev provides BOTH the FIR/HLFIR
+        # The HLFIR bridge requires LLVM/flang 21 or 22 (flang-new -fc1
+        # -emit-hlfir).  libflang-$LLVM_VERSION-dev provides BOTH the FIR/HLFIR
         # static libs the bridge links (libFIRTransforms.a,
         # libFortranSupport.a, ...) AND the flang headers it #includes
         # (flang/Optimizer/HLFIR/HLFIROps.h); without it CMake configures
         # but the link fails.  Provenance verified via dpkg -S on a
-        # known-good local build.
+        # known-good local build; re-verified against the noble-22 Packages index.
         wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
-        sudo add-apt-repository -y "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-21 main"
+        sudo add-apt-repository -y "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-$LLVM_VERSION main"
         sudo apt-get update
         sudo apt-get install -y \
-          llvm-21-dev libmlir-21-dev mlir-21-tools \
-          libflang-21-dev flang-21 clang-21 \
+          llvm-$LLVM_VERSION-dev libmlir-$LLVM_VERSION-dev mlir-$LLVM_VERSION-tools \
+          libflang-$LLVM_VERSION-dev flang-$LLVM_VERSION clang-$LLVM_VERSION \
           build-essential cmake ninja-build gfortran libgomp1 \
           libopenmpi-dev openmpi-bin \
           libnetcdff-dev libnetcdf-dev libhdf5-dev \
@@ -128,10 +138,10 @@ jobs:
           libfyaml-dev libxml2-dev liblapack-dev libblas-dev \
           pkg-config perl python3 \
           bear autoconf automake m4 rsync zlib1g-dev \
-          cppcheck clang-tidy-21
+          cppcheck clang-tidy-$LLVM_VERSION
         # Static analysis of the C++ DaCe generates (tests/codegen_static_analysis_test.py).
         # clang-tidy ships versioned from apt.llvm.org; the checker probes it by bare name.
-        command -v clang-tidy || sudo ln -sf /usr/lib/llvm-21/bin/clang-tidy /usr/local/bin/clang-tidy
+        command -v clang-tidy || sudo ln -sf /usr/lib/llvm-$LLVM_VERSION/bin/clang-tidy /usr/local/bin/clang-tidy
         # The ICON-integration tests configure + ``make`` the
         # icon-model submodule on demand (the ``icon_build`` fixture).
         # GRIB2/eccodes is DISABLED in that build (the dycore tests
@@ -142,11 +152,12 @@ jobs:
         # bear + autotools drive the tier-3 prebuilt-HLFIR autotools
         # project (tests/prebuilt_hlfir/jacobi): bear -- make captures
         # compile_commands.json the way it would for ICON's build.
-        echo "/usr/lib/llvm-21/bin" >> "$GITHUB_PATH"
-        # apt.llvm.org installs the binary as flang-new-21 in
-        # /usr/lib/llvm-21/bin (on PATH above).  Fall back to a symlink
-        # only if a packaging change drops that name.
-        command -v flang-new-21 || sudo ln -sf /usr/lib/llvm-21/bin/flang-21 /usr/local/bin/flang-new-21
+        echo "/usr/lib/llvm-$LLVM_VERSION/bin" >> "$GITHUB_PATH"
+        # apt.llvm.org keeps the legacy alias on BOTH majors: /usr/bin/flang-new-NN ->
+        # /usr/lib/llvm-NN/bin/flang-new -> flang -> flang-NN (verified in the 21 and 22
+        # .debs).  Fall back to a symlink only if a packaging change drops that name.
+        command -v flang-new-$LLVM_VERSION \
+          || sudo ln -sf /usr/lib/llvm-$LLVM_VERSION/bin/flang-$LLVM_VERSION /usr/local/bin/flang-new-$LLVM_VERSION
         # OpenMPI ships the Fortran wrapper as both ``mpifort`` and the legacy
         # ``mpif90``; the multi-rank MPI tests probe ``mpif90`` by name.  Symlink
         # it to mpifort if a packaging change ever drops the legacy alias.
@@ -173,13 +184,13 @@ jobs:
 
     - name: Verify toolchain is complete (fail fast on a missing dependency)
       run: |
-        # ``flang-new-21`` is on PATH only in steps AFTER the one that appended
-        # /usr/lib/llvm-21/bin to $GITHUB_PATH, so this must be its own step.
+        # ``flang-new-$LLVM_VERSION`` is on PATH only in steps AFTER the one that appended
+        # /usr/lib/llvm-NN/bin to $GITHUB_PATH, so this must be its own step.
         # This step runs AFTER ``Install Python dependencies``: ``meson`` and
         # ``numpy.f2py`` are pip-provided, so asserting them before the pip
         # install fails on a healthy runner (observed: both MISS, lane red).
         # Asserting every required tool up front turns a silently-skipped test
-        # (e.g. "needs flang-new-21 + OpenMPI") into a loud, fail-fast setup
+        # (e.g. "needs flang-new + OpenMPI") into a loud, fail-fast setup
         # error -- so a provisioning regression can never masquerade as a green
         # run with hidden skips.
         missing=0
@@ -191,7 +202,7 @@ jobs:
         # ``meson`` backs numpy.f2py on Python>=3.12, and f2py builds the CloudSC REFERENCE. Absent,
         # ``_util.f2py_compile`` skips, the whole CloudSC e2e data point disappears and the lane
         # still reports GREEN -- precisely the failure this step exists to prevent.
-        for t in flang-new-21 clang-21 gfortran gcc g++ make cmake ninja meson \
+        for t in flang-new-$LLVM_VERSION clang-$LLVM_VERSION gfortran gcc g++ make cmake ninja meson \
                  mpicc mpicxx mpifort mpif90 perl python3 \
                  bear autoconf automake aclocal m4 rsync pkg-config \
                  cppcheck clang-tidy; do

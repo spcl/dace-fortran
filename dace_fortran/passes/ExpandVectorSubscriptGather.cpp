@@ -77,6 +77,7 @@
 #include "flang/Optimizer/Dialect/FIRType.h"
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm_compat.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
@@ -304,16 +305,13 @@ struct ExpandVectorSubscriptGatherPass
       declOp = b.create<hlfir::DeclareOp>(loc, alloca.getResult(), uniqName, shapeOper);
     } else {
       auto boxTy = fir::BoxType::get(seqTy);
-      declOp = b.create<hlfir::DeclareOp>(loc,
-                                          /*resultType0=*/boxTy,
-                                          /*resultType1=*/refTy,
-                                          /*memref=*/alloca.getResult(),
-                                          /*shape=*/shapeOper,
-                                          /*typeparams=*/mlir::ValueRange{},
-                                          /*dummy_scope=*/mlir::Value{},
-                                          /*uniq_name=*/b.getStringAttr(uniqName),
-                                          /*fortran_attrs=*/fir::FortranVariableFlagsAttr{},
-                                          /*data_attr=*/cuf::DataAttributeAttr{});
+      declOp = hlfir_bridge::createDeclare(b, loc,
+                                           /*resultType0=*/boxTy,
+                                           /*resultType1=*/refTy,
+                                           /*memref=*/alloca.getResult(),
+                                           /*shape=*/shapeOper,
+                                           /*typeparams=*/mlir::ValueRange{},
+                                           /*uniq_name=*/b.getStringAttr(uniqName));
     }
 
     // 2) Build the nested gather DO loop tree  --  one ``fir.do_loop``

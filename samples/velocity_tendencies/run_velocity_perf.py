@@ -83,7 +83,7 @@ def load_or_build(variant: str, cache: Path, build_dir: Path):
     from dace_fortran.pipelines import num_maps, optimize
 
     if not have_flang():
-        raise SystemExit(f"no cached SDFG at {cache} and flang-new-21 not on PATH to build one")
+        raise SystemExit(f"no cached SDFG at {cache} and no LLVM flang on PATH to build one")
     tu = REPO / "tests" / "icon" / "atmosphere" / VARIANT_TUS[variant]
     build_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(tu.read_text(), build_dir, name=f"velocity_{variant}", entry=ENTRY).build()

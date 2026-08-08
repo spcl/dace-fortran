@@ -71,7 +71,8 @@ nblks job asks for `baselines` by default -- the velocity Fortran lanes need it 
 
 Checking a run. A finished job's last line is `done: <csv>`. A missing toolchain or deck is a loud
 `SKIP` on stderr and not a failure, so read which lanes reached the CSV rather than the exit
-status; `FATAL` is a real failure. `flang-new-21` is not optional for the dace lanes: without a
+status; `FATAL` is a real failure. An LLVM flang (21 or 22: `flang-new-21`/`flang-21`/`flang-22`/`flang`) is not
+optional for the dace lanes: without a
 cached SDFG the driver exits rather than skipping. GPU lanes are opt-in and out of scope for the
 CPU matrix -- `gpu` in a cloudsc job's `LANES` runs `cloudsc/gpu_baselines.sh`, and
 `velocity_tendencies/baselines.sh` keeps `openacc` in its default `BASELINE_LANES` (it self-skips

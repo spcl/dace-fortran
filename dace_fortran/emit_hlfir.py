@@ -33,6 +33,8 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Sequence
 
+from dace_fortran.llvm_toolchain import require_flang
+
 #: ``MODULE <name>`` opener at the top of a Fortran source.  Used for
 #: the (fallback) ``--source`` topo-sort when no ``compile_commands.json``
 #: artefact is supplied.
@@ -345,7 +347,7 @@ def emit(*,
          extra_includes: Sequence[Path] = (),
          extra_defines: Sequence[str] = (),
          entry: Optional[str] = None,
-         flang: str = "flang-new-21") -> List[Path]:
+         flang: Optional[str] = None) -> List[Path]:
     """Emit ``.hlfir`` files under ``out_dir``.  Exactly one of
     ``compile_commands`` or ``sources`` must drive the file list:
 
@@ -377,6 +379,7 @@ def emit(*,
     # XOR: exactly one of the two file-list sources must drive the run.
     if (compile_commands is None) == (not sources):
         raise ValueError("emit() takes exactly one of compile_commands= or sources=")
+    flang = flang or require_flang()
     out_dir.mkdir(parents=True, exist_ok=True)
     extra_defs = list(extra_defines)
     emitted: list = []
@@ -456,9 +459,11 @@ def main(argv=None):
                    "compile_commands run to that entry's USE-closure "
                    "instead of emitting every TU.")
     p.add_argument("--out", required=True, type=Path, help="output directory; .hlfir + .mod files land here.")
-    p.add_argument("--flang", default="flang-new-21", help="flang binary to drive (default: flang-new-21).")
+    p.add_argument("--flang",
+                   default=None,
+                   help="flang binary to drive (default: the first supported LLVM flang on PATH).")
     args = p.parse_args(argv)
-    if shutil.which(args.flang) is None:
+    if args.flang is not None and shutil.which(args.flang) is None:
         p.error(f"flang binary {args.flang!r} not on PATH")
     if (args.compile_commands is None) == (not args.sources):
         p.error("pass either compile_commands.json (positional) or one or "

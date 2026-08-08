@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from dace_fortran.llvm_toolchain import flang_names
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _HLFIR_DIR = _REPO_ROOT / "dace" / "frontend" / "hlfir"
 
@@ -64,8 +66,9 @@ def _dump_dir() -> Path | None:
     return Path(val)
 
 
-# LLVM/flang 21 only (matches build_bridge.py).  Ubuntu ships flang-new-21/flang-21 as identical symlinks; probe both, $FC overrides.
-_FLANG_NAMES = ("flang-new-21", "flang-21", "flang-new", "flang")
+# Every supported LLVM major (matches build_bridge.py), newest naming last so the
+# preference order mirrors llvm_toolchain.SUPPORTED_LLVM_VERSIONS; $FC overrides.
+_FLANG_NAMES = tuple(flang_names())
 
 
 def _resolve_flang() -> str | None:

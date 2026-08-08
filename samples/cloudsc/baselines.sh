@@ -209,7 +209,7 @@ for lane in $BASELINE_LANES; do
         flang-serial)
             # flang has no -ftree-parallelize-loops equivalent, so serial is the only flang lane
             if [ "$HAVE_FLANG" != 1 ]; then
-                echo "SKIP $lane: no flang-new-21/flang on PATH" >&2
+                echo "SKIP $lane: no LLVM flang on PATH" >&2
                 continue
             fi
             if ! flang_hdf5; then

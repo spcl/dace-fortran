@@ -57,6 +57,7 @@ import dace_fortran
 
 from _util import build_sdfg
 from dace_fortran.bindings import build_fortran_library, FlattenPlan
+from dace_fortran.llvm_toolchain import find_flang
 from dace_fortran.bindings.bind_c_shim import scalar_pointer_members
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.external import Arg, clear_external_registry, keep_external
@@ -492,8 +493,8 @@ def main():
     if not args.velocity_source.exists():
         print(f"error: velocity source not found: {args.velocity_source}", file=sys.stderr)
         return 1
-    if not shutil.which("gfortran") or not shutil.which("flang-new-21"):
-        print("error: need gfortran + flang-new-21 on PATH", file=sys.stderr)
+    if not shutil.which("gfortran") or find_flang() is None:
+        print("error: need gfortran + an LLVM flang on PATH", file=sys.stderr)
         return 1
 
     if (args.icon_src is None) != (args.icon_build is None):

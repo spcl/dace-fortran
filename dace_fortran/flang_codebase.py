@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
+from .llvm_toolchain import require_flang
 from .preprocess import merge_used_modules
 
 # ---------------------------------------------------------------------------
@@ -378,7 +379,7 @@ def emit_hlfir_from_codebase(
         include_dirs: Sequence[Path] = (),
         cache_dir: Optional[Path] = None,
         openmpi_include: Optional[str] = None,
-        flang_program: str = "flang-new-21",
+        flang_program: Optional[str] = None,
         extra_flang_flags: Sequence[str] = (),
 ) -> Path:
     """Compose a translation unit for ``entry_source`` via
@@ -417,7 +418,7 @@ def emit_hlfir_from_codebase(
     # gfortran's; a chance collision surfaces as ``Cannot use module
     # file for module X``.
     subprocess.check_call([
-        flang_program,
+        flang_program or require_flang(),
         "-fc1",
         "-cpp",
         "-U_OPENMP",

@@ -150,13 +150,13 @@ Declare once with `apply_external_functions(EXTERNAL, IGNORE)`: `EXTERNAL` = lis
 
 ## Prerequisites
 
-- **LLVM/Flang 21** — `flang-new-21` (validated LLVM 21.1.8; default set by `LLVM_VERSION="21"` in `dace_fortran/CMakeLists.txt` + `build_bridge.py`, override via `LLVM_VERSION` env var). Debian/Ubuntu: `llvm-21-dev libmlir-21-dev mlir-21-tools libflang-21-dev flang-21 clang-21` from apt.llvm.org. `libflang-21-dev` provides both the FIR/HLFIR static libs the bridge links and the flang headers it includes.
+- **LLVM/Flang 21 or 22** — auto-detected: `dace_fortran/llvm_toolchain.py` (`SUPPORTED_LLVM_VERSIONS`) probes `flang-new-<major>` / `flang-<major>` and then unversioned `flang-new` / `flang` (which must self-identify via `--version`), taking the first installed major; `LLVM_VERSION` pins one, `LLVM_DIR` overrides discovery outright. Validated on LLVM 21.1.8 and 22.1.5. Debian/Ubuntu: `llvm-N-dev libmlir-N-dev mlir-N-tools libflang-N-dev flang-N clang-N` from apt.llvm.org (N = 21 or 22). `libflang-N-dev` provides both the FIR/HLFIR static libs the bridge links and the flang headers it includes. The C++ side keeps both majors' spellings behind `LLVM_VERSION_MAJOR` in `dace_fortran/llvm_compat.h`.
 - **Python** 3.10–3.14 (CI runs 3.12).
 - **DaCe** — pinned `dace @ git+https://github.com/spcl/dace.git@FaCe` (FaCe branch carries DaCe-core pieces the frontend needs; see `pyproject.toml`). Plus `fparser > 0.2`, `networkx`, `numpy`.
 - **nanobind** — bridge is a nanobind extension (`pip install nanobind`).
-- **CMake ≥ 3.18**, C++17 compiler (clang-21 auto-selected if present), **gfortran** (binding tests + numerical references compile with gfortran; Ubuntu's `flang-new-21` ships without `libflang_rt` → flang is emit-HLFIR-only).
+- **CMake ≥ 3.18**, C++17 compiler (the detected LLVM's own `clang++`/`clang++-<major>` auto-selected if present), **gfortran** (binding tests + numerical references compile with gfortran; Ubuntu's `flang-new-21` ships without `libflang_rt` → flang is emit-HLFIR-only).
 
-Bridge locates LLVM/MLIR by deriving the install prefix from `flang-new-21`, using `find_package(LLVM)` only (avoids the often-broken Debian `find_package(MLIR)` cmake config; finds MLIR headers/libs via LLVM's prefix).
+Bridge locates LLVM/MLIR by deriving the install prefix from the flang it detected, using `find_package(LLVM)` only (avoids the often-broken Debian `find_package(MLIR)` cmake config; finds MLIR headers/libs via LLVM's prefix).
 
 ## Install & build
 
@@ -173,11 +173,11 @@ python -m dace_fortran.build_bridge --clean    # wipe build dir and rebuild
 
 # Or drive cmake directly:
 cd dace_fortran/build
-cmake .. -DLLVM_VERSION=21 -DCMAKE_BUILD_TYPE=Release
+cmake .. -DCMAKE_BUILD_TYPE=Release          # add -DLLVM_VERSION=22 to pin a major
 make -j8
 ```
 
-Override LLVM discovery with the `LLVM_VERSION` / `LLVM_DIR` env vars if auto-detection misses.
+Override LLVM discovery with the `LLVM_VERSION` / `LLVM_DIR` env vars if auto-detection misses; `LLVM_VERSION` restricts the probe to that major, `LLVM_DIR` names an `LLVMConfig.cmake` directory directly (the major is then read out of that config).
 
 ## Quick start
 
@@ -321,7 +321,9 @@ dace_fortran/
   flang_codebase.py        real-codebase flang driver helpers (ICON/IFS/…)
   external.py / external_functions.py  external-call policy + registry
   emit_hlfir.py            tier-3 .hlfir emission helper
-  CMakeLists.txt           bridge build (LLVM 21, nanobind)
+  CMakeLists.txt           bridge build (LLVM 21/22, nanobind)
+  llvm_toolchain.py        LLVM/flang discovery over the supported majors
+  llvm_compat.h            LLVM_VERSION_MAJOR shims for the 21/22 C++ API delta
   bridge/                  C++/MLIR bridge (nanobind ext: hlfir_bridge)
     bridge.cpp             nanobind boundary
     extract_vars.cpp / extract_ast.cpp / trace_utils.cpp

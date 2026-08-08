@@ -149,7 +149,7 @@ def load_or_build(so_path: Path, build_dir: Path, mode: str, fft: str) -> ctypes
     from qe.exx_bp import test_vexx_bp_k_gpu_parse as vexx
 
     if not have_flang():
-        raise SystemExit(f"no cached library at {so_path} and flang-new-21 not on PATH to build one")
+        raise SystemExit(f"no cached library at {so_path} and no LLVM flang on PATH to build one")
     build_dir.mkdir(parents=True, exist_ok=True)
 
     src = vexx._make_paw_flag_public(vexx._restore_fft_interfaces(vexx._SRC.read_text()))

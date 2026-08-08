@@ -90,6 +90,9 @@ include = ["dace_fortran*"]
 dace_fortran = [
     "CMakeLists.txt",
     "build_bridge.py",
+    # Version shims the bridge sources #include; lives at the package root, so it is
+    # not covered by the bridge/ and passes/ globs below.
+    "llvm_compat.h",
     "bridge/**/*.cpp",
     "bridge/**/*.h",
     "passes/**/*.cpp",

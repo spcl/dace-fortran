@@ -67,6 +67,7 @@
 #include "flang/Optimizer/Dialect/FIRType.h"
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm_compat.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -233,16 +234,13 @@ struct UnwrapEvalInMemPass : public mlir::PassWrapper<UnwrapEvalInMemPass, mlir:
     auto alloca = builder.create<fir::AllocaOp>(loc, arrTy);
     std::string const name = "_eval_in_mem_" + std::to_string(counter++);
     auto refTy = fir::ReferenceType::get(arrTy);
-    auto declare = builder.create<hlfir::DeclareOp>(loc,
-                                                    /*resultType0=*/refTy,
-                                                    /*resultType1=*/refTy,
-                                                    /*memref=*/alloca.getResult(),
-                                                    /*shape=*/op.getShape(),
-                                                    /*typeparams=*/op.getTypeparams(),
-                                                    /*dummy_scope=*/mlir::Value{},
-                                                    /*uniq_name=*/builder.getStringAttr(name),
-                                                    /*fortran_attrs=*/fir::FortranVariableFlagsAttr{},
-                                                    /*data_attr=*/cuf::DataAttributeAttr{});
+    auto declare = hlfir_bridge::createDeclare(builder, loc,
+                                               /*resultType0=*/refTy,
+                                               /*resultType1=*/refTy,
+                                               /*memref=*/alloca.getResult(),
+                                               /*shape=*/op.getShape(),
+                                               /*typeparams=*/op.getTypeparams(),
+                                               /*uniq_name=*/builder.getStringAttr(name));
 
     mapper.map(bufArg, declare.getResult(0));
     for (auto& innerOp : llvm::make_early_inc_range(*entry)) {

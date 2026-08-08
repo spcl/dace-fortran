@@ -60,7 +60,7 @@ def load_or_build(cache: Path, build_dir: Path):
     from dace_fortran.pipelines import num_maps, optimize
 
     if not have_flang():
-        raise SystemExit(f"no cached SDFG at {cache} and flang-new-21 not on PATH to build one")
+        raise SystemExit(f"no cached SDFG at {cache} and no LLVM flang on PATH to build one")
     build_dir.mkdir(parents=True, exist_ok=True)
     sdfg = build_sdfg(SRC.read_text(), build_dir, name="cloudsc", entry="cloudscouter").build()
     syms, scalar_consts = _split_specialize(sdfg)
