@@ -1,0 +1,45 @@
+Retarget the nvptx accelerator compiler at CUDA 13-supported ISAs.
+
+gcc/config.gcc defaults an nvptx target to --with-arch=sm_52 and expands the
+multilib set to nvptx_multilibs_default, also sm_52.  (gcc/configure.ac:1220
+sets with_multilib_list=default when --with-multilib-list is not passed, so
+the 'xdefault | xyes' branch -- not the empty one -- is what runs in a stock
+build.)  CUDA 13 dropped every ISA below sm_80, so ptxas rejects sm_52 and
+the accelerator build dies:
+
+    ptxas fatal : Value 'sm_52' is not defined for option 'gpu-name'
+    configure: error: cannot compute suffix of object files
+    make[1]: *** [configure-target-libgcc] Error 1
+
+Move both defaults up: --with-arch=sm_80, multilib default sm_89.  config.gcc
+prepends $with_arch to the expanded multilib list and de-duplicates, so this
+yields TM_MULTILIB_CONFIG "sm_80 sm_89" with default -march=sm_80 -- both
+lanes built.
+
+GCC 16 has no sm_90 ISA: nvptx-sm.def tops out at sm_89 and nvptx.opt maps
+-march=sm_90/sm_90a/sm_100 onto misa=sm_89, so sm_89 *is* the Hopper lane.
+ptxas runs a `.target sm_XY` image on any sm_MN with MN >= XY, so sm_80
+covers A100 and sm_89 covers Ada/Hopper.
+
+Applies with `patch -p1` against any GCC 16 source tree.
+
+--- a/gcc/config.gcc
++++ b/gcc/config.gcc
+@@ -4233,7 +4233,7 @@
+       with_arch=mips2
+       ;;
+     nvptx-*)
+-      with_arch=sm_52
++      with_arch=sm_80
+       ;;
+   esac
+ 
+@@ -5757,7 +5757,7 @@
+ 	nvptx-*)
+ 		supported_defaults=arch
+ 
+-		nvptx_multilibs_default=sm_52
++		nvptx_multilibs_default=sm_89
+ 
+ 		case "x${with_multilib_list}" in
+ 		x | xno)
