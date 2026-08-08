@@ -40,20 +40,42 @@ Python is not taken from spack by default: the drivers run on the pinned interpr
 (`~/.pyenv/versions/py13/bin/python`). A spack `python@3.13` works if `PYTHON=` points at it.
 The velocity bindings configure needs cmake >= 3.18 (system package or `spack install cmake`).
 
-## reproduce
+## running the CPU jobs
 
 1. Install with the pinned interpreter (`~/.pyenv/versions/py13/bin/python`, override with
    `PYTHON=`): `pip install -e '.[samples]'`. DaCe comes in as a dependency, from `FaCe`.
-2. Fetch data. The jobs do it themselves and skip when the files are there. By hand:
+2. Put the toolchain on PATH: copy `samples/env.spack.example` to `samples/env.sh` (or export
+   `SAMPLES_ENV=<file>`); `common.sh` sources it once per job before probing compilers.
+3. Fetch data. The jobs do it themselves and skip when the files verify. By hand:
    `bash samples/cloudsc/download_data.sh`, `bash samples/velocity_tendencies/download_data.sh`.
-3. Build the velocity python bindings (`convert_data.py` also builds them on first import):
+4. Build the velocity python bindings (`convert_data.py` also builds them on first import):
    `python samples/velocity_tendencies/velocity_data_build.py`.
-4. Put the toolchain on PATH: copy `samples/env.spack.example` to `samples/env.sh` (or export
-   `SAMPLES_ENV=<file>`); `common.sh` sources it in every job before probing compilers.
-5. Submit the full CPU matrix: `./samples/submit_all.sh -p <partition> -A <account>`. Its per-job
-   lane lists are defaults; an exported `LANES` overrides every job. GPU lanes are opt-in: add
-   `gpu` to `LANES` on the cloudsc jobs.
-6. Collect: one CSV per job, `kernel,mode,<p1>,<p2>,threads,rep,ms,inputs,lane`.
+5. From the directory the results should land in: `./samples/submit_all.sh -p <partition>
+   -A <account>`. Arguments pass straight to `sbatch`; one `<jobid> <name>` line comes back per
+   job. Five jobs: cloudsc klon/nblks, vexx bands/grid, velocity_tendencies.
+6. Resubmit a single job the same way, carrying its lanes explicitly, e.g.
+   `sbatch --export=ALL,LANES='dace-gcc dace-llvm' -p <p> -A <a> samples/vexx/run_vexx_grid.sbatch`.
+
+Output. Per job, `<name>_<jobid>.out` plus a CSV in the submission directory (`CSV=` overrides):
+`cloudsc_{klon,nblks}_<jobid>.csv`, `vexx_{bands,grid}_<jobid>.csv`,
+`velocity_tendencies_<jobid>.csv`; the baseline lanes write their own
+`cloudsc_baselines_<jobid>.csv` / `velocity_baselines_<jobid>.csv`. Columns are
+`kernel,mode,<p1>,<p2>,threads,rep,ms,inputs,lane` -- `klon,nblocks` for cloudsc, `m,nnr` for
+vexx, `nproma,nblks_e` for velocity -- one row per timed rep, `THREADS` (default `1 4 8 16 32 64`)
+clipped to the probed physical-core count.
+
+Subsetting. An exported `LANES` replaces the per-job default for every job of the submission;
+unknown tokens are skipped per job, so one global list works across kernels. Only the cloudsc
+nblks job asks for `baselines` by default -- the velocity Fortran lanes need it added to that job's
+`LANES`. `BASELINE_LANES` then subsets the lanes inside either `baselines.sh`.
+
+Checking a run. A finished job's last line is `done: <csv>`. A missing toolchain or deck is a loud
+`SKIP` on stderr and not a failure, so read which lanes reached the CSV rather than the exit
+status; `FATAL` is a real failure. `flang-new-21` is not optional for the dace lanes: without a
+cached SDFG the driver exits rather than skipping. GPU lanes are opt-in and out of scope for the
+CPU matrix -- `gpu` in a cloudsc job's `LANES` runs `cloudsc/gpu_baselines.sh`, and
+`velocity_tendencies/baselines.sh` keeps `openacc` in its default `BASELINE_LANES` (it self-skips
+when `nvidia-smi` lists no GPU).
 
 ## lanes
 
