@@ -175,8 +175,28 @@ def _python_cmake_hints() -> list:
     return hints
 
 
+#: Set to 1 in batch jobs.  A bridge cache miss inside a job would otherwise
+#: compile into the shared source tree from a compute node, racing whatever the
+#: login-node tree is doing; failing loudly is always the better outcome there.
+NO_REBUILD_ENV = "DACE_FORTRAN_NO_REBUILD"
+
+
+def rebuild_forbidden() -> bool:
+    """True if the environment bans building the bridge in this process."""
+    return os.environ.get(NO_REBUILD_ENV, "") not in ("", "0")
+
+
 def build(clean: bool = False, verbose: bool = True):
     """Run cmake + make.  Raises on failure."""
+    if rebuild_forbidden():
+        raise RuntimeError(
+            f"{NO_REBUILD_ENV} is set -- refusing to build the HLFIR bridge.\n"
+            f"  expected a prebuilt extension at: {_local_so()}\n"
+            "Something requested a build (missing or stale .so).  Doing it here would\n"
+            "compile into the shared source tree, typically from a compute node.\n"
+            "Build once on the login node with:\n"
+            "  python -c 'import dace_fortran.build_bridge as b; b.build()'\n"
+            f"then resubmit -- or unset {NO_REBUILD_ENV} to allow this process to build.")
     _detect_dirs()
 
     if clean and _BUILD_DIR.exists():
