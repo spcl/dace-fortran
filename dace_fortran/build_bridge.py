@@ -186,14 +186,13 @@ def rebuild_forbidden() -> bool:
 def build(clean: bool = False, verbose: bool = True):
     """Run cmake + make.  Raises on failure."""
     if rebuild_forbidden():
-        raise RuntimeError(
-            f"{NO_REBUILD_ENV} is set -- refusing to build the HLFIR bridge.\n"
-            f"  expected a prebuilt extension at: {_local_so()}\n"
-            "Something requested a build (missing or stale .so).  Doing it here would\n"
-            "compile into the shared source tree, typically from a compute node.\n"
-            "Build once on the login node with:\n"
-            "  python -c 'import dace_fortran.build_bridge as b; b.build()'\n"
-            f"then resubmit -- or unset {NO_REBUILD_ENV} to allow this process to build.")
+        raise RuntimeError(f"{NO_REBUILD_ENV} is set -- refusing to build the HLFIR bridge.\n"
+                           f"  expected a prebuilt extension at: {_local_so()}\n"
+                           "Something requested a build (missing or stale .so).  Doing it here would\n"
+                           "compile into the shared source tree, typically from a compute node.\n"
+                           "Build once on the login node with:\n"
+                           "  python -c 'import dace_fortran.build_bridge as b; b.build()'\n"
+                           f"then resubmit -- or unset {NO_REBUILD_ENV} to allow this process to build.")
     _detect_dirs()
 
     if clean and _BUILD_DIR.exists():

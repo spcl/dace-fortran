@@ -53,12 +53,12 @@
 #include "flang/Optimizer/Builder/FIRBuilder.h"
 #include "flang/Optimizer/Dialect/FIROps.h"
 #include "flang/Optimizer/Dialect/FIRType.h"
+#include "flang/Optimizer/HLFIR/HLFIROps.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Config/llvm-config.h"
 #include "llvm/Support/Debug.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "flang/Optimizer/HLFIR/HLFIROps.h"
-#include "llvm/Config/llvm-config.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -108,8 +108,8 @@ void stripCmpChar(mlir::ModuleOp module) {
   llvm::SmallVector<hlfir::CmpCharOp, 8> toErase;
   module.walk([&](hlfir::CmpCharOp cmp) {
     mlir::OpBuilder builder(cmp);
-    auto repl = builder.create<mlir::arith::ConstantOp>(
-        cmp.getLoc(), builder.getBoolAttr(cmpCharEqualResult(cmp.getPredicate())));
+    auto repl = builder.create<mlir::arith::ConstantOp>(cmp.getLoc(),
+                                                        builder.getBoolAttr(cmpCharEqualResult(cmp.getPredicate())));
     cmp.getResult().replaceAllUsesWith(repl);
     toErase.push_back(cmp);
   });
