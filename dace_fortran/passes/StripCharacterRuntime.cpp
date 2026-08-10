@@ -57,6 +57,8 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Debug.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "flang/Optimizer/HLFIR/HLFIROps.h"
+#include "llvm/Config/llvm-config.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -85,6 +87,43 @@ mlir::Value makeReplacement(mlir::OpBuilder& builder, mlir::Location loc, mlir::
   }
   return {};
 }
+
+#if LLVM_VERSION_MAJOR >= 22
+/// LLVM 22 lowers a CHARACTER relational to a first-class ``hlfir.cmpchar``
+/// instead of the ``_FortranACharacterCompareScalar*`` call LLVM 21 emitted, so
+/// the call-prefix walk below never sees it and the AST builder strands it as
+/// ``?``.  Fold it to the same "strings compare equal" answer the call path
+/// produces: the call's i32 result is replaced by 0, which collapses the
+/// downstream ``cmpi <pred> %res, 0``; here the predicate is on the op itself,
+/// so evaluate it against an equal comparison directly.
+bool cmpCharEqualResult(mlir::arith::CmpIPredicate pred) {
+  using P = mlir::arith::CmpIPredicate;
+  switch (pred) {
+    case P::eq:
+    case P::sle:
+    case P::ule:
+    case P::sge:
+    case P::uge:
+      return true;
+    default:
+      return false;
+  }
+}
+
+/// Replace every ``hlfir.cmpchar`` with its equal-strings constant.
+void stripCmpChar(mlir::ModuleOp module) {
+  llvm::SmallVector<hlfir::CmpCharOp, 8> toErase;
+  module.walk([&](hlfir::CmpCharOp cmp) {
+    mlir::OpBuilder builder(cmp);
+    auto repl = builder.create<mlir::arith::ConstantOp>(
+        cmp.getLoc(), builder.getBoolAttr(cmpCharEqualResult(cmp.getPredicate())));
+    cmp.getResult().replaceAllUsesWith(repl);
+    toErase.push_back(cmp);
+  });
+  for (auto cmp : toErase) cmp->erase();
+  LLVM_DEBUG(llvm::dbgs() << "StripCharacterRuntime: folded " << toErase.size() << " hlfir.cmpchar op(s)\n");
+}
+#endif
 
 struct StripCharacterRuntimePass
     : public mlir::PassWrapper<StripCharacterRuntimePass, mlir::OperationPass<mlir::ModuleOp>> {
@@ -126,6 +165,10 @@ struct StripCharacterRuntimePass
     for (auto call : toErase) call->erase();
 
     LLVM_DEBUG(llvm::dbgs() << "StripCharacterRuntime: erased " << toErase.size() << " _FortranACharacter* call(s)\n");
+
+#if LLVM_VERSION_MAJOR >= 22
+    stripCmpChar(module);
+#endif
   }
 };
 
