@@ -48,9 +48,11 @@ export THREADS
 # /tmp is tmpfs; build on disk, in a root private to the given tag (two modes running
 # concurrently must not share a dacecache). DACE_cache=name (not unique) ON PURPOSE: one SDFG
 # name per root, and reuse across the thread-loop invocations is exactly what Phase A caches.
+# BUILD_ROOT_BASE is the job-wide root the per-lane tags hang off; a lane that must not inherit the
+# previous lane's per-lane root unsets BUILD_ROOT and lands under the base rather than back in $HOME.
 setup_build_root() {
     local tag="$1"
-    BUILD_ROOT="${BUILD_ROOT:-$HOME/.cache/dace-fortran-samples/$tag}"
+    BUILD_ROOT="${BUILD_ROOT:-${BUILD_ROOT_BASE:-$HOME/.cache/dace-fortran-samples}/$tag}"
     mkdir -p "$BUILD_ROOT/tmp"
     export TMPDIR="$BUILD_ROOT/tmp"
     export DACE_default_build_folder="$BUILD_ROOT/dacecache"

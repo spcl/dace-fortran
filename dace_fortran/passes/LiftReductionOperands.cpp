@@ -62,6 +62,7 @@
 #include "flang/Optimizer/Dialect/FIROps.h"
 #include "flang/Optimizer/HLFIR/HLFIROps.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm_compat.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -332,9 +333,7 @@ struct LiftReductionOperandsPass
     std::string const uniqName = "_QQred_lift_" + std::to_string(gid);
     mlir::NamedAttrList attrs;
     attrs.append("uniq_name", mlir::StringAttr::get(ctx, uniqName));
-    // operandSegmentSizes for hlfir.declare: memref + (no shape) +
-    // (no typeparams) + (no dummy_scope).
-    attrs.append("operandSegmentSizes", b.getDenseI32ArrayAttr({1, 0, 0, 0}));
+    attrs.append(hlfir_bridge::declareSegments(b, /*hasShape=*/false));
     auto decl = b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{allocaTy, allocaTy},
                                            mlir::ValueRange{alloca.getResult()}, attrs);
 
@@ -441,9 +440,7 @@ struct LiftReductionOperandsPass
       extents.push_back(c);
     }
     auto shapeOp = b.create<fir::ShapeOp>(loc, extents);
-    // operandSegmentSizes for hlfir.declare: memref(1) + shape(1) +
-    // typeparams(0) + dummy_scope(0).
-    attrs.append("operandSegmentSizes", b.getDenseI32ArrayAttr({1, 1, 0, 0}));
+    attrs.append(hlfir_bridge::declareSegments(b, /*hasShape=*/true));
     auto decl = b.create<hlfir::DeclareOp>(loc, mlir::TypeRange{refTy, refTy},
                                            mlir::ValueRange{alloca.getResult(), shapeOp.getResult()}, attrs);
 

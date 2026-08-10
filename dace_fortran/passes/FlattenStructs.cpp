@@ -195,6 +195,7 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm_compat.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
@@ -479,15 +480,11 @@ llvm::SmallVector<int64_t, 4> staticArrayExtents(mlir::Type t) {
   return out;
 }
 
-/// Build the operandSegmentSizes attribute expected on hlfir.declare.
-/// hlfir.declare has four operand segments in this order: memref, shape,
-/// typeparams, dummy_scope.  We only ever construct declares with a memref
-/// (and optionally a shape) in this pass  --  the remaining two segments are
-/// always zero.
-mlir::NamedAttribute declareSegments(mlir::OpBuilder& b, bool hasShape) {
-  llvm::SmallVector<int32_t, 4> const sizes{1, hasShape ? 1 : 0, 0, 0};
-  return b.getNamedAttr("operandSegmentSizes", b.getDenseI32ArrayAttr(sizes));
-}
+/// Build the operandSegmentSizes attribute expected on hlfir.declare.  This
+/// pass only ever constructs declares with a memref (and optionally a shape);
+/// every other segment is empty.  Segment COUNT is version-dependent, so the
+/// array itself is built in ``llvm_compat.h``.
+using hlfir_bridge::declareSegments;
 
 /// True if every member is flat (scalar or array-of-scalar) and we can
 /// synthesise a companion pointee for every (outer, member) pair.  AoS

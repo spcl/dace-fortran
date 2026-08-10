@@ -36,6 +36,9 @@ if [ ! -f "$HERE/data/input.h5" ] || [ ! -f "$HERE/data/reference.h5" ]; then
     exit 0
 fi
 
+# Never inherit a dacecache root from the sbatch's dace lanes: these lanes share nothing with them
+# (velocity_tendencies/baselines.sh does the same).
+unset BUILD_ROOT
 setup_build_root "cloudsc_baselines"
 RUNDIR="$BUILD_ROOT/run"
 mkdir -p "$RUNDIR"
@@ -107,11 +110,22 @@ run_lane() {
     done
 }
 
+# Sets GF_HDF5_LIBS. spack's h5fc emits `-L<dir> -lhdf5_fortran -lhdf5` with NO rpath, so the
+# binary links and then dies at startup on libhdf5_fortran.so.310. Stamp the rpath instead of
+# exporting LD_LIBRARY_PATH: that would also override the flang lane's DT_RUNPATH and silently
+# swap a gfortran-built libhdf5_fortran under it.
 gfortran_ok() {
+    local lib
     if [ "$HAVE_H5FC" != 1 ] || ! "$H5FC" -show | grep -qw gfortran; then
         echo "SKIP $1: no h5fc wrapping gfortran (dwarf reader needs the HDF5 Fortran library)" >&2
         return 1
     fi
+    if [ -n "${HDF5_GFORTRAN_ROOT:-}" ]; then
+        lib="$(hdf5_libdir "$HDF5_GFORTRAN_ROOT")"
+    else
+        lib="$("$H5FC" -show | tr ' ' '\n' | sed -n 's/^-L//p' | head -1)"
+    fi
+    GF_HDF5_LIBS="${lib:+$(hdf5_ldflags "$lib")}"
 }
 
 # hdf5.mod is compiler-specific; flang cannot read the gfortran-built one h5fc points at.
@@ -150,7 +164,7 @@ for lane in $BASELINE_LANES; do
     case "$lane" in
         gfortran-serial)
             gfortran_ok "$lane" || continue
-            build_dwarf "$BUILD_ROOT/$lane" "$H5FC" "" -O3 -march=native
+            build_dwarf "$BUILD_ROOT/$lane" "$H5FC" "$GF_HDF5_LIBS" -O3 -march=native
             set_omp_env 1
             run_lane "$BUILD_ROOT/$lane/dwarf-cloudsc" "$lane" 1 1
             ;;
@@ -162,14 +176,14 @@ for lane in $BASELINE_LANES; do
                     continue
                 fi
                 # thread count is a compile-time constant for autopar: one build per t
-                build_dwarf "$BUILD_ROOT/$lane-$t" "$H5FC" "" -O3 -march=native -ftree-parallelize-loops="$t"
+                build_dwarf "$BUILD_ROOT/$lane-$t" "$H5FC" "$GF_HDF5_LIBS" -O3 -march=native -ftree-parallelize-loops="$t"
                 set_omp_env "$t"
                 run_lane "$BUILD_ROOT/$lane-$t/dwarf-cloudsc" "$lane" "$t" 1
             done
             ;;
         original-openmp)
             gfortran_ok "$lane" || continue
-            build_dwarf "$BUILD_ROOT/$lane" "$H5FC" "" -O3 -march=native -fopenmp
+            build_dwarf "$BUILD_ROOT/$lane" "$H5FC" "$GF_HDF5_LIBS" -O3 -march=native -fopenmp
             # the dwarf block loop is schedule(runtime): pin it, or timings drift with libgomp defaults
             export OMP_SCHEDULE=static
             for t in $THREADS; do

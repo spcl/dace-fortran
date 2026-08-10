@@ -45,4 +45,18 @@ inline hlfir::DeclareOp createDeclare(mlir::OpBuilder& b, mlir::Location loc, ml
 #endif
 }
 
+/// ``operandSegmentSizes`` for a hand-built ``hlfir.declare``.
+///
+/// The op carries ``AttrSizedOperandSegments``, so this array must hold exactly
+/// one entry per operand segment -- a short array makes every operand accessor
+/// read past its end.  LLVM 21 has four segments (memref, shape, typeparams,
+/// dummy_scope); LLVM 22 appended ``storage``.
+inline mlir::NamedAttribute declareSegments(mlir::OpBuilder& b, bool hasShape) {
+  llvm::SmallVector<std::int32_t, 5> sizes{1, hasShape ? 1 : 0, 0, 0};
+#if LLVM_VERSION_MAJOR >= 22
+  sizes.push_back(0);
+#endif
+  return b.getNamedAttr("operandSegmentSizes", b.getDenseI32ArrayAttr(sizes));
+}
+
 }  // namespace hlfir_bridge

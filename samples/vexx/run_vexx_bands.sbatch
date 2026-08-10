@@ -2,6 +2,9 @@
 # vexx CPU scaling, mode 1 (bands): many bands, moderate grid (m=64, nnr=48^3).
 # Site-neutral header (cloudsc sibling convention): pass partition/account on the command line:
 #     sbatch -p <partition> -A <account> samples/vexx/run_vexx_bands.sbatch
+#     Submit from the repo root (or from this script's own directory); Slurm spools the
+#     script, so the repo is found via $SLURM_SUBMIT_DIR. DACE_FORTRAN_REPO=<repo> overrides,
+#     and is REQUIRED alongside -D/--chdir, which repoints $SLURM_SUBMIT_DIR away from the repo.
 
 #SBATCH --job-name=vexx-bands-scaling
 #SBATCH --nodes=1
@@ -14,13 +17,41 @@
 set -euo pipefail
 
 MODE=bands
-REPO="${DACE_FORTRAN_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+# Slurm copies the batch script into its spool dir before running it, so ${BASH_SOURCE[0]} is
+# /var/spool/slurmd/... in a job and cannot find the repo. Order: an explicit DACE_FORTRAN_REPO
+# (which must resolve), then the submitting directory -- repo root, or samples/<kernel>/ two levels
+# down -- then the script's own path, which only resolves outside Slurm.
+resolve_repo() {
+    local c
+    if [ -n "${DACE_FORTRAN_REPO:-}" ]; then
+        if [ ! -f "$DACE_FORTRAN_REPO/samples/common.sh" ]; then
+            echo "FATAL: DACE_FORTRAN_REPO=$DACE_FORTRAN_REPO holds no samples/common.sh" >&2
+            return 1
+        fi
+        (cd "$DACE_FORTRAN_REPO" && pwd)
+        return 0
+    fi
+    for c in "${SLURM_SUBMIT_DIR:-}" "${SLURM_SUBMIT_DIR:+$SLURM_SUBMIT_DIR/../..}" \
+        "$(dirname "${BASH_SOURCE[0]}")/../.."; do
+        [ -n "$c" ] && [ -f "$c/samples/common.sh" ] || continue
+        (cd "$c" && pwd)
+        return 0
+    done
+    echo "FATAL: cannot locate the dace-fortran repo. Slurm spools the batch script, so the script's" >&2
+    echo "  own path is under /var/spool in a job, and \$SLURM_SUBMIT_DIR did not resolve either." >&2
+    echo "  Submit from the repo root or from samples/<kernel>/, or pass DACE_FORTRAN_REPO=<repo>." >&2
+    return 1
+}
+REPO="$(resolve_repo)"
 source "$REPO/samples/common.sh"
 # LANES: space list from {dace-gcc,dace-llvm} (cloudsc sbatch convention; no Fortran baseline
 # lanes here -- no standalone driver exists for this kernel outside the harness).  Any other
 # token is skipped, so a global LANES carrying cloudsc-only lanes still runs this job.
 LANES="${LANES:-dace-gcc}"
 BUILD_ROOT_BASE="${BUILD_ROOT:-$HOME/.cache/dace-fortran-samples}"
+# exported so the baselines lane (which unsets BUILD_ROOT to escape the dace lanes' dacecache)
+# still lands under this root instead of falling back to $HOME.
+export BUILD_ROOT_BASE
 
 # Topology into the log for the record; probed at runtime, never assumed.
 lscpu | head -30
