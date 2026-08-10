@@ -89,13 +89,7 @@ mlir::Value makeReplacement(mlir::OpBuilder& builder, mlir::Location loc, mlir::
 }
 
 #if LLVM_VERSION_MAJOR >= 22
-/// LLVM 22 lowers a CHARACTER relational to a first-class ``hlfir.cmpchar``
-/// instead of the ``_FortranACharacterCompareScalar*`` call LLVM 21 emitted, so
-/// the call-prefix walk below never sees it and the AST builder strands it as
-/// ``?``.  Fold it to the same "strings compare equal" answer the call path
-/// produces: the call's i32 result is replaced by 0, which collapses the
-/// downstream ``cmpi <pred> %res, 0``; here the predicate is on the op itself,
-/// so evaluate it against an equal comparison directly.
+/// Value of ``pred`` when both operands compare equal, matching the LLVM 21 call path.
 bool cmpCharEqualResult(mlir::arith::CmpIPredicate pred) {
   using P = mlir::arith::CmpIPredicate;
   switch (pred) {
@@ -110,7 +104,6 @@ bool cmpCharEqualResult(mlir::arith::CmpIPredicate pred) {
   }
 }
 
-/// Replace every ``hlfir.cmpchar`` with its equal-strings constant.
 void stripCmpChar(mlir::ModuleOp module) {
   llvm::SmallVector<hlfir::CmpCharOp, 8> toErase;
   module.walk([&](hlfir::CmpCharOp cmp) {

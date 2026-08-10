@@ -175,9 +175,6 @@ def _python_cmake_hints() -> list:
     return hints
 
 
-#: Set to 1 in batch jobs.  A bridge cache miss inside a job would otherwise
-#: compile into the shared source tree from a compute node, racing whatever the
-#: login-node tree is doing; failing loudly is always the better outcome there.
 NO_REBUILD_ENV = "DACE_FORTRAN_NO_REBUILD"
 
 

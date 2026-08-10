@@ -1090,9 +1090,6 @@ std::string buildExpr(mlir::Value val, int d) {
   // Python ``**`` operator.  A downstream SDFG-level simplify pass
   // recognises ``**`` and rewrites it based on the tasklet's
   // input/output types  --  no variant marker needed at this layer.
-  // ``complex.powi`` is LLVM 22's first-class spelling of what flang 21
-  // lowered to a ``_FortranAzpowi`` / ``_FortranAcpowi`` runtime call
-  // (handled below); both render as ``**``.
   static const std::set<llvm::StringRef> pow_ops = {
       "complex.powi", "math.fpowi", "math.powf", "math.powi", "math.ipowi",
   };
