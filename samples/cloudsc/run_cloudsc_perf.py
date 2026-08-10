@@ -84,8 +84,8 @@ def run_timed(sdfg, compiled, mode: str, klon: int, nblocks: int, reps: int, war
         inputs = get_inputs_physical(rng)
     outputs = lower_keys(get_outputs(rng))
     scalars = {k.lower(): v for k, v in inputs.items() if isinstance(v, _SCALAR_TYPES)}
-    kwargs = {k.lower(): v for k, v in inputs.items() if not isinstance(v, _SCALAR_TYPES)}
-    kwargs.update({k: v.copy(order="F") for k, v in outputs.items()})
+    kwargs = {k.lower(): np.array(v, order="F") for k, v in inputs.items() if not isinstance(v, _SCALAR_TYPES)}
+    kwargs.update({k: np.array(v, order="F") for k, v in outputs.items()})
     kwargs.update(sdfg_call_args(sdfg, scalars))
     # Keep what the (possibly cache-loaded) SDFG accepts; specialization baked the rest out.
     accepted = accepted_names(sdfg)

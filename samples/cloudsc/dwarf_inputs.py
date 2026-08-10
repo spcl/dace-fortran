@@ -77,7 +77,7 @@ def tile_columns(src: np.ndarray, klon: int, nblocks: int) -> np.ndarray:
     # C-order (d_n,...,d_1,KLON_SRC) is the F-order array (KLON_SRC,d_1,...,d_n); reverse leading axes.
     m = src.ndim
     axes = (m - 1, ) + tuple(range(m - 2, -1, -1)) + (m, )
-    return np.asfortranarray(np.transpose(gathered, axes))
+    return np.array(np.transpose(gathered, axes), order='F')
 
 
 def crosscheck_constants(by_lower: dict) -> tuple:
