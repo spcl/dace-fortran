@@ -24,6 +24,7 @@ from dace.transformation.interstate.loop_to_map import LoopToMap
 from dace.transformation.interstate.state_fusion_with_happens_before import StateFusionExtended
 from dace.transformation.pass_pipeline import Pipeline
 from dace.transformation.passes.parallelization_prep import ShortLoopUnroll
+from dace.transformation.passes.persistent_transients import MakeTransientsPersistent
 from dace.transformation.passes.scalar_fission import ScalarFission
 from dace.transformation.passes.unique_loop_iterators import UniqueLoopIterators
 
@@ -129,6 +130,7 @@ def optimize(sdfg: SDFG,
     sdfg.apply_transformations_repeated(LoopToMap, validate=validate)
     sdfg.apply_transformations_repeated(StateFusionExtended, validate=validate)
     sdfg.apply_transformations_repeated(MapFusionVertical, validate=validate)
+    MakeTransientsPersistent().apply_pass(sdfg, {})
 
     if validate:
         sdfg.validate()
