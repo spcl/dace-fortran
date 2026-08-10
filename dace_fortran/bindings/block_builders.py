@@ -608,10 +608,11 @@ def build_wrapper_body(frozen: FrozenSignature,
 
     orphans = _orphan_module_args(frozen, iface, plan)
     if orphans:
+        synth_members = _synthetic_members(plan)
         body.append("")
         body.append("    ! ----- Module-global args sourced from use-imports -----")
         for a, _mod, _member in orphans:
-            alias = _module_symbol_alias(a.sdfg_name)
+            alias = _module_value_expr(a.sdfg_name, synth_members)
             alloc_inside = getattr(a, 'global_alloc_inside', False)
             is_alloc = getattr(a, 'module_origin_allocatable', False)
             is_ptr = getattr(a, 'module_origin_pointer', False)
@@ -870,14 +871,14 @@ def build_finalize(iface: OriginalInterface) -> str:
 # ---------------------------------------------------------------------------
 
 
-def assemble_module(iface: OriginalInterface, frozen: FrozenSignature, blocks: dict) -> str:
+def assemble_module(iface: OriginalInterface, frozen: FrozenSignature, blocks: dict, plan: FlattenPlan = None) -> str:
     """Stitch the rendered blocks into the complete Fortran module
     (template: templates/module.f90.in)."""
     use_lines = [f"  use {mod}, only: {', '.join(syms)}" for mod, syms in sorted(iface.used_modules.items())]
     # Module-sourced free symbols: import each member under a <sym>__mod alias so
     # it doesn't clash with the wrapper's own local <sym>. Group by module.
     by_mod: dict = {}
-    for sym, (mod, member) in sorted(effective_module_sources(frozen, iface).items()):
+    for sym, (mod, member) in sorted(effective_module_sources(frozen, iface, plan).items()):
         by_mod.setdefault(mod, []).append(f"{_module_symbol_alias(sym)} => {member}")
     for mod, renames in sorted(by_mod.items()):
         use_lines.append(f"  use {mod}, only: {', '.join(sorted(set(renames)))}")
@@ -1068,11 +1069,36 @@ def _module_symbol_alias(sym: str) -> str:
     return f"{sym}__mod"
 
 
-def effective_module_sources(frozen: FrozenSignature, iface: OriginalInterface) -> Dict[str, Tuple[str, str]]:
+def _synthetic_members(plan: FlattenPlan) -> Dict[str, str]:
+    """SDFG name -> struct member for every ``hlfir-flatten-global-scalar-reads``
+    lift.  The host entity, not the lifted scalar, is what the binding imports;
+    this map says which component to read off it."""
+    return {s.sdfg_name: s.member for s in getattr(plan, 'synthetic_globals', ()) or ()}
+
+
+def _module_value_expr(sym: str, members: Dict[str, str]) -> str:
+    """Fortran expression for a module-sourced symbol's caller-side value.  A
+    lifted struct member reads through its host entity's import alias; every
+    other module symbol IS its alias."""
+    member = members.get(sym)
+    return f"{_module_symbol_alias(sym)}%{member}" if member else _module_symbol_alias(sym)
+
+
+def effective_module_sources(frozen: FrozenSignature,
+                             iface: OriginalInterface,
+                             plan: FlattenPlan = None) -> Dict[str, Tuple[str, str]]:
     """Merge bridge-auto-detected module-global provenance (the primary source,
-    FrozenSignature.module_symbol_origins) with hand-authored
-    iface.module_symbol_sources, which wins on conflict (override/fallback)."""
+    FrozenSignature.module_symbol_origins) with the flatten plan's synthetic-global
+    side table and hand-authored iface.module_symbol_sources, which wins on conflict
+    (override/fallback).
+
+    A lifted struct member's own mangled symbol decodes to a module entity that does
+    not exist (``_QM<mod>E<entity>_<member>`` reads as a variable named
+    ``<entity>_<member>``), so the side table's ``(module, entity)`` must displace the
+    bridge's decode -- the ``%<member>`` step is applied by :func:`_module_value_expr`."""
     merged: Dict[str, Tuple[str, str]] = dict(getattr(frozen, 'module_symbol_origins', {}) or {})
+    for s in (getattr(plan, 'synthetic_globals', ()) or ()):
+        merged[s.sdfg_name] = (s.module, s.entity)
     merged.update(iface.module_symbol_sources)  # explicit override wins
     return merged
 
@@ -1081,7 +1107,7 @@ def _orphan_module_args(frozen: FrozenSignature, iface: OriginalInterface, plan:
     """SDFG args that are neither an outer dummy, flat companion, nor extent/offset
     symbol -- Fortran module globals the kernel reads directly (ICON's nrdmax,
     i_am_accel_node, timer handles). Returns (FrozenArg, module, member) tuples."""
-    sources = effective_module_sources(frozen, iface)
+    sources = effective_module_sources(frozen, iface, plan)
     dummy = {a.name for a in iface.args}
     flat = {f for e in plan.entries for f in e.recipe.flat_names}
     out = []
@@ -1130,7 +1156,8 @@ def _extra_local_symbols(frozen: FrozenSignature, iface: OriginalInterface, plan
     no free-symbol/dummy source. Returns (name, fortran_type, rhs); non-module-
     origin symbols degrade to a degenerate default, valid since none is READ on
     the no-op path."""
-    sources = effective_module_sources(frozen, iface)
+    sources = effective_module_sources(frozen, iface, plan)
+    synth_members = _synthetic_members(plan)
     outer = {a.name for a in iface.args}
     flat = {f for e in plan.entries for f in e.recipe.flat_names}
     declared = set(frozen.free_symbols) | outer | flat
@@ -1145,7 +1172,7 @@ def _extra_local_symbols(frozen: FrozenSignature, iface: OriginalInterface, plan
 
     def _rhs(name: str, dtype: str, is_dim: bool) -> str:
         if name in sources:
-            alias = _module_symbol_alias(name)
+            alias = _module_value_expr(name, synth_members)
             return f"int({alias}, c_int)" if dtype != 'bool' else alias
         return "1" if is_dim else _zero_literal(dtype)
 
@@ -1492,7 +1519,8 @@ def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dumm
     offset_<arr>_d<i> -> lbound, <arr>_d<i> -> extent/size. Flatten-plan expr
     preferred when available; falls back to lbound/size on the arg's own Fortran
     expr for plain assumed-shape / non-default lower-bound dummies."""
-    _module_sources = effective_module_sources(frozen, iface)
+    _module_sources = effective_module_sources(frozen, iface, plan)
+    _synth_members = _synthetic_members(plan)
     # Struct-member free symbols with no FlattenEntry (used only as a loop bound /
     # extent, e.g. QE dfftt%ngm) -- sourced from the static struct_types layout.
     _struct_member_sources, _struct_member_paths = _struct_member_symbol_sources(iface)
@@ -1598,7 +1626,7 @@ def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dumm
         # Last resort: a module global the kernel reads directly, use-imported
         # under the __mod alias -- assign from that import.
         if sym in _module_sources:
-            out.append(f"    {sym} = int({_module_symbol_alias(sym)}, c_int)")
+            out.append(f"    {sym} = int({_module_value_expr(sym, _synth_members)}, c_int)")
             continue
         # Presence of a deferred-storage MODULE global: ALLOCATED/ASSOCIATED(g) ->
         # g_allocated, PRESENT(g) -> g_present. Source from the REAL host so a

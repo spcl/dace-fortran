@@ -54,5 +54,5 @@ def emit_bindings(
         'wrapper_tail': build_wrapper_tail(frozen, iface, plan, dace_arglist, enum_maps=enum_maps),
         'finalize': build_finalize(iface),
     }
-    out_path.write_text(assemble_module(iface, frozen, blocks))
+    out_path.write_text(assemble_module(iface, frozen, blocks, plan))
     return out_path

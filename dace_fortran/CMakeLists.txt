@@ -276,6 +276,7 @@ add_library(hlfir_bridge_passes STATIC
     passes/InlineAll.cpp
     passes/LowerFirSelectCase.cpp
     passes/FlattenStructs.cpp
+    passes/FlattenGlobalScalarReads.cpp
     passes/EliminateDoubleBufferToggle.cpp
     passes/DefaultIntent.cpp
     passes/VerifyNoUnresolvedCalls.cpp

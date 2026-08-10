@@ -23,6 +23,7 @@ from dace_fortran.bindings.flatten_plan import (
     FlattenEntry,
     FlattenPlan,
     FlattenRecipe,
+    SyntheticGlobal,
     strip_index_args,
     substitute_indices,
 )
@@ -52,6 +53,7 @@ __all__ = [
     "FlattenRecipe",
     "FlattenEntry",
     "FlattenPlan",
+    "SyntheticGlobal",
     "substitute_indices",
     "strip_index_args",
     # Emitter

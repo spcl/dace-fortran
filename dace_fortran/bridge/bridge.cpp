@@ -226,10 +226,6 @@ class HLFIRModule {
 
     auto planDict = mlir::dyn_cast<mlir::DictionaryAttr>(attr);
     if (!planDict) return out;
-    auto entriesAttr = planDict.get("entries");
-    if (!entriesAttr) return out;
-    auto entriesArr = mlir::dyn_cast<mlir::ArrayAttr>(entriesAttr);
-    if (!entriesArr) return out;
 
     auto asStr = [](mlir::Attribute a) -> std::string {
       if (auto s = mlir::dyn_cast<mlir::StringAttr>(a)) return s.str();
@@ -249,6 +245,25 @@ class HLFIRModule {
         for (auto e : arr) out.append(asStr(e));
       return out;
     };
+
+    nb::list synthetics;
+    out["synthetic_globals"] = synthetics;
+    if (auto synthArr = mlir::dyn_cast_or_null<mlir::ArrayAttr>(planDict.get("synthetic_globals"))) {
+      for (auto sAttr : synthArr) {
+        auto s = mlir::dyn_cast<mlir::DictionaryAttr>(sAttr);
+        if (!s) continue;
+        nb::dict d;
+        d["symbol"] = asStr(s.get("symbol"));
+        d["module"] = asStr(s.get("module"));
+        d["entity"] = asStr(s.get("entity"));
+        d["member"] = asStr(s.get("member"));
+        d["dtype"] = asStr(s.get("dtype"));
+        synthetics.append(d);
+      }
+    }
+
+    auto entriesArr = mlir::dyn_cast_or_null<mlir::ArrayAttr>(planDict.get("entries"));
+    if (!entriesArr) return out;
 
     for (auto entryAttr : entriesArr) {
       auto entry = mlir::dyn_cast<mlir::DictionaryAttr>(entryAttr);

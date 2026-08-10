@@ -141,24 +141,80 @@ class FlattenEntry:
 
 
 @dataclass(frozen=True)
+class SyntheticGlobal:
+    """One scalar struct member ``hlfir-flatten-global-scalar-reads`` lifted
+    out of a module-global record into a standalone ``fir.global``.
+
+    The synthetic symbol's mangled name is a CARRIER, never parsed for
+    meaning: ``_QM<mod>E<entity>_<member>`` is indistinguishable from a real
+    module variable literally named ``<entity>_<member>``.  This record is the
+    source of truth -- the emitter reads module/entity/member from here.
+
+    symbol: SDFG-visible name of the lifted scalar (the Fortran entity name
+        the bridge derives from the synthetic global's mangled symbol).
+    module: Fortran module the host struct lives in (``USE``d by the binding).
+    entity: the host struct's Fortran name inside ``module``.
+    member: the scalar component read off ``entity``.
+    dtype: SDFG element dtype of the member.
+    """
+    symbol: str
+    module: str
+    entity: str
+    member: str
+    dtype: str = 'float64'
+
+    @property
+    def sdfg_name(self) -> str:
+        """Name the lifted scalar carries on the SDFG.  Composed from the side
+        table, never decoded from ``symbol``."""
+        return f"{self.entity}_{self.member}"
+
+    def to_dict(self) -> dict:
+        """Serialise to a JSON-safe dict."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> 'SyntheticGlobal':
+        """Rebuild from a :meth:`to_dict` mapping."""
+        return cls(
+            symbol=d['symbol'],
+            module=d['module'],
+            entity=d['entity'],
+            member=d['member'],
+            dtype=d.get('dtype', 'float64'),
+        )
+
+
+@dataclass(frozen=True)
 class FlattenPlan:
     """All unpacks ``hlfir-flatten-structs`` performed for one entry
     subroutine.  One entry per flattened outer dummy; untouched
     scalars/plain-arrays don't appear.
 
     entries: tuple of FlattenEntry in argument order.
+    synthetic_globals: tuple of SyntheticGlobal, one per scalar member
+        ``hlfir-flatten-global-scalar-reads`` lifted out of a module-global
+        record.  Each needs a ``<symbol> = <entity>%<member>`` assignment in
+        the binding wrapper before the call.
     """
     entries: Tuple[FlattenEntry, ...] = field(default_factory=tuple)
+    synthetic_globals: Tuple[SyntheticGlobal, ...] = field(default_factory=tuple)
 
     def to_dict(self) -> dict:
         """Serialise to a JSON-safe dict (one entry per flattened dummy)."""
-        return {'entries': [e.to_dict() for e in self.entries]}
+        return {
+            'entries': [e.to_dict() for e in self.entries],
+            'synthetic_globals': [s.to_dict() for s in self.synthetic_globals],
+        }
 
     @classmethod
     def from_dict(cls, d: dict) -> 'FlattenPlan':
         """Rehydrate from a plain dict -- the bridge returns the MLIR-side
         ``hlfir.flatten_plan`` attribute in this same nested shape."""
-        return cls(entries=tuple(FlattenEntry.from_dict(e) for e in d.get('entries', [])))
+        return cls(
+            entries=tuple(FlattenEntry.from_dict(e) for e in d.get('entries', [])),
+            synthetic_globals=tuple(SyntheticGlobal.from_dict(s) for s in d.get('synthetic_globals', [])),
+        )
 
     def to_json(self, path: str):
         """Write the plan to ``path`` as indented JSON."""

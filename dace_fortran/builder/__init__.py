@@ -269,6 +269,10 @@ DEFAULT_PIPELINE = (
     # bind).  See ``passes/PruneNeverAllocatedMemberDeref.cpp``.
     "hlfir-prune-never-allocated-member-deref,"
     "hlfir-flatten-structs,"
+    # Must sit AFTER flatten-structs (the struct rewrites it depends on are done)
+    # and BEFORE hlfir-preserve-mutable-globals, whose INPUT/MUTABLE
+    # classification has to see the synthetic per-member globals this mints.
+    "hlfir-flatten-global-scalar-reads,"
     # Tag Fortran 2003 bounds-remapping pointer assignments
     # (``ptr(1:N*K) => target(:, slice)``) with
     # ``hlfir_bridge.bounds_remap_view`` on the LHS pointer declare.
@@ -367,6 +371,7 @@ MULTI_FILE_PIPELINE = (
     "symbol-dce,"
     "hlfir-verify-no-unresolved-calls,"
     "hlfir-flatten-structs,"
+    "hlfir-flatten-global-scalar-reads,"
     "hlfir-propagate-shapes,"
     "hlfir-default-intent,"
     "hlfir-preserve-mutable-globals,"
