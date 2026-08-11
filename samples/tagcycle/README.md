@@ -28,12 +28,46 @@ all four concurrently:
 
 - `cloudsc-klon` — `run_cloudsc_perf.py --mode klon`, both gcc and llvm backends (KLON=65536, NBLOCKS=1)
 - `cloudsc-nblks` — `run_cloudsc_perf.py --mode nblks`, both backends (KLON=32, NBLOCKS=2048)
-- `velocity-gcc` — `run_velocity_perf.py --backend gcc`, both loop-exchange TU variants
-- `velocity-llvm` — same with the llvm backend
+- `velocity-loopexch` — the `__LOOP_EXCHANGE` TU, both backends × both data layouts
+- `velocity-noloopexch` — the no-loop-exchange TU, same 2×2
 
-cloudsc splits by mode and velocity splits by backend because both velocity TU variants produce an
-SDFG named `velocity_tendencies` and therefore share one dacecache directory; splitting by backend
-keeps every concurrent rank in a private cache root.
+cloudsc splits by mode; velocity splits by **TU variant**, with the backend and the data layout as
+sweep dimensions inside each rank (4 combinations per rank). The layout is deliberately not tied to
+the TU: only when both TUs see both layouts can a row be read as "which TU wins at this layout".
+The CSV keeps the axes separate — `mode` is the TU, `nproma`+`nblks_e` are the layout,
+`lane` is the backend.
+
+Both velocity TUs build an SDFG named `velocity_tendencies`, and `DACE_cache=name` keys the build
+folder on that name, so two concurrent velocity ranks would otherwise compile into the same
+directory. `setup_lane_root` takes a partition suffix: the velocity lanes share the per-backend
+root `velocity_tendencies_dace-{gcc,llvm}` (where the `.sdfgz` caches, the `.arglist.txt` dumps and
+the baseline arglists already live under TU-unique names) but build under
+`dacecache_{loopexch,noloopexch}` with `tmp_{loopexch,noloopexch}` beside it.
+
+`velocity-openacc` is a fifth, separately composable variant — the nvfortran `-acc=multicore`
+Fortran twin, built and timed by `driver_velocity.f90` against `dump_data.py`'s stream-binary
+dumps rather than an `.npz`. It is not part of the default four; add it with
+`VARIANTS="... velocity-openacc"` on a rank that has a free socket.
+
+## The velocity dataset (R02B06)
+
+Since `prepare_r02b06.sh` the velocity lanes read the real R02B06 grid:
+**327680 cells / 491520 edges / 163842 verts, nlev=90** — 16× the cell count of the deck used
+through job 4391146. (The old deck is `data_r02b05` by name only: what it holds is 20480 cells /
+30720 edges, i.e. R02B04 scale. Any "81920 cells" claim about it is wrong.)
+
+Two layouts, both swept by both velocity ranks:
+
+| Layout | Deck | nproma | nblks_c/e/v |
+|---|---|---|---|
+| many-blocks | `velocity_r02b06_nproma32.npz` | 32 | 10240 / 15360 / 5121 |
+| flat | `velocity_r02b06_nproma491520.npz` | 491520 | 1 / 1 / 1 |
+
+One iteration is now ~1 s sequential and ~90 ms on 72 threads, and a deck is 6.9 GB in memory
+(0.74 GB compressed), so a velocity rank spends more wall time starting 32 driver processes than
+running the timed calls. Both decks are produced by
+`samples/velocity_tendencies/prepare_r02b06.sh`; the warm stage will convert a missing one itself
+(under an `flock`, so the two velocity ranks do not both do it).
 
 ## Running a cycle
 
@@ -64,8 +98,9 @@ rebuilding on a compute node (`DACE_FORTRAN_NO_REBUILD=1` plus the frozen clone)
 ## Experiment matrix (CPU)
 
 Legend: ✅ measured, ⚠️ supported but not yet run, ❌ not available. CPU experiments (this
-harness) run BOTH shape variants per kernel; GPU experiments (separate harness, `probe/gpu`) run
-only the big flat variant (cloudsc klon huge, nblks=1; velocity nproma=30720, nblks_e=1).
+harness) run BOTH shape variants per kernel; GPU experiments live in a separate harness under
+`probe/gpu` (`gpu_lane.sh` plus its own warm/meas sbatch pair per kernel) and run only the big
+flat variant — cloudsc klon huge with nblks=1, velocity at the single-block layout.
 
 **cloudsc (klon + nblks):**
 
@@ -73,7 +108,12 @@ only the big flat variant (cloudsc klon huge, nblks=1; velocity nproma=30720, nb
 |---|---|---|---|
 | dace-optimize | ✅ measured | ✅ measured | ❌ no dace-nvhpc lane exists in the harness |
 | autopar | ⚠️ supported (`-ftree-parallelize-loops`), never run | ❌ flang has no autopar flag — genuinely unsupported | ❌ nvfortran has `-Mconcur` but no harness arm written |
-| original OpenMP / OpenACC-CPU | ⚠️ `original-openmp` arm exists, never run | ❌ no arm (only the gcc one is wired) | ⚠️ `openacc-cpu` arm exists, blocked on an nvfortran-built HDF5 |
+| original OpenMP / OpenACC-CPU | ⚠️ `original-openmp` arm exists, never run | ❌ no arm (only the gcc one is wired) | ⚠️ `openacc-cpu` arm exists and is **unblocked**, never run |
+
+The cloudsc `openacc-cpu` blocker is gone: spack carries `hdf5@1.14.6+fortran%nvhpc@26.3` and
+`samples/env.sh` exports `HDF5_NVFORTRAN_ROOT` from it, which is the only thing
+`baselines.sh`'s `openacc-cpu` arm was missing. It still has no tagcycle rank of its own — it runs
+through `samples/cloudsc/baselines.sh`.
 
 **velocity (loopexch + noloopexch):**
 
@@ -81,10 +121,11 @@ only the big flat variant (cloudsc klon huge, nblks=1; velocity nproma=30720, nb
 |---|---|---|---|
 | dace-optimize | ✅ measured* | ✅ measured* | ❌ no lane |
 | autopar | ⚠️ supported, never run | ❌ impossible (flang) | ❌ no arm |
-| original | ❌ no OpenMP source exists — the original twin is OpenACC-only | ❌ | ⚠️ `openacc-cpu` arm exists, being wired now |
+| original | ❌ no OpenMP source exists — the original twin is OpenACC-only | ❌ | ⚠️ `velocity-openacc` variant wired (0d125c8), never run |
 
-\* noloopexch was measured at the wrong shape (32x960) in job 4391146; fixed in 2f1f38b to
-nproma=30720, nblks_e=1; velocity dace lanes need re-measurement.
+\* the ✅ rows are job 4391146 on the old R02B04-scale deck, both TUs at 32×960 — the wrong shape
+for noloopexch and the wrong dataset for everything. Every velocity number needs re-measuring at
+R02B06 under the TU-per-rank layout above.
 
 ## Rules the scripts encode
 
