@@ -49,6 +49,13 @@ Fortran twin, built and timed by `driver_velocity.f90` against `dump_data.py`'s 
 dumps rather than an `.npz`. It is not part of the default four; add it with
 `VARIANTS="... velocity-openacc"` on a rank that has a free socket.
 
+`velocity-openmp` is a sixth, likewise composable variant — the same `velocity_advection_acc.f90`
+source built `-fopenmp`/`-mp` instead of `-acc=multicore`, sweeping all three compilers
+(`original-openmp-gcc`, `original-openmp-flang`, `original-openmp-nvhpc`) inside one rank, one CSV.
+The file's 23 `!$OMP` directives (block-loop level) compile clean under gcc, flang-22, and nvhpc
+alike; flang's own `!$ACC` lowering is broken (see `probe/toolchain_matrix_audit.md`), so this
+variant never passes `-fopenacc` to it. Add it the same way: `VARIANTS="... velocity-openmp"`.
+
 ## The velocity dataset (R02B06)
 
 Since `prepare_r02b06.sh` the velocity lanes read the real R02B06 grid:
@@ -125,7 +132,7 @@ through `samples/cloudsc/baselines.sh`.
 |---|---|---|---|
 | dace-optimize | ✅ measured* | ✅ measured* | ❌ no lane |
 | autopar | ⚠️ supported, never run | ❌ impossible (flang) | ❌ no arm |
-| original | ❌ no OpenMP source exists — the original twin is OpenACC-only | ❌ | ⚠️ `velocity-openacc` variant wired (0d125c8), never run |
+| original | ⚠️ wired for gcc — `original-openmp-gcc` (`baselines.sh`) + `velocity-openmp` tagcycle sub-lane, never run | ⚠️ wired for llvm — `original-openmp-flang` (`baselines.sh`) + `velocity-openmp` tagcycle sub-lane, never run | ⚠️ wired for nvhpc — `original-openmp-nvhpc` (`baselines.sh`) + `velocity-openmp` tagcycle sub-lane, never run; `velocity-openacc` (OpenACC-CPU, `-acc=multicore`, 0d125c8) also wired, never run |
 
 \* the ✅ rows are job 4391146 on the old R02B04-scale deck, both TUs at 32×960 — the wrong shape
 for noloopexch and the wrong dataset for everything. Every velocity number needs re-measuring at

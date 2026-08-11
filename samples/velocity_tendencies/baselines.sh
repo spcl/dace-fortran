@@ -23,6 +23,8 @@ CSV="${CSV:-velocity_baselines_${SLURM_JOB_ID:-local}.csv}"
 BASELINE_LANES="${BASELINE_LANES:-gfortran-autopar openacc-cpu openacc}"
 CSV_HEADER="kernel,mode,nproma,nblks_e,threads,rep,ms,inputs,lane"
 DATA_DIR="${VELOCITY_DATA_DIR:-$HERE/data_r02b05}"
+R06_DATA_DIR="${VELOCITY_R06_DATA_DIR:-$HERE/data_r02b06}"
+R06_TIMESTEP="${VELOCITY_TIMESTEP:-1}"
 
 # Never inherit a dacecache root from the sbatch's dace lanes: these lanes share nothing with them.
 unset BUILD_ROOT
@@ -56,10 +58,29 @@ emit_header() {
     echo "$CSV_HEADER"
 }
 
-# The driver prints CSV rows on stdout and diagnostics on stderr; both land in the log.
+r06_dump_for() {
+    case "$1" in
+        flat) echo "$BUILD_ROOT/dump_r02b06_nproma491520" ;;
+        *) echo "$BUILD_ROOT/dump_r02b06_nproma32" ;;
+    esac
+}
+r06_nproma_for() {
+    case "$1" in
+        flat) echo 491520 ;;
+        *) echo 32 ;;
+    esac
+}
+ensure_r06_dump() {
+    local d
+    d="$(r06_dump_for "$1")"
+    [ -f "$d/manifest.txt" ] && return 0
+    "$PY" "$HERE/dump_data.py" --data-dir "$R06_DATA_DIR" --timestep "$R06_TIMESTEP" \
+        --nproma "$(r06_nproma_for "$1")" --out "$d"
+}
+
 run_lane() {
-    local exe="$1" lane="$2" threads="$3" log="$BUILD_ROOT/last_run.log"
-    if ! "$exe" "$DUMP" "$lane" "$threads" "$REPS" "$WARMUP" > "$log" 2>&1; then
+    local exe="$1" dump_dir="$2" lane="$3" threads="$4" inputs="${5:-}" log="$BUILD_ROOT/last_run.log" rows
+    if ! "$exe" "$dump_dir" "$lane" "$threads" "$REPS" "$WARMUP" > "$log" 2>&1; then
         echo "FATAL: $exe failed (lane $lane, threads $threads); tail of $log:" >&2
         tail -5 "$log" >&2
         return 1
@@ -68,7 +89,9 @@ run_lane() {
         echo "FATAL: no CSV rows from $exe (lane $lane, threads $threads)" >&2
         return 1
     fi
-    grep '^velocity_tendencies,' "$log" | tee -a "$CSV"
+    rows="$(grep '^velocity_tendencies,' "$log")"
+    [ -z "$inputs" ] || rows="$(printf '%s\n' "$rows" | sed "s/,r02b05,/,${inputs},/")"
+    printf '%s\n' "$rows" | tee -a "$CSV"
 }
 
 emit_header
@@ -87,7 +110,7 @@ for lane in $BASELINE_LANES; do
                 # thread count is a compile-time constant for autopar: one build per t
                 build_driver "$BUILD_ROOT/$lane-$t" "$GFORTRAN" -O3 -march=native -ftree-parallelize-loops="$t"
                 set_omp_env "$t"
-                run_lane "$BUILD_ROOT/$lane-$t/driver_velocity" "$lane" "$t"
+                run_lane "$BUILD_ROOT/$lane-$t/driver_velocity" "$DUMP" "$lane" "$t"
             done
             ;;
         openacc-cpu)
@@ -104,7 +127,7 @@ for lane in $BASELINE_LANES; do
                 fi
                 set_omp_env "$t"
                 export ACC_NUM_CORES="$t"
-                run_lane "$BUILD_ROOT/$lane/driver_velocity" "$lane" "$t"
+                run_lane "$BUILD_ROOT/$lane/driver_velocity" "$DUMP" "$lane" "$t"
             done
             unset ACC_NUM_CORES
             ;;
@@ -123,7 +146,34 @@ for lane in $BASELINE_LANES; do
             build_driver "$BUILD_ROOT/$lane" "$NVFORTRAN" -O3 -acc=gpu
             set_omp_env 1
             # threads column 0: no CPU thread sweep applies (same convention as cloudsc gpu_baselines.sh)
-            run_lane "$BUILD_ROOT/$lane/driver_velocity" "$lane" 0
+            run_lane "$BUILD_ROOT/$lane/driver_velocity" "$DUMP" "$lane" 0
+            ;;
+        original-openmp-gcc | original-openmp-flang | original-openmp-nvhpc)
+            oc="${lane#original-openmp-}"
+            case "$oc" in
+                gcc) ofc="$GFORTRAN" ohave="$HAVE_GFORTRAN" oflags=(-O3 -march=native -fopenmp) ;;
+                flang) ofc="$FLANG" ohave="$HAVE_FLANG" oflags=(-O3 -fopenmp) ;;
+                nvhpc) ofc="$NVFORTRAN" ohave="$HAVE_NVFORTRAN" oflags=(-O3 -mp) ;;
+            esac
+            if [ "$ohave" != 1 ]; then
+                echo "SKIP $lane: no $oc Fortran compiler on PATH" >&2
+                continue
+            fi
+            build_driver "$BUILD_ROOT/$lane" "$ofc" "${oflags[@]}"
+            for t in $THREADS; do
+                if [ "$t" -gt "$TOPO_NCORES" ]; then
+                    echo "skip threads=$t (> $TOPO_NCORES physical cores)"
+                    continue
+                fi
+                set_omp_env "$t"
+                for ol in nproma32 flat; do
+                    if ! ensure_r06_dump "$ol"; then
+                        echo "SKIP $lane layout $ol: no R02B06 dump at $(r06_dump_for "$ol")" >&2
+                        continue
+                    fi
+                    run_lane "$BUILD_ROOT/$lane/driver_velocity" "$(r06_dump_for "$ol")" "$lane" "$t" r02b06
+                done
+            done
             ;;
         *)
             echo "unknown baseline lane: $lane" >&2

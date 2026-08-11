@@ -354,6 +354,90 @@ case "$VARIANT" in
             unset ACC_NUM_CORES
         fi
         ;;
+    velocity-openmp)
+        . /capstor/scratch/cscs/ybudanaz/aarch64/spack/share/spack/setup-env.sh
+        spack load gcc@16.1.0 +graphite
+        spack load nvhpc
+        OMP_NVHPC_ROOT="$(spack location -i nvhpc 2> /dev/null || true)"
+        if [ -n "$OMP_NVHPC_ROOT" ]; then
+            OMP_CUDA_HOME="$(ls -d "$OMP_NVHPC_ROOT"/Linux_aarch64/*/cuda 2> /dev/null | head -1)"
+            if [ -n "$OMP_CUDA_HOME" ]; then
+                export CUDA_HOME="$OMP_CUDA_HOME"
+                export PATH="$CUDA_HOME/bin:$PATH"
+                export LD_LIBRARY_PATH="$CUDA_HOME/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            fi
+        fi
+        OMP_GFORTRAN="$(command -v gfortran || true)"
+        OMP_FLANG="$(command -v flang-22 || command -v flang || true)"
+        OMP_NVFORTRAN="$(command -v nvfortran || true)"
+        REPS="${REPS:-50}"
+        WARMUP="${WARMUP:-2}"
+        ulimit -s unlimited 2> /dev/null || echo "warning: could not raise the stack limit" >&2
+        setup_lane_root "$BR2/velocity_tendencies_openmp" || exit 1
+        if [ "$MODE" = warm ]; then
+            for l in $VELOCITY_LAYOUTS; do
+                d="$(dump_for "$l")"
+                [ -f "$d/manifest.txt" ] || run "$PY" "$VELOCITY_SRC/dump_data.py" --data-dir "$VELOCITY_DATA_DIR" \
+                    --timestep "$VELOCITY_TIMESTEP" --nproma "$(nproma_for "$l")" --out "$d"
+            done
+        else
+            for l in $VELOCITY_LAYOUTS; do
+                [ -f "$(dump_for "$l")/manifest.txt" ] || {
+                    echo "FATAL: no velocity dump at $(dump_for "$l") for layout $l (warm mode builds it)" >&2
+                    rc=1
+                }
+            done
+            [ "$rc" -eq 0 ] || exit "$rc"
+        fi
+        for oc in gcc flang nvhpc; do
+            case "$oc" in
+                gcc) ofc="$OMP_GFORTRAN" oflags=(-O3 -march=native -fopenmp) ;;
+                flang) ofc="$OMP_FLANG" oflags=(-O3 -fopenmp) ;;
+                nvhpc) ofc="$OMP_NVFORTRAN" oflags=(-O3 -mp) ;;
+            esac
+            olane="original-openmp-$oc"
+            odir="$BUILD_ROOT/$oc"
+            if [ -z "$ofc" ]; then
+                [ "$MODE" = warm ] && echo "SKIP $olane: no compiler on PATH" >&2
+                continue
+            fi
+            ODRIVER="$odir/driver_velocity"
+            if [ "$MODE" = warm ]; then
+                mkdir -p "$odir" || { rc=1; continue; }
+                run "$ofc" "${oflags[@]}" -c "$VELOCITY_SRC/velocity_advection_acc.f90" \
+                    -o "$odir/velocity_advection_acc.o" -module "$odir"
+                run "$ofc" "${oflags[@]}" -c "$VELOCITY_SRC/driver_velocity.f90" \
+                    -o "$odir/driver_velocity.o" -module "$odir"
+                run "$ofc" "${oflags[@]}" "$odir/velocity_advection_acc.o" "$odir/driver_velocity.o" -o "$ODRIVER"
+                continue
+            fi
+            [ -x "$ODRIVER" ] || {
+                echo "FATAL: no driver binary at $ODRIVER (warm mode builds it)" >&2
+                rc=1
+                continue
+            }
+            for t in $THREADS; do
+                if [ "$t" -gt "$LANE_NCORES" ]; then
+                    echo "skip threads=$t (> $LANE_NCORES cpus in this cpuset)"
+                    continue
+                fi
+                set_omp_lane "$t" || { rc=1; continue; }
+                for l in $VELOCITY_LAYOUTS; do
+                    d="$(dump_for "$l")"
+                    log="$odir/last_run_${l}_${t}.log"
+                    if ! "$ODRIVER" "$d" "$olane" "$t" "$REPS" "$WARMUP" > "$log" 2>&1; then
+                        echo "FATAL: driver_velocity failed ($olane layout $l threads=$t); tail of $log:" >&2
+                        tail -5 "$log" >&2
+                        rc=1
+                        continue
+                    fi
+                    [ -f "$CSV" ] || echo "kernel,mode,nproma,nblks_e,threads,rep,ms,inputs,lane" > "$CSV"
+                    grep '^velocity_tendencies,' "$log" | sed "s/,r02b05,/,${VELOCITY_INPUTS},/" \
+                        | tee -a "$CSV"
+                done
+            done
+        done
+        ;;
     *)
         echo "unknown variant: $VARIANT" >&2
         exit 2
