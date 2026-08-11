@@ -131,6 +131,13 @@ CLOUDSC_DRIVER="$MEAS/samples/cloudsc/run_cloudsc_perf.py"
 VELOCITY_DRIVER="$MEAS/samples/velocity_tendencies/run_velocity_perf.py"
 CLOUDSC_H5="$MEAS/samples/cloudsc/data/input.h5"
 NPZ="${VELOCITY_NPZ:-$BR2/velocity_r02b05_nproma32.npz}"
+NPZ_NOLOOPEXCH="${VELOCITY_NPZ_NOLOOPEXCH:-$BR2/velocity_r02b05_nproma30720.npz}"
+npz_for() {
+    case "$1" in
+        noloopexch) echo "$NPZ_NOLOOPEXCH" ;;
+        *) echo "$NPZ" ;;
+    esac
+}
 
 if [ "$MODE" = meas ]; then
     : "${CSV:?meas mode needs CSV=<path>}"
@@ -172,8 +179,8 @@ case "$VARIANT" in
         ;;
     velocity-gcc | velocity-llvm)
         b="${VARIANT#velocity-}"
-        [ -f "$NPZ" ] || {
-            echo "FATAL: no velocity npz at $NPZ" >&2
+        [ -f "$NPZ" ] && [ -f "$NPZ_NOLOOPEXCH" ] || {
+            echo "FATAL: no velocity npz at $NPZ or $NPZ_NOLOOPEXCH" >&2
             exit 1
         }
         setup_lane_root "$BR2/velocity_tendencies_dace-${b}" || exit 1
@@ -181,7 +188,7 @@ case "$VARIANT" in
             set_omp_lane "$WARM_THREADS" || exit 1
             for v in $VELOCITY_VARIANTS; do
                 run "$PY" "$VELOCITY_DRIVER" --variant "$v" --backend "$b" \
-                    --npz "$NPZ" --build-only
+                    --npz "$(npz_for "$v")" --build-only
             done
         else
             # threads outer / TU variant inner, matching samples/.../run_velocity.sbatch.
@@ -193,7 +200,7 @@ case "$VARIANT" in
                 set_omp_lane "$t" || { rc=1; continue; }
                 for v in $VELOCITY_VARIANTS; do
                     run "$PY" "$VELOCITY_DRIVER" --variant "$v" --backend "$b" \
-                        --npz "$NPZ" --csv "$CSV"
+                        --npz "$(npz_for "$v")" --csv "$CSV"
                 done
             done
         fi

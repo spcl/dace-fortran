@@ -59,6 +59,7 @@ mkdir -p "$BUILD_ROOT_BASE"
 HERE="$REPO/samples/velocity_tendencies"
 DATA_DIR="${VELOCITY_DATA_DIR:-$HERE/data_r02b05}"
 NPZ="${VELOCITY_NPZ:-$BUILD_ROOT_BASE/velocity_r02b05_nproma32.npz}"
+NPZ_NOLOOPEXCH="${VELOCITY_NPZ_NOLOOPEXCH:-$BUILD_ROOT_BASE/velocity_r02b05_nproma30720.npz}"
 
 lscpu | head -30
 probe_topology
@@ -71,6 +72,16 @@ OUTPUT_DIR="$DATA_DIR" bash "$HERE/download_data.sh"
 if [ ! -f "$NPZ" ]; then
     "$PY" "$HERE/convert_data.py" --data-dir "$DATA_DIR" --nproma 32 --out "$NPZ"
 fi
+if [ ! -f "$NPZ_NOLOOPEXCH" ]; then
+    "$PY" "$HERE/convert_data.py" --data-dir "$DATA_DIR" --nproma 30720 --out "$NPZ_NOLOOPEXCH"
+fi
+
+npz_for() {
+    case "$1" in
+        noloopexch) echo "$NPZ_NOLOOPEXCH" ;;
+        *) echo "$NPZ" ;;
+    esac
+}
 
 DRIVER="$HERE/run_velocity_perf.py"
 CSV="${CSV:-velocity_tendencies_${SLURM_JOB_ID:-local}.csv}"
@@ -99,7 +110,7 @@ for lane in $LANES; do
     set_omp_env "$TOPO_NCORES"
     for v in $VARIANTS; do
         srun --ntasks=1 --cpus-per-task="$NCPUS" --cpu-bind=verbose,cores \
-            "$PY" "$DRIVER" --variant "$v" --backend "$backend" --npz "$NPZ" --build-only
+            "$PY" "$DRIVER" --variant "$v" --backend "$backend" --npz "$(npz_for "$v")" --build-only
     done
 
     for t in $THREADS; do
@@ -110,7 +121,7 @@ for lane in $LANES; do
         set_omp_env "$t"
         for v in $VARIANTS; do
             srun --ntasks=1 --cpus-per-task="$NCPUS" --cpu-bind=verbose,cores \
-                "$PY" "$DRIVER" --variant "$v" --backend "$backend" --npz "$NPZ" --csv "$CSV"
+                "$PY" "$DRIVER" --variant "$v" --backend "$backend" --npz "$(npz_for "$v")" --csv "$CSV"
         done
     done
 done

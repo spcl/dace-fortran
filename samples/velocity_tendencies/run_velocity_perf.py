@@ -22,6 +22,7 @@ VARIANT_TUS = {
     "loopexch": "velocity_advection_inlined_single_tu.f90",
     "noloopexch": "velocity_advection_inlined_no_loop_exchange_single_tu.f90",
 }
+VARIANT_NPROMA = {"loopexch": 32, "noloopexch": 30720}
 # Kernel write set (VelocityTendenciesPipeline/main.cpp got/want list); restored before every rep.
 OUTPUTS = ("p_diag_ddt_vn_apc_pc", "p_diag_ddt_vn_cor_pc", "p_diag_ddt_w_adv_pc", "p_diag_vt", "p_diag_vn_ie",
            "p_diag_vn_ie_ubc", "p_diag_w_concorr_c", "p_diag_max_vcfl_dyn", "z_kin_hor_e", "z_vt_ie", "z_w_concorr_me")
@@ -252,7 +253,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="velocity_tendencies CPU scaling: one timed sweep point per invocation.")
     ap.add_argument("--variant", choices=sorted(VARIANT_TUS), required=True)
     ap.add_argument("--backend", choices=("gcc", "llvm"), default="gcc", help="DaCe CPU compiler (CSV lane column)")
-    ap.add_argument("--npz", type=Path, default=Path(__file__).resolve().parent / "velocity_r02b05_nproma32.npz")
+    ap.add_argument("--npz", type=Path, default=None)
     ap.add_argument("--reps", type=int, default=50)
     ap.add_argument("--warmup", type=int, default=2)
     ap.add_argument("--csv", type=Path, default=None)
@@ -272,7 +273,8 @@ def main() -> int:
         print(f"phase A done: {tag}", flush=True)
         return 0
 
-    arrays, meta = load_npz(args.npz)
+    npz = args.npz or Path(__file__).resolve().parent / f"velocity_r02b05_nproma{VARIANT_NPROMA[args.variant]}.npz"
+    arrays, meta = load_npz(npz)
     call = bind_call(sdfg, arrays, meta)
     if args.verify is not None and verify(compiled, call, args.verify):
         return 1
