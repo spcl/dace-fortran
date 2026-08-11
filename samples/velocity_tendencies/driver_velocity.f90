@@ -286,7 +286,7 @@ PROGRAM driver_velocity
   REAL(wp), ALLOCATABLE :: vcfl0(:)
 
   CHARACTER(LEN=4096) :: dump_dir, ref_dir, lane, arg
-  CHARACTER(LEN=32) :: mode
+  CHARACTER(LEN=32) :: mode, tu
   CHARACTER(LEN=512) :: row
   INTEGER :: threads, reps, warmup, rep, ntnd, istep, nblks_e, nlev, nlevp1
   LOGICAL :: lvn_only, ldeepatmo
@@ -309,6 +309,11 @@ PROGRAM driver_velocity
   CALL GET_COMMAND_ARGUMENT(6, mode)
   CALL GET_COMMAND_ARGUMENT(7, ref_dir)
   IF (LEN_TRIM(ref_dir) == 0) ref_dir = TRIM(dump_dir)//'/ref'
+
+  ! The TU variant is a LINK-TIME property this driver cannot see, so the build states it.  Default
+  ! keeps every existing caller emitting mode=loopexch; the noloopexch twin sets VELOCITY_TU.
+  CALL GET_ENVIRONMENT_VARIABLE('VELOCITY_TU', tu)
+  IF (LEN_TRIM(tu) == 0) tu = 'loopexch'
 
   ! --- config module globals the kernel reads straight off the modules ----------------------
   nproma = NINT(scal(dump_dir, 'nproma'))
@@ -489,13 +494,19 @@ PROGRAM driver_velocity
     !$ACC   p_diag%vt, p_diag%vn_ie, p_diag%vn_ie_ubc, p_diag%w_concorr_c, &
     !$ACC   z_kin_hor_e, z_vt_ie, z_w_concorr_me)
 
+    ! All 27 compute regions in the TU are ASYNC(1). Both twins happen to end on an !$ACC WAIT, so
+    ! today these two drain nothing -- they are here so the timer's guarantee is LOCAL: the bracket
+    ! must not depend on the callee's last line, or a regenerated TU silently times launches again.
+    ! Inert (a comment) for gfortran/flang without -fopenacc, a no-op for -acc=multicore.
+    !$ACC WAIT
     CALL SYSTEM_CLOCK(t0)
     CALL velocity_tendencies(p_prog, p_patch, p_int, p_metrics, p_diag, z_w_concorr_me, z_kin_hor_e, z_vt_ie, &
                              ntnd, istep, lvn_only, dtime, dt_linintp_ubc, ldeepatmo)
+    !$ACC WAIT
     CALL SYSTEM_CLOCK(t1)
     ms = 1000.0_wp*REAL(t1 - t0, wp)/REAL(rate, wp)
     IF (rep >= 0) THEN
-      WRITE (row, '(A,I0,A,I0,A,I0,A,I0,A,F0.3,A)') 'velocity_tendencies,loopexch,', nproma, ',', nblks_e, ',', &
+      WRITE (row, '(A,I0,A,I0,A,I0,A,I0,A,F0.3,A)') 'velocity_tendencies,'//TRIM(tu)//',', nproma, ',', nblks_e, ',', &
         threads, ',', rep, ',', ms, ',r02b05,'//TRIM(lane)
       WRITE (output_unit, '(A)') TRIM(row)
       FLUSH (output_unit)

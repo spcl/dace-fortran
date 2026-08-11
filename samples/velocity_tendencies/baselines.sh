@@ -21,7 +21,10 @@ WARMUP="${WARMUP:-2}"
 NPROMA="${VELOCITY_NPROMA:-32}"
 CSV="${CSV:-velocity_baselines_${SLURM_JOB_ID:-local}.csv}"
 BASELINE_LANES="${BASELINE_LANES:-gfortran-autopar openacc-cpu openacc}"
-CSV_HEADER="kernel,mode,nproma,nblks_e,threads,rep,ms,inputs,lane"
+CSV_HEADER="kernel,mode,nproma,nblks_e,threads,rep,ms,inputs,lane,alloc"
+# driver_velocity emits the 9 original columns; the allocator is a property of the process the
+# harness launched it in, so the alloc column is appended here rather than in the Fortran driver.
+ALLOC="${MEAS_ALLOC_ACTIVE:-system}"
 DATA_DIR="${VELOCITY_DATA_DIR:-$HERE/data_r02b05}"
 R06_DATA_DIR="${VELOCITY_R06_DATA_DIR:-$HERE/data_r02b06}"
 R06_TIMESTEP="${VELOCITY_TIMESTEP:-1}"
@@ -91,7 +94,7 @@ run_lane() {
     fi
     rows="$(grep '^velocity_tendencies,' "$log")"
     [ -z "$inputs" ] || rows="$(printf '%s\n' "$rows" | sed "s/,r02b05,/,${inputs},/")"
-    printf '%s\n' "$rows" | tee -a "$CSV"
+    printf '%s\n' "$rows" | sed "s/\$/,${ALLOC}/" | tee -a "$CSV"
 }
 
 emit_header

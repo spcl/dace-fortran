@@ -6,6 +6,7 @@
 #SBATCH --ntasks=4
 #SBATCH --cpus-per-task=72
 #SBATCH --exclusive
+#SBATCH --mem=0
 #SBATCH --hint=nomultithread
 #SBATCH -t 02:00:00
 #SBATCH -o /capstor/scratch/cscs/ybudanaz/aarch64/probe/meas_4rank-%j.out
@@ -64,12 +65,23 @@ fi
         "$TAG_NOW" "4 ranks share one node, socket-pinned"
 } >> "$PROV"
 
+# --mem=0 above hands the whole node to the batch step; split it evenly so one rank cannot
+# starve its siblings (a cloudsc rank at a large NGPTOT holds tens of GB of expanded deck).
+NRANKS="$(echo "$VARIANTS" | wc -w)"
+NODE_MB="$(scontrol show node "$SLURMD_NODENAME" 2> /dev/null | tr ' ' '\n' \
+    | sed -n 's/^RealMemory=//p' | head -1)"
+[ -n "$NODE_MB" ] || NODE_MB="$(awk '/^MemTotal:/ { printf "%d", $2 / 1024 }' /proc/meminfo)"
+MEM_PER_RANK="$(((NODE_MB - 4096) / NRANKS))"
+[ "$MEM_PER_RANK" -gt 0 ] || MEM_PER_RANK="$((NODE_MB / NRANKS))"
+echo "MEMSPLIT=$MEM_PER_RANK  (node RealMemory=$NODE_MB MB over $NRANKS ranks)"
+
 declare -A PID RC
 for v in $VARIANTS; do
     csv="$RUNS/${v}_${TAG}_${SLURM_JOB_ID}.csv"
     log="$RUNS/${v}_${TAG}_${SLURM_JOB_ID}.log"
     echo "rank -> $v  csv=$csv"
-    CSV="$csv" srun --exact --ntasks=1 --cpus-per-task=72 --cpu-bind=cores --mem-bind=local \
+    CSV="$csv" srun --exact --ntasks=1 --cpus-per-task=72 --mem="${MEM_PER_RANK}M" \
+        --cpu-bind=cores --mem-bind=local \
         bash "$PROBE/tagcycle_lane.sh" meas "$v" > "$log" 2>&1 &
     PID[$v]=$!
 done

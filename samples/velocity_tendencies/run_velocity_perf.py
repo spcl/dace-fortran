@@ -46,7 +46,26 @@ SEED_FROM_META = {
 }
 SEED_LITERAL = {"p_patch_id": 1, "p_patch_nshift": 0}  # id indexes the per-domain nflatlev/nrdmax
 
-CSV_HEADER = "kernel,mode,nproma,nblks_e,threads,rep,ms,inputs,lane"
+CSV_HEADER = "kernel,mode,nproma,nblks_e,threads,rep,ms,inputs,lane,alloc"
+
+
+def alloc_label() -> str:
+    """Allocator actually mapped into THIS process, not the one the shell meant to preload.
+
+    Read off /proc/self/maps rather than MEAS_ALLOC_ACTIVE so a run whose LD_PRELOAD silently
+    failed records `system` instead of inheriting the shell's intent and mislabelling the row.
+    """
+    try:
+        maps = Path("/proc/self/maps").read_text()
+    except OSError:
+        return os.environ.get("MEAS_ALLOC_ACTIVE", "unknown")
+    for name in ("mimalloc", "jemalloc"):
+        if f"lib{name}.so" in maps:
+            return name
+    return "system"
+
+
+ALLOC = alloc_label()
 # mode = TU variant, nproma/nblks_e = data layout: a row identifies both independently.
 VERIFY_TOL = 1e-10  # same relative gate driver_velocity.f90's verify mode uses
 
@@ -219,7 +238,7 @@ def run_timed(compiled, call: dict, variant: str, meta: dict, reps: int, warmup:
         ms = (time.perf_counter_ns() - t0) / 1e6
         if rep >= 0:
             rows.append(f"velocity_tendencies,{variant},{meta['nproma']},{meta['nblks_e']},{threads},{rep},{ms:.3f},"
-                        f"{inputs},{lane}")
+                        f"{inputs},{lane},{ALLOC}")
             print(rows[-1], flush=True)
     return rows
 

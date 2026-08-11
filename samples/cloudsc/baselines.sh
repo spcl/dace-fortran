@@ -21,9 +21,34 @@ REPS="${REPS:-50}"
 WARMUP="${WARMUP:-2}"
 CSV="${CSV:-cloudsc_baselines_${SLURM_JOB_ID:-local}.csv}"
 BASELINE_LANES="${BASELINE_LANES:-gfortran-serial gfortran-autopar original-openmp openacc-cpu flang-serial}"
-CSV_HEADER="kernel,mode,klon,nblocks,threads,rep,ms,inputs,lane"
-# mode:NPROMA pairs mirror run_cloudsc_perf.py MODE_DEFAULTS (same NGPTOT split, comparable rows).
-MODES="klon:65536 nblks:32"
+CSV_HEADER="kernel,mode,klon,nblocks,threads,rep,ms,inputs,lane,alloc"
+# The allocator is a property of the process the harness launched, not of the timed binary,
+# so the alloc column is stamped here from what alloc_pool.sh actually managed to preload.
+ALLOC="${MEAS_ALLOC_ACTIVE:-system}"
+# Size table + mimalloc-cliff verdicts, shared with the DaCe lanes and the sweep sbatch jobs.
+# shellcheck disable=SC1091
+source "$HERE/sweep_sizes.sh"
+
+# CLOUDSC_SWEEP=1 turns the two fixed modes into the figure-A problem-size sweep.
+CLOUDSC_SWEEP="${CLOUDSC_SWEEP:-0}"
+
+# One "<mode> <nproma> <ngptot>" line per timed point.  Default keeps the historical pair
+# (mirrors run_cloudsc_perf.py MODE_DEFAULTS, so the rows stay comparable); the sweep walks
+# sizes at the pinned NPROMA instead, because klon-mode at these sizes neither scales nor
+# stays off the allocator cliff (KLON=65536 puts a transient row at exactly 512 KiB).
+baseline_points() {
+    local s n
+    if [ "$CLOUDSC_SWEEP" = 1 ]; then
+        for s in $CLOUDSC_SWEEP_SIZES; do
+            for n in $CLOUDSC_SWEEP_NPROMAS; do
+                printf 'nblks %s %s\n' "$n" "$s"
+            done
+        done
+    else
+        printf 'klon %s %s\n' "$NGPTOT" "$NGPTOT"
+        printf 'nblks 32 %s\n' "$NGPTOT"
+    fi
+}
 
 if [ "$HAVE_GCC" != 1 ]; then
     echo "SKIP all baselines: gcc missing (needed for the mycpu.c shim)" >&2
@@ -88,26 +113,89 @@ emit_header() {
 }
 
 run_lane() {
-    local exe="$1" lane="$2" threads="$3" numomp="$4" log="$RUNDIR/last_run.log" spec mode nproma nblocks rep ms
-    for spec in $MODES; do
-        mode="${spec%%:*}" nproma="${spec##*:}"
-        nblocks=$(((NGPTOT + nproma - 1) / nproma))
+    local exe="$1" lane="$2" threads="$3" numomp="$4" log="$RUNDIR/last_run.log" mode nproma size nblocks rep ms
+    while read -r mode nproma size; do
+        nblocks=$(((size + nproma - 1) / nproma))
         for rep in $(seq "$((-WARMUP))" "$((REPS - 1))"); do
-            if ! (cd "$RUNDIR" && "$exe" "$numomp" "$NGPTOT" "$nproma" > "$log" 2>&1); then
-                echo "FATAL: $exe failed (lane $lane, mode $mode); tail of $log:" >&2
+            if ! (cd "$RUNDIR" && "$exe" "$numomp" "$size" "$nproma" > "$log" 2>&1); then
+                echo "FATAL: $exe failed (lane $lane, mode $mode, ngptot $size); tail of $log:" >&2
                 tail -5 "$log" >&2
                 return 1
             fi
             ms="$(total_ms < "$log")"
             if [ -z "$ms" ]; then
-                echo "FATAL: no TOTAL line from $exe (lane $lane, mode $mode)" >&2
+                echo "FATAL: no TOTAL line from $exe (lane $lane, mode $mode, ngptot $size)" >&2
                 return 1
             fi
             if [ "$rep" -ge 0 ]; then
-                echo "cloudsc,$mode,$nproma,$nblocks,$threads,$rep,$ms,h5,$lane" | tee -a "$CSV"
+                echo "cloudsc,$mode,$nproma,$nblocks,$threads,$rep,$ms,h5,$lane,$ALLOC" | tee -a "$CSV"
             fi
         done
-    done
+    done < <(baseline_points)
+}
+
+# The C rewrite times every rep INSIDE one process (CLOUDSC_REPS/CLOUDSC_WARMUP, one
+# ` REP <i> <ms>` line each), so this lane pays the h5 load + column expansion once per sweep
+# point instead of once per rep.  That matters: at NGPTOT=262144 the expansion dominates a
+# per-rep-process lane by an order of magnitude.  Timers are host timers around the block
+# loop only -- no I/O and no allocation inside the bracket.
+run_lane_c() {
+    local exe="$1" lane="$2" threads="$3" numomp="$4" log="$RUNDIR/last_run_c.log" mode nproma size nblocks rep ms
+    while read -r mode nproma size; do
+        nblocks=$(((size + nproma - 1) / nproma))
+        if ! (cd "$RUNDIR" && CLOUDSC_REPS="$REPS" CLOUDSC_WARMUP="$WARMUP" \
+            "$exe" "$numomp" "$size" "$nproma" > "$log" 2>&1); then
+            echo "FATAL: $exe failed (lane $lane, ngptot $size); tail of $log:" >&2
+            tail -5 "$log" >&2
+            return 1
+        fi
+        rep=0
+        while read -r ms; do
+            echo "cloudsc,$mode,$nproma,$nblocks,$threads,$rep,$ms,h5,$lane,$ALLOC" | tee -a "$CSV"
+            rep=$((rep + 1))
+        done < <(awk '/^ REP /{ print $3 }' "$log")
+        if [ "$rep" -ne "$REPS" ]; then
+            echo "FATAL: $exe emitted $rep REP lines, expected $REPS (lane $lane, ngptot $size)" >&2
+            return 1
+        fi
+    done < <(baseline_points)
+}
+
+# The C rewrite is the dwarf's cloudsc_cuda kernel compiled for the host: cuda_shim/cuda.h
+# neutralises `__global__` and supplies the thread-local block/column indices, and
+# c_openmp/cloudsc_driver_omp.cpp replaces the CUDA driver with an OpenMP block loop.  The
+# other three vendored translation units (load_state, cloudsc_validate, mycpu) are already
+# pure host code and compile unchanged.  -w: the vendored sources are warning-noisy and not
+# ours to clean.
+build_dwarf_c() (
+    local dir="$1" h5inc="$2" h5lib="$3"
+    local cu="$DWARF/cloudsc_cuda/cloudsc"
+    mkdir -p "$dir" && cd "$dir"
+    # shellcheck disable=SC2046 -- hdf5_ldflags emits two words (-L and -Wl,-rpath) on purpose
+    "$CXX" -O3 -march=native -std=c++17 -fopenmp -DHAVE_HDF5 -w \
+        -I"$HERE/c_openmp/cuda_shim" -I"$cu" -I"$h5inc" \
+        -x c++ "$cu/load_state.cu" "$cu/cloudsc_validate.cu" "$cu/mycpu.cu" "$cu/cloudsc_c.cu" \
+        "$HERE/c_openmp/cloudsc_driver_omp.cpp" \
+        $(hdf5_ldflags "$h5lib") -lhdf5 -lm -o dwarf-cloudsc-c-omp
+)
+
+# g++ + the HDF5 C library (not the Fortran one the other lanes need): sets CXX/C_H5INC/C_H5LIB.
+c_openmp_ok() {
+    CXX="${CXX:-$(command -v g++ || true)}"
+    if [ -z "$CXX" ]; then
+        echo "SKIP $1: no g++ on PATH" >&2
+        return 1
+    fi
+    if [ -n "${HDF5_C_ROOT:-}" ]; then
+        C_H5INC="$HDF5_C_ROOT/include" C_H5LIB="$(hdf5_libdir "$HDF5_C_ROOT")"
+    elif [ "$HAVE_H5CC" = 1 ]; then
+        C_H5INC="$("$H5CC" -show | tr ' ' '\n' | sed -n 's/^-I//p' | head -1)"
+        C_H5LIB="$("$H5CC" -show | tr ' ' '\n' | sed -n 's/^-L//p' | head -1)"
+    else
+        echo "SKIP $1: no h5cc and no HDF5_C_ROOT (the C rewrite reads the deck via the HDF5 C API)" >&2
+        return 1
+    fi
+    [ -n "$C_H5INC" ] && [ -n "$C_H5LIB" ]
 }
 
 # Sets GF_HDF5_LIBS. spack's h5fc emits `-L<dir> -lhdf5_fortran -lhdf5` with NO rpath, so the
@@ -219,6 +307,22 @@ for lane in $BASELINE_LANES; do
                 run_lane "$BUILD_ROOT/$lane/dwarf-cloudsc" "$lane" "$t" 1
             done
             unset ACC_NUM_CORES
+            ;;
+        c-openmp)
+            # The C rewrite, same thread handling as original-openmp: one build, OMP_NUM_THREADS
+            # and the argv NUMOMP both carry the thread count, schedule pinned to static.
+            c_openmp_ok "$lane" || continue
+            build_dwarf_c "$BUILD_ROOT/$lane" "$C_H5INC" "$C_H5LIB"
+            export OMP_SCHEDULE=static
+            for t in $THREADS; do
+                if [ "$t" -gt "$TOPO_NCORES" ]; then
+                    echo "skip threads=$t (> $TOPO_NCORES physical cores)"
+                    continue
+                fi
+                set_omp_env "$t"
+                run_lane_c "$BUILD_ROOT/$lane/dwarf-cloudsc-c-omp" "$lane" "$t" "$t"
+            done
+            unset OMP_SCHEDULE
             ;;
         flang-serial)
             # flang has no -ftree-parallelize-loops equivalent, so serial is the only flang lane

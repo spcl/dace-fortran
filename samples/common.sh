@@ -23,6 +23,14 @@ if [ -n "${SAMPLES_ENV:-}" ] && [ -z "${SAMPLES_ENV_LOADED:-}" ]; then
     export SAMPLES_ENV SAMPLES_ENV_LOADED
 fi
 
+# Pooled allocator for every lane (mimalloc by default, MEAS_ALLOC=system opts out). Sourced HERE,
+# after the env hook has put spack on PATH but before any lane launches the python that dlopens a
+# dacecache .so -- LD_PRELOAD only takes effect at process start, so a later export would miss it.
+# Every entry point reaches this file (run_*.sbatch, both baselines.sh, tagcycle_lane.sh), so this
+# is the one edit that covers all of them.
+# shellcheck disable=SC1091
+. "$SAMPLES_DIR/alloc_pool.sh"
+
 # Batch jobs don't inherit the interactive PATH, so a bare `python` may lack ordered_set/dace.
 PY="${PYTHON:-$HOME/.pyenv/versions/py13/bin/python}"
 [ -x "$PY" ] || PY="$(command -v python3)"

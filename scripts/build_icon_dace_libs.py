@@ -57,6 +57,16 @@ import dace_fortran
 
 from _util import build_sdfg
 from dace_fortran.bindings import build_fortran_library, FlattenPlan
+from dace_fortran.bindings.acc_transfers import (
+    AccResidency,
+    AccTransferPlan,
+    plan_acc_transfers,
+    render_host_data_close,
+    render_host_data_open,
+    render_post_call,
+    render_pre_call,
+    render_sync,
+)
 from dace_fortran.llvm_toolchain import find_flang
 from dace_fortran.bindings.bind_c_shim import scalar_pointer_members
 from dace_fortran.bindings.fortran_interface import build_auto_interface
@@ -94,7 +104,27 @@ _RELEASE_CXX_FLAGS = (
 # prelude.  ICON's CPU build keeps its own copies in its own
 # objects; under the default ``--as-needed`` linker the .so's copies
 # stay live without colliding.
-_ICON_WRAPPER_F90 = """\
+#: Dummy-argument order of ``velocity_tendencies_dace_icon``.  Fixes the
+#: order of every emitted OpenACC directive, so the same sidecar + SDFG
+#: always render byte-identical Fortran.
+_VELOCITY_WRAPPER_ARGS = (
+    "p_prog",
+    "p_patch",
+    "p_int",
+    "p_metrics",
+    "p_diag",
+    "z_w_concorr_me",
+    "z_kin_hor_e",
+    "z_vt_ie",
+    "ntnd",
+    "istep",
+    "lvn_only",
+    "dtime",
+    "dt_linintp_ubc",
+    "ldeepatmo",
+)
+
+_ICON_WRAPPER_HEAD = """\
 ! ICON-side wrapper: forwards to the SDFG-generated
 ! ``velocity_tendencies_dace`` (module-scoped name
 ! ``__velocity_tendencies_dace_bindings_MOD_velocity_tendencies_dace``)
@@ -130,13 +160,19 @@ SUBROUTINE velocity_tendencies_dace_icon(p_prog, p_patch, p_int, p_metrics, p_di
   INTEGER(c_int)       :: velo_lvn
   REAL(c_double)       :: velo_ms
   CHARACTER(LEN=32)    :: velo_buf
-  CALL SYSTEM_CLOCK(COUNT_RATE=velo_rate)
-  CALL SYSTEM_CLOCK(COUNT=velo_t0)
+  CALL SYSTEM_CLOCK(COUNT_RATE=velo_rate)"""
+
+_ICON_WRAPPER_ENTRY_READ = "  CALL SYSTEM_CLOCK(COUNT=velo_t0)"
+
+_ICON_WRAPPER_CALL = """\
   CALL velocity_tendencies_dace(p_prog, p_patch, p_int, p_metrics, p_diag, &
                                 z_w_concorr_me, z_kin_hor_e, z_vt_ie, &
                                 ntnd, istep, lvn_only, &
-                                dtime, dt_linintp_ubc, ldeepatmo)
-  CALL SYSTEM_CLOCK(COUNT=velo_t1)
+                                dtime, dt_linintp_ubc, ldeepatmo)"""
+
+_ICON_WRAPPER_EXIT_READ = "  CALL SYSTEM_CLOCK(COUNT=velo_t1)"
+
+_ICON_WRAPPER_TAIL = """\
   velo_ms = 1.0e3_c_double * REAL(velo_t1 - velo_t0, c_double) / REAL(velo_rate, c_double)
   velo_lvn = MERGE(1_c_int, 0_c_int, lvn_only)
   WRITE(velo_buf, '(ES17.9E3)') velo_ms
@@ -147,6 +183,55 @@ SUBROUTINE velocity_tendencies_dace_icon(p_prog, p_patch, p_int, p_metrics, p_di
   FLUSH(6)
 END SUBROUTINE velocity_tendencies_dace_icon
 """
+
+
+def render_icon_wrapper(plan: AccTransferPlan = None) -> str:
+    """Render ``icon_wrapper.f90``, optionally staging ICON's device data.
+
+    Without ``plan`` this reproduces the CPU-only wrapper verbatim.  With
+    one, the OpenACC directives land in the sync slots
+    ``d570f0a8`` opened up: each ``SYSTEM_CLOCK`` read stays the last
+    statement of its boundary, so both timer reads sit AFTER their sync
+    and the staging traffic is inside the measured window rather than
+    straddling it.
+
+    Every emitted line is a sentinel ``!$ACC`` comment, so a build
+    without ``-acc`` / ``-fopenacc`` sees plain Fortran comments and the
+    same wrapper compiles under gfortran and flang unchanged.
+    """
+    lines = _ICON_WRAPPER_HEAD.splitlines()
+    if plan is not None:
+        lines += render_sync(plan)
+    lines.append(_ICON_WRAPPER_ENTRY_READ)
+    if plan is not None:
+        lines += render_pre_call(plan)
+        lines += render_host_data_open(plan)
+    lines += _ICON_WRAPPER_CALL.splitlines()
+    if plan is not None:
+        lines += render_host_data_close(plan)
+        lines += render_post_call(plan)
+        lines += render_sync(plan)
+    lines.append(_ICON_WRAPPER_EXIT_READ)
+    lines += _ICON_WRAPPER_TAIL.splitlines()
+    return "\n".join(lines) + "\n"
+
+
+def acc_residency_sidecar(sdfg_dir: Path) -> Path:
+    """Where the ``DACE_FORTRAN_ACC_RESIDENCY`` hook drops its sidecar."""
+    return Path(sdfg_dir) / f"{_VELOCITY_ENTRY_QUALIFIED.split('::')[-1]}.acc_residency.json"
+
+
+def acc_transfer_plan(sdfg, residency_path) -> AccTransferPlan:
+    """Cross the sidecar at ``residency_path`` with ``sdfg``'s storage."""
+    residency = AccResidency.from_file(residency_path)
+    plan = plan_acc_transfers(sdfg, residency, _VELOCITY_WRAPPER_ARGS)
+    print(
+        f"[build_icon_dace_libs] acc residency {residency_path}: "
+        f"update host {list(plan.update_host)}, update device {list(plan.update_device)}, "
+        f"use_device {list(plan.use_device)}",
+        flush=True)
+    return plan
+
 
 #: The ICON object whose ``make -n`` line supplies the real ``-D`` / ``-I`` set.
 _VELOCITY_TARGET = "src/atm_dyn_iconam/mo_velocity_advection.o"
@@ -251,7 +336,8 @@ def build_velocity_inner_wrap(velocity_source: Path,
                               out_dir: Path,
                               release: bool,
                               icon_src: Path = None,
-                              icon_build: Path = None):
+                              icon_build: Path = None,
+                              acc_residency: Path = None):
     """Build ``libvelocity_inner_wrap.so`` from
     ``mo_velocity_advection.f90``.  The output dir gets the .so + the
     .mod (``velocity_tendencies_dace_bindings.mod``) ICON needs at
@@ -262,7 +348,15 @@ def build_velocity_inner_wrap(velocity_source: Path,
     velocity source (see :func:`build_velocity_sdfg_from_icon_source`) and the
     bind_c shim's ``USE``s resolve against that build's real ``.mod`` via ``-I``
     instead of against a self-contained prelude -- ICON's modules ARE the
-    prelude.  Without them, the legacy pre-merged (stub-typed) route is used."""
+    prelude.  Without them, the legacy pre-merged (stub-typed) route is used.
+
+    ``acc_residency`` points at the ``<routine>.acc_residency.json``
+    sidecar :mod:`dace_fortran.acc_residency` writes at parse time.  Given
+    one -- explicitly, or via the ``DACE_FORTRAN_ACC_RESIDENCY`` hook
+    that writes it into ``_sdfg_build/`` during the real-source lowering
+    -- the ICON wrapper stages ICON's device-resident arguments across
+    the boundary before and after the SDFG call; without one the wrapper
+    is the unchanged CPU-only form."""
     velocity_source = velocity_source.resolve()
     out_dir = out_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -279,14 +373,7 @@ def build_velocity_inner_wrap(velocity_source: Path,
 
     velocity_src = velocity_source.read_text()
 
-    # Drop the ICON-side wrapper next to the binding source.
-    # ``extra_sources`` is compiled AFTER the binding module so the
-    # wrapper's ``USE velocity_tendencies_dace_bindings`` and
-    # ``USE mo_model_domain`` (resolved against the stub .mod files
-    # the binding emits as a side effect of ``prelude_sources``)
-    # both succeed.
     icon_wrapper_f90 = out_dir / "icon_wrapper.f90"
-    icon_wrapper_f90.write_text(_ICON_WRAPPER_F90)
 
     # Pin DaCe's C++ codegen flags before any SDFG build.
     orig_cxx_args = dace.Config.get("compiler", "cpu", "args")
@@ -305,6 +392,19 @@ def build_velocity_inner_wrap(velocity_source: Path,
             ).build()
         sdfg.name = "velocity_tendencies"
         sdfg.build_folder = str(sdfg_dir / "dacecache")
+        # Drop the ICON-side wrapper next to the binding source.  Written
+        # only now: its OpenACC staging is decided by the SDFG's own
+        # per-array storage, which does not exist before the build.
+        # ``extra_sources`` is compiled AFTER the binding module so the
+        # wrapper's ``USE velocity_tendencies_dace_bindings`` and
+        # ``USE mo_model_domain`` (resolved against the stub .mod files
+        # the binding emits as a side effect of ``prelude_sources``)
+        # both succeed.
+        sidecar = acc_residency
+        if sidecar is None and acc_residency_sidecar(sdfg_dir).is_file():
+            sidecar = acc_residency_sidecar(sdfg_dir)
+        acc_plan = acc_transfer_plan(sdfg, sidecar) if sidecar is not None else None
+        icon_wrapper_f90.write_text(render_icon_wrapper(acc_plan))
         iface = build_auto_interface(sdfg._fortran_interface_raw, "velocity_tendencies")
         # Grid-dim scalar members the shim takes as ``type(c_ptr), value`` -- the
         # OUTER dycore SDFG's velocity ``keep_external`` must pass their ADDRESS
@@ -508,10 +608,26 @@ def main():
                     "artifact (its real ``mo_solve_nonhydro`` signature does "
                     "not match the wrapper), but building it validates the "
                     "SDFG-to-SDFG C-ABI chain.")
+    ap.add_argument("--acc-residency",
+                    type=Path,
+                    default=os.environ.get("DACE_FORTRAN_ACC_RESIDENCY_SIDECAR") or None,
+                    help="``<routine>.acc_residency.json`` sidecar (see "
+                    "``python -m dace_fortran.acc_residency``).  Every argument ICON "
+                    "keeps on the device gets an ``!$ACC UPDATE HOST`` before the SDFG "
+                    "call and, if the SDFG writes it, an ``!$ACC UPDATE DEVICE`` after; "
+                    "a device argument whose SDFG array is itself on GPU storage is "
+                    "passed through ``!$ACC HOST_DATA USE_DEVICE`` with no copy.  Any "
+                    "other residency/storage crossing is a hard error.  Defaults to "
+                    "$DACE_FORTRAN_ACC_RESIDENCY_SIDECAR, else to the sidecar the "
+                    "DACE_FORTRAN_ACC_RESIDENCY hook writes during the real-source "
+                    "lowering; with none of them the wrapper is CPU-only as before.")
     args = ap.parse_args()
 
     if not args.velocity_source.exists():
         print(f"error: velocity source not found: {args.velocity_source}", file=sys.stderr)
+        return 1
+    if args.acc_residency is not None and not Path(args.acc_residency).is_file():
+        print(f"error: acc residency sidecar not found: {args.acc_residency}", file=sys.stderr)
         return 1
     if not shutil.which("gfortran") or find_flang() is None:
         print("error: need gfortran + an LLVM flang on PATH", file=sys.stderr)
@@ -528,7 +644,8 @@ def main():
                                                               args.out_dir,
                                                               release=args.release,
                                                               icon_src=args.icon_src,
-                                                              icon_build=args.icon_build)
+                                                              icon_build=args.icon_build,
+                                                              acc_residency=args.acc_residency)
     if args.with_dycore:
         build_dycore_wrapper(args.velocity_source,
                              inner_lib.so_path,

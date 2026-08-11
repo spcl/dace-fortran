@@ -17,9 +17,59 @@ sys.path.insert(0, str(REPO / "tests"))
 # BITEXACT_CPU_ARGS (tests/_util.py) without the --param caps sized for a 16 GB CI runner.
 PERF_CPU_ARGS = "-fPIC -O3 -march=native -fno-fast-math -ffp-contract=off -fno-math-errno -fno-trapping-math"
 
+DEFAULT_NGPTOT = 65536  # canonical problem size; the sweep overrides it per point
 MODE_DEFAULTS = {"klon": (65536, 1), "nblks": (32, 2048)}  # see README.md table
+DEFAULT_NPROMA = 32  # `nblks` block width; see samples/cloudsc/sweep_sizes.sh for why not 64/128
 
-CSV_HEADER = "kernel,mode,klon,nblocks,threads,rep,ms,inputs,lane"
+CSV_HEADER = "kernel,mode,klon,nblocks,threads,rep,ms,inputs,lane,alloc"
+
+# Per-block transient classes the generated code allocates inside the block loop, as a
+# multiplier on KLON (doubles): the bare KLON row, KLEV, NCLV*KLEV, NCLV*(KLEV+1).
+KLEV, NCLV = 137, 5
+TRANSIENT_MULTIPLIERS = (8, 8 * KLEV, 8 * NCLV * KLEV, 8 * NCLV * (KLEV + 1))
+MIMALLOC_CLIFF = (512 * 1024, 1024 * 1024)  # [lo, hi): mimalloc's slow size-class band
+
+
+def decompose(mode: str, ngptot: int, nproma: int) -> tuple[int, int]:
+    """(KLON, NBLOCKS) for one sweep point: `klon` puts every column in one block, `nblks` blocks."""
+    if mode == "klon":
+        return ngptot, 1
+    return nproma, -(-ngptot // nproma)  # ceil, matching the dwarf driver's block count
+
+
+def warn_mimalloc_cliff(klon: int) -> None:
+    """Loud stderr note when a per-block transient lands in mimalloc's 512 KiB-1 MiB band.
+
+    Not fatal: the run is still valid, but its allocator behaviour is not comparable with the
+    rest of the sweep, so the operator has to see it in the log rather than in the numbers.
+    """
+    lo, hi = MIMALLOC_CLIFF
+    hits = [m * klon for m in TRANSIENT_MULTIPLIERS if lo <= m * klon < hi]
+    if hits:
+        sizes = ", ".join(f"{h // 1024} KiB" for h in hits)
+        print(f"WARNING: KLON={klon} puts per-block transients in the mimalloc cliff band ({sizes}); "
+              "see samples/cloudsc/sweep_sizes.sh",
+              file=sys.stderr,
+              flush=True)
+
+
+def alloc_label() -> str:
+    """Allocator actually mapped into THIS process, not the one the shell meant to preload.
+
+    Read off /proc/self/maps rather than MEAS_ALLOC_ACTIVE so a run whose LD_PRELOAD silently
+    failed records `system` instead of inheriting the shell's intent and mislabelling the row.
+    """
+    try:
+        maps = Path("/proc/self/maps").read_text()
+    except OSError:
+        return os.environ.get("MEAS_ALLOC_ACTIVE", "unknown")
+    for name in ("mimalloc", "jemalloc"):
+        if f"lib{name}.so" in maps:
+            return name
+    return "system"
+
+
+ALLOC = alloc_label()
 H5_DEFAULT = Path(__file__).resolve().parent / "data" / "input.h5"
 
 
@@ -102,7 +152,7 @@ def run_timed(sdfg, compiled, mode: str, klon: int, nblocks: int, reps: int, war
         compiled(**call)
         ms = (time.perf_counter_ns() - t0) / 1e6
         if rep >= 0:
-            rows.append(f"cloudsc,{mode},{klon},{nblocks},{threads},{rep},{ms:.3f},{inputs_kind},{lane}")
+            rows.append(f"cloudsc,{mode},{klon},{nblocks},{threads},{rep},{ms:.3f},{inputs_kind},{lane},{ALLOC}")
             print(rows[-1], flush=True)
     return rows
 
@@ -127,9 +177,14 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=42, help="input rng seed (default 42)")
     ap.add_argument("--csv", type=Path, default=None, help="append CSV rows here (stdout always gets them)")
     ap.add_argument("--build-only", action="store_true", help="phase A only: build/optimize/compile the cache")
+    ap.add_argument("--ngptot", type=int, default=None, help=f"total columns (default {DEFAULT_NGPTOT}); sweep knob")
+    ap.add_argument("--nproma", type=int, default=DEFAULT_NPROMA, help="block width for --mode nblks (default 32)")
     args = ap.parse_args()
 
-    klon_default, nblocks_default = MODE_DEFAULTS[args.mode]
+    if args.ngptot is not None:
+        klon_default, nblocks_default = decompose(args.mode, args.ngptot, args.nproma)
+    else:
+        klon_default, nblocks_default = MODE_DEFAULTS[args.mode]
     # Must land BEFORE the registries import (evaluates its shape dict at import time); setdefault
     # so an explicit sbatch export still wins.
     os.environ.setdefault("CLOUDSC_KLON", str(klon_default))
@@ -138,6 +193,8 @@ def main() -> int:
     os.environ.setdefault("DACE_compiler_cpu_args", PERF_CPU_ARGS)
     klon = int(os.environ["CLOUDSC_KLON"])
     nblocks = int(os.environ["CLOUDSC_NBLOCKS"])
+    print(f"sweep point: mode={args.mode} KLON={klon} NBLOCKS={nblocks} NGPTOT={klon * nblocks}", flush=True)
+    warn_mimalloc_cliff(klon)
 
     inputs_kind = args.inputs
     if inputs_kind == "h5" and not args.h5.is_file():

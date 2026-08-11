@@ -2,9 +2,13 @@
 # CloudSC GPU baseline lanes from the vendored dwarf-p-cloudsc tree: cuda (src/cloudsc_cuda,
 # nvcc) and openacc (src/cloudsc_gpu scc variant, nvfortran).  Build-gated skeleton under the
 # CPU-first policy: each lane builds and runs only where its toolchain exists; a missing
-# toolchain is one loud SKIP line and exit 0.  Timing/CSV contract matches baselines.sh (the
-# CUDA driver prints the same TOTAL Time(msec) line); threads column is 0 for GPU lanes -- no
-# CPU thread sweep applies.
+# toolchain is one loud SKIP line and exit 0.  threads column is 0 for GPU lanes -- no CPU thread
+# sweep applies.
+#
+# Rep semantics differ by lane.  The CUDA driver runs the rep loop itself, host-timed as
+# sync/t0/kernel/sync/t1 per rep, and prints one " REP <rep> <ms>" line per timed rep: ONE process
+# per lane, REPS rows, kernel only.  The OpenACC dwarf driver still times a whole-run TOTAL, so
+# that lane keeps baselines.sh's one-process-per-rep convention.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,7 +23,10 @@ REPS="${REPS:-50}"
 WARMUP="${WARMUP:-2}"
 CSV="${CSV:-cloudsc_gpu_baselines_${SLURM_JOB_ID:-local}.csv}"
 GPU_LANES="${GPU_LANES:-cuda openacc}"
-CSV_HEADER="kernel,mode,klon,nblocks,threads,rep,ms,inputs,lane"
+CSV_HEADER="kernel,mode,klon,nblocks,threads,rep,ms,inputs,lane,alloc"
+# The allocator is a property of the process the harness launched, not of the timed binary,
+# so the alloc column is stamped here from what alloc_pool.sh actually managed to preload.
+ALLOC="${MEAS_ALLOC_ACTIVE:-system}"
 NBLOCKS=$(((NGPTOT + NPROMA - 1) / NPROMA))
 
 bash "$HERE/download_data.sh" || true
@@ -56,9 +63,26 @@ run_lane() {
             return 1
         fi
         if [ "$rep" -ge 0 ]; then
-            echo "cloudsc,nblks,$NPROMA,$NBLOCKS,0,$rep,$ms,h5,$lane" | tee -a "$CSV"
+            echo "cloudsc,nblks,$NPROMA,$NBLOCKS,0,$rep,$ms,h5,$lane,$ALLOC" | tee -a "$CSV"
         fi
     done
+}
+
+run_lane_reps() {
+    local exe="$1" lane="$2" log="$RUNDIR/last_run.log" rows
+    if ! (cd "$RUNDIR" && CLOUDSC_REPS="$REPS" CLOUDSC_WARMUP="$WARMUP" \
+        "$exe" 1 "$NGPTOT" "$NPROMA" > "$log" 2>&1); then
+        echo "FATAL: $exe failed (lane $lane); tail of $log:" >&2
+        tail -5 "$log" >&2
+        return 1
+    fi
+    rows="$(awk -v k="cloudsc,nblks,$NPROMA,$NBLOCKS,0" -v l="$lane" -v a="$ALLOC" \
+        '$1 == "REP" { print k "," $2 "," $3 ",h5," l "," a }' "$log")"
+    if [ -z "$rows" ]; then
+        echo "FATAL: no REP lines from $exe (lane $lane) -- driver too old for per-rep timing" >&2
+        return 1
+    fi
+    printf '%s\n' "$rows" | tee -a "$CSV"
 }
 
 build_cuda() (
@@ -68,7 +92,11 @@ build_cuda() (
     lib="$("$H5CC" -show | tr ' ' '\n' | sed -n 's/^-L//p' | head -1)"
     # -rdc=true mirrors upstream CUDA_SEPARABLE_COMPILATION ON (cloudsc_cuda/CMakeLists.txt);
     # source list = the dwarf-cloudsc-gpu-cuda-c target there (base scc variant).
+    # --allow-unsupported-compiler: the host compiler is gcc 16.1.0, past nvcc's supported-version
+    # wall, which is a hard error rather than a warning. --expt-relaxed-constexpr: the dwarf's
+    # __device__ code calls constexpr host functions.
     "$NVCC" -O3 -arch=native -rdc=true -DHAVE_HDF5 \
+        --allow-unsupported-compiler --expt-relaxed-constexpr \
         -I"$DWARF/cloudsc_cuda/cloudsc" ${inc:+-I"$inc"} \
         "$DWARF/cloudsc_cuda/cloudsc/load_state.cu" \
         "$DWARF/cloudsc_cuda/cloudsc/cloudsc_validate.cu" \
@@ -123,7 +151,7 @@ for lane in $GPU_LANES; do
                 continue
             fi
             build_cuda
-            run_lane "$BUILD_ROOT/dwarf-cloudsc-cuda" cuda
+            run_lane_reps "$BUILD_ROOT/dwarf-cloudsc-cuda" cuda
             ;;
         openacc)
             if [ "$HAVE_NVFORTRAN" != 1 ] || [ -z "${NVC:-}${GCC:-}" ]; then

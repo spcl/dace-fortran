@@ -12,13 +12,18 @@ VARIANT="${2:?usage: tagcycle_lane.sh <warm|meas|artifacts> <variant>}"
 MEAS="${MEAS:-/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-meas}"
 BR2="${BR2:-/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-samples-meas}"
 # Data layout is a sweep dimension inside a velocity rank, not a property of the TU variant.
-VELOCITY_LAYOUTS="${VELOCITY_LAYOUTS:-nproma32 flat}"
+# CPU default = both blocked decks (r02b05 and r02b06 at nproma=32), which is what the paper's
+# velocity panels need; `flat` (nproma=491520) is a GPU layout and is opt-in here.
+VELOCITY_LAYOUTS="${VELOCITY_LAYOUTS:-r02b05 r02b06}"
+REPS="${REPS:-50}"
+WARMUP="${WARMUP:-2}"
 
 # variant -> the lane roots under $BR2 that hold its .sdfgz artifacts
 lane_roots() {
     case "$1" in
         cloudsc-klon) echo "cloudsc_klon_dace-gcc cloudsc_klon_dace-llvm" ;;
         cloudsc-nblks) echo "cloudsc_nblks_dace-gcc cloudsc_nblks_dace-llvm" ;;
+        cloudsc-sweep) echo "cloudsc_sweep_dace-gcc cloudsc_sweep_dace-llvm" ;;
         velocity-loopexch | velocity-noloopexch) echo "velocity_tendencies_dace-gcc velocity_tendencies_dace-llvm" ;;
         *) return 1 ;;
     esac
@@ -62,6 +67,23 @@ TAG_NOW="$(git -C "$MEAS" describe --always --dirty)"
 # A view argument silently reinterprets a non-contiguous array; never on in a measurement.
 export DACE_compiler_allow_view_arguments=false
 probe_compilers
+
+# common.sh sourced alloc_pool.sh, so the preload (if any) is already exported and every $PY the
+# lane launches inherits it. The driver-emitted CSV rows carry the 9 original columns; the
+# Fortran/OpenACC drivers cannot know the allocator, so the lane stamps it on.
+ALLOC="${MEAS_ALLOC_ACTIVE:-system}"
+echo "lane $VARIANT: alloc=$ALLOC${MEAS_ALLOC_SO:+ preload=$MEAS_ALLOC_SO}"
+
+# Refuse to MEASURE a mixed-OpenMP-runtime process. libgomp and libomp in one process each see
+# only their own threads, oversubscribe the cpuset and cost ~34x -- and the run still completes
+# with plausible-looking rows, so it has to be an abort, not a warning. Runs in this environment
+# (after alloc_pool), so the mapping it checks is the one the timed run will get.
+omp_preflight() {
+    local backend="$1" so="$2"
+    # warm mode is what builds the .so in the first place; nothing to check yet.
+    [ "$MODE" = meas ] || return 0
+    "$PY" "$MEAS/samples/omp_preflight.py" --so "$so" --expect "$backend" --label "$VARIANT/dace-$backend"
+}
 
 # CPU ids this process may actually touch. NOT lscpu (common.sh probe_topology): that reports all
 # 288 node cpus, and an OMP_PLACES id outside the step's cpuset is the same EINVAL class of bug
@@ -163,11 +185,16 @@ VELOCITY_SRC="$MEAS/samples/velocity_tendencies"
 VELOCITY_DRIVER="$VELOCITY_SRC/run_velocity_perf.py"
 CLOUDSC_H5="$MEAS/samples/cloudsc/data/input.h5"
 VELOCITY_DATA_DIR="${VELOCITY_DATA_DIR:-$BR2/data_r02b06}"
+VELOCITY_DATA_DIR_R05="${VELOCITY_DATA_DIR_R05:-$VELOCITY_SRC/data_r02b05}"
 VELOCITY_TIMESTEP="${VELOCITY_TIMESTEP:-1}"
+NPZ_R02B05="${VELOCITY_NPZ_R02B05:-$BR2/velocity_r02b05_nproma32.npz}"
 NPZ_NPROMA32="${VELOCITY_NPZ_NPROMA32:-$BR2/velocity_r02b06_nproma32.npz}"
 NPZ_FLAT="${VELOCITY_NPZ_FLAT:-$BR2/velocity_r02b06_nproma491520.npz}"
+# Layout -> deck.  `nproma32` is kept as an alias of `r02b06` so an older VELOCITY_LAYOUTS
+# export keeps meaning what it meant.
 npz_for() {
     case "$1" in
+        r02b05) echo "$NPZ_R02B05" ;;
         flat) echo "$NPZ_FLAT" ;;
         *) echo "$NPZ_NPROMA32" ;;
     esac
@@ -178,19 +205,34 @@ nproma_for() {
         *) echo 32 ;;
     esac
 }
+# The raw ICON dump each layout is converted from; r02b05 ships in the repo, r02b06 is staged
+# into $BR2 by prepare_r02b06.sh (see the warm job).
+data_dir_for() {
+    case "$1" in
+        r02b05) echo "$VELOCITY_DATA_DIR_R05" ;;
+        *) echo "$VELOCITY_DATA_DIR" ;;
+    esac
+}
+# CSV `inputs` label; the DaCe driver derives it from the npz name, the Fortran drivers do not.
+inputs_for() {
+    case "$1" in
+        r02b05) echo r02b05 ;;
+        *) echo r02b06 ;;
+    esac
+}
 
 # openacc-cpu is the raw Fortran baseline (driver_velocity.f90 + dump_data.py's stream-binary
 # dump), not the npz the DaCe lanes above read -- same shape labels, different file format.
+VELOCITY_DUMP05="${VELOCITY_DUMP05:-$BR2/velocity_dump_r02b05_nproma32}"
 VELOCITY_DUMP32="${VELOCITY_DUMP32:-$BR2/velocity_dump_r02b06_nproma32}"
 VELOCITY_DUMP_FLAT="${VELOCITY_DUMP_FLAT:-$BR2/velocity_dump_r02b06_nproma491520}"
 dump_for() {
     case "$1" in
+        r02b05) echo "$VELOCITY_DUMP05" ;;
         flat) echo "$VELOCITY_DUMP_FLAT" ;;
         *) echo "$VELOCITY_DUMP32" ;;
     esac
 }
-# The driver hardcodes the dataset label of the deck it was written against.
-VELOCITY_INPUTS="${VELOCITY_INPUTS:-r02b06}"
 
 # Warm only: the flock keeps the two concurrent velocity ranks from both spending ~4.5 min (and
 # tens of GB) converting the same deck.
@@ -204,7 +246,7 @@ ensure_npz() {
         flock 9
         [ -f "$n" ] && exit 0
         echo "+ convert_data.py --nproma $(nproma_for "$1") --out $n"
-        "$PY" "$VELOCITY_SRC/convert_data.py" --data-dir "$VELOCITY_DATA_DIR" \
+        "$PY" "$VELOCITY_SRC/convert_data.py" --data-dir "$(data_dir_for "$1")" \
             --timestep "$VELOCITY_TIMESTEP" --nproma "$(nproma_for "$1")" --out "$n.partial" \
             && mv -f "$n.partial" "$n"
     ) 9> "$lock"
@@ -238,6 +280,11 @@ case "$VARIANT" in
                 warm_build "$BUILD_ROOT/warm_build.log" \
                     "$PY" "$CLOUDSC_DRIVER" --mode "$m" --backend "$b" --build-only
             else
+                omp_preflight "$b" "$BUILD_ROOT/dacecache/cloudscouter/build/libcloudscouter.so" || {
+                    echo "ABORT: OpenMP purity preflight failed for $lane -- refusing to measure" >&2
+                    rc=1
+                    continue
+                }
                 for t in $THREADS; do
                     if [ "$t" -gt "$LANE_NCORES" ]; then
                         echo "skip threads=$t (> $LANE_NCORES cpus in this cpuset)"
@@ -248,6 +295,82 @@ case "$VARIANT" in
                 done
             fi
         done
+        ;;
+    cloudsc-sweep)
+        # Figure-A problem-size sweep for the DaCe lanes: one SDFG per (NGPTOT, backend), because
+        # KLON/NBLOCKS are specialized into the graph.  Phase A is the expensive half (~13 min a
+        # build), so the warm job shards CLOUDSC_SWEEP_SIZES/CLOUDSC_SWEEP_BACKENDS across ranks.
+        # shellcheck disable=SC1091
+        . "$MEAS/samples/cloudsc/sweep_sizes.sh"
+        [ -f "$CLOUDSC_H5" ] || {
+            echo "FATAL: no cloudsc deck at $CLOUDSC_H5" >&2
+            exit 1
+        }
+        cloudsc_print_size_table || echo "WARNING: continuing with a cliff-flagged NPROMA" >&2
+        for b in ${CLOUDSC_SWEEP_BACKENDS:-gcc llvm}; do
+            for s in $CLOUDSC_SWEEP_SIZES; do
+                for n in $CLOUDSC_SWEEP_NPROMAS; do
+                    setup_lane_root "$BR2/cloudsc_sweep_dace-${b}" "n${n}_s${s}" || {
+                        rc=1
+                        continue
+                    }
+                    if [ "$MODE" = warm ]; then
+                        set_omp_lane "$WARM_THREADS" || { rc=1; continue; }
+                        warm_build "$BUILD_ROOT/warm_build_n${n}_s${s}.log" \
+                            "$PY" "$CLOUDSC_DRIVER" --mode nblks --ngptot "$s" --nproma "$n" \
+                            --backend "$b" --build-only
+                        continue
+                    fi
+                    omp_preflight "$b" \
+                        "$BUILD_ROOT/dacecache_n${n}_s${s}/cloudscouter/build/libcloudscouter.so" || {
+                        echo "ABORT: OpenMP purity preflight failed for dace-$b (ngptot $s) -- refusing" >&2
+                        rc=1
+                        continue
+                    }
+                    for t in $THREADS; do
+                        if [ "$t" -gt "$LANE_NCORES" ]; then
+                            echo "skip threads=$t (> $LANE_NCORES cpus in this cpuset)"
+                            continue
+                        fi
+                        set_omp_lane "$t" || { rc=1; continue; }
+                        run "$PY" "$CLOUDSC_DRIVER" --mode nblks --ngptot "$s" --nproma "$n" \
+                            --backend "$b" --reps "$REPS" --warmup "$WARMUP" --csv "$CSV"
+                    done
+                done
+            done
+        done
+        ;;
+    cloudsc-sweep-fortran | cloudsc-sweep-c)
+        # The two non-DaCe sweep lanes are just baselines.sh in sweep mode: it already owns the
+        # dwarf build recipes, the h5 deck wiring and the 10-column CSV contract, and neither lane
+        # has a phase A, so warm only has to produce the binary (a 4096-column smoke run does that
+        # and proves it runs).  BUILD_ROOT_BASE is shared warm->meas so the binary survives.
+        case "$VARIANT" in
+            cloudsc-sweep-fortran) blane=original-openmp ;;
+            *) blane=c-openmp ;;
+        esac
+        [ -f "$CLOUDSC_H5" ] || {
+            echo "FATAL: no cloudsc deck at $CLOUDSC_H5" >&2
+            exit 1
+        }
+        unset BUILD_ROOT
+        export BUILD_ROOT_BASE="$BR2/cloudsc_sweep_${blane}"
+        mkdir -p "$BUILD_ROOT_BASE" || rc=1
+        if [ "$MODE" = warm ]; then
+            sizes="${CLOUDSC_WARM_SMOKE_SIZE:-4096}" reps=1 warm=0 threads="$WARM_THREADS"
+        else
+            sizes="$CLOUDSC_SWEEP_SIZES" reps="$REPS" warm="$WARMUP" threads="$THREADS"
+        fi
+        # baselines.sh runs under `set -e`; keep its failure from killing this lane's siblings.
+        (
+            export BASELINE_LANES="$blane" CLOUDSC_SWEEP=1 CLOUDSC_SWEEP_SIZES="$sizes"
+            export REPS="$reps" WARMUP="$warm" THREADS="$threads" CSV="${CSV:-/dev/null}"
+            bash "$MEAS/samples/cloudsc/baselines.sh"
+        )
+        r=$?
+        [ "$r" -eq 0 ] || rc="$r"
+        # warm has no phase A marker of its own; say so in the same shape the warm job greps.
+        [ "$MODE" = warm ] && echo "phase A done: cloudsc_sweep_${blane} (binary built)"
         ;;
     velocity-loopexch | velocity-noloopexch)
         v="${VARIANT#velocity-}"
@@ -272,6 +395,12 @@ case "$VARIANT" in
                 warm_build "$BUILD_ROOT/warm_build_${v}.log" \
                     "$PY" "$VELOCITY_DRIVER" --variant "$v" --backend "$b" --build-only
             else
+                omp_preflight "$b" \
+                    "$BUILD_ROOT/dacecache_${v}/velocity_tendencies/build/libvelocity_tendencies.so" || {
+                    echo "ABORT: OpenMP purity preflight failed for dace-$b ($v) -- refusing to measure" >&2
+                    rc=1
+                    continue
+                }
                 # threads outer / layout inner, matching samples/.../run_velocity.sbatch.
                 for t in $THREADS; do
                     if [ "$t" -gt "$LANE_NCORES" ]; then
@@ -306,7 +435,7 @@ case "$VARIANT" in
         if [ "$MODE" = warm ]; then
             for l in $VELOCITY_LAYOUTS; do
                 d="$(dump_for "$l")"
-                [ -f "$d/manifest.txt" ] || run "$PY" "$VELOCITY_SRC/dump_data.py" --data-dir "$VELOCITY_DATA_DIR" \
+                [ -f "$d/manifest.txt" ] || run "$PY" "$VELOCITY_SRC/dump_data.py" --data-dir "$(data_dir_for "$l")" \
                     --timestep "$VELOCITY_TIMESTEP" --nproma "$(nproma_for "$l")" --out "$d"
             done
             run "$NVFORTRAN" -O3 -acc=multicore -c "$VELOCITY_SRC/velocity_advection_acc.f90" \
@@ -344,11 +473,11 @@ case "$VARIANT" in
                         rc=1
                         continue
                     fi
-                    [ -f "$CSV" ] || echo "kernel,mode,nproma,nblks_e,threads,rep,ms,inputs,lane" > "$CSV"
+                    [ -f "$CSV" ] || echo "kernel,mode,nproma,nblks_e,threads,rep,ms,inputs,lane,alloc" > "$CSV"
                     # The ACC twin IS the loop-exchange source, so its mode label stands; only the
                     # dataset label needs correcting, and nproma/nblks_e already carry the layout.
-                    grep '^velocity_tendencies,' "$log" | sed "s/,r02b05,/,${VELOCITY_INPUTS},/" \
-                        | tee -a "$CSV"
+                    grep '^velocity_tendencies,' "$log" | sed "s/,r02b05,/,$(inputs_for "$l"),/" \
+                        | sed "s/\$/,${ALLOC}/" | tee -a "$CSV"
                 done
             done
             unset ACC_NUM_CORES
@@ -377,7 +506,7 @@ case "$VARIANT" in
         if [ "$MODE" = warm ]; then
             for l in $VELOCITY_LAYOUTS; do
                 d="$(dump_for "$l")"
-                [ -f "$d/manifest.txt" ] || run "$PY" "$VELOCITY_SRC/dump_data.py" --data-dir "$VELOCITY_DATA_DIR" \
+                [ -f "$d/manifest.txt" ] || run "$PY" "$VELOCITY_SRC/dump_data.py" --data-dir "$(data_dir_for "$l")" \
                     --timestep "$VELOCITY_TIMESTEP" --nproma "$(nproma_for "$l")" --out "$d"
             done
         else
@@ -431,9 +560,9 @@ case "$VARIANT" in
                         rc=1
                         continue
                     fi
-                    [ -f "$CSV" ] || echo "kernel,mode,nproma,nblks_e,threads,rep,ms,inputs,lane" > "$CSV"
-                    grep '^velocity_tendencies,' "$log" | sed "s/,r02b05,/,${VELOCITY_INPUTS},/" \
-                        | tee -a "$CSV"
+                    [ -f "$CSV" ] || echo "kernel,mode,nproma,nblks_e,threads,rep,ms,inputs,lane,alloc" > "$CSV"
+                    grep '^velocity_tendencies,' "$log" | sed "s/,r02b05,/,$(inputs_for "$l"),/" \
+                        | sed "s/\$/,${ALLOC}/" | tee -a "$CSV"
                 done
             done
         done

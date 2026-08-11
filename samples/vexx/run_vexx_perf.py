@@ -22,7 +22,26 @@ PERF_CPU_ARGS = "-fPIC -O3 -march=native -fno-fast-math -ffp-contract=off -fno-m
 # (m, nnr) per mode; m * nnr within ~2x of each other, all synthetic (README).
 MODE_DEFAULTS = {"bands": (64, 48**3), "grid": (4, 128**3)}
 
-CSV_HEADER = "kernel,mode,m,nnr,threads,rep,ms,inputs,lane"
+CSV_HEADER = "kernel,mode,m,nnr,threads,rep,ms,inputs,lane,alloc"
+
+
+def alloc_label() -> str:
+    """Allocator actually mapped into THIS process, not the one the shell meant to preload.
+
+    Read off /proc/self/maps rather than MEAS_ALLOC_ACTIVE so a run whose LD_PRELOAD silently
+    failed records `system` instead of inheriting the shell's intent and mislabelling the row.
+    """
+    try:
+        maps = Path("/proc/self/maps").read_text()
+    except OSError:
+        return os.environ.get("MEAS_ALLOC_ACTIVE", "unknown")
+    for name in ("mimalloc", "jemalloc"):
+        if f"lib{name}.so" in maps:
+            return name
+    return "system"
+
+
+ALLOC = alloc_label()
 INPUTS_KIND = "synthetic"  # all vexx dims are synthetic (README); column kept position-compatible with cloudsc
 
 LIB_NAME = "vexx_perf_lib"
@@ -220,7 +239,7 @@ def run_timed(cdll: ctypes.CDLL, mode: str, dims: dict, reps: int, warmup: int, 
             if not np.all(np.isfinite(hpsi)):
                 raise SystemExit("first call produced non-finite hpsi -- bad synthetic state")
         if rep >= 0:
-            rows.append(f"vexx,{mode},{m},{nnr},{threads},{rep},{ms:.3f},{INPUTS_KIND},{lane}")
+            rows.append(f"vexx,{mode},{m},{nnr},{threads},{rep},{ms:.3f},{INPUTS_KIND},{lane},{ALLOC}")
             print(rows[-1], flush=True)
     return rows
 

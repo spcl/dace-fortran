@@ -395,6 +395,20 @@ void cloudsc_driver(int numthreads, int numcols, int nproma) {
   int ibl = (jkglo - 1) / nproma + 1;
   int icend = min(nproma, numcols - jkglo + 1);
 
+  const char *repenv;
+  int nreps = (repenv = getenv("CLOUDSC_REPS")) ? atoi(repenv) : 1;
+  int nwarmup = (repenv = getenv("CLOUDSC_WARMUP")) ? atoi(repenv) : 0;
+  double end = start;
+
+  for (int rep = -nwarmup; rep < nreps; rep++) {
+
+  // plude is the kernel's only in-out field: restage it so every rep does identical work.
+  cudaMemcpy(d_plude, plude, sizeof(dtype) * nblocks*nlev*nproma, cudaMemcpyHostToDevice);
+  // The timer pair brackets nothing but the kernel, and a full device sync sits inside both
+  // brackets, so no launch or copy is ever timed across an asynchronous gap.
+  gpuErrchk( cudaDeviceSynchronize() );
+  start = omp_get_wtime();
+
   cloudsc_c<<<griddim, blockdim>>>(1, icend, nproma, ptsphy, d_pt, d_pq,
   		d_tend_tmp_t, d_tend_tmp_q, d_tend_tmp_a, d_tend_tmp_cld,
   		d_tend_loc_t, d_tend_loc_q, d_tend_loc_a, d_tend_loc_cld,
@@ -419,8 +433,12 @@ void cloudsc_driver(int numthreads, int numcols, int nproma) {
 
   gpuErrchk( cudaPeekAtLastError() );
   gpuErrchk( cudaDeviceSynchronize() );
+  end = omp_get_wtime();
 
-  double end = omp_get_wtime();
+  if (rep >= 0)
+    printf(" REP %d %.6f\n", rep, 1000. * (end - start));
+
+  }
 
   // device to host
   cudaMemcpy(tend_loc_t, d_tend_loc_t, sizeof(dtype) * nblocks*nlev*nproma, cudaMemcpyDeviceToHost);
