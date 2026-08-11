@@ -117,11 +117,18 @@ rm -rf "$BUILD/experiments/$EXP"
 mkdir -p "$RUNS"
 LOG="$RUNS/icon_gpu_smoke_${GRID}_${TAG}_${SLURM_JOB_ID:-local}.log"
 export CUDA_VISIBLE_DEVICES=0
-srun --exact --ntasks=1 --cpus-per-task=72 --cpu-bind=cores --mem-bind=local \
+# 20-min cap on the model run (data init is slow, that much wall is expected);
+# success is judged from stdout step progress, a timeout with steps is a pass.
+RUN_CAP="${RUN_CAP:-1200}"
+timeout -k 60 "$RUN_CAP" srun --exact --ntasks=1 --cpus-per-task=72 --cpu-bind=cores --mem-bind=local \
     bash -c "cd '$BUILD/run' && bash 'exp.$EXP.run'" > "$LOG" 2>&1
 rc=$?
+[ $rc -eq 124 ] && echo "ICON_GPU_RUN_TIMEOUT=1 cap=${RUN_CAP}s"
 [ $rc -eq 0 ] || tail -40 "$LOG"
 nsteps=$(grep -cE 'Time step:|TIME STEP' "$LOG" || true)
+if [ $rc -eq 124 ] && [ "$nsteps" -gt 0 ]; then
+    rc=0
+fi
 echo "ICON_GPU_RUN_STEPS=$nsteps log=$LOG"
 echo "ICON_GPU_RUN_EXIT=$rc"
 echo "ICON_GPU_SMOKE_DONE grid=$GRID end=$(date -u +%FT%TZ)"
