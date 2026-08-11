@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Callable, Dict, List
 
 REPO = Path(__file__).resolve().parents[2]
-GH200_ARCH = "90a"
+GH200_ARCH = "90"
 
 
 def configure_gpu(arch: str = GH200_ARCH) -> str:
