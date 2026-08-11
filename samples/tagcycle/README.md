@@ -188,6 +188,19 @@ Wall time is now the **slowest lane in a wave**, not the sum: the velocity half 
 sequential to ~8–10 min, and all three forms sit comfortably inside the 30-minute debug cap. The
 split pair is still what to submit — two short jobs beat one that has to fit two waves.
 
+## ICON integration jobs (CPU, no MPI)
+
+Full-ICON Held-Suarez R02B05 with the DaCe velocity lib linked in (`docs/ICON_INTEGRATION.md`),
+one compiler lane per submission (`COMPILER=gcc|nvhpc`; nvhpc lane is stock-only until the DaCe
+lib builder grows an nvfortran arm). ICON is configured `--disable-mpi` — serial binary, OpenMP
+only. Builds run plain on the node (never under `srun`); only the timing step is `srun`-pinned.
+
+| job | partition | walltime | tasks | what it does |
+|---|---|---|---|---|
+| `icon_cpu_build.sbatch` | `normal` | 4 h | 1, plain make | stock ICON (`configure_icon_dace_cpu_daint.sh`, FMA on) → DaCe velocity lib (`build_icon_dace_libs.py --release`, `DACE_FORTRAN_FP_CONTRACT=fast`) → velocity-patched ICON. Verdicts `ICON_STOCK_BUILD_EXIT[lane]` / `DACE_LIBS_EXIT[lane]` / `ICON_DACE_BUILD_EXIT[lane]` / `ICON_BUILD_EXIT[lane]` |
+| `icon_cpu_timing.sbatch` | `debug` | 30 min | 1 × 72 cores, one socket | runs the patched ICON on Held-Suarez R02B05 (seeds pinned 0, PT10S steps) via `srun --ntasks=1`, greps `VELO_TIMER`, `parse_icon_timers.py` → per-config median CSV in `runs/`. Verdict `ICON_TIMING_EXIT[lane]` |
+| `icon_gpu_smoke.sbatch` | `debug` | 30 min | 1 × 72 cores + GPU 0 | **the integration TEST job**: OpenACC GPU ICON (nvhpc, `-acc=gpu -gpu=cc90 -Minfo=accel`, `--enable-gpu=openacc+cuda`, no MPI) — configure+`make -j72` (resumable: build dir kept, resubmit continues) then a 3-step Held-Suarez on `GRID=R02B04..R02B09` (grids pre-staged by `scripts/fetch_icon_grids.sh`, ids 0013/0019/0021/0023/0025/0015). Sweep intent: B04–B07 fit one GH200; B08 is attempted anyway and allowed to OOM-crash; B09 does not fit a single module (grid staged for multi-module futures). Verdicts `ICON_GPU_CONFIGURE_EXIT` / `ICON_GPU_BUILD_EXIT` / `ICON_GPU_RUN_EXIT` |
+
 `gpu_warm.sbatch` stays deliberately sequential on a single GPU. Nothing in it is timed, so the
 lanes gain nothing from running together, and the mechanism that would parallelise them — `srun` —
 is exactly what must never wrap a build (blocked `SIGCHLD` deadlocks `cmake` in `select()`).

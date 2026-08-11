@@ -87,6 +87,19 @@ _RELEASE_CXX_FLAGS = (
     "-Wno-unused-label",
 )
 
+# DACE_FORTRAN_FP_CONTRACT=fast swaps -ffp-contract=off for =fast on every
+# layer (daint lanes build BOTH ICON and this lib with FMA; the contract
+# setting must match within a lane for the stock-vs-DaCe comparison).
+_FP_CONTRACT = os.environ.get("DACE_FORTRAN_FP_CONTRACT", "off")
+if _FP_CONTRACT not in ("off", "fast"):
+    raise SystemExit(f"DACE_FORTRAN_FP_CONTRACT must be off|fast, got {_FP_CONTRACT!r}")
+if _FP_CONTRACT == "fast":
+    _swap = lambda flags: tuple(f.replace("-ffp-contract=off", "-ffp-contract=fast") for f in flags)
+    _RELEASE_FFLAGS = _swap(_RELEASE_FFLAGS)
+    _RELEASE_CXX_FLAGS = _swap(_RELEASE_CXX_FLAGS)
+    _O0_FFLAGS = _swap(_O0_FFLAGS)
+    _O0_CXX_FLAGS = _swap(_O0_CXX_FLAGS)
+
 # Free-standing wrapper subroutine ICON's patched ``mo_velocity_advection``
 # calls into.  Exports the link-time symbol ``velocity_tendencies_dace_icon_``
 # (trailing underscore, NO module prefix) so the call site can declare it
@@ -194,6 +207,11 @@ def render_icon_wrapper(plan: AccTransferPlan = None) -> str:
     statement of its boundary, so both timer reads sit AFTER their sync
     and the staging traffic is inside the measured window rather than
     straddling it.
+
+    The entry-side sync deliberately drains ICON's in-flight kernels so
+    they are not charged to the velocity timer; ``WAIT(1)`` suffices
+    because both ICON's kernels and our staging copies run on queue 1
+    (``ACC_QUEUE``).
 
     Every emitted line is a sentinel ``!$ACC`` comment, so a build
     without ``-acc`` / ``-fopenacc`` sees plain Fortran comments and the
