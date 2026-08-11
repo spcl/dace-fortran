@@ -235,7 +235,8 @@ def extract_single_tu(source_relpath: str,
                       out_dir: Path,
                       halo_mode: str = "inlined",
                       mem_gb: float = 12.0,
-                      loop_exchange: bool = True) -> dict:
+                      loop_exchange: bool = True,
+                      keep_acc_directives: bool = False) -> dict:
     """Extract one atmosphere kernel into a single, gfortran-compiling ``.f90`` in a
     memory-capped subprocess (fparser parse peaks near 9 GB).  Returns a dict with
     ``passed``/``tu_path``/``tu_lines``/``output``.
@@ -258,7 +259,7 @@ def extract_single_tu(source_relpath: str,
         sys.executable,
         str(_EXTRACT_SCRIPT), source_relpath, entry,
         str(out_dir),
-        str(mem_gb), halo_mode, "1" if loop_exchange else "0"
+        str(mem_gb), halo_mode, "1" if loop_exchange else "0", "1" if keep_acc_directives else "0"
     ],
                           capture_output=True,
                           text=True,

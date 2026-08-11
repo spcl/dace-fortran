@@ -1194,7 +1194,8 @@ def _fparser_merge(source: str,
                    *,
                    search_dirs=(),
                    entry: Optional[str] = None,
-                   external_names: Iterable[str] = ()) -> str:
+                   external_names: Iterable[str] = (),
+                   keep_acc_directives: bool = False) -> str:
     """Single-TU merge via the fparser inliner engine (opt-in via
     ``merge_engine="fparser"``; the regex splicer stays default).
 
@@ -1205,7 +1206,8 @@ def _fparser_merge(source: str,
     ``external_names`` are stubbed empty (inliner's ``make_noop``) so their
     internals never enter the TU.
     """
-    from dace_fortran.fparser_inliner import inline_to_ast, strip_builtin_stub_modules
+    from dace_fortran.fparser_inliner import (decode_acc_directives, encode_acc_directives, inline_to_ast,
+                                              strip_builtin_stub_modules)
 
     src_map = {}
     for d in search_dirs:
@@ -1229,11 +1231,17 @@ def _fparser_merge(source: str,
     # ``optimize=False``: skip the inliner's const-propagation -- flang/the
     # bridge already do constant-folding, and this avoids optimizer
     # fragilities on inlined-call patterns.
+    acc_table = None
+    if keep_acc_directives:
+        src_map, acc_table = encode_acc_directives(src_map)
     ast = inline_to_ast(src_map, entry, include_builtins=True, optimize=False, do_not_emit=external_names)
     # Strip injected intrinsic-module stubs (no-op if ``entry`` already pruned
     # them) so flang's own ``iso_c_binding``/``iso_fortran_env`` are used.
     ast = strip_builtin_stub_modules(ast)
-    return ast.tofortran()
+    text = ast.tofortran()
+    if acc_table is not None:
+        text = decode_acc_directives(text, acc_table)
+    return text
 
 
 def preprocess_fortran_source(source: str,
@@ -1245,7 +1253,8 @@ def preprocess_fortran_source(source: str,
                               external_names: Iterable[str] = (),
                               if_intvar: bool = False,
                               kind_map: dict = None,
-                              kind_passthrough: bool = False) -> str:
+                              kind_passthrough: bool = False,
+                              keep_acc_directives: bool = False) -> str:
     """Single entrypoint for all Fortran-source preprocessing before flang.
 
     Order matters -- composes:
@@ -1264,10 +1273,20 @@ def preprocess_fortran_source(source: str,
 
     ``external_names``: kept external (not inlined) at the merge stage in
     BOTH engines -- stubbed empty so halo/MPI/I/O internals never enter the TU.
+
+    ``keep_acc_directives``: fparser engine only -- carry ``!$acc`` lines through
+    the merge (the regex engine keeps them anyway).  The later
+    ``strip_openmp_directives`` step still removes every sentinel from the
+    flang-bound text, so this passthrough serves bindings-side readers of the
+    MERGED text; the SDFG path is unchanged.
     """
     if merge:
         if merge_engine == "fparser":
-            source = _fparser_merge(source, search_dirs=search_dirs, entry=merge_entry, external_names=external_names)
+            source = _fparser_merge(source,
+                                    search_dirs=search_dirs,
+                                    entry=merge_entry,
+                                    external_names=external_names,
+                                    keep_acc_directives=keep_acc_directives)
         elif merge_engine == "regex":
             source = merge_used_modules(source, search_dirs=search_dirs, do_not_emit=external_names)
         else:

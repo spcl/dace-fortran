@@ -21,6 +21,7 @@ Slow (the merged closure is ~140k lines) and memory-heavy, so ``long`` and
 serialised onto one xdist worker in a memory-capped subprocess.  Gated on
 flang-new-21 + OpenMPI + the icon-model submodule.
 """
+import re
 from pathlib import Path
 
 import pytest
@@ -65,3 +66,26 @@ def test_extract_compiles_and_matches_committed(tmp_path, key, halo_mode, filena
         f"{key}[{halo_mode}]: no committed artifact {committed.name}; save the extracted TU into this folder"
     assert Path(res["tu_path"]).read_text() == committed.read_text(), \
         f"{key}[{halo_mode}]: extracted TU drifted from committed {committed.name}; regenerate it"
+
+
+_ACC_LINE = re.compile(r"\s*!\s*\$\s*acc", re.IGNORECASE)
+
+
+@pytest.mark.xdist_group("atmo_fparser")
+def test_keep_acc_directives_survive_into_the_velocity_tu(tmp_path):
+    """``keep_acc_directives=True`` must carry the ~94 ``!$ACC`` source
+    directives of ``mo_velocity_advection`` into the emitted TU, attached to
+    their statements, WITHOUT changing one byte of the code around them
+    (stripping the directive lines must reproduce the committed artifact)."""
+    res = extract_single_tu(_SOURCE["velocity_advection"],
+                            "mo_velocity_advection::velocity_tendencies",
+                            tmp_path / "keep_acc",
+                            loop_exchange=False,
+                            keep_acc_directives=True)
+    assert res["tu_path"] is not None and Path(res["tu_path"]).is_file(), res["output"][-4000:]
+    tu_lines = Path(res["tu_path"]).read_text().splitlines(keepends=True)
+    n_acc = sum(1 for line in tu_lines if _ACC_LINE.match(line))
+    assert 60 <= n_acc <= 150, f"expected ~90 surviving !$ACC directives, got {n_acc}"
+    committed = (_HERE / "velocity_advection_inlined_no_loop_exchange_single_tu.f90").read_text()
+    stripped = "".join(line for line in tu_lines if not _ACC_LINE.match(line))
+    assert stripped == committed, "keep_acc_directives perturbed the TU beyond the inserted directive lines"

@@ -21,8 +21,8 @@ from dace_fortran.bindings import (
 # --------------------------------------------------------------------------
 
 
-def _two_real_array_struct(tmp_path: Path) -> str:
-    """type(t_fields) with two plain real(c_double) members -- everything aliases."""
+def _two_real_array_parts():
+    """(frozen, iface, plan) for the two-real-array-struct fixture."""
     frozen = FrozenSignature(
         entry="kernel",
         mangled="_QPkernel",
@@ -73,6 +73,12 @@ def _two_real_array_struct(tmp_path: Path) -> str:
                                           shape_exprs=("size(fld%b, dim=1)", "size(fld%b, dim=2)"),
                                           aliasable=True)),
     ))
+    return frozen, iface, plan
+
+
+def _two_real_array_struct(tmp_path: Path) -> str:
+    """type(t_fields) with two plain real(c_double) members -- everything aliases."""
+    frozen, iface, plan = _two_real_array_parts()
     out = tmp_path / "kernel_bindings.f90"
     emit_bindings(frozen, iface, plan, str(out))
     return out.read_text()
@@ -208,6 +214,17 @@ def test_two_real_array_struct_all_aliased(tmp_path: Path):
     assert src.count("call c_f_pointer(c_loc(fld%b)") == 1
     assert "real(c_double), pointer :: fld_a(:, :)" in src
     assert "real(c_double), pointer :: fld_b(:, :)" in src
+
+
+def test_acc_residency_none_is_byte_identical(tmp_path: Path):
+    """``acc_residency=None`` (the default) must not change one byte of the
+    emitted module -- the ACC staging path is strictly opt-in."""
+    baseline = _two_real_array_struct(tmp_path)
+    out = tmp_path / "kernel_bindings_accnone.f90"
+    frozen, iface, plan = _two_real_array_parts()
+    emit_bindings(frozen, iface, plan, str(out), acc_residency=None)
+    assert out.read_text() == baseline
+    assert "!$ACC" not in baseline.upper()
 
 
 def test_two_real_array_struct_module_boilerplate(tmp_path: Path):

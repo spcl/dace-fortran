@@ -1182,6 +1182,75 @@ def _entry_to_spec(source: str, entry: Optional[str]) -> Optional[types.SPEC]:
     return _demangle_spec(_resolve_entry(source, entry))
 
 
+#: One physical ``!$acc`` sentinel line (directive opener or continuation piece).
+_ACC_SENTINEL_LINE_RE = re.compile(r"^\s*!\s*\$\s*acc\b", re.IGNORECASE)
+#: Marker-call name stem; the ``dace_`` namespace is reserved for generated names.
+_ACC_MARKER_STEM = "dace_acc_dirmark_"
+#: A serialised marker call in the emitted single-TU text.
+_ACC_MARKER_CALL_RE = re.compile(rf"^\s*CALL\s+{_ACC_MARKER_STEM}(\d+)\s*$", re.IGNORECASE)
+#: Directive heads that live in the SPECIFICATION part; a CALL marker there is
+#: an illegal executable statement, so these are left as plain comments (and
+#: thus dropped by fparser, exactly as with the flag off).
+_ACC_SPEC_PART_HEADS = frozenset({"declare", "routine"})
+
+
+def encode_acc_directives(src_map: Dict[str, str]) -> Tuple[Dict[str, str], Dict[int, List[str]]]:
+    """Replace each logical ``!$acc`` directive (continuations joined) with a
+    ``CALL dace_acc_dirmark_<n>`` marker statement, returning the rewritten
+    sources and the ``{n: [original lines]}`` table :func:`decode_acc_directives`
+    restores from.
+
+    fparser drops comments, but a plain CALL to an (external, never-defined)
+    marker subroutine parses, rides through the merge / inlining / pruning
+    pipeline attached to exactly its neighbouring statements, and is pruned
+    with the code region it annotates -- so a directive surviving into the
+    single TU is one whose statement context survived.  Specification-part
+    directive heads (``DECLARE`` / ``ROUTINE``) stay comments: a CALL between
+    declarations would not parse."""
+    table: Dict[int, List[str]] = {}
+    out_map: Dict[str, str] = {}
+    counter = 0
+    for name, text in src_map.items():
+        lines = text.splitlines()
+        out: List[str] = []
+        i = 0
+        while i < len(lines):
+            if not _ACC_SENTINEL_LINE_RE.match(lines[i]):
+                out.append(lines[i])
+                i += 1
+                continue
+            block = [lines[i]]
+            while lines[i].rstrip().endswith("&") and i + 1 < len(lines) and _ACC_SENTINEL_LINE_RE.match(lines[i + 1]):
+                i += 1
+                block.append(lines[i])
+            i += 1
+            first = _ACC_SENTINEL_LINE_RE.match(block[0])
+            head = re.match(r"\s*([A-Za-z_]\w*)", block[0][first.end():])
+            if head is not None and head.group(1).lower() in _ACC_SPEC_PART_HEADS:
+                out.extend(block)
+                continue
+            indent = block[0][:len(block[0]) - len(block[0].lstrip())]
+            table[counter] = block
+            out.append(f"{indent}CALL {_ACC_MARKER_STEM}{counter}")
+            counter += 1
+        out_map[name] = "\n".join(out) + ("\n" if text.endswith("\n") else "")
+    return out_map, table
+
+
+def decode_acc_directives(text: str, table: Dict[int, List[str]]) -> str:
+    """Inverse of :func:`encode_acc_directives` on serialised Fortran: each
+    surviving marker CALL becomes its original ``!$acc`` line(s) again (verbatim,
+    original indentation).  Markers whose region was pruned simply never appear."""
+    out: List[str] = []
+    for line in text.splitlines():
+        match = _ACC_MARKER_CALL_RE.match(line)
+        if match is not None and int(match.group(1)) in table:
+            out.extend(table[int(match.group(1))])
+        else:
+            out.append(line)
+    return "\n".join(out) + ("\n" if text.endswith("\n") else "")
+
+
 #: A standalone ``CONTIGUOUS :: a, b`` attribute statement.  fparser's f2008
 #: grammar does not accept it as a stand-alone declaration, so it aborts the
 #: whole file parse.  DaCe assumes contiguous storage, so the attribute is
@@ -1412,7 +1481,8 @@ def inline_to_single_tu(sources: Union[Dict[str, str], Iterable[Union[str, Path]
                         monomorphize: bool = True,
                         rename_specifics: Optional[Dict[str, str]] = None,
                         specialize_at_source: Iterable[str] = (),
-                        f2py_safe: bool = False) -> Path:
+                        f2py_safe: bool = False,
+                        keep_acc_directives: bool = False) -> Path:
     """Inline a multi-file Fortran project into ONE self-contained ``.f90``
     and return the path to it.
 
@@ -1451,8 +1521,22 @@ def inline_to_single_tu(sources: Union[Dict[str, str], Iterable[Union[str, Path]
     :param checkpoint_dir: dump intermediate ASTs (``ast_v*.f90``) here.
     :param include_builtins: inject intrinsic-module stubs so ``USE
         iso_c_binding`` / ``iso_fortran_env`` resolve during parsing.
+    :param keep_acc_directives: opt-in -- carry ``!$acc`` directive lines
+        through the (comment-dropping) fparser pipeline as marker statements
+        and restore them, attached to the surviving statements, in the emitted
+        TU (see :func:`encode_acc_directives`).  OFF by default: with the flag
+        off no code path changes and the output stays byte-identical.
     :returns: the path to the written single-TU ``.f90``.
     """
+    acc_table: Optional[Dict[int, List[str]]] = None
+    if keep_acc_directives:
+        src_map = _normalize_sources(sources)
+        if expand_cpp:
+            # cpp must run BEFORE the marker encoding (markers only in live arms);
+            # the inner inline_to_ast then skips its own expansion.
+            src_map = cpp_expand_sources(src_map, defines=defines, include_dirs=include_dirs, flang=flang)
+            expand_cpp = False
+        sources, acc_table = encode_acc_directives(src_map)
     ast = inline_to_ast(sources,
                         entry,
                         expand_cpp=expand_cpp,
@@ -1488,6 +1572,8 @@ def inline_to_single_tu(sources: Union[Dict[str, str], Iterable[Union[str, Path]
     # (mandatory) empty parentheses; restore them on the final text so an emitted
     # external C interface (ICON's ``util_abort``) compiles.
     f90 = re.sub(r'(?im)^(\s*SUBROUTINE\s+\w+)\s+(BIND\s*\()', r'\1() \2', f90)
+    if acc_table is not None:
+        f90 = decode_acc_directives(f90, acc_table)
 
     if output is not None:
         out_path = Path(output)

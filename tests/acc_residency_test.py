@@ -77,6 +77,7 @@ def test_device_clauses(payload, arg, clause, marker):
         "residency": "device",
         "clause": clause,
         "evidence": f"fixture.f90:{_line_of(marker)}",
+        "ref": arg,
     }
 
 
@@ -125,6 +126,91 @@ def test_default_present_is_not_evidence(payload):
 def test_routine_not_found():
     with pytest.raises(ValueError, match="not found"):
         classify(FIXTURE, "no_such_routine", "fixture.f90")
+
+
+COMPONENT_FIXTURE = """\
+MODULE m_acc_comp
+  IMPLICIT NONE
+  TYPE :: t_diag
+    REAL, POINTER :: vt(:, :, :)
+    REAL, POINTER :: vn_ie(:, :, :)
+  END TYPE t_diag
+CONTAINS
+  SUBROUTINE comp_kernel(p_diag, z_vt_ie, jb, n)
+    TYPE(t_diag), INTENT(INOUT) :: p_diag
+    REAL, INTENT(INOUT) :: z_vt_ie(:, :, :)
+    INTEGER, INTENT(IN) :: jb, n
+    INTEGER :: i
+    !$ACC DATA PRESENT(p_diag%vt, p_diag % vn_ie(:, :, jb)) &
+    !$ACC   COPYIN(z_vt_ie(:, :, jb))
+    DO i = 1, n
+      p_diag%vt(i, 1, jb) = z_vt_ie(i, 1, jb)
+    END DO
+    !$ACC END DATA
+  END SUBROUTINE comp_kernel
+END MODULE m_acc_comp
+"""
+
+
+@pytest.fixture(name="comp_payload", scope="module")
+def _comp_payload():
+    return classify(COMPONENT_FIXTURE, "comp_kernel", "comp.f90")
+
+
+def test_component_ref_normalises_to_base_arg(comp_payload):
+    info = comp_payload["args"]["p_diag"]
+    assert info["residency"] == "device"
+    assert info["clause"] == "PRESENT"
+    assert info["ref"] == "p_diag%vt"
+
+
+def test_array_section_ref_is_retained(comp_payload):
+    info = comp_payload["args"]["z_vt_ie"]
+    assert info["residency"] == "device"
+    assert info["ref"] == "z_vt_ie(:,:,jb)"
+
+
+def test_subscript_identifiers_are_not_entities(comp_payload):
+    """``jb`` appears only inside array-section subscripts; it must stay
+    unclassified rather than inherit the clause of its enclosing entity."""
+    assert comp_payload["unclassified"] == ["jb", "n"]
+
+
+CPP_FIXTURE = """\
+SUBROUTINE cpp_kernel(a, b, n)
+  REAL, INTENT(INOUT) :: a(:), b(:)
+  INTEGER, INTENT(IN) :: n
+  INTEGER :: i
+  !$ACC ENTER DATA COPYIN(a)
+#ifdef _OPENACC
+  !$ACC ENTER DATA CREATE(b)
+  DO i = 1, n, 2
+#else
+  b(1) = 1.0
+  DO i = 1, n
+#endif
+    a(i) = b(i)
+  END DO
+  !$ACC EXIT DATA DELETE(a, b)
+END SUBROUTINE cpp_kernel
+"""
+
+
+def test_cpp_arm_selection_keeps_the_openacc_arm():
+    """The two cpp arms carry structurally different DO statements, so the
+    source only parses under arm selection; ``_OPENACC`` is on by default."""
+    payload = classify(CPP_FIXTURE, "cpp_kernel", "cpp.f90")
+    assert payload["args"]["b"]["clause"] == "CREATE"
+    assert payload["args"]["a"]["clause"] == "COPYIN"
+    assert payload["unclassified"] == ["n"]
+
+
+def test_cpp_arm_selection_respects_explicit_defines():
+    """Without ``_OPENACC`` the #else arm is live and ``b`` loses its CREATE;
+    the unguarded EXIT DATA DELETE is then its best (device) evidence."""
+    payload = classify(CPP_FIXTURE, "cpp_kernel", "cpp.f90", defines=())
+    assert payload["args"]["a"]["clause"] == "COPYIN"
+    assert payload["args"]["b"]["clause"] == "DELETE"
 
 
 def test_write_sidecar(tmp_path):

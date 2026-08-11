@@ -855,6 +855,60 @@ def build_wrapper_tail(frozen: FrozenSignature,
 
 
 # ---------------------------------------------------------------------------
+# OpenACC staging (optional; reuses the acc_transfers renderers)
+# ---------------------------------------------------------------------------
+
+#: Indent of a wrapper-body statement in the generated module.
+_ACC_INDENT = "    "
+
+
+def build_acc_staging(plan) -> Tuple[List[str], List[str]]:
+    """``(pre_lines, post_lines)`` staging ICON's device-resident arguments
+    around the whole wrapper body, mirroring what
+    ``scripts/build_icon_dace_libs.render_icon_wrapper`` hand-rolls: drain
+    queue 1, ``UPDATE HOST ASYNC(1)`` before the copy-in reads host memory,
+    ``UPDATE DEVICE ASYNC(1)`` after the copy-out has written it back, and a
+    closing ``WAIT(1)``.  Empty when the plan needs no directives."""
+    from dace_fortran.bindings.acc_transfers import render_post_call, render_pre_call, render_sync
+    if plan is None or not plan.active:
+        return [], []
+    pre = render_sync(plan, _ACC_INDENT) + render_pre_call(plan, _ACC_INDENT)
+    post = render_post_call(plan, _ACC_INDENT) + render_sync(plan, _ACC_INDENT)
+    return pre, post
+
+
+def splice_acc_staging(blocks: Dict[str, str], entry: str, plan) -> Dict[str, str]:
+    """Return ``blocks`` with the OpenACC staging of ``plan`` spliced in:
+    pre-staging at the top of ``wrapper_body``, ``HOST_DATA USE_DEVICE`` around
+    the SDFG invocation, post-staging before the wrapper's end statement.
+    ``plan`` inactive (or ``None``) returns ``blocks`` unchanged."""
+    from dace_fortran.bindings.acc_transfers import render_host_data_close, render_host_data_open
+    pre, post = build_acc_staging(plan)
+    if plan is None or not plan.active:
+        return blocks
+    out = dict(blocks)
+    if pre:
+        out['wrapper_body'] = "\n".join([_ACC_INDENT + "! ----- OpenACC staging (device -> host) -----"] + pre +
+                                        [""]) + out['wrapper_body']
+    tail_lines = out['wrapper_tail'].splitlines()
+    hd_open = render_host_data_open(plan, _ACC_INDENT)
+    hd_close = render_host_data_close(plan, _ACC_INDENT)
+    if hd_open:
+        call_at = next(i for i, ln in enumerate(tail_lines) if ln.lstrip().startswith(f"call dace_program_{entry}("))
+        call_end = call_at
+        while tail_lines[call_end].rstrip().endswith("&"):
+            call_end += 1
+        tail_lines = (tail_lines[:call_at] + hd_open + tail_lines[call_at:call_end + 1] + hd_close +
+                      tail_lines[call_end + 1:])
+    if post:
+        end_at = next(i for i, ln in enumerate(tail_lines) if ln.strip() == f"end subroutine {entry}_dace")
+        post_block = [_ACC_INDENT + "! ----- OpenACC staging (host -> device) -----"] + post
+        tail_lines = tail_lines[:end_at] + post_block + tail_lines[end_at:]
+    out['wrapper_tail'] = "\n".join(tail_lines)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Finalize subroutine
 # ---------------------------------------------------------------------------
 

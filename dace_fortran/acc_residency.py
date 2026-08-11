@@ -7,7 +7,15 @@ strip_openmp_directives` deletes the sentinels before flang runs, and flang is
 invoked without ``-fopenacc`` (``build.py``, ``emit_hlfir.py``,
 ``flang_codebase.py`` all pass ``-U_OPENACC``), so the directives are plain
 comments and comments never enter a flang parse tree.  Residency is therefore
-recovered by a text pre-pass over the ORIGINAL source, before preprocessing.
+recovered by a pre-pass over the ORIGINAL source, before preprocessing.
+
+The routine structure (span, dummy arguments) comes from a real fparser AST --
+a light line-preserving cpp arm selection (``_OPENACC`` defined, matching the
+GPU build this pass models) makes raw ICON sources parseable -- and the
+directive text itself (a comment even to fparser) is tokenised by a small
+clause/entity parser that understands component refs (``p_diag%vt``), array
+sections (``v(:,:,jb)``), continuation lines and multiple clauses per
+directive.
 
 The pre-pass answers, for every dummy argument of a target routine, whether the
 data is device- or host-resident at call time, and emits the sidecar
@@ -15,8 +23,13 @@ data is device- or host-resident at call time, and emits the sidecar
 
     {"routine": ..., "source": ...,
      "args": {"<arg>": {"residency": "device"|"host",
-                        "clause": "PRESENT", "evidence": "<file>:<line>"}},
+                        "clause": "PRESENT", "evidence": "<file>:<line>",
+                        "ref": "<full entity ref, e.g. p_diag%vt(:,:,jb)>"}},
      "unclassified": ["<arg>", ...]}
+
+``ref`` is additive over the original schema: entities are normalised to their
+BASE variable name for the ``args`` keys (what the binding interface matches),
+while the full reference string of the deciding clause item is retained.
 
 An argument with no ACC evidence is reported in ``unclassified``; it is never
 defaulted into ``host``, because "no directive mentions it" and "the directives
@@ -29,6 +42,12 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Tuple
+
+from fparser.common.readfortran import FortranStringReader
+from fparser.two import Fortran2003 as f03
+from fparser.two.parser import ParserFactory
+from fparser.two.utils import FortranSyntaxError, walk
 
 #: Clauses proving the data has a device copy at call time.  ``DELETE`` /
 #: ``DETACH`` qualify: only device-resident data can be removed from the device.
@@ -65,11 +84,13 @@ DEVICE_CLAUSES = frozenset({
 #: ``UPDATE SELF`` stays ``device``.
 HOST_CLAUSES = frozenset({"no_create", "host", "self"})
 
+#: cpp macros assumed defined when selecting preprocessor arms.  ``_OPENACC``
+#: models the GPU build whose residency this pass reconstructs.
+DEFAULT_CPP_DEFINES = frozenset({"_OPENACC"})
+
 _ACC_SENTINEL_RE = re.compile(r"^\s*!\s*\$\s*acc\b", re.IGNORECASE)
 _IDENT_RE = re.compile(r"\s*([A-Za-z_]\w*)")
 _CLAUSE_RE = re.compile(r"([A-Za-z_]\w*)\s*\(")
-_ROUTINE_END_RE = re.compile(r"^\s*end\s*(?:subroutine|function)\b", re.IGNORECASE)
-_ROUTINE_DECL_RE = re.compile(r"^\s*(?:[\w*(),:=\s]*?\b)?(?:subroutine|function)\s+[A-Za-z_]\w*", re.IGNORECASE)
 
 #: Directive heads whose second word is part of the head itself.
 _TWO_WORD_HEADS = frozenset({"end data", "enter data", "exit data", "end host_data"})
@@ -91,6 +112,102 @@ def _strip_comment(line: str) -> str:
         elif ch == "!":
             return line[:i]
     return line
+
+
+# ---------------------------------------------------------------------------
+# cpp arm selection (line-count preserving) + fparser parse
+# ---------------------------------------------------------------------------
+
+
+def _cpp_expr_true(expr: str, defines: frozenset) -> bool:
+    """Best-effort truth of a ``#if`` expression: ``defined(X)`` resolves against
+    ``defines``, unknown identifiers count as 0, unparseable means False."""
+    e = re.sub(r"defined\s*\(\s*(\w+)\s*\)", lambda m: "1" if m.group(1) in defines else "0", expr)
+    e = re.sub(r"defined\s+(\w+)", lambda m: "1" if m.group(1) in defines else "0", e)
+    e = re.sub(r"\b[A-Za-z_]\w*\b", "0", e)
+    e = e.replace("&&", " and ").replace("||", " or ").replace("!", " not ")
+    try:
+        return bool(eval(e))  # arithmetic/logic over literals only after the rewrites
+    except Exception:
+        return False
+
+
+def _mask_cpp(source: str, defines: frozenset) -> str:
+    """Comment out cpp directive lines and every line of a not-taken arm,
+    preserving the line count so fparser spans keep pointing at the original."""
+    out: List[str] = []
+    stack: List[List[bool]] = []  # [taken_now, taken_ever] per open #if
+    for line in source.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            directive = stripped[1:].lstrip()
+            word = re.match(r"\w*", directive).group(0)
+            rest = directive[len(word):].strip()
+            if word == "ifdef":
+                taken = rest.split()[0] in defines if rest.split() else False
+                stack.append([taken, taken])
+            elif word == "ifndef":
+                taken = rest.split()[0] not in defines if rest.split() else False
+                stack.append([taken, taken])
+            elif word == "if":
+                taken = _cpp_expr_true(rest, defines)
+                stack.append([taken, taken])
+            elif word == "elif" and stack:
+                taken = (not stack[-1][1]) and _cpp_expr_true(rest, defines)
+                stack[-1] = [taken, stack[-1][1] or taken]
+            elif word == "else" and stack:
+                taken = not stack[-1][1]
+                stack[-1] = [taken, True]
+            elif word == "endif" and stack:
+                stack.pop()
+            out.append("!" + line)
+            continue
+        out.append(line if all(f[0] for f in stack) else "!" + line)
+    return "\n".join(out)
+
+
+_PARSER = None
+
+
+def _parser():
+    global _PARSER
+    if _PARSER is None:
+        _PARSER = ParserFactory().create(std="f2008")
+    return _PARSER
+
+
+def _parse(source: str, defines: Iterable[str] = DEFAULT_CPP_DEFINES) -> f03.Program:
+    """fparser AST of ``source`` (comments retained), after cpp arm selection."""
+    masked = _mask_cpp(source, frozenset(defines))
+    try:
+        return _parser()(FortranStringReader(masked, ignore_comments=False))
+    except FortranSyntaxError as exc:
+        raise ValueError(f"fparser could not parse the source: {exc}") from exc
+
+
+_SCOPE_CLASSES = (f03.Subroutine_Subprogram, f03.Function_Subprogram)
+_SCOPE_STMT_CLASSES = (f03.Subroutine_Stmt, f03.Function_Stmt)
+
+
+def _routine_node(ast: f03.Program, routine: str):
+    """The subprogram node defining ``routine`` (first match, like the old scan)."""
+    want = routine.lower()
+    for scope in walk(ast, _SCOPE_CLASSES):
+        stmt = next(iter(walk(scope, _SCOPE_STMT_CLASSES)), None)
+        if stmt is not None and str(stmt.children[1]).lower() == want:
+            return scope
+    raise ValueError(f"routine {routine!r} not found in source")
+
+
+def _node_span(node) -> Tuple[int, int]:
+    """1-based (first, last) source line of ``node``'s subtree."""
+    spans = [n.item.span for n in walk(node) if getattr(n, "item", None) is not None]
+    return min(s[0] for s in spans), max(s[1] for s in spans)
+
+
+# ---------------------------------------------------------------------------
+# Directive extraction (continuation-joined) + clause/entity tokenizer
+# ---------------------------------------------------------------------------
 
 
 class _Logical:
@@ -115,39 +232,35 @@ class _Logical:
         return self.line
 
 
-def _join_continuations(lines, index, sentinel):
-    """Collect the physical pieces of one logical statement starting at ``index``."""
-    pieces, i = [], index
-    while i < len(lines):
-        if sentinel is None:
-            body = _strip_comment(lines[i])
-        else:
-            match = sentinel.match(lines[i])
-            if match is None:
-                break
-            body = _strip_comment(lines[i][match.end():])
-        body = body.rstrip()
-        continued = body.endswith("&")
-        if continued:
-            body = body[:-1]
-        body = body.strip()
-        if body.startswith("&"):
-            body = body[1:].strip()
-        pieces.append((i + 1, body))
-        if not continued:
-            break
-        i += 1
-    return pieces, i
+def _sentinel_body(line: str) -> Tuple[str, bool]:
+    """The directive text of one physical ``!$acc`` line, plus its continues-flag."""
+    match = _ACC_SENTINEL_RE.match(line)
+    body = _strip_comment(line[match.end():]).rstrip()
+    continued = body.endswith("&")
+    if continued:
+        body = body[:-1]
+    body = body.strip()
+    if body.startswith("&"):
+        body = body[1:].strip()
+    return body, continued
 
 
-def acc_directives(source: str):
+def acc_directives(source: str) -> List[_Logical]:
     """Yield every ``!$ACC`` directive of ``source`` as a :class:`_Logical`."""
     lines = source.splitlines()
     out, i = [], 0
     while i < len(lines):
-        if _ACC_SENTINEL_RE.match(lines[i]):
-            pieces, i = _join_continuations(lines, i, _ACC_SENTINEL_RE)
-            out.append(_Logical(pieces))
+        if not _ACC_SENTINEL_RE.match(lines[i]):
+            i += 1
+            continue
+        pieces = []
+        body, continued = _sentinel_body(lines[i])
+        pieces.append((i + 1, body))
+        while continued and i + 1 < len(lines) and _ACC_SENTINEL_RE.match(lines[i + 1]):
+            i += 1
+            body, continued = _sentinel_body(lines[i])
+            pieces.append((i + 1, body))
+        out.append(_Logical(pieces))
         i += 1
     return out
 
@@ -162,8 +275,15 @@ def _head(text: str) -> str:
     return words[0].lower()
 
 
-def _clause_args(text: str, start: int, end: int):
-    """Base names and absolute offsets of a clause's comma-separated items."""
+def _clause_entities(text: str, start: int, end: int):
+    """``(base_name, full_ref, offset)`` per comma-separated clause item.
+
+    An item is a variable reference: plain name, component path (``a%b%c``),
+    or either with array-section subscripts (``v(:, :, jb)``); the base name
+    is the leading identifier, the full ref is the item with whitespace
+    removed.  Items that do not start with an identifier (e.g. a ``*``) are
+    skipped.
+    """
     out, depth, token_start = [], 0, start
     for i in range(start, end + 1):
         ch = text[i] if i < end else ","
@@ -172,15 +292,17 @@ def _clause_args(text: str, start: int, end: int):
         elif ch == ")":
             depth -= 1
         if ch == "," and depth == 0:
-            match = _IDENT_RE.match(text, token_start)
-            if match is not None and match.end() <= i:
-                out.append((match.group(1).lower(), match.start(1)))
+            item = text[token_start:i]
+            match = _IDENT_RE.match(item)
+            if match is not None:
+                ref = re.sub(r"\s+", "", item)
+                out.append((match.group(1).lower(), ref, token_start + match.start(1)))
             token_start = i + 1
     return out
 
 
 def _clauses(logical: _Logical):
-    """Yield ``(clause_name, [(base_name, offset), ...])`` for one directive."""
+    """Yield ``(clause_name, [(base, ref, offset), ...])`` for one directive."""
     text, i = logical.text, 0
     while True:
         match = _CLAUSE_RE.search(text, i)
@@ -193,79 +315,50 @@ def _clauses(logical: _Logical):
             elif text[j] == ")":
                 depth -= 1
             j += 1
-        yield match.group(1).lower(), _clause_args(text, match.end(), j - 1)
+        yield match.group(1).lower(), _clause_entities(text, match.end(), j - 1)
         i = j
 
 
-def routine_span(source: str, routine: str):
-    """1-based ``(first_line, last_line)`` of ``routine``'s body."""
-    lines = source.splitlines()
-    name_re = re.compile(r"\b(?:subroutine|function)\s+" + re.escape(routine) + r"\s*[(\s]", re.IGNORECASE)
-    start = None
-    for i, line in enumerate(lines):
-        stripped = line.lstrip()
-        if stripped.startswith("!") or stripped.startswith("#"):
-            continue
-        if _ROUTINE_END_RE.match(line):
-            continue
-        if name_re.search(_strip_comment(line)):
-            start = i
-            break
-    if start is None:
-        raise ValueError(f"routine {routine!r} not found in source")
-    depth = 0
-    for i in range(start + 1, len(lines)):
-        stripped = lines[i].lstrip()
-        if stripped.startswith("!") or stripped.startswith("#"):
-            continue
-        code = _strip_comment(lines[i])
-        if _ROUTINE_END_RE.match(code):
-            if depth == 0:
-                return start + 1, i + 1
-            depth -= 1
-        elif _ROUTINE_DECL_RE.match(code):
-            depth += 1
-    return start + 1, len(lines)
+# ---------------------------------------------------------------------------
+# Public API (unchanged signatures + optional cpp ``defines``)
+# ---------------------------------------------------------------------------
 
 
-def dummy_args(source: str, routine: str):
+def routine_span(source: str, routine: str, defines: Iterable[str] = DEFAULT_CPP_DEFINES) -> Tuple[int, int]:
+    """1-based ``(first_line, last_line)`` of ``routine``'s definition."""
+    return _node_span(_routine_node(_parse(source, defines), routine))
+
+
+def dummy_args(source: str, routine: str, defines: Iterable[str] = DEFAULT_CPP_DEFINES) -> List[str]:
     """Dummy argument names of ``routine``, in declaration order, lowercased."""
-    lines = source.splitlines()
-    start = routine_span(source, routine)[0] - 1
-    pieces, _ = _join_continuations(lines, start, None)
-    stmt = " ".join(piece for _, piece in pieces)
-    match = re.search(r"\b(?:subroutine|function)\s+" + re.escape(routine) + r"\s*\(", stmt, re.IGNORECASE)
-    if match is None:
+    node = _routine_node(_parse(source, defines), routine)
+    stmt = next(iter(walk(node, _SCOPE_STMT_CLASSES)))
+    args = next(iter(walk(stmt, f03.Dummy_Arg_List)), None)
+    if args is None:
         return []
-    depth, j = 1, match.end()
-    while j < len(stmt) and depth:
-        if stmt[j] == "(":
-            depth += 1
-        elif stmt[j] == ")":
-            depth -= 1
-        j += 1
-    out = []
-    for item in stmt[match.end():j - 1].split(","):
-        ident = _IDENT_RE.match(item)
-        if ident is not None:
-            name = ident.group(1).lower()
-            if name not in out:
-                out.append(name)
+    out: List[str] = []
+    for name in walk(args, f03.Name):
+        low = name.string.lower()
+        if low not in out:
+            out.append(low)
     return out
 
 
-def collect_evidence(source: str, routine: str):
-    """Map ``arg -> [(depth, order, clause, line)]`` from the routine's directives.
-
-    ``depth`` counts enclosing structured data regions; a region's own clauses
-    are recorded at the depth they open, so a nested ``!$ACC DATA`` outranks the
-    outer one while a compute construct directly inside a region ties with it
-    and loses on ``order``.
-    """
-    first, last = routine_span(source, routine)
-    args = set(dummy_args(source, routine))
-    evidence, depth, order = {}, 0, 0
-    for logical in acc_directives(source):
+def _collect_evidence_impl(source: str, routine: str, defines: Iterable[str]) -> Dict[str, list]:
+    ast = _parse(source, defines)
+    node = _routine_node(ast, routine)
+    first, last = _node_span(node)
+    stmt = next(iter(walk(node, _SCOPE_STMT_CLASSES)))
+    args = set()
+    arg_list = next(iter(walk(stmt, f03.Dummy_Arg_List)), None)
+    if arg_list is not None:
+        args = {n.string.lower() for n in walk(arg_list, f03.Name)}
+    # Directive scan runs over the cpp-masked text so only live-arm directives
+    # count, matching the parsed structure the spans came from.
+    masked = _mask_cpp(source, frozenset(defines))
+    evidence: Dict[str, list] = {}
+    depth, order = 0, 0
+    for logical in acc_directives(masked):
         if not first <= logical.line <= last:
             continue
         head = _head(logical.text)
@@ -277,17 +370,32 @@ def collect_evidence(source: str, routine: str):
         for clause, items in _clauses(logical):
             if clause not in DEVICE_CLAUSES and clause not in HOST_CLAUSES:
                 continue
-            for name, offset in items:
-                if name in args:
-                    evidence.setdefault(name, []).append((depth, order, clause, logical.line_at(offset)))
+            for base, ref, offset in items:
+                if base in args:
+                    evidence.setdefault(base, []).append((depth, order, clause, logical.line_at(offset), ref))
                     order += 1
     return evidence
 
 
-def classify(source: str, routine: str, source_name: str) -> dict:
+def collect_evidence(source: str,
+                     routine: str,
+                     defines: Iterable[str] = DEFAULT_CPP_DEFINES) -> Dict[str, list]:
+    """Map ``arg -> [(depth, order, clause, line, ref)]`` from the routine's
+    directives.
+
+    ``depth`` counts enclosing structured data regions; a region's own clauses
+    are recorded at the depth they open, so a nested ``!$ACC DATA`` outranks the
+    outer one while a compute construct directly inside a region ties with it
+    and loses on ``order``.  ``ref`` is the full entity reference the clause
+    named (``p_diag%vt(:,:,jb)``), whitespace-normalised; ``arg`` is its base.
+    """
+    return _collect_evidence_impl(source, routine, defines)
+
+
+def classify(source: str, routine: str, source_name: str, defines: Iterable[str] = DEFAULT_CPP_DEFINES) -> dict:
     """Build the sidecar payload for ``routine`` in ``source``."""
-    args = dummy_args(source, routine)
-    evidence = collect_evidence(source, routine)
+    args = dummy_args(source, routine, defines)
+    evidence = collect_evidence(source, routine, defines)
     classified, unclassified = {}, []
     for arg in args:
         found = evidence.get(arg, [])
@@ -302,19 +410,20 @@ def classify(source: str, routine: str, source_name: str) -> dict:
             "residency": residency,
             "clause": best[2].upper(),
             "evidence": f"{source_name}:{best[3]}",
+            "ref": best[4],
         }
     return {"routine": routine, "source": source_name, "args": classified, "unclassified": unclassified}
 
 
-def extract_acc_residency(source_path, routine: str) -> dict:
+def extract_acc_residency(source_path, routine: str, defines: Iterable[str] = DEFAULT_CPP_DEFINES) -> dict:
     """Classify ``routine`` in the Fortran file ``source_path``."""
     path = Path(source_path)
-    return classify(path.read_text(), routine, path.name)
+    return classify(path.read_text(), routine, path.name, defines)
 
 
-def write_acc_residency_sidecar(source_path, routine: str, out_dir) -> Path:
+def write_acc_residency_sidecar(source_path, routine: str, out_dir, defines: Iterable[str] = DEFAULT_CPP_DEFINES) -> Path:
     """Write ``<routine>.acc_residency.json`` into ``out_dir``; return its path."""
-    payload = extract_acc_residency(source_path, routine)
+    payload = extract_acc_residency(source_path, routine, defines)
     out = Path(out_dir) / f"{routine}.acc_residency.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(payload, indent=2) + "\n")
@@ -326,13 +435,19 @@ def main(argv=None) -> int:
                                      description="Extract per-argument OpenACC data residency for a Fortran routine.")
     parser.add_argument("source", type=Path, help="Fortran source, ACC directives intact.")
     parser.add_argument("--routine", required=True, help="Target routine name.")
+    parser.add_argument("--define",
+                        action="append",
+                        default=[],
+                        help="Extra cpp macro assumed defined when selecting #if arms "
+                        "(added to the default set: %s)." % ", ".join(sorted(DEFAULT_CPP_DEFINES)))
     parser.add_argument("--out", type=Path, help="Write the sidecar JSON here (default: stdout).")
     parser.add_argument("--out-dir", type=Path, help="Write <routine>.acc_residency.json into this directory.")
     parser.add_argument("--table", action="store_true", help="Also print a human-readable table on stderr.")
     ns = parser.parse_args(argv)
 
+    defines = DEFAULT_CPP_DEFINES | set(ns.define)
     try:
-        payload = extract_acc_residency(ns.source, ns.routine)
+        payload = extract_acc_residency(ns.source, ns.routine, defines)
     except (OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

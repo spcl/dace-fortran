@@ -3,7 +3,7 @@
 Pipeline: merge_used_modules -> inline_to_single_tu(expand_cpp, tolerate_external_uses, monomorphize) -> gfortran -fsyntax-only.
 Runs as a memory-capped subprocess (fparser on the ~140k-line merged closure can OOM the host).  Prints RESULT/TU_PATH/TU_LINES on success.
 
-Usage: _extract_single_tu.py <source_relpath> <module::entry> <out_dir> [mem_gb] [halo_mode] [loop_exchange]
+Usage: _extract_single_tu.py <source_relpath> <module::entry> <out_dir> [mem_gb] [halo_mode] [loop_exchange] [keep_acc]
 """
 import os
 import re
@@ -23,6 +23,7 @@ def main(argv):
     # "0" drops __LOOP_EXCHANGE -- a DIFFERENT kernel, not a reordering: it swaps the automatic
     # transients between (nlev, nproma, nblks) and (nproma, nlev, nblks).
     loop_exchange = argv[6] != "0" if len(argv) > 6 else True
+    keep_acc = argv[7] != "0" if len(argv) > 7 else False
     hard = resource.getrlimit(resource.RLIMIT_AS)[1]
     cap = int(mem_gb * 1024**3)
     if hard != resource.RLIM_INFINITY:
@@ -85,7 +86,8 @@ def main(argv):
                                  specialize_at_source=cfg["specialize_at_source"],
                                  keep_type_components=cfg.get("keep_type_components"),
                                  checkpoint_dir=(os.environ.get("ATMO_CHECKPOINT_DIR") or None),
-                                 tolerate_external_uses=True)
+                                 tolerate_external_uses=True,
+                                 keep_acc_directives=keep_acc)
         n = len(Path(tu).read_text().splitlines())
         log(f"  single TU: {n} lines in {time.time()-t0:.0f}s")
         print(f"TU_PATH: {tu}", flush=True)

@@ -48,6 +48,7 @@ the extractor reports ``velocity_tendencies``' six scalars as
 """
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, Mapping, Sequence, Tuple
@@ -73,12 +74,18 @@ class AccResidencyError(Exception):
 
 @dataclass(frozen=True)
 class AccResidency:
-    """Parsed ``<routine>.acc_residency.json`` sidecar."""
+    """Parsed ``<routine>.acc_residency.json`` sidecar.
+
+    ``refs`` (additive, may be empty for old sidecars) retains the full entity
+    reference string(s) the deciding clause named per argument -- e.g.
+    ``("p_diag%vt(:,:,jb)",)`` -- while ``args`` stays keyed by the base name.
+    """
 
     routine: str
     source: str
     args: Mapping[str, str]
     unclassified: Tuple[str, ...] = ()
+    refs: Mapping[str, Tuple[str, ...]] = field(default_factory=dict)
 
     @property
     def has_device_args(self) -> bool:
@@ -89,17 +96,22 @@ class AccResidency:
     def from_dict(cls, raw: Mapping) -> "AccResidency":
         """Build from the sidecar mapping, rejecting unknown residencies."""
         args = {}
+        refs = {}
         for name, entry in (raw.get("args") or {}).items():
             residency = (entry or {}).get("residency")
             if residency not in (DEVICE, HOST):
                 raise AccResidencyError(f"acc residency sidecar: argument {name!r} has residency "
                                         f"{residency!r}; expected {DEVICE!r} or {HOST!r}")
             args[str(name)] = residency
+            entry_refs = (entry or {}).get("refs") or ([(entry or {}).get("ref")] if (entry or {}).get("ref") else [])
+            if entry_refs:
+                refs[str(name)] = tuple(str(r) for r in entry_refs)
         return cls(
             routine=str(raw.get("routine", "")),
             source=str(raw.get("source", "")),
             args=args,
             unclassified=tuple(str(a) for a in (raw.get("unclassified") or ())),
+            refs=refs,
         )
 
     @classmethod
@@ -171,6 +183,61 @@ def _written_args(sdfg: dace.SDFG, containers: Mapping[str, Tuple[str, ...]]) ->
     return frozenset(arg for arg, names in containers.items() if write_set & set(names))
 
 
+#: Array-section / argument-list parentheses of an entity ref, innermost first.
+_PAREN_GROUP_RE = re.compile(r"\([^()]*\)")
+
+
+def _ref_to_flat_name(ref: str) -> str:
+    """Normalise a sidecar entity ref to its flat-binding-name form.
+
+    ``hlfir-flatten-structs`` names a flattened member ``<dummy>_<member path>``
+    with ``%`` -> ``_``; array-section subscripts select elements, not members,
+    so they are dropped: ``p_diag%vt(:,:,jb)`` -> ``p_diag_vt``.
+    """
+    text = re.sub(r"\s+", "", ref)
+    while _PAREN_GROUP_RE.search(text):
+        text = _PAREN_GROUP_RE.sub("", text)
+    return text.replace("%", "_")
+
+
+def validate_acc_mappability(sdfg: dace.SDFG, residency: AccResidency, arg_order: Iterable[str]) -> None:
+    """Pre-plan invariant: every device-resident sidecar entity the routine's
+    interface exposes must resolve, through the flatten plan frozen into the
+    SDFG's data descriptors, to exactly one flat binding argument.
+
+    Data ICON keeps on the GPU is staged per flat binding buffer; an entity
+    with no flat counterpart (a pruned member, a pointer the flattener could
+    not unpack) has no buffer to stage through, so it must fail loudly here --
+    a pointer on the GPU must be mappable.  A whole-struct entity resolving to
+    several flats is one uniquely-resolved leaf per flat, which is fine.
+    Host-resident and unmentioned arguments keep their existing behaviour.
+    """
+    problems = []
+    for arg in arg_order:
+        if residency.args.get(arg) != DEVICE:
+            continue
+        containers = sdfg_containers_for_arg(sdfg, arg)
+        if is_scalar_arg(sdfg, arg, containers):
+            continue
+        if not containers:
+            problems.append(f"{arg!r} is device-resident but has no flat binding argument in the "
+                            f"SDFG (pointer on GPU must be mappable)")
+            continue
+        for ref in residency.refs.get(arg) or (arg, ):
+            flat = _ref_to_flat_name(ref)
+            exact = [n for n in containers if n == flat]
+            prefixed = [n for n in containers if n.startswith(flat + "_")]
+            if exact:
+                continue
+            if len(prefixed) == 0:
+                problems.append(f"device-resident entity {ref!r} of argument {arg!r} does not resolve "
+                                f"to any flat binding argument (candidates: "
+                                f"{', '.join(containers)}); pointer on GPU must be mappable")
+    if problems:
+        raise AccResidencyError(f"acc residency sidecar for {residency.routine or '<unknown>'} fails the "
+                                f"mappability invariant -- " + "; ".join(problems))
+
+
 def plan_acc_transfers(sdfg: dace.SDFG, residency: AccResidency, arg_order: Iterable[str]) -> AccTransferPlan:
     """Cross the sidecar with the SDFG and return what the wrapper must emit.
 
@@ -198,6 +265,8 @@ def plan_acc_transfers(sdfg: dace.SDFG, residency: AccResidency, arg_order: Iter
     if offenders:
         raise AccResidencyError(f"acc residency sidecar for {residency.routine or '<unknown>'} cannot be "
                                 f"applied -- " + "; ".join(offenders))
+
+    validate_acc_mappability(sdfg, residency, arg_order)
 
     storage = {a: _arg_storage(sdfg, a, containers[a]) for a in buffers}
     written = _written_args(sdfg, {a: containers[a] for a in buffers})

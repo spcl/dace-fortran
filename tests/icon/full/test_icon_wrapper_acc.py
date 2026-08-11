@@ -24,6 +24,7 @@ from dace_fortran.bindings.acc_transfers import (
     AccResidency,
     AccResidencyError,
     plan_acc_transfers,
+    validate_acc_mappability,
 )
 
 _HERE = Path(__file__).resolve().parent
@@ -101,13 +102,15 @@ END MODULE velocity_tendencies_dace_bindings
 """
 
 
-def _sidecar(device=(), host=(), unclassified=(), routine="velocity_tendencies") -> AccResidency:
+def _sidecar(device=(), host=(), unclassified=(), routine="velocity_tendencies", refs=None) -> AccResidency:
     """Build a sidecar payload the way the parse-side extractor writes it."""
     args = {}
     for name in device:
         args[name] = {"residency": "device", "clause": "PRESENT", "evidence": "src.f90:1"}
     for name in host:
         args[name] = {"residency": "host", "clause": "SELF", "evidence": "src.f90:2"}
+    for name, ref in (refs or {}).items():
+        args[name]["ref"] = ref
     return AccResidency.from_dict({
         "routine": routine,
         "source": "src.f90",
@@ -253,6 +256,42 @@ def test_arg_split_across_host_and_gpu_containers_is_an_error():
         plan_acc_transfers(sdfg, _sidecar(device=_ARRAY_ARGS, host=_SCALAR_ARGS), _ARGS)
 
 
+def test_component_ref_resolves_through_the_flatten_plan():
+    """A ``p_diag%vt`` sidecar entity maps to the ``p_diag_vt`` flat container."""
+    storages = {name: dace.StorageType.CPU_Heap for name in _ARRAY_ARGS if name != "p_diag"}
+    storages["p_diag_vt"] = dace.StorageType.CPU_Heap
+    sdfg = _toy_sdfg(storages, written=("p_diag_vt", ))
+    residency = _sidecar(device=_ARRAY_ARGS, host=_SCALAR_ARGS, refs={"p_diag": "p_diag%vt(:,:,jb)"})
+    plan = plan_acc_transfers(sdfg, residency, _ARGS)
+    assert "p_diag" in plan.update_host
+    assert plan.update_device == ("p_diag", )
+
+
+def test_unmappable_device_component_ref_is_an_error():
+    """``p_diag%vt`` device-resident but no ``p_diag_vt`` flat exists."""
+    sdfg = _toy_sdfg({name: dace.StorageType.CPU_Heap for name in _ARRAY_ARGS})
+    residency = _sidecar(device=_ARRAY_ARGS, host=_SCALAR_ARGS, refs={"p_diag": "p_diag%vt"})
+    with pytest.raises(AccResidencyError, match=r"p_diag%vt.*must be mappable"):
+        plan_acc_transfers(sdfg, residency, _ARGS)
+
+
+def test_validate_acc_mappability_is_callable_pre_plan():
+    """The additive helper raises on its own, before any plan is built."""
+    sdfg = _toy_sdfg({name: dace.StorageType.CPU_Heap for name in _ARRAY_ARGS})
+    residency = _sidecar(device=_ARRAY_ARGS, host=_SCALAR_ARGS, refs={"p_metrics": "p_metrics%wgtfac_c"})
+    with pytest.raises(AccResidencyError, match="pointer on GPU must be mappable"):
+        validate_acc_mappability(sdfg, residency, _ARGS)
+    ok = _sidecar(device=_ARRAY_ARGS, host=_SCALAR_ARGS)
+    validate_acc_mappability(sdfg, ok, _ARGS)
+
+
+def test_host_resident_component_ref_is_not_checked():
+    """Host-resident and unmentioned args keep today's behaviour."""
+    sdfg = _toy_sdfg({name: dace.StorageType.CPU_Heap for name in _ARRAY_ARGS})
+    residency = _sidecar(host=_ARRAY_ARGS + _SCALAR_ARGS, refs={"p_diag": "p_diag%vt"})
+    assert not plan_acc_transfers(sdfg, residency, _ARGS).active
+
+
 def test_unknown_residency_word_is_an_error():
     with pytest.raises(AccResidencyError, match="residency"):
         AccResidency.from_dict({"routine": "r", "args": {"a": {"residency": "gpu"}}})
@@ -360,3 +399,71 @@ def test_staged_wrapper_compiles_without_openacc(tmp_path):
 @pytest.mark.skipif(shutil.which("nvfortran") is None, reason="nvfortran not on PATH")
 def test_staged_wrapper_compiles_with_openacc(tmp_path):
     _compile(tmp_path, "nvfortran", ["-acc"])
+
+
+# ----- unified emit_bindings ACC staging ------------------------------------
+
+
+def _emit_fixture(tmp_path: Path, name: str, acc=None) -> str:
+    from dace_fortran.bindings import (FlattenPlan, FrozenArg, FrozenSignature, OriginalArg, OriginalInterface,
+                                       emit_bindings)
+    frozen = FrozenSignature(entry="kernel",
+                             mangled="_QPkernel",
+                             args=(FrozenArg(fortran_name="a",
+                                             sdfg_name="a",
+                                             kind="array",
+                                             dtype="float64",
+                                             rank=1,
+                                             shape=("n", ),
+                                             intent="inout"), ),
+                             free_symbols=("n", ))
+    iface = OriginalInterface(entry="kernel",
+                              args=(OriginalArg(name="a", fortran_type="real(c_double)", rank=1, intent="inout"),
+                                    OriginalArg(name="n", fortran_type="integer(c_int)", rank=0, intent="in")),
+                              used_modules={})
+    out = tmp_path / f"{name}.f90"
+    emit_bindings(frozen, iface, FlattenPlan(entries=()), str(out), acc_residency=acc)
+    return out.read_text()
+
+
+def _staging_plan():
+    sdfg = _toy_sdfg({name: dace.StorageType.CPU_Heap for name in _ARRAY_ARGS}, written=("p_diag", "z_kin_hor_e"))
+    return plan_acc_transfers(sdfg, _sidecar(device=_ARRAY_ARGS, host=_SCALAR_ARGS), _ARGS)
+
+
+def test_emit_bindings_without_acc_plan_is_byte_identical(tmp_path):
+    assert _emit_fixture(tmp_path, "plain") == _emit_fixture(tmp_path, "none", acc=None)
+    assert "!$ACC" not in _emit_fixture(tmp_path, "plain2").upper()
+
+
+def test_emit_bindings_acc_blocks_match_the_icon_wrapper(tmp_path):
+    """The unified emitter must produce exactly the directive sequence the
+    hand-rolled ``render_icon_wrapper`` emits for the same plan."""
+    plan = _staging_plan()
+    unified = [l.strip() for l in _emit_fixture(tmp_path, "acc", acc=plan).splitlines() if "!$ACC" in l.upper()]
+    handrolled = [l.strip() for l in _bil.render_icon_wrapper(plan).splitlines() if "!$ACC" in l.upper()]
+    assert unified == handrolled
+
+
+def test_emit_bindings_acc_staging_brackets_the_wrapper_body(tmp_path):
+    plan = _staging_plan()
+    body = _lines(_emit_fixture(tmp_path, "order", acc=plan))
+    first_update_host = body.index("!$ACC UPDATE HOST(p_prog) ASYNC(1)")
+    call = next(i for i, l in enumerate(body) if l.startswith("call dace_program_kernel("))
+    update_device = body.index("!$ACC UPDATE DEVICE(p_diag) ASYNC(1)")
+    end_sub = body.index("end subroutine kernel_dace")
+    assert body[first_update_host - 1] == "!$ACC WAIT(1)"
+    assert first_update_host < call < update_device < end_sub
+    assert body[body.index("!$ACC UPDATE DEVICE(z_kin_hor_e) ASYNC(1)") + 1] == "!$ACC WAIT(1)"
+
+
+def test_emit_bindings_acc_host_data_wraps_the_sdfg_call(tmp_path):
+    storages = {name: dace.StorageType.GPU_Global for name in _ARRAY_ARGS}
+    sdfg = _toy_sdfg(storages, written=("p_diag", ))
+    plan = plan_acc_transfers(sdfg, _sidecar(device=_ARRAY_ARGS, host=_SCALAR_ARGS), _ARGS)
+    assert plan.use_device == _ARRAY_ARGS
+    body = _lines(_emit_fixture(tmp_path, "hostdata", acc=plan))
+    open_at = body.index("!$ACC HOST_DATA USE_DEVICE(" + ", ".join(_ARRAY_ARGS) + ")")
+    close_at = body.index("!$ACC END HOST_DATA")
+    call = next(i for i, l in enumerate(body) if l.startswith("call dace_program_kernel("))
+    assert open_at < call < close_at
