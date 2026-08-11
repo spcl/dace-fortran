@@ -62,6 +62,10 @@ _GPU_STORAGE = (
 DEVICE = "device"
 HOST = "host"
 
+# ICON launches its dycore kernels on ASYNC(1); putting our copies on the
+# same queue orders them after ICON's in-flight work with no extra fence.
+ACC_QUEUE = 1
+
 
 class AccResidencyError(Exception):
     """A sidecar/SDFG residency crossing with no defined emission."""
@@ -222,8 +226,8 @@ def plan_acc_transfers(sdfg: dace.SDFG, residency: AccResidency, arg_order: Iter
 
 
 def _directive(keyword: str, names: Sequence[str], indent: str) -> list:
-    """One directive per name, so no line needs a continuation marker."""
-    return [f"{indent}!$ACC {keyword}({name})" for name in names]
+    """One async directive per name, so no line needs a continuation marker."""
+    return [f"{indent}!$ACC {keyword}({name}) ASYNC({ACC_QUEUE})" for name in names]
 
 
 def render_pre_call(plan: AccTransferPlan, indent: str = "  ") -> list:
@@ -253,8 +257,11 @@ def render_host_data_close(plan: AccTransferPlan, indent: str = "  ") -> list:
 def render_sync(plan: AccTransferPlan, indent: str = "  ") -> list:
     """The sync line that must precede each ``SYSTEM_CLOCK`` read.
 
-    ICON launches its kernels on ``ASYNC(1)``; without draining that
-    queue the entry read charges us ICON's outstanding work and the exit
-    read returns before the copy-back has landed.
+    ICON launches its kernels on ``ASYNC(1)`` and our copies join the
+    same queue (``ACC_QUEUE``), so ``WAIT(1)`` alone drains everything
+    that matters: without it the entry read charges us ICON's
+    outstanding work and the exit read returns before the copy-back has
+    landed.  Other queues never carry our traffic, so they are not
+    drained.
     """
-    return [f"{indent}!$ACC WAIT"] if plan.active else []
+    return [f"{indent}!$ACC WAIT({ACC_QUEUE})"] if plan.active else []

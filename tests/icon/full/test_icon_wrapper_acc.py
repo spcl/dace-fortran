@@ -95,7 +95,7 @@ CONTAINS
     z_kin_hor_e(1, 1, 1) = z_kin_hor_e(1, 1, 1) + dtime + dt_linintp_ubc
     z_w_concorr_me(1, 1, 1) = REAL(ntnd + istep, c_double)
     z_vt_ie(1, 1, 1) = MERGE(1.0_c_double, 0.0_c_double, lvn_only .OR. ldeepatmo)
-    p_patch%id = p_int%id
+    IF (p_patch%id /= p_int%id) p_prog%vn => NULL()
   END SUBROUTINE velocity_tendencies_dace
 END MODULE velocity_tendencies_dace_bindings
 """
@@ -190,7 +190,7 @@ def test_drift_rule_passes_the_device_pointer_through():
     call = body.index("!$ACC HOST_DATA USE_DEVICE(" + ", ".join(_ARRAY_ARGS) + ")")
     assert body[call + 1].startswith("CALL velocity_tendencies_dace(")
     close = body.index("!$ACC END HOST_DATA")
-    assert body[close + 1] == "!$ACC WAIT"
+    assert body[close + 1] == "!$ACC WAIT(1)"
     assert body[close + 2] == "CALL SYSTEM_CLOCK(COUNT=velo_t1)"
 
 
@@ -274,7 +274,7 @@ def velocity_sdfg():
         return dace.SDFG.from_file(cached)
     if not have_flang():
         pytest.skip("flang not on PATH and $DACE_FORTRAN_VELOCITY_SDFGZ unset")
-    out = Path(dace.Config.get("default_build_folder")) / "_acc_residency_velocity"
+    out = (Path(dace.Config.get("default_build_folder")) / "_acc_residency_velocity").resolve()
     out.mkdir(parents=True, exist_ok=True)
     return build_sdfg(_VELOCITY_SRC.read_text(),
                       out,
@@ -308,13 +308,13 @@ def test_real_velocity_sdfg_stages_every_device_arg(velocity_sdfg, tmp_path):
     exit_ = body.index("CALL SYSTEM_CLOCK(COUNT=velo_t1)")
     call = next(i for i, line in enumerate(body) if line.startswith("CALL velocity_tendencies_dace("))
 
-    assert body[rate + 1] == "!$ACC WAIT"
-    assert body[entry - 1] == "!$ACC WAIT"
-    assert body[exit_ - 1] == "!$ACC WAIT"
-    assert body[entry + 1:call] == [f"!$ACC UPDATE HOST({name})" for name in _ARRAY_ARGS]
+    assert body[rate + 1] == "!$ACC WAIT(1)"
+    assert body[entry - 1] == "!$ACC WAIT(1)"
+    assert body[exit_ - 1] == "!$ACC WAIT(1)"
+    assert body[entry + 1:call] == [f"!$ACC UPDATE HOST({name}) ASYNC(1)" for name in _ARRAY_ARGS]
 
     after = body[call + 4:exit_ - 1]
-    assert after == [f"!$ACC UPDATE DEVICE({name})" for name in plan.update_device]
+    assert after == [f"!$ACC UPDATE DEVICE({name}) ASYNC(1)" for name in plan.update_device]
     assert "!$ACC HOST_DATA" not in " ".join(body)
 
 
