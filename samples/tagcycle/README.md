@@ -61,6 +61,31 @@ The measurement job may also be submitted without the dependency chain when the 
 warm at the target tag; if the caches are cold it aborts loudly within seconds instead of
 rebuilding on a compute node (`DACE_FORTRAN_NO_REBUILD=1` plus the frozen clone).
 
+## Experiment matrix (CPU)
+
+Legend: ✅ measured, ⚠️ supported but not yet run, ❌ not available. CPU experiments (this
+harness) run BOTH shape variants per kernel; GPU experiments (separate harness, `probe/gpu`) run
+only the big flat variant (cloudsc klon huge, nblks=1; velocity nproma=30720, nblks_e=1).
+
+**cloudsc (klon + nblks):**
+
+| config | gcc | llvm | nvhpc |
+|---|---|---|---|
+| dace-optimize | ✅ measured | ✅ measured | ❌ no dace-nvhpc lane exists in the harness |
+| autopar | ⚠️ supported (`-ftree-parallelize-loops`), never run | ❌ flang has no autopar flag — genuinely unsupported | ❌ nvfortran has `-Mconcur` but no harness arm written |
+| original OpenMP / OpenACC-CPU | ⚠️ `original-openmp` arm exists, never run | ❌ no arm (only the gcc one is wired) | ⚠️ `openacc-cpu` arm exists, blocked on an nvfortran-built HDF5 |
+
+**velocity (loopexch + noloopexch):**
+
+| config | gcc | llvm | nvhpc |
+|---|---|---|---|
+| dace-optimize | ✅ measured* | ✅ measured* | ❌ no lane |
+| autopar | ⚠️ supported, never run | ❌ impossible (flang) | ❌ no arm |
+| original | ❌ no OpenMP source exists — the original twin is OpenACC-only | ❌ | ⚠️ `openacc-cpu` arm exists, being wired now |
+
+\* noloopexch was measured at the wrong shape (32x960) in job 4391146; fixed in 2f1f38b to
+nproma=30720, nblks_e=1; velocity dace lanes need re-measurement.
+
 ## Rules the scripts encode
 
 - Never `numactl` inside an `srun` cpuset: the node exposes 36 NUMA nodes and
