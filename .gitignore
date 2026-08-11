@@ -296,3 +296,7 @@ samples/env.sh
 !samples/velocity_tendencies/velocity_advection_acc.f90
 !samples/velocity_tendencies/velocity_advection_noloopexch_acc.f90
 !samples/velocity_tendencies/driver_velocity.f90
+
+# crash artifacts + build-bridge runtime lock
+core_*
+dace_fortran/.build_bridge.lock
