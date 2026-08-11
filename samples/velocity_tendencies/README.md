@@ -117,6 +117,27 @@ VELO_TIMER istep=1 lvn=0 ms=4.707100000E-002 path=run_velocity_flat_c
 read immediately before and after the call; `istep` and `lvn_only` are dummy arguments at both
 sites, so every line is labelled and the parser never has to cluster.
 
+The `COUNT_RATE` query is a statement of its own, so each of the two timer reads is a bare
+single `CALL SYSTEM_CLOCK(COUNT=...)` at the call boundary:
+
+```fortran
+CALL SYSTEM_CLOCK(COUNT_RATE=velo_rate)
+CALL SYSTEM_CLOCK(COUNT=velo_t0)
+CALL velocity_tendencies(...)
+CALL SYSTEM_CLOCK(COUNT=velo_t1)
+```
+
+A future GPU variant slots its synchronisation directly in front of each read without
+restructuring anything: `!$ACC WAIT` for the OpenACC case, a device sync for the CUDA case
+(entry sync before `velo_t0`, exit sync before `velo_t1`, so both reads land *after* their
+sync). No GPU path is implemented here -- this is CPU only.
+
+`VELO_FC` (default `gfortran`) is the single place a Fortran compiler is named: the runner
+exports it and the test reads it, because ICON and the SDFG binding it dispatches into must be
+built by the same compiler. The runner records the resolved path and version of `VELO_FC` and
+of `flang` into the log as a `VELO_TOOLCHAIN` line, so a captured log carries the provenance of
+its own numbers.
+
 ```
 bash run_icon_velo_timing.sh          # PASSES / VELO_REPS / CONFIGS / TEST / KEXPR / OUT_DIR
 python parse_icon_timers.py <log> --csv <out.csv>

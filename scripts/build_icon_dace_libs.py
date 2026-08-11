@@ -130,7 +130,8 @@ SUBROUTINE velocity_tendencies_dace_icon(p_prog, p_patch, p_int, p_metrics, p_di
   INTEGER(c_int)       :: velo_lvn
   REAL(c_double)       :: velo_ms
   CHARACTER(LEN=32)    :: velo_buf
-  CALL SYSTEM_CLOCK(COUNT=velo_t0, COUNT_RATE=velo_rate)
+  CALL SYSTEM_CLOCK(COUNT_RATE=velo_rate)
+  CALL SYSTEM_CLOCK(COUNT=velo_t0)
   CALL velocity_tendencies_dace(p_prog, p_patch, p_int, p_metrics, p_diag, &
                                 z_w_concorr_me, z_kin_hor_e, z_vt_ie, &
                                 ntnd, istep, lvn_only, &

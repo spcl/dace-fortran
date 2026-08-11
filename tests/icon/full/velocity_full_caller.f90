@@ -491,7 +491,8 @@ SUBROUTINE run_velocity_flat_c(nproma, nlev, nlevp1, nblks_c, nblks_e, nblks_v, 
   p_metrics % deepatmo_gradh_ifc => p_metrics_deepatmo_gradh_ifc
   p_metrics % deepatmo_invr_ifc  => p_metrics_deepatmo_invr_ifc
 
-  CALL SYSTEM_CLOCK(COUNT=velo_t0, COUNT_RATE=velo_rate)
+  CALL SYSTEM_CLOCK(COUNT_RATE=velo_rate)
+  CALL SYSTEM_CLOCK(COUNT=velo_t0)
   CALL velocity_tendencies(p_prog, p_patch, p_int, p_metrics, p_diag, &
                            z_w_concorr_me, z_kin_hor_e, z_vt_ie, &
                            ntnd, istep, &

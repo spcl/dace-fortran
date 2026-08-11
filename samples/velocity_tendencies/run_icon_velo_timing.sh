@@ -17,8 +17,17 @@
 #   TEST        the ICON-integration test to drive
 #   KEXPR       -k selector inside TEST                             (default inline)
 #   OUT_DIR     log + CSV destination                               (default $PWD/velo_timing)
+#   VELO_FC     THE Fortran compiler, single-sourced                (default gfortran)
 #   PYTEST_PY   interpreter that owns dace / dace_fortran / flang
 #   PARSE_PY    interpreter for the parser (numpy only)
+#
+# VELO_FC is the ONE place a Fortran compiler is named.  ICON and the SDFG binding it
+# dispatches into must be built by the same compiler or the derived-type ABI and the module
+# layout do not line up, so the test reads VELO_FC too and nothing hard-codes a compiler name.
+# The resolved absolute path and version of both VELO_FC and flang are recorded into the log as
+# a VELO_TOOLCHAIN line, so a captured log always carries the provenance of its own numbers.
+# KEXPR defaults to `inline` for the same reason: that arm is the one whose link line VELO_FC
+# controls end to end (`build_fortran_library` picks its own compiler internally).
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -67,13 +76,31 @@ PYTEST_PY="$(pick_python "${PYTEST_PY:-}" "${PYTHON:-}" \
 PARSE_PY="$(pick_python "${PARSE_PY:-}" \
     /capstor/scratch/cscs/ybudanaz/aarch64/venv-meas/bin/python "$PYTEST_PY")"
 
+VELO_FC="${VELO_FC:-gfortran}"
+FC_PATH="$(command -v "$VELO_FC" || true)"
+if [ -z "$FC_PATH" ]; then
+    echo "FATAL: VELO_FC=$VELO_FC is not on PATH" >&2
+    echo "ICON_VELO_EXIT=2"
+    exit 2
+fi
+FLANG_PATH="$(command -v flang-22 flang-new-21 flang-new flang 2>/dev/null | head -1)"
+if [ -z "$FLANG_PATH" ]; then
+    echo "FATAL: no flang on PATH -- the binding e2e would SKIP and measure nothing" >&2
+    echo "ICON_VELO_EXIT=2"
+    exit 2
+fi
+FC_VERSION="$("$FC_PATH" --version 2>&1 | head -1)"
+FLANG_VERSION="$("$FLANG_PATH" --version 2>&1 | head -1)"
+
 : > "$LOG"
 
 export PYTHONUNBUFFERED=1
 export PYTHONHASHSEED=0
 export MPI4PY_RC_INITIALIZE=0
-export VELO_REPS
+export VELO_REPS VELO_FC
 
+echo "VELO_TOOLCHAIN fc=$FC_PATH fc_version='$FC_VERSION' flang=$FLANG_PATH flang_version='$FLANG_VERSION'" \
+    | tee -a "$LOG"
 echo "velo-timing: repo=$REPO"
 echo "velo-timing: test=$TEST -k $KEXPR passes=$PASSES reps=$VELO_REPS configs='$CONFIGS'"
 echo "velo-timing: pytest_py=$PYTEST_PY parse_py=$PARSE_PY"

@@ -39,9 +39,14 @@ from dace_fortran.bindings import (
     emit_bindings,
 )
 
+#: Single source for the Fortran compiler that builds BOTH the reference .so and the .so that
+#: links the SDFG.  ICON and the binding it dispatches into must be the same compiler, so the
+#: timing harness sets this once and nothing below may hard-code a compiler name.
+_FC = os.environ.get("VELO_FC", "gfortran")
+
 pytestmark = [
     pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH"),
-    pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
+    pytest.mark.skipif(shutil.which(_FC) is None, reason=f"{_FC} not on PATH"),
 ]
 
 _HERE = Path(__file__).resolve().parent
@@ -137,8 +142,7 @@ def _make_sdfg_driver(caller_src: str) -> str:
 
 def _gfortran(out_so: Path, *sources, mod_dir: Path, link_so: Path | None = None):
     cmd = [
-        "gfortran", "-shared", "-fPIC", "-O0", "-fno-fast-math", "-ffp-contract=off", "-ffree-line-length-none",
-        f"-J{mod_dir}"
+        _FC, "-shared", "-fPIC", "-O0", "-fno-fast-math", "-ffp-contract=off", "-ffree-line-length-none", f"-J{mod_dir}"
     ]
     cmd += [str(s) for s in sources]
     cmd += ["-o", str(out_so)]
