@@ -56,6 +56,16 @@ The file's 23 `!$OMP` directives (block-loop level) compile clean under gcc, fla
 alike; flang's own `!$ACC` lowering is broken (see `probe/toolchain_matrix_audit.md`), so this
 variant never passes `-fopenacc` to it. Add it the same way: `VARIANTS="... velocity-openmp"`.
 
+`velocity-icon-integ` is a seventh, likewise composable variant — `samples/velocity_tendencies/run_icon_velo_timing.sh`,
+gcc backend only, driving the ICON-integration binding e2e
+(`tests/icon/full/test_velocity_full_bindings_e2e.py`) once per `(istep, lvn)` configuration across
+both call paths, stock Fortran reference vs the DaCe binding. It sweeps the full 2×2 `(istep, lvn)`
+matrix times the 2 call paths, 4 combinations, and reports single-threaded per-invocation medians —
+this is not a thread sweep, unlike the other six. Each pytest invocation builds under its own
+`tmp_path`-scoped `dacecache`, so the variant is free to run concurrently with the other variants on
+its own socket, or serially after they're warm; nothing about it collides on a shared cache
+directory. Add it the same way: `VARIANTS="... velocity-icon-integ"`.
+
 ## The velocity dataset (R02B06)
 
 Since `prepare_r02b06.sh` the velocity lanes read the real R02B06 grid:
@@ -94,7 +104,19 @@ M=$(sbatch --parsable --dependency=afterok:$W --export=ALL,TAG=$TAG meas_4rank.s
 
 Every stage prints grep-able verdicts to its stdout file: `BRIDGE_BUILD_EXIT=0`;
 `BRIDGE_FRESH=1`, `WARM_<variant>_EXIT=0`, `ARGLIST_DIFF_<variant>=OK`, `REFROZEN=1`;
-`MEAS_<variant>_EXIT=0 rows=<n>` and `MEAS_ALL_EXIT=0`. A `DIVERGED` arglist means the SDFG
+`MEAS_<variant>_EXIT=0 rows=<n>` and `MEAS_ALL_EXIT=0`. `velocity-icon-integ` prints its own set
+instead of the common `MEAS_<variant>_EXIT` line: `VELO_TOOLCHAIN fc=...` (compiler provenance),
+`VELO_PYTEST_EXIT istep=<i> lvn=<l> pass=<p> rc=<n>` (one per pytest invocation), `VELO_SAMPLES=<n>`,
+`VELO_LABELS=present|absent`, `VELO_PARSE_EXIT=0 rows=<n>`, and finally `ICON_VELO_LOG=`,
+`ICON_VELO_CSV=`, `ICON_VELO_EXIT=0`.
+
+`velocity-icon-integ`'s CSV is not the 9-column `kernel,mode,nproma,nblks_e,threads,rep,ms,inputs,lane`
+schema the other six variants write. `parse_icon_timers.py` emits its own 5-column schema —
+`config,count,median_ms,p25,p75` — with one row per `(path,istep,lvn)` instead of one row per
+timed rep, since it reports medians already reduced across the pytest passes rather than raw
+per-invocation samples.
+
+A `DIVERGED` arglist means the SDFG
 signature moved at this commit — read the `.names.diff` under the artifact tree's `logs/` (a
 full-line `.diff` sits beside it for debugging) before trusting any numbers. On a red warm stage
 the clone is deliberately left unfrozen; phase A itself is judged by the `phase A done:` marker in
