@@ -47,6 +47,10 @@ _LAZY = {
     "find_openmpi_include": "dace_fortran.flang_codebase",
     "LIBRARY_STUBS": "dace_fortran.flang_codebase",
     "FLANG_BUG_PATCHES": "dace_fortran.flang_codebase",
+    # OpenACC data-residency pre-pass (reads the ORIGINAL source: the HLFIR path
+    # strips !$ACC before flang, so residency cannot come from the parse tree).
+    "extract_acc_residency": "dace_fortran.acc_residency",
+    "write_acc_residency_sidecar": "dace_fortran.acc_residency",
 }
 
 __all__ = list(_LAZY)
