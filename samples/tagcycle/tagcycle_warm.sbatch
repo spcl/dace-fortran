@@ -28,6 +28,7 @@ VARIANTS="${VARIANTS:-cloudsc-klon cloudsc-nblks velocity-loopexch velocity-nolo
 BASE_TAG="${BASE_TAG:-094035d}"
 BASE_INDEX="$BR2/arglists_${BASE_TAG}.index"
 WARM_PARALLEL="${WARM_PARALLEL:-1}"
+DUMP_PYTHON="${DUMP_PYTHON:-/capstor/scratch/cscs/ybudanaz/aarch64/venv-meas/bin/python}"
 : "${TAG:?TAG must be exported into this job (--export=ALL,TAG=<tag>)}"
 
 mkdir -p "$LOG"
@@ -109,21 +110,25 @@ for v in $VARIANTS; do
         diff_all=1
         continue
     fi
-    "$PYTHON" "$PROBE/dump_arglists.py" "$BR2" "${arts[@]}" >> "$NEW_INDEX"
+    "$DUMP_PYTHON" "$PROBE/dump_arglists.py" "$BR2" "${arts[@]}" >> "$NEW_INDEX"
     verdict=OK
     for a in "${arts[@]}"; do
         new="${a%.sdfgz}.arglist.txt"
         base="${new%_${TAG}.arglist.txt}_${BASE_TAG}.arglist.txt"
+        stem="$LOG/arglist_$(basename "${new%.arglist.txt}")"
         if [ ! -f "$new" ]; then
             echo "  MISSING dump: $new"
             verdict=DIVERGED
         elif [ ! -f "$base" ]; then
             echo "  NO BASELINE: $base"
             verdict=DIVERGED
-        elif ! diff -u <(tail -n +4 "$base") <(tail -n +4 "$new") > "$LOG/arglist_$(basename "${new%.arglist.txt}").diff"; then
-            echo "  SIGNATURE CHANGED: $(basename "$new") vs $(basename "$base")"
-            head -40 "$LOG/arglist_$(basename "${new%.arglist.txt}").diff"
-            verdict=DIVERGED
+        else
+            diff -u <(tail -n +4 "$base") <(tail -n +4 "$new") > "$stem.diff" || true
+            if ! diff -u <(tail -n +4 "$base" | cut -f2) <(tail -n +4 "$new" | cut -f2) > "$stem.names.diff"; then
+                echo "  SIGNATURE CHANGED: $(basename "$new") vs $(basename "$base")"
+                head -40 "$stem.names.diff"
+                verdict=DIVERGED
+            fi
         fi
     done
     echo "ARGLIST_DIFF_${v}=$verdict"

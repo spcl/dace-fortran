@@ -142,6 +142,22 @@ run() { # record the first-worst exit in $rc; a red point must not cost the lane
     return 0
 }
 
+warm_build() {
+    local log="$1" r
+    shift
+    echo "+ $*"
+    "$@" > "$log" 2>&1
+    r=$?
+    cat "$log"
+    if grep -q '^phase A done:' "$log"; then
+        [ "$r" -eq 0 ] || echo "MARKER OK despite rc=$r"
+        return 0
+    fi
+    echo "ERR: no phase A marker in $log (rc=$r)"
+    rc=1
+    return 1
+}
+
 CLOUDSC_DRIVER="$MEAS/samples/cloudsc/run_cloudsc_perf.py"
 VELOCITY_SRC="$MEAS/samples/velocity_tendencies"
 VELOCITY_DRIVER="$VELOCITY_SRC/run_velocity_perf.py"
@@ -219,7 +235,8 @@ case "$VARIANT" in
             }
             if [ "$MODE" = warm ]; then
                 set_omp_lane "$WARM_THREADS" || { rc=1; continue; }
-                run "$PY" "$CLOUDSC_DRIVER" --mode "$m" --backend "$b" --build-only
+                warm_build "$BUILD_ROOT/warm_build.log" \
+                    "$PY" "$CLOUDSC_DRIVER" --mode "$m" --backend "$b" --build-only
             else
                 for t in $THREADS; do
                     if [ "$t" -gt "$LANE_NCORES" ]; then
@@ -252,7 +269,8 @@ case "$VARIANT" in
             }
             if [ "$MODE" = warm ]; then
                 set_omp_lane "$WARM_THREADS" || { rc=1; continue; }
-                run "$PY" "$VELOCITY_DRIVER" --variant "$v" --backend "$b" --build-only
+                warm_build "$BUILD_ROOT/warm_build_${v}.log" \
+                    "$PY" "$VELOCITY_DRIVER" --variant "$v" --backend "$b" --build-only
             else
                 # threads outer / layout inner, matching samples/.../run_velocity.sbatch.
                 for t in $THREADS; do

@@ -88,8 +88,12 @@ M=$(sbatch --parsable --dependency=afterok:$W --export=ALL,TAG=$TAG meas_4rank.s
 Every stage prints grep-able verdicts to its stdout file: `BRIDGE_BUILD_EXIT=0`;
 `BRIDGE_FRESH=1`, `WARM_<variant>_EXIT=0`, `ARGLIST_DIFF_<variant>=OK`, `REFROZEN=1`;
 `MEAS_<variant>_EXIT=0 rows=<n>` and `MEAS_ALL_EXIT=0`. A `DIVERGED` arglist means the SDFG
-signature moved at this commit — read the diff under the artifact tree's `logs/` before trusting
-any numbers. On a red warm stage the clone is deliberately left unfrozen.
+signature moved at this commit — read the `.names.diff` under the artifact tree's `logs/` (a
+full-line `.diff` sits beside it for debugging) before trusting any numbers. On a red warm stage
+the clone is deliberately left unfrozen; phase A itself is judged by the `phase A done:` marker in
+its log rather than by exit code, since the HLFIR bridge can finish all its work and still die
+rc=134 in CPython teardown. `dump_arglists.py` always runs under the pinned `venv-meas` interpreter
+so the baseline and every warm dump read SDFG signatures through the same dace build.
 
 The measurement job may also be submitted without the dependency chain when the caches are already
 warm at the target tag; if the caches are cold it aborts loudly within seconds instead of
