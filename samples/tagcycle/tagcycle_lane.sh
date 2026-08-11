@@ -139,6 +139,23 @@ npz_for() {
     esac
 }
 
+# openacc-cpu is the raw Fortran baseline (driver_velocity.f90 + dump_data.py's stream-binary
+# dump), not the npz the DaCe lanes above read -- same shape labels, different file format.
+VELOCITY_DUMP32="${VELOCITY_DUMP32:-$BR2/velocity_dump_r02b05_nproma32}"
+VELOCITY_DUMP30720="${VELOCITY_DUMP30720:-$BR2/velocity_dump_r02b05_nproma30720}"
+dump_for() {
+    case "$1" in
+        noloopexch) echo "$VELOCITY_DUMP30720" ;;
+        *) echo "$VELOCITY_DUMP32" ;;
+    esac
+}
+nproma_for() {
+    case "$1" in
+        noloopexch) echo 30720 ;;
+        *) echo 32 ;;
+    esac
+}
+
 if [ "$MODE" = meas ]; then
     : "${CSV:?meas mode needs CSV=<path>}"
     [ "${DACE_FORTRAN_NO_REBUILD:-0}" = 1 ] || {
@@ -203,6 +220,73 @@ case "$VARIANT" in
                         --npz "$(npz_for "$v")" --csv "$CSV"
                 done
             done
+        fi
+        ;;
+    velocity-openacc)
+        # shellcheck disable=SC1091
+        . /capstor/scratch/cscs/ybudanaz/aarch64/spack/share/spack/setup-env.sh
+        spack load nvhpc
+        NVFORTRAN="$(command -v nvfortran || true)"
+        [ -n "$NVFORTRAN" ] || {
+            echo "FATAL: no nvfortran on PATH after spack load nvhpc" >&2
+            exit 1
+        }
+        VELOCITY_SRC="$MEAS/samples/velocity_tendencies"
+        VELOCITY_DATA_DIR="${VELOCITY_DATA_DIR:-$VELOCITY_SRC/data_r02b05}"
+        REPS="${REPS:-50}"
+        WARMUP="${WARMUP:-2}"
+        # driver_velocity's automatic transients are hundreds of MB at nproma=32, far more at
+        # nproma=30720 (baselines.sh hits the same wall).
+        ulimit -s unlimited 2> /dev/null || echo "warning: could not raise the stack limit" >&2
+        setup_lane_root "$BR2/velocity_tendencies_openacc" || exit 1
+        DRIVER="$BUILD_ROOT/driver_velocity"
+        if [ "$MODE" = warm ]; then
+            for v in $VELOCITY_VARIANTS; do
+                d="$(dump_for "$v")"
+                [ -f "$d/manifest.txt" ] || run "$PY" "$VELOCITY_SRC/dump_data.py" --data-dir "$VELOCITY_DATA_DIR" \
+                    --nproma "$(nproma_for "$v")" --out "$d"
+            done
+            run "$NVFORTRAN" -O3 -acc=multicore -c "$VELOCITY_SRC/velocity_advection_acc.f90" \
+                -o "$BUILD_ROOT/velocity_advection_acc.o" -module "$BUILD_ROOT"
+            run "$NVFORTRAN" -O3 -acc=multicore -c "$VELOCITY_SRC/driver_velocity.f90" \
+                -o "$BUILD_ROOT/driver_velocity.o" -module "$BUILD_ROOT"
+            run "$NVFORTRAN" -O3 -acc=multicore "$BUILD_ROOT/velocity_advection_acc.o" \
+                "$BUILD_ROOT/driver_velocity.o" -o "$DRIVER"
+        else
+            for v in $VELOCITY_VARIANTS; do
+                d="$(dump_for "$v")"
+                [ -f "$d/manifest.txt" ] || {
+                    echo "FATAL: no velocity dump at $d for $v (warm mode builds it)" >&2
+                    rc=1
+                }
+            done
+            [ -x "$DRIVER" ] || {
+                echo "FATAL: no driver binary at $DRIVER (warm mode builds it)" >&2
+                exit 1
+            }
+            [ "$rc" -eq 0 ] || exit "$rc"
+            for t in $THREADS; do
+                if [ "$t" -gt "$LANE_NCORES" ]; then
+                    echo "skip threads=$t (> $LANE_NCORES cpus in this cpuset)"
+                    continue
+                fi
+                set_omp_lane "$t" || { rc=1; continue; }
+                export ACC_NUM_CORES="$t"
+                for v in $VELOCITY_VARIANTS; do
+                    d="$(dump_for "$v")"
+                    log="$BUILD_ROOT/last_run_${v}_${t}.log"
+                    if ! "$DRIVER" "$d" openacc-cpu "$t" "$REPS" "$WARMUP" > "$log" 2>&1; then
+                        echo "FATAL: driver_velocity failed ($v threads=$t); tail of $log:" >&2
+                        tail -5 "$log" >&2
+                        rc=1
+                        continue
+                    fi
+                    [ -f "$CSV" ] || echo "kernel,mode,nproma,nblks_e,threads,rep,ms,inputs,lane" > "$CSV"
+                    grep '^velocity_tendencies,' "$log" | sed "s/^velocity_tendencies,loopexch,/velocity_tendencies,${v},/" \
+                        | tee -a "$CSV"
+                done
+            done
+            unset ACC_NUM_CORES
         fi
         ;;
     *)
