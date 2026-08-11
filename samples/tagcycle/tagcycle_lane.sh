@@ -520,9 +520,10 @@ case "$VARIANT" in
         fi
         for oc in gcc flang nvhpc; do
             case "$oc" in
-                gcc) ofc="$OMP_GFORTRAN" oflags=(-O3 -march=native -fopenmp) ;;
-                flang) ofc="$OMP_FLANG" oflags=(-O3 -fopenmp) ;;
-                nvhpc) ofc="$OMP_NVFORTRAN" oflags=(-O3 -mp) ;;
+                # module-dir spelling differs: gfortran -J, flang -module-dir, nvfortran -module
+                gcc) ofc="$OMP_GFORTRAN" oflags=(-O3 -march=native -fopenmp) omod=-J ;;
+                flang) ofc="$OMP_FLANG" oflags=(-O3 -fopenmp) omod=-module-dir ;;
+                nvhpc) ofc="$OMP_NVFORTRAN" oflags=(-O3 -mp) omod=-module ;;
             esac
             olane="original-openmp-$oc"
             odir="$BUILD_ROOT/$oc"
@@ -534,9 +535,9 @@ case "$VARIANT" in
             if [ "$MODE" = warm ]; then
                 mkdir -p "$odir" || { rc=1; continue; }
                 run "$ofc" "${oflags[@]}" -c "$VELOCITY_SRC/velocity_advection_acc.f90" \
-                    -o "$odir/velocity_advection_acc.o" -module "$odir"
+                    -o "$odir/velocity_advection_acc.o" "$omod" "$odir"
                 run "$ofc" "${oflags[@]}" -c "$VELOCITY_SRC/driver_velocity.f90" \
-                    -o "$odir/driver_velocity.o" -module "$odir"
+                    -o "$odir/driver_velocity.o" "$omod" "$odir"
                 run "$ofc" "${oflags[@]}" "$odir/velocity_advection_acc.o" "$odir/driver_velocity.o" -o "$ODRIVER"
                 continue
             fi

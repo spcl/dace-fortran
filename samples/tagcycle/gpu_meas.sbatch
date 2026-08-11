@@ -17,7 +17,7 @@
 # shape as the 4-rank CPU job (meas_4rank.sbatch), not a sequential sweep of one device.
 #
 #   cloudsc   cuda-ref (the vendored dwarf CUDA driver)   dace-gpu
-#   velocity  openacc-ref (driver_velocity -acc=gpu       dace-gpu-pipeline   dace-gpu-autoopt
+#   velocity  openacc-ref (driver_velocity -acc=gpu       dace-gpu-pipeline   dace-gpu-manual
 #             against the NOLOOPEXCH ACC twin)
 #
 # LANE -> GPU is positional: lane i takes GPU (i mod NGPU) and lanes are launched in WAVES of NGPU,
@@ -66,7 +66,7 @@ GPUROOT="${GPUROOT:-$BR2/gpu}"
 RUNS="$BR2/runs"
 PROV="$RUNS/PROVENANCE.txt"
 SELF="$MEAS/samples/tagcycle/gpu_meas.sbatch"
-LANES="${LANES:-cuda-ref dace-gpu openacc-ref dace-gpu-pipeline dace-gpu-autoopt}"
+LANES="${LANES:-cuda-ref dace-gpu openacc-ref dace-gpu-pipeline dace-gpu-manual}"
 REPS="${REPS:-50}"
 WARMUP="${WARMUP:-2}"
 # Delay between backgrounded rank launches. Spreads the deck-load I/O only: each rank starts its own
@@ -150,7 +150,7 @@ socket_of_cpu() {
 kernel_of() {
     case "$1" in
         cuda-ref | dace-gpu) echo cloudsc ;;
-        openacc-ref | openacc-ref-loopexch | dace-gpu-pipeline | dace-gpu-autoopt) echo velocity_tendencies ;;
+        openacc-ref | openacc-ref-loopexch | dace-gpu-pipeline | dace-gpu-manual) echo velocity_tendencies ;;
         *) return 1 ;;
     esac
 }
@@ -252,7 +252,7 @@ meas_lane() {
             ensure_alloc_column "$csv"
             return "$r"
             ;;
-        dace-gpu-pipeline | dace-gpu-autoopt)
+        dace-gpu-pipeline | dace-gpu-manual)
             need "$VELOCITY_RUNNER" || return 1
             dace_sigchld_preflight || return 1
             "$PY" "$VELOCITY_RUNNER" --lane "$lane" --reps "$REPS" --csv "$csv" > "$log" 2>&1

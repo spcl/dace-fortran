@@ -42,7 +42,7 @@ MEAS="${MEAS:-/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-meas}"
 BR2="${BR2:-/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-samples-meas}"
 GPUROOT="${GPUROOT:-$BR2/gpu}"
 LOG="$BR2/logs"
-LANES="${LANES:-cuda-ref openacc-ref dace-gpu dace-gpu-pipeline dace-gpu-autoopt}"
+LANES="${LANES:-cuda-ref openacc-ref dace-gpu dace-gpu-pipeline dace-gpu-manual}"
 : "${TAG:?TAG must be exported into this job (--export=ALL,TAG=<tag>)}"
 
 # The GPU matrix is the big flat shapes only; the small-block shapes stay CPU-only by owner rule.
@@ -215,7 +215,7 @@ warm_lane() {
             need_runner "$CLOUDSC_RUNNER" || return 1
             "$PY" "$CLOUDSC_RUNNER" --lane dace-gpu --reps 1 --csv "$GPUROOT/warm_dace-gpu.csv" || return 1
             ;;
-        dace-gpu-pipeline | dace-gpu-autoopt)
+        dace-gpu-pipeline | dace-gpu-manual)
             need_runner "$VELOCITY_RUNNER" || return 1
             "$PY" "$VELOCITY_RUNNER" --lane "$1" --reps 1 --csv "$GPUROOT/warm_$1.csv" || return 1
             ;;

@@ -95,8 +95,10 @@ build_cuda() (
     # --allow-unsupported-compiler: the host compiler is gcc 16.1.0, past nvcc's supported-version
     # wall, which is a hard error rather than a warning. --expt-relaxed-constexpr: the dwarf's
     # __device__ code calls constexpr host functions.
+    # -Xcompiler -fopenmp: cloudsc_driver.cu times with omp_get_wtime; the flag must also
+    # reach the link step or libgomp stays unresolved.
     "$NVCC" -O3 -arch=native -rdc=true -DHAVE_HDF5 \
-        --allow-unsupported-compiler --expt-relaxed-constexpr \
+        --allow-unsupported-compiler --expt-relaxed-constexpr -Xcompiler -fopenmp \
         -I"$DWARF/cloudsc_cuda/cloudsc" ${inc:+-I"$inc"} \
         "$DWARF/cloudsc_cuda/cloudsc/load_state.cu" \
         "$DWARF/cloudsc_cuda/cloudsc/cloudsc_validate.cu" \

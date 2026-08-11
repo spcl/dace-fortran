@@ -3,17 +3,18 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """velocity_tendencies GPU driver: one timed sweep point per invocation, flat nproma=491520.
 
-    run_velocity_gpu.py --lane dace-gpu-pipeline|dace-gpu-autoopt --reps N --csv PATH [--threads-col 0]
+    run_velocity_gpu.py --lane dace-gpu-pipeline|dace-gpu-manual --reps N --csv PATH [--threads-col 0]
 
-Two GPU lanes off the SAME frontend SDFG:
+Two DaCe GPU lanes:
 
-    dace-gpu-pipeline   velocity_pipeline.optimize_velocity (the standalone copy of the
-                        dace-fortran pipeline) + gpu_offload.apply_gpu_offload
-    dace-gpu-autoopt    dace.transformation.auto.auto_optimize(sdfg, DeviceType.GPU), stock DaCe,
-                        no dace-fortran pipeline and no manual offload
+    dace-gpu-pipeline   the automated dace-fortran pipeline off the frontend SDFG:
+                        velocity_pipeline.optimize_velocity + gpu_offload.apply_gpu_offload
+    dace-gpu-manual     the human-written VelocityTendenciesPipeline flow (vtp_manual.py):
+                        VTP's stage-3 artifact through its stage-4 GPU entry point, imported
+                        from the checkout at VTP_DIR, whose git sha is logged at lane start
 
 Reported ``ms`` comes from timer tasklets inside the SDFG; ``host_ms`` is the python wall time.
-The autoopt lane gets the same timer tasklets (and nothing else) so both lanes report the same
+The manual lane gets the same timer tasklets (and nothing else) so both lanes report the same
 quantity.
 """
 from __future__ import annotations
@@ -30,7 +31,7 @@ VARIANT = "noloopexch"
 ENTRY = "mo_velocity_advection::velocity_tendencies"
 TU = "velocity_advection_inlined_no_loop_exchange_single_tu.f90"
 NPROMA = 491520
-LANES = ("dace-gpu-pipeline", "dace-gpu-autoopt")
+LANES = ("dace-gpu-pipeline", "dace-gpu-manual")
 CSV_HEADER = "kernel,mode,nproma,nblks_e,threads,rep,ms,inputs,lane,host_ms"
 DEFAULT_NPZ = f"velocity_r02b06_nproma{NPROMA}.npz"
 
@@ -47,12 +48,6 @@ def frontend_sdfg(build_dir: Path):
 
 def optimize_lane(sdfg, lane: str, verbose: bool, demote: bool = False):
     from gpu_common import report_offload
-    if lane == "dace-gpu-autoopt":
-        import dace
-        from dace.transformation.auto.auto_optimize import auto_optimize
-        auto_optimize(sdfg, dace.DeviceType.GPU)
-        print("lane dace-gpu-autoopt: stock auto_optimize(DeviceType.GPU)", flush=True)
-        return sdfg
     from dace_fortran.bindings.frozen_signature import refreeze
 
     from gpu_offload import apply_gpu_offload
@@ -66,7 +61,7 @@ def optimize_lane(sdfg, lane: str, verbose: bool, demote: bool = False):
 
 
 def add_timers(sdfg):
-    """The autoopt lane is stock DaCe, so it needs the begin/end sync + timer states bolted on."""
+    """The manual lane's SDFG comes from VTP, so it needs the begin/end sync + timer states bolted on."""
     from gpu_offload import (SYNC_TICK, TIMER_BEGIN, TIMER_END, _GLOBAL_CODE, _SYNC_CODE, _TIMER_CODE, _add_host_array,
                              _append, _prepend, _silence_codegen_syncs)
     sdfg.append_global_code(_GLOBAL_CODE)
@@ -77,7 +72,7 @@ def add_timers(sdfg):
     _prepend(sdfg, "__gpu_sync_begin", _SYNC_CODE, SYNC_TICK)
     _append(sdfg, "__gpu_sync_end", _SYNC_CODE, SYNC_TICK)
     _append(sdfg, "__gpu_timer_end", _TIMER_CODE, TIMER_END)
-    _silence_codegen_syncs(sdfg)
+    _silence_codegen_syncs(sdfg, set())
     sdfg.validate()
     return sdfg
 
@@ -87,25 +82,35 @@ def load_gpu_sdfg(lane: str, verbose: bool, demote: bool = False):
 
     from gpu_common import cache_root, git_describe
     root = cache_root()
-    tag = f"velocity_{VARIANT}_{git_describe()}"
+    if lane == "dace-gpu-manual":
+        import vtp_manual
+        tag = f"velocity_{vtp_manual.vtp_variant()}_{vtp_manual.vtp_describe().replace('/', '-')}"
+    else:
+        tag = f"velocity_{VARIANT}_{git_describe()}"
     gpu_cache = root / f"{tag}_{lane}{'_demoted' if demote else ''}.sdfgz"
     if gpu_cache.is_file():
         print(f"phase A: GPU cache hit {gpu_cache}", flush=True)
         return SDFG.from_file(str(gpu_cache))
-    sdfg = frontend_sdfg(root / f"{tag}_{lane}")
-    optimize_lane(sdfg, lane, verbose, demote)
-    if lane == "dace-gpu-autoopt":
+    if lane == "dace-gpu-manual":
+        sdfg = vtp_manual.build_manual_sdfg()
         add_timers(sdfg)
+    else:
+        sdfg = frontend_sdfg(root / f"{tag}_{lane}")
+        optimize_lane(sdfg, lane, verbose, demote)
     sdfg.save(str(gpu_cache), compress=True)
     return sdfg
 
 
-def build_call(sdfg, npz: Path):
+def build_call(sdfg, npz: Path, lane: str):
     import run_velocity_perf as cpu
 
     from gpu_offload import timer_arrays
     arrays, meta = cpu.load_npz(npz)
-    call = cpu.bind_call(sdfg, arrays, meta)
+    if lane == "dace-gpu-manual":
+        import vtp_manual
+        call = vtp_manual.bind_manual_call(sdfg, arrays, meta)
+    else:
+        call = cpu.bind_call(sdfg, arrays, meta)
     call.update(timer_arrays())
     return call, cpu.snapshot_outputs(call), meta
 
@@ -137,14 +142,19 @@ def main() -> int:
         return 0
 
     npz = args.npz or _find_npz()
-    call, pristine, meta = build_call(sdfg, npz)
+    call, pristine, meta = build_call(sdfg, npz, args.lane)
     import run_velocity_perf as cpu
     inputs = cpu.inputs_kind(npz)
+
+    mode = VARIANT
+    if args.lane == "dace-gpu-manual":
+        import vtp_manual
+        mode = vtp_manual.vtp_variant().removeprefix("velocity_no_nproma_")
 
     print(CSV_HEADER, flush=True)
     rows = timed_loop(
         compiled, call, pristine, args.reps, args.warmup, lambda rep, ms, host_ms:
-        (f"velocity_tendencies,{VARIANT},{meta['nproma']},{meta['nblks_e']},{args.threads_col},{rep},{ms:.3f},"
+        (f"velocity_tendencies,{mode},{meta['nproma']},{meta['nblks_e']},{args.threads_col},{rep},{ms:.3f},"
          f"{inputs},{args.lane},{host_ms:.3f}"))
     if args.csv is not None:
         append_csv(args.csv, CSV_HEADER, rows)
@@ -167,4 +177,16 @@ def _find_npz() -> Path:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        rc = main()
+    except SystemExit as exc:
+        rc = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+        if not isinstance(exc.code, (int, type(None))):
+            print(exc.code, file=sys.stderr)
+    # os._exit skips interpreter teardown, which aborts (glibc heap corruption, exit 134)
+    # under the current dace AFTER the run has already printed its terminal state -- the
+    # sbatch wrappers judge lanes by exit code, so the teardown must not overwrite it.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    import os
+    os._exit(rc)

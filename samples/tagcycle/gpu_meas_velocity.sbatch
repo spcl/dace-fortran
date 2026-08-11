@@ -16,7 +16,7 @@
 # (nblks_e = 1) on the R02B06 deck --
 #   rank 0  openacc-ref          GPU 0, socket 0
 #   rank 1  dace-gpu-pipeline    GPU 1, socket 1
-#   rank 2  dace-gpu-autoopt     GPU 2, socket 2
+#   rank 2  dace-gpu-manual      GPU 2, socket 2
 # 50 reps each, each rank socket-pinned with --cpu-bind=cores --mem-bind=local and holding a third
 # of the node's memory. Wall time is the slowest single lane (~8-10 min), not their sum.
 #
@@ -35,5 +35,5 @@
 set -uo pipefail
 
 MEAS="${MEAS:-/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-meas}"
-export LANES="${LANES:-openacc-ref dace-gpu-pipeline dace-gpu-autoopt}"
+export LANES="${LANES:-openacc-ref dace-gpu-pipeline dace-gpu-manual}"
 exec bash "$MEAS/samples/tagcycle/gpu_meas.sbatch"

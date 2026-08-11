@@ -181,12 +181,26 @@ node's memory. Only the big flat shapes: cloudsc `NGPTOT=65536 NPROMA=128`, velo
 |---|---|---|---|---|
 | `gpu_warm.sbatch` | `normal` | 1 h | 1 × 1, sequential | builds the cloudsc CUDA binary (`nvcc`) and the velocity `-acc=gpu` driver against the noloopexch ACC twin (`nvfortran`), generates the flat R02B06 dump, warms all three DaCe GPU caches at `--reps 1` |
 | `gpu_meas_cloudsc.sbatch` | `debug` | 30 min | 2 × 1, one wave | **submit this**: `cuda-ref` on GPU 0, `dace-gpu` on GPU 1, 50 reps. ~6 min |
-| `gpu_meas_velocity.sbatch` | `debug` | 30 min | 3 × 1, one wave | **submit this**: `openacc-ref` GPU 0, `dace-gpu-pipeline` GPU 1, `dace-gpu-autoopt` GPU 2, 50 reps. ~8–10 min |
+| `gpu_meas_velocity.sbatch` | `debug` | 30 min | 3 × 1, one wave | **submit this**: `openacc-ref` GPU 0, `dace-gpu-pipeline` GPU 1, `dace-gpu-manual` GPU 2, 50 reps. ~8–10 min |
 | `gpu_meas.sbatch` | `debug` | 30 min | 4 × 1, two waves | all five lanes — the shared body the two halves above `exec` into. ~15 min; useful as a one-slot smoke run |
 
 Wall time is now the **slowest lane in a wave**, not the sum: the velocity half dropped from ~20 min
 sequential to ~8–10 min, and all three forms sit comfortably inside the 30-minute debug cap. The
 split pair is still what to submit — two short jobs beat one that has to fit two waves.
+
+Velocity lane semantics: `dace-gpu-pipeline` is the **automated** dace-fortran pipeline
+(`velocity_pipeline.optimize_velocity` + `gpu_offload.apply_gpu_offload`, unchanged);
+`dace-gpu-manual` is the **human-written** VelocityTendenciesPipeline flow (`samples/gpu/
+vtp_manual.py`): the VTP stage-3 artifact run through VTP's stage-4 GPU entry point, imported from
+the checkout at `VTP_DIR` (default `/capstor/scratch/cscs/ybudanaz/aarch64/VelocityTendenciesPipeline`,
+variant via `VTP_VARIANT`), with that checkout's `git describe` sha logged at lane start and baked
+into the phase-A cache name so every measurement records pipeline provenance. The former
+`dace-gpu-autoopt` lane (stock `auto_optimize`) is removed everywhere by owner decision.
+The manual lane binds the harness deck (single source of truth) to VTP's SoA signature via
+`vtp_manual.bind_manual_call`; the deck holds one timestep (`istep=1`, `lvn_only=0`), so the lane
+is pinned to the matching variant `if_prop_lvn_only_0_istep_1` and refuses a mismatched
+`VTP_VARIANT`. The ICON-integration measurement (separate, later) will measure all 4 VTP variants
+as separate rows, since ICON exercises every timestep combination.
 
 ## ICON integration jobs (CPU, no MPI)
 
@@ -224,7 +238,7 @@ variable.
 | kernel | reference lane | DaCe lanes |
 |---|---|---|
 | cloudsc | `cuda-ref` — vendored `cloudsc_cuda` driver, `nvcc` | `dace-gpu` |
-| velocity | `openacc-ref` — `driver_velocity.f90` + `velocity_advection_noloopexch_acc.f90`, `nvfortran -acc=gpu` | `dace-gpu-pipeline`, `dace-gpu-autoopt` |
+| velocity | `openacc-ref` — `driver_velocity.f90` + `velocity_advection_noloopexch_acc.f90`, `nvfortran -acc=gpu` | `dace-gpu-pipeline` (automated), `dace-gpu-manual` (VTP) |
 
 `openacc-ref-loopexch` is a sixth, composable lane: the same build against the `loopexch` twin
 (`velocity_advection_acc.f90`). It is available in both stages but deliberately **out of the default
