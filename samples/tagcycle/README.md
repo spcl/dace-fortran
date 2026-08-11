@@ -90,30 +90,19 @@ running the timed calls. Both decks are produced by
 ## Running a cycle
 
 ```bash
-# 1. login node: unfreeze the clone and move it to the new commit (submits nothing)
+# 1. login node: unfreeze the clone, move it to the new commit, sync the job scripts
+#    into $PROBE (submits nothing, prints the whole submission chain below)
 bash tagcycle_prepare.sh <tag>
-
-# 2. rebuild the native bridge at the new commit
-B=$(sbatch --parsable --export=ALL,TAG=$TAG tagcycle_bridge.sbatch)
-
-# 3. pre-warm all four variants, diff argument lists against the baseline, refreeze on green
-W=$(sbatch --parsable --dependency=afterok:$B --export=ALL,TAG=$TAG tagcycle_warm.sbatch)
-
-# 4. the measurement: 1 node, 4 ranks x 72 cores, 2 hours
-M=$(sbatch --parsable --dependency=afterok:$W --export=ALL,TAG=$TAG meas_4rank.sbatch)
 ```
 
-The GPU half is a second, independent pair of stages on the same clone and the same tag. It needs
-one GPU, never four, and it is the only part of the cycle that runs on the `debug` partition:
-
-```bash
-# 5. build the reference binaries + the flat R02B06 dump, warm the three DaCe GPU caches
-G=$(sbatch --parsable --export=ALL,TAG=$TAG gpu_warm.sbatch)
-
-# 6. the GPU measurement -- SUBMIT THE SPLIT PAIR, not gpu_meas.sbatch (see below)
-sbatch --dependency=afterok:$G --export=ALL,TAG=$TAG gpu_meas_cloudsc.sbatch
-sbatch --dependency=afterok:$G --export=ALL,TAG=$TAG gpu_meas_velocity.sbatch
-```
+`tagcycle_prepare.sh` prints the rest ready to paste: the bridge rebuild, then all five warm jobs
+in parallel behind it (`cpu_warm` small+large, `cpu_velocity_warm`, `gpu_warm`, `tagcycle_warm`),
+then the seven measurement jobs — `meas_4rank`, the two `cpu_sweep_cloudsc` arms, the efficiency
+ladder, `cpu_velocity_r02b06`, and the GPU split pair — each `afterok` on the warm that feeds it
+and `afterany` on the previous meas job, so exactly one measurement runs at a time. Submit the
+`$PROBE` copies it just synced, never the repo checkout: `cpu_job_common.sh` and `meas_4rank`
+exec `$PROBE/tagcycle_lane.sh` at run time, and a stale probe copy would run old lane code.
+Submit `gpu_meas_cloudsc.sbatch` + `gpu_meas_velocity.sbatch`, not `gpu_meas.sbatch` (see below).
 
 Every stage prints grep-able verdicts to its stdout file: `BRIDGE_BUILD_EXIT=0`;
 `BRIDGE_FRESH=1`, `WARM_<variant>_EXIT=0`, `ARGLIST_DIFF_<variant>=OK`, `REFROZEN=1`;
