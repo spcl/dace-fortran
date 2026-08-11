@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -22,7 +23,7 @@ VARIANT_TUS = {
     "loopexch": "velocity_advection_inlined_single_tu.f90",
     "noloopexch": "velocity_advection_inlined_no_loop_exchange_single_tu.f90",
 }
-VARIANT_NPROMA = {"loopexch": 32, "noloopexch": 30720}
+DEFAULT_NPZ = "velocity_r02b06_nproma32.npz"
 # Kernel write set (VelocityTendenciesPipeline/main.cpp got/want list); restored before every rep.
 OUTPUTS = ("p_diag_ddt_vn_apc_pc", "p_diag_ddt_vn_cor_pc", "p_diag_ddt_w_adv_pc", "p_diag_vt", "p_diag_vn_ie",
            "p_diag_vn_ie_ubc", "p_diag_w_concorr_c", "p_diag_max_vcfl_dyn", "z_kin_hor_e", "z_vt_ie", "z_w_concorr_me")
@@ -46,7 +47,7 @@ SEED_FROM_META = {
 SEED_LITERAL = {"p_patch_id": 1, "p_patch_nshift": 0}  # id indexes the per-domain nflatlev/nrdmax
 
 CSV_HEADER = "kernel,mode,nproma,nblks_e,threads,rep,ms,inputs,lane"
-INPUTS_KIND = "r02b05"  # real R02B05 grid data (README); column kept position-compatible with cloudsc/vexx
+# mode = TU variant, nproma/nblks_e = data layout: a row identifies both independently.
 VERIFY_TOL = 1e-10  # same relative gate driver_velocity.f90's verify mode uses
 
 
@@ -199,7 +200,14 @@ def snapshot_outputs(call: dict) -> dict:
     return {reverse[f]: call[reverse[f]].copy(order="F") for f in OUTPUTS if f in reverse}
 
 
-def run_timed(compiled, call: dict, variant: str, meta: dict, reps: int, warmup: int, lane: str) -> list[str]:
+def inputs_kind(npz: Path) -> str:
+    """Dataset label for the CSV ``inputs`` column, read off the deck's own name."""
+    match = re.search(r"r02b\d+", npz.name)
+    return match.group(0) if match else "unknown"
+
+
+def run_timed(compiled, call: dict, variant: str, meta: dict, reps: int, warmup: int, lane: str,
+              inputs: str) -> list[str]:
     pristine = snapshot_outputs(call)
     threads = int(os.environ.get("OMP_NUM_THREADS", "1"))
     rows = []
@@ -211,7 +219,7 @@ def run_timed(compiled, call: dict, variant: str, meta: dict, reps: int, warmup:
         ms = (time.perf_counter_ns() - t0) / 1e6
         if rep >= 0:
             rows.append(f"velocity_tendencies,{variant},{meta['nproma']},{meta['nblks_e']},{threads},{rep},{ms:.3f},"
-                        f"{INPUTS_KIND},{lane}")
+                        f"{inputs},{lane}")
             print(rows[-1], flush=True)
     return rows
 
@@ -273,13 +281,13 @@ def main() -> int:
         print(f"phase A done: {tag}", flush=True)
         return 0
 
-    npz = args.npz or Path(__file__).resolve().parent / f"velocity_r02b05_nproma{VARIANT_NPROMA[args.variant]}.npz"
+    npz = args.npz or Path(__file__).resolve().parent / DEFAULT_NPZ
     arrays, meta = load_npz(npz)
     call = bind_call(sdfg, arrays, meta)
     if args.verify is not None and verify(compiled, call, args.verify):
         return 1
     print(CSV_HEADER, flush=True)
-    rows = run_timed(compiled, call, args.variant, meta, args.reps, args.warmup, lane)
+    rows = run_timed(compiled, call, args.variant, meta, args.reps, args.warmup, lane, inputs_kind(npz))
     if args.csv is not None:
         append_csv(args.csv, rows)
     return 0

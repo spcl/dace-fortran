@@ -11,24 +11,35 @@ VARIANT="${2:?usage: tagcycle_lane.sh <warm|meas|artifacts> <variant>}"
 
 MEAS="${MEAS:-/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-meas}"
 BR2="${BR2:-/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-samples-meas}"
-VELOCITY_VARIANTS="${VELOCITY_VARIANTS:-loopexch noloopexch}"
+# Data layout is a sweep dimension inside a velocity rank, not a property of the TU variant.
+VELOCITY_LAYOUTS="${VELOCITY_LAYOUTS:-nproma32 flat}"
 
 # variant -> the lane roots under $BR2 that hold its .sdfgz artifacts
 lane_roots() {
     case "$1" in
         cloudsc-klon) echo "cloudsc_klon_dace-gcc cloudsc_klon_dace-llvm" ;;
         cloudsc-nblks) echo "cloudsc_nblks_dace-gcc cloudsc_nblks_dace-llvm" ;;
-        velocity-gcc) echo "velocity_tendencies_dace-gcc" ;;
-        velocity-llvm) echo "velocity_tendencies_dace-llvm" ;;
+        velocity-loopexch | velocity-noloopexch) echo "velocity_tendencies_dace-gcc velocity_tendencies_dace-llvm" ;;
         *) return 1 ;;
+    esac
+}
+
+# Both velocity TU variants keep their artifacts in the per-backend root (that is where the
+# baseline arglists live), so a velocity variant selects its own by filename prefix.
+lane_prefix() {
+    case "$1" in
+        velocity-loopexch) echo "velocity_loopexch_" ;;
+        velocity-noloopexch) echo "velocity_noloopexch_" ;;
+        *) echo "" ;;
     esac
 }
 
 if [ "$MODE" = artifacts ]; then
     tag="${EXPECTED_TAG:?EXPECTED_TAG must be set}"
     roots="$(lane_roots "$VARIANT")" || { echo "unknown variant: $VARIANT" >&2; exit 2; }
+    pfx="$(lane_prefix "$VARIANT")"
     for r in $roots; do
-        for f in "$BR2/$r"/*_"$tag".sdfgz; do
+        for f in "$BR2/$r/$pfx"*_"$tag".sdfgz; do
             [ -f "$f" ] && printf '%s\n' "$f"
         done
     done
@@ -86,11 +97,15 @@ set_omp_lane() {
     export OPENBLAS_NUM_THREADS="$n" MKL_NUM_THREADS="$n" BLIS_NUM_THREADS="$n"
 }
 
+# $2 partitions one root into private build/scratch dirs: DACE_cache=name keys the build folder on
+# the SDFG name, and both velocity TU variants build an SDFG named velocity_tendencies -- without a
+# suffix the two concurrent velocity ranks would compile into the same dacecache/velocity_tendencies.
 setup_lane_root() {
-    local root="$1"
-    mkdir -p "$root/tmp" || return 1
-    export BUILD_ROOT="$root" TMPDIR="$root/tmp"
-    export DACE_default_build_folder="$root/dacecache" DACE_cache=name
+    local root="$1" sfx="${2:-}"
+    local cache="dacecache${sfx:+_$sfx}" tmp="tmp${sfx:+_$sfx}"
+    mkdir -p "$root/$tmp" || return 1
+    export BUILD_ROOT="$root" TMPDIR="$root/$tmp"
+    export DACE_default_build_folder="$root/$cache" DACE_cache=name
 }
 
 WARM_THREADS="$LANE_NCORES"
@@ -128,32 +143,55 @@ run() { # record the first-worst exit in $rc; a red point must not cost the lane
 }
 
 CLOUDSC_DRIVER="$MEAS/samples/cloudsc/run_cloudsc_perf.py"
-VELOCITY_DRIVER="$MEAS/samples/velocity_tendencies/run_velocity_perf.py"
+VELOCITY_SRC="$MEAS/samples/velocity_tendencies"
+VELOCITY_DRIVER="$VELOCITY_SRC/run_velocity_perf.py"
 CLOUDSC_H5="$MEAS/samples/cloudsc/data/input.h5"
-NPZ="${VELOCITY_NPZ:-$BR2/velocity_r02b05_nproma32.npz}"
-NPZ_NOLOOPEXCH="${VELOCITY_NPZ_NOLOOPEXCH:-$BR2/velocity_r02b05_nproma30720.npz}"
+VELOCITY_DATA_DIR="${VELOCITY_DATA_DIR:-$BR2/data_r02b06}"
+VELOCITY_TIMESTEP="${VELOCITY_TIMESTEP:-1}"
+NPZ_NPROMA32="${VELOCITY_NPZ_NPROMA32:-$BR2/velocity_r02b06_nproma32.npz}"
+NPZ_FLAT="${VELOCITY_NPZ_FLAT:-$BR2/velocity_r02b06_nproma491520.npz}"
 npz_for() {
     case "$1" in
-        noloopexch) echo "$NPZ_NOLOOPEXCH" ;;
-        *) echo "$NPZ" ;;
+        flat) echo "$NPZ_FLAT" ;;
+        *) echo "$NPZ_NPROMA32" ;;
+    esac
+}
+nproma_for() {
+    case "$1" in
+        flat) echo 491520 ;;
+        *) echo 32 ;;
     esac
 }
 
 # openacc-cpu is the raw Fortran baseline (driver_velocity.f90 + dump_data.py's stream-binary
 # dump), not the npz the DaCe lanes above read -- same shape labels, different file format.
-VELOCITY_DUMP32="${VELOCITY_DUMP32:-$BR2/velocity_dump_r02b05_nproma32}"
-VELOCITY_DUMP30720="${VELOCITY_DUMP30720:-$BR2/velocity_dump_r02b05_nproma30720}"
+VELOCITY_DUMP32="${VELOCITY_DUMP32:-$BR2/velocity_dump_r02b06_nproma32}"
+VELOCITY_DUMP_FLAT="${VELOCITY_DUMP_FLAT:-$BR2/velocity_dump_r02b06_nproma491520}"
 dump_for() {
     case "$1" in
-        noloopexch) echo "$VELOCITY_DUMP30720" ;;
+        flat) echo "$VELOCITY_DUMP_FLAT" ;;
         *) echo "$VELOCITY_DUMP32" ;;
     esac
 }
-nproma_for() {
-    case "$1" in
-        noloopexch) echo 30720 ;;
-        *) echo 32 ;;
-    esac
+# The driver hardcodes the dataset label of the deck it was written against.
+VELOCITY_INPUTS="${VELOCITY_INPUTS:-r02b06}"
+
+# Warm only: the flock keeps the two concurrent velocity ranks from both spending ~4.5 min (and
+# tens of GB) converting the same deck.
+ensure_npz() {
+    local n lock
+    n="$(npz_for "$1")"
+    [ -f "$n" ] && return 0
+    lock="$n.lock"
+    mkdir -p "$(dirname "$n")" || return 1
+    (
+        flock 9
+        [ -f "$n" ] && exit 0
+        echo "+ convert_data.py --nproma $(nproma_for "$1") --out $n"
+        "$PY" "$VELOCITY_SRC/convert_data.py" --data-dir "$VELOCITY_DATA_DIR" \
+            --timestep "$VELOCITY_TIMESTEP" --nproma "$(nproma_for "$1")" --out "$n.partial" \
+            && mv -f "$n.partial" "$n"
+    ) 9> "$lock"
 }
 
 if [ "$MODE" = meas ]; then
@@ -194,33 +232,42 @@ case "$VARIANT" in
             fi
         done
         ;;
-    velocity-gcc | velocity-llvm)
-        b="${VARIANT#velocity-}"
-        [ -f "$NPZ" ] && [ -f "$NPZ_NOLOOPEXCH" ] || {
-            echo "FATAL: no velocity npz at $NPZ or $NPZ_NOLOOPEXCH" >&2
-            exit 1
-        }
-        setup_lane_root "$BR2/velocity_tendencies_dace-${b}" || exit 1
+    velocity-loopexch | velocity-noloopexch)
+        v="${VARIANT#velocity-}"
         if [ "$MODE" = warm ]; then
-            set_omp_lane "$WARM_THREADS" || exit 1
-            for v in $VELOCITY_VARIANTS; do
-                run "$PY" "$VELOCITY_DRIVER" --variant "$v" --backend "$b" \
-                    --npz "$(npz_for "$v")" --build-only
-            done
-        else
-            # threads outer / TU variant inner, matching samples/.../run_velocity.sbatch.
-            for t in $THREADS; do
-                if [ "$t" -gt "$LANE_NCORES" ]; then
-                    echo "skip threads=$t (> $LANE_NCORES cpus in this cpuset)"
-                    continue
-                fi
-                set_omp_lane "$t" || { rc=1; continue; }
-                for v in $VELOCITY_VARIANTS; do
-                    run "$PY" "$VELOCITY_DRIVER" --variant "$v" --backend "$b" \
-                        --npz "$(npz_for "$v")" --csv "$CSV"
-                done
+            for l in $VELOCITY_LAYOUTS; do
+                ensure_npz "$l" || rc=1
             done
         fi
+        for l in $VELOCITY_LAYOUTS; do
+            [ -f "$(npz_for "$l")" ] || {
+                echo "FATAL: no velocity npz at $(npz_for "$l") for layout $l" >&2
+                exit 1
+            }
+        done
+        for b in gcc llvm; do
+            setup_lane_root "$BR2/velocity_tendencies_dace-${b}" "$v" || {
+                rc=1
+                continue
+            }
+            if [ "$MODE" = warm ]; then
+                set_omp_lane "$WARM_THREADS" || { rc=1; continue; }
+                run "$PY" "$VELOCITY_DRIVER" --variant "$v" --backend "$b" --build-only
+            else
+                # threads outer / layout inner, matching samples/.../run_velocity.sbatch.
+                for t in $THREADS; do
+                    if [ "$t" -gt "$LANE_NCORES" ]; then
+                        echo "skip threads=$t (> $LANE_NCORES cpus in this cpuset)"
+                        continue
+                    fi
+                    set_omp_lane "$t" || { rc=1; continue; }
+                    for l in $VELOCITY_LAYOUTS; do
+                        run "$PY" "$VELOCITY_DRIVER" --variant "$v" --backend "$b" \
+                            --npz "$(npz_for "$l")" --csv "$CSV"
+                    done
+                done
+            fi
+        done
         ;;
     velocity-openacc)
         # shellcheck disable=SC1091
@@ -231,20 +278,18 @@ case "$VARIANT" in
             echo "FATAL: no nvfortran on PATH after spack load nvhpc" >&2
             exit 1
         }
-        VELOCITY_SRC="$MEAS/samples/velocity_tendencies"
-        VELOCITY_DATA_DIR="${VELOCITY_DATA_DIR:-$VELOCITY_SRC/data_r02b05}"
         REPS="${REPS:-50}"
         WARMUP="${WARMUP:-2}"
         # driver_velocity's automatic transients are hundreds of MB at nproma=32, far more at
-        # nproma=30720 (baselines.sh hits the same wall).
+        # nproma=491520 (baselines.sh hits the same wall).
         ulimit -s unlimited 2> /dev/null || echo "warning: could not raise the stack limit" >&2
         setup_lane_root "$BR2/velocity_tendencies_openacc" || exit 1
         DRIVER="$BUILD_ROOT/driver_velocity"
         if [ "$MODE" = warm ]; then
-            for v in $VELOCITY_VARIANTS; do
-                d="$(dump_for "$v")"
+            for l in $VELOCITY_LAYOUTS; do
+                d="$(dump_for "$l")"
                 [ -f "$d/manifest.txt" ] || run "$PY" "$VELOCITY_SRC/dump_data.py" --data-dir "$VELOCITY_DATA_DIR" \
-                    --nproma "$(nproma_for "$v")" --out "$d"
+                    --timestep "$VELOCITY_TIMESTEP" --nproma "$(nproma_for "$l")" --out "$d"
             done
             run "$NVFORTRAN" -O3 -acc=multicore -c "$VELOCITY_SRC/velocity_advection_acc.f90" \
                 -o "$BUILD_ROOT/velocity_advection_acc.o" -module "$BUILD_ROOT"
@@ -253,10 +298,10 @@ case "$VARIANT" in
             run "$NVFORTRAN" -O3 -acc=multicore "$BUILD_ROOT/velocity_advection_acc.o" \
                 "$BUILD_ROOT/driver_velocity.o" -o "$DRIVER"
         else
-            for v in $VELOCITY_VARIANTS; do
-                d="$(dump_for "$v")"
+            for l in $VELOCITY_LAYOUTS; do
+                d="$(dump_for "$l")"
                 [ -f "$d/manifest.txt" ] || {
-                    echo "FATAL: no velocity dump at $d for $v (warm mode builds it)" >&2
+                    echo "FATAL: no velocity dump at $d for layout $l (warm mode builds it)" >&2
                     rc=1
                 }
             done
@@ -272,17 +317,19 @@ case "$VARIANT" in
                 fi
                 set_omp_lane "$t" || { rc=1; continue; }
                 export ACC_NUM_CORES="$t"
-                for v in $VELOCITY_VARIANTS; do
-                    d="$(dump_for "$v")"
-                    log="$BUILD_ROOT/last_run_${v}_${t}.log"
+                for l in $VELOCITY_LAYOUTS; do
+                    d="$(dump_for "$l")"
+                    log="$BUILD_ROOT/last_run_${l}_${t}.log"
                     if ! "$DRIVER" "$d" openacc-cpu "$t" "$REPS" "$WARMUP" > "$log" 2>&1; then
-                        echo "FATAL: driver_velocity failed ($v threads=$t); tail of $log:" >&2
+                        echo "FATAL: driver_velocity failed (layout $l threads=$t); tail of $log:" >&2
                         tail -5 "$log" >&2
                         rc=1
                         continue
                     fi
                     [ -f "$CSV" ] || echo "kernel,mode,nproma,nblks_e,threads,rep,ms,inputs,lane" > "$CSV"
-                    grep '^velocity_tendencies,' "$log" | sed "s/^velocity_tendencies,loopexch,/velocity_tendencies,${v},/" \
+                    # The ACC twin IS the loop-exchange source, so its mode label stands; only the
+                    # dataset label needs correcting, and nproma/nblks_e already carry the layout.
+                    grep '^velocity_tendencies,' "$log" | sed "s/,r02b05,/,${VELOCITY_INPUTS},/" \
                         | tee -a "$CSV"
                 done
             done

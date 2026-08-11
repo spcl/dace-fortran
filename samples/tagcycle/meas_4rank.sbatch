@@ -16,7 +16,9 @@
 #
 # WALLTIME: 02:00:00 here; the single-variant jobs got 06:00:00 from _harness/submit.sh and a
 # cloudsc-nblks sweep once died at 2h36. Raise -t (up to the 24h partition cap) before submitting
-# if the previous cycle came close.
+# if the previous cycle came close. Job 4391146 finished the whole 4-rank layout in 1h31; the
+# R02B06 velocity ranks add ~35-70 min each (32 driver starts x (dace import + 6.9 GB deck load)
+# plus ~8 min of timed work), which stays under the cloudsc-nblks critical path.
 #
 # ABSOLUTE RULE: no numactl anywhere below. This node exposes 36 NUMA nodes; numactl --cpunodebind
 # inside an srun cpuset returns sched_setaffinity EINVAL and kills the step outright (4390808,
@@ -29,7 +31,7 @@ MEAS=/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-meas
 BR2=/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-samples-meas
 RUNS="$BR2/runs"
 PROV="$RUNS/PROVENANCE.txt"
-VARIANTS="${VARIANTS:-cloudsc-klon cloudsc-nblks velocity-gcc velocity-llvm}"
+VARIANTS="${VARIANTS:-cloudsc-klon cloudsc-nblks velocity-loopexch velocity-noloopexch}"
 : "${TAG:?TAG must be exported into this job (--export=ALL,TAG=<tag>)}"
 
 mkdir -p "$RUNS"
