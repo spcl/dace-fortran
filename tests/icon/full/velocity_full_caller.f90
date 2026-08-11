@@ -349,6 +349,11 @@ SUBROUTINE run_velocity_flat_c(nproma, nlev, nlevp1, nblks_c, nblks_e, nblks_v, 
   TYPE(t_nh_diag)       :: p_diag
   TYPE(t_nh_metrics)    :: p_metrics
 
+  INTEGER(c_long_long)  :: velo_t0, velo_t1, velo_rate
+  INTEGER(c_int)        :: velo_lvn
+  REAL(c_double)        :: velo_ms
+  CHARACTER(LEN=32)     :: velo_buf
+
   nrdmax       = nrdmax_in
   nflatlev     = nflatlev_in
   lvert_nest   = (lvert_nest_in   /= 0_c_int8_t)
@@ -486,10 +491,20 @@ SUBROUTINE run_velocity_flat_c(nproma, nlev, nlevp1, nblks_c, nblks_e, nblks_v, 
   p_metrics % deepatmo_gradh_ifc => p_metrics_deepatmo_gradh_ifc
   p_metrics % deepatmo_invr_ifc  => p_metrics_deepatmo_invr_ifc
 
+  CALL SYSTEM_CLOCK(COUNT=velo_t0, COUNT_RATE=velo_rate)
   CALL velocity_tendencies(p_prog, p_patch, p_int, p_metrics, p_diag, &
                            z_w_concorr_me, z_kin_hor_e, z_vt_ie, &
                            ntnd, istep, &
                            (lvn_only /= 0_c_int8_t), &
                            dtime, dt_linintp_ubc, &
                            (ldeepatmo /= 0_c_int8_t))
+  CALL SYSTEM_CLOCK(COUNT=velo_t1)
+  velo_ms = 1.0e3_c_double * REAL(velo_t1 - velo_t0, c_double) / REAL(velo_rate, c_double)
+  velo_lvn = MERGE(1_c_int, 0_c_int, lvn_only /= 0_c_int8_t)
+  WRITE(velo_buf, '(ES17.9E3)') velo_ms
+  WRITE(*, '(A,I0,A,I0,A,A,A)') 'VELO_TIMER istep=', istep, &
+                                ' lvn=', velo_lvn, &
+                                ' ms=', TRIM(ADJUSTL(velo_buf)), &
+                                ' path=run_velocity_flat_c'
+  FLUSH(6)
 END SUBROUTINE run_velocity_flat_c

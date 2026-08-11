@@ -19,6 +19,7 @@ executed; outputs compared against the gfortran reference.
 """
 
 import ctypes
+import os
 import re
 import shutil
 import subprocess
@@ -47,6 +48,15 @@ _HERE = Path(__file__).resolve().parent
 _DRIVER_PATH = _HERE / "velocity_full.f90"
 _CALLER_PATH = _HERE / "velocity_full_caller.f90"
 _ENTRY = "mo_velocity_advection::velocity_tendencies"
+
+#: The (istep, lvn_only) configuration ICON's ``solve_nh`` would be at for this call.
+#: Defaults reproduce the historical hard-coded pair, so CI behaviour is unchanged; the
+#: ``VELO_TIMER`` timing harness (samples/velocity_tendencies/run_icon_velo_timing.sh)
+#: sweeps all four.
+_ISTEP = int(os.environ.get("VELO_ISTEP", "1"))
+_LVN = int(os.environ.get("VELO_LVN", "0"))
+#: Extra timing-only invocations after the correctness compare (0 = CI behaviour, no replay).
+_REPS = int(os.environ.get("VELO_REPS", "0"))
 
 
 # caller flat-array dummy order matches velocity_full_caller.f90 (see _harness.py::_INIT_ARRAY_ORDER)
@@ -150,7 +160,7 @@ def _run(lib, fn, dims, bufs, z_arrays):
     nproma, nlev, nlevp1, nblks_c, nblks_e, nblks_v = dims
     nrdmax_in = np.full(10, nlev, dtype=np.int32, order='F')
     nflatlev_in = np.ones(10, dtype=np.int32, order='F')
-    f(nproma, nlev, nlevp1, nblks_c, nblks_e, nblks_v, 1, 1, 0, 0, 60.0, 0.0, nrdmax_in.ctypes.data,
+    f(nproma, nlev, nlevp1, nblks_c, nblks_e, nblks_v, 1, _ISTEP, _LVN, 0, 60.0, 0.0, nrdmax_in.ctypes.data,
       nflatlev_in.ctypes.data, 0, 0, 0, *[bufs[k].ctypes.data for k in _INIT_ARRAY_ORDER],
       *[z.ctypes.data for z in z_arrays])
 
@@ -215,6 +225,7 @@ def test_velocity_full_f90_bindings_e2e(tmp_path: Path, build_path: str):
     init.argtypes = [ctypes.c_int] * 7 + [ctypes.c_void_p] * len(_INIT_ARRAY_ORDER)
     init(42, nproma, nlev, nlevp1, nblks_c, nblks_e, nblks_v, *[bufs_ref[k].ctypes.data for k in _INIT_ARRAY_ORDER])
     bufs_sdfg = {k: v.copy(order='F') for k, v in bufs_ref.items()}
+    pristine = {k: v.copy(order='F') for k, v in bufs_ref.items()} if _REPS else {}
 
     zshape = ((nproma, nlev, nblks_e), (nproma, nlev, nblks_e), (nproma, nlevp1, nblks_e))
     z_ref = [np.zeros(s, dtype=np.float64, order='F') for s in zshape]
@@ -240,3 +251,12 @@ def test_velocity_full_f90_bindings_e2e(tmp_path: Path, build_path: str):
     # reference must have done real work, and SDFG side must agree to 1e-10 on all 12 outputs
     assert mutated, "reference left every output untouched -- kernel did not run"
     assert not mismatches, "\n".join(mismatches)
+
+    # Timing-only replay, always AFTER the correctness verdict and always from the pristine
+    # inputs, so the VELO_TIMER medians never feed a mutated state back into the kernel and
+    # the differential above is byte-identical to the un-instrumented run.
+    for _ in range(_REPS):
+        for lib_, sym in ((ref_lib, "run_velocity_flat_c"), (sdfg_lib, "run_velocity_flat_sdfg")):
+            replay = {k: v.copy(order='F') for k, v in pristine.items()}
+            z_replay = [np.zeros(s, dtype=np.float64, order='F') for s in zshape]
+            _run(lib_, sym, dims, replay, z_replay)

@@ -107,7 +107,7 @@ SUBROUTINE velocity_tendencies_dace_icon(p_prog, p_patch, p_int, p_metrics, p_di
                                          z_w_concorr_me, z_kin_hor_e, z_vt_ie, &
                                          ntnd, istep, lvn_only, &
                                          dtime, dt_linintp_ubc, ldeepatmo)
-  USE iso_c_binding, ONLY: c_int, c_double, c_bool
+  USE iso_c_binding, ONLY: c_int, c_double, c_bool, c_long_long
   USE velocity_tendencies_dace_bindings, ONLY: velocity_tendencies_dace
   USE mo_model_domain,      ONLY: t_patch
   USE mo_intp_data_strc,    ONLY: t_int_state
@@ -126,10 +126,24 @@ SUBROUTINE velocity_tendencies_dace_icon(p_prog, p_patch, p_int, p_metrics, p_di
   REAL(c_double),     INTENT(IN),    TARGET :: dtime
   REAL(c_double),     INTENT(IN),    TARGET :: dt_linintp_ubc
   LOGICAL(c_bool),    INTENT(IN),    TARGET :: ldeepatmo
+  INTEGER(c_long_long) :: velo_t0, velo_t1, velo_rate
+  INTEGER(c_int)       :: velo_lvn
+  REAL(c_double)       :: velo_ms
+  CHARACTER(LEN=32)    :: velo_buf
+  CALL SYSTEM_CLOCK(COUNT=velo_t0, COUNT_RATE=velo_rate)
   CALL velocity_tendencies_dace(p_prog, p_patch, p_int, p_metrics, p_diag, &
                                 z_w_concorr_me, z_kin_hor_e, z_vt_ie, &
                                 ntnd, istep, lvn_only, &
                                 dtime, dt_linintp_ubc, ldeepatmo)
+  CALL SYSTEM_CLOCK(COUNT=velo_t1)
+  velo_ms = 1.0e3_c_double * REAL(velo_t1 - velo_t0, c_double) / REAL(velo_rate, c_double)
+  velo_lvn = MERGE(1_c_int, 0_c_int, lvn_only)
+  WRITE(velo_buf, '(ES17.9E3)') velo_ms
+  WRITE(*, '(A,I0,A,I0,A,A,A)') 'VELO_TIMER istep=', istep, &
+                                ' lvn=', velo_lvn, &
+                                ' ms=', TRIM(ADJUSTL(velo_buf)), &
+                                ' path=velocity_tendencies_dace_icon'
+  FLUSH(6)
 END SUBROUTINE velocity_tendencies_dace_icon
 """
 

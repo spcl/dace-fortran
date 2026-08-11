@@ -93,3 +93,51 @@ region; the driver does that with a shallow `!$ACC ENTER DATA COPYIN`, which is 
 builds `-gpu=mem:managed` (nvfortran cannot deep-copy the `POINTER` components).
 
 Only the `loopexch` TU is annotated; the `noloopexch` variant has no baseline lane.
+
+## ICON-integration timing (`VELO_TIMER`, per `(istep, lvn)` configuration)
+
+Separate experiment from the thread sweep above: it does not time the standalone kernel, it
+times `velocity_tendencies` **as ICON calls it**, split by the `(istep, lvn_only)` configuration
+`mo_solve_nonhydro::solve_nh` is in. `istep` runs 1..2 and `lvn_only` is `.TRUE.` only on the
+`istep==1` recompute arm, so the four nominal configurations collapse into roughly two runtime
+clusters: `lvn=1` skips the whole `w`/kinetic-energy half of the kernel.
+
+Two instrumented call sites, both printing one grep-able line per invocation to stdout:
+
+| Call site | File | Reached by |
+|---|---|---|
+| `run_velocity_flat_c` | `tests/icon/full/velocity_full_caller.f90` | the in-process binding e2e (also the SDFG twin `run_velocity_flat_sdfg`, derived from the same source) |
+| `velocity_tendencies_dace_icon` | `scripts/build_icon_dace_libs.py` (`_ICON_WRAPPER_F90`) | a real patched-ICON run (`tests/icon/full/run_icon_e2e.sh`, `docs/ICON_INTEGRATION.md`) |
+
+```
+VELO_TIMER istep=1 lvn=0 ms=4.707100000E-002 path=run_velocity_flat_c
+```
+
+`SYSTEM_CLOCK` with an `int64` count (nanosecond `COUNT_RATE` under both gfortran and flang),
+read immediately before and after the call; `istep` and `lvn_only` are dummy arguments at both
+sites, so every line is labelled and the parser never has to cluster.
+
+```
+bash run_icon_velo_timing.sh          # PASSES / VELO_REPS / CONFIGS / TEST / KEXPR / OUT_DIR
+python parse_icon_timers.py <log> --csv <out.csv>
+```
+
+`run_icon_velo_timing.sh` sweeps `CONFIGS` (default all four `istep:lvn` pairs), runs the binding
+e2e `PASSES` times per configuration with `VELO_REPS` timing-only replays on top of the
+correctness call, tees stdout to `$OUT_DIR/icon_velo_<jobid>.log`, and ends with grep-able
+`ICON_VELO_EXIT=<n>`. No `srun`/`salloc` inside, so it is launchable directly on a compute node
+and from a future sbatch alike.
+
+`VELO_ISTEP` / `VELO_LVN` / `VELO_REPS` default to the historical hard-coded pair and zero
+replays, so an un-instrumented CI run of the e2e is byte-identical to before.
+
+`parse_icon_timers.py` (numpy only) medians each configuration and writes
+`config,count,median_ms,p25,p75`. Labelled logs group directly; an unlabelled log (a call site
+where neither scalar was in scope) is split into two clusters instead -- 1-D k-means seeded at
+the extremes by default, `--method gap` for a sorted largest-gap split -- and the four
+configurations are then reported as *attributed* to a cluster, never as measured.
+
+Caveat when reading the numbers: on the binding-e2e path the SDFG side's `run_velocity_flat_sdfg`
+finalizes the ref-counted DaCe handle after every call, so each `path=run_velocity_flat_sdfg`
+sample carries one `dace_init`/`dace_exit` pair inside the timed region. The real ICON wrapper
+does not finalize, and the offset is constant across configurations.
