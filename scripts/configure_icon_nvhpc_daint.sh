@@ -1,12 +1,13 @@
 #!/bin/bash
 # Daint/Alps (aarch64 GH200) ICON configure -- NVHPC lane (nvc/nvc++/nvfortran).
-# This is the only lane that can do OpenACC offload here: GPU=1 adds
-# -acc=gpu -gpu=cc90 (arch 90, NOT 90a) and --enable-gpu=openacc+cuda.
-# The gcc lane lives in configure_icon_gcc_daint.sh; the two never share a
-# build tree.  Deps come from the user spack tree.
+# GPU=1 adds -acc=gpu -gpu=cc90 (arch 90, NOT 90a) and --enable-gpu=openacc+cuda
+# -- native cc90 SASS.  This is the ONLY ICON lane script: gfortran's OpenACC
+# has no derived-type manual deep copy, which ICON's GPU port relies on, so gcc
+# builds only the standalone samples.  The two lanes never share a build tree.
+# Deps come from the user spack tree.
 #
-#   scripts/configure_icon_nvhpc_daint.sh              # CPU, build/nvhpc
-#   GPU=1 scripts/configure_icon_nvhpc_daint.sh        # OpenACC GPU
+#   scripts/configure_icon_nvhpc_daint.sh              # CPU, build/cpu_nvhpc
+#   GPU=1 scripts/configure_icon_nvhpc_daint.sh        # OpenACC, build/gpu_nvhpc
 #   BUILD_DIR=... DACE_LIBS_DIR=... scripts/configure_icon_nvhpc_daint.sh
 #
 # Env knobs:
@@ -14,7 +15,7 @@
 #                   --enable-gpu=openacc+cuda, nvhpc's bundled CUDA as CUDACXX).
 #                   -Minfo=accel is compile-time output -- it lands in the make log.
 #   ICON_DACE_OPT   optimization level: O0 (default, bit-exact) | O2 | O3
-#   BUILD_DIR       build tree (default: $ICON_SRC/build/nvhpc)
+#   BUILD_DIR       build tree (default: $ICON_SRC/build/{cpu,gpu}_nvhpc)
 #   ICON_SRC        ICON checkout (default: the aarch64 scratch clone)
 #   SPACK_ROOT      spack tree (default: the aarch64 scratch spack)
 #   DACE_LIBS_DIR   dir with libvelocity_inner_wrap.so (empty => stock ICON)
@@ -32,7 +33,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")"; pwd)/icon_daint_common.sh"
 
 GPU=${GPU:-0}
 icon_daint_load_spack
-icon_daint_enter_build_dir nvhpc
+icon_daint_enter_build_dir nvhpc "${GPU}"
 icon_daint_assert_pin
 icon_daint_apply_patches
 icon_daint_print_provenance

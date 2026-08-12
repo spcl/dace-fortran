@@ -9,30 +9,35 @@
 #SBATCH --mem=0
 #SBATCH --hint=nomultithread
 #SBATCH -t 04:00:00
-#SBATCH -o /capstor/scratch/cscs/ybudanaz/aarch64/probe/icon_cpu_build-%j.out
-#SBATCH -e /capstor/scratch/cscs/ybudanaz/aarch64/probe/icon_cpu_build-%j.out
+#SBATCH -o samples/_work/logs/icon_cpu_build-%j.out
+#SBATCH -e samples/_work/logs/icon_cpu_build-%j.out
 # ICON CPU integration build, one compiler lane per submission: stock ICON,
 # then the DaCe velocity lib (--release, FMA on), then the velocity-patched
 # ICON linking that lib.  No MPI anywhere -- ICON is configured --disable-mpi.
 # Builds run PLAIN on the allocated node: srun must never wrap configure/make
 # (blocked SIGCHLD deadlocks the conftest select() loop), and nothing here is
 # timed so plain -j is the right shape.
-#   sbatch --export=ALL,TAG=<tag>,COMPILER=gcc samples/tagcycle/icon_cpu_build.sbatch
+# SUBMIT FROM THE REPO ROOT: the -o/-e paths above and $DF below both resolve
+# through the submit dir (slurm copies this script to a spool dir, so its own
+# location tells us nothing).  Create samples/_work/logs/ first.
+#   mkdir -p samples/_work/logs
 #   sbatch --export=ALL,TAG=<tag>,COMPILER=nvhpc samples/tagcycle/icon_cpu_build.sbatch
 set -uo pipefail
 
-WORK=/capstor/scratch/cscs/ybudanaz/aarch64
-DF="${DF:-$WORK/dace-fortran}"
-ICON_SRC="${ICON_SRC:-$WORK/icon-model}"
-GRID_DIR="${GRID_DIR:-$WORK/icon-grids}"
-COMPILER="${COMPILER:-gcc}"
-DACE_LIBS="${DACE_LIBS:-$WORK/dace-icon-libs-$COMPILER}"
-# ONE build tree per compiler (build/gcc, build/nvhpc); the stock and the
-# DaCe-linked binaries are kept side by side inside it as bin/icon.stock and
-# bin/icon.dace, since only the icon.mk link rule differs between them.
-LANE_BUILD="${LANE_BUILD:-$ICON_SRC/build/$COMPILER}"
+DF="${DF:-${SLURM_SUBMIT_DIR:-$PWD}}"
+WORK_ROOT="${WORK_ROOT:-$DF/samples/_work}"
+SITE_ROOT="$(cd "$DF/.." && pwd)"
+ICON_SRC="${ICON_SRC:-$WORK_ROOT/icon-model}"
+GRID_DIR="${GRID_DIR:-$WORK_ROOT/icon-grids}"
+COMPILER="${COMPILER:-nvhpc}"
+DACE_LIBS="${DACE_LIBS:-$WORK_ROOT/dace-icon-libs-$COMPILER}"
+# ONE build tree per (compiler, GPU) lane -- this is the CPU job, so
+# build/cpu_$COMPILER; the stock and the DaCe-linked binaries are kept side by
+# side inside it as bin/icon.stock and bin/icon.dace, since only the icon.mk
+# link rule differs between them.
+LANE_BUILD="${LANE_BUILD:-$ICON_SRC/build/cpu_$COMPILER}"
 CONF_SH="$DF/scripts/configure_icon_${COMPILER}_daint.sh"
-PY="${PY:-$WORK/venv-meas/bin/python}"
+PY="${PY:-$SITE_ROOT/venv-meas/bin/python}"
 MAKE_J="${MAKE_J:-64}"
 ICON_DACE_OPT="${ICON_DACE_OPT:-O3}"
 : "${TAG:?TAG must be exported into this job (--export=ALL,TAG=<tag>)}"
@@ -46,7 +51,7 @@ echo "ICON_BUILD host=$(hostname) lane=$COMPILER tag=$TAG_NOW expected=$TAG job=
 }
 
 # shellcheck disable=SC1091
-source "$WORK/spack/share/spack/setup-env.sh"
+source "${SPACK_ROOT:-$SITE_ROOT/spack}/share/spack/setup-env.sh"
 spack load "gcc@16.1.0 arch=linux-sles15-neoverse_v2"
 # The DaCe lib build needs LLVM flang on PATH next to gfortran (gcc lane only).
 [ "$COMPILER" = gcc ] && spack load llvm@22.1.5
@@ -108,9 +113,10 @@ if [ "$COMPILER" = gcc ] && [ $rc -eq 0 ]; then
         cp "$VELOCITY_F90.bak" "$VELOCITY_F90"
     fi
 else
-    # nvhpc lane: stock only for now -- build_icon_dace_libs.py hard-requires
-    # gfortran+flang, so no .mod-compatible DaCe lib exists for nvfortran yet.
-    echo "DACE_LIBS_EXIT[$COMPILER]=skip"
+    # The ONLY path now: ICON is nvhpc-only, so the gcc arm above is
+    # unreachable and kept solely for when a DaCe lib exists for nvfortran.
+    # build_icon_dace_libs.py hard-requires gfortran+flang, so it does not yet.
+    echo "DACE_LIBS_EXIT[$COMPILER]=skip  # blocked: no nvfortran-compatible DaCe lib"
 fi
 
 echo "ICON_BUILD_EXIT[$COMPILER]=$overall"

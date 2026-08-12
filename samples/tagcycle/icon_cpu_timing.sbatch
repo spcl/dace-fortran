@@ -9,8 +9,8 @@
 #SBATCH --mem=0
 #SBATCH --hint=nomultithread
 #SBATCH -t 00:30:00
-#SBATCH -o /capstor/scratch/cscs/ybudanaz/aarch64/probe/icon_cpu_timing-%j.out
-#SBATCH -e /capstor/scratch/cscs/ybudanaz/aarch64/probe/icon_cpu_timing-%j.out
+#SBATCH -o samples/_work/logs/icon_cpu_timing-%j.out
+#SBATCH -e samples/_work/logs/icon_cpu_timing-%j.out
 # Held-Suarez R02B05 timing run of the DaCe-patched ICON built by
 # icon_cpu_build.sbatch (same COMPILER lane).  Serial ICON (--disable-mpi),
 # one srun task pinned to one socket; VELO_TIMER lines from the wrapper are
@@ -19,19 +19,24 @@
 # perturbation seeds pinned to 0 (pairs with the pinit_seed guard patch the
 # build job applied), radiation off, output PT10S + include_last.
 # No numactl anywhere -- srun --cpu-bind=cores is the only pinning allowed.
+# SUBMIT FROM THE REPO ROOT: the -o/-e paths above and $DF below both resolve
+# through the submit dir (slurm copies this script to a spool dir, so its own
+# location tells us nothing).  Create samples/_work/logs/ first.
+#   mkdir -p samples/_work/logs
 #   sbatch --export=ALL,TAG=<tag>,COMPILER=gcc samples/tagcycle/icon_cpu_timing.sbatch
 set -uo pipefail
 
-WORK=/capstor/scratch/cscs/ybudanaz/aarch64
-DF="${DF:-$WORK/dace-fortran}"
-ICON_SRC="${ICON_SRC:-$WORK/icon-model}"
-GRID_DIR="${GRID_DIR:-$WORK/icon-grids}"
-COMPILER="${COMPILER:-gcc}"
-LANE_BUILD="${LANE_BUILD:-$ICON_SRC/build/$COMPILER}"
-PY="${PY:-$WORK/venv-meas/bin/python}"
+DF="${DF:-${SLURM_SUBMIT_DIR:-$PWD}}"
+WORK_ROOT="${WORK_ROOT:-$DF/samples/_work}"
+SITE_ROOT="$(cd "$DF/.." && pwd)"
+ICON_SRC="${ICON_SRC:-$WORK_ROOT/icon-model}"
+GRID_DIR="${GRID_DIR:-$WORK_ROOT/icon-grids}"
+COMPILER="${COMPILER:-nvhpc}"
+LANE_BUILD="${LANE_BUILD:-$ICON_SRC/build/cpu_$COMPILER}"
+PY="${PY:-$SITE_ROOT/venv-meas/bin/python}"
 EXP="${EXP:-atm_heldsuarez_dace_r02b05}"
 THREADS="${THREADS:-72}"
-RUNS="${RUNS:-$WORK/dace-fortran-samples-meas/runs}"
+RUNS="${RUNS:-$WORK_ROOT/meas/runs}"
 : "${TAG:?TAG must be exported into this job (--export=ALL,TAG=<tag>)}"
 
 TAG_NOW="$(git -C "$DF" describe --always --dirty)"
@@ -51,7 +56,7 @@ echo "ICON_TIMING host=$(hostname) lane=$COMPILER tag=$TAG_NOW expected=$TAG job
 cp "$LANE_BUILD/bin/icon.dace" "$LANE_BUILD/bin/icon"
 
 # shellcheck disable=SC1091
-source "$WORK/spack/share/spack/setup-env.sh"
+source "${SPACK_ROOT:-$SITE_ROOT/spack}/share/spack/setup-env.sh"
 spack load "gcc@16.1.0 arch=linux-sles15-neoverse_v2"
 mkdir -p "$RUNS"
 

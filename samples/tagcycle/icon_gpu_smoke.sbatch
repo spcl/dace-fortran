@@ -10,8 +10,8 @@
 #SBATCH --gpus-per-node=1
 #SBATCH --hint=nomultithread
 #SBATCH -t 00:30:00
-#SBATCH -o /capstor/scratch/cscs/ybudanaz/aarch64/probe/icon_gpu_smoke-%j.out
-#SBATCH -e /capstor/scratch/cscs/ybudanaz/aarch64/probe/icon_gpu_smoke-%j.out
+#SBATCH -o samples/_work/logs/icon_gpu_smoke-%j.out
+#SBATCH -e samples/_work/logs/icon_gpu_smoke-%j.out
 # Smoke: configure + make + short-run the OpenACC GPU ICON (nvhpc, cc90,
 # --disable-mpi) on a GH200 node.  RESUMABLE: the build dir is kept, each
 # phase has its own verdict, and a rerun continues where make stopped -- a
@@ -20,19 +20,24 @@
 # grids must be pre-staged by scripts/fetch_icon_grids.sh (no internet here).
 # configure/make run PLAIN (srun-wrapped builds deadlock on SIGCHLD); only
 # the model run goes through srun.  No numactl.
+# SUBMIT FROM THE REPO ROOT: the -o/-e paths above and $DF below both resolve
+# through the submit dir (slurm copies this script to a spool dir, so its own
+# location tells us nothing).  Create samples/_work/logs/ first.
+#   mkdir -p samples/_work/logs
 #   sbatch --export=ALL,TAG=<tag> samples/tagcycle/icon_gpu_smoke.sbatch
 #   sbatch --export=ALL,TAG=<tag>,GRID=R02B06 samples/tagcycle/icon_gpu_smoke.sbatch
 set -uo pipefail
 
-WORK=/capstor/scratch/cscs/ybudanaz/aarch64
-DF="${DF:-$WORK/dace-fortran}"
-ICON_SRC="${ICON_SRC:-$WORK/icon-model}"
-GRID_DIR="${GRID_DIR:-$WORK/icon-grids}"
-BUILD="${BUILD:-$ICON_SRC/build/nvhpc}"
+DF="${DF:-${SLURM_SUBMIT_DIR:-$PWD}}"
+WORK_ROOT="${WORK_ROOT:-$DF/samples/_work}"
+SITE_ROOT="$(cd "$DF/.." && pwd)"
+ICON_SRC="${ICON_SRC:-$WORK_ROOT/icon-model}"
+GRID_DIR="${GRID_DIR:-$WORK_ROOT/icon-grids}"
+BUILD="${BUILD:-$ICON_SRC/build/gpu_nvhpc}"
 GRID="${GRID:-R02B04}"
 MAKE_J="${MAKE_J:-72}"
 ICON_DACE_OPT="${ICON_DACE_OPT:-O3}"
-RUNS="${RUNS:-$WORK/dace-fortran-samples-meas/runs}"
+RUNS="${RUNS:-$WORK_ROOT/meas/runs}"
 : "${TAG:?TAG must be exported into this job (--export=ALL,TAG=<tag>)}"
 
 TAG_NOW="$(git -C "$DF" describe --always --dirty)"
@@ -60,7 +65,7 @@ GRID_FILE="$GRID_DIR/$GRID_ID/icon_grid_${GRID_ID}_${GRID}_G.nc"
 }
 
 # shellcheck disable=SC1091
-source "$WORK/spack/share/spack/setup-env.sh"
+source "${SPACK_ROOT:-$SITE_ROOT/spack}/share/spack/setup-env.sh"
 spack load "gcc@16.1.0 arch=linux-sles15-neoverse_v2"
 
 # --- phase 1: configure (reused only when the stamp the configure script wrote
@@ -129,9 +134,10 @@ rm -rf "$BUILD/experiments/$EXP"
 mkdir -p "$RUNS"
 LOG="$RUNS/icon_gpu_smoke_${GRID}_${TAG}_${SLURM_JOB_ID:-local}.log"
 export CUDA_VISIBLE_DEVICES=0
-# 20-min cap on the model run (data init is slow, that much wall is expected);
-# success is judged from stdout step progress, a timeout with steps is a pass.
-RUN_CAP="${RUN_CAP:-1200}"
+# 3-min cap on the model run: nothing long may sit on a compute node, so this
+# is a smoke test and not a measurement.  Success is judged from stdout step
+# progress -- a timeout that still made steps is a pass.
+RUN_CAP="${RUN_CAP:-180}"
 timeout -k 60 "$RUN_CAP" srun --exact --ntasks=1 --cpus-per-task=72 --cpu-bind=cores --mem-bind=local \
     bash -c "cd '$BUILD/run' && bash 'exp.$EXP.run'" > "$LOG" 2>&1
 rc=$?

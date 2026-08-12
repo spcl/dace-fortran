@@ -10,14 +10,18 @@
 #
 # ICON source is never vendored into this repo: the reproducible tree is
 # upstream@pin + scripts/icon_patches/*.patch, applied by the lane configure
-# scripts (scripts/configure_icon_{gcc,nvhpc}_daint.sh).
+# scripts (scripts/configure_icon_{gcc,nvhpc}_daint.sh).  The clone lands in
+# the gitignored samples/_work root, so nothing of ICON is ever tracked.
 #
 #   bash scripts/fetch_icon_source.sh
 #   ICON_SRC=/path/to/icon-model bash scripts/fetch_icon_source.sh
 
 set -eu
 
-ICON_SRC=${ICON_SRC:-/capstor/scratch/cscs/ybudanaz/aarch64/icon-model}
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$HERE/.." && pwd)"
+WORK_ROOT=${WORK_ROOT:-$REPO/samples/_work}
+ICON_SRC=${ICON_SRC:-$WORK_ROOT/icon-model}
 ICON_URL=${ICON_URL:-https://gitlab.dkrz.de/icon/icon-model.git}
 ICON_SHA=${ICON_SHA:-8597da45ef4b86323f3fb844caedc4ae5e1ffc01}
 ICON_TAG=${ICON_TAG:-icon-2026.04-public}

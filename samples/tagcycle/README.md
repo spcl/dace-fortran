@@ -256,30 +256,37 @@ Patches (unified diffs against the pin, applied by `scripts/icon_daint_common.sh
 
 Compiler → script → build dir, **one build tree per compiler**, never shared:
 
-There are **exactly four** build trees and their names are derived, never spelled: the build dir is
-`{cpu,gpu}_{gcc,nvhpc}`, a pure function of (compiler lane, `GPU` flag), computed by
-`icon_daint_build_dir_name` in `scripts/icon_daint_common.sh`. A fifth name cannot be produced —
-the helper rejects anything outside the four. `BUILD_DIR=` still overrides for one-off trees, and
+There are **exactly two** build trees and their names are derived, never spelled: the build dir is
+`{cpu,gpu}_nvhpc`, a pure function of (compiler lane, `GPU` flag), computed by
+`icon_daint_build_dir_name` in `scripts/icon_daint_common.sh`. A third name cannot be produced —
+the helper rejects anything outside the two. `BUILD_DIR=` still overrides for one-off trees, and
 says so loudly when it does.
 
 | lane | configure invocation | build dir | status |
 |---|---|---|---|
-| cpu_gcc | `scripts/configure_icon_gcc_daint.sh` | `samples/_work/icon-model/build/cpu_gcc` | builds, runs |
-| gpu_gcc | `GPU=1 scripts/configure_icon_gcc_daint.sh` | `samples/_work/icon-model/build/gpu_gcc` | configures; **make fails on ICON source** (see below) |
 | cpu_nvhpc | `scripts/configure_icon_nvhpc_daint.sh` | `samples/_work/icon-model/build/cpu_nvhpc` | builds, runs |
 | gpu_nvhpc | `GPU=1 scripts/configure_icon_nvhpc_daint.sh` | `samples/_work/icon-model/build/gpu_nvhpc` | builds; OpenACC `-gpu=cc90` |
 
-`gpu_gcc` is a real OpenACC configure, not a disguised CPU build: gcc 16.1.0 here has
-`--enable-offload-targets=nvptx-none`, ICON's configure detects `-fopenacc` and reports
+**ICON is nvhpc-only. gcc is not a supported ICON lane** — it keeps its lanes in the standalone
+velocity and cloudsc samples, whose extracted kernels carry none of ICON's derived-type surface.
+
+The blocker was never a build flag. gcc 16.1.0 here really does offload
+(`--enable-offload-targets=nvptx-none`, ICON's configure detects `-fopenacc` and reports
 `_OPENACC=201711`, and a standalone `!$acc parallel loop` binary JITs its sm_80 PTX onto the
-GH200's cc90 and produces the right answer. What blocks it is **ICON's own source**: ICON's deep
-copies name a derived-type variable and one of its components in a single directive
-(`copyin(this, this%concs)`), an NVHPC extension. gfortran enforces the standard restriction and
-rejects every such site with `Symbol '<x>' has mixed component and non-component accesses` — 29
-files / 172 sites in the configuration these lanes enable, first hit in `externals/rte-rrtmgp`.
-No gfortran flag relaxes it and splitting the clause is not enough (each site needs its own
-directive), so this is an ICON port, not a build-flag change. The lane deliberately fails loudly
-rather than quietly dropping `GPU=1`.
+GH200's cc90 correctly). What blocks it is that ICON's GPU port was written against nvfortran and
+Cray, and leans on OpenACC's derived-type manual deep copy: it names a derived-type variable and
+one of its components in a single directive (`copyin(this, this%concs)`). nvfortran implements
+that; gfortran has no such path and rejects every site with `Symbol '<x>' has mixed component and
+non-component accesses` — **29 files / 172 sites** in the configuration these lanes enable, first
+hit in `externals/rte-rrtmgp`. No gfortran flag relaxes it, and each site needs its own directive
+rather than just a split clause, so making gcc work means porting ICON's GPU data movement.
+
+That port was attempted and abandoned: it reached 19 files across advection, dynamics, AES and
+NWP physics while still expanding, and the pressure to make the build go green produced edits
+that *deleted* clauses (`copyin(fluxes) copyout(fluxes%flux_net)` → `copyout(fluxes%flux_net)`).
+Those compile and are silently wrong at runtime. If this is ever revisited, the rule is
+**split, never delete**: the multiset of `(symbol, clause-kind)` pairs must be identical before
+and after, verified per region.
 
 Stock and DaCe-linked binaries live side by side in the lane tree as `bin/icon.stock` and
 `bin/icon.dace` (only the icon.mk link rule and the velocity patch differ). Each configure run

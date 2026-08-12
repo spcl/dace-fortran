@@ -1,6 +1,6 @@
 #!/bin/bash
 # Shared machinery for the Daint/Alps (aarch64 GH200) ICON configure scripts.
-# Sourced by configure_icon_gcc_daint.sh and configure_icon_nvhpc_daint.sh.
+# Sourced by configure_icon_nvhpc_daint.sh (the only ICON lane script).
 # Lives in one place because the netcdf-c-before-netcdf-fortran ordering, the
 # rpath set, the ICON source patches and the reuse fingerprint MUST NOT drift
 # between the two lanes; per-compiler flags stay in the lane scripts.
@@ -13,26 +13,71 @@ ICON_DAINT_REPO_DIR=$(cd "${ICON_DAINT_SCRIPTS_DIR}/.."; pwd)
 # Every ICON source patch both lanes carry, repo-relative, applied idempotently
 # in order.  Each patch file exists exactly once in the repo -- the pinit guard
 # is the copy the icon e2e tests already use, deliberately NOT duplicated here.
+# Entry form: [<apply-root>::]<repo-relative patch>.  The apply root is
+# relative to the ICON checkout and defaults to "." -- externals/* are git
+# SUBMODULES, so a patch against one must be applied from inside it; git apply
+# run at the superproject root will not cross the submodule boundary.
 ICON_DAINT_PATCHES=(
   scripts/icon_patches/icon_acc_device_management_nompi.patch
   scripts/icon_patches/icon_nh_supervise_acc_directives.patch
   scripts/icon_patches/icon_pinit_seed_guard.patch
 )
+
+# Split an ICON_DAINT_PATCHES entry into its apply root and its patch path.
+icon_daint_patch_root() { case "$1" in *::*) echo "${1%%::*}" ;; *) echo "." ;; esac; }
+icon_daint_patch_file() { echo "${1##*::}"; }
 # Opt-in, applied only by the DaCe-linked build (not part of a stock lane).
 ICON_DAINT_DACE_PATCH=scripts/icon_patches/icon_velocity_dace_dispatch.patch
 # The sha fetch_icon_source.sh pins; the patches are diffs against it.
 ICON_DAINT_PIN_SHA=${ICON_DAINT_PIN_SHA:-8597da45ef4b86323f3fb844caedc4ae5e1ffc01}
 
+# Everything defaults off the repo root; only the toolchain lives outside it,
+# as a sibling of the checkout.  Env overrides win, defaults are never absolute.
+ICON_DAINT_WORK_ROOT=${WORK_ROOT:-${ICON_DAINT_REPO_DIR}/samples/_work}
+ICON_DAINT_SITE_ROOT=$(cd "${ICON_DAINT_REPO_DIR}/.."; pwd)
+
 icon_daint_load_spack() {
-  SPACK_ROOT=${SPACK_ROOT:-/capstor/scratch/cscs/ybudanaz/aarch64/spack}
+  SPACK_ROOT=${SPACK_ROOT:-${ICON_DAINT_SITE_ROOT}/spack}
   # shellcheck disable=SC1091
   source "${SPACK_ROOT}/share/spack/setup-env.sh"
   spack load "gcc@16.1.0 arch=linux-sles15-neoverse_v2"
 }
 
+# The ONLY two ICON build trees.  A name is a pure function of (compiler
+# lane, GPU flag) -- no lane script ever spells a directory itself, so a third
+# tree cannot be produced by a typo or a copied default.
+#
+# ICON is nvhpc-only: gfortran's OpenACC lacks the derived-type manual deep
+# copy ICON's GPU port relies on (it rejects an aggregate and its own component
+# named from one directive), and ICON's directives were written against
+# nvfortran and Cray.  gcc keeps its lanes in the STANDALONE velocity sample,
+# whose extracted kernel carries none of that surface.
+ICON_DAINT_BUILD_DIRS='cpu_nvhpc gpu_nvhpc'
+
+icon_daint_build_dir_name() {
+  local compiler=$1 gpu=$2 name
+  case "${gpu}" in
+    0) name="cpu_${compiler}" ;;
+    1) name="gpu_${compiler}" ;;
+    *) echo "error: GPU must be 0 or 1, got '${gpu}'" >&2; return 1 ;;
+  esac
+  case " ${ICON_DAINT_BUILD_DIRS} " in
+    *" ${name} "*) echo "${name}" ;;
+    *) echo "error: derived build dir '${name}' is not one of: ${ICON_DAINT_BUILD_DIRS}" >&2; return 1 ;;
+  esac
+}
+
+# $1 = compiler lane (nvhpc), $2 = GPU flag (0|1).  BUILD_DIR still wins so
+# a caller can build elsewhere, but an override off the canonical four is
+# announced rather than silently accepted.
 icon_daint_enter_build_dir() {
-  ICON_SRC=${ICON_SRC:-/capstor/scratch/cscs/ybudanaz/aarch64/icon-model}
-  BUILD_DIR=${BUILD_DIR:-${ICON_SRC}/build/$1}
+  local canonical
+  canonical=$(icon_daint_build_dir_name "$1" "$2") || exit 1
+  ICON_SRC=${ICON_SRC:-${ICON_DAINT_WORK_ROOT}/icon-model}
+  if test -n "${BUILD_DIR:-}" && test "$(basename "${BUILD_DIR}")" != "${canonical}"; then
+    echo "[${ICON_DAINT_LANE}] NOTE: BUILD_DIR override '${BUILD_DIR}' is off the canonical ${canonical}" >&2
+  fi
+  BUILD_DIR=${BUILD_DIR:-${ICON_SRC}/build/${canonical}}
   mkdir -p "${BUILD_DIR}"
   BUILD_DIR=$(cd "${BUILD_DIR}"; pwd)
   icon_dir=$(cd "${ICON_SRC}"; pwd)
@@ -45,8 +90,10 @@ icon_daint_enter_build_dir() {
 icon_daint_print_provenance() {
   local f
   echo "ICON_SHA=$(git -C "${icon_dir}" rev-parse HEAD) pin=${ICON_DAINT_PIN_SHA}"
+  local pf
   for f in "${ICON_DAINT_PATCHES[@]}"; do
-    echo "ICON_PATCH=$(basename "${f}") sha256=$(sha256sum "${ICON_DAINT_REPO_DIR}/${f}" | cut -c1-16)"
+    pf=$(icon_daint_patch_file "${f}")
+    echo "ICON_PATCH=$(basename "${pf}") sha256=$(sha256sum "${ICON_DAINT_REPO_DIR}/${pf}" | cut -c1-16)"
   done
 }
 
@@ -66,21 +113,23 @@ icon_daint_assert_pin() {
 icon_daint_apply_patches() {
   local f
   for f in "${ICON_DAINT_PATCHES[@]}"; do
-    icon_daint_apply_one_patch "${f}"
+    icon_daint_apply_one_patch "$(icon_daint_patch_file "${f}")" "$(icon_daint_patch_root "${f}")"
   done
 }
 
 icon_daint_apply_one_patch() {
-  local f=$1 p
+  local f=$1 root=${2:-.} p dir
   p="${ICON_DAINT_REPO_DIR}/${f}"
+  dir="${icon_dir}/${root}"
   test -f "${p}" || { echo "error: missing patch ${p}" >&2; exit 1; }
-  if git -C "${icon_dir}" apply --reverse --check "${p}" 2>/dev/null; then
+  test -d "${dir}" || { echo "error: patch root ${dir} does not exist" >&2; exit 1; }
+  if git -C "${dir}" apply --reverse --check "${p}" 2>/dev/null; then
     echo "[${ICON_DAINT_LANE}] patch already applied: ${f}"
-  elif git -C "${icon_dir}" apply --check "${p}" 2>/dev/null; then
-    git -C "${icon_dir}" apply "${p}"
-    echo "[${ICON_DAINT_LANE}] patch applied: ${f}"
+  elif git -C "${dir}" apply --check "${p}" 2>/dev/null; then
+    git -C "${dir}" apply "${p}"
+    echo "[${ICON_DAINT_LANE}] patch applied: ${f} (root ${root})"
   else
-    echo "error: ${f} neither applies nor is already applied to ${icon_dir}" >&2
+    echo "error: ${f} neither applies nor is already applied under ${dir}" >&2
     echo "       the ICON pin may have moved -- see scripts/fetch_icon_source.sh" >&2
     exit 1
   fi
@@ -160,7 +209,7 @@ icon_daint_stamp_id() {
   local acc
   acc=$(sha256sum "${ICON_DAINT_SCRIPTS_DIR}/$2" "${BASH_SOURCE[0]}" | cut -d' ' -f1 | tr '\n' ' ')
   for f in "${ICON_DAINT_PATCHES[@]}"; do
-    acc="${acc}$(sha256sum "${ICON_DAINT_REPO_DIR}/${f}" | cut -d' ' -f1) "
+    acc="${acc}$(sha256sum "${ICON_DAINT_REPO_DIR}/$(icon_daint_patch_file "${f}")" | cut -d' ' -f1) "
   done
   echo "${acc}${lane_key}"
 }

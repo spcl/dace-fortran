@@ -3,16 +3,17 @@
 # diff against an unpatched (stock-Fortran) ICON.
 #
 #   1. Builds STOCK ICON  (pristine mo_velocity_advection.f90, no DaCe link)
-#      into ``${STOCK_BUILD}`` -- FIRST, so its config-matched .mod + -D
-#      defines are available for the lib build.
+#      into ``${LANE_BUILD}`` as ``bin/icon.stock`` -- FIRST, so its
+#      config-matched .mod + -D defines are available for the lib build.
 #   2. Builds the DaCe velocity library from ICON's REAL
 #      ``mo_velocity_advection`` source, lowered against STOCK's config.
 #   3. Patches mo_velocity_advection.f90 to dispatch into the DaCe wrapper
-#      and builds DACE ICON into ``${DACE_BUILD}``.
+#      and relinks the SAME tree as ``bin/icon.dace``.
 #   4. Caches the R02B05 grid.
 #   5. Generates the short Held-Suarez R02B05 experiment.
-#   6. Generates the runscript for each build dir.
-#   7. Runs both ICON binaries on the SAME exp (NRANKS ranks each).
+#   6. Generates the runscript for the lane build dir.
+#   7. Runs both ICON binaries on the SAME exp (NRANKS ranks each), parking
+#      each run's output as ``experiments/${EXP}.{stock,dace}``.
 #   8. Calls ``compare_icon_runs.py`` to diff every overlapping
 #      ``*_{ml,hl,pl}_*.nc`` variable-by-variable.
 #
@@ -30,36 +31,42 @@
 # setup.  Then re-run without STOCK_ONLY for the full stock-vs-DaCe differential.
 #
 # Tunables:
-#   ICON_SRC, DACE_FORTRAN, DACE_LIBS, GRID_DIR, STOCK_BUILD,
-#   DACE_BUILD, EXP, NRANKS, PY, RTOL, STOCK_ONLY, CAP
+#   ICON_SRC, DACE_FORTRAN, DACE_LIBS, GRID_DIR, LANE_BUILD, GPU,
+#   EXP, NRANKS, PY, RTOL, STOCK_ONLY, CAP
 set -euo pipefail
 
-# Default ICON_SRC to the in-tree submodule (icon-2026.04-public); override to
-# point at a separate checkout.  The old default
-# ``/home/primrose/Work/icon-model-public`` does not exist on this box.
+# Every work root is derived from this script's own location: the repo is two
+# levels above tests/icon/full, and everything ICON needs (clone, grids, DaCe
+# libs) lives under the gitignored samples/_work root inside it.  No default is
+# an absolute path; env overrides still win.
 _SELF_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")"; pwd)
-# DAINT=1 switches defaults to the Alps/daint aarch64 layout (auto-detected on
-# aarch64 hosts; force DAINT=0 to keep x86 defaults there).
+DACE_FORTRAN=${DACE_FORTRAN:-$(cd "${_SELF_DIR}/../../.."; pwd)}
+WORK_ROOT=${WORK_ROOT:-${DACE_FORTRAN}/samples/_work}
+ICON_SRC=${ICON_SRC:-${WORK_ROOT}/icon-model}
+DACE_LIBS=${DACE_LIBS:-${WORK_ROOT}/dace-icon-libs}
+GRID_DIR=${GRID_DIR:-${WORK_ROOT}/icon-grids}
+PY=${PY:-$(command -v python3)}
+# DAINT=1 switches the TOOLCHAIN defaults to the Alps/daint aarch64 lane
+# (auto-detected on aarch64; force DAINT=0 to keep the x86 ones).  Paths are
+# no longer part of this split -- only the lane script and the build budget.
 DAINT=${DAINT:-$([[ $(uname -m) == aarch64 ]] && echo 1 || echo 0)}
 if [[ "${DAINT}" == 1 ]]; then
-  _WORK=/capstor/scratch/cscs/ybudanaz/aarch64
-  ICON_SRC=${ICON_SRC:-${_WORK}/icon-model}
-  DACE_FORTRAN=${DACE_FORTRAN:-${_WORK}/dace-fortran}
-  DACE_LIBS=${DACE_LIBS:-${_WORK}/dace-icon-libs}
-  GRID_DIR=${GRID_DIR:-${_WORK}/icon-grids}
-  PY=${PY:-$(command -v python3)}
-  CONFIGURE_SH=${CONFIGURE_SH:-configure_icon_gcc_daint.sh}
+  CONFIGURE_SH=${CONFIGURE_SH:-configure_icon_nvhpc_daint.sh}
   CAP=${CAP:-none}
   MAKE_J=${MAKE_J:-16}
 fi
-ICON_SRC=${ICON_SRC:-${_SELF_DIR}/icon-model}
-DACE_FORTRAN=${DACE_FORTRAN:-/home/primrose/Work/dace-fortran}
-DACE_LIBS=${DACE_LIBS:-/home/primrose/Work/dace-icon-libs}
-GRID_DIR=${GRID_DIR:-/home/primrose/Work/icon-grids}
 CONFIGURE_SH=${CONFIGURE_SH:-configure_icon_dace_cpu.sh}
 MAKE_J=${MAKE_J:-1}
-STOCK_BUILD=${STOCK_BUILD:-${ICON_SRC}/build/stock_cpu}
-DACE_BUILD=${DACE_BUILD:-${ICON_SRC}/build/dace_cpu}
+GPU=${GPU:-0}
+# ONE build tree, named exactly as scripts/icon_daint_common.sh derives it from
+# (compiler lane, GPU flag): cpu_nvhpc | gpu_nvhpc, never a third name.  Stock
+# and DaCe-linked ICON live side by side inside it as bin/icon.stock and
+# bin/icon.dace -- they differ only by the icon.mk link rule and the velocity
+# patch, so a separate tree buys nothing and would be a third directory.  Each
+# run's output is parked under its own experiments/ suffix.
+_LANE=nvhpc
+[[ ${GPU} == 1 ]] && _PFX=gpu || _PFX=cpu
+LANE_BUILD=${LANE_BUILD:-${ICON_SRC}/build/${_PFX}_${_LANE}}
 EXP=${EXP:-atm_heldsuarez_dace_r02b05}
 NRANKS=${NRANKS:-2}
 # STOCK_ONLY=1: build + run ONLY stock ICON at NRANKS ranks and verify the run is
@@ -68,7 +75,6 @@ NRANKS=${NRANKS:-2}
 # works independently, so an integration failure later can't be confused with a
 # broken experiment / grid / rank setup.
 STOCK_ONLY=${STOCK_ONLY:-0}
-PY=${PY:-/home/primrose/.pyenv/versions/py13/bin/python3}
 RTOL=${RTOL:-1e-12}
 
 GRID_ID=0014
@@ -102,20 +108,26 @@ capped() {
   systemd-run --user --scope -p MemoryMax="${CAP}" -p MemorySwapMax=0 --quiet "$@"
 }
 
-# Configure + clean rebuild ICON.  Pass DACE_LIBS_DIR="" for stock.
+# Configure + build the lane tree, keeping the result as bin/icon.$2.
+# $3=1 wipes the tree first (the stock pass); the DaCe pass reconfigures in
+# place so make recompiles and relinks only what the velocity patch touched.
 # make -j1 + 8GB cap (single build at a time -- see the box's RAM budget).
 build_icon() {
-  local build_dir=$1
-  local dace_libs_dir=$2
-  echo "  -> ${build_dir} (DACE_LIBS_DIR='${dace_libs_dir}')"
-  rm -rf "${build_dir}"
-  mkdir -p "${build_dir}"
+  local dace_libs_dir=$1 label=$2 fresh=${3:-0}
+  echo "  -> ${LANE_BUILD} (bin/icon.${label}, DACE_LIBS_DIR='${dace_libs_dir}')"
+  [[ "${fresh}" == 1 ]] && rm -rf "${LANE_BUILD}"
+  mkdir -p "${LANE_BUILD}"
   # The daint lane scripts own their build dir via BUILD_DIR/ICON_SRC; the x86
   # script still infers it from the cwd, so pass both.
-  ( cd "${build_dir}" && DACE_LIBS_DIR="${dace_libs_dir}" \
-      BUILD_DIR="${build_dir}" ICON_SRC="${ICON_SRC}" \
+  ( cd "${LANE_BUILD}" && GPU="${GPU}" DACE_LIBS_DIR="${dace_libs_dir}" \
+      BUILD_DIR="${LANE_BUILD}" ICON_SRC="${ICON_SRC}" \
       bash "${DACE_FORTRAN}/scripts/${CONFIGURE_SH}" )
-  capped make -C "${build_dir}" -j"${MAKE_J}" >/dev/null
+  # The sub-configures and cmake externals run from make, a shell that never
+  # sourced the lane script; build-env.sh replays the compiler env it used.
+  # shellcheck disable=SC1091
+  [[ -f "${LANE_BUILD}/build-env.sh" ]] && source "${LANE_BUILD}/build-env.sh"
+  capped make -C "${LANE_BUILD}" -j"${MAKE_J}" >/dev/null
+  cp "${LANE_BUILD}/bin/icon" "${LANE_BUILD}/bin/icon.${label}"
 }
 
 
@@ -131,12 +143,15 @@ stage_runscript_helpers() {
 }
 
 
-# Run ICON under the generated runscript and capture rc.
+# Swap bin/icon to the labelled binary, run it, then park the output as
+# experiments/${EXP}.${label} so the next label's run cannot clobber it --
+# both binaries share one tree, so the outputs must not share one exp dir.
 run_icon() {
-  local build_dir=$1
-  local exp_dir="${build_dir}/experiments/${EXP}"
-  rm -rf "${exp_dir}"
-  ln -sfn "${RUN}/exp.${EXP}.run" "${build_dir}/run/exp.${EXP}.run"
+  local label=$1
+  local exp_dir="${LANE_BUILD}/experiments/${EXP}"
+  cp "${LANE_BUILD}/bin/icon.${label}" "${LANE_BUILD}/bin/icon"
+  rm -rf "${exp_dir}" "${exp_dir}.${label}"
+  ln -sfn "${RUN}/exp.${EXP}.run" "${LANE_BUILD}/run/exp.${EXP}.run"
   set +e
   # The generated ``exp.<EXP>.run`` RECOMPUTES the rank count as
   # ``: ${no_of_nodes:=1} ${mpi_procs_pernode:=4}; ((mpi_total_procs = no_of_nodes
@@ -145,10 +160,11 @@ run_icon() {
   # ``env`` so they survive the ``capped`` systemd scope): 1 node x NRANKS =
   # NRANKS ranks.  Both compute (num_io_procs=0), a genuine NRANKS-rank run.
   capped env no_of_nodes=1 mpi_procs_pernode="${NRANKS}" bash -c \
-    "cd '${build_dir}/run' && bash 'exp.${EXP}.run'" > "${build_dir}/icon_run.log" 2>&1
+    "cd '${LANE_BUILD}/run' && bash 'exp.${EXP}.run'" > "${LANE_BUILD}/icon_run.${label}.log" 2>&1
   local rc=$?
   set -e
-  echo "  ${build_dir##*/} run rc=${rc}, exp_dir=${exp_dir}"
+  mv "${exp_dir}" "${exp_dir}.${label}" 2>/dev/null || true
+  echo "  ${label} run rc=${rc}, exp_dir=${exp_dir}.${label}"
 }
 
 
@@ -174,8 +190,8 @@ step "1) Build STOCK ICON (no patch, no DaCe link)"
 # velocity_full.f90 SIGSEGVs in a real run), and that lowering needs the TARGET
 # ICON config's -D defines + compiled .mod, which only exist after a build.
 # STOCK and DACE differ ONLY by the icon.mk link patch + the velocity source
-# patch, so STOCK_BUILD's mod/ + defines are valid for the lib the DACE build
-# links.
+# patch, so the tree's mod/ + defines are valid for the lib the DACE relink
+# picks up.
 # Preserve the pristine source the first time through, and build from it.
 [[ -f "${VELOCITY_F90}.bak" ]] || cp "${VELOCITY_F90}" "${VELOCITY_F90}.bak"
 cp "${VELOCITY_F90}.bak" "${VELOCITY_F90}"
@@ -184,10 +200,10 @@ cp "${VELOCITY_F90}.bak" "${VELOCITY_F90}"
 # above), so an existing ``bin/icon`` was built from the same source; the
 # ~1h clean rebuild buys nothing.  Leave unset for the authoritative
 # from-scratch run.
-if [[ "${STOCK_REUSE:-0}" == 1 && -x "${STOCK_BUILD}/bin/icon" ]]; then
-  echo "(reusing existing ${STOCK_BUILD} -- STOCK_REUSE=1)"
+if [[ "${STOCK_REUSE:-0}" == 1 && -x "${LANE_BUILD}/bin/icon.stock" ]]; then
+  echo "(reusing existing ${LANE_BUILD}/bin/icon.stock -- STOCK_REUSE=1)"
 else
-  build_icon "${STOCK_BUILD}" ""
+  build_icon "" stock 1
 fi
 
 
@@ -201,7 +217,7 @@ step "2) Build DaCe velocity lib from ICON's REAL source (vs STOCK config)"
 # now) and the bind_c shim resolves its USEs against STOCK_BUILD/mod via -I.
 capped "${PY}" "${DACE_FORTRAN}/scripts/build_icon_dace_libs.py" \
   --icon-src "${ICON_SRC}" \
-  --icon-build "${STOCK_BUILD}" \
+  --icon-build "${LANE_BUILD}" \
   --out-dir "${DACE_LIBS}"
 
 
@@ -210,11 +226,11 @@ step "3) Patch mo_velocity_advection.f90 + build DACE ICON"
 # to STOCK_REUSE).  The DaCe lib is always regenerated in step 2, and ICON links
 # it by rpath/soname, so a reused binary picks up the fresh lib at load time --
 # valid whenever only the emitter / lib changed and the patch + ICON tree did not.
-if [[ "${DACE_REUSE:-0}" == 1 && -x "${DACE_BUILD}/bin/icon" ]]; then
-  echo "(reusing existing ${DACE_BUILD} -- DACE_REUSE=1; lib relinked via rpath)"
+if [[ "${DACE_REUSE:-0}" == 1 && -x "${LANE_BUILD}/bin/icon.dace" ]]; then
+  echo "(reusing existing ${LANE_BUILD}/bin/icon.dace -- DACE_REUSE=1; lib relinked via rpath)"
 else
   apply_dace_patch
-  build_icon "${DACE_BUILD}" "${DACE_LIBS}"
+  build_icon "${DACE_LIBS}" dace
 fi
 
 fi
@@ -266,22 +282,20 @@ sed -i \
   "${EXP_FILE}"
 
 
-step "6) Stage runscripts in both build dirs"
-stage_runscript_helpers "${STOCK_BUILD}"
+step "6) Stage runscripts in the lane build dir"
+# One tree, so the runscript's hardcoded ``basedir`` is right for both
+# binaries and is generated exactly once.
+stage_runscript_helpers "${LANE_BUILD}"
 ( cd "${ICON_SRC}" && ./make_runscripts "${EXP}" )
-# The generated runscript hardcodes ``basedir`` to whichever build's
-# set-up.info was symlinked at make_runscripts time -- which is the
-# stock one now.  We regenerate it for the dace build after switching
-# the set-up.info symlink in step 7.
 ls -lh "${RUN}/exp.${EXP}.run"
 
 
 step "7) Run ICON on the exp (${NRANKS} ranks)"
 echo "Stock:"
-run_icon "${STOCK_BUILD}"
+run_icon stock
 
-STOCK_EXP="${STOCK_BUILD}/experiments/${EXP}"
-DACE_EXP="${DACE_BUILD}/experiments/${EXP}"
+STOCK_EXP="${LANE_BUILD}/experiments/${EXP}.stock"
+DACE_EXP="${LANE_BUILD}/experiments/${EXP}.dace"
 
 if [[ "${STOCK_ONLY}" == 1 ]]; then
   # INDEPENDENT 2-node check: prove the plain (un-integrated) ICON run works at
