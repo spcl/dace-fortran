@@ -35,6 +35,16 @@ fi
 # shellcheck disable=SC1091
 . "$SAMPLES_DIR/alloc_pool.sh"
 
+# dace da8e104ff (#2484) defaults cache_distaware=true, appending _rank<n> to the build folder
+# whenever a launcher advertises a rank -- and srun ALWAYS sets SLURM_PROCID, even for a 1-task
+# step. So every lane built into $DACE_default_build_folder_rank0 while the paths here name the
+# unsuffixed folder: the OpenMP preflight aborted on "no such .so", or -- where a pre-#2484 folder
+# survived -- passed against a STALE .so the timed run never loads, which is worse.
+# The suffix buys nothing here: each lane already gets a private BUILD_ROOT, one rank compiles per
+# lane, and the race this job set actually hits (cpu_warm CHUNK=small and CHUNK=large aimed at one
+# BUILD_ROOT concurrently) is between two rank0 processes, so lock_build_root is what guards it.
+export DACE_cache_distaware=0
+
 # Batch jobs don't inherit the interactive PATH, so a bare `python` may lack ordered_set/dace.
 PY="${PYTHON:-$HOME/.pyenv/versions/py13/bin/python}"
 [ -x "$PY" ] || PY="$(command -v python3)"

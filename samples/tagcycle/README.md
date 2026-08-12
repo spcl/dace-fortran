@@ -43,6 +43,16 @@ The Python environment must resolve `dace` from the `FaCe` branch: it carries
 (SIGCHLD unblock plus PMI environment stripping around every build subprocess). Without those
 safeguards any `sdfg.compile()` inside an `srun` step hangs in cmake configure until walltime.
 
+`samples/common.sh` sets `DACE_cache_distaware=0`, and every lane depends on it. dace #2484
+appends `_rank<n>` to the build folder whenever a launcher advertises a rank, and `srun` always
+sets `SLURM_PROCID` — so with it left on, lanes build into `dacecache_*_rank0/` while the paths
+here (and `omp_preflight.py`) look at the unsuffixed name. That surfaced twice, and the second
+way is the dangerous one: velocity and `cloudsc-sweep` aborted loudly on "no such .so", but
+`cloudsc-klon`/`cloudsc-nblks` found a surviving pre-#2484 folder and reported
+`OMP_PREFLIGHT=OK` against a **stale** `.so` the timed run never loads — a green preflight over
+numbers that measure the wrong binary. If a lane ever reports a cache miss it cannot explain,
+check for a `_rank*` build folder first.
+
 ## The four variants
 
 One Grace node has 4 sockets of 72 cores; the measurement runs one variant per socket,
