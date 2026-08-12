@@ -188,12 +188,16 @@ def refreeze(sdfg) -> "FrozenSignature":
     pipeline run between ``build()`` and ``build_fortran_library``), so the bindings regenerate
     against the live signature instead of tripping the drift check.
 
-    Contract -- optimization must not change the Fortran-facing ABI:
+    Contract -- optimization must not change the ARRAY side of the Fortran-facing ABI:
 
-    * data/scalar args must match the original snapshot exactly (names, order, dtypes);
-    * the free-symbol set may only SHRINK (symbols whose last uses were optimized away; the
-      binding simply derives fewer);
-    * a NEW free symbol is refused -- the binding has no value derivation for it.
+    * array args must match the original snapshot exactly (names, order, dtypes) -- the
+      caller's buffers are the ABI, so one going missing means the wrapper would stop
+      passing memory the kernel still expects, or vice versa;
+    * scalar args and the free-symbol set may SHRINK, which is what specialization does:
+      folding a value to a constant deletes its argument, and the binding simply derives
+      and passes fewer. A scalar the kernel no longer reads costs the caller nothing;
+    * anything NEW is refused, symbol or scalar -- the binding has no value derivation
+      for an argument that was not in the Fortran interface.
 
     Returns the new snapshot and attaches it to ``sdfg._frozen_signature``.
     """
@@ -201,6 +205,7 @@ def refreeze(sdfg) -> "FrozenSignature":
     if frozen is None:
         raise RuntimeError(f"refreeze: SDFG {sdfg.name!r} carries no _frozen_signature; "
                            "it must come from SDFGBuilder.build()")
+    live_arglist = sdfg.arglist()
     live_fs = set(str(s) for s in sdfg.free_symbols)
     snap_fs = set(frozen.free_symbols)
 
@@ -209,9 +214,22 @@ def refreeze(sdfg) -> "FrozenSignature":
         raise SignatureDriftError(f"refreeze on {frozen.entry!r}: optimization introduced free "
                                   f"symbols {added} the binding cannot derive values for")
 
+    dropped_arrays = [a.sdfg_name for a in frozen.args
+                      if a.kind == 'array' and a.sdfg_name not in live_arglist]
+    if dropped_arrays:
+        raise SignatureDriftError(f"refreeze on {frozen.entry!r}: optimization removed array "
+                                  f"args {dropped_arrays}; only scalars and free symbols may shrink")
+
+    def _survives(a: FrozenArg) -> bool:
+        if a.sdfg_name in live_arglist or a.sdfg_name in live_fs:
+            return True
+        # Folded to a constant: drop it from the snapshot so the regenerated binding stops
+        # deriving and passing it. Arrays never reach here (refused above).
+        return False
+
     new = replace(
         frozen,
-        args=tuple(a for a in frozen.args if a.sdfg_name not in snap_fs or a.sdfg_name in live_fs),
+        args=tuple(a for a in frozen.args if _survives(a)),
         free_symbols=tuple(s for s in frozen.free_symbols if s in live_fs),
     )
     # Full re-validation (arg partition, per-arg dtypes, symbol set) against the live SDFG.

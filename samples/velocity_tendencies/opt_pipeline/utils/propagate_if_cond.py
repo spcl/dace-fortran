@@ -1,7 +1,7 @@
 import copy
 import dace
 from dace.codegen.control_flow import ConditionalBlock, ContinueBlock, ControlFlowBlock, ControlFlowRegion
-from dace.codegen.targets.unroller import product
+from itertools import product
 from dace.properties import CodeBlock
 from dace.transformation.passes import DeadStateElimination, SymbolPropagation
 from dace.transformation.passes.constant_propagation import ConstantPropagation
