@@ -56,19 +56,20 @@ check for a `_rank*` build folder first.
 ## The four variants
 
 One Grace node has 4 sockets of 72 cores; the measurement runs one variant per socket,
-all four concurrently:
+all concurrently:
 
-- `cloudsc-klon` — `run_cloudsc_perf.py --mode klon`, both gcc and llvm backends (KLON=65536, NBLOCKS=1)
 - `cloudsc-nblks` — `run_cloudsc_perf.py --mode nblks`, both backends (KLON=32, NBLOCKS=2048)
 - `velocity-loopexch` — the `__LOOP_EXCHANGE` TU, both backends × both data layouts
 - `velocity-noloopexch` — the no-loop-exchange TU, same 2×2
 
-⚠ **`cloudsc-klon` is currently OUT of the default cycle** — pass `VARIANTS` without it. At
-`NBLOCKS=1` the only parallelism available is the inner JL loops, and the DaCe lanes do not
-exploit it: job 4411783 measured 15020 ms at 1 thread against 14779 ms at 72, i.e. flat across
-the whole thread grid. The rank still costs ~1.66 h of timed work per backend, so it spends
-~4 h to draw a horizontal line. Put it back once the inner-loop parallelization lands; the
-6 h walltime in `meas_4rank.sbatch` is sized for it and should not be lowered meanwhile.
+⛔ **`cloudsc-klon` is a GPU-only shape and is never measured on CPU.** `KLON=65536, NBLOCKS=1`
+leaves the OpenMP block loop with a single iteration, so the only parallelism on offer is the
+inner JL loops — which the DaCe CPU lanes do not exploit. Job 4411783 measured 15020 ms at
+1 thread against 14779 ms at 72: flat across the entire thread grid, for ~1.66 h of timed work
+per backend. It is the correct shape on GPU, where KLON becomes device-wide parallelism, and
+`samples/gpu/run_cloudsc_gpu.py` pins `MODE=klon` / `NBLOCKS=1` for that reason. The GPU lane
+builds its own klon SDFG under the GPU cache root, so its absence from the CPU `VARIANTS`
+default costs the GPU nothing. Do not add it back to a CPU cycle to "fill the fourth socket".
 
 cloudsc splits by mode; velocity splits by **TU variant**, with the backend and the data layout as
 sweep dimensions inside each rank (4 combinations per rank). The layout is deliberately not tied to
@@ -184,11 +185,12 @@ rebuilding on a compute node (`DACE_FORTRAN_NO_REBUILD=1`).
 
 ## Experiment matrix (CPU)
 
-Legend: ✅ measured, ⚠️ supported but not yet run, ❌ not available. CPU experiments (this
-harness, `tagcycle_warm.sbatch` + `meas_4rank.sbatch`) run BOTH shape variants per kernel; the GPU
-experiments are the separate stage pair below and run only the big flat variant.
+Legend: ✅ measured, ⚠️ supported but not yet run, ❌ not available. CPU experiments are this
+harness (`tagcycle_warm.sbatch` + `meas_4rank.sbatch`); the GPU experiments are the separate stage
+pair below and run only the big flat variant. Velocity runs BOTH shape variants on CPU; cloudsc
+runs only `nblks` there, because the `klon` shape has no CPU parallelism to measure (see above).
 
-**cloudsc (klon + nblks):**
+**cloudsc (nblks on CPU; klon is GPU-only):**
 
 | config | gcc | llvm | nvhpc |
 |---|---|---|---|

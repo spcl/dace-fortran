@@ -36,7 +36,9 @@ TAGDIR="$REPO/samples/tagcycle"
 MEAS="${MEAS:-$REPO}"
 BR2="${BR2:-$WORK_ROOT/meas}"
 LOG="$BR2/logs"
-VARIANTS="${VARIANTS:-cloudsc-klon cloudsc-nblks velocity-loopexch velocity-noloopexch}"
+# No cloudsc-klon: it is not measured on CPU (see meas_4rank.sbatch), so warming it built an
+# artifact nothing consumed -- the GPU lane builds its own klon SDFG under the GPU cache root.
+VARIANTS="${VARIANTS:-cloudsc-nblks velocity-loopexch velocity-noloopexch}"
 BASE_TAG="${BASE_TAG:-094035d}"
 BASE_INDEX="$BR2/arglists_${BASE_TAG}.index"
 WARM_PARALLEL="${WARM_PARALLEL:-1}"

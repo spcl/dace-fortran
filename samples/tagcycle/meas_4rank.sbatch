@@ -8,22 +8,24 @@
 #SBATCH --exclusive
 #SBATCH --mem=0
 #SBATCH --hint=nomultithread
-#SBATCH -t 06:00:00
+#SBATCH -t 02:00:00
 #SBATCH -o samples/_work/logs/meas_4rank-%j.out
 #SBATCH -e samples/_work/logs/meas_4rank-%j.out
 # SUBMIT FROM THE REPO ROOT: slurm resolves the -o/-e paths above against the submit dir.
-# Step 4 of the tag cycle: THE measurement. One Grace node = 4 sockets x 72 cores = 4 ranks, one
-# variant per rank, all four concurrent, each pinned to its own socket. Every variant gets its own
+# Step 4 of the tag cycle: THE measurement. One Grace node = 4 sockets x 72 cores; one rank per
+# VARIANT, all concurrent, each pinned to its own socket. Every variant gets its own
 # log and its own CSV, and a red rank never takes its siblings down.
 #
-# WALLTIME: 06:00:00, raised from 02:00:00 after job 4411783 hit the wall. The critical path is
-# cloudsc-klon, not cloudsc-nblks: at KLON=65536/NBLOCKS=1 one rep costs ~14.8 s at EVERY thread
-# count, so a backend is 8 threads x 50 reps ~= 1.66 h of timed work and the rank needs both
-# dace-gcc and dace-llvm. 4411783 got through dace-gcc alone in 1h53 wall (~13% process overhead
-# on top of timed) and was killed before dace-llvm started; two backends land near 3h45. The
-# other three ranks finish in 24-28 min and are nowhere near the path.
-# Raise further (24h partition cap) only if the klon rep cost grows -- do not lower it back on the
-# evidence of a nblks-only cycle.
+# cloudsc-klon IS NOT MEASURED ON CPU -- it is a GPU-only shape. KLON=65536/NBLOCKS=1 leaves the
+# OpenMP block loop with exactly one iteration, so the only parallelism available is the inner JL
+# loops, which the DaCe CPU lanes do not exploit: job 4411783 measured 15020 ms at 1 thread against
+# 14779 ms at 72, flat across the whole grid, at ~1.66 h of timed work per backend. It is the right
+# shape on GPU, where KLON becomes device-wide parallelism, and samples/gpu/run_cloudsc_gpu.py
+# pins MODE=klon/NBLOCKS=1 for exactly that. The GPU lane builds its own SDFG under the GPU cache
+# root, so dropping klon here costs the GPU nothing.
+#
+# WALLTIME: 02:00:00 for the three remaining ranks, which finish in 24-28 min. Raise -t (24h
+# partition cap) if a cloudsc-nblks sweep ever comes close -- one died at 2h36 historically.
 #
 # ABSOLUTE RULE: no numactl anywhere below. This node exposes 36 NUMA nodes; numactl --cpunodebind
 # inside an srun cpuset returns sched_setaffinity EINVAL and kills the step outright (4390808,
@@ -42,7 +44,8 @@ MEAS="${MEAS:-$REPO}"
 BR2="${BR2:-$WORK_ROOT/meas}"
 RUNS="$BR2/runs"
 PROV="$RUNS/PROVENANCE.txt"
-VARIANTS="${VARIANTS:-cloudsc-klon cloudsc-nblks velocity-loopexch velocity-noloopexch}"
+# cloudsc-klon is deliberately absent: it is a GPU-only shape (see the walltime note).
+VARIANTS="${VARIANTS:-cloudsc-nblks velocity-loopexch velocity-noloopexch}"
 : "${TAG:?TAG must be exported into this job (--export=ALL,TAG=<tag>)}"
 
 mkdir -p "$RUNS"
@@ -68,7 +71,7 @@ echo "THREADS=$THREADS"
 {
     [ -f "$PROV" ] || echo "# utc | job id | job | repo tag | notes"
     printf '%s | %-8s | %-11s | %s | %s\n' "$(date -u +%FT%TZ)" "$SLURM_JOB_ID" "meas_4rank" \
-        "$TAG_NOW" "4 ranks share one node, socket-pinned"
+        "$TAG_NOW" "$(echo "$VARIANTS" | wc -w) ranks share one node, socket-pinned"
 } >> "$PROV"
 
 # --mem=0 above hands the whole node to the batch step; split it evenly so one rank cannot
