@@ -16,7 +16,7 @@ from _util import build_sdfg, have_flang
 
 from dace_fortran.bindings.build_fortran_library import build_fortran_library
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _SRC = Path(__file__).parent / "ppm_vflux_single_tu.f90"
 _ENTRY = "mo_ocean_tracer_transport_vert::upwind_vflux_ppm_onblock"

@@ -12,7 +12,7 @@ import pytest
 from _util import build_sdfg, have_flang
 from _helpers import f2py, sdfg_call_args
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def _build_and_run(tmp_path, *, src: str, name: str, entry: str, fortran_call, int_args=None):

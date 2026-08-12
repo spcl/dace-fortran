@@ -14,7 +14,7 @@ from dace_fortran.external import (Arg, apply_external_functions, clear_external
                                    keep_external)
 from dace_fortran.external_functions import ExternalFunction
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def test_inline_external_swaps_libnode_for_nested_sdfg(tmp_path):

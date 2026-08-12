@@ -25,7 +25,7 @@ from dace_fortran.external_functions import ExternalFunction
 _VELOCITY_FULL = Path(
     os.environ.get("VELOCITY_FULL_F90", str(Path(__file__).resolve().parent / "icon" / "full" / "velocity_full.f90")))
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def _build_c_so(out_dir: Path, name: str, csrc: str) -> Path:

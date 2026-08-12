@@ -17,7 +17,7 @@ import pytest
 
 from _util import build_sdfg, have_flang
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # Parent is a POINTER member so contiguity is unknown at the call site and flang guards it with
 # copy_in/copy_out; a plain contiguous local would be passed by reference with no copy at all.

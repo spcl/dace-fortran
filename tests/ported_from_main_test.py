@@ -8,7 +8,7 @@ import pytest
 
 from _util import have_flang
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not available")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # ---------------------------------------------------------------------------
 # tests/fortran/fortran_loops_test.py  --  simplest nested-loop case.

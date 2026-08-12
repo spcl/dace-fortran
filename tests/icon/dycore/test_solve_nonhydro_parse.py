@@ -49,7 +49,7 @@ _SETUP_HINT = ("set ICON_DYCORE_CC to a built compile_commands.json, "
 # belongs in the `long` lane (fast lane has no such DB).
 pytestmark = [
     pytest.mark.long,
-    pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH"),
+    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
     pytest.mark.skipif(_resolve_compile_commands() is None, reason=_SETUP_HINT),
 ]
 

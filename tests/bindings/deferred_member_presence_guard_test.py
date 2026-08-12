@@ -25,7 +25,7 @@ from dace_fortran.bindings import FlattenPlan, emit_bindings
 from dace_fortran.bindings.fortran_interface import build_auto_interface
 from tests.bindings.struct_bindings_e2e_test import _build_reference_lib, _build_sdfg_lib
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _TYPES_SRC = """
 module mo_opt_state

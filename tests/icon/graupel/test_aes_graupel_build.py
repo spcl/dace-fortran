@@ -28,7 +28,7 @@ _GRAUPEL_SOURCES = [
 # Mangled flang symbol for ``mo_aes_graupel::graupel_run``.
 _ENTRY = "mo_aes_graupel::graupel_run"
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def test_aes_graupel_multi_file_build(tmp_path):

@@ -125,7 +125,7 @@ def test_e2e_parenthesised_base_matches_gfortran(tmp_path: Path):
     from _util import build_sdfg, f2py_compile, have_flang
 
     if not have_flang():
-        pytest.skip("flang-new-21 not on PATH")
+        pytest.skip("no LLVM flang on PATH")
 
     src = """
 module pw_mod

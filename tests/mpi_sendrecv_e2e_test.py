@@ -11,7 +11,7 @@ from _util import build_on_root, build_sdfg, have_flang
 
 pytestmark = [
     pytest.mark.mpi,
-    pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH"),
+    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
 ]
 
 _RING = """

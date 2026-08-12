@@ -112,7 +112,7 @@ def _f2py_reference(tu_text: str, out_dir: Path, mod: str):
     return __import__(mod)
 
 
-@pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+@pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 @pytest.mark.parametrize("engine", ["regex", "fparser"])
 def test_calcelemvolumederivative_e2e(tmp_path: Path, engine: str):
     """SDFG of the inlined kernel matches the gfortran reference element-wise."""

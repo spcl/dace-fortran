@@ -28,7 +28,7 @@ from dace_fortran.bindings import (
 
 pytestmark = [
     pytest.mark.mpi,
-    pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH"),
+    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
     pytest.mark.skipif(shutil.which("mpif90") is None, reason="mpif90 not on PATH"),
 ]
 

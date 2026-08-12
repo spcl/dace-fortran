@@ -45,7 +45,7 @@ from dace_fortran.bindings import (
 _FC = os.environ.get("VELO_FC", "gfortran")
 
 pytestmark = [
-    pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH"),
+    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
     pytest.mark.skipif(shutil.which(_FC) is None, reason=f"{_FC} not on PATH"),
 ]
 

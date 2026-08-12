@@ -35,7 +35,7 @@ from _helpers import f2py
 from _util import build_sdfg, have_flang
 from hazard_scan import scan
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 HEAD = """
 MODULE kernel_mod

@@ -20,7 +20,7 @@ NAME = "cloudsc_gpu_scc_k_caching"
 # since these are integrated in place.
 LOC_TENDENCIES = ("tendency_loc_T", "tendency_loc_a", "tendency_loc_q", "tendency_loc_cld")
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 @pytest.fixture(scope="module")

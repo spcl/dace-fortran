@@ -7,7 +7,7 @@ from _util import build_sdfg, have_flang
 
 import dace.data
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _SRC = """\
 module m

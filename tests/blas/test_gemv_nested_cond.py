@@ -15,7 +15,7 @@ import pytest
 
 from _util import build_sdfg, have_flang
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not available")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _SRC = """
 subroutine probe_gemv_cond(A, x, y, alpha, n, flag)

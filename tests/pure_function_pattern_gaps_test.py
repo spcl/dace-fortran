@@ -21,7 +21,7 @@ from _util import f2py_compile, have_flang
 
 from dace_fortran import build_sdfg_from_files
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # ---------------------------------------------------------------------------
 # Pattern A -- array fn return used inside an arithmetic expression.

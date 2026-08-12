@@ -11,7 +11,7 @@ from _util import have_flang
 
 from dace_fortran import build_sdfg, build_sdfg_from_files
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _MOD_ADD = """
 module mod_add

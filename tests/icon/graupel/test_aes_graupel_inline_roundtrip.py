@@ -12,7 +12,7 @@ import pytest
 from _util import have_flang
 from dace_fortran import build_sdfg_from_files, inline_to_single_tu
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _HERE = Path(__file__).resolve().parent
 _AES = _HERE / "aes_graupel"

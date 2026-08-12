@@ -21,7 +21,7 @@ from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import (clone_shar
                                                                       monomorphize_local_dispatch, retype_to_concrete)
 
 pytestmark = [
-    pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH"),
+    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
     pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
 ]
 

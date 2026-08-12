@@ -27,7 +27,7 @@ _CASES = SINGLE_TU_ARTIFACTS
 
 pytestmark = [
     pytest.mark.long,
-    pytest.mark.skipif(not (HAVE_FLANG and HAVE_OPENMPI), reason="needs flang-new-21 + OpenMPI"),
+    pytest.mark.skipif(not (HAVE_FLANG and HAVE_OPENMPI), reason="needs an LLVM flang on PATH + OpenMPI"),
     pytest.mark.skipif(not have_icon_ocean(),
                        reason="icon-model ocean source not checked out; run "
                        "`git submodule update --init --recursive tests/icon/full/icon-model`"),

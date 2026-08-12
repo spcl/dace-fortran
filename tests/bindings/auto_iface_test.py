@@ -22,7 +22,7 @@ from dace_fortran.bindings.fortran_interface import (
     build_auto_interface,
 )
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def _auto(src: str, tmp_path: Path, name: str, entry: str) -> OriginalInterface:

@@ -42,7 +42,7 @@ _DT = 0.5
 _OMEGA = 1.2
 _TOLRSD = 1.0e-08
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def _compile_reference(tmp_path):

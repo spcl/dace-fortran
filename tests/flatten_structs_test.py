@@ -8,7 +8,7 @@ import pytest
 
 from _util import build_sdfg, have_flang, run_passes_dump
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not available")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _HERE = Path(__file__).resolve().parent
 _SRC = (_HERE / "complex_struct.f90").read_text()

@@ -35,7 +35,7 @@ from icon.ocean._ocean_e2e import build_dut_and_ref, synth_call_inputs, _invoke
 pytestmark = [
     pytest.mark.long,
     pytest.mark.mpi,
-    pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH"),
+    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
     pytest.mark.skipif(shutil.which("mpifort") is None, reason="mpifort not on PATH (need an MPI Fortran wrapper)"),
     pytest.mark.skipif(not have_icon_ocean(), reason="icon-model ocean source not checked out"),
 ]

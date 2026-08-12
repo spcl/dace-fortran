@@ -11,7 +11,7 @@ import pytest
 
 from _util import build_sdfg, f2py_compile, have_flang
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def _run(tmp_path, src, dims, *, entry="probe_mod::probe", shape_of=None):

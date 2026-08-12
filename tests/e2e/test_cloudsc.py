@@ -28,7 +28,7 @@ _SRC = Path(__file__).resolve().parents[1] / "cloudsc" / "full" / "cloudsc.F90"
 # assumed present.
 _SPECIALIZE = {"NCLV": 5, "NCLDQI": 2, "NCLDQL": 1, "NCLDQR": 3, "NCLDQS": 4}
 
-pytestmark = [pytest.mark.e2e, pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")]
+pytestmark = [pytest.mark.e2e, pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")]
 
 
 def _split_specialize(sdfg):

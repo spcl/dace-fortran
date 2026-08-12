@@ -14,7 +14,7 @@ import pytest
 
 from _util import build_sdfg, f2py_compile, have_flang
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # Mirrors the cloudsc trigger: explicit-shape local 3-D array, PARAMETER
 # last extent, written with a constant PARAMETER 3rd index in one loop

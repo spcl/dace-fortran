@@ -80,7 +80,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _util import build_sdfg, have_flang  # noqa: E402
 
-_needs_flang = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+_needs_flang = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def _run_seq_assoc(tmp_path, ind, src_decls, call):

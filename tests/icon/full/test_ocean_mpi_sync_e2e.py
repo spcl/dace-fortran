@@ -30,7 +30,7 @@ from dace_fortran.external import Arg, clear_external_registry, keep_external
 
 pytestmark = [
     pytest.mark.mpi,
-    pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH"),
+    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
     pytest.mark.skipif(shutil.which("mpifort") is None, reason="mpifort not on PATH (need an MPI Fortran wrapper)"),
 ]
 

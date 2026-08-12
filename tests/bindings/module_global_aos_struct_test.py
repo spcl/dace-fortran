@@ -17,7 +17,7 @@ import pytest
 
 from _util import have_flang
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # --- READ: out(:) += becxx(1)%k(:, jb), via an inlined callee ---------------
 _SRC_READ = """

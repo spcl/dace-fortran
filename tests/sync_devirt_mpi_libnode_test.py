@@ -12,7 +12,7 @@ from _util import build_sdfg, have_flang
 from dace_fortran.inliner.ast_desugaring.monomorphize import parse_program
 from dace_fortran.inliner.ast_desugaring.monomorphize_rewrite import (AxisSpec, monomorphize, MonomorphizationSpec)
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 #: Abstract comm_pattern (deferred exchange) + concrete comm_orig whose exchange packs then
 #: issues raw MPI. `external` MPI decls so it lowers with no mpi.mod (bridge recognises the

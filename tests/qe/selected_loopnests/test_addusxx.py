@@ -33,7 +33,7 @@ import pytest
 from _prng import complex_stream
 from _util import build_sdfg, have_flang
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # Small symbolic problem sizes -- a correctness test, not a benchmark.
 # ``ncol = nh*nh`` qgm columns, ``nbeta = nat*nh`` projector entries.

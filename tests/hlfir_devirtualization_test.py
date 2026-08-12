@@ -18,7 +18,7 @@ import pytest
 
 from _util import _FLANG, have_flang
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # Minimal abstract base + one concrete override, kept in its own TU so a direct fir.call to
 # the override could only mean genuine devirtualisation (no concrete-TYPE call to muddy the

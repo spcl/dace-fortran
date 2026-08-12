@@ -21,7 +21,7 @@ from _util import build_sdfg, have_flang
 
 _HERE = Path(__file__).resolve().parent
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # ---------------------------------------------------------------------------
 # helpers

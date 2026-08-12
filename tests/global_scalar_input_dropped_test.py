@@ -36,7 +36,7 @@ contains
 end module mdriver
 """
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def test_module_scalar_input_survives_sccp(tmp_path):

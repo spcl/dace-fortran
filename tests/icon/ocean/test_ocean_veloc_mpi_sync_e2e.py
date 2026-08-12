@@ -41,7 +41,7 @@ from icon.ocean._ocean_e2e import (_invoke, _resolve_module_seeds, _retarget_shi
 
 pytestmark = [
     pytest.mark.mpi,
-    pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH"),
+    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
     pytest.mark.skipif(shutil.which("mpifort") is None, reason="mpifort not on PATH (need an MPI Fortran wrapper)"),
 ]
 

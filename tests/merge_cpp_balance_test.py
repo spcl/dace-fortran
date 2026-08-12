@@ -17,7 +17,7 @@ from _util import have_flang
 from dace_fortran import build_sdfg_from_files
 from dace_fortran.preprocess import merge_used_modules
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # mo_dbl shares a file with a preceding module wrapped in a whole-module #ifdef:
 # mo_dbl's extracted block picks up the orphan #endif, the wrapped block an orphan #if.

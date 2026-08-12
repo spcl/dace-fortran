@@ -106,7 +106,7 @@ def test_apply_validates_duplicate_emit_name():
 from _util import build_sdfg, have_flang  # tests/conftest.py puts tests/ on sys.path
 
 _e2e = [
-    pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH"),
+    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
     pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
 ]
 

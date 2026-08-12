@@ -22,7 +22,7 @@ from _util import have_flang
 _HERE = Path(__file__).resolve().parent
 _SRC = _HERE / "fft_probe_2d3d.f90"
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def _build_and_assert_fft(src: str, entry: str, name: str, out_dir):

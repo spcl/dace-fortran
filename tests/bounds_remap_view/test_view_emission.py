@@ -18,7 +18,7 @@ _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
 from _util import build_sdfg, have_flang  # noqa: E402
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def _make_builder(probe_name: str, tmp_path: Path, entry: str = "run"):

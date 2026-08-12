@@ -14,7 +14,7 @@ from dace_fortran.bindings.build_fortran_library import build_fortran_library
 from dace_fortran.bindings.fortran_interface import OriginalArg, OriginalInterface
 from dace_fortran.bindings.flatten_plan import FlattenPlan
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _N = 4
 

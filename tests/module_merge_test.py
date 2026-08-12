@@ -14,7 +14,7 @@ import pytest
 from _util import build_sdfg, have_flang
 from dace_fortran.preprocess import merge_used_modules
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # Transitive project: physmod  <-  drivermod (use physmod)  <-  drv (use drivermod)
 _PHYSMOD = """\

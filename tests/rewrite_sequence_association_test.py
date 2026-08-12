@@ -19,7 +19,7 @@ import pytest
 
 from _util import build_sdfg, compile_to_hlfir, have_flang
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _PRELUDE = ("lower-fir-select-case,hlfir-inline-all,hlfir-fold-element-aliases,"
             "hlfir-expand-vector-subscript-gather,hlfir-expand-vector-subscript-scatter,symbol-dce,"

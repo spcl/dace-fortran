@@ -20,7 +20,7 @@ NAME = "cloudsc_gpu_multistep"
 # state so both start identical.
 PROGNOSTIC_STATE = ("PT", "PQ", "PA", "PCLV")
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 @pytest.fixture(scope="module")

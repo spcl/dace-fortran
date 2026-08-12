@@ -16,7 +16,7 @@ import pytest
 
 from _util import build_sdfg, have_flang
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # scatter/gather variants (incl. symbolic extents) are supported in Phase 1.5;
 # positive tests in noncontig_gather_scatter_test.py. Remaining unsupported case:

@@ -8,7 +8,7 @@ from cloudsc.full._registries import CLOUDSC_F90FLAGS
 from cloudsc.full._harness import run_cloudsc
 
 _HERE = Path(__file__).resolve().parent
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 @pytest.fixture(scope="module")

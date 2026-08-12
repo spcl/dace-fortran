@@ -25,7 +25,7 @@ from icon.ocean._ocean_e2e import run_kernel_e2e
 
 pytestmark = [
     pytest.mark.long,
-    pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH"),
+    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
     pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
 ]
 

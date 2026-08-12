@@ -13,7 +13,7 @@ import pytest
 from _util import build_sdfg, have_flang
 from dace_fortran.codegen_check import CRITICAL_WARNINGS, analyze
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # An ALLOCATE whose extent comes from a runtime scalar, plus a loop nest over it -- the shape that produced the
 # uninitialised-extent miscompile.  Kept tiny so the analysis, not the build, dominates the runtime.

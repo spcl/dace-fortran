@@ -21,7 +21,7 @@ import pytest
 
 from _util import build_sdfg, have_flang
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # Mirrors ast_v1_h_psi.f90:88-133 (xclib_dft_is + capital), wrapped so the
 # SELECT CASE result lands in an integer output.

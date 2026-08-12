@@ -20,7 +20,7 @@ _HERE = __import__("pathlib").Path(__file__).resolve().parent
 pytestmark = [
     # NOT a `long` test: builds the checked-in extracted single-TU kernels
     # (no ICON-from-source), so it belongs in the fast lane.
-    pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH"),
+    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
     pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
 ]
 

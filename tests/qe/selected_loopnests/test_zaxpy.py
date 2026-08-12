@@ -14,7 +14,7 @@ import pytest
 from _prng import complex_stream
 from _util import build_sdfg, have_flang
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # (kind, indirection) -> Fortran kernel body. n=iteration count; ymap/xmap are 1-based index maps;
 # AoS uses complex(8), SoA uses paired real(8) re/im arrays.

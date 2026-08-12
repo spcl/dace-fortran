@@ -39,7 +39,7 @@ from qe.exx_bp import test_vexx_bp_k_gpu_parse as vexx
 
 pytestmark = [
     pytest.mark.e2e,
-    pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH"),
+    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
     pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
 ]
 

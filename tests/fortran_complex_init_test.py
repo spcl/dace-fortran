@@ -16,7 +16,7 @@ from dace.codegen.exceptions import CompilationError
 
 from _util import build_sdfg, have_flang
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def test_fortran_frontend_complex_init(tmp_path):

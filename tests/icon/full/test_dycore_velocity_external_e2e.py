@@ -45,7 +45,7 @@ from dace_fortran.bindings.fortran_interface import build_auto_interface
 from dace_fortran.external import Arg, clear_external_registry, keep_external
 
 pytestmark = [
-    pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH"),
+    pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH"),
     pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran not on PATH"),
 ]
 

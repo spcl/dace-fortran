@@ -20,7 +20,7 @@ import pytest
 
 from _util import build_sdfg, have_flang
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # Module-global TARGET derived-type object (mirrors ICON's mo_ocean_physics_types::v_params)
 # with a POINTER array member, rebound by a local pointer. out0 = g%arr(1) reads directly (so

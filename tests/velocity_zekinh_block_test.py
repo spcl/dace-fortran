@@ -15,7 +15,7 @@ import pytest
 
 from _util import build_sdfg, have_flang
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _SRC_PATH = Path(__file__).resolve().parent / "velocity_zekinh_block.f90"
 _ENTRY = "mo_velocity_zekinh::zekinh_block"

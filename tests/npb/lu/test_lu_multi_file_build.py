@@ -20,7 +20,7 @@ _LU_SOURCES = [_HERE / "lu.F90", _HERE / "useapplu.F90"]
 # Kernels dolu sequences; if none survive the merge, lu.F90's body was silently dropped.
 _LU_KERNELS = ("ssor", "rhs", "jacld", "jacu", "blts", "buts", "erhs")
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 @pytest.mark.parametrize("merge_engine", ["fparser", "regex"])
