@@ -1,4 +1,4 @@
-"""HLFIR frontend test helpers: compile inline Fortran to ``.hlfir`` via ``flang-new-21``, build SDFGs.  ``have_flang()`` reports availability so callers can skip collection."""
+"""HLFIR frontend test helpers: compile inline Fortran to ``.hlfir`` via LLVM flang, build SDFGs.  ``have_flang()`` reports availability so callers can skip collection; ``flang_binary()`` returns the resolved driver for any supported LLVM major."""
 
 import os
 import re
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from dace_fortran.llvm_toolchain import flang_names
+from dace_fortran.llvm_toolchain import flang_names, intrinsic_modules_path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _HLFIR_DIR = _REPO_ROOT / "dace" / "frontend" / "hlfir"
@@ -98,6 +98,23 @@ def have_flang() -> bool:
     return _FLANG is not None
 
 
+def flang_binary() -> str:
+    """Resolved LLVM-flang path, skipping the test when no supported major is installed.
+
+    Every test that spawns flang goes through this rather than a literal binary name:
+    the naming scheme differs per distribution and per LLVM major, so a hardcoded
+    ``flang-new-21`` fails on an install that ships only ``flang-22``.
+    """
+    if _FLANG is None:
+        pytest.skip(f"no LLVM flang on PATH (tried {', '.join(_FLANG_NAMES)})")
+    return _FLANG
+
+
+def flang_intrinsic_modules_path() -> str:
+    """``-fintrinsic-modules-path`` argument matching the resolved flang."""
+    return str(intrinsic_modules_path(flang_binary()))
+
+
 # strict-FP flags keep an SDFG binding and its gfortran reference byte-identical; -ffree-line-length-none for long generated signatures.
 FLANG_PORTABLE_FFLAGS = ["-O0", "-fno-fast-math", "-ffp-contract=off", "-ffree-line-length-none"]
 
@@ -158,9 +175,9 @@ def compile_to_hlfir(source: str,
 
     ``merge`` (default on): inline USE-d modules into one TU; no-op for self-contained input.
     Integer-valued REAL powers (``x**2.0``) are always expanded to multiplies so bridge/gfortran stay bit-identical.
-    ``preprocess``: opt-in ``IF (intvar)`` rewrite for legacy INTEGER-as-IF-condition code flang-new-21 rejects; off by default.
+    ``preprocess``: opt-in ``IF (intvar)`` rewrite for legacy INTEGER-as-IF-condition code flang rejects; off by default.
     """
-    assert _FLANG is not None, "flang-new-21 not available"
+    assert _FLANG is not None, "no LLVM flang available"
     out_dir.mkdir(parents=True, exist_ok=True)
     src = out_dir / f"{name}.f90"
     from dace_fortran.preprocess import preprocess_fortran_source

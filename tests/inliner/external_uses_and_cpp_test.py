@@ -16,12 +16,9 @@ from tempfile import TemporaryDirectory
 
 import pytest
 
+from _util import have_flang
 from dace_fortran.fparser_inliner import cpp_expand_sources, inline_to_ast, inline_to_single_tu
 from dace_fortran.preprocess import merge_used_modules
-
-
-def _have_flang() -> bool:
-    return shutil.which("flang-new-21") is not None
 
 
 def _have_gfortran() -> bool:
@@ -98,7 +95,7 @@ def test_external_use_reached_does_not_crash():
 # expand_cpp -- the C-preprocessor pre-pass (needs flang)
 # ---------------------------------------------------------------------------
 
-pytestmark_flang = pytest.mark.skipif(not _have_flang(), reason="flang-new-21 not on PATH")
+pytestmark_flang = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 @pytestmark_flang

@@ -37,8 +37,8 @@ def _assert_inlined(sdfg, helper: str):
 
 
 @pytest.mark.skipif(
-    not (_have("flang-new-21", "bear", "autoreconf", "automake", "mpif90", "nf-config") and _has_netcdf_fortran()),
-    reason="flang-new-21 / bear / autotools / MPI / netcdf-fortran missing",
+    not (have_flang() and _have("bear", "autoreconf", "automake", "mpif90", "nf-config") and _has_netcdf_fortran()),
+    reason="LLVM flang / bear / autotools / MPI / netcdf-fortran missing",
 )
 def test_jacobi_autotools_bear(tmp_path: Path):
     """Autotools + bear -- make -> compile_commands.json (ICON build shape); drives the one-call build_sdfg_from_project tier-3 entry point."""
@@ -62,8 +62,8 @@ def test_jacobi_autotools_bear(tmp_path: Path):
 
 
 @pytest.mark.skipif(
-    not _have("cmake", "flang-new-21"),
-    reason="cmake / flang-new-21 missing",
+    not (_have("cmake") and have_flang()),
+    reason="cmake / LLVM flang missing",
 )
 def test_csr_spmv_cmake(tmp_path: Path):
     """cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -> compile_commands.json; structurally different project, no per-project plumbing needed."""

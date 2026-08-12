@@ -93,3 +93,12 @@ def require_flang(version: Optional[str] = None) -> str:
 def llvm_prefix(flang_binary: str) -> Path:
     """Install prefix of a flang binary, resolving through the usual ``bin/`` symlink."""
     return Path(flang_binary).resolve().parent.parent
+
+
+def intrinsic_modules_path(flang_binary: str) -> Path:
+    """``-fintrinsic-modules-path`` for a flang binary: ``<prefix>/include/flang``.
+
+    Debian's ``/usr/lib/llvm-<major>`` and spack/upstream prefixes share this layout,
+    so deriving it beats hardcoding either one.
+    """
+    return llvm_prefix(flang_binary) / "include" / "flang"

@@ -5,17 +5,17 @@ Runs against three fixtures: external_basic_example.f90 (one EXTERNAL),
 external_multiple_example.f90 (three in one line), external_already_used_example.f90
 (EXTERNAL + existing USE); utils_mod.f90 defines the referenced procedures."""
 import re
-import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
 import pytest
 
+from _util import flang_binary, flang_intrinsic_modules_path, have_flang
 from dace_fortran.preprocess import replace_external_with_modules
 
 _HERE = Path(__file__).resolve().parent
-_HAVE_FLANG = shutil.which("flang-new-21") is not None
+_HAVE_FLANG = have_flang()
 
 
 def _read(name: str) -> str:
@@ -148,7 +148,7 @@ END SUBROUTINE
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _HAVE_FLANG, reason="flang-new-21 not on PATH")
+@pytest.mark.skipif(not _HAVE_FLANG, reason="no LLVM flang on PATH")
 def test_rewritten_basic_example_parses_under_flang(tmp_path):
     """Rewrite output is valid Fortran flang can lower (kernel + sidecar module staged side by side)."""
     src = _read("external_basic_example.f90")
@@ -159,13 +159,15 @@ def test_rewritten_basic_example_parses_under_flang(tmp_path):
     kernel.write_text(rewritten)
     mod.write_text(_read("utils_mod.f90"))
     subprocess.check_call([
-        "flang-new-21", "-fc1", "-emit-hlfir", "-fintrinsic-modules-path", "/usr/lib/llvm-21/include/flang",
+        flang_binary(), "-fc1", "-emit-hlfir", "-fintrinsic-modules-path",
+        flang_intrinsic_modules_path(),
         str(mod), "-o",
         str(tmp_path / "utils_mod.hlfir")
     ],
                           cwd=tmp_path)
     subprocess.check_call([
-        "flang-new-21", "-fc1", "-emit-hlfir", "-fintrinsic-modules-path", "/usr/lib/llvm-21/include/flang",
+        flang_binary(), "-fc1", "-emit-hlfir", "-fintrinsic-modules-path",
+        flang_intrinsic_modules_path(),
         str(kernel), "-o",
         str(tmp_path / "kernel.hlfir")
     ],

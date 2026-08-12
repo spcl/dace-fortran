@@ -24,9 +24,9 @@ from pathlib import Path
 
 import pytest
 
-from _util import have_flang
+from _util import flang_binary, flang_intrinsic_modules_path, have_flang
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _HERE = Path(__file__).resolve().parent
 
@@ -36,7 +36,8 @@ def _emit_hlfir(src_path: Path) -> str:
     with tempfile.TemporaryDirectory(prefix="brv_") as td:
         out = Path(td) / "k.hlfir"
         subprocess.check_call([
-            "flang-new-21", "-fc1", "-fintrinsic-modules-path", "/usr/lib/llvm-21/include/flang", "-emit-hlfir",
+            flang_binary(), "-fc1", "-fintrinsic-modules-path",
+            flang_intrinsic_modules_path(), "-emit-hlfir",
             str(src_path), "-o",
             str(out)
         ],

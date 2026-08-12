@@ -11,13 +11,13 @@ Composes a TU from the icon-model submodule, registers externals, drives
 ``build_sdfg_from_hlfir``.  Skipped if the submodule/flang/OpenMPI is absent.
 """
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
 import dace_fortran
+from _util import have_flang
 from dace_fortran.flang_codebase import find_openmpi_include
 
 from ._fc import (
@@ -122,7 +122,7 @@ _CACHE_DIR = Path(os.environ.get("DACE_FORTRAN_CACHE", str(Path.home() / ".cache
 _SOLVE_NH_TARGET = "src/atm_dyn_iconam/mo_solve_nonhydro.o"
 _SOLVE_NH_ENTRY = "mo_solve_nonhydro::solve_nh"
 
-_HAVE_FLANG = shutil.which("flang-new-21") is not None
+_HAVE_FLANG = have_flang()
 _HAVE_OPENMPI = find_openmpi_include() is not None
 
 
@@ -237,7 +237,7 @@ _ICON_EXTERNAL_STUBS = (
 # heavy CI lane checks it out -> `long`.
 pytestmark = [
     pytest.mark.long,
-    pytest.mark.skipif(not (_HAVE_FLANG and _HAVE_OPENMPI), reason="needs flang-new-21 + OpenMPI"),
+    pytest.mark.skipif(not (_HAVE_FLANG and _HAVE_OPENMPI), reason="needs an LLVM flang on PATH + OpenMPI"),
 ]
 
 
@@ -306,7 +306,7 @@ def test_build_sdfg_for_icon_solve_nh(tmp_path: Path):
 @pytest.mark.parametrize("fc", FORTRAN_COMPILERS)
 def test_sync_iso_c_wrapper_source_parses(fc, tmp_path: Path):
     """iso_c wrapper source is well-formed under every Fortran compiler we ship
-    binding-shim recipes for: gfortran, flang-new-21, nvfortran.  Regression gate for
+    binding-shim recipes for: gfortran, flang, nvfortran.  Regression gate for
     the ``bind(c, name=...)`` signatures, independent of whether icon-model is built."""
     fc_name, fc_path = fc
     # Minimal stubs for the modules the wrapper USEs; concrete bodies are no-ops.
@@ -368,7 +368,7 @@ END MODULE mo_sync
     syntax_argv = syntax_check_argv(fc_name, tmp_path)
     if fc_name == "nvfortran":
         mod_out_flag = ["-module", str(tmp_path)]
-    elif fc_name == "flang-new-21":
+    elif fc_name == "flang":
         # flang-new -fsyntax-only skips module emission; stubs parsed in-line with the
         # wrapper, no -J/-module needed.
         mod_out_flag = []

@@ -4,7 +4,6 @@ ICON's real ``mo_velocity_advection.f90``, asserting the merged TU lowers to HLF
 cleanly under flang-21. Skipped if no ICON checkout, flang, or OpenMPI.
 """
 import os
-import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -12,6 +11,7 @@ from pathlib import Path
 import pytest
 
 import dace_fortran
+from _util import flang_binary, have_flang
 from dace_fortran.flang_codebase import (
     FLANG_BUG_PATCHES,
     LIBRARY_STUBS,
@@ -33,7 +33,7 @@ _CACHE_DIR = Path(os.environ.get("DACE_FORTRAN_CACHE", str(Path(tempfile.gettemp
 # Prefer a pristine .bak if a developer left one; else the submodule's own source.
 _VELOCITY_REF = _VELOCITY_BAK if _VELOCITY_BAK.is_file() else _VELOCITY_SRC
 
-_HAVE_FLANG = shutil.which("flang-new-21") is not None
+_HAVE_FLANG = have_flang()
 _HAVE_OPENMPI = find_openmpi_include() is not None
 # icon_build session fixture (root conftest.py) configures+builds ICON on demand;
 # no .mod tree required upfront here.
@@ -118,7 +118,7 @@ def test_extract_make_compile_args_for_icon_velocity(icon_build):
     assert src_include in args["include_dirs"]
 
 
-@pytest.mark.skipif(not (_HAVE_FLANG and _HAVE_OPENMPI), reason="needs flang-new-21 + OpenMPI")
+@pytest.mark.skipif(not (_HAVE_FLANG and _HAVE_OPENMPI), reason="needs an LLVM flang on PATH + OpenMPI")
 def test_prepare_translation_unit_flang_clean_on_icon_velocity(tmp_path: Path, icon_build):
     """Compose a TU for ICON's real mo_velocity_advection.f90 and verify flang-21 lowers it
     to HLFIR with zero errors -- pins the entire merge+stubs+patches+defines recipe as a gate."""
@@ -149,7 +149,7 @@ def test_prepare_translation_unit_flang_clean_on_icon_velocity(tmp_path: Path, i
     # iso_c_binding.mod there, which flang then rejects).
     result = subprocess.run(
         [
-            "flang-new-21",
+            flang_binary(),
             "-fc1",
             "-cpp",
             "-U_OPENMP",

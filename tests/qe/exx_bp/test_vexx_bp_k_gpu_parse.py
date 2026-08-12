@@ -30,13 +30,13 @@ from pathlib import Path
 import pytest
 
 import dace_fortran
-from _util import have_flang
+from _util import flang_binary, flang_intrinsic_modules_path, have_flang
 
 _HERE = Path(__file__).resolve().parent
 _SRC = _HERE / "ast_v1_vexx_bp_k_gpu.f90"
 _ENTRY = "exx_bp::vexx_bp_k_gpu"
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 _FFT_INTERFACES_EMPTY_RE = re.compile(r"MODULE fft_interfaces\s*\n"
                                       r"  IMPLICIT NONE\s*\n"
@@ -169,7 +169,8 @@ def test_restore_fft_interfaces_unblocks_flang_parse(tmp_path):
     rewritten.write_text(src)
     out = tmp_path / "qe.hlfir"
     result = subprocess.run([
-        "/usr/bin/flang-new-21", "-fc1", "-fintrinsic-modules-path", "/usr/lib/llvm-21/include/flang", "-emit-hlfir",
+        flang_binary(), "-fc1", "-fintrinsic-modules-path",
+        flang_intrinsic_modules_path(), "-emit-hlfir",
         str(rewritten), "-o",
         str(out)
     ],

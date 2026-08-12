@@ -5,14 +5,14 @@ regression on either route surfaces immediately: (1) the self-contained
 :mod:`dace_fortran.flang_codebase` (merge + library stubs + ICON's ``-D`` defines),
 emitted to HLFIR and lowered to an SDFG.
 
-Skipped without the icon-model submodule or flang-new-21/OpenMPI.
+Skipped without the icon-model submodule or an LLVM flang/OpenMPI.
 """
-import shutil
 from pathlib import Path
 
 import pytest
 
 import dace_fortran
+from _util import have_flang
 from dace_fortran.flang_codebase import find_openmpi_include
 
 _HERE = Path(__file__).resolve().parent
@@ -35,7 +35,7 @@ _CACHE_DIR = Path(os.environ.get("DACE_FORTRAN_CACHE", str(Path.home() / ".cache
 _VELOCITY_TARGET = "src/atm_dyn_iconam/mo_velocity_advection.o"
 _VELOCITY_ENTRY = "mo_velocity_advection::velocity_tendencies"
 
-_HAVE_FLANG = shutil.which("flang-new-21") is not None
+_HAVE_FLANG = have_flang()
 _HAVE_OPENMPI = find_openmpi_include() is not None
 
 
@@ -113,7 +113,7 @@ def _icon_compile_args() -> dict:
 # The self-contained velocity_full.f90 e2e tests stay in the fast lane.
 pytestmark = [
     pytest.mark.long,
-    pytest.mark.skipif(not (_HAVE_FLANG and _HAVE_OPENMPI), reason="needs flang-new-21 + OpenMPI"),
+    pytest.mark.skipif(not (_HAVE_FLANG and _HAVE_OPENMPI), reason="needs an LLVM flang on PATH + OpenMPI"),
 ]
 
 # ---------------------------------------------------------------------------

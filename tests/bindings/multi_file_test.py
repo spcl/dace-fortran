@@ -8,18 +8,16 @@ from pathlib import Path
 
 import pytest
 
-from _util import have_flang
+from _util import flang_binary, have_flang
 from dace_fortran.hlfir_to_sdfg import SDFGBuilder
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
-
-_FLANG = "flang-new-21"
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
 def _hlfir(src: str, out: Path) -> Path:
     f90 = out.with_suffix(".f90")
     f90.write_text(src)
-    subprocess.check_call([_FLANG, "-fc1", "-emit-hlfir", str(f90), "-o", str(out)])
+    subprocess.check_call([flang_binary(), "-fc1", "-emit-hlfir", str(f90), "-o", str(out)])
     return out
 
 

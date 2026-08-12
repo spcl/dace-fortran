@@ -40,7 +40,7 @@ from pathlib import Path
 import pytest
 
 import dace_fortran
-from _util import have_flang
+from _util import flang_binary, flang_intrinsic_modules_path, have_flang
 
 _HERE = Path(__file__).resolve().parent
 _SRC = _HERE / "ast_v1_newdxx.f90"
@@ -53,7 +53,7 @@ _NNR = 4
 _NGMS = 4
 _NKB = 2
 
-pytestmark = pytest.mark.skipif(not have_flang(), reason="flang-new-21 not on PATH")
+pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 # C-callable driver that initialises the QE module state (shared with the
 # gfortran reference via ``init_newdxx_g_state_c``), then dispatches into the
@@ -116,7 +116,8 @@ def test_newdxx_g_flang_parses(tmp_path):
     import subprocess
     out = tmp_path / "qe.hlfir"
     result = subprocess.run([
-        "/usr/bin/flang-new-21", "-fc1", "-fintrinsic-modules-path", "/usr/lib/llvm-21/include/flang", "-emit-hlfir",
+        flang_binary(), "-fc1", "-fintrinsic-modules-path",
+        flang_intrinsic_modules_path(), "-emit-hlfir",
         str(_SRC), "-o",
         str(out)
     ],

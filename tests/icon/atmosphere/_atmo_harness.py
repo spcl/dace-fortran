@@ -11,11 +11,11 @@ collectives, comm-pattern construction, terminal I/O/timers.  Slow (~140k-line
 closure) and memory-heavy -- extraction runs in a memory-capped subprocess.
 """
 import os
-import shutil
 from pathlib import Path
 
 from dace_fortran.external_functions import ExternalFunction
 from dace_fortran.flang_codebase import find_openmpi_include
+from dace_fortran.llvm_toolchain import find_flang
 
 from icon._halo_modes import halo_config
 
@@ -25,7 +25,7 @@ _HERE = Path(__file__).resolve().parent
 _ICON_SRC = Path(os.environ.get("ICON_SRC", str(_HERE.parent / "full" / "icon-model")))
 SRC = _ICON_SRC / "src"
 
-HAVE_FLANG = shutil.which("flang-new-21") is not None
+HAVE_FLANG = find_flang() is not None
 HAVE_OPENMPI = find_openmpi_include() is not None
 
 

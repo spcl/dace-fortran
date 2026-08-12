@@ -10,6 +10,8 @@ from typing import List, Optional
 
 import pytest
 
+from dace_fortran.llvm_toolchain import flang_names
+
 # standard NVIDIA HPC SDK install prefixes; version segment (e.g. 25.7) varies by release.
 _NVHPC_PREFIXES = (
     "/opt/nvidia/hpc_sdk/Linux_x86_64",
@@ -35,8 +37,8 @@ def _find_nvfortran() -> Optional[Path]:
     return None
 
 
-# LLVM-flang binary names probed in order; Ubuntu ships flang-new-21/flang-21 as identical symlinks, distributions differ on which is canonical.
-_FLANG_NAMES = ("flang-new-21", "flang-21", "flang-new", "flang")
+# LLVM-flang binary names probed in order, for every supported LLVM major; distributions differ on which spelling is canonical.
+_FLANG_NAMES = tuple(flang_names())
 
 
 def _looks_like_llvm_flang(path: str) -> bool:
@@ -68,14 +70,16 @@ def _find_gfortran() -> Optional[Path]:
 
 
 def discover_fortran_compilers() -> dict:
-    """{display_name: path} for gfortran and flang-new-21 (both on CI); each test compiles against an ICON .mod tree built by the SAME compiler since .mod files aren't cross-compatible.  nvfortran excluded -- multi-GB CI dependency, GPU builds out of scope."""
+    """{display_name: path} for gfortran and flang (both on CI); each test compiles against an ICON .mod tree built by the SAME compiler since .mod files aren't cross-compatible.  nvfortran excluded -- multi-GB CI dependency, GPU builds out of scope.
+
+    The flang key is the version-neutral ``"flang"`` whatever binary spelling or LLVM major resolved, so parametrized tests branch on a stable name."""
     out: dict = {}
     gfortran = _find_gfortran()
     if gfortran:
         out["gfortran"] = gfortran
     flang = _find_flang()
     if flang:
-        out["flang-new-21"] = flang
+        out["flang"] = flang
     return out
 
 

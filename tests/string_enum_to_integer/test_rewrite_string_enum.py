@@ -3,17 +3,17 @@ dual-pattern QE rewrite): a ``CHARACTER`` enum-style switch (``flag == 'c'``) be
 ``INTEGER`` with a sidecar ``enum_maps`` dict for the Python-boundary string surface.
 Covers textual rewrite correctness, the sidecar dict's shape, and a flang smoke parse."""
 import re
-import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
 import pytest
 
+from _util import flang_binary, flang_intrinsic_modules_path, have_flang
 from dace_fortran.preprocess import rewrite_string_enum_to_integer
 
 _HERE = Path(__file__).resolve().parent
-_HAVE_FLANG = shutil.which("flang-new-21") is not None
+_HAVE_FLANG = have_flang()
 
 
 def _read(name: str) -> str:
@@ -178,7 +178,7 @@ def test_idempotent():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(not _HAVE_FLANG, reason="flang-new-21 not on PATH")
+@pytest.mark.skipif(not _HAVE_FLANG, reason="no LLVM flang on PATH")
 @pytest.mark.parametrize("probe", [
     "string_enum_basic_example.f90",
     "string_enum_case_insensitive_example.f90",
@@ -192,7 +192,8 @@ def test_rewritten_probe_parses_under_flang(probe, tmp_path):
     f = tmp_path / "k.f90"
     f.write_text(rewritten)
     subprocess.check_call([
-        "flang-new-21", "-fc1", "-emit-hlfir", "-fintrinsic-modules-path", "/usr/lib/llvm-21/include/flang",
+        flang_binary(), "-fc1", "-emit-hlfir", "-fintrinsic-modules-path",
+        flang_intrinsic_modules_path(),
         str(f), "-o",
         str(tmp_path / "k.hlfir")
     ],
