@@ -1,0 +1,61 @@
+{
+  "$comment": "Example experiment config consumed by tools/generate_submissions.py.",
+  "$comment_layout": "Each entry under 'experiments' becomes one sbatch script per platform (daint, beverin). Platform-level defaults are inherited unless overridden inside the experiment.",
+
+  "defaults": {
+    "stage": 6,
+    "stage_flags": "--optimize --compile",
+    "reps": 100,
+    "configs": ["unpermuted", "nlev_first", "index_only"],
+    "time": "06:00:00",
+    "account": "g177-1",
+    "pipeline_dir": "$HOME/Work/VelocityTendenciesPipeline",
+    "results_subdir": "results"
+  },
+
+  "platforms": {
+    "daint": {
+      "partition": "normal",
+      "cpus_per_task": 288,
+      "gpus_per_task": 1,
+      "extra_setup": ["spack load gcc/76jw6nu", "spack load cuda@12.9", "spack load cutensor"],
+      "env": {
+        "GENCODE_NUMBER": "90a",
+        "OMP_NUM_THREADS": "288"
+      }
+    },
+    "beverin": {
+      "partition": "mi300",
+      "cpus_per_task": 192,
+      "gpus_per_task": 1,
+      "extra_setup": ["spack load gcc/ktd4slj"],
+      "env": {
+        "BEVERIN": "1",
+        "ARCH": "gfx942",
+        "_TBLOCK_DIMS": "32,4,1",
+        "OMP_NUM_THREADS": "96"
+      }
+    }
+  },
+
+  "experiments": [
+    {
+      "name": "stage6_default_sweep",
+      "stage": 6,
+      "stage_flags": "--optimize --compile",
+      "configs": ["unpermuted", "nlev_first", "index_only"]
+    },
+    {
+      "name": "stage6_full_sweep",
+      "stage": 6,
+      "stage_flags": "--optimize --compile",
+      "configs": ["full_sweep"]
+    },
+    {
+      "name": "stage5_baseline_only",
+      "stage": 5,
+      "stage_flags": "--optimize --compile",
+      "configs": []
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+# Regenerable: `python generate_baselines.py` rebuilds baseline/ and codegen/ from the
+# single-TU Fortran, so neither the SDFGs nor the DaCe-generated headers are tracked.
+baseline/
+codegen/
+data_r02b05/
+_dacegraphs/
+__pycache__/
+*.pyc
+*.so
+*.o
