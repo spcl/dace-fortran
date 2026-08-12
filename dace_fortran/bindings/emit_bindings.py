@@ -51,11 +51,18 @@ def emit_bindings(
     ASYNC(1)`` before the copy-in, ``UPDATE DEVICE ASYNC(1)`` + ``WAIT(1)``
     after the copy-out, ``HOST_DATA USE_DEVICE`` around the SDFG invocation
     (see :func:`block_builders.splice_acc_staging`).  ``None`` (the default)
-    emits today's byte-identical CPU-only module.
+    falls back to the standalone direction: if ``frozen`` records arguments an
+    offload pass moved to the device, the wrapper gets an ``!$ACC DATA`` region
+    staging the host caller's buffers up; if it records none, the emitted module
+    is byte-identical to today's CPU-only one.
     """
+    from dace_fortran.bindings.acc_transfers import plan_frozen_transfers
+
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     enum_maps = enum_maps or {}
+    if acc_residency is None:
+        acc_residency = plan_frozen_transfers(frozen)
 
     blocks = {
         'c_interface': build_c_interface(frozen, iface, dace_arglist),
@@ -65,7 +72,6 @@ def emit_bindings(
         'wrapper_tail': build_wrapper_tail(frozen, iface, plan, dace_arglist, enum_maps=enum_maps),
         'finalize': build_finalize(iface),
     }
-    if acc_residency is not None:
-        blocks = splice_acc_staging(blocks, iface.entry, acc_residency)
+    blocks = splice_acc_staging(blocks, iface.entry, acc_residency)
     out_path.write_text(assemble_module(iface, frozen, blocks, plan))
     return out_path

@@ -40,6 +40,15 @@ routine does have device arguments -- is also an
 fallback: guessing wrong produces a silently wrong answer at runtime
 rather than a failed build.
 
+That crossing is the ICON-integrated lane, where the caller already owns
+a device copy.  The standalone lane is the mirror image: an ordinary
+Fortran caller holds host buffers and an offload pass has moved the
+SDFG's copies to the GPU.  There is no sidecar to read -- the frozen
+signature kept both locations -- so :func:`plan_frozen_transfers` builds
+the plan from it and the wrapper brackets the call in an ``!$ACC DATA``
+region whose ``COPYIN``/``COPYOUT``/``COPY`` clauses follow each
+argument's intent.
+
 Scalar dummies are exempt from all of it.  They reach the SDFG by value
 (or as an SDFG symbol), so there is no buffer to stage and no residency
 to get wrong -- and ICON's own directives rarely name them, which is why
@@ -129,17 +138,32 @@ class AccResidency:
 
 @dataclass(frozen=True)
 class AccTransferPlan:
-    """The three emission slots of the wrapper, in wrapper-argument order."""
+    """The emission slots of the wrapper, in wrapper-argument order.
+
+    ``update_host``/``update_device`` stage an ICON-owned device buffer down to a
+    host SDFG; ``copyin``/``copyout``/``copy`` are the opposite direction -- a host
+    caller's buffer staged up to an offloaded SDFG (see :func:`plan_frozen_transfers`).
+    A given build uses one pair or the other, never both.
+    """
 
     update_host: Tuple[str, ...] = ()
     update_device: Tuple[str, ...] = ()
     use_device: Tuple[str, ...] = ()
     storage: Mapping[str, str] = field(default_factory=dict)
+    copyin: Tuple[str, ...] = ()
+    copyout: Tuple[str, ...] = ()
+    copy: Tuple[str, ...] = ()
 
     @property
     def active(self) -> bool:
         """True iff the wrapper needs any OpenACC directive at all."""
-        return bool(self.update_host or self.update_device or self.use_device)
+        return bool(self.update_host or self.update_device or self.use_device or self.data_region)
+
+    @property
+    def data_region(self) -> Tuple[Tuple[str, str], ...]:
+        """``(clause, name)`` pairs for the ``!$ACC DATA`` region, in emission order."""
+        return tuple(
+            (clause, name) for clause in ('COPYIN', 'COPY', 'COPYOUT') for name in getattr(self, clause.lower()))
 
 
 def sdfg_containers_for_arg(sdfg: dace.SDFG, arg: str) -> Tuple[str, ...]:
@@ -151,7 +175,8 @@ def sdfg_containers_for_arg(sdfg: dace.SDFG, arg: str) -> Tuple[str, ...]:
     by the same prefix rule.  Sorted, so callers are deterministic.
     """
     prefix = arg + "_"
-    return tuple(sorted(n for n, desc in sdfg.arrays.items() if not desc.transient and (n == arg or n.startswith(prefix))))
+    return tuple(
+        sorted(n for n, desc in sdfg.arrays.items() if not desc.transient and (n == arg or n.startswith(prefix))))
 
 
 def is_scalar_arg(sdfg: dace.SDFG, arg: str, containers: Sequence[str]) -> bool:
@@ -292,6 +317,55 @@ def plan_acc_transfers(sdfg: dace.SDFG, residency: AccResidency, arg_order: Iter
         use_device=tuple(use_device),
         storage=storage,
     )
+
+
+def plan_frozen_transfers(frozen) -> AccTransferPlan:
+    """Plan the standalone direction: host caller, offloaded SDFG.
+
+    No ICON sidecar is involved -- the caller is ordinary Fortran, so every buffer
+    starts on the host (:data:`~dace_fortran.bindings.frozen_signature.HOST_STORAGE`)
+    and the only question is which ones an offload pass moved.  The
+    :class:`~dace_fortran.bindings.frozen_signature.FrozenSignature` answers it: it
+    kept the caller-side location while ``refreeze`` recorded the kernel's new one, and
+    ``FrozenArg.acc_data_clause`` reduces that pair plus the intent to one clause.
+
+    Relocated arguments also go in ``use_device``: inside the data region the wrapper
+    must hand the SDFG the DEVICE address, which is what ``HOST_DATA USE_DEVICE`` makes
+    ``c_loc`` return.  Argument order follows the snapshot, so the emission is stable.
+    """
+    by_clause: Dict[str, list] = {'copyin': [], 'copyout': [], 'copy': []}
+    for arg in frozen.args:
+        clause = arg.acc_data_clause
+        if clause:
+            by_clause[clause].append(arg.sdfg_name)
+    moved = tuple(a.sdfg_name for a in frozen.args if a.acc_data_clause)
+    return AccTransferPlan(
+        use_device=moved,
+        copyin=tuple(by_clause['copyin']),
+        copyout=tuple(by_clause['copyout']),
+        copy=tuple(by_clause['copy']),
+        storage={a.sdfg_name: DEVICE if a.acc_data_clause else HOST
+                 for a in frozen.args if a.kind == 'array'})
+
+
+def render_data_open(plan: AccTransferPlan, indent: str = "  ") -> list:
+    """``!$ACC DATA`` opener staging the host caller's buffers onto the device.
+
+    One clause per line: the velocity wrapper moves ~100 buffers, and a single
+    directive line naming them all would blow past any free-form line limit.
+    """
+    pairs = plan.data_region
+    if not pairs:
+        return []
+    lines = [f"{indent}!$ACC DATA &"]
+    lines += [f"{indent}!$ACC   {clause}({name}) &" for clause, name in pairs[:-1]]
+    clause, name = pairs[-1]
+    return lines + [f"{indent}!$ACC   {clause}({name})"]
+
+
+def render_data_close(plan: AccTransferPlan, indent: str = "  ") -> list:
+    """Closer matching :func:`render_data_open`."""
+    return [f"{indent}!$ACC END DATA"] if plan.data_region else []
 
 
 def _directive(keyword: str, names: Sequence[str], indent: str) -> list:

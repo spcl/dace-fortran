@@ -879,10 +879,11 @@ def build_acc_staging(plan) -> Tuple[List[str], List[str]]:
 
 def splice_acc_staging(blocks: Dict[str, str], entry: str, plan) -> Dict[str, str]:
     """Return ``blocks`` with the OpenACC staging of ``plan`` spliced in:
-    pre-staging at the top of ``wrapper_body``, ``HOST_DATA USE_DEVICE`` around
-    the SDFG invocation, post-staging before the wrapper's end statement.
+    pre-staging at the top of ``wrapper_body``, the ``DATA``/``HOST_DATA USE_DEVICE``
+    regions around the SDFG invocation, post-staging before the wrapper's end statement.
     ``plan`` inactive (or ``None``) returns ``blocks`` unchanged."""
-    from dace_fortran.bindings.acc_transfers import render_host_data_close, render_host_data_open
+    from dace_fortran.bindings.acc_transfers import (render_data_close, render_data_open, render_host_data_close,
+                                                     render_host_data_open)
     pre, post = build_acc_staging(plan)
     if plan is None or not plan.active:
         return blocks
@@ -891,14 +892,16 @@ def splice_acc_staging(blocks: Dict[str, str], entry: str, plan) -> Dict[str, st
         out['wrapper_body'] = "\n".join([_ACC_INDENT + "! ----- OpenACC staging (device -> host) -----"] + pre +
                                         [""]) + out['wrapper_body']
     tail_lines = out['wrapper_tail'].splitlines()
-    hd_open = render_host_data_open(plan, _ACC_INDENT)
-    hd_close = render_host_data_close(plan, _ACC_INDENT)
-    if hd_open:
+    # The data region encloses HOST_DATA: the device copies have to exist before
+    # USE_DEVICE can hand their addresses to the SDFG.
+    call_open = render_data_open(plan, _ACC_INDENT) + render_host_data_open(plan, _ACC_INDENT)
+    call_close = render_host_data_close(plan, _ACC_INDENT) + render_data_close(plan, _ACC_INDENT)
+    if call_open:
         call_at = next(i for i, ln in enumerate(tail_lines) if ln.lstrip().startswith(f"call dace_program_{entry}("))
         call_end = call_at
         while tail_lines[call_end].rstrip().endswith("&"):
             call_end += 1
-        tail_lines = (tail_lines[:call_at] + hd_open + tail_lines[call_at:call_end + 1] + hd_close +
+        tail_lines = (tail_lines[:call_at] + call_open + tail_lines[call_at:call_end + 1] + call_close +
                       tail_lines[call_end + 1:])
     if post:
         end_at = next(i for i, ln in enumerate(tail_lines) if ln.strip() == f"end subroutine {entry}_dace")

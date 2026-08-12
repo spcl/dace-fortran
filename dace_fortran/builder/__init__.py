@@ -1529,7 +1529,7 @@ class SDFGBuilder:
         # ``import dace_fortran`` doesn't drag it in.
         from dace import dtypes
         from dace.data import Array, Scalar
-        from dace_fortran.bindings.frozen_signature import FrozenArg, FrozenSignature
+        from dace_fortran.bindings.frozen_signature import HOST_STORAGE, FrozenArg, FrozenSignature
 
         # Auto-detected Fortran module-global provenance, keyed by the
         # bridge's short Fortran name.  Populated from every VarInfo
@@ -1623,6 +1623,12 @@ class SDFGBuilder:
                 dtype_str = (getattr(dtype_obj, 'to_string', lambda: str(dtype_obj))()
                              if dtype_obj is not None else '?')
             shape = tuple(str(s) for s in getattr(desc, 'shape', ()))
+            # Caller-side location, pinned here so a later offload pass can be told
+            # apart from where the Fortran dummy actually lives.  The frontend leaves
+            # arguments on ``Default``, which for a non-transient IS the host memory
+            # the caller passes -- record that rather than dace's placeholder.
+            storage_obj = getattr(desc, 'storage', None)
+            storage_str = (HOST_STORAGE if storage_obj in (None, dtypes.StorageType.Default) else storage_obj.name)
             origin = origin_by_name.get(user_key)
             if origin is not None:
                 module_symbol_origins[sdfg_name_] = origin
@@ -1636,6 +1642,7 @@ class SDFGBuilder:
                     shape=shape,
                     intent=(v.intent if v is not None else ''),
                     is_written=bool(getattr(v, 'is_written', False)),
+                    storage=storage_str,
                     aos_origin_mod=getattr(v, 'aos_origin_mod', '') if v is not None else '',
                     aos_origin_struct=getattr(v, 'aos_origin_struct', '') if v is not None else '',
                     aos_member_path=getattr(v, 'aos_member_path', '') if v is not None else '',

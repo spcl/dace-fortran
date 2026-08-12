@@ -9,12 +9,19 @@ invalidate a generated wrapper.
 
 Drift gate lives in ``build_fortran_library``: before emit/link it calls
 ``fs.verify_against(sdfg)``, raising ``SignatureDriftError`` on
-divergence.  dace-core stays vanilla -- the contract is dace-fortran-only.
+divergence.  dace-core contributes only the opaque ``SDFG.frontend_metadata``
+dict this rides in and never reads it -- the contract is dace-fortran-only.
 """
 
 import json
 from dataclasses import asdict, dataclass, field, replace
 from typing import Dict, Optional, Tuple
+
+# Where a Fortran caller's buffers live unless a pass says otherwise.  Anything a
+# transformation moves into a ``GPU_*`` storage is a device relocation the binding has
+# to bridge; everything else is still reachable through the pointer the caller passed.
+HOST_STORAGE = 'CPU_Heap'
+DEVICE_STORAGE_PREFIX = 'GPU_'
 
 
 class SignatureDriftError(RuntimeError):
@@ -68,6 +75,31 @@ class FrozenArg:
     # associated() so an unallocated host isn't read; both false = static.
     module_origin_allocatable: bool = False
     module_origin_pointer: bool = False
+    # Where the buffer lives.  ``storage`` is the CALLER's location, frozen at build
+    # time and never rewritten -- a Fortran dummy is host memory, which is why the
+    # default is a host storage rather than empty.  Offloading relocates the kernel's
+    # copy, and :func:`refreeze` records that in ``device_storage``; the binding then
+    # brackets the call in OpenACC data clauses instead of handing the host pointer
+    # straight through.  Back on the host, ``device_storage`` clears again.
+    storage: str = HOST_STORAGE
+    device_storage: str = ''
+
+    @property
+    def acc_data_clause(self) -> str:
+        """``copyin`` / ``copyout`` / ``copy`` for this arg, '' if it never leaves the host.
+
+        Direction is the Fortran intent: an ``in`` dummy the kernel doesn't write needs
+        only the host->device leg, an ``out`` dummy only the device->host one, anything
+        else both.
+        """
+        if self.kind != 'array' or not self.device_storage or self.device_storage == self.storage:
+            return ''
+        intent = self.intent.lower()
+        if intent == 'in' and not self.is_written:
+            return 'copyin'
+        if intent == 'out':
+            return 'copyout'
+        return 'copy'
 
     def to_dict(self) -> dict:
         """Serialise to a JSON-safe dict (``shape`` tuple becomes a list)."""
@@ -109,30 +141,27 @@ class FrozenSignature:
 
     # ----- I/O ---------------------------------------------------------
 
-    def to_json(self, path: str):
-        """Write the snapshot to ``path`` as indented JSON."""
-        with open(path, 'w') as fh:
-            json.dump(
-                {
-                    'entry': self.entry,
-                    'mangled': self.mangled,
-                    'args': [a.to_dict() for a in self.args],
-                    'free_symbols': list(self.free_symbols),
-                    'schema_version': self.schema_version,
-                    'module_symbol_origins': {
-                        k: list(v)
-                        for k, v in self.module_symbol_origins.items()
-                    },
-                    'user_comm_source': self.user_comm_source,
-                },
-                fh,
-                indent=2)
+    def to_dict(self) -> dict:
+        """Serialise to a JSON-safe dict (every tuple becomes a list).
+
+        Also the on-SDFG storage form -- see :func:`attach_to_sdfg`.
+        """
+        return {
+            'entry': self.entry,
+            'mangled': self.mangled,
+            'args': [a.to_dict() for a in self.args],
+            'free_symbols': list(self.free_symbols),
+            'schema_version': self.schema_version,
+            'module_symbol_origins': {
+                k: list(v)
+                for k, v in self.module_symbol_origins.items()
+            },
+            'user_comm_source': self.user_comm_source,
+        }
 
     @classmethod
-    def from_json(cls, path: str) -> "FrozenSignature":
-        """Load a snapshot previously written by :meth:`to_json`."""
-        with open(path) as fh:
-            d = json.load(fh)
+    def from_dict(cls, d: dict) -> "FrozenSignature":
+        """Rebuild from a :meth:`to_dict` mapping (lists back to tuples)."""
         return cls(
             entry=d['entry'],
             mangled=d['mangled'],
@@ -145,6 +174,17 @@ class FrozenSignature:
             },
             user_comm_source=d.get('user_comm_source'),
         )
+
+    def to_json(self, path: str):
+        """Write the snapshot to ``path`` as indented JSON."""
+        with open(path, 'w') as fh:
+            json.dump(self.to_dict(), fh, indent=2)
+
+    @classmethod
+    def from_json(cls, path: str) -> "FrozenSignature":
+        """Load a snapshot previously written by :meth:`to_json`."""
+        with open(path) as fh:
+            return cls.from_dict(json.load(fh))
 
     # ----- Drift check -------------------------------------------------
 
@@ -183,21 +223,82 @@ class FrozenSignature:
                                       f"expected free symbols {sorted(snap_fs)}, got {sorted(live_fs)}")
 
 
+# ----- On-SDFG storage ----------------------------------------------------
+#
+# The snapshot lives inside ``sdfg.frontend_metadata``, a dace Property, so it
+# survives ``sdfg.save()`` / ``SDFG.from_file()``.  It is still reached through
+# the historical ``sdfg._frozen_signature`` name, installed below as a
+# descriptor on ``SDFG``; before this it was a plain Python attribute, which
+# every serialization round-trip silently dropped.
+
+SDFG_METADATA_KEY = 'frozen_signature'
+_CACHE_ATTR = '_frozen_signature_cache'
+
+# Argument kinds an optimization pass is allowed to delete; see :func:`refreeze`.
+_MAY_SHRINK = frozenset({'scalar', 'symbol'})
+
+
+def get_frozen_signature(sdfg) -> Optional["FrozenSignature"]:
+    """Deserialise the snapshot stored on ``sdfg``; None if it carries none."""
+    raw = getattr(sdfg, 'frontend_metadata', {}).get(SDFG_METADATA_KEY)
+    if raw is None:
+        return None
+    # Hand back the same object while the stored dict is untouched, so repeated
+    # reads don't rebuild several hundred FrozenArgs apiece.
+    cached = sdfg.__dict__.get(_CACHE_ATTR)
+    if cached is not None and cached[0] is raw:
+        return cached[1]
+    frozen = FrozenSignature.from_dict(raw)
+    sdfg.__dict__[_CACHE_ATTR] = (raw, frozen)
+    return frozen
+
+
+def attach_to_sdfg(sdfg, frozen: Optional["FrozenSignature"]):
+    """Store ``frozen`` on ``sdfg`` in serialized form; None clears it."""
+    if frozen is None:
+        sdfg.frontend_metadata.pop(SDFG_METADATA_KEY, None)
+        sdfg.__dict__.pop(_CACHE_ATTR, None)
+        return
+    raw = frozen.to_dict()
+    sdfg.frontend_metadata[SDFG_METADATA_KEY] = raw
+    sdfg.__dict__[_CACHE_ATTR] = (raw, frozen)
+
+
+def _install_sdfg_accessor():
+    """Make ``sdfg._frozen_signature`` a view onto ``sdfg.frontend_metadata``."""
+    from dace.sdfg import SDFG
+
+    if isinstance(SDFG.__dict__.get('_frozen_signature'), property):
+        return
+    if 'frontend_metadata' not in getattr(SDFG, '__properties__', {}):
+        raise RuntimeError("this dace has no SDFG.frontend_metadata property, so a frozen "
+                           "signature could not survive save/load; update dace")
+    SDFG._frozen_signature = property(get_frozen_signature, attach_to_sdfg)
+
+
+_install_sdfg_accessor()
+
+
 def refreeze(sdfg) -> "FrozenSignature":
     """Re-snapshot after a DELIBERATE transformation of the built SDFG (e.g. an optimization
     pipeline run between ``build()`` and ``build_fortran_library``), so the bindings regenerate
     against the live signature instead of tripping the drift check.
 
-    Contract -- optimization must not change the ARRAY side of the Fortran-facing ABI:
+    Contract -- optimization must not change the BUFFER side of the Fortran-facing ABI:
 
-    * array args must match the original snapshot exactly (names, order, dtypes) -- the
-      caller's buffers are the ABI, so one going missing means the wrapper would stop
-      passing memory the kernel still expects, or vice versa;
+    * array (and MPI communicator) args must match the original snapshot exactly -- names,
+      order, dtypes.  The caller's buffers are the ABI, so one going missing means the
+      wrapper would stop passing memory the kernel still expects, or vice versa;
     * scalar args and the free-symbol set may SHRINK, which is what specialization does:
       folding a value to a constant deletes its argument, and the binding simply derives
       and passes fewer. A scalar the kernel no longer reads costs the caller nothing;
     * anything NEW is refused, symbol or scalar -- the binding has no value derivation
       for an argument that was not in the Fortran interface.
+
+    An array's STORAGE may change, which is how offloading shows up here: the caller-side
+    location stays pinned in ``FrozenArg.storage`` and the kernel's new one is recorded in
+    ``device_storage``, so the binding can bracket the call in OpenACC data clauses rather
+    than pass a host pointer to a device kernel.
 
     Returns the new snapshot and attaches it to ``sdfg._frozen_signature``.
     """
@@ -214,22 +315,29 @@ def refreeze(sdfg) -> "FrozenSignature":
         raise SignatureDriftError(f"refreeze on {frozen.entry!r}: optimization introduced free "
                                   f"symbols {added} the binding cannot derive values for")
 
-    dropped_arrays = [a.sdfg_name for a in frozen.args
-                      if a.kind == 'array' and a.sdfg_name not in live_arglist]
-    if dropped_arrays:
-        raise SignatureDriftError(f"refreeze on {frozen.entry!r}: optimization removed array "
-                                  f"args {dropped_arrays}; only scalars and free symbols may shrink")
+    dropped_buffers = [
+        a.sdfg_name for a in frozen.args if a.kind not in _MAY_SHRINK and a.sdfg_name not in live_arglist
+    ]
+    if dropped_buffers:
+        raise SignatureDriftError(f"refreeze on {frozen.entry!r}: optimization removed "
+                                  f"args {dropped_buffers}; only scalars and free symbols may shrink")
 
     def _survives(a: FrozenArg) -> bool:
-        if a.sdfg_name in live_arglist or a.sdfg_name in live_fs:
-            return True
-        # Folded to a constant: drop it from the snapshot so the regenerated binding stops
-        # deriving and passing it. Arrays never reach here (refused above).
-        return False
+        # Anything gone from both the arglist and the free symbols was folded to a constant:
+        # drop it so the regenerated binding stops deriving and passing it.  Only scalars and
+        # symbols reach here -- the rest are refused above.
+        return a.sdfg_name in live_arglist or a.sdfg_name in live_fs
+
+    def _relocate(a: FrozenArg) -> FrozenArg:
+        # Host-side storage churn (Register, Pinned) still hands the caller's pointer
+        # straight through, so only a move into device memory is worth recording.
+        live = getattr(sdfg.arrays.get(a.sdfg_name), 'storage', None)
+        name = live.name if live is not None else ''
+        return replace(a, device_storage=name if name.startswith(DEVICE_STORAGE_PREFIX) else '')
 
     new = replace(
         frozen,
-        args=tuple(a for a in frozen.args if _survives(a)),
+        args=tuple(_relocate(a) for a in frozen.args if _survives(a)),
         free_symbols=tuple(s for s in frozen.free_symbols if s in live_fs),
     )
     # Full re-validation (arg partition, per-arg dtypes, symbol set) against the live SDFG.

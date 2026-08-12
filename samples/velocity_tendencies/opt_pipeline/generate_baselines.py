@@ -306,6 +306,7 @@ def main():
 
     from dace.transformation.passes import RemoveUnusedSymbols
 
+    from dace_fortran.bindings.frozen_signature import refreeze
     from utils.passes.unify_variant_signatures import unify_variant_signatures
     from utils.unique_names import unique_names
 
@@ -357,6 +358,10 @@ def main():
         assert_no_structs(v)
     unique_names(variants)
     for v in variants:
+        # Specialisation folded scalars and symbols away, so the snapshot the frontend
+        # attached no longer matches. Re-snapshot BEFORE saving: the .sdfgz is what a
+        # later stage reads the signature back out of.
+        refreeze(v)
         v.save(str(out / f"{v.name}.sdfgz"), compress=True)
         v.validate()
         if args.compile:
