@@ -97,6 +97,9 @@ build_cuda() (
     # __device__ code calls constexpr host functions.
     # -Xcompiler -fopenmp: cloudsc_driver.cu times with omp_get_wtime; the flag must also
     # reach the link step or libgomp stays unresolved.
+    # -L alone only satisfies the LINKER: spack's HDF5 is outside the loader's default search
+    # path, so without a matching rpath the binary builds and then dies at exec with
+    # "libhdf5.so.310: cannot open shared object file". nvcc needs -Xlinker to forward it.
     "$NVCC" -O3 -arch=native -rdc=true -DHAVE_HDF5 \
         --allow-unsupported-compiler --expt-relaxed-constexpr -Xcompiler -fopenmp \
         -I"$DWARF/cloudsc_cuda/cloudsc" ${inc:+-I"$inc"} \
@@ -106,7 +109,7 @@ build_cuda() (
         "$DWARF/cloudsc_cuda/cloudsc/cloudsc_driver.cu" \
         "$DWARF/cloudsc_cuda/cloudsc/cloudsc_c.cu" \
         "$DWARF/cloudsc_cuda/dwarf_cloudsc.cpp" \
-        ${lib:+-L"$lib"} -lhdf5 -o dwarf-cloudsc-cuda
+        ${lib:+-L"$lib" -Xlinker -rpath -Xlinker "$lib"} -lhdf5 -o dwarf-cloudsc-cuda
 )
 
 # hdf5.mod is compiler-specific: nvfortran cannot read a gfortran-built one, so this lane

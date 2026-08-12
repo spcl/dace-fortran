@@ -63,6 +63,13 @@ all four concurrently:
 - `velocity-loopexch` — the `__LOOP_EXCHANGE` TU, both backends × both data layouts
 - `velocity-noloopexch` — the no-loop-exchange TU, same 2×2
 
+⚠ **`cloudsc-klon` is currently OUT of the default cycle** — pass `VARIANTS` without it. At
+`NBLOCKS=1` the only parallelism available is the inner JL loops, and the DaCe lanes do not
+exploit it: job 4411783 measured 15020 ms at 1 thread against 14779 ms at 72, i.e. flat across
+the whole thread grid. The rank still costs ~1.66 h of timed work per backend, so it spends
+~4 h to draw a horizontal line. Put it back once the inner-loop parallelization lands; the
+6 h walltime in `meas_4rank.sbatch` is sized for it and should not be lowered meanwhile.
+
 cloudsc splits by mode; velocity splits by **TU variant**, with the backend and the data layout as
 sweep dimensions inside each rank (4 combinations per rank). The layout is deliberately not tied to
 the TU: only when both TUs see both layouts can a row be read as "which TU wins at this layout".

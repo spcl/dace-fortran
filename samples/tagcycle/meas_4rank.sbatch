@@ -8,7 +8,7 @@
 #SBATCH --exclusive
 #SBATCH --mem=0
 #SBATCH --hint=nomultithread
-#SBATCH -t 02:00:00
+#SBATCH -t 06:00:00
 #SBATCH -o samples/_work/logs/meas_4rank-%j.out
 #SBATCH -e samples/_work/logs/meas_4rank-%j.out
 # SUBMIT FROM THE REPO ROOT: slurm resolves the -o/-e paths above against the submit dir.
@@ -16,11 +16,14 @@
 # variant per rank, all four concurrent, each pinned to its own socket. Every variant gets its own
 # log and its own CSV, and a red rank never takes its siblings down.
 #
-# WALLTIME: 02:00:00 here; the single-variant jobs got 06:00:00 from _harness/submit.sh and a
-# cloudsc-nblks sweep once died at 2h36. Raise -t (up to the 24h partition cap) before submitting
-# if the previous cycle came close. Job 4391146 finished the whole 4-rank layout in 1h31; the
-# R02B06 velocity ranks add ~35-70 min each (32 driver starts x (dace import + 6.9 GB deck load)
-# plus ~8 min of timed work), which stays under the cloudsc-nblks critical path.
+# WALLTIME: 06:00:00, raised from 02:00:00 after job 4411783 hit the wall. The critical path is
+# cloudsc-klon, not cloudsc-nblks: at KLON=65536/NBLOCKS=1 one rep costs ~14.8 s at EVERY thread
+# count, so a backend is 8 threads x 50 reps ~= 1.66 h of timed work and the rank needs both
+# dace-gcc and dace-llvm. 4411783 got through dace-gcc alone in 1h53 wall (~13% process overhead
+# on top of timed) and was killed before dace-llvm started; two backends land near 3h45. The
+# other three ranks finish in 24-28 min and are nowhere near the path.
+# Raise further (24h partition cap) only if the klon rep cost grows -- do not lower it back on the
+# evidence of a nblks-only cycle.
 #
 # ABSOLUTE RULE: no numactl anywhere below. This node exposes 36 NUMA nodes; numactl --cpunodebind
 # inside an srun cpuset returns sched_setaffinity EINVAL and kills the step outright (4390808,
