@@ -25,7 +25,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-sys.path[:0] = [str(HERE), str(REPO / "samples" / "velocity_tendencies"), str(REPO / "tests")]
+sys.path[:0] = [str(HERE), str(REPO / "samples" / "velocity_tendencies"), str(REPO / "tests"), str(REPO / "samples")]
 
 VARIANT = "noloopexch"
 ENTRY = "mo_velocity_advection::velocity_tendencies"
@@ -78,7 +78,7 @@ def add_timers(sdfg):
 
 
 def load_gpu_sdfg(lane: str, verbose: bool, demote: bool = False):
-    from dace import SDFG
+    from sdfg_cache import load_sdfg_cached, save_sdfg_atomic
 
     from gpu_common import cache_root, git_describe
     root = cache_root()
@@ -88,16 +88,16 @@ def load_gpu_sdfg(lane: str, verbose: bool, demote: bool = False):
     else:
         tag = f"velocity_{VARIANT}_{git_describe()}"
     gpu_cache = root / f"{tag}_{lane}{'_demoted' if demote else ''}.sdfgz"
-    if gpu_cache.is_file():
-        print(f"phase A: GPU cache hit {gpu_cache}", flush=True)
-        return SDFG.from_file(str(gpu_cache))
+    cached = load_sdfg_cached(gpu_cache, label="phase A: GPU")
+    if cached is not None:
+        return cached
     if lane == "dace-gpu-manual":
         sdfg = vtp_manual.build_manual_sdfg()
         add_timers(sdfg)
     else:
         sdfg = frontend_sdfg(root / f"{tag}_{lane}")
         optimize_lane(sdfg, lane, verbose, demote)
-    sdfg.save(str(gpu_cache), compress=True)
+    save_sdfg_atomic(sdfg, gpu_cache)
     return sdfg
 
 

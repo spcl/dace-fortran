@@ -53,7 +53,12 @@ def build_manual_sdfg():
     stage3 = root / "codegen" / "stage3" / f"{vtp_variant()}.sdfgz"
     if not stage3.is_file():
         raise SystemExit(f"no stage-3 artifact at {stage3} (VTP_DIR/VTP_VARIANT wrong?)")
-    sdfg = dace.SDFG.from_file(str(stage3))
+    try:
+        # Not our cache to rebuild -- name the truncated file instead of dying on its gzip magic.
+        sdfg = dace.SDFG.from_file(str(stage3))
+    except Exception as exc:
+        raise SystemExit(f"stage-3 artifact {stage3} is unreadable ({type(exc).__name__}: {exc}); "
+                         "re-export it from VTP") from exc
     sdfg = optimization_action(sdfg)
     _demote_persistent_scalars(sdfg)
     _demote_host_write_gpu_maps(sdfg)

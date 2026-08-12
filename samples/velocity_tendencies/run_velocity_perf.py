@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO / "tests"))  # reuse the test scaffolding, like tests/conftest.py does
+sys.path[:0] = [str(REPO / "tests"), str(REPO / "samples")]  # test scaffolding + shared sample helpers
 
 # BITEXACT_CPU_ARGS (tests/_util.py) without the CI-sized --param ggc-*/gcse caps: perf nodes have the RAM.
 PERF_CPU_ARGS = "-fPIC -O3 -march=native -fno-fast-math -ffp-contract=off -fno-math-errno -fno-trapping-math"
@@ -94,10 +94,10 @@ def cache_root() -> Path:
 
 
 def load_or_build(variant: str, cache: Path, build_dir: Path):
-    from dace import SDFG
-    if cache.is_file():
-        print(f"phase A: cache hit {cache}", flush=True)
-        return SDFG.from_file(str(cache))
+    from sdfg_cache import load_sdfg_cached, save_sdfg_atomic
+    cached = load_sdfg_cached(cache)
+    if cached is not None:
+        return cached
 
     from _util import build_sdfg, have_flang
     from dace_fortran.bindings.frozen_signature import refreeze
@@ -114,7 +114,7 @@ def load_or_build(variant: str, cache: Path, build_dir: Path):
         raise AssertionError("pipeline produced no maps -- nothing was parallelized")
     refreeze(sdfg)
     print(f"phase A: built + optimized ({num_maps(sdfg)} maps), caching {cache}", flush=True)
-    sdfg.save(str(cache), compress=True)
+    save_sdfg_atomic(sdfg, cache)
     return sdfg
 
 

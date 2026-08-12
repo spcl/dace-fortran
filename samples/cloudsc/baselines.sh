@@ -65,6 +65,9 @@ fi
 # (velocity_tendencies/baselines.sh does the same).
 unset BUILD_ROOT
 setup_build_root "cloudsc_baselines"
+# Everything below compiles into $BUILD_ROOT/<lane> and execs out of the shared $BUILD_ROOT/run;
+# concurrent jobs pointed at this root (cpu_warm CHUNK=small vs CHUNK=large) must take turns.
+lock_build_root
 RUNDIR="$BUILD_ROOT/run"
 mkdir -p "$RUNDIR"
 ln -sf "$HERE/data/input.h5" "$RUNDIR/input.h5"

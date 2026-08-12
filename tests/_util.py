@@ -209,7 +209,9 @@ class _TestBuilder:
         if self._dump_dir is not None:
             self._dump_dir.mkdir(parents=True, exist_ok=True)
             out_path = self._dump_dir / f"{self._name}{self._suffix}.sdfgz"
-            sdfg.save(str(out_path), compress=True)
+            # .partial + replace: a killed run must not leave a truncated .sdfgz under the real name.
+            sdfg.save(f"{out_path}.partial", compress=True)
+            os.replace(f"{out_path}.partial", out_path)
         return sdfg
 
 

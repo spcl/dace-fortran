@@ -21,7 +21,7 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-sys.path[:0] = [str(HERE), str(REPO / "samples" / "cloudsc"), str(REPO / "tests")]
+sys.path[:0] = [str(HERE), str(REPO / "samples" / "cloudsc"), str(REPO / "tests"), str(REPO / "samples")]
 
 KLON = 65536
 NBLOCKS = 1
@@ -57,7 +57,7 @@ def build_call(sdfg, klon: int, nblocks: int, inputs_kind: str, h5_path: Path, s
 
 def load_gpu_sdfg(lane: str, klon: int, nblocks: int, verbose: bool):
     import run_cloudsc_perf as cpu
-    from dace import SDFG
+    from sdfg_cache import load_sdfg_cached, save_sdfg_atomic
 
     from gpu_common import cache_root, git_describe, report_offload
     from gpu_offload import apply_gpu_offload
@@ -65,13 +65,13 @@ def load_gpu_sdfg(lane: str, klon: int, nblocks: int, verbose: bool):
     root = cache_root()
     tag = f"cloudsc_klon{klon}_nb{nblocks}_{git_describe()}"
     gpu_cache = root / f"{tag}_{lane}.sdfgz"
-    if gpu_cache.is_file():
-        print(f"phase A: GPU cache hit {gpu_cache}", flush=True)
-        return SDFG.from_file(str(gpu_cache))
+    cached = load_sdfg_cached(gpu_cache, label="phase A: GPU")
+    if cached is not None:
+        return cached
     sdfg = cpu.load_or_build(root / f"cloudsc_klon{klon}_nb{nblocks}_gcc_{git_describe()}.sdfgz", root / tag)
     info = apply_gpu_offload(sdfg, "cloudsc")
     report_offload(info, verbose)
-    sdfg.save(str(gpu_cache), compress=True)
+    save_sdfg_atomic(sdfg, gpu_cache)
     return sdfg
 
 

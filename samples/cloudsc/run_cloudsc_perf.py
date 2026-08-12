@@ -12,7 +12,7 @@ import numpy as np
 REPO = Path(__file__).resolve().parents[2]
 SRC = REPO / "tests" / "cloudsc" / "full" / "cloudsc.F90"
 # tests/ is not an installed package; same sys.path pattern as tests/conftest.py.
-sys.path.insert(0, str(REPO / "tests"))
+sys.path[:0] = [str(REPO / "tests"), str(REPO / "samples")]
 
 # BITEXACT_CPU_ARGS (tests/_util.py) without the --param caps sized for a 16 GB CI runner.
 PERF_CPU_ARGS = "-fPIC -O3 -march=native -fno-fast-math -ffp-contract=off -fno-math-errno -fno-trapping-math"
@@ -97,11 +97,11 @@ def cache_root() -> Path:
 
 
 def load_or_build(cache: Path, build_dir: Path):
-    """Return the optimized SDFG: from ``cache`` when present, else build + optimize + save."""
-    from dace import SDFG
-    if cache.is_file():
-        print(f"phase A: cache hit {cache}", flush=True)
-        return SDFG.from_file(str(cache))
+    """Return the optimized SDFG: from ``cache`` when readable, else build + optimize + save."""
+    from sdfg_cache import load_sdfg_cached, save_sdfg_atomic
+    cached = load_sdfg_cached(cache)
+    if cached is not None:
+        return cached
 
     # Species-count specialize split reused from the e2e lane (tests/e2e/test_cloudsc.py).
     from _util import build_sdfg, have_flang
@@ -116,7 +116,7 @@ def load_or_build(cache: Path, build_dir: Path):
     syms, scalar_consts = _split_specialize(sdfg)
     optimize(sdfg, symbols=syms, scalars=scalar_consts)
     print(f"phase A: built + optimized ({num_maps(sdfg)} maps), caching {cache}", flush=True)
-    sdfg.save(str(cache), compress=True)
+    save_sdfg_atomic(sdfg, cache)
     return sdfg
 
 

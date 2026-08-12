@@ -10,8 +10,20 @@ from pathlib import Path
 from dace import SDFG
 
 
-def dump(path: Path, root: Path) -> str:
-    sdfg = SDFG.from_file(str(path))
+def load(path: Path):
+    """None when the artifact will not load (truncated .sdfgz from a killed writer)."""
+    try:
+        return SDFG.from_file(str(path))
+    except Exception as exc:  # noqa: BLE001 -- a truncated pickle raises anything
+        print(f"ARGLIST_DUMP_CORRUPT {path}: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        try:
+            path.unlink()  # unusable either way; removing it makes the next warm rebuild instead
+        except OSError as unlink_exc:
+            print(f"  could not remove {path}: {unlink_exc}", file=sys.stderr, flush=True)
+        return None
+
+
+def dump(sdfg, path: Path, root: Path) -> str:
     args = sdfg.arglist()
     out = path.parent / (path.name[:-len(".sdfgz")] + ".arglist.txt")
     with out.open("w") as f:
@@ -30,8 +42,13 @@ def main() -> int:
     rc = 0
     for raw in sys.argv[2:]:
         path = Path(raw).resolve()
+        # A corrupt artifact is skipped, not fatal: the warm job's per-artifact check reports it
+        # as a MISSING dump (DIVERGED) without costing the other artifacts their dumps.
+        sdfg = load(path)
+        if sdfg is None:
+            continue
         try:
-            print(dump(path, root), flush=True)
+            print(dump(sdfg, path, root), flush=True)
         except Exception as exc:  # one unreadable artifact must not cost the others their dump
             print(f"ARGLIST_DUMP_FAILED {path}: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
             rc = 1

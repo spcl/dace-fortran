@@ -68,6 +68,24 @@ setup_build_root() {
     export BUILD_ROOT
 }
 
+# Two JOBS can be aimed at one BUILD_ROOT on purpose (cpu_warm.sbatch submits CHUNK=small and
+# CHUNK=large as separate concurrent jobs, and the non-DaCe cloudsc lanes share BUILD_ROOT_BASE
+# warm->meas so the binary survives).  Compiling twice in one directory races gfortran's temp
+# modules ("Cannot delete temporary module file 'parkind1.mod0'") and executing a binary another
+# job is relinking gives "Text file busy", so build+run is a critical section.  The lock is held
+# on fd 9 (same idiom as tagcycle_lane.sh ensure_npz) for the life of the calling shell, and the
+# kernel drops it if that shell dies -- a crashed job cannot wedge the next one.
+lock_build_root() {
+    local lock="${1:-$BUILD_ROOT/.build.lock}"
+    mkdir -p "$(dirname "$lock")" || return 1
+    exec 9> "$lock"
+    if ! flock -n 9; then
+        echo "waiting for $lock (another job is building/running in this root)"
+        flock 9
+    fi
+    echo "holding $lock"
+}
+
 # --- topology ----------------------------------------------------------------
 # Sets: TOPO_NSOCKETS, TOPO_NNUMA, TOPO_NCORES, TOPO_PHYS_CPUS (one CPU id per physical core,
 # lowest sibling, ordered NUMA-node-major then CPU id). Never hardcoded: the target node may be

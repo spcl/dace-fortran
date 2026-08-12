@@ -23,6 +23,7 @@ __all__ = [
 
 if __name__ == "__main__":
     # Manual inspection CLI: python3 -m dace_fortran.hlfir_to_sdfg <input.hlfir> [output.sdfg]
+    import os
     import sys
 
     import dace
@@ -53,5 +54,7 @@ if __name__ == "__main__":
 
     show_region(sdfg)
     out = sys.argv[2] if len(sys.argv) > 2 else f"{sdfg.name}.sdfgz"
-    sdfg.save(out, compress=True)
+    # Publish atomically: an interrupted save must not leave a truncated .sdfgz under the real name.
+    sdfg.save(f"{out}.partial", compress=True)
+    os.replace(f"{out}.partial", out)
     print(f"\nSaved: {out}")
