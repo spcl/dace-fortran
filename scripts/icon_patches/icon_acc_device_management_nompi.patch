@@ -1,0 +1,66 @@
+diff --git a/src/shared/mo_acc_device_management.f90 b/src/shared/mo_acc_device_management.f90
+index e927a0a..37cafa5 100644
+--- a/src/shared/mo_acc_device_management.f90
++++ b/src/shared/mo_acc_device_management.f90
+@@ -46,7 +46,9 @@ MODULE mo_acc_device_management
+ !------------------------------------------------------------------------------
+ 
+ USE, INTRINSIC :: iso_c_binding
++#ifndef NOMPI
+ USE mpi
++#endif
+ USE mo_kind,      ONLY: wp
+ USE mo_mpi,       ONLY: p_comm_work, p_comm_rank, num_work_procs, p_max
+ USE mo_exception, ONLY: message, message_text
+@@ -487,11 +489,15 @@ SUBROUTINE checkAccDevice(mycomm, mynumranks, myrank)
+ !!$    write(0,'(a,i,i,i)') 'ERROR: inconsistent number of ranks on communicator and passed as argument', numid, numnodev, mynumranks
+ !!$    stop
+ !!$  endif
++#ifndef NOMPI
+     CALL mpi_comm_size(mycomm, numid, ierr)
+     IF (ierr /= 0) THEN
+       WRITE(0,'(a,i)') 'ERROR: problem with mpi_comm_size', ierr
+       STOP
+     ENDIF
++#else
++    numid = mynumranks
++#endif
+     IF (numid /= mynumranks) THEN
+       WRITE(0,'(a,i,i)') 'ERROR: inconsistent number of ranks on communicator and passed as argument', numid, mynumranks
+       STOP
+@@ -504,11 +510,17 @@ SUBROUTINE checkAccDevice(mycomm, mynumranks, myrank)
+     numnodev = 0
+ 
+     ! get number of ranks
++#ifndef NOMPI
+     CALL mpi_comm_size(mycomm, numid, ierr)
+     IF (ierr /= 0) THEN
+       WRITE(0,'(a,i)') 'ERROR: problem with mpi_comm_size', ierr
+       STOP
+     ENDIF
++#else
++    ! serial build: one process, one device -- rank 0 takes device 0
++    numid = mynumranks
++    mylocid = 0
++#endif
+     IF (numid /= mynumranks) THEN
+       WRITE(0,'(a,i,i)') 'ERROR: inconsistent number of ranks on communicator and passed as argument', numid, mynumranks
+       STOP
+@@ -533,11 +545,17 @@ SUBROUTINE checkAccDevice(mycomm, mynumranks, myrank)
+   ELSE
+ 
+     ! get the hostids so we can determine what other processes are on this node
++#ifndef NOMPI
+     CALL mpi_allgather( hostid, 1, mpi_integer, hostids, 1, mpi_integer, mycomm, ierr )
+     IF (ierr /= 0) THEN
+       WRITE(0,'(a,i)') 'ERROR: problem with mpi_allgather', ierr
+       STOP
+     ENDIF
++#else
++    ! unreachable in a serial build (numid == 1 above); keeps the branch compilable
++    WRITE(0,'(a,i)') 'ERROR: multi-rank checkAccDevice in a NOMPI build', numid
++    STOP
++#endif
+     IF (debug) WRITE(*,*) 'DBG: ', myid, ' gathered hostids'
+ 
+     ! determine who's on this node

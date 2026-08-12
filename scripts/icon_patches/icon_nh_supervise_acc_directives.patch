@@ -1,0 +1,22 @@
+diff --git a/src/atm_dyn_iconam/mo_nh_supervise.f90 b/src/atm_dyn_iconam/mo_nh_supervise.f90
+index b3ac001..d644b3a 100644
+--- a/src/atm_dyn_iconam/mo_nh_supervise.f90
++++ b/src/atm_dyn_iconam/mo_nh_supervise.f90
+@@ -294,7 +294,7 @@ CONTAINS
+       ENDIF
+       !$ACC PARALLEL DEFAULT(PRESENT) COPY(z_total_mass, z_kin_energy, z_int_energy, z_pot_energy, z_dry_mass) ASYNC(1)
+       !$ACC LOOP GANG VECTOR COLLAPSE(2) PRIVATE(z_volume) &
+-      !$ACC   REDUCTION(+, z_total_mass, z_kin_energy, z_int_energy, z_pot_energy, z_dry_mass)
++      !$ACC   REDUCTION(+: z_total_mass, z_kin_energy, z_int_energy, z_pot_energy, z_dry_mass)
+       DO jk = 1, nlev
+         DO jc = 1, nlen
+           z_volume = patch%cells%area(jc,jb)*nh_state%metrics%ddqz_z_full(jc,jk,jb) &
+@@ -314,7 +314,7 @@ CONTAINS
+       !$ACC END PARALLEL
+ 
+       !$ACC PARALLEL DEFAULT(PRESENT) COPY(z_mean_surfp) ASYNC(1)
+-      !$ACC LOOP GANG VECTOR COLLAPSE(2) REDUCTION(+, z_mean_surfp)
++      !$ACC LOOP GANG VECTOR REDUCTION(+: z_mean_surfp)
+       DO jc = 1, nlen
+         z_mean_surfp = z_mean_surfp + diag%pres_sfc(jc,jb)*patch%cells%area(jc,jb) /  &
+           &  (4._wp*grid_sphere_radius**2*pi)

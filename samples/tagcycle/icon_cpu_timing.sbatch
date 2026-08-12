@@ -27,7 +27,7 @@ DF="${DF:-$WORK/dace-fortran}"
 ICON_SRC="${ICON_SRC:-$WORK/icon-model}"
 GRID_DIR="${GRID_DIR:-$WORK/icon-grids}"
 COMPILER="${COMPILER:-gcc}"
-DACE_BUILD="${DACE_BUILD:-$ICON_SRC/build/dace_cpu_$COMPILER}"
+LANE_BUILD="${LANE_BUILD:-$ICON_SRC/build/$COMPILER}"
 PY="${PY:-$WORK/venv-meas/bin/python}"
 EXP="${EXP:-atm_heldsuarez_dace_r02b05}"
 THREADS="${THREADS:-72}"
@@ -41,11 +41,14 @@ echo "ICON_TIMING host=$(hostname) lane=$COMPILER tag=$TAG_NOW expected=$TAG job
     echo "ICON_TIMING_EXIT[$COMPILER]=1"
     exit 1
 }
-[ -x "$DACE_BUILD/bin/icon" ] || {
-    echo "ABORT: no icon binary at $DACE_BUILD/bin/icon -- run icon_cpu_build.sbatch first" >&2
+# The lane tree holds both binaries; time the DaCe-linked one, and make it the
+# bin/icon the generated runscript execs.
+[ -x "$LANE_BUILD/bin/icon.dace" ] || {
+    echo "ABORT: no DaCe icon binary at $LANE_BUILD/bin/icon.dace -- run icon_cpu_build.sbatch first" >&2
     echo "ICON_TIMING_EXIT[$COMPILER]=1"
     exit 1
 }
+cp "$LANE_BUILD/bin/icon.dace" "$LANE_BUILD/bin/icon"
 
 # shellcheck disable=SC1091
 source "$WORK/spack/share/spack/setup-env.sh"
@@ -68,17 +71,17 @@ sed -i \
     -e 's|num_io_procs *= *1|num_io_procs = 0|g' \
     "$EXP_FILE"
 
-ln -sfn "$DACE_BUILD/run/set-up.info" "$RUN/set-up.info"
+ln -sfn "$LANE_BUILD/run/set-up.info" "$RUN/set-up.info"
 for entry in "$RUN"/*; do
     base=$(basename "$entry")
-    [ -e "$DACE_BUILD/run/$base" ] || ln -sn "$entry" "$DACE_BUILD/run/$base"
+    [ -e "$LANE_BUILD/run/$base" ] || ln -sn "$entry" "$LANE_BUILD/run/$base"
 done
 ( cd "$ICON_SRC" && ./make_runscripts "$EXP" ) || {
     echo "ICON_TIMING_EXIT[$COMPILER]=1"
     exit 1
 }
-ln -sfn "$RUN/exp.$EXP.run" "$DACE_BUILD/run/exp.$EXP.run"
-rm -rf "$DACE_BUILD/experiments/$EXP"
+ln -sfn "$RUN/exp.$EXP.run" "$LANE_BUILD/run/exp.$EXP.run"
+rm -rf "$LANE_BUILD/experiments/$EXP"
 
 LOG="$RUNS/icon_timing_${COMPILER}_${TAG}_${SLURM_JOB_ID:-local}.log"
 CSV="$RUNS/icon_timing_${COMPILER}_${TAG}_${SLURM_JOB_ID:-local}.csv"
@@ -100,7 +103,7 @@ echo "alloc: $MEAS_ALLOC_ACTIVE (MEAS_ALLOC=$MEAS_ALLOC, so=${MEAS_ALLOC_SO:-non
 # mpirun exists in a --disable-mpi build).  srun only places/pins the step.
 export OMP_NUM_THREADS="$THREADS" OMP_PROC_BIND=close OMP_PLACES=cores
 srun --exact --ntasks=1 --cpus-per-task="$THREADS" --cpu-bind=cores --mem-bind=local \
-    bash -c "cd '$DACE_BUILD/run' && bash 'exp.$EXP.run'" > "$LOG" 2>&1
+    bash -c "cd '$LANE_BUILD/run' && bash 'exp.$EXP.run'" > "$LOG" 2>&1
 run_rc=$?
 echo "ICON_RUN_EXIT[$COMPILER]=$run_rc log=$LOG"
 [ $run_rc -eq 0 ] || tail -40 "$LOG"

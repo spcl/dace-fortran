@@ -48,7 +48,7 @@ if [[ "${DAINT}" == 1 ]]; then
   DACE_LIBS=${DACE_LIBS:-${_WORK}/dace-icon-libs}
   GRID_DIR=${GRID_DIR:-${_WORK}/icon-grids}
   PY=${PY:-$(command -v python3)}
-  CONFIGURE_SH=${CONFIGURE_SH:-configure_icon_dace_cpu_daint.sh}
+  CONFIGURE_SH=${CONFIGURE_SH:-configure_icon_gcc_daint.sh}
   CAP=${CAP:-none}
   MAKE_J=${MAKE_J:-16}
 fi
@@ -110,7 +110,10 @@ build_icon() {
   echo "  -> ${build_dir} (DACE_LIBS_DIR='${dace_libs_dir}')"
   rm -rf "${build_dir}"
   mkdir -p "${build_dir}"
+  # The daint lane scripts own their build dir via BUILD_DIR/ICON_SRC; the x86
+  # script still infers it from the cwd, so pass both.
   ( cd "${build_dir}" && DACE_LIBS_DIR="${dace_libs_dir}" \
+      BUILD_DIR="${build_dir}" ICON_SRC="${ICON_SRC}" \
       bash "${DACE_FORTRAN}/scripts/${CONFIGURE_SH}" )
   capped make -C "${build_dir}" -j"${MAKE_J}" >/dev/null
 }
@@ -156,7 +159,7 @@ step "0) Apply ICON source guards (idempotent)"
 # skips it when pinit_seed==0 (which step 5 forces in the namelist). Applied to
 # the shared ICON tree BEFORE both builds so STOCK and DACE carry it identically
 # -- the comparison stays valid. Idempotent: skip if already applied.
-PINIT_PATCH=${PINIT_PATCH:-${DACE_FORTRAN}/tests/icon/full/patches/mo_atmo_nonhydrostatic_pinit_seed_guard.patch}
+PINIT_PATCH=${PINIT_PATCH:-${DACE_FORTRAN}/scripts/icon_patches/icon_pinit_seed_guard.patch}
 ( cd "${ICON_SRC}"
   if git apply --reverse --check "${PINIT_PATCH}" 2>/dev/null; then
     echo "(pinit_seed guard already applied)"

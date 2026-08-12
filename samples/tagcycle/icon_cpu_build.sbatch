@@ -27,8 +27,11 @@ ICON_SRC="${ICON_SRC:-$WORK/icon-model}"
 GRID_DIR="${GRID_DIR:-$WORK/icon-grids}"
 COMPILER="${COMPILER:-gcc}"
 DACE_LIBS="${DACE_LIBS:-$WORK/dace-icon-libs-$COMPILER}"
-STOCK_BUILD="$ICON_SRC/build/stock_cpu_$COMPILER"
-DACE_BUILD="$ICON_SRC/build/dace_cpu_$COMPILER"
+# ONE build tree per compiler (build/gcc, build/nvhpc); the stock and the
+# DaCe-linked binaries are kept side by side inside it as bin/icon.stock and
+# bin/icon.dace, since only the icon.mk link rule differs between them.
+LANE_BUILD="${LANE_BUILD:-$ICON_SRC/build/$COMPILER}"
+CONF_SH="$DF/scripts/configure_icon_${COMPILER}_daint.sh"
 PY="${PY:-$WORK/venv-meas/bin/python}"
 MAKE_J="${MAKE_J:-64}"
 ICON_DACE_OPT="${ICON_DACE_OPT:-O3}"
@@ -48,6 +51,10 @@ spack load "gcc@16.1.0 arch=linux-sles15-neoverse_v2"
 # The DaCe lib build needs LLVM flang on PATH next to gfortran (gcc lane only).
 [ "$COMPILER" = gcc ] && spack load llvm@22.1.5
 
+# shellcheck disable=SC1091
+source "$DF/scripts/icon_daint_common.sh"
+( icon_dir="$ICON_SRC" ICON_DAINT_LANE=icon_cpu_build icon_daint_print_provenance )
+
 overall=0
 fail() { echo "$1"; overall=1; }
 
@@ -55,29 +62,26 @@ fail() { echo "$1"; overall=1; }
 GRID_FILE="$GRID_DIR/0014/icon_grid_0014_R02B05_G.nc"
 [ -f "$GRID_FILE" ] || { fail "ICON_BUILD_EXIT[$COMPILER]=1  # grid missing: $GRID_FILE"; exit 1; }
 
-PINIT_PATCH="$DF/tests/icon/full/patches/mo_atmo_nonhydrostatic_pinit_seed_guard.patch"
-( cd "$ICON_SRC"
-  if git apply --reverse --check "$PINIT_PATCH" 2>/dev/null; then
-      echo "(pinit_seed guard already applied)"
-  else
-      git apply "$PINIT_PATCH" && echo "applied pinit_seed guard"
-  fi ) || fail "PINIT_PATCH_EXIT[$COMPILER]=1"
-
+# The ICON source patches (pinit_seed guard, NOMPI acc device management, acc
+# reduction syntax) are applied by the lane configure script itself.
 VELOCITY_F90="$ICON_SRC/src/atm_dyn_iconam/mo_velocity_advection.f90"
 [ -f "$VELOCITY_F90.bak" ] || cp "$VELOCITY_F90" "$VELOCITY_F90.bak"
 cp "$VELOCITY_F90.bak" "$VELOCITY_F90"
 
-build_icon() { # $1=build dir  $2=DACE_LIBS_DIR ('' for stock)
-    rm -rf "$1" && mkdir -p "$1" &&
-        ( cd "$1" && COMPILER="$COMPILER" ICON_DACE_OPT="$ICON_DACE_OPT" DACE_LIBS_DIR="$2" \
-            bash "$DF/scripts/configure_icon_dace_cpu_daint.sh" ) &&
-        make -C "$1" -j"$MAKE_J" > "$1/make.log" 2>&1
+build_icon() { # $1=DACE_LIBS_DIR ('' for stock)  $2=name to keep the binary under
+    ( ICON_DACE_OPT="$ICON_DACE_OPT" DACE_LIBS_DIR="$1" \
+        BUILD_DIR="$LANE_BUILD" ICON_SRC="$ICON_SRC" bash "$CONF_SH" ) > "$LANE_BUILD.configure.log" 2>&1 &&
+        # shellcheck disable=SC1091
+        { source "$LANE_BUILD/build-env.sh" &&
+          make -C "$LANE_BUILD" -j"$MAKE_J" > "$LANE_BUILD/make.log" 2>&1; } &&
+        cp "$LANE_BUILD/bin/icon" "$LANE_BUILD/bin/$2"
 }
 
-echo "=== stock ICON ($COMPILER, $ICON_DACE_OPT) -> $STOCK_BUILD"
-build_icon "$STOCK_BUILD" ""
+echo "=== stock ICON ($COMPILER, $ICON_DACE_OPT) -> $LANE_BUILD (bin/icon.stock)"
+rm -rf "$LANE_BUILD"
+build_icon "" icon.stock
 rc=$?
-[ $rc -eq 0 ] || { tail -40 "$STOCK_BUILD/make.log" 2>/dev/null; overall=1; }
+[ $rc -eq 0 ] || { tail -40 "$LANE_BUILD/make.log" 2>/dev/null; overall=1; }
 echo "ICON_STOCK_BUILD_EXIT[$COMPILER]=$rc"
 
 if [ "$COMPILER" = gcc ] && [ $rc -eq 0 ]; then
@@ -85,17 +89,20 @@ if [ "$COMPILER" = gcc ] && [ $rc -eq 0 ]; then
     rel=--release
     [ "$ICON_DACE_OPT" = O0 ] && rel=
     DACE_FORTRAN_FP_CONTRACT=fast "$PY" "$DF/scripts/build_icon_dace_libs.py" \
-        $rel --icon-src "$ICON_SRC" --icon-build "$STOCK_BUILD" --out-dir "$DACE_LIBS"
+        $rel --icon-src "$ICON_SRC" --icon-build "$LANE_BUILD" --out-dir "$DACE_LIBS"
     lib_rc=$?
     echo "DACE_LIBS_EXIT[$COMPILER]=$lib_rc"
     [ $lib_rc -eq 0 ] || overall=1
 
     if [ $lib_rc -eq 0 ]; then
-        echo "=== patched ICON ($COMPILER) -> $DACE_BUILD"
-        "$PY" "$DF/tests/icon/full/apply_velocity_dace_patch.py" "$VELOCITY_F90"
-        build_icon "$DACE_BUILD" "$DACE_LIBS"
+        # Same tree, DaCe link rule + velocity dispatch patch: make relinks and
+        # recompiles only what the patch touched.
+        echo "=== patched ICON ($COMPILER) -> $LANE_BUILD (bin/icon.dace)"
+        icon_dir="$ICON_SRC" ICON_DAINT_LANE=icon_cpu_build \
+            icon_daint_apply_one_patch "$ICON_DAINT_DACE_PATCH"
+        build_icon "$DACE_LIBS" icon.dace
         drc=$?
-        [ $drc -eq 0 ] || tail -40 "$DACE_BUILD/make.log" 2>/dev/null
+        [ $drc -eq 0 ] || tail -40 "$LANE_BUILD/make.log" 2>/dev/null
         echo "ICON_DACE_BUILD_EXIT[$COMPILER]=$drc"
         [ $drc -eq 0 ] || overall=1
         cp "$VELOCITY_F90.bak" "$VELOCITY_F90"

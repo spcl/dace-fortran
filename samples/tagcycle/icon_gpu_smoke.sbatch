@@ -28,7 +28,7 @@ WORK=/capstor/scratch/cscs/ybudanaz/aarch64
 DF="${DF:-$WORK/dace-fortran}"
 ICON_SRC="${ICON_SRC:-$WORK/icon-model}"
 GRID_DIR="${GRID_DIR:-$WORK/icon-grids}"
-BUILD="${BUILD:-$ICON_SRC/build/gpu_nvhpc}"
+BUILD="${BUILD:-$ICON_SRC/build/nvhpc}"
 GRID="${GRID:-R02B04}"
 MAKE_J="${MAKE_J:-72}"
 ICON_DACE_OPT="${ICON_DACE_OPT:-O3}"
@@ -63,21 +63,33 @@ GRID_FILE="$GRID_DIR/$GRID_ID/icon_grid_${GRID_ID}_${GRID}_G.nc"
 source "$WORK/spack/share/spack/setup-env.sh"
 spack load "gcc@16.1.0 arch=linux-sles15-neoverse_v2"
 
-# --- phase 1: configure (skipped when a Makefile survives from a previous try)
+# --- phase 1: configure (reused only when the stamp the configure script wrote
+# still matches: an edited lane script, helper or ICON patch invalidates
+# icon.mk, whose sub-configure recipes bake in the compiler paths and flags)
+# shellcheck disable=SC1091
+source "$DF/scripts/icon_daint_common.sh"
+( icon_dir="$ICON_SRC" ICON_DAINT_LANE=icon_gpu_smoke icon_daint_print_provenance )
+CONF_ID="$(icon_daint_stamp_id "GPU=1 OPT=$ICON_DACE_OPT DACE=" configure_icon_nvhpc_daint.sh)"
 [ "${FORCE_CLEAN:-0}" = 1 ] && rm -rf "$BUILD"
 mkdir -p "$BUILD"
-if [ -f "$BUILD/icon.mk" ]; then
+if [ -f "$BUILD/icon.mk" ] && [ "$(cat "$BUILD/.configure.stamp" 2>/dev/null)" = "$CONF_ID" ]; then
     echo "(configure reused from previous run)"
     echo "ICON_GPU_CONFIGURE_EXIT=0"
 else
-    ( cd "$BUILD" && GPU=1 COMPILER=nvhpc ICON_DACE_OPT="$ICON_DACE_OPT" DACE_LIBS_DIR= \
-        bash "$DF/scripts/configure_icon_dace_cpu_daint.sh" ) > "$BUILD/configure.log" 2>&1
+    [ -f "$BUILD/icon.mk" ] && echo "(configure inputs changed -- reconfiguring in place)"
+    ( GPU=1 ICON_DACE_OPT="$ICON_DACE_OPT" DACE_LIBS_DIR= BUILD_DIR="$BUILD" ICON_SRC="$ICON_SRC" \
+        bash "$DF/scripts/configure_icon_nvhpc_daint.sh" ) > "$BUILD/configure.log" 2>&1
     rc=$?
     echo "ICON_GPU_CONFIGURE_EXIT=$rc"
     [ $rc -eq 0 ] || { tail -30 "$BUILD/configure.log"; exit 1; }
 fi
 
 # --- phase 2: build (make resumes; -Minfo=accel lands in make.log)
+# The delayed sub-configures and cmake externals inherit THIS shell's env;
+# build-env.sh is what the configure phase actually used (nvhpc bin on PATH,
+# CUDA redirects scrubbed).
+# shellcheck disable=SC1091
+[ -f "$BUILD/build-env.sh" ] && source "$BUILD/build-env.sh"
 make -C "$BUILD" -j"$MAKE_J" >> "$BUILD/make.log" 2>&1
 rc=$?
 echo "ICON_GPU_BUILD_EXIT=$rc"

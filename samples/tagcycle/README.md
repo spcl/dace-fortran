@@ -202,6 +202,43 @@ is pinned to the matching variant `if_prop_lvn_only_0_istep_1` and refuses a mis
 `VTP_VARIANT`. The ICON-integration measurement (separate, later) will measure all 4 VTP variants
 as separate rows, since ICON exercises every timestep combination.
 
+## ICON source, patches and build lanes
+
+ICON is **not vendored** here. The reproducible tree is upstream at a pinned sha plus our patches:
+
+    login node:  bash scripts/fetch_icon_source.sh          # clone @ pin + submodules
+    then:        the lane configure script applies scripts/icon_patches/*.patch idempotently
+                 -> configure -> make -> run
+
+| item | value |
+|---|---|
+| upstream | `https://gitlab.dkrz.de/icon/icon-model.git` |
+| pin | `8597da45ef4b86323f3fb844caedc4ae5e1ffc01` (tag `icon-2026.04-public`) |
+| clone | `$WORK/icon-model` (login-node fetch only; jobs assert the pin, like the grids) |
+
+Patches (unified diffs against the pin, applied by `scripts/icon_daint_common.sh`):
+
+| patch | what it fixes | lanes |
+|---|---|---|
+| `icon_patches/icon_acc_device_management_nompi.patch` | `USE mpi` + `mpi_comm_size`/`mpi_allgather` guarded `#ifndef NOMPI`; serial path takes device 0. Without it `--enable-gpu=openacc` + `--disable-mpi` cannot compile (`Unable to open MODULE file mpi.mod`) | both |
+| `icon_patches/icon_nh_supervise_acc_directives.patch` | invalid OpenACC in `mo_nh_supervise.f90`: `REDUCTION(+, ...)` → `REDUCTION(+: ...)` (×2) and `COLLAPSE(2)` over a single loop | both |
+| `icon_patches/icon_pinit_seed_guard.patch` | soil-temp perturbation guarded on `pinit_seed /= 0` (segfault with `inwp_surface=0`) | both |
+| `icon_patches/icon_velocity_dace_dispatch.patch` | velocity_tendencies dispatches into `libvelocity_inner_wrap.so`; generated from `tests/icon/full/apply_velocity_dace_patch.py`, regenerate when either changes | DaCe-linked build only (opt-in) |
+
+Compiler → script → build dir, **one build tree per compiler**, never shared:
+
+| compiler | configure script | build dir | lanes it serves |
+|---|---|---|---|
+| gcc 16.1.0 | `scripts/configure_icon_gcc_daint.sh` | `icon-model/build/gcc` | CPU only (gcc's nvptx here is sm_80, not cc90) |
+| nvhpc 26.3 | `scripts/configure_icon_nvhpc_daint.sh` | `icon-model/build/nvhpc` | CPU, and `GPU=1` OpenACC (`-acc=gpu -gpu=cc90`) |
+
+Stock and DaCe-linked binaries live side by side in the lane tree as `bin/icon.stock` and
+`bin/icon.dace` (only the icon.mk link rule and the velocity patch differ). Each configure run
+writes `$BUILD/.configure.stamp`, a sha256 fingerprint of the lane script + the shared helper +
+every patch; a job reuses an existing build only when the stamp still matches, so a debug-slot
+rerun resumes instead of rebuilding. Each ICON job prints `ICON_SHA=` and one `ICON_PATCH=` line
+per patch for provenance.
+
 ## ICON integration jobs (CPU, no MPI)
 
 Full-ICON Held-Suarez R02B05 with the DaCe velocity lib linked in (`docs/ICON_INTEGRATION.md`),
@@ -211,7 +248,7 @@ only. Builds run plain on the node (never under `srun`); only the timing step is
 
 | job | partition | walltime | tasks | what it does |
 |---|---|---|---|---|
-| `icon_cpu_build.sbatch` | `normal` | 4 h | 1, plain make | stock ICON (`configure_icon_dace_cpu_daint.sh`, FMA on) → DaCe velocity lib (`build_icon_dace_libs.py --release`, `DACE_FORTRAN_FP_CONTRACT=fast`) → velocity-patched ICON. Verdicts `ICON_STOCK_BUILD_EXIT[lane]` / `DACE_LIBS_EXIT[lane]` / `ICON_DACE_BUILD_EXIT[lane]` / `ICON_BUILD_EXIT[lane]` |
+| `icon_cpu_build.sbatch` | `normal` | 4 h | 1, plain make | stock ICON (`configure_icon_<lane>_daint.sh`, FMA on) → `bin/icon.stock` → DaCe velocity lib (`build_icon_dace_libs.py --release`, `DACE_FORTRAN_FP_CONTRACT=fast`) → velocity-patched relink in the same tree → `bin/icon.dace`. Verdicts `ICON_STOCK_BUILD_EXIT[lane]` / `DACE_LIBS_EXIT[lane]` / `ICON_DACE_BUILD_EXIT[lane]` / `ICON_BUILD_EXIT[lane]` |
 | `icon_cpu_timing.sbatch` | `debug` | 30 min | 1 × 72 cores, one socket | runs the patched ICON on Held-Suarez R02B05 (seeds pinned 0, PT10S steps) via `srun --ntasks=1`, greps `VELO_TIMER`, `parse_icon_timers.py` → per-config median CSV in `runs/`. Verdict `ICON_TIMING_EXIT[lane]` |
 | `icon_gpu_smoke.sbatch` | `debug` | 30 min | 1 × 72 cores + GPU 0 | **the integration TEST job**: OpenACC GPU ICON (nvhpc, `-acc=gpu -gpu=cc90 -Minfo=accel`, `--enable-gpu=openacc+cuda`, no MPI) — configure+`make -j72` (resumable: build dir kept, resubmit continues) then a 3-step Held-Suarez on `GRID=R02B04..R02B09` (grids pre-staged by `scripts/fetch_icon_grids.sh`, ids 0013/0019/0021/0023/0025/0015). Sweep intent: B04–B07 fit one GH200; B08 is attempted anyway and allowed to OOM-crash; B09 does not fit a single module (grid staged for multi-module futures). Verdicts `ICON_GPU_CONFIGURE_EXIT` / `ICON_GPU_BUILD_EXIT` / `ICON_GPU_RUN_EXIT` |
 
