@@ -123,11 +123,13 @@ def _rewrite_init(state, access_node, tasklet, name, nlev_sym, nproma_sym):
         state.remove_edge(e)
     state.remove_node(tasklet)
 
-    # ``_i`` (nproma) is listed first so DaCe maps it to threadIdx.x --
-    # the stride-1 axis, matching the Fortran-major layout installed
-    # above.
-    me, mx = state.add_map("init_maxvcfl",
-                           {"_i": f"0:{nproma_sym}", "_j": f"0:{nlev_sym}"})
+    # ``_i`` (nproma) is listed LAST. DaCe's CUDA codegen reverses the map range
+    # when it assigns grid axes (``range.size(True)[::-1]``), so the last param is
+    # the one that becomes gridDim.x -- and x is both the stride-1 axis this
+    # Fortran-major layout wants for coalescing and the only axis whose extent is
+    # not capped at 65535. Listed first, nproma landed on gridDim.y and any grid
+    # past 65535 columns failed to launch with "invalid argument".
+    me, mx = state.add_map("init_maxvcfl", {"_j": f"0:{nlev_sym}", "_i": f"0:{nproma_sym}"})
     mx.add_in_connector("IN__buf")
     mx.add_out_connector("OUT__buf")
     t = state.add_tasklet("zero", {}, {"_out"}, "_out = 0")
