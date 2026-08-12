@@ -3,8 +3,12 @@ import glob
 import json
 import os
 import time
+from pathlib import Path
 
 OUT = os.path.dirname(os.path.abspath(__file__))
+REPO = Path(__file__).resolve().parents[2]
+WORK_ROOT = Path(os.environ.get('WORK_ROOT') or REPO / 'samples' / '_work')
+ARCHIVE = WORK_ROOT / 'runs_system-malloc_archive_2026-08-11.tar.gz'
 
 HEAD = """# f2dace-artifact look-alike figures -- manifest
 
@@ -14,7 +18,7 @@ script writes. Regenerate everything with:
 ```
 cd {out}
 RUNS="<runs dir> [<runs dir> ...]"
-PY=/capstor/scratch/cscs/ybudanaz/aarch64/venv-meas/bin/python
+PY="${{PYTHON:-python3}}"
 $PY plot_cloudsc_fig.py        --runs-dir $RUNS      # FIG A: fig_cloudsc_bar / _violin
 $PY plot_velocity_fig.py       --runs-dir $RUNS      # FIG B: fig_velocity_bar / _violin
 $PY plot_cloudsc_efficiency.py --runs-dir $RUNS      # FIG C: fig_cloudsc_eff
@@ -49,7 +53,7 @@ def main():
                 body.append(f'- {key}: `{r[key]}`')
         body.append('')
 
-    body.append("""## Lane -> colour / legend map (`f2dace_style.py`)
+    body.append(f"""## Lane -> colour / legend map (`f2dace_style.py`)
 
 Set1, artifact assignment: red = DaCe, blue = the Fortran OpenMP/OpenACC
 baseline, green = the C rewrite.
@@ -79,10 +83,10 @@ scratch; no synthetic data was used for any delivered figure.
 
 ## Data provenance
 
-The run CSVs under `dace-fortran-samples*/runs/` were removed while these
+The run CSVs under `$WORK_ROOT/{{meas,dev}}/runs/` were removed while these
 figures were being built, so every figure currently on disk was rendered from
 the archived pre-mimalloc runs in
-`/capstor/scratch/cscs/ybudanaz/aarch64/runs_system-malloc_archive_2026-08-11.tar.gz`
+`{ARCHIVE}`
 (extracted to scratch, allocator column absent -> reported as `unspecified`).
 Each figure carries that path in its footer.  Re-run the four scripts with
 `--runs-dir` pointing at the new mimalloc runs to replace them; do not compare

@@ -10,8 +10,9 @@
 #SBATCH --mem=0
 #SBATCH --hint=nomultithread
 #SBATCH -t 00:30:00
-#SBATCH -o /capstor/scratch/cscs/ybudanaz/aarch64/probe/gpu_meas-%j.out
-#SBATCH -e /capstor/scratch/cscs/ybudanaz/aarch64/probe/gpu_meas-%j.out
+#SBATCH -o samples/_work/logs/gpu_meas-%j.out
+#SBATCH -e samples/_work/logs/gpu_meas-%j.out
+# SUBMIT FROM THE REPO ROOT: slurm resolves the -o/-e paths above against the submit dir.
 # Stage 2 of the GPU cycle: THE MEASUREMENT. One GH200 node is 4 modules = 4 sockets x 72 cores,
 # each socket paired with its own H100, so the lanes run CONCURRENTLY, one lane per GPU -- the same
 # shape as the 4-rank CPU job (meas_4rank.sbatch), not a sequential sweep of one device.
@@ -50,7 +51,7 @@
 set -uo pipefail
 
 # Re-entrant: the launcher runs one srun step per lane, and each step re-enters this same file as a
-# single-lane worker. $0 is the spool copy on a compute node, so self-reference goes through $MEAS.
+# single-lane worker. $0 is the spool copy on a compute node, so self-reference goes through $REPO.
 WORKER_MODE=0
 if [ "${1:-}" = "--lane-worker" ]; then
     WORKER_MODE=1
@@ -60,12 +61,19 @@ if [ "${1:-}" = "--lane-worker" ]; then
     WORKER_GPU="$5"
 fi
 
-MEAS="${MEAS:-/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-meas}"
-BR2="${BR2:-/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-samples-meas}"
+# Under sbatch, BASH_SOURCE is the slurm spool copy -- fall back to the submit dir (the repo root).
+# A worker step re-enters this file BY REPO PATH, so BASH_SOURCE is the real file in that case.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="${REPO:-$(cd "$HERE/../.." && pwd)}"
+[ -d "$REPO/samples/tagcycle" ] || REPO="${SLURM_SUBMIT_DIR:-$PWD}"
+WORK_ROOT="${WORK_ROOT:-$REPO/samples/_work}"
+# MEAS/BR2 keep their pinned-mirror names: the tree under test (now the repo) and the output root.
+MEAS="${MEAS:-$REPO}"
+BR2="${BR2:-$WORK_ROOT/meas}"
 GPUROOT="${GPUROOT:-$BR2/gpu}"
 RUNS="$BR2/runs"
 PROV="$RUNS/PROVENANCE.txt"
-SELF="$MEAS/samples/tagcycle/gpu_meas.sbatch"
+SELF="$REPO/samples/tagcycle/gpu_meas.sbatch"
 LANES="${LANES:-cuda-ref dace-gpu openacc-ref dace-gpu-pipeline dace-gpu-manual}"
 REPS="${REPS:-50}"
 WARMUP="${WARMUP:-2}"
@@ -95,7 +103,8 @@ ulimit -c 0
 ulimit -s unlimited 2> /dev/null || echo "warning: could not raise the stack limit" >&2
 # shellcheck disable=SC1091
 . samples/env.sh > /dev/null 2>&1
-PY="${PY:-${PYTHON:-/capstor/scratch/cscs/ybudanaz/aarch64/venv-meas/bin/python}}"
+# python3.11 before python3: the system python3 on these nodes is 3.6, which no sample runs on.
+PY="${PY:-${PYTHON:-$(command -v python3.11 || command -v python3 || true)}}"
 [ -x "$PY" ] || {
     echo "ABORT: no usable interpreter at $PY (set PYTHON in samples/env.sh or export PY)" >&2
     exit 1
@@ -114,10 +123,9 @@ else
 fi
 export MEAS_ALLOC="${MEAS_ALLOC:-system}" MEAS_ALLOC_ACTIVE
 
-# The clone is frozen at this point: a phase A cache miss must die, not quietly rebuild the bridge
-# from a compute node into the shared tree.
+# A phase A cache miss must die here, not quietly rebuild the bridge from a compute node.
 export DACE_FORTRAN_NO_REBUILD=1
-export EXPECTED_TAG="$TAG" MEAS BR2
+export EXPECTED_TAG="$TAG" REPO WORK_ROOT MEAS BR2
 export DACE_compiler_allow_view_arguments=false
 unset BUILD_ROOT
 export BUILD_ROOT_BASE="$GPUROOT"
@@ -320,7 +328,7 @@ nvidia-smi -L
 echo "--- GPU/CPU affinity (provenance for the lane->gpu mapping) ---"
 nvidia-smi topo -m 2> /dev/null | head -12
 [ "$TAG_NOW" = "$TAG" ] || {
-    echo "ABORT: clone tag is $TAG_NOW, expected $TAG" >&2
+    echo "ABORT: repo describes as $TAG_NOW, expected $TAG (check out the tag, clean the tree)" >&2
     exit 1
 }
 if ! nvidia-smi -L 2> /dev/null | grep -q '^GPU'; then
@@ -331,12 +339,9 @@ fi
     echo "ABORT: cannot re-enter myself at $SELF (the srun steps run this file)" >&2
     exit 1
 }
-if [ -w "$MEAS/dace_fortran" ]; then
-    echo "WARN: $MEAS is WRITABLE -- it should have been refrozen after the warm stage" >&2
-fi
 
 {
-    [ -f "$PROV" ] || echo "# utc | job id | job | clone tag | notes"
+    [ -f "$PROV" ] || echo "# utc | job id | job | repo tag | notes"
     printf '%s | %-8s | %-11s | %s | %s\n' "$(date -u +%FT%TZ)" "${SLURM_JOB_ID:-local}" "gpu_meas" \
         "$TAG_NOW" "$WAVE ranks/wave, 1 gpu each, ${RANK_MEM_MB}MB/rank, reps=$REPS, alloc=$MEAS_ALLOC_ACTIVE, lanes: $LANES"
 } >> "$PROV"

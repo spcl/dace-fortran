@@ -47,10 +47,11 @@ def warn_mimalloc_cliff(klon: int) -> None:
     hits = [m * klon for m in TRANSIENT_MULTIPLIERS if lo <= m * klon < hi]
     if hits:
         sizes = ", ".join(f"{h // 1024} KiB" for h in hits)
-        print(f"WARNING: KLON={klon} puts per-block transients in the mimalloc cliff band ({sizes}); "
-              "see samples/cloudsc/sweep_sizes.sh",
-              file=sys.stderr,
-              flush=True)
+        print(
+            f"WARNING: KLON={klon} puts per-block transients in the mimalloc cliff band ({sizes}); "
+            "see samples/cloudsc/sweep_sizes.sh",
+            file=sys.stderr,
+            flush=True)
 
 
 def alloc_label() -> str:
@@ -88,10 +89,15 @@ def git_describe() -> str:
     return out.strip().replace("/", "-")
 
 
+def work_root() -> Path:
+    """The single output root every lane writes under: env override, else <repo>/samples/_work."""
+    return Path(os.environ.get("WORK_ROOT") or REPO / "samples" / "_work")
+
+
 def cache_root() -> Path:
-    """Next to the sbatch dacecache when set, else a stable per-user dir; never /tmp (tmpfs)."""
+    """Next to the sbatch dacecache when set, else under the work root; never /tmp (tmpfs)."""
     dace_build = os.environ.get("DACE_default_build_folder")
-    root = Path(dace_build).parent if dace_build else Path.home() / ".cache" / "dace-fortran-samples"
+    root = Path(dace_build).parent if dace_build else work_root() / "cache"
     root.mkdir(parents=True, exist_ok=True)
     return root
 

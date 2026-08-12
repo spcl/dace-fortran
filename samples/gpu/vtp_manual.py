@@ -17,7 +17,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-VTP_DEFAULT = "/capstor/scratch/cscs/ybudanaz/aarch64/VelocityTendenciesPipeline"
+REPO = Path(__file__).resolve().parents[2]
+VTP_DEFAULT = str(REPO.parent / "VelocityTendenciesPipeline")
 DEFAULT_VARIANT = "velocity_no_nproma_if_prop_lvn_only_0_istep_1"
 _HEADERS = ("reductions_cpu.h", "reductions_kernel.cuh", "reductions_device.cuh")
 _GLOBAL_FLAG_LITERALS = {"i_am_accel_node": 1, "timers_level": 0, "timer_intp": 0, "timer_solve_nh_veltend": 0}

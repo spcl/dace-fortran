@@ -50,7 +50,7 @@ source "$REPO/samples/common.sh"
 # the Fortran lanes of baselines.sh, which picks its own subset via BASELINE_LANES).  Any other
 # token is skipped, so a global LANES carrying cloudsc-only lanes still runs this job.
 LANES="${LANES:-dace-gcc}"
-BUILD_ROOT_BASE="${BUILD_ROOT:-$HOME/.cache/dace-fortran-samples}"
+BUILD_ROOT_BASE="${BUILD_ROOT:-$WORK_ROOT/cache}"
 # exported so the baselines lane (which unsets BUILD_ROOT to escape the dace lanes' dacecache)
 # still lands under this root instead of falling back to $HOME.
 export BUILD_ROOT_BASE

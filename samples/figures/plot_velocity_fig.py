@@ -13,8 +13,10 @@ under MISSING; nothing is invented.
 """
 import argparse
 import os
+from pathlib import Path
 
 import matplotlib
+
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
@@ -22,9 +24,11 @@ import polars as pl
 
 import f2dace_style as st
 
+REPO = Path(__file__).resolve().parents[2]
+WORK_ROOT = Path(os.environ.get("WORK_ROOT", REPO / "samples" / "_work"))
 DEFAULT_RUNS = [
-    '/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-samples-meas/runs',
-    '/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-samples/runs',
+    str(WORK_ROOT / 'meas' / 'runs'),
+    str(WORK_ROOT / 'dev' / 'runs'),
 ]
 XLABEL = 'Grid Resolution'
 WANT_GRIDS = ['R02B05', 'R02B06']
@@ -44,8 +48,7 @@ def build(df, missing, out_dir, prefix, cpu_threads, footer=None):
             continue
         # sort so multiple grids (r02b05, r02b06, ...) keep a stable x order
         sub = st.best_variant(sub, keys=('lane', 'grid', 'threads')).sort('grid')
-        lanes = [l for l in st.CPU_LANES + st.GPU_LANES
-                 if l in set(sub['lane'].unique().to_list())]
+        lanes = [l for l in st.CPU_LANES + st.GPU_LANES if l in set(sub['lane'].unique().to_list())]
         live.append((title, sub, lanes))
 
     have_grids = sorted(df['grid'].unique().to_list()) if df.height else []
@@ -66,23 +69,35 @@ def build(df, missing, out_dir, prefix, cpu_threads, footer=None):
         gs = GridSpec(1, len(live), height_ratios=[1], width_ratios=widths, wspace=0.3)
         axes = [fig.add_subplot(gs[0, i]) for i in range(len(live))]
         for ax, (title, sub, lanes) in zip(axes, live):
-            panel(ax, sub, lanes, 'grid', title=title, xlabel_text=XLABEL,
-                  xtick_map=lambda s: st.GRID_LABEL.get(s, s), legend=False)
+            panel(ax,
+                  sub,
+                  lanes,
+                  'grid',
+                  title=title,
+                  xlabel_text=XLABEL,
+                  xtick_map=lambda s: st.GRID_LABEL.get(s, s),
+                  legend=False)
 
-        all_lanes = [l for l in st.CPU_LANES + st.GPU_LANES
-                     if any(l in ls for _, _, ls in live)]
-        handles = [plt.Rectangle((0, 0), 1, 1, color=st.LANE_COLOR.get(l, '0.5'))
-                   for l in all_lanes]
-        fig.legend(handles, st.legend_for(all_lanes), loc='lower center',
-                   ncol=min(len(all_lanes), 4), bbox_to_anchor=(0.5, -0.28),
+        all_lanes = [l for l in st.CPU_LANES + st.GPU_LANES if any(l in ls for _, _, ls in live)]
+        handles = [plt.Rectangle((0, 0), 1, 1, color=st.LANE_COLOR.get(l, '0.5')) for l in all_lanes]
+        fig.legend(handles,
+                   st.legend_for(all_lanes),
+                   loc='lower center',
+                   ncol=min(len(all_lanes), 4),
+                   bbox_to_anchor=(0.5, -0.28),
                    frameon=False)
         fig.tight_layout()
-        st.save(fig, out_dir, f'{prefix}_{kind}', footer=footer,
-                status={'figure': f'{prefix}_{kind}',
-                        'panels': [t for t, _, _ in live],
-                        'lanes': all_lanes,
-                        'grids': have_grids,
-                        'missing': list(missing)})
+        st.save(fig,
+                out_dir,
+                f'{prefix}_{kind}',
+                footer=footer,
+                status={
+                    'figure': f'{prefix}_{kind}',
+                    'panels': [t for t, _, _ in live],
+                    'lanes': all_lanes,
+                    'grids': have_grids,
+                    'missing': list(missing)
+                })
     return live
 
 
@@ -99,8 +114,10 @@ def main():
     missing = st.Missing()
     df = st.load_runs(args.runs_dir, args.kernel, alloc=args.alloc, missing=missing)
     print(f'velocity rows loaded: {df.height}')
-    build(df, missing, args.out_dir, args.out_prefix,
-          [int(x) for x in args.cpu_threads.split(',')],
+    build(df,
+          missing,
+          args.out_dir,
+          args.out_prefix, [int(x) for x in args.cpu_threads.split(',')],
           footer='data: ' + ', '.join(args.runs_dir))
     if missing:
         print('MISSING:')

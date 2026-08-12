@@ -49,7 +49,7 @@ source "$REPO/samples/common.sh"
 # LANES: space list from {dace-gcc,dace-llvm,baselines,gpu} (baselines/gpu scripts run both
 # klon+nblks themselves -- request them from only one job of the pair).
 LANES="${LANES:-dace-gcc}"
-BUILD_ROOT_BASE="${BUILD_ROOT:-$HOME/.cache/dace-fortran-samples}"
+BUILD_ROOT_BASE="${BUILD_ROOT:-$WORK_ROOT/cache}"
 # exported so the baselines lane (which unsets BUILD_ROOT to escape the dace lanes' dacecache)
 # still lands under this root instead of falling back to $HOME.
 export BUILD_ROOT_BASE

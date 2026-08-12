@@ -9,8 +9,9 @@
 #SBATCH --mem=0
 #SBATCH --hint=nomultithread
 #SBATCH -t 00:30:00
-#SBATCH -o /capstor/scratch/cscs/ybudanaz/aarch64/probe/cpu_sweep_cloudsc-%j.out
-#SBATCH -e /capstor/scratch/cscs/ybudanaz/aarch64/probe/cpu_sweep_cloudsc-%j.out
+#SBATCH -o samples/_work/logs/cpu_sweep_cloudsc-%j.out
+#SBATCH -e samples/_work/logs/cpu_sweep_cloudsc-%j.out
+# SUBMIT FROM THE REPO ROOT: slurm resolves the -o/-e paths above against the submit dir.
 # Figure-A row: cloudsc across the 7 problem sizes at ONE thread count, four lanes in parallel
 # (dace-gcc, dace-llvm, original-openmp, c-openmp), one rank each, socket-pinned.
 #
@@ -28,11 +29,14 @@
 #   sbatch --export=ALL,TAG=<tag>,THREADS=1,REPS=10  samples/tagcycle/cpu_sweep_cloudsc.sbatch
 set -uo pipefail
 
-MEAS=/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-meas
+# Under sbatch, BASH_SOURCE is the slurm spool copy -- fall back to the submit dir (the repo root).
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="${REPO:-$(cd "$HERE/../.." && pwd)}"
+[ -d "$REPO/samples/tagcycle" ] || REPO="${SLURM_SUBMIT_DIR:-$PWD}"
+export REPO
 
-# The clone is frozen here: a phase A cache miss must die, not rebuild from a compute node.
+# A phase A cache miss must die here, not rebuild from a compute node.
 export DACE_FORTRAN_NO_REBUILD=1
-[ -w "$MEAS/dace_fortran" ] && echo "WARN: $MEAS is WRITABLE -- cpu_warm.sbatch should have refrozen it" >&2
 
 export STAGE=MEAS LANE_MODE=meas
 export THREADS="${THREADS:-72}"
@@ -44,5 +48,5 @@ export VARIANTS="${VARIANTS:-cloudsc-sweep%CLOUDSC_SWEEP_BACKENDS=gcc cloudsc-sw
 
 echo "CPU_SWEEP_CLOUDSC threads=$THREADS reps=$REPS sizes=$CLOUDSC_SWEEP_SIZES"
 # shellcheck disable=SC1091
-. "$MEAS/samples/tagcycle/cpu_job_common.sh"
+. "$REPO/samples/tagcycle/cpu_job_common.sh"
 exit "$cpu_overall"

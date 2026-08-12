@@ -13,8 +13,8 @@ call site where neither scalar was in scope) the samples are split into two clus
 1-D k-means seeded at the extremes, or a sorted largest-gap split -- and the four nominal
 configurations are attributed to those clusters rather than measured.
 
-Runs under ``/capstor/scratch/cscs/ybudanaz/aarch64/venv-meas/bin/python``; numpy is the only
-non-stdlib import.
+Runs under the project's measurement venv interpreter (``$PARSE_PY``, see
+``run_icon_velo_timing.sh``); numpy is the only non-stdlib import.
 """
 from __future__ import annotations
 

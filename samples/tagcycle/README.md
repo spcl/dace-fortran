@@ -2,25 +2,46 @@
 
 These scripts take a freshly pushed dace-fortran commit ("the tag") through bridge rebuild,
 cache pre-warm, and a 4-variant CPU measurement on one Grace node. They are the scripts that
-produced the `<variant>_<tag>_<jobid>.csv` files in the measurement runs directory; paths are
-site-specific to the daint.alps setup described in the top-level reproduction notes.
+produced the `<variant>_<tag>_<jobid>.csv` files in the measurement runs directory.
 
-## Layout on the machine
+## Layout
 
-| What | Path |
-|---|---|
-| Frozen measurement clone | `/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-meas` |
-| Artifacts, caches, CSVs | `/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-samples-meas` |
-| GPU build root (`BUILD_ROOT_BASE`, shared warm→meas) | `…/dace-fortran-samples-meas/gpu` |
-| Python environment | `/capstor/scratch/cscs/ybudanaz/aarch64/venv-meas` (dace resolved from the `FaCe` worktree) |
-| Job scripts and stdout | `/capstor/scratch/cscs/ybudanaz/aarch64/probe` |
+**No script here contains an absolute path.** Everything is derived from the repo root, which each
+launcher resolves from its own location — and, under `sbatch`, from `SLURM_SUBMIT_DIR`, because
+Slurm runs a *spool copy* of the script and `BASH_SOURCE` no longer points into the repo.
 
-The measurement clone is kept read-only (`chmod -R a-w`) between cycles so an accidental edit can
-never flip `git describe` to `-dirty` mid-measurement. The Python environment must resolve `dace`
-from the `FaCe` branch: it carries `MakeTransientsPersistent` and the launcher build safeguards in
-`dace/codegen/compiler.py` (SIGCHLD unblock plus PMI environment stripping around every build
-subprocess). Without those safeguards any `sdfg.compile()` inside an `srun` step hangs in cmake
-configure until walltime.
+> **Submit every tagcycle job from the repo root**, as `sbatch … samples/tagcycle/<job>.sbatch`.
+> Slurm also resolves the `#SBATCH -o/-e` paths against the submit directory, so submitting from
+> anywhere else sends the job stdout somewhere else (or fails to open it at all).
+
+| What | Path | Override |
+|---|---|---|
+| Repo / tree under test | resolved per launcher | `REPO=` |
+| Work root (gitignored) | `<repo>/samples/_work` | `WORK_ROOT=` |
+| Measurement artifacts, caches, CSVs | `$WORK_ROOT/meas` | `BR2=` |
+| Run CSVs and per-rank logs | `$WORK_ROOT/meas/runs` | `RUNS=` |
+| Job stdout (`#SBATCH -o/-e`) | `samples/_work/logs`, relative to the submit dir | — |
+| Dev / login-node outputs | `$WORK_ROOT/dev` | — |
+| GPU build root (`BUILD_ROOT_BASE`, shared warm→meas) | `$WORK_ROOT/meas/gpu` | `GPUROOT=` |
+| Default DaCe build cache | `$WORK_ROOT/cache` | `BUILD_ROOT_BASE=` |
+| ICON source | `$WORK_ROOT/icon-model` | — |
+| Python interpreter | `$PYTHON` from `samples/env.sh` | `PYTHON=`, `PY=` |
+| Spack | `$SPACK_ROOT` from `samples/env.sh` | `SPACK_ROOT=`, `SPACK_SETUP_ENV=` |
+
+`samples/env.sh` is the gitignored site hook (template: `samples/env.spack.example`) and is the
+**only** place machine-specific absolute paths belong.
+
+There is no pinned mirror clone any more: jobs run out of the working repo, so nothing is
+`chmod -R a-w`-frozen and nothing is copied to a sibling `probe/` directory. Two guards replace
+what the freeze bought — every job re-asserts `git describe --always --dirty` == `$TAG` and
+refuses to run against a moved or dirty tree, and every measurement job sets
+`DACE_FORTRAN_NO_REBUILD=1` so a phase A cache miss dies instead of rebuilding on a compute node.
+**Do not edit the tree between submitting a cycle and its last job finishing.**
+
+The Python environment must resolve `dace` from the `FaCe` branch: it carries
+`MakeTransientsPersistent` and the launcher build safeguards in `dace/codegen/compiler.py`
+(SIGCHLD unblock plus PMI environment stripping around every build subprocess). Without those
+safeguards any `sdfg.compile()` inside an `srun` step hangs in cmake configure until walltime.
 
 ## The four variants
 
@@ -90,22 +111,28 @@ running the timed calls. Both decks are produced by
 ## Running a cycle
 
 ```bash
-# 1. login node: unfreeze the clone, move it to the new commit, sync the job scripts
-#    into $PROBE (submits nothing, prints the whole submission chain below)
-bash tagcycle_prepare.sh <tag>
+# 0. check out the tag yourself; prepare no longer moves the tree
+git checkout <tag>
+
+# 1. login node, FROM THE REPO ROOT: assert the tree is clean at <tag>, create the gitignored
+#    work root (samples/_work/{logs,meas/runs,meas/logs,dev}), print the whole chain below.
+#    Submits nothing. With no argument it uses whatever HEAD describes as.
+bash samples/tagcycle/tagcycle_prepare.sh <tag>
 ```
 
 `tagcycle_prepare.sh` prints the rest ready to paste: the bridge rebuild, then all five warm jobs
 in parallel behind it (`cpu_warm` small+large, `cpu_velocity_warm`, `gpu_warm`, `tagcycle_warm`),
 then the seven measurement jobs — `meas_4rank`, the two `cpu_sweep_cloudsc` arms, the efficiency
 ladder, `cpu_velocity_r02b06`, and the GPU split pair — each `afterok` on the warm that feeds it
-and `afterany` on the previous meas job, so exactly one measurement runs at a time. Submit the
-`$PROBE` copies it just synced, never the repo checkout: `cpu_job_common.sh` and `meas_4rank`
-exec `$PROBE/tagcycle_lane.sh` at run time, and a stale probe copy would run old lane code.
+and `afterany` on the previous meas job, so exactly one measurement runs at a time. Every line it
+prints is `sbatch … samples/tagcycle/<job>.sbatch` run from the repo root; the jobs re-enter the
+repo by path (`cpu_job_common.sh` and `meas_4rank` exec `samples/tagcycle/tagcycle_lane.sh`), so
+the code that runs is always the code in the tree the tag assertion checked.
 Submit `gpu_meas_cloudsc.sbatch` + `gpu_meas_velocity.sbatch`, not `gpu_meas.sbatch` (see below).
 
-Every stage prints grep-able verdicts to its stdout file: `BRIDGE_BUILD_EXIT=0`;
-`BRIDGE_FRESH=1`, `WARM_<variant>_EXIT=0`, `ARGLIST_DIFF_<variant>=OK`, `REFROZEN=1`;
+Every stage prints grep-able verdicts to its stdout file under `samples/_work/logs/`:
+`BRIDGE_BUILD_EXIT=0`;
+`BRIDGE_FRESH=1`, `WARM_<variant>_EXIT=0`, `ARGLIST_DIFF_<variant>=OK`, `TAG_STABLE=1`;
 `MEAS_<variant>_EXIT=0 rows=<n>` and `MEAS_ALL_EXIT=0`. `velocity-icon-integ` prints its own set
 instead of the common `MEAS_<variant>_EXIT` line: `VELO_TOOLCHAIN fc=...` (compiler provenance),
 `VELO_PYTEST_EXIT istep=<i> lvn=<l> pass=<p> rc=<n>` (one per pytest invocation), `VELO_SAMPLES=<n>`,
@@ -126,15 +153,17 @@ per-invocation samples.
 
 A `DIVERGED` arglist means the SDFG
 signature moved at this commit — read the `.names.diff` under the artifact tree's `logs/` (a
-full-line `.diff` sits beside it for debugging) before trusting any numbers. On a red warm stage
-the clone is deliberately left unfrozen; phase A itself is judged by the `phase A done:` marker in
-its log rather than by exit code, since the HLFIR bridge can finish all its work and still die
-rc=134 in CPython teardown. `dump_arglists.py` always runs under the pinned `venv-meas` interpreter
-so the baseline and every warm dump read SDFG signatures through the same dace build.
+full-line `.diff` sits beside it for debugging) before trusting any numbers. Phase A itself is
+judged by the `phase A done:` marker in its log rather than by exit code, since the HLFIR bridge
+can finish all its work and still die rc=134 in CPython teardown. `TAG_STABLE=0` means the tree
+moved or was edited *during* phase A, so the caches it just wrote are not keyed to the code in
+them — that stage is red regardless of the per-variant verdicts. `dump_arglists.py` runs under
+`$DUMP_PYTHON` (default `$PYTHON` from `samples/env.sh`) so the baseline and every warm dump read
+SDFG signatures through the same dace build.
 
 The measurement job may also be submitted without the dependency chain when the caches are already
 warm at the target tag; if the caches are cold it aborts loudly within seconds instead of
-rebuilding on a compute node (`DACE_FORTRAN_NO_REBUILD=1` plus the frozen clone).
+rebuilding on a compute node (`DACE_FORTRAN_NO_REBUILD=1`).
 
 ## Experiment matrix (CPU)
 
@@ -192,8 +221,8 @@ Velocity lane semantics: `dace-gpu-pipeline` is the **automated** dace-fortran p
 (`velocity_pipeline.optimize_velocity` + `gpu_offload.apply_gpu_offload`, unchanged);
 `dace-gpu-manual` is the **human-written** VelocityTendenciesPipeline flow (`samples/gpu/
 vtp_manual.py`): the VTP stage-3 artifact run through VTP's stage-4 GPU entry point, imported from
-the checkout at `VTP_DIR` (default `/capstor/scratch/cscs/ybudanaz/aarch64/VelocityTendenciesPipeline`,
-variant via `VTP_VARIANT`), with that checkout's `git describe` sha logged at lane start and baked
+the checkout at `VTP_DIR` (a sibling of the repo by default; variant via `VTP_VARIANT`), with that
+checkout's `git describe` sha logged at lane start and baked
 into the phase-A cache name so every measurement records pipeline provenance. The former
 `dace-gpu-autoopt` lane (stock `auto_optimize`) is removed everywhere by owner decision.
 The manual lane binds the harness deck (single source of truth) to VTP's SoA signature via
@@ -214,7 +243,7 @@ ICON is **not vendored** here. The reproducible tree is upstream at a pinned sha
 |---|---|
 | upstream | `https://gitlab.dkrz.de/icon/icon-model.git` |
 | pin | `8597da45ef4b86323f3fb844caedc4ae5e1ffc01` (tag `icon-2026.04-public`) |
-| clone | `$WORK/icon-model` (login-node fetch only; jobs assert the pin, like the grids) |
+| clone | `$WORK_ROOT/icon-model` i.e. `samples/_work/icon-model` (login-node fetch only; jobs assert the pin, like the grids) |
 
 Patches (unified diffs against the pin, applied by `scripts/icon_daint_common.sh`):
 
@@ -227,10 +256,30 @@ Patches (unified diffs against the pin, applied by `scripts/icon_daint_common.sh
 
 Compiler → script → build dir, **one build tree per compiler**, never shared:
 
-| compiler | configure script | build dir | lanes it serves |
+There are **exactly four** build trees and their names are derived, never spelled: the build dir is
+`{cpu,gpu}_{gcc,nvhpc}`, a pure function of (compiler lane, `GPU` flag), computed by
+`icon_daint_build_dir_name` in `scripts/icon_daint_common.sh`. A fifth name cannot be produced —
+the helper rejects anything outside the four. `BUILD_DIR=` still overrides for one-off trees, and
+says so loudly when it does.
+
+| lane | configure invocation | build dir | status |
 |---|---|---|---|
-| gcc 16.1.0 | `scripts/configure_icon_gcc_daint.sh` | `icon-model/build/gcc` | CPU only (gcc's nvptx here is sm_80, not cc90) |
-| nvhpc 26.3 | `scripts/configure_icon_nvhpc_daint.sh` | `icon-model/build/nvhpc` | CPU, and `GPU=1` OpenACC (`-acc=gpu -gpu=cc90`) |
+| cpu_gcc | `scripts/configure_icon_gcc_daint.sh` | `samples/_work/icon-model/build/cpu_gcc` | builds, runs |
+| gpu_gcc | `GPU=1 scripts/configure_icon_gcc_daint.sh` | `samples/_work/icon-model/build/gpu_gcc` | configures; **make fails on ICON source** (see below) |
+| cpu_nvhpc | `scripts/configure_icon_nvhpc_daint.sh` | `samples/_work/icon-model/build/cpu_nvhpc` | builds, runs |
+| gpu_nvhpc | `GPU=1 scripts/configure_icon_nvhpc_daint.sh` | `samples/_work/icon-model/build/gpu_nvhpc` | builds; OpenACC `-gpu=cc90` |
+
+`gpu_gcc` is a real OpenACC configure, not a disguised CPU build: gcc 16.1.0 here has
+`--enable-offload-targets=nvptx-none`, ICON's configure detects `-fopenacc` and reports
+`_OPENACC=201711`, and a standalone `!$acc parallel loop` binary JITs its sm_80 PTX onto the
+GH200's cc90 and produces the right answer. What blocks it is **ICON's own source**: ICON's deep
+copies name a derived-type variable and one of its components in a single directive
+(`copyin(this, this%concs)`), an NVHPC extension. gfortran enforces the standard restriction and
+rejects every such site with `Symbol '<x>' has mixed component and non-component accesses` — 29
+files / 172 sites in the configuration these lanes enable, first hit in `externals/rte-rrtmgp`.
+No gfortran flag relaxes it and splitting the clause is not enough (each site needs its own
+directive), so this is an ICON port, not a build-flag change. The lane deliberately fails loudly
+rather than quietly dropping `GPU=1`.
 
 Stock and DaCe-linked binaries live side by side in the lane tree as `bin/icon.stock` and
 `bin/icon.dace` (only the icon.mk link rule and the velocity patch differ). Each configure run
@@ -246,11 +295,18 @@ one compiler lane per submission (`COMPILER=gcc|nvhpc`; nvhpc lane is stock-only
 lib builder grows an nvfortran arm). ICON is configured `--disable-mpi` — serial binary, OpenMP
 only. Builds run plain on the node (never under `srun`); only the timing step is `srun`-pinned.
 
+All three ICON jobs **must be submitted from the repo root**: their `#SBATCH -o/-e` paths are
+repo-relative and slurm resolves them through the submit dir, and each job takes the repo from
+`$SLURM_SUBMIT_DIR`. Create the log dir once — it lives under the gitignored work root:
+
+    mkdir -p samples/_work/logs
+    sbatch --export=ALL,TAG=<tag>,COMPILER=gcc samples/tagcycle/icon_cpu_build.sbatch
+
 | job | partition | walltime | tasks | what it does |
 |---|---|---|---|---|
 | `icon_cpu_build.sbatch` | `normal` | 4 h | 1, plain make | stock ICON (`configure_icon_<lane>_daint.sh`, FMA on) → `bin/icon.stock` → DaCe velocity lib (`build_icon_dace_libs.py --release`, `DACE_FORTRAN_FP_CONTRACT=fast`) → velocity-patched relink in the same tree → `bin/icon.dace`. Verdicts `ICON_STOCK_BUILD_EXIT[lane]` / `DACE_LIBS_EXIT[lane]` / `ICON_DACE_BUILD_EXIT[lane]` / `ICON_BUILD_EXIT[lane]` |
 | `icon_cpu_timing.sbatch` | `debug` | 30 min | 1 × 72 cores, one socket | runs the patched ICON on Held-Suarez R02B05 (seeds pinned 0, PT10S steps) via `srun --ntasks=1`, greps `VELO_TIMER`, `parse_icon_timers.py` → per-config median CSV in `runs/`. Verdict `ICON_TIMING_EXIT[lane]` |
-| `icon_gpu_smoke.sbatch` | `debug` | 30 min | 1 × 72 cores + GPU 0 | **the integration TEST job**: OpenACC GPU ICON (nvhpc, `-acc=gpu -gpu=cc90 -Minfo=accel`, `--enable-gpu=openacc+cuda`, no MPI) — configure+`make -j72` (resumable: build dir kept, resubmit continues) then a 3-step Held-Suarez on `GRID=R02B04..R02B09` (grids pre-staged by `scripts/fetch_icon_grids.sh`, ids 0013/0019/0021/0023/0025/0015). Sweep intent: B04–B07 fit one GH200; B08 is attempted anyway and allowed to OOM-crash; B09 does not fit a single module (grid staged for multi-module futures). Verdicts `ICON_GPU_CONFIGURE_EXIT` / `ICON_GPU_BUILD_EXIT` / `ICON_GPU_RUN_EXIT` |
+| `icon_gpu_smoke.sbatch` | `debug` | 30 min | 1 × 72 cores + GPU 0 | **the integration TEST job**: OpenACC GPU ICON (nvhpc, `-acc=gpu -gpu=cc90 -Minfo=accel`, `--enable-gpu=openacc+cuda`, no MPI) — configure+`make -j72` (resumable: build dir kept, resubmit continues) then a 3-step Held-Suarez on `GRID=R02B04..R02B09` (grids pre-staged by `scripts/fetch_icon_grids.sh`, ids 0013/0019/0021/0023/0025/0015). Sweep intent: B04–B07 fit one GH200; B08 is attempted anyway and allowed to OOM-crash; B09 does not fit a single module (grid staged for multi-module futures). Builds into `build/gpu_nvhpc`; the model run is capped at `RUN_CAP=180`s — nothing long may sit on a compute node, so this is a smoke test judged by stdout step progress, never a measurement. Verdicts `ICON_GPU_CONFIGURE_EXIT` / `ICON_GPU_BUILD_EXIT` / `ICON_GPU_RUN_EXIT` |
 
 `gpu_warm.sbatch` stays deliberately sequential on a single GPU. Nothing in it is timed, so the
 lanes gain nothing from running together, and the mechanism that would parallelise them — `srun` —

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One rank = one VARIANT of the tag cycle. Three modes:
-#   warm      phase A only (--build-only); needs a WRITABLE clone (the bridge takes an flock)
-#   meas      the timed sweep; needs a FROZEN clone (a cache miss then dies on the lock, loudly)
+#   warm      phase A only (--build-only); builds into $BR2, never into the repo
+#   meas      the timed sweep; runs under DACE_FORTRAN_NO_REBUILD, so a cache miss dies loudly
 #   artifacts print the .sdfgz this variant owns at $EXPECTED_TAG, one per line
 # Never calls srun itself -- the caller decides whether this runs inside a step or in the batch body.
 set -uo pipefail
@@ -9,8 +9,13 @@ set -uo pipefail
 MODE="${1:?usage: tagcycle_lane.sh <warm|meas|artifacts> <variant>}"
 VARIANT="${2:?usage: tagcycle_lane.sh <warm|meas|artifacts> <variant>}"
 
-MEAS="${MEAS:-/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-meas}"
-BR2="${BR2:-/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-samples-meas}"
+# Always invoked by path out of the repo (never spooled), so BASH_SOURCE is the real file.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="${REPO:-$(cd "$HERE/../.." && pwd)}"
+WORK_ROOT="${WORK_ROOT:-$REPO/samples/_work}"
+# MEAS/BR2 keep their pinned-mirror names: the tree under test (now the repo) and the output root.
+MEAS="${MEAS:-$REPO}"
+BR2="${BR2:-$WORK_ROOT/meas}"
 # Data layout is a sweep dimension inside a velocity rank, not a property of the TU variant.
 # CPU default = both blocked decks (r02b05 and r02b06 at nproma=32), which is what the paper's
 # velocity panels need; `flat` (nproma=491520) is a GPU layout and is opt-in here.
@@ -52,7 +57,7 @@ if [ "$MODE" = artifacts ]; then
 fi
 
 cd "$MEAS" || exit 1
-ulimit -c 0 # the clone already carries ~10 GB of core dumps from an earlier abort
+ulimit -c 0 # a lane abort used to leave ~10 GB of core dumps in the tree
 # common.sh sources samples/env.sh and turns on -e; the lane keeps going past a red point instead.
 # shellcheck disable=SC1091
 . "$MEAS/samples/common.sh"
@@ -60,7 +65,7 @@ set +e
 
 TAG_NOW="$(git -C "$MEAS" describe --always --dirty)"
 [ "$TAG_NOW" = "${EXPECTED_TAG:?EXPECTED_TAG must be set}" ] || {
-    echo "ABORT: clone tag is $TAG_NOW, expected $EXPECTED_TAG" >&2
+    echo "ABORT: repo describes as $TAG_NOW, expected $EXPECTED_TAG" >&2
     exit 1
 }
 
@@ -148,7 +153,7 @@ sys.exit(1 if (blocked and not shim) else 0)
 "
 if [ $? -ne 0 ]; then
     echo "ABORT: this dace has no SIGCHLD unblock shim and SIGCHLD is blocked -- every" >&2
-    echo "  sdfg.compile() would hang in cmake configure. Point venv-meas at a dace that" >&2
+    echo "  sdfg.compile() would hang in cmake configure. Point \$PYTHON at a dace that" >&2
     echo "  carries dace/codegen/compiler.py _build_subprocess_sigmask, or run this lane" >&2
     echo "  outside an srun step." >&2
     exit 1
@@ -162,6 +167,19 @@ run() { # record the first-worst exit in $rc; a red point must not cost the lane
     r=$?
     [ "$r" -eq 0 ] || rc="$r"
     return 0
+}
+
+# `spack` is a shell FUNCTION from setup-env.sh; samples/env.sh normally defines it already.
+# SPACK_ROOT (which env.sh also exports) is the only path input -- nothing here is hardcoded.
+load_spack() {
+    command -v spack > /dev/null 2>&1 && return 0
+    local s="${SPACK_SETUP_ENV:-${SPACK_ROOT:+$SPACK_ROOT/share/spack/setup-env.sh}}"
+    [ -n "$s" ] && [ -f "$s" ] || {
+        echo "FATAL: no spack on PATH -- set SPACK_ROOT or SPACK_SETUP_ENV in samples/env.sh" >&2
+        return 1
+    }
+    # shellcheck disable=SC1090
+    . "$s"
 }
 
 warm_build() {
@@ -417,8 +435,7 @@ case "$VARIANT" in
         done
         ;;
     velocity-openacc)
-        # shellcheck disable=SC1091
-        . /capstor/scratch/cscs/ybudanaz/aarch64/spack/share/spack/setup-env.sh
+        load_spack || exit 1
         spack load nvhpc
         NVFORTRAN="$(command -v nvfortran || true)"
         [ -n "$NVFORTRAN" ] || {
@@ -484,7 +501,7 @@ case "$VARIANT" in
         fi
         ;;
     velocity-openmp)
-        . /capstor/scratch/cscs/ybudanaz/aarch64/spack/share/spack/setup-env.sh
+        load_spack || exit 1
         spack load gcc@16.1.0 +graphite
         spack load nvhpc
         OMP_NVHPC_ROOT="$(spack location -i nvhpc 2> /dev/null || true)"

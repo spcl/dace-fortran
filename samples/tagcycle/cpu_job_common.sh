@@ -3,7 +3,7 @@
 # script after setting VARIANTS and whatever sweep envs the lanes read.
 #
 # What it owns:
-#   * the EXPECTED_TAG guard (a clone at the wrong commit must never produce rows)
+#   * the EXPECTED_TAG guard (a tree at the wrong commit, or dirty, must never produce rows)
 #   * the memory split: the node is --exclusive with --mem=0, so the batch step owns all of
 #     RealMemory; each of the N concurrent ranks then gets RealMemory/N via `srun --mem`, and
 #     MEMSPLIT= is printed so the log says what each rank was allowed.  Without the split one
@@ -15,9 +15,17 @@
 # NUMA nodes and numactl --cpunodebind inside an srun cpuset returns sched_setaffinity EINVAL
 # and kills the step (4390808, 4390809).  srun --cpu-bind=cores --mem-bind=local is the way.
 
-PROBE="${PROBE:-/capstor/scratch/cscs/ybudanaz/aarch64/probe}"
-MEAS="${MEAS:-/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-meas}"
-BR2="${BR2:-/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-samples-meas}"
+# Sourced by path out of the repo, so BASH_SOURCE is the real file here (not a slurm spool copy);
+# the sourcing sbatch has normally already resolved REPO and this just re-uses it.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="${REPO:-$(cd "$HERE/../.." && pwd)}"
+[ -d "$REPO/samples/tagcycle" ] || REPO="${SLURM_SUBMIT_DIR:-$PWD}"
+WORK_ROOT="${WORK_ROOT:-$REPO/samples/_work}"
+TAGDIR="$REPO/samples/tagcycle"
+# MEAS/BR2 keep their names from the pinned-mirror era: MEAS is the tree under test (now the repo
+# itself, there is no second checkout) and BR2 is the measurement output root.
+MEAS="${MEAS:-$REPO}"
+BR2="${BR2:-$WORK_ROOT/meas}"
 RUNS="${RUNS:-$BR2/runs}"
 PROV="$RUNS/PROVENANCE.txt"
 STAGE="${STAGE:-MEAS}"
@@ -33,14 +41,14 @@ ulimit -c 0
 # shellcheck disable=SC1091
 . samples/env.sh > /dev/null 2>&1
 
-export EXPECTED_TAG="$TAG" MEAS BR2
+export EXPECTED_TAG="$TAG" REPO WORK_ROOT MEAS BR2
 export DACE_compiler_allow_view_arguments=false
 
 TAG_NOW="$(git -C "$MEAS" describe --always --dirty)"
 echo "$STAGE host=$(hostname) tag=$TAG_NOW expected=$TAG job=${SLURM_JOB_ID:-none} start=$(date -u +%FT%TZ)"
 echo "THREADS=${THREADS:-unset} REPS=${REPS:-unset} VARIANTS=$VARIANTS"
 [ "$TAG_NOW" = "$TAG" ] || {
-    echo "ABORT: clone tag is $TAG_NOW, expected $TAG" >&2
+    echo "ABORT: repo describes as $TAG_NOW, expected $TAG (check out the tag, clean the tree)" >&2
     echo "${STAGE}_ALL_EXIT=1"
     exit 1
 }
@@ -68,7 +76,7 @@ MEM_PER_RANK="$(((NODE_MB - 4096) / NRANKS))"
 echo "MEMSPLIT=$MEM_PER_RANK  (node RealMemory=$NODE_MB MB over $NRANKS ranks)"
 
 {
-    [ -f "$PROV" ] || echo "# utc | job id | job | clone tag | notes"
+    [ -f "$PROV" ] || echo "# utc | job id | job | repo tag | notes"
     printf '%s | %-8s | %-11s | %s | %s\n' "$(date -u +%FT%TZ)" "${SLURM_JOB_ID:-none}" \
         "${SLURM_JOB_NAME:-cpu}" "$TAG_NOW" "$NRANKS ranks, ${MEM_PER_RANK}MB each, $STAGE"
 } >> "$PROV"
@@ -97,7 +105,7 @@ for entry in $VARIANTS; do
     CSV="$csv" env "${rank_overrides[@]}" \
         srun --exact --ntasks=1 --cpus-per-task="$CPUS_PER_RANK" --mem="${MEM_PER_RANK}M" \
         --cpu-bind=cores --mem-bind=local \
-        bash "$PROBE/tagcycle_lane.sh" "$LANE_MODE" "$v" > "$log" 2>&1 &
+        bash "$TAGDIR/tagcycle_lane.sh" "$LANE_MODE" "$v" > "$log" 2>&1 &
     CPU_PID[$key]=$!
 done
 

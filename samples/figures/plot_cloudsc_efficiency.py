@@ -10,22 +10,25 @@ legend design (above the axes, frameon=False) and log-2 thread axis.
 """
 import argparse
 import os
+from pathlib import Path
 
 import matplotlib
+
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import polars as pl
 
 import f2dace_style as st
 
+REPO = Path(__file__).resolve().parents[2]
+WORK_ROOT = Path(os.environ.get("WORK_ROOT", REPO / "samples" / "_work"))
 DEFAULT_RUNS = [
-    '/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-samples-meas/runs',
-    '/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-samples/runs',
+    str(WORK_ROOT / 'meas' / 'runs'),
+    str(WORK_ROOT / 'dev' / 'runs'),
 ]
 LANES = ['dace-gcc', 'original-openmp', 'gfortran-autopar']
 MARKERS = {'dace-gcc': 'o', 'original-openmp': 's', 'gfortran-autopar': '^'}
-MODE_TITLE = {'nblks': 'blocked layout (N_Pt=32 × N_Blk)',
-              'klon': 'flat layout (N_Pt=65536 × 1 block)'}
+MODE_TITLE = {'nblks': 'blocked layout (N_Pt=32 × N_Blk)', 'klon': 'flat layout (N_Pt=65536 × 1 block)'}
 
 
 def efficiency(df, lane, mode):
@@ -40,8 +43,7 @@ def efficiency(df, lane, mode):
 
 
 def build(df, missing, out_dir, name, footer=None):
-    modes = [m for m in ('nblks', 'klon') if df.height and
-             m in set(df['mode'].unique().to_list())]
+    modes = [m for m in ('nblks', 'klon') if df.height and m in set(df['mode'].unique().to_list())]
     for m in ('nblks', 'klon'):
         if m not in modes:
             missing.note(f'efficiency: layout "{m}" not measured')
@@ -52,8 +54,7 @@ def build(df, missing, out_dir, name, footer=None):
         missing.note('efficiency: nothing to plot, no figure written')
         return None
 
-    fig, axes = plt.subplots(1, len(modes), squeeze=False,
-                             figsize=(5.2 * len(modes), 3.0), sharey=True)
+    fig, axes = plt.subplots(1, len(modes), squeeze=False, figsize=(5.2 * len(modes), 3.0), sharey=True)
     axes = axes.flatten()
     plotted = {}
     for ax, mode in zip(axes, modes):
@@ -65,8 +66,13 @@ def build(df, missing, out_dir, name, footer=None):
             xs = [n for n, _ in series]
             ys = [e for _, e in series]
             plotted.setdefault(mode, []).append(lane)
-            ax.plot(xs, ys, marker=MARKERS.get(lane, 'o'), markersize=4.5,
-                    linewidth=1.6, color=st.LANE_COLOR[lane], label=lane)
+            ax.plot(xs,
+                    ys,
+                    marker=MARKERS.get(lane, 'o'),
+                    markersize=4.5,
+                    linewidth=1.6,
+                    color=st.LANE_COLOR[lane],
+                    label=lane)
         ax.axhline(100, color='0.6', linewidth=0.9, linestyle='--', zorder=0)
         ax.set_xscale('log', base=2)
         ax.set_xticks(sorted(df['threads'].unique().to_list()))
@@ -80,12 +86,23 @@ def build(df, missing, out_dir, name, footer=None):
     axes[0].set_ylabel('Parallel efficiency  T₁ / (N·T_N)  [%]')
 
     handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, st.legend_for(labels), loc='lower center',
-               ncol=min(len(labels), 3), bbox_to_anchor=(0.5, -0.16), frameon=False)
+    fig.legend(handles,
+               st.legend_for(labels),
+               loc='lower center',
+               ncol=min(len(labels), 3),
+               bbox_to_anchor=(0.5, -0.16),
+               frameon=False)
     fig.tight_layout()
-    st.save(fig, out_dir, name, footer=footer,
-            status={'figure': name, 'panels': modes, 'lanes': plotted,
-                    'missing': list(missing)})
+    st.save(fig,
+            out_dir,
+            name,
+            footer=footer,
+            status={
+                'figure': name,
+                'panels': modes,
+                'lanes': plotted,
+                'missing': list(missing)
+            })
     return plotted
 
 
@@ -100,8 +117,7 @@ def main():
     missing = st.Missing()
     df = st.load_runs(args.runs_dir, 'cloudsc', alloc=args.alloc, missing=missing)
     print(f'cloudsc rows loaded: {df.height}')
-    build(df, missing, args.out_dir, args.out_name,
-          footer='data: ' + ', '.join(args.runs_dir))
+    build(df, missing, args.out_dir, args.out_name, footer='data: ' + ', '.join(args.runs_dir))
     if missing:
         print('MISSING:')
         for m in missing:

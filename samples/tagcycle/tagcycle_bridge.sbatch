@@ -7,20 +7,26 @@
 #SBATCH --exclusive
 #SBATCH --hint=nomultithread
 #SBATCH -t 01:00:00
-#SBATCH -o /capstor/scratch/cscs/ybudanaz/aarch64/probe/tagcycle_bridge-%j.out
-#SBATCH -e /capstor/scratch/cscs/ybudanaz/aarch64/probe/tagcycle_bridge-%j.out
+#SBATCH -o samples/_work/logs/tagcycle_bridge-%j.out
+#SBATCH -e samples/_work/logs/tagcycle_bridge-%j.out
 # Step 2 of the tag cycle: rebuild the HLFIR bridge (and the velocity_data nanobind module) in the
-# meas clone at $TAG.  Needs a clone left WRITABLE by tagcycle_prepare.sh.
+# repo at $TAG.  SUBMIT FROM THE REPO ROOT: slurm resolves the -o/-e paths above against the
+# submit dir, and tagcycle_prepare.sh is what creates samples/_work/logs (gitignored).
 #
 # NOTHING HERE MAY BE WRAPPED IN srun.  srun starts its tasks with SIGCHLD blocked, cmake reaps its
 # configure helpers through SIGCHLD, and both of these cmake calls run straight out of subprocess
 # with no unblock shim (dace/codegen/compiler.py has one; build_bridge.py does not) -- so a step
 # would hang in select() until the walltime.
-#   sbatch --export=ALL,TAG=<tag> tagcycle_bridge.sbatch
+#   sbatch --export=ALL,TAG=<tag> samples/tagcycle/tagcycle_bridge.sbatch
 set -uo pipefail
 
-MEAS=/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-meas
-BR2=/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-samples-meas
+# Under sbatch, BASH_SOURCE is the slurm spool copy -- fall back to the submit dir (the repo root).
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="${REPO:-$(cd "$HERE/../.." && pwd)}"
+[ -d "$REPO/samples/tagcycle" ] || REPO="${SLURM_SUBMIT_DIR:-$PWD}"
+WORK_ROOT="${WORK_ROOT:-$REPO/samples/_work}"
+MEAS="${MEAS:-$REPO}"
+BR2="${BR2:-$WORK_ROOT/meas}"
 LOG="$BR2/logs"
 : "${TAG:?TAG must be exported into this job (--export=ALL,TAG=<tag>)}"
 
@@ -36,12 +42,7 @@ unset DACE_FORTRAN_NO_REBUILD
 TAG_NOW="$(git -C "$MEAS" describe --always --dirty)"
 echo "BRIDGE host=$(hostname) tag=$TAG_NOW expected=$TAG python=$PYTHON start=$(date -u +%FT%TZ)"
 [ "$TAG_NOW" = "$TAG" ] || {
-    echo "ABORT: clone tag is $TAG_NOW, expected $TAG" >&2
-    echo "BRIDGE_BUILD_EXIT=1"
-    exit 1
-}
-[ -w "$MEAS/dace_fortran" ] || {
-    echo "ABORT: $MEAS is still frozen -- run tagcycle_prepare.sh $TAG first" >&2
+    echo "ABORT: repo describes as $TAG_NOW, expected $TAG (check out the tag, clean the tree)" >&2
     echo "BRIDGE_BUILD_EXIT=1"
     exit 1
 }

@@ -55,7 +55,9 @@ def configure_gpu(arch: str = GH200_ARCH) -> str:
 
 
 def _spack_cuda() -> str:
-    root = os.environ.get("SPACK_ROOT", "/capstor/scratch/cscs/ybudanaz/aarch64/spack")
+    root = os.environ.get("SPACK_ROOT", "")
+    if not root:
+        return ""
     hits = sorted(glob(f"{root}/*/cuda-*-ickio72*"))
     return hits[-1] if hits else ""
 
@@ -65,10 +67,15 @@ def git_describe() -> str:
     return out.strip().replace("/", "-")
 
 
+def work_root() -> Path:
+    """The single output root every lane writes under: env override, else <repo>/samples/_work."""
+    return Path(os.environ.get("WORK_ROOT") or REPO / "samples" / "_work")
+
+
 def cache_root() -> Path:
-    """Beside the sbatch dacecache when set, else a stable per-user dir; never /tmp (tmpfs)."""
+    """Beside the sbatch dacecache when set, else under the work root; never /tmp (tmpfs)."""
     dace_build = os.environ.get("DACE_default_build_folder")  # noqa: SIM112 -- DaCe's env-var casing
-    root = Path(dace_build).parent if dace_build else Path.home() / ".cache" / "dace-fortran-samples"
+    root = Path(dace_build).parent if dace_build else work_root() / "cache"
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -103,13 +110,15 @@ def append_csv(path: Path, header: str, rows: List[str]) -> None:
 
 
 def report_offload(info: Dict, verbose: bool) -> None:
-    print(f"offload: {info['gpu_maps']} GPU_Device maps, "
-          f"block maps ({'demoted to loops' if info['demoted'] else 'left as maps'}): {info['block_maps'] or 'none'}, "
-          f"host data: {info['host_data'] or 'none'}, mid syncs: {info['mid_syncs'] or 'none'}",
-          flush=True)
-    print(f"offload: {len(info['premarked'])} transients pre-marked device for host-read interstate edges, "
-          f"{len(info['codegen_syncs'])} states left with a codegen sync (host reads device data there)",
-          flush=True)
+    print(
+        f"offload: {info['gpu_maps']} GPU_Device maps, "
+        f"block maps ({'demoted to loops' if info['demoted'] else 'left as maps'}): {info['block_maps'] or 'none'}, "
+        f"host data: {info['host_data'] or 'none'}, mid syncs: {info['mid_syncs'] or 'none'}",
+        flush=True)
+    print(
+        f"offload: {len(info['premarked'])} transients pre-marked device for host-read interstate edges, "
+        f"{len(info['codegen_syncs'])} states left with a codegen sync (host reads device data there)",
+        flush=True)
     if verbose:
         for loc, label, kind in info["schedules"]:
             print(f"  sched {loc} {label}: {kind}", flush=True)

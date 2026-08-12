@@ -9,8 +9,9 @@
 #SBATCH --mem=0
 #SBATCH --hint=nomultithread
 #SBATCH -t 00:30:00
-#SBATCH -o /capstor/scratch/cscs/ybudanaz/aarch64/probe/cpu_velocity_r02b06-%j.out
-#SBATCH -e /capstor/scratch/cscs/ybudanaz/aarch64/probe/cpu_velocity_r02b06-%j.out
+#SBATCH -o samples/_work/logs/cpu_velocity_r02b06-%j.out
+#SBATCH -e samples/_work/logs/cpu_velocity_r02b06-%j.out
+# SUBMIT FROM THE REPO ROOT: slurm resolves the -o/-e paths above against the submit dir.
 # Velocity CPU panels on BOTH blocked decks: r02b05 (nproma=32, nblks_e=960) and r02b06
 # (nproma=32, nblks_e=15360).  VELOCITY_LAYOUTS drives that; the `flat` nproma=491520 layout is
 # a GPU decomposition and is deliberately absent, so every row here is the blocked CPU layout.
@@ -22,10 +23,15 @@
 #   sbatch --export=ALL,TAG=<tag> samples/tagcycle/cpu_velocity_r02b06.sbatch
 set -uo pipefail
 
-MEAS=/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-meas
+# Under sbatch, BASH_SOURCE is the slurm spool copy -- fall back to the submit dir (the repo root).
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="${REPO:-$(cd "$HERE/../.." && pwd)}"
+[ -d "$REPO/samples/tagcycle" ] || REPO="${SLURM_SUBMIT_DIR:-$PWD}"
+export REPO
 
+# NO_REBUILD is what keeps a phase A cache miss from rebuilding on a measurement node; the
+# EXPECTED_TAG guard in cpu_job_common.sh is what keeps a moved-or-dirty tree from producing rows.
 export DACE_FORTRAN_NO_REBUILD=1
-[ -w "$MEAS/dace_fortran" ] && echo "WARN: $MEAS is WRITABLE -- the warm job should have refrozen it" >&2
 
 export STAGE=MEAS LANE_MODE=meas
 export THREADS="${THREADS:-16 32 72}"
@@ -37,5 +43,5 @@ export VARIANTS="${VARIANTS:-velocity-loopexch velocity-noloopexch velocity-open
 
 echo "CPU_VELOCITY threads=$THREADS reps=$REPS layouts=$VELOCITY_LAYOUTS"
 # shellcheck disable=SC1091
-. "$MEAS/samples/tagcycle/cpu_job_common.sh"
+. "$REPO/samples/tagcycle/cpu_job_common.sh"
 exit "$cpu_overall"

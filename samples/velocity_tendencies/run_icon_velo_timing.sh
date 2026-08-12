@@ -71,10 +71,8 @@ pick_python() {
     done
     command -v python3
 }
-PYTEST_PY="$(pick_python "${PYTEST_PY:-}" "${PYTHON:-}" \
-    /capstor/scratch/cscs/ybudanaz/aarch64/venv-df313/bin/python)"
-PARSE_PY="$(pick_python "${PARSE_PY:-}" \
-    /capstor/scratch/cscs/ybudanaz/aarch64/venv-meas/bin/python "$PYTEST_PY")"
+PYTEST_PY="$(pick_python "${PYTEST_PY:-}" "${PYTHON:-}")"
+PARSE_PY="$(pick_python "${PARSE_PY:-}" "$PYTEST_PY")"
 
 VELO_FC="${VELO_FC:-gfortran}"
 FC_PATH="$(command -v "$VELO_FC" || true)"

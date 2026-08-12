@@ -85,10 +85,15 @@ def git_describe() -> str:
     return out.strip().replace("/", "-")
 
 
+def work_root() -> Path:
+    """The single output root every lane writes under: env override, else <repo>/samples/_work."""
+    return Path(os.environ.get("WORK_ROOT") or REPO / "samples" / "_work")
+
+
 def cache_root() -> Path:
     # Beside the dacecache when the sbatch set one (common.sh setup_build_root); never /tmp (tmpfs).
     dace_build = os.environ.get("DACE_default_build_folder")  # noqa: SIM112 -- DaCe's real env-var casing
-    root = Path(dace_build).parent if dace_build else Path.home() / ".cache" / "dace-fortran-samples"
+    root = Path(dace_build).parent if dace_build else work_root() / "cache"
     root.mkdir(parents=True, exist_ok=True)
     return root
 

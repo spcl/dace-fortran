@@ -9,8 +9,9 @@
 #SBATCH --mem=0
 #SBATCH --hint=nomultithread
 #SBATCH -t 02:00:00
-#SBATCH -o /capstor/scratch/cscs/ybudanaz/aarch64/probe/meas_4rank-%j.out
-#SBATCH -e /capstor/scratch/cscs/ybudanaz/aarch64/probe/meas_4rank-%j.out
+#SBATCH -o samples/_work/logs/meas_4rank-%j.out
+#SBATCH -e samples/_work/logs/meas_4rank-%j.out
+# SUBMIT FROM THE REPO ROOT: slurm resolves the -o/-e paths above against the submit dir.
 # Step 4 of the tag cycle: THE measurement. One Grace node = 4 sockets x 72 cores = 4 ranks, one
 # variant per rank, all four concurrent, each pinned to its own socket. Every variant gets its own
 # log and its own CSV, and a red rank never takes its siblings down.
@@ -24,12 +25,18 @@
 # ABSOLUTE RULE: no numactl anywhere below. This node exposes 36 NUMA nodes; numactl --cpunodebind
 # inside an srun cpuset returns sched_setaffinity EINVAL and kills the step outright (4390808,
 # 4390809). srun --cpu-bind=cores --mem-bind=local does the same job correctly.
-#   sbatch --export=ALL,TAG=<tag> meas_4rank.sbatch
+#   sbatch --export=ALL,TAG=<tag> samples/tagcycle/meas_4rank.sbatch
 set -uo pipefail
 
-PROBE=/capstor/scratch/cscs/ybudanaz/aarch64/probe
-MEAS=/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-meas
-BR2=/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-samples-meas
+# Under sbatch, BASH_SOURCE is the slurm spool copy -- fall back to the submit dir (the repo root).
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="${REPO:-$(cd "$HERE/../.." && pwd)}"
+[ -d "$REPO/samples/tagcycle" ] || REPO="${SLURM_SUBMIT_DIR:-$PWD}"
+WORK_ROOT="${WORK_ROOT:-$REPO/samples/_work}"
+TAGDIR="$REPO/samples/tagcycle"
+# MEAS/BR2 keep their pinned-mirror names: the tree under test (now the repo) and the output root.
+MEAS="${MEAS:-$REPO}"
+BR2="${BR2:-$WORK_ROOT/meas}"
 RUNS="$BR2/runs"
 PROV="$RUNS/PROVENANCE.txt"
 VARIANTS="${VARIANTS:-cloudsc-klon cloudsc-nblks velocity-loopexch velocity-noloopexch}"
@@ -41,10 +48,9 @@ ulimit -c 0
 # shellcheck disable=SC1091
 . samples/env.sh > /dev/null 2>&1
 
-# The clone is frozen at this point: a phase A cache miss must die, not quietly rebuild the bridge
-# from a compute node into the shared tree.
+# A phase A cache miss must die here, not quietly rebuild the bridge from a compute node.
 export DACE_FORTRAN_NO_REBUILD=1
-export EXPECTED_TAG="$TAG" MEAS BR2
+export EXPECTED_TAG="$TAG" REPO WORK_ROOT MEAS BR2
 export DACE_compiler_allow_view_arguments=false
 export THREADS="${THREADS:-1 2 4 8 16 32 64 72}"
 
@@ -52,15 +58,12 @@ TAG_NOW="$(git -C "$MEAS" describe --always --dirty)"
 echo "MEAS host=$(hostname) tag=$TAG_NOW expected=$TAG job=$SLURM_JOB_ID start=$(date -u +%FT%TZ)"
 echo "THREADS=$THREADS"
 [ "$TAG_NOW" = "$TAG" ] || {
-    echo "ABORT: clone tag is $TAG_NOW, expected $TAG" >&2
+    echo "ABORT: repo describes as $TAG_NOW, expected $TAG (check out the tag, clean the tree)" >&2
     exit 1
 }
-if [ -w "$MEAS/dace_fortran" ]; then
-    echo "WARN: $MEAS is WRITABLE -- it should have been refrozen by tagcycle_warm.sbatch" >&2
-fi
 
 {
-    [ -f "$PROV" ] || echo "# utc | job id | job | clone tag | notes"
+    [ -f "$PROV" ] || echo "# utc | job id | job | repo tag | notes"
     printf '%s | %-8s | %-11s | %s | %s\n' "$(date -u +%FT%TZ)" "$SLURM_JOB_ID" "meas_4rank" \
         "$TAG_NOW" "4 ranks share one node, socket-pinned"
 } >> "$PROV"
@@ -82,7 +85,7 @@ for v in $VARIANTS; do
     echo "rank -> $v  csv=$csv"
     CSV="$csv" srun --exact --ntasks=1 --cpus-per-task=72 --mem="${MEM_PER_RANK}M" \
         --cpu-bind=cores --mem-bind=local \
-        bash "$PROBE/tagcycle_lane.sh" meas "$v" > "$log" 2>&1 &
+        bash "$TAGDIR/tagcycle_lane.sh" meas "$v" > "$log" 2>&1 &
     PID[$v]=$!
 done
 

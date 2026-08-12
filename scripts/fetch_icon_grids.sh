@@ -13,7 +13,10 @@
 
 set -eu
 
-GRID_DIR=${GRID_DIR:-/capstor/scratch/cscs/ybudanaz/aarch64/icon-grids}
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$HERE/.." && pwd)"
+WORK_ROOT=${WORK_ROOT:-$REPO/samples/_work}
+GRID_DIR=${GRID_DIR:-$WORK_ROOT/icon-grids}
 BASE=http://icon-downloads.mpimet.mpg.de/grids/public/mpim
 GRIDS=${GRIDS:-R02B04 R02B05 R02B06 R02B07 R02B08 R02B09}
 

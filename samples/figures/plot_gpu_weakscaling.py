@@ -8,8 +8,10 @@ inventing points.
 """
 import argparse
 import os
+from pathlib import Path
 
 import matplotlib
+
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
@@ -17,9 +19,11 @@ import polars as pl
 
 import f2dace_style as st
 
+REPO = Path(__file__).resolve().parents[2]
+WORK_ROOT = Path(os.environ.get("WORK_ROOT", REPO / "samples" / "_work"))
 DEFAULT_RUNS = [
-    '/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-samples-meas/runs',
-    '/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-samples/runs',
+    str(WORK_ROOT / 'meas' / 'runs'),
+    str(WORK_ROOT / 'dev' / 'runs'),
 ]
 LANES = ['dace-gpu', 'cuda-ref', 'openacc-gpu']
 MARKERS = {'dace-gpu': 'o', 'cuda-ref': '^', 'openacc-gpu': 's'}
@@ -46,15 +50,25 @@ def build(df, missing, out_dir, name, footer=None):
         sub = gpu.filter(pl.col('lane') == lane)
         if sub.height == 0:
             continue
-        med = sub.group_by('problem_size').agg(
-            pl.median('ms').alias('t')).sort('problem_size')
-        ax.plot(med['problem_size'], med['t'], marker=MARKERS.get(lane, 'o'),
-                markersize=5, linewidth=1.6, color=st.LANE_COLOR[lane], label=lane)
+        med = sub.group_by('problem_size').agg(pl.median('ms').alias('t')).sort('problem_size')
+        ax.plot(med['problem_size'],
+                med['t'],
+                marker=MARKERS.get(lane, 'o'),
+                markersize=5,
+                linewidth=1.6,
+                color=st.LANE_COLOR[lane],
+                label=lane)
         lanes_plotted.append(lane)
 
     if empty:
-        ax.text(0.5, 0.5, 'no GPU runs measured yet', transform=ax.transAxes,
-                ha='center', va='center', fontsize=11, color='0.55')
+        ax.text(0.5,
+                0.5,
+                'no GPU runs measured yet',
+                transform=ax.transAxes,
+                ha='center',
+                va='center',
+                fontsize=11,
+                color='0.55')
         ax.set_ylim(1, 1000)
     ax.set_xscale('log', base=2)
     ax.set_yscale('log')
@@ -70,15 +84,26 @@ def build(df, missing, out_dir, name, footer=None):
     ax.spines['right'].set_visible(False)
     handles, labels = ax.get_legend_handles_labels()
     if empty:
-        handles = [plt.Line2D([], [], color=st.LANE_COLOR[l], marker=MARKERS[l])
-                   for l in LANES]
+        handles = [plt.Line2D([], [], color=st.LANE_COLOR[l], marker=MARKERS[l]) for l in LANES]
         labels = LANES
-    ax.legend(handles, st.legend_for(labels), loc='upper center', frameon=False,
-              ncol=min(len(labels), 3), bbox_to_anchor=(0.5, 1.26), fontsize=9)
+    ax.legend(handles,
+              st.legend_for(labels),
+              loc='upper center',
+              frameon=False,
+              ncol=min(len(labels), 3),
+              bbox_to_anchor=(0.5, 1.26),
+              fontsize=9)
     fig.tight_layout()
-    st.save(fig, out_dir, name, footer=footer,
-            status={'figure': name, 'lanes': lanes_plotted, 'problem_sizes': have,
-                    'missing': list(missing)})
+    st.save(fig,
+            out_dir,
+            name,
+            footer=footer,
+            status={
+                'figure': name,
+                'lanes': lanes_plotted,
+                'problem_sizes': have,
+                'missing': list(missing)
+            })
     return lanes_plotted
 
 
@@ -94,8 +119,7 @@ def main():
     missing = st.Missing()
     df = st.load_runs(args.runs_dir, args.kernel, alloc=args.alloc, missing=missing)
     print(f'{args.kernel} rows loaded: {df.height}')
-    build(df, missing, args.out_dir, args.out_name,
-          footer='data: ' + ', '.join(args.runs_dir))
+    build(df, missing, args.out_dir, args.out_name, footer='data: ' + ', '.join(args.runs_dir))
     if missing:
         print('MISSING:')
         for m in missing:

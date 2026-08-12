@@ -7,6 +7,7 @@ artifact's transformation/optimization pipeline is used.
 """
 import io
 import os
+from pathlib import Path
 
 import polars as pl
 import pandas as pd
@@ -17,21 +18,22 @@ import matplotlib.patches as patches
 from matplotlib.ticker import FuncFormatter
 from scipy.stats import t
 
-ROOT = '/capstor/scratch/cscs/ybudanaz/aarch64'
-OUT = os.path.join(ROOT, 'probe/f2dace_plots')
+REPO = Path(__file__).resolve().parents[2]
+WORK_ROOT = Path(os.environ.get("WORK_ROOT", REPO / "samples" / "_work"))
+OUT = os.path.dirname(os.path.abspath(__file__))
 
 # ---------------------------------------------------------------- our data ---
 CLOUDSC_SOURCES = [
-    f'{ROOT}/dace-fortran-samples-meas/runs/cloudsc-klon_30c14cd_4391146.csv',
-    f'{ROOT}/dace-fortran-samples-meas/runs/cloudsc-nblks_30c14cd_4391146.csv',
-    f'{ROOT}/dace-fortran-samples-meas/runs/cloudsc_baselines_4388632.csv',
-    f'{ROOT}/dace-fortran-samples/runs/cloudsc_baselines_4387048.csv',
+    str(WORK_ROOT / 'meas' / 'runs' / 'cloudsc-klon_30c14cd_4391146.csv'),
+    str(WORK_ROOT / 'meas' / 'runs' / 'cloudsc-nblks_30c14cd_4391146.csv'),
+    str(WORK_ROOT / 'meas' / 'runs' / 'cloudsc_baselines_4388632.csv'),
+    str(WORK_ROOT / 'dev' / 'runs' / 'cloudsc_baselines_4387048.csv'),
 ]
 
 # klon = points per block == artifact's nproma; klon*nblocks == artifact's problem_size.
 frames = [
-    pl.read_csv(p).select(['lane', 'klon', 'nblocks', 'threads', 'ms']).with_columns(
-        pl.col('ms').cast(pl.Float64)) for p in CLOUDSC_SOURCES
+    pl.read_csv(p).select(['lane', 'klon', 'nblocks', 'threads', 'ms']).with_columns(pl.col('ms').cast(pl.Float64))
+    for p in CLOUDSC_SOURCES
 ]
 daata = pl.concat(frames).with_columns([
     pl.col('lane').alias('label'),
@@ -44,20 +46,16 @@ pl.Config.set_tbl_rows(20)
 print(daata)
 
 # Group by 'label', 'problem_size', 'threads', and 'nproma' and calculate the mean 'millis'
-mean_millis_by_nproma = daata.group_by(['label', 'problem_size', 'threads', 'nproma']).agg(
-    pl.mean('millis').alias('mean_millis')
-)
+mean_millis_by_nproma = daata.group_by(['label', 'problem_size', 'threads',
+                                        'nproma']).agg(pl.mean('millis').alias('mean_millis'))
 
 best_configs_for_min_mean_millis = mean_millis_by_nproma.sort('mean_millis').group_by(
-    ['label', 'problem_size', 'threads'], maintain_order=True
-).first()
+    ['label', 'problem_size', 'threads'], maintain_order=True).first()
 
 # Keep rows from 'daata' only if the combination of ['label', 'problem_size', 'threads', 'nproma'] is in 'best_configs_for_min_mean_millis'
-daata_best_nproma = daata.join(
-    best_configs_for_min_mean_millis,
-    on=['label', 'problem_size', 'threads', 'nproma'],
-    how='inner'
-)
+daata_best_nproma = daata.join(best_configs_for_min_mean_millis,
+                               on=['label', 'problem_size', 'threads', 'nproma'],
+                               how='inner')
 
 print(daata_best_nproma)
 
@@ -76,6 +74,7 @@ def format_yaxis(value, tick_number):
     else:
         return f'{value:.0f}'
 
+
 def human_readable_time(mean_millis, _):
     if mean_millis == 0:
         return "0 ms"
@@ -90,6 +89,7 @@ def human_readable_time(mean_millis, _):
             return f"{seconds:.0f} s"
         else:
             return f"{seconds:.0f} s"
+
 
 def format_duration(mean_millis):
     """
@@ -119,53 +119,52 @@ def format_duration(mean_millis):
 # ------------------------------------------------- verbatim notebook cell 3 ---
 # (x_col / xlabel_text are the only added parameters: they default to the
 #  notebook's own 'problem_size' behaviour and are used by the thread-sweep figure.)
-def construct_performance_plot_table(
-    pl_df: pl.DataFrame, baseline_label: str, selected_labels: list, threads: int,
-    x_col: str = 'problem_size'):
+def construct_performance_plot_table(pl_df: pl.DataFrame,
+                                     baseline_label: str,
+                                     selected_labels: list,
+                                     threads: int,
+                                     x_col: str = 'problem_size'):
 
     # Filter the DataFrame
-    filtered_data = pl_df.filter(
-        (pl.col('label').is_in(selected_labels)) &
-        (pl.col('threads') == threads if threads is not None else pl.lit(True))
-    )
+    filtered_data = pl_df.filter((pl.col('label').is_in(selected_labels))
+                                 & (pl.col('threads') == threads if threads is not None else pl.lit(True)))
 
     # Group by 'label' and 'problem_size' and calculate mean of 'millis'
     grouped_data = filtered_data.group_by(['label', x_col]).agg(
         pl.mean('millis').alias('mean_millis'),
         pl.std('millis').alias('std_millis'),
-        pl.col("millis").count().alias("n")
-    ).sort([x_col, 'label'])
+        pl.col("millis").count().alias("n")).sort([x_col, 'label'])
     grouped_data = grouped_data.with_columns([
         pl.struct(["std_millis", "n"]).map_elements(
-            lambda s: t.ppf(0.975, df=s["n"] - 1) * s["std_millis"] / (s["n"] ** 0.5),
+            lambda s: t.ppf(0.975, df=s["n"] - 1) * s["std_millis"] / (s["n"]**0.5),
             return_dtype=pl.Float64,
         ).alias("margin_of_error")
-    ]).with_columns([
-        (pl.col("mean_millis") - pl.col("margin_of_error")).alias("ci_lower"),
-        (pl.col("mean_millis") + pl.col("margin_of_error")).alias("ci_upper")
-    ])
+    ]).with_columns([(pl.col("mean_millis") - pl.col("margin_of_error")).alias("ci_lower"),
+                     (pl.col("mean_millis") + pl.col("margin_of_error")).alias("ci_upper")])
 
     baseline_data = grouped_data.filter(pl.col('label') == baseline_label).rename({'mean_millis': 'baseline_millis'})
 
-    merged_data = grouped_data.join(
-        baseline_data.select([x_col, 'baseline_millis']),
-        on=x_col,
-        how='left'
-    )
+    merged_data = grouped_data.join(baseline_data.select([x_col, 'baseline_millis']), on=x_col, how='left')
 
     speedup_data = merged_data.with_columns(
-        (pl.col('baseline_millis') / pl.col('mean_millis')).alias('speedup')
-    ).filter(pl.col('label').is_in(selected_labels))
+        (pl.col('baseline_millis') / pl.col('mean_millis')).alias('speedup')).filter(
+            pl.col('label').is_in(selected_labels))
 
     return speedup_data
 
-def plot_performance(
-    pl_df: pl.DataFrame, baseline_label: str, selected_labels: list,
-    legend_mapping: dict, YLIM_LO: float, YLIM_HI: float,
-    ax: plt.Axes = None, xlabel: bool = False,
-    ylabel_text: str = 'Run Time (ms)', annotation_unit='',
-    x_col: str = 'problem_size',
-    xlabel_text: str = 'Problem size (N_Pt × N_Lvl × N_Blk)'):
+
+def plot_performance(pl_df: pl.DataFrame,
+                     baseline_label: str,
+                     selected_labels: list,
+                     legend_mapping: dict,
+                     YLIM_LO: float,
+                     YLIM_HI: float,
+                     ax: plt.Axes = None,
+                     xlabel: bool = False,
+                     ylabel_text: str = 'Run Time (ms)',
+                     annotation_unit='',
+                     x_col: str = 'problem_size',
+                     xlabel_text: str = 'Problem size (N_Pt × N_Lvl × N_Blk)'):
 
     assert ax
 
@@ -202,11 +201,13 @@ def plot_performance(
     ax.yaxis.set_major_formatter(FuncFormatter(human_readable_time))
     handles, labels = ax.get_legend_handles_labels()
     ax.spines['top'].set_visible(False)
-    ax.legend(
-        handles=handles,
-        labels=[legend_mapping.get(label, label) for label in labels],
-        loc='upper center', frameon=False, ncol=len(labels),
-        bbox_to_anchor=(0.5, 1.25), fontsize=9)
+    ax.legend(handles=handles,
+              labels=[legend_mapping.get(label, label) for label in labels],
+              loc='upper center',
+              frameon=False,
+              ncol=len(labels),
+              bbox_to_anchor=(0.5, 1.25),
+              fontsize=9)
     ax.set_xlabel(xlabel_text if xlabel else '')
     xtick_labels = ax.get_xticklabels()
     ax.set_xticklabels([f"{int(label.get_text()):,}" for label in xtick_labels])
@@ -227,7 +228,8 @@ def plot_performance(
 
         # Better: loop over grouped data again
         for _, row in pandas_df.iterrows():
-            if np.isclose(row["mean_millis"], height, atol=1e-3) and np.isclose(x, patch.get_x() + patch.get_width() / 2):
+            if np.isclose(row["mean_millis"], height, atol=1e-3) and np.isclose(x,
+                                                                                patch.get_x() + patch.get_width() / 2):
                 ci = row["margin_of_error"]
                 ax.errorbar(
                     x=x,
@@ -248,24 +250,24 @@ def plot_performance(
         # Get the x-position of the bar (the center of the bar)
         overflow = height > YLIM_HI * 0.8
         x_pos = p.get_x() + p.get_width() / 2
-        y_pos = YLIM_HI/10 if overflow else height
+        y_pos = YLIM_HI / 10 if overflow else height
 
         # Annotate with a line and text
         if annotation_unit:
-          s_txt = f"{height/1000.0:.2f}s"
-          ms_txt = f"{height:.1f}\nms"
-          txt = s_txt if len(s_txt) < len(ms_txt) - 3 else ms_txt
-          ax.annotate(
-              txt,  # Annotation text (mean_millis)
-              xy=(x_pos, y_pos),  # Position at the top of the bar
-              xytext=(0, 5),  # Offset for the text (move a bit above the bar)
-              textcoords="offset points",
-              ha="center",  # Horizontal alignment of the text
-              va="bottom",  # Vertical alignment (text goes above the top of the bar)
-              fontsize=7,  # Font size of the annotation
-              color="white" if overflow else "black",  # Text color
-              bbox=dict(facecolor="none", edgecolor="none", boxstyle="round,pad=0.5")  # Box around text
-          )
+            s_txt = f"{height/1000.0:.2f}s"
+            ms_txt = f"{height:.1f}\nms"
+            txt = s_txt if len(s_txt) < len(ms_txt) - 3 else ms_txt
+            ax.annotate(
+                txt,  # Annotation text (mean_millis)
+                xy=(x_pos, y_pos),  # Position at the top of the bar
+                xytext=(0, 5),  # Offset for the text (move a bit above the bar)
+                textcoords="offset points",
+                ha="center",  # Horizontal alignment of the text
+                va="bottom",  # Vertical alignment (text goes above the top of the bar)
+                fontsize=7,  # Font size of the annotation
+                color="white" if overflow else "black",  # Text color
+                bbox=dict(facecolor="none", edgecolor="none", boxstyle="round,pad=0.5")  # Box around text
+            )
 
 
 # --------------------------------------------------- figure (our lane set) ---
@@ -282,14 +284,19 @@ num_rows, num_cols = 3, 1
 fig, axes = plt.subplots(num_rows, num_cols, figsize=(1.5 * num_cols * 7, 2.4 * num_rows))
 axes = axes.flatten()
 
-for ax, threads, lo, hi, unit, last in [
-        (axes[0], 1, 1e3, 1e4, 's', False),
-        (axes[1], 32, 5e1, 5e3, 'ms', False),
-        (axes[2], 72, 2e1, 5e3, 'ms', True)]:
+for ax, threads, lo, hi, unit, last in [(axes[0], 1, 1e3, 1e4, 's', False), (axes[1], 32, 5e1, 5e3, 'ms', False),
+                                        (axes[2], 72, 2e1, 5e3, 'ms', True)]:
     plot_df = construct_performance_plot_table(daata_best_nproma, BASELINE, LANES, threads)
-    plot_performance(plot_df, BASELINE, LANES, legend_mapping=LEGEND,
-                     YLIM_LO=lo, YLIM_HI=hi, ax=ax, xlabel=last,
-                     ylabel_text=f"CPU ({threads} Thread)", annotation_unit=unit)
+    plot_performance(plot_df,
+                     BASELINE,
+                     LANES,
+                     legend_mapping=LEGEND,
+                     YLIM_LO=lo,
+                     YLIM_HI=hi,
+                     ax=ax,
+                     xlabel=last,
+                     ylabel_text=f"CPU ({threads} Thread)",
+                     annotation_unit=unit)
 
 plt.tight_layout()
 fig.savefig(os.path.join(OUT, 'cloudsc_cpu.pdf'), bbox_inches='tight')
@@ -303,14 +310,21 @@ num_rows, num_cols = 2, 1
 fig, axes = plt.subplots(num_rows, num_cols, figsize=(1.5 * num_cols * 9.5, 2.4 * num_rows))
 axes = axes.flatten()
 
-for ax, nproma, lo, hi, last in [(axes[0], 65536, 1e3, 3e4, False),
-                                 (axes[1], 32, 2e1, 3e4, True)]:
+for ax, nproma, lo, hi, last in [(axes[0], 65536, 1e3, 3e4, False), (axes[1], 32, 2e1, 3e4, True)]:
     sub = daata.filter(pl.col('nproma') == nproma)
     plot_df = construct_performance_plot_table(sub, BASELINE, LANES, None, x_col='threads')
-    plot_performance(plot_df, BASELINE, LANES, legend_mapping=LEGEND,
-                     YLIM_LO=lo, YLIM_HI=hi, ax=ax, xlabel=last,
-                     ylabel_text=f"CPU (N_Pt={nproma})", annotation_unit='ms',
-                     x_col='threads', xlabel_text='OpenMP threads')
+    plot_performance(plot_df,
+                     BASELINE,
+                     LANES,
+                     legend_mapping=LEGEND,
+                     YLIM_LO=lo,
+                     YLIM_HI=hi,
+                     ax=ax,
+                     xlabel=last,
+                     ylabel_text=f"CPU (N_Pt={nproma})",
+                     annotation_unit='ms',
+                     x_col='threads',
+                     xlabel_text='OpenMP threads')
 
 plt.tight_layout()
 fig.savefig(os.path.join(OUT, 'cloudsc_cpu_threads.pdf'), bbox_inches='tight')

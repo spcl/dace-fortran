@@ -9,9 +9,12 @@
 #SBATCH --mem=0
 #SBATCH --hint=nomultithread
 #SBATCH -t 01:00:00
-#SBATCH -o /capstor/scratch/cscs/ybudanaz/aarch64/probe/cpu_warm-%j.out
-#SBATCH -e /capstor/scratch/cscs/ybudanaz/aarch64/probe/cpu_warm-%j.out
-# Phase A for everything the new CPU jobs measure.  Needs the clone WRITABLE.
+#SBATCH -o samples/_work/logs/cpu_warm-%j.out
+#SBATCH -e samples/_work/logs/cpu_warm-%j.out
+# Phase A for everything the new CPU jobs measure.
+#
+# SUBMIT FROM THE REPO ROOT: slurm resolves the -o/-e paths above against the submit directory,
+# and tagcycle_prepare.sh is what creates samples/_work/logs (gitignored, absent on a fresh clone).
 #
 # CHUNKING: a cloudsc SDFG build is ~13 min and KLON/NBLOCKS are specialized into the graph, so
 # the 7-size sweep is 7 builds per backend = 14 builds.  One hour of 4 ranks holds ~4 builds per
@@ -24,7 +27,12 @@
 #   sbatch --export=ALL,TAG=<tag>,CHUNK=large samples/tagcycle/cpu_warm.sbatch
 set -uo pipefail
 
-MEAS=/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-meas
+# Under sbatch, BASH_SOURCE is the slurm spool copy -- fall back to the submit dir (the repo root).
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="${REPO:-$(cd "$HERE/../.." && pwd)}"
+[ -d "$REPO/samples/tagcycle" ] || REPO="${SLURM_SUBMIT_DIR:-$PWD}"
+export REPO
+
 CHUNK="${CHUNK:-small}"
 case "$CHUNK" in
     small) export CLOUDSC_SWEEP_SIZES="${CLOUDSC_SWEEP_SIZES:-4096 8192 16384 32768}" ;;
@@ -36,11 +44,6 @@ case "$CHUNK" in
         ;;
 esac
 
-[ -w "$MEAS/dace_fortran" ] || {
-    echo "ABORT: $MEAS is frozen -- phase A needs it writable (build_bridge flock)" >&2
-    echo "WARM_ALL_EXIT=1"
-    exit 1
-}
 # Phase A BUILDS; NO_REBUILD belongs to the measurement jobs only.
 unset DACE_FORTRAN_NO_REBUILD
 
@@ -53,5 +56,5 @@ export THREADS="${THREADS:-72}"
 echo "CPU_WARM chunk=$CHUNK sizes=$CLOUDSC_SWEEP_SIZES"
 
 # shellcheck disable=SC1091
-. "$MEAS/samples/tagcycle/cpu_job_common.sh"
+. "$REPO/samples/tagcycle/cpu_job_common.sh"
 exit "$cpu_overall"

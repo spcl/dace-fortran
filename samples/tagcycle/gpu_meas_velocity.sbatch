@@ -10,8 +10,9 @@
 #SBATCH --mem=0
 #SBATCH --hint=nomultithread
 #SBATCH -t 00:30:00
-#SBATCH -o /capstor/scratch/cscs/ybudanaz/aarch64/probe/gpu_meas_velocity-%j.out
-#SBATCH -e /capstor/scratch/cscs/ybudanaz/aarch64/probe/gpu_meas_velocity-%j.out
+#SBATCH -o samples/_work/logs/gpu_meas_velocity-%j.out
+#SBATCH -e samples/_work/logs/gpu_meas_velocity-%j.out
+# SUBMIT FROM THE REPO ROOT: slurm resolves the -o/-e paths above against the submit dir.
 # The velocity half of gpu_meas.sbatch: THREE CONCURRENT RANKS in one wave, all at nproma=491520
 # (nblks_e = 1) on the R02B06 deck --
 #   rank 0  openacc-ref          GPU 0, socket 0
@@ -31,9 +32,12 @@
 # node-level flags must be repeated here because a wrapper's own header is the one Slurm reads.
 #
 # This job submits nothing and resubmits nothing.
-#   sbatch --export=ALL,TAG=<tag> gpu_meas_velocity.sbatch
+#   sbatch --export=ALL,TAG=<tag> samples/tagcycle/gpu_meas_velocity.sbatch
 set -uo pipefail
 
-MEAS="${MEAS:-/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-meas}"
-export LANES="${LANES:-openacc-ref dace-gpu-pipeline dace-gpu-manual}"
-exec bash "$MEAS/samples/tagcycle/gpu_meas.sbatch"
+# Under sbatch, BASH_SOURCE is the slurm spool copy -- fall back to the submit dir (the repo root).
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="${REPO:-$(cd "$HERE/../.." && pwd)}"
+[ -d "$REPO/samples/tagcycle" ] || REPO="${SLURM_SUBMIT_DIR:-$PWD}"
+export REPO LANES="${LANES:-openacc-ref dace-gpu-pipeline dace-gpu-manual}"
+exec bash "$REPO/samples/tagcycle/gpu_meas.sbatch"

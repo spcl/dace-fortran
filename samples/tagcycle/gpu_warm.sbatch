@@ -10,8 +10,9 @@
 #SBATCH --mem=0
 #SBATCH --hint=nomultithread
 #SBATCH -t 01:00:00
-#SBATCH -o /capstor/scratch/cscs/ybudanaz/aarch64/probe/gpu_warm-%j.out
-#SBATCH -e /capstor/scratch/cscs/ybudanaz/aarch64/probe/gpu_warm-%j.out
+#SBATCH -o samples/_work/logs/gpu_warm-%j.out
+#SBATCH -e samples/_work/logs/gpu_warm-%j.out
+# SUBMIT FROM THE REPO ROOT: slurm resolves the -o/-e paths above against the submit dir.
 # Stage 1 of the GPU cycle: BUILD AND WARM ONLY, nothing here is a measurement. It produces every
 # artifact gpu_meas.sbatch refuses to build for itself:
 #   * the reference binaries -- cloudsc CUDA (nvcc) and the velocity OpenACC-GPU driver (nvfortran
@@ -35,11 +36,17 @@
 # may use srun precisely because it compiles nothing.)
 #
 # This job submits nothing and resubmits nothing.
-#   sbatch --export=ALL,TAG=<tag> gpu_warm.sbatch
+#   sbatch --export=ALL,TAG=<tag> samples/tagcycle/gpu_warm.sbatch
 set -uo pipefail
 
-MEAS="${MEAS:-/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-meas}"
-BR2="${BR2:-/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran-samples-meas}"
+# Under sbatch, BASH_SOURCE is the slurm spool copy -- fall back to the submit dir (the repo root).
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="${REPO:-$(cd "$HERE/../.." && pwd)}"
+[ -d "$REPO/samples/tagcycle" ] || REPO="${SLURM_SUBMIT_DIR:-$PWD}"
+WORK_ROOT="${WORK_ROOT:-$REPO/samples/_work}"
+# MEAS/BR2 keep their pinned-mirror names: the tree under test (now the repo) and the output root.
+MEAS="${MEAS:-$REPO}"
+BR2="${BR2:-$WORK_ROOT/meas}"
 GPUROOT="${GPUROOT:-$BR2/gpu}"
 LOG="$BR2/logs"
 LANES="${LANES:-cuda-ref openacc-ref dace-gpu dace-gpu-pipeline dace-gpu-manual}"
@@ -77,7 +84,8 @@ ulimit -c 0
 ulimit -s unlimited 2> /dev/null || echo "warning: could not raise the stack limit" >&2
 # shellcheck disable=SC1091
 . samples/env.sh > /dev/null 2>&1
-PY="${PY:-${PYTHON:-/capstor/scratch/cscs/ybudanaz/aarch64/venv-meas/bin/python}}"
+# python3.11 before python3: the system python3 on these nodes is 3.6, which no sample runs on.
+PY="${PY:-${PYTHON:-$(command -v python3.11 || command -v python3 || true)}}"
 [ -x "$PY" ] || {
     echo "ABORT: no usable interpreter at $PY (set PYTHON in samples/env.sh or export PY)" >&2
     exit 1
@@ -99,7 +107,7 @@ export MEAS_ALLOC="${MEAS_ALLOC:-system}" MEAS_ALLOC_ACTIVE
 unset DACE_FORTRAN_NO_REBUILD
 unset BUILD_ROOT
 export BUILD_ROOT_BASE="$GPUROOT"
-export EXPECTED_TAG="$TAG" MEAS BR2
+export EXPECTED_TAG="$TAG" REPO WORK_ROOT MEAS BR2
 export DACE_compiler_allow_view_arguments=false
 export CLOUDSC_NGPTOT CLOUDSC_GPU_NPROMA
 export CUDA_VISIBLE_DEVICES=0
@@ -132,11 +140,7 @@ echo "cpuset: $JOB_CPUS"
 echo "MEMSPLIT=all-single-rank"
 nvidia-smi -L
 [ "$TAG_NOW" = "$TAG" ] || {
-    echo "ABORT: clone tag is $TAG_NOW, expected $TAG" >&2
-    exit 1
-}
-[ -w "$MEAS/dace_fortran" ] || {
-    echo "ABORT: $MEAS is frozen -- phase A needs it writable (build_bridge flock)" >&2
+    echo "ABORT: repo describes as $TAG_NOW, expected $TAG (check out the tag, clean the tree)" >&2
     exit 1
 }
 if ! nvidia-smi -L 2> /dev/null | grep -q '^GPU'; then

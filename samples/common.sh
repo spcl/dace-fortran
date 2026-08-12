@@ -6,6 +6,10 @@ set -euo pipefail
 # Site env hook, sourced before any probe below so a module/spack PATH is visible to all of them:
 # SAMPLES_ENV=<file>, else samples/env.sh when it exists. An explicit SAMPLES_ENV must resolve.
 SAMPLES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="${REPO:-$(cd "$SAMPLES_DIR/.." && pwd)}"
+# Single gitignored output/scratch root for everything the samples produce; never an absolute path.
+WORK_ROOT="${WORK_ROOT:-$REPO/samples/_work}"
+export REPO WORK_ROOT
 if [ -n "${SAMPLES_ENV:-}" ]; then
     if [ ! -f "$SAMPLES_ENV" ]; then
         echo "FATAL: SAMPLES_ENV=$SAMPLES_ENV does not exist" >&2
@@ -57,10 +61,10 @@ export THREADS
 # concurrently must not share a dacecache). DACE_cache=name (not unique) ON PURPOSE: one SDFG
 # name per root, and reuse across the thread-loop invocations is exactly what Phase A caches.
 # BUILD_ROOT_BASE is the job-wide root the per-lane tags hang off; a lane that must not inherit the
-# previous lane's per-lane root unsets BUILD_ROOT and lands under the base rather than back in $HOME.
+# previous lane's per-lane root unsets BUILD_ROOT and lands under the base, not back in $WORK_ROOT.
 setup_build_root() {
     local tag="$1"
-    BUILD_ROOT="${BUILD_ROOT:-${BUILD_ROOT_BASE:-$HOME/.cache/dace-fortran-samples}/$tag}"
+    BUILD_ROOT="${BUILD_ROOT:-${BUILD_ROOT_BASE:-$WORK_ROOT/cache}/$tag}"
     mkdir -p "$BUILD_ROOT/tmp"
     export TMPDIR="$BUILD_ROOT/tmp"
     export DACE_default_build_folder="$BUILD_ROOT/dacecache"
