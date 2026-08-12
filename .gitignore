@@ -300,3 +300,6 @@ samples/env.sh
 # crash artifacts + build-bridge runtime lock
 core_*
 dace_fortran/.build_bridge.lock
+
+# Consolidated sample/measurement work roots (build roots, dumps, ICON decks, run CSVs)
+samples/_work/
