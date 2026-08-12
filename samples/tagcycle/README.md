@@ -22,7 +22,7 @@ Slurm runs a *spool copy* of the script and `BASH_SOURCE` no longer points into 
 | Run CSVs and per-rank logs | `$WORK_ROOT/meas/runs` | `RUNS=` |
 | Job stdout (`#SBATCH -o/-e`) | `samples/_work/logs`, relative to the submit dir | — |
 | Dev / login-node outputs | `$WORK_ROOT/dev` | — |
-| GPU build root (`BUILD_ROOT_BASE`, shared warm→meas) | `$WORK_ROOT/meas/gpu` | `GPUROOT=` |
+| GPU build root (per-lane `dacecache_<lane>`, shared warm→meas) | `$WORK_ROOT/meas/gpu` | `GPUROOT=` |
 | Default DaCe build cache | `$WORK_ROOT/cache` | `BUILD_ROOT_BASE=` |
 | ICON source | `$WORK_ROOT/icon-model` | — |
 | Python interpreter | `$PYTHON` from `samples/env.sh` | `PYTHON=`, `PY=` |

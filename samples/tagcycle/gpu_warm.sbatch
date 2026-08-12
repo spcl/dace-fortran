@@ -59,6 +59,9 @@ VELOCITY_FLAT_NPROMA="${VELOCITY_FLAT_NPROMA:-491520}"
 VELOCITY_R06_DATA_DIR="${VELOCITY_R06_DATA_DIR:-$BR2/data_r02b06}"
 VELOCITY_TIMESTEP="${VELOCITY_TIMESTEP:-1}"
 FLATDUMP="$GPUROOT/dump_r02b06_nproma${VELOCITY_FLAT_NPROMA}"
+# The DaCe velocity runner probes only its cache root; the flat deck lives beside the runs, so the
+# path is handed over explicitly rather than guessed.
+export VELOCITY_NPZ_FLAT="${VELOCITY_NPZ_FLAT:-$BR2/velocity_r02b06_nproma${VELOCITY_FLAT_NPROMA}.npz}"
 
 CUDA_EXE="$GPUROOT/cloudsc_gpu_baselines/dwarf-cloudsc-cuda"
 ACC_ROOT="$GPUROOT/velocity_acc_gpu"
@@ -106,6 +109,7 @@ export MEAS_ALLOC="${MEAS_ALLOC:-system}" MEAS_ALLOC_ACTIVE
 # Phase A BUILDS -- the whole point. NO_REBUILD belongs to the measurement job only.
 unset DACE_FORTRAN_NO_REBUILD
 unset BUILD_ROOT
+# Read by gpu_baselines.sh (samples/common.sh setup_build_root) for the cuda-ref lane.
 export BUILD_ROOT_BASE="$GPUROOT"
 export EXPECTED_TAG="$TAG" REPO WORK_ROOT MEAS BR2
 export DACE_compiler_allow_view_arguments=false
@@ -233,6 +237,10 @@ warm_lane() {
 overall=0
 for l in $LANES; do
     log="$LOG/warm_gpu_${l}_${TAG}_${SLURM_JOB_ID:-local}.log"
+    # Same per-lane build folder gpu_meas.sbatch's worker uses, so the measurement job finds the
+    # cache this job warms; DACE_cache=name alone would collide on the shared SDFG names.
+    export DACE_default_build_folder="$GPUROOT/dacecache_$l" DACE_cache=name
+    mkdir -p "$DACE_default_build_folder" || exit 1
     echo "=== warm $l -> $log"
     warm_lane "$l" > "$log" 2>&1
     r=$?

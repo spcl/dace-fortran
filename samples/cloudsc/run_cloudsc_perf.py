@@ -108,6 +108,8 @@ def load_or_build(cache: Path, build_dir: Path):
     cached = load_sdfg_cached(cache)
     if cached is not None:
         return cached
+    if os.environ.get("DACE_FORTRAN_NO_REBUILD") == "1":
+        raise SystemExit(f"phase A cache miss at {cache} under DACE_FORTRAN_NO_REBUILD=1")
 
     # Species-count specialize split reused from the e2e lane (tests/e2e/test_cloudsc.py).
     from _util import build_sdfg, have_flang

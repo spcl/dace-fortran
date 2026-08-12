@@ -13,7 +13,10 @@
 #SBATCH --exclusive
 #SBATCH --hint=nomultithread
 #SBATCH --time=00:30:00
-#SBATCH --output=cloudsc_klon_%j.out
+#SBATCH -o samples/_work/logs/cloudsc_klon-%j.out
+#SBATCH -e samples/_work/logs/cloudsc_klon-%j.err
+# The -o/-e paths are repo-relative on purpose: slurm resolves them against the submit dir, and
+# this job is submitted from the repo root.
 
 set -euo pipefail
 

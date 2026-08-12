@@ -88,6 +88,9 @@ CLOUDSC_NBLOCKS=$(((CLOUDSC_NGPTOT + CLOUDSC_GPU_NPROMA - 1) / CLOUDSC_GPU_NPROM
 VELOCITY_FLAT_NPROMA="${VELOCITY_FLAT_NPROMA:-491520}"
 VELOCITY_INPUTS="${VELOCITY_INPUTS:-r02b06}"
 FLATDUMP="$GPUROOT/dump_r02b06_nproma${VELOCITY_FLAT_NPROMA}"
+# The DaCe velocity runner probes only its cache root; the flat deck lives beside the runs, so the
+# path is handed over explicitly rather than guessed.
+export VELOCITY_NPZ_FLAT="${VELOCITY_NPZ_FLAT:-$BR2/velocity_r02b06_nproma${VELOCITY_FLAT_NPROMA}.npz}"
 
 CUDA_EXE="$GPUROOT/cloudsc_gpu_baselines/dwarf-cloudsc-cuda"
 CUDA_RUNDIR="$GPUROOT/cloudsc_gpu_baselines/run"
@@ -128,7 +131,6 @@ export DACE_FORTRAN_NO_REBUILD=1
 export EXPECTED_TAG="$TAG" REPO WORK_ROOT MEAS BR2
 export DACE_compiler_allow_view_arguments=false
 unset BUILD_ROOT
-export BUILD_ROOT_BASE="$GPUROOT"
 
 # CPU ids THIS process may actually touch. NOT lscpu: that reports all 288 node cpus regardless of
 # the cpuset. In a worker this is the step's own 72-core slice, which is exactly what we want to
@@ -278,6 +280,10 @@ meas_lane() {
 # --- worker: one lane, one GPU, inside its own srun step ----------------------
 if [ "$WORKER_MODE" = 1 ]; then
     export CUDA_VISIBLE_DEVICES="$WORKER_GPU"
+    # Per-lane build folder: DACE_cache=name keys it on the SDFG name, and the concurrent ranks
+    # share SDFG names, so without the suffix they would compile into one directory.
+    export DACE_default_build_folder="$GPUROOT/dacecache_$WORKER_LANE" DACE_cache=name
+    mkdir -p "$DACE_default_build_folder" || exit 1
     sock="$(socket_of_cpu "$FIRST_CPU")"
     echo "RANK lane=$WORKER_LANE gpu=$WORKER_GPU socket=${sock:-?} ncpus=$(echo "$JOB_CPUS" | wc -w) first_cpu=$FIRST_CPU"
     # Module affinity on Grace-Hopper: GPU i is local to socket i. Slurm hands consecutive --exact

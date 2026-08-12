@@ -103,6 +103,8 @@ def load_or_build(variant: str, cache: Path, build_dir: Path):
     cached = load_sdfg_cached(cache)
     if cached is not None:
         return cached
+    if os.environ.get("DACE_FORTRAN_NO_REBUILD") == "1":
+        raise SystemExit(f"phase A cache miss at {cache} under DACE_FORTRAN_NO_REBUILD=1")
 
     from _util import build_sdfg, have_flang
     from dace_fortran.bindings.frozen_signature import refreeze

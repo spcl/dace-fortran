@@ -14,8 +14,12 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --exclusive
 #SBATCH --hint=nomultithread
-#SBATCH --time=02:00:00
-#SBATCH --output=velocity_tendencies_%j.out
+#SBATCH -p debug
+#SBATCH --time=00:30:00
+#SBATCH -o samples/_work/logs/velocity_tendencies-%j.out
+#SBATCH -e samples/_work/logs/velocity_tendencies-%j.err
+# The -o/-e paths are repo-relative on purpose: slurm resolves them against the submit dir, and
+# this job is submitted from the repo root.
 
 set -euo pipefail
 
@@ -109,6 +113,9 @@ for lane in $LANES; do
     # Phase A once per variant, at max threads: build + optimize + compile into the cache (untimed).
     set_omp_env "$TOPO_NCORES"
     for v in $VARIANTS; do
+        # Both variants build an SDFG named velocity_tendencies, so under DACE_cache=name one
+        # dacecache would make each variant a full rebuild of the other (tagcycle_lane.sh idiom).
+        export DACE_default_build_folder="$BUILD_ROOT/dacecache_$v"
         srun --ntasks=1 --cpus-per-task="$NCPUS" --cpu-bind=verbose,cores \
             "$PY" "$DRIVER" --variant "$v" --backend "$backend" --npz "$(npz_for "$v")" --build-only
     done
@@ -120,6 +127,7 @@ for lane in $LANES; do
         fi
         set_omp_env "$t"
         for v in $VARIANTS; do
+            export DACE_default_build_folder="$BUILD_ROOT/dacecache_$v"
             srun --ntasks=1 --cpus-per-task="$NCPUS" --cpu-bind=verbose,cores \
                 "$PY" "$DRIVER" --variant "$v" --backend "$backend" --npz "$(npz_for "$v")" --csv "$CSV"
         done
