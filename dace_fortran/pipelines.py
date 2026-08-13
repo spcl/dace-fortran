@@ -4,13 +4,20 @@
 
 ``optimize`` is the end-to-end parallelization pipeline:
 
-    specialize -> short-loop-unroll -> unique-loop-iterators -> scalar-fission -> simplify
-      -> state-fusion-extended -> loop2map -> state-fusion-extended -> mapfusion
+    len1-to-scalar -> specialize -> short-loop-unroll -> unique-loop-iterators -> scalar-fission
+      -> simplify -> state-fusion-extended -> loop2map -> state-fusion-extended -> mapfusion
+      -> map-collapse -> mapfusion -> make-transients-persistent
 
 ``scalar_fission`` runs unconditionally, BEFORE simplify (it splits scalar-carried loop bodies so
 the loop can map downstream): LoopToMap needs it in general, not just CloudSC. ``specialize``
 bakes the known compile-time constants (CloudSC: nclv, ncldqi, ...) so the shape and branch
-folding downstream have literals to work on.
+folding downstream have literals to work on. ``len1_to_scalar`` runs FIRST, with ``preserve_abi``,
+so the rest of the pipeline sees a plain scalar instead of a one-element buffer while the SDFG
+signature keeps its array form. The builder already runs it on frontend output; repeating it here
+covers an SDFG that reached ``optimize`` some other way, and the pass is idempotent.
+``mapfusion`` is ``FullMapFusion`` (vertical +
+horizontal fusion run together to a fixed point), applied a second time after ``map-collapse``
+since a freshly-collapsed nest can expose fusions the first pass missed.
 """
 import copy
 from typing import Any, Dict, Optional, Set, Union
@@ -20,10 +27,11 @@ import numpy as np
 
 from dace import SDFG
 from dace.sdfg.utils import specialize_scalars, specialize_symbols
-from dace.transformation.dataflow.map_fusion_vertical import MapFusionVertical
 from dace.transformation.interstate.loop_to_map import LoopToMap
 from dace.transformation.interstate.state_fusion_with_happens_before import StateFusionExtended
 from dace.transformation.pass_pipeline import Pipeline
+from dace.transformation.passes.full_map_fusion import FullMapFusion
+from dace.transformation.passes.length_one_array_scalar_conversion import ConvertLengthOneArraysToScalars
 from dace.transformation.passes.parallelization_prep import ShortLoopUnroll
 from dace.transformation.passes.scalar_fission import ScalarFission
 from dace.transformation.passes.unique_loop_iterators import UniqueLoopIterators
@@ -111,6 +119,8 @@ def optimize(sdfg: SDFG,
     """
     reference = copy.deepcopy(sdfg) if verify_inputs is not None else None
 
+    ConvertLengthOneArraysToScalars(preserve_abi=True).apply_pass(sdfg, {})
+
     if symbols:
         specialize_symbols(sdfg, symbols)
     if scalars:
@@ -129,8 +139,12 @@ def optimize(sdfg: SDFG,
 
     sdfg.apply_transformations_repeated(LoopToMap, validate=validate)
     sdfg.apply_transformations_repeated(StateFusionExtended, validate=validate)
-    sdfg.apply_transformations_repeated(MapFusionVertical, validate=validate)
+    # FullMapFusion: MapFusionVertical + MapFusionHorizontal run together to a fixed point, not just
+    # vertical -- horizontal fuses maps that only share an input, no producer/consumer edge.
+    FullMapFusion(validate=validate).apply_pass(sdfg, {})
     sdfg.apply_transformations_repeated(MapCollapse, validate=validate)
+    # A freshly-collapsed nest can expose a fusion the pass above missed.
+    FullMapFusion(validate=validate).apply_pass(sdfg, {})
 
     from dace.transformation.passes.persistent_transients import MakeTransientsPersistent
     MakeTransientsPersistent().apply_pass(sdfg, {})
