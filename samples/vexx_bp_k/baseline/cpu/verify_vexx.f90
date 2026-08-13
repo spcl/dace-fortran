@@ -408,12 +408,17 @@ contains
     block
       logical :: has_hin
       complex(dp), allocatable :: hin(:,:)
+      real(dp) :: tk0, tk1
       allocate( hin(npwx*npol, m) )
       hin = (0.0_dp, 0.0_dp)
       inquire(file=trim(pfx)//'hpsi_in.bin', exist=has_hin)
       if (has_hin) call rd_c(trim(pfx)//'hpsi_in.bin', hin(1:n,1:m), n*m)
       hpsi = hin
+      tk0 = omp_get_wtime()
       call vexx_bp_k(lda, n, m, psi, hpsi, becpsi)
+      tk1 = omp_get_wtime()
+      ! single-call wall time, one line per rank (parsed by measure_sweep.sh)
+      write(*,'(A,F12.4)') 'kernel_time_s ', tk1 - tk0
     end block
     !
     ! ---- verify ------------------------------------------------------------
