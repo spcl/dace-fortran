@@ -303,3 +303,9 @@ dace_fortran/.build_bridge.lock
 
 # Consolidated sample/measurement work roots (build roots, dumps, ICON decks, run CSVs)
 samples/_work/
+
+# Measurement CSVs a job writes to its cwd when CSV= is unset and the submit dir is the repo
+# root; the ones written under $RUNS are already covered by samples/_work/ above.
+/cloudsc_*.csv
+/velocity_baselines_*.csv
+/velocity_tendencies_*.csv
