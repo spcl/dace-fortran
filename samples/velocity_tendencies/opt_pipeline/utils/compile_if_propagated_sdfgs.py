@@ -241,6 +241,37 @@ def _compile_and_link(
 
     objects = []
 
+    # OpenACC Fortran (the velocity_tendencies reference and its serde bridge). Compiled first and
+    # strictly in the order given: nvfortran emits a .mod per module and a parallel batch would
+    # race on the USE dependencies. nvfortran is the only ACC-offload Fortran compiler here.
+    fortran_sources = [s for s in sources if s.endswith((".f90", ".F90"))]
+    if fortran_sources:
+        gencode_num = os.getenv("GENCODE_NUMBER", "90a").rstrip("a")
+        moddir = "codegen/fmod"
+        os.makedirs(moddir, exist_ok=True)
+        acc_target = "gpu" if gpu else "multicore"
+        # fastmath / flushz / fma mirror the DaCe side's --use_fast_math --ftz=true --fmad=true
+        # --prec-div=false --prec-sqrt=false, so neither engine is timed under a different
+        # floating-point contract than the other.
+        gpu_opts = f"cc{gencode_num},fastmath,flushz,fma" if gpu else f"cc{gencode_num}"
+        fflags = os.getenv(
+            "VT_ACC_FFLAGS",
+            f"-O3 -acc={acc_target} -gpu={gpu_opts} -Minfo=accel -module {moddir}",
+        )
+        for src in fortran_sources:
+            # Objects go beside the .mod files, not next to the sources: one of these lives in the
+            # parent sample directory and would drop a stray .o into the tracked tree.
+            obj = os.path.join(moddir, os.path.basename(os.path.splitext(src)[0]) + ".o")
+            cmd = f"nvfortran -c {src} {fflags} -o {obj}"
+            print(f"  [FC nvfortran] {src}  ({fflags})")
+            ret = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            if ret.stderr:
+                print(ret.stderr, end="", file=sys.stderr)
+            if ret.returncode != 0:
+                raise RuntimeError(f"FAILED: {src}")
+            objects.append(obj)
+        sources = [s for s in sources if s not in fortran_sources]
+
     def compile_one(src):
         obj = os.path.splitext(src)[0] + ".o"
         obj_dir = os.path.dirname(obj)
@@ -297,12 +328,33 @@ def _compile_and_link(
     if gpu and sdfg_names:
         objects = _localize_internal_symbols(objects, sdfg_names)
 
+    # With OpenACC Fortran in the mix nvfortran has to drive the link: nvcc never runs nvfortran's
+    # device-registration step, so its __fatbinwrap_* for the ACC translation unit goes unresolved.
+    # -Mnomain because the entry point is C++, -c++libs for the DaCe host code, -cuda for cudart.
+    if fortran_sources:
+        gpu_arg = os.getenv("GENCODE_NUMBER", "90a").rstrip("a")
+        link_cmd = (f"nvfortran {' '.join(objects)} -acc={'gpu' if gpu else 'multicore'} "
+                    f"-gpu=cc{gpu_arg} -cuda -c++libs -mp -Mnomain -o {output}")
+        print(f"  [LD nvfortran] {output}")
+        if subprocess.run(link_cmd, shell=True).returncode != 0:
+            raise RuntimeError(f"FAILED: {link_cmd}")
+        return
+
     link_flags = ""
     if lib:
         link_flags = "-shared" if (AMD or link_cc == _cxx()) else "--shared -Xcompiler=-fPIC"
 
     if "nvcc" in link_cc:
         link_flags += " -Xcompiler=-fopenmp "
+        # The link needs the same host driver as the compiles: objects built by nvc++ pull in
+        # nvhpc runtime symbols (__nv_init_env, __c_mset4, __kmpc_*) that g++ cannot resolve.
+        if USE_NVHPC:
+            link_flags += " -ccbin=nvc++ "
+        # OpenACC Fortran objects need the ACC runtime and libnvf pulled in through the host
+        # driver; without -acc the device-side data clauses link but never initialise.
+        if fortran_sources:
+            gpu_arg = os.getenv("GENCODE_NUMBER", "90a").rstrip("a")
+            link_flags += f" -Xcompiler=-acc -Xcompiler=-gpu=cc{gpu_arg} -Xlinker=-lnvf "
     else:
         link_flags += " -fopenmp "
 
@@ -435,6 +487,7 @@ def compile_if_propagated_sdfgs(
     debuginfo: bool,
     extra_sources: typing.Optional[typing.Iterable[str]] = None,
     extra_include_dirs: typing.Optional[typing.Iterable[str]] = None,
+    extra_defines: typing.Optional[typing.Iterable[str]] = None,
     output: typing.Optional[str] = None,
     post_codegen_hook: typing.Optional[
         typing.Callable[[typing.List[dace.SDFG]], None]
@@ -499,6 +552,7 @@ def compile_if_propagated_sdfgs(
 
     sources: typing.List[str] = list(extra_sources) if extra_sources is not None else []
     headers = [f"-I{d}" for d in (extra_include_dirs or ["include"])]
+    headers += [f"-D{d}" for d in (extra_defines or [])]
 
     from dace.codegen import codegen, compiler
 

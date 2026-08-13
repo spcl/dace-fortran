@@ -1,14 +1,24 @@
 #include "flags.h"
+#include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <future>
 #include <iostream>
+#include <numeric>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "serde_velocity_no_nproma.h"
 #include "velocity_tendencies_no_nproma.h"
 #include "call_velocity.h"
+#include "velocity_split_dispatch.h"
+
+#ifdef VT_WITH_ACC
+#include "velocity_acc_bridge.h"
+#endif
 
 template <std::ostream &CS> struct AtomicStream {
   std::ostringstream s;
@@ -133,6 +143,48 @@ static std::vector<int> parse_csv_ints(std::string_view s) {
   return out;
 }
 
+// The kernel's write set. Snapshotted before the first engine runs and restored before the second,
+// so the ACC reference and the DaCe variants both start from the dumped t0 state -- otherwise
+// whichever engine ran second would consume the first one's output.
+struct WriteSet {
+  std::vector<std::pair<double *, std::vector<double>>> arrays;
+  double max_vcfl_dyn = 0.0;
+};
+
+static void track(WriteSet &ws, double *p) {
+  const int n = serde::ARRAY_META_DICT_AT(p).volume();
+  ws.arrays.emplace_back(p, std::vector<double>(p, p + n));
+}
+
+static void restore(const WriteSet &ws, double *max_vcfl_dyn) {
+  for (const auto &[ptr, saved] : ws.arrays) {
+    std::copy(saved.begin(), saved.end(), ptr);
+  }
+  *max_vcfl_dyn = ws.max_vcfl_dyn;
+}
+
+struct Timings {
+  double best = 0.0, mean = 0.0, median = 0.0;
+};
+
+static Timings summarize(std::vector<double> ms) {
+  Timings t;
+  if (ms.empty()) {
+    return t;
+  }
+  std::sort(ms.begin(), ms.end());
+  t.best = ms.front();
+  t.median = ms[ms.size() / 2];
+  t.mean = std::accumulate(ms.begin(), ms.end(), 0.0) / static_cast<double>(ms.size());
+  return t;
+}
+
+static void report(const std::string &engine, int timestep, int istep, int lvn_only, const Timings &t,
+                   int reps) {
+  acout() << "TIME," << engine << ',' << timestep << ',' << istep << ',' << lvn_only << ',' << reps
+          << ',' << t.best << ',' << t.median << ',' << t.mean << std::endl;
+}
+
 static void print_help(const char *prog) {
   std::cout
       << "Usage: " << prog << " [OPTIONS] [TIMESTEP ...]\n"
@@ -146,6 +198,10 @@ static void print_help(const char *prog) {
       << "                        (default: 20)\n"
       << "  --timesteps a,b,c     Comma-separated timesteps to process\n"
       << "                        (default: 1,2,7,9,43,93,463)\n"
+      << "  --engine <name>       dace (default), acc, or both.  acc runs the original\n"
+      << "                        single-TU OpenACC Fortran velocity_tendencies on the same\n"
+      << "                        deserialised structs; both runs each from the dumped t0\n"
+      << "                        state and dumps got/want under <output-dir>/<engine>/\n"
       << "  --output-dir <path>   got/want dump dir\n"
       << "                        (default: ./gotwant/<basename(data)>)\n"
       << "  -h, --help            Print this message and exit\n"
@@ -164,6 +220,12 @@ int main(int argc, char *argv[]) {
   const auto root = args.get<std::string>("data", "data_r02b05");
   const int rep = args.get<int>("reps", 20);
   const auto timesteps_csv = args.get<std::string>("timesteps", "");
+  const auto engine = args.get<std::string>("engine", "dace");
+  if (engine != "dace" && engine != "acc" && engine != "both") {
+    acerr() << "--engine must be one of dace, acc, both (got '" << engine << "')" << std::endl;
+    return EXIT_FAILURE;
+  }
+  acout() << "TIME,engine,timestep,istep,lvn_only,reps,best_ms,median_ms,mean_ms" << std::endl;
 
   const std::filesystem::path ROOT{root};
   acerr() << "Will be reading data from: " << ROOT << std::endl;
@@ -268,47 +330,92 @@ int main(int argc, char *argv[]) {
     acout() << "Step " << n << " variables, extra_diffu: " << global_data.lextra_diffu << ", istep: ";
     acout() << istep << ", lvn_only: " << lvn_only << ", ldeepatmo: " << ldeepatmo << std::endl;
 
-    std::cout << "MAIN PER" << std::endl;
+    const auto dump_gotwant = [&](const std::filesystem::path &into) {
+      std::error_code dec;
+      std::filesystem::create_directories(into, dec);
+      std::vector<std::jthread> dumpers;
+      dumpers.emplace_back([&] { got_want_pair<global_data_type>(global_data, global_data_want, "global_data", n, into); });
+      dumpers.emplace_back([&] { got_want_pair<t_nh_diag>(p_diag, p_diag_want, "p_diag", n, into); });
+      dumpers.emplace_back([&] { got_want_pair<t_nh_metrics>(p_metrics, p_metrics_want, "p_metrics", n, into); });
+      dumpers.emplace_back([&] { got_want_pair<t_nh_prog>(p_prog, p_prog_want, "p_prog", n, into); });
+      dumpers.emplace_back([&] { got_want_pair<double *>(z_kin_hor_e, z_kin_hor_e_want, "z_kin_hor_e", n, into); });
+      dumpers.emplace_back([&] { got_want_pair<double *>(z_vt_ie, z_vt_ie_want, "z_vt_ie", n, into); });
+      dumpers.emplace_back([&] { got_want_pair<double *>(z_w_concorr_me, z_w_concorr_me_want, "z_w_concorr_me", n, into); });
+    };
 
-#define VT_DISPATCH(suffix)                                                                              \
-  do {                                                                                                   \
-    auto *h = __dace_init_velocity_no_nproma_if_prop_##suffix(                                           \
-        VELOCITY_INIT_ARGS(global_data, p_diag, p_int, p_metrics, p_patch, p_prog,                       \
-                           z_kin_hor_e, z_vt_ie, z_w_concorr_me,                                         \
-                           dt_linintp_ubc, dtime, istep, ldeepatmo, lvn_only, ntnd));                    \
-    for (int j = 0; j < rep; j++) {                                                                      \
-      __program_velocity_no_nproma_if_prop_##suffix(                                                     \
-          h,                                                                                             \
-          VELOCITY_CALL_ARGS(global_data, p_diag, p_int, p_metrics, p_patch, p_prog,                     \
-                             z_kin_hor_e, z_vt_ie, z_w_concorr_me,                                       \
-                             dt_linintp_ubc, dtime, istep, ldeepatmo, lvn_only, ntnd));                  \
-    }                                                                                                    \
-    __dace_exit_velocity_no_nproma_if_prop_##suffix(h);                                                  \
-  } while (0)
+    // Both engines mutate the same buffers, so the second one to run would otherwise consume the
+    // first one's output instead of the dumped t0 state.
+    WriteSet base;
+    track(base, p_diag.ddt_vn_apc_pc);
+    track(base, p_diag.ddt_w_adv_pc);
+    track(base, p_diag.vt);
+    track(base, p_diag.vn_ie);
+    track(base, p_diag.w_concorr_c);
+    track(base, z_kin_hor_e);
+    track(base, z_vt_ie);
+    track(base, z_w_concorr_me);
+    base.max_vcfl_dyn = p_diag.max_vcfl_dyn;
 
-    if (lvn_only == 0 && istep == 1) {
-      VT_DISPATCH(lvn_only_0_istep_1);
-    } else if (lvn_only == 0 && istep == 2) {
-      VT_DISPATCH(lvn_only_0_istep_2);
-    } else if (lvn_only == 1 && istep == 1) {
-      VT_DISPATCH(lvn_only_1_istep_1);
-    } else if (lvn_only == 1 && istep == 2) {
-      VT_DISPATCH(lvn_only_1_istep_2);
-    } else {
-      throw std::runtime_error("Law of Logic and Mathematics violated");
+    // Callers restore before whatever staging their engine needs, so this only times.
+    const auto time_engine = [&](const std::string &name, auto &&once) {
+      std::vector<double> samples;
+      samples.reserve(static_cast<size_t>(rep));
+      for (int j = 0; j < rep; j++) {
+        samples.push_back(once());
+      }
+      report(name, n, istep, lvn_only, summarize(samples), rep);
+    };
+
+    if (engine != "acc") {
+      restore(base, &p_diag.max_vcfl_dyn);
+      velocity_dace_init(VELOCITY_ENGINE_ARGS);
+      time_engine("dace", [&] {
+        const auto t0 = std::chrono::steady_clock::now();
+        velocity_dace_run(VELOCITY_ENGINE_ARGS);
+        const auto t1 = std::chrono::steady_clock::now();
+        return std::chrono::duration<double, std::milli>(t1 - t0).count();
+      });
+      velocity_dace_finalize();
+      if (engine == "both") {
+        dump_gotwant(DUMP / "dace");
+      }
     }
 
-#undef VT_DISPATCH
+#ifdef VT_WITH_ACC
+    if (engine != "dace") {
+      const auto &mk = serde::ARRAY_META_DICT_AT(z_kin_hor_e);
+      const auto &mv = serde::ARRAY_META_DICT_AT(z_vt_ie);
+      const auto &mw = serde::ARRAY_META_DICT_AT(z_w_concorr_me);
+      const int zdims[9] = {mk.size[0],   mk.size[1],   mk.size[2],   mv.size[0], mv.size[1],
+                            mv.size[2],   mw.size[0],   mw.size[1],   mw.size[2]};
+      const int zlbs[9] = {mk.lbound[0], mk.lbound[1], mk.lbound[2], mv.lbound[0], mv.lbound[1],
+                           mv.lbound[2], mw.lbound[0], mw.lbound[1], mw.lbound[2]};
+      restore(base, &p_diag.max_vcfl_dyn);
+      velocity_acc_assert_layout();
+      velocity_acc_setup(&global_data, &p_diag, &p_int, &p_metrics, &p_patch, &p_prog, z_kin_hor_e,
+                         z_vt_ie, z_w_concorr_me, zdims, zlbs, ntnd, istep, lvn_only, ldeepatmo,
+                         dtime, dt_linintp_ubc);
+      // Neither engine restores between reps, so with reps > 1 both accumulate the same way --
+      // which is why correctness is verified at reps=1 and only timings are read at reps=50.
+      time_engine("acc", [&] { return velocity_acc_run(); });
+      velocity_acc_teardown();
+      p_diag.max_vcfl_dyn = velocity_acc_max_vcfl();
+      if (engine == "both") {
+        dump_gotwant(DUMP / "acc");
+      }
+    }
+#else
+    if (engine != "dace") {
+      throw std::runtime_error("built without VT_WITH_ACC; --engine acc/both unavailable");
+    }
+#endif
     acout() << "Step " << n << " done." << std::endl;
 
-    pool.emplace_back([&] { got_want_pair<global_data_type>(global_data, global_data_want, "global_data", n, DUMP); });
-    pool.emplace_back([&] { got_want_pair<t_nh_diag>(p_diag, p_diag_want, "p_diag", n, DUMP); });
-    pool.emplace_back([&] { got_want_pair<t_nh_metrics>(p_metrics, p_metrics_want, "p_metrics", n, DUMP); });
-    pool.emplace_back([&] { got_want_pair<t_nh_prog>(p_prog, p_prog_want, "p_prog", n, DUMP); });
-    pool.emplace_back([&] { got_want_pair<double *>(z_kin_hor_e, z_kin_hor_e_want, "z_kin_hor_e", n, DUMP); });
-    pool.emplace_back([&] { got_want_pair<double *>(z_vt_ie, z_vt_ie_want, "z_vt_ie", n, DUMP); });
-    pool.emplace_back([&] { got_want_pair<double *>(z_w_concorr_me, z_w_concorr_me_want, "z_w_concorr_me", n, DUMP); });
-    pool.clear();
+    // A single-engine run keeps the flat layout the existing compare_got_and_want job expects;
+    // --engine both already wrote per-engine subdirectories above.
+    if (engine != "both") {
+      dump_gotwant(DUMP);
+    }
   }
   return EXIT_SUCCESS;
 }

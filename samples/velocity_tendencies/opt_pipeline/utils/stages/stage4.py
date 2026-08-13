@@ -284,11 +284,13 @@ def main():
             for name in names
         }
         # Velocity-owned reduction helpers.
-        extra_sources = ["src/reductions.cpp", "src/reductions_kernel.cu"]
+        engine_srcs, engine_defs = common.engine_sources()
+        extra_sources = ["src/reductions.cpp", "src/reductions_kernel.cu"] + engine_srcs
         extra_include_dirs = ["include"]
         common.compile_action(STAGE_ID, sdfgs, gpu=True, release=args.release,
                               extra_sources=extra_sources,
-                              extra_include_dirs=extra_include_dirs)
+                              extra_include_dirs=extra_include_dirs,
+                              extra_defines=engine_defs)
 
 
 if __name__ == "__main__":

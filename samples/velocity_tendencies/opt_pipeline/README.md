@@ -33,6 +33,10 @@ tools/                        F90 -> SDFG, baseline regen, submission gen
 ## Quick start
 
 ```bash
+# 0. Toolchain. nvcc, nvc++ and nvfortran all come from one nvhpc, so the DaCe binary and the
+#    OpenACC Fortran reference are built by the same compiler family.
+. ./env_nvhpc.sh
+
 # 1. Regenerate baselines from F90 (needs DaCe on the f2dace/staging branch).
 bash tools/regenerate_baselines.sh
 
@@ -45,6 +49,57 @@ python tools/generate_submissions.py \
     --out-dir submissions/
 sbatch submissions/run_stage6_default_sweep_daint.sh
 ```
+
+## Engines: split-4 DaCe vs original OpenACC Fortran
+
+`main.cpp` drives two engines over the same deserialised structs, selected with `--engine`:
+
+| Engine | What runs | Entry points |
+|--------|-----------|--------------|
+| `dace` (default) | The 4 specialised SDFGs behind one caller-facing interface | `velocity_dace_init` / `_run` / `_finalize` (`src/velocity_split_dispatch.cpp`) |
+| `acc` | The original single-TU OpenACC Fortran `velocity_tendencies` | `velocity_acc_setup` / `_run` / `_teardown` (`src/velocity_acc_bridge.f90`) |
+| `both` | Each in turn from the same dumped t0 state; got/want under `<output-dir>/<engine>/` | — |
+
+The split into 4 variants is an implementation detail of the pipeline: `velocity_dace_run` does the
+`(lvn_only, istep)` dispatch, so neither the runner nor ICON branches on it. `velocity_dace_init`
+brings up all 4 handles at once, which is legal because `unify_variant_signatures` makes the 4
+signatures byte-identical.
+
+`VELOCITY_CALL_ARGS` expands to 18 `serde::ARRAY_META_DICT_AT` lookups (the extents of the 3 bare
+`z_*` arrays; everything else comes from struct fields), so the wrapper needs serde. serde's 53
+namespace-scope functions therefore carry `inline` -- **not** `static`: `ARRAY_META_DICT()` holds a
+function-local `static` map, and internal linkage would give every translation unit its own empty
+copy, turning a link error into an `std::out_of_range` at run time. `inline` merges the definition
+and shares the map.
+
+The ACC engine is opt-in at build time, because the two ACC translation units define the same
+module and only one can be linked:
+
+```bash
+. ./env_nvhpc.sh
+VT_WITH_ACC=1 VT_ACC_TU=loopexch python -m utils.stages.stage5 --compile   # or noloopexch
+sbatch -p debug -A g34 samples/velocity_tendencies/opt_pipeline/run_acc_vs_dace.sbatch
+```
+
+`run_acc_vs_dace.sbatch` runs correctness at `reps=1` (both engines diffed against the same `want`
+via `utils/compare_got_and_want.py`) and then performance at `reps=50`.
+
+Both engines are timed under the same floating-point contract: nvfortran gets
+`-gpu=cc90,fastmath,flushz,fma` against the DaCe side's `--use_fast_math --ftz=true --fmad=true
+--prec-div=false --prec-sqrt=false`. Override with `VT_ACC_FFLAGS`.
+
+The standalone is **big-nproma only**, by design: `data_r02b05` has `z_kin_hor_e` at
+`(20480, 90, 2)` -- nproma=20480 over 2 blocks -- which is the flat `no_nproma` layout the 4
+variants were specialised for. Small-nproma velocity is an ICON-side concern, not a standalone one.
+
+`src/velocity_acc_mirror.f90` is generated — rerun `tools/gen_acc_mirror.py` after regenerating
+`include/velocity_tendencies_no_nproma.h`, and `tools/gen_acc_mirror.py --check` fails if it is
+stale. The bridge asserts every C++ `sizeof` against its Fortran mirror before first use.
+
+Configuration this comparison assumes, taken from the recorded dump scalars (`l_vert_nested=0`,
+`ddt_vn_cor_associated=0`, `lextra_diffu=1`): `p_diag%vn_ie_ubc` and `p_diag%ddt_vn_cor_pc` are
+never written, which is why the DaCe frontend folded both out of the generated signature. The
+bridge allocates them zeroed and checks at teardown that they stayed zero.
 
 ## Regenerating baselines from F90
 
