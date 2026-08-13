@@ -133,6 +133,11 @@ def _get_flags(gpu: bool, release: bool, lib: bool, debuginfo: bool) -> str:
         ) if not USE_NVHPC else ""
         debugflag = "-lineinfo" if debuginfo else ""
         arch_flag = f"-arch=sm_{gencode_num}"
+        # nvcc 13.3 hard-errors on a host gcc newer than 15 and this tree is pinned to
+        # gcc@16.1.0. ``samples/env.sh`` already carries the override for the dacecache
+        # path (CUDAFLAGS / DACE_compiler_cuda_args); this build shells out to nvcc
+        # itself and reads neither.
+        suppress = f"-allow-unsupported-compiler {suppress}" if not USE_NVHPC else suppress
 
         if release:
             flags = (
@@ -216,6 +221,7 @@ def _compile_and_link(
     import re as _re
     _NVCC_ONLY_TOKENS = _re.compile(
         r"(?:--diag-suppress\s+\S+|"
+        r"-allow-unsupported-compiler|"
         r"-arch=sm_\w+|"
         r"--expt-relaxed-constexpr|"
         r"--use_fast_math|"

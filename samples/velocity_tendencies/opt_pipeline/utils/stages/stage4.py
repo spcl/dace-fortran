@@ -128,8 +128,13 @@ def _promote_transients_persistent(sdfg: dace.SDFG) -> int:
     """Flip every transient array in ``sdfg`` (root + nested) on
     ``AllocationLifetime.SDFG`` over to ``Persistent``. Skips
     ``StorageType.Register`` -- those are stack-local in the
-    generated function body and can't outlive a single call. Returns
-    the count flipped."""
+    generated function body and can't outlive a single call -- and
+    ``StorageType.Default``, which codegen's own inference turns into
+    ``Register`` for exactly these scalars; promoting one produces the
+    persistent+Register pair ``validate_sdfg`` rejects.
+    ``OffloadVelocityToGPU`` already stamps every device buffer
+    ``GPU_Global`` explicitly, so nothing device-side is left at
+    ``Default`` for this to miss. Returns the count flipped."""
     from dace.sdfg import nodes as _nodes
     sdfgs = [sdfg]
     for n, _ in sdfg.all_nodes_recursive():
@@ -142,7 +147,7 @@ def _promote_transients_persistent(sdfg: dace.SDFG) -> int:
                 continue
             if desc.lifetime != dace.AllocationLifetime.SDFG:
                 continue
-            if desc.storage == dace.StorageType.Register:
+            if desc.storage in (dace.StorageType.Register, dace.StorageType.Default):
                 continue
             desc.lifetime = dace.AllocationLifetime.Persistent
             count += 1

@@ -8,3 +8,6 @@ __pycache__/
 *.pyc
 *.so
 *.o
+
+# Linked standalone drivers (3.9 MB each); rebuilt by utils.stages.stage<N> --compile.
+velocity_stage*
