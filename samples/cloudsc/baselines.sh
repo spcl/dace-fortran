@@ -20,7 +20,11 @@ NGPTOT="${CLOUDSC_NGPTOT:-65536}"
 REPS="${REPS:-50}"
 WARMUP="${WARMUP:-2}"
 CSV="${CSV:-cloudsc_baselines_${SLURM_JOB_ID:-local}.csv}"
-BASELINE_LANES="${BASELINE_LANES:-gfortran-serial gfortran-autopar original-openmp openacc-cpu flang-serial}"
+# Default = the four non-DaCe columns of the 6-lane comparison: the original Fortran built by
+# both Fortran compilers, and the C rewrite built by both C++ compilers. The other two columns
+# (dace-gcc, dace-llvm) come from the sbatch's own LANES. Set BASELINE_LANES to get the older
+# diagnostic lanes (gfortran-serial gfortran-autopar openacc-cpu flang-serial) back.
+BASELINE_LANES="${BASELINE_LANES:-original-openmp flang-openmp c-openmp c-openmp-clang}"
 CSV_HEADER="kernel,mode,klon,nblocks,threads,rep,ms,inputs,lane,alloc"
 # The allocator is a property of the process the harness launched, not of the timed binary,
 # so the alloc column is stamped here from what alloc_pool.sh actually managed to preload.
@@ -179,15 +183,28 @@ build_dwarf_c() (
         -I"$HERE/c_openmp/cuda_shim" -I"$cu" -I"$h5inc" \
         -x c++ "$cu/load_state.cu" "$cu/cloudsc_validate.cu" "$cu/mycpu.cu" "$cu/cloudsc_c.cu" \
         "$HERE/c_openmp/cloudsc_driver_omp.cpp" \
-        $(hdf5_ldflags "$h5lib") -lhdf5 -lm -o dwarf-cloudsc-c-omp
+        ${CXX_RPATH:-} $(hdf5_ldflags "$h5lib") -lhdf5 -lm -o dwarf-cloudsc-c-omp
 )
 
-# g++ + the HDF5 C library (not the Fortran one the other lanes need): sets CXX/C_H5INC/C_H5LIB.
+# Host compiler + the HDF5 C library (not the Fortran one the other lanes need): sets
+# CXX/CXX_RPATH/C_H5INC/C_H5LIB. $2 names the compiler so the C rewrite can be built once per
+# toolchain from identical sources. CXX is assigned unconditionally, never `${CXX:-}`: the two C
+# lanes run in the same shell, so inheriting would silently rebuild the second with the first's
+# compiler and report one toolchain's numbers under both names.
 c_openmp_ok() {
-    CXX="${CXX:-$(command -v g++ || true)}"
+    local want="${2:-g++}" libdir
+    CXX="$(command -v "$want" || true)"
     if [ -z "$CXX" ]; then
-        echo "SKIP $1: no g++ on PATH" >&2
+        echo "SKIP $1: no $want on PATH" >&2
         return 1
+    fi
+    # clang's -fopenmp resolves libomp.so at load time and spack does not put it on the default
+    # search path, so stamp an rpath rather than exporting LD_LIBRARY_PATH (which would leak into
+    # the Fortran lanes and swap their HDF5 out from under them).
+    CXX_RPATH=""
+    if [ "$want" != "${want#clang}" ]; then
+        libdir="$(dirname "$(dirname "$CXX")")/lib"
+        [ -d "$libdir" ] && CXX_RPATH="-Wl,-rpath,$libdir -L$libdir"
     fi
     if [ -n "${HDF5_C_ROOT:-}" ]; then
         C_H5INC="$HDF5_C_ROOT/include" C_H5LIB="$(hdf5_libdir "$HDF5_C_ROOT")"
@@ -311,10 +328,12 @@ for lane in $BASELINE_LANES; do
             done
             unset ACC_NUM_CORES
             ;;
-        c-openmp)
+        c-openmp | c-openmp-clang)
             # The C rewrite, same thread handling as original-openmp: one build, OMP_NUM_THREADS
-            # and the argv NUMOMP both carry the thread count, schedule pinned to static.
-            c_openmp_ok "$lane" || continue
+            # and the argv NUMOMP both carry the thread count, schedule pinned to static. The two
+            # lanes differ only in host compiler, so they isolate the toolchain from the source.
+            if [ "$lane" = c-openmp-clang ]; then C_WANT=clang++; else C_WANT=g++; fi
+            c_openmp_ok "$lane" "$C_WANT" || continue
             build_dwarf_c "$BUILD_ROOT/$lane" "$C_H5INC" "$C_H5LIB"
             export OMP_SCHEDULE=static
             for t in $THREADS; do
@@ -324,6 +343,31 @@ for lane in $BASELINE_LANES; do
                 fi
                 set_omp_env "$t"
                 run_lane_c "$BUILD_ROOT/$lane/dwarf-cloudsc-c-omp" "$lane" "$t" "$t"
+            done
+            unset OMP_SCHEDULE
+            ;;
+        flang-openmp)
+            # The gfortran twin of original-openmp: same OpenMP dwarf sources, same thread sweep,
+            # only the Fortran compiler differs -- so the pair isolates the toolchain the way
+            # c-openmp / c-openmp-clang does for the C rewrite. (flang-serial stays because flang
+            # has no -ftree-parallelize-loops equivalent, so it cannot mirror gfortran-autopar.)
+            if [ "$HAVE_FLANG" != 1 ]; then
+                echo "SKIP $lane: no LLVM flang on PATH" >&2
+                continue
+            fi
+            if ! flang_hdf5; then
+                echo "SKIP $lane: no flang-compatible HDF5 Fortran (set HDF5_FLANG_ROOT)" >&2
+                continue
+            fi
+            build_dwarf "$BUILD_ROOT/$lane" "$FLANG" "$FLANG_HDF5_LIBS" -O3 -fopenmp "$FLANG_HDF5_FLAGS"
+            export OMP_SCHEDULE=static
+            for t in $THREADS; do
+                if [ "$t" -gt "$TOPO_NCORES" ]; then
+                    echo "skip threads=$t (> $TOPO_NCORES physical cores)"
+                    continue
+                fi
+                set_omp_env "$t"
+                run_lane "$BUILD_ROOT/$lane/dwarf-cloudsc" "$lane" "$t" "$t"
             done
             unset OMP_SCHEDULE
             ;;

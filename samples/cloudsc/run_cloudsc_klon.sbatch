@@ -50,7 +50,11 @@ REPO="$(resolve_repo)"
 source "$REPO/samples/common.sh"
 # LANES: space list from {dace-gcc,dace-llvm,baselines,gpu} (baselines/gpu scripts run both
 # klon+nblks themselves -- request them from only one job of the pair).
-LANES="${LANES:-dace-gcc}"
+# The 6-lane comparison: our DaCe C++ codegen under both host compilers, plus the four baseline
+# columns baselines.sh contributes (original Fortran x {gfortran, flang}, C rewrite x {g++,
+# clang++}). Request `baselines` from only ONE job of the klon/nblks pair -- that script runs both
+# modes itself.
+LANES="${LANES:-dace-gcc dace-llvm baselines}"
 BUILD_ROOT_BASE="${BUILD_ROOT:-$WORK_ROOT/cache}"
 # exported so the baselines lane (which unsets BUILD_ROOT to escape the dace lanes' dacecache)
 # still lands under this root instead of falling back to $HOME.

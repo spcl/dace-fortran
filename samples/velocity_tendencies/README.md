@@ -162,3 +162,52 @@ Caveat when reading the numbers: on the binding-e2e path the SDFG side's `run_ve
 finalizes the ref-counted DaCe handle after every call, so each `path=run_velocity_flat_sdfg`
 sample carries one `dace_init`/`dace_exit` pair inside the timed region. The real ICON wrapper
 does not finalize, and the offset is constant across configurations.
+
+## Reproducing the runs
+
+### GPU: original OpenACC Fortran vs our split-4 DaCe (task 1.5)
+
+Both engines run in **one binary**, over the same serde-deserialised structs, built by one
+compiler family (nvcc / nvc++ / nvfortran from a single nvhpc), under a matched floating-point
+contract.
+
+```bash
+cd samples/velocity_tendencies/opt_pipeline
+. ./env_nvhpc.sh
+VT_WITH_ACC=1 python -m utils.stages.stage5 --compile      # VT_ACC_TU=loopexch|noloopexch
+
+cd <repo root>
+sbatch -p debug -A g34 samples/velocity_tendencies/opt_pipeline/run_acc_vs_dace.sbatch
+```
+
+The job runs two passes: correctness at `reps=1` (each engine diffed against the same `want`
+files via the polars `utils/compare_got_and_want.py`), then performance at `reps=50`. Knobs:
+`VT_STAGE` (5), `VT_TIMESTEPS` (1,2,7,9), `VT_PERF_REPS` (50), `VT_DATA` (data_r02b05).
+
+Outputs land in `$WORK_ROOT/meas/velocity_acc_vs_dace/<jobid>/`:
+`verify/<engine>/numeric_differences_ts=*.csv` and `acc_vs_dace_timings.csv`.
+
+**Read the CSVs, not the exit status.** `compare_got_and_want.py` writes its verdict per field and
+never exits non-zero on a DIFF, so `compare rc=0` is not a correctness gate. A field is clean when
+its row says `OK`; `max_rel` near 2.0 on a `DIFF` row means `got ~= -want`, i.e. a sign inversion
+rather than roundoff.
+
+The standalone is **big-nproma only** by design: `data_r02b05` is `(20480, 90, 2)`, the flat
+`no_nproma` layout the 4 variants were specialised for. Small-nproma velocity is an ICON-side
+concern.
+
+### CPU thread sweep
+
+```bash
+cd <repo root>
+sbatch -p normal -A g34 --time=02:00:00 \
+    --export=ALL,LANES="dace-gcc dace-llvm" samples/velocity_tendencies/run_velocity.sbatch
+```
+
+Sweeps both `__LOOP_EXCHANGE` TU variants (`VARIANTS="loopexch noloopexch"` -- different transient
+data layouts, so both are run) over `THREADS`. Data is re-blocked to nproma=32 from the R02B05
+deck. mimalloc is preloaded by default and stamped into the CSV `alloc` column.
+
+```bash
+python samples/figures/plot_velocity_cpu.py
+```
