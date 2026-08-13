@@ -1,0 +1,219 @@
+"""Generate the Fortran ``BIND(C)`` mirrors of the serde structs.
+
+The serde runner deserialises ``data_r02b05`` into the C++ structs declared in
+``include/velocity_tendencies_no_nproma.h``. To hand that same data to the OpenACC
+Fortran kernel we need Fortran types with byte-identical layout, so the bridge can
+``c_f_pointer`` a single struct pointer and read every component off it instead of
+threading ~70 array pointers plus their extents through the call.
+
+Each C++ field maps 1:1 and in declaration order::
+
+    int X       -> INTEGER(c_int)  :: f_X
+    double X    -> REAL(c_double)  :: f_X
+    T* X        -> TYPE(c_ptr)     :: f_X
+
+The ``f_`` prefix exists because Fortran identifiers may not start with an
+underscore and every extent field is named ``__f2dace_SA_...``. Nested structs are
+reached through ``c_ptr``, so the mirrors are flat and order-independent.
+
+The emitted ``velocity_acc_check_sizes`` is the guard that makes this safe: the C++
+side passes its own ``sizeof`` for every struct and the bridge aborts on the first
+mismatch, so a regenerated header can never silently shift a field offset.
+
+Run:
+    python tools/gen_acc_mirror.py            # writes src/velocity_acc_mirror.f90
+    python tools/gen_acc_mirror.py --check    # non-zero exit if it is out of date
+"""
+
+import argparse
+import re
+import sys
+from pathlib import Path
+
+HEADER = Path("include/velocity_tendencies_no_nproma.h")
+OUTPUT = Path("src/velocity_acc_mirror.f90")
+
+# Order the C++ side must use when filling the ``sizes`` array of the layout guard.
+STRUCT_ORDER = (
+    "t_grid_edges",
+    "t_int_state",
+    "t_nh_prog",
+    "global_data_type",
+    "t_grid_domain_decomp_info",
+    "t_grid_cells",
+    "t_nh_metrics",
+    "t_grid_vertices",
+    "t_patch",
+    "t_nh_diag",
+)
+
+STRUCT_HEAD_RE = re.compile(r"struct\s+(\w+)\s*\{")
+FIELD_RE = re.compile(r"^\s*(.+?)(\s*\*+\s*|\s+)(\w+)\s*(?:=\s*\{\}\s*)?;\s*$", re.M)
+# Anchored at the tail: a leaf name may itself contain "_d_" (inv_dual_edge_length).
+EXTENT_RE = re.compile(r"^__f2dace_(SA|SOA)_(.+)_d_(\d+)_s_(\d+)$")
+
+
+def struct_bodies(text: str) -> dict[str, str]:
+    """Brace-counted struct extraction; ``= {}`` initialisers must not close a struct."""
+    out: dict[str, str] = {}
+    for head in STRUCT_HEAD_RE.finditer(text):
+        depth, i = 1, head.end()
+        while depth != 0 and i < len(text):
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+            i += 1
+        out[head.group(1)] = text[head.end():i - 1]
+    return out
+
+
+def fortran_field(ctype: str, stars: str, name: str) -> str:
+    if "*" in stars:
+        return f"    TYPE(c_ptr) :: f_{name}"
+    base = ctype.strip()
+    if base == "int":
+        return f"    INTEGER(c_int) :: f_{name}"
+    if base == "double":
+        return f"    REAL(c_double) :: f_{name}"
+    raise SystemExit(f"gen_acc_mirror: unsupported non-pointer field type {base!r} on {name!r}")
+
+
+def leaf_extents(body: str) -> dict[str, dict[int, tuple[str, str]]]:
+    """leaf -> {dim: (SA field name, SOA field name)}, so the bridge asks for a shape by leaf."""
+    sa: dict[str, dict[int, str]] = {}
+    soa: dict[str, dict[int, str]] = {}
+    for _ctype, _stars, fname in FIELD_RE.findall(body):
+        m = EXTENT_RE.match(fname)
+        if m is None:
+            continue
+        kind, leaf, dim = m.group(1), m.group(2), int(m.group(3))
+        (sa if kind == "SA" else soa).setdefault(leaf, {})[dim] = fname
+    out: dict[str, dict[int, tuple[str, str]]] = {}
+    for leaf, dims in sa.items():
+        if leaf not in soa or set(soa[leaf]) != set(dims):
+            raise SystemExit(f"gen_acc_mirror: {leaf!r} has SA dims {sorted(dims)} without matching SOA")
+        out[leaf] = {d: (dims[d], soa[leaf][d]) for d in dims}
+    return out
+
+
+def emit_meta_accessors(sname: str, body: str) -> list[str]:
+    lines: list[str] = []
+    for leaf, dims in sorted(leaf_extents(body).items()):
+        rank = max(dims) + 1
+        if sorted(dims) != list(range(rank)):
+            raise SystemExit(f"gen_acc_mirror: {sname}.{leaf} has non-contiguous dims {sorted(dims)}")
+        lines += [
+            f"  PURE FUNCTION meta_{sname}_{leaf}(o) RESULT(m)",
+            f"    TYPE(cm_{sname}), INTENT(IN) :: o",
+            "    TYPE(cm_meta) :: m",
+            f"    m%rank = {rank}",
+        ]
+        for d in range(rank):
+            sa_f, soa_f = dims[d]
+            lines.append(f"    m%dims({d + 1}) = o%f_{sa_f}")
+            lines.append(f"    m%lbs({d + 1}) = o%f_{soa_f}")
+        lines += [f"  END FUNCTION meta_{sname}_{leaf}", ""]
+    return lines
+
+
+def emit(structs: dict[str, str]) -> str:
+    missing = [s for s in STRUCT_ORDER if s not in structs]
+    if missing:
+        raise SystemExit(f"gen_acc_mirror: header is missing {missing}")
+
+    lines: list[str] = [
+        "! GENERATED by tools/gen_acc_mirror.py from include/velocity_tendencies_no_nproma.h.",
+        "! Do not edit by hand -- rerun the generator after regenerating the C++ header.",
+        "MODULE velocity_acc_mirror",
+        "  USE iso_c_binding, ONLY: c_int, c_double, c_ptr, c_size_t, c_sizeof",
+        "  IMPLICIT NONE",
+        "  PUBLIC",
+        "",
+        "  !> Shape and Fortran lower bounds of one component, as recorded by the f2dace",
+        "  !> SA (size) / SOA (offset) extent fields.",
+        "  TYPE :: cm_meta",
+        "    INTEGER :: rank = 0",
+        "    INTEGER :: dims(4) = 1",
+        "    INTEGER :: lbs(4) = 1",
+        "  END TYPE cm_meta",
+        "",
+    ]
+
+    for sname in STRUCT_ORDER:
+        lines.append(f"  TYPE, BIND(C) :: cm_{sname}")
+        for ctype, stars, fname in FIELD_RE.findall(structs[sname]):
+            lines.append(fortran_field(ctype, stars, fname))
+        lines.append(f"  END TYPE cm_{sname}")
+        lines.append("")
+
+    lines += [
+        "CONTAINS",
+        "",
+    ]
+
+    for sname in STRUCT_ORDER:
+        lines += emit_meta_accessors(sname, structs[sname])
+
+    lines += [
+        "  !> Aborts unless every C++ sizeof matches its mirror; a shifted field would otherwise",
+        "  !> be read as silently wrong data rather than as a link or compile error.",
+        "  SUBROUTINE velocity_acc_check_sizes(n, sizes) BIND(C, name='velocity_acc_check_sizes')",
+        "    USE iso_fortran_env, ONLY: error_unit",
+        "    INTEGER(c_int), VALUE :: n",
+        "    INTEGER(c_size_t), INTENT(IN) :: sizes(n)",
+        f"    INTEGER(c_size_t) :: mine({len(STRUCT_ORDER)})",
+        "    INTEGER :: i",
+    ]
+    for sname in STRUCT_ORDER:
+        lines.append(f"    TYPE(cm_{sname}) :: probe_{sname}")
+    lines.append("")
+    for i, sname in enumerate(STRUCT_ORDER, start=1):
+        lines.append(f"    mine({i}) = c_sizeof(probe_{sname})")
+    lines += [
+        "",
+        "    IF (n /= SIZE(mine)) THEN",
+        "      WRITE (error_unit, '(A,I0,A,I0)') 'velocity_acc: struct count mismatch, C++ ', n, &",
+        "        ' vs Fortran ', SIZE(mine)",
+        "      STOP 1",
+        "    END IF",
+        "    DO i = 1, n",
+        "      IF (sizes(i) /= mine(i)) THEN",
+        "        WRITE (error_unit, '(A,I0,A,I0,A,I0)') 'velocity_acc: struct ', i, ' sizeof mismatch, C++ ', &",
+        "          sizes(i), ' vs Fortran ', mine(i)",
+        "        STOP 1",
+        "      END IF",
+        "    END DO",
+        "  END SUBROUTINE velocity_acc_check_sizes",
+        "",
+        "END MODULE velocity_acc_mirror",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def main() -> None:
+    argp = argparse.ArgumentParser()
+    argp.add_argument("--check", action="store_true", help="exit non-zero if the checked-in file is stale")
+    args = argp.parse_args()
+
+    root = Path(__file__).resolve().parent.parent
+    text = (root / HEADER).read_text()
+    generated = emit(struct_bodies(text))
+
+    target = root / OUTPUT
+    if args.check:
+        current = target.read_text() if target.exists() else ""
+        if current != generated:
+            print(f"{OUTPUT} is out of date; rerun tools/gen_acc_mirror.py", file=sys.stderr)
+            raise SystemExit(1)
+        print(f"{OUTPUT} is up to date")
+        return
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(generated)
+    print(f"wrote {OUTPUT} ({len(generated.splitlines())} lines, {len(STRUCT_ORDER)} mirrors)")
+
+
+if __name__ == "__main__":
+    main()

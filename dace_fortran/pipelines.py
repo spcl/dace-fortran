@@ -15,6 +15,7 @@ folding downstream have literals to work on.
 import copy
 from typing import Any, Dict, Optional, Set, Union
 
+from dace.transformation.dataflow.map_collapse import MapCollapse
 import numpy as np
 
 from dace import SDFG
@@ -129,6 +130,8 @@ def optimize(sdfg: SDFG,
     sdfg.apply_transformations_repeated(LoopToMap, validate=validate)
     sdfg.apply_transformations_repeated(StateFusionExtended, validate=validate)
     sdfg.apply_transformations_repeated(MapFusionVertical, validate=validate)
+    sdfg.apply_transformations_repeated(MapCollapse, validate=validate)
+
     from dace.transformation.passes.persistent_transients import MakeTransientsPersistent
     MakeTransientsPersistent().apply_pass(sdfg, {})
 

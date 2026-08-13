@@ -12,6 +12,7 @@ repo's layout:
   per-stage build folder namespaced under ``codegen/stage<N>/<name>/``.
 """
 
+import os
 from pathlib import Path
 from typing import Dict
 
@@ -29,6 +30,45 @@ VARIANT_NAMES = tuple(
 
 BASELINE_DIR = "baseline"
 CODEGEN_DIR = "codegen"
+
+# The split-4 dispatch wrapper. One init/run/finalize interface in front of all 4 variants, so the
+# runner here and ICON later never branch on (lvn_only, istep) themselves. It is a real translation
+# unit: serde's 53 namespace-scope functions carry `inline`, so the ARRAY_META_DICT_AT lookups
+# VELOCITY_CALL_ARGS expands to can appear in a second TU without a duplicate-symbol link error,
+# and the metadata map stays shared rather than being duplicated per TU.
+DISPATCH_SOURCES = ["src/velocity_split_dispatch.cpp"]
+
+# The original single-TU OpenACC Fortran velocity_tendencies plus the serde bridge, in module
+# dependency order (nvfortran compiles these serially, so the order is load-bearing). Enabled with
+# VT_WITH_ACC=1; it is what the DaCe variants are timed against.
+ACC_SOURCES = [
+    "../velocity_advection_acc.f90",
+    "src/velocity_acc_mirror.f90",
+    "src/velocity_acc_bridge.f90",
+]
+
+ACC_NOLOOPEXCH_SOURCES = [
+    "../velocity_advection_noloopexch_acc.f90",
+    "src/velocity_acc_mirror.f90",
+    "src/velocity_acc_bridge.f90",
+]
+
+
+def engine_sources() -> tuple:
+    """(extra sources, extra defines) for the dispatch wrapper and the optional ACC reference.
+
+    The two ACC translation units define the same module and subroutine, so exactly one can be
+    linked; VT_ACC_TU selects which.
+    """
+    sources = list(DISPATCH_SOURCES)
+    defines: list = []
+    if os.getenv("VT_WITH_ACC", "0").lower() in ("1", "true", "yes"):
+        tu = os.getenv("VT_ACC_TU", "loopexch")
+        if tu not in ("loopexch", "noloopexch"):
+            raise SystemExit(f"VT_ACC_TU must be loopexch or noloopexch (got {tu!r})")
+        sources += ACC_SOURCES if tu == "loopexch" else ACC_NOLOOPEXCH_SOURCES
+        defines.append("VT_WITH_ACC")
+    return sources, defines
 
 
 def sdfg_names() -> list:
@@ -61,6 +101,7 @@ def compile_action(
     output: str = None,
     extra_sources=None,
     extra_include_dirs=None,
+    extra_defines=None,
 ):
     """Codegen + compile + link the staged SDFGs into ``velocity_stage<N>``."""
     repo = Path(__file__).resolve().parent.parent.parent
@@ -83,4 +124,5 @@ def compile_action(
         output=output,
         extra_sources=extra_sources,
         extra_include_dirs=extra_include_dirs,
+        extra_defines=extra_defines,
     )

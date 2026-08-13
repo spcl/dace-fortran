@@ -1395,13 +1395,11 @@ class SDFGBuilder:
               the loop end (gfortran/ifort/flang convention: one stride
               past the last attained value), so the pass also stages a
               postfix-assignment state for that read.
-            * ``replace_length_one_arrays_with_scalars`` -- folds
-              every length-1 ``Array`` on the SDFG signature down to a
-              true ``Scalar``.  The bridge already emits scalar inputs
-              directly as ``Scalar``; this pass cleans up leftover
-              length-1 OUTPUTS and any local 1-element transients so
-              callers can bind plain ``int`` / ``float`` instead of
-              wrapping in a numpy 1-array.
+            * ``ConvertLengthOneArraysToScalars`` -- leaves no length-1
+              ``Array`` behind.  Local 1-element transients fold in
+              place; signature length-1 arrays are STAGED into transient
+              scalars under ``preserve_abi`` so the body computes on
+              plain scalars while the caller contract is untouched.
         """
         from dace.transformation.passes import ConvertLengthOneArraysToScalars
         from dace_fortran.builder.scalar_shape_symbol_cleanup import RemoveScalarFortranShapeSymbols
@@ -1449,14 +1447,11 @@ class SDFGBuilder:
         # per-block index that IS read in an inlined body), so only true
         # orphans are dropped.  ``recursive`` defaults to True on the pass.
         RemoveUnusedSymbols().apply_pass(sdfg, {})
-        # Default (``stage_nontransients_arrays_into_scalars=False``): only fold
-        # LOCAL 1-element transients (e.g. accumulators left as length-1 arrays
-        # by the bridge).  The signature convention is preserved:
-        # ``intent(out)`` / ``inout`` scalars stay as length-1 ``Array`` so
-        # callers can pass a numpy 1-element buffer to receive the value.
-        # ``intent(in)`` / ``VALUE`` scalars are already emitted as ``Scalar``
-        # directly by ``descriptors.py`` and don't need this pass.
-        ConvertLengthOneArraysToScalars(recursive=True).apply_pass(sdfg, {})
+        # ``preserve_abi``: a signature length-1 array is STAGED into a transient scalar
+        # (copy-in start state, copy-out sink state) rather than rewritten, so the body
+        # computes on plain scalars while ``intent(out)`` / ``inout`` callers keep binding
+        # a 1-element buffer.  Local transients still fold in place, same name.
+        ConvertLengthOneArraysToScalars(recursive=True, preserve_abi=True).apply_pass(sdfg, {})
 
         # A ``Scalar`` has no shape / offset, so the bridge's synthesised
         # ``<s>_d<i>`` / ``offset_<s>_d<i>`` symbols for it are dead; under

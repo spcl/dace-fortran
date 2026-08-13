@@ -17,7 +17,7 @@
 #include "velocity_tendencies_no_nproma.h"
 
 namespace serde {
-std::vector<std::string_view> split(std::string_view s, char delim) {
+inline std::vector<std::string_view> split(std::string_view s, char delim) {
   std::vector<std::string_view> parts;
   for (uint start_pos = 0, next_pos; start_pos < s.length(); start_pos = next_pos + 1) {
     next_pos = s.find(delim, start_pos);
@@ -30,7 +30,7 @@ std::vector<std::string_view> split(std::string_view s, char delim) {
   return parts;
 }
 
-std::string scroll_space(std::istream &s) {
+inline std::string scroll_space(std::istream &s) {
   std::string out;
   while (!s.eof() && (!s.peek() || isspace(s.peek()))) {
     out += s.get();
@@ -39,7 +39,7 @@ std::string scroll_space(std::istream &s) {
   return out;
 }
 
-std::string read_line(std::istream &s, const std::optional<std::string> &should_contain = {}) {
+inline std::string read_line(std::istream &s, const std::optional<std::string> &should_contain = {}) {
   if (s.eof())
     return "<eof>";
   scroll_space(s);
@@ -67,7 +67,7 @@ struct array_meta {
 
   template <typename T> T *read(std::istream &s) const;
 };
-std::map<void *, array_meta> *ARRAY_META_DICT() {
+inline std::map<void *, array_meta> *ARRAY_META_DICT() {
   static auto *M = new std::map<void *, array_meta>();
   return M;
 }
@@ -86,7 +86,7 @@ template <typename T> void read_scalar(T &x, std::istream &s) {
   s >> x;
 }
 
-void read_scalar(float &x, std::istream &s) {
+inline void read_scalar(float &x, std::istream &s) {
   if (s.eof())
     return;
   scroll_space(s);
@@ -95,7 +95,7 @@ void read_scalar(float &x, std::istream &s) {
   x = y;
 }
 
-void read_scalar(double &x, std::istream &s) {
+inline void read_scalar(double &x, std::istream &s) {
   if (s.eof())
     return;
   scroll_space(s);
@@ -104,14 +104,14 @@ void read_scalar(double &x, std::istream &s) {
   x = y;
 }
 
-void read_scalar(bool &x, std::istream &s) {
+inline void read_scalar(bool &x, std::istream &s) {
   char c;
   read_scalar(c, s);
   assert(c == '1' or c == '0');
   x = (c == '1');
 }
 
-array_meta read_array_meta(std::istream &s) {
+inline array_meta read_array_meta(std::istream &s) {
   array_meta m;
   read_line(s, {"# rank"}); // Should contain '# rank'
   read_scalar(m.rank, s);
@@ -144,22 +144,22 @@ template <typename T> std::pair<array_meta, T *> read_pointer(std::istream &s) {
 
 template <typename T> std::string serialize_array(T *arr);
 
-void deserialize(float *x, std::istream &s) { read_scalar(*x, s); }
-void deserialize(double *x, std::istream &s) { read_scalar(*x, s); }
-void deserialize(long double *x, std::istream &s) { read_scalar(*x, s); }
-void deserialize(int *x, std::istream &s) { read_scalar(*x, s); }
-void deserialize(long *x, std::istream &s) { read_scalar(*x, s); }
-void deserialize(long long *x, std::istream &s) { read_scalar(*x, s); }
-void deserialize(bool *x, std::istream &s) { read_scalar(*x, s); }
-void deserialize(float &x, std::istream &s) { read_scalar(x, s); }
-void deserialize(double &x, std::istream &s) { read_scalar(x, s); }
-void deserialize(long double &x, std::istream &s) { read_scalar(x, s); }
-void deserialize(int &x, std::istream &s) { read_scalar(x, s); }
-void deserialize(long &x, std::istream &s) { read_scalar(x, s); }
-void deserialize(long long &x, std::istream &s) { read_scalar(x, s); }
-void deserialize(bool &x, std::istream &s) { read_scalar(x, s); }
+inline void deserialize(float *x, std::istream &s) { read_scalar(*x, s); }
+inline void deserialize(double *x, std::istream &s) { read_scalar(*x, s); }
+inline void deserialize(long double *x, std::istream &s) { read_scalar(*x, s); }
+inline void deserialize(int *x, std::istream &s) { read_scalar(*x, s); }
+inline void deserialize(long *x, std::istream &s) { read_scalar(*x, s); }
+inline void deserialize(long long *x, std::istream &s) { read_scalar(*x, s); }
+inline void deserialize(bool *x, std::istream &s) { read_scalar(*x, s); }
+inline void deserialize(float &x, std::istream &s) { read_scalar(x, s); }
+inline void deserialize(double &x, std::istream &s) { read_scalar(x, s); }
+inline void deserialize(long double &x, std::istream &s) { read_scalar(x, s); }
+inline void deserialize(int &x, std::istream &s) { read_scalar(x, s); }
+inline void deserialize(long &x, std::istream &s) { read_scalar(x, s); }
+inline void deserialize(long long &x, std::istream &s) { read_scalar(x, s); }
+inline void deserialize(bool &x, std::istream &s) { read_scalar(x, s); }
 
-void deserialize(t_grid_domain_decomp_info *x, std::istream &s) {
+inline void deserialize(t_grid_domain_decomp_info *x, std::istream &s) {
   bool yep;
   array_meta m;
   read_line(s, {"# owner_mask"}); // Should contain '# owner_mask'
@@ -180,7 +180,7 @@ void deserialize(t_grid_domain_decomp_info *x, std::istream &s) {
   } // CONCLUDING IF
 }
 
-void deserialize(t_int_state *x, std::istream &s) {
+inline void deserialize(t_int_state *x, std::istream &s) {
   bool yep;
   array_meta m;
   read_line(s, {"# c_lin_e"}); // Should contain '# c_lin_e'
@@ -311,7 +311,7 @@ void deserialize(t_int_state *x, std::istream &s) {
   } // CONCLUDING IF
 }
 
-void deserialize(t_grid_cells *x, std::istream &s) {
+inline void deserialize(t_grid_cells *x, std::istream &s) {
   bool yep;
   array_meta m;
   read_line(s, {"# neighbor_idx"}); // Should contain '# neighbor_idx'
@@ -462,7 +462,7 @@ void deserialize(t_grid_cells *x, std::istream &s) {
   deserialize(x->decomp_info, s);
 }
 
-void deserialize(t_grid_edges *x, std::istream &s) {
+inline void deserialize(t_grid_edges *x, std::istream &s) {
   bool yep;
   array_meta m;
   read_line(s, {"# cell_idx"}); // Should contain '# cell_idx'
@@ -744,7 +744,7 @@ void deserialize(t_grid_edges *x, std::istream &s) {
   } // CONCLUDING IF
 }
 
-void deserialize(t_grid_vertices *x, std::istream &s) {
+inline void deserialize(t_grid_vertices *x, std::istream &s) {
   bool yep;
   array_meta m;
   read_line(s, {"# cell_idx"}); // Should contain '# cell_idx'
@@ -877,7 +877,7 @@ void deserialize(t_grid_vertices *x, std::istream &s) {
   } // CONCLUDING IF
 }
 
-void deserialize(t_patch *x, std::istream &s) {
+inline void deserialize(t_patch *x, std::istream &s) {
   bool yep;
   array_meta m;
   read_line(s, {"# nblks_c"}); // Should contain '# nblks_c'
@@ -908,7 +908,7 @@ void deserialize(t_patch *x, std::istream &s) {
   deserialize(x->verts, s);
 }
 
-void deserialize(t_nh_prog *x, std::istream &s) {
+inline void deserialize(t_nh_prog *x, std::istream &s) {
   bool yep;
   array_meta m;
   read_line(s, {"# w"}); // Should contain '# w'
@@ -944,7 +944,7 @@ void deserialize(t_nh_prog *x, std::istream &s) {
   }
 }
 
-void deserialize(t_nh_diag *x, std::istream &s) {
+inline void deserialize(t_nh_diag *x, std::istream &s) {
   bool yep;
   array_meta m;
   read_line(s, {"# vt"}); // Should contain '# vt'
@@ -1036,7 +1036,7 @@ void deserialize(t_nh_diag *x, std::istream &s) {
   deserialize(&(x->max_vcfl_dyn), s);
 }
 
-void deserialize(t_nh_metrics *x, std::istream &s) {
+inline void deserialize(t_nh_metrics *x, std::istream &s) {
   bool yep;
   array_meta m;
   read_line(s, {"# ddxn_z_full"}); // Should contain '# ddxn_z_full'
@@ -1253,17 +1253,17 @@ template <typename T> void add_line(const T &x, std::ostream &s, bool trailing_n
   if (trailing_newline)
     s << std::endl;
 }
-void add_line(long long x, std::ostream &s, bool trailing_newline = true) {
+inline void add_line(long long x, std::ostream &s, bool trailing_newline = true) {
   s << x;
   if (trailing_newline)
     s << std::endl;
 }
-void add_line(long double x, std::ostream &s, bool trailing_newline = true) {
+inline void add_line(long double x, std::ostream &s, bool trailing_newline = true) {
   s << std::setprecision(20) << x;
   if (trailing_newline)
     s << std::endl;
 }
-void add_line(bool x, std::ostream &s, bool trailing_newline = true) { add_line(int(x), s, trailing_newline); }
+inline void add_line(bool x, std::ostream &s, bool trailing_newline = true) { add_line(int(x), s, trailing_newline); }
 template <typename T> std::string serialize(const T *x) {
   if constexpr (std::is_pointer_v<T>) {
     return serialize(*x);
@@ -1273,39 +1273,39 @@ template <typename T> std::string serialize(const T *x) {
     return s.str();
   }
 }
-std::string serialize(int x) {
+inline std::string serialize(int x) {
   std::stringstream s;
   s << x;
   return s.str();
 }
-std::string serialize(long x) {
+inline std::string serialize(long x) {
   std::stringstream s;
   s << x;
   return s.str();
 }
-std::string serialize(long long x) {
+inline std::string serialize(long long x) {
   std::stringstream s;
   s << x;
   return s.str();
 }
-std::string serialize(float x) {
+inline std::string serialize(float x) {
   std::stringstream s;
   s << std::setprecision(20) << x;
   return s.str();
 }
-std::string serialize(double x) {
+inline std::string serialize(double x) {
   std::stringstream s;
   s << std::setprecision(20) << x;
   return s.str();
 }
-std::string serialize(long double x) {
+inline std::string serialize(long double x) {
   std::stringstream s;
   s << std::setprecision(20) << x;
   return s.str();
 }
-std::string serialize(bool x) { return serialize(int(x)); }
+inline std::string serialize(bool x) { return serialize(int(x)); }
 
-std::string serialize(const t_grid_domain_decomp_info *x) {
+inline std::string serialize(const t_grid_domain_decomp_info *x) {
   std::stringstream s;
   add_line("# owner_mask", s);
 
@@ -1336,7 +1336,7 @@ std::string serialize(const t_grid_domain_decomp_info *x) {
   return out;
 }
 
-std::string serialize(const t_int_state *x) {
+inline std::string serialize(const t_int_state *x) {
   std::stringstream s;
   add_line("# c_lin_e", s);
 
@@ -1505,7 +1505,7 @@ std::string serialize(const t_int_state *x) {
   return out;
 }
 
-std::string serialize(const t_grid_cells *x) {
+inline std::string serialize(const t_grid_cells *x) {
   std::stringstream s;
   add_line("# neighbor_idx", s);
 
@@ -1707,7 +1707,7 @@ std::string serialize(const t_grid_cells *x) {
   return out;
 }
 
-std::string serialize(const t_grid_edges *x) {
+inline std::string serialize(const t_grid_edges *x) {
   std::stringstream s;
   add_line("# cell_idx", s);
 
@@ -2106,7 +2106,7 @@ std::string serialize(const t_grid_edges *x) {
   return out;
 }
 
-std::string serialize(const t_grid_vertices *x) {
+inline std::string serialize(const t_grid_vertices *x) {
   std::stringstream s;
   add_line("# cell_idx", s);
 
@@ -2298,7 +2298,7 @@ std::string serialize(const t_grid_vertices *x) {
   return out;
 }
 
-std::string serialize(const t_patch *x) {
+inline std::string serialize(const t_patch *x) {
   std::stringstream s;
   add_line("# nblks_c", s);
   add_line(serialize(x->nblks_c), s);
@@ -2318,7 +2318,7 @@ std::string serialize(const t_patch *x) {
   return out;
 }
 
-std::string serialize(const t_nh_prog *x) {
+inline std::string serialize(const t_nh_prog *x) {
   std::stringstream s;
   add_line("# w", s);
 
@@ -2342,7 +2342,7 @@ std::string serialize(const t_nh_prog *x) {
   return out;
 }
 
-std::string serialize(const t_nh_diag *x) {
+inline std::string serialize(const t_nh_diag *x) {
   std::stringstream s;
   add_line("# vt", s);
 
@@ -2392,7 +2392,7 @@ std::string serialize(const t_nh_diag *x) {
   return out;
 }
 
-std::string serialize(const t_nh_metrics *x) {
+inline std::string serialize(const t_nh_metrics *x) {
   std::stringstream s;
   add_line("# ddxn_z_full", s);
 
@@ -2546,7 +2546,7 @@ template <typename T> std::string serialize_array(T *arr) {
   return s.str();
 }
 
-void deserialize_global_data(global_data_type *g, std::istream &s) {
+inline void deserialize_global_data(global_data_type *g, std::istream &s) {
   {
     read_line(s, "# nflatlev");
     auto [m, arr] = read_array<int>(s);
@@ -2578,7 +2578,7 @@ void deserialize_global_data(global_data_type *g, std::istream &s) {
   }
 }
 
-std::string serialize_global_data(const global_data_type *g) {
+inline std::string serialize_global_data(const global_data_type *g) {
   std::stringstream s;
 
   add_line(serialize_array(g->nflatlev), s);
@@ -2602,7 +2602,7 @@ std::string serialize_global_data(const global_data_type *g) {
 
 enum class SerializationType { INVALID, PLAIN, CONST_INJECTION, F90_MODULE };
 
-std::string serialize_consistent_global_data(std::vector<const global_data_type *> &gs,
+inline std::string serialize_consistent_global_data(std::vector<const global_data_type *> &gs,
                                              SerializationType serialization_type = SerializationType::INVALID) {
   assert(serialization_type != SerializationType::INVALID);
   if (gs.empty())
