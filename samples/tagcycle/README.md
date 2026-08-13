@@ -236,11 +236,14 @@ Wall time is now the **slowest lane in a wave**, not the sum: the velocity half 
 sequential to ~8–10 min, and all three forms sit comfortably inside the 30-minute debug cap. The
 split pair is still what to submit — two short jobs beat one that has to fit two waves.
 
-Velocity lane semantics: `dace-gpu-pipeline` is the **automated** dace-fortran pipeline
-(`velocity_pipeline.optimize_velocity` + `gpu_offload.apply_gpu_offload`, unchanged);
-`dace-gpu-manual` is the **human-written** VelocityTendenciesPipeline flow (`samples/gpu/
-vtp_manual.py`): the VTP stage-3 artifact run through VTP's stage-4 GPU entry point, imported from
-the checkout at `VTP_DIR` (a sibling of the repo by default; variant via `VTP_VARIANT`), with that
+Velocity lane semantics: **both lanes are offloaded by `OffloadVelocityToGPU` and nothing else**
+(`samples/gpu/velocity_offload.py`); `GPUTransformSDFG` is never reached from a velocity lane, and
+`gpu_offload.py` is cloudsc-only. They differ solely in the SDFG they hand it —
+`dace-gpu-pipeline` is the **automated** dace-fortran pipeline (`velocity_pipeline.optimize_velocity`,
+then `velocity_offload.offload`); `dace-gpu-manual` is the **human-written**
+VelocityTendenciesPipeline flow (`samples/gpu/vtp_manual.py`): the VTP stage-3 artifact run through
+VTP's stage-4 GPU entry point, imported from the checkout at `VTP_DIR` (the in-tree
+`samples/velocity_tendencies/opt_pipeline` by default; variant via `VTP_VARIANT`), with that
 checkout's `git describe` sha logged at lane start and baked
 into the phase-A cache name so every measurement records pipeline provenance. The former
 `dace-gpu-autoopt` lane (stock `auto_optimize`) is removed everywhere by owner decision.

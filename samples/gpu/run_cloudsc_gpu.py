@@ -35,7 +35,7 @@ def build_call(sdfg, klon: int, nblocks: int, inputs_kind: str, h5_path: Path, s
     from cloudsc.full._harness import _SCALAR_TYPES, accepted_names, lower_keys, sdfg_call_args
     from cloudsc.full._registries import get_inputs_physical, get_outputs
 
-    from gpu_offload import timer_arrays
+    from gpu_timers import timer_arrays
 
     rng = np.random.default_rng(seed)
     if inputs_kind == "h5":

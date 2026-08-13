@@ -18,14 +18,13 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-VTP_DEFAULT = str(REPO.parent / "VelocityTendenciesPipeline")
 DEFAULT_VARIANT = "velocity_no_nproma_if_prop_lvn_only_0_istep_1"
-_HEADERS = ("reductions_cpu.h", "reductions_kernel.cuh", "reductions_device.cuh")
 _GLOBAL_FLAG_LITERALS = {"i_am_accel_node": 1, "timers_level": 0, "timer_intp": 0, "timer_solve_nh_veltend": 0}
 
 
 def vtp_dir() -> Path:
-    return Path(os.environ.get("VTP_DIR", VTP_DEFAULT))
+    import velocity_offload
+    return velocity_offload.vtp_root()
 
 
 def vtp_variant() -> str:
@@ -61,25 +60,9 @@ def build_manual_sdfg():
         raise SystemExit(f"stage-3 artifact {stage3} is unreadable ({type(exc).__name__}: {exc}); "
                          "re-export it from VTP") from exc
     sdfg = optimization_action(sdfg)
-    _demote_persistent_scalars(sdfg)
-    _demote_host_write_gpu_maps(sdfg)
-    _absolutize_includes(sdfg)
-    _shim_gpu_aliases(sdfg)
-    _inline_reduction_kernels(sdfg)
+    import velocity_offload
+    velocity_offload.post_fix(sdfg)
     return sdfg
-
-
-def _shim_gpu_aliases(sdfg) -> None:
-    """VTP's sync tasklets say gpuStreamSynchronize; the user's DaCe branch aliases
-    gpu* to cuda* everywhere, this one nowhere -- shim it into the frame."""
-    from dace.properties import CodeBlock
-    import dace
-    shim = ("#ifndef gpuStreamSynchronize\n"
-            "#define gpuStreamSynchronize cudaStreamSynchronize\n"
-            "#endif\n")
-    existing = sdfg.global_code.get("frame")
-    prior = existing.code if existing is not None and isinstance(existing.code, str) else ""
-    sdfg.global_code["frame"] = CodeBlock(shim + prior, dace.dtypes.Language.CPP)
 
 
 def check_variant_matches_deck(meta: dict) -> None:
@@ -192,72 +175,3 @@ def bind_manual_call(sdfg, arrays: dict, meta: dict) -> dict:
     if missing:
         raise RuntimeError("cannot bind the harness deck to the VTP signature:\n  " + "\n  ".join(missing))
     return call
-
-
-def _demote_persistent_scalars(sdfg) -> None:
-    """Stage 4 promotes Default-storage Scalars to Persistent; this DaCe's CUDA
-    preprocess infers them to Register, and Register+Persistent fails validation.
-    Demote just those -- the GPU/heap buffers keep their Persistent promotion."""
-    import dace
-    from dace import data
-    demotable = (dace.StorageType.Default, dace.StorageType.Register)
-    count = 0
-    for g in sdfg.all_sdfgs_recursive():
-        for desc in g.arrays.values():
-            if (desc.transient and isinstance(desc, data.Scalar) and desc.lifetime == dace.AllocationLifetime.Persistent
-                    and desc.storage in demotable):
-                desc.lifetime = dace.AllocationLifetime.SDFG
-                count += 1
-    if count:
-        print(f"vtp_manual: demoted {count} Default/Register scalar(s) from Persistent to SDFG lifetime", flush=True)
-
-
-def _demote_host_write_gpu_maps(sdfg) -> None:
-    """VTP's reduction pass leaves seed tasklets (constant writes to its host-side
-    async scratch) inside 1-iteration GPU maps; on the user's coherent-memory DaCe
-    branch that is fine, on this one it is an IllegalCopy. A GPU map that reads
-    nothing and writes only host-storage data runs on the host instead."""
-    import dace
-    from dace.sdfg import nodes as nd
-    count = 0
-    for g in sdfg.all_sdfgs_recursive():
-        for state in g.states():
-            for node in state.nodes():
-                if not (isinstance(node, nd.MapEntry) and node.map.schedule == dace.ScheduleType.GPU_Device):
-                    continue
-                reads = [e for e in state.in_edges(node) if e.data is not None and e.data.data]
-                writes = [
-                    e.data.data for e in state.out_edges(state.exit_node(node)) if e.data is not None and e.data.data
-                ]
-                if reads or not writes:
-                    continue
-                if all(g.arrays[w].storage != dace.StorageType.GPU_Global for w in writes):
-                    node.map.schedule = dace.ScheduleType.Sequential
-                    count += 1
-    if count:
-        print(f"vtp_manual: demoted {count} host-writing GPU map(s) to Sequential", flush=True)
-
-
-def _absolutize_includes(sdfg) -> None:
-    """VTP's global code quotes headers relative to its include/; the harness build
-    runs from a dacecache dir, so point them at the checkout."""
-    from dace.properties import CodeBlock
-    inc = vtp_dir() / "include"
-    for key, block in list(sdfg.global_code.items()):
-        code = block.code
-        if not isinstance(code, str):
-            continue
-        for header in _HEADERS:
-            code = code.replace(f'"{header}"', f'"{inc / header}"')
-        sdfg.global_code[key] = CodeBlock(code, block.language)
-
-
-def _inline_reduction_kernels(sdfg) -> None:
-    """VTP compiles src/reductions{_kernel.cu,.cpp} as extra sources; sdfg.compile()
-    has no hook for that, so their text goes into the global code instead."""
-    inc = vtp_dir() / "include"
-    for name, location in (("reductions_kernel.cu", "cuda"), ("reductions.cpp", "frame")):
-        src = (vtp_dir() / "src" / name).read_text()
-        for header in _HEADERS:
-            src = src.replace(f'"{header}"', f'"{inc / header}"')
-        sdfg.append_global_code("\n" + src, location)

@@ -5,17 +5,21 @@
 
     run_velocity_gpu.py --lane dace-gpu-pipeline|dace-gpu-manual --reps N --csv PATH [--threads-col 0]
 
-Two DaCe GPU lanes:
+Two DaCe GPU lanes, differing only in the SDFG they hand to the offload:
 
     dace-gpu-pipeline   the automated dace-fortran pipeline off the frontend SDFG:
-                        velocity_pipeline.optimize_velocity + gpu_offload.apply_gpu_offload
+                        velocity_pipeline.optimize_velocity, then velocity_offload.offload
     dace-gpu-manual     the human-written VelocityTendenciesPipeline flow (vtp_manual.py):
                         VTP's stage-3 artifact through its stage-4 GPU entry point, imported
                         from the checkout at VTP_DIR, whose git sha is logged at lane start
 
-Reported ``ms`` comes from timer tasklets inside the SDFG; ``host_ms`` is the python wall time.
-The manual lane gets the same timer tasklets (and nothing else) so both lanes report the same
-quantity.
+``OffloadVelocityToGPU`` is the only offload either lane runs -- see velocity_offload. Both then
+get the same timer tasklets, so ``ms`` means the same thing in both rows; ``host_ms`` is the
+python wall time.
+
+The Fortran-facing signature is frozen AFTER the offload (``refreeze``), which is what records
+each argument's device storage for the binding generator; freezing before it would regenerate
+bindings against pre-offload storage.
 """
 from __future__ import annotations
 
@@ -46,38 +50,42 @@ def frontend_sdfg(build_dir: Path):
     return build_sdfg(tu.read_text(), build_dir, name=f"velocity_{VARIANT}", entry=ENTRY).build()
 
 
-def optimize_lane(sdfg, lane: str, verbose: bool, demote: bool = False):
-    from gpu_common import report_offload
+def _signature(sdfg):
+    """The caller-visible argument list, as the binding generator sees it."""
+    return tuple((name, type(desc).__name__, str(desc.dtype), tuple(str(d) for d in desc.shape))
+                 for name, desc in sorted(sdfg.arrays.items()) if not desc.transient)
+
+
+def optimize_lane(sdfg, lane: str, verbose: bool):
+    """Frontend SDFG -> parallel maps -> OffloadVelocityToGPU -> re-frozen Fortran signature."""
     from dace_fortran.bindings.frozen_signature import refreeze
 
-    from gpu_offload import apply_gpu_offload
+    import velocity_offload
     from velocity_pipeline import num_maps, optimize_velocity
     optimize_velocity(sdfg)
     if num_maps(sdfg) == 0:
         raise AssertionError("pipeline produced no maps -- nothing was parallelized")
+
+    before = _signature(sdfg)
+    velocity_offload.offload(sdfg)
+    if _signature(sdfg) != before:
+        raise AssertionError("OffloadVelocityToGPU changed the caller-visible signature; the Fortran "
+                             "bindings would no longer match the deck")
+    # After the offload, so each arg's device storage reaches the binding generator.
     refreeze(sdfg)
-    report_offload(apply_gpu_offload(sdfg, "velocity", demote_block_maps=demote or None), verbose)
+    if verbose:
+        print("\n".join(velocity_offload.schedule_report(sdfg)), flush=True)
     return sdfg
 
 
 def add_timers(sdfg):
-    """The manual lane's SDFG comes from VTP, so it needs the begin/end sync + timer states bolted on."""
-    from gpu_offload import (SYNC_TICK, TIMER_BEGIN, TIMER_END, _GLOBAL_CODE, _SYNC_CODE, _TIMER_CODE, _add_host_array,
-                             _append, _prepend, _silence_codegen_syncs)
-    sdfg.append_global_code(_GLOBAL_CODE)
-    _add_host_array(sdfg, SYNC_TICK, transient=True)
-    _add_host_array(sdfg, TIMER_BEGIN, transient=False)
-    _add_host_array(sdfg, TIMER_END, transient=False)
-    _prepend(sdfg, "__gpu_timer_begin", _TIMER_CODE, TIMER_BEGIN)
-    _prepend(sdfg, "__gpu_sync_begin", _SYNC_CODE, SYNC_TICK)
-    _append(sdfg, "__gpu_sync_end", _SYNC_CODE, SYNC_TICK)
-    _append(sdfg, "__gpu_timer_end", _TIMER_CODE, TIMER_END)
-    _silence_codegen_syncs(sdfg, set())
-    sdfg.validate()
+    """Both lanes get the same begin/end sync + timer states bolted on."""
+    from gpu_timers import add_timers as _bolt_on
+    _bolt_on(sdfg)
     return sdfg
 
 
-def load_gpu_sdfg(lane: str, verbose: bool, demote: bool = False):
+def load_gpu_sdfg(lane: str, verbose: bool):
     from sdfg_cache import load_sdfg_cached, save_sdfg_atomic
 
     from gpu_common import cache_root, git_describe
@@ -87,16 +95,17 @@ def load_gpu_sdfg(lane: str, verbose: bool, demote: bool = False):
         tag = f"velocity_{vtp_manual.vtp_variant()}_{vtp_manual.vtp_describe().replace('/', '-')}"
     else:
         tag = f"velocity_{VARIANT}_{git_describe()}"
-    gpu_cache = root / f"{tag}_{lane}{'_demoted' if demote else ''}.sdfgz"
+    gpu_cache = root / f"{tag}_{lane}.sdfgz"
     cached = load_sdfg_cached(gpu_cache, label="phase A: GPU")
     if cached is not None:
         return cached
     if lane == "dace-gpu-manual":
         sdfg = vtp_manual.build_manual_sdfg()
-        add_timers(sdfg)
     else:
         sdfg = frontend_sdfg(root / f"{tag}_{lane}")
-        optimize_lane(sdfg, lane, verbose, demote)
+        optimize_lane(sdfg, lane, verbose)
+    # Instrumentation last: the timer arrays are harness state, not part of the Fortran ABI.
+    add_timers(sdfg)
     save_sdfg_atomic(sdfg, gpu_cache)
     return sdfg
 
@@ -104,7 +113,7 @@ def load_gpu_sdfg(lane: str, verbose: bool, demote: bool = False):
 def build_call(sdfg, npz: Path, lane: str):
     import run_velocity_perf as cpu
 
-    from gpu_offload import timer_arrays
+    from gpu_timers import timer_arrays
     arrays, meta = cpu.load_npz(npz)
     if lane == "dace-gpu-manual":
         import vtp_manual
@@ -125,16 +134,12 @@ def main() -> int:
     ap.add_argument("--npz", type=Path, default=None, help="smoke-test override; the lane deck is the flat one")
     ap.add_argument("--build-only", action="store_true")
     ap.add_argument("--show-schedules", action="store_true", help="print every map and its schedule")
-    ap.add_argument("--demote-block-maps",
-                    action="store_true",
-                    help="schedule the maps INSIDE the block map instead of the block map itself "
-                    "(pipeline lane only; see gpu_offload.apply_gpu_offload)")
     args = ap.parse_args()
 
     from gpu_common import append_csv, configure_gpu, sync_report, timed_loop
     print(f"nvcc: {configure_gpu()}", flush=True)
 
-    sdfg = load_gpu_sdfg(args.lane, args.show_schedules, args.demote_block_maps)
+    sdfg = load_gpu_sdfg(args.lane, args.show_schedules)
     sync_report(sdfg)
     compiled = sdfg.compile()
     if args.build_only:
