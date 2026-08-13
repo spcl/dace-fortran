@@ -12,7 +12,8 @@ no ``scalars`` (velocity specializes nothing), so the sequence is
 
 Every pass is a stock DaCe pass, so nothing here imports dace_fortran. GPU deltas versus the
 source: none in the sequence itself -- the device schedule and the transfers are applied
-afterwards by ``gpu_offload.apply_gpu_offload``, which is the only step the CPU lane lacks.
+afterwards by ``OffloadVelocityToGPU`` (see ``velocity_offload``), which is the only step the
+CPU lane lacks.
 """
 from __future__ import annotations
 

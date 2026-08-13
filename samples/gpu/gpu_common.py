@@ -85,7 +85,7 @@ def timed_loop(compiled, call: Dict, pristine: Dict, reps: int, warmup: int, row
     """Warmup + reps calls; ``ms`` comes from the SDFG's own timer tasklets, ``host_ms`` from here."""
     import numpy as np
 
-    from gpu_offload import elapsed_ms
+    from gpu_timers import elapsed_ms
     rows = []
     for rep in range(-warmup, reps):
         for key, value in pristine.items():
@@ -125,6 +125,6 @@ def report_offload(info: Dict, verbose: bool) -> None:
 
 
 def sync_report(sdfg) -> None:
-    from gpu_offload import count_syncs
+    from gpu_timers import count_syncs
     counts = count_syncs(sdfg)
     print(f"syncs in generated code: {counts or 'none'}", flush=True)
