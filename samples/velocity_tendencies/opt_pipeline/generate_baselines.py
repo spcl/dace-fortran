@@ -47,7 +47,11 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
 sys.path[:0] = [str(REPO / "tests"), str(REPO / "samples")]
 
-DEFAULT_TU = REPO / "tests" / "icon" / "atmosphere" / "velocity_advection_inlined_no_loop_exchange_single_tu.f90"
+# Loop-exchange ON, matching the ICON integration lib (lowered with -D__LOOP_EXCHANGE) and the
+# Fortran reference (VT_ACC_TU=loopexch).  The two TUs are not a loop swap: __LOOP_EXCHANGE also
+# transposes the local work arrays -- zeta(nlev, nproma, nblks_v) here vs zeta(nproma, nlev,
+# nblks_v) in the no-exchange TU -- so mixing them compares different memory layouts.
+DEFAULT_TU = REPO / "tests" / "icon" / "atmosphere" / "velocity_advection_inlined_single_tu.f90"
 DEFAULT_ENTRY = "mo_velocity_advection::velocity_tendencies"
 CONFIG_KEYS = ("lvn_only", "istep", "lextra_diffu", "ldeepatmo", "lvert_nest")
 
@@ -322,6 +326,8 @@ def main():
     if not args.no_specialize:
         from dace.transformation.passes.lift_trivial_if import LiftTrivialIf
 
+        from utils.passes.specialize_constants import specialize_constants
+
         live = {k: v for k, v in FIXED_SYMBOLS.items() if k in sdfg.symbols or k in sdfg.free_symbols}
         sdfg.specialize(live)
         print(f"  specialized {len(live)} grid symbol(s): {live}", flush=True)
@@ -330,6 +336,10 @@ def main():
             offs = offset_constants(sdfg, constant_lbounds(args.lbounds_csv))
             sdfg.specialize(offs)
             print(f"  specialized {len(offs)} constant offset(s) from {args.lbounds_csv.name}", flush=True)
+
+        # Before the simplify below, not after: the specialize calls above only record constants.
+        consts = specialize_constants(sdfg)
+        print(f"  folded {len(consts)} constant(s) to literals", flush=True)
 
         sdfg.simplify()
         LiftTrivialIf().apply_pass(sdfg, {})

@@ -66,10 +66,9 @@ def engine_sources() -> tuple:
     sources = list(DISPATCH_SOURCES)
     defines: list = []
     if os.getenv("VT_WITH_ACC", "0").lower() in ("1", "true", "yes"):
-        # The SDFG under test is lowered from velocity_advection_inlined_no_loop_exchange_single_tu.f90
-        # (generate_baselines.py DEFAULT_TU), so the Fortran it is timed against must be the
-        # no-loop-exchange TU or the two sides do not compute the same loop order.
-        tu = os.getenv("VT_ACC_TU", "noloopexch")
+        # DaCe is always loop-exchange (generate_baselines.py DEFAULT_TU, and the ICON lib's
+        # harvested -D set), so the Fortran reference must be too -- on CPU and GPU alike.
+        tu = os.getenv("VT_ACC_TU", "loopexch")
         if tu not in ("loopexch", "noloopexch"):
             raise SystemExit(f"VT_ACC_TU must be loopexch or noloopexch (got {tu!r})")
         sources += ACC_SOURCES if tu == "loopexch" else ACC_NOLOOPEXCH_SOURCES
