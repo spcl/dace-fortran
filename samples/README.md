@@ -103,6 +103,10 @@ the `!$omp` and `!$acc` lines in those sources are inert comments -- no source i
 
 vexx has no Fortran baseline lanes yet.
 
+`addusxx_g` and `newdxx_g` (QE `us_exx` kernels) run outside `submit_all.sh`, each on its own
+`original-openmp`/`flang-openmp` lane pair -- see `samples/addusxx_g/README.md` and
+`samples/newdxx_g/README.md`.
+
 Detail sits next to the code: `samples/cloudsc/dwarf_inputs.py` (deck expansion, constants
 cross-check), `samples/vexx/README.md`, `samples/velocity_tendencies/README.md`.
 

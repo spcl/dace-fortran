@@ -41,6 +41,7 @@ LANE_COLOR = {
     'openacc-cpu': _SET1[6],
     'flang-serial': _SET1[5],
     'gfortran-serial': _SET1[7],
+    'flang-openmp': _SET1[8],
 }
 
 LANE_LABEL = {
@@ -55,6 +56,7 @@ LANE_LABEL = {
     'openacc-cpu': 'Original Code ▶ NVHPC w. OpenACC (multicore)',
     'flang-serial': 'Original Code ▶ Flang (serial)',
     'gfortran-serial': 'Original Code ▶ GFortran (serial)',
+    'flang-openmp': 'Original Code ▶ Flang w. OpenMP',
 }
 
 # Artifact hue order: DaCe first, the Fortran baseline second, the C rewrite third.
