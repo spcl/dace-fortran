@@ -7,6 +7,7 @@ artifact's transformation/optimization pipeline is used.
 """
 import io
 import os
+import re
 from pathlib import Path
 
 import polars as pl
@@ -23,12 +24,26 @@ WORK_ROOT = Path(os.environ.get("WORK_ROOT", REPO / "samples" / "_work"))
 OUT = os.path.dirname(os.path.abspath(__file__))
 
 # ---------------------------------------------------------------- our data ---
-CLOUDSC_SOURCES = [
-    str(WORK_ROOT / 'meas' / 'runs' / 'cloudsc-klon_30c14cd_4391146.csv'),
-    str(WORK_ROOT / 'meas' / 'runs' / 'cloudsc-nblks_30c14cd_4391146.csv'),
-    str(WORK_ROOT / 'meas' / 'runs' / 'cloudsc_baselines_4388632.csv'),
-    str(WORK_ROOT / 'dev' / 'runs' / 'cloudsc_baselines_4387048.csv'),
-]
+# Inputs, in priority order: an explicit CLOUDSC_CSVS (colon- or comma-separated), else every
+# cloudsc CSV under $WORK_ROOT. Hardcoding job ids here is what made this script rot -- a run with
+# a new id silently plotted the old numbers instead of failing.
+def _discover_sources() -> list:
+    override = os.environ.get('CLOUDSC_CSVS', '')
+    if override:
+        return [q for q in re.split(r'[:,]', override) if q]
+    found = sorted(
+        {str(q) for pat in ('cloudsc*_*.csv', 'cloudsc-*_*.csv')
+         for q in WORK_ROOT.rglob(pat) if q.is_file()})
+    if not found:
+        raise SystemExit(
+            f'no cloudsc CSVs under {WORK_ROOT}; set CLOUDSC_CSVS=<file>[,<file>...]')
+    return found
+
+
+CLOUDSC_SOURCES = _discover_sources()
+print('cloudsc sources:')
+for _s in CLOUDSC_SOURCES:
+    print('  ', _s)
 
 # klon = points per block == artifact's nproma; klon*nblocks == artifact's problem_size.
 frames = [
@@ -272,12 +287,20 @@ def plot_performance(pl_df: pl.DataFrame,
 
 # --------------------------------------------------- figure (our lane set) ---
 BASELINE = 'original-openmp'
-LANES = ['dace-gcc', 'dace-llvm', 'original-openmp', 'gfortran-autopar']
+# Six lanes, in three toolchain-paired groups, so each pair isolates the compiler on identical
+# sources: our DaCe C++ codegen, the original Fortran, and the hand-written C rewrite.
+LANES = [
+    'dace-gcc', 'dace-llvm',
+    'original-openmp', 'flang-openmp',
+    'c-openmp', 'c-openmp-clang',
+]
 LEGEND = {
     'dace-gcc': 'Original Code ▶ DaCe ▶ G++ w. OpenMP',
     'dace-llvm': 'Original Code ▶ DaCe ▶ Clang++ w. OpenMP',
     'original-openmp': 'Original Code ▶ GFortran w. OpenMP',
-    'gfortran-autopar': 'Original Code ▶ GFortran w. Autopar',
+    'flang-openmp': 'Original Code ▶ Flang w. OpenMP',
+    'c-openmp': 'C Rewrite ▶ G++ w. OpenMP',
+    'c-openmp-clang': 'C Rewrite ▶ Clang++ w. OpenMP',
 }
 
 num_rows, num_cols = 3, 1
