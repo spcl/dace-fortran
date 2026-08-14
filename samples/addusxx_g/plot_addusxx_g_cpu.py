@@ -1,7 +1,11 @@
 """QE us_exx CPU figure for this sample, in the shared f2dace-artifact style.
 
-Reads the 10-column measurement CSVs this sample's run_*_cpu.sbatch writes and emits one
-thread-sweep panel per material deck: bars (mean + 95% t CI) and violins (raw reps).
+Reads the measurement CSVs this sample's run_*_cpu.sbatch writes and emits one thread-sweep
+panel per material deck: bars (mean + 95% t CI) and violins (raw reps).
+
+Only one deck replication factor is ever plotted -- the largest present -- because a 1x deck
+and a 72x deck are different problems and averaging them together is meaningless.  Lanes are
+whatever the CSVs contain, coloured through f2dace_style's shared maps.
 """
 from __future__ import annotations
 
@@ -22,7 +26,9 @@ REPO = HERE.parents[1]
 WORK_ROOT = Path(os.environ.get('WORK_ROOT', REPO / 'samples' / '_work'))
 OUT = HERE / 'figures'
 
-LANES = ['original-openmp', 'flang-openmp']
+# Preferred hue order only: the lanes actually drawn come from the CSVs.  Pairing each DaCe
+# lane with the Fortran baseline of its own compiler family keeps the families adjacent.
+LANE_ORDER = ['dace-gcc', 'original-openmp', 'dace-llvm', 'flang-openmp']
 
 
 def sources() -> list[str]:
@@ -49,21 +55,33 @@ def main() -> int:
     if df.height == 0:
         raise SystemExit(f'no rows for kernel {KERNEL} in {paths}')
 
+    # run_lane_worker.sh encodes the replication factor in `inputs` (set<n>_rep<R>, bare set<n>
+    # at R=1); that is the column load_runs keeps, so no reliance on the trailing deck_rep one.
+    df = df.with_columns(pl.col('inputs').str.extract(r'_rep(\d+)$', 1).cast(pl.Int64).fill_null(1).alias('deck_rep'))
+    deck_rep = df['deck_rep'].max()
+    df = df.filter(pl.col('deck_rep') == deck_rep)
+
+    present = set(df['lane'].unique().to_list())
+    unknown = sorted(l for l in present if l not in fs.LANE_COLOR or l not in fs.LANE_LABEL)
+    if unknown:
+        raise SystemExit(f'{KERNEL}: lane(s) {unknown} have no LANE_COLOR/LANE_LABEL entry in '
+                         f'{Path(fs.__file__).resolve()}; add them there rather than here')
+    lanes = [l for l in LANE_ORDER if l in present] + sorted(present - set(LANE_ORDER))
+
     decks = sorted(df['mode'].unique().to_list())
-    lanes = [l for l in LANES if l in set(df['lane'].unique().to_list())]
     OUT.mkdir(parents=True, exist_ok=True)
 
     for panel, name in ((fs.bar_panel, f'{KERNEL}_cpu'), (fs.violin_panel, f'{KERNEL}_cpu_violin')):
         fig, axes = plt.subplots(len(decks), 1, figsize=(10.5, 2.8 * len(decks)), squeeze=False)
         for ax, deck in zip(axes.flatten(), decks):
-            sub = df.filter((pl.col('mode') == deck) & pl.col('lane').is_in(lanes))
+            sub = df.filter(pl.col('mode') == deck)
             nnr = sub['size_a'][0] if sub.height else 0
             ngmt = sub['size_b'][0] if sub.height else 0
             panel(ax,
                   sub,
                   lanes,
                   'threads',
-                  title=f'{deck} (nnr={nnr:,}, ngm_t={ngmt:,})',
+                  title=f'{deck} (nnr={nnr:,}, ngm_t={ngmt:,}, deck_rep={deck_rep}x)',
                   xlabel_text='OpenMP threads',
                   legend=(deck == decks[0]),
                   ylabel_text='Run Time')

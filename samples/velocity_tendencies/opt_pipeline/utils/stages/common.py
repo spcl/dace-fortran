@@ -38,6 +38,9 @@ CODEGEN_DIR = "codegen"
 # and the metadata map stays shared rather than being duplicated per TU.
 DISPATCH_SOURCES = ["src/velocity_split_dispatch.cpp"]
 
+# Zeroed body-timer globals for the pre-GPU stages; stage 4's _insert_body_timer defines them for real.
+BODY_TIMER_STUB = "src/velocity_body_timer_stub.cpp"
+
 # The original single-TU OpenACC Fortran velocity_tendencies plus the serde bridge, in module
 # dependency order (nvfortran compiles these serially, so the order is load-bearing). Enabled with
 # VT_WITH_ACC=1; it is what the DaCe variants are timed against.
@@ -63,7 +66,10 @@ def engine_sources() -> tuple:
     sources = list(DISPATCH_SOURCES)
     defines: list = []
     if os.getenv("VT_WITH_ACC", "0").lower() in ("1", "true", "yes"):
-        tu = os.getenv("VT_ACC_TU", "loopexch")
+        # The SDFG under test is lowered from velocity_advection_inlined_no_loop_exchange_single_tu.f90
+        # (generate_baselines.py DEFAULT_TU), so the Fortran it is timed against must be the
+        # no-loop-exchange TU or the two sides do not compute the same loop order.
+        tu = os.getenv("VT_ACC_TU", "noloopexch")
         if tu not in ("loopexch", "noloopexch"):
             raise SystemExit(f"VT_ACC_TU must be loopexch or noloopexch (got {tu!r})")
         sources += ACC_SOURCES if tu == "loopexch" else ACC_NOLOOPEXCH_SOURCES
