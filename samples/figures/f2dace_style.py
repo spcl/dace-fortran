@@ -29,14 +29,21 @@ _SET1 = sns.color_palette("Set1", 9)
 
 # Red = DaCe, blue = the Fortran OpenMP/OpenACC baseline, green = the
 # third-party reference (C rewrite / CUDA reference) -- as in the artifact.
+#
+# The three GPU lanes used to REUSE their CPU counterpart's Set1 hue, which was fine only while
+# CPU and GPU lived in separate figures; fig_velocity_bar puts 3 CPU panels and a GPU panel under
+# one legend, where it showed red twice and blue twice.  They now have their own hues, picked out
+# of the cyan->violet arc -- the only region Set1's nine leave free -- so all 12 lanes are
+# pairwise distinct.  The CPU nine are unchanged on purpose: every published figure keeps its
+# colours.  Verified with the dataviz palette validator (see README of that skill).
 LANE_COLOR = {
     'dace-gcc': _SET1[0],
     'dace-llvm': _SET1[3],
-    'dace-gpu': _SET1[0],
+    'dace-gpu': '#2600ff',
     'original-openmp': _SET1[1],
-    'openacc-gpu': _SET1[1],
-    'c-openmp': _SET1[2],       # the artifact's green C-rewrite slot
-    'cuda-ref': _SET1[2],
+    'openacc-gpu': '#00c3ff',
+    'c-openmp': _SET1[2],  # the artifact's green C-rewrite slot
+    'cuda-ref': '#9c7cff',
     'gfortran-autopar': _SET1[4],
     'openacc-cpu': _SET1[6],
     'flang-serial': _SET1[5],
@@ -60,14 +67,19 @@ LANE_LABEL = {
 }
 
 # Artifact hue order: DaCe first, the Fortran baseline second, the C rewrite third.
-CPU_LANES = ['dace-gcc', 'dace-llvm', 'original-openmp', 'c-openmp',
-             'gfortran-autopar', 'openacc-cpu', 'flang-serial', 'gfortran-serial']
+CPU_LANES = [
+    'dace-gcc', 'dace-llvm', 'original-openmp', 'c-openmp', 'gfortran-autopar', 'openacc-cpu', 'flang-serial',
+    'gfortran-serial'
+]
 GPU_LANES = ['dace-gpu', 'openacc-gpu', 'cuda-ref']
 
 # ICON grid resolutions, from the artifact's RELABEL_XTICK.
 GRID_LABEL = {
-    'R02B03': '320 km', 'R02B04': '160 km', 'R02B05': '80 km',
-    'R02B06': '40 km', 'R02B07': '20 km',
+    'R02B03': '320 km',
+    'R02B04': '160 km',
+    'R02B05': '80 km',
+    'R02B06': '40 km',
+    'R02B07': '20 km',
 }
 
 
@@ -169,19 +181,27 @@ def load_runs(paths, kernel, alloc=None, missing=None):
             pl.col('lane').cast(pl.Utf8),
             pl.col('mode').cast(pl.Utf8),
             pl.col('alloc').cast(pl.Utf8),
-        ]).select(['lane', 'mode', 'size_a', 'size_b', 'threads', 'rep', 'ms',
-                   'inputs', 'alloc'])
+        ]).select(['lane', 'mode', 'size_a', 'size_b', 'threads', 'rep', 'ms', 'inputs', 'alloc'])
         frames.append(df)
         print(f'  + {os.path.basename(f)}: {df.height} rows')
 
     if not frames:
         if missing is not None:
             missing.note(f'{kernel}: no CSV rows found under {paths}')
-        return pl.DataFrame(schema={
-            'lane': pl.Utf8, 'mode': pl.Utf8, 'size_a': pl.Int64, 'size_b': pl.Int64,
-            'threads': pl.Int64, 'rep': pl.Int64, 'ms': pl.Float64,
-            'inputs': pl.Utf8, 'alloc': pl.Utf8, 'problem_size': pl.Int64,
-            'grid': pl.Utf8})
+        return pl.DataFrame(
+            schema={
+                'lane': pl.Utf8,
+                'mode': pl.Utf8,
+                'size_a': pl.Int64,
+                'size_b': pl.Int64,
+                'threads': pl.Int64,
+                'rep': pl.Int64,
+                'ms': pl.Float64,
+                'inputs': pl.Utf8,
+                'alloc': pl.Utf8,
+                'problem_size': pl.Int64,
+                'grid': pl.Utf8
+            })
 
     df = pl.concat(frames).with_columns([
         (pl.col('size_a') * pl.col('size_b')).alias('problem_size'),
@@ -218,8 +238,7 @@ def ci_table(df, x_col):
     ).sort([x_col, 'lane'])
     return g.with_columns([
         pl.struct(['std_millis', 'n']).map_elements(
-            lambda s: (t.ppf(0.975, df=s['n'] - 1) * s['std_millis'] / (s['n'] ** 0.5))
-            if s['n'] > 1 else 0.0,
+            lambda s: (t.ppf(0.975, df=s['n'] - 1) * s['std_millis'] / (s['n']**0.5)) if s['n'] > 1 else 0.0,
             return_dtype=pl.Float64,
         ).alias('margin_of_error')
     ])
@@ -229,14 +248,13 @@ def ylimits(values, headroom=2.5, floor_frac=0.9):
     v = [x for x in values if x and x > 0]
     if not v:
         return 1.0, 10.0
-    lo = 10 ** math.floor(math.log10(min(v) * floor_frac))
-    hi = 10 ** math.ceil(math.log10(max(v) * headroom))
+    lo = 10**math.floor(math.log10(min(v) * floor_frac))
+    hi = 10**math.ceil(math.log10(max(v) * headroom))
     return lo, hi
 
 
 # ---------------------------------------------------------------- panels ---
-def _finish_axis(ax, lanes, ylo, yhi, title, xlabel_text, xtick_map=None,
-                 legend=True, ylabel_text=''):
+def _finish_axis(ax, lanes, ylo, yhi, title, xlabel_text, xtick_map=None, legend=True, ylabel_text=''):
     ax.set_yscale('log')
     ax.set_ylabel(ylabel_text)
     ax.set_ylim(top=yhi, bottom=ylo)
@@ -251,9 +269,13 @@ def _finish_axis(ax, lanes, ylo, yhi, title, xlabel_text, xtick_map=None,
     if legend and handles:
         ncol = min(len(labels), 3)
         nlines = math.ceil(len(labels) / ncol)
-        ax.legend(handles=handles, labels=legend_for(labels), loc='upper center',
-                  frameon=False, ncol=ncol,
-                  bbox_to_anchor=(0.5, 1.19 + 0.07 * nlines), fontsize=9)
+        ax.legend(handles=handles,
+                  labels=legend_for(labels),
+                  loc='upper center',
+                  frameon=False,
+                  ncol=ncol,
+                  bbox_to_anchor=(0.5, 1.19 + 0.07 * nlines),
+                  fontsize=9)
     elif ax.get_legend():
         ax.get_legend().set_visible(False)
     ax.set_xlabel(xlabel_text)
@@ -268,17 +290,33 @@ def _finish_axis(ax, lanes, ylo, yhi, title, xlabel_text, xtick_map=None,
         ax.set_xlim(-0.5, 0.5)
 
 
-def bar_panel(ax, df, lanes, x_col, title, xlabel_text, xtick_map=None,
-              legend=True, ylabel_text='', ylim=None, annotate=True):
+def bar_panel(ax,
+              df,
+              lanes,
+              x_col,
+              title,
+              xlabel_text,
+              xtick_map=None,
+              legend=True,
+              ylabel_text='',
+              ylim=None,
+              annotate=True):
     """Artifact bar panel: log y, Set1 hues, own t-CI error bars, value labels."""
     tab = ci_table(df, x_col)
     pdf = tab.to_pandas()
     ylo, yhi = ylim if ylim else ylimits(pdf['mean_millis'].tolist())
     single = pdf[x_col].nunique() == 1
 
-    sns.barplot(data=pdf, x=x_col, y='mean_millis', hue='lane',
-                palette=palette_for(lanes), errorbar=None, capsize=0.1,
-                hue_order=lanes, width=0.4 if single else 0.8, ax=ax)
+    sns.barplot(data=pdf,
+                x=x_col,
+                y='mean_millis',
+                hue='lane',
+                palette=palette_for(lanes),
+                errorbar=None,
+                capsize=0.1,
+                hue_order=lanes,
+                width=0.4 if single else 0.8,
+                ax=ax)
 
     n_x = max(pdf[x_col].nunique(), 1)
     for i, patch in enumerate(ax.patches):
@@ -287,25 +325,41 @@ def bar_panel(ax, df, lanes, x_col, title, xlabel_text, xtick_map=None,
         if not height or np.isnan(height):
             continue
         row = pdf.iloc[(pdf['mean_millis'] - height).abs().argsort().iloc[0]]
-        ax.errorbar(x=x, y=height, yerr=[[row['margin_of_error']], [row['margin_of_error']]],
-                    fmt='none', ecolor='black', capsize=4, linewidth=1)
+        ax.errorbar(x=x,
+                    y=height,
+                    yerr=[[row['margin_of_error']], [row['margin_of_error']]],
+                    fmt='none',
+                    ecolor='black',
+                    capsize=4,
+                    linewidth=1)
         if annotate:
             overflow = height > yhi * 0.8
             stagger = 5 + 11 * ((i // n_x) % 2)  # neighbouring hues alternate height
             ax.annotate(_annotation_text(height),
-                        xy=(x, yhi / 10 if overflow else height), xytext=(0, stagger),
-                        textcoords="offset points", ha="center", va="bottom",
-                        fontsize=7, color="white" if overflow else "black",
-                        bbox=dict(facecolor="none", edgecolor="none",
-                                  boxstyle="round,pad=0.5"))
+                        xy=(x, yhi / 10 if overflow else height),
+                        xytext=(0, stagger),
+                        textcoords="offset points",
+                        ha="center",
+                        va="bottom",
+                        fontsize=7,
+                        color="white" if overflow else "black",
+                        bbox=dict(facecolor="none", edgecolor="none", boxstyle="round,pad=0.5"))
 
-    _finish_axis(ax, lanes, ylo, yhi, title, xlabel_text, xtick_map, legend,
-                 ylabel_text)
+    _finish_axis(ax, lanes, ylo, yhi, title, xlabel_text, xtick_map, legend, ylabel_text)
     return ylo, yhi
 
 
-def violin_panel(ax, df, lanes, x_col, title, xlabel_text, xtick_map=None,
-                 legend=True, ylabel_text='', ylim=None, annotate=True):
+def violin_panel(ax,
+                 df,
+                 lanes,
+                 x_col,
+                 title,
+                 xlabel_text,
+                 xtick_map=None,
+                 legend=True,
+                 ylabel_text='',
+                 ylim=None,
+                 annotate=True):
     """Same layout/palette as bar_panel, but the raw reps as violins."""
     pdf = df.to_pandas()
     med = df.group_by(['lane', x_col]).agg(pl.median('ms').alias('median_millis')).to_pandas()
@@ -313,10 +367,19 @@ def violin_panel(ax, df, lanes, x_col, title, xlabel_text, xtick_map=None,
     single = pdf[x_col].nunique() == 1
 
     vwidth = 0.8
-    sns.violinplot(data=pdf, x=x_col, y='ms', hue='lane',
-                   palette=palette_for(lanes), hue_order=lanes, log_scale=(False, True),
-                   density_norm='width', cut=0, inner='quartile', linewidth=0.6,
-                   width=vwidth, ax=ax)
+    sns.violinplot(data=pdf,
+                   x=x_col,
+                   y='ms',
+                   hue='lane',
+                   palette=palette_for(lanes),
+                   hue_order=lanes,
+                   log_scale=(False, True),
+                   density_norm='width',
+                   cut=0,
+                   inner='quartile',
+                   linewidth=0.6,
+                   width=vwidth,
+                   ax=ax)
 
     if annotate:
         xcats = list(dict.fromkeys(sorted(pdf[x_col].unique())))
@@ -330,11 +393,13 @@ def violin_panel(ax, df, lanes, x_col, title, xlabel_text, xtick_map=None,
             ax.annotate(_annotation_text(row['median_millis']),
                         xy=(xi + off, row['median_millis']),
                         xytext=(0, 6 + 11 * (li % 2)),
-                        textcoords="offset points", ha="center", va="bottom",
-                        fontsize=6.5, color="black")
+                        textcoords="offset points",
+                        ha="center",
+                        va="bottom",
+                        fontsize=6.5,
+                        color="black")
 
-    _finish_axis(ax, lanes, ylo, yhi, title, xlabel_text, xtick_map, legend,
-                 ylabel_text)
+    _finish_axis(ax, lanes, ylo, yhi, title, xlabel_text, xtick_map, legend, ylabel_text)
     return ylo, yhi
 
 

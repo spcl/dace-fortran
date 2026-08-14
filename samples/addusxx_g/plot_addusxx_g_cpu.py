@@ -4,8 +4,9 @@ Reads the measurement CSVs this sample's run_*_cpu.sbatch writes and emits one t
 panel per material deck: bars (mean + 95% t CI) and violins (raw reps).
 
 Only one deck replication factor is ever plotted -- the largest present -- because a 1x deck
-and a 72x deck are different problems and averaging them together is meaningless.  Lanes are
-whatever the CSVs contain, coloured through f2dace_style's shared maps.
+and a 72x deck are different problems and averaging them together is meaningless.  That filter
+is internal: it is reported on stdout, never drawn on the figure.  Lanes are whatever the CSVs
+contain, coloured through f2dace_style's shared maps.
 """
 from __future__ import annotations
 
@@ -60,6 +61,7 @@ def main() -> int:
     df = df.with_columns(pl.col('inputs').str.extract(r'_rep(\d+)$', 1).cast(pl.Int64).fill_null(1).alias('deck_rep'))
     deck_rep = df['deck_rep'].max()
     df = df.filter(pl.col('deck_rep') == deck_rep)
+    print(f'  deck replication plotted: {deck_rep}x (largest present; never pooled with smaller R)')
 
     present = set(df['lane'].unique().to_list())
     unknown = sorted(l for l in present if l not in fs.LANE_COLOR or l not in fs.LANE_LABEL)
@@ -81,7 +83,7 @@ def main() -> int:
                   sub,
                   lanes,
                   'threads',
-                  title=f'{deck} (nnr={nnr:,}, ngm_t={ngmt:,}, deck_rep={deck_rep}x)',
+                  title=f'{deck} (nnr={nnr:,}, ngm_t={ngmt:,})',
                   xlabel_text='OpenMP threads',
                   legend=(deck == decks[0]),
                   ylabel_text='Run Time')
