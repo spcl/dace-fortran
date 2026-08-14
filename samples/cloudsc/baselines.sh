@@ -24,6 +24,8 @@ CSV="${CSV:-cloudsc_baselines_${SLURM_JOB_ID:-local}.csv}"
 # both Fortran compilers, and the C rewrite built by both C++ compilers. The other two columns
 # (dace-gcc, dace-llvm) come from the sbatch's own LANES. Set BASELINE_LANES to get the older
 # diagnostic lanes (gfortran-serial gfortran-autopar openacc-cpu flang-serial) back.
+# The `-const` twins (arm C) are available but not default: they are nblks-only (see
+# const_src_tree) and the klon job's default lane set has to stay runnable.
 BASELINE_LANES="${BASELINE_LANES:-original-openmp flang-openmp c-openmp c-openmp-clang}"
 CSV_HEADER="kernel,mode,klon,nblocks,threads,rep,ms,inputs,lane,alloc"
 # The allocator is a property of the process the harness launched, not of the timed binary,
@@ -89,6 +91,35 @@ FORTRAN_SRCS="cloudsc cloudsc_driver_mod dwarf_cloudsc"
 ACC_SCC_DIR="$DWARF/cloudsc_gpu"
 ACC_SCC_SRCS="cloudsc_gpu_scc_mod cloudsc_driver_gpu_scc_mod dwarf_cloudsc_gpu"
 
+# Arm C ("-const" lanes): the same dwarf sources with KLON/KLEV/KFDIA as compile-time constants,
+# so the Fortran reference gets the trip counts the DaCe specializer bakes into the SDFG.  The
+# patch is applied to a throwaway copy here, never to the vendored tree (see const_klon.patch for
+# why the change cannot be a -D guard: KLON/KLEV dimension their own dummy arrays).
+# Only `nblks` points are valid: the constants pin NPROMA=32, and the driver patch STOPs otherwise.
+CONST_SRC="$BUILD_ROOT/const-src"
+CONST_SRCS="cloudsc_const_mod cloudsc cloudsc_driver_mod dwarf_cloudsc"
+CONST_MODES="nblks"
+
+const_src_tree() {
+    [ -f "$CONST_SRC/.stamp" ] && return 0
+    rm -rf "$CONST_SRC"
+    mkdir -p "$CONST_SRC"
+    cp -r "$DWARF/common" "$DWARF/cloudsc_fortran" "$CONST_SRC/"
+    chmod -R u+w "$CONST_SRC"
+    # The patch also creates cloudsc_const_mod.F90: .gitignore excludes *.F90, so shipping the
+    # module as a standalone file would lose it on a fresh checkout.
+    patch -p1 -s -d "$CONST_SRC" < "$HERE/const_klon.patch" || return 1
+    touch "$CONST_SRC/.stamp"
+}
+
+# build_dwarf against the patched copy: DWARF drives the include path and COMMON_SRCS too, so it
+# has to move with FORTRAN_DIR or the lane would compile arm-G modules into an arm-C binary.
+build_dwarf_const() {
+    const_src_tree || return 1
+    DWARF="$CONST_SRC" FORTRAN_DIR="$CONST_SRC/cloudsc_fortran" FORTRAN_SRCS="$CONST_SRCS" \
+        build_dwarf "$@"
+}
+
 # build_dwarf <dir> <fc> <link_libs> <flags...>: mycpu.c shim stands in for upstream
 # common/module/mycpu.c, which is not vendored (only the .cu twin is).  FORTRAN_DIR/FORTRAN_SRCS
 # select the driver set (cloudsc_fortran by default, cloudsc_gpu for the acc lane).
@@ -119,9 +150,13 @@ emit_header() {
     echo "$CSV_HEADER"
 }
 
+# $5 (modes, optional): space-separated allowlist of point modes. Arm C passes "nblks" because its
+# constants pin NPROMA=32, so the klon point would (correctly) abort in the driver's guard.
 run_lane() {
-    local exe="$1" lane="$2" threads="$3" numomp="$4" log="$RUNDIR/last_run.log" mode nproma size nblocks rep ms
+    local exe="$1" lane="$2" threads="$3" numomp="$4" modes="${5:-}" log="$RUNDIR/last_run.log"
+    local mode nproma size nblocks rep ms
     while read -r mode nproma size; do
+        if [ -n "$modes" ] && [[ " $modes " != *" $mode "* ]]; then continue; fi
         nblocks=$(((size + nproma - 1) / nproma))
         for rep in $(seq "$((-WARMUP))" "$((REPS - 1))"); do
             if ! (cd "$RUNDIR" && "$exe" "$numomp" "$size" "$nproma" > "$log" 2>&1); then
@@ -174,16 +209,40 @@ run_lane_c() {
 # other three vendored translation units (load_state, cloudsc_validate, mycpu) are already
 # pure host code and compile unchanged.  -w: the vendored sources are warning-noisy and not
 # ours to clean.
+# $4 (cc99, optional): compiles load_state.cu/cloudsc_validate.cu as C, no -fopenmp (their
+# VLA-typed casts are invalid C++, and clang miscompiles them under -fopenmp); extern "C" in
+# their headers matches the linkage. Nothing timed lives in these two (see run_lane_c).
+# C23, not C99: cloudsc_validate.cu:134 does `auto field = (dtype (*)[nclv][nlev][nlon]) v_field`.
+# In C99 `auto` is a storage-class specifier, so that is implicit-int -- gcc tolerates it, clang
+# makes it a hard error and the whole c-openmp-clang lane died with 18 errors (job 4478200).
+# `auto` type inference is standard C23; measured c99 -> 18 errors, c23 -> 0.
 build_dwarf_c() (
-    local dir="$1" h5inc="$2" h5lib="$3"
+    local dir="$1" h5inc="$2" h5lib="$3" cc99="${4:-}"
     local cu="$DWARF/cloudsc_cuda/cloudsc"
+    local incs=(-I"$HERE/c_openmp/cuda_shim" -I"$cu" -I"$h5inc")
     mkdir -p "$dir" && cd "$dir"
-    # shellcheck disable=SC2046 -- hdf5_ldflags emits two words (-L and -Wl,-rpath) on purpose
-    "$CXX" -O3 -march=native -std=c++17 -fopenmp -DHAVE_HDF5 -w \
-        -I"$HERE/c_openmp/cuda_shim" -I"$cu" -I"$h5inc" \
-        -x c++ "$cu/load_state.cu" "$cu/cloudsc_validate.cu" "$cu/mycpu.cu" "$cu/cloudsc_c.cu" \
-        "$HERE/c_openmp/cloudsc_driver_omp.cpp" \
-        ${CXX_RPATH:-} $(hdf5_ldflags "$h5lib") -lhdf5 -lm -o dwarf-cloudsc-c-omp
+    if [ -n "$cc99" ]; then
+        "$cc99" -O3 -march=native -std=c23 -DHAVE_HDF5 -w \
+            "${incs[@]}" -x c -c "$cu/load_state.cu" -o load_state.o
+        "$cc99" -O3 -march=native -std=c23 -DHAVE_HDF5 -w \
+            "${incs[@]}" -x c -c "$cu/cloudsc_validate.cu" -o cloudsc_validate.o
+        "$CXX" -O3 -march=native -std=c++17 -fopenmp -DHAVE_HDF5 -w \
+            "${incs[@]}" -x c++ -c "$cu/mycpu.cu" -o mycpu.o
+        "$CXX" -O3 -march=native -std=c++17 -fopenmp -DHAVE_HDF5 -w \
+            "${incs[@]}" -x c++ -c "$cu/cloudsc_c.cu" -o cloudsc_c.o
+        "$CXX" -O3 -march=native -std=c++17 -fopenmp -DHAVE_HDF5 -w \
+            "${incs[@]}" -x c++ -c "$HERE/c_openmp/cloudsc_driver_omp.cpp" -o cloudsc_driver_omp.o
+        # shellcheck disable=SC2046 -- hdf5_ldflags emits two words (-L and -Wl,-rpath) on purpose
+        "$CXX" -fopenmp load_state.o cloudsc_validate.o mycpu.o cloudsc_c.o cloudsc_driver_omp.o \
+            ${CXX_RPATH:-} $(hdf5_ldflags "$h5lib") -lhdf5 -lm -o dwarf-cloudsc-c-omp
+    else
+        # shellcheck disable=SC2046 -- hdf5_ldflags emits two words (-L and -Wl,-rpath) on purpose
+        "$CXX" -O3 -march=native -std=c++17 -fopenmp -DHAVE_HDF5 -w \
+            "${incs[@]}" \
+            -x c++ "$cu/load_state.cu" "$cu/cloudsc_validate.cu" "$cu/mycpu.cu" "$cu/cloudsc_c.cu" \
+            "$HERE/c_openmp/cloudsc_driver_omp.cpp" \
+            ${CXX_RPATH:-} $(hdf5_ldflags "$h5lib") -lhdf5 -lm -o dwarf-cloudsc-c-omp
+    fi
 )
 
 # Host compiler + the HDF5 C library (not the Fortran one the other lanes need): sets
@@ -304,6 +363,37 @@ for lane in $BASELINE_LANES; do
             done
             unset OMP_SCHEDULE
             ;;
+        original-openmp-const | flang-openmp-const)
+            # Arm C twin of original-openmp / flang-openmp: identical flags, identical thread
+            # sweep, only KLON/KLEV/KFDIA differ (runtime -> compile-time). Paired with its arm-G
+            # lane in the CSV, so the pair isolates compile-time knowledge from everything else.
+            if [ "$lane" = original-openmp-const ]; then
+                gfortran_ok "$lane" || continue
+                build_dwarf_const "$BUILD_ROOT/$lane" "$H5FC" "$GF_HDF5_LIBS" -O3 -march=native -fopenmp \
+                    || { echo "SKIP $lane: gfortran could not build the const dwarf (see log above)" >&2; continue; }
+            else
+                if [ "$HAVE_FLANG" != 1 ]; then
+                    echo "SKIP $lane: no LLVM flang on PATH" >&2
+                    continue
+                fi
+                if ! flang_hdf5; then
+                    echo "SKIP $lane: no flang-compatible HDF5 Fortran (set HDF5_FLANG_ROOT)" >&2
+                    continue
+                fi
+                build_dwarf_const "$BUILD_ROOT/$lane" "$FLANG" "$FLANG_HDF5_LIBS" -O3 -fopenmp "$FLANG_HDF5_FLAGS" \
+                    || { echo "SKIP $lane: flang could not build the const dwarf (see log above)" >&2; continue; }
+            fi
+            export OMP_SCHEDULE=static
+            for t in $THREADS; do
+                if [ "$t" -gt "$TOPO_NCORES" ]; then
+                    echo "skip threads=$t (> $TOPO_NCORES physical cores)"
+                    continue
+                fi
+                set_omp_env "$t"
+                run_lane "$BUILD_ROOT/$lane/dwarf-cloudsc" "$lane" "$t" "$t" "$CONST_MODES"
+            done
+            unset OMP_SCHEDULE
+            ;;
         openacc-cpu)
             if [ "$HAVE_NVFORTRAN" != 1 ]; then
                 echo "SKIP $lane: no nvfortran on PATH" >&2
@@ -336,9 +426,16 @@ for lane in $BASELINE_LANES; do
             c_openmp_ok "$lane" "$C_WANT" || continue
             # Lanes are independent and this script is `set -e`: a toolchain that cannot build the
             # vendored sources must cost its own column, not every column measured before it.
-            # clang++ is a live case -- the vendored .cu files use VLA-typed pointers
-            # (`double (*)[nproma]`), a GCC extension clang rejects outright.
-            if ! build_dwarf_c "$BUILD_ROOT/$lane" "$C_H5INC" "$C_H5LIB"; then
+            CC99=""
+            if [ "$lane" = c-openmp-clang ]; then
+                # See build_dwarf_c: clang's C sibling compiles the two VLA-typed TUs as C99.
+                CC99="$(dirname "$CXX")/clang"
+                if [ ! -x "$CC99" ]; then
+                    echo "SKIP $lane: no clang sibling of $CXX to compile the VLA-typed sources as C99" >&2
+                    continue
+                fi
+            fi
+            if ! build_dwarf_c "$BUILD_ROOT/$lane" "$C_H5INC" "$C_H5LIB" "$CC99"; then
                 echo "SKIP $lane: $C_WANT could not build the C rewrite (see log above)" >&2
                 continue
             fi

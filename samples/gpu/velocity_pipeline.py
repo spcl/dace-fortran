@@ -10,10 +10,12 @@ no ``scalars`` (velocity specializes nothing), so the sequence is
       -> state-fusion-extended -> loop2map -> state-fusion-extended -> mapfusion
       -> make-transients-persistent
 
-Every pass is a stock DaCe pass, so nothing here imports dace_fortran. GPU deltas versus the
-source: none in the sequence itself -- the device schedule and the transfers are applied
-afterwards by ``OffloadVelocityToGPU`` (see ``velocity_offload``), which is the only step the
-CPU lane lacks.
+Every pass is a stock DaCe pass except the scalar-fission step, which goes through
+``dace_fortran.pipelines.fission_scalars``: a bare ``ScalarFission`` also splits the transient
+ABI proxies the len-1 scalarization leaves behind, and only one of the resulting shadows is
+copied back out, so the caller can silently read a stale value. GPU deltas versus the source:
+none in the sequence itself -- the device schedule and the transfers are applied afterwards by
+``OffloadVelocityToGPU`` (see ``velocity_offload``), which is the only step the CPU lane lacks.
 """
 from __future__ import annotations
 
@@ -24,8 +26,9 @@ from dace.transformation.interstate.state_fusion_with_happens_before import Stat
 from dace.transformation.pass_pipeline import Pipeline
 from dace.transformation.passes.parallelization_prep import ShortLoopUnroll
 from dace.transformation.passes.persistent_transients import MakeTransientsPersistent
-from dace.transformation.passes.scalar_fission import ScalarFission
 from dace.transformation.passes.unique_loop_iterators import UniqueLoopIterators
+
+from dace_fortran.pipelines import fission_scalars
 
 from dace.sdfg import nodes as _nd
 
@@ -36,7 +39,7 @@ def optimize_velocity(sdfg: SDFG, validate: bool = True) -> SDFG:
     """Run the velocity parallelization pipeline in place and return ``sdfg``."""
     ShortLoopUnroll(UNROLL_LIMIT).apply_pass(sdfg, {})
     UniqueLoopIterators().apply_pass(sdfg, {})
-    Pipeline([ScalarFission()]).apply_pass(sdfg, {})
+    fission_scalars(sdfg)
 
     sdfg.simplify(validate=validate)
     sdfg.apply_transformations_repeated(StateFusionExtended, validate=validate)
