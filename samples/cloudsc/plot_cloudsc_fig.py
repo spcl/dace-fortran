@@ -92,7 +92,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--runs-dir', nargs='+', default=DEFAULT_RUNS)
     ap.add_argument('--out-prefix', default='fig_cloudsc')
-    ap.add_argument('--out-dir', default=os.path.dirname(os.path.abspath(__file__)))
+    ap.add_argument('--out-dir', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'figures'))
     ap.add_argument('--alloc', default='mimalloc')
     ap.add_argument('--cpu-threads', default='1,72')
     args = ap.parse_args()
@@ -100,7 +100,24 @@ def main():
     missing = st.Missing()
     df = st.load_runs(args.runs_dir, 'cloudsc', alloc=args.alloc, missing=missing)
     print(f'cloudsc rows loaded: {df.height}')
+    # is_in(CPU_LANES) drops unknown lanes without a word; measured rows must never vanish silently.
+    unstyled = sorted(set(df['lane'].unique().to_list()) - set(st.CPU_LANES) - set(st.GPU_LANES))
+    if unstyled:
+        raise SystemExit(f'FATAL: measured lanes with no f2dace_style entry: {unstyled}')
+    # A lane that died mid-sweep still has rows; without this it plots as a complete lane with a gap.
+    cells = df.select(['threads', 'problem_size']).unique()
+    gaps = {}
+    for lane in sorted(df['lane'].unique().to_list()):
+        have = df.filter(pl.col('lane') == lane).select(['threads', 'problem_size']).unique()
+        lost = sorted(
+            (int(t), int(p)) for t, p in cells.join(have, on=['threads', 'problem_size'], how='anti').iter_rows())
+        if lost:
+            gaps[lane] = lost
+            missing.note(f'cloudsc lane "{lane}": INCOMPLETE, no rows at (threads, size) {lost}')
+
     footer = 'data: ' + ', '.join(args.runs_dir)
+    if gaps:
+        footer = f'INCOMPLETE: {", ".join(gaps)} | ' + footer
     build(df, missing, args.out_dir, args.out_prefix, [int(x) for x in args.cpu_threads.split(',')], footer=footer)
     if missing:
         print('MISSING:')

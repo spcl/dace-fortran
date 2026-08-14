@@ -68,8 +68,8 @@ LANE_LABEL = {
 
 # Artifact hue order: DaCe first, the Fortran baseline second, the C rewrite third.
 CPU_LANES = [
-    'dace-gcc', 'dace-llvm', 'original-openmp', 'c-openmp', 'gfortran-autopar', 'openacc-cpu', 'flang-serial',
-    'gfortran-serial'
+    'dace-gcc', 'dace-llvm', 'original-openmp', 'flang-openmp', 'c-openmp', 'gfortran-autopar', 'openacc-cpu',
+    'flang-serial', 'gfortran-serial'
 ]
 GPU_LANES = ['dace-gpu', 'openacc-gpu', 'cuda-ref']
 
