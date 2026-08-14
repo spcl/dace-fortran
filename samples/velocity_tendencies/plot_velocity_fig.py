@@ -24,14 +24,21 @@ import polars as pl
 
 import f2dace_style as st
 
+HERE = Path(__file__).resolve().parent
 REPO = Path(__file__).resolve().parents[2]
 WORK_ROOT = Path(os.environ.get("WORK_ROOT", REPO / "samples" / "_work"))
+# output_data first, as in plot_velocity_integration.py: it is the promoted, canonical copy --
+# lane names collapsed to the ones f2dace_style knows, and the deck relabelled to the grid its
+# edge count actually implies.  _work/meas/runs holds the same job 4421055 pre-promotion, where
+# the Fortran baseline is still split three ways (original-openmp-{flang,gcc,nvhpc}, none of
+# them in CPU_LANES, so all three are silently dropped) and the 160 km deck is still mislabelled
+# r02b05/80 km.  Reading it too would add an 80 km column that no baseline lane appears in.
 DEFAULT_RUNS = [
-    str(WORK_ROOT / 'meas' / 'runs'),
+    str(HERE / 'output_data'),
     str(WORK_ROOT / 'dev' / 'runs'),
 ]
 XLABEL = 'Grid Resolution'
-WANT_GRIDS = ['R02B05', 'R02B06']
+WANT_GRIDS = ['R02B04', 'R02B06']
 
 
 def build(df, missing, out_dir, prefix, cpu_threads, footer=None):
@@ -105,7 +112,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--runs-dir', nargs='+', default=DEFAULT_RUNS)
     ap.add_argument('--out-prefix', default='fig_velocity')
-    ap.add_argument('--out-dir', default=os.path.dirname(os.path.abspath(__file__)))
+    ap.add_argument('--out-dir', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'figures'))
     ap.add_argument('--alloc', default='mimalloc')
     ap.add_argument('--kernel', default='velocity_tendencies')
     ap.add_argument('--cpu-threads', default='16,32,72')
