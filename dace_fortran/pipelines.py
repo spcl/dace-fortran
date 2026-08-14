@@ -26,12 +26,14 @@ from dace.transformation.dataflow.map_collapse import MapCollapse
 import numpy as np
 
 from dace import SDFG
+from dace.sdfg import nodes
 from dace.sdfg.utils import specialize_scalars, specialize_symbols
 from dace.transformation.interstate.loop_to_map import LoopToMap
 from dace.transformation.interstate.state_fusion_with_happens_before import StateFusionExtended
 from dace.transformation.pass_pipeline import Pipeline
 from dace.transformation.passes.full_map_fusion import FullMapFusion
-from dace.transformation.passes.length_one_array_scalar_conversion import ConvertLengthOneArraysToScalars
+from dace.transformation.passes.length_one_array_scalar_conversion import (ConvertLengthOneArraysToScalars,
+                                                                           _STAGING_STATE_PREFIXES)
 from dace.transformation.passes.parallelization_prep import ShortLoopUnroll
 from dace.transformation.passes.scalar_fission import ScalarFission
 from dace.transformation.passes.unique_loop_iterators import UniqueLoopIterators
@@ -42,6 +44,49 @@ Const = Union[float, int, str]
 def accepted_call_args(sdfg: SDFG) -> Set[str]:
     """Names ``sdfg`` can be called with: its arglist plus its free symbols."""
     return set(sdfg.arglist()) | {str(s) for s in sdfg.free_symbols}
+
+
+def abi_proxy_transients(sdfg: SDFG) -> Set[str]:
+    """Transients that exist only as the copy-in/copy-out shadow of a NON-transient.
+
+    ``ConvertLengthOneArraysToScalars(preserve_abi=True)`` keeps the signature array and stages it
+    through a fresh transient scalar, so that scalar's value leaves the SDFG through the copy-out --
+    it is an ABI proxy, externally visible, and must be treated like the non-transient it stands for.
+    Derived from the staging edges themselves rather than the ``scal_`` name the pass happens to mint,
+    and keyed on that pass's OWN state-label constant so a rename there cannot silently unhook this.
+    """
+    proxies: Set[str] = set()
+    for state in sdfg.all_states():
+        if not state.label.startswith(_STAGING_STATE_PREFIXES):
+            continue
+        for edge in state.edges():
+            if not (isinstance(edge.src, nodes.AccessNode) and isinstance(edge.dst, nodes.AccessNode)):
+                continue
+            src, dst = sdfg.arrays[edge.src.data], sdfg.arrays[edge.dst.data]
+            if src.transient != dst.transient:
+                proxies.add(edge.src.data if src.transient else edge.dst.data)
+    return proxies
+
+
+def fission_scalars(sdfg: SDFG) -> Dict[str, Set[str]]:
+    """Run ``ScalarFission`` on ``sdfg``, leaving ABI-proxy transients whole.
+
+    Fissioning a proxy splits its value over several shadows while the copy-out still reads exactly
+    one of them, so a kernel write landing in another shadow is silently lost to the caller. The
+    proxies are hidden behind the pass's OWN non-transient gate for the duration of the run --
+    genuine internal transients (``difcoef`` and friends) still fission.
+
+    ``ScalarFission`` depends on the ``ScalarWriteShadowScopes`` analysis; a bare ``apply_pass`` gets
+    an empty ``pipeline_results`` and KeyErrors, so a ``Pipeline`` resolves ``depends_on()`` first.
+    """
+    proxies = abi_proxy_transients(sdfg)
+    for name in proxies:
+        sdfg.arrays[name].transient = False
+    try:
+        return (Pipeline([ScalarFission()]).apply_pass(sdfg, {}) or {}).get('ScalarFission') or {}
+    finally:
+        for name in proxies:
+            sdfg.arrays[name].transient = True
 
 
 def verify_numerics(reference: SDFG, optimized: SDFG, inputs: Dict[str, Any]) -> None:
@@ -130,9 +175,7 @@ def optimize(sdfg: SDFG,
     # default assign_loop_iterator_post_value=True keeps Fortran counted-DO exit-value semantics;
     # shared iterator names otherwise make LoopToMap refuse merged siblings.
     UniqueLoopIterators().apply_pass(sdfg, {})
-    # ScalarFission depends on the ScalarWriteShadowScopes analysis; a bare apply_pass gets an
-    # empty pipeline_results and KeyErrors. A Pipeline resolves depends_on() first.
-    Pipeline([ScalarFission()]).apply_pass(sdfg, {})
+    fission_scalars(sdfg)
 
     sdfg.simplify(validate=validate)
     sdfg.apply_transformations_repeated(StateFusionExtended, validate=validate)
