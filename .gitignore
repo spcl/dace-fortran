@@ -234,6 +234,15 @@ _all_tests/
 !tests/norm2/**/*.f90
 !tests/reshape/**/*.f90
 !tests/spread/**/*.f90
+# QE us_exx standalone samples: the merged single-TU kernel export and the
+# verify/bench drivers are SOURCES, not build output -- nothing regenerates
+# them locally (download_data.sh fetches only the decks).  Scoped to these two
+# sample dirs rather than samples/**, so no other sample's generated .f90 is
+# swept in.  Lowercase-only on purpose: outputs/<kernel>.F90 is the SDFG
+# pipeline's regenerable flat TU and stays ignored by the *.F90 rule above, as
+# do outputs/*.sdfg and the ~480 MB decks (samples/<kernel>/.gitignore: data/).
+!samples/addusxx_g/**/*.f90
+!samples/newdxx_g/**/*.f90
 # Bounds-remap-view probes: pin the IR-pattern claim that
 # view-semantics (pointer assign with bounds remap) and copy-
 # semantics (RESHAPE intrinsic, plain slice assign) are
