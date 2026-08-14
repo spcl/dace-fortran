@@ -334,7 +334,14 @@ for lane in $BASELINE_LANES; do
             # lanes differ only in host compiler, so they isolate the toolchain from the source.
             if [ "$lane" = c-openmp-clang ]; then C_WANT=clang++; else C_WANT=g++; fi
             c_openmp_ok "$lane" "$C_WANT" || continue
-            build_dwarf_c "$BUILD_ROOT/$lane" "$C_H5INC" "$C_H5LIB"
+            # Lanes are independent and this script is `set -e`: a toolchain that cannot build the
+            # vendored sources must cost its own column, not every column measured before it.
+            # clang++ is a live case -- the vendored .cu files use VLA-typed pointers
+            # (`double (*)[nproma]`), a GCC extension clang rejects outright.
+            if ! build_dwarf_c "$BUILD_ROOT/$lane" "$C_H5INC" "$C_H5LIB"; then
+                echo "SKIP $lane: $C_WANT could not build the C rewrite (see log above)" >&2
+                continue
+            fi
             export OMP_SCHEDULE=static
             for t in $THREADS; do
                 if [ "$t" -gt "$TOPO_NCORES" ]; then
@@ -359,7 +366,10 @@ for lane in $BASELINE_LANES; do
                 echo "SKIP $lane: no flang-compatible HDF5 Fortran (set HDF5_FLANG_ROOT)" >&2
                 continue
             fi
-            build_dwarf "$BUILD_ROOT/$lane" "$FLANG" "$FLANG_HDF5_LIBS" -O3 -fopenmp "$FLANG_HDF5_FLAGS"
+            if ! build_dwarf "$BUILD_ROOT/$lane" "$FLANG" "$FLANG_HDF5_LIBS" -O3 -fopenmp "$FLANG_HDF5_FLAGS"; then
+                echo "SKIP $lane: flang could not build the OpenMP dwarf (see log above)" >&2
+                continue
+            fi
             export OMP_SCHEDULE=static
             for t in $THREADS; do
                 if [ "$t" -gt "$TOPO_NCORES" ]; then
