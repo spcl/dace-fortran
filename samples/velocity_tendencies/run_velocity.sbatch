@@ -1,6 +1,6 @@
 #!/bin/bash
-# ICON velocity_tendencies on real R02B05 data, re-blocked to nproma=32: CPU thread sweep
-# over both __LOOP_EXCHANGE TU variants (different transient DATA LAYOUTS, run both).
+# ICON velocity_tendencies on real R02B05 data, re-blocked to nproma=32: CPU thread sweep, default
+# lane dace-gcc x the loopexch TU variant (VARIANTS opts noloopexch back in, see below).
 # Site-neutral header (no partition/account in-file, pass them on the command line):
 #     sbatch -p <partition> -A <account> samples/velocity_tendencies/run_velocity.sbatch
 #     Submit from the repo root (or from this script's own directory); Slurm spools the
@@ -50,9 +50,11 @@ resolve_repo() {
 }
 REPO="$(resolve_repo)"
 source "$REPO/samples/common.sh"
-# LANES: space list from {dace-gcc,dace-llvm,baselines} (cloudsc sbatch convention; baselines runs
-# the Fortran lanes of baselines.sh, which picks its own subset via BASELINE_LANES).  Any other
-# token is skipped, so a global LANES carrying cloudsc-only lanes still runs this job.
+# LANES: space list from {dace-gcc,dace-llvm,baselines,acc-multicore} (cloudsc sbatch convention;
+# baselines runs the Fortran lanes of baselines.sh, which picks its own subset via BASELINE_LANES;
+# acc-multicore is baselines.sh's openacc-cpu lane alone -- nvfortran -acc=multicore, the CPU-side
+# twin of the GPU ACC-vs-DaCe story in opt_pipeline/run_acc_vs_dace.sbatch). Any other token is
+# skipped, so a global LANES carrying cloudsc-only lanes still runs this job.
 LANES="${LANES:-dace-gcc}"
 BUILD_ROOT_BASE="${BUILD_ROOT:-$WORK_ROOT/cache}"
 # exported so the baselines lane (which unsets BUILD_ROOT to escape the dace lanes' dacecache)
@@ -80,9 +82,12 @@ if [ ! -f "$NPZ_NOLOOPEXCH" ]; then
     "$PY" "$HERE/convert_data.py" --data-dir "$DATA_DIR" --nproma 30720 --out "$NPZ_NOLOOPEXCH"
 fi
 
+# Data shape is its OWN axis, not a function of the TU variant.  They used to share the
+# loopexch/noloopexch names, so switching the TU silently switched nproma 32 -> 30720 and
+# left the CPU block loop with one block to distribute.
 npz_for() {
-    case "$1" in
-        noloopexch) echo "$NPZ_NOLOOPEXCH" ;;
+    case "${DATA_SHAPE:-nproma32}" in
+        bignproma) echo "$NPZ_NOLOOPEXCH" ;;
         *) echo "$NPZ" ;;
     esac
 }
@@ -90,13 +95,39 @@ npz_for() {
 DRIVER="$HERE/run_velocity_perf.py"
 CSV="${CSV:-velocity_tendencies_${SLURM_JOB_ID:-local}.csv}"
 NCPUS="${SLURM_CPUS_ON_NODE:-$TOPO_NCORES}"
-VARIANTS="${VARIANTS:-loopexch noloopexch}"
+# TU variant only.  Everything is no-loop-exchange -- the SDFG baselines, the ACC reference and
+# both ICON lanes -- so the DaCe side must be lowered from the same TU.  Data shape is DATA_SHAPE
+# (nproma32 default; bignproma = nproma 30720 / nblks_e 1, the GPU shape, meaningless on CPU
+# because a block-parallel schedule then has exactly one block to distribute).
+VARIANTS="${VARIANTS:-noloopexch}"
+# OpenMP schedule sweep for the DaCe block-loop maps: space-separated "kind[,chunk]" specs, each
+# its own build (the clause is baked into the pragma, so a point is a recompile). Default is the
+# single point; the three-point sweep is
+#   OMP_SCHEDULES="static,1 guided static,8"
+# A spec contains a comma, which is also `sbatch --export`'s separator, so export from the
+# submitting shell instead of spelling the list inside --export:
+#   OMP_SCHEDULES="static,1 guided static,8" THREADS="16 32 72" LANES=dace-gcc \
+#       sbatch --export=ALL -p debug -A g34 --time=00:30:00 samples/velocity_tendencies/run_velocity.sbatch
+OMP_SCHEDULES="${OMP_SCHEDULES:-default}"
+sched_slug() { echo "${1//,/_}"; }
 
 for lane in $LANES; do
     case "$lane" in
         dace-gcc | dace-llvm) ;;
         baselines)
             srun --ntasks=1 --cpus-per-task="$NCPUS" --cpu-bind=verbose,cores \
+                bash "$HERE/baselines.sh"
+            continue
+            ;;
+        acc-multicore)
+            if [ "${HAVE_NVFORTRAN:-0}" != 1 ]; then
+                echo "SKIP $lane: no nvfortran on PATH" >&2
+                continue
+            fi
+            # openacc-cpu alone: nvfortran -acc=multicore, one build, ACC_NUM_CORES sweeps THREADS
+            # (baselines.sh), same CSV so this lane lands beside dace-gcc/dace-llvm for comparison.
+            BASELINE_LANES=openacc-cpu CSV="$CSV" \
+                srun --ntasks=1 --cpus-per-task="$NCPUS" --cpu-bind=verbose,cores \
                 bash "$HERE/baselines.sh"
             continue
             ;;
@@ -115,9 +146,13 @@ for lane in $LANES; do
     for v in $VARIANTS; do
         # Both variants build an SDFG named velocity_tendencies, so under DACE_cache=name one
         # dacecache would make each variant a full rebuild of the other (tagcycle_lane.sh idiom).
-        export DACE_default_build_folder="$BUILD_ROOT/dacecache_$v"
-        srun --ntasks=1 --cpus-per-task="$NCPUS" --cpu-bind=verbose,cores \
-            "$PY" "$DRIVER" --variant "$v" --backend "$backend" --npz "$(npz_for "$v")" --build-only
+        # Same reason for the schedule slug: each spec is a different pragma, hence a different .so.
+        for s in $OMP_SCHEDULES; do
+            export DACE_default_build_folder="$BUILD_ROOT/dacecache_${v}_$(sched_slug "$s")"
+            srun --ntasks=1 --cpus-per-task="$NCPUS" --cpu-bind=verbose,cores \
+                "$PY" "$DRIVER" --variant "$v" --backend "$backend" --npz "$(npz_for "$v")" \
+                --omp-schedule "$s" --build-only
+        done
     done
 
     for t in $THREADS; do
@@ -127,9 +162,12 @@ for lane in $LANES; do
         fi
         set_omp_env "$t"
         for v in $VARIANTS; do
-            export DACE_default_build_folder="$BUILD_ROOT/dacecache_$v"
-            srun --ntasks=1 --cpus-per-task="$NCPUS" --cpu-bind=verbose,cores \
-                "$PY" "$DRIVER" --variant "$v" --backend "$backend" --npz "$(npz_for "$v")" --csv "$CSV"
+            for s in $OMP_SCHEDULES; do
+                export DACE_default_build_folder="$BUILD_ROOT/dacecache_${v}_$(sched_slug "$s")"
+                srun --ntasks=1 --cpus-per-task="$NCPUS" --cpu-bind=verbose,cores \
+                    "$PY" "$DRIVER" --variant "$v" --backend "$backend" --npz "$(npz_for "$v")" \
+                    --omp-schedule "$s" --csv "$CSV"
+            done
         done
     done
 done

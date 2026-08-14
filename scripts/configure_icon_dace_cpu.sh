@@ -99,7 +99,7 @@ LIBS="${XML2_LIB} ${FYAML_LIB} ${ECCODES_LIB} ${LAPACK_LIB} ${NETCDF_F_LIB} ${NE
 # away cleanly.
 EXTRA_CONFIG_ARGS="\
 --enable-grib2 \
---enable-loop-exchange \
+--disable-loop-exchange \
 --enable-openmp \
 --enable-bundled-python=mtime \
 --disable-jsbach \

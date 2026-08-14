@@ -118,7 +118,7 @@ def main() -> int:
     ap.add_argument("--timestep", type=int, default=1)
     ap.add_argument("--nproma", type=int, default=32)
     ap.add_argument("--reference", action="store_true", help="also dump the DaCe kernel's outputs (needs flang)")
-    ap.add_argument("--variant", choices=sorted(VARIANT_TUS), default="loopexch", help="--reference TU variant")
+    ap.add_argument("--variant", choices=sorted(VARIANT_TUS), default="noloopexch", help="--reference TU variant")
     ap.add_argument("--force", action="store_true", help="re-dump even when the manifest is already there")
     args = ap.parse_args()
 
