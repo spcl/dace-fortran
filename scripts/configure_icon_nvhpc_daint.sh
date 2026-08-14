@@ -66,23 +66,23 @@ icon_daint_base_config_args
 
 CONFIG_VARS=()
 if [ "${GPU}" = 1 ]; then
-  # loop-exchange follows the SDFG, not the device: build_icon_dace_libs.py lowers
-  # mo_velocity_advection.f90 with the defines harvested from the ICON build, and that
-  # set carries -D__LOOP_EXCHANGE.  One SDFG serves both lanes, so both lanes must use
-  # the layout it was lowered under.  OpenMP off (OpenACC owns the parallelism), CUDA
-  # from the NVHPC bundle next to nvfortran.
+  # loop-exchange is OFF in every lane, CPU and GPU alike: the DaCe SDFGs are lowered
+  # from the no-loop-exchange TU, and __LOOP_EXCHANGE transposes the work arrays
+  # (zeta(nlev,nproma,nblks) vs zeta(nproma,nlev,nblks)), so a lane that enables it
+  # hands the kernel a different layout than it was built for.  OpenMP off (OpenACC
+  # owns the parallelism), CUDA from the NVHPC bundle next to nvfortran.
   # spack-load of gcc16 exports CUDA_HOME/NVHPC_CUDA_HOME=spack cuda-13.3 (its
   # nvptx dep) and makes g++16 nvcc's host compiler -- cuda13.3 rejects gcc>15,
   # so unset the redirects and pin the host to system g++-13.
   unset CUDA_HOME NVHPC_CUDA_HOME CUDA_ROOT CUDA_PATH || true
-  EXTRA_CONFIG_ARGS="${EXTRA_CONFIG_ARGS} --enable-gpu=openacc+cuda --enable-loop-exchange --disable-openmp"
+  EXTRA_CONFIG_ARGS="${EXTRA_CONFIG_ARGS} --enable-gpu=openacc+cuda --disable-loop-exchange --disable-openmp"
   CONFIG_VARS+=("CUDACXX=${NVHPC_BIN}/nvcc" "CUDAFLAGS=-arch=sm_90 -O3 -ccbin /usr/bin/g++-13")
   # nvfortran does not search the bundled CUDA lib dir at link time.
   CUDA_LIB64="${NVHPC_BIN%/compilers/bin}/cuda/lib64"
   LDFLAGS="${LDFLAGS} -L${CUDA_LIB64} -Wl,-rpath,${CUDA_LIB64}"
   LIBS="${LIBS} -lcudart"
 else
-  EXTRA_CONFIG_ARGS="${EXTRA_CONFIG_ARGS} --enable-loop-exchange --enable-openmp"
+  EXTRA_CONFIG_ARGS="${EXTRA_CONFIG_ARGS} --disable-loop-exchange --enable-openmp"
 fi
 
 icon_daint_write_build_env "${NVHPC_BIN}" "${GPU}"

@@ -47,11 +47,11 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
 sys.path[:0] = [str(REPO / "tests"), str(REPO / "samples")]
 
-# Loop-exchange ON, matching the ICON integration lib (lowered with -D__LOOP_EXCHANGE) and the
-# Fortran reference (VT_ACC_TU=loopexch).  The two TUs are not a loop swap: __LOOP_EXCHANGE also
-# transposes the local work arrays -- zeta(nlev, nproma, nblks_v) here vs zeta(nproma, nlev,
-# nblks_v) in the no-exchange TU -- so mixing them compares different memory layouts.
-DEFAULT_TU = REPO / "tests" / "icon" / "atmosphere" / "velocity_advection_inlined_single_tu.f90"
+# Loop-exchange OFF, everywhere and on every device: this TU, the Fortran reference
+# (VT_ACC_TU=noloopexch) and both ICON lanes (--disable-loop-exchange).  The two TUs are not a
+# loop swap -- __LOOP_EXCHANGE also transposes the work arrays, zeta(nproma, nlev, nblks_v) here
+# vs zeta(nlev, nproma, nblks_v) with it -- so a mismatch compares different memory layouts.
+DEFAULT_TU = REPO / "tests" / "icon" / "atmosphere" / "velocity_advection_inlined_no_loop_exchange_single_tu.f90"
 DEFAULT_ENTRY = "mo_velocity_advection::velocity_tendencies"
 CONFIG_KEYS = ("lvn_only", "istep", "lextra_diffu", "ldeepatmo", "lvert_nest")
 
