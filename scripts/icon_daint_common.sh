@@ -28,6 +28,11 @@ icon_daint_patch_root() { case "$1" in *::*) echo "${1%%::*}" ;; *) echo "." ;; 
 icon_daint_patch_file() { echo "${1##*::}"; }
 # Opt-in, applied only by the DaCe-linked build (not part of a stock lane).
 ICON_DAINT_DACE_PATCH=scripts/icon_patches/icon_velocity_dace_dispatch.patch
+# Opt-in, applied only by the STOCK tree of the A/B: gives the original
+# velocity_tendencies the same per-call VELO_TIMER print (and the same call cap)
+# the DaCe wrapper emits, so one parser reads both lanes.  Mutually exclusive
+# with the dispatch patch -- they rewrite the same subroutine.
+ICON_DAINT_STOCK_TIMER_PATCH=scripts/icon_patches/icon_velocity_stock_timer.patch
 # The sha fetch_icon_source.sh pins; the patches are diffs against it.
 ICON_DAINT_PIN_SHA=${ICON_DAINT_PIN_SHA:-8597da45ef4b86323f3fb844caedc4ae5e1ffc01}
 
@@ -234,12 +239,14 @@ icon_daint_check_config_log() {
 }
 
 # Append the DaCe lib AFTER $(link_files) so ICON module symbols resolve, and
-# keep it live under --as-needed.
+# keep it live under --as-needed.  Plain -l, never -l:<file>: nvfortran does not
+# recognise the colon form and forwards it as "-llibvelocity_inner_wrap.so",
+# which ld then cannot find (job 4479047).
 icon_daint_patch_icon_mk() {
   test -n "${DACE_LIBS_DIR}" || return 0
   local link_old link_new
   link_old='$(silent_FCLD)$(FC) -o $@ $(make_FCFLAGS) $(FCFLAGS) $(ICON_FCFLAGS) $(LDFLAGS) $(link_files) $(shell . ./collect.extra-libs) $(LIBS)'
-  link_new="${link_old} -L${DACE_LIBS_DIR} -Wl,-rpath,${DACE_LIBS_DIR} -Wl,--no-as-needed -l:libvelocity_inner_wrap.so"
+  link_new="${link_old} -L${DACE_LIBS_DIR} -Wl,-rpath,${DACE_LIBS_DIR} -Wl,--no-as-needed -lvelocity_inner_wrap"
   if grep -qF -- "${link_old}" icon.mk; then
     if grep -qF -- "${link_new}" icon.mk; then
       echo "[${ICON_DAINT_LANE}] icon.mk link rule already DaCe-patched"
