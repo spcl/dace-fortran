@@ -32,18 +32,23 @@ _SET1 = sns.color_palette("Set1", 9)
 #
 # The three GPU lanes used to REUSE their CPU counterpart's Set1 hue, which was fine only while
 # CPU and GPU lived in separate figures; fig_velocity_bar puts 3 CPU panels and a GPU panel under
-# one legend, where it showed red twice and blue twice.  They now have their own hues, picked out
-# of the cyan->violet arc -- the only region Set1's nine leave free -- so all 12 lanes are
-# pairwise distinct.  The CPU nine are unchanged on purpose: every published figure keeps its
-# colours.  Verified with the dataviz palette validator (see README of that skill).
+# one legend, where it showed red twice and blue twice.  They now carry a cool arc of their own --
+# violet, azure, teal -- picked by maximizing the worst OKLab dE over every GPU-involving pair
+# against the frozen Set1 nine under normal, protan and deutan vision.  Worst pair 9.09 (cuda-ref
+# vs openacc-cpu), clear of the >=8 target, and the trio alone passes all six dataviz checks in
+# both modes.  Two of them still echo their CPU role family: azure next to the Fortran/OpenACC
+# baseline blue, teal next to the third-party green.  A literal darker-shade-per-role scheme was
+# measured and rejected -- it cannot beat worst-pair dE 3.0, because a deep red and a deep green
+# both collapse into Set1's brown under deuteranopia.  The CPU nine are unchanged on purpose:
+# every published figure keeps its colours.
 LANE_COLOR = {
     'dace-gcc': _SET1[0],
     'dace-llvm': _SET1[3],
-    'dace-gpu': '#2600ff',
+    'dace-gpu': '#7134fe',
     'original-openmp': _SET1[1],
-    'openacc-gpu': '#00c3ff',
+    'openacc-gpu': '#438dff',
     'c-openmp': _SET1[2],  # the artifact's green C-rewrite slot
-    'cuda-ref': '#9c7cff',
+    'cuda-ref': '#008066',
     'gfortran-autopar': _SET1[4],
     'openacc-cpu': _SET1[6],
     'flang-serial': _SET1[5],
