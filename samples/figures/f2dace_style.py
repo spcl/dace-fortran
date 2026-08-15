@@ -128,7 +128,7 @@ def _tier_offset(xi, n_x):
     tight and the numbers are long.  A flat bump instead would waste headroom on the left and push
     a two-category panel's labels into its title.
     """
-    return 11 + 4.5 * (n_x - 2) * xi / max(n_x - 1, 1)
+    return 11 + 2.5 * (n_x - 2) * xi / max(n_x - 1, 1)
 
 
 def _annotation_text(height):
