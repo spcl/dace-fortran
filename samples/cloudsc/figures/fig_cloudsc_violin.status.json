@@ -1,5 +1,6 @@
 {
   "figure": "fig_cloudsc_violin",
+  "data": "data: /capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran/samples/_work/logs/cloudsc_sweep_4478200_ranks",
   "rows": [
     "CPU (1 Thread)",
     "CPU (72 Threads)"

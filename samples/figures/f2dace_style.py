@@ -120,6 +120,17 @@ def format_duration(mean_millis):
     return f"{seconds:.2f} s" if seconds < 10 else f"{seconds:.1f} s"
 
 
+def _tier_offset(xi, n_x):
+    """Points between the two annotation tiers, widening towards the right (largest) x category.
+
+    Labels are two lines tall and get wider as the numbers grow, while the bar slot they sit over
+    gets narrower with every extra x category -- so the tiers have to spread where the slots are
+    tight and the numbers are long.  A flat bump instead would waste headroom on the left and push
+    a two-category panel's labels into its title.
+    """
+    return 11 + 4.5 * (n_x - 2) * xi / max(n_x - 1, 1)
+
+
 def _annotation_text(height):
     """Artifact bar annotation: shortest of s / ms / us rendering."""
     s_txt = f"{height / 1000.0:.2f}s"
@@ -334,7 +345,7 @@ def bar_panel(ax,
                     linewidth=1)
         if annotate:
             overflow = height > yhi * 0.8
-            stagger = 5 + 11 * ((i // n_x) % 2)  # neighbouring hues alternate height
+            stagger = 5 + _tier_offset(i % n_x, n_x) * ((i // n_x) % 2)
             ax.annotate(_annotation_text(height),
                         xy=(x, yhi / 10 if overflow else height),
                         xytext=(0, stagger),
@@ -392,7 +403,7 @@ def violin_panel(ax,
             off = (li - (n - 1) / 2) * vwidth / n
             ax.annotate(_annotation_text(row['median_millis']),
                         xy=(xi + off, row['median_millis']),
-                        xytext=(0, 6 + 11 * (li % 2)),
+                        xytext=(0, 6 + _tier_offset(xi, len(xcats)) * (li % 2)),
                         textcoords="offset points",
                         ha="center",
                         va="bottom",

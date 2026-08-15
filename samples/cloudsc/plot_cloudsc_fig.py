@@ -70,14 +70,26 @@ def build(df, missing, out_dir, prefix, cpu_threads, footer=None):
                   title=None,
                   xlabel_text=XLABEL if i == len(live) - 1 else '',
                   xtick_map=lambda s: f'{int(float(s)):,}',
-                  ylabel_text=title)
+                  ylabel_text=title,
+                  legend=False)
+
+        # One shared legend under the rows, same construction as plot_velocity_fig.
+        all_lanes = [l for l in st.CPU_LANES + st.GPU_LANES if any(l in ls for _, _, ls in live)]
+        handles = [plt.Rectangle((0, 0), 1, 1, color=st.LANE_COLOR.get(l, '0.5')) for l in all_lanes]
+        fig.legend(handles,
+                   st.legend_for(all_lanes),
+                   loc='lower center',
+                   ncol=min(len(all_lanes), 3),
+                   bbox_to_anchor=(0.5, -0.13),
+                   frameon=False)
         fig.tight_layout()
+        # Provenance goes to the sidecar, not onto the canvas -- it collides with the shared legend.
         st.save(fig,
                 out_dir,
                 f'{prefix}_{kind}',
-                footer=footer,
                 status={
                     'figure': f'{prefix}_{kind}',
+                    'data': footer,
                     'rows': [t for t, _, _ in live],
                     'lanes': sorted({l
                                      for _, _, ls in live
@@ -116,8 +128,6 @@ def main():
             missing.note(f'cloudsc lane "{lane}": INCOMPLETE, no rows at (threads, size) {lost}')
 
     footer = 'data: ' + ', '.join(args.runs_dir)
-    if gaps:
-        footer = f'INCOMPLETE: {", ".join(gaps)} | ' + footer
     build(df, missing, args.out_dir, args.out_prefix, [int(x) for x in args.cpu_threads.split(',')], footer=footer)
     if missing:
         print('MISSING:')
