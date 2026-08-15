@@ -16,14 +16,15 @@ OpenMP loop over G-blocks.  Sibling sample: `../addusxx_g` (same TU, same decks'
 |---|---|
 | `baseline/cpu/newdxx_g_baseline_cpu_omp.f90` | single TU: OMP-preserving merged `us_exx` closure (QE 7.6 export, `!$omp` intact) + QE utility stubs |
 | `baseline/cpu/verify_newdxx.f90` | driver: loads a dump set, calls the REAL `newdxx_g`, verifies + times |
-| `baseline/cpu/build.sh` | build one lane (`LANE=original-openmp|flang-openmp`) |
+| `baseline/cpu/build.sh` | build one Fortran lane (`LANE=original-openmp|flang-openmp`) |
 | `baseline/cpu/run_verify.sh` | correctness-only gate, no timing (PR verbatim) |
 | `baseline/cpu/run_lane_worker.sh` | one measurement lane, one socket, sweeps `DECK_REPS`, writes the 11-column CSV |
+| `../qe_cpu_perf.py` | the DaCe CPU lanes (`dace-gcc`/`dace-llvm`): compiles `outputs/newdxx_g_opt.sdfg` with the lane's C++ compiler, verifies every timed call, appends the same CSV |
 | `../qe_deck_replicate.py`, `../check_qe_deck_replicate.py` | deck replication for the Python/GPU path + its numpy gate and negative control |
-| `run_newdxx_g_cpu.sbatch` | the CPU experiment: 2 lanes x 2 decks x sets x threads |
+| `run_newdxx_g_cpu.sbatch` | the CPU experiment: 4 lanes x 2 decks x sets x threads |
 | `download_data.sh` | fetch the pinned dump decks into `data/<MAT>/` (PR verbatim) |
 | `outputs/` | SDFG lowering artifacts (`.F90` TU, original/optimized/GPU `.sdfg`) |
-| `run_regex_default_newdxx_g.py`, `run_optimize_original.py`, `optimize_sdfg_newdxx_g.py`, `offload_newdxx.py`, `apply_manual_fixes.sh`, `build_verify.sh`, `verify_newdxx.f90` | PR's SDFG/binding chain and its own verify driver (not wired into the CPU job yet) |
+| `run_regex_default_newdxx_g.py`, `run_optimize_original.py`, `optimize_sdfg_newdxx_g.py`, `offload_newdxx.py`, `apply_manual_fixes.sh`, `build_verify.sh`, `verify_newdxx.f90` | PR's SDFG/binding chain and its own verify driver (the Fortran-bindings route; the CPU job calls the SDFG from Python instead) |
 | `plot_newdxx_g_cpu.py`, `figures/`, `output_data/` | figures and measurement CSVs |
 
 ## Decks
@@ -95,11 +96,14 @@ and every MPI entry point becomes an abort-if-called link stub (one rank reaches
 
     sbatch -p debug -A <account> samples/newdxx_g/run_newdxx_g_cpu.sbatch
 
-One node, 2 lanes running concurrently on one exclusive 72-core socket each
-(`original-openmp` = gfortran, `flang-openmp` = LLVM flang), sweeping `$THREADS` over both decks
-and both sets.  Timing is steady state: one process per (deck, set, deck_rep, threads) runs
+One node, 4 lanes running concurrently on one exclusive 72-core socket each -- two Fortran
+(`original-openmp` = gfortran, `flang-openmp` = LLVM flang) and two DaCe (`dace-gcc` = g++,
+`dace-llvm` = clang++, both on `outputs/newdxx_g_opt.sdfg`) -- sweeping `$THREADS` over both
+decks and both sets.  Timing is steady state: one process per (deck, set, deck_rep, threads) runs
 `WARMUP=3` discarded + `REPS=20` timed in-process calls, and the driver verifies EVERY timed call,
-so a lane that drifts numerically contributes no rows.  Knobs: `LANES`, `MATS`, `REPS`, `WARMUP`,
+so a lane that drifts numerically contributes no rows.  Neither SDFG holds a top-level BLAS
+library node, so the DaCe lanes link no BLAS at all and their only OpenMP runtime is the one
+`-fopenmp` pulls in; `../omp_preflight.py` asserts that per lane before any row is written.  Knobs: `LANES`, `MATS`, `REPS`, `WARMUP`,
 `THREADS`, `DECK_REPS`, `CSV`, `MEAS_ALLOC`.
 
 `DECK_REPS` (default `1 64`) is the deck-replication sweep; `1` is always kept so the original

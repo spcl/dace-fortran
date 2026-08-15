@@ -56,8 +56,32 @@ unset BUILD_ROOT
 setup_build_root "${KERNEL}_${LANE}"
 lock_build_root
 
-BIN="$BUILD_ROOT/$(basename "$(ls "$HERE"/verify_*.f90 | head -1)" .f90)"
-LANE="$LANE" BUILD_DIR="$BUILD_ROOT/lib" BIN_PATH="$BIN" bash "$HERE/build.sh"
+DRIVER="$REPO/samples/qe_cpu_perf.py"
+case "$LANE" in
+    original-openmp | flang-openmp)
+        BIN="$BUILD_ROOT/$(basename "$(ls "$HERE"/verify_*.f90 | head -1)" .f90)"
+        LANE="$LANE" BUILD_DIR="$BUILD_ROOT/lib" BIN_PATH="$BIN" bash "$HERE/build.sh"
+        ;;
+    dace-gcc | dace-llvm)
+        # The DaCe lanes are the SDFG's own C++ compiled by this lane's C++ compiler -- no
+        # Fortran TU and no BLAS link (optimize() reports no top-level BLAS library node in
+        # either kernel), so the ONLY OpenMP runtime in the process is the one -fopenmp pulled
+        # in, and omp_preflight asserts it is this lane's and not the other family's.
+        BACKEND="${LANE#dace-}"
+        SO="$BUILD_ROOT/dacecache/${KERNEL}_cpu_${BACKEND}/build/lib${KERNEL}_cpu_${BACKEND}.so"
+        # *.sdfg is gitignored, so the optimized SDFG is a build artifact like any other.
+        OPT_SDFG="$KDIR/outputs/${KERNEL}_opt.sdfg"
+        [ -f "$OPT_SDFG" ] || (cd "$KDIR" && "$PY" "optimize_sdfg_${KERNEL}.py" \
+            --input "outputs/${KERNEL}_original.sdfg" --output "$OPT_SDFG")
+        set_omp_env "$TOPO_NCORES"
+        "$PY" "$DRIVER" --kernel "$KERNEL" --lane "$LANE" --build-only
+        "$PY" "$REPO/samples/omp_preflight.py" --so "$SO" --expect "$BACKEND" --label "$LANE"
+        ;;
+    *)
+        echo "FATAL: unknown lane $LANE (original-openmp | flang-openmp | dace-gcc | dace-llvm)" >&2
+        exit 1
+        ;;
+esac
 
 meta_val() { awk -v k="$2" '$1 == k { print $2; exit }' "$1"; }
 
@@ -91,26 +115,36 @@ for mat in $MATS; do
             set_omp_env "$t"
             log="$BUILD_ROOT/run_${mat}_${iset}_r${R}_${t}.log"
             rc=0
-            DECK_REP="$R" "$BIN" "$deck" "$iset" "$REPS" "$WARMUP" > "$log" 2>&1 || rc=$?
+            if [ -n "${BACKEND:-}" ]; then
+                # The DaCe driver verifies every timed call itself and appends the same 11 columns.
+                "$PY" "$DRIVER" --kernel "$KERNEL" --lane "$LANE" --deck "$deck" --sets "$iset" \
+                    --reps "$REPS" --warmup "$WARMUP" --rep "$R" --csv "$CSV" > "$log" 2>&1 || rc=$?
+            else
+                DECK_REP="$R" "$BIN" "$deck" "$iset" "$REPS" "$WARMUP" > "$log" 2>&1 || rc=$?
+            fi
             if [ "$rc" -ne 0 ] || ! grep -q "VERIFY: PASS" "$log"; then
                 echo "FATAL: $KERNEL $mat set $iset deck_rep=$R at $t threads did not verify (rc=$rc); tail:" >&2
                 tail -10 "$log" >&2
                 exit 1
             fi
-            # The driver echoes what it actually replicated; a silently ignored DECK_REP would
-            # otherwise label R=1 timings as R=64.
-            if ! grep -q "^replicate $R " "$log"; then
-                echo "FATAL: driver did not report 'replicate $R' -- DECK_REP was not honoured" >&2
-                exit 1
+            if [ -n "${BACKEND:-}" ]; then
+                n="$(awk '$1 == "wrote" { print $2 }' "$log")"
+            else
+                # The driver echoes what it actually replicated; a silently ignored DECK_REP would
+                # otherwise label R=1 timings as R=64.
+                if ! grep -q "^replicate $R " "$log"; then
+                    echo "FATAL: driver did not report 'replicate $R' -- DECK_REP was not honoured" >&2
+                    exit 1
+                fi
+                n=0
+                while read -r secs; do
+                    awk -v k="$KERNEL" -v m="$mat" -v a="$nnr" -v b="$ngmt" -v th="$t" -v r="$n" \
+                        -v s="$secs" -v i="$inputs" -v l="$LANE" -v al="$ALLOC" -v dr="$R" \
+                        'BEGIN { printf "%s,%s,%s,%s,%s,%s,%.6f,%s,%s,%s,%s\n", k, m, a, b, th, r, s * 1000.0, i, l, al, dr }' \
+                        >> "$CSV"
+                    n=$((n + 1))
+                done < <(awk '$1 == "kernel_time_s" { print $2 }' "$log")
             fi
-            n=0
-            while read -r secs; do
-                awk -v k="$KERNEL" -v m="$mat" -v a="$nnr" -v b="$ngmt" -v th="$t" -v r="$n" \
-                    -v s="$secs" -v i="$inputs" -v l="$LANE" -v al="$ALLOC" -v dr="$R" \
-                    'BEGIN { printf "%s,%s,%s,%s,%s,%s,%.6f,%s,%s,%s,%s\n", k, m, a, b, th, r, s * 1000.0, i, l, al, dr }' \
-                    >> "$CSV"
-                n=$((n + 1))
-            done < <(awk '$1 == "kernel_time_s" { print $2 }' "$log")
             if [ "$n" -ne "$REPS" ]; then
                 echo "FATAL: $mat set $iset deck_rep=$R at $t threads emitted $n timed calls, expected $REPS" >&2
                 exit 1
