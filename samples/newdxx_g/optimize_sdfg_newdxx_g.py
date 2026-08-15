@@ -208,7 +208,106 @@ class StageTimer:
 # --------------------------------------------------------------------------- pipeline
 
 
-def run_pipeline(sdfg, unroll_limit=8, validate=True):
+#: The ONE loop in this kernel the Fortran itself parallelizes: SDFG label ->
+#: (``DO`` line, ``!$omp do`` line) in ``baseline/cpu/newdxx_g_baseline_cpu_omp.f90``.
+#: Same contract as ``scripts/forced_loop_to_map.py``'s ``OMP_PARALLEL_JB_LOOPS``:
+#: membership here is the whole safety story, so never add a loop without an
+#: ``!$omp do`` above its Fortran original.
+#:
+#: DELIBERATELY ABSENT, and both must stay absent:
+#:  * ``loop_iblock_74`` (f90:21962) -- ``deexx`` takes one block-partial sum per
+#:    iblock IN BLOCK ORDER, so this loop IS the G-reduction tree, not cache
+#:    blocking.  The Fortran puts no ``!$omp do`` on it either.  LoopToMap's
+#:    PERMISSIVE rung *accepts* it, which is exactly why conversion here is by
+#:    name and never through a pattern-matching driver.
+#:  * the other ``DO na = 1, nat`` (f90:21923, the eigqts loop) -- no ``!$omp do``
+#:    above it, and the pipeline has already made it a Map before we run.
+OMP_PARALLEL_NA_LOOPS = {"loop_na_78": (21968, 21967)}
+F90 = "newdxx_g_baseline_cpu_omp.f90"
+
+
+def _assert_is_the_pinned_na_loop(loop):
+    """Guard the pinned label against pipeline drift -- forcing the wrong loop is a
+    silent race, not an error, so re-check the two properties that identify it."""
+    parents, p = [], loop.parent_graph
+    while p is not None:
+        parents.append(getattr(p, "label", ""))
+        p = getattr(p, "parent_graph", None)
+    if not any(x.startswith("loop_iblock") for x in parents):
+        sys.exit(f"FATAL: {loop.label} is not nested inside the iblock loop (parents {parents}); "
+                 f"the label is pinned to {F90}:{OMP_PARALLEL_NA_LOOPS[loop.label][0]} -- re-identify it")
+    touched = {n.data for n, _ in loop.all_nodes_recursive() if isinstance(n, dace_nodes.AccessNode)}
+    if "deexx" not in touched:
+        sys.exit(f"FATAL: {loop.label} does not touch deexx (touches {sorted(touched)[:12]})")
+
+
+def _demote_persistent(sdfg, names):
+    """Pin the given transients to a thread-local stack array: ``Scope`` lifetime, ``Register``
+    storage.
+
+    ``MakeTransientsPersistent`` (last pass of the shared pipeline) promotes these to
+    ``Persistent``, i.e. ONE buffer allocated in ``__dace_init_*``.  That is harmless while
+    ``na`` is serial -- there is only ever one live instance -- but once ``na`` is a parallel
+    Map the single buffer is shared by every thread, and the descriptor lands inside the map
+    body where an init-time allocation does not compose at all (measured: SIGSEGV even at one
+    thread).  ``Scope`` gives one instance per scope entry, which is what the serial version
+    had and what the Fortran has: ``aux1``/``aux2`` are ALLOCATEd inside ``!$omp parallel``,
+    hence private per thread.
+
+    ``(256,) complex128`` = 4 KiB, so ~288 KiB across 72 threads against the ``OMP_STACKSIZE=64M``
+    ``samples/common.sh::set_omp_env`` already exports -- the promotion bought no memory and cost
+    correctness.  Done at the CALL SITE on purpose: ``MakeTransientsPersistent`` is shared with
+    cloudsc and velocity and is not ours to change.
+    """
+    changed = []
+    for s in sdfg.all_sdfgs_recursive():
+        if s is sdfg:
+            # Root-level transients (auxvc at 298 KiB, eigqts, fact) are written by the SETUP
+            # states OUTSIDE the map and only READ inside it, so they stay shared and stay on the
+            # heap.  Only what the map body declares becomes per-instance scratch.
+            continue
+        for name, desc in s.arrays.items():
+            if name not in names or not desc.transient:
+                continue
+            before = (desc.lifetime.name, desc.storage.name)
+            desc.lifetime = dace.dtypes.AllocationLifetime.Scope
+            desc.storage = dace.dtypes.StorageType.Register
+            after = (desc.lifetime.name, desc.storage.name)
+            if before != after:
+                changed.append(f"{s.label}.{name} {before[0]}/{before[1]}->{after[0]}/{after[1]}")
+    return sorted(changed)
+
+
+def parallelize_omp_do_loops(sdfg):
+    """Turn the Fortran's ``!$omp do`` ``na`` loop into a Map; leave every other loop alone.
+
+    Stock ``LoopToMap`` refuses it, and the reason is the indirection rather than a
+    weak dependence test: ``ikb = ofsbeta(na) + ih`` makes the frontend emit a
+    whole-array ``deexx[0:nkb]`` write memlet, which ``_check_range`` cannot match
+    against ``a*na + b``.  The disjointness that actually makes the loop parallel
+    lives in ``ofsbeta`` -- asserted by ``samples/qe_deck_replicate.py::
+    deexx_targets_disjoint`` -- and never reaches the SDFG.
+    """
+    sys.path.insert(0, str(HERE.parents[1] / "scripts"))
+    from forced_loop_to_map import loop_to_map_escalating
+
+    loops = {r.label: r for r in sdfg.all_control_flow_regions(recursive=True) if isinstance(r, LoopRegion)}
+    lines = []
+    for label, (do_line, omp_line) in OMP_PARALLEL_NA_LOOPS.items():
+        loop = loops.get(label)
+        if loop is None:
+            sys.exit(f"FATAL: {label} not in this SDFG (loops: {sorted(loops)}); it is pinned to "
+                     f"{F90}:{do_line} -- re-identify the loop before editing OMP_PARALLEL_NA_LOOPS")
+        _assert_is_the_pinned_na_loop(loop)
+        under = {n.data for n, _ in loop.all_nodes_recursive() if isinstance(n, dace_nodes.AccessNode)}
+        tag = loop_to_map_escalating(loop)
+        demoted = _demote_persistent(sdfg, under)
+        lines.append(f"{label}: {tag} -- {F90}:{do_line}, !$omp do at :{omp_line}")
+        lines.append(f"{label}: Persistent->Scope for {demoted or 'nothing'}")
+    return lines
+
+
+def run_pipeline(sdfg, unroll_limit=8, validate=True, parallelize_na=False):
     """``dace_fortran.pipelines.optimize`` -- the shared pipeline, CALLED not copied.
 
     Only the two sample-specific bookends stay here: the gate copy-in repair,
@@ -225,6 +324,15 @@ def run_pipeline(sdfg, unroll_limit=8, validate=True):
     optimize(sdfg, unroll_limit=unroll_limit, validate=validate)
     st.report("pipelines.optimize")
 
+    # Opt-in, CPU driver only: offload_newdxx.py calls run_pipeline() without it, so the GPU
+    # SDFG is unchanged by this. `na` is the axis the Fortran parallelizes and the only one
+    # that grows with DECK_REP; leaving it serial is what caps the CPU lanes at nh (19 or 8)
+    # threads' worth of work and forks two OpenMP regions per (iblock, na).
+    if parallelize_na:
+        for line in parallelize_omp_do_loops(sdfg):
+            print(f"[omp-do-parallelize      ] {line}", flush=True)
+        st.report("omp-do-parallelize")
+
     bad = writerless_edge_read_transients(sdfg)
     if bad:
         sys.exit(f"FATAL: writer-less edge-read transients at end of pipeline: {sorted(bad)}")
@@ -240,6 +348,10 @@ def main() -> int:
     ap.add_argument("--output", type=Path, default=OUT / f"{NAME}_opt.sdfg", help="where to save the result")
     ap.add_argument("--unroll-limit", type=int, default=8, help="ShortLoopUnroll trip-count limit")
     ap.add_argument("--no-validate", action="store_true", help="skip structural validation between stages")
+    ap.add_argument("--no-parallelize-na", action="store_true",
+                    help="leave the Fortran's !$omp do na loop sequential. Default is to map it: "
+                         "serial na caps the CPU lanes at nh (19/8) units and forks 2 OpenMP regions "
+                         "per (iblock, na). CPU driver only -- offload_newdxx.py is unaffected.")
     ap.add_argument("--no-refreeze", action="store_true", help="skip re-snapshotting the frozen binding signature")
     args = ap.parse_args()
 
@@ -252,7 +364,8 @@ def main() -> int:
     print(f"loaded {args.input.name}: {s0['nodes']} nodes, {s0['loops']} loops, {s0['maps']} maps "
           f"in {time.time() - t0:.0f}s", flush=True)
 
-    run_pipeline(sdfg, unroll_limit=args.unroll_limit, validate=not args.no_validate)
+    run_pipeline(sdfg, unroll_limit=args.unroll_limit, validate=not args.no_validate,
+                 parallelize_na=not args.no_parallelize_na)
 
     if not args.no_refreeze:
         # NOTE: on a file-loaded SDFG this snapshots the CURRENT signature (the builder's
