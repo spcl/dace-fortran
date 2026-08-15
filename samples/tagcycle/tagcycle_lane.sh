@@ -358,13 +358,14 @@ case "$VARIANT" in
             done
         done
         ;;
-    cloudsc-sweep-fortran | cloudsc-sweep-c)
+    cloudsc-sweep-fortran | cloudsc-sweep-c | cloudsc-sweep-c-clang)
         # The two non-DaCe sweep lanes are just baselines.sh in sweep mode: it already owns the
         # dwarf build recipes, the h5 deck wiring and the 10-column CSV contract, and neither lane
         # has a phase A, so warm only has to produce the binary (a 4096-column smoke run does that
         # and proves it runs).  BUILD_ROOT_BASE is shared warm->meas so the binary survives.
         case "$VARIANT" in
             cloudsc-sweep-fortran) blane=original-openmp ;;
+            cloudsc-sweep-c-clang) blane=c-openmp-clang ;;
             *) blane=c-openmp ;;
         esac
         [ -f "$CLOUDSC_H5" ] || {
