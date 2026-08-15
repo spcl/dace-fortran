@@ -25,8 +25,36 @@ CSV_HEADER="kernel,mode,nproma,nblks_e,threads,rep,ms,inputs,lane,alloc"
 # driver_velocity emits the 9 original columns; the allocator is a property of the process the
 # harness launched it in, so the alloc column is appended here rather than in the Fortran driver.
 ALLOC="${MEAS_ALLOC_ACTIVE:-system}"
-DATA_DIR="${VELOCITY_DATA_DIR:-$HERE/data_r02b05}"
-R06_DATA_DIR="${VELOCITY_R06_DATA_DIR:-$HERE/data_r02b06}"
+# Deck paths from the caller are resolved against the REPO ROOT when relative. The sbatch passes
+# repo-relative paths (it is submitted from the repo root), but this script is CWD-independent, so
+# a relative VELOCITY_DATA_DIR used as-is silently missed and the lane fell back to the 160 km deck
+# while the DaCe lanes ran 40 km -- confidently wrong numbers under a matching-looking label.
+abs_deck() { case "$1" in /*) printf '%s' "$1" ;; *) printf '%s' "$REPO/$1" ;; esac; }
+
+DATA_DIR="$(abs_deck "${VELOCITY_DATA_DIR:-$HERE/data_r02b05}")"
+# An EXPLICIT request that does not resolve is fatal: falling back to another deck is the bug above.
+if [ -n "${VELOCITY_DATA_DIR:-}" ] && [ ! -d "$DATA_DIR" ]; then
+    echo "FATAL: VELOCITY_DATA_DIR=$VELOCITY_DATA_DIR resolved to $DATA_DIR, which is not a directory." >&2
+    echo "  Refusing to fall back to $HERE/data_r02b05 -- that would measure a different grid." >&2
+    exit 1
+fi
+
+# The R02B06 deck ships as a tarball beside this script and is extracted under _work/meas, so the
+# in-tree path does not exist and the nvhpc lane skipped for want of a dump it could have built.
+if [ -n "${VELOCITY_R06_DATA_DIR:-}" ]; then
+    R06_DATA_DIR="$(abs_deck "$VELOCITY_R06_DATA_DIR")"
+    if [ ! -d "$R06_DATA_DIR" ]; then
+        echo "FATAL: VELOCITY_R06_DATA_DIR=$VELOCITY_R06_DATA_DIR resolved to $R06_DATA_DIR, not a directory." >&2
+        exit 1
+    fi
+else
+    R06_DATA_DIR="$HERE/data_r02b06"
+    for _cand in "$REPO/samples/_work/meas/data_r02b06" "$HERE/data_r02b06"; do
+        [ -d "$_cand" ] && { R06_DATA_DIR="$_cand"; break; }
+    done
+fi
+echo "baselines: DATA_DIR=$DATA_DIR"
+echo "baselines: R06_DATA_DIR=$R06_DATA_DIR"
 R06_TIMESTEP="${VELOCITY_TIMESTEP:-1}"
 
 # Never inherit a dacecache root from the sbatch's dace lanes: these lanes share nothing with them.
@@ -47,11 +75,16 @@ if [ ! -f "$DUMP/manifest.txt" ]; then
 fi
 
 # build_driver <dir> <fc> <flags...>: modules first, the TU defines every module the driver USEs.
+# Loop exchange is OFF everywhere (0c9bdc0), which this file was missed by: the exchange twin
+# declares the kernel's INOUT work arrays transposed (z_kin_hor_e(jk,je,jb) vs (je,jk,jb)), so
+# building it here would compare the DaCe lane against a differently-laid-out oracle.
+VT_ACC_TU="${VT_ACC_TU:-$HERE/velocity_advection_noloopexch_acc.f90}"
+
 build_driver() (
     local dir="$1" fc="$2"
     shift 2
     mkdir -p "$dir" && cd "$dir"
-    "$fc" "$@" -c "$HERE/velocity_advection_acc.f90" -o velocity_advection_acc.o
+    "$fc" "$@" -c "$VT_ACC_TU" -o velocity_advection_acc.o
     "$fc" "$@" -c "$HERE/driver_velocity.f90" -o driver_velocity.o
     "$fc" "$@" velocity_advection_acc.o driver_velocity.o -o driver_velocity
 )
