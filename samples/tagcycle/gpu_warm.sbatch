@@ -56,12 +56,17 @@ LANES="${LANES:-cuda-ref openacc-ref dace-gpu dace-gpu-pipeline dace-gpu-manual}
 CLOUDSC_NGPTOT="${CLOUDSC_NGPTOT:-65536}"
 CLOUDSC_GPU_NPROMA="${CLOUDSC_GPU_NPROMA:-128}"
 VELOCITY_FLAT_NPROMA="${VELOCITY_FLAT_NPROMA:-491520}"
-VELOCITY_R06_DATA_DIR="${VELOCITY_R06_DATA_DIR:-$BR2/data_r02b06}"
+# The grid was pinned by three r02b06 literals, so the GPU lane could only ever run 40 km. It is a
+# knob now; the default keeps existing behaviour. 160 km is VELOCITY_FLAT_GRID=r02b05 with
+# VELOCITY_FLAT_NPROMA=30720 (that deck's edge count, so nblks_e comes out 1 -- the flat shape).
+VELOCITY_FLAT_GRID="${VELOCITY_FLAT_GRID:-r02b06}"
+# VELOCITY_R06_DATA_DIR kept as a fallback so an existing caller that sets it still works.
+VELOCITY_FLAT_DATA_DIR="${VELOCITY_FLAT_DATA_DIR:-${VELOCITY_R06_DATA_DIR:-$BR2/data_$VELOCITY_FLAT_GRID}}"
 VELOCITY_TIMESTEP="${VELOCITY_TIMESTEP:-1}"
-FLATDUMP="$GPUROOT/dump_r02b06_nproma${VELOCITY_FLAT_NPROMA}"
+FLATDUMP="$GPUROOT/dump_${VELOCITY_FLAT_GRID}_nproma${VELOCITY_FLAT_NPROMA}"
 # The DaCe velocity runner probes only its cache root; the flat deck lives beside the runs, so the
 # path is handed over explicitly rather than guessed.
-export VELOCITY_NPZ_FLAT="${VELOCITY_NPZ_FLAT:-$BR2/velocity_r02b06_nproma${VELOCITY_FLAT_NPROMA}.npz}"
+export VELOCITY_NPZ_FLAT="${VELOCITY_NPZ_FLAT:-$BR2/velocity_${VELOCITY_FLAT_GRID}_nproma${VELOCITY_FLAT_NPROMA}.npz}"
 
 CUDA_EXE="$GPUROOT/cloudsc_gpu_baselines/dwarf-cloudsc-cuda"
 ACC_ROOT="$GPUROOT/velocity_acc_gpu"
@@ -168,7 +173,12 @@ tu_of() {
 
 ensure_flat_dump() {
     [ -f "$FLATDUMP/manifest.txt" ] && return 0
-    "$PY" "$VELOCITY_SRC/dump_data.py" --data-dir "$VELOCITY_R06_DATA_DIR" \
+    if [ ! -d "$VELOCITY_FLAT_DATA_DIR" ]; then
+        echo "FATAL: VELOCITY_FLAT_DATA_DIR=$VELOCITY_FLAT_DATA_DIR is not a directory;" >&2
+        echo "  cannot build the $VELOCITY_FLAT_GRID flat dump. Refusing to fall back to another grid." >&2
+        return 1
+    fi
+    "$PY" "$VELOCITY_SRC/dump_data.py" --data-dir "$VELOCITY_FLAT_DATA_DIR" \
         --timestep "$VELOCITY_TIMESTEP" --nproma "$VELOCITY_FLAT_NPROMA" --out "$FLATDUMP"
 }
 

@@ -86,11 +86,13 @@ CLOUDSC_NGPTOT="${CLOUDSC_NGPTOT:-65536}"
 CLOUDSC_GPU_NPROMA="${CLOUDSC_GPU_NPROMA:-128}"
 CLOUDSC_NBLOCKS=$(((CLOUDSC_NGPTOT + CLOUDSC_GPU_NPROMA - 1) / CLOUDSC_GPU_NPROMA))
 VELOCITY_FLAT_NPROMA="${VELOCITY_FLAT_NPROMA:-491520}"
-VELOCITY_INPUTS="${VELOCITY_INPUTS:-r02b06}"
-FLATDUMP="$GPUROOT/dump_r02b06_nproma${VELOCITY_FLAT_NPROMA}"
+# Grid knob, same as gpu_warm.sbatch -- the two MUST agree or meas looks for a dump warm never built.
+VELOCITY_FLAT_GRID="${VELOCITY_FLAT_GRID:-r02b06}"
+VELOCITY_INPUTS="${VELOCITY_INPUTS:-$VELOCITY_FLAT_GRID}"
+FLATDUMP="$GPUROOT/dump_${VELOCITY_FLAT_GRID}_nproma${VELOCITY_FLAT_NPROMA}"
 # The DaCe velocity runner probes only its cache root; the flat deck lives beside the runs, so the
 # path is handed over explicitly rather than guessed.
-export VELOCITY_NPZ_FLAT="${VELOCITY_NPZ_FLAT:-$BR2/velocity_r02b06_nproma${VELOCITY_FLAT_NPROMA}.npz}"
+export VELOCITY_NPZ_FLAT="${VELOCITY_NPZ_FLAT:-$BR2/velocity_${VELOCITY_FLAT_GRID}_nproma${VELOCITY_FLAT_NPROMA}.npz}"
 
 CUDA_EXE="$GPUROOT/cloudsc_gpu_baselines/dwarf-cloudsc-cuda"
 CUDA_RUNDIR="$GPUROOT/cloudsc_gpu_baselines/run"
