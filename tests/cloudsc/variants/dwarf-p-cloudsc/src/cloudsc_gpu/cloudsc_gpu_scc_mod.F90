@@ -115,7 +115,7 @@ CONTAINS
     !!
     !===============================================================================
     
-    USE PARKIND1, ONLY: JPIM, JPRB, JPRD, JPRL
+    USE PARKIND1, ONLY: JPIM, JPRB, JPRD, JPRL, JPRM
     USE YOMPHYDER, ONLY: state_type
     USE YOMCST, ONLY: RG, RD, RCPD, RETV, RLVTT, RLSTT, RLMLT, RTT, RV
     USE YOETHF, ONLY: R2ES, R3LES, R3IES, R4LES, R4IES, R5LES, R5IES, R5ALVCP, R5ALSCP, RALVDCP, RALSDCP, RALFDCP, RTWAT, RTICE,  &

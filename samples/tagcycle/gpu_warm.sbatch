@@ -69,6 +69,7 @@ FLATDUMP="$GPUROOT/dump_${VELOCITY_FLAT_GRID}_nproma${VELOCITY_FLAT_NPROMA}"
 export VELOCITY_NPZ_FLAT="${VELOCITY_NPZ_FLAT:-$BR2/velocity_${VELOCITY_FLAT_GRID}_nproma${VELOCITY_FLAT_NPROMA}.npz}"
 
 CUDA_EXE="$GPUROOT/cloudsc_gpu_baselines/dwarf-cloudsc-cuda"
+CLOUDSC_ACC_EXE="$GPUROOT/cloudsc_gpu_baselines/openacc/dwarf-cloudsc-gpu-scc"
 ACC_ROOT="$GPUROOT/velocity_acc_gpu"
 VELOCITY_SRC="$MEAS/samples/velocity_tendencies"
 CLOUDSC_RUNNER="$MEAS/samples/gpu/run_cloudsc_gpu.py"
@@ -222,6 +223,14 @@ warm_lane() {
                 bash "$MEAS/samples/cloudsc/gpu_baselines.sh" || return 1
             [ -x "$CUDA_EXE" ] || {
                 echo "FATAL: gpu_baselines.sh left no binary at $CUDA_EXE" >&2
+                return 1
+            }
+            ;;
+        cloudsc-acc-ref)
+            CSV="$GPUROOT/warm_cloudsc_acc_ref.csv" GPU_LANES=openacc REPS=1 WARMUP=0 \
+                bash "$MEAS/samples/cloudsc/gpu_baselines.sh" || return 1
+            [ -x "$CLOUDSC_ACC_EXE" ] || {
+                echo "FATAL: gpu_baselines.sh left no binary at $CLOUDSC_ACC_EXE" >&2
                 return 1
             }
             ;;
