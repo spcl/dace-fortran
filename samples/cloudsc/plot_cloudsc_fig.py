@@ -112,10 +112,15 @@ def main():
     missing = st.Missing()
     df = st.load_runs(args.runs_dir, 'cloudsc', alloc=args.alloc, missing=missing)
     print(f'cloudsc rows loaded: {df.height}')
-    # is_in(CPU_LANES) drops unknown lanes without a word; measured rows must never vanish silently.
-    unstyled = sorted(set(df['lane'].unique().to_list()) - set(st.CPU_LANES) - set(st.GPU_LANES))
+    # is_in(CPU_LANES) drops lanes without a word; measured rows must never vanish silently.  A
+    # lane nobody has styled is a mistake and aborts; a styled lane held out of the drawn set is a
+    # decision, so it is recorded instead -- either way it is never dropped in silence.
+    measured = set(df['lane'].unique().to_list())
+    unstyled = sorted(measured - set(st.LANE_COLOR))
     if unstyled:
         raise SystemExit(f'FATAL: measured lanes with no f2dace_style entry: {unstyled}')
+    for lane in sorted(measured - set(st.CPU_LANES) - set(st.GPU_LANES)):
+        missing.note(f'cloudsc lane "{lane}": measured, deliberately not drawn (not in CPU_LANES)')
     # A lane that died mid-sweep still has rows; without this it plots as a complete lane with a gap.
     cells = df.select(['threads', 'problem_size']).unique()
     gaps = {}

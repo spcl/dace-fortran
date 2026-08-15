@@ -94,12 +94,15 @@ the two allocator generations in one plot.
 
 ## Earlier-brief figures (superseded, kept for reference)
 
-- `cloudsc_cpu.pdf|png`, `velocity_cpu.pdf|png` -- first pass, code copied
-  verbatim from the artifact notebooks (`plot_cloudsc_cpu.py`,
-  `plot_velocity_cpu.py`).  Superseded by `fig_cloudsc_bar` / `fig_velocity_bar`.
-- `cloudsc_cpu_threads.pdf|png`, `velocity_cpu_threads.pdf|png` -- thread sweep
-  in the same style (x = OpenMP threads), the only non-degenerate x axis our
-  single-size/single-grid data supports.
+- `cloudsc_cpu.*`, `velocity_cpu.*`, `cloudsc_cpu_threads.*`, `velocity_cpu_threads.*`
+  and the fast-math pair -- DELETED along with the scripts that made them
+  (`plot_cloudsc_cpu.py`, `plot_velocity_cpu.py`, `plot_cloudsc_fastmath.py`).
+  The first two were superseded by `fig_cloudsc_bar` / `fig_velocity_bar`; the
+  thread sweeps existed only because a single size/grid left no other
+  non-degenerate x axis, which the size sweep has since fixed; fast-math was
+  never measured.  All three also kept private lane colour/label dicts, so
+  deleting them is what stops the shared palette drifting again.
+  NOTE: nothing else plots x = OpenMP threads for velocity.
 - `compare_cloudsc.png`, `compare_velocity.png` -- artifact reference figure
   stacked above ours for the fidelity check (`make_side_by_side.py`).
 - `reference/ref_cloudsc.png`, `reference/ref_icon_velocity.png` -- the

@@ -65,6 +65,15 @@ def build(df, missing, out_dir, prefix, cpu_threads, footer=None):
     for lane in st.CPU_LANES + st.GPU_LANES:
         if lane not in set(df['lane'].unique().to_list()):
             missing.note(f'velocity lane "{lane}": not measured')
+    # The reverse direction is the dangerous one: is_in(CPU_LANES) drops a measured lane without a
+    # word.  Unstyled means nobody has defined it and is a mistake; styled-but-not-listed is a
+    # deliberate hold-out and is recorded.  Neither disappears quietly.
+    measured = set(df['lane'].unique().to_list())
+    unstyled = sorted(measured - set(st.LANE_COLOR))
+    if unstyled:
+        raise SystemExit(f'FATAL: measured lanes with no f2dace_style entry: {unstyled}')
+    for lane in sorted(measured - set(st.CPU_LANES) - set(st.GPU_LANES)):
+        missing.note(f'velocity lane "{lane}": measured, deliberately not drawn (not in CPU_LANES)')
 
     if not live:
         missing.note('velocity: nothing to plot, no figure written')

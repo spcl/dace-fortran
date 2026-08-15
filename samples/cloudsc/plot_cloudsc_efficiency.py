@@ -75,7 +75,10 @@ def build(df, missing, out_dir, name, footer=None):
                     label=lane)
         ax.axhline(100, color='0.6', linewidth=0.9, linestyle='--', zorder=0)
         ax.set_xscale('log', base=2)
-        ax.set_xticks(sorted(df['threads'].unique().to_list()))
+        # 64 and 72 land on top of each other on a log2 axis; label the full-node count and let
+        # the crowded one keep its data point but lose its tick.
+        counts = sorted(df['threads'].unique().to_list())
+        ax.set_xticks([n for n in counts if not any(1.0 < m / n < 1.19 for m in counts)])
         ax.get_xaxis().set_major_formatter(plt.ScalarFormatter())
         ax.tick_params(axis='x', labelrotation=45)
         ax.set_ylim(0, 115)
@@ -96,9 +99,9 @@ def build(df, missing, out_dir, name, footer=None):
     st.save(fig,
             out_dir,
             name,
-            footer=footer,
             status={
                 'figure': name,
+                'data': footer,
                 'panels': modes,
                 'lanes': plotted,
                 'missing': list(missing)
@@ -110,7 +113,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--runs-dir', nargs='+', default=DEFAULT_RUNS)
     ap.add_argument('--out-name', default='fig_cloudsc_eff')
-    ap.add_argument('--out-dir', default=os.path.dirname(os.path.abspath(__file__)))
+    ap.add_argument('--out-dir', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'figures'))
     ap.add_argument('--alloc', default='mimalloc')
     args = ap.parse_args()
 

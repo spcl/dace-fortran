@@ -1,0 +1,23 @@
+{
+  "figure": "fig_cloudsc_eff",
+  "data": "data: /capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran/samples/_work/meas/runs, /capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran/samples/_work/dev/runs",
+  "panels": [
+    "nblks",
+    "klon"
+  ],
+  "lanes": {
+    "nblks": [
+      "dace-gcc",
+      "original-openmp"
+    ],
+    "klon": [
+      "dace-gcc"
+    ]
+  },
+  "missing": [
+    "efficiency lane \"gfortran-autopar\": not measured",
+    "efficiency: gfortran-autopar has no 1-thread point for \"nblks\"",
+    "efficiency: original-openmp has no 1-thread point for \"klon\"",
+    "efficiency: gfortran-autopar has no 1-thread point for \"klon\""
+  ]
+}

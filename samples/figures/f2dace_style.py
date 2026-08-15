@@ -81,10 +81,17 @@ LANE_LABEL = {
     'flang-openmp': 'Original Code ▶ Flang w. OpenMP',
 }
 
-# Artifact hue order: DaCe first, the Fortran baseline second, the C rewrite third.
+# Artifact hue order: DaCe first, the Fortran baseline second.
+#
+# The two C-rewrite lanes keep their colour and label above but are NOT in this list: the figures
+# compare DaCe against the original Fortran in the GNU and LLVM families, and the hand-written C
+# rewrite answers a different question.  Their rows are still measured and still load; a lane that
+# is styled but left out here is reported as deliberately-not-drawn rather than dropped in
+# silence.  Removing them also retires the two-greens adjacency that failed the normal-vision
+# floor, so nothing in the drawn set depends on that workaround any more.
 CPU_LANES = [
-    'dace-gcc', 'dace-llvm', 'original-openmp', 'flang-openmp', 'c-openmp', 'c-openmp-clang', 'gfortran-autopar',
-    'openacc-cpu', 'flang-serial', 'gfortran-serial'
+    'dace-gcc', 'dace-llvm', 'original-openmp', 'flang-openmp', 'gfortran-autopar', 'openacc-cpu', 'flang-serial',
+    'gfortran-serial'
 ]
 GPU_LANES = ['dace-gpu', 'openacc-gpu', 'cuda-ref']
 
@@ -143,7 +150,7 @@ def _tier_offset(xi, n_x):
     tight and the numbers are long.  A flat bump instead would waste headroom on the left and push
     a two-category panel's labels into its title.
     """
-    return 11 + 2.5 * (n_x - 2) * xi / max(n_x - 1, 1)
+    return 11 + 1.0 * (n_x - 2) * xi / max(n_x - 1, 1)
 
 
 def _annotation_text(height):

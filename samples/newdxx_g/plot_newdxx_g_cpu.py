@@ -59,9 +59,21 @@ def main() -> int:
     # run_lane_worker.sh encodes the replication factor in `inputs` (set<n>_rep<R>, bare set<n>
     # at R=1); that is the column load_runs keeps, so no reliance on the trailing deck_rep one.
     df = df.with_columns(pl.col('inputs').str.extract(r'_rep(\d+)$', 1).cast(pl.Int64).fill_null(1).alias('deck_rep'))
-    deck_rep = df['deck_rep'].max()
+    # Largest R alone is the WRONG pick: an older run that reached a bigger R on only some lanes
+    # silently deletes a newer complete one (newdxx job 4481020 has all four lanes at rep64, while
+    # 4479255 has rep72 for gfortran/flang ONLY -- max() chose 72 and dropped both DaCe lanes with
+    # no warning).  Rank candidates by lane COVERAGE first and R second, and name whatever the
+    # winner still drops instead of letting a lane vanish silently.
+    reps = sorted(df['deck_rep'].unique().to_list())
+    cover = {r: set(df.filter(pl.col('deck_rep') == r)['lane'].unique().to_list()) for r in reps}
+    deck_rep = max(reps, key=lambda r: (len(cover[r]), r))
+    dropped = sorted(set(df['lane'].unique().to_list()) - cover[deck_rep])
     df = df.filter(pl.col('deck_rep') == deck_rep)
-    print(f'  deck replication plotted: {deck_rep}x (largest present; never pooled with smaller R)')
+    summary = ', '.join(f'{r}x:{len(cover[r])}' for r in reps)
+    print(f'  deck replication plotted: {deck_rep}x (R:lanes = {summary}; picked by lane coverage '
+          f'then size; never pooled across R)')
+    if dropped:
+        print(f'WARNING: lane(s) {dropped} have no rows at deck_rep={deck_rep}x and are NOT drawn', file=sys.stderr)
 
     present = set(df['lane'].unique().to_list())
     unknown = sorted(l for l in present if l not in fs.LANE_COLOR or l not in fs.LANE_LABEL)
