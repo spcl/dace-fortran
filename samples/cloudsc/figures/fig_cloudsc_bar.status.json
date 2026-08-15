@@ -1,12 +1,13 @@
 {
   "figure": "fig_cloudsc_bar",
-  "data": "data: /capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran/samples/_work/logs/cloudsc_sweep_4478200_ranks",
+  "data": "data: /capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran/samples/_work/logs/cloudsc_sweep_4478200_ranks, /capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran/samples/_work/meas/runs/cloudsc-refill-llvm_cloudsc-sweep_CLOUDSC_SWEEP_BACKENDS_llvm_4e846f2-dirty_4480249.csv, /capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran/samples/_work/meas/runs/cclang-meas_cloudsc-sweep-c-clang_fbb7726-dirty_4481138.csv",
   "rows": [
     "CPU (1 Thread)",
     "CPU (72 Threads)"
   ],
   "lanes": [
     "c-openmp",
+    "c-openmp-clang",
     "dace-gcc",
     "dace-llvm",
     "flang-openmp",
@@ -22,7 +23,7 @@
     262144
   ],
   "missing": [
-    "cloudsc lane \"dace-llvm\": INCOMPLETE, no rows at (threads, size) [(72, 262144)]",
+    "cloudsc lane \"c-openmp-clang\": INCOMPLETE, no rows at (threads, size) [(1, 4096), (1, 8192), (1, 16384), (1, 32768), (1, 65536), (1, 131072), (1, 262144), (72, 4096), (72, 8192), (72, 16384), (72, 32768), (72, 131072), (72, 262144)]",
     "cloudsc row \"GPU GH200\": no rows in data",
     "cloudsc lane \"gfortran-autopar\": not measured",
     "cloudsc lane \"openacc-cpu\": not measured",

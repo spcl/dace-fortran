@@ -41,6 +41,14 @@ _SET1 = sns.color_palette("Set1", 9)
 # measured and rejected -- it cannot beat worst-pair dE 3.0, because a deep red and a deep green
 # both collapse into Set1's brown under deuteranopia.  The CPU nine are unchanged on purpose:
 # every published figure keeps its colours.
+#
+# 'c-openmp-clang' is a C-rewrite sibling of the green 'c-openmp', so it takes the best colour its
+# own family can offer: #469664, worst-pair dE 7.63.  That is UNDER the >=8 CVD target, in the 6-8
+# band that is legal only alongside secondary encoding -- the direct value labels every bar
+# carries are that relief, and they must stay.  Three lanes box the green neighbourhood in at
+# once (flang-openmp 7.63, cuda-ref 7.70, gfortran-autopar 7.73), so re-stepping any single
+# incumbent does not open it up; accepted deliberately rather than moving the lane out of its
+# family.
 LANE_COLOR = {
     'dace-gcc': _SET1[0],
     'dace-llvm': _SET1[3],
@@ -48,6 +56,7 @@ LANE_COLOR = {
     'original-openmp': _SET1[1],
     'openacc-gpu': '#438dff',
     'c-openmp': _SET1[2],  # the artifact's green C-rewrite slot
+    'c-openmp-clang': '#469664',
     'cuda-ref': '#008066',
     'gfortran-autopar': _SET1[4],
     'openacc-cpu': _SET1[6],
@@ -64,6 +73,7 @@ LANE_LABEL = {
     'openacc-gpu': 'Original Code ▶ NVHPC w. OpenACC',
     'gfortran-autopar': 'Original Code ▶ GFortran w. -ftree-parallelize-loops',
     'c-openmp': 'C Rewrite ▶ G++ w. OpenMP',
+    'c-openmp-clang': 'C Rewrite ▶ Clang++ w. OpenMP',
     'cuda-ref': 'C Rewrite ▶ nvcc w. CUDA',
     'openacc-cpu': 'Original Code ▶ NVHPC w. OpenACC (multicore)',
     'flang-serial': 'Original Code ▶ Flang (serial)',
@@ -73,8 +83,8 @@ LANE_LABEL = {
 
 # Artifact hue order: DaCe first, the Fortran baseline second, the C rewrite third.
 CPU_LANES = [
-    'dace-gcc', 'dace-llvm', 'original-openmp', 'flang-openmp', 'c-openmp', 'gfortran-autopar', 'openacc-cpu',
-    'flang-serial', 'gfortran-serial'
+    'dace-gcc', 'dace-llvm', 'original-openmp', 'flang-openmp', 'c-openmp', 'c-openmp-clang', 'gfortran-autopar',
+    'openacc-cpu', 'flang-serial', 'gfortran-serial'
 ]
 GPU_LANES = ['dace-gpu', 'openacc-gpu', 'cuda-ref']
 
