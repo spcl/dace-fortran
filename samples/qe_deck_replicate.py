@@ -57,8 +57,15 @@ def read_meta(path: Path) -> dict[str, int | float]:
 
 
 def tile_1d(a: np.ndarray, rep: int, n: int | None = None) -> np.ndarray:
-    """Tile the first ``n`` entries of a 1-D array ``rep`` times."""
-    return np.ascontiguousarray(np.tile(a[:n], rep))
+    """Tile the first ``n`` entries of a 1-D array ``rep`` times.
+
+    ``np.copy``, not ``ascontiguousarray``: np.tile ends in a reshape, so its result is a VIEW of
+    the repeat temporary (``base is not None``) and is already contiguous -- which makes
+    ascontiguousarray a no-op that leaves the view marker in place, and DaCe refuses view
+    arguments outright.  The 2-D tilers escape this only because asfortranarray has to re-copy a
+    C-ordered tile.
+    """
+    return np.copy(np.tile(a[:n], rep))
 
 
 def tile_axis1(a: np.ndarray, rep: int, ncols: int | None = None) -> np.ndarray:
