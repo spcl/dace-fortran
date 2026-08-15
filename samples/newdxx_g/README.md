@@ -128,6 +128,34 @@ bar.
 
     python plot_newdxx_g_cpu.py     # -> figures/newdxx_g_cpu.{pdf,png} (+ _violin)
 
+## The GPU numbers
+
+**There is no reference implementation for these kernels on GPU.** No CUDA, no OpenACC, no
+Fortran GPU port exists in this tree or upstream, so there is nothing to plot the DaCe lane
+against — a one-series bar chart beside the four-lane CPU panels would read as three lanes that
+failed. The numbers therefore live here as a table and are deliberately **not** drawn.
+
+Absolute, **compute only**. The SDFG owns its copy states, so `../qe_gpu_timing.py` gates them and
+the rep loop calls the phases separately: copy-in (untimed) → COMPUTE (timed) → copy-out (untimed)
+→ verify. **H2D/D2H are listed only for context and are outside the timing bracket** — never fold
+them into the compute figure.
+
+| deck | set | compute (ms) | H2D (ms) | D2H (ms) |
+|---|---|---|---|---|
+| `BaO_nat002` | 0 | **35.48** | 1.84 | 1.04 |
+| `BaO_nat002` | 1 | **35.47** | 1.84 | 1.04 |
+| `BaTiO3_nat005` | 0 | **118.48** | 3.08 | 1.08 |
+| `BaTiO3_nat005` | 1 | **118.46** | 3.08 | 1.06 |
+
+Source: `output_data/newdxx_g_gpu_4479825.csv`, `--rep 1`, `--reps 20` (median), every call verified
+at 1e-11. Regenerate — and refresh this table from the new CSV — with
+
+    PYTHONHASHSEED=0 python3 bench_newdxx_gpu.py --deck data/<MAT> --reps 20 --csv output_data/newdxx_g_gpu_<jobid>.csv
+
+> Do **not** read `output_data/newdxx_g_gpu_4479163.csv`: that is the pre-unblocking SDFG and its
+> compute column is stale. These figures move whenever the offload pipeline changes, so always
+> re-derive them from the newest CSV rather than editing a number in place.
+
 ## Not ported from PR #3
 
 `baseline/cpu/setup_env.sh` (loads NSCC modulefiles `openmpi/4.1.7-gcc11`, `fftw/3.3.10-gcc11`,
