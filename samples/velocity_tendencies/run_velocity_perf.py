@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+from dace import Memlet, subsets, symbolic
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(REPO / "tests"), str(REPO / "samples")]  # test scaffolding + shared sample helpers
@@ -46,7 +47,13 @@ SEED_FROM_META = {
 }
 SEED_LITERAL = {"p_patch_id": 1, "p_patch_nshift": 0}  # id indexes the per-domain nflatlev/nrdmax
 
-CSV_HEADER = "kernel,mode,nproma,nblks_e,threads,rep,ms,inputs,lane,alloc"
+CSV_HEADER = "kernel,mode,nproma,nblks_e,threads,rep,ms,inputs,lane,alloc,omp_schedule"
+# `default` = no schedule clause, i.e. what DaCe has always emitted -- the honest baseline. The
+# candidates (static,1 / guided / static,8) are sweep points, picked by measurement, never defaulted
+# in unmeasured. ICON itself stamps ICON_OMP_DEFAULT_SCHEDULE on every block loop
+# (src/include/omp_definitions.inc: guided under nvhpc/Cray/Intel, dynamic,1 under gcc/llvm).
+DEFAULT_OMP_SCHEDULE = "default"
+OMP_SCHEDULE_KINDS = ("default", "static", "dynamic", "guided")
 
 
 def alloc_label() -> str:
@@ -78,6 +85,149 @@ def set_backend(backend: str) -> str:
             raise SystemExit("--backend llvm: no clang++-21/clang++ found (common.sh probe_compilers exports CLANGXX)")
         os.environ["DACE_compiler_cpu_executable"] = exe
     return f"dace-{backend}"
+
+
+def apply_omp_schedule(sdfg, spec: str) -> int:
+    """Stamp ``schedule(kind[, chunk])`` on every CPU_Multicore map. Returns the maps touched.
+
+    Applied after the SDFG cache load, so a sweep point costs a recompile, not a rebuild.
+    """
+    from dace.dtypes import OMPScheduleType, ScheduleType
+    from dace.sdfg import nodes as dnodes
+    from dace.sdfg.infer_types import set_default_schedule_and_storage_types
+
+    # The block-loop maps come out of the pipeline as ScheduleType.Default and only become
+    # CPU_Multicore during codegen, so resolve them first or this pass matches nothing.
+    set_default_schedule_and_storage_types(sdfg, None)
+
+    kind, _, chunk = spec.partition(",")
+    kind = kind.strip().lower()
+    if kind not in OMP_SCHEDULE_KINDS:
+        raise SystemExit(f"--omp-schedule: unknown kind {kind!r}, expected one of {OMP_SCHEDULE_KINDS}")
+    omp_kind = getattr(OMPScheduleType, kind.capitalize()) if kind != "default" else OMPScheduleType.Default
+    chunk_size = int(chunk) if chunk.strip() else 0
+    touched = 0
+    for node, _ in sdfg.all_nodes_recursive():
+        if isinstance(node, dnodes.MapEntry) and node.map.schedule == ScheduleType.CPU_Multicore:
+            node.map.omp_schedule = omp_kind
+            node.map.omp_chunk_size = chunk_size
+            touched += 1
+    return touched
+
+
+def wrap_compute_in_parallel_region(sdfg) -> int:
+    """Group the contiguous run of block-parallel top-level blocks into one ``ControlFlowRegion``
+    flagged ``omp_parallel_region``, so the team is forked once instead of once per map.
+
+    Leaves the serial head (``stage_copyin`` and the branch-condition blocks) and the serial tail
+    (the vcfl reduce and its copy-out) OUTSIDE the region, which is what keeps the reduce a plain
+    serial local -- no ``single``, no thread-private accumulator. Returns the blocks grouped.
+
+    Only the single-successor chain shape is handled; anything else is left alone.
+    """
+    from dace.dtypes import ScheduleType
+    from dace.sdfg import nodes as dnodes
+    from dace.sdfg.state import ControlFlowRegion
+
+    order, cur, seen = [], sdfg.start_block, set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        order.append(cur)
+        out = sdfg.out_edges(cur)
+        cur = out[0].dst if len(out) == 1 else None
+    if len(order) != len(sdfg.nodes()):
+        return 0  # not a simple chain -- refuse
+
+    def has_block_map(blk):
+        return any(
+            isinstance(n, dnodes.MapEntry) and n.map.schedule == ScheduleType.CPU_Multicore
+            for n, _ in blk.all_nodes_recursive())
+
+    idx = [i for i, b in enumerate(order) if has_block_map(b)]
+    if not idx:
+        return 0
+    lo, hi = idx[0], idx[-1]
+    group = order[lo:hi + 1]
+
+    region = ControlFlowRegion("compute_parallel", sdfg=sdfg)
+    region.omp_parallel_region = True
+    inner = [(e.src, e.dst, e.data) for e in sdfg.edges() if e.src in group and e.dst in group]
+    before = [e for e in sdfg.edges() if e.dst is group[0] and e.src not in group]
+    after = [e for e in sdfg.edges() if e.src is group[-1] and e.dst not in group]
+
+    for b in group:
+        sdfg.remove_node(b)
+    sdfg.add_node(region)
+    for b in group:
+        region.add_node(b)
+    region.start_block = region.node_id(group[0])
+    for src, dst, data in inner:
+        region.add_edge(src, dst, data)
+    for e in before:
+        sdfg.add_edge(e.src, region, e.data)
+    for e in after:
+        sdfg.add_edge(region, e.dst, e.data)
+    sdfg.reset_cfg_list()
+    return len(group)
+
+
+def parallelize_vcfl_reduce(sdfg) -> str:
+    """Turn the serial max-over-blocks LoopRegion into a ``Reduce`` library node, OpenMP expansion.
+
+    Matches the vcfl chain specifically -- a one-state LoopRegion whose only tasklet accumulates
+    ``max(acc, arr[it - 1])`` into a scalar -- and asserts that shape rather than pattern-matching
+    loosely, so a pipeline change that alters it fails here instead of silently reverting to serial.
+    Returns a description of what was replaced, or '' if the shape was not found.
+    """
+    from dace.libraries.standard.nodes.reduce import Reduce
+    from dace.sdfg import nodes as dnodes
+    from dace.sdfg.state import LoopRegion
+
+    for blk in list(sdfg.nodes()):
+        if not isinstance(blk, LoopRegion):
+            continue
+        states = list(blk.all_states())
+        if len(states) != 1:
+            continue
+        st = states[0]
+        tasklets = [n for n in st.nodes() if isinstance(n, dnodes.Tasklet)]
+        if len(tasklets) != 1 or 'max' not in tasklets[0].code.as_string:
+            continue
+        arr_edge = next((e for e in st.edges()
+                         if isinstance(e.src, dnodes.AccessNode) and str(blk.loop_variable) in str(e.data.subset)),
+                        None)
+        acc_edge = next((e for e in st.edges() if isinstance(e.dst, dnodes.AccessNode) and e.src is tasklets[0]), None)
+        if arr_edge is None or acc_edge is None:
+            continue
+        arr, acc = arr_edge.src.data, acc_edge.dst.data
+        lo = symbolic.pystr_to_symbolic(blk.init_statement.as_string.split('=', 1)[1])
+        hi = symbolic.pystr_to_symbolic(blk.loop_condition.as_string.split('<', 1)[1].strip(' ()'))
+        rng = subsets.Range([(lo - 1, hi - 2, 1)])  # arr[it-1] for it in [lo, hi)
+
+        new_state = sdfg.add_state(f'{blk.label}_reduce')
+        rnode = new_state.add_reduce('lambda a, b: max(a, b)', None, float('-inf'))
+        rnode.implementation = 'OpenMP'  # explicit, not ExpandReduceAuto's fallthrough
+        rin, rout = new_state.add_read(arr), new_state.add_write(acc)
+        new_state.add_edge(rin, None, rnode, None, Memlet(data=arr, subset=rng))
+        new_state.add_edge(rnode, None, rout, None, Memlet(data=acc, subset=subsets.Range([(0, 0, 1)])))
+
+        for e in list(sdfg.in_edges(blk)):
+            sdfg.add_edge(e.src, new_state, e.data)
+        for e in list(sdfg.out_edges(blk)):
+            sdfg.add_edge(new_state, e.dst, e.data)
+        sdfg.remove_node(blk)
+        sdfg.reset_cfg_list()
+        return f'{arr}[{rng}] -> {acc} (Reduce/OpenMP, was serial LoopRegion {blk.label})'
+    return ''
+
+
+def _acc_name(state) -> str:
+    """Name of the scalar the state's single tasklet accumulates into (or '')."""
+    from dace.sdfg import nodes as dnodes
+    for e in state.edges():
+        if isinstance(e.src, dnodes.Tasklet) and isinstance(e.dst, dnodes.AccessNode):
+            return e.dst.data
+    return ''
 
 
 def git_describe() -> str:
@@ -232,10 +382,11 @@ def inputs_kind(npz: Path) -> str:
     return match.group(0) if match else "unknown"
 
 
-def run_timed(compiled, call: dict, variant: str, meta: dict, reps: int, warmup: int, lane: str,
-              inputs: str) -> list[str]:
+def run_timed(compiled, call: dict, variant: str, meta: dict, reps: int, warmup: int, lane: str, inputs: str,
+              omp_schedule: str) -> list[str]:
     pristine = snapshot_outputs(call)
     threads = int(os.environ.get("OMP_NUM_THREADS", "1"))
+    sched = omp_schedule.replace(",", ":")  # the CSV separator is a comma
     rows = []
     for rep in range(-warmup, reps):
         for k, v in pristine.items():
@@ -245,7 +396,7 @@ def run_timed(compiled, call: dict, variant: str, meta: dict, reps: int, warmup:
         ms = (time.perf_counter_ns() - t0) / 1e6
         if rep >= 0:
             rows.append(f"velocity_tendencies,{variant},{meta['nproma']},{meta['nblks_e']},{threads},{rep},{ms:.3f},"
-                        f"{inputs},{lane},{ALLOC}")
+                        f"{inputs},{lane},{ALLOC},{sched}")
             print(rows[-1], flush=True)
     return rows
 
@@ -293,6 +444,17 @@ def main() -> int:
     ap.add_argument("--csv", type=Path, default=None)
     ap.add_argument("--build-only", action="store_true", help="phase A only: build/optimize/compile the cache")
     ap.add_argument("--verify", type=Path, default=None, help="reference dump dir to check the write set against")
+    ap.add_argument("--parallel-reduce",
+                    action="store_true",
+                    help="lower the serial vcfl max-over-blocks loop to a Reduce library node with the "
+                    "OpenMP expansion ('parallel for reduction(max:)') instead of a serial loop")
+    ap.add_argument("--one-region",
+                    action="store_true",
+                    help="fork the OpenMP team once for the whole compute chain (one 'omp parallel', "
+                    "eight 'omp for') instead of once per block map")
+    ap.add_argument("--omp-schedule",
+                    default=os.environ.get("VELOCITY_OMP_SCHEDULE", DEFAULT_OMP_SCHEDULE),
+                    help=f"OpenMP schedule for the block-loop maps, 'kind[,chunk]' (default {DEFAULT_OMP_SCHEDULE})")
     args = ap.parse_args()
 
     # DACE_* env OUTRANKS Config.set, so the perf flags survive whatever the scaffolding touches.
@@ -302,6 +464,13 @@ def main() -> int:
     root = cache_root()
     tag = f"velocity_{args.variant}_{args.backend}_{git_describe()}"
     sdfg = load_or_build(args.variant, root / f"{tag}.sdfgz", root / tag)
+    touched = apply_omp_schedule(sdfg, args.omp_schedule)
+    print(f"omp schedule({args.omp_schedule}) on {touched} CPU_Multicore maps", flush=True)
+    if args.parallel_reduce:
+        print(f"parallel-reduce: {parallelize_vcfl_reduce(sdfg) or 'shape NOT FOUND -- left serial'}", flush=True)
+    if args.one_region:
+        grouped = wrap_compute_in_parallel_region(sdfg)
+        print(f"one-region: grouped {grouped} top-level blocks into a single omp parallel", flush=True)
     compiled = sdfg.compile()
     if args.build_only:
         print(f"phase A done: {tag}", flush=True)
@@ -313,7 +482,8 @@ def main() -> int:
     if args.verify is not None and verify(compiled, call, args.verify):
         return 1
     print(CSV_HEADER, flush=True)
-    rows = run_timed(compiled, call, args.variant, meta, args.reps, args.warmup, lane, inputs_kind(npz))
+    rows = run_timed(compiled, call, args.variant, meta, args.reps, args.warmup, lane, inputs_kind(npz),
+                     args.omp_schedule)
     if args.csv is not None:
         append_csv(args.csv, rows)
     return 0

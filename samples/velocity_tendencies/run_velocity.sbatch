@@ -110,6 +110,14 @@ VARIANTS="${VARIANTS:-noloopexch}"
 #       sbatch --export=ALL -p debug -A g34 --time=00:30:00 samples/velocity_tendencies/run_velocity.sbatch
 OMP_SCHEDULES="${OMP_SCHEDULES:-default}"
 sched_slug() { echo "${1//,/_}"; }
+# ONE_REGION=1 forks the OpenMP team once for the whole compute chain (one `omp parallel`, eight
+# `omp for`) instead of once per block map; PARALLEL_REDUCE=1 lowers the vcfl max-over-blocks loop
+# to a Reduce library node (`parallel for reduction(max:)`) instead of a serial loop. Both are
+# shape changes, so each gets its own build folder.
+SHAPE_ARGS=""
+SHAPE_SLUG="perloop"
+[ "${ONE_REGION:-0}" = 1 ] && { SHAPE_ARGS="$SHAPE_ARGS --one-region"; SHAPE_SLUG="oneregion"; }
+[ "${PARALLEL_REDUCE:-0}" = 1 ] && { SHAPE_ARGS="$SHAPE_ARGS --parallel-reduce"; SHAPE_SLUG="${SHAPE_SLUG}_pr"; }
 
 for lane in $LANES; do
     case "$lane" in
@@ -148,10 +156,18 @@ for lane in $LANES; do
         # dacecache would make each variant a full rebuild of the other (tagcycle_lane.sh idiom).
         # Same reason for the schedule slug: each spec is a different pragma, hence a different .so.
         for s in $OMP_SCHEDULES; do
-            export DACE_default_build_folder="$BUILD_ROOT/dacecache_${v}_$(sched_slug "$s")"
+            export DACE_default_build_folder="$BUILD_ROOT/dacecache_${v}_$(sched_slug "$s")_$SHAPE_SLUG"
+            # shellcheck disable=SC2086
             srun --ntasks=1 --cpus-per-task="$NCPUS" --cpu-bind=verbose,cores \
                 "$PY" "$DRIVER" --variant "$v" --backend "$backend" --npz "$(npz_for "$v")" \
-                --omp-schedule "$s" --build-only
+                --omp-schedule "$s" $SHAPE_ARGS --build-only
+            # A process mapping BOTH libgomp and libomp runs two OpenMP runtimes, oversubscribes
+            # the cpuset and measures ~34x slow -- silently, with plausible CSV rows. Assert the
+            # lane's runtime purity on the .so the timed run will load, and abort rather than
+            # measure a contaminated process. Same guard the addusxx_g CPU lanes use.
+            "$PY" "$REPO/samples/omp_preflight.py" \
+                --so "$DACE_default_build_folder/velocity_tendencies/build/libvelocity_tendencies.so" \
+                --expect "$backend" --label "$lane"
         done
     done
 
@@ -163,10 +179,11 @@ for lane in $LANES; do
         set_omp_env "$t"
         for v in $VARIANTS; do
             for s in $OMP_SCHEDULES; do
-                export DACE_default_build_folder="$BUILD_ROOT/dacecache_${v}_$(sched_slug "$s")"
+                export DACE_default_build_folder="$BUILD_ROOT/dacecache_${v}_$(sched_slug "$s")_$SHAPE_SLUG"
+                # shellcheck disable=SC2086
                 srun --ntasks=1 --cpus-per-task="$NCPUS" --cpu-bind=verbose,cores \
                     "$PY" "$DRIVER" --variant "$v" --backend "$backend" --npz "$(npz_for "$v")" \
-                    --omp-schedule "$s" --csv "$CSV"
+                    --omp-schedule "$s" $SHAPE_ARGS --csv "$CSV"
             done
         done
     done
