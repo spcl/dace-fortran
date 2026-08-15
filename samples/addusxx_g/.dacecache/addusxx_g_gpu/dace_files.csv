@@ -1,0 +1,2 @@
+cpu,,addusxx_g_gpu.cpp
+cuda,,addusxx_g_gpu_cuda.cu

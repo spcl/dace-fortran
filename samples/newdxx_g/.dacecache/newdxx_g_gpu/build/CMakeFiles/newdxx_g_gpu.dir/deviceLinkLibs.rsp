@@ -1,0 +1,1 @@
+  -L"/capstor/scratch/cscs/ybudanaz/aarch64/spack/linux-neoverse_v2/cuda-13.3.0-ickio72otm2ifsockd42dw425cntauby/targets/sbsa-linux/lib/stubs"  -L"/capstor/scratch/cscs/ybudanaz/aarch64/spack/linux-neoverse_v2/cuda-13.3.0-ickio72otm2ifsockd42dw425cntauby/targets/sbsa-linux/lib"   /usr/lib64/libpthread.a -ldl -lcudadevrt -lcudart_static -lrt -lpthread 
