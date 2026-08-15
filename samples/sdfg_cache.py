@@ -13,9 +13,16 @@ from pathlib import Path
 
 
 def save_sdfg_atomic(sdfg, cache) -> None:
-    """Write ``sdfg`` to ``cache`` (gzipped) so the final name only ever appears complete."""
+    """Write ``sdfg`` to ``cache`` (gzipped) so the final name only ever appears complete.
+
+    The staging name carries the pid: the cache key is grid-independent (nproma/nblks stay
+    symbolic), so two jobs measuring different grids build the SAME key concurrently, and a
+    shared ``.partial`` means one job's ``os.replace`` consumes the other's staging file --
+    ``FileNotFoundError`` mid-run (job 4480423). ``os.replace`` onto the final name stays
+    atomic and the payloads are identical, so the last writer simply wins.
+    """
     cache = Path(cache)
-    partial = cache.with_name(cache.name + ".partial")
+    partial = cache.with_name(f"{cache.name}.{os.getpid()}.partial")
     cache.parent.mkdir(parents=True, exist_ok=True)
     sdfg.save(str(partial), compress=True)
     os.replace(partial, cache)
