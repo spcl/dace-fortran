@@ -68,6 +68,21 @@ end subroutine disp
 end module disp_mod
 """
 
+# Calls the wrapper the way an ICON/QE caller would: the live arm's optional
+# supplied, the dead arm's OMITTED (its dummy is not even referenced here).
+_DRIVER = """
+subroutine run_disp(n, y, a_c) bind(c, name='run_disp')
+  use iso_c_binding
+  use disp_dace_bindings
+  implicit none
+  integer(c_int), value :: n
+  real(c_double), intent(inout) :: y(n)
+  real(c_double), intent(in) :: a_c(n)
+  call disp_dace(n, y, a_c)
+  call disp_dace_finalize()
+end subroutine run_disp
+"""
+
 
 def _build(tmp_path: Path):
     sdfg_dir = tmp_path / "sdfg"
@@ -162,6 +177,42 @@ def test_dead_arm_validation_cannot_gate_the_live_arm(tmp_path: Path):
         "present(a_r)")
     assert "a_r_present = 0  !" not in text, \
         "wrapper still hardwires the dead arm's optional to absent"
+
+
+def test_wrapper_call_omitting_the_dead_arm_computes(tmp_path: Path):
+    """The contract that matters once the dead arm's flag survives as a free symbol:
+    a caller of the WRAPPER may omit the dead arm's optional entirely.  The wrapper
+    must then report it absent, alias its data onto valid storage, and the baked
+    'c' arm must still compute.  At 6c99810 this call returned ``y`` unchanged."""
+    import ctypes
+
+    from _util import gfortran_compile_so
+
+    sdfg = _build(tmp_path)
+    compiled = sdfg.compile()
+    iface = build_auto_interface(sdfg._fortran_interface_raw, "disp")
+    bindings_path = tmp_path / "disp_bindings.f90"
+    emit_bindings(sdfg._frozen_signature, iface, FlattenPlan(entries=()), str(bindings_path))
+    driver_path = tmp_path / "disp_driver.f90"
+    driver_path.write_text(_DRIVER)
+
+    build_dir = tmp_path / "bind_build"
+    build_dir.mkdir(parents=True, exist_ok=True)
+    drv_so = build_dir / "disp_drv.so"
+    gfortran_compile_so(drv_so,
+                        bindings_path,
+                        driver_path,
+                        mod_dir=build_dir,
+                        link_so=Path(compiled._lib._library_filename))
+
+    lib = ctypes.CDLL(str(drv_so))
+    dp = ctypes.POINTER(ctypes.c_double)
+    y = np.zeros(4)
+    a_c = np.array([1.0, 2.0, 3.0, 4.0])
+    lib.run_disp.restype = None
+    lib.run_disp.argtypes = [ctypes.c_int, dp, dp]
+    lib.run_disp(4, y.ctypes.data_as(dp), a_c.ctypes.data_as(dp))
+    np.testing.assert_allclose(y, a_c, err_msg="wrapper call without the dead arm's optional did not compute")
 
 
 def test_dead_arm_absent_still_computes(tmp_path: Path):
