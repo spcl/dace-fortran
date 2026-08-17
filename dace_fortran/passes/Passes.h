@@ -13,6 +13,7 @@
 #include <memory>
 
 #include "mlir/Pass/Pass.h"
+#include "mlir/Pass/PassManager.h"
 
 namespace hlfir_bridge {
 
@@ -53,5 +54,10 @@ std::unique_ptr<mlir::Pass> createPruneNeverAllocatedMemberDerefPass();
 
 /// Register every bridge pass with MLIR's global pass registry.
 void registerAllBridgePasses();
+
+/// Print each pass name + op to stderr before it runs, so the last line before a crash IDs the culprit
+/// pass.  Lives here rather than in the nanobind module: subclassing an MLIR class needs the same
+/// -frtti setting the LLVM prefix was built with, and nanobind's own code requires RTTI.
+void installPassTracer(mlir::PassManager& pm);
 
 }  // namespace hlfir_bridge

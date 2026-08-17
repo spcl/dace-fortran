@@ -136,10 +136,29 @@ message(STATUS "LLVM library dir:  ${LLVM_LIBRARY_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
 include(AddLLVM)
 
-# --- MLIR: located through LLVM, not find_package(MLIR) ----------------------
-# MLIR headers live alongside LLVM's in the same include directory.
-# MLIR libraries (.a / .so) live in LLVM_LIBRARY_DIR.
-set(MLIR_INCLUDE_DIRS "${LLVM_INCLUDE_DIRS}" CACHE PATH "MLIR include dirs")
+# Debian builds LLVM with RTTI, upstream/spack default to without.  Subclassing an
+# MLIR class from an -frtti translation unit against an -fno-rtti LLVM leaves the
+# base's typeinfo undefined at import time, so the MLIR-facing libraries follow
+# whatever the prefix was built with.  The nanobind module cannot: nanobind's own
+# headers use typeid.  Hence installPassTracer lives in the passes library.
+if(LLVM_ENABLE_RTTI)
+    set(BRIDGE_MLIR_RTTI_FLAGS "")
+else()
+    set(BRIDGE_MLIR_RTTI_FLAGS -fno-rtti)
+endif()
+
+# --- MLIR --------------------------------------------------------------------
+# Debian splits MLIR across packages whose cmake config is unusable, so MLIR is
+# located through the LLVM prefix: headers sit in the same include directory,
+# libraries in LLVM_LIBRARY_DIR.  A source or spack install is the opposite
+# case -- it ships a working MLIRConfig.cmake and NO monolithic libMLIR.so, so
+# the static component closure has to come from that package.  Take it when it
+# is there; its imported targets pre-empt the manual ones below by name.
+find_package(MLIR CONFIG QUIET HINTS "${LLVM_LIBRARY_DIR}/cmake/mlir")
+if(NOT MLIR_FOUND)
+    set(MLIR_INCLUDE_DIRS "${LLVM_INCLUDE_DIRS}" CACHE PATH "MLIR include dirs")
+endif()
+message(STATUS "MLIR cmake package: ${MLIR_FOUND}")
 
 # Helper: find one MLIR (or Flang) library and create an imported target.
 # Usage: find_mlir_lib(MLIRIR) -> creates target MLIRIR if libMLIRIR.a exists.
@@ -172,13 +191,33 @@ endforeach()
 # Debian names it libLLVM-<major>.so and drops it on the default link path; spack
 # and upstream keep it in the LLVM prefix, sometimes as a plain libLLVM.so -- so
 # resolve a full path rather than emitting a bare -lLLVM-<major>.
-find_library(MLIR_MONO_LIB MLIR HINTS ${LLVM_LIBRARY_DIR})
-find_library(LLVM_MONO_LIB NAMES LLVM-${LLVM_VERSION_MAJOR} LLVM HINTS ${LLVM_LIBRARY_DIR})
-if(NOT LLVM_MONO_LIB)
-    set(LLVM_MONO_LIB "LLVM-${LLVM_VERSION_MAJOR}")
+# Search the prefix ONLY: a dylib picked up from the system path can belong to a
+# different point release than the prefix's static libs, which links and then
+# misbehaves at runtime.
+find_library(MLIR_MONO_LIB MLIR PATHS ${LLVM_LIBRARY_DIR} NO_DEFAULT_PATH)
+find_library(LLVM_MONO_LIB NAMES LLVM-${LLVM_VERSION_MAJOR} LLVM
+    PATHS ${LLVM_LIBRARY_DIR} NO_DEFAULT_PATH)
+# What the bridge finally links for MLIR/LLVM.  Two shapes:
+#   * dylib prefix (Debian): the two monolithic libs resolve everything;
+#   * static-only prefix (source / spack builds): no dylib exists, so the whole
+#     archive set stands in for it.  The flang dialect libs are pulled with
+#     --whole-archive ahead of these, and they reference far more of MLIR than
+#     the components this bridge names itself, so nothing narrower resolves.
+if(MLIR_MONO_LIB)
+    set(MLIR_LINK_LIBS "${MLIR_MONO_LIB}")
+else()
+    file(GLOB MLIR_LINK_LIBS "${LLVM_LIBRARY_DIR}/libMLIR*.a")
 endif()
-message(STATUS "MLIR monolithic: ${MLIR_MONO_LIB}")
-message(STATUS "LLVM monolithic: ${LLVM_MONO_LIB}")
+if(LLVM_MONO_LIB)
+    set(LLVM_LINK_LIBS "${LLVM_MONO_LIB}")
+elseif(MLIR_LINK_LIBS)
+    file(GLOB LLVM_LINK_LIBS "${LLVM_LIBRARY_DIR}/libLLVM*.a")
+else()
+    set(LLVM_LINK_LIBS "LLVM-${LLVM_VERSION_MAJOR}")
+endif()
+list(LENGTH MLIR_LINK_LIBS _n_mlir_link)
+list(LENGTH LLVM_LINK_LIBS _n_llvm_link)
+message(STATUS "MLIR link: ${_n_mlir_link} lib(s), LLVM link: ${_n_llvm_link} lib(s)")
 
 # --- Flang dialect libraries --------------------------------------------------
 set(FLANG_DIALECT_LIBS
@@ -267,6 +306,7 @@ add_library(hlfir_bridge_core STATIC
 target_link_libraries(hlfir_bridge_core PUBLIC
     MLIRIR MLIRParser MLIRSupport MLIRFuncDialect MLIRArithDialect
 )
+target_compile_options(hlfir_bridge_core PRIVATE ${BRIDGE_MLIR_RTTI_FLAGS})
 
 # --- Passes library -----------------------------------------------------------
 add_library(hlfir_bridge_passes STATIC
@@ -307,6 +347,7 @@ target_link_libraries(hlfir_bridge_passes PUBLIC
     MLIRPass MLIRTransforms
     MLIRControlFlowToSCF
 )
+target_compile_options(hlfir_bridge_passes PRIVATE ${BRIDGE_MLIR_RTTI_FLAGS})
 
 # --- Python extension ---------------------------------------------------------
 nanobind_add_module(hlfir_bridge NB_STATIC bridge/bridge.cpp)
@@ -316,8 +357,10 @@ target_link_libraries(hlfir_bridge PRIVATE
     -Wl,--whole-archive
     ${FLANG_DIALECT_LIBS}
     -Wl,--no-whole-archive
-    ${MLIR_MONO_LIB}
-    ${LLVM_MONO_LIB}
+    -Wl,--start-group
+    ${MLIR_LINK_LIBS}
+    ${LLVM_LINK_LIBS}
+    -Wl,--end-group
 )
 set_target_properties(hlfir_bridge PROPERTIES
     INSTALL_RPATH "${LLVM_LIBRARY_DIR}"

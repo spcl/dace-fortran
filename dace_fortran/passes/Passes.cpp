@@ -6,6 +6,7 @@
 
 #include "flang/Optimizer/Transforms/Passes.h"
 #include "mlir/Conversion/ControlFlowToSCF/ControlFlowToSCF.h"
+#include "mlir/Pass/PassInstrumentation.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/Passes.h"
 
@@ -66,6 +67,15 @@ void registerAllBridgePasses() {
   // dispatches succeed; surviving ops after the conversion are
   // truly runtime-polymorphic and get rejected.
   mlir::registerPass([]() -> std::unique_ptr<mlir::Pass> { return fir::createPolymorphicOpConversion(); });
+}
+
+void installPassTracer(mlir::PassManager& pm) {
+  struct PassTracer : public mlir::PassInstrumentation {
+    void runBeforePass(mlir::Pass* pass, mlir::Operation* op) override {
+      llvm::errs() << "HLFIR_PASS_TRACE before: " << pass->getName() << " on " << op->getName() << "\n";
+    }
+  };
+  pm.addInstrumentation(std::make_unique<PassTracer>());
 }
 
 }  // namespace hlfir_bridge

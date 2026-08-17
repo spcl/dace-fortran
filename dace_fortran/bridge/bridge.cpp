@@ -140,14 +140,7 @@ class HLFIRModule {
       throw std::runtime_error("run_passes: bad pipeline: " + pipeline);
     // DACE_HLFIR_TRACE_PASSES: prints each pass name+op to stderr before it runs, so the last line before a crash IDs
     // the culprit pass. Off unless the env var is set.
-    if (std::getenv("DACE_HLFIR_TRACE_PASSES")) {
-      struct PassTracer : public mlir::PassInstrumentation {
-        void runBeforePass(mlir::Pass* pass, mlir::Operation* op) override {
-          llvm::errs() << "HLFIR_PASS_TRACE before: " << pass->getName() << " on " << op->getName() << "\n";
-        }
-      };
-      pm.addInstrumentation(std::make_unique<PassTracer>());
-    }
+    if (std::getenv("DACE_HLFIR_TRACE_PASSES")) hlfir_bridge::installPassTracer(pm);
     // Multithreading disabled so nested passes run serially on the big-stack worker below -- MLIR's own thread pool
     // uses default ~8 MB stacks that deep inline recursion (e.g. hlfir-inline-all) overflows, crashing with a
     // corrupt-stack SIGSEGV.
