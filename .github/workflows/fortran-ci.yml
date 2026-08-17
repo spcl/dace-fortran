@@ -238,8 +238,10 @@ jobs:
         # orig-vs-binding bit-exact -- run on the ``integration`` runner so
         # they never leak into the quick PR sweep).  ``--dist loadgroup``
         # honours the ``xdist_group`` markers so grouped tests share one worker.
+        # ``--durations`` is what makes a per-major slowdown attributable: the llvm22 lane runs the
+        # same sweep as llvm21 and the two logs are only comparable test-by-test.
         pytest -n auto --dist loadgroup -m "not mpi and not long and not integration and not e2e" \
-          --maxfail=20 --cov-report=xml --cov=dace_fortran --tb=short tests/
+          --maxfail=20 --durations=40 --cov-report=xml --cov=dace_fortran --tb=short tests/
         coverage report || true
         coverage xml || true
         reachable=0

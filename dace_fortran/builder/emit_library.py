@@ -591,12 +591,12 @@ def emit_mpi(builder, ctx, n, region):
         # C++ reads an uninitialised int (``-Wuninitialized``, and DaCe's own validator reports an uninitialised
         # transient).  The value stays irrelevant -- seeding it just makes the first link defined.  The seed write
         # doubles as that call's read source, so the RAW edge orders them inside this state.
-        _seed = state.add_tasklet(f"_mpi_seq_init_{builder.nid()}", {}, {"_o_out"}, "_o_out = 0")
+        _seed = state.add_tasklet(f"_mpi_seq_init_{builder.nid()}", {}, {"_o_out": None}, "_o_out = 0")
         _tok_src = state.add_write(_tok)
         state.add_edge(_seed, "_o_out", _tok_src, None, Memlet(f"{_tok}[0]"))
     else:
         _tok_src = state.add_read(_tok)
-    _seq = state.add_tasklet(f"_mpi_seq_{builder.nid()}", {"_o_in"}, {"_o_out"}, "_o_out = _o_in + 1")
+    _seq = state.add_tasklet(f"_mpi_seq_{builder.nid()}", {"_o_in": None}, {"_o_out": None}, "_o_out = _o_in + 1")
     state.add_edge(_tok_src, None, _seq, "_o_in", Memlet(f"{_tok}[0]"))
     state.add_edge(_seq, "_o_out", state.add_write(_tok), None, Memlet(f"{_tok}[0]"))
 
@@ -859,7 +859,7 @@ def emit_mpi(builder, ctx, n, region):
         else:
             ename = f'_mpi_abort_code_{builder.nid()}'
             ctx.sdfg.add_scalar(ename, dace.int32, transient=True)
-            seed = state.add_tasklet(f'_mpi_abort_code_t_{builder.nid()}', set(), {'_c'}, f'_c = {lit or 1}')
+            seed = state.add_tasklet(f'_mpi_abort_code_t_{builder.nid()}', {}, {'_c': None}, f'_c = {lit or 1}')
             ew = acc(builder, state, ename)
             state.add_edge(seed, '_c', ew, None, Memlet(f'{ename}[0]'))
             state.add_edge(ew, None, node, '_errorcode', Memlet(f'{ename}[0]'))

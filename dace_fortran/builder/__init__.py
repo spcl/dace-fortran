@@ -1136,7 +1136,7 @@ class SDFGBuilder:
         from dace import data as dace_data
         if isinstance(desc, dace_data.Scalar):
             wnode = state.add_access(name)
-            tasklet = state.add_tasklet(f"zinit_{name}", set(), {"_out"}, "_out = 0")
+            tasklet = state.add_tasklet(f"zinit_{name}", {}, {"_out": None}, "_out = 0")
             state.add_edge(tasklet, "_out", wnode, None, Memlet(data=name, subset="0"))
             return
         ranges = {f"__zi{d}": f"0:{ext}" for d, ext in enumerate(desc.shape)}
@@ -1282,7 +1282,7 @@ class SDFGBuilder:
                 val = arr[idx]
                 expr = str(int(round(float(val)))) if is_int else repr(float(val))
                 tname = "init_%s_%s" % (v.fortran_name, "_".join(str(i) for i in idx))
-                t = ctx.cur.add_tasklet(tname, set(), {"_o"}, "_o = %s" % expr)
+                t = ctx.cur.add_tasklet(tname, {}, {"_o": None}, "_o = %s" % expr)
                 ctx.cur.add_edge(t, "_o", acc, None,
                                  Memlet("%s[%s]" % (v.fortran_name, ", ".join(str(i) for i in idx))))
         nxt = sdfg.add_state(f"s_{self.nid()}")

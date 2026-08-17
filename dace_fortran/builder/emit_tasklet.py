@@ -208,11 +208,13 @@ def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect
     occ = {nm: 0 for nm in r_arr}
     sorted_tokens = sorted(r_arr | r_scl, key=len, reverse=True)
 
-    in_c = {f"_in_{sc}" for sc in r_scl}
+    # Connector dicts, not sets: ``add_tasklet`` turns a set into a dict anyway, and doing it here
+    # keeps the connector order the one this code built rather than a hash order.
+    in_c = {f"_in_{sc}": None for sc in r_scl}
     for nm, acs in reads_by_name.items():
         for i in range(len(acs)):
-            in_c.add(f"_in_{nm}_{i}")
-    out_c = {f"_out_{target}"}
+            in_c[f"_in_{nm}_{i}"] = None
+    out_c = {f"_out_{target}": None}
 
     # iter_map rename MUST run before the connector rewrite: ``d(i) = i*2.0``
     # in ``do i = 50, 54`` renders RHS ``i * 2.0``, but the LoopRegion's iter is
@@ -406,8 +408,8 @@ def emit_scalar_assign(builder, state, target: str, value: str):
     for nm in reads:
         code = re.sub(rf'\b{re.escape(nm)}\b', f'_in_{nm}', code)
 
-    in_c = {f"_in_{nm}" for nm in reads}
-    out_c = {'_out'}
+    in_c = {f"_in_{nm}": None for nm in reads}
+    out_c = {'_out': None}
     t = state.add_tasklet(f"set_{target}", in_c, out_c, f"_out = {code}")
 
     for nm in reads:
@@ -498,10 +500,10 @@ def emit_complex_component_assign(builder, state, node, idx: int, iter_map: dict
         raise NotImplementedError(f"emit_complex_component_assign: unresolved operand placeholder "
                                   f"``?`` in rhs ``{rhs_code}`` (target={name!r}).")
 
-    in_conns = {'_in_z'} | {f"_in_{sc}" for sc in r_scl}
+    in_conns = {'_in_z': None, **{f"_in_{sc}": None for sc in r_scl}}
     for nm, acs in reads_by_name.items():
         for i in range(len(acs)):
-            in_conns.add(f"_in_{nm}_{i}")
+            in_conns[f"_in_{nm}_{i}"] = None
     # ``.real()``/``.imag()`` METHODS, not ``re()``/``im()`` helpers: a bare
     # ``im`` token collides with QE's kernel variable ``im`` (reserved-name
     # rewrite turns the call into a call on an int).  Attribute access isn't a
@@ -509,7 +511,7 @@ def emit_complex_component_assign(builder, state, node, idx: int, iter_map: dict
     code = (f"_cur = ((_in_z).real() if ({comp_ref} == 1) else (_in_z).imag())\n"
             f"_new = {rhs_code}\n"
             f"_out_z = (_new + 1j*(_in_z).imag()) if ({comp_ref} == 1) else ((_in_z).real() + 1j*_new)")
-    t = state.add_tasklet(f"cc_{name}_{idx}", in_conns, {'_out_z'}, code)
+    t = state.add_tasklet(f"cc_{name}_{idx}", in_conns, {'_out_z': None}, code)
 
     rz = acc(builder, state, name)  # COMPLEX view read (installs src -> view link)
     state.add_edge(rz, None, t, '_in_z', Memlet(f"{name}[{elem_sub}]"))

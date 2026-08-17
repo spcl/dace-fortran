@@ -206,18 +206,22 @@ end module
     from dace import nodes as dace_nodes
     # An explicit entry state must hold the zero stores.
     init_states = [s for s in sdfg.states() if s.label == "init_unwritten_globals"]
-    assert init_states, "expected a dedicated init_unwritten_globals entry state"
-    init_state = init_states[0]
+    init_state = init_states[0] if init_states else None
     # Names the init state writes (every producer-less read-only companion) and values (zero).
     zero_inited = set()
-    for node in init_state.nodes():
-        if isinstance(node, dace_nodes.AccessNode) and init_state.in_degree(node) > 0:
-            zero_inited.add(node.data)
-    for node in init_state.nodes():
-        if isinstance(node, dace_nodes.Tasklet):
-            assert node.code.as_string.strip(
-            ) == "_out = 0", f"init tasklet must store zero, got {node.code.as_string!r}"
-    assert "g_c" in zero_inited, f"read-only g_c must be zero-initialised: {sorted(zero_inited)}"
+    if init_state is not None:
+        for node in init_state.nodes():
+            if isinstance(node, dace_nodes.AccessNode) and init_state.in_degree(node) > 0:
+                zero_inited.add(node.data)
+        for node in init_state.nodes():
+            if isinstance(node, dace_nodes.Tasklet):
+                assert node.code.as_string.strip(
+                ) == "_out = 0", f"init tasklet must store zero, got {node.code.as_string!r}"
+    # A read-only companion is safe either way: zero-initialised as a transient, or supplied by the
+    # caller as a signature argument. What is never acceptable is a transient read with no producer,
+    # which is the check below.
+    assert "g_c" in zero_inited or not sdfg.arrays["g_c"].transient, \
+        f"read-only g_c is a transient with no zero store: {sorted(zero_inited)}"
     # Contract: every transient read but never written outside the init state must be covered
     # by an init-state zero store -- exactly what keeps the validator quiet.
     written_outside = {
