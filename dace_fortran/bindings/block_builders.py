@@ -273,23 +273,34 @@ def _optional_local_name(sdfg_name: str) -> str:
     return f"{sdfg_name}__opt"
 
 
+def _optional_array_dummy(fa) -> bool:
+    """Whether a forwarded optional dummy carries an array (rank > 0) actual."""
+    return fa.kind == 'array' or fa.rank > 0
+
+
 def _optional_outer_dummies(frozen: FrozenSignature, iface: OriginalInterface) -> list:
     """(OriginalArg, FrozenArg) pairs for every OPTIONAL outer dummy the SDFG
-    branches on via <name>_present. Scoped to SCALAR optionals only -- ARRAY
-    optionals need their extent symbols guarded too (size(absent) is UB), a
-    follow-up not yet done; until then they keep the default-absent presence."""
+    branches on via <name>_present. Scalars forward through a value local, arrays
+    through a contiguous pointer local -- either way the SDFG never sees the outer
+    dummy itself, whose storage and descriptor are undefined while absent."""
     optional_names = {a.name.lower() for a in iface.args if getattr(a, 'optional', False)}
     if not optional_names:
         return []
     by_name = {a.name.lower(): a for a in iface.args}
     pairs = []
     for fa in frozen.args:
-        if fa.kind != 'scalar' or getattr(fa, 'rank', 0) != 0:
+        if fa.kind not in ('scalar', 'array'):
             continue
         fn = (fa.fortran_name or '').lower()
         if fn in optional_names:
             pairs.append((by_name[fn], fa))
     return pairs
+
+
+def _optional_absent_scratch(sdfg_name: str) -> str:
+    """Degenerate target an ABSENT optional array's pointer local aliases, so the
+    SDFG always receives valid storage for a region it never enters."""
+    return f"{sdfg_name}__optabs"
 
 
 def build_wrapper_head(frozen: FrozenSignature,
@@ -424,7 +435,13 @@ def build_wrapper_head(frozen: FrozenSignature,
     # is never referenced. Filled in build_wrapper_body, passed in build_wrapper_tail.
     for _oa, fa in _optional_outer_dummies(frozen, iface):
         local = _optional_local_name(fa.sdfg_name)
-        scratch_lines.append(f"    {_fortran_c_value_type(fa.dtype)} :: {local}")
+        ftype = _fortran_c_value_type(fa.dtype)
+        if _optional_array_dummy(fa):
+            spec = "(" + ", ".join(":" for _ in range(fa.rank)) + ")"
+            scratch_lines.append(f"    {ftype}, pointer, contiguous :: {local}{spec}")
+            scratch_lines.append(f"    {ftype}, allocatable, target :: {_optional_absent_scratch(fa.sdfg_name)}{spec}")
+        else:
+            scratch_lines.append(f"    {ftype} :: {local}")
 
     bridge_decls, _, _, _ = _build_logical_bridges(frozen, iface)
     if bridge_decls:
@@ -677,9 +694,19 @@ def build_wrapper_body(frozen: FrozenSignature,
         for oa, fa in optional_dummies:
             local = _optional_local_name(fa.sdfg_name)
             body.append(f"    if (present({oa.name})) then")
-            body.append(f"      {local} = {oa.name}")
-            body.append(f"    else")
-            body.append(f"      {local} = {_zero_literal(fa.dtype)}")
+            if _optional_array_dummy(fa):
+                # Alias, never copy: an intent(inout)/(out) optional's writes must
+                # reach the caller's storage.
+                scratch = _optional_absent_scratch(fa.sdfg_name)
+                body.append(f"      {local} => {oa.name}")
+                body.append(f"    else")
+                body.append(f"      allocate({scratch}({', '.join('1' for _ in range(fa.rank))}))")
+                body.append(f"      {scratch} = {_zero_literal(fa.dtype)}")
+                body.append(f"      {local} => {scratch}")
+            else:
+                body.append(f"      {local} = {oa.name}")
+                body.append(f"    else")
+                body.append(f"      {local} = {_zero_literal(fa.dtype)}")
             body.append(f"    end if")
 
     comm_args = [a for a in frozen.args if a.kind == 'mpi_comm']
@@ -1588,6 +1615,22 @@ def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dumm
     # SCALAR outer dummies declared OPTIONAL: their <name>_present companion is
     # forwarded from the caller's present(<name>), not defaulted.
     outer_optional_set = {oa.name for oa, _fa in _optional_outer_dummies(frozen, iface)}
+    # ARRAY optionals: size()/lbound() of an absent one reads an undefined descriptor,
+    # so every symbol derived from one is guarded. Keyed by the Fortran name, which is
+    # the expression those derivations read.
+    optional_array_guards = {
+        (fa.fortran_name or '').lower(): f"present({oa.name})"
+        for oa, fa in _optional_outer_dummies(frozen, iface) if _optional_array_dummy(fa)
+    }
+    # Deferred-shape module globals: (host alias, presence guard) per array arg. The
+    # kernel does not allocate them, so their bounds are the CALLER's -- read off the
+    # use-import, not off the wrapper's own 1-based copy.
+    module_array_hosts: dict = {}
+    for a in frozen.args:
+        deferred = a.module_origin_allocatable or a.module_origin_pointer
+        if a.kind == 'array' and deferred and not a.global_alloc_inside:
+            alias = _module_value_expr(a.sdfg_name, _synth_members)
+            module_array_hosts[a.sdfg_name] = (alias, _present(alias, a.module_origin_pointer))
     # Cap symbols of aos_alloc recipes are populated by pack-in code before the
     # call -- skip here to avoid a stray TODO or duplicate assignment.
     aos_cap_syms = {
@@ -1665,12 +1708,24 @@ def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dumm
             # Absent member -> neutral lower bound 1 (never evaluated on the absent branch).
             out.extend(_guarded_assign(sym, _struct_member_sources[sym], _member_sym_guard(sym), absent="1"))
             continue
+        # A deferred-shape MODULE global's lower bound must come from the HOST
+        # import, not the wrapper's copy: the copy is an allocatable assigned from
+        # the alias, so its own lbound is always 1 while the SDFG indexes in the
+        # host's frame (QE's eigts1(-nr:nr, nat), allocated by pw.x).
+        off_m = _OFFSET_SYM_RE.match(sym)
+        if off_m and off_m.group(1) in module_array_hosts:
+            alias, guard = module_array_hosts[off_m.group(1)]
+            out.extend(_guarded_assign(sym, f"lbound({alias}, dim={int(off_m.group(2)) + 1})", guard, absent="1"))
+            continue
         # No flatten-plan size expr: derive directly via lbound/size (covers plain
         # assumed-shape / non-default-lower-bound dummies).
         intr = _sym_from_intrinsic(sym, frozen)
         if intr is not None:
             fn, expr, dim = intr
-            out.append(f"    {sym} = int({fn}({expr}, dim={dim}), c_int)")
+            guard = optional_array_guards.get((expr or '').lower(), '')
+            # Absent: extent 1 / lower bound 1, matching the degenerate local the
+            # wrapper aliases the absent optional onto.
+            out.extend(_guarded_assign(sym, f"{fn}({expr}, dim={dim})", guard, absent="1"))
             continue
         # A NAMED array extent must beat the module-global fallback below: the SDFG
         # sized its transients by this symbol, so it must equal the actual
@@ -1678,7 +1733,8 @@ def _build_symbol_assigns(frozen: FrozenSignature, plan: FlattenPlan, outer_dumm
         ext = _sym_from_array_extent(sym, frozen, exclude=_unsourced_names)
         if ext is not None:
             expr, dim = ext
-            out.append(f"    {sym} = int(size({expr}, dim={dim}), c_int)")
+            guard = optional_array_guards.get((expr or '').lower(), '')
+            out.extend(_guarded_assign(sym, f"size({expr}, dim={dim})", guard, absent="1"))
             continue
         # Last resort: a module global the kernel reads directly, use-imported
         # under the __mod alias -- assign from that import.

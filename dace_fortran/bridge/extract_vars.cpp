@@ -2790,8 +2790,17 @@ std::vector<VarInfo> extractVariables(mlir::ModuleOp module, std::vector<ValueSy
         isAllocOrPointerAttr = true;
     }
     bool const declHasNoShape = (op.getShape() == nullptr);
-    if (v.rank > 0 && isDummyArg && isAllocOrPointerAttr && declHasNoShape) {
-      if (op->hasAttr("hlfir_bridge.aor_flat_entry")) {
+    // Same situation, different provenance: a deferred-shape MODULE global whose
+    // ALLOCATE is not in this TU (QE's ``eigts1(-nr:nr, nat)``, allocated by pw.x)
+    // has its bounds only in the runtime descriptor, exactly like a deferred-shape
+    // dummy.  Baking "1" here indexed every read ``lbound-1`` slots low -- silently
+    // wrong phases, and out of bounds for a subscript <= 0.  When the ALLOCATE IS
+    // in this TU, ``lowerBoundsFromAllocSite`` above already recovered the real
+    // bound, so this leaves it alone.
+    bool const isCallerAllocatedGlobal =
+        !isDummyArg && allocSites.empty() && !traceToGlobalSymbol(op.getMemref()).empty();
+    if (v.rank > 0 && isAllocOrPointerAttr && declHasNoShape && (isDummyArg || isCallerAllocatedGlobal)) {
+      if (isDummyArg && op->hasAttr("hlfir_bridge.aor_flat_entry")) {
         // A value-record AoR companion (``hlfir-split-aor-dummies``,
         // ``primal_normal_cell_v1``): a SYNTHESISED SoA array, not a
         // caller-allocated one.  ``bind_c_shim`` reconstructs it 1-based

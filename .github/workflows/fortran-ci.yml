@@ -82,7 +82,10 @@ jobs:
     # never a test failure), so give it 90 min of headroom.
     # ``e2e`` gets the long budget too: CloudSC alone is a ~20 min SDFG optimize
     # followed by an -O3 -march=native build of a single 25k-line translation unit.
-    timeout-minutes: ${{ (matrix.suite == 'fast') && 90 || 180 }}
+    # The llvm22 lane runs the same sweep ~3x slower (an apt-channel toolchain
+    # regression, still being attributed by ``--durations``); it needs the long
+    # budget until that is found, or it reports a timeout instead of a verdict.
+    timeout-minutes: ${{ (matrix.suite == 'fast' && matrix.llvm == '21') && 90 || 180 }}
     env:
       # Pins the bridge's flang discovery and names the apt packages / paths below.
       LLVM_VERSION: ${{ matrix.llvm }}

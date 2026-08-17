@@ -22,11 +22,15 @@
 //
 // Approach:
 //     Walk the module for every ``fir.call`` whose callee starts with
-//     ``_FortranACharacter``.  Replace each call's SSA result(s) with
-//     a benign constant matching the result type (``i32`` -> ``0``,
-//     i.e. "strings compare equal", which collapses the downstream
-//     ``cmpi eq %res, 0`` to constant true and lets the canonicalizer
-//     fold the dispatch into the matching arm).  Calls with no result
+//     ``_FortranACharacter`` (LLVM 22: ``hlfir.cmpchar`` too).  A COMPARE
+//     against a character literal folds per literal: the first literal a
+//     given entity is tested against is the one that reads as equal, every
+//     other literal reads as not-equal.  The canonicalizer then bakes the
+//     first dispatch arm AND drops the sibling arms -- including the
+//     separate input-validation IFs that reference them, which under the
+//     old fold-everything-equal rule stayed live and kept the dead arms'
+//     optionals on the SDFG's call surface (QE addusxx_g / newdxx_g).
+//     Every other character call keeps the benign ``0``.  Calls with no result
 //     (``Trim``) get erased outright -- the destination box stays
 //     uninitialised, but the bridge doesn't model character data
 //     anyway and the downstream chain dies in the AST builder's
@@ -77,13 +81,98 @@ namespace {
 /// shares this prefix.
 constexpr llvm::StringLiteral kFortranCharPrefix = "_FortranACharacter";
 
+/// Strip ``fir.convert`` / ``hlfir.declare`` wrappers so two references to the
+/// same character entity compare identical.
+mlir::Value charRoot(mlir::Value v) {
+  for (int hop = 0; hop < 8 && v; ++hop) {
+    auto* def = v.getDefiningOp();
+    if (!def) break;
+    if (auto conv = mlir::dyn_cast<fir::ConvertOp>(def)) {
+      v = conv.getValue();
+      continue;
+    }
+    if (auto emb = mlir::dyn_cast<fir::EmboxCharOp>(def)) {
+      v = emb.getMemref();
+      continue;
+    }
+    if (auto decl = mlir::dyn_cast<hlfir::DeclareOp>(def)) {
+      // A PARAMETER declare over a literal global is the literal itself; any
+      // other declare IS the entity, so stop there.
+      auto attrs = decl.getFortranAttrs();
+      if (!attrs || !bitEnumContainsAny(*attrs, fir::FortranVariableFlagsEnum::parameter)) break;
+      v = decl.getMemref();
+      continue;
+    }
+    break;
+  }
+  return v;
+}
+
+/// The character literal ``v`` refers to, or empty when it is not a literal.
+/// Flang materialises every literal as a ``fir.address_of`` of a constant
+/// ``fir.global`` whose body is a single ``fir.string_lit``.
+std::string literalText(mlir::Value v, mlir::ModuleOp module) {
+  auto addr = mlir::dyn_cast_or_null<fir::AddrOfOp>(charRoot(v).getDefiningOp());
+  if (!addr) return {};
+  auto global = module.lookupSymbol<fir::GlobalOp>(addr.getSymbol().getLeafReference());
+  if (!global || !global.getConstant().value_or(false)) return {};
+  std::string text;
+  global.walk([&](fir::StringLitOp lit) {
+    if (auto str = mlir::dyn_cast<mlir::StringAttr>(lit.getValue())) text = str.getValue().str();
+  });
+  return text;
+}
+
+bool equalIgnoringCase(llvm::StringRef a, llvm::StringRef b) { return a.equals_insensitive(b); }
+
+/// Per-dispatch-variable record of the ONE literal its compares are folded
+/// against: the first literal the routine tests it against, which is the arm the
+/// canonicalizer then bakes.
+///
+/// Folding EVERY compare to "equal" (the pass's original behaviour) makes a
+/// ``flag=='c'/'r'/'i'`` dispatch bake its first arm, but leaves the routine's
+/// SEPARATE input-validation IFs consulting the dead arms -- QE's addusxx_g then
+/// demanded the 'r' arm's optionals be present while its 'c' arm computed, and
+/// the dead arms' arrays stayed on the SDFG's call surface.  Folding against ONE
+/// literal instead is consistent everywhere the flag appears: the dead arms'
+/// validation clauses go FALSE and canonicalize away with their operands.
+class LiteralSelection {
+ public:
+  /// Whether a compare of ``var`` against ``lit`` is the selected arm. The first
+  /// literal seen for a variable wins, so the baked arm is the source's first --
+  /// the contract the sample pipelines already document.
+  bool selects(mlir::Value var, llvm::StringRef lit) {
+    auto it = selected.find(var);
+    if (it == selected.end()) {
+      selected.try_emplace(var, lit.str());
+      return true;
+    }
+    return equalIgnoringCase(it->second, lit);
+  }
+
+ private:
+  llvm::DenseMap<mlir::Value, std::string> selected;
+};
+
+/// Classify one character compare: ``(matched, isLiteralCompare)``. A compare with
+/// no literal operand keeps the old "strings compare equal" answer.
+std::pair<bool, bool> foldCharCompare(mlir::Value lhs, mlir::Value rhs, mlir::ModuleOp module,
+                                      LiteralSelection& selection) {
+  std::string const lhsLit = literalText(lhs, module);
+  std::string const rhsLit = literalText(rhs, module);
+  if (lhsLit.empty() == rhsLit.empty()) return {true, false};  // both or neither literal
+  mlir::Value const var = charRoot(lhsLit.empty() ? lhs : rhs);
+  llvm::StringRef const lit = lhsLit.empty() ? rhsLit : lhsLit;
+  return {selection.selects(var, lit), true};
+}
+
 /// Build a benign constant of ``ty`` immediately before ``call`` to
 /// replace one of its results.  Returns ``nullptr`` if the result
 /// type isn't one of the integer types the Fortran character
 /// runtime is known to produce (currently always ``i32``).
-mlir::Value makeReplacement(mlir::OpBuilder& builder, mlir::Location loc, mlir::Type ty) {
+mlir::Value makeReplacement(mlir::OpBuilder& builder, mlir::Location loc, mlir::Type ty, int value) {
   if (auto intTy = mlir::dyn_cast<mlir::IntegerType>(ty)) {
-    return builder.create<mlir::arith::ConstantOp>(loc, builder.getIntegerAttr(intTy, 0));
+    return builder.create<mlir::arith::ConstantOp>(loc, builder.getIntegerAttr(intTy, value));
   }
   return {};
 }
@@ -104,12 +193,23 @@ bool cmpCharEqualResult(mlir::arith::CmpIPredicate pred) {
   }
 }
 
-void stripCmpChar(mlir::ModuleOp module) {
+/// Result of ``pred`` given whether the two strings are equal. Ordering compares
+/// carry no per-literal information, so they keep the equal-strings answer.
+bool comparePredicateResult(mlir::arith::CmpIPredicate pred, bool equal) {
+  using P = mlir::arith::CmpIPredicate;
+  if (pred == P::eq) return equal;
+  if (pred == P::ne) return !equal;
+  return cmpCharEqualResult(pred);
+}
+
+void stripCmpChar(mlir::ModuleOp module, LiteralSelection& selection) {
   llvm::SmallVector<hlfir::CmpCharOp, 8> toErase;
   module.walk([&](hlfir::CmpCharOp cmp) {
+    auto const [matched, isLiteral] = foldCharCompare(cmp.getLchr(), cmp.getRchr(), module, selection);
+    bool const result =
+        isLiteral ? comparePredicateResult(cmp.getPredicate(), matched) : cmpCharEqualResult(cmp.getPredicate());
     mlir::OpBuilder builder(cmp);
-    auto repl = builder.create<mlir::arith::ConstantOp>(cmp.getLoc(),
-                                                        builder.getBoolAttr(cmpCharEqualResult(cmp.getPredicate())));
+    auto repl = builder.create<mlir::arith::ConstantOp>(cmp.getLoc(), builder.getBoolAttr(result));
     cmp.getResult().replaceAllUsesWith(repl);
     toErase.push_back(cmp);
   });
@@ -133,6 +233,7 @@ struct StripCharacterRuntimePass
   void runOnOperation() override {
     auto module = getOperation();
     llvm::SmallVector<fir::CallOp, 32> toErase;
+    LiteralSelection selection;
 
     module.walk([&](fir::CallOp call) {
       auto sym = call.getCallee();
@@ -140,10 +241,18 @@ struct StripCharacterRuntimePass
       llvm::StringRef const name = sym->getLeafReference().getValue();
       if (!name.starts_with(kFortranCharPrefix)) return;
 
+      // ``CompareScalar<kind>(%a, %b, %la, %lb) -> i32`` returns 0 for equal.
+      // Fold it per literal, so only the arm the dispatch bakes reads as a match.
+      int compareResult = 0;
+      if (name.contains("Compare") && call.getArgs().size() >= 2) {
+        auto const [matched, isLiteral] = foldCharCompare(call.getArgs()[0], call.getArgs()[1], module, selection);
+        if (isLiteral && !matched) compareResult = 1;
+      }
+
       mlir::OpBuilder builder(call);
       bool allReplaced = true;
       for (auto res : call.getResults()) {
-        mlir::Value const repl = makeReplacement(builder, call.getLoc(), res.getType());
+        mlir::Value const repl = makeReplacement(builder, call.getLoc(), res.getType(), compareResult);
         if (!repl) {
           LLVM_DEBUG(llvm::dbgs() << "StripCharacterRuntime: refusing to strip " << name
                                   << " -- result type unsupported\n");
@@ -160,7 +269,7 @@ struct StripCharacterRuntimePass
     LLVM_DEBUG(llvm::dbgs() << "StripCharacterRuntime: erased " << toErase.size() << " _FortranACharacter* call(s)\n");
 
 #if LLVM_VERSION_MAJOR >= 22
-    stripCmpChar(module);
+    stripCmpChar(module, selection);
 #endif
   }
 };
