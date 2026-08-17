@@ -1,1 +1,0 @@
-#define __HASH_addusxx_g_gpu "b492cceb1478eb58442e878d92d9d6dfefd2084df657d49860b6fe749c3a5a74"

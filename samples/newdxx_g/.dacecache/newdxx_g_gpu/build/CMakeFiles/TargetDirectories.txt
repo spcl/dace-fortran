@@ -1,4 +1,0 @@
-/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran/samples/newdxx_g/.dacecache/newdxx_g_gpu/build/CMakeFiles/newdxx_g_gpu.dir
-/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran/samples/newdxx_g/.dacecache/newdxx_g_gpu/build/CMakeFiles/dacestub_newdxx_g_gpu.dir
-/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran/samples/newdxx_g/.dacecache/newdxx_g_gpu/build/CMakeFiles/edit_cache.dir
-/capstor/scratch/cscs/ybudanaz/aarch64/dace-fortran/samples/newdxx_g/.dacecache/newdxx_g_gpu/build/CMakeFiles/rebuild_cache.dir

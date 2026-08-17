@@ -1,8 +1,0 @@
-build/
-data_r02b05
-data_r02b06
-*.tar.xz
-*.npz
-*.csv
-*.so
-__pycache__/

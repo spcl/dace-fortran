@@ -11,7 +11,7 @@ import pytest
 from dace_fortran.acc_residency import classify, extract_acc_residency, write_acc_residency_sidecar
 
 REPO = Path(__file__).resolve().parents[1]
-VELOCITY = REPO / "samples" / "velocity_tendencies" / "velocity_advection_acc.f90"
+VELOCITY = REPO / "tests" / "icon" / "atmosphere" / "velocity_advection_acc.f90"
 
 FIXTURE = """\
 MODULE m_acc_fixture

@@ -1,5 +1,0 @@
-kernel,deck,rep,set,reps,compute_ms,compute_min_ms,compute_max_ms,h2d_ms,d2h_ms,verify
-newdxx_g,BaO_nat002,1,0,20,35.478,35.395,35.606,1.845,1.040,PASS
-newdxx_g,BaO_nat002,1,1,20,35.466,35.412,35.535,1.840,1.040,PASS
-newdxx_g,BaTiO3_nat005,1,0,20,118.478,118.433,118.620,3.085,1.079,PASS
-newdxx_g,BaTiO3_nat005,1,1,20,118.460,118.427,118.540,3.078,1.061,PASS

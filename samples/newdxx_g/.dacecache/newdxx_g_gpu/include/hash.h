@@ -1,1 +1,0 @@
-#define __HASH_newdxx_g_gpu "bd5956bb3f747ea66ea808e93df3f173feba7fe09dc0beb53f7ed6aeaec2cbcf"
