@@ -156,7 +156,29 @@ endif()
 # come from that package: its imported targets pre-empt the manual ones below.
 # Search the prefix ONLY: a dylib from the system path can belong to a different
 # point release than the prefix's static libs, which links and then misbehaves.
-find_library(MLIR_MONO_LIB MLIR PATHS "${LLVM_LIBRARY_DIR}" NO_DEFAULT_PATH)
+#
+# find_library alone is not enough.  It matches the unversioned development
+# symlink, which a spack or source install frequently omits -- it ships
+# libLLVM.so.21.1 and nothing else.  Missing the dylib is not a cosmetic miss:
+# the static branch further down then links LLVM into this module while the same
+# dylib still arrives through DT_NEEDED on the flang libraries, and a global that
+# exists in both copies has its destructor run twice.  Observed as a SIGABRT in
+# llvm::TensorSpec::~TensorSpec() out of exit().
+macro(find_mono_lib out)
+    find_library(${out} NAMES ${ARGN} PATHS "${LLVM_LIBRARY_DIR}" NO_DEFAULT_PATH)
+    if(NOT ${out})
+        foreach(_base ${ARGN})
+            file(GLOB _versioned "${LLVM_LIBRARY_DIR}/lib${_base}.so.*")
+            list(SORT _versioned)
+            if(_versioned)
+                list(GET _versioned 0 ${out})
+                break()
+            endif()
+        endforeach()
+    endif()
+endmacro()
+
+find_mono_lib(MLIR_MONO_LIB MLIR)
 if(NOT MLIR_MONO_LIB)
     find_package(MLIR CONFIG QUIET HINTS "${LLVM_LIBRARY_DIR}/cmake/mlir")
 endif()
@@ -197,8 +219,7 @@ endforeach()
 # and upstream keep it in the LLVM prefix, sometimes as a plain libLLVM.so -- so
 # resolve a full path rather than emitting a bare -lLLVM-<major>.
 # Search the prefix ONLY, for the reason given at the MLIR_MONO_LIB probe above.
-find_library(LLVM_MONO_LIB NAMES LLVM-${LLVM_VERSION_MAJOR} LLVM
-    PATHS ${LLVM_LIBRARY_DIR} NO_DEFAULT_PATH)
+find_mono_lib(LLVM_MONO_LIB LLVM-${LLVM_VERSION_MAJOR} LLVM)
 # What the bridge finally links for MLIR/LLVM.  Two shapes:
 #   * dylib prefix (Debian): the two monolithic libs resolve everything;
 #   * static-only prefix (source / spack builds): no dylib exists, so the whole
