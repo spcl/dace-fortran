@@ -39,17 +39,11 @@ except (ImportError, ValueError, OSError):
     # resource is POSIX-only; setrlimit can fail -- fall through with the inherited limit
     pass
 
-# DaCe's default compiler.cpu.args (-O3 -march=native -ffast-math) permits FMA/reassociation
-# that quietly diverges from a strict Fortran reference (-O0 -fno-fast-math -ffp-contract=off);
-# NPB LU's ssor residual sat ~1.7% off at itmax=50 from this alone, a flag mismatch not a bridge
-# bug. Force strict IEEE FP as the baseline here; tests wanting optimised perf override it.
-from dace.config import Config
-
-Config.set("compiler",
-           "cpu",
-           "args",
-           value=("-fPIC -Wall -Wextra -O0 -fno-fast-math -ffp-contract=off "
-                  "-Wno-unused-parameter -Wno-unused-label"))
+# Build the way production does: DaCe's own defaults (Release -O3, -march=native and the
+# targeted FP relaxations) so what the suite exercises is what users get. A test comparing
+# against a strict Fortran reference has to state its own tolerance rather than rely on the
+# whole suite being compiled at -O0: -O3 lets the compiler contract a multiply-add, which is a
+# different (more accurate) result, not a wrong one.
 
 # Per-worker DaCe build folder: PYTEST_XDIST_WORKER is gw0/gw1/... per worker, absent on
 # serial runs (keeps the default .dacecache there).
