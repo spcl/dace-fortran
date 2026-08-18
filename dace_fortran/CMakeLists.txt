@@ -8,10 +8,10 @@
 #
 # MLIR linking strategy (cf. pixel-druid.com/articles/how-to-link-against-mlir-with-cmake):
 #   Debian/Ubuntu MLIR cmake configs are often broken (missing tool binaries
-#   cause CMake export-set errors).  We avoid find_package(MLIR) entirely.
-#   Instead we use find_package(LLVM)  --  which works  --  and locate MLIR
-#   headers and libraries through LLVM's install prefix.  MLIR is always
-#   co-installed alongside LLVM.
+#   cause CMake export-set errors), so find_package(MLIR) is used only on a
+#   prefix that has no monolithic libMLIR.  Otherwise find_package(LLVM)  --
+#   which always works  --  locates MLIR headers and libraries through LLVM's
+#   install prefix.  MLIR is always co-installed alongside LLVM.
 # ============================================================================
 
 cmake_minimum_required(VERSION 3.18)
@@ -148,13 +148,18 @@ else()
 endif()
 
 # --- MLIR --------------------------------------------------------------------
-# Debian splits MLIR across packages whose cmake config is unusable, so MLIR is
-# located through the LLVM prefix: headers sit in the same include directory,
-# libraries in LLVM_LIBRARY_DIR.  A source or spack install is the opposite
-# case -- it ships a working MLIRConfig.cmake and NO monolithic libMLIR.so, so
-# the static component closure has to come from that package.  Take it when it
-# is there; its imported targets pre-empt the manual ones below by name.
-find_package(MLIR CONFIG QUIET HINTS "${LLVM_LIBRARY_DIR}/cmake/mlir")
+# A monolithic libMLIR tells the two prefix shapes apart.  Debian ships one and
+# splits the cmake config across packages so that including it is a hard error,
+# not a QUIET miss -- its export set names tool binaries the packages omit; MLIR
+# is located through the LLVM prefix there.  A source or spack install has no
+# dylib but a working MLIRConfig.cmake, and the static component closure has to
+# come from that package: its imported targets pre-empt the manual ones below.
+# Search the prefix ONLY: a dylib from the system path can belong to a different
+# point release than the prefix's static libs, which links and then misbehaves.
+find_library(MLIR_MONO_LIB MLIR PATHS "${LLVM_LIBRARY_DIR}" NO_DEFAULT_PATH)
+if(NOT MLIR_MONO_LIB)
+    find_package(MLIR CONFIG QUIET HINTS "${LLVM_LIBRARY_DIR}/cmake/mlir")
+endif()
 if(NOT MLIR_FOUND)
     set(MLIR_INCLUDE_DIRS "${LLVM_INCLUDE_DIRS}" CACHE PATH "MLIR include dirs")
 endif()
@@ -191,10 +196,7 @@ endforeach()
 # Debian names it libLLVM-<major>.so and drops it on the default link path; spack
 # and upstream keep it in the LLVM prefix, sometimes as a plain libLLVM.so -- so
 # resolve a full path rather than emitting a bare -lLLVM-<major>.
-# Search the prefix ONLY: a dylib picked up from the system path can belong to a
-# different point release than the prefix's static libs, which links and then
-# misbehaves at runtime.
-find_library(MLIR_MONO_LIB MLIR PATHS ${LLVM_LIBRARY_DIR} NO_DEFAULT_PATH)
+# Search the prefix ONLY, for the reason given at the MLIR_MONO_LIB probe above.
 find_library(LLVM_MONO_LIB NAMES LLVM-${LLVM_VERSION_MAJOR} LLVM
     PATHS ${LLVM_LIBRARY_DIR} NO_DEFAULT_PATH)
 # What the bridge finally links for MLIR/LLVM.  Two shapes:
