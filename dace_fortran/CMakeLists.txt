@@ -265,9 +265,23 @@ elseif(MLIR_LINK_LIBS)
 else()
     set(LLVM_LINK_LIBS "LLVM-${LLVM_VERSION_MAJOR}")
 endif()
+# Never mix a shared MLIR with static LLVM archives.  libMLIR.so carries its own LLVM through
+# DT_NEEDED, so linking the archives beside it puts every LLVM global in the process twice and
+# both copies are destroyed at exit -- which aborts as "double free or corruption" long after
+# the build itself looked fine.  A prefix that ships libMLIR.so ships an LLVM dylib too, so
+# failing to resolve one is a broken probe, not a supported layout.
+if(MLIR_MONO_LIB AND NOT LLVM_MONO_LIB)
+    message(FATAL_ERROR
+            "Found a monolithic MLIR (${MLIR_MONO_LIB}) but no monolithic LLVM in "
+            "${LLVM_LIBRARY_DIR}.  Linking static libLLVM*.a beside a shared MLIR duplicates "
+            "LLVM's globals and aborts at exit.  Point LLVM_DIR at a prefix that ships an LLVM "
+            "dylib (libLLVM.so, libLLVM.so.<ver>, or libLLVM-${LLVM_VERSION_MAJOR}.so).")
+endif()
+
 list(LENGTH MLIR_LINK_LIBS _n_mlir_link)
 list(LENGTH LLVM_LINK_LIBS _n_llvm_link)
-message(STATUS "MLIR link: ${_n_mlir_link} lib(s), LLVM link: ${_n_llvm_link} lib(s)")
+message(STATUS "MLIR link: ${_n_mlir_link} lib(s) (${MLIR_MONO_LIB}), "
+               "LLVM link: ${_n_llvm_link} lib(s) (${LLVM_MONO_LIB})")
 
 # --- Flang dialect libraries --------------------------------------------------
 set(FLANG_DIALECT_LIBS
