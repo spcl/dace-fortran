@@ -143,7 +143,9 @@ def vendor_netcdf_fortran(cache_dir: Path, version: str = _NETCDF_FORTRAN_DEFAUL
         with urllib.request.urlopen(url) as r, tarball.open("wb") as f:
             shutil.copyfileobj(r, f)
     with tarfile.open(tarball) as t:
-        t.extractall(cache_dir)
+        # filter="data" is 3.14's default and the only safe one for a downloaded tarball:
+        # it rejects absolute/parent paths, links out of the tree, and device nodes.
+        t.extractall(cache_dir, filter="data")
     if not fortran_dir.is_dir():
         raise RuntimeError(f"netcdf-fortran tarball did not extract a fortran/ "
                            f"subdirectory under {target}")
