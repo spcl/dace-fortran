@@ -5,6 +5,8 @@ venv/pyenv fix) and ``needs_build`` (source-vs-``.so`` mtime gate); the
 cmake/LLVM shell-out paths are exercised by CI's build step, not mocked here.
 """
 import os
+import subprocess
+import sys
 import sysconfig
 
 from dace_fortran import build_bridge
@@ -61,3 +63,12 @@ def test_needs_build_true_when_so_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(build_bridge, "_HERE", tmp_path)
     monkeypatch.setattr(build_bridge, "_local_so", lambda: tmp_path / "absent.so")
     assert build_bridge.needs_build() is True
+
+
+def test_importing_the_module_does_not_load_the_extension():
+    """``python -m dace_fortran.build_bridge`` rebuilds the ``.so``; loading it during import would
+    leave the process holding the copy it is about to replace, and the README promises the bridge
+    compiles on first use rather than at import.  A subprocess keeps an earlier test's ``hb`` out."""
+    code = "import dace_fortran.build_bridge, sys; print('dace_fortran.hlfir_bridge' in sys.modules)"
+    out = subprocess.check_output([sys.executable, "-c", code], text=True)
+    assert out.strip() == "False", out

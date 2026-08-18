@@ -277,8 +277,18 @@ def ensure_fresh():
     return ensure_bridge()
 
 
-# Module-level singleton: import this from other files.
-hb = ensure_fresh()
+def __getattr__(name: str):
+    """Resolve ``hb`` on first use, which is what the README promises and what the CLI needs.
+
+    Binding it at import made ``python -m dace_fortran.build_bridge`` load the extension before
+    rebuilding it, so the process ran cmake twice and then exited with the old .so still mapped.
+    """
+    if name == "hb":
+        bridge = ensure_fresh()
+        globals()["hb"] = bridge
+        return bridge
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 # --- CLI ---
 
