@@ -201,11 +201,22 @@ sdfg = dace_fortran.build_sdfg(src, entry="kernel", name="kernel")
 lib = build_fortran_library(sdfg, out_dir="build", name="kernel")
 ```
 
+`build_sdfg` takes ONE self-contained source. A kernel whose modules live in other files goes through `build_sdfg_from_files` below — pass every `.f90`, in any order; there is nothing to add to `src`.
+
 Other entry points (all return a built, validated `dace.SDFG`):
 
 ```python
-# A multi-file project (driver + the modules it USEs, in any order):
+# A multi-file project (driver + the modules it USEs, in any order).  These are
+# ``.f90`` PATHS, not source text and not HLFIR.  Do not confuse it with
+# ``SDFGBuilder.from_files``, which consumes already-emitted ``.hlfir`` files.
+# ``entry`` is required here: it is what selects the root file.
 sdfg = dace_fortran.build_sdfg_from_files([driver, mod], entry="mo_x::kernel")
+
+# The same, with fparser doing the ``USE``-inlining instead of the default
+# text-splicer -- it resolves the ``ONLY:`` / ``=>`` renames the splicer cannot
+# see.  Needs ``fparser > 0.2``.
+sdfg = dace_fortran.build_sdfg_from_files([driver, mod], entry="mo_x::kernel",
+                                          merge_engine="fparser")
 
 # A large / dependency-tangled project: emit .hlfir from your own build,
 # then consume compile_commands.json directly (tier 3):

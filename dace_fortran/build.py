@@ -414,7 +414,7 @@ def build_sdfg(source: str,
         entirely -- for build pipelines that already resolve every
         kind alias upstream (e.g. via cpp expansion or by emitting
         HLFIR with the constants module pre-merged).
-    :param merge_engine: ``"fparser"`` (default) or ``"regex"`` -- which
+    :param merge_engine: ``"regex"`` (default) or ``"fparser"`` -- which
         ``USE``-merge engine preprocesses the source (see
         :func:`build_sdfg_from_files`).
     :returns: a built, validated SDFG.
@@ -620,17 +620,19 @@ def build_sdfg_from_files(files: Sequence[Union[str, Path]],
 
     :param files: ``.f90`` paths (one defines ``entry``; the rest are
         its ``USE``-d modules).
-    :param entry: mangled Flang symbol of the target procedure --
-        **required**; it selects the root file.
+    :param entry: the target procedure -- a plain Fortran name, a
+        ``module::proc`` qualifier, or a mangled Flang symbol.
+        **Required**: it is what selects the root file.
     :param name: base filename for the merged ``.f90`` / ``.hlfir``.
     :param pipeline: MLIR pass pipeline; defaults to
         ``DEFAULT_PIPELINE``.
     :param out_dir: scratch directory; a temporary one is used and
         removed when omitted.
     :param preprocess: also run the opt-in ``IF (intvar)`` rewrite.
-    :param merge_engine: ``"fparser"`` (default) inlines the ``USE``-d
-        modules with the fparser AST engine; ``"regex"`` uses the legacy
-        text-splicer (:func:`merge_used_modules`).
+    :param merge_engine: ``"regex"`` (default) inlines the ``USE``-d modules
+        with the text-splicer (:func:`merge_used_modules`); ``"fparser"``
+        uses the fparser AST engine, which resolves ``ONLY:`` / ``=>``
+        renames the splicer cannot see.  Needs ``fparser > 0.2``.
     :returns: a built, validated SDFG.
     :raises ValueError: ``entry`` missing, or no file defines its
         procedure.
