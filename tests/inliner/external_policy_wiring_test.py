@@ -1,4 +1,4 @@
-# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 """The external-function policy (:mod:`dace_fortran.external_functions`) wired into both
 inliner engines: the fparser pipeline (:func:`inline_to_ast`) and the regex text-splicer
 (:func:`merge_used_modules`).

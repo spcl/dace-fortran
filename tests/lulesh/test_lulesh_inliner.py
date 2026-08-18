@@ -1,4 +1,4 @@
-# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 """Inliner + e2e numerical-correctness tests over the vendored Fortran LULESH
 (``tests/lulesh/``; GPL-v3 third-party fixture -- see ``NOTICE.md``).
 

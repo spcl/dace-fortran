@@ -1,6 +1,6 @@
-# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Library-node + terminator emitters (CopyLibraryNode/MemsetLibraryNode/MatMul/Transpose/Dot/Reduce
+"""Library-node + terminator emitters (CopyLibraryNode/FillLibraryNode/MatMul/Transpose/Dot/Reduce
 library nodes; BreakBlock/ReturnBlock terminators). Shared shape: flush pending scalars, ensure a
 state, add the node, attach edges -- too small individually to earn their own file.
 """
@@ -145,9 +145,9 @@ def emit_copy(builder, ctx, n, region):
 
 
 def emit_memset(builder, ctx, n, region):
-    """Scalar-zero fill -> ``MemsetLibraryNode``. Transitions to a fresh successor state so a
+    """Scalar-zero fill -> ``FillLibraryNode``. Transitions to a fresh successor state so a
     later element write to the same array doesn't race the array-wide write in one state's DAG."""
-    from dace.libraries.standard.nodes import MemsetLibraryNode
+    from dace.libraries.standard.nodes import FillLibraryNode
     state = ctx.flush_and_ensure(builder, region)
 
     tgt_name = n.target
@@ -164,17 +164,17 @@ def emit_memset(builder, ctx, n, region):
             else:
                 slab_parts.append(f"({slot}) - 1")
         slab_subset = ", ".join(slab_parts)
-        ms = MemsetLibraryNode(name=f"memset_{tgt_name}_{builder.nid()}")
+        ms = FillLibraryNode(name=f"memset_{tgt_name}_{builder.nid()}")
         state.add_node(ms)
         tgt_access = acc(builder, state, tgt_name)  # redirects to src via resolve
-        state.add_edge(ms, MemsetLibraryNode.OUTPUT_CONNECTOR_NAME, tgt_access, None,
+        state.add_edge(ms, FillLibraryNode.OUTPUT_CONNECTOR_NAME, tgt_access, None,
                        Memlet(data=src_name, subset=slab_subset))
         ctx.new_state(builder, region)
         return
 
     tgt_desc = ctx.sdfg.arrays[tgt_name]
 
-    ms = MemsetLibraryNode(name=f"memset_{tgt_name}_{builder.nid()}")
+    ms = FillLibraryNode(name=f"memset_{tgt_name}_{builder.nid()}")
     state.add_node(ms)
 
     from dace.data import View
@@ -183,14 +183,14 @@ def emit_memset(builder, ctx, n, region):
         # use a fresh write node + _ensure_view_writeback_link (same as tasklet RMW writes).
         from dace_fortran.builder.emit_tasklet import _ensure_view_writeback_link
         view_node = state.add_access(tgt_name)
-        state.add_edge(ms, MemsetLibraryNode.OUTPUT_CONNECTOR_NAME, view_node, None,
+        state.add_edge(ms, FillLibraryNode.OUTPUT_CONNECTOR_NAME, view_node, None,
                        Memlet.from_array(tgt_name, tgt_desc))
         _ensure_view_writeback_link(builder, state, view_node, tgt_name)
         ctx.new_state(builder, region)
         return
 
     tgt_access = acc(builder, state, tgt_name)
-    state.add_edge(ms, MemsetLibraryNode.OUTPUT_CONNECTOR_NAME, tgt_access, None, Memlet.from_array(tgt_name, tgt_desc))
+    state.add_edge(ms, FillLibraryNode.OUTPUT_CONNECTOR_NAME, tgt_access, None, Memlet.from_array(tgt_name, tgt_desc))
 
     # Force a state break: two incoming memlets on one access node race in DaCe's dataflow DAG.
     ctx.new_state(builder, region)

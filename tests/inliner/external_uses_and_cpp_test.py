@@ -1,4 +1,4 @@
-# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 """Tests two robustness features of the fparser single-TU inliner needed to ingest
 *real* ICON sources (not just cpp-clean fixtures):
 

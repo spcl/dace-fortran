@@ -1,4 +1,4 @@
-# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 """Correctness tests for the :class:`FFTInterpolate` lib node's pure expansion.
 
 The pure expansion composes FFT -> pad/truncate spectrum -> IFFT.  The

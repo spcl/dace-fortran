@@ -1,4 +1,4 @@
-# Copyright 2019-2025 ETH Zurich and the DaCe authors. All rights reserved.
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 import fparser.two.Fortran2003 as f03
 from fparser.common.readfortran import FortranStringReader
 from fparser.two.parser import ParserFactory

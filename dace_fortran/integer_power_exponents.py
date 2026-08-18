@@ -1,4 +1,4 @@
-# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Retype integer-valued float ``**`` exponents to ``int`` so codegen emits
 ``ipow`` (repeated multiply) instead of libm ``pow``, which isn't bit-identical

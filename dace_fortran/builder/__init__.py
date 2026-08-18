@@ -1,4 +1,4 @@
-# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """``SDFGBuilder``  --  walks the HLFIR AST to directly construct a DaCe SDFG.
 
@@ -16,7 +16,7 @@ Architecture:
         kind="while"       -> LoopRegion (while form, post lift-cf-to-scf)
         kind="conditional" -> ConditionalBlock + ControlFlowRegion per branch
         kind="copy"        -> CopyLibraryNode
-        kind="memset"      -> MemsetLibraryNode
+        kind="memset"      -> FillLibraryNode
         kind="libcall"     -> BLAS / standard library node (MatMul, Dot, ...)
         kind="reduce"      -> standard.Reduce
         kind="break"       -> BreakBlock

@@ -1,10 +1,10 @@
 # `dace_fortran.flang_codebase` -- driving flang on real-world Fortran codebases
 
-> **Status**: validated against ICON release `icon-2026.04-public` (pinned by the `tests/icon/full/icon-model` submodule); worked examples: [test_velocity_from_icon_source.py](../tests/icon/full/test_velocity_from_icon_source.py), [test_dycore_from_icon_source.py](../tests/icon/full/test_dycore_from_icon_source.py). Companion to tier-3 (`build_sdfg_from_project`), [README](../README.md#tier-3----a-real-cmake--autotools-project).
+> **Status**: validated against ICON release `icon-2026.04-public` (pinned by the `tests/icon/full/icon-model` submodule); worked examples: [test_velocity_from_icon_source.py](../tests/icon/full/test_velocity_from_icon_source.py), [test_dycore_from_icon_source.py](../tests/icon/full/test_dycore_from_icon_source.py). Companion to tier-3 (`build_sdfg_from_project`), [README](../README.md#quick-start).
 
 ## Why this exists
 
-Tiers 1+2 ([README](../README.md#the-three-input-tiers)) drive flang internally and merge a hand-curated source list. Tier 3 expects a `compile_commands.json` (`cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON` or `bear -- make`). Some projects fit neither:
+Tiers 1+2 ([README](../README.md#quick-start)) drive flang internally and merge a hand-curated source list. Tier 3 expects a `compile_commands.json` (`cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON` or `bear -- make`). Some projects fit neither:
 
   * ICON: autotools build, so `cmake --export` is out; `bear -- make` adds a dependency to the inner CI loop.
   * netcdf-fortran: ships only a gfortran-binary `.mod` on every Linux distro (flang can't consume it) -- but can ingest netcdf-fortran's *source* from github.

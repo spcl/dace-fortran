@@ -1,4 +1,4 @@
-# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 """Rewrite tests for the static-vtable engine
 (:mod:`dace_fortran.inliner.ast_desugaring.monomorphize_rewrite`).
 

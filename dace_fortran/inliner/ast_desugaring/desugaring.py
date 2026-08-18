@@ -1,4 +1,4 @@
-# Copyright 2019-2025 ETH Zurich and the DaCe authors. All rights reserved.
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Desugaring passes for the Fortran AST: rewrite high-level/syntactic-sugar
 constructs into simpler, equivalent ones an SDFG can be built from --

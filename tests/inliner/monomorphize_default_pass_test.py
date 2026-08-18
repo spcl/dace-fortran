@@ -1,4 +1,4 @@
-# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 """monomorphize runs by default in the fparser inliner (ParseConfig.monomorphize),
 devirtualising single-level abstract dispatch the bridge can't lower into static calls.
 Tests drive the real inline_to_ast pipeline (not the engine in isolation) to pin wiring

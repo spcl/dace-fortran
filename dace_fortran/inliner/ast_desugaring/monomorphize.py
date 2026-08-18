@@ -1,4 +1,4 @@
-# Copyright 2019-2025 ETH Zurich and the DaCe authors. All rights reserved.
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Supportability analysis for static-vtable monomorphisation of polymorphic TBP
 dispatch (ICON-O ocean-solver pattern): recognises programs where a runtime

@@ -1,4 +1,4 @@
-# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 """Unit tests for dace-fortran's fparser-inliner additions:
 
   * restore_cross_module_uses -- re-adds inter-module USE statements the

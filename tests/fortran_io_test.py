@@ -1,4 +1,4 @@
-# Copyright 2019-2024 ETH Zurich and the DaCe authors. All rights reserved.
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 """Round-trip tests for the ``dace_fortran.libraries.fortran_io`` Read / Write nodes.
 
 Each test writes arrays through a ``Write`` node (the shipped iso_c_binding

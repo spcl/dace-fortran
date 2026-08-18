@@ -1,4 +1,4 @@
-# Copyright 2019-2025 ETH Zurich and the DaCe authors. All rights reserved.
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 from dace_fortran.fparser_inliner import inline_to_ast
 from dace_fortran.inliner.ast_desugaring import cleanup
 from inliner.fortran_test_helper import SourceCodeBuilder, parse_and_improve

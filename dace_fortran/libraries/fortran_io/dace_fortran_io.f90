@@ -1,4 +1,4 @@
-! Copyright 2019-2024 ETH Zurich and the DaCe authors. All rights reserved.
+! Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 !
 ! iso_c_binding wrappers around Fortran external-file I/O for dace.libraries.fortran_io:
 ! the library nodes lower a READ/WRITE statement to a C++ tasklet calling these

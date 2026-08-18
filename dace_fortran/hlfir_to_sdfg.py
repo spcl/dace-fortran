@@ -1,4 +1,4 @@
-# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Back-compat shim -- real builder lives in ``.builder``; re-exports keep
 the old ``dace_fortran.hlfir_to_sdfg`` import path working.

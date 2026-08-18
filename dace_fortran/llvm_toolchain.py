@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """LLVM/flang discovery shared by the bridge build and the flang drivers.
 

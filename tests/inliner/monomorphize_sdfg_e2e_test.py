@@ -1,4 +1,4 @@
-# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 """End-to-end numerical-correctness tests for static-vtable monomorphisation: each
 monomorphised kernel must lower to an SDFG and match the original polymorphic program run
 through gfortran's real dispatch, across all four rewrite primitives (local, component,

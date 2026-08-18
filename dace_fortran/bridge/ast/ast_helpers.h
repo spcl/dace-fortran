@@ -1,4 +1,4 @@
-// Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+// Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 //
 // Cross-file API for HLFIR AST extraction: thread-local state, cross-TU function declarations, and the NoSubscriptGuard
 // helper, shared by every ast/*.cpp and bridge/extract_ast.cpp. Globals are inline thread_local so the C++17

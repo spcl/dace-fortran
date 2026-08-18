@@ -827,7 +827,7 @@ ASTNode buildCopyNode(hlfir::AssignOp assign) {
 
 /// ``hlfir.assign %zero to %dst`` where source is a constant zero and dest
 /// is an array box  --  a zero-fill.  Emit ``kind="memset"`` so
-/// hlfir_to_sdfg can wire a ``standard.MemsetLibraryNode``.
+/// hlfir_to_sdfg can wire a ``standard.FillLibraryNode``.
 /// Return ``dg`` if ``v`` comes from an ``hlfir.designate`` whose
 /// ``is_triplet`` attribute marks at least one dimension as a section
 /// (lower:upper:stride).  Used by the Phase-1 array-section lowering to

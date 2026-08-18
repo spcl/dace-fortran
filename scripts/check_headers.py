@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Enforce the copyright / SPDX header on the core Python package.
 
@@ -11,11 +11,11 @@ immediately followed by::
 (An optional ``#!`` shebang and/or a PEP 263 ``coding`` line may precede it; the
 copyright line is then required immediately after, with the SPDX line right below it.)
 
-Most of the tree already carries DaCe's own long-standing copyright line (any single
-year or year range, e.g. ``# Copyright 2019-2025 ETH Zurich and the DaCe authors. All
-rights reserved.``) predating this GPLv3 relicense -- ``--fix`` never rewrites or
-duplicates that line, it only appends the missing SPDX line directly below it. A file
-with no copyright line at all gets the full canonical two-line header inserted instead.
+The copyright line is matched loosely (any single year or year range, any
+``ETH Zurich and the <project> authors`` phrasing) so a file that predates the current
+wording still counts -- ``--fix`` never rewrites or duplicates that line, it only
+appends the missing SPDX line directly below it. A file with no copyright line at all
+gets the full canonical two-line header inserted instead.
 
 Scope -- the CORE package only: ``dace_fortran/``. ``tests/`` and top-level ``scripts/``
 are a separate, deferred header pass (dace-fortran's ``tests/`` holds byte-compared
@@ -38,7 +38,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SPDX_LINE = "# SPDX-License-Identifier: GPL-3.0-or-later"
 # What --fix writes into a file with no copyright line at all (the canonical form).
 HEADER = (
-    "# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.",
+    "# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.",
     SPDX_LINE,
 )
 # A copyright line, loosely matched: any single year or year range, and any

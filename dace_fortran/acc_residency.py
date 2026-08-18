@@ -1,4 +1,4 @@
-# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Per-argument OpenACC data residency for a Fortran routine.
 
@@ -377,9 +377,7 @@ def _collect_evidence_impl(source: str, routine: str, defines: Iterable[str]) ->
     return evidence
 
 
-def collect_evidence(source: str,
-                     routine: str,
-                     defines: Iterable[str] = DEFAULT_CPP_DEFINES) -> Dict[str, list]:
+def collect_evidence(source: str, routine: str, defines: Iterable[str] = DEFAULT_CPP_DEFINES) -> Dict[str, list]:
     """Map ``arg -> [(depth, order, clause, line, ref)]`` from the routine's
     directives.
 
@@ -421,7 +419,10 @@ def extract_acc_residency(source_path, routine: str, defines: Iterable[str] = DE
     return classify(path.read_text(), routine, path.name, defines)
 
 
-def write_acc_residency_sidecar(source_path, routine: str, out_dir, defines: Iterable[str] = DEFAULT_CPP_DEFINES) -> Path:
+def write_acc_residency_sidecar(source_path,
+                                routine: str,
+                                out_dir,
+                                defines: Iterable[str] = DEFAULT_CPP_DEFINES) -> Path:
     """Write ``<routine>.acc_residency.json`` into ``out_dir``; return its path."""
     payload = extract_acc_residency(source_path, routine, defines)
     out = Path(out_dir) / f"{routine}.acc_residency.json"

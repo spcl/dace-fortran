@@ -1,4 +1,4 @@
-# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 """``rename_specifics``: disambiguate a specific module procedure sharing its name
 with the generic interface it belongs to (ICON's ``mo_mpi`` ``p_wait`` pattern) --
 renaming the specific avoids the dangling ambiguous ``USE ... => p_wait`` the

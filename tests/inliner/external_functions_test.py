@@ -1,4 +1,4 @@
-# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 """Unit tests for the external-function policy data model
 (:mod:`dace_fortran.external_functions`) -- the pure-stdlib declaration the
 inliner and the bridge share.  No dace / fparser dependency, so these run

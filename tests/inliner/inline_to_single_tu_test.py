@@ -1,4 +1,4 @@
-# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 """End-to-end tests for the public ``inline_to_single_tu`` API and extra patterns
 (only_clause, rename, collision, nested_types, helper_proc, do_not_emit, cycle,
 generic_interface, private_public).

@@ -12,7 +12,7 @@ Regression for the heap corruption fixed in 0fbe410: a wrong (function-scope,
 single free symbol) allocation over-runs the buffer; glibc aborts on the corrupt
 free even without a sanitizer, and ASan pinpoints the write
 (see ``scripts/lint_generated_kernel.py``). Correctness is oracle'd against f2py,
-not hand literals. See ``docs/value_projection_ssa.md``.
+not hand literals.
 """
 from pathlib import Path
 

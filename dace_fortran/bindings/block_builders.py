@@ -1,4 +1,4 @@
-# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Named block builders -- one function per Fortran section of the generated wrapper
 module.  Each takes the canonical bundle ``(frozen, iface, plan)`` (or a subset) and

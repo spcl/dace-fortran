@@ -1,4 +1,4 @@
-"""Whole-array copy -> ``CopyLibraryNode`` and zero-fill -> ``MemsetLibraryNode``.
+"""Whole-array copy -> ``CopyLibraryNode`` and zero-fill -> ``FillLibraryNode``.
 
 Exercises the two ``hlfir.assign`` shapes that skip the tasklet/loop path
 and go straight to library nodes on FaCe.  Compared numerically against
@@ -64,7 +64,7 @@ def test_copy_and_memset_numerical(tmp_path):
 
 def test_copy_and_memset_structure(tmp_path):
     """The SDFG should carry exactly one CopyLibraryNode (for ``b = a``)
-    and one MemsetLibraryNode (for ``c = 0.0``), rather than tasklet-and-
+    and one FillLibraryNode (for ``c = 0.0``), rather than tasklet-and-
     loop decompositions."""
     sdfg_dir = tmp_path / "sdfg"
     sdfg_dir.mkdir(parents=True, exist_ok=True)
@@ -72,7 +72,7 @@ def test_copy_and_memset_structure(tmp_path):
                       pipeline="hlfir-propagate-shapes").build()
 
     from dace.sdfg.state import LoopRegion, SDFGState
-    from dace.libraries.standard.nodes import (CopyLibraryNode, MemsetLibraryNode)
+    from dace.libraries.standard.nodes import (CopyLibraryNode, FillLibraryNode)
 
     def iter_states(region):
         for n in region.nodes():
@@ -83,6 +83,6 @@ def test_copy_and_memset_structure(tmp_path):
 
     nodes = [n for s in iter_states(sdfg) for n in s.nodes()]
     copies = [n for n in nodes if isinstance(n, CopyLibraryNode)]
-    memsets = [n for n in nodes if isinstance(n, MemsetLibraryNode)]
+    memsets = [n for n in nodes if isinstance(n, FillLibraryNode)]
     assert len(copies) == 1, f"expected 1 CopyLibraryNode, got {len(copies)}"
-    assert len(memsets) == 1, f"expected 1 MemsetLibraryNode, got {len(memsets)}"
+    assert len(memsets) == 1, f"expected 1 FillLibraryNode, got {len(memsets)}"

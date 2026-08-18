@@ -29,6 +29,7 @@ Lowers Fortran HPC kernels to optimisable [DaCe](https://github.com/spcl/dace) S
 - **AoS / nested derived types**: path-flattened to per-member arrays; array-of-struct (array + allocatable members), ICON's array-of-pointer-records (Graupel) pattern.
 - **Fortran binding generation**: emits `<entry>_bindings.f90`, preserves caller interface, zero-copy alias where layouts agree, copy-in/copy-out do-loops otherwise. Optional flat-C-ABI shim (`bind(c)`) for a stable C entry point.
 - **External-call policy**: a kernel `CALL` to a separately-compiled `bind(c)` procedure (e.g. ICON's MPI halo exchange `sync_patch_array`) stays external → DaCe library node, or is dropped — one declaration drives both the inliner and the bridge.
+- **GPU / OpenACC callers**: an ICON-style caller that keeps arguments on the device is handled at the binding boundary — a device-resident argument feeding a host SDFG is staged with `!$ACC UPDATE HOST`/`UPDATE DEVICE`, and one feeding a GPU SDFG is passed straight through inside `!$ACC HOST_DATA USE_DEVICE` (no host round-trip). Residency comes from a parse-time sidecar; an undecidable argument raises rather than guessing (`dace_fortran/bindings/acc_transfers.py`).
 - **Build-system integration**: standalone preprocess CLI + CMake module + Autotools macros run the source-text rewrites in place — existing build emits flang-consumable Fortran with no other changes.
 
 ## Architecture / pipeline
@@ -347,20 +348,20 @@ dace_fortran/
   data/                    distributed-data helpers
 cmake/                     DaceFortran.cmake (CMake integration)
 autotools/                 dace_fortran.m4 + dace_fortran.mk
-scripts/                   ICON build/configure helpers
-docs/                      CODEBASE_HELPERS, ICON_INTEGRATION, …
+scripts/                   ICON build/configure helpers, pre-commit guards,
+                           generated-kernel static analysis
+docs/                      CODEBASE_HELPERS (flang on a real codebase),
+                           ICON_INTEGRATION (full ICON CPU recipe)
 tests/                     test corpora (see Testing)
 ```
 
 ## Future work / roadmap
 
-- **GPU target bindings** — binding generator marshals host (CPU) arrays only; accepting GPU device-pointer inputs (an SDFG compiled for GPU callable with device memory, no host round-trip) is future work. GPU codegen itself is a DaCe capability — the missing piece is device-pointer marshalling at the Fortran/C-ABI boundary.
-- **Dimensional reductions in AST emit** — the bridge pipeline safely lifts `SUM(arr, DIM=k)`-style reductions; the AST emit path for the dimensional case still has a gap.
+- **`DIM=` over an expression source — WRONG RESULT, not an error.** `SUM(arr, DIM=k)` over a *named* array is correct (rank-reducing, numerically checked). With a computed source — `SUM(arr**2, DIM=1)`, QE's `SQRT(SUM(matrix**2, DIM=1))` — `emit_reduce` drops the axis and reduces the whole array, broadcasting one scalar over the result. It compiles and runs; only the values are wrong.
 - **`CHARACTER` string content** — only the enum-as-integer pattern (`rewrite_string_enum_to_integer`) is supported; arbitrary character data is not modelled.
 - **Polymorphism beyond monomorphic CLASS** — `SELECT TYPE`/`CLASS(*)` with genuine runtime type discrimination is rejected; static devirtualisation handles only the resolvable case.
-- **Caller-mutable global classification** — `PreserveMutableGlobals` treats every `fir.zero_bits` (BSS-default) global as caller-mutable; a genuinely zero-initialised mutable global is indistinguishable from an uninitialised input in the IR (see `WORK_PACKAGES.md`).
+- **Caller-mutable global classification** — `PreserveMutableGlobals` treats every `fir.zero_bits` (BSS-default) global as caller-mutable; a genuinely zero-initialised mutable global is indistinguishable from an uninitialised input in the IR.
 
-Tracked (+ per-construct support matrix) in `WORK_PACKAGES.md` and the `docs/` planning notes.
 
 ## Non-goals
 

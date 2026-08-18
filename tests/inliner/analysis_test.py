@@ -1,4 +1,4 @@
-# Copyright 2019-2026 ETH Zurich and the DaCe authors. All rights reserved.
+# Copyright 2025-2026 ETH Zurich and the dace-fortran authors. All rights reserved.
 """Ported from upstream tests/fortran/desugaring/analysis_test.py."""
 from dace_fortran.inliner.ast_desugaring import analysis
 from inliner.fortran_test_helper import SourceCodeBuilder, parse_and_improve
