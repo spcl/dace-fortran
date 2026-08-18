@@ -23,6 +23,12 @@ from dace import SDFG
 #: value store when the bridge lowered ``obj_ptr => src`` as a plain assign.
 _REF_EXPR = re.compile(r"[A-Za-z_]\w*(?:\[[^\]]*\])?\Z")
 
+#: Pointer-association right-hand side that names a derived-type component
+#: chain (``obj_ptr => src % comp1 % comp2``).  The bridge lowers the
+#: association as a plain scalar assign, but the flattened storage for the
+#: component's members lives under ``src_comp1_comp2_<member>``.
+_MEMBER_REF_EXPR = re.compile(r"[A-Za-z_]\w*(?:\s*%\s*[A-Za-z_]\w*)+(?:\[[^\]]*\])?\Z")
+
 #: Reserved names the bridge's faithful scf.while walker mints and
 #: ``auto_declare_synth`` lazily registers as REAL SDFG scalars / symbols
 #: (``__sc_N`` scf.if results, ``__al_N`` scratch counters, ``__brk_N`` /
@@ -70,6 +76,217 @@ def is_character_data(builder, name: str) -> bool:
     """
     v = builder.scalars.get(name) or builder.arrays.get(name)
     return v is not None and is_character_dtype(v.dtype)
+
+
+def _infer_component_aliases(builder) -> tuple[dict[str, str], dict[str, set[str]]]:
+    """Recover pointer-object aliases the bridge inlining chain dissolved.
+
+    When Fortran source contains ``p_pat_fn2 => p_patch % comm_pat_c``,
+    the inlined HLFIR no longer exposes a single association node: the
+    pointer object's member accesses surface as bare array names such as
+    ``p_pat_fn2_send_src_idx`` that have NO descriptor, while the real
+    flattened storage lives under ``p_patch_comm_pat_c_send_src_idx``.
+
+    This pass looks for such phantom prefixes by comparing the suffixes
+    of unresolved array subscripts against the registered arrays.  When
+    every member accessed through a phantom prefix has a matching member
+    under exactly one real prefix, we treat the phantom prefix as an
+    alias of that real prefix.  The returned suffix map lets the caller
+    materialise the phantom members as ``view_alias`` descriptors so
+    the rest of the emit path (``collect_indirect``,
+    ``build_memlet_index``, ``acc``) handles them exactly like explicit
+    whole-array view aliases.
+
+    Returns ``(prefix -> real_prefix, prefix -> member_suffixes)``.
+    """
+    known = set(builder.arrays) | set(builder.scalars) | set(builder.symbols)
+    unresolved: set[str] = set()
+
+    def walk(nodes):
+        for c in nodes:
+            for ac in getattr(c, 'accesses', None) or []:
+                for expr in getattr(ac, 'index_exprs', None) or []:
+                    if isinstance(expr, str):
+                        for m in re.finditer(r'([A-Za-z_]\w*)\[', expr):
+                            n = m.group(1)
+                            if n not in known and '_' in n:
+                                unresolved.add(n)
+            walk(c.children)
+            walk(getattr(c, 'else_children', []))
+
+    walk(builder.ast)
+    if not unresolved:
+        return {}, {}
+
+    # For each phantom name, record every possible (prefix, suffix) split.
+    prefix_suffixes: dict[str, set[str]] = {}
+    for name in unresolved:
+        for i, ch in enumerate(name):
+            if ch != '_':
+                continue
+            prefix = name[:i]
+            suffix = name[i + 1:]
+            if not prefix or not suffix:
+                continue
+            prefix_suffixes.setdefault(prefix, set()).add(suffix)
+
+    real_names = set(builder.arrays)
+    aliases: dict[str, str] = {}
+    for prefix, suffixes in prefix_suffixes.items():
+        if not suffixes:
+            continue
+        # A real prefix must supply every suffix the phantom prefix reads.
+        candidate_prefixes: set[str] | None = None
+        for suffix in suffixes:
+            cands = {r[:-(len(suffix) + 1)] for r in real_names if r.endswith('_' + suffix)}
+            if candidate_prefixes is None:
+                candidate_prefixes = cands
+            else:
+                candidate_prefixes &= cands
+            if not candidate_prefixes:
+                break
+        if not candidate_prefixes or len(candidate_prefixes) != 1:
+            continue
+        real_prefix = next(iter(candidate_prefixes))
+        # The phantom prefix must not itself host any real arrays.
+        if any(r.startswith(prefix + '_') for r in real_names):
+            continue
+        aliases[prefix] = real_prefix
+    return aliases, prefix_suffixes
+
+
+def _synth_view_alias(src, fortran_name: str):
+    """Build a stand-in VarInfo for a phantom pointer-component array.
+
+    The real storage descriptor is ``src`` (already in ``builder.arrays``);
+    the phantom name ``fortran_name`` becomes a whole-array ``view_alias``
+    pointing at it.  Only the fields actually consulted by
+    ``add_descriptors`` and ``access.py`` are populated.
+    """
+    return SimpleNamespace(
+        fortran_name=fortran_name,
+        role='view_alias',
+        view_source=src.fortran_name,
+        view_subset=[''],
+        view_dim_map=[],
+        dtype=src.dtype,
+        rank=src.rank,
+        shape_symbols=list(src.shape_symbols),
+        lower_bounds=list(src.lower_bounds),
+        intent=src.intent,
+        is_dynamic=src.is_dynamic,
+        bounds_remap_view=False,
+        bounds_remap_source='',
+        bounds_remap_source_subset=[],
+        bounds_remap_total_extent='',
+    )
+
+
+def _rename_scalar_members(builder, aliases: dict[str, str], used_tokens: set[str]):
+    """Rewrite phantom scalar member names to their real flattened names.
+
+    Scalar members of a dissolved pointer object (``p_pat_fn1_comm``) have no
+    descriptor, so the SDFG must reference the real storage
+    (``p_patch_comm_pat_e_comm``) instead of fabricating a parallel symbol.
+    The rewrite is a whole-word substitution that deliberately skips
+    underscore-adjacent matches so internal ``__sym_...`` names are untouched.
+    """
+    renames: dict[str, str] = {}
+    for prefix, real_prefix in aliases.items():
+        for src_dict in (builder.scalars, builder.symbols):
+            for real_name in list(src_dict):
+                if not real_name.startswith(real_prefix + '_'):
+                    continue
+                suffix = real_name[len(real_prefix) + 1:]
+                phantom = f"{prefix}_{suffix}"
+                if phantom not in used_tokens:
+                    continue
+                # Only rename when the phantom is not already a real descriptor.
+                if phantom in builder.arrays or phantom in builder.scalars or phantom in builder.symbols:
+                    continue
+                renames[phantom] = real_name
+    if not renames:
+        return
+
+    def _subst(s: str) -> str:
+        # Longest phantom first so a short phantom doesn't eat a longer one.
+        for phantom in sorted(renames, key=len, reverse=True):
+            real = renames[phantom]
+            s = re.sub(rf'(?<![A-Za-z0-9_]){re.escape(phantom)}(?![A-Za-z0-9_])', real, s)
+        return s
+
+    def _walk(nodes):
+        for c in nodes:
+            for attr in dir(c):
+                if not attr or attr.startswith('_') or attr in ('children', 'else_children', 'accesses'):
+                    continue
+                val = getattr(c, attr, None)
+                if isinstance(val, str):
+                    try:
+                        setattr(c, attr, _subst(val))
+                    except AttributeError:
+                        pass
+            for ac in getattr(c, 'accesses', None) or []:
+                if hasattr(ac, 'index_exprs') and ac.index_exprs:
+                    for i, e in enumerate(ac.index_exprs):
+                        if isinstance(e, str):
+                            ac.index_exprs[i] = _subst(e)
+                if hasattr(ac, 'index_vars') and ac.index_vars:
+                    for i, v in enumerate(ac.index_vars):
+                        if isinstance(v, str):
+                            ac.index_vars[i] = _subst(v)
+            call_args = getattr(c, 'call_args', None)
+            if call_args:
+                for i, arg in enumerate(call_args):
+                    if isinstance(arg, str):
+                        call_args[i] = _subst(arg)
+            _walk(c.children)
+            _walk(getattr(c, 'else_children', []))
+
+    _walk(builder.ast)
+
+
+_POINTER_ASSOC_RE = re.compile(r'(?<!\w)([A-Za-z_]\w*)\s*=>\s*([A-Za-z_]\w*(?:\s*%\s*[A-Za-z_]\w*)*)', re.IGNORECASE)
+
+
+def _pointer_aliases_from_source(builder, source: str) -> dict[str, str]:
+    """Parse the original Fortran source for pointer-association statements.
+
+    The bridge's inlining pass dissolves object aliases such as
+    ``p_pat_fn2 => p_patch % comm_pat_c``; recovering them from the source
+    is the only unambiguous way to map the phantom prefix
+    ``p_pat_fn2`` to the real flattened component prefix
+    ``p_patch_comm_pat_c``.  Inline comments and ``&`` line continuations
+    are stripped before matching.
+    """
+    if not source:
+        return {}
+    # Strip comments and join line continuations to keep the RHS on one line.
+    cleaned = re.sub(r'!.*', '', source)
+    cleaned = re.sub(r'&\s*\n\s*&?', ' ', cleaned)
+    out: dict[str, str] = {}
+    real_names = set(builder.arrays)
+    for left, right in _POINTER_ASSOC_RE.findall(cleaned):
+        left = left.strip()
+        right = right.strip()
+        if not left or not right:
+            continue
+        # Only component-chain or bare identifier RHS; arithmetic indicates
+        # a data assignment, not a pointer association.
+        if any(op in right for op in '+-*/()'):
+            continue
+        flat = re.sub(r'\s+', '', right).replace('%', '_')
+        if not flat.isidentifier():
+            continue
+        # The alias must be useful: real arrays live under the flattened
+        # component prefix, and the alias prefix must not itself host real
+        # arrays (otherwise we would be renaming an existing descriptor).
+        if not any(a.startswith(flat + '_') for a in real_names):
+            continue
+        if any(a.startswith(left + '_') for a in real_names):
+            continue
+        out[left] = flat
+    return out
 
 
 def scan_object_aliases(builder) -> None:
@@ -149,6 +366,17 @@ def scan_object_aliases(builder) -> None:
                         # source is itself an (unflattened) object.  Member
                         # accesses on ``tgt_obj`` redirect through this edge.
                         aliases[c.target] = src
+                elif _MEMBER_REF_EXPR.match(src):
+                    # Component-chain pointer association: ``p_pat_fn2 => p_patch % comm_pat_c``.
+                    # The target is an object pointer; its member accesses must
+                    # resolve to the already-flattened storage of the source
+                    # component (``p_patch_comm_pat_c_<member>``).  Record an
+                    # alias from the target to the flattened component prefix so
+                    # ``resolve_object_member`` can follow it transitively.
+                    defs.add(c.target)
+                    flat_prefix = re.sub(r"\s+", "", src).replace("[", "").replace("]", "").replace("%", "_")
+                    if any(a.startswith(flat_prefix + "_") for a in builder.arrays):
+                        aliases[c.target] = flat_prefix
             elif c.kind == "assign" and not c.target_is_array and c.target in builder.arrays:
                 # Section-RHS pointer rebind onto a MATERIALISED array companion:
                 # ``inv_mm_solver % b_loc_wp => rhs_e(:, jk, :)`` flattens to a
@@ -198,9 +426,70 @@ def scan_object_aliases(builder) -> None:
                 per_member.setdefault(flat[len(root) + 1:], set()).add(flat)
     flat_members = {m: next(iter(s)) for m, s in per_member.items() if len(s) == 1}
 
+    # Recover aliases dissolved by inlining (e.g. ``p_pat_fn2 => p_patch%comm_pat_c``)
+    # and materialise phantom pointer-component names as mirrors of the real
+    # flattened storage.  This must happen before ``add_descriptors`` registers the
+    # SDFG symbols/arrays because the synthetic views need their own offset symbols.
+    source_aliases = _pointer_aliases_from_source(builder, getattr(builder, '_fortran_source', None) or '')
+    inferred_aliases, inferred_suffixes = _infer_component_aliases(builder)
+    all_aliases: dict[str, str] = {**inferred_aliases, **source_aliases}
+    for prefix, real_prefix in all_aliases.items():
+        aliases[prefix] = real_prefix
+
+    # Stash the recovered alias tables on ``builder`` so emit-time member
+    # resolution (``access.resolve_object_member`` and the expression rewrite
+    # helpers) can redirect phantom object-alias members to their real
+    # flattened descriptors.
     builder.object_aliases = aliases
     builder.object_alias_defs = defs
     builder.object_alias_flat_members = flat_members
+
+    # Collect every bare identifier token used in the AST so we only synthesise
+    # the phantom members that are actually referenced.
+    used_tokens: set[str] = set()
+    _ident_re = re.compile(r'\b[A-Za-z_]\w*\b')
+
+    def _collect_tokens(nodes):
+        for c in nodes:
+            # Scan every string attribute of the AST node (loop bounds,
+            # conditions, expressions, ...) plus nested AccessInfo strings.
+            for attr in dir(c):
+                if attr.startswith('_') or attr in ('children', 'else_children', 'accesses'):
+                    continue
+                val = getattr(c, attr, None)
+                if isinstance(val, str):
+                    used_tokens.update(_ident_re.findall(val))
+            for ac in getattr(c, 'accesses', None) or []:
+                for expr in getattr(ac, 'index_exprs', None) or []:
+                    if isinstance(expr, str):
+                        used_tokens.update(_ident_re.findall(expr))
+                for iv in getattr(ac, 'index_vars', None) or []:
+                    if isinstance(iv, str):
+                        used_tokens.update(_ident_re.findall(iv))
+            for arg in getattr(c, 'call_args', None) or []:
+                used_tokens.update(_ident_re.findall(str(arg)))
+            _collect_tokens(c.children)
+            _collect_tokens(getattr(c, 'else_children', []))
+
+    _collect_tokens(builder.ast)
+
+    # Array members (e.g. ``p_pat_fn2_send_src_idx``) become whole-array
+    # ``view_alias`` descriptors so ``collect_indirect`` / ``build_memlet_index``
+    # treat them like explicit pointer-to-array aliases.  Scalar members of a
+    # dissolved object alias are resolved at emit time (see
+    # ``access.resolve_object_member_expr``) because the AST string attributes
+    # are immutable nanobind properties.
+    for prefix, real_prefix in all_aliases.items():
+        for real_name in list(builder.arrays):
+            if not real_name.startswith(real_prefix + '_'):
+                continue
+            suffix = real_name[len(real_prefix) + 1:]
+            phantom = f"{prefix}_{suffix}"
+            if phantom in builder.arrays or phantom in builder.scalars or phantom in builder.symbols:
+                continue
+            if phantom not in used_tokens:
+                continue
+            builder.arrays[phantom] = _synth_view_alias(builder.arrays[real_name], phantom)
 
     # Value stores into OPAQUE (unflattened) struct members.  ``this % patch_3d
     # => patch_3d`` (a rebind) is dropped above, but the same opaque solver

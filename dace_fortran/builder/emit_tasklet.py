@@ -12,7 +12,7 @@ import re
 from dace import Memlet
 
 from dace_fortran.builder.access import (acc, build_memlet_index, get_access, indirect_host, rename_iters,
-                                         resolve_object_member, resolve_section_alias)
+                                         resolve_object_member, resolve_object_member_expr, resolve_section_alias)
 
 # Excludes the imaginary-unit suffix of a complex literal (``1j`` in
 # ``(0.0) + 1j*(0.0)``): negative lookbehind drops idents starting right after
@@ -221,6 +221,11 @@ def emit_tasklet(builder, state, assign_node, idx: int, iter_map: dict, indirect
     # uniquified to ``i_0`` while an SDFG-level ``i`` symbol may also exist.
     # Without the rename the tasklet reads that ``i`` (typically zero), not ``i_0``.
     expr = rename_iters(assign_node.expr, iter_map)
+    # Phantom object-alias scalar members (e.g. ``p_pat_fn1_comm``) may resolve
+    # to real SDFG symbols (``p_patch_comm_pat_e_comm``).  Rewrite those before
+    # connector substitution so they become free symbol references rather than
+    # unresolved free identifiers.
+    expr = resolve_object_member_expr(builder, expr)
     code = f"_out_{target} = {_rewrite_read_connectors(expr, sorted_tokens, r_scl, occ)}"
     # Bare ``?`` means the C++ AST builder hit a buildIndexExpr/leafExpr
     # fallback it couldn't trace; raise here instead of letting it reach

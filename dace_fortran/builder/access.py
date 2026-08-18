@@ -70,10 +70,37 @@ def resolve_object_member(builder, name: str):
         if cand in builder.arrays or cand in builder.scalars or cand in builder.symbols:
             return cand
         hit = (vars(builder).get("object_alias_flat_members") or {}).get(member)
-        if hit is not None and (hit in builder.arrays or hit in builder.scalars):
+        if hit is not None and (hit in builder.arrays or hit in builder.scalars or hit in builder.symbols):
             return hit
         return None
     return None
+
+
+def resolve_object_member_expr(builder, expr: str) -> str:
+    """Rewrite bare phantom object-alias scalar-member names to their real
+    flattened SDFG symbol names.
+
+    When a dissolved object pointer rebind (``p_pat_fn1 => p_patch%comm_pat_e``)
+    leaves scalar member accesses as phantom names (``p_pat_fn1_comm``), the
+    real descriptor may be an SDFG symbol (``p_patch_comm_pat_e_comm``) rather
+    than a data scalar.  This helper replaces such tokens in expression
+    strings so downstream symbolic paths see a registered name.  Array and
+    data-scalar resolutions are left untouched  --  those are handled by the
+    per-occurrence connector wiring in ``emit_tasklet`` / ``emit_scalar_assign``.
+    """
+    if not isinstance(expr, str) or '_' not in expr:
+        return expr
+
+    def _repl(m):
+        tok = m.group(0)
+        if tok in builder.arrays or tok in builder.scalars or tok in builder.symbols:
+            return tok
+        real = resolve_object_member(builder, tok)
+        if real is not None and real in builder.symbols:
+            return real
+        return tok
+
+    return re.sub(r'\b[A-Za-z_]\w*\b', _repl, expr)
 
 
 def resolve_section_alias(builder, array_name: str, access):
@@ -422,13 +449,14 @@ def deref_len1_array_scalars(sdfg, expr: str) -> str:
     return "".join(out)
 
 
-def find_array_subscripts(expr, names):
+def find_array_subscripts(expr, names, resolver=None):
     """Generator yielding ``(start, end, arr_name, parts)`` for each
     top-level ``<arr>[...]`` substring in ``expr`` whose ``<arr>`` is in
-    ``names``.  Walks brackets balanced (handles nested subscripts
-    like ``a[idx[i],j]``) and splits the inner range on top-level
-    commas only.  Replaces the brittle ``^(\\w+)\\[([^\\]]*)\\]$``
-    regex used by indirect_to_dace / indirect_host."""
+    ``names`` or resolves (via ``resolver``) to an array.  Walks
+    brackets balanced (handles nested subscripts like ``a[idx[i],j]``)
+    and splits the inner range on top-level commas only.  Replaces the
+    brittle ``^(\\w+)\\[([^\\]]*)\\]$`` regex used by
+    indirect_to_dace / indirect_host."""
     n = len(expr)
     i = 0
     while i < n:
@@ -437,7 +465,12 @@ def find_array_subscripts(expr, names):
             i += 1
             continue
         arr = m.group(1)
-        if arr not in names:
+        resolved = None
+        if arr in names:
+            resolved = arr
+        elif resolver is not None:
+            resolved = resolver(arr)
+        if resolved is None:
             i += 1
             continue
         start = i
@@ -467,7 +500,7 @@ def find_array_subscripts(expr, names):
                 parts.append(inner[sp:k].strip())
                 sp = k + 1
         parts.append(inner[sp:].strip())
-        yield (start, j + 1, arr, parts)
+        yield (start, j + 1, resolved, parts)
         i = j + 1
 
 
@@ -498,7 +531,8 @@ def indirect_exprs(builder, a) -> list:
         """
         if not isinstance(expr, str) or '[' not in expr:
             return
-        for start, end, arr, parts in find_array_subscripts(expr, builder.arrays):
+        resolver = lambda n: resolve_object_member(builder, n)
+        for start, end, arr, parts in find_array_subscripts(expr, builder.arrays, resolver):
             # Recurse into each part FIRST so inner indirections come ahead of
             # the enclosing one.
             for part in parts:
@@ -564,8 +598,9 @@ def materialize_indirect_view_sources(builder, state, indirect_syms: dict) -> No
     placeholders and walks states topologically, so the real node is the FIRST
     recorded instance and ``get_view_edge`` resolves against it.
     """
+    resolver = lambda n: resolve_object_member(builder, n)
     for expr in indirect_syms:
-        for _start, _end, arr, _parts in find_array_subscripts(expr, builder.arrays):
+        for _start, _end, arr, _parts in find_array_subscripts(expr, builder.arrays, resolver):
             v = builder.arrays.get(arr)
             if v is not None and getattr(v, 'role', '') == 'view_alias':
                 acc(builder, state, arr)
@@ -710,7 +745,8 @@ def indirect_to_dace(builder, expr: str, iter_map: dict, indirect_syms: dict | N
     """
     if not isinstance(expr, str) or '[' not in expr:
         return expr
-    matches = list(find_array_subscripts(expr, builder.arrays))
+    resolver = lambda n: resolve_object_member(builder, n)
+    matches = list(find_array_subscripts(expr, builder.arrays, resolver))
     # Single full-string match -- the typical inline-indirection shape.
     if len(matches) == 1:
         start, end, arr, parts = matches[0]
@@ -771,9 +807,10 @@ def build_memlet_index(builder, array_name: str, access, iter_map: dict, indirec
         # exact-match early-return below still catches the pure-indirect case
         # (``ikidx[...]`` with no surrounding arithmetic).
         if '[' in expr and indirect_syms:
+            resolver = lambda n: resolve_object_member(builder, n)
             while True:
                 replaced = False
-                for sub_start, sub_end, _arr, _parts in find_array_subscripts(expr, builder.arrays):
+                for sub_start, sub_end, _arr, _parts in find_array_subscripts(expr, builder.arrays, resolver):
                     sub = expr[sub_start:sub_end]
                     if sub in indirect_syms:
                         expr = expr[:sub_start] + indirect_syms[sub] + expr[sub_end:]

@@ -23,6 +23,7 @@ from dace_fortran.builder.access import (
     indirect_to_dace,
     iter_view_dim_map,
     materialize_indirect_view_sources,
+    resolve_object_member,
 )
 from dace_fortran.builder.context import _Ctx
 from dace_fortran.builder.descriptors import auto_declare_synth, is_character_data
@@ -118,7 +119,8 @@ def _rewrite_section_aliases_in_expr(builder, expr: str) -> str:
     section_dummies = {nm for nm, v in builder.arrays.items() if getattr(v, 'role', '') == 'section_alias'}
     if not section_dummies:
         return expr
-    matches = list(find_array_subscripts(expr, builder.arrays))
+    resolver = lambda n: resolve_object_member(builder, n)
+    matches = list(find_array_subscripts(expr, builder.arrays, resolver))
     if not matches:
         return expr
     out = expr
@@ -358,7 +360,8 @@ def _fortran_subs_to_dace(expr, builder):
     so nested subscripts are handled correctly."""
     if not isinstance(expr, str) or '[' not in expr:
         return expr
-    matches = list(find_array_subscripts(expr, builder.arrays))
+    resolver = lambda n: resolve_object_member(builder, n)
+    matches = list(find_array_subscripts(expr, builder.arrays, resolver))
     if not matches:
         return expr
     out = []
