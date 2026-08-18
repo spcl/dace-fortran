@@ -140,8 +140,23 @@ if(NOT LLVM_VERSION_MAJOR IN_LIST LLVM_SUPPORTED_VERSIONS)
     message(FATAL_ERROR "LLVM ${LLVM_PACKAGE_VERSION} in ${LLVM_DIR} is unsupported; "
         "the bridge builds against LLVM ${LLVM_SUPPORTED_VERSIONS}.")
 endif()
+# Every component has to be the same major.  flang emits the HLFIR that MLIR then parses, so a
+# flang of one major against an MLIR of another is not a version skew that shows up at build time
+# -- it links, and then misparses or fails to dlopen.
+if(_FLANG_VERSION AND NOT _FLANG_VERSION STREQUAL LLVM_VERSION_MAJOR)
+    message(FATAL_ERROR "Mixed LLVM majors: flang ${_FLANG_BIN} is ${_FLANG_VERSION}, but "
+                        "${LLVM_DIR} is LLVM ${LLVM_PACKAGE_VERSION}.  Point LLVM_DIR and "
+                        "FLANG_BIN at one install.")
+endif()
 set(LLVM_VERSION "${LLVM_VERSION_MAJOR}")
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION} in ${LLVM_DIR}")
+
+# Same major, different install: legal, but flang and MLIR then differ by point release, which is
+# a skew nothing downstream can detect.  Say so rather than let it pass unremarked.
+if(DEFINED LLVM_INSTALL_PREFIX AND _LLVM_PREFIX AND NOT _LLVM_PREFIX STREQUAL LLVM_INSTALL_PREFIX)
+    message(WARNING "flang comes from ${_LLVM_PREFIX} but LLVM/MLIR from ${LLVM_INSTALL_PREFIX}; "
+                    "both are LLVM ${LLVM_VERSION_MAJOR}, but they are different installs.")
+endif()
 message(STATUS "LLVM include dirs: ${LLVM_INCLUDE_DIRS}")
 message(STATUS "LLVM library dir:  ${LLVM_LIBRARY_DIR}")
 
