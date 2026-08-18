@@ -72,3 +72,29 @@ def test_importing_the_module_does_not_load_the_extension():
     code = "import dace_fortran.build_bridge, sys; print('dace_fortran.hlfir_bridge' in sys.modules)"
     out = subprocess.check_output([sys.executable, "-c", code], text=True)
     assert out.strip() == "False", out
+
+
+def test_an_incomplete_prefix_is_not_selected(monkeypatch, tmp_path):
+    """An LLVM prefix can ship LLVMConfig.cmake and neither flang nor MLIR. Selecting it
+    configures a build that cannot emit HLFIR and links a second LLVM's MLIR."""
+    prefix = tmp_path / "llvm-x"
+    (prefix / "lib" / "cmake" / "llvm").mkdir(parents=True)
+    monkeypatch.setattr(build_bridge, "find_flang", lambda v: None)
+    assert build_bridge._prefix_builds_the_bridge(str(prefix), "22") is False
+
+    (prefix / "lib" / "cmake" / "mlir").mkdir(parents=True)
+    monkeypatch.setattr(build_bridge, "find_flang", lambda v: "/usr/bin/flang-new-22")
+    assert build_bridge._prefix_builds_the_bridge(str(prefix), "22") is True
+
+
+def test_a_differently_configured_build_dir_is_reported(monkeypatch, tmp_path):
+    """Reconfiguring in place leaves entries cmake does not overwrite pointing at the old prefix,
+    which is how one module ends up linking parts of two LLVM installs."""
+    monkeypatch.setattr(build_bridge, "_BUILD_DIR", tmp_path)
+    (tmp_path / "CMakeCache.txt").write_text("LLVM_VERSION:STRING=21\n"
+                                             "LLVM_DIR:PATH=/opt/llvm-21/lib/cmake/llvm\n")
+
+    assert build_bridge._cache_conflicts({"LLVM_VERSION": "21"}) == []
+
+    conflicts = build_bridge._cache_conflicts({"LLVM_VERSION": "22"})
+    assert len(conflicts) == 1 and "LLVM_VERSION" in conflicts[0], conflicts

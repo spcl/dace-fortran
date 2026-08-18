@@ -59,7 +59,19 @@ function(_find_flang_for out_bin out_version)
     set(${out_version} "" PARENT_SCOPE)
 endfunction()
 
-_find_flang_for(_FLANG_BIN _FLANG_VERSION)
+# A caller that already resolved the toolchain pins it with -DFLANG_BIN.  Probing again here is
+# what let two detectors disagree: this file overwrites LLVM_VERSION with whatever IT found, so a
+# build told to use one major could compile against another's MLIR and fail at dlopen.
+if(FLANG_BIN)
+    set(_FLANG_BIN "${FLANG_BIN}")
+    _flang_reported_major(_FLANG_VERSION "${FLANG_BIN}")
+    if(LLVM_VERSION AND _FLANG_VERSION AND NOT _FLANG_VERSION STREQUAL LLVM_VERSION)
+        message(FATAL_ERROR "FLANG_BIN (${FLANG_BIN}) is LLVM ${_FLANG_VERSION}, but LLVM_VERSION="
+                            "${LLVM_VERSION} was requested.  Pass a matching pair, or neither.")
+    endif()
+else()
+    _find_flang_for(_FLANG_BIN _FLANG_VERSION)
+endif()
 if(_FLANG_VERSION)
     set(LLVM_VERSION "${_FLANG_VERSION}")
 elseif(NOT LLVM_VERSION)

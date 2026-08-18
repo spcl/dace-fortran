@@ -96,6 +96,20 @@ def _find_llvm_cmake_dir(prefix: str, version: str) -> str:
     return ""
 
 
+def _prefix_builds_the_bridge(prefix: str, version: str) -> bool:
+    """Whether a prefix carries what the bridge needs, beyond an ``LLVMConfig.cmake``.
+
+    An LLVM install can ship the LLVM cmake package and neither flang nor MLIR --
+    ``llvm-21-dev`` without ``libmlir-21-dev``/``flang-21`` is exactly that.  Selecting it
+    configures a build that cannot emit HLFIR and links against whatever MLIR happens to be
+    reachable, which is how a mixed prefix reaches the linker and fails at ``dlopen``.
+    """
+    if not find_flang(version):
+        return False
+    root = Path(prefix)
+    return (root / "lib" / "cmake" / "mlir").is_dir() or (root / "include" / "mlir").is_dir()
+
+
 def _detect_dirs():
     """Populate _LLVM_DIR / _LLVM_VERSION: explicit env vars win, else probe the supported majors."""
     global _LLVM_DIR, _LLVM_VERSION
@@ -104,13 +118,22 @@ def _detect_dirs():
         return
 
     searched: list = []
+    incomplete: list = []
     for version in candidate_versions():
         prefix = _find_llvm_prefix(version)
         searched += _cmake_dir_candidates(prefix, version)
         found = _find_llvm_cmake_dir(prefix, version)
+        if found and not _prefix_builds_the_bridge(prefix, version):
+            incomplete.append(f"{prefix} (LLVM {version}: no flang and/or no MLIR)")
+            continue
         if found:
             _LLVM_VERSION, _LLVM_DIR = version, found
             return
+
+    if incomplete:
+        raise RuntimeError("No LLVM prefix can build the HLFIR bridge.  Rejected as incomplete: " +
+                           "; ".join(incomplete) + ".  Install the matching flang and MLIR development "
+                           "packages, or set LLVM_DIR (and optionally LLVM_VERSION) to a complete prefix.")
 
     majors = "/".join(candidate_versions())
     raise RuntimeError(f"Cannot find LLVMConfig.cmake for LLVM {majors}.  Looked in: "
@@ -183,6 +206,25 @@ def rebuild_forbidden() -> bool:
     return os.environ.get(NO_REBUILD_ENV, "") not in ("", "0")
 
 
+def _cache_conflicts(expected: dict) -> list:
+    """Cached cmake entries that disagree with what this build is about to pass.
+
+    Reconfiguring an existing build directory with a different prefix or interpreter leaves the
+    entries cmake does not overwrite pointing at the old one, and the module then links parts of
+    two LLVM installs -- seen as ``LLVM_VERSION=21`` beside an MLIR from the 22 prefix, which
+    builds and then fails at ``dlopen`` on an undefined typeinfo.
+    """
+    cache = _BUILD_DIR / "CMakeCache.txt"
+    if not cache.is_file():
+        return []
+    cached = {}
+    for line in cache.read_text(errors="replace").splitlines():
+        name, sep, value = line.partition(":")
+        if sep and "=" in value:
+            cached[name.strip()] = value.split("=", 1)[1].strip()
+    return [f"{k}: {cached[k]!r} -> {v!r}" for k, v in expected.items() if k in cached and cached[k] != v]
+
+
 def build(clean: bool = False, verbose: bool = True):
     """Run cmake + make.  Raises on failure."""
     if rebuild_forbidden():
@@ -195,6 +237,24 @@ def build(clean: bool = False, verbose: bool = True):
                            f"then resubmit -- or unset {NO_REBUILD_ENV} to allow this process to build.")
     _detect_dirs()
 
+    python = sys.executable
+    # Pin the flang this resolution picked, so cmake does not run its own probe and land on a
+    # different major than the LLVM_DIR passed beside it.
+    flang = find_flang(_LLVM_VERSION) or ""
+    conflicts = _cache_conflicts({
+        "LLVM_DIR": _LLVM_DIR,
+        "LLVM_VERSION": _LLVM_VERSION,
+        "FLANG_BIN": flang,
+        "Python_EXECUTABLE": python,
+    })
+    if conflicts and not clean:
+        if verbose:
+            print(
+                f"[build_bridge] build dir was configured differently ({'; '.join(conflicts)}); "
+                "reconfiguring from scratch",
+                file=sys.stderr)
+        clean = True
+
     if clean and _BUILD_DIR.exists():
         if verbose:
             print(f"[build_bridge] cleaning {_BUILD_DIR}", file=sys.stderr)
@@ -202,7 +262,6 @@ def build(clean: bool = False, verbose: bool = True):
 
     _BUILD_DIR.mkdir(exist_ok=True)
 
-    python = sys.executable
     nproc = os.cpu_count() or 4
 
     # --- cmake configure ---
@@ -211,6 +270,7 @@ def build(clean: bool = False, verbose: bool = True):
         str(_HERE),
         f"-DLLVM_VERSION={_LLVM_VERSION}",
         f"-DLLVM_DIR={_LLVM_DIR}",
+        *([f"-DFLANG_BIN={flang}"] if flang else []),
         f"-DPython_EXECUTABLE={python}",
         *_python_cmake_hints(),
         "-DCMAKE_BUILD_TYPE=Release",
