@@ -62,17 +62,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        llvm: ['21']
+        # Both supported majors run the whole sweep and both block: the bridge claims to
+        # support 21 and 22, and a lane that cannot fail does not back that claim.  Any
+        # point release of either is accepted -- discovery reads the major alone.  Both
+        # stay on noble; 26.04 packages flang 22 but is a PREVIEW image, and noble-22 is
+        # a ROLLING apt channel, so a red 22 lane can mean the channel moved.
+        llvm: ['21', '22']
         suite: [fast, heavy, integration, e2e, e2e-cloudsc]
-        # LLVM 22 gets the ``fast`` sweep only (bridge build + HLFIR emission is the whole
-        # version-sensitive surface) and is non-blocking below: noble-22 is a ROLLING apt
-        # channel.  Both stay on noble; 26.04 packages flang 22 but is a PREVIEW image.
-        include:
-          - llvm: '22'
-            suite: fast
     name: test-fortran (llvm${{ matrix.llvm }}, ${{ matrix.suite }})
     runs-on: ubuntu-24.04
-    continue-on-error: ${{ matrix.llvm == '22' }}
     # The heavy suite builds ICON from source and runs the ~9 GB-peak
     # fparser ocean extractions; the integration suite likewise builds ICON
     # (same bear-wrapped configure + make) before its SHORT test run -- give
