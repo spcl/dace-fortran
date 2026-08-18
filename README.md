@@ -418,4 +418,4 @@ call s%apply(x)   →   IF (s__tag==1) CALL gmres_apply(s__t_gmres, x)
 
 ## License
 
-BSD 3-Clause. Copyright ETH Zurich and the DaCe authors (see `AUTHORS` / `LICENSE`).
+GPL-3.0-or-later. Copyright ETH Zurich and the dace-fortran authors (see `AUTHORS` / `LICENSE` / `NOTICE`).

@@ -7,9 +7,9 @@ name = "dace-fortran"
 version = "1.0.0"
 description = "Fortran (HLFIR) frontend for the DaCe data-centric framework"
 readme = "README.md"
-license = "BSD-3-Clause"
+license = "GPL-3.0-or-later"
 authors = [
-    { name = "ETH Zurich and the DaCe authors" }
+    { name = "ETH Zurich and the dace-fortran authors" }
 ]
 requires-python = ">=3.10, <3.15"
 classifiers = [
