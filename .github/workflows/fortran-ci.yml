@@ -108,6 +108,7 @@ jobs:
       # (SIGSEGV in compiled_sdfg.fast_call). These match the FaCe General Tests fix.
       OMP_STACKSIZE: "64M"
       DACE_compiler_max_stack_array_size: "65536"
+      DACE_compiler_build_type: "Release"
     steps:
     - uses: actions/checkout@v4
       with:

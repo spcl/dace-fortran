@@ -1,0 +1,136 @@
+name: LLVM 21 vs 22 comparison
+
+on:
+  workflow_dispatch:
+
+env:
+  CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+  OMPI_MCA_rmaps_base_oversubscribe: "1"
+  PRTE_MCA_rmaps_default_mapping_policy: ":oversubscribe"
+
+jobs:
+  compare:
+    name: compare (llvm${{ matrix.llvm }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        llvm: ['21', '22']
+    env:
+      LLVM_VERSION: ${{ matrix.llvm }}
+      HWLOC_COMPONENTS: "-gl"
+      OMPI_MCA_pml: "ob1"
+      OMPI_MCA_btl: "self,vader"
+      UCX_VFS_ENABLE: "n"
+      OMP_STACKSIZE: "64M"
+      DACE_compiler_max_stack_array_size: "65536"
+      DACE_compiler_build_type: "Release"
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: false
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install LLVM / MLIR / flang ${{ matrix.llvm }} + Fortran toolchain
+      run: |
+        wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+        sudo add-apt-repository -y "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-$LLVM_VERSION main"
+        sudo apt-get update
+        sudo apt-get install -y \
+          llvm-$LLVM_VERSION-dev libmlir-$LLVM_VERSION-dev mlir-$LLVM_VERSION-tools \
+          libflang-$LLVM_VERSION-dev flang-$LLVM_VERSION clang-$LLVM_VERSION \
+          build-essential cmake ninja-build gfortran libgomp1 \
+          libopenmpi-dev openmpi-bin \
+          libnetcdff-dev libnetcdf-dev libhdf5-dev \
+          libfftw3-dev \
+          libfyaml-dev libxml2-dev liblapack-dev libblas-dev \
+          pkg-config perl python3 \
+          bear autoconf automake m4 rsync zlib1g-dev
+        command -v clang-tidy || sudo ln -sf /usr/lib/llvm-$LLVM_VERSION/bin/clang-tidy /usr/local/bin/clang-tidy
+        echo "/usr/lib/llvm-$LLVM_VERSION/bin" >> "$GITHUB_PATH"
+        command -v flang-new-$LLVM_VERSION \
+          || sudo ln -sf /usr/lib/llvm-$LLVM_VERSION/bin/flang-$LLVM_VERSION /usr/local/bin/flang-new-$LLVM_VERSION
+        command -v mpif90 || sudo ln -sf "$(command -v mpifort)" /usr/local/bin/mpif90
+
+    - name: Install Python dependencies
+      run: |
+        rm -f ~/.dace.conf
+        rm -rf .dacecache tests/.dacecache
+        python -m pip install --upgrade pip
+        pip install nanobind numpy meson ninja
+        pip install -e ".[testing]" pytest-xdist pytest-timeout coverage
+        MPICC=mpicc pip install mpi4py
+
+    - name: Build HLFIR bridge
+      run: |
+        python -c "import dace_fortran; dace_fortran.SDFGBuilder"
+
+    - name: Run 50-test comparison subset
+      run: |
+        ulimit -s 65536 || true
+        pytest -n auto --dist loadgroup --max-worker-restart=0 \
+          --maxfail=20 --durations=50 --timeout=300 --timeout-method=thread \
+          -o faulthandler_timeout=420 --tb=short \
+          --junitxml=pytest-compare-llvm${LLVM_VERSION}.xml \
+          tests/rewrite_sequence_association_test.py::test_module_parameter_constant_extent \
+          tests/fortran_complex_init_test.py::test_fortran_frontend_complex_init \
+          tests/ppm_vflux_test.py::test_ppm_vflux_numerical_e2e_via_binding \
+          tests/string_enum_to_integer/test_rewrite_string_enum.py::test_basic_enum_map_shape \
+          tests/icon/full/test_icon_wrapper_acc.py::test_missing_sidecar_file_is_an_error \
+          tests/array_wide_ops_test.py::test_inline_sum_rebroadcast \
+          tests/compressed_ssa_patterns_test.py::test_subexpr_cse_repeated_product \
+          tests/inliner/monomorphize_default_pass_test.py::test_slot_ladder_ignores_same_name_on_unrelated_type \
+          tests/inliner/external_policy_wiring_test.py::test_fparser_external_functions_do_not_emit_keep_external_are_identical \
+          tests/hlfir_devirtualization_test.py::test_concrete_type_call_is_a_direct_bind \
+          tests/sync_devirt_mpi_libnode_test.py::test_atmosphere_sync_patch_array_devirtualized_to_mpi_libnodes \
+          tests/preserve_mutable_globals_test.py::test_module_array_global_surfaces_as_kwarg \
+          tests/ranges_test.py::test_fortran_frontend_ranges_struct \
+          tests/derived_type_test.py::test_batched_csr_fixed_capacity_cross_boundary \
+          tests/inliner/desugaring_test.py::test_interface_replacer_with_keyworded_args \
+          tests/external_call/test_keep_external.py::test_keep_external_lowers_to_externalcall \
+          tests/intrinsic_allocated_test.py::test_allocated_after_deallocate \
+          tests/string_enum_to_integer/test_rewrite_string_enum.py::test_select_case_rewrites_case_branches \
+          tests/struct_variations_test.py::test_module_struct_array_field_indexed \
+          tests/cloudsc/selected_loopnests/cloudsc_plude_conditional_zero_test.py::test_fortran_frontend_cloudsc_plude_conditional_zero \
+          tests/inliner/inline_to_single_tu_test.py::test_pointer_component_of_extension_type_survives_pruning \
+          tests/bindings/module_origin_merge_test.py::test_auto_only_no_handauthored_list \
+          tests/copy_memset_test.py::test_copy_and_memset_numerical \
+          tests/bindings/module_origin_merge_test.py::test_explicit_override_wins_on_conflict \
+          tests/ported_from_main_test.py::test_fortran_frontend_loop_region_basic_loop \
+          tests/bindings/emit_bindings_test.py::test_acc_residency_none_is_byte_identical \
+          tests/intrinsic_merge_test.py::test_fortran_frontend_merge_array_shift \
+          "tests/qe/selected_loopnests/test_zaxpy.py::test_zaxpy_soa[gather]" \
+          tests/complex_test.py::test_complex_transcendentals[exp-c8] \
+          tests/sum_dynamic_extent_test.py::test_sum_dynamic_extent_builds \
+          tests/inliner/monomorphize_support_test.py::test_abstract_intermediate_subtype_is_rejected \
+          tests/multi_target_reduction_test.py::test_mixed_reductions \
+          tests/qe_bug1_optional_array_present_test.py::test_sdfg_side_models_array_optional_presence \
+          tests/intrinsic_count_test.py::test_fortran_frontend_count_array_2d \
+          tests/strip_runtime_io_test.py::test_strip_no_io_is_passthrough \
+          tests/bindings/numeric_io_bindings_e2e_test.py::test_e2e_scalar_real_intent_out \
+          tests/derived_type_test.py::test_batched_csr_allocatable_jagged \
+          tests/bindings/emit_bindings_test.py::test_logical_array_emits_intrinsic_cast_on_entry \
+          tests/offset_propagation_audit_test.py::test_two_level_inlined_callee_literal \
+          tests/bindings/acc_data_region_test.py::test_every_relocated_arg_is_also_use_device \
+          tests/strip_error_helpers_test.py::test_strip_refuses_function_style_helper \
+          tests/scalar_reuse_war_test.py::test_scalar_reuse_multicomponent \
+          tests/module_merge_test.py::test_merge_then_single_file_matches_all_files_together \
+          tests/double_buffer_test.py::test_dbuf_bind_c_shim_reconstructs_lanes \
+          tests/inliner/desugaring_test.py::test_procedure_replacer_name_collision_with_another_import \
+          tests/integer_power_rewrite_test.py::test_simple_identifier_cube \
+          tests/bindings/emit_bindings_test.py::test_logical_kind_2_emits_bridge \
+          tests/external_call/test_apply_external_functions.py::test_apply_registers_ignored_as_stub \
+          "tests/icon/selected_loopnests/test_equivalence.py::test_struct_flat_equivalence[icon_loopnest_6]" \
+          tests/design_failures_test.py::test_multi_callsite_no_qualification_for_unique_short_name
+
+    - name: Upload comparison results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: compare-llvm${{ matrix.llvm }}-${{ github.run_id }}
+        path: pytest-compare-llvm${{ matrix.llvm }}.xml
+        if-no-files-found: ignore
