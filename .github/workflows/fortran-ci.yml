@@ -249,7 +249,9 @@ jobs:
         pytest -n auto --dist loadgroup --max-worker-restart=0 \
           -m "not mpi and not long and not integration and not e2e" \
           --maxfail=20 --durations=40 --timeout=300 --timeout-method=thread \
-          -o faulthandler_timeout=420 --cov-report=xml --cov=dace_fortran --tb=short tests/
+          -o faulthandler_timeout=420 \
+          --junitxml=pytest-fast-llvm${LLVM_VERSION}.xml \
+          --cov-report=xml --cov=dace_fortran --tb=short tests/ | tee pytest-fast-llvm${LLVM_VERSION}.log
         coverage report || true
         coverage xml || true
         reachable=0
@@ -259,6 +261,16 @@ jobs:
         else
           echo "Codecov.io is unreachable"
         fi
+
+    - name: Upload fast sweep artifacts
+      if: always() && matrix.suite == 'fast'
+      uses: actions/upload-artifact@v4
+      with:
+        name: fast-results-llvm${{ matrix.llvm }}-${{ github.run_id }}
+        path: |
+          pytest-fast-llvm${{ matrix.llvm }}.xml
+          pytest-fast-llvm${{ matrix.llvm }}.log
+        if-no-files-found: ignore
 
     # ----- heavy + integration runners: check out the ICON submodule (public externals only) -----
     - name: Check out icon-model submodule (heavy + integration)
