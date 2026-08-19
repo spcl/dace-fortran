@@ -33,6 +33,9 @@ _NON_VAR_RE = re.compile(
     r"^\s*(?:TYPE|INTERFACE|ABSTRACT\s+INTERFACE|PROCEDURE|MODULE\s+PROCEDURE|"
     r"SUBROUTINE|FUNCTION|END\b)", re.IGNORECASE)
 
+_TYPE_DEF_START_RE = re.compile(r"^\s*TYPE\s+(?:::|,?\s*\w)", re.IGNORECASE)
+_END_TYPE_RE = re.compile(r"^\s*END\s*TYPE\b", re.IGNORECASE)
+
 
 def _ensure_target_on_module_deferred_arrays(text: str) -> str:
     """Add ``TARGET`` to module-level deferred-shape (allocatable/pointer) array
@@ -43,22 +46,33 @@ def _ensure_target_on_module_deferred_arrays(text: str) -> str:
     to carry the ``TARGET`` attribute.  Inserting it in the prelude sources is
     safe: it only enables pointer association, it does not change the variable's
     type, layout, or lifetime.
+
+    Derived-type components are left untouched: ``POINTER``/``ALLOCATABLE`` members
+    cannot carry ``TARGET`` in Fortran.
     """
     lines = text.splitlines(keepends=True)
     in_module = False
     in_spec = True
+    in_type = False
     out: List[str] = []
     for raw in lines:
         stripped = raw.strip()
         if re.match(r"^\s*MODULE\s+\w+", raw, re.IGNORECASE):
             in_module = True
             in_spec = True
+            in_type = False
         elif in_module and re.match(r"^\s*CONTAINS\b", raw, re.IGNORECASE):
             in_spec = False
+            in_type = False
         elif in_module and re.match(r"^\s*END\s*MODULE\b", raw, re.IGNORECASE):
             in_module = False
             in_spec = True
-        elif in_spec and _DECL_TYPE_RE.match(raw) and _DEFERRED_RE.search(raw) \
+            in_type = False
+        elif in_spec and _TYPE_DEF_START_RE.match(raw):
+            in_type = True
+        elif in_type and _END_TYPE_RE.match(raw):
+            in_type = False
+        elif in_spec and not in_type and _DECL_TYPE_RE.match(raw) and _DEFERRED_RE.search(raw) \
                 and not _TARGET_RE.search(raw) and "::" in raw and not _NON_VAR_RE.match(raw):
             # Insert TARGET right before the first :: on the line.
             raw = re.sub(r"(\S)(\s*)(::)", r"\1, target\2\3", raw, count=1)
