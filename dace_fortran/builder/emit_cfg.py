@@ -24,6 +24,7 @@ from dace_fortran.builder.access import (
     iter_view_dim_map,
     materialize_indirect_view_sources,
     resolve_object_member,
+    resolve_object_member_expr,
 )
 from dace_fortran.builder.context import _Ctx
 from dace_fortran.builder.descriptors import auto_declare_synth, is_character_data
@@ -114,7 +115,13 @@ def _rewrite_section_aliases_in_expr(builder, expr: str) -> str:
     scalar slots are 1-based Fortran-form, so we subtract 1 when
     splicing them in.
     """
-    if not isinstance(expr, str) or '[' not in expr:
+    if not isinstance(expr, str):
+        return expr
+    # Phantom object-alias scalar members may appear in condition/bound
+    # expressions; rewrite them to real SDFG symbols before section-alias
+    # handling so the downstream interstate edge references a registered name.
+    expr = resolve_object_member_expr(builder, expr)
+    if '[' not in expr:
         return expr
     section_dummies = {nm for nm, v in builder.arrays.items() if getattr(v, 'role', '') == 'section_alias'}
     if not section_dummies:
@@ -319,7 +326,11 @@ def emit_symbol_init(builder, ctx: '_Ctx', n, region):
     memlet / shape referencing the symbol resolves to a closed-form
     expression rather than a data lookup DaCe can't represent in a subset.
     """
-    sym, arr = n.target, n.expr
+    sym = n.target
+    # Phantom object-alias member names (``p_pat_fn1_n_pnts``) resolve to
+    # the real flattened SDFG symbol/array; read the symbol-init value from
+    # there so the interstate edge doesn't carry an unregistered name.
+    arr = resolve_object_member(builder, n.expr) or n.expr
     idxs = list(getattr(n, "pos_indices", None) or [])
     if not idxs:  # back-compat: scalar mirror on loop_lower
         idxs = [int(n.loop_lower)]
@@ -358,7 +369,13 @@ def _fortran_subs_to_dace(expr, builder):
     Non-array names (or untracked synthesised arrays) are left
     unchanged.  Walks brackets balanced via ``find_array_subscripts``
     so nested subscripts are handled correctly."""
-    if not isinstance(expr, str) or '[' not in expr:
+    if not isinstance(expr, str):
+        return expr
+    # Phantom object-alias scalar members (loop bounds, steps, ...) resolve to
+    # real SDFG symbols; rewrite them before the array-subscript pass so the
+    # LoopRegion's init/cond/update expressions reference registered names.
+    expr = resolve_object_member_expr(builder, expr)
+    if '[' not in expr:
         return expr
     resolver = lambda n: resolve_object_member(builder, n)
     matches = list(find_array_subscripts(expr, builder.arrays, resolver))

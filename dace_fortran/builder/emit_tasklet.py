@@ -317,6 +317,11 @@ def emit_scalar_assign(builder, state, target: str, value: str):
     ``icidx => p_patch%edges%cell_idx``) -- emit a whole-array copy memlet
     instead of a scalar tasklet with the wrong subset."""
     value = str(value)
+    # Phantom object-alias scalar members (``p_pat_fn1_comm``) resolve to real
+    # SDFG symbols (``p_patch_comm_pat_e_comm``).  Rewrite them before the
+    # scalar-read classification so the tasklet body references a registered
+    # symbol rather than an unresolved free identifier.
+    value = resolve_object_member_expr(builder, value)
     # Whole-OBJECT pointer rebind store (``params_oce => v_params``): a POINTER
     # association moves NO SDFG data -- member accesses resolve to the real
     # source via ``resolve_object_member`` on their own.  Emitting the store

@@ -15,6 +15,8 @@ from types import SimpleNamespace
 import dace
 from dace import SDFG
 
+from dace_fortran.builder.access import resolve_object_member_expr
+
 #: A pointer-ASSOCIATION right-hand side: a bare identifier or a flattened
 #: member chain (``patch_2d % edges % in_domain`` -> ``patch_2d_edges_in_domain``),
 #: optionally whole-array-indexed (``p_patch_2d(1)`` -> ``p_patch_2d[1]``).  It
@@ -714,6 +716,11 @@ def add_descriptors(builder, sdfg: SDFG):
         for dim, s in enumerate(syms):
             if s == "?":
                 syms[dim] = f"{v.fortran_name}_d{dim}"
+        # Phantom object-alias scalar members (e.g. ``p_pat_fn1_n_pnts``)
+        # leak into extent symbols when the flattened component inherits the
+        # pointer object's name.  Rewrite them to the real SDFG symbol so the
+        # registration loop below sees a registered name.
+        syms = [resolve_object_member_expr(builder, str(s)) for s in syms]
         shape_syms[v.fortran_name] = syms
         # A SEPARATE ``fir.box_dims`` synthetic ``<name>_d<i>`` -- minted by an
         # inlined ``SIZE(arr, i+1)`` (e.g. the ``init_zero_3d_dp`` zero-fill) and
@@ -728,7 +735,7 @@ def add_descriptors(builder, sdfg: SDFG):
             syn = f"{v.fortran_name}_d{i}"
             if ext == syn or not ext.isidentifier():
                 continue
-            builder.extent_aliases[syn] = ext
+            builder.extent_aliases[syn] = resolve_object_member_expr(builder, str(ext))
 
     # Closed-form extent expressions (``traceExtentExpr`` output for a
     # dynamic gather-temp first dim, e.g. ``"max((endcol - startcol) +

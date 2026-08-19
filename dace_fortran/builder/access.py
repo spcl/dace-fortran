@@ -628,6 +628,10 @@ def array_read_to_dace_expr(builder, assign_node, iter_map: dict, sdfg=None) -> 
     symbol wrong.  Falls back to ``expr`` when the RHS has no array read."""
     reads = [ac for ac in assign_node.accesses if ac.is_read and ac.array_name in builder.arrays]
     expr = assign_node.expr
+    # Phantom object-alias scalar members (``p_pat_fn1_comm``) resolve to real
+    # SDFG symbols.  Rewrite them so the interstate-edge expression references
+    # a registered symbol instead of leaking as a free identifier.
+    expr = resolve_object_member_expr(builder, expr)
     # Fast path: nothing to subscript (no array reads, and -- absent the SDFG
     # to consult for length-1 Array scalars -- no deref to add).
     if not reads and sdfg is None:
