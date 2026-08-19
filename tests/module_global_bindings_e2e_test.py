@@ -276,3 +276,89 @@ end module mod_kern_b
          uses=[("mod_state_x", "accum")],
          sets=[("accum", 1.0)],
          reads=["accum"])
+
+
+def test_e2e_allocatable_module_array_zero_copy_alias(tmp_path: Path):
+    """A contiguous allocatable module array is aliased through ``pointer, contiguous``
+    instead of deep-copied; the wrapper reads host memory in place."""
+    src = """
+module mod_alias
+  implicit none
+  real(8), allocatable, target :: tab(:)
+end module mod_alias
+
+module mod_alias_kern
+  implicit none
+contains
+  subroutine apply_alias(x, y)
+    use mod_alias, only: tab
+    real(8), intent(in) :: x(4)
+    real(8), intent(out) :: y(4)
+    integer :: i
+    do i = 1, 4
+      y(i) = x(i) + tab(i)
+    end do
+  end subroutine apply_alias
+end module mod_alias_kern
+"""
+    src_path = tmp_path / "alias.f90"
+    src_path.write_text(src)
+
+    sdfg_dir = tmp_path / "sdfg"
+    sdfg_dir.mkdir(parents=True, exist_ok=True)
+    builder = build_sdfg(src, sdfg_dir, name="apply_alias", entry="mod_alias_kern::apply_alias")
+    plan = FlattenPlan.from_dict(builder.module.get_flatten_plan())
+    sdfg = builder.build()
+    sdfg.validate()
+    sdfg.name = "apply_alias"
+    sdfg.build_folder = str(tmp_path / "dacecache")
+
+    # Shim allocates the module allocatable before the kernel call, then the wrapper
+    # aliases it instead of copying.
+    dace_shim = tmp_path / "dace_shim.f90"
+    dace_shim.write_text("""
+subroutine run_kern(xin, yout, gset) bind(c, name="run_kern")
+  use iso_c_binding
+  use mod_alias, only: tab
+  use apply_alias_dace_bindings, only: apply_alias_dace
+  real(c_double), intent(in) :: xin(4)
+  real(c_double), intent(out) :: yout(4)
+  real(c_double), intent(in) :: gset
+  if (.not. allocated(tab)) allocate(tab(4))
+  tab = gset
+  call apply_alias_dace(xin, yout)
+end subroutine run_kern
+""")
+    lib = build_fortran_library(sdfg,
+                                _iface("apply_alias"),
+                                plan,
+                                str(tmp_path / "lib"),
+                                name="alias_lib",
+                                prelude_sources=[src_path],
+                                extra_sources=[dace_shim])
+    dace_lib = lib.load()
+
+    ref_dir = tmp_path / "ref"
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    ref_shim = ref_dir / "ref_shim.f90"
+    ref_shim.write_text("""
+subroutine run_kern(xin, yout, gset) bind(c, name="run_kern")
+  use iso_c_binding
+  use mod_alias, only: tab
+  use mod_alias_kern, only: apply_alias
+  real(c_double), intent(in) :: xin(4)
+  real(c_double), intent(out) :: yout(4)
+  real(c_double), intent(in) :: gset
+  if (.not. allocated(tab)) allocate(tab(4))
+  tab = gset
+  call apply_alias(xin, yout)
+end subroutine run_kern
+""")
+    ref_so = ref_dir / "libapply_alias_ref.so"
+    _gfortran(ref_so, src_path, ref_shim, mod_dir=ref_dir)
+    ref_lib = ctypes.CDLL(str(ref_so))
+
+    x = np.asfortranarray(np.arange(1, _N + 1, dtype=np.float64))
+    y_dace, _ = _invoke(dace_lib, x, [5.0], 0)
+    y_ref, _ = _invoke(ref_lib, x.copy(order='F'), [5.0], 0)
+    np.testing.assert_allclose(y_dace, y_ref, rtol=1e-12, err_msg="aliased module array disagrees with reference")

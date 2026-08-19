@@ -399,7 +399,7 @@ def test_alloc_inside_module_global_e2e(tmp_path):
 _SRC_ALLOC_PRESENT = """
 module pres_alloc_mod
   implicit none
-  real(8), allocatable :: gbuf(:)
+  real(8), allocatable, target :: gbuf(:)
 contains
   subroutine sum_if_present(n, r)
     integer, intent(in) :: n

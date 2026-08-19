@@ -222,6 +222,33 @@ def _fortran_c_value_type(dtype: str) -> str:
     return table[dtype]
 
 
+def _module_arg_aliasable(a) -> bool:
+    """True when an orphan module-global array can be zero-copy aliased via a
+    ``pointer, contiguous`` local and ``X => X__mod`` instead of a deep copy.
+
+    Criteria: rank > 0, native layout (no complex-split/transpose), host storage
+    is deferred (allocatable/pointer) and already allocated by the caller, dtype
+    needs no logical-kind bridge, and the kernel does not allocate the array.
+    Read-only or inout intent is allowed; out-only still falls back to copy.
+    """
+    from dace_fortran.bindings.frozen_signature import FrozenArg
+    if not isinstance(a, FrozenArg):
+        return False
+    if a.kind != 'array' or a.rank <= 0:
+        return False
+    if a.layout != 'same':
+        return False
+    if a.global_alloc_inside:
+        return False
+    if not (a.module_origin_allocatable or a.module_origin_pointer):
+        return False
+    if a.dtype == 'bool':
+        return False
+    if a.intent == 'out':
+        return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Ref-counted handle state
 # ---------------------------------------------------------------------------
@@ -402,12 +429,18 @@ def build_wrapper_head(frozen: FrozenSignature,
         symbol_decls = (symbol_decls + "\n" + iter_decl) if symbol_decls else iter_decl
 
     # Orphan module-global args: wrapper-local target per arg, filled from the
-    # renamed module import in build_wrapper_body.
+    # renamed module import in build_wrapper_body.  Aliasable contiguous arrays
+    # use a pointer local to avoid the deep copy; scalars and non-aliasable arrays
+    # keep an allocatable/target scratch.
     for a, _mod, _member in _orphan_module_args(frozen, iface, plan):
         ftype = _fortran_c_value_type(a.dtype)
         spec = "(" + ", ".join(":" for _ in range(a.rank)) + ")" if a.rank > 0 else ""
-        kw = "allocatable, target" if a.rank > 0 else "target"
-        scratch_lines.append(f"    {ftype}, {kw} :: {a.sdfg_name}{spec}")
+        if _module_arg_aliasable(a):
+            scratch_lines.append(f"    {ftype}, pointer, contiguous :: {a.sdfg_name}{spec}")
+        elif a.rank > 0:
+            scratch_lines.append(f"    {ftype}, allocatable, target :: {a.sdfg_name}{spec}")
+        else:
+            scratch_lines.append(f"    {ftype}, target :: {a.sdfg_name}")
 
     # AoS-struct component SoA buffers: allocatable/target per arg + loop index +
     # one cap per member dim (filled in build_wrapper_body, drained in build_wrapper_tail).
@@ -648,11 +681,19 @@ def build_wrapper_body(frozen: FrozenSignature,
                             f"(host alias unallocated on entry)")
             elif deferred:
                 degen = ", ".join("1" for _ in range(a.rank))
+                aliasable = _module_arg_aliasable(a)
                 body.append(f"    if ({_present(alias, is_ptr)}) then")
-                body.append(f"      {a.sdfg_name} = {alias}")
+                if aliasable:
+                    body.append(f"      {a.sdfg_name} => {alias}")
+                else:
+                    body.append(f"      {a.sdfg_name} = {alias}")
                 body.append(f"    else")
-                body.append(f"      allocate({a.sdfg_name}({degen}))  "
-                            f"! host unallocated (absent on no-op path)")
+                if aliasable:
+                    body.append(f"      if (.not. associated({a.sdfg_name})) allocate({a.sdfg_name}({degen}))"
+                                f"  ! host unallocated (absent on no-op path)")
+                else:
+                    body.append(f"      allocate({a.sdfg_name}({degen}))  "
+                                f"! host unallocated (absent on no-op path)")
                 body.append(f"    end if")
             else:
                 # Static array or scalar module global: allocate to the arg's own
@@ -837,9 +878,12 @@ def build_wrapper_tail(frozen: FrozenSignature,
     # Module globals the kernel WRITES are host-shared inout state: copy the SDFG
     # arg's final value back to the host module var (symmetric to copy-in). A
     # scalar source was lifted to a length-1 array, so write back element (1).
+    # Aliased arrays already write through the host pointer, so no copy-back is needed.
     module_writeback_lines: List[str] = []
     for a, _mod, _member in _orphan_module_args(frozen, iface, plan):
         if not a.is_written:
+            continue
+        if _module_arg_aliasable(a):
             continue
         alias = _module_symbol_alias(a.sdfg_name)
         actual = name_override.get(a.sdfg_name, a.sdfg_name)

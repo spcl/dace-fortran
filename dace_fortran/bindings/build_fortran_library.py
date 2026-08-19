@@ -10,10 +10,11 @@ verify it still matches the ``FrozenSignature`` snapshot (raises
 kernel ``.so`` and any extra sources into one shared library.
 """
 import ctypes
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import List, Sequence
 
 from dace_fortran.bindings.bind_c_shim import emit_bind_c_shim
 from dace_fortran.bindings.emit_bindings import emit_bindings
@@ -22,6 +23,48 @@ from dace_fortran.bindings.fortran_interface import OriginalInterface, build_aut
 
 #: Mandatory flags -- a shared, position-independent, long-line module.
 _SHARED_FLAGS = ("-shared", "-fPIC", "-ffree-line-length-none")
+
+#: True when a source line is a module-level variable declaration carrying
+#: ALLOCATABLE or POINTER (i.e. a deferred-shape array) without a TARGET attribute.
+_TARGET_RE = re.compile(r"\bTARGET\b", re.IGNORECASE)
+_DECL_TYPE_RE = re.compile(r"^\s*(?:REAL|INTEGER|LOGICAL|COMPLEX|DOUBLE\s+PRECISION|CHARACTER)\b", re.IGNORECASE)
+_DEFERRED_RE = re.compile(r"\b(?:ALLOCATABLE|POINTER)\b", re.IGNORECASE)
+_NON_VAR_RE = re.compile(
+    r"^\s*(?:TYPE|INTERFACE|ABSTRACT\s+INTERFACE|PROCEDURE|MODULE\s+PROCEDURE|"
+    r"SUBROUTINE|FUNCTION|END\b)", re.IGNORECASE)
+
+
+def _ensure_target_on_module_deferred_arrays(text: str) -> str:
+    """Add ``TARGET`` to module-level deferred-shape (allocatable/pointer) array
+    declarations that lack it.
+
+    The generated binding aliases contiguous module arrays with a wrapper-local
+    ``pointer, contiguous`` and ``X => X__mod``; this requires the host variable
+    to carry the ``TARGET`` attribute.  Inserting it in the prelude sources is
+    safe: it only enables pointer association, it does not change the variable's
+    type, layout, or lifetime.
+    """
+    lines = text.splitlines(keepends=True)
+    in_module = False
+    in_spec = True
+    out: List[str] = []
+    for raw in lines:
+        stripped = raw.strip()
+        if re.match(r"^\s*MODULE\s+\w+", raw, re.IGNORECASE):
+            in_module = True
+            in_spec = True
+        elif in_module and re.match(r"^\s*CONTAINS\b", raw, re.IGNORECASE):
+            in_spec = False
+        elif in_module and re.match(r"^\s*END\s*MODULE\b", raw, re.IGNORECASE):
+            in_module = False
+            in_spec = True
+        elif in_spec and _DECL_TYPE_RE.match(raw) and _DEFERRED_RE.search(raw) \
+                and not _TARGET_RE.search(raw) and "::" in raw and not _NON_VAR_RE.match(raw):
+            # Insert TARGET right before the first :: on the line.
+            raw = re.sub(r"(\S)(\s*)(::)", r"\1, target\2\3", raw, count=1)
+        out.append(raw)
+    return "".join(out)
+
 
 #: Optimised + debug info + strict IEEE (no fast-math/fp-contract,
 #: rounding-aware) so SDFG-vs-reference comparisons stay bit-reproducible.
@@ -147,10 +190,19 @@ def build_fortran_library(
                          plan=plan)
 
     so_path = out_dir / f"lib{name}.so"
+    # Copy and patch prelude sources in the build dir so module arrays used by
+    # the binding carry TARGET; the originals are left untouched.
+    patched_preludes: List[Path] = []
+    for src in prelude_sources:
+        src_path = Path(src)
+        patched = out_dir / f"{src_path.stem}_target{src_path.suffix}"
+        patched.write_text(_ensure_target_on_module_deferred_arrays(src_path.read_text()))
+        patched_preludes.append(patched)
+
     # gfortran compiles left-to-right, no reordering: deps before, users after.
     cmd = [
         "gfortran", *_SHARED_FLAGS, *opt_flags, *extra_flags, "-fopenmp", f"-J{out_dir}",
-        *[str(s) for s in prelude_sources],
+        *[str(s) for s in patched_preludes],
         str(bindings_f90), *([str(shim_f90)] if shim_f90 else []), *[str(s) for s in extra_sources], "-o",
         str(so_path), f"-L{sdfg_so.parent}", f"-Wl,-rpath,{sdfg_so.parent}", f"-l:{sdfg_so.name}"
     ]
