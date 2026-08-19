@@ -104,6 +104,10 @@ jobs:
       OMPI_MCA_pml: "ob1"
       OMPI_MCA_btl: "self,vader"
       UCX_VFS_ENABLE: "n"
+      # Stack guard: the llvm22 fast lane crashes on large generated stack arrays
+      # (SIGSEGV in compiled_sdfg.fast_call). These match the FaCe General Tests fix.
+      OMP_STACKSIZE: "64M"
+      DACE_compiler_max_stack_array_size: "65536"
     steps:
     - uses: actions/checkout@v4
       with:
@@ -178,7 +182,7 @@ jobs:
         # meson is the f2py backend on Python >=3.12 (numerical refs) AND
         # the build backend for the icon-model meson configure path.
         pip install nanobind numpy meson ninja
-        pip install -e ".[testing]" pytest-xdist coverage
+        pip install -e ".[testing]" pytest-xdist pytest-timeout coverage
         # mpi4py (built against the openmpi installed above) drives the
         # multi-rank MPI Send/Recv e2e via dace.sdfg.utils.distributed_compile.
         MPICC=mpicc pip install mpi4py
@@ -241,8 +245,11 @@ jobs:
         # honours the ``xdist_group`` markers so grouped tests share one worker.
         # ``--durations`` is what makes a per-major slowdown attributable: the llvm22 lane runs the
         # same sweep as llvm21 and the two logs are only comparable test-by-test.
-        pytest -n auto --dist loadgroup -m "not mpi and not long and not integration and not e2e" \
-          --maxfail=20 --durations=40 --cov-report=xml --cov=dace_fortran --tb=short tests/
+        ulimit -s 65536 || true
+        pytest -n auto --dist loadgroup --max-worker-restart=0 \
+          -m "not mpi and not long and not integration and not e2e" \
+          --maxfail=20 --durations=40 --timeout=300 --timeout-method=thread \
+          -o faulthandler_timeout=420 --cov-report=xml --cov=dace_fortran --tb=short tests/
         coverage report || true
         coverage xml || true
         reachable=0
