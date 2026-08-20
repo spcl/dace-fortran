@@ -340,6 +340,12 @@ DEFAULT_PIPELINE = (
     # and BEFORE ``canonicalize`` (so the cmpi / scf.if / select
     # chain reduces to just the matching branch).
     "hlfir-fold-assumed-rank-queries,"
+    # Promote scalar stack variables with a single constant store to SSA
+    # constants.  Flang leaves assignments like ``IWARMRAIN = 2`` as
+    # alloca + store + load, which SCCP (SSA-only) cannot fold.  Doing it
+    # here lets the final SCCP/Canonicalize pass fold the branch conditions
+    # and remove dead code before AST extraction.
+    "hlfir-fold-constant-scalars,"
     # Constant propagation + fold + CSE after every HLFIR rewrite has
     # exposed as many constants as it will.
     "sccp,canonicalize,cse")
@@ -376,6 +382,7 @@ MULTI_FILE_PIPELINE = (
     "hlfir-default-intent,"
     "hlfir-preserve-mutable-globals,"
     "hlfir-fold-assumed-rank-queries,"
+    "hlfir-fold-constant-scalars,"
     "sccp,canonicalize,cse")
 
 # Sympy module-level attributes that turn user-source identifiers into

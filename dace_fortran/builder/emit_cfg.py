@@ -1103,133 +1103,94 @@ def emit_while(builder, ctx: '_Ctx', n, region):
     inner_ctx.flush(builder, loop)
 
 
-def emit_cond(builder, ctx: '_Ctx', n, region):
-    """``if (cond) then ... else ... end if`` -> ``ConditionalBlock`` with
-    a ``ControlFlowRegion`` per branch.  Subsequent statements land in a
-    fresh successor state wired from the block.
-    """
-    pre = ctx.flush_and_ensure(builder, region)
+def _prepare_cond_expr(builder, ctx: '_Ctx', region, pre, n):
+    """Return ``(pre_state, cond_expr)`` for a single ``conditional`` branch.
 
-    cond = n.condition if n.condition and n.condition != "?" else "True"
-    # Section-alias dummies (trivial section slices) have no SDFG
-    # descriptor  --  rewrite ``dummy[i, j]`` references in the condition
-    # to ``source[i, j, k_const]`` via the view_dim_map.  Without this,
-    # the interstate-edge assignment carries the dummy name as a free
-    # symbol and ``sdfg.arglist`` raises a KeyError when scanning.
+    Mirrors the staging logic previously inline in ``emit_cond``:
+    section-alias rewriting, scalar-output subscripting, tasklet-lifting for
+    array-reading conditions, and caching of never-written conditions.
+    """
+    cond = n.condition if getattr(n, 'condition', None) and n.condition != "?" else "True"
     cond = _rewrite_section_aliases_in_expr(builder, cond)
-    # Scalar OUTPUTS land as size-1 Arrays on the SDFG signature, so
-    # referring to a bare name in a branch condition would pick up the
-    # array pointer.  Subscript each one to read element 0.  Scalar
-    # INPUTS (``intent(in)`` / ``VALUE``) are true Scalars and need no
-    # subscript -- they're addressable as the bare name in C++.
-    #
-    # Skip when the condition will be lifted into a tasklet
-    # (downstream array-read path): emit_tasklet's
-    # ``_rewrite_read_connectors`` handles scalar connectors as
-    # ``_in_<nm>`` -- a textual ``[0]`` already in the body would
-    # leak through as ``_in_<nm>[0]`` and fail validation as a
-    # subscript-on-scalar (the IndexError that surfaced
-    # test_sqrt_in_if / test_exp_in_if).
-    will_lift = bool(n.accesses) and any(ac.is_read and ac.array_name in builder.arrays for ac in n.accesses)
+
+    accesses = getattr(n, 'accesses', None)
+    will_lift = bool(accesses) and any(ac.is_read and ac.array_name in builder.arrays for ac in accesses)
     if not will_lift:
         for nm, v in builder.scalars.items():
             if v.intent in ('out', 'inout'):
                 cond = re.sub(rf'\b{re.escape(nm)}\b', f"{nm}[0]", cond)
 
-    # Hoist non-trivial conditions to a pre-state symbol so the
-    # ConditionalBlock branch carries only a symbol name -- one path
-    # for every IF lowering, no per-branch expression-rewrite logic.
-    # Trivial cases (a bare name or ``True`` / ``False``) skip the
-    # staging.
-    if not _is_trivial_bound(cond, builder):
-        # Conditions that reference ARRAYS (e.g. graupel's
-        # ``MAX(q_x_1[1,iv,k], q_x_1[5,iv,k], q_x_1[6,iv,k]) > qmin``)
-        # cannot be lifted onto a plain interstate-edge assignment --
-        # DaCe treats bare array names there as Symbols (no connector
-        # + no memlet) and the C++ codegen emits the data pointer
-        # where a scalar was expected (``double* > 1e-15`` type-error
-        # in graupel's ``if_cond_38``).
-        #
-        # Detection: if the bridge populated ``n.accesses`` for the
-        # conditional AND any of the read targets is in
-        # ``builder.arrays``, route through the per-occurrence-
-        # connector tasklet path (same machinery ``emit_tasklet``
-        # uses for assigns) into a fresh ``if_cond_<nid>`` scalar
-        # transient.  The conditional then reads the transient
-        # element-0 as a regular scalar.
-        # Dedupe accesses by ``(array_name, index_exprs)`` -- the
-        # bridge walker recurses through ``arith.maximumf`` /
-        # ``cmpf`` / ``select`` chains and visits the same
-        # ``hlfir.designate`` from multiple paths, so the raw
-        # accesses list has duplicates (e.g. 20 entries for a,b,c
-        # each accessed once textually).  Dedupe to 1 entry per
-        # unique (name, indices) so the per-occurrence connector
-        # count matches the text-occurrence count.
-        cond_accesses = []
-        if n.accesses:
-            seen_acc = set()
-            for ac in n.accesses:
-                key = (ac.array_name, tuple(ac.index_exprs), ac.is_read)
-                if key in seen_acc:
-                    continue
-                seen_acc.add(key)
-                cond_accesses.append(ac)
-        cond_array_reads = [ac for ac in cond_accesses if ac.is_read and ac.array_name in builder.arrays]
-        # Only lift via the tasklet path when accesses can be matched
-        # 1:1 to text occurrences -- otherwise we mint connectors that
-        # the rewritten code references but the access list can't
-        # bind to memlets, producing the ``_in_<arr>_<n>`` unresolved-
-        # free-symbol error.  Mismatch surfaces when the bridge
-        # collapsed a slice ``arr[i, 0:4]`` into ONE access while
-        # ``buildBoolExpr`` expanded the slice into FOUR textual
-        # ``arr[i, 0], arr[i, 1], ...`` references (graupel's
-        # ``MIN(kmin[iv,0:4]) >`` shape).
-        if cond_array_reads:
-            from collections import Counter
-            text_occ = Counter()
-            for tok in re.findall(r'\b([A-Za-z_]\w*)\b', cond):
-                if tok in builder.arrays:
-                    text_occ[tok] += 1
-            access_count = Counter()
-            for ac in cond_array_reads:
-                access_count[ac.array_name] += 1
-            mismatched = any(text_occ[k] != access_count[k] for k in set(text_occ) | set(access_count))
-            if mismatched:
-                cond_array_reads = []  # fall through to legacy path
-        if cond_array_reads:
-            # Lift the array-reading branch condition into a SCALAR
-            # transient (DaCe takes any numeric-truthy value on the
-            # branch); the ConditionalBlock reads it by its bare name.
-            # ``emit_tasklet``'s per-occurrence array-read connector
-            # machinery wires each ``arr[i, k]`` to ``_in_arr_N`` + memlet.
-            sym = f"if_cond_{builder.nid()}"
-            pre, cond = _stage_cond_scalar(builder, ctx, region, pre, sym, cond, cond_accesses)
+    if _is_trivial_bound(cond, builder):
+        return pre, cond
+
+    cond_accesses = []
+    if accesses:
+        seen_acc = set()
+        for ac in accesses:
+            key = (ac.array_name, tuple(ac.index_exprs), ac.is_read)
+            if key in seen_acc:
+                continue
+            seen_acc.add(key)
+            cond_accesses.append(ac)
+    cond_array_reads = [ac for ac in cond_accesses if ac.is_read and ac.array_name in builder.arrays]
+    if cond_array_reads:
+        from collections import Counter
+        text_occ = Counter()
+        for tok in re.findall(r'\b([A-Za-z_]\w*)\b', cond):
+            if tok in builder.arrays:
+                text_occ[tok] += 1
+        access_count = Counter()
+        for ac in cond_array_reads:
+            access_count[ac.array_name] += 1
+        mismatched = any(text_occ[k] != access_count[k] for k in set(text_occ) | set(access_count))
+        if mismatched:
+            cond_array_reads = []
+    if cond_array_reads:
+        sym = f"if_cond_{builder.nid()}"
+        pre, cond = _stage_cond_scalar(builder, ctx, region, pre, sym, cond, cond_accesses)
+    else:
+        reuse_key = cond_reuse_key(builder, cond)
+        cached = ctx.cond_cache.get(reuse_key) if reuse_key is not None else None
+        if cached is not None:
+            cond = cached
         else:
-            # An identical condition over never-written data was already hoisted
-            # in this region: reuse its symbol instead of recomputing it.  QE's
-            # ``IF (okvan .AND. .NOT. tqr)`` guards both the definition and the
-            # use of ``qvan_init_nij``; emitted as two separate reads of the same
-            # flags, gcc cannot correlate the guards and reports the use as
-            # maybe-uninitialized.  One symbol makes the correlation syntactic.
-            reuse_key = cond_reuse_key(builder, cond)
-            cached = ctx.cond_cache.get(reuse_key) if reuse_key is not None else None
-            if cached is not None:
-                cond = cached
-            else:
-                sym = f"if_cond_{builder.nid()}"
-                if reuse_key is not None:
-                    ctx.cond_cache[reuse_key] = sym
-                if sym not in ctx.sdfg.symbols:
-                    ctx.sdfg.add_symbol(sym, dace.int64)
-                # If the condition references any view_alias array, anchor it
-                # in a state upstream of the interstate-edge assignment so
-                # DaCe's framecode finds a real AccessNode first.
-                pre = _anchor_views_referenced_in_expr(builder, cond, region, pre, ctx.sdfg)
-                nxt = region.add_state(f"pre_{sym}")
-                region.add_edge(pre, nxt, InterstateEdge(assignments={sym: cond}))
-                pre = nxt
-                ctx.cur = nxt
-                cond = sym
+            sym = f"if_cond_{builder.nid()}"
+            if reuse_key is not None:
+                ctx.cond_cache[reuse_key] = sym
+            if sym not in ctx.sdfg.symbols:
+                ctx.sdfg.add_symbol(sym, dace.int64)
+            pre = _anchor_views_referenced_in_expr(builder, cond, region, pre, ctx.sdfg)
+            nxt = region.add_state(f"pre_{sym}")
+            region.add_edge(pre, nxt, InterstateEdge(assignments={sym: cond}))
+            pre = nxt
+            ctx.cur = nxt
+            cond = sym
+    return pre, cond
+
+
+def emit_cond(builder, ctx: '_Ctx', n, region):
+    """``if (cond) then ... else ... end if`` -> ``ConditionalBlock`` with
+    a ``ControlFlowRegion`` per branch.  Subsequent statements land in a
+    fresh successor state wired from the block.
+
+    ``else if`` chains emitted by the bridge as nested ``conditional`` nodes
+    are flattened into a single multi-branch ``ConditionalBlock``.
+    """
+    pre = ctx.flush_and_ensure(builder, region)
+
+    branches = []
+    tail_children = []
+    cur = n
+    while True:
+        pre, cond = _prepare_cond_expr(builder, ctx, region, pre, cur)
+        branches.append((cond, list(cur.children)))
+        else_children = list(cur.else_children)
+        if (len(else_children) == 1 and getattr(else_children[0], 'kind', None) == 'conditional'
+                and getattr(else_children[0], 'condition', None)):
+            cur = else_children[0]
+            continue
+        tail_children = else_children
+        break
 
     uid = builder.nid()
     cond_block = ConditionalBlock(f"if_{uid}")
@@ -1249,12 +1210,11 @@ def emit_cond(builder, ctx: '_Ctx', n, region):
             branch.add_state(f"{label}_noop", is_start_block=True)
         return branch
 
-    then_region = _populate_branch(f"if_{uid}_then", list(n.children))
-    cond_block.add_branch(cond, then_region)
-
-    else_children = list(n.else_children)
-    if else_children:
-        else_region = _populate_branch(f"if_{uid}_else", else_children)
+    for i, (cond, children) in enumerate(branches):
+        branch_region = _populate_branch(f"if_{uid}_b{i}", children)
+        cond_block.add_branch(cond, branch_region)
+    if tail_children:
+        else_region = _populate_branch(f"if_{uid}_else", tail_children)
         cond_block.add_branch(None, else_region)
 
     # The ConditionalBlock is itself the "current" control-flow node;

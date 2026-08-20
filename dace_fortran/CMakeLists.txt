@@ -405,6 +405,7 @@ add_library(hlfir_bridge_passes STATIC
     passes/MarkBoundsRemapViews.cpp
     passes/FoldAssumedRankQueries.cpp
     passes/PruneNeverAllocatedMemberDeref.cpp
+    passes/FoldConstantScalars.cpp
 )
 target_link_libraries(hlfir_bridge_passes PUBLIC
     hlfir_bridge_core
