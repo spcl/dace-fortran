@@ -25,10 +25,11 @@ from dace_fortran.bindings.fortran_interface import OriginalInterface, build_aut
 _SHARED_FLAGS = ("-shared", "-fPIC", "-ffree-line-length-none")
 
 #: True when a source line is a module-level variable declaration carrying
-#: ALLOCATABLE or POINTER (i.e. a deferred-shape array) without a TARGET attribute.
+#: ALLOCATABLE (i.e. a deferred-shape array) without a TARGET attribute.
 _TARGET_RE = re.compile(r"\bTARGET\b", re.IGNORECASE)
 _DECL_TYPE_RE = re.compile(r"^\s*(?:REAL|INTEGER|LOGICAL|COMPLEX|DOUBLE\s+PRECISION|CHARACTER)\b", re.IGNORECASE)
-_DEFERRED_RE = re.compile(r"\b(?:ALLOCATABLE|POINTER)\b", re.IGNORECASE)
+_ALLOCATABLE_RE = re.compile(r"\bALLOCATABLE\b", re.IGNORECASE)
+_POINTER_RE = re.compile(r"\bPOINTER\b", re.IGNORECASE)
 _NON_VAR_RE = re.compile(
     r"^\s*(?:TYPE|INTERFACE|ABSTRACT\s+INTERFACE|PROCEDURE|MODULE\s+PROCEDURE|"
     r"SUBROUTINE|FUNCTION|END\b)", re.IGNORECASE)
@@ -38,8 +39,7 @@ _END_TYPE_RE = re.compile(r"^\s*END\s*TYPE\b", re.IGNORECASE)
 
 
 def _ensure_target_on_module_deferred_arrays(text: str) -> str:
-    """Add ``TARGET`` to module-level deferred-shape (allocatable/pointer) array
-    declarations that lack it.
+    """Add ``TARGET`` to module-level allocatable array declarations that lack it.
 
     The generated binding aliases contiguous module arrays with a wrapper-local
     ``pointer, contiguous`` and ``X => X__mod``; this requires the host variable
@@ -47,8 +47,9 @@ def _ensure_target_on_module_deferred_arrays(text: str) -> str:
     safe: it only enables pointer association, it does not change the variable's
     type, layout, or lifetime.
 
-    Derived-type components are left untouched: ``POINTER``/``ALLOCATABLE`` members
-    cannot carry ``TARGET`` in Fortran.
+    ``POINTER`` variables are left untouched: Fortran prohibits both ``POINTER``
+    and ``TARGET`` on the same entity, and a pointer can already be the target of
+    another pointer association.  Derived-type components are also untouched.
     """
     lines = text.splitlines(keepends=True)
     in_module = False
@@ -72,8 +73,9 @@ def _ensure_target_on_module_deferred_arrays(text: str) -> str:
             in_type = True
         elif in_type and _END_TYPE_RE.match(raw):
             in_type = False
-        elif in_spec and not in_type and _DECL_TYPE_RE.match(raw) and _DEFERRED_RE.search(raw) \
-                and not _TARGET_RE.search(raw) and "::" in raw and not _NON_VAR_RE.match(raw):
+        elif in_spec and not in_type and _DECL_TYPE_RE.match(raw) and _ALLOCATABLE_RE.search(raw) \
+                and not _POINTER_RE.search(raw) and not _TARGET_RE.search(raw) and "::" in raw \
+                and not _NON_VAR_RE.match(raw):
             # Insert TARGET right before the first :: on the line.
             raw = re.sub(r"(\S)(\s*)(::)", r"\1, target\2\3", raw, count=1)
         out.append(raw)
