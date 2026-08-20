@@ -53,18 +53,17 @@ _REBOX_INTO_PTR_RE = re.compile(r"fir\.rebox\s+%\w+(?:\([^)]*\))?\s*:\s*\([^)]*\
 
 #: Rank change = differing count of ``?`` (dynamic-extent placeholders) between input/output.
 def _has_rank_changing_rebox_into_ptr(ir: str) -> bool:
-    """Detect ``fir.rebox %X(...) : (!fir.box<!fir.array<INPUT>>, ...)
+    """Detect ``fir.rebox %X(...) : (!fir.box<[!fir.ptr<!]!fir.array<INPUT>>>, ...)
     -> !fir.box<!fir.ptr<!fir.array<OUTPUT>>>`` where rank(INPUT) !=
-    rank(OUTPUT)."""
+    rank(OUTPUT).  flang-22 sometimes lowers rank-preserving remapping through an
+    intermediate ``!fir.box<!fir.ptr<!fir.array<...>>>``, so the input box may
+    itself already be pointer-typed."""
     for m in re.finditer(
             r"fir\.rebox[^:]*:\s*"
-            r"\(\s*!fir\.box<!fir\.array<([?\dx]+)x[^>]+>>[^)]*\)\s*->\s*"
+            r"\(\s*!fir\.box<(?:!fir\.ptr<)?!fir\.array<([?\dx]+)x[^>]+>>(?:>)?[^)]*\)\s*->\s*"
             r"!fir\.box<!fir\.ptr<!fir\.array<([?\dx]+)x[^>]+>>",
             ir,
     ):
-        in_dims = m.group(1).count("?") + m.group(1).count("x") + 1 - m.group(1).count("x")
-        out_dims = m.group(2).count("?") + m.group(2).count("x") + 1 - m.group(2).count("x")
-        # heuristic above is flaky on flang's type printer -- count ? directly instead.
         in_dims = m.group(1).count("?")
         out_dims = m.group(2).count("?")
         if in_dims != out_dims and in_dims > 0 and out_dims > 0:
@@ -97,11 +96,11 @@ def test_reshape_intrinsic_copy_uses_hlfir_reshape_not_rebox():
         "the bounds-remap-view detector would false-positive on copy semantics"
 
 
-def test_pointer_plain_no_remap_uses_embox_not_rebox():
-    """Plain pointer assign (no bounds remap): ``fir.embox``, same rank -- handled by
+def test_pointer_plain_no_remap_has_no_rank_changing_rebox():
+    """Plain pointer assign (no bounds remap): same rank, handled by
     ``hlfir-rewrite-pointer-assigns``; bounds-remap-view detector must not trigger."""
     ir = _emit_hlfir(_HERE / "pointer_plain_no_remap_probe.f90")
-    assert "fir.embox" in ir, "plain pointer assign should use fir.embox"
+    assert "!fir.box<!fir.ptr<" in ir, "plain pointer assign should introduce a pointer box"
     assert not _has_rank_changing_rebox_into_ptr(ir), \
         "plain pointer assign must not have rank-changing rebox -- " \
         "the bounds-remap-view detector would false-positive"
