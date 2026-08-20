@@ -107,6 +107,11 @@ jobs:
       # Stack guard: the llvm22 fast lane crashes on large generated stack arrays
       # (SIGSEGV in compiled_sdfg.fast_call). These match the FaCe General Tests fix.
       OMP_STACKSIZE: "64M"
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      VECLIB_MAXIMUM_THREADS: "1"
+      NUMEXPR_NUM_THREADS: "1"
       DACE_compiler_max_stack_array_size: "65536"
       DACE_compiler_build_type: "Release"
     steps:
