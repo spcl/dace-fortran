@@ -232,6 +232,10 @@ jobs:
         # First access of a builder-backed symbol triggers the CMake build.
         python -c "import dace_fortran; dace_fortran.SDFGBuilder"
 
+    - name: Enforce Release build type
+      run: |
+        python -c "import dace; bt = dace.Config.get('compiler', 'build_type'); assert bt == 'Release', bt"
+
     # ----- fast runner: the routine sweep (no mpi, no long, no integration) -----
     - name: Run Fortran frontend tests (fast sweep)
       if: ${{ matrix.suite == 'fast' }}
