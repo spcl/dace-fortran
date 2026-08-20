@@ -34,7 +34,7 @@ _NON_VAR_RE = re.compile(
     r"^\s*(?:TYPE|INTERFACE|ABSTRACT\s+INTERFACE|PROCEDURE|MODULE\s+PROCEDURE|"
     r"SUBROUTINE|FUNCTION|END\b)", re.IGNORECASE)
 
-_TYPE_DEF_START_RE = re.compile(r"^\s*TYPE\b\s*(?:,|::)", re.IGNORECASE)
+_TYPE_DEF_START_RE = re.compile(r"^\s*TYPE\b(?:\s+[A-Za-z_]\w*|\s*(?:,|::))", re.IGNORECASE)
 _END_TYPE_RE = re.compile(r"^\s*END\s*TYPE\b", re.IGNORECASE)
 
 
