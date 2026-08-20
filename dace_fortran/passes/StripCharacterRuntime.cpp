@@ -81,12 +81,19 @@ namespace {
 /// shares this prefix.
 constexpr llvm::StringLiteral kFortranCharPrefix = "_FortranACharacter";
 
-/// Strip ``fir.convert`` / ``hlfir.declare`` wrappers so two references to the
-/// same character entity compare identical.
+/// Strip ``fir.load`` / ``fir.convert`` / ``hlfir.declare`` wrappers so two
+/// references to the same character entity compare identical.  Loads from the
+/// same variable are keyed together: otherwise each ``flag == 'x'`` compare in
+/// a QE-style dispatch sees a distinct loaded value and every literal folds to
+/// the "selected" arm, leaving dead-arm validation branches live.
 mlir::Value charRoot(mlir::Value v) {
   for (int hop = 0; hop < 8 && v; ++hop) {
     auto* def = v.getDefiningOp();
     if (!def) break;
+    if (auto load = mlir::dyn_cast<fir::LoadOp>(def)) {
+      v = load.getMemref();
+      continue;
+    }
     if (auto conv = mlir::dyn_cast<fir::ConvertOp>(def)) {
       v = conv.getValue();
       continue;
