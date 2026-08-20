@@ -3,7 +3,9 @@ from dace_fortran.bindings.build_fortran_library import _ensure_target_on_module
 
 _SRC = """
 module mo_types
-  type :: t_coeffs
+  type, abstract :: t_base
+  end type t_base
+  type, extends(t_base) :: t_coeffs
     real(kind=8), pointer :: ptr_arr(:, :)
     real(kind=8), allocatable :: alloc_arr(:)
   end type t_coeffs
@@ -23,3 +25,4 @@ def test_target_added_to_module_allocatables_only():
     assert "target :: ptr_arr" not in patched
     assert "target :: alloc_arr" not in patched
     assert "pointer, target" not in patched
+    assert ", target ::" not in patched.split("end type t_coeffs")[0]
