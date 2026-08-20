@@ -387,8 +387,16 @@ static ASTNode buildWhileNode(mlir::scf::WhileOp whileOp) {
   n.kind = "while";
   n.condition = "True";  // all break decisions live inside the body.
 
-  if (whileOp.getBefore().empty()) return n;
-  n.children = walkSCFBeforeRegion(whileOp.getBefore().front());
+  if (!whileOp.getBefore().empty()) {
+    auto before = walkSCFBeforeRegion(whileOp.getBefore().front());
+    n.children.insert(n.children.end(), before.begin(), before.end());
+  }
+  // scf.while's AFTER region is the loop body (the BEFORE region is only the
+  // condition).  Without walking it, the body statements are silently dropped.
+  if (!whileOp.getAfter().empty()) {
+    auto after = walkSCFBeforeRegion(whileOp.getAfter().front());
+    n.children.insert(n.children.end(), after.begin(), after.end());
+  }
   return n;
 }
 

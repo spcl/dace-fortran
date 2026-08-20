@@ -22,7 +22,7 @@ from dace_fortran.llvm_toolchain import (SUPPORTED_LLVM_VERSIONS, candidate_vers
 # --- Configuration: override via env vars ---
 
 _HERE = Path(__file__).resolve().parent
-_BUILD_DIR = _HERE / "build"
+_BUILD_DIR = Path(os.environ.get("DACE_FORTRAN_BUILD_DIR", _HERE / "build"))
 
 # Pinned by the LLVM_VERSION env var; empty means "auto-detect over SUPPORTED_LLVM_VERSIONS".
 _LLVM_VERSION = requested_version()
