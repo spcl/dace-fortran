@@ -1,0 +1,119 @@
+name: ICON Atmosphere solve_nh integration
+
+# llvm22-only integration test: replace ICON's ``solve_nh`` dycore with the
+# DaCe-generated binding and run a short EXCLAIM aquaplanet R02B04 experiment.
+# Triggered manually until the first successful run; push triggers can be
+# enabled once the script is verified.
+on:
+  workflow_dispatch:
+
+env:
+  CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+  OMPI_MCA_rmaps_base_oversubscribe: "1"
+  PRTE_MCA_rmaps_default_mapping_policy: ":oversubscribe"
+  HWLOC_COMPONENTS: "-gl"
+  OMPI_MCA_pml: "ob1"
+  OMPI_MCA_btl: "self,vader"
+  UCX_VFS_ENABLE: "n"
+  OMP_STACKSIZE: "64M"
+  OMP_NUM_THREADS: "1"
+  OPENBLAS_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  VECLIB_MAXIMUM_THREADS: "1"
+  NUMEXPR_NUM_THREADS: "1"
+  DACE_compiler_max_stack_array_size: "65536"
+  DACE_compiler_build_type: "Release"
+
+jobs:
+  icon-atmosphere-solve-nh:
+    name: ICON atmosphere solve_nh dace-fortran (llvm22)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      LLVM_VERSION: "22"
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: false
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install LLVM / MLIR / flang 22 + Fortran toolchain
+      run: |
+        wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+        sudo add-apt-repository -y "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-$LLVM_VERSION main"
+        sudo apt-get update
+        sudo apt-get install -y \
+          llvm-$LLVM_VERSION-dev libmlir-$LLVM_VERSION-dev mlir-$LLVM_VERSION-tools \
+          libflang-$LLVM_VERSION-dev flang-$LLVM_VERSION clang-$LLVM_VERSION \
+          build-essential cmake ninja-build gfortran libgomp1 \
+          libopenmpi-dev openmpi-bin \
+          libnetcdff-dev libnetcdf-dev libhdf5-dev \
+          libfftw3-dev \
+          libfyaml-dev libxml2-dev liblapack-dev libblas-dev \
+          pkg-config perl python3 \
+          bear autoconf automake m4 rsync zlib1g-dev
+        command -v clang-tidy || sudo ln -sf /usr/lib/llvm-$LLVM_VERSION/bin/clang-tidy /usr/local/bin/clang-tidy
+        command -v flang-new-$LLVM_VERSION \
+          || sudo ln -sf /usr/lib/llvm-$LLVM_VERSION/bin/flang-$LLVM_VERSION /usr/local/bin/flang-new-$LLVM_VERSION
+        command -v mpif90 || sudo ln -sf "$(command -v mpifort)" /usr/local/bin/mpif90
+        echo "/usr/lib/llvm-$LLVM_VERSION/bin" >> "$GITHUB_PATH"
+
+    - name: Install Python dependencies
+      run: |
+        rm -f ~/.dace.conf
+        rm -rf .dacecache tests/.dacecache
+        python -m pip install --upgrade pip
+        pip install nanobind numpy meson ninja
+        pip install -e ".[testing]" pytest-xdist pytest-timeout coverage
+        MPICC=mpicc pip install mpi4py
+
+    - name: Verify toolchain
+      run: |
+        missing=0
+        for t in flang-new-$LLVM_VERSION clang-$LLVM_VERSION gfortran gcc g++ make cmake ninja meson \
+                 mpicc mpicxx mpifort mpif90 perl python3 \
+                 bear autoconf automake aclocal m4 rsync pkg-config; do
+          if command -v "$t" >/dev/null 2>&1; then
+            printf '  ok    %-12s %s\n' "$t" "$(command -v "$t")"
+          else
+            printf '  MISS  %s\n' "$t"; missing=1
+          fi
+        done
+        test -f /usr/lib/x86_64-linux-gnu/openmpi/include/mpif-config.h \
+          || { echo '  MISS  openmpi mpif-config.h'; missing=1; }
+        python3 -c 'import numpy.f2py' 2>/dev/null \
+          || { echo '  MISS  numpy.f2py (importable)'; missing=1; }
+        [ "$missing" = 0 ] || { echo 'Toolchain incomplete'; exit 1; }
+
+    - name: Check out icon-model submodule
+      run: |
+        git submodule update --init --recursive --depth 1 tests/icon/full/icon-model
+
+    - name: Build HLFIR bridge
+      run: |
+        python -c "import dace_fortran; dace_fortran.SDFGBuilder"
+
+    - name: Enforce Release build type
+      run: |
+        python -c "import dace; bt = dace.Config.get('compiler', 'build_type'); assert bt == 'Release', bt"
+
+    - name: Run solve_nh ICON atmosphere e2e
+      run: |
+        python -m scripts.run_icon_solve_nh_atmosphere_e2e \
+          --icon-src tests/icon/full/icon-model \
+          --work-dir "${RUNNER_TEMP}/solve_nh_atmosphere_e2e" \
+          --nranks 2 \
+          --jobs 2
+
+    - name: Upload logs and artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: icon-atmosphere-solve-nh-logs-${{ github.run_id }}
+        path: |
+          ${{ runner.temp }}/solve_nh_atmosphere_e2e/*/icon_run.*.log
+          ${{ runner.temp }}/solve_nh_atmosphere_e2e/solve_nh_dace_libs/**/*.f90
+        if-no-files-found: ignore
