@@ -118,14 +118,11 @@ def _parse_reduce_identity(s: str):
         raise NotImplementedError(f"unsupported reduction identity {s!r}")
 
 
-def emit_copy(builder, ctx, n, region):
-    """Whole-array ``b = a`` -> ``CopyLibraryNode``. Connector names come from the node class
-    so this stays correct across libnode renames."""
+def add_copy_node(builder, ctx, state, src_name, tgt_name):
+    """Add a ``CopyLibraryNode`` copying the whole array ``src_name`` into ``tgt_name`` in ``state``. Connector
+    names come from the node class so this stays correct across libnode renames."""
     from dace.libraries.standard.nodes import CopyLibraryNode
-    state = ctx.flush_and_ensure(builder, region)
 
-    src_name = n.reduce_src  # buildCopyNode stored the source here
-    tgt_name = n.target
     src_desc = ctx.sdfg.arrays[src_name]
     tgt_desc = ctx.sdfg.arrays[tgt_name]
 
@@ -142,6 +139,12 @@ def emit_copy(builder, ctx, n, region):
         tgt_name, tgt_desc))
     state.add_edge(src_access, None, cp, CopyLibraryNode.INPUT_CONNECTOR_NAME, Memlet.from_array(src_name, src_desc))
     state.add_edge(cp, CopyLibraryNode.OUTPUT_CONNECTOR_NAME, tgt_access, None, tgt_memlet)
+
+
+def emit_copy(builder, ctx, n, region):
+    """Whole-array ``b = a`` -> ``CopyLibraryNode``."""
+    state = ctx.flush_and_ensure(builder, region)
+    add_copy_node(builder, ctx, state, n.reduce_src, n.target)  # buildCopyNode stored the source in reduce_src
 
 
 def emit_memset(builder, ctx, n, region):
@@ -1095,6 +1098,12 @@ def emit_blas(builder, ctx, n, region):
     * ``dscal`` / ``sscal``     -- ``x := alpha*x``
     * ``dgemv`` / ``sgemv``     -- ``y := alpha*op(A)*x + beta*y``
     * ``dgemm`` / ``sgemm``     -- ``C := alpha*op(A)*op(B) + beta*C``
+    * ``dger`` / ``dsymv`` / ``dsymm`` / ``dsyrk`` and their ``s`` twins
+    * ``dcopy`` / ``scopy``     -- a standard copy node (no BLAS node: it only wrapped that)
+    * ``dswap`` / ``sswap``     -- a sequential map exchanging the two vectors
+
+    The triangular routines (``trsv``/``trmv``/``trsm``/``trmm``) have no library node and are
+    rejected as unsupported library calls.
 
     ``ddot`` is special-cased on the C++ side and threads through the
     matching ``hlfir.assign`` site (not via this emitter).
@@ -1218,27 +1227,27 @@ def emit_blas(builder, ctx, n, region):
         state.add_edge(node, "_res", state.add_write(x), None, Memlet.from_array(x, x_desc))
 
     if routine in ("dcopy", "scopy"):
+        # A BLAS copy is an element move; the standard copy node picks the lowering from the descriptors.
         x, y = n.call_args
-        node = blas_nodes.Copy(f"copy_{builder.nid()}")
-        _apply_promotions()
-        state.add_node(node)
-        x_desc = ctx.sdfg.arrays[x]
-        y_desc = ctx.sdfg.arrays[y]
-        state.add_edge(state.add_read(x), None, node, "_x", Memlet.from_array(x, x_desc))
-        state.add_edge(node, "_y", state.add_write(y), None, Memlet.from_array(y, y_desc))
+        add_copy_node(builder, ctx, state, x, y)
         return
 
     if routine in ("dswap", "sswap"):
+        # No vendor kernel gains anything on an element exchange: one sequential map over the vector.
         x, y = n.call_args
-        node = blas_nodes.Swap(f"swap_{builder.nid()}")
-        _apply_promotions()
-        state.add_node(node)
-        x_desc = ctx.sdfg.arrays[x]
-        y_desc = ctx.sdfg.arrays[y]
-        state.add_edge(state.add_read(x), None, node, "_xin", Memlet.from_array(x, x_desc))
-        state.add_edge(state.add_read(y), None, node, "_yin", Memlet.from_array(y, y_desc))
-        state.add_edge(node, "_xout", state.add_write(x), None, Memlet.from_array(x, x_desc))
-        state.add_edge(node, "_yout", state.add_write(y), None, Memlet.from_array(y, y_desc))
+        x_desc, y_desc = ctx.sdfg.arrays[x], ctx.sdfg.arrays[y]
+        if len(x_desc.shape) != 1 or len(y_desc.shape) != 1:
+            raise NotImplementedError(f"{routine} on {x!r}/{y!r}: only rank-1 operands are lowered")
+        state.add_mapped_tasklet(f"swap_{builder.nid()}", {"__i": f"0:{x_desc.shape[0]}"}, {
+            "__x": Memlet(f"{x}[__i]"),
+            "__y": Memlet(f"{y}[__i]")
+        },
+                                 "__xo = __y\n__yo = __x", {
+                                     "__xo": Memlet(f"{x}[__i]"),
+                                     "__yo": Memlet(f"{y}[__i]")
+                                 },
+                                 schedule=dtypes.ScheduleType.Sequential,
+                                 external_edges=True)
         return
 
     if routine in ("dger", "sger"):
@@ -1253,27 +1262,6 @@ def emit_blas(builder, ctx, n, region):
         state.add_edge(node, "_res", state.add_write(A), None, Memlet.from_array(A, a_desc))
         return
 
-    if routine in ("dtrsv", "strsv", "dtrmv", "strmv"):
-        is_trsv = routine.endswith("trsv")
-        flags = n.expr.split(",")
-        uplo_l = flags[0].strip("'\"").upper()[:1] or "L"
-        trans_l = flags[1].strip("'\"").upper()[:1] or "N"
-        diag_l = flags[2].strip("'\"").upper()[:1] or "N"
-        A, x = n.call_args
-        cls = blas_nodes.Trsv if is_trsv else blas_nodes.Trmv
-        node = cls(f"{routine}_{builder.nid()}",
-                   uplo=(uplo_l == "U"),
-                   transA=(trans_l == "T"),
-                   unit_diag=(diag_l == "U"))
-        _apply_promotions()
-        state.add_node(node)
-        for arr, conn in ((A, "_A"), (x, "_xin")):
-            desc = ctx.sdfg.arrays[arr]
-            state.add_edge(state.add_read(arr), None, node, conn, Memlet.from_array(arr, desc))
-        x_desc = ctx.sdfg.arrays[x]
-        state.add_edge(node, "_xout", state.add_write(x), None, Memlet.from_array(x, x_desc))
-        return
-
     if routine in ("dsymv", "ssymv"):
         uplo_l = n.expr.strip("'\"").upper()[:1] or "L"
         alpha, A, x, beta, y = n.call_args
@@ -1285,30 +1273,6 @@ def emit_blas(builder, ctx, n, region):
             state.add_edge(state.add_read(arr), None, node, conn, Memlet.from_array(arr, desc))
         y_desc = ctx.sdfg.arrays[y]
         state.add_edge(node, "_yout", state.add_write(y), None, Memlet.from_array(y, y_desc))
-        return
-
-    if routine in ("dtrsm", "strsm", "dtrmm", "strmm"):
-        is_trsm = routine.endswith("trsm")
-        flags = n.expr.split(",")
-        side_l = flags[0].strip("'\"").upper()[:1] or "L"
-        uplo_l = flags[1].strip("'\"").upper()[:1] or "L"
-        trans_l = flags[2].strip("'\"").upper()[:1] or "N"
-        diag_l = flags[3].strip("'\"").upper()[:1] or "N"
-        alpha, A, B = n.call_args
-        cls = blas_nodes.Trsm if is_trsm else blas_nodes.Trmm
-        node = cls(f"{routine}_{builder.nid()}",
-                   side=(side_l == "R"),
-                   uplo=(uplo_l == "U"),
-                   transA=(trans_l == "T"),
-                   unit_diag=(diag_l == "U"),
-                   alpha=_scalar(alpha))
-        _apply_promotions()
-        state.add_node(node)
-        for arr, conn in ((A, "_A"), (B, "_Bin")):
-            desc = ctx.sdfg.arrays[arr]
-            state.add_edge(state.add_read(arr), None, node, conn, Memlet.from_array(arr, desc))
-        b_desc = ctx.sdfg.arrays[B]
-        state.add_edge(node, "_Bout", state.add_write(B), None, Memlet.from_array(B, b_desc))
         return
 
     if routine in ("dsymm", "ssymm"):
@@ -1358,6 +1322,8 @@ def emit_lapack(builder, ctx, n, region):
 
     * ``dgetrf`` / ``sgetrf``  -- LU factorisation
     * ``dpotrf`` / ``spotrf``  -- Cholesky factorisation
+
+    ``potrs``, ``geqrf`` and ``orgqr`` have no library node and are rejected as unsupported library calls.
     """
     import importlib
 
@@ -1389,50 +1355,6 @@ def emit_lapack(builder, ctx, n, region):
         a_desc = ctx.sdfg.arrays[A]
         state.add_edge(state.add_read(A), None, node, "_xin", Memlet.from_array(A, a_desc))
         state.add_edge(node, "_xout", state.add_write(A), None, Memlet.from_array(A, a_desc))
-        if info in ctx.sdfg.arrays:
-            info_desc = ctx.sdfg.arrays[info]
-            state.add_edge(node, "_res", state.add_write(info), None, Memlet.from_array(info, info_desc))
-        return
-
-    if routine in ("dpotrs", "spotrs"):
-        uplo_literal = n.expr.strip().strip("'\"").upper()[:1] or "L"
-        A, B, info = n.call_args
-        node = lapack_nodes.Potrs(f"potrs_{builder.nid()}", lower=(uplo_literal == "L"))
-        state.add_node(node)
-        a_desc = ctx.sdfg.arrays[A]
-        b_desc = ctx.sdfg.arrays[B]
-        state.add_edge(state.add_read(A), None, node, "_a", Memlet.from_array(A, a_desc))
-        state.add_edge(state.add_read(B), None, node, "_bin", Memlet.from_array(B, b_desc))
-        state.add_edge(node, "_bout", state.add_write(B), None, Memlet.from_array(B, b_desc))
-        if info in ctx.sdfg.arrays:
-            info_desc = ctx.sdfg.arrays[info]
-            state.add_edge(node, "_res", state.add_write(info), None, Memlet.from_array(info, info_desc))
-        return
-
-    if routine in ("dgeqrf", "sgeqrf"):
-        A, tau, info = n.call_args
-        node = lapack_nodes.Geqrf(f"geqrf_{builder.nid()}")
-        state.add_node(node)
-        a_desc = ctx.sdfg.arrays[A]
-        state.add_edge(state.add_read(A), None, node, "_ain", Memlet.from_array(A, a_desc))
-        state.add_edge(node, "_aout", state.add_write(A), None, Memlet.from_array(A, a_desc))
-        if tau in ctx.sdfg.arrays:
-            tau_desc = ctx.sdfg.arrays[tau]
-            state.add_edge(node, "_tau", state.add_write(tau), None, Memlet.from_array(tau, tau_desc))
-        if info in ctx.sdfg.arrays:
-            info_desc = ctx.sdfg.arrays[info]
-            state.add_edge(node, "_res", state.add_write(info), None, Memlet.from_array(info, info_desc))
-        return
-
-    if routine in ("dorgqr", "sorgqr"):
-        A, tau, info = n.call_args
-        node = lapack_nodes.Orgqr(f"orgqr_{builder.nid()}")
-        state.add_node(node)
-        a_desc = ctx.sdfg.arrays[A]
-        tau_desc = ctx.sdfg.arrays[tau]
-        state.add_edge(state.add_read(A), None, node, "_ain", Memlet.from_array(A, a_desc))
-        state.add_edge(state.add_read(tau), None, node, "_tau", Memlet.from_array(tau, tau_desc))
-        state.add_edge(node, "_aout", state.add_write(A), None, Memlet.from_array(A, a_desc))
         if info in ctx.sdfg.arrays:
             info_desc = ctx.sdfg.arrays[info]
             state.add_edge(node, "_res", state.add_write(info), None, Memlet.from_array(info, info_desc))

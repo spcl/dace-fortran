@@ -468,19 +468,11 @@ static std::string blasCalleeTag(const std::string& callee) {
       "sgemv",
       "dger",
       "sger",
-      "dtrsv",
-      "strsv",
-      "dtrmv",
-      "strmv",
       "dsymv",
       "ssymv",
       // L3
       "dgemm",
       "sgemm",
-      "dtrsm",
-      "strsm",
-      "dtrmm",
-      "strmm",
       "dsymm",
       "ssymm",
       "dsyrk",
@@ -494,7 +486,10 @@ static std::string blasCalleeTag(const std::string& callee) {
 static std::string lapackCalleeTag(const std::string& callee) {
   std::string low = normaliseBlasName(callee);
   static const std::set<std::string> recognised = {
-      "dgetrf", "sgetrf", "dpotrf", "spotrf", "dpotrs", "spotrs", "dgeqrf", "sgeqrf", "dorgqr", "sorgqr",
+      "dgetrf",
+      "sgetrf",
+      "dpotrf",
+      "spotrf",
   };
   if (recognised.count(low)) return low;
   return std::string{};
@@ -819,18 +814,6 @@ static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
     push(args[7]);  // A (inout)
     return n;
   }
-  if (routine == "dtrsv" || routine == "strsv" || routine == "dtrmv" || routine == "strmv") {
-    // trsv/trmv(uplo, trans, diag, n, A, lda, x, incx)
-    if (args.size() < 8) {
-      n.kind.clear();
-      return n;
-    }
-    n.expr =
-        resolveCallArg(args[0]) + "," + resolveCallArg(args[1]) + "," + resolveCallArg(args[2]);  // uplo,trans,diag
-    push(args[4]);                                                                                // A
-    push(args[6]);                                                                                // x (inout)
-    return n;
-  }
   if (routine == "dsymv" || routine == "ssymv") {
     // symv(uplo, n, alpha, A, lda, x, incx, beta, y, incy)
     if (args.size() < 10) {
@@ -843,19 +826,6 @@ static ASTNode buildBlasCallNode(fir::CallOp call, const std::string& routine) {
     push(args[5]);                     // x
     push(args[7]);                     // beta
     push(args[8]);                     // y (inout)
-    return n;
-  }
-  if (routine == "dtrsm" || routine == "strsm" || routine == "dtrmm" || routine == "strmm") {
-    // trsm/trmm(side, uplo, trans, diag, m, n, alpha, A, lda, B, ldb)
-    if (args.size() < 11) {
-      n.kind.clear();
-      return n;
-    }
-    n.expr = resolveCallArg(args[0]) + "," + resolveCallArg(args[1]) + "," + resolveCallArg(args[2]) + "," +
-             resolveCallArg(args[3]);
-    push(args[6]);  // alpha
-    push(args[7]);  // A
-    push(args[9]);  // B (inout)
     return n;
   }
   if (routine == "dsymm" || routine == "ssymm") {
@@ -916,40 +886,6 @@ static ASTNode buildLapackCallNode(fir::CallOp call, const std::string& routine)
     n.expr = resolveCallArg(args[0]);                // 'U' or 'L'
     n.call_args.push_back(resolveCallArg(args[2]));  // A (inout)
     n.call_args.push_back(resolveCallArg(args[4]));  // info (out)
-    return n;
-  }
-  if (routine == "dpotrs" || routine == "spotrs") {
-    // potrs(uplo, n, nrhs, A, lda, B, ldb, info)
-    if (args.size() < 8) {
-      n.kind.clear();
-      return n;
-    }
-    n.expr = resolveCallArg(args[0]);                // 'U' or 'L'
-    n.call_args.push_back(resolveCallArg(args[3]));  // A
-    n.call_args.push_back(resolveCallArg(args[5]));  // B (inout)
-    n.call_args.push_back(resolveCallArg(args[7]));  // info (out)
-    return n;
-  }
-  if (routine == "dgeqrf" || routine == "sgeqrf") {
-    // geqrf(m, n, A, lda, tau, work, lwork, info)
-    if (args.size() < 8) {
-      n.kind.clear();
-      return n;
-    }
-    n.call_args.push_back(resolveCallArg(args[2]));  // A (inout)
-    n.call_args.push_back(resolveCallArg(args[4]));  // tau (out)
-    n.call_args.push_back(resolveCallArg(args[7]));  // info (out)
-    return n;
-  }
-  if (routine == "dorgqr" || routine == "sorgqr") {
-    // orgqr(m, n, k, A, lda, tau, work, lwork, info)
-    if (args.size() < 9) {
-      n.kind.clear();
-      return n;
-    }
-    n.call_args.push_back(resolveCallArg(args[3]));  // A (inout)
-    n.call_args.push_back(resolveCallArg(args[5]));  // tau (in)
-    n.call_args.push_back(resolveCallArg(args[8]));  // info (out)
     return n;
   }
   n.kind.clear();
