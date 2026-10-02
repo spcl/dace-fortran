@@ -33,7 +33,7 @@ from dace.transformation.interstate.state_fusion_with_happens_before import Stat
 from dace.transformation.pass_pipeline import Pipeline
 from dace.transformation.passes.full_map_fusion import FullMapFusion
 from dace.transformation.passes.length_one_array_scalar_conversion import (ConvertLengthOneArraysToScalars,
-                                                                           _STAGING_STATE_PREFIXES)
+                                                                           STAGING_STATE_PREFIXES)
 from dace.transformation.passes.parallelization_prep import ShortLoopUnroll
 from dace.transformation.passes.scalar_fission import ScalarFission
 from dace.transformation.passes.unique_loop_iterators import UniqueLoopIterators
@@ -57,7 +57,7 @@ def abi_proxy_transients(sdfg: SDFG) -> Set[str]:
     """
     proxies: Set[str] = set()
     for state in sdfg.all_states():
-        if not state.label.startswith(_STAGING_STATE_PREFIXES):
+        if not state.label.startswith(STAGING_STATE_PREFIXES):
             continue
         for edge in state.edges():
             if not (isinstance(edge.src, nodes.AccessNode) and isinstance(edge.dst, nodes.AccessNode)):
