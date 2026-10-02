@@ -6,7 +6,7 @@
 
     len1-to-scalar -> specialize -> short-loop-unroll -> unique-loop-iterators -> scalar-fission
       -> simplify -> state-fusion-extended -> loop2map -> state-fusion-extended -> mapfusion
-      -> map-collapse -> mapfusion -> make-transients-persistent
+      -> map-collapse -> mapfusion -> make-transients-persistent -> bind-omp-thread-count
 
 ``scalar_fission`` runs unconditionally, BEFORE simplify (it splits scalar-carried loop bodies so
 the loop can map downstream): LoopToMap needs it in general, not just CloudSC. ``specialize``
@@ -17,7 +17,8 @@ signature keeps its array form. The builder already runs it on frontend output; 
 covers an SDFG that reached ``optimize`` some other way, and the pass is idempotent.
 ``mapfusion`` is ``FullMapFusion`` (vertical +
 horizontal fusion run together to a fixed point), applied a second time after ``map-collapse``
-since a freshly-collapsed nest can expose fusions the first pass missed.
+since a freshly-collapsed nest can expose fusions the first pass missed. ``bind-omp-thread-count``
+defines the team-size symbol of thread-strided persistent maps at SDFG entry, when the SDFG uses it.
 """
 import copy
 from typing import Any, Dict, Optional, Set, Union
@@ -37,6 +38,8 @@ from dace.transformation.passes.length_one_array_scalar_conversion import (Conve
 from dace.transformation.passes.parallelization_prep import ShortLoopUnroll
 from dace.transformation.passes.scalar_fission import ScalarFission
 from dace.transformation.passes.unique_loop_iterators import UniqueLoopIterators
+
+from dace_fortran.omp_threads import BindOmpThreadCount
 
 Const = Union[float, int, str]
 
@@ -191,6 +194,7 @@ def optimize(sdfg: SDFG,
 
     from dace.transformation.passes.persistent_transients import MakeTransientsPersistent
     MakeTransientsPersistent().apply_pass(sdfg, {})
+    BindOmpThreadCount().apply_pass(sdfg, {})
 
     if validate:
         sdfg.validate()
