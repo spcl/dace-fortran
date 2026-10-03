@@ -107,14 +107,13 @@ def _reparent_children(node: Base):
 
 def set_children(par: Base, children: Iterable[Union[Base, str]]):
     """Replaces `par`'s children, handling both `.items`- and `.content`-based nodes."""
-    assert hasattr(par, 'content') != hasattr(par, 'items')
-    if hasattr(par, 'items'):
-        par.items = tuple(children)
-    elif hasattr(par, 'content'):
+    if isinstance(par, BlockBase):
         if not children:
             remove_self(par)
         else:
             par.content = list(children)
+    else:
+        par.items = tuple(children)
     if children:
         _reparent_children(par)
 

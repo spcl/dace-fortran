@@ -11,7 +11,7 @@ from typing import Iterable, Optional, Set
 __all__ = ["ExternalFunction", "dont_inline_names", "validate"]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ExternalFunction:
     """A procedure that is NOT inlined and IS emitted as an external call.
 

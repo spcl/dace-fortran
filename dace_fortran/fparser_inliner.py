@@ -225,6 +225,29 @@ class ParseConfig:
     entry points, etc.).
     """
 
+    __slots__ = ('sources', 'entry_points', 'config_injections', 'make_return_false', 'do_not_prune', 'do_not_rename',
+                 'make_noop', 'drop_noop_calls', 'ast_checkpoint_dir', 'consolidate_global_data', 'rename_uniquely',
+                 'do_not_prune_type_components', 'keep_type_components', 'monomorphize', 'rename_specifics',
+                 'specialize_at_source', 'f2py_safe')
+
+    sources: Dict[str, str]
+    entry_points: List[types.SPEC]
+    config_injections: list
+    make_return_false: Set[str]
+    do_not_prune: List[types.SPEC]
+    do_not_rename: List[types.SPEC]
+    make_noop: List[types.SPEC]
+    drop_noop_calls: Set[str]
+    ast_checkpoint_dir: Optional[Path]
+    consolidate_global_data: bool
+    rename_uniquely: bool
+    do_not_prune_type_components: bool
+    keep_type_components: Dict[str, List[str]]
+    monomorphize: bool
+    rename_specifics: Dict[str, str]
+    specialize_at_source: List[str]
+    f2py_safe: bool
+
     def __init__(self,
                  sources: Union[None, List[Path], Dict[str, str]] = None,
                  entry_points: Union[None, types.SPEC, List[types.SPEC]] = None,
@@ -239,7 +262,7 @@ class ParseConfig:
                  monomorphize: bool = True,
                  rename_specifics: Optional[Dict[str, str]] = None,
                  specialize_at_source: Optional[Iterable[str]] = None,
-                 f2py_safe: bool = False):
+                 f2py_safe: bool = False) -> None:
         # Make the configs canonical, by processing the various types upfront.
         if not sources:
             sources = {}
@@ -266,22 +289,22 @@ class ParseConfig:
         if isinstance(ast_checkpoint_dir, str):
             ast_checkpoint_dir = Path(ast_checkpoint_dir)
 
-        self.sources: Dict[str, str] = sources
-        self.entry_points: List[types.SPEC] = entry_points
-        self.config_injections: list = []
+        self.sources = sources
+        self.entry_points = entry_points
+        self.config_injections = []
         #: Lower-cased names of stubbed LOGICAL functions whose body is replaced
         #: with ``<result> = .FALSE.`` (a subset of ``make_noop``); populated by
         #: :func:`inline_to_ast` from its ``make_return_false`` argument.
-        self.make_return_false: Set[str] = set()
-        self.do_not_prune: List[types.SPEC] = do_not_prune
-        self.do_not_rename: List[types.SPEC] = do_not_rename
-        self.make_noop: List[types.SPEC] = make_noop
+        self.make_return_false = set()
+        self.do_not_prune = do_not_prune
+        self.do_not_rename = do_not_rename
+        self.make_noop = make_noop
         #: Lower-cased names of the EXPLICIT make_noop procedures (snapshotted
         #: before :func:`inline_to_ast` merges the do_not_emit/keep_external
         #: stubs in).  A call to one of these is a semantic no-op and is
         #: dropped outright; keep_external stubs keep their call sites (the
         #: bridge or an external implementation handles them).
-        self.drop_noop_calls: Set[str] = {s[-1].lower() for s in make_noop}
+        self.drop_noop_calls = {s[-1].lower() for s in make_noop}
         self.ast_checkpoint_dir = ast_checkpoint_dir
         self.consolidate_global_data = consolidate_global_data
         self.rename_uniquely = rename_uniquely
@@ -298,7 +321,7 @@ class ParseConfig:
         #: slot order, both being source declaration order).  Type / component
         #: names are matched case-insensitively.  Resolved to
         #: ``Component_Decl`` specs by :meth:`keep_named_type_components`.
-        self.keep_type_components: Dict[str, List[str]] = {
+        self.keep_type_components = {
             t.lower(): [c.lower() for c in comps]
             for t, comps in (keep_type_components or {}).items()
         }
@@ -312,7 +335,7 @@ class ParseConfig:
         #: name with the generic interface it belongs to (see
         #: :func:`cleanup.rename_clashing_specifics`).  Applied before the
         #: externalisation / interface deconstruction that the collision breaks.
-        self.rename_specifics: Dict[str, str] = dict(rename_specifics or {})
+        self.rename_specifics = dict(rename_specifics or {})
         #: Names of subprograms to SPECIALIZE to their call sites by source-level
         #: inlining (per-call-site monomorphization), in addition to the structural
         #: module merge.  Used for ICON's halo ``sync_patch_array`` family, whose
@@ -322,7 +345,7 @@ class ParseConfig:
         #: branch-prune collapses the ladder to a single-source rebind BEFORE the
         #: bridge's pointer-rewrite (HLFIR inlining is too late).  See
         #: :mod:`inliner.ast_desugaring.specialize_at_source`.
-        self.specialize_at_source: List[str] = [n.lower() for n in (specialize_at_source or [])]
+        self.specialize_at_source = [n.lower() for n in (specialize_at_source or [])]
         #: Apply f2py-safety transforms so numpy f2py can wrap the TU: a placeholder
         #: member for emptied derived types + CLASS(t)->TYPE(t) stub-dummy demotion.
         #: Only the f2py-wrapped path (CLOUDSC) sets this; a gfortran-only extraction

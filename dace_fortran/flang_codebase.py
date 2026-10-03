@@ -169,7 +169,7 @@ def netcdf_stub_source(fortran_dir: Path) -> str:
 # Registry: name -> (stub source provider, include-path provider).  The
 # stub source goes into the merged TU; the include-path provider
 # returns a list of ``-I<dir>`` flags to append to flang's command line.
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class LibraryStub:
     """A pluggable wrapper for an upstream Fortran library that ships
     only binary ``.mod`` files.  See :data:`LIBRARY_STUBS` for the

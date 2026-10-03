@@ -33,18 +33,30 @@ class TYPE_SPEC:
     """Parses a Fortran variable's attribute string (e.g. 'DIMENSION(..)', 'INTENT(IN)') into shape/intent/etc properties."""
     NO_ATTRS = ''
 
-    def __init__(self, spec: Union[str, SPEC], attrs: str = NO_ATTRS, is_arg: bool = False):
+    __slots__ = ('spec', 'shape', 'optional', 'pointer', 'inp', 'out', 'alloc', 'const', 'keyword')
+
+    spec: SPEC
+    shape: Tuple[str, ...]
+    optional: bool
+    pointer: bool
+    inp: bool
+    out: bool
+    alloc: bool
+    const: bool
+    keyword: Optional[str]
+
+    def __init__(self, spec: Union[str, SPEC], attrs: str = NO_ATTRS, is_arg: bool = False) -> None:
         if isinstance(spec, str):
             spec = (spec, )
-        self.spec: SPEC = spec
-        self.shape: Tuple[str, ...] = self._parse_shape(attrs)
-        self.optional: bool = 'OPTIONAL' in attrs
-        self.pointer: bool = 'POINTER' in attrs
-        self.inp: bool = 'INTENT(IN)' in attrs or 'INTENT(INOUT)' in attrs
-        self.out: bool = 'INTENT(OUT)' in attrs or 'INTENT(INOUT)' in attrs
-        self.alloc: bool = 'ALLOCATABLE' in attrs
-        self.const: bool = 'PARAMETER' in attrs
-        self.keyword: Optional[str] = None
+        self.spec = spec
+        self.shape = self._parse_shape(attrs)
+        self.optional = 'OPTIONAL' in attrs
+        self.pointer = 'POINTER' in attrs
+        self.inp = 'INTENT(IN)' in attrs or 'INTENT(INOUT)' in attrs
+        self.out = 'INTENT(OUT)' in attrs or 'INTENT(INOUT)' in attrs
+        self.alloc = 'ALLOCATABLE' in attrs
+        self.const = 'PARAMETER' in attrs
+        self.keyword = None
         if is_arg and not self.inp and not self.out:
             # Argument with no explicit intent is both in and out.
             self.inp, self.out = True, True
@@ -136,7 +148,7 @@ class TYPE_SPEC:
         return f"{bits_str} :: {var}{shape_str}"
 
 
-@dataclass
+@dataclass(slots=True)
 class ConstTypeInjection:
     """Constant-value injection for a derived-type component, applied everywhere that type is used (optionally scoped)."""
     scope_spec: Optional[SPEC]  # Only replace within this scope object.
@@ -145,7 +157,7 @@ class ConstTypeInjection:
     value: Any  # Literal value to substitute with.
 
 
-@dataclass
+@dataclass(slots=True)
 class ConstInstanceInjection:
     """Constant-value injection for one variable instance's component (not all instances of its type)."""
     scope_spec: Optional[SPEC]  # Only replace within this scope object.

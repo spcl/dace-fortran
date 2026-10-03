@@ -360,7 +360,7 @@ def make_builder(source: str,
                             kind_map=kind_map,
                             kind_passthrough=kind_passthrough)
         builder = SDFGBuilder(str(hlfir), pipeline=pipeline, entry=fwd)
-        builder._fortran_source = source
+        builder.fortran_source = source
         return builder
     with tempfile.TemporaryDirectory(prefix=f"hlfir_{name}_") as td:
         hlfir = _emit_hlfir(source,
@@ -374,7 +374,7 @@ def make_builder(source: str,
                             kind_map=kind_map,
                             kind_passthrough=kind_passthrough)
         builder = SDFGBuilder(str(hlfir), pipeline=pipeline, entry=fwd)
-        builder._fortran_source = source
+        builder.fortran_source = source
         return builder
 
 

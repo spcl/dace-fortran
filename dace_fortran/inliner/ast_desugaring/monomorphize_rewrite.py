@@ -1335,7 +1335,7 @@ LADDER = 'ladder'
 RETYPE = 'retype'
 
 
-@dataclass
+@dataclass(slots=True)
 class AxisSpec:
     """One polymorphic dispatch axis and how to collapse it.
 
@@ -1347,7 +1347,7 @@ class AxisSpec:
     concrete: Optional[str] = None
 
 
-@dataclass
+@dataclass(slots=True)
 class MonomorphizationSpec:
     """The per-translation-unit monomorphisation plan: each polymorphic axis
     paired with its collapse strategy.  Hand-written first; auto-generated later.
@@ -1356,7 +1356,7 @@ class MonomorphizationSpec:
     axes: List[AxisSpec]
 
 
-@dataclass
+@dataclass(slots=True)
 class MonomorphizationStats:
     """Per-strategy counts of what the driver rewrote, so a caller can detect a
     no-op axis or assert the expected amount of rewriting happened."""

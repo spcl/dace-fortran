@@ -35,7 +35,7 @@ class UnsupportedProgram(Exception):
         self.reason = reason
 
 
-@dataclass
+@dataclass(slots=True)
 class ConcreteArm:
     """One concrete subtype registered to an abstract base -- one arm of the
     generated static-dispatch ladder."""
@@ -44,7 +44,7 @@ class ConcreteArm:
     bindings: Dict[str, str]
 
 
-@dataclass
+@dataclass(slots=True)
 class MonomorphizationPlan:
     """The closed set of concrete arms for one abstract base.  The rewrite emits
     every arm (emit-all-always: no collapse), one static call each."""
@@ -53,7 +53,7 @@ class MonomorphizationPlan:
     arms: List[ConcreteArm]
 
 
-@dataclass
+@dataclass(slots=True)
 class TypeInfo:
     name: str
     abstract: bool

@@ -54,7 +54,7 @@ _C_TYPES = {
 _OPAQUE_COMM_DTYPE = "MPI_Comm"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Arg:
     """One argument of a registered external function.
 
@@ -174,7 +174,7 @@ class Arg:
         return f"{base} *" if self.kind == "array" else base
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ExternalSignature:
     """Signature of a registered external ``bind(c)`` function.
 
