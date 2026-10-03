@@ -461,14 +461,14 @@ std::string buildIndexExpr(mlir::Value v, int d) {
       {"arith.addi", " + "},
       {"arith.subi", " - "},
       {"arith.muli", " * "},
-      {"arith.divui", " // "},
   };
   if (auto it = int_bin.find(nm); it != int_bin.end() && def->getNumOperands() == 2) {
     return "(" + buildIndexExpr(def->getOperand(0), d + 1) + it->second + buildIndexExpr(def->getOperand(1), d + 1) +
            ")";
   }
-  if (nm == "arith.divsi" && def->getNumOperands() == 2) {
-    return truncatedDivision(buildIndexExpr(def->getOperand(0), d + 1), buildIndexExpr(def->getOperand(1), d + 1));
+  if ((nm == "arith.divsi" || nm == "arith.divui") && def->getNumOperands() == 2) {
+    const std::string a = buildIndexExpr(def->getOperand(0), d + 1), b = buildIndexExpr(def->getOperand(1), d + 1);
+    return nm == "arith.divsi" ? truncatedDivision(a, b) : floorDivision(a, b);
   }
   // ``MOD(i, k)`` in an index expression (``arr(mod(i,2)+1)``) lowers to ``arith.remsi`` / ``arith.remui``.
   // ``FtnMod`` is the SDFG's truncated remainder (sign of the dividend), the semantics of Fortran ``MOD``.

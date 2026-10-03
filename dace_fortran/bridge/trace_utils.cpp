@@ -654,14 +654,14 @@ static std::string traceExtentExprMemo(mlir::Value v, llvm::DenseMap<mlir::Opera
     // MAX/MIN lowering (vs the select-over-cmp form above).
     auto nm = def->getName().getStringRef();
     static const std::map<llvm::StringRef, std::string> bin = {
-        {"arith.addi", " + "}, {"arith.subi", " - "},   {"arith.muli", " * "},
-        {"arith.divsi", ""},   {"arith.divui", " // "},
+        {"arith.addi", " + "}, {"arith.subi", " - "}, {"arith.muli", " * "}, {"arith.divsi", ""}, {"arith.divui", ""},
     };
     if (auto it = bin.find(nm); it != bin.end() && def->getNumOperands() == 2) {
       auto l = traceExtentExprMemo(def->getOperand(0), memo);
       auto r = traceExtentExprMemo(def->getOperand(1), memo);
       if (l.empty() || r.empty()) return "";
       if (nm == "arith.divsi") return truncatedDivision(l, r);
+      if (nm == "arith.divui") return floorDivision(l, r);
       return "(" + l + it->second + r + ")";
     }
     if ((nm == "arith.maxsi" || nm == "arith.maxui" || nm == "arith.minsi" || nm == "arith.minui") &&
