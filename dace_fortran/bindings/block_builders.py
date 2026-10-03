@@ -109,8 +109,7 @@ def build_c_interface(frozen: FrozenSignature, iface: OriginalInterface, dace_ar
     return rendered
 
 
-# Symbols from emit_mpi._install_user_pgrid; special-cased since FrozenSignature.free_symbols
-# carries names only. Keep in lockstep with emit_library._USER_*.
+# User process-grid symbols; special-cased since FrozenSignature.free_symbols carries names only.
 _USER_COMM_SYMBOL_NAME = "dace_user_comm"
 _USER_COMM_SIZE_SYMBOL_NAME = "dace_user_comm_size"
 

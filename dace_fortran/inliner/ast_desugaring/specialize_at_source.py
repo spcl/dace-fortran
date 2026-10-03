@@ -74,16 +74,6 @@ def _dummy_arg_names(sub_stmt: f03.Base) -> List[str]:
     return [str(c) for c in dal.children]
 
 
-def _entity_names(spec: f03.Base) -> Set[str]:
-    """Every entity name DECLARED in a Specification_Part (lower-cased)."""
-    names: Set[str] = set()
-    for ed in walk(spec, (f03.Entity_Decl, f03.Component_Decl)):
-        nm = next(children_of_type(ed, f03.Name), None)
-        if nm is not None:
-            names.add(str(nm).lower())
-    return names
-
-
 #: A keyword-argument NAME position: ``(kw =`` or ``, kw =`` (but not ``==``).  The
 #: keyword of a nested call's actual-argument spec is the CALLEE's parameter name,
 #: not a reference -- so it must NOT be substituted even when it collides with a

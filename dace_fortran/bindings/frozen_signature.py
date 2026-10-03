@@ -135,8 +135,7 @@ class FrozenSignature:
     module_symbol_origins: Dict[str, Tuple[str, str]] = field(default_factory=dict)
     # Integer communicator dummy the wrapper feeds (via MPI_Comm_f2c +
     # MPI_Comm_size) into __user_comm/__user_comm_size at dace_init_<entry>
-    # time.  None if no runtime MPI comm.  Set from emit_mpi's
-    # _fortran_user_comm_source sidecar.
+    # time.  None if no runtime MPI comm.
     user_comm_source: Optional[str] = None
 
     # ----- I/O ---------------------------------------------------------

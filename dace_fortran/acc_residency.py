@@ -42,7 +42,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Tuple
 
 from fparser.common.readfortran import FortranStringReader
 from fparser.two import Fortran2003 as f03
@@ -322,11 +322,6 @@ def _clauses(logical: _Logical):
 # ---------------------------------------------------------------------------
 # Public API (unchanged signatures + optional cpp ``defines``)
 # ---------------------------------------------------------------------------
-
-
-def routine_span(source: str, routine: str, defines: Iterable[str] = DEFAULT_CPP_DEFINES) -> Tuple[int, int]:
-    """1-based ``(first_line, last_line)`` of ``routine``'s definition."""
-    return _node_span(_routine_node(_parse(source, defines), routine))
 
 
 def dummy_args(source: str, routine: str, defines: Iterable[str] = DEFAULT_CPP_DEFINES) -> List[str]:

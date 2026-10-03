@@ -12,7 +12,6 @@ from .. import ast_utils
 
 # Type Aliases for common node groupings
 # Represents program entry points like the main program, subroutines, and functions.
-ENTRY_POINT_OBJECT_TYPES = Union[f03.Main_Program, f03.Subroutine_Subprogram, f03.Function_Subprogram]
 ENTRY_POINT_OBJECT_CLASSES = (f03.Main_Program, f03.Subroutine_Subprogram, f03.Function_Subprogram)
 # Represents nodes that define a new scope (e.g., modules, functions, derived types).
 SCOPE_OBJECT_TYPES = Union[f03.Main_Program, f03.Module, f03.Function_Subprogram, f03.Subroutine_Subprogram,

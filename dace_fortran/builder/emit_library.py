@@ -14,13 +14,6 @@ from dace import dtypes, InterstateEdge, Memlet
 
 from dace_fortran.builder.access import acc, iter_view_dim_map
 
-# emit_mpi installs a FortranProcessGrid (MPI_Cart_create sub-comm, built in init_code at
-# __dace_init time) under these fixed names so the bindings layer + tests can find them
-# without grepping sdfg.symbols.
-_USER_COMM_SYMBOL = "dace_user_comm"  # opaque(MPI_Comm) symbol -- f2c result from the wrapper
-_USER_COMM_SIZE_SYMBOL = "dace_user_comm_size"  # int -- MPI_Comm_size(dace_user_comm), 1-D pgrid extent
-_USER_PGRID_NAME = "dace_user_pgrid"  # FortranProcessGrid descriptor name
-
 
 def pin_sequential(node):
     """Pin a compute library node to a sequential schedule, and return it.
@@ -354,106 +347,6 @@ def emit_libcall(builder, ctx, n, region):
     else:
         out_memlet = Memlet.from_array(n.target, tgt_desc)
     state.add_edge(node, out_conn, acc(builder, state, n.target), None, out_memlet)
-
-
-def _install_user_pgrid(ctx, comm_arg: str):
-    """Install FortranProcessGrid (+ driving symbols __user_comm/__user_comm_size) on the SDFG
-    if absent, and drop the orphan Fortran comm scalar from sdfg.arrays. Bindings layer must
-    populate both symbols via MPI_Comm_f2c/MPI_Comm_size and omit comm from the program call."""
-    import dace
-    from dace_fortran.data import FortranProcessGrid
-
-    sdfg = ctx.sdfg
-    # Track every comm scalar converted to the user pgrid so a post-emit sweep
-    # (:func:`drop_user_comm_scalar_nodes`) can remove its now-orphan access
-    # nodes + the dead ``<local> = comm`` copy tasklets.  The descriptor is
-    # popped here, but the wrapper-body assignment that wrote the comm local
-    # (``com = comm`` in ``p_barrier``, ``p_comm = comm`` in ``p_isend`` &c.)
-    # persists as a dangling access node otherwise -- the ICON halo inlines
-    # several such wrappers, each with its own comm copy.
-    if not hasattr(sdfg, "_fortran_dropped_comms"):
-        sdfg._fortran_dropped_comms = set()
-    sdfg._fortran_dropped_comms.add(comm_arg)
-    if _USER_PGRID_NAME in sdfg.arrays:
-        # Already installed by an earlier MPI call in the same kernel.
-        # Still need to remove the orphan ``comm`` scalar -- it might be
-        # a distinct dummy in a later call (rare but easy to support).
-        if comm_arg in sdfg.arrays:
-            sdfg.arrays.pop(comm_arg, None)
-        return
-
-    sdfg.add_symbol(_USER_COMM_SYMBOL, dace.dtypes.opaque("MPI_Comm"))
-    sdfg.add_symbol(_USER_COMM_SIZE_SYMBOL, dace.dtypes.int64)
-    sdfg.add_datadesc(
-        _USER_PGRID_NAME,
-        FortranProcessGrid(
-            name=_USER_PGRID_NAME,
-            shape=[dace.symbol(_USER_COMM_SIZE_SYMBOL)],
-            parent_comm_symbol=_USER_COMM_SYMBOL,
-        ))
-    sdfg.append_init_code(sdfg.arrays[_USER_PGRID_NAME].init_code())
-    sdfg.append_exit_code(sdfg.arrays[_USER_PGRID_NAME].exit_code())
-    # ``ProcessGrid``'s ``init_code`` references state fields
-    # (``__state->__user_pgrid``, ``..._group``, ``..._rank``, etc.)
-    # but DaCe codegen only emits those fields when an MPI
-    # :class:`dace.libraries.mpi.Dummy` node declares them.  Place a
-    # Dummy on the SDFG's start state with the field list mirroring
-    # the stock ``add_pgrid`` pattern from
-    # ``dace/frontend/python/replacements/mpi.py``.
-    from dace.libraries.mpi import Dummy
-    start_state = sdfg.start_state
-    dummy = Dummy(_USER_PGRID_NAME, [
-        f'MPI_Comm {_USER_PGRID_NAME};',
-        f'MPI_Group {_USER_PGRID_NAME}_group;',
-        f'int {_USER_PGRID_NAME}_coords[1];',
-        f'int {_USER_PGRID_NAME}_dims[1];',
-        f'int {_USER_PGRID_NAME}_rank;',
-        f'int {_USER_PGRID_NAME}_size;',
-        f'bool {_USER_PGRID_NAME}_valid;',
-    ])
-    start_state.add_node(dummy)
-    wnode = start_state.add_write(_USER_PGRID_NAME)
-    start_state.add_edge(dummy, None, wnode, None, Memlet())
-    # Drop the original ``comm`` integer dummy from the SDFG signature
-    # -- the MPI nodes now wire to ``__user_pgrid`` instead, and the
-    # bindings wrapper routes the f2c'd MPI_Comm into ``__user_comm``
-    # at init time, not into the kernel call.
-    sdfg.arrays.pop(comm_arg, None)
-    # Remember the Fortran integer dummy that originally held this
-    # communicator -- the bindings wrapper needs the outer-dummy name
-    # to call ``MPI_Comm_f2c`` on it.  ``__user_comm_size`` is
-    # populated by an ``MPI_Comm_size`` call in the same wrapper
-    # block; track it alongside.
-    sdfg._fortran_user_comm_source = comm_arg
-
-
-def drop_user_comm_scalar_nodes(sdfg):
-    """Post-emit sweep removing the orphan access nodes (+ dead ``<local> = comm``
-    copy tasklets) of comm scalars converted to the user process grid.
-
-    :func:`_install_user_pgrid` pops each comm scalar's DESCRIPTOR -- the MPI
-    library nodes wire to the ``dace_user_pgrid`` connector instead -- but the
-    wrapper-body assignment that wrote the comm local (``com = comm`` in
-    ``p_barrier``, ``p_comm = comm`` in ``p_isend``/``p_irecv``/...) persists as a
-    dangling access node whose ``desc()`` then ``KeyError``s in
-    ``prune_unused_arrays``.  Drop those nodes; a copy tasklet left with no live
-    output is dead and is dropped too (its now-unused comm read source prunes
-    normally).  Must run AFTER all emit and BEFORE ``prune_unused_arrays``."""
-    import dace
-
-    dropped = getattr(sdfg, "_fortran_dropped_comms", None)
-    if not dropped:
-        return
-    targets = [(parent, node) for node, parent in sdfg.all_nodes_recursive()
-               if isinstance(node, dace.nodes.AccessNode) and node.data in dropped]
-    for state, node in targets:
-        if node not in state.nodes():
-            continue  # already removed via an earlier node's writer sweep
-        writers = [e.src for e in state.in_edges(node) if isinstance(e.src, dace.nodes.Tasklet)]
-        state.remove_node(node)  # also removes incident edges
-        for w in writers:
-            if w in state.nodes() and state.out_degree(w) == 0:
-                state.remove_node(w)
 
 
 # Fortran MPI reduction-op handle name (``use mpi`` integer handle, lower-cased)
@@ -1207,15 +1100,6 @@ def emit_blas(builder, ctx, n, region):
         return
 
     # ----- new-extension BLAS L1/L2/L3 lib nodes -------------------------------
-
-    def _wire_inplace_single(node_cls, x, **kwargs):
-        """Lib nodes with ``_x`` in -> ``_res`` out (Scal-style) on a single array."""
-        node = node_cls(f"{routine}_{builder.nid()}", **kwargs)
-        _apply_promotions()
-        state.add_node(node)
-        x_desc = ctx.sdfg.arrays[x]
-        state.add_edge(state.add_read(x), None, node, "_x", Memlet.from_array(x, x_desc))
-        state.add_edge(node, "_res", state.add_write(x), None, Memlet.from_array(x, x_desc))
 
     if routine in ("dcopy", "scopy"):
         x, y = n.call_args

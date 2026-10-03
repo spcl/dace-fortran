@@ -987,13 +987,6 @@ class SDFGBuilder:
         # bridge generated for the bindings ``c_loc`` aliasing path
         # survives even if the SDFG dataflow itself never reads it.
         from dace_fortran.builder.prune_unused_arrays import prune_unused_arrays
-        # Drop the orphan access nodes of comm scalars converted to the user
-        # process grid (their descriptors were popped at MPI-node emit; the
-        # wrapper-body ``<local> = comm`` copy tasklets still reference them).
-        # Must precede prune_unused_arrays, which would otherwise KeyError on
-        # the dangling ``desc()``.
-        from dace_fortran.builder.emit_library import drop_user_comm_scalar_nodes
-        drop_user_comm_scalar_nodes(sdfg)
         _plan_raw = self.module.get_flatten_plan() or {}
         _binding_keep = {
             f
@@ -1591,7 +1584,7 @@ class SDFGBuilder:
             v = (self.arrays.get(user_key) or self.symbols.get(user_key) or self.scalars.get(user_key))
             _dt = getattr(desc, 'dtype', None)
             if sdfg_name_ in ('dace_user_comm', 'dace_user_comm_size'):
-                # SDFG free symbols seeded by ``emit_mpi._install_user_pgrid``
+                # SDFG free symbols seeded for the user process grid
                 # -- the bindings wrapper sources their values by calling
                 # ``MPI_Comm_f2c`` + ``MPI_Comm_size`` on the original
                 # Fortran integer communicator dummy (recorded on
