@@ -9,7 +9,7 @@ helpers in ``__init__.py`` stay family-agnostic.
 from dataclasses import dataclass
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ElementwiseIntrinsic:
     """Fortran intrinsic lowered to a per-element scalar call inside an
     ``hlfir.elemental`` body; name is used verbatim in tasklet code, resolved
@@ -19,7 +19,7 @@ class ElementwiseIntrinsic:
     arity: int
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ReductionIntrinsic:
     """Whole-array reduction that becomes a ``standard.Reduce`` library
     node via ``state.add_reduce(wcr, axes, identity)``  --  populated by
@@ -30,7 +30,7 @@ class ReductionIntrinsic:
     identity: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class LibNodeIntrinsic:
     """Intrinsic that becomes a direct DaCe library-node emission
     (``blas.Matmul``, ``linalg.Transpose``, ``blas.Dot``, ``fft.FFT``) --

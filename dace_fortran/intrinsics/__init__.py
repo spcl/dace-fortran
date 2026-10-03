@@ -5,8 +5,7 @@
 Emitter code should only talk to this module, never import the per-family
 registries directly -- adding an intrinsic means editing one file under this
 package.  Families: elementwise.py (sin/cos/exp/...), reduction.py
-(sum/product/minval/maxval), linalg.py (matmul/transpose/dot_product),
-direct.py (SIZE/LBOUND/... stub).
+(sum/product/minval/maxval), linalg.py (matmul/transpose/dot_product).
 """
 
 from dace_fortran.intrinsics.elementwise import ELEMENTWISE_INTRINSICS
