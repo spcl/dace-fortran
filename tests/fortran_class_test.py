@@ -1,4 +1,4 @@
-"""Verbatim port of f2dace/dev:tests/fortran/future/fortran_class_test.py."""
+"""Port of f2dace/dev:tests/fortran/future/fortran_class_test.py (``recv`` is zero-initialized: the original read it uninitialized)."""
 
 import numpy as np
 import pytest
@@ -47,6 +47,7 @@ subroutine main(d)
   integer d(2)
   real recv(2, 2, 2)
   class(t_comm_pattern_orig), allocatable :: p_pat
+  recv = 0.0  ! exchange_data_r3d reads recv(1,1,1); the verbatim source left it uninitialized (UB)
   call setup_comm_pattern(p_pat, 400)
   call exchange_data_r3d(p_pat, recv)
   d(1) = p_pat%n_pnts
