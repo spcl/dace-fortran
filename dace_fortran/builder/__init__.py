@@ -50,7 +50,9 @@ from dace.properties import CodeBlock
 from dace.sdfg.state import ControlFlowRegion
 from dace.sdfg.utils import specialize_symbols
 
+from dace_fortran.bridge_types import HlfirModule
 from dace_fortran.build_bridge import hb
+from dace_fortran.entry_names import split_qualified_entry
 
 from dace_fortran.builder.auto_dim_symbols import install_auto_dim_symbols
 from dace_fortran.builder.context import _Ctx
@@ -549,7 +551,7 @@ def _module_of_fortran_sym(sym: str) -> str | None:
     return None
 
 
-def _resolve_entry_symbol(module: 'hb.HLFIRModule', entry: str) -> str:
+def _resolve_entry_symbol(module: HlfirModule, entry: str) -> str:
     """Resolve a user-supplied ``entry`` to the flang-mangled func symbol
     the bridge keys on.
 
@@ -565,8 +567,7 @@ def _resolve_entry_symbol(module: 'hb.HLFIRModule', entry: str) -> str:
         return entry
     # ``module::proc`` -> (module, proc); a bare name leaves the module
     # unconstrained.  flang lower-cases Fortran identifiers.
-    want_mod, _, want_proc = entry.lower().rpartition("::")
-    want_mod_opt: str | None = want_mod or None
+    want_mod_opt, want_proc = split_qualified_entry(entry)
     funcs = list(module.list_functions())
     matches = [
         s for s in funcs if _demangle_fortran_proc(s) == want_proc and (
@@ -603,7 +604,7 @@ class SDFGBuilder:
                  'extent_aliases', 'object_aliases', 'object_alias_defs', 'object_alias_flat_members', 'dace_name_map',
                  '_value_symbol_provenance', '_id_counter', 'access_caches')
 
-    module: 'hb.HLFIRModule'
+    module: HlfirModule
     entry: str | None
     #: Fortran source text the HLFIR was lowered from (pointer-alias scan); ``''`` when unknown.
     fortran_source: str

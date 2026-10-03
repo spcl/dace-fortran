@@ -43,7 +43,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Tuple
+from typing import Callable, Dict, Iterable, Iterator, List, Sequence, Tuple
 
 from fparser.common.readfortran import FortranStringReader
 from fparser.two import Fortran2003 as f03
@@ -185,7 +185,7 @@ _SCOPE_CLASSES = (f03.Subroutine_Subprogram, f03.Function_Subprogram)
 _SCOPE_STMT_CLASSES = (f03.Subroutine_Stmt, f03.Function_Stmt)
 
 
-def _routine_node(ast: f03.Program, routine: str):
+def _routine_node(ast: f03.Program, routine: str) -> f03.Base:
     """The subprogram node defining ``routine`` (first match, like the old scan)."""
     want = routine.lower()
     for scope in walk(ast, _SCOPE_CLASSES):
@@ -195,7 +195,7 @@ def _routine_node(ast: f03.Program, routine: str):
     raise ValueError(f"routine {routine!r} not found in source")
 
 
-def _node_span(node) -> Tuple[int, int]:
+def _node_span(node: f03.Base) -> Tuple[int, int]:
     """1-based (first, last) source line of ``node``'s subtree."""
     spans = [n.item.span for n in walk(node) if getattr(n, "item", None) is not None]
     return min(s[0] for s in spans), max(s[1] for s in spans)
@@ -211,7 +211,7 @@ class _Logical:
 
     __slots__ = ("text", "_spans", "line")
 
-    def __init__(self, pieces):
+    def __init__(self, pieces: Sequence[Tuple[int, str]]) -> None:
         parts, spans, off = [], [], 0
         for lineno, piece in pieces:
             parts.append(piece)
@@ -271,7 +271,7 @@ def _head(text: str) -> str:
     return words[0].lower()
 
 
-def _clause_entities(text: str, start: int, end: int):
+def _clause_entities(text: str, start: int, end: int) -> List[Tuple[str, str, int]]:
     """``(base_name, full_ref, offset)`` per comma-separated clause item.
 
     An item is a variable reference: plain name, component path (``a%b%c``),
@@ -297,7 +297,7 @@ def _clause_entities(text: str, start: int, end: int):
     return out
 
 
-def _clauses(logical: _Logical):
+def _clauses(logical: _Logical) -> Iterator[Tuple[str, List[Tuple[str, str, int]]]]:
     """Yield ``(clause_name, [(base, ref, offset), ...])`` for one directive."""
     text, i = logical.text, 0
     while True:
@@ -404,15 +404,15 @@ def classify(source: str, routine: str, source_name: str, defines: Iterable[str]
     return {"routine": routine, "source": source_name, "args": classified, "unclassified": unclassified}
 
 
-def extract_acc_residency(source_path, routine: str, defines: Iterable[str] = DEFAULT_CPP_DEFINES) -> dict:
+def extract_acc_residency(source_path: str | Path, routine: str, defines: Iterable[str] = DEFAULT_CPP_DEFINES) -> dict:
     """Classify ``routine`` in the Fortran file ``source_path``."""
     path = Path(source_path)
     return classify(path.read_text(), routine, path.name, defines)
 
 
-def write_acc_residency_sidecar(source_path,
+def write_acc_residency_sidecar(source_path: str | Path,
                                 routine: str,
-                                out_dir,
+                                out_dir: str | Path,
                                 defines: Iterable[str] = DEFAULT_CPP_DEFINES) -> Path:
     """Write ``<routine>.acc_residency.json`` into ``out_dir``; return its path."""
     payload = extract_acc_residency(source_path, routine, defines)
@@ -422,7 +422,7 @@ def write_acc_residency_sidecar(source_path,
     return out
 
 
-def main(argv=None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m dace_fortran.acc_residency",
                                      description="Extract per-argument OpenACC data residency for a Fortran routine.")
     parser.add_argument("source", type=Path, help="Fortran source, ACC directives intact.")

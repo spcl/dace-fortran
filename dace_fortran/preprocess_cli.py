@@ -12,6 +12,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Iterable, Sequence
 
 from dace_fortran.preprocess import (
     merge_used_modules,
@@ -108,7 +109,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _parse_kind_map(items) -> dict:
+def _parse_kind_map(items: Iterable[str] | None) -> dict[str, int | None]:
     """Parse ``--kind-map`` CLI items into the dict the pass accepts."""
     out: dict = {}
     for item in items:
@@ -119,7 +120,7 @@ def _parse_kind_map(items) -> dict:
     return out
 
 
-def _apply_passes(source: str, args) -> tuple:
+def _apply_passes(source: str, args: argparse.Namespace) -> tuple[str, dict]:
     """Apply the requested passes (in canonical order) to one source
     string.  Returns ``(rewritten_source, enum_maps)``."""
     if args.all_defaults:
@@ -149,7 +150,7 @@ def _apply_passes(source: str, args) -> tuple:
     return source, enum_maps
 
 
-def _rewrite_inplace(in_path: Path, args) -> dict:
+def _rewrite_inplace(in_path: Path, args: argparse.Namespace) -> dict:
     """Read ``in_path``, apply passes, atomically replace the original
     via a sibling tempfile + rename.  Returns the enum_maps (empty
     when --rewrite-string-enum is off)."""
@@ -180,7 +181,7 @@ def _rewrite_inplace(in_path: Path, args) -> dict:
     return emaps
 
 
-def main(argv=None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     """Runs the CLI; returns 0 on success, 2 on argument error, 3 on pass refusal."""
     args = _build_parser().parse_args(argv)
 

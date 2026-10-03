@@ -5,6 +5,8 @@
 Stdlib-only (no dace imports) -- fparser inliner needs this without pulling in dace_fortran.external.
 Invariant: do_not_emit is a subset of don't-inline; dont_inline_names() is the single source of truth.
 """
+
+from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Optional, Set
 
@@ -23,7 +25,7 @@ class ExternalFunction:
     c_function: Optional[str] = None
     library: Optional[str] = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if not self.name or not self.name.strip():
             raise ValueError("ExternalFunction.name must be a non-empty procedure name")
 

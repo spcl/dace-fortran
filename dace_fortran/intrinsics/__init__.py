@@ -10,6 +10,7 @@ package.  Families: elementwise.py (sin/cos/exp/...), reduction.py
 
 from dace_fortran.intrinsics.elementwise import ELEMENTWISE_INTRINSICS
 from dace_fortran.intrinsics.reduction import REDUCTIONS
+from dace_fortran.intrinsics.base import LibNodeIntrinsic
 from dace_fortran.intrinsics.linalg import LINALG, STANDARD
 
 
@@ -28,7 +29,7 @@ def is_libnode(name: str) -> bool:
     return name in LINALG or name in STANDARD
 
 
-def libnode_spec(name: str):
+def libnode_spec(name: str) -> LibNodeIntrinsic | None:
     """Return the ``LibNodeIntrinsic`` for ``name`` or ``None``.  Looks up both
     the linalg registry (matmul/transpose/dot_product) and the standard registry (count/merge/...)."""
     spec = LINALG.get(name)

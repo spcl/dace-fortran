@@ -254,14 +254,14 @@ def emit_libcall(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFl
     elif spec.node_cls in ("ArgMin", "ArgMax"):
         # dim 0-based in reduce_axes (mirrors the Reduce path); back in options; mask=
         # signalled by an extra call_args entry past the first _x source.
-        dim = (n.reduce_axes[0] + 1) if n.reduce_axes else None
+        opt_dim = (n.reduce_axes[0] + 1) if n.reduce_axes else None
         back = bool((n.options or {}).get('back', False))
         has_mask = len(n.call_args) > 1
         node = cls(
             f"{spec.name}_{n.target}_{builder.nid()}",
             one_based=True,
             back=back,
-            dim=dim,
+            dim=opt_dim,
             mask=has_mask,
         )
     elif spec.node_cls == "CShift":
@@ -300,8 +300,8 @@ def emit_libcall(builder: SDFGBuilder, ctx: _Ctx, n: NodeLike, region: ControlFl
                     ctx.sdfg.add_symbol(name, dtypes.int64)
     elif spec.node_cls == "Norm2":
         # optional 1-based dim from reduce_axes (empty = whole-array scalar).
-        dim = (n.reduce_axes[0] + 1) if n.reduce_axes else None
-        node = cls(f"{spec.name}_{n.target}_{builder.nid()}", dim=dim)
+        opt_dim = (n.reduce_axes[0] + 1) if n.reduce_axes else None
+        node = cls(f"{spec.name}_{n.target}_{builder.nid()}", dim=opt_dim)
     elif spec.node_cls == "Broadcast":
         # SPREAD's inserted axis: bridge stores it 0-based in reduce_axes[0].
         dim = (n.reduce_axes[0] + 1) if n.reduce_axes else 1

@@ -316,8 +316,9 @@ def emit_tasklet(builder: SDFGBuilder,
         # Scalar target: no buildable index, subset is always element 0.
         state.add_edge(t, f"_out_{target}", w, None, Memlet(data=eff_target, subset="0"))
     else:
-        ac = get_access(accesses, target, is_read=False)
-        eff_nm, eff_ac = resolve_section_alias(builder, target, ac)
+        write_ac = get_access(accesses, target, is_read=False)
+        assert write_ac is not None, f"no write access recorded for {target!r}"
+        eff_nm, eff_ac = resolve_section_alias(builder, target, write_ac)
         ix = build_memlet_index(builder, eff_nm, eff_ac, iter_map, indirect_syms)
         state.add_edge(t, f"_out_{target}", w, None, Memlet(f"{eff_nm}[{ix}]"))
 

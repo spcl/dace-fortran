@@ -42,6 +42,7 @@ from typing import List, Optional, Sequence, Union
 from dace import SDFG
 
 from dace_fortran.build_bridge import hb  # noqa: F401  -- ensures the bridge is built
+from dace_fortran.entry_names import split_qualified_entry
 from dace_fortran.external import (
     Arg,
     ExternalSignature,
@@ -188,14 +189,13 @@ def _resolve_entry(source: str, entry: Optional[str]) -> str:
         if m_p:
             procs.append((cur_mod, m_p.group(2)))
 
-    def _mangle(mod, name):
+    def _mangle(mod: str | None, name: str) -> str:
         return f"_QM{mod.lower()}P{name.lower()}" if mod else f"_QP{name.lower()}"
 
     # Plain Fortran name given (``proc`` or ``mod::proc``): resolve against
     # the scanned definitions so callers need not hand-write the mangled symbol.
     if entry:
-        want_mod, _, want_proc = entry.lower().rpartition("::")
-        want_mod = want_mod or None
+        want_mod, want_proc = split_qualified_entry(entry)
         matches = {(m, n)
                    for (m, n) in procs
                    if n.lower() == want_proc and (want_mod is None or (m or "").lower() == want_mod)}
@@ -463,8 +463,7 @@ def _resolve_hlfir_for_entry(root: Path, entry: str) -> Path:
     from dace_fortran.builder import _demangle_fortran_proc, _module_of_fortran_sym
 
     mangled = entry.startswith("_Q")
-    want_mod, _, want_proc = entry.lower().rpartition("::")
-    want_mod = want_mod or None
+    want_mod, want_proc = split_qualified_entry(entry)
 
     def _is_entry(sym: str) -> bool:
         if mangled:

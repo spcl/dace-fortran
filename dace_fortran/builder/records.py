@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TypeAlias
 
-from dace_fortran.build_bridge import hb
+from dace_fortran.bridge_types import AccessRecord, NodeRecord, VarRecord
 
 
 @dataclass(slots=True)
@@ -95,9 +95,9 @@ class SyntheticNode:
     else_children: list = field(default_factory=list)
 
 
-#: A variable record: bridge-produced or emitter-synthesised.
-VarLike: TypeAlias = hb.VarInfo | SyntheticVar
+#: A variable record: bridge-produced or emitter-synthesised (both satisfy :class:`VarRecord`).
+VarLike: TypeAlias = VarRecord
 #: An access record: bridge-produced or emitter-synthesised.
-AccessLike: TypeAlias = hb.AccessInfo | SyntheticAccess
+AccessLike: TypeAlias = AccessRecord
 #: A statement node: bridge-produced or emitter-synthesised.
-NodeLike: TypeAlias = hb.ASTNode | SyntheticNode
+NodeLike: TypeAlias = NodeRecord

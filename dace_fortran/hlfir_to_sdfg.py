@@ -25,6 +25,7 @@ if __name__ == "__main__":
     # Manual inspection CLI: python3 -m dace_fortran.hlfir_to_sdfg <input.hlfir> [output.sdfg]
     import os
     import sys
+    from typing import Any
 
     import dace
     from dace.sdfg import nodes as nd
@@ -35,7 +36,7 @@ if __name__ == "__main__":
     sdfg.validate()
     print(f"SDFG: {sdfg.name}")
 
-    def show_region(region, indent=0):
+    def show_region(region: Any, indent: int = 0) -> None:
         p = "  " * indent
         for node in region.nodes():
             if isinstance(node, LoopRegion):

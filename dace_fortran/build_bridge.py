@@ -6,6 +6,8 @@
 The .so is symlinked next to this file (as dace_fortran.hlfir_bridge) so no PYTHONPATH manipulation is needed.
 """
 
+from __future__ import annotations
+
 import fcntl
 import importlib
 import os
@@ -15,6 +17,7 @@ import subprocess
 import sys
 import sysconfig
 from pathlib import Path
+from types import ModuleType
 
 from dace_fortran.llvm_toolchain import (SUPPORTED_LLVM_VERSIONS, candidate_versions, find_flang, llvm_prefix,
                                          requested_version)
@@ -125,7 +128,7 @@ def _prefix_builds_the_bridge(prefix: str, version: str) -> bool:
     return (root / "lib" / "cmake" / "mlir").is_dir() or (root / "include" / "mlir").is_dir()
 
 
-def _detect_dirs():
+def _detect_dirs() -> None:
     """Populate _LLVM.cmake_dir / _LLVM.version: explicit env vars win, else probe the supported majors."""
     if _LLVM.cmake_dir:
         _LLVM.version = _LLVM.version or _cmake_dir_major(_LLVM.cmake_dir) or SUPPORTED_LLVM_VERSIONS[0]
@@ -239,7 +242,7 @@ def _cache_conflicts(expected: dict) -> list:
     return [f"{k}: {cached[k]!r} -> {v!r}" for k, v in expected.items() if k in cached and cached[k] != v]
 
 
-def build(clean: bool = False, verbose: bool = True):
+def build(clean: bool = False, verbose: bool = True) -> None:
     """Run cmake + make.  Raises on failure."""
     if rebuild_forbidden():
         raise RuntimeError(f"{NO_REBUILD_ENV} is set -- refusing to build the HLFIR bridge.\n"
@@ -320,7 +323,7 @@ def build(clean: bool = False, verbose: bool = True):
 _BRIDGE_MODULE = "dace_fortran.hlfir_bridge"
 
 
-def ensure_bridge():
+def ensure_bridge() -> ModuleType:
     """Import the compiled bridge, building first if necessary.
 
     Imported as dace_fortran.hlfir_bridge (build() symlinks the .so into the package dir) -- no sys.path hacking.
@@ -336,7 +339,7 @@ def ensure_bridge():
     return importlib.import_module(_BRIDGE_MODULE)
 
 
-def ensure_fresh():
+def ensure_fresh() -> ModuleType:
     """Import hlfir_bridge, rebuilding if any source is newer than the .so.
 
     flock-serialized: concurrent processes (e.g. parallel pytest runs) racing an unlocked
@@ -351,7 +354,7 @@ def ensure_fresh():
     return ensure_bridge()
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> ModuleType:
     """Resolve ``hb`` on first use, which is what the README promises and what the CLI needs.
 
     Binding it at import made ``python -m dace_fortran.build_bridge`` load the extension before
