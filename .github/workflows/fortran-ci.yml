@@ -123,9 +123,10 @@ jobs:
         # shallow + recursive checks it out in a dedicated step below.
         submodules: false
 
-    - uses: actions/setup-python@v5
+    - uses: astral-sh/setup-uv@v7
       with:
         python-version: '3.12'
+        enable-cache: true
 
     - name: Install LLVM / MLIR / flang ${{ matrix.llvm }} + Fortran toolchain
       run: |
@@ -183,15 +184,11 @@ jobs:
       run: |
         rm -f ~/.dace.conf
         rm -rf .dacecache tests/.dacecache
-        python -m pip install --upgrade pip
-        # nanobind is a CMake-configure-time requirement of the bridge;
-        # meson is the f2py backend on Python >=3.12 (numerical refs) AND
-        # the build backend for the icon-model meson configure path.
-        pip install nanobind numpy meson ninja
-        pip install -e ".[testing]" pytest-xdist pytest-timeout coverage
-        # mpi4py (built against the openmpi installed above) drives the
-        # multi-rank MPI Send/Recv e2e via dace.sdfg.utils.distributed_compile.
-        MPICC=mpicc pip install mpi4py
+        # Locked environment (uv.lock): the testing group (pytest, nanobind for the bridge, meson for f2py and
+        # the icon-model configure) plus mpi4py built against the openmpi installed above.
+        MPICC=mpicc uv sync --frozen --group testing --group mpi --no-default-groups
+        # Later steps call ``python`` / ``pytest`` directly.
+        echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
     - name: Verify toolchain is complete (fail fast on a missing dependency)
       run: |
