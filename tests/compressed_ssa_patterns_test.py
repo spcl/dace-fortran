@@ -15,7 +15,7 @@ from _helpers import f2py, sdfg_call_args
 pytestmark = pytest.mark.skipif(not have_flang(), reason="no LLVM flang on PATH")
 
 
-def _build_and_run(tmp_path, *, src: str, name: str, entry: str, fortran_call, int_args=None):
+def _build_and_run(tmp_path, *, src: str, name: str, entry: str, int_args=None):
     """Compile Fortran via f2py + bridge, return (ref_module, sdfg)."""
     ref = f2py(src, tmp_path / 'ref', f'{name}_ref')
     sdfg_dir = tmp_path / 'sdfg'
@@ -42,7 +42,7 @@ DO jk = 2, klev
 ENDDO
 END SUBROUTINE cov_update
 """
-    ref, sdfg = _build_and_run(tmp_path, src=src, name='cov_update', entry='cov_update', fortran_call=None)
+    ref, sdfg = _build_and_run(tmp_path, src=src, name='cov_update', entry='cov_update')
     rng = np.random.default_rng(7)
     klon, klev = 1, 6
     za = np.asfortranarray(rng.random((klon, klev)))
@@ -70,7 +70,7 @@ DO i = 1, n_arr
 ENDDO
 END SUBROUTINE wrap_mod
 """
-    ref, sdfg = _build_and_run(tmp_path, src=src, name='wrap_mod', entry='wrap_mod', fortran_call=None)
+    ref, sdfg = _build_and_run(tmp_path, src=src, name='wrap_mod', entry='wrap_mod')
     n_arr = 8
     n = 3
     arr = np.array([1, -1, 7, -7, 10, -10, 0, 11], dtype=np.int32)
@@ -98,7 +98,7 @@ DO i = 1, n
 ENDDO
 END SUBROUTINE sqrarr
 """
-    ref, sdfg = _build_and_run(tmp_path, src=src, name='sqrarr', entry='sqrarr', fortran_call=None)
+    ref, sdfg = _build_and_run(tmp_path, src=src, name='sqrarr', entry='sqrarr')
     rng = np.random.default_rng(7)
     n = 5
     a = rng.random(n)
@@ -127,7 +127,7 @@ DO i = 1, n
 ENDDO
 END SUBROUTINE which_bigger
 """
-    ref, sdfg = _build_and_run(tmp_path, src=src, name='which_bigger', entry='which_bigger', fortran_call=None)
+    ref, sdfg = _build_and_run(tmp_path, src=src, name='which_bigger', entry='which_bigger')
     rng = np.random.default_rng(7)
     n = 8
     a = rng.standard_normal(n)
@@ -157,7 +157,7 @@ DO i = 1, n
 ENDDO
 END SUBROUTINE flag_sqrt
 """
-    ref, sdfg = _build_and_run(tmp_path, src=src, name='flag_sqrt', entry='flag_sqrt', fortran_call=None)
+    ref, sdfg = _build_and_run(tmp_path, src=src, name='flag_sqrt', entry='flag_sqrt')
     rng = np.random.default_rng(7)
     n = 8
     a = rng.random(n) * 4.0
@@ -189,7 +189,7 @@ DO i = 1, n
 ENDDO
 END SUBROUTINE flag_exp
 """
-    ref, sdfg = _build_and_run(tmp_path, src=src, name='flag_exp', entry='flag_exp', fortran_call=None)
+    ref, sdfg = _build_and_run(tmp_path, src=src, name='flag_exp', entry='flag_exp')
     rng = np.random.default_rng(7)
     n = 8
     a = rng.random(n) * 2.0
@@ -220,7 +220,7 @@ DO i = 1, n
 ENDDO
 END SUBROUTINE flag_log
 """
-    ref, sdfg = _build_and_run(tmp_path, src=src, name='flag_log', entry='flag_log', fortran_call=None)
+    ref, sdfg = _build_and_run(tmp_path, src=src, name='flag_log', entry='flag_log')
     rng = np.random.default_rng(7)
     n = 8
     a = rng.random(n) * 4.0 + 0.1  # positive
@@ -249,7 +249,7 @@ DO i = 1, n
 ENDDO
 END SUBROUTINE flag_trig
 """
-    ref, sdfg = _build_and_run(tmp_path, src=src, name='flag_trig', entry='flag_trig', fortran_call=None)
+    ref, sdfg = _build_and_run(tmp_path, src=src, name='flag_trig', entry='flag_trig')
     rng = np.random.default_rng(7)
     n = 8
     a = rng.standard_normal(n)
@@ -273,7 +273,7 @@ DO i = 1, n
 ENDDO
 END SUBROUTINE triple
 """
-    ref, sdfg = _build_and_run(tmp_path, src=src, name='triple', entry='triple', fortran_call=None)
+    ref, sdfg = _build_and_run(tmp_path, src=src, name='triple', entry='triple')
     rng = np.random.default_rng(7)
     n = 5
     a = rng.standard_normal(n)
@@ -302,7 +302,7 @@ DO jk = 1, klev
 ENDDO
 END SUBROUTINE nested_max
 """
-    ref, sdfg = _build_and_run(tmp_path, src=src, name='nested_max', entry='nested_max', fortran_call=None)
+    ref, sdfg = _build_and_run(tmp_path, src=src, name='nested_max', entry='nested_max')
     rng = np.random.default_rng(7)
     klon, klev = 1, 5
     zcov_in = np.asfortranarray(rng.random(klon))
@@ -335,7 +335,7 @@ DO i = 1, n
 ENDDO
 END SUBROUTINE complex_div
 """
-    ref, sdfg = _build_and_run(tmp_path, src=src, name='complex_div', entry='complex_div', fortran_call=None)
+    ref, sdfg = _build_and_run(tmp_path, src=src, name='complex_div', entry='complex_div')
     rng = np.random.default_rng(7)
     n = 5
     a = (rng.random(n) + 1j * rng.random(n)).astype(np.complex128)
@@ -361,7 +361,7 @@ DO i = 1, n
 ENDDO
 END SUBROUTINE sq_sum
 """
-    ref, sdfg = _build_and_run(tmp_path, src=src, name='sq_sum', entry='sq_sum', fortran_call=None)
+    ref, sdfg = _build_and_run(tmp_path, src=src, name='sq_sum', entry='sq_sum')
     rng = np.random.default_rng(7)
     n = 5
     a = rng.standard_normal(n)
@@ -388,7 +388,7 @@ DO i = 1, n
 ENDDO
 END SUBROUTINE merge_arrays
 """
-    ref, sdfg = _build_and_run(tmp_path, src=src, name='merge_arrays', entry='merge_arrays', fortran_call=None)
+    ref, sdfg = _build_and_run(tmp_path, src=src, name='merge_arrays', entry='merge_arrays')
     rng = np.random.default_rng(7)
     n = 8
     a = rng.standard_normal(n)
@@ -414,7 +414,7 @@ DO i = 2, n
 ENDDO
 END SUBROUTINE max_neighbor
 """
-    ref, sdfg = _build_and_run(tmp_path, src=src, name='max_neighbor', entry='max_neighbor', fortran_call=None)
+    ref, sdfg = _build_and_run(tmp_path, src=src, name='max_neighbor', entry='max_neighbor')
     rng = np.random.default_rng(7)
     n = 6
     a = rng.standard_normal(n)

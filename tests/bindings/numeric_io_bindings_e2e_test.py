@@ -293,7 +293,7 @@ end subroutine madd_k{kind}
 """
 
 
-def _intk_sdfg_driver(kind: int, cty_name: str) -> str:
+def _intk_sdfg_driver(kind: int) -> str:
     return f"""
 subroutine run_madd_k{kind}(a, b, c, n) bind(c, name='run_madd_k{kind}')
   use iso_c_binding
@@ -351,7 +351,7 @@ def test_e2e_integer_kind_arith(tmp_path: Path, kind: int, npty, cty):
                                    name=name,
                                    entry=f"_QP{name}",
                                    iface=iface,
-                                   driver_src=_intk_sdfg_driver(kind, cty.__name__))
+                                   driver_src=_intk_sdfg_driver(kind))
     ref = _build_ref_lib(tmp_path, kernel_src=kernel, ref_driver_src=_intk_ref_driver(kind), name=name)
 
     n = 6

@@ -4,12 +4,9 @@
 import json
 import subprocess
 import sys
-from pathlib import Path
-
-import pytest
 
 
-def _run_cli(*argv: str, input_path: Path = None, expect_rc: int = 0) -> tuple:
+def _run_cli(*argv: str, expect_rc: int = 0) -> tuple:
     """Run the CLI in a fresh subprocess; returns (stdout, stderr)."""
     cmd = [sys.executable, "-m", "dace_fortran.preprocess_cli", *argv]
     res = subprocess.run(cmd, capture_output=True, text=True)
